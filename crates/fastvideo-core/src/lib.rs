@@ -8,7 +8,7 @@ pub mod sampling;
 
 pub use backend_kind::BackendKind;
 pub use error::{FastVideoError, Result};
-pub use generator::{GenerateOutput, LoadOptions, VideoGenerator};
+pub use generator::{BenchStats, ClipBenchStats, GenerateOutput, LoadOptions, VideoGenerator};
 pub use registry::{resolve_wan, SamplingAlgorithm, WanModelDefinition, WAN_MODEL_DEFINITIONS};
 pub use sampling::{sampling_from_definition, InferencePreset, SamplingParam, ALL_PRESETS};
 
@@ -149,25 +149,19 @@ mod tests {
         assert!(root.join("text_encoder").is_dir() || root.join("text_encoder_2").is_dir());
     }
 
+    #[cfg(feature = "cuda")]
     #[test]
-    fn candle_real_1_3b_generate_is_gated() {
-        if std::env::var("FASTVIDEO_REAL_GENERATE").ok().as_deref() != Some("1") {
-            return;
-        }
+    fn cuda_tiny_generate_writes_png() {
         let gen = VideoGenerator::from_pretrained(
-            "Wan-AI/Wan2.1-T2V-1.3B-Diffusers",
+            "FastVideo/FastWan2.1-T2V-1.3B-Diffusers",
             LoadOptions {
                 backend: BackendKind::Candle,
-                height: Some(256),
-                width: Some(256),
-                num_frames: Some(9),
-                num_inference_steps: Some(1),
-                guidance_scale: Some(1.0),
+                tiny: true,
+                device: "cuda".into(),
                 dtype: Some("f32".into()),
-                device: "cpu".into(),
                 output_path: Some(
                     std::env::temp_dir()
-                        .join("fastvideo-real-1-3b")
+                        .join("fastvideo-cuda-tiny")
                         .to_string_lossy()
                         .into(),
                 ),
@@ -175,11 +169,42 @@ mod tests {
             },
         )
         .unwrap();
-        let out = gen
-            .generate_video("A curious raccoon in a field of sunflowers.")
-            .unwrap();
+        let out = gen.generate_video("a raccoon").unwrap();
         assert!(!out.frame_paths.is_empty());
         assert!(std::path::Path::new(&out.frame_paths[0]).exists());
+    }
+
+    #[cfg(feature = "cuda")]
+    #[test]
+    fn cuda_1_3b_smoke_gated() {
+        if std::env::var("FASTVIDEO_GPU_SMOKE").ok().as_deref() != Some("1") {
+            return;
+        }
+        let gen = VideoGenerator::from_pretrained(
+            "Wan-AI/Wan2.1-T2V-1.3B-Diffusers",
+            LoadOptions {
+                backend: BackendKind::Candle,
+                device: "cuda".into(),
+                dtype: Some("bf16".into()),
+                height: Some(256),
+                width: Some(256),
+                num_frames: Some(9),
+                num_inference_steps: Some(2),
+                guidance_scale: Some(1.0),
+                output_path: Some("/workspace/fastvideo-gpu-smoke".into()),
+                ..LoadOptions::default()
+            },
+        )
+        .unwrap();
+        let (out, stats) = gen
+            .bench_video("A curious raccoon in a field of sunflowers.")
+            .unwrap();
+        assert!(!out.frame_paths.is_empty());
+        assert!(stats.load_and_generate_ms > 0);
+        eprintln!(
+            "cuda_1_3b_smoke {}x{} frames={} steps={} {}ms",
+            stats.width, stats.height, stats.frames, stats.steps, stats.load_and_generate_ms
+        );
     }
 
     #[test]

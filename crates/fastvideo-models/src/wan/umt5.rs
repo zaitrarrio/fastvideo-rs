@@ -113,9 +113,10 @@ impl DenseGated {
     }
 
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
-        let gelu = crate::nn::gelu_tanh(&self.wi_0.forward(xs)?)?;
-        let linear = self.wi_1.forward(xs)?;
-        self.wo.forward(&(gelu * linear)?)
+        let dtype = xs.dtype();
+        let gelu = crate::nn::gelu_tanh(&self.wi_0.forward(xs)?)?.to_dtype(DType::F32)?;
+        let linear = self.wi_1.forward(xs)?.to_dtype(DType::F32)?;
+        self.wo.forward(&(gelu * linear)?.to_dtype(dtype)?)
     }
 }
 
@@ -152,9 +153,9 @@ impl SelfAttention {
         let q = self.q.forward(xs)?.reshape((b, s, self.n_heads, self.d_kv))?.transpose(1, 2)?;
         let k = self.k.forward(xs)?.reshape((b, s, self.n_heads, self.d_kv))?.transpose(1, 2)?;
         let v = self.v.forward(xs)?.reshape((b, s, self.n_heads, self.d_kv))?.transpose(1, 2)?;
-        let q = q.contiguous()?;
-        let k = k.contiguous()?;
-        let v = v.contiguous()?;
+        let q = q.contiguous()?.to_dtype(DType::F32)?;
+        let k = k.contiguous()?.to_dtype(DType::F32)?;
+        let v = v.contiguous()?.to_dtype(DType::F32)?;
         let scores = q.matmul(&k.transpose(D::Minus1, D::Minus2)?)?;
         // relative bias: embedding lookup [S,S] -> [H,S,S]
         let bias = self
@@ -163,7 +164,8 @@ impl SelfAttention {
         let bias = bias
             .reshape((s, s, self.n_heads))?
             .permute((2, 0, 1))?
-            .unsqueeze(0)?;
+            .unsqueeze(0)?
+            .to_dtype(DType::F32)?;
         let mut scores = scores.broadcast_add(&bias)?;
         if let Some(mask) = mask {
             let neg = Tensor::new(f32::NEG_INFINITY, xs.device())?.broadcast_as(scores.shape())?;
@@ -173,7 +175,7 @@ impl SelfAttention {
         }
         let attn = candle_nn::ops::softmax_last_dim(&scores)?;
         let ctx = attn.matmul(&v)?.transpose(1, 2)?.contiguous()?.reshape((b, s, self.n_heads * self.d_kv))?;
-        self.o.forward(&ctx)
+        self.o.forward(&ctx.to_dtype(xs.dtype())?)
     }
 }
 

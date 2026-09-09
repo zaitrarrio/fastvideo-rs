@@ -577,6 +577,7 @@ dependencies = [
  "clap",
  "fastvideo-core",
  "fastvideo-models",
+ "serde_json",
 ]
 
 [[package]]

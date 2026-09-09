@@ -63,9 +63,11 @@ pub fn var_builder_from_dir(
     }
     let mut tensors = std::collections::HashMap::new();
     for file in &files {
-        let loaded = candle_core::safetensors::load(file, device)?;
+        // Decode on CPU, cast, then move. Loading f32 shards straight onto a
+        // 24GB GPU OOMs Wan 1.3B (UMT5+DiT+VAE are ~27GB on disk).
+        let loaded = candle_core::safetensors::load(file, &Device::Cpu)?;
         for (name, tensor) in loaded {
-            tensors.insert(name, tensor.to_dtype(dtype)?);
+            tensors.insert(name, tensor.to_dtype(dtype)?.to_device(device)?);
         }
     }
     Ok(VarBuilder::from_tensors(tensors, dtype, device))
@@ -77,6 +79,8 @@ pub struct DiffusersComponents {
     pub transformer_2: Option<VarBuilder<'static>>,
     pub vae: VarBuilder<'static>,
     pub text: VarBuilder<'static>,
+    /// Wan I2V CLIP ViT-H (`image_encoder/`).
+    pub image_encoder: Option<VarBuilder<'static>>,
 }
 
 pub fn load_diffusers_components(
@@ -107,11 +111,25 @@ pub fn load_diffusers_components(
             var_builder_from_dir(&root.join("text_encoder_2"), dtype, device)?
         }
     };
+    let image_encoder = {
+        let dir = root.join("image_encoder");
+        if dir.is_dir() {
+            match collect_safetensors(&dir) {
+                Ok(files) if !files.is_empty() => {
+                    Some(var_builder_from_dir(&dir, dtype, device)?)
+                }
+                _ => None,
+            }
+        } else {
+            None
+        }
+    };
     Ok(DiffusersComponents {
         transformer,
         transformer_2,
         vae,
         text,
+        image_encoder,
     })
 }
 

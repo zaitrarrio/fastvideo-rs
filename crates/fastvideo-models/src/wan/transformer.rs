@@ -108,7 +108,10 @@ impl WanAttention {
 }
 
 fn apply_rotary(xs: &Tensor, cos: &Tensor, sin: &Tensor) -> Result<Tensor> {
-    // xs: [B, S, H, D], cos/sin: [1, S, 1, D] with interleaved pairs.
+    let dtype = xs.dtype();
+    let xs = xs.to_dtype(DType::F32)?;
+    let cos = cos.to_dtype(DType::F32)?;
+    let sin = sin.to_dtype(DType::F32)?;
     let d = xs.dim(D::Minus1)?;
     let mut x1s = Vec::with_capacity(d / 2);
     let mut x2s = Vec::with_capacity(d / 2);
@@ -133,7 +136,7 @@ fn apply_rotary(xs: &Tensor, cos: &Tensor, sin: &Tensor) -> Result<Tensor> {
         parts.push(a);
         parts.push(b);
     }
-    Tensor::cat(&parts, D::Minus1)
+    Tensor::cat(&parts, D::Minus1)?.to_dtype(dtype)
 }
 
 fn rotary_1d(dim: usize, seq: usize, theta: f64, device: &Device) -> Result<(Tensor, Tensor)> {

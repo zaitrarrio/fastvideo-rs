@@ -1,10 +1,11 @@
 use std::path::PathBuf;
+use std::time::Instant;
 
 use candle_core::{DType, Device};
 use fastvideo_loader::load_diffusers_components;
 use fastvideo_models::{
-    tokenize_prompt, FlowUniPCMultistepScheduler, GenerateConfig, Umt5Config, WanPipeline,
-    WanVaeConfig, WanVideoArchConfig,
+    tokenize_prompt, ClipVision, ClipVisionConfig, FlowUniPCMultistepScheduler, GenerateConfig,
+    Umt5Config, WanPipeline, WanVaeConfig, WanVideoArchConfig,
 };
 use fastvideo_ops::{HostBackend, TensorBackend};
 
@@ -189,7 +190,7 @@ impl VideoGenerator {
         if is_i2v && !self.tiny && self.image_path.is_none() {
             return Err(FastVideoError::NotImplemented {
                 component: "I2V generate".into(),
-                detail: "pass --image <png|jpeg>; VAE encode + 36-channel pack is wired, CLIP image tokens are optional".into(),
+                detail: "pass --image <png|jpeg>; CLIP ViT-H + VAE 36-channel pack run when image_encoder/ is present".into(),
             });
         }
         let weights = if self.tiny {
@@ -250,6 +251,7 @@ impl VideoGenerator {
                 Umt5Config::xxl(),
                 device,
                 components.transformer_2,
+                components.image_encoder,
             )
             .map_err(candle_err)?
         };
@@ -257,6 +259,69 @@ impl VideoGenerator {
         Ok(GenerateOutput {
             output_path: frames.first().cloned(),
             frame_paths: frames,
+        })
+    }
+
+    /// Time weight load + generate. Use on Vast CUDA, not laptop CPU.
+    pub fn bench_video(&self, prompt: &str) -> Result<(GenerateOutput, BenchStats)> {
+        let t0 = Instant::now();
+        let out = self.generate_video(prompt)?;
+        let total_ms = t0.elapsed().as_millis();
+        Ok((
+            out.clone(),
+            BenchStats {
+                model: self.model_id.clone(),
+                device: self.device.clone(),
+                dtype: self.dtype.clone().unwrap_or_else(|| "default".into()),
+                height: self.sampling.height,
+                width: self.sampling.width,
+                frames: self.sampling.num_frames,
+                steps: self.sampling.num_inference_steps,
+                load_and_generate_ms: total_ms,
+                frames_written: out.frame_paths.len() as u32,
+            },
+        ))
+    }
+
+    /// CLIP ViT-H encode only (`image_encoder/`). Does not load DiT/UMT5.
+    pub fn bench_clip(&self, image: &str) -> Result<ClipBenchStats> {
+        let root = self.resolved_clip_dir().ok_or_else(|| {
+            FastVideoError::Message(
+                "CLIP bench needs image_encoder/ (I2V Diffusers snapshot or --weights)".into(),
+            )
+        })?;
+        let device = resolve_candle_device(&self.device)?;
+        let dtype = resolve_dtype(self.dtype.as_deref(), &self.device)?;
+        let t0 = Instant::now();
+        let vb = fastvideo_loader::var_builder_from_dir(&root.join("image_encoder"), dtype, &device)
+            .map_err(|e| FastVideoError::Message(e.to_string()))?;
+        let clip = ClipVision::load(ClipVisionConfig::vit_h_14(), vb).map_err(candle_err)?;
+        let load_ms = t0.elapsed().as_millis();
+        let t1 = Instant::now();
+        let tokens = clip
+            .encode_image_file(image, &device, dtype)
+            .map_err(candle_err)?;
+        let encode_ms = t1.elapsed().as_millis();
+        Ok(ClipBenchStats {
+            hidden: tokens.dims().to_vec(),
+            load_ms,
+            encode_ms,
+            path: root.display().to_string(),
+        })
+    }
+
+    pub fn resolved_clip_dir(&self) -> Option<PathBuf> {
+        let candidates = [
+            self.weights_path.as_ref().map(PathBuf::from),
+            std::env::var("FASTVIDEO_WEIGHTS").ok().map(PathBuf::from),
+            fastvideo_models::wan::weights::hf_snapshot(&self.model_id),
+            fastvideo_models::wan::weights::hf_snapshot("Wan-AI/Wan2.1-I2V-14B-480P-Diffusers"),
+        ];
+        candidates.into_iter().flatten().find(|p| {
+            p.join("image_encoder").is_dir()
+                && fastvideo_loader::collect_safetensors(&p.join("image_encoder"))
+                    .map(|f| !f.is_empty())
+                    .unwrap_or(false)
         })
     }
 
@@ -373,4 +438,25 @@ fn candle_err(err: candle_core::Error) -> FastVideoError {
 pub struct GenerateOutput {
     pub output_path: Option<String>,
     pub frame_paths: Vec<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct BenchStats {
+    pub model: String,
+    pub device: String,
+    pub dtype: String,
+    pub height: u32,
+    pub width: u32,
+    pub frames: u32,
+    pub steps: u32,
+    pub load_and_generate_ms: u128,
+    pub frames_written: u32,
+}
+
+#[derive(Debug, Clone)]
+pub struct ClipBenchStats {
+    pub hidden: Vec<usize>,
+    pub load_ms: u128,
+    pub encode_ms: u128,
+    pub path: String,
 }

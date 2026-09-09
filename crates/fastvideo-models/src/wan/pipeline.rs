@@ -7,6 +7,7 @@ use candle_nn::VarBuilder;
 use rand::{Rng, SeedableRng};
 use rand_distr::StandardNormal;
 
+use super::clip::{ClipVision, ClipVisionConfig};
 use super::config::WanVideoArchConfig;
 use super::family::{i2v_first_frame_mask, moe_expert, MoeExpert};
 use super::transformer::WanTransformer3D;
@@ -66,6 +67,7 @@ pub struct WanPipeline {
     transformer: WanTransformer3D,
     transformer_2: Option<WanTransformer3D>,
     vae: AutoencoderKlWan,
+    clip: Option<ClipVision>,
     device: Device,
     tiny: bool,
     dtype: DType,
@@ -84,6 +86,7 @@ impl WanPipeline {
             transformer: WanTransformer3D::load(WanVideoArchConfig::tiny(), vb.pp("dit"))?,
             transformer_2: None,
             vae: AutoencoderKlWan::load(WanVaeConfig::tiny(), vb.pp("vae"))?,
+            clip: None,
             device: device.clone(),
             tiny: true,
             dtype,
@@ -100,6 +103,7 @@ impl WanPipeline {
         text_cfg: Umt5Config,
         device: Device,
         transformer_2_vb: Option<VarBuilder>,
+        clip_vb: Option<VarBuilder>,
     ) -> Result<Self> {
         let dtype = transformer_vb.dtype();
         let boundary_ratio = dit_cfg.boundary_ratio;
@@ -107,11 +111,16 @@ impl WanPipeline {
             Some(vb) => Some(WanTransformer3D::load(dit_cfg.clone(), vb)?),
             None => None,
         };
+        let clip = match clip_vb {
+            Some(vb) => Some(ClipVision::load(ClipVisionConfig::vit_h_14(), vb)?),
+            None => None,
+        };
         Ok(Self {
             text: Umt5Encoder::load(text_cfg, text_vb)?,
             transformer: WanTransformer3D::load(dit_cfg, transformer_vb)?,
             transformer_2,
             vae: AutoencoderKlWan::load(vae_cfg, vae_vb)?,
+            clip,
             device,
             tiny: false,
             dtype,
@@ -178,13 +187,20 @@ impl WanPipeline {
             None
         };
 
+        let clip_tokens = match (&self.clip, cfg.image_path.as_ref()) {
+            (Some(clip), Some(path)) => {
+                let e = clip.encode_image_file(path, &self.device, self.dtype)?;
+                Some(Tensor::cat(&[&e, &e], 0)?)
+            }
+            _ => None,
+        };
         let encoder_hs = self.encode_prompt(cfg)?.to_dtype(self.dtype)?;
         let boundary = cfg.boundary_ratio.or(self.boundary_ratio);
         let ctx = DenoiseCtx {
             high: &self.transformer,
             low: self.transformer_2.as_ref(),
             boundary_ratio: boundary,
-            image: None,
+            image: clip_tokens.as_ref(),
             i2v: i2v_pack.as_ref().map(|(mask, cond)| (mask, cond)),
             guidance: cfg.guidance_scale,
             guidance_2: cfg.guidance_scale_2.unwrap_or(cfg.guidance_scale),

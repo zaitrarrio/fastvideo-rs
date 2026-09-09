@@ -51,6 +51,12 @@ pub fn gelu_tanh(xs: &Tensor) -> Result<Tensor> {
     ((&xs * 0.5)? * (1.0 + tanh)?)?.to_dtype(dtype)
 }
 
+/// Exact GELU (`erf`) used by OpenCLIP ViT-H (`hidden_act: gelu`).
+pub fn gelu(xs: &Tensor) -> Result<Tensor> {
+    let dtype = xs.dtype();
+    xs.to_dtype(DType::F32)?.gelu()?.to_dtype(dtype)
+}
+
 pub fn rms_norm(xs: &Tensor, weight: &Tensor, eps: f64) -> Result<Tensor> {
     let x = xs.to_dtype(DType::F32)?;
     let mean_sq = x.sqr()?.mean_keepdim(D::Minus1)?;
@@ -141,13 +147,17 @@ pub fn scaled_dot_product_attention(
     v: &Tensor,
     mask: Option<&Tensor>,
 ) -> Result<Tensor> {
-    // q/k/v: [B, heads, seq, dim]
+    // q/k/v: [B, heads, seq, dim]. CUDA BF16 cannot multiply an F32/F64 scale.
+    let dtype = q.dtype();
+    let q = q.to_dtype(DType::F32)?;
+    let k = k.to_dtype(DType::F32)?;
+    let v = v.to_dtype(DType::F32)?;
     let dim = q.dim(D::Minus1)? as f64;
     let scale = 1.0 / dim.sqrt();
     let mut attn = (q.matmul(&k.transpose(D::Minus1, D::Minus2)?)? * scale)?;
     if let Some(mask) = mask {
-        attn = attn.broadcast_add(mask)?;
+        attn = attn.broadcast_add(&mask.to_dtype(DType::F32)?)?;
     }
     let attn = candle_nn::ops::softmax_last_dim(&attn)?;
-    attn.matmul(v)
+    attn.matmul(&v)?.to_dtype(dtype)
 }

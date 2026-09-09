@@ -19,6 +19,8 @@ enum Commands {
     ListModels,
     /// Resolve a model id and run generation (use --tiny for a zero-weight smoke test).
     Generate(GenerateArgs),
+    /// Time CUDA generate (Vast GPU). Not a laptop CPU job.
+    Bench(BenchArgs),
     /// Print the flow-match or DMD sigma table for a resolved model.
     Schedule(ScheduleArgs),
 }
@@ -69,6 +71,41 @@ struct GenerateArgs {
     /// First-frame image for I2V (PNG or JPEG).
     #[arg(long)]
     image: Option<String>,
+}
+
+#[derive(clap::Args)]
+struct BenchArgs {
+    #[arg(long, default_value = "Wan-AI/Wan2.1-T2V-1.3B-Diffusers")]
+    model: String,
+    #[arg(long, default_value = "candle")]
+    backend: CliBackend,
+    #[arg(long, default_value = "A curious raccoon in a field of sunflowers.")]
+    prompt: String,
+    #[arg(long)]
+    weights: Option<String>,
+    #[arg(long)]
+    output: Option<String>,
+    #[arg(long, default_value = "cuda")]
+    device: String,
+    #[arg(long)]
+    dtype: Option<String>,
+    #[arg(long)]
+    steps: Option<u32>,
+    #[arg(long)]
+    frames: Option<u32>,
+    #[arg(long)]
+    height: Option<u32>,
+    #[arg(long)]
+    width: Option<u32>,
+    #[arg(long)]
+    guidance: Option<f32>,
+    #[arg(long)]
+    seed: Option<u64>,
+    #[arg(long)]
+    image: Option<String>,
+    /// Only time CLIP ViT-H `image_encoder/` (no DiT).
+    #[arg(long, default_value_t = false)]
+    clip_only: bool,
 }
 
 #[derive(clap::Args)]
@@ -142,6 +179,77 @@ fn main() -> Result<()> {
                 Err(err) => {
                     eprintln!("{err}");
                     std::process::exit(2);
+                }
+            }
+        }
+        Commands::Bench(args) => {
+            if !args.device.to_ascii_lowercase().starts_with("cuda") {
+                eprintln!("bench is a Vast CUDA job; got --device {}", args.device);
+                std::process::exit(2);
+            }
+            let gen = VideoGenerator::from_pretrained(
+                &args.model,
+                LoadOptions {
+                    backend: args.backend.into(),
+                    weights_path: args.weights,
+                    output_path: args.output.or_else(|| Some("/workspace/fastvideo-bench".into())),
+                    device: args.device,
+                    dtype: args.dtype,
+                    height: args.height,
+                    width: args.width,
+                    num_frames: args.frames,
+                    num_inference_steps: args.steps,
+                    guidance_scale: args.guidance,
+                    seed: args.seed,
+                    image_path: args.image.clone(),
+                    ..LoadOptions::default()
+                },
+            )?;
+            println!("{}", gen.summary());
+            if args.clip_only {
+                let image = args.image.ok_or_else(|| {
+                    anyhow::anyhow!("--clip-only needs --image <png|jpeg>")
+                })?;
+                match gen.bench_clip(&image) {
+                    Ok(stats) => {
+                        println!(
+                            "{}",
+                            serde_json::json!({
+                                "clip_hidden": stats.hidden,
+                                "clip_load_ms": stats.load_ms,
+                                "clip_encode_ms": stats.encode_ms,
+                                "image_encoder": stats.path,
+                            })
+                        );
+                    }
+                    Err(err) => {
+                        eprintln!("{err}");
+                        std::process::exit(2);
+                    }
+                }
+            } else {
+                match gen.bench_video(&args.prompt) {
+                    Ok((out, stats)) => {
+                        println!(
+                            "{}",
+                            serde_json::json!({
+                                "model": stats.model,
+                                "device": stats.device,
+                                "dtype": stats.dtype,
+                                "height": stats.height,
+                                "width": stats.width,
+                                "frames": stats.frames,
+                                "steps": stats.steps,
+                                "load_and_generate_ms": stats.load_and_generate_ms,
+                                "frames_written": stats.frames_written,
+                                "first_frame": out.frame_paths.first(),
+                            })
+                        );
+                    }
+                    Err(err) => {
+                        eprintln!("{err}");
+                        std::process::exit(2);
+                    }
                 }
             }
         }

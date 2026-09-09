@@ -11,37 +11,32 @@ CUDA. Burn and Luminal backends remain stubs. Mac/CI stay on CPU.
 | Wan/FastWan HF id registry | done |
 | UniPC (Wan T2V) + FastWan DMD `[1000, 757, 522]` | done |
 | Candle Wan T2V: UMT5 → DiT → VAE PNG | 1.3B Diffusers (auto HF cache) |
-| I2V 36-ch pack + VAE encode | `--image` (CLIP tokens optional) |
+| I2V 36-ch pack + VAE encode + CLIP ViT-H | `--image`; CLIP from `image_encoder/` |
 | Wan 2.2 MoE `transformer_2` | route by `boundary_ratio` |
-| Candle CUDA (`--features cuda --device cuda`) | Vast RTX 4090 |
+| GPU tests + benches | Vast RTX 4090 (`scripts/vast-gpu-bench.sh`) |
 | Burn Flex / Luminal graphs | stubs (PNG via Candle if `--weights`) |
 
 ## CLI (CPU / CI)
 
+Mac/CI stay on the zero-weight graph. **Do not** load 1.3B on CPU.
+
 ```bash
 cargo test --workspace
-# zero-weight CI graph
 cargo run -p fastvideo-cli -- generate \
   --model FastVideo/FastWan2.1-T2V-1.3B-Diffusers \
   --tiny --output /tmp/fastvideo-tiny
-
-# full Wan 2.1 T2V 1.3B from the local Hugging Face snapshot
-# (~17GB F32; use --frames/--steps/--height/--width to smoke)
-cargo run -p fastvideo-cli -- generate \
-  --model Wan-AI/Wan2.1-T2V-1.3B-Diffusers \
-  --frames 9 --steps 2 --height 256 --width 256 \
-  --output /tmp/fastvideo-1-3b
 ```
 
-Weights resolve in order: `--weights`, `FASTVIDEO_WEIGHTS`, then
-`~/.cache/huggingface/hub/models--Wan-AI--Wan2.1-T2V-1.3B-Diffusers`. I2V needs
-`--image frame.png`. A14B MoE loads `transformer_2/` when present.
-
-A full 1.3B load is not part of `cargo test`. To smoke it:
+## GPU tests and benches (Vast)
 
 ```bash
-FASTVIDEO_REAL_GENERATE=1 cargo test -p fastvideo-core candle_real_1_3b_generate_is_gated -- --nocapture
+./scripts/vast-sync.sh
+# on the instance, once: bash scripts/vast-setup-cuda.sh
+./scripts/vast-gpu-bench.sh          # CUDA tests + 1.3B smoke + CLIP encode
+./scripts/vast-gpu-bench.sh full     # plus 480p / 8-step
 ```
+
+Weights live on the instance (`scripts/vast-pull-weights.sh`): 1.3B T2V (fits 24GB bf16) plus I2V `image_encoder/` (CLIP ViT-H). Full I2V 14B / A14B DiTs need 48GB+ VRAM (`PULL_I2V_FULL=1` / `PULL_A14B=1`).
 
 ## GPU on Vast
 
@@ -100,6 +95,8 @@ crates/
 scripts/
   vast-sync.sh         rsync onto the Vast box
   vast-setup-cuda.sh   rustup + CUDA 12.4 nvcc
+  vast-pull-weights.sh 1.3B T2V + I2V CLIP on the instance
+  vast-gpu-bench.sh    CUDA tests + generate/CLIP benches
   vast-generate.sh     CUDA tiny or 1.3B generate
 ```
 
