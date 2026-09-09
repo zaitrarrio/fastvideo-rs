@@ -6,8 +6,10 @@ license.workspace = true
 description = "Hugging Face Diffusers loaders and weight-name mapping."
 
 [dependencies]
+candle-core.workspace = true
+candle-nn.workspace = true
 fastvideo-models.workspace = true
-thiserror.workspace = true
+thiserror = { workspace = true }
 
 [lints]
 workspace = true

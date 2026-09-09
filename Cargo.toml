@@ -24,7 +24,15 @@ anyhow = "1"
 clap = { version = "4", features = ["derive"] }
 serde = { version = "1", features = ["derive"] }
 thiserror = "2"
+serde_json = "1"
 candle-core = "0.11"
+candle-nn = "0.11"
+hf-hub = { version = "0.4", default-features = false, features = ["ureq"] }
+safetensors = "0.6"
+tokenizers = { version = "0.22", default-features = false, features = ["onig"] }
+image = { version = "0.25", default-features = false, features = ["png"] }
+rand = "0.9"
+rand_distr = "0.5"
 
 fastvideo-ops = { path = "crates/fastvideo-ops" }
 fastvideo-core = { path = "crates/fastvideo-core" }

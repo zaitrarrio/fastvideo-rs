@@ -7,6 +7,9 @@ description = "FastVideo-rs pipeline core: registry, sampling, VideoGenerator."
 
 [dependencies]
 thiserror.workspace = true
+candle-core.workspace = true
+fastvideo-models.workspace = true
+fastvideo-loader.workspace = true
 
 [lints]
 workspace = true

@@ -17,7 +17,7 @@ struct Cli {
 enum Commands {
     /// List registered Wan/FastWan Hugging Face ids.
     ListModels,
-    /// Resolve a model id and attempt generation (DiT is Phase 1).
+    /// Resolve a model id and run generation (use --tiny for a zero-weight smoke test).
     Generate(GenerateArgs),
     /// Print the flow-match or DMD sigma table for a resolved model.
     Schedule(ScheduleArgs),
@@ -34,6 +34,15 @@ struct GenerateArgs {
     prompt: String,
     #[arg(long, default_value_t = 1)]
     num_gpus: u32,
+    /// Zero-weight tiny graph (no Hub download). Writes PNG frames.
+    #[arg(long, default_value_t = false)]
+    tiny: bool,
+    /// Local Diffusers directory with transformer/, vae/, and text_encoder/.
+    #[arg(long)]
+    weights: Option<String>,
+    /// Directory for decoded PNG frames.
+    #[arg(long)]
+    output: Option<String>,
 }
 
 #[derive(clap::Args)]
@@ -81,11 +90,18 @@ fn main() -> Result<()> {
                 LoadOptions {
                     backend: args.backend.into(),
                     num_gpus: args.num_gpus,
+                    tiny: args.tiny,
+                    weights_path: args.weights,
+                    output_path: args.output,
                 },
             )?;
             println!("{}", gen.summary());
             match gen.generate_video(&args.prompt) {
-                Ok(_) => {}
+                Ok(out) => {
+                    if let Some(path) = out.frame_paths.first() {
+                        println!("wrote {} frames, first={path}", out.frame_paths.len());
+                    }
+                }
                 Err(err) => {
                     eprintln!("{err}");
                     std::process::exit(2);
