@@ -9,20 +9,38 @@ CUDA. Burn and Luminal backends remain stubs. Mac/CI stay on CPU.
 | Piece | State |
 | --- | --- |
 | Wan/FastWan HF id registry | done |
-| UniPC sigma table + Euler step | done |
-| FastWan DMD timesteps `[1000, 757, 522]` | done |
-| Candle CPU UMT5 + DiT + VAE decode | done (`--tiny`) |
+| UniPC (Wan T2V) + FastWan DMD `[1000, 757, 522]` | done |
+| Candle Wan T2V: UMT5 → DiT → VAE PNG | 1.3B Diffusers (auto HF cache) |
+| I2V 36-ch pack + VAE encode | `--image` (CLIP tokens optional) |
+| Wan 2.2 MoE `transformer_2` | route by `boundary_ratio` |
 | Candle CUDA (`--features cuda --device cuda`) | Vast RTX 4090 |
-| Diffusers safetensors + tokenizer.json | local dir |
-| Burn Flex / Luminal graphs | stubs |
+| Burn Flex / Luminal graphs | stubs (PNG via Candle if `--weights`) |
 
 ## CLI (CPU / CI)
 
 ```bash
 cargo test --workspace
+# zero-weight CI graph
 cargo run -p fastvideo-cli -- generate \
   --model FastVideo/FastWan2.1-T2V-1.3B-Diffusers \
   --tiny --output /tmp/fastvideo-tiny
+
+# full Wan 2.1 T2V 1.3B from the local Hugging Face snapshot
+# (~17GB F32; use --frames/--steps/--height/--width to smoke)
+cargo run -p fastvideo-cli -- generate \
+  --model Wan-AI/Wan2.1-T2V-1.3B-Diffusers \
+  --frames 9 --steps 2 --height 256 --width 256 \
+  --output /tmp/fastvideo-1-3b
+```
+
+Weights resolve in order: `--weights`, `FASTVIDEO_WEIGHTS`, then
+`~/.cache/huggingface/hub/models--Wan-AI--Wan2.1-T2V-1.3B-Diffusers`. I2V needs
+`--image frame.png`. A14B MoE loads `transformer_2/` when present.
+
+A full 1.3B load is not part of `cargo test`. To smoke it:
+
+```bash
+FASTVIDEO_REAL_GENERATE=1 cargo test -p fastvideo-core candle_real_1_3b_generate_is_gated -- --nocapture
 ```
 
 ## GPU on Vast
@@ -46,13 +64,14 @@ cargo run -p fastvideo-cli --release --features cuda -- generate \
   --model Wan-AI/Wan2.1-T2V-1.3B-Diffusers \
   --device cuda \
   --dtype bf16 \
-  --weights /workspace/weights/Wan2.1-T2V-1.3B-Diffusers \
+  --frames 9 --steps 2 --height 256 --width 256 \
   --output /workspace/fastvideo-out \
   --prompt "A curious raccoon in a field of sunflowers."
 ```
 
-`--weights` is a Diffusers layout: `transformer/`, `vae/`, `text_encoder/`, and
-`tokenizer/tokenizer.json`. Bring-up checkpoint:
+`--weights` is optional when the Diffusers snapshot is already in the HF cache.
+Layout: `transformer/`, `vae/`, `text_encoder/`, `tokenizer/tokenizer.json`, and
+`transformer_2/` for Wan 2.2 MoE. Bring-up checkpoint:
 `Wan-AI/Wan2.1-T2V-1.3B-Diffusers`.
 
 ## Local Linux CUDA build (Docker)

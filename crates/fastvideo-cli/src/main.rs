@@ -32,12 +32,15 @@ struct GenerateArgs {
     backend: CliBackend,
     #[arg(long, default_value = "A curious raccoon in a field of sunflowers.")]
     prompt: String,
+    #[arg(long)]
+    negative: Option<String>,
     #[arg(long, default_value_t = 1)]
     num_gpus: u32,
     /// Zero-weight tiny graph (no Hub download). Writes PNG frames.
     #[arg(long, default_value_t = false)]
     tiny: bool,
     /// Local Diffusers directory with transformer/, vae/, and text_encoder/.
+    /// If omitted, uses FASTVIDEO_WEIGHTS or the cached Hugging Face snapshot.
     #[arg(long)]
     weights: Option<String>,
     /// Directory for decoded PNG frames.
@@ -49,6 +52,23 @@ struct GenerateArgs {
     /// `f32`, `f16`, or `bf16`. Defaults to bf16 on CUDA, f32 on CPU.
     #[arg(long)]
     dtype: Option<String>,
+    #[arg(long)]
+    steps: Option<u32>,
+    #[arg(long)]
+    frames: Option<u32>,
+    #[arg(long)]
+    height: Option<u32>,
+    #[arg(long)]
+    width: Option<u32>,
+    #[arg(long)]
+    guidance: Option<f32>,
+    #[arg(long)]
+    guidance_2: Option<f32>,
+    #[arg(long)]
+    seed: Option<u64>,
+    /// First-frame image for I2V (PNG or JPEG).
+    #[arg(long)]
+    image: Option<String>,
 }
 
 #[derive(clap::Args)]
@@ -101,6 +121,15 @@ fn main() -> Result<()> {
                     output_path: args.output,
                     device: args.device,
                     dtype: args.dtype,
+                    height: args.height,
+                    width: args.width,
+                    num_frames: args.frames,
+                    num_inference_steps: args.steps,
+                    guidance_scale: args.guidance,
+                    guidance_scale_2: args.guidance_2,
+                    seed: args.seed,
+                    negative_prompt: args.negative,
+                    image_path: args.image,
                 },
             )?;
             println!("{}", gen.summary());

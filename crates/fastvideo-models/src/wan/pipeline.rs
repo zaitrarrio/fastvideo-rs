@@ -8,6 +8,7 @@ use rand::{Rng, SeedableRng};
 use rand_distr::StandardNormal;
 
 use super::config::WanVideoArchConfig;
+use super::family::{i2v_first_frame_mask, moe_expert, MoeExpert};
 use super::transformer::WanTransformer3D;
 use super::umt5::{pad_prompt_embeds, Umt5Config, Umt5Encoder};
 use super::vae::{AutoencoderKlWan, WanVaeConfig};
@@ -29,6 +30,11 @@ pub struct GenerateConfig {
     pub flow_shift: f64,
     pub dmd_steps: Option<Vec<i32>>,
     pub tokenizer_path: Option<String>,
+    /// First-frame path for I2V (PNG/JPEG). Required when the DiT is 36-channel.
+    pub image_path: Option<String>,
+    /// Wan 2.2 low-noise CFG. Falls back to `guidance_scale`.
+    pub guidance_scale_2: Option<f32>,
+    pub boundary_ratio: Option<f32>,
 }
 
 impl Default for GenerateConfig {
@@ -48,6 +54,9 @@ impl Default for GenerateConfig {
             flow_shift: 5.0,
             dmd_steps: None,
             tokenizer_path: None,
+            image_path: None,
+            guidance_scale_2: None,
+            boundary_ratio: None,
         }
     }
 }
@@ -55,10 +64,12 @@ impl Default for GenerateConfig {
 pub struct WanPipeline {
     text: Umt5Encoder,
     transformer: WanTransformer3D,
+    transformer_2: Option<WanTransformer3D>,
     vae: AutoencoderKlWan,
     device: Device,
     tiny: bool,
     dtype: DType,
+    boundary_ratio: Option<f32>,
 }
 
 impl WanPipeline {
@@ -71,10 +82,12 @@ impl WanPipeline {
         Ok(Self {
             text: Umt5Encoder::load(Umt5Config::tiny(), vb.pp("text"))?,
             transformer: WanTransformer3D::load(WanVideoArchConfig::tiny(), vb.pp("dit"))?,
+            transformer_2: None,
             vae: AutoencoderKlWan::load(WanVaeConfig::tiny(), vb.pp("vae"))?,
             device: device.clone(),
             tiny: true,
             dtype,
+            boundary_ratio: None,
         })
     }
 
@@ -86,15 +99,23 @@ impl WanPipeline {
         vae_cfg: WanVaeConfig,
         text_cfg: Umt5Config,
         device: Device,
+        transformer_2_vb: Option<VarBuilder>,
     ) -> Result<Self> {
         let dtype = transformer_vb.dtype();
+        let boundary_ratio = dit_cfg.boundary_ratio;
+        let transformer_2 = match transformer_2_vb {
+            Some(vb) => Some(WanTransformer3D::load(dit_cfg.clone(), vb)?),
+            None => None,
+        };
         Ok(Self {
             text: Umt5Encoder::load(text_cfg, text_vb)?,
             transformer: WanTransformer3D::load(dit_cfg, transformer_vb)?,
+            transformer_2,
             vae: AutoencoderKlWan::load(vae_cfg, vae_vb)?,
             device,
             tiny: false,
             dtype,
+            boundary_ratio,
         })
     }
 
@@ -138,6 +159,10 @@ impl WanPipeline {
                 self.transformer.cfg.out_channels,
             )
         };
+        let i2v = !self.tiny && self.transformer.cfg.in_channels > self.transformer.cfg.out_channels;
+        if i2v && cfg.image_path.is_none() {
+            candle_core::bail!("I2V generate needs --image <png|jpeg> for 36-channel latent packing");
+        }
         let mut rng = rand::rngs::StdRng::seed_from_u64(cfg.seed);
         let n_el = z_c * z_t * z_h * z_w;
         let noise: Vec<f32> = (0..n_el)
@@ -146,7 +171,25 @@ impl WanPipeline {
         let mut latents =
             Tensor::from_vec(noise, (1, z_c, z_t, z_h, z_w), &self.device)?.to_dtype(self.dtype)?;
 
+        let i2v_pack = if i2v {
+            let image = cfg.image_path.as_deref().unwrap();
+            Some(self.encode_i2v_condition(image, cfg.height, cfg.width, z_t, z_h, z_w)?)
+        } else {
+            None
+        };
+
         let encoder_hs = self.encode_prompt(cfg)?.to_dtype(self.dtype)?;
+        let boundary = cfg.boundary_ratio.or(self.boundary_ratio);
+        let ctx = DenoiseCtx {
+            high: &self.transformer,
+            low: self.transformer_2.as_ref(),
+            boundary_ratio: boundary,
+            image: None,
+            i2v: i2v_pack.as_ref().map(|(mask, cond)| (mask, cond)),
+            guidance: cfg.guidance_scale,
+            guidance_2: cfg.guidance_scale_2.unwrap_or(cfg.guidance_scale),
+            dtype: self.dtype,
+        };
 
         if cfg.is_dmd {
             let steps = cfg
@@ -155,26 +198,11 @@ impl WanPipeline {
                 .unwrap_or_else(|| crate::schedulers::FAST_WAN_1_3B_DMD_STEPS.to_vec());
             let s = DmdSchedule::new(&steps, cfg.flow_shift, 1000);
             let timesteps: Vec<f32> = s.train_timesteps.iter().map(|&t| t as f32).collect();
-            latents = euler_denoise(
-                &self.transformer,
-                latents,
-                &encoder_hs,
-                &timesteps,
-                &s.sigmas,
-                cfg.guidance_scale,
-                self.dtype,
-            )?;
+            latents = euler_denoise(latents, &encoder_hs, &timesteps, &s.sigmas, &ctx)?;
         } else {
             let mut sched = FlowUniPCMultistepScheduler::new(1000, cfg.flow_shift);
             sched.set_timesteps(cfg.num_inference_steps);
-            latents = unipc_denoise(
-                &self.transformer,
-                latents,
-                &encoder_hs,
-                &mut sched,
-                cfg.guidance_scale,
-                self.dtype,
-            )?;
+            latents = unipc_denoise(latents, &encoder_hs, &mut sched, &ctx)?;
         }
 
         let latents = if self.tiny {
@@ -184,6 +212,69 @@ impl WanPipeline {
         };
         let video = self.vae.decode(&latents)?;
         write_frames(&video, Path::new(&cfg.output_dir))
+    }
+
+    fn encode_i2v_condition(
+        &self,
+        image_path: &str,
+        height: usize,
+        width: usize,
+        z_t: usize,
+        z_h: usize,
+        z_w: usize,
+    ) -> Result<(Tensor, Tensor)> {
+        let video = load_rgb_frame(image_path, height, width, &self.device)?.to_dtype(self.dtype)?;
+        let encoded = self.vae.encode_video(&video)?;
+        let encoded = self.vae.normalize_latents(&encoded)?;
+        let first = encoded.narrow(2, 0, 1)?;
+        let (_, c, _, eh, ew) = first.dims5()?;
+        if eh != z_h || ew != z_w {
+            candle_core::bail!(
+                "I2V VAE latent spatial {eh}x{ew} does not match expected {z_h}x{z_w}"
+            );
+        }
+        let rest_t = z_t.saturating_sub(1);
+        let cond = if rest_t == 0 {
+            first
+        } else {
+            let rest = Tensor::zeros((1, c, rest_t, z_h, z_w), encoded.dtype(), &self.device)?;
+            Tensor::cat(&[&first, &rest], 2)?
+        };
+        let mask_c = self.transformer.cfg.in_channels.saturating_sub(2 * c).max(1);
+        let mask = Tensor::from_vec(
+            i2v_first_frame_mask(z_t, z_h, z_w),
+            (1, 4, z_t, z_h, z_w),
+            &self.device,
+        )?
+        .to_dtype(self.dtype)?;
+        let mask = if mask_c == 4 {
+            mask
+        } else {
+            mask.narrow(1, 0, mask_c)?
+        };
+        Ok((mask, cond.to_dtype(self.dtype)?))
+    }
+}
+
+struct DenoiseCtx<'a> {
+    high: &'a WanTransformer3D,
+    low: Option<&'a WanTransformer3D>,
+    boundary_ratio: Option<f32>,
+    image: Option<&'a Tensor>,
+    i2v: Option<(&'a Tensor, &'a Tensor)>,
+    guidance: f32,
+    guidance_2: f32,
+    dtype: DType,
+}
+
+fn pick_expert<'a>(ctx: &'a DenoiseCtx<'_>, t: f32) -> (&'a WanTransformer3D, f32) {
+    if let (Some(ratio), Some(low)) = (ctx.boundary_ratio, ctx.low) {
+        match moe_expert(f64::from(t), ratio, 1000) {
+            MoeExpert::LowNoise => (low, ctx.guidance_2),
+            MoeExpert::HighNoise => (ctx.high, ctx.guidance),
+        }
+    } else {
+        (ctx.high, ctx.guidance)
     }
 }
 
@@ -196,47 +287,46 @@ fn cfg_guide(uncond: &Tensor, text: &Tensor, scale: f32, dtype: DType) -> Result
     (uncond_f.clone() + ((text_f - uncond_f)? * f64::from(scale))?)?.to_dtype(dtype)
 }
 
-fn dit_cfg(
-    transformer: &WanTransformer3D,
-    latents: &Tensor,
-    encoder_hs: &Tensor,
-    t: f32,
-    guidance_scale: f32,
-    dtype: DType,
-) -> Result<Tensor> {
+fn pack_dit_input(latents: &Tensor, i2v: Option<(&Tensor, &Tensor)>) -> Result<Tensor> {
+    let packed = if let Some((mask, cond)) = i2v {
+        Tensor::cat(&[latents, mask, cond], 1)?
+    } else {
+        latents.clone()
+    };
+    Tensor::cat(&[&packed, &packed], 0)
+}
+
+fn dit_cfg(ctx: &DenoiseCtx, latents: &Tensor, encoder_hs: &Tensor, t: f32) -> Result<Tensor> {
+    let (transformer, scale) = pick_expert(ctx, t);
     let device = latents.device();
-    let t_tensor = Tensor::from_vec(vec![t, t], (2,), device)?.to_dtype(dtype)?;
-    let latent_in = Tensor::cat(&[latents, latents], 0)?;
-    let noise_pred = transformer.forward(&latent_in, &t_tensor, encoder_hs)?;
+    let t_tensor = Tensor::from_vec(vec![t, t], (2,), device)?.to_dtype(ctx.dtype)?;
+    let latent_in = pack_dit_input(latents, ctx.i2v)?;
+    let noise_pred = transformer.forward_ctx(&latent_in, &t_tensor, encoder_hs, ctx.image)?;
     let chunks = noise_pred.chunk(2, 0)?;
-    cfg_guide(&chunks[0], &chunks[1], guidance_scale, dtype)
+    cfg_guide(&chunks[0], &chunks[1], scale, ctx.dtype)
 }
 
 fn euler_denoise(
-    transformer: &WanTransformer3D,
     mut latents: Tensor,
     encoder_hs: &Tensor,
     timesteps: &[f32],
     sigmas: &[f64],
-    guidance_scale: f32,
-    dtype: DType,
+    ctx: &DenoiseCtx,
 ) -> Result<Tensor> {
     for (i, &t) in timesteps.iter().enumerate() {
-        let guided = dit_cfg(transformer, &latents, encoder_hs, t, guidance_scale, dtype)?;
+        let guided = dit_cfg(ctx, &latents, encoder_hs, t)?;
         let dt = sigmas[i + 1] - sigmas[i];
-        let delta = (guided.to_dtype(DType::F32)? * dt)?.to_dtype(dtype)?;
+        let delta = (guided.to_dtype(DType::F32)? * dt)?.to_dtype(ctx.dtype)?;
         latents = (latents + delta)?;
     }
     Ok(latents)
 }
 
 fn unipc_denoise(
-    transformer: &WanTransformer3D,
     mut latents: Tensor,
     encoder_hs: &Tensor,
     sched: &mut FlowUniPCMultistepScheduler,
-    guidance_scale: f32,
-    dtype: DType,
+    ctx: &DenoiseCtx,
 ) -> Result<Tensor> {
     let device = latents.device().clone();
     let shape = latents.dims().to_vec();
@@ -246,7 +336,7 @@ fn unipc_denoise(
         .map(|t| *t as f32)
         .collect();
     for &t in &ts {
-        let guided = dit_cfg(transformer, &latents, encoder_hs, t, guidance_scale, dtype)?;
+        let guided = dit_cfg(ctx, &latents, encoder_hs, t)?;
         let vel = guided
             .to_dtype(DType::F32)?
             .flatten_all()?
@@ -258,9 +348,30 @@ fn unipc_denoise(
         let prev = sched
             .step(&vel, &x)
             .map_err(|e| candle_core::Error::Msg(e))?;
-        latents = Tensor::from_vec(prev, shape.clone(), &device)?.to_dtype(dtype)?;
+        latents = Tensor::from_vec(prev, shape.clone(), &device)?.to_dtype(ctx.dtype)?;
     }
     Ok(latents)
+}
+
+fn load_rgb_frame(path: &str, height: usize, width: usize, device: &Device) -> Result<Tensor> {
+    let img = image::open(path)
+        .map_err(|e| candle_core::Error::Msg(format!("image load failed: {e}")))?
+        .resize_exact(
+            width as u32,
+            height as u32,
+            image::imageops::FilterType::CatmullRom,
+        )
+        .to_rgb8();
+    let mut data = Vec::with_capacity(3 * height * width);
+    for c in 0..3 {
+        for y in 0..height {
+            for x in 0..width {
+                let p = img.get_pixel(x as u32, y as u32)[c];
+                data.push(f32::from(p) / 127.5 - 1.0);
+            }
+        }
+    }
+    Tensor::from_vec(data, (1, 3, 1, height, width), device)
 }
 
 pub fn tokenize_prompt(path: &str, text: &str, max_len: usize) -> Result<(Vec<u32>, usize)> {
@@ -342,5 +453,29 @@ mod tests {
         // UMT5/T5: pad=0, eos=1. Encoding with special tokens ends in eos.
         assert_eq!(*ids.last().unwrap(), 1);
         assert!(ids.iter().any(|&id| id > 10));
+    }
+
+    #[test]
+    fn load_rgb_frame_is_minus_one_to_one() {
+        let dir = std::env::temp_dir().join("fastvideo-i2v-rgb");
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("cond.png");
+        let img = image::RgbImage::from_pixel(8, 8, image::Rgb([255, 0, 128]));
+        img.save(&path).unwrap();
+        let t = load_rgb_frame(path.to_str().unwrap(), 16, 16, &Device::Cpu).unwrap();
+        assert_eq!(t.dims(), &[1, 3, 1, 16, 16]);
+        let v = t.flatten_all().unwrap().to_vec1::<f32>().unwrap();
+        assert!((v[0] - 1.0).abs() < 1e-5);
+        assert!((v[16 * 16] + 1.0).abs() < 1e-5);
+    }
+
+    #[test]
+    fn i2v_pack_concat_is_36_channels() {
+        let device = Device::Cpu;
+        let noisy = Tensor::zeros((1, 16, 2, 4, 4), DType::F32, &device).unwrap();
+        let mask = Tensor::ones((1, 4, 2, 4, 4), DType::F32, &device).unwrap();
+        let cond = Tensor::zeros((1, 16, 2, 4, 4), DType::F32, &device).unwrap();
+        let packed = pack_dit_input(&noisy, Some((&mask, &cond))).unwrap();
+        assert_eq!(packed.dims(), &[2, 36, 2, 4, 4]);
     }
 }

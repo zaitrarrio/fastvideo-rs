@@ -50,6 +50,11 @@ if [ ! -d "$WEIGHTS/transformer" ]; then
   huggingface-cli download Wan-AI/Wan2.1-T2V-1.3B-Diffusers --local-dir "$WEIGHTS"
 fi
 
+SMOKE_FLAGS=()
+if [ "$MODE" = "1.3b-smoke" ]; then
+  SMOKE_FLAGS=(--frames 9 --steps 2 --height 256 --width 256 --guidance 1.0)
+fi
+
 ./target/release/fastvideo generate \
   --model Wan-AI/Wan2.1-T2V-1.3B-Diffusers \
   --backend candle \
@@ -57,6 +62,7 @@ fi
   --dtype bf16 \
   --weights "$WEIGHTS" \
   --output /workspace/fastvideo-out \
-  --prompt "A curious raccoon in a field of sunflowers."
+  --prompt "A curious raccoon in a field of sunflowers." \
+  "${SMOKE_FLAGS[@]}"
 ls -la /workspace/fastvideo-out | head
 EOF

@@ -21,6 +21,7 @@ pub struct WanVaeConfig {
     pub dim_mult: Vec<usize>,
     pub num_res_blocks: usize,
     pub temporal_upsample: Vec<bool>,
+    pub load_encoder: bool,
 }
 
 impl WanVaeConfig {
@@ -31,6 +32,7 @@ impl WanVaeConfig {
             dim_mult: vec![1, 2, 4, 4],
             num_res_blocks: 2,
             temporal_upsample: vec![true, true, false],
+            load_encoder: true,
         }
     }
 
@@ -41,6 +43,7 @@ impl WanVaeConfig {
             dim_mult: vec![1, 2],
             num_res_blocks: 1,
             temporal_upsample: vec![false],
+            load_encoder: false,
         }
     }
 }
@@ -430,14 +433,141 @@ impl WanDecoder {
 }
 
 #[derive(Debug, Clone)]
+struct EncoderDownsample {
+    spatial_w: Tensor,
+    spatial_b: Tensor,
+    time_conv: Option<CausalConv3d>,
+}
+
+impl EncoderDownsample {
+    fn load_2d(channels: usize, vb: VarBuilder) -> Result<Self> {
+        Ok(Self {
+            spatial_w: vb.pp("resample").pp("1").get((channels, channels, 3, 3), "weight")?,
+            spatial_b: vb.pp("resample").pp("1").get(channels, "bias")?,
+            time_conv: None,
+        })
+    }
+
+    fn load_3d(channels: usize, vb: VarBuilder) -> Result<Self> {
+        Ok(Self {
+            spatial_w: vb.pp("resample").pp("1").get((channels, channels, 3, 3), "weight")?,
+            spatial_b: vb.pp("resample").pp("1").get(channels, "bias")?,
+            time_conv: Some(CausalConv3d::load_k(
+                channels,
+                channels,
+                [3, 1, 1],
+                [2, 1, 1],
+                [1, 0, 0],
+                vb.pp("time_conv"),
+            )?),
+        })
+    }
+
+    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+        let mut x = xs.clone();
+        if let Some(tc) = &self.time_conv {
+            x = tc.forward(&x)?;
+        }
+        let (b, c, t, h, w) = x.dims5()?;
+        let x2 = x.transpose(1, 2)?.contiguous()?.reshape((b * t, c, h, w))?;
+        let y = nn::conv2d(&x2, &self.spatial_w.to_dtype(xs.dtype())?, 1, 2)?.broadcast_add(
+            &self.spatial_b.to_dtype(xs.dtype())?.reshape((1, c, 1, 1))?,
+        )?;
+        let (_, oc, hh, ww) = y.dims4()?;
+        y.reshape((b, t, oc, hh, ww))?.permute((0, 2, 1, 3, 4))
+    }
+}
+
+#[derive(Debug, Clone)]
+struct WanEncoder {
+    conv_in: CausalConv3d,
+    blocks: Vec<EncoderStage>,
+    mid_res0: ResidualBlock,
+    mid_attn: AttentionBlock,
+    mid_res1: ResidualBlock,
+    norm_out: Tensor,
+    conv_out: CausalConv3d,
+    quant: CausalConv3d,
+}
+
+#[derive(Debug, Clone)]
+enum EncoderStage {
+    Res(ResidualBlock),
+    Down(EncoderDownsample),
+}
+
+impl WanEncoder {
+    fn load_wan_2_1(vb: VarBuilder) -> Result<Self> {
+        let d = vb.pp("encoder");
+        let mut blocks = Vec::new();
+        blocks.push(EncoderStage::Res(ResidualBlock::load(96, 96, d.pp("down_blocks").pp("0"))?));
+        blocks.push(EncoderStage::Res(ResidualBlock::load(96, 96, d.pp("down_blocks").pp("1"))?));
+        blocks.push(EncoderStage::Down(EncoderDownsample::load_2d(
+            96,
+            d.pp("down_blocks").pp("2"),
+        )?));
+        blocks.push(EncoderStage::Res(ResidualBlock::load(96, 192, d.pp("down_blocks").pp("3"))?));
+        blocks.push(EncoderStage::Res(ResidualBlock::load(192, 192, d.pp("down_blocks").pp("4"))?));
+        blocks.push(EncoderStage::Down(EncoderDownsample::load_3d(
+            192,
+            d.pp("down_blocks").pp("5"),
+        )?));
+        blocks.push(EncoderStage::Res(ResidualBlock::load(192, 384, d.pp("down_blocks").pp("6"))?));
+        blocks.push(EncoderStage::Res(ResidualBlock::load(384, 384, d.pp("down_blocks").pp("7"))?));
+        blocks.push(EncoderStage::Down(EncoderDownsample::load_3d(
+            384,
+            d.pp("down_blocks").pp("8"),
+        )?));
+        blocks.push(EncoderStage::Res(ResidualBlock::load(384, 384, d.pp("down_blocks").pp("9"))?));
+        blocks.push(EncoderStage::Res(ResidualBlock::load(384, 384, d.pp("down_blocks").pp("10"))?));
+        let mid = d.pp("mid_block");
+        Ok(Self {
+            conv_in: CausalConv3d::load(3, 96, 3, [1, 1, 1], [1, 1, 1], d.pp("conv_in"))?,
+            blocks,
+            mid_res0: ResidualBlock::load(384, 384, mid.pp("resnets").pp("0"))?,
+            mid_attn: AttentionBlock::load(384, mid.pp("attentions").pp("0"))?,
+            mid_res1: ResidualBlock::load(384, 384, mid.pp("resnets").pp("1"))?,
+            norm_out: d.pp("norm_out").get((384, 1, 1, 1), "gamma")?,
+            conv_out: CausalConv3d::load(384, 32, 3, [1, 1, 1], [1, 1, 1], d.pp("conv_out"))?,
+            quant: CausalConv3d::load(32, 32, 1, [1, 1, 1], [0, 0, 0], vb.pp("quant_conv"))?,
+        })
+    }
+
+    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+        let mut x = self.conv_in.forward(xs)?;
+        for block in &self.blocks {
+            x = match block {
+                EncoderStage::Res(r) => r.forward(&x)?,
+                EncoderStage::Down(d) => d.forward(&x)?,
+            };
+        }
+        x = self.mid_res0.forward(&x)?;
+        x = self.mid_attn.forward(&x)?;
+        x = self.mid_res1.forward(&x)?;
+        x = rms_video(&x, &self.norm_out)?;
+        x = nn::silu(&x)?;
+        x = self.conv_out.forward(&x)?;
+        x = self.quant.forward(&x)?;
+        let chunks = x.chunk(2, 1)?;
+        Ok(chunks[0].clone())
+    }
+}
+
+#[derive(Debug, Clone)]
 pub struct AutoencoderKlWan {
     pub cfg: WanVaeConfig,
     post_quant: CausalConv3d,
     decoder: WanDecoder,
+    encoder: Option<WanEncoder>,
 }
 
 impl AutoencoderKlWan {
     pub fn load(cfg: WanVaeConfig, vb: VarBuilder) -> Result<Self> {
+        let encoder = if cfg.load_encoder {
+            Some(WanEncoder::load_wan_2_1(vb.clone())?)
+        } else {
+            None
+        };
         Ok(Self {
             post_quant: CausalConv3d::load(
                 cfg.z_dim,
@@ -448,6 +578,7 @@ impl AutoencoderKlWan {
                 vb.pp("post_quant_conv"),
             )?,
             decoder: WanDecoder::load(&cfg, vb.pp("decoder"))?,
+            encoder,
             cfg,
         })
     }
@@ -460,6 +591,24 @@ impl AutoencoderKlWan {
         let std = Tensor::from_slice(&LATENTS_STD[..n], (1, n, 1, 1, 1), device)?
             .to_dtype(latents.dtype())?;
         latents.broadcast_mul(&std)?.broadcast_add(&mean)
+    }
+
+    pub fn normalize_latents(&self, latents: &Tensor) -> Result<Tensor> {
+        let device = latents.device();
+        let n = self.cfg.z_dim.min(16);
+        let mean = Tensor::from_slice(&LATENTS_MEAN[..n], (1, n, 1, 1, 1), device)?
+            .to_dtype(latents.dtype())?;
+        let std = Tensor::from_slice(&LATENTS_STD[..n], (1, n, 1, 1, 1), device)?
+            .to_dtype(latents.dtype())?;
+        (latents.broadcast_sub(&mean)?).broadcast_div(&std)
+    }
+
+    pub fn encode_video(&self, video: &Tensor) -> Result<Tensor> {
+        let enc = self
+            .encoder
+            .as_ref()
+            .ok_or_else(|| candle_core::Error::Msg("VAE encoder not loaded".into()))?;
+        enc.forward(video)
     }
 
     pub fn decode(&self, latents: &Tensor) -> Result<Tensor> {

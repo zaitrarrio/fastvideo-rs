@@ -231,6 +231,49 @@ impl TextProjection {
 }
 
 #[derive(Debug, Clone)]
+struct ImageEmbedder {
+    norm1_w: Tensor,
+    norm1_b: Tensor,
+    proj: Linear,
+    out: Linear,
+    norm2_w: Tensor,
+    norm2_b: Tensor,
+}
+
+impl ImageEmbedder {
+    fn load(in_dim: usize, out_dim: usize, vb: VarBuilder) -> Result<Self> {
+        Ok(Self {
+            norm1_w: vb.pp("norm1").get(in_dim, "weight")?,
+            norm1_b: vb.pp("norm1").get(in_dim, "bias")?,
+            // Diffusers FeedForward(in, out, mult=1, gelu): Linear(in, in) then Linear(in, out).
+            proj: Linear::load(in_dim, in_dim, vb.pp("ff").pp("net").pp("0").pp("proj"))?,
+            out: Linear::load(in_dim, out_dim, vb.pp("ff").pp("net").pp("2"))?,
+            norm2_w: vb.pp("norm2").get(out_dim, "weight")?,
+            norm2_b: vb.pp("norm2").get(out_dim, "bias")?,
+        })
+    }
+
+    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+        let x = nn::layer_norm(
+            &xs.to_dtype(DType::F32)?,
+            1e-5,
+            Some(&self.norm1_w),
+            Some(&self.norm1_b),
+        )?
+        .to_dtype(xs.dtype())?;
+        let x = nn::gelu_tanh(&self.proj.forward(&x)?)?;
+        let x = self.out.forward(&x)?;
+        nn::layer_norm(
+            &x.to_dtype(DType::F32)?,
+            1e-5,
+            Some(&self.norm2_w),
+            Some(&self.norm2_b),
+        )?
+        .to_dtype(xs.dtype())
+    }
+}
+
+#[derive(Debug, Clone)]
 struct TimestepEmbedding {
     linear_1: Linear,
     linear_2: Linear,
@@ -342,6 +385,7 @@ pub struct WanTransformer3D {
     time_embedder: TimestepEmbedding,
     time_proj: Linear,
     text_embedder: TextProjection,
+    image_embedder: Option<ImageEmbedder>,
     blocks: Vec<WanBlock>,
     proj_out: Linear,
     scale_shift_table: Tensor,
@@ -357,6 +401,12 @@ impl WanTransformer3D {
             .get((dim, cfg.in_channels, p[0], p[1], p[2]), "weight")?;
         let patch_bias = vb.pp("patch_embedding").get(dim, "bias")?;
         let cond = vb.pp("condition_embedder");
+        let image_embedder = match (cfg.image_dim, cfg.added_kv_proj_dim) {
+            (Some(in_dim), Some(out_dim)) => {
+                Some(ImageEmbedder::load(in_dim, out_dim, cond.pp("image_embedder"))?)
+            }
+            _ => None,
+        };
         let mut blocks = Vec::with_capacity(cfg.num_layers);
         for i in 0..cfg.num_layers {
             blocks.push(WanBlock::load(&cfg, vb.pp("blocks").pp(&i.to_string()))?);
@@ -365,6 +415,7 @@ impl WanTransformer3D {
             time_embedder: TimestepEmbedding::load(cfg.freq_dim, dim, cond.pp("time_embedder"))?,
             time_proj: Linear::load(dim, dim * 6, cond.pp("time_proj"))?,
             text_embedder: TextProjection::load(cfg.text_dim, dim, cond.pp("text_embedder"))?,
+            image_embedder,
             freq_dim: cfg.freq_dim,
             proj_out: Linear::load(dim, cfg.out_channels * p.iter().product::<usize>(), vb.pp("proj_out"))?,
             scale_shift_table: vb.get((1, 2, dim), "scale_shift_table")?,
@@ -418,6 +469,12 @@ impl WanTransformer3D {
         let timestep_proj = self.time_proj.forward(&nn::silu(&temb)?)?;
         let timestep_proj = timestep_proj.reshape((b, 6, self.cfg.hidden_size()))?;
         let encoder = self.text_embedder.forward(encoder)?;
+        let image = match (image, &self.image_embedder) {
+            (Some(img), Some(emb)) => Some(emb.forward(img)?),
+            (Some(img), None) => Some(img.clone()),
+            _ => None,
+        };
+        let image = image.as_ref();
         for block in &self.blocks {
             hidden = block.forward(
                 &hidden,

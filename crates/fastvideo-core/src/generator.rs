@@ -1,3 +1,5 @@
+use std::path::PathBuf;
+
 use candle_core::{DType, Device};
 use fastvideo_loader::load_diffusers_components;
 use fastvideo_models::{
@@ -9,7 +11,7 @@ use fastvideo_ops::{HostBackend, TensorBackend};
 use crate::backend_kind::BackendKind;
 use crate::error::{FastVideoError, Result};
 use crate::registry::{resolve_wan, SamplingAlgorithm, WanModelDefinition};
-use crate::sampling::{pipeline_defaults, sampling_from_definition, PipelineDefaults, SamplingParam};
+use crate::sampling::{pipeline_defaults, sampling_from_definition, PipelineDefaults, SamplingParam, WorkloadType};
 
 #[derive(Debug, Clone)]
 pub struct LoadOptions {
@@ -22,6 +24,15 @@ pub struct LoadOptions {
     pub device: String,
     /// `f32`, `f16`, or `bf16`. Empty means bf16 on CUDA, f32 on CPU.
     pub dtype: Option<String>,
+    pub height: Option<u32>,
+    pub width: Option<u32>,
+    pub num_frames: Option<u32>,
+    pub num_inference_steps: Option<u32>,
+    pub guidance_scale: Option<f32>,
+    pub guidance_scale_2: Option<f32>,
+    pub seed: Option<u64>,
+    pub negative_prompt: Option<String>,
+    pub image_path: Option<String>,
 }
 
 impl Default for LoadOptions {
@@ -34,6 +45,15 @@ impl Default for LoadOptions {
             output_path: None,
             device: "cpu".into(),
             dtype: None,
+            height: None,
+            width: None,
+            num_frames: None,
+            num_inference_steps: None,
+            guidance_scale: None,
+            guidance_scale_2: None,
+            seed: None,
+            negative_prompt: None,
+            image_path: None,
         }
     }
 }
@@ -51,6 +71,7 @@ pub struct VideoGenerator {
     pub output_path: String,
     pub device: String,
     pub dtype: Option<String>,
+    pub image_path: Option<String>,
 }
 
 impl VideoGenerator {
@@ -61,6 +82,30 @@ impl VideoGenerator {
         let pipeline = pipeline_defaults(definition);
         if let Some(path) = &opts.output_path {
             sampling.output_path = path.clone();
+        }
+        if let Some(h) = opts.height {
+            sampling.height = h;
+        }
+        if let Some(w) = opts.width {
+            sampling.width = w;
+        }
+        if let Some(f) = opts.num_frames {
+            sampling.num_frames = f;
+        }
+        if let Some(s) = opts.num_inference_steps {
+            sampling.num_inference_steps = s;
+        }
+        if let Some(g) = opts.guidance_scale {
+            sampling.guidance_scale = g;
+        }
+        if let Some(g) = opts.guidance_scale_2 {
+            sampling.guidance_scale_2 = Some(g);
+        }
+        if let Some(seed) = opts.seed {
+            sampling.seed = seed;
+        }
+        if let Some(neg) = opts.negative_prompt {
+            sampling.negative_prompt = neg;
         }
         Ok(Self {
             model_id,
@@ -74,6 +119,7 @@ impl VideoGenerator {
             output_path: opts.output_path.unwrap_or_else(|| "outputs".to_string()),
             device: opts.device,
             dtype: opts.dtype,
+            image_path: opts.image_path,
         })
     }
 
@@ -98,9 +144,38 @@ impl VideoGenerator {
         match self.backend {
             BackendKind::Candle => self.generate_candle(prompt),
             BackendKind::Host | BackendKind::Burn | BackendKind::Luminal => {
-                self.generate_reference(prompt)
+                // Explicit `--weights` runs the Candle Wan graph so these backends
+                // can emit PNG frames. Tests leave weights_path unset so they
+                // never load the ~17GB 1.3B checkpoint.
+                if self.weights_path.is_some() && !self.tiny {
+                    self.generate_candle(prompt)
+                } else {
+                    self.generate_reference(prompt)
+                }
             }
         }
+    }
+
+    /// Local Diffusers root: `--weights`, `FASTVIDEO_WEIGHTS`, or the HF hub snapshot.
+    pub fn resolved_weights_dir(&self) -> Option<PathBuf> {
+        if self.tiny {
+            return None;
+        }
+        if let Some(path) = &self.weights_path {
+            let p = PathBuf::from(path);
+            if p.join("transformer").is_dir() {
+                return Some(p);
+            }
+        }
+        if let Ok(path) = std::env::var("FASTVIDEO_WEIGHTS") {
+            let p = PathBuf::from(path);
+            if p.join("transformer").is_dir() {
+                return Some(p);
+            }
+        }
+        fastvideo_models::wan::weights::hf_snapshot(&self.model_id).filter(|root| {
+            root.join("transformer").is_dir()
+        })
     }
 
     fn generate_candle(&self, prompt: &str) -> Result<GenerateOutput> {
@@ -110,15 +185,24 @@ impl VideoGenerator {
             self.definition.sampling,
             SamplingAlgorithm::Dmd | SamplingAlgorithm::CausalDmd
         );
-        if self.definition.workload_types.contains(&crate::sampling::WorkloadType::I2V) && !self.tiny
-        {
+        let is_i2v = self.definition.workload_types.contains(&WorkloadType::I2V);
+        if is_i2v && !self.tiny && self.image_path.is_none() {
             return Err(FastVideoError::NotImplemented {
                 component: "I2V generate".into(),
-                detail: "36-channel pack_i2v_channels + added-KV attention are implemented; CLIP image encode is not wired into this generate path yet".into(),
+                detail: "pass --image <png|jpeg>; VAE encode + 36-channel pack is wired, CLIP image tokens are optional".into(),
             });
         }
-        let tokenizer_path = self.weights_path.as_ref().and_then(|root| {
-            let p = std::path::Path::new(root).join("tokenizer").join("tokenizer.json");
+        let weights = if self.tiny {
+            None
+        } else {
+            Some(self.resolved_weights_dir().ok_or_else(|| {
+                FastVideoError::Message(
+                    "pass --tiny (zero weights, CI), --weights <diffusers-dir>, or cache the Hugging Face snapshot".into(),
+                )
+            })?)
+        };
+        let tokenizer_path = weights.as_ref().and_then(|root| {
+            let p = root.join("tokenizer").join("tokenizer.json");
             p.exists().then(|| p.to_string_lossy().into_owned())
         });
         let mut gen_cfg = GenerateConfig {
@@ -136,6 +220,9 @@ impl VideoGenerator {
             flow_shift: f64::from(self.pipeline.flow_shift),
             dmd_steps: self.pipeline.dmd_steps.map(|s| s.to_vec()),
             tokenizer_path,
+            image_path: self.image_path.clone(),
+            guidance_scale_2: self.sampling.guidance_scale_2,
+            boundary_ratio: self.pipeline.boundary_ratio,
         };
         if self.tiny {
             gen_cfg.guidance_scale = 1.0;
@@ -145,27 +232,24 @@ impl VideoGenerator {
         let pipe = if self.tiny {
             WanPipeline::tiny_dtype(&device, dtype).map_err(candle_err)?
         } else {
-            let root = self.weights_path.as_ref().ok_or_else(|| {
-                FastVideoError::Message(
-                    "pass --tiny (zero weights, CI) or --weights <diffusers-dir>".into(),
-                )
-            })?;
+            let root = weights.as_ref().expect("resolved");
             if gen_cfg.tokenizer_path.is_none() {
                 return Err(FastVideoError::Message(format!(
-                    "missing {root}/tokenizer/tokenizer.json"
+                    "missing {}/tokenizer/tokenizer.json",
+                    root.display()
                 )));
             }
-            let (t_vb, v_vb, e_vb) =
-                load_diffusers_components(std::path::Path::new(root), dtype, &device)
-                    .map_err(|e| FastVideoError::Message(e.to_string()))?;
+            let components = load_diffusers_components(root, dtype, &device)
+                .map_err(|e| FastVideoError::Message(e.to_string()))?;
             WanPipeline::load(
-                t_vb,
-                v_vb,
-                e_vb,
+                components.transformer,
+                components.vae,
+                components.text,
                 WanVideoArchConfig::from_preset(self.definition.preset),
                 WanVaeConfig::wan_2_1(),
                 Umt5Config::xxl(),
                 device,
+                components.transformer_2,
             )
             .map_err(candle_err)?
         };
@@ -177,13 +261,7 @@ impl VideoGenerator {
     }
 
     fn resolve_tokenizer(&self) -> Option<String> {
-        if let Some(root) = &self.weights_path {
-            let p = std::path::Path::new(root).join("tokenizer").join("tokenizer.json");
-            if p.exists() {
-                return Some(p.to_string_lossy().into_owned());
-            }
-        }
-        fastvideo_models::wan::weights::hf_snapshot(&self.model_id).and_then(|root| {
+        self.resolved_weights_dir().and_then(|root| {
             let p = root.join("tokenizer").join("tokenizer.json");
             p.exists().then(|| p.to_string_lossy().into_owned())
         })

@@ -71,12 +71,33 @@ pub fn var_builder_from_dir(
     Ok(VarBuilder::from_tensors(tensors, dtype, device))
 }
 
+pub struct DiffusersComponents {
+    pub transformer: VarBuilder<'static>,
+    /// Wan 2.2 MoE low-noise expert (`transformer_2/`).
+    pub transformer_2: Option<VarBuilder<'static>>,
+    pub vae: VarBuilder<'static>,
+    pub text: VarBuilder<'static>,
+}
+
 pub fn load_diffusers_components(
     root: &Path,
     dtype: DType,
     device: &Device,
-) -> Result<(VarBuilder<'static>, VarBuilder<'static>, VarBuilder<'static>), LoaderError> {
+) -> Result<DiffusersComponents, LoaderError> {
     let transformer = var_builder_from_dir(&root.join("transformer"), dtype, device)?;
+    let transformer_2 = {
+        let dir = root.join("transformer_2");
+        if dir.is_dir() {
+            match collect_safetensors(&dir) {
+                Ok(files) if !files.is_empty() => {
+                    Some(var_builder_from_dir(&dir, dtype, device)?)
+                }
+                _ => None,
+            }
+        } else {
+            None
+        }
+    };
     let vae = var_builder_from_dir(&root.join("vae"), dtype, device)?;
     let text = {
         let te = root.join("text_encoder");
@@ -86,7 +107,12 @@ pub fn load_diffusers_components(
             var_builder_from_dir(&root.join("text_encoder_2"), dtype, device)?
         }
     };
-    Ok((transformer, vae, text))
+    Ok(DiffusersComponents {
+        transformer,
+        transformer_2,
+        vae,
+        text,
+    })
 }
 
 pub fn weight_map_keys(index_json: &Path) -> Result<Vec<String>, LoaderError> {
@@ -159,5 +185,9 @@ mod tests {
         }
         assert!(keys.iter().any(|k| k.starts_with("blocks.29.")));
         assert!(!keys.iter().any(|k| k.contains("blocks.30.")));
+        assert!(
+            !root.join("transformer_2").is_dir(),
+            "1.3B T2V is a single DiT; MoE transformer_2 belongs on A14B"
+        );
     }
 }
