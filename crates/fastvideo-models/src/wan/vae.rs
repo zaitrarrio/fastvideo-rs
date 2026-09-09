@@ -219,7 +219,7 @@ impl AttentionBlock {
             .reshape((b * t, 1, c * 3, hw))?
             .permute((0, 1, 3, 2))?;
         let chunks = qkv.chunk(3, D::Minus1)?;
-        let attn = nn::scaled_dot_product_attention(&chunks[0], &chunks[1], &chunks[2])?;
+        let attn = nn::scaled_dot_product_attention(&chunks[0], &chunks[1], &chunks[2], None)?;
         let attn = attn
             .squeeze(1)?
             .permute((0, 2, 1))?

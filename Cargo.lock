@@ -586,6 +586,8 @@ dependencies = [
  "candle-core",
  "fastvideo-loader",
  "fastvideo-models",
+ "fastvideo-ops",
+ "serde_json",
  "thiserror 2.0.20",
 ]
 
@@ -596,6 +598,7 @@ dependencies = [
  "candle-core",
  "candle-nn",
  "fastvideo-models",
+ "serde_json",
  "thiserror 2.0.20",
 ]
 

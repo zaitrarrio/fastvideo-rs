@@ -89,9 +89,25 @@ pub fn load_diffusers_components(
     Ok((transformer, vae, text))
 }
 
+pub fn weight_map_keys(index_json: &Path) -> Result<Vec<String>, LoaderError> {
+    let raw = std::fs::read_to_string(index_json)?;
+    let v: serde_json::Value = serde_json::from_str(&raw)
+        .map_err(|e| LoaderError::Message(format!("weight index json: {e}")))?;
+    let map = v
+        .get("weight_map")
+        .and_then(|m| m.as_object())
+        .ok_or_else(|| LoaderError::Message("missing weight_map".into()))?;
+    let mut keys: Vec<String> = map.keys().cloned().collect();
+    keys.sort();
+    Ok(keys)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use fastvideo_models::wan::config::WanVideoArchConfig;
+    use fastvideo_models::wan::weights::local_wan_t2v_1_3b;
+    use fastvideo_models::wan::WAN_T2V_1_3B_REQUIRED_KEYS;
 
     #[test]
     fn mapping_table_is_nonempty() {
@@ -103,5 +119,45 @@ mod tests {
     fn missing_dir_errors() {
         let err = collect_safetensors(Path::new("/tmp/fastvideo-rs-no-such-dir")).unwrap_err();
         assert!(err.to_string().contains("not found"));
+    }
+
+    #[test]
+    fn local_1_3b_diffusers_layout_without_loading_weights() {
+        let Some(root) = local_wan_t2v_1_3b() else {
+            eprintln!("skip: Wan-AI/Wan2.1-T2V-1.3B-Diffusers not in HF cache / FASTVIDEO_WEIGHTS");
+            return;
+        };
+        assert!(root.join("transformer").is_dir());
+        assert!(root.join("vae").is_dir());
+        assert!(root.join("text_encoder").is_dir() || root.join("text_encoder_2").is_dir());
+        assert!(root.join("tokenizer/tokenizer.json").is_file());
+        let cfg_raw = std::fs::read_to_string(root.join("transformer/config.json")).unwrap();
+        let cfg: serde_json::Value = serde_json::from_str(&cfg_raw).unwrap();
+        let expected = WanVideoArchConfig::wan_t2v_1_3b();
+        assert_eq!(cfg["num_layers"].as_u64().unwrap() as usize, expected.num_layers);
+        assert_eq!(
+            cfg["num_attention_heads"].as_u64().unwrap() as usize,
+            expected.num_attention_heads
+        );
+        assert_eq!(cfg["ffn_dim"].as_u64().unwrap() as usize, expected.ffn_dim);
+        assert_eq!(
+            cfg["in_channels"].as_u64().unwrap() as usize,
+            expected.in_channels
+        );
+        let files = collect_safetensors(&root.join("transformer")).unwrap();
+        assert!(
+            files.len() >= 2,
+            "expected sharded safetensors, got {files:?}"
+        );
+        let index = root.join("transformer/diffusion_pytorch_model.safetensors.index.json");
+        let keys = weight_map_keys(&index).unwrap();
+        for required in WAN_T2V_1_3B_REQUIRED_KEYS {
+            assert!(
+                keys.iter().any(|k| k == required),
+                "missing Diffusers key {required}"
+            );
+        }
+        assert!(keys.iter().any(|k| k.starts_with("blocks.29.")));
+        assert!(!keys.iter().any(|k| k.contains("blocks.30.")));
     }
 }

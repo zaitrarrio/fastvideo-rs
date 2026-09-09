@@ -10,6 +10,8 @@ thiserror.workspace = true
 candle-core.workspace = true
 fastvideo-models.workspace = true
 fastvideo-loader.workspace = true
+fastvideo-ops.workspace = true
+serde_json.workspace = true
 
 [features]
 default = []

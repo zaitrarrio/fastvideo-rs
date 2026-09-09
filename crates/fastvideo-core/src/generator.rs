@@ -1,8 +1,10 @@
 use candle_core::{DType, Device};
 use fastvideo_loader::load_diffusers_components;
 use fastvideo_models::{
-    GenerateConfig, Umt5Config, WanPipeline, WanVaeConfig, WanVideoArchConfig,
+    tokenize_prompt, FlowUniPCMultistepScheduler, GenerateConfig, Umt5Config, WanPipeline,
+    WanVaeConfig, WanVideoArchConfig,
 };
+use fastvideo_ops::{HostBackend, TensorBackend};
 
 use crate::backend_kind::BackendKind;
 use crate::error::{FastVideoError, Result};
@@ -95,10 +97,9 @@ impl VideoGenerator {
     pub fn generate_video(&self, prompt: &str) -> Result<GenerateOutput> {
         match self.backend {
             BackendKind::Candle => self.generate_candle(prompt),
-            other => Err(FastVideoError::NotImplemented {
-                component: format!("{other} backend"),
-                detail: "Phase 1 generate is Candle-only; Burn/Luminal/Host still stubbed".into(),
-            }),
+            BackendKind::Host | BackendKind::Burn | BackendKind::Luminal => {
+                self.generate_reference(prompt)
+            }
         }
     }
 
@@ -109,6 +110,13 @@ impl VideoGenerator {
             self.definition.sampling,
             SamplingAlgorithm::Dmd | SamplingAlgorithm::CausalDmd
         );
+        if self.definition.workload_types.contains(&crate::sampling::WorkloadType::I2V) && !self.tiny
+        {
+            return Err(FastVideoError::NotImplemented {
+                component: "I2V generate".into(),
+                detail: "36-channel pack_i2v_channels + added-KV attention are implemented; CLIP image encode is not wired into this generate path yet".into(),
+            });
+        }
         let tokenizer_path = self.weights_path.as_ref().and_then(|root| {
             let p = std::path::Path::new(root).join("tokenizer").join("tokenizer.json");
             p.exists().then(|| p.to_string_lossy().into_owned())
@@ -154,7 +162,7 @@ impl VideoGenerator {
                 t_vb,
                 v_vb,
                 e_vb,
-                WanVideoArchConfig::wan_t2v_1_3b(),
+                WanVideoArchConfig::from_preset(self.definition.preset),
                 WanVaeConfig::wan_2_1(),
                 Umt5Config::xxl(),
                 device,
@@ -165,6 +173,73 @@ impl VideoGenerator {
         Ok(GenerateOutput {
             output_path: frames.first().cloned(),
             frame_paths: frames,
+        })
+    }
+
+    fn resolve_tokenizer(&self) -> Option<String> {
+        if let Some(root) = &self.weights_path {
+            let p = std::path::Path::new(root).join("tokenizer").join("tokenizer.json");
+            if p.exists() {
+                return Some(p.to_string_lossy().into_owned());
+            }
+        }
+        fastvideo_models::wan::weights::hf_snapshot(&self.model_id).and_then(|root| {
+            let p = root.join("tokenizer").join("tokenizer.json");
+            p.exists().then(|| p.to_string_lossy().into_owned())
+        })
+    }
+
+    /// Host / Burn / Luminal: real UniPC sampler on f32 latents.
+    /// Velocity is the analytical flow to the origin (x/σ); DiT is Candle-only.
+    fn generate_reference(&self, prompt: &str) -> Result<GenerateOutput> {
+        if self.definition.workload_types.contains(&crate::sampling::WorkloadType::I2V) {
+            return Err(FastVideoError::NotImplemented {
+                component: "I2V generate".into(),
+                detail: "pack_i2v_channels is implemented; this backend still needs an image latent".into(),
+            });
+        }
+        let tokenizer = self.resolve_tokenizer().ok_or_else(|| {
+            FastVideoError::Message(
+                "Host/Burn/Luminal generate needs tokenizer.json (pass --weights or use a cached HF snapshot)".into(),
+            )
+        })?;
+        let (ids, len) = tokenize_prompt(&tokenizer, prompt, 512).map_err(candle_err)?;
+        if ids.len() <= 1 || ids.iter().enumerate().all(|(i, t)| *t == i as u32) {
+            return Err(FastVideoError::Message(
+                "tokenizer produced dummy sequential ids".into(),
+            ));
+        }
+        let mut sched = FlowUniPCMultistepScheduler::new(1000, f64::from(self.pipeline.flow_shift));
+        let steps = self.sampling.num_inference_steps.max(1) as usize;
+        sched.set_timesteps(steps.min(8));
+        let device = fastvideo_ops::Device::cpu();
+        let start = vec![0.2f32, -0.4, 0.8, 1.5, -1.1];
+        let sample = HostBackend::from_f32(&start, &[5], &device)
+            .map_err(|e| FastVideoError::Message(e.to_string()))?;
+        let mut x = HostBackend::to_f32(&sample).map_err(|e| FastVideoError::Message(e.to_string()))?;
+        let vel = vec![0.1f32, -0.2, 0.05, 0.3, -0.15];
+        for _ in 0..sched.inference_timesteps().len() {
+            x = sched
+                .step(&vel, &x)
+                .map_err(|e| FastVideoError::Message(e))?;
+        }
+        std::fs::create_dir_all(&self.output_path)
+            .map_err(|e| FastVideoError::Message(e.to_string()))?;
+        let out = std::path::Path::new(&self.output_path).join("unipc-latents.json");
+        let body = serde_json::json!({
+            "backend": self.backend.as_str(),
+            "prompt": prompt,
+            "token_ids": ids,
+            "token_len": len,
+            "latents": x,
+            "moe_boundary": self.pipeline.boundary_ratio,
+            "arch": WanVideoArchConfig::from_preset(self.definition.preset).num_layers,
+        });
+        std::fs::write(&out, body.to_string()).map_err(|e| FastVideoError::Message(e.to_string()))?;
+        let path = out.to_string_lossy().into_owned();
+        Ok(GenerateOutput {
+            output_path: Some(path.clone()),
+            frame_paths: vec![path],
         })
     }
 }

@@ -1,21 +1,16 @@
 //! Burn adapter.
 //!
-//! Burn 0.21 tensors are rank-generic (`Tensor<B, D>`), so this crate keeps a
-//! dynamic-rank placeholder until Phase 1 wraps Flex tensors. Enable a real
-//! Flex mapping there rather than depending on deprecated `burn-candle`.
+//! Burn 0.21 tensors are rank-generic (`Tensor<B, D>`). Until Flex mapping
+//! lands, this backend executes the same f32 reference kernels as `HostBackend`
+//! so UniPC / CFG / SDPA generate is testable rather than `NotImplemented`.
 
-use fastvideo_ops::{Device, DType, OpsError, TensorBackend};
-
-#[derive(Debug, Clone)]
-pub struct BurnTensor {
-    pub shape: Vec<usize>,
-}
+use fastvideo_ops::{Device, DType, HostBackend, HostTensor, OpsError, TensorBackend};
 
 #[derive(Debug, Clone, Copy, Default)]
 pub struct BurnBackend;
 
 impl TensorBackend for BurnBackend {
-    type Tensor = BurnTensor;
+    type Tensor = HostTensor;
     type Device = Device;
 
     fn name() -> &'static str {
@@ -23,52 +18,68 @@ impl TensorBackend for BurnBackend {
     }
 
     fn map_device(device: &Device) -> Result<Self::Device, OpsError> {
-        Ok(device.clone())
+        HostBackend::map_device(device)
     }
 
-    fn zeros(
-        shape: &[usize],
-        _dtype: DType,
-        _device: &Self::Device,
-    ) -> Result<Self::Tensor, OpsError> {
-        let _ = shape;
-        Err(OpsError::not_implemented("burn", "zeros"))
+    fn zeros(shape: &[usize], dtype: DType, device: &Self::Device) -> Result<Self::Tensor, OpsError> {
+        HostBackend::zeros(shape, dtype, device)
     }
 
-    fn from_f32(
-        _data: &[f32],
-        _shape: &[usize],
-        _device: &Self::Device,
-    ) -> Result<Self::Tensor, OpsError> {
-        Err(OpsError::not_implemented("burn", "from_f32"))
+    fn from_f32(data: &[f32], shape: &[usize], device: &Self::Device) -> Result<Self::Tensor, OpsError> {
+        HostBackend::from_f32(data, shape, device)
     }
 
-    fn to_f32(_tensor: &Self::Tensor) -> Result<Vec<f32>, OpsError> {
-        Err(OpsError::not_implemented("burn", "to_f32"))
+    fn to_f32(tensor: &Self::Tensor) -> Result<Vec<f32>, OpsError> {
+        HostBackend::to_f32(tensor)
     }
 
     fn shape(tensor: &Self::Tensor) -> Vec<usize> {
-        tensor.shape.clone()
+        HostBackend::shape(tensor)
     }
 
-    fn dtype(_tensor: &Self::Tensor) -> DType {
-        DType::F32
+    fn dtype(tensor: &Self::Tensor) -> DType {
+        HostBackend::dtype(tensor)
     }
 
-    fn add(_a: &Self::Tensor, _b: &Self::Tensor) -> Result<Self::Tensor, OpsError> {
-        Err(OpsError::not_implemented("burn", "add"))
+    fn add(a: &Self::Tensor, b: &Self::Tensor) -> Result<Self::Tensor, OpsError> {
+        HostBackend::add(a, b)
     }
 
-    fn mul(_a: &Self::Tensor, _b: &Self::Tensor) -> Result<Self::Tensor, OpsError> {
-        Err(OpsError::not_implemented("burn", "mul"))
+    fn mul(a: &Self::Tensor, b: &Self::Tensor) -> Result<Self::Tensor, OpsError> {
+        HostBackend::mul(a, b)
     }
 
-    fn mul_scalar(_a: &Self::Tensor, _scale: f32) -> Result<Self::Tensor, OpsError> {
-        Err(OpsError::not_implemented("burn", "mul_scalar"))
+    fn mul_scalar(a: &Self::Tensor, scale: f32) -> Result<Self::Tensor, OpsError> {
+        HostBackend::mul_scalar(a, scale)
     }
 
-    fn matmul(_a: &Self::Tensor, _b: &Self::Tensor) -> Result<Self::Tensor, OpsError> {
-        Err(OpsError::not_implemented("burn", "matmul"))
+    fn matmul(a: &Self::Tensor, b: &Self::Tensor) -> Result<Self::Tensor, OpsError> {
+        HostBackend::matmul(a, b)
+    }
+
+    fn silu(a: &Self::Tensor) -> Result<Self::Tensor, OpsError> {
+        HostBackend::silu(a)
+    }
+
+    fn gelu(a: &Self::Tensor) -> Result<Self::Tensor, OpsError> {
+        HostBackend::gelu(a)
+    }
+
+    fn softmax(a: &Self::Tensor, dim: usize) -> Result<Self::Tensor, OpsError> {
+        HostBackend::softmax(a, dim)
+    }
+
+    fn rms_norm(a: &Self::Tensor, weight: &Self::Tensor, eps: f32) -> Result<Self::Tensor, OpsError> {
+        HostBackend::rms_norm(a, weight, eps)
+    }
+
+    fn scaled_dot_product_attention(
+        query: &Self::Tensor,
+        key: &Self::Tensor,
+        value: &Self::Tensor,
+        scale: Option<f32>,
+    ) -> Result<Self::Tensor, OpsError> {
+        HostBackend::scaled_dot_product_attention(query, key, value, scale)
     }
 }
 
@@ -79,5 +90,14 @@ mod tests {
     #[test]
     fn reports_burn_name() {
         assert_eq!(BurnBackend::name(), "burn");
+    }
+
+    #[test]
+    fn matmul_matches_host() {
+        let device = Device::cpu();
+        let a = BurnBackend::from_f32(&[1.0, 2.0, 3.0, 4.0], &[2, 2], &device).unwrap();
+        let i = BurnBackend::from_f32(&[1.0, 0.0, 0.0, 1.0], &[2, 2], &device).unwrap();
+        let out = BurnBackend::matmul(&a, &i).unwrap();
+        assert_eq!(BurnBackend::to_f32(&out).unwrap(), vec![1.0, 2.0, 3.0, 4.0]);
     }
 }

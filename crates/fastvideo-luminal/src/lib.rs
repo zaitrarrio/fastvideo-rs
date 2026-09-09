@@ -1,22 +1,16 @@
 //! Luminal adapter.
 //!
-//! Luminal is a static graph compiler. The denoising loop stays in Rust:
-//! compile one DiT step graph and one VAE decode graph, then execute them
-//! per timestep. The crates.io `luminal` 0.2 API is stale relative to
-//! github.com/luminal-ai/luminal; Phase 6 will pin a git revision.
+//! The crates.io `luminal` 0.2 API is stale relative to github.com/luminal-ai/luminal.
+//! Until a git revision is pinned, this backend runs the Host f32 kernels so
+//! UniPC generate is a real sampler, not a name-only stub.
 
-use fastvideo_ops::{Device, DType, OpsError, TensorBackend};
-
-#[derive(Debug, Clone)]
-pub struct LuminalTensor {
-    pub shape: Vec<usize>,
-}
+use fastvideo_ops::{Device, DType, HostBackend, HostTensor, OpsError, TensorBackend};
 
 #[derive(Debug, Clone, Copy, Default)]
 pub struct LuminalBackend;
 
 impl TensorBackend for LuminalBackend {
-    type Tensor = LuminalTensor;
+    type Tensor = HostTensor;
     type Device = Device;
 
     fn name() -> &'static str {
@@ -24,51 +18,68 @@ impl TensorBackend for LuminalBackend {
     }
 
     fn map_device(device: &Device) -> Result<Self::Device, OpsError> {
-        Ok(device.clone())
+        HostBackend::map_device(device)
     }
 
-    fn zeros(
-        _shape: &[usize],
-        _dtype: DType,
-        _device: &Self::Device,
-    ) -> Result<Self::Tensor, OpsError> {
-        Err(OpsError::not_implemented("luminal", "zeros"))
+    fn zeros(shape: &[usize], dtype: DType, device: &Self::Device) -> Result<Self::Tensor, OpsError> {
+        HostBackend::zeros(shape, dtype, device)
     }
 
-    fn from_f32(
-        _data: &[f32],
-        _shape: &[usize],
-        _device: &Self::Device,
-    ) -> Result<Self::Tensor, OpsError> {
-        Err(OpsError::not_implemented("luminal", "from_f32"))
+    fn from_f32(data: &[f32], shape: &[usize], device: &Self::Device) -> Result<Self::Tensor, OpsError> {
+        HostBackend::from_f32(data, shape, device)
     }
 
-    fn to_f32(_tensor: &Self::Tensor) -> Result<Vec<f32>, OpsError> {
-        Err(OpsError::not_implemented("luminal", "to_f32"))
+    fn to_f32(tensor: &Self::Tensor) -> Result<Vec<f32>, OpsError> {
+        HostBackend::to_f32(tensor)
     }
 
     fn shape(tensor: &Self::Tensor) -> Vec<usize> {
-        tensor.shape.clone()
+        HostBackend::shape(tensor)
     }
 
-    fn dtype(_tensor: &Self::Tensor) -> DType {
-        DType::F32
+    fn dtype(tensor: &Self::Tensor) -> DType {
+        HostBackend::dtype(tensor)
     }
 
-    fn add(_a: &Self::Tensor, _b: &Self::Tensor) -> Result<Self::Tensor, OpsError> {
-        Err(OpsError::not_implemented("luminal", "add"))
+    fn add(a: &Self::Tensor, b: &Self::Tensor) -> Result<Self::Tensor, OpsError> {
+        HostBackend::add(a, b)
     }
 
-    fn mul(_a: &Self::Tensor, _b: &Self::Tensor) -> Result<Self::Tensor, OpsError> {
-        Err(OpsError::not_implemented("luminal", "mul"))
+    fn mul(a: &Self::Tensor, b: &Self::Tensor) -> Result<Self::Tensor, OpsError> {
+        HostBackend::mul(a, b)
     }
 
-    fn mul_scalar(_a: &Self::Tensor, _scale: f32) -> Result<Self::Tensor, OpsError> {
-        Err(OpsError::not_implemented("luminal", "mul_scalar"))
+    fn mul_scalar(a: &Self::Tensor, scale: f32) -> Result<Self::Tensor, OpsError> {
+        HostBackend::mul_scalar(a, scale)
     }
 
-    fn matmul(_a: &Self::Tensor, _b: &Self::Tensor) -> Result<Self::Tensor, OpsError> {
-        Err(OpsError::not_implemented("luminal", "matmul"))
+    fn matmul(a: &Self::Tensor, b: &Self::Tensor) -> Result<Self::Tensor, OpsError> {
+        HostBackend::matmul(a, b)
+    }
+
+    fn silu(a: &Self::Tensor) -> Result<Self::Tensor, OpsError> {
+        HostBackend::silu(a)
+    }
+
+    fn gelu(a: &Self::Tensor) -> Result<Self::Tensor, OpsError> {
+        HostBackend::gelu(a)
+    }
+
+    fn softmax(a: &Self::Tensor, dim: usize) -> Result<Self::Tensor, OpsError> {
+        HostBackend::softmax(a, dim)
+    }
+
+    fn rms_norm(a: &Self::Tensor, weight: &Self::Tensor, eps: f32) -> Result<Self::Tensor, OpsError> {
+        HostBackend::rms_norm(a, weight, eps)
+    }
+
+    fn scaled_dot_product_attention(
+        query: &Self::Tensor,
+        key: &Self::Tensor,
+        value: &Self::Tensor,
+        scale: Option<f32>,
+    ) -> Result<Self::Tensor, OpsError> {
+        HostBackend::scaled_dot_product_attention(query, key, value, scale)
     }
 }
 
@@ -79,5 +90,14 @@ mod tests {
     #[test]
     fn reports_luminal_name() {
         assert_eq!(LuminalBackend::name(), "luminal");
+    }
+
+    #[test]
+    fn silu_matches_host() {
+        let device = Device::cpu();
+        let a = LuminalBackend::from_f32(&[-2.0, 1.5], &[2], &device).unwrap();
+        let y = LuminalBackend::silu(&a).unwrap();
+        let h = HostBackend::silu(&a).unwrap();
+        assert_eq!(y.data, h.data);
     }
 }

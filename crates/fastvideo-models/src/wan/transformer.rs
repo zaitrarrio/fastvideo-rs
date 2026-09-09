@@ -33,13 +33,29 @@ struct WanAttention {
     to_out: Linear,
     norm_q: RmsNorm,
     norm_k: RmsNorm,
+    add_k: Option<Linear>,
+    add_v: Option<Linear>,
     heads: usize,
     dim_head: usize,
 }
 
 impl WanAttention {
-    fn load(dim: usize, heads: usize, eps: f64, vb: VarBuilder) -> Result<Self> {
+    fn load(
+        dim: usize,
+        heads: usize,
+        eps: f64,
+        added_kv: Option<usize>,
+        vb: VarBuilder,
+    ) -> Result<Self> {
         let dim_head = dim / heads;
+        let (add_k, add_v) = if let Some(extra) = added_kv {
+            (
+                Some(Linear::load(extra, dim, vb.pp("add_k_proj"))?),
+                Some(Linear::load(extra, dim, vb.pp("add_v_proj"))?),
+            )
+        } else {
+            (None, None)
+        };
         Ok(Self {
             to_q: Linear::load(dim, dim, vb.pp("to_q"))?,
             to_k: Linear::load(dim, dim, vb.pp("to_k"))?,
@@ -47,6 +63,8 @@ impl WanAttention {
             to_out: Linear::load(dim, dim, vb.pp("to_out").pp("0"))?,
             norm_q: RmsNorm::load(dim, eps, vb.pp("norm_q"))?,
             norm_k: RmsNorm::load(dim, eps, vb.pp("norm_k"))?,
+            add_k,
+            add_v,
             heads,
             dim_head,
         })
@@ -57,11 +75,19 @@ impl WanAttention {
         hidden: &Tensor,
         encoder: Option<&Tensor>,
         rotary: Option<&(Tensor, Tensor)>,
+        image: Option<&Tensor>,
+        attn_mask: Option<&Tensor>,
     ) -> Result<Tensor> {
         let ctx = encoder.unwrap_or(hidden);
         let q = self.norm_q.forward(&self.to_q.forward(hidden)?)?;
-        let k = self.norm_k.forward(&self.to_k.forward(ctx)?)?;
-        let v = self.to_v.forward(ctx)?;
+        let mut k = self.norm_k.forward(&self.to_k.forward(ctx)?)?;
+        let mut v = self.to_v.forward(ctx)?;
+        if let (Some(add_k), Some(add_v), Some(img)) = (&self.add_k, &self.add_v, image) {
+            let ik = add_k.forward(img)?;
+            let iv = add_v.forward(img)?;
+            k = Tensor::cat(&[&ik, &k], 1)?;
+            v = Tensor::cat(&[&iv, &v], 1)?;
+        }
         let (b, sq, _) = q.dims3()?;
         let sk = k.dim(1)?;
         let q = q.reshape((b, sq, self.heads, self.dim_head))?;
@@ -75,7 +101,7 @@ impl WanAttention {
         let q = q.transpose(1, 2)?.contiguous()?;
         let k = k.transpose(1, 2)?.contiguous()?;
         let v = v.transpose(1, 2)?.contiguous()?;
-        let attn = nn::scaled_dot_product_attention(&q, &k, &v)?;
+        let attn = nn::scaled_dot_product_attention(&q, &k, &v, attn_mask)?;
         let attn = attn.transpose(1, 2)?.contiguous()?.reshape((b, sq, self.heads * self.dim_head))?;
         self.to_out.forward(&attn)
     }
@@ -240,8 +266,20 @@ impl WanBlock {
         let dim = cfg.hidden_size();
         Ok(Self {
             norm1_eps: cfg.eps as f64,
-            attn1: WanAttention::load(dim, cfg.num_attention_heads, cfg.eps as f64, vb.pp("attn1"))?,
-            attn2: WanAttention::load(dim, cfg.num_attention_heads, cfg.eps as f64, vb.pp("attn2"))?,
+            attn1: WanAttention::load(
+                dim,
+                cfg.num_attention_heads,
+                cfg.eps as f64,
+                None,
+                vb.pp("attn1"),
+            )?,
+            attn2: WanAttention::load(
+                dim,
+                cfg.num_attention_heads,
+                cfg.eps as f64,
+                cfg.added_kv_proj_dim,
+                vb.pp("attn2"),
+            )?,
             norm2_weight: vb.pp("norm2").get(dim, "weight")?,
             norm2_bias: vb.pp("norm2").get(dim, "bias")?,
             ffn: FeedForward::load(dim, cfg.ffn_dim, vb.pp("ffn"))?,
@@ -255,6 +293,8 @@ impl WanBlock {
         encoder: &Tensor,
         temb: &Tensor,
         rotary: &(Tensor, Tensor),
+        image: Option<&Tensor>,
+        attn_mask: Option<&Tensor>,
     ) -> Result<Tensor> {
         let e = self
             .scale_shift_table
@@ -271,7 +311,7 @@ impl WanBlock {
         let normed = nn::layer_norm(&hidden.to_dtype(DType::F32)?, self.norm1_eps, None, None)?;
         let normed = (normed.broadcast_mul(&(scale_msa.to_dtype(DType::F32)? + 1.0)?)?.broadcast_add(&shift_msa.to_dtype(DType::F32)?)?)
             .to_dtype(hidden.dtype())?;
-        let attn = self.attn1.forward(&normed, None, Some(rotary))?;
+        let attn = self.attn1.forward(&normed, None, Some(rotary), None, attn_mask)?;
         let hidden = (hidden.to_dtype(DType::F32)?.broadcast_add(&attn.to_dtype(DType::F32)?.broadcast_mul(gate_msa)?)?)
             .to_dtype(hidden.dtype())?;
 
@@ -282,7 +322,7 @@ impl WanBlock {
             Some(&self.norm2_bias),
         )?
         .to_dtype(hidden.dtype())?;
-        let attn = self.attn2.forward(&normed, Some(encoder), None)?;
+        let attn = self.attn2.forward(&normed, Some(encoder), None, image, None)?;
         let hidden = (hidden + attn)?;
 
         let normed = nn::layer_norm(&hidden.to_dtype(DType::F32)?, self.norm1_eps, None, None)?;
@@ -352,9 +392,26 @@ impl WanTransformer3D {
     }
 
     pub fn forward(&self, latents: &Tensor, timestep: &Tensor, encoder: &Tensor) -> Result<Tensor> {
+        self.forward_ctx(latents, timestep, encoder, None)
+    }
+
+    pub fn forward_ctx(
+        &self,
+        latents: &Tensor,
+        timestep: &Tensor,
+        encoder: &Tensor,
+        image: Option<&Tensor>,
+    ) -> Result<Tensor> {
         let (b, _c, t, h, w) = latents.dims5()?;
         let device = latents.device();
         let rotary = wan_rope(&self.cfg, t, h, w, device)?;
+        let attn_mask = if self.cfg.causal {
+            let mask = crate::wan::family::causal_temporal_mask(&self.cfg, t, h, w);
+            let seq = (mask.len() as f64).sqrt() as usize;
+            Some(Tensor::from_vec(mask, (1, 1, seq, seq), device)?.to_dtype(DType::F32)?)
+        } else {
+            None
+        };
         let mut hidden = self.patch_embed(latents)?;
         let temb_in = nn::sinusoidal_timesteps(timestep, self.freq_dim, device)?;
         let temb = self.time_embedder.forward(&temb_in.to_dtype(latents.dtype())?)?;
@@ -362,7 +419,14 @@ impl WanTransformer3D {
         let timestep_proj = timestep_proj.reshape((b, 6, self.cfg.hidden_size()))?;
         let encoder = self.text_embedder.forward(encoder)?;
         for block in &self.blocks {
-            hidden = block.forward(&hidden, &encoder, &timestep_proj, &rotary)?;
+            hidden = block.forward(
+                &hidden,
+                &encoder,
+                &timestep_proj,
+                &rotary,
+                image,
+                attn_mask.as_ref(),
+            )?;
         }
         let table = self.scale_shift_table.to_dtype(DType::F32)?;
         let temb_f = temb.to_dtype(DType::F32)?.unsqueeze(1)?;
@@ -394,25 +458,6 @@ impl WanTransformer3D {
     }
 }
 
-impl WanVideoArchConfig {
-    pub fn tiny() -> Self {
-        Self {
-            patch_size: [1, 2, 2],
-            text_len: 8,
-            num_attention_heads: 2,
-            attention_head_dim: 8,
-            in_channels: 4,
-            out_channels: 4,
-            text_dim: 16,
-            freq_dim: 16,
-            ffn_dim: 32,
-            num_layers: 1,
-            eps: 1e-6,
-            rope_max_seq_len: 64,
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -429,5 +474,27 @@ mod tests {
         let enc = Tensor::zeros((1, 8, 16), DType::F32, &device).unwrap();
         let out = model.forward(&latents, &t, &enc).unwrap();
         assert_eq!(out.dims(), &[1, 4, 2, 8, 8]);
+    }
+
+    #[test]
+    fn i2v_block_accepts_image_kv() {
+        let device = Device::Cpu;
+        let cfg = WanVideoArchConfig::i2v_block();
+        let vb = VarBuilder::zeros(DType::F32, &device);
+        let model = WanTransformer3D::load(cfg.clone(), vb).unwrap();
+        let latents = Tensor::zeros((1, 36, 2, 8, 8), DType::F32, &device).unwrap();
+        let t = Tensor::from_vec(vec![500f32], (1,), &device).unwrap();
+        let enc = Tensor::zeros((1, 8, 16), DType::F32, &device).unwrap();
+        let image = Tensor::zeros((1, 4, 32), DType::F32, &device).unwrap();
+        let out = model.forward_ctx(&latents, &t, &enc, Some(&image)).unwrap();
+        assert_eq!(out.dims(), &[1, 16, 2, 8, 8]);
+    }
+
+    #[test]
+    fn causal_1_3b_cfg_builds_mask() {
+        let cfg = WanVideoArchConfig::sf_wan_t2v_1_3b();
+        assert!(cfg.causal);
+        let mask = crate::wan::family::causal_temporal_mask(&cfg, 4, 8, 8);
+        assert_eq!(mask.len(), 64 * 64);
     }
 }

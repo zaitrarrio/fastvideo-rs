@@ -59,6 +59,44 @@ pub fn rms_norm(xs: &Tensor, weight: &Tensor, eps: f64) -> Result<Tensor> {
     y.to_dtype(xs.dtype())?.broadcast_mul(&weight.to_dtype(xs.dtype())?)
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn silu_gelu_rms_match_numpy() {
+        let device = Device::Cpu;
+        let x = Tensor::from_vec(vec![-2.0f32, -0.5, 0.0, 0.25, 1.5], (5,), &device).unwrap();
+        let silu_y = silu(&x).unwrap().to_vec1::<f32>().unwrap();
+        let gelu_y = gelu_tanh(&x).unwrap().to_vec1::<f32>().unwrap();
+        let w = Tensor::from_vec(vec![1.1f32, 0.9, 1.0, 0.8, 1.2], (5,), &device).unwrap();
+        let rms_y = rms_norm(&x, &w, 1e-6).unwrap().to_vec1::<f32>().unwrap();
+        let silu_exp = [-0.23840584, -0.18877033, 0.0, 0.14054413, 1.2263617];
+        let gelu_exp = [-0.045402306, -0.15428599, 0.0, 0.14967535, 1.3995716];
+        let rms_exp = [-1.9203167, -0.39279205, 0.0, 0.17457425, 1.5711682];
+        for i in 0..5 {
+            assert!((silu_y[i] - silu_exp[i]).abs() < 1e-6);
+            assert!((gelu_y[i] - gelu_exp[i]).abs() < 1e-6);
+            assert!((rms_y[i] - rms_exp[i]).abs() < 1e-5);
+        }
+    }
+
+    #[test]
+    fn sinusoidal_timestep_matches_diffusers() {
+        let device = Device::Cpu;
+        let t = Tensor::from_vec(vec![500f32], (1,), &device).unwrap();
+        let emb = sinusoidal_timesteps(&t, 256, &device)
+            .unwrap()
+            .flatten_all()
+            .unwrap()
+            .to_vec1::<f32>()
+            .unwrap();
+        assert!((emb[0] + 0.8838493).abs() < 1e-5, "cos0={}", emb[0]);
+        assert!((emb[1] - 0.9459426).abs() < 1e-5, "emb1={}", emb[1]);
+        assert!((emb[128] + 0.4677718).abs() < 1e-5, "emb128={}", emb[128]);
+    }
+}
+
 /// LayerNorm over the last dim. `affine=false` skips weight/bias.
 pub fn layer_norm(xs: &Tensor, eps: f64, weight: Option<&Tensor>, bias: Option<&Tensor>) -> Result<Tensor> {
     let x = xs.to_dtype(DType::F32)?;
@@ -97,11 +135,19 @@ pub fn conv2d(xs: &Tensor, kernel: &Tensor, padding: usize, stride: usize) -> Re
     xs.conv2d(kernel, padding, stride, 1, 1)
 }
 
-pub fn scaled_dot_product_attention(q: &Tensor, k: &Tensor, v: &Tensor) -> Result<Tensor> {
+pub fn scaled_dot_product_attention(
+    q: &Tensor,
+    k: &Tensor,
+    v: &Tensor,
+    mask: Option<&Tensor>,
+) -> Result<Tensor> {
     // q/k/v: [B, heads, seq, dim]
     let dim = q.dim(D::Minus1)? as f64;
     let scale = 1.0 / dim.sqrt();
-    let attn = (q.matmul(&k.transpose(D::Minus1, D::Minus2)?)? * scale)?;
+    let mut attn = (q.matmul(&k.transpose(D::Minus1, D::Minus2)?)? * scale)?;
+    if let Some(mask) = mask {
+        attn = attn.broadcast_add(mask)?;
+    }
     let attn = candle_nn::ops::softmax_last_dim(&attn)?;
     attn.matmul(v)
 }

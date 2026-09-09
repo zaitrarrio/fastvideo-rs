@@ -244,6 +244,7 @@ pub fn resolve_wan(model_id: &str) -> Result<&'static WanModelDefinition> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::sampling::WorkloadType;
 
     #[test]
     fn resolves_wan_1_3b_exact() {
@@ -262,5 +263,39 @@ mod tests {
     #[test]
     fn unknown_id_errors() {
         assert!(resolve_wan("not-a-real/model").is_err());
+    }
+
+    #[test]
+    fn family_ids_resolve() {
+        assert_eq!(
+            resolve_wan("Wan-AI/Wan2.1-T2V-14B-Diffusers")
+                .unwrap()
+                .preset,
+            "wan_t2v_14b"
+        );
+        assert_eq!(
+            resolve_wan("Wan-AI/Wan2.1-I2V-14B-480P-Diffusers")
+                .unwrap()
+                .workload_types[0],
+            WorkloadType::I2V
+        );
+        assert_eq!(
+            resolve_wan("Wan-AI/Wan2.2-TI2V-5B-Diffusers")
+                .unwrap()
+                .preset,
+            "wan_2_2_ti2v_5b"
+        );
+        assert_eq!(
+            resolve_wan("Wan-AI/Wan2.2-T2V-A14B-Diffusers")
+                .unwrap()
+                .pipeline_config,
+            "Wan2_2_T2V_A14B_Config"
+        );
+        assert_eq!(
+            resolve_wan("wlsaidhi/SFWan2.1-T2V-1.3B-Diffusers")
+                .unwrap()
+                .sampling,
+            SamplingAlgorithm::CausalDmd
+        );
     }
 }

@@ -333,40 +333,49 @@ pub fn pipeline_defaults(def: &WanModelDefinition) -> PipelineDefaults {
         "WanT2V480PConfig" => PipelineDefaults {
             flow_shift: 3.0,
             dmd_steps: None,
+            boundary_ratio: None,
         },
         "WanT2V720PConfig" | "WanI2V720PConfig" | "Wan2_2_TI2V_5B_Config"
         | "SelfForcingWanT2V480PConfig" => PipelineDefaults {
             flow_shift: 5.0,
             dmd_steps: None,
+            boundary_ratio: None,
         },
         "FastWan2_1_T2V_480P_Config" => PipelineDefaults {
             flow_shift: 8.0,
             dmd_steps: Some(&[1000, 757, 522]),
+            boundary_ratio: None,
         },
         "FastWan2_2_TI2V_5B_Config" => PipelineDefaults {
             flow_shift: 5.0,
             dmd_steps: Some(&[1000, 757, 522]),
+            boundary_ratio: None,
         },
         "Wan2_2_T2V_A14B_Config" => PipelineDefaults {
             flow_shift: 12.0,
             dmd_steps: Some(&[1000, 750, 500, 250]),
+            boundary_ratio: Some(0.875),
         },
         "Wan2_2_I2V_A14B_Config" => PipelineDefaults {
             flow_shift: 5.0,
             dmd_steps: None,
+            boundary_ratio: Some(0.875),
         },
         "SelfForcingWan2_2_T2V480PConfig" => PipelineDefaults {
             flow_shift: 12.0,
             dmd_steps: Some(&[1000, 850, 700, 550, 350, 275, 200, 125]),
+            boundary_ratio: Some(0.875),
         },
         _ => match def.sampling {
             SamplingAlgorithm::Dmd => PipelineDefaults {
                 flow_shift: 8.0,
                 dmd_steps: Some(&[1000, 757, 522]),
+                boundary_ratio: None,
             },
             _ => PipelineDefaults {
                 flow_shift: 3.0,
                 dmd_steps: None,
+                boundary_ratio: None,
             },
         },
     }
@@ -376,4 +385,5 @@ pub fn pipeline_defaults(def: &WanModelDefinition) -> PipelineDefaults {
 pub struct PipelineDefaults {
     pub flow_shift: f32,
     pub dmd_steps: Option<&'static [i32]>,
+    pub boundary_ratio: Option<f32>,
 }

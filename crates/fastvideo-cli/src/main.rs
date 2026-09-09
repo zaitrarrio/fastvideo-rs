@@ -1,7 +1,7 @@
 use anyhow::Result;
 use clap::{Parser, Subcommand, ValueEnum};
 use fastvideo_core::{BackendKind, LoadOptions, VideoGenerator, WAN_MODEL_DEFINITIONS};
-use fastvideo_models::{DmdSchedule, FlowMatchEulerDiscreteScheduler};
+use fastvideo_models::{DmdSchedule, FlowUniPCMultistepScheduler};
 
 #[derive(Parser)]
 #[command(
@@ -138,16 +138,18 @@ fn main() -> Result<()> {
                     println!("dmd_sigmas={:?}", sched.sigmas);
                 }
                 fastvideo_core::SamplingAlgorithm::UniPc => {
-                    let mut sched = FlowMatchEulerDiscreteScheduler::new(
+                    let mut sched = FlowUniPCMultistepScheduler::new(
                         1000,
                         f64::from(gen.pipeline.flow_shift),
                     );
                     sched.set_timesteps(gen.sampling.num_inference_steps as usize);
                     println!(
-                        "unipc_first_timestep={:.6} last={:.6} n={}",
+                        "unipc_first_timestep={:.6} last={:.6} n={} first_sigma={:.6} i64_t0={}",
                         sched.inference_timesteps()[0],
                         sched.inference_timesteps().last().copied().unwrap_or(0.0),
-                        sched.inference_timesteps().len()
+                        sched.inference_timesteps().len(),
+                        sched.inference_sigmas()[0],
+                        sched.inference_timesteps_i64()[0]
                     );
                 }
             }

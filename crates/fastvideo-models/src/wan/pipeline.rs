@@ -11,7 +11,7 @@ use super::config::WanVideoArchConfig;
 use super::transformer::WanTransformer3D;
 use super::umt5::{pad_prompt_embeds, Umt5Config, Umt5Encoder};
 use super::vae::{AutoencoderKlWan, WanVaeConfig};
-use crate::schedulers::{DmdSchedule, FlowMatchEulerDiscreteScheduler};
+use crate::schedulers::{DmdSchedule, FlowUniPCMultistepScheduler};
 
 #[derive(Debug, Clone)]
 pub struct GenerateConfig {
@@ -105,6 +105,14 @@ impl WanPipeline {
 
     fn encode_prompt(&self, cfg: &GenerateConfig) -> Result<Tensor> {
         let text_len = self.transformer.cfg.text_len;
+        if let Some(tokenizer) = cfg.tokenizer_path.as_ref() {
+            let (prompt_ids, prompt_len) = tokenize_prompt(tokenizer, &cfg.prompt, text_len)?;
+            let (neg_ids, neg_len) = tokenize_prompt(tokenizer, &cfg.negative_prompt, text_len)?;
+            let prompt_embeds =
+                pad_prompt_embeds(&self.encode_ids(&prompt_ids)?, &[prompt_len], text_len)?;
+            let neg_embeds = pad_prompt_embeds(&self.encode_ids(&neg_ids)?, &[neg_len], text_len)?;
+            return Tensor::cat(&[&neg_embeds, &prompt_embeds], 0);
+        }
         if self.tiny {
             let seq = text_len.min(8);
             let dummy: Vec<u32> = (0..seq).map(|i| (i % 10) as u32).collect();
@@ -114,16 +122,9 @@ impl WanPipeline {
             let neg_embeds = pad_prompt_embeds(&neg_embeds, &[seq], text_len)?;
             return Tensor::cat(&[&neg_embeds, &prompt_embeds], 0);
         }
-        let tokenizer = cfg.tokenizer_path.as_ref().ok_or_else(|| {
-            candle_core::Error::Msg(
-                "real generate needs tokenizer.json next to the Diffusers weights".into(),
-            )
-        })?;
-        let (prompt_ids, prompt_len) = tokenize_prompt(tokenizer, &cfg.prompt, text_len)?;
-        let (neg_ids, neg_len) = tokenize_prompt(tokenizer, &cfg.negative_prompt, text_len)?;
-        let prompt_embeds = pad_prompt_embeds(&self.encode_ids(&prompt_ids)?, &[prompt_len], text_len)?;
-        let neg_embeds = pad_prompt_embeds(&self.encode_ids(&neg_ids)?, &[neg_len], text_len)?;
-        Tensor::cat(&[&neg_embeds, &prompt_embeds], 0)
+        Err(candle_core::Error::Msg(
+            "real generate needs tokenizer.json next to the Diffusers weights".into(),
+        ))
     }
 
     pub fn generate(&self, cfg: &GenerateConfig) -> Result<Vec<String>> {
@@ -134,7 +135,7 @@ impl WanPipeline {
                 (cfg.num_frames.saturating_sub(1)) / 4 + 1,
                 cfg.height / 8,
                 cfg.width / 8,
-                16usize,
+                self.transformer.cfg.out_channels,
             )
         };
         let mut rng = rand::rngs::StdRng::seed_from_u64(cfg.seed);
@@ -147,38 +148,33 @@ impl WanPipeline {
 
         let encoder_hs = self.encode_prompt(cfg)?.to_dtype(self.dtype)?;
 
-        let (timesteps, sigmas): (Vec<f32>, Vec<f64>) = if cfg.is_dmd {
+        if cfg.is_dmd {
             let steps = cfg
                 .dmd_steps
                 .clone()
                 .unwrap_or_else(|| crate::schedulers::FAST_WAN_1_3B_DMD_STEPS.to_vec());
             let s = DmdSchedule::new(&steps, cfg.flow_shift, 1000);
-            let ts: Vec<f32> = s.train_timesteps.iter().map(|&t| t as f32).collect();
-            (ts, s.sigmas)
+            let timesteps: Vec<f32> = s.train_timesteps.iter().map(|&t| t as f32).collect();
+            latents = euler_denoise(
+                &self.transformer,
+                latents,
+                &encoder_hs,
+                &timesteps,
+                &s.sigmas,
+                cfg.guidance_scale,
+                self.dtype,
+            )?;
         } else {
-            let mut s = FlowMatchEulerDiscreteScheduler::new(1000, cfg.flow_shift);
-            s.set_timesteps(cfg.num_inference_steps);
-            let ts: Vec<f32> = s.inference_timesteps().iter().map(|t| *t as f32).collect();
-            (ts, s.inference_sigmas().to_vec())
-        };
-
-        for (i, &t) in timesteps.iter().enumerate() {
-            let t_tensor = Tensor::from_vec(vec![t, t], (2,), &self.device)?.to_dtype(self.dtype)?;
-            let latent_in = Tensor::cat(&[&latents, &latents], 0)?;
-            let noise_pred = self.transformer.forward(&latent_in, &t_tensor, &encoder_hs)?;
-            let chunks = noise_pred.chunk(2, 0)?;
-            let (uncond, text) = (&chunks[0], &chunks[1]);
-            let guided = if (cfg.guidance_scale - 1.0).abs() < 1e-6 {
-                text.clone()
-            } else {
-                let uncond_f = uncond.to_dtype(DType::F32)?;
-                let text_f = text.to_dtype(DType::F32)?;
-                (uncond_f.clone() + ((text_f - uncond_f)? * f64::from(cfg.guidance_scale))?)?
-                    .to_dtype(self.dtype)?
-            };
-            let dt = sigmas[i + 1] - sigmas[i];
-            let delta = (guided.to_dtype(DType::F32)? * dt)?.to_dtype(self.dtype)?;
-            latents = (latents + delta)?;
+            let mut sched = FlowUniPCMultistepScheduler::new(1000, cfg.flow_shift);
+            sched.set_timesteps(cfg.num_inference_steps);
+            latents = unipc_denoise(
+                &self.transformer,
+                latents,
+                &encoder_hs,
+                &mut sched,
+                cfg.guidance_scale,
+                self.dtype,
+            )?;
         }
 
         let latents = if self.tiny {
@@ -191,7 +187,83 @@ impl WanPipeline {
     }
 }
 
-fn tokenize_prompt(path: &str, text: &str, max_len: usize) -> Result<(Vec<u32>, usize)> {
+fn cfg_guide(uncond: &Tensor, text: &Tensor, scale: f32, dtype: DType) -> Result<Tensor> {
+    if (scale - 1.0).abs() < 1e-6 {
+        return Ok(text.clone());
+    }
+    let uncond_f = uncond.to_dtype(DType::F32)?;
+    let text_f = text.to_dtype(DType::F32)?;
+    (uncond_f.clone() + ((text_f - uncond_f)? * f64::from(scale))?)?.to_dtype(dtype)
+}
+
+fn dit_cfg(
+    transformer: &WanTransformer3D,
+    latents: &Tensor,
+    encoder_hs: &Tensor,
+    t: f32,
+    guidance_scale: f32,
+    dtype: DType,
+) -> Result<Tensor> {
+    let device = latents.device();
+    let t_tensor = Tensor::from_vec(vec![t, t], (2,), device)?.to_dtype(dtype)?;
+    let latent_in = Tensor::cat(&[latents, latents], 0)?;
+    let noise_pred = transformer.forward(&latent_in, &t_tensor, encoder_hs)?;
+    let chunks = noise_pred.chunk(2, 0)?;
+    cfg_guide(&chunks[0], &chunks[1], guidance_scale, dtype)
+}
+
+fn euler_denoise(
+    transformer: &WanTransformer3D,
+    mut latents: Tensor,
+    encoder_hs: &Tensor,
+    timesteps: &[f32],
+    sigmas: &[f64],
+    guidance_scale: f32,
+    dtype: DType,
+) -> Result<Tensor> {
+    for (i, &t) in timesteps.iter().enumerate() {
+        let guided = dit_cfg(transformer, &latents, encoder_hs, t, guidance_scale, dtype)?;
+        let dt = sigmas[i + 1] - sigmas[i];
+        let delta = (guided.to_dtype(DType::F32)? * dt)?.to_dtype(dtype)?;
+        latents = (latents + delta)?;
+    }
+    Ok(latents)
+}
+
+fn unipc_denoise(
+    transformer: &WanTransformer3D,
+    mut latents: Tensor,
+    encoder_hs: &Tensor,
+    sched: &mut FlowUniPCMultistepScheduler,
+    guidance_scale: f32,
+    dtype: DType,
+) -> Result<Tensor> {
+    let device = latents.device().clone();
+    let shape = latents.dims().to_vec();
+    let ts: Vec<f32> = sched
+        .inference_timesteps_i64()
+        .iter()
+        .map(|t| *t as f32)
+        .collect();
+    for &t in &ts {
+        let guided = dit_cfg(transformer, &latents, encoder_hs, t, guidance_scale, dtype)?;
+        let vel = guided
+            .to_dtype(DType::F32)?
+            .flatten_all()?
+            .to_vec1::<f32>()?;
+        let x = latents
+            .to_dtype(DType::F32)?
+            .flatten_all()?
+            .to_vec1::<f32>()?;
+        let prev = sched
+            .step(&vel, &x)
+            .map_err(|e| candle_core::Error::Msg(e))?;
+        latents = Tensor::from_vec(prev, shape.clone(), &device)?.to_dtype(dtype)?;
+    }
+    Ok(latents)
+}
+
+pub fn tokenize_prompt(path: &str, text: &str, max_len: usize) -> Result<(Vec<u32>, usize)> {
     let tokenizer = tokenizers::Tokenizer::from_file(path)
         .map_err(|e| candle_core::Error::Msg(format!("tokenizer load failed: {e}")))?;
     let encoding = tokenizer
@@ -252,5 +324,23 @@ mod tests {
         let paths = pipe.generate(&cfg).unwrap();
         assert!(!paths.is_empty());
         assert!(Path::new(&paths[0]).exists());
+    }
+
+    #[test]
+    fn umt5_tokenizer_is_not_dummy_ids() {
+        let Some(root) = crate::wan::weights::local_wan_t2v_1_3b() else {
+            eprintln!("skip: Wan2.1-T2V-1.3B-Diffusers not in HF cache");
+            return;
+        };
+        let tok = root.join("tokenizer/tokenizer.json");
+        assert!(tok.is_file(), "{}", tok.display());
+        let prompt = "A curious raccoon in a field of sunflowers.";
+        let (ids, len) = tokenize_prompt(tok.to_str().unwrap(), prompt, 512).unwrap();
+        assert!(len > 4, "expected a real sentencepiece encoding, got {ids:?}");
+        let dummy: Vec<u32> = (0..len as u32).collect();
+        assert_ne!(ids, dummy, "tokenizer returned dummy sequential ids");
+        // UMT5/T5: pad=0, eos=1. Encoding with special tokens ends in eos.
+        assert_eq!(*ids.last().unwrap(), 1);
+        assert!(ids.iter().any(|&id| id > 10));
     }
 }
