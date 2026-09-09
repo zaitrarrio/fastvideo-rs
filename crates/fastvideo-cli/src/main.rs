@@ -43,6 +43,12 @@ struct GenerateArgs {
     /// Directory for decoded PNG frames.
     #[arg(long)]
     output: Option<String>,
+    /// `cpu`, `cuda`, or `cuda:0`. CUDA binaries need `--features cuda`.
+    #[arg(long, default_value = "cpu")]
+    device: String,
+    /// `f32`, `f16`, or `bf16`. Defaults to bf16 on CUDA, f32 on CPU.
+    #[arg(long)]
+    dtype: Option<String>,
 }
 
 #[derive(clap::Args)]
@@ -93,6 +99,8 @@ fn main() -> Result<()> {
                     tiny: args.tiny,
                     weights_path: args.weights,
                     output_path: args.output,
+                    device: args.device,
+                    dtype: args.dtype,
                 },
             )?;
             println!("{}", gen.summary());

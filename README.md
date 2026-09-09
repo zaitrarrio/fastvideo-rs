@@ -1,12 +1,8 @@
 # fastvideo-rs
 
 Rust inference port of [FastVideo](https://github.com/hao-ai-lab/FastVideo) for the
-Wan / FastWan family. Models currently run on **Candle** (CPU). Burn and Luminal
-backends remain stubs.
-
-This is Phase 1: UMT5, WanTransformer3D, Wan-VAE decode, a sampling loop, and PNG
-frame write. Full 1.3B quality still needs a local Diffusers checkpoint; CI uses
-`--tiny` zero weights so tests never download UMT5-XXL.
+Wan / FastWan family. **Real inference targets Vast.ai NVIDIA GPUs** via Candle
+CUDA. Burn and Luminal backends remain stubs. Mac/CI stay on CPU.
 
 ## Status
 
@@ -15,36 +11,46 @@ frame write. Full 1.3B quality still needs a local Diffusers checkpoint; CI uses
 | Wan/FastWan HF id registry | done |
 | UniPC sigma table + Euler step | done |
 | FastWan DMD timesteps `[1000, 757, 522]` | done |
-| Candle CPU UMT5 + DiT + VAE decode | done (tiny + 1.3B graph) |
-| Diffusers safetensors loader | done (local dir) |
+| Candle CPU UMT5 + DiT + VAE decode | done (`--tiny`) |
+| Candle CUDA (`--features cuda --device cuda`) | Vast RTX 4090 |
+| Diffusers safetensors + tokenizer.json | local dir |
 | Burn Flex / Luminal graphs | stubs |
 
-## CLI
+## CLI (CPU / CI)
 
 ```bash
-cargo run -p fastvideo-cli -- list-models
-cargo run -p fastvideo-cli -- schedule --model Wan-AI/Wan2.1-T2V-1.3B-Diffusers
-
-# Zero-weight smoke test (no Hub download)
+cargo test --workspace
 cargo run -p fastvideo-cli -- generate \
   --model FastVideo/FastWan2.1-T2V-1.3B-Diffusers \
-  --backend candle \
-  --tiny \
-  --output /tmp/fastvideo-tiny \
-  --prompt "A curious raccoon in a field of sunflowers."
+  --tiny --output /tmp/fastvideo-tiny
+```
 
-# Real Wan 2.1 1.3B Diffusers weights (local checkout)
-cargo run -p fastvideo-cli -- generate \
+## GPU on Vast
+
+Bring-up host: running RTX 4090 instance. Default dtype on CUDA is **BF16**.
+
+```bash
+./scripts/vast-sync.sh
+ssh -i ~/.ssh/id_strobe_vast -p 3390 root@<vast-host> 'bash /workspace/fastvideo-rs/scripts/vast-setup-cuda.sh'
+./scripts/vast-generate.sh tiny
+# then, after weights are on disk:
+./scripts/vast-generate.sh 1.3b
+```
+
+On the instance:
+
+```bash
+cargo run -p fastvideo-cli --release --features cuda -- generate \
   --model Wan-AI/Wan2.1-T2V-1.3B-Diffusers \
-  --backend candle \
-  --weights /path/to/Wan2.1-T2V-1.3B-Diffusers \
-  --output outputs \
+  --device cuda \
+  --dtype bf16 \
+  --weights /workspace/weights/Wan2.1-T2V-1.3B-Diffusers \
+  --output /workspace/fastvideo-out \
   --prompt "A curious raccoon in a field of sunflowers."
 ```
 
-`--weights` must be a Diffusers layout with `transformer/`, `vae/`, and
-`text_encoder/` safetensors. Tokenizer-backed prompts are not wired yet; the
-graph still runs with dummy token ids. Bring-up checkpoint:
+`--weights` is a Diffusers layout: `transformer/`, `vae/`, `text_encoder/`, and
+`tokenizer/tokenizer.json`. Bring-up checkpoint:
 `Wan-AI/Wan2.1-T2V-1.3B-Diffusers`.
 
 ## Layout
@@ -54,11 +60,15 @@ crates/
   fastvideo-ops        TensorBackend trait + host CPU reference
   fastvideo-core       registry, SamplingParam, VideoGenerator
   fastvideo-models     Wan DiT / VAE / UMT5 + schedulers
-  fastvideo-loader     Diffusers safetensors mmap
+  fastvideo-loader     Diffusers safetensors load
   fastvideo-candle     Candle backend
   fastvideo-burn       Burn backend stub
   fastvideo-luminal    Luminal backend stub
   fastvideo-cli        `fastvideo` binary
+scripts/
+  vast-sync.sh         rsync onto the Vast box
+  vast-setup-cuda.sh   rustup + CUDA 12.4 nvcc
+  vast-generate.sh     CUDA tiny or 1.3B generate
 ```
 
 ## License

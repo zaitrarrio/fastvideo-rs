@@ -31,3 +31,14 @@ Project code: FVID
 - Executed by: Executor
 - ADR: ADR-0001
 - Verification: pending
+
+### FVID · 2026-09-09 · FVID-2026-09-09-vast-gpu
+- Trigger: CPU `--tiny` is not a real inference bar; need GPU for Wan 1.3B
+- Options: local Metal; wait for Luminal GPU; CUDA on Vast.ai
+- Decision: real GPU runs on Vast CUDA hardware (Candle `--features cuda`, BF16)
+- Reason: user directed GPU runs onto Vast
+- Reversibility: cheap
+- Executed by: Executor
+- ADR: ADR-0002
+- Verification: gates green (tiny CUDA F32 generate on RTX 4090 instance 50416610)
+

@@ -15,5 +15,9 @@ clap.workspace = true
 fastvideo-core.workspace = true
 fastvideo-models.workspace = true
 
+[features]
+default = []
+cuda = ["fastvideo-core/cuda", "fastvideo-models/cuda"]
+
 [lints]
 workspace = true

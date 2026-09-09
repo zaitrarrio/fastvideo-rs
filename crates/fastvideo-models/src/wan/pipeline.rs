@@ -28,6 +28,7 @@ pub struct GenerateConfig {
     pub is_dmd: bool,
     pub flow_shift: f64,
     pub dmd_steps: Option<Vec<i32>>,
+    pub tokenizer_path: Option<String>,
 }
 
 impl Default for GenerateConfig {
@@ -46,6 +47,7 @@ impl Default for GenerateConfig {
             is_dmd: false,
             flow_shift: 5.0,
             dmd_steps: None,
+            tokenizer_path: None,
         }
     }
 }
@@ -56,17 +58,23 @@ pub struct WanPipeline {
     vae: AutoencoderKlWan,
     device: Device,
     tiny: bool,
+    dtype: DType,
 }
 
 impl WanPipeline {
     pub fn tiny(device: &Device) -> Result<Self> {
-        let vb = VarBuilder::zeros(DType::F32, device);
+        Self::tiny_dtype(device, DType::F32)
+    }
+
+    pub fn tiny_dtype(device: &Device, dtype: DType) -> Result<Self> {
+        let vb = VarBuilder::zeros(dtype, device);
         Ok(Self {
             text: Umt5Encoder::load(Umt5Config::tiny(), vb.pp("text"))?,
             transformer: WanTransformer3D::load(WanVideoArchConfig::tiny(), vb.pp("dit"))?,
             vae: AutoencoderKlWan::load(WanVaeConfig::tiny(), vb.pp("vae"))?,
             device: device.clone(),
             tiny: true,
+            dtype,
         })
     }
 
@@ -79,18 +87,43 @@ impl WanPipeline {
         text_cfg: Umt5Config,
         device: Device,
     ) -> Result<Self> {
+        let dtype = transformer_vb.dtype();
         Ok(Self {
             text: Umt5Encoder::load(text_cfg, text_vb)?,
             transformer: WanTransformer3D::load(dit_cfg, transformer_vb)?,
             vae: AutoencoderKlWan::load(vae_cfg, vae_vb)?,
             device,
             tiny: false,
+            dtype,
         })
     }
 
     fn encode_ids(&self, ids: &[u32]) -> Result<Tensor> {
         let input = Tensor::new(ids, &self.device)?.unsqueeze(0)?;
         self.text.forward(&input, None)
+    }
+
+    fn encode_prompt(&self, cfg: &GenerateConfig) -> Result<Tensor> {
+        let text_len = self.transformer.cfg.text_len;
+        if self.tiny {
+            let seq = text_len.min(8);
+            let dummy: Vec<u32> = (0..seq).map(|i| (i % 10) as u32).collect();
+            let prompt_embeds = self.encode_ids(&dummy)?;
+            let neg_embeds = prompt_embeds.clone();
+            let prompt_embeds = pad_prompt_embeds(&prompt_embeds, &[seq], text_len)?;
+            let neg_embeds = pad_prompt_embeds(&neg_embeds, &[seq], text_len)?;
+            return Tensor::cat(&[&neg_embeds, &prompt_embeds], 0);
+        }
+        let tokenizer = cfg.tokenizer_path.as_ref().ok_or_else(|| {
+            candle_core::Error::Msg(
+                "real generate needs tokenizer.json next to the Diffusers weights".into(),
+            )
+        })?;
+        let (prompt_ids, prompt_len) = tokenize_prompt(tokenizer, &cfg.prompt, text_len)?;
+        let (neg_ids, neg_len) = tokenize_prompt(tokenizer, &cfg.negative_prompt, text_len)?;
+        let prompt_embeds = pad_prompt_embeds(&self.encode_ids(&prompt_ids)?, &[prompt_len], text_len)?;
+        let neg_embeds = pad_prompt_embeds(&self.encode_ids(&neg_ids)?, &[neg_len], text_len)?;
+        Tensor::cat(&[&neg_embeds, &prompt_embeds], 0)
     }
 
     pub fn generate(&self, cfg: &GenerateConfig) -> Result<Vec<String>> {
@@ -109,16 +142,10 @@ impl WanPipeline {
         let noise: Vec<f32> = (0..n_el)
             .map(|_| rng.sample::<f32, _>(StandardNormal))
             .collect();
-        let mut latents = Tensor::from_vec(noise, (1, z_c, z_t, z_h, z_w), &self.device)?;
+        let mut latents =
+            Tensor::from_vec(noise, (1, z_c, z_t, z_h, z_w), &self.device)?.to_dtype(self.dtype)?;
 
-        let text_len = self.transformer.cfg.text_len;
-        let seq = if self.tiny { text_len.min(8) } else { text_len.min(8) };
-        let dummy: Vec<u32> = (0..seq).map(|i| (i % 10) as u32).collect();
-        let prompt_embeds = self.encode_ids(&dummy)?;
-        let neg_embeds = prompt_embeds.clone();
-        let prompt_embeds = pad_prompt_embeds(&prompt_embeds, &[seq], text_len)?;
-        let neg_embeds = pad_prompt_embeds(&neg_embeds, &[seq], text_len)?;
-        let encoder_hs = Tensor::cat(&[&neg_embeds, &prompt_embeds], 0)?;
+        let encoder_hs = self.encode_prompt(cfg)?.to_dtype(self.dtype)?;
 
         let (timesteps, sigmas): (Vec<f32>, Vec<f64>) = if cfg.is_dmd {
             let steps = cfg
@@ -136,7 +163,7 @@ impl WanPipeline {
         };
 
         for (i, &t) in timesteps.iter().enumerate() {
-            let t_tensor = Tensor::from_vec(vec![t, t], (2,), &self.device)?;
+            let t_tensor = Tensor::from_vec(vec![t, t], (2,), &self.device)?.to_dtype(self.dtype)?;
             let latent_in = Tensor::cat(&[&latents, &latents], 0)?;
             let noise_pred = self.transformer.forward(&latent_in, &t_tensor, &encoder_hs)?;
             let chunks = noise_pred.chunk(2, 0)?;
@@ -144,10 +171,14 @@ impl WanPipeline {
             let guided = if (cfg.guidance_scale - 1.0).abs() < 1e-6 {
                 text.clone()
             } else {
-                (uncond + ((text - uncond)? * f64::from(cfg.guidance_scale))?)?
+                let uncond_f = uncond.to_dtype(DType::F32)?;
+                let text_f = text.to_dtype(DType::F32)?;
+                (uncond_f.clone() + ((text_f - uncond_f)? * f64::from(cfg.guidance_scale))?)?
+                    .to_dtype(self.dtype)?
             };
             let dt = sigmas[i + 1] - sigmas[i];
-            latents = (latents + (guided * dt)?)?;
+            let delta = (guided.to_dtype(DType::F32)? * dt)?.to_dtype(self.dtype)?;
+            latents = (latents + delta)?;
         }
 
         let latents = if self.tiny {
@@ -160,9 +191,26 @@ impl WanPipeline {
     }
 }
 
+fn tokenize_prompt(path: &str, text: &str, max_len: usize) -> Result<(Vec<u32>, usize)> {
+    let tokenizer = tokenizers::Tokenizer::from_file(path)
+        .map_err(|e| candle_core::Error::Msg(format!("tokenizer load failed: {e}")))?;
+    let encoding = tokenizer
+        .encode(text, true)
+        .map_err(|e| candle_core::Error::Msg(format!("tokenize failed: {e}")))?;
+    let mut ids = encoding.get_ids().to_vec();
+    if ids.len() > max_len {
+        ids.truncate(max_len);
+    }
+    let len = ids.len().max(1);
+    Ok((ids, len))
+}
+
 fn write_frames(video: &Tensor, dir: &Path) -> Result<Vec<String>> {
     std::fs::create_dir_all(dir).map_err(|e| candle_core::Error::Msg(e.to_string()))?;
-    let video = video.squeeze(0)?;
+    let video = video
+        .to_dtype(DType::F32)?
+        .to_device(&Device::Cpu)?
+        .squeeze(0)?;
     let dims = video.dims();
     let (t, h, w) = match dims {
         [_c, t, h, w] => (*t, *h, *w),

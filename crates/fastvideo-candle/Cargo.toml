@@ -9,5 +9,9 @@ description = "Candle TensorBackend for fastvideo-rs."
 fastvideo-ops.workspace = true
 candle-core.workspace = true
 
+[features]
+default = []
+cuda = ["candle-core/cuda"]
+
 [lints]
 workspace = true

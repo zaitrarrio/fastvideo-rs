@@ -269,7 +269,7 @@ impl WanBlock {
         let c_gate = &chunks[5];
 
         let normed = nn::layer_norm(&hidden.to_dtype(DType::F32)?, self.norm1_eps, None, None)?;
-        let normed = (normed.broadcast_mul(&(scale_msa + 1.0)?)?.broadcast_add(shift_msa)?)
+        let normed = (normed.broadcast_mul(&(scale_msa.to_dtype(DType::F32)? + 1.0)?)?.broadcast_add(&shift_msa.to_dtype(DType::F32)?)?)
             .to_dtype(hidden.dtype())?;
         let attn = self.attn1.forward(&normed, None, Some(rotary))?;
         let hidden = (hidden.to_dtype(DType::F32)?.broadcast_add(&attn.to_dtype(DType::F32)?.broadcast_mul(gate_msa)?)?)
@@ -286,7 +286,7 @@ impl WanBlock {
         let hidden = (hidden + attn)?;
 
         let normed = nn::layer_norm(&hidden.to_dtype(DType::F32)?, self.norm1_eps, None, None)?;
-        let normed = (normed.broadcast_mul(&(c_scale + 1.0)?)?.broadcast_add(c_shift)?)
+        let normed = (normed.broadcast_mul(&(c_scale.to_dtype(DType::F32)? + 1.0)?)?.broadcast_add(&c_shift.to_dtype(DType::F32)?)?)
             .to_dtype(hidden.dtype())?;
         let ff = self.ffn.forward(&normed)?;
         (hidden.to_dtype(DType::F32)?.broadcast_add(&ff.to_dtype(DType::F32)?.broadcast_mul(c_gate)?)?)

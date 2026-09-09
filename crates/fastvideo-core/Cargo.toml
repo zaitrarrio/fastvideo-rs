@@ -11,5 +11,9 @@ candle-core.workspace = true
 fastvideo-models.workspace = true
 fastvideo-loader.workspace = true
 
+[features]
+default = []
+cuda = ["candle-core/cuda", "fastvideo-models/cuda", "fastvideo-loader/cuda"]
+
 [lints]
 workspace = true

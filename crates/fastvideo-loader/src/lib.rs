@@ -64,7 +64,9 @@ pub fn var_builder_from_dir(
     let mut tensors = std::collections::HashMap::new();
     for file in &files {
         let loaded = candle_core::safetensors::load(file, device)?;
-        tensors.extend(loaded);
+        for (name, tensor) in loaded {
+            tensors.insert(name, tensor.to_dtype(dtype)?);
+        }
     }
     Ok(VarBuilder::from_tensors(tensors, dtype, device))
 }

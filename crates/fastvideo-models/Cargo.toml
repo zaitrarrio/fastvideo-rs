@@ -12,6 +12,11 @@ image.workspace = true
 rand.workspace = true
 rand_distr.workspace = true
 thiserror = { workspace = true }
+tokenizers.workspace = true
+
+[features]
+default = []
+cuda = ["candle-core/cuda", "candle-nn/cuda"]
 
 [lints]
 workspace = true

@@ -26,6 +26,8 @@ mod tests {
                 tiny: false,
                 weights_path: None,
                 output_path: None,
+                device: "cpu".into(),
+                dtype: None,
             },
         )
         .unwrap();
@@ -50,11 +52,32 @@ mod tests {
                         .to_string_lossy()
                         .into(),
                 ),
+                device: "cpu".into(),
+                dtype: None,
             },
         )
         .unwrap();
         let out = gen.generate_video("a raccoon").unwrap();
         assert!(!out.frame_paths.is_empty());
         assert!(std::path::Path::new(&out.frame_paths[0]).exists());
+    }
+
+    #[cfg(not(feature = "cuda"))]
+    #[test]
+    fn cuda_device_requires_feature() {
+        let err = crate::generator::resolve_candle_device("cuda").unwrap_err();
+        assert!(err.to_string().contains("features cuda"));
+    }
+
+    #[test]
+    fn cuda_defaults_to_bf16() {
+        assert_eq!(
+            crate::generator::resolve_dtype(None, "cuda").unwrap(),
+            candle_core::DType::BF16
+        );
+        assert_eq!(
+            crate::generator::resolve_dtype(None, "cpu").unwrap(),
+            candle_core::DType::F32
+        );
     }
 }

@@ -37,14 +37,18 @@ impl Linear {
 }
 
 pub fn silu(xs: &Tensor) -> Result<Tensor> {
-    xs * candle_nn::ops::sigmoid(xs)?
+    let dtype = xs.dtype();
+    let x = xs.to_dtype(DType::F32)?;
+    (x.clone() * candle_nn::ops::sigmoid(&x)?)?.to_dtype(dtype)
 }
 
 /// GELU tanh approximation used by Diffusers `gelu-approximate` / `gelu_pytorch_tanh`.
 pub fn gelu_tanh(xs: &Tensor) -> Result<Tensor> {
-    let inner = ((xs.powf(3.0)? * 0.044715)? + xs)?;
+    let dtype = xs.dtype();
+    let xs = xs.to_dtype(DType::F32)?;
+    let inner = ((xs.powf(3.0)? * 0.044715)? + &xs)?;
     let tanh = (inner * (2.0 / std::f64::consts::PI).sqrt())?.tanh()?;
-    (xs * 0.5)? * (1.0 + tanh)?
+    ((&xs * 0.5)? * (1.0 + tanh)?)?.to_dtype(dtype)
 }
 
 pub fn rms_norm(xs: &Tensor, weight: &Tensor, eps: f64) -> Result<Tensor> {

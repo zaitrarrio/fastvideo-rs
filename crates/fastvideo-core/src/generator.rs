@@ -16,6 +16,10 @@ pub struct LoadOptions {
     pub tiny: bool,
     pub weights_path: Option<String>,
     pub output_path: Option<String>,
+    /// `cpu`, `cuda`, or `cuda:0`.
+    pub device: String,
+    /// `f32`, `f16`, or `bf16`. Empty means bf16 on CUDA, f32 on CPU.
+    pub dtype: Option<String>,
 }
 
 impl Default for LoadOptions {
@@ -26,6 +30,8 @@ impl Default for LoadOptions {
             tiny: false,
             weights_path: None,
             output_path: None,
+            device: "cpu".into(),
+            dtype: None,
         }
     }
 }
@@ -41,6 +47,8 @@ pub struct VideoGenerator {
     pub tiny: bool,
     pub weights_path: Option<String>,
     pub output_path: String,
+    pub device: String,
+    pub dtype: Option<String>,
 }
 
 impl VideoGenerator {
@@ -62,17 +70,20 @@ impl VideoGenerator {
             tiny: opts.tiny,
             weights_path: opts.weights_path,
             output_path: opts.output_path.unwrap_or_else(|| "outputs".to_string()),
+            device: opts.device,
+            dtype: opts.dtype,
         })
     }
 
     pub fn summary(&self) -> String {
         format!(
-            "model={} preset={} sampling={} backend={} tiny={} {}x{} frames={} steps={} shift={}",
+            "model={} preset={} sampling={} backend={} tiny={} device={} {}x{} frames={} steps={} shift={}",
             self.model_id,
             self.definition.preset,
             self.definition.sampling.as_str(),
             self.backend,
             self.tiny,
+            self.device,
             self.sampling.width,
             self.sampling.height,
             self.sampling.num_frames,
@@ -92,11 +103,16 @@ impl VideoGenerator {
     }
 
     fn generate_candle(&self, prompt: &str) -> Result<GenerateOutput> {
-        let device = Device::Cpu;
+        let device = resolve_candle_device(&self.device)?;
+        let dtype = resolve_dtype(self.dtype.as_deref(), &self.device)?;
         let is_dmd = matches!(
             self.definition.sampling,
             SamplingAlgorithm::Dmd | SamplingAlgorithm::CausalDmd
         );
+        let tokenizer_path = self.weights_path.as_ref().and_then(|root| {
+            let p = std::path::Path::new(root).join("tokenizer").join("tokenizer.json");
+            p.exists().then(|| p.to_string_lossy().into_owned())
+        });
         let mut gen_cfg = GenerateConfig {
             prompt: prompt.to_string(),
             negative_prompt: self.sampling.negative_prompt.clone(),
@@ -111,6 +127,7 @@ impl VideoGenerator {
             is_dmd,
             flow_shift: f64::from(self.pipeline.flow_shift),
             dmd_steps: self.pipeline.dmd_steps.map(|s| s.to_vec()),
+            tokenizer_path,
         };
         if self.tiny {
             gen_cfg.guidance_scale = 1.0;
@@ -118,15 +135,20 @@ impl VideoGenerator {
             gen_cfg.flow_shift = 8.0;
         }
         let pipe = if self.tiny {
-            WanPipeline::tiny(&device).map_err(candle_err)?
+            WanPipeline::tiny_dtype(&device, dtype).map_err(candle_err)?
         } else {
             let root = self.weights_path.as_ref().ok_or_else(|| {
                 FastVideoError::Message(
                     "pass --tiny (zero weights, CI) or --weights <diffusers-dir>".into(),
                 )
             })?;
+            if gen_cfg.tokenizer_path.is_none() {
+                return Err(FastVideoError::Message(format!(
+                    "missing {root}/tokenizer/tokenizer.json"
+                )));
+            }
             let (t_vb, v_vb, e_vb) =
-                load_diffusers_components(std::path::Path::new(root), DType::F32, &device)
+                load_diffusers_components(std::path::Path::new(root), dtype, &device)
                     .map_err(|e| FastVideoError::Message(e.to_string()))?;
             WanPipeline::load(
                 t_vb,
@@ -144,6 +166,49 @@ impl VideoGenerator {
             output_path: frames.first().cloned(),
             frame_paths: frames,
         })
+    }
+}
+
+pub fn resolve_candle_device(spec: &str) -> Result<Device> {
+    let spec = spec.trim().to_ascii_lowercase();
+    if spec == "cpu" {
+        return Ok(Device::Cpu);
+    }
+    let index = if spec == "cuda" {
+        0usize
+    } else if let Some(rest) = spec.strip_prefix("cuda:") {
+        rest.parse::<usize>()
+            .map_err(|_| FastVideoError::Message(format!("bad CUDA index in `{spec}`")))?
+    } else {
+        return Err(FastVideoError::Message(format!(
+            "unknown device `{spec}` (expected cpu, cuda, or cuda:N)"
+        )));
+    };
+    #[cfg(feature = "cuda")]
+    {
+        Device::new_cuda(index).map_err(candle_err)
+    }
+    #[cfg(not(feature = "cuda"))]
+    {
+        let _ = index;
+        Err(FastVideoError::Message(
+            "CUDA requested but this binary was built without `--features cuda`".into(),
+        ))
+    }
+}
+
+pub fn resolve_dtype(dtype: Option<&str>, device: &str) -> Result<DType> {
+    match dtype {
+        None if device.to_ascii_lowercase().starts_with("cuda") => Ok(DType::BF16),
+        None => Ok(DType::F32),
+        Some(value) => match value.to_ascii_lowercase().as_str() {
+            "f32" | "fp32" => Ok(DType::F32),
+            "f16" | "fp16" => Ok(DType::F16),
+            "bf16" => Ok(DType::BF16),
+            other => Err(FastVideoError::Message(format!(
+                "unknown dtype `{other}` (expected f32, f16, or bf16)"
+            ))),
+        },
     }
 }
 

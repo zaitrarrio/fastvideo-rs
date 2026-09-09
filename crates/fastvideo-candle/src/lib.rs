@@ -42,8 +42,21 @@ impl TensorBackend for CandleBackend {
     fn map_device(device: &Device) -> Result<Self::Device, OpsError> {
         match device {
             Device::Cpu => Ok(CandleDevice::Cpu),
+            Device::Cuda { index } => {
+                #[cfg(feature = "cuda")]
+                {
+                    CandleDevice::new_cuda(*index).map_err(map_err)
+                }
+                #[cfg(not(feature = "cuda"))]
+                {
+                    let _ = index;
+                    Err(OpsError::Message(
+                        "rebuild with --features cuda for CUDA devices".into(),
+                    ))
+                }
+            }
             other => Err(OpsError::Message(format!(
-                "candle GPU devices require the cuda/metal crate features; got {other:?}"
+                "candle adapter does not map {other:?} yet"
             ))),
         }
     }
