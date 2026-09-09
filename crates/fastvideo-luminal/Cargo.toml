@@ -1,0 +1,12 @@
+[package]
+name = "fastvideo-luminal"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Luminal TensorBackend for fastvideo-rs (compile-once DiT/VAE graphs)."
+
+[dependencies]
+fastvideo-ops.workspace = true
+
+[lints]
+workspace = true

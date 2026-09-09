@@ -1,0 +1,19 @@
+[package]
+name = "fastvideo-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "CLI for FastVideo-rs inference."
+
+[[bin]]
+name = "fastvideo"
+path = "src/main.rs"
+
+[dependencies]
+anyhow.workspace = true
+clap.workspace = true
+fastvideo-core.workspace = true
+fastvideo-models.workspace = true
+
+[lints]
+workspace = true

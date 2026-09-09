@@ -1,0 +1,11 @@
+fastvideo-rs
+Copyright 2026 fastvideo-rs contributors
+
+This product includes software derived from FastVideo
+(https://github.com/hao-ai-lab/FastVideo), Copyright the FastVideo authors,
+licensed under the Apache License, Version 2.0.
+
+Scheduler math in crates/fastvideo-models is adapted from FastVideo's
+FlowMatchEulerDiscreteScheduler, itself modified from Hugging Face Diffusers
+(Apache-2.0). Wan model definitions and sampling presets are ported from
+fastvideo/models/wan/definition.py and fastvideo/pipelines/basic/wan/presets.py.

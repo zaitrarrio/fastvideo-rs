@@ -1,0 +1,13 @@
+[package]
+name = "fastvideo-candle"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Candle TensorBackend for fastvideo-rs."
+
+[dependencies]
+fastvideo-ops.workspace = true
+candle-core.workspace = true
+
+[lints]
+workspace = true

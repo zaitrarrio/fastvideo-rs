@@ -1,0 +1,41 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/fastvideo-ops",
+    "crates/fastvideo-core",
+    "crates/fastvideo-models",
+    "crates/fastvideo-loader",
+    "crates/fastvideo-burn",
+    "crates/fastvideo-candle",
+    "crates/fastvideo-luminal",
+    "crates/fastvideo-cli",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "Apache-2.0"
+rust-version = "1.82"
+description = "Rust inference port of FastVideo for Wan/FastWan, running on Burn, Candle, or Luminal."
+repository = "https://github.com/zaitrarrio/fastvideo-rs"
+
+[workspace.dependencies]
+anyhow = "1"
+clap = { version = "4", features = ["derive"] }
+serde = { version = "1", features = ["derive"] }
+thiserror = "2"
+candle-core = "0.11"
+
+fastvideo-ops = { path = "crates/fastvideo-ops" }
+fastvideo-core = { path = "crates/fastvideo-core" }
+fastvideo-models = { path = "crates/fastvideo-models" }
+fastvideo-loader = { path = "crates/fastvideo-loader" }
+fastvideo-burn = { path = "crates/fastvideo-burn" }
+fastvideo-candle = { path = "crates/fastvideo-candle" }
+fastvideo-luminal = { path = "crates/fastvideo-luminal" }
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+
+[workspace.lints.clippy]
+all = { level = "warn", priority = -1 }

@@ -1,0 +1,14 @@
+/target
+**/*.rs.bk
+.idea/
+.vscode/
+.DS_Store
+outputs/
+*.mp4
+.env
+.env.*
+!*.env.example
+*.safetensors
+*.bin
+*.gguf
+.cache/
