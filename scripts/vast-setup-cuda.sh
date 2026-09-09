@@ -13,6 +13,9 @@ if ! command -v rustc >/dev/null 2>&1; then
 fi
 # shellcheck disable=SC1091
 source "$HOME/.cargo/env"
+export CARGO_HOME="${CARGO_HOME:-/workspace/.cargo}"
+mkdir -p "$CARGO_HOME"
+# Keep the 1.82 toolchain; rust-toolchain.toml "stable" would otherwise auto-update.
 
 if ! command -v nvcc >/dev/null 2>&1; then
   wget -q https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2204/x86_64/cuda-keyring_1.1-1_all.deb

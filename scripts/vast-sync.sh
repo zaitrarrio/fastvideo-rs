@@ -17,6 +17,7 @@ echo "sync $ROOT -> root@$host:$port:$REMOTE_DIR"
 ssh -i "$SSH_KEY" -p "$port" -o StrictHostKeyChecking=accept-new "root@$host" "mkdir -p $REMOTE_DIR"
 rsync -az --delete \
   --exclude target \
+  --exclude target-linux \
   --exclude .git \
   --exclude 'outputs' \
   -e "ssh -i $SSH_KEY -p $port -o StrictHostKeyChecking=accept-new" \

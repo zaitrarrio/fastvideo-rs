@@ -5,6 +5,7 @@ set -euo pipefail
 INSTANCE_ID="${VAST_INSTANCE_ID:-50416610}"
 SSH_KEY="${VAST_SSH_KEY:-$HOME/.ssh/id_strobe_vast}"
 REMOTE_DIR="${VAST_REMOTE_DIR:-/workspace/fastvideo-rs}"
+CARGO_HOME_DIR="${VAST_CARGO_HOME:-/workspace/.cargo}"
 MODE="${1:-tiny}"
 
 url="$(vastai ssh-url "$INSTANCE_ID")"
@@ -12,13 +13,17 @@ hostport="${url#ssh://root@}"
 host="${hostport%:*}"
 port="${hostport##*:}"
 
-ssh -i "$SSH_KEY" -p "$port" -o StrictHostKeyChecking=accept-new "root@$host" bash -s -- "$REMOTE_DIR" "$MODE" <<'EOF'
+ssh -i "$SSH_KEY" -p "$port" -o StrictHostKeyChecking=accept-new "root@$host" bash -s -- "$REMOTE_DIR" "$MODE" "$CARGO_HOME_DIR" <<'EOF'
 set -euo pipefail
 REMOTE_DIR="$1"
 MODE="$2"
+export CARGO_HOME="$3"
+mkdir -p "$CARGO_HOME"
 # shellcheck disable=SC1091
-source "$HOME/.cargo/env"
-export PATH="/usr/local/cuda-12.4/bin:${PATH}"
+if [ -f "$HOME/.cargo/env" ]; then
+  source "$HOME/.cargo/env"
+fi
+export PATH="$HOME/.cargo/bin:/usr/local/cuda-12.4/bin:${PATH}"
 export LD_LIBRARY_PATH="/usr/local/cuda-12.4/lib64:${LD_LIBRARY_PATH:-}"
 cd "$REMOTE_DIR"
 

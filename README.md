@@ -31,11 +31,13 @@ Bring-up host: running RTX 4090 instance. Default dtype on CUDA is **BF16**.
 
 ```bash
 ./scripts/vast-sync.sh
-ssh -i ~/.ssh/id_strobe_vast -p 3390 root@<vast-host> 'bash /workspace/fastvideo-rs/scripts/vast-setup-cuda.sh'
+ssh -i ~/.ssh/id_strobe_vast -p 41695 root@<vast-host> 'bash /workspace/fastvideo-rs/scripts/vast-setup-cuda.sh'
 ./scripts/vast-generate.sh tiny
 # then, after weights are on disk:
 ./scripts/vast-generate.sh 1.3b
 ```
+
+Cargo registry and `target/` stay on the instance (`CARGO_HOME=/workspace/.cargo`; rsync skips `target`). Rebuilds after the first compile are incremental.
 
 On the instance:
 
@@ -52,6 +54,17 @@ cargo run -p fastvideo-cli --release --features cuda -- generate \
 `--weights` is a Diffusers layout: `transformer/`, `vae/`, `text_encoder/`, and
 `tokenizer/tokenizer.json`. Bring-up checkpoint:
 `Wan-AI/Wan2.1-T2V-1.3B-Diffusers`.
+
+## Local Linux CUDA build (Docker)
+
+This Mac cannot compile Candle `--features cuda` natively (no Linux `nvcc`). Docker Desktop can, without a GPU:
+
+```bash
+./scripts/docker-build-cuda.sh
+# → ./target-linux/release/fastvideo  (x86_64 Linux)
+```
+
+Crates cache in the Docker volume `fastvideo-rs-cargo-registry`. Copy the binary onto Vast; you still need CUDA 12.4 runtime libs there (`nvrtc`, `cublas`, `curand`). You cannot *run* the CUDA binary in Docker on this Mac (no NVIDIA device).
 
 ## Layout
 
