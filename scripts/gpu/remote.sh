@@ -278,6 +278,15 @@ cmd_upstream_install() {
   export HF_HOME="$WORK/hf"
   mkdir -p "$HF_HOME"
   export PATH="$HOME/.local/bin:$PATH"
+  # Triton JIT-builds a small C extension the first time it talks to the
+  # driver, so upstream needs a C compiler that our lean runtime image omits.
+  if ! command -v cc >/dev/null && ! command -v gcc >/dev/null; then
+    log "installing gcc (Triton builds a driver shim at import)"
+    apt-get update -qq >/dev/null 2>&1 || true
+    apt-get install -y -qq --no-install-recommends gcc g++ >/dev/null 2>&1 \
+      || die "could not install a C compiler for Triton"
+  fi
+  export CC="${CC:-$(command -v gcc || command -v cc)}"
   if [[ ! -x "$UPSTREAM_VENV/bin/python" ]]; then
     command -v uv >/dev/null || {
       log "installing uv"
@@ -299,6 +308,7 @@ cmd_upstream_bench() {
   local backend="$1"; shift
   export HF_HOME="$WORK/hf"
   export PATH="$HOME/.local/bin:$PATH"
+  export CC="${CC:-$(command -v gcc || command -v cc || true)}"
   [[ -x "$UPSTREAM_VENV/bin/python" ]] || die "upstream venv missing (run upstream-install)"
   "$UPSTREAM_VENV/bin/python" "$ROOT/scripts/gpu/upstream_bench.py" \
     --backend "$backend" --out "$OUT/upstream-$backend.json" --video-dir "$OUT/upstream-videos/$backend" "$@"
