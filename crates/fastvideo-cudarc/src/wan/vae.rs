@@ -319,20 +319,23 @@ fn rms_video(xs: &CudaTensor, gamma: &CudaTensor) -> Result<CudaTensor> {
             }
         }
     }
-    let mut out = vec![0.0f32; xs.data.len()];
+    // Host fallback: read through host_cow (device-fresh `.data` is stale).
+    let x_host = xs.host_cow()?;
+    let g_host = gamma.host_cow()?;
+    let mut out = vec![0.0f32; x_host.len()];
     for bi in 0..b {
         for s in 0..spatial {
             let mut mean_sq = 0.0;
             for ci in 0..c {
-                let v = xs.data[((bi * c + ci) * spatial) + s];
+                let v = x_host[((bi * c + ci) * spatial) + s];
                 mean_sq += v * v;
             }
             mean_sq /= c as f32;
             let inv = 1.0 / (mean_sq + 1e-12).sqrt();
             for ci in 0..c {
                 let idx = ((bi * c + ci) * spatial) + s;
-                let g = gamma.data[ci];
-                out[idx] = xs.data[idx] * inv * g;
+                let g = g_host[ci];
+                out[idx] = x_host[idx] * inv * g;
             }
         }
     }

@@ -966,7 +966,10 @@ impl CudaTensor {
     }
 
     pub fn sqr(&self) -> CudaTensor {
-        Self::host_only(self.data.iter().map(|x| x * x).collect(), self.shape.clone())
+        let host = self.host_cow().unwrap_or(Cow::Borrowed(self.data.as_slice()));
+        let mut t = Self::host_only(host.iter().map(|x| x * x).collect(), self.shape.clone());
+        let _ = t.ensure_device();
+        t
     }
 
     pub fn mean_keepdim(&self, dim: isize) -> Result<CudaTensor> {
@@ -978,11 +981,12 @@ impl CudaTensor {
         let mut counts = counts;
         let in_strides = strides(&self.shape);
         let out_strides = strides(&out_shape);
-        for in_idx in 0..self.data.len() {
+        let host = self.host_cow()?;
+        for in_idx in 0..host.len() {
             let mut coord = unravel(in_idx, &in_strides);
             coord[axis] = 0;
             let oi = ravel(&coord, &out_strides);
-            out[oi] += self.data[in_idx];
+            out[oi] += host[in_idx];
             counts[oi] += 1;
         }
         for (o, c) in out.iter_mut().zip(counts) {
@@ -1455,11 +1459,19 @@ impl CudaTensor {
         let stride = stride.max(1);
         let out_h = (h + 2 * padding - kh) / stride + 1;
         let out_w = (w + 2 * padding - kw) / stride + 1;
+        // Host views: a device-fresh tensor's `data` mirror is stale (zeros)
+        // until downloaded, so never read `.data` directly here.
+        let x_host = self.host_cow()?;
+        let w_host = weight.host_cow()?;
+        let b_host = match bias {
+            Some(b) => Some(b.host_cow()?),
+            None => None,
+        };
 
         #[cfg(feature = "cuda")]
         if let Some(mut out) = super::ops::try_conv2d(
-            &self.data,
-            &weight.data,
+            &x_host,
+            &w_host,
             n,
             c_in,
             h,
@@ -1470,10 +1482,10 @@ impl CudaTensor {
             padding,
             stride,
         ) {
-            if let Some(b) = bias {
+            if let Some(b) = &b_host {
                 for ni in 0..n {
                     for oc in 0..c_out {
-                        let add = b.data[oc];
+                        let add = b[oc];
                         for oh in 0..out_h {
                             for ow in 0..out_w {
                                 out[((ni * c_out + oc) * out_h + oh) * out_w + ow] += add;
@@ -1504,16 +1516,14 @@ impl CudaTensor {
                                     if ih >= h || iw >= w {
                                         continue;
                                     }
-                                    let xv = self.data
-                                        [((ni * c_in + ic) * h + ih) * w + iw];
-                                    let wv = weight.data
-                                        [((oc * c_in + ic) * kh + kh_i) * kw + kw_i];
+                                    let xv = x_host[((ni * c_in + ic) * h + ih) * w + iw];
+                                    let wv = w_host[((oc * c_in + ic) * kh + kh_i) * kw + kw_i];
                                     acc += xv * wv;
                                 }
                             }
                         }
-                        if let Some(b) = bias {
-                            acc += b.data[oc];
+                        if let Some(b) = &b_host {
+                            acc += b[oc];
                         }
                         out[((ni * c_out + oc) * out_h + oh) * out_w + ow] = acc;
                     }
@@ -1528,6 +1538,7 @@ impl CudaTensor {
             return Err(TensorError::Message("upsample_nearest2d NCHW".into()));
         }
         let (n, c, h, w) = (self.shape[0], self.shape[1], self.shape[2], self.shape[3]);
+        let host = self.host_cow()?;
         let mut out = vec![0.0; n * c * out_h * out_w];
         for ni in 0..n {
             for ci in 0..c {
@@ -1536,7 +1547,7 @@ impl CudaTensor {
                         let ih = oh * h / out_h;
                         let iw = ow * w / out_w;
                         out[((ni * c + ci) * out_h + oh) * out_w + ow] =
-                            self.data[((ni * c + ci) * h + ih) * w + iw];
+                            host[((ni * c + ci) * h + ih) * w + iw];
                     }
                 }
             }
@@ -1569,12 +1580,13 @@ impl CudaTensor {
             return Err(TensorError::Message("index_select_rows expects 2D".into()));
         }
         let d = self.shape[1];
+        let host = self.host_cow()?;
         let mut data = Vec::with_capacity(indices.len() * d);
         for &i in indices {
             if i >= self.shape[0] {
                 return Err(TensorError::Message("index OOB".into()));
             }
-            data.extend_from_slice(&self.data[i * d..(i + 1) * d]);
+            data.extend_from_slice(&host[i * d..(i + 1) * d]);
         }
         Ok(Self::host_only(data, vec![indices.len(), d]))
     }
