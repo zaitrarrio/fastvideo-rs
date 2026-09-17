@@ -287,7 +287,7 @@ unsafe fn gemm_raw(
     batch: usize,
 ) -> Result<()> {
     let r32 = cudarc::cublas::sys::cudaDataType_t::CUDA_R_32F;
-    gemm_raw_ty(dev, transa, m, n, k, alpha, a, lda, stride_a, b, ldb, stride_b, c, ldc, stride_c, batch, r32)
+    gemm_raw_ty(dev, transa, m, n, k, alpha, a, lda, stride_a, b, ldb, stride_b, c, ldc, stride_c, batch, r32, None)
 }
 
 /// [`gemm_raw`] with the A/B element type spelled out (C stays F32). bf16
@@ -313,6 +313,7 @@ unsafe fn gemm_raw_ty(
     stride_c: usize,
     batch: usize,
     ab_ty: cudarc::cublas::sys::cudaDataType_t,
+    math: Option<GemmMath>,
 ) -> Result<()> {
     use cudarc::cublas::sys;
     let op_a = if transa {
@@ -323,7 +324,7 @@ unsafe fn gemm_raw_ty(
     let beta = 0.0f32;
     let r32 = sys::cudaDataType_t::CUDA_R_32F;
     let algo = sys::cublasGemmAlgo_t::CUBLAS_GEMM_DEFAULT_TENSOR_OP;
-    let compute = dev.gemm_math.compute_type();
+    let compute = math.unwrap_or(dev.gemm_math).compute_type();
     if batch == 1 {
         cudarc::cublas::result::gemm_ex(
             *dev.cublas.handle(),
@@ -543,6 +544,65 @@ pub fn matmul_linear_wt_strided_batched(
     unsafe { gemm_raw(&dev, true, n, m, k, scale, wp, k, n * k, xp, k, m * k, cp, n, m * n, batch) }
 }
 
+/// [`matmul_linear_wt_strided_batched`] pinned to F32 math regardless of the
+/// context's [`GemmMath`]. VSA's coarse scores decide which tiles the fine
+/// stage attends to, and that choice is discrete: letting bf16 rounding flip a
+/// near-tie changes the output far more than the rounding itself.
+#[cfg(feature = "cuda")]
+#[allow(clippy::too_many_arguments)]
+pub fn matmul_linear_wt_strided_batched_f32(
+    x: &cudarc::driver::CudaSlice<f32>,
+    w: &cudarc::driver::CudaSlice<f32>,
+    out: &mut cudarc::driver::CudaSlice<f32>,
+    batch: usize,
+    m: usize,
+    k: usize,
+    n: usize,
+    scale: f32,
+) -> Result<()> {
+    use cudarc::driver::{DevicePtr, DevicePtrMut};
+    let dev = global_device().ok_or_else(no_device)?;
+    size_check(
+        "strided wt gemm (f32-pinned)",
+        x.len() == batch * m * k && w.len() == batch * n * k && out.len() == batch * m * n,
+        || format!("x={} w={} out={} batch={batch} m={m} k={k} n={n}", x.len(), w.len(), out.len()),
+    )?;
+    let (wp, _rw) = w.device_ptr(&dev.stream);
+    let (xp, _rx) = x.device_ptr(&dev.stream);
+    let (cp, _rc) = out.device_ptr_mut(&dev.stream);
+    let r32 = cudarc::cublas::sys::cudaDataType_t::CUDA_R_32F;
+    unsafe {
+        gemm_raw_ty(&dev, true, n, m, k, scale, wp, k, n * k, xp, k, m * k, cp, n, m * n, batch, r32, Some(GemmMath::F32))
+    }
+}
+
+/// [`matmul_2d_strided_batched`] pinned to F32 math, for VSA's coarse `P @ V`.
+#[cfg(feature = "cuda")]
+pub fn matmul_2d_strided_batched_f32(
+    a: &cudarc::driver::CudaSlice<f32>,
+    b: &cudarc::driver::CudaSlice<f32>,
+    out: &mut cudarc::driver::CudaSlice<f32>,
+    batch: usize,
+    m: usize,
+    k: usize,
+    n: usize,
+) -> Result<()> {
+    use cudarc::driver::{DevicePtr, DevicePtrMut};
+    let dev = global_device().ok_or_else(no_device)?;
+    size_check(
+        "strided gemm (f32-pinned)",
+        a.len() == batch * m * k && b.len() == batch * k * n && out.len() == batch * m * n,
+        || format!("a={} b={} out={} batch={batch} ({m},{k})@({k},{n})", a.len(), b.len(), out.len()),
+    )?;
+    let (bp, _rb) = b.device_ptr(&dev.stream);
+    let (ap, _ra) = a.device_ptr(&dev.stream);
+    let (cp, _rc) = out.device_ptr_mut(&dev.stream);
+    let r32 = cudarc::cublas::sys::cudaDataType_t::CUDA_R_32F;
+    unsafe {
+        gemm_raw_ty(&dev, false, n, m, k, 1.0, bp, n, k * n, ap, k, m * k, cp, n, m * n, batch, r32, Some(GemmMath::F32))
+    }
+}
+
 /// [`matmul_linear_wt_strided_batched`] with bf16 operands and an F32 result:
 /// VSA's `Q @ K^T` over gathered tiles.
 #[cfg(feature = "cuda")]
@@ -568,7 +628,7 @@ pub fn matmul_linear_wt_strided_batched_bf16(
     let (xp, _rx) = x.device_ptr(&dev.stream);
     let (cp, _rc) = out.device_ptr_mut(&dev.stream);
     let bf = cudarc::cublas::sys::cudaDataType_t::CUDA_R_16BF;
-    unsafe { gemm_raw_ty(&dev, true, n, m, k, scale, wp, k, n * k, xp, k, m * k, cp, n, m * n, batch, bf) }
+    unsafe { gemm_raw_ty(&dev, true, n, m, k, scale, wp, k, n * k, xp, k, m * k, cp, n, m * n, batch, bf, None) }
 }
 
 /// Strided-batched row-major `(m,k) @ (k,n)` over `batch` tiles (attention `P @ V`).
@@ -712,7 +772,7 @@ pub fn matmul_2d_strided_batched_bf16(
     let (ap, _ra) = a.device_ptr(&dev.stream);
     let (cp, _rc) = out.device_ptr_mut(&dev.stream);
     let bf = cudarc::cublas::sys::cudaDataType_t::CUDA_R_16BF;
-    unsafe { gemm_raw_ty(&dev, false, n, m, k, 1.0, bp, n, k * n, ap, k, m * k, cp, n, m * n, batch, bf) }
+    unsafe { gemm_raw_ty(&dev, false, n, m, k, 1.0, bp, n, k * n, ap, k, m * k, cp, n, m * n, batch, bf, None) }
 }
 
 /// [`matmul_2d_strided_batched_bf16`] writing into a strided view of a larger
@@ -741,7 +801,7 @@ pub fn matmul_2d_strided_batched_out_view_bf16(
     let (ap, _ra) = a.device_ptr(&dev.stream);
     let (cp, _rc) = out.device_ptr_mut(&dev.stream);
     let bf = cudarc::cublas::sys::cudaDataType_t::CUDA_R_16BF;
-    unsafe { gemm_raw_ty(&dev, false, n, m, k, 1.0, bp, n, k * n, ap, k, m * k, cp, n, outer_stride_c, batch, bf) }
+    unsafe { gemm_raw_ty(&dev, false, n, m, k, 1.0, bp, n, k * n, ap, k, m * k, cp, n, outer_stride_c, batch, bf, None) }
 }
 
 /// Resolve device from CLI spec (`cpu`, `cuda`, `cuda:0`).

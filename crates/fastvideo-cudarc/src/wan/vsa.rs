@@ -242,6 +242,30 @@ pub fn vsa_attention_host(
     Ok(out)
 }
 
+/// Everything a VSA layer needs for one latent grid: the uploaded tiling, how
+/// many tiles each query tile attends to, and the query-tile group size that
+/// bounds the gathered buffer. Built once per grid and shared by every layer
+/// and denoising step.
+#[cfg(feature = "cuda")]
+#[derive(Debug)]
+pub struct VsaCtx {
+    pub plan: super::ops::VsaPlanDev,
+    pub topk: usize,
+    pub seq: usize,
+    pub group: usize,
+}
+
+#[cfg(feature = "cuda")]
+impl VsaCtx {
+    /// Build from a grid. `sparsity` follows upstream's `VSA_sparsity`.
+    pub fn new(grid: (usize, usize, usize), sparsity: f64, group: usize) -> Result<Self> {
+        let plan = TilePlan::new(grid)?;
+        let topk = topk_for(sparsity, plan.num_tiles());
+        let dev = super::ops::vsa_plan_upload(&plan.slot_src, &plan.block_sizes, TILE_ELEMS)?;
+        Ok(Self { plan: dev, topk, seq: plan.seq, group: group.max(1) })
+    }
+}
+
 /// VSA on device, `[b, heads, seq, dim]` in and out.
 ///
 /// The fine stage gathers each query tile's selected K/V into a dense buffer
@@ -276,10 +300,10 @@ pub fn vsa_attention_device(
         ops::vsa_tile_mean_device(v, plan, bh, seq, dim)?,
     );
     let mut scores = ops::alloc(bh * nb * nb)?;
-    device::matmul_linear_wt_strided_batched(&qc, &kc, &mut scores, bh, nb, dim, nb, scale).map_err(err)?;
+    device::matmul_linear_wt_strided_batched_f32(&qc, &kc, &mut scores, bh, nb, dim, nb, scale).map_err(err)?;
     let probs = ops::softmax_last_device(&scores, nb)?;
     let mut coarse = ops::alloc(bh * nb * dim)?;
-    device::matmul_2d_strided_batched(&probs, &vc, &mut coarse, bh, nb, nb, dim).map_err(err)?;
+    device::matmul_2d_strided_batched_f32(&probs, &vc, &mut coarse, bh, nb, nb, dim).map_err(err)?;
 
     // 2. Tiles to attend to, from the same coarse scores (pre-softmax order is
     //    the same, but top-k on the raw scores matches upstream).

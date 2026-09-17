@@ -8,6 +8,11 @@
 use fastvideo_models::wan::WanVideoArchConfig;
 
 use super::fused::Rope;
+#[cfg(feature = "cuda")]
+use super::vsa::VsaCtx;
+/// Placeholder so block signatures are the same shape on CPU builds.
+#[cfg(not(feature = "cuda"))]
+pub struct VsaCtx;
 use super::nn::{self, Linear};
 use super::tensor::{CudaTensor, Result, TensorError};
 use super::weights::{self, WeightMap};
@@ -90,14 +95,71 @@ impl WanAttention {
         self.to_out.forward(&attn.merge_heads()?)
     }
 
-    fn forward_self(&self, hidden: &CudaTensor, rope: &(CudaTensor, CudaTensor), mask: Option<&CudaTensor>) -> Result<CudaTensor> {
+    fn forward_self(
+        &self,
+        hidden: &CudaTensor,
+        rope: &(CudaTensor, CudaTensor),
+        mask: Option<&CudaTensor>,
+        gate: Option<&Linear>,
+        vsa: Option<&VsaCtx>,
+    ) -> Result<CudaTensor> {
         let dim = self.heads * self.dim_head;
         let qkv = self.q_or_qkv.forward(hidden)?;
         let rope = || Some(Rope { cos: &rope.0, sin: &rope.1 });
         let q = qkv.qk_norm_rope_bhsd(0, self.heads, &self.norm_q, rope(), self.eps)?;
         let k = qkv.qk_norm_rope_bhsd(dim, self.heads, &self.norm_k, rope(), self.eps)?;
         let v = qkv.split_heads_bhsd(2 * dim, self.heads, self.dim_head)?;
+        // VSA needs both the tiling for this grid and the checkpoint's gate;
+        // without either it is not the configuration the weights were trained
+        // for, so fall back to the dense path rather than approximate it.
+        if let (Some(ctx), Some(gate)) = (vsa, gate) {
+            // The gate shares q/k/v's projection input but takes no RoPE and
+            // no norm, matching upstream.
+            let g = gate.forward(hidden)?.split_heads_bhsd(0, self.heads, self.dim_head)?;
+            if let Some(out) = self.attend_vsa(&q, &k, &v, &g, ctx)? {
+                return Ok(out);
+            }
+        }
         self.attend(&q, &k, &v, mask)
+    }
+
+    /// VSA over `[b, heads, seq, dim]` inputs; `None` when the device path is
+    /// unavailable, so the caller can use dense attention instead.
+    #[cfg(feature = "cuda")]
+    fn attend_vsa(
+        &self,
+        q: &CudaTensor,
+        k: &CudaTensor,
+        v: &CudaTensor,
+        gate: &CudaTensor,
+        ctx: &VsaCtx,
+    ) -> Result<Option<CudaTensor>> {
+        let [b, heads, seq, dim] = q.shape[..] else {
+            return Ok(None);
+        };
+        if seq != ctx.seq {
+            return Ok(None);
+        }
+        let (Some(qd), Some(kd), Some(vd), Some(gd)) = (q.dev()?, k.dev()?, v.dev()?, gate.dev()?) else {
+            return Ok(None);
+        };
+        let scale = 1.0 / (dim as f32).sqrt();
+        let out = super::vsa::vsa_attention_device(
+            &qd, &kd, &vd, Some(&gd), &ctx.plan, ctx.topk, b * heads, seq, dim, scale, ctx.group,
+        )?;
+        Ok(Some(CudaTensor::from_device_slice(out, vec![b, heads, seq, dim])?))
+    }
+
+    #[cfg(not(feature = "cuda"))]
+    fn attend_vsa(
+        &self,
+        _q: &CudaTensor,
+        _k: &CudaTensor,
+        _v: &CudaTensor,
+        _gate: &CudaTensor,
+        _ctx: &VsaCtx,
+    ) -> Result<Option<CudaTensor>> {
+        Ok(None)
     }
 
     fn forward_cross(&self, hidden: &CudaTensor, encoder: &CudaTensor, image: Option<&CudaTensor>) -> Result<CudaTensor> {
@@ -246,6 +308,8 @@ const GATE_FFN: usize = 5;
 struct WanBlock {
     eps: f32,
     attn1: WanAttention,
+    /// `to_gate_compress`, present only on VSA checkpoints.
+    gate: Option<Linear>,
     attn2: WanAttention,
     norm2_weight: CudaTensor,
     norm2_bias: CudaTensor,
@@ -260,6 +324,7 @@ impl WanBlock {
         Ok(Self {
             eps: cfg.eps,
             attn1: WanAttention::zeros(dim, heads, cfg.eps, false, None)?,
+            gate: None,
             attn2: WanAttention::zeros(dim, heads, cfg.eps, true, cfg.added_kv_proj_dim)?,
             norm2_weight: pinned(CudaTensor::ones(&[dim]))?,
             norm2_bias: pinned(CudaTensor::zeros(&[dim]))?,
@@ -275,6 +340,12 @@ impl WanBlock {
         Ok(Self {
             eps: cfg.eps,
             attn1: WanAttention::load(map, &key("attn1"), dim, heads, cfg.eps, false, None)?,
+            // VSA checkpoints carry a per-block gate for the coarse branch;
+            // dense checkpoints simply do not have it.
+            gate: map
+                .contains(&key("to_gate_compress.weight"))
+                .then(|| Linear::load(map, &key("to_gate_compress"), dim, dim, true))
+                .transpose()?,
             attn2: WanAttention::load(map, &key("attn2"), dim, heads, cfg.eps, true, cfg.added_kv_proj_dim)?,
             norm2_weight: pinned(weights::cuda_tensor_shaped(map, &key("norm2.weight"), &[dim])?)?,
             norm2_bias: pinned(weights::cuda_tensor_shaped(map, &key("norm2.bias"), &[dim])?)?,
@@ -294,10 +365,11 @@ impl WanBlock {
         rope: &(CudaTensor, CudaTensor),
         image: Option<&CudaTensor>,
         mask: Option<&CudaTensor>,
+        vsa: Option<&VsaCtx>,
     ) -> Result<CudaTensor> {
         let e = timestep_proj.add(&self.scale_shift_table)?;
         let normed = hidden.ln_adaln_e(&e, SCALE_MSA, SHIFT_MSA, self.eps)?;
-        let attn = self.attn1.forward_self(&normed, rope, mask)?;
+        let attn = self.attn1.forward_self(&normed, rope, mask, self.gate.as_ref(), vsa)?;
         let hidden = hidden.residual_gate_add_e(&attn, &e, GATE_MSA)?;
 
         let normed = hidden.layer_norm(self.eps, Some(&self.norm2_weight), Some(&self.norm2_bias))?;
@@ -324,6 +396,11 @@ pub struct WanTransformer3D {
     freq_dim: usize,
     /// RoPE tables keyed by `(seq_len, head_dim)`: built and uploaded once.
     rotary_cache: std::sync::Arc<std::sync::Mutex<std::collections::HashMap<(usize, usize), (CudaTensor, CudaTensor)>>>,
+    /// VSA tiling per latent grid, built once and shared by every layer.
+    #[cfg(feature = "cuda")]
+    vsa_cache: std::sync::Arc<
+        std::sync::Mutex<std::collections::HashMap<(usize, usize, usize), std::sync::Arc<VsaCtx>>>,
+    >,
 }
 
 impl WanTransformer3D {
@@ -347,6 +424,8 @@ impl WanTransformer3D {
             proj_out: Linear::zeros(dim, cfg.out_channels * p.iter().product::<usize>(), true),
             scale_shift_table: pinned(CudaTensor::zeros(&[1, 2, dim]))?,
             rotary_cache: Default::default(),
+            #[cfg(feature = "cuda")]
+            vsa_cache: Default::default(),
             cfg,
         })
     }
@@ -377,6 +456,8 @@ impl WanTransformer3D {
             freq_dim: cfg.freq_dim,
             blocks,
             rotary_cache: Default::default(),
+            #[cfg(feature = "cuda")]
+            vsa_cache: Default::default(),
             cfg,
         })
     }
@@ -402,6 +483,35 @@ impl WanTransformer3D {
 
     pub fn forward(&self, latents: &CudaTensor, timestep: &CudaTensor, encoder: &CudaTensor) -> Result<CudaTensor> {
         self.forward_ctx(latents, timestep, encoder, None)
+    }
+
+    /// Get-or-build the VSA context for a latent grid, or `None` when VSA is
+    /// off, unavailable, or the checkpoint has no gates.
+    #[cfg(feature = "cuda")]
+    fn vsa_for(&self, t: usize, h: usize, w: usize) -> Result<Option<std::sync::Arc<VsaCtx>>> {
+        if !super::nn::vsa_enabled() || !self.blocks.iter().any(|b| b.gate.is_some()) {
+            return Ok(None);
+        }
+        let p = self.cfg.patch_size;
+        let grid = (t / p[0], h / p[1], w / p[2]);
+        let mut map = self.vsa_cache.lock().expect("vsa cache lock");
+        if let Some(ctx) = map.get(&grid) {
+            return Ok(Some(ctx.clone()));
+        }
+        let sparsity = super::envflag::f64_flag("FASTVIDEO_VSA_SPARSITY", 0.8);
+        let group = super::envflag::usize_flag("FASTVIDEO_VSA_GROUP", 32);
+        let ctx = std::sync::Arc::new(VsaCtx::new(grid, sparsity, group)?);
+        super::log::info(format_args!(
+            "vsa: grid {grid:?} tiles {} topk {} group {group}",
+            ctx.plan.num_tiles, ctx.topk
+        ));
+        map.insert(grid, ctx.clone());
+        Ok(Some(ctx))
+    }
+
+    #[cfg(not(feature = "cuda"))]
+    fn vsa_for(&self, _t: usize, _h: usize, _w: usize) -> Result<Option<std::sync::Arc<VsaCtx>>> {
+        Ok(None)
     }
 
     /// Get-or-build the `[seq, head_dim]` RoPE tables for a latent grid.
@@ -447,8 +557,12 @@ impl WanTransformer3D {
             (Some(img), None) => Some(img.clone()),
             _ => None,
         };
+        // VSA applies to the self-attention grid only, and only when the
+        // checkpoint carries the gates it was trained with.
+        let vsa = self.vsa_for(t, h, w)?;
         for block in &self.blocks {
-            hidden = block.forward(&hidden, &encoder, &timestep_proj, &rope, image.as_ref(), mask.as_ref())?;
+            hidden =
+                block.forward(&hidden, &encoder, &timestep_proj, &rope, image.as_ref(), mask.as_ref(), vsa.as_deref())?;
         }
         // Output head: table [1, 2, dim] + temb broadcast over both rows.
         let temb_rows = temb.unsqueeze(1)?;

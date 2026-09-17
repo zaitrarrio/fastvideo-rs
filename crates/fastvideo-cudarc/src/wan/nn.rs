@@ -253,7 +253,7 @@ pub fn sdpa_backend() -> String {
     SDPA_BACKEND_CACHE.get_or_init(|| super::envflag::string_flag("FASTVIDEO_SDPA", "dense"))
 }
 
-fn vsa_enabled() -> bool {
+pub fn vsa_enabled() -> bool {
     VSA_CACHE.get_or_init(|| super::envflag::bool_flag("FASTVIDEO_VSA", false))
 }
 

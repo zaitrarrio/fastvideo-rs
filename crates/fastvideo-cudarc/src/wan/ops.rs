@@ -539,6 +539,7 @@ pub fn index_select_rows_device(table: &CudaSlice<f32>, d: usize, indices: &[u32
 /// Device-side tiling geometry, uploaded once per latent grid and reused by
 /// every VSA layer and step.
 #[cfg(feature = "cuda")]
+#[derive(Debug)]
 pub struct VsaPlanDev {
     pub slot_src: CudaSlice<i32>,
     pub block_sizes: CudaSlice<i32>,
