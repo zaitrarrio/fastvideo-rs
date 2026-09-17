@@ -99,6 +99,8 @@ resolve_image() {
 # Compile-level gates only: catches a broken build before paying for one.
 
 cmd_local() {
+  log "preflight: shell lint"
+  bash "$FV_ROOT/scripts/gpu/lint.sh" || die "shell lint failed" 1
   # Everything builds and runs in Docker (scripts/gpu/docker.sh), not on the host.
   log "preflight: unit tests (Docker)"
   "$DOCKER_SH" test || die "unit tests failed" 1
@@ -561,13 +563,11 @@ cmd_run() {
   local backend
   for backend in ${FV_UPSTREAM_BACKENDS:-TORCH_SDPA VIDEO_SPARSE_ATTN}; do
     local extra=()
-    # `[[ ... ]] && x=(...)` would return 1 for the non-VSA backends and, under
-    # `set -e`, end the run before any benchmark.
     if [[ "$backend" == VIDEO_SPARSE_ATTN* ]]; then
       extra=(--vsa-sparsity "${FV_VSA_SPARSITY:-0.8}")
     fi
     # A backend that will not import or run is a result, not a run failure.
-    STAGE_OPTIONAL=1 remote_run "upstream-$backend" "${FV_UPSTREAM_TIMEOUT:-3600}" upstream-bench "$backend" "${ub[@]}" "${extra[@]}" || true
+    STAGE_OPTIONAL=1 remote_run "upstream-$backend" "${FV_UPSTREAM_TIMEOUT:-3600}" upstream-bench "$backend" "${ub[@]}" ${extra[@]+"${extra[@]}"} || true
   done
   log "T4 PASS"
 }

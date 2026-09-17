@@ -29,6 +29,11 @@ Compare-tier knobs: `FV_UPSTREAM_BACKENDS` (default `TORCH_SDPA VIDEO_SPARSE_ATT
 `FV_UPSTREAM_RUNS`, `FV_VSA_SPARSITY`, `FV_TORCH_BACKEND` (default `cu126`). Upstream
 VSA ships tuned C++ kernels only for H100 (sm_90a); elsewhere it falls back to Triton.
 
+The harness runs on macOS bash 3.2, where `"${arr[@]}"` on an empty array under
+`set -u` is an error; expand possibly-empty arrays as `${arr[@]+"${arr[@]}"}`.
+`scripts/gpu/lint.sh` checks this (and parses every script); `validate.sh local`
+runs it.
+
 `FV_STAGE_ENV` passes environment to the stage process itself, for A/B runs.
 For a same-GPU A/B, rent once with `--keep` and rerun against `--instance <id>`:
 `FV_STAGE_ENV="FASTVIDEO_ATTN_PROBS_BF16=0" scripts/gpu/validate.sh run clip --instance 12345`.
