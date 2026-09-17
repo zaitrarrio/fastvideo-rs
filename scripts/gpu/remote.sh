@@ -101,7 +101,14 @@ for lib in ("libnvrtc.so", "libcublasLt.so", "libcublas.so", "libcudnn.so"):
 print("cuda libs load ok")
 PY
   local need_disk="${1:-30}"
-  (( disk_gb >= need_disk )) || die "only ${disk_gb}GB free, need ${need_disk}GB"
+  # Weights already on disk are what the headroom was for, so a reused instance
+  # (--instance) counts them: the budget is free space PLUS what is downloaded.
+  local have_gb=0
+  if [[ -d "$WORK/weights" ]]; then
+    have_gb="$(du -BG -s "$WORK/weights" 2>/dev/null | tr -dc 0-9)"
+    have_gb="${have_gb:-0}"
+  fi
+  (( disk_gb + have_gb >= need_disk )) || die "only ${disk_gb}GB free (+${have_gb}GB weights), need ${need_disk}GB"
   awk -v v="$cuda_drv" 'BEGIN { split(v, a, "."); exit !(a[1] > 12 || (a[1] == 12 && a[2] >= 4)) }' \
     || die "driver supports CUDA $cuda_drv < 12.4"
 }
