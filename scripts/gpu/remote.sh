@@ -283,8 +283,16 @@ cmd_upstream_install() {
   if ! command -v cc >/dev/null && ! command -v gcc >/dev/null; then
     log "installing gcc (Triton builds a driver shim at import)"
     apt-get update -qq >/dev/null 2>&1 || true
-    apt-get install -y -qq --no-install-recommends gcc g++ >/dev/null 2>&1 \
-      || die "could not install a C compiler for Triton"
+    if ! apt-get install -y -qq --no-install-recommends gcc g++ >/dev/null 2>&1; then
+      # Some hosts pin a regional mirror that lags the image's own libgcc, so
+      # apt tries to downgrade gcc-12-base and deadlocks. The official archive
+      # carries the matching version.
+      log "mirror cannot satisfy gcc; switching to archive.ubuntu.com"
+      sed -i 's|http://[^ ]*/ubuntu|http://archive.ubuntu.com/ubuntu|g' /etc/apt/sources.list || true
+      apt-get update -qq >/dev/null 2>&1 || true
+      apt-get install -y -qq --no-install-recommends gcc g++ >/dev/null 2>&1 \
+        || die "could not install a C compiler for Triton"
+    fi
   fi
   export CC="${CC:-$(command -v gcc || command -v cc)}"
   if [[ ! -x "$UPSTREAM_VENV/bin/python" ]]; then
