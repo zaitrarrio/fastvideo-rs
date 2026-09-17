@@ -2,6 +2,17 @@
 
 Project code: FVID
 
+### FVID · 2026-09-17 · FVID-2026-09-17-upstream-head-to-head
+- Trigger: user asked how our numbers compare with upstream FastVideo on the same hardware
+- Options: compare against published figures (H100, different GPU); rent two boxes; run both implementations on ONE rented box
+- Decision: added a **`compare` tier (T4)** that runs our clip stages and then installs upstream FastVideo in its own uv venv on the SAME instance and times the same 8s clip. Identical hardware by construction. The tier skips T1/T2 (it benchmarks, it does not re-validate). Model load is timed separately and excluded; one warm-up then median of 2.
+- Result on an RTX 3090 Ti (448×832, 129 frames, 3 DMD steps, timesteps 1000/757/522, same FastWan2.1-T2V-1.3B weights): **upstream 55.30 s per generation vs ours ~108.4 s (denoise 82.74 + VAE 21.86 + write 3.80) — upstream ≈1.96× faster.** Upstream load 49.89 s, warm-up 95.85 s (Triton JIT; a single-shot benchmark would have called upstream SLOWER than us).
+- **The dense comparison does not exist on upstream's side for these weights**: `TORCH_SDPA` cannot load the checkpoint — `Parameter blocks.0.to_gate_compress.bias not found in custom model state dict` — because FastWan ships VSA gate weights their dense model class does not define. Upstream on this model IS the VSA configuration.
+- Reason: the gap is the optimization we deliberately have not ported. VSA cuts the quadratic attention term; our 48k-token forward is dominated by dense attention, which is what the flash experiment showed from the other side. ~2× is the measured price of no sparse attention.
+- Reversibility: free (new tier, nothing in the shipped path changed)
+- Executed by: Executor
+- Verification: run `20260917T220533Z-compare`, upstream torch 2.12.0+cu126 / fastvideo 0.2.1. Nine attempts to get here; the failures were ours, not upstream's — see FVID-2026-09-17-exact-parity-24gb-oom and the harness fixes (bad-host recording on mid-run ssh death, disk precheck crediting fetched data, empty-array expansion under bash 3.2, shell lint).
+
 ### FVID · 2026-09-17 · FVID-2026-09-17-exact-parity-24gb-oom
 - Trigger: the `compare` tier OOM'd in `parity-exact` on two different 24GB cards — a plain RTX 3090 (24124 MiB total, 23846 free, no other tenant) and an RTX 3090 Ti (24112 MiB, 23829 free) — failing on the FIRST `dit_forward_t999` right after `load`. The same stage passes on an RTX A5000 (24111 MiB) and on a larger 3090 Ti (24564 MiB)
 - Options: rent only >24GB cards; cut exact-mode peak; give the mempool a finite release threshold; leave it and document

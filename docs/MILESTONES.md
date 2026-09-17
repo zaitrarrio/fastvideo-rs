@@ -215,8 +215,33 @@ bit-identical, and every fast-vs-exact gate unchanged in character (step-1
 `FV_STAGE_ENV` to A/B a setting without touching code, and a disk precheck that
 counts already-downloaded weights so a kept instance can be reused.
 
+## 2026-09-17, 17:27 — Head to head with upstream FastVideo
+
+A new `compare` tier runs our clip stages and then upstream FastVideo on the
+**same rented box**, so the hardware is identical by construction rather than by
+matching model names. Same weights, same 8s clip, same DMD timesteps.
+
+| RTX 3090 Ti | Ours (dense) | Upstream (VSA) |
+| --- | ---: | ---: |
+| Generation | ~108.4 s | **55.3 s** |
+| — denoise | 82.7 s | — |
+| — VAE decode | 21.9 s | — |
+| Model load (excluded) | 12 s | 49.9 s |
+| First run (warm-up) | 82.7 s | 95.9 s |
+
+Upstream is **1.96× faster**, and the gap is precisely the optimization we chose
+not to port: VSA cuts the quadratic attention term, while our 48k-token forward
+is dominated by dense attention.
+
+Two details that matter for reading this honestly. Upstream's first generation
+takes 95.9 s against 55.3 s steady-state, because Triton compiles its kernels on
+first use — a single-shot benchmark would have reported upstream as *slower*
+than us. And the like-for-like dense number does not exist on their side:
+`TORCH_SDPA` cannot load this checkpoint at all, since FastWan ships VSA gate
+weights (`to_gate_compress`) their dense model class does not define.
+
 ## Totals
 
-- **26 validation runs**, **$0.845** of GPU time end to end.
+- **34 validation runs**, **$1.333** of GPU time end to end.
 - A full T3 tier — kernels, models, parity, text encoding, two 8s clips and a precision comparison — costs **$0.066** and 19 minutes.
 - Cached CPU references save 648 s of billed CPU work per run.
