@@ -561,7 +561,11 @@ cmd_run() {
   local backend
   for backend in ${FV_UPSTREAM_BACKENDS:-TORCH_SDPA VIDEO_SPARSE_ATTN}; do
     local extra=()
-    [[ "$backend" == VIDEO_SPARSE_ATTN* ]] && extra=(--vsa-sparsity "${FV_VSA_SPARSITY:-0.8}")
+    # `[[ ... ]] && x=(...)` would return 1 for the non-VSA backends and, under
+    # `set -e`, end the run before any benchmark.
+    if [[ "$backend" == VIDEO_SPARSE_ATTN* ]]; then
+      extra=(--vsa-sparsity "${FV_VSA_SPARSITY:-0.8}")
+    fi
     # A backend that will not import or run is a result, not a run failure.
     STAGE_OPTIONAL=1 remote_run "upstream-$backend" "${FV_UPSTREAM_TIMEOUT:-3600}" upstream-bench "$backend" "${ub[@]}" "${extra[@]}" || true
   done
