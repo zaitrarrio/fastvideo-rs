@@ -237,6 +237,10 @@ impl Umt5Encoder {
         })
     }
 
+    pub fn device(&self) -> &Device {
+        self.embed.device()
+    }
+
     pub fn forward(&self, input_ids: &Tensor, attention_mask: Option<&Tensor>) -> Result<Tensor> {
         let (_b, s) = input_ids.dims2()?;
         let mut hidden = self

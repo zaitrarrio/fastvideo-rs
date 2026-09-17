@@ -5,6 +5,7 @@
 .vscode/
 .DS_Store
 outputs/
+artifacts/
 *.mp4
 .env
 .env.*

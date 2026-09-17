@@ -101,6 +101,50 @@ mod tests {
         assert!((emb[1] - 0.9459426).abs() < 1e-5, "emb1={}", emb[1]);
         assert!((emb[128] + 0.4677718).abs() < 1e-5, "emb128={}", emb[128]);
     }
+
+    #[test]
+    fn sdpa_query_chunks_match_full() {
+        let device = Device::Cpu;
+        let q = Tensor::arange(0f32, (1 * 2 * 80 * 8) as f32, &device)
+            .unwrap()
+            .reshape((1, 2, 80, 8))
+            .unwrap();
+        let k = (&q * 0.01).unwrap();
+        let v = (&q * 0.02).unwrap();
+        let chunked = scaled_dot_product_attention(&q, &k, &v, None).unwrap();
+        let full = super::sdpa_qk(&q, &k, &v, None, 1.0 / 8f64.sqrt()).unwrap();
+        let a = chunked.flatten_all().unwrap().to_vec1::<f32>().unwrap();
+        let b = full.flatten_all().unwrap().to_vec1::<f32>().unwrap();
+        assert_eq!(a.len(), b.len());
+        for (x, y) in a.iter().zip(b.iter()) {
+            assert!((x - y).abs() < 1e-5, "{x} vs {y}");
+        }
+    }
+
+    #[test]
+    fn conv2d_tiles_match_full() {
+        let device = Device::Cpu;
+        let xs = Tensor::arange(0f32, (1 * 3 * 80 * 96) as f32, &device)
+            .unwrap()
+            .reshape((1, 3, 80, 96))
+            .unwrap();
+        let k = Tensor::arange(0f32, (4 * 3 * 3 * 3) as f32, &device)
+            .unwrap()
+            .reshape((4, 3, 3, 3))
+            .unwrap()
+            .affine(0.01, 0.0)
+            .unwrap();
+        for (pad, stride) in [(0usize, 1usize), (1, 1), (1, 2)] {
+            let full = xs.conv2d(&k, pad, stride, 1, 1).unwrap();
+            let tiled = super::conv2d_tiled(&xs, &k, pad, stride).unwrap();
+            assert_eq!(full.dims(), tiled.dims(), "pad={pad} stride={stride}");
+            let a = full.flatten_all().unwrap().to_vec1::<f32>().unwrap();
+            let b = tiled.flatten_all().unwrap().to_vec1::<f32>().unwrap();
+            for (i, (x, y)) in a.iter().zip(b.iter()).enumerate() {
+                assert!((x - y).abs() < 1e-4, "i={i} {x} vs {y} pad={pad} stride={stride}");
+            }
+        }
+    }
 }
 
 /// LayerNorm over the last dim. `affine=false` skips weight/bias.
@@ -137,9 +181,78 @@ pub fn sinusoidal_timesteps(timesteps: &Tensor, dim: usize, device: &Device) -> 
     Tensor::cat(&[&cos, &sin], 1)
 }
 
+/// Height/width of each output tile. Keeps CUDA im2col workspaces off the
+/// 24GB card at 480p (full-frame 3x3 im2col is multiple GB).
+const CONV2D_TILE: usize = 32;
+
 pub fn conv2d(xs: &Tensor, kernel: &Tensor, padding: usize, stride: usize) -> Result<Tensor> {
-    xs.conv2d(kernel, padding, stride, 1, 1)
+    let (_, _, h, w) = xs.dims4()?;
+    if h.max(w) <= CONV2D_TILE * 2 {
+        return xs.conv2d(kernel, padding, stride, 1, 1);
+    }
+    conv2d_tiled(xs, kernel, padding, stride)
 }
+
+fn conv2d_tiled(xs: &Tensor, kernel: &Tensor, padding: usize, stride: usize) -> Result<Tensor> {
+    let stride = stride.max(1);
+    let (_oc, _ic, kh, kw) = kernel.dims4()?;
+    let mut x = xs.clone();
+    if padding > 0 {
+        x = x.pad_with_zeros(2, padding, padding)?;
+        x = x.pad_with_zeros(3, padding, padding)?;
+    }
+    let (_b, _c, h, w) = x.dims4()?;
+    if h < kh || w < kw {
+        candle_core::bail!("conv2d tile: input {h}x{w} smaller than kernel {kh}x{kw}");
+    }
+    let oh = (h - kh) / stride + 1;
+    let ow = (w - kw) / stride + 1;
+    let dtype = xs.dtype();
+    let kernel = kernel.to_dtype(dtype)?;
+    let mut rows = Vec::new();
+    let mut oy = 0usize;
+    while oy < oh {
+        let th = CONV2D_TILE.min(oh - oy);
+        let mut cols = Vec::new();
+        let mut ox = 0usize;
+        while ox < ow {
+            let tw = CONV2D_TILE.min(ow - ox);
+            let in_y = oy * stride;
+            let in_x = ox * stride;
+            let in_h = (th - 1) * stride + kh;
+            let in_w = (tw - 1) * stride + kw;
+            let tile = x
+                .narrow(2, in_y, in_h)?
+                .narrow(3, in_x, in_w)?
+                .contiguous()?;
+            let y = if dtype == DType::F32 {
+                tile.conv2d(&kernel, 0, stride, 1, 1)?
+            } else {
+                tile.to_dtype(DType::F32)?
+                    .conv2d(&kernel.to_dtype(DType::F32)?, 0, stride, 1, 1)?
+                    .to_dtype(dtype)?
+            };
+            cols.push(y);
+            ox += tw;
+        }
+        rows.push(if cols.len() == 1 {
+            cols.pop().unwrap()
+        } else {
+            Tensor::cat(&cols, 3)?
+        });
+        oy += th;
+    }
+    let out = if rows.len() == 1 {
+        rows.pop().unwrap()
+    } else {
+        Tensor::cat(&rows, 2)?
+    };
+    Ok(out)
+}
+
+/// Query-chunked SDPA so we never allocate a full `[seq, seq]` score matrix.
+/// Chunking is exact (softmax is over keys, independent per query).
+const SDPA_QUERY_CHUNK: usize = 64;
 
 pub fn scaled_dot_product_attention(
     q: &Tensor,
@@ -147,17 +260,50 @@ pub fn scaled_dot_product_attention(
     v: &Tensor,
     mask: Option<&Tensor>,
 ) -> Result<Tensor> {
-    // q/k/v: [B, heads, seq, dim]. CUDA BF16 cannot multiply an F32/F64 scale.
+    // q/k/v: [B, heads, seq, dim]
     let dtype = q.dtype();
-    let q = q.to_dtype(DType::F32)?;
-    let k = k.to_dtype(DType::F32)?;
-    let v = v.to_dtype(DType::F32)?;
-    let dim = q.dim(D::Minus1)? as f64;
-    let scale = 1.0 / dim.sqrt();
-    let mut attn = (q.matmul(&k.transpose(D::Minus1, D::Minus2)?)? * scale)?;
+    let (_b, _h, sq, dim) = q.dims4()?;
+    let compute = match q.device() {
+        Device::Cpu => DType::F32,
+        _ => dtype,
+    };
+    let q = q.to_dtype(compute)?.contiguous()?;
+    let k = k.to_dtype(compute)?.contiguous()?;
+    let v = v.to_dtype(compute)?.contiguous()?;
+    let scale = 1.0 / (dim as f64).sqrt();
+    let out = if sq <= SDPA_QUERY_CHUNK {
+        sdpa_qk(&q, &k, &v, mask, scale)?
+    } else {
+        let mut chunks = Vec::new();
+        let mut start = 0;
+        while start < sq {
+            let len = SDPA_QUERY_CHUNK.min(sq - start);
+            let qc = q.narrow(2, start, len)?;
+            let mask_c = match mask {
+                Some(m) => Some(m.narrow(m.dims().len() - 2, start, len)?),
+                None => None,
+            };
+            chunks.push(sdpa_qk(&qc, &k, &v, mask_c.as_ref(), scale)?);
+            start += len;
+        }
+        Tensor::cat(&chunks, 2)?
+    };
+    out.to_dtype(dtype)
+}
+
+fn sdpa_qk(
+    q: &Tensor,
+    k: &Tensor,
+    v: &Tensor,
+    mask: Option<&Tensor>,
+    scale: f64,
+) -> Result<Tensor> {
+    // QK stays in `q`'s dtype (BF16 on CUDA). Softmax is F32 on the query chunk only.
+    let mut attn = q.matmul(&k.transpose(D::Minus1, D::Minus2)?)?;
+    attn = attn.to_dtype(DType::F32)?.affine(scale, 0.0)?;
     if let Some(mask) = mask {
         attn = attn.broadcast_add(&mask.to_dtype(DType::F32)?)?;
     }
     let attn = candle_nn::ops::softmax_last_dim(&attn)?;
-    attn.matmul(&v)?.to_dtype(dtype)
+    attn.to_dtype(v.dtype())?.matmul(v)
 }

@@ -1,6 +1,6 @@
 # ADR-0002: Real GPU inference on Vast CUDA hardware
 
-- Status: Accepted
+- Status: Accepted (amended 2026-09-10; cudarc-primary)
 - Date: 2026-09-09
 - Decision-id: FVID-2026-09-09-vast-gpu
 
@@ -8,7 +8,7 @@
 
 Phase 1 proved the Wan graph on Candle CPU with `--tiny` zero weights. That is
 not a product bar: 1.3B UMT5+DiT+VAE will not run in useful time on a laptop,
-and this Mac cannot compile Candle's CUDA kernels.
+and this Mac cannot compile CUDA kernels.
 
 The account already has Vast.ai GPU capacity. A running RTX 4090
 (`loom-bench-rtx-4090`) is the bring-up host.
@@ -16,8 +16,10 @@ The account already has Vast.ai GPU capacity. A running RTX 4090
 ## Decision
 
 - Target hardware for real inference is **Vast.ai NVIDIA CUDA** (24GB+ VRAM).
-- Candle is built with `--features cuda`. GPU default dtype is **BF16**.
-- Mac/CI stay on CPU (`cargo test` without the cuda feature).
+- **Primary GPU path is cudarc** via `--features cuda-cudarc` (lean; skips
+  Candle CUDA kernels and Burn CubeCL). Full `--features cuda` remains for
+  frozen Candle/Burn benches only.
+- Mac/CI stay on CPU (`cargo test` without cuda features).
 - First GPU gate is tiny generate on CUDA; 1.3B Diffusers weights follow on the
   same box.
 
@@ -25,9 +27,9 @@ The account already has Vast.ai GPU capacity. A running RTX 4090
 
 - CUDA toolkit (`nvcc`) must exist on the Vast image. Runtime PyTorch images
   need `scripts/vast-setup-cuda.sh`.
-- A fourth backend or Metal path is a later choice, not a substitute for this
-  gate.
+- Scripts (`vast-generate.sh`, `docker-build-cuda.sh`, default bench backends)
+  target cudarc.
 - Weights live on the instance disk, not in this git repo.
 
-Verified: tiny Candle CUDA generate (`--dtype f32`) wrote PNG frames on
-RTX 4090 instance `50416610`.
+Verified (historical): tiny Candle CUDA generate (`--dtype f32`) wrote PNG
+frames on RTX 4090 instance `50416610`. Current scripts use cudarc.

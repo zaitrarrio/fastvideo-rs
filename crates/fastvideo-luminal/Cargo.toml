@@ -7,6 +7,19 @@ description = "Luminal TensorBackend for fastvideo-rs (compile-once DiT/VAE grap
 
 [dependencies]
 fastvideo-ops.workspace = true
+fastvideo-models.workspace = true
+fastvideo-loader.workspace = true
+luminal = { workspace = true }
+image = { workspace = true }
+rand = { workspace = true }
+rand_distr = { workspace = true }
+thiserror = { workspace = true }
+serde_json = { workspace = true }
+
+[features]
+default = []
+# crates.io luminal 0.2 advertises `cuda` but ships no `compilers/cuda` module.
+# Do not wire `luminal/cuda` here — workspace `--features cuda` would break the build.
 
 [lints]
 workspace = true

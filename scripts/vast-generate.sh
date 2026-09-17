@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Build Candle CUDA and run a tiny GPU generate on the Vast box.
+# Build cudarc CUDA and run a tiny / 1.3B GPU generate on the Vast box.
 set -euo pipefail
 
 INSTANCE_ID="${VAST_INSTANCE_ID:-50416610}"
@@ -27,19 +27,24 @@ export PATH="$HOME/.cargo/bin:/usr/local/cuda-12.4/bin:${PATH}"
 export LD_LIBRARY_PATH="/usr/local/cuda-12.4/lib64:${LD_LIBRARY_PATH:-}"
 cd "$REMOTE_DIR"
 
-echo "building fastvideo-cli --features cuda (release)"
-cargo build -p fastvideo-cli --release --features cuda
+GPU_SLUG="$(nvidia-smi --query-gpu=name --format=csv,noheader | head -1 | tr '[:upper:]' '[:lower:]' | tr -cs 'a-z0-9' '-' | sed 's/-$//')"
+STAMP="$(date -u +%Y%m%dT%H%M%SZ)"
+RUN_DIR="/workspace/artifacts/${STAMP}-${GPU_SLUG}-generate-${MODE}"
+mkdir -p "$RUN_DIR"
+
+echo "building fastvideo-cli --features cuda-cudarc (release)"
+cargo build -p fastvideo-cli --release --features cuda-cudarc
 
 if [ "$MODE" = "tiny" ]; then
   ./target/release/fastvideo generate \
     --model FastVideo/FastWan2.1-T2V-1.3B-Diffusers \
-    --backend candle \
+    --backend cudarc \
     --tiny \
     --device cuda \
-    --dtype f32 \
-    --output /workspace/fastvideo-tiny \
+    --output "$RUN_DIR/tiny" \
     --prompt "A curious raccoon in a field of sunflowers."
-  ls -la /workspace/fastvideo-tiny | head
+  echo "artifacts $RUN_DIR"
+  ls -la "$RUN_DIR/tiny" | head
   exit 0
 fi
 
@@ -57,12 +62,12 @@ fi
 
 ./target/release/fastvideo generate \
   --model Wan-AI/Wan2.1-T2V-1.3B-Diffusers \
-  --backend candle \
+  --backend cudarc \
   --device cuda \
-  --dtype bf16 \
   --weights "$WEIGHTS" \
-  --output /workspace/fastvideo-out \
+  --output "$RUN_DIR/generate" \
   --prompt "A curious raccoon in a field of sunflowers." \
   "${SMOKE_FLAGS[@]}"
-ls -la /workspace/fastvideo-out | head
+echo "artifacts $RUN_DIR"
+ls -la "$RUN_DIR/generate" | head
 EOF

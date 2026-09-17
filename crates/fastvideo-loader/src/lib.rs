@@ -1,5 +1,12 @@
 //! Hugging Face Diffusers weight loading for Wan components.
 
+mod raw;
+
+pub use raw::{
+    load_raw_component, load_raw_component_native, load_raw_tensors, load_raw_tensors_native,
+    RawDType, RawTensor,
+};
+
 use std::path::{Path, PathBuf};
 
 use candle_core::{DType, Device};
@@ -73,6 +80,16 @@ pub fn var_builder_from_dir(
     Ok(VarBuilder::from_tensors(tensors, dtype, device))
 }
 
+fn cpu_offload_for_cuda(device: &Device, dtype: DType) -> (Device, DType) {
+    match device {
+        Device::Cpu => (device.clone(), dtype),
+        #[cfg(feature = "cuda")]
+        Device::Cuda(_) => (Device::Cpu, DType::F32),
+        #[allow(unreachable_patterns)]
+        _ => (device.clone(), dtype),
+    }
+}
+
 pub struct DiffusersComponents {
     pub transformer: VarBuilder<'static>,
     /// Wan 2.2 MoE low-noise expert (`transformer_2/`).
@@ -88,6 +105,7 @@ pub fn load_diffusers_components(
     dtype: DType,
     device: &Device,
 ) -> Result<DiffusersComponents, LoaderError> {
+    eprintln!("loading transformer onto {device:?} dtype={dtype:?}");
     let transformer = var_builder_from_dir(&root.join("transformer"), dtype, device)?;
     let transformer_2 = {
         let dir = root.join("transformer_2");
@@ -102,13 +120,17 @@ pub fn load_diffusers_components(
             None
         }
     };
+    eprintln!("loading vae onto {device:?} dtype={dtype:?}");
     let vae = var_builder_from_dir(&root.join("vae"), dtype, device)?;
+    // UMT5-XXL is ~11GB BF16. Keep it on CPU so the 24GB GPU can hold DiT + VAE decode.
+    let (host, host_dtype) = cpu_offload_for_cuda(device, dtype);
     let text = {
         let te = root.join("text_encoder");
+        eprintln!("loading text encoder on {host:?} dtype={host_dtype:?}");
         if te.is_dir() {
-            var_builder_from_dir(&te, dtype, device)?
+            var_builder_from_dir(&te, host_dtype, &host)?
         } else {
-            var_builder_from_dir(&root.join("text_encoder_2"), dtype, device)?
+            var_builder_from_dir(&root.join("text_encoder_2"), host_dtype, &host)?
         }
     };
     let image_encoder = {

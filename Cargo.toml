@@ -8,6 +8,7 @@ members = [
     "crates/fastvideo-burn",
     "crates/fastvideo-candle",
     "crates/fastvideo-luminal",
+    "crates/fastvideo-cudarc",
     "crates/fastvideo-cli",
 ]
 
@@ -15,8 +16,8 @@ members = [
 version = "0.1.0"
 edition = "2021"
 license = "Apache-2.0"
-rust-version = "1.82"
-description = "Rust inference port of FastVideo for Wan/FastWan, running on Burn, Candle, or Luminal."
+rust-version = "1.85"
+description = "Rust inference port of FastVideo for Wan/FastWan, running on Burn, Candle, Luminal, or cudarc."
 repository = "https://github.com/zaitrarrio/fastvideo-rs"
 
 [workspace.dependencies]
@@ -25,6 +26,7 @@ clap = { version = "4", features = ["derive"] }
 serde = { version = "1", features = ["derive"] }
 thiserror = "2"
 serde_json = "1"
+toml = "0.8"
 candle-core = "0.11"
 candle-nn = "0.11"
 hf-hub = { version = "0.4", default-features = false, features = ["ureq"] }
@@ -33,6 +35,10 @@ tokenizers = { version = "0.22", default-features = false, features = ["onig"] }
 image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
 rand = "0.9"
 rand_distr = "0.5"
+burn = { version = "0.18", default-features = false, features = ["std", "ndarray"] }
+luminal = "0.2"
+memmap2 = "0.9"
+rayon = "1"
 
 fastvideo-ops = { path = "crates/fastvideo-ops" }
 fastvideo-core = { path = "crates/fastvideo-core" }
@@ -41,9 +47,23 @@ fastvideo-loader = { path = "crates/fastvideo-loader" }
 fastvideo-burn = { path = "crates/fastvideo-burn" }
 fastvideo-candle = { path = "crates/fastvideo-candle" }
 fastvideo-luminal = { path = "crates/fastvideo-luminal" }
+fastvideo-cudarc = { path = "crates/fastvideo-cudarc" }
+cudarc = { version = "0.17", default-features = false, features = ["std", "driver", "cublas", "cudnn", "nvrtc", "f16", "cuda-version-from-build-system", "dynamic-loading"] }
 
 [workspace.lints.rust]
 unsafe_code = "forbid"
 
 [workspace.lints.clippy]
 all = { level = "warn", priority = -1 }
+
+# Real inference runs are release builds. LTO + a single codegen unit cost
+# build time only, but help every host-side glue path this workspace still
+# has (shape/stride math, CPU fallback loops, safetensors dtype conversion) —
+# free throughput for code we don't want to (or can't yet) move to the GPU.
+# `panic = "abort"` drops unwind-table overhead; this binary doesn't rely on
+# catching panics across an FFI boundary.
+[profile.release]
+lto = "fat"
+codegen-units = 1
+panic = "abort"
+opt-level = 3

@@ -14,11 +14,15 @@ anyhow.workspace = true
 clap.workspace = true
 fastvideo-core.workspace = true
 fastvideo-models.workspace = true
+serde.workspace = true
 serde_json.workspace = true
+toml.workspace = true
 
 [features]
 default = []
 cuda = ["fastvideo-core/cuda", "fastvideo-models/cuda"]
+# Lean: cudarc backend only (skips Candle CUDA kernels + Burn CubeCL).
+cuda-cudarc = ["fastvideo-core/cuda-cudarc"]
 
 [lints]
 workspace = true

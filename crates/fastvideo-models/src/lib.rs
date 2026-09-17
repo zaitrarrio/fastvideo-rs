@@ -6,6 +6,7 @@ pub mod wan;
 
 pub use schedulers::{DmdSchedule, FlowMatchEulerDiscreteScheduler, FlowUniPCMultistepScheduler};
 pub use wan::{
-    tokenize_prompt, AutoencoderKlWan, ClipVision, ClipVisionConfig, GenerateConfig, Umt5Config,
-    Umt5Encoder, WanPipeline, WanTransformer3D, WanVaeConfig, WanVideoArchConfig,
+    causal_temporal_mask, i2v_first_frame_mask, moe_expert, tokenize_prompt, AutoencoderKlWan,
+    ClipVision, ClipVisionConfig, GenerateConfig, MoeExpert, Umt5Config, Umt5Encoder, WanPipeline,
+    WanTransformer3D, WanVaeConfig, WanVideoArchConfig,
 };

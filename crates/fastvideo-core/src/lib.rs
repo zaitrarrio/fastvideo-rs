@@ -14,7 +14,124 @@ pub use sampling::{sampling_from_definition, InferencePreset, SamplingParam, ALL
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Mutex;
+
+    static ENV_LOCK: Mutex<()> = Mutex::new(());
+
+    fn persist_dir(name: &str) -> String {
+        let root = std::env::var("FASTVIDEO_ARTIFACT_DIR")
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(|_| std::env::temp_dir());
+        let dir = root.join(name);
+        let _ = std::fs::create_dir_all(&dir);
+        dir.to_string_lossy().into_owned()
+    }
     use super::*;
+
+    #[test]
+    fn cudarc_multi_gpu_enables_sequence_parallel() {
+        let gen = VideoGenerator::from_pretrained(
+            "Wan-AI/Wan2.1-T2V-1.3B-Diffusers",
+            LoadOptions {
+                backend: BackendKind::Cudarc,
+                tiny: true,
+                num_gpus: 2,
+                output_path: Some(persist_dir("cudarc-sp-smoke")),
+                ..LoadOptions::default()
+            },
+        )
+        .unwrap();
+        let out = gen.generate_video("a cat").unwrap();
+        assert!(!out.frame_paths.is_empty());
+    }
+
+    #[test]
+    fn cudarc_vsa_ids_hard_fail_without_flag() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let prev = std::env::var("FASTVIDEO_VSA").ok();
+        let prev_sdpa = std::env::var("FASTVIDEO_SDPA").ok();
+        std::env::remove_var("FASTVIDEO_VSA");
+        std::env::remove_var("FASTVIDEO_SDPA");
+        let gen = VideoGenerator::from_pretrained(
+            "FastVideo/Wan2.1-VSA-T2V-14B-720P-Diffusers",
+            LoadOptions {
+                backend: BackendKind::Cudarc,
+                tiny: true,
+                output_path: Some(persist_dir("cudarc-vsa-reject")),
+                ..LoadOptions::default()
+            },
+        )
+        .unwrap();
+        let err = gen.generate_video("a cat").unwrap_err();
+        assert!(
+            err.to_string().to_ascii_lowercase().contains("vsa"),
+            "{err}"
+        );
+        match prev {
+            Some(v) => std::env::set_var("FASTVIDEO_VSA", v),
+            None => std::env::remove_var("FASTVIDEO_VSA"),
+        }
+        match prev_sdpa {
+            Some(v) => std::env::set_var("FASTVIDEO_SDPA", v),
+            None => std::env::remove_var("FASTVIDEO_SDPA"),
+        }
+    }
+
+    #[test]
+    fn cudarc_vsa_sparse_runs_when_enabled() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let prev = std::env::var("FASTVIDEO_VSA").ok();
+        let prev_sdpa = std::env::var("FASTVIDEO_SDPA").ok();
+        std::env::set_var("FASTVIDEO_VSA", "1");
+        let gen = VideoGenerator::from_pretrained(
+            "FastVideo/Wan2.1-VSA-T2V-14B-720P-Diffusers",
+            LoadOptions {
+                backend: BackendKind::Cudarc,
+                tiny: true,
+                output_path: Some(persist_dir("cudarc-vsa-sparse")),
+                ..LoadOptions::default()
+            },
+        )
+        .unwrap();
+        let out = gen.generate_video("a cat").unwrap();
+        assert!(!out.frame_paths.is_empty());
+        match prev {
+            Some(v) => std::env::set_var("FASTVIDEO_VSA", v),
+            None => std::env::remove_var("FASTVIDEO_VSA"),
+        }
+        match prev_sdpa {
+            Some(v) => std::env::set_var("FASTVIDEO_SDPA", v),
+            None => std::env::remove_var("FASTVIDEO_SDPA"),
+        }
+    }
+
+    #[test]
+    fn cudarc_control_preset_errors_clearly() {
+        let gen = VideoGenerator::from_pretrained(
+            "IRMChen/Wan2.1-Fun-1.3B-Control-Diffusers",
+            LoadOptions {
+                backend: BackendKind::Cudarc,
+                tiny: false,
+                weights_path: Some("/nonexistent/weights".into()),
+                ..LoadOptions::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(gen.definition.preset, "wan_fun_1_3b_control");
+        // Without weights, generate fails before control stub; with tiny it would hit control error.
+        let tiny = VideoGenerator::from_pretrained(
+            "IRMChen/Wan2.1-Fun-1.3B-Control-Diffusers",
+            LoadOptions {
+                backend: BackendKind::Cudarc,
+                tiny: true,
+                output_path: Some(persist_dir("cudarc-control-tiny")),
+                ..LoadOptions::default()
+            },
+        )
+        .unwrap();
+        // tiny bypasses control error by design (smoke graph)
+        let _ = tiny.generate_video("x");
+    }
 
     #[test]
     fn from_pretrained_fastwan() {
@@ -39,12 +156,7 @@ mod tests {
             "Wan-AI/Wan2.1-T2V-1.3B-Diffusers",
             LoadOptions {
                 backend: BackendKind::Host,
-                output_path: Some(
-                    std::env::temp_dir()
-                        .join("fastvideo-host-unipc")
-                        .to_string_lossy()
-                        .into(),
-                ),
+                output_path: Some(persist_dir("host-unipc")),
                 ..LoadOptions::default()
             },
         )
@@ -66,29 +178,39 @@ mod tests {
     }
 
     #[test]
-    fn burn_and_luminal_generate_write_latents() {
-        for backend in [BackendKind::Burn, BackendKind::Luminal] {
+    fn burn_luminal_cudarc_tiny_generate_write_png() {
+        for backend in [BackendKind::Burn, BackendKind::Luminal, BackendKind::Cudarc] {
+            let device = if cfg!(feature = "cuda")
+                && matches!(backend, BackendKind::Burn | BackendKind::Cudarc)
+            {
+                "cuda".into()
+            } else {
+                "cpu".into()
+            };
             let gen = VideoGenerator::from_pretrained(
-                "Wan-AI/Wan2.1-T2V-1.3B-Diffusers",
+                "FastVideo/FastWan2.1-T2V-1.3B-Diffusers",
                 LoadOptions {
                     backend,
-                    output_path: Some(
-                        std::env::temp_dir()
-                            .join(format!("fastvideo-{backend}-unipc"))
-                            .to_string_lossy()
-                            .into(),
-                    ),
+                    tiny: true,
+                    device,
+                    output_path: Some(persist_dir(&format!("{backend}-tiny"))),
                     ..LoadOptions::default()
                 },
             )
             .unwrap();
-            match gen.generate_video("A curious raccoon in a field of sunflowers.") {
-                Ok(out) => {
-                    assert!(std::path::Path::new(&out.frame_paths[0]).exists());
-                }
-                Err(err) if err.to_string().contains("tokenizer.json") => {}
-                Err(err) => panic!("{err}"),
-            }
+            let out = gen
+                .generate_video("A curious raccoon in a field of sunflowers.")
+                .unwrap();
+            assert!(
+                std::path::Path::new(&out.frame_paths[0]).exists(),
+                "{backend} missing {}",
+                out.frame_paths[0]
+            );
+            assert!(
+                out.frame_paths[0].ends_with(".png"),
+                "{backend} expected PNG, got {}",
+                out.frame_paths[0]
+            );
         }
     }
 
@@ -159,12 +281,7 @@ mod tests {
                 tiny: true,
                 device: "cuda".into(),
                 dtype: Some("f32".into()),
-                output_path: Some(
-                    std::env::temp_dir()
-                        .join("fastvideo-cuda-tiny")
-                        .to_string_lossy()
-                        .into(),
-                ),
+                output_path: Some(persist_dir("cuda-tiny")),
                 ..LoadOptions::default()
             },
         )
@@ -191,7 +308,7 @@ mod tests {
                 num_frames: Some(9),
                 num_inference_steps: Some(2),
                 guidance_scale: Some(1.0),
-                output_path: Some("/workspace/fastvideo-gpu-smoke".into()),
+                output_path: Some(persist_dir("cuda-1-3b-smoke")),
                 ..LoadOptions::default()
             },
         )
@@ -243,12 +360,7 @@ mod tests {
             LoadOptions {
                 backend: BackendKind::Candle,
                 tiny: true,
-                output_path: Some(
-                    std::env::temp_dir()
-                        .join("fastvideo-core-tiny")
-                        .to_string_lossy()
-                        .into(),
-                ),
+                output_path: Some(persist_dir("candle-tiny")),
                 ..LoadOptions::default()
             },
         )

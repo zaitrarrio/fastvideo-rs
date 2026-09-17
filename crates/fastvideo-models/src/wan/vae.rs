@@ -1,9 +1,17 @@
-//! Wan 2.1 VAE decoder (full-sequence causal conv3d, no streaming cache).
+//! Wan 2.1 VAE with Diffusers/Wan feat-cache decode.
+//!
+//! Decode walks one latent frame at a time and keeps `CACHE_T=2` activations at
+//! each causal conv. Upsample3d uses the `"Rep"` first-chunk sentinel so time
+//! doubling is skipped on latent 0, yielding `4n+1` RGB frames. Combined with
+//! tiled `conv2d` and BF16 weights on CUDA, peak activation memory is O(1) in
+//! clip duration.
 
-use candle_core::{DType, Result, Tensor, D};
+use candle_core::{DType, Device, Result, Tensor, D};
 use candle_nn::VarBuilder;
 
 use crate::nn;
+
+const CACHE_T: usize = 2;
 
 const LATENTS_MEAN: [f32; 16] = [
     -0.7571, -0.7089, -0.9113, 0.1075, -0.1745, 0.9653, -0.1517, 1.5508, 0.4134, -0.0715, 0.5517,
@@ -48,6 +56,76 @@ impl WanVaeConfig {
     }
 }
 
+#[derive(Clone)]
+enum CacheSlot {
+    Empty,
+    Rep,
+    Tensor(Tensor),
+}
+
+struct FeatCache {
+    slots: Vec<CacheSlot>,
+    idx: usize,
+}
+
+impl FeatCache {
+    fn new() -> Self {
+        Self {
+            slots: Vec::new(),
+            idx: 0,
+        }
+    }
+
+    fn begin_pass(&mut self) {
+        self.idx = 0;
+    }
+
+    fn reserve(&mut self) -> usize {
+        let i = self.idx;
+        if i >= self.slots.len() {
+            self.slots.push(CacheSlot::Empty);
+        }
+        self.idx += 1;
+        i
+    }
+}
+
+fn last_frames(x: &Tensor, n: usize) -> Result<Tensor> {
+    let t = x.dim(2)?;
+    let take = t.min(n);
+    x.narrow(2, t - take, take)?.contiguous()
+}
+
+fn conv_cached(conv: &CausalConv3d, x: &Tensor, cache: Option<&mut FeatCache>) -> Result<Tensor> {
+    let Some(cache) = cache else {
+        return conv.forward(x);
+    };
+    let i = cache.reserve();
+    let prev = match cache.slots.get(i) {
+        Some(CacheSlot::Tensor(t)) => Some(t.clone()),
+        _ => None,
+    };
+    let mut cache_x = last_frames(x, CACHE_T)?;
+    if cache_x.dim(2)? < CACHE_T {
+        if let Some(prev) = &prev {
+            let last = prev.narrow(2, prev.dim(2)? - 1, 1)?;
+            cache_x = Tensor::cat(&[last, cache_x], 2)?;
+        }
+    }
+    let y = conv.forward_with_cache(x, prev.as_ref())?;
+    cache.slots[i] = CacheSlot::Tensor(cache_x);
+    Ok(y)
+}
+
+fn double_time(x: Tensor) -> Result<Tensor> {
+    let (b, c2, t, h, w) = x.dims5()?;
+    let c = c2 / 2;
+    x.reshape((b, 2, c, t, h, w))?
+        .permute((0, 2, 3, 1, 4, 5))?
+        .contiguous()?
+        .reshape((b, c, t * 2, h, w))
+}
+
 #[derive(Debug, Clone)]
 struct CausalConv3d {
     weight: Tensor,
@@ -78,17 +156,28 @@ impl CausalConv3d {
     }
 
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+        self.forward_with_cache(xs, None)
+    }
+
+    fn forward_with_cache(&self, xs: &Tensor, cache_x: Option<&Tensor>) -> Result<Tensor> {
         let (b, _c, _t, _h, _w) = xs.dims5()?;
         let (out_c, in_c, kt, kh, kw) = self.weight.dims5()?;
         let mut x = xs.clone();
+        let mut pad_t = 2 * self.pad[0];
+        if let Some(c) = cache_x {
+            if pad_t > 0 {
+                x = Tensor::cat(&[c, &x], 2)?;
+                pad_t = pad_t.saturating_sub(c.dim(2)?);
+            }
+        }
         if self.pad[2] > 0 {
             x = x.pad_with_zeros(4, self.pad[2], self.pad[2])?;
         }
         if self.pad[1] > 0 {
             x = x.pad_with_zeros(3, self.pad[1], self.pad[1])?;
         }
-        if self.pad[0] > 0 {
-            x = x.pad_with_zeros(2, 2 * self.pad[0], 0)?;
+        if pad_t > 0 {
+            x = x.pad_with_zeros(2, pad_t, 0)?;
         }
         let (_b, _c, t_p, h_p, w_p) = x.dims5()?;
         if kt == 1 && kh == 1 && kw == 1 && self.stride == [1, 1, 1] {
@@ -121,17 +210,43 @@ impl CausalConv3d {
             frames.push(y.unsqueeze(2)?);
             ti += t_stride;
         }
+        if frames.is_empty() {
+            candle_core::bail!("empty causal conv3d output");
+        }
         Tensor::cat(&frames, 2)
     }
 }
 
 /// Channel-first RMS over dim=1, matching Wan `F.normalize * sqrt(C)`.
 fn rms_video(xs: &Tensor, gamma: &Tensor) -> Result<Tensor> {
+    if xs.elem_count() > 1_000_000 && xs.dim(2)? > 1 {
+        return map_time(xs, |frame| rms_video_one(frame, gamma));
+    }
+    rms_video_one(xs, gamma)
+}
+
+fn rms_video_one(xs: &Tensor, gamma: &Tensor) -> Result<Tensor> {
     let x = xs.to_dtype(DType::F32)?;
     let var = x.sqr()?.mean_keepdim(1)?;
     let y = x.broadcast_div(&(var + 1e-12)?.sqrt()?)?;
     y.to_dtype(xs.dtype())?
         .broadcast_mul(&gamma.to_dtype(xs.dtype())?)
+}
+
+fn silu_video(xs: &Tensor) -> Result<Tensor> {
+    if xs.elem_count() > 1_000_000 && xs.dim(2)? > 1 {
+        return map_time(xs, nn::silu);
+    }
+    nn::silu(xs)
+}
+
+fn map_time(xs: &Tensor, mut f: impl FnMut(&Tensor) -> Result<Tensor>) -> Result<Tensor> {
+    let t = xs.dim(2)?;
+    let mut parts = Vec::with_capacity(t);
+    for i in 0..t {
+        parts.push(f(&xs.narrow(2, i, 1)?)?);
+    }
+    Tensor::cat(&parts, 2)
 }
 
 #[derive(Debug, Clone)]
@@ -166,18 +281,17 @@ impl ResidualBlock {
         })
     }
 
-    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
-        let h = match &self.shortcut {
-            Some(sc) => sc.forward(xs)?,
-            None => xs.clone(),
-        };
+    fn forward(&self, xs: &Tensor, mut cache: Option<&mut FeatCache>) -> Result<Tensor> {
         let mut x = rms_video(xs, &self.norm1)?;
-        x = nn::silu(&x)?;
-        x = self.conv1.forward(&x)?;
+        x = silu_video(&x)?;
+        x = conv_cached(&self.conv1, &x, cache.as_deref_mut())?;
         x = rms_video(&x, &self.norm2)?;
-        x = nn::silu(&x)?;
-        x = self.conv2.forward(&x)?;
-        h + x
+        x = silu_video(&x)?;
+        x = conv_cached(&self.conv2, &x, cache.as_deref_mut())?;
+        match &self.shortcut {
+            Some(sc) => sc.forward(xs)? + x,
+            None => xs + x,
+        }
     }
 }
 
@@ -286,33 +400,65 @@ impl Resample {
         })
     }
 
-    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+    fn forward(&self, xs: &Tensor, cache: Option<&mut FeatCache>) -> Result<Tensor> {
         let mut x = xs.clone();
         if matches!(self.mode, ResampleMode::Upsample3d) {
             if let Some(tc) = &self.time_conv {
-                x = tc.forward(&x)?;
-                let (b, c2, t, h, w) = x.dims5()?;
-                let c = c2 / 2;
-                x = x
-                    .reshape((b, 2, c, t, h, w))?
-                    .permute((0, 2, 3, 1, 4, 5))?
-                    .contiguous()?
-                    .reshape((b, c, t * 2, h, w))?;
+                if let Some(cache) = cache {
+                    let i = cache.reserve();
+                    let slot = cache.slots.get(i).cloned().unwrap_or(CacheSlot::Empty);
+                    match slot {
+                        CacheSlot::Empty => {
+                            cache.slots[i] = CacheSlot::Rep;
+                        }
+                        CacheSlot::Rep | CacheSlot::Tensor(_) => {
+                            let mut cache_x = last_frames(&x, CACHE_T)?;
+                            if cache_x.dim(2)? < CACHE_T {
+                                if let CacheSlot::Tensor(prev) = &slot {
+                                    let last = prev.narrow(2, prev.dim(2)? - 1, 1)?;
+                                    cache_x = Tensor::cat(&[last, cache_x], 2)?;
+                                }
+                            }
+                            let cache_arg = match &slot {
+                                CacheSlot::Tensor(t) => Some(t.clone()),
+                                _ => None,
+                            };
+                            x = tc.forward_with_cache(&x, cache_arg.as_ref())?;
+                            cache.slots[i] = CacheSlot::Tensor(cache_x);
+                            x = double_time(x)?;
+                        }
+                    }
+                } else {
+                    x = tc.forward(&x)?;
+                    x = double_time(x)?;
+                }
             }
         }
         if let Some((w_conv, bias)) = &self.conv {
             let (b, c, t, h, w) = x.dims5()?;
-            let x2 = x.transpose(1, 2)?.contiguous()?.reshape((b * t, c, h, w))?;
-            let up = x2.upsample_nearest2d(h * 2, w * 2)?;
-            let y = nn::conv2d(&up, &w_conv.to_dtype(xs.dtype())?, 1, 1)?.broadcast_add(
-                &bias
-                    .to_dtype(xs.dtype())?
-                    .reshape((1, w_conv.dim(0)?, 1, 1))?,
-            )?;
-            let oc = y.dim(1)?;
-            x = y
-                .reshape((b, t, oc, h * 2, w * 2))?
-                .permute((0, 2, 1, 3, 4))?;
+            let w_conv = w_conv.to_dtype(xs.dtype())?;
+            let bias = bias
+                .to_dtype(xs.dtype())?
+                .reshape((1, w_conv.dim(0)?, 1, 1))?;
+            let up_elems = b.saturating_mul(t).saturating_mul(c).saturating_mul(h * 2).saturating_mul(w * 2);
+            if t > 1 && up_elems > 1_000_000 {
+                let mut frames = Vec::with_capacity(t);
+                for i in 0..t {
+                    let frame = x.narrow(2, i, 1)?.squeeze(2)?.contiguous()?;
+                    let up = frame.upsample_nearest2d(h * 2, w * 2)?;
+                    let y = nn::conv2d(&up, &w_conv, 1, 1)?.broadcast_add(&bias)?;
+                    frames.push(y.unsqueeze(2)?);
+                }
+                x = Tensor::cat(&frames, 2)?;
+            } else {
+                let x2 = x.transpose(1, 2)?.contiguous()?.reshape((b * t, c, h, w))?;
+                let up = x2.upsample_nearest2d(h * 2, w * 2)?;
+                let y = nn::conv2d(&up, &w_conv, 1, 1)?.broadcast_add(&bias)?;
+                let oc = y.dim(1)?;
+                x = y
+                    .reshape((b, t, oc, h * 2, w * 2))?
+                    .permute((0, 2, 1, 3, 4))?;
+            }
         }
         Ok(x)
     }
@@ -349,12 +495,12 @@ impl UpBlock {
         Ok(Self { resnets, upsample })
     }
 
-    fn forward(&self, mut xs: Tensor) -> Result<Tensor> {
+    fn forward(&self, mut xs: Tensor, mut cache: Option<&mut FeatCache>) -> Result<Tensor> {
         for r in &self.resnets {
-            xs = r.forward(&xs)?;
+            xs = r.forward(&xs, cache.as_deref_mut())?;
         }
         if let Some(up) = &self.upsample {
-            xs = up.forward(&xs)?;
+            xs = up.forward(&xs, cache.as_deref_mut())?;
         }
         Ok(xs)
     }
@@ -417,17 +563,17 @@ impl WanDecoder {
         })
     }
 
-    pub fn forward(&self, zs: &Tensor) -> Result<Tensor> {
-        let mut x = self.conv_in.forward(zs)?;
-        x = self.mid_res0.forward(&x)?;
+    fn forward(&self, zs: &Tensor, mut cache: Option<&mut FeatCache>) -> Result<Tensor> {
+        let mut x = conv_cached(&self.conv_in, zs, cache.as_deref_mut())?;
+        x = self.mid_res0.forward(&x, cache.as_deref_mut())?;
         x = self.mid_attn.forward(&x)?;
-        x = self.mid_res1.forward(&x)?;
+        x = self.mid_res1.forward(&x, cache.as_deref_mut())?;
         for up in &self.up_blocks {
-            x = up.forward(x)?;
+            x = up.forward(x, cache.as_deref_mut())?;
         }
         x = rms_video(&x, &self.norm_out)?;
-        x = nn::silu(&x)?;
-        x = self.conv_out.forward(&x)?;
+        x = silu_video(&x)?;
+        x = conv_cached(&self.conv_out, &x, cache.as_deref_mut())?;
         x.clamp(-1.0, 1.0)
     }
 }
@@ -537,15 +683,15 @@ impl WanEncoder {
         let mut x = self.conv_in.forward(xs)?;
         for block in &self.blocks {
             x = match block {
-                EncoderStage::Res(r) => r.forward(&x)?,
+                EncoderStage::Res(r) => r.forward(&x, None)?,
                 EncoderStage::Down(d) => d.forward(&x)?,
             };
         }
-        x = self.mid_res0.forward(&x)?;
+        x = self.mid_res0.forward(&x, None)?;
         x = self.mid_attn.forward(&x)?;
-        x = self.mid_res1.forward(&x)?;
+        x = self.mid_res1.forward(&x, None)?;
         x = rms_video(&x, &self.norm_out)?;
-        x = nn::silu(&x)?;
+        x = silu_video(&x)?;
         x = self.conv_out.forward(&x)?;
         x = self.quant.forward(&x)?;
         let chunks = x.chunk(2, 1)?;
@@ -583,6 +729,10 @@ impl AutoencoderKlWan {
         })
     }
 
+    pub fn device(&self) -> &Device {
+        self.post_quant.weight.device()
+    }
+
     pub fn scale_latents(&self, latents: &Tensor) -> Result<Tensor> {
         let device = latents.device();
         let n = self.cfg.z_dim.min(16);
@@ -613,7 +763,17 @@ impl AutoencoderKlWan {
 
     pub fn decode(&self, latents: &Tensor) -> Result<Tensor> {
         let z = self.post_quant.forward(latents)?;
-        self.decoder.forward(&z)
+        let t = z.dim(2)?;
+        let mut cache = FeatCache::new();
+        let mut frames = Vec::with_capacity(t);
+        for i in 0..t {
+            cache.begin_pass();
+            if t > 4 {
+                eprintln!("vae feat-cache decode latent {}/{t}", i + 1);
+            }
+            frames.push(self.decoder.forward(&z.narrow(2, i, 1)?, Some(&mut cache))?);
+        }
+        Tensor::cat(&frames, 2)
     }
 }
 
@@ -635,5 +795,41 @@ mod tests {
         assert_eq!(out.dim(2).unwrap(), 2);
         assert_eq!(out.dim(3).unwrap(), 8);
         assert_eq!(out.dim(4).unwrap(), 8);
+    }
+
+    #[test]
+    fn feat_cache_decode_is_4n_plus_1() {
+        let device = Device::Cpu;
+        let cfg = WanVaeConfig {
+            base_dim: 8,
+            z_dim: 4,
+            dim_mult: vec![1, 2, 2],
+            num_res_blocks: 1,
+            temporal_upsample: vec![true, true],
+            load_encoder: false,
+        };
+        let vb = VarBuilder::zeros(DType::F32, &device);
+        let vae = AutoencoderKlWan::load(cfg, vb).unwrap();
+        let z = Tensor::zeros((1, 4, 3, 2, 2), DType::F32, &device).unwrap();
+        let out = vae.decode(&z).unwrap();
+        assert_eq!(out.dims(), &[1, 3, 9, 8, 8], "two upsample3d stages: 3 latents → 9 RGB");
+    }
+
+    #[test]
+    fn feat_cache_single_latent_skips_time_double() {
+        let device = Device::Cpu;
+        let cfg = WanVaeConfig {
+            base_dim: 8,
+            z_dim: 4,
+            dim_mult: vec![1, 2],
+            num_res_blocks: 1,
+            temporal_upsample: vec![true],
+            load_encoder: false,
+        };
+        let vb = VarBuilder::zeros(DType::F32, &device);
+        let vae = AutoencoderKlWan::load(cfg, vb).unwrap();
+        let z = Tensor::zeros((1, 4, 1, 2, 2), DType::F32, &device).unwrap();
+        let out = vae.decode(&z).unwrap();
+        assert_eq!(out.dim(2).unwrap(), 1, "first chunk Rep skips upsample3d time conv");
     }
 }

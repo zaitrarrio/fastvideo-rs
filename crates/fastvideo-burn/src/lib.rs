@@ -1,10 +1,20 @@
 //! Burn adapter.
 //!
-//! Burn 0.21 tensors are rank-generic (`Tensor<B, D>`). Until Flex mapping
-//! lands, this backend executes the same f32 reference kernels as `HostBackend`
-//! so UniPC / CFG / SDPA generate is testable rather than `NotImplemented`.
+//! Native Wan T2V lives in [`wan`]: UMT5 → DiT → feat-cache VAE on Burn 0.18.
+//! Default build uses `ndarray` (f32 CPU). Enable `--features cuda` for CubeCL
+//! CUDA (`Cuda<f32>`). Tiny zeros and Diffusers `WanPipeline::load` both produce
+//! PNG frames.
+//!
+//! [`BurnBackend`] still implements [`TensorBackend`] via host f32 kernels for
+//! ops-unit tests; the Wan graph does **not** go through that trait.
 
 use fastvideo_ops::{Device, DType, HostBackend, HostTensor, OpsError, TensorBackend};
+
+pub mod error;
+pub mod wan;
+
+pub use wan::nn::{default_device, resolve_device, Device as BurnDevice};
+pub use wan::{GenerateConfig, WanPipeline};
 
 #[derive(Debug, Clone, Copy, Default)]
 pub struct BurnBackend;

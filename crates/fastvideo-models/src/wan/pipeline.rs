@@ -129,7 +129,7 @@ impl WanPipeline {
     }
 
     fn encode_ids(&self, ids: &[u32]) -> Result<Tensor> {
-        let input = Tensor::new(ids, &self.device)?.unsqueeze(0)?;
+        let input = Tensor::new(ids, self.text.device())?.unsqueeze(0)?;
         self.text.forward(&input, None)
     }
 
@@ -189,12 +189,16 @@ impl WanPipeline {
 
         let clip_tokens = match (&self.clip, cfg.image_path.as_ref()) {
             (Some(clip), Some(path)) => {
-                let e = clip.encode_image_file(path, &self.device, self.dtype)?;
-                Some(Tensor::cat(&[&e, &e], 0)?)
+                Some(clip.encode_image_file(path, &self.device, self.dtype)?)
             }
             _ => None,
         };
-        let encoder_hs = self.encode_prompt(cfg)?.to_dtype(self.dtype)?;
+        eprintln!("encoding prompt on {:?}", self.text.device());
+        let encoder_hs = self
+            .encode_prompt(cfg)?
+            .to_dtype(self.dtype)?
+            .to_device(&self.device)?;
+        eprintln!("prompt encoded {:?}, starting denoise", encoder_hs.dims());
         let boundary = cfg.boundary_ratio.or(self.boundary_ratio);
         let ctx = DenoiseCtx {
             high: &self.transformer,
@@ -221,11 +225,14 @@ impl WanPipeline {
             latents = unipc_denoise(latents, &encoder_hs, &mut sched, &ctx)?;
         }
 
-        let latents = if self.tiny {
-            latents
-        } else {
-            self.vae.scale_latents(&latents)?
-        };
+        eprintln!("vae decode on {:?}", self.vae.device());
+        let mut latents = latents.to_device(self.vae.device())?;
+        if matches!(self.vae.device(), Device::Cpu) {
+            latents = latents.to_dtype(DType::F32)?;
+        }
+        if !self.tiny {
+            latents = self.vae.scale_latents(&latents)?;
+        }
         let video = self.vae.decode(&latents)?;
         write_frames(&video, Path::new(&cfg.output_dir))
     }
@@ -239,7 +246,7 @@ impl WanPipeline {
         z_h: usize,
         z_w: usize,
     ) -> Result<(Tensor, Tensor)> {
-        let video = load_rgb_frame(image_path, height, width, &self.device)?.to_dtype(self.dtype)?;
+        let video = load_rgb_frame(image_path, height, width, self.vae.device())?;
         let encoded = self.vae.encode_video(&video)?;
         let encoded = self.vae.normalize_latents(&encoded)?;
         let first = encoded.narrow(2, 0, 1)?;
@@ -268,7 +275,7 @@ impl WanPipeline {
         } else {
             mask.narrow(1, 0, mask_c)?
         };
-        Ok((mask, cond.to_dtype(self.dtype)?))
+        Ok((mask, cond.to_dtype(self.dtype)?.to_device(&self.device)?))
     }
 }
 
@@ -304,22 +311,27 @@ fn cfg_guide(uncond: &Tensor, text: &Tensor, scale: f32, dtype: DType) -> Result
 }
 
 fn pack_dit_input(latents: &Tensor, i2v: Option<(&Tensor, &Tensor)>) -> Result<Tensor> {
-    let packed = if let Some((mask, cond)) = i2v {
-        Tensor::cat(&[latents, mask, cond], 1)?
+    if let Some((mask, cond)) = i2v {
+        Tensor::cat(&[latents, mask, cond], 1)
     } else {
-        latents.clone()
-    };
-    Tensor::cat(&[&packed, &packed], 0)
+        Ok(latents.clone())
+    }
 }
 
 fn dit_cfg(ctx: &DenoiseCtx, latents: &Tensor, encoder_hs: &Tensor, t: f32) -> Result<Tensor> {
     let (transformer, scale) = pick_expert(ctx, t);
     let device = latents.device();
-    let t_tensor = Tensor::from_vec(vec![t, t], (2,), device)?.to_dtype(ctx.dtype)?;
+    eprintln!("dit step t={t} latents={:?}", latents.dims());
+    let t_tensor = Tensor::from_vec(vec![t], (1,), device)?.to_dtype(ctx.dtype)?;
     let latent_in = pack_dit_input(latents, ctx.i2v)?;
-    let noise_pred = transformer.forward_ctx(&latent_in, &t_tensor, encoder_hs, ctx.image)?;
-    let chunks = noise_pred.chunk(2, 0)?;
-    cfg_guide(&chunks[0], &chunks[1], scale, ctx.dtype)
+    let cond_hs = encoder_hs.narrow(0, 1, 1)?;
+    let cond = transformer.forward_ctx(&latent_in, &t_tensor, &cond_hs, ctx.image)?;
+    if (scale - 1.0).abs() < 1e-6 {
+        return Ok(cond);
+    }
+    let uncond_hs = encoder_hs.narrow(0, 0, 1)?;
+    let uncond = transformer.forward_ctx(&latent_in, &t_tensor, &uncond_hs, ctx.image)?;
+    cfg_guide(&uncond, &cond, scale, ctx.dtype)
 }
 
 fn euler_denoise(
@@ -444,8 +456,10 @@ mod tests {
         cfg.is_dmd = true;
         cfg.flow_shift = 8.0;
         cfg.guidance_scale = 1.0;
-        cfg.output_dir = std::env::temp_dir()
-            .join("fastvideo-tiny")
+        cfg.output_dir = std::env::var("FASTVIDEO_ARTIFACT_DIR")
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(|_| std::env::temp_dir())
+            .join("pipeline-tiny")
             .to_string_lossy()
             .into();
         let paths = pipe.generate(&cfg).unwrap();
@@ -492,6 +506,6 @@ mod tests {
         let mask = Tensor::ones((1, 4, 2, 4, 4), DType::F32, &device).unwrap();
         let cond = Tensor::zeros((1, 16, 2, 4, 4), DType::F32, &device).unwrap();
         let packed = pack_dit_input(&noisy, Some((&mask, &cond))).unwrap();
-        assert_eq!(packed.dims(), &[2, 36, 2, 4, 4]);
+        assert_eq!(packed.dims(), &[1, 36, 2, 4, 4]);
     }
 }
