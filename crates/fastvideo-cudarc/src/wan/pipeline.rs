@@ -969,6 +969,9 @@ pub fn mux_mp4(dir: &Path, fps: u32) -> Result<String> {
     let status = Command::new("ffmpeg")
         .args([
             "-y",
+            "-loglevel",
+            "error",
+            "-nostats",
             "-framerate",
             &fps.to_string(),
             "-i",

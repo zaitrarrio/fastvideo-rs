@@ -440,7 +440,8 @@ pub fn run(report: &mut Report, lim: Limits, seed: u64) -> StageResult<()> {
     group(&mut c, "attention", |c: &mut Ctx<'_>| -> StageResult<()> {
         // Attention: flash kernel and GPU dense SDPA vs reference, including
         // cross-attention lengths and Sk not a multiple of the 32-wide tile.
-        for (b, h, sq, sk, d) in [(1usize, 2usize, 70usize, 70usize, 64usize), (2, 12, 257, 257, 128), (1, 12, 300, 512, 128), (1, 2, 1100, 1100, 32)] {
+        // Includes the Wan VAE mid-block shape: one 384-wide head over 16x16 tokens.
+        for (b, h, sq, sk, d) in [(1usize, 2usize, 70usize, 70usize, 64usize), (2, 12, 257, 257, 128), (1, 12, 300, 512, 128), (1, 2, 1100, 1100, 32), (2, 1, 256, 256, 384)] {
             let q = c.rand(b * h * sq * d, 1.0);
             let kk = c.rand(b * h * sk * d, 1.0);
             let v = c.rand(b * h * sk * d, 1.0);
@@ -452,9 +453,14 @@ pub fn run(report: &mut Report, lim: Limits, seed: u64) -> StageResult<()> {
             let tag = format!("{b}x{h}x{sq}x{sk}x{d}");
             let got = some("dense_sdpa", attn::device_dense_sdpa(&qt, &kt, &vt, Some(scale))?)?;
             c.cmp(&format!("dense_sdpa_{tag}"), &got.host_cow()?, &want, gemm.max(op))?;
-            if d % 32 == 0 {
+            if d % 32 == 0 && d <= attn::FLASH_MAX_HEAD_DIM {
                 let got = some("flash_sdpa", attn::device_flash_sdpa(&qt, &kt, &vt, Some(scale))?)?;
                 c.cmp(&format!("flash_sdpa_{tag}"), &got.host_cow()?, &want, op.max(1e-4))?;
+            } else {
+                // Beyond the flash kernel's limits the wrapper must decline
+                // (None → dense fallback), never launch and fail.
+                let declined = attn::device_flash_sdpa(&qt, &kt, &vt, Some(scale))?.is_none();
+                c.report.check(format!("flash_sdpa_declines_{tag}"), declined, json!({"declined": declined}), json!({}))?;
             }
         }
 

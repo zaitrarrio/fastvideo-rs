@@ -7,6 +7,13 @@ use super::tensor::{record_device_hit, strict_device_check, CudaTensor, Result, 
 /// Fallback query-chunk size when no CUDA device context is available.
 pub const GPU_SDPA_QUERY_CHUNK: usize = 256;
 
+/// Largest head dim the flash kernel is launched for. Its per-block shared
+/// memory is `(2*32*d + d) * 4` bytes; d=384 (the Wan VAE mid-block, a single
+/// 384-wide head) asks for ~100KB and the driver rejects the launch with
+/// CUDA_ERROR_INVALID_VALUE (seen on an RTX A4000). d<=128 (every DiT head,
+/// ~33KB) is validated; larger heads use GPU dense SDPA instead.
+pub const FLASH_MAX_HEAD_DIM: usize = 128;
+
 /// Tiled flash attention on-device: O(d) peak memory, no full S×S scores buffer.
 /// Kernel: `flash_attn_f32` (NVRTC), one block per (bh, q_i), blockDim = head_dim.
 /// Falls back to `None` if head_dim is not a multiple of 32 or CUDA is unavailable.
@@ -31,8 +38,9 @@ pub fn device_flash_sdpa(
     if k.shape[3] != d || v.shape[2] != sk || v.shape[3] != d || k.shape[0] != b || k.shape[1] != h {
         return Ok(None);
     }
-    // Flash kernel requires d to be a multiple of the warp size (32).
-    if d == 0 || d % 32 != 0 {
+    // Flash kernel requires d to be a multiple of the warp size (32) and a
+    // shared-memory block the driver accepts (see FLASH_MAX_HEAD_DIM).
+    if d == 0 || d % 32 != 0 || d > FLASH_MAX_HEAD_DIM {
         return Ok(None);
     }
     let scale = scale.unwrap_or(1.0 / (d as f32).sqrt());
