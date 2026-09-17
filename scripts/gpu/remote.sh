@@ -192,6 +192,11 @@ cmd_stage() {
     FV_GIT_SHA="$(cat "$bin.build-id")"
     export FV_GIT_SHA
   fi
+  # CPU-path reference key (written by validate.sh at upload).
+  if [[ -f "$OUT/refs/ref-key" ]]; then
+    FV_REF_KEY="$(cat "$OUT/refs/ref-key")"
+    export FV_REF_KEY
+  fi
   log "stage $name (timeout ${timeout_s}s): $*"
   set +e
   timeout --kill-after=30 "$timeout_s" "$bin" --out "$OUT" "$@" 2>&1 | tee "$LOGS/$name.log"

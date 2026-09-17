@@ -106,15 +106,20 @@ hf_snapshot() {
 # CPU-path references: identical binary and build id to what the rented box
 # runs, so the GPU stages can compare against them without spending billed
 # time on the (slow) host path.
+# Dump CPU-path references locally into the same keyed cache `validate.sh run`
+# reads (artifacts/gpucheck/refs/<ref key>/<model|parity>/refs), so a rental
+# skips those CPU stages.
 cmd_refs() {
   local parity=0
   [[ "${1:-}" == "--parity" ]] && parity=1
   cmd_dist
-  local id; id="$(fv_build_id)"
-  mkdir -p "$REFS"
-  log "model reference (random weights, CPU path)"
+  local key; key="$(fv_ref_key)"
+  local scratch="/src/artifacts/gpucheck/refs/$key/.dump"
+  FV_DOCKER_EXTRA=(-e "FV_REF_KEY=$key")
+  log "model reference (random weights, CPU path) for ref key $key"
   in_builder "/src/artifacts/gpucheck/dist/fv-gpucheck --out /src/artifacts/gpucheck/local --tag ref \
-    --mode exact model --device cpu --dump /src/artifacts/gpucheck/refs"
+    --mode exact model --device cpu --dump $scratch"
+  ref_file model
   if [[ $parity -eq 1 ]]; then
     local snap mem_gb
     snap="$(hf_snapshot "$BASE_REPO")" || die "no local $BASE_REPO snapshot with transformer/ + vae/ in the HF cache"
@@ -122,13 +127,22 @@ cmd_refs() {
     (( mem_gb >= 28 )) || die "parity reference needs ~28GB in the Docker VM (have ${mem_gb}GB): raise Docker Desktop → Settings → Resources → Memory, or let the rented box compute it"
     local models_dir="${snap%/snapshots/*}"
     log "parity reference (real 1.3B weights, CPU path; tens of minutes)"
-    FV_DOCKER_EXTRA=(-v "$models_dir:/hf/model:ro")
+    FV_DOCKER_EXTRA=(-e "FV_REF_KEY=$key" -v "$models_dir:/hf/model:ro")
     in_builder "/src/artifacts/gpucheck/dist/fv-gpucheck --out /src/artifacts/gpucheck/local --tag ref \
-      --mode exact parity --weights /hf/model/snapshots/$(basename "$snap") --device cpu --dump /src/artifacts/gpucheck/refs"
-    FV_DOCKER_EXTRA=()
+      --mode exact parity --weights /hf/model/snapshots/$(basename "$snap") --device cpu --dump $scratch"
+    ref_file parity
   fi
-  echo "$id" >"$REFS/build-id"
-  log "references for build $id in $REFS"
+  FV_DOCKER_EXTRA=()
+  rm -rf "$REFS/$key/.dump"
+  log "references for ref key $key in $REFS/$key"
+}
+
+# ref_file <model|parity>: move a dump from the scratch dir into the cache layout.
+ref_file() {
+  local key; key="$(fv_ref_key)"
+  local dir="$REFS/$key/$1/refs"
+  mkdir -p "$dir"
+  mv "$REFS/$key/.dump/$1.safetensors" "$REFS/$key/.dump/$1.json" "$dir/"
 }
 
 cmd_image() {

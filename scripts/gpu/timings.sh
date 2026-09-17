@@ -27,7 +27,13 @@ compgen -G "$reports/*.json" >/dev/null || { echo "no stage reports in $reports"
   echo "| stage | status | wall s |"
   echo "|---|---|---:|"
   for f in "$reports"/*.json; do
-    jq -r 'select(.stage != null) | "| \(.stage) | \(.status) | \(.elapsed_s * 10 | round / 10) |"' "$f" 2>/dev/null || true
+    row="$(jq -r 'select(.stage != null) | "| \(.stage) | \(.status) | \(.elapsed_s * 10 | round / 10) |"' "$f" 2>/dev/null || true)"
+    [[ -n "$row" ]] || continue
+    # CPU-path references restored from the local cache did not run this time.
+    for cached in $(cat "$run_dir/cached-refs" 2>/dev/null); do
+      [[ "$row" == "| $cached-$cached-cpu-ref |"* ]] && row="${row/| pass |/| cached (earlier run) |}"
+    done
+    printf '%s\n' "$row"
   done
 
   echo

@@ -110,6 +110,25 @@ vast_destroy() {
 FV_SSH_OPTS=(-o StrictHostKeyChecking=accept-new -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR
   -o ServerAliveInterval=15 -o ServerAliveCountMax=4 -o ConnectTimeout=15 -o BatchMode=yes)
 
+# CPU-path reference key: a hash of exactly the sources that determine the
+# outputs `fv-gpucheck --device cpu --dump` writes (host math, model graphs,
+# schedulers, weight loading, the seeded test inputs and the dump format).
+# GPU-only files are excluded so kernel work keeps cached references valid;
+# anything that changes CPU results changes the key and forces a re-dump.
+FV_REF_SOURCES=(
+  crates/fastvideo-cudarc/src crates/fastvideo-models/src crates/fastvideo-loader/src
+  crates/fastvideo-ops/src Cargo.lock
+  crates/fastvideo-gpucheck/src/model.rs crates/fastvideo-gpucheck/src/parity.rs
+  crates/fastvideo-gpucheck/src/rand_weights.rs crates/fastvideo-gpucheck/src/reference.rs
+  crates/fastvideo-gpucheck/src/st.rs
+)
+FV_REF_GPU_ONLY='^crates/fastvideo-cudarc/src/wan/(kernels|device|conv|stats|log)\.rs$'
+fv_ref_key() {
+  (cd "$FV_ROOT" && git ls-files -z -co --exclude-standard -- "${FV_REF_SOURCES[@]}" \
+    | tr '\0' '\n' | grep -Ev "$FV_REF_GPU_ONLY" | LC_ALL=C sort \
+    | tr '\n' '\0' | xargs -0 shasum -a 256 | shasum -a 256 | cut -c1-16)
+}
+
 fv_ssh() {
   local host="$1" port="$2"; shift 2
   ssh -i "$FV_SSH_KEY" -p "$port" "${FV_SSH_OPTS[@]}" "root@$host" "$@"

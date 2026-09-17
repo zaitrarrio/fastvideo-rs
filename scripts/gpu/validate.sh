@@ -128,6 +128,7 @@ cmd_offers() {
 
 # ---- run ---------------------------------------------------------------------------
 
+REF_KEY=""
 INSTANCE=""; HOST=""; PORT=""; RUN_DIR=""; KEEP=0; OWN_INSTANCE=1; WATCHDOG_PID=""; DPH=0; T_START=0
 
 cleanup() {
@@ -223,6 +224,34 @@ remote_run() {
     exit "$rc"
   fi
   log "✓ $name ${secs}s"
+}
+
+# ref_cache <name>: local cache dir for one reference set under the current key.
+ref_cache() { printf '%s/%s/%s' "$LOCAL_REFS" "$REF_KEY" "$1"; }
+
+# ref_restore <model|parity>: upload a cached reference (and the CPU stage's
+# report + videos, so timings still list the CPU times) to the box. Returns 1
+# when this key has no complete cached reference.
+ref_restore() {
+  local name="$1" dir; dir="$(ref_cache "$1")"
+  [[ -f "$dir/refs/$name.safetensors" && -f "$dir/refs/$name.json" ]] || return 1
+  fv_rsync_to "$HOST" "$PORT" "$dir/refs/" "$OUTR/refs/" >/dev/null
+  [[ -d "$dir/out" ]] && fv_rsync_to "$HOST" "$PORT" "$dir/out/" "$OUTR/" >/dev/null
+  printf '%s\n' "$name" >>"$RUN_DIR/cached-refs"
+  log "$name-cpu-ref: cached CPU-path reference $REF_KEY (stage skipped)"
+}
+
+# ref_save <model|parity> <stage>: keep a freshly dumped reference for later runs.
+ref_save() {
+  local name="$1" stage="$2" dir tmp
+  dir="$(ref_cache "$name")"
+  tmp="$dir.tmp.$$"
+  rm -rf "$tmp" && mkdir -p "$tmp/refs" "$tmp/out/videos"
+  cp "$RUN_DIR/remote/refs/$name.safetensors" "$RUN_DIR/remote/refs/$name.json" "$tmp/refs/" || { rm -rf "$tmp"; log "could not cache $name reference"; return 0; }
+  cp "$RUN_DIR/remote/$name-$stage.json" "$tmp/out/" 2>/dev/null || true
+  [[ -d "$RUN_DIR/remote/videos/$name-$stage" ]] && cp -R "$RUN_DIR/remote/videos/$name-$stage" "$tmp/out/videos/"
+  rm -rf "$dir" && mv "$tmp" "$dir"
+  log "cached $name reference → $dir"
 }
 
 gpucheck_stage() {
@@ -380,12 +409,13 @@ cmd_run() {
     log "uploading prebuilt fv-gpucheck (build $build_id)"
     fv_rsync_to "$HOST" "$PORT" "$DIST/" "$FV_REMOTE_DIR/target/release/"
   fi
-  local have_refs=0
-  if [[ "$(cat "$LOCAL_REFS/build-id" 2>/dev/null)" == "$build_id" ]]; then
-    fv_rsync_to "$HOST" "$PORT" "$LOCAL_REFS/" "$OUTR/refs/"
-    have_refs=1
-    log "using local CPU-path references for build $build_id"
-  fi
+  # CPU-path references are cached per ref key (scripts/gpu/lib.sh fv_ref_key):
+  # a hit uploads them and skips that CPU-reference stage entirely.
+  REF_KEY="$(fv_ref_key)"
+  fv_ssh "$HOST" "$PORT" "echo $REF_KEY >$OUTR/refs/ref-key"
+  local have_model_ref=0 have_parity_ref=0
+  ref_restore model && have_model_ref=1
+  ref_restore parity && have_parity_ref=1
 
   local need_disk; need_disk=$(( $(tier_disk "$tier") - 10 ))
   remote_run env 120 env "$need_disk"
@@ -405,8 +435,9 @@ cmd_run() {
   gpucheck_stage device 300 device
   gpucheck_stage kernels-exact 900 --keep-going --mode exact kernels
   gpucheck_stage kernels-fast 900 --keep-going --mode fast kernels
-  if [[ $have_refs -eq 0 || ! -f "$LOCAL_REFS/model.safetensors" ]]; then
+  if [[ $have_model_ref -eq 0 ]]; then
     gpucheck_stage model-cpu-ref 600 --mode exact model --device cpu --dump "$refs"
+    ref_save model model-cpu-ref
   fi
   gpucheck_stage model-exact 600 --mode exact model --device cuda --reference "$refs"
   gpucheck_stage model-fast 600 --mode fast model --device cuda --reference "$refs"
@@ -414,8 +445,9 @@ cmd_run() {
 
   # T2: real 1.3B weights, GPU vs cudarc CPU path.
   remote_run wait-base 1800 wait-weights "$BASE_W" 1800 transformer vae
-  if [[ $have_refs -eq 0 || ! -f "$LOCAL_REFS/parity.safetensors" ]]; then
+  if [[ $have_parity_ref -eq 0 ]]; then
     gpucheck_stage parity-cpu-ref 3600 --mode exact parity --weights "$BASE_W" --device cpu --dump "$refs"
+    ref_save parity parity-cpu-ref
   fi
   gpucheck_stage parity-exact 1200 --mode exact parity --weights "$BASE_W" --device cuda --reference "$refs"
   gpucheck_stage parity-fast 1200 --mode fast parity --weights "$BASE_W" --device cuda --reference "$refs"

@@ -50,14 +50,17 @@ Everything builds in Docker (`docker/gpucheck.Dockerfile`, driven by
 scripts/gpu/docker.sh test            # unit tests
 scripts/gpu/docker.sh nvrtc           # compile every kernel for sm 7.5–9.0 (no GPU)
 scripts/gpu/docker.sh dist            # release binary → artifacts/gpucheck/dist/
-scripts/gpu/docker.sh refs [--parity] # CPU-path references → artifacts/gpucheck/refs/
+scripts/gpu/docker.sh refs [--parity] # CPU-path references → artifacts/gpucheck/refs/<ref key>/
 scripts/gpu/docker.sh image           # CUDA runtime image with the binary
 scripts/gpu/docker.sh gpu <stage...>  # GPU stages on a local NVIDIA GPU
 ```
 
 - **Builder image:** Ubuntu 22.04, the same glibc as the Vast image, with Rust and NVRTC 12.4. It needs no CUDA toolkit, because cudarc loads CUDA libraries at run time. The cargo registry and target dir live in named volumes, so rebuilds are incremental. The repo is mounted with `.env` masked.
 - **Build id:** a hash of `crates/`, `Cargo.toml`, `Cargo.lock` and `rust-toolchain.toml`. `run` refuses a stale binary. The rented box only receives `scripts/` and the binary, so it compiles nothing.
-- **References:** `refs` dumps CPU-path references with the same binary. When their build id matches, `run` uploads them and skips the box's own CPU-reference stages. `--parity` needs the local HF snapshot and ≥28 GB of Docker VM memory, and saves the slowest idle-GPU stage of T2.
+- **References:** CPU-path references are cached in `artifacts/gpucheck/refs/<ref key>/`. The ref key hashes only the sources that shape CPU outputs: host math, model graphs, schedulers, weight loading, seeded test inputs and the dump format. GPU-only files (`kernels.rs`, `device.rs`, `conv.rs`, `stats.rs`, `log.rs`) are excluded, so kernel work keeps references valid.
+  - `run` saves every reference its box dumps, and uploads cached ones to later boxes, skipping `model-cpu-ref` / `parity-cpu-ref`. `timings.md` marks those stages "cached (earlier run)".
+  - The binary refuses a reference whose key differs from the run's.
+  - `docker.sh refs [--parity]` fills the same cache locally. `--parity` needs the local HF snapshot and ≥28 GB of Docker VM memory.
 - **Local GPU runs:** only on Linux with an NVIDIA GPU and `nvidia-container-toolkit`. Docker Desktop on macOS has no GPU passthrough, and Macs have no NVIDIA GPUs, so on a Mac the GPU stages run only on rented boxes. There `docker.sh gpu` stops with that explanation.
 
 ## Fail-fast design

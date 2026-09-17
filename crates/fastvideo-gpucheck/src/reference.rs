@@ -87,9 +87,12 @@ impl RefIo {
                 if meta["device"] != "cpu" || meta["mode"] != "exact" {
                     bail!("{}: reference must come from --device cpu --mode exact, got {meta}", path.display());
                 }
-                if let (Some(want), Ok(have)) = (meta["git_sha"].as_str(), std::env::var("FV_GIT_SHA")) {
+                // References are keyed by the CPU-path sources that produce
+                // them (scripts/gpu/lib.sh fv_ref_key), not the binary: GPU-only
+                // changes reuse them, CPU-path changes must re-dump.
+                if let (Some(want), Ok(have)) = (meta["ref_key"].as_str(), std::env::var("FV_REF_KEY")) {
                     if want != have {
-                        bail!("reference was dumped at {want}, this binary is {have}; re-dump");
+                        bail!("reference key {want} != this run's {have}: CPU-path sources changed; re-dump");
                     }
                 }
                 Ok(RefIo::Compare {
@@ -178,6 +181,7 @@ impl RefIo {
                 "device": device,
                 "mode": mode,
                 "git_sha": std::env::var("FV_GIT_SHA").ok(),
+                "ref_key": std::env::var("FV_REF_KEY").ok(),
                 "outputs": outputs.iter().map(|(n, t)| json!({"name": n, "shape": t.shape})).collect::<Vec<_>>(),
             });
             std::fs::write(path.with_extension("json"), serde_json::to_string_pretty(&meta)?)?;
