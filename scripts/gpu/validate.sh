@@ -132,6 +132,9 @@ INSTANCE=""; HOST=""; PORT=""; RUN_DIR=""; KEEP=0; OWN_INSTANCE=1; WATCHDOG_PID=
 
 cleanup() {
   local rc=$?
+  # Signal traps pass the conventional code; `$?` there is the interrupted
+  # command's status (often 0), which would report a killed run as passing.
+  [[ -n "${1:-}" ]] && rc="$1"
   trap - EXIT INT TERM
   # A host that can't get through env/bootstrap is a host problem, not a test result.
   if [[ $rc -ne 0 && -n "$CURRENT_MACHINE" ]]; then
@@ -159,7 +162,12 @@ cleanup() {
       --slurpfile stages <(cat "$RUN_DIR/stages.jsonl" 2>/dev/null || true) \
       '{status: $status, exit_code: $rc, instance: $instance, dph: $dph, wall_minutes: $minutes, est_cost_usd: $cost, stages: $stages}' \
       >"$RUN_DIR/summary.json" 2>/dev/null || true
-    log "run $([[ $rc -eq 0 ]] && echo PASSED || echo FAILED rc=$rc) in ${mins} min, ~\$${cost} — $RUN_DIR/summary.json"
+    log "run $([[ $rc -eq 0 ]] && echo PASSED || echo "FAILED rc=$rc") in ${mins} min, ~\$${cost} — $RUN_DIR/summary.json"
+    if bash "$FV_ROOT/scripts/gpu/timings.sh" "$RUN_DIR" >"$RUN_DIR/.timings.out" 2>&1; then
+      log "timings (also $RUN_DIR/timings.md):"
+      cat "$RUN_DIR/.timings.out" >&2
+    fi
+    rm -f "$RUN_DIR/.timings.out"
   fi
   exit "$rc"
 }
@@ -307,7 +315,9 @@ cmd_run() {
   RUN_DIR="$RUNS/$(date -u +%Y%m%dT%H%M%SZ)-$tier"
   mkdir -p "$RUN_DIR/remote"
   T_START=$(date +%s)
-  trap cleanup EXIT INT TERM
+  trap cleanup EXIT
+  trap 'cleanup 130' INT
+  trap 'cleanup 143' TERM
 
   if [[ $OWN_INSTANCE -eq 0 ]]; then
     DPH="$(vastai show instance "$INSTANCE" --raw | jq -r '.dph_total // 0')"

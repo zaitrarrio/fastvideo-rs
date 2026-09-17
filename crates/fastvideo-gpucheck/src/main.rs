@@ -269,14 +269,16 @@ fn run(cli: &Cli, report: &mut Report) -> StageResult<()> {
         #[cfg(feature = "cuda")]
         Cmd::Kernels { seed } => kernels::run(report, mode::limits(cli.mode), *seed),
         Cmd::Model { device, seed, refs } => {
-            let mut io = reference::RefIo::new(refs.dump.as_deref(), refs.reference.as_deref(), "model")?;
+            let mut io = reference::RefIo::new(refs.dump.as_deref(), refs.reference.as_deref(), "model")?
+                .with_videos(cli.out.join("videos").join(report.stage()));
             check_dump_mode(&io, device, cli.mode)?;
             model::run(report, &mut io, device, cli.mode, *seed)?;
             io.finish(report, cli.mode, device)?;
             Ok(())
         }
         Cmd::Parity { weights, device, refs } => {
-            let mut io = reference::RefIo::new(refs.dump.as_deref(), refs.reference.as_deref(), "parity")?;
+            let mut io = reference::RefIo::new(refs.dump.as_deref(), refs.reference.as_deref(), "parity")?
+                .with_videos(cli.out.join("videos").join(report.stage()));
             check_dump_mode(&io, device, cli.mode)?;
             parity::run(report, &mut io, weights, device, cli.mode)?;
             io.finish(report, cli.mode, device)?;

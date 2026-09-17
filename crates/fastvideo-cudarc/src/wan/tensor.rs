@@ -1056,15 +1056,7 @@ impl CudaTensor {
             let b_slice = &b_host[b_off..b_off + k * n];
             let o_slice = &mut out[o_off..o_off + m * n];
             if !matmul_slice(a_slice, b_slice, o_slice, m, k, n) {
-                for i in 0..m {
-                    for j in 0..n {
-                        let mut acc = 0.0;
-                        for t in 0..k {
-                            acc += a_slice[i * k + t] * b_slice[t * n + j];
-                        }
-                        o_slice[i * n + j] = acc;
-                    }
-                }
+                host_matmul(a_slice, b_slice, o_slice, k, n);
             }
         }
         let mut out_shape = batch_shape;
@@ -1497,39 +1489,42 @@ impl CudaTensor {
             return Ok(Self::host_only(out, vec![n, c_out, out_h, out_w]));
         }
 
+        // One output plane per (batch, out-channel), computed in parallel;
+        // per-element accumulation order is unchanged (bit-identical results).
+        use rayon::prelude::*;
         let mut out = vec![0.0; n * c_out * out_h * out_w];
-        for ni in 0..n {
-            for oc in 0..c_out {
-                for oh in 0..out_h {
-                    for ow in 0..out_w {
-                        let mut acc = 0.0;
-                        for ic in 0..c_in {
-                            for kh_i in 0..kh {
-                                for kw_i in 0..kw {
-                                    let ih = oh * stride + kh_i;
-                                    let iw = ow * stride + kw_i;
-                                    if ih < padding || iw < padding {
-                                        continue;
-                                    }
-                                    let ih = ih - padding;
-                                    let iw = iw - padding;
-                                    if ih >= h || iw >= w {
-                                        continue;
-                                    }
-                                    let xv = x_host[((ni * c_in + ic) * h + ih) * w + iw];
-                                    let wv = w_host[((oc * c_in + ic) * kh + kh_i) * kw + kw_i];
-                                    acc += xv * wv;
+        let plane = (out_h * out_w).max(1);
+        out.par_chunks_mut(plane).enumerate().for_each(|(p, out_plane)| {
+            let (ni, oc) = (p / c_out, p % c_out);
+            for oh in 0..out_h {
+                for ow in 0..out_w {
+                    let mut acc = 0.0;
+                    for ic in 0..c_in {
+                        for kh_i in 0..kh {
+                            for kw_i in 0..kw {
+                                let ih = oh * stride + kh_i;
+                                let iw = ow * stride + kw_i;
+                                if ih < padding || iw < padding {
+                                    continue;
                                 }
+                                let ih = ih - padding;
+                                let iw = iw - padding;
+                                if ih >= h || iw >= w {
+                                    continue;
+                                }
+                                let xv = x_host[((ni * c_in + ic) * h + ih) * w + iw];
+                                let wv = w_host[((oc * c_in + ic) * kh + kh_i) * kw + kw_i];
+                                acc += xv * wv;
                             }
                         }
-                        if let Some(b) = &b_host {
-                            acc += b[oc];
-                        }
-                        out[((ni * c_out + oc) * out_h + oh) * out_w + ow] = acc;
                     }
+                    if let Some(b) = &b_host {
+                        acc += b[oc];
+                    }
+                    out_plane[oh * out_w + ow] = acc;
                 }
             }
-        }
+        });
         Ok(Self::host_only(out, vec![n, c_out, out_h, out_w]))
     }
 
@@ -1682,6 +1677,24 @@ fn broadcast_bin(a: &CudaTensor, b: &CudaTensor, op: impl Fn(f32, f32) -> f32) -
 }
 
 /// Prefer cuBLAS for a single `(m,k)@(k,n)` tile when a global CUDA context is set.
+/// Host GEMM `a[m,k] @ b[k,n]` into `out[m,n]`: rows in parallel, i-t-j loop
+/// order for cache locality. Each output element still accumulates
+/// `a[i,t]*b[t,j]` for t = 0..k in order from 0.0, so results are bit-identical
+/// to the naive serial loop (CPU-path references stay reproducible).
+fn host_matmul(a: &[f32], b: &[f32], out: &mut [f32], k: usize, n: usize) {
+    use rayon::prelude::*;
+    out.par_chunks_mut(n.max(1)).enumerate().for_each(|(i, row)| {
+        row.fill(0.0);
+        let a_row = &a[i * k..(i + 1) * k];
+        for (t, &av) in a_row.iter().enumerate() {
+            let b_row = &b[t * n..(t + 1) * n];
+            for (o, &bv) in row.iter_mut().zip(b_row) {
+                *o += av * bv;
+            }
+        }
+    });
+}
+
 fn matmul_slice(a: &[f32], b: &[f32], out: &mut [f32], m: usize, k: usize, n: usize) -> bool {
     #[cfg(feature = "cuda")]
     {

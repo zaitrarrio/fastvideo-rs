@@ -75,6 +75,11 @@ impl Report {
         }
     }
 
+    /// Report name (stage + tag), e.g. `model-model-exact`.
+    pub fn stage(&self) -> &str {
+        &self.stage
+    }
+
     pub fn set_keep_going(&mut self, keep_going: bool) {
         self.keep_going = keep_going;
     }

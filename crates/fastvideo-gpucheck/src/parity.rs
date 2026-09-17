@@ -10,7 +10,8 @@ use serde_json::json;
 
 use crate::mode::{limits, Mode};
 use crate::rand_weights::randn;
-use crate::reference::RefIo;
+use crate::model::{decode_video, secs};
+use crate::reference::{Out, RefIo};
 use crate::report::{Report, StageResult};
 
 fn host(t: &CudaTensor) -> anyhow::Result<Vec<f32>> {
@@ -42,15 +43,13 @@ pub fn run(report: &mut Report, refs: &mut RefIo, weights: &Path, device: &str, 
         None,
     )?;
     let y = host(&y)?;
-    report.note("dit_forward_seconds", json!({"seconds": timer.elapsed().as_secs_f64()}));
-    refs.output(report, "dit_forward_t999", &lat_shape, y, lim.forward, false)?;
+    refs.output(report, "dit_forward_t999", &lat_shape, y, lim.forward, secs(timer), Out::Tensor)?;
 
     let timer = Instant::now();
     let video = pipe.decode_latents(&CudaTensor::from_vec(randn(104, n_lat, 1.0), lat_shape.clone())?)?;
     let shape = video.shape.clone();
     let video = host(&video)?;
-    report.note("vae_decode_seconds", json!({"seconds": timer.elapsed().as_secs_f64()}));
-    refs.output(report, "vae_decode", &shape, video, lim.forward, true)?;
+    refs.output(report, "vae_decode", &shape, video, lim.forward, secs(timer), Out::Video)?;
 
     let cfg = GenerateConfig {
         height: 128,
@@ -64,7 +63,9 @@ pub fn run(report: &mut Report, refs: &mut RefIo, weights: &Path, device: &str, 
     };
     let timer = Instant::now();
     let out = pipe.denoise(&cfg, pipe.initial_latents(&cfg)?, &embeds, None)?;
-    report.note("unipc_seconds", json!({"seconds": timer.elapsed().as_secs_f64()}));
-    refs.output(report, "unipc_2step_cfg5", &out.shape.clone(), host(&out)?, lim.denoise, false)?;
+    let data = host(&out)?;
+    let denoise_s = secs(timer);
+    refs.output(report, "unipc_2step_cfg5", &out.shape.clone(), data, lim.denoise, denoise_s, Out::Tensor)?;
+    decode_video(report, refs, &pipe, &out, "unipc_2step_cfg5_video", lim.denoise, denoise_s)?;
     Ok(())
 }

@@ -8,6 +8,8 @@
 //! reference: batched rows must equal single-row forwards, and a repeated
 //! forward must be reproducible.
 
+use std::time::Instant;
+
 use fastvideo_cudarc::wan::umt5::Umt5Encoder;
 use fastvideo_cudarc::wan::{AutoencoderKlWan, WanTransformer3D};
 use fastvideo_cudarc::{CudaTensor, GenerateConfig, WanPipeline};
@@ -17,7 +19,7 @@ use serde_json::json;
 use crate::metrics::diff;
 use crate::mode::{limits, Mode};
 use crate::rand_weights::{randn, random_map};
-use crate::reference::RefIo;
+use crate::reference::{Out, RefIo};
 use crate::report::{Report, StageResult};
 
 pub fn dit_config() -> WanVideoArchConfig {
@@ -78,8 +80,10 @@ pub fn run(report: &mut Report, refs: &mut RefIo, device: &str, mode: Mode, seed
 
     // UMT5 on 11 ids (odd length exercises the relative-position buckets).
     let ids: Vec<u32> = (0..11u32).map(|i| (i * 37 + 5) % 512).collect();
+    let timer = Instant::now();
     let out = text.forward(&ids, 1, ids.len())?;
-    refs.output(report, "umt5_forward", &out.shape, host(&out)?, lim.forward, false)?;
+    let data = host(&out)?;
+    refs.output(report, "umt5_forward", &out.shape, data, lim.forward, secs(timer), Out::Tensor)?;
 
     // DiT forward, batch 1: [1,16,3,6,8] → 36 tokens.
     let lat_shape = vec![1usize, 16, 3, 6, 8];
@@ -98,16 +102,19 @@ pub fn run(report: &mut Report, refs: &mut RefIo, device: &str, mode: Mode, seed
         )?;
         host(&y)
     };
+    let timer = Instant::now();
     let y1 = fwd(&lat, &enc, 1)?;
-    refs.output(report, "dit_forward_b1", &lat_shape, y1.clone(), lim.forward, false)?;
+    refs.output(report, "dit_forward_b1", &lat_shape, y1.clone(), lim.forward, secs(timer), Out::Tensor)?;
 
     // Batch 2 with different text per row (the batched-CFG shape).
     let lat_b2 = [lat.as_slice(), lat.as_slice()].concat();
     let enc_b2 = [enc2.as_slice(), enc.as_slice()].concat();
+    let timer = Instant::now();
     let y2 = fwd(&lat_b2, &enc_b2, 2)?;
+    let y2_s = secs(timer);
     let mut b2_shape = lat_shape.clone();
     b2_shape[0] = 2;
-    refs.output(report, "dit_forward_b2", &b2_shape, y2.clone(), lim.forward, false)?;
+    refs.output(report, "dit_forward_b2", &b2_shape, y2.clone(), lim.forward, y2_s, Out::Tensor)?;
     if gpu {
         let half = y2.len() / 2;
         let d = diff(&y2[half..], &y1);
@@ -120,8 +127,10 @@ pub fn run(report: &mut Report, refs: &mut RefIo, device: &str, mode: Mode, seed
     // VAE decode: 3 latent frames → 5 RGB frames at 4x spatial.
     let z_shape = vec![1usize, 16, 3, 6, 8];
     let z = randn(seed + 4, z_shape.iter().product(), 1.0);
+    let timer = Instant::now();
     let video = vae.decode(&CudaTensor::from_vec(z, z_shape)?)?;
-    refs.output(report, "vae_decode", &video.shape.clone(), host(&video)?, lim.forward, true)?;
+    let data = host(&video)?;
+    refs.output(report, "vae_decode", &video.shape.clone(), data, lim.forward, secs(timer), Out::Video)?;
 
     // Samplers through the production WanPipeline::denoise path.
     let pipe = WanPipeline::from_parts(None, dit, vae);
@@ -140,8 +149,12 @@ pub fn run(report: &mut Report, refs: &mut RefIo, device: &str, mode: Mode, seed
         ..GenerateConfig::default()
     };
     let noise = pipe.initial_latents(&cfg)?;
+    let timer = Instant::now();
     let out = pipe.denoise(&cfg, noise.clone(), &embeds, None)?;
-    refs.output(report, "unipc_4step_cfg3", &out.shape.clone(), host(&out)?, lim.denoise, false)?;
+    let data = host(&out)?;
+    let denoise_s = secs(timer);
+    refs.output(report, "unipc_4step_cfg3", &out.shape.clone(), data, lim.denoise, denoise_s, Out::Tensor)?;
+    decode_video(report, refs, &pipe, &out, "unipc_4step_cfg3_video", lim.denoise, denoise_s)?;
 
     let dmd_cfg = GenerateConfig {
         is_dmd: true,
@@ -150,8 +163,38 @@ pub fn run(report: &mut Report, refs: &mut RefIo, device: &str, mode: Mode, seed
         guidance_scale: 1.0,
         ..cfg
     };
+    let timer = Instant::now();
     let out = pipe.denoise(&dmd_cfg, noise, &embeds, None)?;
+    let data = host(&out)?;
+    let denoise_s = secs(timer);
     // Euler has no host/device order difference: forward limit.
-    refs.output(report, "dmd_3step", &out.shape.clone(), host(&out)?, lim.forward, false)?;
+    refs.output(report, "dmd_3step", &out.shape.clone(), data, lim.forward, denoise_s, Out::Tensor)?;
+    decode_video(report, refs, &pipe, &out, "dmd_3step_video", lim.forward, denoise_s)?;
     Ok(())
+}
+
+pub fn secs(timer: Instant) -> f64 {
+    timer.elapsed().as_secs_f64()
+}
+
+/// Decode sampler latents through the pipeline VAE into a compared, saved
+/// video. The recorded time is end-to-end generation: denoise + decode.
+pub fn decode_video(
+    report: &mut Report,
+    refs: &mut RefIo,
+    pipe: &WanPipeline,
+    latents: &CudaTensor,
+    name: &str,
+    rel_limit: f64,
+    denoise_s: f64,
+) -> StageResult<()> {
+    let timer = Instant::now();
+    let video = pipe.decode_latents(latents)?;
+    let data = host(&video)?;
+    let decode_s = secs(timer);
+    report.note(
+        format!("timing/{name}"),
+        json!({"denoise_seconds": denoise_s, "decode_seconds": decode_s, "total_seconds": denoise_s + decode_s}),
+    );
+    refs.output(report, name, &video.shape.clone(), data, rel_limit, denoise_s + decode_s, Out::Video)
 }
