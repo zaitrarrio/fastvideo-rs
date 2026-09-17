@@ -182,6 +182,49 @@ extern "C" __global__ void softmax_last(const float* a, float* out, int rows, in
     __syncthreads();
     for (int j = tid; j < width; j += nthreads) dst[j] *= inv;
 }
+// Softmax over the last dim writing bfloat16 probabilities. In fast mode
+// cuBLAS already rounds its F32 inputs to bf16 for the tensor-core op, so
+// storing the probabilities this way is the same math over half the bytes —
+// and the probability matrix is the dominant traffic in dense attention.
+// Three passes over the f32 scores (max, sum, write) beat keeping f32 exps
+// around: the row is far too wide for shared memory.
+extern "C" __global__ void softmax_last_bf16(const float* a, unsigned short* out, int rows, int width) {
+    extern __shared__ float sdata[];
+    int row = blockIdx.x;
+    if (row >= rows) return;
+    int tid = threadIdx.x;
+    int nthreads = blockDim.x;
+    const float* src = a + (long)row * (long)width;
+    unsigned short* dst = out + (long)row * (long)width;
+
+    float local_max = -1e30f;
+    for (int j = tid; j < width; j += nthreads) local_max = fmaxf(local_max, src[j]);
+    sdata[tid] = local_max;
+    __syncthreads();
+    for (int s = nthreads >> 1; s > 0; s >>= 1) {
+        if (tid < s) sdata[tid] = fmaxf(sdata[tid], sdata[tid + s]);
+        __syncthreads();
+    }
+    float m = sdata[0];
+    __syncthreads();
+
+    float local_sum = 0.0f;
+    for (int j = tid; j < width; j += nthreads) local_sum += expf(src[j] - m);
+    sdata[tid] = local_sum;
+    __syncthreads();
+    for (int s = nthreads >> 1; s > 0; s >>= 1) {
+        if (tid < s) sdata[tid] += sdata[tid + s];
+        __syncthreads();
+    }
+    float inv = 1.0f / sdata[0];
+    __syncthreads();
+    for (int j = tid; j < width; j += nthreads) {
+        unsigned int u = __float_as_uint(expf(src[j] - m) * inv);
+        unsigned int hi = u >> 16;
+        if ((u & 0x8000u) != 0u && (hi & 0x7F80u) != 0x7F80u && (hi & 0x7FFFu) != 0x7F7Fu) hi += 1u;
+        dst[j] = (unsigned short)hi;
+    }
+}
 // RMS norm over last dim `width` (rows = n / width). weight length = width.
 extern "C" __global__ void rms_norm_last(
     const float* a, const float* w, float* out, int rows, int width, float eps
@@ -573,6 +616,7 @@ kernel_fns!(
     cast_bf16_f32_bias_act,
     residual_gate_add_e,
     softmax_last,
+    softmax_last_bf16,
     rms_norm_last,
     layer_norm_last,
     ln_adaln_e,

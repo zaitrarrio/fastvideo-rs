@@ -286,6 +286,34 @@ unsafe fn gemm_raw(
     stride_c: usize,
     batch: usize,
 ) -> Result<()> {
+    let r32 = cudarc::cublas::sys::cudaDataType_t::CUDA_R_32F;
+    gemm_raw_ty(dev, transa, m, n, k, alpha, a, lda, stride_a, b, ldb, stride_b, c, ldc, stride_c, batch, r32)
+}
+
+/// [`gemm_raw`] with the A/B element type spelled out (C stays F32). bf16
+/// inputs cost nothing numerically under `GemmMath::Bf16`, which already
+/// rounds F32 operands to bf16 for the tensor-core op.
+#[cfg(feature = "cuda")]
+#[allow(clippy::too_many_arguments)]
+unsafe fn gemm_raw_ty(
+    dev: &DeviceContext,
+    transa: bool,
+    m: usize,
+    n: usize,
+    k: usize,
+    alpha: f32,
+    a: cudarc::driver::sys::CUdeviceptr,
+    lda: usize,
+    stride_a: usize,
+    b: cudarc::driver::sys::CUdeviceptr,
+    ldb: usize,
+    stride_b: usize,
+    c: cudarc::driver::sys::CUdeviceptr,
+    ldc: usize,
+    stride_c: usize,
+    batch: usize,
+    ab_ty: cudarc::cublas::sys::cudaDataType_t,
+) -> Result<()> {
     use cudarc::cublas::sys;
     let op_a = if transa {
         sys::cublasOperation_t::CUBLAS_OP_T
@@ -306,10 +334,10 @@ unsafe fn gemm_raw(
             k as i32,
             (&alpha as *const f32).cast(),
             a as *const _,
-            r32,
+            ab_ty,
             lda as i32,
             b as *const _,
-            r32,
+            ab_ty,
             ldb as i32,
             (&beta as *const f32).cast(),
             c as *mut _,
@@ -328,11 +356,11 @@ unsafe fn gemm_raw(
             k as i32,
             (&alpha as *const f32).cast(),
             a as *const _,
-            r32,
+            ab_ty,
             lda as i32,
             stride_a as i64,
             b as *const _,
-            r32,
+            ab_ty,
             ldb as i32,
             stride_b as i64,
             (&beta as *const f32).cast(),
@@ -630,6 +658,62 @@ pub fn matmul_2d_strided_batched_out_view(
     let (ap, _ra) = a.device_ptr(&dev.stream);
     let (cp, _rc) = out.device_ptr_mut(&dev.stream);
     unsafe { gemm_raw(&dev, false, n, m, k, 1.0, bp, n, k * n, ap, k, m * k, cp, n, outer_stride_c, batch) }
+}
+
+/// Attention `P [batch,m,k] @ V [batch,k,n]` with bfloat16 operands and an F32
+/// result: the `P@V` half of dense SDPA once the probabilities are stored as
+/// bf16.
+#[cfg(feature = "cuda")]
+pub fn matmul_2d_strided_batched_bf16(
+    a: &cudarc::driver::CudaSlice<half::bf16>,
+    b: &cudarc::driver::CudaSlice<half::bf16>,
+    out: &mut cudarc::driver::CudaSlice<f32>,
+    batch: usize,
+    m: usize,
+    k: usize,
+    n: usize,
+) -> Result<()> {
+    use cudarc::driver::{DevicePtr, DevicePtrMut};
+    let dev = global_device().ok_or_else(no_device)?;
+    size_check(
+        "strided gemm (bf16)",
+        a.len() == batch * m * k && b.len() == batch * k * n && out.len() == batch * m * n,
+        || format!("a={} b={} out={} batch={batch} ({m},{k})@({k},{n})", a.len(), b.len(), out.len()),
+    )?;
+    let (bp, _rb) = b.device_ptr(&dev.stream);
+    let (ap, _ra) = a.device_ptr(&dev.stream);
+    let (cp, _rc) = out.device_ptr_mut(&dev.stream);
+    let bf = cudarc::cublas::sys::cudaDataType_t::CUDA_R_16BF;
+    unsafe { gemm_raw_ty(&dev, false, n, m, k, 1.0, bp, n, k * n, ap, k, m * k, cp, n, m * n, batch, bf) }
+}
+
+/// [`matmul_2d_strided_batched_bf16`] writing into a strided view of a larger
+/// output (the chunked attention path).
+#[cfg(feature = "cuda")]
+#[allow(clippy::too_many_arguments)]
+pub fn matmul_2d_strided_batched_out_view_bf16(
+    a: &cudarc::driver::CudaSlice<half::bf16>,
+    b: &cudarc::driver::CudaSlice<half::bf16>,
+    out: &mut cudarc::driver::CudaViewMut<'_, f32>,
+    outer_stride_c: usize,
+    batch: usize,
+    m: usize,
+    k: usize,
+    n: usize,
+) -> Result<()> {
+    use cudarc::driver::{DevicePtr, DevicePtrMut};
+    let dev = global_device().ok_or_else(no_device)?;
+    let out_required = strided_view_required_len(batch, outer_stride_c, m * n);
+    size_check(
+        "strided gemm (bf16, out-view)",
+        a.len() == batch * m * k && b.len() == batch * k * n && out.len() >= out_required,
+        || format!("a={} b={} out={} (need >= {out_required}) batch={batch} ({m},{k})@({k},{n})", a.len(), b.len(), out.len()),
+    )?;
+    let (bp, _rb) = b.device_ptr(&dev.stream);
+    let (ap, _ra) = a.device_ptr(&dev.stream);
+    let (cp, _rc) = out.device_ptr_mut(&dev.stream);
+    let bf = cudarc::cublas::sys::cudaDataType_t::CUDA_R_16BF;
+    unsafe { gemm_raw_ty(&dev, false, n, m, k, 1.0, bp, n, k * n, ap, k, m * k, cp, n, outer_stride_c, batch, bf) }
 }
 
 /// Resolve device from CLI spec (`cpu`, `cuda`, `cuda:0`).

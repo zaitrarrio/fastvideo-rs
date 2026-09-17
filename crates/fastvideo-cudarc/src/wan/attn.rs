@@ -20,6 +20,14 @@ pub const FLASH_MAX_HEAD_DIM: usize = 128;
 /// path; longer queries are processed in chunks that address Q/out in place.
 pub const DENSE_SCORE_BUDGET: usize = 256 * 1024 * 1024;
 
+/// bf16 attention probabilities apply when the context runs bf16 GEMM math,
+/// where cuBLAS rounds F32 operands to bf16 for the tensor-core op anyway.
+#[cfg(feature = "cuda")]
+fn probs_bf16() -> bool {
+    super::stats::device_expected()
+        && super::device::global_device().is_some_and(|d| d.gemm_math == super::device::GemmMath::Bf16)
+}
+
 fn bhsd(q: &CudaTensor, k: &CudaTensor, v: &CudaTensor) -> Option<(usize, usize, usize, usize, usize)> {
     let [b, h, sq, d] = q.shape[..] else { return None };
     let sk = k.shape.get(2).copied()?;
@@ -85,12 +93,25 @@ pub fn device_dense_sdpa_with_budget(
     super::log::info_once(&ONCE, format_args!("sdpa: device dense B={b} H={h} Sq={sq} Sk={sk} D={d} query_chunk={chunk}"));
     let err = |e: device::DeviceError| msg(e.to_string());
     let mut out = super::ops::alloc((bh * sq * d).max(1))?;
+    // The probability matrix is `bh*sq*sk` — far larger than Q, K, V — so in
+    // fast mode it is stored as bf16, halving the dominant traffic. `V` is cast
+    // once to match. Exact mode keeps F32 so it stays comparable to the CPU path.
+    let v_bf16 = if probs_bf16() { Some(super::ops::cast_f32_bf16_device(&vd)?) } else { None };
     if chunk >= sq {
         let mut scores = super::ops::alloc((bh * sq * sk).max(1))?;
         device::matmul_linear_wt_strided_batched(&qd, &kd, &mut scores, bh, sq, d, sk, scale).map_err(err)?;
-        let probs = super::ops::softmax_last_device(&scores, sk)?;
-        drop(scores);
-        device::matmul_2d_strided_batched(&probs, &vd, &mut out, bh, sq, sk, d).map_err(err)?;
+        match &v_bf16 {
+            Some(vb) => {
+                let probs = super::ops::softmax_last_bf16_device(&scores, sk)?;
+                drop(scores);
+                device::matmul_2d_strided_batched_bf16(&probs, vb, &mut out, bh, sq, sk, d).map_err(err)?;
+            }
+            None => {
+                let probs = super::ops::softmax_last_device(&scores, sk)?;
+                drop(scores);
+                device::matmul_2d_strided_batched(&probs, &vd, &mut out, bh, sq, sk, d).map_err(err)?;
+            }
+        }
     } else {
         let mut start = 0usize;
         while start < sq {
@@ -99,10 +120,21 @@ pub fn device_dense_sdpa_with_budget(
             let mut scores = super::ops::alloc(bh * qlen * sk)?;
             device::matmul_linear_wt_strided_batched_x_view(&q_view, sq * d, &kd, &mut scores, bh, qlen, d, sk, scale)
                 .map_err(err)?;
-            let probs = super::ops::softmax_last_device(&scores, sk)?;
-            drop(scores);
             let mut out_view = out.slice_mut(start * d..);
-            device::matmul_2d_strided_batched_out_view(&probs, &vd, &mut out_view, sq * d, bh, qlen, sk, d).map_err(err)?;
+            match &v_bf16 {
+                Some(vb) => {
+                    let probs = super::ops::softmax_last_bf16_device(&scores, sk)?;
+                    drop(scores);
+                    device::matmul_2d_strided_batched_out_view_bf16(&probs, vb, &mut out_view, sq * d, bh, qlen, sk, d)
+                        .map_err(err)?;
+                }
+                None => {
+                    let probs = super::ops::softmax_last_device(&scores, sk)?;
+                    drop(scores);
+                    device::matmul_2d_strided_batched_out_view(&probs, &vd, &mut out_view, sq * d, bh, qlen, sk, d)
+                        .map_err(err)?;
+                }
+            }
             start += qlen;
         }
     }

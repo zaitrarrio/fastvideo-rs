@@ -290,6 +290,15 @@ pub fn run(report: &mut Report, lim: Limits, seed: u64) -> StageResult<()> {
             let x = c.rand(rows * width, 2.0);
             let dx = up(&x)?;
             c.cmp(&format!("softmax_{rows}x{width}"), &down(&ops::softmax_last_device(&dx, width)?)?, &ref_softmax(&x, width), op)?;
+            // bf16 probabilities for dense attention: same softmax, half the
+            // bytes, so it is held to bf16 round-off rather than `op`.
+            let got: Vec<f32> = dev()?
+                .stream
+                .memcpy_dtov(&ops::softmax_last_bf16_device(&dx, width)?)?
+                .iter()
+                .map(|v: &half::bf16| v.to_f32())
+                .collect();
+            c.cmp(&format!("softmax_bf16_{rows}x{width}"), &got, &ref_softmax(&x, width), 8e-3)?;
             let w: Vec<f32> = c.rand(width, 0.1).iter().map(|v| 1.0 + v).collect();
             let b = c.rand(width, 0.1);
             let (dw, db) = (up(&w)?, up(&b)?);

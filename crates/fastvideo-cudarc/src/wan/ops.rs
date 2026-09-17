@@ -287,6 +287,21 @@ pub fn softmax_last_device(a: &CudaSlice<f32>, width: usize) -> Result<CudaSlice
     Ok(out)
 }
 
+/// [`softmax_last_device`] writing bfloat16 probabilities: half the bytes for
+/// the attention `P@V` GEMM, and in fast mode the same math cuBLAS would do
+/// internally anyway.
+#[cfg(feature = "cuda")]
+pub fn softmax_last_bf16_device(a: &CudaSlice<f32>, width: usize) -> Result<CudaSlice<half::bf16>> {
+    check("softmax_last_bf16", width > 0 && a.len() % width == 0)?;
+    let dev = ctx()?;
+    let rows = a.len() / width;
+    let (rows_i, width_i) = (rows as i32, width as i32);
+    let mut out = unsafe { dev.stream.alloc::<half::bf16>(a.len().max(1)) }.map_err(err)?;
+    launch!(dev.stream, &dev.kernels.softmax_last_bf16, cfg_rows(rows); a, &mut out, &rows_i, &width_i)
+        .map_err(err)?;
+    Ok(out)
+}
+
 #[cfg(feature = "cuda")]
 pub fn rms_norm_last_device(a: &CudaSlice<f32>, weight: &CudaSlice<f32>, eps: f32) -> Result<CudaSlice<f32>> {
     let width = weight.len();
