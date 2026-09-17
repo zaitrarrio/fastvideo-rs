@@ -489,12 +489,18 @@ impl WanTransformer3D {
     /// off, unavailable, or the checkpoint has no gates.
     #[cfg(feature = "cuda")]
     fn vsa_for(&self, t: usize, h: usize, w: usize) -> Result<Option<std::sync::Arc<VsaCtx>>> {
+        if !super::nn::vsa_enabled() {
+            return Ok(None);
+        }
         // No live device means a CPU run, where VSA has no device path: fall
-        // back to dense rather than failing to upload a tiling.
-        if !super::nn::vsa_enabled()
-            || super::device::global_device().is_none()
-            || !self.blocks.iter().any(|b| b.gate.is_some())
-        {
+        // back to dense rather than failing to upload a tiling. Say so, rather
+        // than silently running dense while the caller believes VSA is on.
+        if super::device::global_device().is_none() || !self.blocks.iter().any(|b| b.gate.is_some()) {
+            static ONCE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+            super::log::info_once(
+                &ONCE,
+                format_args!("vsa: requested but unavailable (no device, or checkpoint has no to_gate_compress); using dense attention"),
+            );
             return Ok(None);
         }
         let p = self.cfg.patch_size;

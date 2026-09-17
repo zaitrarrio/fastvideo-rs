@@ -390,6 +390,9 @@ fn main() {
     let cli = Cli::parse();
     // Must precede every cudarc call: its FASTVIDEO_* flags are cached on first read.
     cli.mode.apply_env();
+    if cli.vsa {
+        std::env::set_var("FASTVIDEO_VSA", "1");
+    }
     let name = match &cli.tag {
         Some(tag) => format!("{}-{tag}", stage_name(&cli.cmd)),
         None => stage_name(&cli.cmd).to_string(),

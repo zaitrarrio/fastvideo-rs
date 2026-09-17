@@ -317,7 +317,11 @@ pub fn scaled_dot_product_attention_masked(
     }
     let run = |q: &CudaTensor| -> Result<CudaTensor> {
         if mask.is_none() {
-            if vsa_enabled() || sdpa_backend() == "sparse" {
+            // FASTVIDEO_VSA now selects the real video sparse attention in
+            // self-attention (see wan::vsa); this window-sparse host prototype
+            // keeps its own opt-in so enabling VSA does not route cross
+            // attention into a path with no device kernel.
+            if sdpa_backend() == "sparse" {
                 let window = super::envflag::usize_flag("FASTVIDEO_VSA_WINDOW", 128);
                 return super::attn::block_sparse_sdpa(q, k, v, scale, window);
             }
