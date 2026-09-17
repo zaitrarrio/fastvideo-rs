@@ -188,8 +188,35 @@ Flash stays off. Making it competitive means writing FlashAttention-2 properly
 porting upstream's sparse attention, which cuts the S² term instead of fighting
 it. The cheap intermediate — bf16 probabilities in the dense path — is next.
 
+## 2026-09-17, 14:06 — bf16 attention probabilities: 36% off an 8s clip
+
+With flash ruled out, the target was the probability matrix dense attention
+writes and reads back. Under bf16 GEMM math cuBLAS already rounds its F32
+operands to bf16 for the tensor-core op, so storing probabilities that way is
+the same arithmetic over half the bytes.
+
+Measured as a same-instance A/B (one kept box, only the dtype differs):
+
+| | F32 probs | bf16 probs | Gain |
+| --- | ---: | ---: | ---: |
+| Forward @ 1,456 tokens | 0.117 s | 0.111 s | 5.4% |
+| Forward @ 4,368 tokens | 0.489 s | 0.414 s | 15.3% |
+| Forward @ 13,104 tokens | 3.064 s | 2.304 s | 24.8% |
+| **8s clip denoise** | **128.5 s** | **82.7 s** | **35.6%** |
+| 8s clip, end to end | 161.9 s | 115.8 s | 28.5% |
+| Peak denoise memory | 9,859 MiB | 9,539 MiB | — |
+
+The gain grows with sequence length, exactly as the traffic argument predicts.
+Accuracy did not move: parity fast rel_l2 0.004515 → 0.004498, exact mode
+bit-identical, and every fast-vs-exact gate unchanged in character (step-1
+0.0166 → 0.0180 against a 0.05 limit).
+
+`FASTVIDEO_ATTN_PROBS_BF16=0` opts out. Two harness fixes came with it:
+`FV_STAGE_ENV` to A/B a setting without touching code, and a disk precheck that
+counts already-downloaded weights so a kept instance can be reused.
+
 ## Totals
 
-- **22 validation runs**, **$0.662** of GPU time end to end.
+- **26 validation runs**, **$0.845** of GPU time end to end.
 - A full T3 tier — kernels, models, parity, text encoding, two 8s clips and a precision comparison — costs **$0.066** and 19 minutes.
 - Cached CPU references save 648 s of billed CPU work per run.

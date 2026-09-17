@@ -2,6 +2,15 @@
 
 Project code: FVID
 
+### FVID · 2026-09-17 · FVID-2026-09-17-bf16-attention-probs
+- Trigger: after flash SDPA was rejected (FVID-2026-09-17-flash-sdpa-rejected), the dominant remaining cost in a clip-scale forward was dense attention's probability matrix (`bh*sq*sk`), written by softmax and read back by the `P@V` GEMM
+- Options: leave it; store probabilities as bf16; also store pre-softmax scores as bf16; rewrite attention with two-level tiling; port VSA
+- Decision: **probabilities are stored as bf16 under `GemmMath::Bf16`** (`FASTVIDEO_ATTN_PROBS_BF16=0` opts out; exact mode unchanged). New `softmax_last_bf16` kernel writes them directly — three passes over the f32 scores (max, sum, write) rather than keeping f32 exponentials, since a 48k-wide row cannot live in shared memory — `V` is cast once per call, and `gemm_raw` gained an A/B dtype parameter so `P@V` takes bf16 operands with an F32 result. Pre-softmax scores stay F32: bf16 there perturbs `exp()` by ~2% at score magnitudes around 10, far above the fast-mode error budget.
+- Reason: under `CUBLAS_COMPUTE_32F_FAST_16BF` cuBLAS already rounds F32 operands to bf16 for the tensor-core op, so materialising the probabilities as bf16 is the same arithmetic over half the bytes — a pure traffic win, not a precision trade
+- Reversibility: cheap (one env flag; exact mode never takes the path)
+- Executed by: Executor
+- Verification: same-instance A/B on 51338983 (sm_86), runs `20260917T190610Z-clip` (F32, via `FV_STAGE_ENV="FASTVIDEO_ATTN_PROBS_BF16=0"`) and `20260917T193716Z-clip` (bf16), 22 stages PASS each. **8s clip denoise 128.5 s → 82.7 s (-35.6%)**, 42.8 → 27.6 s/step; total clip 161.9 s → 115.8 s. Forward gain grows with sequence: 5.4% at 1,456 tokens, 15.3% at 4,368, 24.8% at 13,104. Peak denoise memory 9,859 → 9,539 MiB; probe peak 7,427 → 5,827 MiB. Accuracy unmoved: parity fast rel_l2 0.004515 → 0.004498, exact bit-identical at 2.355890268907824e-6; fast-vs-exact step-1 0.0166 → 0.0180 (gate 0.05), final 0.2035 → 0.2114 (gate 0.35), 24.06 → 23.69 dB (gate 20). New `softmax_bf16` kernel check: rel_l2 8e-4–1.9e-3 vs an f64 reference. Cost $0.183 for both halves.
+
 ### FVID · 2026-09-17 · FVID-2026-09-17-flash-sdpa-rejected
 - Trigger: at 48k tokens (8s clip) a DiT forward costs ~43 s with the default dense SDPA, and attention dominates; the opt-in `flash_attn_f32` kernel was never measured at clip scale, so `FASTVIDEO_SDPA=flash` was A/B'd on a pinned RTX A5000 against run `20260917T175630Z-clip`
 - Options: adopt flash as default; tune the existing kernel; rewrite it with query tiling + tensor cores; keep dense and cut its memory traffic; port upstream VSA sparse attention
