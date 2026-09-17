@@ -213,12 +213,19 @@ extern "C" __global__ void add_bias_last(float* out, const float* bias, int n, i
     int i = blockIdx.x * blockDim.x + threadIdx.x;
     if (i < n) out[i] += bias[i % width];
 }
-// Cast f32 -> bf16 bits stored as ushort.
+// Cast f32 -> bf16 bits stored as ushort. bfloat16 = f32's sign + 8-bit
+// exponent + top 7 mantissa bits; round to nearest on the dropped bits (plain
+// truncation biases every value toward zero). Carry into the exponent is the
+// correct round-up; inf/NaN and the largest finite value are left unrounded.
 extern "C" __global__ void f32_to_bf16(const float* a, unsigned short* out, int n) {
     int i = blockIdx.x * blockDim.x + threadIdx.x;
     if (i < n) {
         unsigned int u = __float_as_uint(a[i]);
-        out[i] = (unsigned short)(u >> 16);
+        unsigned int hi = u >> 16;
+        if ((u & 0x8000u) != 0u && (hi & 0x7F80u) != 0x7F80u && (hi & 0x7FFFu) != 0x7F7Fu) {
+            hi += 1u;
+        }
+        out[i] = (unsigned short)hi;
     }
 }
 extern "C" __global__ void bf16_to_f32(const unsigned short* a, float* out, int n) {
@@ -313,8 +320,9 @@ extern "C" __global__ void rope_interleaved(
     int base = row * dim + (j << 1);
     float x1 = x[base];
     float x2 = x[base + 1];
+    // Matches transformer::apply_rotary: cos from the even slot, sin from the odd slot.
     float c = cos[base];
-    float s = sin[base];
+    float s = sin[base + 1];
     out[base] = x1 * c - x2 * s;
     out[base + 1] = x1 * s + x2 * c;
 }

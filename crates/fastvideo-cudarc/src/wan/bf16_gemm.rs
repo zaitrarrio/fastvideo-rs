@@ -198,6 +198,9 @@ mod cuda_impl {
         if x_f32.len() != m * k || w_bf16.len() != n * k {
             return Err(DeviceError::Message("bf16 linear size mismatch".into()));
         }
+        // The GEMM reads the BF16 copy of X, so it must be (re)cast on every
+        // call: the buffer is scratch storage, never a cache of X's values.
+        cast_f32_to_bf16_inplace(x_f32, bits_u16)?;
         let mut c = dev.stream.alloc_zeros::<f32>(m * n)?;
         let alpha = 1.0f32;
         let beta = 0.0f32;
@@ -261,6 +264,7 @@ mod cuda_impl {
                 "bf16-output linear buffer size mismatch".into(),
             ));
         }
+        cast_f32_to_bf16_inplace(x_f32, bits_u16)?;
         // Ensure c_bf16 is zeroed (cublasGemmEx doesn't auto-zero on first use with beta=0,
         // but we want deterministic values; the caller passes an empty zeroed slice).
         let alpha = 1.0f32;
