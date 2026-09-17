@@ -16,7 +16,7 @@ set -euo pipefail
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 
 BUILDER_IMAGE="${FV_BUILDER_IMAGE:-fastvideo-rs/gpucheck-builder:cu124}"
-RUNTIME_IMAGE="${FV_RUNTIME_IMAGE:-fastvideo-rs/gpucheck:cu124}"
+RUNTIME_IMAGE="${FV_RUNTIME_IMAGE:-fastvideo-rs-runtime:local}"
 DOCKERFILE="$FV_ROOT/docker/gpucheck.Dockerfile"
 DIST="$FV_ROOT/artifacts/gpucheck/dist"
 REFS="$FV_ROOT/artifacts/gpucheck/refs"
@@ -135,7 +135,9 @@ cmd_image() {
   cmd_dist
   require_docker
   log "building $RUNTIME_IMAGE"
-  docker build --platform "$PLATFORM" -f "$DOCKERFILE" --target runtime -t "$RUNTIME_IMAGE" "$DIST" >&2
+  # Same Dockerfile CI publishes to GHCR; reuse the local dist binary instead of recompiling.
+  docker buildx build --platform "$PLATFORM" -f "$DOCKERFILE" --target runtime \
+    --build-context binary="$DIST" -t "$RUNTIME_IMAGE" --load "$FV_ROOT" >&2
 }
 
 cmd_gpu() {
@@ -151,7 +153,7 @@ cmd_gpu() {
     -v "$out:/work/out" \
     -v "${HF_HOME:-$HOME/.cache/huggingface}:/hf:ro" \
     -e FV_GIT_SHA="$(fv_build_id)" \
-    "$RUNTIME_IMAGE" --out /work/out "$@"
+    "$RUNTIME_IMAGE" /opt/fastvideo-rs/target/release/fv-gpucheck --out /work/out "$@"
 }
 
 # Tests source this file for helpers.

@@ -1,0 +1,11 @@
+# Keep build contexts small and secret-free.
+target
+target-linux
+artifacts
+outputs
+.git
+.env
+.env.*
+!.env.example
+*.zip
+**/*.safetensors

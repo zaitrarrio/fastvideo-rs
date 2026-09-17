@@ -1,0 +1,80 @@
+# Builds the GPU validation runtime image (fv-gpucheck + CUDA runtime libraries)
+# and pushes it to GHCR, so rented GPU boxes pull a small prebuilt image instead
+# of a ~9GB PyTorch image plus an upload. See scripts/gpu/README.md.
+name: gpucheck-runtime-image
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - "crates/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "rust-toolchain.toml"
+      - "docker/gpucheck.Dockerfile"
+      - ".dockerignore"
+      - "scripts/gpu/**"
+      - ".github/workflows/gpucheck-runtime-image.yml"
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: gpucheck-runtime-image-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  image:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build id and image name
+        id: meta
+        run: |
+          # Same hash scripts/gpu/validate.sh uses to match a box's binary to local sources.
+          echo "build_id=$(bash scripts/gpu/docker.sh build-id)" >> "$GITHUB_OUTPUT"
+          echo "image=ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/fastvideo-rs-runtime" >> "$GITHUB_OUTPUT"
+          echo "short_sha=${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: docker/gpucheck.Dockerfile
+          target: runtime
+          platforms: linux/amd64
+          push: true
+          build-args: |
+            BUILD_ID=${{ steps.meta.outputs.build_id }}
+          tags: |
+            ${{ steps.meta.outputs.image }}:build-${{ steps.meta.outputs.build_id }}
+            ${{ steps.meta.outputs.image }}:sha-${{ steps.meta.outputs.short_sha }}
+            ${{ steps.meta.outputs.image }}:latest
+          labels: |
+            org.opencontainers.image.revision=${{ github.sha }}
+            dev.fastvideo.build-id=${{ steps.meta.outputs.build_id }}
+          cache-from: type=gha,scope=gpucheck-runtime
+          cache-to: type=gha,mode=max,scope=gpucheck-runtime
+
+      - name: Smoke-check the pushed image (no GPU)
+        run: |
+          img="${{ steps.meta.outputs.image }}:build-${{ steps.meta.outputs.build_id }}"
+          docker pull "$img"
+          docker run --rm "$img" bash -euo pipefail -c '
+            test "$(cat target/release/fv-gpucheck.build-id)" = "${{ steps.meta.outputs.build_id }}"
+            python3 -c "import ctypes; [ctypes.CDLL(l) for l in (\"libnvrtc.so.12\", \"libcublasLt.so.12\", \"libcublas.so.12\", \"libcudnn.so.9\")]"
+            ./target/release/fv-gpucheck --out /tmp/out nvrtc'
+          docker image inspect "$img" --format 'size={{.Size}}'
+          echo "::notice title=GPU runtime image::$img"

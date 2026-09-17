@@ -1,14 +1,18 @@
 # syntax=docker/dockerfile:1.7
-# fv-gpucheck images. Driven by scripts/gpu/docker.sh; see scripts/gpu/README.md.
+# fv-gpucheck images. Built locally by scripts/gpu/docker.sh and in CI by
+# .github/workflows/gpucheck-runtime-image.yml; see scripts/gpu/README.md.
 #
-# builder  Ubuntu 22.04 (same glibc as the Vast pytorch image the binary ships
-#          to) + Rust + NVRTC 12.4. Builds `fv-gpucheck --features cuda`
-#          without a CUDA toolkit (cudarc loads CUDA libraries at runtime) and
+# builder  Ubuntu 22.04 + Rust + NVRTC 12.4. Builds `fv-gpucheck --features cuda`
+#          without a CUDA toolkit (cudarc loads CUDA libraries at run time) and
 #          runs everything that needs no GPU: unit tests, the NVRTC compile
 #          gate, CPU-path reference dumps.
-# runtime  CUDA 12.4 + cuDNN runtime + the prebuilt binary. Runs every GPU
-#          stage on any Linux host with the NVIDIA Container Toolkit:
-#          `docker run --gpus all ...`. (No GPU passthrough on macOS.)
+# build    Compiles the release binary from the repo (CI path).
+# binary   The binary + build id. Locally overridden with
+#          `--build-context binary=artifacts/gpucheck/dist` to reuse `docker.sh dist`.
+# runtime  What a GPU box runs (ghcr.io/zaitrarrio/fastvideo-rs-runtime): Ubuntu
+#          22.04 + only the CUDA libraries cudarc loads (pinned NVIDIA wheels) +
+#          rsync/ffmpeg/HF downloader + the binary and scripts. No PyTorch, no
+#          toolkit: ~1.5GB compressed instead of ~9GB, so hosts boot quickly.
 
 FROM ubuntu:22.04 AS builder
 ARG DEBIAN_FRONTEND=noninteractive
@@ -36,17 +40,45 @@ ENV CUDARC_CUDA_VERSION=12040 \
     CARGO_PROFILE_RELEASE_PANIC=unwind
 WORKDIR /src
 
-FROM nvidia/cuda:12.4.1-cudnn-runtime-ubuntu22.04 AS runtime
+FROM builder AS build
+ARG BUILD_ID=unknown
+COPY . /src
+RUN --mount=type=cache,target=/usr/local/cargo/registry \
+    --mount=type=cache,target=/target \
+    cargo build --release -p fastvideo-gpucheck --features cuda \
+ && mkdir -p /out \
+ && cp /target/release/fv-gpucheck /out/fv-gpucheck \
+ && echo "$BUILD_ID" > /out/fv-gpucheck.build-id
+
+FROM scratch AS binary
+COPY --from=build /out/ /
+
+FROM ubuntu:22.04 AS runtime
 ARG DEBIAN_FRONTEND=noninteractive
+# Pinned to what the GPU ladder was validated against. cuDNN must be >= the
+# version whose symbols cudarc 0.17 binds (the 9.1 in PyTorch/CUDA images is too old).
+ARG NVRTC_VERSION=12.4.127
+ARG CUBLAS_VERSION=12.4.5.8
+ARG CUDNN_VERSION=9.26.0.51
 RUN apt-get update \
- && apt-get install -y --no-install-recommends ffmpeg python3-pip ca-certificates \
+ && apt-get install -y --no-install-recommends \
+      python3 python3-pip rsync ffmpeg openssh-server ca-certificates curl \
  && rm -rf /var/lib/apt/lists/* \
- && pip3 install --no-cache-dir 'huggingface_hub[hf_transfer]' \
- && pip3 install --no-cache-dir --no-deps --target /opt/fv-cudnn 'nvidia-cudnn-cu12==9.26.0.51' \
- && ln -sf /opt/fv-cudnn/nvidia/cudnn/lib/libcudnn.so.9 /opt/fv-cudnn/nvidia/cudnn/lib/libcudnn.so
-# cudarc 0.17's cuDNN bindings need symbols newer than the base image's cuDNN 9.1.
-ENV LD_LIBRARY_PATH=/opt/fv-cudnn/nvidia/cudnn/lib:${LD_LIBRARY_PATH}
-COPY fv-gpucheck fv-gpucheck.build-id /usr/local/bin/
-ENV FV_BUILD_ID_FILE=/usr/local/bin/fv-gpucheck.build-id
-WORKDIR /work
-ENTRYPOINT ["/usr/local/bin/fv-gpucheck"]
+ && pip3 install --no-cache-dir --no-deps --target /opt/nvidia-libs \
+      "nvidia-cuda-nvrtc-cu12==${NVRTC_VERSION}" \
+      "nvidia-cublas-cu12==${CUBLAS_VERSION}" \
+      "nvidia-cudnn-cu12==${CUDNN_VERSION}" \
+ && pip3 install --no-cache-dir huggingface_hub hf_transfer \
+ && ls -d /opt/nvidia-libs/nvidia/*/lib > /etc/ld.so.conf.d/fastvideo-nvidia.conf \
+ && ldconfig \
+ && ldconfig -p | grep -E 'libnvrtc\.so|libcublasLt\.so|libcublas\.so|libcudnn\.so' \
+ && mkdir -p /run/sshd
+# The NVIDIA container runtime injects the driver (libcuda) when these are set.
+ENV NVIDIA_VISIBLE_DEVICES=all \
+    NVIDIA_DRIVER_CAPABILITIES=compute,utility
+COPY scripts/gpu /opt/fastvideo-rs/scripts/gpu
+COPY --from=binary /fv-gpucheck /fv-gpucheck.build-id /opt/fastvideo-rs/target/release/
+LABEL org.opencontainers.image.source="https://github.com/zaitrarrio/fastvideo-rs" \
+      org.opencontainers.image.description="fastvideo-rs cudarc GPU validation runtime (fv-gpucheck + CUDA runtime libraries)" \
+      org.opencontainers.image.licenses="Apache-2.0"
+WORKDIR /opt/fastvideo-rs
