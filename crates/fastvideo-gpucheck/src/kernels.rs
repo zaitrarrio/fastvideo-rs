@@ -592,7 +592,7 @@ pub fn run(report: &mut Report, lim: Limits, seed: u64) -> StageResult<()> {
         let refused = x.sqrt().is_err();
         c.report.check("sqrt_refuses_host_compute", refused, json!({"refused": refused}), json!({}))?;
         let a = t(c.rand(6, 1.0), &[2, 1, 3])?;
-        let b = t(c.rand(8, 1.0), &[1, 4, 1])?;
+        let b = t(c.rand(4, 1.0), &[1, 4, 1])?;
         let refused = a.mul(&b).is_err();
         c.report.check("generic_broadcast_refuses_host_compute", refused, json!({"refused": refused}), json!({}))?;
         Ok(())
