@@ -1,0 +1,171 @@
+# Milestones
+
+Chronological record of what shipped, what it cost, and what each step proved.
+
+All times are **local (CDT, UTC−5)** to match `git log`. Run IDs under
+`artifacts/gpucheck/runs/` are UTC, so `175630Z` is 12:56 here. For *why* a
+choice was made rather than *what* changed, see
+[decision-log.md](../decision-log.md) and [docs/adr](adr/).
+
+## 2026-09-09 — Scaffold to first frames
+
+| Commit | Milestone |
+| --- | --- |
+| `a47b2d0` | Phase 0 workspace scaffolded |
+| `bd1aa2a` | Wan transformer, UMT5 and VAE land; PNG output |
+| `d6d9dd5` | Candle CUDA inference for Vast.ai GPUs |
+| `bfeb341` | Docker CUDA builder and Vast cargo cache |
+| `6ae69d7` | fastvideo-ops integrated for tensor operations |
+| `f697f5b` | I2V support |
+| `ceead5b` | Benchmarking for video generation |
+
+## 2026-09-17, 00:22–04:56 — cudarc becomes the primary path
+
+| Commit | Milestone |
+| --- | --- |
+| `524e930` | Full Wan modules on the cudarc backend |
+| `0b7a6ec`, `aef03dd`, `9aefb63` | GPU-optimized Wan pipeline: flash attention, BF16 FFN, fused kernels, plus an A100 smoke suite |
+| `6dc5e8b` | A100 smoke suite retired in favour of a real check harness |
+| `2c9cb1e` | **`fastvideo-gpucheck` crate** — staged, fail-fast GPU validation |
+
+The harness shape that made everything afterwards cheap: rent the smallest
+capable GPU, run stages in order, stop at the first failure, pull artifacts,
+destroy the instance. Tiers are `kernels` (T1), `parity` (T2), `clip` (T3).
+
+## 2026-09-17, 05:10–08:03 — Harness hardening, T1 and T2 go green
+
+Harness work and paid runs interleaved, each failure feeding the next fix.
+
+| Commit | Milestone |
+| --- | --- |
+| `feb9637`, `09794b3` | Docker and GPU scripts; cuDNN integration |
+| `13e5d6a` | BF16 casting and kernel accuracy fixes |
+| `0178839`, `e329d01` | **GHCR runtime image built in CI**; renting skips known-bad hosts |
+| `198b663` | Device-fresh tensors read through `host_cow` in host fallbacks |
+| `db9cb8f` | **Every test emits an mp4 and a generation time**; CPU reference runs in parallel |
+| `a8ab946` | No flash attention above head dim 128 |
+
+**T1 kernels tier** — seven runs to green:
+
+| Run (UTC id) | Local | Result | Cost |
+| --- | --- | --- | ---: |
+| `101246Z` … `120552Z` (6 runs) | 05:12–07:05 | fail | $0.109 |
+| `121607Z` | 07:16 | **pass**, 9 stages, 6 min | $0.007 |
+
+**T2 parity tier** — real 1.3B weights against a CPU reference:
+
+| Run | Local | Result | Cost |
+| --- | --- | --- | ---: |
+| `122337Z` | 07:23 | pass, 11 stages | $0.044 |
+| `124601Z` | 07:46 | fail (RTX A4000) | $0.036 |
+| `130350Z` | 08:03 | **pass**, 14 stages, 37 min | $0.112 |
+
+Correct, but slow. Baseline on an RTX 5060 Ti:
+
+| | exact |
+| --- | ---: |
+| DiT forward | 5.263 s |
+| VAE decode | 27.570 s |
+| UniPC 2-step | 18.642 s |
+| UniPC video | 46.189 s |
+
+## 2026-09-17, 11:19 — The performance pass
+
+`7566769` — *device-only tensors, fused kernels, cuDNN conv3d, upstream
+samplers.* The single largest change in the project:
+
+- **Device-only tensors.** `CudaTensor` keeps a host copy only while it is valid; `pin_device` frees it. No host round trip inside a forward pass.
+- **30 fused NVRTC kernels**, including `qk_norm_rope_bhsd`, `ln_adaln_e`, `residual_gate_add_e`, `gather_nd`, `block_copy`.
+- **cuDNN N-D convolution** with a shape-keyed plan cache, plus a temporal-unfold alternative.
+- **Upstream-aligned samplers** — DMD corrections and UniPC order-2.
+- **No CPU fallback.** `stats::host_fallback` errors whenever a device is expected, so a missing device path fails loudly instead of quietly computing on the host.
+
+Verified on the same RTX 5060 Ti (run `162416Z`, 11:24, 14 stages, $0.046):
+
+| | before | after | speedup |
+| --- | ---: | ---: | ---: |
+| DiT forward | 5.263 s | 0.112 s | **47×** |
+| VAE decode | 27.570 s | 0.186 s | **148×** |
+| UniPC 2-step | 18.642 s | 0.446 s | **42×** |
+| UniPC video | 46.189 s | 0.632 s | **73×** |
+
+## 2026-09-17, 11:23–11:51 — Cheap runs, honest references
+
+| Commit | Milestone |
+| --- | --- |
+| `c48b99f` | Broadcast-refusal tensor sized to its shape — a test bug that had failed a paid run |
+| `2cd3161` | **CPU references cached by source hash.** The 648 s CPU parity reference is computed once per source key and restored on later runs; GPU-only files are excluded from the key, so kernel work never invalidates it |
+| `5c03514` | **cuBLAS math probe tier**; the UMT5 embedding table stays on host |
+
+## 2026-09-17, 11:50–12:03 — The cuBLAS 12.4 discovery
+
+Fast mode was producing output **bit-identical** to exact mode, which meant bf16
+was never running. The math probe tier (runs `165231Z`, `165241Z`) timed each
+GEMM math option against FP32 and compared the results:
+
+- **cuBLAS 12.4 predates Blackwell.** It silently ignored TF32 and BF16 compute types, and its FP32 was 2.6× slower than it should be.
+- **cuBLAS 12.9 honours them**, and bf16 buffers give roughly 4× FP32 throughput.
+
+`c5ca5a9` made fast mode store and multiply real bf16 buffers and required
+cuBLAS 12.9, with bootstrap auto-installing it.
+
+## 2026-09-17, 12:32 — Per-shape conv3d backend selection
+
+`d70e13c` — cuDNN and temporal unfold each win on different hardware, different
+shapes, and the ranking flips with the math mode:
+
+| | exact | fast |
+| --- | --- | --- |
+| A5000, VAE shapes | unfold, ~18 ms vs 35 ms | cuDNN, ~8.5 ms (TF32) |
+| Blackwell | cuDNN 33 ms vs unfold 53 ms | — |
+
+The cache times both once per shape — keyed on shape *and* math flag — then
+keeps the winner.
+
+## 2026-09-17, 12:04–12:56 — T3 clip tier: 8-second videos
+
+| Run | Local | Result |
+| --- | --- | --- |
+| `170404Z` | 12:04 | fail, 7 stages — cast-length test bug |
+| `173304Z` | 12:33 | fail, 22 stages — every stage passed except the final fast-vs-exact compare |
+| `175630Z` | 12:56 | **pass**, 22 stages, 19 min, $0.066 |
+
+**The compare failure was a bad gate, not a bad kernel.** Its limits (rel_l2
+0.15, 30 dB) were set while fast mode was silently FP32, so they had never been
+measured against real bf16. The divergence was even across every latent frame
+with no growth along the sequence, concentrated in high frequencies, and both
+contact sheets showed the same scene and motion — trajectory drift, not a bug.
+
+`9bb8bf6` split the gate to match the physics:
+
+- **Step-1 latents, rel_l2 ≤ 0.05.** Both paths start step 1 from identical noise, so this isolates single-forward bf16 error. Measured: **0.022**.
+- **Final latents and frames, loose.** Over 3 DMD steps that error compounds ~10× to 0.23 (23 dB); the limits are now 0.35 and 20 dB.
+
+`eba8263` fixed clip retention: the per-stage pull excluded `clips/*/frames`,
+where `output.mp4` lives, so clips only arrived at teardown and were lost if a
+run died first. Clips now land in `artifacts/clips/<run>/` as each stage
+completes.
+
+### Final numbers — RTX A5000, real 1.3B weights
+
+| | exact | fast | speedup |
+| --- | ---: | ---: | ---: |
+| DiT forward | 52 ms | 20 ms | 2.6× |
+| VAE decode | 147 ms (131 dB) | 53 ms (74 dB) | 2.8× |
+| UniPC 2-step | 214 ms | 85 ms | 2.5× |
+
+**8-second clips** — 448×832, 129 frames, DMD 3 steps, fast mode, 48k tokens per
+forward pass:
+
+| clip | denoise | VAE | total |
+| --- | ---: | ---: | ---: |
+| beach_dog | 152.8 s (50.9 s/step) | 27.6 s | 197.1 s |
+| city_rain | 153.2 s (51.1 s/step) | 27.7 s | 198.5 s |
+
+About 24.5 s of compute per second of video, on a $0.20/hr GPU.
+
+## Totals
+
+- **21 validation runs**, **$0.609** of GPU time end to end.
+- A full T3 tier — kernels, models, parity, text encoding, two 8s clips and a precision comparison — costs **$0.066** and 19 minutes.
+- Cached CPU references save 648 s of billed CPU work per run.
