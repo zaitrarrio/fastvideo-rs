@@ -543,6 +543,34 @@ pub fn matmul_linear_wt_strided_batched(
     unsafe { gemm_raw(&dev, true, n, m, k, scale, wp, k, n * k, xp, k, m * k, cp, n, m * n, batch) }
 }
 
+/// [`matmul_linear_wt_strided_batched`] with bf16 operands and an F32 result:
+/// VSA's `Q @ K^T` over gathered tiles.
+#[cfg(feature = "cuda")]
+#[allow(clippy::too_many_arguments)]
+pub fn matmul_linear_wt_strided_batched_bf16(
+    x: &cudarc::driver::CudaSlice<half::bf16>,
+    w: &cudarc::driver::CudaSlice<half::bf16>,
+    out: &mut cudarc::driver::CudaSlice<f32>,
+    batch: usize,
+    m: usize,
+    k: usize,
+    n: usize,
+    scale: f32,
+) -> Result<()> {
+    use cudarc::driver::{DevicePtr, DevicePtrMut};
+    let dev = global_device().ok_or_else(no_device)?;
+    size_check(
+        "strided wt gemm (bf16)",
+        x.len() == batch * m * k && w.len() == batch * n * k && out.len() == batch * m * n,
+        || format!("x={} w={} out={} batch={batch} m={m} k={k} n={n}", x.len(), w.len(), out.len()),
+    )?;
+    let (wp, _rw) = w.device_ptr(&dev.stream);
+    let (xp, _rx) = x.device_ptr(&dev.stream);
+    let (cp, _rc) = out.device_ptr_mut(&dev.stream);
+    let bf = cudarc::cublas::sys::cudaDataType_t::CUDA_R_16BF;
+    unsafe { gemm_raw_ty(&dev, true, n, m, k, scale, wp, k, n * k, xp, k, m * k, cp, n, m * n, batch, bf) }
+}
+
 /// Strided-batched row-major `(m,k) @ (k,n)` over `batch` tiles (attention `P @ V`).
 #[cfg(feature = "cuda")]
 pub fn matmul_2d_strided_batched(

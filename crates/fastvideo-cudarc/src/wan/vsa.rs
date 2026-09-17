@@ -242,6 +242,76 @@ pub fn vsa_attention_host(
     Ok(out)
 }
 
+/// VSA on device, `[b, heads, seq, dim]` in and out.
+///
+/// The fine stage gathers each query tile's selected K/V into a dense buffer
+/// and runs a batched GEMM, rather than a fused attention kernel: it reuses the
+/// bf16 tensor-core path, and the gather still moves far less than dense
+/// attention's score matrix. Query tiles are processed in groups so the
+/// gathered buffer stays bounded.
+#[cfg(feature = "cuda")]
+#[allow(clippy::too_many_arguments)]
+pub fn vsa_attention_device(
+    q: &cudarc::driver::CudaSlice<f32>,
+    k: &cudarc::driver::CudaSlice<f32>,
+    v: &cudarc::driver::CudaSlice<f32>,
+    gate: Option<&cudarc::driver::CudaSlice<f32>>,
+    plan: &super::ops::VsaPlanDev,
+    topk: usize,
+    bh: usize,
+    seq: usize,
+    dim: usize,
+    scale: f32,
+    group: usize,
+) -> Result<cudarc::driver::CudaSlice<f32>> {
+    use super::{device, ops};
+    let nb = plan.num_tiles;
+    let topk = topk.clamp(1, nb);
+    let err = |e: device::DeviceError| TensorError::Message(e.to_string());
+
+    // 1. Tile means, then coarse attention over tiles.
+    let (qc, kc, vc) = (
+        ops::vsa_tile_mean_device(q, plan, bh, seq, dim)?,
+        ops::vsa_tile_mean_device(k, plan, bh, seq, dim)?,
+        ops::vsa_tile_mean_device(v, plan, bh, seq, dim)?,
+    );
+    let mut scores = ops::alloc(bh * nb * nb)?;
+    device::matmul_linear_wt_strided_batched(&qc, &kc, &mut scores, bh, nb, dim, nb, scale).map_err(err)?;
+    let probs = ops::softmax_last_device(&scores, nb)?;
+    let mut coarse = ops::alloc(bh * nb * dim)?;
+    device::matmul_2d_strided_batched(&probs, &vc, &mut coarse, bh, nb, nb, dim).map_err(err)?;
+
+    // 2. Tiles to attend to, from the same coarse scores (pre-softmax order is
+    //    the same, but top-k on the raw scores matches upstream).
+    let selected = ops::vsa_topk_device(&scores, bh * nb, nb, topk)?;
+    drop(probs);
+    drop(scores);
+
+    // 3. Fine stage, a group of query tiles at a time.
+    let mut out = ops::fill_device(bh * seq * dim, 0.0)?;
+    let len = topk * plan.tile_elems;
+    let group = group.clamp(1, nb);
+    let mut q_base = 0usize;
+    while q_base < nb {
+        let g = group.min(nb - q_base);
+        let (kg, vg) = ops::vsa_gather_kv_device(k, v, &selected, plan, bh, g, seq, dim, topk, q_base)?;
+        // Queries for these tiles, in padded slot order.
+        let qt = ops::vsa_gather_q_device(q, plan, bh, g, q_base, seq, dim)?;
+        let rows = plan.tile_elems;
+        let mut s = ops::alloc(bh * g * rows * len)?;
+        device::matmul_linear_wt_strided_batched_bf16(&qt, &kg, &mut s, bh * g, rows, dim, len, scale)
+            .map_err(err)?;
+        ops::vsa_mask_pad_device(&mut s, &selected, plan, bh, g, rows, topk, q_base)?;
+        let p = ops::softmax_last_bf16_device(&s, len)?;
+        drop(s);
+        let mut sparse = ops::alloc(bh * g * rows * dim)?;
+        device::matmul_2d_strided_batched_bf16(&p, &vg, &mut sparse, bh * g, rows, len, dim).map_err(err)?;
+        ops::vsa_combine_device(&sparse, &coarse, gate, plan, &mut out, bh, g, q_base, seq, dim)?;
+        q_base += g;
+    }
+    Ok(out)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

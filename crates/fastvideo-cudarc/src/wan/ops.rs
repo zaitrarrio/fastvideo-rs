@@ -14,6 +14,8 @@ use super::device::{self, DeviceContext};
 #[cfg(feature = "cuda")]
 use super::kernels::{cfg_n, cfg_rows, launch};
 #[cfg(feature = "cuda")]
+use cudarc::driver::LaunchConfig;
+#[cfg(feature = "cuda")]
 use super::tensor::TensorError;
 use super::tensor::{CudaTensor, Result};
 
@@ -530,6 +532,209 @@ pub fn index_select_rows_device(table: &CudaSlice<f32>, d: usize, indices: &[u32
     let mut out = alloc(n)?;
     launch!(dev.stream, &dev.kernels.index_select_rows, cfg_n(n); table, &idx, &mut out, &n_i, &d_i).map_err(err)?;
     Ok(out)
+}
+
+// ---- Video Sparse Attention -------------------------------------------------
+
+/// Device-side tiling geometry, uploaded once per latent grid and reused by
+/// every VSA layer and step.
+#[cfg(feature = "cuda")]
+pub struct VsaPlanDev {
+    pub slot_src: CudaSlice<i32>,
+    pub block_sizes: CudaSlice<i32>,
+    pub num_tiles: usize,
+    pub tile_elems: usize,
+}
+
+#[cfg(feature = "cuda")]
+pub fn vsa_plan_upload(slot_src: &[i32], block_sizes: &[u32], tile_elems: usize) -> Result<VsaPlanDev> {
+    let dev = ctx()?;
+    let sizes: Vec<i32> = block_sizes.iter().map(|&n| n as i32).collect();
+    let out = VsaPlanDev {
+        slot_src: dev.stream.memcpy_stod(slot_src).map_err(err)?,
+        block_sizes: dev.stream.memcpy_stod(&sizes).map_err(err)?,
+        num_tiles: block_sizes.len(),
+        tile_elems,
+    };
+    super::stats::record_h2d(slot_src.len() + sizes.len());
+    Ok(out)
+}
+
+/// Per-tile means of a token-indexed `[bh, seq, dim]` tensor.
+#[cfg(feature = "cuda")]
+pub fn vsa_tile_mean_device(
+    x: &CudaSlice<f32>,
+    plan: &VsaPlanDev,
+    bh: usize,
+    seq: usize,
+    dim: usize,
+) -> Result<CudaSlice<f32>> {
+    check("vsa_tile_mean", x.len() == bh * seq * dim && dim > 0)?;
+    let dev = ctx()?;
+    let mut out = alloc(bh * plan.num_tiles * dim)?;
+    let cfg = LaunchConfig {
+        grid_dim: (plan.num_tiles as u32, bh as u32, 1),
+        block_dim: (dim.min(256) as u32, 1, 1),
+        shared_mem_bytes: 0,
+    };
+    let (seq_i, dim_i) = (seq as i64, dim as i32);
+    let (nt, te) = (plan.num_tiles as i32, plan.tile_elems as i32);
+    launch!(dev.stream, &dev.kernels.vsa_tile_mean, cfg;
+        x, &plan.slot_src, &plan.block_sizes, &mut out, &seq_i, &dim_i, &nt, &te)
+    .map_err(err)?;
+    Ok(out)
+}
+
+/// Top-k column indices per score row, `[rows, k]`.
+#[cfg(feature = "cuda")]
+pub fn vsa_topk_device(scores: &CudaSlice<f32>, rows: usize, n: usize, k: usize) -> Result<CudaSlice<u32>> {
+    check("vsa_topk", n > 0 && k > 0 && k <= n && scores.len() == rows * n)?;
+    let dev = ctx()?;
+    let mut out = unsafe { dev.stream.alloc::<u32>((rows * k).max(1)) }.map_err(err)?;
+    const THREADS: u32 = 256;
+    let cfg = LaunchConfig {
+        grid_dim: (rows as u32, 1, 1),
+        block_dim: (THREADS, 1, 1),
+        shared_mem_bytes: THREADS * std::mem::size_of::<i32>() as u32,
+    };
+    let (rows_i, n_i, k_i) = (rows as i32, n as i32, k as i32);
+    launch!(dev.stream, &dev.kernels.vsa_topk, cfg; scores, &mut out, &rows_i, &n_i, &k_i).map_err(err)?;
+    Ok(out)
+}
+
+/// Gather the selected tiles' K/V rows into `[bh, group, topk*tile, dim]` bf16.
+#[cfg(feature = "cuda")]
+#[allow(clippy::too_many_arguments)]
+pub fn vsa_gather_kv_device(
+    k: &CudaSlice<f32>,
+    v: &CudaSlice<f32>,
+    selected: &CudaSlice<u32>,
+    plan: &VsaPlanDev,
+    bh: usize,
+    group: usize,
+    seq: usize,
+    dim: usize,
+    topk: usize,
+    q_base: usize,
+) -> Result<(CudaSlice<half::bf16>, CudaSlice<half::bf16>)> {
+    let dev = ctx()?;
+    let len = topk * plan.tile_elems;
+    let n = bh * group * len * dim;
+    let mut kg = unsafe { dev.stream.alloc::<half::bf16>(n.max(1)) }.map_err(err)?;
+    let mut vg = unsafe { dev.stream.alloc::<half::bf16>(n.max(1)) }.map_err(err)?;
+    // One thread row per gathered slot; x covers dim.
+    let rows_per_block = (256 / dim.min(128)).max(1);
+    let cfg = LaunchConfig {
+        grid_dim: (len.div_ceil(rows_per_block) as u32, group as u32, bh as u32),
+        block_dim: (dim.min(128) as u32, rows_per_block as u32, 1),
+        shared_mem_bytes: 0,
+    };
+    let (seq_i, dim_i) = (seq as i64, dim as i32);
+    let (tk, te, qb, nt) = (topk as i32, plan.tile_elems as i32, q_base as i32, plan.num_tiles as i32);
+    launch!(dev.stream, &dev.kernels.vsa_gather_kv, cfg;
+        k, v, selected, &plan.slot_src, &mut kg, &mut vg, &seq_i, &dim_i, &tk, &te, &qb, &nt)
+    .map_err(err)?;
+    Ok((kg, vg))
+}
+
+/// Gather a group of query tiles into `[bh, group, tile, dim]` bf16, in padded
+/// slot order. Padding slots are zero; `vsa_combine` drops their outputs.
+#[cfg(feature = "cuda")]
+#[allow(clippy::too_many_arguments)]
+pub fn vsa_gather_q_device(
+    q: &CudaSlice<f32>,
+    plan: &VsaPlanDev,
+    bh: usize,
+    group: usize,
+    q_base: usize,
+    seq: usize,
+    dim: usize,
+) -> Result<CudaSlice<half::bf16>> {
+    let dev = ctx()?;
+    let n = bh * group * plan.tile_elems * dim;
+    let mut out = unsafe { dev.stream.alloc::<half::bf16>(n.max(1)) }.map_err(err)?;
+    let rows_per_block = (256 / dim.min(128)).max(1);
+    let cfg = LaunchConfig {
+        grid_dim: (plan.tile_elems.div_ceil(rows_per_block) as u32, group as u32, bh as u32),
+        block_dim: (dim.min(128) as u32, rows_per_block as u32, 1),
+        shared_mem_bytes: 0,
+    };
+    let (seq_i, dim_i) = (seq as i64, dim as i32);
+    let (te, qb) = (plan.tile_elems as i32, q_base as i32);
+    launch!(dev.stream, &dev.kernels.vsa_gather_q, cfg;
+        q, &plan.slot_src, &mut out, &seq_i, &dim_i, &te, &qb)
+    .map_err(err)?;
+    Ok(out)
+}
+
+/// `-inf` the score columns that fall on tile padding.
+#[cfg(feature = "cuda")]
+#[allow(clippy::too_many_arguments)]
+pub fn vsa_mask_pad_device(
+    scores: &mut CudaSlice<f32>,
+    selected: &CudaSlice<u32>,
+    plan: &VsaPlanDev,
+    bh: usize,
+    group: usize,
+    rows_per_tile: usize,
+    topk: usize,
+    q_base: usize,
+) -> Result<()> {
+    let dev = ctx()?;
+    let len = topk * plan.tile_elems;
+    const THREADS: u32 = 128;
+    let cfg = LaunchConfig {
+        grid_dim: (len.div_ceil(THREADS as usize) as u32, group as u32, bh as u32),
+        block_dim: (THREADS, 1, 1),
+        shared_mem_bytes: 0,
+    };
+    let (rpt, tk, te) = (rows_per_tile as i32, topk as i32, plan.tile_elems as i32);
+    let (qb, nt) = (q_base as i32, plan.num_tiles as i32);
+    launch!(dev.stream, &dev.kernels.vsa_mask_pad, cfg;
+        scores, selected, &plan.block_sizes, &rpt, &tk, &te, &qb, &nt)
+    .map_err(err)?;
+    Ok(())
+}
+
+/// Scatter `coarse * gate + sparse` back into token order.
+#[cfg(feature = "cuda")]
+#[allow(clippy::too_many_arguments)]
+pub fn vsa_combine_device(
+    sparse: &CudaSlice<f32>,
+    coarse: &CudaSlice<f32>,
+    gate: Option<&CudaSlice<f32>>,
+    plan: &VsaPlanDev,
+    out: &mut CudaSlice<f32>,
+    bh: usize,
+    group: usize,
+    q_base: usize,
+    seq: usize,
+    dim: usize,
+) -> Result<()> {
+    let dev = ctx()?;
+    let rows_per_block = (256 / dim.min(128)).max(1);
+    let cfg = LaunchConfig {
+        grid_dim: (plan.tile_elems.div_ceil(rows_per_block) as u32, group as u32, bh as u32),
+        block_dim: (dim.min(128) as u32, rows_per_block as u32, 1),
+        shared_mem_bytes: 0,
+    };
+    let (seq_i, dim_i) = (seq as i64, dim as i32);
+    let (te, qb, nt) = (plan.tile_elems as i32, q_base as i32, plan.num_tiles as i32);
+    // The kernel never reads a null gate, but a launch argument still needs a
+    // pointer to bind, so pass a one-element placeholder.
+    let placeholder;
+    let gate_ref = match gate {
+        Some(g) => g,
+        None => {
+            placeholder = alloc(1)?;
+            &placeholder
+        }
+    };
+    let has_gate = i32::from(gate.is_some());
+    launch!(dev.stream, &dev.kernels.vsa_combine, cfg;
+        sparse, coarse, gate_ref, &plan.slot_src, out, &seq_i, &dim_i, &te, &qb, &nt, &has_gate)
+    .map_err(err)?;
+    Ok(())
 }
 
 /// Plain-Rust twins of the device kernels. These are the CPU path, so they

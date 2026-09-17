@@ -12,7 +12,7 @@ use fastvideo_cudarc::wan::device::GemmMath;
 use fastvideo_cudarc::wan::fused::Rope;
 use fastvideo_cudarc::wan::ops::{self, host, BcastOp};
 use fastvideo_cudarc::wan::nn::Linear;
-use fastvideo_cudarc::wan::{attn, conv, device, kernels as k};
+use fastvideo_cudarc::wan::{attn, conv, device, kernels as k, vsa};
 use fastvideo_cudarc::CudaTensor;
 use serde_json::json;
 
@@ -514,6 +514,62 @@ pub fn run(report: &mut Report, lim: Limits, seed: u64) -> StageResult<()> {
             device::matmul_shared_left(&up(&w)?, &up(&x)?, &mut out, batch, oc, ic, s)?;
             let want: Vec<f32> = (0..batch).flat_map(|bi| ref_matmul(&w, &x[bi * ic * s..(bi + 1) * ic * s], oc, ic, s)).collect();
             c.cmp("gemm_shared_left", &down(&out)?, &want, gemm)?;
+        }
+        Ok(())
+    })?;
+
+    group(&mut c, "vsa", |c| {
+        // Grids cover full tiles, a partial tile on every axis, and the real
+        // 8s-clip aspect at reduced depth. Device output is checked against the
+        // host reference, which is itself checked against dense attention.
+        for (grid, heads, dim, sparsity) in [
+            ((4usize, 4usize, 4usize), 2usize, 64usize, 0.0f64),
+            ((2, 3, 5), 2, 64, 0.0),
+            ((5, 6, 9), 3, 128, 0.8),
+            ((9, 8, 13), 2, 128, 0.8),
+        ] {
+            let plan = vsa::TilePlan::new(grid)?;
+            let (b, seq, nb) = (1usize, plan.seq, plan.num_tiles());
+            let topk = vsa::topk_for(sparsity, nb);
+            let bh = b * heads;
+            let n = bh * seq * dim;
+            let (q, k, v, g) = (c.rand(n, 1.0), c.rand(n, 1.0), c.rand(n, 1.0), c.rand(n, 0.5));
+            let scale = 1.0 / (dim as f32).sqrt();
+            let want = vsa::vsa_attention_host(&q, &k, &v, Some(&g), &plan, topk, b, heads, dim, scale)?;
+
+            let dev = dev()?;
+            let (qd, kd, vd, gd) = (
+                dev.stream.memcpy_stod(&q)?,
+                dev.stream.memcpy_stod(&k)?,
+                dev.stream.memcpy_stod(&v)?,
+                dev.stream.memcpy_stod(&g)?,
+            );
+            let plan_dev = ops::vsa_plan_upload(&plan.slot_src, &plan.block_sizes, vsa::TILE_ELEMS)?;
+            // A group smaller than the tile count exercises the chunked loop.
+            for group in [nb, 2.min(nb)] {
+                let got = vsa::vsa_attention_device(
+                    &qd, &kd, &vd, Some(&gd), &plan_dev, topk, bh, seq, dim, scale, group,
+                )?;
+                let host = dev.stream.memcpy_dtov(&got)?;
+                let tag = format!("vsa_{}x{}x{}_h{heads}_d{dim}_k{topk}_g{group}", grid.0, grid.1, grid.2);
+                // bf16 gathers on the fine stage, so this is bf16 round-off.
+                c.cmp(&tag, &host, &want, 2e-2)?;
+            }
+            // Tile means and top-k are exact, so they get tight limits of their own.
+            let qc = ops::vsa_tile_mean_device(&qd, &plan_dev, bh, seq, dim)?;
+            let mut want_mean = vec![0.0f32; bh * nb * dim];
+            for h in 0..bh {
+                for t in 0..nb {
+                    let cnt = plan.block_sizes[t] as usize;
+                    for sl in t * vsa::TILE_ELEMS..t * vsa::TILE_ELEMS + cnt {
+                        let tok = plan.slot_src[sl] as usize;
+                        for d in 0..dim {
+                            want_mean[(h * nb + t) * dim + d] += q[(h * seq + tok) * dim + d] / cnt as f32;
+                        }
+                    }
+                }
+            }
+            c.cmp(&format!("vsa_tile_mean_{}x{}x{}", grid.0, grid.1, grid.2), &down(&qc)?, &want_mean, op)?;
         }
         Ok(())
     })?;

@@ -510,6 +510,165 @@ extern "C" __global__ void index_select_rows(
     long r = i / d;
     out[i] = table[(long)idx[r] * d + i % d];
 }
+// ---- Video Sparse Attention -------------------------------------------------
+// Tiles are 64 padded slots; slot_src maps a slot to its token, or -1 for
+// padding. Coarse means divide by the tile's REAL token count, so a partial
+// tile is not diluted toward zero.
+extern "C" __global__ void vsa_tile_mean(
+    const float* x, const int* slot_src, const int* block_sizes, float* out,
+    long seq, int dim, int num_tiles, int tile_elems
+) {
+    int tile = blockIdx.x;
+    long bh = blockIdx.y;
+    if (tile >= num_tiles) return;
+    int n = block_sizes[tile];
+    const float* xb = x + bh * seq * (long)dim;
+    float* ob = out + (bh * (long)num_tiles + tile) * (long)dim;
+    for (int d = threadIdx.x; d < dim; d += blockDim.x) {
+        float acc = 0.0f;
+        for (int j = 0; j < n; j++) {
+            int tok = slot_src[(long)tile * tile_elems + j];
+            acc += xb[(long)tok * dim + d];
+        }
+        ob[d] = n > 0 ? acc / (float)n : 0.0f;
+    }
+}
+// Round-to-nearest f32 -> bf16 bits, as cast_f32_bf16 does.
+__device__ __forceinline__ unsigned short fv_to_bf16(float x) {
+    unsigned int u = __float_as_uint(x);
+    unsigned int hi = u >> 16;
+    if ((u & 0x8000u) != 0u && (hi & 0x7F80u) != 0x7F80u && (hi & 0x7FFFu) != 0x7F7Fu) hi += 1u;
+    return (unsigned short)hi;
+}
+// Order-preserving map from float to unsigned so integer compares sort floats.
+__device__ __forceinline__ unsigned int fv_sortable(float x) {
+    unsigned int u = __float_as_uint(x);
+    return (u & 0x80000000u) ? ~u : (u | 0x80000000u);
+}
+// Top-k column indices per score row. A binary search on the sortable key
+// (32 counting passes) beats an O(n*k) scan at n=819, k=164; the final gather
+// is single-threaded so ties resolve to the lower index, matching the host
+// reference exactly.
+extern "C" __global__ void vsa_topk(
+    const float* scores, unsigned int* out, int rows, int n, int k
+) {
+    int row = blockIdx.x;
+    if (row >= rows) return;
+    const float* s = scores + (long)row * n;
+    extern __shared__ int counts[];
+    __shared__ unsigned int lo_s;
+    int tid = threadIdx.x;
+    unsigned int lo = 0u, hi = 0xFFFFFFFFu;
+    // Largest threshold T with count(key >= T) >= k.
+    while (lo < hi) {
+        unsigned int mid = lo + (hi - lo) / 2u + ((hi - lo) & 1u);
+        int local = 0;
+        for (int i = tid; i < n; i += blockDim.x) local += (fv_sortable(s[i]) >= mid) ? 1 : 0;
+        counts[tid] = local;
+        __syncthreads();
+        for (int off = blockDim.x >> 1; off > 0; off >>= 1) {
+            if (tid < off) counts[tid] += counts[tid + off];
+            __syncthreads();
+        }
+        int total = counts[0];
+        __syncthreads();
+        if (total >= k) lo = mid; else hi = mid - 1u;
+    }
+    if (tid == 0) lo_s = lo;
+    __syncthreads();
+    unsigned int thr = lo_s;
+    if (tid == 0) {
+        unsigned int* dst = out + (long)row * k;
+        int written = 0;
+        for (int i = 0; i < n && written < k; i++) if (fv_sortable(s[i]) > thr) dst[written++] = (unsigned int)i;
+        for (int i = 0; i < n && written < k; i++) if (fv_sortable(s[i]) == thr) dst[written++] = (unsigned int)i;
+        for (; written < k; written++) dst[written] = 0u;
+    }
+}
+// Gather the selected tiles' K and V rows into a dense per-query-tile buffer
+// so the fine stage is a batched GEMM. Padding slots are zeroed; the score
+// mask, not the zeros, is what keeps them out of the softmax.
+extern "C" __global__ void vsa_gather_kv(
+    const float* k, const float* v, const unsigned int* selected, const int* slot_src,
+    unsigned short* kg, unsigned short* vg, long seq, int dim, int topk, int tile_elems,
+    int q_base, int num_tiles
+) {
+    long slot = (long)blockIdx.x * blockDim.y + threadIdx.y;   // slot within the gathered list
+    long g = blockIdx.y;                                        // query tile within the group
+    long bh = blockIdx.z;
+    long len = (long)topk * tile_elems;
+    if (slot >= len) return;
+    int tile_pos = (int)(slot / tile_elems), within = (int)(slot % tile_elems);
+    unsigned int kt = selected[((bh * (long)num_tiles) + q_base + g) * (long)topk + tile_pos];
+    int src = slot_src[(long)kt * tile_elems + within];
+    long dst = ((bh * gridDim.y + g) * len + slot) * (long)dim;
+    const float* kb = k + bh * seq * (long)dim;
+    const float* vb = v + bh * seq * (long)dim;
+    for (int d = threadIdx.x; d < dim; d += blockDim.x) {
+        float kv = 0.0f, vv = 0.0f;
+        if (src >= 0) { kv = kb[(long)src * dim + d]; vv = vb[(long)src * dim + d]; }
+        kg[dst + d] = fv_to_bf16(kv);
+        vg[dst + d] = fv_to_bf16(vv);
+    }
+}
+// Gather one group of query tiles into padded slot order, bf16.
+extern "C" __global__ void vsa_gather_q(
+    const float* q, const int* slot_src, unsigned short* out,
+    long seq, int dim, int tile_elems, int q_base
+) {
+    long slot = (long)blockIdx.x * blockDim.y + threadIdx.y;
+    long g = blockIdx.y;
+    long bh = blockIdx.z;
+    if (slot >= tile_elems) return;
+    int tile = q_base + (int)g;
+    int src = slot_src[(long)tile * tile_elems + slot];
+    long dst = ((bh * gridDim.y + g) * (long)tile_elems + slot) * (long)dim;
+    const float* qb = q + bh * seq * (long)dim;
+    for (int d = threadIdx.x; d < dim; d += blockDim.x) {
+        out[dst + d] = fv_to_bf16(src >= 0 ? qb[(long)src * dim + d] : 0.0f);
+    }
+}
+// -inf the score columns that land on tile padding, so the softmax ignores
+// them instead of treating a zeroed key as a real one scoring 0.
+extern "C" __global__ void vsa_mask_pad(
+    float* scores, const unsigned int* selected, const int* block_sizes,
+    int rows_per_tile, int topk, int tile_elems, int q_base, int num_tiles
+) {
+    long col = (long)blockIdx.x * blockDim.x + threadIdx.x;
+    long g = blockIdx.y;
+    long bh = blockIdx.z;
+    long len = (long)topk * tile_elems;
+    if (col >= len) return;
+    int tile_pos = (int)(col / tile_elems), within = (int)(col % tile_elems);
+    unsigned int kt = selected[((bh * (long)num_tiles) + q_base + g) * (long)topk + tile_pos];
+    if (within < block_sizes[kt]) return;
+    float* base = scores + (bh * gridDim.y + g) * (long)rows_per_tile * len;
+    // NVRTC compiles without <math.h>, so spell -inf as its bit pattern.
+    float neg_inf = __int_as_float(0xff800000);
+    for (int r = 0; r < rows_per_tile; r++) base[(long)r * len + col] = neg_inf;
+}
+// out[token] = coarse[tile] * gate[token] + sparse[slot], scattering the
+// padded tile layout back to token order. gate == null means a gate of one.
+extern "C" __global__ void vsa_combine(
+    const float* sparse, const float* coarse, const float* gate, const int* slot_src,
+    float* out, long seq, int dim, int tile_elems, int q_base, int num_tiles, int has_gate
+) {
+    long slot_in_group = (long)blockIdx.x * blockDim.y + threadIdx.y;
+    long g = blockIdx.y;
+    long bh = blockIdx.z;
+    if (slot_in_group >= tile_elems) return;
+    int tile = q_base + (int)g;
+    if (tile >= num_tiles) return;
+    int src = slot_src[(long)tile * tile_elems + slot_in_group];
+    if (src < 0) return;
+    const float* sp = sparse + ((bh * gridDim.y + g) * (long)tile_elems + slot_in_group) * (long)dim;
+    const float* co = coarse + (bh * (long)num_tiles + tile) * (long)dim;
+    float* ob = out + bh * seq * (long)dim + (long)src * dim;
+    const float* ga = has_gate ? gate + bh * seq * (long)dim + (long)src * dim : nullptr;
+    for (int d = threadIdx.x; d < dim; d += blockDim.x) {
+        ob[d] = co[d] * (ga ? ga[d] : 1.0f) + sp[d];
+    }
+}
 // Tiled flash attention (online softmax, O(d) memory per block). Opt-in via
 // FASTVIDEO_SDPA=flash: the barrier syncs per key tile make it slower than
 // dense cuBLAS attention at the sequence lengths this crate runs.
@@ -630,6 +789,12 @@ kernel_fns!(
     temporal_unfold,
     index_select_rows,
     flash_attn_f32,
+    vsa_tile_mean,
+    vsa_topk,
+    vsa_gather_kv,
+    vsa_gather_q,
+    vsa_mask_pad,
+    vsa_combine,
 );
 
 /// NVRTC-compile the kernel module for `sm_major.sm_minor` without touching a
