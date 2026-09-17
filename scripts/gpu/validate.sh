@@ -7,7 +7,7 @@
 #   validate.sh run <tier> [opts]     T1-T3      rent → stages → pull artifacts → destroy
 #   validate.sh reap                             destroy every fvgpu-* instance
 #
-# tiers: kernels (T1) | parity (T2) | clip (T3)   — each tier includes the ones before it.
+# tiers: kernels (T1) | parity (T2) | clip (T3) | compare (T4, + upstream FastVideo)\n#        each tier includes the ones before it.
 set -euo pipefail
 # shellcheck source=scripts/gpu/lib.sh
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
@@ -45,12 +45,15 @@ tier_query() {
     parity) echo "$base gpu_ram>=16 disk_space>=60 cpu_ram>=32 inet_down>=500" ;;
     # UMT5-XXL loads ~60GB of host RAM (raw bytes + F32 views) before upload.
     clip) echo "$base gpu_ram>=24 disk_space>=100 cpu_ram>=80 inet_down>=500" ;;
-    *) die "unknown tier '$1' (mathprobe|kernels|parity|clip)" ;;
+    # Same box runs our clip stages and upstream FastVideo: + torch wheels and
+    # upstream's own copy of the weights in the HF cache.
+    compare) echo "$base gpu_ram>=24 disk_space>=180 cpu_ram>=80 inet_down>=500" ;;
+    *) die "unknown tier '$1' (mathprobe|kernels|parity|clip|compare)" ;;
   esac
 }
 tier_max_dph() { case "$1" in mathprobe) echo 0.40 ;; kernels) echo 0.25 ;; parity) echo 0.40 ;; clip) echo 0.60 ;; esac; }
 tier_max_minutes() { case "$1" in mathprobe) echo 30 ;; kernels) echo 40 ;; parity) echo 75 ;; clip) echo 180 ;; esac; }
-tier_disk() { case "$1" in mathprobe) echo 40 ;; kernels) echo 40 ;; parity) echo 60 ;; clip) echo 100 ;; esac; }
+tier_disk() { case "$1" in mathprobe) echo 40 ;; kernels) echo 40 ;; parity) echo 60 ;; clip) echo 100 ;; compare) echo 180 ;; esac; }
 
 usage() { sed -n '2,12p' "$0" | sed 's/^# \{0,1\}//'; exit 2; }
 
@@ -227,6 +230,12 @@ remote_run() {
   # failure (or a lost instance) keeps them.
   pull_outputs
   if [[ "$rc" != "0" ]]; then
+    # An optional stage (a backend that will not build or run) is a result to
+    # record, not a reason to stop the run.
+    if [[ "${STAGE_OPTIONAL:-0}" == 1 ]]; then
+      log "✗ $name failed rc=$rc after ${secs}s — continuing (optional)"
+      return "$rc"
+    fi
     log "✗ $name failed rc=$rc after ${secs}s — stopping (fail-fast). Report: $RUN_DIR/remote/"
     exit "$rc"
   fi
@@ -252,6 +261,16 @@ collect_clips() {
     [[ -f "$dir/contact_sheet.png" ]] && cp "$dir/contact_sheet.png" "$dest/$name.png"
     log "saved clip → $dest/$name.mp4"
   done
+  # Upstream FastVideo's own mp4s (compare tier), kept beside ours.
+  local mp4
+  while IFS= read -r mp4; do
+    [[ -n "$mp4" ]] || continue
+    name="upstream-$(basename "$(dirname "$mp4")")-$(basename "$mp4")"
+    [[ -f "$dest/$name" ]] && continue
+    mkdir -p "$dest"
+    cp "$mp4" "$dest/$name"
+    log "saved clip → $dest/$name"
+  done < <(find "$RUN_DIR/remote/upstream-videos" -name '*.mp4' 2>/dev/null)
 }
 
 # ref_cache <name>: local cache dir for one reference set under the current key.
@@ -451,7 +470,7 @@ cmd_run() {
   # Downloads run in the background during the weight-free stages.
   case "$tier" in
     parity) remote_run fetch-base 120 fetch "$BASE_REPO" "$BASE_W" "transformer/*" "vae/*" ;;
-    clip)
+    clip | compare)
       remote_run fetch-base 120 fetch "$BASE_REPO" "$BASE_W" "transformer/*" "vae/*" "text_encoder/*" "tokenizer/*"
       remote_run fetch-fast 120 fetch "$FAST_REPO" "$FAST_W" "transformer/*" "vae/*"
       ;;
@@ -518,7 +537,22 @@ cmd_run() {
   gpucheck_stage clip-2s-fast 1800 --mode fast clip --weights "$FAST_W" --embeds "$embeds/$first.safetensors" \
     --device cuda "${short[@]}" --name dmd-2s-fast --budget-min 20 --no-mp4
   gpucheck_stage compare-2s 300 compare --a "$OUTR/clips/dmd-2s-exact" --b "$OUTR/clips/dmd-2s-fast"
-  log "T3 PASS"
+  [[ "$tier" == clip ]] && { log "T3 PASS"; return 0; }
+
+  # T4: the same 8s clip through upstream FastVideo on this same GPU. Upstream
+  # pulls its own copy of the weights (its loader expects the HF cache layout),
+  # so this only measures generation with the pipeline already resident.
+  remote_run upstream-install "${FV_UPSTREAM_INSTALL_TIMEOUT:-2400}" upstream-install "${FV_TORCH_BACKEND:-cu126}"
+  local ub=(--model-path "$FAST_REPO" --height 448 --width 832 --num-frames 129 --steps 3
+            --guidance 1.0 --fps 16 --seed 0 --runs "${FV_UPSTREAM_RUNS:-2}")
+  local backend
+  for backend in ${FV_UPSTREAM_BACKENDS:-TORCH_SDPA VIDEO_SPARSE_ATTN}; do
+    local extra=()
+    [[ "$backend" == VIDEO_SPARSE_ATTN* ]] && extra=(--vsa-sparsity "${FV_VSA_SPARSITY:-0.8}")
+    # A backend that will not import or run is a result, not a run failure.
+    STAGE_OPTIONAL=1 remote_run "upstream-$backend" "${FV_UPSTREAM_TIMEOUT:-3600}" upstream-bench "$backend" "${ub[@]}" "${extra[@]}" || true
+  done
+  log "T4 PASS"
 }
 
 cmd_reap() {

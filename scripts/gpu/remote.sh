@@ -268,6 +268,42 @@ cmd_stage() {
   exit "$rc"
 }
 
+# Upstream FastVideo in its own venv, for same-box comparison. uv brings its
+# own Python 3.12 (the image's may be older) and torch wheels carry their own
+# CUDA, so nothing here touches the libraries our binary dlopens.
+UPSTREAM_VENV="$WORK/upstream-venv"
+
+cmd_upstream_install() {
+  local torch_backend="${1:-cu126}"
+  export HF_HOME="$WORK/hf"
+  mkdir -p "$HF_HOME"
+  export PATH="$HOME/.local/bin:$PATH"
+  if [[ ! -x "$UPSTREAM_VENV/bin/python" ]]; then
+    command -v uv >/dev/null || {
+      log "installing uv"
+      curl -LsSf https://astral.sh/uv/install.sh | sh >/dev/null 2>&1 || die "uv install failed"
+    }
+    export PATH="$HOME/.local/bin:$PATH"
+    log "creating venv (python 3.12)"
+    uv venv --python 3.12 --seed "$UPSTREAM_VENV" >&2 || die "uv venv failed"
+  fi
+  log "installing fastvideo (UV_TORCH_BACKEND=$torch_backend) — several minutes"
+  VIRTUAL_ENV="$UPSTREAM_VENV" UV_TORCH_BACKEND="$torch_backend" \
+    uv pip install --python "$UPSTREAM_VENV/bin/python" fastvideo >&2 || die "fastvideo install failed"
+  "$UPSTREAM_VENV/bin/python" -c 'import torch, fastvideo; print("torch", torch.__version__, "cuda", torch.version.cuda, "fastvideo", getattr(fastvideo, "__version__", "?"))' >&2 \
+    || die "fastvideo import failed"
+  log "upstream install ok"
+}
+
+cmd_upstream_bench() {
+  local backend="$1"; shift
+  export HF_HOME="$WORK/hf"
+  export PATH="$HOME/.local/bin:$PATH"
+  [[ -x "$UPSTREAM_VENV/bin/python" ]] || die "upstream venv missing (run upstream-install)"
+  "$UPSTREAM_VENV/bin/python" "$ROOT/scripts/gpu/upstream_bench.py" \
+    --backend "$backend" --out "$OUT/upstream-$backend.json" --video-dir "$OUT/upstream-videos/$backend" "$@"
+}
+
 sub="${1:-}"; shift || true
 case "$sub" in
   env) cmd_env "$@" ;;
@@ -277,5 +313,7 @@ case "$sub" in
   fetch) cmd_fetch "$@" ;;
   wait-weights) cmd_wait_weights "$@" ;;
   stage) cmd_stage "$@" ;;
-  *) die "usage: remote.sh env|bootstrap|cublas|fetch|wait-weights|stage" ;;
+  upstream-install) cmd_upstream_install "$@" ;;
+  upstream-bench) cmd_upstream_bench "$@" ;;
+  *) die "usage: remote.sh env|bootstrap|cublas|fetch|wait-weights|stage|upstream-install|upstream-bench" ;;
 esac

@@ -21,8 +21,13 @@ Nothing is compared against another framework. The references are:
 | preflight `local` | none (Docker) | unit tests, NVRTC compile of every kernel (needs only `libnvrtc`), and the release binary the rented box runs, all built in Docker | 10–15 min cold, ~2 min warm | free |
 | `run mathprobe` | any (pick with `FV_OFFER_QUERY_EXTRA=gpu_name=…`) | which cuBLAS math (FP32 / TF32 / bf16 compute / bf16 buffers) this GPU honors, with the image's cuBLAS and a newer one | ~5–7 min | ~$0.01–0.02 |
 | **T1** `run kernels` | cheapest Ampere+ ≥8 GB | CUDA context; every NVRTC kernel, cuBLAS GEMMs and bf16 linears, dense/flash attention, cuDNN conv2d/conv3d and temporal unfold vs plain-Rust math; random-weight UMT5/DiT/VAE/UniPC/DMD GPU vs CPU path (exact and fast) | 10–15 min | $0.02–0.04 |
+| `run compare` | 24GB+, 180GB disk | our clip stages **and** upstream FastVideo on the same box: install torch+fastvideo in a venv, time the same 8s clip per attention backend | ~50-70 min | ~$0.20-0.30 |
 | **T2** `run parity` | ≥16 GB | T1, plus real 1.3B DiT forward, VAE decode and 2-step UniPC, GPU vs CPU path | 45–75 min (CPU reference is slow) | $0.10–0.30 |
 | **T3** `run clip` | ≥24 GB, ≥80 GB RAM | T2, plus real prompt embeddings from cudarc UMT5-XXL on the GPU; a probe that projects 8s-clip time and VRAM before committing; two 8s clips (129 frames, 448×832, FastWan DMD) with per-step NaN and time guards and video quality gates; exact vs fast drift on a 2s clip | 90–150 min | $0.30–0.90 |
+
+Compare-tier knobs: `FV_UPSTREAM_BACKENDS` (default `TORCH_SDPA VIDEO_SPARSE_ATTN`),
+`FV_UPSTREAM_RUNS`, `FV_VSA_SPARSITY`, `FV_TORCH_BACKEND` (default `cu126`). Upstream
+VSA ships tuned C++ kernels only for H100 (sm_90a); elsewhere it falls back to Triton.
 
 `FV_STAGE_ENV` passes environment to the stage process itself, for A/B runs.
 For a same-GPU A/B, rent once with `--keep` and rerun against `--instance <id>`:
