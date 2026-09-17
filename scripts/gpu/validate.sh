@@ -192,7 +192,12 @@ remote_run() {
   # process itself; gpucheck records every FASTVIDEO_* it ran under.
   fv_ssh "$HOST" "$PORT" "mkdir -p $OUTR/rc $OUTR/logs && rm -f $OUTR/rc/$name $OUTR/rc/$name.pid && cd $FV_REMOTE_DIR && \
     { setsid nohup bash -c 'env ${FV_STAGE_ENV:-} bash scripts/gpu/remote.sh $args >$OUTR/logs/$name.driver.log 2>&1; echo \$? >$OUTR/rc/$name' \
-      </dev/null >/dev/null 2>&1 & echo \$! >$OUTR/rc/$name.pid; }" || die "could not start $name"
+      </dev/null >/dev/null 2>&1 & echo \$! >$OUTR/rc/$name.pid; }" || {
+    # ssh worked at boot and has now stopped working: the host is the problem,
+    # so record it rather than rent it again on the next run.
+    bad_host_record "$CURRENT_MACHINE" "ssh died before $name"
+    die "could not start $name"
+  }
   local offset=0 fails=0 deadline=$(( t0 + timeout_s + 180 )) rc="" alive
   while :; do
     sleep "${FV_POLL_S:-10}"
