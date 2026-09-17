@@ -9,11 +9,50 @@ WORK="${FV_WORK:-/workspace}"
 OUT="$WORK/gpucheck-out"
 LOGS="$OUT/logs"
 export PATH="/usr/local/cuda/bin:$PATH"
-export LD_LIBRARY_PATH="/usr/local/cuda/lib64:${LD_LIBRARY_PATH:-}"
 mkdir -p "$LOGS"
 
 log() { printf '[remote %s] %s\n' "$(date -u +%H:%M:%S)" "$*" >&2; }
 die() { log "FATAL: $*"; exit 2; }
+
+# cudarc dlopens CUDA libraries by fixed names: libX.so, libX.so.<cuda major>
+# (12), .11, .10, .1. Images put them in different places, and cuDNN 9 ships
+# only libcudnn.so.9 (often inside pip site-packages), which cudarc never tries.
+# Link every library under its unversioned name in one directory and put that
+# plus each real library's directory (for dependent sub-libraries) on the path.
+FV_LIBDIR="$WORK/fv-libs"
+# cudarc 0.17's cuDNN bindings require symbols newer than the cuDNN 9.1 that
+# PyTorch images ship (e.g. cudnnBackendPopulateCudaGraph); bootstrap installs
+# this pinned cuDNN into its own directory without touching the image's Python env.
+FV_CUDNN_VERSION="${FV_CUDNN_VERSION:-9.26.0.51}"
+FV_CUDNN_DIR="$WORK/fv-cudnn"
+FV_CUDNN_REQUIRED_SYMBOL="cudnnBackendPopulateCudaGraph"
+fv_find_lib() {
+  local name="$1" hit=""
+  if [[ "$name" == cudnn && -e "$FV_CUDNN_DIR/nvidia/cudnn/lib/libcudnn.so.9" ]]; then
+    readlink -f "$FV_CUDNN_DIR/nvidia/cudnn/lib/libcudnn.so.9"
+    return 0
+  fi
+  hit="$(ldconfig -p 2>/dev/null | awk -v n="lib$name.so" '$1 == n || index($1, n".") == 1 {print $NF}' | head -1)"
+  if [[ -z "$hit" ]]; then
+    hit="$(find /usr/local/cuda*/targets/*/lib /usr/local/cuda*/lib64 /usr/lib/x86_64-linux-gnu \
+             /opt/conda/lib/python3*/site-packages/nvidia/*/lib /usr/local/lib/python3*/dist-packages/nvidia/*/lib \
+             -maxdepth 1 \( -name "lib$name.so" -o -name "lib$name.so.[0-9]*" \) 2>/dev/null \
+           | grep -v '/stubs/' | sort | head -1)"
+  fi
+  [[ -n "$hit" ]] && readlink -f "$hit"
+}
+fv_setup_libs() {
+  mkdir -p "$FV_LIBDIR"
+  local dirs="" lib real
+  for lib in nvrtc cublas cublasLt cudnn; do
+    real="$(fv_find_lib "$lib")" || true
+    [[ -n "$real" ]] || continue
+    ln -sf "$real" "$FV_LIBDIR/lib$lib.so"
+    case ":$dirs:" in *":$(dirname "$real"):"*) ;; *) dirs="$dirs:$(dirname "$real")" ;; esac
+  done
+  export LD_LIBRARY_PATH="$FV_LIBDIR$dirs:/usr/local/cuda/lib64:${LD_LIBRARY_PATH:-}"
+}
+fv_setup_libs
 
 cmd_env() {
   # Cheapest possible gate: is this box usable at all?
@@ -23,15 +62,17 @@ cmd_env() {
     || die "nvidia-smi failed — driver not usable"
   IFS=',' read -r name mem driver cap <<<"$q"
   local cuda_drv
-  cuda_drv="$(nvidia-smi | sed -n 's/.*CUDA Version: \([0-9.]*\).*/\1/p' | head -1)"
+  # Header format varies by driver ("CUDA Version: 12.4" / "CUDA Version : 13.0").
+  cuda_drv="$( { nvidia-smi; nvidia-smi -q; } 2>/dev/null | sed -n 's/.*CUDA Version *: *\([0-9][0-9.]*\).*/\1/p' | head -1)"
+  [[ -n "$cuda_drv" ]] || die "could not read the driver's CUDA version from nvidia-smi"
   local disk_gb ram_gb cores
   disk_gb="$(df -BG --output=avail "$WORK" | tail -1 | tr -dc 0-9)"
   ram_gb="$(awk '/MemTotal/ {printf "%d", $2/1048576}' /proc/meminfo)"
   cores="$(nproc)"
   local libs=()
   for lib in libnvrtc.so libcublas.so libcublasLt.so libcudnn.so; do
-    if ldconfig -p | grep -q "$lib" || compgen -G "/usr/local/cuda/lib64/${lib}*" >/dev/null; then
-      libs+=("\"$lib\":true")
+    if [[ -e "$FV_LIBDIR/$lib" ]]; then
+      libs+=("\"$lib\":\"$(readlink "$FV_LIBDIR/$lib")\"")
     else
       libs+=("\"$lib\":false")
     fi
@@ -41,11 +82,28 @@ cmd_env() {
     "$(xargs <<<"$name")" "$(xargs <<<"$mem")" "$(xargs <<<"$driver")" "$(xargs <<<"$cap")" "$cuda_drv" \
     "$disk_gb" "$ram_gb" "$cores" "$(IFS=,; echo "${libs[*]}")")"
   echo "$json" | tee "$OUT/env.json"
-  [[ "$json" != *'false'* ]] || die "missing CUDA runtime libraries: $json"
+  [[ "$json" != *':false'* ]] || die "missing CUDA runtime libraries: $json"
+  # Every library must actually load (catches wrong arch / missing deps), not just exist.
+  python3 - "$FV_LIBDIR" <<'PY' || die "a CUDA runtime library failed to load"
+import ctypes, os, sys
+for lib in ("libnvrtc.so", "libcublasLt.so", "libcublas.so", "libcudnn.so"):
+    ctypes.CDLL(os.path.join(sys.argv[1], lib))
+print("cuda libs load ok")
+PY
   local need_disk="${1:-30}"
   (( disk_gb >= need_disk )) || die "only ${disk_gb}GB free, need ${need_disk}GB"
   awk -v v="$cuda_drv" 'BEGIN { split(v, a, "."); exit !(a[1] > 12 || (a[1] == 12 && a[2] >= 4)) }' \
     || die "driver supports CUDA $cuda_drv < 12.4"
+}
+
+fv_cudnn_ok() {
+  python3 - "$FV_LIBDIR/libcudnn.so" "$FV_CUDNN_REQUIRED_SYMBOL" <<'PY' 2>/dev/null
+import ctypes, sys
+lib = ctypes.CDLL(sys.argv[1])
+getattr(lib, sys.argv[2])
+lib.cudnnGetVersion.restype = ctypes.c_size_t
+print("cudnn", lib.cudnnGetVersion())
+PY
 }
 
 cmd_bootstrap() {
@@ -62,6 +120,13 @@ cmd_bootstrap() {
     python3 -m pip install -q 'huggingface_hub[hf_transfer]' >"$LOGS/pip-hf.log" 2>&1 \
       || { tail -20 "$LOGS/pip-hf.log"; die "pip install huggingface_hub failed"; }
   fi
+  if ! fv_cudnn_ok; then
+    log "image cuDNN lacks $FV_CUDNN_REQUIRED_SYMBOL; installing nvidia-cudnn-cu12==$FV_CUDNN_VERSION → $FV_CUDNN_DIR"
+    python3 -m pip install -q --no-deps --target "$FV_CUDNN_DIR" "nvidia-cudnn-cu12==$FV_CUDNN_VERSION" \
+      >"$LOGS/pip-cudnn.log" 2>&1 || { tail -20 "$LOGS/pip-cudnn.log"; die "cuDNN install failed"; }
+    fv_setup_libs
+  fi
+  fv_cudnn_ok || die "cuDNN at $(readlink "$FV_LIBDIR/libcudnn.so") still lacks $FV_CUDNN_REQUIRED_SYMBOL"
 }
 
 # fetch <repo> <dest> <glob>...: background download of only the listed
@@ -143,6 +208,7 @@ cmd_stage() {
 sub="${1:-}"; shift || true
 case "$sub" in
   env) cmd_env "$@" ;;
+  libs) printf '%s\n' "$LD_LIBRARY_PATH"; ls -l "$FV_LIBDIR" ;;
   bootstrap) cmd_bootstrap ;;
   fetch) cmd_fetch "$@" ;;
   wait-weights) cmd_wait_weights "$@" ;;

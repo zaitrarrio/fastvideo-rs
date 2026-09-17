@@ -29,9 +29,9 @@ require_docker() {
   docker info >/dev/null 2>&1 || die "Docker daemon not running (start Docker Desktop)"
 }
 
-# Hash of everything that affects the binary. Tracked + untracked-but-not-ignored.
+# Hash of everything that affects the binary (sources + builder image/profile).
 fv_build_id() {
-  (cd "$FV_ROOT" && git ls-files -z -co --exclude-standard -- crates Cargo.toml Cargo.lock rust-toolchain.toml \
+  (cd "$FV_ROOT" && git ls-files -z -co --exclude-standard -- crates Cargo.toml Cargo.lock rust-toolchain.toml docker/gpucheck.Dockerfile \
     | LC_ALL=C sort -z | xargs -0 shasum -a 256 | shasum -a 256 | cut -c1-16)
 }
 

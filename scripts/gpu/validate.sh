@@ -61,7 +61,7 @@ cmd_local() {
 offers_json() {
   local tier="$1"
   vastai search offers "$(tier_query "$tier")" -o 'dph_total' --raw 2>/dev/null \
-    | jq '[.[] | {id, gpu_name, gpu_ram: (.gpu_ram/1024|floor), dph_total, reliability: (.reliability2 // .reliability),
+    | jq '[.[] | {id, machine_id, gpu_name, gpu_ram: (.gpu_ram/1024|floor), dph_total, reliability: (.reliability2 // .reliability),
                inet_down, cpu_ram: ((.cpu_ram // 0)/1024|floor), compute_cap, cuda_max_good, geolocation}]'
 }
 
@@ -168,17 +168,26 @@ gpucheck_stage() {
   remote_run "$tag" "$timeout_s" stage "$tag" "$timeout_s" --tag "$tag" "$@"
 }
 
+# create_instance <tier> <offer>: returns 1 (not fatal) so the caller can try another offer.
 create_instance() {
   local tier="$1" offer="$2"
   local label out
   label="${FV_LABEL_PREFIX}-$(date -u +%Y%m%d%H%M%S)-$tier"
-  out="$(vastai create instance "$offer" --image "$IMAGE" --disk "$(tier_disk "$tier")" --ssh --direct \
-          --label "$label" --cancel-unavail --raw 2>&1)" || die "create failed: $out"
+  if ! out="$(vastai create instance "$offer" --image "$IMAGE" --disk "$(tier_disk "$tier")" --ssh --direct \
+          --label "$label" --cancel-unavail --raw 2>&1)"; then
+    log "create failed for offer $offer: $(head -c 300 <<<"$out")"
+    return 1
+  fi
   INSTANCE="$(jq -r '.new_contract // empty' <<<"$out" 2>/dev/null)"
-  [[ -n "$INSTANCE" ]] || die "create returned no contract id: $out"
+  if [[ -z "$INSTANCE" ]]; then
+    log "create returned no contract id for offer $offer: $(head -c 300 <<<"$out")"
+    return 1
+  fi
   log "created instance $INSTANCE ($label)"
 }
 
+# wait_ready: 0 once ssh works; 1 if the host never boots or never accepts ssh
+# (a bad host, not a bad test) so the caller can destroy it and move on.
 wait_ready() {
   local t0; t0=$(date +%s)
   local status=""
@@ -186,20 +195,28 @@ wait_ready() {
     status="$(vastai show instance "$INSTANCE" --raw 2>/dev/null | jq -r '.actual_status // "unknown"')" || status=unknown
     case "$status" in
       running) break ;;
-      exited|offline|error) die "instance $INSTANCE entered '$status'" ;;
+      exited|offline|error) log "instance $INSTANCE entered '$status'"; return 1 ;;
     esac
-    (( $(date +%s) - t0 < ${FV_BOOT_TIMEOUT:-900} )) || die "instance not running after ${FV_BOOT_TIMEOUT:-900}s (status=$status)"
+    if (( $(date +%s) - t0 >= ${FV_BOOT_TIMEOUT:-900} )); then
+      log "instance $INSTANCE not running after ${FV_BOOT_TIMEOUT:-900}s (status=$status)"
+      return 1
+    fi
     sleep 10
   done
-  log "instance running after $(( $(date +%s) - t0 ))s; waiting for ssh"
+  local t_run; t_run=$(date +%s)
+  log "instance running after $(( t_run - t0 ))s; waiting for ssh (up to ${FV_SSH_TIMEOUT:-180}s)"
   while :; do
     if read -r HOST PORT < <(vast_ssh_target "$INSTANCE") && fv_ssh "$HOST" "$PORT" true 2>/dev/null; then
-      break
+      log "ssh ok root@$HOST:$PORT"
+      return 0
     fi
-    (( $(date +%s) - t0 < ${FV_BOOT_TIMEOUT:-900} + 300 )) || die "ssh never came up"
+    if (( $(date +%s) - t_run >= ${FV_SSH_TIMEOUT:-180} )); then
+      log "ssh to instance $INSTANCE never came up (${HOST:-?}:${PORT:-?})"
+      HOST=""; PORT=""
+      return 1
+    fi
     sleep 10
   done
-  log "ssh ok root@$HOST:$PORT"
 }
 
 cmd_run() {
@@ -232,35 +249,56 @@ cmd_run() {
   local max_dph mins
   max_dph="${MAX_DPH:-$(tier_max_dph "$tier")}"
   mins="${MAX_MINUTES:-$(tier_max_minutes "$tier")}"
-  if [[ -z "$INSTANCE" ]]; then
-    local pick
-    pick="$(offers_json "$tier" | jq -c --arg id "$offer" --argjson max "$max_dph" \
-      'map(select(if $id == "" then .dph_total <= $max else (.id|tostring) == $id end)) | .[0] // empty')"
-    [[ -n "$pick" ]] || die "no offer ≤ \$$max_dph/hr for tier $tier (raise MAX_DPH or see '$0 offers $tier')"
-    offer="$(jq -r .id <<<"$pick")"
-    DPH="$(jq -r .dph_total <<<"$pick")"
-    local cap balance
-    cap="$(awk -v d="$DPH" -v m="$mins" 'BEGIN { printf "%.2f", d * m / 60 }')"
-    balance="$(vast_balance)"
-    log "offer $offer: $(jq -r '"\(.gpu_name) \(.gpu_ram)GB $\(.dph_total)/hr"' <<<"$pick"); worst case \$$cap (${mins} min cap); balance \$${balance:-?}"
-    if [[ -n "$balance" ]] && awk -v b="$balance" -v c="$cap" 'BEGIN { exit !(b < c) }'; then
-      die "balance \$$balance below worst-case \$$cap"
-    fi
-  else
-    DPH="$(vastai show instance "$INSTANCE" --raw | jq -r '.dph_total // 0')"
-  fi
-
   RUN_DIR="$RUNS/$(date -u +%Y%m%dT%H%M%SZ)-$tier"
   mkdir -p "$RUN_DIR/remote"
   T_START=$(date +%s)
   trap cleanup EXIT INT TERM
-  if [[ $OWN_INSTANCE -eq 1 ]]; then
-    create_instance "$tier" "$offer"
-    # Independent of this shell: destroys at the wall cap even if we're killed.
-    nohup bash -c "sleep $((mins * 60)); vastai destroy instance -y $INSTANCE" >/dev/null 2>&1 &
-    WATCHDOG_PID=$!
+
+  if [[ $OWN_INSTANCE -eq 0 ]]; then
+    DPH="$(vastai show instance "$INSTANCE" --raw | jq -r '.dph_total // 0')"
+    wait_ready || die "instance $INSTANCE is not reachable"
+  else
+    # Bad hosts (no ssh, stuck boot, offer gone) are destroyed and skipped:
+    # up to FV_OFFER_RETRIES more offers, never the same machine twice.
+    local tried='[]' attempt=0 max_attempts=$(( ${FV_OFFER_RETRIES:-2} + 1 )) checked_balance=0
+    while :; do
+      attempt=$((attempt + 1))
+      (( attempt <= max_attempts )) || die "no usable host after $max_attempts offers"
+      local pick
+      pick="$(offers_json "$tier" | jq -c --arg id "$offer" --argjson max "$max_dph" --argjson tried "$tried" \
+        'map(select((.machine_id as $m | $tried | index($m) | not)
+                    and (if $id == "" then .dph_total <= $max else (.id|tostring) == $id end))) | .[0] // empty')"
+      [[ -n "$pick" ]] || die "no untried offer ≤ \$$max_dph/hr for tier $tier (raise MAX_DPH or see '$0 offers $tier')"
+      offer=""  # an explicit --offer applies to the first attempt only
+      local offer_id; offer_id="$(jq -r .id <<<"$pick")"
+      tried="$(jq -c --argjson m "$(jq .machine_id <<<"$pick")" '. + [$m]' <<<"$tried")"
+      DPH="$(jq -r .dph_total <<<"$pick")"
+      local cap
+      cap="$(awk -v d="$DPH" -v m="$mins" 'BEGIN { printf "%.2f", d * m / 60 }')"
+      log "attempt $attempt/$max_attempts offer $offer_id: $(jq -r '"\(.gpu_name) \(.gpu_ram)GB $\(.dph_total)/hr (machine \(.machine_id))"' <<<"$pick"); worst case \$$cap (${mins} min cap)"
+      if [[ $checked_balance -eq 0 ]]; then
+        local balance; balance="$(vast_balance)"
+        log "balance \$${balance:-?}"
+        if [[ -n "$balance" ]] && awk -v b="$balance" -v c="$cap" 'BEGIN { exit !(b < c) }'; then
+          die "balance \$$balance below worst-case \$$cap"
+        fi
+        checked_balance=1
+      fi
+      create_instance "$tier" "$offer_id" || continue
+      # Independent of this shell: destroys at the wall cap even if we're killed.
+      nohup bash -c "sleep $((mins * 60)); vastai destroy instance -y $INSTANCE" >/dev/null 2>&1 &
+      WATCHDOG_PID=$!
+      disown "$WATCHDOG_PID"
+      if wait_ready; then
+        break
+      fi
+      log "host unusable — destroying $INSTANCE and trying another offer"
+      kill "$WATCHDOG_PID" 2>/dev/null || true
+      WATCHDOG_PID=""
+      vast_destroy "$INSTANCE" || true
+      INSTANCE=""
+    done
   fi
-  wait_ready
 
   # The box gets scripts + the Docker-built binary only: no source, no compile.
   log "uploading scripts and prebuilt fv-gpucheck (build $build_id)"

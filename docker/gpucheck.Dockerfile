@@ -32,7 +32,8 @@ ENV CUDARC_CUDA_VERSION=12040 \
     LD_LIBRARY_PATH=/usr/local/cuda-12.4/lib64 \
     CARGO_TARGET_DIR=/target \
     CARGO_PROFILE_RELEASE_LTO=off \
-    CARGO_PROFILE_RELEASE_CODEGEN_UNITS=16
+    CARGO_PROFILE_RELEASE_CODEGEN_UNITS=16 \
+    CARGO_PROFILE_RELEASE_PANIC=unwind
 WORKDIR /src
 
 FROM nvidia/cuda:12.4.1-cudnn-runtime-ubuntu22.04 AS runtime
@@ -40,7 +41,11 @@ ARG DEBIAN_FRONTEND=noninteractive
 RUN apt-get update \
  && apt-get install -y --no-install-recommends ffmpeg python3-pip ca-certificates \
  && rm -rf /var/lib/apt/lists/* \
- && pip3 install --no-cache-dir 'huggingface_hub[hf_transfer]'
+ && pip3 install --no-cache-dir 'huggingface_hub[hf_transfer]' \
+ && pip3 install --no-cache-dir --no-deps --target /opt/fv-cudnn 'nvidia-cudnn-cu12==9.26.0.51' \
+ && ln -sf /opt/fv-cudnn/nvidia/cudnn/lib/libcudnn.so.9 /opt/fv-cudnn/nvidia/cudnn/lib/libcudnn.so
+# cudarc 0.17's cuDNN bindings need symbols newer than the base image's cuDNN 9.1.
+ENV LD_LIBRARY_PATH=/opt/fv-cudnn/nvidia/cudnn/lib:${LD_LIBRARY_PATH}
 COPY fv-gpucheck fv-gpucheck.build-id /usr/local/bin/
 ENV FV_BUILD_ID_FILE=/usr/local/bin/fv-gpucheck.build-id
 WORKDIR /work
