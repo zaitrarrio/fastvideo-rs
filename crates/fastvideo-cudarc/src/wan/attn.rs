@@ -20,11 +20,17 @@ pub const FLASH_MAX_HEAD_DIM: usize = 128;
 /// path; longer queries are processed in chunks that address Q/out in place.
 pub const DENSE_SCORE_BUDGET: usize = 256 * 1024 * 1024;
 
+#[cfg(feature = "cuda")]
+static PROBS_BF16_CACHE: super::envflag::CachedBool = super::envflag::CachedBool::new();
+
 /// bf16 attention probabilities apply when the context runs bf16 GEMM math,
 /// where cuBLAS rounds F32 operands to bf16 for the tensor-core op anyway.
+/// `FASTVIDEO_ATTN_PROBS_BF16=0` forces F32 probabilities back (A/B runs, and
+/// an escape hatch if a model ever proves sensitive to the rounding).
 #[cfg(feature = "cuda")]
 fn probs_bf16() -> bool {
-    super::stats::device_expected()
+    PROBS_BF16_CACHE.get_or_init(|| super::envflag::bool_flag("FASTVIDEO_ATTN_PROBS_BF16", true))
+        && super::stats::device_expected()
         && super::device::global_device().is_some_and(|d| d.gemm_math == super::device::GemmMath::Bf16)
 }
 
