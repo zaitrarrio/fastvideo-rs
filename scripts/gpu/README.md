@@ -118,3 +118,5 @@ fails on the next poll.
 - `remote/embeds/`
 - `remote/probe-8s.json`: the fitted projection.
 - `remote/clips/<name>/`: `frames/` (with `frames/output.mp4`), `contact_sheet.png`, `latents.safetensors`.
+  PNG frames stay on the instance; the mp4, contact sheet and latents are pulled after every stage.
+- `artifacts/clips/<run>/<name>.mp4` (+ `<name>.png` contact sheet): every generated clip, copied as soon as its stage is pulled.

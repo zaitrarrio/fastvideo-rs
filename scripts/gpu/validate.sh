@@ -150,6 +150,7 @@ cleanup() {
     log "pulling artifacts → $RUN_DIR"
     fv_timeout 300 rsync -az -e "ssh -i $FV_SSH_KEY -p $PORT ${FV_SSH_OPTS[*]}" "root@$HOST:$OUTR/" "$RUN_DIR/remote/" \
       || log "artifact pull failed/timed out"
+    collect_clips
   fi
   if [[ -n "$WATCHDOG_PID" ]]; then kill "$WATCHDOG_PID" 2>/dev/null || true; fi
   if [[ -n "$INSTANCE" && $OWN_INSTANCE -eq 1 && $KEEP -eq 0 ]]; then
@@ -220,13 +221,35 @@ remote_run() {
   done
   local secs=$(( $(date +%s) - t0 ))
   printf '{"name":"%s","rc":%s,"seconds":%s}\n' "$name" "$rc" "$secs" >>"$RUN_DIR/stages.jsonl"
-  # Reports are small; pull after every stage so a later failure keeps them.
-  fv_rsync_from "$HOST" "$PORT" "$OUTR/" "$RUN_DIR/remote/" --exclude 'clips/*/frames' >/dev/null 2>&1 || true
+  # Reports and finished clips are small; pull after every stage so a later
+  # failure (or a lost instance) keeps them.
+  pull_outputs
   if [[ "$rc" != "0" ]]; then
     log "✗ $name failed rc=$rc after ${secs}s — stopping (fail-fast). Report: $RUN_DIR/remote/"
     exit "$rc"
   fi
   log "✓ $name ${secs}s"
+}
+
+# pull_outputs: reports, latents, contact sheets and clip mp4s (not the PNG
+# frames), then copy each clip into artifacts/clips/<run>/ where they collect.
+pull_outputs() {
+  fv_rsync_from "$HOST" "$PORT" "$OUTR/" "$RUN_DIR/remote/" \
+    --include 'clips/*/frames/*.mp4' --exclude 'clips/*/frames/*' >/dev/null 2>&1 || true
+  collect_clips
+}
+
+collect_clips() {
+  local dest="$FV_ROOT/artifacts/clips/$(basename "$RUN_DIR")" dir name
+  for dir in "$RUN_DIR"/remote/clips/*/; do
+    [[ -f "$dir/frames/output.mp4" ]] || continue
+    name="$(basename "$dir")"
+    [[ -f "$dest/$name.mp4" ]] && continue
+    mkdir -p "$dest"
+    cp "$dir/frames/output.mp4" "$dest/$name.mp4"
+    [[ -f "$dir/contact_sheet.png" ]] && cp "$dir/contact_sheet.png" "$dest/$name.png"
+    log "saved clip → $dest/$name.mp4"
+  done
 }
 
 # ref_cache <name>: local cache dir for one reference set under the current key.
