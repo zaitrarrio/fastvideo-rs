@@ -58,6 +58,11 @@ struct Cli {
     /// Meant for cheap diagnostic stages (kernels, tiny) so one run lists every bug.
     #[arg(long, global = true)]
     keep_going: bool,
+    /// Run video sparse attention. A different attention algorithm, not a
+    /// precision knob, so it is opt-in per stage: the model and parity stages
+    /// compare against dense references and must not use it.
+    #[arg(long, global = true)]
+    vsa: bool,
     #[command(subcommand)]
     cmd: Cmd,
 }

@@ -536,6 +536,11 @@ cmd_run() {
   names="$(jq -r '.prompts[].name' "$FV_ROOT/scripts/gpu/prompts.json")"
   first="$(head -1 <<<"$names")"
   local clip=(--height 448 --width 832 --frames 129 --steps 3 --guidance 1.0 --flow-shift 8.0 --dmd --fps 16)
+  # FV_VSA=1 runs the generation stages with video sparse attention. It is not
+  # passed to the model/parity stages: those compare against dense references.
+  if [[ "${FV_VSA:-0}" == 1 ]]; then
+    clip+=(--vsa)
+  fi
   gpucheck_stage probe-8s 1800 --mode fast probe --weights "$FAST_W" --embeds "$embeds/$first.safetensors" \
     --device cuda "${clip[@]}" --budget-min "$budget_min"
   local clip_timeout=$(( budget_min * 60 * 13 / 10 + 600 ))

@@ -489,7 +489,12 @@ impl WanTransformer3D {
     /// off, unavailable, or the checkpoint has no gates.
     #[cfg(feature = "cuda")]
     fn vsa_for(&self, t: usize, h: usize, w: usize) -> Result<Option<std::sync::Arc<VsaCtx>>> {
-        if !super::nn::vsa_enabled() || !self.blocks.iter().any(|b| b.gate.is_some()) {
+        // No live device means a CPU run, where VSA has no device path: fall
+        // back to dense rather than failing to upload a tiling.
+        if !super::nn::vsa_enabled()
+            || super::device::global_device().is_none()
+            || !self.blocks.iter().any(|b| b.gate.is_some())
+        {
             return Ok(None);
         }
         let p = self.cfg.patch_size;
