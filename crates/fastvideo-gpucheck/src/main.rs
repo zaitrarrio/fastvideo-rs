@@ -40,7 +40,10 @@ use mode::Mode;
 use report::{Report, StageError, StageResult};
 
 #[derive(Parser)]
-#[command(name = "fv-gpucheck", about = "Fail-fast numerical/perf validation for fastvideo-cudarc")]
+#[command(
+    name = "fv-gpucheck",
+    about = "Fail-fast numerical/perf validation for fastvideo-cudarc"
+)]
 struct Cli {
     /// Directory for `<stage>.json` reports and clip artifacts.
     #[arg(long, global = true, default_value = "gpucheck-out")]
@@ -203,17 +206,25 @@ enum Cmd {
         a: PathBuf,
         #[arg(long)]
         b: PathBuf,
-        #[arg(long, default_value_t = 30.0)]
-        min_psnr: f64,
-        #[arg(long, default_value_t = 0.15)]
+        /// Step-1 latents: one forward from identical noise.
+        #[arg(long, default_value_t = 0.05)]
+        max_step1_rel: f64,
+        /// Final latents after the trajectories have drifted.
+        #[arg(long, default_value_t = 0.35)]
         max_latent_rel: f64,
+        #[arg(long, default_value_t = 20.0)]
+        min_psnr: f64,
     },
 }
 
 fn parse_list<T: std::str::FromStr>(s: &str) -> anyhow::Result<Vec<T>> {
     s.split(',')
         .filter(|p| !p.trim().is_empty())
-        .map(|p| p.trim().parse::<T>().map_err(|_| anyhow::anyhow!("bad list item `{p}`")))
+        .map(|p| {
+            p.trim()
+                .parse::<T>()
+                .map_err(|_| anyhow::anyhow!("bad list item `{p}`"))
+        })
         .collect()
 }
 
@@ -221,10 +232,14 @@ fn parse_list<T: std::str::FromStr>(s: &str) -> anyhow::Result<Vec<T>> {
 fn check_dump_mode(io: &reference::RefIo, device: &str, mode: Mode) -> StageResult<()> {
     let gpu = gpu::on_gpu(device);
     if io.is_dump() && (gpu || mode != Mode::Exact) {
-        return Err(StageError::Error(anyhow::anyhow!("--dump requires --device cpu --mode exact")));
+        return Err(StageError::Error(anyhow::anyhow!(
+            "--dump requires --device cpu --mode exact"
+        )));
     }
     if !io.is_dump() && !gpu {
-        return Err(StageError::Error(anyhow::anyhow!("--reference requires a cuda device")));
+        return Err(StageError::Error(anyhow::anyhow!(
+            "--reference requires a cuda device"
+        )));
     }
     Ok(())
 }
@@ -279,16 +294,22 @@ fn run(cli: &Cli, report: &mut Report) -> StageResult<()> {
         #[cfg(feature = "cuda")]
         Cmd::GemmProbe => mathprobe::run(report),
         Cmd::Model { device, seed, refs } => {
-            let mut io = reference::RefIo::new(refs.dump.as_deref(), refs.reference.as_deref(), "model")?
-                .with_videos(cli.out.join("videos").join(report.stage()));
+            let mut io =
+                reference::RefIo::new(refs.dump.as_deref(), refs.reference.as_deref(), "model")?
+                    .with_videos(cli.out.join("videos").join(report.stage()));
             check_dump_mode(&io, device, cli.mode)?;
             model::run(report, &mut io, device, cli.mode, *seed)?;
             io.finish(report, cli.mode, device)?;
             Ok(())
         }
-        Cmd::Parity { weights, device, refs } => {
-            let mut io = reference::RefIo::new(refs.dump.as_deref(), refs.reference.as_deref(), "parity")?
-                .with_videos(cli.out.join("videos").join(report.stage()));
+        Cmd::Parity {
+            weights,
+            device,
+            refs,
+        } => {
+            let mut io =
+                reference::RefIo::new(refs.dump.as_deref(), refs.reference.as_deref(), "parity")?
+                    .with_videos(cli.out.join("videos").join(report.stage()));
             check_dump_mode(&io, device, cli.mode)?;
             parity::run(report, &mut io, weights, device, cli.mode)?;
             io.finish(report, cli.mode, device)?;
@@ -344,9 +365,19 @@ fn run(cli: &Cli, report: &mut Report) -> StageResult<()> {
         Cmd::Compare {
             a,
             b,
-            min_psnr,
+            max_step1_rel,
             max_latent_rel,
-        } => perf::compare(report, a, b, *min_psnr, *max_latent_rel),
+            min_psnr,
+        } => perf::compare(
+            report,
+            a,
+            b,
+            perf::CompareGates {
+                max_step1_rel: *max_step1_rel,
+                max_latent_rel: *max_latent_rel,
+                min_psnr: *min_psnr,
+            },
+        ),
     }
 }
 

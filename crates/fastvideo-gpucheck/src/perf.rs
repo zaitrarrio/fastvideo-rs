@@ -76,7 +76,11 @@ impl ClipSpec {
     }
 
     fn validate(&self) -> anyhow::Result<()> {
-        anyhow::ensure!(self.frames % 4 == 1, "frames must be 4n+1 (got {})", self.frames);
+        anyhow::ensure!(
+            self.frames % 4 == 1,
+            "frames must be 4n+1 (got {})",
+            self.frames
+        );
         anyhow::ensure!(
             self.height % 16 == 0 && self.width % 16 == 0,
             "height/width must be multiples of 16 (got {}x{})",
@@ -102,8 +106,17 @@ fn load_embeds(path: &Path) -> anyhow::Result<CudaTensor> {
 
 fn load_pipeline(report: &mut Report, weights: &Path) -> anyhow::Result<WanPipeline> {
     let t = Instant::now();
-    let pipe = WanPipeline::load_with(weights, "wan_t2v_1_3b", LoadParts { text_encoder: false })?;
-    report.note("load", json!({"seconds": t.elapsed().as_secs_f64(), "mem_used_mib": used_mib()}));
+    let pipe = WanPipeline::load_with(
+        weights,
+        "wan_t2v_1_3b",
+        LoadParts {
+            text_encoder: false,
+        },
+    )?;
+    report.note(
+        "load",
+        json!({"seconds": t.elapsed().as_secs_f64(), "mem_used_mib": used_mib()}),
+    );
     Ok(pipe)
 }
 
@@ -134,7 +147,10 @@ fn fit_linear_quadratic(xs: &[f64], ys: &[f64]) -> (f64, f64) {
     let a_only = if s11 > 0.0 { t1 / s11 } else { 0.0 };
     let b_only = if s22 > 0.0 { t2 / s22 } else { 0.0 };
     let err = |a: f64, b: f64| -> f64 {
-        xs.iter().zip(ys).map(|(&x, &y)| (a * x + b * x * x - y).powi(2)).sum()
+        xs.iter()
+            .zip(ys)
+            .map(|(&x, &y)| (a * x + b * x * x - y).powi(2))
+            .sum()
     };
     if err(a_only.max(0.0), 0.0) <= err(0.0, b_only.max(0.0)) {
         (a_only.max(0.0), 0.0)
@@ -178,15 +194,23 @@ pub fn probe(report: &mut Report, args: ProbeArgs<'_>) -> StageResult<()> {
     let embeds = load_embeds(args.embeds)?;
     let (text_len, text_dim) = (embeds.shape[1], embeds.shape[2]);
     let b = spec.batch();
-    let enc = if b == 2 { embeds.clone() } else { embeds.narrow(0, 1, 1)? };
+    let enc = if b == 2 {
+        embeds.clone()
+    } else {
+        embeds.narrow(0, 1, 1)?
+    };
     let (zh, zw) = (spec.height / 8, spec.width / 8);
     let tpf = spec.tokens_per_frame();
 
     let forward = |t_lat: usize| -> anyhow::Result<(f64, Option<u64>)> {
         let n = b * 16 * t_lat * zh * zw;
-        let lat = CudaTensor::from_vec(crate::rand_weights::randn(7, n, 1.0), vec![b, 16, t_lat, zh, zw])?;
+        let lat = CudaTensor::from_vec(
+            crate::rand_weights::randn(7, n, 1.0),
+            vec![b, 16, t_lat, zh, zw],
+        )?;
         let ts = CudaTensor::from_vec(vec![999.0; b], vec![b])?;
-        let enc_b = CudaTensor::from_vec(enc.host_cow()?.into_owned(), vec![b, text_len, text_dim])?;
+        let enc_b =
+            CudaTensor::from_vec(enc.host_cow()?.into_owned(), vec![b, text_len, text_dim])?;
         let mem = PeakMem::start();
         let t = Instant::now();
         let out = pipe.transformer().forward_ctx(&lat, &ts, &enc_b, None)?;
@@ -197,9 +221,16 @@ pub fn probe(report: &mut Report, args: ProbeArgs<'_>) -> StageResult<()> {
         Ok((secs, mem.stop()))
     };
 
-    let smallest = *args.probe_latent_frames.iter().min().context("no probe sizes")?;
+    let smallest = *args
+        .probe_latent_frames
+        .iter()
+        .min()
+        .context("no probe sizes")?;
     let (warm_s, _) = forward(smallest)?;
-    report.note("warmup", json!({"latent_frames": smallest, "seconds": warm_s}));
+    report.note(
+        "warmup",
+        json!({"latent_frames": smallest, "seconds": warm_s}),
+    );
 
     let budget_s = args.budget_min * 60.0;
     let (mut xs, mut ts, mut ms) = (Vec::new(), Vec::new(), Vec::new());
@@ -242,7 +273,10 @@ pub fn probe(report: &mut Report, args: ProbeArgs<'_>) -> StageResult<()> {
     let vae_probe_s = t.elapsed().as_secs_f64();
     let vae_peak = mem.stop();
     let vae_s = vae_probe_s / vae_lat as f64 * spec.latent_frames() as f64;
-    report.note("vae_T2", json!({"seconds": vae_probe_s, "peak_mib": vae_peak}));
+    report.note(
+        "vae_T2",
+        json!({"seconds": vae_probe_s, "peak_mib": vae_peak}),
+    );
 
     let total_s = denoise_s + vae_s;
     let mut projection = json!({
@@ -311,6 +345,9 @@ pub fn clip(report: &mut Report, args: ClipArgs<'_>) -> StageResult<()> {
     #[derive(Default)]
     struct Trace {
         steps: Vec<serde_json::Value>,
+        /// Latents after step 1: every precision path starts that step from
+        /// the same seeded noise, so `compare` isolates one-forward error.
+        first: Option<Vec<f32>>,
         abort: Option<StageError>,
     }
     let trace = RefCell::new(Trace::default());
@@ -332,6 +369,9 @@ pub fn clip(report: &mut Report, args: ClipArgs<'_>) -> StageResult<()> {
         );
         let mut tr = trace.borrow_mut();
         tr.steps.push(json!({"t": s.timestep, "seconds": step_s, "mean": mean, "std": std, "non_finite": bad}));
+        if s.index == 0 {
+            tr.first = Some(host.into_owned());
+        }
         if bad > 0 {
             let msg = format!("{bad} non-finite latents after step {}", s.index + 1);
             tr.abort = Some(StageError::Check(msg.clone()));
@@ -355,8 +395,9 @@ pub fn clip(report: &mut Report, args: ClipArgs<'_>) -> StageResult<()> {
     drop(observer);
     let denoise_peak = mem.stop();
     let denoise_s = denoise_timer.elapsed().as_secs_f64();
-    let trace = trace.into_inner();
+    let mut trace = trace.into_inner();
     report.set("steps", &trace.steps);
+    let first = trace.first.take();
     let latents = match (denoised, trace.abort) {
         (_, Some(abort)) => return Err(abort),
         (Err(e), None) => return Err(StageError::Error(e.into())),
@@ -366,7 +407,14 @@ pub fn clip(report: &mut Report, args: ClipArgs<'_>) -> StageResult<()> {
     let clip_dir = args.out_dir;
     std::fs::create_dir_all(&clip_dir)?;
     let lat_host = F32Tensor::new(latents.shape.clone(), latents.host_cow()?.into_owned())?;
-    st::save(&clip_dir.join("latents.safetensors"), &[("latents", &lat_host)])?;
+    let mut saved = vec![("latents", &lat_host)];
+    let first_host = first
+        .map(|v| F32Tensor::new(latents.shape.clone(), v))
+        .transpose()?;
+    if let Some(f) = &first_host {
+        saved.push(("step1", f));
+    }
+    st::save(&clip_dir.join("latents.safetensors"), &saved)?;
 
     let mem = PeakMem::start();
     let t = Instant::now();
@@ -383,7 +431,11 @@ pub fn clip(report: &mut Report, args: ClipArgs<'_>) -> StageResult<()> {
     } else {
         String::new()
     };
-    contact_sheet(&video_host, &video.shape, &clip_dir.join("contact_sheet.png"))?;
+    contact_sheet(
+        &video_host,
+        &video.shape,
+        &clip_dir.join("contact_sheet.png"),
+    )?;
     let write_s = t.elapsed().as_secs_f64();
 
     let total_s = run_timer.elapsed().as_secs_f64();
@@ -401,7 +453,10 @@ pub fn clip(report: &mut Report, args: ClipArgs<'_>) -> StageResult<()> {
             "peak_mib": {"denoise": denoise_peak, "vae": vae_peak},
         }),
     );
-    report.set("artifacts", json!({"frames": paths.len(), "mp4": mp4, "dir": clip_dir}));
+    report.set(
+        "artifacts",
+        json!({"frames": paths.len(), "mp4": mp4, "dir": clip_dir}),
+    );
 
     report.check(
         "frame_count",
@@ -427,17 +482,27 @@ pub fn clip(report: &mut Report, args: ClipArgs<'_>) -> StageResult<()> {
     Ok(())
 }
 
-/// Two clip runs of the same seed/prompt under different precision paths:
-/// bounds how far the fast path's output drifts from the exact path.
-pub fn compare(report: &mut Report, a: &Path, b: &Path, min_psnr: f64, max_latent_rel: f64) -> StageResult<()> {
-    let load = |dir: &Path| -> anyhow::Result<F32Tensor> {
-        let p = dir.join("latents.safetensors");
-        let mut m = st::load(&p)?;
-        st::take(&mut m, "latents", &p)
+/// Two clip runs of the same seed and prompt under different precision paths.
+///
+/// Step 1 starts from identical noise in both runs, so its latents bound the
+/// single-forward error of path `b` and are gated tightly. Later steps feed
+/// that error back through the model, and the trajectories drift apart
+/// (bf16 vs FP32 on the 2s DMD clip: rel_l2 0.23, 23 dB, same content), so
+/// the final latents and frames get sanity limits only.
+pub fn compare(report: &mut Report, a: &Path, b: &Path, gates: CompareGates) -> StageResult<()> {
+    let load = |dir: &Path| -> anyhow::Result<std::collections::HashMap<String, F32Tensor>> {
+        st::load(&dir.join("latents.safetensors"))
     };
-    let (la, lb) = (load(a)?, load(b)?);
-    let d = crate::metrics::diff(&la.data, &lb.data);
-    report.check("latents", d.within(max_latent_rel), d.to_json(), json!({"rel_l2": max_latent_rel}))?;
+    let (mut ma, mut mb) = (load(a)?, load(b)?);
+    let (la, lb) = (
+        st::take(&mut ma, "latents", &a.join("latents.safetensors"))?,
+        st::take(&mut mb, "latents", &b.join("latents.safetensors"))?,
+    );
+    let step1 = match (ma.remove("step1"), mb.remove("step1")) {
+        (Some(x), Some(y)) => Some(crate::metrics::diff(&y.data, &x.data)),
+        _ => None,
+    };
+    let d = crate::metrics::diff(&lb.data, &la.data);
 
     let frames = |dir: &Path| -> anyhow::Result<Vec<PathBuf>> {
         let mut v: Vec<PathBuf> = std::fs::read_dir(dir.join("frames"))?
@@ -448,13 +513,15 @@ pub fn compare(report: &mut Report, a: &Path, b: &Path, min_psnr: f64, max_laten
         Ok(v)
     };
     let (fa, fb) = (frames(a)?, frames(b)?);
-    report.check("frame_count", fa.len() == fb.len() && !fa.is_empty(), json!({"a": fa.len(), "b": fb.len()}), json!({}))?;
     let (mut mse, mut n) = (0.0f64, 0usize);
     for (pa, pb) in fa.iter().zip(&fb) {
         let ia = image::open(pa)?.into_rgb8();
         let ib = image::open(pb)?.into_rgb8();
         if ia.dimensions() != ib.dimensions() {
-            return Err(StageError::Check(format!("frame size mismatch {}", pa.display())));
+            return Err(StageError::Check(format!(
+                "frame size mismatch {}",
+                pa.display()
+            )));
         }
         for (x, y) in ia.as_raw().iter().zip(ib.as_raw()) {
             let d = f64::from(*x) - f64::from(*y);
@@ -463,9 +530,60 @@ pub fn compare(report: &mut Report, a: &Path, b: &Path, min_psnr: f64, max_laten
         n += ia.as_raw().len();
     }
     mse /= n.max(1) as f64;
-    let p = if mse == 0.0 { f64::INFINITY } else { 10.0 * (255.0f64 * 255.0 / mse).log10() };
-    report.check("frames_psnr", p >= min_psnr, json!({"psnr_db": crate::metrics::jf(p)}), json!({"psnr_db_min": min_psnr}))?;
+    let p = if mse == 0.0 {
+        f64::INFINITY
+    } else {
+        10.0 * (255.0f64 * 255.0 / mse).log10()
+    };
+
+    // Every metric lands in the report before the first gate can stop the stage.
+    report.set(
+        "metrics",
+        json!({
+            "step1": step1.as_ref().map(|s| s.to_json()),
+            "latents": d.to_json(),
+            "frames_psnr_db": crate::metrics::jf(p),
+        }),
+    );
+    match &step1 {
+        Some(s) => report.check(
+            "step1_latents",
+            s.within(gates.max_step1_rel),
+            s.to_json(),
+            json!({"rel_l2": gates.max_step1_rel}),
+        )?,
+        None => {
+            return Err(StageError::Check(
+                "clip dirs have no step1 latents; rerun the clip stages".into(),
+            ))
+        }
+    }
+    report.check(
+        "latents",
+        d.within(gates.max_latent_rel),
+        d.to_json(),
+        json!({"rel_l2": gates.max_latent_rel}),
+    )?;
+    report.check(
+        "frame_count",
+        fa.len() == fb.len() && !fa.is_empty(),
+        json!({"a": fa.len(), "b": fb.len()}),
+        json!({}),
+    )?;
+    report.check(
+        "frames_psnr",
+        p >= gates.min_psnr,
+        json!({"psnr_db": crate::metrics::jf(p)}),
+        json!({"psnr_db_min": gates.min_psnr}),
+    )?;
     Ok(())
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct CompareGates {
+    pub max_step1_rel: f64,
+    pub max_latent_rel: f64,
+    pub min_psnr: f64,
 }
 
 #[cfg(test)]
@@ -477,7 +595,10 @@ mod tests {
         let xs = [1000.0, 3000.0, 9000.0];
         let ys: Vec<f64> = xs.iter().map(|x| 2e-4 * x + 3e-8 * x * x).collect();
         let (a, b) = fit_linear_quadratic(&xs, &ys);
-        assert!((a - 2e-4).abs() < 1e-9 && (b - 3e-8).abs() < 1e-12, "{a} {b}");
+        assert!(
+            (a - 2e-4).abs() < 1e-9 && (b - 3e-8).abs() < 1e-12,
+            "{a} {b}"
+        );
     }
 
     #[test]
