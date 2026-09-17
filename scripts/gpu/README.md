@@ -24,6 +24,11 @@ Nothing is compared against another framework. The references are:
 | **T2** `run parity` | ≥16 GB | T1, plus real 1.3B DiT forward, VAE decode and 2-step UniPC, GPU vs CPU path | 45–75 min (CPU reference is slow) | $0.10–0.30 |
 | **T3** `run clip` | ≥24 GB, ≥80 GB RAM | T2, plus real prompt embeddings from cudarc UMT5-XXL on the GPU; a probe that projects 8s-clip time and VRAM before committing; two 8s clips (129 frames, 448×832, FastWan DMD) with per-step NaN and time guards and video quality gates; exact vs fast drift on a 2s clip | 90–150 min | $0.30–0.90 |
 
+`FV_STAGE_ENV` passes environment to the stage process itself, for A/B runs:
+`FV_STAGE_ENV="FASTVIDEO_SDPA=flash" scripts/gpu/validate.sh run clip`. Each report
+records every `FASTVIDEO_*` it ran under, so the setting is visible in the artifacts.
+Pair it with `FV_OFFER_QUERY_EXTRA=gpu_name=RTX_A5000` to compare against an earlier run on the same GPU.
+
 \*Estimates from typical Vast on-demand prices. Check live prices with
 `validate.sh offers <tier>`. `run` refuses offers above the tier's $/hr
 ceiling and prints the worst-case cost (price × wall cap) before renting.

@@ -185,8 +185,10 @@ remote_run() {
   local t0; t0=$(date +%s)
   LAST_STAGE="$name"
   log "▶ $name (timeout ${timeout_s}s)"
+  # FV_STAGE_ENV ("FASTVIDEO_SDPA=flash FASTVIDEO_TEACACHE=1") reaches the stage
+  # process itself; gpucheck records every FASTVIDEO_* it ran under.
   fv_ssh "$HOST" "$PORT" "mkdir -p $OUTR/rc $OUTR/logs && rm -f $OUTR/rc/$name $OUTR/rc/$name.pid && cd $FV_REMOTE_DIR && \
-    { setsid nohup bash -c 'bash scripts/gpu/remote.sh $args >$OUTR/logs/$name.driver.log 2>&1; echo \$? >$OUTR/rc/$name' \
+    { setsid nohup bash -c 'env ${FV_STAGE_ENV:-} bash scripts/gpu/remote.sh $args >$OUTR/logs/$name.driver.log 2>&1; echo \$? >$OUTR/rc/$name' \
       </dev/null >/dev/null 2>&1 & echo \$! >$OUTR/rc/$name.pid; }" || die "could not start $name"
   local offset=0 fails=0 deadline=$(( t0 + timeout_s + 180 )) rc="" alive
   while :; do
