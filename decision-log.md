@@ -2,6 +2,15 @@
 
 Project code: FVID
 
+### FVID · 2026-09-17 · FVID-2026-09-17-exact-parity-24gb-oom
+- Trigger: the `compare` tier OOM'd in `parity-exact` on two different 24GB cards — a plain RTX 3090 (24124 MiB total, 23846 free, no other tenant) and an RTX 3090 Ti (24112 MiB, 23829 free) — failing on the FIRST `dit_forward_t999` right after `load`. The same stage passes on an RTX A5000 (24111 MiB) and on a larger 3090 Ti (24564 MiB)
+- Options: rent only >24GB cards; cut exact-mode peak; give the mempool a finite release threshold; leave it and document
+- Decision: **not fixed yet, recorded and routed around.** The `compare` tier now skips T1/T2 (it benchmarks, it does not re-validate) so it never runs exact-mode parity; the validation tiers still do, on cards that fit. Not diagnosed further under a benchmarking task — the suspects are the mempool release threshold (`u64::MAX`, so nothing returns to the driver) and cuDNN workspace from conv3d auto-selection, which times BOTH backends per shape and so allocates a cuDNN plan's workspace even where unfold wins.
+- Reason: exact mode is F32 everywhere and is the memory-hungriest configuration; it is a validation path, not a production one, so a 24GB card failing it blocks validation but not use. Worth fixing, but not by guessing mid-benchmark
+- Reversibility: free (no behaviour changed)
+- Executed by: Executor
+- Verification: runs `20260917T202914Z-compare` (3090) and `20260917T204412Z-compare` (3090 Ti), both rc=2 at `parity-exact`, $0.035 and ~$0.01. Next diagnostic: rerun the `parity` tier on a 24GB box with `FV_STAGE_ENV="FASTVIDEO_CONV3D=unfold"` — if it passes, cuDNN workspace is the cause; if not, the mempool is.
+
 ### FVID · 2026-09-17 · FVID-2026-09-17-bf16-attention-probs
 - Trigger: after flash SDPA was rejected (FVID-2026-09-17-flash-sdpa-rejected), the dominant remaining cost in a clip-scale forward was dense attention's probability matrix (`bh*sq*sk`), written by softmax and read back by the `P@V` GEMM
 - Options: leave it; store probabilities as bf16; also store pre-softmax scores as bf16; rewrite attention with two-level tiling; port VSA

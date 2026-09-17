@@ -491,6 +491,13 @@ cmd_run() {
     log "math probe done"
     return 0
   fi
+  # `compare` benchmarks two implementations; it does not re-validate them, so
+  # it skips T1/T2 and goes straight to the clip stages it times. That also
+  # keeps it off exact-mode parity, whose peak does not fit a 24GB card.
+  if [[ "$tier" == compare ]]; then
+    gpucheck_stage nvrtc 300 nvrtc
+    gpucheck_stage device 300 device
+  else
   # T1: kernels vs plain-Rust math; random-weight model, GPU vs cudarc CPU path.
   gpucheck_stage nvrtc 300 nvrtc
   gpucheck_stage device 300 device
@@ -513,6 +520,7 @@ cmd_run() {
   gpucheck_stage parity-exact 1200 --mode exact parity --weights "$BASE_W" --device cuda --reference "$refs"
   gpucheck_stage parity-fast 1200 --mode fast parity --weights "$BASE_W" --device cuda --reference "$refs"
   [[ "$tier" == parity ]] && { log "T2 PASS"; return 0; }
+  fi
 
   # T3: 8s clips. Prompts are encoded by cudarc UMT5 on this GPU (own process,
   # BF16 off so the XXL weights fit), then the probe must project a clip that
