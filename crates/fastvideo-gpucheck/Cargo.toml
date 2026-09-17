@@ -1,0 +1,36 @@
+[package]
+name = "fastvideo-gpucheck"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Tiered, fail-fast numerical and performance validation for the cudarc Wan backend."
+
+[[bin]]
+name = "fv-gpucheck"
+path = "src/main.rs"
+
+[dependencies]
+anyhow.workspace = true
+clap.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+safetensors.workspace = true
+image.workspace = true
+rand.workspace = true
+rand_distr.workspace = true
+fastvideo-models.workspace = true
+fastvideo-cudarc.workspace = true
+cudarc = { workspace = true, optional = true }
+half = { version = "2", optional = true }
+
+[features]
+default = []
+# Device checks (nvrtc, device, kernels) and GPU runs of every other stage.
+cuda = ["fastvideo-cudarc/cuda", "dep:cudarc", "dep:half"]
+
+[lints.rust]
+# Kernel-level parity checks launch NVRTC kernels directly (`unsafe fn`).
+unsafe_code = "allow"
+
+[lints.clippy]
+all = { level = "warn", priority = -1 }

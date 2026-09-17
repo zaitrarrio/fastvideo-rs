@@ -1654,6 +1654,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "fastvideo-gpucheck"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "cudarc 0.17.8",
+ "fastvideo-cudarc",
+ "fastvideo-models",
+ "half",
+ "image",
+ "rand 0.9.5",
+ "rand_distr",
+ "safetensors 0.6.2",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "fastvideo-loader"
 version = "0.1.0"
 dependencies = [

@@ -10,6 +10,7 @@ members = [
     "crates/fastvideo-luminal",
     "crates/fastvideo-cudarc",
     "crates/fastvideo-cli",
+    "crates/fastvideo-gpucheck",
 ]
 
 [workspace.package]

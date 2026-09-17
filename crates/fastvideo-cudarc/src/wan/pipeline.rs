@@ -119,8 +119,36 @@ impl Default for GenerateConfig {
     }
 }
 
+/// Which heavy components [`WanPipeline::load_with`] materializes.
+#[derive(Debug, Clone, Copy)]
+pub struct LoadParts {
+    /// UMT5-XXL (~21GB F32 on disk). Skip it when prompt embeddings are
+    /// precomputed (see [`WanPipeline::denoise`]): it is by far the largest
+    /// component and the only one a validation run on a 24GB card can't hold.
+    pub text_encoder: bool,
+}
+
+impl Default for LoadParts {
+    fn default() -> Self {
+        Self { text_encoder: true }
+    }
+}
+
+/// Per-step progress passed to a [`WanPipeline::denoise`] observer. The
+/// observer runs after each step's latent update; returning `Err` aborts the
+/// run immediately (fail-fast on NaN, time budget, etc.).
+pub struct DenoiseStep<'a> {
+    /// 0-based step index.
+    pub index: usize,
+    pub total: usize,
+    pub timestep: f32,
+    pub latents: &'a CudaTensor,
+}
+
+pub type StepObserver<'o> = dyn FnMut(&DenoiseStep<'_>) -> Result<()> + 'o;
+
 pub struct WanPipeline {
-    text: Umt5Encoder,
+    text: Option<Umt5Encoder>,
     dit: WanTransformer3D,
     dit_2: Option<WanTransformer3D>,
     vae: AutoencoderKlWan,
@@ -135,7 +163,7 @@ impl WanPipeline {
     /// Zero-weight tiny graph with eager DiT + VAE decode.
     pub fn tiny() -> Self {
         Self {
-            text: Umt5Encoder::zeros(Umt5Config::tiny()),
+            text: Some(Umt5Encoder::zeros(Umt5Config::tiny())),
             dit: WanTransformer3D::zeros(WanVideoArchConfig::tiny()),
             dit_2: None,
             vae: AutoencoderKlWan::zeros(WanVaeConfig::tiny()),
@@ -146,8 +174,33 @@ impl WanPipeline {
         }
     }
 
+    /// T2V pipeline from already-built components (e.g. seeded random weights
+    /// for parity tests). Uses real latent-shape logic, unlike [`Self::tiny`].
+    pub fn from_parts(
+        text: Option<Umt5Encoder>,
+        dit: WanTransformer3D,
+        vae: AutoencoderKlWan,
+    ) -> Self {
+        let boundary_ratio = dit.cfg.boundary_ratio;
+        Self {
+            text,
+            dit,
+            dit_2: None,
+            vae,
+            clip: None,
+            tiny: false,
+            boundary_ratio,
+            preset: "custom".into(),
+        }
+    }
+
     /// Load Diffusers layout using a registry preset (arch-aware).
     pub fn load(root: &Path, preset: &str) -> Result<Self> {
+        Self::load_with(root, preset, LoadParts::default())
+    }
+
+    /// [`Self::load`] with control over which components are materialized.
+    pub fn load_with(root: &Path, preset: &str, parts: LoadParts) -> Result<Self> {
         let cfg = WanVideoArchConfig::from_preset(preset);
         let dit = WeightMap::from_dir(&root.join("transformer"))?;
         let vae_cfg = if cfg.out_channels == 48 {
@@ -159,12 +212,17 @@ impl WanPipeline {
             WanVaeConfig::wan_2_1()
         };
         let vae = WeightMap::from_dir(&root.join("vae"))?;
-        let text_dir = if root.join("text_encoder").is_dir() {
-            root.join("text_encoder")
+        let text = if parts.text_encoder {
+            let text_dir = if root.join("text_encoder").is_dir() {
+                root.join("text_encoder")
+            } else {
+                root.join("text_encoder_2")
+            };
+            let map = WeightMap::from_dir(&text_dir)?;
+            Some(Umt5Encoder::load(Umt5Config::xxl(), &map)?)
         } else {
-            root.join("text_encoder_2")
+            None
         };
-        let text = WeightMap::from_dir(&text_dir)?;
 
         let dit_2 = if root.join("transformer_2").is_dir() {
             let map = WeightMap::from_dir(&root.join("transformer_2"))?;
@@ -182,7 +240,7 @@ impl WanPipeline {
 
         let boundary_ratio = cfg.boundary_ratio;
         Ok(Self {
-            text: Umt5Encoder::load(Umt5Config::xxl(), &text)?,
+            text,
             dit: WanTransformer3D::load(cfg, &dit)?,
             dit_2,
             vae: AutoencoderKlWan::load(vae_cfg, &vae)?,
@@ -198,14 +256,21 @@ impl WanPipeline {
         Self::load(root, "wan_t2v_1_3b")
     }
 
-    fn encode_prompt(&self, cfg: &GenerateConfig) -> Result<CudaTensor> {
+    /// `[neg, prompt]` UMT5 embeddings padded to `text_len`: `[2, text_len, 4096]`.
+    pub fn encode_prompt_embeds(&self, cfg: &GenerateConfig) -> Result<CudaTensor> {
         let text_len = self.dit.cfg.text_len;
+        let text = self.text.as_ref().ok_or_else(|| {
+            PipelineError::Message(
+                "text encoder not loaded (LoadParts::text_encoder=false); pass precomputed embeddings"
+                    .into(),
+            )
+        })?;
         if let Some(tokenizer) = cfg.tokenizer_path.as_ref() {
             let (prompt_ids, prompt_len) = tokenize_prompt(tokenizer, &cfg.prompt, text_len)?;
             let (neg_ids, neg_len) =
                 tokenize_prompt(tokenizer, &cfg.negative_prompt, text_len)?;
-            let prompt_embeds = self.text.forward(&prompt_ids, 1, prompt_ids.len())?;
-            let neg_embeds = self.text.forward(&neg_ids, 1, neg_ids.len())?;
+            let prompt_embeds = text.forward(&prompt_ids, 1, prompt_ids.len())?;
+            let neg_embeds = text.forward(&neg_ids, 1, neg_ids.len())?;
             let prompt_embeds = pad_prompt_embeds(&prompt_embeds, &[prompt_len], text_len)?;
             let neg_embeds = pad_prompt_embeds(&neg_embeds, &[neg_len], text_len)?;
             return Ok(CudaTensor::cat(&[&neg_embeds, &prompt_embeds], 0)?);
@@ -213,7 +278,7 @@ impl WanPipeline {
         if self.tiny {
             let seq = text_len.min(8);
             let dummy: Vec<u32> = (0..seq).map(|i| (i % 10) as u32).collect();
-            let prompt_embeds = self.text.forward(&dummy, 1, seq)?;
+            let prompt_embeds = text.forward(&dummy, 1, seq)?;
             let neg_embeds = prompt_embeds.clone();
             let prompt_embeds = pad_prompt_embeds(&prompt_embeds, &[seq], text_len)?;
             let neg_embeds = pad_prompt_embeds(&neg_embeds, &[seq], text_len)?;
@@ -280,16 +345,7 @@ impl WanPipeline {
             )));
         }
 
-        let (z_t, z_h, z_w, z_c) = if self.tiny {
-            (2usize, 4usize, 4usize, 4usize)
-        } else {
-            (
-                (cfg.num_frames.saturating_sub(1)) / 4 + 1,
-                cfg.height / 8,
-                cfg.width / 8,
-                self.dit.cfg.out_channels,
-            )
-        };
+        let (z_c, z_t, z_h, z_w) = self.latent_shape(cfg);
         super::log::info(format_args!(
             "generate preset={} tiny={} {}x{} frames={} steps={} dmd={} latent=1x{}x{}x{}x{} \
              resident={} cuda={}",
@@ -320,12 +376,7 @@ impl WanPipeline {
             ));
         }
 
-        let mut rng = rand::rngs::StdRng::seed_from_u64(cfg.seed);
-        let n_el = z_c * z_t * z_h * z_w;
-        let noise: Vec<f32> = (0..n_el)
-            .map(|_| rng.sample::<f32, _>(StandardNormal))
-            .collect();
-        let mut latents = CudaTensor::from_vec(noise, vec![1, z_c, z_t, z_h, z_w])?;
+        let mut latents = self.initial_latents(cfg)?;
 
         let i2v_pack = if i2v {
             let image = cfg
@@ -365,19 +416,91 @@ impl WanPipeline {
             _ => None,
         };
 
-        let encoder_hs = self.encode_prompt(cfg)?;
+        let encoder_hs = self.encode_prompt_embeds(cfg)?;
+        let latents = self.denoise_inner(
+            cfg,
+            latents,
+            &encoder_hs,
+            clip_tokens.as_ref(),
+            i2v_pack.as_ref().map(|(m, c)| (m, c)),
+            None,
+        )?;
+        let video = self.decode_latents(&latents)?;
+        let paths = write_frames(&video, Path::new(&cfg.output_dir))?;
+        if cfg.save_video {
+            match mux_mp4(Path::new(&cfg.output_dir), cfg.fps) {
+                Ok(p) => super::log::info(format_args!("wrote mp4 {p}")),
+                Err(e) => super::log::info(format_args!("mp4 mux skipped: {e}")),
+            }
+        }
+        super::log::info(format_args!("wrote {} png frames → {}", paths.len(), cfg.output_dir));
+        log_device_path_stats_if_enabled();
+        Ok(paths)
+    }
+
+    /// `(C, T, H, W)` of the latent for `cfg` (tiny graphs use a fixed shape).
+    pub fn latent_shape(&self, cfg: &GenerateConfig) -> (usize, usize, usize, usize) {
+        if self.tiny {
+            (4, 2, 4, 4)
+        } else {
+            (
+                self.dit.cfg.out_channels,
+                (cfg.num_frames.saturating_sub(1)) / 4 + 1,
+                cfg.height / 8,
+                cfg.width / 8,
+            )
+        }
+    }
+
+    /// Seeded `StdRng` + `StandardNormal` noise, in the same order as the
+    /// Candle pipeline, so both backends start from bit-identical latents.
+    pub fn initial_latents(&self, cfg: &GenerateConfig) -> Result<CudaTensor> {
+        let (z_c, z_t, z_h, z_w) = self.latent_shape(cfg);
+        let mut rng = rand::rngs::StdRng::seed_from_u64(cfg.seed);
+        let n_el = z_c * z_t * z_h * z_w;
+        let noise: Vec<f32> = (0..n_el)
+            .map(|_| rng.sample::<f32, _>(StandardNormal))
+            .collect();
+        Ok(CudaTensor::from_vec(noise, vec![1, z_c, z_t, z_h, z_w])?)
+    }
+
+    /// Text-to-video denoise from precomputed `[neg, prompt]` embeddings
+    /// (see [`Self::encode_prompt_embeds`]). `observer` runs after every step.
+    pub fn denoise(
+        &self,
+        cfg: &GenerateConfig,
+        latents: CudaTensor,
+        encoder_hs: &CudaTensor,
+        observer: Option<&mut StepObserver<'_>>,
+    ) -> Result<CudaTensor> {
+        if self.dit.cfg.in_channels > self.dit.cfg.out_channels {
+            return Err(PipelineError::Message(
+                "denoise() is text-to-video only; use generate() for I2V".into(),
+            ));
+        }
+        self.denoise_inner(cfg, latents, encoder_hs, None, None, observer)
+    }
+
+    fn denoise_inner(
+        &self,
+        cfg: &GenerateConfig,
+        latents: CudaTensor,
+        encoder_hs: &CudaTensor,
+        image: Option<&CudaTensor>,
+        i2v: Option<(&CudaTensor, &CudaTensor)>,
+        observer: Option<&mut StepObserver<'_>>,
+    ) -> Result<CudaTensor> {
         let boundary = cfg.boundary_ratio.or(self.boundary_ratio);
         let ctx = DenoiseCtx {
             high: &self.dit,
             low: self.dit_2.as_ref(),
             boundary_ratio: boundary,
-            image: clip_tokens.as_ref(),
-            i2v: i2v_pack.as_ref().map(|(m, c)| (m, c)),
+            image,
+            i2v,
             guidance: cfg.guidance_scale,
             guidance_2: cfg.guidance_scale_2.unwrap_or(cfg.guidance_scale),
             tea_cache: TeaCache::from_env(),
         };
-
         if cfg.is_dmd {
             let steps = cfg
                 .dmd_steps
@@ -387,7 +510,7 @@ impl WanPipeline {
             let s = DmdSchedule::new(&steps, cfg.flow_shift, 1000);
             let timesteps: Vec<f32> = s.train_timesteps.iter().map(|&t| t as f32).collect();
             let _denoise = super::log::StepTimer::start(format!("dmd {} steps", timesteps.len()));
-            latents = euler_denoise(latents, &encoder_hs, &timesteps, &s.sigmas, &ctx)?;
+            euler_denoise(latents, encoder_hs, &timesteps, &s.sigmas, &ctx, observer)
         } else {
             let mut sched = FlowUniPCMultistepScheduler::new(1000, cfg.flow_shift);
             sched.set_timesteps(cfg.num_inference_steps);
@@ -397,13 +520,16 @@ impl WanPipeline {
             ));
             let _denoise =
                 super::log::StepTimer::start(format!("unipc {} steps", cfg.num_inference_steps));
-            latents = unipc_denoise(latents, &encoder_hs, &mut sched, &ctx)?;
+            unipc_denoise(latents, encoder_hs, &mut sched, &ctx, observer)
         }
+    }
 
+    /// Un-normalize latents and run the feat-cache VAE decode → `[1, 3, F, H, W]` in `[-1, 1]`.
+    pub fn decode_latents(&self, latents: &CudaTensor) -> Result<CudaTensor> {
         let latents = if !self.tiny {
-            self.vae.scale_latents(&latents)?
+            self.vae.scale_latents(latents)?
         } else {
-            latents
+            latents.clone()
         };
         // Mark latents as device-resident for the VAE path. The denoise loop
         // already returned device-fresh tensors (dit_cfg returns device_fresh
@@ -426,20 +552,8 @@ impl WanPipeline {
             device_fresh_state,
             cuda_context_live(),
         ));
-        {
-            let _vae = super::log::StepTimer::start("vae.decode");
-            let video = self.vae.decode(&latents)?;
-            let paths = write_frames(&video, Path::new(&cfg.output_dir))?;
-            if cfg.save_video {
-                match mux_mp4(Path::new(&cfg.output_dir), cfg.fps) {
-                    Ok(p) => super::log::info(format_args!("wrote mp4 {p}")),
-                    Err(e) => super::log::info(format_args!("mp4 mux skipped: {e}")),
-                }
-            }
-            super::log::info(format_args!("wrote {} png frames → {}", paths.len(), cfg.output_dir));
-            log_device_path_stats_if_enabled();
-            Ok(paths)
-        }
+        let _vae = super::log::StepTimer::start("vae.decode");
+        Ok(self.vae.decode(&latents)?)
     }
 
     pub fn transformer(&self) -> &WanTransformer3D {
@@ -647,6 +761,7 @@ fn euler_denoise(
     timesteps: &[f32],
     sigmas: &[f64],
     ctx: &DenoiseCtx<'_>,
+    mut observer: Option<&mut StepObserver<'_>>,
 ) -> Result<CudaTensor> {
     let mut ctx = DenoiseCtx {
         high: ctx.high,
@@ -668,6 +783,14 @@ fn euler_denoise(
         let dt = sigmas[i + 1] - sigmas[i];
         let delta = guided.mul_scalar(dt as f32);
         latents = latents.add(&delta)?;
+        if let Some(obs) = observer.as_deref_mut() {
+            obs(&DenoiseStep {
+                index: i,
+                total: timesteps.len(),
+                timestep: t,
+                latents: &latents,
+            })?;
+        }
     }
     Ok(latents)
 }
@@ -677,6 +800,7 @@ fn unipc_denoise(
     encoder_hs: &CudaTensor,
     sched: &mut FlowUniPCMultistepScheduler,
     ctx: &DenoiseCtx<'_>,
+    mut observer: Option<&mut StepObserver<'_>>,
 ) -> Result<CudaTensor> {
     let mut ctx = DenoiseCtx {
         high: ctx.high,
@@ -717,6 +841,14 @@ fn unipc_denoise(
             latents = latents
                 .mul_scalar(coeffs.scale_sample)
                 .add(&converted.mul_scalar(coeffs.scale_converted))?;
+            if let Some(obs) = observer.as_deref_mut() {
+                obs(&DenoiseStep {
+                    index: i,
+                    total: ts.len(),
+                    timestep: t,
+                    latents: &latents,
+                })?;
+            }
         }
         return Ok(latents);
     }
@@ -745,6 +877,14 @@ fn unipc_denoise(
         let mut fresh = CudaTensor::from_vec(prev, shape.clone())?;
         let _ = fresh.pin_device();
         latents = fresh;
+        if let Some(obs) = observer.as_deref_mut() {
+            obs(&DenoiseStep {
+                index: i,
+                total: ts.len(),
+                timestep: t,
+                latents: &latents,
+            })?;
+        }
     }
     Ok(latents)
 }
@@ -778,7 +918,8 @@ fn load_rgb_frame(path: &str, height: usize, width: usize) -> Result<CudaTensor>
     CudaTensor::from_vec(data, vec![1, 3, 1, height, width]).map_err(Into::into)
 }
 
-fn write_frames(video: &CudaTensor, dir: &Path) -> Result<Vec<String>> {
+/// Write `[1, C>=3, F, H, W]` video in `[-1, 1]` as `frame-%03d.png`.
+pub fn write_frames(video: &CudaTensor, dir: &Path) -> Result<Vec<String>> {
     std::fs::create_dir_all(dir).map_err(|e| PipelineError::Message(e.to_string()))?;
     if video.rank() != 5 || video.shape[0] != 1 {
         return Err(PipelineError::Message(format!(
@@ -821,7 +962,8 @@ fn write_frames(video: &CudaTensor, dir: &Path) -> Result<Vec<String>> {
     Ok(paths)
 }
 
-fn mux_mp4(dir: &Path, fps: u32) -> Result<String> {
+/// Mux `frame-%03d.png` in `dir` into `output.mp4` with ffmpeg (libx264).
+pub fn mux_mp4(dir: &Path, fps: u32) -> Result<String> {
     let out = dir.join("output.mp4");
     let pattern = dir.join("frame-%03d.png");
     let status = Command::new("ffmpeg")

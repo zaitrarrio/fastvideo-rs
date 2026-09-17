@@ -12,19 +12,40 @@ use fastvideo_loader::{load_raw_tensors_native, RawTensor};
 
 use super::tensor::{CudaTensor, Result, TensorError};
 
+/// Produces F32 values for a missing key given the shape the loader expects.
+pub type WeightGenerator = dyn Fn(&str, &[usize]) -> Vec<f32> + Send + Sync;
+
 pub struct WeightMap {
     tensors: HashMap<String, RawTensor>,
+    /// When set, shape-checked loads of absent keys are generated instead of
+    /// failing (seeded random weights for GPU-vs-CPU parity tests).
+    generator: Option<Box<WeightGenerator>>,
 }
 
 impl WeightMap {
     pub fn load_dir(dir: &Path) -> Result<Self> {
         let tensors =
             load_raw_tensors_native(dir).map_err(|e| TensorError::Message(e.to_string()))?;
-        Ok(Self { tensors })
+        Ok(Self {
+            tensors,
+            generator: None,
+        })
     }
 
     pub fn from_dir(dir: &Path) -> Result<Self> {
         Self::load_dir(dir)
+    }
+
+    /// Every weight comes from `generator(key, expected_shape)`: no files, any
+    /// config. Loaders always pass the expected shape, so the generated model
+    /// has exactly the architecture the config describes.
+    pub fn generated(
+        generator: impl Fn(&str, &[usize]) -> Vec<f32> + Send + Sync + 'static,
+    ) -> Self {
+        Self {
+            tensors: HashMap::new(),
+            generator: Some(Box::new(generator)),
+        }
     }
 
     pub fn require(&self, key: &str) -> Result<&RawTensor> {
@@ -51,7 +72,7 @@ impl WeightMap {
     }
 
     pub fn contains(&self, key: &str) -> bool {
-        self.tensors.contains_key(key)
+        self.tensors.contains_key(key) || self.generator.is_some()
     }
 }
 
@@ -70,6 +91,10 @@ pub fn cuda_tensor(map: &WeightMap, key: &str) -> Result<CudaTensor> {
 }
 
 pub fn cuda_tensor_shaped(map: &WeightMap, key: &str, expected: &[usize]) -> Result<CudaTensor> {
+    if let (None, Some(generate)) = (map.tensors.get(key), map.generator.as_ref()) {
+        let values = generate(key, expected);
+        return CudaTensor::from_vec(values, expected.to_vec());
+    }
     let (shape, values) = map.get_f32(key)?;
     expect_shape(key, &shape, expected)?;
     CudaTensor::from_vec(values, shape)
@@ -91,6 +116,7 @@ mod tests {
     fn weight_map_missing_key_errors() {
         let map = WeightMap {
             tensors: HashMap::new(),
+            generator: None,
         };
         let err = map.require("no.such.key").unwrap_err();
         assert!(err.to_string().contains("missing weight key"));

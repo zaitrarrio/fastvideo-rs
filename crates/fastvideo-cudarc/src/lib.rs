@@ -12,7 +12,10 @@
 pub mod wan;
 
 pub use wan::device::{resolve_device, DeviceError};
-pub use wan::{ClipVision, ClipVisionConfig, CudaTensor, GenerateConfig, WanPipeline};
+pub use wan::{
+    ClipVision, ClipVisionConfig, CudaTensor, DenoiseStep, GenerateConfig, LoadParts, StepObserver,
+    WanPipeline,
+};
 
 use fastvideo_ops::{Device, DType, HostBackend, HostTensor, OpsError, TensorBackend};
 

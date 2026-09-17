@@ -1,0 +1,13 @@
+{
+  "negative": "Bright tones, overexposed, static, blurred details, subtitles, style, works, paintings, images, static, overall gray, worst quality, low quality, JPEG compression residue, ugly, incomplete, extra fingers, poorly drawn hands, poorly drawn faces, deformed, disfigured, misshapen limbs, fused fingers, still picture, messy background, three legs, many people in the background, walking backwards",
+  "prompts": [
+    {
+      "name": "beach_dog",
+      "prompt": "A golden retriever sprints along the shoreline at sunset, waves breaking around its paws, the camera tracking alongside at dog height, warm backlight, spray catching the light."
+    },
+    {
+      "name": "city_rain",
+      "prompt": "A slow dolly shot down a neon-lit city street at night in the rain, reflections rippling in puddles, pedestrians with umbrellas crossing, steam rising from a grate."
+    }
+  ]
+}

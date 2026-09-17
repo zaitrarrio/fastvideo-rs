@@ -21,6 +21,8 @@ rsync -az --delete \
   --exclude .git \
   --exclude 'outputs' \
   --exclude 'artifacts' \
+  --exclude .env \
+  --exclude '.env.*' \
   -e "ssh -i $SSH_KEY -p $port -o StrictHostKeyChecking=accept-new -o ServerAliveInterval=15 -o ServerAliveCountMax=3" \
   "$ROOT/" "root@$host:$REMOTE_DIR/"
 echo "synced"

@@ -527,25 +527,59 @@ pub struct KernelFns {
 }
 
 
+/// Every `__global__` entry point in [`KERNEL_SRC`], in load order.
+pub const KERNEL_NAMES: &[&str] = &[
+    "elem_add",
+    "elem_mul",
+    "elem_sub",
+    "mul_scalar",
+    "add_scalar",
+    "silu",
+    "gelu_tanh",
+    "clamp_f",
+    "softmax_last",
+    "rms_norm_last",
+    "layer_norm_last",
+    "modulate_scale_shift_last",
+    "broadcast_mul_last",
+    "add_bias_last",
+    "f32_to_bf16",
+    "bf16_to_f32",
+    "causal_conv3d_f32",
+    "permute_4d",
+    "block_copy",
+    "rope_interleaved",
+    "rms_norm_channels",
+    "gelu_tanh_bf16",
+    "add_bias_bf16_last",
+    "flash_attn_f32",
+    "layer_norm_adaln_fused",
+];
+
+/// NVRTC-compile the kernel module for `sm_major.sm_minor` without touching a
+/// GPU. NVRTC only needs `libnvrtc`, so this runs on any Linux box with the
+/// CUDA runtime libraries — a free gate before renting hardware.
+pub fn compile_ptx(sm_major: i32, sm_minor: i32) -> Result<cudarc::nvrtc::Ptx> {
+    let arch = super::hopper::nvrtc_arch(sm_major, sm_minor);
+    let opts = CompileOptions {
+        arch,
+        use_fast_math: Some(true),
+        ftz: Some(true),
+        // Do not also set `fmad`: use_fast_math already injects --fmad=true.
+        ..Default::default()
+    };
+    compile_ptx_with_opts(KERNEL_SRC, opts).map_err(|e| {
+        DeviceError::Message(format!("nvrtc compile failed (arch={arch:?}): {e}"))
+    })
+}
+
 impl KernelFns {
     pub fn compile(
         ctx: &Arc<cudarc::driver::CudaContext>,
         sm_major: i32,
         sm_minor: i32,
     ) -> Result<Self> {
-        let arch = super::hopper::nvrtc_arch(sm_major, sm_minor);
-        let opts = CompileOptions {
-            arch,
-            use_fast_math: Some(true),
-            ftz: Some(true),
-            // Do not also set `fmad`: use_fast_math already injects --fmad=true.
-            ..Default::default()
-        };
-        let ptx = compile_ptx_with_opts(KERNEL_SRC, opts).map_err(|e| {
-            DeviceError::Message(format!(
-                "nvrtc compile failed (arch={arch:?}): {e}"
-            ))
-        })?;
+        let ptx = compile_ptx(sm_major, sm_minor)?;
         let module = ctx.load_module(ptx)?;
         Ok(Self {
             elem_add: module.load_function("elem_add")?,

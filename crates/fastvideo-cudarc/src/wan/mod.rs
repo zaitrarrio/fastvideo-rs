@@ -27,7 +27,7 @@ pub mod vae;
 pub mod weights;
 
 pub use clip::{ClipVision, ClipVisionConfig};
-pub use pipeline::{GenerateConfig, WanPipeline};
+pub use pipeline::{DenoiseStep, GenerateConfig, LoadParts, StepObserver, WanPipeline};
 pub use tensor::CudaTensor;
 pub use transformer::WanTransformer3D;
 pub use vae::AutoencoderKlWan;

@@ -43,7 +43,7 @@ BENCH_TIMEOUT_SEC="${BENCH_TIMEOUT_SEC:-5400}"
 if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
   _on_local_int() {
     echo "[vast-gpu-bench] local INT/TERM — destroying instance $INSTANCE_ID"
-    vastai destroy instance "$INSTANCE_ID" >/dev/null 2>&1 || true
+    vastai destroy instance -y "$INSTANCE_ID" >/dev/null 2>&1 || true
     exit 130
   }
   # Install local Ctrl-C / TERM guard. No EXIT slot — the remote script's own
@@ -114,7 +114,10 @@ set -euo pipefail
 # SSH session timeout, parent kill), destroy the Vast instance so idle billed
 # time cannot accrue.  `exit 0` ensures the trap runs even if the bench was
 # killed by `timeout`, a Ctrl-C, or the SSH channel closing.
-trap 'vastai destroy instance "$INSTANCE_ID" >/dev/null 2>&1 || true; exit 0' EXIT INT TERM
+# NOTE: only effective if the box has the vastai CLI + key; scripts/gpu/validate.sh
+# destroys from the local side instead. Preserve the real exit code (was `exit 0`,
+# which reported every failed bench as success).
+trap 'rc=$?; vastai destroy instance -y "$INSTANCE_ID" >/dev/null 2>&1 || true; exit $rc' EXIT INT TERM
 
 # Wall-clock cap on the bench block.  Override by exporting BENCH_TIMEOUT_SEC
 # before invoking scripts/vast-gpu-bench.sh.  Default 90 minutes.
