@@ -103,12 +103,14 @@ PY
   local need_disk="${1:-30}"
   # Weights already on disk are what the headroom was for, so a reused instance
   # (--instance) counts them: the budget is free space PLUS what is downloaded.
-  local have_gb=0
-  if [[ -d "$WORK/weights" ]]; then
-    have_gb="$(du -BG -s "$WORK/weights" 2>/dev/null | tr -dc 0-9)"
-    have_gb="${have_gb:-0}"
-  fi
-  (( disk_gb + have_gb >= need_disk )) || die "only ${disk_gb}GB free (+${have_gb}GB weights), need ${need_disk}GB"
+  local have_gb=0 d sub
+  for sub in weights hf upstream-venv; do
+    d="$WORK/$sub"
+    [[ -d "$d" ]] || continue
+    local gb; gb="$(du -BG -s "$d" 2>/dev/null | tr -dc 0-9)"
+    have_gb=$(( have_gb + ${gb:-0} ))
+  done
+  (( disk_gb + have_gb >= need_disk )) || die "only ${disk_gb}GB free (+${have_gb}GB already fetched), need ${need_disk}GB"
   awk -v v="$cuda_drv" 'BEGIN { split(v, a, "."); exit !(a[1] > 12 || (a[1] == 12 && a[2] >= 4)) }' \
     || die "driver supports CUDA $cuda_drv < 12.4"
 }
