@@ -19,6 +19,7 @@ pub mod pipeline;
 pub mod resident;
 pub mod sp;
 pub mod stats;
+pub mod vsa;
 pub mod tensor;
 pub mod transformer;
 pub mod umt5;
