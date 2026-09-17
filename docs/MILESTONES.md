@@ -164,8 +164,32 @@ forward pass:
 
 About 24.5 s of compute per second of video, on a $0.20/hr GPU.
 
+## 2026-09-17, 13:32 — Flash attention measured and rejected
+
+The opt-in `flash_attn_f32` kernel had never been timed at clip scale, where
+attention dominates a 43 s DiT forward. An A/B on a pinned A5000
+(`FV_STAGE_ENV="FASTVIDEO_SDPA=flash"`, run `183200Z`) settled it:
+
+| Tokens | Dense | Flash | Penalty |
+| --- | ---: | ---: | ---: |
+| 1,456 | 0.13 s | 1.64 s | 12.6× |
+| 4,368 | 0.56 s | 11.8 s | 21× |
+| 13,104 | 3.74 s | 134 s | 35.8× |
+
+The penalty grows with sequence length — backwards for a flash-style kernel.
+The cause is structural: the launch config gives one block per query row, so at
+48k tokens 576,576 blocks each stream all of K and V through shared memory.
+That trades the materialized score matrix (110 GB per layer) for K/V re-reads
+hundreds of times larger. The budget gate stopped the run at $0.053, projecting
+1,795 s per forward against 43 s for dense.
+
+Flash stays off. Making it competitive means writing FlashAttention-2 properly
+(query tiles, tensor-core MMA, double-buffered loads); the larger win is
+porting upstream's sparse attention, which cuts the S² term instead of fighting
+it. The cheap intermediate — bf16 probabilities in the dense path — is next.
+
 ## Totals
 
-- **21 validation runs**, **$0.609** of GPU time end to end.
+- **22 validation runs**, **$0.662** of GPU time end to end.
 - A full T3 tier — kernels, models, parity, text encoding, two 8s clips and a precision comparison — costs **$0.066** and 19 minutes.
 - Cached CPU references save 648 s of billed CPU work per run.

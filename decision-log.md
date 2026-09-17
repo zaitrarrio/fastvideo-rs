@@ -2,6 +2,16 @@
 
 Project code: FVID
 
+### FVID · 2026-09-17 · FVID-2026-09-17-flash-sdpa-rejected
+- Trigger: at 48k tokens (8s clip) a DiT forward costs ~43 s with the default dense SDPA, and attention dominates; the opt-in `flash_attn_f32` kernel was never measured at clip scale, so `FASTVIDEO_SDPA=flash` was A/B'd on a pinned RTX A5000 against run `20260917T175630Z-clip`
+- Options: adopt flash as default; tune the existing kernel; rewrite it with query tiling + tensor cores; keep dense and cut its memory traffic; port upstream VSA sparse attention
+- Decision: **flash stays opt-in and off**; dense remains the default. The kernel is not tunable into competitiveness — `cfg_flash` launches one block per query row (`grid = bh × sq`, `block = d`), so at 48k tokens 576,576 blocks of 128 threads each stream the WHOLE of K and V through shared memory. K/V traffic per attention call is `bh × sq × sk × d × 2 × 4 B` ≈ 28 TB, hundreds of TB per forward across 30 layers; at ~768 GB/s that is the measured cost. It trades away the materialized score matrix (110 GB/layer) for K/V re-reads three orders of magnitude larger, so the penalty GROWS with sequence length: measured 12.6× slower at 1,456 tokens, 21× at 4,368, 35.8× at 13,104, and the probe's budget gate aborted the run projecting 1,795 s per forward at 48,048 tokens (vs 43 s dense). It is also scalar FMA + warp-shuffle per key, forfeiting the tensor cores cuBLAS gets in the dense path.
+- Reason: the hypothesis was that a flash-style kernel wins at long sequence because it never materializes scores; the measurement says this implementation loses for a different reason (no query tiling ⇒ no K/V reuse), and a real fix is FlashAttention-2 (query tiles, MMA on bf16, double-buffered loads), not tuning
+- Reversibility: free (nothing changed in the default path; `FASTVIDEO_SDPA=flash` still selects it)
+- Executed by: Executor
+- ADR: none (no architecture change; negative result recorded)
+- Verification: run `20260917T183200Z-clip` on a pinned RTX A5000, `FV_STAGE_ENV="FASTVIDEO_SDPA=flash"` — kernels/model/parity stages PASS (flash is numerically correct: parity exact rel_l2 2.3e-6), timings above, stage `probe-8s` rc=3 (budget). Cost $0.053. Next step recorded separately: cut dense's score-matrix traffic (bf16 probabilities), then evaluate the VSA port.
+
 ### FVID · 2026-09-13 · FVID-2026-09-13-strict-device-check
 - Trigger: user asked how to verify GPU code paths never silently execute on CPU — every device op added in FVID-2026-09-13-cudarc-perf-pass is structured as "try the device kernel, silently compute on host if it returns `None` for any reason", which is correct for portability but means a real GPU run where something's subtly broken (bad shape guard, kernel launch failure, residency toggled off) still produces correct output, just slower, with nothing in the logs
 - Options: no tooling (rely on manual profiling to notice a slowdown); log-only auditing; hard-fail strict mode; full distributed tracing
