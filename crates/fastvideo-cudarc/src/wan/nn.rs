@@ -237,11 +237,80 @@ impl Linear {
             .stream
             .alloc_zeros::<u16>(x_dev.len())
             .map_err(|e| TensorError::Message(e.to_string()))?;
+        // Reinterpret c_bf16 as &mut CudaSlice<u16> for the GEMM call, then add bias.
+        // SAFETY: CudaSlice<half::bf16> and CudaSlice<u16> have identical memory layout
+        // on device (both 16-bit); only the Rust type differs.
+        let c_bits: &mut cudarc::driver::CudaSlice<u16> =
+            unsafe { &mut *(c_bf16 as *mut cudarc::driver::CudaSlice<half::bf16> as *mut cudarc::driver::CudaSlice<u16>) };
         super::bf16_gemm::matmul_linear_wt_bf16_to_bf16(
             x_dev, w_bf16, &mut bits, c_bf16, m, k, n,
         )
         .map_err(|e| TensorError::Message(e.to_string()))?;
+        // Add bias in BF16 if present (fused F32-bias → BF16-output kernel).
+        if let Some(bias) = &self.bias {
+            let mut b = bias.clone();
+            b.ensure_device()?;
+            if let Some(b_dev) = b.device_slice() {
+                let total = (m * n) as i32;
+                unsafe {
+                    super::kernels::launch_add_bias_bf16_last(
+                        &dev.stream,
+                        &dev.kernels.add_bias_bf16_last,
+                        c_bits,
+                        b_dev,
+                        total,
+                        n as i32,
+                    )
+                    .map_err(|e| TensorError::Message(e.to_string()))?;
+                }
+            }
+        }
         Ok(())
+    }
+
+    /// Forward from a pre-cast BF16 activation buffer (e.g., the output of
+    /// `forward_into_bf16` after a GELU) → F32 output tensor. Enables a
+    /// fully BF16 FFN: proj(F32→BF16) → gelu_bf16 → out(BF16→F32) with
+    /// no F32 intermediate allocation.
+    #[cfg(feature = "cuda")]
+    pub fn forward_from_bf16(
+        &self,
+        x_bf16: &cudarc::driver::CudaSlice<half::bf16>,
+        m: usize,
+        out_shape: Vec<usize>,
+    ) -> Result<CudaTensor> {
+        if !super::bf16_gemm::bf16_enabled() {
+            return Err(TensorError::Message(
+                "forward_from_bf16: BF16 disabled".into(),
+            ));
+        }
+        let Some(w_bf16) = self.ensure_bf16_cache() else {
+            return Err(TensorError::Message(
+                "forward_from_bf16: weight bf16 cache unavailable".into(),
+            ));
+        };
+        let dev = super::device::global_device().ok_or_else(|| {
+            TensorError::Message("no global CUDA device context".into())
+        })?;
+        let k = self.weight.shape[1];
+        let n = self.weight.shape[0];
+        if x_bf16.len() != m * k {
+            return Err(TensorError::Message(format!(
+                "forward_from_bf16: activation size {} != m*k={}*{}",
+                x_bf16.len(), m, k
+            )));
+        }
+        let mut c_dev = super::bf16_gemm::matmul_bf16_bf16_to_f32(x_bf16, w_bf16, m, k, n)
+            .map_err(|e| TensorError::Message(e.to_string()))?;
+        if let Some(bias) = &self.bias {
+            let mut b = bias.clone();
+            b.ensure_device()?;
+            if let Some(b_dev) = b.device_slice() {
+                super::ops::add_bias_last_inplace(&mut c_dev, b_dev)?;
+            }
+        }
+        let _ = dev;
+        CudaTensor::from_device_slice(c_dev, out_shape)
     }
 
     pub fn forward(&self, xs: &CudaTensor) -> Result<CudaTensor> {
@@ -392,6 +461,96 @@ pub fn gelu_tanh(xs: &CudaTensor) -> CudaTensor {
 /// Approximate GELU via tanh variant (sufficient for CLIP MLP).
 pub fn gelu(xs: &CudaTensor) -> CudaTensor {
     xs.gelu_tanh()
+}
+
+/// In-place GELU-tanh on a BF16 buffer (stored as `CudaSlice<u16>` bits).
+/// Used by the chained BF16 FFN path between `forward_into_bf16` and
+/// `forward_from_bf16`. Returns `Err` if no CUDA device is available.
+#[cfg(feature = "cuda")]
+pub fn gelu_tanh_bf16_inplace(buf: &mut cudarc::driver::CudaSlice<u16>) -> Result<()> {
+    let dev = super::device::global_device().ok_or_else(|| {
+        TensorError::Message("gelu_tanh_bf16_inplace: no CUDA device".into())
+    })?;
+    let n = buf.len() as i32;
+    unsafe {
+        super::kernels::launch_gelu_tanh_bf16(
+            &dev.stream,
+            &dev.kernels.gelu_tanh_bf16,
+            buf,
+            n,
+        )
+        .map_err(|e| TensorError::Message(e.to_string()))?;
+    }
+    Ok(())
+}
+
+/// Fused unaffine LayerNorm + AdaLN modulate in one kernel launch.
+/// `x`: [batch, seq, dim]; `scale`/`shift`: [batch, dim]; output: [batch, seq, dim].
+/// Returns `None` if CUDA unavailable (caller falls back to separate ops).
+#[cfg(feature = "cuda")]
+pub fn layer_norm_adaln(
+    x: &CudaTensor,
+    scale: &CudaTensor,
+    shift: &CudaTensor,
+    eps: f32,
+) -> Result<Option<CudaTensor>> {
+    use super::device;
+    if x.rank() != 3 || scale.rank() != 2 || shift.rank() != 2 {
+        return Ok(None);
+    }
+    let (batch, seq, dim) = (x.shape[0], x.shape[1], x.shape[2]);
+    if scale.shape[0] != batch || scale.shape[1] != dim
+        || shift.shape[0] != batch || shift.shape[1] != dim
+    {
+        return Ok(None);
+    }
+    let Some(dev) = device::global_device() else {
+        return Ok(None);
+    };
+    let mut xc = x.clone();
+    let mut sc = scale.clone();
+    let mut sh = shift.clone();
+    xc.ensure_device()?;
+    sc.ensure_device()?;
+    sh.ensure_device()?;
+    let (Some(x_dev), Some(sc_dev), Some(sh_dev)) =
+        (xc.device_slice(), sc.device_slice(), sh.device_slice())
+    else {
+        return Ok(None);
+    };
+    let mut out = dev
+        .stream
+        .alloc_zeros::<f32>(batch * seq * dim)
+        .map_err(|e| TensorError::Message(e.to_string()))?;
+    unsafe {
+        super::kernels::launch_layer_norm_adaln_fused(
+            &dev.stream,
+            &dev.kernels.layer_norm_adaln_fused,
+            x_dev,
+            sc_dev,
+            sh_dev,
+            &mut out,
+            batch as i32,
+            seq as i32,
+            dim as i32,
+            eps,
+        )
+        .map_err(|e| TensorError::Message(e.to_string()))?;
+    }
+    Ok(Some(CudaTensor::from_device_slice(
+        out,
+        vec![batch, seq, dim],
+    )?))
+}
+
+#[cfg(not(feature = "cuda"))]
+pub fn layer_norm_adaln(
+    _x: &CudaTensor,
+    _scale: &CudaTensor,
+    _shift: &CudaTensor,
+    _eps: f32,
+) -> Result<Option<CudaTensor>> {
+    Ok(None)
 }
 
 pub fn rms_norm(xs: &CudaTensor, weight: &CudaTensor, eps: f32) -> Result<CudaTensor> {
@@ -577,7 +736,14 @@ pub fn scaled_dot_product_attention_masked(
             if sdpa_backend() == "host" {
                 return super::attn::flash_style_sdpa_host(q, k, v, scale);
             }
-            // flash / dense / default → GPU-first
+            // flash / dense / default → GPU-first.
+            // Try tiled flash attention first (O(d) memory); fall back to dense
+            // (O(Sq*Sk) memory) when flash is unavailable (d not multiple of 32).
+            if sdpa_backend() != "dense" {
+                if let Some(out) = super::attn::device_flash_sdpa(q, k, v, scale)? {
+                    return Ok(out);
+                }
+            }
             if let Some(out) = super::attn::device_dense_sdpa(q, k, v, scale)? {
                 return Ok(out);
             }

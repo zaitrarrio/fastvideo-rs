@@ -7,6 +7,93 @@ use super::tensor::{record_device_hit, strict_device_check, CudaTensor, Result, 
 /// Fallback query-chunk size when no CUDA device context is available.
 pub const GPU_SDPA_QUERY_CHUNK: usize = 256;
 
+/// Tiled flash attention on-device: O(d) peak memory, no full S×S scores buffer.
+/// Kernel: `flash_attn_f32` (NVRTC), one block per (bh, q_i), blockDim = head_dim.
+/// Falls back to `None` if head_dim is not a multiple of 32 or CUDA is unavailable.
+#[cfg(feature = "cuda")]
+pub fn device_flash_sdpa(
+    q: &CudaTensor,
+    k: &CudaTensor,
+    v: &CudaTensor,
+    scale: Option<f32>,
+) -> Result<Option<CudaTensor>> {
+    use super::device;
+    use super::resident::residency_enabled;
+
+    if !residency_enabled() || device::global_device().is_none() {
+        return Ok(None);
+    }
+    if q.rank() != 4 || k.rank() != 4 || v.rank() != 4 {
+        return Ok(None);
+    }
+    let (b, h, sq, d) = (q.shape[0], q.shape[1], q.shape[2], q.shape[3]);
+    let sk = k.shape[2];
+    if k.shape[3] != d || v.shape[2] != sk || v.shape[3] != d || k.shape[0] != b || k.shape[1] != h {
+        return Ok(None);
+    }
+    // Flash kernel requires d to be a multiple of the warp size (32).
+    if d == 0 || d % 32 != 0 {
+        return Ok(None);
+    }
+    let scale = scale.unwrap_or(1.0 / (d as f32).sqrt());
+    let bh = b * h;
+    let Some(dev) = device::global_device() else {
+        return Ok(None);
+    };
+    let mut q = q.clone();
+    let mut k = k.clone();
+    let mut v = v.clone();
+    q.ensure_device()?;
+    k.ensure_device()?;
+    v.ensure_device()?;
+    let Some(q_dev) = q.device_slice() else { return Ok(None); };
+    let Some(k_dev) = k.device_slice() else { return Ok(None); };
+    let Some(v_dev) = v.device_slice() else { return Ok(None); };
+
+    static FLASH_ONCE: AtomicBool = AtomicBool::new(false);
+    super::log::info_once(
+        &FLASH_ONCE,
+        format_args!(
+            "sdpa: GPU flash-tiled B={b} H={h} Sq={sq} Sk={sk} D={d} (O(d) mem)"
+        ),
+    );
+
+    let mut out_dev = dev
+        .stream
+        .alloc_zeros::<f32>(bh * sq * d)
+        .map_err(|e| TensorError::Message(e.to_string()))?;
+
+    unsafe {
+        super::kernels::launch_flash_attn_f32(
+            &dev.stream,
+            &dev.kernels.flash_attn_f32,
+            q_dev,
+            k_dev,
+            v_dev,
+            &mut out_dev,
+            bh as i32,
+            sq as i32,
+            sk as i32,
+            d as i32,
+            scale,
+        )
+        .map_err(|e| TensorError::Message(e.to_string()))?;
+    }
+
+    record_device_hit("flash-attention");
+    Ok(Some(CudaTensor::from_device_slice(out_dev, vec![b, h, sq, d])?))
+}
+
+#[cfg(not(feature = "cuda"))]
+pub fn device_flash_sdpa(
+    _q: &CudaTensor,
+    _k: &CudaTensor,
+    _v: &CudaTensor,
+    _scale: Option<f32>,
+) -> Result<Option<CudaTensor>> {
+    Ok(None)
+}
+
 /// Device-resident dense SDPA: strided-batched cuBLAS `Q@K^T` + NVRTC softmax + `P@V`.
 /// Returns `None` when CUDA/residency is unavailable (caller falls back).
 #[cfg(feature = "cuda")]

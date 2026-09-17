@@ -339,6 +339,163 @@ extern "C" __global__ void rms_norm_channels(
         out[i] = x[i] * inv * gamma[ci];
     }
 }
+// In-place GELU-tanh on BF16 (stored as ushort) — used by chained BF16 FFN path.
+extern "C" __global__ void gelu_tanh_bf16(unsigned short* a, int n) {
+    int i = blockIdx.x * blockDim.x + threadIdx.x;
+    if (i >= n) return;
+    unsigned int u = ((unsigned int)a[i]) << 16;
+    float x = __uint_as_float(u);
+    const float k0 = 0.7978845608028654f;
+    float t = k0 * (x + 0.044715f * x * x * x);
+    float y = 0.5f * x * (1.0f + tanhf(t));
+    a[i] = (unsigned short)(__float_as_uint(y) >> 16);
+}
+// In-place add F32 bias to a BF16 (ushort) buffer along last dim `width`.
+// Used by `forward_into_bf16` so the chained FFN includes the projection bias.
+extern "C" __global__ void add_bias_bf16_last(unsigned short* out, const float* bias, int n, int width) {
+    int i = blockIdx.x * blockDim.x + threadIdx.x;
+    if (i >= n) return;
+    unsigned int u = ((unsigned int)out[i]) << 16;
+    float val = __uint_as_float(u) + bias[i % width];
+    out[i] = (unsigned short)(__float_as_uint(val) >> 16);
+}
+// Tiled flash attention (online softmax, O(d) peak memory per block).
+// Grid: (bh * sq), Block: (d) where d = head_dim (multiple of 32).
+// Shared mem: (2*FA_BK*d + FA_BK*n_warps) * sizeof(float), passed at launch.
+// Uses warp shuffle for intra-warp dot-product reduction and re-uses the K
+// tile buffer for scores once the K tile has been consumed, avoiding any
+// extra allocation. No O(Sq*Sk) intermediate buffer is needed.
+#define FA_BK 32
+#define FA_WARP 32
+extern "C" __global__ void flash_attn_f32(
+    const float* Q, const float* K, const float* V, float* O,
+    int bh, int sq, int sk, int d, float scale
+) {
+    int bh_idx = blockIdx.x / sq;
+    int q_i    = blockIdx.x % sq;
+    if (bh_idx >= bh) return;
+    int tid     = threadIdx.x;
+    int n_warps = d / FA_WARP;
+    int warp_id = tid / FA_WARP;
+    int lane    = tid % FA_WARP;
+
+    extern __shared__ float smem[];
+    float* Ksh       = smem;                          // [FA_BK * d] — K tile, reused for scores
+    float* Vsh       = smem + FA_BK * d;              // [FA_BK * d]
+    float* sc_partial = smem + 2 * FA_BK * d;         // [FA_BK * n_warps]
+
+    float q_val = Q[((long)bh_idx * sq + q_i) * d + tid];
+    float o_val = 0.0f;
+    float m_val = -3.402823466e+38f;
+    float l_val = 0.0f;
+
+    for (int k0 = 0; k0 < sk; k0 += FA_BK) {
+        int klen = (sk - k0 < FA_BK) ? (sk - k0) : FA_BK;
+
+        // Step 1: load K and V tiles cooperatively (each thread loads column tid).
+        for (int ki = 0; ki < klen; ki++) {
+            long base = ((long)bh_idx * sk + k0 + ki) * d;
+            Ksh[ki * d + tid] = K[base + tid];
+            Vsh[ki * d + tid] = V[base + tid];
+        }
+        __syncthreads();  // SYNC-A: K/V tiles visible to all threads
+
+        // Step 2: compute klen dot products using warp-shuffle intra-warp reduction.
+        for (int ki = 0; ki < klen; ki++) {
+            float dot = q_val * Ksh[ki * d + tid];
+            for (int offset = FA_WARP / 2; offset > 0; offset >>= 1)
+                dot += __shfl_down_sync(0xffffffff, dot, offset);
+            if (lane == 0) sc_partial[ki * n_warps + warp_id] = dot;
+        }
+        __syncthreads();  // SYNC-B: warp partial sums visible
+
+        // Step 3: thread tid < klen aggregates warp partials → Ksh[tid] stores score.
+        if (tid < klen) {
+            float s = 0.0f;
+            for (int w = 0; w < n_warps; w++) s += sc_partial[tid * n_warps + w];
+            Ksh[tid] = s * scale;
+        }
+        __syncthreads();  // SYNC-C: scores in Ksh[0..klen]
+
+        // Step 4: online softmax — all threads compute same m_tile and m_new.
+        float m_tile = -3.402823466e+38f;
+        for (int ki = 0; ki < klen; ki++) m_tile = fmaxf(m_tile, Ksh[ki]);
+        float m_new      = fmaxf(m_val, m_tile);
+        float exp_rescale = expf(m_val - m_new);
+
+        // Overwrite Ksh[0..klen] with softmax weights.
+        if (tid < klen) Ksh[tid] = expf(Ksh[tid] - m_new);
+        __syncthreads();  // SYNC-D: softmax weights in Ksh[0..klen]
+
+        // Step 5: rescale running output and accumulate weighted V.
+        o_val *= exp_rescale;
+        for (int ki = 0; ki < klen; ki++)
+            o_val += Ksh[ki] * Vsh[ki * d + tid];
+
+        // Update running statistics (same value computed by every thread).
+        float sum_exp = 0.0f;
+        for (int ki = 0; ki < klen; ki++) sum_exp += Ksh[ki];
+        l_val = l_val * exp_rescale + sum_exp;
+        m_val = m_new;
+        __syncthreads();  // SYNC-E: done with Ksh/Vsh before next tile overwrites them
+    }
+
+    // Normalise and write output.
+    O[((long)bh_idx * sq + q_i) * d + tid] = o_val / l_val;
+}
+// Fused unaffine LayerNorm + AdaLN modulate (one-pass, one kernel launch).
+// Replaces the `layer_norm(None,None)` + `modulate(scale, shift)` pair in
+// each WanBlock pre-attention and pre-FFN norm step. Scale/shift are [batch,
+// dim]; x/out are [batch, seq, dim]. One block per (batch*seq) row,
+// blockDim=256, dynamic shared memory for the tree reductions.
+extern "C" __global__ void layer_norm_adaln_fused(
+    const float* x, const float* scale_w, const float* shift_w, float* out,
+    int batch, int seq, int dim, float eps
+) {
+    extern __shared__ float sdata[];
+    int row = blockIdx.x;
+    if (row >= batch * seq) return;
+    int batch_i = row / seq;
+    int tid      = threadIdx.x;
+    int nthreads = blockDim.x;
+    const float* src = x + (long)row * dim;
+    float*       dst = out + (long)row * dim;
+    const float* sc  = scale_w + (long)batch_i * dim;
+    const float* sh  = shift_w + (long)batch_i * dim;
+
+    // Compute mean.
+    float local_sum = 0.0f;
+    for (int j = tid; j < dim; j += nthreads) local_sum += src[j];
+    sdata[tid] = local_sum;
+    __syncthreads();
+    for (int s = nthreads >> 1; s > 0; s >>= 1) {
+        if (tid < s) sdata[tid] += sdata[tid + s];
+        __syncthreads();
+    }
+    float mean = sdata[0] / (float)dim;
+    __syncthreads();
+
+    // Compute variance.
+    float local_var = 0.0f;
+    for (int j = tid; j < dim; j += nthreads) {
+        float d = src[j] - mean;
+        local_var += d * d;
+    }
+    sdata[tid] = local_var;
+    __syncthreads();
+    for (int s = nthreads >> 1; s > 0; s >>= 1) {
+        if (tid < s) sdata[tid] += sdata[tid + s];
+        __syncthreads();
+    }
+    float inv = rsqrtf(sdata[0] / (float)dim + eps);
+    __syncthreads();
+
+    // Write LayerNorm output with AdaLN modulation: out = norm * (1+scale) + shift.
+    for (int j = tid; j < dim; j += nthreads) {
+        float n = (src[j] - mean) * inv;
+        dst[j] = n * (1.0f + sc[j]) + sh[j];
+    }
+}
 "#;
 
 pub struct KernelFns {
@@ -363,6 +520,10 @@ pub struct KernelFns {
     pub block_copy: CudaFunction,
     pub rope_interleaved: CudaFunction,
     pub rms_norm_channels: CudaFunction,
+    pub gelu_tanh_bf16: CudaFunction,
+    pub add_bias_bf16_last: CudaFunction,
+    pub flash_attn_f32: CudaFunction,
+    pub layer_norm_adaln_fused: CudaFunction,
 }
 
 
@@ -408,6 +569,10 @@ impl KernelFns {
             block_copy: module.load_function("block_copy")?,
             rope_interleaved: module.load_function("rope_interleaved")?,
             rms_norm_channels: module.load_function("rms_norm_channels")?,
+            gelu_tanh_bf16: module.load_function("gelu_tanh_bf16")?,
+            add_bias_bf16_last: module.load_function("add_bias_bf16_last")?,
+            flash_attn_f32: module.load_function("flash_attn_f32")?,
+            layer_norm_adaln_fused: module.load_function("layer_norm_adaln_fused")?,
         })
     }
 }
@@ -835,6 +1000,122 @@ pub unsafe fn launch_rms_norm_channels(
             .arg(&spatial)
             .arg(&eps)
             .launch(cfg_n(total))?;
+    }
+    Ok(())
+}
+
+/// In-place BF16 GELU-tanh. `a` is a slice of ushort BF16 bits.
+pub unsafe fn launch_gelu_tanh_bf16(
+    stream: &CudaStream,
+    f: &CudaFunction,
+    a: &mut CudaSlice<u16>,
+    n: i32,
+) -> Result<()> {
+    unsafe {
+        stream
+            .launch_builder(f)
+            .arg(a)
+            .arg(&n)
+            .launch(cfg_n(n as u32))?;
+    }
+    Ok(())
+}
+
+/// In-place add F32 bias to a BF16 (ushort) buffer along last dim `width`.
+pub unsafe fn launch_add_bias_bf16_last(
+    stream: &CudaStream,
+    f: &CudaFunction,
+    out: &mut CudaSlice<u16>,
+    bias: &CudaSlice<f32>,
+    n: i32,
+    width: i32,
+) -> Result<()> {
+    unsafe {
+        stream
+            .launch_builder(f)
+            .arg(out)
+            .arg(bias)
+            .arg(&n)
+            .arg(&width)
+            .launch(cfg_n(n as u32))?;
+    }
+    Ok(())
+}
+
+/// Tiled flash attention: O(d) peak memory. Grid = bh*sq blocks, Block = d threads.
+/// `smem_bytes` = (2*FA_BK*d + FA_BK*n_warps) * 4; passed by caller.
+pub unsafe fn launch_flash_attn_f32(
+    stream: &CudaStream,
+    f: &CudaFunction,
+    q: &CudaSlice<f32>,
+    k: &CudaSlice<f32>,
+    v: &CudaSlice<f32>,
+    out: &mut CudaSlice<f32>,
+    bh: i32,
+    sq: i32,
+    sk: i32,
+    d: i32,
+    scale: f32,
+) -> Result<()> {
+    let fa_bk = 32u32;
+    let d_u = d as u32;
+    let n_warps = d_u / 32;
+    let smem_bytes = (2 * fa_bk * d_u + fa_bk * n_warps) * std::mem::size_of::<f32>() as u32;
+    let cfg = LaunchConfig {
+        grid_dim: ((bh * sq).max(1) as u32, 1, 1),
+        block_dim: (d_u, 1, 1),
+        shared_mem_bytes: smem_bytes,
+    };
+    unsafe {
+        stream
+            .launch_builder(f)
+            .arg(q)
+            .arg(k)
+            .arg(v)
+            .arg(out)
+            .arg(&bh)
+            .arg(&sq)
+            .arg(&sk)
+            .arg(&d)
+            .arg(&scale)
+            .launch(cfg)?;
+    }
+    Ok(())
+}
+
+/// Fused unaffine LayerNorm + AdaLN modulate.
+/// `scale_w`/`shift_w`: [batch, dim]; `x`/`out`: [batch, seq, dim].
+/// One block per (batch*seq) row, 256 threads, dynamic shared memory.
+pub unsafe fn launch_layer_norm_adaln_fused(
+    stream: &CudaStream,
+    f: &CudaFunction,
+    x: &CudaSlice<f32>,
+    scale_w: &CudaSlice<f32>,
+    shift_w: &CudaSlice<f32>,
+    out: &mut CudaSlice<f32>,
+    batch: i32,
+    seq: i32,
+    dim: i32,
+    eps: f32,
+) -> Result<()> {
+    let rows = (batch * seq).max(1) as u32;
+    let cfg = LaunchConfig {
+        grid_dim: (rows, 1, 1),
+        block_dim: (ROW_BLOCK_THREADS, 1, 1),
+        shared_mem_bytes: ROW_BLOCK_THREADS * std::mem::size_of::<f32>() as u32,
+    };
+    unsafe {
+        stream
+            .launch_builder(f)
+            .arg(x)
+            .arg(scale_w)
+            .arg(shift_w)
+            .arg(out)
+            .arg(&batch)
+            .arg(&seq)
+            .arg(&dim)
+            .arg(&eps)
+            .launch(cfg)?;
     }
     Ok(())
 }

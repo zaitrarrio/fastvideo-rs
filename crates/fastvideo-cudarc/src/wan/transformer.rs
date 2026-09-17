@@ -317,8 +317,58 @@ impl FeedForward {
     }
 
     fn forward(&self, xs: &CudaTensor) -> Result<CudaTensor> {
+        // Fast path: BF16 chain — proj(F32→BF16) → gelu_bf16 → out(BF16→F32).
+        // Eliminates the F32 intermediate buffer and the cast round-trips that
+        // the naive F32 path incurs.
+        #[cfg(feature = "cuda")]
+        if super::bf16_gemm::bf16_enabled() {
+            if let Ok(result) = self.forward_bf16_chained(xs) {
+                return Ok(result);
+            }
+        }
         let h = nn::gelu_tanh(&self.proj.forward(xs)?);
         self.out.forward(&h)
+    }
+
+    /// Chained BF16 FFN: proj(F32→BF16) → in-place gelu_bf16 → out(BF16→F32).
+    /// Returns Err if BF16 is unavailable; caller falls back to F32 path.
+    #[cfg(feature = "cuda")]
+    fn forward_bf16_chained(&self, xs: &CudaTensor) -> Result<CudaTensor> {
+        use cudarc::driver::DevicePtrMut;
+        let dev = super::device::global_device().ok_or_else(|| {
+            TensorError::Message("no CUDA device".into())
+        })?;
+        let (m, out_shape_proj) = match xs.rank() {
+            2 => (xs.shape[0], vec![xs.shape[0], self.proj.weight.shape[0]]),
+            3 => (
+                xs.shape[0] * xs.shape[1],
+                vec![xs.shape[0], xs.shape[1], self.proj.weight.shape[0]],
+            ),
+            _ => return Err(TensorError::Message("ffn bf16: unsupported rank".into())),
+        };
+        let ffn_dim = self.proj.weight.shape[0];
+        let dim = self.out.weight.shape[0];
+        // Allocate BF16 intermediate buffer: m * ffn_dim elements.
+        let mut h_bf16 = dev
+            .stream
+            .alloc_zeros::<half::bf16>(m * ffn_dim)
+            .map_err(|e| TensorError::Message(e.to_string()))?;
+        // proj: F32 → BF16 (with bias fused).
+        self.proj.forward_into_bf16(xs, &mut h_bf16)?;
+        // In-place gelu_bf16 on the BF16 buffer (reinterpret as u16 for the kernel).
+        let h_bits: &mut cudarc::driver::CudaSlice<u16> = unsafe {
+            &mut *((&mut h_bf16) as *mut cudarc::driver::CudaSlice<half::bf16>
+                as *mut cudarc::driver::CudaSlice<u16>)
+        };
+        nn::gelu_tanh_bf16_inplace(h_bits)?;
+        // out: BF16 → F32 (with bias fused).
+        let out_shape = match xs.rank() {
+            2 => vec![xs.shape[0], dim],
+            3 => vec![xs.shape[0], xs.shape[1], dim],
+            _ => unreachable!(),
+        };
+        let _ = out_shape_proj;
+        self.out.forward_from_bf16(&h_bf16, m, out_shape)
     }
 }
 
@@ -512,19 +562,6 @@ impl WanBlock {
         image: Option<&CudaTensor>,
         attn_mask: Option<&CudaTensor>,
     ) -> Result<CudaTensor> {
-        // Stream pool warm-up for `FASTVIDEO_TWO_STREAMS=1`. We ensure a side
-        // stream exists on the first call and record an event from the primary
-        // stream so the side stream can `wait` before issuing its MLP work.
-        // Currently the existing kernel/cuBLAS calls all run on the primary
-        // stream (dev.stream), so the side stream is exercised via the wait
-        // barrier but does not own the actual compute yet — wiring every helper
-        // onto a non-default stream is a much larger refactor. The hook is here
-        // so future work (or a `FASTVIDEO_TWO_STREAMS=2` strict split) can
-        // extend without another architectural change.
-        #[cfg(feature = "cuda")]
-        let _stream_hook: Option<(cudarc::driver::CudaEvent, std::sync::Arc<cudarc::driver::CudaStream>)> =
-            maybe_record_two_stream_event();
-
         let e = self.scale_shift_table.add(temb)?;
         let chunks = e.chunk(6, 1)?;
         let shift_msa = &chunks[0];
@@ -534,8 +571,27 @@ impl WanBlock {
         let c_scale = &chunks[4];
         let c_gate = &chunks[5];
 
-        let normed = nn::layer_norm(hidden, self.norm1_eps, None, None)?;
-        let normed = normed.modulate(scale_msa, shift_msa)?;
+        // Helper: squeeze [batch,1,dim] → [batch,dim] for fused LN+AdaLN kernel.
+        let squeeze2d = |t: &CudaTensor| -> Result<CudaTensor> {
+            if t.rank() == 3 && t.shape[1] == 1 {
+                t.reshape(vec![t.shape[0], t.shape[2]])
+            } else {
+                Ok(t.clone())
+            }
+        };
+
+        // Pre-SA norm: try fused LayerNorm + AdaLN modulate.
+        let normed = {
+            let sc2 = squeeze2d(scale_msa)?;
+            let sh2 = squeeze2d(shift_msa)?;
+            match nn::layer_norm_adaln(hidden, &sc2, &sh2, self.norm1_eps)? {
+                Some(fused) => fused,
+                None => {
+                    let n = nn::layer_norm(hidden, self.norm1_eps, None, None)?;
+                    n.modulate(scale_msa, shift_msa)?
+                }
+            }
+        };
         let attn = self
             .attn1
             .forward(&normed, None, Some(rotary), None, attn_mask)?;
@@ -552,8 +608,20 @@ impl WanBlock {
             .forward(&normed, Some(encoder), None, image, None)?;
         let hidden = hidden.add(&attn)?;
 
-        let normed = nn::layer_norm(&hidden, self.norm1_eps, None, None)?;
-        let normed = normed.modulate(c_scale, c_shift)?;
+        // Pre-FFN norm: try fused LayerNorm + AdaLN modulate.
+        let normed = {
+            let sc2 = squeeze2d(c_scale)?;
+            let sh2 = squeeze2d(c_shift)?;
+            match nn::layer_norm_adaln(&hidden, &sc2, &sh2, self.norm1_eps)? {
+                Some(fused) => fused,
+                None => {
+                    let n = nn::layer_norm(&hidden, self.norm1_eps, None, None)?;
+                    n.modulate(c_scale, c_shift)?
+                }
+            }
+        };
+
+        // FFN (chained BF16 path attempted inside FeedForward::forward).
         let ff = self.ffn.forward(&normed)?;
         hidden.add(&ff.gate_mul(c_gate)?)
     }

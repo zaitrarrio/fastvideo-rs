@@ -5,6 +5,8 @@
 pub mod device;
 #[cfg(feature = "cuda")]
 pub mod kernels;
+#[cfg(feature = "cuda")]
+pub mod pool;
 pub mod attn;
 pub mod bf16_gemm;
 pub mod clip;

@@ -109,6 +109,64 @@ mod cuda_impl {
         Ok(())
     }
 
+    /// `X[m,k](bf16) @ W[n,k]^T(bf16) → C[m,n](f32)` via GemmEx Tensor Cores.
+    /// Used by `Linear::forward_from_bf16` for chained FFN: the first projection's
+    /// BF16 output is passed directly as the second projection's input without
+    /// a round-trip through F32, saving one cast kernel and one allocation.
+    pub fn matmul_bf16_bf16_to_f32(
+        x_bf16: &cudarc::driver::CudaSlice<half::bf16>,
+        w_bf16: &cudarc::driver::CudaSlice<half::bf16>,
+        m: usize,
+        k: usize,
+        n: usize,
+    ) -> Result<cudarc::driver::CudaSlice<f32>> {
+        use cudarc::cublas::sys;
+        use cudarc::driver::{DevicePtr, DevicePtrMut};
+
+        let dev = device::global_device().ok_or_else(|| {
+            DeviceError::Message("no global CUDA device context".into())
+        })?;
+        if x_bf16.len() != m * k || w_bf16.len() != n * k {
+            return Err(DeviceError::Message(
+                "matmul_bf16_bf16_to_f32: size mismatch".into(),
+            ));
+        }
+        let mut c = dev.stream.alloc_zeros::<f32>(m * n)?;
+        let alpha = 1.0f32;
+        let beta = 0.0f32;
+        let (a_ptr, _ra) = w_bf16.device_ptr(&dev.stream);
+        let (b_ptr, _rb) = x_bf16.device_ptr(&dev.stream);
+        let (c_ptr, _rc) = c.device_ptr_mut(&dev.stream);
+        unsafe {
+            cudarc::cublas::result::gemm_ex(
+                *dev.cublas.handle(),
+                sys::cublasOperation_t::CUBLAS_OP_T,
+                sys::cublasOperation_t::CUBLAS_OP_N,
+                n as i32,
+                m as i32,
+                k as i32,
+                (&alpha) as *const f32 as *const _,
+                a_ptr as *const _,
+                sys::cudaDataType_t::CUDA_R_16BF,
+                k as i32,
+                b_ptr as *const _,
+                sys::cudaDataType_t::CUDA_R_16BF,
+                k as i32,
+                (&beta) as *const f32 as *const _,
+                c_ptr as *mut _,
+                sys::cudaDataType_t::CUDA_R_32F,
+                n as i32,
+                sys::cublasComputeType_t::CUBLAS_COMPUTE_32F,
+                sys::cublasGemmAlgo_t::CUBLAS_GEMM_DEFAULT_TENSOR_OP,
+            )
+            .map_err(|e| DeviceError::Message(e.to_string()))?;
+        }
+        drop(_ra);
+        drop(_rb);
+        drop(_rc);
+        Ok(c)
+    }
+
     /// Identity hash for an activation: the device pointer XOR'd with the length.
     /// Cheap "has the activation buffer changed since last call?" test used by the
     /// per-Linear bf16 cache (`FASTVIDEO_BF16_ACT=1`).
