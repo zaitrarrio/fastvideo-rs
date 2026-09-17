@@ -5,9 +5,11 @@
 //! workspace size are built once per shape and the workspace buffer is shared
 //! and only ever grows. Bias is added in place by one kernel launch.
 //!
-//! `FASTVIDEO_CONV3D=unfold` routes 3-D convs through a temporal unfold into a
-//! cuDNN conv2d instead (lets cuDNN pick 2-D Winograd for 3×3); `fv-gpucheck`
-//! benchmarks both.
+//! 3-D convs have two backends: cuDNN N-D, or a temporal unfold into a cuDNN
+//! conv2d (lets cuDNN pick 2-D Winograd for 3×3). Which is faster depends on
+//! the GPU (unfold 2× faster on an RTX A5000, cuDNN N-D 1.6× faster on an RTX
+//! 5060 Ti at VAE sizes), so by default the first call per shape times both
+//! and caches the winner. `FASTVIDEO_CONV3D=cudnn|unfold` forces one.
 
 #![cfg(feature = "cuda")]
 
@@ -42,6 +44,8 @@ struct ConvPlan {
 pub struct ConvCache {
     plans: HashMap<ConvKey, ConvPlan>,
     workspace: Option<CudaSlice<u8>>,
+    /// Chosen 3-D backend per shape (`true` = temporal unfold).
+    conv3d_unfold: HashMap<ConvKey, bool>,
 }
 
 impl ConvCache {
@@ -151,7 +155,7 @@ pub fn cudnn_conv(
         cache.workspace = None;
         cache.workspace = Some(unsafe { dev.stream.alloc::<u8>(need) }?);
     }
-    let ConvCache { plans, workspace } = &mut *cache;
+    let ConvCache { plans, workspace, .. } = &mut *cache;
     let plan = &plans[&key];
     let n_out: usize = plan.y_shape.iter().product();
     let mut y = unsafe { dev.stream.alloc::<f32>(n_out) }?;
@@ -171,9 +175,59 @@ pub fn cudnn_conv(
 
 static CONV3D_BACKEND: CachedString = CachedString::new();
 
-/// `cudnn` (default) or `unfold`.
+/// `auto` (default), `cudnn` or `unfold`.
 pub fn conv3d_backend() -> String {
-    CONV3D_BACKEND.get_or_init(|| super::envflag::string_flag("FASTVIDEO_CONV3D", "cudnn"))
+    CONV3D_BACKEND.get_or_init(|| super::envflag::string_flag("FASTVIDEO_CONV3D", "auto"))
+}
+
+/// 3-D conv with the backend chosen per [`conv3d_backend`]. In `auto` mode the
+/// first call for a shape runs each backend twice, times the second run of
+/// each (synchronized), keeps the faster one's output and remembers the choice.
+pub fn conv3d(
+    x: &CudaSlice<f32>,
+    x_shape: &[usize],
+    w: &CudaSlice<f32>,
+    w_shape: &[usize],
+    pad: [usize; 3],
+    stride: [usize; 3],
+) -> Result<(CudaSlice<f32>, Vec<usize>)> {
+    let run = |unfold: bool| -> Result<(CudaSlice<f32>, Vec<usize>)> {
+        if unfold && pad[0] == 0 {
+            conv3d_unfold(x, x_shape, w, w_shape, [pad[1], pad[2]], stride)
+        } else {
+            cudnn_conv(x, x_shape, w, w_shape, &pad, &stride)
+        }
+    };
+    match conv3d_backend().as_str() {
+        "cudnn" => return run(false),
+        "unfold" => return run(true),
+        _ => {}
+    }
+    let dev = global_device().ok_or_else(|| DeviceError::Message("no global CUDA device context".into()))?;
+    let key = ConvKey { x: x_shape.to_vec(), w: w_shape.to_vec(), pad: pad.to_vec(), stride: stride.to_vec(), fma: fma_math(&dev) };
+    let known = dev.conv.lock().expect("conv cache lock").conv3d_unfold.get(&key).copied();
+    if let Some(unfold) = known {
+        return run(unfold);
+    }
+    let timed = |unfold: bool| -> Result<(f64, (CudaSlice<f32>, Vec<usize>))> {
+        drop(run(unfold)?);
+        dev.synchronize()?;
+        let t = std::time::Instant::now();
+        let out = run(unfold)?;
+        dev.synchronize()?;
+        Ok((t.elapsed().as_secs_f64(), out))
+    };
+    let (cudnn_s, cudnn_out) = timed(false)?;
+    let (unfold_s, unfold_out) = timed(true)?;
+    let unfold = unfold_s < cudnn_s;
+    super::log::info(format_args!(
+        "conv3d x={x_shape:?} w={w_shape:?}: cudnn {:.1}ms, unfold {:.1}ms → {}",
+        cudnn_s * 1e3,
+        unfold_s * 1e3,
+        if unfold { "unfold" } else { "cudnn" }
+    ));
+    dev.conv.lock().expect("conv cache lock").conv3d_unfold.insert(key, unfold);
+    Ok(if unfold { unfold_out } else { cudnn_out })
 }
 
 /// 3-D conv through a temporal unfold: gather every `kt`-frame window into

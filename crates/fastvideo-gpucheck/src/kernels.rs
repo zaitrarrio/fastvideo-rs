@@ -470,7 +470,7 @@ pub fn run(report: &mut Report, lim: Limits, seed: u64) -> StageResult<()> {
         }
         {
             // bf16 casts: round-trip error is bf16 precision; bias+GELU fused on the way out.
-            let x = c.rand(100_003, 3.0);
+            let x = c.rand(100_002, 3.0); // multiple of the bias width
             let bias = c.rand(7, 0.5);
             let x16 = ops::cast_f32_bf16_device(&up(&x)?)?;
             let bits: Vec<f32> = dev()?.stream.memcpy_dtov(&x16)?.iter().map(|v| v.to_f32()).collect();

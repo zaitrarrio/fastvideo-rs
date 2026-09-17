@@ -866,8 +866,8 @@ impl CudaTensor {
                 let mut shape = self.shape.clone();
                 shape[1] = oc;
                 (y, shape)
-            } else if spatial == 3 && super::conv::conv3d_backend() == "unfold" {
-                super::conv::conv3d_unfold(&x, &self.shape, &w, &weight.shape, [pad[1], pad[2]], [stride[0], stride[1], stride[2]])
+            } else if spatial == 3 {
+                super::conv::conv3d(&x, &self.shape, &w, &weight.shape, [pad[0], pad[1], pad[2]], [stride[0], stride[1], stride[2]])
                     .map_err(|e| msg(e.to_string()))?
             } else {
                 super::conv::cudnn_conv(&x, &self.shape, &w, &weight.shape, pad, stride).map_err(|e| msg(e.to_string()))?
