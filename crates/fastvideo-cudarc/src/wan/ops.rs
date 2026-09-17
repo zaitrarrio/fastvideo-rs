@@ -220,6 +220,41 @@ pub fn bias_gelu_inplace_device(x: &mut CudaSlice<f32>, bias: &CudaSlice<f32>) -
     launch!(dev.stream, &dev.kernels.bias_gelu_inplace, cfg; x, bias, &n, &width).map_err(err)
 }
 
+/// f32 → bfloat16 (round to nearest).
+#[cfg(feature = "cuda")]
+pub fn cast_f32_bf16_device(a: &CudaSlice<f32>) -> Result<CudaSlice<half::bf16>> {
+    let dev = ctx()?;
+    let n = a.len() as i64;
+    let mut out = unsafe { dev.stream.alloc::<half::bf16>(a.len().max(1)) }.map_err(err)?;
+    launch!(dev.stream, &dev.kernels.cast_f32_bf16, cfg_n(a.len()); a, &mut out, &n).map_err(err)?;
+    Ok(out)
+}
+
+/// bfloat16 → f32 with optional `bias[i % bias.len()]` and GELU-tanh.
+#[cfg(feature = "cuda")]
+pub fn cast_bf16_f32_bias_act_device(a: &CudaSlice<half::bf16>, bias: Option<&CudaSlice<f32>>, gelu: bool) -> Result<CudaSlice<f32>> {
+    if let Some(b) = bias {
+        check("cast_bf16_f32 bias", !b.is_empty() && a.len() % b.len() == 0)?;
+    }
+    let dev = ctx()?;
+    let mut out = alloc(a.len().max(1))?;
+    let (n, width) = (a.len() as i64, bias.map_or(1, |b| b.len()) as i64);
+    let (has_bias, act) = (i32::from(bias.is_some()), i32::from(gelu));
+    // Without a bias the kernel never reads it, but still needs a pointer to bind.
+    let placeholder;
+    let bias_arg = match bias {
+        Some(b) => b,
+        None => {
+            placeholder = alloc(1)?;
+            &placeholder
+        }
+    };
+    launch!(dev.stream, &dev.kernels.cast_bf16_f32_bias_act, cfg_n(a.len());
+        a, bias_arg, &mut out, &n, &width, &has_bias, &act)
+    .map_err(err)?;
+    Ok(out)
+}
+
 #[cfg(feature = "cuda")]
 #[allow(clippy::too_many_arguments)]
 pub fn residual_gate_add_e_device(

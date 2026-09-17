@@ -29,6 +29,9 @@ FV_CUDNN_REQUIRED_SYMBOL="cudnnBackendPopulateCudaGraph"
 # `remote.sh cublas <version>` installs a different cuBLAS here; once present
 # it replaces the image's for every later stage on this box.
 FV_CUBLAS_DIR="$WORK/fv-cublas"
+# Minimum cuBLAS: older builds lack Blackwell kernels (generic FP32 only).
+FV_CUBLAS_MIN="${FV_CUBLAS_MIN:-12.9.1}"
+FV_CUBLAS_VERSION="${FV_CUBLAS_VERSION:-12.9.1.4}"
 fv_find_lib() {
   local name="$1" hit=""
   if [[ "$name" == cudnn && -e "$FV_CUDNN_DIR/nvidia/cudnn/lib/libcudnn.so.9" ]]; then
@@ -134,6 +137,27 @@ cmd_bootstrap() {
     fv_setup_libs
   fi
   fv_cudnn_ok || die "cuDNN at $(readlink "$FV_LIBDIR/libcudnn.so") still lacks $FV_CUDNN_REQUIRED_SYMBOL"
+  local have
+  have="$(fv_cublas_version)"
+  if [[ -z "$have" ]] || [[ "$(printf '%s\n%s\n' "$FV_CUBLAS_MIN" "$have" | sort -V | head -1)" != "$FV_CUBLAS_MIN" ]]; then
+    log "image cuBLAS ${have:-unknown} < $FV_CUBLAS_MIN"
+    cmd_cublas "$FV_CUBLAS_VERSION"
+  fi
+  log "cublas $(fv_cublas_version)"
+}
+
+# Print the loaded cuBLAS version (major.minor.patch).
+fv_cublas_version() {
+  python3 - "$FV_LIBDIR/libcublas.so" <<'PY' 2>/dev/null
+import ctypes, sys
+lib = ctypes.CDLL(sys.argv[1])
+v = ctypes.c_int()
+out = []
+for prop in (0, 1, 2):
+    lib.cublasGetProperty(prop, ctypes.byref(v))
+    out.append(str(v.value))
+print(".".join(out))
+PY
 }
 
 # cublas <version>: install nvidia-cublas-cu12==<version> beside the image's

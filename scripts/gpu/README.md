@@ -18,8 +18,9 @@ Nothing is compared against another framework. The references are:
 
 | Tier | GPU | Proves | Typical wall time | Est. cost* |
 |---|---|---|---|---|
-| preflight `local` | none (Docker) | unit tests, NVRTC compile of all 25 kernels (needs only `libnvrtc`), and the release binary the rented box runs, all built in Docker | 10–15 min cold, ~2 min warm | free |
-| **T1** `run kernels` | cheapest Ampere+ ≥8 GB | CUDA context; every NVRTC kernel, cuBLAS F32/TF32/BF16 GEMM, flash/dense attention, conv3d, cuDNN conv2d vs plain-Rust math; random-weight UMT5/DiT/VAE/UniPC/DMD GPU vs CPU path (exact and fast) | 15–25 min | $0.02–0.06 |
+| preflight `local` | none (Docker) | unit tests, NVRTC compile of every kernel (needs only `libnvrtc`), and the release binary the rented box runs, all built in Docker | 10–15 min cold, ~2 min warm | free |
+| `run mathprobe` | any (pick with `FV_OFFER_QUERY_EXTRA=gpu_name=…`) | which cuBLAS math (FP32 / TF32 / bf16 compute / bf16 buffers) this GPU honors, with the image's cuBLAS and a newer one | ~5–7 min | ~$0.01–0.02 |
+| **T1** `run kernels` | cheapest Ampere+ ≥8 GB | CUDA context; every NVRTC kernel, cuBLAS GEMMs and bf16 linears, dense/flash attention, cuDNN conv2d/conv3d and temporal unfold vs plain-Rust math; random-weight UMT5/DiT/VAE/UniPC/DMD GPU vs CPU path (exact and fast) | 10–15 min | $0.02–0.04 |
 | **T2** `run parity` | ≥16 GB | T1, plus real 1.3B DiT forward, VAE decode and 2-step UniPC, GPU vs CPU path | 45–75 min (CPU reference is slow) | $0.10–0.30 |
 | **T3** `run clip` | ≥24 GB, ≥80 GB RAM | T2, plus real prompt embeddings from cudarc UMT5-XXL on the GPU; a probe that projects 8s-clip time and VRAM before committing; two 8s clips (129 frames, 448×832, FastWan DMD) with per-step NaN and time guards and video quality gates; exact vs fast drift on a 2s clip | 90–150 min | $0.30–0.90 |
 
@@ -61,6 +62,8 @@ scripts/gpu/docker.sh gpu <stage...>  # GPU stages on a local NVIDIA GPU
   - `run` saves every reference its box dumps, and uploads cached ones to later boxes, skipping `model-cpu-ref` / `parity-cpu-ref`. `timings.md` marks those stages "cached (earlier run)".
   - The binary refuses a reference whose key differs from the run's.
   - `docker.sh refs [--parity]` fills the same cache locally. `--parity` needs the local HF snapshot and ≥28 GB of Docker VM memory.
+- **cuBLAS:** bootstrap requires cuBLAS ≥ 12.9.1 (`FV_CUBLAS_MIN`) and installs `nvidia-cublas-cu12==12.9.1.4` beside older images. cuBLAS 12.4 predates Blackwell: on an RTX 5060 Ti it runs generic FP32 kernels, ignores TF32/bf16 compute and is 2.6× slower even in FP32 (`run mathprobe`, 2026-09-17).
+- **Fast mode:** DiT/UMT5 linears keep bf16 weights on the device and multiply bf16 buffers (≈4× FP32 on Ampere and Blackwell); attention and other GEMMs use `CUBLAS_COMPUTE_32F_FAST_16BF` on F32 buffers; cuDNN convs allow TF32.
 - **Local GPU runs:** only on Linux with an NVIDIA GPU and `nvidia-container-toolkit`. Docker Desktop on macOS has no GPU passthrough, and Macs have no NVIDIA GPUs, so on a Mac the GPU stages run only on rented boxes. There `docker.sh gpu` stops with that explanation.
 
 ## Fail-fast design

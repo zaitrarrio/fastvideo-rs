@@ -10,8 +10,25 @@ fn msg(s: impl Into<String>) -> TensorError {
 
 #[derive(Debug, Clone)]
 pub struct Linear {
-    pub weight: CudaTensor, // [out, in]
+    /// `[out, in]` F32 weight. Empty (`[0, in]`) when the weight lives only
+    /// as bfloat16 on the device (see [`Self::weight_bf16`]).
+    pub weight: CudaTensor,
     pub bias: Option<CudaTensor>,
+    in_dim: usize,
+    out_dim: usize,
+    /// Fast mode on a Tensor Core GPU: the weight as bfloat16 on the device.
+    /// Activations are cast in, multiplied with bf16 buffers throughout (the
+    /// only form cuBLAS runs as true bf16 kernels on every GPU generation),
+    /// and cast back with the bias and activation fused.
+    #[cfg(feature = "cuda")]
+    weight_bf16: Option<std::sync::Arc<cudarc::driver::CudaSlice<half::bf16>>>,
+}
+
+/// bfloat16 linears apply when the context runs bf16 GEMM math.
+#[cfg(feature = "cuda")]
+fn bf16_linears() -> bool {
+    stats::device_expected()
+        && super::device::global_device().is_some_and(|d| d.gemm_math == super::device::GemmMath::Bf16)
 }
 
 impl Linear {
@@ -20,11 +37,33 @@ impl Linear {
         if weight.rank() != 2 || bias.as_ref().is_some_and(|b| b.numel() != weight.shape[0]) {
             return Err(msg(format!("linear weight {:?} bias {:?}", weight.shape, bias.as_ref().map(|b| &b.shape))));
         }
-        weight.pin_device()?;
+        let (out_dim, in_dim) = (weight.shape[0], weight.shape[1]);
         if let Some(b) = &mut bias {
             b.pin_device()?;
         }
-        Ok(Self { weight, bias })
+        #[cfg(feature = "cuda")]
+        if bf16_linears() {
+            let dev = super::device::global_device().ok_or_else(|| msg("no device"))?;
+            let host: Vec<half::bf16> = weight.host_cow()?.iter().map(|&v| half::bf16::from_f32(v)).collect();
+            let slice = dev.stream.memcpy_stod(&host).map_err(|e| msg(e.to_string()))?;
+            stats::record_h2d(host.len() / 2);
+            return Ok(Self {
+                weight: CudaTensor::from_vec(Vec::new(), vec![0, in_dim])?,
+                bias,
+                in_dim,
+                out_dim,
+                weight_bf16: Some(std::sync::Arc::new(slice)),
+            });
+        }
+        weight.pin_device()?;
+        Ok(Self {
+            weight,
+            bias,
+            in_dim,
+            out_dim,
+            #[cfg(feature = "cuda")]
+            weight_bf16: None,
+        })
     }
 
     pub fn zeros(in_dim: usize, out_dim: usize, bias: bool) -> Self {
@@ -72,13 +111,17 @@ impl Linear {
     }
 
     pub fn out_dim(&self) -> usize {
-        self.weight.shape[0]
+        self.out_dim
+    }
+
+    pub fn in_dim(&self) -> usize {
+        self.in_dim
     }
 
     fn out_shape(&self, xs: &CudaTensor) -> Result<(usize, usize, Vec<usize>)> {
         let k = *xs.shape.last().ok_or_else(|| msg("linear on scalar"))?;
-        if xs.rank() < 2 || k != self.weight.shape[1] {
-            return Err(msg(format!("linear input {:?} for weight {:?}", xs.shape, self.weight.shape)));
+        if xs.rank() < 2 || k != self.in_dim {
+            return Err(msg(format!("linear input {:?} for weight [{}, {}]", xs.shape, self.out_dim, self.in_dim)));
         }
         let mut shape = xs.shape.clone();
         *shape.last_mut().unwrap() = self.out_dim();
@@ -97,6 +140,21 @@ impl Linear {
     fn forward_act(&self, xs: &CudaTensor, gelu: bool) -> Result<CudaTensor> {
         let (m, k, out_shape) = self.out_shape(xs)?;
         let n = self.out_dim();
+        #[cfg(feature = "cuda")]
+        if let Some(w16) = &self.weight_bf16 {
+            let x = xs.dev()?.ok_or_else(|| msg("bf16 linear without a device"))?;
+            let x16 = super::ops::cast_f32_bf16_device(&x)?;
+            let mut c16 = unsafe { super::device::global_device().ok_or_else(|| msg("no device"))?.stream.alloc::<half::bf16>((m * n).max(1)) }
+                .map_err(|e| msg(e.to_string()))?;
+            super::device::matmul_linear_wt_bf16(&x16, w16, &mut c16, m, k, n).map_err(|e| msg(e.to_string()))?;
+            drop(x16);
+            let bias = match &self.bias {
+                Some(b) => Some(b.dev()?.ok_or_else(|| msg("bias"))?),
+                None => None,
+            };
+            let c = super::ops::cast_bf16_f32_bias_act_device(&c16, bias.as_deref(), gelu)?;
+            return CudaTensor::from_dev_result(c, out_shape);
+        }
         #[cfg(feature = "cuda")]
         if let (Some(x), Some(w)) = (xs.dev()?, self.weight.dev()?) {
             let mut c = super::ops::alloc((m * n).max(1))?;

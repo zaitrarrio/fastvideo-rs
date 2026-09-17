@@ -58,7 +58,9 @@ ARG DEBIAN_FRONTEND=noninteractive
 # Pinned to what the GPU ladder was validated against. cuDNN must be >= the
 # version whose symbols cudarc 0.17 binds (the 9.1 in PyTorch/CUDA images is too old).
 ARG NVRTC_VERSION=12.4.127
-ARG CUBLAS_VERSION=12.4.5.8
+# cuBLAS 12.9: 12.4 predates Blackwell and runs generic FP32 kernels there
+# (TF32 / bf16 compute ignored, FP32 2.6x slower; see `validate.sh run mathprobe`).
+ARG CUBLAS_VERSION=12.9.1.4
 ARG CUDNN_VERSION=9.26.0.51
 RUN apt-get update \
  && apt-get install -y --no-install-recommends \

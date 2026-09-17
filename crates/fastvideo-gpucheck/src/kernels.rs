@@ -11,6 +11,7 @@ use cudarc::driver::CudaSlice;
 use fastvideo_cudarc::wan::device::GemmMath;
 use fastvideo_cudarc::wan::fused::Rope;
 use fastvideo_cudarc::wan::ops::{self, host, BcastOp};
+use fastvideo_cudarc::wan::nn::Linear;
 use fastvideo_cudarc::wan::{attn, conv, device, kernels as k};
 use fastvideo_cudarc::CudaTensor;
 use serde_json::json;
@@ -466,6 +467,35 @@ pub fn run(report: &mut Report, lim: Limits, seed: u64) -> StageResult<()> {
             device::matmul_2d_strided_batched(&up(&a)?, &up(&b)?, &mut out, batch, m, kk, n)?;
             let want: Vec<f32> = (0..batch).flat_map(|bi| ref_matmul(&a[bi * m * kk..(bi + 1) * m * kk], &b[bi * kk * n..(bi + 1) * kk * n], m, kk, n)).collect();
             c.cmp("gemm_strided_batched", &down(&out)?, &want, gemm)?;
+        }
+        {
+            // bf16 casts: round-trip error is bf16 precision; bias+GELU fused on the way out.
+            let x = c.rand(100_003, 3.0);
+            let bias = c.rand(7, 0.5);
+            let x16 = ops::cast_f32_bf16_device(&up(&x)?)?;
+            let bits: Vec<f32> = dev()?.stream.memcpy_dtov(&x16)?.iter().map(|v| v.to_f32()).collect();
+            let want: Vec<f32> = x.iter().map(|&v| half::bf16::from_f32(v).to_f32()).collect();
+            c.cmp("cast_f32_bf16_matches_half", &bits, &want, 0.0)?;
+            let got = down(&ops::cast_bf16_f32_bias_act_device(&x16, Some(&up(&bias)?), true)?)?;
+            let want: Vec<f32> = want.iter().enumerate().map(|(i, v)| ref_gelu_tanh(v + bias[i % 7])).collect();
+            c.cmp("cast_bf16_f32_bias_gelu", &got, &want, op)?;
+            let got = down(&ops::cast_bf16_f32_bias_act_device(&x16, None, false)?)?;
+            c.cmp("cast_bf16_f32_plain", &got, &bits, 0.0)?;
+        }
+        for (rows, kk, n, gelu) in [(97usize, 1536usize, 8960usize, true), (300, 1536, 1536, false)] {
+            // Production Linear: bf16 buffers in fast mode, F32 GEMM in exact mode.
+            let (x, w, b) = (c.rand(rows * kk, 1.0), c.rand(n * kk, 0.05), c.rand(n, 0.1));
+            let lin = Linear::from_tensors(CudaTensor::from_vec(w.clone(), vec![n, kk])?, Some(CudaTensor::from_vec(b.clone(), vec![n])?))?;
+            let xt = t(x.clone(), &[1, rows, kk])?;
+            let got = if gelu { lin.forward_gelu(&xt)? } else { lin.forward(&xt)? };
+            let mut want = ref_matmul(&x, &transpose2(&w, n, kk), rows, kk, n);
+            for (i, v) in want.iter_mut().enumerate() {
+                *v += b[i % n];
+                if gelu {
+                    *v = ref_gelu_tanh(*v);
+                }
+            }
+            c.cmp(&format!("linear_{math:?}_{rows}x{kk}x{n}_gelu{gelu}"), &host_of(&got)?, &want, gemm)?;
         }
         {
             // 1×1 conv as a shared-weight GEMM over channel-first activations.

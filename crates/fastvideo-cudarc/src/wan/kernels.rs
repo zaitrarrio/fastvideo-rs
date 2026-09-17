@@ -103,6 +103,34 @@ extern "C" __global__ void bias_gelu_inplace(float* x, const float* bias, long n
     float u = k * (v + 0.044715f * v * v * v);
     x[i] = 0.5f * v * (1.0f + tanhf(u));
 }
+// f32 -> bfloat16 bits (stored as ushort): sign + 8-bit exponent + top 7
+// mantissa bits, rounded to nearest on the dropped bits. Carry into the
+// exponent is the correct round-up; inf/NaN and the largest finite value are
+// left unrounded.
+extern "C" __global__ void cast_f32_bf16(const float* a, unsigned short* out, long n) {
+    long i = IDX();
+    if (i >= n) return;
+    unsigned int u = __float_as_uint(a[i]);
+    unsigned int hi = u >> 16;
+    if ((u & 0x8000u) != 0u && (hi & 0x7F80u) != 0x7F80u && (hi & 0x7FFFu) != 0x7F7Fu) hi += 1u;
+    out[i] = (unsigned short)hi;
+}
+// bfloat16 bits -> f32, then optional bias[i % width] and GELU-tanh (act=1):
+// the output side of a bf16 linear in one launch.
+extern "C" __global__ void cast_bf16_f32_bias_act(
+    const unsigned short* a, const float* bias, float* out, long n, long width, int has_bias, int act
+) {
+    long i = IDX();
+    if (i >= n) return;
+    float v = __uint_as_float(((unsigned int)a[i]) << 16);
+    if (has_bias) v += bias[i % width];
+    if (act == 1) {
+        const float k = 0.7978845608028654f;
+        float u = k * (v + 0.044715f * v * v * v);
+        v = 0.5f * v * (1.0f + tanhf(u));
+    }
+    out[i] = v;
+}
 // Gated residual with the AdaLN table: out = h + a * e[b, slot, d], with
 // h/a [batch, seq, dim] and e [batch, e_rows, dim].
 extern "C" __global__ void residual_gate_add_e(
@@ -541,6 +569,8 @@ kernel_fns!(
     bcast_binary,
     add_bias_inplace,
     bias_gelu_inplace,
+    cast_f32_bf16,
+    cast_bf16_f32_bias_act,
     residual_gate_add_e,
     softmax_last,
     rms_norm_last,

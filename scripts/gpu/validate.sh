@@ -36,7 +36,8 @@ FAST_W="$WORK/weights/fastwan21-1.3b"
 # ---- tier definitions ---------------------------------------------------------
 # Offer filter, $/hr ceiling, hard wall-clock cap (watchdog destroys at the cap).
 tier_query() {
-  local base="num_gpus=1 compute_cap>=800 cuda_vers>=12.4 reliability>0.97 rentable=true verified=true direct_port_count>=1 inet_down>=200"
+  # FV_OFFER_QUERY_EXTRA narrows the search, e.g. "gpu_name=RTX_4070S".
+  local base="num_gpus=1 compute_cap>=800 cuda_vers>=12.4 reliability>0.97 rentable=true verified=true direct_port_count>=1 inet_down>=200 ${FV_OFFER_QUERY_EXTRA:-}"
   case "$1" in
     kernels) echo "$base gpu_ram>=8 disk_space>=40 cpu_ram>=16" ;;
     # cuBLAS math-mode probe: DiT linears at 8s-clip size (~2 GB of buffers).
