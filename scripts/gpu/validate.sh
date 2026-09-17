@@ -13,6 +13,9 @@ set -euo pipefail
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 
 RUNS="${FV_RUNS:-$FV_ROOT/artifacts/gpucheck/runs}"
+DOCKER_SH="$FV_ROOT/scripts/gpu/docker.sh"
+DIST="$FV_ROOT/artifacts/gpucheck/dist"
+LOCAL_REFS="$FV_ROOT/artifacts/gpucheck/refs"
 IMAGE="${VAST_IMAGE:-pytorch/pytorch:2.5.1-cuda12.4-cudnn9-devel}"
 WORK="/workspace"
 OUTR="$WORK/gpucheck-out"
@@ -43,14 +46,13 @@ usage() { sed -n '2,12p' "$0" | sed 's/^# \{0,1\}//'; exit 2; }
 # Compile-level gates only: catches a broken build before paying for one.
 
 cmd_local() {
-  require_tools cargo
-  log "preflight: unit tests (gpucheck + cudarc lib)"
-  (cd "$FV_ROOT" && cargo test -q -p fastvideo-gpucheck -p fastvideo-cudarc --lib --bins 2>&1 | grep -E 'test result|FAILED|panicked') \
-    || die "unit tests failed" 1
-  log "preflight: CUDA feature type-check (no toolkit needed)"
-  if ! (cd "$FV_ROOT" && CUDARC_CUDA_VERSION=12040 cargo check -q -p fastvideo-gpucheck --features cuda 2>&1 | grep -E '^error' -A8 >&2; exit "${PIPESTATUS[0]}"); then
-    die "cuda type-check failed" 1
-  fi
+  # Everything builds and runs in Docker (scripts/gpu/docker.sh), not on the host.
+  log "preflight: unit tests (Docker)"
+  "$DOCKER_SH" test || die "unit tests failed" 1
+  log "preflight: NVRTC compile gate (Docker, libnvrtc only)"
+  "$DOCKER_SH" nvrtc || die "NVRTC kernel compile failed — no GPU run can pass; see artifacts/gpucheck/local/nvrtc.json" 1
+  log "preflight: release binary for the rented box (Docker)"
+  "$DOCKER_SH" dist || die "dist build failed" 1
   log "preflight PASS"
 }
 
@@ -220,7 +222,12 @@ cmd_run() {
   if [[ $skip_local -eq 0 ]]; then
     log "free local preflight first (skip with --skip-local)"
     cmd_local
+  else
+    "$DOCKER_SH" dist || die "dist build failed" 1
   fi
+  local build_id
+  build_id="$("$DOCKER_SH" build-id)"
+  [[ "$(cat "$DIST/fv-gpucheck.build-id" 2>/dev/null)" == "$build_id" ]] || die "dist binary is stale; run: $DOCKER_SH dist"
 
   local max_dph mins
   max_dph="${MAX_DPH:-$(tier_max_dph "$tier")}"
@@ -255,16 +262,22 @@ cmd_run() {
   fi
   wait_ready
 
-  log "syncing repo"
-  fv_ssh "$HOST" "$PORT" "mkdir -p $FV_REMOTE_DIR"
-  fv_rsync_to "$HOST" "$PORT" "$FV_ROOT/" "$FV_REMOTE_DIR/" --delete \
-    --exclude target --exclude target-linux --exclude .git --exclude artifacts --exclude '*.zip' \
-    --exclude .env --exclude '.env.*'
+  # The box gets scripts + the Docker-built binary only: no source, no compile.
+  log "uploading scripts and prebuilt fv-gpucheck (build $build_id)"
+  fv_ssh "$HOST" "$PORT" "mkdir -p $FV_REMOTE_DIR/scripts $FV_REMOTE_DIR/target/release $OUTR/refs"
+  fv_rsync_to "$HOST" "$PORT" "$FV_ROOT/scripts/" "$FV_REMOTE_DIR/scripts/" --delete --exclude '.env*'
+  fv_rsync_to "$HOST" "$PORT" "$DIST/" "$FV_REMOTE_DIR/target/release/"
+  local have_refs=0
+  if [[ "$(cat "$LOCAL_REFS/build-id" 2>/dev/null)" == "$build_id" ]]; then
+    fv_rsync_to "$HOST" "$PORT" "$LOCAL_REFS/" "$OUTR/refs/"
+    have_refs=1
+    log "using local CPU-path references for build $build_id"
+  fi
 
   local need_disk; need_disk=$(( $(tier_disk "$tier") - 10 ))
   remote_run env 120 env "$need_disk"
   remote_run bootstrap 600 bootstrap
-  # Downloads run while we compile; wait-weights verifies them later.
+  # Downloads run in the background during the weight-free stages.
   case "$tier" in
     parity) remote_run fetch-base 120 fetch "$BASE_REPO" "$BASE_W" "transformer/*" "vae/*" ;;
     clip)
@@ -272,7 +285,6 @@ cmd_run() {
       remote_run fetch-fast 120 fetch "$FAST_REPO" "$FAST_W" "transformer/*" "vae/*"
       ;;
   esac
-  remote_run build 2400 build
 
   local refs="$OUTR/refs"
   # T1: kernels vs plain-Rust math; random-weight model, GPU vs cudarc CPU path.
@@ -280,14 +292,18 @@ cmd_run() {
   gpucheck_stage device 300 device
   gpucheck_stage kernels-exact 900 --keep-going --mode exact kernels
   gpucheck_stage kernels-fast 900 --keep-going --mode fast kernels
-  gpucheck_stage model-cpu-ref 600 --mode exact model --device cpu --dump "$refs"
+  if [[ $have_refs -eq 0 || ! -f "$LOCAL_REFS/model.safetensors" ]]; then
+    gpucheck_stage model-cpu-ref 600 --mode exact model --device cpu --dump "$refs"
+  fi
   gpucheck_stage model-exact 600 --mode exact model --device cuda --reference "$refs"
   gpucheck_stage model-fast 600 --mode fast model --device cuda --reference "$refs"
   [[ "$tier" == kernels ]] && { log "T1 PASS"; return 0; }
 
   # T2: real 1.3B weights, GPU vs cudarc CPU path.
   remote_run wait-base 1800 wait-weights "$BASE_W" 1800 transformer vae
-  gpucheck_stage parity-cpu-ref 3600 --mode exact parity --weights "$BASE_W" --device cpu --dump "$refs"
+  if [[ $have_refs -eq 0 || ! -f "$LOCAL_REFS/parity.safetensors" ]]; then
+    gpucheck_stage parity-cpu-ref 3600 --mode exact parity --weights "$BASE_W" --device cpu --dump "$refs"
+  fi
   gpucheck_stage parity-exact 1200 --mode exact parity --weights "$BASE_W" --device cuda --reference "$refs"
   gpucheck_stage parity-fast 1200 --mode fast parity --weights "$BASE_W" --device cuda --reference "$refs"
   [[ "$tier" == parity ]] && { log "T2 PASS"; return 0; }

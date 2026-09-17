@@ -8,9 +8,7 @@ ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 WORK="${FV_WORK:-/workspace}"
 OUT="$WORK/gpucheck-out"
 LOGS="$OUT/logs"
-export CARGO_HOME="${CARGO_HOME:-$WORK/.cargo}"
-export RUSTUP_HOME="${RUSTUP_HOME:-$WORK/.rustup}"
-export PATH="$CARGO_HOME/bin:/usr/local/cuda/bin:$PATH"
+export PATH="/usr/local/cuda/bin:$PATH"
 export LD_LIBRARY_PATH="/usr/local/cuda/lib64:${LD_LIBRARY_PATH:-}"
 mkdir -p "$LOGS"
 
@@ -51,15 +49,11 @@ cmd_env() {
 }
 
 cmd_bootstrap() {
-  if ! command -v cargo >/dev/null; then
-    log "installing rust (minimal profile)"
-    curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
-      | sh -s -- -y --profile minimal --default-toolchain stable >"$LOGS/rustup.log" 2>&1 \
-      || { tail -20 "$LOGS/rustup.log"; die "rustup failed"; }
-  fi
-  cargo --version
-  # ffmpeg (mp4 mux) and the HF downloader install in the background: neither
-  # blocks the build, and failures surface at the stage that needs them.
+  # The binary arrives prebuilt (scripts/gpu/docker.sh dist); only runtime
+  # helpers are installed here. ffmpeg (mp4 mux) installs in the background
+  # and surfaces at the clip stage if it failed.
+  [[ -x "$ROOT/target/release/fv-gpucheck" ]] || die "prebuilt fv-gpucheck missing (upload failed?)"
+  "$ROOT/target/release/fv-gpucheck" --help >/dev/null || die "prebuilt fv-gpucheck does not run on this box (glibc/arch mismatch?)"
   if ! command -v ffmpeg >/dev/null; then
     nohup bash -c 'DEBIAN_FRONTEND=noninteractive apt-get update -qq && apt-get install -y -qq ffmpeg' \
       >"$LOGS/apt-ffmpeg.log" 2>&1 &
@@ -122,20 +116,17 @@ print(f"weights ok: {n} shards verified under {root}")
 PY
 }
 
-cmd_build() {
-  cd "$ROOT"
-  # Validation builds skip fat LTO: minutes of billed compile for no kernel speedup.
-  CARGO_PROFILE_RELEASE_LTO=off CARGO_PROFILE_RELEASE_CODEGEN_UNITS=16 \
-    cargo build --release -p fastvideo-gpucheck --features cuda 2>&1 | tee "$LOGS/build.log" | grep -E '^(error|warning: unused)|Compiling fastvideo|Finished' || true
-  [[ ${PIPESTATUS[0]} -eq 0 ]] || { grep -A20 '^error' "$LOGS/build.log" | head -60; die "build failed"; }
-}
-
 # stage <name> <timeout_s> <fv-gpucheck args...>
 cmd_stage() {
   local name="$1" timeout_s="$2"; shift 2
   cd "$ROOT"
   local bin="$ROOT/target/release/fv-gpucheck"
-  [[ -x "$bin" ]] || die "fv-gpucheck not built"
+  [[ -x "$bin" ]] || die "fv-gpucheck not uploaded"
+  # Build id ties reports and CPU-path references to the exact binary.
+  if [[ -f "$bin.build-id" ]]; then
+    FV_GIT_SHA="$(cat "$bin.build-id")"
+    export FV_GIT_SHA
+  fi
   log "stage $name (timeout ${timeout_s}s): $*"
   set +e
   timeout --kill-after=30 "$timeout_s" "$bin" --out "$OUT" "$@" 2>&1 | tee "$LOGS/$name.log"
@@ -155,7 +146,6 @@ case "$sub" in
   bootstrap) cmd_bootstrap ;;
   fetch) cmd_fetch "$@" ;;
   wait-weights) cmd_wait_weights "$@" ;;
-  build) cmd_build ;;
   stage) cmd_stage "$@" ;;
-  *) die "usage: remote.sh env|bootstrap|fetch|wait-weights|build|stage" ;;
+  *) die "usage: remote.sh env|bootstrap|fetch|wait-weights|stage" ;;
 esac
