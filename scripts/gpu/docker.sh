@@ -157,7 +157,7 @@ cmd_gpu() {
 }
 
 # Tests source this file for helpers.
-[[ -n "${FV_SOURCE_ONLY:-}" ]] && return 0
+[[ -n "${FV_SOURCE_ONLY:-}" && "${BASH_SOURCE[0]}" != "$0" ]] && return 0
 
 case "${1:-}" in
   builder) cmd_builder ;;

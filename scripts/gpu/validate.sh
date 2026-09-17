@@ -16,7 +16,16 @@ RUNS="${FV_RUNS:-$FV_ROOT/artifacts/gpucheck/runs}"
 DOCKER_SH="$FV_ROOT/scripts/gpu/docker.sh"
 DIST="$FV_ROOT/artifacts/gpucheck/dist"
 LOCAL_REFS="$FV_ROOT/artifacts/gpucheck/refs"
-IMAGE="${VAST_IMAGE:-pytorch/pytorch:2.5.1-cuda12.4-cudnn9-devel}"
+# Small runtime image built by .github/workflows/gpucheck-runtime-image.yml:
+# CUDA runtime libraries cudarc loads + fv-gpucheck + scripts (no PyTorch).
+IMAGE_REPO="${VAST_IMAGE_REPO:-ghcr.io/zaitrarrio/fastvideo-rs-runtime}"
+IMAGE="${VAST_IMAGE:-}"
+# The image bakes the binary and scripts here; uploads land in the same place.
+FV_REMOTE_DIR="${VAST_REMOTE_DIR:-/opt/fastvideo-rs}"
+# Machines that failed to boot / never accepted ssh / failed env or bootstrap.
+BAD_HOSTS="${FV_BAD_HOSTS_FILE:-$FV_ROOT/artifacts/gpucheck/bad-machines.tsv}"
+BAD_HOST_TTL_H="${FV_BAD_HOST_TTL_H:-24}"
+CURRENT_MACHINE=""; LAST_STAGE=""; IMAGE_HAS_BUILD=0
 WORK="/workspace"
 OUTR="$WORK/gpucheck-out"
 BASE_REPO="Wan-AI/Wan2.1-T2V-1.3B-Diffusers"
@@ -41,6 +50,44 @@ tier_max_minutes() { case "$1" in kernels) echo 40 ;; parity) echo 75 ;; clip) e
 tier_disk() { case "$1" in kernels) echo 40 ;; parity) echo 60 ;; clip) echo 100 ;; esac; }
 
 usage() { sed -n '2,12p' "$0" | sed 's/^# \{0,1\}//'; exit 2; }
+
+# ---- bad hosts ------------------------------------------------------------------
+bad_host_record() {
+  local machine="$1" reason="$2"
+  [[ -n "$machine" ]] || return 0
+  mkdir -p "$(dirname "$BAD_HOSTS")"
+  printf '%s\t%s\t%s\n' "$machine" "$(date +%s)" "$reason" >>"$BAD_HOSTS"
+  log "recorded machine $machine as bad for ${BAD_HOST_TTL_H}h ($reason)"
+}
+
+# JSON array of machine ids recorded within the TTL.
+bad_hosts_json() {
+  local cutoff=$(( $(date +%s) - BAD_HOST_TTL_H * 3600 ))
+  if [[ -f "$BAD_HOSTS" ]]; then
+    awk -F'\t' -v c="$cutoff" '$2 >= c { print $1 }' "$BAD_HOSTS" | sort -u | jq -R 'tonumber? // empty' | jq -s -c .
+  else
+    echo '[]'
+  fi
+}
+
+# ---- image ------------------------------------------------------------------------
+# Prefer the CI image built from exactly these sources (binary baked in, no
+# upload); otherwise :latest for the runtime libraries plus an uploaded binary.
+resolve_image() {
+  local build_id="$1"
+  if [[ -n "$IMAGE" ]]; then
+    log "image $IMAGE (VAST_IMAGE override; uploading binary)"
+    return 0
+  fi
+  if command -v docker >/dev/null 2>&1 && docker manifest inspect "$IMAGE_REPO:build-$build_id" >/dev/null 2>&1; then
+    IMAGE="$IMAGE_REPO:build-$build_id"
+    IMAGE_HAS_BUILD=1
+    log "image $IMAGE (CI-built from these sources; binary baked in)"
+  else
+    IMAGE="$IMAGE_REPO:latest"
+    log "image $IMAGE (no CI image for build $build_id yet — push to main to publish one; uploading local binary)"
+  fi
+}
 
 # ---- preflight: local, free ------------------------------------------------------
 # Compile-level gates only: catches a broken build before paying for one.
@@ -86,6 +133,12 @@ INSTANCE=""; HOST=""; PORT=""; RUN_DIR=""; KEEP=0; OWN_INSTANCE=1; WATCHDOG_PID=
 cleanup() {
   local rc=$?
   trap - EXIT INT TERM
+  # A host that can't get through env/bootstrap is a host problem, not a test result.
+  if [[ $rc -ne 0 && -n "$CURRENT_MACHINE" ]]; then
+    case "$LAST_STAGE" in
+      env|bootstrap|upload) bad_host_record "$CURRENT_MACHINE" "$LAST_STAGE rc=$rc" ;;
+    esac
+  fi
   if [[ -n "$HOST" && -n "$RUN_DIR" ]]; then
     log "pulling artifacts → $RUN_DIR"
     fv_timeout 300 rsync -az -e "ssh -i $FV_SSH_KEY -p $PORT ${FV_SSH_OPTS[*]}" "root@$HOST:$OUTR/" "$RUN_DIR/remote/" \
@@ -117,6 +170,7 @@ remote_run() {
   local name="$1" timeout_s="$2"; shift 2
   local args; args="$(printf '%q ' "$@")"
   local t0; t0=$(date +%s)
+  LAST_STAGE="$name"
   log "▶ $name (timeout ${timeout_s}s)"
   fv_ssh "$HOST" "$PORT" "mkdir -p $OUTR/rc $OUTR/logs && rm -f $OUTR/rc/$name $OUTR/rc/$name.pid && cd $FV_REMOTE_DIR && \
     { setsid nohup bash -c 'bash scripts/gpu/remote.sh $args >$OUTR/logs/$name.driver.log 2>&1; echo \$? >$OUTR/rc/$name' \
@@ -197,8 +251,8 @@ wait_ready() {
       running) break ;;
       exited|offline|error) log "instance $INSTANCE entered '$status'"; return 1 ;;
     esac
-    if (( $(date +%s) - t0 >= ${FV_BOOT_TIMEOUT:-900} )); then
-      log "instance $INSTANCE not running after ${FV_BOOT_TIMEOUT:-900}s (status=$status)"
+    if (( $(date +%s) - t0 >= ${FV_BOOT_TIMEOUT:-600} )); then
+      log "instance $INSTANCE not running after ${FV_BOOT_TIMEOUT:-600}s (status=$status)"
       return 1
     fi
     sleep 10
@@ -245,6 +299,7 @@ cmd_run() {
   local build_id
   build_id="$("$DOCKER_SH" build-id)"
   [[ "$(cat "$DIST/fv-gpucheck.build-id" 2>/dev/null)" == "$build_id" ]] || die "dist binary is stale; run: $DOCKER_SH dist"
+  resolve_image "$build_id"
 
   local max_dph mins
   max_dph="${MAX_DPH:-$(tier_max_dph "$tier")}"
@@ -260,7 +315,9 @@ cmd_run() {
   else
     # Bad hosts (no ssh, stuck boot, offer gone) are destroyed and skipped:
     # up to FV_OFFER_RETRIES more offers, never the same machine twice.
-    local tried='[]' attempt=0 max_attempts=$(( ${FV_OFFER_RETRIES:-2} + 1 )) checked_balance=0
+    local tried attempt=0 max_attempts=$(( ${FV_OFFER_RETRIES:-2} + 1 )) checked_balance=0
+    tried="$(bad_hosts_json)"
+    [[ "$tried" == "[]" ]] || log "skipping recently bad machines: $tried"
     while :; do
       attempt=$((attempt + 1))
       (( attempt <= max_attempts )) || die "no usable host after $max_attempts offers"
@@ -284,6 +341,7 @@ cmd_run() {
         fi
         checked_balance=1
       fi
+      CURRENT_MACHINE="$(jq -r .machine_id <<<"$pick")"
       create_instance "$tier" "$offer_id" || continue
       # Independent of this shell: destroys at the wall cap even if we're killed.
       nohup bash -c "sleep $((mins * 60)); vastai destroy instance -y $INSTANCE" >/dev/null 2>&1 &
@@ -293,6 +351,7 @@ cmd_run() {
         break
       fi
       log "host unusable — destroying $INSTANCE and trying another offer"
+      bad_host_record "$CURRENT_MACHINE" "boot/ssh"
       kill "$WATCHDOG_PID" 2>/dev/null || true
       WATCHDOG_PID=""
       vast_destroy "$INSTANCE" || true
@@ -300,11 +359,17 @@ cmd_run() {
     done
   fi
 
-  # The box gets scripts + the Docker-built binary only: no source, no compile.
-  log "uploading scripts and prebuilt fv-gpucheck (build $build_id)"
+  # No source, no compile on the box. Scripts always sync (they are not part of
+  # the build id); the binary only when the image doesn't already carry this build.
+  LAST_STAGE=upload
   fv_ssh "$HOST" "$PORT" "mkdir -p $FV_REMOTE_DIR/scripts $FV_REMOTE_DIR/target/release $OUTR/refs"
   fv_rsync_to "$HOST" "$PORT" "$FV_ROOT/scripts/" "$FV_REMOTE_DIR/scripts/" --delete --exclude '.env*'
-  fv_rsync_to "$HOST" "$PORT" "$DIST/" "$FV_REMOTE_DIR/target/release/"
+  if [[ $IMAGE_HAS_BUILD -eq 1 ]]; then
+    log "binary for build $build_id is baked into $IMAGE"
+  else
+    log "uploading prebuilt fv-gpucheck (build $build_id)"
+    fv_rsync_to "$HOST" "$PORT" "$DIST/" "$FV_REMOTE_DIR/target/release/"
+  fi
   local have_refs=0
   if [[ "$(cat "$LOCAL_REFS/build-id" 2>/dev/null)" == "$build_id" ]]; then
     fv_rsync_to "$HOST" "$PORT" "$LOCAL_REFS/" "$OUTR/refs/"
@@ -386,7 +451,7 @@ cmd_reap() {
 }
 
 # Tests source this file to exercise helpers without dispatching.
-[[ -n "${FV_SOURCE_ONLY:-}" ]] && return 0
+[[ -n "${FV_SOURCE_ONLY:-}" && "${BASH_SOURCE[0]}" != "$0" ]] && return 0
 
 case "${1:-}" in
   local) shift; cmd_local "$@" ;;
