@@ -109,3 +109,37 @@ impl PeakMem {
         Some(self.peak.load(Ordering::Relaxed))
     }
 }
+
+/// Synchronized timing span that also counts host↔device transfers. Kernel
+/// launches return when queued, so both ends synchronize the device.
+pub struct Span {
+    start: std::time::Instant,
+    stats: fastvideo_cudarc::wan::stats::Snapshot,
+}
+
+pub fn span() -> anyhow::Result<Span> {
+    fastvideo_cudarc::wan::device::synchronize()?;
+    Ok(Span {
+        start: std::time::Instant::now(),
+        stats: fastvideo_cudarc::wan::stats::snapshot(),
+    })
+}
+
+impl Span {
+    /// `(seconds, transfers during the span)` as JSON-ready values.
+    pub fn finish(self) -> anyhow::Result<(f64, serde_json::Value)> {
+        fastvideo_cudarc::wan::device::synchronize()?;
+        let secs = self.start.elapsed().as_secs_f64();
+        let d = fastvideo_cudarc::wan::stats::snapshot().since(&self.stats);
+        Ok((
+            secs,
+            serde_json::json!({
+                "h2d_count": d.h2d_count,
+                "h2d_mib": d.h2d_bytes as f64 / f64::from(1u32 << 20),
+                "d2h_count": d.d2h_count,
+                "d2h_mib": d.d2h_bytes as f64 / f64::from(1u32 << 20),
+                "host_fallbacks": d.host_fallbacks,
+            }),
+        ))
+    }
+}

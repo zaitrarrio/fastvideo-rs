@@ -4,23 +4,16 @@
 //! - TF32 Tensor Core math (disable with `FASTVIDEO_TF32=0`)
 //! - Larger SDPA query chunks on 80GB-class GPUs
 //! - NVRTC `--gpu-architecture=compute_90` when SM ≥ 90
-//! - Device-side UniPC/Euler (disable with `FASTVIDEO_DEVICE_SCHED=0`)
 
 use super::envflag::CachedBool;
 
 static TF32_CACHE: CachedBool = CachedBool::new();
-static DEVICE_SCHED_CACHE: CachedBool = CachedBool::new();
 
 /// True when TF32 Tensor Core math should be used for F32 GEMMs (default on).
 /// Read once and cached: this is consulted on every GEMM dispatch, so a raw
 /// `std::env::var` per call would add a lock+allocate to the hottest path.
 pub fn tf32_enabled() -> bool {
     TF32_CACHE.get_or_init(|| super::envflag::bool_flag("FASTVIDEO_TF32", true))
-}
-
-/// Keep scheduler updates on device (default on). Cached (see [`tf32_enabled`]).
-pub fn device_sched_enabled() -> bool {
-    DEVICE_SCHED_CACHE.get_or_init(|| super::envflag::bool_flag("FASTVIDEO_DEVICE_SCHED", true))
 }
 
 /// Hopper / Ada / Ampere class (≥ sm_80) for Tensor Core TF32.

@@ -2,89 +2,21 @@
 
 use fastvideo_models::wan::WanVaeConfig;
 
-use super::nn;
 use super::tensor::{CudaTensor, Result, TensorError};
 use super::weights::{self, WeightMap};
 
 const CACHE_T: usize = 2;
 
-/// NVRTC causal conv3d when a global CUDA device is live.
-#[cfg(feature = "cuda")]
-fn try_causal_conv3d_device(
-    x: &CudaTensor,
-    weight: &CudaTensor,
-    bias: &CudaTensor,
-    stride: [usize; 3],
-) -> Option<Result<CudaTensor>> {
-    let dev = super::device::global_device()?;
-    let mut x = x.clone();
-    let mut w = weight.clone();
-    let mut b = bias.clone();
-    x.ensure_device().ok()?;
-    w.ensure_device().ok()?;
-    b.ensure_device().ok()?;
-    let x_dev = x.device_slice()?;
-    let w_dev = w.device_slice()?;
-    let b_dev = b.device_slice()?;
-    let (n, ic, it, ih, iw) = (x.shape[0], x.shape[1], x.shape[2], x.shape[3], x.shape[4]);
-    let (oc, _ic2, kt, kh, kw) = (
-        weight.shape[0],
-        weight.shape[1],
-        weight.shape[2],
-        weight.shape[3],
-        weight.shape[4],
-    );
-    let st = stride[0].max(1);
-    let sh = stride[1].max(1);
-    let sw = stride[2].max(1);
-    let ot = (it.saturating_sub(kt)) / st + 1;
-    let oh = (ih.saturating_sub(kh)) / sh + 1;
-    let ow = (iw.saturating_sub(kw)) / sw + 1;
-    if ot == 0 || oh == 0 || ow == 0 {
-        return None;
-    }
-    let mut out_dev = dev.stream.alloc_zeros::<f32>(n * oc * ot * oh * ow).ok()?;
-    unsafe {
-        super::kernels::launch_causal_conv3d(
-            &dev.stream,
-            &dev.kernels.causal_conv3d_f32,
-            x_dev,
-            w_dev,
-            Some(b_dev),
-            &mut out_dev,
-            n as i32,
-            ic as i32,
-            it as i32,
-            ih as i32,
-            iw as i32,
-            oc as i32,
-            kt as i32,
-            kh as i32,
-            kw as i32,
-            ot as i32,
-            oh as i32,
-            ow as i32,
-            st as i32,
-            sh as i32,
-            sw as i32,
-        )
-        .ok()?;
-    }
-    Some(CudaTensor::from_device_slice(
-        out_dev,
-        vec![n, oc, ot, oh, ow],
-    ))
+/// Weights live on the device (a no-op on CPU runs). An upload failure here is
+/// fatal: there is no host path to continue on.
+fn pinned(mut t: CudaTensor) -> CudaTensor {
+    t.pin_device().expect("upload VAE weight to device");
+    t
 }
 
-#[cfg(not(feature = "cuda"))]
-#[allow(dead_code)]
-fn try_causal_conv3d_device(
-    _x: &CudaTensor,
-    _weight: &CudaTensor,
-    _bias: &CudaTensor,
-    _stride: [usize; 3],
-) -> Option<Result<CudaTensor>> {
-    None
+/// A `[c, 1, 1(, 1)]` gamma as a pinned `[c]` vector.
+fn gamma(map: &WeightMap, key: &str, shape: &[usize]) -> Result<CudaTensor> {
+    Ok(pinned(weights::cuda_tensor_shaped(map, key, shape)?.reshape(vec![shape[0]])?))
 }
 
 const LATENTS_MEAN: [f32; 16] = [
@@ -147,8 +79,8 @@ struct CausalConv3d {
 impl CausalConv3d {
     fn zeros(in_c: usize, out_c: usize, kernel: [usize; 3], stride: [usize; 3], pad: [usize; 3]) -> Self {
         Self {
-            weight: CudaTensor::zeros(&[out_c, in_c, kernel[0], kernel[1], kernel[2]]),
-            bias: CudaTensor::zeros(&[out_c]),
+            weight: pinned(CudaTensor::zeros(&[out_c, in_c, kernel[0], kernel[1], kernel[2]])),
+            bias: pinned(CudaTensor::zeros(&[out_c])),
             stride,
             pad,
         }
@@ -164,12 +96,12 @@ impl CausalConv3d {
         pad: [usize; 3],
     ) -> Result<Self> {
         Ok(Self {
-            weight: weights::cuda_tensor_shaped(
+            weight: pinned(weights::cuda_tensor_shaped(
                 map,
                 &weights::join_key(prefix, "weight"),
                 &[out_c, in_c, kernel[0], kernel[1], kernel[2]],
-            )?,
-            bias: weights::cuda_tensor_shaped(map, &weights::join_key(prefix, "bias"), &[out_c])?,
+            )?),
+            bias: pinned(weights::cuda_tensor_shaped(map, &weights::join_key(prefix, "bias"), &[out_c])?),
             stride,
             pad,
         })
@@ -179,15 +111,9 @@ impl CausalConv3d {
         self.forward_with_cache(xs, None)
     }
 
+    /// Causal time padding (`2*pad_t` frames in front, filled from the feat
+    /// cache first), symmetric spatial padding inside the conv.
     fn forward_with_cache(&self, xs: &CudaTensor, cache_x: Option<&CudaTensor>) -> Result<CudaTensor> {
-        let b = xs.shape[0];
-        let (out_c, in_c, kt, kh, kw) = (
-            self.weight.shape[0],
-            self.weight.shape[1],
-            self.weight.shape[2],
-            self.weight.shape[3],
-            self.weight.shape[4],
-        );
         let mut x = xs.clone();
         let mut pad_t = 2 * self.pad[0];
         if let Some(c) = cache_x {
@@ -196,63 +122,10 @@ impl CausalConv3d {
                 pad_t = pad_t.saturating_sub(c.dim(2)?);
             }
         }
-        if self.pad[2] > 0 {
-            x = x.pad_zeros(4, self.pad[2], self.pad[2])?;
-        }
-        if self.pad[1] > 0 {
-            x = x.pad_zeros(3, self.pad[1], self.pad[1])?;
-        }
         if pad_t > 0 {
             x = x.pad_zeros(2, pad_t, 0)?;
         }
-        let (_b, _c, t_p, h_p, w_p) = (x.shape[0], x.shape[1], x.shape[2], x.shape[3], x.shape[4]);
-        // GPU causal conv3d when CUDA residency is live (NVRTC dense kernel).
-        #[cfg(feature = "cuda")]
-        if super::resident::residency_enabled() {
-            if let Some(out) = try_causal_conv3d_device(
-                &x,
-                &self.weight,
-                &self.bias,
-                self.stride,
-            ) {
-                return out;
-            }
-        }
-        let _ = x.ensure_device();
-        {
-            let mut w = self.weight.clone();
-            let _ = w.pin_device();
-        }
-        if kt == 1 && kh == 1 && kw == 1 && self.stride == [1, 1, 1] {
-            let x = x
-                .permute(&[0, 2, 3, 4, 1])?
-                .reshape(vec![b * t_p * h_p * w_p, in_c])?;
-            let w = self.weight.reshape(vec![out_c, in_c])?.transpose(0, 1)?;
-            let y = x.matmul(&w)?;
-            let y = y.add(&self.bias.reshape(vec![1, out_c])?)?;
-            return y
-                .reshape(vec![b, t_p, h_p, w_p, out_c])?
-                .permute(&[0, 4, 1, 2, 3]);
-        }
-        let w2 = self
-            .weight
-            .reshape(vec![out_c, in_c * kt, kh, kw])?;
-        let mut frames = Vec::new();
-        let mut ti = 0usize;
-        let t_stride = self.stride[0].max(1);
-        while ti + kt <= t_p {
-            let window = x.narrow(2, ti, kt)?.reshape(vec![b, in_c * kt, h_p, w_p])?;
-            let y = nn::conv2d(&window, &w2, 0, self.stride[1])?;
-            let bias = self.bias.reshape(vec![1, out_c, 1, 1])?;
-            let y = y.add(&bias)?.unsqueeze(2)?;
-            frames.push(y);
-            ti += t_stride;
-        }
-        if frames.is_empty() {
-            return Err(TensorError::Message("empty causal conv3d output".into()));
-        }
-        let refs: Vec<&CudaTensor> = frames.iter().collect();
-        CudaTensor::cat(&refs, 2)
+        x.conv3d(&self.weight, Some(&self.bias), [0, self.pad[1], self.pad[2]], self.stride)
     }
 }
 
@@ -290,56 +163,8 @@ fn double_time(x: CudaTensor) -> Result<CudaTensor> {
 }
 
 fn rms_video(xs: &CudaTensor, gamma: &CudaTensor) -> Result<CudaTensor> {
-    // Channel-first RMS over dim=1. Defensive 4D-safe shape unpacking so
-    // 4D unit-test inputs (B, C, H, W) don't panic on missing dim=4.
-    let b = xs.shape.get(0).copied().unwrap_or(1);
-    let c = xs.shape.get(1).copied().unwrap_or(1);
-    let t = xs.shape.get(2).copied().unwrap_or(1);
-    let h = xs.shape.get(3).copied().unwrap_or(1);
-    let w = xs.shape.get(4).copied().unwrap_or(1);
-    let spatial = t * h * w;
-    // Device path: NVRTC rms_norm_channels over NCHW.
-    #[cfg(feature = "cuda")]
-    {
-        if super::resident::residency_enabled() {
-            let mut xd = xs.clone();
-            let mut gd = gamma.clone();
-            xd.ensure_device().ok();
-            gd.ensure_device().ok();
-            if xd.is_device_fresh() && gd.is_device_fresh() {
-                if let (Some(x_dev), Some(g_dev)) = (xd.device_slice(), gd.device_slice()) {
-                    if gamma.shape[0] == c {
-                        if let Some(out_dev) = super::ops::rms_norm_channels_device(
-                            x_dev, g_dev, b, c, spatial, 1e-12,
-                        ) {
-                            return CudaTensor::from_device_slice(out_dev, xs.shape.clone());
-                        }
-                    }
-                }
-            }
-        }
-    }
-    // Host fallback: read through host_cow (device-fresh `.data` is stale).
-    let x_host = xs.host_cow()?;
-    let g_host = gamma.host_cow()?;
-    let mut out = vec![0.0f32; x_host.len()];
-    for bi in 0..b {
-        for s in 0..spatial {
-            let mut mean_sq = 0.0;
-            for ci in 0..c {
-                let v = x_host[((bi * c + ci) * spatial) + s];
-                mean_sq += v * v;
-            }
-            mean_sq /= c as f32;
-            let inv = 1.0 / (mean_sq + 1e-12).sqrt();
-            for ci in 0..c {
-                let idx = ((bi * c + ci) * spatial) + s;
-                let g = g_host[ci];
-                out[idx] = x_host[idx] * inv * g;
-            }
-        }
-    }
-    Ok(CudaTensor::host_only(out, xs.shape.clone()))
+    // Channel-first RMS over dim 1 (`F.normalize * sqrt(C) * gamma`).
+    xs.rms_norm_channels(gamma, 1e-12)
 }
 
 fn silu_video(xs: &CudaTensor) -> CudaTensor {
@@ -369,9 +194,9 @@ impl ResidualBlock {
             None
         };
         Self {
-            norm1: CudaTensor::ones(&[in_dim]),
+            norm1: pinned(CudaTensor::ones(&[in_dim])),
             conv1: CausalConv3d::zeros(in_dim, out_dim, [3, 3, 3], [1, 1, 1], [1, 1, 1]),
-            norm2: CudaTensor::ones(&[out_dim]),
+            norm2: pinned(CudaTensor::ones(&[out_dim])),
             conv2: CausalConv3d::zeros(out_dim, out_dim, [3, 3, 3], [1, 1, 1], [1, 1, 1]),
             shortcut,
         }
@@ -392,12 +217,7 @@ impl ResidualBlock {
             None
         };
         Ok(Self {
-            norm1: weights::cuda_tensor_shaped(
-                map,
-                &weights::join_key(prefix, "norm1.gamma"),
-                &[in_dim, 1, 1, 1],
-            )?
-            .reshape(vec![in_dim])?,
+            norm1: gamma(map, &weights::join_key(prefix, "norm1.gamma"), &[in_dim, 1, 1, 1])?,
             conv1: CausalConv3d::load(
                 map,
                 &weights::join_key(prefix, "conv1"),
@@ -407,12 +227,7 @@ impl ResidualBlock {
                 [1, 1, 1],
                 [1, 1, 1],
             )?,
-            norm2: weights::cuda_tensor_shaped(
-                map,
-                &weights::join_key(prefix, "norm2.gamma"),
-                &[out_dim, 1, 1, 1],
-            )?
-            .reshape(vec![out_dim])?,
+            norm2: gamma(map, &weights::join_key(prefix, "norm2.gamma"), &[out_dim, 1, 1, 1])?,
             conv2: CausalConv3d::load(
                 map,
                 &weights::join_key(prefix, "conv2"),
@@ -452,86 +267,60 @@ struct AttentionBlock {
 impl AttentionBlock {
     fn zeros(dim: usize) -> Self {
         Self {
-            norm: CudaTensor::ones(&[dim]),
-            qkv: CudaTensor::zeros(&[dim * 3, dim, 1, 1]),
-            qkv_bias: CudaTensor::zeros(&[dim * 3]),
-            proj: CudaTensor::zeros(&[dim, dim, 1, 1]),
-            proj_bias: CudaTensor::zeros(&[dim]),
+            norm: pinned(CudaTensor::ones(&[dim])),
+            qkv: pinned(CudaTensor::zeros(&[dim * 3, dim, 1, 1])),
+            qkv_bias: pinned(CudaTensor::zeros(&[dim * 3])),
+            proj: pinned(CudaTensor::zeros(&[dim, dim, 1, 1])),
+            proj_bias: pinned(CudaTensor::zeros(&[dim])),
         }
     }
 
     fn load(map: &WeightMap, prefix: &str, dim: usize) -> Result<Self> {
+        let key = |name: &str| weights::join_key(prefix, name);
         Ok(Self {
-            norm: weights::cuda_tensor_shaped(
-                map,
-                &weights::join_key(prefix, "norm.gamma"),
-                &[dim, 1, 1],
-            )?
-            .reshape(vec![dim])?,
-            qkv: weights::cuda_tensor_shaped(
-                map,
-                &weights::join_key(prefix, "to_qkv.weight"),
-                &[dim * 3, dim, 1, 1],
-            )?,
-            qkv_bias: weights::cuda_tensor_shaped(
-                map,
-                &weights::join_key(prefix, "to_qkv.bias"),
-                &[dim * 3],
-            )?,
-            proj: weights::cuda_tensor_shaped(
-                map,
-                &weights::join_key(prefix, "proj.weight"),
-                &[dim, dim, 1, 1],
-            )?,
-            proj_bias: weights::cuda_tensor_shaped(
-                map,
-                &weights::join_key(prefix, "proj.bias"),
-                &[dim],
-            )?,
+            norm: gamma(map, &key("norm.gamma"), &[dim, 1, 1])?,
+            qkv: pinned(weights::cuda_tensor_shaped(map, &key("to_qkv.weight"), &[dim * 3, dim, 1, 1])?),
+            qkv_bias: pinned(weights::cuda_tensor_shaped(map, &key("to_qkv.bias"), &[dim * 3])?),
+            proj: pinned(weights::cuda_tensor_shaped(map, &key("proj.weight"), &[dim, dim, 1, 1])?),
+            proj_bias: pinned(weights::cuda_tensor_shaped(map, &key("proj.bias"), &[dim])?),
         })
     }
 
+    /// Per-frame single-head attention over `h*w` tokens, identity residual.
+    /// Accepts `[b, c, t, h, w]` or `[b, c, h, w]`.
     fn forward(&self, xs: &CudaTensor) -> Result<CudaTensor> {
-        // 4D-safe unpacking so a 4D test input (B, C, H, W) doesn't panic.
-        let rank = xs.rank();
-        let b = xs.shape.get(0).copied().unwrap_or(1);
-        let c = xs.shape.get(1).copied().unwrap_or(1);
-        let t = xs.shape.get(2).copied().unwrap_or(1);
-        let h = xs.shape.get(3).copied().unwrap_or(1);
-        let w = xs.shape.get(4).copied().unwrap_or(1);
-        let mut x = if rank == 5 {
-            xs.permute(&[0, 2, 1, 3, 4])?
-                .reshape(vec![b * t, c, h, w])?
+        let (b, c) = (xs.shape[0], xs.shape[1]);
+        let (t, h, w) = match xs.shape[..] {
+            [_, _, t, h, w] => (t, h, w),
+            [_, _, h, w] => (1, h, w),
+            _ => return Err(TensorError::Message(format!("attention block input {:?}", xs.shape))),
+        };
+        let frames = if xs.rank() == 5 {
+            xs.permute(&[0, 2, 1, 3, 4])?.reshape(vec![b * t, c, h, w])?
         } else {
-            // 4D NCHW (B, C, H, W) → already in NCHW, just clone.
             xs.clone()
         };
-        // Device RMS over channels (NCHW layout).
-        let gamma = self.norm.reshape(vec![1, c, 1, 1])?;
-        x = rms_video(&x, &gamma)?;
+        let x = rms_video(&frames, &self.norm)?;
         let hw = h * w;
-        let qkv = nn::conv2d(&x, &self.qkv, 0, 1)?.add(
-            &self.qkv_bias.reshape(vec![1, c * 3, 1, 1])?,
-        )?;
-        let qkv = qkv
-            .reshape(vec![b * t, 1, c * 3, hw])?
-            .permute(&[0, 1, 3, 2])?;
-        let chunks = qkv.chunk(3, 3)?;
-        let attn = nn::scaled_dot_product_attention(&chunks[0], &chunks[1], &chunks[2], None)?;
-        let attn = attn
-            .squeeze(1)?
+        // [bt, 3c, h, w] → [bt, hw, 3c]; q/k/v are its column blocks.
+        let qkv = x
+            .conv2d(&self.qkv, Some(&self.qkv_bias), 0, 1)?
+            .reshape(vec![b * t, c * 3, hw])?
+            .permute(&[0, 2, 1])?;
+        let q = qkv.split_heads_bhsd(0, 1, c)?;
+        let k = qkv.split_heads_bhsd(c, 1, c)?;
+        let v = qkv.split_heads_bhsd(2 * c, 1, c)?;
+        let attn = super::nn::scaled_dot_product_attention(&q, &k, &v, None)?
+            .reshape(vec![b * t, hw, c])?
             .permute(&[0, 2, 1])?
             .reshape(vec![b * t, c, h, w])?;
-        let y = nn::conv2d(&attn, &self.proj, 0, 1)?
-            .add(&self.proj_bias.reshape(vec![1, c, 1, 1])?)?;
-        if rank == 5 {
-            let y = y
-                .reshape(vec![b, t, c, h, w])?
-                .permute(&[0, 2, 1, 3, 4])?;
-            xs.add(&y)
+        let y = attn.conv2d(&self.proj, Some(&self.proj_bias), 0, 1)?;
+        let y = if xs.rank() == 5 {
+            y.reshape(vec![b, t, c, h, w])?.permute(&[0, 2, 1, 3, 4])?
         } else {
-            xs.add(&y)
-        }
+            y
+        };
+        xs.add(&y)
     }
 }
 
@@ -564,8 +353,8 @@ impl Resample {
         };
         Self {
             mode,
-            conv_w: CudaTensor::zeros(&[out, dim, 3, 3]),
-            conv_b: CudaTensor::zeros(&[out]),
+            conv_w: pinned(CudaTensor::zeros(&[out, dim, 3, 3])),
+            conv_b: pinned(CudaTensor::zeros(&[out])),
             time_conv,
         }
     }
@@ -586,16 +375,8 @@ impl Resample {
         };
         Ok(Self {
             mode,
-            conv_w: weights::cuda_tensor_shaped(
-                map,
-                &weights::join_key(prefix, "resample.1.weight"),
-                &[out, dim, 3, 3],
-            )?,
-            conv_b: weights::cuda_tensor_shaped(
-                map,
-                &weights::join_key(prefix, "resample.1.bias"),
-                &[out],
-            )?,
+            conv_w: pinned(weights::cuda_tensor_shaped(map, &weights::join_key(prefix, "resample.1.weight"), &[out, dim, 3, 3])?),
+            conv_b: pinned(weights::cuda_tensor_shaped(map, &weights::join_key(prefix, "resample.1.bias"), &[out])?),
             time_conv,
         })
     }
@@ -635,10 +416,9 @@ impl Resample {
             }
         }
         let (b, c, t, h, w) = (x.shape[0], x.shape[1], x.shape[2], x.shape[3], x.shape[4]);
-        let bias = self.conv_b.reshape(vec![1, self.conv_w.shape[0], 1, 1])?;
         let x2 = x.permute(&[0, 2, 1, 3, 4])?.reshape(vec![b * t, c, h, w])?;
         let up = x2.upsample_nearest2d(h * 2, w * 2)?;
-        let y = nn::conv2d(&up, &self.conv_w, 1, 1)?.add(&bias)?;
+        let y = up.conv2d(&self.conv_w, Some(&self.conv_b), 1, 1)?;
         let oc = y.shape[1];
         y.reshape(vec![b, t, oc, h * 2, w * 2])?
             .permute(&[0, 2, 1, 3, 4])
@@ -755,7 +535,7 @@ impl WanDecoder {
             mid_attn,
             mid_res1,
             up_blocks,
-            norm_out: CudaTensor::ones(&[out_dim]),
+            norm_out: pinned(CudaTensor::ones(&[out_dim])),
             conv_out: CausalConv3d::zeros(out_dim, 3, [3, 3, 3], [1, 1, 1], [1, 1, 1]),
         }
     }
@@ -822,12 +602,7 @@ impl WanDecoder {
             mid_attn,
             mid_res1,
             up_blocks,
-            norm_out: weights::cuda_tensor_shaped(
-                map,
-                &weights::join_key(prefix, "norm_out.gamma"),
-                &[out_dim, 1, 1, 1],
-            )?
-            .reshape(vec![out_dim])?,
+            norm_out: gamma(map, &weights::join_key(prefix, "norm_out.gamma"), &[out_dim, 1, 1, 1])?,
             conv_out: CausalConv3d::load(
                 map,
                 &weights::join_key(prefix, "conv_out"),
@@ -865,32 +640,32 @@ struct EncoderDownsample {
 impl EncoderDownsample {
     fn load_2d(map: &WeightMap, prefix: &str, channels: usize) -> Result<Self> {
         Ok(Self {
-            spatial_w: weights::cuda_tensor_shaped(
+            spatial_w: pinned(weights::cuda_tensor_shaped(
                 map,
                 &weights::join_key(prefix, "resample.1.weight"),
                 &[channels, channels, 3, 3],
-            )?,
-            spatial_b: weights::cuda_tensor_shaped(
+            )?),
+            spatial_b: pinned(weights::cuda_tensor_shaped(
                 map,
                 &weights::join_key(prefix, "resample.1.bias"),
                 &[channels],
-            )?,
+            )?),
             time_conv: None,
         })
     }
 
     fn load_3d(map: &WeightMap, prefix: &str, channels: usize) -> Result<Self> {
         Ok(Self {
-            spatial_w: weights::cuda_tensor_shaped(
+            spatial_w: pinned(weights::cuda_tensor_shaped(
                 map,
                 &weights::join_key(prefix, "resample.1.weight"),
                 &[channels, channels, 3, 3],
-            )?,
-            spatial_b: weights::cuda_tensor_shaped(
+            )?),
+            spatial_b: pinned(weights::cuda_tensor_shaped(
                 map,
                 &weights::join_key(prefix, "resample.1.bias"),
                 &[channels],
-            )?,
+            )?),
             time_conv: Some(CausalConv3d::load(
                 map,
                 &weights::join_key(prefix, "time_conv"),
@@ -910,9 +685,7 @@ impl EncoderDownsample {
         }
         let (b, c, t, h, w) = (x.shape[0], x.shape[1], x.shape[2], x.shape[3], x.shape[4]);
         let x2 = x.permute(&[0, 2, 1, 3, 4])?.reshape(vec![b * t, c, h, w])?;
-        let y = nn::conv2d(&x2, &self.spatial_w, 1, 2)?;
-        let bias = self.spatial_b.reshape(vec![1, c, 1, 1])?;
-        let y = y.add(&bias)?;
+        let y = x2.conv2d(&self.spatial_w, Some(&self.spatial_b), 1, 2)?;
         let (_n, oc, hh, ww) = (y.shape[0], y.shape[1], y.shape[2], y.shape[3]);
         y.reshape(vec![b, t, oc, hh, ww])?.permute(&[0, 2, 1, 3, 4])
     }
@@ -1010,12 +783,7 @@ impl WanEncoder {
             mid_res0: ResidualBlock::load(map, &format!("{mid}.resnets.0"), 384, 384)?,
             mid_attn: AttentionBlock::load(map, &format!("{mid}.attentions.0"), 384)?,
             mid_res1: ResidualBlock::load(map, &format!("{mid}.resnets.1"), 384, 384)?,
-            norm_out: weights::cuda_tensor_shaped(
-                map,
-                &format!("{d}.norm_out.gamma"),
-                &[384, 1, 1, 1],
-            )?
-            .reshape(vec![384])?,
+            norm_out: gamma(map, &format!("{d}.norm_out.gamma"), &[384, 1, 1, 1])?,
             conv_out: CausalConv3d::load(
                 map,
                 &format!("{d}.conv_out"),

@@ -6,7 +6,7 @@ use std::path::Path;
 use std::process::Command;
 
 use fastvideo_models::schedulers::{
-    DmdSchedule, FlowUniPCMultistepScheduler, FAST_WAN_1_3B_DMD_STEPS,
+    DmdSchedule, FlowUniPCMultistepScheduler, UniPcTerm, FAST_WAN_1_3B_DMD_STEPS,
 };
 use fastvideo_models::wan::{
     i2v_first_frame_mask, moe_expert, MoeExpert, Umt5Config, WanVaeConfig, WanVideoArchConfig,
@@ -22,25 +22,20 @@ use super::umt5::{pad_prompt_embeds, Umt5Encoder};
 use super::vae::AutoencoderKlWan;
 use super::weights::WeightMap;
 
-/// `FASTVIDEO_DEVICE_STATS=1`: print per-op device-vs-host dispatch counts
-/// (see `tensor::device_path_stats`) after a `generate()` call. Complements
-/// `FASTVIDEO_STRICT_DEVICE=1` (which hard-fails on an unexpected host
-/// fallback): this is the non-fatal version — a quick "how much of this run
-/// actually used the GPU" readout, safe to leave on for any real GPU run
-/// without risking a crash if something's a known, accepted host-only case.
-fn log_device_path_stats_if_enabled() {
+/// `FASTVIDEO_DEVICE_STATS=1`: log host↔device transfer counts after `generate()`.
+fn log_device_stats_if_enabled() {
     if !super::envflag::bool_flag("FASTVIDEO_DEVICE_STATS", false) {
         return;
     }
-    for (op, hits, misses) in super::tensor::device_path_stats() {
-        let total = hits + misses;
-        if total == 0 {
-            continue;
-        }
-        super::log::info(format_args!(
-            "device-path[{op}]: {hits}/{total} device ({misses} host fallback)"
-        ));
-    }
+    let s = super::stats::snapshot();
+    super::log::info(format_args!(
+        "device stats: h2d {} ({} MiB) d2h {} ({} MiB) host fallbacks {:?}",
+        s.h2d_count,
+        s.h2d_bytes >> 20,
+        s.d2h_count,
+        s.d2h_bytes >> 20,
+        s.host_fallbacks
+    ));
 }
 
 #[derive(Debug, Error)]
@@ -434,7 +429,7 @@ impl WanPipeline {
             }
         }
         super::log::info(format_args!("wrote {} png frames → {}", paths.len(), cfg.output_dir));
-        log_device_path_stats_if_enabled();
+        log_device_stats_if_enabled();
         Ok(paths)
     }
 
@@ -490,37 +485,38 @@ impl WanPipeline {
         i2v: Option<(&CudaTensor, &CudaTensor)>,
         observer: Option<&mut StepObserver<'_>>,
     ) -> Result<CudaTensor> {
+        // Inputs cross to the device once; every step then stays there.
+        let latents = latents.to_device()?;
+        let encoder_hs = encoder_hs.clone().to_device()?;
         let boundary = cfg.boundary_ratio.or(self.boundary_ratio);
-        let ctx = DenoiseCtx {
+        // DMD students are distilled for a single conditional pass.
+        let (guidance, guidance_2) = if cfg.is_dmd {
+            (1.0, 1.0)
+        } else {
+            (cfg.guidance_scale, cfg.guidance_scale_2.unwrap_or(cfg.guidance_scale))
+        };
+        let mut ctx = DenoiseCtx {
             high: &self.dit,
             low: self.dit_2.as_ref(),
             boundary_ratio: boundary,
             image,
             i2v,
-            guidance: cfg.guidance_scale,
-            guidance_2: cfg.guidance_scale_2.unwrap_or(cfg.guidance_scale),
+            guidance,
+            guidance_2,
             tea_cache: TeaCache::from_env(),
         };
         if cfg.is_dmd {
-            let steps = cfg
-                .dmd_steps
-                .clone()
-                .unwrap_or_else(|| FAST_WAN_1_3B_DMD_STEPS.to_vec());
+            let steps = cfg.dmd_steps.clone().unwrap_or_else(|| FAST_WAN_1_3B_DMD_STEPS.to_vec());
             super::log::info(format_args!("denoise=dmd steps={}", steps.len()));
-            let s = DmdSchedule::new(&steps, cfg.flow_shift, 1000);
-            let timesteps: Vec<f32> = s.train_timesteps.iter().map(|&t| t as f32).collect();
-            let _denoise = super::log::StepTimer::start(format!("dmd {} steps", timesteps.len()));
-            euler_denoise(latents, encoder_hs, &timesteps, &s.sigmas, &ctx, observer)
+            let sched = DmdSchedule::new(&steps, 1000);
+            let _denoise = super::log::StepTimer::start(format!("dmd {} steps", steps.len()));
+            dmd_denoise(latents, &encoder_hs, &sched, cfg.seed, &mut ctx, observer)
         } else {
             let mut sched = FlowUniPCMultistepScheduler::new(1000, cfg.flow_shift);
             sched.set_timesteps(cfg.num_inference_steps);
-            super::log::info(format_args!(
-                "denoise=unipc steps={}",
-                cfg.num_inference_steps
-            ));
-            let _denoise =
-                super::log::StepTimer::start(format!("unipc {} steps", cfg.num_inference_steps));
-            unipc_denoise(latents, encoder_hs, &mut sched, &ctx, observer)
+            super::log::info(format_args!("denoise=unipc steps={}", cfg.num_inference_steps));
+            let _denoise = super::log::StepTimer::start(format!("unipc {} steps", cfg.num_inference_steps));
+            unipc_denoise(latents, &encoder_hs, &mut sched, &mut ctx, observer)
         }
     }
 
@@ -531,27 +527,6 @@ impl WanPipeline {
         } else {
             latents.clone()
         };
-        // Mark latents as device-resident for the VAE path. The denoise loop
-        // already returned device-fresh tensors (dit_cfg returns device_fresh
-        // outputs and axpy/add preserve the flag). VAE decode currently uses
-        // the host path (causal_conv3d_f32 → cuDNN via host upload), so we
-        // don't try to keep the latent device-resident across the VAE call —
-        // but we log the residency state so it shows up in bench artifacts.
-        let device_fresh_state = {
-            #[cfg(feature = "cuda")]
-            {
-                latents.is_device_fresh()
-            }
-            #[cfg(not(feature = "cuda"))]
-            {
-                false
-            }
-        };
-        super::log::info(format_args!(
-            "vae.in device_fresh={} cuda={}",
-            device_fresh_state,
-            cuda_context_live(),
-        ));
         let _vae = super::log::StepTimer::start("vae.decode");
         Ok(self.vae.decode(&latents)?)
     }
@@ -719,172 +694,130 @@ fn dit_cfg(
     }
     let (dit, scale) = pick_expert(ctx, t);
     let latent_in = pack_dit_input(latents, ctx.i2v)?;
-    let cond_hs = encoder_hs.narrow(0, 1, 1)?;
+    // `encoder_hs` is `[negative, prompt]`; a single row is the prompt alone.
+    let rows = encoder_hs.shape[0];
+    let cond_hs = if rows > 1 { encoder_hs.narrow(0, 1, 1)? } else { encoder_hs.clone() };
+    let t1 = CudaTensor::from_vec(vec![t], vec![1])?;
 
     let out = if (scale - 1.0).abs() < 1e-6 {
-        let t_tensor = CudaTensor::from_vec(vec![t], vec![1])?;
-        dit.forward_ctx(&latent_in, &t_tensor, &cond_hs, ctx.image)?
-    } else if ctx.i2v.is_none() && ctx.image.is_none() {
-        // Batch cond+uncond into one forward pass instead of two sequential
-        // batch=1 passes: doubles the arithmetic intensity of every GEMM in
-        // the step and halves the kernel-launch count for the whole DiT
-        // (dozens of blocks × ~15 launches each), instead of paying that
-        // twice. Scoped to the no-I2V/no-image-conditioning path: batching
-        // those would also need `mask`/`cond`/`image` duplicated to batch=2,
-        // and getting that wrong silently mixes cond/uncond image tokens —
-        // not worth guessing at without a GPU to check numerics against, so
-        // I2V/image conditioning keeps the sequential two-pass path below.
-        let uncond_hs = encoder_hs.narrow(0, 0, 1)?;
+        dit.forward_ctx(&latent_in, &t1, &cond_hs, ctx.image)?
+    } else if ctx.i2v.is_none() && ctx.image.is_none() && rows == 2 {
+        // One batch-2 forward for [uncond, cond]: the embeddings are already
+        // in that order, so only the latents are duplicated.
         let latent_batch = CudaTensor::cat(&[&latent_in, &latent_in], 0)?;
-        let hs_batch = CudaTensor::cat(&[&uncond_hs, &cond_hs], 0)?;
         let t_batch = CudaTensor::from_vec(vec![t, t], vec![2])?;
-        let out_batch = dit.forward_ctx(&latent_batch, &t_batch, &hs_batch, None)?;
+        let out_batch = dit.forward_ctx(&latent_batch, &t_batch, encoder_hs, None)?;
         let uncond = out_batch.narrow(0, 0, 1)?;
         let cond = out_batch.narrow(0, 1, 1)?;
-        let delta = cond.sub(&uncond)?;
-        uncond.add(&delta.mul_scalar(scale))?
+        // uncond + s·(cond − uncond)
+        CudaTensor::lincomb(&[(1.0 - scale, &uncond), (scale, &cond)])?
     } else {
-        let t_tensor = CudaTensor::from_vec(vec![t], vec![1])?;
         let uncond_hs = encoder_hs.narrow(0, 0, 1)?;
-        let cond = dit.forward_ctx(&latent_in, &t_tensor, &cond_hs, ctx.image)?;
-        let uncond = dit.forward_ctx(&latent_in, &t_tensor, &uncond_hs, ctx.image)?;
-        let delta = cond.sub(&uncond)?;
-        uncond.add(&delta.mul_scalar(scale))?
+        let cond = dit.forward_ctx(&latent_in, &t1, &cond_hs, ctx.image)?;
+        let uncond = dit.forward_ctx(&latent_in, &t1, &uncond_hs, ctx.image)?;
+        CudaTensor::lincomb(&[(1.0 - scale, &uncond), (scale, &cond)])?
     };
     ctx.tea_cache.store(latents, &out);
     Ok(out)
 }
 
-fn euler_denoise(
+fn notify(observer: &mut Option<&mut StepObserver<'_>>, index: usize, total: usize, timestep: f32, latents: &CudaTensor) -> Result<()> {
+    match observer.as_deref_mut() {
+        Some(obs) => obs(&DenoiseStep { index, total, timestep, latents }),
+        None => Ok(()),
+    }
+}
+
+/// Seeded standard-normal noise for DMD step `i` (independent per step).
+fn dmd_noise(seed: u64, step: usize, shape: &[usize]) -> Result<CudaTensor> {
+    let mut rng = rand::rngs::StdRng::seed_from_u64(seed ^ (0x9E37_79B9_7F4A_7C15u64.wrapping_mul(step as u64 + 1)));
+    let n: usize = shape.iter().product();
+    let noise: Vec<f32> = (0..n).map(|_| rng.sample::<f32, _>(StandardNormal)).collect();
+    Ok(CudaTensor::from_vec(noise, shape.to_vec())?.to_device()?)
+}
+
+/// FastVideo DMD sampler: predict x0 = x − σ_t·v, then re-noise to the next
+/// table sigma with fresh noise; the last step returns x0.
+fn dmd_denoise(
     mut latents: CudaTensor,
     encoder_hs: &CudaTensor,
-    timesteps: &[f32],
-    sigmas: &[f64],
-    ctx: &DenoiseCtx<'_>,
+    sched: &DmdSchedule,
+    seed: u64,
+    ctx: &mut DenoiseCtx<'_>,
     mut observer: Option<&mut StepObserver<'_>>,
 ) -> Result<CudaTensor> {
-    let mut ctx = DenoiseCtx {
-        high: ctx.high,
-        low: ctx.low,
-        boundary_ratio: ctx.boundary_ratio,
-        image: ctx.image,
-        i2v: ctx.i2v,
-        guidance: ctx.guidance,
-        guidance_2: ctx.guidance_2,
-        tea_cache: TeaCache::from_env(),
-    };
-    for (i, &t) in timesteps.iter().enumerate() {
-        let _step = super::log::StepTimer::start(format!(
-            "dmd step {}/{} t={t:.0}",
-            i + 1,
-            timesteps.len()
-        ));
-        let guided = dit_cfg(&mut ctx, &latents, encoder_hs, t)?;
-        let dt = sigmas[i + 1] - sigmas[i];
-        let delta = guided.mul_scalar(dt as f32);
-        latents = latents.add(&delta)?;
-        if let Some(obs) = observer.as_deref_mut() {
-            obs(&DenoiseStep {
-                index: i,
-                total: timesteps.len(),
-                timestep: t,
-                latents: &latents,
-            })?;
-        }
+    let total = sched.num_steps();
+    for (i, &t) in sched.train_timesteps.iter().enumerate() {
+        let t = t as f32;
+        let _step = super::log::StepTimer::start(format!("dmd step {}/{total} t={t:.0}", i + 1));
+        let velocity = dit_cfg(ctx, &latents, encoder_hs, t)?;
+        let c = sched.step_coeffs(i);
+        let x0 = CudaTensor::lincomb(&[(1.0, &latents), (-(c.sigma_t as f32), &velocity)])?;
+        latents = match c.sigma_next {
+            Some(next) => {
+                let noise = dmd_noise(seed, i, &latents.shape)?;
+                CudaTensor::lincomb(&[(1.0 - next as f32, &x0), (next as f32, &noise)])?
+            }
+            None => x0,
+        };
+        super::device::synchronize().map_err(|e| PipelineError::Message(e.to_string()))?;
+        notify(&mut observer, i, total, t, &latents)?;
     }
     Ok(latents)
 }
 
+/// Σ coef·term over one UniPC plan combination.
+fn unipc_combine(
+    terms: &[(UniPcTerm, f64)],
+    sample: &CudaTensor,
+    last_sample: Option<&CudaTensor>,
+    converted: &CudaTensor,
+    history: &std::collections::VecDeque<CudaTensor>,
+) -> Result<CudaTensor> {
+    let mut parts: Vec<(f32, &CudaTensor)> = Vec::with_capacity(terms.len());
+    for (term, coef) in terms {
+        let t = match term {
+            UniPcTerm::Sample => sample,
+            UniPcTerm::Converted => converted,
+            UniPcTerm::LastSample => last_sample.ok_or_else(|| PipelineError::Message("unipc: plan needs a last sample".into()))?,
+            UniPcTerm::History(k) => history
+                .get(*k)
+                .ok_or_else(|| PipelineError::Message(format!("unipc: plan needs history[{k}]")))?,
+        };
+        parts.push((*coef as f32, t));
+    }
+    Ok(CudaTensor::lincomb(&parts)?)
+}
+
+/// Order-2 bh2 UniPC predictor-corrector (FastVideo defaults) with every
+/// update a linear combination of latent-shaped tensors: device kernels on
+/// GPU runs, the same math on host for CPU runs.
 fn unipc_denoise(
     mut latents: CudaTensor,
     encoder_hs: &CudaTensor,
     sched: &mut FlowUniPCMultistepScheduler,
-    ctx: &DenoiseCtx<'_>,
+    ctx: &mut DenoiseCtx<'_>,
     mut observer: Option<&mut StepObserver<'_>>,
 ) -> Result<CudaTensor> {
-    let mut ctx = DenoiseCtx {
-        high: ctx.high,
-        low: ctx.low,
-        boundary_ratio: ctx.boundary_ratio,
-        image: ctx.image,
-        i2v: ctx.i2v,
-        guidance: ctx.guidance,
-        guidance_2: ctx.guidance_2,
-        tea_cache: TeaCache::from_env(),
-    };
-    let device_sched = super::hopper::device_sched_enabled()
-        && super::resident::residency_enabled()
-        && cuda_context_live()
-        && sched.predict_x0;
-    if device_sched {
-        static ONCE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
-        super::log::info_once(
-            &ONCE,
-            format_args!("unipc: device order-1 axpy (FASTVIDEO_DEVICE_SCHED)"),
-        );
-        let ts: Vec<f32> = sched
-            .inference_timesteps_i64()
-            .iter()
-            .map(|t| *t as f32)
-            .collect();
-        for (i, &t) in ts.iter().enumerate() {
-            let _step = super::log::StepTimer::start(format!(
-                "unipc-dev step {}/{} t={t:.0}",
-                i + 1,
-                ts.len()
-            ));
-            let guided = dit_cfg(&mut ctx, &latents, encoder_hs, t)?;
-            let coeffs = sched
-                .order1_device_coeffs()
-                .map_err(PipelineError::Message)?;
-            let converted = latents.add(&guided.mul_scalar(-coeffs.sigma_cur))?;
-            latents = latents
-                .mul_scalar(coeffs.scale_sample)
-                .add(&converted.mul_scalar(coeffs.scale_converted))?;
-            if let Some(obs) = observer.as_deref_mut() {
-                obs(&DenoiseStep {
-                    index: i,
-                    total: ts.len(),
-                    timestep: t,
-                    latents: &latents,
-                })?;
-            }
-        }
-        return Ok(latents);
-    }
-    let shape = latents.shape.clone();
-    let ts: Vec<f32> = sched
-        .inference_timesteps_i64()
-        .iter()
-        .map(|t| *t as f32)
-        .collect();
+    let ts: Vec<f32> = sched.inference_timesteps_i64().iter().map(|t| *t as f32).collect();
+    let mut history = std::collections::VecDeque::new();
+    let mut last_sample: Option<CudaTensor> = None;
     for (i, &t) in ts.iter().enumerate() {
-        let _step = super::log::StepTimer::start(format!(
-            "unipc step {}/{} t={t:.0}",
-            i + 1,
-            ts.len()
-        ));
-        let mut guided = dit_cfg(&mut ctx, &latents, encoder_hs, t)?;
-        guided.ensure_host().map_err(|e| PipelineError::Message(e.to_string()))?;
-        latents
-            .ensure_host()
-            .map_err(|e| PipelineError::Message(e.to_string()))?;
-        let prev = sched
-            .step(&guided.data, &latents.data)
-            .map_err(PipelineError::Message)?;
-        // Re-upload the updated latents so the next step starts device-fresh.
-        // Honors the residency contract through the VAE call.
-        let mut fresh = CudaTensor::from_vec(prev, shape.clone())?;
-        let _ = fresh.pin_device();
-        latents = fresh;
-        if let Some(obs) = observer.as_deref_mut() {
-            obs(&DenoiseStep {
-                index: i,
-                total: ts.len(),
-                timestep: t,
-                latents: &latents,
-            })?;
-        }
+        let _step = super::log::StepTimer::start(format!("unipc step {}/{} t={t:.0}", i + 1, ts.len()));
+        let velocity = dit_cfg(ctx, &latents, encoder_hs, t)?;
+        let plan = sched.plan_step().map_err(PipelineError::Message)?;
+        let converted = CudaTensor::lincomb(&[(1.0, &latents), (-(plan.convert_scale as f32), &velocity)])?;
+        let corrected = match &plan.corrector {
+            Some(terms) => unipc_combine(terms, &latents, last_sample.as_ref(), &converted, &history)?,
+            None => latents.clone(),
+        };
+        let prev = unipc_combine(&plan.predictor, &corrected, last_sample.as_ref(), &converted, &history)?;
+        history.push_front(converted);
+        history.truncate(plan.history_len);
+        last_sample = Some(corrected);
+        latents = prev;
+        super::device::synchronize().map_err(|e| PipelineError::Message(e.to_string()))?;
+        notify(&mut observer, i, ts.len(), t, &latents)?;
     }
     Ok(latents)
 }

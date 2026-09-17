@@ -1,13 +1,17 @@
-//! Kernel-level parity on a live GPU: every NVRTC kernel and cuBLAS path the
-//! Wan graph uses, called through its public device wrapper and compared with
-//! a plain-Rust reference. A wrapper returning `None` is a failure, not a skip:
-//! it means production would silently fall back to host compute.
+//! Kernel-level parity on a live GPU: every NVRTC kernel, cuBLAS and cuDNN
+//! path the Wan graph uses, called through its public device wrapper and
+//! compared with an independent plain-Rust reference. Also times the two
+//! conv3d strategies at VAE sizes and checks that GPU runs refuse to compute
+//! on the host.
 //!
 //! Shapes deliberately include non-power-of-two widths, partial reduction
-//! blocks, key lengths that are not multiples of the flash tile, and B=2.
+//! blocks, chunked attention, rank-6 permutes and B=2.
 
 use cudarc::driver::CudaSlice;
-use fastvideo_cudarc::wan::{attn, bf16_gemm, device, kernels as k, nn, ops};
+use fastvideo_cudarc::wan::device::GemmMath;
+use fastvideo_cudarc::wan::fused::Rope;
+use fastvideo_cudarc::wan::ops::{self, host, BcastOp};
+use fastvideo_cudarc::wan::{attn, conv, device, kernels as k};
 use fastvideo_cudarc::CudaTensor;
 use serde_json::json;
 
@@ -28,8 +32,12 @@ fn down(s: &CudaSlice<f32>) -> anyhow::Result<Vec<f32>> {
     Ok(dev()?.stream.memcpy_dtov(s)?)
 }
 
-fn some<T>(name: &str, v: Option<T>) -> anyhow::Result<T> {
-    v.ok_or_else(|| anyhow::anyhow!("{name}: device path returned None (would silently run on host)"))
+fn t(data: Vec<f32>, shape: &[usize]) -> anyhow::Result<CudaTensor> {
+    Ok(CudaTensor::from_vec(data, shape.to_vec())?.to_device()?)
+}
+
+fn host_of(x: &CudaTensor) -> anyhow::Result<Vec<f32>> {
+    Ok(x.host_cow()?.into_owned())
 }
 
 struct Ctx<'r> {
@@ -49,7 +57,7 @@ impl Ctx<'_> {
     }
 }
 
-// ---- references -----------------------------------------------------------
+// ---- independent references (f64 accumulation, index math) ---------------
 
 fn ref_softmax(x: &[f32], width: usize) -> Vec<f32> {
     let mut out = vec![0.0; x.len()];
@@ -76,21 +84,18 @@ fn ref_rms(x: &[f32], w: &[f32], eps: f32) -> Vec<f32> {
     out
 }
 
-fn ref_layer_norm(x: &[f32], width: usize, w: Option<&[f32]>, b: Option<&[f32]>, eps: f32) -> Vec<f32> {
+fn ref_layer_norm(x: &[f32], width: usize, affine: Option<(&[f32], &[f32])>, eps: f32) -> Vec<f32> {
     let mut out = vec![0.0; x.len()];
     for (row, o) in x.chunks(width).zip(out.chunks_mut(width)) {
         let mean = row.iter().map(|&v| f64::from(v)).sum::<f64>() / width as f64;
         let var = row.iter().map(|&v| (f64::from(v) - mean).powi(2)).sum::<f64>() / width as f64;
         let inv = 1.0 / (var + f64::from(eps)).sqrt();
         for i in 0..width {
-            let mut y = ((f64::from(row[i]) - mean) * inv) as f32;
-            if let Some(w) = w {
-                y *= w[i];
-            }
-            if let Some(b) = b {
-                y += b[i];
-            }
-            o[i] = y;
+            let y = ((f64::from(row[i]) - mean) * inv) as f32;
+            o[i] = match affine {
+                Some((w, b)) => y * w[i] + b[i],
+                None => y,
+            };
         }
     }
     out
@@ -106,17 +111,25 @@ fn ref_matmul(a: &[f32], b: &[f32], m: usize, k: usize, n: usize) -> Vec<f32> {
     let mut out = vec![0.0; m * n];
     for i in 0..m {
         for j in 0..n {
-            let mut acc = 0.0f64;
-            for t in 0..k {
-                acc += f64::from(a[i * k + t]) * f64::from(b[t * n + j]);
-            }
+            let acc: f64 = (0..k).map(|t| f64::from(a[i * k + t]) * f64::from(b[t * n + j])).sum();
             out[i * n + j] = acc as f32;
         }
     }
     out
 }
 
+fn transpose2(w: &[f32], r: usize, c: usize) -> Vec<f32> {
+    let mut out = vec![0.0; r * c];
+    for i in 0..r {
+        for j in 0..c {
+            out[j * r + i] = w[i * c + j];
+        }
+    }
+    out
+}
+
 /// `[bh, sq, d] × [bh, sk, d]` scaled dot-product attention.
+#[allow(clippy::too_many_arguments)]
 fn ref_sdpa(q: &[f32], kk: &[f32], v: &[f32], bh: usize, sq: usize, sk: usize, d: usize, scale: f32) -> Vec<f32> {
     let mut out = vec![0.0; bh * sq * d];
     let mut scores = vec![0.0f32; sk];
@@ -140,32 +153,41 @@ fn ref_sdpa(q: &[f32], kk: &[f32], v: &[f32], bh: usize, sq: usize, sk: usize, d
     out
 }
 
+/// Naive 3-D cross-correlation (`kt=1` gives conv2d) with symmetric padding.
+#[allow(clippy::too_many_arguments)]
 fn ref_conv3d(
-    x: &[f32], w: &[f32], bias: &[f32],
+    x: &[f32],
+    w: &[f32],
+    bias: Option<&[f32]>,
     (n, ic, it, ih, iw): (usize, usize, usize, usize, usize),
     (oc, kt, kh, kw): (usize, usize, usize, usize),
+    (pt, ph, pw): (usize, usize, usize),
     (st, sh, sw): (usize, usize, usize),
 ) -> (Vec<f32>, [usize; 3]) {
-    let (ot, oh, ow) = ((it - kt) / st + 1, (ih - kh) / sh + 1, (iw - kw) / sw + 1);
+    let (ot, oh, ow) = ((it + 2 * pt - kt) / st + 1, (ih + 2 * ph - kh) / sh + 1, (iw + 2 * pw - kw) / sw + 1);
     let mut out = vec![0.0; n * oc * ot * oh * ow];
     for b in 0..n {
         for o in 0..oc {
-            for t in 0..ot {
+            for tt in 0..ot {
                 for y in 0..oh {
                     for xx in 0..ow {
-                        let mut acc = f64::from(bias[o]);
+                        let mut acc = f64::from(bias.map_or(0.0, |bs| bs[o]));
                         for c in 0..ic {
                             for dt in 0..kt {
                                 for dy in 0..kh {
                                     for dx in 0..kw {
-                                        let xi = (((b * ic + c) * it + t * st + dt) * ih + y * sh + dy) * iw + xx * sw + dx;
+                                        let (zt, zy, zx) = (tt * st + dt, y * sh + dy, xx * sw + dx);
+                                        if zt < pt || zy < ph || zx < pw || zt - pt >= it || zy - ph >= ih || zx - pw >= iw {
+                                            continue;
+                                        }
+                                        let xi = (((b * ic + c) * it + zt - pt) * ih + zy - ph) * iw + zx - pw;
                                         let wi = (((o * ic + c) * kt + dt) * kh + dy) * kw + dx;
                                         acc += f64::from(x[xi]) * f64::from(w[wi]);
                                     }
                                 }
                             }
                         }
-                        out[(((b * oc + o) * ot + t) * oh + y) * ow + xx] = acc as f32;
+                        out[(((b * oc + o) * ot + tt) * oh + y) * ow + xx] = acc as f32;
                     }
                 }
             }
@@ -174,19 +196,29 @@ fn ref_conv3d(
     (out, [ot, oh, ow])
 }
 
+fn ref_permute(x: &[f32], shape: &[usize], perm: &[usize]) -> Vec<f32> {
+    let rank = shape.len();
+    let strides: Vec<usize> = (0..rank).map(|i| shape[i + 1..].iter().product()).collect();
+    let out_shape: Vec<usize> = perm.iter().map(|&p| shape[p]).collect();
+    let mut out = vec![0.0; x.len()];
+    for (i, o) in out.iter_mut().enumerate() {
+        let (mut rem, mut src) = (i, 0usize);
+        for k in (0..rank).rev() {
+            src += (rem % out_shape[k]) * strides[perm[k]];
+            rem /= out_shape[k];
+        }
+        *o = x[src];
+    }
+    out
+}
+
 // ---- suite ----------------------------------------------------------------
 
-/// Run one kernel group. An error inside a group (device wrapper returned
-/// `None`, CUDA error) becomes a failed check, so with `--keep-going` the
-/// remaining groups still run and one rental lists every broken kernel.
+/// Run one kernel group. An error inside a group becomes a failed check, so
+/// with `--keep-going` the remaining groups still run.
 fn group(c: &mut Ctx<'_>, name: &str, f: impl FnOnce(&mut Ctx<'_>) -> StageResult<()>) -> StageResult<()> {
     match f(c) {
-        Err(StageError::Error(e)) => c.report.check(
-            format!("{name}/completed"),
-            false,
-            json!({"error": format!("{e:#}")}),
-            json!({}),
-        ),
+        Err(StageError::Error(e)) => c.report.check(format!("{name}/completed"), false, json!({"error": format!("{e:#}")}), json!({})),
         other => other,
     }
 }
@@ -195,172 +227,203 @@ pub fn run(report: &mut Report, lim: Limits, seed: u64) -> StageResult<()> {
     let info = crate::gpu::init("cuda")?;
     report.set("device", &info);
     report.set("limits", lim);
+    let math = dev()?.gemm_math;
+    report.set("gemm_math", format!("{math:?}"));
     let mut c = Ctx { report, seed };
     let op = lim.op;
-    // Shared GEMM tolerance: TF32 (when on) perturbs cuBLAS F32 results.
-    let gemm = op.max(if device::global_device().is_some_and(|d| d.tf32) { 2e-3 } else { 0.0 });
-    group(&mut c, "elementwise", |c: &mut Ctx<'_>| -> StageResult<()> {
-        // Elementwise.
+    // cuBLAS math: TF32 perturbs F32 results; bf16 compute more so.
+    let gemm = op.max(match math {
+        GemmMath::F32 => 0.0,
+        GemmMath::Tf32 => 2e-3,
+        GemmMath::Bf16 => 5e-3,
+    });
+
+    group(&mut c, "elementwise", |c| {
         for n in [1usize, 1000, 65_537] {
-            let (a, b) = (c.rand(n, 1.0), c.rand(n, 1.0));
-            let (da, db) = (up(&a)?, up(&b)?);
+            let (a, b, z) = (c.rand(n, 1.0), c.rand(n, 1.0), c.rand(n, 1.0));
+            let (da, db, dz) = (up(&a)?, up(&b)?, up(&z)?);
             for (kind, name, f) in [
                 (ops::ElemBinary::Add, "add", (|x: f32, y: f32| x + y) as fn(f32, f32) -> f32),
                 (ops::ElemBinary::Sub, "sub", |x, y| x - y),
                 (ops::ElemBinary::Mul, "mul", |x, y| x * y),
             ] {
-                let got = down(&some(name, ops::elem_binary_device(&da, &db, kind))?)?;
+                let got = down(&ops::elem_binary_device(&da, &db, kind)?)?;
                 let want: Vec<f32> = a.iter().zip(&b).map(|(&x, &y)| f(x, y)).collect();
                 c.cmp(&format!("elem_{name}_n{n}"), &got, &want, op)?;
             }
-            let got = down(&some("mul_scalar", ops::mul_scalar_device(&da, -1.75))?)?;
-            c.cmp(&format!("mul_scalar_n{n}"), &got, &a.iter().map(|v| v * -1.75).collect::<Vec<_>>(), op)?;
-            let got = down(&some("add_scalar", ops::add_scalar_device(&da, 0.5))?)?;
-            c.cmp(&format!("add_scalar_n{n}"), &got, &a.iter().map(|v| v + 0.5).collect::<Vec<_>>(), op)?;
-            let got = down(&some("silu", ops::unary_device(&da, ops::ElemUnary::Silu))?)?;
+            c.cmp(&format!("mul_scalar_n{n}"), &down(&ops::mul_scalar_device(&da, -1.75)?)?, &a.iter().map(|v| v * -1.75).collect::<Vec<_>>(), op)?;
+            c.cmp(&format!("add_scalar_n{n}"), &down(&ops::add_scalar_device(&da, 0.5)?)?, &a.iter().map(|v| v + 0.5).collect::<Vec<_>>(), op)?;
             let want: Vec<f32> = a.iter().map(|&v| v / (1.0 + (-v).exp())).collect();
-            c.cmp(&format!("silu_n{n}"), &got, &want, op)?;
-            let got = down(&some("gelu_tanh", ops::unary_device(&da, ops::ElemUnary::GeluTanh))?)?;
-            c.cmp(&format!("gelu_tanh_n{n}"), &got, &a.iter().map(|&v| ref_gelu_tanh(v)).collect::<Vec<_>>(), op)?;
-            let got = down(&some("clamp", ops::clamp_device(&da, -0.3, 0.7))?)?;
-            c.cmp(&format!("clamp_n{n}"), &got, &a.iter().map(|v| v.clamp(-0.3, 0.7)).collect::<Vec<_>>(), op)?;
+            c.cmp(&format!("silu_n{n}"), &down(&ops::unary_device(&da, ops::ElemUnary::Silu)?)?, &want, op)?;
+            let want: Vec<f32> = a.iter().map(|&v| ref_gelu_tanh(v)).collect();
+            c.cmp(&format!("gelu_tanh_n{n}"), &down(&ops::unary_device(&da, ops::ElemUnary::GeluTanh)?)?, &want, op)?;
+            c.cmp(&format!("clamp_n{n}"), &down(&ops::clamp_device(&da, -0.3, 0.7)?)?, &a.iter().map(|v| v.clamp(-0.3, 0.7)).collect::<Vec<_>>(), op)?;
+            c.cmp(&format!("fill_n{n}"), &down(&ops::fill_device(n, 0.25)?)?, &vec![0.25; n], 0.0)?;
+            // Five terms: one lincomb3 launch plus one chained launch.
+            let coefs = [0.7f32, -1.3, 0.25, 2.0, -0.5];
+            let bufs = [&da, &db, &dz, &da, &db];
+            let terms: Vec<(f32, &CudaSlice<f32>)> = coefs.iter().copied().zip(bufs).collect();
+            let want: Vec<f32> = (0..n).map(|i| {
+                let v = [a[i], b[i], z[i], a[i], b[i]];
+                coefs.iter().zip(v).map(|(k, x)| f64::from(*k) * f64::from(x)).sum::<f64>() as f32
+            }).collect();
+            c.cmp(&format!("lincomb5_n{n}"), &down(&ops::lincomb_device(&terms)?)?, &want, op)?;
         }
-
+        // Broadcast binary: trailing repeat, channel broadcast, leading batch.
+        for (big_shape, inner, period) in [(vec![2usize, 6, 7], 1usize, 42usize), (vec![2, 5, 3, 4], 12, 5), (vec![3, 4, 5], 1, 5)] {
+            let nb: usize = big_shape.iter().product();
+            let (big, small) = (c.rand(nb, 1.0), c.rand(period, 1.0).iter().map(|v| v + 2.0).collect::<Vec<_>>());
+            let (dbig, dsmall) = (up(&big)?, up(&small)?);
+            for bop in [BcastOp::Add, BcastOp::Sub, BcastOp::Mul, BcastOp::Div, BcastOp::RSub, BcastOp::RDiv] {
+                let got = down(&ops::bcast_binary_device(&dbig, &dsmall, inner, period, bop)?)?;
+                let want: Vec<f32> = (0..nb).map(|i| bop.apply(big[i], small[(i / inner) % period])).collect();
+                c.cmp(&format!("bcast_{bop:?}_{big_shape:?}"), &got, &want, op)?;
+            }
+        }
         Ok(())
     })?;
-    group(&mut c, "row_reductions", |c: &mut Ctx<'_>| -> StageResult<()> {
-        // Row reductions: widths straddle the 256-thread block and non-powers of 2.
+
+    group(&mut c, "row_reductions", |c| {
+        // Widths straddle the 256-thread block and non-powers of 2.
         for (rows, width) in [(1usize, 7usize), (5, 64), (33, 255), (3, 256), (4, 300), (2, 1536), (2, 4096)] {
             let x = c.rand(rows * width, 2.0);
             let dx = up(&x)?;
-            let got = down(&some("softmax_last", ops::softmax_last_device(&dx, width))?)?;
-            c.cmp(&format!("softmax_{rows}x{width}"), &got, &ref_softmax(&x, width), op)?;
+            c.cmp(&format!("softmax_{rows}x{width}"), &down(&ops::softmax_last_device(&dx, width)?)?, &ref_softmax(&x, width), op)?;
             let w: Vec<f32> = c.rand(width, 0.1).iter().map(|v| 1.0 + v).collect();
             let b = c.rand(width, 0.1);
             let (dw, db) = (up(&w)?, up(&b)?);
-            let got = down(&some("rms_norm_last", ops::rms_norm_last_device(&dx, &dw, 1e-6))?)?;
-            c.cmp(&format!("rms_norm_{rows}x{width}"), &got, &ref_rms(&x, &w, 1e-6), op)?;
-            let got = down(&some("layer_norm_last", ops::layer_norm_last_device(&dx, Some(&dw), Some(&db), width, 1e-6))?)?;
-            c.cmp(&format!("layer_norm_affine_{rows}x{width}"), &got, &ref_layer_norm(&x, width, Some(&w), Some(&b), 1e-6), op)?;
-            let got = down(&some("layer_norm_last", ops::layer_norm_last_device(&dx, None, None, width, 1e-6))?)?;
-            c.cmp(&format!("layer_norm_plain_{rows}x{width}"), &got, &ref_layer_norm(&x, width, None, None, 1e-6), op)?;
+            c.cmp(&format!("rms_norm_{rows}x{width}"), &down(&ops::rms_norm_last_device(&dx, &dw, 1e-6)?)?, &ref_rms(&x, &w, 1e-6), op)?;
+            let got = down(&ops::layer_norm_last_device(&dx, Some((&dw, &db)), width, 1e-6)?)?;
+            c.cmp(&format!("layer_norm_affine_{rows}x{width}"), &got, &ref_layer_norm(&x, width, Some((&w, &b)), 1e-6), op)?;
+            let got = down(&ops::layer_norm_last_device(&dx, None, width, 1e-6)?)?;
+            c.cmp(&format!("layer_norm_plain_{rows}x{width}"), &got, &ref_layer_norm(&x, width, None, 1e-6), op)?;
         }
-
         Ok(())
     })?;
-    group(&mut c, "adaln", |c: &mut Ctx<'_>| -> StageResult<()> {
-        // AdaLN broadcast ops and the fused LN+AdaLN kernel.
+
+    group(&mut c, "dit_fused", |c| {
         for (b, s, d) in [(1usize, 17usize, 64usize), (2, 300, 1536)] {
             let x = c.rand(b * s * d, 1.0);
-            let scale = c.rand(b * d, 0.2);
-            let shift = c.rand(b * d, 0.2);
-            let (dx, dsc, dsh) = (up(&x)?, up(&scale)?, up(&shift)?);
-            let mut want_mod = vec![0.0; x.len()];
+            let e = c.rand(b * 6 * d, 0.2);
+            let upd = c.rand(b * s * d, 1.0);
+            let (xt, et, ut) = (t(x.clone(), &[b, s, d])?, t(e.clone(), &[b, 6, d])?, t(upd.clone(), &[b, s, d])?);
+            let normed = ref_layer_norm(&x, d, None, 1e-6);
+            let mut want = vec![0.0; x.len()];
             let mut want_gate = vec![0.0; x.len()];
-            for bi in 0..b {
-                for si in 0..s {
-                    for di in 0..d {
-                        let i = (bi * s + si) * d + di;
-                        want_mod[i] = x[i] * (1.0 + scale[bi * d + di]) + shift[bi * d + di];
-                        want_gate[i] = x[i] * scale[bi * d + di];
-                    }
-                }
+            for i in 0..x.len() {
+                let (bi, j) = (i / (s * d), i % d);
+                want[i] = normed[i] * (1.0 + e[(bi * 6 + 4) * d + j]) + e[(bi * 6 + 3) * d + j];
+                want_gate[i] = x[i] + upd[i] * e[(bi * 6 + 5) * d + j];
             }
-            let got = down(&some("modulate", ops::modulate_scale_shift_device(&dx, &dsc, &dsh, b, s, d))?)?;
-            c.cmp(&format!("modulate_{b}x{s}x{d}"), &got, &want_mod, op)?;
-            let got = down(&some("gate_mul", ops::broadcast_mul_last_device(&dx, &dsc, b, s, d))?)?;
-            c.cmp(&format!("gate_mul_{b}x{s}x{d}"), &got, &want_gate, op)?;
+            c.cmp(&format!("ln_adaln_e_{b}x{s}x{d}"), &host_of(&xt.ln_adaln_e(&et, 4, 3, 1e-6)?)?, &want, op)?;
+            c.cmp(&format!("residual_gate_add_e_{b}x{s}x{d}"), &host_of(&xt.residual_gate_add_e(&ut, &et, 5)?)?, &want_gate, op)?;
 
-            let normed = ref_layer_norm(&x, d, None, None, 1e-6);
-            let mut want = vec![0.0; x.len()];
-            for bi in 0..b {
-                for si in 0..s {
-                    for di in 0..d {
-                        let i = (bi * s + si) * d + di;
-                        want[i] = normed[i] * (1.0 + scale[bi * d + di]) + shift[bi * d + di];
-                    }
-                }
-            }
-            let xt = CudaTensor::from_vec(x.clone(), vec![b, s, d])?;
-            let st = CudaTensor::from_vec(scale.clone(), vec![b, d])?;
-            let sh = CudaTensor::from_vec(shift.clone(), vec![b, d])?;
-            let got = some("layer_norm_adaln", nn::layer_norm_adaln(&xt, &st, &sh, 1e-6)?)?;
-            c.cmp(&format!("layer_norm_adaln_{b}x{s}x{d}"), &got.host_cow()?, &want, op)?;
-
-            let mut out = up(&x)?;
             let bias = c.rand(d, 0.5);
-            ops::add_bias_last_inplace(&mut out, &up(&bias)?)?;
-            let want: Vec<f32> = x.iter().enumerate().map(|(i, v)| v + bias[i % d]).collect();
-            c.cmp(&format!("add_bias_{b}x{s}x{d}"), &down(&out)?, &want, op)?;
+            let mut out = up(&x)?;
+            ops::add_bias_inplace_device(&mut out, &up(&bias)?, 1)?;
+            c.cmp(&format!("add_bias_last_{b}x{s}x{d}"), &down(&out)?, &x.iter().enumerate().map(|(i, v)| v + bias[i % d]).collect::<Vec<_>>(), op)?;
+            let mut out = up(&x)?;
+            ops::bias_gelu_inplace_device(&mut out, &up(&bias)?)?;
+            let want: Vec<f32> = x.iter().enumerate().map(|(i, v)| ref_gelu_tanh(v + bias[i % d])).collect();
+            c.cmp(&format!("bias_gelu_{b}x{s}x{d}"), &down(&out)?, &want, op)?;
         }
-
-        Ok(())
-    })?;
-    group(&mut c, "data_movement", |c: &mut Ctx<'_>| -> StageResult<()> {
-        // Data movement kernels.
-        let shape = [2usize, 3, 5, 7];
-        let x = c.rand(shape.iter().product(), 1.0);
-        let dx = up(&x)?;
-        for dims in [[0usize, 2, 1, 3], [0, 1, 3, 2], [3, 2, 1, 0]] {
-            let got = down(&device::permute_4d_device(&dx, shape, dims)?)?;
-            let out_shape: Vec<usize> = dims.iter().map(|&d| shape[d]).collect();
-            let mut want = vec![0.0; x.len()];
-            let in_str = [shape[1] * shape[2] * shape[3], shape[2] * shape[3], shape[3], 1];
-            let mut idx = 0;
-            for a in 0..out_shape[0] {
-                for b in 0..out_shape[1] {
-                    for cc in 0..out_shape[2] {
-                        for d in 0..out_shape[3] {
-                            let o = [a, b, cc, d];
-                            let mut src = 0;
-                            for (oi, &dd) in dims.iter().enumerate() {
-                                src += o[oi] * in_str[dd];
+        // q/k prep from a fused QKV row: [b, s, 3*heads*hd].
+        for (b, s, heads, hd) in [(1usize, 9usize, 2usize, 8usize), (2, 128, 12, 128)] {
+            let width = heads * hd;
+            let x = c.rand(b * s * 3 * width, 1.0);
+            let w: Vec<f32> = c.rand(width, 0.1).iter().map(|v| 1.0 + v).collect();
+            let ang = c.rand(s * hd, 3.0);
+            let (cos, sin): (Vec<f32>, Vec<f32>) = ang.iter().map(|a| (a.cos(), a.sin())).unzip();
+            let xt = t(x.clone(), &[b, s, 3 * width])?;
+            let (wt, ct, st) = (t(w.clone(), &[width])?, t(cos.clone(), &[s, hd])?, t(sin.clone(), &[s, hd])?);
+            for (col, rope) in [(0usize, true), (1, true), (1, false)] {
+                let got = xt.qk_norm_rope_bhsd(col * width, heads, &wt, rope.then_some(Rope { cos: &ct, sin: &st }), 1e-6)?;
+                let slice: Vec<f32> = (0..b * s).flat_map(|r| x[r * 3 * width + col * width..r * 3 * width + (col + 1) * width].to_vec()).collect();
+                let n = ref_rms(&slice, &w, 1e-6);
+                let mut want = vec![0.0; b * heads * s * hd];
+                for bi in 0..b {
+                    for si in 0..s {
+                        for h in 0..heads {
+                            for p in 0..hd {
+                                let src = (bi * s + si) * width + h * hd + p;
+                                let o = ((bi * heads + h) * s + si) * hd + p;
+                                want[o] = if rope {
+                                    let even = p & !1;
+                                    let (x1, x2) = (n[src - (p & 1)], n[src - (p & 1) + 1]);
+                                    let (cs, sn) = (cos[si * hd + even], sin[si * hd + even + 1]);
+                                    if p & 1 == 1 { x1 * sn + x2 * cs } else { x1 * cs - x2 * sn }
+                                } else {
+                                    n[src]
+                                };
                             }
-                            want[idx] = x[src];
-                            idx += 1;
                         }
                     }
                 }
+                c.cmp(&format!("qk_norm_rope_bhsd_col{col}_rope{rope}_{b}x{s}x{heads}x{hd}"), &host_of(&got)?, &want, op)?;
             }
-            c.cmp(&format!("permute_4d_{dims:?}"), &got, &want, 0.0)?;
+            let v = xt.split_heads_bhsd(2 * width, heads, hd)?;
+            let merged = host_of(&v.merge_heads()?)?;
+            let want: Vec<f32> = (0..b * s).flat_map(|r| x[r * 3 * width + 2 * width..r * 3 * width + 3 * width].to_vec()).collect();
+            c.cmp(&format!("split_merge_heads_{b}x{s}x{heads}x{hd}"), &merged, &want, 0.0)?;
         }
-        {
-            let (outer, in_stride, out_stride, len, in_off, out_off) = (6usize, 40usize, 25usize, 17usize, 9usize, 4usize);
-            let x = c.rand(outer * in_stride, 1.0);
-            let mut out = up(&vec![0.0; outer * out_stride])?;
-            some("block_copy", ops::block_copy_device(&up(&x)?, &mut out, outer, len, in_stride, out_stride, in_off, out_off))?;
-            let mut want = vec![0.0; outer * out_stride];
+        Ok(())
+    })?;
+
+    group(&mut c, "data_movement", |c| {
+        for (shape, perm) in [
+            (vec![2usize, 3, 5, 7], vec![0usize, 2, 1, 3]),
+            (vec![2, 3, 5, 7], vec![3, 2, 1, 0]),
+            (vec![1, 4, 3, 6, 5], vec![0, 2, 1, 3, 4]),
+            (vec![2, 3, 2, 4, 2, 3], vec![0, 5, 1, 3, 2, 4]),
+            (vec![6, 2, 3, 4, 2, 5], vec![0, 1, 5, 2, 4, 3]),
+        ] {
+            let x = c.rand(shape.iter().product(), 1.0);
+            let got = down(&ops::gather_nd_device(&up(&x)?, &shape, &perm)?)?;
+            c.cmp(&format!("gather_nd_{shape:?}_{perm:?}"), &got, &ref_permute(&x, &shape, &perm), 0.0)?;
+        }
+        // Tensor-level narrow / cat / pad on every axis (block_copy).
+        let shape = [2usize, 3, 4, 5, 6];
+        let x = c.rand(shape.iter().product(), 1.0);
+        let xt = t(x.clone(), &shape)?;
+        for dim in 0..shape.len() {
+            let d = shape[dim];
+            let (outer, inner): (usize, usize) = (shape[..dim].iter().product(), shape[dim + 1..].iter().product());
+            let a = xt.narrow(dim, 1, d - 1)?;
+            let mut want = Vec::new();
             for o in 0..outer {
-                for i in 0..len {
-                    want[o * out_stride + out_off + i] = x[o * in_stride + in_off + i];
-                }
+                want.extend_from_slice(&x[(o * d + 1) * inner..(o + 1) * d * inner]);
             }
-            c.cmp("block_copy", &down(&out)?, &want, 0.0)?;
+            c.cmp(&format!("narrow_dim{dim}"), &host_of(&a)?, &want, 0.0)?;
+            let first = xt.narrow(dim, 0, 1)?;
+            c.cmp(&format!("cat_dim{dim}"), &host_of(&CudaTensor::cat(&[&first, &a], dim)?)?, &x, 0.0)?;
+            let padded = xt.pad_zeros(dim, 2, 1)?;
+            let mut want = vec![0.0f32; outer * (d + 3) * inner];
+            for o in 0..outer {
+                let dst = (o * (d + 3) + 2) * inner;
+                want[dst..dst + d * inner].copy_from_slice(&x[o * d * inner..(o + 1) * d * inner]);
+            }
+            c.cmp(&format!("pad_dim{dim}"), &host_of(&padded)?, &want, 0.0)?;
         }
         {
-            let (rows, dim) = (70usize, 128usize);
-            let x = c.rand(rows * dim, 1.0);
-            let angles = c.rand(rows * dim, 3.0);
-            let cos: Vec<f32> = angles.iter().map(|a| a.cos()).collect();
-            let sin: Vec<f32> = angles.iter().map(|a| a.sin()).collect();
-            let got = down(&some("rope_interleaved", ops::rope_interleaved_device(&up(&x)?, &up(&cos)?, &up(&sin)?, dim))?)?;
-            // Matches transformer::apply_rotary: even slots use cos/sin at the even index.
-            let mut want = vec![0.0; x.len()];
-            for r in 0..rows {
-                for p in 0..dim / 2 {
-                    let (i0, i1) = (r * dim + 2 * p, r * dim + 2 * p + 1);
-                    let (x1, x2, cs, sn) = (x[i0], x[i1], cos[i0], sin[i1]);
-                    want[i0] = x1 * cs - x2 * sn;
-                    want[i1] = x1 * sn + x2 * cs;
+            let (nc, h, w) = (6usize, 7usize, 9usize);
+            let x = c.rand(nc * h * w, 1.0);
+            let got = down(&ops::upsample_nearest_device(&up(&x)?, nc, h, w, 2, 2)?)?;
+            c.cmp("upsample_nearest_2x", &got, &host::upsample_nearest(&x, nc, h, w, 2, 2), 0.0)?;
+            let mut want = vec![0.0; nc * 4 * h * w];
+            for ci in 0..nc {
+                for y in 0..2 * h {
+                    for xx in 0..2 * w {
+                        want[(ci * 2 * h + y) * 2 * w + xx] = x[(ci * h + y / 2) * w + xx / 2];
+                    }
                 }
             }
-            c.cmp("rope_interleaved", &got, &want, op)?;
+            c.cmp("upsample_nearest_2x_ref", &got, &want, 0.0)?;
         }
         {
             let (n, ch, spatial) = (2usize, 12usize, 5 * 9 * 11);
             let x = c.rand(n * ch * spatial, 1.0);
             let g: Vec<f32> = c.rand(ch, 0.1).iter().map(|v| 1.0 + v).collect();
-            let got = down(&some("rms_norm_channels", ops::rms_norm_channels_device(&up(&x)?, &up(&g)?, n, ch, spatial, 1e-12))?)?;
+            let got = down(&ops::rms_norm_channels_device(&up(&x)?, &up(&g)?, n, ch, spatial, 1e-12)?)?;
             let mut want = vec![0.0; x.len()];
             for ni in 0..n {
                 for s in 0..spatial {
@@ -374,147 +437,164 @@ pub fn run(report: &mut Report, lim: Limits, seed: u64) -> StageResult<()> {
             }
             c.cmp("rms_norm_channels", &got, &want, op)?;
         }
-
+        {
+            let (v, d) = (50usize, 33usize);
+            let table = c.rand(v * d, 1.0);
+            let idx: Vec<usize> = (0..17).map(|i| (i * 13 + 7) % v).collect();
+            let got = host_of(&t(table.clone(), &[v, d])?.index_select_rows(&idx)?)?;
+            let want: Vec<f32> = idx.iter().flat_map(|&i| table[i * d..(i + 1) * d].to_vec()).collect();
+            c.cmp("index_select_rows", &got, &want, 0.0)?;
+        }
         Ok(())
     })?;
-    group(&mut c, "gemm_f32_bf16", |c: &mut Ctx<'_>| -> StageResult<()> {
-        // cuBLAS F32 (TF32 when enabled) GEMMs.
+
+    group(&mut c, "gemm", |c| {
         for (m, kk, n) in [(1usize, 1usize, 1usize), (37, 64, 19), (512, 1536, 1536), (300, 1536, 8960)] {
             let (a, b) = (c.rand(m * kk, 1.0), c.rand(kk * n, 0.05));
             let mut out = up(&vec![0.0; m * n])?;
             device::matmul_2d_f32_device(&up(&a)?, &up(&b)?, &mut out, m, kk, n)?;
             c.cmp(&format!("gemm_2d_{m}x{kk}x{n}"), &down(&out)?, &ref_matmul(&a, &b, m, kk, n), gemm)?;
-            // Linear: x[m,k] @ w[n,k]^T.
             let w = c.rand(n * kk, 0.05);
-            let mut wt = vec![0.0; kk * n];
-            for r in 0..n {
-                for col in 0..kk {
-                    wt[col * n + r] = w[r * kk + col];
-                }
-            }
             let mut out = up(&vec![0.0; m * n])?;
             device::matmul_linear_wt_device(&up(&a)?, &up(&w)?, &mut out, m, kk, n)?;
-            let want = ref_matmul(&a, &wt, m, kk, n);
-            c.cmp(&format!("gemm_linear_{m}x{kk}x{n}"), &down(&out)?, &want, gemm)?;
-
-            // BF16 GEMM (the default DiT linear path) must match F32 to BF16 precision.
-            let w_bf16 = bf16_gemm::upload_bf16(&w)?;
-            let got = bf16_gemm::matmul_linear_wt_bf16_to_f32(&up(&a)?, &w_bf16, m, kk, n)?;
-            c.cmp(&format!("bf16_gemm_linear_{m}x{kk}x{n}"), &down(&got)?, &want, 5e-3)?;
+            c.cmp(&format!("gemm_linear_{m}x{kk}x{n}"), &down(&out)?, &ref_matmul(&a, &transpose2(&w, n, kk), m, kk, n), gemm)?;
         }
         {
             let (batch, m, kk, n) = (24usize, 50usize, 32usize, 70usize);
             let (a, b) = (c.rand(batch * m * kk, 1.0), c.rand(batch * kk * n, 0.2));
             let mut out = up(&vec![0.0; batch * m * n])?;
             device::matmul_2d_strided_batched(&up(&a)?, &up(&b)?, &mut out, batch, m, kk, n)?;
-            let mut want = Vec::with_capacity(batch * m * n);
-            for bi in 0..batch {
-                want.extend(ref_matmul(&a[bi * m * kk..(bi + 1) * m * kk], &b[bi * kk * n..(bi + 1) * kk * n], m, kk, n));
-            }
+            let want: Vec<f32> = (0..batch).flat_map(|bi| ref_matmul(&a[bi * m * kk..(bi + 1) * m * kk], &b[bi * kk * n..(bi + 1) * kk * n], m, kk, n)).collect();
             c.cmp("gemm_strided_batched", &down(&out)?, &want, gemm)?;
         }
-
-        Ok(())
-    })?;
-    group(&mut c, "bf16_elementwise", |c: &mut Ctx<'_>| -> StageResult<()> {
-        // BF16 elementwise kernels used by the chained FFN.
         {
-            let x = c.rand(10_000, 2.0);
-            let bits: Vec<u16> = x.iter().map(|&v| half::bf16::from_f32(v).to_bits()).collect();
-            let mut dbits = dev()?.stream.memcpy_stod(&bits)?;
-            nn::gelu_tanh_bf16_inplace(&mut dbits)?;
-            let got: Vec<f32> = dev()?.stream.memcpy_dtov(&dbits)?.iter().map(|&b| half::bf16::from_bits(b).to_f32()).collect();
-            let want: Vec<f32> = x.iter().map(|&v| ref_gelu_tanh(v)).collect();
-            c.cmp("gelu_tanh_bf16", &got, &want, 5e-3)?;
-
-            let mut out16 = dev()?.stream.alloc_zeros::<u16>(x.len())?;
-            unsafe {
-                k::launch_f32_to_bf16(&dev()?.stream, &dev()?.kernels.f32_to_bf16, &up(&x)?, &mut out16, x.len() as i32)?;
-            }
-            let got: Vec<f32> = dev()?.stream.memcpy_dtov(&out16)?.iter().map(|&b| half::bf16::from_bits(b).to_f32()).collect();
-            c.cmp("f32_to_bf16", &got, &x, 5e-3)?;
+            // 1×1 conv as a shared-weight GEMM over channel-first activations.
+            let (batch, oc, ic, s) = (3usize, 7usize, 5usize, 41usize);
+            let (w, x) = (c.rand(oc * ic, 0.3), c.rand(batch * ic * s, 1.0));
+            let mut out = up(&vec![0.0; batch * oc * s])?;
+            device::matmul_shared_left(&up(&w)?, &up(&x)?, &mut out, batch, oc, ic, s)?;
+            let want: Vec<f32> = (0..batch).flat_map(|bi| ref_matmul(&w, &x[bi * ic * s..(bi + 1) * ic * s], oc, ic, s)).collect();
+            c.cmp("gemm_shared_left", &down(&out)?, &want, gemm)?;
         }
-
         Ok(())
     })?;
-    group(&mut c, "attention", |c: &mut Ctx<'_>| -> StageResult<()> {
-        // Attention: flash kernel and GPU dense SDPA vs reference, including
-        // cross-attention lengths and Sk not a multiple of the 32-wide tile.
-        // Includes the Wan VAE mid-block shape: one 384-wide head over 16x16 tokens.
-        for (b, h, sq, sk, d) in [(1usize, 2usize, 70usize, 70usize, 64usize), (2, 12, 257, 257, 128), (1, 12, 300, 512, 128), (1, 2, 1100, 1100, 32), (2, 1, 256, 256, 384)] {
+
+    group(&mut c, "attention", |c| {
+        // Includes the Wan VAE mid-block shape (one 384-wide head) and a small
+        // score budget that forces the chunked in-place path.
+        for (b, h, sq, sk, d, budget) in [
+            (1usize, 2usize, 70usize, 70usize, 64usize, usize::MAX),
+            (2, 12, 257, 257, 128, usize::MAX),
+            (1, 12, 300, 512, 128, usize::MAX),
+            (2, 12, 300, 512, 128, 12 * 512 * 64),
+            (2, 1, 256, 256, 384, usize::MAX),
+        ] {
             let q = c.rand(b * h * sq * d, 1.0);
             let kk = c.rand(b * h * sk * d, 1.0);
             let v = c.rand(b * h * sk * d, 1.0);
             let scale = 1.0 / (d as f32).sqrt();
             let want = ref_sdpa(&q, &kk, &v, b * h, sq, sk, d, scale);
-            let qt = CudaTensor::from_vec(q, vec![b, h, sq, d])?;
-            let kt = CudaTensor::from_vec(kk, vec![b, h, sk, d])?;
-            let vt = CudaTensor::from_vec(v, vec![b, h, sk, d])?;
+            let (qt, kt, vt) = (t(q, &[b, h, sq, d])?, t(kk, &[b, h, sk, d])?, t(v, &[b, h, sk, d])?);
             let tag = format!("{b}x{h}x{sq}x{sk}x{d}");
-            let got = some("dense_sdpa", attn::device_dense_sdpa(&qt, &kt, &vt, Some(scale))?)?;
-            c.cmp(&format!("dense_sdpa_{tag}"), &got.host_cow()?, &want, gemm.max(op))?;
+            let dense = attn::device_dense_sdpa_with_budget(&qt, &kt, &vt, Some(scale), budget)?
+                .ok_or_else(|| anyhow::anyhow!("dense sdpa declined on a live device"))?;
+            let chunked = if budget == usize::MAX { "" } else { "_chunked" };
+            c.cmp(&format!("dense_sdpa{chunked}_{tag}"), &host_of(&dense)?, &want, gemm.max(op))?;
             if d % 32 == 0 && d <= attn::FLASH_MAX_HEAD_DIM {
-                let got = some("flash_sdpa", attn::device_flash_sdpa(&qt, &kt, &vt, Some(scale))?)?;
-                c.cmp(&format!("flash_sdpa_{tag}"), &got.host_cow()?, &want, op.max(1e-4))?;
-            } else {
-                // Beyond the flash kernel's limits the wrapper must decline
-                // (None → dense fallback), never launch and fail.
-                let declined = attn::device_flash_sdpa(&qt, &kt, &vt, Some(scale))?.is_none();
-                c.report.check(format!("flash_sdpa_declines_{tag}"), declined, json!({"declined": declined}), json!({}))?;
+                let got = attn::device_flash_sdpa(&qt, &kt, &vt, Some(scale))?.ok_or_else(|| anyhow::anyhow!("flash declined"))?;
+                c.cmp(&format!("flash_sdpa_{tag}"), &host_of(&got)?, &want, op.max(1e-4))?;
             }
         }
-
         Ok(())
     })?;
-    group(&mut c, "causal_conv3d", |c: &mut Ctx<'_>| -> StageResult<()> {
-        // Causal conv3d (VAE hot path), stride 1 and spatial stride 2.
-        for (dims, stride) in [((1usize, 4usize, 3usize, 9usize, 11usize), (1usize, 1usize, 1usize)), ((2, 3, 4, 10, 12), (1, 2, 2))] {
+
+    group(&mut c, "conv", |c| {
+        // cuDNN conv2d (patch embed, VAE resample): pad/stride variants + bias.
+        let (n, ci, h, w, co) = (2usize, 3usize, 17usize, 20usize, 6usize);
+        let x = c.rand(n * ci * h * w, 1.0);
+        let wt = c.rand(co * ci * 9, 0.2);
+        let bias = c.rand(co, 0.1);
+        let (xt, wtt, bt) = (t(x.clone(), &[n, ci, h, w])?, t(wt.clone(), &[co, ci, 3, 3])?, t(bias.clone(), &[co])?);
+        for (pad, stride) in [(0usize, 1usize), (1, 1), (1, 2)] {
+            let got = xt.conv2d(&wtt, Some(&bt), pad, stride)?;
+            let (want, _) = ref_conv3d(&x, &wt, Some(&bias), (n, ci, 1, h, w), (co, 1, 3, 3), (0, pad, pad), (1, stride, stride));
+            c.cmp(&format!("cudnn_conv2d_p{pad}_s{stride}"), &host_of(&got)?, &want, gemm.max(op))?;
+        }
+        // 1×1 conv2d → GEMM path.
+        let w1 = c.rand(co * ci, 0.3);
+        let got = xt.conv2d(&t(w1.clone(), &[co, ci, 1, 1])?, Some(&bt), 0, 1)?;
+        let (want, _) = ref_conv3d(&x, &w1, Some(&bias), (n, ci, 1, h, w), (co, 1, 1, 1), (0, 0, 0), (1, 1, 1));
+        c.cmp("conv2d_1x1_gemm", &host_of(&got)?, &want, gemm.max(op))?;
+
+        // 3-D: cuDNN N-D and temporal unfold, stride 1 and spatial stride 2.
+        for (dims, stride) in [((1usize, 4usize, 5usize, 9usize, 11usize), [1usize, 1, 1]), ((2, 3, 4, 10, 12), [1, 2, 2])] {
             let (n, ic, it, ih, iw) = dims;
-            let (oc, kt, kh, kw) = (5usize, 3usize, 3usize, 3usize);
+            let oc = 5usize;
             let x = c.rand(n * ic * it * ih * iw, 1.0);
-            let w = c.rand(oc * ic * kt * kh * kw, 0.2);
+            let w = c.rand(oc * ic * 27, 0.2);
             let bias = c.rand(oc, 0.1);
-            let (want, [ot, oh, ow]) = ref_conv3d(&x, &w, &bias, dims, (oc, kt, kh, kw), stride);
-            let mut out = up(&vec![0.0; want.len()])?;
-            let (dx, dw, db) = (up(&x)?, up(&w)?, up(&bias)?);
-            unsafe {
-                k::launch_causal_conv3d(
-                    &dev()?.stream, &dev()?.kernels.causal_conv3d_f32, &dx, &dw, Some(&db), &mut out,
-                    n as i32, ic as i32, it as i32, ih as i32, iw as i32,
-                    oc as i32, kt as i32, kh as i32, kw as i32,
-                    ot as i32, oh as i32, ow as i32,
-                    stride.0 as i32, stride.1 as i32, stride.2 as i32,
-                )?;
-            }
-            c.cmp(&format!("causal_conv3d_{n}x{ic}x{it}x{ih}x{iw}_s{}", stride.1), &down(&out)?, &want, op)?;
+            let (want, _) = ref_conv3d(&x, &w, Some(&bias), dims, (oc, 3, 3, 3), (0, 1, 1), (stride[0], stride[1], stride[2]));
+            let xt = t(x, &[n, ic, it, ih, iw])?;
+            let wt = t(w, &[oc, ic, 3, 3, 3])?;
+            let tag = format!("{n}x{ic}x{it}x{ih}x{iw}_s{}", stride[1]);
+            let got = xt.conv3d(&wt, Some(&t(bias.clone(), &[oc])?), [0, 1, 1], stride)?;
+            c.cmp(&format!("cudnn_conv3d_{tag}"), &host_of(&got)?, &want, gemm.max(op))?;
+            let (x_dev, w_dev) = (xt.device_slice().unwrap(), wt.device_slice().unwrap());
+            let (y, y_shape) = conv::conv3d_unfold(x_dev, &xt.shape, w_dev, &wt.shape, [1, 1], stride)?;
+            let got = CudaTensor::from_device_slice(y, y_shape)?.add_bias(&t(bias, &[oc])?, 1)?;
+            c.cmp(&format!("unfold_conv3d_{tag}"), &host_of(&got)?, &want, gemm.max(op))?;
         }
-
+        // 1×1×1 conv3d → GEMM path.
+        let (n, ic, tt, hh, ww, oc) = (1usize, 6usize, 3usize, 5usize, 7usize, 4usize);
+        let x = c.rand(n * ic * tt * hh * ww, 1.0);
+        let w = c.rand(oc * ic, 0.3);
+        let got = t(x.clone(), &[n, ic, tt, hh, ww])?.conv3d(&t(w.clone(), &[oc, ic, 1, 1, 1])?, None, [0, 0, 0], [1, 1, 1])?;
+        let (want, _) = ref_conv3d(&x, &w, None, (n, ic, tt, hh, ww), (oc, 1, 1, 1), (0, 0, 0), (1, 1, 1));
+        c.cmp("conv3d_1x1x1_gemm", &host_of(&got)?, &want, gemm.max(op))?;
         Ok(())
     })?;
-    group(&mut c, "cudnn_conv2d", |c: &mut Ctx<'_>| -> StageResult<()> {
-        // cuDNN conv2d (patch embed / VAE resample host-upload path).
-        {
-            let (n, ci, h, w, co, kh, kw) = (2usize, 3usize, 17usize, 20usize, 6usize, 3usize, 3usize);
-            let x = c.rand(n * ci * h * w, 1.0);
-            let wt = c.rand(co * ci * kh * kw, 0.2);
-            for (pad, stride) in [(0usize, 1usize), (1, 1), (1, 2)] {
-                let got = device::conv2d_f32(&x, &wt, n, ci, h, w, co, kh, kw, pad, stride)?;
-                // Reference via conv3d with kt=1 on explicitly zero-padded input.
-                let (ph, pw) = (h + 2 * pad, w + 2 * pad);
-                let mut xp = vec![0.0; n * ci * ph * pw];
-                for b in 0..n {
-                    for cc in 0..ci {
-                        for y in 0..h {
-                            for xx in 0..w {
-                                xp[((b * ci + cc) * ph + y + pad) * pw + xx + pad] = x[((b * ci + cc) * h + y) * w + xx];
-                            }
-                        }
+
+    group(&mut c, "conv3d_bench", |c| {
+        // VAE decoder shapes at 480p-class resolution: time both strategies.
+        for (ch, t_in, hh, ww) in [(384usize, 3usize, 30usize, 52usize), (192, 6, 120, 208), (96, 6, 240, 416)] {
+            let x = t(c.rand(ch * t_in * hh * ww, 1.0), &[1, ch, t_in, hh, ww])?;
+            let w = t(c.rand(ch * ch * 27, 0.02), &[ch, ch, 3, 3, 3])?;
+            let (xd, wd) = (x.device_slice().unwrap(), w.device_slice().unwrap());
+            let mut values = serde_json::Map::new();
+            for backend in ["cudnn", "unfold"] {
+                // One warm-up (plan build, allocator) then the timed call.
+                let mut secs = 0.0;
+                for iter in 0..2 {
+                    device::synchronize()?;
+                    let timer = std::time::Instant::now();
+                    let y = if backend == "cudnn" {
+                        conv::cudnn_conv(xd, &x.shape, wd, &w.shape, &[0, 1, 1], &[1, 1, 1])?.0
+                    } else {
+                        conv::conv3d_unfold(xd, &x.shape, wd, &w.shape, [1, 1], [1, 1, 1])?.0
+                    };
+                    device::synchronize()?;
+                    if iter == 1 {
+                        secs = timer.elapsed().as_secs_f64();
                     }
+                    drop(y);
                 }
-                let (want, _) = ref_conv3d(&xp, &wt, &vec![0.0; co], (n, ci, 1, ph, pw), (co, 1, kh, kw), (1, stride, stride));
-                c.cmp(&format!("cudnn_conv2d_p{pad}_s{stride}"), &got, &want, gemm.max(op))?;
+                values.insert(format!("{backend}_seconds"), json!(secs));
             }
+            c.report.note(format!("conv3d_bench_{ch}x{t_in}x{hh}x{ww}"), serde_json::Value::Object(values));
         }
+        Ok(())
+    })?;
+
+    group(&mut c, "no_host_fallback", |c| {
+        // With a device live, an op without a device path must error, not
+        // silently compute on the CPU.
+        let x = t(c.rand(16, 1.0), &[16])?;
+        let refused = x.sqrt().is_err();
+        c.report.check("sqrt_refuses_host_compute", refused, json!({"refused": refused}), json!({}))?;
+        let a = t(c.rand(6, 1.0), &[2, 1, 3])?;
+        let b = t(c.rand(8, 1.0), &[1, 4, 1])?;
+        let refused = a.mul(&b).is_err();
+        c.report.check("generic_broadcast_refuses_host_compute", refused, json!({"refused": refused}), json!({}))?;
         Ok(())
     })?;
     Ok(())
@@ -524,19 +604,14 @@ pub fn run(report: &mut Report, lim: Limits, seed: u64) -> StageResult<()> {
 /// `libnvrtc` (no GPU, no driver), so it runs in CI or any Linux container.
 pub fn nvrtc(report: &mut Report, archs: &[(i32, i32)]) -> StageResult<()> {
     for &(maj, min) in archs {
-        let t = std::time::Instant::now();
+        let timer = std::time::Instant::now();
         let result = k::compile_ptx(maj, min);
-        let secs = t.elapsed().as_secs_f64();
+        let secs = timer.elapsed().as_secs_f64();
         let (ok, err) = match &result {
             Ok(_) => (true, serde_json::Value::Null),
             Err(e) => (false, json!(e.to_string())),
         };
-        report.check(
-            format!("compile_sm{maj}{min}"),
-            ok,
-            json!({"seconds": secs, "error": err, "kernels": k::KERNEL_NAMES.len()}),
-            json!({}),
-        )?;
+        report.check(format!("compile_sm{maj}{min}"), ok, json!({"seconds": secs, "error": err, "kernels": k::KERNEL_NAMES.len()}), json!({}))?;
     }
     Ok(())
 }

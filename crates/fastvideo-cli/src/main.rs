@@ -366,11 +366,7 @@ fn main() -> Result<()> {
                         .pipeline
                         .dmd_steps
                         .unwrap_or(&fastvideo_models::schedulers::FAST_WAN_1_3B_DMD_STEPS);
-                    let sched = DmdSchedule::new(
-                        steps,
-                        f64::from(gen.pipeline.flow_shift),
-                        1000,
-                    );
+                    let sched = DmdSchedule::new(steps, 1000);
                     println!("dmd_timesteps={:?}", sched.train_timesteps);
                     println!("dmd_sigmas={:?}", sched.sigmas);
                 }

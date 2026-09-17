@@ -3,6 +3,12 @@
 //! Ported from FastVideo `scheduling_flow_unipc_multistep.py` (Diffusers
 //! UniPC converted for flow matching, Apache-2.0). Default Wan settings:
 //! `solver_order=2`, `solver_type=bh2`, `predict_x0=true`, `final_sigmas=zero`.
+//!
+//! All scalar math lives in [`FlowUniPCMultistepScheduler::plan_step`], which
+//! expresses one step as linear combinations of sample-shaped tensors
+//! ([`UniPcStepPlan`]). [`FlowUniPCMultistepScheduler::step`] is the host
+//! reference that applies those plans to `&[f32]` buffers; device backends
+//! apply the same plans with their own axpy kernels.
 
 use super::flow_match::apply_shift;
 
@@ -12,6 +18,46 @@ const EPS: f64 = 1e-12;
 pub enum UniPcSolverType {
     Bh1,
     Bh2,
+}
+
+/// A sample-shaped tensor a [`UniPcStepPlan`] combination refers to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UniPcTerm {
+    /// This step's sample. In the predictor: the corrected sample (or the raw
+    /// input sample when the plan has no corrector).
+    Sample,
+    /// The sample the previous step's predictor consumed (its corrected sample).
+    LastSample,
+    /// This step's converted model output (`sample - convert_scale * model_output`).
+    Converted,
+    /// Converted outputs of earlier steps, indexed against the history *before*
+    /// this step's `Converted` is pushed: `History(0)` = previous step,
+    /// `History(1)` = two steps back, ...
+    History(usize),
+}
+
+/// One UniPC step as scalar coefficients over [`UniPcTerm`] tensors.
+///
+/// Caller protocol:
+/// 1. `converted = sample - convert_scale * model_output`
+/// 2. `corrected = Σ coef * term` over `corrector` if present, else `sample`
+/// 3. `prev_sample = Σ coef * term` over `predictor` (`Sample` = `corrected`)
+/// 4. push `converted` to the front of the history, keep `history_len` entries;
+///    remember `corrected` as the next step's `LastSample`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct UniPcStepPlan {
+    /// Current sigma (`sigmas[step_index]`).
+    pub sigma: f64,
+    /// `converted = sample - convert_scale * model_output`. Equals `sigma` for
+    /// `predict_x0` (x0 prediction) and `1 - sigma` otherwise (epsilon).
+    pub convert_scale: f64,
+    /// `corrected_sample = Σ coef * term`, terms from `{LastSample, Converted, History(k)}`.
+    pub corrector: Option<Vec<(UniPcTerm, f64)>>,
+    /// `prev_sample = Σ coef * term`, terms from `{Sample, Converted, History(k)}`.
+    pub predictor: Vec<(UniPcTerm, f64)>,
+    /// Converted outputs to retain after pushing this step's `Converted`
+    /// (== `solver_order`).
+    pub history_len: usize,
 }
 
 #[derive(Debug, Clone)]
@@ -27,8 +73,12 @@ pub struct FlowUniPCMultistepScheduler {
     sigmas: Vec<f64>,
     timesteps: Vec<f64>,
     timesteps_i64: Vec<i64>,
-    model_outputs: Vec<Option<Vec<f32>>>,
+    /// Host `step` history of converted outputs, newest first.
+    history: Vec<Vec<f32>>,
+    /// Host `step` sample consumed by the previous predictor.
     last_sample: Option<Vec<f32>>,
+    /// Scalar mirror of upstream `last_sample is not None`.
+    has_last_sample: bool,
     step_index: Option<usize>,
     lower_order_nums: usize,
     this_order: usize,
@@ -71,8 +121,9 @@ impl FlowUniPCMultistepScheduler {
             sigmas: Vec::new(),
             timesteps: Vec::new(),
             timesteps_i64: Vec::new(),
-            model_outputs: vec![None; 2],
+            history: Vec::new(),
             last_sample: None,
+            has_last_sample: false,
             step_index: None,
             lower_order_nums: 0,
             this_order: 0,
@@ -95,8 +146,8 @@ impl FlowUniPCMultistepScheduler {
         } else {
             for i in 0..n {
                 // np.linspace(sigma_max, sigma_min, n+1)[:-1]
-                let t = self.sigma_max
-                    + (self.sigma_min - self.sigma_max) * (i as f64) / (n as f64);
+                let t =
+                    self.sigma_max + (self.sigma_min - self.sigma_max) * (i as f64) / (n as f64);
                 sigmas.push(t);
             }
         }
@@ -112,8 +163,9 @@ impl FlowUniPCMultistepScheduler {
         self.timesteps = timesteps;
         self.timesteps_i64 = timesteps_i64;
         self.sigmas = sigmas;
-        self.model_outputs = vec![None; self.solver_order];
+        self.history.clear();
         self.last_sample = None;
+        self.has_last_sample = false;
         self.step_index = None;
         self.lower_order_nums = 0;
         self.this_order = 0;
@@ -135,14 +187,9 @@ impl FlowUniPCMultistepScheduler {
         (1.0 - sigma, sigma)
     }
 
-    fn convert_model_output(&self, model_output: &[f32], sample: &[f32]) -> Vec<f32> {
-        let idx = self.step_index.expect("step_index");
-        let sigma_t = self.sigmas[idx] as f32;
-        sample
-            .iter()
-            .zip(model_output)
-            .map(|(x, m)| x - sigma_t * m)
-            .collect()
+    fn lambda(sigma: f64) -> f64 {
+        let (alpha, sigma) = Self::sigma_to_alpha_sigma(sigma);
+        alpha.max(EPS).ln() - sigma.max(EPS).ln()
     }
 
     fn bh(&self, hh: f64) -> f64 {
@@ -152,35 +199,8 @@ impl FlowUniPCMultistepScheduler {
         }
     }
 
-    fn predictor_update(&self, sample: &[f32], order: usize) -> Result<Vec<f32>, String> {
-        let idx = self.step_index.expect("step_index");
-        let m0 = self.model_outputs.last().and_then(|m| m.as_ref()).ok_or("missing m0")?;
-        let (alpha_t, sigma_t) = Self::sigma_to_alpha_sigma(self.sigmas[idx + 1]);
-        let (alpha_s0, sigma_s0) = Self::sigma_to_alpha_sigma(self.sigmas[idx]);
-        let lambda_t = (alpha_t.max(EPS)).ln() - (sigma_t.max(EPS)).ln();
-        let lambda_s0 = (alpha_s0.max(EPS)).ln() - (sigma_s0.max(EPS)).ln();
-        let h = lambda_t - lambda_s0;
-        let mut rks = Vec::new();
-        let mut d1s: Vec<Vec<f32>> = Vec::new();
-        for i in 1..order {
-            let si = idx.checked_sub(i).ok_or("predictor history underflow")?;
-            let mi = self
-                .model_outputs
-                .get(self.model_outputs.len().wrapping_sub(i + 1))
-                .and_then(|m| m.as_ref())
-                .ok_or("missing mi")?;
-            let (alpha_si, sigma_si) = Self::sigma_to_alpha_sigma(self.sigmas[si]);
-            let lambda_si = (alpha_si.max(EPS)).ln() - (sigma_si.max(EPS)).ln();
-            let rk = (lambda_si - lambda_s0) / h;
-            rks.push(rk);
-            d1s.push(
-                mi.iter()
-                    .zip(m0)
-                    .map(|(a, b)| (a - b) / rk as f32)
-                    .collect(),
-            );
-        }
-        rks.push(1.0);
+    /// Shared UniP/UniC scalars. Returns `(h_phi_1, B_h, R rows, b)`.
+    fn bh_system(&self, h: f64, rks: &[f64], order: usize) -> (f64, f64, Vec<Vec<f64>>, Vec<f64>) {
         let hh = if self.predict_x0 { -h } else { h };
         let h_phi_1 = hh.exp_m1();
         let mut h_phi_k = h_phi_1 / hh - 1.0;
@@ -189,12 +209,45 @@ impl FlowUniPCMultistepScheduler {
         let mut b = Vec::with_capacity(order);
         let mut r_rows = Vec::with_capacity(order);
         for i in 1..=order {
-            r_rows.push(rks.iter().map(|rk| rk.powi((i - 1) as i32)).collect::<Vec<_>>());
+            r_rows.push(
+                rks.iter()
+                    .map(|rk| rk.powi((i - 1) as i32))
+                    .collect::<Vec<_>>(),
+            );
             b.push(h_phi_k * factorial_i / b_h);
             factorial_i *= (i + 1) as f64;
             h_phi_k = h_phi_k / hh - 1.0 / factorial_i;
         }
-        let rhos_p = if d1s.is_empty() {
+        (h_phi_1, b_h, r_rows, b)
+    }
+
+    /// `(x coef, m0 coef, residual scale)` of `x_t_ = cx*x - cm*m0; x_t = x_t_ - scale*res`.
+    fn base_coeffs(&self, sigma_t: f64, sigma_s0: f64, h_phi_1: f64, b_h: f64) -> (f64, f64, f64) {
+        let (alpha_t, sigma_t) = Self::sigma_to_alpha_sigma(sigma_t);
+        let (alpha_s0, sigma_s0) = Self::sigma_to_alpha_sigma(sigma_s0);
+        if self.predict_x0 {
+            (sigma_t / sigma_s0, alpha_t * h_phi_1, alpha_t * b_h)
+        } else {
+            (alpha_t / alpha_s0, sigma_t * h_phi_1, sigma_t * b_h)
+        }
+    }
+
+    /// `multistep_uni_p_bh_update` as coefficients. `m0` is `Converted`,
+    /// `m_i` (i >= 1) is `History(i - 1)`.
+    fn predictor_terms(&self, idx: usize, order: usize) -> Result<Vec<(UniPcTerm, f64)>, String> {
+        let sigma_t = self.sigmas[idx + 1];
+        let sigma_s0 = self.sigmas[idx];
+        let lambda_s0 = Self::lambda(sigma_s0);
+        let h = Self::lambda(sigma_t) - lambda_s0;
+        let mut rks = Vec::with_capacity(order);
+        for i in 1..order {
+            let si = idx.checked_sub(i).ok_or("predictor history underflow")?;
+            rks.push((Self::lambda(self.sigmas[si]) - lambda_s0) / h);
+        }
+        let n_hist = rks.len();
+        rks.push(1.0);
+        let (h_phi_1, b_h, r_rows, b) = self.bh_system(h, &rks, order);
+        let rhos_p = if n_hist == 0 {
             Vec::new()
         } else if order == 2 {
             vec![0.5]
@@ -205,115 +258,111 @@ impl FlowUniPCMultistepScheduler {
                 .collect();
             solve_linear(&r_cut, &b[..order - 1])?
         };
-        let mut x_t: Vec<f32> = sample
-            .iter()
-            .zip(m0)
-            .map(|(x, m)| {
-                let base = if self.predict_x0 {
-                    (sigma_t / sigma_s0) * f64::from(*x) - alpha_t * h_phi_1 * f64::from(*m)
-                } else {
-                    (alpha_t / alpha_s0) * f64::from(*x) - sigma_t * h_phi_1 * f64::from(*m)
-                };
-                base as f32
-            })
-            .collect();
-        if !d1s.is_empty() {
-            let pred_res = mix_history(&d1s, &rhos_p);
-            let scale = if self.predict_x0 {
-                alpha_t * b_h
-            } else {
-                sigma_t * b_h
-            } as f32;
-            for (x, r) in x_t.iter_mut().zip(pred_res) {
-                *x -= scale * r;
-            }
+        let (cx, cm, scale) = self.base_coeffs(sigma_t, sigma_s0, h_phi_1, b_h);
+        // x_t = cx*x - cm*m0 - scale * Σ_k rho_k (m_{k+1} - m0) / rk_k
+        let mut m0 = -cm;
+        let mut hist = Vec::with_capacity(n_hist);
+        for k in 0..n_hist {
+            let w = rhos_p[k] / rks[k];
+            m0 += scale * w;
+            hist.push((UniPcTerm::History(k), -scale * w));
         }
-        Ok(x_t)
+        let mut terms = vec![(UniPcTerm::Sample, cx), (UniPcTerm::Converted, m0)];
+        terms.extend(hist);
+        Ok(terms)
     }
 
-    fn corrector_update(
-        &self,
-        this_model_output: &[f32],
-        last_sample: &[f32],
-        this_sample: &[f32],
-        order: usize,
-    ) -> Result<Vec<f32>, String> {
-        let idx = self.step_index.expect("step_index");
-        let m0 = self.model_outputs.last().and_then(|m| m.as_ref()).ok_or("missing m0")?;
-        let (alpha_t, sigma_t) = Self::sigma_to_alpha_sigma(self.sigmas[idx]);
-        let (alpha_s0, sigma_s0) = Self::sigma_to_alpha_sigma(self.sigmas[idx - 1]);
-        let lambda_t = (alpha_t.max(EPS)).ln() - (sigma_t.max(EPS)).ln();
-        let lambda_s0 = (alpha_s0.max(EPS)).ln() - (sigma_s0.max(EPS)).ln();
-        let h = lambda_t - lambda_s0;
-        let mut rks = Vec::new();
-        let mut d1s: Vec<Vec<f32>> = Vec::new();
+    /// `multistep_uni_c_bh_update` as coefficients. `m0` is `History(0)`,
+    /// `m_i` (i >= 1) is `History(i)`, `model_t` is `Converted`.
+    fn corrector_terms(&self, idx: usize, order: usize) -> Result<Vec<(UniPcTerm, f64)>, String> {
+        let sigma_t = self.sigmas[idx];
+        let sigma_s0 = self.sigmas[idx - 1];
+        let lambda_s0 = Self::lambda(sigma_s0);
+        let h = Self::lambda(sigma_t) - lambda_s0;
+        let mut rks = Vec::with_capacity(order);
         for i in 1..order {
             let si = idx
                 .checked_sub(i + 1)
                 .ok_or("corrector history underflow")?;
-            let mi = self
-                .model_outputs
-                .get(self.model_outputs.len().wrapping_sub(i + 1))
-                .and_then(|m| m.as_ref())
-                .ok_or("missing mi")?;
-            let (alpha_si, sigma_si) = Self::sigma_to_alpha_sigma(self.sigmas[si]);
-            let lambda_si = (alpha_si.max(EPS)).ln() - (sigma_si.max(EPS)).ln();
-            let rk = (lambda_si - lambda_s0) / h;
-            rks.push(rk);
-            d1s.push(
-                mi.iter()
-                    .zip(m0)
-                    .map(|(a, b)| (a - b) / rk as f32)
-                    .collect(),
-            );
+            rks.push((Self::lambda(self.sigmas[si]) - lambda_s0) / h);
         }
+        let n_hist = rks.len();
         rks.push(1.0);
-        let hh = if self.predict_x0 { -h } else { h };
-        let h_phi_1 = hh.exp_m1();
-        let mut h_phi_k = h_phi_1 / hh - 1.0;
-        let mut factorial_i = 1.0;
-        let b_h = self.bh(hh);
-        let mut b = Vec::with_capacity(order);
-        let mut r_rows = Vec::with_capacity(order);
-        for i in 1..=order {
-            r_rows.push(rks.iter().map(|rk| rk.powi((i - 1) as i32)).collect::<Vec<_>>());
-            b.push(h_phi_k * factorial_i / b_h);
-            factorial_i *= (i + 1) as f64;
-            h_phi_k = h_phi_k / hh - 1.0 / factorial_i;
-        }
+        let (h_phi_1, b_h, r_rows, b) = self.bh_system(h, &rks, order);
         let rhos_c = if order == 1 {
             vec![0.5]
         } else {
             solve_linear(&r_rows, &b)?
         };
-        let mut x_t: Vec<f32> = last_sample
-            .iter()
-            .zip(m0)
-            .map(|(x, m)| {
-                let base = if self.predict_x0 {
-                    (sigma_t / sigma_s0) * f64::from(*x) - alpha_t * h_phi_1 * f64::from(*m)
-                } else {
-                    (alpha_t / alpha_s0) * f64::from(*x) - sigma_t * h_phi_1 * f64::from(*m)
-                };
-                base as f32
-            })
-            .collect();
-        let corr_res = if d1s.is_empty() {
-            vec![0.0f32; this_sample.len()]
-        } else {
-            mix_history(&d1s, &rhos_c[..rhos_c.len() - 1])
-        };
-        let rho_last = *rhos_c.last().unwrap_or(&0.5) as f32;
-        let scale = if self.predict_x0 {
-            alpha_t * b_h
-        } else {
-            sigma_t * b_h
-        } as f32;
-        for i in 0..x_t.len() {
-            let d1_t = this_model_output[i] - m0[i];
-            x_t[i] -= scale * (corr_res[i] + rho_last * d1_t);
+        let (cx, cm, scale) = self.base_coeffs(sigma_t, sigma_s0, h_phi_1, b_h);
+        // x_t = cx*x - cm*m0 - scale * (Σ_k rho_k (m_{k+1} - m0) / rk_k + rho_last (model_t - m0))
+        let rho_last = *rhos_c.last().ok_or("empty UniC rhos")?;
+        let mut m0 = -cm + scale * rho_last;
+        let mut hist = Vec::with_capacity(n_hist);
+        for k in 0..n_hist {
+            let w = rhos_c[k] / rks[k];
+            m0 += scale * w;
+            hist.push((UniPcTerm::History(k + 1), -scale * w));
         }
-        Ok(x_t)
+        let mut terms = vec![
+            (UniPcTerm::LastSample, cx),
+            (UniPcTerm::Converted, -scale * rho_last),
+            (UniPcTerm::History(0), m0),
+        ];
+        terms.extend(hist);
+        Ok(terms)
+    }
+
+    /// Plan one UniPC predictor-corrector step and advance the scalar state
+    /// (`step_index`, `this_order`, `lower_order_nums`, last-sample flag)
+    /// exactly as [`Self::step`]. See [`UniPcStepPlan`] for how to apply it.
+    pub fn plan_step(&mut self) -> Result<UniPcStepPlan, String> {
+        if self.sigmas.len() < 2 {
+            return Err("call set_timesteps before step".into());
+        }
+        if self.solver_order == 0 {
+            return Err("solver_order must be >= 1".into());
+        }
+        let idx = self.step_index.unwrap_or(0);
+        if idx + 1 >= self.sigmas.len() {
+            return Err("step past end of schedule".into());
+        }
+        // Converted outputs available before this step's push.
+        let available = self.lower_order_nums.min(self.solver_order);
+        let use_corrector = idx > 0 && self.has_last_sample;
+        let corrector = if use_corrector {
+            if self.this_order > available {
+                return Err("missing UniC history".into());
+            }
+            Some(self.corrector_terms(idx, self.this_order)?)
+        } else {
+            None
+        };
+        let this_order = if self.lower_order_final {
+            self.solver_order.min(self.timesteps.len() - idx)
+        } else {
+            self.solver_order
+        };
+        let this_order = this_order.min(self.lower_order_nums + 1).max(1);
+        if this_order - 1 > available {
+            return Err("missing UniP history".into());
+        }
+        let predictor = self.predictor_terms(idx, this_order)?;
+        let sigma = self.sigmas[idx];
+
+        self.this_order = this_order;
+        self.has_last_sample = true;
+        if self.lower_order_nums < self.solver_order {
+            self.lower_order_nums += 1;
+        }
+        self.step_index = Some(idx + 1);
+        Ok(UniPcStepPlan {
+            sigma,
+            convert_scale: if self.predict_x0 { sigma } else { 1.0 - sigma },
+            corrector,
+            predictor,
+            history_len: self.solver_order,
+        })
     }
 
     /// One UniPC predictor-corrector step. `model_output` is flow velocity.
@@ -321,86 +370,39 @@ impl FlowUniPCMultistepScheduler {
         if model_output.len() != sample.len() {
             return Err("sample / model_output length mismatch".into());
         }
-        if self.sigmas.len() < 2 {
-            return Err("call set_timesteps before step".into());
-        }
-        if self.step_index.is_none() {
-            self.step_index = Some(0);
-        }
-        let idx = self.step_index.unwrap();
-        if idx + 1 >= self.sigmas.len() {
-            return Err("step past end of schedule".into());
-        }
-        let use_corrector = idx > 0 && self.last_sample.is_some();
-        let converted = self.convert_model_output(model_output, sample);
-        let mut sample = sample.to_vec();
-        if use_corrector {
-            sample = self.corrector_update(
-                &converted,
-                self.last_sample.as_ref().unwrap(),
-                &sample,
-                self.this_order,
-            )?;
-        }
-        for i in 0..self.solver_order.saturating_sub(1) {
-            self.model_outputs[i] = self.model_outputs[i + 1].clone();
-        }
-        if let Some(last) = self.model_outputs.last_mut() {
-            *last = Some(converted);
-        }
-        let this_order = if self.lower_order_final {
-            self.solver_order.min(self.timesteps.len() - idx)
-        } else {
-            self.solver_order
+        let plan = self.plan_step()?;
+        let converted: Vec<f32> = sample
+            .iter()
+            .zip(model_output)
+            .map(|(&x, &m)| (f64::from(x) - plan.convert_scale * f64::from(m)) as f32)
+            .collect();
+        let corrected = match &plan.corrector {
+            Some(terms) => combine(terms, sample.len(), |term| match term {
+                UniPcTerm::LastSample => self.last_sample.as_deref().ok_or("missing last_sample"),
+                UniPcTerm::Converted => Ok(&converted),
+                UniPcTerm::History(k) => self
+                    .history
+                    .get(k)
+                    .map(Vec::as_slice)
+                    .ok_or("missing UniC history"),
+                UniPcTerm::Sample => Err("Sample term in corrector"),
+            })?,
+            None => sample.to_vec(),
         };
-        self.this_order = this_order.min(self.lower_order_nums + 1).max(1);
-        self.last_sample = Some(sample.clone());
-        let prev = self.predictor_update(&sample, self.this_order)?;
-        if self.lower_order_nums < self.solver_order {
-            self.lower_order_nums += 1;
-        }
-        self.step_index = Some(idx + 1);
+        let prev = combine(&plan.predictor, sample.len(), |term| match term {
+            UniPcTerm::Sample => Ok(&corrected),
+            UniPcTerm::Converted => Ok(&converted),
+            UniPcTerm::History(k) => self
+                .history
+                .get(k)
+                .map(Vec::as_slice)
+                .ok_or("missing UniP history"),
+            UniPcTerm::LastSample => Err("LastSample term in predictor"),
+        })?;
+        self.history.insert(0, converted);
+        self.history.truncate(plan.history_len);
+        self.last_sample = Some(corrected);
         Ok(prev)
-    }
-
-    /// Order-1 UniPC predictor coeffs for device axpy (no host sample buffers).
-    ///
-    /// `converted = sample - sigma_cur * model_output`
-    /// `prev = scale_sample * sample + scale_converted * converted`
-    ///
-    /// Advances `step_index` like a full order-1 step (no corrector / higher-order history).
-    pub fn order1_device_coeffs(&mut self) -> Result<Order1DeviceCoeffs, String> {
-        if self.sigmas.len() < 2 {
-            return Err("call set_timesteps before step".into());
-        }
-        if self.step_index.is_none() {
-            self.step_index = Some(0);
-        }
-        let idx = self.step_index.unwrap();
-        if idx + 1 >= self.sigmas.len() {
-            return Err("step past end of schedule".into());
-        }
-        if !self.predict_x0 {
-            return Err("order1_device_coeffs requires predict_x0".into());
-        }
-        let sigma_s0 = self.sigmas[idx];
-        let sigma_t = self.sigmas[idx + 1];
-        let (alpha_t, _) = Self::sigma_to_alpha_sigma(sigma_t);
-        let (alpha_s0, _) = Self::sigma_to_alpha_sigma(sigma_s0);
-        let lambda_t = (alpha_t.max(EPS)).ln() - (sigma_t.max(EPS)).ln();
-        let lambda_s0 = (alpha_s0.max(EPS)).ln() - (sigma_s0.max(EPS)).ln();
-        let h = lambda_t - lambda_s0;
-        let hh = -h;
-        let h_phi_1 = hh.exp_m1();
-        let scale_sample = (sigma_t / sigma_s0) as f32;
-        let scale_converted = (-(alpha_t * h_phi_1)) as f32;
-        self.step_index = Some(idx + 1);
-        self.this_order = 1;
-        Ok(Order1DeviceCoeffs {
-            sigma_cur: sigma_s0 as f32,
-            scale_sample,
-            scale_converted,
-        })
     }
 
     /// Run the full UniPC loop with a velocity callback `f(sample, sigma_t, t)`.
@@ -419,24 +421,23 @@ impl FlowUniPCMultistepScheduler {
     }
 }
 
-/// Scalars for device-side order-1 UniPC (see [`FlowUniPCMultistepScheduler::order1_device_coeffs`]).
-#[derive(Debug, Clone, Copy)]
-pub struct Order1DeviceCoeffs {
-    pub sigma_cur: f32,
-    pub scale_sample: f32,
-    pub scale_converted: f32,
-}
-
-fn mix_history(d1s: &[Vec<f32>], rhos: &[f64]) -> Vec<f32> {
-    let n = d1s.first().map(Vec::len).unwrap_or(0);
-    let mut out = vec![0.0f32; n];
-    for (k, d1) in d1s.iter().enumerate() {
-        let w = rhos.get(k).copied().unwrap_or(0.0) as f32;
-        for (o, v) in out.iter_mut().zip(d1) {
-            *o += w * *v;
+/// `Σ coef * term`, accumulated per element in f64.
+fn combine<'a>(
+    terms: &[(UniPcTerm, f64)],
+    n: usize,
+    resolve: impl Fn(UniPcTerm) -> Result<&'a [f32], &'static str>,
+) -> Result<Vec<f32>, String> {
+    let mut acc = vec![0.0f64; n];
+    for &(term, coef) in terms {
+        let src = resolve(term)?;
+        if src.len() != n {
+            return Err("UniPC term length mismatch".into());
+        }
+        for (a, &v) in acc.iter_mut().zip(src) {
+            *a += coef * f64::from(v);
         }
     }
-    out
+    Ok(acc.into_iter().map(|v| v as f32).collect())
 }
 
 fn solve_linear(a: &[Vec<f64>], b: &[f64]) -> Result<Vec<f64>, String> {
@@ -504,35 +505,6 @@ mod tests {
     }
 
     #[test]
-    fn order1_device_coeffs_match_host_order1_step() {
-        let mut device = FlowUniPCMultistepScheduler::new(1000, 3.0);
-        device.solver_order = 1;
-        device.set_timesteps(4);
-
-        let sample = vec![1.0f32, -0.5, 0.25, 2.0];
-        let velocity = vec![0.1f32, -0.2, 0.3, -0.4];
-        let coeffs = device.order1_device_coeffs().unwrap();
-        let converted: Vec<f32> = sample
-            .iter()
-            .zip(&velocity)
-            .map(|(x, v)| x - coeffs.sigma_cur * v)
-            .collect();
-        let prev_dev: Vec<f32> = sample
-            .iter()
-            .zip(&converted)
-            .map(|(x, c)| coeffs.scale_sample * x + coeffs.scale_converted * c)
-            .collect();
-
-        let mut host = FlowUniPCMultistepScheduler::new(1000, 3.0);
-        host.solver_order = 1;
-        host.set_timesteps(4);
-        let prev_host = host.step(&velocity, &sample).unwrap();
-        for (a, b) in prev_dev.iter().zip(&prev_host) {
-            assert!((a - b).abs() < 1e-5, "{a} vs {b}");
-        }
-    }
-
-    #[test]
     fn predictor_corrector_constant_flow_golden() {
         let mut sched = FlowUniPCMultistepScheduler::new(1000, 3.0);
         sched.set_timesteps(4);
@@ -554,6 +526,132 @@ mod tests {
                 assert!(
                     (g - e).abs() < 2e-5,
                     "uniPC traj mismatch {g} vs {e} (full {traj:?})"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn plan_corrector_starts_on_step_one() {
+        let mut sched = FlowUniPCMultistepScheduler::new(1000, 3.0);
+        sched.set_timesteps(6);
+        let p0 = sched.plan_step().unwrap();
+        assert!(p0.corrector.is_none());
+        assert_eq!(p0.history_len, 2);
+        assert_eq!(p0.predictor.len(), 2); // order 1: Sample + Converted
+        let p1 = sched.plan_step().unwrap();
+        let corr = p1.corrector.expect("corrector on step 1");
+        assert!(corr.iter().any(|(t, _)| *t == UniPcTerm::LastSample));
+        assert!(corr.iter().any(|(t, _)| *t == UniPcTerm::History(0)));
+        assert!(p1
+            .predictor
+            .iter()
+            .any(|(t, _)| *t == UniPcTerm::History(0)));
+        sched.set_timesteps(6);
+        assert!(sched.plan_step().unwrap().corrector.is_none());
+    }
+
+    /// Device-style application of plans: f32 only, `out = out + c * x` chains.
+    fn device_run(
+        sched: &mut FlowUniPCMultistepScheduler,
+        mut x: Vec<f32>,
+        steps: usize,
+        velocity: impl Fn(&[f32], usize) -> Vec<f32>,
+    ) -> Vec<f32> {
+        fn axpy_chain(
+            terms: &[(UniPcTerm, f64)],
+            sample: &[f32],
+            last: Option<&[f32]>,
+            converted: &[f32],
+            history: &[Vec<f32>],
+        ) -> Vec<f32> {
+            let mut out = vec![0.0f32; sample.len()];
+            for &(term, coef) in terms {
+                let src: &[f32] = match term {
+                    UniPcTerm::Sample => sample,
+                    UniPcTerm::LastSample => last.unwrap(),
+                    UniPcTerm::Converted => converted,
+                    UniPcTerm::History(k) => &history[k],
+                };
+                let c = coef as f32;
+                for (o, s) in out.iter_mut().zip(src) {
+                    *o = 1.0f32 * *o + c * *s;
+                }
+            }
+            out
+        }
+        let mut history: Vec<Vec<f32>> = Vec::new();
+        let mut last: Option<Vec<f32>> = None;
+        for i in 0..steps {
+            let v = velocity(&x, i);
+            let plan = sched.plan_step().unwrap();
+            let neg = -(plan.convert_scale as f32);
+            let converted: Vec<f32> = x.iter().zip(&v).map(|(a, b)| a + neg * b).collect();
+            let corrected = match &plan.corrector {
+                Some(t) => axpy_chain(t, &x, last.as_deref(), &converted, &history),
+                None => x.clone(),
+            };
+            x = axpy_chain(&plan.predictor, &corrected, None, &converted, &history);
+            history.insert(0, converted);
+            history.truncate(plan.history_len);
+            last = Some(corrected);
+        }
+        x
+    }
+
+    #[test]
+    fn device_plans_match_host_step_nonconstant_flow() {
+        let n = 64;
+        let mut seed = 0x2545_f491_4f6c_dd1du64;
+        let x0: Vec<f32> = (0..n)
+            .map(|_| {
+                seed = seed
+                    .wrapping_mul(6364136223846793005)
+                    .wrapping_add(1442695040888963407);
+                ((seed >> 40) as f32 / (1u64 << 24) as f32) * 2.0 - 1.0
+            })
+            .collect();
+        let velocity = |x: &[f32], step: usize| -> Vec<f32> {
+            x.iter()
+                .enumerate()
+                .map(|(j, &v)| {
+                    let phase = 0.37 * j as f32 + 0.61 * step as f32;
+                    (1.3 * v + phase).sin() - 0.4 * v + 0.2 * (0.5 * phase).cos()
+                })
+                .collect()
+        };
+        let steps = 12;
+        for order in 1..=3 {
+            for solver_type in [UniPcSolverType::Bh1, UniPcSolverType::Bh2] {
+                let make = || {
+                    let mut s = FlowUniPCMultistepScheduler::new(1000, 3.0);
+                    s.solver_order = order;
+                    s.solver_type = solver_type;
+                    s.set_timesteps(steps);
+                    s
+                };
+                let mut host = make();
+                let mut x = x0.clone();
+                for i in 0..steps {
+                    let v = velocity(&x, i);
+                    x = host.step(&v, &x).unwrap();
+                }
+                let dev = device_run(&mut make(), x0.clone(), steps, velocity);
+                let max_abs = x
+                    .iter()
+                    .zip(&dev)
+                    .map(|(a, b)| (a - b).abs())
+                    .fold(0.0f32, f32::max);
+                let diff2: f64 = x
+                    .iter()
+                    .zip(&dev)
+                    .map(|(a, b)| f64::from(a - b).powi(2))
+                    .sum();
+                let norm2: f64 = x.iter().map(|a| f64::from(*a).powi(2)).sum();
+                let rel = (diff2 / norm2).sqrt();
+                assert!(
+                    max_abs < 1e-4 && rel < 1e-5,
+                    "order={order} {solver_type:?}: max_abs={max_abs} rel_l2={rel}"
                 );
             }
         }

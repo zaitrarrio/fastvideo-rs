@@ -1,61 +1,38 @@
-//! Layer primitives matching Candle `fastvideo_models::nn` for the host Wan graph.
+//! Layer primitives for the Wan graph.
 
-#[cfg(feature = "cuda")]
-use std::sync::atomic::AtomicBool;
-#[cfg(feature = "cuda")]
-use std::sync::{Arc, Mutex, OnceLock};
-
-use super::resident::residency_enabled;
+use super::ops::host;
+use super::stats;
 use super::tensor::{CudaTensor, Result, TensorError};
+
+fn msg(s: impl Into<String>) -> TensorError {
+    TensorError::Message(s.into())
+}
 
 #[derive(Debug, Clone)]
 pub struct Linear {
     pub weight: CudaTensor, // [out, in]
     pub bias: Option<CudaTensor>,
-    /// Cached BF16 device weights (filled on first successful upload).
-    #[cfg(feature = "cuda")]
-    weight_bf16: Arc<OnceLock<cudarc::driver::CudaSlice<half::bf16>>>,
-    /// Resident BF16 activation scratch + identity of the last f32 input.
-    /// Avoids re-casting X→BF16 between consecutive DiT steps whose input
-    /// activation buffer has not changed. Gated by `FASTVIDEO_BF16_ACT=1`.
-    #[cfg(feature = "cuda")]
-    bf16_act: Arc<Mutex<Option<Bf16Activation>>>,
-}
-
-#[cfg(feature = "cuda")]
-#[derive(Debug)]
-struct Bf16Activation {
-    /// u16-bits buffer (length = input.len()); same bytes as `bf16`.
-    bits: cudarc::driver::CudaSlice<u16>,
-    /// Identity hash of the last f32 input (ptr ^ len mix).
-    identity: u64,
-    /// Shape dims (for shape-change invalidation).
-    shape_len: usize,
 }
 
 impl Linear {
-    fn new_empty_cache(weight: CudaTensor, bias: Option<CudaTensor>) -> Self {
-        Self {
-            weight,
-            bias,
-            #[cfg(feature = "cuda")]
-            weight_bf16: Arc::new(OnceLock::new()),
-            #[cfg(feature = "cuda")]
-            bf16_act: Arc::new(Mutex::new(None)),
+    /// Wrap weight/bias and keep them on the device (a no-op on CPU runs).
+    pub fn from_tensors(mut weight: CudaTensor, mut bias: Option<CudaTensor>) -> Result<Self> {
+        if weight.rank() != 2 || bias.as_ref().is_some_and(|b| b.numel() != weight.shape[0]) {
+            return Err(msg(format!("linear weight {:?} bias {:?}", weight.shape, bias.as_ref().map(|b| &b.shape))));
         }
+        weight.pin_device()?;
+        if let Some(b) = &mut bias {
+            b.pin_device()?;
+        }
+        Ok(Self { weight, bias })
     }
 
     pub fn zeros(in_dim: usize, out_dim: usize, bias: bool) -> Self {
-        let mut s = Self::new_empty_cache(
+        Self::from_tensors(
             CudaTensor::zeros(&[out_dim, in_dim]),
-            if bias {
-                Some(CudaTensor::zeros(&[out_dim]))
-            } else {
-                None
-            },
-        );
-        let _ = s.pin();
-        s
+            bias.then(|| CudaTensor::zeros(&[out_dim])),
+        )
+        .expect("zero linear")
     }
 
     pub fn load(
@@ -65,388 +42,99 @@ impl Linear {
         out_dim: usize,
         has_bias: bool,
     ) -> Result<Self> {
-        let w_key = super::weights::join_key(prefix, "weight");
-        let weight = super::weights::cuda_tensor_shaped(map, &w_key, &[out_dim, in_dim])?;
-        let bias = if has_bias {
-            let b_key = super::weights::join_key(prefix, "bias");
-            Some(super::weights::cuda_tensor_shaped(map, &b_key, &[out_dim])?)
-        } else {
-            None
-        };
-        let mut s = Self::new_empty_cache(weight, bias);
-        let _ = s.pin();
-        Ok(s)
+        Self::load_fused(map, &[prefix], in_dim, out_dim, has_bias)
     }
 
-    /// Pin weight/bias on device when residency is enabled; cache BF16 once.
-    pub fn pin(&mut self) -> Result<()> {
-        if !residency_enabled() {
-            return Ok(());
-        }
-        self.weight.pin_device()?;
-        if let Some(b) = &mut self.bias {
-            b.pin_device()?;
-        }
-        #[cfg(feature = "cuda")]
-        {
-            let _ = self.ensure_bf16_cache();
-        }
-        Ok(())
-    }
-
-    #[cfg(feature = "cuda")]
-    fn ensure_bf16_cache(&self) -> Option<&cudarc::driver::CudaSlice<half::bf16>> {
-        if !super::bf16_gemm::bf16_enabled() {
-            return None;
-        }
-        if let Some(w) = self.weight_bf16.get() {
-            return Some(w);
-        }
-        let host = self.weight.host_cow().ok()?;
-        let uploaded = super::bf16_gemm::upload_bf16(&host).ok()?;
-        let _ = self.weight_bf16.set(uploaded);
-        static ONCE: AtomicBool = AtomicBool::new(false);
-        super::log::debug_once(
-            &ONCE,
-            format_args!("linear: cached BF16 weights"),
-        );
-        self.weight_bf16.get()
-    }
-
-    /// Run the BF16 GEMM, reusing the per-Linear cached X→BF16 cast buffer
-    /// when the input activation identity matches the previous call (avoids
-    /// the f32→bf16 cast kernel launch on the hot DiT step path).
-    #[cfg(feature = "cuda")]
-    fn bf16_matmul(
-        &self,
-        x_dev: &cudarc::driver::CudaSlice<f32>,
-        w_bf16: &cudarc::driver::CudaSlice<half::bf16>,
-        m: usize,
-        k: usize,
-        n: usize,
-    ) -> Result<cudarc::driver::CudaSlice<f32>> {
-        if !super::bf16_gemm::bf16_act_cache_enabled() {
-            return super::bf16_gemm::matmul_linear_wt_bf16_to_f32(
-                x_dev, w_bf16, m, k, n,
-            )
-            .map_err(|e| TensorError::Message(e.to_string()));
-        }
-        let dev = super::device::global_device().ok_or_else(|| {
-            TensorError::Message("no global CUDA device context".into())
-        })?;
-        let identity = super::bf16_gemm::activation_identity(x_dev);
-        let mut guard = self.bf16_act.lock().expect("bf16 act lock");
-        let reuse = match guard.as_ref() {
-            Some(existing) => existing.identity == identity && existing.bits.len() == x_dev.len(),
-            None => false,
-        };
-        if reuse {
-            super::bf16_gemm::matmul_linear_wt_bf16_to_f32_with_bits(
-                x_dev,
-                w_bf16,
-                &mut guard.as_mut().unwrap().bits,
-                m,
-                k,
-                n,
-            )
-            .map_err(|e| TensorError::Message(e.to_string()))
-        } else {
-            let mut bits = dev
-                .stream
-                .alloc_zeros::<u16>(x_dev.len())
-                .map_err(|e| TensorError::Message(e.to_string()))?;
-            let c = super::bf16_gemm::matmul_linear_wt_bf16_to_f32_with_bits(
-                x_dev,
-                w_bf16,
-                &mut bits,
-                m,
-                k,
-                n,
-            )
-            .map_err(|e| TensorError::Message(e.to_string()))?;
-            *guard = Some(Bf16Activation {
-                bits,
-                identity,
-                shape_len: x_dev.len(),
-            });
-            Ok(c)
-        }
-    }
-
-    /// Forward to a caller-owned bf16 output buffer (skips the final f32 cast).
-    /// Used to chain stacked linears (e.g., W1 → W2 in an FFN) so W2 can read
-    /// bf16 directly without re-casting W1's f32 output. Returns `Ok(())` on
-    /// success; on bf16-disabled path returns `Err` and the caller should
-    /// fall back to [`Self::forward`].
-    #[cfg(feature = "cuda")]
-    pub fn forward_into_bf16(
-        &self,
-        xs: &CudaTensor,
-        c_bf16: &mut cudarc::driver::CudaSlice<half::bf16>,
-    ) -> Result<()> {
-        if !super::bf16_gemm::bf16_enabled() {
-            return Err(TensorError::Message(
-                "forward_into_bf16: BF16 disabled (FASTVIDEO_BF16=0)".into(),
-            ));
-        }
-        let Some(w_bf16) = self.ensure_bf16_cache() else {
-            return Err(TensorError::Message(
-                "forward_into_bf16: weight bf16 cache unavailable".into(),
-            ));
-        };
-        let dev = super::device::global_device().ok_or_else(|| {
-            TensorError::Message("no global CUDA device context".into())
-        })?;
-        let (m, k, n) = match xs.rank() {
-            2 => (xs.shape[0], xs.shape[1], self.weight.shape[0]),
-            3 => (
-                xs.shape[0] * xs.shape[1],
-                xs.shape[2],
-                self.weight.shape[0],
-            ),
-            4 => (
-                xs.shape[0] * xs.shape[1] * xs.shape[2],
-                xs.shape[3],
-                self.weight.shape[0],
-            ),
-            r => {
-                return Err(TensorError::Message(format!(
-                    "forward_into_bf16 unsupported rank {r}"
-                )))
+    /// Several same-input projections as one linear with rows stacked in
+    /// `prefixes` order (fused QKV / KV): one GEMM instead of one per prefix.
+    pub fn load_fused(
+        map: &super::weights::WeightMap,
+        prefixes: &[&str],
+        in_dim: usize,
+        out_dim: usize,
+        has_bias: bool,
+    ) -> Result<Self> {
+        let mut w = Vec::with_capacity(prefixes.len() * out_dim * in_dim);
+        let mut b = Vec::with_capacity(prefixes.len() * out_dim);
+        for prefix in prefixes {
+            let wt = super::weights::cuda_tensor_shaped(map, &super::weights::join_key(prefix, "weight"), &[out_dim, in_dim])?;
+            w.extend_from_slice(&wt.host_cow()?);
+            if has_bias {
+                let bt = super::weights::cuda_tensor_shaped(map, &super::weights::join_key(prefix, "bias"), &[out_dim])?;
+                b.extend_from_slice(&bt.host_cow()?);
             }
-        };
-        if k != self.weight.shape[1] {
-            return Err(TensorError::Message(format!(
-                "forward_into_bf16 inner dim {k} vs {}",
-                self.weight.shape[1]
-            )));
         }
-        let mut x = xs.clone();
-        x.ensure_device()?;
-        let Some(x_dev) = x.device_slice() else {
-            return Err(TensorError::Message(
-                "forward_into_bf16: activation not on device".into(),
-            ));
-        };
-        if x_dev.len() != m * k || c_bf16.len() != m * n {
-            return Err(TensorError::Message(
-                "forward_into_bf16: size mismatch".into(),
-            ));
-        }
-        let mut bits = dev
-            .stream
-            .alloc_zeros::<u16>(x_dev.len())
-            .map_err(|e| TensorError::Message(e.to_string()))?;
-        // Reinterpret c_bf16 as &mut CudaSlice<u16> for the GEMM call, then add bias.
-        // SAFETY: CudaSlice<half::bf16> and CudaSlice<u16> have identical memory layout
-        // on device (both 16-bit); only the Rust type differs.
-        let c_bits: &mut cudarc::driver::CudaSlice<u16> =
-            unsafe { &mut *(c_bf16 as *mut cudarc::driver::CudaSlice<half::bf16> as *mut cudarc::driver::CudaSlice<u16>) };
-        super::bf16_gemm::matmul_linear_wt_bf16_to_bf16(
-            x_dev, w_bf16, &mut bits, c_bf16, m, k, n,
+        let rows = prefixes.len() * out_dim;
+        Self::from_tensors(
+            CudaTensor::from_vec(w, vec![rows, in_dim])?,
+            if has_bias { Some(CudaTensor::from_vec(b, vec![rows])?) } else { None },
         )
-        .map_err(|e| TensorError::Message(e.to_string()))?;
-        // Add bias in BF16 if present (fused F32-bias → BF16-output kernel).
-        if let Some(bias) = &self.bias {
-            let mut b = bias.clone();
-            b.ensure_device()?;
-            if let Some(b_dev) = b.device_slice() {
-                let total = (m * n) as i32;
-                unsafe {
-                    super::kernels::launch_add_bias_bf16_last(
-                        &dev.stream,
-                        &dev.kernels.add_bias_bf16_last,
-                        c_bits,
-                        b_dev,
-                        total,
-                        n as i32,
-                    )
-                    .map_err(|e| TensorError::Message(e.to_string()))?;
-                }
-            }
-        }
-        Ok(())
     }
 
-    /// Forward from a pre-cast BF16 activation buffer (e.g., the output of
-    /// `forward_into_bf16` after a GELU) → F32 output tensor. Enables a
-    /// fully BF16 FFN: proj(F32→BF16) → gelu_bf16 → out(BF16→F32) with
-    /// no F32 intermediate allocation.
-    #[cfg(feature = "cuda")]
-    pub fn forward_from_bf16(
-        &self,
-        x_bf16: &cudarc::driver::CudaSlice<half::bf16>,
-        m: usize,
-        out_shape: Vec<usize>,
-    ) -> Result<CudaTensor> {
-        if !super::bf16_gemm::bf16_enabled() {
-            return Err(TensorError::Message(
-                "forward_from_bf16: BF16 disabled".into(),
-            ));
+    pub fn out_dim(&self) -> usize {
+        self.weight.shape[0]
+    }
+
+    fn out_shape(&self, xs: &CudaTensor) -> Result<(usize, usize, Vec<usize>)> {
+        let k = *xs.shape.last().ok_or_else(|| msg("linear on scalar"))?;
+        if xs.rank() < 2 || k != self.weight.shape[1] {
+            return Err(msg(format!("linear input {:?} for weight {:?}", xs.shape, self.weight.shape)));
         }
-        let Some(w_bf16) = self.ensure_bf16_cache() else {
-            return Err(TensorError::Message(
-                "forward_from_bf16: weight bf16 cache unavailable".into(),
-            ));
-        };
-        let dev = super::device::global_device().ok_or_else(|| {
-            TensorError::Message("no global CUDA device context".into())
-        })?;
-        let k = self.weight.shape[1];
-        let n = self.weight.shape[0];
-        if x_bf16.len() != m * k {
-            return Err(TensorError::Message(format!(
-                "forward_from_bf16: activation size {} != m*k={}*{}",
-                x_bf16.len(), m, k
-            )));
-        }
-        let mut c_dev = super::bf16_gemm::matmul_bf16_bf16_to_f32(x_bf16, w_bf16, m, k, n)
-            .map_err(|e| TensorError::Message(e.to_string()))?;
-        if let Some(bias) = &self.bias {
-            let mut b = bias.clone();
-            b.ensure_device()?;
-            if let Some(b_dev) = b.device_slice() {
-                super::ops::add_bias_last_inplace(&mut c_dev, b_dev)?;
-            }
-        }
-        let _ = dev;
-        CudaTensor::from_device_slice(c_dev, out_shape)
+        let mut shape = xs.shape.clone();
+        *shape.last_mut().unwrap() = self.out_dim();
+        Ok((xs.numel() / k, k, shape))
     }
 
     pub fn forward(&self, xs: &CudaTensor) -> Result<CudaTensor> {
-        #[cfg(feature = "cuda")]
-        {
-            if let Some(out) = self.forward_resident(xs)? {
-                return Ok(out);
-            }
-        }
-        let w_t = self.weight.transpose(0, 1)?;
-        let mut out = match xs.rank() {
-            2 => xs.matmul(&w_t)?,
-            3 => {
-                let (b, s, i) = (xs.shape[0], xs.shape[1], xs.shape[2]);
-                let flat = xs.reshape(vec![b * s, i])?;
-                flat.matmul(&w_t)?.reshape(vec![b, s, self.weight.shape[0]])?
-            }
-            4 => {
-                let (b1, b2, s, i) = (xs.shape[0], xs.shape[1], xs.shape[2], xs.shape[3]);
-                let flat = xs.reshape(vec![b1 * b2 * s, i])?;
-                flat.matmul(&w_t)?
-                    .reshape(vec![b1, b2, s, self.weight.shape[0]])?
-            }
-            _ => {
-                return Err(TensorError::Message(format!(
-                    "linear unsupported rank {}",
-                    xs.rank()
-                )));
-            }
-        };
-        if let Some(bias) = &self.bias {
-            let mut bshape = vec![1; out.rank()];
-            bshape[out.rank() - 1] = bias.shape[0];
-            let b = bias.reshape(bshape)?;
-            out = out.add(&b)?;
-        }
-        Ok(out)
+        self.forward_act(xs, false)
     }
 
-    #[cfg(feature = "cuda")]
-    fn forward_resident(&self, xs: &CudaTensor) -> Result<Option<CudaTensor>> {
-        if !residency_enabled() {
-            return Ok(None);
-        }
-        let Some(dev) = super::device::global_device() else {
-            return Ok(None);
-        };
-        let mut w = self.weight.clone();
-        w.ensure_device()?;
-        let Some(w_dev) = w.device_slice() else {
-            return Ok(None);
-        };
-        let (m, k, n, out_shape) = match xs.rank() {
-            2 => {
-                let m = xs.shape[0];
-                let k = xs.shape[1];
-                (m, k, self.weight.shape[0], vec![m, self.weight.shape[0]])
-            }
-            3 => {
-                let (b, s, i) = (xs.shape[0], xs.shape[1], xs.shape[2]);
-                (
-                    b * s,
-                    i,
-                    self.weight.shape[0],
-                    vec![b, s, self.weight.shape[0]],
-                )
-            }
-            4 => {
-                let (b1, b2, s, i) = (xs.shape[0], xs.shape[1], xs.shape[2], xs.shape[3]);
-                (
-                    b1 * b2 * s,
-                    i,
-                    self.weight.shape[0],
-                    vec![b1, b2, s, self.weight.shape[0]],
-                )
-            }
-            _ => return Ok(None),
-        };
-        if k != self.weight.shape[1] {
-            return Ok(None);
-        }
-        let mut x = xs.clone();
-        x.ensure_device()?;
-        let Some(x_dev) = x.device_slice() else {
-            return Ok(None);
-        };
-        if x_dev.len() != m * k {
-            return Ok(None);
-        }
-        let mut c_dev = if let Some(w_bf16) = self.ensure_bf16_cache() {
-            match self.bf16_matmul(x_dev, w_bf16, m, k, n) {
-                Ok(c) => {
-                    static BF16_ONCE: AtomicBool = AtomicBool::new(false);
-                    super::log::debug_once(
-                        &BF16_ONCE,
-                        format_args!("linear: BF16 GemmEx m={m} k={k} n={n}"),
-                    );
-                    c
+    /// `gelu_tanh(W x + b)` with the bias add and activation in one launch.
+    pub fn forward_gelu(&self, xs: &CudaTensor) -> Result<CudaTensor> {
+        self.forward_act(xs, true)
+    }
+
+    fn forward_act(&self, xs: &CudaTensor, gelu: bool) -> Result<CudaTensor> {
+        let (m, k, out_shape) = self.out_shape(xs)?;
+        let n = self.out_dim();
+        #[cfg(feature = "cuda")]
+        if let (Some(x), Some(w)) = (xs.dev()?, self.weight.dev()?) {
+            let mut c = super::ops::alloc((m * n).max(1))?;
+            super::device::matmul_linear_wt_device(&x, &w, &mut c, m, k, n).map_err(|e| msg(e.to_string()))?;
+            match (&self.bias, gelu) {
+                (Some(b), true) => {
+                    let b = b.dev()?.ok_or_else(|| msg("bias"))?;
+                    super::ops::bias_gelu_inplace_device(&mut c, &b)?
                 }
-                Err(e) => {
-                    static FB_ONCE: AtomicBool = AtomicBool::new(false);
-                    super::log::info_once(
-                        &FB_ONCE,
-                        format_args!("linear: BF16 GemmEx failed ({e}); using F32 cuBLAS"),
-                    );
-                    let mut c = dev
-                        .stream
-                        .alloc_zeros::<f32>(m * n)
-                        .map_err(|e| TensorError::Message(e.to_string()))?;
-                    super::device::matmul_linear_wt_device(x_dev, w_dev, &mut c, m, k, n)
-                        .map_err(|e| TensorError::Message(e.to_string()))?;
-                    c
+                (Some(b), false) => {
+                    let b = b.dev()?.ok_or_else(|| msg("bias"))?;
+                    super::ops::add_bias_inplace_device(&mut c, &b, 1)?
                 }
+                (None, true) => c = super::ops::unary_device(&c, super::ops::ElemUnary::GeluTanh)?,
+                (None, false) => {}
             }
-        } else {
-            static F32_ONCE: AtomicBool = AtomicBool::new(false);
-            super::log::debug_once(
-                &F32_ONCE,
-                format_args!("linear: F32 cuBLAS m={m} k={k} n={n}"),
-            );
-            let mut c = dev
-                .stream
-                .alloc_zeros::<f32>(m * n)
-                .map_err(|e| TensorError::Message(e.to_string()))?;
-            super::device::matmul_linear_wt_device(x_dev, w_dev, &mut c, m, k, n)
-                .map_err(|e| TensorError::Message(e.to_string()))?;
-            c
-        };
-        if let Some(bias) = &self.bias {
-            let mut b = bias.clone();
-            b.ensure_device()?;
-            if let Some(b_dev) = b.device_slice() {
-                super::ops::add_bias_last_inplace(&mut c_dev, b_dev)?;
-            }
+            return CudaTensor::from_dev_result(c, out_shape);
         }
-        Ok(Some(CudaTensor::from_device_slice(c_dev, out_shape)?))
+        let x = xs.host_cow()?;
+        let w = self.weight.host_cow()?;
+        let b = self.bias.as_ref().map(|b| b.host_cow()).transpose()?;
+        use rayon::prelude::*;
+        let mut out = vec![0.0f32; m * n];
+        out.par_chunks_mut(n.max(1)).enumerate().for_each(|(i, row)| {
+            let xi = &x[i * k..(i + 1) * k];
+            for (j, o) in row.iter_mut().enumerate() {
+                let wj = &w[j * k..(j + 1) * k];
+                let mut acc = 0.0f32;
+                for t in 0..k {
+                    acc += xi[t] * wj[t];
+                }
+                if let Some(b) = &b {
+                    acc += b[j];
+                }
+                *o = if gelu { host::gelu_tanh(acc) } else { acc };
+            }
+        });
+        CudaTensor::from_vec(out, out_shape)
     }
 }
 
@@ -463,106 +151,11 @@ pub fn gelu(xs: &CudaTensor) -> CudaTensor {
     xs.gelu_tanh()
 }
 
-/// In-place GELU-tanh on a BF16 buffer (stored as `CudaSlice<u16>` bits).
-/// Used by the chained BF16 FFN path between `forward_into_bf16` and
-/// `forward_from_bf16`. Returns `Err` if no CUDA device is available.
-#[cfg(feature = "cuda")]
-pub fn gelu_tanh_bf16_inplace(buf: &mut cudarc::driver::CudaSlice<u16>) -> Result<()> {
-    let dev = super::device::global_device().ok_or_else(|| {
-        TensorError::Message("gelu_tanh_bf16_inplace: no CUDA device".into())
-    })?;
-    let n = buf.len() as i32;
-    unsafe {
-        super::kernels::launch_gelu_tanh_bf16(
-            &dev.stream,
-            &dev.kernels.gelu_tanh_bf16,
-            buf,
-            n,
-        )
-        .map_err(|e| TensorError::Message(e.to_string()))?;
-    }
-    Ok(())
-}
-
-/// Fused unaffine LayerNorm + AdaLN modulate in one kernel launch.
-/// `x`: [batch, seq, dim]; `scale`/`shift`: [batch, dim]; output: [batch, seq, dim].
-/// Returns `None` if CUDA unavailable (caller falls back to separate ops).
-#[cfg(feature = "cuda")]
-pub fn layer_norm_adaln(
-    x: &CudaTensor,
-    scale: &CudaTensor,
-    shift: &CudaTensor,
-    eps: f32,
-) -> Result<Option<CudaTensor>> {
-    use super::device;
-    if x.rank() != 3 || scale.rank() != 2 || shift.rank() != 2 {
-        return Ok(None);
-    }
-    let (batch, seq, dim) = (x.shape[0], x.shape[1], x.shape[2]);
-    if scale.shape[0] != batch || scale.shape[1] != dim
-        || shift.shape[0] != batch || shift.shape[1] != dim
-    {
-        return Ok(None);
-    }
-    let Some(dev) = device::global_device() else {
-        return Ok(None);
-    };
-    let mut xc = x.clone();
-    let mut sc = scale.clone();
-    let mut sh = shift.clone();
-    xc.ensure_device()?;
-    sc.ensure_device()?;
-    sh.ensure_device()?;
-    let (Some(x_dev), Some(sc_dev), Some(sh_dev)) =
-        (xc.device_slice(), sc.device_slice(), sh.device_slice())
-    else {
-        return Ok(None);
-    };
-    let mut out = dev
-        .stream
-        .alloc_zeros::<f32>(batch * seq * dim)
-        .map_err(|e| TensorError::Message(e.to_string()))?;
-    unsafe {
-        super::kernels::launch_layer_norm_adaln_fused(
-            &dev.stream,
-            &dev.kernels.layer_norm_adaln_fused,
-            x_dev,
-            sc_dev,
-            sh_dev,
-            &mut out,
-            batch as i32,
-            seq as i32,
-            dim as i32,
-            eps,
-        )
-        .map_err(|e| TensorError::Message(e.to_string()))?;
-    }
-    Ok(Some(CudaTensor::from_device_slice(
-        out,
-        vec![batch, seq, dim],
-    )?))
-}
-
-#[cfg(not(feature = "cuda"))]
-pub fn layer_norm_adaln(
-    _x: &CudaTensor,
-    _scale: &CudaTensor,
-    _shift: &CudaTensor,
-    _eps: f32,
-) -> Result<Option<CudaTensor>> {
-    Ok(None)
-}
-
 pub fn rms_norm(xs: &CudaTensor, weight: &CudaTensor, eps: f32) -> Result<CudaTensor> {
     xs.rms_norm(weight, eps)
 }
 
-pub fn layer_norm(
-    xs: &CudaTensor,
-    eps: f32,
-    weight: Option<&CudaTensor>,
-    bias: Option<&CudaTensor>,
-) -> Result<CudaTensor> {
+pub fn layer_norm(xs: &CudaTensor, eps: f32, weight: Option<&CudaTensor>, bias: Option<&CudaTensor>) -> Result<CudaTensor> {
     xs.layer_norm(eps, weight, bias)
 }
 
@@ -570,6 +163,8 @@ pub fn softmax(xs: &CudaTensor, dim: isize) -> Result<CudaTensor> {
     xs.softmax(dim)
 }
 
+/// `[cos(t·f_i), sin(t·f_i)]` embedding. Built on host from scalar timesteps
+/// (an input boundary, uploaded once per step by the first linear).
 pub fn sinusoidal_timesteps(timesteps: &CudaTensor, dim: usize) -> Result<CudaTensor> {
     let half = dim / 2;
     let host = timesteps.host_cow()?;
@@ -586,26 +181,6 @@ pub fn sinusoidal_timesteps(timesteps: &CudaTensor, dim: usize) -> Result<CudaTe
     CudaTensor::from_vec(out, vec![n, dim])
 }
 
-/// Scaled dot-product attention. q/k/v: [B, H, S, D]
-///
-/// Backend selection (`FASTVIDEO_SDPA`):
-/// - `flash` (default): GPU dense SDPA when CUDA is live (chunked QK); host online-softmax fallback
-/// - `dense`: same GPU path / materialize QK^T
-/// - `sparse` / VSA: block-sparse local+global window (`FASTVIDEO_VSA=1` forces this)
-/// - `host`: force CPU flash-style path
-///
-/// Sequence parallel: `FASTVIDEO_SP_WORLD=N` shards the query sequence.
-pub fn scaled_dot_product_attention(
-    q: &CudaTensor,
-    k: &CudaTensor,
-    v: &CudaTensor,
-    scale: Option<f32>,
-) -> Result<CudaTensor> {
-    scaled_dot_product_attention_masked(q, k, v, scale, None)
-}
-
-const SDPA_QUERY_CHUNK: usize = 512;
-
 static SP_WORLD_CACHE: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
 static SDPA_BACKEND_CACHE: super::envflag::CachedString = super::envflag::CachedString::new();
 static VSA_CACHE: super::envflag::CachedBool = super::envflag::CachedBool::new();
@@ -614,73 +189,38 @@ fn sp_world() -> usize {
     *SP_WORLD_CACHE.get_or_init(|| super::envflag::usize_flag("FASTVIDEO_SP_WORLD", 1).max(1))
 }
 
-/// Cached (see [`super::resident::residency_enabled`] doc for why): consulted
-/// multiple times per attention call.
-fn sdpa_backend() -> String {
-    SDPA_BACKEND_CACHE.get_or_init(|| super::envflag::string_flag("FASTVIDEO_SDPA", "flash"))
+/// `FASTVIDEO_SDPA`: `dense` (default: cuBLAS QKᵀ + softmax + PV, query-chunked
+/// to bound memory), `flash` (tiled NVRTC kernel), `host` (CPU runs only).
+pub fn sdpa_backend() -> String {
+    SDPA_BACKEND_CACHE.get_or_init(|| super::envflag::string_flag("FASTVIDEO_SDPA", "dense"))
 }
 
 fn vsa_enabled() -> bool {
     VSA_CACHE.get_or_init(|| super::envflag::bool_flag("FASTVIDEO_VSA", false))
 }
 
-/// Test-only: clears the `FASTVIDEO_SDPA` cache so a test that flips the env
-/// var mid-process (see `attn::tests::flash_style_matches_dense_small`) sees
-/// the new value.
-#[cfg(test)]
-pub(crate) fn reset_sdpa_backend_cache_for_test() {
-    SDPA_BACKEND_CACHE.reset();
+/// Scaled dot-product attention. q/k/v: [B, H, S, D].
+pub fn scaled_dot_product_attention(q: &CudaTensor, k: &CudaTensor, v: &CudaTensor, scale: Option<f32>) -> Result<CudaTensor> {
+    scaled_dot_product_attention_masked(q, k, v, scale, None)
 }
 
-/// Run `compute` on each of `world` query-sequence shards of `q` and gather
-/// the results back into a full-sequence tensor.
-///
-/// When a CUDA device is live, this dispatches each rank's shard to its own
-/// physical GPU (`super::sp::device_for_rank`) on its own OS thread, running
-/// genuinely in parallel — this is what `--num-gpus N` is supposed to do.
-/// Previously `world > 1` ran every rank sequentially on the single global
-/// device (see the old sp.rs doc comment / decision log): smaller batched
-/// GEMMs than the unsharded call, zero benefit from extra GPUs, and real
-/// overhead from the shard/gather step. `device_for_rank` existed but was
-/// never called.
-///
-/// Each rank downloads its shard to host (`ensure_host`) *on its own thread*
-/// before returning: a `CudaSlice` belongs to the `CudaContext` that
-/// allocated it, so touching it from the joining thread (a different
-/// context) would be operating on a foreign-context pointer. The gather then
-/// runs on host data and re-uploads to the caller's own device — exactly the
-/// "host-mediated gather" `sp.rs` always documented as the plan, now
-/// actually wired to real per-rank devices instead of one shared one. NCCL
-/// P2P (skipping the host round trip) remains a follow-up.
-fn dispatch_sharded(
-    q: &CudaTensor,
-    world: usize,
-    compute: impl Fn(&CudaTensor) -> Result<CudaTensor> + Sync,
-) -> Result<CudaTensor> {
+/// Run `compute` on each of `world` query-sequence shards, one GPU per rank,
+/// and gather the results (host-mediated; see [`super::sp`]).
+fn dispatch_sharded(q: &CudaTensor, world: usize, compute: impl Fn(&CudaTensor) -> Result<CudaTensor> + Sync) -> Result<CudaTensor> {
     #[cfg(feature = "cuda")]
-    {
-        if super::device::global_device().is_some() {
-            return dispatch_sharded_multi_gpu(q, world, compute);
-        }
+    if super::device::global_device().is_some() {
+        return dispatch_sharded_multi_gpu(q, world, compute);
     }
-    // No live CUDA device: nothing to parallelize across (host-only build or
-    // CPU path), so a plain sequential shard loop is already correct.
     let mut shards = Vec::with_capacity(world);
     for rank in 0..world {
-        let qc = super::sp::shard_tensor(q, 2, rank, world)?;
-        shards.push(compute(&qc)?);
+        shards.push(compute(&super::sp::shard_tensor(q, 2, rank, world)?)?);
     }
     super::sp::all_gather_seq(&shards, 2)
 }
 
 #[cfg(feature = "cuda")]
-fn dispatch_sharded_multi_gpu(
-    q: &CudaTensor,
-    world: usize,
-    compute: impl Fn(&CudaTensor) -> Result<CudaTensor> + Sync,
-) -> Result<CudaTensor> {
-    let results: Vec<std::sync::Mutex<Option<Result<CudaTensor>>>> =
-        (0..world).map(|_| std::sync::Mutex::new(None)).collect();
+fn dispatch_sharded_multi_gpu(q: &CudaTensor, world: usize, compute: impl Fn(&CudaTensor) -> Result<CudaTensor> + Sync) -> Result<CudaTensor> {
+    let results: Vec<std::sync::Mutex<Option<Result<CudaTensor>>>> = (0..world).map(|_| std::sync::Mutex::new(None)).collect();
     std::thread::scope(|scope| {
         for rank in 0..world {
             let results = &results;
@@ -688,13 +228,12 @@ fn dispatch_sharded_multi_gpu(
             scope.spawn(move || {
                 let outcome = (|| -> Result<CudaTensor> {
                     let idx = super::sp::device_for_rank(rank, world);
-                    let dev = super::device::device_for_index(idx)
-                        .map_err(|e| TensorError::Message(e.to_string()))?;
+                    let dev = super::device::device_for_index(idx).map_err(|e| msg(e.to_string()))?;
                     super::device::set_thread_device(Some(dev));
-                    let qc = super::sp::shard_tensor(q, 2, rank, world)?;
+                    let qc = super::sp::shard_tensor(&q.clone(), 2, rank, world)?;
                     let mut out = compute(&qc)?;
                     out.ensure_host()?;
-                    Ok(out)
+                    Ok(CudaTensor::from_vec(out.host_cow()?.into_owned(), out.shape.clone())?)
                 })();
                 super::device::set_thread_device(None);
                 *results[rank].lock().expect("sdpa shard result lock") = Some(outcome);
@@ -703,13 +242,7 @@ fn dispatch_sharded_multi_gpu(
     });
     let mut shards = Vec::with_capacity(world);
     for r in results {
-        let outcome = r
-            .into_inner()
-            .expect("sdpa shard result lock")
-            .ok_or_else(|| {
-                TensorError::Message("sdpa shard thread did not produce a result".into())
-            })?;
-        shards.push(outcome?);
+        shards.push(r.into_inner().expect("sdpa shard result lock").ok_or_else(|| msg("sdpa shard produced no result"))??);
     }
     super::sp::all_gather_seq(&shards, 2)
 }
@@ -722,24 +255,18 @@ pub fn scaled_dot_product_attention_masked(
     mask: Option<&CudaTensor>,
 ) -> Result<CudaTensor> {
     if q.rank() != 4 || k.rank() != 4 || v.rank() != 4 {
-        return Err(TensorError::Message("sdpa expects BHSD".into()));
+        return Err(msg("sdpa expects BHSD"));
     }
-    if mask.is_none() {
-        let world = sp_world();
-        let run = |q: &CudaTensor| -> Result<CudaTensor> {
+    let run = |q: &CudaTensor| -> Result<CudaTensor> {
+        if mask.is_none() {
             if vsa_enabled() || sdpa_backend() == "sparse" {
-                static WINDOW_CACHE: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
-                let window =
-                    *WINDOW_CACHE.get_or_init(|| super::envflag::usize_flag("FASTVIDEO_VSA_WINDOW", 128));
+                let window = super::envflag::usize_flag("FASTVIDEO_VSA_WINDOW", 128);
                 return super::attn::block_sparse_sdpa(q, k, v, scale, window);
             }
             if sdpa_backend() == "host" {
                 return super::attn::flash_style_sdpa_host(q, k, v, scale);
             }
-            // flash / dense / default → GPU-first.
-            // Try tiled flash attention first (O(d) memory); fall back to dense
-            // (O(Sq*Sk) memory) when flash is unavailable (d not multiple of 32).
-            if sdpa_backend() != "dense" {
+            if sdpa_backend() == "flash" {
                 if let Some(out) = super::attn::device_flash_sdpa(q, k, v, scale)? {
                     return Ok(out);
                 }
@@ -747,69 +274,33 @@ pub fn scaled_dot_product_attention_masked(
             if let Some(out) = super::attn::device_dense_sdpa(q, k, v, scale)? {
                 return Ok(out);
             }
-            if sdpa_backend() != "dense" {
-                return super::attn::flash_style_sdpa(q, k, v, scale);
-            }
-            sdpa_qk(q, k, v, scale, None)
-        };
-        if world > 1 {
-            return dispatch_sharded(q, world, run);
         }
-        return run(q);
-    }
+        sdpa_composed(q, k, v, scale, mask)
+    };
     let world = sp_world();
     if world > 1 {
-        return dispatch_sharded(q, world, |qc| sdpa_qk(qc, k, v, scale, None));
+        return dispatch_sharded(q, world, run);
     }
-    let sq = q.shape[2];
-    if sq <= SDPA_QUERY_CHUNK {
-        return sdpa_qk(q, k, v, scale, mask);
-    }
-    let mut chunks = Vec::new();
-    let mut start = 0;
-    while start < sq {
-        let len = SDPA_QUERY_CHUNK.min(sq - start);
-        let qc = q.narrow(2, start, len)?;
-        let mask_c = match mask {
-            Some(m) => Some(m.narrow(m.rank() - 2, start, len)?),
-            None => None,
-        };
-        chunks.push(sdpa_qk(&qc, k, v, scale, mask_c.as_ref())?);
-        start += len;
-    }
-    let refs: Vec<&CudaTensor> = chunks.iter().collect();
-    CudaTensor::cat(&refs, 2)
+    run(q)
 }
 
-fn sdpa_qk(
-    q: &CudaTensor,
-    k: &CudaTensor,
-    v: &CudaTensor,
-    scale: Option<f32>,
-    mask: Option<&CudaTensor>,
-) -> Result<CudaTensor> {
-    if mask.is_none() {
-        if let Some(out) = super::attn::device_dense_sdpa(q, k, v, scale)? {
-            return Ok(out);
-        }
-    }
+/// SDPA from tensor ops (masked attention, CPU runs). Every op here has a
+/// device kernel, so on GPU runs this stays on the device.
+fn sdpa_composed(q: &CudaTensor, k: &CudaTensor, v: &CudaTensor, scale: Option<f32>, mask: Option<&CudaTensor>) -> Result<CudaTensor> {
     let d = q.shape[3] as f32;
     let scale = scale.unwrap_or(1.0 / d.sqrt());
-    let k_t = k.transpose(2, 3)?;
-    let mut scores = q.matmul(&k_t)?;
-    scores = scores.mul_scalar(scale);
+    let mut scores = q.matmul(&k.transpose(2, 3)?)?.try_mul_scalar(scale)?;
     if let Some(m) = mask {
         scores = scores.add(m)?;
     }
-    let attn = scores.softmax(-1)?;
-    attn.matmul(v)
+    scores.softmax(-1)?.matmul(v)
 }
 
-pub fn conv2d(
-    xs: &CudaTensor,
-    kernel: &CudaTensor,
-    padding: usize,
-    stride: usize,
-) -> Result<CudaTensor> {
+pub fn conv2d(xs: &CudaTensor, kernel: &CudaTensor, padding: usize, stride: usize) -> Result<CudaTensor> {
     xs.conv2d(kernel, None, padding, stride)
+}
+
+/// CPU-only helper guard: call before host-only algorithms with no kernel.
+pub(crate) fn host_only_op(op: &'static str, detail: impl std::fmt::Display) -> Result<()> {
+    stats::host_fallback(op, detail)
 }

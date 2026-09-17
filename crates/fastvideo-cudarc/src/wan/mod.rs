@@ -1,16 +1,16 @@
-//! Native Wan graph for cudarc bring-up.
-//!
-//! Eager `CudaTensor` forwards match Candle/Luminal tiny shapes for full Diffusers loads.
+//! Native Wan graph on cudarc: UMT5 → DiT → feat-cache VAE, device-resident
+//! on CUDA (see [`tensor`]) with plain-Rust reference ops on CPU runs.
 
 pub mod device;
 #[cfg(feature = "cuda")]
 pub mod kernels;
-#[cfg(feature = "cuda")]
-pub mod pool;
 pub mod attn;
 pub mod bf16_gemm;
 pub mod clip;
+#[cfg(feature = "cuda")]
+pub mod conv;
 pub mod envflag;
+pub mod fused;
 pub mod hopper;
 pub mod log;
 pub mod nn;
@@ -18,8 +18,7 @@ pub mod ops;
 pub mod pipeline;
 pub mod resident;
 pub mod sp;
-#[cfg(feature = "cuda")]
-pub mod streams;
+pub mod stats;
 pub mod tensor;
 pub mod transformer;
 pub mod umt5;

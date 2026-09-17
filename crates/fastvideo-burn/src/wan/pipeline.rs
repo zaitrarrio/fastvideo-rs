@@ -167,7 +167,7 @@ impl WanPipeline {
                 .dmd_steps
                 .clone()
                 .unwrap_or_else(|| FAST_WAN_1_3B_DMD_STEPS.to_vec());
-            let s = DmdSchedule::new(&steps, cfg.flow_shift, 1000);
+            let s = DmdSchedule::new(&steps, 1000);
             let timesteps: Vec<f32> = s.train_timesteps.iter().map(|&t| t as f32).collect();
             latents = euler_denoise(
                 latents,
