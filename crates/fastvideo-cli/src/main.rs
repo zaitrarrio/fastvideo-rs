@@ -1,12 +1,27 @@
-use anyhow::Result;
+use anyhow::{Context, Result};
 use clap::{Parser, Subcommand, ValueEnum};
 use fastvideo_core::{BackendKind, LoadOptions, VideoGenerator, WAN_MODEL_DEFINITIONS};
 use fastvideo_models::{DmdSchedule, FlowUniPCMultistepScheduler};
+use serde::Deserialize;
+use std::path::Path;
+
+fn write_sidecar(dir: Option<&str>, name: &str, value: &serde_json::Value) {
+    let Some(dir) = dir.filter(|d| !d.is_empty()) else {
+        return;
+    };
+    let path = Path::new(dir).join(name);
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    if let Ok(body) = serde_json::to_string_pretty(value) {
+        let _ = std::fs::write(path, body);
+    }
+}
 
 #[derive(Parser)]
 #[command(
     name = "fastvideo",
-    about = "Rust inference port of FastVideo (Wan/FastWan) for Burn, Candle, and Luminal."
+    about = "Rust Wan/FastWan inference (cudarc CUDA primary; Burn/Candle/Luminal frozen)."
 )]
 struct Cli {
     #[command(subcommand)]
@@ -30,10 +45,10 @@ struct GenerateArgs {
     /// Hugging Face repo id, e.g. Wan-AI/Wan2.1-T2V-1.3B-Diffusers
     #[arg(long)]
     model: String,
-    #[arg(long, default_value = "candle")]
+    #[arg(long, default_value = "cudarc")]
     backend: CliBackend,
-    #[arg(long, default_value = "A curious raccoon in a field of sunflowers.")]
-    prompt: String,
+    #[arg(long)]
+    prompt: Option<String>,
     #[arg(long)]
     negative: Option<String>,
     #[arg(long, default_value_t = 1)]
@@ -48,7 +63,7 @@ struct GenerateArgs {
     /// Directory for decoded PNG frames.
     #[arg(long)]
     output: Option<String>,
-    /// `cpu`, `cuda`, or `cuda:0`. CUDA binaries need `--features cuda`.
+    /// `cpu`, `cuda`, or `cuda:0`. GPU builds: `--features cuda-cudarc` (lean) or `cuda` (full).
     #[arg(long, default_value = "cpu")]
     device: String,
     /// `f32`, `f16`, or `bf16`. Defaults to bf16 on CUDA, f32 on CPU.
@@ -71,13 +86,55 @@ struct GenerateArgs {
     /// First-frame image for I2V (PNG or JPEG).
     #[arg(long)]
     image: Option<String>,
+    /// Control / reference frame for Fun Control / Lucy (PNG or JPEG).
+    #[arg(long)]
+    control: Option<String>,
+    /// TOML overlay for common generate knobs (height, width, frames, steps, …).
+    /// CLI flags override values from the file.
+    #[arg(long)]
+    config: Option<String>,
+    /// Mux PNG frames to `output.mp4` via ffmpeg (same as FASTVIDEO_SAVE_MP4=1).
+    #[arg(long, default_value_t = false)]
+    save_mp4: bool,
+}
+
+/// Minimal TOML overlay for `generate` (not full upstream YAML).
+#[derive(Debug, Default, Deserialize)]
+struct GenerateToml {
+    height: Option<u32>,
+    width: Option<u32>,
+    frames: Option<u32>,
+    num_frames: Option<u32>,
+    steps: Option<u32>,
+    num_inference_steps: Option<u32>,
+    guidance: Option<f32>,
+    guidance_scale: Option<f32>,
+    guidance_2: Option<f32>,
+    guidance_scale_2: Option<f32>,
+    seed: Option<u64>,
+    image: Option<String>,
+    control: Option<String>,
+    output: Option<String>,
+    prompt: Option<String>,
+    negative: Option<String>,
+    save_mp4: Option<bool>,
+    flow_shift: Option<f32>,
+    fps: Option<u32>,
+    dtype: Option<String>,
+    device: Option<String>,
+}
+
+fn load_generate_toml(path: &str) -> Result<GenerateToml> {
+    let body = std::fs::read_to_string(path)
+        .with_context(|| format!("read --config {path}"))?;
+    toml::from_str(&body).with_context(|| format!("parse --config {path}"))
 }
 
 #[derive(clap::Args)]
 struct BenchArgs {
     #[arg(long, default_value = "Wan-AI/Wan2.1-T2V-1.3B-Diffusers")]
     model: String,
-    #[arg(long, default_value = "candle")]
+    #[arg(long, default_value = "cudarc")]
     backend: CliBackend,
     #[arg(long, default_value = "A curious raccoon in a field of sunflowers.")]
     prompt: String,
@@ -120,6 +177,7 @@ enum CliBackend {
     Burn,
     Candle,
     Luminal,
+    Cudarc,
 }
 
 impl From<CliBackend> for BackendKind {
@@ -129,6 +187,7 @@ impl From<CliBackend> for BackendKind {
             CliBackend::Burn => Self::Burn,
             CliBackend::Candle => Self::Candle,
             CliBackend::Luminal => Self::Luminal,
+            CliBackend::Cudarc => Self::Cudarc,
         }
     }
 }
@@ -148,6 +207,16 @@ fn main() -> Result<()> {
             }
         }
         Commands::Generate(args) => {
+            let file = args
+                .config
+                .as_deref()
+                .map(load_generate_toml)
+                .transpose()?
+                .unwrap_or_default();
+            let prompt = args
+                .prompt
+                .or(file.prompt)
+                .unwrap_or_else(|| "A curious raccoon in a field of sunflowers.".into());
             let gen = VideoGenerator::from_pretrained(
                 &args.model,
                 LoadOptions {
@@ -155,22 +224,37 @@ fn main() -> Result<()> {
                     num_gpus: args.num_gpus,
                     tiny: args.tiny,
                     weights_path: args.weights,
-                    output_path: args.output,
-                    device: args.device,
-                    dtype: args.dtype,
-                    height: args.height,
-                    width: args.width,
-                    num_frames: args.frames,
-                    num_inference_steps: args.steps,
-                    guidance_scale: args.guidance,
-                    guidance_scale_2: args.guidance_2,
-                    seed: args.seed,
-                    negative_prompt: args.negative,
-                    image_path: args.image,
+                    output_path: args.output.or(file.output),
+                    device: if args.device != "cpu" {
+                        args.device
+                    } else {
+                        file.device.unwrap_or(args.device)
+                    },
+                    dtype: args.dtype.or(file.dtype),
+                    height: args.height.or(file.height),
+                    width: args.width.or(file.width),
+                    num_frames: args.frames.or(file.frames).or(file.num_frames),
+                    num_inference_steps: args
+                        .steps
+                        .or(file.steps)
+                        .or(file.num_inference_steps),
+                    guidance_scale: args
+                        .guidance
+                        .or(file.guidance)
+                        .or(file.guidance_scale),
+                    guidance_scale_2: args
+                        .guidance_2
+                        .or(file.guidance_2)
+                        .or(file.guidance_scale_2),
+                    seed: args.seed.or(file.seed),
+                    negative_prompt: args.negative.or(file.negative),
+                    image_path: args.image.or(file.image),
+                    control_path: args.control.or(file.control),
+                    save_mp4: args.save_mp4 || file.save_mp4.unwrap_or(false),
                 },
             )?;
             println!("{}", gen.summary());
-            match gen.generate_video(&args.prompt) {
+            match gen.generate_video(&prompt) {
                 Ok(out) => {
                     if let Some(path) = out.frame_paths.first() {
                         println!("wrote {} frames, first={path}", out.frame_paths.len());
@@ -187,12 +271,16 @@ fn main() -> Result<()> {
                 eprintln!("bench is a Vast CUDA job; got --device {}", args.device);
                 std::process::exit(2);
             }
+            let output_path = args
+                .output
+                .clone()
+                .or_else(|| Some("/workspace/fastvideo-bench".into()));
             let gen = VideoGenerator::from_pretrained(
                 &args.model,
                 LoadOptions {
                     backend: args.backend.into(),
                     weights_path: args.weights,
-                    output_path: args.output.or_else(|| Some("/workspace/fastvideo-bench".into())),
+                    output_path,
                     device: args.device,
                     dtype: args.dtype,
                     height: args.height,
@@ -212,15 +300,14 @@ fn main() -> Result<()> {
                 })?;
                 match gen.bench_clip(&image) {
                     Ok(stats) => {
-                        println!(
-                            "{}",
-                            serde_json::json!({
-                                "clip_hidden": stats.hidden,
-                                "clip_load_ms": stats.load_ms,
-                                "clip_encode_ms": stats.encode_ms,
-                                "image_encoder": stats.path,
-                            })
-                        );
+                        let json = serde_json::json!({
+                            "clip_hidden": stats.hidden,
+                            "clip_load_ms": stats.load_ms,
+                            "clip_encode_ms": stats.encode_ms,
+                            "image_encoder": stats.path,
+                        });
+                        println!("{json}");
+                        write_sidecar(args.output.as_deref(), "clip.json", &json);
                     }
                     Err(err) => {
                         eprintln!("{err}");
@@ -230,21 +317,34 @@ fn main() -> Result<()> {
             } else {
                 match gen.bench_video(&args.prompt) {
                     Ok((out, stats)) => {
-                        println!(
-                            "{}",
-                            serde_json::json!({
-                                "model": stats.model,
-                                "device": stats.device,
-                                "dtype": stats.dtype,
-                                "height": stats.height,
-                                "width": stats.width,
-                                "frames": stats.frames,
-                                "steps": stats.steps,
-                                "load_and_generate_ms": stats.load_and_generate_ms,
-                                "frames_written": stats.frames_written,
-                                "first_frame": out.frame_paths.first(),
-                            })
+                        let json = serde_json::json!({
+                            "model": stats.model,
+                            "backend": stats.backend,
+                            "device": stats.device,
+                            "dtype": stats.dtype,
+                            "height": stats.height,
+                            "width": stats.width,
+                            "frames": stats.frames,
+                            "steps": stats.steps,
+                            "load_ms": stats.load_ms,
+                            "generate_ms": stats.generate_ms,
+                            "load_and_generate_ms": stats.load_and_generate_ms,
+                            "frames_written": stats.frames_written,
+                            "first_frame": out.frame_paths.first(),
+                        });
+                        println!("{json}");
+                        eprintln!(
+                            "bench load_ms={} generate_ms={} total_ms={}",
+                            stats.load_ms, stats.generate_ms, stats.load_and_generate_ms
                         );
+                        let sidecar_dir = args.output.clone().or_else(|| {
+                            out.frame_paths.first().and_then(|p| {
+                                Path::new(p)
+                                    .parent()
+                                    .map(|d| d.to_string_lossy().into_owned())
+                            })
+                        });
+                        write_sidecar(sidecar_dir.as_deref(), "bench.json", &json);
                     }
                     Err(err) => {
                         eprintln!("{err}");

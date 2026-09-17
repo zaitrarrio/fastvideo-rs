@@ -1,0 +1,31 @@
+[package]
+name = "fastvideo-cudarc"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "cudarc CUDA Wan T2V backend for fastvideo-rs."
+
+[dependencies]
+fastvideo-ops.workspace = true
+fastvideo-models.workspace = true
+fastvideo-loader.workspace = true
+image.workspace = true
+rand.workspace = true
+rand_distr.workspace = true
+thiserror.workspace = true
+serde_json.workspace = true
+half = "2"
+
+[features]
+default = []
+cuda = ["dep:cudarc"]
+
+[dependencies.cudarc]
+workspace = true
+optional = true
+
+[lints.rust]
+unsafe_code = "allow"
+
+[lints.clippy]
+all = { level = "warn", priority = -1 }

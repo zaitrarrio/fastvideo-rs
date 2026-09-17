@@ -107,36 +107,39 @@ impl WanAttention {
     }
 }
 
+fn pair_last_dim(xs: &Tensor) -> Result<(Tensor, Tensor)> {
+    let mut dims = xs.dims().to_vec();
+    let d = dims.pop().ok_or_else(|| candle_core::Error::Msg("empty rotary dims".into()))?;
+    if d % 2 != 0 {
+        candle_core::bail!("rotary last dim must be even, got {d}");
+    }
+    dims.push(d / 2);
+    dims.push(2);
+    let xs = xs.contiguous()?.reshape(dims)?;
+    let rank = xs.dims().len();
+    let even = xs.narrow(rank - 1, 0, 1)?.squeeze(rank - 1)?;
+    let odd = xs.narrow(rank - 1, 1, 1)?.squeeze(rank - 1)?;
+    Ok((even, odd))
+}
+
 fn apply_rotary(xs: &Tensor, cos: &Tensor, sin: &Tensor) -> Result<Tensor> {
     let dtype = xs.dtype();
     let xs = xs.to_dtype(DType::F32)?;
     let cos = cos.to_dtype(DType::F32)?;
     let sin = sin.to_dtype(DType::F32)?;
-    let d = xs.dim(D::Minus1)?;
-    let mut x1s = Vec::with_capacity(d / 2);
-    let mut x2s = Vec::with_capacity(d / 2);
-    let mut cos_e = Vec::with_capacity(d / 2);
-    let mut sin_o = Vec::with_capacity(d / 2);
-    for i in 0..(d / 2) {
-        x1s.push(xs.narrow(D::Minus1, i * 2, 1)?);
-        x2s.push(xs.narrow(D::Minus1, i * 2 + 1, 1)?);
-        cos_e.push(cos.narrow(D::Minus1, i * 2, 1)?);
-        sin_o.push(sin.narrow(D::Minus1, i * 2 + 1, 1)?);
-    }
-    let x1 = Tensor::cat(&x1s, D::Minus1)?;
-    let x2 = Tensor::cat(&x2s, D::Minus1)?;
-    let cos = Tensor::cat(&cos_e, D::Minus1)?;
-    let sin = Tensor::cat(&sin_o, D::Minus1)?;
-    let out1 = (x1.broadcast_mul(&cos)? - x2.broadcast_mul(&sin)?)?;
-    let out2 = (x1.broadcast_mul(&sin)? + x2.broadcast_mul(&cos)?)?;
-    let mut parts = Vec::with_capacity(d);
-    let x1s = out1.chunk(d / 2, D::Minus1)?;
-    let x2s = out2.chunk(d / 2, D::Minus1)?;
-    for (a, b) in x1s.into_iter().zip(x2s) {
-        parts.push(a);
-        parts.push(b);
-    }
-    Tensor::cat(&parts, D::Minus1)?.to_dtype(dtype)
+    let (x1, x2) = pair_last_dim(&xs)?;
+    let (cos_e, _) = pair_last_dim(&cos)?;
+    let (_, sin_o) = pair_last_dim(&sin)?;
+    let out1 = (x1.broadcast_mul(&cos_e)? - x2.broadcast_mul(&sin_o)?)?;
+    let out2 = (x1.broadcast_mul(&sin_o)? + x2.broadcast_mul(&cos_e)?)?;
+    let out1 = out1.unsqueeze(D::Minus1)?;
+    let out2 = out2.unsqueeze(D::Minus1)?;
+    let stacked = Tensor::cat(&[&out1, &out2], D::Minus1)?;
+    let mut out_dims = stacked.dims().to_vec();
+    let pair = out_dims.pop().unwrap_or(2);
+    let half = out_dims.pop().unwrap_or(0);
+    out_dims.push(half * pair);
+    stacked.reshape(out_dims)?.to_dtype(dtype)
 }
 
 fn rotary_1d(dim: usize, seq: usize, theta: f64, device: &Device) -> Result<(Tensor, Tensor)> {

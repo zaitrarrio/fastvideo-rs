@@ -1,8 +1,16 @@
 //! Luminal adapter.
 //!
-//! The crates.io `luminal` 0.2 API is stale relative to github.com/luminal-ai/luminal.
-//! Until a git revision is pinned, this backend runs the Host f32 kernels so
-//! UniPC generate is a real sampler, not a name-only stub.
+//! Native Wan T2V lives in [`wan`]: UMT5 → DiT → feat-cache VAE. Tiny shapes use
+//! luminal 0.2 `Graph` compile (`CompiledDitStep` / `CompiledVaeDecode` with
+//! `GenericCompiler` + `CPUCompiler`). Full Diffusers loads use eager `NdTensor`
+//! until Dyn-shape DiT/VAE graphs land.
+//!
+//! [`LuminalBackend`] still implements [`TensorBackend`] via host kernels for
+//! ops-unit tests; the Wan graph does **not** go through that trait.
+
+pub mod wan;
+
+pub use wan::{CompiledDitStep, CompiledVaeDecode, GenerateConfig, NdTensor, WanPipeline};
 
 use fastvideo_ops::{Device, DType, HostBackend, HostTensor, OpsError, TensorBackend};
 

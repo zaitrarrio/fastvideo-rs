@@ -26,7 +26,7 @@ docker run --rm \
   -e CARGO_HOME=/usr/local/cargo \
   -w /src \
   "$IMAGE" \
-  cargo build -p fastvideo-cli --release --features cuda
+  cargo build -p fastvideo-cli --release --features cuda-cudarc
 
 echo "linux cuda binary: $ROOT/target-linux/release/fastvideo"
 file "$ROOT/target-linux/release/fastvideo" || true

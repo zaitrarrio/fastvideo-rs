@@ -260,4 +260,20 @@ mod tests {
         assert!(causal.causal);
         assert_eq!(causal.local_attn_size, 21);
     }
+
+    #[test]
+    fn fun_inp_preset_is_i2v_ready_1_3b() {
+        let cfg = WanVideoArchConfig::from_preset("wan_fun_1_3b_inp");
+        // Fun InP shares the 1.3B DiT body; I2V packing uses 36-ch when in > out.
+        // Diffusers Fun InP uses the T2V 1.3B channel layout at the DiT; conditioning
+        // still goes through the I2V pack helpers when in_channels is raised by weights.
+        assert_eq!(cfg.num_layers, 30);
+        assert_eq!(cfg.hidden_size(), 1536);
+        assert_eq!(cfg.out_channels, 16);
+        // Candle/cudarc Fun InP registry maps to wan_t2v_1_3b arch (16-ch); I2V 14B is 36-ch.
+        let i2v = WanVideoArchConfig::wan_i2v_14b();
+        assert!(i2v.is_i2v());
+        assert_eq!(i2v.in_channels, 36);
+        assert_eq!(i2v.in_channels, 2 * i2v.out_channels + 4);
+    }
 }

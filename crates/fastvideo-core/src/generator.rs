@@ -34,12 +34,16 @@ pub struct LoadOptions {
     pub seed: Option<u64>,
     pub negative_prompt: Option<String>,
     pub image_path: Option<String>,
+    /// Control / reference frame for Fun Control / Lucy.
+    pub control_path: Option<String>,
+    /// Mux PNG frames to output.mp4 via ffmpeg when true (or FASTVIDEO_SAVE_MP4=1).
+    pub save_mp4: bool,
 }
 
 impl Default for LoadOptions {
     fn default() -> Self {
         Self {
-            backend: BackendKind::Candle,
+            backend: BackendKind::Cudarc,
             num_gpus: 1,
             tiny: false,
             weights_path: None,
@@ -55,6 +59,8 @@ impl Default for LoadOptions {
             seed: None,
             negative_prompt: None,
             image_path: None,
+            control_path: None,
+            save_mp4: false,
         }
     }
 }
@@ -73,6 +79,8 @@ pub struct VideoGenerator {
     pub device: String,
     pub dtype: Option<String>,
     pub image_path: Option<String>,
+    pub control_path: Option<String>,
+    pub save_mp4: bool,
 }
 
 impl VideoGenerator {
@@ -108,6 +116,9 @@ impl VideoGenerator {
         if let Some(neg) = opts.negative_prompt {
             sampling.negative_prompt = neg;
         }
+        if opts.save_mp4 {
+            sampling.save_video = true;
+        }
         Ok(Self {
             model_id,
             definition,
@@ -121,6 +132,8 @@ impl VideoGenerator {
             device: opts.device,
             dtype: opts.dtype,
             image_path: opts.image_path,
+            control_path: opts.control_path,
+            save_mp4: opts.save_mp4,
         })
     }
 
@@ -141,19 +154,15 @@ impl VideoGenerator {
         )
     }
 
+    /// Generate video frames. **cudarc is the supported path**; Burn / Candle /
+    /// Luminal remain frozen reference backends (no new Wan features).
     pub fn generate_video(&self, prompt: &str) -> Result<GenerateOutput> {
         match self.backend {
+            BackendKind::Cudarc => self.generate_cudarc(prompt),
             BackendKind::Candle => self.generate_candle(prompt),
-            BackendKind::Host | BackendKind::Burn | BackendKind::Luminal => {
-                // Explicit `--weights` runs the Candle Wan graph so these backends
-                // can emit PNG frames. Tests leave weights_path unset so they
-                // never load the ~17GB 1.3B checkpoint.
-                if self.weights_path.is_some() && !self.tiny {
-                    self.generate_candle(prompt)
-                } else {
-                    self.generate_reference(prompt)
-                }
-            }
+            BackendKind::Burn => self.generate_burn(prompt),
+            BackendKind::Luminal => self.generate_luminal(prompt),
+            BackendKind::Host => self.generate_reference(prompt),
         }
     }
 
@@ -180,6 +189,10 @@ impl VideoGenerator {
     }
 
     fn generate_candle(&self, prompt: &str) -> Result<GenerateOutput> {
+        Ok(self.run_candle(prompt)?.0)
+    }
+
+    fn run_candle(&self, prompt: &str) -> Result<(GenerateOutput, u128, u128)> {
         let device = resolve_candle_device(&self.device)?;
         let dtype = resolve_dtype(self.dtype.as_deref(), &self.device)?;
         let is_dmd = matches!(
@@ -230,6 +243,7 @@ impl VideoGenerator {
             gen_cfg.is_dmd = true;
             gen_cfg.flow_shift = 8.0;
         }
+        let t_load = Instant::now();
         let pipe = if self.tiny {
             WanPipeline::tiny_dtype(&device, dtype).map_err(candle_err)?
         } else {
@@ -255,41 +269,378 @@ impl VideoGenerator {
             )
             .map_err(candle_err)?
         };
+        let load_ms = t_load.elapsed().as_millis();
+        let t_gen = Instant::now();
         let frames = pipe.generate(&gen_cfg).map_err(candle_err)?;
-        Ok(GenerateOutput {
-            output_path: frames.first().cloned(),
-            frame_paths: frames,
-        })
+        let generate_ms = t_gen.elapsed().as_millis();
+        Ok((
+            GenerateOutput {
+                output_path: frames.first().cloned(),
+                frame_paths: frames,
+            },
+            load_ms,
+            generate_ms,
+        ))
     }
 
-    /// Time weight load + generate. Use on Vast CUDA, not laptop CPU.
+    fn generate_burn(&self, prompt: &str) -> Result<GenerateOutput> {
+        Ok(self.run_burn(prompt)?.0)
+    }
+
+    fn run_burn(&self, prompt: &str) -> Result<(GenerateOutput, u128, u128)> {
+        let is_dmd = matches!(
+            self.definition.sampling,
+            SamplingAlgorithm::Dmd | SamplingAlgorithm::CausalDmd
+        );
+        if self.definition.workload_types.contains(&WorkloadType::I2V) && !self.tiny {
+            return Err(FastVideoError::NotImplemented {
+                component: "I2V generate".into(),
+                detail: "Burn T2V only; use --backend candle for I2V".into(),
+            });
+        }
+        let mut gen_cfg = fastvideo_burn::GenerateConfig {
+            prompt: prompt.to_string(),
+            negative_prompt: self.sampling.negative_prompt.clone(),
+            height: self.sampling.height as usize,
+            width: self.sampling.width as usize,
+            num_frames: self.sampling.num_frames as usize,
+            num_inference_steps: self.sampling.num_inference_steps as usize,
+            guidance_scale: self.sampling.guidance_scale,
+            seed: self.sampling.seed,
+            output_dir: self.output_path.clone(),
+            tiny: self.tiny,
+            is_dmd,
+            flow_shift: f64::from(self.pipeline.flow_shift),
+            dmd_steps: self.pipeline.dmd_steps.map(|s| s.to_vec()),
+            tokenizer_path: None,
+            image_path: self.image_path.clone(),
+            guidance_scale_2: self.sampling.guidance_scale_2,
+            boundary_ratio: self.pipeline.boundary_ratio,
+        };
+        let device = fastvideo_burn::resolve_device(&self.device)
+            .map_err(|e| FastVideoError::Message(e.to_string()))?;
+        if self.tiny {
+            gen_cfg.guidance_scale = 1.0;
+            gen_cfg.is_dmd = true;
+            gen_cfg.flow_shift = 8.0;
+            let t_load = Instant::now();
+            let pipe = fastvideo_burn::WanPipeline::tiny_on(&device)
+                .map_err(|e| FastVideoError::Message(e.to_string()))?;
+            let load_ms = t_load.elapsed().as_millis();
+            let t_gen = Instant::now();
+            let frames = pipe
+                .generate(&gen_cfg)
+                .map_err(|e| FastVideoError::Message(e.to_string()))?;
+            let generate_ms = t_gen.elapsed().as_millis();
+            return Ok((
+                GenerateOutput {
+                    output_path: frames.first().cloned(),
+                    frame_paths: frames,
+                },
+                load_ms,
+                generate_ms,
+            ));
+        }
+        let root = self.resolved_weights_dir().ok_or_else(|| {
+            FastVideoError::Message(
+                "Burn generate needs --weights <diffusers-dir> or a cached HF snapshot".into(),
+            )
+        })?;
+        let tok = root.join("tokenizer").join("tokenizer.json");
+        if !tok.is_file() {
+            return Err(FastVideoError::Message(format!(
+                "missing {}/tokenizer/tokenizer.json",
+                root.display()
+            )));
+        }
+        gen_cfg.tokenizer_path = Some(tok.to_string_lossy().into_owned());
+        let t_load = Instant::now();
+        let pipe = fastvideo_burn::WanPipeline::load_on(&root, &device)
+            .map_err(|e| FastVideoError::Message(e.to_string()))?;
+        let load_ms = t_load.elapsed().as_millis();
+        let t_gen = Instant::now();
+        let frames = pipe
+            .generate(&gen_cfg)
+            .map_err(|e| FastVideoError::Message(e.to_string()))?;
+        let generate_ms = t_gen.elapsed().as_millis();
+        Ok((
+            GenerateOutput {
+                output_path: frames.first().cloned(),
+                frame_paths: frames,
+            },
+            load_ms,
+            generate_ms,
+        ))
+    }
+
+    fn generate_luminal(&self, prompt: &str) -> Result<GenerateOutput> {
+        Ok(self.run_luminal(prompt)?.0)
+    }
+
+    fn run_luminal(&self, prompt: &str) -> Result<(GenerateOutput, u128, u128)> {
+        let is_dmd = matches!(
+            self.definition.sampling,
+            SamplingAlgorithm::Dmd | SamplingAlgorithm::CausalDmd
+        );
+        if self.definition.workload_types.contains(&WorkloadType::I2V) && !self.tiny {
+            return Err(FastVideoError::NotImplemented {
+                component: "I2V generate".into(),
+                detail: "Luminal T2V only; use --backend candle for I2V".into(),
+            });
+        }
+        let mut gen_cfg = fastvideo_luminal::GenerateConfig {
+            prompt: prompt.to_string(),
+            negative_prompt: self.sampling.negative_prompt.clone(),
+            height: self.sampling.height as usize,
+            width: self.sampling.width as usize,
+            num_frames: self.sampling.num_frames as usize,
+            num_inference_steps: self.sampling.num_inference_steps as usize,
+            guidance_scale: self.sampling.guidance_scale,
+            seed: self.sampling.seed,
+            output_dir: self.output_path.clone(),
+            tiny: self.tiny,
+            is_dmd,
+            flow_shift: f64::from(self.pipeline.flow_shift),
+            dmd_steps: self.pipeline.dmd_steps.map(|s| s.to_vec()),
+            tokenizer_path: None,
+        };
+        if self.tiny {
+            gen_cfg.guidance_scale = 1.0;
+            gen_cfg.is_dmd = true;
+            gen_cfg.flow_shift = 8.0;
+            let t_gen = Instant::now();
+            let mut pipe = fastvideo_luminal::WanPipeline::tiny();
+            let frames = pipe
+                .generate(&gen_cfg)
+                .map_err(|e| FastVideoError::Message(e.to_string()))?;
+            let generate_ms = t_gen.elapsed().as_millis();
+            return Ok((
+                GenerateOutput {
+                    output_path: frames.first().cloned(),
+                    frame_paths: frames,
+                },
+                0,
+                generate_ms,
+            ));
+        }
+        let root = self.resolved_weights_dir().ok_or_else(|| {
+            FastVideoError::Message(
+                "Luminal generate needs --weights <diffusers-dir> or a cached HF snapshot".into(),
+            )
+        })?;
+        let tok = root.join("tokenizer").join("tokenizer.json");
+        if !tok.is_file() {
+            return Err(FastVideoError::Message(format!(
+                "missing {}/tokenizer/tokenizer.json",
+                root.display()
+            )));
+        }
+        gen_cfg.tokenizer_path = Some(tok.to_string_lossy().into_owned());
+        let t_load = Instant::now();
+        let mut pipe = fastvideo_luminal::WanPipeline::load(&root)
+            .map_err(|e| FastVideoError::Message(e.to_string()))?;
+        let load_ms = t_load.elapsed().as_millis();
+        let t_gen = Instant::now();
+        let frames = pipe
+            .generate(&gen_cfg)
+            .map_err(|e| FastVideoError::Message(e.to_string()))?;
+        let generate_ms = t_gen.elapsed().as_millis();
+        Ok((
+            GenerateOutput {
+                output_path: frames.first().cloned(),
+                frame_paths: frames,
+            },
+            load_ms,
+            generate_ms,
+        ))
+    }
+
+    fn generate_cudarc(&self, prompt: &str) -> Result<GenerateOutput> {
+        Ok(self.run_cudarc(prompt)?.0)
+    }
+
+    /// Returns `(output, load_ms, generate_ms)`. Load is Diffusers safetensors → tensors.
+    fn run_cudarc(&self, prompt: &str) -> Result<(GenerateOutput, u128, u128)> {
+        let is_dmd = matches!(
+            self.definition.sampling,
+            SamplingAlgorithm::Dmd | SamplingAlgorithm::CausalDmd
+        );
+        if self.num_gpus > 1 {
+            // Sequence-parallel smoke: shard SDPA query dim across logical ranks.
+            std::env::set_var("FASTVIDEO_SP_WORLD", self.num_gpus.to_string());
+            eprintln!(
+                "info: enabling sequence parallel world={} (FASTVIDEO_SP_WORLD)",
+                self.num_gpus
+            );
+        } else {
+            std::env::remove_var("FASTVIDEO_SP_WORLD");
+        }
+        // VSA: require opt-in, then use block-sparse SDPA (in-tree), not silent dense.
+        if self.model_id.to_ascii_lowercase().contains("vsa") {
+            let vsa_on = std::env::var("FASTVIDEO_VSA")
+                .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+                .unwrap_or(false);
+            if !vsa_on {
+                return Err(FastVideoError::Message(
+                    "VSA checkpoint detected: set FASTVIDEO_VSA=1 to enable block-sparse \
+                     attention (in-tree), or use a dense Wan model id."
+                        .into(),
+                ));
+            }
+            std::env::set_var("FASTVIDEO_SDPA", "sparse");
+            eprintln!("info: VSA id → block-sparse SDPA (FASTVIDEO_VSA=1)");
+        }
+        fastvideo_cudarc::resolve_device(&self.device)
+            .map_err(|e| FastVideoError::Message(e.to_string()))?;
+        eprintln!(
+            "[fastvideo] cudarc run device={} tiny={} {}x{} frames={} steps={} log={}",
+            self.device,
+            self.tiny,
+            self.sampling.width,
+            self.sampling.height,
+            self.sampling.num_frames,
+            self.sampling.num_inference_steps,
+            std::env::var("FASTVIDEO_LOG").unwrap_or_else(|_| "info".into()),
+        );
+        let mut gen_cfg = fastvideo_cudarc::GenerateConfig {
+            prompt: prompt.to_string(),
+            negative_prompt: self.sampling.negative_prompt.clone(),
+            height: self.sampling.height as usize,
+            width: self.sampling.width as usize,
+            num_frames: self.sampling.num_frames as usize,
+            num_inference_steps: self.sampling.num_inference_steps as usize,
+            guidance_scale: self.sampling.guidance_scale,
+            seed: self.sampling.seed,
+            output_dir: self.output_path.clone(),
+            tiny: self.tiny,
+            is_dmd,
+            flow_shift: f64::from(self.pipeline.flow_shift),
+            dmd_steps: self.pipeline.dmd_steps.map(|s| s.to_vec()),
+            tokenizer_path: None,
+            image_path: self.image_path.clone(),
+            control_path: self.control_path.clone(),
+            guidance_scale_2: self.sampling.guidance_scale_2,
+            boundary_ratio: self.pipeline.boundary_ratio,
+            save_video: self.save_mp4
+                || std::env::var("FASTVIDEO_SAVE_MP4")
+                    .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+                    .unwrap_or(false),
+            fps: self.sampling.fps,
+        };
+        if self.tiny {
+            gen_cfg.guidance_scale = 1.0;
+            gen_cfg.is_dmd = true;
+            gen_cfg.flow_shift = 8.0;
+            let t_gen = Instant::now();
+            let mut pipe = fastvideo_cudarc::WanPipeline::tiny();
+            let frames = pipe
+                .generate(&gen_cfg)
+                .map_err(|e| FastVideoError::Message(e.to_string()))?;
+            let generate_ms = t_gen.elapsed().as_millis();
+            return Ok((
+                GenerateOutput {
+                    output_path: frames.first().cloned(),
+                    frame_paths: frames,
+                },
+                0,
+                generate_ms,
+            ));
+        }
+        let root = self.resolved_weights_dir().ok_or_else(|| {
+            FastVideoError::Message(
+                "cudarc generate needs --weights <diffusers-dir> or a cached HF snapshot".into(),
+            )
+        })?;
+        let tok = root.join("tokenizer").join("tokenizer.json");
+        if !tok.is_file() {
+            return Err(FastVideoError::Message(format!(
+                "missing {}/tokenizer/tokenizer.json",
+                root.display()
+            )));
+        }
+        gen_cfg.tokenizer_path = Some(tok.to_string_lossy().into_owned());
+        let t_load = Instant::now();
+        let mut pipe = fastvideo_cudarc::WanPipeline::load(&root, self.definition.preset)
+            .map_err(|e| FastVideoError::Message(e.to_string()))?;
+        let load_ms = t_load.elapsed().as_millis();
+        let t_gen = Instant::now();
+        let frames = pipe
+            .generate(&gen_cfg)
+            .map_err(|e| FastVideoError::Message(e.to_string()))?;
+        let generate_ms = t_gen.elapsed().as_millis();
+        Ok((
+            GenerateOutput {
+                output_path: frames.first().cloned(),
+                frame_paths: frames,
+            },
+            load_ms,
+            generate_ms,
+        ))
+    }
+
+    /// Split weight materialization from sampling. Use on Vast CUDA, not laptop CPU.
     pub fn bench_video(&self, prompt: &str) -> Result<(GenerateOutput, BenchStats)> {
-        let t0 = Instant::now();
-        let out = self.generate_video(prompt)?;
-        let total_ms = t0.elapsed().as_millis();
+        let (out, load_ms, generate_ms) = match self.backend {
+            BackendKind::Cudarc => self.run_cudarc(prompt)?,
+            BackendKind::Candle => self.run_candle(prompt)?,
+            BackendKind::Burn => self.run_burn(prompt)?,
+            BackendKind::Luminal => self.run_luminal(prompt)?,
+            BackendKind::Host => {
+                let t0 = Instant::now();
+                let out = self.generate_reference(prompt)?;
+                (out, 0, t0.elapsed().as_millis())
+            }
+        };
         Ok((
             out.clone(),
             BenchStats {
                 model: self.model_id.clone(),
+                backend: self.backend.as_str().to_string(),
                 device: self.device.clone(),
                 dtype: self.dtype.clone().unwrap_or_else(|| "default".into()),
                 height: self.sampling.height,
                 width: self.sampling.width,
                 frames: self.sampling.num_frames,
                 steps: self.sampling.num_inference_steps,
-                load_and_generate_ms: total_ms,
+                load_ms,
+                generate_ms,
+                load_and_generate_ms: load_ms.saturating_add(generate_ms),
                 frames_written: out.frame_paths.len() as u32,
             },
         ))
     }
 
-    /// CLIP ViT-H encode only (`image_encoder/`). Does not load DiT/UMT5.
+    /// CLIP ViT-H encode only (`image_encoder/`). Prefers cudarc when backend is cudarc.
     pub fn bench_clip(&self, image: &str) -> Result<ClipBenchStats> {
         let root = self.resolved_clip_dir().ok_or_else(|| {
             FastVideoError::Message(
                 "CLIP bench needs image_encoder/ (I2V Diffusers snapshot or --weights)".into(),
             )
         })?;
+        if self.backend == BackendKind::Cudarc {
+            fastvideo_cudarc::resolve_device(&self.device)
+                .map_err(|e| FastVideoError::Message(e.to_string()))?;
+            let t0 = Instant::now();
+            let map = fastvideo_cudarc::wan::weights::WeightMap::from_dir(&root.join("image_encoder"))
+                .map_err(|e| FastVideoError::Message(e.to_string()))?;
+            let clip = fastvideo_cudarc::wan::ClipVision::load(
+                fastvideo_cudarc::wan::ClipVisionConfig::vit_h_14(),
+                &map,
+            )
+            .map_err(|e| FastVideoError::Message(e.to_string()))?;
+            let load_ms = t0.elapsed().as_millis();
+            let t1 = Instant::now();
+            let tokens = clip
+                .encode_image_file(image)
+                .map_err(|e| FastVideoError::Message(e.to_string()))?;
+            let encode_ms = t1.elapsed().as_millis();
+            return Ok(ClipBenchStats {
+                hidden: tokens.shape.clone(),
+                load_ms,
+                encode_ms,
+                path: root.display().to_string(),
+            });
+        }
         let device = resolve_candle_device(&self.device)?;
         let dtype = resolve_dtype(self.dtype.as_deref(), &self.device)?;
         let t0 = Instant::now();
@@ -443,12 +794,17 @@ pub struct GenerateOutput {
 #[derive(Debug, Clone)]
 pub struct BenchStats {
     pub model: String,
+    pub backend: String,
     pub device: String,
     pub dtype: String,
     pub height: u32,
     pub width: u32,
     pub frames: u32,
     pub steps: u32,
+    /// Diffusers safetensors → in-memory tensors (not Hub network pull).
+    pub load_ms: u128,
+    /// Sampling + decode after weights are resident.
+    pub generate_ms: u128,
     pub load_and_generate_ms: u128,
     pub frames_written: u32,
 }

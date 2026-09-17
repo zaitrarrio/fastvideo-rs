@@ -363,6 +363,46 @@ impl FlowUniPCMultistepScheduler {
         Ok(prev)
     }
 
+    /// Order-1 UniPC predictor coeffs for device axpy (no host sample buffers).
+    ///
+    /// `converted = sample - sigma_cur * model_output`
+    /// `prev = scale_sample * sample + scale_converted * converted`
+    ///
+    /// Advances `step_index` like a full order-1 step (no corrector / higher-order history).
+    pub fn order1_device_coeffs(&mut self) -> Result<Order1DeviceCoeffs, String> {
+        if self.sigmas.len() < 2 {
+            return Err("call set_timesteps before step".into());
+        }
+        if self.step_index.is_none() {
+            self.step_index = Some(0);
+        }
+        let idx = self.step_index.unwrap();
+        if idx + 1 >= self.sigmas.len() {
+            return Err("step past end of schedule".into());
+        }
+        if !self.predict_x0 {
+            return Err("order1_device_coeffs requires predict_x0".into());
+        }
+        let sigma_s0 = self.sigmas[idx];
+        let sigma_t = self.sigmas[idx + 1];
+        let (alpha_t, _) = Self::sigma_to_alpha_sigma(sigma_t);
+        let (alpha_s0, _) = Self::sigma_to_alpha_sigma(sigma_s0);
+        let lambda_t = (alpha_t.max(EPS)).ln() - (sigma_t.max(EPS)).ln();
+        let lambda_s0 = (alpha_s0.max(EPS)).ln() - (sigma_s0.max(EPS)).ln();
+        let h = lambda_t - lambda_s0;
+        let hh = -h;
+        let h_phi_1 = hh.exp_m1();
+        let scale_sample = (sigma_t / sigma_s0) as f32;
+        let scale_converted = (-(alpha_t * h_phi_1)) as f32;
+        self.step_index = Some(idx + 1);
+        self.this_order = 1;
+        Ok(Order1DeviceCoeffs {
+            sigma_cur: sigma_s0 as f32,
+            scale_sample,
+            scale_converted,
+        })
+    }
+
     /// Run the full UniPC loop with a velocity callback `f(sample, sigma_t, t)`.
     pub fn denoise(
         &mut self,
@@ -377,6 +417,14 @@ impl FlowUniPCMultistepScheduler {
         }
         Ok(sample)
     }
+}
+
+/// Scalars for device-side order-1 UniPC (see [`FlowUniPCMultistepScheduler::order1_device_coeffs`]).
+#[derive(Debug, Clone, Copy)]
+pub struct Order1DeviceCoeffs {
+    pub sigma_cur: f32,
+    pub scale_sample: f32,
+    pub scale_converted: f32,
 }
 
 fn mix_history(d1s: &[Vec<f32>], rhos: &[f64]) -> Vec<f32> {
@@ -453,6 +501,35 @@ mod tests {
         assert!((s49 - 0.057673800736665726).abs() < 1e-6, "sigma[49]={s49}");
         assert_eq!(sched.timesteps_i64[0], 999);
         assert_eq!(sched.timesteps_i64.len(), 50);
+    }
+
+    #[test]
+    fn order1_device_coeffs_match_host_order1_step() {
+        let mut device = FlowUniPCMultistepScheduler::new(1000, 3.0);
+        device.solver_order = 1;
+        device.set_timesteps(4);
+
+        let sample = vec![1.0f32, -0.5, 0.25, 2.0];
+        let velocity = vec![0.1f32, -0.2, 0.3, -0.4];
+        let coeffs = device.order1_device_coeffs().unwrap();
+        let converted: Vec<f32> = sample
+            .iter()
+            .zip(&velocity)
+            .map(|(x, v)| x - coeffs.sigma_cur * v)
+            .collect();
+        let prev_dev: Vec<f32> = sample
+            .iter()
+            .zip(&converted)
+            .map(|(x, c)| coeffs.scale_sample * x + coeffs.scale_converted * c)
+            .collect();
+
+        let mut host = FlowUniPCMultistepScheduler::new(1000, 3.0);
+        host.solver_order = 1;
+        host.set_timesteps(4);
+        let prev_host = host.step(&velocity, &sample).unwrap();
+        for (a, b) in prev_dev.iter().zip(&prev_host) {
+            assert!((a - b).abs() < 1e-5, "{a} vs {b}");
+        }
     }
 
     #[test]

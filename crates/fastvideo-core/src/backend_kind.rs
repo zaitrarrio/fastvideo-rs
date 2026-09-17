@@ -7,6 +7,7 @@ pub enum BackendKind {
     Burn,
     Candle,
     Luminal,
+    Cudarc,
 }
 
 impl BackendKind {
@@ -16,6 +17,7 @@ impl BackendKind {
             Self::Burn => "burn",
             Self::Candle => "candle",
             Self::Luminal => "luminal",
+            Self::Cudarc => "cudarc",
         }
     }
 }
@@ -35,8 +37,9 @@ impl FromStr for BackendKind {
             "burn" => Ok(Self::Burn),
             "candle" => Ok(Self::Candle),
             "luminal" | "luminar" => Ok(Self::Luminal),
+            "cudarc" | "cdarc" | "cuda-native" => Ok(Self::Cudarc),
             other => Err(format!(
-                "unknown backend `{other}` (expected host, burn, candle, or luminal)"
+                "unknown backend `{other}` (expected host, burn, candle, luminal, or cudarc)"
             )),
         }
     }
