@@ -261,7 +261,8 @@ impl Umt5Encoder {
             return Err(TensorError::Message("input_ids length mismatch".into()));
         }
         let indices: Vec<usize> = input_ids.iter().map(|&i| i as usize).collect();
-        let mut hidden = self.embed.index_select_rows(&indices)?;
+        // The [vocab, d_model] table stays on the host (see `embedding_rows`).
+        let mut hidden = self.embed.embedding_rows(&indices)?;
         hidden = hidden.reshape(vec![batch, seq, self.cfg.d_model])?;
         let buckets = relative_position_bucket(
             seq,

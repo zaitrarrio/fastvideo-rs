@@ -37,7 +37,7 @@ pub enum GemmMath {
 
 #[cfg(feature = "cuda")]
 impl GemmMath {
-    fn compute_type(self) -> cudarc::cublas::sys::cublasComputeType_t {
+    pub fn compute_type(self) -> cudarc::cublas::sys::cublasComputeType_t {
         use cudarc::cublas::sys::cublasComputeType_t as C;
         match self {
             GemmMath::F32 => C::CUBLAS_COMPUTE_32F,
@@ -389,6 +389,103 @@ pub fn matmul_linear_wt_device(
     let (xp, _rx) = x.device_ptr(&dev.stream);
     let (cp, _rc) = out.device_ptr_mut(&dev.stream);
     unsafe { gemm_raw(&dev, true, n, m, k, 1.0, wp, k, 0, xp, k, 0, cp, n, 0, 1) }
+}
+
+/// [`matmul_linear_wt_device`] with an explicit [`GemmMath`] instead of the
+/// context's (math-mode probes).
+#[cfg(feature = "cuda")]
+pub fn matmul_linear_wt_math(
+    x: &cudarc::driver::CudaSlice<f32>,
+    w: &cudarc::driver::CudaSlice<f32>,
+    out: &mut cudarc::driver::CudaSlice<f32>,
+    m: usize,
+    k: usize,
+    n: usize,
+    math: GemmMath,
+) -> Result<()> {
+    use cudarc::cublas::sys;
+    use cudarc::driver::{DevicePtr, DevicePtrMut};
+    let dev = global_device().ok_or_else(no_device)?;
+    size_check("matmul_linear_wt_math", x.len() == m * k && w.len() == n * k && out.len() == m * n, || {
+        format!("x={} w={} out={} m={m} k={k} n={n}", x.len(), w.len(), out.len())
+    })?;
+    let (wp, _rw) = w.device_ptr(&dev.stream);
+    let (xp, _rx) = x.device_ptr(&dev.stream);
+    let (cp, _rc) = out.device_ptr_mut(&dev.stream);
+    let (alpha, beta) = (1.0f32, 0.0f32);
+    let r32 = sys::cudaDataType_t::CUDA_R_32F;
+    unsafe {
+        cudarc::cublas::result::gemm_ex(
+            *dev.cublas.handle(),
+            sys::cublasOperation_t::CUBLAS_OP_T,
+            sys::cublasOperation_t::CUBLAS_OP_N,
+            n as i32,
+            m as i32,
+            k as i32,
+            (&alpha as *const f32).cast(),
+            wp as *const _,
+            r32,
+            k as i32,
+            xp as *const _,
+            r32,
+            k as i32,
+            (&beta as *const f32).cast(),
+            cp as *mut _,
+            r32,
+            n as i32,
+            math.compute_type(),
+            sys::cublasGemmAlgo_t::CUBLAS_GEMM_DEFAULT_TENSOR_OP,
+        )?;
+    }
+    Ok(())
+}
+
+/// `X [m,k] @ W^T` with bfloat16 buffers throughout (the PyTorch bf16 linear:
+/// 16BF A/B/C, `CUBLAS_COMPUTE_32F` scaling).
+#[cfg(feature = "cuda")]
+pub fn matmul_linear_wt_bf16(
+    x: &cudarc::driver::CudaSlice<half::bf16>,
+    w: &cudarc::driver::CudaSlice<half::bf16>,
+    out: &mut cudarc::driver::CudaSlice<half::bf16>,
+    m: usize,
+    k: usize,
+    n: usize,
+) -> Result<()> {
+    use cudarc::cublas::sys;
+    use cudarc::driver::{DevicePtr, DevicePtrMut};
+    let dev = global_device().ok_or_else(no_device)?;
+    size_check("matmul_linear_wt_bf16", x.len() == m * k && w.len() == n * k && out.len() == m * n, || {
+        format!("x={} w={} out={} m={m} k={k} n={n}", x.len(), w.len(), out.len())
+    })?;
+    let (wp, _rw) = w.device_ptr(&dev.stream);
+    let (xp, _rx) = x.device_ptr(&dev.stream);
+    let (cp, _rc) = out.device_ptr_mut(&dev.stream);
+    let (alpha, beta) = (1.0f32, 0.0f32);
+    let bf = sys::cudaDataType_t::CUDA_R_16BF;
+    unsafe {
+        cudarc::cublas::result::gemm_ex(
+            *dev.cublas.handle(),
+            sys::cublasOperation_t::CUBLAS_OP_T,
+            sys::cublasOperation_t::CUBLAS_OP_N,
+            n as i32,
+            m as i32,
+            k as i32,
+            (&alpha as *const f32).cast(),
+            wp as *const _,
+            bf,
+            k as i32,
+            xp as *const _,
+            bf,
+            k as i32,
+            (&beta as *const f32).cast(),
+            cp as *mut _,
+            bf,
+            n as i32,
+            sys::cublasComputeType_t::CUBLAS_COMPUTE_32F,
+            sys::cublasGemmAlgo_t::CUBLAS_GEMM_DEFAULT_TENSOR_OP,
+        )?;
+    }
+    Ok(())
 }
 
 /// Strided-batched `X [batch,m,k] @ W^T * scale` where each `W` tile is row-major

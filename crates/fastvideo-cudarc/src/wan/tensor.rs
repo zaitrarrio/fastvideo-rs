@@ -919,6 +919,29 @@ impl CudaTensor {
         Ok(Self::host_only(host::upsample_nearest(&self.host_cow()?, n * c, h, w, fy, fx), out_shape))
     }
 
+    /// Embedding lookup for a table kept in host memory: gather the rows on
+    /// the host and upload only them. This is input preparation (a prompt's
+    /// few hundred rows out of a 250k-row UMT5 vocabulary), so a 4 GB table
+    /// never has to occupy device memory. A device table uses the kernel.
+    pub fn embedding_rows(&self, indices: &[usize]) -> Result<CudaTensor> {
+        #[cfg(feature = "cuda")]
+        if self.device.is_some() {
+            return self.index_select_rows(indices);
+        }
+        if self.rank() != 2 {
+            return Err(msg("embedding_rows expects [V, D]"));
+        }
+        let (v, d) = (self.shape[0], self.shape[1]);
+        let mut data = Vec::with_capacity(indices.len() * d);
+        for &i in indices {
+            if i >= v {
+                return Err(msg(format!("index {i} out of range {v}")));
+            }
+            data.extend_from_slice(&self.data[i * d..(i + 1) * d]);
+        }
+        Self::host_only(data, vec![indices.len(), d]).to_device()
+    }
+
     /// Rows of a `[V, D]` table.
     pub fn index_select_rows(&self, indices: &[usize]) -> Result<CudaTensor> {
         if self.rank() != 2 {

@@ -19,6 +19,8 @@ mod embed;
 mod gpu;
 #[cfg(feature = "cuda")]
 mod kernels;
+#[cfg(feature = "cuda")]
+mod mathprobe;
 mod metrics;
 mod mode;
 mod model;
@@ -124,6 +126,10 @@ enum Cmd {
         #[arg(long, default_value_t = 17)]
         seed: u64,
     },
+    /// Time the DiT linears under each cuBLAS math option and report which
+    /// ones this GPU + cuBLAS build actually honors.
+    #[cfg(feature = "cuda")]
+    GemmProbe,
     /// Random-weight UMT5/DiT/VAE/samplers (`--dump` on CPU, `--reference` on GPU).
     Model {
         #[arg(long, default_value = "cuda")]
@@ -231,6 +237,8 @@ fn stage_name(cmd: &Cmd) -> &'static str {
         Cmd::Device => "device",
         #[cfg(feature = "cuda")]
         Cmd::Kernels { .. } => "kernels",
+        #[cfg(feature = "cuda")]
+        Cmd::GemmProbe => "gemm-probe",
         Cmd::Model { .. } => "model",
         Cmd::Parity { .. } => "parity",
         Cmd::Embed { .. } => "embed",
@@ -268,6 +276,8 @@ fn run(cli: &Cli, report: &mut Report) -> StageResult<()> {
         }
         #[cfg(feature = "cuda")]
         Cmd::Kernels { seed } => kernels::run(report, mode::limits(cli.mode), *seed),
+        #[cfg(feature = "cuda")]
+        Cmd::GemmProbe => mathprobe::run(report),
         Cmd::Model { device, seed, refs } => {
             let mut io = reference::RefIo::new(refs.dump.as_deref(), refs.reference.as_deref(), "model")?
                 .with_videos(cli.out.join("videos").join(report.stage()));

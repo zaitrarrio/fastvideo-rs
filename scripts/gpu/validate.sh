@@ -39,15 +39,17 @@ tier_query() {
   local base="num_gpus=1 compute_cap>=800 cuda_vers>=12.4 reliability>0.97 rentable=true verified=true direct_port_count>=1 inet_down>=200"
   case "$1" in
     kernels) echo "$base gpu_ram>=8 disk_space>=40 cpu_ram>=16" ;;
+    # cuBLAS math-mode probe: DiT linears at 8s-clip size (~2 GB of buffers).
+    mathprobe) echo "$base gpu_ram>=12 disk_space>=40 cpu_ram>=16" ;;
     parity) echo "$base gpu_ram>=16 disk_space>=60 cpu_ram>=32 inet_down>=500" ;;
     # UMT5-XXL loads ~60GB of host RAM (raw bytes + F32 views) before upload.
     clip) echo "$base gpu_ram>=24 disk_space>=100 cpu_ram>=80 inet_down>=500" ;;
-    *) die "unknown tier '$1' (kernels|parity|clip)" ;;
+    *) die "unknown tier '$1' (mathprobe|kernels|parity|clip)" ;;
   esac
 }
-tier_max_dph() { case "$1" in kernels) echo 0.25 ;; parity) echo 0.40 ;; clip) echo 0.60 ;; esac; }
-tier_max_minutes() { case "$1" in kernels) echo 40 ;; parity) echo 75 ;; clip) echo 180 ;; esac; }
-tier_disk() { case "$1" in kernels) echo 40 ;; parity) echo 60 ;; clip) echo 100 ;; esac; }
+tier_max_dph() { case "$1" in mathprobe) echo 0.40 ;; kernels) echo 0.25 ;; parity) echo 0.40 ;; clip) echo 0.60 ;; esac; }
+tier_max_minutes() { case "$1" in mathprobe) echo 30 ;; kernels) echo 40 ;; parity) echo 75 ;; clip) echo 180 ;; esac; }
+tier_disk() { case "$1" in mathprobe) echo 40 ;; kernels) echo 40 ;; parity) echo 60 ;; clip) echo 100 ;; esac; }
 
 usage() { sed -n '2,12p' "$0" | sed 's/^# \{0,1\}//'; exit 2; }
 
@@ -430,6 +432,15 @@ cmd_run() {
   esac
 
   local refs="$OUTR/refs"
+  if [[ "$tier" == mathprobe ]]; then
+    # Which cuBLAS math runs here: the image's cuBLAS, then a newer one.
+    gpucheck_stage device 300 device
+    gpucheck_stage gemm-probe-image 900 gemm-probe
+    remote_run cublas-new 600 cublas "${FV_PROBE_CUBLAS_VERSION:-12.9.1.4}"
+    gpucheck_stage gemm-probe-new 900 gemm-probe
+    log "math probe done"
+    return 0
+  fi
   # T1: kernels vs plain-Rust math; random-weight model, GPU vs cudarc CPU path.
   gpucheck_stage nvrtc 300 nvrtc
   gpucheck_stage device 300 device

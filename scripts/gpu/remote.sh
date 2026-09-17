@@ -26,10 +26,17 @@ FV_LIBDIR="$WORK/fv-libs"
 FV_CUDNN_VERSION="${FV_CUDNN_VERSION:-9.26.0.51}"
 FV_CUDNN_DIR="$WORK/fv-cudnn"
 FV_CUDNN_REQUIRED_SYMBOL="cudnnBackendPopulateCudaGraph"
+# `remote.sh cublas <version>` installs a different cuBLAS here; once present
+# it replaces the image's for every later stage on this box.
+FV_CUBLAS_DIR="$WORK/fv-cublas"
 fv_find_lib() {
   local name="$1" hit=""
   if [[ "$name" == cudnn && -e "$FV_CUDNN_DIR/nvidia/cudnn/lib/libcudnn.so.9" ]]; then
     readlink -f "$FV_CUDNN_DIR/nvidia/cudnn/lib/libcudnn.so.9"
+    return 0
+  fi
+  if [[ "$name" == cublas* && -e "$FV_CUBLAS_DIR/nvidia/cublas/lib/lib$name.so.12" ]]; then
+    readlink -f "$FV_CUBLAS_DIR/nvidia/cublas/lib/lib$name.so.12"
     return 0
   fi
   hit="$(ldconfig -p 2>/dev/null | awk -v n="lib$name.so" '$1 == n || index($1, n".") == 1 {print $NF}' | head -1)"
@@ -129,6 +136,26 @@ cmd_bootstrap() {
   fv_cudnn_ok || die "cuDNN at $(readlink "$FV_LIBDIR/libcudnn.so") still lacks $FV_CUDNN_REQUIRED_SYMBOL"
 }
 
+# cublas <version>: install nvidia-cublas-cu12==<version> beside the image's
+# and switch the library shim to it.
+cmd_cublas() {
+  local version="${1:?usage: remote.sh cublas <version>}"
+  log "installing nvidia-cublas-cu12==$version → $FV_CUBLAS_DIR"
+  rm -rf "$FV_CUBLAS_DIR"
+  python3 -m pip install -q --no-deps --target "$FV_CUBLAS_DIR" "nvidia-cublas-cu12==$version" \
+    >"$LOGS/pip-cublas.log" 2>&1 || { tail -20 "$LOGS/pip-cublas.log"; die "cuBLAS install failed"; }
+  fv_setup_libs
+  python3 - "$FV_LIBDIR/libcublas.so" <<'PY' || die "installed cuBLAS does not load"
+import ctypes, sys
+lib = ctypes.CDLL(sys.argv[1])
+v = ctypes.c_int()
+lib.cublasGetProperty(0, ctypes.byref(v)); major = v.value
+lib.cublasGetProperty(1, ctypes.byref(v)); minor = v.value
+lib.cublasGetProperty(2, ctypes.byref(v)); patch = v.value
+print(f"cublas {major}.{minor}.{patch} at {sys.argv[1]}")
+PY
+}
+
 # fetch <repo> <dest> <glob>...: background download of only the listed
 # components (e.g. "transformer/*" "vae/*").
 cmd_fetch() {
@@ -215,8 +242,9 @@ case "$sub" in
   env) cmd_env "$@" ;;
   libs) printf '%s\n' "$LD_LIBRARY_PATH"; ls -l "$FV_LIBDIR" ;;
   bootstrap) cmd_bootstrap ;;
+  cublas) cmd_cublas "$@" ;;
   fetch) cmd_fetch "$@" ;;
   wait-weights) cmd_wait_weights "$@" ;;
   stage) cmd_stage "$@" ;;
-  *) die "usage: remote.sh env|bootstrap|fetch|wait-weights|stage" ;;
+  *) die "usage: remote.sh env|bootstrap|cublas|fetch|wait-weights|stage" ;;
 esac
