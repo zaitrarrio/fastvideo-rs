@@ -240,8 +240,46 @@ than us. And the like-for-like dense number does not exist on their side:
 `TORCH_SDPA` cannot load this checkpoint at all, since FastWan ships VSA gate
 weights (`to_gate_compress`) their dense model class does not define.
 
+## 2026-09-18, 00:34 — Video Sparse Attention ported: 1.81x on an 8s clip
+
+The head-to-head put upstream 1.96x ahead, and the gap was the optimization
+we had not ported. So we ported it, reading their implementation rather than
+inferring it: `(4,4,4)` tiles, a coarse stage that attends over tile means, a
+top-k that picks which tiles the fine stage sees at full resolution, and the
+checkpoint's gate scaling the coarse term.
+
+| RTX 3090 Ti, 8s clip | Dense | VSA |
+| --- | ---: | ---: |
+| Denoise | 82.7 s | **45.6 s** |
+| Per step | 27.6 s | 15.1 s |
+
+Speed scales exactly as the algorithm predicts — VSA *loses* where its fixed
+overhead outweighs the sparsity, and wins as the quadratic term takes over:
+
+| Tokens | Dense | VSA |
+| --- | ---: | ---: |
+| 1,456 | 0.115 s | 0.227 s (2x slower) |
+| 4,368 | 0.415 s | 0.412 s (parity) |
+| 13,104 | 2.309 s | 1.931 s (16% faster) |
+| 48,048 | 27.6 s | 15.1 s (**1.81x faster**) |
+
+Two decisions worth keeping. The fine stage **gathers** selected K/V and runs
+batched GEMMs instead of using a fused kernel: it reuses the tensor-core path
+and still moves an order of magnitude less than dense attention's score matrix.
+And the coarse stage is **pinned to F32** — tile selection is discrete, so
+letting bf16 rounding flip a near-tie changes which tile is attended and moved
+the largest test grid from rel_l2 0.003 to 0.043.
+
+The load-bearing test: with every tile selected and a zero gate, the host
+reference is exactly dense attention, so tiling, padding and the online softmax
+are verified against an independent oracle before any kernel runs.
+
+Quality: composition survives under the same seed, but VSA is a different sample
+with more saturated colour, and that has not been checked against upstream's own
+VSA output.
+
 ## Totals
 
-- **34 validation runs**, **$1.333** of GPU time end to end.
+- **39 validation runs**, **$1.547** of GPU time end to end.
 - A full T3 tier — kernels, models, parity, text encoding, two 8s clips and a precision comparison — costs **$0.066** and 19 minutes.
 - Cached CPU references save 648 s of billed CPU work per run.

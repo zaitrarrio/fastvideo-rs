@@ -2,6 +2,18 @@
 
 Project code: FVID
 
+### FVID · 2026-09-18 · FVID-2026-09-18-vsa-port
+- Trigger: the head-to-head (FVID-2026-09-17-upstream-head-to-head) put upstream 1.96x ahead on the same GPU, and the gap was attributable to Video Sparse Attention, which we had not ported
+- Options: leave dense; write FlashAttention-2 properly; port VSA with a fused block-sparse kernel; port VSA reusing cuBLAS via a gather
+- Decision: **ported VSA**, reading upstream's implementation rather than inferring it. `(4,4,4)` tiles of 64 slots; coarse stage mean-pools Q/K/V per tile and attends over tiles; top-k of those scores picks the tiles the fine stage attends at full resolution; `out = coarse * to_gate_compress + sparse`. The fine stage **gathers** each query tile's selected K/V into a dense bf16 buffer and runs batched GEMMs, rather than a fused kernel: the gather moves ~53 GB/layer against dense attention's ~440 GB of score traffic, and it reuses the tensor-core path that is already fast here.
+- **Coarse stage is pinned to F32** regardless of `GemmMath`. Tile selection is discrete: in fast mode bf16 rounding flipped a near-tie, a different tile was attended, and the largest test grid moved rel_l2 0.003 -> 0.043. The coarse stage is 819x819 and costs almost nothing, so selection no longer depends on the math mode.
+- Result on an RTX 3090 Ti, 8s clip (448x832, 129 frames, 3 DMD steps): **denoise 82.7 s -> 45.6 s, 1.81x**, 27.6 -> 15.1 s/step, reproducible across both prompts to 15 ms, every quality gate passing. Scaling matches the algorithm: 2x SLOWER at 1,456 tokens (fixed overhead dominates), parity at 4,368, 16% faster at 13,104, 1.81x at 48,048.
+- Quality: composition and subject are preserved under the same seed, but VSA is a different sample with visibly more saturated colour (`clipped_fraction` 0.0218 vs 0.008 dense). Not verified against upstream's own VSA output.
+- Reversibility: cheap (opt-in; `FASTVIDEO_VSA=1` / gpucheck `--vsa`, and it needs a checkpoint carrying `to_gate_compress`)
+- Executed by: Executor
+- Verification: host reference equals dense attention exactly when every tile is selected (the load-bearing test); device kernels match that reference across four grids and two group sizes (run `20260917T231353Z-kernels`); end-to-end run `20260918T001353Z-clip` pass, 24 stages, $0.089. Four integration bugs found by live runs, none in the kernels: VSA leaking into dense-reference stages, `--vsa` parsed but never acted on, the legacy host-only sparse branch, and a missing head merge before `to_out`.
+- Open: our generation is now ~71 s (45.6 denoise + 21.9 VAE + 3.8 write) against upstream's 55.3 s. VAE decode is the largest remaining single cost. A fused block-sparse kernel would remove the gather.
+
 ### FVID · 2026-09-17 · FVID-2026-09-17-upstream-head-to-head
 - Trigger: user asked how our numbers compare with upstream FastVideo on the same hardware
 - Options: compare against published figures (H100, different GPU); rent two boxes; run both implementations on ONE rented box
