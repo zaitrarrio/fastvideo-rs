@@ -34,6 +34,20 @@ The harness runs on macOS bash 3.2, where `"${arr[@]}"` on an empty array under
 `scripts/gpu/lint.sh` checks this (and parses every script); `validate.sh local`
 runs it.
 
+## Control panel
+
+`python3 scripts/ui/server.py` serves a local page (loopback only, default port
+8733) to search offers, rent a machine, deploy, generate from a prompt and play
+the result. It shells out to `validate.sh run gen`, so the Vast key stays in
+`.env` and never reaches the browser. The same path from the shell:
+
+```
+FV_PROMPT="a golden retriever on a beach at sunset" scripts/gpu/validate.sh run gen
+```
+
+`gen` is the lean tier: deploy, encode one prompt, generate one clip — no
+kernel, model or parity validation.
+
 `FASTVIDEO_CONV3D` picks the 3-D conv backend: `auto` (default, times each
 candidate once per shape and keeps the winner), `cudnn`, `unfold` or
 `cudnn-bf16`. bf16 only competes in `auto` under fast mode, since it changes

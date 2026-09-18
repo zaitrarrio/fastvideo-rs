@@ -7,7 +7,8 @@
 #   validate.sh run <tier> [opts]     T1-T3      rent → stages → pull artifacts → destroy
 #   validate.sh reap                             destroy every fvgpu-* instance
 #
-# tiers: kernels (T1) | parity (T2) | clip (T3) | compare (T4, + upstream FastVideo)\n#        each tier includes the ones before it.
+# tiers: kernels (T1) | parity (T2) | clip (T3) | compare (T4, + upstream FastVideo)
+#        gen (UI: deploy, encode one prompt, generate one clip)\n#        each tier includes the ones before it.
 set -euo pipefail
 # shellcheck source=scripts/gpu/lib.sh
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
@@ -48,12 +49,14 @@ tier_query() {
     # Same box runs our clip stages and upstream FastVideo: + torch wheels and
     # upstream's own copy of the weights in the HF cache.
     compare) echo "$base gpu_ram>=24 disk_space>=180 cpu_ram>=80 inet_down>=500" ;;
-    *) die "unknown tier '$1' (mathprobe|kernels|parity|clip|compare)" ;;
+    # `gen` is the UI's path: deploy, encode one prompt, generate one clip.
+    gen) echo "$base gpu_ram>=24 disk_space>=100 cpu_ram>=80 inet_down>=500" ;;
+    *) die "unknown tier '$1' (mathprobe|kernels|parity|clip|compare|gen)" ;;
   esac
 }
-tier_max_dph() { case "$1" in mathprobe) echo 0.40 ;; kernels) echo 0.25 ;; parity) echo 0.40 ;; clip) echo 0.60 ;; compare) echo 0.60 ;; esac; }
-tier_max_minutes() { case "$1" in mathprobe) echo 30 ;; kernels) echo 40 ;; parity) echo 75 ;; clip) echo 180 ;; compare) echo 240 ;; esac; }
-tier_disk() { case "$1" in mathprobe) echo 40 ;; kernels) echo 40 ;; parity) echo 60 ;; clip) echo 100 ;; compare) echo 180 ;; esac; }
+tier_max_dph() { case "$1" in mathprobe) echo 0.40 ;; kernels) echo 0.25 ;; parity) echo 0.40 ;; clip) echo 0.60 ;; compare) echo 0.60 ;; gen) echo 0.80 ;; esac; }
+tier_max_minutes() { case "$1" in mathprobe) echo 30 ;; kernels) echo 40 ;; parity) echo 75 ;; clip) echo 180 ;; compare) echo 240 ;; gen) echo 180 ;; esac; }
+tier_disk() { case "$1" in mathprobe) echo 40 ;; kernels) echo 40 ;; parity) echo 60 ;; clip) echo 100 ;; compare) echo 180 ;; gen) echo 100 ;; esac; }
 
 usage() { sed -n '2,12p' "$0" | sed 's/^# \{0,1\}//'; exit 2; }
 
@@ -477,7 +480,7 @@ cmd_run() {
   # Downloads run in the background during the weight-free stages.
   case "$tier" in
     parity) remote_run fetch-base 120 fetch "$BASE_REPO" "$BASE_W" "transformer/*" "vae/*" ;;
-    clip | compare)
+    clip | compare | gen)
       remote_run fetch-base 120 fetch "$BASE_REPO" "$BASE_W" "transformer/*" "vae/*" "text_encoder/*" "tokenizer/*"
       remote_run fetch-fast 120 fetch "$FAST_REPO" "$FAST_W" "transformer/*" "vae/*"
       ;;
@@ -493,6 +496,33 @@ cmd_run() {
     log "math probe done"
     return 0
   fi
+  # `gen` is the UI path: no validation, just enough to turn a prompt into a
+  # clip. FV_PROMPT carries the text; the negative prompt comes from the shared
+  # prompts file so generations match the benchmark configuration.
+  if [[ "$tier" == gen ]]; then
+    local prompt="${FV_PROMPT:-}"
+    [[ -n "$prompt" ]] || die "gen needs FV_PROMPT"
+    local name="${FV_CLIP_NAME:-ui-$(date -u +%Y%m%d%H%M%S)}"
+    local negative; negative="$(jq -r '.negative' "$FV_ROOT/scripts/gpu/prompts.json")"
+    jq -n --arg p "$prompt" --arg n "$negative" \
+      '{negative: $n, prompts: [{name: "ui", prompt: $p}]}' >"$RUN_DIR/prompt.json"
+    fv_rsync_to "$HOST" "$PORT" "$RUN_DIR/prompt.json" "$OUTR/prompt.json" >/dev/null
+    local embeds="$OUTR/embeds"
+    remote_run wait-text 1800 wait-weights "$BASE_W" 1800 text_encoder
+    gpucheck_stage embed 1800 --mode exact embed --weights "$BASE_W" --prompts "$OUTR/prompt.json" \
+      --embeds "$embeds" --device cuda
+    remote_run wait-fast 1800 wait-weights "$FAST_W" 1800 transformer vae
+    local gen=(--height "${FV_HEIGHT:-448}" --width "${FV_WIDTH:-832}" --frames "${FV_FRAMES:-129}"
+               --steps "${FV_STEPS:-3}" --guidance 1.0 --flow-shift 8.0 --dmd --fps 16)
+    if [[ "${FV_VSA:-1}" == 1 ]]; then gen+=(--vsa); fi
+    if [[ -n "${FV_VAE_CHUNK:-2}" ]]; then gen+=(--vae-chunk "${FV_VAE_CHUNK:-2}"); fi
+    gpucheck_stage "clip-$name" $(( budget_min * 60 * 13 / 10 + 600 )) --mode fast clip \
+      --weights "$FAST_W" --embeds "$embeds/ui.safetensors" --device cuda "${gen[@]}" \
+      --name "$name" --budget-min "$budget_min"
+    log "GEN done: $name"
+    return 0
+  fi
+
   # `compare` benchmarks two implementations; it does not re-validate them, so
   # it skips T1/T2 and goes straight to the clip stages it times. That also
   # keeps it off exact-mode parity, whose peak does not fit a 24GB card.
