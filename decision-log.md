@@ -2,6 +2,18 @@
 
 Project code: FVID
 
+### FVID · 2026-09-18 · FVID-2026-09-18-cuda-graphs-not-worth-it
+- Trigger: we sit ~4x behind FastWan-QAD's published 3.4s for a 5s 480p clip on a 4090, and the suspicion was launch overhead — our DiT launches a separate kernel per op with a fresh allocation, which is exactly what `torch.compile` and CUDA graphs remove. ADR-0003 had also deferred graph capture, so it looked like unclaimed ground.
+- Two corrections on the way to the measurement. First, `FASTVIDEO_CUGRAPH` is **not implemented and not merely disabled**: commit `7566769` — the ADR-0003 pass itself — deleted `streams.rs` and rewrote `transformer.rs` from 994 lines to 237. The only surviving copy is an unmerged worktree 63 commits behind whose own commit is about schedulers. Second, the reason ADR-0003 gave for deferring capture ("capturing a host-bouncing block body isn't safe") was fixed by that same commit, which added the `layer_norm_last` / `modulate_scale_shift_last` kernels that removed the bounce. The conclusion outlived its premise.
+- **Decision: do not build CUDA graph capture.** Measured on a 3090, 2s clip, VSA: **3,112 kernel launches per denoising step**, against a measured **2,237 ms** per step. At ~5 µs of launch overhead that is ~16 ms, or **0.7%**; at a pessimistic 10 µs, 1.4%. Graphs cannot be worth more than one or two percent here.
+- The same run settles the other half: **zero host fallbacks**, and 6 device-to-host transfers for an entire clip (the frame readback). ADR-0003's blocker is gone — but it no longer matters, because the thing it was blocking is not worth doing.
+- So the remaining gap to FastWan-QAD is **arithmetic, not overhead**. This also kills launch overhead as the explanation for the H100 dense result tying a 4090 (27.3s vs 27.5s), which needs a different cause — `mathprobe` on Hopper is the next measurement, since it reports which cuBLAS math mode the hardware actually honours.
+- Of upstream's levers, FP8 linears are measured at 4.8% (FVID-2026-09-18-fp8-linears-measured) and TAEHV is adopted, leaving **SageAttention2++** as the only large untested one. Attention's share of the 2,237 ms per step should be estimated before building it.
+- Incidental: 911 host-to-device transfers totalling 3.4 GiB during a 3-step clip. Not overhead-critical, but plausibly uploads repeated per step rather than once — worth a look.
+- Reversibility: n/a (nothing built)
+- Executed by: Executor
+- Verification: `20260918T231508Z-gen`, ~$0.05. The counter lives in the one `launch!` macro every kernel goes through, so no call site can under-report, and clip reports now carry `device_stats` by default.
+
 ### FVID · 2026-09-18 · FVID-2026-09-18-taehv-adopted
 - Trigger: the TAEHV port was verified against the reference (FVID-2026-09-18-taehv-port) but never run in the pipeline, so the quality and end-to-end time trade were both unmeasured.
 - Decision: **TAEHV is worth using**, behind `FASTVIDEO_TAEHV_WEIGHTS=<dir>`. A/B on one RTX 3090, 8s clip (129 frames, 832x448), same prompt and seed, VSA on both sides, latents **bit-identical** (rel_l2 0.0) so the decoder is the only variable:
