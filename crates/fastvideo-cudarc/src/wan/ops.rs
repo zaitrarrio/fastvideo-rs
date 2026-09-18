@@ -1106,3 +1106,50 @@ pub mod host {
         (out, ot)
     }
 }
+
+// ---- FP8 E4M3 ------------------------------------------------------------
+
+/// Dynamic per-tensor E4M3 quantization of an activation.
+///
+/// Returns the E4M3 bytes and a one-float device buffer holding the
+/// dequantization `scale`, which is exactly what the GEMM's scale pointer
+/// wants. Keeping the whole computation on the device means the amax never has
+/// to come back to the host between the reduction and the matmul.
+///
+/// The scale is recomputed every call rather than calibrated once. That costs
+/// one extra pass over the activation, and it is the conservative choice: a
+/// stale calibration that under-estimates amax clips the tensor, and clipping
+/// in a denoiser compounds across steps.
+#[cfg(feature = "cuda")]
+pub fn quantize_e4m3_device(a: &CudaSlice<f32>) -> Result<(CudaSlice<u8>, CudaSlice<f32>)> {
+    let dev = ctx()?;
+    let n = a.len() as i64;
+    // amax_abs combines blocks with atomicMax, so the target must start at zero.
+    let mut amax = dev.stream.alloc_zeros::<f32>(1).map_err(err)?;
+    let blocks = a.len().div_ceil(256).clamp(1, 1024) as u32;
+    let cfg = LaunchConfig {
+        grid_dim: (blocks, 1, 1),
+        block_dim: (256, 1, 1),
+        shared_mem_bytes: 256 * 4,
+    };
+    launch!(dev.stream, &dev.kernels.amax_abs, cfg; a, &mut amax, &n).map_err(err)?;
+
+    let cfg1 = LaunchConfig { grid_dim: (1, 1, 1), block_dim: (1, 1, 1), shared_mem_bytes: 0 };
+    let (mut scale, mut inv) = (alloc(1)?, alloc(1)?);
+    launch!(dev.stream, &dev.kernels.e4m3_scale_from_amax, cfg1; &amax, &mut scale, &mut inv).map_err(err)?;
+
+    let mut out = unsafe { dev.stream.alloc::<u8>(a.len().max(1)) }.map_err(err)?;
+    launch!(dev.stream, &dev.kernels.quantize_e4m3, cfg_n(a.len()); a, &mut out, &inv, &n).map_err(err)?;
+    Ok((out, scale))
+}
+
+/// E4M3 bytes back to f32, for checking the quantizer against the host
+/// reference in the kernels tier.
+#[cfg(feature = "cuda")]
+pub fn dequantize_e4m3_device(a: &CudaSlice<u8>, scale: &CudaSlice<f32>) -> Result<CudaSlice<f32>> {
+    let dev = ctx()?;
+    let n = a.len() as i64;
+    let mut out = alloc(a.len().max(1))?;
+    launch!(dev.stream, &dev.kernels.dequantize_e4m3, cfg_n(a.len()); a, &mut out, scale, &n).map_err(err)?;
+    Ok(out)
+}

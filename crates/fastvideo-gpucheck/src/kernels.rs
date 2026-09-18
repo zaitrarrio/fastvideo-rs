@@ -496,6 +496,35 @@ pub fn run(report: &mut Report, lim: Limits, seed: u64) -> StageResult<()> {
             let got = down(&ops::cast_bf16_f32_bias_act_device(&x16, None, false)?)?;
             c.cmp("cast_bf16_f32_plain", &got, &bits, 0.0)?;
         }
+        {
+            // FP8 E4M3: the device quantizer must agree with the host reference
+            // *exactly*, not approximately. The reference is checked over all
+            // 256 codes by a unit test, so an exact match here transfers that
+            // guarantee to the kernel; any tolerance would hide a rounding-mode
+            // divergence, which is precisely the bug worth catching.
+            use fastvideo_ops::fp8;
+            let x = c.rand(65_536, 4.0);
+            let amax = x.iter().fold(0.0f32, |a, b| a.max(b.abs()));
+            let (scale, inv) = fp8::scale_for_amax(amax);
+            let (q, scale_dev) = ops::quantize_e4m3_device(&up(&x)?)?;
+            let got_bits = dev()?.stream.memcpy_dtov(&q)?;
+            let want_bits: Vec<u8> = x.iter().map(|&v| fp8::f32_to_e4m3(v * inv)).collect();
+            let mism = got_bits.iter().zip(&want_bits).filter(|(a, b)| a != b).count();
+            c.report.check(
+                "fp8_quantize_matches_reference",
+                mism == 0,
+                serde_json::json!({"mismatched_codes": mism, "n": got_bits.len()}),
+                serde_json::json!({"mismatched_codes": 0}),
+            )?;
+            // The device-computed scale must match the host amax reduction too:
+            // a wrong scale is invisible in the codes but wrecks the GEMM.
+            let got_scale = dev()?.stream.memcpy_dtov(&scale_dev)?[0];
+            c.cmp("fp8_scale_from_amax", &[got_scale], &[scale], 1e-6)?;
+            // Round-trip lands within E4M3's 3-bit mantissa.
+            let deq = down(&ops::dequantize_e4m3_device(&q, &scale_dev)?)?;
+            let want: Vec<f32> = want_bits.iter().map(|&b| fp8::e4m3_to_f32(b) * scale).collect();
+            c.cmp("fp8_dequantize", &deq, &want, 1e-6)?;
+        }
         for (rows, kk, n, gelu) in [(97usize, 1536usize, 8960usize, true), (300, 1536, 1536, false)] {
             // Production Linear: bf16 buffers in fast mode, F32 GEMM in exact mode.
             let (x, w, b) = (c.rand(rows * kk, 1.0), c.rand(n * kk, 0.05), c.rand(n, 0.1));

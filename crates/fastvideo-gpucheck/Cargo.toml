@@ -20,6 +20,7 @@ rand.workspace = true
 rand_distr.workspace = true
 fastvideo-models.workspace = true
 fastvideo-cudarc.workspace = true
+fastvideo-ops.workspace = true
 cudarc = { workspace = true, optional = true }
 half = { version = "2", optional = true }
 
