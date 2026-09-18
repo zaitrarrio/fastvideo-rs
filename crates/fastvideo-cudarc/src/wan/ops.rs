@@ -718,7 +718,8 @@ pub fn vsa_fused_attn_device(
 ) -> Result<CudaSlice<f32>> {
     const THREADS: u32 = 256;
     const HALF: usize = 32;
-    check("vsa_fused_attn", dim % 128 == 0 || dim == 64 || dim == 128)?;
+    // The kernel splits dim across 32 lanes with at most four each.
+    check("vsa_fused_attn dim", dim % 32 == 0 && dim / 32 <= 4 && dim > 0)?;
     let dev = ctx()?;
     let nb = plan.num_tiles;
     let mut out = alloc(bh * nb * plan.tile_elems * dim)?;

@@ -661,6 +661,9 @@ extern "C" __global__ void vsa_fused_attn(
     long bh = blockIdx.y;
     if (qt >= num_tiles) return;
     int tid = threadIdx.x, warp = tid >> 5, lane = tid & 31;
+    // Output dims are split across the warp's 32 lanes; dim=128 gives 4 each,
+    // dim=64 gives 2. Assuming 4 reads past the row for anything narrower.
+    int dpl = dim >> 5;
 
     extern __shared__ unsigned char vsa_smem[];
     unsigned short* Qs = (unsigned short*)vsa_smem;
@@ -686,7 +689,7 @@ extern "C" __global__ void vsa_fused_attn(
     for (int qi = 0; qi < 8; qi++) {
         m_run[qi] = -3.402823466e+38f;
         l_run[qi] = 0.0f;
-        for (int dd = 0; dd < 4; dd++) acc[qi][dd] = 0.0f;
+        for (int dd = 0; dd < 4; dd++) acc[qi][dd] = 0.0f;   // dpl <= 4 entries used
     }
     const float neg_inf = __int_as_float(0xff800000);
 
@@ -727,7 +730,7 @@ extern "C" __global__ void vsa_fused_attn(
                 for (int off = 16; off > 0; off >>= 1) sum += __shfl_xor_sync(0xffffffff, sum, off);
                 float corr = (m_run[qi] == -3.402823466e+38f) ? 0.0f : expf(m_run[qi] - m_new);
                 l_run[qi] = l_run[qi] * corr + sum;
-                for (int dd = 0; dd < 4; dd++) acc[qi][dd] *= corr;
+                for (int dd = 0; dd < dpl; dd++) acc[qi][dd] *= corr;
                 m_run[qi] = m_new;
             }
             __syncthreads();
@@ -739,7 +742,7 @@ extern "C" __global__ void vsa_fused_attn(
                     float p = prow[key];
                     if (p == 0.0f) continue;
                     const unsigned short* vrow = Vs + (long)key * dim;
-                    for (int dd = 0; dd < 4; dd++) acc[qi][dd] += p * fv_bf16_to_f32(vrow[lane * 4 + dd]);
+                    for (int dd = 0; dd < dpl; dd++) acc[qi][dd] += p * fv_bf16_to_f32(vrow[lane * dpl + dd]);
                 }
             }
             __syncthreads();
@@ -750,7 +753,7 @@ extern "C" __global__ void vsa_fused_attn(
         int qrow = warp * 8 + qi;
         float inv = l_run[qi] > 0.0f ? 1.0f / l_run[qi] : 0.0f;
         float* orow = out + ((bh * (long)num_tiles + qt) * VSA_Q + qrow) * (long)dim;
-        for (int dd = 0; dd < 4; dd++) orow[lane * 4 + dd] = acc[qi][dd] * inv;
+        for (int dd = 0; dd < dpl; dd++) orow[lane * dpl + dd] = acc[qi][dd] * inv;
     }
 }
 // -inf the score columns that land on tile padding, so the softmax ignores

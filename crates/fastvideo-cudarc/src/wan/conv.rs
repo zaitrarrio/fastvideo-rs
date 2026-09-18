@@ -316,17 +316,21 @@ pub fn conv3d(
     if let Some(pick) = known {
         return run(pick);
     }
-    let timed = |pick: Conv3dPick| -> Result<(f64, (CudaSlice<f32>, Vec<usize>))> {
+    // Timing drops every output before the next candidate runs: holding the
+    // winner-so-far alive while the next one allocates its own doubles the peak,
+    // and exact-mode parity already sits at the edge of a 24GB card. The winner
+    // is re-run once at the end, which costs one convolution per shape, once.
+    let timed = |pick: Conv3dPick| -> Result<f64> {
         drop(run(pick)?);
         dev.synchronize()?;
         let t = std::time::Instant::now();
-        let out = run(pick)?;
+        drop(run(pick)?);
         dev.synchronize()?;
-        Ok((t.elapsed().as_secs_f64(), out))
+        Ok(t.elapsed().as_secs_f64())
     };
     // Exact mode must stay comparable to the CPU path, so bf16 only competes
     // when the context is already running reduced-precision math.
-    let mut best: Option<(f64, Conv3dPick, (CudaSlice<f32>, Vec<usize>))> = None;
+    let mut best: Option<(f64, Conv3dPick)> = None;
     let mut report: Vec<String> = Vec::new();
     let candidates: &[Conv3dPick] = if fma_math(&dev) {
         &[Conv3dPick::Cudnn, Conv3dPick::Unfold]
@@ -334,16 +338,16 @@ pub fn conv3d(
         &[Conv3dPick::Cudnn, Conv3dPick::Unfold, Conv3dPick::CudnnBf16]
     };
     for &pick in candidates {
-        let (secs, out) = timed(pick)?;
+        let secs = timed(pick)?;
         report.push(format!("{pick:?} {:.1}ms", secs * 1e3));
-        if best.as_ref().is_none_or(|(b, _, _)| secs < *b) {
-            best = Some((secs, pick, out));
+        if best.is_none_or(|(b, _)| secs < b) {
+            best = Some((secs, pick));
         }
     }
-    let (_, pick, out) = best.expect("at least one conv3d backend");
+    let (_, pick) = best.expect("at least one conv3d backend");
     super::log::info(format_args!("conv3d x={x_shape:?} w={w_shape:?}: {} → {pick:?}", report.join(", ")));
     dev.conv.lock().expect("conv cache lock").conv3d_pick.insert(key, pick);
-    Ok(out)
+    run(pick)
 }
 
 /// 3-D conv through a temporal unfold: gather every `kt`-frame window into
