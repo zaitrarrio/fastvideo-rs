@@ -2,6 +2,17 @@
 
 Project code: FVID
 
+### FVID · 2026-09-18 · FVID-2026-09-18-fused-block-sparse-rejected
+- Trigger: VSA's fine stage gathers each query tile's selected K/V into a dense buffer (~106 GB/layer written and read, plus a 26 GB score buffer) so cuBLAS can run the GEMMs on tensor cores. A fused kernel streaming K/V straight from the tiled layout would move ~53 GB/layer and materialise no scores.
+- Options: keep the gather; fuse with scalar f32 math; fuse with tensor cores via inline PTX `mma.sync`
+- Decision: **the fused kernel stays off.** Measured on one RTX 5090 against the gather path on the same card class: **8.0x slower at 1,456 tokens, 5.5x at 4,368, 8.6x at 13,104**. Trading ~80 GB/layer of traffic for scalar f32 math does not come close to paying for the loss of cuBLAS bf16 tensor cores, which run at roughly twice the scalar f32 rate before any efficiency gap.
+- The structure was right this time and it still lost. One CUDA block per QUERY TILE amortises each K/V tile load over 64 queries — exactly what `flash_attn_f32` got wrong with one query per block — and that moved the result from 12-36x slower (FVID-2026-09-17-flash-sdpa-rejected) to ~8x. Structure was never the binding constraint; tensor cores are.
+- Reason: this is the second hand-written attention kernel to lose to cuBLAS by a wide margin. The rule that generalises: **on this hardware, do not hand-write attention math that cuBLAS can express.** A fused kernel is only worth attempting with `mma.sync` tensor-core intrinsics, and even then it must beat a library that is already near peak.
+- Reversibility: free (kept behind `FASTVIDEO_VSA_FUSED=1`, default off; correct, so it stays as a reference implementation and a place to add MMA later)
+- Executed by: Executor
+- Verification: correctness first — gpucheck holds it to the same host reference as the gather path across four grids in both precision modes, rel_l2 0.0026-0.0028, marginally *better* than the gather path's 0.0032 because the online softmax keeps probabilities in f32 registers instead of round-tripping bf16. Speed: run `20260918T104448Z-clip` (fused) vs `20260918T101337Z-clip` (gather), both RTX 5090 32607 MiB, fresh instances. Stopped after the probe: the clips would only have confirmed it more expensively.
+- A dim=64 indexing bug (four output dims per lane hardcoded for dim=128) was found by the first hardware run and fixed in `6ea882c`; the d=128 grids the real model uses would never have caught it.
+
 ### FVID · 2026-09-18 · FVID-2026-09-18-vae-decode
 - Trigger: after the VSA port, VAE decode (21.9 s) was the largest single cost in an 8s clip, bigger than any remaining attention win
 - Options: bf16 storage through the VAE; faster convolutions; fuse elementwise ops; decode several latent frames per pass
