@@ -177,6 +177,10 @@ tasks:
     desc: TAEHV tier — our tiny-autoencoder decoder vs madebyollin's own (~$0.20)
     cmds: [{ task: run, vars: { TIER: taehv } }]
 
+  vaeab:
+    desc: 'VAE A/B — one clip decoded by the Wan VAE and by TAEHV (~$0.25)'
+    cmds: [{ task: run, vars: { TIER: vaeab } }]
+
   gen:
     desc: 'Generate one clip from a prompt (PROMPT="a dog on a beach")'
     requires:

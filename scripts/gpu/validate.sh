@@ -13,6 +13,7 @@
 #        oracle — our text encoder and one DiT step vs transformers/diffusers.
 #        fp8 — the same clip with and without FP8 linears, on one box.
 #        taehv — our tiny-autoencoder decoder vs madebyollin's own.
+#        vaeab — the same clip decoded by the Wan VAE and by TAEHV.
 set -euo pipefail
 # shellcheck source=scripts/gpu/lib.sh
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
@@ -65,12 +66,14 @@ tier_query() {
     # TAEHV is ~10M parameters and needs no Wan weights at all — only torch,
     # which is why this tier is cheap despite installing the upstream venv.
     taehv) echo "$base gpu_ram>=12 disk_space>=60 cpu_ram>=16" ;;
-    *) die "unknown tier '$1' (mathprobe|kernels|parity|clip|compare|gen|oracle|fp8|taehv)" ;;
+    # The A/B decodes the same clip both ways, so it needs the Wan weights too.
+    vaeab) echo "$base gpu_ram>=24 disk_space>=100 cpu_ram>=80 inet_down>=500" ;;
+    *) die "unknown tier '$1' (mathprobe|kernels|parity|clip|compare|gen|oracle|fp8|taehv|vaeab)" ;;
   esac
 }
-tier_max_dph() { case "$1" in mathprobe) echo 0.40 ;; kernels) echo 0.25 ;; parity) echo 0.40 ;; clip) echo 0.60 ;; compare) echo 0.60 ;; gen) echo 0.80 ;; oracle) echo 1.60 ;; fp8) echo 0.80 ;; taehv) echo 0.40 ;; esac; }
-tier_max_minutes() { case "$1" in mathprobe) echo 30 ;; kernels) echo 40 ;; parity) echo 75 ;; clip) echo 180 ;; compare) echo 240 ;; gen) echo 180 ;; oracle) echo 150 ;; fp8) echo 90 ;; taehv) echo 60 ;; esac; }
-tier_disk() { case "$1" in mathprobe) echo 40 ;; kernels) echo 40 ;; parity) echo 60 ;; clip) echo 100 ;; compare) echo 180 ;; gen) echo 100 ;; oracle) echo 160 ;; fp8) echo 100 ;; taehv) echo 60 ;; esac; }
+tier_max_dph() { case "$1" in mathprobe) echo 0.40 ;; kernels) echo 0.25 ;; parity) echo 0.40 ;; clip) echo 0.60 ;; compare) echo 0.60 ;; gen) echo 0.80 ;; oracle) echo 1.60 ;; fp8) echo 0.80 ;; taehv) echo 0.40 ;; vaeab) echo 0.80 ;; esac; }
+tier_max_minutes() { case "$1" in mathprobe) echo 30 ;; kernels) echo 40 ;; parity) echo 75 ;; clip) echo 180 ;; compare) echo 240 ;; gen) echo 180 ;; oracle) echo 150 ;; fp8) echo 90 ;; taehv) echo 60 ;; vaeab) echo 90 ;; esac; }
+tier_disk() { case "$1" in mathprobe) echo 40 ;; kernels) echo 40 ;; parity) echo 60 ;; clip) echo 100 ;; compare) echo 180 ;; gen) echo 100 ;; oracle) echo 160 ;; fp8) echo 100 ;; taehv) echo 60 ;; vaeab) echo 100 ;; esac; }
 
 usage() { sed -n '2,12p' "$0" | sed 's/^# \{0,1\}//'; exit 2; }
 
@@ -494,7 +497,7 @@ cmd_run() {
   # Downloads run in the background during the weight-free stages.
   case "$tier" in
     parity) remote_run fetch-base 120 fetch "$BASE_REPO" "$BASE_W" "transformer/*" "vae/*" ;;
-    clip | compare | gen | oracle | fp8)
+    clip | compare | gen | oracle | fp8 | vaeab)
       remote_run fetch-base 120 fetch "$BASE_REPO" "$BASE_W" "transformer/*" "vae/*" "text_encoder/*" "tokenizer/*"
       remote_run fetch-fast 120 fetch "$FAST_REPO" "$FAST_W" "transformer/*" "vae/*"
       ;;
@@ -624,6 +627,43 @@ cmd_run() {
     gpucheck_stage taehv 900 --keep-going --mode exact taehv --weights "$WORK/taehv" \
       --oracle "$OUTR/taehv/oracle.safetensors" --device cuda
     log "TAEHV oracle done"
+    return 0
+  fi
+
+  # `vaeab` decodes one clip both ways. The Wan VAE is 3.9s of a 23.7s H100
+  # clip and TAEHV is ~10M parameters against its ~130M, so the time question
+  # is close to settled — what this measures is the *quality* trade, which the
+  # oracle tier says nothing about because it only proves our port matches
+  # madebyollin's, not that TAEHV is good enough for a clip.
+  if [[ "$tier" == vaeab ]]; then
+    local prompt; prompt="$(jq -r '.prompts[0].prompt' "$FV_ROOT/scripts/gpu/prompts.json")"
+    local negative; negative="$(jq -r '.negative' "$FV_ROOT/scripts/gpu/prompts.json")"
+    jq -n --arg p "$prompt" --arg n "$negative" \
+      '{negative: $n, prompts: [{name: "vaeab", prompt: $p}]}' >"$RUN_DIR/prompt.json"
+    fv_rsync_to "$HOST" "$PORT" "$RUN_DIR/prompt.json" "$OUTR/prompt.json" >/dev/null
+    local embeds="$OUTR/embeds"
+    remote_run wait-text 1800 wait-weights "$BASE_W" 1800 text_encoder
+    gpucheck_stage embed 1800 --mode exact embed --weights "$BASE_W" --prompts "$OUTR/prompt.json" \
+      --embeds "$embeds" --device cuda
+    remote_run wait-fast 1800 wait-weights "$FAST_W" 1800 transformer vae
+    # taehv-oracle is what puts taew2_1.safetensors on the box; it needs torch,
+    # which is the only reason this tier installs the upstream venv at all.
+    remote_run upstream-install "${FV_UPSTREAM_INSTALL_TIMEOUT:-2400}" upstream-install "${FV_TORCH_BACKEND:-cu126}"
+    remote_run taehv-oracle "${FV_TAEHV_TIMEOUT:-1800}" taehv-oracle --latent-frames 1 --height 8 --width 8
+    local ab=(--height 448 --width 832 --frames "${FV_VAEAB_FRAMES:-129}" --steps 3
+              --guidance 1.0 --flow-shift 8.0 --dmd --fps 16 --vsa)
+    gpucheck_stage clip-wanvae "$(( budget_min * 60 * 13 / 10 + 600 ))" --mode fast clip \
+      --weights "$FAST_W" --embeds "$embeds/vaeab.safetensors" --device cuda "${ab[@]}" \
+      --vae-chunk 2 --name dmd-wanvae --budget-min "$budget_min"
+    gpucheck_stage clip-taehv "$(( budget_min * 60 * 13 / 10 + 600 ))" --mode fast clip \
+      --weights "$FAST_W" --embeds "$embeds/vaeab.safetensors" --device cuda "${ab[@]}" \
+      --taehv-weights "$WORK/taehv" --name dmd-taehv --budget-min "$budget_min"
+    # Wide-open limits: two different decoders will not agree numerically, and
+    # the point is to see how far apart they are, not to gate on a number
+    # nobody has looked at yet.
+    gpucheck_stage compare-vae 300 compare --a "$OUTR/clips/dmd-wanvae" --b "$OUTR/clips/dmd-taehv" \
+      --max-step1-rel 1e9 --max-latent-rel 1e9 --min-psnr 0.0
+    log "VAE A/B done"
     return 0
   fi
 

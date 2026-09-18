@@ -22,6 +22,27 @@ use super::umt5::{pad_prompt_embeds, Umt5Encoder};
 use super::vae::AutoencoderKlWan;
 use super::weights::WeightMap;
 
+/// TAEHV replaces the Wan VAE decode when `FASTVIDEO_TAEHV_WEIGHTS` names a
+/// directory holding `taew2_1.safetensors`.
+///
+/// A path rather than a boolean, because the weights ship separately from the
+/// Wan checkpoint (they live in madebyollin/taehv, not the Diffusers repo) and
+/// there is no sensible place to guess. A set-but-unloadable path is an error
+/// rather than a silent fall back to the Wan VAE: asking for TAEHV and getting
+/// a 3.9s Wan decode would look exactly like TAEHV being slow.
+fn load_taehv() -> Result<Option<super::taehv::TaeHv>> {
+    let dir = std::env::var("FASTVIDEO_TAEHV_WEIGHTS").unwrap_or_default();
+    if dir.is_empty() {
+        return Ok(None);
+    }
+    let map = WeightMap::from_dir(Path::new(&dir))
+        .map_err(|e| PipelineError::Message(format!("FASTVIDEO_TAEHV_WEIGHTS={dir}: {e}")))?;
+    let tae = super::taehv::TaeHv::load(&map)
+        .map_err(|e| PipelineError::Message(format!("FASTVIDEO_TAEHV_WEIGHTS={dir}: {e}")))?;
+    super::log::info(format_args!("vae=taehv ({dir})"));
+    Ok(Some(tae))
+}
+
 /// `FASTVIDEO_DEVICE_STATS=1`: log host↔device transfer counts after `generate()`.
 fn log_device_stats_if_enabled() {
     if !super::envflag::bool_flag("FASTVIDEO_DEVICE_STATS", false) {
@@ -147,6 +168,10 @@ pub struct WanPipeline {
     dit: WanTransformer3D,
     dit_2: Option<WanTransformer3D>,
     vae: AutoencoderKlWan,
+    /// `FASTVIDEO_TAEHV_WEIGHTS=<dir>`: decode through the tiny autoencoder
+    /// instead of the Wan VAE. Loaded alongside rather than instead of it, so
+    /// the Wan VAE stays available and the choice is per-decode.
+    taehv: Option<super::taehv::TaeHv>,
     clip: Option<ClipVision>,
     tiny: bool,
     boundary_ratio: Option<f32>,
@@ -162,6 +187,7 @@ impl WanPipeline {
             dit: WanTransformer3D::zeros(WanVideoArchConfig::tiny()),
             dit_2: None,
             vae: AutoencoderKlWan::zeros(WanVaeConfig::tiny()),
+            taehv: None,
             clip: None,
             tiny: true,
             boundary_ratio: None,
@@ -182,6 +208,7 @@ impl WanPipeline {
             dit,
             dit_2: None,
             vae,
+            taehv: None,
             clip: None,
             tiny: false,
             boundary_ratio,
@@ -234,11 +261,13 @@ impl WanPipeline {
         };
 
         let boundary_ratio = cfg.boundary_ratio;
+        let taehv = load_taehv()?;
         Ok(Self {
             text,
             dit: WanTransformer3D::load(cfg, &dit)?,
             dit_2,
             vae: AutoencoderKlWan::load(vae_cfg, &vae)?,
+            taehv,
             clip,
             tiny: false,
             boundary_ratio,
@@ -522,6 +551,14 @@ impl WanPipeline {
 
     /// Un-normalize latents and run the feat-cache VAE decode → `[1, 3, F, H, W]` in `[-1, 1]`.
     pub fn decode_latents(&self, latents: &CudaTensor) -> Result<CudaTensor> {
+        // TAEHV takes latents in DiT space — *without* the per-channel
+        // un-normalisation the Wan VAE needs. That difference is the whole
+        // reason this branch sits above `scale_latents` rather than inside the
+        // decoder, and the oracle stage is what established it.
+        if let Some(tae) = &self.taehv {
+            let _vae = super::log::StepTimer::start("taehv.decode");
+            return Ok(tae.decode(latents)?);
+        }
         let latents = if !self.tiny {
             self.vae.scale_latents(latents)?
         } else {

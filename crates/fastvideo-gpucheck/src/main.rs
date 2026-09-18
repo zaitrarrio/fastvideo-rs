@@ -70,6 +70,11 @@ struct Cli {
     /// this, so it is opt-in per stage and never inferred from the device.
     #[arg(long, global = true)]
     fp8: bool,
+    /// Decode through TAEHV instead of the Wan VAE. Takes the directory
+    /// holding taew2_1.safetensors, because those weights ship separately from
+    /// the Wan checkpoint and there is nowhere sensible to guess.
+    #[arg(long, global = true)]
+    taehv_weights: Option<PathBuf>,
     /// Latent frames per VAE decode pass. Like --vsa this is per stage: exact
     /// parity already sits at the edge of a 24GB card, and a bigger chunk
     /// tips it over.
@@ -464,6 +469,9 @@ fn main() {
     }
     if cli.fp8 {
         std::env::set_var("FASTVIDEO_FP8", "1");
+    }
+    if let Some(p) = &cli.taehv_weights {
+        std::env::set_var("FASTVIDEO_TAEHV_WEIGHTS", p);
     }
     if let Some(n) = cli.vae_chunk {
         std::env::set_var("FASTVIDEO_VAE_CHUNK", n.to_string());
