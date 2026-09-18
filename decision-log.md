@@ -2,6 +2,27 @@
 
 Project code: FVID
 
+### FVID · 2026-09-18 · FVID-2026-09-18-umt5-bias-mirrored
+- Trigger: user reported that generated clips do not follow the prompt. Confirmed visually: "a piper cub takes off" rendered a hand holding a green pepper; the benchmark prompt "A golden retriever sprints along the shoreline at sunset, waves breaking around its paws" rendered a static dog on grass. Upstream FastVideo, on the same GPU and the same weights, rendered the puppy on a beach with waves.
+- Root cause: `relative_position_bucket` added the half-table offset when the key came **before** the query; HF adds it when `relative_position > 0`, i.e. after. The two halves of the learned 32-row relative attention bias were swapped. For a 12-token prompt **132 of 144 entries were wrong** — only the zero-distance diagonal survived.
+- Why it presented as "keeps the subject, loses the scene": UMT5 carries no absolute or rotary positional encoding, so this bias, injected into all 24 encoder layers, is the model's *only* word-order signal. Mirroring it preserves token identity but binds modifiers, verbs and prepositional phrases to the wrong side.
+- Decision: fix the predicate to `relative > 0` in all four backends (cudarc, models, burn, luminal — the function was copy-pasted, which is why every cross-backend comparison agreed with itself). Regression test takes its expectations from HF's formula rather than from our output, and fails against the old sign.
+- Reversibility: cheap (one predicate)
+- Executed by: Executor
+- Verification: oracle tier `20260918T124220Z-oracle`, L40S 44GB, against transformers' UMT5 and diffusers' `WanTransformer3DModel` on identical inputs. Before the fix: text cosine **0.268** / rel_l2 **1.296** (FAIL), dit cosine **0.9999999** / rel_l2 **0.00045** (PASS), e2e cosine 0.823 / rel_l2 0.607 (FAIL).
+- **The DiT port was exact the whole time.** Every attention, RoPE, patch-embed, adaLN, VSA and bf16 change was correct; the entire prompt-adherence failure was one inverted comparison in the text encoder.
+- Process note: this survived 42 green validation runs because **every gate compared fastvideo-rs to fastvideo-rs** — `parity` is GPU vs our own CPU path (and feeds the DiT *random* embeddings, so it never touched the text encoder at all), and `compare` diffs two of our own clip dirs. The video-quality gates score luma, temporal MAD and clipping, so a coherent wrong video passes them. See FVID-2026-09-18-oracle-tier.
+
+### FVID · 2026-09-18 · FVID-2026-09-18-oracle-tier
+- Trigger: a prompt-adherence bug that no tier could see, because no tier compared us to anything but ourselves.
+- Options: tighten the existing self-comparisons; add semantic scoring (CLIP similarity) to the clip gates; diff against the reference implementations on identical inputs
+- Decision: **an `oracle` tier.** `scripts/gpu/upstream_oracle.py` runs transformers' UMT5 and diffusers' `WanTransformer3DModel` on the same weights and saves its inputs and outputs; `fv-gpucheck oracle` replays them through us. Three checks, on byte-identical tensors: `text` (our embedding vs the reference), `dit` (our DiT on the *reference* embedding), `e2e` (our DiT on *our* embedding).
+- `dit` is the load-bearing design choice: feeding both sides the same conditioning removes the text encoder from the comparison, so text-vs-DiT is **decidable** rather than a single number that says only "something is wrong". On its first run it attributed the defect immediately — text failed at rel_l2 1.296 while dit passed at 0.00045.
+- Float32 throughout: the oracle judges exact mode, and a looser judge cannot set a limit. Needs 40GB because UMT5-XXL in torch float32 is ~22GB before the DiT loads.
+- Reversibility: cheap (additive; no existing tier changes)
+- Executed by: Executor
+- Verification: `20260918T124220Z-oracle` (baseline, pre-fix) — the tier failed exactly the two checks it should and passed the one that isolates the DiT. Cost $0.32, 36 min, most of it the upstream install.
+
 ### FVID · 2026-09-18 · FVID-2026-09-18-bf16-conv3d
 - Trigger: after the SiLU fusion and chunked decode, VAE convolutions were the remaining VAE cost, and the dominant one ran 1.11 TFLOP in 27.7 ms ≈ 40 TFLOPS on a 3090 Ti — this card's TF32 peak, so compute-bound with no memory headroom to recover
 - Options: leave it; bf16 storage through the whole VAE (large refactor); bf16 operands per convolution with casts around it
