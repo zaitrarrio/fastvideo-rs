@@ -117,7 +117,9 @@ impl WanAttention {
             // no norm, matching upstream.
             let g = gate.forward(hidden)?.split_heads_bhsd(0, self.heads, self.dim_head)?;
             if let Some(out) = self.attend_vsa(&q, &k, &v, &g, ctx)? {
-                return Ok(out);
+                // Same tail as the dense path: VSA returns BHSD attention, which
+                // still has to be merged back to [b, seq, dim] and projected.
+                return self.to_out.forward(&out.merge_heads()?);
             }
         }
         self.attend(&q, &k, &v, mask)
