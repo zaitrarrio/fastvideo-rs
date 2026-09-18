@@ -8,7 +8,8 @@
 #   validate.sh reap                             destroy every fvgpu-* instance
 #
 # tiers: kernels (T1) | parity (T2) | clip (T3) | compare (T4, + upstream FastVideo)
-#        gen (UI: deploy, encode one prompt, generate one clip)\n#        each tier includes the ones before it.
+#        each validation tier includes the ones before it.
+#        gen — the UI path: deploy, encode one prompt, generate one clip.
 set -euo pipefail
 # shellcheck source=scripts/gpu/lib.sh
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"

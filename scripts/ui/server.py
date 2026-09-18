@@ -316,7 +316,19 @@ class Handler(BaseHTTPRequestHandler):
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--port", type=int, default=8733)
+    ap.add_argument("--list-instances", action="store_true",
+                    help="print running instances and exit (no server)")
     args = ap.parse_args()
+    if args.list_instances:
+        rows = instances()
+        if not rows:
+            print("no running instances")
+        for i in rows:
+            if "error" in i:
+                print(f"error: {i['error']}")
+            else:
+                print(f"{i['id']}\t{i['gpu']}\t{i['status']}\t${i['dph']}/hr\t{i['label'] or ''}")
+        return
     srv = ThreadingHTTPServer(("127.0.0.1", args.port), Handler)
     print(f"fastvideo control panel → http://127.0.0.1:{args.port}")
     print("loopback only; the Vast key stays in .env and never reaches the page")

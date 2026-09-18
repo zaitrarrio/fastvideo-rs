@@ -29,6 +29,21 @@ Real inference targets Vast.ai NVIDIA GPUs. Mac/CI stay on CPU (cudarc without
 | Flash-style SDPA | default (`FASTVIDEO_SDPA=flash`); `dense` / `sparse` overrides |
 | GPU tests + benches | Vast (`scripts/vast-gpu-bench.sh`) |
 
+## Tasks
+
+Everything below is wrapped in a [Taskfile](https://taskfile.dev) — `task` alone lists them.
+
+```bash
+task check      # lint, tests, the NVRTC gate, cuda type-check — no GPU, no cost
+task up         # build the dist binary, then open the control panel
+task clip       # rent a GPU and run the full validation tier (~$0.12)
+task gen PROMPT="a dog running on a beach"
+task instances  # what is currently billing
+task reap       # destroy every fvgpu-* instance
+```
+
+Tasks that rent hardware say so in their description, with what a run costs.
+
 ## CLI (CPU / CI)
 
 Mac/CI stay on the zero-weight graph. **Do not** load 1.3B on CPU.

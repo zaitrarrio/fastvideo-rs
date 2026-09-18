@@ -1,0 +1,207 @@
+version: '3'
+
+# Task automation for fastvideo-rs.
+#
+#   task            list every task
+#   task up         build what a run needs, then open the control panel
+#   task check      everything that costs nothing: lint, tests, kernel compile
+#   task clip       rent a GPU and run the full validation tier
+#
+# The Rust workspace builds on the host for CPU code, but anything touching
+# CUDA compiles in Docker: NVRTC needs libnvrtc, and the binary shipped to a
+# rented box must be linked against the same runtime it will find there.
+
+vars:
+  UI_PORT: '{{.UI_PORT | default "8733"}}'
+  TIER: '{{.TIER | default "clip"}}'
+  GPU: '{{.GPU | default ""}}'
+  FRAMES: '{{.FRAMES | default "129"}}'
+  STEPS: '{{.STEPS | default "3"}}'
+  CUDA_VER: '{{.CUDA_VER | default "12040"}}'
+
+env:
+  # Type-checking the cuda feature needs a version to target; it never runs here.
+  CUDARC_CUDA_VERSION: '{{.CUDA_VER}}'
+
+tasks:
+  default:
+    desc: List available tasks
+    silent: true
+    cmds: ['task --list']
+
+  # ---- build ---------------------------------------------------------------
+
+  build:
+    desc: Build the workspace (host, CPU paths)
+    cmds: ['cargo build --workspace --release']
+
+  build:cuda:
+    desc: Type-check the CUDA feature (no GPU needed)
+    cmds: ['cargo check -p fastvideo-cudarc -p fastvideo-gpucheck --features cuda']
+
+  dist:
+    desc: Release binary for rented boxes (Docker, linked for the runtime image)
+    deps: [docker:up]
+    cmds: ['bash scripts/gpu/docker.sh dist']
+
+  image:
+    desc: Build the CUDA runtime image (published to GHCR by CI)
+    deps: [docker:up]
+    cmds: ['bash scripts/gpu/docker.sh image']
+
+  docker:up:
+    desc: Fail early with a clear message if Docker is not running
+    silent: true
+    cmds:
+      - |
+        docker info >/dev/null 2>&1 || {
+          echo "Docker is not running — start Docker Desktop (CUDA builds happen in it)." >&2
+          exit 1
+        }
+
+  # ---- checks that cost nothing -------------------------------------------
+
+  check:
+    desc: Lint, tests and the kernel compile gate — everything free
+    cmds:
+      - task: lint
+      - task: test
+      - task: nvrtc
+      - task: build:cuda
+
+  lint:
+    desc: Shell lint — the array-expansion trap that cost a GPU run
+    cmds: ['bash scripts/gpu/lint.sh']
+
+  # The workspace is not rustfmt- or clippy-clean today: `cargo fmt --all` rewrites
+  # ~60 files and clippy reports 27 lints. Both are advisory here rather than gates,
+  # so `task check` does not fail on drift that predates the change being checked.
+  lint:rust:
+    desc: Clippy over the workspace (advisory — does not fail the build)
+    cmds: ['cargo clippy --workspace --all-targets || true']
+
+  fmt:check:
+    desc: Show rustfmt drift (advisory — reformats nothing)
+    cmds: ['cargo fmt --all -- --check || true']
+
+  fmt:
+    desc: Apply rustfmt (warning — touches the whole workspace, not just your edits)
+    prompt: rustfmt currently rewrites ~60 files across the repo. Apply anyway?
+    cmds: ['cargo fmt --all']
+
+  test:
+    desc: Unit tests (host)
+    cmds: ['cargo test --workspace --lib']
+
+  test:docker:
+    desc: Unit tests inside the builder image
+    deps: [docker:up]
+    cmds: ['bash scripts/gpu/docker.sh test']
+
+  nvrtc:
+    desc: Compile every CUDA kernel for sm75-sm90 (no GPU)
+    deps: [docker:up]
+    cmds: ['bash scripts/gpu/docker.sh nvrtc']
+
+  preflight:
+    desc: What validate.sh runs before renting anything
+    deps: [docker:up]
+    cmds: ['bash scripts/gpu/validate.sh local']
+
+  # ---- control panel -------------------------------------------------------
+
+  up:
+    desc: Build what a run needs, then launch the control panel
+    deps: [dist]
+    cmds: [{ task: ui }]
+
+  ui:
+    desc: Launch the control panel (http://127.0.0.1:{{.UI_PORT}})
+    cmds:
+      - |
+        echo "control panel → http://127.0.0.1:{{.UI_PORT}}"
+        python3 scripts/ui/server.py --port {{.UI_PORT}}
+
+  ui:open:
+    desc: Launch the control panel and open a browser
+    cmds:
+      - |
+        python3 scripts/ui/server.py --port {{.UI_PORT}} &
+        sleep 2
+        (open http://127.0.0.1:{{.UI_PORT}} 2>/dev/null || xdg-open http://127.0.0.1:{{.UI_PORT}} 2>/dev/null || true)
+        wait
+
+  # ---- GPU runs (these rent hardware and cost money) -----------------------
+
+  offers:
+    desc: 'Cheapest matching offers, no rental (TIER=clip GPU=RTX_5090)'
+    cmds:
+      - '{{if .GPU}}FV_OFFER_QUERY_EXTRA=gpu_name={{.GPU}} {{end}}bash scripts/gpu/validate.sh offers {{.TIER}}'
+
+  run:
+    desc: 'Rent and run a tier (TIER=kernels|parity|clip|compare)'
+    cmds:
+      - '{{if .GPU}}FV_OFFER_QUERY_EXTRA=gpu_name={{.GPU}} {{end}}bash scripts/gpu/validate.sh run {{.TIER}}'
+
+  kernels:
+    desc: Kernel tier — kernels vs plain-Rust references (~$0.02)
+    cmds: [{ task: run, vars: { TIER: kernels } }]
+
+  parity:
+    desc: Parity tier — real weights vs the CPU path (~$0.05)
+    cmds: [{ task: run, vars: { TIER: parity } }]
+
+  clip:
+    desc: Clip tier — full validation plus two 8s clips (~$0.12)
+    cmds: [{ task: run, vars: { TIER: clip } }]
+
+  compare:
+    desc: Compare tier — our stack against upstream FastVideo on one box (~$0.30)
+    cmds: [{ task: run, vars: { TIER: compare } }]
+
+  gen:
+    desc: 'Generate one clip from a prompt (PROMPT="a dog on a beach")'
+    requires:
+      vars: [PROMPT]
+    cmds:
+      - |
+        FV_PROMPT={{.PROMPT | quote}} FV_FRAMES={{.FRAMES}} FV_STEPS={{.STEPS}} \
+        {{if .GPU}}FV_OFFER_QUERY_EXTRA=gpu_name={{.GPU}} {{end}}\
+        bash scripts/gpu/validate.sh run gen
+
+  # ---- rented machines -----------------------------------------------------
+
+  instances:
+    desc: List running Vast instances (they bill while they exist)
+    silent: true
+    cmds: ['python3 scripts/ui/server.py --list-instances']
+
+  reap:
+    desc: Destroy every fvgpu-* instance
+    cmds: ['bash scripts/gpu/validate.sh reap']
+
+  # ---- artifacts -----------------------------------------------------------
+
+  clips:
+    desc: List generated clips
+    silent: true
+    cmds:
+      - |
+        if [ -d artifacts/clips ]; then
+          find artifacts/clips -name '*.mp4' -exec ls -lh {} \; | awk '{print $5"\t"$9}' | sort -k2
+        else
+          echo "no clips yet — task gen PROMPT=\"...\""
+        fi
+
+  clean:
+    desc: Remove build output (keeps clips and cached references)
+    cmds:
+      - cargo clean
+      - rm -rf artifacts/gpucheck/dist artifacts/gpucheck/local
+
+  clean:all:
+    desc: Remove every artifact, including clips and cached references
+    prompt: Delete all clips, run reports and cached CPU references?
+    cmds:
+      - cargo clean
+      - rm -rf artifacts
