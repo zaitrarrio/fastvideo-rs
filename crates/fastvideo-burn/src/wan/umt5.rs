@@ -32,10 +32,13 @@ fn relative_position_bucket(
             let mut relative = j - i;
             let mut bucket = 0i32;
             let n_buckets = num_buckets / 2;
-            if relative < 0 {
+            // The upper half of the table is for keys *after* the query:
+            // HF adds the offset on `relative_position > 0`. Inverting this
+            // swaps the two halves and the encoder reads word order backwards.
+            if relative > 0 {
                 bucket += n_buckets;
-                relative = -relative;
             }
+            relative = relative.abs();
             let is_small = relative < max_exact;
             let relative_log = ((relative as f64 / max_exact as f64).ln()
                 / (max_distance as f64 / max_exact as f64).ln()
