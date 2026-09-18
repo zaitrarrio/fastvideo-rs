@@ -198,22 +198,84 @@ impl TaeHv {
         if n != 1 || c != 16 {
             return Err(msg(format!("taehv (taew2_1) expects [1, 16, T, H, W], got {:?}", z.shape)));
         }
-        // [1, C, T, H, W] -> frames-as-batch [T, C, H, W], which is how every
-        // block below wants it; time only reappears for MemBlock and TGrow.
-        let mut x = z.narrow(0, 0, 1)?.reshape(vec![c, t, h, w])?.permute(&[1, 0, 2, 3])?;
-        let mut frames = t;
 
-        for block in &self.blocks {
+        // Being parallel over frames is what makes TAEHV fast and what makes it
+        // run out of memory: every stage materialises every frame, and the last
+        // one is 4T frames of 64 channels at full resolution — ~12.6 GB for a
+        // 129-frame clip, on top of a resident DiT. So decode in chunks of
+        // latent frames, carrying each MemBlock's boundary frame across the
+        // seam, which is exactly what the reference's sequential path does with
+        // its `memory[i]`. Results are identical to decoding in one go.
+        let chunk = super::envflag::usize_flag("FASTVIDEO_TAEHV_CHUNK", 4).max(1);
+        // One saved frame per block, at that block's own frame rate — the rate
+        // differs after each TGrow, which is why this is indexed by block.
+        let mut memory: Vec<Option<CudaTensor>> = (0..self.blocks.len()).map(|_| None).collect();
+        let mut out_chunks: Vec<CudaTensor> = Vec::new();
+        let mut trimmed = false;
+
+        let mut start = 0usize;
+        while start < t {
+            let len = chunk.min(t - start);
+            let zc = z.narrow(2, start, len)?;
+            let piece = self.decode_chunk(&zc, c, len, h, w, &mut memory)?;
+            // Only the very first output frames are priming frames.
+            let piece = if !trimmed {
+                trimmed = true;
+                let f = piece.shape[0];
+                if f <= FRAMES_TO_TRIM {
+                    return Err(msg(format!(
+                        "taehv first chunk produced {f} frames, needs more than {FRAMES_TO_TRIM}; \
+                         raise FASTVIDEO_TAEHV_CHUNK"
+                    )));
+                }
+                piece.narrow(0, FRAMES_TO_TRIM, f - FRAMES_TO_TRIM)?
+            } else {
+                piece
+            };
+            out_chunks.push(piece);
+            start += len;
+        }
+
+        let refs: Vec<&CudaTensor> = out_chunks.iter().collect();
+        let x = CudaTensor::cat(&refs, 0)?;
+        let (frames, oc, oh, ow) = (x.shape[0], x.shape[1], x.shape[2], x.shape[3]);
+        // Clamp to the reference's [0, 1], then map to the [-1, 1] the rest of
+        // the pipeline uses.
+        let out = x.clamp(0.0, 1.0).mul_scalar(2.0).add_scalar(-1.0);
+        out.reshape(vec![1, frames, oc, oh, ow])?.permute(&[0, 2, 1, 3, 4])
+    }
+
+    /// One chunk of latent frames through every block, updating the per-block
+    /// boundary memory. Returns `[frames, 3, 8H, 8W]`, untrimmed.
+    fn decode_chunk(
+        &self,
+        zc: &CudaTensor,
+        c: usize,
+        len: usize,
+        h: usize,
+        w: usize,
+        memory: &mut [Option<CudaTensor>],
+    ) -> Result<CudaTensor> {
+        let mut x = zc.reshape(vec![c, len, h, w])?.permute(&[1, 0, 2, 3])?;
+        let mut frames = len;
+
+        for (i, block) in self.blocks.iter().enumerate() {
             x = match block {
                 Block::Clamp => tanh_scaled(&x, CLAMP_SCALE)?,
                 Block::Relu => relu(&x),
-                Block::Conv(c) => c.forward(&x)?,
+                Block::Conv(cv) => cv.forward(&x)?,
                 Block::Upsample2 => {
-                    let (h, w) = (x.shape[2], x.shape[3]);
-                    x.upsample_nearest2d(h * 2, w * 2)?
+                    let (hh, ww) = (x.shape[2], x.shape[3]);
+                    x.upsample_nearest2d(hh * 2, ww * 2)?
                 }
                 Block::Mem(m) => {
-                    let past = shift_one_frame(&x, frames)?;
+                    let past = match &memory[i] {
+                        // Carry the previous chunk's last input frame into this
+                        // chunk's first, so the seam is invisible.
+                        Some(prev) => CudaTensor::cat(&[prev, &x.narrow(0, 0, frames - 1)?], 0)?,
+                        None => shift_one_frame(&x, frames)?,
+                    };
+                    memory[i] = Some(x.narrow(0, frames - 1, 1)?);
                     m.forward(&x, &past)?
                 }
                 Block::TGrow { conv, stride } => {
@@ -221,8 +283,6 @@ impl TaeHv {
                     if *stride == 1 {
                         y
                     } else {
-                        // [F, stride*C, H, W] -> [F*stride, C, H, W], the
-                        // channel groups becoming consecutive frames.
                         let (fc, hh, ww) = (y.shape[1] / stride, y.shape[2], y.shape[3]);
                         frames *= stride;
                         y.reshape(vec![frames, fc, hh, ww])?
@@ -230,20 +290,7 @@ impl TaeHv {
                 }
             };
         }
-
-        let (oc, oh, ow) = (x.shape[1], x.shape[2], x.shape[3]);
-        if frames <= FRAMES_TO_TRIM {
-            return Err(msg(format!("taehv produced {frames} frames, needs more than {FRAMES_TO_TRIM}")));
-        }
-        // Drop the priming frames, clamp to the reference's [0, 1], then map to
-        // the [-1, 1] the rest of the pipeline uses.
-        let kept = frames - FRAMES_TO_TRIM;
-        let out = x
-            .narrow(0, FRAMES_TO_TRIM, kept)?
-            .clamp(0.0, 1.0)
-            .mul_scalar(2.0)
-            .add_scalar(-1.0);
-        out.reshape(vec![1, kept, oc, oh, ow])?.permute(&[0, 2, 1, 3, 4])
+        Ok(x)
     }
 }
 
@@ -319,6 +366,39 @@ mod tests {
         let x = CudaTensor::from_vec((0..6).map(|v| v as f32).collect(), vec![3, 2, 1, 1]).unwrap();
         let s = shift_one_frame(&x, 3).unwrap();
         assert_eq!(s.host_cow().unwrap().as_ref(), &[0.0, 0.0, 0.0, 1.0, 2.0, 3.0]);
+    }
+
+    /// The whole point of the boundary carry: chunking must be invisible.
+    /// Without it each chunk would restart every MemBlock's `past` from zero
+    /// and leave a seam every `chunk` latent frames — a defect that looks like
+    /// a periodic flicker in the video and like nothing at all in the shapes.
+    #[test]
+    fn chunking_does_not_change_the_result() {
+        let tae = TaeHv::load(&tiny_map()).expect("load");
+        let z = CudaTensor::from_vec(
+            (0..(16 * 6 * 2 * 2)).map(|i| ((i % 37) as f32 / 37.0) - 0.5).collect(),
+            vec![1, 16, 6, 2, 2],
+        )
+        .unwrap();
+
+        let whole = {
+            std::env::set_var("FASTVIDEO_TAEHV_CHUNK", "64");
+            tae.decode(&z).expect("whole")
+        };
+        let chunked = {
+            std::env::set_var("FASTVIDEO_TAEHV_CHUNK", "2");
+            tae.decode(&z).expect("chunked")
+        };
+        std::env::remove_var("FASTVIDEO_TAEHV_CHUNK");
+
+        assert_eq!(whole.shape, chunked.shape, "chunking changed the frame count");
+        let (a, b) = (whole.host_cow().unwrap(), chunked.host_cow().unwrap());
+        let worst = a
+            .iter()
+            .zip(b.iter())
+            .map(|(x, y)| (x - y).abs())
+            .fold(0.0f32, f32::max);
+        assert!(worst < 1e-5, "chunk seam changed the output by {worst}");
     }
 
     #[test]
