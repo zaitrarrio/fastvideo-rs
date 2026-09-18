@@ -165,6 +165,14 @@ tasks:
     desc: Oracle tier — our text encoder and one DiT step vs transformers/diffusers (~$1.50)
     cmds: [{ task: run, vars: { TIER: oracle } }]
 
+  fp8:
+    desc: 'FP8 A/B — the same clip with and without FP8 linears on one box (~$0.15)'
+    cmds:
+      - |
+        FV_FAST_REPO={{.REPO | default "FastVideo/FastWan-QAD-FP8-1.3B" | quote}} \
+        {{if .GPU}}FV_OFFER_QUERY_EXTRA=gpu_name={{.GPU}} {{end}}\
+        bash scripts/gpu/validate.sh run fp8
+
   gen:
     desc: 'Generate one clip from a prompt (PROMPT="a dog on a beach")'
     requires:

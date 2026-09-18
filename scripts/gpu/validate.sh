@@ -11,6 +11,7 @@
 #        each validation tier includes the ones before it.
 #        gen — the UI path: deploy, encode one prompt, generate one clip.
 #        oracle — our text encoder and one DiT step vs transformers/diffusers.
+#        fp8 — the same clip with and without FP8 linears, on one box.
 set -euo pipefail
 # shellcheck source=scripts/gpu/lib.sh
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
@@ -32,7 +33,9 @@ CURRENT_MACHINE=""; LAST_STAGE=""; IMAGE_HAS_BUILD=0
 WORK="/workspace"
 OUTR="$WORK/gpucheck-out"
 BASE_REPO="Wan-AI/Wan2.1-T2V-1.3B-Diffusers"
-FAST_REPO="FastVideo/FastWan2.1-T2V-1.3B-Diffusers"
+# FV_FAST_REPO swaps the distilled checkpoint without touching the tier code —
+# FastWan-QAD is the same architecture, so only the weights differ.
+FAST_REPO="${FV_FAST_REPO:-FastVideo/FastWan2.1-T2V-1.3B-Diffusers}"
 BASE_W="$WORK/weights/wan21-1.3b"
 FAST_W="$WORK/weights/fastwan21-1.3b"
 
@@ -56,12 +59,14 @@ tier_query() {
     # The oracle holds UMT5-XXL in torch float32 (~22GB) before the DiT loads;
     # 24GB is too tight to risk a rental on.
     oracle) echo "$base gpu_ram>=40 disk_space>=160 cpu_ram>=80 inet_down>=500" ;;
-    *) die "unknown tier '$1' (mathprobe|kernels|parity|clip|compare|gen|oracle)" ;;
+    # FP8 E4M3 tensor cores start at Ada (sm89); Ampere has none.
+    fp8) echo "$base compute_cap>=890 gpu_ram>=24 disk_space>=100 cpu_ram>=80 inet_down>=500" ;;
+    *) die "unknown tier '$1' (mathprobe|kernels|parity|clip|compare|gen|oracle|fp8)" ;;
   esac
 }
-tier_max_dph() { case "$1" in mathprobe) echo 0.40 ;; kernels) echo 0.25 ;; parity) echo 0.40 ;; clip) echo 0.60 ;; compare) echo 0.60 ;; gen) echo 0.80 ;; oracle) echo 1.60 ;; esac; }
-tier_max_minutes() { case "$1" in mathprobe) echo 30 ;; kernels) echo 40 ;; parity) echo 75 ;; clip) echo 180 ;; compare) echo 240 ;; gen) echo 180 ;; oracle) echo 150 ;; esac; }
-tier_disk() { case "$1" in mathprobe) echo 40 ;; kernels) echo 40 ;; parity) echo 60 ;; clip) echo 100 ;; compare) echo 180 ;; gen) echo 100 ;; oracle) echo 160 ;; esac; }
+tier_max_dph() { case "$1" in mathprobe) echo 0.40 ;; kernels) echo 0.25 ;; parity) echo 0.40 ;; clip) echo 0.60 ;; compare) echo 0.60 ;; gen) echo 0.80 ;; oracle) echo 1.60 ;; fp8) echo 0.80 ;; esac; }
+tier_max_minutes() { case "$1" in mathprobe) echo 30 ;; kernels) echo 40 ;; parity) echo 75 ;; clip) echo 180 ;; compare) echo 240 ;; gen) echo 180 ;; oracle) echo 150 ;; fp8) echo 90 ;; esac; }
+tier_disk() { case "$1" in mathprobe) echo 40 ;; kernels) echo 40 ;; parity) echo 60 ;; clip) echo 100 ;; compare) echo 180 ;; gen) echo 100 ;; oracle) echo 160 ;; fp8) echo 100 ;; esac; }
 
 usage() { sed -n '2,12p' "$0" | sed 's/^# \{0,1\}//'; exit 2; }
 
@@ -485,7 +490,7 @@ cmd_run() {
   # Downloads run in the background during the weight-free stages.
   case "$tier" in
     parity) remote_run fetch-base 120 fetch "$BASE_REPO" "$BASE_W" "transformer/*" "vae/*" ;;
-    clip | compare | gen | oracle)
+    clip | compare | gen | oracle | fp8)
       remote_run fetch-base 120 fetch "$BASE_REPO" "$BASE_W" "transformer/*" "vae/*" "text_encoder/*" "tokenizer/*"
       remote_run fetch-fast 120 fetch "$FAST_REPO" "$FAST_W" "transformer/*" "vae/*"
       ;;
@@ -555,6 +560,49 @@ cmd_run() {
     gpucheck_stage oracle 1800 --keep-going --mode exact oracle --weights "$FAST_W" \
       --oracle "$OUTR/oracle/oracle.safetensors" --embeds "$embeds/oracle.safetensors" --device cuda
     log "ORACLE done"
+    return 0
+  fi
+
+  # `fp8` answers two questions about the FP8 linear path that only hardware
+  # can: is it faster, and does per-tensor E4M3 hold on a checkpoint distilled
+  # for it. One box, one prompt, one seed, the same clip twice — so the only
+  # variable is --fp8 — then `compare` diffs the two latents and frames.
+  #
+  # Point FV_FAST_REPO at FastVideo/FastWan-QAD-FP8-1.3B for the QAD weights.
+  # Running it against stock FastWan is also informative: the difference between
+  # the two is the whole claim QAD makes.
+  if [[ "$tier" == fp8 ]]; then
+    gpucheck_stage nvrtc 300 nvrtc
+    gpucheck_stage device 300 device
+    # Kernel-level FP8 checks first: no point timing a GEMM that is wrong.
+    gpucheck_stage kernels-fp8 900 --keep-going --mode fast kernels
+    local prompt; prompt="$(jq -r '.prompts[0].prompt' "$FV_ROOT/scripts/gpu/prompts.json")"
+    local negative; negative="$(jq -r '.negative' "$FV_ROOT/scripts/gpu/prompts.json")"
+    jq -n --arg p "$prompt" --arg n "$negative" \
+      '{negative: $n, prompts: [{name: "fp8", prompt: $p}]}' >"$RUN_DIR/prompt.json"
+    fv_rsync_to "$HOST" "$PORT" "$RUN_DIR/prompt.json" "$OUTR/prompt.json" >/dev/null
+    log "fp8 tier: checkpoint $FAST_REPO"
+    local embeds="$OUTR/embeds"
+    remote_run wait-text 1800 wait-weights "$BASE_W" 1800 text_encoder
+    gpucheck_stage embed 1800 --mode exact embed --weights "$BASE_W" --prompts "$OUTR/prompt.json" \
+      --embeds "$embeds" --device cuda
+    remote_run wait-fast 1800 wait-weights "$FAST_W" 1800 transformer vae
+    # 2s keeps the A/B cheap; the frame count is the only thing dropped, and the
+    # per-step cost is what the timing question is about.
+    local ab=(--height 448 --width 832 --frames "${FV_FP8_FRAMES:-33}" --steps 3
+              --guidance 1.0 --flow-shift 8.0 --dmd --fps 16)
+    gpucheck_stage clip-bf16 1800 --mode fast clip --weights "$FAST_W" \
+      --embeds "$embeds/fp8.safetensors" --device cuda "${ab[@]}" \
+      --name dmd-bf16 --budget-min 20 --no-mp4
+    gpucheck_stage clip-fp8 1800 --mode fast --fp8 clip --weights "$FAST_W" \
+      --embeds "$embeds/fp8.safetensors" --device cuda "${ab[@]}" \
+      --name dmd-fp8 --budget-min 20 --no-mp4
+    # Limits are loose on purpose: this stage measures the cost of FP8 rather
+    # than gating it. What the numbers mean is a judgement for the report, not
+    # something to bake in before we have ever seen one.
+    gpucheck_stage compare-fp8 300 compare --a "$OUTR/clips/dmd-bf16" --b "$OUTR/clips/dmd-fp8" \
+      --max-step1-rel 1.0 --max-latent-rel 1.0 --min-psnr 0.0
+    log "FP8 A/B done"
     return 0
   fi
 
