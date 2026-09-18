@@ -560,6 +560,17 @@ pub fn run(report: &mut Report, lim: Limits, seed: u64) -> StageResult<()> {
                 // bf16 gathers on the fine stage, so this is bf16 round-off.
                 c.cmp(&tag, &host, &want, 2e-2)?;
             }
+            // The fused fine stage must land on the same answer as gather +
+            // batched GEMM: same algorithm, different execution.
+            std::env::set_var("FASTVIDEO_VSA_FUSED", "1");
+            let fused = vsa::vsa_attention_device(
+                &qd, &kd, &vd, Some(&gd), &plan_dev, topk, bh, seq, dim, scale, nb,
+            )?;
+            std::env::remove_var("FASTVIDEO_VSA_FUSED");
+            let host_fused = dev.stream.memcpy_dtov(&fused)?;
+            let tag = format!("vsa_fused_{}x{}x{}_h{heads}_d{dim}_k{topk}", grid.0, grid.1, grid.2);
+            c.cmp(&tag, &host_fused, &want, 2e-2)?;
+
             // Tile means and top-k are exact, so they get tight limits of their own.
             let qc = ops::vsa_tile_mean_device(&qd, &plan_dev, bh, seq, dim)?;
             let mut want_mean = vec![0.0f32; bh * nb * dim];

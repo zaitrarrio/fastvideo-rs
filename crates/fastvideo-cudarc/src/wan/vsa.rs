@@ -242,6 +242,13 @@ pub fn vsa_attention_host(
     Ok(out)
 }
 
+/// `FASTVIDEO_VSA_FUSED=1` runs the fine stage as one fused kernel instead of
+/// gather + batched GEMM.
+#[cfg(feature = "cuda")]
+fn fused_enabled() -> bool {
+    super::envflag::bool_flag("FASTVIDEO_VSA_FUSED", false)
+}
+
 /// Everything a VSA layer needs for one latent grid: the uploaded tiling, how
 /// many tiles each query tile attends to, and the query-tile group size that
 /// bounds the gathered buffer. Built once per grid and shared by every layer
@@ -311,8 +318,15 @@ pub fn vsa_attention_device(
     drop(probs);
     drop(scores);
 
-    // 3. Fine stage, a group of query tiles at a time.
+    // 3. Fine stage. The fused kernel streams K/V from the tiled layout; the
+    //    gather path materialises them and lets cuBLAS use tensor cores. Which
+    //    is faster is hardware-dependent, so it is a flag, not a decision.
     let mut out = ops::fill_device(bh * seq * dim, 0.0)?;
+    if fused_enabled() {
+        let sparse = ops::vsa_fused_attn_device(q, k, v, &selected, plan, bh, seq, dim, topk, scale)?;
+        ops::vsa_combine_device(&sparse, &coarse, gate, plan, &mut out, bh, nb, 0, seq, dim)?;
+        return Ok(out);
+    }
     let len = topk * plan.tile_elems;
     let group = group.clamp(1, nb);
     let mut q_base = 0usize;

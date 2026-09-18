@@ -635,6 +635,124 @@ extern "C" __global__ void vsa_gather_q(
         out[dst + d] = fv_to_bf16(src >= 0 ? qb[(long)src * dim + d] : 0.0f);
     }
 }
+// Fused block-sparse attention: one CUDA block per (query tile, batch-head).
+//
+// The gather path materialises every query tile's selected K/V into a dense
+// buffer so cuBLAS can run the fine stage on tensor cores. This streams the
+// same tiles straight out of the tiled layout instead, trading ~80 GB/layer of
+// traffic for scalar math. Whether that is a win is a measurement, not a
+// theorem: cuBLAS bf16 runs at roughly twice the scalar f32 rate.
+//
+// 256 threads = 8 warps; warp w owns queries [8w, 8w+8), lane l owns key l of
+// the current 32-key half tile and dims [4l, 4l+4) of the output. Every K/V
+// tile load is therefore amortised over all 64 queries — the thing the earlier
+// flash kernel got wrong by giving each block a single query.
+#define VSA_Q 64
+#define VSA_KH 32
+__device__ __forceinline__ float fv_bf16_to_f32(unsigned short b) {
+    return __uint_as_float((unsigned int)b << 16);
+}
+extern "C" __global__ void vsa_fused_attn(
+    const float* q, const float* k, const float* v, const unsigned int* selected,
+    const int* slot_src, const int* block_sizes, float* out,
+    long seq, int dim, int topk, int num_tiles, float scale
+) {
+    int qt = blockIdx.x;
+    long bh = blockIdx.y;
+    if (qt >= num_tiles) return;
+    int tid = threadIdx.x, warp = tid >> 5, lane = tid & 31;
+
+    extern __shared__ unsigned char vsa_smem[];
+    unsigned short* Qs = (unsigned short*)vsa_smem;
+    unsigned short* Ks = Qs + (long)VSA_Q * dim;
+    unsigned short* Vs = Ks + (long)VSA_KH * dim;
+    float* Ps = (float*)(Vs + (long)VSA_KH * dim);
+
+    const float* qb = q + bh * seq * (long)dim;
+    const float* kb = k + bh * seq * (long)dim;
+    const float* vb = v + bh * seq * (long)dim;
+
+    // Q tile stays resident for the whole block: it is read once per kv tile.
+    for (int i = tid; i < VSA_Q * dim; i += blockDim.x) {
+        int slot = i / dim, d = i - slot * dim;
+        int src = slot_src[(long)qt * VSA_Q + slot];
+        float val = src >= 0 ? qb[(long)src * dim + d] : 0.0f;
+        Qs[i] = fv_to_bf16(val);
+    }
+    __syncthreads();
+
+    float acc[8][4];
+    float m_run[8], l_run[8];
+    for (int qi = 0; qi < 8; qi++) {
+        m_run[qi] = -3.402823466e+38f;
+        l_run[qi] = 0.0f;
+        for (int dd = 0; dd < 4; dd++) acc[qi][dd] = 0.0f;
+    }
+    const float neg_inf = __int_as_float(0xff800000);
+
+    for (int slot_i = 0; slot_i < topk; slot_i++) {
+        unsigned int kt = selected[((bh * (long)num_tiles) + qt) * (long)topk + slot_i];
+        int valid = block_sizes[kt];
+        for (int half = 0; half < 2; half++) {
+            int base = half * VSA_KH;
+            for (int i = tid; i < VSA_KH * dim; i += blockDim.x) {
+                int slot = i / dim, d = i - slot * dim;
+                int src = slot_src[(long)kt * VSA_Q + base + slot];
+                float kv = 0.0f, vv = 0.0f;
+                if (src >= 0) { kv = kb[(long)src * dim + d]; vv = vb[(long)src * dim + d]; }
+                Ks[i] = fv_to_bf16(kv);
+                Vs[i] = fv_to_bf16(vv);
+            }
+            __syncthreads();
+
+            // Scores: each lane takes one key, each warp eight queries.
+            float s[8];
+            int key_ok = (base + lane) < valid;
+            for (int qi = 0; qi < 8; qi++) {
+                int qrow = warp * 8 + qi;
+                float dot = 0.0f;
+                const unsigned short* qrow_p = Qs + (long)qrow * dim;
+                const unsigned short* krow_p = Ks + (long)lane * dim;
+                for (int d = 0; d < dim; d++) dot += fv_bf16_to_f32(qrow_p[d]) * fv_bf16_to_f32(krow_p[d]);
+                s[qi] = key_ok ? dot * scale : neg_inf;
+            }
+            // Online softmax over this half tile, reduced across the warp's lanes.
+            for (int qi = 0; qi < 8; qi++) {
+                float m_tile = s[qi];
+                for (int off = 16; off > 0; off >>= 1) m_tile = fmaxf(m_tile, __shfl_xor_sync(0xffffffff, m_tile, off));
+                float m_new = fmaxf(m_run[qi], m_tile);
+                float e = (s[qi] == neg_inf) ? 0.0f : expf(s[qi] - m_new);
+                Ps[(warp * 8 + qi) * VSA_KH + lane] = e;
+                float sum = e;
+                for (int off = 16; off > 0; off >>= 1) sum += __shfl_xor_sync(0xffffffff, sum, off);
+                float corr = (m_run[qi] == -3.402823466e+38f) ? 0.0f : expf(m_run[qi] - m_new);
+                l_run[qi] = l_run[qi] * corr + sum;
+                for (int dd = 0; dd < 4; dd++) acc[qi][dd] *= corr;
+                m_run[qi] = m_new;
+            }
+            __syncthreads();
+            // P @ V: lane owns four output dims, loops the 32 keys.
+            for (int qi = 0; qi < 8; qi++) {
+                int qrow = warp * 8 + qi;
+                const float* prow = Ps + (long)qrow * VSA_KH;
+                for (int key = 0; key < VSA_KH; key++) {
+                    float p = prow[key];
+                    if (p == 0.0f) continue;
+                    const unsigned short* vrow = Vs + (long)key * dim;
+                    for (int dd = 0; dd < 4; dd++) acc[qi][dd] += p * fv_bf16_to_f32(vrow[lane * 4 + dd]);
+                }
+            }
+            __syncthreads();
+        }
+    }
+    // Write the tile's rows in padded slot order; vsa_combine scatters them.
+    for (int qi = 0; qi < 8; qi++) {
+        int qrow = warp * 8 + qi;
+        float inv = l_run[qi] > 0.0f ? 1.0f / l_run[qi] : 0.0f;
+        float* orow = out + ((bh * (long)num_tiles + qt) * VSA_Q + qrow) * (long)dim;
+        for (int dd = 0; dd < 4; dd++) orow[lane * 4 + dd] = acc[qi][dd] * inv;
+    }
+}
 // -inf the score columns that land on tile padding, so the softmax ignores
 // them instead of treating a zeroed key as a real one scoring 0.
 extern "C" __global__ void vsa_mask_pad(
@@ -800,6 +918,7 @@ kernel_fns!(
     vsa_topk,
     vsa_gather_kv,
     vsa_gather_q,
+    vsa_fused_attn,
     vsa_mask_pad,
     vsa_combine,
 );

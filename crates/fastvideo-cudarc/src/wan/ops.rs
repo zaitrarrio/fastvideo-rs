@@ -699,6 +699,44 @@ pub fn vsa_mask_pad_device(
     Ok(())
 }
 
+/// Fused block-sparse attention over every query tile at once. Writes the fine
+/// stage's output in padded slot order, `[bh, num_tiles, tile, dim]`, for
+/// [`vsa_combine_device`] to scatter.
+#[cfg(feature = "cuda")]
+#[allow(clippy::too_many_arguments)]
+pub fn vsa_fused_attn_device(
+    q: &CudaSlice<f32>,
+    k: &CudaSlice<f32>,
+    v: &CudaSlice<f32>,
+    selected: &CudaSlice<u32>,
+    plan: &VsaPlanDev,
+    bh: usize,
+    seq: usize,
+    dim: usize,
+    topk: usize,
+    scale: f32,
+) -> Result<CudaSlice<f32>> {
+    const THREADS: u32 = 256;
+    const HALF: usize = 32;
+    check("vsa_fused_attn", dim % 128 == 0 || dim == 64 || dim == 128)?;
+    let dev = ctx()?;
+    let nb = plan.num_tiles;
+    let mut out = alloc(bh * nb * plan.tile_elems * dim)?;
+    // Q tile + one K/V half tile in bf16, plus the probability tile in f32.
+    let shared = (plan.tile_elems + 2 * HALF) * dim * 2 + plan.tile_elems * HALF * 4;
+    let cfg = LaunchConfig {
+        grid_dim: (nb as u32, bh as u32, 1),
+        block_dim: (THREADS, 1, 1),
+        shared_mem_bytes: shared as u32,
+    };
+    let (seq_i, dim_i) = (seq as i64, dim as i32);
+    let (tk, nt) = (topk as i32, nb as i32);
+    launch!(dev.stream, &dev.kernels.vsa_fused_attn, cfg;
+        q, k, v, selected, &plan.slot_src, &plan.block_sizes, &mut out, &seq_i, &dim_i, &tk, &nt, &scale)
+    .map_err(err)?;
+    Ok(out)
+}
+
 /// Scatter `coarse * gate + sparse` back into token order.
 #[cfg(feature = "cuda")]
 #[allow(clippy::too_many_arguments)]
