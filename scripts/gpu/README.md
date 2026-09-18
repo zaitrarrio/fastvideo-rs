@@ -34,6 +34,11 @@ The harness runs on macOS bash 3.2, where `"${arr[@]}"` on an empty array under
 `scripts/gpu/lint.sh` checks this (and parses every script); `validate.sh local`
 runs it.
 
+`FASTVIDEO_CONV3D` picks the 3-D conv backend: `auto` (default, times each
+candidate once per shape and keeps the winner), `cudnn`, `unfold` or
+`cudnn-bf16`. bf16 only competes in `auto` under fast mode, since it changes
+the numerics.
+
 `FASTVIDEO_VAE_CHUNK` decodes several latent frames per pass instead of one.
 `2` is ~9% faster on an 8s clip and produces identical frames; `4` runs out of
 memory on a 24GB card, so the default stays `1`.

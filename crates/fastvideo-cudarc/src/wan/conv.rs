@@ -28,6 +28,7 @@ struct ConvKey {
     pad: Vec<usize>,
     stride: Vec<usize>,
     fma: bool,
+    bf16: bool,
 }
 
 struct ConvPlan {
@@ -40,12 +41,36 @@ struct ConvPlan {
     y_shape: Vec<usize>,
 }
 
+/// The same plan with bfloat16 operands and F32 accumulation. The VAE's
+/// convolutions run at this card's TF32 peak, so they are compute-bound: bf16
+/// halves the math, and the casts around it cost less than the time saved.
+struct ConvPlanBf16 {
+    conv: ConvDescriptor<f32>,
+    x: TensorDescriptor<half::bf16>,
+    w: FilterDescriptor<half::bf16>,
+    y: TensorDescriptor<half::bf16>,
+    algo: sys::cudnnConvolutionFwdAlgo_t,
+    workspace_bytes: usize,
+    y_shape: Vec<usize>,
+}
+
+/// Which implementation runs a 3-D convolution for a given shape.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Conv3dPick {
+    Cudnn,
+    Unfold,
+    /// bf16 operands, F32 accumulate. Only a candidate in fast mode: it changes
+    /// the numerics, and exact mode has to stay comparable to the CPU path.
+    CudnnBf16,
+}
+
 #[derive(Default)]
 pub struct ConvCache {
     plans: HashMap<ConvKey, ConvPlan>,
+    plans_bf16: HashMap<ConvKey, ConvPlanBf16>,
     workspace: Option<CudaSlice<u8>>,
-    /// Chosen 3-D backend per shape (`true` = temporal unfold).
-    conv3d_unfold: HashMap<ConvKey, bool>,
+    /// Chosen 3-D backend per shape.
+    conv3d_pick: HashMap<ConvKey, Conv3dPick>,
 }
 
 impl ConvCache {
@@ -120,6 +145,85 @@ fn build_plan(dev: &DeviceContext, key: &ConvKey) -> Result<ConvPlan> {
     Ok(ConvPlan { conv, x, w, y, algo, workspace_bytes, y_shape })
 }
 
+fn build_plan_bf16(dev: &DeviceContext, key: &ConvKey) -> Result<ConvPlanBf16> {
+    let cudnn = &dev.cudnn;
+    let y_shape = out_shape(&key.x, &key.w, &key.pad, &key.stride)?;
+    let pads: Vec<i32> = key.pad.iter().map(|&p| p as i32).collect();
+    let strides: Vec<i32> = key.stride.iter().map(|&s| s as i32).collect();
+    let dilations = vec![1i32; pads.len()];
+    // F32 accumulation over bf16 operands; tensor-core math is the whole point,
+    // so this plan never asks for FMA_MATH.
+    let mut conv = cudnn.create_convnd::<f32>(
+        &pads,
+        &strides,
+        &dilations,
+        sys::cudnnConvolutionMode_t::CUDNN_CROSS_CORRELATION,
+    )?;
+    conv.set_math_type(sys::cudnnMathType_t::CUDNN_TENSOR_OP_MATH)?;
+    let dims = |s: &[usize]| s.iter().map(|&d| d as i32).collect::<Vec<i32>>();
+    let x = cudnn.create_nd_tensor::<half::bf16>(&dims(&key.x), &contiguous_strides(&key.x))?;
+    let w = cudnn
+        .create_nd_filter::<half::bf16>(sys::cudnnTensorFormat_t::CUDNN_TENSOR_NCHW, &dims(&key.w))?;
+    let y = cudnn.create_nd_tensor::<half::bf16>(&dims(&y_shape), &contiguous_strides(&y_shape))?;
+    let op = ConvForward { conv: &conv, x: &x, w: &w, y: &y };
+    let algo = op.pick_algorithm()?;
+    let workspace_bytes = op.get_workspace_size(algo)?;
+    super::log::debug(format_args!(
+        "conv plan (bf16) x={:?} w={:?} algo={algo:?} workspace={}B",
+        key.x, key.w, workspace_bytes
+    ));
+    Ok(ConvPlanBf16 { conv, x, w, y, algo, workspace_bytes, y_shape })
+}
+
+/// [`cudnn_conv`] with bf16 operands: cast in, convolve, cast back. Worth it
+/// only because these convolutions are compute-bound at TF32 peak.
+pub fn cudnn_conv_bf16(
+    x: &CudaSlice<f32>,
+    x_shape: &[usize],
+    w: &CudaSlice<f32>,
+    w_shape: &[usize],
+    pad: &[usize],
+    stride: &[usize],
+) -> Result<(CudaSlice<f32>, Vec<usize>)> {
+    let dev = global_device().ok_or_else(|| DeviceError::Message("no global CUDA device context".into()))?;
+    let cast = |e: super::tensor::TensorError| DeviceError::Message(e.to_string());
+    let xb = super::ops::cast_f32_bf16_device(x).map_err(cast)?;
+    let wb = super::ops::cast_f32_bf16_device(w).map_err(cast)?;
+    let key = ConvKey {
+        x: x_shape.to_vec(),
+        w: w_shape.to_vec(),
+        pad: pad.to_vec(),
+        stride: stride.to_vec(),
+        fma: false,
+        bf16: true,
+    };
+    let mut cache = dev.conv.lock().expect("conv cache lock");
+    if !cache.plans_bf16.contains_key(&key) {
+        let plan = build_plan_bf16(&dev, &key)?;
+        cache.plans_bf16.insert(key.clone(), plan);
+    }
+    let need = cache.plans_bf16[&key].workspace_bytes;
+    if need > 0 && cache.workspace.as_ref().is_none_or(|ws| ws.len() < need) {
+        cache.workspace = None;
+        cache.workspace = Some(unsafe { dev.stream.alloc::<u8>(need) }?);
+    }
+    let ConvCache { plans_bf16, workspace, .. } = &mut *cache;
+    let plan = &plans_bf16[&key];
+    let n_out: usize = plan.y_shape.iter().product();
+    let mut yb = unsafe { dev.stream.alloc::<half::bf16>(n_out) }?;
+    let op = ConvForward { conv: &plan.conv, x: &plan.x, w: &plan.w, y: &plan.y };
+    unsafe {
+        // cudarc types alpha/beta as the output element type and converts them
+        // to cuDNN's F32 scaling parameter internally.
+        let (alpha, beta) = (half::bf16::from_f32(1.0), half::bf16::from_f32(0.0));
+        op.launch(plan.algo, if need > 0 { workspace.as_mut() } else { None }, (alpha, beta), &xb, &wb, &mut yb)?;
+    }
+    let y_shape = plan.y_shape.clone();
+    drop(cache);
+    let y = super::ops::cast_bf16_f32_bias_act_device(&yb, None, false).map_err(cast)?;
+    Ok((y, y_shape))
+}
+
 /// cuDNN cross-correlation of contiguous NC(D)HW `x` with OI(D)HW `w`
 /// (symmetric zero padding). Returns the output buffer and its shape.
 pub fn cudnn_conv(
@@ -144,6 +248,7 @@ pub fn cudnn_conv(
         pad: pad.to_vec(),
         stride: stride.to_vec(),
         fma: fma_math(&dev),
+        bf16: false,
     };
     let mut cache = dev.conv.lock().expect("conv cache lock");
     if !cache.plans.contains_key(&key) {
@@ -191,43 +296,54 @@ pub fn conv3d(
     pad: [usize; 3],
     stride: [usize; 3],
 ) -> Result<(CudaSlice<f32>, Vec<usize>)> {
-    let run = |unfold: bool| -> Result<(CudaSlice<f32>, Vec<usize>)> {
-        if unfold && pad[0] == 0 {
-            conv3d_unfold(x, x_shape, w, w_shape, [pad[1], pad[2]], stride)
-        } else {
-            cudnn_conv(x, x_shape, w, w_shape, &pad, &stride)
+    let run = |pick: Conv3dPick| -> Result<(CudaSlice<f32>, Vec<usize>)> {
+        match pick {
+            Conv3dPick::Unfold if pad[0] == 0 => conv3d_unfold(x, x_shape, w, w_shape, [pad[1], pad[2]], stride),
+            Conv3dPick::CudnnBf16 => cudnn_conv_bf16(x, x_shape, w, w_shape, &pad, &stride),
+            _ => cudnn_conv(x, x_shape, w, w_shape, &pad, &stride),
         }
     };
     match conv3d_backend().as_str() {
-        "cudnn" => return run(false),
-        "unfold" => return run(true),
+        "cudnn" => return run(Conv3dPick::Cudnn),
+        "unfold" => return run(Conv3dPick::Unfold),
+        "cudnn-bf16" => return run(Conv3dPick::CudnnBf16),
         _ => {}
     }
     let dev = global_device().ok_or_else(|| DeviceError::Message("no global CUDA device context".into()))?;
-    let key = ConvKey { x: x_shape.to_vec(), w: w_shape.to_vec(), pad: pad.to_vec(), stride: stride.to_vec(), fma: fma_math(&dev) };
-    let known = dev.conv.lock().expect("conv cache lock").conv3d_unfold.get(&key).copied();
-    if let Some(unfold) = known {
-        return run(unfold);
+    let key =
+        ConvKey { x: x_shape.to_vec(), w: w_shape.to_vec(), pad: pad.to_vec(), stride: stride.to_vec(), fma: fma_math(&dev), bf16: false };
+    let known = dev.conv.lock().expect("conv cache lock").conv3d_pick.get(&key).copied();
+    if let Some(pick) = known {
+        return run(pick);
     }
-    let timed = |unfold: bool| -> Result<(f64, (CudaSlice<f32>, Vec<usize>))> {
-        drop(run(unfold)?);
+    let timed = |pick: Conv3dPick| -> Result<(f64, (CudaSlice<f32>, Vec<usize>))> {
+        drop(run(pick)?);
         dev.synchronize()?;
         let t = std::time::Instant::now();
-        let out = run(unfold)?;
+        let out = run(pick)?;
         dev.synchronize()?;
         Ok((t.elapsed().as_secs_f64(), out))
     };
-    let (cudnn_s, cudnn_out) = timed(false)?;
-    let (unfold_s, unfold_out) = timed(true)?;
-    let unfold = unfold_s < cudnn_s;
-    super::log::info(format_args!(
-        "conv3d x={x_shape:?} w={w_shape:?}: cudnn {:.1}ms, unfold {:.1}ms → {}",
-        cudnn_s * 1e3,
-        unfold_s * 1e3,
-        if unfold { "unfold" } else { "cudnn" }
-    ));
-    dev.conv.lock().expect("conv cache lock").conv3d_unfold.insert(key, unfold);
-    Ok(if unfold { unfold_out } else { cudnn_out })
+    // Exact mode must stay comparable to the CPU path, so bf16 only competes
+    // when the context is already running reduced-precision math.
+    let mut best: Option<(f64, Conv3dPick, (CudaSlice<f32>, Vec<usize>))> = None;
+    let mut report: Vec<String> = Vec::new();
+    let candidates: &[Conv3dPick] = if fma_math(&dev) {
+        &[Conv3dPick::Cudnn, Conv3dPick::Unfold]
+    } else {
+        &[Conv3dPick::Cudnn, Conv3dPick::Unfold, Conv3dPick::CudnnBf16]
+    };
+    for &pick in candidates {
+        let (secs, out) = timed(pick)?;
+        report.push(format!("{pick:?} {:.1}ms", secs * 1e3));
+        if best.as_ref().is_none_or(|(b, _, _)| secs < *b) {
+            best = Some((secs, pick, out));
+        }
+    }
+    let (_, pick, out) = best.expect("at least one conv3d backend");
+    super::log::info(format_args!("conv3d x={x_shape:?} w={w_shape:?}: {} → {pick:?}", report.join(", ")));
+    dev.conv.lock().expect("conv cache lock").conv3d_pick.insert(key, pick);
+    Ok(out)
 }
 
 /// 3-D conv through a temporal unfold: gather every `kt`-frame window into
