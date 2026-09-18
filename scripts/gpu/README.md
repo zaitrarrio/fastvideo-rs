@@ -38,8 +38,16 @@ runs it.
 
 `python3 scripts/ui/server.py` serves a local page (loopback only, default port
 8733) to search offers, rent a machine, deploy, generate from a prompt and play
-the result. It shells out to `validate.sh run gen`, so the Vast key stays in
-`.env` and never reaches the browser. The same path from the shell:
+the result. Searching, listing and destroying call Vast's REST API directly;
+deploy and generate shell out to `validate.sh run gen`, which needs ssh and
+rsync. The key is read from `.env` into the server process, sent only to Vast,
+and scrubbed from anything the page receives.
+
+API routes, as verified against the live service (the published docs still list
+the first one): `GET /api/v0/bundles/` for offers, `GET /api/v1/instances/` for
+instances — **`/api/v0/instances/` answers 410 Gone** — `PUT /api/v0/asks/{id}/`
+to rent and `DELETE /api/v0/instances/{id}/` to destroy. Override the base with
+`VAST_API_BASE`. The same path from the shell:
 
 ```
 FV_PROMPT="a golden retriever on a beach at sunset" scripts/gpu/validate.sh run gen

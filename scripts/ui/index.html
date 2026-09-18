@@ -62,7 +62,7 @@
 <body>
 <header>
   <h1>FastVideo Control</h1>
-  <p>Rent a GPU, deploy the model, generate a clip. Runs locally — your Vast key stays in <code>.env</code>.</p>
+  <p>Rent a GPU, deploy the model, generate a clip. Talks to the Vast REST API from your machine; the key stays in <code>.env</code>.</p>
 </header>
 
 <main>
@@ -150,9 +150,11 @@ $('search').onclick = async () => {
   body.innerHTML = '<tr><td class="muted">Searching…</td></tr>';
   const list = await api('/api/offers?tier=gen&gpu=' + encodeURIComponent($('gpu').value));
   if (!list.length) { body.innerHTML = '<tr><td class="muted">No offers under the price cap.</td></tr>'; return; }
-  body.innerHTML = '<tr><th>GPU</th><th>VRAM</th><th>$/hr</th><th>Net</th><th>Where</th></tr>' +
-    list.map(o => `<tr class="pick" data-gpu="${o.gpu.replace(/\s+/g, '_')}">
+  if (list[0] && list[0].error) { body.innerHTML = `<tr><td class="bad">${list[0].error}</td></tr>`; return; }
+  body.innerHTML = '<tr><th>GPU</th><th>VRAM</th><th>$/hr</th><th>sm</th><th>rel</th><th>Net</th><th>Where</th></tr>' +
+    list.map(o => `<tr class="pick" data-gpu="${(o.gpu||'').replace(/\s+/g, '_')}" title="offer ${o.id} · machine ${o.machine} · CUDA ${o.cuda}">
       <td>${o.gpu}</td><td>${o.vram}GB</td><td>$${o.dph.toFixed(3)}</td>
+      <td class="muted">${o.sm}</td><td class="muted">${o.reliability}</td>
       <td>${o.inet}Mbps</td><td class="muted">${o.where}</td></tr>`).join('');
   body.querySelectorAll('tr.pick').forEach(tr => tr.onclick = () => {
     body.querySelectorAll('tr').forEach(r => r.classList.remove('sel'));
@@ -221,9 +223,13 @@ $('refresh').onclick = loadClips;
 async function loadInstances() {
   const list = await api('/api/instances');
   const body = $('instances').querySelector('tbody');
+  if (list[0] && list[0].error) {
+    body.innerHTML = `<tr><td class="bad">${list[0].error}</td></tr>`; return;
+  }
   body.innerHTML = list.length
-    ? '<tr><th>ID</th><th>GPU</th><th>Status</th><th>$/hr</th><th></th></tr>' + list.map(i => `<tr>
+    ? '<tr><th>ID</th><th>GPU</th><th>Status</th><th>ssh</th><th>$/hr</th><th></th></tr>' + list.map(i => `<tr>
         <td>${i.id}</td><td>${i.gpu || ''}</td><td>${i.status || ''}</td>
+        <td class="muted">${i.ssh || ''}</td>
         <td>${i.dph ? '$' + (+i.dph).toFixed(3) : ''}</td>
         <td><button class="ghost kill" data-id="${i.id}" style="width:auto;padding:3px 10px">Destroy</button></td>
       </tr>`).join('')

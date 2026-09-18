@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
 """Local control panel for renting a GPU, deploying FastVideo and generating a clip.
 
-Runs on the machine that holds the Vast credentials and the ssh key, because
-every useful action here shells out: `vastai` to search and rent, ssh/rsync to
-deploy, and the gpucheck binary on the far end to generate. A page served from
-elsewhere could not do any of it.
+Searching, listing and destroying go straight to Vast's REST API. Deploying and
+generating shell out to scripts/gpu/validate.sh, because those need ssh, rsync
+and the gpucheck binary on the far end — which is also why this has to run on
+the machine holding the credentials and the ssh key rather than in a browser.
 
-Binds to loopback only. The Vast API key stays in .env, is read by the scripts
-themselves, and is never sent to the browser.
+Binds to loopback only. The API key is read from .env into this process, sent
+only to Vast, and scrubbed from anything the page receives.
 
     python3 scripts/ui/server.py [--port 8733]
 """
@@ -22,11 +22,22 @@ import shlex
 import subprocess
 import threading
 import time
+import urllib.error
+import urllib.parse
+import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
 ROOT = Path(__file__).resolve().parents[2]
+# Vast's REST API. Verified against the live service: /api/v0/instances/ answers
+# 410 Gone (the published docs still list it), so listing goes through v1, while
+# bundles, asks and delete are still v0.
+VAST_BASE = os.environ.get("VAST_API_BASE", "https://console.vast.ai")
+API_OFFERS = "/api/v0/bundles/"
+API_INSTANCES = "/api/v1/instances/"
+API_RENT = "/api/v0/asks/{offer}/"
+API_INSTANCE = "/api/v0/instances/{id}/"
 VALIDATE = ROOT / "scripts" / "gpu" / "validate.sh"
 CLIPS = ROOT / "artifacts" / "clips"
 UI_DIR = Path(__file__).resolve().parent
@@ -112,47 +123,101 @@ def run(cmd: list[str], timeout: int = 120) -> tuple[int, str]:
     return p.returncode, (p.stdout or "") + (p.stderr or "")
 
 
+def api_key() -> str:
+    """The key from the environment or .env. It never leaves this process."""
+    key = os.environ.get("VAST_API_KEY", "").strip()
+    if key:
+        return key
+    env = ROOT / ".env"
+    if env.is_file():
+        for line in env.read_text().splitlines():
+            line = line.strip()
+            if line.startswith("VAST_API_KEY"):
+                return line.split("=", 1)[1].strip().strip("\"'")
+    raise RuntimeError("VAST_API_KEY is not set: add it to .env (chmod 600)")
+
+
+def vast(method: str, path: str, params: dict | None = None, body: dict | None = None, timeout: int = 60):
+    url = VAST_BASE + path
+    if params:
+        url += "?" + urllib.parse.urlencode(params)
+    data = json.dumps(body).encode() if body is not None else None
+    req = urllib.request.Request(url, data=data, method=method, headers={
+        "Authorization": f"Bearer {api_key()}",
+        "Accept": "application/json",
+        # Vast rejects the stock urllib agent on some routes.
+        "User-Agent": "fastvideo-rs-ui/1",
+        **({"Content-Type": "application/json"} if data else {}),
+    })
+    with urllib.request.urlopen(req, timeout=timeout) as r:
+        raw = r.read()
+    return json.loads(raw) if raw else {}
+
+
 def offers(tier: str, gpu: str) -> list[dict]:
-    """Cheapest matching offers, parsed out of `validate.sh offers`."""
-    env = {"FV_OFFER_QUERY_EXTRA": f"gpu_name={gpu}"} if gpu else {}
-    p = subprocess.run(
-        ["bash", str(VALIDATE), "offers", tier],
-        cwd=str(ROOT),
-        capture_output=True,
-        text=True,
-        env={**os.environ, **env},
-        timeout=120,
-    )
+    """Cheapest matching offers, straight from the bundles endpoint.
+
+    Mirrors the filters `validate.sh tier_query` uses, so what the page shows is
+    what a run would actually rent.
+    """
+    need = {"gen": 24, "clip": 24, "compare": 24, "parity": 16, "kernels": 8}.get(tier, 24)
+    q = {
+        "num_gpus": {"eq": 1},
+        "gpu_ram": {"gte": need * 1000},
+        "compute_cap": {"gte": 800},
+        "cuda_max_good": {"gte": 12.4},
+        "reliability2": {"gt": 0.97},
+        "rentable": {"eq": True},
+        "verified": {"eq": True},
+        "direct_port_count": {"gte": 1},
+        "inet_down": {"gte": 200},
+        "disk_space": {"gte": 100},
+        "type": "on-demand",
+        "order": [["dph_total", "asc"]],
+        "limit": 24,
+    }
+    if gpu:
+        q["gpu_name"] = {"eq": gpu.replace("_", " ")}
+    try:
+        body = vast("GET", API_OFFERS, {"q": json.dumps(q)})
+    except Exception as e:  # noqa: BLE001 - surfaced in the page, not swallowed
+        return [{"error": f"{type(e).__name__}: {e}"}]
     out = []
-    for line in (p.stdout or "").splitlines():
-        m = re.search(
-            r"offer (\d+)\s+(.+?)\s+(\d+)GB\s+\$([\d.]+)/hr\s+sm(\d+)\s+rel ([\d.]+)\s+(\d+)Mbps\s+(.+?)\s+worst-case",
-            line,
-        )
-        if m:
-            out.append({
-                "id": m.group(1), "gpu": m.group(2).strip(), "vram": int(m.group(3)),
-                "dph": float(m.group(4)), "sm": m.group(5), "reliability": float(m.group(6)),
-                "inet": int(m.group(7)), "where": m.group(8).strip(),
-            })
+    for o in body.get("offers", []):
+        out.append({
+            "id": o.get("id"),
+            "machine": o.get("machine_id"),
+            "gpu": o.get("gpu_name"),
+            "vram": round((o.get("gpu_ram") or 0) / 1024),
+            "dph": round(o.get("dph_total") or 0, 4),
+            "sm": o.get("compute_cap"),
+            "reliability": round(o.get("reliability2") or 0, 3),
+            "inet": round(o.get("inet_down") or 0),
+            "where": o.get("geolocation") or "",
+            "cuda": o.get("cuda_max_good"),
+        })
     return out
 
 
 def instances() -> list[dict]:
-    rc, out = run(["vastai", "show", "instances", "--raw"])
-    if rc != 0:
-        return []
     try:
-        raw = json.loads(out)
-    except json.JSONDecodeError:
-        return []
-    return [{
-        "id": i.get("id"),
-        "gpu": i.get("gpu_name"),
-        "status": i.get("actual_status"),
-        "dph": i.get("dph_total"),
-        "label": i.get("label"),
-    } for i in raw]
+        body = vast("GET", API_INSTANCES)
+    except Exception as e:  # noqa: BLE001
+        return [{"error": f"{type(e).__name__}: {e}"}]
+    raw = body.get("instances", body.get("instances_found", [])) if isinstance(body, dict) else []
+    if isinstance(raw, int):  # v1 returns a count under that name when empty
+        raw = body.get("instances", [])
+    out = []
+    for i in raw or []:
+        out.append({
+            "id": i.get("id"),
+            "gpu": i.get("gpu_name"),
+            "status": i.get("actual_status") or i.get("cur_state"),
+            "dph": i.get("dph_total"),
+            "label": i.get("label"),
+            "ssh": f"{i.get('ssh_host')}:{i.get('ssh_port')}" if i.get("ssh_host") else "",
+        })
+    return out
 
 
 def clips() -> list[dict]:
@@ -237,8 +302,11 @@ class Handler(BaseHTTPRequestHandler):
             ok, msg = JOB.start(f"generate: {prompt[:60]}", cmd, env)
             self._json({"started": ok, "message": msg}, 200 if ok else 409)
         elif u.path == "/api/destroy":
-            rc, out = run(["vastai", "destroy", "instance", "-y", str(body.get("id"))])
-            self._json({"ok": rc == 0, "output": SECRET.sub("<redacted>", out)})
+            try:
+                res = vast("DELETE", API_INSTANCE.format(id=int(body.get("id"))))
+                self._json({"ok": bool(res.get("success", True)), "output": json.dumps(res)[:300]})
+            except Exception as e:  # noqa: BLE001
+                self._json({"ok": False, "output": f"{type(e).__name__}: {e}"}, 502)
         elif u.path == "/api/stop":
             self._json({"stopped": JOB.stop()})
         else:
