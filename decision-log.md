@@ -2,6 +2,19 @@
 
 Project code: FVID
 
+### FVID · 2026-09-18 · FVID-2026-09-18-fp8-linears-measured
+- Trigger: FastWan-QAD (haoailab.com/blogs/fastwan-qad) claims 3.4s for a 5s 480p clip on a 4090 via FP8 linears + FP8 attention + TAEHV + full compile. The checkpoints turned out to be **unquantized** — F32 weights, a transformer config byte-identical to stock Wan2.1-1.3B, no quantization_config — so "FP8" names the precision the model was *trained to tolerate*, and every part of the speedup is ours to build.
+- Built: `fastvideo-ops::fp8` (E4M3 conversion, exhaustively tested over all 256 codes), four CUDA kernels mirroring it, a cuBLASLt E4M3 GEMM, and FP8 linears behind `FASTVIDEO_FP8`.
+- **The plumbing is correct.** On two sm89 cards (L40S and RTX 4090) the device quantizer matches the host reference on all 65,536 values with **zero** tolerance, and the GEMM lands at rel_l2 **1.39e-4** against a 2e-2 limit — bit-identical across both cards. Because both sides of that check see identical quantized operands against an f64 reference, 1.39e-4 is cuBLASLt's accumulation order alone; a wrong transpose would have been order-1 wrong.
+- **Decision: FP8 linears stay off.** A/B on one 4090, FastWan-QAD-FP8-1.3B weights, same prompt and seed, 2s clip: denoise **4.207s → 4.007s (−4.8%)**, model load **6.49s → 12.76s**, total **14.36s → 20.19s (41% slower)**. Weight memory does fall 3607 → 2263 MiB (−37%).
+- Accuracy cost: step-1 latents rel_l2 **0.108**, frames **16.9 dB** — against 4.4e-3 and 66 dB for our bf16 fast path. ~25x more error than bf16, on the checkpoint distilled specifically to tolerate per-tensor FP8.
+- Why only 4.8%: the GEMMs really do run on FP8 tensor cores, but **activation quantization eats the win**. Every linear gains an amax reduction and a quantize pass over its input — two memory-bound passes over data the GEMM was about to read anyway. At Wan 1.3B's shapes, halving operand bandwidth does not outrun them. The load regression is separate and fixable (host-side element-by-element quantization of 1.3B parameters), but fixing it only removes a regression rather than creating a win.
+- **Third instance of the same shape**, after FVID-2026-09-17-flash-sdpa-rejected and FVID-2026-09-18-fused-block-sparse-rejected: a correct implementation that loses to the simpler path. The cause differs — this one is not about tensor cores, it is about per-op overhead around them.
+- What would have to change to revisit: fusing the quantization into the op that already writes the activation (the RMS norm, or the bias/activation epilogue), so it costs nothing extra. Even then the ceiling is the GEMM half of denoise, so expect 10-15%, against TAEHV which targets 3.9s of VAE out of a 23.7s H100 clip at far lower risk.
+- Reversibility: cheap — the path is behind a flag that is off by default and never inferred from the device.
+- Executed by: Executor
+- Verification: `20260918T172402Z-kernels` (L40S, 405 checks, 0 fail) and `20260918T173147Z-fp8` (RTX 4090, A/B). $0.15 for both.
+
 ### FVID · 2026-09-18 · FVID-2026-09-18-umt5-bias-mirrored
 - Trigger: user reported that generated clips do not follow the prompt. Confirmed visually: "a piper cub takes off" rendered a hand holding a green pepper; the benchmark prompt "A golden retriever sprints along the shoreline at sunset, waves breaking around its paws" rendered a static dog on grass. Upstream FastVideo, on the same GPU and the same weights, rendered the puppy on a beach with waves.
 - Root cause: `relative_position_bucket` added the half-table offset when the key came **before** the query; HF adds it when `relative_position > 0`, i.e. after. The two halves of the learned 32-row relative attention bias were swapped. For a 12-token prompt **132 of 144 entries were wrong** — only the zero-distance diagonal survived.
