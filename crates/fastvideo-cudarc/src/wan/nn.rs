@@ -22,6 +22,25 @@ pub struct Linear {
     /// and cast back with the bias and activation fused.
     #[cfg(feature = "cuda")]
     weight_bf16: Option<std::sync::Arc<cudarc::driver::CudaSlice<half::bf16>>>,
+    /// `FASTVIDEO_FP8=1`: the weight quantized once to E4M3 with a per-tensor
+    /// scale. Activations are quantized per call and the product runs on FP8
+    /// tensor cores. Only sound on a checkpoint trained to tolerate it — see
+    /// [`fp8_linears`].
+    #[cfg(feature = "cuda")]
+    weight_fp8: Option<std::sync::Arc<super::fp8::Fp8Weight>>,
+}
+
+/// FP8 linears are opt-in and never a default.
+///
+/// Per-tensor E4M3 is coarse — one scalar across a 1536x8960 weight — and a
+/// stock checkpoint has no reason to survive it. A QAD checkpoint does, because
+/// quantization-aware distillation trained it against exactly this error. So
+/// this is a flag the caller sets knowing which weights are loaded, not
+/// something inferred from the device.
+#[cfg(feature = "cuda")]
+fn fp8_linears() -> bool {
+    static FLAG: super::envflag::CachedBool = super::envflag::CachedBool::new();
+    FLAG.get_or_init(|| super::envflag::bool_flag("FASTVIDEO_FP8", false)) && stats::device_expected()
 }
 
 /// bfloat16 linears apply when the context runs bf16 GEMM math.
@@ -42,6 +61,32 @@ impl Linear {
             b.pin_device()?;
         }
         #[cfg(feature = "cuda")]
+        if fp8_linears() {
+            let dev = super::device::global_device().ok_or_else(|| msg("no device"))?;
+            // A shape cuBLASLt cannot serve falls back to bf16/F32 rather than
+            // failing the run, but says so once: a silent fallback would let an
+            // FP8 benchmark quietly measure something else.
+            match super::fp8::fp8_gemm_supported(&dev, out_dim, 16, in_dim) {
+                Ok(()) => {
+                    let host = weight.host_cow()?;
+                    let q = super::fp8::Fp8Weight::quantize(&dev, &host, out_dim, in_dim)?;
+                    stats::record_h2d(host.len() / 4);
+                    return Ok(Self {
+                        weight: CudaTensor::from_vec(Vec::new(), vec![0, in_dim])?,
+                        bias,
+                        in_dim,
+                        out_dim,
+                        weight_bf16: None,
+                        weight_fp8: Some(std::sync::Arc::new(q)),
+                    });
+                }
+                Err(why) => {
+                    static WARNED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+                    super::log::info_once(&WARNED, format_args!("fp8 linear disabled: {why}"));
+                }
+            }
+        }
+        #[cfg(feature = "cuda")]
         if bf16_linears() {
             let dev = super::device::global_device().ok_or_else(|| msg("no device"))?;
             let host: Vec<half::bf16> = weight.host_cow()?.iter().map(|&v| half::bf16::from_f32(v)).collect();
@@ -53,6 +98,7 @@ impl Linear {
                 in_dim,
                 out_dim,
                 weight_bf16: Some(std::sync::Arc::new(slice)),
+                weight_fp8: None,
             });
         }
         weight.pin_device()?;
@@ -63,6 +109,8 @@ impl Linear {
             out_dim,
             #[cfg(feature = "cuda")]
             weight_bf16: None,
+            #[cfg(feature = "cuda")]
+            weight_fp8: None,
         })
     }
 
@@ -140,6 +188,40 @@ impl Linear {
     fn forward_act(&self, xs: &CudaTensor, gelu: bool) -> Result<CudaTensor> {
         let (m, k, out_shape) = self.out_shape(xs)?;
         let n = self.out_dim();
+        #[cfg(feature = "cuda")]
+        if let Some(wq) = &self.weight_fp8 {
+            use cudarc::driver::{DevicePtr, DevicePtrMut};
+            let dev = super::device::global_device().ok_or_else(|| msg("no device"))?;
+            let ltc = super::fp8::lt_context(&dev)?;
+            let x = xs.dev()?.ok_or_else(|| msg("fp8 linear without a device"))?;
+            let (xq, x_scale) = super::ops::quantize_e4m3_device(&x)?;
+            let mut c = super::ops::alloc((m * n).max(1))?;
+            {
+                let (wp, _gw) = wq.data.device_ptr(&dev.stream);
+                let (wsp, _gws) = wq.scale.device_ptr(&dev.stream);
+                let (xp, _gx) = xq.device_ptr(&dev.stream);
+                let (xsp, _gxs) = x_scale.device_ptr(&dev.stream);
+                let (cp, _gc) = c.device_ptr_mut(&dev.stream);
+                // cuBLASLt is column-major: a row-major [m, n] result with
+                // leading dimension n is a column-major [n, m] with the same
+                // leading dimension, so the weight goes in as A and the
+                // activations as B, and (m, n, k) becomes (out, tokens, in).
+                unsafe { super::fp8::gemm_e4m3(&dev, &ltc, n, m, k, wp, wsp, xp, xsp, cp)? };
+            }
+            match (&self.bias, gelu) {
+                (Some(b), true) => {
+                    let b = b.dev()?.ok_or_else(|| msg("bias"))?;
+                    super::ops::bias_gelu_inplace_device(&mut c, &b)?
+                }
+                (Some(b), false) => {
+                    let b = b.dev()?.ok_or_else(|| msg("bias"))?;
+                    super::ops::add_bias_inplace_device(&mut c, &b, 1)?
+                }
+                (None, true) => c = super::ops::unary_device(&c, super::ops::ElemUnary::GeluTanh)?,
+                (None, false) => {}
+            }
+            return CudaTensor::from_dev_result(c, out_shape);
+        }
         #[cfg(feature = "cuda")]
         if let Some(w16) = &self.weight_bf16 {
             let x = xs.dev()?.ok_or_else(|| msg("bf16 linear without a device"))?;

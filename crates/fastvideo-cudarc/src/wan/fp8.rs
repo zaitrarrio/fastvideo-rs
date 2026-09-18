@@ -250,3 +250,63 @@ pub unsafe fn gemm_e4m3(
     )?;
     Ok(())
 }
+
+/// The process-wide cuBLASLt context.
+///
+/// The handle plus a 32 MiB workspace is far too expensive to build per GEMM,
+/// and every linear on a device shares one, exactly as `DeviceContext` holds
+/// one cuBLAS handle.
+static LT: std::sync::Mutex<Option<std::sync::Arc<LtContext>>> = std::sync::Mutex::new(None);
+
+pub fn lt_context(dev: &DeviceContext) -> Result<std::sync::Arc<LtContext>> {
+    let mut guard = LT.lock().map_err(|_| TensorError::Message("cuBLASLt context poisoned".into()))?;
+    if let Some(c) = guard.as_ref() {
+        return Ok(c.clone());
+    }
+    let ctx = std::sync::Arc::new(LtContext::new(dev)?);
+    *guard = Some(ctx.clone());
+    Ok(ctx)
+}
+
+/// A linear's weight, quantized once at load.
+///
+/// Quantization happens on the host with `fastvideo_ops::fp8`, the same
+/// reference the kernels are checked against: weights are already in host
+/// memory at load time, so there is nothing to gain from a device round trip
+/// and something to lose — the host path is the exhaustively tested one.
+#[derive(Debug)]
+pub struct Fp8Weight {
+    pub data: cudarc::driver::CudaSlice<u8>,
+    /// One-element device buffer; the GEMM takes its address.
+    pub scale: cudarc::driver::CudaSlice<f32>,
+    pub out_dim: usize,
+    pub in_dim: usize,
+}
+
+impl Fp8Weight {
+    /// Quantize a row-major `[out, in]` f32 weight to per-tensor E4M3.
+    pub fn quantize(dev: &DeviceContext, w: &[f32], out_dim: usize, in_dim: usize) -> Result<Self> {
+        use fastvideo_ops::fp8;
+        if w.len() != out_dim * in_dim {
+            return Err(TensorError::Message(format!(
+                "fp8 weight {} elements for [{out_dim}, {in_dim}]",
+                w.len()
+            )));
+        }
+        let amax = w.iter().fold(0.0f32, |a, &b| a.max(b.abs()));
+        if !amax.is_finite() {
+            return Err(TensorError::Message("fp8 weight has a non-finite amax".into()));
+        }
+        let (scale_v, inv) = fp8::scale_for_amax(amax);
+        let bytes: Vec<u8> = w.iter().map(|&v| fp8::f32_to_e4m3(v * inv)).collect();
+        let data = dev
+            .stream
+            .memcpy_stod(&bytes)
+            .map_err(|e| TensorError::Message(format!("fp8 weight upload: {e}")))?;
+        let scale = dev
+            .stream
+            .memcpy_stod(&[scale_v])
+            .map_err(|e| TensorError::Message(format!("fp8 scale upload: {e}")))?;
+        Ok(Self { data, scale, out_dim, in_dim })
+    }
+}

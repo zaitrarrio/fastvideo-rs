@@ -64,6 +64,11 @@ struct Cli {
     /// compare against dense references and must not use it.
     #[arg(long, global = true)]
     vsa: bool,
+    /// Run the DiT linears in FP8 E4M3. Per-tensor scales are coarse enough
+    /// that only a checkpoint distilled against them (FastWan-QAD) should use
+    /// this, so it is opt-in per stage and never inferred from the device.
+    #[arg(long, global = true)]
+    fp8: bool,
     /// Latent frames per VAE decode pass. Like --vsa this is per stage: exact
     /// parity already sits at the edge of a 24GB card, and a bigger chunk
     /// tips it over.
@@ -438,6 +443,9 @@ fn main() {
     cli.mode.apply_env();
     if cli.vsa {
         std::env::set_var("FASTVIDEO_VSA", "1");
+    }
+    if cli.fp8 {
+        std::env::set_var("FASTVIDEO_FP8", "1");
     }
     if let Some(n) = cli.vae_chunk {
         std::env::set_var("FASTVIDEO_VAE_CHUNK", n.to_string());
