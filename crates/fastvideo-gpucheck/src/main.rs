@@ -63,6 +63,11 @@ struct Cli {
     /// compare against dense references and must not use it.
     #[arg(long, global = true)]
     vsa: bool,
+    /// Latent frames per VAE decode pass. Like --vsa this is per stage: exact
+    /// parity already sits at the edge of a 24GB card, and a bigger chunk
+    /// tips it over.
+    #[arg(long, global = true)]
+    vae_chunk: Option<usize>,
     #[command(subcommand)]
     cmd: Cmd,
 }
@@ -392,6 +397,9 @@ fn main() {
     cli.mode.apply_env();
     if cli.vsa {
         std::env::set_var("FASTVIDEO_VSA", "1");
+    }
+    if let Some(n) = cli.vae_chunk {
+        std::env::set_var("FASTVIDEO_VAE_CHUNK", n.to_string());
     }
     let name = match &cli.tag {
         Some(tag) => format!("{}-{tag}", stage_name(&cli.cmd)),

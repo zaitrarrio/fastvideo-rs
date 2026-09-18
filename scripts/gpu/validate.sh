@@ -541,6 +541,11 @@ cmd_run() {
   if [[ "${FV_VSA:-0}" == 1 ]]; then
     clip+=(--vsa)
   fi
+  # Same reasoning as --vsa: the generation stages only. Exact parity is at the
+  # edge of a 24GB card and a larger VAE chunk pushes it over.
+  if [[ -n "${FV_VAE_CHUNK:-}" ]]; then
+    clip+=(--vae-chunk "$FV_VAE_CHUNK")
+  fi
   gpucheck_stage probe-8s 1800 --mode fast probe --weights "$FAST_W" --embeds "$embeds/$first.safetensors" \
     --device cuda "${clip[@]}" --budget-min "$budget_min"
   local clip_timeout=$(( budget_min * 60 * 13 / 10 + 600 ))
