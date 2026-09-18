@@ -895,9 +895,22 @@ impl AutoencoderKlWan {
         let t = z.dim(2)?;
         let mut cache = FeatCache::new();
         let mut frames = Vec::with_capacity(t);
-        for i in 0..t {
+        // Latent frame 0 must be its own pass: the temporal upsamplers detect
+        // the first pass through an empty cache slot and skip doubling, which
+        // is what makes the output 4n+1 frames rather than 4n. From frame 1 on,
+        // a chunk is equivalent to the same frames one at a time — that is
+        // exactly what the causal conv cache guarantees — and larger chunks
+        // give the GPU more to do per launch.
+        //
+        // `FASTVIDEO_VAE_CHUNK` trades memory for utilization: every extra
+        // latent frame in a chunk multiplies the decoder's activations.
+        let chunk = super::envflag::usize_flag("FASTVIDEO_VAE_CHUNK", 1).max(1);
+        let mut i = 0usize;
+        while i < t {
+            let n = if i == 0 { 1 } else { chunk.min(t - i) };
             cache.begin_pass();
-            frames.push(self.decoder.forward(&z.narrow(2, i, 1)?, Some(&mut cache))?);
+            frames.push(self.decoder.forward(&z.narrow(2, i, n)?, Some(&mut cache))?);
+            i += n;
         }
         let refs: Vec<&CudaTensor> = frames.iter().collect();
         CudaTensor::cat(&refs, 2)
@@ -926,6 +939,42 @@ mod tests {
         let xs3 = CudaTensor::zeros(&[1, 4, 2]);
         let out3 = rms_video(&xs3, &gamma).expect("3D rms_video");
         assert_eq!(out3.shape, vec![1, 4, 2]);
+    }
+
+    /// Chunking the decode must not change the output's shape, and above all
+    /// must not change the frame count: latent frame 0 is the only pass that
+    /// skips temporal doubling, so folding it into a chunk would silently turn
+    /// 4n+1 frames into 4n.
+    #[test]
+    fn decode_chunking_keeps_the_frame_count() {
+        let cfg = WanVaeConfig {
+            base_dim: 8,
+            z_dim: 4,
+            dim_mult: vec![1, 2, 2],
+            num_res_blocks: 1,
+            temporal_upsample: vec![true, true],
+            load_encoder: false,
+        };
+        let vae = AutoencoderKlWan::zeros(cfg);
+        let latent_frames = 5;
+        let z = CudaTensor::zeros(&[1, 4, latent_frames, 2, 2]);
+        let prev = std::env::var("FASTVIDEO_VAE_CHUNK").ok();
+
+        let mut shapes = Vec::new();
+        for chunk in ["1", "2", "4", "16"] {
+            std::env::set_var("FASTVIDEO_VAE_CHUNK", chunk);
+            shapes.push(vae.decode(&z).expect("decode").shape.clone());
+        }
+        match prev {
+            Some(v) => std::env::set_var("FASTVIDEO_VAE_CHUNK", v),
+            None => std::env::remove_var("FASTVIDEO_VAE_CHUNK"),
+        }
+
+        // 4 * (5 - 1) + 1 = 17 output frames, whatever the chunk size.
+        assert_eq!(shapes[0][2], 4 * (latent_frames - 1) + 1, "unchunked frame count");
+        for (i, shape) in shapes.iter().enumerate() {
+            assert_eq!(shape, &shapes[0], "chunk size {i} changed the output shape");
+        }
     }
 
     #[test]
