@@ -278,8 +278,35 @@ Quality: composition survives under the same seed, but VSA is a different sample
 with more saturated colour, and that has not been checked against upstream's own
 VSA output.
 
+## 2026-09-18, 01:44 — VAE decode: 21.9 s to 17.8 s
+
+With attention handled, VAE decode was the largest single cost in an 8s clip.
+The convolutions turned out to be a dead end — the dominant one already runs at
+this card's TF32 peak — so the wins came from memory traffic and from how the
+decode is structured.
+
+| 8s clip | VAE decode |
+| --- | ---: |
+| Baseline | 21.86 s |
+| + SiLU folded into the RMS norm | 19.49 s (-10.8%) |
+| + 2 latent frames per pass | **17.81 s** (-18.5%) |
+| 4 latent frames per pass | out of memory |
+
+Both changes are verified equivalent rather than argued: the fusion matches
+norm-then-silu at rel_l2 8e-8, and chunking produces 129 frames with a clipped
+fraction identical to eighteen digits.
+
+Chunking helped less than expected. Thirty-three sequential passes suggested
+launch overhead was the problem, but halving the passes bought only 8.6% — the
+decode tracks the work, not the number of launches.
+
+One near-miss worth recording: at four frames per pass the decode "finished" in
+1.98 seconds, which would have read as a 10x win. It was an out-of-memory
+failure part-way through. Removing 3.7x of the passes cannot produce 10x, and
+disbelieving the number is what surfaced the error.
+
 ## Totals
 
-- **39 validation runs**, **$1.547** of GPU time end to end.
+- **42 validation runs**, **$1.79** of GPU time end to end.
 - A full T3 tier — kernels, models, parity, text encoding, two 8s clips and a precision comparison — costs **$0.066** and 19 minutes.
 - Cached CPU references save 648 s of billed CPU work per run.

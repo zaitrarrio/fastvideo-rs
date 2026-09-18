@@ -2,6 +2,20 @@
 
 Project code: FVID
 
+### FVID · 2026-09-18 · FVID-2026-09-18-vae-decode
+- Trigger: after the VSA port, VAE decode (21.9 s) was the largest single cost in an 8s clip, bigger than any remaining attention win
+- Options: bf16 storage through the VAE; faster convolutions; fuse elementwise ops; decode several latent frames per pass
+- **Convolutions were ruled out by measurement, not skipped**: the dominant conv, `[1,96,6,448,832]` 3x3x3, runs 1.1 TFLOP in 27.7 ms ≈ 40 TFLOPS, which is this card's TF32 peak. Nothing to win there without bf16 storage — a much larger refactor.
+- Decision: two changes, both verified equivalent rather than assumed.
+  1. **SiLU folded into the channel RMS norm** (`0559ed1`). The decoder always pairs them and the norm kernel already reads x twice, so the activation rides along free and a whole read+write pass over a 859 MB tensor disappears. Three sites: both residual-block norms and each `norm_out`. **21.86 s -> 19.49 s (-10.8%)**, identical on both clips to 10 ms, gpucheck holds the fused path at rel_l2 8e-8 against norm-then-silu.
+  2. **Chunked decode** (`a0cbb21`), `FASTVIDEO_VAE_CHUNK`. Decode ran one latent frame per pass — 33 sequential trips through the decoder. The causal conv cache makes a chunk equivalent to the same frames one at a time. **19.49 s -> 17.81 s (-8.6%) at chunk=2**, with 129 frames and a `clipped_fraction` identical to 18 digits, so the video is unchanged.
+- **chunk=4 OOMs on 24 GB** (`CUDA_ERROR_OUT_OF_MEMORY`), so the default stays 1: an OOM on a smaller card is a far worse failure than a missed 9%. The flag is opt-in and documented.
+- Latent frame 0 must stay its own pass: the temporal upsamplers detect the first pass through an empty cache slot and skip doubling, which is what makes the output 4n+1 rather than 4n. A unit test pins it — folding frame 0 into a chunk turns 17 frames into 14, and the test fails.
+- Reason: chunking helped **less** than predicted. 33 sequential passes suggested launch overhead dominated, but halving the passes bought only 8.6%, so decode cost tracks the work rather than the pass count. The pure traffic reduction was the bigger lever.
+- Reversibility: cheap (fusion is numerically identical; chunking is one env flag, default unchanged)
+- Executed by: Executor
+- Verification: runs `20260918T004528Z-clip` (fusion, pass, $0.110) and `20260918T011336Z-clip` (chunk=4 OOM, then chunk=2 pass). A 1.98 s "decode" at chunk=4 was an OOM part-way, not a 10x win — it exceeded what removing 3.7x of the passes could explain, which is what prompted checking.
+
 ### FVID · 2026-09-18 · FVID-2026-09-18-vsa-port
 - Trigger: the head-to-head (FVID-2026-09-17-upstream-head-to-head) put upstream 1.96x ahead on the same GPU, and the gap was attributable to Video Sparse Attention, which we had not ported
 - Options: leave dense; write FlashAttention-2 properly; port VSA with a fused block-sparse kernel; port VSA reusing cuBLAS via a gather

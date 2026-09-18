@@ -34,6 +34,10 @@ The harness runs on macOS bash 3.2, where `"${arr[@]}"` on an empty array under
 `scripts/gpu/lint.sh` checks this (and parses every script); `validate.sh local`
 runs it.
 
+`FASTVIDEO_VAE_CHUNK` decodes several latent frames per pass instead of one.
+`2` is ~9% faster on an 8s clip and produces identical frames; `4` runs out of
+memory on a 24GB card, so the default stays `1`.
+
 `FV_STAGE_ENV` passes environment to the stage process itself, for A/B runs.
 For a same-GPU A/B, rent once with `--keep` and rerun against `--instance <id>`:
 `FV_STAGE_ENV="FASTVIDEO_ATTN_PROBS_BF16=0" scripts/gpu/validate.sh run clip --instance 12345`.
