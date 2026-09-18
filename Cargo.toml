@@ -49,7 +49,7 @@ fastvideo-burn = { path = "crates/fastvideo-burn" }
 fastvideo-candle = { path = "crates/fastvideo-candle" }
 fastvideo-luminal = { path = "crates/fastvideo-luminal" }
 fastvideo-cudarc = { path = "crates/fastvideo-cudarc" }
-cudarc = { version = "0.17", default-features = false, features = ["std", "driver", "cublas", "cudnn", "nvrtc", "f16", "cuda-version-from-build-system", "dynamic-loading"] }
+cudarc = { version = "0.17", default-features = false, features = ["std", "driver", "cublas", "cublaslt", "cudnn", "nvrtc", "f16", "cuda-version-from-build-system", "dynamic-loading"] }
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

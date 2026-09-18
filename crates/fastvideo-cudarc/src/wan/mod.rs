@@ -10,6 +10,8 @@ pub mod clip;
 #[cfg(feature = "cuda")]
 pub mod conv;
 pub mod envflag;
+#[cfg(feature = "cuda")]
+pub mod fp8;
 pub mod fused;
 pub mod hopper;
 pub mod log;
