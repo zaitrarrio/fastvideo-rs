@@ -50,11 +50,12 @@ fn log_device_stats_if_enabled() {
     }
     let s = super::stats::snapshot();
     super::log::info(format_args!(
-        "device stats: h2d {} ({} MiB) d2h {} ({} MiB) host fallbacks {:?}",
+        "device stats: h2d {} ({} MiB) d2h {} ({} MiB) kernel launches {} host fallbacks {:?}",
         s.h2d_count,
         s.h2d_bytes >> 20,
         s.d2h_count,
         s.d2h_bytes >> 20,
+        s.launches,
         s.host_fallbacks
     ));
 }

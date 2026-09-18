@@ -18,6 +18,10 @@ static FALLBACKS: Mutex<BTreeMap<&'static str, u64>> = Mutex::new(BTreeMap::new(
 static H2D_COUNT: AtomicU64 = AtomicU64::new(0);
 static H2D_BYTES: AtomicU64 = AtomicU64::new(0);
 static D2H_COUNT: AtomicU64 = AtomicU64::new(0);
+/// Every NVRTC kernel launch, counted at the one macro they all go through.
+/// Launch overhead is a few microseconds each, so this is what turns "maybe we
+/// are launch-bound" into an arithmetic claim.
+static LAUNCHES: AtomicU64 = AtomicU64::new(0);
 static D2H_BYTES: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -28,6 +32,7 @@ pub struct Snapshot {
     pub h2d_bytes: u64,
     pub d2h_count: u64,
     pub d2h_bytes: u64,
+    pub launches: u64,
 }
 
 impl Snapshot {
@@ -50,6 +55,7 @@ impl Snapshot {
             h2d_bytes: self.h2d_bytes - earlier.h2d_bytes,
             d2h_count: self.d2h_count - earlier.d2h_count,
             d2h_bytes: self.d2h_bytes - earlier.d2h_bytes,
+            launches: self.launches - earlier.launches,
         }
     }
 }
@@ -61,12 +67,19 @@ pub fn snapshot() -> Snapshot {
         h2d_bytes: H2D_BYTES.load(Relaxed),
         d2h_count: D2H_COUNT.load(Relaxed),
         d2h_bytes: D2H_BYTES.load(Relaxed),
+        launches: LAUNCHES.load(Relaxed),
     }
+}
+
+/// Counted by the `launch!` macro, so no call site can forget.
+#[inline]
+pub(crate) fn record_launch() {
+    LAUNCHES.fetch_add(1, Relaxed);
 }
 
 pub fn reset() {
     FALLBACKS.lock().expect("stats lock").clear();
-    for c in [&H2D_COUNT, &H2D_BYTES, &D2H_COUNT, &D2H_BYTES] {
+    for c in [&H2D_COUNT, &H2D_BYTES, &D2H_COUNT, &D2H_BYTES, &LAUNCHES] {
         c.store(0, Relaxed);
     }
 }

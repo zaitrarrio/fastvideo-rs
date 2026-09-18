@@ -453,6 +453,24 @@ pub fn clip(report: &mut Report, args: ClipArgs<'_>) -> StageResult<()> {
             "peak_mib": {"denoise": denoise_peak, "vae": vae_peak},
         }),
     );
+    // Recorded, not just printed: kernel launches are the number that decides
+    // whether the remaining gap to upstream is launch overhead or arithmetic,
+    // and "how many launches per step" is only answerable from a real clip.
+    {
+        let st = fastvideo_cudarc::wan::stats::snapshot();
+        report.set(
+            "device_stats",
+            json!({
+                "kernel_launches": st.launches,
+                "launches_per_step": st.launches as f64 / spec.steps as f64,
+                "h2d_count": st.h2d_count,
+                "d2h_count": st.d2h_count,
+                "h2d_mib": st.h2d_bytes >> 20,
+                "d2h_mib": st.d2h_bytes >> 20,
+                "host_fallbacks": st.host_fallbacks,
+            }),
+        );
+    }
     report.set(
         "artifacts",
         json!({"frames": paths.len(), "mp4": mp4, "dir": clip_dir}),

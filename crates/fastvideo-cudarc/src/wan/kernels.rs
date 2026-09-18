@@ -1096,6 +1096,7 @@ macro_rules! launch {
     ($stream:expr, $f:expr, $cfg:expr; $($arg:expr),+ $(,)?) => {
         ({
             use cudarc::driver::PushKernelArg as _;
+            super::stats::record_launch();
             let mut builder = $stream.launch_builder($f);
             $( builder.arg($arg); )+
             unsafe { builder.launch($cfg) }.map(|_| ()).map_err(super::device::DeviceError::from)
