@@ -7,6 +7,7 @@ pub mod backend;
 pub mod device;
 pub mod dtype;
 pub mod error;
+pub mod fp8;
 pub mod host;
 
 pub use backend::TensorBackend;

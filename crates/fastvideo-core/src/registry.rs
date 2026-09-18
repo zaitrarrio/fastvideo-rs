@@ -155,6 +155,17 @@ pub static WAN_MODEL_DEFINITIONS: &[WanModelDefinition] = &[
         &[
             "FastVideo/FastWan2.1-T2V-1.3B-Diffusers",
             "FastVideo/FastWan2.1-T2V-14B-480P-Diffusers",
+            // QAD is a *training* recipe: quantization-aware finetuning then
+            // quantization-aware DMD. The checkpoints are architecturally
+            // identical to FastWan 1.3B and ship unquantized (F32, no
+            // quantization_config), so the only thing that differs at load time
+            // is the weights. They must be listed explicitly: their
+            // model_index.json says `WanPipeline`, so class matching would
+            // resolve them to the UniPC preset and run the wrong sampler on a
+            // 3-step DMD model.
+            "FastVideo/FastWan-QAD-1.3B",
+            "FastVideo/FastWan-QAD-1.3B-SA2",
+            "FastVideo/FastWan-QAD-FP8-1.3B",
         ],
         &[WorkloadType::T2V],
         match_any = &["wandmdpipeline"]
@@ -245,6 +256,22 @@ pub fn resolve_wan(model_id: &str) -> Result<&'static WanModelDefinition> {
 mod tests {
     use super::*;
     use crate::sampling::WorkloadType;
+
+    /// QAD ships `"_class_name": "WanPipeline"`, so class matching alone would
+    /// hand it the UniPC preset and silently run a 3-step DMD model on a
+    /// multi-step sampler. The explicit repo entry is what prevents that.
+    #[test]
+    fn qad_checkpoints_resolve_to_dmd_not_unipc() {
+        for id in [
+            "FastVideo/FastWan-QAD-FP8-1.3B",
+            "FastVideo/FastWan-QAD-1.3B",
+            "FastVideo/FastWan-QAD-1.3B-SA2",
+        ] {
+            let def = resolve_wan(id).unwrap_or_else(|_| panic!("{id} did not resolve"));
+            assert_eq!(def.sampling, SamplingAlgorithm::Dmd, "{id} must use DMD");
+            assert_eq!(def.preset, "fast_wan_t2v_480p", "{id} preset");
+        }
+    }
 
     #[test]
     fn resolves_wan_1_3b_exact() {

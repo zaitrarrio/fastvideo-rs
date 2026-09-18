@@ -862,6 +862,101 @@ extern "C" __global__ void flash_attn_f32(
     }
     O[((long)bh_idx * sq + q_i) * d + tid] = o_val / l_val;
 }
+
+// ---- FP8 E4M3 ------------------------------------------------------------
+// NVRTC here has no cuda_fp8.h, so the conversion is open-coded. This mirrors
+// fastvideo_ops::fp8::f32_to_e4m3 line for line; that reference is exhaustively
+// tested over all 256 codes and the kernels tier checks this against it.
+// Saturating (SATFINITE): out-of-range clamps to +-448 rather than becoming
+// NaN, because one NaN poisons every remaining denoising step.
+__device__ __forceinline__ unsigned char fv_to_e4m3(float x) {
+    unsigned int u = __float_as_uint(x);
+    unsigned int sign = (u >> 24) & 0x80u;
+    unsigned int mag = u & 0x7FFFFFFFu;
+    if (mag >= 0x7F800000u || mag >= 0x43E00000u) return (unsigned char)(sign | 0x7Eu);
+    int exp = (int)(mag >> 23) - 127;
+    unsigned int man = mag & 0x007FFFFFu;
+    unsigned int out;
+    if (exp >= -6) {
+        unsigned int m = man >> 20;
+        unsigned int rem = man & 0x000FFFFFu;
+        unsigned int half = 1u << 19;
+        if (rem > half || (rem == half && (m & 1u) == 1u)) m += 1u;
+        unsigned int e = (unsigned int)(exp + 7);
+        if (m == 8u) { m = 0u; e += 1u; }
+        if (e > 15u || (e == 15u && m >= 7u)) return (unsigned char)(sign | 0x7Eu);
+        out = (e << 3) | m;
+    } else {
+        unsigned int shift = (unsigned int)(20 + (-6 - exp));
+        if (shift > 31u) return (unsigned char)sign;
+        unsigned int full = (1u << 23) | man;
+        unsigned int m = full >> shift;
+        unsigned int rem = full & ((1u << shift) - 1u);
+        unsigned int half = 1u << (shift - 1u);
+        if (rem > half || (rem == half && (m & 1u) == 1u)) m += 1u;
+        out = m;
+    }
+    return (unsigned char)(sign | out);
+}
+
+__device__ __forceinline__ float fv_e4m3_to_f32(unsigned char b) {
+    float sign = (b & 0x80u) ? -1.0f : 1.0f;
+    int e = (int)((b >> 3) & 0x0Fu);
+    unsigned int m = (unsigned int)(b & 0x07u);
+    if (e == 0) return sign * (float)m * (1.0f / 512.0f);
+    float frac = 1.0f + (float)m * 0.125f;
+    return sign * frac * __int_as_float((e - 7 + 127) << 23);
+}
+
+// x * inv_scale -> E4M3. `inv_scale` is a device scalar so the scale can come
+// from amax_abs without a host round trip.
+extern "C" __global__ void quantize_e4m3(
+    const float* a, unsigned char* out, const float* inv_scale, long n
+) {
+    long i = blockIdx.x * (long)blockDim.x + threadIdx.x;
+    if (i >= n) return;
+    out[i] = fv_to_e4m3(a[i] * *inv_scale);
+}
+
+// Dequantize for the reference path and for checking the kernel against it.
+extern "C" __global__ void dequantize_e4m3(
+    const unsigned char* a, float* out, const float* scale, long n
+) {
+    long i = blockIdx.x * (long)blockDim.x + threadIdx.x;
+    if (i >= n) return;
+    out[i] = fv_e4m3_to_f32(a[i]) * *scale;
+}
+
+// max(|a|) over the whole tensor, block-reduced then atomically combined.
+// `out` must be zeroed by the caller.
+extern "C" __global__ void amax_abs(const float* a, float* out, long n) {
+    extern __shared__ float sm[];
+    int tid = threadIdx.x;
+    float acc = 0.0f;
+    for (long i = blockIdx.x * (long)blockDim.x + tid; i < n; i += (long)gridDim.x * blockDim.x) {
+        float v = fabsf(a[i]);
+        // A NaN weight must not silently become a 0 scale; propagate it so the
+        // gate downstream can refuse rather than quantize garbage.
+        if (!(v <= acc)) acc = v;
+    }
+    sm[tid] = acc;
+    __syncthreads();
+    for (int s = blockDim.x >> 1; s > 0; s >>= 1) {
+        if (tid < s) { float o = sm[tid + s]; if (!(o <= sm[tid])) sm[tid] = o; }
+        __syncthreads();
+    }
+    if (tid == 0) atomicMax((int*)out, __float_as_int(sm[0]));
+}
+
+// amax -> (scale, inv_scale) on the device, so the GEMM's scale pointers can be
+// filled without stalling on a download.
+extern "C" __global__ void e4m3_scale_from_amax(const float* amax, float* scale, float* inv_scale) {
+    float a = *amax;
+    if (!(a > 0.0f) || !isfinite(a)) { *scale = 1.0f; *inv_scale = 1.0f; return; }
+    float s = a * (1.0f / 448.0f);
+    *scale = s;
+    *inv_scale = 1.0f / s;
+}
 "#;
 
 /// Declares [`KernelFns`] and [`KERNEL_NAMES`] from one list, so a kernel
@@ -886,6 +981,10 @@ macro_rules! kernel_fns {
 }
 
 kernel_fns!(
+    quantize_e4m3,
+    dequantize_e4m3,
+    amax_abs,
+    e4m3_scale_from_amax,
     elem_add,
     elem_mul,
     elem_sub,
