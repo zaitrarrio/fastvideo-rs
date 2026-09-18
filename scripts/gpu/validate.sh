@@ -12,6 +12,7 @@
 #        gen — the UI path: deploy, encode one prompt, generate one clip.
 #        oracle — our text encoder and one DiT step vs transformers/diffusers.
 #        fp8 — the same clip with and without FP8 linears, on one box.
+#        taehv — our tiny-autoencoder decoder vs madebyollin's own.
 set -euo pipefail
 # shellcheck source=scripts/gpu/lib.sh
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
@@ -61,12 +62,15 @@ tier_query() {
     oracle) echo "$base gpu_ram>=40 disk_space>=160 cpu_ram>=80 inet_down>=500" ;;
     # FP8 E4M3 tensor cores start at Ada (sm89); Ampere has none.
     fp8) echo "$base compute_cap>=890 gpu_ram>=24 disk_space>=100 cpu_ram>=80 inet_down>=500" ;;
-    *) die "unknown tier '$1' (mathprobe|kernels|parity|clip|compare|gen|oracle|fp8)" ;;
+    # TAEHV is ~10M parameters and needs no Wan weights at all — only torch,
+    # which is why this tier is cheap despite installing the upstream venv.
+    taehv) echo "$base gpu_ram>=12 disk_space>=60 cpu_ram>=16" ;;
+    *) die "unknown tier '$1' (mathprobe|kernels|parity|clip|compare|gen|oracle|fp8|taehv)" ;;
   esac
 }
-tier_max_dph() { case "$1" in mathprobe) echo 0.40 ;; kernels) echo 0.25 ;; parity) echo 0.40 ;; clip) echo 0.60 ;; compare) echo 0.60 ;; gen) echo 0.80 ;; oracle) echo 1.60 ;; fp8) echo 0.80 ;; esac; }
-tier_max_minutes() { case "$1" in mathprobe) echo 30 ;; kernels) echo 40 ;; parity) echo 75 ;; clip) echo 180 ;; compare) echo 240 ;; gen) echo 180 ;; oracle) echo 150 ;; fp8) echo 90 ;; esac; }
-tier_disk() { case "$1" in mathprobe) echo 40 ;; kernels) echo 40 ;; parity) echo 60 ;; clip) echo 100 ;; compare) echo 180 ;; gen) echo 100 ;; oracle) echo 160 ;; fp8) echo 100 ;; esac; }
+tier_max_dph() { case "$1" in mathprobe) echo 0.40 ;; kernels) echo 0.25 ;; parity) echo 0.40 ;; clip) echo 0.60 ;; compare) echo 0.60 ;; gen) echo 0.80 ;; oracle) echo 1.60 ;; fp8) echo 0.80 ;; taehv) echo 0.40 ;; esac; }
+tier_max_minutes() { case "$1" in mathprobe) echo 30 ;; kernels) echo 40 ;; parity) echo 75 ;; clip) echo 180 ;; compare) echo 240 ;; gen) echo 180 ;; oracle) echo 150 ;; fp8) echo 90 ;; taehv) echo 60 ;; esac; }
+tier_disk() { case "$1" in mathprobe) echo 40 ;; kernels) echo 40 ;; parity) echo 60 ;; clip) echo 100 ;; compare) echo 180 ;; gen) echo 100 ;; oracle) echo 160 ;; fp8) echo 100 ;; taehv) echo 60 ;; esac; }
 
 usage() { sed -n '2,12p' "$0" | sed 's/^# \{0,1\}//'; exit 2; }
 
@@ -603,6 +607,23 @@ cmd_run() {
     gpucheck_stage compare-fp8 300 compare --a "$OUTR/clips/dmd-bf16" --b "$OUTR/clips/dmd-fp8" \
       --max-step1-rel 1.0 --max-latent-rel 1.0 --min-psnr 0.0
     log "FP8 A/B done"
+    return 0
+  fi
+
+  # `taehv` judges our tiny-autoencoder port against the implementation it was
+  # read from. No Wan weights are involved: the oracle fetches taehv.py and
+  # taew2_1.safetensors, and both sides then decode the identical latent.
+  if [[ "$tier" == taehv ]]; then
+    gpucheck_stage nvrtc 300 nvrtc
+    gpucheck_stage device 300 device
+    remote_run upstream-install "${FV_UPSTREAM_INSTALL_TIMEOUT:-2400}" upstream-install "${FV_TORCH_BACKEND:-cu126}"
+    remote_run taehv-oracle "${FV_TAEHV_TIMEOUT:-1800}" taehv-oracle \
+      --latent-frames "${FV_TAEHV_LATENT_FRAMES:-3}" --height "${FV_TAEHV_H:-56}" --width "${FV_TAEHV_W:-104}"
+    # Exact mode: the reference runs float32, and a looser judge cannot set a
+    # limit on it.
+    gpucheck_stage taehv 900 --keep-going --mode exact taehv --weights "$WORK/taehv" \
+      --oracle "$OUTR/taehv/oracle.safetensors" --device cuda
+    log "TAEHV oracle done"
     return 0
   fi
 

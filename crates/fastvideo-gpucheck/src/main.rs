@@ -32,6 +32,7 @@ mod rand_weights;
 mod reference;
 mod report;
 mod st;
+mod taehv;
 
 use std::path::PathBuf;
 
@@ -231,6 +232,19 @@ enum Cmd {
         #[arg(long, default_value_t = 20.0)]
         min_psnr: f64,
     },
+    /// Diff our TAEHV decoder against madebyollin's own implementation.
+    Taehv {
+        /// Directory holding taew2_1.safetensors (the oracle fetches it there).
+        #[arg(long)]
+        weights: PathBuf,
+        /// Written by scripts/gpu/taehv_oracle.py.
+        #[arg(long)]
+        oracle: PathBuf,
+        #[arg(long, default_value = "cuda")]
+        device: String,
+        #[arg(long, default_value_t = 0.02)]
+        max_rel: f64,
+    },
     /// Diff our text encoder and one DiT step against an external reference.
     Oracle {
         #[arg(long)]
@@ -296,6 +310,7 @@ fn stage_name(cmd: &Cmd) -> &'static str {
         Cmd::Clip { .. } => "clip",
         Cmd::Compare { .. } => "compare",
         Cmd::Oracle { .. } => "oracle",
+        Cmd::Taehv { .. } => "taehv",
     }
 }
 
@@ -414,6 +429,9 @@ fn run(cli: &Cli, report: &mut Report) -> StageResult<()> {
                 min_psnr: *min_psnr,
             },
         ),
+        Cmd::Taehv { weights, oracle, device, max_rel } => {
+            taehv::run(report, weights, oracle, device, *max_rel)
+        }
         Cmd::Oracle {
             weights,
             oracle,

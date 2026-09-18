@@ -335,6 +335,17 @@ cmd_upstream_oracle() {
     --out "$OUT/oracle/oracle.safetensors" --meta "$OUT/oracle/oracle.json" "$@"
 }
 
+# TAEHV's reference implementation is a single file on GitHub, not a package;
+# the script fetches it and the weights into $WORK/taehv, where our own stage
+# reads the same checkpoint.
+cmd_taehv_oracle() {
+  export PATH="$HOME/.local/bin:$PATH"
+  [[ -x "$UPSTREAM_VENV/bin/python" ]] || die "upstream venv missing (run upstream-install)"
+  mkdir -p "$OUT/taehv"
+  "$UPSTREAM_VENV/bin/python" "$ROOT/scripts/gpu/taehv_oracle.py" \
+    --cache "$WORK/taehv" --out "$OUT/taehv/oracle.safetensors" --meta "$OUT/taehv/oracle.json" "$@"
+}
+
 sub="${1:-}"; shift || true
 case "$sub" in
   env) cmd_env "$@" ;;
@@ -347,5 +358,6 @@ case "$sub" in
   upstream-install) cmd_upstream_install "$@" ;;
   upstream-bench) cmd_upstream_bench "$@" ;;
   upstream-oracle) cmd_upstream_oracle "$@" ;;
-  *) die "usage: remote.sh env|bootstrap|cublas|fetch|wait-weights|stage|upstream-install|upstream-bench|upstream-oracle" ;;
+  taehv-oracle) cmd_taehv_oracle "$@" ;;
+  *) die "usage: remote.sh env|bootstrap|cublas|fetch|wait-weights|stage|upstream-install|upstream-bench|upstream-oracle|taehv-oracle" ;;
 esac

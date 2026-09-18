@@ -173,6 +173,10 @@ tasks:
         {{if .GPU}}FV_OFFER_QUERY_EXTRA=gpu_name={{.GPU}} {{end}}\
         bash scripts/gpu/validate.sh run fp8
 
+  taehv:
+    desc: TAEHV tier — our tiny-autoencoder decoder vs madebyollin's own (~$0.20)
+    cmds: [{ task: run, vars: { TIER: taehv } }]
+
   gen:
     desc: 'Generate one clip from a prompt (PROMPT="a dog on a beach")'
     requires:
