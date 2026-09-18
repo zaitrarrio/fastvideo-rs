@@ -133,15 +133,17 @@ tasks:
 
   # ---- GPU runs (these rent hardware and cost money) -----------------------
 
+  # DPH/MINUTES raise the tier's price and wall-clock ceilings — both bound the
+  # worst case of a run, so raise them together and deliberately.
   offers:
-    desc: 'Cheapest matching offers, no rental (TIER=clip GPU=RTX_5090)'
+    desc: 'Cheapest matching offers, no rental (TIER=clip GPU=RTX_5090 DPH=3.20)'
     cmds:
-      - '{{if .GPU}}FV_OFFER_QUERY_EXTRA=gpu_name={{.GPU}} {{end}}bash scripts/gpu/validate.sh offers {{.TIER}}'
+      - '{{if .DPH}}MAX_DPH={{.DPH}} {{end}}{{if .MINUTES}}MAX_MINUTES={{.MINUTES}} {{end}}{{if .GPU}}FV_OFFER_QUERY_EXTRA=gpu_name={{.GPU}} {{end}}bash scripts/gpu/validate.sh offers {{.TIER}}'
 
   run:
     desc: 'Rent and run a tier (TIER=kernels|parity|clip|compare)'
     cmds:
-      - '{{if .GPU}}FV_OFFER_QUERY_EXTRA=gpu_name={{.GPU}} {{end}}bash scripts/gpu/validate.sh run {{.TIER}}'
+      - '{{if .DPH}}MAX_DPH={{.DPH}} {{end}}{{if .MINUTES}}MAX_MINUTES={{.MINUTES}} {{end}}{{if .GPU}}FV_OFFER_QUERY_EXTRA=gpu_name={{.GPU}} {{end}}bash scripts/gpu/validate.sh run {{.TIER}}'
 
   kernels:
     desc: Kernel tier — kernels vs plain-Rust references (~$0.02)
