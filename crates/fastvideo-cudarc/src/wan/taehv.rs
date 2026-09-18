@@ -270,8 +270,15 @@ impl TaeHv {
                 }
                 Block::Mem(m) => {
                     let past = match &memory[i] {
-                        // Carry the previous chunk's last input frame into this
-                        // chunk's first, so the seam is invisible.
+                        // A one-frame chunk's `past` is the carry alone — there
+                        // is no earlier frame in this chunk to shift in, and
+                        // narrowing to zero frames is not a valid tensor. A
+                        // chunk size that does not divide the latent frame
+                        // count always ends in a short chunk, and 33 frames
+                        // with the default chunk of 4 ends in exactly one.
+                        Some(prev) if frames == 1 => prev.clone(),
+                        // Otherwise carry the previous chunk's last input frame
+                        // into this chunk's first, so the seam is invisible.
                         Some(prev) => CudaTensor::cat(&[prev, &x.narrow(0, 0, frames - 1)?], 0)?,
                         None => shift_one_frame(&x, frames)?,
                     };
@@ -399,6 +406,29 @@ mod tests {
             .map(|(x, y)| (x - y).abs())
             .fold(0.0f32, f32::max);
         assert!(worst < 1e-5, "chunk seam changed the output by {worst}");
+    }
+
+    /// A chunk size that does not divide the latent frame count leaves a short
+    /// final chunk, and Wan's 33 latent frames with the default chunk of 4 end
+    /// in a chunk of exactly one — where there is no earlier frame to shift in.
+    /// This is what a full 129-frame clip hits.
+    #[test]
+    fn a_ragged_final_chunk_still_decodes() {
+        let tae = TaeHv::load(&tiny_map()).expect("load");
+        let z = CudaTensor::from_vec(
+            (0..(16 * 5 * 2 * 2)).map(|i| ((i % 13) as f32 / 13.0) - 0.5).collect(),
+            vec![1, 16, 5, 2, 2],
+        )
+        .unwrap();
+        std::env::set_var("FASTVIDEO_TAEHV_CHUNK", "4"); // 5 = 4 + 1
+        let ragged = tae.decode(&z).expect("ragged tail");
+        std::env::set_var("FASTVIDEO_TAEHV_CHUNK", "64");
+        let whole = tae.decode(&z).expect("whole");
+        std::env::remove_var("FASTVIDEO_TAEHV_CHUNK");
+        assert_eq!(ragged.shape, whole.shape);
+        let (a, b) = (ragged.host_cow().unwrap(), whole.host_cow().unwrap());
+        let worst = a.iter().zip(b.iter()).map(|(x, y)| (x - y).abs()).fold(0.0f32, f32::max);
+        assert!(worst < 1e-5, "ragged tail changed the output by {worst}");
     }
 
     #[test]
