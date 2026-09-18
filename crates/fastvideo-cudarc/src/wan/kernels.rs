@@ -44,6 +44,12 @@ extern "C" __global__ void silu(const float* a, float* out, long n) {
         out[i] = x / (1.0f + expf(-x));
     }
 }
+// TAEHV's Clamp block: a soft limiter, not a hard clamp, so the decoder never
+// sees a latent far outside the range it was trained on.
+extern "C" __global__ void tanh_scaled(const float* a, float* out, const float* s, long n) {
+    long i = IDX();
+    if (i < n) out[i] = tanhf(a[i] / *s) * *s;
+}
 extern "C" __global__ void gelu_tanh(const float* a, float* out, long n) {
     long i = IDX();
     if (i < n) {
@@ -981,6 +987,7 @@ macro_rules! kernel_fns {
 }
 
 kernel_fns!(
+    tanh_scaled,
     quantize_e4m3,
     dequantize_e4m3,
     amax_abs,

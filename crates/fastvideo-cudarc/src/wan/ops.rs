@@ -1107,6 +1107,17 @@ pub mod host {
     }
 }
 
+/// `tanh(x / s) * s` — TAEHV's soft limiter.
+#[cfg(feature = "cuda")]
+pub fn tanh_scaled_device(a: &CudaSlice<f32>, s: f32) -> Result<CudaSlice<f32>> {
+    let dev = ctx()?;
+    let n = a.len() as i64;
+    let sd = dev.stream.memcpy_stod(&[s]).map_err(err)?;
+    let mut out = alloc(a.len())?;
+    launch!(dev.stream, &dev.kernels.tanh_scaled, cfg_n(a.len()); a, &mut out, &sd, &n).map_err(err)?;
+    Ok(out)
+}
+
 // ---- FP8 E4M3 ------------------------------------------------------------
 
 /// Dynamic per-tensor E4M3 quantization of an activation.
