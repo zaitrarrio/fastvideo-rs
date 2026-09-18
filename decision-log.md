@@ -2,6 +2,25 @@
 
 Project code: FVID
 
+### FVID · 2026-09-18 · FVID-2026-09-18-taehv-adopted
+- Trigger: the TAEHV port was verified against the reference (FVID-2026-09-18-taehv-port) but never run in the pipeline, so the quality and end-to-end time trade were both unmeasured.
+- Decision: **TAEHV is worth using**, behind `FASTVIDEO_TAEHV_WEIGHTS=<dir>`. A/B on one RTX 3090, 8s clip (129 frames, 832x448), same prompt and seed, VSA on both sides, latents **bit-identical** (rel_l2 0.0) so the decoder is the only variable:
+
+  | | Wan VAE | TAEHV |
+  | --- | ---: | ---: |
+  | VAE decode | 16.18s | **1.66s** (9.7x) |
+  | total | 78.86s | **64.71s** (-18%) |
+  | peak VRAM | 21.4 GB | **12.1 GB** (-44%) |
+
+- Quality: **34.16 dB** PSNR between the two decodes. For scale, our own exact-vs-fast mode differs by 27.8 dB, so TAEHV sits closer to the Wan VAE than our fast path sits to our exact path. Visually the composition, motion and lighting are identical; TAEHV is slightly softer in fine detail (fur, foam).
+- The memory drop matters as much as the time. 21.4 GB took an 8s clip to the edge of a 24GB card — the constraint behind this morning's OOM on a reused box and behind `--vae-chunk 2` existing at all. 12.1 GB is comfortable.
+- **I had the structural trade backwards.** TAEHV being parallel over frames was described as an advantage over the Wan VAE's sequential feature cache; it is both. Every stage materialises every frame, and the deepest is ~12.6 GB for 129 frames, so the first A/B OOM'd. The fix is the reference's own sequential path: chunk the decode and carry each MemBlock's boundary frame across the seam. The oracle test ran 3 latent frames, where that liability cannot appear — a reminder that a correctness oracle at toy sizes says nothing about production shapes.
+- Second failure worth recording: 33 latent frames at chunk 4 ends in a chunk of **one**, where there is no earlier frame to shift in. Only reachable at real clip lengths; the unit tests used frame counts that never produced a ragged tail. Both failures now have tests that fail without the fix.
+- Reversibility: cheap — off unless the weights path is set, and a bad path errors rather than silently falling back to the Wan VAE.
+- Executed by: Executor
+- Verification: `20260918T195506Z-vaeab`. Three attempts, ~$0.16 total including the two failures.
+- Not done: TAEHV is not on by default, and no clip tier enables it. The quality trade is real if small, so that should be a deliberate choice rather than a default.
+
 ### FVID · 2026-09-18 · FVID-2026-09-18-taehv-port
 - Trigger: the Wan VAE is the largest component of a clip never attacked — 3.9s of a 23.7s 8-second clip on an H100 — and the only major block never checked against an external reference. FastWan-QAD's speedup leans on TAEHV for exactly this reason.
 - Decision: **port the TAEHV decoder** (madebyollin/taehv, `taew2_1`) as an alternative to `AutoencoderKLWan`. Decoder only; text-to-video never encodes.
