@@ -10,6 +10,7 @@
 # tiers: kernels (T1) | parity (T2) | clip (T3) | compare (T4, + upstream FastVideo)
 #        each validation tier includes the ones before it.
 #        gen — the UI path: deploy, encode one prompt, generate one clip.
+#        oracle — our text encoder and one DiT step vs transformers/diffusers.
 set -euo pipefail
 # shellcheck source=scripts/gpu/lib.sh
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
@@ -52,12 +53,15 @@ tier_query() {
     compare) echo "$base gpu_ram>=24 disk_space>=180 cpu_ram>=80 inet_down>=500" ;;
     # `gen` is the UI's path: deploy, encode one prompt, generate one clip.
     gen) echo "$base gpu_ram>=24 disk_space>=100 cpu_ram>=80 inet_down>=500" ;;
-    *) die "unknown tier '$1' (mathprobe|kernels|parity|clip|compare|gen)" ;;
+    # The oracle holds UMT5-XXL in torch float32 (~22GB) before the DiT loads;
+    # 24GB is too tight to risk a rental on.
+    oracle) echo "$base gpu_ram>=40 disk_space>=160 cpu_ram>=80 inet_down>=500" ;;
+    *) die "unknown tier '$1' (mathprobe|kernels|parity|clip|compare|gen|oracle)" ;;
   esac
 }
-tier_max_dph() { case "$1" in mathprobe) echo 0.40 ;; kernels) echo 0.25 ;; parity) echo 0.40 ;; clip) echo 0.60 ;; compare) echo 0.60 ;; gen) echo 0.80 ;; esac; }
-tier_max_minutes() { case "$1" in mathprobe) echo 30 ;; kernels) echo 40 ;; parity) echo 75 ;; clip) echo 180 ;; compare) echo 240 ;; gen) echo 180 ;; esac; }
-tier_disk() { case "$1" in mathprobe) echo 40 ;; kernels) echo 40 ;; parity) echo 60 ;; clip) echo 100 ;; compare) echo 180 ;; gen) echo 100 ;; esac; }
+tier_max_dph() { case "$1" in mathprobe) echo 0.40 ;; kernels) echo 0.25 ;; parity) echo 0.40 ;; clip) echo 0.60 ;; compare) echo 0.60 ;; gen) echo 0.80 ;; oracle) echo 1.60 ;; esac; }
+tier_max_minutes() { case "$1" in mathprobe) echo 30 ;; kernels) echo 40 ;; parity) echo 75 ;; clip) echo 180 ;; compare) echo 240 ;; gen) echo 180 ;; oracle) echo 150 ;; esac; }
+tier_disk() { case "$1" in mathprobe) echo 40 ;; kernels) echo 40 ;; parity) echo 60 ;; clip) echo 100 ;; compare) echo 180 ;; gen) echo 100 ;; oracle) echo 160 ;; esac; }
 
 usage() { sed -n '2,12p' "$0" | sed 's/^# \{0,1\}//'; exit 2; }
 
@@ -481,7 +485,7 @@ cmd_run() {
   # Downloads run in the background during the weight-free stages.
   case "$tier" in
     parity) remote_run fetch-base 120 fetch "$BASE_REPO" "$BASE_W" "transformer/*" "vae/*" ;;
-    clip | compare | gen)
+    clip | compare | gen | oracle)
       remote_run fetch-base 120 fetch "$BASE_REPO" "$BASE_W" "transformer/*" "vae/*" "text_encoder/*" "tokenizer/*"
       remote_run fetch-fast 120 fetch "$FAST_REPO" "$FAST_W" "transformer/*" "vae/*"
       ;;
@@ -521,6 +525,36 @@ cmd_run() {
       --weights "$FAST_W" --embeds "$embeds/ui.safetensors" --device cuda "${gen[@]}" \
       --name "$name" --budget-min "$budget_min"
     log "GEN done: $name"
+    return 0
+  fi
+
+  # `oracle` is the only tier that judges us against something other than
+  # ourselves. transformers' UMT5 and diffusers' WanTransformer3DModel run on
+  # the same weights, and both sides then consume byte-identical inputs, so the
+  # three checks attribute error instead of only detecting it:
+  #   text — our embedding vs the reference embedding   → the UMT5 port
+  #   dit  — our DiT on the *reference* embedding       → the DiT port
+  #   e2e  — our DiT on *our* embedding                 → what a clip gets
+  if [[ "$tier" == oracle ]]; then
+    local prompt="${FV_PROMPT:-$(jq -r '.prompts[0].prompt' "$FV_ROOT/scripts/gpu/prompts.json")}"
+    local negative; negative="$(jq -r '.negative' "$FV_ROOT/scripts/gpu/prompts.json")"
+    jq -n --arg p "$prompt" --arg n "$negative" \
+      '{negative: $n, prompts: [{name: "oracle", prompt: $p}]}' >"$RUN_DIR/prompt.json"
+    fv_rsync_to "$HOST" "$PORT" "$RUN_DIR/prompt.json" "$OUTR/prompt.json" >/dev/null
+    log "oracle prompt: $prompt"
+    local embeds="$OUTR/embeds"
+    remote_run wait-text 1800 wait-weights "$BASE_W" 1800 text_encoder
+    gpucheck_stage embed 1800 --mode exact embed --weights "$BASE_W" --prompts "$OUTR/prompt.json" \
+      --embeds "$embeds" --device cuda
+    remote_run wait-fast 1800 wait-weights "$FAST_W" 1800 transformer vae
+    remote_run upstream-install "${FV_UPSTREAM_INSTALL_TIMEOUT:-2400}" upstream-install "${FV_TORCH_BACKEND:-cu126}"
+    remote_run upstream-oracle "${FV_ORACLE_TIMEOUT:-3600}" upstream-oracle \
+      --base-weights "$BASE_W" --dit-weights "$FAST_W" --prompts "$OUTR/prompt.json" \
+      --height "${FV_HEIGHT:-448}" --width "${FV_WIDTH:-832}" --num-frames "${FV_ORACLE_FRAMES:-33}"
+    # Exact mode: the oracle is float32, and a looser judge cannot set a limit.
+    gpucheck_stage oracle 1800 --keep-going --mode exact oracle --weights "$FAST_W" \
+      --oracle "$OUTR/oracle/oracle.safetensors" --embeds "$embeds/oracle.safetensors" --device cuda
+    log "ORACLE done"
     return 0
   fi
 

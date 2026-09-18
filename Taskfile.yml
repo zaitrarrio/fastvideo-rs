@@ -159,6 +159,10 @@ tasks:
     desc: Compare tier — our stack against upstream FastVideo on one box (~$0.30)
     cmds: [{ task: run, vars: { TIER: compare } }]
 
+  oracle:
+    desc: Oracle tier — our text encoder and one DiT step vs transformers/diffusers (~$1.50)
+    cmds: [{ task: run, vars: { TIER: oracle } }]
+
   gen:
     desc: 'Generate one clip from a prompt (PROMPT="a dog on a beach")'
     requires:

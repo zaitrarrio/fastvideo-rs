@@ -24,6 +24,7 @@ mod mathprobe;
 mod metrics;
 mod mode;
 mod model;
+mod oracle;
 mod parity;
 mod perf;
 mod quality;
@@ -225,6 +226,25 @@ enum Cmd {
         #[arg(long, default_value_t = 20.0)]
         min_psnr: f64,
     },
+    /// Diff our text encoder and one DiT step against an external reference.
+    Oracle {
+        #[arg(long)]
+        weights: PathBuf,
+        /// Written by scripts/gpu/upstream_oracle.py.
+        #[arg(long)]
+        oracle: PathBuf,
+        /// Our own embeds for the same prompt (from the embed stage).
+        #[arg(long)]
+        embeds: PathBuf,
+        #[arg(long, default_value = "cuda")]
+        device: String,
+        #[arg(long, default_value_t = 0.02)]
+        max_text_rel: f64,
+        #[arg(long, default_value_t = 0.05)]
+        max_dit_rel: f64,
+        #[arg(long, default_value_t = 0.05)]
+        max_e2e_rel: f64,
+    },
 }
 
 fn parse_list<T: std::str::FromStr>(s: &str) -> anyhow::Result<Vec<T>> {
@@ -270,6 +290,7 @@ fn stage_name(cmd: &Cmd) -> &'static str {
         Cmd::Probe { .. } => "probe",
         Cmd::Clip { .. } => "clip",
         Cmd::Compare { .. } => "compare",
+        Cmd::Oracle { .. } => "oracle",
     }
 }
 
@@ -386,6 +407,26 @@ fn run(cli: &Cli, report: &mut Report) -> StageResult<()> {
                 max_step1_rel: *max_step1_rel,
                 max_latent_rel: *max_latent_rel,
                 min_psnr: *min_psnr,
+            },
+        ),
+        Cmd::Oracle {
+            weights,
+            oracle,
+            embeds,
+            device,
+            max_text_rel,
+            max_dit_rel,
+            max_e2e_rel,
+        } => oracle::run(
+            report,
+            weights,
+            oracle,
+            embeds,
+            device,
+            oracle::OracleGates {
+                max_text_rel: *max_text_rel,
+                max_dit_rel: *max_dit_rel,
+                max_e2e_rel: *max_e2e_rel,
             },
         ),
     }

@@ -324,6 +324,17 @@ cmd_upstream_bench() {
     --backend "$backend" --out "$OUT/upstream-$backend.json" --video-dir "$OUT/upstream-videos/$backend" "$@"
 }
 
+# The oracle runs in the upstream venv: transformers' UMT5 and diffusers'
+# WanTransformer3DModel are the reference our own ports are judged against.
+cmd_upstream_oracle() {
+  export HF_HOME="$WORK/hf"
+  export PATH="$HOME/.local/bin:$PATH"
+  [[ -x "$UPSTREAM_VENV/bin/python" ]] || die "upstream venv missing (run upstream-install)"
+  mkdir -p "$OUT/oracle"
+  "$UPSTREAM_VENV/bin/python" "$ROOT/scripts/gpu/upstream_oracle.py" \
+    --out "$OUT/oracle/oracle.safetensors" --meta "$OUT/oracle/oracle.json" "$@"
+}
+
 sub="${1:-}"; shift || true
 case "$sub" in
   env) cmd_env "$@" ;;
@@ -335,5 +346,6 @@ case "$sub" in
   stage) cmd_stage "$@" ;;
   upstream-install) cmd_upstream_install "$@" ;;
   upstream-bench) cmd_upstream_bench "$@" ;;
-  *) die "usage: remote.sh env|bootstrap|cublas|fetch|wait-weights|stage|upstream-install|upstream-bench" ;;
+  upstream-oracle) cmd_upstream_oracle "$@" ;;
+  *) die "usage: remote.sh env|bootstrap|cublas|fetch|wait-weights|stage|upstream-install|upstream-bench|upstream-oracle" ;;
 esac
