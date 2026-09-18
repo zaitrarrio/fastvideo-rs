@@ -2,6 +2,17 @@
 
 Project code: FVID
 
+### FVID · 2026-09-18 · FVID-2026-09-18-taehv-port
+- Trigger: the Wan VAE is the largest component of a clip never attacked — 3.9s of a 23.7s 8-second clip on an H100 — and the only major block never checked against an external reference. FastWan-QAD's speedup leans on TAEHV for exactly this reason.
+- Decision: **port the TAEHV decoder** (madebyollin/taehv, `taew2_1`) as an alternative to `AutoencoderKLWan`. Decoder only; text-to-video never encodes.
+- Verified against the implementation it was read from, first hardware run: `video` rel_l2 **2.6e-4** (cosine 0.99999997) against a 2e-2 limit, output shape `[9, 3, 448, 832]` exact. `20260918T182450Z-taehv`, RTX 3060, **$0.008**.
+- **Faster than the reference it copies**: decode 1.332s (reference PyTorch) → **0.443s** (ours), same card, same latent, same weights — 3.0x. Our port is parallel over frames because TAEHV's `past` is only a one-frame shift, so unlike the Wan VAE there is no sequential feature cache to serialise on.
+- The measurement that could not be made by reading: TAEHV documents "~Gaussian" input, which had to mean **DiT-space** latents, *before* the per-channel `latents_mean`/`latents_std` un-normalisation the Wan VAE requires. Getting that backwards yields a plausible, wrongly-coloured video rather than an error — the same failure shape that hid the mirrored UMT5 bias. The oracle settles it.
+- Every architectural constant inferred from the source was confirmed by the reference: `patch_size` 1, `latent_channels` 16, `t_upscale` 4, `frames_to_trim` 3, and T latent frames → 4T−3 output frames, which is Wan's 4n+1.
+- Reversibility: cheap — additive, nothing existing changed.
+- Executed by: Executor
+- **Not yet answered**: what TAEHV costs in *quality* on a real clip, and what it saves end to end against the Wan VAE's 3.9s. Both need it wired into the pipeline and a clip run. Speed is established; the trade is not.
+
 ### FVID · 2026-09-18 · FVID-2026-09-18-fp8-linears-measured
 - Trigger: FastWan-QAD (haoailab.com/blogs/fastwan-qad) claims 3.4s for a 5s 480p clip on a 4090 via FP8 linears + FP8 attention + TAEHV + full compile. The checkpoints turned out to be **unquantized** — F32 weights, a transformer config byte-identical to stock Wan2.1-1.3B, no quantization_config — so "FP8" names the precision the model was *trained to tolerate*, and every part of the speedup is ours to build.
 - Built: `fastvideo-ops::fp8` (E4M3 conversion, exhaustively tested over all 256 codes), four CUDA kernels mirroring it, a cuBLASLt E4M3 GEMM, and FP8 linears behind `FASTVIDEO_FP8`.
