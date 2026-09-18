@@ -433,7 +433,7 @@ pub fn run(report: &mut Report, lim: Limits, seed: u64) -> StageResult<()> {
             let (n, ch, spatial) = (2usize, 12usize, 5 * 9 * 11);
             let x = c.rand(n * ch * spatial, 1.0);
             let g: Vec<f32> = c.rand(ch, 0.1).iter().map(|v| 1.0 + v).collect();
-            let got = down(&ops::rms_norm_channels_device(&up(&x)?, &up(&g)?, n, ch, spatial, 1e-12)?)?;
+            let got = down(&ops::rms_norm_channels_device(&up(&x)?, &up(&g)?, n, ch, spatial, 1e-12, false)?)?;
             let mut want = vec![0.0; x.len()];
             for ni in 0..n {
                 for s in 0..spatial {
@@ -446,6 +446,11 @@ pub fn run(report: &mut Report, lim: Limits, seed: u64) -> StageResult<()> {
                 }
             }
             c.cmp("rms_norm_channels", &got, &want, op)?;
+            // Folding SiLU into the norm must not move the result: it is the
+            // same expression, written in one pass instead of two.
+            let fused = down(&ops::rms_norm_channels_device(&up(&x)?, &up(&g)?, n, ch, spatial, 1e-12, true)?)?;
+            let want_silu: Vec<f32> = want.iter().map(|&v| v / (1.0 + (-v).exp())).collect();
+            c.cmp("rms_norm_channels_silu", &fused, &want_silu, op)?;
         }
         {
             let (v, d) = (50usize, 33usize);

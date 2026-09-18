@@ -157,6 +157,13 @@ impl CudaTensor {
 
     /// RMS over dim 1 of `[n, c, ...]` scaled by `gamma` `[c]` (Wan VAE norm).
     pub fn rms_norm_channels(&self, gamma: &CudaTensor, eps: f32) -> Result<CudaTensor> {
+        self.rms_norm_channels_act(gamma, eps, false)
+    }
+
+    /// RMS norm over the channel axis, optionally with SiLU folded into the
+    /// same pass. The VAE decoder always follows the norm with SiLU, and at
+    /// decode resolution that separate pass is hundreds of MB read and written.
+    pub fn rms_norm_channels_act(&self, gamma: &CudaTensor, eps: f32, silu: bool) -> Result<CudaTensor> {
         if self.rank() < 2 {
             return Err(msg("rms_norm_channels needs [n, c, ...]"));
         }
@@ -167,10 +174,10 @@ impl CudaTensor {
         let spatial: usize = self.shape[2..].iter().product();
         #[cfg(feature = "cuda")]
         if let (Some(x), Some(g)) = (self.dev()?, gamma.dev()?) {
-            let out = super::ops::rms_norm_channels_device(&x, &g, n, c, spatial, eps)?;
+            let out = super::ops::rms_norm_channels_device(&x, &g, n, c, spatial, eps, silu)?;
             return Self::from_dev_result(out, self.shape.clone());
         }
-        let out = host::rms_norm_channels(&self.host_cow()?, &gamma.host_cow()?, n, c, spatial, eps);
+        let out = host::rms_norm_channels(&self.host_cow()?, &gamma.host_cow()?, n, c, spatial, eps, silu);
         Ok(Self::host_only(out, self.shape.clone()))
     }
 }

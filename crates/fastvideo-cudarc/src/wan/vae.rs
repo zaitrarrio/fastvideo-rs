@@ -167,6 +167,11 @@ fn rms_video(xs: &CudaTensor, gamma: &CudaTensor) -> Result<CudaTensor> {
     xs.rms_norm_channels(gamma, 1e-12)
 }
 
+/// `rms_video` with SiLU folded in, which is how the decoder always uses it.
+fn rms_silu_video(xs: &CudaTensor, gamma: &CudaTensor) -> Result<CudaTensor> {
+    xs.rms_norm_channels_act(gamma, 1e-12, true)
+}
+
 fn silu_video(xs: &CudaTensor) -> CudaTensor {
     xs.silu()
 }
@@ -242,11 +247,9 @@ impl ResidualBlock {
     }
 
     fn forward(&self, xs: &CudaTensor, mut cache: Option<&mut FeatCache>) -> Result<CudaTensor> {
-        let mut x = rms_video(xs, &self.norm1)?;
-        x = silu_video(&x);
+        let mut x = rms_silu_video(xs, &self.norm1)?;
         x = conv_cached(&self.conv1, &x, cache.as_deref_mut())?;
-        x = rms_video(&x, &self.norm2)?;
-        x = silu_video(&x);
+        x = rms_silu_video(&x, &self.norm2)?;
         x = conv_cached(&self.conv2, &x, cache.as_deref_mut())?;
         match &self.shortcut {
             Some(sc) => Ok(sc.forward(xs)?.add(&x)?),
@@ -623,8 +626,7 @@ impl WanDecoder {
         for up in &self.up_blocks {
             x = up.forward(x, cache.as_deref_mut())?;
         }
-        x = rms_video(&x, &self.norm_out)?;
-        x = silu_video(&x);
+        x = rms_silu_video(&x, &self.norm_out)?;
         x = conv_cached(&self.conv_out, &x, cache.as_deref_mut())?;
         Ok(x.clamp(-1.0, 1.0))
     }
@@ -808,8 +810,7 @@ impl WanEncoder {
         x = self.mid_res0.forward(&x, None)?;
         x = self.mid_attn.forward(&x)?;
         x = self.mid_res1.forward(&x, None)?;
-        x = rms_video(&x, &self.norm_out)?;
-        x = silu_video(&x);
+        x = rms_silu_video(&x, &self.norm_out)?;
         x = self.conv_out.forward(&x)?;
         x = self.quant.forward(&x)?;
         let chunks = x.chunk(2, 1)?;

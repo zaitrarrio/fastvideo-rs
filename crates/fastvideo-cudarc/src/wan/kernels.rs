@@ -463,9 +463,13 @@ extern "C" __global__ void upsample_nearest(
     out[i] = in[(c * h + y / fy) * w + x / fx];
 }
 // RMS over the channel axis of [n, c, spatial]; gamma length = c.
+// `act != 0` applies SiLU to the normalized value. The kernel already reads x
+// twice (sum of squares, then normalize), so the activation rides along for
+// free and saves a whole read+write pass over a tensor that is hundreds of MB
+// at VAE decode resolution.
 extern "C" __global__ void rms_norm_channels(
     const float* x, const float* gamma, float* out,
-    long n, long c, long spatial, float eps
+    long n, long c, long spatial, float eps, int act
 ) {
     long idx = IDX();
     if (idx >= n * spatial) return;
@@ -479,7 +483,10 @@ extern "C" __global__ void rms_norm_channels(
     float inv = rsqrtf(acc / (float)c + eps);
     for (long ci = 0; ci < c; ++ci) {
         long i = (ni * c + ci) * spatial + s;
-        out[i] = x[i] * inv * gamma[ci];
+        float v = x[i] * inv * gamma[ci];
+        // Same expression as the standalone silu kernel, so fusing cannot move
+        // the result.
+        out[i] = act ? v / (1.0f + expf(-v)) : v;
     }
 }
 // Temporal unfold for conv3d-as-conv2d: [n, c, t, h, w] → [n*ot, c*kt, h, w]

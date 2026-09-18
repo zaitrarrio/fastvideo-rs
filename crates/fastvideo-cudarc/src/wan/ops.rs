@@ -511,12 +511,14 @@ pub fn rms_norm_channels_device(
     c: usize,
     spatial: usize,
     eps: f32,
+    silu: bool,
 ) -> Result<CudaSlice<f32>> {
     check("rms_norm_channels", gamma.len() == c && x.len() == n * c * spatial)?;
     let dev = ctx()?;
     let a = [n as i64, c as i64, spatial as i64];
     let mut out = alloc(x.len())?;
-    launch!(dev.stream, &dev.kernels.rms_norm_channels, cfg_n(n * spatial); x, gamma, &mut out, &a[0], &a[1], &a[2], &eps)
+    let act = i32::from(silu);
+    launch!(dev.stream, &dev.kernels.rms_norm_channels, cfg_n(n * spatial); x, gamma, &mut out, &a[0], &a[1], &a[2], &eps, &act)
         .map_err(err)?;
     Ok(out)
 }
@@ -985,7 +987,7 @@ pub mod host {
         out
     }
 
-    pub fn rms_norm_channels(x: &[f32], gamma: &[f32], n: usize, c: usize, spatial: usize, eps: f32) -> Vec<f32> {
+    pub fn rms_norm_channels(x: &[f32], gamma: &[f32], n: usize, c: usize, spatial: usize, eps: f32, silu: bool) -> Vec<f32> {
         let mut out = vec![0.0f32; x.len()];
         for ni in 0..n {
             let (inv_all, ()) = {
@@ -1004,7 +1006,8 @@ pub mod host {
                 .for_each(|(ci, plane)| {
                     let src = &x[(ni * c + ci) * spatial..][..spatial];
                     for s in 0..spatial {
-                        plane[s] = src[s] * inv_all[s] * gamma[ci];
+                        let v = src[s] * inv_all[s] * gamma[ci];
+                        plane[s] = if silu { v / (1.0 + (-v).exp()) } else { v };
                     }
                 });
         }
