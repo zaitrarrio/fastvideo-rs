@@ -305,6 +305,40 @@ One near-miss worth recording: at four frames per pass the decode "finished" in
 failure part-way through. Removing 3.7x of the passes cannot produce 10x, and
 disbelieving the number is what surfaced the error.
 
+## 2026-09-18 — bf16 convolutions in, fused attention out
+
+Two attempts at the last two levers. One worked, one did not.
+
+**bf16 VAE convolutions (adopted).** The dominant convolution already ran at
+the card's TF32 peak, so only cheaper math could help. bf16 tensor ops are
+about twice TF32 on Ampere, and the casts cost less than the compute saved.
+
+| Shape | cuDNN f32 | bf16 |
+| --- | ---: | ---: |
+| [1,192,10,224,416] (Ada) | 32.7 ms | 15.4 ms |
+| [1,96,10,448,832] (Ada) | 41.1 ms | 28.1 ms |
+| [1,192,6,224,416] (Blackwell) | 9.9 ms | 5.6 ms |
+
+1.3-2.1x on large shapes across Ampere, Ada and Blackwell. The per-shape timed
+selection is what makes it safe: on two shapes bf16 is *slower*, one by 22x, and
+the selection keeps cuDNN there. A blanket switch would have hidden both.
+
+**Fused block-sparse attention (rejected).** Streaming K/V from the tiled layout
+instead of gathering saves ~80 GB/layer, but gives up cuBLAS tensor cores:
+
+| Tokens | Gather + cuBLAS | Fused |
+| --- | ---: | ---: |
+| 1,456 | 0.107 s | 0.856 s |
+| 13,104 | 0.870 s | 7.483 s |
+
+8x slower on the same RTX 5090. The structure was right this time — one block
+per query tile, so each K/V load is amortised over 64 queries, which is what the
+flash kernel got wrong — and that moved it from 12-36x slower to 8x. It still
+lost, because the binding constraint was never structure but tensor cores.
+
+Two independent experiments now say the same thing: **do not hand-write
+attention math that cuBLAS can express on this hardware.**
+
 ## Totals
 
 - **42 validation runs**, **$1.79** of GPU time end to end.

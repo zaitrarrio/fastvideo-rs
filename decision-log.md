@@ -2,6 +2,18 @@
 
 Project code: FVID
 
+### FVID · 2026-09-18 · FVID-2026-09-18-bf16-conv3d
+- Trigger: after the SiLU fusion and chunked decode, VAE convolutions were the remaining VAE cost, and the dominant one ran 1.11 TFLOP in 27.7 ms ≈ 40 TFLOPS on a 3090 Ti — this card's TF32 peak, so compute-bound with no memory headroom to recover
+- Options: leave it; bf16 storage through the whole VAE (large refactor); bf16 operands per convolution with casts around it
+- Decision: **bf16 cuDNN conv3d as a third auto-selected backend** (`ded1f0c`). bf16 tensor ops run at roughly twice TF32 on Ampere, and the casts around one convolution cost ~3.4 ms against ~13.8 ms of compute saved, so it wins even without chaining bf16 between ops. `conv3d`'s auto mode times three candidates per shape and keeps the winner; bf16 only competes in fast mode, since exact mode must stay comparable to the CPU path.
+- Measured 1.3-2.1x on large shapes across **three architectures**: Ada 4090 `[1,192,10,224,416]` 32.7 -> 15.4 ms, `[1,96,10,448,832]` 41.1 -> 28.1 ms; Blackwell 5090 `[1,192,6,224,416]` 9.9 -> 5.6 ms, `[1,96,6,448,832]` 10.4 -> 7.2 ms. 13 of 14 full-resolution shapes chose bf16.
+- **Per-shape selection is load-bearing, not tidiness.** On the 4090, `[1,96,3,128,128]` is 0.3 ms in cuDNN f32 and **6.6 ms in bf16** — 22x slower, presumably a poor cuDNN algorithm for that configuration — and one other shape also lost. A blanket bf16 switch, the obvious implementation, would have absorbed both regressions silently.
+- Accuracy: VAE decode rel_l2 0.00287 at 64.0 dB against the fast-mode limit of 0.02, versus 0.00092 at 74 dB for F32. A real trade, of the same kind already accepted for bf16 linears and bf16 attention probabilities — not free like the SiLU fusion.
+- Reversibility: cheap (`FASTVIDEO_CONV3D=cudnn` or `unfold` forces the old behaviour; exact mode never selects it)
+- Executed by: Executor
+- Verification: runs `20260918T095625Z-clip` (Ada) and `20260918T101337Z-clip` (Blackwell, all stages pass, 15 min, $0.120). 8s clip on the 5090: denoise 18.4 s, VAE decode 5.02 s, both clips within 40 ms of each other.
+- Process note: a `clip-2s-exact` OOM during this work was **accumulated GPU memory on a reused instance**, not the card and not these changes — the stage passes on a fresh box. Rent a new instance per run; never trust a timing from a machine that has already done substantial work.
+
 ### FVID · 2026-09-18 · FVID-2026-09-18-fused-block-sparse-rejected
 - Trigger: VSA's fine stage gathers each query tile's selected K/V into a dense buffer (~106 GB/layer written and read, plus a 26 GB score buffer) so cuBLAS can run the GEMMs on tensor cores. A fused kernel streaming K/V straight from the tiled layout would move ~53 GB/layer and materialise no scores.
 - Options: keep the gather; fuse with scalar f32 math; fuse with tensor cores via inline PTX `mma.sync`
