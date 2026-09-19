@@ -195,8 +195,9 @@ tasks:
     cmds:
       - |
         FV_PROMPT={{.PROMPT | quote}} FV_FRAMES={{.FRAMES}} FV_STEPS={{.STEPS}} \
+        {{if .DPH}}MAX_DPH={{.DPH}} {{end}}{{if .MINUTES}}MAX_MINUTES={{.MINUTES}} {{end}}\
         {{if .GPU}}FV_OFFER_QUERY_EXTRA=gpu_name={{.GPU}} {{end}}\
-        bash scripts/gpu/validate.sh run gen
+        bash scripts/gpu/validate.sh run gen{{if .SKIP_LOCAL}} --skip-local{{end}}
 
   # ---- rented machines -----------------------------------------------------
 
