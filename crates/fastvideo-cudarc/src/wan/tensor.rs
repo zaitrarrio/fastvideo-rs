@@ -487,6 +487,48 @@ impl CudaTensor {
         Ok(Self::host_only(out, out_shape))
     }
 
+    /// Pad one axis with zeros, a reflection, or the edge sample — `torch`'s
+    /// `constant`, `reflect` and `replicate`. Pad several axes by calling it
+    /// once per axis: for these modes the result is the same in any order.
+    pub fn pad(&self, dim: usize, left: usize, right: usize, mode: super::ops::PadMode) -> Result<CudaTensor> {
+        if left == 0 && right == 0 {
+            return Ok(self.clone());
+        }
+        let d = self.dim(dim)?;
+        if d == 0 || (mode == super::ops::PadMode::Reflect && left.max(right) >= d) {
+            return Err(msg(format!("pad: {mode:?} by ({left}, {right}) on an axis of {d}")));
+        }
+        let mut out_shape = self.shape.clone();
+        out_shape[dim] = d + left + right;
+        let (_, inner) = self.blocks(dim);
+        #[cfg(feature = "cuda")]
+        if let Some(src) = self.dev()? {
+            return Self::from_dev_result(super::ops::pad_axis_device(&src, d, inner, left, right, mode)?, out_shape);
+        }
+        Ok(Self::host_only(host::pad_axis(&self.host_cow()?, d, inner, left, right, mode), out_shape))
+    }
+
+    /// GroupNorm over `[N, C, ...]` with affine `weight`/`bias` of `[C]`.
+    /// `silu` folds the activation that follows it in every ResNet block here.
+    pub fn group_norm(&self, groups: usize, weight: &CudaTensor, bias: &CudaTensor, eps: f32, silu: bool) -> Result<CudaTensor> {
+        if self.rank() < 2 {
+            return Err(msg(format!("group_norm expects [N, C, ...], got {:?}", self.shape)));
+        }
+        let (n, c) = (self.shape[0], self.shape[1]);
+        let spatial = numel(&self.shape[2..]);
+        if groups == 0 || c % groups != 0 || weight.numel() != c || bias.numel() != c || self.numel() == 0 {
+            return Err(msg(format!("group_norm: {:?} in {groups} groups, weight {:?}", self.shape, weight.shape)));
+        }
+        #[cfg(feature = "cuda")]
+        if let (Some(x), Some(w), Some(b)) = (self.dev()?, weight.dev()?, bias.dev()?) {
+            return Self::from_dev_result(super::ops::group_norm_device(&x, &w, &b, n, c, spatial, groups, eps, silu)?, self.shape.clone());
+        }
+        Ok(Self::host_only(
+            host::group_norm(&self.host_cow()?, &weight.host_cow()?, &bias.host_cow()?, c, spatial, groups, eps, silu),
+            self.shape.clone(),
+        ))
+    }
+
     pub fn pad_zeros(&self, dim: usize, left: usize, right: usize) -> Result<CudaTensor> {
         if left == 0 && right == 0 {
             return Ok(self.clone());
@@ -1472,5 +1514,55 @@ mod conv1d_tests {
         assert!(x.conv1d(&CudaTensor::zeros(&[6, 2, 3]), None, 1, 1, 1, 4).is_err(), "groups do not divide");
         assert!(x.conv1d(&CudaTensor::zeros(&[6, 4, 3]), None, 0, 1, 8, 1).is_err(), "reach exceeds input");
         assert!(x.conv_transpose1d(&CudaTensor::zeros(&[3, 2, 3]), None, 0, 1, 1, 1, 0).is_err());
+    }
+}
+
+#[cfg(test)]
+mod vae_op_tests {
+    use super::*;
+    use crate::wan::ops::PadMode;
+
+    #[test]
+    fn pad_modes_match_torch() {
+        let x = CudaTensor::from_vec(vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0], vec![1, 2, 3]).unwrap();
+        let pad = |mode| x.pad(2, 2, 1, mode).unwrap().host_cow().unwrap().into_owned();
+        // torch.nn.functional.pad(x, (2, 1), mode=...)
+        assert_eq!(pad(PadMode::Reflect), vec![3.0, 2.0, 1.0, 2.0, 3.0, 2.0, 6.0, 5.0, 4.0, 5.0, 6.0, 5.0]);
+        assert_eq!(pad(PadMode::Replicate), vec![1.0, 1.0, 1.0, 2.0, 3.0, 3.0, 4.0, 4.0, 4.0, 5.0, 6.0, 6.0]);
+        assert_eq!(pad(PadMode::Zeros), x.pad_zeros(2, 2, 1).unwrap().host_cow().unwrap().into_owned());
+        // A middle axis: rows move as whole blocks.
+        let rows = x.pad(1, 1, 0, PadMode::Reflect).unwrap();
+        assert_eq!(rows.shape, vec![1, 3, 3]);
+        assert_eq!(&*rows.host_cow().unwrap(), &[4.0, 5.0, 6.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0]);
+        assert!(x.pad(2, 3, 0, PadMode::Reflect).is_err(), "reflect needs pad < len");
+        assert!(x.pad(2, 3, 0, PadMode::Replicate).is_ok());
+    }
+
+    #[test]
+    fn group_norm_normalizes_each_group() {
+        let (n, c, sp, g) = (2usize, 4usize, 5usize, 2usize);
+        let x: Vec<f32> = (0..n * c * sp).map(|i| ((i * 37 % 19) as f32 - 7.0) * 0.3 + (i / (2 * sp)) as f32).collect();
+        let xt = CudaTensor::from_vec(x.clone(), vec![n, c, sp]).unwrap();
+        let ones = CudaTensor::ones(&[c]);
+        let zeros = CudaTensor::zeros(&[c]);
+        let y = xt.group_norm(g, &ones, &zeros, 1e-6, false).unwrap();
+        let yv = y.host_cow().unwrap();
+        for grp in yv.chunks(c / g * sp) {
+            let m: f32 = grp.iter().sum::<f32>() / grp.len() as f32;
+            let v: f32 = grp.iter().map(|a| (a - m).powi(2)).sum::<f32>() / grp.len() as f32;
+            assert!(m.abs() < 1e-5 && (v - 1.0).abs() < 1e-4, "mean {m} var {v}");
+        }
+        // Affine is per channel, and SiLU is applied after it.
+        let w = CudaTensor::from_vec(vec![2.0, 1.0, 0.5, 3.0], vec![c]).unwrap();
+        let b = CudaTensor::from_vec(vec![0.1, -0.2, 0.3, 0.0], vec![c]).unwrap();
+        let ya = xt.group_norm(g, &w, &b, 1e-6, false).unwrap();
+        let ys = xt.group_norm(g, &w, &b, 1e-6, true).unwrap();
+        let (wv, bv) = ([2.0f32, 1.0, 0.5, 3.0], [0.1f32, -0.2, 0.3, 0.0]);
+        for (i, ((a, s), base)) in ya.host_cow().unwrap().iter().zip(ys.host_cow().unwrap().iter()).zip(yv.iter()).enumerate() {
+            let ch = (i / sp) % c;
+            assert!((a - (base * wv[ch] + bv[ch])).abs() < 1e-5);
+            assert!((s - a / (1.0 + (-a).exp())).abs() < 1e-6);
+        }
+        assert!(xt.group_norm(3, &ones, &zeros, 1e-6, false).is_err());
     }
 }

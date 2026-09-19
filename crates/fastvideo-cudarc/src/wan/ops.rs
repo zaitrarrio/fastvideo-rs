@@ -978,6 +978,49 @@ pub mod host {
             .collect()
     }
 
+    /// Pad the middle axis of `[outer, len, inner]`.
+    pub fn pad_axis(x: &[f32], len: usize, inner: usize, left: usize, right: usize, mode: super::PadMode) -> Vec<f32> {
+        let out_len = len + left + right;
+        let total = x.len() / len * out_len;
+        (0..total)
+            .into_par_iter()
+            .map(|i| {
+                let o = (i / inner) % out_len;
+                let src = o as isize - left as isize;
+                let src = if src < 0 || src >= len as isize {
+                    match mode {
+                        super::PadMode::Zeros => return 0.0,
+                        super::PadMode::Reflect => if src < 0 { -src } else { 2 * (len as isize - 1) - src },
+                        super::PadMode::Replicate => src.clamp(0, len as isize - 1),
+                    }
+                } else {
+                    src
+                } as usize;
+                x[(i / (inner * out_len)) * len * inner + src * inner + i % inner]
+            })
+            .collect()
+    }
+
+    /// GroupNorm over `[N, C, spatial]`, statistics in f64.
+    #[allow(clippy::too_many_arguments)]
+    pub fn group_norm(x: &[f32], w: &[f32], b: &[f32], c: usize, spatial: usize, groups: usize, eps: f32, silu: bool) -> Vec<f32> {
+        let cg = c / groups;
+        let ge = cg * spatial;
+        let mut out = vec![0f32; x.len()];
+        out.par_chunks_mut(ge).zip(x.par_chunks(ge)).enumerate().for_each(|(gi, (o, g))| {
+            let mean = g.iter().map(|v| f64::from(*v)).sum::<f64>() / ge as f64;
+            let var = (g.iter().map(|v| f64::from(*v).powi(2)).sum::<f64>() / ge as f64 - mean * mean).max(0.0);
+            let inv = 1.0 / (var + f64::from(eps)).sqrt();
+            let first = (gi % groups) * cg;
+            for (j, (ov, xv)) in o.iter_mut().zip(g).enumerate() {
+                let ch = first + j / spatial;
+                let y = ((f64::from(*xv) - mean) * inv) as f32 * w[ch] + b[ch];
+                *ov = if silu { y / (1.0 + (-y).exp()) } else { y };
+            }
+        });
+        out
+    }
+
     /// 1-D cross-correlation, PyTorch `Conv1d` semantics. `x`: `[n, c, l]`,
     /// `w`: `[oc, c / groups, k]`. Returns the output and its length.
     #[allow(clippy::too_many_arguments)]
@@ -1436,6 +1479,75 @@ pub fn repeat_kv_device(x: &CudaSlice<f32>, hkv: usize, rep: usize, inner: usize
     let (n, hkv, rep, inner) = (total as i64, hkv as i64, rep as i64, inner as i64);
     let mut out = alloc(total)?;
     launch!(dev.stream, &dev.kernels.repeat_kv, cfg_n(total); x, &mut out, &hkv, &rep, &inner, &n).map_err(err)?;
+    Ok(out)
+}
+
+/// How [`pad_axis_device`] fills positions outside the input.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PadMode {
+    Zeros = 0,
+    /// Mirror without repeating the edge sample (`torch` `reflect`).
+    Reflect = 1,
+    /// Repeat the edge sample (`torch` `replicate`).
+    Replicate = 2,
+}
+
+/// Pad the middle axis of `[outer, len, inner]`.
+#[cfg(feature = "cuda")]
+pub fn pad_axis_device(
+    x: &CudaSlice<f32>,
+    len: usize,
+    inner: usize,
+    left: usize,
+    right: usize,
+    mode: PadMode,
+) -> Result<CudaSlice<f32>> {
+    let dev = ctx()?;
+    if len == 0 || inner == 0 || x.len() % (len * inner) != 0 {
+        return Err(err(format!("pad_axis: {} elements for len={len} inner={inner}", x.len())));
+    }
+    let out_len = len + left + right;
+    let total = x.len() / len * out_len;
+    let (n, len, inner, left, out_len, mode) = (total as i64, len as i64, inner as i64, left as i64, out_len as i64, mode as i32);
+    let mut out = alloc(total)?;
+    launch!(dev.stream, &dev.kernels.pad_axis, cfg_n(total); x, &mut out, &len, &inner, &left, &out_len, &mode, &n).map_err(err)?;
+    Ok(out)
+}
+
+/// GroupNorm over `[N, C, spatial]` with `groups` groups, affine, optional SiLU.
+#[cfg(feature = "cuda")]
+#[allow(clippy::too_many_arguments)]
+pub fn group_norm_device(
+    x: &CudaSlice<f32>,
+    w: &CudaSlice<f32>,
+    b: &CudaSlice<f32>,
+    n: usize,
+    c: usize,
+    spatial: usize,
+    groups: usize,
+    eps: f32,
+    silu: bool,
+) -> Result<CudaSlice<f32>> {
+    let dev = ctx()?;
+    if groups == 0 || c % groups != 0 || x.len() != n * c * spatial || w.len() != c || b.len() != c || x.is_empty() {
+        return Err(err(format!("group_norm: {} elements for [{n}, {c}, {spatial}] in {groups} groups", x.len())));
+    }
+    let cg = c / groups;
+    let group_elems = (cg * spatial) as i64;
+    let mut stats = dev.stream.alloc_zeros::<f64>(2 * n * groups).map_err(err)?;
+    // A power-of-two block so the halving reduction is exact; small groups
+    // (a late, narrow feature map) do not need 512 threads.
+    let threads = ((cg * spatial).next_power_of_two()).clamp(1, 512) as u32;
+    let cfg = LaunchConfig {
+        grid_dim: ((n * groups) as u32, 1, 1),
+        block_dim: (threads, 1, 1),
+        shared_mem_bytes: threads * 16,
+    };
+    launch!(dev.stream, &dev.kernels.group_norm_stats, cfg; x, &mut stats, &group_elems).map_err(err)?;
+    let mut out = alloc(x.len())?;
+    let (total, c, spatial, cg, silu) = (x.len() as i64, c as i64, spatial as i64, cg as i64, i32::from(silu));
+    launch!(dev.stream, &dev.kernels.group_norm_apply, cfg_n(x.len()); x, &stats, w, b, &mut out, &c, &spatial, &cg, &eps, &silu, &total)
+        .map_err(err)?;
     Ok(out)
 }
 

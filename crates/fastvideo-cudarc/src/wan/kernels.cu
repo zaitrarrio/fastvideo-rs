@@ -1288,3 +1288,71 @@ extern "C" __global__ void repeat_kv(const float* x, float* out, long hkv, long 
     long b = i / (inner * hkv * rep);
     out[i] = x[(b * hkv + h / rep) * inner + i % inner];
 }
+
+// ---- VAE decoders of the audio-video models --------------------------------
+
+// Pad one axis. mode 0 = zeros, 1 = reflect (mirror without repeating the
+// edge: -1 -> 1, len -> len - 2), 2 = replicate (clamp). Tensor viewed as
+// [outer, len, inner]; out is [outer, out_len, inner].
+extern "C" __global__ void pad_axis(
+    const float* x, float* out, long len, long inner, long left, long out_len, int mode, long n
+) {
+    long i = IDX();
+    if (i >= n) return;
+    long o = (i / inner) % out_len;
+    long src = o - left;
+    if (src < 0 || src >= len) {
+        if (mode == 0) { out[i] = 0.0f; return; }
+        if (mode == 1) src = src < 0 ? -src : 2 * (len - 1) - src;
+        else src = src < 0 ? 0 : len - 1;
+    }
+    out[i] = x[(i / (inner * out_len)) * len * inner + src * inner + i % inner];
+}
+
+// GroupNorm statistics: one block per (batch, group), threads stride over the
+// group and reduce in shared memory. Accumulated in double — a group of a
+// 768p video feature map is tens of millions of elements, and float sums of
+// that many squares lose the digits the variance is made of.
+// stats[2 * grp] = mean, stats[2 * grp + 1] = biased variance.
+extern "C" __global__ void group_norm_stats(const float* x, double* stats, long group_elems) {
+    extern __shared__ double sm[];
+    int tid = threadIdx.x;
+    long grp = blockIdx.x;
+    const float* p = x + grp * group_elems;
+    double s = 0.0, q = 0.0;
+    for (long i = tid; i < group_elems; i += blockDim.x) {
+        double v = p[i];
+        s += v;
+        q += v * v;
+    }
+    sm[2 * tid] = s;
+    sm[2 * tid + 1] = q;
+    __syncthreads();
+    for (int st = blockDim.x >> 1; st > 0; st >>= 1) {
+        if (tid < st) {
+            sm[2 * tid] += sm[2 * (tid + st)];
+            sm[2 * tid + 1] += sm[2 * (tid + st) + 1];
+        }
+        __syncthreads();
+    }
+    if (tid == 0) {
+        double mean = sm[0] / (double)group_elems;
+        double var = sm[1] / (double)group_elems - mean * mean;
+        stats[2 * grp] = mean;
+        stats[2 * grp + 1] = var > 0.0 ? var : 0.0;
+    }
+}
+// x: [N, C, spatial]; cg = channels per group. w, b: [C]. Optional SiLU folded
+// in, since GroupNorm -> SiLU is how every ResNet block in these VAEs uses it.
+extern "C" __global__ void group_norm_apply(
+    const float* x, const double* stats, const float* w, const float* b, float* out,
+    long c, long spatial, long cg, float eps, int silu, long n
+) {
+    long i = IDX();
+    if (i >= n) return;
+    long ch = (i / spatial) % c;
+    long grp = (i / (spatial * c)) * (c / cg) + ch / cg;
+    double v = ((double)x[i] - stats[2 * grp]) / sqrt(stats[2 * grp + 1] + (double)eps);
+    float y = (float)v * w[ch] + b[ch];
+    out[i] = silu ? y / (1.0f + expf(-y)) : y;
+}

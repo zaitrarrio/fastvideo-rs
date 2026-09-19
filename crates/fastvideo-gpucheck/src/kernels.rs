@@ -529,6 +529,29 @@ pub fn run(report: &mut Report, lim: Limits, seed: u64) -> StageResult<()> {
             c.cmp("repeat_kv_8x8", &got, &host::repeat_kv(&x, hkv, rep, s * d), 0.0)?;
         }
         {
+            // Padding modes and GroupNorm for the VAE decoders. GroupNorm at a
+            // group size in the millions is the case that needs the f64
+            // reduction; a small group exercises the narrow-block path.
+            use fastvideo_cudarc::wan::ops::{host, PadMode};
+            let (outer, len, inner) = (6usize, 37usize, 29usize);
+            let x = c.rand(outer * len * inner, 1.0);
+            for (mode, name) in [(PadMode::Zeros, "zeros"), (PadMode::Reflect, "reflect"), (PadMode::Replicate, "replicate")] {
+                let got = down(&ops::pad_axis_device(&up(&x)?, len, inner, 5, 3, mode)?)?;
+                c.cmp(&format!("pad_axis_{name}"), &got, &host::pad_axis(&x, len, inner, 5, 3, mode), 0.0)?;
+            }
+            for (n, ch, spatial, groups) in [(1usize, 128usize, 4 * 96 * 168usize, 32usize), (3, 32, 7, 32), (2, 512, 1024, 32)] {
+                // An offset mean makes the variance a small difference of large sums.
+                let x: Vec<f32> = c.rand(n * ch * spatial, 0.5).iter().map(|v| v + 3.0).collect();
+                let w: Vec<f32> = c.rand(ch, 0.1).iter().map(|v| 1.0 + v).collect();
+                let b = c.rand(ch, 0.1);
+                for silu in [false, true] {
+                    let got = down(&ops::group_norm_device(&up(&x)?, &up(&w)?, &up(&b)?, n, ch, spatial, groups, 1e-6, silu)?)?;
+                    let want = host::group_norm(&x, &w, &b, ch, spatial, groups, 1e-6, silu);
+                    c.cmp(&format!("group_norm_{n}x{ch}x{spatial}{}", if silu { "_silu" } else { "" }), &got, &want, op)?;
+                }
+            }
+        }
+        {
             // 1-D convolutions for the audio decoders: cuDNN over a unit height,
             // forward and backward-data, against the host loops (which the unit
             // tests hold to the adjoint identity and to hand-worked cases).

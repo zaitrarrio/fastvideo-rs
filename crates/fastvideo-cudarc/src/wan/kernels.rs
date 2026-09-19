@@ -43,6 +43,9 @@ macro_rules! kernel_fns {
 }
 
 kernel_fns!(
+    pad_axis,
+    group_norm_stats,
+    group_norm_apply,
     gelu_erf,
     leaky_relu,
     snake_beta,
