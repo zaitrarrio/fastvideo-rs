@@ -123,6 +123,16 @@ impl HiddenStack {
         Ok(Self { tokens: prompt.real, hidden: cfg.hidden, states })
     }
 
+    /// [`Self::encode`] on a decoder that is already on the device: the same
+    /// tokens, positions and taps, so the same stack.
+    pub fn encode_resident(decoder: &llm::ResidentDecoder, prompt: &PaddedPrompt) -> Result<Self> {
+        let cfg = decoder.config();
+        let taps: Vec<usize> = (0..=cfg.num_layers()).collect();
+        let out = decoder.hidden_states(prompt.real_ids(), &prompt.real_positions(), &vec![true; prompt.real], &taps)?;
+        let states = out.iter().map(|t| Ok(t.host_cow()?.into_owned())).collect::<Result<Vec<_>>>()?;
+        Ok(Self { tokens: prompt.real, hidden: cfg.hidden, states })
+    }
+
     /// `per_layer_masked_mean_norm` over the real tokens, packed the way
     /// `text_proj_in` wants it: `[tokens, hidden · states]`, feature index
     /// `channel · states + state`.
@@ -438,5 +448,35 @@ mod tests {
         // A stack of the wrong depth is refused before any arithmetic.
         let shallow = HiddenStack::from_interleaved(&data[..4 * 8 * 2], 4, 8, 2).unwrap();
         assert!(model.forward(&shallow, 4).is_err());
+    }
+    /// The resident decoder is the streamed one with its layers left in place:
+    /// the 3-state stack of a tiny Gemma-shaped model is identical either way.
+    #[test]
+    fn resident_and_streamed_encoding_give_the_same_stack() {
+        use crate::llm::{Act, LayerAttn, ResidentDecoder};
+        let cfg = DecoderConfig {
+            vocab: 16,
+            hidden: 8,
+            heads: 4,
+            kv_heads: 2,
+            head_dim: 4,
+            intermediate: 12,
+            rms_eps: 1e-6,
+            norm_offset: 1.0,
+            act: Act::GeluTanh,
+            qk_norm: true,
+            sandwich_norms: true,
+            embed_scale: 2.0,
+            attn_scale: 0.5,
+            layers: vec![LayerAttn { rope_theta: 10_000.0, rope_factor: 1.0, window: Some(4) }, LayerAttn { rope_theta: 1e6, rope_factor: 8.0, window: None }],
+            layer_prefix: "lm.layers".into(),
+            embed_key: "lm.embed.weight".into(),
+            final_norm_key: "lm.norm.weight".into(),
+        };
+        let prompt = PaddedPrompt::from_ids(&[2, 7, 9, 4], 32).unwrap();
+        let streamed = HiddenStack::encode(&weights(), &cfg, &prompt).unwrap();
+        let resident = HiddenStack::encode_resident(&ResidentDecoder::load(&weights(), &cfg, 2).unwrap(), &prompt).unwrap();
+        assert_eq!((streamed.tokens, streamed.hidden, streamed.states.len()), (4, 8, 3));
+        assert_eq!(streamed.states, resident.states);
     }
 }

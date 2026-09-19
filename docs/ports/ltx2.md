@@ -1192,3 +1192,33 @@ then gate *ours vs float32* at `--floor-factor` (1.25) times that floor. Blocks
 (`blockNN.{video,audio}.{attn1,attn2,av,ff}_{in,out,after}`,
 `head.*.{norm,modulated}`; every 16th video token).
 
+### The text path's cost
+
+Measured: 15.7 s per new prompt, all of it moving weights — 47 GB of float32
+read, narrowed on the host, 23.5 GB uploaded — for 31 MB of conditioning. Three
+independent remedies, cheapest first:
+
+* **Conditioning cache** (`ltx2/text_cache.rs`, `ltx2 gen --text-cache <dir>`,
+  on by default under `~/.cache/fastvideo/ltx2-text`). The two connector outputs
+  `[1, 1024, 3840]` — before the DiT's caption projections, so an entry does not
+  depend on the DiT — keyed by sha256 over the stripped prompt, the tokenizer
+  file, the padded length and an identity of the Gemma and connector *files*
+  (name, size, first and last MiB: no store is opened on a hit). Entries carry
+  their token ids and a hash of themselves; anything short, corrupt or made from
+  other ids is a miss.
+* **Slim checkpoint** (`ltx2/slim.rs`, `fv-gpucheck ltx2 slim-text --weights
+  <root> --slim <out>`, CPU only). Language model only, projections narrowed
+  once with the loader's own `half::bf16::from_f32` (bit-identical device
+  weights), norms and — by default — the embedding left float32, tensors in load
+  order, ~5 GB shards: 47.06 GB → 25.55 GB (23.53 GB with `--embed bf16`). Use
+  with `ltx2 gen --text-weights <out>`. Not for `--mode exact` parity work.
+* **Resident text** (`TextResidency`, `--text auto|resident|streamed`,
+  `FASTVIDEO_LTX2_TEXT`). Gemma (21.5 GB of bf16 projections) and the connectors
+  (2.9 GB) stay on the device beside the 38 GB DiT; decided on the first prompt
+  that actually has to be encoded, from the device's free memory (needs the
+  resident bytes + 8 GB). A process that only ever hits the cache never loads
+  Gemma.
+
+`Ltx2Pipeline` holds the DiT and decoders across generations; `ltx2 gen --warm`
+runs one untimed generation first (cache bypassed) and reports the second.
+

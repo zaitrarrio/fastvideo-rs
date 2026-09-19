@@ -14,3 +14,5 @@ pub mod pipeline;
 mod manifest_tests;
 #[cfg(test)]
 mod reference_tests;
+pub mod text_cache;
+pub mod slim;

@@ -54,17 +54,142 @@ pub fn encode_ids(map: &WeightMap, cfg: &DecoderConfig, ids: &[u32], tap: usize)
     taps.pop().ok_or_else(|| msg("h3 text: the decoder returned no hidden state"))
 }
 
-/// The conditioning the DiT consumes for `prompt`: token ids and `[1, S, 5120]`.
-/// The ~50 GB of decoder weights stream through one layer at a time and are
-/// gone when this returns.
-pub fn encode_prompt(root: &Path, prompt: &str) -> Result<(Vec<u32>, CudaTensor)> {
+/// Something that turns token ids into `hidden_states[tap]`. Two kinds exist:
+/// the streaming encoder below, which holds nothing between prompts and pays
+/// ~10 s of weight transfer per prompt, and a resident one ([`crate::llm`]'s
+/// resident mode, FP8 to fit beside the DiT), which pays once. The pipeline
+/// only ever sees this trait, so which one runs is a request-level choice.
+pub trait HiddenStateEncoder {
+    fn hidden_state(&self, ids: &[u32], tap: usize) -> Result<CudaTensor>;
+    /// For reports: `"streamed"`, `"resident-bf16"`, `"resident-fp8"`.
+    fn kind(&self) -> &'static str;
+    /// Device bytes this encoder keeps between prompts.
+    fn resident_bytes(&self) -> u64 {
+        0
+    }
+}
+
+/// One layer on the device at a time, nothing kept: the ~50 GB of decoder
+/// weights stream through and are gone when a call returns.
+pub struct StreamedEncoder<'a> {
+    pub map: &'a WeightMap,
+    pub cfg: &'a DecoderConfig,
+}
+
+impl HiddenStateEncoder for StreamedEncoder<'_> {
+    fn hidden_state(&self, ids: &[u32], tap: usize) -> Result<CudaTensor> {
+        encode_ids(self.map, self.cfg, ids, tap)
+    }
+
+    fn kind(&self) -> &'static str {
+        "streamed"
+    }
+}
+
+/// [`crate::llm::ResidentDecoder`]: layers 0..=49 stay on the device, a new
+/// prompt costs a forward instead of 50 GB of transfers. At the checkpoint's
+/// bf16 that is 50 GB, which does not fit beside the 41 GB DiT on a 96 GB card;
+/// with weight-only FP8 rows (E4M3 codes + a scale per output row, dequantized
+/// to bf16 per GEMM, activations untouched) it is 24.4 GB and does.
+impl HiddenStateEncoder for crate::llm::ResidentDecoder {
+    fn hidden_state(&self, ids: &[u32], tap: usize) -> Result<CudaTensor> {
+        let positions: Vec<u32> = (0..ids.len() as u32).collect();
+        let mut taps = self.hidden_states(ids, &positions, &vec![true; ids.len()], &[tap])?;
+        taps.pop().ok_or_else(|| msg("h3 text: the resident decoder returned no hidden state"))
+    }
+
+    fn kind(&self) -> &'static str {
+        match self.precision() {
+            crate::llm::WeightPrecision::Native => "resident-bf16",
+            crate::llm::WeightPrecision::Fp8Rows => "resident-fp8",
+        }
+    }
+
+    fn resident_bytes(&self) -> u64 {
+        self.device_bytes()
+    }
+}
+
+/// Load the resident encoder for `root` (`root/text_encoder`, either layout):
+/// exactly the layers tap 50 needs, no final norm. The precision is
+/// per-instance; the process-wide `FASTVIDEO_FP8` flag is not involved (it
+/// would quantize the DiT as well).
+pub fn load_resident_encoder(root: &Path, precision: crate::llm::WeightPrecision) -> Result<crate::llm::ResidentDecoder> {
+    let map = WeightMap::open(&root.join("text_encoder"))?;
+    let cfg = DecoderConfig::qwen3_vl_32b_text().for_bf16_reference();
+    crate::llm::ResidentDecoder::load_with(&map, &cfg, H3TextEncoderConfig::fasth3_8step().output_hidden_state_index, precision)
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CacheStatus {
+    /// No cache directory was given.
+    Disabled,
+    Hit,
+    Miss,
+}
+
+impl CacheStatus {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            CacheStatus::Disabled => "disabled",
+            CacheStatus::Hit => "hit",
+            CacheStatus::Miss => "miss",
+        }
+    }
+}
+
+pub struct TextConditioning {
+    pub ids: Vec<u32>,
+    /// `[1, S, 5120]`, un-normed `hidden_states[50]`.
+    pub hidden: CudaTensor,
+    pub cache: CacheStatus,
+    /// Which encoder ran; `"cache"` on a hit, when none did.
+    pub encoder: &'static str,
+}
+
+/// The conditioning the DiT consumes for `prompt`.
+///
+/// `root` holds `tokenizer/tokenizer.json` and `text_encoder/*.safetensors`:
+/// either the published snapshot or the slim re-pack of [`super::slim`] — the
+/// loader resolves tensors by name, so the layouts are interchangeable (and
+/// share cache entries, whose key is built from tensors, not files).
+///
+/// With `cache_dir`, a prompt seen before costs a file read: the shards are
+/// mapped for their headers (the key needs the encoder's identity) but no
+/// weight is streamed and no forward runs. `resident` replaces the streaming
+/// encoder on a miss.
+pub fn encode_prompt_with(root: &Path, prompt: &str, cache_dir: Option<&Path>, resident: Option<&dyn HiddenStateEncoder>) -> Result<TextConditioning> {
+    use super::text_cache as cache;
     let ids = tokenize(root, prompt)?;
     let map = WeightMap::open(&root.join("text_encoder"))?;
     // The reference encoder runs in bf16; follow its constant casts.
     let cfg = DecoderConfig::qwen3_vl_32b_text().for_bf16_reference();
     let tap = H3TextEncoderConfig::fasth3_8step().output_hidden_state_index;
-    let hidden = encode_ids(&map, &cfg, &ids, tap)?;
-    Ok((ids, hidden))
+    let streamed = StreamedEncoder { map: &map, cfg: &cfg };
+    let encoder: &dyn HiddenStateEncoder = resident.unwrap_or(&streamed);
+    let Some(dir) = cache_dir else {
+        let hidden = encoder.hidden_state(&ids, tap)?;
+        return Ok(TextConditioning { ids, hidden, cache: CacheStatus::Disabled, encoder: encoder.kind() });
+    };
+
+    let tokenizer_path = root.join("tokenizer").join("tokenizer.json");
+    let tokenizer_bytes = std::fs::read(&tokenizer_path).map_err(|e| msg(format!("{}: {e}", tokenizer_path.display())))?;
+    let store = map.lazy().ok_or_else(|| msg("h3 text: the encoder checkpoint was not opened lazily"))?;
+    let key = cache::cache_key(prompt, &cache::sha256(&tokenizer_bytes), tap, &cache::encoder_identity(store, &cfg, tap)?);
+    let (entry, hit) = cache::get_or_compute(dir, &key, &ids, cfg.hidden, || Ok(encoder.hidden_state(&ids, tap)?.host_cow()?.into_owned()))?;
+    let hidden = CudaTensor::from_vec(entry.data, vec![1, ids.len(), cfg.hidden])?.to_device()?;
+    Ok(TextConditioning {
+        ids,
+        hidden,
+        cache: if hit { CacheStatus::Hit } else { CacheStatus::Miss },
+        encoder: if hit { "cache" } else { encoder.kind() },
+    })
+}
+
+/// [`encode_prompt_with`] without a cache or a resident encoder.
+pub fn encode_prompt(root: &Path, prompt: &str) -> Result<(Vec<u32>, CudaTensor)> {
+    let text = encode_prompt_with(root, prompt, None, None)?;
+    Ok((text.ids, text.hidden))
 }
 
 #[cfg(test)]
@@ -74,6 +199,7 @@ mod tests {
 
     fn tiny() -> DecoderConfig {
         DecoderConfig {
+            vocab: 16,
             hidden: 8,
             heads: 4,
             kv_heads: 2,
@@ -121,6 +247,24 @@ mod tests {
         let (a, b) = (want.host_cow().unwrap(), normed.host_cow().unwrap());
         assert!(a.iter().zip(b.iter()).all(|(x, y)| (x - y).abs() < 1e-6));
         assert!(got.host_cow().unwrap().iter().zip(b.iter()).any(|(x, y)| (x - y).abs() > 1e-3));
+    }
+
+    #[test]
+    fn the_resident_encoder_is_the_streamed_one_with_the_weights_left_in_place() {
+        let (cfg, ids, map) = (tiny(), [1u32, 3, 0, 2], weights());
+        let streamed = StreamedEncoder { map: &map, cfg: &cfg }.hidden_state(&ids, 2).unwrap();
+        let resident = crate::llm::ResidentDecoder::load(&map, &cfg, 2).unwrap();
+        let again = HiddenStateEncoder::hidden_state(&resident, &ids, 2).unwrap();
+        assert_eq!(&*streamed.host_cow().unwrap(), &*again.host_cow().unwrap());
+        assert_eq!((StreamedEncoder { map: &map, cfg: &cfg }.kind(), resident.kind()), ("streamed", "resident-bf16"));
+        // Weight-only FP8 is a different, nearby function: close, not equal, and it says what it is.
+        let fp8 = crate::llm::ResidentDecoder::load_with(&map, &cfg, 2, crate::llm::WeightPrecision::Fp8Rows).unwrap();
+        let quantized = HiddenStateEncoder::hidden_state(&fp8, &ids, 2).unwrap();
+        let (a, b) = (streamed.host_cow().unwrap(), quantized.host_cow().unwrap());
+        let (err, norm) = a.iter().zip(b.iter()).fold((0f64, 0f64), |(e, n), (x, y)| (e + f64::from(x - y).powi(2), n + f64::from(*x).powi(2)));
+        let rel = (err / norm).sqrt();
+        assert!(rel > 0.0 && rel < 0.1, "fp8 rows vs native: rel {rel}");
+        assert_eq!(fp8.kind(), "resident-fp8");
     }
 
     #[test]

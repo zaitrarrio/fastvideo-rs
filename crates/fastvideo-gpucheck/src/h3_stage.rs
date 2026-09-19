@@ -42,9 +42,17 @@ pub enum Stage {
         prompt: Option<String>,
         #[arg(long, default_value = "cuda")]
         device: String,
-        /// `hidden_states[50]`: bf16 on both sides through 50 layers.
-        #[arg(long, default_value_t = 2e-2)]
-        max_rel: f64,
+        /// `hidden_states[50]`: bf16 on both sides through 50 layers (measured
+        /// 1.37e-2). With `--precision fp8` the default gate is 5e-2 instead.
+        #[arg(long)]
+        max_rel: Option<f64>,
+        /// Run the same checks through a RESIDENT encoder at this weight
+        /// precision (`native` = the checkpoint's bf16, `fp8` = weight-only
+        /// E4M3 rows) instead of the streamed one. For `fp8` the stage also
+        /// encodes with our own native path and reports FP8 against it, so the
+        /// quantization error is separated from the bf16-reference floor.
+        #[arg(long)]
+        precision: Option<String>,
         /// `hidden_states[1]`: one layer. Measured 4.35e-3 (cosine 0.99999) on an
         /// RTX PRO 6000 against transformers 5.17, falling to 1.9e-3 by layer 8
         /// before growing slowly to 1.4e-2 at layer 50. An error that shrinks
@@ -115,12 +123,22 @@ pub enum Stage {
         oracle: PathBuf,
         #[arg(long, default_value = "cuda")]
         device: String,
-        /// After the first step: one forward's worth of divergence.
+        /// Gate on the first `gated_steps` steps, where the comparison still
+        /// measures the port. Measured on an RTX PRO 6000 (dense, bf16 reference),
+        /// video: 2.4e-4, 2.2e-3, 1.0e-2, 2.2e-2, 4.4e-2, 8.8e-2, 2.0e-1, 4.0e-1;
+        /// audio 4.5e-4 .. 2.6e-1. The error roughly doubles per step on both
+        /// modalities, and LTX-2 shows the same against its bf16 reference: a
+        /// few-step distilled sampler feeds each forward's rounding-level
+        /// divergence (1.3e-2 on one forward) back in while the carried-noise
+        /// share `sigma'/sigma` shrinks to zero, so two correct bf16
+        /// implementations end on different, equally valid samples. A sign,
+        /// shift or ratio mistake shows at step 0-2 (and is pinned exactly by
+        /// the CPU reference test against diffusers' scheduler); later steps are
+        /// recorded, not gated.
         #[arg(long, default_value_t = 3e-2)]
-        max_rel_first: f64,
-        /// After the last step: eight forwards, each fed the previous one's error.
-        #[arg(long, default_value_t = 1e-1)]
-        max_rel_last: f64,
+        max_rel: f64,
+        #[arg(long, default_value_t = 3)]
+        gated_steps: usize,
     },
     /// VSA-H3 on the device against its plain-loop statement, and against
     /// dense attention at sparsity 0 without the gate. No weights needed.
@@ -157,8 +175,47 @@ pub enum Stage {
         /// skips reading 26 GB of projections.
         #[arg(long)]
         adaln_cache: Option<PathBuf>,
+        /// Conditioning cache directory. Default: `text-cache` next to the clip
+        /// directory (e.g. `/workspace/text-cache`). A prompt seen before then
+        /// costs a file read instead of ~10 s of weight streaming.
+        #[arg(long)]
+        text_cache: Option<PathBuf>,
+        #[arg(long)]
+        no_text_cache: bool,
+        /// Root holding `tokenizer/` + `text_encoder/` when not `--weights`
+        /// itself, e.g. the output of `h3 slim-text`.
+        #[arg(long)]
+        text_weights: Option<PathBuf>,
+        /// `auto` (resident-fp8 when >= 85 GB are free before anything loads,
+        /// else streamed), `streamed`, `resident-fp8`, `resident-bf16`. The
+        /// conditioning cache stays in front of whichever is chosen.
+        #[arg(long, default_value = "auto")]
+        text_encoder: String,
+        /// With a resident encoder: also encode the prompt by streaming (~10 s,
+        /// once, cache bypassed) and report rel_l2 / cosine between the two
+        /// conditionings: what quantizing the encoder does to THIS prompt.
+        #[arg(long)]
+        compare_text_encoders: bool,
+        /// Run one untimed generation first, so the reported numbers are a warm
+        /// process: weights resident, allocator grown, kernels compiled, the
+        /// conditioning cached. The cold run's numbers are recorded beside them.
+        #[arg(long)]
+        warm: bool,
         #[arg(long, default_value = "cuda")]
         device: String,
+    },
+    /// CPU only: re-pack the text encoder to exactly what tap 50 reads
+    /// (embed_tokens + layers 0..=49, bf16 verbatim, in load order) plus a copy
+    /// of `tokenizer/`. The output is a root `--text-weights` accepts.
+    SlimText {
+        /// Root of the FastH3 snapshot (`tokenizer/`, `text_encoder/`).
+        #[arg(long)]
+        weights: PathBuf,
+        #[arg(long)]
+        out: PathBuf,
+        /// Shard size in GiB; shards break only between layers.
+        #[arg(long, default_value_t = 5)]
+        shard_gib: u64,
     },
 }
 
@@ -169,17 +226,40 @@ pub fn run(report: &mut Report, stage: &Stage) -> StageResult<()> {
             report.set("contract", format!("{c:?}"));
             Ok(())
         }
-        Stage::Text { weights, oracle, meta, prompt, device, max_rel, max_rel_layer0 } => {
-            text(report, weights, oracle, meta.as_deref(), prompt.as_deref(), device, *max_rel, *max_rel_layer0)
+        Stage::Text { weights, oracle, meta, prompt, device, max_rel, max_rel_layer0, precision } => {
+            let precision = match precision.as_deref() {
+                None => None,
+                Some("native") => Some(fastvideo_cudarc::llm::WeightPrecision::Native),
+                Some("fp8") => Some(fastvideo_cudarc::llm::WeightPrecision::Fp8Rows),
+                Some(other) => return Err(anyhow::anyhow!("unknown --precision '{other}' (native|fp8)").into()),
+            };
+            let fp8 = precision == Some(fastvideo_cudarc::llm::WeightPrecision::Fp8Rows);
+            let max_rel = max_rel.unwrap_or(if fp8 { 5e-2 } else { 2e-2 });
+            // One quantized layer has no 50-layer average to hide in; its own gate scales with the tap's.
+            let layer0 = if fp8 { max_rel_layer0.max(max_rel) } else { *max_rel_layer0 };
+            text(report, weights, oracle, meta.as_deref(), prompt.as_deref(), device, max_rel, layer0, precision)
         }
         Stage::AudioVae { weights, oracle, device, max_abs } => audio_vae(report, weights, oracle, device, *max_abs),
         Stage::Vae { weights, oracle, device, max_abs, max_rel } => vae(report, weights, oracle, device, *max_abs, *max_rel),
         Stage::Dit { weights, oracle, device, max_rel } => dit(report, weights, oracle, device, *max_rel),
-        Stage::Loop { weights, oracle, device, max_rel_first, max_rel_last } => ladder(report, weights, oracle, device, *max_rel_first, *max_rel_last),
+        Stage::Loop { weights, oracle, device, max_rel, gated_steps } => ladder(report, weights, oracle, device, *max_rel, *gated_steps),
         Stage::Vsa { device, seed, max_rel } => vsa(report, device, *seed, *max_rel),
-        Stage::Gen { weights, prompt, seconds, seed, dense, no_mp4, clip_dir, adaln_cache, device } => {
-            gen(report, weights, prompt, *seconds, *seed, *dense, !*no_mp4, clip_dir, adaln_cache.clone(), device)
+        Stage::Gen { weights, prompt, seconds, seed, dense, no_mp4, clip_dir, adaln_cache, text_cache, no_text_cache, text_weights, text_encoder, compare_text_encoders, warm, device } => {
+            let text_cache = if *no_text_cache {
+                None
+            } else {
+                Some(text_cache.clone().unwrap_or_else(|| clip_dir.parent().unwrap_or(Path::new(".")).join("text-cache")))
+            };
+            let options = fastvideo_cudarc::h3::pipeline::H3PipelineOptions {
+                dense: *dense,
+                adaln_cache: adaln_cache.clone(),
+                text_root: text_weights.clone(),
+                text_cache,
+                text_encoder: fastvideo_cudarc::h3::pipeline::TextEncoderChoice::parse(text_encoder).map_err(|e| anyhow::anyhow!(e))?,
+            };
+            gen(report, weights, prompt, *seconds, *seed, !*no_mp4, clip_dir, options, *warm, *compare_text_encoders, device)
         }
+        Stage::SlimText { weights, out, shard_gib } => slim_text(report, weights, out, *shard_gib),
     }
 }
 
@@ -218,6 +298,7 @@ fn text(
     device: &str,
     max_rel: f64,
     max_rel_layer0: f64,
+    precision: Option<fastvideo_cudarc::llm::WeightPrecision>,
 ) -> StageResult<()> {
     report.set("device", crate::gpu::init(device)?);
     let mut orc = st::load(oracle)?;
@@ -268,11 +349,36 @@ fn text(
     let taps: Vec<usize> = named.iter().map(|(k, _, _)| *k).collect();
     let positions: Vec<u32> = (0..want_ids.len() as u32).collect();
     let attend = vec![true; want_ids.len()];
+    let resident = match precision {
+        Some(p) => {
+            let timer = std::time::Instant::now();
+            let decoder = fastvideo_cudarc::llm::ResidentDecoder::load_with(&map, &cfg, tap, p)?;
+            report.note("resident_encoder", json!({"precision": format!("{p:?}"), "load_seconds": timer.elapsed().as_secs_f64(), "device_gib": decoder.device_bytes() as f64 / f64::from(1u32 << 30)}));
+            Some(decoder)
+        }
+        None => None,
+    };
     let (states, seconds) = measure(report, "text_forward", || {
-        let out = fastvideo_cudarc::llm::hidden_states(&map, &cfg, &want_ids, &positions, &attend, &taps)?;
+        let out = match &resident {
+            Some(decoder) => decoder.hidden_states(&want_ids, &positions, &attend, &taps)?,
+            None => fastvideo_cudarc::llm::hidden_states(&map, &cfg, &want_ids, &positions, &attend, &taps)?,
+        };
         out.iter().map(|t| Ok(t.host_cow()?.into_owned())).collect::<anyhow::Result<Vec<_>>>()
     })?;
-    report.note("text_forward", json!({"seconds": seconds, "tokens": want_ids.len(), "layers_run": tap}));
+    report.note("text_forward", json!({"seconds": seconds, "tokens": want_ids.len(), "layers_run": tap, "encoder": if resident.is_some() { "resident" } else { "streamed" }}));
+    // Against OUR native path: for fp8 this is the quantization error alone;
+    // for native it must be zero (one layer loop, weights merely left in place).
+    if let Some(decoder) = resident {
+        drop(decoder);
+        let ours = fastvideo_cudarc::llm::hidden_states(&map, &cfg, &want_ids, &positions, &attend, &taps)?;
+        for (((_, name, _), got), native) in named.iter().zip(&states).zip(&ours) {
+            let d = diff(got, &native.host_cow()?);
+            report.note(format!("{name}/vs_our_native"), d.to_json());
+            if precision == Some(fastvideo_cudarc::llm::WeightPrecision::Native) {
+                report.check(format!("{name}/resident_equals_streamed"), d.max_abs == 0.0 && d.non_finite == 0, d.to_json(), json!({"max_abs": 0.0}))?;
+            }
+        }
+    }
     // Every metric lands before the first gate can stop the stage.
     let diffs: Vec<_> = named
         .iter()
@@ -590,7 +696,7 @@ fn dit(report: &mut Report, weights: &Path, oracle: &Path, device: &str, max_rel
     Ok(())
 }
 
-fn ladder(report: &mut Report, weights: &Path, oracle: &Path, device: &str, max_rel_first: f64, max_rel_last: f64) -> StageResult<()> {
+fn ladder(report: &mut Report, weights: &Path, oracle: &Path, device: &str, max_rel: f64, gated_steps: usize) -> StageResult<()> {
     use fastvideo_cudarc::h3::pipeline::denoise;
     use fastvideo_cudarc::h3::transformer::{AttnMode, DeviceLayout, H3TextRefiner, H3Transformer};
     use fastvideo_models::h3::config::H3TransformerConfig;
@@ -635,13 +741,17 @@ fn ladder(report: &mut Report, weights: &Path, oracle: &Path, device: &str, max_
     })?;
     report.note("loop", json!({"seconds": seconds, "peak_mib": mem.stop()}));
     report.set("per_step", steps.iter().map(|(v, a)| json!({"video": v.to_json(), "audio": a.to_json()})).collect::<Vec<_>>());
-    let last = steps.len().saturating_sub(1);
-    for (index, limit) in [(0usize, max_rel_first), (last, max_rel_last)] {
-        let Some((v, a)) = steps.get(index) else {
-            return Err(anyhow::anyhow!("the loop produced no step {index}").into());
-        };
-        report.check(format!("loop_video_step{index}"), v.within(limit), v.to_json(), json!({"rel_l2": limit}))?;
-        report.check(format!("loop_audio_step{index}"), a.within(limit), a.to_json(), json!({"rel_l2": limit}))?;
+    if steps.len() < gated_steps.max(1) {
+        return Err(anyhow::anyhow!("the loop produced {} steps, fewer than the {gated_steps} gated", steps.len()).into());
+    }
+    for (index, (v, a)) in steps.iter().enumerate() {
+        if index < gated_steps {
+            report.check(format!("loop_video_step{index}"), v.within(max_rel), v.to_json(), json!({"rel_l2": max_rel}))?;
+            report.check(format!("loop_audio_step{index}"), a.within(max_rel), a.to_json(), json!({"rel_l2": max_rel}))?;
+        } else {
+            // Finite is still required: a NaN late in the ladder is a defect at any tolerance.
+            report.check(format!("loop_step{index}_finite"), v.non_finite == 0 && a.non_finite == 0, json!({"video_rel_l2": v.rel_l2, "audio_rel_l2": a.rel_l2}), json!({"non_finite": 0}))?;
+        }
     }
     Ok(())
 }
@@ -691,41 +801,116 @@ fn vsa(report: &mut Report, device: &str, seed: u64, max_rel: f64) -> StageResul
     Ok(())
 }
 
+fn slim_text(report: &mut Report, weights: &Path, out: &Path, shard_gib: u64) -> StageResult<()> {
+    let timer = std::time::Instant::now();
+    let r = fastvideo_cudarc::h3::slim::write_slim_text_root(weights, out, shard_gib.max(1) << 30)?;
+    let gib = |b: u64| b as f64 / f64::from(1u32 << 30);
+    report.note(
+        "slim_text",
+        json!({
+            "seconds": timer.elapsed().as_secs_f64(),
+            "files": r.files.len(),
+            "tensors": r.tensors,
+            "bytes": r.bytes,
+            "gib": gib(r.bytes),
+            "skipped_tensors": r.skipped_tensors,
+            "skipped_gib": gib(r.skipped_bytes),
+            "out": out,
+        }),
+    );
+    // embed_tokens + 50 layers x 11 tensors, all bf16: the figure docs/ports/h3.md derives from the headers.
+    report.check("slim_is_tap_50", r.tensors == 551 && r.bytes == 50_315_658_240, json!({"tensors": r.tensors, "bytes": r.bytes}), json!({"tensors": 551, "bytes": 50_315_658_240u64}))?;
+    Ok(())
+}
+
 #[allow(clippy::too_many_arguments)]
-fn gen(report: &mut Report, weights: &Path, prompt: &str, seconds: usize, seed: u64, dense: bool, mp4: bool, clip_dir: &Path, adaln_cache: Option<PathBuf>, device: &str) -> StageResult<()> {
-    use fastvideo_cudarc::h3::pipeline::{generate, H3Request};
+fn gen(
+    report: &mut Report,
+    weights: &Path,
+    prompt: &str,
+    seconds: usize,
+    seed: u64,
+    mp4: bool,
+    clip_dir: &Path,
+    options: fastvideo_cudarc::h3::pipeline::H3PipelineOptions,
+    warm: bool,
+    compare_text_encoders: bool,
+    device: &str,
+) -> StageResult<()> {
+    use fastvideo_cudarc::h3::pipeline::{H3Output, H3Pipeline, H3Request};
 
     report.set("device", crate::gpu::init(device)?);
     let mut request = H3Request::seconds(prompt, seconds, seed).map_err(|e| anyhow::anyhow!(e))?;
-    request.dense = dense;
     request.mp4 = mp4;
-    request.adaln_cache = adaln_cache;
-    report.set("request", json!({"prompt": prompt, "seconds": seconds, "seed": seed, "attention": if dense { "dense, no gate" } else { "vsa-h3 0.8 + to_gate_compress" }, "height": request.height, "width": request.width, "num_frames": request.num_frames}));
+    report.set(
+        "request",
+        json!({
+            "prompt": prompt, "seconds": seconds, "seed": seed, "warm": warm,
+            "attention": if options.dense { "dense, no gate" } else { "vsa-h3 0.8 + to_gate_compress" },
+            "height": request.height, "width": request.width, "num_frames": request.num_frames,
+            "text_cache": options.text_cache, "text_weights": options.text_root,
+        }),
+    );
 
+    let requested_encoder = format!("{:?}", options.text_encoder);
+    let free_before = crate::gpu::mem_info().map(|(free, _)| free as f64 / f64::from(1u32 << 30));
     let mem = crate::gpu::PeakMem::start();
     let timer = std::time::Instant::now();
-    let out = generate(weights, &request, clip_dir)?;
-    let total = timer.elapsed().as_secs_f64();
-    let t = &out.timings;
+    let pipeline = H3Pipeline::load(weights, options)?;
+    let load_s = timer.elapsed().as_secs_f64();
+    let l = &pipeline.load_timings;
+    let (encoder_kind, encoder_bytes) = pipeline.text_encoder();
     report.note(
-        "timings",
+        "text_encoder",
+        json!({"requested": requested_encoder, "chosen": encoder_kind, "device_gib": encoder_bytes as f64 / f64::from(1u32 << 30), "load_seconds": l.text_encoder_s, "free_gib_before_load": free_before}),
+    );
+    if compare_text_encoders {
+        match pipeline.text_encoder_drift(prompt)? {
+            Some((rel_l2, cosine)) => {
+                // Same scale as the fp8 gate of `h3 text`: past this the conditioning is a different prompt.
+                report.check("text_encoder_drift", rel_l2.is_finite() && rel_l2 <= 5e-2, json!({"rel_l2": rel_l2, "cosine": cosine, "resident": encoder_kind, "against": "streamed"}), json!({"rel_l2": 5e-2}))?;
+            }
+            None => report.note("text_encoder_drift", json!({"skipped": "the encoder is streamed; there is nothing to compare"})),
+        }
+    }
+    report.note("load", json!({"seconds": load_s, "text_encoder_s": l.text_encoder_s, "refiner_s": l.refiner_s, "dit_s": l.dit_s, "video_vae_s": l.video_vae_s, "audio_vae_s": l.audio_vae_s}));
+
+    let timings = |out: &H3Output, total: f64| {
+        let t = &out.timings;
         json!({
             "total_s": total,
             "text_s": t.text_s,
+            "text_cache": out.text_cache.as_str(),
+            "text_encoder": out.text_encoder,
             "refine_s": t.refine_s,
-            "load_dit_s": t.load_dit_s,
             "denoise_s": t.denoise_s,
             "step_s": t.step_s,
             "audio_decode_s": t.audio_decode_s,
-            "load_vae_s": t.load_vae_s,
             "video_decode_s": t.video_decode_s,
             "write_s": t.write_s,
-            "peak_mib": mem.stop(),
-        }),
-    );
+            "decode_s": t.audio_decode_s + t.video_decode_s,
+        })
+    };
+    if warm {
+        // Untimed in the sense that it is not THE number; it is still recorded,
+        // because cold-vs-warm is itself what the user asked about.
+        let timer = std::time::Instant::now();
+        let cold = pipeline.generate(&request, &clip_dir.join("cold"))?;
+        report.note("cold_generation", timings(&cold, timer.elapsed().as_secs_f64()));
+    }
+    let timer = std::time::Instant::now();
+    let out = pipeline.generate(&request, clip_dir)?;
+    let total = timer.elapsed().as_secs_f64();
+    let mut values = timings(&out, total);
+    values["warm"] = json!(warm);
+    values["load_s"] = json!(load_s);
+    values["peak_mib"] = json!(mem.stop());
+    report.note("timings", values);
     report.set("output", json!({"frames": out.frames, "text_tokens": out.text_tokens, "sequence_length": out.sequence_length, "mp4": out.mp4, "wav": out.wav, "audio_samples_per_channel": out.geometry.audio_samples()}));
+    if warm {
+        report.check("warm_text_is_a_cache_hit", out.text_cache.as_str() != "miss", json!({"text_cache": out.text_cache.as_str(), "text_s": out.timings.text_s}), json!({"expected": "hit (or disabled)"}))?;
+    }
     report.check("frames", out.frames == out.geometry.num_frames, json!({"decoded": out.frames}), json!({"expected": out.geometry.num_frames}))?;
-
     // A finite, non-constant picture: the cheapest statement that the clip is not garbage.
     let probe = out.frame_paths.get(out.frame_paths.len() / 2).ok_or_else(|| anyhow::anyhow!("no frames were written"))?;
     let img = image::open(probe).with_context(|| format!("open {probe}"))?.to_rgb8();

@@ -27,7 +27,7 @@ use fastvideo_models::ltx2::Ltx2Schedule;
 use rand::{Rng, SeedableRng};
 use rand_distr::StandardNormal;
 
-use crate::llm::DecoderConfig;
+use crate::llm::{DecoderConfig, ResidentDecoder};
 use crate::wan::pipeline::{frames_to_rgb8, interleave_audio, write_wav, PipelineError, Result, VideoWriter};
 use crate::wan::tensor::{CudaTensor, TensorError};
 use crate::wan::weights::WeightMap;
@@ -35,6 +35,7 @@ use crate::wan::weights::WeightMap;
 use super::audio_vae::AudioDecoder;
 use super::keys::Keys;
 use super::text::{HiddenStack, PaddedPrompt, TextConnectors};
+use super::text_cache::{cache_key, weights_identity, CachedContexts, TextCache};
 use super::transformer::{pack_video, unpack_video, Ltx2Transformer, Ropes, TextConditioning};
 use super::vae::VideoDecoder;
 use super::vocoder::Vocoder;
@@ -59,6 +60,15 @@ pub struct Ltx2Paths {
     /// The *distilled* DiT and connectors: `ltx-2-19b-distilled.safetensors`,
     /// or a diffusers root holding `transformer/` and `connectors/`.
     pub dit: PathBuf,
+    /// Another root for `tokenizer/` and `text_encoder/` — a slim rewrite
+    /// ([`super::slim`]). `None`: they are under `weights`.
+    pub text: Option<PathBuf>,
+}
+
+impl Ltx2Paths {
+    fn text_root(&self) -> &Path {
+        self.text.as_deref().unwrap_or(&self.weights)
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -104,8 +114,9 @@ impl Ltx2Request {
     }
 }
 
-/// Wall-clock seconds per phase. Loads are summed; the rest are what the phase
-/// itself took.
+/// Wall-clock seconds per phase. `load_s` is the pipeline's one-off load; the
+/// rest are what each phase of this generation took (text includes loading the
+/// connectors when the text path is streamed).
 #[derive(Debug, Clone, Default)]
 pub struct Ltx2Timings {
     pub load_s: f64,
@@ -126,6 +137,7 @@ pub struct Ltx2Output {
     pub prompt_tokens: usize,
     pub video_tokens: usize,
     pub audio_tokens: usize,
+    pub text: TextReport,
     pub timings: Ltx2Timings,
 }
 
@@ -269,81 +281,334 @@ pub fn open_distilled(path: &Path, component: &str) -> Result<WeightMap> {
     Ok(map)
 }
 
-/// Prompt → the two connector contexts. Gemma is streamed and the connectors
-/// are dropped on return, so nothing of the text path stays on the device but
-/// the contexts. Returns `(contexts, real token count, load seconds)`.
-pub fn encode_prompt(paths: &Ltx2Paths, cfg: &Ltx2Config, prompt: &str) -> Result<(super::text::TextContexts, usize, f64)> {
-    let max_len = cfg.defaults.max_sequence_length;
-    let padded = PaddedPrompt::tokenize(&paths.weights.join("tokenizer").join("tokenizer.json"), prompt, max_len)?;
-    let gemma = WeightMap::open(&paths.weights.join("text_encoder"))?;
-    // The product runs Gemma in bf16, where the embedding multiplier is 62.0.
-    let stack = HiddenStack::encode(&gemma, &DecoderConfig::gemma3_12b_text().for_bf16_reference(), &padded)?;
-    drop(gemma);
-    let timer = Instant::now();
-    let map = open_distilled(&paths.dit, "connectors")?;
-    let connectors = TextConnectors::load(&map, &Keys::connectors(Keys::detect(&map)), &cfg.connectors)?;
-    let load_s = timer.elapsed().as_secs_f64();
-    Ok((connectors.forward(&stack, max_len)?, padded.real, load_s))
+/// Whether the conditioning cache answered.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CacheOutcome {
+    /// No cache directory was given, or this call bypassed it.
+    Off,
+    Hit,
+    Miss,
 }
 
-/// The whole stage-1 run.
-pub fn generate(paths: &Ltx2Paths, cfg: &Ltx2Config, req: &Ltx2Request, observer: Option<StepObserver<'_>>) -> Result<Ltx2Output> {
-    req.validate()?;
-    let mut timings = Ltx2Timings::default();
-    let grid = cfg.transformer.latent_grid(req.num_frames, req.height, req.width);
-    let audio_tokens = cfg.transformer.audio_tokens(req.num_frames, req.frame_rate);
-    if audio_tokens == 0 {
-        return Err(err("ltx2: the clip is too short for a single audio latent"));
+impl CacheOutcome {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Off => "off",
+            Self::Hit => "hit",
+            Self::Miss => "miss",
+        }
+    }
+}
+
+/// What the text phase of one generation did.
+#[derive(Debug, Clone)]
+pub struct TextReport {
+    pub cache: CacheOutcome,
+    /// `"cache"` when nothing was computed, else how Gemma ran: `"streamed"` or
+    /// `"resident"` (whose first use includes loading it).
+    pub mode: &'static str,
+    pub tokens: usize,
+    pub seconds: f64,
+    pub key: Option<String>,
+}
+
+/// Where Gemma and the connectors live between prompts.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum TextResidency {
+    /// Resident when the device has room beside what is already loaded, else
+    /// streamed. `FASTVIDEO_LTX2_TEXT=resident|streamed` overrides.
+    #[default]
+    Auto,
+    /// One layer on the device at a time; every new prompt re-reads the
+    /// checkpoint. The only choice on a card the DiT already fills.
+    Streamed,
+    /// Gemma (23.5 GB as bf16) and the connectors (2.9 GB) stay loaded: a new
+    /// prompt costs one forward.
+    Resident,
+}
+
+impl TextResidency {
+    /// `Auto` resolved against the environment and the device. `free` is what
+    /// the device reports *now* — after the DiT and decoders are in place;
+    /// `needed` what the text path would hold plus working room.
+    pub fn resolve(self, env: Option<&str>, free: Option<u64>, needed: u64) -> Result<bool> {
+        let asked = match env.map(str::trim).filter(|v| !v.is_empty()) {
+            None => self,
+            Some(v) if v.eq_ignore_ascii_case("resident") => Self::Resident,
+            Some(v) if v.eq_ignore_ascii_case("streamed") => Self::Streamed,
+            Some(v) if v.eq_ignore_ascii_case("auto") => Self::Auto,
+            Some(v) => return Err(err(format!("FASTVIDEO_LTX2_TEXT={v}: expected resident, streamed or auto"))),
+        };
+        Ok(match asked {
+            Self::Resident => true,
+            Self::Streamed => false,
+            // No device to ask (a CPU run): stream, which is what is validated there.
+            Self::Auto => free.is_some_and(|f| f >= needed),
+        })
+    }
+}
+
+/// Activations of a text forward and of the denoise that follows, plus
+/// allocator slack: what must stay free once the resident encoder is loaded.
+const RESIDENT_HEADROOM: u64 = 8 << 30;
+
+struct ResidentText {
+    gemma: ResidentDecoder,
+    connectors: TextConnectors,
+}
+
+/// Prompt → connector contexts, with the conditioning cache in front.
+///
+/// On a hit neither Gemma nor the connectors are opened: the key is made from
+/// the prompt, the tokenizer file and the weight *files'* identities
+/// ([`weights_identity`]), which are computed once per encoder.
+pub struct TextEncoder {
+    paths: Ltx2Paths,
+    cfg: Ltx2Config,
+    cache: Option<TextCache>,
+    residency: TextResidency,
+    /// Built on the first cache miss: a run of hits never loads Gemma at all.
+    resident: Option<ResidentText>,
+    /// `(sha256-able tokenizer bytes, gemma identity, connector identity)`.
+    identity: Option<(Vec<u8>, [u8; 32], [u8; 32])>,
+}
+
+impl TextEncoder {
+    pub fn new(paths: &Ltx2Paths, cfg: &Ltx2Config, options: &PipelineOptions) -> Self {
+        Self {
+            paths: paths.clone(),
+            cfg: cfg.clone(),
+            cache: options.text_cache.clone().map(TextCache::new),
+            residency: options.text_residency,
+            resident: None,
+            identity: None,
+        }
     }
 
-    let timer = Instant::now();
-    let (contexts, prompt_tokens, connector_load_s) = encode_prompt(paths, cfg, &req.prompt)?;
-    sync()?;
-    timings.text_s = timer.elapsed().as_secs_f64() - connector_load_s;
-    timings.load_s += connector_load_s;
+    fn tokenizer_path(&self) -> PathBuf {
+        self.paths.text_root().join("tokenizer").join("tokenizer.json")
+    }
 
-    let timer = Instant::now();
-    let map = open_distilled(&paths.dit, "transformer")?;
-    let model = Ltx2Transformer::load(&map, &Keys::transformer(Keys::detect(&map)), &cfg.transformer)?;
-    sync()?;
-    timings.load_s += timer.elapsed().as_secs_f64();
+    fn decoder_config() -> DecoderConfig {
+        // The product runs Gemma in bf16, where the embedding multiplier is 62.0.
+        DecoderConfig::gemma3_12b_text().for_bf16_reference()
+    }
 
-    let timer = Instant::now();
-    let text = model.project_text(&contexts.video, &contexts.audio)?;
-    drop(contexts);
-    let ropes = Ropes::new(&cfg.transformer, grid, audio_tokens, req.frame_rate as f32)?;
-    let (video, audio) = initial_noise(cfg, grid, audio_tokens, req.seed)?;
-    let mut step_s = Vec::new();
-    let mut observer = observer;
-    let mut record = |i: usize, v: &CudaTensor, a: &CudaTensor, s: f64| -> Result<()> {
-        step_s.push(s);
-        match observer.as_mut() {
-            Some(obs) => obs(i, v, a, s),
-            None => Ok(()),
+    /// Device bytes a resident text path would add, from the shapes alone.
+    fn resident_bytes(&self) -> u64 {
+        let (g, c) = (Self::decoder_config(), &self.cfg.connectors);
+        let width: u64 = if crate::wan::nn::bf16_linears_active() { 2 } else { 4 };
+        let per_layer = g.hidden * (g.heads + 2 * g.kv_heads) * g.head_dim + g.heads * g.head_dim * g.hidden + 3 * g.hidden * g.intermediate;
+        let d = c.inner_dim();
+        let connector = (c.video_connector_num_layers + c.audio_connector_num_layers) * (4 * d * d + 8 * d * d) + c.text_proj_in_features() * c.caption_channels;
+        (g.num_layers() * per_layer + connector) as u64 * width
+    }
+
+    fn key(&mut self, prompt: &str) -> Result<String> {
+        if self.identity.is_none() {
+            let tokenizer = std::fs::read(self.tokenizer_path()).map_err(|e| err(format!("{}: {e}", self.tokenizer_path().display())))?;
+            let text_dir = self.paths.text_root().join("text_encoder");
+            // `Lightricks/LTX-2` keeps a stale duplicate shard set next to the real
+            // one; when the real one is there, it alone identifies the encoder.
+            let has_model_set = std::fs::read_dir(&text_dir)
+                .map(|d| d.filter_map(|e| e.ok()).any(|e| e.file_name().to_string_lossy().starts_with("model-")))
+                .unwrap_or(false);
+            let gemma = weights_identity(&text_dir, has_model_set.then_some("model-"))?;
+            let connectors = if self.paths.dit.is_file() {
+                weights_identity(&self.paths.dit, None)?
+            } else if self.paths.dit.join("connectors").is_dir() {
+                weights_identity(&self.paths.dit.join("connectors"), None)?
+            } else {
+                weights_identity(&self.paths.dit, None)?
+            };
+            self.identity = Some((tokenizer, gemma, connectors));
         }
-    };
-    let (video, audio) = denoise(&model, &text, &ropes, &Ltx2Schedule::distilled(), video, audio, Some(&mut record))?;
-    timings.denoise_s = timer.elapsed().as_secs_f64();
-    timings.step_s = step_s;
-    // The decoders need ~3 GB; the DiT's 38 GB are not needed again.
-    drop((model, text, ropes));
+        let (tokenizer, gemma, connectors) = self.identity.as_ref().ok_or_else(|| err("ltx2: text identity missing"))?;
+        Ok(cache_key(prompt, tokenizer, self.cfg.defaults.max_sequence_length, gemma, connectors))
+    }
 
-    let timer = Instant::now();
-    let decoders = Decoders::load(&paths.weights, cfg)?;
-    timings.load_s += timer.elapsed().as_secs_f64();
-    let written = decode_and_write(&decoders, &video, &audio, grid, &req.output_dir, req.frame_rate, req.mp4)?;
-    timings.decode_audio_s = written.decode_audio_s;
-    timings.decode_video_s = written.decode_video_s;
-    timings.write_s = written.write_s;
-    Ok(Ltx2Output {
-        frames: written.frames,
-        mp4: written.mp4,
-        wav: written.wav,
-        prompt_tokens,
-        video_tokens: grid.iter().product(),
-        audio_tokens,
-        timings,
-    })
+    fn load_connectors(&self) -> Result<TextConnectors> {
+        let map = open_distilled(&self.paths.dit, "connectors")?;
+        Ok(TextConnectors::load(&map, &Keys::connectors(Keys::detect(&map)), &self.cfg.connectors)?)
+    }
+
+    /// Decide once, on the first prompt that actually has to be encoded, and
+    /// load the resident models if that is the answer.
+    fn ensure_backend(&mut self) -> Result<()> {
+        if self.resident.is_some() || self.residency == TextResidency::Streamed {
+            return Ok(());
+        }
+        let env = std::env::var("FASTVIDEO_LTX2_TEXT").ok();
+        let free = crate::wan::device::free_memory().map(|(free, _)| free);
+        let needed = self.resident_bytes() + RESIDENT_HEADROOM;
+        if !self.residency.resolve(env.as_deref(), free, needed)? {
+            crate::wan::log::info(format_args!("ltx2 text: streamed (free {:?} bytes, resident needs {needed})", free));
+            self.residency = TextResidency::Streamed;
+            return Ok(());
+        }
+        let timer = Instant::now();
+        let cfg = Self::decoder_config();
+        let map = WeightMap::open(&self.paths.text_root().join("text_encoder"))?;
+        let gemma = ResidentDecoder::load(&map, &cfg, cfg.num_layers())?;
+        let connectors = self.load_connectors()?;
+        sync()?;
+        crate::wan::log::info(format_args!("ltx2 text: resident, {:.1} GiB on device, loaded in {:.1}s", gemma.device_bytes() as f64 / f64::from(1u32 << 30), timer.elapsed().as_secs_f64()));
+        self.resident = Some(ResidentText { gemma, connectors });
+        self.residency = TextResidency::Resident;
+        Ok(())
+    }
+
+    /// Resident: one forward. Streamed: Gemma layer by layer, the connectors
+    /// loaded, used and dropped.
+    fn compute(&mut self, padded: &PaddedPrompt) -> Result<CachedContexts> {
+        self.ensure_backend()?;
+        let out = match &self.resident {
+            Some(r) => r.connectors.forward(&HiddenStack::encode_resident(&r.gemma, padded)?, padded.max_len())?,
+            None => {
+                let gemma = WeightMap::open(&self.paths.text_root().join("text_encoder"))?;
+                let stack = HiddenStack::encode(&gemma, &Self::decoder_config(), padded)?;
+                drop(gemma);
+                self.load_connectors()?.forward(&stack, padded.max_len())?
+            }
+        };
+        Ok(CachedContexts { video: out.video, audio: out.audio })
+    }
+
+    /// `"resident"`, `"streamed"`, or `"undecided"` while only cache hits have
+    /// been served.
+    pub fn mode(&self) -> &'static str {
+        match (self.resident.is_some(), self.residency) {
+            (true, _) => "resident",
+            (false, TextResidency::Streamed) => "streamed",
+            _ => "undecided",
+        }
+    }
+
+    /// `use_cache = false` neither reads nor writes the cache (a warm-up run
+    /// must not turn the run it warms up for into a hit).
+    pub fn encode(&mut self, prompt: &str, use_cache: bool) -> Result<(CachedContexts, TextReport)> {
+        let timer = Instant::now();
+        let padded = PaddedPrompt::tokenize(&self.tokenizer_path(), prompt, self.cfg.defaults.max_sequence_length)?;
+        let key = if use_cache && self.cache.is_some() { Some(self.key(prompt)?) } else { None };
+        // Taken out so the compute closure can borrow the encoder mutably.
+        let cache = self.cache.take();
+        let result = cached_or(cache.as_ref(), key.as_deref(), &padded, || self.compute(&padded));
+        self.cache = cache;
+        let (contexts, outcome) = result?;
+        sync()?;
+        let mode = if outcome == CacheOutcome::Hit { "cache" } else { self.mode() };
+        Ok((contexts, TextReport { cache: outcome, mode, tokens: padded.real, seconds: timer.elapsed().as_secs_f64(), key }))
+    }
+}
+
+/// The cache protocol, apart from what it caches: look up, else compute and
+/// store. A cache that cannot be written is reported by the log, not by failing
+/// a generation whose conditioning is already in hand.
+fn cached_or(
+    cache: Option<&TextCache>,
+    key: Option<&str>,
+    padded: &PaddedPrompt,
+    compute: impl FnOnce() -> Result<CachedContexts>,
+) -> Result<(CachedContexts, CacheOutcome)> {
+    let (Some(cache), Some(key)) = (cache, key) else { return Ok((compute()?, CacheOutcome::Off)) };
+    if let Some(hit) = cache.load(key, padded) {
+        return Ok((hit, CacheOutcome::Hit));
+    }
+    let fresh = compute()?;
+    if let Err(e) = cache.store(key, padded, &fresh.video, &fresh.audio) {
+        crate::wan::log::info(format_args!("ltx2 text cache: not stored: {e}"));
+    }
+    Ok((fresh, CacheOutcome::Miss))
+}
+
+/// How a pipeline is set up.
+#[derive(Debug, Clone, Default)]
+pub struct PipelineOptions {
+    /// Directory of the conditioning cache; `None` turns it off.
+    pub text_cache: Option<PathBuf>,
+    pub text_residency: TextResidency,
+}
+
+/// The models of a stage-1 run, loaded once and kept: the DiT (37.8 GB) and the
+/// three decoders (~3 GB). A second generation pays for text, denoise and
+/// decode only — and for text not even that when the prompt was seen before.
+pub struct Ltx2Pipeline {
+    cfg: Ltx2Config,
+    model: Ltx2Transformer,
+    decoders: Decoders,
+    text: TextEncoder,
+    /// Seconds [`Self::load`] took.
+    pub load_s: f64,
+}
+
+impl Ltx2Pipeline {
+    pub fn load(paths: &Ltx2Paths, cfg: &Ltx2Config, options: &PipelineOptions) -> Result<Self> {
+        let timer = Instant::now();
+        let map = open_distilled(&paths.dit, "transformer")?;
+        let model = Ltx2Transformer::load(&map, &Keys::transformer(Keys::detect(&map)), &cfg.transformer)?;
+        let decoders = Decoders::load(&paths.weights, cfg)?;
+        sync()?;
+        Ok(Self { cfg: cfg.clone(), model, decoders, text: TextEncoder::new(paths, cfg, options), load_s: timer.elapsed().as_secs_f64() })
+    }
+
+    /// One clip. `use_text_cache = false` bypasses the conditioning cache for
+    /// this call only.
+    pub fn generate(&mut self, req: &Ltx2Request, use_text_cache: bool, observer: Option<StepObserver<'_>>) -> Result<Ltx2Output> {
+        req.validate()?;
+        let cfg = &self.cfg;
+        let mut timings = Ltx2Timings::default();
+        let grid = cfg.transformer.latent_grid(req.num_frames, req.height, req.width);
+        let audio_tokens = cfg.transformer.audio_tokens(req.num_frames, req.frame_rate);
+        if audio_tokens == 0 {
+            return Err(err("ltx2: the clip is too short for a single audio latent"));
+        }
+
+        let (contexts, text_report) = self.text.encode(&req.prompt, use_text_cache)?;
+        timings.text_s = text_report.seconds;
+
+        let timer = Instant::now();
+        let text = self.model.project_text(&contexts.video, &contexts.audio)?;
+        drop(contexts);
+        let ropes = Ropes::new(&cfg.transformer, grid, audio_tokens, req.frame_rate as f32)?;
+        let (video, audio) = initial_noise(cfg, grid, audio_tokens, req.seed)?;
+        let mut step_s = Vec::new();
+        let mut observer = observer;
+        let mut record = |i: usize, v: &CudaTensor, a: &CudaTensor, s: f64| -> Result<()> {
+            step_s.push(s);
+            match observer.as_mut() {
+                Some(obs) => obs(i, v, a, s),
+                None => Ok(()),
+            }
+        };
+        let (video, audio) = denoise(&self.model, &text, &ropes, &Ltx2Schedule::distilled(), video, audio, Some(&mut record))?;
+        timings.denoise_s = timer.elapsed().as_secs_f64();
+        timings.step_s = step_s;
+        drop((text, ropes));
+
+        let written = decode_and_write(&self.decoders, &video, &audio, grid, &req.output_dir, req.frame_rate, req.mp4)?;
+        timings.decode_audio_s = written.decode_audio_s;
+        timings.decode_video_s = written.decode_video_s;
+        timings.write_s = written.write_s;
+        Ok(Ltx2Output {
+            frames: written.frames,
+            mp4: written.mp4,
+            wav: written.wav,
+            prompt_tokens: text_report.tokens,
+            video_tokens: grid.iter().product(),
+            audio_tokens,
+            text: text_report,
+            timings,
+        })
+    }
+}
+
+/// Load, generate one clip, drop everything.
+pub fn generate(paths: &Ltx2Paths, cfg: &Ltx2Config, req: &Ltx2Request, options: &PipelineOptions, observer: Option<StepObserver<'_>>) -> Result<Ltx2Output> {
+    req.validate()?;
+    let mut pipeline = Ltx2Pipeline::load(paths, cfg, options)?;
+    let mut out = pipeline.generate(req, true, observer)?;
+    out.timings.load_s = pipeline.load_s;
+    Ok(out)
 }
 
 #[cfg(test)]
@@ -496,5 +761,65 @@ mod tests {
         assert!(Ltx2Request { num_frames: 120, ..ok.clone() }.validate().is_err());
         assert!(Ltx2Request { prompt: "  ".into(), ..ok.clone() }.validate().is_err());
         assert!(Ltx2Request { frame_rate: 0.0, ..ok }.validate().is_err());
+    }
+    /// Hit, miss and bypass, with the expensive part replaced by a counter.
+    #[test]
+    fn the_cache_computes_once_per_prompt_and_a_bypass_neither_reads_nor_writes() {
+        let dir = std::env::temp_dir().join(format!("fv-ltx2-pipeline-cache-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let cache = TextCache::new(&dir);
+        let padded = PaddedPrompt::from_ids(&[2, 5, 9], 8).unwrap();
+        let calls = std::cell::Cell::new(0usize);
+        let compute = || -> Result<CachedContexts> {
+            calls.set(calls.get() + 1);
+            Ok(CachedContexts {
+                video: CudaTensor::from_vec(vec![1.0, 2.0, 3.0, 4.0], vec![1, 2, 2])?,
+                audio: CudaTensor::from_vec(vec![5.0, 6.0], vec![1, 2, 1])?,
+            })
+        };
+        // Bypassed: computed, nothing written.
+        assert_eq!(cached_or(Some(&cache), None, &padded, compute).unwrap().1, CacheOutcome::Off);
+        assert!(!cache.path("k").exists());
+        assert_eq!(cached_or(Some(&cache), Some("k"), &padded, compute).unwrap().1, CacheOutcome::Miss);
+        let (hit, outcome) = cached_or(Some(&cache), Some("k"), &padded, compute).unwrap();
+        assert_eq!((outcome, calls.get()), (CacheOutcome::Hit, 2), "the third call must not compute");
+        assert_eq!(&*hit.video.host_cow().unwrap(), &[1.0, 2.0, 3.0, 4.0]);
+        // A truncated entry: a miss that recomputes and repairs the file.
+        let whole = std::fs::read(cache.path("k")).unwrap();
+        std::fs::write(cache.path("k"), &whole[..whole.len() - 5]).unwrap();
+        assert_eq!(cached_or(Some(&cache), Some("k"), &padded, compute).unwrap().1, CacheOutcome::Miss);
+        assert_eq!(std::fs::read(cache.path("k")).unwrap(), whole);
+        // No cache at all.
+        assert_eq!(cached_or(None, Some("k"), &padded, compute).unwrap().1, CacheOutcome::Off);
+        assert_eq!(calls.get(), 4);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+    #[test]
+    fn auto_residency_needs_a_device_with_room_and_the_environment_overrides() {
+        let gib = |n: u64| n << 30;
+        let auto = TextResidency::Auto;
+        assert!(auto.resolve(None, Some(gib(50)), gib(34)).unwrap(), "96 GB card, DiT loaded: room");
+        assert!(!auto.resolve(None, Some(gib(20)), gib(34)).unwrap(), "48 GB card: stream");
+        assert!(!auto.resolve(None, None, gib(34)).unwrap(), "no device: stream");
+        assert!(auto.resolve(Some("resident"), Some(0), gib(34)).unwrap());
+        assert!(!auto.resolve(Some(" Streamed "), Some(gib(90)), gib(34)).unwrap());
+        assert!(TextResidency::Resident.resolve(Some("auto"), Some(gib(90)), gib(34)).unwrap());
+        assert!(!TextResidency::Streamed.resolve(None, Some(gib(90)), gib(34)).unwrap());
+        assert!(TextResidency::Resident.resolve(Some(""), None, gib(34)).unwrap(), "an empty variable is unset");
+        assert!(auto.resolve(Some("maybe"), None, 0).is_err());
+    }
+
+    #[test]
+    fn the_resident_text_path_is_sized_from_the_published_shapes() {
+        let paths = Ltx2Paths { weights: "/nonexistent".into(), dit: "/nonexistent".into(), text: None };
+        let enc = TextEncoder::new(&paths, &ltx2_19b_distilled(), &PipelineOptions::default());
+        // CPU build: float32 widths. Gemma's 48 layers of projections are
+        // 10.76 B parameters, the connectors 1.43 B (docs/ports/ltx2.md §g).
+        let params = enc.resident_bytes() / 4;
+        assert_eq!(params, 48 * 224_133_120 + (4 * 12 * 3840 * 3840 + 188_160 * 3840));
+        assert_eq!(enc.mode(), "undecided");
+        assert_eq!(paths.text_root(), Path::new("/nonexistent"));
+        let slim = Ltx2Paths { text: Some("/slim".into()), ..paths };
+        assert_eq!(slim.text_root(), Path::new("/slim"));
     }
 }
