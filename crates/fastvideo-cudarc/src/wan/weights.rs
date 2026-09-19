@@ -8,7 +8,7 @@
 use std::collections::HashMap;
 use std::path::Path;
 
-use fastvideo_loader::{load_raw_tensors_native, RawTensor};
+use fastvideo_loader::{load_raw_tensors_native, LazyStore, RawTensor};
 
 use super::tensor::{CudaTensor, Result, TensorError};
 
@@ -17,6 +17,11 @@ pub type WeightGenerator = dyn Fn(&str, &[usize]) -> Vec<f32> + Send + Sync;
 
 pub struct WeightMap {
     tensors: HashMap<String, RawTensor>,
+    /// Set by [`WeightMap::open`]: tensors stay in the mapped shards and are
+    /// converted one at a time as they are asked for, so host memory holds a
+    /// single tensor rather than the checkpoint. What the 20B+ models load
+    /// through; `load_dir` remains the eager path the Wan graph was validated on.
+    lazy: Option<LazyStore>,
     /// When set, shape-checked loads of absent keys are generated instead of
     /// failing (seeded random weights for GPU-vs-CPU parity tests).
     generator: Option<Box<WeightGenerator>>,
@@ -28,8 +33,34 @@ impl WeightMap {
             load_raw_tensors_native(dir).map_err(|e| TensorError::Message(e.to_string()))?;
         Ok(Self {
             tensors,
+            lazy: None,
             generator: None,
         })
+    }
+
+    /// Map every shard under `dir` without reading tensor data.
+    pub fn open(dir: &Path) -> Result<Self> {
+        let lazy = LazyStore::open(dir).map_err(|e| TensorError::Message(e.to_string()))?;
+        Ok(Self {
+            tensors: HashMap::new(),
+            lazy: Some(lazy),
+            generator: None,
+        })
+    }
+
+    /// Exactly these files: a single-file checkpoint or a chosen subset of shards.
+    pub fn open_files(files: &[std::path::PathBuf]) -> Result<Self> {
+        let lazy = LazyStore::open_files(files).map_err(|e| TensorError::Message(e.to_string()))?;
+        Ok(Self {
+            tensors: HashMap::new(),
+            lazy: Some(lazy),
+            generator: None,
+        })
+    }
+
+    /// The lazy store, when this map was opened rather than loaded.
+    pub fn lazy(&self) -> Option<&LazyStore> {
+        self.lazy.as_ref()
     }
 
     pub fn from_dir(dir: &Path) -> Result<Self> {
@@ -44,6 +75,7 @@ impl WeightMap {
     ) -> Self {
         Self {
             tensors: HashMap::new(),
+            lazy: None,
             generator: Some(Box::new(generator)),
         }
     }
@@ -55,6 +87,9 @@ impl WeightMap {
     }
 
     pub fn get_f32(&self, key: &str) -> Result<(Vec<usize>, Vec<f32>)> {
+        if let Some(lazy) = &self.lazy {
+            return lazy.to_f32(key).map_err(|e| TensorError::Message(e.to_string()));
+        }
         let t = self.require(key)?;
         let values = t
             .to_f32_vec()
@@ -64,6 +99,10 @@ impl WeightMap {
 
     /// Native BF16 payload for CUDA upload (converts from F32/F16 if needed).
     pub fn get_bf16_bytes(&self, key: &str) -> Result<(Vec<usize>, Vec<u8>)> {
+        if let Some(lazy) = &self.lazy {
+            let (shape, bytes) = lazy.to_bf16(key).map_err(|e| TensorError::Message(e.to_string()))?;
+            return Ok((shape, bytes.into_owned()));
+        }
         let t = self.require(key)?;
         let bytes = t
             .to_bf16_bytes()
@@ -72,7 +111,45 @@ impl WeightMap {
     }
 
     pub fn contains(&self, key: &str) -> bool {
-        self.tensors.contains_key(key) || self.generator.is_some()
+        self.has_tensor(key) || self.generator.is_some()
+    }
+
+    /// A real tensor under `key` (as opposed to one a generator would invent).
+    pub fn has_tensor(&self, key: &str) -> bool {
+        self.tensors.contains_key(key) || self.lazy.as_ref().is_some_and(|l| l.contains(key))
+    }
+
+    /// Shape of a real tensor, without touching its data.
+    pub fn shape(&self, key: &str) -> Option<Vec<usize>> {
+        match &self.lazy {
+            Some(l) => l.shape(key).map(<[usize]>::to_vec),
+            None => self.tensors.get(key).map(|t| t.shape.clone()),
+        }
+    }
+
+    /// bf16 values of a lazily mapped tensor, for upload as a device bf16
+    /// weight without an f32 detour. `None` for eager and generated maps, whose
+    /// callers keep the f32 path they were validated on.
+    ///
+    /// bf16 on disk is reinterpreted bit for bit. F32/F16 on disk goes through
+    /// `half::bf16::from_f32`, the same rounding `Linear::from_tensors` applies,
+    /// so a checkpoint loads to identical device bits either way.
+    #[cfg(feature = "cuda")]
+    pub fn lazy_bf16(&self, key: &str) -> Result<Option<(Vec<usize>, Vec<half::bf16>)>> {
+        use fastvideo_loader::LazyDType;
+        use rayon::prelude::*;
+        let Some(lazy) = &self.lazy else { return Ok(None) };
+        let view = lazy.view(key).map_err(|e| TensorError::Message(e.to_string()))?;
+        let values: Vec<half::bf16> = if *view.dtype == LazyDType::BF16 {
+            view.bytes
+                .par_chunks_exact(2)
+                .map(|c| half::bf16::from_bits(u16::from_le_bytes([c[0], c[1]])))
+                .collect()
+        } else {
+            let (_, f) = lazy.to_f32(key).map_err(|e| TensorError::Message(e.to_string()))?;
+            f.par_iter().map(|&v| half::bf16::from_f32(v)).collect()
+        };
+        Ok(Some((view.shape.to_vec(), values)))
     }
 }
 
@@ -91,7 +168,7 @@ pub fn cuda_tensor(map: &WeightMap, key: &str) -> Result<CudaTensor> {
 }
 
 pub fn cuda_tensor_shaped(map: &WeightMap, key: &str, expected: &[usize]) -> Result<CudaTensor> {
-    if let (None, Some(generate)) = (map.tensors.get(key), map.generator.as_ref()) {
+    if let (false, Some(generate)) = (map.has_tensor(key), map.generator.as_ref()) {
         let values = generate(key, expected);
         return CudaTensor::from_vec(values, expected.to_vec());
     }
@@ -116,10 +193,49 @@ mod tests {
     fn weight_map_missing_key_errors() {
         let map = WeightMap {
             tensors: HashMap::new(),
+            lazy: None,
             generator: None,
         };
         let err = map.require("no.such.key").unwrap_err();
         assert!(err.to_string().contains("missing weight key"));
+    }
+
+    /// A lazily opened map serves the same f32 values as the eager loader,
+    /// shape-checks, and feeds `Linear::load` — what every large model loads through.
+    #[test]
+    fn lazy_map_feeds_the_layer_loaders() {
+        use std::io::Write;
+        let dir = std::env::temp_dir().join(format!("fv-lazy-wm-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        // One shard: a bf16 [2,3] weight and an f32 [2] bias.
+        let w: Vec<u8> = [1.0f32, 2.0, 3.0, -1.0, 0.5, 0.25]
+            .iter()
+            .flat_map(|v| half::bf16::from_f32(*v).to_bits().to_le_bytes())
+            .collect();
+        let b: Vec<u8> = [10.0f32, 20.0].iter().flat_map(|v| v.to_le_bytes()).collect();
+        let header = format!(
+            r#"{{"proj.weight":{{"dtype":"BF16","shape":[2,3],"data_offsets":[0,{}]}},"proj.bias":{{"dtype":"F32","shape":[2],"data_offsets":[{},{}]}}}}"#,
+            w.len(),
+            w.len(),
+            w.len() + b.len()
+        );
+        let mut f = std::fs::File::create(dir.join("model-00001-of-00001.safetensors")).unwrap();
+        f.write_all(&(header.len() as u64).to_le_bytes()).unwrap();
+        f.write_all(header.as_bytes()).unwrap();
+        f.write_all(&w).unwrap();
+        f.write_all(&b).unwrap();
+        drop(f);
+
+        let map = WeightMap::open(&dir).unwrap();
+        assert!(map.has_tensor("proj.weight") && !map.has_tensor("proj.nope"));
+        assert_eq!(map.shape("proj.weight"), Some(vec![2, 3]));
+        assert!(cuda_tensor_shaped(&map, "proj.weight", &[3, 2]).is_err(), "shape must be checked");
+        let lin = crate::wan::nn::Linear::load(&map, "proj", 3, 2, true).unwrap();
+        let x = CudaTensor::from_vec(vec![1.0, 1.0, 1.0], vec![1, 3]).unwrap();
+        let y = lin.forward(&x).unwrap();
+        assert_eq!(&*y.host_cow().unwrap(), &[16.0, 19.75]);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

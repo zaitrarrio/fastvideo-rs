@@ -1,7 +1,9 @@
 //! Hugging Face Diffusers weight loading for Wan components.
 
+mod lazy;
 mod raw;
 
+pub use lazy::{LazyDType, LazyStore, LazyView};
 pub use raw::{
     load_raw_component, load_raw_component_native, load_raw_tensors, load_raw_tensors_native,
     RawDType, RawTensor,

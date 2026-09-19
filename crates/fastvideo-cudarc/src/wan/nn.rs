@@ -141,6 +141,12 @@ impl Linear {
         out_dim: usize,
         has_bias: bool,
     ) -> Result<Self> {
+        #[cfg(feature = "cuda")]
+        if bf16_linears() && !fp8_linears() {
+            if let Some(l) = Self::load_fused_bf16(map, prefixes, in_dim, out_dim, has_bias)? {
+                return Ok(l);
+            }
+        }
         let mut w = Vec::with_capacity(prefixes.len() * out_dim * in_dim);
         let mut b = Vec::with_capacity(prefixes.len() * out_dim);
         for prefix in prefixes {
@@ -156,6 +162,61 @@ impl Linear {
             CudaTensor::from_vec(w, vec![rows, in_dim])?,
             if has_bias { Some(CudaTensor::from_vec(b, vec![rows])?) } else { None },
         )
+    }
+
+    /// A lazily mapped checkpoint straight to a device bf16 weight: no f32
+    /// copy of the weight ever exists, on the host or the device, and the host
+    /// holds one tensor at a time. `None` when the map is not lazy, so eager
+    /// and generated maps keep their path.
+    #[cfg(feature = "cuda")]
+    fn load_fused_bf16(
+        map: &super::weights::WeightMap,
+        prefixes: &[&str],
+        in_dim: usize,
+        out_dim: usize,
+        has_bias: bool,
+    ) -> Result<Option<Self>> {
+        if map.lazy().is_none() {
+            return Ok(None);
+        }
+        let dev = super::device::global_device().ok_or_else(|| msg("no device"))?;
+        let mut host: Vec<half::bf16> = Vec::new();
+        for prefix in prefixes {
+            let key = super::weights::join_key(prefix, "weight");
+            let (shape, values) = map.lazy_bf16(&key)?.ok_or_else(|| msg("lazy map lost its store"))?;
+            if shape != [out_dim, in_dim] {
+                return Err(msg(format!("key {key}: shape {shape:?} != expected {:?}", [out_dim, in_dim])));
+            }
+            if prefixes.len() == 1 {
+                host = values;
+            } else {
+                host.extend_from_slice(&values);
+            }
+        }
+        let slice = dev.stream.memcpy_stod(&host).map_err(|e| msg(e.to_string()))?;
+        stats::record_h2d(host.len() / 2);
+        drop(host);
+        let rows = prefixes.len() * out_dim;
+        let bias = if has_bias {
+            let mut b = Vec::with_capacity(rows);
+            for prefix in prefixes {
+                let bt = super::weights::cuda_tensor_shaped(map, &super::weights::join_key(prefix, "bias"), &[out_dim])?;
+                b.extend_from_slice(&bt.host_cow()?);
+            }
+            let mut b = CudaTensor::from_vec(b, vec![rows])?;
+            b.pin_device()?;
+            Some(b)
+        } else {
+            None
+        };
+        Ok(Some(Self {
+            weight: CudaTensor::from_vec(Vec::new(), vec![0, in_dim])?,
+            bias,
+            in_dim,
+            out_dim: rows,
+            weight_bf16: Some(std::sync::Arc::new(slice)),
+            weight_fp8: None,
+        }))
     }
 
     pub fn out_dim(&self) -> usize {

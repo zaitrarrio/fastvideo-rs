@@ -132,14 +132,14 @@ impl RawTensor {
     }
 }
 
-fn f32_to_bf16_bits(v: f32) -> u16 {
+pub(crate) fn f32_to_bf16_bits(v: f32) -> u16 {
     let bits = v.to_bits();
     let lsb = (bits >> 16) & 1;
     let rounding = 0x7fff + lsb;
     ((bits + rounding) >> 16) as u16
 }
 
-fn f16_bits_to_f32(h: u16) -> f32 {
+pub(crate) fn f16_bits_to_f32(h: u16) -> f32 {
     let sign = u32::from((h >> 15) & 1);
     let exp = u32::from((h >> 10) & 0x1f);
     let mant = u32::from(h & 0x3ff);
@@ -164,7 +164,7 @@ fn f16_bits_to_f32(h: u16) -> f32 {
     f32::from_bits(bits)
 }
 
-fn bf16_bits_to_f32(h: u16) -> f32 {
+pub(crate) fn bf16_bits_to_f32(h: u16) -> f32 {
     f32::from_bits(u32::from(h) << 16)
 }
 
@@ -317,7 +317,7 @@ fn load_raw_tensors_with(
 ///   have a race-free version of (a `read` racing a concurrent truncate can
 ///   also observe a short/torn file; mmap's failure mode for that case is a
 ///   SIGBUS instead of a short read, not a new class of unsoundness).
-fn mmap_file(path: &Path) -> Result<Mmap, LoaderError> {
+pub(crate) fn mmap_file(path: &Path) -> Result<Mmap, LoaderError> {
     let file = File::open(path)?;
     // SAFETY: see the doc comment above.
     unsafe { Mmap::map(&file) }
