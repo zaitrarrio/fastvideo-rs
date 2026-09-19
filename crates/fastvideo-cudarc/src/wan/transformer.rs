@@ -369,17 +369,24 @@ impl WanBlock {
         mask: Option<&CudaTensor>,
         vsa: Option<&VsaCtx>,
     ) -> Result<CudaTensor> {
+        use super::stats::phase;
         let e = timestep_proj.add(&self.scale_shift_table)?;
-        let normed = hidden.ln_adaln_e(&e, SCALE_MSA, SHIFT_MSA, self.eps)?;
-        let attn = self.attn1.forward_self(&normed, rope, mask, self.gate.as_ref(), vsa)?;
-        let hidden = hidden.residual_gate_add_e(&attn, &e, GATE_MSA)?;
+        let normed = phase("1_norm_msa", || hidden.ln_adaln_e(&e, SCALE_MSA, SHIFT_MSA, self.eps))?;
+        let attn = phase("2_self_attn", || {
+            self.attn1.forward_self(&normed, rope, mask, self.gate.as_ref(), vsa)
+        })?;
+        let hidden = phase("3_residual_msa", || hidden.residual_gate_add_e(&attn, &e, GATE_MSA))?;
 
-        let normed = hidden.layer_norm(self.eps, Some(&self.norm2_weight), Some(&self.norm2_bias))?;
-        let hidden = hidden.add(&self.attn2.forward_cross(&normed, encoder, image)?)?;
+        let normed = phase("4_norm_cross", || {
+            hidden.layer_norm(self.eps, Some(&self.norm2_weight), Some(&self.norm2_bias))
+        })?;
+        let hidden = phase("5_cross_attn", || {
+            Ok::<_, TensorError>(hidden.add(&self.attn2.forward_cross(&normed, encoder, image)?)?)
+        })?;
 
-        let normed = hidden.ln_adaln_e(&e, SCALE_FFN, SHIFT_FFN, self.eps)?;
-        let ff = self.ffn.forward(&normed)?;
-        hidden.residual_gate_add_e(&ff, &e, GATE_FFN)
+        let normed = phase("6_norm_ffn", || hidden.ln_adaln_e(&e, SCALE_FFN, SHIFT_FFN, self.eps))?;
+        let ff = phase("7_ffn", || self.ffn.forward(&normed))?;
+        phase("8_residual_ffn", || hidden.residual_gate_add_e(&ff, &e, GATE_FFN))
     }
 }
 

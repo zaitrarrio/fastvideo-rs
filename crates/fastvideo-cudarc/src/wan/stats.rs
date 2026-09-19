@@ -145,3 +145,48 @@ mod tests {
         assert_eq!(d.h2d_count, 3);
     }
 }
+
+// ---- phase profiling ------------------------------------------------------
+
+/// `FASTVIDEO_PROFILE=1`: accumulate wall time per named phase of the DiT
+/// block.
+///
+/// Arithmetic on the measured GEMM throughput says ~90% of a denoising step is
+/// *not* the linear algebra, but that says nothing about *which* of the ~3,100
+/// launches per step the time is in. This splits a block into its six phases so
+/// fusion work can be aimed instead of guessed.
+///
+/// Each phase synchronizes, which is what makes the numbers attributable and
+/// also why this is off by default: ~180 extra syncs per step is small against
+/// a 5s step but is still a perturbation, so profile runs and timed runs are
+/// deliberately not the same run.
+static PHASES: Mutex<BTreeMap<&'static str, (u64, f64)>> = Mutex::new(BTreeMap::new());
+
+pub fn profiling() -> bool {
+    static ON: super::envflag::CachedBool = super::envflag::CachedBool::new();
+    ON.get_or_init(|| super::envflag::bool_flag("FASTVIDEO_PROFILE", false))
+}
+
+/// Times `f` under `name` when profiling is on, and is a plain call otherwise.
+pub fn phase<T>(name: &'static str, f: impl FnOnce() -> T) -> T {
+    if !profiling() {
+        return f();
+    }
+    let t = std::time::Instant::now();
+    let out = f();
+    let _ = super::device::synchronize();
+    let secs = t.elapsed().as_secs_f64();
+    let mut g = PHASES.lock().expect("phase lock");
+    let e = g.entry(name).or_insert((0, 0.0));
+    e.0 += 1;
+    e.1 += secs;
+    out
+}
+
+/// `(calls, seconds)` per phase, sorted by total time descending.
+pub fn phase_report() -> Vec<(&'static str, u64, f64)> {
+    let g = PHASES.lock().expect("phase lock");
+    let mut v: Vec<_> = g.iter().map(|(k, (c, s))| (*k, *c, *s)).collect();
+    v.sort_by(|a, b| b.2.total_cmp(&a.2));
+    v
+}

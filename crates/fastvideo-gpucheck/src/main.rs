@@ -70,6 +70,10 @@ struct Cli {
     /// this, so it is opt-in per stage and never inferred from the device.
     #[arg(long, global = true)]
     fp8: bool,
+    /// Time each DiT block phase. Synchronizes per phase, so a profiled run
+    /// measures *where* the time goes and must not be quoted for *how long*.
+    #[arg(long, global = true)]
+    profile: bool,
     /// Decode through TAEHV instead of the Wan VAE. Takes the directory
     /// holding taew2_1.safetensors, because those weights ship separately from
     /// the Wan checkpoint and there is nowhere sensible to guess.
@@ -469,6 +473,9 @@ fn main() {
     }
     if cli.fp8 {
         std::env::set_var("FASTVIDEO_FP8", "1");
+    }
+    if cli.profile {
+        std::env::set_var("FASTVIDEO_PROFILE", "1");
     }
     if let Some(p) = &cli.taehv_weights {
         std::env::set_var("FASTVIDEO_TAEHV_WEIGHTS", p);

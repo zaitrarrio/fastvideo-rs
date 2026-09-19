@@ -470,6 +470,23 @@ pub fn clip(report: &mut Report, args: ClipArgs<'_>) -> StageResult<()> {
                 "host_fallbacks": st.host_fallbacks,
             }),
         );
+        // Empty unless FASTVIDEO_PROFILE=1: phase timing synchronizes, so a
+        // profiled run is deliberately not the run we quote timings from.
+        let phases = fastvideo_cudarc::wan::stats::phase_report();
+        if !phases.is_empty() {
+            let total: f64 = phases.iter().map(|(_, _, s)| s).sum();
+            report.set(
+                "dit_phases",
+                json!({
+                    "total_s": total,
+                    "by_phase": phases
+                        .iter()
+                        .map(|(n, c, s)| json!({"phase": n, "calls": c, "seconds": s,
+                                                "pct": if total > 0.0 { 100.0 * s / total } else { 0.0 }}))
+                        .collect::<Vec<_>>(),
+                }),
+            );
+        }
     }
     report.set(
         "artifacts",
