@@ -177,7 +177,8 @@ cleanup() {
       env|bootstrap|upload) bad_host_record "$CURRENT_MACHINE" "$LAST_STAGE rc=$rc" ;;
     esac
   fi
-  if [[ -n "$HOST" && -n "$RUN_DIR" ]]; then
+  # FV_NO_ARTIFACTS=1 (build-remote.sh): the box has no validation output dir.
+  if [[ -n "$HOST" && -n "$RUN_DIR" && "${FV_NO_ARTIFACTS:-0}" != 1 ]]; then
     log "pulling artifacts → $RUN_DIR"
     fv_timeout 300 rsync -az -e "ssh -i $FV_SSH_KEY -p $PORT ${FV_SSH_OPTS[*]}" "root@$HOST:$OUTR/" "$RUN_DIR/remote/" \
       || log "artifact pull failed/timed out"
