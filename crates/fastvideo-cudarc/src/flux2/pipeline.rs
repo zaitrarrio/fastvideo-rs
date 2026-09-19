@@ -12,13 +12,14 @@ use rand_distr::StandardNormal;
 use thiserror::Error;
 
 use crate::wan::pipeline::write_frames;
+use crate::wan::stats;
 use crate::wan::tensor::{CudaTensor, TensorError};
 use crate::wan::weights::WeightMap;
 
 use super::text::{
     flux2_dummy_text, flux2_text_len, format_flux2_prompt, pad_token_ids, Flux2TextEncoder, Qwen3Encoder,
 };
-use super::transformer::Flux2Transformer2D;
+use super::transformer::{self, Flux2Transformer2D};
 use super::vae::AutoencoderKlFlux2;
 
 #[derive(Debug, Error)]
@@ -133,6 +134,9 @@ impl Flux2Pipeline {
     }
 
     pub fn generate(&mut self, cfg: &GenerateConfig) -> Result<Vec<String>> {
+        let _gen = crate::wan::log::StepTimer::start("flux2.generate");
+        transformer::reset_rope_host_stats();
+        let xfer0 = stats::snapshot();
         let (height, width, steps) = if self.tiny {
             (16usize, 16, 2usize)
         } else {
@@ -145,11 +149,29 @@ impl Flux2Pipeline {
         };
         let channels = self.transformer.cfg.in_channels;
         let seq = ph * pw;
+        crate::wan::log::info(format_args!(
+            "flux2 generate preset={} tiny={} kind={} {}x{} packed={}x{} seq={} steps={} text={}",
+            cfg.preset,
+            self.tiny,
+            self.kind.as_str(),
+            width,
+            height,
+            ph,
+            pw,
+            seq,
+            steps,
+            if matches!(self.text.lm_config(), Some(_)) { "qwen3/mistral3" } else { "dummy" },
+        ));
         let mut rng = rand::rngs::StdRng::seed_from_u64(cfg.seed);
         let noise: Vec<f32> = (0..channels * seq).map(|_| rng.sample(StandardNormal)).collect();
         let mut latents = CudaTensor::from_vec(noise, vec![1, channels, 1, ph, pw])?;
         let (ids, valid_len) = encode_prompt_ids(&self.text, cfg, self.tiny, self.transformer.cfg.joint_attention_dim);
-        let encoder = self.text.encode_ids(&ids, valid_len)?;
+        let t_text = std::time::Instant::now();
+        let encoder = {
+            let _t = crate::wan::log::StepTimer::start("flux2.text.encode");
+            self.text.encode_ids(&ids, valid_len)?
+        };
+        let text_encode_ms = t_text.elapsed().as_millis();
         let mu = compute_empirical_mu(seq, steps);
         let mut sched = FlowMatchEulerDiscreteScheduler::new(1000, 1.0);
         sched.set_timesteps_flux2(steps, Some(mu));
@@ -159,35 +181,111 @@ impl Flux2Pipeline {
             None
         };
         let timesteps: Vec<f64> = sched.inference_timesteps().to_vec();
-        for t in timesteps {
-            let vel = self.transformer.forward(
-                &latents,
-                &encoder,
-                t as f32 / 1000.0,
-                guidance,
-                ph,
-                pw,
-            )?;
-            let x = latents.host_cow()?.to_vec();
-            let v = vel.host_cow()?.to_vec();
-            let next = sched
-                .step_euler(&x, &v)
-                .map_err(PipelineError::Message)?;
-            latents = CudaTensor::from_vec(next, latents.shape.clone())?;
+        let mut steps_ms = Vec::with_capacity(timesteps.len());
+        let mut euler_host_ms = 0u128;
+        let t_denoise = std::time::Instant::now();
+        {
+            let _denoise = crate::wan::log::StepTimer::start(format!("flux2.denoise {} steps", timesteps.len()));
+            for (i, t) in timesteps.iter().copied().enumerate() {
+                let t_step = std::time::Instant::now();
+                let _step = crate::wan::log::StepTimer::start(format!(
+                    "flux2.dit step {}/{} t={t:.1}",
+                    i + 1,
+                    timesteps.len()
+                ));
+                let vel = self.transformer.forward(
+                    &latents,
+                    &encoder,
+                    t as f32 / 1000.0,
+                    guidance,
+                    ph,
+                    pw,
+                )?;
+                let t_euler = std::time::Instant::now();
+                let x = latents.host_cow()?.to_vec();
+                let v = vel.host_cow()?.to_vec();
+                let next = sched
+                    .step_euler(&x, &v)
+                    .map_err(PipelineError::Message)?;
+                latents = CudaTensor::from_vec(next, latents.shape.clone())?;
+                euler_host_ms += t_euler.elapsed().as_millis();
+                steps_ms.push(t_step.elapsed().as_millis());
+            }
         }
-        let decoded = if self.tiny {
-            self.vae.decode(&latents)?
+        let denoise_ms = t_denoise.elapsed().as_millis();
+        let t_unpack = std::time::Instant::now();
+        let unpacked = if self.tiny {
+            None
         } else {
             let packed = latents.host_cow()?;
             let spatial = unpatchify_2x2(&packed, self.vae.cfg.latent_channels, ph, pw)
                 .map_err(PipelineError::Message)?;
-            let unpacked = CudaTensor::from_vec(
+            Some(CudaTensor::from_vec(
                 spatial,
                 vec![1, self.vae.cfg.latent_channels, 1, ph * 2, pw * 2],
-            )?;
-            self.vae.decode(&unpacked)?
+            )?)
         };
-        write_frames(&decoded, Path::new(&cfg.output_dir)).map_err(|e| PipelineError::Message(e.to_string()))
+        let unpack_ms = t_unpack.elapsed().as_millis();
+        let t_vae = std::time::Instant::now();
+        let decoded = {
+            let _vae = crate::wan::log::StepTimer::start("flux2.vae.decode");
+            match &unpacked {
+                Some(u) => self.vae.decode(u)?,
+                None => self.vae.decode(&latents)?,
+            }
+        };
+        let vae_decode_ms = t_vae.elapsed().as_millis();
+        let t_write = std::time::Instant::now();
+        let paths = {
+            let _w = crate::wan::log::StepTimer::start("flux2.write_frames");
+            write_frames(&decoded, Path::new(&cfg.output_dir)).map_err(|e| PipelineError::Message(e.to_string()))?
+        };
+        let write_frames_ms = t_write.elapsed().as_millis();
+        let rope = transformer::rope_host_stats();
+        let xfer = stats::snapshot().since(&xfer0);
+        let profile = serde_json::json!({
+            "preset": cfg.preset,
+            "tiny": self.tiny,
+            "text_kind": self.kind.as_str(),
+            "text": if self.text.lm_config().is_some() { "real" } else { "dummy" },
+            "height": height,
+            "width": width,
+            "packed_h": ph,
+            "packed_w": pw,
+            "seq": seq,
+            "steps": steps,
+            "text_encode_ms": text_encode_ms,
+            "denoise_ms": denoise_ms,
+            "steps_ms": steps_ms,
+            "euler_host_ms": euler_host_ms,
+            "unpack_ms": unpack_ms,
+            "vae_decode_ms": vae_decode_ms,
+            "write_frames_ms": write_frames_ms,
+            "rope_host_apply_calls": rope.apply_calls,
+            "rope_host_apply_ms": rope.apply_ms,
+            "rope_host_apply_elems": rope.apply_elems,
+            "rope_table_calls": rope.table_calls,
+            "rope_table_ms": rope.table_ms,
+            "h2d_count": xfer.h2d_count,
+            "h2d_mib": xfer.h2d_bytes >> 20,
+            "d2h_count": xfer.d2h_count,
+            "d2h_mib": xfer.d2h_bytes >> 20,
+            "host_fallbacks": xfer.host_fallbacks,
+        });
+        crate::wan::log::info(format_args!(
+            "flux2.profile text_ms={text_encode_ms} denoise_ms={denoise_ms} vae_ms={vae_decode_ms} \
+             write_ms={write_frames_ms} euler_host_ms={euler_host_ms} rope_host_ms={} rope_calls={} \
+             rope_table_ms={} h2d={} ({} MiB) d2h={} ({} MiB)",
+            rope.apply_ms,
+            rope.apply_calls,
+            rope.table_ms,
+            xfer.h2d_count,
+            xfer.h2d_bytes >> 20,
+            xfer.d2h_count,
+            xfer.d2h_bytes >> 20,
+        ));
+        write_profile(Path::new(&cfg.output_dir), &profile)?;
+        Ok(paths)
     }
 
     pub fn text_kind(&self) -> Flux2TextKind {
@@ -247,6 +345,15 @@ fn encode_prompt_ids(
     (ids, Some(valid))
 }
 
+fn write_profile(dir: &Path, profile: &serde_json::Value) -> Result<()> {
+    std::fs::create_dir_all(dir).map_err(|e| PipelineError::Message(e.to_string()))?;
+    let path = dir.join("profile.json");
+    std::fs::write(&path, serde_json::to_string_pretty(profile).map_err(|e| PipelineError::Message(e.to_string()))?)
+        .map_err(|e| PipelineError::Message(e.to_string()))?;
+    crate::wan::log::info(format_args!("wrote {}", path.display()));
+    Ok(())
+}
+
 fn hash_ids(prompt: &str, len: usize) -> Vec<u32> {
     prompt
         .bytes()
@@ -271,6 +378,11 @@ mod tests {
             .into();
         let paths = pipe.generate(&cfg).unwrap();
         assert!(Path::new(&paths[0]).exists());
+        let profile = Path::new(&cfg.output_dir).join("profile.json");
+        assert!(profile.exists(), "expected {}", profile.display());
+        let body = std::fs::read_to_string(&profile).unwrap();
+        assert!(body.contains("text_encode_ms"), "{body}");
+        assert!(body.contains("rope_host_apply_calls"), "{body}");
     }
 
     #[test]
@@ -287,5 +399,7 @@ mod tests {
         let paths = pipe.generate(&cfg).unwrap();
         assert!(Path::new(&paths[0]).exists());
         assert_eq!(pipe.text_kind(), Flux2TextKind::Qwen3);
+        let profile = Path::new(&cfg.output_dir).join("profile.json");
+        assert!(profile.exists(), "expected {}", profile.display());
     }
 }

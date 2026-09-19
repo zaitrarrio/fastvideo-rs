@@ -7,5 +7,5 @@ pub mod vae;
 
 pub use pipeline::{Flux2Pipeline, GenerateConfig};
 pub use text::{Flux2TextEncoder, Qwen3Encoder};
-pub use transformer::Flux2Transformer2D;
+pub use transformer::{Flux2Transformer2D, RopeHostStats};
 pub use vae::AutoencoderKlFlux2;
