@@ -71,15 +71,21 @@ tier_query() {
     taehv) echo "$base gpu_ram>=12 disk_space>=60 cpu_ram>=16" ;;
     # The A/B decodes the same clip both ways, so it needs the Wan weights too.
     vaeab) echo "$base gpu_ram>=24 disk_space>=100 cpu_ram>=80 inet_down>=500" ;;
+    # The audio-video ports (docs/ports/{h3,ltx2}.md). The references hold a
+    # 12B-32B text encoder or a 19B-33B DiT in bf16 on the GPU, and the
+    # checkpoints are 80-150 GB, so these ask for a 96 GB card, a big disk and
+    # a fast link. `-text` is the first milestone: the text encoder alone.
+    h3-text) echo "$base gpu_ram>=90 disk_space>=220 cpu_ram>=64 inet_down>=800" ;;
+    ltx2-text) echo "$base gpu_ram>=90 disk_space>=180 cpu_ram>=64 inet_down>=800" ;;
     # A build box: the GPU is irrelevant, so this asks for the cheapest thing
     # with cores and RAM for a release cargo build plus nvcc for 7 SMs.
     build) echo "num_gpus=1 cuda_vers>=13.0 reliability>0.97 rentable=true verified=true direct_port_count>=1 inet_down>=200 cpu_cores>=8 cpu_ram>=16 disk_space>=40 ${FV_OFFER_QUERY_EXTRA:-}" ;;
-    *) die "unknown tier '$1' (mathprobe|kernels|parity|clip|compare|gen|oracle|fp8|taehv|vaeab|build)" ;;
+    *) die "unknown tier '$1' (mathprobe|kernels|parity|clip|compare|gen|oracle|fp8|taehv|vaeab|build|h3-text|ltx2-text)" ;;
   esac
 }
-tier_max_dph() { case "$1" in mathprobe) echo 0.40 ;; kernels) echo 0.25 ;; parity) echo 0.40 ;; clip) echo 0.60 ;; compare) echo 0.60 ;; gen) echo 0.80 ;; oracle) echo 1.60 ;; fp8) echo 0.80 ;; taehv) echo 0.40 ;; vaeab) echo 0.80 ;; build) echo 0.20 ;; esac; }
-tier_max_minutes() { case "$1" in mathprobe) echo 30 ;; kernels) echo 40 ;; parity) echo 75 ;; clip) echo 180 ;; compare) echo 240 ;; gen) echo 180 ;; oracle) echo 150 ;; fp8) echo 90 ;; taehv) echo 60 ;; vaeab) echo 90 ;; build) echo 45 ;; esac; }
-tier_disk() { case "$1" in mathprobe) echo 40 ;; kernels) echo 40 ;; parity) echo 60 ;; clip) echo 100 ;; compare) echo 180 ;; gen) echo 100 ;; oracle) echo 160 ;; fp8) echo 100 ;; taehv) echo 60 ;; vaeab) echo 100 ;; build) echo 40 ;; esac; }
+tier_max_dph() { case "$1" in mathprobe) echo 0.40 ;; kernels) echo 0.25 ;; parity) echo 0.40 ;; clip) echo 0.60 ;; compare) echo 0.60 ;; gen) echo 0.80 ;; oracle) echo 1.60 ;; fp8) echo 0.80 ;; taehv) echo 0.40 ;; vaeab) echo 0.80 ;; build) echo 0.20 ;; h3-text | ltx2-text) echo 2.00 ;; esac; }
+tier_max_minutes() { case "$1" in mathprobe) echo 30 ;; kernels) echo 40 ;; parity) echo 75 ;; clip) echo 180 ;; compare) echo 240 ;; gen) echo 180 ;; oracle) echo 150 ;; fp8) echo 90 ;; taehv) echo 60 ;; vaeab) echo 90 ;; build) echo 45 ;; h3-text | ltx2-text) echo 150 ;; esac; }
+tier_disk() { case "$1" in mathprobe) echo 40 ;; kernels) echo 40 ;; parity) echo 60 ;; clip) echo 100 ;; compare) echo 180 ;; gen) echo 100 ;; oracle) echo 160 ;; fp8) echo 100 ;; taehv) echo 60 ;; vaeab) echo 100 ;; build) echo 40 ;; h3-text) echo 220 ;; ltx2-text) echo 180 ;; esac; }
 
 usage() { sed -n '2,12p' "$0" | sed 's/^# \{0,1\}//'; exit 2; }
 
@@ -511,6 +517,40 @@ cmd_run() {
   esac
 
   local refs="$OUTR/refs"
+  # Text-encoder milestone of the audio-video ports: transformers runs the
+  # encoder in bf16 and writes the hidden states the DiT consumes, together
+  # with the token ids they came from; `fv-gpucheck llm` replays those ids
+  # through our streaming encoder. One tier body, two models.
+  if [[ "$tier" == h3-text || "$tier" == ltx2-text ]]; then
+    local model repo wdir family patterns
+    if [[ "$tier" == h3-text ]]; then
+      model=h3 repo="${FV_H3_REPO:-FastVideo/FastVideo-FastH3-8-Step-V2}" family=qwen3-vl-32b
+      patterns=("text_encoder/*" "tokenizer/*" "processor/*")
+    else
+      # `model-*` is the live shard set; `diffusion_pytorch_model-*` under the
+      # same directory is a stale 52 GB duplicate (docs/ports/ltx2.md).
+      model=ltx2 repo="${FV_LTX2_REPO:-Lightricks/LTX-2}" family=gemma3-12b
+      patterns=("text_encoder/model-*" "text_encoder/*.json" "tokenizer/*")
+    fi
+    wdir="$WORK/weights/$model"
+    remote_run "fetch-$model" 120 fetch "$repo" "$wdir" "${patterns[@]}"
+    local prompt="${FV_PROMPT:-$(jq -r '.prompts[0].prompt' "$FV_ROOT/scripts/gpu/prompts.json")}"
+    local negative; negative="$(jq -r '.negative' "$FV_ROOT/scripts/gpu/prompts.json")"
+    jq -n --arg p "$prompt" --arg n "$negative" \
+      '{negative: $n, prompts: [{name: "oracle", prompt: $p}]}' >"$RUN_DIR/prompt.json"
+    fv_rsync_to "$HOST" "$PORT" "$RUN_DIR/prompt.json" "$OUTR/prompt.json" >/dev/null
+    remote_run oracle-venv 1800 oracle-venv "${FV_TORCH_BACKEND:-cu130}"
+    remote_run "wait-$model" 3600 wait-weights "$wdir" 3600 text_encoder
+    local odir="$OUTR/$model"
+    local oargs=(--weights "$wdir" --prompts "$OUTR/prompt.json" --out "$odir/oracle.safetensors"
+                 --meta "$odir/oracle.json" --llm-out "$odir/llm.safetensors")
+    if [[ "$model" == h3 ]]; then oargs+=(--stages text); else oargs+=(--skip conn,dit,vae,audio); fi
+    remote_run "oracle-$model" 3600 model-oracle "$model" "${oargs[@]}"
+    gpucheck_stage "llm-$model" 3600 --keep-going --mode fast llm --weights "$wdir/text_encoder" \
+      --family "$family" --oracle "$odir/llm.safetensors" --device cuda
+    log "${tier} done"
+    return 0
+  fi
   if [[ "$tier" == mathprobe ]]; then
     # Which cuBLAS math runs here: the image's cuBLAS, then a newer one.
     gpucheck_stage device 300 device

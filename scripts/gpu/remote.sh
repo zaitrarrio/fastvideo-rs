@@ -351,6 +351,46 @@ cmd_upstream_bench() {
 
 # The oracle runs in the upstream venv: transformers' UMT5 and diffusers'
 # WanTransformer3DModel are the reference our own ports are judged against.
+# oracle-venv [torch_backend]: transformers + diffusers (from git: the
+# MiniMax-H3 and LTX-2 model classes are newer than any release) for the
+# audio-video reference dumps. Separate from upstream-venv: it needs no
+# fastvideo package and no Triton, so it installs in a fraction of the time.
+ORACLE_VENV="$WORK/oracle-venv"
+cmd_oracle_venv() {
+  local torch_backend="${1:-cu130}"
+  export HF_HOME="$WORK/hf"
+  mkdir -p "$HF_HOME"
+  export PATH="$HOME/.local/bin:$PATH"
+  command -v git >/dev/null || { apt-get update -qq >/dev/null 2>&1 || true; apt-get install -y -qq --no-install-recommends git >/dev/null 2>&1 || die "could not install git"; }
+  if [[ ! -x "$ORACLE_VENV/bin/python" ]]; then
+    command -v uv >/dev/null || {
+      log "installing uv"
+      curl -LsSf https://astral.sh/uv/install.sh | sh >/dev/null 2>&1 || die "uv install failed"
+    }
+    export PATH="$HOME/.local/bin:$PATH"
+    uv venv --python 3.12 --seed "$ORACLE_VENV" >&2 || die "uv venv failed"
+  fi
+  log "installing torch ($torch_backend), transformers, diffusers@main"
+  VIRTUAL_ENV="$ORACLE_VENV" UV_TORCH_BACKEND="$torch_backend" \
+    uv pip install --python "$ORACLE_VENV/bin/python" torch torchvision transformers accelerate safetensors sentencepiece protobuf pillow numpy \
+      "diffusers @ git+https://github.com/huggingface/diffusers" >&2 || die "oracle venv install failed"
+  "$ORACLE_VENV/bin/python" -c 'import torch, transformers, diffusers; print("torch", torch.__version__, "cuda", torch.version.cuda, "transformers", transformers.__version__, "diffusers", diffusers.__version__, "gpu", torch.cuda.get_device_name(0))' >&2 \
+    || die "oracle venv import failed"
+  log "oracle venv ok"
+}
+
+# model-oracle <h3|ltx2> <args...>: run scripts/gpu/<model>_oracle.py in the
+# oracle venv. Outputs land wherever the args say (validate.sh passes $OUT paths).
+cmd_model_oracle() {
+  local model="$1"; shift
+  export HF_HOME="$WORK/hf"
+  export PATH="$HOME/.local/bin:$PATH"
+  [[ -x "$ORACLE_VENV/bin/python" ]] || die "oracle venv missing (run oracle-venv)"
+  [[ -f "$ROOT/scripts/gpu/${model}_oracle.py" ]] || die "no oracle script for '$model'"
+  mkdir -p "$OUT/$model"
+  PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True "$ORACLE_VENV/bin/python" "$ROOT/scripts/gpu/${model}_oracle.py" "$@"
+}
+
 cmd_upstream_oracle() {
   export HF_HOME="$WORK/hf"
   export PATH="$HOME/.local/bin:$PATH"
@@ -386,5 +426,7 @@ case "$sub" in
   upstream-bench) cmd_upstream_bench "$@" ;;
   upstream-oracle) cmd_upstream_oracle "$@" ;;
   taehv-oracle) cmd_taehv_oracle "$@" ;;
-  *) die "usage: remote.sh env|bootstrap|cublas|fetch|wait-weights|fetch-taehv|wait-taehv|stage|upstream-install|upstream-bench|upstream-oracle|taehv-oracle" ;;
+  oracle-venv) cmd_oracle_venv "$@" ;;
+  model-oracle) cmd_model_oracle "$@" ;;
+  *) die "usage: remote.sh env|bootstrap|cublas|fetch|wait-weights|fetch-taehv|wait-taehv|stage|upstream-install|upstream-bench|upstream-oracle|taehv-oracle|oracle-venv|model-oracle" ;;
 esac
