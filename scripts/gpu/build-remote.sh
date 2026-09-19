@@ -64,6 +64,9 @@ fv_ssh "$HOST" "$PORT" 'set -euo pipefail; export DEBIAN_FRONTEND=noninteractive
   /usr/local/cuda-13.0/bin/nvcc --version | tail -1; ~/.cargo/bin/rustc --version'
 
 log "syncing source (git-tracked files only)"
+# rsync creates the last path component only; a bare ubuntu image has no
+# /workspace, and rsync reports that as a receiver file-IO error (code 11).
+fv_ssh "$HOST" "$PORT" "mkdir -p $REMOTE"
 (cd "$FV_ROOT" && git ls-files -z | rsync -az --files-from=- --from0 -e "ssh -p $PORT -o StrictHostKeyChecking=no" . "root@$HOST:$REMOTE/") >/dev/null
 
 log "building release with ahead-of-time cubins"
