@@ -2,8 +2,10 @@
 
 mod lazy;
 mod raw;
+mod writer;
 
 pub use lazy::{LazyDType, LazyStore, LazyView};
+pub use writer::{SafetensorsWriter, TensorSpec};
 pub use raw::{
     load_raw_component, load_raw_component_native, load_raw_tensors, load_raw_tensors_native,
     RawDType, RawTensor,

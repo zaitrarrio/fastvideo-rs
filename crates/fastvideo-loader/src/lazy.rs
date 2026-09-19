@@ -49,6 +49,20 @@ impl LazyDType {
         }
     }
 
+    /// The safetensors spelling.
+    pub fn as_str(&self) -> &str {
+        match self {
+            Self::F32 => "F32",
+            Self::F16 => "F16",
+            Self::BF16 => "BF16",
+            Self::F8E4M3 => "F8_E4M3",
+            Self::F8E5M2 => "F8_E5M2",
+            Self::U8 => "U8",
+            Self::I8 => "I8",
+            Self::Other(s) => s,
+        }
+    }
+
     /// Bytes per element, where the type has a whole number of them.
     pub fn size(&self) -> Option<usize> {
         match self {
