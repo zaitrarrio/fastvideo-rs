@@ -2,6 +2,36 @@
 
 Project code: FVID
 
+### FVID · 2026-09-19 · FVID-2026-09-19-taehv-default-streaming-write
+- Trigger: with exact-SM cubins and the tensor-core fine stage in, an 8s clip was 19.7s (H100 NVL) / 20.7s (RTX 5090) and only ~25% of it was the DiT. The Wan VAE decode and the serial PNG-then-ffmpeg write were the next two terms, and neither is a kernel problem.
+- Decision: **the `gen` tier decodes with TAEHV by default (`FV_TAEHV=0` for the Wan VAE) and frames are written while the decoder runs.**
+  - `remote.sh fetch-taehv` pulls and verifies `taew2_1.safetensors` behind the text encoding; the clip stage gets `--taehv-weights`. The UI passes `{"taehv": false}` through as `FV_TAEHV=0`.
+  - `TaeHv::decode_streaming` / `AutoencoderKlWan::decode_streaming` hand each chunk's finished frames to a sink; `Pipeline::decode_latents_streaming` wraps both and `decode_latents` is the no-op-sink case, so nothing else changes. `pack_rgb_u8` turns a chunk into interleaved 8-bit RGB on the device (3 bytes/pixel down instead of 12, no host clamp loop); a `VideoWriter` thread encodes PNGs in parallel with rayon and streams rgb24 into ffmpeg's stdin, so the mux needs no PNG round trip. Byte-exactness against the old writer is a kernels-tier check (`pack_rgb_u8_matches_host`).
+  - `--warm` (`FV_WARM=1`, `task gen WARM=1`) runs one untimed generation first; the timings block now separates `load_s` from `generate_s` (denoise + decode + write), which is what a served request costs.
+- Measured, 129 frames 832x448, 3 DMD steps, VSA, same prompt and seed, **first clip in the process** (cold):
+
+  | | RTX 5090 (`20260919T130240Z-gen`) | H100 NVL (`20260919T130210Z-gen`) |
+  | --- | ---: | ---: |
+  | weight load | 4.0s | 11.2s |
+  | denoise (3 steps) | 5.50s (1.93 / 1.78 / 1.78) | 4.61s (1.73 / 1.42 / 1.42) |
+  | decode (TAEHV, chunked, frames streamed) | 0.64s (`taehv.decode` 505ms) | 1.16s (`taehv.decode` 693ms) |
+  | write tail after decode | 0.10s | 0.24s |
+  | **generate (denoise + decode + write)** | **6.24s** | **6.01s** |
+  | peak VRAM | 11.6 GB | 11.3 GB |
+
+  Both gates pass (129 frames, video_quality), 1.06 MB mp4 each, contact sheets identical across cards, and the prompt is what is on screen. Both boxes booted from the CI image by build id (no upload).
+- **Warm** (`--warm`: one untimed generation first, so this is a resident pipeline answering its next request), same clip:
+
+  | | RTX 5090 (`20260919T131942Z-gen`, machine 149252) | H100 NVL (`20260919T131944Z-gen`) |
+  | --- | ---: | ---: |
+  | denoise (3 steps) | 5.71s (1.87 / 1.89 / 1.89) | 4.31s (1.42 / 1.42 / 1.42) |
+  | decode (TAEHV; `taehv.decode` alone) | 0.59s (458ms) | 0.97s (606ms) |
+  | write tail after decode | 0.09s | 0.23s |
+  | **generate** | **6.43s** (0.80 s per video-second) | **5.60s** (0.69 s per video-second) |
+
+  Warm vs cold: the H100 sheds its 0.3s first-step penalty and 0.2s of decode; the 5090 sheds nothing beyond the load (its first step was already within noise of the rest — this host's 5090 ran 1.88s/step against 1.78s on the cold run's host). So on either card the cost of a clip after the first is denoise + ~1s, and the first clip adds only the weight load (2.9–4.0s on the 5090 hosts, 11.3s on the H100 host, which is disk, not GPU).
+- Reversibility: cheap — `FV_TAEHV=0` restores the Wan VAE; the streaming sink defaults to a no-op.
+
 ### FVID · 2026-09-19 · FVID-2026-09-19-cuda13-aot-cubins-ci
 - Trigger: the Blackwell arch-mapping bug (`nvrtc_arch` → None → compute_52) showed that choosing the kernel target at run time is a class of failure, not an instance. And the user's point stood: NVRTC 12.4 with no nvcc, and Docker builds under x86 emulation, were facts about the laptop, not constraints on the project.
 - Decision: **CUDA 13.0 everywhere, kernels compiled ahead of time by nvcc, builds off the Mac.**
