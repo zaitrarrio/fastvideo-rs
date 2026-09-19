@@ -63,6 +63,24 @@ pub enum Stage {
         #[arg(long, default_value_t = 1e-4)]
         max_abs: f64,
     },
+    /// The ViT video decoder (tiled, temporally chunked) on the oracle's fixed latent.
+    Vae {
+        /// Root of the FastH3 snapshot (reads `vae/`).
+        #[arg(long)]
+        weights: PathBuf,
+        /// `--out` file of `h3_oracle.py` (stage `vae`): `vae_latent`, `vae_video_raw`.
+        #[arg(long)]
+        oracle: PathBuf,
+        #[arg(long, default_value = "cuda")]
+        device: String,
+        /// ImageNet-normalized RGB, before the clamp; float32 on both sides in
+        /// `--mode exact`. With bf16 linears (`--mode fast`) pass a budget from
+        /// the meta's `vae_fp16_autocast_vs_fp32`.
+        #[arg(long, default_value_t = 2e-3)]
+        max_abs: f64,
+        #[arg(long, default_value_t = 1e-3)]
+        max_rel: f64,
+    },
 }
 
 pub fn run(report: &mut Report, stage: &Stage) -> StageResult<()> {
@@ -76,6 +94,7 @@ pub fn run(report: &mut Report, stage: &Stage) -> StageResult<()> {
             text(report, weights, oracle, meta.as_deref(), prompt.as_deref(), device, *max_rel, *max_rel_layer0)
         }
         Stage::AudioVae { weights, oracle, device, max_abs } => audio_vae(report, weights, oracle, device, *max_abs),
+        Stage::Vae { weights, oracle, device, max_abs, max_rel } => vae(report, weights, oracle, device, *max_abs, *max_rel),
     }
 }
 
@@ -209,5 +228,66 @@ fn audio_vae(report: &mut Report, weights: &Path, oracle: &Path, device: &str, m
     let railed = want.data.iter().filter(|v| v.abs() >= 1.0).count() as f64 / want.data.len().max(1) as f64;
     report.note("audio_wave_railed", json!({"fraction_of_reference_at_full_scale": railed}));
     report.check("audio_wave", d.non_finite == 0 && d.max_abs <= max_abs, d.to_json(), json!({"max_abs": max_abs}))?;
+    Ok(())
+}
+
+fn vae(report: &mut Report, weights: &Path, oracle: &Path, device: &str, max_abs: f64, max_rel: f64) -> StageResult<()> {
+    use fastvideo_cudarc::h3::vae::H3VideoDecoder;
+    use fastvideo_models::h3::config::H3VideoVaeConfig;
+
+    report.set("device", crate::gpu::init(device)?);
+    let mut orc = st::load(oracle)?;
+    let latent = st::take(&mut orc, "vae_latent", oracle)?;
+    let want = st::take(&mut orc, "vae_video_raw", oracle)?;
+    drop(orc);
+
+    let timer = std::time::Instant::now();
+    let decoder = H3VideoDecoder::load(H3VideoVaeConfig::fasth3_8step(), &WeightMap::open(&weights.join("vae"))?)?;
+    report.note("load_vae", json!({"seconds": timer.elapsed().as_secs_f64()}));
+
+    // The reference is [1, 3, F, H, W]; chunks arrive as [3, f, H, W] and are
+    // placed by their frame offset.
+    let [_, channels, frames, height, width] = want.shape[..] else {
+        return Err(anyhow::anyhow!("vae_video_raw has shape {:?}, expected [1, 3, F, H, W]", want.shape).into());
+    };
+    let plane = height * width;
+    let mut video = vec![f32::NAN; channels * frames * plane];
+    let input = CudaTensor::from_vec(latent.data, latent.shape.clone())?;
+    let mem = crate::gpu::PeakMem::start();
+    let (emitted, seconds) = measure(report, "vae_decode", || {
+        Ok(decoder.decode_raw_streaming(&input, &mut |offset, chunk| {
+            let [c, f, h, w] = chunk.shape[..] else {
+                return Err(fastvideo_cudarc::wan::tensor::TensorError::Message(format!("chunk shape {:?}", chunk.shape)));
+            };
+            if c != channels || h != height || w != width || offset + f > frames {
+                return Err(fastvideo_cudarc::wan::tensor::TensorError::Message(format!(
+                    "chunk {:?} at frame {offset} does not fit the reference {:?}",
+                    chunk.shape, want.shape
+                )));
+            }
+            let host = chunk.host_cow()?;
+            for ch in 0..c {
+                let dst = (ch * frames + offset) * plane;
+                video[dst..dst + f * plane].copy_from_slice(&host[ch * f * plane..(ch + 1) * f * plane]);
+            }
+            Ok(())
+        })?)
+    })?;
+    report.note("vae_decode", json!({"seconds": seconds, "frames": emitted, "latent": latent.shape, "peak_mib": mem.stop()}));
+    report.check("vae_frames", emitted == frames, json!({"ours": emitted}), json!({"reference": frames}))?;
+    let d = diff(&video, &want.data);
+    // Where along time the error sits separates a chunk cross-fade bug from a ViT bug.
+    let per_frame: Vec<f64> = (0..frames)
+        .map(|f| {
+            (0..channels)
+                .flat_map(|ch| {
+                    let base = (ch * frames + f) * plane;
+                    video[base..base + plane].iter().zip(&want.data[base..base + plane])
+                })
+                .fold(0.0f64, |m, (a, b)| m.max(f64::from((a - b).abs())))
+        })
+        .collect();
+    report.note("vae_max_abs_per_frame", json!({"values": per_frame}));
+    report.check("vae_video_raw", d.non_finite == 0 && d.max_abs <= max_abs && d.within(max_rel), d.to_json(), json!({"max_abs": max_abs, "rel_l2": max_rel}))?;
     Ok(())
 }

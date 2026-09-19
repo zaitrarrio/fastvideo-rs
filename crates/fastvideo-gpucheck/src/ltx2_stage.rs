@@ -17,8 +17,12 @@ use std::path::{Path, PathBuf};
 
 use anyhow::Context;
 use fastvideo_cudarc::llm::DecoderConfig;
+use fastvideo_cudarc::ltx2::audio_vae::AudioDecoder;
 use fastvideo_cudarc::ltx2::keys::{Keys, Layout};
 use fastvideo_cudarc::ltx2::text::{HiddenStack, PaddedPrompt, TextConnectors};
+use fastvideo_cudarc::ltx2::vocoder::Vocoder;
+use fastvideo_cudarc::wan::pipeline::{interleave_audio, write_wav};
+use fastvideo_cudarc::CudaTensor;
 use fastvideo_cudarc::wan::weights::WeightMap;
 use fastvideo_models::ltx2::config::{ltx2_19b_distilled, Ltx2Config};
 use serde_json::json;
@@ -71,6 +75,31 @@ pub enum Stage {
         #[arg(long, default_value_t = 0.15)]
         max_rel_e2e: f64,
     },
+    /// The audio VAE decoder and the vocoder on the oracle's fixed latent,
+    /// float32 on both sides (run with the default `--mode exact`).
+    Audio {
+        /// A diffusers LTX-2 snapshot: reads `audio_vae/` and `vocoder/`
+        /// (identical in `Lightricks/LTX-2` and the distilled conversion).
+        #[arg(long)]
+        weights: PathBuf,
+        /// `--out` file of `ltx2_oracle.py` (stage `audio`).
+        #[arg(long)]
+        oracle: PathBuf,
+        #[arg(long, default_value = "cuda")]
+        device: String,
+        /// Also write our waveform here as a 24 kHz stereo WAV, for ears.
+        #[arg(long)]
+        wav: Option<PathBuf>,
+        /// Log-mel, relative L2.
+        #[arg(long, default_value_t = 1e-4)]
+        max_rel_mel: f64,
+        /// Waveform signal-to-error ratio on the oracle's mel, dB.
+        #[arg(long, default_value_t = 60.0)]
+        min_snr_db: f64,
+        /// The same with our own mel upstream.
+        #[arg(long, default_value_t = 50.0)]
+        min_snr_db_e2e: f64,
+    },
 }
 
 pub fn run(report: &mut Report, stage: &Stage) -> StageResult<()> {
@@ -85,6 +114,9 @@ pub fn run(report: &mut Report, stage: &Stage) -> StageResult<()> {
             &TextArgs { weights, dit, oracle, meta: meta.as_deref(), prompt: prompt.as_deref(), device, skip_llm: *skip_llm },
             [*max_rel, *max_rel_llm, *max_rel_e2e],
         ),
+        Stage::Audio { weights, oracle, device, wav, max_rel_mel, min_snr_db, min_snr_db_e2e } => {
+            audio(report, weights, oracle, device, wav.as_deref(), [*max_rel_mel, *min_snr_db, *min_snr_db_e2e])
+        }
     }
 }
 
@@ -302,5 +334,66 @@ fn text(report: &mut Report, a: &TextArgs<'_>, [max_rel, max_rel_llm, max_rel_e2
             json!({"rel_l2": max_rel_e2e, "cosine_min": 0.99}),
         )?;
     }
+    Ok(())
+}
+
+// ---- audio ------------------------------------------------------------------
+
+/// Root-mean-square error and signal-to-error ratio in dB, from a [`diff`].
+fn rmse_snr(d: &crate::metrics::Diff, n: usize) -> (f64, f64) {
+    let rmse = d.rel_l2 * d.ref_norm / (n.max(1) as f64).sqrt();
+    let snr = if d.rel_l2 > 0.0 { -20.0 * d.rel_l2.log10() } else { f64::INFINITY };
+    (rmse, snr)
+}
+
+fn audio(report: &mut Report, weights: &Path, oracle: &Path, device: &str, wav: Option<&Path>, [max_rel_mel, min_snr, min_snr_e2e]: [f64; 3]) -> StageResult<()> {
+    report.set("device", crate::gpu::init(device)?);
+    let cfg = ltx2_19b_distilled();
+    let mut orc = load_oracle(oracle, &["audio."])?;
+    let latent = take(&mut orc, "audio.latent", oracle)?;
+    let want_mel = take(&mut orc, "audio.mel", oracle)?;
+    let want_wave = take(&mut orc, "audio.wave", oracle)?;
+    drop(orc);
+
+    let timer = std::time::Instant::now();
+    let decoder = AudioDecoder::load(&WeightMap::open(&weights.join("audio_vae"))?, &cfg.audio_vae)?;
+    let vocoder = Vocoder::load(&WeightMap::open(&weights.join("vocoder"))?, &cfg.vocoder)?;
+    report.note("load_audio", json!({"seconds": timer.elapsed().as_secs_f64()}));
+
+    let packed = CudaTensor::from_vec(latent.data, latent.shape.clone())?;
+    let (mel, seconds) = measure(report, "audio_vae", || Ok(decoder.decode_packed(&packed)?))?;
+    report.note("audio_vae", json!({"seconds": seconds, "latent": latent.shape, "mel": mel.shape}));
+    let reference_mel = CudaTensor::from_vec(want_mel.data.clone(), want_mel.shape.clone())?;
+    let (wave, seconds) = measure(report, "vocoder", || Ok(vocoder.forward(&reference_mel)?))?;
+    report.note("vocoder", json!({"seconds": seconds, "wave": wave.shape, "sample_rate": vocoder.sample_rate()}));
+    let (wave_e2e, _) = measure(report, "vocoder_e2e", || Ok(vocoder.forward(&mel)?))?;
+
+    let shape_ok = mel.shape == want_mel.shape && wave.shape == want_wave.shape;
+    report.check(
+        "audio.shapes",
+        shape_ok,
+        json!({"mel": mel.shape, "wave": wave.shape}),
+        json!({"mel": want_mel.shape, "wave": want_wave.shape}),
+    )?;
+    let (mel_h, wave_h, e2e_h) = (mel.host_cow()?, wave.host_cow()?, wave_e2e.host_cow()?);
+    // Every metric lands before the first gate can stop the stage.
+    let d_mel = diff(&mel_h, &want_mel.data);
+    let d_wave = diff(&wave_h, &want_wave.data);
+    let d_e2e = diff(&e2e_h, &want_wave.data);
+    let with = |d: &crate::metrics::Diff, n: usize| {
+        let (rmse, snr) = rmse_snr(d, n);
+        let mut v = d.to_json();
+        v["rmse"] = json!(rmse);
+        v["snr_db"] = json!(if snr.is_finite() { snr } else { 999.0 });
+        v
+    };
+    if let Some(path) = wav {
+        write_wav(path, &interleave_audio(&e2e_h, cfg.vocoder.out_channels)?, cfg.vocoder.out_channels as u16, cfg.vocoder.output_sampling_rate as u32)?;
+        report.set("wav", path.display().to_string());
+    }
+    report.check("audio.mel", d_mel.within(max_rel_mel), with(&d_mel, mel_h.len()), json!({"rel_l2": max_rel_mel}))?;
+    let snr = |d: &crate::metrics::Diff| rmse_snr(d, 1).1;
+    report.check("audio.wave", d_wave.non_finite == 0 && snr(&d_wave) >= min_snr, with(&d_wave, wave_h.len()), json!({"snr_db_min": min_snr}))?;
+    report.check("e2e.wave", d_e2e.non_finite == 0 && snr(&d_e2e) >= min_snr_e2e, with(&d_e2e, e2e_h.len()), json!({"snr_db_min": min_snr_e2e}))?;
     Ok(())
 }

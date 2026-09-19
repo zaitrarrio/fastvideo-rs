@@ -4,5 +4,6 @@
 //! and FastVideo `pipelines/basic/minimax_h3`. See docs/ports/h3.md.
 
 pub mod config;
+pub mod packing;
 pub mod schedule;
 pub mod tokenizer;

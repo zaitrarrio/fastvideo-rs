@@ -12,6 +12,8 @@ pub mod attention;
 pub mod audio_vae;
 pub mod keys;
 pub mod text;
+pub mod vae;
+pub mod vocoder;
 
 use crate::wan::tensor::{CudaTensor, Result, TensorError};
 
@@ -33,4 +35,14 @@ pub(crate) fn pinned(data: Vec<f32>, shape: Vec<usize>) -> Result<CudaTensor> {
     let mut t = CudaTensor::from_vec(data, shape)?;
     t.pin_device()?;
     Ok(t)
+}
+
+/// Elementwise `tanh`. The backend's kernel is the soft clamp `s·tanh(x/s)`;
+/// at `s = 1` that is the plain function.
+pub(crate) fn tanh(x: &CudaTensor) -> Result<CudaTensor> {
+    #[cfg(feature = "cuda")]
+    if let Some(d) = x.dev()? {
+        return CudaTensor::from_dev_result(crate::wan::ops::tanh_scaled_device(&d, 1.0)?, x.shape.clone());
+    }
+    CudaTensor::from_vec(x.host_cow()?.iter().map(|v| v.tanh()).collect(), x.shape.clone())
 }

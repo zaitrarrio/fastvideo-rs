@@ -138,11 +138,33 @@ def main() -> int:
     # `<d>...</d>`, so a port that reads tokenizer.json alone must add them with
     # these ids. Recorded rather than assumed.
     meta["tokenizer_len"] = len(tokenizer)
+    # Read the list from tokenizer_config.json rather than from the tokenizer
+    # object: transformers 5 removed `additional_special_tokens` from the fast
+    # tokenizer classes, and the config file is the thing a port reads anyway.
+    import os
+
+    if os.path.isdir(args.weights):
+        tok_cfg_path = os.path.join(args.weights, "tokenizer", "tokenizer_config.json")
+    else:
+        from huggingface_hub import hf_hub_download
+
+        tok_cfg_path = hf_hub_download(args.weights, "tokenizer_config.json", subfolder="tokenizer")
+    with open(tok_cfg_path) as fh:
+        tok_cfg = json.load(fh)
+    listed = tok_cfg.get("additional_special_tokens") or []
+    if not listed and isinstance(tok_cfg.get("extra_special_tokens"), (dict, list)):
+        extra = tok_cfg["extra_special_tokens"]
+        listed = list(extra.values()) if isinstance(extra, dict) else list(extra)
+    listed = [t if isinstance(t, str) else t.get("content", "") for t in listed]
     meta["added_special_token_ids"] = {
         tok: tokenizer.convert_tokens_to_ids(tok)
-        for tok in tokenizer.additional_special_tokens
+        for tok in listed
         if tok.startswith(("<d>", "</d>", "<|cutoff", "<|lyrics", "<|caption"))
     }
+    # A marker that maps to None / the unk id was NOT registered by this
+    # transformers version: the prompt's `<d>` would then be split into pieces
+    # on the reference side, and token parity has to be judged knowing that.
+    meta["transformers_version"] = __import__("transformers").__version__
 
     if "text" in stages:
         from transformers import Qwen3VLForConditionalGeneration
