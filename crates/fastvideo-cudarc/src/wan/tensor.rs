@@ -514,8 +514,10 @@ impl CudaTensor {
         if self.rank() < 2 {
             return Err(msg(format!("group_norm expects [N, C, ...], got {:?}", self.shape)));
         }
-        let (n, c) = (self.shape[0], self.shape[1]);
+        let c = self.shape[1];
         let spatial = numel(&self.shape[2..]);
+        #[cfg(feature = "cuda")]
+        let n = self.shape[0];
         if groups == 0 || c % groups != 0 || weight.numel() != c || bias.numel() != c || self.numel() == 0 {
             return Err(msg(format!("group_norm: {:?} in {groups} groups, weight {:?}", self.shape, weight.shape)));
         }

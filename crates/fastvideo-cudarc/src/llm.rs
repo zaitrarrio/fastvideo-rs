@@ -43,6 +43,9 @@ pub struct LayerAttn {
 
 #[derive(Debug, Clone)]
 pub struct DecoderConfig {
+    /// Rows of the embedding table. Checked against the checkpoint; it is what
+    /// sizes the table when weights are generated rather than read.
+    pub vocab: usize,
     pub hidden: usize,
     pub heads: usize,
     pub kv_heads: usize,
@@ -77,6 +80,7 @@ impl DecoderConfig {
     pub fn qwen3_vl_32b_text() -> Self {
         let head_dim = 128;
         Self {
+            vocab: 151_936,
             hidden: 5120,
             heads: 64,
             kv_heads: 8,
@@ -109,6 +113,7 @@ impl DecoderConfig {
             })
             .collect();
         Self {
+            vocab: 262_208,
             hidden: 3840,
             heads: 16,
             kv_heads: 8,
@@ -313,8 +318,7 @@ fn embed(map: &WeightMap, cfg: &DecoderConfig, ids: &[u32]) -> Result<CudaTensor
             CudaTensor::from_vec(values, vec![rows.len(), width])?.to_device()?
         }
         None => {
-            let vocab = map.shape(&cfg.embed_key).map_or(rows.iter().max().map_or(1, |m| m + 1), |s| s[0]);
-            cuda_tensor_shaped(map, &cfg.embed_key, &[vocab, cfg.hidden])?.embedding_rows(&rows)?
+            cuda_tensor_shaped(map, &cfg.embed_key, &[cfg.vocab, cfg.hidden])?.embedding_rows(&rows)?
         }
     };
     let x = x.reshape(vec![1, ids.len(), cfg.hidden])?;
@@ -325,27 +329,42 @@ fn embed(map: &WeightMap, cfg: &DecoderConfig, ids: &[u32]) -> Result<CudaTensor
     }
 }
 
-/// Hidden states of one prompt, in Hugging Face's `output_hidden_states`
-/// numbering: tap `0` is the (scaled) embeddings, tap `k` the output of layer
-/// `k`, and tap `num_layers` is that last output *after the final norm* — the
-/// one entry of the tuple HF norms. Layers past the largest tap are not read.
-///
-/// `positions` are the rotary positions, given explicitly because references
-/// disagree: transformers numbers a left-padded prompt `0..S` across the
-/// padding (real tokens end up at `S-n..S-1`), other stacks restart at the
-/// first real token. Pass what the reference used. `attend[j]` says whether
-/// position `j` may be used as a key (false for padding).
-///
-/// Returns one `[1, S, hidden]` tensor per tap, in the order asked.
-pub fn hidden_states(
-    map: &WeightMap,
+/// Where the layer loop gets its weights: read from the checkpoint and dropped
+/// per layer (streamed), or already on the device (resident).
+trait LayerSource {
+    fn with_layer<R>(&mut self, index: usize, f: impl FnOnce(&Layer) -> Result<R>) -> Result<R>;
+    fn final_norm(&mut self) -> Result<CudaTensor>;
+}
+
+struct Streamed<'a> {
+    map: &'a WeightMap,
+    cfg: &'a DecoderConfig,
+}
+
+impl LayerSource for Streamed<'_> {
+    fn with_layer<R>(&mut self, index: usize, f: impl FnOnce(&Layer) -> Result<R>) -> Result<R> {
+        // Loaded here and dropped on return: one layer on the device at a time.
+        let layer = Layer::load(self.map, self.cfg, index)?;
+        f(&layer)
+    }
+
+    fn final_norm(&mut self) -> Result<CudaTensor> {
+        norm_weight(self.map, &self.cfg.final_norm_key, self.cfg.hidden, self.cfg.norm_offset)
+    }
+}
+
+/// The one layer loop both modes run, so a resident encoder cannot drift from
+/// the streamed one that the parity gates judged.
+fn encode<S: LayerSource>(
     cfg: &DecoderConfig,
-    ids: &[u32],
+    source: &mut S,
+    embedded: CudaTensor,
     positions: &[u32],
     attend: &[bool],
     taps: &[usize],
+    progress: bool,
 ) -> Result<Vec<CudaTensor>> {
-    let s = ids.len();
+    let s = embedded.shape[1];
     if s == 0 || positions.len() != s || attend.len() != s {
         return Err(msg(format!("llm: {s} ids, {} positions, {} attend flags", positions.len(), attend.len())));
     }
@@ -367,15 +386,13 @@ pub fn hidden_states(
         }
     };
 
-    let mut x = embed(map, cfg, ids)?;
+    let mut x = embedded;
     // Rotary tables and masks are shared by every layer with the same settings
     // (one kind for Qwen, two for Gemma-3), so build each once.
     let mut ropes: Vec<(LayerAttn, (CudaTensor, CudaTensor))> = Vec::new();
     let mut masks: Vec<(Option<usize>, CudaTensor)> = Vec::new();
     for (i, la) in cfg.layers.iter().enumerate().take(last) {
-        if i < n {
-            keep(i, &x);
-        }
+        keep(i, &x);
         if !ropes.iter().any(|(k, _)| k == la) {
             ropes.push((*la, rope_tables(positions, cfg.head_dim, la)?));
         }
@@ -384,19 +401,193 @@ pub fn hidden_states(
         }
         let (cos, sin) = &ropes.iter().find(|(k, _)| k == la).expect("just inserted").1;
         let mask = &masks.iter().find(|(w, _)| *w == la.window).expect("just inserted").1;
-        // Loaded here and dropped at the end of the iteration: one layer resident.
-        let layer = Layer::load(map, cfg, i)?;
-        x = layer.forward(cfg, &x, cos, sin, mask)?;
-        crate::wan::log::info(format_args!("llm layer {}/{last}", i + 1));
+        x = source.with_layer(i, |layer| layer.forward(cfg, &x, cos, sin, mask))?;
+        if progress {
+            crate::wan::log::info(format_args!("llm layer {}/{last}", i + 1));
+        }
     }
     if last == n {
-        let w = norm_weight(map, &cfg.final_norm_key, cfg.hidden, cfg.norm_offset)?;
-        x = x.rms_norm(&w, cfg.rms_eps)?;
+        x = x.rms_norm(&source.final_norm()?, cfg.rms_eps)?;
     }
     keep(last, &x);
     out.into_iter()
         .map(|t| t.ok_or_else(|| msg("llm: a tap was not reached")))
         .collect()
+}
+
+/// Hidden states of one prompt, in Hugging Face's `output_hidden_states`
+/// numbering: tap `0` is the (scaled) embeddings, tap `k` the output of layer
+/// `k`, and tap `num_layers` is that last output *after the final norm* — the
+/// one entry of the tuple HF norms. Layers past the largest tap are not read.
+///
+/// `positions` are the rotary positions, given explicitly because references
+/// disagree: transformers numbers a left-padded prompt `0..S` across the
+/// padding (real tokens end up at `S-n..S-1`), other stacks restart at the
+/// first real token. Pass what the reference used. `attend[j]` says whether
+/// position `j` may be used as a key (false for padding).
+///
+/// Streams: one layer's weights on the device at a time. For a process that
+/// encodes many prompts and has the memory, see [`ResidentDecoder`].
+///
+/// Returns one `[1, S, hidden]` tensor per tap, in the order asked.
+pub fn hidden_states(
+    map: &WeightMap,
+    cfg: &DecoderConfig,
+    ids: &[u32],
+    positions: &[u32],
+    attend: &[bool],
+    taps: &[usize],
+) -> Result<Vec<CudaTensor>> {
+    if ids.is_empty() {
+        return Err(msg("llm: empty prompt"));
+    }
+    let embedded = embed(map, cfg, ids)?;
+    encode(cfg, &mut Streamed { map, cfg }, embedded, positions, attend, taps, true)
+}
+
+/// The embedding table, held on the host in whatever dtype the checkpoint
+/// stores: a prompt needs a few hundred of its 150k-260k rows, and 2-4 GB of
+/// device memory is better spent on the DiT sitting next to this encoder.
+enum EmbedTable {
+    F32(Vec<f32>),
+    Bf16(Vec<u8>),
+    F16(Vec<u8>),
+}
+
+impl EmbedTable {
+    fn load(map: &WeightMap, cfg: &DecoderConfig) -> Result<Self> {
+        use fastvideo_loader::LazyDType;
+        if let Some(lazy) = map.lazy() {
+            let v = lazy.view(&cfg.embed_key).map_err(|e| msg(e.to_string()))?;
+            if v.shape != [cfg.vocab, cfg.hidden] {
+                return Err(msg(format!("{}: shape {:?}, expected [{}, {}]", cfg.embed_key, v.shape, cfg.vocab, cfg.hidden)));
+            }
+            return match v.dtype {
+                LazyDType::BF16 => Ok(Self::Bf16(v.bytes.to_vec())),
+                LazyDType::F16 => Ok(Self::F16(v.bytes.to_vec())),
+                LazyDType::F32 => Ok(Self::F32(lazy.to_f32(&cfg.embed_key).map_err(|e| msg(e.to_string()))?.1)),
+                other => Err(msg(format!("{}: {other:?} embedding table", cfg.embed_key))),
+            };
+        }
+        let t = cuda_tensor_shaped(map, &cfg.embed_key, &[cfg.vocab, cfg.hidden])?;
+        Ok(Self::F32(t.host_cow()?.into_owned()))
+    }
+
+    fn rows(&self, ids: &[u32], hidden: usize) -> Result<Vec<f32>> {
+        let mut out = Vec::with_capacity(ids.len() * hidden);
+        for &id in ids {
+            let r = id as usize;
+            match self {
+                Self::F32(t) => {
+                    let row = t.get(r * hidden..(r + 1) * hidden).ok_or_else(|| msg(format!("llm: token id {id} past the embedding table")))?;
+                    out.extend_from_slice(row);
+                }
+                Self::Bf16(b) | Self::F16(b) => {
+                    let row = b.get(r * hidden * 2..(r + 1) * hidden * 2).ok_or_else(|| msg(format!("llm: token id {id} past the embedding table")))?;
+                    let half_is_bf16 = matches!(self, Self::Bf16(_));
+                    out.extend(row.chunks_exact(2).map(|c| {
+                        let bits = u16::from_le_bytes([c[0], c[1]]);
+                        if half_is_bf16 { half::bf16::from_bits(bits).to_f32() } else { half::f16::from_bits(bits).to_f32() }
+                    }));
+                }
+            }
+        }
+        Ok(out)
+    }
+
+    fn host_bytes(&self) -> u64 {
+        match self {
+            Self::F32(t) => (t.len() * 4) as u64,
+            Self::Bf16(b) | Self::F16(b) => b.len() as u64,
+        }
+    }
+}
+
+/// A decoder whose layers stay on the device, for a process that encodes
+/// prompt after prompt next to a resident DiT.
+///
+/// Streaming is the right default — the encoder is needed for milliseconds of
+/// compute and costs tens of GB — but it makes every new prompt pay for the
+/// whole checkpoint again: 10.6 s for Qwen3-VL-32B (50 GB read), 15.7 s for
+/// Gemma-3-12B (47 GB of float32 read and narrowed). Where the card has room
+/// (Gemma at bf16 is 23.5 GB beside a 38 GB LTX-2 DiT on 96 GB) the same forward
+/// takes a fraction of a second once the weights are simply left in place.
+///
+/// Same layer loop as [`hidden_states`], so the numbers are the same numbers.
+pub struct ResidentDecoder {
+    cfg: DecoderConfig,
+    layers: Vec<Layer>,
+    final_norm: Option<CudaTensor>,
+    embed: EmbedTable,
+}
+
+struct Resident<'a>(&'a ResidentDecoder);
+
+impl LayerSource for Resident<'_> {
+    fn with_layer<R>(&mut self, index: usize, f: impl FnOnce(&Layer) -> Result<R>) -> Result<R> {
+        let layer = self.0.layers.get(index).ok_or_else(|| {
+            msg(format!("llm: layer {index} is not resident (loaded {})", self.0.layers.len()))
+        })?;
+        f(layer)
+    }
+
+    fn final_norm(&mut self) -> Result<CudaTensor> {
+        self.0.final_norm.clone().ok_or_else(|| msg("llm: the final norm is not resident (load every layer to tap the last state)"))
+    }
+}
+
+impl ResidentDecoder {
+    /// Load layers `0..layers` and keep them on the device. Taps up to `layers`
+    /// are then available; pass `cfg.num_layers()` to include the final norm
+    /// (the last tap is post-norm). Reads either checkpoint layout — the
+    /// original shards or a slim rewrite — since both go through `Linear::load`.
+    pub fn load(map: &WeightMap, cfg: &DecoderConfig, layers: usize) -> Result<Self> {
+        let n = cfg.num_layers();
+        if layers == 0 || layers > n {
+            return Err(msg(format!("llm: {layers} resident layers of a {n}-layer model")));
+        }
+        let mut loaded = Vec::with_capacity(layers);
+        for i in 0..layers {
+            loaded.push(Layer::load(map, cfg, i)?);
+            crate::wan::log::info(format_args!("llm resident layer {}/{layers}", i + 1));
+        }
+        let final_norm = if layers == n {
+            Some(norm_weight(map, &cfg.final_norm_key, cfg.hidden, cfg.norm_offset)?)
+        } else {
+            None
+        };
+        Ok(Self { cfg: cfg.clone(), layers: loaded, final_norm, embed: EmbedTable::load(map, cfg)? })
+    }
+
+    pub fn config(&self) -> &DecoderConfig {
+        &self.cfg
+    }
+
+    /// Same contract and same numbers as the free [`hidden_states`].
+    pub fn hidden_states(&self, ids: &[u32], positions: &[u32], attend: &[bool], taps: &[usize]) -> Result<Vec<CudaTensor>> {
+        if ids.is_empty() {
+            return Err(msg("llm: empty prompt"));
+        }
+        let h = self.cfg.hidden;
+        let x = CudaTensor::from_vec(self.embed.rows(ids, h)?, vec![1, ids.len(), h])?.to_device()?;
+        let x = if self.cfg.embed_scale == 1.0 { x } else { x.try_mul_scalar(self.cfg.embed_scale)? };
+        encode(&self.cfg, &mut Resident(self), x, positions, attend, taps, false)
+    }
+
+    /// Device bytes the layers occupy, from the shapes: linears at the width
+    /// they were loaded (bf16 under bf16 GEMM math, f32 otherwise), norms in f32.
+    pub fn device_bytes(&self) -> u64 {
+        let c = &self.cfg;
+        let linear = c.hidden * (c.heads + 2 * c.kv_heads) * c.head_dim + c.heads * c.head_dim * c.hidden + 3 * c.hidden * c.intermediate;
+        let norms = c.hidden * if c.sandwich_norms { 4 } else { 2 } + if c.qk_norm { 2 * c.head_dim } else { 0 };
+        let width = if crate::wan::nn::bf16_linears_active() { 2 } else { 4 };
+        (self.layers.len() * (linear * width + norms * 4) + self.final_norm.as_ref().map_or(0, |_| c.hidden * 4)) as u64
+    }
+
+    /// Host bytes held by the embedding table.
+    pub fn host_bytes(&self) -> u64 {
+        self.embed.host_bytes()
+    }
 }
 
 #[cfg(test)]
@@ -405,6 +596,7 @@ mod tests {
 
     fn tiny(sandwich: bool) -> DecoderConfig {
         DecoderConfig {
+            vocab: 16,
             hidden: 8,
             heads: 4,
             kv_heads: 2,
@@ -490,7 +682,7 @@ mod tests {
     }
 
     fn weights_embed(cfg: &DecoderConfig) -> (Vec<usize>, Vec<f32>) {
-        let t = cuda_tensor_shaped(&weights(), &cfg.embed_key, &[4, cfg.hidden]).unwrap();
+        let t = cuda_tensor_shaped(&weights(), &cfg.embed_key, &[cfg.vocab, cfg.hidden]).unwrap();
         (t.shape.clone(), t.host_cow().unwrap().into_owned())
     }
 
@@ -507,7 +699,7 @@ mod tests {
         let map = weights();
         let get = |key: &str, shape: &[usize]| cuda_tensor_shaped(&map, key, shape).unwrap().host_cow().unwrap().into_owned();
         let (h, hq, hkv, d, ff, s) = (cfg.hidden, cfg.heads, cfg.kv_heads, cfg.head_dim, cfg.intermediate, ids.len());
-        let table = get(&cfg.embed_key, &[4, h]);
+        let table = get(&cfg.embed_key, &[cfg.vocab, h]);
         let x: Vec<Vec<f32>> = ids.iter().map(|&i| table[i as usize * h..(i as usize + 1) * h].to_vec()).collect();
         let rms = |v: &[f32], w: &[f32]| -> Vec<f32> {
             let ms = v.iter().map(|a| a * a).sum::<f32>() / v.len() as f32;
@@ -589,6 +781,33 @@ mod tests {
         }
     }
 
+    /// Resident and streamed share the layer loop, so they must agree to the
+    /// bit — including a partial load that stops at the tap, and a second
+    /// prompt through the same resident weights.
+    #[test]
+    fn a_resident_decoder_gives_the_streamed_numbers() {
+        for sandwich in [false, true] {
+            let cfg = tiny(sandwich);
+            let full = ResidentDecoder::load(&weights(), &cfg, 2).unwrap();
+            for ids in [&[1u32, 3, 0, 2][..], &[2, 2, 1][..]] {
+                let pos: Vec<u32> = (0..ids.len() as u32).collect();
+                let att = vec![true; ids.len()];
+                let want = run(&cfg, ids, &[0, 1, 2]);
+                let got = full.hidden_states(ids, &pos, &att, &[0, 1, 2]).unwrap();
+                for (w, g) in want.iter().zip(&got) {
+                    assert_eq!(w, &*g.host_cow().unwrap(), "sandwich={sandwich}");
+                }
+            }
+            let one = ResidentDecoder::load(&weights(), &cfg, 1).unwrap();
+            let got = one.hidden_states(&[1, 3, 0], &[0, 1, 2], &[true; 3], &[1]).unwrap();
+            assert_eq!(run(&cfg, &[1, 3, 0], &[1])[0], &*got[0].host_cow().unwrap());
+            assert!(one.hidden_states(&[1, 3, 0], &[0, 1, 2], &[true; 3], &[2]).is_err(), "tap past the resident layers");
+            assert!(full.device_bytes() > one.device_bytes());
+            assert!(full.hidden_states(&[16], &[0], &[true], &[1]).is_err(), "token id past the table");
+        }
+        assert!(ResidentDecoder::load(&weights(), &tiny(false), 3).is_err());
+    }
+
     #[test]
     fn padding_is_not_attended_and_windows_limit_reach() {
         let m = attn_mask(&[false, true, true, true], Some(2)).unwrap();
@@ -604,6 +823,7 @@ mod tests {
     fn presets_have_consistent_shapes() {
         let q = DecoderConfig::qwen3_vl_32b_text();
         assert_eq!((q.num_layers(), q.heads * q.head_dim, q.kv_heads * q.head_dim), (64, 8192, 1024));
+        assert_eq!((q.vocab, DecoderConfig::gemma3_12b_text().vocab), (151_936, 262_208));
         let g = DecoderConfig::gemma3_12b_text();
         assert_eq!(g.num_layers(), 48);
         assert_eq!(g.layers.iter().filter(|l| l.window.is_none()).count(), 8);

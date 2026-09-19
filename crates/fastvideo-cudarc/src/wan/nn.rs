@@ -50,6 +50,19 @@ fn bf16_linears() -> bool {
         && super::device::global_device().is_some_and(|d| d.gemm_math == super::device::GemmMath::Bf16)
 }
 
+/// Whether `Linear` weights load as device bfloat16 (2 bytes per parameter)
+/// rather than f32: what a memory estimate needs to know.
+pub fn bf16_linears_active() -> bool {
+    #[cfg(feature = "cuda")]
+    {
+        bf16_linears()
+    }
+    #[cfg(not(feature = "cuda"))]
+    {
+        false
+    }
+}
+
 impl Linear {
     /// Wrap weight/bias and keep them on the device (a no-op on CPU runs).
     pub fn from_tensors(mut weight: CudaTensor, mut bias: Option<CudaTensor>) -> Result<Self> {

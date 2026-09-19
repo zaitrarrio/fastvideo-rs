@@ -189,6 +189,23 @@ pub fn set_thread_device(ctx: Option<Arc<DeviceContext>>) {
     THREAD_DEVICE.with(|d| *d.borrow_mut() = ctx);
 }
 
+/// `(free, total)` bytes of the global device, or `None` without one. What a
+/// pipeline asks before deciding whether a text encoder can stay resident
+/// beside the DiT or has to be streamed.
+pub fn free_memory() -> Option<(u64, u64)> {
+    #[cfg(feature = "cuda")]
+    {
+        let dev = global_device()?;
+        dev.ctx.bind_to_thread().ok()?;
+        let (free, total) = cudarc::driver::result::mem_get_info().ok()?;
+        Some((free as u64, total as u64))
+    }
+    #[cfg(not(feature = "cuda"))]
+    {
+        None
+    }
+}
+
 #[cfg(feature = "cuda")]
 pub fn global_device() -> Option<Arc<DeviceContext>> {
     if let Some(dev) = THREAD_DEVICE.with(|d| d.borrow().clone()) {
