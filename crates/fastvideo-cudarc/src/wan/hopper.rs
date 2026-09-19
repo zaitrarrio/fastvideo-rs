@@ -26,13 +26,41 @@ pub fn is_hopper(sm_major: i32) -> bool {
 }
 
 /// NVRTC arch string for the live device, if we should pin it.
+/// NVRTC target for a device. `None` would compile with no `-arch` at all,
+/// which NVRTC treats as compute_52 — `__CUDA_ARCH__ = 520`, every
+/// `#if __CUDA_ARCH__ >= 800` body compiled out, and the PTX then JITs onto
+/// whatever the device is with no error. That is exactly what happened on
+/// Blackwell before this mapped it: the tensor-core VSA kernel ran as a
+/// stub and reported garbage.
+///
+/// libnvrtc 12.4, which the runtime image ships, tops out at compute_90; PTX
+/// is forward-compatible, so sm100 and sm120 JIT from it correctly and keep
+/// every sm80+ instruction (mma.sync, ldmatrix, cp.async).
 pub fn nvrtc_arch(sm_major: i32, sm_minor: i32) -> Option<&'static str> {
     match (sm_major, sm_minor) {
-        (9, _) => Some("compute_90"),
+        (m, _) if m >= 9 => Some("compute_90"),
         (8, 9) => Some("compute_89"),
         (8, _) => Some("compute_80"),
         (7, 5) => Some("compute_75"),
         _ => None,
+    }
+}
+
+#[cfg(test)]
+mod arch_tests {
+    use super::nvrtc_arch;
+
+    /// Blackwell must not fall through to "no arch": that silently compiles
+    /// every guarded kernel body out. Pinned so the mapping cannot regress.
+    #[test]
+    fn hopper_and_later_target_compute_90() {
+        assert_eq!(nvrtc_arch(9, 0), Some("compute_90"));
+        assert_eq!(nvrtc_arch(10, 0), Some("compute_90"));
+        assert_eq!(nvrtc_arch(12, 0), Some("compute_90"));
+        assert_eq!(nvrtc_arch(12, 1), Some("compute_90"));
+        assert_eq!(nvrtc_arch(8, 9), Some("compute_89"));
+        assert_eq!(nvrtc_arch(8, 6), Some("compute_80"));
+        assert_eq!(nvrtc_arch(7, 5), Some("compute_75"));
     }
 }
 

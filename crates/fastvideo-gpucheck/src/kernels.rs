@@ -636,9 +636,15 @@ pub fn run(report: &mut Report, lim: Limits, seed: u64) -> StageResult<()> {
             let plan_dev = ops::vsa_plan_upload(&plan.slot_src, &plan.block_sizes, vsa::TILE_ELEMS)?;
             // A group smaller than the tile count exercises the chunked loop.
             for group in [nb, 2.min(nb)] {
+                // Pinned by name: on the first tensor-core run `auto` picked
+                // the new kernel here too, and a "gather" failure was really a
+                // second copy of the mma failure.
+                std::env::set_var("FASTVIDEO_VSA_KERNEL", "gather");
                 let got = vsa::vsa_attention_device(
                     &qd, &kd, &vd, Some(&gd), &plan_dev, topk, bh, seq, dim, scale, group,
-                )?;
+                );
+                std::env::remove_var("FASTVIDEO_VSA_KERNEL");
+                let got = got?;
                 let host = dev.stream.memcpy_dtov(&got)?;
                 let tag = format!("vsa_{}x{}x{}_h{heads}_d{dim}_k{topk}_g{group}", grid.0, grid.1, grid.2);
                 // bf16 gathers on the fine stage, so this is bf16 round-off.

@@ -752,8 +752,8 @@ pub fn vsa_tile_qkv_device(
     let padded = plan.num_tiles * plan.tile_elems;
     let total = bh * padded * dim;
     let mut out = unsafe { dev.stream.alloc::<half::bf16>(total.max(1)) }.map_err(err)?;
-    let mut cfg = cfg_n(total);
-    cfg.grid_dim.2 = bh as u32; // the kernel reads gridDim.z as bh
+    let mut cfg = cfg_n(padded * dim);
+    cfg.grid_dim.2 = bh as u32; // one z-slice per head; grid.x covers padded x dim
     let (seq_i, padded_i, dim_i) = (seq as i64, padded as i64, dim as i32);
     launch!(dev.stream, &dev.kernels.vsa_tile_qkv, cfg; x, &plan.slot_src, &mut out, &seq_i, &padded_i, &dim_i)
         .map_err(err)?;

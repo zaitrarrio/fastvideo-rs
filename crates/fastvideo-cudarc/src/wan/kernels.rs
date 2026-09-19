@@ -1098,9 +1098,12 @@ extern "C" __global__ void __launch_bounds__(128, 2) vsa_mma_attn(
         *reinterpret_cast<float2*>(ob + (long)(g + 8) * MMA_DIM + col) = r1;
     }
 #else
-    // sm75 has no bf16 mma; the dispatcher never launches this there.
+    // sm75 has no bf16 mma and the dispatcher never launches this there. If
+    // it runs anyway the build was compiled for the wrong arch — trap, so that
+    // reports as a CUDA error instead of as an uninitialised output buffer.
     (void)qt; (void)kt; (void)vt; (void)selected; (void)block_sizes; (void)out;
     (void)num_tiles; (void)topk; (void)scale_log2;
+    __trap();
 #endif
 }
 
@@ -1111,16 +1114,15 @@ extern "C" __global__ void vsa_tile_qkv(
     const float* __restrict__ x, const int* __restrict__ slot_src, unsigned short* __restrict__ xt,
     long seq, long padded, int dim
 ) {
-    long i = blockIdx.x * (long)blockDim.x + threadIdx.x;
-    long total = (long)gridDim.z * padded * dim;
-    if (i >= total) return;
-    long bh = i / (padded * dim);
-    long rem = i - bh * padded * dim;
+    // grid.x spans one head's padded x dim; grid.z is the head.
+    long rem = blockIdx.x * (long)blockDim.x + threadIdx.x;
+    if (rem >= padded * dim) return;
+    long bh = blockIdx.z;
     long slot = rem / dim;
     int d = (int)(rem - slot * dim);
     int src = slot_src[slot];
     float v = src >= 0 ? x[(bh * seq + src) * dim + d] : 0.f;
-    xt[i] = fv_to_bf16(v);
+    xt[bh * padded * dim + rem] = fv_to_bf16(v);
 }
 
 // ---- FP8 E4M3 ------------------------------------------------------------
