@@ -124,6 +124,38 @@ impl CudaTensor {
         Ok(Self::host_only(out, out_shape))
     }
 
+    /// Pair-rotate last dim of BSHD `[B,S,H,D]` with Flux2 tables `[S,D]`.
+    /// Cos/sin use the even slot (Diffusers `repeat_interleave(2)`). Device
+    /// path is the `apply_rotary_bshd` sibling of Wan's `qk_norm_rope_bhsd`
+    /// rotate half — Flux2 RMSNorms per head, so the fused Wan prep does not
+    /// apply.
+    pub fn apply_rotary_bshd(&self, cos: &CudaTensor, sin: &CudaTensor) -> Result<CudaTensor> {
+        let [batch, seq, heads, d] = self.shape[..] else {
+            return Err(msg(format!("apply_rotary_bshd expects BSHD, got {:?}", self.shape)));
+        };
+        if d % 2 != 0 || cos.shape != [seq, d] || sin.shape != [seq, d] {
+            return Err(msg(format!(
+                "apply_rotary_bshd tables {:?} {:?} for {:?}",
+                cos.shape, sin.shape, self.shape
+            )));
+        }
+        #[cfg(feature = "cuda")]
+        if let (Some(x), Some(c), Some(s)) = (self.dev()?, cos.dev()?, sin.dev()?) {
+            let out = super::ops::apply_rotary_bshd_device(&x, &c, &s, batch, seq, heads, d)?;
+            return Self::from_dev_result(out, self.shape.clone());
+        }
+        let out = host::apply_rotary_bshd(
+            &self.host_cow()?,
+            &cos.host_cow()?,
+            &sin.host_cow()?,
+            batch,
+            seq,
+            heads,
+            d,
+        );
+        Ok(Self::host_only(out, self.shape.clone()))
+    }
+
     /// Columns `[col_off, col_off + heads*d)` of `[b, seq, width]` as BHSD.
     pub fn split_heads_bhsd(&self, col_off: usize, heads: usize, d: usize) -> Result<CudaTensor> {
         let [batch, seq, width] = self.shape[..] else {
@@ -245,5 +277,45 @@ mod tests {
         let v = x.split_heads_bhsd(2 * width, heads, d).unwrap();
         let merged = v.merge_heads().unwrap();
         assert_eq!(merged.data, x.narrow(2, 2 * width, width).unwrap().data);
+    }
+
+    #[test]
+    fn apply_rotary_bshd_matches_pair_rotate() {
+        let (b, s, h, d) = (2usize, 3usize, 2usize, 4usize);
+        let xs = t(vals(b * s * h * d, 0.41), &[b, s, h, d]);
+        let angles = vals(s * d, 1.7);
+        // Flux2 tables: even and odd of each pair share the same freq.
+        let mut cos = vec![0.0f32; s * d];
+        let mut sin = vec![0.0f32; s * d];
+        for t in 0..s {
+            for i in 0..(d / 2) {
+                let a = angles[t * (d / 2) + i];
+                cos[t * d + 2 * i] = a.cos();
+                cos[t * d + 2 * i + 1] = a.cos();
+                sin[t * d + 2 * i] = a.sin();
+                sin[t * d + 2 * i + 1] = a.sin();
+            }
+        }
+        let ct = t(cos.clone(), &[s, d]);
+        let st = t(sin.clone(), &[s, d]);
+        let got = xs.apply_rotary_bshd(&ct, &st).unwrap();
+        assert_eq!(got.shape, vec![b, s, h, d]);
+        for bi in 0..b {
+            for ti in 0..s {
+                for head in 0..h {
+                    for i in 0..(d / 2) {
+                        let base = (((bi * s + ti) * h + head) * d) + 2 * i;
+                        let (x1, x2) = (xs.data[base], xs.data[base + 1]);
+                        let (c, sn) = (cos[ti * d + 2 * i], sin[ti * d + 2 * i]);
+                        assert!((got.data[base] - (x1 * c - x2 * sn)).abs() < 1e-5);
+                        assert!((got.data[base + 1] - (x1 * sn + x2 * c)).abs() < 1e-5);
+                    }
+                }
+            }
+        }
+        let ones = t(vec![1.0; s * d], &[s, d]);
+        let zeros = t(vec![0.0; s * d], &[s, d]);
+        let id = xs.apply_rotary_bshd(&ones, &zeros).unwrap();
+        assert_eq!(id.data, xs.data);
     }
 }

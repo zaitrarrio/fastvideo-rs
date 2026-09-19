@@ -95,7 +95,7 @@ Artifacts (same run dir as Wan compare):
 
 - `remote/upstream-TORCH_SDPA.json` — load seconds, warmup, median/min generate
 - `remote/flux2-rust/bench.json` — rust `load_ms` / `generate_ms`
-- `remote/flux2-rust/profile.json` — per-stage generate breakdown (text / denoise / VAE / PNG / host RoPE / H2D-D2H). See [flux2-generate-gap.md](flux2-generate-gap.md).
+- `remote/flux2-rust/profile.json` — per-stage generate breakdown (text / denoise / VAE / PNG / RoPE host+device / H2D-D2H). See [flux2-generate-gap.md](flux2-generate-gap.md). After P0, `rope_host_apply_*` should be ~0 on the cudarc GPU path.
 - PNG stills under `remote/flux2-rust/` and upstream’s video dir (num_frames=1)
 
 `docker.sh dist` now ships both `fv-gpucheck` and the `fastvideo` CLI
@@ -114,6 +114,8 @@ Artifacts (same run dir as Wan compare):
 - cudarc generate: DiT load + forward, Qwen3 (Klein) and Mistral3 (dev) text
   encoders (same Diffusers keys / layer stack as Candle), full 2D VAE decode,
   wired through `VideoGenerator`
+- Device DiT RoPE (`apply_rotary_bshd`) + cached sin/cos + on-device Euler
+  lincomb; see [flux2-generate-gap.md](flux2-generate-gap.md) P0
 - Parity tests: timestep/μ table, 2×2 pack, GroupNorm, tiny DiT/Qwen3 shapes,
   Candle↔cudarc L2/PSNR on zero-weight tiny VAE + Qwen3 (see
   `fastvideo_models::flux2::parity`)

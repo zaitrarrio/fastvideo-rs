@@ -117,23 +117,25 @@ impl FlowMatchEulerDiscreteScheduler {
         self.step_index = None;
     }
 
-    /// `prev = sample + (sigma_next - sigma) * model_output`
-    pub fn step_euler(&mut self, sample: &[f32], model_output: &[f32]) -> Result<Vec<f32>, String> {
-        if sample.len() != model_output.len() {
-            return Err("sample / model_output length mismatch".into());
-        }
+    /// `dt = sigma_next - sigma` for the current step, then advance.
+    /// Device Euler uses this so the update can stay on the latent tensor.
+    pub fn take_euler_dt(&mut self) -> Result<f32, String> {
         let idx = self.step_index.unwrap_or(0);
         if idx + 1 >= self.sigmas.len() {
             return Err("step past end of schedule".into());
         }
         let dt = (self.sigmas[idx + 1] - self.sigmas[idx]) as f32;
-        let prev: Vec<f32> = sample
-            .iter()
-            .zip(model_output)
-            .map(|(x, v)| x + dt * v)
-            .collect();
         self.step_index = Some(idx + 1);
-        Ok(prev)
+        Ok(dt)
+    }
+
+    /// `prev = sample + (sigma_next - sigma) * model_output`
+    pub fn step_euler(&mut self, sample: &[f32], model_output: &[f32]) -> Result<Vec<f32>, String> {
+        if sample.len() != model_output.len() {
+            return Err("sample / model_output length mismatch".into());
+        }
+        let dt = self.take_euler_dt()?;
+        Ok(sample.iter().zip(model_output).map(|(x, v)| x + dt * v).collect())
     }
 }
 
@@ -174,6 +176,24 @@ mod tests {
         let vel = vec![0.0f32, 0.0, 0.0];
         let out = sched.step_euler(&sample, &vel).unwrap();
         assert_eq!(out, sample);
+    }
+
+    #[test]
+    fn take_euler_dt_matches_step_euler() {
+        let mut a = FlowMatchEulerDiscreteScheduler::new(1000, 3.0);
+        let mut b = a.clone();
+        a.set_timesteps(4);
+        b.set_timesteps(4);
+        let sample = vec![1.0f32, -2.0, 0.5];
+        let vel = vec![0.25f32, 1.0, -0.5];
+        let dt = a.take_euler_dt().unwrap();
+        let via_dt: Vec<f32> = sample.iter().zip(&vel).map(|(x, v)| x + dt * v).collect();
+        let via_step = b.step_euler(&sample, &vel).unwrap();
+        assert_eq!(via_dt, via_step);
+        // Both schedulers should be on the same next step.
+        let dt2 = a.take_euler_dt().unwrap();
+        let dt2b = b.take_euler_dt().unwrap();
+        assert_eq!(dt2, dt2b);
     }
 
     #[test]

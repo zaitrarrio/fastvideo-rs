@@ -13,7 +13,9 @@ workload (1024×1024, 4 steps, guidance 1.0). Measured after the I64 loader skip
 Log: `sdpa device dense B=1 H=24 Sq=4608 Sk=4608 D=128 query_chunk=2427; gemm=Bf16 resident=true`.
 
 This note does **not** pick a single root cause. It ranks several, with code
-evidence, and says what the new `profile.json` will settle on the next Vast run.
+evidence. P0 (device DiT RoPE + cached tables + on-device Euler) is in tree;
+re-run `compare-flux2` to measure the remaining gap. Do not treat the 23.4 s
+figure as post-P0.
 
 ## 1. Timing scopes (apples-to-apples)
 
@@ -66,15 +68,19 @@ and optional `FASTVIDEO_DEVICE_STATS=1` transfer dumps. **Flux2 generate had
 none of that** — only the one-shot `generate_ms` and a once-per-process dense
 SDPA line.
 
-This PR adds Wan-style spans plus `profile.json` next to the PNG:
+Profiling (PR #5) added Wan-style spans plus `profile.json` next to the PNG:
 
 - `text_encode_ms`, `denoise_ms`, `steps_ms[]`, `euler_host_ms`
 - `unpack_ms`, `vae_decode_ms`, `write_frames_ms`
-- **host RoPE**: `rope_host_apply_calls/ms/elems`, `rope_table_calls/ms`
+- **RoPE**: `rope_host_apply_calls/ms/elems`, `rope_device_apply_calls/elems`,
+  `rope_table_calls/ms`
 - generate-window `h2d` / `d2h` counts and MiB, plus `host_fallbacks`
 
-`rope_host_*` is required because DiT RoPE **bypasses** `stats::host_fallback`
-(see below), so a GPU run would otherwise look “clean” while doing CPU work.
+On a cudarc GPU generate, **`rope_host_apply_*` must be ~0** and
+`rope_device_apply_calls` ≈ `2 × (num_layers + num_single_layers) × steps`
+(200 for Klein 4B / 4 steps). A non-zero host apply counter means Q/K are
+still leaving the device. CPU unit tests still take the host twin and increment
+`rope_host_*`.
 
 ---
 
@@ -92,39 +98,32 @@ The in-tree `FASTVIDEO_SDPA=flash` kernel is **not** a win. Wan clip A/B
 because it launches one block per query row and re-reads K/V. Do not flip
 that flag for Flux2.
 
-### DiT RoPE is a silent host path (strongest code-level finding)
+### DiT RoPE (P0 done — was the strongest code-level finding)
 
-```81:107:crates/fastvideo-cudarc/src/flux2/transformer.rs
-fn apply_rotary(xs: &CudaTensor, cos: &CudaTensor, sin: &CudaTensor) -> Result<CudaTensor> {
-    let t0 = Instant::now();
-    let (b, s, h, d) = (xs.shape[0], xs.shape[1], xs.shape[2], xs.shape[3]);
-    let x = xs.host_cow()?;
-    let c = cos.host_cow()?;
-    let si = sin.host_cow()?;
-    // ... scalar pair-rotate on Vec<f32> ...
-    let y = CudaTensor::from_vec(out, vec![b, s, h, d])?;
-```
+`apply_rotary` used to `host_cow` Q/K `[B,S,H,D]`, pair-rotate on CPU, and
+`from_vec` back. Klein 4B: `2 (q,k) × (5 double + 20 single) × 4 steps = 200`
+round-trips of `[1, 4608, 24, 128]` (~56.6 MiB each) plus `[4608, 128]`
+tables — on the order of **20+ GiB** of PCIe and a sync before every
+attention. That path also bypassed `stats::host_fallback`.
 
-Called on **Q and K** in every joint and parallel attention. Klein 4B:
+**Now:** `CudaTensor::apply_rotary_bshd` launches the NVRTC sibling
+`apply_rotary_bshd` (rotate half of Wan `qk_norm_rope_bhsd`, Flux2 layout:
+BSHD in/out, even-slot cos/sin). Host twin lives in `ops::host` for CPU
+tests and `fv-gpucheck`. Wan’s fused kernel is **not** reused as-is: it
+RMSNorms over `heads*d` and writes BHSD with sin from the odd slot. Flux2
+RMSNorms per head (`rms_heads`) and stores `repeat_interleave(2)` tables.
 
-`2 (q,k) × (5 double + 20 single) × 4 steps = 200` host RoPEs.
+`flux2_rope` tables are built once per `(text_len, img_h, img_w)` on
+`Flux2Transformer2D` and pinned. `rope_table_calls` should be **1** per
+generate, not 4.
 
-Each call at `[1, 4608, 24, 128]` moves ~56.6 MiB Q/K down and back, plus
-`[4608, 128]` cos/sin. That is on the order of **20+ GiB** of PCIe traffic,
-each `host_cow` a device sync, and a single-threaded CPU loop. Wan already
-has a device `qk_norm_rope_bhsd` kernel; Flux2 does not use it.
+### Euler (P0 small extra)
 
-`flux2_rope` also rebuilds and uploads sin/cos **every DiT forward** (4×),
-again on the CPU.
-
-Wan’s `host_fallback` would **error** on this. Flux2 never calls it, so
-generate succeeds and the transfer counters are the only signal.
-
-### Host Euler (real, small)
-
-Each step downloads packed latents + velocity (`[1,128,1,64,64]` ≈ 2 MiB each)
-and re-uploads. 4 steps: tens of milliseconds, not seconds — but it is
-another sync barrier after every forward.
+Was: each step downloaded packed latents + velocity (`[1,128,1,64,64]` ≈
+2 MiB each) for `step_euler` on `Vec<f32>`. Now: `take_euler_dt` +
+`CudaTensor::lincomb` (`x + dt * v`) on device. `euler_host_ms` is launch
+time only (no D2H/H2D); expect ~0 on GPU. Candle generate still uses host
+`step_euler`.
 
 ### Text (Qwen3-4B, once)
 
@@ -188,13 +187,13 @@ launches**, not missing FLOPs.
 
 | Rank | Cause | Evidence | Expected share of the 23.4 s | Notes |
 | ---: | --- | --- | --- | --- |
-| 1 | **Host DiT RoPE** (`apply_rotary`) | 200 D2H/H2D of `[1,4608,24,128]`; bypasses `host_fallback`; Wan already has a device kernel | **~3–8 s** plus GPU idle between every attention | Highest-confidence code bug. `profile.json` `rope_host_apply_ms` / `d2h_mib` will confirm. |
+| 1 | **Host DiT RoPE** (`apply_rotary`) — **fixed in P0** | Was 200 D2H/H2D of `[1,4608,24,128]`. Now `apply_rotary_bshd` on GPU; tables cached. | **~3–8 s** plus GPU idle (hypothesis; not re-measured here) | Confirm with `rope_host_apply_ms ≈ 0` and `rope_device_apply_calls = 200`. |
 | 2 | **Dense SDPA vs PyTorch fused SDPA** at 4608 | Log: device dense, chunk 2427; upstream `F.sdpa` flash/mem-efficient | **~1–4 s** of remaining DiT time | Same FLOP count; rust pays HBM for ~1 GiB scores × 2 chunks × 100 attentions. In-tree `flash` is **worse** (12–35× on Wan). |
-| 3 | **Unfused double-stream QKV + kernel-launch tax** | 6 separate linears + `cat` + transpose + narrow per double block; many 1-op kernels vs PyTorch fused graphs / compile | **~2–5 s** | Shows up as `denoise_ms - rope_host_apply_ms` still high after P0. |
+| 3 | **Unfused double-stream QKV + kernel-launch tax** | 6 separate linears + `cat` + transpose + narrow per double block; many 1-op kernels vs PyTorch fused graphs / compile | **~2–5 s** | Shows up as leftover `denoise_ms` after P0. |
 | 4 | **Qwen3 encode overhead** | Host NeoX tables + 36 mask uploads + host layer stack | **~1–3 s** extra vs HF | Inside both timings; rust-only waste is the host tables/masks. |
 | 5 | **VAE mid attn as H=1,D=512 @ 16k tokens** | First SDPA log hides this; one 16384²×512 dense | **~0.5–2 s** | Once per generate. |
 | 6 | **Cold bench vs warmed median** | rust 1 run; upstream warmup + median of 2 | **~0.5–2 s** | Re-bench rust with a discarded warmup to isolate. |
-| 7 | Host Euler + unpack + PNG | 4× 2 MiB copies; one PNG | **≪0.3 s** | Real, not ranked as the gap. |
+| 7 | Euler + unpack + PNG | Device Euler in P0; unpack + one PNG remain | **≪0.3 s** | Real, not ranked as the gap. |
 
 Discarded as *the* explanation: “generate includes VAE/text and upstream
 doesn’t” — both include them. “Need `FASTVIDEO_SDPA=flash`” — measured
@@ -204,16 +203,25 @@ regression on this stack.
 
 ## 6. Fix plan
 
-### P0 — do next, small, measurable
+### P0 — done (device RoPE + cached tables + device Euler)
 
-1. **Device Flux2 RoPE.** Pair-rotate `[B,S,H,D]` with `[S,D]` tables on GPU.
-   Reuse the rotate half of `qk_norm_rope_bhsd` (or a 20-line sibling kernel).
-   Cache `flux2_rope` tables across the 4 steps. **Expected: 3–8 s off, maybe
-   more** once attention no longer syncs 200 times.
-2. **Keep the new profile** and re-run `compare-flux2` on a 3090. Rank 1 vs 2
-   is settled by `rope_host_apply_ms` vs leftover `denoise_ms`.
-3. **Device Euler** (`x := x + dt * v` on the latent tensor). Tiny wall time,
-   removes a sync; do it while touching the step loop.
+1. **Device Flux2 RoPE.** `apply_rotary_bshd` pair-rotates `[B,S,H,D]` with
+   `[S,D]` tables on GPU. Host twin + `fv-gpucheck` parity. **Expected: 3–8 s
+   off, maybe more** once attention no longer syncs 200 times — verify on Vast,
+   do not quote the 23.4 s row as post-fix.
+2. **Profile kept.** `rope_host_*` stays; `rope_device_apply_*` added.
+3. **Device Euler** via `take_euler_dt` + `lincomb`. Tiny; removes a sync.
+
+Re-run compare (same box / prompt / steps as the 23.4 s row):
+
+```bash
+scripts/gpu/validate.sh offers compare-flux2
+scripts/gpu/validate.sh run compare-flux2
+```
+
+Read `remote/flux2-rust/profile.json` (and `flux2.profile` in the rust log).
+Overrides: `FV_FLUX2_STEPS=4`, `FV_FLUX2_HEIGHT=1024`, `FV_FLUX2_WIDTH=1024`.
+Do **not** set `FASTVIDEO_SDPA=flash`.
 
 ### P1 — after profile says RoPE is gone and denoise is still ~2×
 
@@ -237,10 +245,16 @@ regression on this stack.
 
 `remote/flux2-rust/profile.json` (and the `flux2.profile ...` log line):
 
-- `rope_host_apply_ms` ≈ several seconds → P0 RoPE was the gap.
-- `rope_host_apply_ms` small but `denoise_ms` ≈ 18 s+ → SDPA / GEMM launch (P1).
+- `rope_host_apply_calls` / `rope_host_apply_ms` ≈ 0 and
+  `rope_device_apply_calls` = 200 → P0 RoPE is on device (expected after this
+  change).
+- `rope_host_apply_ms` still seconds → Q/K are leaving the device; regress.
+- `rope_table_calls` should be 1 (cached). >1 means a size change or cache miss.
+- `rope_host_apply_ms` ≈ 0 but `denoise_ms` still ≈ 18 s+ → SDPA / GEMM launch (P1).
 - `text_encode_ms` ≈ 5 s+ → text host masks/tables.
 - `vae_decode_ms` ≈ 5 s+ → mid-attn / conv, not DiT.
+- `euler_host_ms` ≈ 0 → device lincomb (no latent D2H). Non-zero + matching
+  `d2h_mib` means Euler fell back to host.
 
 `generate_ms` will stay inclusive of text+VAE+PNG; compare
 `denoise_ms + text_encode_ms + vae_decode_ms` to upstream’s 7.57 s, not load.

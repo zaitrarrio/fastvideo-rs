@@ -376,6 +376,27 @@ pub fn run(report: &mut Report, lim: Limits, seed: u64) -> StageResult<()> {
             let want: Vec<f32> = (0..b * s).flat_map(|r| x[r * 3 * width + 2 * width..r * 3 * width + 3 * width].to_vec()).collect();
             c.cmp(&format!("split_merge_heads_{b}x{s}x{heads}x{hd}"), &merged, &want, 0.0)?;
         }
+        // Flux2 DiT RoPE: BSHD pair-rotate, even-slot cos/sin.
+        for (b, s, heads, hd) in [(1usize, 5usize, 2usize, 8usize), (2, 17, 3, 4)] {
+            let x = c.rand(b * s * heads * hd, 1.0);
+            let ang = c.rand(s * (hd / 2), 3.0);
+            let mut cos = vec![0.0f32; s * hd];
+            let mut sin = vec![0.0f32; s * hd];
+            for si in 0..s {
+                for i in 0..(hd / 2) {
+                    let (cs, sn) = (ang[si * (hd / 2) + i].cos(), ang[si * (hd / 2) + i].sin());
+                    cos[si * hd + 2 * i] = cs;
+                    cos[si * hd + 2 * i + 1] = cs;
+                    sin[si * hd + 2 * i] = sn;
+                    sin[si * hd + 2 * i + 1] = sn;
+                }
+            }
+            let xt = t(x.clone(), &[b, s, heads, hd])?;
+            let (ct, st) = (t(cos.clone(), &[s, hd])?, t(sin.clone(), &[s, hd])?);
+            let got = host_of(&xt.apply_rotary_bshd(&ct, &st)?)?;
+            let want = host::apply_rotary_bshd(&x, &cos, &sin, b, s, heads, hd);
+            c.cmp(&format!("apply_rotary_bshd_{b}x{s}x{heads}x{hd}"), &got, &want, op)?;
+        }
         Ok(())
     })?;
 

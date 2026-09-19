@@ -387,6 +387,33 @@ extern "C" __global__ void qk_norm_rope_bhsd(
         }
     }
 }
+// Flux2 DiT RoPE: pair-rotate BSHD Q/K. Sibling of the rotate half of
+// qk_norm_rope_bhsd — no RMSNorm, stays BSHD, and both cos/sin come from
+// the even slot (Flux2 repeat_interleave tables). Wan's fused kernel
+// reads sin from the odd slot and writes BHSD after RMS over heads*d.
+// xs [B,S,H,D], cos/sin [S,D]; one thread per (x1, x2) pair.
+extern "C" __global__ void apply_rotary_bshd(
+    const float* xs, const float* cos_t, const float* sin_t, float* out,
+    long n_pairs, long seq, long heads, long d
+) {
+    long i = IDX();
+    if (i >= n_pairs) return;
+    long half = d >> 1;
+    long p = i % half;
+    long t = i / half;
+    long h = t % heads;
+    t /= heads;
+    long s = t % seq;
+    long b = t / seq;
+    long even = p * 2;
+    long base = ((((b * seq + s) * heads + h) * d) + even);
+    float x1 = xs[base];
+    float x2 = xs[base + 1];
+    float c = cos_t[s * d + even];
+    float sn = sin_t[s * d + even];
+    out[base] = x1 * c - x2 * sn;
+    out[base + 1] = x1 * sn + x2 * c;
+}
 // [batch, seq, src_width] slice [col_off, col_off+heads*d) → BHSD (value heads).
 extern "C" __global__ void split_heads_bhsd(
     const float* src, float* out, long n, long seq, long heads, long d, long src_width, long col_off
@@ -908,6 +935,7 @@ kernel_fns!(
     layer_norm_last,
     ln_adaln_e,
     qk_norm_rope_bhsd,
+    apply_rotary_bshd,
     split_heads_bhsd,
     merge_heads,
     gather_nd,

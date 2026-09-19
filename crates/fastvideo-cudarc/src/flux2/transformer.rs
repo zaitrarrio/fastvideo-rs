@@ -9,12 +9,14 @@ use crate::wan::nn::{self, Linear};
 use crate::wan::tensor::{CudaTensor, Result, TensorError};
 use crate::wan::weights::{cuda_tensor_shaped, join_key, WeightMap};
 
-/// Host-path RoPE accounting. `apply_rotary` downloads Q/K, rotates on CPU, and
-/// uploads — it does **not** go through [`crate::wan::stats::host_fallback`], so
-/// GPU generate stays silent while this dominates transfers.
+/// RoPE accounting. Host apply is the old Q/K D2H/H2D path; on a live CUDA
+/// device [`apply_rotary`] launches `apply_rotary_bshd` and host counters stay
+/// at zero. Table rebuilds are cached on [`Flux2Transformer2D`] across steps.
 static ROPE_HOST_CALLS: AtomicU64 = AtomicU64::new(0);
 static ROPE_HOST_MS: AtomicU64 = AtomicU64::new(0);
 static ROPE_HOST_ELEMS: AtomicU64 = AtomicU64::new(0);
+static ROPE_DEVICE_CALLS: AtomicU64 = AtomicU64::new(0);
+static ROPE_DEVICE_ELEMS: AtomicU64 = AtomicU64::new(0);
 static ROPE_TABLE_CALLS: AtomicU64 = AtomicU64::new(0);
 static ROPE_TABLE_MS: AtomicU64 = AtomicU64::new(0);
 
@@ -23,6 +25,8 @@ pub struct RopeHostStats {
     pub apply_calls: u64,
     pub apply_ms: u64,
     pub apply_elems: u64,
+    pub device_apply_calls: u64,
+    pub device_apply_elems: u64,
     pub table_calls: u64,
     pub table_ms: u64,
 }
@@ -32,6 +36,8 @@ pub fn rope_host_stats() -> RopeHostStats {
         apply_calls: ROPE_HOST_CALLS.load(Ordering::Relaxed),
         apply_ms: ROPE_HOST_MS.load(Ordering::Relaxed),
         apply_elems: ROPE_HOST_ELEMS.load(Ordering::Relaxed),
+        device_apply_calls: ROPE_DEVICE_CALLS.load(Ordering::Relaxed),
+        device_apply_elems: ROPE_DEVICE_ELEMS.load(Ordering::Relaxed),
         table_calls: ROPE_TABLE_CALLS.load(Ordering::Relaxed),
         table_ms: ROPE_TABLE_MS.load(Ordering::Relaxed),
     }
@@ -42,6 +48,8 @@ pub fn reset_rope_host_stats() {
         &ROPE_HOST_CALLS,
         &ROPE_HOST_MS,
         &ROPE_HOST_ELEMS,
+        &ROPE_DEVICE_CALLS,
+        &ROPE_DEVICE_ELEMS,
         &ROPE_TABLE_CALLS,
         &ROPE_TABLE_MS,
     ] {
@@ -128,29 +136,16 @@ fn rms_heads(xs: &CudaTensor, norm: &RmsNorm, heads: usize, dim_head: usize) -> 
 }
 
 fn apply_rotary(xs: &CudaTensor, cos: &CudaTensor, sin: &CudaTensor) -> Result<CudaTensor> {
-    let t0 = Instant::now();
-    let (b, s, h, d) = (xs.shape[0], xs.shape[1], xs.shape[2], xs.shape[3]);
-    let x = xs.host_cow()?;
-    let c = cos.host_cow()?;
-    let si = sin.host_cow()?;
-    let mut out = vec![0.0f32; b * s * h * d];
-    for bi in 0..b {
-        for t in 0..s {
-            for head in 0..h {
-                for i in 0..(d / 2) {
-                    let base = (((bi * s + t) * h + head) * d) + 2 * i;
-                    let x1 = x[base];
-                    let x2 = x[base + 1];
-                    let cs = c[t * d + 2 * i];
-                    let sn = si[t * d + 2 * i];
-                    out[base] = x1 * cs - x2 * sn;
-                    out[base + 1] = x1 * sn + x2 * cs;
-                }
-            }
-        }
+    let elems = xs.numel() as u64;
+    if crate::wan::stats::device_expected() {
+        let y = xs.apply_rotary_bshd(cos, sin)?;
+        ROPE_DEVICE_CALLS.fetch_add(1, Ordering::Relaxed);
+        ROPE_DEVICE_ELEMS.fetch_add(elems, Ordering::Relaxed);
+        return Ok(y);
     }
-    let y = CudaTensor::from_vec(out, vec![b, s, h, d])?;
-    record_apply_rotary((b * s * h * d) as u64, t0.elapsed().as_millis() as u64);
+    let t0 = Instant::now();
+    let y = xs.apply_rotary_bshd(cos, sin)?;
+    record_apply_rotary(elems, t0.elapsed().as_millis() as u64);
     Ok(y)
 }
 
@@ -500,6 +495,10 @@ pub struct Flux2Transformer2D {
     singles: Vec<SingleBlock>,
     norm_out: Linear,
     proj_out: Linear,
+    /// `(text_len, img_h, img_w)` → pinned sin/cos. Reused across denoise steps.
+    rope_cache: Option<((usize, usize, usize), (CudaTensor, CudaTensor))>,
+    /// Times `flux2_rope` ran for this instance (cache misses).
+    rope_builds: u64,
 }
 
 impl Flux2Transformer2D {
@@ -519,6 +518,8 @@ impl Flux2Transformer2D {
             singles: (0..cfg.num_single_layers).map(|_| SingleBlock::zeros(&cfg)).collect(),
             norm_out: Linear::zeros(dim, dim * 2, false),
             proj_out: Linear::zeros(dim, cfg.out_channels, false),
+            rope_cache: None,
+            rope_builds: 0,
             cfg,
         }
     }
@@ -554,12 +555,30 @@ impl Flux2Transformer2D {
             singles,
             norm_out: Linear::load(map, "norm_out.linear", dim, dim * 2, false)?,
             proj_out: Linear::load(map, "proj_out", dim, cfg.out_channels, false)?,
+            rope_cache: None,
+            rope_builds: 0,
             cfg,
         })
     }
 
+    fn cached_rope(&mut self, text_len: usize, img_h: usize, img_w: usize) -> Result<(CudaTensor, CudaTensor)> {
+        let key = (text_len, img_h, img_w);
+        if let Some((k, tables)) = &self.rope_cache {
+            if *k == key {
+                return Ok(tables.clone());
+            }
+        }
+        let (mut cos, mut sin) = flux2_rope(text_len, img_h, img_w, &self.cfg.axes_dims_rope, self.cfg.rope_theta)?;
+        cos.pin_device()?;
+        sin.pin_device()?;
+        let tables = (cos, sin);
+        self.rope_builds += 1;
+        self.rope_cache = Some((key, tables.clone()));
+        Ok(tables)
+    }
+
     pub fn forward(
-        &self,
+        &mut self,
         hidden: &CudaTensor,
         encoder: &CudaTensor,
         timestep: f32,
@@ -588,7 +607,7 @@ impl Flux2Transformer2D {
         let mut enc = self.ctx_embed.forward(encoder)?;
         let text_len = enc.shape[1];
         let img_len = x.shape[1];
-        let rope = flux2_rope(text_len, img_h, img_w, &self.cfg.axes_dims_rope, self.cfg.rope_theta)?;
+        let rope = self.cached_rope(text_len, img_h, img_w)?;
         for block in &self.blocks {
             let (e, h) = block.forward(&x, &enc, &img_arr, &txt_arr, &rope)?;
             enc = e;
@@ -664,17 +683,48 @@ mod tests {
         let sin = CudaTensor::from_vec(zeros, vec![2, 8]).unwrap();
         let out = apply_rotary(&xs, &cos, &sin).unwrap();
         assert_eq!(out.shape, vec![1, 2, 1, 8]);
+        assert_eq!(out.data, xs.data, "cos=1 sin=0 is identity");
         let stats = rope_host_stats();
         assert_eq!(stats.apply_calls, 1);
         assert_eq!(stats.apply_elems, 16);
+        assert_eq!(stats.device_apply_calls, 0);
+    }
+
+    #[test]
+    fn apply_rotary_quarter_turn() {
+        reset_rope_host_stats();
+        let xs = CudaTensor::from_vec(vec![1.0, 2.0, 3.0, 4.0], vec![1, 1, 1, 4]).unwrap();
+        let cos = CudaTensor::from_vec(vec![0.0, 0.0, 0.0, 0.0], vec![1, 4]).unwrap();
+        let sin = CudaTensor::from_vec(vec![1.0, 1.0, 1.0, 1.0], vec![1, 4]).unwrap();
+        let out = apply_rotary(&xs, &cos, &sin).unwrap();
+        // (x1, x2) → (-x2, x1)
+        assert!((out.data[0] + 2.0).abs() < 1e-6);
+        assert!((out.data[1] - 1.0).abs() < 1e-6);
+        assert!((out.data[2] + 4.0).abs() < 1e-6);
+        assert!((out.data[3] - 3.0).abs() < 1e-6);
     }
 
     #[test]
     fn flux2_rope_records_table_stats() {
-        reset_rope_host_stats();
         let (cos, sin) = flux2_rope(2, 1, 1, &[2, 2, 2, 2], 2000.0).unwrap();
         assert_eq!(cos.shape, sin.shape);
-        let stats = rope_host_stats();
-        assert_eq!(stats.table_calls, 1);
+        // text_len=2 + 1×1 image tokens; axes 2+2+2+2.
+        assert_eq!(cos.shape, vec![3, 8]);
+        assert!(!cos.data.is_empty());
+    }
+
+    #[test]
+    fn rope_tables_cached_across_forwards() {
+        let mut dit = Flux2Transformer2D::zeros(Flux2ArchConfig::tiny());
+        let hidden = CudaTensor::zeros(&[1, dit.cfg.in_channels, 1, 2, 2]);
+        let enc = CudaTensor::zeros(&[1, 4, dit.cfg.joint_attention_dim]);
+        dit.forward(&hidden, &enc, 0.5, None, 2, 2).unwrap();
+        dit.forward(&hidden, &enc, 0.4, None, 2, 2).unwrap();
+        assert_eq!(dit.rope_builds, 1, "same packed size reuses tables");
+        assert_eq!(dit.rope_cache.as_ref().map(|(k, _)| *k), Some((4, 2, 2)));
+        dit.cached_rope(4, 3, 3).unwrap();
+        assert_eq!(dit.rope_builds, 2, "size change rebuilds tables");
+        dit.cached_rope(4, 3, 3).unwrap();
+        assert_eq!(dit.rope_builds, 2, "repeat of new size stays cached");
     }
 }

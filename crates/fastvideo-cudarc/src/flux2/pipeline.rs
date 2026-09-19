@@ -202,12 +202,8 @@ impl Flux2Pipeline {
                     pw,
                 )?;
                 let t_euler = std::time::Instant::now();
-                let x = latents.host_cow()?.to_vec();
-                let v = vel.host_cow()?.to_vec();
-                let next = sched
-                    .step_euler(&x, &v)
-                    .map_err(PipelineError::Message)?;
-                latents = CudaTensor::from_vec(next, latents.shape.clone())?;
+                let dt = sched.take_euler_dt().map_err(PipelineError::Message)?;
+                latents = CudaTensor::lincomb(&[(1.0, &latents), (dt, &vel)])?;
                 euler_host_ms += t_euler.elapsed().as_millis();
                 steps_ms.push(t_step.elapsed().as_millis());
             }
@@ -264,6 +260,8 @@ impl Flux2Pipeline {
             "rope_host_apply_calls": rope.apply_calls,
             "rope_host_apply_ms": rope.apply_ms,
             "rope_host_apply_elems": rope.apply_elems,
+            "rope_device_apply_calls": rope.device_apply_calls,
+            "rope_device_apply_elems": rope.device_apply_elems,
             "rope_table_calls": rope.table_calls,
             "rope_table_ms": rope.table_ms,
             "h2d_count": xfer.h2d_count,
@@ -275,9 +273,10 @@ impl Flux2Pipeline {
         crate::wan::log::info(format_args!(
             "flux2.profile text_ms={text_encode_ms} denoise_ms={denoise_ms} vae_ms={vae_decode_ms} \
              write_ms={write_frames_ms} euler_host_ms={euler_host_ms} rope_host_ms={} rope_calls={} \
-             rope_table_ms={} h2d={} ({} MiB) d2h={} ({} MiB)",
+             rope_device_calls={} rope_table_ms={} h2d={} ({} MiB) d2h={} ({} MiB)",
             rope.apply_ms,
             rope.apply_calls,
+            rope.device_apply_calls,
             rope.table_ms,
             xfer.h2d_count,
             xfer.h2d_bytes >> 20,
@@ -383,6 +382,7 @@ mod tests {
         let body = std::fs::read_to_string(&profile).unwrap();
         assert!(body.contains("text_encode_ms"), "{body}");
         assert!(body.contains("rope_host_apply_calls"), "{body}");
+        assert!(body.contains("rope_device_apply_calls"), "{body}");
     }
 
     #[test]
