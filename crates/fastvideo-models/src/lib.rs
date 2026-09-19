@@ -1,5 +1,6 @@
-//! Wan/FastWan model components. Forwards currently target Candle.
+//! Wan/FastWan and Flux2 model components. Forwards currently target Candle.
 
+pub mod flux2;
 pub mod nn;
 pub mod schedulers;
 pub mod wan;

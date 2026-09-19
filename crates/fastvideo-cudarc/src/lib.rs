@@ -9,6 +9,7 @@
 
 #![allow(unsafe_code)]
 
+pub mod flux2;
 pub mod wan;
 
 pub use wan::device::{resolve_device, DeviceError};

@@ -324,6 +324,41 @@ cmd_upstream_bench() {
     --backend "$backend" --out "$OUT/upstream-$backend.json" --video-dir "$OUT/upstream-videos/$backend" "$@"
 }
 
+# flux2-rust-bench <model> <weights> <height> <width> <steps> <guidance> <seed> <prompt> <out>
+# Times the rust `fastvideo bench` CLI (cuda-cudarc) on the same Flux2 prompt
+# as upstream_bench.py --workload t2i. Writes bench.json under <out>.
+cmd_flux2_rust_bench() {
+  local model="${1:?}" weights="${2:?}" height="${3:?}" width="${4:?}"
+  local steps="${5:?}" guidance="${6:?}" seed="${7:?}" prompt="${8:?}" out="${9:?}"
+  local bin="$ROOT/target/release/fastvideo"
+  [[ -x "$bin" ]] || die "fastvideo CLI missing — upload a --features cuda-cudarc binary to $bin"
+  mkdir -p "$out" "$LOGS"
+  log "flux2 rust bench model=$model ${height}x${width} steps=$steps guidance=$guidance"
+  export HF_HOME="$WORK/hf"
+  set +e
+  timeout --kill-after=30 "${FV_FLUX2_RUST_TIMEOUT:-1800}" "$bin" bench \
+    --model "$model" \
+    --backend cudarc \
+    --device cuda \
+    --weights "$weights" \
+    --height "$height" \
+    --width "$width" \
+    --frames 1 \
+    --steps "$steps" \
+    --guidance "$guidance" \
+    --seed "$seed" \
+    --prompt "$prompt" \
+    --output "$out" 2>&1 | tee "$LOGS/flux2-rust-bench.log"
+  local rc=${PIPESTATUS[0]}
+  set -e
+  if [[ $rc -eq 124 || $rc -eq 137 ]]; then
+    log "flux2-rust-bench TIMED OUT"
+    printf '{"stage":"flux2-rust-bench","status":"timeout"}\n' >"$OUT/flux2-rust-bench.timeout.json"
+    exit 124
+  fi
+  exit "$rc"
+}
+
 sub="${1:-}"; shift || true
 case "$sub" in
   env) cmd_env "$@" ;;
@@ -335,5 +370,13 @@ case "$sub" in
   stage) cmd_stage "$@" ;;
   upstream-install) cmd_upstream_install "$@" ;;
   upstream-bench) cmd_upstream_bench "$@" ;;
-  *) die "usage: remote.sh env|bootstrap|cublas|fetch|wait-weights|stage|upstream-install|upstream-bench" ;;
+  flux2-rust-bench) cmd_flux2_rust_bench "$@" ;;
+  *) die "usage: remote.sh env|bootstrap|cublas|fetch|wait-weights|stage|upstream-install|upstream-bench|flux2-rust-bench" ;;
 esac
+
+# Flux2 compare extras are passed through to upstream_bench.py:
+#   remote.sh upstream-bench TORCH_SDPA --model-path black-forest-labs/FLUX.2-klein-4B \
+#     --workload t2i --height 1024 --width 1024 --num-frames 1 --steps 4 --guidance 1.0
+# Rust same-box pair:
+#   remote.sh flux2-rust-bench black-forest-labs/FLUX.2-klein-4B /workspace/weights/flux2 \
+#     1024 1024 4 1.0 0 'a photo of a banana' /workspace/gpucheck-out/flux2-rust

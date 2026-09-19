@@ -4,7 +4,7 @@
 #   docker.sh builder          build the builder image (Rust + NVRTC, no GPU)
 #   docker.sh test             unit tests (gpucheck + cudarc) in the builder
 #   docker.sh nvrtc            compile every NVRTC kernel for sm 7.5–9.0 (no GPU)
-#   docker.sh dist             release binary → artifacts/gpucheck/dist/ (shipped to rented boxes)
+#   docker.sh dist             release binaries → artifacts/gpucheck/dist/ (fv-gpucheck + fastvideo CLI)
 #   docker.sh refs [--parity]  CPU-path reference dumps → artifacts/gpucheck/refs/ (saves billed GPU idle time)
 #   docker.sh image            runtime image (CUDA 12.4 runtime + binary) for NVIDIA Linux hosts
 #   docker.sh gpu <args...>    run fv-gpucheck on a local NVIDIA GPU: docker run --gpus all
@@ -68,7 +68,7 @@ BUILD_CMD='(cargo build --release -p fastvideo-gpucheck --features cuda 2>&1 | g
 cmd_test() {
   log "unit tests in $BUILDER_IMAGE"
   # shellcheck disable=SC2016
-  in_builder 'cargo test -q -p fastvideo-gpucheck -p fastvideo-cudarc --lib --bins 2>&1 | grep -E "test result|FAILED|panicked|^error" ; exit "${PIPESTATUS[0]}"'
+  in_builder 'cargo test -q -p fastvideo-gpucheck -p fastvideo-cudarc -p fastvideo-models -p fastvideo-core --lib --bins 2>&1 | grep -E "test result|FAILED|panicked|^error" ; exit "${PIPESTATUS[0]}"'
 }
 
 cmd_nvrtc() {
@@ -78,21 +78,26 @@ cmd_nvrtc() {
 }
 
 dist_fresh() {
-  [[ -x "$DIST/fv-gpucheck" && -f "$DIST/fv-gpucheck.build-id" && "$(cat "$DIST/fv-gpucheck.build-id")" == "$(fv_build_id)" ]]
+  [[ -x "$DIST/fv-gpucheck" && -x "$DIST/fastvideo" && -f "$DIST/fv-gpucheck.build-id" && "$(cat "$DIST/fv-gpucheck.build-id")" == "$(fv_build_id)" ]]
 }
+
+# Lean Flux2 / Wan generate CLI (same rustc, cuda-cudarc only).
+# shellcheck disable=SC2016
+CLI_BUILD_CMD='(cargo build --release -p fastvideo-cli --features cuda-cudarc 2>&1 | grep -E "^(error|warning: unused)|Compiling fastvideo|Finished" ; exit "${PIPESTATUS[0]}")'
 
 cmd_dist() {
   local id; id="$(fv_build_id)"
   if dist_fresh && [[ "${1:-}" != "--force" ]]; then
-    log "dist binary up to date (build $id)"
+    log "dist binaries up to date (build $id)"
     return 0
   fi
   log "release build in $BUILDER_IMAGE (build $id)"
   mkdir -p "$DIST"
-  in_builder "$BUILD_CMD && install -m 755 /target/release/fv-gpucheck /src/artifacts/gpucheck/dist/fv-gpucheck \
+  in_builder "$BUILD_CMD && $CLI_BUILD_CMD && install -m 755 /target/release/fv-gpucheck /src/artifacts/gpucheck/dist/fv-gpucheck \
+    && install -m 755 /target/release/fastvideo /src/artifacts/gpucheck/dist/fastvideo \
     && echo $id > /src/artifacts/gpucheck/dist/fv-gpucheck.build-id \
     && ldd /src/artifacts/gpucheck/dist/fv-gpucheck | grep -v -E 'linux-vdso|ld-linux' | sed 's/^/  needs /'"
-  log "dist: $DIST/fv-gpucheck"
+  log "dist: $DIST/fv-gpucheck + $DIST/fastvideo"
 }
 
 hf_snapshot() {

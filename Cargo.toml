@@ -18,7 +18,7 @@ version = "0.1.0"
 edition = "2021"
 license = "Apache-2.0"
 rust-version = "1.85"
-description = "Rust inference port of FastVideo for Wan/FastWan, running on Burn, Candle, Luminal, or cudarc."
+description = "Rust inference port of FastVideo for Wan/FastWan and Flux2, running on cudarc (primary), with Candle as a frozen oracle."
 repository = "https://github.com/zaitrarrio/fastvideo-rs"
 
 [workspace.dependencies]

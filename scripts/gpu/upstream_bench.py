@@ -34,9 +34,20 @@ def main() -> int:
     ap.add_argument("--vsa-sparsity", type=float, default=None)
     ap.add_argument("--runs", type=int, default=2, help="timed runs after one warm-up")
     ap.add_argument("--prompt", default="A golden retriever puppy playing on a sunny beach, waves in the background")
+    ap.add_argument(
+        "--workload",
+        default="t2v",
+        choices=("t2v", "t2i"),
+        help="t2v is Wan/FastWan clips; t2i is Flux2 stills (num_frames=1)",
+    )
     ap.add_argument("--out", required=True)
     ap.add_argument("--video-dir", required=True)
     args = ap.parse_args()
+    if args.workload == "t2i" and args.num_frames == 129:
+        args.num_frames = 1
+    if args.workload == "t2i" and args.height == 448 and args.width == 832:
+        args.height = 1024
+        args.width = 1024
 
     # Must be set before FastVideo is imported.
     os.environ["FASTVIDEO_ATTENTION_BACKEND"] = args.backend
@@ -45,6 +56,7 @@ def main() -> int:
 
     result: dict[str, object] = {
         "backend": args.backend,
+        "workload": args.workload,
         "model_path": args.model_path,
         "spec": {
             "height": args.height,

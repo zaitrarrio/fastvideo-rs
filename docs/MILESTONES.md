@@ -339,6 +339,13 @@ lost, because the binding constraint was never structure but tensor cores.
 Two independent experiments now say the same thing: **do not hand-write
 attention math that cuBLAS can express on this hardware.**
 
+## 2026-09-19 — Flux2 scaffolding (dev + Klein)
+
+Candle oracle + cudarc generate for FLUX.2, selected the same way as Wan.
+Klein 4B is the Vast smoke (`validate.sh run compare-flux2` vs upstream
+FastVideo `--workload t2i`). FLUX.1 is explicitly a follow-up:
+[docs/flux2-port.md](flux2-port.md).
+
 ## Totals
 
 - **42 validation runs**, **$1.79** of GPU time end to end.

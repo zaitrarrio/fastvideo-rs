@@ -9,7 +9,10 @@ pub mod sampling;
 pub use backend_kind::BackendKind;
 pub use error::{FastVideoError, Result};
 pub use generator::{BenchStats, ClipBenchStats, GenerateOutput, LoadOptions, VideoGenerator};
-pub use registry::{resolve_wan, SamplingAlgorithm, WanModelDefinition, WAN_MODEL_DEFINITIONS};
+pub use registry::{
+    resolve_model, resolve_wan, Flux2ModelDefinition, ModelDefinition, ModelFamily, SamplingAlgorithm,
+    WanModelDefinition, FLUX2_MODEL_DEFINITIONS, WAN_MODEL_DEFINITIONS,
+};
 pub use sampling::{sampling_from_definition, InferencePreset, SamplingParam, ALL_PRESETS};
 
 #[cfg(test)]
@@ -351,6 +354,42 @@ mod tests {
         )
         .unwrap();
         assert_eq!(t14.definition.preset, "wan_t2v_14b");
+    }
+
+    #[test]
+    fn flux2_registry_and_tiny_generate() {
+        let gen = VideoGenerator::from_pretrained(
+            "black-forest-labs/FLUX.2-dev",
+            LoadOptions {
+                backend: BackendKind::Cudarc,
+                tiny: true,
+                output_path: Some(persist_dir("flux2-dev-tiny")),
+                ..LoadOptions::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(gen.definition.family, crate::registry::ModelFamily::Flux2);
+        assert_eq!(gen.definition.preset, "flux2_dev");
+        assert_eq!(gen.sampling.height, 1024);
+        assert_eq!(gen.sampling.num_frames, 1);
+        let out = gen.generate_video("a banana on a table").unwrap();
+        assert!(out.frame_paths[0].ends_with(".png"));
+        assert!(std::path::Path::new(&out.frame_paths[0]).exists());
+
+        let klein = VideoGenerator::from_pretrained(
+            "black-forest-labs/FLUX.2-klein-4B",
+            LoadOptions {
+                backend: BackendKind::Candle,
+                tiny: true,
+                output_path: Some(persist_dir("flux2-klein-tiny")),
+                ..LoadOptions::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(klein.definition.preset, "flux2_klein_4b");
+        assert_eq!(klein.sampling.num_inference_steps, 4);
+        let out = klein.generate_video("a banana on a table").unwrap();
+        assert!(std::path::Path::new(&out.frame_paths[0]).exists());
     }
 
     #[test]

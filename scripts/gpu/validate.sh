@@ -7,7 +7,9 @@
 #   validate.sh run <tier> [opts]     T1-T3      rent → stages → pull artifacts → destroy
 #   validate.sh reap                             destroy every fvgpu-* instance
 #
-# tiers: kernels (T1) | parity (T2) | clip (T3) | compare (T4, + upstream FastVideo)\n#        each tier includes the ones before it.
+# tiers: kernels (T1) | parity (T2) | clip (T3) | compare (T4, Wan + upstream FastVideo)
+#        compare-flux2 (Flux2 T2I rust vs upstream FastVideo on the same box)
+#        each Wan tier includes the ones before it.
 set -euo pipefail
 # shellcheck source=scripts/gpu/lib.sh
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
@@ -48,12 +50,14 @@ tier_query() {
     # Same box runs our clip stages and upstream FastVideo: + torch wheels and
     # upstream's own copy of the weights in the HF cache.
     compare) echo "$base gpu_ram>=24 disk_space>=180 cpu_ram>=80 inet_down>=500" ;;
-    *) die "unknown tier '$1' (mathprobe|kernels|parity|clip|compare)" ;;
+    # Flux2 T2I vs upstream FastVideo (same box). Klein 4B is the default smoke.
+    compare-flux2) echo "$base gpu_ram>=24 disk_space>=180 cpu_ram>=80 inet_down>=500" ;;
+    *) die "unknown tier '$1' (mathprobe|kernels|parity|clip|compare|compare-flux2)" ;;
   esac
 }
-tier_max_dph() { case "$1" in mathprobe) echo 0.40 ;; kernels) echo 0.25 ;; parity) echo 0.40 ;; clip) echo 0.60 ;; compare) echo 0.60 ;; esac; }
-tier_max_minutes() { case "$1" in mathprobe) echo 30 ;; kernels) echo 40 ;; parity) echo 75 ;; clip) echo 180 ;; compare) echo 240 ;; esac; }
-tier_disk() { case "$1" in mathprobe) echo 40 ;; kernels) echo 40 ;; parity) echo 60 ;; clip) echo 100 ;; compare) echo 180 ;; esac; }
+tier_max_dph() { case "$1" in mathprobe) echo 0.40 ;; kernels) echo 0.25 ;; parity) echo 0.40 ;; clip) echo 0.60 ;; compare|compare-flux2) echo 0.60 ;; esac; }
+tier_max_minutes() { case "$1" in mathprobe) echo 30 ;; kernels) echo 40 ;; parity) echo 75 ;; clip) echo 180 ;; compare|compare-flux2) echo 240 ;; esac; }
+tier_disk() { case "$1" in mathprobe) echo 40 ;; kernels) echo 40 ;; parity) echo 60 ;; clip) echo 100 ;; compare|compare-flux2) echo 180 ;; esac; }
 
 usage() { sed -n '2,12p' "$0" | sed 's/^# \{0,1\}//'; exit 2; }
 
@@ -463,6 +467,12 @@ cmd_run() {
     log "uploading prebuilt fv-gpucheck (build $build_id)"
     fv_rsync_to "$HOST" "$PORT" "$DIST/" "$FV_REMOTE_DIR/target/release/"
   fi
+  # Flux2 benches the `fastvideo` CLI (`--features cuda-cudarc`). The runtime
+  # image ships fv-gpucheck; upload the CLI whenever docker.sh dist produced it.
+  if [[ -x "$DIST/fastvideo" ]]; then
+    log "uploading prebuilt fastvideo CLI for Flux2 benches"
+    fv_rsync_to "$HOST" "$PORT" "$DIST/fastvideo" "$FV_REMOTE_DIR/target/release/fastvideo"
+  fi
   # CPU-path references are cached per ref key (scripts/gpu/lib.sh fv_ref_key):
   # a hit uploads them and skips that CPU-reference stage entirely.
   REF_KEY="$(fv_ref_key)"
@@ -474,6 +484,10 @@ cmd_run() {
   local need_disk; need_disk=$(( $(tier_disk "$tier") - 10 ))
   remote_run env 120 env "$need_disk"
   remote_run bootstrap 600 bootstrap
+  if [[ "$tier" == compare-flux2 ]]; then
+    run_flux2_compare
+    return 0
+  fi
   # Downloads run in the background during the weight-free stages.
   case "$tier" in
     parity) remote_run fetch-base 120 fetch "$BASE_REPO" "$BASE_W" "transformer/*" "vae/*" ;;
@@ -580,6 +594,41 @@ cmd_run() {
     STAGE_OPTIONAL=1 remote_run "upstream-$backend" "${FV_UPSTREAM_TIMEOUT:-3600}" upstream-bench "$backend" "${ub[@]}" ${extra[@]+"${extra[@]}"} || true
   done
   log "T4 PASS"
+}
+
+# Flux2 T2I vs upstream FastVideo on the same rented box. Default is Klein 4B
+# (4-step, no guidance) so the disk/VRAM ask stays closer to the Wan compare
+# tier. Override with FV_FLUX2_REPO / FV_FLUX2_STEPS / FV_FLUX2_GUIDANCE.
+run_flux2_compare() {
+  local repo="${FV_FLUX2_REPO:-black-forest-labs/FLUX.2-klein-4B}"
+  local steps="${FV_FLUX2_STEPS:-4}"
+  local guidance="${FV_FLUX2_GUIDANCE:-1.0}"
+  local height="${FV_FLUX2_HEIGHT:-1024}"
+  local width="${FV_FLUX2_WIDTH:-1024}"
+  local prompt="${FV_FLUX2_PROMPT:-a photo of a banana on a wooden table, studio lighting}"
+  local flux_w="$WORK/weights/flux2"
+  log "Flux2 compare: repo=$repo ${height}x${width} steps=$steps guidance=$guidance"
+  remote_run fetch-flux2 120 fetch "$repo" "$flux_w" "transformer/*" "vae/*" "text_encoder/*" "tokenizer/*" "scheduler/*"
+  remote_run wait-flux2 1800 wait-weights "$flux_w" 1800 transformer vae
+  remote_run upstream-install "${FV_UPSTREAM_INSTALL_TIMEOUT:-2400}" upstream-install "${FV_TORCH_BACKEND:-cu126}"
+  local ub=(--model-path "$repo" --workload t2i --height "$height" --width "$width" --num-frames 1
+            --steps "$steps" --guidance "$guidance" --fps 1 --seed 0 --runs "${FV_UPSTREAM_RUNS:-2}"
+            --prompt "$prompt")
+  local backend
+  for backend in ${FV_UPSTREAM_BACKENDS:-TORCH_SDPA}; do
+    STAGE_OPTIONAL=1 remote_run "upstream-flux2-$backend" "${FV_UPSTREAM_TIMEOUT:-3600}" \
+      upstream-bench "$backend" "${ub[@]}" || true
+  done
+  # Rust path: `fastvideo bench` (cuda-cudarc), not fv-gpucheck. The CLI is
+  # uploaded from artifacts/gpucheck/dist/fastvideo when docker.sh dist built it.
+  local rust_bin="$FV_REMOTE_DIR/target/release/fastvideo"
+  if fv_ssh "$HOST" "$PORT" "test -x $rust_bin"; then
+    STAGE_OPTIONAL=1 remote_run rust-flux2 "${FV_FLUX2_RUST_TIMEOUT:-1800}" flux2-rust-bench \
+      "$repo" "$flux_w" "$height" "$width" "$steps" "$guidance" 0 "$prompt" "$OUTR/flux2-rust" || true
+  else
+    log "no $rust_bin on the box — rust Flux2 bench skipped (docker.sh dist builds it next to fv-gpucheck)"
+  fi
+  log "Flux2 compare PASS (see remote/upstream-*.json and remote/flux2-rust/bench.json)"
 }
 
 cmd_reap() {
