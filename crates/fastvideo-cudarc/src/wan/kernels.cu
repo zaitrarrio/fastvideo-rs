@@ -1315,7 +1315,9 @@ extern "C" __global__ void pad_axis(
 // that many squares lose the digits the variance is made of.
 // stats[2 * grp] = mean, stats[2 * grp + 1] = biased variance.
 extern "C" __global__ void group_norm_stats(const float* x, double* stats, long group_elems) {
-    extern __shared__ double sm[];
+    // Its own name: an extern __shared__ array has file linkage, and `sm` is
+    // already the float scratch of the reductions above.
+    extern __shared__ double gn_sm[];
     int tid = threadIdx.x;
     long grp = blockIdx.x;
     const float* p = x + grp * group_elems;
@@ -1325,19 +1327,19 @@ extern "C" __global__ void group_norm_stats(const float* x, double* stats, long 
         s += v;
         q += v * v;
     }
-    sm[2 * tid] = s;
-    sm[2 * tid + 1] = q;
+    gn_sm[2 * tid] = s;
+    gn_sm[2 * tid + 1] = q;
     __syncthreads();
     for (int st = blockDim.x >> 1; st > 0; st >>= 1) {
         if (tid < st) {
-            sm[2 * tid] += sm[2 * (tid + st)];
-            sm[2 * tid + 1] += sm[2 * (tid + st) + 1];
+            gn_sm[2 * tid] += gn_sm[2 * (tid + st)];
+            gn_sm[2 * tid + 1] += gn_sm[2 * (tid + st) + 1];
         }
         __syncthreads();
     }
     if (tid == 0) {
-        double mean = sm[0] / (double)group_elems;
-        double var = sm[1] / (double)group_elems - mean * mean;
+        double mean = gn_sm[0] / (double)group_elems;
+        double var = gn_sm[1] / (double)group_elems - mean * mean;
         stats[2 * grp] = mean;
         stats[2 * grp + 1] = var > 0.0 ? var : 0.0;
     }
