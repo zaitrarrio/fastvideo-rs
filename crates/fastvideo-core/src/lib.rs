@@ -8,7 +8,9 @@ pub mod sampling;
 
 pub use backend_kind::BackendKind;
 pub use error::{FastVideoError, Result};
-pub use generator::{BenchStats, ClipBenchStats, GenerateOutput, LoadOptions, VideoGenerator};
+pub use generator::{
+    median_u128, BenchStats, ClipBenchStats, GenerateOutput, LoadOptions, VideoGenerator,
+};
 pub use registry::{
     resolve_model, resolve_wan, Flux2ModelDefinition, ModelDefinition, ModelFamily, SamplingAlgorithm,
     WanModelDefinition, FLUX2_MODEL_DEFINITIONS, WAN_MODEL_DEFINITIONS,
@@ -479,5 +481,41 @@ mod tests {
         assert_eq!(a.len(), b.len());
         let db = psnr(&a, &b, 1.0).unwrap();
         assert!(db.is_infinite() || db > 60.0, "vae psnr={db}");
+    }
+
+    #[test]
+    fn median_u128_matches_python_statistics() {
+        assert_eq!(crate::median_u128(&[]), 0);
+        assert_eq!(crate::median_u128(&[7]), 7);
+        assert_eq!(crate::median_u128(&[10, 20]), 15);
+        assert_eq!(crate::median_u128(&[3, 1, 2]), 2);
+        assert_eq!(crate::median_u128(&[8, 2, 6, 4]), 5);
+    }
+
+    #[test]
+    fn flux2_tiny_bench_warm_median() {
+        let gen = VideoGenerator::from_pretrained(
+            "black-forest-labs/FLUX.2-klein-4B",
+            LoadOptions {
+                backend: BackendKind::Cudarc,
+                tiny: true,
+                output_path: Some(persist_dir("flux2-klein-tiny-bench")),
+                ..LoadOptions::default()
+            },
+        )
+        .unwrap();
+        let (out, stats) = gen
+            .bench_video_with("a banana on a table", 1, 2)
+            .unwrap();
+        assert!(std::path::Path::new(&out.frame_paths[0]).exists());
+        assert_eq!(stats.warmup, 1);
+        assert_eq!(stats.runs, 2);
+        assert_eq!(stats.runs_ms.len(), 2);
+        assert_eq!(stats.generate_ms, stats.runs_ms[1]);
+        assert_eq!(stats.median_ms, crate::median_u128(&stats.runs_ms));
+        assert_eq!(stats.min_ms, *stats.runs_ms.iter().min().unwrap());
+        assert_eq!(stats.sdpa, "dense");
+        let profile = std::path::Path::new(&gen.output_path).join("profile.json");
+        assert!(profile.exists(), "profile.json from last timed run");
     }
 }

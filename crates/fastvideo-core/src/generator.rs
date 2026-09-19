@@ -559,13 +559,20 @@ impl VideoGenerator {
 
     /// Returns `(output, load_ms, generate_ms)`. Load is Diffusers safetensors → tensors.
     fn run_cudarc(&self, prompt: &str) -> Result<(GenerateOutput, u128, u128)> {
-        if self.definition.family == ModelFamily::Flux2 {
-            return self.run_cudarc_flux2(prompt);
-        }
-        self.run_cudarc_wan(prompt)
+        let (mut loaded, load_ms) = self.load_cudarc(prompt)?;
+        let t_gen = Instant::now();
+        let frames = loaded.generate()?;
+        Ok((output_from_frames(frames), load_ms, t_gen.elapsed().as_millis()))
     }
 
-    fn run_cudarc_flux2(&self, prompt: &str) -> Result<(GenerateOutput, u128, u128)> {
+    fn load_cudarc(&self, prompt: &str) -> Result<(CudarcLoaded, u128)> {
+        if self.definition.family == ModelFamily::Flux2 {
+            return self.load_cudarc_flux2(prompt);
+        }
+        self.load_cudarc_wan(prompt)
+    }
+
+    fn load_cudarc_flux2(&self, prompt: &str) -> Result<(CudarcLoaded, u128)> {
         fastvideo_cudarc::resolve_device(&self.device)
             .map_err(|e| FastVideoError::Message(e.to_string()))?;
         eprintln!(
@@ -592,19 +599,8 @@ impl VideoGenerator {
         };
         if self.tiny {
             gen_cfg.guidance_scale = 1.0;
-            let t_gen = Instant::now();
-            let mut pipe = fastvideo_cudarc::flux2::Flux2Pipeline::tiny_for_preset(self.definition.preset);
-            let frames = pipe
-                .generate(&gen_cfg)
-                .map_err(|e| FastVideoError::Message(e.to_string()))?;
-            return Ok((
-                GenerateOutput {
-                    output_path: frames.first().cloned(),
-                    frame_paths: frames,
-                },
-                0,
-                t_gen.elapsed().as_millis(),
-            ));
+            let pipe = fastvideo_cudarc::flux2::Flux2Pipeline::tiny_for_preset(self.definition.preset);
+            return Ok((CudarcLoaded::Flux2 { pipe, cfg: gen_cfg }, 0));
         }
         let root = self.resolved_weights_dir().ok_or_else(|| {
             FastVideoError::Message(
@@ -616,24 +612,12 @@ impl VideoGenerator {
             gen_cfg.tokenizer_path = Some(tok.to_string_lossy().into_owned());
         }
         let t_load = Instant::now();
-        let mut pipe = fastvideo_cudarc::flux2::Flux2Pipeline::load(&root, self.definition.preset)
+        let pipe = fastvideo_cudarc::flux2::Flux2Pipeline::load(&root, self.definition.preset)
             .map_err(|e| FastVideoError::Message(e.to_string()))?;
-        let load_ms = t_load.elapsed().as_millis();
-        let t_gen = Instant::now();
-        let frames = pipe
-            .generate(&gen_cfg)
-            .map_err(|e| FastVideoError::Message(e.to_string()))?;
-        Ok((
-            GenerateOutput {
-                output_path: frames.first().cloned(),
-                frame_paths: frames,
-            },
-            load_ms,
-            t_gen.elapsed().as_millis(),
-        ))
+        Ok((CudarcLoaded::Flux2 { pipe, cfg: gen_cfg }, t_load.elapsed().as_millis()))
     }
 
-    fn run_cudarc_wan(&self, prompt: &str) -> Result<(GenerateOutput, u128, u128)> {
+    fn load_cudarc_wan(&self, prompt: &str) -> Result<(CudarcLoaded, u128)> {
         let is_dmd = matches!(
             self.definition.sampling,
             SamplingAlgorithm::Dmd | SamplingAlgorithm::CausalDmd
@@ -704,20 +688,8 @@ impl VideoGenerator {
             gen_cfg.guidance_scale = 1.0;
             gen_cfg.is_dmd = true;
             gen_cfg.flow_shift = 8.0;
-            let t_gen = Instant::now();
-            let mut pipe = fastvideo_cudarc::WanPipeline::tiny();
-            let frames = pipe
-                .generate(&gen_cfg)
-                .map_err(|e| FastVideoError::Message(e.to_string()))?;
-            let generate_ms = t_gen.elapsed().as_millis();
-            return Ok((
-                GenerateOutput {
-                    output_path: frames.first().cloned(),
-                    frame_paths: frames,
-                },
-                0,
-                generate_ms,
-            ));
+            let pipe = fastvideo_cudarc::WanPipeline::tiny();
+            return Ok((CudarcLoaded::Wan { pipe, cfg: gen_cfg }, 0));
         }
         let root = self.resolved_weights_dir().ok_or_else(|| {
             FastVideoError::Message(
@@ -733,54 +705,143 @@ impl VideoGenerator {
         }
         gen_cfg.tokenizer_path = Some(tok.to_string_lossy().into_owned());
         let t_load = Instant::now();
-        let mut pipe = fastvideo_cudarc::WanPipeline::load(&root, self.definition.preset)
+        let pipe = fastvideo_cudarc::WanPipeline::load(&root, self.definition.preset)
             .map_err(|e| FastVideoError::Message(e.to_string()))?;
-        let load_ms = t_load.elapsed().as_millis();
-        let t_gen = Instant::now();
-        let frames = pipe
-            .generate(&gen_cfg)
-            .map_err(|e| FastVideoError::Message(e.to_string()))?;
-        let generate_ms = t_gen.elapsed().as_millis();
-        Ok((
-            GenerateOutput {
-                output_path: frames.first().cloned(),
-                frame_paths: frames,
-            },
-            load_ms,
-            generate_ms,
-        ))
+        Ok((CudarcLoaded::Wan { pipe, cfg: gen_cfg }, t_load.elapsed().as_millis()))
     }
 
     /// Split weight materialization from sampling. Use on Vast CUDA, not laptop CPU.
+    /// One generate after load (cold). Prefer [`Self::bench_video_with`] for the
+    /// upstream-matching warmup + median protocol.
     pub fn bench_video(&self, prompt: &str) -> Result<(GenerateOutput, BenchStats)> {
-        let (out, load_ms, generate_ms) = match self.backend {
-            BackendKind::Cudarc => self.run_cudarc(prompt)?,
-            BackendKind::Candle => self.run_candle(prompt)?,
-            BackendKind::Burn => self.run_burn(prompt)?,
-            BackendKind::Luminal => self.run_luminal(prompt)?,
-            BackendKind::Host => {
-                let t0 = Instant::now();
-                let out = self.generate_reference(prompt)?;
-                (out, 0, t0.elapsed().as_millis())
+        self.bench_video_with(prompt, 0, 1)
+    }
+
+    /// Load once, discard `warmup` generates, then time `runs` generates.
+    ///
+    /// `warmup_ms` is the first discarded generate (cold when `warmup >= 1`).
+    /// `generate_ms` is the **last timed run** — the same generate that writes
+    /// `profile.json`. `median_ms` / `min_ms` are over `runs_ms` and are the
+    /// numbers to compare with upstream `median_seconds` / `min_seconds`.
+    pub fn bench_video_with(
+        &self,
+        prompt: &str,
+        warmup: u32,
+        runs: u32,
+    ) -> Result<(GenerateOutput, BenchStats)> {
+        let runs = runs.max(1);
+        match self.backend {
+            BackendKind::Cudarc => self.bench_cudarc_with(prompt, warmup, runs),
+            other => {
+                let (out, load_ms, first_ms) = match other {
+                    BackendKind::Candle => self.run_candle(prompt)?,
+                    BackendKind::Burn => self.run_burn(prompt)?,
+                    BackendKind::Luminal => self.run_luminal(prompt)?,
+                    BackendKind::Host => {
+                        let t0 = Instant::now();
+                        let out = self.generate_reference(prompt)?;
+                        (out, 0, t0.elapsed().as_millis())
+                    }
+                    BackendKind::Cudarc => unreachable!(),
+                };
+                if warmup == 0 && runs == 1 {
+                    return Ok((
+                        out.clone(),
+                        self.bench_stats(load_ms, 0, 0, vec![first_ms], &out),
+                    ));
+                }
+                // Non-cudarc backends reload per call; extra generates still
+                // produce a median so CLI --warmup/--runs stay meaningful.
+                let mut warmup_ms = 0u128;
+                if warmup > 0 {
+                    warmup_ms = first_ms;
+                    for _ in 1..warmup {
+                        let t = Instant::now();
+                        let _ = self.generate_video(prompt)?;
+                        let _ = t.elapsed();
+                    }
+                }
+                let mut runs_ms = Vec::with_capacity(runs as usize);
+                let mut last = out;
+                let start = if warmup == 0 {
+                    runs_ms.push(first_ms);
+                    1
+                } else {
+                    0
+                };
+                for _ in start..runs {
+                    let t = Instant::now();
+                    last = self.generate_video(prompt)?;
+                    runs_ms.push(t.elapsed().as_millis());
+                }
+                Ok((
+                    last.clone(),
+                    self.bench_stats(load_ms, warmup, warmup_ms, runs_ms, &last),
+                ))
             }
-        };
+        }
+    }
+
+    fn bench_cudarc_with(
+        &self,
+        prompt: &str,
+        warmup: u32,
+        runs: u32,
+    ) -> Result<(GenerateOutput, BenchStats)> {
+        let (mut loaded, load_ms) = self.load_cudarc(prompt)?;
+        let mut warmup_ms = 0u128;
+        for i in 0..warmup {
+            let t = Instant::now();
+            let _ = loaded.generate()?;
+            let dt = t.elapsed().as_millis();
+            if i == 0 {
+                warmup_ms = dt;
+            }
+        }
+        let mut runs_ms = Vec::with_capacity(runs as usize);
+        let mut last_frames = Vec::new();
+        for _ in 0..runs {
+            let t = Instant::now();
+            last_frames = loaded.generate()?;
+            runs_ms.push(t.elapsed().as_millis());
+        }
+        let out = output_from_frames(last_frames);
         Ok((
             out.clone(),
-            BenchStats {
-                model: self.model_id.clone(),
-                backend: self.backend.as_str().to_string(),
-                device: self.device.clone(),
-                dtype: self.dtype.clone().unwrap_or_else(|| "default".into()),
-                height: self.sampling.height,
-                width: self.sampling.width,
-                frames: self.sampling.num_frames,
-                steps: self.sampling.num_inference_steps,
-                load_ms,
-                generate_ms,
-                load_and_generate_ms: load_ms.saturating_add(generate_ms),
-                frames_written: out.frame_paths.len() as u32,
-            },
+            self.bench_stats(load_ms, warmup, warmup_ms, runs_ms, &out),
         ))
+    }
+
+    fn bench_stats(
+        &self,
+        load_ms: u128,
+        warmup: u32,
+        warmup_ms: u128,
+        runs_ms: Vec<u128>,
+        out: &GenerateOutput,
+    ) -> BenchStats {
+        let generate_ms = runs_ms.last().copied().unwrap_or(0);
+        BenchStats {
+            model: self.model_id.clone(),
+            backend: self.backend.as_str().to_string(),
+            device: self.device.clone(),
+            dtype: self.dtype.clone().unwrap_or_else(|| "default".into()),
+            height: self.sampling.height,
+            width: self.sampling.width,
+            frames: self.sampling.num_frames,
+            steps: self.sampling.num_inference_steps,
+            load_ms,
+            generate_ms,
+            load_and_generate_ms: load_ms.saturating_add(generate_ms),
+            frames_written: out.frame_paths.len() as u32,
+            warmup,
+            runs: runs_ms.len() as u32,
+            warmup_ms,
+            median_ms: median_u128(&runs_ms),
+            min_ms: runs_ms.iter().copied().min().unwrap_or(0),
+            runs_ms,
+            sdpa: sdpa_backend_label(),
+        }
     }
 
     /// CLIP ViT-H encode only (`image_encoder/`). Prefers cudarc when backend is cudarc.
@@ -1020,10 +1081,80 @@ pub struct BenchStats {
     pub steps: u32,
     /// Diffusers safetensors → in-memory tensors (not Hub network pull).
     pub load_ms: u128,
-    /// Sampling + decode after weights are resident.
+    /// Last timed generate (same run that writes `profile.json`). Warm when
+    /// `warmup >= 1`. Compare `median_ms` to upstream `median_seconds`, not this.
     pub generate_ms: u128,
     pub load_and_generate_ms: u128,
     pub frames_written: u32,
+    /// Discarded generates after load. First of these is the cold generate.
+    pub warmup: u32,
+    /// Timed generates after warmup.
+    pub runs: u32,
+    /// First discarded generate after load (cold when `warmup >= 1`). 0 if none.
+    pub warmup_ms: u128,
+    /// Timed generate durations, in order.
+    pub runs_ms: Vec<u128>,
+    /// Median of `runs_ms`. Headline number vs upstream `median_seconds`.
+    pub median_ms: u128,
+    /// Fastest timed generate.
+    pub min_ms: u128,
+    /// `FASTVIDEO_SDPA` value in effect (`dense` when unset).
+    pub sdpa: String,
+}
+
+/// Median of millisecond samples. Even length averages the two middle values
+/// (same as Python `statistics.median` used by `upstream_bench.py`).
+pub fn median_u128(values: &[u128]) -> u128 {
+    if values.is_empty() {
+        return 0;
+    }
+    let mut v = values.to_vec();
+    v.sort_unstable();
+    let n = v.len();
+    if n % 2 == 1 {
+        v[n / 2]
+    } else {
+        v[n / 2 - 1].saturating_add(v[n / 2]) / 2
+    }
+}
+
+fn sdpa_backend_label() -> String {
+    std::env::var("FASTVIDEO_SDPA")
+        .ok()
+        .map(|s| s.trim().to_ascii_lowercase())
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| "dense".into())
+}
+
+fn output_from_frames(frames: Vec<String>) -> GenerateOutput {
+    GenerateOutput {
+        output_path: frames.first().cloned(),
+        frame_paths: frames,
+    }
+}
+
+enum CudarcLoaded {
+    Flux2 {
+        pipe: fastvideo_cudarc::flux2::Flux2Pipeline,
+        cfg: fastvideo_cudarc::flux2::GenerateConfig,
+    },
+    Wan {
+        pipe: fastvideo_cudarc::WanPipeline,
+        cfg: fastvideo_cudarc::GenerateConfig,
+    },
+}
+
+impl CudarcLoaded {
+    fn generate(&mut self) -> Result<Vec<String>> {
+        match self {
+            Self::Flux2 { pipe, cfg } => pipe
+                .generate(cfg)
+                .map_err(|e| FastVideoError::Message(e.to_string())),
+            Self::Wan { pipe, cfg } => pipe
+                .generate(cfg)
+                .map_err(|e| FastVideoError::Message(e.to_string())),
+        }
+    }
 }
 
 #[derive(Debug, Clone)]

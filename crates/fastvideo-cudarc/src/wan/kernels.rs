@@ -889,6 +889,116 @@ extern "C" __global__ void flash_attn_f32(
     }
     O[((long)bh_idx * sq + q_i) * d + tid] = o_val / l_val;
 }
+// Memory-efficient tiled SDPA (`FASTVIDEO_SDPA=fused` / `mem_eff`).
+//
+// One block per (batch-head, query tile of 64). Streams K/V in 32-key tiles
+// through shared memory and keeps online-softmax state in registers — the
+// S×S score matrix never lands in HBM. This is NOT `flash_attn_f32`, which
+// launched one block per query row and re-read all of K/V (12–35× slower
+// than dense on Wan). Layout matches `vsa_fused_attn`: 256 threads / 8 warps,
+// warp w owns 8 queries, lane owns one key of the current tile and dim/32
+// output channels. Requires dim % 32 == 0 and dim <= 128 (Flux2 DiT is
+// D=128). Wider heads (VAE mid D=512) decline and the caller uses dense.
+#define FSDPA_BR 64
+#define FSDPA_BC 32
+extern "C" __global__ void fused_sdpa(
+    const float* Q, const float* K, const float* V, float* O,
+    int bh, int sq, int sk, int d, float scale
+) {
+    int bh_idx = blockIdx.x;
+    int q0 = (int)blockIdx.y * FSDPA_BR;
+    if (bh_idx >= bh || q0 >= sq) return;
+    int tid = threadIdx.x, warp = tid >> 5, lane = tid & 31;
+    int dpl = d >> 5;
+
+    extern __shared__ unsigned char fsdpa_smem[];
+    unsigned short* Qs = (unsigned short*)fsdpa_smem;
+    unsigned short* Ks = Qs + (long)FSDPA_BR * d;
+    unsigned short* Vs = Ks + (long)FSDPA_BC * d;
+    float* Ps = (float*)(Vs + (long)FSDPA_BC * d);
+
+    const float* qb = Q + ((long)bh_idx * sq) * d;
+    const float* kb = K + ((long)bh_idx * sk) * d;
+    const float* vb = V + ((long)bh_idx * sk) * d;
+
+    for (int i = tid; i < FSDPA_BR * d; i += blockDim.x) {
+        int slot = i / d, dd = i - slot * d;
+        int q_i = q0 + slot;
+        float val = (q_i < sq) ? qb[(long)q_i * d + dd] : 0.0f;
+        Qs[i] = fv_to_bf16(val);
+    }
+    __syncthreads();
+
+    float acc[8][4];
+    float m_run[8], l_run[8];
+    for (int qi = 0; qi < 8; qi++) {
+        m_run[qi] = -3.402823466e+38f;
+        l_run[qi] = 0.0f;
+        for (int dd = 0; dd < 4; dd++) acc[qi][dd] = 0.0f;
+    }
+    const float neg_inf = __int_as_float(0xff800000);
+
+    for (int k0 = 0; k0 < sk; k0 += FSDPA_BC) {
+        int klen = (sk - k0 < FSDPA_BC) ? (sk - k0) : FSDPA_BC;
+        for (int i = tid; i < FSDPA_BC * d; i += blockDim.x) {
+            int slot = i / d, dd = i - slot * d;
+            int k_i = k0 + slot;
+            float kv = 0.0f, vv = 0.0f;
+            if (slot < klen && k_i < sk) {
+                kv = kb[(long)k_i * d + dd];
+                vv = vb[(long)k_i * d + dd];
+            }
+            Ks[i] = fv_to_bf16(kv);
+            Vs[i] = fv_to_bf16(vv);
+        }
+        __syncthreads();
+
+        float s[8];
+        int key_ok = lane < klen;
+        for (int qi = 0; qi < 8; qi++) {
+            int qrow = warp * 8 + qi;
+            float dot = 0.0f;
+            const unsigned short* qrow_p = Qs + (long)qrow * d;
+            const unsigned short* krow_p = Ks + (long)lane * d;
+            for (int dd = 0; dd < d; dd++) dot += fv_bf16_to_f32(qrow_p[dd]) * fv_bf16_to_f32(krow_p[dd]);
+            s[qi] = key_ok ? dot * scale : neg_inf;
+        }
+        for (int qi = 0; qi < 8; qi++) {
+            float m_tile = s[qi];
+            for (int off = 16; off > 0; off >>= 1) m_tile = fmaxf(m_tile, __shfl_xor_sync(0xffffffff, m_tile, off));
+            float m_new = fmaxf(m_run[qi], m_tile);
+            float e = (s[qi] == neg_inf) ? 0.0f : expf(s[qi] - m_new);
+            Ps[(warp * 8 + qi) * FSDPA_BC + lane] = e;
+            float sum = e;
+            for (int off = 16; off > 0; off >>= 1) sum += __shfl_xor_sync(0xffffffff, sum, off);
+            float corr = (m_run[qi] == -3.402823466e+38f) ? 0.0f : expf(m_run[qi] - m_new);
+            l_run[qi] = l_run[qi] * corr + sum;
+            for (int dd = 0; dd < dpl; dd++) acc[qi][dd] *= corr;
+            m_run[qi] = m_new;
+        }
+        __syncthreads();
+        for (int qi = 0; qi < 8; qi++) {
+            int qrow = warp * 8 + qi;
+            const float* prow = Ps + (long)qrow * FSDPA_BC;
+            for (int key = 0; key < FSDPA_BC; key++) {
+                float p = prow[key];
+                if (p == 0.0f) continue;
+                const unsigned short* vrow = Vs + (long)key * d;
+                for (int dd = 0; dd < dpl; dd++) acc[qi][dd] += p * fv_bf16_to_f32(vrow[lane * dpl + dd]);
+            }
+        }
+        __syncthreads();
+    }
+
+    for (int qi = 0; qi < 8; qi++) {
+        int qrow = warp * 8 + qi;
+        int q_i = q0 + qrow;
+        if (q_i >= sq) continue;
+        float inv = l_run[qi] > 0.0f ? 1.0f / l_run[qi] : 0.0f;
+        float* orow = O + ((long)bh_idx * sq + q_i) * d;
+        for (int dd = 0; dd < dpl; dd++) orow[lane * dpl + dd] = acc[qi][dd] * inv;
+    }
+}
 "#;
 
 /// Declares [`KernelFns`] and [`KERNEL_NAMES`] from one list, so a kernel
@@ -945,6 +1055,7 @@ kernel_fns!(
     temporal_unfold,
     index_select_rows,
     flash_attn_f32,
+    fused_sdpa,
     vsa_tile_mean,
     vsa_topk,
     vsa_gather_kv,
@@ -1009,6 +1120,26 @@ pub fn cfg_flash(bh: usize, sq: usize, d: usize) -> LaunchConfig {
         grid_dim: ((bh * sq).max(1) as u32, 1, 1),
         block_dim: (d_u, 1, 1),
         shared_mem_bytes: smem_bytes,
+    }
+}
+
+/// Query-tiled fused SDPA: grid = (bh, ceil(sq/64)), 256 threads.
+/// Shared: Q tile bf16 + K/V tile bf16 + P f32. `d` must be 32..=128, %32==0.
+pub const FUSED_SDPA_BR: usize = 64;
+pub const FUSED_SDPA_BC: usize = 32;
+pub const FUSED_SDPA_THREADS: u32 = 256;
+
+pub fn cfg_fused_sdpa(bh: usize, sq: usize, d: usize) -> LaunchConfig {
+    let q_tiles = ((sq + FUSED_SDPA_BR - 1) / FUSED_SDPA_BR).max(1) as u32;
+    let d_u = d as u32;
+    // Qs bf16[BR*d] + Ks bf16[BC*d] + Vs bf16[BC*d] + Ps f32[BR*BC]
+    let smem_bytes = (FUSED_SDPA_BR * d_u as usize + 2 * FUSED_SDPA_BC * d_u as usize)
+        * std::mem::size_of::<u16>()
+        + FUSED_SDPA_BR * FUSED_SDPA_BC * std::mem::size_of::<f32>();
+    LaunchConfig {
+        grid_dim: (bh.max(1) as u32, q_tiles, 1),
+        block_dim: (FUSED_SDPA_THREADS, 1, 1),
+        shared_mem_bytes: smem_bytes as u32,
     }
 }
 

@@ -69,7 +69,24 @@ scripts/gpu/validate.sh run compare-flux2  # Flux2 rust vs upstream FastVideo
 
 Flux2 compare knobs: `FV_FLUX2_REPO` (default `black-forest-labs/FLUX.2-klein-4B`),
 `FV_FLUX2_STEPS` (4), `FV_FLUX2_GUIDANCE` (1.0), `FV_FLUX2_HEIGHT` / `FV_FLUX2_WIDTH`
-(1024), `FV_FLUX2_PROMPT`. Rust generate uses real Qwen3/Mistral3 text + the
+(1024), `FV_FLUX2_PROMPT`. Rust `fastvideo bench` now matches upstream's
+warm-median protocol: `--warmup` (default 1) + `--runs` (default 2). Override
+with `FV_FLUX2_WARMUP` / `FV_FLUX2_RUNS`, or set `FV_UPSTREAM_RUNS` to move
+both sides together. Compare rust `median_ms` to upstream `median_seconds`.
+`profile.json` is the last timed rust generate.
+
+SDPA A/B (default stays `dense`, same as tag `flux2-rope-p0-pre-fused-sdpa`):
+
+```bash
+FASTVIDEO_SDPA=dense FV_UPSTREAM_RUNS=2 scripts/gpu/validate.sh run compare-flux2
+FASTVIDEO_SDPA=fused FV_UPSTREAM_RUNS=2 scripts/gpu/validate.sh run compare-flux2
+```
+
+Do **not** set `FASTVIDEO_SDPA=flash` (12–35× slower than dense on Wan).
+`fused` / `mem_eff` is the query-tiled online-softmax path. See
+[docs/flux2-generate-gap.md](../../docs/flux2-generate-gap.md).
+
+Rust generate uses real Qwen3/Mistral3 text + the
 full 2D VAE when those shards load; `FASTVIDEO_FLUX2_DUMMY_TEXT=1` and
 `FASTVIDEO_FLUX2_TEXT_LEN` are A/B overrides. `docker.sh dist` builds
 `fv-gpucheck` and the `fastvideo` CLI; the CLI is what `remote.sh

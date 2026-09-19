@@ -269,6 +269,8 @@ impl Flux2Pipeline {
             "d2h_count": xfer.d2h_count,
             "d2h_mib": xfer.d2h_bytes >> 20,
             "host_fallbacks": xfer.host_fallbacks,
+            "sdpa": crate::wan::nn::sdpa_backend(),
+            "profile_run": "this generate (last timed run when used from bench --runs)",
         });
         crate::wan::log::info(format_args!(
             "flux2.profile text_ms={text_encode_ms} denoise_ms={denoise_ms} vae_ms={vae_decode_ms} \

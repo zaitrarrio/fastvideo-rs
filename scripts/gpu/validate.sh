@@ -614,6 +614,11 @@ run_flux2_compare() {
   remote_run fetch-flux2 120 fetch "$repo" "$flux_w" "transformer/*" "vae/*" "text_encoder/*" "tokenizer/*" "scheduler/*"
   remote_run wait-flux2 1800 wait-weights "$flux_w" 1800 transformer vae
   remote_run upstream-install "${FV_UPSTREAM_INSTALL_TIMEOUT:-2400}" upstream-install "${FV_TORCH_BACKEND:-cu126}"
+  # Warm/median: rust `fastvideo bench --warmup/--runs` matches upstream_bench.py
+  # (1 discarded generate + N timed). Override rust independently with
+  # FV_FLUX2_WARMUP / FV_FLUX2_RUNS; otherwise both sides use FV_UPSTREAM_RUNS.
+  export FV_FLUX2_WARMUP="${FV_FLUX2_WARMUP:-1}"
+  export FV_FLUX2_RUNS="${FV_FLUX2_RUNS:-${FV_UPSTREAM_RUNS:-2}}"
   local ub=(--model-path "$repo" --workload t2i --height "$height" --width "$width" --num-frames 1
             --steps "$steps" --guidance "$guidance" --fps 1 --seed 0 --runs "${FV_UPSTREAM_RUNS:-2}"
             --prompt "$prompt")

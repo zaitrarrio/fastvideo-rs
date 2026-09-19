@@ -13,9 +13,12 @@ workload (1024×1024, 4 steps, guidance 1.0). Measured after the I64 loader skip
 Log: `sdpa device dense B=1 H=24 Sq=4608 Sk=4608 D=128 query_chunk=2427; gemm=Bf16 resident=true`.
 
 This note does **not** pick a single root cause. It ranks several, with code
-evidence. P0 (device DiT RoPE + cached tables + on-device Euler) is in tree;
-re-run `compare-flux2` to measure the remaining gap. Do not treat the 23.4 s
-figure as post-P0.
+evidence. P0 (device DiT RoPE + cached tables + on-device Euler) is tagged
+`flux2-rope-p0-pre-fused-sdpa` (commit fdd9b7f): cold generate after RoPE was
+~7.55 s vs upstream TORCH_SDPA ~9.25 s median on RTX 3090 (`rope_host=0`,
+`rope_device_calls=200`). This change adds a warm-median rust bench and an
+opt-in `FASTVIDEO_SDPA=fused` path so those two can be A/B’d fairly. Do not
+treat the 23.4 s figure as post-P0.
 
 ## 1. Timing scopes (apples-to-apples)
 
@@ -34,8 +37,13 @@ does, in order:
 5. **Full 2D VAE decode**
 6. `write_frames`: device→host + one 1024×1024 PNG
 
-`fastvideo bench` / `remote.sh flux2-rust-bench` is **one cold generate**. No
-warmup, no explicit `cudaDeviceSynchronize` (PNG download is a sync).
+`fastvideo bench` / `remote.sh flux2-rust-bench` now matches upstream: load
+once, discard `--warmup` generates (default 1), then time `--runs` generates
+(default 2) and report `median_ms` / `min_ms`. `generate_ms` is the **last
+timed run** (same generate that writes `profile.json`). `warmup_ms` is the
+first discarded generate (cold). Override with `--warmup` / `--runs` or
+`FV_FLUX2_WARMUP` / `FV_FLUX2_RUNS` (the latter defaults to `FV_UPSTREAM_RUNS`).
+No explicit `cudaDeviceSynchronize` (PNG download is a sync).
 
 ### Upstream `median_seconds`
 
@@ -91,12 +99,26 @@ still leaving the device. CPU unit tests still take the host twin and increment
 `nn::scaled_dot_product_attention` defaults to `FASTVIDEO_SDPA=dense`:
 strided-batched cuBLAS `Q@Kᵀ` + softmax + `P@V`, query-chunked so the score
 buffer stays under 256M elements (`query_chunk = 256M / (B·H·Sk) = 2427` at
-this shape). bf16 probabilities when `gemm=Bf16`.
+this shape). bf16 probabilities when `gemm=Bf16`. **Leave this as the
+default** so the `flux2-rope-p0-pre-fused-sdpa` tag stays comparable.
 
-The in-tree `FASTVIDEO_SDPA=flash` kernel is **not** a win. Wan clip A/B
-(`docs/MILESTONES.md`, 2026-09-17) measured **12–35× slower** than dense
-because it launches one block per query row and re-reads K/V. Do not flip
-that flag for Flux2.
+`FASTVIDEO_SDPA=fused` (alias `mem_eff`) is the opt-in fused / memory-efficient
+path: one block per (batch-head, query tile of 64), K/V streamed in 32-key
+tiles, online softmax in registers. The S×S score matrix never lands in HBM.
+It is **not** the in-tree `flash` kernel. Typical Flux2 DiT shape
+`B=1 H=24 S=4608 D=128`, BF16 storage, `causal=false` is in range. Heads
+wider than 128 (VAE mid, D=512) fall back to dense. Numerics are generate-close
+(bf16 smem), not bit-exact vs dense.
+
+The in-tree `FASTVIDEO_SDPA=flash` kernel is **not** a win and must **not**
+be used as “fused”. Wan clip A/B (`docs/MILESTONES.md`, 2026-09-17) measured
+**12–35× slower** than dense because it launches one block per query row and
+re-reads K/V. Do not flip that flag for Flux2. A later VSA fused kernel with
+query tiles still lost ~8× to cuBLAS without tensor-core MMA
+(`decision-log.md`, FVID-2026-09-18-fused-block-sparse-rejected). The `fused`
+A/B exists to measure whether avoiding the 1 GiB score matrix at 4608 beats
+dense on this stack; if it loses, the next step is `mma.sync` / a cuDNN graph
+SDPA, not `flash`.
 
 ### DiT RoPE (P0 done — was the strongest code-level finding)
 
@@ -192,7 +214,7 @@ launches**, not missing FLOPs.
 | 3 | **Unfused double-stream QKV + kernel-launch tax** | 6 separate linears + `cat` + transpose + narrow per double block; many 1-op kernels vs PyTorch fused graphs / compile | **~2–5 s** | Shows up as leftover `denoise_ms` after P0. |
 | 4 | **Qwen3 encode overhead** | Host NeoX tables + 36 mask uploads + host layer stack | **~1–3 s** extra vs HF | Inside both timings; rust-only waste is the host tables/masks. |
 | 5 | **VAE mid attn as H=1,D=512 @ 16k tokens** | First SDPA log hides this; one 16384²×512 dense | **~0.5–2 s** | Once per generate. |
-| 6 | **Cold bench vs warmed median** | rust 1 run; upstream warmup + median of 2 | **~0.5–2 s** | Re-bench rust with a discarded warmup to isolate. |
+| 6 | **Cold bench vs warmed median** | rust now warmup + median of 2 (same as upstream) | **~0.5–2 s (isolated)** | Compare `median_ms` to `median_seconds`. |
 | 7 | Euler + unpack + PNG | Device Euler in P0; unpack + one PNG remain | **≪0.3 s** | Real, not ranked as the gap. |
 
 Discarded as *the* explanation: “generate includes VAE/text and upstream
@@ -223,16 +245,43 @@ Read `remote/flux2-rust/profile.json` (and `flux2.profile` in the rust log).
 Overrides: `FV_FLUX2_STEPS=4`, `FV_FLUX2_HEIGHT=1024`, `FV_FLUX2_WIDTH=1024`.
 Do **not** set `FASTVIDEO_SDPA=flash`.
 
-### P1 — after profile says RoPE is gone and denoise is still ~2×
+### P1 — fused SDPA A/B (in this change) + leftover DiT work
 
-1. **Do not enable in-tree flash.** Write a real FA-2 / cuDNN SDPA, or bind
-   PyTorch’s mem-efficient path, if `denoise_ms` is still SDPA-bound at 4608.
-2. Fuse double-stream `to_q/k/v` and `add_q/k/v` (Wan already has
-   `Linear::load_fused`).
-3. Text: build the causal mask once; move NeoX tables to device; `cat` stacked
+1. **Warm / median rust bench** — `fastvideo bench --warmup 1 --runs 2` (CLI
+   defaults). Headline field: `median_ms`.
+2. **Opt-in fused SDPA** — `FASTVIDEO_SDPA=fused` (alias `mem_eff`). Default
+   remains `dense`. Do **not** set `flash`.
+3. Fuse double-stream `to_q/k/v` and `add_q/k/v` (Wan already has
+   `Linear::load_fused`) if `denoise_ms` is still ~2× after the fused A/B.
+4. Text: build the causal mask once; move NeoX tables to device; `cat` stacked
    layers on device.
-4. Add a rust warmup (or `bench --runs N`) so the headline number matches
-   upstream `median_seconds`.
+
+### How to A/B fused vs dense (warm median)
+
+Same box, same prompt / steps as the RoPE baseline. Compare rust `median_ms`
+to upstream `median_seconds` (both exclude load; both include text + VAE + save).
+
+```bash
+# BEFORE (dense, warm median) — same as tag flux2-rope-p0-pre-fused-sdpa + new warm flags
+FASTVIDEO_SDPA=dense FV_UPSTREAM_RUNS=2 scripts/gpu/validate.sh run compare-flux2
+
+# AFTER
+FASTVIDEO_SDPA=fused FV_UPSTREAM_RUNS=2 scripts/gpu/validate.sh run compare-flux2
+```
+
+Overrides: `FV_FLUX2_WARMUP` (default 1), `FV_FLUX2_RUNS` (default
+`FV_UPSTREAM_RUNS` / 2), `FV_FLUX2_STEPS=4`, `FV_FLUX2_HEIGHT=1024`,
+`FV_FLUX2_WIDTH=1024`.
+
+Report fields:
+
+| Side | Load | Headline generate | Profile |
+| --- | --- | --- | --- |
+| Rust `remote/flux2-rust/bench.json` | `load_ms` | **`median_ms`** (also `min_ms`, `runs_ms[]`, `warmup_ms` = cold) | `profile.json` = last timed run (`profile_run`) |
+| Upstream `remote/upstream-TORCH_SDPA.json` | `load_seconds` | **`median_seconds`** (`min_seconds`, `runs[]`, `warmup_seconds`) | — |
+
+`generate_ms` on the rust side is the last timed run, **not** the headline.
+Do **not** set `FASTVIDEO_SDPA=flash`.
 
 ### P2 — later / quality
 

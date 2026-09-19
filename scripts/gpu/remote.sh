@@ -333,7 +333,9 @@ cmd_flux2_rust_bench() {
   local bin="$ROOT/target/release/fastvideo"
   [[ -x "$bin" ]] || die "fastvideo CLI missing — upload a --features cuda-cudarc binary to $bin"
   mkdir -p "$out" "$LOGS"
-  log "flux2 rust bench model=$model ${height}x${width} steps=$steps guidance=$guidance"
+  local warmup="${FV_FLUX2_WARMUP:-1}"
+  local runs="${FV_FLUX2_RUNS:-${FV_UPSTREAM_RUNS:-2}}"
+  log "flux2 rust bench model=$model ${height}x${width} steps=$steps guidance=$guidance warmup=$warmup runs=$runs sdpa=${FASTVIDEO_SDPA:-dense}"
   export HF_HOME="$WORK/hf"
   set +e
   timeout --kill-after=30 "${FV_FLUX2_RUST_TIMEOUT:-1800}" "$bin" bench \
@@ -348,6 +350,8 @@ cmd_flux2_rust_bench() {
     --guidance "$guidance" \
     --seed "$seed" \
     --prompt "$prompt" \
+    --warmup "$warmup" \
+    --runs "$runs" \
     --output "$out" 2>&1 | tee "$LOGS/flux2-rust-bench.log"
   local rc=${PIPESTATUS[0]}
   set -e
@@ -377,6 +381,6 @@ esac
 # Flux2 compare extras are passed through to upstream_bench.py:
 #   remote.sh upstream-bench TORCH_SDPA --model-path black-forest-labs/FLUX.2-klein-4B \
 #     --workload t2i --height 1024 --width 1024 --num-frames 1 --steps 4 --guidance 1.0
-# Rust same-box pair:
+# Rust same-box pair (warm median; FV_FLUX2_WARMUP / FV_FLUX2_RUNS / FV_UPSTREAM_RUNS):
 #   remote.sh flux2-rust-bench black-forest-labs/FLUX.2-klein-4B /workspace/weights/flux2 \
 #     1024 1024 4 1.0 0 'a photo of a banana' /workspace/gpucheck-out/flux2-rust

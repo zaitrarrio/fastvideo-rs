@@ -248,7 +248,9 @@ fn sp_world() -> usize {
 }
 
 /// `FASTVIDEO_SDPA`: `dense` (default: cuBLAS QKᵀ + softmax + PV, query-chunked
-/// to bound memory), `flash` (tiled NVRTC kernel), `host` (CPU runs only).
+/// to bound memory), `fused` / `mem_eff` (query-tiled online-softmax, no S×S
+/// HBM scores), `flash` (legacy per-row NVRTC kernel — **do not use**; 12–35×
+/// slower than dense on Wan), `host` (CPU runs only).
 pub fn sdpa_backend() -> String {
     SDPA_BACKEND_CACHE.get_or_init(|| super::envflag::string_flag("FASTVIDEO_SDPA", "dense"))
 }
@@ -328,6 +330,15 @@ pub fn scaled_dot_product_attention_masked(
             if sdpa_backend() == "host" {
                 return super::attn::flash_style_sdpa_host(q, k, v, scale);
             }
+            if super::attn::is_fused_sdpa_backend(&sdpa_backend()) {
+                if let Some(out) = super::attn::device_fused_sdpa(q, k, v, scale)? {
+                    return Ok(out);
+                }
+                // CPU / unsupported head dim: same online-softmax algorithm.
+                if !super::device::has_live_device() {
+                    return super::attn::flash_style_sdpa_host(q, k, v, scale);
+                }
+            }
             if sdpa_backend() == "flash" {
                 if let Some(out) = super::attn::device_flash_sdpa(q, k, v, scale)? {
                     return Ok(out);
@@ -365,4 +376,52 @@ pub fn conv2d(xs: &CudaTensor, kernel: &CudaTensor, padding: usize, stride: usiz
 /// CPU-only helper guard: call before host-only algorithms with no kernel.
 pub(crate) fn host_only_op(op: &'static str, detail: impl std::fmt::Display) -> Result<()> {
     stats::host_fallback(op, detail)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::Mutex;
+
+    static ENV_LOCK: Mutex<()> = Mutex::new(());
+
+    #[test]
+    fn sdpa_default_is_dense() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let prev = std::env::var("FASTVIDEO_SDPA").ok();
+        std::env::remove_var("FASTVIDEO_SDPA");
+        SDPA_BACKEND_CACHE.reset();
+        assert_eq!(sdpa_backend(), "dense");
+        match prev {
+            Some(v) => std::env::set_var("FASTVIDEO_SDPA", v),
+            None => std::env::remove_var("FASTVIDEO_SDPA"),
+        }
+        SDPA_BACKEND_CACHE.reset();
+    }
+
+    #[test]
+    fn fused_alias_selects_host_online_softmax() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let prev = std::env::var("FASTVIDEO_SDPA").ok();
+        std::env::set_var("FASTVIDEO_SDPA", "fused");
+        SDPA_BACKEND_CACHE.reset();
+        assert!(super::super::attn::is_fused_sdpa_backend(&sdpa_backend()));
+        let q = CudaTensor::from_vec((0..24).map(|x| (x as f32) * 0.01).collect(), vec![1, 2, 3, 4]).unwrap();
+        let dense = {
+            std::env::set_var("FASTVIDEO_SDPA", "dense");
+            SDPA_BACKEND_CACHE.reset();
+            scaled_dot_product_attention(&q, &q, &q, None).unwrap()
+        };
+        std::env::set_var("FASTVIDEO_SDPA", "mem_eff");
+        SDPA_BACKEND_CACHE.reset();
+        let fused = scaled_dot_product_attention(&q, &q, &q, None).unwrap();
+        for (a, b) in dense.data.iter().zip(&fused.data) {
+            assert!((a - b).abs() < 1e-5, "{a} vs {b}");
+        }
+        match prev {
+            Some(v) => std::env::set_var("FASTVIDEO_SDPA", v),
+            None => std::env::remove_var("FASTVIDEO_SDPA"),
+        }
+        SDPA_BACKEND_CACHE.reset();
+    }
 }

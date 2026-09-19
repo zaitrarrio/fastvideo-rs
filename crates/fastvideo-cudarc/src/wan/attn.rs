@@ -1,5 +1,6 @@
-//! Attention kernels for Wan: device dense (default), device flash (opt-in),
-//! and host implementations for CPU runs.
+//! Attention kernels for Wan: device dense (default), device fused / mem-eff
+//! (opt-in `FASTVIDEO_SDPA=fused`), device flash (opt-in, slow — do not use
+//! as the fused path), and host implementations for CPU runs.
 
 #[cfg(feature = "cuda")]
 use std::sync::atomic::AtomicBool;
@@ -15,6 +16,17 @@ fn msg(s: impl Into<String>) -> TensorError {
 /// memory is `(2*32*d + d) * 4` bytes; d=384 (the Wan VAE mid-block) is
 /// rejected by the driver with CUDA_ERROR_INVALID_VALUE.
 pub const FLASH_MAX_HEAD_DIM: usize = 128;
+
+/// Head-dim window the query-tiled fused kernel accepts (same as flash: one
+/// output dim per lane of a 32-thread warp, up to 4 dims/lane).
+pub const FUSED_MAX_HEAD_DIM: usize = 128;
+
+/// Canonical `FASTVIDEO_SDPA` values that select [`device_fused_sdpa`].
+/// `flash` is intentionally **not** included — that kernel is 12–35× slower
+/// than dense and must not be used as the fused A/B path.
+pub fn is_fused_sdpa_backend(name: &str) -> bool {
+    matches!(name, "fused" | "mem_eff")
+}
 
 /// Largest attention-score buffer (elements) materialized at once by the dense
 /// path; longer queries are processed in chunks that address Q/out in place.
@@ -66,6 +78,45 @@ pub fn device_flash_sdpa(q: &CudaTensor, k: &CudaTensor, v: &CudaTensor, scale: 
 
 #[cfg(not(feature = "cuda"))]
 pub fn device_flash_sdpa(_q: &CudaTensor, _k: &CudaTensor, _v: &CudaTensor, _scale: Option<f32>) -> Result<Option<CudaTensor>> {
+    Ok(None)
+}
+
+/// Query-tiled memory-efficient SDPA (`FASTVIDEO_SDPA=fused`). `None` when the
+/// head dim is outside the kernel's limits or no device is expected.
+///
+/// This is **not** [`device_flash_sdpa`]: it amortises each K/V tile over 64
+/// queries. Numerics match dense to generate tolerance (bf16 smem storage).
+#[cfg(feature = "cuda")]
+pub fn device_fused_sdpa(q: &CudaTensor, k: &CudaTensor, v: &CudaTensor, scale: Option<f32>) -> Result<Option<CudaTensor>> {
+    let Some((b, h, sq, sk, d)) = bhsd(q, k, v) else { return Ok(None) };
+    if d == 0 || d % 32 != 0 || d > FUSED_MAX_HEAD_DIM {
+        return Ok(None);
+    }
+    let (Some(qd), Some(kd), Some(vd)) = (q.dev()?, k.dev()?, v.dev()?) else {
+        return Ok(None);
+    };
+    let dev = super::device::global_device().ok_or_else(|| msg("no device"))?;
+    let scale = scale.unwrap_or(1.0 / (d as f32).sqrt());
+    let bh = b * h;
+    static ONCE: AtomicBool = AtomicBool::new(false);
+    super::log::info_once(
+        &ONCE,
+        format_args!("sdpa: GPU fused/mem_eff B={b} H={h} Sq={sq} Sk={sk} D={d} q_tile=64 k_tile=32"),
+    );
+    let mut out = super::ops::alloc(bh * sq * d)?;
+    let (bh_i, sq_i, sk_i, d_i) = (bh as i32, sq as i32, sk as i32, d as i32);
+    super::kernels::launch!(
+        dev.stream,
+        &dev.kernels.fused_sdpa,
+        super::kernels::cfg_fused_sdpa(bh, sq, d);
+        &*qd, &*kd, &*vd, &mut out, &bh_i, &sq_i, &sk_i, &d_i, &scale
+    )
+    .map_err(|e| msg(e.to_string()))?;
+    Ok(Some(CudaTensor::from_device_slice(out, vec![b, h, sq, d])?))
+}
+
+#[cfg(not(feature = "cuda"))]
+pub fn device_fused_sdpa(_q: &CudaTensor, _k: &CudaTensor, _v: &CudaTensor, _scale: Option<f32>) -> Result<Option<CudaTensor>> {
     Ok(None)
 }
 
@@ -242,6 +293,35 @@ mod tests {
         let flash = flash_style_sdpa_host(&q, &q, &q, None).unwrap();
         for (a, b) in dense.data.iter().zip(&flash.data) {
             assert!((a - b).abs() < 1e-5, "{a} vs {b}");
+        }
+    }
+
+    #[test]
+    fn fused_backend_names() {
+        assert!(is_fused_sdpa_backend("fused"));
+        assert!(is_fused_sdpa_backend("mem_eff"));
+        assert!(!is_fused_sdpa_backend("dense"));
+        assert!(!is_fused_sdpa_backend("flash"));
+        assert!(!is_fused_sdpa_backend("cudnn"));
+    }
+
+    #[test]
+    fn fused_declines_without_device() {
+        let q = CudaTensor::from_vec((0..24).map(|x| (x as f32) * 0.01).collect(), vec![1, 2, 3, 4]).unwrap();
+        assert!(device_fused_sdpa(&q, &q, &q, None).unwrap().is_none());
+    }
+
+    #[test]
+    fn fused_host_matches_dense_flux2_ish_shape() {
+        // B=1 H=2 S=8 D=4 — same algorithm as the device fused kernel.
+        let n = 1 * 2 * 8 * 4;
+        let q = CudaTensor::from_vec((0..n).map(|x| (x as f32) * 0.02 - 0.3).collect(), vec![1, 2, 8, 4]).unwrap();
+        let k = CudaTensor::from_vec((0..n).map(|x| (x as f32) * 0.01 + 0.1).collect(), vec![1, 2, 8, 4]).unwrap();
+        let v = CudaTensor::from_vec((0..n).map(|x| (x as f32) * 0.015).collect(), vec![1, 2, 8, 4]).unwrap();
+        let dense = scaled_dot_product_attention(&q, &k, &v, None).unwrap();
+        let fused = flash_style_sdpa_host(&q, &k, &v, None).unwrap();
+        for (a, b) in dense.data.iter().zip(&fused.data) {
+            assert!((a - b).abs() < 1e-4, "{a} vs {b}");
         }
     }
 }

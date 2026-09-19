@@ -636,6 +636,12 @@ pub fn run(report: &mut Report, lim: Limits, seed: u64) -> StageResult<()> {
                 let got = attn::device_flash_sdpa(&qt, &kt, &vt, Some(scale))?.ok_or_else(|| anyhow::anyhow!("flash declined"))?;
                 c.cmp(&format!("flash_sdpa_{tag}"), &host_of(&got)?, &want, op.max(1e-4))?;
             }
+            if d % 32 == 0 && d <= attn::FUSED_MAX_HEAD_DIM {
+                let got = attn::device_fused_sdpa(&qt, &kt, &vt, Some(scale))?
+                    .ok_or_else(|| anyhow::anyhow!("fused sdpa declined on a live device"))?;
+                // bf16 smem storage: same class of error as flash / fast-mode GEMM.
+                c.cmp(&format!("fused_sdpa_{tag}"), &host_of(&got)?, &want, gemm.max(op).max(1e-3))?;
+            }
         }
         Ok(())
     })?;

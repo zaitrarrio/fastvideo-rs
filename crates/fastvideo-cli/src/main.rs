@@ -165,6 +165,14 @@ struct BenchArgs {
     /// Only time CLIP ViT-H `image_encoder/` (no DiT).
     #[arg(long, default_value_t = false)]
     clip_only: bool,
+    /// Discarded generates after load (default 1, matching upstream).
+    /// The first is the cold generate (`warmup_ms` in bench.json).
+    #[arg(long, default_value_t = 1)]
+    warmup: u32,
+    /// Timed generates after warmup (default 2, matching upstream).
+    /// `median_ms` / `min_ms` are over these; `profile.json` is the last one.
+    #[arg(long, default_value_t = 2)]
+    runs: u32,
 }
 
 #[derive(clap::Args)]
@@ -318,7 +326,7 @@ fn main() -> Result<()> {
                     }
                 }
             } else {
-                match gen.bench_video(&args.prompt) {
+                match gen.bench_video_with(&args.prompt, args.warmup, args.runs) {
                     Ok((out, stats)) => {
                         let json = serde_json::json!({
                             "model": stats.model,
@@ -334,11 +342,27 @@ fn main() -> Result<()> {
                             "load_and_generate_ms": stats.load_and_generate_ms,
                             "frames_written": stats.frames_written,
                             "first_frame": out.frame_paths.first(),
+                            "warmup": stats.warmup,
+                            "runs": stats.runs,
+                            "warmup_ms": stats.warmup_ms,
+                            "runs_ms": stats.runs_ms,
+                            "median_ms": stats.median_ms,
+                            "min_ms": stats.min_ms,
+                            "sdpa": stats.sdpa,
+                            "profile_run": "last_timed",
+                            "generate_ms_meaning": "last timed run (same generate as profile.json); warm when warmup>=1",
+                            "warmup_ms_meaning": "first discarded generate after load (cold). 0 if warmup=0",
+                            "median_ms_meaning": "median of runs_ms; compare to upstream median_seconds",
                         });
                         println!("{json}");
                         eprintln!(
-                            "bench load_ms={} generate_ms={} total_ms={}",
-                            stats.load_ms, stats.generate_ms, stats.load_and_generate_ms
+                            "bench load_ms={} warmup_ms={} median_ms={} min_ms={} generate_ms={} (last timed) total_ms={}",
+                            stats.load_ms,
+                            stats.warmup_ms,
+                            stats.median_ms,
+                            stats.min_ms,
+                            stats.generate_ms,
+                            stats.load_and_generate_ms
                         );
                         let sidecar_dir = args.output.clone().or_else(|| {
                             out.frame_paths.first().and_then(|p| {
@@ -415,4 +439,44 @@ fn main() -> Result<()> {
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use clap::Parser;
+
+    #[test]
+    fn bench_defaults_match_upstream_warm_median() {
+        let cli = Cli::try_parse_from([
+            "fastvideo",
+            "bench",
+            "--model",
+            "black-forest-labs/FLUX.2-klein-4B",
+        ])
+        .unwrap();
+        let Commands::Bench(args) = cli.command else {
+            panic!("expected bench");
+        };
+        assert_eq!(args.warmup, 1);
+        assert_eq!(args.runs, 2);
+    }
+
+    #[test]
+    fn bench_warmup_runs_override() {
+        let cli = Cli::try_parse_from([
+            "fastvideo",
+            "bench",
+            "--warmup",
+            "0",
+            "--runs",
+            "3",
+        ])
+        .unwrap();
+        let Commands::Bench(args) = cli.command else {
+            panic!("expected bench");
+        };
+        assert_eq!(args.warmup, 0);
+        assert_eq!(args.runs, 3);
+    }
 }

@@ -89,12 +89,14 @@ What the tier does on one box:
 
 Overrides: `FV_FLUX2_REPO`, `FV_FLUX2_STEPS`, `FV_FLUX2_GUIDANCE`,
 `FV_FLUX2_HEIGHT`, `FV_FLUX2_WIDTH`, `FV_FLUX2_PROMPT`, `FV_UPSTREAM_RUNS`,
-`FV_UPSTREAM_BACKENDS`. Prompts also live in `scripts/gpu/prompts-flux2.json`.
+`FV_FLUX2_WARMUP`, `FV_FLUX2_RUNS`, `FV_UPSTREAM_BACKENDS`, `FASTVIDEO_SDPA`
+(`dense` default; `fused` / `mem_eff` for the A/B — never `flash`).
+Prompts also live in `scripts/gpu/prompts-flux2.json`.
 
 Artifacts (same run dir as Wan compare):
 
 - `remote/upstream-TORCH_SDPA.json` — load seconds, warmup, median/min generate
-- `remote/flux2-rust/bench.json` — rust `load_ms` / `generate_ms`
+- `remote/flux2-rust/bench.json` — rust `load_ms`, `warmup_ms` (cold), `runs_ms[]`, **`median_ms`** (vs upstream `median_seconds`), `min_ms`, `generate_ms` (last timed run)
 - `remote/flux2-rust/profile.json` — per-stage generate breakdown (text / denoise / VAE / PNG / RoPE host+device / H2D-D2H). See [flux2-generate-gap.md](flux2-generate-gap.md). After P0, `rope_host_apply_*` should be ~0 on the cudarc GPU path.
 - PNG stills under `remote/flux2-rust/` and upstream’s video dir (num_frames=1)
 

@@ -32,7 +32,7 @@ Real inference targets Vast.ai NVIDIA GPUs. Mac/CI stay on CPU (cudarc without
 | Candle / Burn / Luminal | **frozen** |
 | Sequence parallel | `--num-gpus N` (query-seq shard, real per-rank devices via `FASTVIDEO_SP_WORLD`, host-mediated all-gather) |
 | VSA | `FASTVIDEO_VSA=1` → in-tree block-sparse SDPA (hard-fail without flag) |
-| Flash-style SDPA | default (`FASTVIDEO_SDPA=flash`); `dense` / `sparse` overrides |
+| SDPA | default `dense` (cuBLAS); `FASTVIDEO_SDPA=fused` (`mem_eff`) is query-tiled online-softmax; do **not** use `flash` (12–35× slower on Wan) |
 | GPU tests + benches | Vast (`scripts/vast-gpu-bench.sh`) |
 
 ## CLI (CPU / CI)
