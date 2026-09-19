@@ -414,6 +414,66 @@ wait_ready() {
   done
 }
 
+# ---- oracle dump cache -------------------------------------------------------
+# A reference dump is a function of the oracle script, what it was asked for,
+# the model revision and the prompt — not of our code. So it is produced once
+# and kept: parity runs after that need no Python environment and no 12B-66B
+# reference model on the box, only a few hundred MB rsynced up while the
+# weights download. Local on purpose: no tokens on rented machines, and nothing
+# derived from licensed weights is published anywhere.
+#   FV_ORACLE_CACHE    where dumps live (default artifacts/oracle-cache)
+#   FV_ORACLE_REFRESH  1 = ignore a cached dump and regenerate it
+ORACLE_CACHE="${FV_ORACLE_CACHE:-$FV_ROOT/artifacts/oracle-cache}"
+ORACLE_KEY=""
+ORACLE_DIR=""
+ORACLE_REV=""
+
+# oracle_lookup <model> <repo> <prompt> <semantic oracle args...>
+# Sets ORACLE_KEY / ORACLE_DIR / ORACLE_REV; returns 0 when a complete dump is cached.
+oracle_lookup() {
+  local model="$1" repo="$2" prompt="$3"; shift 3
+  local script="$FV_ROOT/scripts/gpu/${model}_oracle.py" script_sha
+  [[ -f "$script" ]] || die "no oracle script for '$model'"
+  script_sha="$(shasum -a 256 "$script" | cut -c1-16)"
+  # The model revision is part of the key. If the hub cannot be asked, the key
+  # is unique to this run: a guess could serve a dump of other weights.
+  ORACLE_REV="$(curl -fsSL --max-time 20 "https://huggingface.co/api/models/$repo" 2>/dev/null | jq -r '.sha // empty' 2>/dev/null || true)"
+  [[ -n "$ORACLE_REV" ]] || ORACLE_REV="unresolved-$(date -u +%Y%m%dT%H%M%SZ)"
+  ORACLE_KEY="$(printf '%s\n' "$model" "$repo" "$ORACLE_REV" "$script_sha" "$prompt" "$@" | shasum -a 256 | cut -c1-20)"
+  ORACLE_DIR="$ORACLE_CACHE/$model/$ORACLE_KEY"
+  [[ "${FV_ORACLE_REFRESH:-0}" != 1 ]] || return 1
+  [[ -s "$ORACLE_DIR/oracle.safetensors" && -s "$ORACLE_DIR/oracle.json" && -s "$ORACLE_DIR/key.json" ]]
+}
+
+# oracle_push <model>: the cached dump to the box, where the stages expect it.
+oracle_push() {
+  local model="$1"
+  fv_ssh "$HOST" "$PORT" "mkdir -p $OUTR/$model"
+  fv_rsync_to "$HOST" "$PORT" "$ORACLE_DIR/" "$OUTR/$model/" --exclude key.json >/dev/null \
+    || die "could not upload the cached oracle dump $ORACLE_KEY"
+  log "oracle dump uploaded ($(du -sh "$ORACLE_DIR" | cut -f1))"
+}
+
+# oracle_store <model> <repo> <prompt> <semantic args...>: keep what the oracle
+# just wrote. key.json is written last, so a partial pull is never a hit.
+oracle_store() {
+  local model="$1" repo="$2" prompt="$3"; shift 3
+  mkdir -p "$ORACLE_DIR"
+  rm -f "$ORACLE_DIR/key.json"
+  if ! fv_rsync_from "$HOST" "$PORT" "$OUTR/$model/" "$ORACLE_DIR/" \
+      --include 'oracle.safetensors' --include 'oracle.json' --include 'llm.safetensors' --exclude '*' >/dev/null; then
+    log "could not pull the oracle dump into the cache (the run continues)"
+    return 0
+  fi
+  [[ -s "$ORACLE_DIR/oracle.safetensors" && -s "$ORACLE_DIR/oracle.json" ]] || { log "oracle dump incomplete; not cached"; return 0; }
+  jq -n --arg model "$model" --arg repo "$repo" --arg rev "$ORACLE_REV" --arg prompt "$prompt" \
+    --arg script_sha "$(shasum -a 256 "$FV_ROOT/scripts/gpu/${model}_oracle.py" | cut -c1-16)" \
+    --arg created "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --arg args "$*" \
+    '{model: $model, repo: $repo, revision: $rev, script_sha: $script_sha, args: $args, prompt: $prompt, created: $created}' \
+    >"$ORACLE_DIR/key.json"
+  log "oracle dump cached as $model/$ORACLE_KEY ($(du -sh "$ORACLE_DIR" | cut -f1))"
+}
+
 cmd_run() {
   local tier="${1:-}"; [[ -n "$tier" ]] || usage; shift
   tier_query "$tier" >/dev/null
@@ -544,72 +604,133 @@ cmd_run() {
   esac
 
   local refs="$OUTR/refs"
-  # Text-encoder milestone of the audio-video ports: transformers runs the
-  # encoder in bf16 and writes the hidden states the DiT consumes, together
-  # with the token ids they came from; `fv-gpucheck llm` replays those ids
-  # through our streaming encoder. One tier body, two models.
-  if [[ "$tier" == h3-text || "$tier" == ltx2-text ]]; then
-    local model repo wdir family patterns
-    if [[ "$tier" == h3-text ]]; then
-      model=h3 repo="${FV_H3_REPO:-FastVideo/FastVideo-FastH3-8-Step-V2}" family=qwen3-vl-32b
-      # h3_oracle.py loads tokenizer/ and both scheduler configs whatever
-      # --stages says; the rest is per stage (docs/ports/h3.md).
-      patterns=("text_encoder/*" "tokenizer/*" "processor/*" "scheduler/*" "audio_scheduler/*")
-    else
-      # The distilled model in diffusers layout: Lightricks/LTX-2's own
-      # transformer/ and connectors/ are the *dev* model, and the distilled
-      # weights ship only as a single file there. Everything that is not the DiT
-      # or the connectors is byte-identical between the two repos.
-      # `model-*` is the live text-encoder shard set; `diffusion_pytorch_model-*`
-      # beside it is a stale 52 GB duplicate (docs/ports/ltx2.md).
-      model=ltx2 repo="${FV_LTX2_REPO:-rootonchair/LTX-2-19b-distilled}" family=gemma3-12b
-      patterns=("text_encoder/model-*" "text_encoder/*.json" "tokenizer/*" "connectors/*")
-    fi
-    wdir="$WORK/weights/$model"
-    remote_run "fetch-$model" 120 fetch "$repo" "$wdir" "${patterns[@]}"
+  # ---- audio-video parity tiers -------------------------------------------
+  # One body for every tier that judges a port against the diffusers /
+  # transformers reference. The reference dump is a cached artifact (see
+  # oracle_lookup): on a hit the box never builds the Python environment, never
+  # loads the 12B-66B reference model, and fetches only the weights OUR side
+  # reads. A miss runs the oracle once and stores the dump for next time.
+  if [[ "$tier" == h3-text || "$tier" == ltx2-text || "$tier" == h3-vae || "$tier" == ltx2-vae \
+     || "$tier" == h3-dit || "$tier" == ltx2-dit ]]; then
+    local model repo sem=() pat_ours=() pat_oracle=() comp_ours=() comp_oracle=()
+    local h3_repo="${FV_H3_REPO:-FastVideo/FastVideo-FastH3-8-Step-V2}"
+    # The distilled model in diffusers layout: Lightricks/LTX-2's own
+    # transformer/ and connectors/ are the *dev* model. Everything that is not
+    # the DiT or the connectors is byte-identical between the two repos.
+    local ltx_repo="${FV_LTX2_REPO:-rootonchair/LTX-2-19b-distilled}"
+    # Qwen3-VL shards 12-14 hold layers past the tap, the final norm, the LM
+    # head and the vision tower: our side never reads them, transformers does.
+    local h3_text_ours=("tokenizer/*" "text_encoder/*.json"
+      "text_encoder/model-0000[1-9]-of-00014.safetensors" "text_encoder/model-0001[01]-of-00014.safetensors")
+    # h3_oracle.py loads tokenizer/ and both scheduler configs whatever --stages says.
+    local h3_always=("tokenizer/*" "scheduler/*" "audio_scheduler/*")
+    case "$tier" in
+      h3-text)
+        model=h3 repo="$h3_repo" sem=(--stages text)
+        pat_ours=("${h3_text_ours[@]}") comp_ours=(text_encoder)
+        pat_oracle=("text_encoder/*" "processor/*" "${h3_always[@]}") comp_oracle=(text_encoder) ;;
+      ltx2-text)
+        # `model-*` is the live text-encoder shard set; `diffusion_pytorch_model-*`
+        # beside it is a stale 52 GB duplicate (docs/ports/ltx2.md).
+        model=ltx2 repo="$ltx_repo" sem=(--skip dit,vae,audio)
+        pat_ours=("text_encoder/model-*" "text_encoder/*.json" "tokenizer/*" "connectors/*")
+        comp_ours=(text_encoder connectors) ;;
+      h3-vae)
+        model=h3 repo="$h3_repo" sem=(--stages vae,audio)
+        pat_ours=("vae/*" "audio_vae/*") comp_ours=(vae audio_vae) pat_oracle=("${h3_always[@]}") ;;
+      ltx2-vae)
+        model=ltx2 repo="$ltx_repo" sem=(--skip text,conn,dit)
+        pat_ours=("vae/*" "audio_vae/*" "vocoder/*") comp_ours=(vae audio_vae vocoder) ;;
+      h3-dit)
+        model=h3 repo="$h3_repo" sem=(--stages dit,loop)
+        pat_ours=("transformer/*") comp_ours=(transformer) pat_oracle=("${h3_always[@]}") ;;
+      ltx2-dit)
+        # `both`: a bf16 pass and a float32 pass of the same module, plus the
+        # reference's own bf16-vs-f32 distance per tap — the floor ours is judged by.
+        model=ltx2 repo="$ltx_repo" sem=(--skip vae,audio --sample --dit-dtype "${FV_LTX2_DIT_DTYPE:-both}")
+        pat_ours=("vae/*" "audio_vae/*" "vocoder/*") comp_ours=(vae audio_vae vocoder)
+        pat_oracle=("transformer/*" "connectors/*" "text_encoder/model-*" "text_encoder/*.json" "tokenizer/*")
+        comp_oracle=(transformer connectors text_encoder) ;;
+    esac
+    local wdir="$WORK/weights/$model" odir="$OUTR/$model"
     local prompt="${FV_PROMPT:-$(jq -r '.prompts[0].prompt' "$FV_ROOT/scripts/gpu/prompts.json")}"
-    local negative; negative="$(jq -r '.negative' "$FV_ROOT/scripts/gpu/prompts.json")"
-    jq -n --arg p "$prompt" --arg n "$negative" \
-      '{negative: $n, prompts: [{name: "oracle", prompt: $p}]}' >"$RUN_DIR/prompt.json"
+    jq -n --arg p "$prompt" '{negative: "", prompts: [{name: "oracle", prompt: $p}]}' >"$RUN_DIR/prompt.json"
     fv_rsync_to "$HOST" "$PORT" "$RUN_DIR/prompt.json" "$OUTR/prompt.json" >/dev/null
-    remote_run oracle-venv 1800 oracle-venv "${FV_TORCH_BACKEND:-cu130}"
-    remote_run "wait-$model" 3600 wait-weights "$wdir" 3600 text_encoder
-    local odir="$OUTR/$model"
-    local oargs=(--weights "$wdir" --prompts "$OUTR/prompt.json" --out "$odir/oracle.safetensors"
-                 --meta "$odir/oracle.json" --llm-out "$odir/llm.safetensors")
-    if [[ "$model" == h3 ]]; then oargs+=(--stages text); else oargs+=(--skip dit,vae,audio); fi
-    remote_run "oracle-$model" 3600 model-oracle "$model" "${oargs[@]}"
-    gpucheck_stage "llm-$model" 3600 --keep-going --mode fast llm --weights "$wdir/text_encoder" \
-      --family "$family" --oracle "$odir/llm.safetensors" --device cuda
-    # The model's own text stage: tokenizer parity on the prompt, then the
-    # consumed hidden state(s) against the oracle's.
-    if [[ "$model" == h3 ]]; then
-      gpucheck_stage "h3-text" 3600 --keep-going --mode fast h3 text --weights "$wdir" \
-        --oracle "$odir/oracle.safetensors" --meta "$odir/oracle.json"
+
+    local hit=0
+    if oracle_lookup "$model" "$repo" "$prompt" "${sem[@]}"; then hit=1; fi
+    if [[ $hit -eq 1 ]]; then
+      log "oracle dump $ORACLE_KEY cached: no Python, no reference model, our weights only"
+      remote_run "fetch-$model" 120 fetch "$repo" "$wdir" "${pat_ours[@]}"
+      oracle_push "$model"
     else
-      # Exact mode: Gemma streams a layer at a time and the connectors are
-      # 5.8 GB in f32, so nothing here needs bf16 to fit.
-      gpucheck_stage "ltx2-text" 5400 --keep-going --mode exact ltx2 text --weights "$wdir" --dit "$wdir" \
-        --oracle "$odir/oracle.safetensors" --meta "$odir/oracle.json"
+      log "oracle dump $ORACLE_KEY not cached: running the reference once"
+      remote_run "fetch-$model" 120 fetch "$repo" "$wdir" "${pat_ours[@]}" ${pat_oracle[@]+"${pat_oracle[@]}"}
     fi
-    log "${tier} done"
-    return 0
-  fi
-  # Decoder milestone of the H3 port: the oracle decodes one fixed video latent
-  # and one fixed audio latent in float32; our decoders replay them in exact mode.
-  if [[ "$tier" == h3-vae ]]; then
-    local repo="${FV_H3_REPO:-FastVideo/FastVideo-FastH3-8-Step-V2}" wdir="$WORK/weights/h3" odir="$OUTR/h3"
-    remote_run fetch-h3 120 fetch "$repo" "$wdir" "vae/*" "audio_vae/*" "tokenizer/*" "scheduler/*" "audio_scheduler/*"
-    jq -n --arg p "$(jq -r '.prompts[0].prompt' "$FV_ROOT/scripts/gpu/prompts.json")" \
-      '{negative: "", prompts: [{name: "oracle", prompt: $p}]}' >"$RUN_DIR/prompt.json"
-    fv_rsync_to "$HOST" "$PORT" "$RUN_DIR/prompt.json" "$OUTR/prompt.json" >/dev/null
-    remote_run oracle-venv 1800 oracle-venv "${FV_TORCH_BACKEND:-cu130}"
-    remote_run wait-h3 3600 wait-weights "$wdir" 3600 vae audio_vae
-    remote_run oracle-h3 3600 model-oracle h3 --weights "$wdir" --prompts "$OUTR/prompt.json" --stages vae,audio \
-      --out "$odir/oracle.safetensors" --meta "$odir/oracle.json"
-    STAGE_OPTIONAL=1 gpucheck_stage h3-audio-vae 1800 --keep-going --mode exact h3 audio-vae --weights "$wdir" --oracle "$odir/oracle.safetensors" || true
-    gpucheck_stage h3-vae 3600 --keep-going --mode exact h3 vae --weights "$wdir" --oracle "$odir/oracle.safetensors"
-    log "h3-vae done"
+    # LTX-2's production DiT is the official single file, read through the
+    # key-rename view; it downloads beside everything else.
+    local sdir="$WORK/weights/ltx2-single"
+    if [[ "$tier" == ltx2-dit ]]; then
+      remote_run fetch-ltx2-single 120 fetch "${FV_LTX2_SINGLE_REPO:-Lightricks/LTX-2}" "$sdir" "ltx-2-19b-distilled.safetensors"
+    fi
+    if [[ $hit -eq 0 ]]; then
+      remote_run oracle-venv 1800 oracle-venv "${FV_TORCH_BACKEND:-cu130}"
+      remote_run "wait-$model" 7200 wait-weights "$wdir" 7200 "${comp_ours[@]}" ${comp_oracle[@]+"${comp_oracle[@]}"}
+      local oargs=(--weights "$wdir" --prompts "$OUTR/prompt.json" --out "$odir/oracle.safetensors" --meta "$odir/oracle.json")
+      if [[ "$tier" == *-text ]]; then oargs+=(--llm-out "$odir/llm.safetensors"); fi
+      remote_run "oracle-$model" 7200 model-oracle "$model" "${oargs[@]}" "${sem[@]}"
+      oracle_store "$model" "$repo" "$prompt" "${sem[@]}"
+    else
+      remote_run "wait-$model" 7200 wait-weights "$wdir" 7200 "${comp_ours[@]}"
+    fi
+
+    local orc="$odir/oracle.safetensors"
+    case "$tier" in
+      h3-text | ltx2-text)
+        local family=qwen3-vl-32b; [[ "$model" == ltx2 ]] && family=gemma3-12b
+        STAGE_OPTIONAL=1 gpucheck_stage "llm-$model" 3600 --keep-going --mode fast llm --weights "$wdir/text_encoder" \
+          --family "$family" --oracle "$odir/llm.safetensors" --device cuda || true
+        if [[ "$model" == h3 ]]; then
+          gpucheck_stage h3-text 3600 --keep-going --mode fast h3 text --weights "$wdir" --oracle "$orc" --meta "$odir/oracle.json"
+        else
+          # Exact mode: Gemma streams a layer at a time and the connectors are
+          # 5.8 GB in f32, so nothing here needs bf16 to fit.
+          gpucheck_stage ltx2-text 5400 --keep-going --mode exact ltx2 text --weights "$wdir" --dit "$wdir" \
+            --oracle "$orc" --meta "$odir/oracle.json"
+        fi ;;
+      h3-vae)
+        STAGE_OPTIONAL=1 gpucheck_stage h3-audio-vae 1800 --keep-going --mode exact h3 audio-vae --weights "$wdir" --oracle "$orc" || true
+        gpucheck_stage h3-vae 3600 --keep-going --mode exact h3 vae --weights "$wdir" --oracle "$orc" ;;
+      ltx2-vae)
+        STAGE_OPTIONAL=1 gpucheck_stage ltx2-audio 1800 --keep-going --mode exact ltx2 audio --weights "$wdir" \
+          --oracle "$orc" --wav "$OUTR/ltx2/audio.wav" || true
+        gpucheck_stage ltx2-vae 3600 --keep-going --mode exact ltx2 vae --weights "$wdir" --oracle "$orc" ;;
+      h3-dit)
+        STAGE_OPTIONAL=1 gpucheck_stage h3-dit 7200 --keep-going --mode fast h3 dit --weights "$wdir" --oracle "$orc" || true
+        # The dense 8-rung ladder on the oracle's text and noise, on the default
+        # (chunked cuBLAS) SDPA: 87 s per 38k-token forward on an RTX PRO 6000. The
+        # tiled NVRTC "flash" kernel is ~20x SLOWER at this length (measured: 25
+        # blocks in 15 minutes) — it exists for memory, not speed.
+        gpucheck_stage h3-loop 3600 --keep-going --mode fast h3 loop --weights "$wdir" --oracle "$orc" ;;
+      ltx2-dit)
+        # Tables first: no weights, seconds, and a layout bug is named by table.
+        STAGE_OPTIONAL=1 gpucheck_stage ltx2-rope 600 --keep-going --mode fast ltx2 dit --rope-only \
+          --dit "$sdir/ltx-2-19b-distilled.safetensors" --oracle "$orc" || true
+        # The converted transformer/ is only on the box when the reference ran
+        # there; it was proved identical to the single file, to the last digit.
+        if [[ $hit -eq 0 && "${FV_LTX2_CONVERTED:-0}" == 1 ]]; then
+          STAGE_OPTIONAL=1 gpucheck_stage ltx2-dit-converted 5400 --keep-going --mode fast ltx2 dit \
+            --dit "$wdir" --oracle "$orc" || true
+        fi
+        remote_run wait-ltx2-single 7200 wait-weights "$sdir" 7200
+        STAGE_OPTIONAL=1 gpucheck_stage ltx2-dit-single 5400 --keep-going --mode fast ltx2 dit \
+          --dit "$sdir/ltx-2-19b-distilled.safetensors" --oracle "$orc" || true
+        # The 8-step trajectory on the oracle's noise, then both decoders at
+        # production size on the oracle's and on our own final latents.
+        gpucheck_stage ltx2-loop 7200 --keep-going --mode fast ltx2 loop \
+          --dit "$sdir/ltx-2-19b-distilled.safetensors" --oracle "$orc" --weights "$wdir" ;;
+    esac
+    log "$tier done"
     return 0
   fi
   # VSA-H3 against its host statement: a kernel-reuse check, no weights.
@@ -646,93 +767,7 @@ cmd_run() {
     log "GEN done: $name"
     return 0
   fi
-  # DiT milestone of the H3 port: one dense forward on the oracle's packed
-  # input (synthetic text: the text encoder is judged by h3-text, and leaving it
-  # out keeps this tier to one 70 GB download). Intermediate hooks localize a miss.
-  if [[ "$tier" == h3-dit ]]; then
-    local repo="${FV_H3_REPO:-FastVideo/FastVideo-FastH3-8-Step-V2}" wdir="$WORK/weights/h3" odir="$OUTR/h3"
-    remote_run fetch-h3 120 fetch "$repo" "$wdir" "transformer/*" "tokenizer/*" "scheduler/*" "audio_scheduler/*"
-    jq -n --arg p "$(jq -r '.prompts[0].prompt' "$FV_ROOT/scripts/gpu/prompts.json")" \
-      '{negative: "", prompts: [{name: "oracle", prompt: $p}]}' >"$RUN_DIR/prompt.json"
-    fv_rsync_to "$HOST" "$PORT" "$RUN_DIR/prompt.json" "$OUTR/prompt.json" >/dev/null
-    remote_run oracle-venv 1800 oracle-venv "${FV_TORCH_BACKEND:-cu130}"
-    remote_run wait-h3 5400 wait-weights "$wdir" 5400 transformer
-    # FV_REUSE_ORACLE=1 on a reused box: the reference is minutes of a 66 GB
-    # model and does not change when only our binary did.
-    if [[ "${FV_REUSE_ORACLE:-0}" == 1 ]] && fv_ssh "$HOST" "$PORT" "test -s $odir/oracle.safetensors && grep -q loop_video $odir/oracle.json" 2>/dev/null; then
-      log "reusing the oracle dump already on the box"
-    else
-      remote_run oracle-h3 7200 model-oracle h3 --weights "$wdir" --prompts "$OUTR/prompt.json" --stages dit,loop \
-        --out "$odir/oracle.safetensors" --meta "$odir/oracle.json"
-    fi
-    STAGE_OPTIONAL=1 gpucheck_stage h3-dit 7200 --keep-going --mode fast h3 dit --weights "$wdir" --oracle "$odir/oracle.safetensors" || true
-    # The dense 8-rung ladder on the oracle's text and noise, on the default
-    # (chunked cuBLAS) SDPA: 87 s per 38k-token forward on an RTX PRO 6000. The
-    # tiled NVRTC "flash" kernel is ~20x SLOWER at this length (measured: 25
-    # blocks in 15 minutes) — it exists for memory, not speed.
-    gpucheck_stage h3-loop 3600 --keep-going --mode fast h3 loop \
-      --weights "$wdir" --oracle "$odir/oracle.safetensors"
-    log "h3-dit done"
-    return 0
-  fi
-  # DiT milestone of the LTX-2 port. The reference runs text -> connectors ->
-  # one DiT forward from the distilled diffusers conversion; ours replays the
-  # same inputs from the official single file (the production path, through the
-  # key-rename view) and once more from the converted transformer/ — if those
-  # two agree with each other, the community conversion is the same weights.
-  if [[ "$tier" == ltx2-dit ]]; then
-    local repo="${FV_LTX2_REPO:-rootonchair/LTX-2-19b-distilled}" wdir="$WORK/weights/ltx2" odir="$OUTR/ltx2"
-    local single_repo="${FV_LTX2_SINGLE_REPO:-Lightricks/LTX-2}" sdir="$WORK/weights/ltx2-single"
-    remote_run fetch-ltx2 120 fetch "$repo" "$wdir" "transformer/*" "connectors/*" "text_encoder/model-*" "text_encoder/*.json" "tokenizer/*" \
-      "vae/*" "audio_vae/*" "vocoder/*"
-    remote_run fetch-ltx2-single 120 fetch "$single_repo" "$sdir" "ltx-2-19b-distilled.safetensors"
-    local prompt="${FV_PROMPT:-$(jq -r '.prompts[0].prompt' "$FV_ROOT/scripts/gpu/prompts.json")}"
-    jq -n --arg p "$prompt" '{negative: "", prompts: [{name: "oracle", prompt: $p}]}' >"$RUN_DIR/prompt.json"
-    fv_rsync_to "$HOST" "$PORT" "$RUN_DIR/prompt.json" "$OUTR/prompt.json" >/dev/null
-    remote_run oracle-venv 1800 oracle-venv "${FV_TORCH_BACKEND:-cu130}"
-    remote_run wait-ltx2 5400 wait-weights "$wdir" 5400 transformer connectors text_encoder
-    remote_run oracle-ltx2 7200 model-oracle ltx2 --weights "$wdir" --prompts "$OUTR/prompt.json" --skip vae,audio --sample \
-      --dit-dtype "${FV_LTX2_DIT_DTYPE:-both}" --out "$odir/oracle.safetensors" --meta "$odir/oracle.json"
-    # `both`: a bf16 pass and a float32 pass of the same module, plus the
-    # reference's own bf16-vs-f32 distance per tap — the floor ours is judged by.
-    # Tables first: no weights, seconds, and a layout bug is named by table.
-    STAGE_OPTIONAL=1 gpucheck_stage ltx2-rope 600 --keep-going --mode fast ltx2 dit --rope-only \
-      --dit "$wdir" --oracle "$odir/oracle.safetensors" || true
-    STAGE_OPTIONAL=1 gpucheck_stage ltx2-dit-converted 5400 --keep-going --mode fast ltx2 dit \
-      --dit "$wdir" --oracle "$odir/oracle.safetensors" || true
-    remote_run wait-ltx2-single 5400 wait-weights "$sdir" 5400
-    STAGE_OPTIONAL=1 gpucheck_stage ltx2-dit-single 5400 --keep-going --mode fast ltx2 dit \
-      --dit "$sdir/ltx-2-19b-distilled.safetensors" --oracle "$odir/oracle.safetensors" || true
-    # The 8-step trajectory on the oracle's noise, then both decoders at
-    # production size on the oracle's and on our own final latents.
-    gpucheck_stage ltx2-loop 7200 --keep-going --mode fast ltx2 loop \
-      --dit "$sdir/ltx-2-19b-distilled.safetensors" --oracle "$odir/oracle.safetensors" --weights "$wdir"
-    log "ltx2-dit done"
-    return 0
-  fi
-  # Decoder milestone of the LTX-2 port: audio VAE + vocoder, and the video
-  # VAE once its stage exists (FV_LTX2_VAE=1). These blobs are byte-identical
-  # between Lightricks/LTX-2 and the distilled diffusers conversion.
-  if [[ "$tier" == ltx2-vae ]]; then
-    local repo="${FV_LTX2_REPO:-rootonchair/LTX-2-19b-distilled}" wdir="$WORK/weights/ltx2" odir="$OUTR/ltx2"
-    local want_vae="${FV_LTX2_VAE:-0}" patterns=("audio_vae/*" "vocoder/*") comps=(audio_vae vocoder) skip="text,conn,dit,vae"
-    if [[ "$want_vae" == 1 ]]; then patterns+=("vae/*"); comps+=(vae); skip="text,conn,dit"; fi
-    remote_run fetch-ltx2 120 fetch "$repo" "$wdir" "${patterns[@]}"
-    jq -n --arg p "$(jq -r '.prompts[0].prompt' "$FV_ROOT/scripts/gpu/prompts.json")" \
-      '{negative: "", prompts: [{name: "oracle", prompt: $p}]}' >"$RUN_DIR/prompt.json"
-    fv_rsync_to "$HOST" "$PORT" "$RUN_DIR/prompt.json" "$OUTR/prompt.json" >/dev/null
-    remote_run oracle-venv 1800 oracle-venv "${FV_TORCH_BACKEND:-cu130}"
-    remote_run wait-ltx2 3600 wait-weights "$wdir" 3600 "${comps[@]}"
-    remote_run oracle-ltx2 3600 model-oracle ltx2 --weights "$wdir" --prompts "$OUTR/prompt.json" --skip "$skip" \
-      --out "$odir/oracle.safetensors" --meta "$odir/oracle.json"
-    STAGE_OPTIONAL=1 gpucheck_stage ltx2-audio 1800 --keep-going --mode exact ltx2 audio --weights "$wdir" \
-      --oracle "$odir/oracle.safetensors" --wav "$OUTR/ltx2/audio.wav" || true
-    if [[ "$want_vae" == 1 ]]; then
-      gpucheck_stage ltx2-vae 3600 --keep-going --mode exact ltx2 vae --weights "$wdir" --oracle "$odir/oracle.safetensors"
-    fi
-    log "ltx2-vae done"
-    return 0
-  fi
+
   if [[ "$tier" == mathprobe ]]; then
     # Which cuBLAS math runs here: the image's cuBLAS, then a newer one.
     gpucheck_stage device 300 device
