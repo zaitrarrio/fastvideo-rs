@@ -122,6 +122,52 @@ def main() -> int:
         gc.collect()
         torch.cuda.empty_cache()
 
+    # --- tolerance for two API generations --------------------------------------
+    # transformers 5 / diffusers 0.41 renamed `torch_dtype=` to `dtype=`. Both
+    # loaders swallow unknown kwargs in some releases, and a silently ignored
+    # dtype means a 133 GB float32 load, so: pick the spelling the installed
+    # `from_pretrained` actually pops, and verify the result.
+    def load_pretrained(cls, *pos, dtype, check: str | None = None, **kw):
+        import re
+
+        try:
+            src = inspect.getsource(cls.from_pretrained)
+        except (OSError, TypeError):
+            src = ""
+        names = ["dtype", "torch_dtype"] if re.search(r"""pop\(\s*["']dtype["']""", src) else ["torch_dtype", "dtype"]
+        last: Exception | None = None
+        for name in names:
+            try:
+                model = cls.from_pretrained(*pos, **{name: dtype}, **kw)
+            except (TypeError, torch.cuda.OutOfMemoryError) as e:
+                # TypeError: "unexpected keyword argument". OOM: the kwarg was
+                # swallowed and the model came up in float32 (twice the size).
+                last = e
+                release()
+                continue
+            # The widest matrix decides: norms and `_keep_in_fp32_modules` may legitimately differ.
+            params = [p for n, p in model.named_parameters() if check is None or check in n]
+            got = max(params, key=lambda p: p.numel()).dtype
+            if got == dtype:
+                meta.setdefault("dtype_kwarg", {})[cls.__name__] = name
+                return model
+            last = RuntimeError(f"{cls.__name__}.from_pretrained({name}={dtype}) produced {got}")
+            del model
+            release()
+        raise RuntimeError(f"could not load {cls.__name__} as {dtype}: {last}")
+
+    def resolve(module_names: list[str], attr: str):
+        """`attr` from the first module that has it: top-level export first, defining module as a fallback."""
+        import importlib
+
+        errors = []
+        for name in module_names:
+            try:
+                return getattr(importlib.import_module(name), attr)
+            except (ImportError, AttributeError) as e:
+                errors.append(f"{name}: {e}")
+        raise ImportError(f"{attr} not found; tried {errors}. diffusers {diffusers.__version__} may predate MiniMax-H3.")
+
     # --- 1. text encoder ----------------------------------------------------
     # diffusers encoders.py:192 and FastVideo minimax_h3_conditioning.py:187 agree:
     # the prompt verbatim, NO chat template, NO special tokens, no padding, no
@@ -129,18 +175,13 @@ def main() -> int:
     from transformers import AutoTokenizer
 
     tokenizer = AutoTokenizer.from_pretrained(args.weights, subfolder="tokenizer")
-    token_ids = tokenizer(prompt, add_special_tokens=False)["input_ids"]
-    meta["tokens"] = len(token_ids)
-    out["text_ids"] = torch.tensor(token_ids, dtype=torch.float32)  # ids < 151936 < 2^24: exact
     # tokenizer_config.json lists seven `additional_special_tokens` (`<d>`, `</d>`,
     # `<|cutoff|>`, `<|lyrics_*|>`, `<|caption_*|>`) that tokenizer.json does not
-    # define; transformers appends them at load time. H3 prompts wrap dialogue in
-    # `<d>...</d>`, so a port that reads tokenizer.json alone must add them with
-    # these ids. Recorded rather than assumed.
-    meta["tokenizer_len"] = len(tokenizer)
-    # Read the list from tokenizer_config.json rather than from the tokenizer
-    # object: transformers 5 removed `additional_special_tokens` from the fast
-    # tokenizer classes, and the config file is the thing a port reads anyway.
+    # define. transformers 4 appends them to the vocabulary at load time, which is
+    # what FastVideo trained and serves with; H3 prompts wrap dialogue in
+    # `<d>...</d>`. Read the list from the config file rather than from the
+    # tokenizer object: transformers 5 removed `additional_special_tokens` from
+    # the fast tokenizer classes, and the config file is what a port reads anyway.
     import os
 
     if os.path.isdir(args.weights):
@@ -156,22 +197,45 @@ def main() -> int:
         extra = tok_cfg["extra_special_tokens"]
         listed = list(extra.values()) if isinstance(extra, dict) else list(extra)
     listed = [t if isinstance(t, str) else t.get("content", "") for t in listed]
-    meta["added_special_token_ids"] = {
-        tok: tokenizer.convert_tokens_to_ids(tok)
-        for tok in listed
-        if tok.startswith(("<d>", "</d>", "<|cutoff", "<|lyrics", "<|caption"))
-    }
-    # A marker that maps to None / the unk id was NOT registered by this
-    # transformers version: the prompt's `<d>` would then be split into pieces
-    # on the reference side, and token parity has to be judged knowing that.
-    meta["transformers_version"] = __import__("transformers").__version__
+    markers = [t for t in listed if t.startswith(("<d>", "</d>", "<|cutoff", "<|lyrics", "<|caption"))]
+
+    def marker_id(tok: str):
+        # None, or the unk id, means "not in the vocabulary" depending on the release.
+        i = tokenizer.convert_tokens_to_ids(tok)
+        return None if i is None or i == getattr(tokenizer, "unk_token_id", None) else int(i)
+
+    # A loader that did NOT register the markers (a transformers release that
+    # ignores `additional_special_tokens` in the config) would split `<d>` into
+    # pieces. Register them the way transformers 4 does - in the listed order, at
+    # the first free ids - so the reference tokenization is the trained one on
+    # every release, and say which path produced the ids.
+    missing = [t for t in markers if marker_id(t) is None]
+    meta["markers_registered_by_loader"] = [t for t in markers if t not in missing]
+    meta["markers_registered_by_oracle"] = missing
+    if missing:
+        from tokenizers import AddedToken
+
+        tokenizer.add_tokens([AddedToken(t, special=True, normalized=False) for t in missing], special_tokens=True)
+    meta["added_special_token_ids"] = {tok: marker_id(tok) for tok in markers}
+    assert all(v is not None for v in meta["added_special_token_ids"].values()), meta["added_special_token_ids"]
+    meta["tokenizer_len"] = len(tokenizer)
+    meta["transformers_version"] = transformers.__version__
+
+    token_ids = tokenizer(prompt, add_special_tokens=False)["input_ids"]
+    meta["tokens"] = len(token_ids)
+    out["text_ids"] = torch.tensor(token_ids, dtype=torch.float32)  # ids < 151936 < 2^24: exact
 
     if "text" in stages:
         from transformers import Qwen3VLForConditionalGeneration
 
         t0 = time.time()
-        text_encoder = Qwen3VLForConditionalGeneration.from_pretrained(
-            args.weights, subfolder="text_encoder", torch_dtype=torch.bfloat16, device_map=args.device_map
+        text_encoder = load_pretrained(
+            Qwen3VLForConditionalGeneration,
+            args.weights,
+            subfolder="text_encoder",
+            dtype=torch.bfloat16,
+            check="language_model",
+            device_map=args.device_map,
         ).eval()
         meta["load_text_s"] = time.time() - t0
 
@@ -186,6 +250,28 @@ def main() -> int:
         # rotary layout is the same 1-D arange either way.
         if "mm_token_type_ids" in inspect.signature(text_encoder.model.forward).parameters:
             kwargs["mm_token_type_ids"] = torch.zeros_like(input_ids)
+        # `output_hidden_states` is plumbed differently in transformers 4 (explicit
+        # tuples) and 5 (output-recording hooks on the inner text model), and the
+        # outer Qwen3VLModel has at times dropped the field. Forward hooks on the
+        # embedding and on decoder layer k-1 capture hidden_states[k] by
+        # construction on any release; they back the tuple up and cross-check it.
+        llm_taps = [int(k) for k in args.llm_taps.split(",") if k != ""] if args.llm_out else []
+        wanted_taps = sorted({0, 1, TEXT_ENCODER_LAYER, *llm_taps})
+        language_model = getattr(text_encoder.model, "language_model", None) or text_encoder.model
+        num_layers = len(language_model.layers)
+        assert max(wanted_taps) < num_layers, "the last tap is post-norm in HF's tuple; hooks cannot see that"
+        hooked: dict[int, "torch.Tensor"] = {}
+
+        def grab(k: int):
+            def hook(_module, _inputs, output):
+                hooked[k] = (output[0] if isinstance(output, (tuple, list)) else output).detach()
+
+            return hook
+
+        hook_handles = [
+            (language_model.embed_tokens if k == 0 else language_model.layers[k - 1]).register_forward_hook(grab(k))
+            for k in wanted_taps
+        ]
         with torch.no_grad():
             t0 = time.time()
             # encoders.py:91-98: `.model`, not the top-level module, so the
@@ -199,7 +285,17 @@ def main() -> int:
             )
             torch.cuda.synchronize()
             meta["encode_s"] = time.time() - t0
-        hs = outputs.hidden_states
+        for h in hook_handles:
+            h.remove()
+        hs = getattr(outputs, "hidden_states", None)
+        if hs is not None and len(hs) == num_layers + 1:
+            meta["hidden_states_source"] = "output_hidden_states tuple"
+            meta["hook_vs_tuple_max_abs"] = {
+                str(k): float((hooked[k].float() - hs[k].float()).abs().max()) for k in wanted_taps
+            }
+        else:
+            meta["hidden_states_source"] = "forward hooks (the model returned no usable hidden_states tuple)"
+            hs = hooked  # indexed by tap, like the tuple
         # HF convention: hidden_states[0] is the embedding output and
         # hidden_states[i] the residual stream after decoder layer i-1. Index 50
         # is therefore after layer **49** and has not been through `norm`
@@ -223,7 +319,7 @@ def main() -> int:
                 "positions": torch.arange(n_tok, dtype=torch.float32),
                 "attend": torch.ones(n_tok, dtype=torch.float32),
             }
-            taps = [int(k) for k in args.llm_taps.split(",") if k != ""]
+            taps = llm_taps
             assert TEXT_ENCODER_LAYER in taps, "the tap H3 conditions on must be among --llm-taps"
             for k in taps:
                 llm[f"hidden_{k}"] = hs[k].float().cpu().contiguous()  # [1, S, 5120]
@@ -285,7 +381,7 @@ def main() -> int:
     # FastVideo minimax_h3_denoising.py:81-87. diffusers' own set_timesteps(9)
     # would build linspace(1, 0, 9), whose first four sigmas are NOT the trained
     # rungs (1.0 vs 0.999, ...), so the explicit-sigmas entry point is used.
-    from diffusers import MiniMaxH3Scheduler
+    MiniMaxH3Scheduler = resolve(["diffusers", "diffusers.schedulers.scheduling_minimax_h3"], "MiniMaxH3Scheduler")
 
     scheduler = MiniMaxH3Scheduler.from_pretrained(args.weights, subfolder="scheduler")
     audio_scheduler = MiniMaxH3Scheduler.from_pretrained(args.weights, subfolder="audio_scheduler")
@@ -310,16 +406,28 @@ def main() -> int:
     # --- 2. one DiT forward ------------------------------------------------------
     transformer = None
     if stages & {"dit", "loop"}:
-        from diffusers import MiniMaxH3Transformer3DModel
+        MiniMaxH3Transformer3DModel = resolve(
+            ["diffusers", "diffusers.models.transformers.transformer_minimax_h3"], "MiniMaxH3Transformer3DModel"
+        )
 
         t0 = time.time()
         # bf16 request + _keep_in_fp32_modules (transformer_minimax_h3.py:444-451)
         # reproduces FastVideo's precision split (minimax_h3.py:583-607). The
         # checkpoint's 50 `attn.to_gate_compress.weight` tensors have no module
         # here and are reported as unexpected keys, not loaded.
-        transformer = MiniMaxH3Transformer3DModel.from_pretrained(
-            args.weights, subfolder="transformer", torch_dtype=torch.bfloat16, device_map=args.device_map
+        transformer = load_pretrained(
+            MiniMaxH3Transformer3DModel,
+            args.weights,
+            subfolder="transformer",
+            dtype=torch.bfloat16,
+            check="transformer_blocks",  # proj_in/out and the time embedder are pinned float32 on purpose
+            device_map=args.device_map,
         ).eval()
+        # The precision split the limits assume; a loader that drops `_keep_in_fp32_modules` would change them.
+        meta["dit_param_dtypes"] = {
+            n: str(next(getattr(transformer, n).parameters()).dtype)
+            for n in ("proj_in", "audio_proj_in", "time_embedder", "proj_out", "audio_proj_out", "context_embedder")
+        }
         meta["load_dit_s"] = time.time() - t0
 
     layout = {
@@ -408,13 +516,15 @@ def main() -> int:
 
     # --- 4. video VAE decode -------------------------------------------------------
     if "vae" in stages:
-        from diffusers import AutoencoderKLMiniMaxH3
+        AutoencoderKLMiniMaxH3 = resolve(
+            ["diffusers", "diffusers.models.autoencoders.autoencoder_kl_minimax_h3"], "AutoencoderKLMiniMaxH3"
+        )
 
         t0 = time.time()
         # float32 weights on disk and pinned float32 by _keep_in_fp32_modules
         # (autoencoder_kl_minimax_h3.py:529-532). Tiling is on by default and is
         # part of the released output (:520-523, :608-615); leave it on.
-        vae = AutoencoderKLMiniMaxH3.from_pretrained(args.weights, subfolder="vae", torch_dtype=torch.float32)
+        vae = load_pretrained(AutoencoderKLMiniMaxH3, args.weights, subfolder="vae", dtype=torch.float32, check="decoder")
         vae = vae.eval().to(dev)
         meta["load_vae_s"] = time.time() - t0
         assert vae.use_tiling and vae.tile_sample_min_height == 256 and vae.tile_sample_min_overlap_height == 64
@@ -449,12 +559,14 @@ def main() -> int:
 
     # --- 5. audio VAE decode --------------------------------------------------------
     if "audio" in stages:
-        from diffusers import AutoencoderKLMiniMaxH3Audio
+        AutoencoderKLMiniMaxH3Audio = resolve(
+            ["diffusers", "diffusers.models.autoencoders.autoencoder_kl_minimax_h3_audio"], "AutoencoderKLMiniMaxH3Audio"
+        )
 
         # float32: the DAC/BigVGAN stack loses ~20 dB under bfloat16
         # (autoencoder_kl_minimax_h3_audio.py:531-534).
-        audio_vae = AutoencoderKLMiniMaxH3Audio.from_pretrained(
-            args.weights, subfolder="audio_vae", torch_dtype=torch.float32
+        audio_vae = load_pretrained(
+            AutoencoderKLMiniMaxH3Audio, args.weights, subfolder="audio_vae", dtype=torch.float32, check="decoder"
         )
         audio_vae = audio_vae.eval().to(dev)
         g = torch.Generator(device="cpu").manual_seed(args.seed + 3)

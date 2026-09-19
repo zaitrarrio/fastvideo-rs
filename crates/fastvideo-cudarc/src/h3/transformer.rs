@@ -61,6 +61,8 @@ const SHIFT_MLP: usize = 3;
 const SCALE_MLP: usize = 4;
 const GATE_MLP: usize = 5;
 const ADALN_PARAMS: usize = 6;
+/// "H3ADALN1": bump the digit when the table layout changes.
+const CACHE_MAGIC: u64 = u64::from_le_bytes(*b"H3ADALN1");
 
 /// Called with a name and a tensor at the points the oracle hooks
 /// (`block_<i>`: that block's `[1, S, hidden]` output).
@@ -175,6 +177,49 @@ impl AdaLnTable {
             row[hidden..].iter_mut().for_each(|v| *v += 1.0);
         }
         Ok(Self { steps, blocks: cfg.num_layers, hidden, block_mods, out_mods, temb })
+    }
+
+    /// [`Self::precompute`], memoized in `cache`. Building the table reads
+    /// 26 GB of projections that are needed for nothing else, so a warm start
+    /// skips more than a third of the checkpoint. The file is keyed by the
+    /// ladder's timesteps and a fingerprint of the checkpoint (block 0's AdaLN
+    /// bias bytes); anything that does not match is rebuilt, never trusted.
+    pub fn load_or_precompute(cfg: &H3TransformerConfig, map: &WeightMap, schedule: &H3JointSchedule, cache: Option<&std::path::Path>) -> Result<Self> {
+        let (Some(path), Some(lazy)) = (cache, map.lazy()) else {
+            return Self::precompute(cfg, map, schedule);
+        };
+        let fingerprint = {
+            let view = lazy.view("transformer_blocks.0.adaln_proj.linear.bias").map_err(|e| msg(e.to_string()))?;
+            view.bytes.iter().fold(0xcbf2_9ce4_8422_2325u64, |h, b| (h ^ u64::from(*b)).wrapping_mul(0x0100_0000_01b3))
+        };
+        let steps = schedule.num_steps();
+        let mut header: Vec<u64> = vec![CACHE_MAGIC, fingerprint, steps as u64, cfg.num_layers as u64, cfg.hidden_size as u64, cfg.time_embed_dim as u64];
+        header.extend((0..steps).flat_map(|i| [schedule.video.timesteps[i], schedule.audio.timesteps[i]]).map(|t| u64::from(t.to_bits())));
+        let header: Vec<u8> = header.iter().flat_map(|v| v.to_le_bytes()).collect();
+        let sizes = [steps * cfg.num_layers * MODALITY_NUM * ADALN_PARAMS * cfg.hidden_size, 2 * steps * 2 * cfg.hidden_size, 2 * steps * cfg.time_embed_dim];
+
+        if let Ok(bytes) = std::fs::read(path) {
+            let want = header.len() + 4 * sizes.iter().sum::<usize>();
+            if bytes.len() == want && bytes[..header.len()] == header[..] {
+                let mut values = bytes[header.len()..].chunks_exact(4).map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]));
+                let block_mods: Vec<f32> = values.by_ref().take(sizes[0]).collect();
+                let out_mods: Vec<f32> = values.by_ref().take(sizes[1]).collect();
+                let flat: Vec<f32> = values.collect();
+                let temb = flat.chunks_exact(cfg.time_embed_dim).map(<[f32]>::to_vec).collect();
+                crate::wan::log::info(format_args!("h3 adaln table: read from {}", path.display()));
+                return Ok(Self { steps, blocks: cfg.num_layers, hidden: cfg.hidden_size, block_mods, out_mods, temb });
+            }
+            crate::wan::log::info(format_args!("h3 adaln table: {} is for another checkpoint or ladder; rebuilding", path.display()));
+        }
+        let table = Self::precompute(cfg, map, schedule)?;
+        let mut bytes = header;
+        bytes.extend(table.block_mods.iter().chain(&table.out_mods).chain(table.temb.iter().flatten()).flat_map(|v| v.to_le_bytes()));
+        // A cache that cannot be written costs the next start some time, not this run its result.
+        let written = path.parent().map_or(Ok(()), std::fs::create_dir_all).and_then(|()| std::fs::write(path, &bytes));
+        if let Err(e) = written {
+            crate::wan::log::info(format_args!("h3 adaln table: could not write {}: {e}", path.display()));
+        }
+        Ok(table)
     }
 
     pub fn steps(&self) -> usize {
@@ -422,10 +467,16 @@ impl H3Transformer {
     /// 37 GiB without) and precomputes the AdaLN table for `schedule`.
     /// `with_gate` loads `to_gate_compress`, which only [`AttnMode::Vsa`] reads.
     pub fn load(cfg: H3TransformerConfig, map: &WeightMap, schedule: &H3JointSchedule, with_gate: bool) -> Result<Self> {
+        Self::load_cached(cfg, map, schedule, with_gate, None)
+    }
+
+    /// [`Self::load`] with the AdaLN table memoized at `adaln_cache`
+    /// (see [`AdaLnTable::load_or_precompute`]).
+    pub fn load_cached(cfg: H3TransformerConfig, map: &WeightMap, schedule: &H3JointSchedule, with_gate: bool, adaln_cache: Option<&std::path::Path>) -> Result<Self> {
         if cfg.rotary_dim() > cfg.attention_head_dim || cfg.freq_dim % 2 != 0 {
             return Err(msg(format!("h3 dit: {} rotary channels of a {}-wide head", cfg.rotary_dim(), cfg.attention_head_dim)));
         }
-        let table = AdaLnTable::precompute(&cfg, map, schedule)?;
+        let table = AdaLnTable::load_or_precompute(&cfg, map, schedule, adaln_cache)?;
         let blocks = (0..cfg.num_layers)
             .map(|i| {
                 let block = Block::load(map, &format!("transformer_blocks.{i}"), &cfg, with_gate);

@@ -12,6 +12,7 @@ pub mod attention;
 pub mod audio_vae;
 pub mod keys;
 pub mod text;
+pub mod transformer;
 pub mod vae;
 pub mod vocoder;
 

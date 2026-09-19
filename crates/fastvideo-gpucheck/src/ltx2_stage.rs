@@ -20,6 +20,7 @@ use fastvideo_cudarc::llm::DecoderConfig;
 use fastvideo_cudarc::ltx2::audio_vae::AudioDecoder;
 use fastvideo_cudarc::ltx2::keys::{Keys, Layout};
 use fastvideo_cudarc::ltx2::text::{HiddenStack, PaddedPrompt, TextConnectors};
+use fastvideo_cudarc::ltx2::vae::VideoDecoder;
 use fastvideo_cudarc::ltx2::vocoder::Vocoder;
 use fastvideo_cudarc::wan::pipeline::{interleave_audio, write_wav};
 use fastvideo_cudarc::CudaTensor;
@@ -100,6 +101,28 @@ pub enum Stage {
         #[arg(long, default_value_t = 50.0)]
         min_snr_db_e2e: f64,
     },
+    /// The video VAE decoder on the oracle's fixed latent, float32 on both
+    /// sides (default `--mode exact`), whole and streamed in small chunks.
+    Vae {
+        /// A diffusers LTX-2 snapshot: reads `vae/` (identical in
+        /// `Lightricks/LTX-2` and the distilled conversion).
+        #[arg(long)]
+        weights: PathBuf,
+        /// `--out` file of `ltx2_oracle.py` (stage `vae`).
+        #[arg(long)]
+        oracle: PathBuf,
+        #[arg(long, default_value = "cuda")]
+        device: String,
+        /// Pixels live in [-1, 1].
+        #[arg(long, default_value_t = 1e-3)]
+        max_abs: f64,
+        #[arg(long, default_value_t = 1e-4)]
+        max_rmse: f64,
+        /// Streaming is the same arithmetic in another order of arrival; only
+        /// cuDNN picking another algorithm for another shape may show here.
+        #[arg(long, default_value_t = 1e-4)]
+        max_abs_streamed: f64,
+    },
 }
 
 pub fn run(report: &mut Report, stage: &Stage) -> StageResult<()> {
@@ -116,6 +139,9 @@ pub fn run(report: &mut Report, stage: &Stage) -> StageResult<()> {
         ),
         Stage::Audio { weights, oracle, device, wav, max_rel_mel, min_snr_db, min_snr_db_e2e } => {
             audio(report, weights, oracle, device, wav.as_deref(), [*max_rel_mel, *min_snr_db, *min_snr_db_e2e])
+        }
+        Stage::Vae { weights, oracle, device, max_abs, max_rmse, max_abs_streamed } => {
+            vae(report, weights, oracle, device, [*max_abs, *max_rmse, *max_abs_streamed])
         }
     }
 }
@@ -395,5 +421,61 @@ fn audio(report: &mut Report, weights: &Path, oracle: &Path, device: &str, wav: 
     let snr = |d: &crate::metrics::Diff| rmse_snr(d, 1).1;
     report.check("audio.wave", d_wave.non_finite == 0 && snr(&d_wave) >= min_snr, with(&d_wave, wave_h.len()), json!({"snr_db_min": min_snr}))?;
     report.check("e2e.wave", d_e2e.non_finite == 0 && snr(&d_e2e) >= min_snr_e2e, with(&d_e2e, e2e_h.len()), json!({"snr_db_min": min_snr_e2e}))?;
+    Ok(())
+}
+
+// ---- video vae --------------------------------------------------------------
+
+fn vae(report: &mut Report, weights: &Path, oracle: &Path, device: &str, [max_abs, max_rmse, max_abs_streamed]: [f64; 3]) -> StageResult<()> {
+    report.set("device", crate::gpu::init(device)?);
+    let cfg = ltx2_19b_distilled();
+    let mut orc = load_oracle(oracle, &["vae."])?;
+    let latent = take(&mut orc, "vae.latent", oracle)?;
+    let want = take(&mut orc, "vae.video", oracle)?;
+    drop(orc);
+
+    let timer = std::time::Instant::now();
+    let map = WeightMap::open(&weights.join("vae"))?;
+    let decoder = VideoDecoder::load(&map, &cfg.vae)?;
+    report.note("load_vae", json!({"seconds": timer.elapsed().as_secs_f64(), "decoder_gib": gib(&map, "decoder.")}));
+
+    let z = CudaTensor::from_vec(latent.data, latent.shape.clone())?;
+    // [frames, 3, H, W] runs → one [3, F, H, W] host buffer, the oracle's order.
+    let decode = |chunk: usize| -> anyhow::Result<(Vec<f32>, Vec<usize>)> {
+        let (mut runs, mut pieces) = (Vec::new(), Vec::new());
+        decoder.decode_streaming_chunked(&z, chunk, &mut |_, frames| {
+            runs.push(frames.shape[0]);
+            pieces.push(frames.clone());
+            Ok(())
+        })?;
+        let all = CudaTensor::cat(&pieces.iter().collect::<Vec<_>>(), 0)?.permute(&[1, 0, 2, 3])?;
+        Ok((all.host_cow()?.into_owned(), runs))
+    };
+    // Warm-up: cuDNN plan search stays out of the timing.
+    decode(usize::MAX)?;
+    let ((whole, runs), seconds) = measure(report, "vae_decode", || decode(usize::MAX))?;
+    report.note("vae_decode", json!({"seconds": seconds, "latent": latent.shape, "runs": runs}));
+    let ((streamed, runs), seconds) = measure(report, "vae_decode_streamed", || decode(2))?;
+    report.note("vae_decode_streamed", json!({"seconds": seconds, "chunk": 2, "runs": runs}));
+
+    let d = diff(&whole, &want.data);
+    let (rmse, _) = rmse_snr(&d, whole.len());
+    let mut values = d.to_json();
+    values["rmse"] = json!(rmse);
+    values["psnr_db"] = json!(crate::metrics::psnr(&whole, &want.data, 2.0).min(999.0));
+    let d_stream = diff(&streamed, &whole);
+    report.set("metrics", json!({"video": values, "streamed_vs_whole": d_stream.to_json()}));
+    report.check(
+        "vae.video",
+        d.non_finite == 0 && whole.len() == want.data.len() && d.max_abs <= max_abs && rmse <= max_rmse,
+        values,
+        json!({"max_abs": max_abs, "rmse": max_rmse, "shape": want.shape}),
+    )?;
+    report.check(
+        "vae.streamed_equals_whole",
+        d_stream.non_finite == 0 && d_stream.max_abs <= max_abs_streamed,
+        d_stream.to_json(),
+        json!({"max_abs": max_abs_streamed}),
+    )?;
     Ok(())
 }

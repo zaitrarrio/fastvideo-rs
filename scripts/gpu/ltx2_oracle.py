@@ -135,6 +135,30 @@ def main() -> int:
         g = torch.Generator(device="cpu").manual_seed(args.seed + offset)
         return torch.randn(shape, generator=g, dtype=torch.float32)
 
+    def load(cls, subfolder: str, dtype: "torch.dtype", lib: str):
+        """from_pretrained across library generations.
+
+        transformers >= 4.56 spells the dtype argument `dtype` and deprecates
+        `torch_dtype`; diffusers spells it `torch_dtype`. Each library is tried
+        with its own spelling first, then the other. An unknown keyword is not
+        always an error — it can be swallowed and the model loaded in float32 — so
+        the resulting parameter dtype is checked, not trusted.
+        """
+        order = ("dtype", "torch_dtype") if lib == "transformers" else ("torch_dtype", "dtype")
+        model = None
+        for i, kw in enumerate(order):
+            try:
+                model = cls.from_pretrained(args.weights, subfolder=subfolder, **{kw: dtype})
+                break
+            except TypeError as e:
+                if i + 1 == len(order) or "dtype" not in str(e):
+                    raise
+        got = next(model.parameters()).dtype
+        if got != dtype:
+            print(f"[oracle] {cls.__name__} loaded as {got}; casting to {dtype}", file=sys.stderr)
+            model = model.to(dtype)
+        return model.eval().to(dev)
+
     # --- text: Gemma-3-12B ---------------------------------------------------
     prompt_embeds = prompt_mask = None
     if "text" not in skip:
@@ -150,9 +174,7 @@ def main() -> int:
         t0 = time.time()
         # The shards are float32 on disk (48.7 GB); torch_dtype casts on load, which
         # is what LTX2Pipeline.from_pretrained(torch_dtype=bfloat16) does too.
-        text_encoder = Gemma3ForConditionalGeneration.from_pretrained(
-            args.weights, subfolder="text_encoder", torch_dtype=t_dtype
-        ).eval().to(dev)
+        text_encoder = load(Gemma3ForConditionalGeneration, "text_encoder", t_dtype, "transformers")
         timings["load_text_s"] = time.time() - t0
 
         # pipeline_ltx2.py:333-341 — no chat template, no system prompt: the stripped
@@ -165,20 +187,62 @@ def main() -> int:
             add_special_tokens=True,
             return_tensors="pt",
         )
-        ids, mask = ti.input_ids.to(dev), ti.attention_mask.to(dev)
+        ids, mask = ti["input_ids"].to(dev), ti["attention_mask"].to(dev)
         n_tok = int(mask.sum())
+        # Everything downstream (positions, the slice of real tokens, the connectors'
+        # padding_side="left") assumes the real tokens are the *last* n. A tokenizer
+        # generation that ignores `padding_side` set as an attribute must not pass silently.
+        if ids.shape[1] != args.max_sequence_length or not bool(mask[0, -n_tok:].all()) or int(mask[0, : ids.shape[1] - n_tok].sum()) != 0:
+            raise SystemExit(f"[oracle] tokenizer did not left-pad to {args.max_sequence_length}: mask sum {n_tok}, shape {tuple(ids.shape)}")
         with torch.no_grad():
             t0 = time.time()
             # pipeline_ltx2.py:347-349 — the multimodal wrapper, text only; position_ids are
             # left to default, i.e. arange(1024) *including* the pad slots
             # (modeling_gemma3.py:529-530), so real tokens sit at 1024-n … 1023.
             enc = text_encoder(input_ids=ids, attention_mask=mask, output_hidden_states=True)
+            hidden_states = getattr(enc, "hidden_states", None)
+            if hidden_states is None:
+                # A wrapper generation that does not surface the decoder's states:
+                # ask the language model itself (where it lives has moved between
+                # `model.language_model` and `language_model.model`).
+                lm = text_encoder.get_decoder() if hasattr(text_encoder, "get_decoder") else None
+                for path in ("model.language_model", "language_model.model", "language_model"):
+                    if lm is not None:
+                        break
+                    obj = text_encoder
+                    for part in path.split("."):
+                        obj = getattr(obj, part, None)
+                        if obj is None:
+                            break
+                    lm = obj
+                if lm is None:
+                    raise SystemExit("[oracle] no hidden_states on the output and no language model found on the wrapper")
+                hidden_states = lm(input_ids=ids, attention_mask=mask, output_hidden_states=True).hidden_states
+            hidden_states = tuple(hidden_states)
             torch.cuda.synchronize()
             timings["encode_s"] = time.time() - t0
+            n_layers = text_encoder.config.get_text_config().num_hidden_layers
+            if len(hidden_states) != n_layers + 1:
+                raise SystemExit(f"[oracle] expected {n_layers + 1} hidden states (embeddings + every layer), got {len(hidden_states)}")
+            # Two facts the port relies on, measured rather than assumed, because how the
+            # tuple is assembled changed between transformers generations (explicit loop
+            # in 4.x, output-recording hooks in 5.x): state 0 is the *scaled* embedding,
+            # and the last state is the final norm's output.
+            checks: dict[str, float] = {}
+            try:
+                emb = text_encoder.get_input_embeddings()(ids)
+                real = slice(args.max_sequence_length - n_tok, None)
+                checks["state0_vs_embedding_max_abs"] = float((hidden_states[0][0, real].float() - emb[0, real].float()).abs().max())
+                last = getattr(enc, "last_hidden_state", None)
+                if last is not None:
+                    checks["state_last_vs_last_hidden_state_max_abs"] = float((hidden_states[-1][0, real].float() - last[0, real].float()).abs().max())
+            except Exception as e:  # diagnostics only
+                checks["error"] = repr(e)  # type: ignore[assignment]
+            meta["text_checks"] = checks
         # pipeline_ltx2.py:350-352 — 49 states (embeddings, 47 raw layer outputs, and the
         # last one *after* the final norm, modeling_gemma3.py:588-591) stacked on a new
         # last axis, then flattened: feature index = channel * 49 + layer.
-        stacked = torch.stack(enc.hidden_states, dim=-1)  # [1, 1024, 3840, 49]
+        stacked = torch.stack(hidden_states, dim=-1)  # [1, 1024, 3840, 49]
         prompt_embeds = stacked.flatten(2, 3).to(dtype=t_dtype)  # [1, 1024, 188160]
         prompt_mask = mask
 
@@ -190,7 +254,7 @@ def main() -> int:
         meta["tokens"] = n_tok
 
         if args.llm_out:
-            n_states = len(enc.hidden_states)  # 49
+            n_states = len(hidden_states)  # 49
             want = set(range(n_states)) if args.llm_taps == "all" else {int(t) for t in args.llm_taps.split(",")}
             want |= {0, 1, 6, n_states - 1}
             s_len = ids.shape[1]
@@ -203,7 +267,7 @@ def main() -> int:
                 "attend": mask[0].float().cpu(),
             }
             for k in sorted(want):
-                llm[f"hidden_{k}"] = f32(enc.hidden_states[k])  # [1, S, 3840]
+                llm[f"hidden_{k}"] = f32(hidden_states[k])  # [1, S, 3840]
             save_file(llm, args.llm_out)
             meta["llm_oracle"] = {
                 "file": args.llm_out,
@@ -220,7 +284,7 @@ def main() -> int:
                 "attended": n_tok,
             }
         meta["text_hidden_states_layout"] = "[n_real_tokens, hidden=3840, state=49]; state 0 = scaled embeddings, 48 = post-norm"
-        del text_encoder, enc, stacked
+        del text_encoder, enc, stacked, hidden_states
         free()
 
     # --- conn: LTX2TextConnectors -------------------------------------------
@@ -229,9 +293,7 @@ def main() -> int:
         from diffusers.pipelines.ltx2 import LTX2TextConnectors
 
         t0 = time.time()
-        connectors = LTX2TextConnectors.from_pretrained(
-            args.weights, subfolder="connectors", torch_dtype=prompt_embeds.dtype
-        ).eval().to(dev)
+        connectors = load(LTX2TextConnectors, "connectors", prompt_embeds.dtype, "diffusers")
         timings["load_conn_s"] = time.time() - t0
 
         captured: dict[str, "torch.Tensor"] = {}
@@ -288,9 +350,7 @@ def main() -> int:
 
         d_dtype = getattr(torch, args.dit_dtype)
         t0 = time.time()
-        transformer = LTX2VideoTransformer3DModel.from_pretrained(
-            args.weights, subfolder="transformer", torch_dtype=d_dtype
-        ).eval().to(dev)
+        transformer = load(LTX2VideoTransformer3DModel, "transformer", d_dtype, "diffusers")
         timings["load_dit_s"] = time.time() - t0
         accepted = set(inspect.signature(transformer.forward).parameters)
 
@@ -384,17 +444,31 @@ def main() -> int:
     # --- sample: the full distilled loop ------------------------------------
     sample_video = sample_audio = None
     if args.sample:
-        from diffusers import FlowMatchEulerDiscreteScheduler
+        # The distilled scheduler config — no dynamic shift, no terminal stretch — makes
+        # set_timesteps(sigmas=…) return the list untouched plus a trailing 0, with
+        # timesteps = float32(sigma) * 1000 (scheduling_flow_match_euler_discrete.py:348-377).
+        # That is three lines of arithmetic, so it is done here and the scheduler class
+        # is only asked to agree: a constructor/keyword change in diffusers then costs a
+        # note in the meta file, not the run, and a dev-configured scheduler/ folder
+        # cannot silently shift the sigmas either way.
+        sigmas = torch.tensor(DISTILLED_SIGMA_VALUES + [0.0], dtype=torch.float32, device=dev)
+        timesteps = sigmas[:-1] * 1000.0
+        meta["sample_sigmas"] = [float(s) for s in sigmas]
+        try:
+            from diffusers import FlowMatchEulerDiscreteScheduler
 
-        # The distilled scheduler config: no dynamic shift, no terminal stretch, so
-        # set_timesteps(sigmas=…) returns the list untouched plus a trailing 0
-        # (scheduling_flow_match_euler_discrete.py:348-377). Built explicitly rather
-        # than loaded so a dev-configured scheduler/ folder cannot silently shift it.
-        sched = FlowMatchEulerDiscreteScheduler(
-            num_train_timesteps=1000, shift=1.0, use_dynamic_shifting=False, shift_terminal=None
-        )
-        sched.set_timesteps(sigmas=DISTILLED_SIGMA_VALUES, device=dev)
-        meta["sample_sigmas"] = [float(s) for s in sched.sigmas]
+            sched = FlowMatchEulerDiscreteScheduler(
+                num_train_timesteps=1000, shift=1.0, use_dynamic_shifting=False, shift_terminal=None
+            )
+            sched.set_timesteps(sigmas=DISTILLED_SIGMA_VALUES, device=dev)
+            agree = bool(torch.equal(sched.sigmas.to(sigmas), sigmas) and torch.equal(sched.timesteps.to(timesteps), timesteps))
+            meta["sample_scheduler_check"] = {"agrees_with_diffusers": agree}
+            if not agree:
+                raise SystemExit(f"[oracle] diffusers scheduler disagrees: sigmas {sched.sigmas.tolist()}, timesteps {sched.timesteps.tolist()}")
+        except SystemExit:
+            raise
+        except Exception as e:  # API drift in the scheduler must not cost the trajectory
+            meta["sample_scheduler_check"] = {"error": repr(e)}
 
         # pipeline_ltx2.py:804-807, 844-845 — N(0,1) in float32, packed. The pipeline draws
         # video then audio from one generator; here each has its own saved draw.
@@ -403,17 +477,17 @@ def main() -> int:
         out["sample.video_noise"] = f32(lat)
         out["sample.audio_noise"] = f32(aud)
         t0 = time.time()
-        for i, t in enumerate(sched.timesteps):
+        for i, t in enumerate(timesteps):
             v, a = dit(lat, aud, t.expand(1))
             # Unguided (guidance_scale=1, stg_scale=0, modality_scale=1, rescale=0), the
             # pipeline still round-trips v → x0 → v in float32 (pipeline_ltx2.py:1466-1467,
             # 1573-1574); kept so the step is bit-comparable with a real pipeline run.
-            sigma = sched.sigmas[i]
+            sigma = sigmas[i]
             v = (lat - (lat - v * sigma)) / sigma
             a = (aud - (aud - a * sigma)) / sigma
-            # pipeline_ltx2.py:1577-1580 — x ← x + (sigma_next - sigma) · v. One scheduler
-            # serves both streams here: step() only reads sigmas[i], sigmas[i+1].
-            dt = sched.sigmas[i + 1] - sigma
+            # pipeline_ltx2.py:1577-1580 — scheduler.step is x ← x + (sigma_next - sigma) · v
+            # in float32, the same rule and the same sigmas for both streams.
+            dt = sigmas[i + 1] - sigma
             lat = lat + dt * v
             aud = aud + dt * a
             out[f"sample.step{i}.video"] = f32(lat)
@@ -431,7 +505,7 @@ def main() -> int:
     if "vae" not in skip or sample_video is not None:
         from diffusers import AutoencoderKLLTX2Video
 
-        vae = AutoencoderKLLTX2Video.from_pretrained(args.weights, subfolder="vae", torch_dtype=torch.float32).eval().to(dev)
+        vae = load(AutoencoderKLLTX2Video, "vae", torch.float32, "diffusers")
         mean = vae.latents_mean.view(1, -1, 1, 1, 1).float()
         std = vae.latents_std.view(1, -1, 1, 1, 1).float()
         out["vae.latents_mean"] = f32(vae.latents_mean)
@@ -469,10 +543,8 @@ def main() -> int:
         from diffusers import AutoencoderKLLTX2Audio
         from diffusers.pipelines.ltx2 import LTX2Vocoder
 
-        audio_vae = AutoencoderKLLTX2Audio.from_pretrained(
-            args.weights, subfolder="audio_vae", torch_dtype=torch.float32
-        ).eval().to(dev)
-        vocoder = LTX2Vocoder.from_pretrained(args.weights, subfolder="vocoder", torch_dtype=torch.float32).eval().to(dev)
+        audio_vae = load(AutoencoderKLLTX2Audio, "audio_vae", torch.float32, "diffusers")
+        vocoder = load(LTX2Vocoder, "vocoder", torch.float32, "diffusers")
         out["audio.latents_mean"] = f32(audio_vae.latents_mean)  # [128] = 8 channels × 16 bins
         out["audio.latents_std"] = f32(audio_vae.latents_std)
         meta["vocoder_sample_rate"] = int(vocoder.config.output_sampling_rate)

@@ -79,16 +79,19 @@ tier_query() {
     # The decoders alone: ~10 GB of weights, held in float32 by both sides.
     h3-vae) echo "$base gpu_ram>=32 disk_space>=100 cpu_ram>=48 inet_down>=500" ;;
     ltx2-vae) echo "$base gpu_ram>=24 disk_space>=80 cpu_ram>=32 inet_down>=500" ;;
+    # One DiT forward: diffusers holds the 66 GB bf16 transformer, then ours
+    # holds 37 GiB of it (AdaLN precomputed) plus ~10 GiB of activations.
+    h3-dit) echo "$base gpu_ram>=90 disk_space>=200 cpu_ram>=64 inet_down>=800" ;;
     ltx2-text) echo "$base gpu_ram>=90 disk_space>=180 cpu_ram>=64 inet_down>=800" ;;
     # A build box: the GPU is irrelevant, so this asks for the cheapest thing
     # with cores and RAM for a release cargo build plus nvcc for 7 SMs.
     build) echo "num_gpus=1 cuda_vers>=13.0 reliability>0.97 rentable=true verified=true direct_port_count>=1 inet_down>=200 cpu_cores>=8 cpu_ram>=16 disk_space>=40 ${FV_OFFER_QUERY_EXTRA:-}" ;;
-    *) die "unknown tier '$1' (mathprobe|kernels|parity|clip|compare|gen|oracle|fp8|taehv|vaeab|build|h3-text|ltx2-text|h3-vae|ltx2-vae)" ;;
+    *) die "unknown tier '$1' (mathprobe|kernels|parity|clip|compare|gen|oracle|fp8|taehv|vaeab|build|h3-text|ltx2-text|h3-vae|ltx2-vae|h3-dit)" ;;
   esac
 }
-tier_max_dph() { case "$1" in mathprobe) echo 0.40 ;; kernels) echo 0.25 ;; parity) echo 0.40 ;; clip) echo 0.60 ;; compare) echo 0.60 ;; gen) echo 0.80 ;; oracle) echo 1.60 ;; fp8) echo 0.80 ;; taehv) echo 0.40 ;; vaeab) echo 0.80 ;; build) echo 0.20 ;; h3-text | ltx2-text) echo 2.00 ;; h3-vae) echo 1.00 ;; ltx2-vae) echo 0.80 ;; esac; }
-tier_max_minutes() { case "$1" in mathprobe) echo 30 ;; kernels) echo 40 ;; parity) echo 75 ;; clip) echo 180 ;; compare) echo 240 ;; gen) echo 180 ;; oracle) echo 150 ;; fp8) echo 90 ;; taehv) echo 60 ;; vaeab) echo 90 ;; build) echo 45 ;; h3-text | ltx2-text) echo 150 ;; h3-vae | ltx2-vae) echo 90 ;; esac; }
-tier_disk() { case "$1" in mathprobe) echo 40 ;; kernels) echo 40 ;; parity) echo 60 ;; clip) echo 100 ;; compare) echo 180 ;; gen) echo 100 ;; oracle) echo 160 ;; fp8) echo 100 ;; taehv) echo 60 ;; vaeab) echo 100 ;; build) echo 40 ;; h3-text) echo 220 ;; ltx2-text) echo 180 ;; h3-vae) echo 100 ;; ltx2-vae) echo 80 ;; esac; }
+tier_max_dph() { case "$1" in mathprobe) echo 0.40 ;; kernels) echo 0.25 ;; parity) echo 0.40 ;; clip) echo 0.60 ;; compare) echo 0.60 ;; gen) echo 0.80 ;; oracle) echo 1.60 ;; fp8) echo 0.80 ;; taehv) echo 0.40 ;; vaeab) echo 0.80 ;; build) echo 0.20 ;; h3-text | ltx2-text) echo 2.00 ;; h3-vae) echo 1.00 ;; ltx2-vae) echo 0.80 ;; h3-dit) echo 2.00 ;; esac; }
+tier_max_minutes() { case "$1" in mathprobe) echo 30 ;; kernels) echo 40 ;; parity) echo 75 ;; clip) echo 180 ;; compare) echo 240 ;; gen) echo 180 ;; oracle) echo 150 ;; fp8) echo 90 ;; taehv) echo 60 ;; vaeab) echo 90 ;; build) echo 45 ;; h3-text | ltx2-text) echo 150 ;; h3-vae | ltx2-vae) echo 90 ;; h3-dit) echo 180 ;; esac; }
+tier_disk() { case "$1" in mathprobe) echo 40 ;; kernels) echo 40 ;; parity) echo 60 ;; clip) echo 100 ;; compare) echo 180 ;; gen) echo 100 ;; oracle) echo 160 ;; fp8) echo 100 ;; taehv) echo 60 ;; vaeab) echo 100 ;; build) echo 40 ;; h3-text) echo 220 ;; ltx2-text) echo 180 ;; h3-vae) echo 100 ;; ltx2-vae) echo 80 ;; h3-dit) echo 200 ;; esac; }
 
 usage() { sed -n '2,12p' "$0" | sed 's/^# \{0,1\}//'; exit 2; }
 
@@ -586,6 +589,23 @@ cmd_run() {
     STAGE_OPTIONAL=1 gpucheck_stage h3-audio-vae 1800 --keep-going --mode exact h3 audio-vae --weights "$wdir" --oracle "$odir/oracle.safetensors" || true
     gpucheck_stage h3-vae 3600 --keep-going --mode exact h3 vae --weights "$wdir" --oracle "$odir/oracle.safetensors"
     log "h3-vae done"
+    return 0
+  fi
+  # DiT milestone of the H3 port: one dense forward on the oracle's packed
+  # input (synthetic text: the text encoder is judged by h3-text, and leaving it
+  # out keeps this tier to one 70 GB download). Intermediate hooks localize a miss.
+  if [[ "$tier" == h3-dit ]]; then
+    local repo="${FV_H3_REPO:-FastVideo/FastVideo-FastH3-8-Step-V2}" wdir="$WORK/weights/h3" odir="$OUTR/h3"
+    remote_run fetch-h3 120 fetch "$repo" "$wdir" "transformer/*" "tokenizer/*" "scheduler/*" "audio_scheduler/*"
+    jq -n --arg p "$(jq -r '.prompts[0].prompt' "$FV_ROOT/scripts/gpu/prompts.json")" \
+      '{negative: "", prompts: [{name: "oracle", prompt: $p}]}' >"$RUN_DIR/prompt.json"
+    fv_rsync_to "$HOST" "$PORT" "$RUN_DIR/prompt.json" "$OUTR/prompt.json" >/dev/null
+    remote_run oracle-venv 1800 oracle-venv "${FV_TORCH_BACKEND:-cu130}"
+    remote_run wait-h3 5400 wait-weights "$wdir" 5400 transformer
+    remote_run oracle-h3 5400 model-oracle h3 --weights "$wdir" --prompts "$OUTR/prompt.json" --stages dit \
+      --out "$odir/oracle.safetensors" --meta "$odir/oracle.json"
+    gpucheck_stage h3-dit 7200 --keep-going --mode fast h3 dit --weights "$wdir" --oracle "$odir/oracle.safetensors"
+    log "h3-dit done"
     return 0
   fi
   # Decoder milestone of the LTX-2 port: audio VAE + vocoder, and the video

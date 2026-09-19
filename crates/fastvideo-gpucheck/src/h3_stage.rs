@@ -81,6 +81,22 @@ pub enum Stage {
         #[arg(long, default_value_t = 1e-3)]
         max_rel: f64,
     },
+    /// One dense DiT forward on the oracle's packed input, with the
+    /// intermediate hooks (temb, AdaLN block 0, refined text, block outputs).
+    /// Run with `--mode fast`: exact mode would load 37 GiB of linears as f32.
+    Dit {
+        /// Root of the FastH3 snapshot (reads `transformer/`).
+        #[arg(long)]
+        weights: PathBuf,
+        /// `--out` file of `h3_oracle.py` (stage `dit`).
+        #[arg(long)]
+        oracle: PathBuf,
+        #[arg(long, default_value = "cuda")]
+        device: String,
+        /// `dit_video` / `dit_audio`: bf16 on both sides through 50 blocks.
+        #[arg(long, default_value_t = 3e-2)]
+        max_rel: f64,
+    },
 }
 
 pub fn run(report: &mut Report, stage: &Stage) -> StageResult<()> {
@@ -95,6 +111,7 @@ pub fn run(report: &mut Report, stage: &Stage) -> StageResult<()> {
         }
         Stage::AudioVae { weights, oracle, device, max_abs } => audio_vae(report, weights, oracle, device, *max_abs),
         Stage::Vae { weights, oracle, device, max_abs, max_rel } => vae(report, weights, oracle, device, *max_abs, *max_rel),
+        Stage::Dit { weights, oracle, device, max_rel } => dit(report, weights, oracle, device, *max_rel),
     }
 }
 
@@ -289,5 +306,184 @@ fn vae(report: &mut Report, weights: &Path, oracle: &Path, device: &str, max_abs
         .collect();
     report.note("vae_max_abs_per_frame", json!({"values": per_frame}));
     report.check("vae_video_raw", d.non_finite == 0 && d.max_abs <= max_abs && d.within(max_rel), d.to_json(), json!({"max_abs": max_abs, "rel_l2": max_rel}))?;
+    Ok(())
+}
+
+/// The oracle's request, rebuilt on our side and checked against the layout
+/// tensors it saved, so a packing difference is named before any weight loads.
+struct OracleRequest {
+    layout: fastvideo_models::h3::packing::H3PackedLayout,
+    /// `[Nv, 96]` patchified `video_noise`.
+    video_rows: Vec<f32>,
+    /// `[2 Na, 32]`.
+    audio_rows: Vec<f32>,
+    latent_shape: [usize; 4],
+}
+
+fn oracle_request(
+    report: &mut Report,
+    orc: &mut std::collections::HashMap<String, st::F32Tensor>,
+    oracle: &Path,
+    cfg: &fastvideo_models::h3::config::H3TransformerConfig,
+    text_tokens: usize,
+) -> StageResult<OracleRequest> {
+    use fastvideo_models::h3::packing::{patchify, H3PackedLayout};
+    use fastvideo_models::h3::schedule::H3JointSchedule;
+
+    let video = st::take(orc, "video_noise", oracle)?;
+    let audio = st::take(orc, "audio_noise", oracle)?;
+    let [1, c, t, h, w] = video.shape[..] else {
+        return Err(anyhow::anyhow!("video_noise has shape {:?}, expected [1, C, T, H, W]", video.shape).into());
+    };
+    if audio.shape.len() != 2 || audio.shape[0] % 2 != 0 || audio.shape[1] != cfg.audio_in_channels {
+        return Err(anyhow::anyhow!("audio_noise has shape {:?}, expected [2 Na, {}]", audio.shape, cfg.audio_in_channels).into());
+    }
+    let layout = H3PackedLayout::new(text_tokens, (t, h, w), audio.shape[0] / 2, cfg.patch_size).map_err(|e| anyhow::anyhow!(e))?;
+
+    let want_pos = st::take(orc, "position_ids", oracle)?;
+    let ours: Vec<f32> = layout.position_ids.iter().flatten().map(|&p| p as f32).collect();
+    let worst = ours.iter().zip(&want_pos.data).map(|(a, b)| f64::from((a - b).abs())).fold(0.0, f64::max);
+    report.check(
+        "position_ids",
+        ours.len() == want_pos.data.len() && worst == 0.0,
+        json!({"rows": layout.sequence_length(), "max_abs": worst}),
+        json!({"rows": want_pos.shape.first(), "exact_as_f32": true}),
+    )?;
+    let want_tags = ints(&st::take(orc, "token_tags", oracle)?, "token_tags")?;
+    let tags_ok = want_tags.len() == layout.token_tags.len() && want_tags.iter().zip(&layout.token_tags).all(|(a, b)| *a == u32::from(*b));
+    report.check("token_tags", tags_ok, json!({"rows": layout.token_tags.len()}), json!({"exact": true}))?;
+
+    let schedule = H3JointSchedule::fasth3_8step();
+    for (name, ours) in [
+        ("video_sigmas", &schedule.video.sigmas),
+        ("audio_sigmas", &schedule.audio.sigmas),
+        ("video_timesteps", &schedule.video.timesteps),
+        ("audio_timesteps", &schedule.audio.timesteps),
+    ] {
+        let want = st::take(orc, name, oracle)?;
+        let same = want.data.len() == ours.len() && want.data.iter().zip(ours.iter()).all(|(a, b)| a.to_bits() == b.to_bits());
+        report.check(name, same, json!({"ours": ours}), json!({"reference": want.data, "bitwise": true}))?;
+    }
+    Ok(OracleRequest {
+        video_rows: patchify(&video.data, [c, t, h, w], cfg.patch_size).map_err(|e| anyhow::anyhow!(e))?,
+        audio_rows: audio.data,
+        latent_shape: [c, t, h, w],
+        layout,
+    })
+}
+
+fn dit(report: &mut Report, weights: &Path, oracle: &Path, device: &str, max_rel: f64) -> StageResult<()> {
+    use fastvideo_cudarc::h3::transformer::{AttnMode, DeviceLayout, H3TextRefiner, H3Transformer};
+    use fastvideo_models::h3::config::{H3TransformerConfig, TAG_AUDIO, TAG_TEXT, TAG_VIDEO};
+    use fastvideo_models::h3::schedule::H3JointSchedule;
+
+    report.set("device", crate::gpu::init(device)?);
+    let cfg = H3TransformerConfig::fasth3_8step();
+    let hidden = cfg.hidden_size;
+    let mut orc = st::load(oracle)?;
+    let text = st::take(&mut orc, "text", oracle)?;
+    let request = oracle_request(report, &mut orc, oracle, &cfg, text.shape[1])?;
+    let layout = &request.layout;
+    report.set("request", json!({"latent": request.latent_shape, "text_tokens": layout.text.len, "audio_rows": layout.audio.len, "video_rows": layout.video.len, "sequence": layout.sequence_length()}));
+
+    // Which rung the oracle ran: its sorted-unique timesteps name it.
+    let schedule = H3JointSchedule::fasth3_8step();
+    let want_ts = st::take(&mut orc, "dit_timesteps", oracle)?;
+    let step = (0..schedule.num_steps())
+        .find(|&i| schedule.row_timesteps(i).is_ok_and(|r| r.timesteps.len() == want_ts.data.len() && r.timesteps.iter().zip(&want_ts.data).all(|(a, b)| a.to_bits() == b.to_bits())))
+        .ok_or_else(|| anyhow::anyhow!("dit_timesteps {:?} match no rung of the FastH3 ladder", want_ts.data))?;
+    let want_index = ints(&st::take(&mut orc, "dit_timestep_indices", oracle)?, "dit_timestep_indices")?;
+    let ours_index = layout.timestep_indices(&schedule.row_timesteps(step).map_err(|e| anyhow::anyhow!(e))?);
+    report.check(
+        "timestep_indices",
+        want_index.len() == ours_index.len() && want_index.iter().zip(&ours_index).all(|(a, b)| *a as usize == *b),
+        json!({"step": step}),
+        json!({"exact": true}),
+    )?;
+
+    let map = WeightMap::open(&weights.join("transformer"))?;
+    let mem = crate::gpu::PeakMem::start();
+
+    // --- text refiner, on the oracle's text ----------------------------------
+    let text_dev = CudaTensor::from_vec(text.data, text.shape.clone())?;
+    let (refined, seconds) = measure(report, "text_refiner", || {
+        let refiner = H3TextRefiner::load(&cfg, &map)?;
+        Ok(refiner.forward(&text_dev)?)
+    })?;
+    report.note("text_refiner", json!({"seconds": seconds}));
+    let mut results = vec![("text_refined".to_string(), 5e-3, diff(&refined.host_cow()?, &st::take(&mut orc, "text_refined", oracle)?.data))];
+
+    // --- load: AdaLN table, then the resident stack (dense: no gates) ---------
+    let timer = std::time::Instant::now();
+    let model = H3Transformer::load(cfg.clone(), &map, &schedule, false)?;
+    report.note("load_dit", json!({"seconds": timer.elapsed().as_secs_f64()}));
+    let table = model.adaln_table();
+    // `temb` rows are the sorted-unique timesteps: video (smaller t) then audio.
+    let want_temb = st::take(&mut orc, "temb", oracle)?;
+    let ours_temb: Vec<f32> = table.temb[2 * step].iter().chain(&table.temb[2 * step + 1]).copied().collect();
+    results.push(("temb".into(), 1e-5, diff(&ours_temb, &want_temb.data)));
+    // adaln_block0 is [6 params, n_t * 3 rows, hidden]; a T2AV forward reads
+    // rows 0 (t_video, video), 1 (t_video, text) and 5 (t_audio, audio).
+    let want_adaln = st::take(&mut orc, "adaln_block0", oracle)?;
+    let rows = want_adaln.shape.get(1).copied().unwrap_or(0);
+    let (mut ours_adaln, mut ref_adaln) = (Vec::new(), Vec::new());
+    for (tag, row) in [(TAG_VIDEO, 0usize), (TAG_TEXT, 1), (TAG_AUDIO, 5)] {
+        let slot = table.block_slot(step, 0, tag);
+        for p in 0..6 {
+            // The table stores 1 + scale for the two scale parameters (1 and 4).
+            let plus = if p == 1 || p == 4 { 1.0 } else { 0.0 };
+            ours_adaln.extend(slot[p * hidden..(p + 1) * hidden].iter().map(|v| v - plus));
+            ref_adaln.extend_from_slice(&want_adaln.data[(p * rows + row) * hidden..(p * rows + row + 1) * hidden]);
+        }
+    }
+    results.push(("adaln_block0".into(), 2e-3, diff(&ours_adaln, &ref_adaln)));
+
+    // --- one forward ------------------------------------------------------------
+    let stride = orc
+        .get("block_0")
+        .map(|t| layout.sequence_length().div_ceil(t.shape[1].max(1)))
+        .unwrap_or(16);
+    let strided: Vec<usize> = (0..layout.sequence_length()).step_by(stride.max(1)).collect();
+    let device_layout = DeviceLayout::new(&cfg, layout.clone())?;
+    let video_rows = CudaTensor::from_vec(request.video_rows, vec![layout.video.len, cfg.video_patch_dim()])?;
+    let audio_rows = CudaTensor::from_vec(request.audio_rows, vec![layout.audio.len, cfg.audio_in_channels])?;
+    let wanted: Vec<String> = orc.keys().filter(|k| k.starts_with("block_")).cloned().collect();
+    let mut dumps: Vec<(String, Vec<f32>)> = Vec::new();
+    let ((video_v, audio_v), seconds) = measure(report, "dit_forward", || {
+        let out = model.forward(
+            step,
+            &video_rows,
+            &audio_rows,
+            &refined,
+            &device_layout,
+            AttnMode::Dense,
+            Some(&mut |name, x| {
+                if wanted.iter().any(|w| w == name) {
+                    let rows = x.reshape(vec![x.shape[1], x.shape[2]])?.index_select_rows(&strided)?;
+                    dumps.push((name.to_string(), rows.host_cow()?.into_owned()));
+                }
+                Ok(())
+            }),
+        )?;
+        Ok((out.0.host_cow()?.into_owned(), out.1.host_cow()?.into_owned()))
+    })?;
+    report.note("dit_forward", json!({"seconds": seconds, "peak_mib": mem.stop(), "block_row_stride": stride}));
+
+    for (name, got) in &dumps {
+        let index: usize = name.trim_start_matches("block_").parse().unwrap_or(0);
+        // Divergence is allowed to grow with depth: bf16 on both sides.
+        let limit = if index == 0 { 5e-3 } else if index < cfg.num_layers / 2 { 2e-2 } else { 5e-2 };
+        results.push((name.clone(), limit, diff(got, &st::take(&mut orc, name, oracle)?.data)));
+    }
+    results.push(("dit_video".into(), max_rel, diff(&video_v, &st::take(&mut orc, "dit_video", oracle)?.data)));
+    results.push(("dit_audio".into(), max_rel, diff(&audio_v, &st::take(&mut orc, "dit_audio", oracle)?.data)));
+
+    // Every metric lands before the first gate can stop the stage: where the
+    // error starts to grow is the diagnosis.
+    report.set("metrics", results.iter().map(|(n, _, d)| (n.clone(), d.to_json())).collect::<serde_json::Map<_, _>>());
+    for (name, limit, d) in &results {
+        let cosine_min = if name.starts_with("dit_") { 0.999 } else { 0.0 };
+        report.check(name.as_str(), d.within(*limit) && d.cosine >= cosine_min, d.to_json(), json!({"rel_l2": limit, "cosine_min": cosine_min}))?;
+    }
     Ok(())
 }
