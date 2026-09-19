@@ -188,6 +188,14 @@ impl Ltx2Transformer {
     /// checkpoint's layout: the diffusers `transformer/` folder or the single
     /// `ltx-2-19b-*.safetensors`.
     pub fn load(map: &WeightMap, keys: &Keys, cfg: &Ltx2TransformerConfig) -> Result<Self> {
+        Self::load_blocks(map, keys, cfg, &(0..cfg.num_layers).collect::<Vec<_>>())
+    }
+
+    /// [`Self::load`] with only the listed blocks (in that order) — the globals
+    /// are always loaded. For the key-manifest tests, which check the loader at
+    /// the production config without materialising 19B parameters; a model
+    /// loaded this way is not the model.
+    pub(crate) fn load_blocks(map: &WeightMap, keys: &Keys, cfg: &Ltx2TransformerConfig, which: &[usize]) -> Result<Self> {
         if cfg.gated_attn || cfg.audio_gated_attn || cfg.cross_attn_mod || cfg.audio_cross_attn_mod || cfg.perturbed_attn || !cfg.use_prompt_embeddings {
             return Err(msg("ltx2 dit: gated attention, prompt modulation and perturbed attention are LTX-2.3+, not supported"));
         }
@@ -205,8 +213,11 @@ impl Ltx2Transformer {
         let a2v_dims = AttentionDims { query_dim: dv, context_dim: da, ..audio_dims };
         let v2a_dims = AttentionDims { query_dim: da, context_dim: dv, ..audio_dims };
 
-        let mut blocks = Vec::with_capacity(cfg.num_layers);
-        for i in 0..cfg.num_layers {
+        let mut blocks = Vec::with_capacity(which.len());
+        for &i in which {
+            if i >= cfg.num_layers {
+                return Err(msg(format!("ltx2 dit: block {i} of a {}-block model", cfg.num_layers)));
+            }
             let p = format!("transformer_blocks.{i}");
             let attn = |name: &str, dims: AttentionDims| Attention::load(map, keys, &format!("{p}.{name}"), dims, eps);
             blocks.push(Block {

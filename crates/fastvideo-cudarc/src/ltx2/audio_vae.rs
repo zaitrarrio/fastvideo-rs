@@ -111,7 +111,7 @@ impl AudioDecoder {
             let blocks = (0..=cfg.num_res_blocks)
                 .map(|i| Resnet::load(map, &format!("decoder.up.{level}.block.{i}"), if i == 0 { cin } else { cout }, cout))
                 .collect::<Result<Vec<_>>>()?;
-            let upsample = if level == 0 { None } else { Some(CausalConv2d::load(map, &format!("decoder.up.{level}.upsample"), cout, cout, 3)?) };
+            let upsample = if level == 0 { None } else { Some(CausalConv2d::load(map, &format!("decoder.up.{level}.upsample.conv"), cout, cout, 3)?) };
             levels.push(Level { blocks, upsample });
             cin = cout;
         }
@@ -290,7 +290,7 @@ pub(crate) mod tests {
                         }
                     }
                 }
-                let y = conv(&map, &format!("decoder.up.{level}.upsample"), &up, cout, 3);
+                let y = conv(&map, &format!("decoder.up.{level}.upsample.conv"), &up, cout, 3);
                 // Drop the first time row.
                 let mut v = Vec::with_capacity(y.c * (y.h - 1) * y.w);
                 for c in 0..y.c {

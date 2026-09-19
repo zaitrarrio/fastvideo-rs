@@ -239,6 +239,12 @@ pub struct TextConnectors {
 
 impl TextConnectors {
     pub fn load(map: &WeightMap, keys: &Keys, cfg: &Ltx2ConnectorsConfig) -> Result<Self> {
+        Self::load_with_projection(map, keys, cfg, &keys.text_proj_in(map)?)
+    }
+
+    /// [`Self::load`] with the text projection's module prefix given, not
+    /// probed — the probe needs a real checkpoint to look into.
+    pub(crate) fn load_with_projection(map: &WeightMap, keys: &Keys, cfg: &Ltx2ConnectorsConfig, text_proj_in: &str) -> Result<Self> {
         if cfg.per_modality_projections || cfg.proj_bias {
             return Err(msg("connectors: per-modality projections / projection bias are LTX-2.3, not supported"));
         }
@@ -249,7 +255,7 @@ impl TextConnectors {
         }
         let eps = cfg.norm_eps as f32;
         Ok(Self {
-            text_proj_in: Linear::load(map, &keys.text_proj_in(map)?, cfg.text_proj_in_features(), cfg.caption_channels, false)?,
+            text_proj_in: Linear::load(map, text_proj_in, cfg.text_proj_in_features(), cfg.caption_channels, false)?,
             video: Connector::load(
                 map,
                 keys,

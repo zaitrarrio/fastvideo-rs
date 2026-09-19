@@ -17,6 +17,9 @@ pub mod transformer;
 pub mod vae;
 pub mod vocoder;
 
+#[cfg(test)]
+mod manifest_tests;
+
 use crate::wan::tensor::{CudaTensor, Result, TensorError};
 
 pub(crate) fn msg(s: impl Into<String>) -> TensorError {

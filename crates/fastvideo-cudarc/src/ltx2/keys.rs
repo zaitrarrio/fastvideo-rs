@@ -88,6 +88,13 @@ impl Keys {
         format!("{SINGLE_FILE_ROOT}.{}", renamed.join("."))
     }
 
+    /// Where a single file may keep the text projection. The published
+    /// `ltx-2-19b-distilled.safetensors` uses the first (outside the DiT root);
+    /// the second is kept for re-exports that nest everything.
+    pub(crate) fn text_proj_in_candidates() -> [String; 2] {
+        ["text_embedding_projection.aggregate_embed".to_string(), format!("{SINGLE_FILE_ROOT}.text_embedding_projection.aggregate_embed")]
+    }
+
     /// Module prefix of the connectors' `text_proj_in` (188160 → 3840). In the
     /// single file it is `text_embedding_projection.aggregate_embed`, and the
     /// releases disagree on whether that sits under the DiT root, so probe.
@@ -95,10 +102,7 @@ impl Keys {
         if self.layout == Layout::Diffusers {
             return Ok("text_proj_in".to_string());
         }
-        let candidates = [
-            "text_embedding_projection.aggregate_embed".to_string(),
-            format!("{SINGLE_FILE_ROOT}.text_embedding_projection.aggregate_embed"),
-        ];
+        let candidates = Self::text_proj_in_candidates();
         candidates
             .iter()
             .find(|c| map.has_tensor(&format!("{c}.weight")))
