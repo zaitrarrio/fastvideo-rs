@@ -2,6 +2,26 @@
 
 Project code: FVID
 
+### FVID · 2026-09-19 · FVID-2026-09-19-text-plan-measured
+- Trigger: "lets run" — the text-encoding plan (oracle cache, conditioning cache + slim checkpoints, resident encoders, FP8 rows, prefetch) had only been checked on the host. All on RTX PRO 6000 96GB (user's choice; the one A100 80GB offer never booted, and 80 GB cannot hold H3 + a resident encoder or a float32 LTX-2 reference).
+- Kernels tier (RTX 3060, <1 cent): FP8 row codes and dequantized weights equal the host exactly; the scales were one ulp off because the device compiler turns `a / 448` into a reciprocal multiply — both sides now spell `a * (1/448)` and are exact. Prefetched encode == plain streamed encode, bit for bit, for stored-bf16 and stored-f32 checkpoints.
+- Text conditioning cost, same prompt and seed per model:
+
+  | route | H3 (Qwen3-VL-32B tap 50) | LTX-2 (Gemma-3-12B + connectors) |
+  | --- | ---: | ---: |
+  | streamed + prefetch, cold disk | 13.3 s (compute starved 11.6 s) | 15.2 s from the f32 checkpoint (starved 7.9 s) |
+  | streamed + prefetch, slim bf16 checkpoint | n/a (already bf16, unread shards never fetched) | 10.7 s (starved 4.7 s) |
+  | streamed + prefetch, warm page cache | 3.9 s (starved 3.0 s) | — |
+  | resident, new prompt | 0.33-0.41 s (FP8 rows, 22.7 GiB, 21-40 s one-time load, peak 83.4 GB) | 2.7 s (bf16, 20.0 GiB, 11.2 s load, peak 70.3 GB) |
+  | conditioning cache hit | 0.19-0.22 s | 2.4 s |
+
+  Reading: `compute starved` ~= `host read+convert` everywhere, so the streamed path is disk-bound and prefetch has nothing left to overlap on a cold cache; its win is the warm-cache case. The real levers are the resident encoder and the cache. LTX-2 has a ~2.4 s per-prompt floor that is neither Gemma nor the connectors (a cache hit pays it) — unexplained, tokenizer parse suspected. H3 loads the resident encoder (27 s) even when the prompt is a cache hit — wasted in a one-shot run.
+- Parity, first hardware runs: H3 text vs transformers — ids exact, tap 50 rel 1.37e-2 streamed and 1.36e-2 resident FP8 (FP8 vs our native 4.2e-3; generation-time drift check 4.15e-3, cosine 0.99999). Gemma-3 vs transformers — all 49 hidden states pass, worst 1.65e-2 at the normed last state, ids exact; connectors vs float32 3.2e-7; end to end vs the bf16 reference 3.4e-3 / 3.7e-3. LTX-2 DiT judged against a float32 reference: ours is CLOSER to float32 than the reference's own bf16 pass at every loop step (step 7 video 0.212 vs 0.371); rope tables 10/10, forward 63/66, loop 17/22 — the misses are early audio-video cross-attention taps at 1.3-1.6x the bf16 floor (gate 1.25x), audio steps 6-7 at ~1.1x the gate, a 35 dB end-to-end frame PSNR gate that assumes non-diverging trajectories, and the vocoder at 40.9 dB SNR vs a 50 dB gate. Gates not yet re-set.
+- All three reference dumps are now in the oracle cache (h3 text 19 MB, ltx2 text 849 MB, ltx2 dit 1.2 GB): these tiers no longer build a Python environment or load a reference model.
+- Hosts: machine 111175 rented GPUs with ~60 GB held by another process (two LTX-2 OOMs and one reference OOM before free-memory logging showed it); `remote.sh env` now fails on a non-empty GPU, which marks the machine bad. Machine 150596 (38.146.30.19) downloads at 0-62 MiB/s; blacklisted. A chained tier idles ~5 min at hand-off because a leftover child keeps the log pipe open — not fixed yet.
+- Cost: about $2.9 for everything above, of which ~$1.1 was lost to the two bad hosts.
+- Reversibility: n/a (measurements); the harness changes are env-gated (`FV_TEXT_PLAN`, `FV_GPU_RAM_MIN`, `FV_DISK_GB`, `FV_MAX_GPU_USED_MIB`).
+
 ### FVID · 2026-09-19 · FVID-2026-09-19-text-encoder-prefetch
 - Trigger: last step of the text-encoding plan the user approved ("let's follow your recommended order", then "proceed with step 5"). After the conditioning cache and the resident encoders, the streamed forward is still what runs on a card without room for a resident encoder and on every first prompt, and it was a strict sequence per layer: page weights in, convert, copy from pageable memory, then launch — the device idle for the first three.
 - Decision: **the streamed encoder stages layer i+1 while layer i computes** (`llm/prefetch.rs`). A worker thread fills one layer-sized page-locked buffer straight from the mapped shards and uploads each tensor on a second, non-blocking stream; one staged layer waits in a bounded channel. Both ports get it without a change, since both stream through `llm::hidden_states`. `FASTVIDEO_LLM_PREFETCH=0` turns it off; it turns itself off (with a log line) when bf16 linears are off or the pinned allocation is refused.
