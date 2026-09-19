@@ -393,9 +393,20 @@ cmd_oracle_venv() {
     uv venv --python 3.12 --seed "$ORACLE_VENV" >&2 || die "uv venv failed"
   fi
   log "installing torch ($torch_backend), transformers, diffusers@main"
-  VIRTUAL_ENV="$ORACLE_VENV" UV_TORCH_BACKEND="$torch_backend" \
-    uv pip install --python "$ORACLE_VENV/bin/python" torch torchvision transformers accelerate safetensors sentencepiece protobuf pillow numpy \
-      "diffusers @ git+https://github.com/huggingface/diffusers" >&2 || die "oracle venv install failed"
+  # diffusers from a source tarball, not a git clone: one HTTP GET instead of a
+  # pack negotiation that a flaky host link breaks ("RPC failed; curl 92"), and
+  # no git needed. Retried, because a rented box's network owes us nothing.
+  local attempt ok=0
+  for attempt in 1 2 3; do
+    if VIRTUAL_ENV="$ORACLE_VENV" UV_TORCH_BACKEND="$torch_backend" \
+      uv pip install --python "$ORACLE_VENV/bin/python" torch torchvision transformers accelerate safetensors sentencepiece protobuf pillow numpy \
+        "diffusers @ https://github.com/huggingface/diffusers/archive/refs/heads/main.tar.gz" >&2; then
+      ok=1; break
+    fi
+    log "oracle venv install attempt $attempt failed; retrying"
+    sleep $(( attempt * 10 ))
+  done
+  (( ok == 1 )) || die "oracle venv install failed"
   "$ORACLE_VENV/bin/python" -c 'import torch, transformers, diffusers; print("torch", torch.__version__, "cuda", torch.version.cuda, "transformers", transformers.__version__, "diffusers", diffusers.__version__, "gpu", torch.cuda.get_device_name(0))' >&2 \
     || die "oracle venv import failed"
   log "oracle venv ok"

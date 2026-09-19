@@ -2,6 +2,33 @@
 
 Project code: FVID
 
+### FVID · 2026-09-19 · FVID-2026-09-19-audio-video-ports-h3-ltx2
+- Trigger: Wan / FastWan is silent ("I don't hear any audio"). The user asked for `FastVideo/FastVideo-FastH3-8-Step-V2` (DMD2-distilled MiniMax-H3) and LTX-2, both text-to-audio-video, ported in parallel onto the cudarc backend, dev card RTX PRO 6000 96 GB.
+- Decision: **both ports exist and generate; specs in docs/ports/{h3,ltx2}.md.** Shared foundation first (lazy shard-aware loader with disk bf16 -> device bf16; `llm`, one streaming decoder-only encoder for Qwen3-VL-32B and Gemma-3-12B; rotate_half RoPE with explicit tables, GQA, erf-GELU, Snake, reflect/replicate pad, GroupNorm, cuDNN conv with dilation/groups/transposed, conv1d; WAV + AAC mux), then one agent per model writing only its own modules.
+  - H3: Qwen3-VL tap 50 streamed (shards 12-14 never read); the ~26 GB of AdaLN weights never reside — each block's `adaln_proj` is streamed once and the `[8,50,3,6,5376]` table kept; VSA-H3 reuses the existing tensor-core fine kernel unchanged (forced prefix columns as a 1e30 bias before the ordinary top-k, prefix query rows recomputed dense).
+  - LTX-2: distilled DiT + connectors from the official single file through a key-rename view (proved identical, to the last digit, to the community diffusers conversion); video VAE chunking that is exact (two-frame carry per 3x3x3 conv) where diffusers' tiling is a blend.
+- Measured on one RTX PRO 6000, our binary alone (no Python on the box), first clip in the process:
+
+  | | FastH3 8-Step V2 | LTX-2 19B distilled (stage 1) |
+  | --- | ---: | ---: |
+  | clip | 1344x768, 124 frames @ 24 fps, 32 kHz stereo | 768x512, 121 frames @ 24 fps, 24 kHz stereo |
+  | text encode (streamed) | 10.6 s | 15.7 s |
+  | denoise, 8 steps | 94.1 s (11.8 s/step, VSA-H3 80%) | 13.5 s (1.59 s/step) |
+  | audio decode | 0.39 s | 0.43 s |
+  | video decode | 22.9 s | 1.59 s |
+  | write tail | 0.31 s | 0.24 s |
+  | weight loads (once) | 15.0 s | 19.4 s |
+  | wall | 145.5 s | 51.4 s |
+  | warm, new prompt / cached embeddings | ~129 s / ~118 s | ~31 s / ~16 s |
+  | peak VRAM | 53.6 GB | 39.9 GB |
+
+  H3 dense attention is 87 s/step at 38k tokens, so VSA-H3 is 7.4x. The tiled NVRTC "flash" SDPA is ~20x SLOWER than chunked cuBLAS at that length (25 blocks in 15 minutes) — it is a memory tool, not a speed one.
+- Parity against diffusers on hardware: H3 text tap 50 rel 1.37e-2 (bf16 both sides), token ids exact; H3 audio decoder 1.29e-5 and video decoder 1.47e-6 once the reference was pinned to real float32 (PyTorch's default TF32 convolutions had made a "float32" oracle 3e-3 wrong); H3 DiT forward 1.30e-2 video / 9.2e-3 audio with layout and both sigma ladders bitwise; VSA-H3 3e-3 vs f64 host loops; LTX-2 video VAE PSNR 91 dB, streamed == whole to 1.2e-6. Eight-step trajectories drift from a bf16 reference by ~2x per step in BOTH ports (H3 0.40, LTX-2 video 0.34 at step 7) while producing coherent, on-prompt clips: few-step sampling amplifies rounding; late-step trajectory parity against a bf16 reference is the wrong gate.
+- Published comparison (FastH3 blog, warm E2E, 5 s at 1344x768): base H3 dense 132.5 s on 1x B200; FastH3 Preview v1 (4-step, 90% sparse) 16.2 s on 1x B200, 6.1 s on 4x. Ours is the 8-step / 80% checkpoint on a card ~2.5-3x slower than a B200, with f32 activations around bf16 GEMMs. Lightricks publishes no latency figure for LTX-2.
+- Process rules the user set today, now in memory: never build/run/test on a GPU unless the step needs one (binary from CI via `task dist:ci`; key-manifest tests and CPU tiny-references against diffusers' own classes guard every loader and every structural property on a laptop); use published numbers rather than building oracle infrastructure. Costly lessons behind them: three oracle runs lost to venv environment bugs, an LTX-2 key mismatch found on a rented box, a reused box running a stale binary, a box idling through a git clone.
+- Next levers, by measured share: H3 denoise is 80% of a warm clip (bf16 activations in the block, fused modulation + SwiGLU), H3 VAE decode 19% (larger tile batches); for LTX-2 a new prompt is half text encoding (Gemma ships as 47 GB of float32 — cache embeddings, or store a bf16 copy).
+- Reversibility: cheap — new modules only; the Wan path is untouched and still passes its kernels and parity tiers.
+
 ### FVID · 2026-09-19 · FVID-2026-09-19-taehv-default-streaming-write
 - Trigger: with exact-SM cubins and the tensor-core fine stage in, an 8s clip was 19.7s (H100 NVL) / 20.7s (RTX 5090) and only ~25% of it was the DiT. The Wan VAE decode and the serial PNG-then-ffmpeg write were the next two terms, and neither is a kernel problem.
 - Decision: **the `gen` tier decodes with TAEHV by default (`FV_TAEHV=0` for the Wan VAE) and frames are written while the decoder runs.**
