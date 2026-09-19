@@ -672,9 +672,13 @@ fn flux2_rope(text_len: usize, img_h: usize, img_w: usize, axes: &[usize; 4], th
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Mutex;
+
+    static ROPE_STATS_LOCK: Mutex<()> = Mutex::new(());
 
     #[test]
     fn apply_rotary_records_host_stats() {
+        let _guard = ROPE_STATS_LOCK.lock().unwrap();
         reset_rope_host_stats();
         let xs = CudaTensor::from_vec((0..16).map(|i| i as f32 * 0.1).collect(), vec![1, 2, 1, 8]).unwrap();
         let ones = vec![1.0f32; 16];
@@ -683,25 +687,37 @@ mod tests {
         let sin = CudaTensor::from_vec(zeros, vec![2, 8]).unwrap();
         let out = apply_rotary(&xs, &cos, &sin).unwrap();
         assert_eq!(out.shape, vec![1, 2, 1, 8]);
-        assert_eq!(out.data, xs.data, "cos=1 sin=0 is identity");
+        assert_eq!(
+            &*out.host_cow().unwrap(),
+            &*xs.host_cow().unwrap(),
+            "cos=1 sin=0 is identity"
+        );
         let stats = rope_host_stats();
-        assert_eq!(stats.apply_calls, 1);
-        assert_eq!(stats.apply_elems, 16);
-        assert_eq!(stats.device_apply_calls, 0);
+        if crate::wan::stats::device_expected() {
+            assert_eq!(stats.device_apply_calls, 1);
+            assert_eq!(stats.device_apply_elems, 16);
+            assert_eq!(stats.apply_calls, 0);
+        } else {
+            assert_eq!(stats.apply_calls, 1);
+            assert_eq!(stats.apply_elems, 16);
+            assert_eq!(stats.device_apply_calls, 0);
+        }
     }
 
     #[test]
     fn apply_rotary_quarter_turn() {
+        let _guard = ROPE_STATS_LOCK.lock().unwrap();
         reset_rope_host_stats();
         let xs = CudaTensor::from_vec(vec![1.0, 2.0, 3.0, 4.0], vec![1, 1, 1, 4]).unwrap();
         let cos = CudaTensor::from_vec(vec![0.0, 0.0, 0.0, 0.0], vec![1, 4]).unwrap();
         let sin = CudaTensor::from_vec(vec![1.0, 1.0, 1.0, 1.0], vec![1, 4]).unwrap();
         let out = apply_rotary(&xs, &cos, &sin).unwrap();
         // (x1, x2) → (-x2, x1)
-        assert!((out.data[0] + 2.0).abs() < 1e-6);
-        assert!((out.data[1] - 1.0).abs() < 1e-6);
-        assert!((out.data[2] + 4.0).abs() < 1e-6);
-        assert!((out.data[3] - 3.0).abs() < 1e-6);
+        let got = out.host_cow().unwrap();
+        assert!((got[0] + 2.0).abs() < 1e-6);
+        assert!((got[1] - 1.0).abs() < 1e-6);
+        assert!((got[2] + 4.0).abs() < 1e-6);
+        assert!((got[3] - 3.0).abs() < 1e-6);
     }
 
     #[test]
@@ -715,6 +731,7 @@ mod tests {
 
     #[test]
     fn rope_tables_cached_across_forwards() {
+        let _guard = ROPE_STATS_LOCK.lock().unwrap();
         let mut dit = Flux2Transformer2D::zeros(Flux2ArchConfig::tiny());
         let hidden = CudaTensor::zeros(&[1, dit.cfg.in_channels, 1, 2, 2]);
         let enc = CudaTensor::zeros(&[1, 4, dit.cfg.joint_attention_dim]);
