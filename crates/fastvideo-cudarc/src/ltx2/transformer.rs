@@ -262,7 +262,8 @@ impl Ltx2Transformer {
                 video_to_audio: attn("video_to_audio_attn", v2a_dims)?,
             });
             if (i + 1) % 8 == 0 || i + 1 == cfg.num_layers {
-                crate::wan::log::info(format_args!("ltx2 dit: loaded block {}/{}", i + 1, cfg.num_layers));
+                let free = crate::wan::device::free_memory().map_or(-1.0, |(f, _)| f as f64 / f64::from(1u32 << 30));
+                crate::wan::log::info(format_args!("ltx2 dit: loaded block {}/{} ({free:.1} GiB free)", i + 1, cfg.num_layers));
             }
         }
         let ada = |name: &str, dim: usize, rows: usize| AdaLnSingle::load(map, keys, name, dim, rows, cfg.timestep_proj_dim);
