@@ -1,6 +1,8 @@
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand, ValueEnum};
-use fastvideo_core::{BackendKind, LoadOptions, VideoGenerator, WAN_MODEL_DEFINITIONS};
+use fastvideo_core::{
+    BackendKind, LoadOptions, VideoGenerator, FLUX2_MODEL_DEFINITIONS, WAN_MODEL_DEFINITIONS,
+};
 use fastvideo_models::{DmdSchedule, FlowUniPCMultistepScheduler};
 use serde::Deserialize;
 use std::path::Path;
@@ -21,7 +23,7 @@ fn write_sidecar(dir: Option<&str>, name: &str, value: &serde_json::Value) {
 #[derive(Parser)]
 #[command(
     name = "fastvideo",
-    about = "Rust Wan/FastWan inference (cudarc CUDA primary; Burn/Candle/Luminal frozen)."
+    about = "Rust Wan/FastWan and Flux2 inference (cudarc CUDA primary; Burn/Candle/Luminal frozen)."
 )]
 struct Cli {
     #[command(subcommand)]
@@ -30,7 +32,7 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
-    /// List registered Wan/FastWan Hugging Face ids.
+    /// List registered Wan/FastWan and Flux2 Hugging Face ids.
     ListModels,
     /// Resolve a model id and run generation (use --tiny for a zero-weight smoke test).
     Generate(GenerateArgs),
@@ -196,10 +198,11 @@ fn main() -> Result<()> {
     let cli = Cli::parse();
     match cli.command {
         Commands::ListModels => {
-            for def in WAN_MODEL_DEFINITIONS {
+            for def in WAN_MODEL_DEFINITIONS.iter().chain(FLUX2_MODEL_DEFINITIONS) {
                 for id in def.hf_model_paths {
                     println!(
-                        "{id}\tpreset={}\tsampling={}",
+                        "{id}\tfamily={}\tpreset={}\tsampling={}",
+                        def.family.as_str(),
                         def.preset,
                         def.sampling.as_str()
                     );
@@ -383,6 +386,29 @@ fn main() -> Result<()> {
                         sched.inference_timesteps().len(),
                         sched.inference_sigmas()[0],
                         sched.inference_timesteps_i64()[0]
+                    );
+                }
+                fastvideo_core::SamplingAlgorithm::FlowMatchEuler => {
+                    let seq = {
+                        let (h, w) = fastvideo_models::flux2::packed_hw(
+                            gen.sampling.height as usize,
+                            gen.sampling.width as usize,
+                            8,
+                        );
+                        h * w
+                    };
+                    let mu = fastvideo_models::flux2::compute_empirical_mu(
+                        seq,
+                        gen.sampling.num_inference_steps as usize,
+                    );
+                    let mut sched = fastvideo_models::FlowMatchEulerDiscreteScheduler::new(1000, 1.0);
+                    sched.set_timesteps_flux2(gen.sampling.num_inference_steps as usize, Some(mu));
+                    println!(
+                        "flux2_mu={mu:.6} first_timestep={:.6} last={:.6} n={} first_sigma={:.6}",
+                        sched.inference_timesteps()[0],
+                        sched.inference_timesteps().last().copied().unwrap_or(0.0),
+                        sched.inference_timesteps().len(),
+                        sched.inference_sigmas()[0]
                     );
                 }
             }

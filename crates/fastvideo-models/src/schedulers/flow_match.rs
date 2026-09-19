@@ -86,6 +86,37 @@ impl FlowMatchEulerDiscreteScheduler {
         &self.sigmas
     }
 
+    /// Flux2 / Diffusers: `linspace(1, 1/steps, steps)` then optional exponential μ shift.
+    pub fn set_timesteps_flux2(&mut self, num_inference_steps: usize, mu: Option<f64>) {
+        let n = num_inference_steps.max(1);
+        let mut sigmas = Vec::with_capacity(n + 1);
+        if n == 1 {
+            sigmas.push(1.0);
+        } else {
+            let last = 1.0 / n as f64;
+            for i in 0..n {
+                sigmas.push(1.0 + (last - 1.0) * (i as f64) / ((n - 1) as f64));
+            }
+        }
+        if let Some(mu) = mu {
+            for s in &mut sigmas {
+                *s = crate::flux2::family::flux2_time_shift(*s, mu);
+            }
+        } else {
+            for s in &mut sigmas {
+                *s = apply_shift(*s, self.shift);
+            }
+        }
+        let timesteps: Vec<f64> = sigmas
+            .iter()
+            .map(|s| s * f64::from(self.num_train_timesteps))
+            .collect();
+        sigmas.push(0.0);
+        self.timesteps = timesteps;
+        self.sigmas = sigmas;
+        self.step_index = None;
+    }
+
     /// `prev = sample + (sigma_next - sigma) * model_output`
     pub fn step_euler(&mut self, sample: &[f32], model_output: &[f32]) -> Result<Vec<f32>, String> {
         if sample.len() != model_output.len() {
@@ -143,5 +174,14 @@ mod tests {
         let vel = vec![0.0f32, 0.0, 0.0];
         let out = sched.step_euler(&sample, &vel).unwrap();
         assert_eq!(out, sample);
+    }
+
+    #[test]
+    fn flux2_linspace_starts_at_one() {
+        let mut sched = FlowMatchEulerDiscreteScheduler::new(1000, 1.0);
+        sched.set_timesteps_flux2(4, None);
+        assert_eq!(sched.timesteps.len(), 4);
+        assert!((sched.sigmas[0] - 1.0).abs() < 1e-12);
+        assert!((sched.sigmas[4] - 0.0).abs() < 1e-12);
     }
 }

@@ -1,9 +1,11 @@
 # fastvideo-rs
 
 Rust inference port of [FastVideo](https://github.com/hao-ai-lab/FastVideo) for the
-Wan / FastWan family. **Primary generate path: cudarc CUDA** (lean
-`--features cuda-cudarc`). Candle remains a frozen behavioral oracle for ports;
-Burn and Luminal are frozen (no new Wan features).
+Wan / FastWan family and **FLUX.2** (dev + Klein). **Primary generate path:
+cudarc CUDA** (lean `--features cuda-cudarc`). Candle remains a frozen
+behavioral oracle for ports; Burn and Luminal are frozen (no new Wan/Flux
+features). Flux2 inventory, Vast benches, and the FLUX.1 follow-up list live in
+[docs/flux2-port.md](docs/flux2-port.md).
 
 Real inference targets Vast.ai NVIDIA GPUs. Mac/CI stay on CPU (cudarc without
 `--features cuda` / `cuda-cudarc` errors if CUDA is requested).
@@ -13,6 +15,10 @@ Real inference targets Vast.ai NVIDIA GPUs. Mac/CI stay on CPU (cudarc without
 | Piece | State |
 | --- | --- |
 | Wan/FastWan HF id registry | done |
+| Flux2 HF id registry (dev + Klein 4B/9B) | done |
+| Flux2 Candle oracle (DiT + VAE + Klein Qwen3) | done (tiny + Diffusers load) |
+| Flux2 cudarc generate | done (DiT load/forward; VAE decode simplified) |
+| Flux2 Vast compare vs upstream | `validate.sh run compare-flux2` |
 | UniPC (Wan T2V) + FastWan DMD `[1000, 757, 522]` | done |
 | **cudarc** Wan generate (Diffusers load) | **primary** |
 | MoE `transformer_2` + dual CFG | cudarc done |
@@ -38,6 +44,9 @@ cargo test --workspace
 cargo run -p fastvideo-cli -- generate \
   --model FastVideo/FastWan2.1-T2V-1.3B-Diffusers \
   --tiny --output /tmp/fastvideo-tiny
+cargo run -p fastvideo-cli -- generate \
+  --model black-forest-labs/FLUX.2-dev \
+  --tiny --output /tmp/flux2-tiny
 ```
 
 Default `--backend` is `cudarc`.
@@ -102,9 +111,9 @@ Crates cache in the Docker volume `fastvideo-rs-cargo-registry`. Copy the binary
 crates/
   fastvideo-ops        TensorBackend trait + host CPU reference
   fastvideo-core       registry, SamplingParam, VideoGenerator
-  fastvideo-models     Wan DiT / VAE / UMT5 + schedulers (Candle oracle)
+  fastvideo-models     Wan + Flux2 DiT / VAE / text + schedulers (Candle oracle)
   fastvideo-loader     Diffusers safetensors load
-  fastvideo-cudarc     **primary** Wan generate (cuBLAS / NVRTC / cuDNN)
+  fastvideo-cudarc     **primary** Wan + Flux2 generate (cuBLAS / NVRTC / cuDNN)
   fastvideo-candle     frozen Candle backend
   fastvideo-burn       frozen Burn Wan
   fastvideo-luminal    frozen Luminal Wan

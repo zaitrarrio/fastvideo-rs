@@ -11,7 +11,7 @@ use fastvideo_ops::{HostBackend, TensorBackend};
 
 use crate::backend_kind::BackendKind;
 use crate::error::{FastVideoError, Result};
-use crate::registry::{resolve_wan, SamplingAlgorithm, WanModelDefinition};
+use crate::registry::{resolve_model, ModelFamily, SamplingAlgorithm, WanModelDefinition};
 use crate::sampling::{pipeline_defaults, sampling_from_definition, PipelineDefaults, SamplingParam, WorkloadType};
 
 #[derive(Debug, Clone)]
@@ -86,7 +86,7 @@ pub struct VideoGenerator {
 impl VideoGenerator {
     pub fn from_pretrained(model_id: impl Into<String>, opts: LoadOptions) -> Result<Self> {
         let model_id = model_id.into();
-        let definition = resolve_wan(&model_id)?;
+        let definition = resolve_model(&model_id)?;
         let mut sampling = sampling_from_definition(definition);
         let pipeline = pipeline_defaults(definition);
         if let Some(path) = &opts.output_path {
@@ -139,8 +139,9 @@ impl VideoGenerator {
 
     pub fn summary(&self) -> String {
         format!(
-            "model={} preset={} sampling={} backend={} tiny={} device={} {}x{} frames={} steps={} shift={}",
+            "model={} family={} preset={} sampling={} backend={} tiny={} device={} {}x{} frames={} steps={} shift={}",
             self.model_id,
+            self.definition.family.as_str(),
             self.definition.preset,
             self.definition.sampling.as_str(),
             self.backend,
@@ -193,6 +194,87 @@ impl VideoGenerator {
     }
 
     fn run_candle(&self, prompt: &str) -> Result<(GenerateOutput, u128, u128)> {
+        if self.definition.family == ModelFamily::Flux2 {
+            return self.run_candle_flux2(prompt);
+        }
+        self.run_candle_wan(prompt)
+    }
+
+    fn run_candle_flux2(&self, prompt: &str) -> Result<(GenerateOutput, u128, u128)> {
+        let device = resolve_candle_device(&self.device)?;
+        let dtype = resolve_dtype(self.dtype.as_deref(), &self.device)?;
+        let kind = fastvideo_models::flux2::Flux2TextKind::from_preset(self.definition.preset);
+        let weights = if self.tiny {
+            None
+        } else {
+            Some(self.resolved_weights_dir().ok_or_else(|| {
+                FastVideoError::Message(
+                    "pass --tiny (zero weights, CI), --weights <diffusers-dir>, or cache the Hugging Face snapshot".into(),
+                )
+            })?)
+        };
+        let tokenizer_path = weights.as_ref().and_then(|root| {
+            let p = root.join("tokenizer").join("tokenizer.json");
+            p.exists().then(|| p.to_string_lossy().into_owned())
+        });
+        let mut gen_cfg = fastvideo_models::flux2::GenerateConfig {
+            prompt: prompt.to_string(),
+            height: self.sampling.height as usize,
+            width: self.sampling.width as usize,
+            num_inference_steps: self.sampling.num_inference_steps as usize,
+            guidance_scale: self.sampling.guidance_scale,
+            seed: self.sampling.seed,
+            output_dir: self.output_path.clone(),
+            tiny: self.tiny,
+            tokenizer_path,
+            embedded_cfg_scale: self.pipeline.embedded_cfg_scale,
+        };
+        if self.tiny {
+            gen_cfg.guidance_scale = 1.0;
+        }
+        let t_load = Instant::now();
+        let pipe = if self.tiny {
+            match kind {
+                fastvideo_models::flux2::Flux2TextKind::Qwen3 => {
+                    fastvideo_models::flux2::Flux2Pipeline::tiny_klein(&device).map_err(candle_err)?
+                }
+                fastvideo_models::flux2::Flux2TextKind::Mistral3 => {
+                    fastvideo_models::flux2::Flux2Pipeline::tiny(&device).map_err(candle_err)?
+                }
+            }
+        } else {
+            let root = weights.as_ref().expect("resolved");
+            let components = load_diffusers_components(root, dtype, &device)
+                .map_err(|e| FastVideoError::Message(e.to_string()))?;
+            let cfg_json = std::fs::read_to_string(root.join("transformer/config.json")).ok();
+            let text_vb = Some(components.text);
+            fastvideo_models::flux2::Flux2Pipeline::load(
+                components.transformer,
+                components.vae,
+                text_vb,
+                fastvideo_models::flux2::Flux2ArchConfig::from_preset(self.definition.preset),
+                fastvideo_models::flux2::Flux2VaeConfig::flux2(),
+                kind,
+                device,
+                cfg_json.as_deref(),
+            )
+            .map_err(candle_err)?
+        };
+        let load_ms = t_load.elapsed().as_millis();
+        let t_gen = Instant::now();
+        let frames = pipe.generate(&gen_cfg).map_err(candle_err)?;
+        let generate_ms = t_gen.elapsed().as_millis();
+        Ok((
+            GenerateOutput {
+                output_path: frames.first().cloned(),
+                frame_paths: frames,
+            },
+            load_ms,
+            generate_ms,
+        ))
+    }
+
+    fn run_candle_wan(&self, prompt: &str) -> Result<(GenerateOutput, u128, u128)> {
         let device = resolve_candle_device(&self.device)?;
         let dtype = resolve_dtype(self.dtype.as_deref(), &self.device)?;
         let is_dmd = matches!(
@@ -288,6 +370,12 @@ impl VideoGenerator {
     }
 
     fn run_burn(&self, prompt: &str) -> Result<(GenerateOutput, u128, u128)> {
+        if self.definition.family == ModelFamily::Flux2 {
+            return Err(FastVideoError::NotImplemented {
+                component: "Flux2 Burn".into(),
+                detail: "Burn is frozen; use --backend cudarc or candle".into(),
+            });
+        }
         let is_dmd = matches!(
             self.definition.sampling,
             SamplingAlgorithm::Dmd | SamplingAlgorithm::CausalDmd
@@ -378,6 +466,12 @@ impl VideoGenerator {
     }
 
     fn run_luminal(&self, prompt: &str) -> Result<(GenerateOutput, u128, u128)> {
+        if self.definition.family == ModelFamily::Flux2 {
+            return Err(FastVideoError::NotImplemented {
+                component: "Flux2 Luminal".into(),
+                detail: "Luminal is frozen; use --backend cudarc or candle".into(),
+            });
+        }
         let is_dmd = matches!(
             self.definition.sampling,
             SamplingAlgorithm::Dmd | SamplingAlgorithm::CausalDmd
@@ -461,6 +555,81 @@ impl VideoGenerator {
 
     /// Returns `(output, load_ms, generate_ms)`. Load is Diffusers safetensors → tensors.
     fn run_cudarc(&self, prompt: &str) -> Result<(GenerateOutput, u128, u128)> {
+        if self.definition.family == ModelFamily::Flux2 {
+            return self.run_cudarc_flux2(prompt);
+        }
+        self.run_cudarc_wan(prompt)
+    }
+
+    fn run_cudarc_flux2(&self, prompt: &str) -> Result<(GenerateOutput, u128, u128)> {
+        fastvideo_cudarc::resolve_device(&self.device)
+            .map_err(|e| FastVideoError::Message(e.to_string()))?;
+        eprintln!(
+            "[fastvideo] cudarc flux2 run device={} tiny={} preset={} {}x{} steps={}",
+            self.device,
+            self.tiny,
+            self.definition.preset,
+            self.sampling.width,
+            self.sampling.height,
+            self.sampling.num_inference_steps,
+        );
+        let mut gen_cfg = fastvideo_cudarc::flux2::GenerateConfig {
+            prompt: prompt.to_string(),
+            height: self.sampling.height as usize,
+            width: self.sampling.width as usize,
+            num_inference_steps: self.sampling.num_inference_steps as usize,
+            guidance_scale: self.sampling.guidance_scale,
+            seed: self.sampling.seed,
+            output_dir: self.output_path.clone(),
+            tiny: self.tiny,
+            tokenizer_path: None,
+            embedded_cfg_scale: self.pipeline.embedded_cfg_scale,
+            preset: self.definition.preset.to_string(),
+        };
+        if self.tiny {
+            gen_cfg.guidance_scale = 1.0;
+            let t_gen = Instant::now();
+            let mut pipe = fastvideo_cudarc::flux2::Flux2Pipeline::tiny_for_preset(self.definition.preset);
+            let frames = pipe
+                .generate(&gen_cfg)
+                .map_err(|e| FastVideoError::Message(e.to_string()))?;
+            return Ok((
+                GenerateOutput {
+                    output_path: frames.first().cloned(),
+                    frame_paths: frames,
+                },
+                0,
+                t_gen.elapsed().as_millis(),
+            ));
+        }
+        let root = self.resolved_weights_dir().ok_or_else(|| {
+            FastVideoError::Message(
+                "cudarc Flux2 generate needs --weights <diffusers-dir> or a cached HF snapshot".into(),
+            )
+        })?;
+        let tok = root.join("tokenizer").join("tokenizer.json");
+        if tok.is_file() {
+            gen_cfg.tokenizer_path = Some(tok.to_string_lossy().into_owned());
+        }
+        let t_load = Instant::now();
+        let mut pipe = fastvideo_cudarc::flux2::Flux2Pipeline::load(&root, self.definition.preset)
+            .map_err(|e| FastVideoError::Message(e.to_string()))?;
+        let load_ms = t_load.elapsed().as_millis();
+        let t_gen = Instant::now();
+        let frames = pipe
+            .generate(&gen_cfg)
+            .map_err(|e| FastVideoError::Message(e.to_string()))?;
+        Ok((
+            GenerateOutput {
+                output_path: frames.first().cloned(),
+                frame_paths: frames,
+            },
+            load_ms,
+            t_gen.elapsed().as_millis(),
+        ))
+    }
+
+    fn run_cudarc_wan(&self, prompt: &str) -> Result<(GenerateOutput, u128, u128)> {
         let is_dmd = matches!(
             self.definition.sampling,
             SamplingAlgorithm::Dmd | SamplingAlgorithm::CausalDmd
@@ -686,6 +855,9 @@ impl VideoGenerator {
     /// Host / Burn / Luminal: real UniPC sampler on f32 latents.
     /// Velocity is the analytical flow to the origin (x/σ); DiT is Candle-only.
     fn generate_reference(&self, prompt: &str) -> Result<GenerateOutput> {
+        if self.definition.family == ModelFamily::Flux2 {
+            return self.generate_reference_flux2(prompt);
+        }
         if self.definition.workload_types.contains(&crate::sampling::WorkloadType::I2V) {
             return Err(FastVideoError::NotImplemented {
                 component: "I2V generate".into(),
@@ -736,6 +908,47 @@ impl VideoGenerator {
             frame_paths: vec![path],
         })
     }
+
+    fn generate_reference_flux2(&self, prompt: &str) -> Result<GenerateOutput> {
+        let seq = packed_flux2_seq(self.sampling.height, self.sampling.width);
+        let mu = fastvideo_models::flux2::compute_empirical_mu(
+            seq,
+            self.sampling.num_inference_steps.max(1) as usize,
+        );
+        let mut sched = fastvideo_models::FlowMatchEulerDiscreteScheduler::new(1000, 1.0);
+        sched.set_timesteps_flux2(self.sampling.num_inference_steps.max(1) as usize, Some(mu));
+        let start = vec![0.2f32, -0.4, 0.8, 1.5, -1.1];
+        let vel = vec![0.1f32, -0.2, 0.05, 0.3, -0.15];
+        let mut x = start;
+        for _ in 0..sched.inference_timesteps().len() {
+            x = sched
+                .step_euler(&x, &vel)
+                .map_err(|e| FastVideoError::Message(e))?;
+        }
+        std::fs::create_dir_all(&self.output_path)
+            .map_err(|e| FastVideoError::Message(e.to_string()))?;
+        let out = std::path::Path::new(&self.output_path).join("flux2-latents.json");
+        let body = serde_json::json!({
+            "backend": self.backend.as_str(),
+            "family": "flux2",
+            "preset": self.definition.preset,
+            "prompt": prompt,
+            "mu": mu,
+            "latents": x,
+            "text_encoder": fastvideo_models::flux2::Flux2TextKind::from_preset(self.definition.preset).as_str(),
+        });
+        std::fs::write(&out, body.to_string()).map_err(|e| FastVideoError::Message(e.to_string()))?;
+        let path = out.to_string_lossy().into_owned();
+        Ok(GenerateOutput {
+            output_path: Some(path.clone()),
+            frame_paths: vec![path],
+        })
+    }
+}
+
+fn packed_flux2_seq(height: u32, width: u32) -> usize {
+    let (h, w) = fastvideo_models::flux2::packed_hw(height as usize, width as usize, 8);
+    h * w
 }
 
 pub fn resolve_candle_device(spec: &str) -> Result<Device> {

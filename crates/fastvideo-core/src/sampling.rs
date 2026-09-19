@@ -13,6 +13,7 @@ pub const NEGATIVE_PROMPT_CN: &str = "色调艳丽，过曝，静态，细节模
 pub enum WorkloadType {
     T2V,
     I2V,
+    T2I,
     Other,
 }
 
@@ -309,6 +310,48 @@ pub static SF_WAN_2_2_I2V_A14B: InferencePreset = InferencePreset {
     negative_prompt: NEGATIVE_PROMPT_CN,
 };
 
+pub static FLUX2_DEV: InferencePreset = InferencePreset {
+    name: "flux2_dev",
+    description: "FLUX.2-dev T2I with embedded guidance (Mistral3)",
+    workload_type: WorkloadType::T2I,
+    height: Some(1024),
+    width: Some(1024),
+    num_frames: Some(1),
+    fps: 1,
+    guidance_scale: 4.0,
+    guidance_scale_2: None,
+    num_inference_steps: 50,
+    negative_prompt: "",
+};
+
+pub static FLUX2_KLEIN_4B: InferencePreset = InferencePreset {
+    name: "flux2_klein_4b",
+    description: "FLUX.2 Klein 4B distilled T2I (Qwen3, 4-step)",
+    workload_type: WorkloadType::T2I,
+    height: Some(1024),
+    width: Some(1024),
+    num_frames: Some(1),
+    fps: 1,
+    guidance_scale: 1.0,
+    guidance_scale_2: None,
+    num_inference_steps: 4,
+    negative_prompt: "",
+};
+
+pub static FLUX2_KLEIN_9B: InferencePreset = InferencePreset {
+    name: "flux2_klein_9b",
+    description: "FLUX.2 Klein 9B distilled T2I (Qwen3, 4-step)",
+    workload_type: WorkloadType::T2I,
+    height: Some(1024),
+    width: Some(1024),
+    num_frames: Some(1),
+    fps: 1,
+    guidance_scale: 1.0,
+    guidance_scale_2: None,
+    num_inference_steps: 4,
+    negative_prompt: "",
+};
+
 pub static ALL_PRESETS: &[&InferencePreset] = &[
     &WAN_T2V_1_3B,
     &WAN_T2V_14B,
@@ -325,6 +368,9 @@ pub static ALL_PRESETS: &[&InferencePreset] = &[
     &SF_WAN_T2V_1_3B,
     &SF_WAN_2_2_T2V_A14B,
     &SF_WAN_2_2_I2V_A14B,
+    &FLUX2_DEV,
+    &FLUX2_KLEIN_4B,
+    &FLUX2_KLEIN_9B,
 ];
 
 /// Default flow-shift / DMD schedule from FastVideo pipeline configs.
@@ -334,48 +380,69 @@ pub fn pipeline_defaults(def: &WanModelDefinition) -> PipelineDefaults {
             flow_shift: 3.0,
             dmd_steps: None,
             boundary_ratio: None,
+            embedded_cfg_scale: None,
         },
         "WanT2V720PConfig" | "WanI2V720PConfig" | "Wan2_2_TI2V_5B_Config"
         | "SelfForcingWanT2V480PConfig" => PipelineDefaults {
             flow_shift: 5.0,
             dmd_steps: None,
             boundary_ratio: None,
+            embedded_cfg_scale: None,
         },
         "FastWan2_1_T2V_480P_Config" => PipelineDefaults {
             flow_shift: 8.0,
             dmd_steps: Some(&[1000, 757, 522]),
             boundary_ratio: None,
+            embedded_cfg_scale: None,
         },
         "FastWan2_2_TI2V_5B_Config" => PipelineDefaults {
             flow_shift: 5.0,
             dmd_steps: Some(&[1000, 757, 522]),
             boundary_ratio: None,
+            embedded_cfg_scale: None,
         },
         "Wan2_2_T2V_A14B_Config" => PipelineDefaults {
             flow_shift: 12.0,
             dmd_steps: Some(&[1000, 750, 500, 250]),
             boundary_ratio: Some(0.875),
+            embedded_cfg_scale: None,
         },
         "Wan2_2_I2V_A14B_Config" => PipelineDefaults {
             flow_shift: 5.0,
             dmd_steps: None,
             boundary_ratio: Some(0.875),
+            embedded_cfg_scale: None,
         },
         "SelfForcingWan2_2_T2V480PConfig" => PipelineDefaults {
             flow_shift: 12.0,
             dmd_steps: Some(&[1000, 850, 700, 550, 350, 275, 200, 125]),
             boundary_ratio: Some(0.875),
+            embedded_cfg_scale: None,
+        },
+        "Flux2PipelineConfig" => PipelineDefaults {
+            flow_shift: 1.0,
+            dmd_steps: None,
+            boundary_ratio: None,
+            embedded_cfg_scale: Some(4.0),
+        },
+        "Flux2KleinPipelineConfig" => PipelineDefaults {
+            flow_shift: 1.0,
+            dmd_steps: None,
+            boundary_ratio: None,
+            embedded_cfg_scale: None,
         },
         _ => match def.sampling {
             SamplingAlgorithm::Dmd => PipelineDefaults {
                 flow_shift: 8.0,
                 dmd_steps: Some(&[1000, 757, 522]),
                 boundary_ratio: None,
+                embedded_cfg_scale: None,
             },
             _ => PipelineDefaults {
                 flow_shift: 3.0,
                 dmd_steps: None,
                 boundary_ratio: None,
+                embedded_cfg_scale: None,
             },
         },
     }
@@ -386,4 +453,5 @@ pub struct PipelineDefaults {
     pub flow_shift: f32,
     pub dmd_steps: Option<&'static [i32]>,
     pub boundary_ratio: Option<f32>,
+    pub embedded_cfg_scale: Option<f32>,
 }

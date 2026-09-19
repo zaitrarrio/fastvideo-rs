@@ -2,7 +2,7 @@ use thiserror::Error;
 
 #[derive(Debug, Error)]
 pub enum FastVideoError {
-    #[error("unknown model id `{0}` — no Wan/FastWan registry match")]
+    #[error("unknown model id `{0}` — no Wan/FastWan or Flux2 registry match")]
     UnknownModel(String),
     #[error("{component} is not implemented yet ({detail})")]
     NotImplemented { component: String, detail: String },

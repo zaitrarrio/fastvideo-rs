@@ -22,6 +22,7 @@ Nothing is compared against another framework. The references are:
 | `run mathprobe` | any (pick with `FV_OFFER_QUERY_EXTRA=gpu_name=…`) | which cuBLAS math (FP32 / TF32 / bf16 compute / bf16 buffers) this GPU honors, with the image's cuBLAS and a newer one | ~5–7 min | ~$0.01–0.02 |
 | **T1** `run kernels` | cheapest Ampere+ ≥8 GB | CUDA context; every NVRTC kernel, cuBLAS GEMMs and bf16 linears, dense/flash attention, cuDNN conv2d/conv3d and temporal unfold vs plain-Rust math; random-weight UMT5/DiT/VAE/UniPC/DMD GPU vs CPU path (exact and fast) | 10–15 min | $0.02–0.04 |
 | `run compare` | 24GB+, 180GB disk | our clip stages **and** upstream FastVideo on the same box: install torch+fastvideo in a venv, time the same 8s clip per attention backend | ~50-70 min | ~$0.20-0.30 |
+| `run compare-flux2` | 24GB+, 180GB disk | Flux2 T2I (default Klein 4B) rust `fastvideo bench` **and** upstream FastVideo `--workload t2i` on the same box and prompt | ~30–90 min (weight fetch) | ~$0.15–0.40 |
 | **T2** `run parity` | ≥16 GB | T1, plus real 1.3B DiT forward, VAE decode and 2-step UniPC, GPU vs CPU path | 45–75 min (CPU reference is slow) | $0.10–0.30 |
 | **T3** `run clip` | ≥24 GB, ≥80 GB RAM | T2, plus real prompt embeddings from cudarc UMT5-XXL on the GPU; a probe that projects 8s-clip time and VRAM before committing; two 8s clips (129 frames, 448×832, FastWan DMD) with per-step NaN and time guards and video quality gates; exact vs fast drift on a 2s clip | 90–150 min | $0.30–0.90 |
 
@@ -62,7 +63,16 @@ scripts/gpu/validate.sh local            # free preflight (run also does this)
 scripts/gpu/validate.sh offers kernels   # see prices; rents nothing
 scripts/gpu/validate.sh run kernels      # T1
 scripts/gpu/validate.sh run clip         # T1 → T2 → T3 on one box
+scripts/gpu/validate.sh offers compare-flux2
+scripts/gpu/validate.sh run compare-flux2  # Flux2 rust vs upstream FastVideo
 ```
+
+Flux2 compare knobs: `FV_FLUX2_REPO` (default `black-forest-labs/FLUX.2-klein-4B`),
+`FV_FLUX2_STEPS` (4), `FV_FLUX2_GUIDANCE` (1.0), `FV_FLUX2_HEIGHT` / `FV_FLUX2_WIDTH`
+(1024), `FV_FLUX2_PROMPT`. `docker.sh dist` builds `fv-gpucheck` and the
+`fastvideo` CLI; the CLI is what `remote.sh flux2-rust-bench` times. Details:
+[docs/flux2-port.md](../../docs/flux2-port.md). No secrets in the repo — use
+`VAST_API_KEY` from `.env`.
 
 Options for `run`: `--offer ID`, `--instance ID` (reuse a running box; it is
 never destroyed), `--keep`, `--skip-local`, `--clip-budget-min N`.

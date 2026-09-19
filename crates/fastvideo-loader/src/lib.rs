@@ -230,4 +230,36 @@ mod tests {
             "1.3B T2V is a single DiT; MoE transformer_2 belongs on A14B"
         );
     }
+
+    #[test]
+    fn flux2_diffusers_layout_without_loading_weights() {
+        let Some(root) = fastvideo_models::flux2::weights::local_flux2("black-forest-labs/FLUX.2-klein-4B")
+            .or_else(|| fastvideo_models::flux2::weights::local_flux2("black-forest-labs/FLUX.2-dev"))
+        else {
+            eprintln!("skip: Flux2 Diffusers snapshot not in HF cache / FASTVIDEO_WEIGHTS");
+            return;
+        };
+        assert!(root.join("transformer").is_dir());
+        assert!(root.join("vae").is_dir());
+        assert!(root.join("text_encoder").is_dir() || root.join("text_encoder_2").is_dir());
+        if let Some(raw) = fastvideo_models::flux2::weights::transformer_config_json(&root) {
+            let cfg = fastvideo_models::flux2::arch_from_transformer_config(
+                &fastvideo_models::flux2::Flux2ArchConfig::flux2_dev(),
+                &raw,
+            )
+            .unwrap();
+            assert_eq!(cfg.in_channels, 128);
+            assert!(cfg.num_layers > 0);
+        }
+        let index = root.join("transformer/diffusion_pytorch_model.safetensors.index.json");
+        if index.is_file() {
+            let keys = weight_map_keys(&index).unwrap();
+            for required in fastvideo_models::flux2::FLUX2_TRANSFORMER_REQUIRED_KEYS {
+                assert!(
+                    keys.iter().any(|k| k == required || k.ends_with(required)),
+                    "missing Flux2 key {required}"
+                );
+            }
+        }
+    }
 }
