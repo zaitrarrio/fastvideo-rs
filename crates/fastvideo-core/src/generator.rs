@@ -1118,7 +1118,7 @@ pub fn median_u128(values: &[u128]) -> u128 {
     }
 }
 
-fn sdpa_backend_label() -> String {
+pub(crate) fn sdpa_backend_label() -> String {
     std::env::var("FASTVIDEO_SDPA")
         .ok()
         .map(|s| s.trim().to_ascii_lowercase())

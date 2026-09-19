@@ -494,6 +494,19 @@ mod tests {
 
     #[test]
     fn flux2_tiny_bench_warm_median() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let prev_sdpa = std::env::var("FASTVIDEO_SDPA").ok();
+        std::env::set_var("FASTVIDEO_SDPA", "dense");
+        struct RestoreSdpa(Option<String>);
+        impl Drop for RestoreSdpa {
+            fn drop(&mut self) {
+                match &self.0 {
+                    Some(v) => std::env::set_var("FASTVIDEO_SDPA", v),
+                    None => std::env::remove_var("FASTVIDEO_SDPA"),
+                }
+            }
+        }
+        let _restore = RestoreSdpa(prev_sdpa);
         let gen = VideoGenerator::from_pretrained(
             "black-forest-labs/FLUX.2-klein-4B",
             LoadOptions {
@@ -514,7 +527,9 @@ mod tests {
         assert_eq!(stats.generate_ms, stats.runs_ms[1]);
         assert_eq!(stats.median_ms, crate::median_u128(&stats.runs_ms));
         assert_eq!(stats.min_ms, *stats.runs_ms.iter().min().unwrap());
-        assert_eq!(stats.sdpa, "dense");
+        let label = crate::generator::sdpa_backend_label();
+        assert_eq!(stats.sdpa, label);
+        assert_eq!(label, "dense");
         let profile = std::path::Path::new(&gen.output_path).join("profile.json");
         assert!(profile.exists(), "profile.json from last timed run");
     }
