@@ -479,6 +479,7 @@ mod tests {
         };
         let (got_v, got_a) = model.forward(&tensor(&video), &tensor(&audio), &text, timestep, &ropes, Some(&mut obs)).unwrap();
         assert_eq!((got_v.shape.clone(), got_a.shape.clone()), (vec![1, s, 6], vec![1, l, 5]));
+        assert_eq!(seen.len(), 2, "one observation per block");
 
         let (dv, da) = (16usize, 8usize);
         let caption = |name: &str, x: &[Vec<f32>], d: usize| -> Vec<Vec<f32>> {
@@ -496,7 +497,7 @@ mod tests {
         let mut xa: Vec<Vec<f32>> = audio.iter().map(|v| lin(&map, "audio_proj_in", v, da)).collect();
         let vd = AttentionDims { query_dim: dv, context_dim: dv, heads: 2, head_dim: 8 };
         let ad = AttentionDims { query_dim: da, context_dim: da, heads: 2, head_dim: 4 };
-        for i in 0..2 {
+        for (i, tap) in seen.iter().enumerate() {
             let p = format!("transformer_blocks.{i}");
             let vt = table_plus(&map, &format!("{p}.scale_shift_table"), 6, dv, &v_main);
             let at = table_plus(&map, &format!("{p}.audio_scale_shift_table"), 6, da, &a_main);
@@ -544,9 +545,9 @@ mod tests {
             gated_add(&mut xv, &u, &vt[5]);
             let u = ff(&map, &format!("{p}.audio_ff"), &adaln_norm(&xa, &at[4], &at[3]), da);
             gated_add(&mut xa, &u, &at[5]);
-            assert_eq!(seen[i].0, i);
-            assert_close(&seen[i].1, &xv, 2e-4, &format!("block {i} video"));
-            assert_close(&seen[i].2, &xa, 2e-4, &format!("block {i} audio"));
+            assert_eq!(tap.0, i);
+            assert_close(&tap.1, &xv, 2e-4, &format!("block {i} video"));
+            assert_close(&tap.2, &xa, 2e-4, &format!("block {i} audio"));
         }
         let head = |x: &[Vec<f32>], tab: &str, e: &[f32], out: &str, d: usize, c: usize| -> Vec<Vec<f32>> {
             let t = get(&map, tab, &[2, d]);
@@ -565,7 +566,7 @@ mod tests {
 
     #[test]
     fn packing_is_frame_major_then_row_then_column() {
-        let z = CudaTensor::from_vec((0..2 * 2 * 1 * 3).map(|i| i as f32).collect(), vec![1, 2, 2, 1, 3]).unwrap();
+        let z = CudaTensor::from_vec((0..12).map(|i| i as f32).collect(), vec![1, 2, 2, 1, 3]).unwrap();
         let p = pack_video(&z).unwrap();
         assert_eq!(p.shape, vec![1, 6, 2]);
         // Token (f=1, h=0, w=2) = index 5: channel 0 → 5, channel 1 → 11.

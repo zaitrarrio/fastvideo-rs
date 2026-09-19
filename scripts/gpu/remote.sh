@@ -300,13 +300,10 @@ cmd_stage() {
 # CUDA, so nothing here touches the libraries our binary dlopens.
 UPSTREAM_VENV="$WORK/upstream-venv"
 
-cmd_upstream_install() {
-  local torch_backend="${1:-cu126}"
-  export HF_HOME="$WORK/hf"
-  mkdir -p "$HF_HOME"
-  export PATH="$HOME/.local/bin:$PATH"
-  # Triton JIT-builds a small C extension the first time it talks to the
-  # driver, so upstream needs a C compiler that our lean runtime image omits.
+# Triton JIT-builds a small C extension the first time it talks to the driver
+# (at import, in both upstream FastVideo and recent transformers), so anything
+# that runs torch needs a C compiler our lean runtime image omits.
+ensure_cc() {
   if ! command -v cc >/dev/null && ! command -v gcc >/dev/null; then
     log "installing gcc (Triton builds a driver shim at import)"
     apt-get update -qq >/dev/null 2>&1 || true
@@ -321,6 +318,14 @@ cmd_upstream_install() {
         || die "could not install a C compiler for Triton"
     fi
   fi
+}
+
+cmd_upstream_install() {
+  local torch_backend="${1:-cu126}"
+  export HF_HOME="$WORK/hf"
+  mkdir -p "$HF_HOME"
+  export PATH="$HOME/.local/bin:$PATH"
+  ensure_cc
   export CC="${CC:-$(command -v gcc || command -v cc)}"
   if [[ ! -x "$UPSTREAM_VENV/bin/python" ]]; then
     command -v uv >/dev/null || {
@@ -361,6 +366,7 @@ cmd_oracle_venv() {
   export HF_HOME="$WORK/hf"
   mkdir -p "$HF_HOME"
   export PATH="$HOME/.local/bin:$PATH"
+  ensure_cc
   command -v git >/dev/null || { apt-get update -qq >/dev/null 2>&1 || true; apt-get install -y -qq --no-install-recommends git >/dev/null 2>&1 || die "could not install git"; }
   if [[ ! -x "$ORACLE_VENV/bin/python" ]]; then
     command -v uv >/dev/null || {
@@ -388,7 +394,13 @@ cmd_model_oracle() {
   [[ -x "$ORACLE_VENV/bin/python" ]] || die "oracle venv missing (run oracle-venv)"
   [[ -f "$ROOT/scripts/gpu/${model}_oracle.py" ]] || die "no oracle script for '$model'"
   mkdir -p "$OUT/$model"
-  PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True "$ORACLE_VENV/bin/python" "$ROOT/scripts/gpu/${model}_oracle.py" "$@"
+  ensure_cc
+  # Without our LD_LIBRARY_PATH: it points at the cuDNN/cuBLAS fv-gpucheck
+  # loads, and torch resolving its main cuDNN library from there while its
+  # sublibraries come from its own wheel ends in
+  # CUDNN_STATUS_SUBLIBRARY_LOADING_FAILED. torch must see only its bundled CUDA.
+  env -u LD_LIBRARY_PATH CC="${CC:-$(command -v gcc || command -v cc)}" PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True \
+    "$ORACLE_VENV/bin/python" "$ROOT/scripts/gpu/${model}_oracle.py" "$@"
 }
 
 cmd_upstream_oracle() {

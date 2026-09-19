@@ -97,6 +97,57 @@ pub enum Stage {
         #[arg(long, default_value_t = 3e-2)]
         max_rel: f64,
     },
+    /// The full 8-step ladder in dense mode against the oracle's per-step
+    /// latents: scheduler sign, both shifts, the step ratio. `--mode fast`.
+    Loop {
+        #[arg(long)]
+        weights: PathBuf,
+        /// `--out` file of `h3_oracle.py` (stage `loop`).
+        #[arg(long)]
+        oracle: PathBuf,
+        #[arg(long, default_value = "cuda")]
+        device: String,
+        /// After the first step: one forward's worth of divergence.
+        #[arg(long, default_value_t = 3e-2)]
+        max_rel_first: f64,
+        /// After the last step: eight forwards, each fed the previous one's error.
+        #[arg(long, default_value_t = 1e-1)]
+        max_rel_last: f64,
+    },
+    /// VSA-H3 on the device against its plain-loop statement, and against
+    /// dense attention at sparsity 0 without the gate. No weights needed.
+    Vsa {
+        #[arg(long, default_value = "cuda")]
+        device: String,
+        #[arg(long, default_value_t = 1)]
+        seed: u64,
+        /// bf16 tensor-core fine stage against a float64 host reference.
+        #[arg(long, default_value_t = 1e-2)]
+        max_rel: f64,
+    },
+    /// Generate one clip end to end (VSA-H3 unless `--dense`) and report
+    /// timings and peak VRAM. `--mode fast`.
+    Gen {
+        #[arg(long)]
+        weights: PathBuf,
+        #[arg(long)]
+        prompt: String,
+        /// 5 to 15.
+        #[arg(long, default_value_t = 5)]
+        seconds: usize,
+        #[arg(long, default_value_t = 1024)]
+        seed: u64,
+        /// Dense attention without the compression gate (the parity mode).
+        #[arg(long)]
+        dense: bool,
+        #[arg(long)]
+        no_mp4: bool,
+        /// Where `frame-NNN.png`, `audio.wav` and `output.mp4` go.
+        #[arg(long, default_value = "gpucheck-out/h3-gen")]
+        clip_dir: PathBuf,
+        #[arg(long, default_value = "cuda")]
+        device: String,
+    },
 }
 
 pub fn run(report: &mut Report, stage: &Stage) -> StageResult<()> {
@@ -112,6 +163,11 @@ pub fn run(report: &mut Report, stage: &Stage) -> StageResult<()> {
         Stage::AudioVae { weights, oracle, device, max_abs } => audio_vae(report, weights, oracle, device, *max_abs),
         Stage::Vae { weights, oracle, device, max_abs, max_rel } => vae(report, weights, oracle, device, *max_abs, *max_rel),
         Stage::Dit { weights, oracle, device, max_rel } => dit(report, weights, oracle, device, *max_rel),
+        Stage::Loop { weights, oracle, device, max_rel_first, max_rel_last } => ladder(report, weights, oracle, device, *max_rel_first, *max_rel_last),
+        Stage::Vsa { device, seed, max_rel } => vsa(report, device, *seed, *max_rel),
+        Stage::Gen { weights, prompt, seconds, seed, dense, no_mp4, clip_dir, device } => {
+            gen(report, weights, prompt, *seconds, *seed, *dense, !*no_mp4, clip_dir, device)
+        }
     }
 }
 
@@ -484,6 +540,153 @@ fn dit(report: &mut Report, weights: &Path, oracle: &Path, device: &str, max_rel
     for (name, limit, d) in &results {
         let cosine_min = if name.starts_with("dit_") { 0.999 } else { 0.0 };
         report.check(name.as_str(), d.within(*limit) && d.cosine >= cosine_min, d.to_json(), json!({"rel_l2": limit, "cosine_min": cosine_min}))?;
+    }
+    Ok(())
+}
+
+fn ladder(report: &mut Report, weights: &Path, oracle: &Path, device: &str, max_rel_first: f64, max_rel_last: f64) -> StageResult<()> {
+    use fastvideo_cudarc::h3::pipeline::denoise;
+    use fastvideo_cudarc::h3::transformer::{AttnMode, DeviceLayout, H3TextRefiner, H3Transformer};
+    use fastvideo_models::h3::config::H3TransformerConfig;
+    use fastvideo_models::h3::schedule::H3JointSchedule;
+
+    report.set("device", crate::gpu::init(device)?);
+    let cfg = H3TransformerConfig::fasth3_8step();
+    let schedule = H3JointSchedule::fasth3_8step();
+    let mut orc = st::load(oracle)?;
+    let text = st::take(&mut orc, "text", oracle)?;
+    let request = oracle_request(report, &mut orc, oracle, &cfg, text.shape[1])?;
+    let want_video = st::take(&mut orc, "loop_video", oracle)?;
+    let want_audio = st::take(&mut orc, "loop_audio", oracle)?;
+    drop(orc);
+    let layout = request.layout.clone();
+
+    let map = WeightMap::open(&weights.join("transformer"))?;
+    let refined = H3TextRefiner::load(&cfg, &map)?.forward(&CudaTensor::from_vec(text.data, text.shape.clone())?)?;
+    let timer = std::time::Instant::now();
+    let model = H3Transformer::load(cfg.clone(), &map, &schedule, false)?;
+    report.note("load_dit", json!({"seconds": timer.elapsed().as_secs_f64()}));
+
+    let device_layout = DeviceLayout::new(&cfg, layout.clone())?;
+    let video_rows = CudaTensor::from_vec(request.video_rows, vec![layout.video.len, cfg.video_patch_dim()])?.to_device()?;
+    let audio_rows = CudaTensor::from_vec(request.audio_rows, vec![layout.audio.len, cfg.audio_in_channels])?.to_device()?;
+    let (nv, na) = (layout.video.len * cfg.video_patch_dim(), layout.audio.len * cfg.audio_in_channels);
+    let mut steps = Vec::new();
+    let mem = crate::gpu::PeakMem::start();
+    let (_, seconds) = measure(report, "loop", || {
+        let mut last = std::time::Instant::now();
+        denoise(&model, &device_layout, &refined, video_rows, audio_rows, &schedule, AttnMode::Dense, &mut |step, video, audio| {
+            let (dv, da) = (
+                diff(&video.host_cow()?, &want_video.data[step * nv..(step + 1) * nv]),
+                diff(&audio.host_cow()?, &want_audio.data[step * na..(step + 1) * na]),
+            );
+            eprintln!("[INFO] h3 loop step {step}: {:.1}s video rel {:.3e} audio rel {:.3e}", last.elapsed().as_secs_f64(), dv.rel_l2, da.rel_l2);
+            last = std::time::Instant::now();
+            steps.push((dv, da));
+            Ok(())
+        })?;
+        Ok(())
+    })?;
+    report.note("loop", json!({"seconds": seconds, "peak_mib": mem.stop()}));
+    report.set("per_step", steps.iter().map(|(v, a)| json!({"video": v.to_json(), "audio": a.to_json()})).collect::<Vec<_>>());
+    let last = steps.len().saturating_sub(1);
+    for (index, limit) in [(0usize, max_rel_first), (last, max_rel_last)] {
+        let Some((v, a)) = steps.get(index) else {
+            return Err(anyhow::anyhow!("the loop produced no step {index}").into());
+        };
+        report.check(format!("loop_video_step{index}"), v.within(limit), v.to_json(), json!({"rel_l2": limit}))?;
+        report.check(format!("loop_audio_step{index}"), a.within(limit), a.to_json(), json!({"rel_l2": limit}))?;
+    }
+    Ok(())
+}
+
+fn vsa(report: &mut Report, device: &str, seed: u64, max_rel: f64) -> StageResult<()> {
+    use fastvideo_cudarc::h3::vsa::{attention_host, H3Vsa, H3VsaConfig};
+    use fastvideo_cudarc::wan::nn::scaled_dot_product_attention;
+    use fastvideo_models::h3::packing::H3PackedLayout;
+
+    report.set("device", crate::gpu::init(device)?);
+    // Partial tiles on every axis, a short text tile, a short audio tile and an
+    // odd tile count: 3 + 2 prefix tiles, 3 x 2 x 3 = 18 video tiles, n = 23.
+    let layout = H3PackedLayout::new(150, (9, 12, 20), 50, [1, 2, 2]).map_err(|e| anyhow::anyhow!(e))?;
+    // The tensor-core fine kernel is written for head dim 128.
+    let (heads, dim, seq) = (4usize, 128usize, layout.sequence_length());
+    let shape = vec![1, heads, seq, dim];
+    let draw = |salt: u64, std: f32| crate::rand_weights::randn(seed ^ salt, heads * seq * dim, std);
+    // Post-norm Q/K have unit RMS; that scale also keeps the top-k decisive.
+    let (q, k, v, gate) = (draw(0x51, 1.0), draw(0x4b, 1.0), draw(0x56, 1.0), draw(0x47, 0.5));
+    let tensor = |x: &[f32]| CudaTensor::from_vec(x.to_vec(), shape.clone());
+
+    for (name, sparsity, gated) in [("sparse_gated", 0.8, true), ("sparse_ungated", 0.5, false), ("all_tiles_gated", 0.0, true)] {
+        let vsa = H3Vsa::new(&layout, heads, dim, H3VsaConfig { sparsity, group: 4 })?;
+        let plan = vsa.plan().clone();
+        report.note(format!("{name}/plan"), json!({"prefix_tiles": plan.prefix_tiles, "video_tiles": plan.video_tiles, "k_vid": vsa.k_vid(), "rows": seq}));
+        let want = attention_host(&q, &k, &v, gated.then_some(&gate[..]), &plan, vsa.k_vid(), heads, dim)?;
+        let g = if gated { Some(tensor(&gate)?) } else { None };
+        let (got, seconds) = measure(report, name, || Ok(vsa.attend(tensor(&q)?, tensor(&k)?, tensor(&v)?, g)?.host_cow()?.into_owned()))?;
+        let d = diff(&got, &want);
+        // Prefix rows take the dense splice, video rows the fine kernel: report them apart.
+        let split = plan.prefix_rows * dim;
+        let part = |lo: usize, hi: usize| -> Vec<f32> { (0..heads).flat_map(|h| got[h * seq * dim + lo..h * seq * dim + hi].to_vec()).collect() };
+        let want_part = |lo: usize, hi: usize| -> Vec<f32> { (0..heads).flat_map(|h| want[h * seq * dim + lo..h * seq * dim + hi].to_vec()).collect() };
+        report.note(
+            format!("{name}/by_segment"),
+            json!({"seconds": seconds, "prefix_rows": diff(&part(0, split), &want_part(0, split)).to_json(), "video_rows": diff(&part(split, seq * dim), &want_part(split, seq * dim)).to_json()}),
+        );
+        report.check(name, d.within(max_rel), d.to_json(), json!({"rel_l2": max_rel}))?;
+    }
+
+    // The load-bearing identity: every tile selected and no gate is dense attention.
+    let vsa = H3Vsa::new(&layout, heads, dim, H3VsaConfig { sparsity: 0.0, group: 4 })?;
+    let got = vsa.attend(tensor(&q)?, tensor(&k)?, tensor(&v)?, None)?.host_cow()?.into_owned();
+    let dense = scaled_dot_product_attention(&tensor(&q)?, &tensor(&k)?, &tensor(&v)?, None)?.host_cow()?.into_owned();
+    let d = diff(&got, &dense);
+    report.check("all_tiles_ungated_is_dense", d.within(max_rel), d.to_json(), json!({"rel_l2": max_rel}))?;
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+fn gen(report: &mut Report, weights: &Path, prompt: &str, seconds: usize, seed: u64, dense: bool, mp4: bool, clip_dir: &Path, device: &str) -> StageResult<()> {
+    use fastvideo_cudarc::h3::pipeline::{generate, H3Request};
+
+    report.set("device", crate::gpu::init(device)?);
+    let mut request = H3Request::seconds(prompt, seconds, seed).map_err(|e| anyhow::anyhow!(e))?;
+    request.dense = dense;
+    request.mp4 = mp4;
+    report.set("request", json!({"prompt": prompt, "seconds": seconds, "seed": seed, "attention": if dense { "dense, no gate" } else { "vsa-h3 0.8 + to_gate_compress" }, "height": request.height, "width": request.width, "num_frames": request.num_frames}));
+
+    let mem = crate::gpu::PeakMem::start();
+    let timer = std::time::Instant::now();
+    let out = generate(weights, &request, clip_dir)?;
+    let total = timer.elapsed().as_secs_f64();
+    let t = &out.timings;
+    report.note(
+        "timings",
+        json!({
+            "total_s": total,
+            "text_s": t.text_s,
+            "refine_s": t.refine_s,
+            "load_dit_s": t.load_dit_s,
+            "denoise_s": t.denoise_s,
+            "step_s": t.step_s,
+            "audio_decode_s": t.audio_decode_s,
+            "load_vae_s": t.load_vae_s,
+            "video_decode_s": t.video_decode_s,
+            "write_s": t.write_s,
+            "peak_mib": mem.stop(),
+        }),
+    );
+    report.set("output", json!({"frames": out.frames, "text_tokens": out.text_tokens, "sequence_length": out.sequence_length, "mp4": out.mp4, "wav": out.wav, "audio_samples_per_channel": out.geometry.audio_samples()}));
+    report.check("frames", out.frames == out.geometry.num_frames, json!({"decoded": out.frames}), json!({"expected": out.geometry.num_frames}))?;
+
+    // A finite, non-constant picture: the cheapest statement that the clip is not garbage.
+    let probe = out.frame_paths.get(out.frame_paths.len() / 2).ok_or_else(|| anyhow::anyhow!("no frames were written"))?;
+    let img = image::open(probe).with_context(|| format!("open {probe}"))?.to_rgb8();
+    let values: Vec<f32> = img.as_raw().iter().map(|&b| f32::from(b) / 255.0).collect();
+    let (mean, std) = crate::metrics::mean_std(&values);
+    report.check("middle_frame_not_flat", std > 0.02 && mean > 0.02 && mean < 0.98, json!({"mean": mean, "std": std, "frame": probe}), json!({"std_min": 0.02}))?;
+    if mp4 {
+        report.check("mp4_written", out.mp4.is_some(), json!({"mp4": out.mp4}), json!({"expected": "output.mp4 with an audio track"}))?;
     }
     Ok(())
 }

@@ -82,16 +82,19 @@ tier_query() {
     # One DiT forward: diffusers holds the 66 GB bf16 transformer, then ours
     # holds 37 GiB of it (AdaLN precomputed) plus ~10 GiB of activations.
     h3-dit) echo "$base gpu_ram>=90 disk_space>=200 cpu_ram>=64 inet_down>=800" ;;
+    # Gemma, connectors and the DiT for the reference (90 GB), plus the official
+    # single-file DiT our side loads through the rename view (43 GB).
+    ltx2-dit) echo "$base gpu_ram>=90 disk_space>=260 cpu_ram>=64 inet_down>=800" ;;
     ltx2-text) echo "$base gpu_ram>=90 disk_space>=180 cpu_ram>=64 inet_down>=800" ;;
     # A build box: the GPU is irrelevant, so this asks for the cheapest thing
     # with cores and RAM for a release cargo build plus nvcc for 7 SMs.
     build) echo "num_gpus=1 cuda_vers>=13.0 reliability>0.97 rentable=true verified=true direct_port_count>=1 inet_down>=200 cpu_cores>=8 cpu_ram>=16 disk_space>=40 ${FV_OFFER_QUERY_EXTRA:-}" ;;
-    *) die "unknown tier '$1' (mathprobe|kernels|parity|clip|compare|gen|oracle|fp8|taehv|vaeab|build|h3-text|ltx2-text|h3-vae|ltx2-vae|h3-dit)" ;;
+    *) die "unknown tier '$1' (mathprobe|kernels|parity|clip|compare|gen|oracle|fp8|taehv|vaeab|build|h3-text|ltx2-text|h3-vae|ltx2-vae|h3-dit|ltx2-dit)" ;;
   esac
 }
-tier_max_dph() { case "$1" in mathprobe) echo 0.40 ;; kernels) echo 0.25 ;; parity) echo 0.40 ;; clip) echo 0.60 ;; compare) echo 0.60 ;; gen) echo 0.80 ;; oracle) echo 1.60 ;; fp8) echo 0.80 ;; taehv) echo 0.40 ;; vaeab) echo 0.80 ;; build) echo 0.20 ;; h3-text | ltx2-text) echo 2.00 ;; h3-vae) echo 1.00 ;; ltx2-vae) echo 0.80 ;; h3-dit) echo 2.00 ;; esac; }
-tier_max_minutes() { case "$1" in mathprobe) echo 30 ;; kernels) echo 40 ;; parity) echo 75 ;; clip) echo 180 ;; compare) echo 240 ;; gen) echo 180 ;; oracle) echo 150 ;; fp8) echo 90 ;; taehv) echo 60 ;; vaeab) echo 90 ;; build) echo 45 ;; h3-text | ltx2-text) echo 150 ;; h3-vae | ltx2-vae) echo 90 ;; h3-dit) echo 180 ;; esac; }
-tier_disk() { case "$1" in mathprobe) echo 40 ;; kernels) echo 40 ;; parity) echo 60 ;; clip) echo 100 ;; compare) echo 180 ;; gen) echo 100 ;; oracle) echo 160 ;; fp8) echo 100 ;; taehv) echo 60 ;; vaeab) echo 100 ;; build) echo 40 ;; h3-text) echo 220 ;; ltx2-text) echo 180 ;; h3-vae) echo 100 ;; ltx2-vae) echo 80 ;; h3-dit) echo 200 ;; esac; }
+tier_max_dph() { case "$1" in mathprobe) echo 0.40 ;; kernels) echo 0.25 ;; parity) echo 0.40 ;; clip) echo 0.60 ;; compare) echo 0.60 ;; gen) echo 0.80 ;; oracle) echo 1.60 ;; fp8) echo 0.80 ;; taehv) echo 0.40 ;; vaeab) echo 0.80 ;; build) echo 0.20 ;; h3-text | ltx2-text) echo 2.00 ;; h3-vae) echo 1.00 ;; ltx2-vae) echo 0.80 ;; h3-dit | ltx2-dit) echo 2.00 ;; esac; }
+tier_max_minutes() { case "$1" in mathprobe) echo 30 ;; kernels) echo 40 ;; parity) echo 75 ;; clip) echo 180 ;; compare) echo 240 ;; gen) echo 180 ;; oracle) echo 150 ;; fp8) echo 90 ;; taehv) echo 60 ;; vaeab) echo 90 ;; build) echo 45 ;; h3-text | ltx2-text) echo 150 ;; h3-vae | ltx2-vae) echo 90 ;; h3-dit | ltx2-dit) echo 180 ;; esac; }
+tier_disk() { case "$1" in mathprobe) echo 40 ;; kernels) echo 40 ;; parity) echo 60 ;; clip) echo 100 ;; compare) echo 180 ;; gen) echo 100 ;; oracle) echo 160 ;; fp8) echo 100 ;; taehv) echo 60 ;; vaeab) echo 100 ;; build) echo 40 ;; h3-text) echo 220 ;; ltx2-text) echo 180 ;; h3-vae) echo 100 ;; ltx2-vae) echo 80 ;; h3-dit) echo 200 ;; ltx2-dit) echo 260 ;; esac; }
 
 usage() { sed -n '2,12p' "$0" | sed 's/^# \{0,1\}//'; exit 2; }
 
@@ -606,6 +609,34 @@ cmd_run() {
       --out "$odir/oracle.safetensors" --meta "$odir/oracle.json"
     gpucheck_stage h3-dit 7200 --keep-going --mode fast h3 dit --weights "$wdir" --oracle "$odir/oracle.safetensors"
     log "h3-dit done"
+    return 0
+  fi
+  # DiT milestone of the LTX-2 port. The reference runs text -> connectors ->
+  # one DiT forward from the distilled diffusers conversion; ours replays the
+  # same inputs from the official single file (the production path, through the
+  # key-rename view) and once more from the converted transformer/ — if those
+  # two agree with each other, the community conversion is the same weights.
+  if [[ "$tier" == ltx2-dit ]]; then
+    local repo="${FV_LTX2_REPO:-rootonchair/LTX-2-19b-distilled}" wdir="$WORK/weights/ltx2" odir="$OUTR/ltx2"
+    local single_repo="${FV_LTX2_SINGLE_REPO:-Lightricks/LTX-2}" sdir="$WORK/weights/ltx2-single"
+    remote_run fetch-ltx2 120 fetch "$repo" "$wdir" "transformer/*" "connectors/*" "text_encoder/model-*" "text_encoder/*.json" "tokenizer/*"
+    remote_run fetch-ltx2-single 120 fetch "$single_repo" "$sdir" "ltx-2-19b-distilled.safetensors"
+    local prompt="${FV_PROMPT:-$(jq -r '.prompts[0].prompt' "$FV_ROOT/scripts/gpu/prompts.json")}"
+    jq -n --arg p "$prompt" '{negative: "", prompts: [{name: "oracle", prompt: $p}]}' >"$RUN_DIR/prompt.json"
+    fv_rsync_to "$HOST" "$PORT" "$RUN_DIR/prompt.json" "$OUTR/prompt.json" >/dev/null
+    remote_run oracle-venv 1800 oracle-venv "${FV_TORCH_BACKEND:-cu130}"
+    remote_run wait-ltx2 5400 wait-weights "$wdir" 5400 transformer connectors text_encoder
+    remote_run oracle-ltx2 5400 model-oracle ltx2 --weights "$wdir" --prompts "$OUTR/prompt.json" --skip vae,audio \
+      --out "$odir/oracle.safetensors" --meta "$odir/oracle.json"
+    # Tables first: no weights, seconds, and a layout bug is named by table.
+    STAGE_OPTIONAL=1 gpucheck_stage ltx2-rope 600 --keep-going --mode fast ltx2 dit --rope-only \
+      --dit "$wdir" --oracle "$odir/oracle.safetensors" || true
+    STAGE_OPTIONAL=1 gpucheck_stage ltx2-dit-converted 5400 --keep-going --mode fast ltx2 dit \
+      --dit "$wdir" --oracle "$odir/oracle.safetensors" || true
+    remote_run wait-ltx2-single 5400 wait-weights "$sdir" 5400
+    gpucheck_stage ltx2-dit-single 5400 --keep-going --mode fast ltx2 dit \
+      --dit "$sdir/ltx-2-19b-distilled.safetensors" --oracle "$odir/oracle.safetensors"
+    log "ltx2-dit done"
     return 0
   fi
   # Decoder milestone of the LTX-2 port: audio VAE + vocoder, and the video

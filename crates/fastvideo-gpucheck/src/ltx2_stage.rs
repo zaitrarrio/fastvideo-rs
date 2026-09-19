@@ -19,13 +19,16 @@ use anyhow::Context;
 use fastvideo_cudarc::llm::DecoderConfig;
 use fastvideo_cudarc::ltx2::audio_vae::AudioDecoder;
 use fastvideo_cudarc::ltx2::keys::{Keys, Layout};
+use fastvideo_cudarc::ltx2::pipeline::{self as ltx2_pipeline, Decoders, Ltx2Paths, Ltx2Request};
 use fastvideo_cudarc::ltx2::text::{HiddenStack, PaddedPrompt, TextConnectors};
+use fastvideo_cudarc::ltx2::transformer::{Ltx2Transformer, Ropes};
 use fastvideo_cudarc::ltx2::vae::VideoDecoder;
 use fastvideo_cudarc::ltx2::vocoder::Vocoder;
 use fastvideo_cudarc::wan::pipeline::{interleave_audio, write_wav};
 use fastvideo_cudarc::CudaTensor;
 use fastvideo_cudarc::wan::weights::WeightMap;
 use fastvideo_models::ltx2::config::{ltx2_19b_distilled, Ltx2Config};
+use fastvideo_models::ltx2::{Ltx2RopeTables, Ltx2Schedule, SplitRope};
 use serde_json::json;
 
 use crate::metrics::diff;
@@ -123,6 +126,107 @@ pub enum Stage {
         #[arg(long, default_value_t = 1e-4)]
         max_abs_streamed: f64,
     },
+    /// The rotary tables, then one DiT forward on the oracle's seeded latents
+    /// and connector outputs, diffed at three blocks and at both outputs.
+    /// Needs the global `--mode fast`: 19B parameters are 38 GB as bf16 and
+    /// 76 GB as the float32 that `--mode exact` would load.
+    Dit {
+        /// The distilled DiT: `ltx-2-19b-distilled.safetensors`, or a
+        /// diffusers folder holding (or being) `transformer/`.
+        #[arg(long)]
+        dit: PathBuf,
+        /// `--out` file of `ltx2_oracle.py` (stages `text`, `conn`, `dit`).
+        #[arg(long)]
+        oracle: PathBuf,
+        #[arg(long, default_value = "cuda")]
+        device: String,
+        #[command(flatten)]
+        geometry: Geometry,
+        /// Only compare the rotary tables (host arithmetic, no weights read).
+        #[arg(long)]
+        rope_only: bool,
+        /// cos/sin against the reference's tables.
+        #[arg(long, default_value_t = 1e-6)]
+        max_abs_rope: f64,
+        /// Output of block 0 against a bf16 reference.
+        #[arg(long, default_value_t = 2e-3)]
+        max_rel_first: f64,
+        /// Later blocks and both velocities.
+        #[arg(long, default_value_t = 2e-2)]
+        max_rel: f64,
+    },
+}
+
+    /// The 8-step distilled loop from the oracle's noise on the oracle's
+    /// connector outputs, diffed after every step; with `--weights`, the final
+    /// latents decoded at full size as well. Needs `--mode fast` (see `dit`).
+    Loop {
+        /// The distilled DiT (single file or diffusers `transformer/`).
+        #[arg(long)]
+        dit: PathBuf,
+        /// `--out` file of `ltx2_oracle.py --sample`.
+        #[arg(long)]
+        oracle: PathBuf,
+        /// A diffusers snapshot with `vae/`, `audio_vae/`, `vocoder/`: also
+        /// compare decoded frames and audio against the oracle's.
+        #[arg(long)]
+        weights: Option<PathBuf>,
+        #[arg(long, default_value = "cuda")]
+        device: String,
+        #[command(flatten)]
+        geometry: Geometry,
+        /// Latents after the first step.
+        #[arg(long, default_value_t = 5e-3)]
+        max_rel_first: f64,
+        /// Latents after the last step: bf16 drift compounds over 8 forwards.
+        #[arg(long, default_value_t = 5e-2)]
+        max_rel: f64,
+        /// Our decoders on the *oracle's* final latents (decoder parity at
+        /// production size), and on our own (the whole chain).
+        #[arg(long, default_value_t = 45.0)]
+        min_psnr_db: f64,
+        #[arg(long, default_value_t = 35.0)]
+        min_psnr_db_e2e: f64,
+    },
+    /// Generate a clip end to end: prompt → mp4 with sound, plus timings and
+    /// peak VRAM. Needs `--mode fast`.
+    Gen {
+        /// A diffusers LTX-2 snapshot: `tokenizer/`, `text_encoder/`, `vae/`,
+        /// `audio_vae/`, `vocoder/`.
+        #[arg(long)]
+        weights: PathBuf,
+        /// The distilled DiT + connectors: `ltx-2-19b-distilled.safetensors`, or
+        /// a diffusers root with `transformer/` and `connectors/`.
+        #[arg(long)]
+        dit: PathBuf,
+        #[arg(long)]
+        prompt: String,
+        /// Output directory: `output.mp4`, `audio.wav`, `frame-NNN.png`.
+        #[arg(long)]
+        clip: PathBuf,
+        #[arg(long, default_value_t = 10)]
+        seed: u64,
+        #[arg(long, default_value = "cuda")]
+        device: String,
+        #[command(flatten)]
+        geometry: Geometry,
+        /// Frames and WAV only (no ffmpeg needed).
+        #[arg(long)]
+        no_mp4: bool,
+    },
+}
+
+/// The request geometry the oracle was run with (its own defaults).
+#[derive(clap::Args, Debug, Clone, Copy)]
+pub struct Geometry {
+    #[arg(long, default_value_t = 512)]
+    height: usize,
+    #[arg(long, default_value_t = 768)]
+    width: usize,
+    #[arg(long, default_value_t = 121)]
+    num_frames: usize,
+    #[arg(long, default_value_t = 24.0)]
+    frame_rate: f64,
 }
 
 pub fn run(report: &mut Report, stage: &Stage) -> StageResult<()> {
@@ -142,6 +246,15 @@ pub fn run(report: &mut Report, stage: &Stage) -> StageResult<()> {
         }
         Stage::Vae { weights, oracle, device, max_abs, max_rmse, max_abs_streamed } => {
             vae(report, weights, oracle, device, [*max_abs, *max_rmse, *max_abs_streamed])
+        }
+        Stage::Dit { dit: path, oracle, device, geometry, rope_only, max_abs_rope, max_rel_first, max_rel } => {
+            dit(report, path, oracle, device, *geometry, *rope_only, [*max_abs_rope, *max_rel_first, *max_rel])
+        }
+        Stage::Loop { dit: path, oracle, weights, device, geometry, max_rel_first, max_rel, min_psnr_db, min_psnr_db_e2e } => {
+            sample_loop(report, path, oracle, weights.as_deref(), device, *geometry, [*max_rel_first, *max_rel, *min_psnr_db, *min_psnr_db_e2e])
+        }
+        Stage::Gen { weights, dit: path, prompt, clip, seed, device, geometry, no_mp4 } => {
+            gen(report, weights, path, prompt, clip, *seed, device, *geometry, !*no_mp4)
         }
     }
 }
@@ -477,5 +590,290 @@ fn vae(report: &mut Report, weights: &Path, oracle: &Path, device: &str, [max_ab
         d_stream.to_json(),
         json!({"max_abs": max_abs_streamed}),
     )?;
+    Ok(())
+}
+
+// ---- dit --------------------------------------------------------------------
+
+fn host(t: &CudaTensor) -> anyhow::Result<Vec<f32>> {
+    Ok(t.host_cow()?.into_owned())
+}
+
+fn cuda(t: &F32Tensor) -> anyhow::Result<CudaTensor> {
+    Ok(CudaTensor::from_vec(t.data.clone(), t.shape.clone())?)
+}
+
+fn dit(report: &mut Report, path: &Path, oracle: &Path, device: &str, g: Geometry, rope_only: bool, [max_abs_rope, max_rel_first, max_rel]: [f64; 3]) -> StageResult<()> {
+    report.set("device", crate::gpu::init(device)?);
+    let cfg = ltx2_19b_distilled();
+    let t_cfg = &cfg.transformer;
+    let mut orc = load_oracle(oracle, &["dit.", "conn.video", "conn.audio"])?;
+    let video_in = take(&mut orc, "dit.video_in", oracle)?;
+    let audio_in = take(&mut orc, "dit.audio_in", oracle)?;
+    let grid = t_cfg.latent_grid(g.num_frames, g.height, g.width);
+    let audio_tokens = t_cfg.audio_tokens(g.num_frames, g.frame_rate);
+    let geometry_ok = video_in.shape == [1, grid.iter().product::<usize>(), t_cfg.in_channels] && audio_in.shape == [1, audio_tokens, t_cfg.audio_in_channels];
+    report.check(
+        "dit.geometry",
+        geometry_ok,
+        json!({"video_in": video_in.shape, "audio_in": audio_in.shape}),
+        json!({"latent_grid": grid, "audio_tokens": audio_tokens, "hint": "pass the oracle's --height/--width/--num-frames/--frame-rate"}),
+    )?;
+
+    // --- rotary tables: pure host arithmetic, judged to the last digits --------
+    let tables = Ltx2RopeTables::new(t_cfg, grid, audio_tokens, g.frame_rate as f32);
+    let named: [(&str, &SplitRope); 4] = [("video", &tables.video), ("audio", &tables.audio), ("cross_video", &tables.cross_video), ("cross_audio", &tables.cross_audio)];
+    let mut rope_diffs = Vec::new();
+    for (name, ours) in named {
+        for (part, values) in [("cos", &ours.cos), ("sin", &ours.sin)] {
+            let want = take(&mut orc, &format!("dit.rope.{name}.{part}"), oracle)?;
+            let shape_ok = want.shape == [1, ours.heads, ours.tokens, ours.half];
+            rope_diffs.push((format!("dit.rope.{name}.{part}"), shape_ok, want.shape.clone(), diff(values, &want.data)));
+        }
+    }
+    for (name, shape_ok, shape, d) in &rope_diffs {
+        report.check(name.clone(), *shape_ok && d.non_finite == 0 && d.max_abs <= max_abs_rope, d.to_json(), json!({"max_abs": max_abs_rope, "reference_shape": shape}))?;
+    }
+    if rope_only {
+        return Ok(());
+    }
+
+    // --- one forward on the oracle's inputs -----------------------------------
+    let timestep = take(&mut orc, "dit.timestep", oracle)?.data.first().copied().context("dit.timestep is empty")?;
+    let (map, layout) = open_distilled(path, "transformer")?;
+    let keys = Keys::transformer(layout);
+    report.set("dit", json!({"source": path.display().to_string(), "layout": format!("{layout:?}"), "timestep": timestep, "video_tokens": video_in.shape[1], "audio_tokens": audio_in.shape[1]}));
+    let peak = crate::gpu::PeakMem::start();
+    let timer = std::time::Instant::now();
+    let model = Ltx2Transformer::load(&map, &keys, t_cfg)?;
+    report.note("load_dit", json!({"seconds": timer.elapsed().as_secs_f64()}));
+
+    let ropes = Ropes::upload(&tables)?;
+    let text = model.project_text(&cuda(&take(&mut orc, "conn.video", oracle)?)?, &cuda(&take(&mut orc, "conn.audio", oracle)?)?)?;
+    let (video, audio) = (cuda(&video_in)?, cuda(&audio_in)?);
+    // Blocks the oracle tapped: dit.blockNN.{video,audio}.
+    let tapped: Vec<usize> = (0..t_cfg.num_layers).filter(|i| orc.contains_key(&format!("dit.block{i:02}.video"))).collect();
+    let mut taps: Vec<(usize, Vec<f32>, Vec<f32>)> = Vec::new();
+    let ((v_out, a_out), seconds) = measure(report, "dit_forward", || {
+        let mut observe = |i: usize, v: &CudaTensor, a: &CudaTensor| -> fastvideo_cudarc::wan::tensor::Result<()> {
+            if tapped.contains(&i) {
+                taps.push((i, v.host_cow()?.into_owned(), a.host_cow()?.into_owned()));
+            }
+            Ok(())
+        };
+        let (v, a) = model.forward(&video, &audio, &text, timestep, &ropes, Some(&mut observe))?;
+        Ok((host(&v)?, host(&a)?))
+    })?;
+    report.note("dit_forward", json!({"seconds": seconds, "includes": "block-tap downloads", "peak_vram_mib": peak.stop()}));
+
+    // Every metric lands before the first gate can stop the stage: the block at
+    // which the error starts to grow is the diagnosis.
+    let mut results = Vec::new();
+    for (i, v, a) in &taps {
+        for (stream, ours) in [("video", v), ("audio", a)] {
+            let name = format!("dit.block{i:02}.{stream}");
+            let d = diff(ours, &take(&mut orc, &name, oracle)?.data);
+            results.push((name, d, if *i == 0 { max_rel_first } else { max_rel }));
+        }
+    }
+    results.push(("dit.video_out".into(), diff(&v_out, &take(&mut orc, "dit.video_out", oracle)?.data), max_rel));
+    results.push(("dit.audio_out".into(), diff(&a_out, &take(&mut orc, "dit.audio_out", oracle)?.data), max_rel));
+    report.set("metrics", results.iter().map(|(n, d, _)| (n.clone(), d.to_json())).collect::<serde_json::Map<_, _>>());
+    for (name, d, limit) in &results {
+        report.check(name.clone(), d.within(*limit) && d.cosine >= 0.999, d.to_json(), json!({"rel_l2": limit, "cosine_min": 0.999}))?;
+    }
+    Ok(())
+}
+
+// ---- sampling loop ----------------------------------------------------------
+
+/// Frames `keep` of a full-size decode, each `[3, H, W]` on the host, without
+/// holding the clip: the sink downloads only the frames asked for.
+fn decode_frames(dec: &Decoders, tokens: &CudaTensor, grid: [usize; 3], keep: &[usize]) -> anyhow::Result<Vec<Vec<f32>>> {
+    let z = fastvideo_cudarc::ltx2::transformer::unpack_video(tokens, grid)?;
+    let mut out: Vec<Option<Vec<f32>>> = vec![None; keep.len()];
+    dec.video.decode_streaming(&z, &mut |offset, frames| {
+        for (slot, &k) in out.iter_mut().zip(keep) {
+            if k >= offset && k < offset + frames.shape[0] {
+                *slot = Some(frames.narrow(0, k - offset, 1)?.host_cow()?.into_owned());
+            }
+        }
+        Ok(())
+    })?;
+    out.into_iter().enumerate().map(|(i, f)| f.with_context(|| format!("frame {} was never decoded", keep[i]))).collect()
+}
+
+fn sample_loop(
+    report: &mut Report,
+    path: &Path,
+    oracle: &Path,
+    weights: Option<&Path>,
+    device: &str,
+    g: Geometry,
+    [max_rel_first, max_rel, min_psnr, min_psnr_e2e]: [f64; 4],
+) -> StageResult<()> {
+    report.set("device", crate::gpu::init(device)?);
+    let cfg = ltx2_19b_distilled();
+    let t_cfg = &cfg.transformer;
+    let mut orc = load_oracle(oracle, &["sample.", "conn.video", "conn.audio"])?;
+    let noise_v = take(&mut orc, "sample.video_noise", oracle)?;
+    let noise_a = take(&mut orc, "sample.audio_noise", oracle)?;
+    let grid = t_cfg.latent_grid(g.num_frames, g.height, g.width);
+    let audio_tokens = t_cfg.audio_tokens(g.num_frames, g.frame_rate);
+    report.check(
+        "loop.geometry",
+        noise_v.shape == [1, grid.iter().product::<usize>(), t_cfg.in_channels] && noise_a.shape == [1, audio_tokens, t_cfg.audio_in_channels],
+        json!({"video_noise": noise_v.shape, "audio_noise": noise_a.shape}),
+        json!({"latent_grid": grid, "audio_tokens": audio_tokens}),
+    )?;
+
+    let peak = crate::gpu::PeakMem::start();
+    let (map, layout) = open_distilled(path, "transformer")?;
+    let timer = std::time::Instant::now();
+    let model = Ltx2Transformer::load(&map, &Keys::transformer(layout), t_cfg)?;
+    report.note("load_dit", json!({"seconds": timer.elapsed().as_secs_f64(), "layout": format!("{layout:?}")}));
+    let ropes = Ropes::new(t_cfg, grid, audio_tokens, g.frame_rate as f32)?;
+    let text = model.project_text(&cuda(&take(&mut orc, "conn.video", oracle)?)?, &cuda(&take(&mut orc, "conn.audio", oracle)?)?)?;
+
+    let schedule = Ltx2Schedule::distilled();
+    let mut steps: Vec<(Vec<f32>, Vec<f32>, f64)> = Vec::new();
+    let ((final_v, final_a), seconds) = measure(report, "denoise", || {
+        let mut observe = |_: usize, v: &CudaTensor, a: &CudaTensor, s: f64| -> fastvideo_cudarc::wan::pipeline::Result<()> {
+            steps.push((v.host_cow()?.into_owned(), a.host_cow()?.into_owned(), s));
+            Ok(())
+        };
+        Ok(ltx2_pipeline::denoise(&model, &text, &ropes, &schedule, cuda(&noise_v)?, cuda(&noise_a)?, Some(&mut observe))?)
+    })?;
+    report.note("denoise", json!({"seconds": seconds, "step_seconds": steps.iter().map(|s| s.2).collect::<Vec<_>>(), "peak_vram_mib": peak.stop()}));
+    drop((model, text, ropes));
+
+    // Every step's metric lands before the first gate can stop the stage: where
+    // the drift starts is the diagnosis.
+    let last = steps.len().saturating_sub(1);
+    let mut results = Vec::new();
+    let mut oracle_final: Option<(F32Tensor, F32Tensor)> = None;
+    for (i, (v, a, _)) in steps.iter().enumerate() {
+        let (want_v, want_a) = (take(&mut orc, &format!("sample.step{i}.video"), oracle)?, take(&mut orc, &format!("sample.step{i}.audio"), oracle)?);
+        results.push((format!("loop.step{i}.video"), diff(v, &want_v.data), i));
+        results.push((format!("loop.step{i}.audio"), diff(a, &want_a.data), i));
+        if i == last {
+            oracle_final = Some((want_v, want_a));
+        }
+    }
+    report.set("metrics", results.iter().map(|(n, d, _)| (n.clone(), d.to_json())).collect::<serde_json::Map<_, _>>());
+    for (name, d, i) in &results {
+        // Linear in the step index between the two published limits.
+        let limit = max_rel_first + (max_rel - max_rel_first) * (*i as f64 / last.max(1) as f64);
+        report.check(name.clone(), d.within(limit) && d.cosine >= 0.99, d.to_json(), json!({"rel_l2": limit, "cosine_min": 0.99}))?;
+    }
+
+    // --- decoded output, when the decoders are at hand -------------------------
+    let (Some(weights), Some((oracle_v, oracle_a))) = (weights, oracle_final) else { return Ok(()) };
+    let Some(frames_ref) = orc.remove("sample.frames") else {
+        report.note("loop.decode", json!({"skipped": "the oracle file has no sample.frames"}));
+        return Ok(());
+    };
+    let decoders = Decoders::load(weights, &cfg)?;
+    let total = cfg.vae.decoded_frames(grid[0]);
+    let mut keep = vec![0, total / 2, total - 1];
+    keep.dedup();
+    let [_, c, kept, h, w] = frames_ref.shape[..] else {
+        return Err(anyhow::anyhow!("sample.frames: expected [1, 3, K, H, W], got {:?}", frames_ref.shape).into());
+    };
+    if kept != keep.len() || c != 3 {
+        return Err(anyhow::anyhow!("sample.frames holds {kept} frames, expected frames {keep:?} of {total}").into());
+    }
+    // Reference frame k out of the [C, K, H, W] layout, as [3, H, W].
+    let plane = h * w;
+    let reference = |k: usize| -> Vec<f32> { (0..c).flat_map(|ch| frames_ref.data[(ch * kept + k) * plane..(ch * kept + k + 1) * plane].iter().copied()).collect() };
+    for (tag, tokens, limit) in [("oracle_latents", cuda(&oracle_v)?, min_psnr), ("e2e", final_v.clone(), min_psnr_e2e)] {
+        let (ours, seconds) = measure(report, &format!("vae_decode_{tag}"), || decode_frames(&decoders, &tokens, grid, &keep))?;
+        let psnr: Vec<f64> = ours.iter().enumerate().map(|(k, f)| crate::metrics::psnr(f, &reference(k), 2.0).min(999.0)).collect();
+        let worst = psnr.iter().copied().fold(f64::INFINITY, f64::min);
+        report.check(
+            format!("loop.frames_{tag}"),
+            worst >= limit,
+            json!({"psnr_db": psnr, "frames": keep, "decode_seconds": seconds}),
+            json!({"psnr_db_min": limit}),
+        )?;
+    }
+    if let (Some(want_mel), Some(want_wave)) = (orc.remove("sample.mel"), orc.remove("sample.wave")) {
+        for (tag, tokens, limit) in [("oracle_latents", cuda(&oracle_a)?, 50.0), ("e2e", final_a.clone(), 20.0)] {
+            let mel = decoders.audio.decode_packed(&tokens)?;
+            let wave = decoders.vocoder.forward(&mel)?;
+            let (d_mel, d_wave) = (diff(&host(&mel)?, &want_mel.data), diff(&host(&wave)?, &want_wave.data));
+            let snr = rmse_snr(&d_wave, 1).1.min(999.0);
+            let mut values = d_wave.to_json();
+            values["snr_db"] = json!(snr);
+            values["mel_rel_l2"] = json!(d_mel.rel_l2);
+            // A vocoder is phase-sensitive: on our own latents the waveform SNR
+            // is reported, and only the attributed decode is gated.
+            let ok = d_wave.non_finite == 0 && (tag == "e2e" || snr >= limit);
+            report.check(format!("loop.wave_{tag}"), ok, values, json!({"snr_db_min": if tag == "e2e" { serde_json::Value::Null } else { json!(limit) }}))?;
+        }
+    }
+    Ok(())
+}
+
+// ---- gen --------------------------------------------------------------------
+
+#[allow(clippy::too_many_arguments)]
+fn gen(report: &mut Report, weights: &Path, path: &Path, prompt: &str, clip: &Path, seed: u64, device: &str, g: Geometry, mp4: bool) -> StageResult<()> {
+    report.set("device", crate::gpu::init(device)?);
+    let cfg = ltx2_19b_distilled();
+    let request = Ltx2Request {
+        prompt: prompt.to_string(),
+        height: g.height,
+        width: g.width,
+        num_frames: g.num_frames,
+        frame_rate: g.frame_rate,
+        seed,
+        output_dir: clip.to_path_buf(),
+        mp4,
+    };
+    report.set("request", json!({"prompt": prompt, "height": g.height, "width": g.width, "num_frames": g.num_frames, "frame_rate": g.frame_rate, "seed": seed}));
+    let paths = Ltx2Paths { weights: weights.to_path_buf(), dit: path.to_path_buf() };
+    let peak = crate::gpu::PeakMem::start();
+    let wall = std::time::Instant::now();
+    // Latent statistics per step: a run that diverges shows here, not in a grey video.
+    let mut stats: Vec<serde_json::Value> = Vec::new();
+    let mut observe = |i: usize, v: &CudaTensor, a: &CudaTensor, s: f64| -> fastvideo_cudarc::wan::pipeline::Result<()> {
+        let (vh, ah) = (v.host_cow()?, a.host_cow()?);
+        let ((vm, vs), (am, as_)) = (crate::metrics::mean_std(&vh), crate::metrics::mean_std(&ah));
+        let bad = crate::metrics::non_finite(&vh) + crate::metrics::non_finite(&ah);
+        stats.push(json!({"step": i, "seconds": s, "video_mean": vm, "video_std": vs, "audio_mean": am, "audio_std": as_, "non_finite": bad}));
+        Ok(())
+    };
+    let out = ltx2_pipeline::generate(&paths, &cfg, &request, Some(&mut observe))?;
+    let wall_s = wall.elapsed().as_secs_f64();
+    let peak_mib = peak.stop();
+    let t = &out.timings;
+    report.set(
+        "timings",
+        json!({
+            "wall_s": wall_s, "load_s": t.load_s, "text_s": t.text_s, "denoise_s": t.denoise_s, "step_s": t.step_s,
+            "decode_audio_s": t.decode_audio_s, "decode_video_s": t.decode_video_s, "write_s": t.write_s,
+        }),
+    );
+    report.set("peak_vram_mib", peak_mib);
+    report.set("steps", &stats);
+    report.set("outputs", json!({"mp4": out.mp4, "wav": out.wav, "frames": out.frames.len(), "first_frame": out.frames.first()}));
+    report.set("tokens", json!({"prompt": out.prompt_tokens, "video": out.video_tokens, "audio": out.audio_tokens}));
+
+    let finite = stats.iter().all(|s| s["non_finite"] == json!(0) && s["video_std"].as_f64().is_some_and(|v| v > 1e-4));
+    report.check("gen.latents_finite", finite && stats.len() == 8, json!({"steps": stats.len()}), json!({"steps": 8, "non_finite": 0}))?;
+    report.check("gen.frames", out.frames.len() == g.num_frames, json!({"frames": out.frames.len()}), json!({"frames": g.num_frames}))?;
+    let wav_bytes = std::fs::metadata(&out.wav).map(|m| m.len()).unwrap_or(0);
+    let want_samples = cfg.vocoder.waveform_samples(cfg.audio_vae.mel_frames(out.audio_tokens));
+    report.check(
+        "gen.wav",
+        wav_bytes == 44 + (want_samples * cfg.vocoder.out_channels * 2) as u64,
+        json!({"bytes": wav_bytes}),
+        json!({"samples_per_channel": want_samples, "sample_rate": cfg.vocoder.output_sampling_rate, "channels": cfg.vocoder.out_channels}),
+    )?;
+    if mp4 {
+        let size = out.mp4.as_ref().and_then(|p| std::fs::metadata(p).ok()).map_or(0, |m| m.len());
+        report.check("gen.mp4", size > 0, json!({"path": out.mp4, "bytes": size}), json!({"bytes_min": 1}))?;
+    }
     Ok(())
 }

@@ -73,7 +73,7 @@ struct Conv1d {
 impl Conv1d {
     /// `padding = "same"` for an odd kernel: `dilation · (k - 1) / 2` each side.
     fn load(map: &WeightMap, prefix: &str, cin: usize, cout: usize, kernel: usize, dilation: usize) -> Result<Self> {
-        if kernel % 2 == 0 {
+        if kernel.is_multiple_of(2) {
             return Err(msg(format!("{prefix}: \"same\" padding needs an odd kernel, got {kernel}")));
         }
         let mut bias = cuda_tensor_shaped(map, &format!("{prefix}.bias"), &[cout])?;
