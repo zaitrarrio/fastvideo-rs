@@ -12,7 +12,7 @@
 #          `--build-context binary=artifacts/gpucheck/dist` to reuse `docker.sh dist`.
 # runtime  What a GPU box runs (ghcr.io/zaitrarrio/fastvideo-rs-runtime): Ubuntu
 #          22.04 + only the CUDA 13.0 libraries cudarc loads (NVIDIA apt) +
-#          rsync/ffmpeg/HF downloader + the binary and scripts. No PyTorch, no
+#          rsync/ffmpeg/HF downloader (hf_xet) + the binary and scripts. No PyTorch, no
 #          toolkit: ~1.5GB compressed instead of ~9GB, so hosts boot quickly.
 
 FROM ubuntu:22.04 AS builder
@@ -70,7 +70,7 @@ RUN apt-get update \
  && apt-get update \
  && apt-get install -y --no-install-recommends cuda-nvrtc-13-0 libcublas-13-0 libcudnn9-cuda-13 \
  && rm -rf /var/lib/apt/lists/* \
- && pip3 install --no-cache-dir huggingface_hub hf_transfer \
+ && pip3 install --no-cache-dir huggingface_hub hf_xet \
  && echo /usr/local/cuda-13.0/lib64 > /etc/ld.so.conf.d/fastvideo-nvidia.conf \
  && ldconfig \
  && ldconfig -p | grep -E 'libnvrtc\.so|libcublasLt\.so|libcublas\.so|libcudnn\.so' \

@@ -159,8 +159,10 @@ pub fn attention_host(q: &[f32], k: &[f32], v: &[f32], gate: Option<&[f32]>, pla
     }
     let scale = 1.0 / (dim as f64).sqrt();
     let tile_rows = |t: usize| plan.slot_src[t * TILE_ELEMS..t * TILE_ELEMS + plan.block_sizes[t] as usize].iter().map(|&s| s as usize);
+    // Heads are independent; rows within a head are what the loops spell out.
+    use rayon::prelude::*;
     let mut out = vec![0f32; want];
-    for h in 0..heads {
+    out.par_chunks_mut(seq * dim).enumerate().for_each(|(h, out)| {
         let base = h * seq * dim;
         // Mean over the VALID rows of each tile.
         let pool = |x: &[f32]| -> Vec<f64> {
@@ -198,11 +200,11 @@ pub fn attention_host(q: &[f32], k: &[f32], v: &[f32], gate: Option<&[f32]>, pla
                 for d in 0..dim {
                     let sparse: f64 = keys.iter().zip(&logits).map(|(&kr, l)| (l - mx).exp() / z * f64::from(v[base + kr * dim + d])).sum();
                     let branch = gate.map_or(0.0, |g| compressed[d] * f64::from(g[base + r * dim + d]));
-                    out[base + r * dim + d] = (sparse + branch) as f32;
+                    out[r * dim + d] = (sparse + branch) as f32;
                 }
             }
         }
-    }
+    });
     Ok(out)
 }
 

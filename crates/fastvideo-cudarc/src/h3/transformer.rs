@@ -827,6 +827,46 @@ pub(crate) mod tests {
         }
     }
 
+    /// The base model's zero-initialised gate makes the compression branch an
+    /// exact no-op, so VSA with every tile kept must reproduce the dense
+    /// forward through the whole stack; with a live gate it must not.
+    #[test]
+    fn vsa_with_every_tile_and_a_zero_gate_is_the_dense_forward() {
+        use crate::h3::vsa::{H3Vsa, H3VsaConfig};
+        let cfg = tiny_cfg();
+        let schedule = H3JointSchedule::fasth3_8step();
+        let zero_gate = || {
+            let base = weights();
+            WeightMap::generated(move |key, shape| {
+                if key.contains("to_gate_compress") {
+                    return vec![0.0; shape.iter().product()];
+                }
+                cuda_tensor_shaped(&base, key, shape).unwrap().host_cow().unwrap().into_owned()
+            })
+        };
+        let layout = H3PackedLayout::new(3, (2, 4, 4), 2, cfg.patch_size).unwrap();
+        let (nv, na, nt) = (layout.video.len, layout.audio.len, layout.text.len);
+        let video = CudaTensor::from_vec(seeded(nv * cfg.video_patch_dim(), 0.41), vec![nv, cfg.video_patch_dim()]).unwrap();
+        let audio = CudaTensor::from_vec(seeded(na * cfg.audio_in_channels, 0.23), vec![na, cfg.audio_in_channels]).unwrap();
+        let text = CudaTensor::from_vec(seeded(nt * cfg.hidden_size, 0.57), vec![1, nt, cfg.hidden_size]).unwrap();
+        let vsa = H3Vsa::new(&layout, cfg.num_attention_heads, cfg.attention_head_dim, H3VsaConfig { sparsity: 0.0, group: 1 }).unwrap();
+        let dl = DeviceLayout::new(&cfg, layout).unwrap();
+        let run = |map: &WeightMap, mode: AttnMode<'_>| -> Vec<f32> {
+            let model = H3Transformer::load(cfg.clone(), map, &schedule, true).unwrap();
+            let (v, a) = model.forward(0, &video, &audio, &text, &dl, mode, None).unwrap();
+            v.host_cow().unwrap().iter().chain(a.host_cow().unwrap().iter()).copied().collect()
+        };
+        let dense = run(&zero_gate(), AttnMode::Dense);
+        let sparse = run(&zero_gate(), AttnMode::Vsa(&vsa));
+        assert!(dense.iter().zip(&sparse).all(|(a, b)| (a - b).abs() < 1e-5), "zero gate: VSA at sparsity 0 is dense");
+        let gated = run(&weights(), AttnMode::Vsa(&vsa));
+        let dense_live = run(&weights(), AttnMode::Dense);
+        assert!(gated.iter().zip(&dense_live).any(|(a, b)| (a - b).abs() > 1e-4), "a trained gate changes the output");
+        // Without the gate weights loaded, VSA is refused rather than silently run gateless.
+        let no_gate = H3Transformer::load(cfg.clone(), &weights(), &schedule, false).unwrap();
+        assert!(no_gate.forward(0, &video, &audio, &text, &dl, AttnMode::Vsa(&vsa), None).is_err());
+    }
+
     #[test]
     fn the_table_holds_the_three_rows_a_t2av_forward_reads() {
         let (cfg, map) = (tiny_cfg(), weights());

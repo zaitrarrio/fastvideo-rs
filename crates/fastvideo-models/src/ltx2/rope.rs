@@ -296,4 +296,50 @@ mod tests {
             }
         }
     }
+    /// Golden values from a numpy transliteration of the reference
+    /// (`transformer_ltx2.py:906-1076`, `connectors.py:111-171`): its meshgrid /
+    /// stack / transpose / flatten / reshape / swapaxes sequence, float32 where
+    /// torch is float32 — so the layout here is checked against the reference's
+    /// own tensor plumbing, not against a second reading of it. Latent grid
+    /// 3x2x3, 5 audio latents, 24 fps, production widths.
+    #[test]
+    fn tables_match_a_numpy_transliteration_of_the_reference() {
+        let t = Ltx2RopeTables::new(&cfg(), [3, 2, 3], 5, 24.0);
+        let sums = |r: &SplitRope| (r.cos.iter().map(|&v| f64::from(v)).sum::<f64>(), r.sin.iter().map(|&v| f64::from(v)).sum::<f64>());
+        for (name, table, want) in [
+            ("video", &t.video, (-1456.788344584278, -526.246063605472)),
+            ("audio", &t.audio, (-266.3353606130113, -141.95092843251768)),
+            ("cross_video", &t.cross_video, (-962.3432892755955, -534.2277238606475)),
+            ("cross_audio", &t.cross_audio, (-266.3353606130113, -141.95092843251768)),
+        ] {
+            let got = sums(table);
+            assert!((got.0 - want.0).abs() < 1e-4 && (got.1 - want.1).abs() < 1e-4, "{name}: sums {got:?} vs {want:?}");
+        }
+        let at = |r: &SplitRope, h: usize, tok: usize, j: usize| {
+            let i = (h * r.tokens + tok) * r.half + j;
+            (r.cos[i], r.sin[i])
+        };
+        let close = |got: (f32, f32), want: (f32, f32), what: &str| {
+            assert!((got.0 - want.0).abs() < 2e-7 && (got.1 - want.1).abs() < 2e-7, "{what}: {got:?} vs {want:?}");
+        };
+        close(at(&t.video, 0, 0, 0), (1.0, 0.0), "video identity pad");
+        close(at(&t.video, 0, 0, 2), (0.003_272_483_8, -0.999_994_64), "video h0 t0 j2");
+        close(at(&t.video, 0, 0, 3), (0.024_541_136, -0.999_698_8), "video h0 t0 j3");
+        close(at(&t.video, 5, 7, 13), (0.846_158_03, -0.532_932_1), "video h5 t7 j13");
+        close(at(&t.video, 31, 17, 63), (-0.382_976_6, 0.923_758_03), "video h31 t17 j63");
+        close(at(&t.video, 17, 9, 40), (0.999_613_7, 0.027_792_243), "video h17 t9 j40");
+        close(at(&t.cross_video, 0, 6, 0), (0.032_718_97, -0.999_464_57), "cross_video h0 t6 j0");
+        close(at(&t.cross_video, 31, 17, 31), (-0.866_037, 0.499_979_88), "cross_video h31 t17 j31");
+        close(at(&t.cross_video, 12, 11, 5), (0.707_948_03, -0.706_264_56), "cross_video h12 t11 j5");
+        close(at(&t.audio, 0, 0, 0), (0.000_785_426_24, -0.999_999_7), "audio h0 t0 j0");
+        close(at(&t.audio, 31, 4, 31), (-1.0, -6.892_973e-5), "audio h31 t4 j31");
+        close(at(&t.audio, 9, 3, 17), (0.598_838_4, 0.800_869_94), "audio h9 t3 j17");
+
+        let c = SplitRope::from_fractions(&connector_fractions(8, 4096), 1, 3840, 30, 10_000.0);
+        let got = sums(&c);
+        assert!((got.0 + 769.1431764554143).abs() < 1e-4 && (got.1 + 343.0537126405907).abs() < 1e-4, "connector sums {got:?}");
+        close(at(&c, 0, 0, 0), (-4.371_139e-8, -1.0), "connector h0 p0 j0");
+        close(at(&c, 29, 7, 63), (-0.960_290_3, -0.279_002_64), "connector h29 p7 j63");
+        close(at(&c, 11, 3, 20), (0.925_963_9, -0.377_612_05), "connector h11 p3 j20");
+    }
 }

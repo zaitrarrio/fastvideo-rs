@@ -44,8 +44,12 @@ tasks:
     deps: [docker:up]
     cmds: ['bash scripts/gpu/docker.sh dist']
 
+  dist:ci:
+    desc: Fetch the CI-built release binary for the current sources (no GPU, no rental) — the default way to get a dist
+    cmds: ['bash scripts/gpu/dist-ci.sh']
+
   build:remote:
-    desc: Release binary with per-SM cubins, built on a cheap rented Linux box (~$0.03)
+    desc: 'FALLBACK ONLY: build on a rented box when CI is unavailable. Compiling needs no GPU — prefer dist:ci'
     cmds: ['bash scripts/gpu/build-remote.sh']
 
   image:

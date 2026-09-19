@@ -238,6 +238,15 @@ impl H3AudioDecoder {
     /// DiT-space latents `[B, 32, L]` to a waveform `[B, 800 L]` in `[-1, 1]`.
     /// Applies `latents_std` / `latents_mean` itself.
     pub fn decode(&self, latents: &CudaTensor) -> Result<CudaTensor> {
+        self.decode_observed(latents, &mut |_, _| Ok(()))
+    }
+
+    /// [`Self::decode`], showing `observe` the intermediates the oracle dumps:
+    /// `conv_pre`, then per stage `up_<i>` (after the transposed conv) and
+    /// `stage_<i>` (after the averaged AMP blocks; `stage_6` is the input of
+    /// the final activation). A waveform-only comparison says that an error
+    /// exists; these say where it enters.
+    pub fn decode_observed(&self, latents: &CudaTensor, observe: &mut dyn FnMut(&str, &CudaTensor) -> Result<()>) -> Result<CudaTensor> {
         let [batch, channels, len] = latents.shape[..] else {
             return Err(msg(format!("audio decode expects [B, C, L], got {:?}", latents.shape)));
         };
@@ -247,9 +256,11 @@ impl H3AudioDecoder {
         let z = latents.mul(&self.std)?.add(&self.mean)?;
         let x = z.conv1d(&self.dec_in_proj.weight, self.dec_in_proj.bias.as_ref(), 0, 1, 1, 1)?;
         let mut x = x.conv1d(&self.conv_pre.weight, self.conv_pre.bias.as_ref(), 3, 1, 1, 1)?;
+        observe("conv_pre", &x)?;
         let kernels = self.cfg.resblock_kernel_sizes.len();
         for (i, up) in self.ups.iter().enumerate() {
             x = x.conv_transpose1d(&up.weight, up.bias.as_ref(), self.cfg.upsampler_padding(i), self.cfg.decoder_rates[i], 1, 1, 0)?;
+            observe(&format!("up_{i}"), &x)?;
             // The parallel AMP blocks all read the same upsampled signal.
             let mut sum: Option<CudaTensor> = None;
             for block in &self.resblocks[i * kernels..(i + 1) * kernels] {
@@ -260,6 +271,7 @@ impl H3AudioDecoder {
                 });
             }
             x = sum.ok_or_else(|| msg("audio decoder without resblocks"))?.div(&self.num_kernels)?;
+            observe(&format!("stage_{i}"), &x)?;
         }
         let x = self.activation_post.forward(&x)?;
         let x = x.conv1d(&self.conv_post.weight, None, 3, 1, 1, 1)?.clamp(-1.0, 1.0);

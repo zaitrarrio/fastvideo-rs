@@ -399,6 +399,23 @@ the untiled peak is ~5 GB of f32 activations plus the conv workspace, so the
 first target does not tile. At 1536×1024 (×4) temporal chunking is required
 (§h).
 
+**What the port does instead (exact).** Input-side chunking cannot be exact at
+our lengths either: 41 convs deep, the temporal receptive field is ≈ 22 latent
+frames, more than a 16-frame clip has. But apart from the convs' temporal kernel
+every op in the decoder is per-frame, and a radius-1 temporal conv needs only a
+two-frame memory. `ltx2::vae` therefore streams each *convolution*: it keeps the
+last two input frames, emits output `t` as soon as input `t+1` exists, and
+replicate-pads only at the true ends of the clip; skip paths (resnet identity,
+the upsampler's tiled residual) are FIFO-buffered until the delayed main path
+catches up, and the upsampler drops the first frame of the *stream*, not of a
+chunk. This is the same sum of the same products as the one-shot decode — the
+host test decodes with chunk sizes 1, 2, 3, 5 and compares to the whole-clip
+result. The low-resolution stages run whole; the last up-block and the head run
+in chunks of `FASTVIDEO_LTX2_VAE_CHUNK` frames (default 8 → 16 output frames)
+and hand finished frames to the sink. On the device a different chunk shape can
+make cuDNN pick a different algorithm, so GPU results agree to rounding, not to
+the bit (`ltx2 vae` measures it).
+
 ---
 
 ## d. Audio VAE decoder + vocoder
@@ -955,9 +972,15 @@ needed, built from existing ops; **new** = still to write.
 Loader
 - **have** lazy reads by offset, one tensor of host RAM, F32 → bf16 narrowing
   (Gemma), `open_files` for the single 43 GB checkpoint.
-- **new** key-rename view for the single-file naming (§g table) and prefix
-  filters (`vae.encoder.*`, `audio_vae.encoder.*`, `vision_tower.*`). Host-side
-  string work only.
+- **done** key-rename view for the single-file naming (§g table):
+  `ltx2::keys::Keys` renames whole dot-separated segments of a diffusers name,
+  so graph code asks for diffusers names under either layout. It covers the DiT
+  and the connectors; the VAEs, vocoder and Gemma load from the diffusers
+  folders (byte-identical in both repos), so the `up_blocks` index remap of the
+  single file's VAE is not needed. Nothing has to be filtered: the lazy store
+  only reads the keys a loader asks for. The root of
+  `text_embedding_projection.aggregate_embed` is probed (bare, then under
+  `model.diffusion_model.`).
 - **new (5090 only)** consume F8_E4M3 weight + scalar `weight_scale` /
   `input_scale` with a *static* input scale; `fp8.rs` currently quantises
   dynamically.
@@ -975,8 +998,12 @@ Gemma-3 — **have**, via `llm::hidden_states` (§b cross-check)
 
 Connectors
 - **compose (host)** masked mean / min / max over `(tokens, channels)` for each of
-  the 49 states, affine, zero the pads — once per prompt, on the host copy of the
-  state stack. No device reduction kernel required.
+  the 49 states, affine — once per prompt, on the host copy of the state stack
+  (f64 accumulation). No device reduction kernel required. The port never
+  materialises the pad rows: Gemma runs the `n` real tokens at positions
+  `1024-n … 1023`, the packed input is `[n, 188160]`, and because
+  `text_proj_in` has no bias the reference's zeroed pad rows project to zero and
+  are then overwritten by registers anyway.
 - **compose** front-gather of real tokens + register fill (`cat` / `narrow`).
 - **have** bf16 Linear for `text_proj_in` (188160 → 3840, input ≤ 735 MB f32).
 - Blocks reuse the DiT attention below (30 heads × 128, 1-D table).
@@ -992,8 +1019,10 @@ DiT
 - **have** QK-norm across `heads·head_dim` with weight — the existing fused
   kernel with `rope = None`; widths 4096, 2048, 3840.
 - **compose / new (perf)** weightless RMSNorm + AdaLN
-  `rms(x)·(1+scale)+shift`: `rms_norm` with a ones weight plus broadcast
-  mul/add works today; the fused `ln_adaln_e` is LayerNorm-based, so an RMS
+  `rms(x)·(1+scale)+shift`: since every modulation is a per-step constant
+  vector at batch 1, the port passes `1 + scale` as the RMSNorm kernel's
+  *weight* and follows with one broadcast add (two launches, not three); gated
+  residuals are `residual_gate_add_e`, the output heads `ln_adaln_e`; the fused `ln_adaln_e` is LayerNorm-based, so an RMS
   variant is the one DiT kernel worth adding for speed (4 sites × 2 streams × 48
   blocks per step). Modulation vectors are per-step constants
   (`table + mod`, computed once per block per step).
@@ -1015,6 +1044,10 @@ Video VAE
 - **compose** 3-D depth-to-space (2,2,2) and the final 4×4 unpatchify via
   `reshape` + `permute` with the index maps in §c (note the swapped H/W pairing
   in the unpatchify); channel tiling ×4 via `cat`; frame drop via `narrow`.
+  The device gather handles rank ≤ 6, and the reference's one-shot reshape is
+  rank 8, so depth-to-space is two moves (space at rank 6 with `c` and `i`
+  merged, then time at rank 4) and the unpatchify one rank-6 move with the
+  batch axis dropped — batch 1 only.
 
 Audio VAE + vocoder
 - **have** asymmetric zero padding by per-axis `pad` (time 2/0, mel 1/1) then
@@ -1095,3 +1128,30 @@ Notes:
    references mux as is; we do the same.
 6. Gemma positions: the oracle uses `arange(1024)` over the padded sequence. The
    port should use the same offsets for parity and may drop the pad rows.
+
+---
+
+## l. Implementation map (stage 1)
+
+| piece | where | gpucheck stage |
+|---|---|---|
+| rotary tables (host, f32 in the reference's op order; golden test against a numpy transliteration of `T:906-1076` / `C:111-171`) | `fastvideo-models/src/ltx2/rope.rs` | `ltx2 dit --rope-only` |
+| key view, `LTX2Attention` + FFN + folded-head `rope_half` | `fastvideo-cudarc/src/ltx2/{keys,attention}.rs` | — |
+| tokenise / left-pad, 49-state stack, normalisation, connectors | `ltx2/text.rs` | `ltx2 text` |
+| audio VAE decoder, vocoder (weight-norm folded at load if present) | `ltx2/{audio_vae,vocoder}.rs` | `ltx2 audio` |
+| video VAE decoder, exact conv streaming | `ltx2/vae.rs` | `ltx2 vae` |
+| DiT | `ltx2/transformer.rs` | `ltx2 dit` |
+| noise, 8-step Euler, decode + mux | `ltx2/pipeline.rs` | `ltx2 loop`, `ltx2 gen` |
+
+`--mode exact` (float32 GEMMs, TF32 off) is the mode for `text`, `audio` and
+`vae`, whose oracles are float32. `dit`, `loop` and `gen` need `--mode fast`:
+under `exact` every Linear would hold float32 weights, 76 GB for the DiT.
+
+The oracle script tolerates both library generations (`dtype=` /
+`torch_dtype=`, hidden-state access through the wrapper or the language model,
+a hard check that the tokenizer really left-padded, and a sigma schedule
+computed directly with the diffusers scheduler only asked to agree).
+
+Not reproduced, on purpose: the pipeline's `v → x₀ → v` float32 round trip with
+guidance off (§f), and diffusers' blended VAE tiling (§c).
+

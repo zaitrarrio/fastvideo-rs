@@ -135,9 +135,12 @@ cmd_bootstrap() {
     nohup bash -c 'DEBIAN_FRONTEND=noninteractive apt-get update -qq && apt-get install -y -qq ffmpeg' \
       >"$LOGS/apt-ffmpeg.log" 2>&1 &
   fi
-  if ! python3 -c 'import huggingface_hub, hf_transfer' 2>/dev/null; then
-    python3 -m pip install -q 'huggingface_hub[hf_transfer]' >"$LOGS/pip-hf.log" 2>&1 \
+  # Always the current downloader: huggingface_hub 1.x moves bytes through
+  # hf_xet, and the image's copy is only as new as its last build.
+  if ! python3 -m pip install -q -U huggingface_hub hf_xet >"$LOGS/pip-hf.log" 2>&1; then
+    python3 -c 'import huggingface_hub' 2>/dev/null \
       || { tail -20 "$LOGS/pip-hf.log"; die "pip install huggingface_hub failed"; }
+    log "could not upgrade huggingface_hub; using the image's copy"
   fi
   if ! fv_cudnn_ok; then
     log "image cuDNN lacks $FV_CUDNN_REQUIRED_SYMBOL; installing nvidia-cudnn-cu12==$FV_CUDNN_VERSION → $FV_CUDNN_DIR"
@@ -195,14 +198,27 @@ cmd_fetch() {
   local repo="$1" dest="$2"; shift 2
   mkdir -p "$dest"
   log "fetching $repo → $dest (background)"
-  nohup env HF_HUB_ENABLE_HF_TRANSFER=1 python3 - "$repo" "$dest" "$@" >"$LOGS/fetch-$(basename "$dest").log" 2>&1 <<'PY' &
-import sys, time
+  # HF_XET_HIGH_PERFORMANCE=1 is hf_xet's fast path: it saturates the link and
+  # uses every core for chunk reassembly instead of the polite defaults (which
+  # measured 45 MiB/s on a 940 Mbps, 208-core box). HF_HUB_ENABLE_HF_TRANSFER
+  # is what this used to set; huggingface_hub 1.x dropped it and ignores it
+  # silently, so it stays only for a box that still has a 0.x hub.
+  nohup env HF_XET_HIGH_PERFORMANCE=1 HF_HUB_ENABLE_HF_TRANSFER=1 HF_HUB_DISABLE_PROGRESS_BARS=1 \
+    python3 - "$repo" "$dest" "$@" >"$LOGS/fetch-$(basename "$dest").log" 2>&1 <<'PY' &
+import importlib.metadata as md, os, sys, time
 from huggingface_hub import snapshot_download
 repo, dest, patterns = sys.argv[1], sys.argv[2], sys.argv[3:]
+def ver(p):
+    try: return md.version(p)
+    except Exception: return "absent"
+print("huggingface_hub", ver("huggingface_hub"), "hf_xet", ver("hf_xet"),
+      "HF_XET_HIGH_PERFORMANCE", os.environ.get("HF_XET_HIGH_PERFORMANCE"), flush=True)
 t = time.time()
-snapshot_download(repo, local_dir=dest, allow_patterns=patterns + ["model_index.json"])
-open(dest + "/.complete", "w").write(str(time.time() - t))
-print("done in", time.time() - t, "s")
+snapshot_download(repo, local_dir=dest, allow_patterns=patterns + ["model_index.json"], max_workers=16)
+secs = time.time() - t
+size = sum(os.path.getsize(os.path.join(r, f)) for r, _, fs in os.walk(dest) for f in fs if ".cache" not in r)
+open(dest + "/.complete", "w").write(str(secs))
+print(f"done in {secs:.0f} s: {size / 2**30:.1f} GiB on disk, {size / 2**20 / max(secs, 1e-9):.0f} MiB/s", flush=True)
 PY
   echo $! >"$dest/.fetch.pid"
 }
@@ -400,6 +416,7 @@ cmd_model_oracle() {
   # sublibraries come from its own wheel ends in
   # CUDNN_STATUS_SUBLIBRARY_LOADING_FAILED. torch must see only its bundled CUDA.
   env -u LD_LIBRARY_PATH CC="${CC:-$(command -v gcc || command -v cc)}" PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True \
+    HF_XET_HIGH_PERFORMANCE=1 \
     "$ORACLE_VENV/bin/python" "$ROOT/scripts/gpu/${model}_oracle.py" "$@"
 }
 

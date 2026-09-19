@@ -114,6 +114,34 @@ def main() -> int:
             "dit_dtype": "bfloat16 with proj_in/audio_proj_in/time_embedder/proj_out/audio_proj_out in float32",
         },
     }
+    # A "float32 reference" is only float32 if the library is told so: PyTorch
+    # ships with TF32 enabled for cuDNN convolutions (10-bit mantissa inside a
+    # float32 API), and the audio decoder is nothing but ~130 convolutions.
+    # Pin real float32 everywhere; the bf16 stages are unaffected.
+    torch.backends.cudnn.allow_tf32 = False
+    torch.backends.cuda.matmul.allow_tf32 = False
+    torch.set_float32_matmul_precision("highest")
+    meta["precision"] = {
+        "cudnn_allow_tf32": torch.backends.cudnn.allow_tf32,
+        "matmul_allow_tf32": torch.backends.cuda.matmul.allow_tf32,
+        "float32_matmul_precision": torch.get_float32_matmul_precision(),
+        "cudnn_benchmark": torch.backends.cudnn.benchmark,
+        "cudnn_version": torch.backends.cudnn.version(),
+        "vae_float32_sdpa": "math backend (no fused kernel) for the float32 decode",
+    }
+
+    def math_sdpa():
+        """Context that forces the unfused SDPA for a float32 stage; a no-op on a torch without the API."""
+        import contextlib
+
+        try:
+            from torch.nn.attention import SDPBackend, sdpa_kernel
+
+            return sdpa_kernel(SDPBackend.MATH)
+        except ImportError:
+            meta["precision"]["vae_float32_sdpa"] = "torch.nn.attention.sdpa_kernel unavailable; default kernel"
+            return contextlib.nullcontext()
+
     out: dict[str, "torch.Tensor"] = {}
     dev = "cuda"
 
@@ -538,7 +566,8 @@ def main() -> int:
         z = latent.to(dev) * std + mean  # decoders.py:183-185
         with torch.no_grad():
             t0 = time.time()
-            raw = vae.decode(z, return_dict=False)[0]  # float32 end to end: the limit-setting reference
+            with math_sdpa():
+                raw = vae.decode(z, return_dict=False)[0]  # float32 end to end: the limit-setting reference
             torch.cuda.synchronize()
             meta["vae_decode_s"] = time.time() - t0
             # decoders.py:187-188: the shipped recipe is float16 *autocast over float32 weights*.
@@ -575,12 +604,51 @@ def main() -> int:
         out["audio_latent"] = a_latent
         a_mean = torch.tensor(audio_vae.config.latents_mean, device=dev, dtype=torch.float32).view(1, -1, 1)
         a_std = torch.tensor(audio_vae.config.latents_std, device=dev, dtype=torch.float32).view(1, -1, 1)
+        # Where an error enters matters more than that it exists: dump the stream
+        # after conv_pre, after every transposed conv (`up_i`) and after every
+        # averaged AMP stage (`stage_i`; stage_6 feeds the final activation).
+        # The stage average has no module of its own, so it is rebuilt from the
+        # three AMP blocks' outputs exactly as the decoder's forward does.
+        bigvgan = audio_vae.decoder
+        audio_hooks, amp_outputs = [], {}
+
+        def dump(name: str):
+            def hook(_module, _inputs, output):
+                out[name] = output.detach().float().cpu().contiguous()
+
+            return hook
+
+        def collect(index: int):
+            def hook(_module, _inputs, output):
+                amp_outputs[index] = output.detach()
+
+            return hook
+
+        audio_hooks.append(bigvgan.conv_pre.register_forward_hook(dump("audio_conv_pre")))
+        for i in range(bigvgan.num_upsamples):
+            audio_hooks.append(bigvgan.ups[i][0].register_forward_hook(dump(f"audio_up_{i}")))
+        for r, block in enumerate(bigvgan.resblocks):
+            audio_hooks.append(block.register_forward_hook(collect(r)))
+        # Are the 254 anti-aliasing filter buffers really one filter? The port loads a single copy.
+        filters = [b for n, b in bigvgan.named_buffers() if n.endswith("filter")]
+        meta["audio_filters"] = {
+            "count": len(filters),
+            "all_bit_equal": all(torch.equal(f, filters[0]) for f in filters),
+            "taps": [float(x) for x in filters[0].flatten()],
+        }
+
         with torch.no_grad():
             t0 = time.time()
             wave = audio_vae.decode(a_latent.to(dev) * a_std + a_mean, return_dict=False)[0]  # decoders.py:243-247
             torch.cuda.synchronize()
             meta["audio_decode_s"] = time.time() - t0
         assert wave.shape == (AUDIO_CHANNELS, 1, args.audio_latents * 800), wave.shape
+        for h in audio_hooks:
+            h.remove()
+        k = bigvgan.num_kernels
+        for i in range(bigvgan.num_upsamples):
+            stage = sum(amp_outputs[i * k + j] for j in range(k)) / k
+            out[f"audio_stage_{i}"] = stage.float().cpu().contiguous()
         out["audio_wave"] = wave[:, 0].float().cpu().contiguous()  # [2, 800*n], already clamped to [-1, 1]
         del audio_vae, wave
         release()

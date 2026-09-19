@@ -52,13 +52,17 @@ pub struct H3Request {
     pub dense: bool,
     /// Write `output.mp4` (needs ffmpeg) next to the PNG frames.
     pub mp4: bool,
+    /// Where to memoize the precomputed AdaLN table (155 MB). Building it reads
+    /// 26 GB of projections nothing else needs, so a warm start is much
+    /// shorter; the file is validated against the checkpoint and the ladder.
+    pub adaln_cache: Option<PathBuf>,
 }
 
 impl H3Request {
     /// The default 16:9 canvas (768 x 1344) for a whole number of seconds.
     pub fn seconds(prompt: impl Into<String>, seconds: usize, seed: u64) -> std::result::Result<Self, String> {
         let g = H3Geometry::default_16x9(seconds)?;
-        Ok(Self { prompt: prompt.into(), seed, height: g.height, width: g.width, num_frames: g.num_frames, dense: false, mp4: true })
+        Ok(Self { prompt: prompt.into(), seed, height: g.height, width: g.width, num_frames: g.num_frames, dense: false, mp4: true, adaln_cache: None })
     }
 }
 
@@ -170,8 +174,7 @@ pub fn generate(root: &Path, request: &H3Request, out_dir: &Path) -> Result<H3Ou
 
     // --- DiT ---------------------------------------------------------------------
     let timer = Instant::now();
-    let cache = out_dir.parent().unwrap_or(out_dir).join("h3-adaln-table.bin");
-    let model = H3Transformer::load_cached(cfg.clone(), &map, &schedule, !request.dense, Some(&cache))?;
+    let model = H3Transformer::load_cached(cfg.clone(), &map, &schedule, !request.dense, request.adaln_cache.as_deref())?;
     timings.load_dit_s = timer.elapsed().as_secs_f64();
 
     let layout = H3PackedLayout::from_geometry(&geometry, ids.len()).map_err(msg)?;

@@ -431,7 +431,7 @@ cmd_run() {
   fi
   local build_id
   build_id="$("$DOCKER_SH" build-id)"
-  [[ "$(cat "$DIST/fv-gpucheck.build-id" 2>/dev/null)" == "$build_id" ]] || die "dist binary is stale; run: $DOCKER_SH dist"
+  [[ "$(cat "$DIST/fv-gpucheck.build-id" 2>/dev/null)" == "$build_id" ]] || die "dist binary is stale; run: bash scripts/gpu/dist-ci.sh (CI-built, no GPU) — or $DOCKER_SH dist to build locally"
   resolve_image "$build_id"
 
   local max_dph mins

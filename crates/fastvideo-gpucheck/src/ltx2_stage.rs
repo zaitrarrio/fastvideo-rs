@@ -155,8 +155,6 @@ pub enum Stage {
         #[arg(long, default_value_t = 2e-2)]
         max_rel: f64,
     },
-}
-
     /// The 8-step distilled loop from the oracle's noise on the oracle's
     /// connector outputs, diffed after every step; with `--weights`, the final
     /// latents decoded at full size as well. Needs `--mode fast` (see `dit`).
