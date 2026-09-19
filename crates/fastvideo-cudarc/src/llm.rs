@@ -6,9 +6,11 @@
 //! Qwen3-VL-32B, LTX-2 on Gemma-3-12B — and those are 24–68 GB of weights that
 //! are needed for a few hundred milliseconds. So the forward here *streams*:
 //! each layer's weights are read from the mapped shards, uploaded, used once
-//! and dropped before the next layer's are touched. Device memory holds one
-//! layer (under 1 GB), host memory holds one tensor, and layers past the last
-//! requested hidden state are never read at all.
+//! and dropped before the next layer's are touched. Device memory holds a few
+//! layers (about 1 GB each), host memory holds one, and layers past the last
+//! requested hidden state are never read at all. On a device the next layer is
+//! staged through pinned memory on a copy stream while the current one
+//! computes (see `llm/prefetch.rs`); the numbers are the same either way.
 //!
 //! One implementation covers both families; [`DecoderConfig`] carries the
 //! differences (norm offset, sandwich norms, activation, per-layer rope and
@@ -164,7 +166,10 @@ impl DecoderConfig {
 
 /// `weight + offset`, on the device. Gemma stores `w` and computes `1 + w`.
 fn norm_weight(map: &WeightMap, key: &str, width: usize, offset: f32) -> Result<CudaTensor> {
-    let w = cuda_tensor_shaped(map, key, &[width])?;
+    norm_from(cuda_tensor_shaped(map, key, &[width])?, offset)
+}
+
+fn norm_from(w: CudaTensor, offset: f32) -> Result<CudaTensor> {
     let mut w = if offset == 0.0 { w } else { w.try_add_scalar(offset)? };
     w.pin_device()?;
     Ok(w)
@@ -190,15 +195,59 @@ struct Layer {
     norm_mlp_out: Option<CudaTensor>,
 }
 
+/// The seven projections of a layer: key suffix, input width, output width.
+fn linear_specs(cfg: &DecoderConfig) -> [(&'static str, usize, usize); 7] {
+    let (h, d) = (cfg.hidden, cfg.head_dim);
+    [
+        ("self_attn.q_proj", h, cfg.heads * d),
+        ("self_attn.k_proj", h, cfg.kv_heads * d),
+        ("self_attn.v_proj", h, cfg.kv_heads * d),
+        ("self_attn.o_proj", cfg.heads * d, h),
+        ("mlp.gate_proj", h, cfg.intermediate),
+        ("mlp.up_proj", h, cfg.intermediate),
+        ("mlp.down_proj", cfg.intermediate, h),
+    ]
+}
+
+/// The norm weights of a layer: key suffix (without `.weight`) and width.
+#[cfg_attr(not(feature = "cuda"), allow(dead_code))]
+fn norm_specs(cfg: &DecoderConfig) -> Vec<(&'static str, usize)> {
+    let (h, d) = (cfg.hidden, cfg.head_dim);
+    let mut v = vec![("input_layernorm", h), ("post_attention_layernorm", h)];
+    if cfg.sandwich_norms {
+        v.push(("pre_feedforward_layernorm", h));
+        v.push(("post_feedforward_layernorm", h));
+    }
+    if cfg.qk_norm {
+        v.push(("self_attn.q_norm", d));
+        v.push(("self_attn.k_norm", d));
+    }
+    v
+}
+
 impl Layer {
     fn load(map: &WeightMap, cfg: &DecoderConfig, index: usize, precision: WeightPrecision) -> Result<Self> {
         let p = format!("{}.{index}", cfg.layer_prefix);
+        Self::assemble(
+            cfg,
+            &mut |name, i, o| match precision {
+                WeightPrecision::Native => Linear::load(map, &format!("{p}.{name}"), i, o, false),
+                WeightPrecision::Fp8Rows => Linear::load_fp8_rows(map, &format!("{p}.{name}"), i, o, false),
+            },
+            &mut |name, width| norm_weight(map, &format!("{p}.{name}.weight"), width, cfg.norm_offset),
+        )
+    }
+
+    /// One layer from wherever its parts come from: the checkpoint directly, or
+    /// a layer the prefetcher already staged. Both go through here so the two
+    /// cannot disagree on which key feeds which slot.
+    fn assemble(
+        cfg: &DecoderConfig,
+        lin: &mut dyn FnMut(&str, usize, usize) -> Result<Linear>,
+        norm: &mut dyn FnMut(&str, usize) -> Result<CudaTensor>,
+    ) -> Result<Self> {
         let (h, d) = (cfg.hidden, cfg.head_dim);
-        let lin = |name: &str, i: usize, o: usize| match precision {
-            WeightPrecision::Native => Linear::load(map, &format!("{p}.{name}"), i, o, false),
-            WeightPrecision::Fp8Rows => Linear::load_fp8_rows(map, &format!("{p}.{name}"), i, o, false),
-        };
-        let norm = |name: &str, width: usize| norm_weight(map, &format!("{p}.{name}.weight"), width, cfg.norm_offset);
+        let [q, k, v, o, gate, up, down] = linear_specs(cfg);
         // The two families name the pre-MLP norm differently: in a sandwich
         // layer `post_attention_layernorm` really is after attention and the
         // pre-MLP norm is `pre_feedforward_layernorm`.
@@ -212,13 +261,13 @@ impl Layer {
             (None, norm("post_attention_layernorm", h)?, None)
         };
         Ok(Self {
-            q: lin("self_attn.q_proj", h, cfg.heads * d)?,
-            k: lin("self_attn.k_proj", h, cfg.kv_heads * d)?,
-            v: lin("self_attn.v_proj", h, cfg.kv_heads * d)?,
-            o: lin("self_attn.o_proj", cfg.heads * d, h)?,
-            gate: lin("mlp.gate_proj", h, cfg.intermediate)?,
-            up: lin("mlp.up_proj", h, cfg.intermediate)?,
-            down: lin("mlp.down_proj", cfg.intermediate, h)?,
+            q: lin(q.0, q.1, q.2)?,
+            k: lin(k.0, k.1, k.2)?,
+            v: lin(v.0, v.1, v.2)?,
+            o: lin(o.0, o.1, o.2)?,
+            gate: lin(gate.0, gate.1, gate.2)?,
+            up: lin(up.0, up.1, up.2)?,
+            down: lin(down.0, down.1, down.2)?,
             q_norm: if cfg.qk_norm { Some(norm("self_attn.q_norm", d)?) } else { None },
             k_norm: if cfg.qk_norm { Some(norm("self_attn.k_norm", d)?) } else { None },
             norm_attn_in: norm("input_layernorm", h)?,
@@ -453,12 +502,119 @@ pub fn hidden_states(
     attend: &[bool],
     taps: &[usize],
 ) -> Result<Vec<CudaTensor>> {
+    hidden_states_opt(map, cfg, ids, positions, attend, taps, true, true)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn hidden_states_opt(
+    map: &WeightMap,
+    cfg: &DecoderConfig,
+    ids: &[u32],
+    positions: &[u32],
+    attend: &[bool],
+    taps: &[usize],
+    allow_prefetch: bool,
+    progress: bool,
+) -> Result<Vec<CudaTensor>> {
     if ids.is_empty() {
         return Err(msg("llm: empty prompt"));
     }
     let embedded = embed(map, cfg, ids)?;
-    encode(cfg, &mut Streamed { map, cfg }, embedded, positions, attend, taps, true)
+    // With a mapped checkpoint and bf16 linears, the next layer is read and
+    // uploaded (pinned memory, its own stream) while this one computes.
+    #[cfg(feature = "cuda")]
+    if let Some(stage) = map.lazy().filter(|_| allow_prefetch).and_then(|lazy| prefetch::Stage::new(lazy, cfg)) {
+        let last = taps.iter().copied().max().unwrap_or(0).min(cfg.num_layers());
+        return stage.run(map, cfg, last, |source| encode(cfg, source, embedded, positions, attend, taps, progress));
+    }
+    let _ = allow_prefetch;
+    encode(cfg, &mut Streamed { map, cfg }, embedded, positions, attend, taps, progress)
 }
+
+/// Result of [`prefetch_self_check`].
+#[cfg(feature = "cuda")]
+#[derive(Debug, Clone)]
+pub struct PrefetchCheck {
+    /// Dtype the checkpoint was stored in.
+    pub stored: &'static str,
+    /// Largest |prefetched - plain| over every tap. Must be exactly zero.
+    pub max_abs_diff: f32,
+    pub elements: usize,
+}
+
+/// The device check for the prefetcher: a small sandwich-norm, qk-norm decoder
+/// (every norm slot in use) is written to `dir` as a real safetensors file,
+/// opened lazily, and encoded twice — layers staged ahead through pinned memory
+/// on the copy stream, and the plain one-layer-at-a-time path. The two must
+/// agree bit for bit. Run once per stored dtype (`BF16` is copied, `F32` is
+/// rounded on the way into the pinned buffer). Errors if prefetching is
+/// unavailable (no device, or bf16 linears off) rather than comparing the plain
+/// path with itself.
+#[cfg(feature = "cuda")]
+pub fn prefetch_self_check(dir: &std::path::Path, stored_bf16: bool) -> Result<PrefetchCheck> {
+    use fastvideo_loader::{LazyDType, SafetensorsWriter, TensorSpec};
+    let mut cfg = DecoderConfig::gemma3_12b_text();
+    (cfg.vocab, cfg.hidden, cfg.heads, cfg.kv_heads, cfg.head_dim, cfg.intermediate) = (48, 96, 4, 2, 24, 256);
+    cfg.layers.truncate(9);
+    let bf16_file = stored_bf16;
+    let (stored, label) = if bf16_file { (LazyDType::BF16, "BF16") } else { (LazyDType::F32, "F32") };
+
+    let mut tensors: Vec<(String, Vec<usize>)> = vec![(cfg.embed_key.clone(), vec![cfg.vocab, cfg.hidden])];
+    for l in 0..cfg.num_layers() {
+        let p = format!("{}.{l}", cfg.layer_prefix);
+        tensors.extend(linear_specs(&cfg).iter().map(|(n, i, o)| (format!("{p}.{n}.weight"), vec![*o, *i])));
+        tensors.extend(norm_specs(&cfg).iter().map(|(n, w)| (format!("{p}.{n}.weight"), vec![*w])));
+    }
+    tensors.push((cfg.final_norm_key.clone(), vec![cfg.hidden]));
+
+    std::fs::create_dir_all(dir).map_err(|e| msg(e.to_string()))?;
+    let path = dir.join(format!("prefetch-check-{label}.safetensors"));
+    let specs: Vec<TensorSpec> = tensors.iter().map(|(k, s)| TensorSpec::new(k.clone(), stored.clone(), s.clone())).collect();
+    let mut w = SafetensorsWriter::create(&path, &specs, &[]).map_err(|e| msg(e.to_string()))?;
+    for (key, shape) in &tensors {
+        let seed = key.bytes().fold(7u32, |a, b| a.wrapping_mul(31).wrapping_add(u32::from(b)));
+        let is_norm = key.contains("norm");
+        let mut bytes = Vec::new();
+        for i in 0..shape.iter().product::<usize>() {
+            let v = (seed.wrapping_add(i as u32).wrapping_mul(2_654_435_761) >> 8) as f32 / (1u32 << 24) as f32;
+            let v = if is_norm { 0.5 + v } else { (v - 0.5) * 0.2 };
+            if bf16_file {
+                bytes.extend_from_slice(&half::bf16::from_f32(v).to_bits().to_le_bytes());
+            } else {
+                bytes.extend_from_slice(&v.to_le_bytes());
+            }
+        }
+        w.write(key, &bytes).map_err(|e| msg(e.to_string()))?;
+    }
+    w.finish().map_err(|e| msg(e.to_string()))?;
+
+    let map = WeightMap::open_files(std::slice::from_ref(&path))?;
+    let lazy = map.lazy().ok_or_else(|| msg("prefetch self-check: the map is not lazy"))?;
+    if prefetch::Stage::new(lazy, &cfg).is_none() {
+        return Err(msg("prefetch self-check: prefetching is unavailable here (bf16 linears off, or no pinned memory)"));
+    }
+    let ids: Vec<u32> = (0..37u32).map(|i| (i * 7 + 3) % cfg.vocab as u32).collect();
+    let positions: Vec<u32> = (0..ids.len() as u32).collect();
+    let attend = vec![true; ids.len()];
+    let taps: Vec<usize> = (0..=cfg.num_layers()).collect();
+    let ahead = hidden_states_opt(&map, &cfg, &ids, &positions, &attend, &taps, true, false)?;
+    let plain = hidden_states_opt(&map, &cfg, &ids, &positions, &attend, &taps, false, false)?;
+    let (mut worst, mut elements) = (0f32, 0usize);
+    for (a, b) in ahead.iter().zip(&plain) {
+        let (a, b) = (a.host_cow()?, b.host_cow()?);
+        elements += a.len();
+        for (x, y) in a.iter().zip(b.iter()) {
+            let d = (x - y).abs();
+            // A NaN on either side must fail, not vanish in a `max`.
+            worst = if d.is_nan() { f32::INFINITY } else { worst.max(d) };
+        }
+    }
+    let _ = std::fs::remove_file(&path);
+    Ok(PrefetchCheck { stored: label, max_abs_diff: worst, elements })
+}
+
+#[cfg(feature = "cuda")]
+mod prefetch;
 
 /// The embedding table, held on the host in whatever dtype the checkpoint
 /// stores: a prompt needs a few hundred of its 150k-260k rows, and 2-4 GB of
@@ -874,6 +1030,34 @@ mod tests {
         assert!(!open(1, 0) && open(1, 1), "padding is never a key");
         assert!(open(3, 3) && open(3, 2) && !open(3, 1), "window of 2");
         assert!(!open(1, 2), "causal");
+    }
+
+    /// The prefetcher stages a layer from `linear_specs` / `norm_specs` and
+    /// `Layer::assemble` then asks for parts by name: every name asked for must
+    /// have been staged, with the same width, and nothing staged may go unused.
+    #[test]
+    fn the_specs_are_exactly_what_a_layer_asks_for() {
+        for cfg in [tiny(false), tiny(true), DecoderConfig::qwen3_vl_32b_text(), DecoderConfig::gemma3_12b_text()] {
+            let (mut lins, mut norms) = (Vec::new(), Vec::new());
+            Layer::assemble(
+                &cfg,
+                &mut |name, i, o| {
+                    lins.push((name.to_string(), i, o));
+                    Ok(Linear::zeros(i, o, false))
+                },
+                &mut |name, width| {
+                    norms.push((name.to_string(), width));
+                    Ok(CudaTensor::zeros(&[width]))
+                },
+            )
+            .unwrap();
+            let want: Vec<_> = linear_specs(&cfg).iter().map(|(n, i, o)| (n.to_string(), *i, *o)).collect();
+            assert_eq!(lins, want, "linears are served in spec order");
+            let mut staged: Vec<_> = norm_specs(&cfg).iter().map(|(n, w)| (n.to_string(), *w)).collect();
+            staged.sort();
+            norms.sort();
+            assert_eq!(norms, staged);
+        }
     }
 
     #[test]

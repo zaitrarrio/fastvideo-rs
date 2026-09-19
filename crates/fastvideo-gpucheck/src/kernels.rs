@@ -562,6 +562,22 @@ pub fn run(report: &mut Report, lim: Limits, seed: u64) -> StageResult<()> {
             }
         }
         {
+            // The streamed text encoder stages layer i+1 (pinned memory, copy
+            // stream) while layer i computes. Same bits as the plain path, for
+            // a stored-bf16 and a stored-f32 checkpoint.
+            let dir = std::env::temp_dir().join(format!("fv-gpucheck-prefetch-{}", std::process::id()));
+            for stored in [true, false] {
+                let r = fastvideo_cudarc::llm::prefetch_self_check(&dir, stored)?;
+                c.report.check(
+                    &format!("llm_prefetch_equals_streamed_{}", r.stored),
+                    r.max_abs_diff == 0.0,
+                    serde_json::json!({"max_abs_diff": r.max_abs_diff, "elements": r.elements}),
+                    serde_json::json!({"max_abs_diff": 0.0}),
+                )?;
+            }
+            let _ = std::fs::remove_dir_all(&dir);
+        }
+        {
             // Padding modes and GroupNorm for the VAE decoders. GroupNorm at a
             // group size in the millions is the case that needs the f64
             // reduction; a small group exercises the narrow-block path.

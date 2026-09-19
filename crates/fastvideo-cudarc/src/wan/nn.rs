@@ -251,6 +251,29 @@ impl Linear {
         }))
     }
 
+    /// A bias-free linear around a bf16 weight that is already on the device
+    /// (`[out_dim, in_dim]`, row-major): what the text-encoder prefetcher hands
+    /// over after staging a layer on its copy stream.
+    #[cfg(feature = "cuda")]
+    pub(crate) fn from_device_bf16(
+        weight: cudarc::driver::CudaSlice<half::bf16>,
+        in_dim: usize,
+        out_dim: usize,
+    ) -> Result<Self> {
+        if weight.len() != in_dim * out_dim {
+            return Err(msg(format!("bf16 weight of {} elements for a {out_dim}x{in_dim} linear", weight.len())));
+        }
+        Ok(Self {
+            weight: CudaTensor::from_vec(Vec::new(), vec![0, in_dim])?,
+            bias: None,
+            in_dim,
+            out_dim,
+            weight_bf16: Some(std::sync::Arc::new(weight)),
+            weight_fp8: None,
+            weight_fp8_rows: None,
+        })
+    }
+
     /// Load `prefix.weight` as weight-only FP8: E4M3 codes, one scale per output
     /// row, one byte per parameter on the device. Quantized on the device, so a
     /// 130M-element weight costs a transient upload rather than seconds of host

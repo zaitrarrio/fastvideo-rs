@@ -136,21 +136,44 @@ impl WeightMap {
     /// so a checkpoint loads to identical device bits either way.
     #[cfg(feature = "cuda")]
     pub fn lazy_bf16(&self, key: &str) -> Result<Option<(Vec<usize>, Vec<half::bf16>)>> {
-        use fastvideo_loader::LazyDType;
-        use rayon::prelude::*;
         let Some(lazy) = &self.lazy else { return Ok(None) };
         let view = lazy.view(key).map_err(|e| TensorError::Message(e.to_string()))?;
-        let values: Vec<half::bf16> = if *view.dtype == LazyDType::BF16 {
-            view.bytes
-                .par_chunks_exact(2)
-                .map(|c| half::bf16::from_bits(u16::from_le_bytes([c[0], c[1]])))
-                .collect()
-        } else {
-            let (_, f) = lazy.to_f32(key).map_err(|e| TensorError::Message(e.to_string()))?;
-            f.par_iter().map(|&v| half::bf16::from_f32(v)).collect()
-        };
+        let mut values = vec![half::bf16::ZERO; view.numel()];
+        fill_bf16(lazy, key, &mut values)?;
         Ok(Some((view.shape.to_vec(), values)))
     }
+}
+
+/// `key` as bfloat16 into `out`, which must have exactly its element count.
+/// A bf16 tensor is copied bit for bit; anything else goes through f32 and
+/// `half::bf16::from_f32`, the rounding `Linear::from_tensors` applies. The one
+/// conversion behind both [`WeightMap::lazy_bf16`] and the text-encoder
+/// prefetcher's pinned staging buffer, so the two produce the same device bits.
+#[cfg_attr(not(feature = "cuda"), allow(dead_code))]
+pub(crate) fn fill_bf16(lazy: &LazyStore, key: &str, out: &mut [half::bf16]) -> Result<()> {
+    use fastvideo_loader::LazyDType;
+    use rayon::prelude::*;
+    let view = lazy.view(key).map_err(|e| TensorError::Message(e.to_string()))?;
+    if view.numel() != out.len() {
+        return Err(TensorError::Message(format!("key {key}: {} elements into a buffer of {}", view.numel(), out.len())));
+    }
+    // Chunked so a 130M-element tensor is a few hundred tasks, not one per element.
+    const CHUNK: usize = 1 << 18;
+    if *view.dtype == LazyDType::BF16 {
+        out.par_chunks_mut(CHUNK).zip(view.bytes.par_chunks(2 * CHUNK)).for_each(|(o, b)| {
+            for (o, c) in o.iter_mut().zip(b.chunks_exact(2)) {
+                *o = half::bf16::from_bits(u16::from_le_bytes([c[0], c[1]]));
+            }
+        });
+    } else {
+        let (_, f) = lazy.to_f32(key).map_err(|e| TensorError::Message(e.to_string()))?;
+        out.par_chunks_mut(CHUNK).zip(f.par_chunks(CHUNK)).for_each(|(o, f)| {
+            for (o, &v) in o.iter_mut().zip(f) {
+                *o = half::bf16::from_f32(v);
+            }
+        });
+    }
+    Ok(())
 }
 
 fn expect_shape(key: &str, actual: &[usize], expected: &[usize]) -> Result<()> {
@@ -188,6 +211,47 @@ pub fn join_key(prefix: &str, name: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The prefetcher's pinned-buffer fill: stored bf16 is copied bit for bit
+    /// (including patterns a float round trip would not preserve), f32 and f16
+    /// are rounded with `half::bf16::from_f32`, across the chunk boundary.
+    #[test]
+    fn fill_bf16_copies_bf16_and_rounds_the_rest() {
+        use fastvideo_loader::{LazyDType, SafetensorsWriter, TensorSpec};
+        let n = (1usize << 18) + 5;
+        let f: Vec<f32> = (0..n).map(|i| ((i as f32) * 0.37).sin() * 10f32.powi((i % 9) as i32 - 4)).collect();
+        let mut bits: Vec<u16> = (0..n).map(|i| (i as u32).wrapping_mul(40_503) as u16).collect();
+        bits[0] = 0x7fc1; // a NaN payload
+        bits[1] = 0x8000; // -0
+        let h: Vec<half::f16> = f.iter().map(|&v| half::f16::from_f32(v)).collect();
+
+        let dir = std::env::temp_dir().join(format!("fv-fill-bf16-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("t.safetensors");
+        let specs = [
+            TensorSpec::new("b", LazyDType::BF16, vec![n]),
+            TensorSpec::new("f", LazyDType::F32, vec![n]),
+            TensorSpec::new("h", LazyDType::F16, vec![n]),
+        ];
+        let mut w = SafetensorsWriter::create(&path, &specs, &[]).unwrap();
+        w.write("b", &bits.iter().flat_map(|v| v.to_le_bytes()).collect::<Vec<u8>>()).unwrap();
+        w.write("f", &f.iter().flat_map(|v| v.to_le_bytes()).collect::<Vec<u8>>()).unwrap();
+        w.write("h", &h.iter().flat_map(|v| v.to_bits().to_le_bytes()).collect::<Vec<u8>>()).unwrap();
+        w.finish().unwrap();
+        let lazy = LazyStore::open_files(std::slice::from_ref(&path)).unwrap();
+
+        let mut out = vec![half::bf16::ZERO; n];
+        fill_bf16(&lazy, "b", &mut out).unwrap();
+        assert!(out.iter().zip(&bits).all(|(o, b)| o.to_bits() == *b));
+        fill_bf16(&lazy, "f", &mut out).unwrap();
+        assert!(out.iter().zip(&f).all(|(o, v)| o.to_bits() == half::bf16::from_f32(*v).to_bits()));
+        fill_bf16(&lazy, "h", &mut out).unwrap();
+        assert!(out.iter().zip(&h).all(|(o, v)| o.to_bits() == half::bf16::from_f32(v.to_f32()).to_bits()));
+
+        assert!(fill_bf16(&lazy, "b", &mut out[..n - 1]).is_err(), "a short buffer must be refused");
+        assert!(fill_bf16(&lazy, "absent", &mut out).is_err());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     #[test]
     fn weight_map_missing_key_errors() {
