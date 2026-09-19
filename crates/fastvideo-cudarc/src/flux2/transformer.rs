@@ -1,10 +1,59 @@
 //! Flux2 DiT on `CudaTensor` (cudarc primary path).
 
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::Instant;
+
 use fastvideo_models::flux2::Flux2ArchConfig;
 
 use crate::wan::nn::{self, Linear};
 use crate::wan::tensor::{CudaTensor, Result, TensorError};
 use crate::wan::weights::{cuda_tensor_shaped, join_key, WeightMap};
+
+/// Host-path RoPE accounting. `apply_rotary` downloads Q/K, rotates on CPU, and
+/// uploads — it does **not** go through [`crate::wan::stats::host_fallback`], so
+/// GPU generate stays silent while this dominates transfers.
+static ROPE_HOST_CALLS: AtomicU64 = AtomicU64::new(0);
+static ROPE_HOST_MS: AtomicU64 = AtomicU64::new(0);
+static ROPE_HOST_ELEMS: AtomicU64 = AtomicU64::new(0);
+static ROPE_TABLE_CALLS: AtomicU64 = AtomicU64::new(0);
+static ROPE_TABLE_MS: AtomicU64 = AtomicU64::new(0);
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct RopeHostStats {
+    pub apply_calls: u64,
+    pub apply_ms: u64,
+    pub apply_elems: u64,
+    pub table_calls: u64,
+    pub table_ms: u64,
+}
+
+pub fn rope_host_stats() -> RopeHostStats {
+    RopeHostStats {
+        apply_calls: ROPE_HOST_CALLS.load(Ordering::Relaxed),
+        apply_ms: ROPE_HOST_MS.load(Ordering::Relaxed),
+        apply_elems: ROPE_HOST_ELEMS.load(Ordering::Relaxed),
+        table_calls: ROPE_TABLE_CALLS.load(Ordering::Relaxed),
+        table_ms: ROPE_TABLE_MS.load(Ordering::Relaxed),
+    }
+}
+
+pub fn reset_rope_host_stats() {
+    for c in [
+        &ROPE_HOST_CALLS,
+        &ROPE_HOST_MS,
+        &ROPE_HOST_ELEMS,
+        &ROPE_TABLE_CALLS,
+        &ROPE_TABLE_MS,
+    ] {
+        c.store(0, Ordering::Relaxed);
+    }
+}
+
+fn record_apply_rotary(elems: u64, ms: u64) {
+    ROPE_HOST_CALLS.fetch_add(1, Ordering::Relaxed);
+    ROPE_HOST_ELEMS.fetch_add(elems, Ordering::Relaxed);
+    ROPE_HOST_MS.fetch_add(ms, Ordering::Relaxed);
+}
 
 fn msg(s: impl Into<String>) -> TensorError {
     TensorError::Message(s.into())
@@ -79,6 +128,7 @@ fn rms_heads(xs: &CudaTensor, norm: &RmsNorm, heads: usize, dim_head: usize) -> 
 }
 
 fn apply_rotary(xs: &CudaTensor, cos: &CudaTensor, sin: &CudaTensor) -> Result<CudaTensor> {
+    let t0 = Instant::now();
     let (b, s, h, d) = (xs.shape[0], xs.shape[1], xs.shape[2], xs.shape[3]);
     let x = xs.host_cow()?;
     let c = cos.host_cow()?;
@@ -99,7 +149,9 @@ fn apply_rotary(xs: &CudaTensor, cos: &CudaTensor, sin: &CudaTensor) -> Result<C
             }
         }
     }
-    CudaTensor::from_vec(out, vec![b, s, h, d])
+    let y = CudaTensor::from_vec(out, vec![b, s, h, d])?;
+    record_apply_rotary((b * s * h * d) as u64, t0.elapsed().as_millis() as u64);
+    Ok(y)
 }
 
 struct JointAttn {
@@ -565,6 +617,7 @@ impl Flux2Transformer2D {
 }
 
 fn flux2_rope(text_len: usize, img_h: usize, img_w: usize, axes: &[usize; 4], theta: f32) -> Result<(CudaTensor, CudaTensor)> {
+    let t0 = Instant::now();
     let txt = fastvideo_models::flux2::text_ids(text_len);
     let img = fastvideo_models::flux2::image_ids(1, img_h, img_w);
     let mut ids = txt;
@@ -588,8 +641,40 @@ fn flux2_rope(text_len: usize, img_h: usize, img_w: usize, axes: &[usize; 4], th
         }
     }
     let rope_dim: usize = axes.iter().sum();
-    Ok((
+    let tables = (
         CudaTensor::from_vec(cos, vec![seq, rope_dim])?,
         CudaTensor::from_vec(sin, vec![seq, rope_dim])?,
-    ))
+    );
+    ROPE_TABLE_CALLS.fetch_add(1, Ordering::Relaxed);
+    ROPE_TABLE_MS.fetch_add(t0.elapsed().as_millis() as u64, Ordering::Relaxed);
+    Ok(tables)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn apply_rotary_records_host_stats() {
+        reset_rope_host_stats();
+        let xs = CudaTensor::from_vec((0..16).map(|i| i as f32 * 0.1).collect(), vec![1, 2, 1, 8]).unwrap();
+        let ones = vec![1.0f32; 16];
+        let zeros = vec![0.0f32; 16];
+        let cos = CudaTensor::from_vec(ones, vec![2, 8]).unwrap();
+        let sin = CudaTensor::from_vec(zeros, vec![2, 8]).unwrap();
+        let out = apply_rotary(&xs, &cos, &sin).unwrap();
+        assert_eq!(out.shape, vec![1, 2, 1, 8]);
+        let stats = rope_host_stats();
+        assert_eq!(stats.apply_calls, 1);
+        assert_eq!(stats.apply_elems, 16);
+    }
+
+    #[test]
+    fn flux2_rope_records_table_stats() {
+        reset_rope_host_stats();
+        let (cos, sin) = flux2_rope(2, 1, 1, &[2, 2, 2, 2], 2000.0).unwrap();
+        assert_eq!(cos.shape, sin.shape);
+        let stats = rope_host_stats();
+        assert_eq!(stats.table_calls, 1);
+    }
 }

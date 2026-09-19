@@ -95,6 +95,7 @@ Artifacts (same run dir as Wan compare):
 
 - `remote/upstream-TORCH_SDPA.json` — load seconds, warmup, median/min generate
 - `remote/flux2-rust/bench.json` — rust `load_ms` / `generate_ms`
+- `remote/flux2-rust/profile.json` — per-stage generate breakdown (text / denoise / VAE / PNG / host RoPE / H2D-D2H). See [flux2-generate-gap.md](flux2-generate-gap.md).
 - PNG stills under `remote/flux2-rust/` and upstream’s video dir (num_frames=1)
 
 `docker.sh dist` now ships both `fv-gpucheck` and the `fastvideo` CLI
