@@ -59,12 +59,12 @@ compgen -G "$reports/*.json" >/dev/null || { echo "no stage reports in $reports"
     echo
     echo "## Clips"
     echo
-    echo "| clip | frames | resolution | steps | denoise s | per step s | VAE s | total s | s per video-second | peak MiB | mp4 |"
-    echo "|---|---:|---|---:|---:|---:|---:|---:|---:|---:|---|"
+    echo "| clip | frames | resolution | steps | warm | load s | denoise s | per step s | decode s | write s | generate s | s per video-second | peak MiB | mp4 |"
+    echo "|---|---:|---|---:|---|---:|---:|---:|---:|---:|---:|---:|---:|---|"
     for f in "$reports"/clip-*.json; do
       jq -r '
         .context as $c
-        | "| \(.stage) | \($c.spec.frames // "—") | \($c.spec.width // "?")x\($c.spec.height // "?") | \($c.spec.steps // "—") | \($c.timings.denoise_s // "—" | tostring | .[0:7]) | \($c.timings.per_step_s // "—" | tostring | .[0:7]) | \($c.timings.vae_decode_s // "—" | tostring | .[0:7]) | \($c.timings.total_s // "—" | tostring | .[0:7]) | \($c.timings.seconds_per_video_second // "—" | tostring | .[0:6]) | \($c.timings.peak_mib.denoise // "—") | \(if $c.artifacts.mp4 then ($c.artifacts.mp4 | split("/gpucheck-out/") | last) else "—" end) |"
+        | "| \(.stage) | \($c.spec.frames // "—") | \($c.spec.width // "?")x\($c.spec.height // "?") | \($c.spec.steps // "—") | \(if $c.timings.warm then "yes" else "cold" end) | \($c.timings.load_s // "—" | tostring | .[0:6]) | \($c.timings.denoise_s // "—" | tostring | .[0:7]) | \($c.timings.per_step_s // "—" | tostring | .[0:7]) | \($c.timings.vae_decode_s // "—" | tostring | .[0:7]) | \($c.timings.write_s // "—" | tostring | .[0:6]) | \($c.timings.generate_s // $c.timings.total_s // "—" | tostring | .[0:7]) | \($c.timings.seconds_per_video_second // "—" | tostring | .[0:6]) | \($c.timings.peak_mib.denoise // "—") | \(if $c.artifacts.mp4 then ($c.artifacts.mp4 | split("/gpucheck-out/") | last) else "—" end) |"
       ' "$f" 2>/dev/null || true
     done
   fi

@@ -189,7 +189,7 @@ tasks:
     cmds: [{ task: run, vars: { TIER: vaeab } }]
 
   gen:
-    desc: 'Generate one clip from a prompt (PROMPT="a dog on a beach")'
+    desc: 'Generate one clip from a prompt (PROMPT="a dog on a beach"; WARM=1 times a resident pipeline; TAEHV=0 for the Wan VAE)'
     requires:
       vars: [PROMPT]
     cmds:
@@ -197,6 +197,7 @@ tasks:
         FV_PROMPT={{.PROMPT | quote}} FV_FRAMES={{.FRAMES}} FV_STEPS={{.STEPS}} \
         {{if .DPH}}MAX_DPH={{.DPH}} {{end}}{{if .MINUTES}}MAX_MINUTES={{.MINUTES}} {{end}}\
         {{if .GPU}}FV_OFFER_QUERY_EXTRA=gpu_name={{.GPU}} {{end}}\
+        {{if .WARM}}FV_WARM=1 {{end}}{{if .TAEHV}}FV_TAEHV={{.TAEHV}} {{end}}\
         bash scripts/gpu/validate.sh run gen{{if .SKIP_LOCAL}} --skip-local{{end}}
 
   # ---- rented machines -----------------------------------------------------

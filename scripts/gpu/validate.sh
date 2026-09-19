@@ -549,6 +549,9 @@ cmd_run() {
       remote_run wait-taehv 300 wait-taehv "$taehv_dir" 300
       gen+=(--taehv-weights "$taehv_dir")
     fi
+    # FV_WARM=1: one untimed generation first, so the clip's timings are a
+    # resident pipeline's rather than the first clip after load.
+    if [[ "${FV_WARM:-0}" == 1 ]]; then gen+=(--warm); fi
     gpucheck_stage "clip-$name" $(( budget_min * 60 * 13 / 10 + 600 )) --mode fast clip \
       --weights "$FAST_W" --embeds "$embeds/ui.safetensors" --device cuda "${gen[@]}" \
       --name "$name" --budget-min "$budget_min"

@@ -225,6 +225,11 @@ enum Cmd {
         budget_min: f64,
         #[arg(long)]
         no_mp4: bool,
+        /// Run one untimed generation first, so the reported timings are a
+        /// warm process (weights resident, allocator grown, first launches
+        /// done) rather than the first clip after load.
+        #[arg(long)]
+        warm: bool,
     },
     /// Compare two clip runs (e.g. fast vs exact) of the same seed and prompt.
     Compare {
@@ -412,6 +417,7 @@ fn run(cli: &Cli, report: &mut Report) -> StageResult<()> {
             name,
             budget_min,
             no_mp4,
+            warm,
         } => perf::clip(
             report,
             perf::ClipArgs {
@@ -423,6 +429,7 @@ fn run(cli: &Cli, report: &mut Report) -> StageResult<()> {
                 budget_min: *budget_min,
                 gates: quality::QualityGates::default(),
                 save_mp4: !no_mp4,
+                warm: *warm,
             },
         ),
         Cmd::Compare {
