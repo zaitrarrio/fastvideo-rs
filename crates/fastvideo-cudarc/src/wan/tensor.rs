@@ -924,6 +924,92 @@ impl CudaTensor {
     }
 
     /// Cross-correlation of NCHW `self` with OIHW `weight`.
+    /// 1-D convolution, PyTorch `Conv1d` semantics. `self`: `[N, C, L]`,
+    /// `weight`: `[C_out, C / groups, K]`. On the device this is a cuDNN conv2d
+    /// over a unit height, so dilation and groups cost nothing extra.
+    pub fn conv1d(
+        &self,
+        weight: &CudaTensor,
+        bias: Option<&CudaTensor>,
+        padding: usize,
+        stride: usize,
+        dilation: usize,
+        groups: usize,
+    ) -> Result<CudaTensor> {
+        let ([n, c, l], [oc, cg, k]) = (self.dims3("conv1d input")?, weight.dims3("conv1d weight")?);
+        if stride == 0 || dilation == 0 || groups == 0 || k == 0 || c % groups != 0 || oc % groups != 0 || cg * groups != c {
+            return Err(msg(format!("conv1d: x={:?} w={:?} groups={groups}", self.shape, weight.shape)));
+        }
+        if l + 2 * padding < dilation * (k - 1) + 1 {
+            return Err(msg(format!("conv1d: kernel reach exceeds input: x={:?} w={:?} pad={padding} dilation={dilation}", self.shape, weight.shape)));
+        }
+        #[cfg(feature = "cuda")]
+        if let (Some(x), Some(w)) = (self.dev()?, weight.dev()?) {
+            let (y, ys) = super::conv::cudnn_conv_ext(&x, &[n, c, 1, l], &w, &[oc, cg, 1, k], &[0, padding], &[1, stride], &[1, dilation], groups)
+                .map_err(|e| msg(e.to_string()))?;
+            let y = Self::from_dev_result(y, vec![n, oc, ys[3]])?;
+            return match bias {
+                Some(b) => y.add_bias(b, 1),
+                None => Ok(y),
+            };
+        }
+        let (y, lo) = host::conv1d(&self.host_cow()?, (n, c, l), &weight.host_cow()?, (oc, k), padding, stride, dilation, groups);
+        let y = Self::host_only(y, vec![n, oc, lo]);
+        match bias {
+            Some(b) => y.add_bias(b, 1),
+            None => Ok(y),
+        }
+    }
+
+    /// 1-D transposed convolution, PyTorch `ConvTranspose1d` semantics. `self`:
+    /// `[N, C, L]`, `weight`: `[C, C_out / groups, K]`; output length
+    /// `(L - 1) * stride - 2 * padding + dilation * (K - 1) + output_padding + 1`.
+    #[allow(clippy::too_many_arguments)]
+    pub fn conv_transpose1d(
+        &self,
+        weight: &CudaTensor,
+        bias: Option<&CudaTensor>,
+        padding: usize,
+        stride: usize,
+        dilation: usize,
+        groups: usize,
+        output_padding: usize,
+    ) -> Result<CudaTensor> {
+        let ([n, c, l], [wc, og, k]) = (self.dims3("conv_transpose1d input")?, weight.dims3("conv_transpose1d weight")?);
+        if stride == 0 || dilation == 0 || groups == 0 || k == 0 || l == 0 || wc != c || c % groups != 0 {
+            return Err(msg(format!("conv_transpose1d: x={:?} w={:?} groups={groups}", self.shape, weight.shape)));
+        }
+        if (l - 1) * stride + dilation * (k - 1) + output_padding + 1 <= 2 * padding {
+            return Err(msg(format!("conv_transpose1d: padding {padding} leaves no output for x={:?} w={:?}", self.shape, weight.shape)));
+        }
+        let oc = og * groups;
+        #[cfg(feature = "cuda")]
+        if let (Some(x), Some(w)) = (self.dev()?, weight.dev()?) {
+            let (y, ys) = super::conv::cudnn_conv_transpose(
+                &x, &[n, c, 1, l], &w, &[c, og, 1, k], &[0, padding], &[1, stride], &[1, dilation], groups, &[0, output_padding],
+            )
+            .map_err(|e| msg(e.to_string()))?;
+            let y = Self::from_dev_result(y, vec![n, oc, ys[3]])?;
+            return match bias {
+                Some(b) => y.add_bias(b, 1),
+                None => Ok(y),
+            };
+        }
+        let (y, lo) = host::conv_transpose1d(&self.host_cow()?, (n, c, l), &weight.host_cow()?, (og, k), padding, stride, dilation, groups, output_padding);
+        let y = Self::host_only(y, vec![n, oc, lo]);
+        match bias {
+            Some(b) => y.add_bias(b, 1),
+            None => Ok(y),
+        }
+    }
+
+    fn dims3(&self, what: &str) -> Result<[usize; 3]> {
+        match self.shape[..] {
+            [a, b, c] => Ok([a, b, c]),
+            _ => Err(msg(format!("{what} must be rank 3, got {:?}", self.shape))),
+        }
+    }
+
     pub fn conv2d(&self, weight: &CudaTensor, bias: Option<&CudaTensor>, padding: usize, stride: usize) -> Result<CudaTensor> {
         self.conv_nd(weight, bias, &[padding, padding], &[stride.max(1), stride.max(1)])
     }
@@ -1309,5 +1395,82 @@ mod encoder_op_tests {
         }
         let lr = CudaTensor::from_vec(vec![-2.0, 0.0, 3.0], vec![3]).unwrap().leaky_relu(0.1);
         assert_eq!(&*lr.host_cow().unwrap(), &[-0.2, 0.0, 3.0]);
+    }
+}
+
+#[cfg(test)]
+mod conv1d_tests {
+    use super::*;
+
+    fn seq(n: usize, mul: usize, modulo: usize) -> Vec<f32> {
+        (0..n).map(|i| ((i * mul) % modulo) as f32 / modulo as f32 - 0.4).collect()
+    }
+
+    fn dot(a: &[f32], b: &[f32]) -> f64 {
+        a.iter().zip(b).map(|(x, y)| f64::from(*x) * f64::from(*y)).sum()
+    }
+
+    /// PyTorch's documented example shapes, worked by hand.
+    #[test]
+    fn small_cases_by_hand() {
+        let x = CudaTensor::from_vec(vec![1.0, 2.0, 3.0, 4.0, 5.0], vec![1, 1, 5]).unwrap();
+        let w = CudaTensor::from_vec(vec![1.0, 0.0, -1.0], vec![1, 1, 3]).unwrap();
+        // Same padding, dilation 2: reach 5, pad 2.
+        let y = x.conv1d(&w, None, 2, 1, 2, 1).unwrap();
+        assert_eq!(y.shape, vec![1, 1, 5]);
+        assert_eq!(&*y.host_cow().unwrap(), &[-3.0, -4.0, -4.0, 2.0, 3.0]);
+        // Stride 2, no padding.
+        let y = x.conv1d(&w, None, 0, 2, 1, 1).unwrap();
+        assert_eq!(&*y.host_cow().unwrap(), &[-2.0, -2.0]);
+
+        // Transposed, stride 2, kernel [1, 1]: every sample held for two.
+        let x3 = CudaTensor::from_vec(vec![1.0, 2.0, 3.0], vec![1, 1, 3]).unwrap();
+        let w2 = CudaTensor::from_vec(vec![1.0, 1.0], vec![1, 1, 2]).unwrap();
+        let bias = CudaTensor::from_vec(vec![0.5], vec![1]).unwrap();
+        let y = x3.conv_transpose1d(&w2, Some(&bias), 0, 2, 1, 1, 0).unwrap();
+        assert_eq!(&*y.host_cow().unwrap(), &[1.5, 1.5, 2.5, 2.5, 3.5, 3.5]);
+        // output_padding appends a position no input reaches: bias only.
+        let y = x3.conv_transpose1d(&w2, Some(&bias), 0, 2, 1, 1, 1).unwrap();
+        assert_eq!(y.shape, vec![1, 1, 7]);
+        assert_eq!(y.host_cow().unwrap()[6], 0.5);
+        // HiFi-GAN style upsampler: kernel 4, stride 2, padding 1 doubles the length.
+        let w4 = CudaTensor::from_vec(vec![1.0; 4], vec![1, 1, 4]).unwrap();
+        assert_eq!(x3.conv_transpose1d(&w4, None, 1, 2, 1, 1, 0).unwrap().shape, vec![1, 1, 6]);
+    }
+
+    /// A transposed convolution is the adjoint of the convolution with the same
+    /// weight: <conv(x), y> = <x, conv_T(y)>. Holds for every stride, dilation,
+    /// padding and grouping, and neither side is written in terms of the other.
+    #[test]
+    fn transpose_is_the_adjoint_of_conv() {
+        for (c, oc, k, pad, stride, dil, groups, l) in [
+            (4usize, 6usize, 3usize, 1usize, 1usize, 1usize, 1usize, 9usize),
+            (4, 6, 4, 1, 2, 1, 2, 10),
+            (6, 6, 5, 4, 1, 2, 6, 11),
+            (3, 9, 7, 3, 3, 1, 3, 13),
+        ] {
+            let lo = (l + 2 * pad - dil * (k - 1) - 1) / stride + 1;
+            // Pick the output_padding that makes conv_T map length lo back to l.
+            let out_pad = l - ((lo - 1) * stride + dil * (k - 1) + 1 - 2 * pad);
+            let x = CudaTensor::from_vec(seq(2 * c * l, 7, 31), vec![2, c, l]).unwrap();
+            let w = CudaTensor::from_vec(seq(oc * (c / groups) * k, 11, 29), vec![oc, c / groups, k]).unwrap();
+            let y = CudaTensor::from_vec(seq(2 * oc * lo, 13, 37), vec![2, oc, lo]).unwrap();
+            let ax = x.conv1d(&w, None, pad, stride, dil, groups).unwrap();
+            assert_eq!(ax.shape, vec![2, oc, lo]);
+            let aty = y.conv_transpose1d(&w, None, pad, stride, dil, groups, out_pad).unwrap();
+            assert_eq!(aty.shape, vec![2, c, l]);
+            let lhs = dot(&ax.host_cow().unwrap(), &y.host_cow().unwrap());
+            let rhs = dot(&x.host_cow().unwrap(), &aty.host_cow().unwrap());
+            assert!((lhs - rhs).abs() < 1e-4 * lhs.abs().max(1.0), "c={c} oc={oc} k={k} g={groups}: {lhs} vs {rhs}");
+        }
+    }
+
+    #[test]
+    fn bad_shapes_are_errors() {
+        let x = CudaTensor::zeros(&[1, 4, 8]);
+        assert!(x.conv1d(&CudaTensor::zeros(&[6, 3, 3]), None, 1, 1, 1, 1).is_err(), "channel mismatch");
+        assert!(x.conv1d(&CudaTensor::zeros(&[6, 2, 3]), None, 1, 1, 1, 4).is_err(), "groups do not divide");
+        assert!(x.conv1d(&CudaTensor::zeros(&[6, 4, 3]), None, 0, 1, 8, 1).is_err(), "reach exceeds input");
+        assert!(x.conv_transpose1d(&CudaTensor::zeros(&[3, 2, 3]), None, 0, 1, 1, 1, 0).is_err());
     }
 }

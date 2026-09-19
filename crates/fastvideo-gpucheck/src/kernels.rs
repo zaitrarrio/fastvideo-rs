@@ -529,6 +529,39 @@ pub fn run(report: &mut Report, lim: Limits, seed: u64) -> StageResult<()> {
             c.cmp("repeat_kv_8x8", &got, &host::repeat_kv(&x, hkv, rep, s * d), 0.0)?;
         }
         {
+            // 1-D convolutions for the audio decoders: cuDNN over a unit height,
+            // forward and backward-data, against the host loops (which the unit
+            // tests hold to the adjoint identity and to hand-worked cases).
+            // Shapes are a DAC/BigVGAN decoder's: dilated residual convs, a
+            // strided transposed upsampler, a depthwise anti-alias filter.
+            for (name, ch, oc, k, pad, stride, dil, groups, l) in [
+                ("resblock_d3", 64usize, 64usize, 7usize, 9usize, 1usize, 3usize, 1usize, 400usize),
+                ("downsample_depthwise", 32, 32, 12, 5, 2, 1, 32, 801),
+                ("grouped", 48, 96, 3, 1, 1, 1, 4, 257),
+            ] {
+                let x = c.rand(2 * ch * l, 1.0);
+                let w = c.rand(oc * (ch / groups) * k, 0.2);
+                let b = c.rand(oc, 0.1);
+                let got = t(x.clone(), &[2, ch, l])?.conv1d(&t(w.clone(), &[oc, ch / groups, k])?, Some(&t(b.clone(), &[oc])?), pad, stride, dil, groups)?;
+                let (mut want, lo) = ops::host::conv1d(&x, (2, ch, l), &w, (oc, k), pad, stride, dil, groups);
+                for (i, v) in want.iter_mut().enumerate() {
+                    *v += b[(i / lo) % oc];
+                }
+                c.cmp(&format!("conv1d_{name}"), &host_of(&got)?, &want, op)?;
+            }
+            for (name, ch, og, k, pad, stride, groups, out_pad, l) in [
+                ("upsample_x5", 128usize, 64usize, 10usize, 3usize, 5usize, 1usize, 1usize, 200usize),
+                ("upsample_x2", 32, 16, 4, 1, 2, 1, 0, 1000),
+                ("upsample_depthwise", 24, 1, 12, 5, 2, 24, 0, 513),
+            ] {
+                let x = c.rand(2 * ch * l, 1.0);
+                let w = c.rand(ch * og * k, 0.2);
+                let got = t(x.clone(), &[2, ch, l])?.conv_transpose1d(&t(w.clone(), &[ch, og, k])?, None, pad, stride, 1, groups, out_pad)?;
+                let (want, _) = ops::host::conv_transpose1d(&x, (2, ch, l), &w, (og, k), pad, stride, 1, groups, out_pad);
+                c.cmp(&format!("conv_transpose1d_{name}"), &host_of(&got)?, &want, op)?;
+            }
+        }
+        {
             // Frame output: the device packer must produce byte-for-byte what
             // the host writer produced, including truncation and the clamp of
             // out-of-range decoder values. A one-code difference here would be

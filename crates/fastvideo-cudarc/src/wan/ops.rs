@@ -978,6 +978,83 @@ pub mod host {
             .collect()
     }
 
+    /// 1-D cross-correlation, PyTorch `Conv1d` semantics. `x`: `[n, c, l]`,
+    /// `w`: `[oc, c / groups, k]`. Returns the output and its length.
+    #[allow(clippy::too_many_arguments)]
+    pub fn conv1d(
+        x: &[f32],
+        (n, c, l): (usize, usize, usize),
+        w: &[f32],
+        (oc, k): (usize, usize),
+        pad: usize,
+        stride: usize,
+        dilation: usize,
+        groups: usize,
+    ) -> (Vec<f32>, usize) {
+        let (cg, og) = (c / groups, oc / groups);
+        let lo = (l + 2 * pad - dilation * (k - 1) - 1) / stride + 1;
+        let mut out = vec![0f32; n * oc * lo];
+        out.par_chunks_mut(lo).enumerate().for_each(|(row, y)| {
+            let (ni, o) = (row / oc, row % oc);
+            let g = o / og;
+            for (t, yt) in y.iter_mut().enumerate() {
+                let mut acc = 0f64;
+                for ci in 0..cg {
+                    let xrow = &x[(ni * c + g * cg + ci) * l..][..l];
+                    let wrow = &w[(o * cg + ci) * k..][..k];
+                    for (kk, wv) in wrow.iter().enumerate() {
+                        let pos = t * stride + kk * dilation;
+                        if pos >= pad && pos - pad < l {
+                            acc += f64::from(xrow[pos - pad]) * f64::from(*wv);
+                        }
+                    }
+                }
+                *yt = acc as f32;
+            }
+        });
+        (out, lo)
+    }
+
+    /// 1-D transposed convolution, PyTorch `ConvTranspose1d` semantics. `x`:
+    /// `[n, c, l]`, `w`: `[c, oc / groups, k]`.
+    #[allow(clippy::too_many_arguments)]
+    pub fn conv_transpose1d(
+        x: &[f32],
+        (n, c, l): (usize, usize, usize),
+        w: &[f32],
+        (og, k): (usize, usize),
+        pad: usize,
+        stride: usize,
+        dilation: usize,
+        groups: usize,
+        out_pad: usize,
+    ) -> (Vec<f32>, usize) {
+        let (cg, oc) = (c / groups, og * groups);
+        let lo = (l - 1) * stride + dilation * (k - 1) + out_pad + 1 - 2 * pad;
+        let mut out = vec![0f32; n * oc * lo];
+        out.par_chunks_mut(lo).enumerate().for_each(|(row, y)| {
+            let (ni, o) = (row / oc, row % oc);
+            let (g, oi) = (o / og, o % og);
+            for (t, yt) in y.iter_mut().enumerate() {
+                let mut acc = 0f64;
+                for kk in 0..k {
+                    // Output t receives x[i] * w[kk] where t = i * stride - pad + kk * dilation.
+                    let Some(num) = (t + pad).checked_sub(kk * dilation) else { continue };
+                    if num % stride != 0 || num / stride >= l {
+                        continue;
+                    }
+                    let i = num / stride;
+                    for ci in 0..cg {
+                        let ch = g * cg + ci;
+                        acc += f64::from(x[(ni * c + ch) * l + i]) * f64::from(w[(ch * og + oi) * k + kk]);
+                    }
+                }
+                *yt = acc as f32;
+            }
+        });
+        (out, lo)
+    }
+
     /// `[B, Hkv, S, D]` → `[B, Hkv * rep, S, D]`; `inner = S * D`.
     pub fn repeat_kv(x: &[f32], hkv: usize, rep: usize, inner: usize) -> Vec<f32> {
         let total = x.len() * rep;
