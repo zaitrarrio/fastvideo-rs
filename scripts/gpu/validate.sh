@@ -548,6 +548,12 @@ cmd_run() {
     remote_run "oracle-$model" 3600 model-oracle "$model" "${oargs[@]}"
     gpucheck_stage "llm-$model" 3600 --keep-going --mode fast llm --weights "$wdir/text_encoder" \
       --family "$family" --oracle "$odir/llm.safetensors" --device cuda
+    # The model's own text stage: tokenizer parity on the prompt, then the
+    # consumed hidden state(s) against the oracle's.
+    if [[ "$model" == h3 ]]; then
+      gpucheck_stage "h3-text" 3600 --keep-going --mode fast h3 text --weights "$wdir" \
+        --oracle "$odir/oracle.safetensors" --meta "$odir/oracle.json"
+    fi
     log "${tier} done"
     return 0
   fi

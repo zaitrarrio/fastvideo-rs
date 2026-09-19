@@ -4,7 +4,9 @@
 //! and `pipelines/ltx2`. See docs/ports/ltx2.md.
 
 pub mod config;
+pub mod rope;
 pub mod schedule;
 
 pub use config::{ltx2_19b, ltx2_19b_distilled, Ltx2Config};
+pub use rope::{Ltx2RopeTables, SplitRope};
 pub use schedule::Ltx2Schedule;
