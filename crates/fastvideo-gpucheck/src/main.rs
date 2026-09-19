@@ -32,6 +32,7 @@ mod rand_weights;
 mod reference;
 mod report;
 mod st;
+mod llm_oracle;
 mod taehv;
 
 use std::path::PathBuf;
@@ -231,6 +232,29 @@ enum Cmd {
         #[arg(long)]
         warm: bool,
     },
+    /// A decoder-only text encoder (Qwen3-VL for MiniMax-H3, Gemma-3 for
+    /// LTX-2) against transformers' hidden states, on the oracle's own tokens.
+    Llm {
+        /// The text encoder's weight directory (sharded safetensors).
+        #[arg(long)]
+        weights: PathBuf,
+        /// `qwen3-vl-32b` or `gemma3-12b`.
+        #[arg(long)]
+        family: String,
+        /// Key of the layer list (e.g. `model.language_model.layers`); probed
+        /// when omitted.
+        #[arg(long)]
+        layer_prefix: Option<String>,
+        /// Reference written by the model's oracle script: input_ids,
+        /// positions, attend and one hidden_<k> per tap.
+        #[arg(long)]
+        oracle: PathBuf,
+        #[arg(long, default_value = "cuda")]
+        device: String,
+        /// bf16 weights on both sides, through dozens of layers.
+        #[arg(long, default_value_t = 0.05)]
+        max_rel: f64,
+    },
     /// Compare two clip runs (e.g. fast vs exact) of the same seed and prompt.
     Compare {
         #[arg(long)]
@@ -322,6 +346,7 @@ fn stage_name(cmd: &Cmd) -> &'static str {
         Cmd::Embed { .. } => "embed",
         Cmd::Probe { .. } => "probe",
         Cmd::Clip { .. } => "clip",
+        Cmd::Llm { .. } => "llm",
         Cmd::Compare { .. } => "compare",
         Cmd::Oracle { .. } => "oracle",
         Cmd::Taehv { .. } => "taehv",
@@ -432,6 +457,9 @@ fn run(cli: &Cli, report: &mut Report) -> StageResult<()> {
                 warm: *warm,
             },
         ),
+        Cmd::Llm { weights, family, layer_prefix, oracle, device, max_rel } => {
+            llm_oracle::run(report, weights, family, layer_prefix.as_deref(), oracle, device, *max_rel)
+        }
         Cmd::Compare {
             a,
             b,
