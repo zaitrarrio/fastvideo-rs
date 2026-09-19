@@ -11,22 +11,20 @@ candle-core.workspace = true
 fastvideo-models.workspace = true
 fastvideo-loader.workspace = true
 fastvideo-ops.workspace = true
-fastvideo-burn.workspace = true
 fastvideo-luminal.workspace = true
 fastvideo-cudarc.workspace = true
 serde_json.workspace = true
 
 [features]
 default = []
-# Full CUDA stack (Candle kernels + Burn CubeCL + cudarc). Slow cold builds.
+# Full CUDA stack (Candle kernels + cudarc). Slow cold builds.
 cuda = [
     "candle-core/cuda",
     "fastvideo-models/cuda",
     "fastvideo-loader/cuda",
-    "fastvideo-burn/cuda",
     "cuda-cudarc",
 ]
-# Lean GPU path: only `fastvideo-cudarc` (no Candle kernels / Burn CubeCL).
+# Lean GPU path: only `fastvideo-cudarc` (no Candle kernels).
 cuda-cudarc = ["fastvideo-cudarc/cuda"]
 
 [lints]

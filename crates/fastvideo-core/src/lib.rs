@@ -178,10 +178,10 @@ mod tests {
     }
 
     #[test]
-    fn burn_luminal_cudarc_tiny_generate_write_png() {
-        for backend in [BackendKind::Burn, BackendKind::Luminal, BackendKind::Cudarc] {
+    fn luminal_cudarc_tiny_generate_write_png() {
+        for backend in [BackendKind::Luminal, BackendKind::Cudarc] {
             let device = if cfg!(feature = "cuda")
-                && matches!(backend, BackendKind::Burn | BackendKind::Cudarc)
+                && matches!(backend, BackendKind::Cudarc)
             {
                 "cuda".into()
             } else {

@@ -1,4 +1,4 @@
-//! Tensor ops trait shared by Burn, Candle, and Luminal adapters.
+//! Tensor ops trait shared by backend adapters (Luminal today).
 //!
 //! Model code in `fastvideo-models` is generic over [`TensorBackend`]. Pipeline
 //! orchestration in `fastvideo-core` stays backend-agnostic.

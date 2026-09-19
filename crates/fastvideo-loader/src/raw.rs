@@ -1,6 +1,6 @@
 //! Backend-agnostic safetensors loading.
 //!
-//! Default [`load_raw_tensors`] converts everything to F32 for Burn / Luminal.
+//! Default [`load_raw_tensors`] converts everything to F32 for Luminal and the host paths.
 //! [`load_raw_tensors_native`] preserves on-disk F16/BF16/F32 bytes for CUDA
 //! backends that upload native dtypes.
 //!

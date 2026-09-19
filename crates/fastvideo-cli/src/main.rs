@@ -21,7 +21,7 @@ fn write_sidecar(dir: Option<&str>, name: &str, value: &serde_json::Value) {
 #[derive(Parser)]
 #[command(
     name = "fastvideo",
-    about = "Rust Wan/FastWan inference (cudarc CUDA primary; Burn/Candle/Luminal frozen)."
+    about = "Rust Wan/FastWan inference (cudarc CUDA primary; Candle/Luminal frozen)."
 )]
 struct Cli {
     #[command(subcommand)]
@@ -174,7 +174,6 @@ struct ScheduleArgs {
 #[derive(Clone, Copy, ValueEnum)]
 enum CliBackend {
     Host,
-    Burn,
     Candle,
     Luminal,
     Cudarc,
@@ -184,7 +183,6 @@ impl From<CliBackend> for BackendKind {
     fn from(value: CliBackend) -> Self {
         match value {
             CliBackend::Host => Self::Host,
-            CliBackend::Burn => Self::Burn,
             CliBackend::Candle => Self::Candle,
             CliBackend::Luminal => Self::Luminal,
             CliBackend::Cudarc => Self::Cudarc,

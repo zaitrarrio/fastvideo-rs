@@ -4,7 +4,6 @@ use std::str::FromStr;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum BackendKind {
     Host,
-    Burn,
     Candle,
     Luminal,
     Cudarc,
@@ -14,7 +13,6 @@ impl BackendKind {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Host => "host",
-            Self::Burn => "burn",
             Self::Candle => "candle",
             Self::Luminal => "luminal",
             Self::Cudarc => "cudarc",
@@ -34,12 +32,11 @@ impl FromStr for BackendKind {
     fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
         match s.to_ascii_lowercase().as_str() {
             "host" | "cpu" | "ref" => Ok(Self::Host),
-            "burn" => Ok(Self::Burn),
             "candle" => Ok(Self::Candle),
             "luminal" | "luminar" => Ok(Self::Luminal),
             "cudarc" | "cdarc" | "cuda-native" => Ok(Self::Cudarc),
             other => Err(format!(
-                "unknown backend `{other}` (expected host, burn, candle, luminal, or cudarc)"
+                "unknown backend `{other}` (expected host, candle, luminal, or cudarc)"
             )),
         }
     }

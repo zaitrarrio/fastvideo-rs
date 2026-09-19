@@ -4,7 +4,7 @@ use crate::error::OpsError;
 
 /// Backend-agnostic tensor surface used by Wan DiT / VAE / UMT5.
 ///
-/// Burn, Candle, and Luminal each implement this trait. Luminal should record
+/// Backend adapters implement this trait (Luminal today). Luminal should record
 /// a single DiT step (and a VAE decode) as a compiled graph and execute that
 /// graph from the Rust denoising loop — do not unroll UniPC/DMD into one graph.
 pub trait TensorBackend: Sized + Send + Sync + 'static {

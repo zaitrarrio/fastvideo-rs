@@ -154,13 +154,12 @@ impl VideoGenerator {
         )
     }
 
-    /// Generate video frames. **cudarc is the supported path**; Burn / Candle /
+    /// Generate video frames. **cudarc is the supported path**; Candle and
     /// Luminal remain frozen reference backends (no new Wan features).
     pub fn generate_video(&self, prompt: &str) -> Result<GenerateOutput> {
         match self.backend {
             BackendKind::Cudarc => self.generate_cudarc(prompt),
             BackendKind::Candle => self.generate_candle(prompt),
-            BackendKind::Burn => self.generate_burn(prompt),
             BackendKind::Luminal => self.generate_luminal(prompt),
             BackendKind::Host => self.generate_reference(prompt),
         }
@@ -272,96 +271,6 @@ impl VideoGenerator {
         let load_ms = t_load.elapsed().as_millis();
         let t_gen = Instant::now();
         let frames = pipe.generate(&gen_cfg).map_err(candle_err)?;
-        let generate_ms = t_gen.elapsed().as_millis();
-        Ok((
-            GenerateOutput {
-                output_path: frames.first().cloned(),
-                frame_paths: frames,
-            },
-            load_ms,
-            generate_ms,
-        ))
-    }
-
-    fn generate_burn(&self, prompt: &str) -> Result<GenerateOutput> {
-        Ok(self.run_burn(prompt)?.0)
-    }
-
-    fn run_burn(&self, prompt: &str) -> Result<(GenerateOutput, u128, u128)> {
-        let is_dmd = matches!(
-            self.definition.sampling,
-            SamplingAlgorithm::Dmd | SamplingAlgorithm::CausalDmd
-        );
-        if self.definition.workload_types.contains(&WorkloadType::I2V) && !self.tiny {
-            return Err(FastVideoError::NotImplemented {
-                component: "I2V generate".into(),
-                detail: "Burn T2V only; use --backend candle for I2V".into(),
-            });
-        }
-        let mut gen_cfg = fastvideo_burn::GenerateConfig {
-            prompt: prompt.to_string(),
-            negative_prompt: self.sampling.negative_prompt.clone(),
-            height: self.sampling.height as usize,
-            width: self.sampling.width as usize,
-            num_frames: self.sampling.num_frames as usize,
-            num_inference_steps: self.sampling.num_inference_steps as usize,
-            guidance_scale: self.sampling.guidance_scale,
-            seed: self.sampling.seed,
-            output_dir: self.output_path.clone(),
-            tiny: self.tiny,
-            is_dmd,
-            flow_shift: f64::from(self.pipeline.flow_shift),
-            dmd_steps: self.pipeline.dmd_steps.map(|s| s.to_vec()),
-            tokenizer_path: None,
-            image_path: self.image_path.clone(),
-            guidance_scale_2: self.sampling.guidance_scale_2,
-            boundary_ratio: self.pipeline.boundary_ratio,
-        };
-        let device = fastvideo_burn::resolve_device(&self.device)
-            .map_err(|e| FastVideoError::Message(e.to_string()))?;
-        if self.tiny {
-            gen_cfg.guidance_scale = 1.0;
-            gen_cfg.is_dmd = true;
-            gen_cfg.flow_shift = 8.0;
-            let t_load = Instant::now();
-            let pipe = fastvideo_burn::WanPipeline::tiny_on(&device)
-                .map_err(|e| FastVideoError::Message(e.to_string()))?;
-            let load_ms = t_load.elapsed().as_millis();
-            let t_gen = Instant::now();
-            let frames = pipe
-                .generate(&gen_cfg)
-                .map_err(|e| FastVideoError::Message(e.to_string()))?;
-            let generate_ms = t_gen.elapsed().as_millis();
-            return Ok((
-                GenerateOutput {
-                    output_path: frames.first().cloned(),
-                    frame_paths: frames,
-                },
-                load_ms,
-                generate_ms,
-            ));
-        }
-        let root = self.resolved_weights_dir().ok_or_else(|| {
-            FastVideoError::Message(
-                "Burn generate needs --weights <diffusers-dir> or a cached HF snapshot".into(),
-            )
-        })?;
-        let tok = root.join("tokenizer").join("tokenizer.json");
-        if !tok.is_file() {
-            return Err(FastVideoError::Message(format!(
-                "missing {}/tokenizer/tokenizer.json",
-                root.display()
-            )));
-        }
-        gen_cfg.tokenizer_path = Some(tok.to_string_lossy().into_owned());
-        let t_load = Instant::now();
-        let pipe = fastvideo_burn::WanPipeline::load_on(&root, &device)
-            .map_err(|e| FastVideoError::Message(e.to_string()))?;
-        let load_ms = t_load.elapsed().as_millis();
-        let t_gen = Instant::now();
-        let frames = pipe
-            .generate(&gen_cfg)
-            .map_err(|e| FastVideoError::Message(e.to_string()))?;
         let generate_ms = t_gen.elapsed().as_millis();
         Ok((
             GenerateOutput {
@@ -583,7 +492,6 @@ impl VideoGenerator {
         let (out, load_ms, generate_ms) = match self.backend {
             BackendKind::Cudarc => self.run_cudarc(prompt)?,
             BackendKind::Candle => self.run_candle(prompt)?,
-            BackendKind::Burn => self.run_burn(prompt)?,
             BackendKind::Luminal => self.run_luminal(prompt)?,
             BackendKind::Host => {
                 let t0 = Instant::now();
@@ -683,7 +591,7 @@ impl VideoGenerator {
         })
     }
 
-    /// Host / Burn / Luminal: real UniPC sampler on f32 latents.
+    /// Host / Luminal: real UniPC sampler on f32 latents.
     /// Velocity is the analytical flow to the origin (x/σ); DiT is Candle-only.
     fn generate_reference(&self, prompt: &str) -> Result<GenerateOutput> {
         if self.definition.workload_types.contains(&crate::sampling::WorkloadType::I2V) {
@@ -694,7 +602,7 @@ impl VideoGenerator {
         }
         let tokenizer = self.resolve_tokenizer().ok_or_else(|| {
             FastVideoError::Message(
-                "Host/Burn/Luminal generate needs tokenizer.json (pass --weights or use a cached HF snapshot)".into(),
+                "Host/Luminal generate needs tokenizer.json (pass --weights or use a cached HF snapshot)".into(),
             )
         })?;
         let (ids, len) = tokenize_prompt(&tokenizer, prompt, 512).map_err(candle_err)?;
