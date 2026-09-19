@@ -19,6 +19,9 @@ set -euo pipefail
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 # Rental helpers (offers, create_instance, wait_ready, cleanup) without dispatch.
 FV_SOURCE_ONLY=1 source "$(dirname "${BASH_SOURCE[0]}")/validate.sh"
+# validate.sh's cleanup pulls a validation output dir on exit; a build box has
+# none, so make that a no-op rather than an "artifact pull failed" line.
+pull_outputs() { :; }
 
 DIST="$FV_ROOT/artifacts/gpucheck/dist"
 IMAGE="${FV_BUILD_IMAGE:-ubuntu:22.04}"
