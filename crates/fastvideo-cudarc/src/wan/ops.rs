@@ -738,6 +738,91 @@ pub fn vsa_fused_attn_device(
     Ok(out)
 }
 
+/// The reference's `tile()`: one f32 `[bh, seq, dim]` tensor into
+/// tile-contiguous bf16 `[bh, padded, dim]`, padding slots zeroed.
+#[cfg(feature = "cuda")]
+pub fn vsa_tile_qkv_device(
+    x: &CudaSlice<f32>,
+    plan: &VsaPlanDev,
+    bh: usize,
+    seq: usize,
+    dim: usize,
+) -> Result<CudaSlice<half::bf16>> {
+    let dev = ctx()?;
+    let padded = plan.num_tiles * plan.tile_elems;
+    let total = bh * padded * dim;
+    let mut out = unsafe { dev.stream.alloc::<half::bf16>(total.max(1)) }.map_err(err)?;
+    let mut cfg = cfg_n(total);
+    cfg.grid_dim.2 = bh as u32; // the kernel reads gridDim.z as bh
+    let (seq_i, padded_i, dim_i) = (seq as i64, padded as i64, dim as i32);
+    launch!(dev.stream, &dev.kernels.vsa_tile_qkv, cfg; x, &plan.slot_src, &mut out, &seq_i, &padded_i, &dim_i)
+        .map_err(err)?;
+    Ok(out)
+}
+
+/// Fine stage on tensor cores: tile Q/K/V once, then one CUDA block per query
+/// tile streams its top-k key tiles through `mma.sync` with an online softmax
+/// — the structure every reference block-sparse kernel uses. Output is f32 in
+/// tile-slot order, the same contract as [`vsa_fused_attn_device`].
+#[cfg(feature = "cuda")]
+#[allow(clippy::too_many_arguments)]
+pub fn vsa_mma_attn_device(
+    q: &CudaSlice<f32>,
+    k: &CudaSlice<f32>,
+    v: &CudaSlice<f32>,
+    selected: &CudaSlice<u32>,
+    plan: &VsaPlanDev,
+    bh: usize,
+    seq: usize,
+    dim: usize,
+    topk: usize,
+    scale: f32,
+) -> Result<CudaSlice<f32>> {
+    const THREADS: u32 = 128;
+    const TILE: usize = 64;
+    const DIM: usize = 128;
+    // Fragment maps and the swizzle are written for Wan's geometry.
+    check("vsa_mma_attn geometry", dim == DIM && plan.tile_elems == TILE)?;
+    let dev = ctx()?;
+    check("vsa_mma_attn needs sm80+", dev.sm_major >= 8)?;
+    let nb = plan.num_tiles;
+    let padded = nb * TILE;
+
+    let (qt, kt, vt) = (
+        vsa_tile_qkv_device(q, plan, bh, seq, dim)?,
+        vsa_tile_qkv_device(k, plan, bh, seq, dim)?,
+        vsa_tile_qkv_device(v, plan, bh, seq, dim)?,
+    );
+
+    // K[2] + V[2] tiles of 64x128 bf16: 64 KiB, past the 48 KiB default, so
+    // the function has to opt in. Once per process; there is one device.
+    let shared = (4 * TILE * DIM * 2) as u32;
+    static OPT_IN: std::sync::Once = std::sync::Once::new();
+    let mut opt_err = None;
+    OPT_IN.call_once(|| {
+        use cudarc::driver::sys::CUfunction_attribute_enum::CU_FUNC_ATTRIBUTE_MAX_DYNAMIC_SHARED_SIZE_BYTES;
+        if let Err(e) = dev.kernels.vsa_mma_attn.set_attribute(CU_FUNC_ATTRIBUTE_MAX_DYNAMIC_SHARED_SIZE_BYTES, shared as i32) {
+            opt_err = Some(e.to_string());
+        }
+    });
+    if let Some(e) = opt_err {
+        return Err(TensorError::Message(format!("vsa_mma_attn: dynamic shared opt-in failed: {e}")));
+    }
+
+    let mut out = alloc(bh * padded * dim)?;
+    let cfg = LaunchConfig {
+        grid_dim: (nb as u32, bh as u32, 1),
+        block_dim: (THREADS, 1, 1),
+        shared_mem_bytes: shared,
+    };
+    let (nt, tk) = (nb as i32, topk as i32);
+    let scale_log2 = scale * std::f32::consts::LOG2_E;
+    launch!(dev.stream, &dev.kernels.vsa_mma_attn, cfg;
+        &qt, &kt, &vt, selected, &plan.block_sizes, &mut out, &nt, &tk, &scale_log2)
+    .map_err(err)?;
+    Ok(out)
+}
+
 /// Scatter `coarse * gate + sparse` back into token order.
 #[cfg(feature = "cuda")]
 #[allow(clippy::too_many_arguments)]

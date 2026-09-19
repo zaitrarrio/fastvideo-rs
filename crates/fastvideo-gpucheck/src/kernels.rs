@@ -655,6 +655,25 @@ pub fn run(report: &mut Report, lim: Limits, seed: u64) -> StageResult<()> {
             let tag = format!("vsa_fused_{}x{}x{}_h{heads}_d{dim}_k{topk}", grid.0, grid.1, grid.2);
             c.cmp(&tag, &host_fused, &want, 2e-2)?;
 
+            // The tensor-core fine stage: same answer as the host reference,
+            // through mma.sync + ldmatrix + cp.async instead of a gather.
+            // P is bf16 on this path exactly as on the gather path, so the
+            // limit is the same bf16 round-off.
+            if dim == 128 && dev.sm_major >= 8 {
+                std::env::set_var("FASTVIDEO_VSA_KERNEL", "mma");
+                let got = vsa::vsa_attention_device(
+                    &qd, &kd, &vd, Some(&gd), &plan_dev, topk, bh, seq, dim, scale, nb,
+                )?;
+                std::env::remove_var("FASTVIDEO_VSA_KERNEL");
+                let tag = format!("vsa_mma_{}x{}x{}_h{heads}_d{dim}_k{topk}", grid.0, grid.1, grid.2);
+                c.cmp(&tag, &dev.stream.memcpy_dtov(&got)?, &want, 2e-2)?;
+            } else {
+                c.report.note(
+                    format!("vsa_mma_{}x{}x{}_skipped", grid.0, grid.1, grid.2),
+                    serde_json::json!({"dim": dim, "sm_major": dev.sm_major, "needs": "dim 128, sm80+"}),
+                );
+            }
+
             // Tile means and top-k are exact, so they get tight limits of their own.
             let qc = ops::vsa_tile_mean_device(&qd, &plan_dev, bh, seq, dim)?;
             let mut want_mean = vec![0.0f32; bh * nb * dim];
@@ -670,6 +689,63 @@ pub fn run(report: &mut Report, lim: Limits, seed: u64) -> StageResult<()> {
                 }
             }
             c.cmp(&format!("vsa_tile_mean_{}x{}x{}", grid.0, grid.1, grid.2), &down(&qc)?, &want_mean, op)?;
+        }
+
+        // Speed, at the token counts the scalar fused kernel was rejected at
+        // (1,456 / 4,368 / 13,104 — FVID-2026-09-18-fused-block-sparse-rejected
+        // recorded 0.107 / 0.870 s for the gather path). Median of three
+        // synchronized runs after a warm-up; the gather path is the baseline
+        // and the number that matters is the ratio.
+        let dev = dev()?;
+        if dev.sm_major >= 8 {
+            let time = |f: &mut dyn FnMut() -> anyhow::Result<()>| -> anyhow::Result<f64> {
+                f()?;
+                let mut t = Vec::new();
+                for _ in 0..3 {
+                    device::synchronize()?;
+                    let s = std::time::Instant::now();
+                    f()?;
+                    device::synchronize()?;
+                    t.push(s.elapsed().as_secs_f64());
+                }
+                t.sort_by(|a, b| a.total_cmp(b));
+                Ok(t[1])
+            };
+            for grid in [(1usize, 28usize, 52usize), (3, 28, 52), (9, 28, 52)] {
+                let plan = vsa::TilePlan::new(grid)?;
+                let (heads, dim) = (12usize, 128usize);
+                let (bh, seq, nb) = (heads, plan.seq, plan.num_tiles());
+                let topk = vsa::topk_for(0.8, nb);
+                let n = bh * seq * dim;
+                let (q, k, v, g) = (c.rand(n, 1.0), c.rand(n, 1.0), c.rand(n, 1.0), c.rand(n, 0.5));
+                let (qd, kd, vd, gd) = (
+                    dev.stream.memcpy_stod(&q)?,
+                    dev.stream.memcpy_stod(&k)?,
+                    dev.stream.memcpy_stod(&v)?,
+                    dev.stream.memcpy_stod(&g)?,
+                );
+                let plan_dev = ops::vsa_plan_upload(&plan.slot_src, &plan.block_sizes, vsa::TILE_ELEMS)?;
+                let scale = 1.0 / (dim as f32).sqrt();
+                let mut run = |kernel: &str| -> anyhow::Result<f64> {
+                    std::env::set_var("FASTVIDEO_VSA_KERNEL", kernel);
+                    let r = time(&mut || {
+                        vsa::vsa_attention_device(&qd, &kd, &vd, Some(&gd), &plan_dev, topk, bh, seq, dim, scale, 32)?;
+                        Ok(())
+                    });
+                    std::env::remove_var("FASTVIDEO_VSA_KERNEL");
+                    r
+                };
+                let gather_s = run("gather")?;
+                let mma_s = run("mma")?;
+                c.report.note(
+                    format!("vsa_fine_time_{}tok", seq),
+                    serde_json::json!({
+                        "tokens": seq, "tiles": nb, "topk": topk,
+                        "gather_s": gather_s, "mma_s": mma_s,
+                        "mma_speedup": gather_s / mma_s,
+                    }),
+                );
+            }
         }
         Ok(())
     })?;

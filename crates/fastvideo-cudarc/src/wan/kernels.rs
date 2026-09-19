@@ -869,6 +869,260 @@ extern "C" __global__ void flash_attn_f32(
     O[((long)bh_idx * sq + q_i) * d + tid] = o_val / l_val;
 }
 
+// ---- VSA fine stage on tensor cores ----------------------------------------
+//
+// The reference block-sparse kernels (FastVideo's Triton `_attn_fwd_sparse`,
+// its ThunderKittens sm90 kernel, FlashAttention-4's block sparsity) never
+// gather the selected K/V tiles. They permute Q/K/V into tile-contiguous order
+// ONCE, so tile j is the contiguous slab of rows [64j, 64j+64), then one CUDA
+// block per query tile walks its top-k list re-pointing at each slab and folds
+// it into an online softmax. Our previous fused attempt had that structure and
+// still lost 8x, because it did the math in scalar f32; every reference kernel
+// does it on tensor cores. This one does too: `mma.sync.m16n8k16` bf16 with
+// `ldmatrix` fragment loads and `cp.async` double buffering, which is the
+// sm80+ version of what the ThunderKittens kernel does with wgmma and TMA.
+//
+// Layout of one tile in shared memory: 64 rows x 128 bf16 = 256 B/row, as 16
+// chunks of 16 B. Chunk c of row r is stored at chunk (c ^ (r & 7)): without
+// that XOR every row of an 8x8 ldmatrix starts on the same bank.
+//
+// Fragment maps (PTX ISA, m16n8k16, lane l, g = l>>2, t = l&3):
+//   A 16x16 row: reg0 = (g, 2t..2t+1)  reg1 = (g+8, 2t..)  reg2 = (g, 2t+8..)  reg3 = (g+8, 2t+8..)
+//   B 16x8 col:  reg0 = (k=2t..2t+1, n=g)  reg1 = (k=2t+8.., n=g)
+//   C 16x8 f32:  c0,c1 = (g, 2t..2t+1)  c2,c3 = (g+8, 2t..2t+1)
+// The C layout of S lines up with the A layout of P for the PV product, so P
+// never leaves registers: n-tiles (2j, 2j+1) of S become k-chunk j of P.
+
+#define MMA_TILE 64
+#define MMA_DIM 128
+#define MMA_ROWB 256   // bytes per tile row
+#define MMA_TILEB (MMA_TILE * MMA_ROWB)
+
+// Byte offset of (row, col) in a swizzled tile; `col` in bf16 elements, and a
+// multiple of 8 wherever ldmatrix reads it.
+__device__ __forceinline__ unsigned int mma_swz(int row, int col) {
+    return (unsigned int)row * MMA_ROWB + ((((unsigned int)col >> 3) ^ ((unsigned int)row & 7u)) << 4) + (((unsigned int)col & 7u) << 1);
+}
+
+#if defined(__CUDA_ARCH__) && __CUDA_ARCH__ >= 800
+__device__ __forceinline__ unsigned int mma_smem_u32(const void* p) {
+    return (unsigned int)__cvta_generic_to_shared(p);
+}
+__device__ __forceinline__ void mma_cp_async16(unsigned int smem, const void* gmem) {
+    asm volatile("cp.async.cg.shared.global [%0], [%1], 16;\n" :: "r"(smem), "l"(gmem));
+}
+__device__ __forceinline__ void mma_cp_commit() { asm volatile("cp.async.commit_group;\n" ::); }
+template <int N> __device__ __forceinline__ void mma_cp_wait() { asm volatile("cp.async.wait_group %0;\n" :: "n"(N)); }
+__device__ __forceinline__ void mma_ldm_x4(unsigned int addr, unsigned int& r0, unsigned int& r1, unsigned int& r2, unsigned int& r3) {
+    asm volatile("ldmatrix.sync.aligned.m8n8.x4.shared.b16 {%0,%1,%2,%3}, [%4];\n"
+                 : "=r"(r0), "=r"(r1), "=r"(r2), "=r"(r3) : "r"(addr));
+}
+__device__ __forceinline__ void mma_ldm_x2(unsigned int addr, unsigned int& r0, unsigned int& r1) {
+    asm volatile("ldmatrix.sync.aligned.m8n8.x2.shared.b16 {%0,%1}, [%2];\n" : "=r"(r0), "=r"(r1) : "r"(addr));
+}
+__device__ __forceinline__ void mma_ldm_x2_trans(unsigned int addr, unsigned int& r0, unsigned int& r1) {
+    asm volatile("ldmatrix.sync.aligned.m8n8.x2.trans.shared.b16 {%0,%1}, [%2];\n" : "=r"(r0), "=r"(r1) : "r"(addr));
+}
+__device__ __forceinline__ void mma_bf16(float* c, const unsigned int* a, const unsigned int* b) {
+    asm volatile("mma.sync.aligned.m16n8k16.row.col.f32.bf16.bf16.f32 {%0,%1,%2,%3}, {%4,%5,%6,%7}, {%8,%9}, {%0,%1,%2,%3};\n"
+                 : "+f"(c[0]), "+f"(c[1]), "+f"(c[2]), "+f"(c[3])
+                 : "r"(a[0]), "r"(a[1]), "r"(a[2]), "r"(a[3]), "r"(b[0]), "r"(b[1]));
+}
+__device__ __forceinline__ unsigned int mma_pack_bf16(float lo, float hi) {
+    return (unsigned int)fv_to_bf16(lo) | ((unsigned int)fv_to_bf16(hi) << 16);
+}
+// Copy one 64x128 bf16 tile (row-major, 256 B rows) from global into a
+// swizzled shared buffer: 1024 chunks of 16 B over 128 threads.
+__device__ __forceinline__ void mma_load_tile(unsigned int smem, const unsigned short* g, int tid) {
+    #pragma unroll
+    for (int i = 0; i < 8; i++) {
+        int chunk = tid + i * 128;
+        int row = chunk >> 4, c = chunk & 15;
+        mma_cp_async16(smem + mma_swz(row, c * 8), g + row * MMA_DIM + c * 8);
+    }
+}
+#endif
+
+// One CUDA block per (query tile, batch*head); 4 warps, warp w owns query rows
+// [16w, 16w+16). Q/K/V are the tile-ordered bf16 tensors from vsa_tile_qkv,
+// `selected` is the top-k key-tile list per query tile, `block_sizes` the real
+// token count per tile (padding columns are masked to -inf, as the reference
+// does with `right_fill`). Output is f32 in the same tile-slot order the
+// gather path produces, so `vsa_combine` is shared.
+extern "C" __global__ void __launch_bounds__(128, 2) vsa_mma_attn(
+    const unsigned short* __restrict__ qt, const unsigned short* __restrict__ kt,
+    const unsigned short* __restrict__ vt, const unsigned int* __restrict__ selected,
+    const int* __restrict__ block_sizes, float* __restrict__ out,
+    int num_tiles, int topk, float scale_log2
+) {
+#if defined(__CUDA_ARCH__) && __CUDA_ARCH__ >= 800
+    extern __shared__ __align__(128) unsigned char mma_smem[];
+    const int tid = threadIdx.x, lane = tid & 31, warp = tid >> 5;
+    const int g = lane >> 2, t = lane & 3;
+    const int qtile = blockIdx.x, bh = blockIdx.y;
+    const long padded = (long)num_tiles * MMA_TILE;
+    const unsigned short* qb = qt + (bh * padded + (long)qtile * MMA_TILE) * MMA_DIM;
+    const unsigned short* kb = kt + bh * padded * MMA_DIM;
+    const unsigned short* vb = vt + bh * padded * MMA_DIM;
+    const unsigned int* sel = selected + ((long)bh * num_tiles + qtile) * topk;
+
+    // Buffers: K[2], V[2] — 4 x 16 KB.
+    const unsigned int s_base = mma_smem_u32(mma_smem);
+    const unsigned int sK[2] = { s_base, s_base + MMA_TILEB };
+    const unsigned int sV[2] = { s_base + 2 * MMA_TILEB, s_base + 3 * MMA_TILEB };
+
+    // Stage Q through K[0] into registers once: 8 k-chunks of A fragments.
+    mma_load_tile(sK[0], qb, tid);
+    mma_cp_commit();
+    mma_cp_wait<0>();
+    __syncthreads();
+    unsigned int qf[8][4];
+    #pragma unroll
+    for (int kc = 0; kc < 8; kc++) {
+        int row = warp * 16 + (lane & 15), col = kc * 16 + (lane >> 4) * 8;
+        mma_ldm_x4(sK[0] + mma_swz(row, col), qf[kc][0], qf[kc][1], qf[kc][2], qf[kc][3]);
+    }
+    __syncthreads();
+
+    // Prime the pipeline with tile 0.
+    unsigned int kt0 = sel[0];
+    mma_load_tile(sK[0], kb + (long)kt0 * MMA_TILE * MMA_DIM, tid);
+    mma_load_tile(sV[0], vb + (long)kt0 * MMA_TILE * MMA_DIM, tid);
+    mma_cp_commit();
+
+    float o[16][4];
+    #pragma unroll
+    for (int n = 0; n < 16; n++) { o[n][0] = o[n][1] = o[n][2] = o[n][3] = 0.f; }
+    const float NEG = __int_as_float(0xff800000);
+    float m0 = NEG, m1 = NEG, l0 = 0.f, l1 = 0.f;   // rows g and g+8
+
+    for (int i = 0; i < topk; i++) {
+        const int buf = i & 1;
+        // Issue the next tile's loads before touching this one, as the
+        // reference does: index i+1 is read while i computes.
+        if (i + 1 < topk) {
+            unsigned int kn = sel[i + 1];
+            mma_load_tile(sK[buf ^ 1], kb + (long)kn * MMA_TILE * MMA_DIM, tid);
+            mma_load_tile(sV[buf ^ 1], vb + (long)kn * MMA_TILE * MMA_DIM, tid);
+            mma_cp_commit();
+            mma_cp_wait<1>();
+        } else {
+            mma_cp_wait<0>();
+        }
+        __syncthreads();
+
+        // S = Q K^T for this warp's 16 rows x 64 keys: 8 n-tiles x 8 k-chunks.
+        float s[8][4];
+        #pragma unroll
+        for (int n = 0; n < 8; n++) { s[n][0] = s[n][1] = s[n][2] = s[n][3] = 0.f; }
+        #pragma unroll
+        for (int kc = 0; kc < 8; kc++) {
+            #pragma unroll
+            for (int n = 0; n < 8; n++) {
+                unsigned int b[2];
+                // 8 keys (rows n*8..) x 16 dims (cols kc*16..), no transpose.
+                mma_ldm_x2(sK[buf] + mma_swz(n * 8 + (lane & 7), kc * 16 + ((lane >> 3) & 1) * 8), b[0], b[1]);
+                mma_bf16(s[n], qf[kc], b);
+            }
+        }
+
+        // Mask padding columns of this key tile, then the online softmax in
+        // the reference's order: new max, rescale old, exp2, accumulate.
+        const int valid = block_sizes[sel[i]];
+        float rmax0 = NEG, rmax1 = NEG;
+        #pragma unroll
+        for (int n = 0; n < 8; n++) {
+            int c0 = n * 8 + t * 2;
+            if (c0 >= valid)     { s[n][0] = NEG; s[n][2] = NEG; }
+            if (c0 + 1 >= valid) { s[n][1] = NEG; s[n][3] = NEG; }
+            rmax0 = fmaxf(rmax0, fmaxf(s[n][0], s[n][1]));
+            rmax1 = fmaxf(rmax1, fmaxf(s[n][2], s[n][3]));
+        }
+        rmax0 = fmaxf(rmax0, __shfl_xor_sync(0xffffffffu, rmax0, 1));
+        rmax0 = fmaxf(rmax0, __shfl_xor_sync(0xffffffffu, rmax0, 2));
+        rmax1 = fmaxf(rmax1, __shfl_xor_sync(0xffffffffu, rmax1, 1));
+        rmax1 = fmaxf(rmax1, __shfl_xor_sync(0xffffffffu, rmax1, 2));
+        const float mn0 = fmaxf(m0, rmax0), mn1 = fmaxf(m1, rmax1);
+        // A row with no valid key yet keeps its scale at 0 rather than NaN.
+        const float ms0 = (mn0 == NEG) ? 0.f : mn0 * scale_log2;
+        const float ms1 = (mn1 == NEG) ? 0.f : mn1 * scale_log2;
+        const float a0 = exp2f(m0 * scale_log2 - ms0), a1 = exp2f(m1 * scale_log2 - ms1);
+        m0 = mn0; m1 = mn1;
+        float rs0 = 0.f, rs1 = 0.f;
+        #pragma unroll
+        for (int n = 0; n < 8; n++) {
+            s[n][0] = exp2f(s[n][0] * scale_log2 - ms0);
+            s[n][1] = exp2f(s[n][1] * scale_log2 - ms0);
+            s[n][2] = exp2f(s[n][2] * scale_log2 - ms1);
+            s[n][3] = exp2f(s[n][3] * scale_log2 - ms1);
+            rs0 += s[n][0] + s[n][1];
+            rs1 += s[n][2] + s[n][3];
+        }
+        rs0 += __shfl_xor_sync(0xffffffffu, rs0, 1);
+        rs0 += __shfl_xor_sync(0xffffffffu, rs0, 2);
+        rs1 += __shfl_xor_sync(0xffffffffu, rs1, 1);
+        rs1 += __shfl_xor_sync(0xffffffffu, rs1, 2);
+        l0 = l0 * a0 + rs0;
+        l1 = l1 * a1 + rs1;
+        #pragma unroll
+        for (int n = 0; n < 16; n++) { o[n][0] *= a0; o[n][1] *= a0; o[n][2] *= a1; o[n][3] *= a1; }
+
+        // O += P V: P re-packed from C layout into A layout, V via ldmatrix.trans.
+        #pragma unroll
+        for (int kc = 0; kc < 4; kc++) {
+            unsigned int pa[4];
+            pa[0] = mma_pack_bf16(s[2 * kc][0], s[2 * kc][1]);
+            pa[1] = mma_pack_bf16(s[2 * kc][2], s[2 * kc][3]);
+            pa[2] = mma_pack_bf16(s[2 * kc + 1][0], s[2 * kc + 1][1]);
+            pa[3] = mma_pack_bf16(s[2 * kc + 1][2], s[2 * kc + 1][3]);
+            #pragma unroll
+            for (int n = 0; n < 16; n++) {
+                unsigned int b[2];
+                // 16 keys (rows kc*16..) x 8 dims (cols n*8..), transposed.
+                mma_ldm_x2_trans(sV[buf] + mma_swz(kc * 16 + (lane & 15), n * 8), b[0], b[1]);
+                mma_bf16(o[n], pa, b);
+            }
+        }
+        __syncthreads();
+    }
+
+    // Normalise and write this warp's 16 rows, f32, tile-slot order.
+    const float inv0 = l0 > 0.f ? 1.f / l0 : 0.f, inv1 = l1 > 0.f ? 1.f / l1 : 0.f;
+    float* ob = out + (bh * padded + (long)qtile * MMA_TILE + warp * 16) * MMA_DIM;
+    #pragma unroll
+    for (int n = 0; n < 16; n++) {
+        int col = n * 8 + t * 2;
+        float2 r0 = make_float2(o[n][0] * inv0, o[n][1] * inv0);
+        float2 r1 = make_float2(o[n][2] * inv1, o[n][3] * inv1);
+        *reinterpret_cast<float2*>(ob + (long)g * MMA_DIM + col) = r0;
+        *reinterpret_cast<float2*>(ob + (long)(g + 8) * MMA_DIM + col) = r1;
+    }
+#else
+    // sm75 has no bf16 mma; the dispatcher never launches this there.
+    (void)qt; (void)kt; (void)vt; (void)selected; (void)block_sizes; (void)out;
+    (void)num_tiles; (void)topk; (void)scale_log2;
+#endif
+}
+
+// The reference's `tile()`: permute one f32 [bh, seq, dim] tensor into
+// tile-contiguous bf16 [bh, padded, dim] once, zero-filling padding slots.
+// O(padded x dim) — versus the per-query-tile gather's O(tiles x topk x 64 x dim).
+extern "C" __global__ void vsa_tile_qkv(
+    const float* __restrict__ x, const int* __restrict__ slot_src, unsigned short* __restrict__ xt,
+    long seq, long padded, int dim
+) {
+    long i = blockIdx.x * (long)blockDim.x + threadIdx.x;
+    long total = (long)gridDim.z * padded * dim;
+    if (i >= total) return;
+    long bh = i / (padded * dim);
+    long rem = i - bh * padded * dim;
+    long slot = rem / dim;
+    int d = (int)(rem - slot * dim);
+    int src = slot_src[slot];
+    float v = src >= 0 ? x[(bh * seq + src) * dim + d] : 0.f;
+    xt[i] = fv_to_bf16(v);
+}
+
 // ---- FP8 E4M3 ------------------------------------------------------------
 // NVRTC here has no cuda_fp8.h, so the conversion is open-coded. This mirrors
 // fastvideo_ops::fp8::f32_to_e4m3 line for line; that reference is exhaustively
@@ -987,6 +1241,8 @@ macro_rules! kernel_fns {
 }
 
 kernel_fns!(
+    vsa_mma_attn,
+    vsa_tile_qkv,
     tanh_scaled,
     quantize_e4m3,
     dequantize_e4m3,

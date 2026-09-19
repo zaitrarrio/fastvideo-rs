@@ -242,11 +242,43 @@ pub fn vsa_attention_host(
     Ok(out)
 }
 
-/// `FASTVIDEO_VSA_FUSED=1` runs the fine stage as one fused kernel instead of
-/// gather + batched GEMM.
+/// Which fine-stage implementation runs.
 #[cfg(feature = "cuda")]
-fn fused_enabled() -> bool {
-    super::envflag::bool_flag("FASTVIDEO_VSA_FUSED", false)
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FineKernel {
+    /// Gather selected K/V into dense buffers per query tile, then cuBLAS.
+    /// Materialises every tile ~topk times; measured at ~21% of the DiT.
+    Gather,
+    /// The scalar-f32 fused kernel: streams K/V, but no tensor cores. Kept
+    /// as the measured negative result it is (8x slower than Gather).
+    FusedScalar,
+    /// Streams K/V through `mma.sync` bf16 tensor cores with an online
+    /// softmax, as the reference kernels do. Needs sm80+ and dim 128.
+    Mma,
+}
+
+/// `FASTVIDEO_VSA_KERNEL=auto|gather|fused|mma`. `auto` picks by hardware:
+/// tensor-core streaming wherever the instruction exists, the gather path
+/// on anything older. `FASTVIDEO_VSA_FUSED=1` is the old spelling of `fused`.
+#[cfg(feature = "cuda")]
+fn fine_kernel(dim: usize, tile_elems: usize) -> FineKernel {
+    use super::envflag::{bool_flag, string_flag};
+    let pick = string_flag("FASTVIDEO_VSA_KERNEL", "auto");
+    let sm = super::device::global_device().map(|d| d.sm_major).unwrap_or(0);
+    let mma_ok = sm >= 8 && dim == 128 && tile_elems == TILE_ELEMS;
+    let chosen = match pick.as_str() {
+        "gather" => FineKernel::Gather,
+        "fused" => FineKernel::FusedScalar,
+        "mma" => FineKernel::Mma,
+        _ if bool_flag("FASTVIDEO_VSA_FUSED", false) => FineKernel::FusedScalar,
+        _ if mma_ok => FineKernel::Mma,
+        _ => FineKernel::Gather,
+    };
+    // An explicit ask for a kernel the hardware cannot run is an error at the
+    // call site, not a silent substitution; `auto` is the only fallback.
+    static LOGGED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+    super::log::info_once(&LOGGED, format_args!("vsa fine kernel: {chosen:?} (sm{sm}, dim {dim}, {pick})"));
+    chosen
 }
 
 /// Everything a VSA layer needs for one latent grid: the uploaded tiling, how
@@ -327,10 +359,22 @@ pub fn vsa_attention_device(
     //    gather path materialises them and lets cuBLAS use tensor cores. Which
     //    is faster is hardware-dependent, so it is a flag, not a decision.
     let mut out = ops::fill_device(bh * seq * dim, 0.0)?;
-    if fused_enabled() {
-        let sparse = ops::vsa_fused_attn_device(q, k, v, &selected, plan, bh, seq, dim, topk, scale)?;
-        ops::vsa_combine_device(&sparse, &coarse, gate, plan, &mut out, bh, nb, 0, seq, dim)?;
-        return Ok(out);
+    match fine_kernel(dim, plan.tile_elems) {
+        FineKernel::Mma => {
+            let sparse = phase("vsa_4_mma", || {
+                ops::vsa_mma_attn_device(q, k, v, &selected, plan, bh, seq, dim, topk, scale)
+            })?;
+            phase("vsa_8_combine", || {
+                ops::vsa_combine_device(&sparse, &coarse, gate, plan, &mut out, bh, nb, 0, seq, dim)
+            })?;
+            return Ok(out);
+        }
+        FineKernel::FusedScalar => {
+            let sparse = ops::vsa_fused_attn_device(q, k, v, &selected, plan, bh, seq, dim, topk, scale)?;
+            ops::vsa_combine_device(&sparse, &coarse, gate, plan, &mut out, bh, nb, 0, seq, dim)?;
+            return Ok(out);
+        }
+        FineKernel::Gather => {}
     }
     let len = topk * plan.tile_elems;
     let group = group.clamp(1, nb);
