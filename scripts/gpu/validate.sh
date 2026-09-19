@@ -85,16 +85,24 @@ tier_query() {
     # Gemma, connectors and the DiT for the reference (90 GB), plus the official
     # single-file DiT our side loads through the rename view (43 GB).
     ltx2-dit) echo "$base gpu_ram>=90 disk_space>=260 cpu_ram>=64 inet_down>=800" ;;
+    # VSA-H3 on the device against f64 host loops: no weights at all, but the
+    # tensor-core fine kernel wants sm80+ (the base filter) and head dim 128.
+    h3-vsa) echo "$base gpu_ram>=12 disk_space>=40 cpu_ram>=16" ;;
+    # Text to mp4-with-audio. H3 reads 50 GB of Qwen3-VL (shards 1-11), the
+    # 70 GB DiT and both decoders; LTX-2 reads 49 GB of Gemma, the 43 GB
+    # single-file DiT and its decoders. No python, no oracle: our binary only.
+    h3-gen) echo "$base gpu_ram>=90 disk_space>=220 cpu_ram>=64 inet_down>=1000" ;;
+    ltx2-gen) echo "$base gpu_ram>=90 disk_space>=180 cpu_ram>=64 inet_down>=1000" ;;
     ltx2-text) echo "$base gpu_ram>=90 disk_space>=180 cpu_ram>=64 inet_down>=800" ;;
     # A build box: the GPU is irrelevant, so this asks for the cheapest thing
     # with cores and RAM for a release cargo build plus nvcc for 7 SMs.
     build) echo "num_gpus=1 cuda_vers>=13.0 reliability>0.97 rentable=true verified=true direct_port_count>=1 inet_down>=200 cpu_cores>=8 cpu_ram>=16 disk_space>=40 ${FV_OFFER_QUERY_EXTRA:-}" ;;
-    *) die "unknown tier '$1' (mathprobe|kernels|parity|clip|compare|gen|oracle|fp8|taehv|vaeab|build|h3-text|ltx2-text|h3-vae|ltx2-vae|h3-dit|ltx2-dit)" ;;
+    *) die "unknown tier '$1' (mathprobe|kernels|parity|clip|compare|gen|oracle|fp8|taehv|vaeab|build|h3-text|ltx2-text|h3-vae|ltx2-vae|h3-dit|ltx2-dit|h3-vsa|h3-gen|ltx2-gen)" ;;
   esac
 }
-tier_max_dph() { case "$1" in mathprobe) echo 0.40 ;; kernels) echo 0.25 ;; parity) echo 0.40 ;; clip) echo 0.60 ;; compare) echo 0.60 ;; gen) echo 0.80 ;; oracle) echo 1.60 ;; fp8) echo 0.80 ;; taehv) echo 0.40 ;; vaeab) echo 0.80 ;; build) echo 0.20 ;; h3-text | ltx2-text) echo 2.00 ;; h3-vae) echo 1.00 ;; ltx2-vae) echo 0.80 ;; h3-dit | ltx2-dit) echo 2.00 ;; esac; }
-tier_max_minutes() { case "$1" in mathprobe) echo 30 ;; kernels) echo 40 ;; parity) echo 75 ;; clip) echo 180 ;; compare) echo 240 ;; gen) echo 180 ;; oracle) echo 150 ;; fp8) echo 90 ;; taehv) echo 60 ;; vaeab) echo 90 ;; build) echo 45 ;; h3-text | ltx2-text) echo 150 ;; h3-vae | ltx2-vae) echo 90 ;; h3-dit | ltx2-dit) echo 180 ;; esac; }
-tier_disk() { case "$1" in mathprobe) echo 40 ;; kernels) echo 40 ;; parity) echo 60 ;; clip) echo 100 ;; compare) echo 180 ;; gen) echo 100 ;; oracle) echo 160 ;; fp8) echo 100 ;; taehv) echo 60 ;; vaeab) echo 100 ;; build) echo 40 ;; h3-text) echo 220 ;; ltx2-text) echo 180 ;; h3-vae) echo 100 ;; ltx2-vae) echo 80 ;; h3-dit) echo 200 ;; ltx2-dit) echo 260 ;; esac; }
+tier_max_dph() { case "$1" in mathprobe) echo 0.40 ;; kernels) echo 0.25 ;; parity) echo 0.40 ;; clip) echo 0.60 ;; compare) echo 0.60 ;; gen) echo 0.80 ;; oracle) echo 1.60 ;; fp8) echo 0.80 ;; taehv) echo 0.40 ;; vaeab) echo 0.80 ;; build) echo 0.20 ;; h3-text | ltx2-text) echo 2.00 ;; h3-vae) echo 1.00 ;; ltx2-vae) echo 0.80 ;; h3-dit | ltx2-dit | h3-gen | ltx2-gen) echo 2.00 ;; h3-vsa) echo 0.40 ;; esac; }
+tier_max_minutes() { case "$1" in mathprobe) echo 30 ;; kernels) echo 40 ;; parity) echo 75 ;; clip) echo 180 ;; compare) echo 240 ;; gen) echo 180 ;; oracle) echo 150 ;; fp8) echo 90 ;; taehv) echo 60 ;; vaeab) echo 90 ;; build) echo 45 ;; h3-text | ltx2-text) echo 150 ;; h3-vae | ltx2-vae) echo 90 ;; h3-dit | ltx2-dit) echo 180 ;; h3-gen | ltx2-gen) echo 150 ;; h3-vsa) echo 40 ;; esac; }
+tier_disk() { case "$1" in mathprobe) echo 40 ;; kernels) echo 40 ;; parity) echo 60 ;; clip) echo 100 ;; compare) echo 180 ;; gen) echo 100 ;; oracle) echo 160 ;; fp8) echo 100 ;; taehv) echo 60 ;; vaeab) echo 100 ;; build) echo 40 ;; h3-text) echo 220 ;; ltx2-text) echo 180 ;; h3-vae) echo 100 ;; ltx2-vae) echo 80 ;; h3-dit) echo 200 ;; ltx2-dit) echo 260 ;; h3-vsa) echo 40 ;; h3-gen) echo 220 ;; ltx2-gen) echo 180 ;; esac; }
 
 usage() { sed -n '2,12p' "$0" | sed 's/^# \{0,1\}//'; exit 2; }
 
@@ -499,10 +507,16 @@ cmd_run() {
   LAST_STAGE=upload
   fv_ssh "$HOST" "$PORT" "mkdir -p $FV_REMOTE_DIR/scripts $FV_REMOTE_DIR/target/release $OUTR/refs"
   fv_rsync_to "$HOST" "$PORT" "$FV_ROOT/scripts/" "$FV_REMOTE_DIR/scripts/" --delete --exclude '.env*'
-  if [[ $IMAGE_HAS_BUILD -eq 1 ]]; then
-    log "binary for build $build_id is baked into $IMAGE"
+  # Ask the box which build it holds rather than inferring it from the image
+  # we would pick today: a reused instance (--instance) was created from an
+  # older image, and trusting "the image has the binary" ran a stale
+  # fv-gpucheck there (it lacked the stage being asked for).
+  local remote_bid
+  remote_bid="$(fv_ssh "$HOST" "$PORT" "cat $FV_REMOTE_DIR/target/release/fv-gpucheck.build-id 2>/dev/null" 2>/dev/null | tr -d '[:space:]' || true)"
+  if [[ "$remote_bid" == "$build_id" ]]; then
+    log "box already holds fv-gpucheck build $build_id"
   else
-    log "uploading prebuilt fv-gpucheck (build $build_id)"
+    log "uploading prebuilt fv-gpucheck (build $build_id; box has '${remote_bid:-none}')"
     fv_rsync_to "$HOST" "$PORT" "$DIST/" "$FV_REMOTE_DIR/target/release/"
   fi
   # CPU-path references are cached per ref key (scripts/gpu/lib.sh fv_ref_key):
@@ -594,6 +608,40 @@ cmd_run() {
     log "h3-vae done"
     return 0
   fi
+  # VSA-H3 against its host statement: a kernel-reuse check, no weights.
+  if [[ "$tier" == h3-vsa ]]; then
+    gpucheck_stage h3-vsa 1800 --keep-going --mode fast h3 vsa
+    log "h3-vsa done"
+    return 0
+  fi
+  # Generation, end to end, by our binary alone: prompt in, mp4 with an audio
+  # track out. FV_PROMPT, FV_SECONDS (H3) and FV_SEED choose the clip.
+  if [[ "$tier" == h3-gen || "$tier" == ltx2-gen ]]; then
+    local prompt="${FV_PROMPT:-A man in his thirties talking to the camera in a bright living room, medium close-up, natural expressions and hand gestures, soft window light. He says: <d>Hello, this was generated entirely in Rust.</d>}"
+    local name="${FV_CLIP_NAME:-$tier-$(date -u +%Y%m%d%H%M%S)}" clip="$OUTR/clips"
+    if [[ "$tier" == h3-gen ]]; then
+      local repo="${FV_H3_REPO:-FastVideo/FastVideo-FastH3-8-Step-V2}" wdir="$WORK/weights/h3"
+      # Qwen3-VL shards 12-14 hold layers past the tap, the final norm, the LM
+      # head and the vision tower: never read, so never fetched.
+      remote_run fetch-h3 120 fetch "$repo" "$wdir" "tokenizer/*" "text_encoder/*.json" \
+        "text_encoder/model-0000[1-9]-of-00014.safetensors" "text_encoder/model-0001[01]-of-00014.safetensors" \
+        "transformer/*" "vae/*" "audio_vae/*"
+      remote_run wait-h3 7200 wait-weights "$wdir" 7200 text_encoder transformer vae audio_vae
+      gpucheck_stage "gen-$name" 7200 --mode fast h3 gen --weights "$wdir" --prompt "$prompt" \
+        --seconds "${FV_SECONDS:-5}" --seed "${FV_SEED:-1024}" --clip-dir "$clip/$name/frames" \
+        --adaln-cache "$WORK/h3-adaln.cache"
+    else
+      local repo="${FV_LTX2_BASE_REPO:-Lightricks/LTX-2}" wdir="$WORK/weights/ltx2"
+      remote_run fetch-ltx2 120 fetch "$repo" "$wdir" "tokenizer/*" "text_encoder/model-*" "text_encoder/*.json" \
+        "vae/*" "audio_vae/*" "vocoder/*" "ltx-2-19b-distilled.safetensors"
+      remote_run wait-ltx2 7200 wait-weights "$wdir" 7200 text_encoder vae audio_vae vocoder
+      gpucheck_stage "gen-$name" 7200 --mode fast ltx2 gen --weights "$wdir" \
+        --dit "$wdir/ltx-2-19b-distilled.safetensors" --prompt "$prompt" --seed "${FV_SEED:-10}" \
+        --clip "$clip/$name/frames"
+    fi
+    log "GEN done: $name"
+    return 0
+  fi
   # DiT milestone of the H3 port: one dense forward on the oracle's packed
   # input (synthetic text: the text encoder is judged by h3-text, and leaving it
   # out keeps this tier to one 70 GB download). Intermediate hooks localize a miss.
@@ -605,9 +653,19 @@ cmd_run() {
     fv_rsync_to "$HOST" "$PORT" "$RUN_DIR/prompt.json" "$OUTR/prompt.json" >/dev/null
     remote_run oracle-venv 1800 oracle-venv "${FV_TORCH_BACKEND:-cu130}"
     remote_run wait-h3 5400 wait-weights "$wdir" 5400 transformer
-    remote_run oracle-h3 5400 model-oracle h3 --weights "$wdir" --prompts "$OUTR/prompt.json" --stages dit \
-      --out "$odir/oracle.safetensors" --meta "$odir/oracle.json"
-    gpucheck_stage h3-dit 7200 --keep-going --mode fast h3 dit --weights "$wdir" --oracle "$odir/oracle.safetensors"
+    # FV_REUSE_ORACLE=1 on a reused box: the reference is minutes of a 66 GB
+    # model and does not change when only our binary did.
+    if [[ "${FV_REUSE_ORACLE:-0}" == 1 ]] && fv_ssh "$HOST" "$PORT" "test -s $odir/oracle.safetensors && grep -q loop_video $odir/oracle.json" 2>/dev/null; then
+      log "reusing the oracle dump already on the box"
+    else
+      remote_run oracle-h3 7200 model-oracle h3 --weights "$wdir" --prompts "$OUTR/prompt.json" --stages dit,loop \
+        --out "$odir/oracle.safetensors" --meta "$odir/oracle.json"
+    fi
+    STAGE_OPTIONAL=1 gpucheck_stage h3-dit 7200 --keep-going --mode fast h3 dit --weights "$wdir" --oracle "$odir/oracle.safetensors" || true
+    # The dense 8-rung ladder on the oracle's text and noise. Flash SDPA: a 38k
+    # token dense forward is ~316 chunked cuBLAS passes per block otherwise.
+    FV_STAGE_ENV="${FV_STAGE_ENV:-} FASTVIDEO_SDPA=flash" gpucheck_stage h3-loop 10800 --keep-going --mode fast h3 loop \
+      --weights "$wdir" --oracle "$odir/oracle.safetensors"
     log "h3-dit done"
     return 0
   fi
@@ -619,14 +677,15 @@ cmd_run() {
   if [[ "$tier" == ltx2-dit ]]; then
     local repo="${FV_LTX2_REPO:-rootonchair/LTX-2-19b-distilled}" wdir="$WORK/weights/ltx2" odir="$OUTR/ltx2"
     local single_repo="${FV_LTX2_SINGLE_REPO:-Lightricks/LTX-2}" sdir="$WORK/weights/ltx2-single"
-    remote_run fetch-ltx2 120 fetch "$repo" "$wdir" "transformer/*" "connectors/*" "text_encoder/model-*" "text_encoder/*.json" "tokenizer/*"
+    remote_run fetch-ltx2 120 fetch "$repo" "$wdir" "transformer/*" "connectors/*" "text_encoder/model-*" "text_encoder/*.json" "tokenizer/*" \
+      "vae/*" "audio_vae/*" "vocoder/*"
     remote_run fetch-ltx2-single 120 fetch "$single_repo" "$sdir" "ltx-2-19b-distilled.safetensors"
     local prompt="${FV_PROMPT:-$(jq -r '.prompts[0].prompt' "$FV_ROOT/scripts/gpu/prompts.json")}"
     jq -n --arg p "$prompt" '{negative: "", prompts: [{name: "oracle", prompt: $p}]}' >"$RUN_DIR/prompt.json"
     fv_rsync_to "$HOST" "$PORT" "$RUN_DIR/prompt.json" "$OUTR/prompt.json" >/dev/null
     remote_run oracle-venv 1800 oracle-venv "${FV_TORCH_BACKEND:-cu130}"
     remote_run wait-ltx2 5400 wait-weights "$wdir" 5400 transformer connectors text_encoder
-    remote_run oracle-ltx2 5400 model-oracle ltx2 --weights "$wdir" --prompts "$OUTR/prompt.json" --skip vae,audio \
+    remote_run oracle-ltx2 7200 model-oracle ltx2 --weights "$wdir" --prompts "$OUTR/prompt.json" --skip vae,audio --sample \
       --out "$odir/oracle.safetensors" --meta "$odir/oracle.json"
     # Tables first: no weights, seconds, and a layout bug is named by table.
     STAGE_OPTIONAL=1 gpucheck_stage ltx2-rope 600 --keep-going --mode fast ltx2 dit --rope-only \
@@ -634,8 +693,12 @@ cmd_run() {
     STAGE_OPTIONAL=1 gpucheck_stage ltx2-dit-converted 5400 --keep-going --mode fast ltx2 dit \
       --dit "$wdir" --oracle "$odir/oracle.safetensors" || true
     remote_run wait-ltx2-single 5400 wait-weights "$sdir" 5400
-    gpucheck_stage ltx2-dit-single 5400 --keep-going --mode fast ltx2 dit \
-      --dit "$sdir/ltx-2-19b-distilled.safetensors" --oracle "$odir/oracle.safetensors"
+    STAGE_OPTIONAL=1 gpucheck_stage ltx2-dit-single 5400 --keep-going --mode fast ltx2 dit \
+      --dit "$sdir/ltx-2-19b-distilled.safetensors" --oracle "$odir/oracle.safetensors" || true
+    # The 8-step trajectory on the oracle's noise, then both decoders at
+    # production size on the oracle's and on our own final latents.
+    gpucheck_stage ltx2-loop 7200 --keep-going --mode fast ltx2 loop \
+      --dit "$sdir/ltx-2-19b-distilled.safetensors" --oracle "$odir/oracle.safetensors" --weights "$wdir"
     log "ltx2-dit done"
     return 0
   fi
