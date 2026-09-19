@@ -692,6 +692,10 @@ cmd_run() {
           --family "$family" --oracle "$odir/llm.safetensors" --device cuda || true
         if [[ "$model" == h3 ]]; then
           gpucheck_stage h3-text 3600 --keep-going --mode fast h3 text --weights "$wdir" --oracle "$orc" --meta "$odir/oracle.json"
+          # The same gates through a resident weight-only-FP8 encoder, plus FP8
+          # against our own native encoder (quantization error on its own).
+          STAGE_OPTIONAL=1 gpucheck_stage h3-text-fp8 3600 --keep-going --mode fast h3 text --weights "$wdir" \
+            --oracle "$orc" --meta "$odir/oracle.json" --precision fp8 || true
         else
           # Exact mode: Gemma streams a layer at a time and the connectors are
           # 5.8 GB in f32, so nothing here needs bf16 to fit.
@@ -752,17 +756,48 @@ cmd_run() {
         "text_encoder/model-0000[1-9]-of-00014.safetensors" "text_encoder/model-0001[01]-of-00014.safetensors" \
         "transformer/*" "vae/*" "audio_vae/*"
       remote_run wait-h3 7200 wait-weights "$wdir" 7200 text_encoder transformer vae audio_vae
-      gpucheck_stage "gen-$name" 7200 --mode fast h3 gen --weights "$wdir" --prompt "$prompt" \
-        --seconds "${FV_SECONDS:-5}" --seed "${FV_SEED:-1024}" --clip-dir "$clip/$name/frames" \
-        --adaln-cache "$WORK/h3-adaln.cache"
+      local h3gen=(--mode fast h3 gen --weights "$wdir" --prompt "$prompt" --seconds "${FV_SECONDS:-5}"
+        --seed "${FV_SEED:-1024}" --adaln-cache "$WORK/h3-adaln.cache")
+      if [[ "${FV_TEXT_PLAN:-0}" == 1 ]]; then
+        # What text conditioning costs by each route, same prompt and seed:
+        # streamed (layers prefetched through pinned memory), resident FP8 in a
+        # warm process with its drift against the streamed conditioning, and a
+        # conditioning-cache hit.
+        local tcache="$WORK/h3-text-cache"
+        gpucheck_stage "gen-$name-streamed" 7200 "${h3gen[@]}" --clip-dir "$clip/$name-streamed/frames" \
+          --text-encoder streamed --no-text-cache
+        STAGE_OPTIONAL=1 gpucheck_stage "gen-$name-resident" 7200 "${h3gen[@]}" --clip-dir "$clip/$name-resident/frames" \
+          --text-encoder auto --compare-text-encoders --warm --text-cache "$tcache" || true
+        STAGE_OPTIONAL=1 gpucheck_stage "gen-$name-cached" 7200 "${h3gen[@]}" --clip-dir "$clip/$name-cached/frames" \
+          --text-encoder auto --text-cache "$tcache" || true
+      else
+        gpucheck_stage "gen-$name" 7200 "${h3gen[@]}" --clip-dir "$clip/$name/frames"
+      fi
     else
       local repo="${FV_LTX2_BASE_REPO:-Lightricks/LTX-2}" wdir="$WORK/weights/ltx2"
       remote_run fetch-ltx2 120 fetch "$repo" "$wdir" "tokenizer/*" "text_encoder/model-*" "text_encoder/*.json" \
         "vae/*" "audio_vae/*" "vocoder/*" "ltx-2-19b-distilled.safetensors"
-      remote_run wait-ltx2 7200 wait-weights "$wdir" 7200 text_encoder vae audio_vae vocoder
-      gpucheck_stage "gen-$name" 7200 --mode fast ltx2 gen --weights "$wdir" \
-        --dit "$wdir/ltx-2-19b-distilled.safetensors" --prompt "$prompt" --seed "${FV_SEED:-10}" \
-        --clip "$clip/$name/frames"
+      local ltxgen=(--mode fast ltx2 gen --weights "$wdir" --dit "$wdir/ltx-2-19b-distilled.safetensors"
+        --prompt "$prompt" --seed "${FV_SEED:-10}")
+      if [[ "${FV_TEXT_PLAN:-0}" == 1 ]]; then
+        # The slim checkpoint is CPU work: it runs as soon as the text encoder has
+        # landed, while the 43 GB DiT file is still downloading.
+        local slim="$WORK/ltx2-slim" tcache="$WORK/ltx2-text-cache"
+        remote_run wait-ltx2-text 7200 wait-weights "$wdir" 7200 text_encoder
+        gpucheck_stage ltx2-slim-text 3600 --mode fast ltx2 slim-text --weights "$wdir" --slim "$slim"
+        remote_run wait-ltx2 7200 wait-weights "$wdir" 7200 text_encoder vae audio_vae vocoder
+        gpucheck_stage "gen-$name-streamed" 7200 "${ltxgen[@]}" --clip "$clip/$name-streamed/frames" \
+          --text streamed --no-text-cache
+        STAGE_OPTIONAL=1 gpucheck_stage "gen-$name-streamed-slim" 7200 "${ltxgen[@]}" --clip "$clip/$name-streamed-slim/frames" \
+          --text streamed --no-text-cache --text-weights "$slim" || true
+        STAGE_OPTIONAL=1 gpucheck_stage "gen-$name-resident" 7200 "${ltxgen[@]}" --clip "$clip/$name-resident/frames" \
+          --text resident --text-weights "$slim" --warm --text-cache "$tcache" || true
+        STAGE_OPTIONAL=1 gpucheck_stage "gen-$name-cached" 7200 "${ltxgen[@]}" --clip "$clip/$name-cached/frames" \
+          --text resident --text-weights "$slim" --text-cache "$tcache" || true
+      else
+        remote_run wait-ltx2 7200 wait-weights "$wdir" 7200 text_encoder vae audio_vae vocoder
+        gpucheck_stage "gen-$name" 7200 "${ltxgen[@]}" --clip "$clip/$name/frames"
+      fi
     fi
     log "GEN done: $name"
     return 0
