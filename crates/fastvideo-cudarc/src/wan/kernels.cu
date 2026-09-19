@@ -1384,7 +1384,9 @@ extern "C" __global__ void fp8_row_scales(const float* w, float* scales, long co
     }
     if (tid == 0) {
         float a = fp8_row_sm[0];
-        scales[row] = (a > 0.0f && isfinite(a)) ? a / 448.0f : 1.0f;
+        // A multiply by the rounded reciprocal, spelled out: a compiler that may turn
+        // `a / 448` into one (fast math) then cannot disagree with the host by an ulp.
+        scales[row] = (a > 0.0f && isfinite(a)) ? a * 0.002232142857142857f : 1.0f;
     }
 }
 extern "C" __global__ void fp8_rows_quantize(const float* w, const float* scales, unsigned char* q, long cols, long n) {

@@ -986,7 +986,8 @@ pub mod host {
             .into_par_iter()
             .map(|r| {
                 let amax = w[r * cols..(r + 1) * cols].iter().fold(0.0f32, |a, v| if v.abs() <= a { a } else { v.abs() });
-                if amax > 0.0 && amax.is_finite() { amax / 448.0 } else { 1.0 }
+                // `amax * (1/448)`, as the kernel: see `fp8_row_scales`.
+                if amax > 0.0 && amax.is_finite() { amax * (1.0f32 / 448.0) } else { 1.0 }
             })
             .collect();
         let q = w.par_iter().enumerate().map(|(i, &v)| fp8::f32_to_e4m3(v * (1.0 / scales[i / cols]))).collect();

@@ -566,7 +566,10 @@ pub fn run(report: &mut Report, lim: Limits, seed: u64) -> StageResult<()> {
             // stream) while layer i computes. Same bits as the plain path, for
             // a stored-bf16 and a stored-f32 checkpoint.
             let dir = std::env::temp_dir().join(format!("fv-gpucheck-prefetch-{}", std::process::id()));
-            for stored in [true, false] {
+            // Prefetching needs bf16 linears, which exact mode turns off: the
+            // fast-mode kernels stage is where this runs.
+            let stored_kinds: &[bool] = if fastvideo_cudarc::wan::nn::bf16_linears_active() { &[true, false] } else { &[] };
+            for &stored in stored_kinds {
                 let r = fastvideo_cudarc::llm::prefetch_self_check(&dir, stored)?;
                 c.report.check(
                     &format!("llm_prefetch_equals_streamed_{}", r.stored),
