@@ -260,24 +260,26 @@ pub enum FineKernel {
 /// `FASTVIDEO_VSA_KERNEL=auto|gather|fused|mma`. `FASTVIDEO_VSA_FUSED=1` is
 /// the old spelling of `fused`.
 ///
-/// `auto` is the gather path until the tensor-core kernel has passed the
-/// kernels tier on hardware. Its first run selected `mma` by default on a
-/// 5090, where a missing arch mapping had compiled the kernel body out, and
-/// the "gather" baseline checks silently ran that stub too. A default may
-/// only point at a kernel that has been verified; flipping this is the commit
-/// that records the verification.
+/// `auto` picks by hardware: the tensor-core kernel wherever `mma.sync` bf16
+/// exists (sm80+) at Wan's geometry, the gather path otherwise. It became the
+/// default in the commit that recorded its verification — kernels tier on an
+/// RTX 5090, rel_l2 0.0029/0.0031 against the host reference, 2.98x / 2.85x /
+/// 5.42x faster than the gather path at 1,456 / 4,368 / 13,104 tokens. Its
+/// first run had been selected by default *before* verification, on a build
+/// where a missing arch mapping compiled the body out; a default may only
+/// point at a verified kernel, which is why the flip is its own commit.
 #[cfg(feature = "cuda")]
 fn fine_kernel(dim: usize, tile_elems: usize) -> FineKernel {
     use super::envflag::{bool_flag, string_flag};
     let pick = string_flag("FASTVIDEO_VSA_KERNEL", "auto");
     let sm = super::device::global_device().map(|d| d.sm_major).unwrap_or(0);
     let mma_ok = sm >= 8 && dim == 128 && tile_elems == TILE_ELEMS;
-    let _ = mma_ok; // becomes the `auto` condition once the kernel is verified
     let chosen = match pick.as_str() {
         "gather" => FineKernel::Gather,
         "fused" => FineKernel::FusedScalar,
         "mma" => FineKernel::Mma,
         _ if bool_flag("FASTVIDEO_VSA_FUSED", false) => FineKernel::FusedScalar,
+        _ if mma_ok => FineKernel::Mma,
         _ => FineKernel::Gather,
     };
     // An explicit ask for a kernel the hardware cannot run is an error at the
