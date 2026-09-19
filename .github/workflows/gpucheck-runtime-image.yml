@@ -6,7 +6,7 @@ name: gpucheck-runtime-image
 on:
   workflow_dispatch:
   push:
-    branches: [main]
+    branches: ["**"]
     paths:
       - "crates/**"
       - "Cargo.toml"
@@ -58,10 +58,13 @@ jobs:
           push: true
           build-args: |
             BUILD_ID=${{ steps.meta.outputs.build_id }}
+          # Every branch publishes its build-id tag, which is what validate.sh
+          # looks up, so a feature branch's boxes boot with the binary baked in
+          # instead of uploading it. Only main moves :latest.
           tags: |
             ${{ steps.meta.outputs.image }}:build-${{ steps.meta.outputs.build_id }}
             ${{ steps.meta.outputs.image }}:sha-${{ steps.meta.outputs.short_sha }}
-            ${{ steps.meta.outputs.image }}:latest
+            ${{ github.ref == 'refs/heads/main' && format('{0}:latest', steps.meta.outputs.image) || '' }}
           labels: |
             org.opencontainers.image.revision=${{ github.sha }}
             dev.fastvideo.build-id=${{ steps.meta.outputs.build_id }}
@@ -74,7 +77,17 @@ jobs:
           docker pull "$img"
           docker run --rm "$img" bash -euo pipefail -c '
             test "$(cat target/release/fv-gpucheck.build-id)" = "${{ steps.meta.outputs.build_id }}"
-            python3 -c "import ctypes; [ctypes.CDLL(l) for l in (\"libnvrtc.so.12\", \"libcublasLt.so.12\", \"libcublas.so.12\", \"libcudnn.so.9\")]"
-            ./target/release/fv-gpucheck --out /tmp/out nvrtc'
+            python3 -c "import ctypes; [ctypes.CDLL(l) for l in (\"libnvrtc.so.13\", \"libcublasLt.so.13\", \"libcublas.so.13\", \"libcudnn.so.9\")]"
+            ./target/release/fv-gpucheck --out /tmp/out nvrtc
+            grep -q aot_sms /tmp/out/nvrtc.json && echo "embedded cubins present"'
           docker image inspect "$img" --format 'size={{.Size}}'
           echo "::notice title=GPU runtime image::$img"
+          # The binary alone, for a box (or a laptop) that wants it without the image.
+          mkdir -p dist && cid=$(docker create "$img") \
+            && docker cp "$cid:/opt/fastvideo-rs/target/release/fv-gpucheck" dist/ \
+            && docker cp "$cid:/opt/fastvideo-rs/target/release/fv-gpucheck.build-id" dist/ \
+            && docker rm "$cid" >/dev/null
+      - uses: actions/upload-artifact@v4
+        with:
+          name: fv-gpucheck-${{ steps.meta.outputs.build_id }}
+          path: dist/

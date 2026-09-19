@@ -2,15 +2,16 @@
 # fv-gpucheck images. Built locally by scripts/gpu/docker.sh and in CI by
 # .github/workflows/gpucheck-runtime-image.yml; see scripts/gpu/README.md.
 #
-# builder  Ubuntu 22.04 + Rust + NVRTC 12.4. Builds `fv-gpucheck --features cuda`
-#          without a CUDA toolkit (cudarc loads CUDA libraries at run time) and
-#          runs everything that needs no GPU: unit tests, the NVRTC compile
-#          gate, CPU-path reference dumps.
+# builder  Ubuntu 22.04 + Rust + CUDA 13.0 nvcc/NVRTC. Builds `fv-gpucheck
+#          --features cuda` with per-SM cubins compiled ahead of time by
+#          build.rs (cudarc still loads the CUDA *libraries* at run time), and
+#          runs everything that needs no GPU: unit tests, the compile gates,
+#          CPU-path reference dumps.
 # build    Compiles the release binary from the repo (CI path).
 # binary   The binary + build id. Locally overridden with
 #          `--build-context binary=artifacts/gpucheck/dist` to reuse `docker.sh dist`.
 # runtime  What a GPU box runs (ghcr.io/zaitrarrio/fastvideo-rs-runtime): Ubuntu
-#          22.04 + only the CUDA libraries cudarc loads (pinned NVIDIA wheels) +
+#          22.04 + only the CUDA 13.0 libraries cudarc loads (NVIDIA apt) +
 #          rsync/ffmpeg/HF downloader + the binary and scripts. No PyTorch, no
 #          toolkit: ~1.5GB compressed instead of ~9GB, so hosts boot quickly.
 
@@ -22,7 +23,7 @@ RUN apt-get update \
  && wget -q https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2204/x86_64/cuda-keyring_1.1-1_all.deb \
  && dpkg -i cuda-keyring_1.1-1_all.deb && rm cuda-keyring_1.1-1_all.deb \
  && apt-get update \
- && apt-get install -y --no-install-recommends cuda-nvrtc-12-4 \
+ && apt-get install -y --no-install-recommends cuda-nvcc-13-0 cuda-nvrtc-13-0 cuda-nvrtc-dev-13-0 \
  && rm -rf /var/lib/apt/lists/*
 ENV RUSTUP_HOME=/usr/local/rustup \
     CARGO_HOME=/usr/local/cargo \
@@ -32,8 +33,10 @@ ENV RUSTUP_HOME=/usr/local/rustup \
 RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
       | sh -s -- -y --profile minimal --default-toolchain stable --component rustfmt,clippy \
  && rustc --version
-ENV CUDARC_CUDA_VERSION=12040 \
-    LD_LIBRARY_PATH=/usr/local/cuda-12.4/lib64 \
+ENV CUDARC_CUDA_VERSION=13000 \
+    LD_LIBRARY_PATH=/usr/local/cuda-13.0/lib64 \
+    PATH=/usr/local/cuda-13.0/bin:/usr/local/cargo/bin:$PATH \
+    NVCC=/usr/local/cuda-13.0/bin/nvcc \
     CARGO_TARGET_DIR=/target \
     CARGO_PROFILE_RELEASE_LTO=off \
     CARGO_PROFILE_RELEASE_CODEGEN_UNITS=16 \
@@ -55,23 +58,20 @@ COPY --from=build /out/ /
 
 FROM ubuntu:22.04 AS runtime
 ARG DEBIAN_FRONTEND=noninteractive
-# Pinned to what the GPU ladder was validated against. cuDNN must be >= the
-# version whose symbols cudarc 0.17 binds (the 9.1 in PyTorch/CUDA images is too old).
-ARG NVRTC_VERSION=12.4.127
-# cuBLAS 12.9: 12.4 predates Blackwell and runs generic FP32 kernels there
-# (TF32 / bf16 compute ignored, FP32 2.6x slower; see `validate.sh run mathprobe`).
-ARG CUBLAS_VERSION=12.9.1.4
-ARG CUDNN_VERSION=9.26.0.51
+# CUDA 13.0 runtime libraries from NVIDIA's apt repo (the PyPI `-cu13` wheels
+# are placeholders). 13.0 needs a >= 580 driver; validate.sh's offer filter
+# asks Vast for cuda_vers>=13.0 so an older box is never rented. cuDNN must be
+# >= the version whose symbols cudarc 0.17 binds.
 RUN apt-get update \
  && apt-get install -y --no-install-recommends \
-      python3 python3-pip rsync ffmpeg openssh-server ca-certificates curl \
+      python3 python3-pip rsync ffmpeg openssh-server ca-certificates curl wget \
+ && wget -q https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2204/x86_64/cuda-keyring_1.1-1_all.deb \
+ && dpkg -i cuda-keyring_1.1-1_all.deb && rm cuda-keyring_1.1-1_all.deb \
+ && apt-get update \
+ && apt-get install -y --no-install-recommends cuda-nvrtc-13-0 libcublas-13-0 libcudnn9-cuda-13 \
  && rm -rf /var/lib/apt/lists/* \
- && pip3 install --no-cache-dir --no-deps --target /opt/nvidia-libs \
-      "nvidia-cuda-nvrtc-cu12==${NVRTC_VERSION}" \
-      "nvidia-cublas-cu12==${CUBLAS_VERSION}" \
-      "nvidia-cudnn-cu12==${CUDNN_VERSION}" \
  && pip3 install --no-cache-dir huggingface_hub hf_transfer \
- && ls -d /opt/nvidia-libs/nvidia/*/lib > /etc/ld.so.conf.d/fastvideo-nvidia.conf \
+ && echo /usr/local/cuda-13.0/lib64 > /etc/ld.so.conf.d/fastvideo-nvidia.conf \
  && ldconfig \
  && ldconfig -p | grep -E 'libnvrtc\.so|libcublasLt\.so|libcublas\.so|libcudnn\.so' \
  && mkdir -p /run/sshd

@@ -17,7 +17,7 @@ vars:
   GPU: '{{.GPU | default ""}}'
   FRAMES: '{{.FRAMES | default "129"}}'
   STEPS: '{{.STEPS | default "3"}}'
-  CUDA_VER: '{{.CUDA_VER | default "12040"}}'
+  CUDA_VER: '{{.CUDA_VER | default "13000"}}'
 
 env:
   # Type-checking the cuda feature needs a version to target; it never runs here.
@@ -43,6 +43,10 @@ tasks:
     desc: Release binary for rented boxes (Docker, linked for the runtime image)
     deps: [docker:up]
     cmds: ['bash scripts/gpu/docker.sh dist']
+
+  build:remote:
+    desc: Release binary with per-SM cubins, built on a cheap rented Linux box (~$0.03)
+    cmds: ['bash scripts/gpu/build-remote.sh']
 
   image:
     desc: Build the CUDA runtime image (published to GHCR by CI)

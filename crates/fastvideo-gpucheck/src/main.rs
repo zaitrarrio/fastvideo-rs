@@ -329,6 +329,9 @@ fn run(cli: &Cli, report: &mut Report) -> StageResult<()> {
     match &cli.cmd {
         #[cfg(feature = "cuda")]
         Cmd::Nvrtc { sm } => {
+            // Which SMs this binary carries real SASS for. Empty means it was
+            // built without nvcc and will NVRTC-compile on every box.
+            report.set("aot_sms", fastvideo_cudarc::wan::kernels::aot_sms());
             let archs = sm
                 .split(',')
                 .map(|s| {

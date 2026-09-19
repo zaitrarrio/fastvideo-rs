@@ -26,41 +26,56 @@ pub fn is_hopper(sm_major: i32) -> bool {
 }
 
 /// NVRTC arch string for the live device, if we should pin it.
-/// NVRTC target for a device. `None` would compile with no `-arch` at all,
-/// which NVRTC treats as compute_52 — `__CUDA_ARCH__ = 520`, every
-/// `#if __CUDA_ARCH__ >= 800` body compiled out, and the PTX then JITs onto
-/// whatever the device is with no error. That is exactly what happened on
-/// Blackwell before this mapped it: the tensor-core VSA kernel ran as a
-/// stub and reported garbage.
+/// NVRTC targets for a device, native first, then what an older NVRTC can
+/// still take. `nvrtc_arch` is the first entry.
 ///
-/// libnvrtc 12.4, which the runtime image ships, tops out at compute_90; PTX
-/// is forward-compatible, so sm100 and sm120 JIT from it correctly and keep
-/// every sm80+ instruction (mma.sync, ldmatrix, cp.async).
-pub fn nvrtc_arch(sm_major: i32, sm_minor: i32) -> Option<&'static str> {
+/// An empty list would mean compiling with no `-arch` at all, which NVRTC
+/// treats as compute_52: `__CUDA_ARCH__ = 520`, every `#if __CUDA_ARCH__ >= 800`
+/// body compiled out, and PTX that JITs onto the device with no error. That is
+/// exactly what happened on Blackwell before sm12 was mapped; the tensor-core
+/// VSA kernel ran as a stub and reported garbage.
+///
+/// NVRTC 13 knows compute_100/120 natively. A box still on libnvrtc 12.x
+/// rejects those, and the compile falls back to compute_90 — PTX is
+/// forward-compatible, so sm100/sm120 JIT from it with every sm80+ instruction
+/// intact, just without arch-specific codegen. Embedded cubins from build.rs
+/// bypass all of this on a device that has one.
+pub fn nvrtc_arches(sm_major: i32, sm_minor: i32) -> &'static [&'static str] {
     match (sm_major, sm_minor) {
-        (m, _) if m >= 9 => Some("compute_90"),
-        (8, 9) => Some("compute_89"),
-        (8, _) => Some("compute_80"),
-        (7, 5) => Some("compute_75"),
-        _ => None,
+        (12, _) => &["compute_120", "compute_90"],
+        (10, _) => &["compute_100", "compute_90"],
+        (9, _) => &["compute_90"],
+        (8, 9) => &["compute_89"],
+        (8, _) => &["compute_80"],
+        (7, 5) => &["compute_75"],
+        // Anything newer than we know about takes the forward-compatible
+        // Hopper PTX rather than falling through to no arch.
+        (m, _) if m > 12 => &["compute_120", "compute_90"],
+        _ => &[],
     }
+}
+
+pub fn nvrtc_arch(sm_major: i32, sm_minor: i32) -> Option<&'static str> {
+    nvrtc_arches(sm_major, sm_minor).first().copied()
 }
 
 #[cfg(test)]
 mod arch_tests {
-    use super::nvrtc_arch;
+    use super::{nvrtc_arch, nvrtc_arches};
 
-    /// Blackwell must not fall through to "no arch": that silently compiles
+    /// No supported device may map to "no arch": that silently compiles
     /// every guarded kernel body out. Pinned so the mapping cannot regress.
     #[test]
-    fn hopper_and_later_target_compute_90() {
-        assert_eq!(nvrtc_arch(9, 0), Some("compute_90"));
-        assert_eq!(nvrtc_arch(10, 0), Some("compute_90"));
-        assert_eq!(nvrtc_arch(12, 0), Some("compute_90"));
-        assert_eq!(nvrtc_arch(12, 1), Some("compute_90"));
+    fn every_supported_sm_has_a_native_target_and_a_fallback() {
+        assert_eq!(nvrtc_arches(12, 0), &["compute_120", "compute_90"]);
+        assert_eq!(nvrtc_arches(12, 1), &["compute_120", "compute_90"]);
+        assert_eq!(nvrtc_arches(10, 0), &["compute_100", "compute_90"]);
+        assert_eq!(nvrtc_arches(9, 0), &["compute_90"]);
         assert_eq!(nvrtc_arch(8, 9), Some("compute_89"));
         assert_eq!(nvrtc_arch(8, 6), Some("compute_80"));
         assert_eq!(nvrtc_arch(7, 5), Some("compute_75"));
+        assert_eq!(nvrtc_arch(13, 0), Some("compute_120"), "unknown future SM must not be None");
+        assert_eq!(nvrtc_arch(7, 0), None, "Volta is genuinely unsupported");
     }
 }
 

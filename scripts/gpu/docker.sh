@@ -6,7 +6,7 @@
 #   docker.sh nvrtc            compile every NVRTC kernel for sm 7.5–9.0 (no GPU)
 #   docker.sh dist             release binary → artifacts/gpucheck/dist/ (shipped to rented boxes)
 #   docker.sh refs [--parity]  CPU-path reference dumps → artifacts/gpucheck/refs/ (saves billed GPU idle time)
-#   docker.sh image            runtime image (CUDA 12.4 runtime + binary) for NVIDIA Linux hosts
+#   docker.sh image            runtime image (CUDA 13.0 runtime + binary) for NVIDIA Linux hosts
 #   docker.sh gpu <args...>    run fv-gpucheck on a local NVIDIA GPU: docker run --gpus all
 #
 # Everything is keyed by a build id (hash of the Rust sources), so stale
@@ -15,7 +15,7 @@ set -euo pipefail
 # shellcheck source=scripts/gpu/lib.sh
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 
-BUILDER_IMAGE="${FV_BUILDER_IMAGE:-fastvideo-rs/gpucheck-builder:cu124}"
+BUILDER_IMAGE="${FV_BUILDER_IMAGE:-fastvideo-rs/gpucheck-builder:cu130}"
 RUNTIME_IMAGE="${FV_RUNTIME_IMAGE:-fastvideo-rs-runtime:local}"
 DOCKERFILE="$FV_ROOT/docker/gpucheck.Dockerfile"
 DIST="$FV_ROOT/artifacts/gpucheck/dist"
@@ -72,7 +72,7 @@ cmd_test() {
 }
 
 cmd_nvrtc() {
-  log "NVRTC compile gate in $BUILDER_IMAGE (libnvrtc 12.4, no GPU)"
+  log "NVRTC compile gate in $BUILDER_IMAGE (CUDA 13.0 nvrtc + nvcc, no GPU)"
   mkdir -p "$LOCAL_OUT"
   in_builder "$BUILD_CMD && /target/release/fv-gpucheck --out /src/artifacts/gpucheck/local nvrtc"
 }

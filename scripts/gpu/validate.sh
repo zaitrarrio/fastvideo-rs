@@ -45,7 +45,10 @@ FAST_W="$WORK/weights/fastwan21-1.3b"
 # Offer filter, $/hr ceiling, hard wall-clock cap (watchdog destroys at the cap).
 tier_query() {
   # FV_OFFER_QUERY_EXTRA narrows the search, e.g. "gpu_name=RTX_4070S".
-  local base="num_gpus=1 compute_cap>=800 cuda_vers>=12.4 reliability>0.97 rentable=true verified=true direct_port_count>=1 inet_down>=200 ${FV_OFFER_QUERY_EXTRA:-}"
+  # cuda_vers>=13.0 is the driver floor for the CUDA 13.0 runtime libraries
+  # the image ships (>= 580); there is no minor-version compatibility across
+  # a major, so a 12.8-driver box would fail at cuBLAS load.
+  local base="num_gpus=1 compute_cap>=800 cuda_vers>=13.0 reliability>0.97 rentable=true verified=true direct_port_count>=1 inet_down>=200 ${FV_OFFER_QUERY_EXTRA:-}"
   case "$1" in
     kernels) echo "$base gpu_ram>=8 disk_space>=40 cpu_ram>=16" ;;
     # cuBLAS math-mode probe: DiT linears at 8s-clip size (~2 GB of buffers).
@@ -68,12 +71,15 @@ tier_query() {
     taehv) echo "$base gpu_ram>=12 disk_space>=60 cpu_ram>=16" ;;
     # The A/B decodes the same clip both ways, so it needs the Wan weights too.
     vaeab) echo "$base gpu_ram>=24 disk_space>=100 cpu_ram>=80 inet_down>=500" ;;
-    *) die "unknown tier '$1' (mathprobe|kernels|parity|clip|compare|gen|oracle|fp8|taehv|vaeab)" ;;
+    # A build box: the GPU is irrelevant, so this asks for the cheapest thing
+    # with cores and RAM for a release cargo build plus nvcc for 7 SMs.
+    build) echo "num_gpus=1 cuda_vers>=13.0 reliability>0.97 rentable=true verified=true direct_port_count>=1 inet_down>=200 cpu_cores>=8 cpu_ram>=16 disk_space>=40 ${FV_OFFER_QUERY_EXTRA:-}" ;;
+    *) die "unknown tier '$1' (mathprobe|kernels|parity|clip|compare|gen|oracle|fp8|taehv|vaeab|build)" ;;
   esac
 }
-tier_max_dph() { case "$1" in mathprobe) echo 0.40 ;; kernels) echo 0.25 ;; parity) echo 0.40 ;; clip) echo 0.60 ;; compare) echo 0.60 ;; gen) echo 0.80 ;; oracle) echo 1.60 ;; fp8) echo 0.80 ;; taehv) echo 0.40 ;; vaeab) echo 0.80 ;; esac; }
-tier_max_minutes() { case "$1" in mathprobe) echo 30 ;; kernels) echo 40 ;; parity) echo 75 ;; clip) echo 180 ;; compare) echo 240 ;; gen) echo 180 ;; oracle) echo 150 ;; fp8) echo 90 ;; taehv) echo 60 ;; vaeab) echo 90 ;; esac; }
-tier_disk() { case "$1" in mathprobe) echo 40 ;; kernels) echo 40 ;; parity) echo 60 ;; clip) echo 100 ;; compare) echo 180 ;; gen) echo 100 ;; oracle) echo 160 ;; fp8) echo 100 ;; taehv) echo 60 ;; vaeab) echo 100 ;; esac; }
+tier_max_dph() { case "$1" in mathprobe) echo 0.40 ;; kernels) echo 0.25 ;; parity) echo 0.40 ;; clip) echo 0.60 ;; compare) echo 0.60 ;; gen) echo 0.80 ;; oracle) echo 1.60 ;; fp8) echo 0.80 ;; taehv) echo 0.40 ;; vaeab) echo 0.80 ;; build) echo 0.20 ;; esac; }
+tier_max_minutes() { case "$1" in mathprobe) echo 30 ;; kernels) echo 40 ;; parity) echo 75 ;; clip) echo 180 ;; compare) echo 240 ;; gen) echo 180 ;; oracle) echo 150 ;; fp8) echo 90 ;; taehv) echo 60 ;; vaeab) echo 90 ;; build) echo 45 ;; esac; }
+tier_disk() { case "$1" in mathprobe) echo 40 ;; kernels) echo 40 ;; parity) echo 60 ;; clip) echo 100 ;; compare) echo 180 ;; gen) echo 100 ;; oracle) echo 160 ;; fp8) echo 100 ;; taehv) echo 60 ;; vaeab) echo 100 ;; build) echo 40 ;; esac; }
 
 usage() { sed -n '2,12p' "$0" | sed 's/^# \{0,1\}//'; exit 2; }
 

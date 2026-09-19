@@ -93,9 +93,9 @@ impl DeviceContext {
             GemmMath::F32
         };
         let cudnn = cudarc::cudnn::Cudnn::new(stream.clone())?;
-        let kernels = super::kernels::KernelFns::compile(&ctx, sm_major, sm_minor)?;
+        let (kernels, origin) = super::kernels::KernelFns::load_for(&ctx, sm_major, sm_minor)?;
         super::log::info(format_args!(
-            "cuda device={device_index} sm_{sm_major}{sm_minor} gemm={gemm_math:?} resident={} sdpa={} \
+            "cuda device={device_index} sm_{sm_major}{sm_minor} kernels={origin:?} gemm={gemm_math:?} resident={} sdpa={} \
              sdpa_chunk={}",
             super::resident::residency_enabled(),
             super::nn::sdpa_backend(),
