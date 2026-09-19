@@ -137,7 +137,7 @@ def main() -> int:
     os.makedirs(args.out, exist_ok=True)
     torch.set_grad_enabled(False)
 
-    def randomise(model: "torch.nn.Module", seed: int) -> None:
+    def randomise(model: "torch.nn.Module", seed: int, weight_norm_gain: float = 1.0) -> None:
         # Default inits leave zero biases, zero LayerScales and unit norms, which
         # would hide a dropped bias, a skipped branch or a swapped table row.
         g = torch.Generator().manual_seed(seed)
@@ -145,8 +145,12 @@ def main() -> int:
             if p.ndim <= 1 or p.shape[1:].numel() == 1:
                 noise = torch.randn(p.shape, generator=g) * 0.3
                 # Norm weights, LayerScales and weight-norm gains sit around one.
-                centred = "norm" in name or name.rsplit(".", 1)[-1] in ("scale1", "scale2", "weight_g")
-                p.copy_(noise + (1.0 if centred else 0.0))
+                leaf = name.rsplit(".", 1)[-1]
+                if leaf == "weight_g":
+                    # A weight-normed row has norm |g| whatever `weight_v` is, so g IS the gain.
+                    p.copy_(noise * 0.3 + weight_norm_gain)
+                else:
+                    p.copy_(noise + (1.0 if "norm" in name or leaf in ("scale1", "scale2") else 0.0))
             else:
                 p.copy_(torch.randn(p.shape, generator=g) * (1.2 / p.shape[1:].numel() ** 0.5))
 
@@ -281,7 +285,10 @@ def main() -> int:
         mean = [0.05 * (i - 1) for i in range(lc)]
         std = [1.5 + 0.25 * i for i in range(lc)]
         audio = AutoencoderKLMiniMaxH3Audio(**AUDIO_VAE, latents_mean=mean, latents_std=std).eval().float()
-        randomise(audio, 31)
+        # Unit gains through 7 stages of 3 residual AMP blocks reach |x| ~ 300 and a
+        # waveform that is railed at the clamp, which tests nothing and makes
+        # sin^2(alpha x) amplify float32 rounding. Keep the stream O(1).
+        randomise(audio, 31, weight_norm_gain=0.7)
         latent = randn((2, lc, 3), 32)  # stereo = a batch of two
         dec = audio.decoder
         taps, amp = {}, {}
@@ -292,6 +299,8 @@ def main() -> int:
             hooks.append(blk.register_forward_hook(lambda _m, _i, o, r=r: amp.__setitem__(r, o.detach().clone())))
         z = latent * torch.tensor(std).view(1, -1, 1) + torch.tensor(mean).view(1, -1, 1)
         wave = audio.decode(z, return_dict=False)[0]
+        railed = float((wave.abs() >= 1.0).float().mean())
+        assert railed < 0.05 and float(wave.std()) > 0.02, f"toy waveform is railed ({railed:.2%}) or silent; retune the gains"
         for hk in hooks:
             hk.remove()
         k = dec.num_kernels
