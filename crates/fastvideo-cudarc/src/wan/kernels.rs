@@ -43,6 +43,7 @@ macro_rules! kernel_fns {
 }
 
 kernel_fns!(
+    pack_rgb_u8,
     vsa_mma_attn,
     vsa_tile_qkv,
     tanh_scaled,

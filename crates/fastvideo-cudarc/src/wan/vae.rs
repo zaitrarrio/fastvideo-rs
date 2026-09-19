@@ -891,6 +891,16 @@ impl AutoencoderKlWan {
     }
 
     pub fn decode(&self, latents: &CudaTensor) -> Result<CudaTensor> {
+        self.decode_streaming(latents, &mut |_, _| Ok(()))
+    }
+
+    /// `decode`, handing each chunk's finished frames to `sink(frame_offset,
+    /// frames)` — `[frames, 3, H, W]`, in order — while the next chunk decodes.
+    pub fn decode_streaming(
+        &self,
+        latents: &CudaTensor,
+        sink: &mut dyn FnMut(usize, &CudaTensor) -> Result<()>,
+    ) -> Result<CudaTensor> {
         let z = self.post_quant.forward(latents)?;
         let t = z.dim(2)?;
         let mut cache = FeatCache::new();
@@ -906,10 +916,18 @@ impl AutoencoderKlWan {
         // latent frame in a chunk multiplies the decoder's activations.
         let chunk = super::envflag::usize_flag("FASTVIDEO_VAE_CHUNK", 1).max(1);
         let mut i = 0usize;
+        let mut emitted = 0usize;
         while i < t {
             let n = if i == 0 { 1 } else { chunk.min(t - i) };
             cache.begin_pass();
-            frames.push(self.decoder.forward(&z.narrow(2, i, n)?, Some(&mut cache))?);
+            let piece = self.decoder.forward(&z.narrow(2, i, n)?, Some(&mut cache))?;
+            // [1, 3, f, H, W] → [f, 3, H, W] for the sink; a small copy next to
+            // the decode that produced it.
+            let (f, hh, ww) = (piece.shape[2], piece.shape[3], piece.shape[4]);
+            let by_frame = piece.reshape(vec![3, f, hh, ww])?.permute(&[1, 0, 2, 3])?;
+            sink(emitted, &by_frame)?;
+            emitted += f;
+            frames.push(piece);
             i += n;
         }
         let refs: Vec<&CudaTensor> = frames.iter().collect();

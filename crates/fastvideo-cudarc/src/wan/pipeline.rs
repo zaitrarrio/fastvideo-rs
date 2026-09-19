@@ -552,21 +552,52 @@ impl WanPipeline {
 
     /// Un-normalize latents and run the feat-cache VAE decode → `[1, 3, F, H, W]` in `[-1, 1]`.
     pub fn decode_latents(&self, latents: &CudaTensor) -> Result<CudaTensor> {
+        self.decode_latents_streaming(latents, &mut |_, _| Ok(()))
+    }
+
+    /// `decode_latents`, calling `sink(frame_offset, frames)` with each chunk
+    /// of finished frames (`[frames, 3, H, W]` in `[-1, 1]`, in order) while
+    /// the decoder is still busy with the next one. Feed a [`VideoWriter`]
+    /// from the sink and frame encoding overlaps the decode.
+    pub fn decode_latents_streaming(
+        &self,
+        latents: &CudaTensor,
+        sink: &mut dyn FnMut(usize, &CudaTensor) -> Result<()>,
+    ) -> Result<CudaTensor> {
+        // Errors from the sink are pipeline errors, not tensor errors; carry
+        // them across the decoder's own `Result` type.
+        let mut sink_err: Option<PipelineError> = None;
+        let mut tensor_sink = |offset: usize, frames: &CudaTensor| -> TensorResult<()> {
+            match sink(offset, frames) {
+                Ok(()) => Ok(()),
+                Err(e) => {
+                    let text = e.to_string();
+                    sink_err = Some(e);
+                    Err(TensorError::Message(text))
+                }
+            }
+        };
         // TAEHV takes latents in DiT space — *without* the per-channel
         // un-normalisation the Wan VAE needs. That difference is the whole
         // reason this branch sits above `scale_latents` rather than inside the
         // decoder, and the oracle stage is what established it.
-        if let Some(tae) = &self.taehv {
+        let decoded = if let Some(tae) = &self.taehv {
             let _vae = super::log::StepTimer::start("taehv.decode");
-            return Ok(tae.decode(latents)?);
-        }
-        let latents = if !self.tiny {
-            self.vae.scale_latents(latents)?
+            tae.decode_streaming(latents, &mut tensor_sink)
         } else {
-            latents.clone()
+            let latents = if !self.tiny {
+                self.vae.scale_latents(latents)?
+            } else {
+                latents.clone()
+            };
+            let _vae = super::log::StepTimer::start("vae.decode");
+            self.vae.decode_streaming(&latents, &mut tensor_sink)
         };
-        let _vae = super::log::StepTimer::start("vae.decode");
-        Ok(self.vae.decode(&latents)?)
+        match (decoded, sink_err) {
+            (_, Some(e)) => Err(e),
+            (Ok(v), None) => Ok(v),
+            (Err(e), None) => Err(e.into()),
+        }
     }
 
     pub fn transformer(&self) -> &WanTransformer3D {
@@ -891,49 +922,229 @@ fn load_rgb_frame(path: &str, height: usize, width: usize) -> Result<CudaTensor>
 
 /// Write `[1, C>=3, F, H, W]` video in `[-1, 1]` as `frame-%03d.png`.
 pub fn write_frames(video: &CudaTensor, dir: &Path) -> Result<Vec<String>> {
-    std::fs::create_dir_all(dir).map_err(|e| PipelineError::Message(e.to_string()))?;
     if video.rank() != 5 || video.shape[0] != 1 {
         return Err(PipelineError::Message(format!(
             "expected 1CTHW video, got {:?}",
             video.shape
         )));
     }
-    let (_b, c, t, h, w) = (
-        video.shape[0],
-        video.shape[1],
-        video.shape[2],
-        video.shape[3],
-        video.shape[4],
-    );
+    let (c, t, h, w) = (video.shape[1], video.shape[2], video.shape[3], video.shape[4]);
     if c < 3 {
         return Err(PipelineError::Message("video needs RGB channels".into()));
     }
-    let host = video
-        .host_cow()
-        .map_err(|e| PipelineError::Message(e.to_string()))?;
-    let mut paths = Vec::new();
-    for ti in 0..t {
-        let mut rgb = vec![0u8; h * w * 3];
-        for y in 0..h {
-            for x in 0..w {
-                for ch in 0..3 {
-                    let v = host[(((0 * c + ch) * t + ti) * h + y) * w + x];
-                    let byte = ((v + 1.0) * 127.5).clamp(0.0, 255.0) as u8;
-                    rgb[(y * w + x) * 3 + ch] = byte;
-                }
-            }
-        }
-        let img = image::RgbImage::from_raw(w as u32, h as u32, rgb)
-            .ok_or_else(|| PipelineError::Message("rgb buffer size mismatch".into()))?;
-        let path = dir.join(format!("frame-{ti:03}.png"));
-        img.save(&path)
-            .map_err(|e| PipelineError::Message(e.to_string()))?;
-        paths.push(path.to_string_lossy().into_owned());
-    }
-    Ok(paths)
+    // [1, C, T, H, W] → [T, 3, H, W], the per-frame layout the packer takes.
+    let by_frame = video
+        .reshape(vec![c, t, h, w])?
+        .narrow(0, 0, 3)?
+        .permute(&[1, 0, 2, 3])?;
+    let rgb = frames_to_rgb8(&by_frame)?;
+    let mut writer = VideoWriter::spawn(dir, 0, false)?;
+    writer.push(0, h, w, rgb)?;
+    Ok(writer.finish()?.0)
 }
 
-/// Mux `frame-%03d.png` in `dir` into `output.mp4` with ffmpeg (libx264).
+/// `[frames, 3, H, W]` in `[-1, 1]` → interleaved 8-bit RGB, `[frames, H, W, 3]`.
+///
+/// On a device tensor this is one kernel plus a 3-byte-per-pixel copy down.
+/// The host loop only runs when the tensor has no device buffer, i.e. CPU
+/// builds and tests: a GPU run never silently converts on the host.
+pub fn frames_to_rgb8(frames: &CudaTensor) -> Result<Vec<u8>> {
+    let [f, c, h, w] = frames.shape[..] else {
+        return Err(PipelineError::Message(format!(
+            "frames_to_rgb8 expects [frames, 3, H, W], got {:?}",
+            frames.shape
+        )));
+    };
+    if c != 3 {
+        return Err(PipelineError::Message(format!("frames_to_rgb8 needs 3 channels, got {c}")));
+    }
+    #[cfg(feature = "cuda")]
+    {
+        let mut on_device = frames.clone();
+        on_device.ensure_device()?;
+        if let Some(slice) = on_device.device_slice() {
+            return Ok(super::ops::pack_rgb_u8_device(slice, f, h, w, 127.5, 127.5)?);
+        }
+    }
+    let host = frames.host_cow()?;
+    let plane = h * w;
+    let mut rgb = vec![0u8; f * plane * 3];
+    for (i, px) in rgb.chunks_exact_mut(3).enumerate() {
+        let (fi, p) = (i / plane, i % plane);
+        for (ch, out) in px.iter_mut().enumerate() {
+            let v = host[(fi * 3 + ch) * plane + p];
+            *out = ((v + 1.0) * 127.5).clamp(0.0, 255.0) as u8;
+        }
+    }
+    Ok(rgb)
+}
+
+/// One chunk of packed frames on its way to disk.
+struct FrameBatch {
+    offset: usize,
+    h: usize,
+    w: usize,
+    rgb: Vec<u8>,
+}
+
+/// Writes frames as they are decoded: PNGs in parallel on a worker thread,
+/// and (when `fps > 0` and `mp4` is set) raw rgb24 straight into an ffmpeg
+/// process so the mux needs no PNG round trip. Encoding overlaps the decode
+/// of the next chunk instead of waiting for the whole video.
+pub struct VideoWriter {
+    tx: Option<std::sync::mpsc::SyncSender<FrameBatch>>,
+    worker: Option<std::thread::JoinHandle<Result<(Vec<String>, Option<String>)>>>,
+}
+
+impl VideoWriter {
+    /// `fps` and `mp4` decide whether an `output.mp4` is produced next to the
+    /// frames; ffmpeg is spawned lazily on the first batch, once the frame
+    /// size is known.
+    pub fn spawn(dir: &Path, fps: u32, mp4: bool) -> Result<Self> {
+        std::fs::create_dir_all(dir).map_err(|e| PipelineError::Message(e.to_string()))?;
+        let dir = dir.to_path_buf();
+        // Two chunks of backlog: enough that a slow PNG batch never stalls the
+        // decoder, small enough that memory stays bounded.
+        let (tx, rx) = std::sync::mpsc::sync_channel::<FrameBatch>(2);
+        let worker = std::thread::Builder::new()
+            .name("fv-video-writer".into())
+            .spawn(move || write_batches(rx, &dir, fps, mp4))
+            .map_err(|e| PipelineError::Message(e.to_string()))?;
+        Ok(Self { tx: Some(tx), worker: Some(worker) })
+    }
+
+    /// Queue `[frames, h, w, 3]` bytes starting at frame `offset`. Batches must
+    /// arrive in frame order; the mp4 is written in the order pushed.
+    pub fn push(&mut self, offset: usize, h: usize, w: usize, rgb: Vec<u8>) -> Result<()> {
+        let tx = self
+            .tx
+            .as_ref()
+            .ok_or_else(|| PipelineError::Message("video writer already finished".into()))?;
+        if tx.send(FrameBatch { offset, h, w, rgb }).is_err() {
+            // The worker is gone; its error is the one worth reporting.
+            return match self.finish() {
+                Ok(_) => Err(PipelineError::Message("video writer stopped early".into())),
+                Err(e) => Err(e),
+            };
+        }
+        Ok(())
+    }
+
+    /// Wait for every queued frame (and ffmpeg) and return the PNG paths in
+    /// frame order plus the mp4 path, if one was requested.
+    pub fn finish(&mut self) -> Result<(Vec<String>, Option<String>)> {
+        drop(self.tx.take());
+        match self.worker.take() {
+            Some(h) => h
+                .join()
+                .map_err(|_| PipelineError::Message("video writer thread panicked".into()))?,
+            None => Err(PipelineError::Message("video writer already finished".into())),
+        }
+    }
+}
+
+impl Drop for VideoWriter {
+    fn drop(&mut self) {
+        drop(self.tx.take());
+        if let Some(h) = self.worker.take() {
+            let _ = h.join();
+        }
+    }
+}
+
+fn write_batches(
+    rx: std::sync::mpsc::Receiver<FrameBatch>,
+    dir: &Path,
+    fps: u32,
+    mp4: bool,
+) -> Result<(Vec<String>, Option<String>)> {
+    use rayon::prelude::*;
+    use std::io::Write as _;
+
+    let out = dir.join("output.mp4");
+    let mut ffmpeg: Option<std::process::Child> = None;
+    let mut paths: Vec<String> = Vec::new();
+    for batch in rx {
+        let FrameBatch { offset, h, w, rgb } = batch;
+        let frame_bytes = h * w * 3;
+        if frame_bytes == 0 || rgb.len() % frame_bytes != 0 {
+            return Err(PipelineError::Message(format!(
+                "frame batch of {} bytes is not whole {w}x{h} RGB frames",
+                rgb.len()
+            )));
+        }
+        if mp4 && fps > 0 && ffmpeg.is_none() {
+            ffmpeg = Some(spawn_ffmpeg_rgb(&out, w, h, fps)?);
+        }
+        if let Some(child) = ffmpeg.as_mut() {
+            let stdin = child
+                .stdin
+                .as_mut()
+                .ok_or_else(|| PipelineError::Message("ffmpeg stdin closed".into()))?;
+            stdin
+                .write_all(&rgb)
+                .map_err(|e| PipelineError::Message(format!("ffmpeg stdin: {e}")))?;
+        }
+        let batch_paths: Vec<Result<String>> = rgb
+            .par_chunks_exact(frame_bytes)
+            .enumerate()
+            .map(|(i, frame)| {
+                let img = image::RgbImage::from_raw(w as u32, h as u32, frame.to_vec())
+                    .ok_or_else(|| PipelineError::Message("rgb buffer size mismatch".into()))?;
+                let path = dir.join(format!("frame-{:03}.png", offset + i));
+                img.save(&path).map_err(|e| PipelineError::Message(e.to_string()))?;
+                Ok(path.to_string_lossy().into_owned())
+            })
+            .collect();
+        for p in batch_paths {
+            paths.push(p?);
+        }
+    }
+    let mp4_path = match ffmpeg {
+        Some(mut child) => {
+            drop(child.stdin.take());
+            let status = child
+                .wait()
+                .map_err(|e| PipelineError::Message(format!("ffmpeg: {e}")))?;
+            if !status.success() {
+                return Err(PipelineError::Message(format!("ffmpeg failed with {status}")));
+            }
+            Some(out.to_string_lossy().into_owned())
+        }
+        None => None,
+    };
+    Ok((paths, mp4_path))
+}
+
+fn spawn_ffmpeg_rgb(out: &Path, w: usize, h: usize, fps: u32) -> Result<std::process::Child> {
+    Command::new("ffmpeg")
+        .args([
+            "-y",
+            "-loglevel",
+            "error",
+            "-nostats",
+            "-f",
+            "rawvideo",
+            "-pix_fmt",
+            "rgb24",
+            "-s",
+            &format!("{w}x{h}"),
+            "-framerate",
+            &fps.to_string(),
+            "-i",
+            "-",
+            "-c:v",
+            "libx264",
+            "-pix_fmt",
+            "yuv420p",
+            &out.to_string_lossy(),
+        ])
+        .stdin(std::process::Stdio::piped())
+        .spawn()
+        .map_err(|e| PipelineError::Message(format!("ffmpeg not available: {e}")))
+}
+
+/// Mux `frame-%03d.png` in `dir` into `dir/output.mp4`.
 pub fn mux_mp4(dir: &Path, fps: u32) -> Result<String> {
     let out = dir.join("output.mp4");
     let pattern = dir.join("frame-%03d.png");
@@ -961,4 +1172,73 @@ pub fn mux_mp4(dir: &Path, fps: u32) -> Result<String> {
         )));
     }
     Ok(out.to_string_lossy().into_owned())
+}
+
+#[cfg(test)]
+mod frame_output_tests {
+    use super::*;
+
+    /// The packer's byte mapping is the one the old per-pixel writer used:
+    /// trunc(clamp((v + 1) * 127.5, 0, 255)), with -1 → 0 and 1 → 255.
+    #[test]
+    fn rgb8_mapping_matches_the_previous_writer() {
+        let (f, h, w) = (2usize, 2usize, 3usize);
+        let vals: Vec<f32> = (0..f * 3 * h * w)
+            .map(|i| match i % 5 {
+                0 => -1.0,
+                1 => 1.0,
+                2 => -2.5,
+                3 => 0.0,
+                _ => 0.25,
+            })
+            .collect();
+        let frames = CudaTensor::from_vec(vals.clone(), vec![f, 3, h, w]).unwrap();
+        let rgb = frames_to_rgb8(&frames).unwrap();
+        assert_eq!(rgb.len(), f * h * w * 3);
+        let plane = h * w;
+        for (i, px) in rgb.chunks_exact(3).enumerate() {
+            let (fi, p) = (i / plane, i % plane);
+            for ch in 0..3 {
+                let v = vals[(fi * 3 + ch) * plane + p];
+                let want = ((v + 1.0) * 127.5).clamp(0.0, 255.0) as u8;
+                assert_eq!(px[ch], want, "frame {fi} pixel {p} channel {ch}");
+            }
+        }
+    }
+
+    /// Batches pushed in order come out as `frame-%03d.png` in order, whatever
+    /// the batch boundaries were.
+    #[test]
+    fn writer_numbers_frames_across_batches() {
+        let dir = std::env::temp_dir().join(format!("fv-writer-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let (h, w) = (4usize, 6usize);
+        let mut writer = VideoWriter::spawn(&dir, 0, false).unwrap();
+        writer.push(0, h, w, vec![10u8; 3 * h * w * 3]).unwrap();
+        writer.push(3, h, w, vec![200u8; 2 * h * w * 3]).unwrap();
+        let (paths, mp4) = writer.finish().unwrap();
+        assert!(mp4.is_none());
+        assert_eq!(paths.len(), 5);
+        for (i, p) in paths.iter().enumerate() {
+            assert!(p.ends_with(&format!("frame-{i:03}.png")), "{p}");
+        }
+        let last = image::open(&paths[4]).unwrap().to_rgb8();
+        assert_eq!(last.dimensions(), (w as u32, h as u32));
+        assert_eq!(last.get_pixel(0, 0).0, [200, 200, 200]);
+        let first = image::open(&paths[0]).unwrap().to_rgb8();
+        assert_eq!(first.get_pixel(0, 0).0, [10, 10, 10]);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A batch that is not whole frames is refused, and the error reaches the
+    /// caller at `finish` rather than being lost on the worker thread.
+    #[test]
+    fn writer_reports_worker_errors() {
+        let dir = std::env::temp_dir().join(format!("fv-writer-bad-{}", std::process::id()));
+        let mut writer = VideoWriter::spawn(&dir, 0, false).unwrap();
+        writer.push(0, 4, 4, vec![0u8; 7]).unwrap();
+        let err = writer.finish().unwrap_err().to_string();
+        assert!(err.contains("not whole"), "{err}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }

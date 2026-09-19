@@ -1203,6 +1203,39 @@ pub fn tanh_scaled_device(a: &CudaSlice<f32>, s: f32) -> Result<CudaSlice<f32>> 
     Ok(out)
 }
 
+// ---- frame output --------------------------------------------------------
+
+/// `[frames, 3, h, w]` planar f32 → `[frames, h, w, 3]` interleaved u8 on the
+/// device, then one copy down. `byte = trunc(clamp(x * a + b, 0, 255))`.
+///
+/// The host used to do this per pixel from a 4x larger f32 copy; on the device
+/// it is one elementwise launch and the transfer is 3 bytes per pixel.
+#[cfg(feature = "cuda")]
+pub fn pack_rgb_u8_device(
+    x: &CudaSlice<f32>,
+    frames: usize,
+    h: usize,
+    w: usize,
+    a: f32,
+    b: f32,
+) -> Result<Vec<u8>> {
+    let dev = ctx()?;
+    let pixels = frames * h * w;
+    if x.len() != pixels * 3 {
+        return Err(err(format!(
+            "pack_rgb_u8: {} elements is not [{frames}, 3, {h}, {w}]",
+            x.len()
+        )));
+    }
+    let mut out = unsafe { dev.stream.alloc::<u8>((pixels * 3).max(1)) }.map_err(err)?;
+    let (fr, hh, ww) = (frames as i32, h as i32, w as i32);
+    launch!(dev.stream, &dev.kernels.pack_rgb_u8, cfg_n(pixels); x, &mut out, &fr, &hh, &ww, &a, &b)
+        .map_err(err)?;
+    let host = dev.stream.memcpy_dtov(&out).map_err(err)?;
+    super::stats::record_d2h(pixels * 3 / 4);
+    Ok(host)
+}
+
 // ---- FP8 E4M3 ------------------------------------------------------------
 
 /// Dynamic per-tensor E4M3 quantization of an activation.

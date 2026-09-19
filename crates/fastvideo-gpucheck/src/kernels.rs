@@ -497,6 +497,39 @@ pub fn run(report: &mut Report, lim: Limits, seed: u64) -> StageResult<()> {
             c.cmp("cast_bf16_f32_plain", &got, &bits, 0.0)?;
         }
         {
+            // Frame output: the device packer must produce byte-for-byte what
+            // the host writer produced, including truncation and the clamp of
+            // out-of-range decoder values. A one-code difference here would be
+            // invisible in every metric and visible in every video.
+            let (frames, h, w) = (3usize, 17usize, 23usize);
+            let x = c.rand(frames * 3 * h * w, 0.8);
+            let planar = fastvideo_cudarc::CudaTensor::from_vec(x.clone(), vec![frames, 3, h, w])?;
+            let got = ops::pack_rgb_u8_device(&up(&x)?, frames, h, w, 127.5, 127.5)?;
+            let plane = h * w;
+            let mut want: Vec<u8> = Vec::with_capacity(frames * plane * 3);
+            for i in 0..frames * plane {
+                let (f, p) = (i / plane, i % plane);
+                for ch in 0..3 {
+                    want.push(((x[(f * 3 + ch) * plane + p] + 1.0) * 127.5).clamp(0.0, 255.0) as u8);
+                }
+            }
+            let mism = got.iter().zip(&want).filter(|(a, b)| a != b).count();
+            c.report.check(
+                "pack_rgb_u8_matches_host",
+                got.len() == want.len() && mism == 0,
+                serde_json::json!({"mismatched_bytes": mism, "n": got.len()}),
+                serde_json::json!({"mismatched_bytes": 0}),
+            )?;
+            // And the pipeline entry point takes the device path for a device tensor.
+            let via_tensor = fastvideo_cudarc::wan::pipeline::frames_to_rgb8(&planar)?;
+            c.report.check(
+                "frames_to_rgb8_uses_device",
+                via_tensor == want,
+                serde_json::json!({"equal": via_tensor == want}),
+                serde_json::json!({"equal": true}),
+            )?;
+        }
+        {
             // FP8 E4M3: the device quantizer must agree with the host reference
             // *exactly*, not approximately. The reference is checked over all
             // 256 codes by a unit test, so an exact match here transfers that

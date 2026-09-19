@@ -192,6 +192,18 @@ impl TaeHv {
     /// That difference is the easiest thing to get silently wrong here, so the
     /// oracle stage checks it rather than trusting this comment.
     pub fn decode(&self, z: &CudaTensor) -> Result<CudaTensor> {
+        self.decode_streaming(z, &mut |_, _| Ok(()))
+    }
+
+    /// `decode`, handing each chunk of finished frames to `sink(frame_offset,
+    /// frames)` as soon as it exists — `[frames, 3, 8H, 8W]` in `[-1, 1]`, in
+    /// order — so PNG encoding and the mp4 mux can run while the GPU is still
+    /// on the next chunk. Returns the whole video exactly as `decode` does.
+    pub fn decode_streaming(
+        &self,
+        z: &CudaTensor,
+        sink: &mut dyn FnMut(usize, &CudaTensor) -> Result<()>,
+    ) -> Result<CudaTensor> {
         let [n, c, t, h, w] = z.shape[..] else {
             return Err(msg(format!("taehv expects [N, C, T, H, W] latents, got {:?}", z.shape)));
         };
@@ -212,6 +224,7 @@ impl TaeHv {
         let mut memory: Vec<Option<CudaTensor>> = (0..self.blocks.len()).map(|_| None).collect();
         let mut out_chunks: Vec<CudaTensor> = Vec::new();
         let mut trimmed = false;
+        let mut emitted = 0usize;
 
         let mut start = 0usize;
         while start < t {
@@ -232,6 +245,12 @@ impl TaeHv {
             } else {
                 piece
             };
+            // Clamp to the reference's [0, 1], then map to the [-1, 1] the
+            // rest of the pipeline uses. Per chunk, so the sink sees finished
+            // frames; elementwise, so it is the same as mapping after the cat.
+            let piece = piece.clamp(0.0, 1.0).mul_scalar(2.0).add_scalar(-1.0);
+            sink(emitted, &piece)?;
+            emitted += piece.shape[0];
             out_chunks.push(piece);
             start += len;
         }
@@ -239,10 +258,7 @@ impl TaeHv {
         let refs: Vec<&CudaTensor> = out_chunks.iter().collect();
         let x = CudaTensor::cat(&refs, 0)?;
         let (frames, oc, oh, ow) = (x.shape[0], x.shape[1], x.shape[2], x.shape[3]);
-        // Clamp to the reference's [0, 1], then map to the [-1, 1] the rest of
-        // the pipeline uses.
-        let out = x.clamp(0.0, 1.0).mul_scalar(2.0).add_scalar(-1.0);
-        out.reshape(vec![1, frames, oc, oh, ow])?.permute(&[0, 2, 1, 3, 4])
+        x.reshape(vec![1, frames, oc, oh, ow])?.permute(&[0, 2, 1, 3, 4])
     }
 
     /// One chunk of latent frames through every block, updating the per-block
@@ -406,6 +422,51 @@ mod tests {
             .map(|(x, y)| (x - y).abs())
             .fold(0.0f32, f32::max);
         assert!(worst < 1e-5, "chunk seam changed the output by {worst}");
+    }
+
+    /// The streaming sink sees exactly the frames `decode` returns, in order,
+    /// already mapped to [-1, 1]: the writer thread must never get a frame
+    /// the video does not contain, nor a frame in the reference's [0, 1].
+    #[test]
+    fn streaming_sink_sees_every_frame_in_order() {
+        let tae = TaeHv::load(&tiny_map()).expect("load");
+        let z = CudaTensor::from_vec(
+            (0..(16 * 5 * 2 * 2)).map(|i| ((i % 41) as f32 / 41.0) - 0.5).collect(),
+            vec![1, 16, 5, 2, 2],
+        )
+        .unwrap();
+        std::env::set_var("FASTVIDEO_TAEHV_CHUNK", "2");
+        let mut seen: Vec<(usize, CudaTensor)> = Vec::new();
+        let out = tae
+            .decode_streaming(&z, &mut |off, frames| {
+                seen.push((off, frames.clone()));
+                Ok(())
+            })
+            .expect("streamed");
+        std::env::remove_var("FASTVIDEO_TAEHV_CHUNK");
+
+        assert!(seen.len() > 1, "a 5-frame latent in chunks of 2 must stream more than one batch");
+        let mut next = 0;
+        let refs: Vec<CudaTensor> = seen
+            .iter()
+            .map(|(off, t)| {
+                assert_eq!(*off, next, "batches must arrive in frame order");
+                next += t.shape[0];
+                t.clone()
+            })
+            .collect();
+        assert_eq!(next, out.shape[2], "streamed frame count != decoded frame count");
+        let refs: Vec<&CudaTensor> = refs.iter().collect();
+        let streamed = CudaTensor::cat(&refs, 0).unwrap();
+        // [F, 3, H, W] vs the video's [1, 3, F, H, W].
+        let video = out
+            .reshape(vec![3, out.shape[2], out.shape[3], out.shape[4]])
+            .unwrap()
+            .permute(&[1, 0, 2, 3])
+            .unwrap();
+        let (a, b) = (streamed.host_cow().unwrap(), video.host_cow().unwrap());
+        assert_eq!(a.len(), b.len());
+        assert!(a.iter().zip(b.iter()).all(|(x, y)| x == y), "streamed frames differ from the video");
     }
 
     /// A chunk size that does not divide the latent frame count leaves a short

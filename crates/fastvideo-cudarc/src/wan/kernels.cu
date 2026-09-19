@@ -1202,3 +1202,27 @@ extern "C" __global__ void e4m3_scale_from_amax(const float* amax, float* scale,
     *scale = s;
     *inv_scale = 1.0f / s;
 }
+
+// Decoded frames -> 8-bit RGB, on the device, so the host receives 3 bytes per
+// pixel instead of 12 and never runs the clamp loop. `x` is [frames, 3, h, w]
+// (planar, as the decoders emit it); `out` is [frames, h, w, 3] (interleaved,
+// as PNG and rawvideo want it). byte = trunc(clamp(x * a + b, 0, 255)), which
+// is exactly what the host writer did with a = 127.5, b = 127.5 on [-1, 1].
+extern "C" __global__ void pack_rgb_u8(
+    const float* __restrict__ x, unsigned char* __restrict__ out,
+    int frames, int h, int w, float a, float b
+) {
+    long plane = (long)h * w;
+    long n = (long)frames * plane;
+    long i = blockIdx.x * (long)blockDim.x + threadIdx.x;
+    if (i >= n) return;
+    long f = i / plane, p = i - f * plane;
+    const float* src = x + f * 3 * plane + p;
+    unsigned char* dst = out + i * 3;
+#pragma unroll
+    for (int c = 0; c < 3; ++c) {
+        float v = fmaf(src[c * plane], a, b);
+        v = fminf(fmaxf(v, 0.0f), 255.0f);
+        dst[c] = (unsigned char)v;
+    }
+}

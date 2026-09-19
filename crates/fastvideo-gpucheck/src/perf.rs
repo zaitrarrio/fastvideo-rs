@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 use std::time::Instant;
 
 use anyhow::Context;
-use fastvideo_cudarc::wan::pipeline::{mux_mp4, write_frames, PipelineError};
+use fastvideo_cudarc::wan::pipeline::{frames_to_rgb8, PipelineError, VideoWriter};
 use fastvideo_cudarc::{CudaTensor, DenoiseStep, GenerateConfig, LoadParts, WanPipeline};
 use serde::Serialize;
 use serde_json::json;
@@ -416,21 +416,25 @@ pub fn clip(report: &mut Report, args: ClipArgs<'_>) -> StageResult<()> {
     }
     st::save(&clip_dir.join("latents.safetensors"), &saved)?;
 
+    // Frames go to disk while the decoder is still working: each finished
+    // chunk is packed to 8-bit RGB on the device and handed to a writer thread
+    // that encodes PNGs in parallel and streams rgb24 into ffmpeg. `write_s`
+    // is then only the tail that outlives the decode, not the whole encode.
     let mem = PeakMem::start();
     let t = Instant::now();
-    let video = pipe.decode_latents(&latents)?;
+    let frames_dir = clip_dir.join("frames");
+    let mut writer = VideoWriter::spawn(&frames_dir, spec.fps, args.save_mp4)?;
+    let video = pipe.decode_latents_streaming(&latents, &mut |offset, frames| {
+        let (h, w) = (frames.shape[2], frames.shape[3]);
+        writer.push(offset, h, w, frames_to_rgb8(frames)?)
+    })?;
     let video_host = video.host_cow()?.into_owned();
     let vae_s = t.elapsed().as_secs_f64();
     let vae_peak = mem.stop();
 
     let t = Instant::now();
-    let frames_dir = clip_dir.join("frames");
-    let paths = write_frames(&video, &frames_dir)?;
-    let mp4 = if args.save_mp4 {
-        mux_mp4(&frames_dir, spec.fps).map_err(|e| anyhow::anyhow!("{e}"))?
-    } else {
-        String::new()
-    };
+    let (paths, mp4) = writer.finish()?;
+    let mp4 = mp4.unwrap_or_default();
     contact_sheet(
         &video_host,
         &video.shape,

@@ -531,6 +531,11 @@ cmd_run() {
       '{negative: $n, prompts: [{name: "ui", prompt: $p}]}' >"$RUN_DIR/prompt.json"
     fv_rsync_to "$HOST" "$PORT" "$RUN_DIR/prompt.json" "$OUTR/prompt.json" >/dev/null
     local embeds="$OUTR/embeds"
+    # TAEHV decodes the clip unless FV_TAEHV=0: ~10x faster than the Wan VAE
+    # and 34 dB against it. The weights ship separately (madebyollin/taehv),
+    # so fetch them behind the text encoding.
+    local taehv_dir="$WORK/taehv"
+    if [[ "${FV_TAEHV:-1}" == 1 ]]; then remote_run fetch-taehv 300 fetch-taehv "$taehv_dir"; fi
     remote_run wait-text 1800 wait-weights "$BASE_W" 1800 text_encoder
     gpucheck_stage embed 1800 --mode exact embed --weights "$BASE_W" --prompts "$OUTR/prompt.json" \
       --embeds "$embeds" --device cuda
@@ -539,6 +544,10 @@ cmd_run() {
                --steps "${FV_STEPS:-3}" --guidance 1.0 --flow-shift 8.0 --dmd --fps 16)
     if [[ "${FV_VSA:-1}" == 1 ]]; then gen+=(--vsa); fi
     if [[ -n "${FV_VAE_CHUNK:-2}" ]]; then gen+=(--vae-chunk "${FV_VAE_CHUNK:-2}"); fi
+    if [[ "${FV_TAEHV:-1}" == 1 ]]; then
+      remote_run wait-taehv 300 wait-taehv "$taehv_dir" 300
+      gen+=(--taehv-weights "$taehv_dir")
+    fi
     gpucheck_stage "clip-$name" $(( budget_min * 60 * 13 / 10 + 600 )) --mode fast clip \
       --weights "$FAST_W" --embeds "$embeds/ui.safetensors" --device cuda "${gen[@]}" \
       --name "$name" --budget-min "$budget_min"

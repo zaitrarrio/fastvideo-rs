@@ -289,6 +289,8 @@ class Handler(BaseHTTPRequestHandler):
                 "FV_WIDTH": str(body.get("width", 832)),
                 "FV_VSA": "1" if body.get("vsa", True) else "0",
                 "FV_VAE_CHUNK": str(body.get("vae_chunk", 2)),
+                # TAEHV decoder by default; {"taehv": false} asks for the Wan VAE.
+                "FV_TAEHV": "1" if body.get("taehv", True) else "0",
             }
             if body.get("gpu"):
                 env["FV_OFFER_QUERY_EXTRA"] = f"gpu_name={body['gpu']}"

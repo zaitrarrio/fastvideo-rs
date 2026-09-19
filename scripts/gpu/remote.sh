@@ -207,6 +207,31 @@ PY
   echo $! >"$dest/.fetch.pid"
 }
 
+# fetch-taehv <dest>: the TAEHV decoder weights (~14MB) from madebyollin's
+# repo, in the background like `fetch`. `.complete` marks a verified file.
+cmd_fetch_taehv() {
+  local dest="$1"
+  mkdir -p "$dest"
+  if [[ -f "$dest/.complete" ]]; then log "taehv weights already in $dest"; return 0; fi
+  log "fetching taew2_1.safetensors → $dest (background)"
+  nohup bash "$ROOT/scripts/gpu/fetch_taehv.sh" "$dest" >"$LOGS/fetch-taehv.log" 2>&1 &
+  echo $! >"$dest/.fetch.pid"
+}
+
+# wait-taehv <dest> <timeout_s>: block until fetch-taehv finished.
+cmd_wait_taehv() {
+  local dest="$1" timeout_s="$2" waited=0
+  while [[ ! -f "$dest/.complete" ]]; do
+    if [[ -f "$dest/.fetch.pid" ]] && ! kill -0 "$(cat "$dest/.fetch.pid")" 2>/dev/null && [[ ! -f "$dest/.complete" ]]; then
+      tail -20 "$LOGS/fetch-taehv.log" >&2 || true
+      die "taehv weight download died"
+    fi
+    (( waited < timeout_s )) || die "taehv weights not ready after ${timeout_s}s"
+    sleep 2; waited=$((waited + 2))
+  done
+  log "taehv weights ok: $(du -h "$dest/taew2_1.safetensors" | cut -f1)"
+}
+
 # wait_weights <dest> <timeout_s> <component>...: block until the background
 # fetch finished and every shard of each component is complete on disk.
 cmd_wait_weights() {
@@ -354,10 +379,12 @@ case "$sub" in
   cublas) cmd_cublas "$@" ;;
   fetch) cmd_fetch "$@" ;;
   wait-weights) cmd_wait_weights "$@" ;;
+  fetch-taehv) cmd_fetch_taehv "$@" ;;
+  wait-taehv) cmd_wait_taehv "$@" ;;
   stage) cmd_stage "$@" ;;
   upstream-install) cmd_upstream_install "$@" ;;
   upstream-bench) cmd_upstream_bench "$@" ;;
   upstream-oracle) cmd_upstream_oracle "$@" ;;
   taehv-oracle) cmd_taehv_oracle "$@" ;;
-  *) die "usage: remote.sh env|bootstrap|cublas|fetch|wait-weights|stage|upstream-install|upstream-bench|upstream-oracle|taehv-oracle" ;;
+  *) die "usage: remote.sh env|bootstrap|cublas|fetch|wait-weights|fetch-taehv|wait-taehv|stage|upstream-install|upstream-bench|upstream-oracle|taehv-oracle" ;;
 esac
