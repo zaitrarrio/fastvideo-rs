@@ -39,6 +39,7 @@ rand_distr = "0.5"
 burn = { version = "0.18", default-features = false, features = ["std", "ndarray"] }
 luminal = "0.2"
 memmap2 = "0.9"
+sha2 = "0.10"
 rayon = "1"
 
 fastvideo-ops = { path = "crates/fastvideo-ops" }
