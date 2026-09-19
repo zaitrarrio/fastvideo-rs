@@ -978,6 +978,31 @@ pub mod host {
             .collect()
     }
 
+    /// `[rows, cols]` weight → E4M3 codes and one scale per row (`amax / 448`,
+    /// 1 for a dead row). Same arithmetic, in the same order, as the kernels.
+    pub fn fp8_rows_quantize(w: &[f32], rows: usize, cols: usize) -> (Vec<u8>, Vec<f32>) {
+        use fastvideo_ops::fp8;
+        let scales: Vec<f32> = (0..rows)
+            .into_par_iter()
+            .map(|r| {
+                let amax = w[r * cols..(r + 1) * cols].iter().fold(0.0f32, |a, v| if v.abs() <= a { a } else { v.abs() });
+                if amax > 0.0 && amax.is_finite() { amax / 448.0 } else { 1.0 }
+            })
+            .collect();
+        let q = w.par_iter().enumerate().map(|(i, &v)| fp8::f32_to_e4m3(v * (1.0 / scales[i / cols]))).collect();
+        (q, scales)
+    }
+
+    /// Codes and per-row scales back to f32, rounded through bfloat16 as the
+    /// device path does (the GEMM consumes a bf16 weight).
+    pub fn fp8_rows_dequant(q: &[u8], scales: &[f32], cols: usize) -> Vec<f32> {
+        use fastvideo_ops::fp8;
+        q.par_iter()
+            .enumerate()
+            .map(|(i, &b)| half::bf16::from_f32(fp8::e4m3_to_f32(b) * scales[i / cols]).to_f32())
+            .collect()
+    }
+
     /// Pad the middle axis of `[outer, len, inner]`.
     pub fn pad_axis(x: &[f32], len: usize, inner: usize, left: usize, right: usize, mode: super::PadMode) -> Vec<f32> {
         let out_len = len + left + right;
@@ -1548,6 +1573,39 @@ pub fn group_norm_device(
     let (total, c, spatial, cg, silu) = (x.len() as i64, c as i64, spatial as i64, cg as i64, i32::from(silu));
     launch!(dev.stream, &dev.kernels.group_norm_apply, cfg_n(x.len()); x, &stats, w, b, &mut out, &c, &spatial, &cg, &eps, &silu, &total)
         .map_err(err)?;
+    Ok(out)
+}
+
+// ---- weight-only FP8 (per-row scales) -------------------------------------
+
+/// `[rows, cols]` f32 weight → E4M3 codes and one dequantization scale per row.
+#[cfg(feature = "cuda")]
+pub fn fp8_rows_quantize_device(w: &CudaSlice<f32>, rows: usize, cols: usize) -> Result<(CudaSlice<u8>, CudaSlice<f32>)> {
+    let dev = ctx()?;
+    if rows == 0 || cols == 0 || w.len() != rows * cols {
+        return Err(err(format!("fp8_rows_quantize: {} elements for [{rows}, {cols}]", w.len())));
+    }
+    let mut scales = alloc(rows)?;
+    let threads = cols.next_power_of_two().clamp(1, 256) as u32;
+    let cfg = LaunchConfig { grid_dim: (rows as u32, 1, 1), block_dim: (threads, 1, 1), shared_mem_bytes: threads * 4 };
+    let c = cols as i64;
+    launch!(dev.stream, &dev.kernels.fp8_row_scales, cfg; w, &mut scales, &c).map_err(err)?;
+    let mut q = unsafe { dev.stream.alloc::<u8>(rows * cols) }.map_err(err)?;
+    let n = (rows * cols) as i64;
+    launch!(dev.stream, &dev.kernels.fp8_rows_quantize, cfg_n(rows * cols); w, &scales, &mut q, &c, &n).map_err(err)?;
+    Ok((q, scales))
+}
+
+/// E4M3 codes with per-row scales → a bfloat16 weight, for the bf16 GEMM.
+#[cfg(feature = "cuda")]
+pub fn fp8_rows_dequant_bf16_device(q: &CudaSlice<u8>, scales: &CudaSlice<f32>, cols: usize) -> Result<CudaSlice<half::bf16>> {
+    let dev = ctx()?;
+    if cols == 0 || q.len() != scales.len() * cols {
+        return Err(err(format!("fp8_rows_dequant: {} codes for {} rows of {cols}", q.len(), scales.len())));
+    }
+    let mut out = unsafe { dev.stream.alloc::<half::bf16>(q.len().max(1)) }.map_err(err)?;
+    let (c, n) = (cols as i64, q.len() as i64);
+    launch!(dev.stream, &dev.kernels.fp8_rows_dequant_bf16, cfg_n(q.len()); q, scales, &mut out, &c, &n).map_err(err)?;
     Ok(out)
 }
 

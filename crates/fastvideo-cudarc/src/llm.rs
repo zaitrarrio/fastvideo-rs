@@ -22,6 +22,18 @@ fn msg(s: impl Into<String>) -> TensorError {
     TensorError::Message(s.into())
 }
 
+/// How a decoder's linear weights rest on the device.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum WeightPrecision {
+    /// Whatever `Linear::load` gives: bf16 under bf16 GEMM math, f32 otherwise.
+    #[default]
+    Native,
+    /// Weight-only FP8 (E4M3 codes, one scale per output row): one byte per
+    /// parameter, dequantized to bf16 per GEMM. For an encoder that has to stay
+    /// resident beside a DiT and does not fit at bf16 (Qwen3-VL-32B: 50 GB).
+    Fp8Rows,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Act {
     /// SwiGLU: `down(silu(gate(x)) * up(x))` — Qwen, Llama.
@@ -179,10 +191,13 @@ struct Layer {
 }
 
 impl Layer {
-    fn load(map: &WeightMap, cfg: &DecoderConfig, index: usize) -> Result<Self> {
+    fn load(map: &WeightMap, cfg: &DecoderConfig, index: usize, precision: WeightPrecision) -> Result<Self> {
         let p = format!("{}.{index}", cfg.layer_prefix);
         let (h, d) = (cfg.hidden, cfg.head_dim);
-        let lin = |name: &str, i: usize, o: usize| Linear::load(map, &format!("{p}.{name}"), i, o, false);
+        let lin = |name: &str, i: usize, o: usize| match precision {
+            WeightPrecision::Native => Linear::load(map, &format!("{p}.{name}"), i, o, false),
+            WeightPrecision::Fp8Rows => Linear::load_fp8_rows(map, &format!("{p}.{name}"), i, o, false),
+        };
         let norm = |name: &str, width: usize| norm_weight(map, &format!("{p}.{name}.weight"), width, cfg.norm_offset);
         // The two families name the pre-MLP norm differently: in a sandwich
         // layer `post_attention_layernorm` really is after attention and the
@@ -344,7 +359,7 @@ struct Streamed<'a> {
 impl LayerSource for Streamed<'_> {
     fn with_layer<R>(&mut self, index: usize, f: impl FnOnce(&Layer) -> Result<R>) -> Result<R> {
         // Loaded here and dropped on return: one layer on the device at a time.
-        let layer = Layer::load(self.map, self.cfg, index)?;
+        let layer = Layer::load(self.map, self.cfg, index, WeightPrecision::Native)?;
         f(&layer)
     }
 
@@ -519,6 +534,7 @@ pub struct ResidentDecoder {
     layers: Vec<Layer>,
     final_norm: Option<CudaTensor>,
     embed: EmbedTable,
+    precision: WeightPrecision,
 }
 
 struct Resident<'a>(&'a ResidentDecoder);
@@ -542,13 +558,19 @@ impl ResidentDecoder {
     /// (the last tap is post-norm). Reads either checkpoint layout — the
     /// original shards or a slim rewrite — since both go through `Linear::load`.
     pub fn load(map: &WeightMap, cfg: &DecoderConfig, layers: usize) -> Result<Self> {
+        Self::load_with(map, cfg, layers, WeightPrecision::Native)
+    }
+
+    /// [`Self::load`] with the linear weights held at `precision`. Norms, the
+    /// embedding table and all activations are unaffected.
+    pub fn load_with(map: &WeightMap, cfg: &DecoderConfig, layers: usize, precision: WeightPrecision) -> Result<Self> {
         let n = cfg.num_layers();
         if layers == 0 || layers > n {
             return Err(msg(format!("llm: {layers} resident layers of a {n}-layer model")));
         }
         let mut loaded = Vec::with_capacity(layers);
         for i in 0..layers {
-            loaded.push(Layer::load(map, cfg, i)?);
+            loaded.push(Layer::load(map, cfg, i, precision)?);
             crate::wan::log::info(format_args!("llm resident layer {}/{layers}", i + 1));
         }
         let final_norm = if layers == n {
@@ -556,11 +578,15 @@ impl ResidentDecoder {
         } else {
             None
         };
-        Ok(Self { cfg: cfg.clone(), layers: loaded, final_norm, embed: EmbedTable::load(map, cfg)? })
+        Ok(Self { cfg: cfg.clone(), layers: loaded, final_norm, embed: EmbedTable::load(map, cfg)?, precision })
     }
 
     pub fn config(&self) -> &DecoderConfig {
         &self.cfg
+    }
+
+    pub fn precision(&self) -> WeightPrecision {
+        self.precision
     }
 
     /// Same contract and same numbers as the free [`hidden_states`].
@@ -580,8 +606,13 @@ impl ResidentDecoder {
         let c = &self.cfg;
         let linear = c.hidden * (c.heads + 2 * c.kv_heads) * c.head_dim + c.heads * c.head_dim * c.hidden + 3 * c.hidden * c.intermediate;
         let norms = c.hidden * if c.sandwich_norms { 4 } else { 2 } + if c.qk_norm { 2 * c.head_dim } else { 0 };
-        let width = if crate::wan::nn::bf16_linears_active() { 2 } else { 4 };
-        (self.layers.len() * (linear * width + norms * 4) + self.final_norm.as_ref().map_or(0, |_| c.hidden * 4)) as u64
+        // Per-row FP8: a byte per parameter plus one f32 scale per output row.
+        let scale_rows = (c.heads + 2 * c.kv_heads) * c.head_dim + c.hidden + 2 * c.intermediate + c.hidden;
+        let per_layer = match self.precision {
+            WeightPrecision::Fp8Rows => linear + scale_rows * 4,
+            WeightPrecision::Native => linear * if crate::wan::nn::bf16_linears_active() { 2 } else { 4 },
+        };
+        (self.layers.len() * (per_layer + norms * 4) + self.final_norm.as_ref().map_or(0, |_| c.hidden * 4)) as u64
     }
 
     /// Host bytes held by the embedding table.
@@ -806,6 +837,32 @@ mod tests {
             assert!(full.hidden_states(&[16], &[0], &[true], &[1]).is_err(), "token id past the table");
         }
         assert!(ResidentDecoder::load(&weights(), &tiny(false), 3).is_err());
+    }
+
+    /// Weight-only FP8 is a storage choice: the encoder it produces tracks the
+    /// native one to within E4M3's 3-bit mantissa, holds a quarter of the f32
+    /// bytes, and is deterministic.
+    #[test]
+    fn an_fp8_resident_decoder_tracks_the_native_one() {
+        let cfg = tiny(false);
+        let ids = [1u32, 3, 0, 2, 5];
+        let pos: Vec<u32> = (0..5).collect();
+        let native = ResidentDecoder::load(&weights(), &cfg, 2).unwrap();
+        let fp8 = ResidentDecoder::load_with(&weights(), &cfg, 2, WeightPrecision::Fp8Rows).unwrap();
+        assert_eq!((native.precision(), fp8.precision()), (WeightPrecision::Native, WeightPrecision::Fp8Rows));
+        let a = native.hidden_states(&ids, &pos, &[true; 5], &[2]).unwrap().remove(0).host_cow().unwrap().into_owned();
+        let b = fp8.hidden_states(&ids, &pos, &[true; 5], &[2]).unwrap().remove(0).host_cow().unwrap().into_owned();
+        let num: f64 = a.iter().zip(&b).map(|(x, y)| f64::from(x - y).powi(2)).sum();
+        let den: f64 = a.iter().map(|x| f64::from(*x).powi(2)).sum();
+        let rel = (num / den).sqrt();
+        assert!(rel > 0.0, "fp8 must actually quantize");
+        assert!(rel < 0.08, "fp8 drifted {rel} from the native encoder");
+        let again = fp8.hidden_states(&ids, &pos, &[true; 5], &[2]).unwrap().remove(0);
+        assert_eq!(b, &*again.host_cow().unwrap());
+        // A byte per parameter plus a scale per row: under half of f32 even at
+        // this toy width, where the scales are a large share of a tiny layer
+        // (at Qwen3-VL-32B's width they are 0.03% and 50 layers come to 24.4 GB).
+        assert!(fp8.device_bytes() * 2 < native.device_bytes(), "{} vs {}", fp8.device_bytes(), native.device_bytes());
     }
 
     #[test]

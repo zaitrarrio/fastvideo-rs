@@ -1358,3 +1358,47 @@ extern "C" __global__ void group_norm_apply(
     float y = (float)v * w[ch] + b[ch];
     out[i] = silu ? y / (1.0f + expf(-y)) : y;
 }
+
+// ---- weight-only FP8: E4M3 codes with one scale per output row ---------------
+// A resident 32B text encoder does not fit beside a 41 GB DiT at bf16; at one
+// byte per parameter it does. Only the WEIGHTS are FP8: each GEMM dequantizes
+// its weight into a transient bf16 buffer and then runs the ordinary bf16 GEMM,
+// so activations are never quantized and no new matmul path exists to trust.
+
+// scales[row] = max|w[row, :]| / 448 (1 for a dead row). One block per row.
+extern "C" __global__ void fp8_row_scales(const float* w, float* scales, long cols) {
+    extern __shared__ float fp8_row_sm[];
+    int tid = threadIdx.x;
+    long row = blockIdx.x;
+    const float* p = w + row * cols;
+    float acc = 0.0f;
+    for (long i = tid; i < cols; i += blockDim.x) {
+        float v = fabsf(p[i]);
+        if (!(v <= acc)) acc = v;   // NaN propagates rather than vanishing
+    }
+    fp8_row_sm[tid] = acc;
+    __syncthreads();
+    for (int st = blockDim.x >> 1; st > 0; st >>= 1) {
+        if (tid < st) { float o = fp8_row_sm[tid + st]; if (!(o <= fp8_row_sm[tid])) fp8_row_sm[tid] = o; }
+        __syncthreads();
+    }
+    if (tid == 0) {
+        float a = fp8_row_sm[0];
+        scales[row] = (a > 0.0f && isfinite(a)) ? a / 448.0f : 1.0f;
+    }
+}
+extern "C" __global__ void fp8_rows_quantize(const float* w, const float* scales, unsigned char* q, long cols, long n) {
+    long i = IDX();
+    if (i >= n) return;
+    q[i] = fv_to_e4m3(w[i] * (1.0f / scales[i / cols]));
+}
+// code * scale, rounded to bfloat16 exactly as cast_f32_bf16 rounds.
+extern "C" __global__ void fp8_rows_dequant_bf16(const unsigned char* q, const float* scales, unsigned short* out, long cols, long n) {
+    long i = IDX();
+    if (i >= n) return;
+    float v = fv_e4m3_to_f32(q[i]) * scales[i / cols];
+    unsigned int u = __float_as_uint(v);
+    unsigned int hi = u >> 16;
+    if ((u & 0x8000u) != 0u && (hi & 0x7F80u) != 0x7F80u && (hi & 0x7FFFu) != 0x7F7Fu) hi += 1u;
+    out[i] = (unsigned short)hi;
+}

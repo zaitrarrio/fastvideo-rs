@@ -43,6 +43,9 @@ macro_rules! kernel_fns {
 }
 
 kernel_fns!(
+    fp8_row_scales,
+    fp8_rows_quantize,
+    fp8_rows_dequant_bf16,
     pad_axis,
     group_norm_stats,
     group_norm_apply,

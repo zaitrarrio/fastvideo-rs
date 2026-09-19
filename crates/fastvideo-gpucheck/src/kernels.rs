@@ -529,6 +529,39 @@ pub fn run(report: &mut Report, lim: Limits, seed: u64) -> StageResult<()> {
             c.cmp("repeat_kv_8x8", &got, &host::repeat_kv(&x, hkv, rep, s * d), 0.0)?;
         }
         {
+            // Weight-only FP8 with per-row scales (a resident Qwen3-VL beside the
+            // H3 DiT). Codes and scales must equal the host quantizer's EXACTLY —
+            // the host twin is what the unit tests hold to the format — and the
+            // dequantized bf16 weight must equal the host's, bit for bit.
+            use fastvideo_cudarc::wan::ops::host;
+            for (rows, cols) in [(64usize, 5120usize), (257, 1000), (3, 25600)] {
+                // Rows of very different magnitude, plus one dead row.
+                let mut w = c.rand(rows * cols, 1.0);
+                for (r, row) in w.chunks_mut(cols).enumerate() {
+                    let g = if r == 1 { 0.0 } else { 10f32.powi((r % 7) as i32 - 3) };
+                    row.iter_mut().for_each(|v| *v *= g);
+                }
+                let (q, scales) = ops::fp8_rows_quantize_device(&up(&w)?, rows, cols)?;
+                let (hq, hs) = host::fp8_rows_quantize(&w, rows, cols);
+                let dq = dev()?.stream.memcpy_dtov(&q)?;
+                let mism = dq.iter().zip(&hq).filter(|(a, b)| a != b).count();
+                c.report.check(
+                    &format!("fp8_rows_codes_{rows}x{cols}"),
+                    mism == 0,
+                    serde_json::json!({"mismatched_codes": mism, "n": dq.len()}),
+                    serde_json::json!({"mismatched_codes": 0}),
+                )?;
+                c.cmp(&format!("fp8_rows_scales_{rows}x{cols}"), &down(&scales)?, &hs, 0.0)?;
+                let w16: Vec<f32> = dev()?
+                    .stream
+                    .memcpy_dtov(&ops::fp8_rows_dequant_bf16_device(&q, &scales, cols)?)?
+                    .iter()
+                    .map(|v: &half::bf16| v.to_f32())
+                    .collect();
+                c.cmp(&format!("fp8_rows_dequant_bf16_{rows}x{cols}"), &w16, &host::fp8_rows_dequant(&hq, &hs, cols), 0.0)?;
+            }
+        }
+        {
             // Padding modes and GroupNorm for the VAE decoders. GroupNorm at a
             // group size in the millions is the case that needs the f64
             // reduction; a small group exercises the narrow-block path.

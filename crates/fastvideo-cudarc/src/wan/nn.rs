@@ -8,6 +8,17 @@ fn msg(s: impl Into<String>) -> TensorError {
     TensorError::Message(s.into())
 }
 
+/// A weight held as E4M3 codes with one dequantization scale per output row.
+#[derive(Debug)]
+pub struct Fp8Rows {
+    rows: usize,
+    cols: usize,
+    /// CPU runs: codes and scales on the host.
+    host: Option<(Vec<u8>, Vec<f32>)>,
+    #[cfg(feature = "cuda")]
+    dev: Option<(cudarc::driver::CudaSlice<u8>, cudarc::driver::CudaSlice<f32>)>,
+}
+
 #[derive(Debug, Clone)]
 pub struct Linear {
     /// `[out, in]` F32 weight. Empty (`[0, in]`) when the weight lives only
@@ -28,6 +39,10 @@ pub struct Linear {
     /// [`fp8_linears`].
     #[cfg(feature = "cuda")]
     weight_fp8: Option<std::sync::Arc<super::fp8::Fp8Weight>>,
+    /// Weight-only FP8 ([`Linear::load_fp8_rows`]): a per-instance choice for
+    /// models that must be resident and do not fit at bf16. Dequantized to bf16
+    /// before each GEMM, so activations and the GEMM itself are untouched.
+    weight_fp8_rows: Option<std::sync::Arc<Fp8Rows>>,
 }
 
 /// FP8 linears are opt-in and never a default.
@@ -91,6 +106,7 @@ impl Linear {
                         out_dim,
                         weight_bf16: None,
                         weight_fp8: Some(std::sync::Arc::new(q)),
+                        weight_fp8_rows: None,
                     });
                 }
                 Err(why) => {
@@ -112,6 +128,7 @@ impl Linear {
                 out_dim,
                 weight_bf16: Some(std::sync::Arc::new(slice)),
                 weight_fp8: None,
+                weight_fp8_rows: None,
             });
         }
         weight.pin_device()?;
@@ -124,6 +141,7 @@ impl Linear {
             weight_bf16: None,
             #[cfg(feature = "cuda")]
             weight_fp8: None,
+            weight_fp8_rows: None,
         })
     }
 
@@ -229,7 +247,84 @@ impl Linear {
             out_dim: rows,
             weight_bf16: Some(std::sync::Arc::new(slice)),
             weight_fp8: None,
+            weight_fp8_rows: None,
         }))
+    }
+
+    /// Load `prefix.weight` as weight-only FP8: E4M3 codes, one scale per output
+    /// row, one byte per parameter on the device. Quantized on the device, so a
+    /// 130M-element weight costs a transient upload rather than seconds of host
+    /// arithmetic. A per-instance choice, unlike the process-wide `FASTVIDEO_FP8`
+    /// (which also quantizes activations and would reach the DiT loaded beside it).
+    pub fn load_fp8_rows(
+        map: &super::weights::WeightMap,
+        prefix: &str,
+        in_dim: usize,
+        out_dim: usize,
+        has_bias: bool,
+    ) -> Result<Self> {
+        let key = super::weights::join_key(prefix, "weight");
+        let mut bias = if has_bias {
+            Some(super::weights::cuda_tensor_shaped(map, &super::weights::join_key(prefix, "bias"), &[out_dim])?)
+        } else {
+            None
+        };
+        if let Some(b) = &mut bias {
+            b.pin_device()?;
+        }
+        let mut rows = Fp8Rows {
+            rows: out_dim,
+            cols: in_dim,
+            host: None,
+            #[cfg(feature = "cuda")]
+            dev: None,
+        };
+        #[cfg(feature = "cuda")]
+        if stats::device_expected() {
+            let dev = super::device::global_device().ok_or_else(|| msg("no device"))?;
+            let wf = match map.lazy_bf16(&key)? {
+                // bf16 on disk: upload 2 bytes/param and widen on the device.
+                Some((shape, values)) => {
+                    if shape != [out_dim, in_dim] {
+                        return Err(msg(format!("key {key}: shape {shape:?} != expected {:?}", [out_dim, in_dim])));
+                    }
+                    let w16 = dev.stream.memcpy_stod(&values).map_err(|e| msg(e.to_string()))?;
+                    stats::record_h2d(values.len() / 2);
+                    super::ops::cast_bf16_f32_bias_act_device(&w16, None, false)?
+                }
+                None => {
+                    let w = super::weights::cuda_tensor_shaped(map, &key, &[out_dim, in_dim])?;
+                    let host = w.host_cow()?;
+                    stats::record_h2d(host.len());
+                    dev.stream.memcpy_stod(&host[..]).map_err(|e| msg(e.to_string()))?
+                }
+            };
+            rows.dev = Some(super::ops::fp8_rows_quantize_device(&wf, out_dim, in_dim)?);
+        }
+        #[cfg(feature = "cuda")]
+        let on_device = rows.dev.is_some();
+        #[cfg(not(feature = "cuda"))]
+        let on_device = false;
+        if !on_device {
+            let w = super::weights::cuda_tensor_shaped(map, &key, &[out_dim, in_dim])?;
+            rows.host = Some(host::fp8_rows_quantize(&w.host_cow()?, out_dim, in_dim));
+        }
+        Ok(Self {
+            weight: CudaTensor::from_vec(Vec::new(), vec![0, in_dim])?,
+            bias,
+            in_dim,
+            out_dim,
+            #[cfg(feature = "cuda")]
+            weight_bf16: None,
+            #[cfg(feature = "cuda")]
+            weight_fp8: None,
+            weight_fp8_rows: Some(std::sync::Arc::new(rows)),
+        })
+    }
+
+    /// Whether this linear holds its weight as per-row FP8.
+    pub fn is_fp8_rows(&self) -> bool {
+        self.weight_fp8_rows.is_some()
     }
 
     pub fn out_dim(&self) -> usize {
@@ -297,7 +392,14 @@ impl Linear {
             return CudaTensor::from_dev_result(c, out_shape);
         }
         #[cfg(feature = "cuda")]
-        if let Some(w16) = &self.weight_bf16 {
+        let dequantized = match self.weight_fp8_rows.as_deref() {
+            Some(Fp8Rows { dev: Some((q, scales)), cols, .. }) => {
+                Some(std::sync::Arc::new(super::ops::fp8_rows_dequant_bf16_device(q, scales, *cols)?))
+            }
+            _ => None,
+        };
+        #[cfg(feature = "cuda")]
+        if let Some(w16) = dequantized.as_ref().or(self.weight_bf16.as_ref()) {
             let x = xs.dev()?.ok_or_else(|| msg("bf16 linear without a device"))?;
             let x16 = super::ops::cast_f32_bf16_device(&x)?;
             let mut c16 = unsafe { super::device::global_device().ok_or_else(|| msg("no device"))?.stream.alloc::<half::bf16>((m * n).max(1)) }
@@ -330,7 +432,11 @@ impl Linear {
             return CudaTensor::from_dev_result(c, out_shape);
         }
         let x = xs.host_cow()?;
-        let w = self.weight.host_cow()?;
+        let w: std::borrow::Cow<'_, [f32]> = match self.weight_fp8_rows.as_deref() {
+            Some(Fp8Rows { host: Some((q, scales)), cols, .. }) => std::borrow::Cow::Owned(host::fp8_rows_dequant(q, scales, *cols)),
+            Some(_) => return Err(msg("fp8 linear: device weight but no device tensor to multiply")),
+            None => self.weight.host_cow()?,
+        };
         let b = self.bias.as_ref().map(|b| b.host_cow()).transpose()?;
         use rayon::prelude::*;
         let mut out = vec![0.0f32; m * n];
@@ -521,4 +627,51 @@ pub fn conv2d(xs: &CudaTensor, kernel: &CudaTensor, padding: usize, stride: usiz
 /// CPU-only helper guard: call before host-only algorithms with no kernel.
 pub(crate) fn host_only_op(op: &'static str, detail: impl std::fmt::Display) -> Result<()> {
     stats::host_fallback(op, detail)
+}
+
+#[cfg(test)]
+mod fp8_rows_tests {
+    use super::*;
+    use crate::wan::weights::WeightMap;
+
+    fn map() -> WeightMap {
+        WeightMap::generated(|key, shape| {
+            let n: usize = shape.iter().product();
+            let seed = key.len() as f32;
+            // Rows of very different magnitude: what per-row scales are for.
+            (0..n).map(|i| ((i * 37 % 101) as f32 / 101.0 - 0.5) * (1.0 + (i / 7) as f32 * seed)).collect()
+        })
+    }
+
+    /// The forward is a plain matmul with the dequantized weight, exactly; the
+    /// dequantized weight is within E4M3's step of the original, per row; and a
+    /// dead row neither divides by zero nor produces a NaN.
+    #[test]
+    fn fp8_rows_is_a_matmul_with_the_dequantized_weight() {
+        let (i, o) = (7usize, 5usize);
+        let lin = Linear::load_fp8_rows(&map(), "p", i, o, true).unwrap();
+        assert!(lin.is_fp8_rows());
+        let w = crate::wan::weights::cuda_tensor_shaped(&map(), "p.weight", &[o, i]).unwrap().host_cow().unwrap().into_owned();
+        let b = crate::wan::weights::cuda_tensor_shaped(&map(), "p.bias", &[o]).unwrap().host_cow().unwrap().into_owned();
+        let (q, scales) = host::fp8_rows_quantize(&w, o, i);
+        let wd = host::fp8_rows_dequant(&q, &scales, i);
+        for r in 0..o {
+            let amax = w[r * i..(r + 1) * i].iter().fold(0f32, |a, v| a.max(v.abs()));
+            for c in 0..i {
+                let (orig, deq) = (w[r * i + c], wd[r * i + c]);
+                assert!((orig - deq).abs() <= amax * 0.07 + 1e-6, "row {r} col {c}: {orig} -> {deq}");
+            }
+        }
+        let x: Vec<f32> = (0..3 * i).map(|k| (k as f32 * 0.37).sin()).collect();
+        let y = lin.forward(&CudaTensor::from_vec(x.clone(), vec![3, i]).unwrap()).unwrap();
+        let got = y.host_cow().unwrap();
+        for t in 0..3 {
+            for r in 0..o {
+                let want: f32 = (0..i).map(|c| x[t * i + c] * wd[r * i + c]).sum::<f32>() + b[r];
+                assert!((got[t * o + r] - want).abs() <= 1e-4 * want.abs().max(1.0), "token {t} row {r}");
+            }
+        }
+        let (qz, sz) = host::fp8_rows_quantize(&[0.0; 6], 2, 3);
+        assert_eq!((qz, sz), (vec![0u8; 6], vec![1.0, 1.0]));
+    }
 }
