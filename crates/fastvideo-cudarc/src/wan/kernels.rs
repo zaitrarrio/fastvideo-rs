@@ -43,6 +43,11 @@ macro_rules! kernel_fns {
 }
 
 kernel_fns!(
+    gelu_erf,
+    leaky_relu,
+    snake_beta,
+    rope_half,
+    repeat_kv,
     pack_rgb_u8,
     vsa_mma_attn,
     vsa_tile_qkv,

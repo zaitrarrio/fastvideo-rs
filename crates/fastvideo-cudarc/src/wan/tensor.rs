@@ -668,6 +668,91 @@ impl CudaTensor {
         .expect("silu")
     }
 
+    /// Exact GELU (erf). `gelu_tanh` is the approximation; a checkpoint means
+    /// one or the other and they differ by ~1e-3.
+    pub fn gelu_erf(&self) -> CudaTensor {
+        self.unary_op(
+            #[cfg(feature = "cuda")]
+            |a| super::ops::unary_device(a, super::ops::ElemUnary::GeluErf),
+            #[cfg(not(feature = "cuda"))]
+            |_| Ok(()),
+            host::gelu_erf,
+        )
+        .expect("gelu_erf")
+    }
+
+    pub fn leaky_relu(&self, slope: f32) -> CudaTensor {
+        self.unary_op(
+            #[cfg(feature = "cuda")]
+            |a| super::ops::leaky_relu_device(a, slope),
+            #[cfg(not(feature = "cuda"))]
+            |_| Ok(()),
+            move |x| host::leaky_relu(x, slope),
+        )
+        .expect("leaky_relu")
+    }
+
+    /// Snake / SnakeBeta over `[N, C, L]`: `x + inv_beta[c] * sin^2(alpha[c] x)`.
+    /// `alpha` and `inv_beta` are `[C]`, already out of log space and with the
+    /// `1 / (beta + eps)` taken, so every Snake variant is this one call.
+    pub fn snake_beta(&self, alpha: &CudaTensor, inv_beta: &CudaTensor) -> Result<CudaTensor> {
+        let [_, c, l] = self.shape[..] else {
+            return Err(msg(format!("snake_beta expects [N, C, L], got {:?}", self.shape)));
+        };
+        if alpha.numel() != c || inv_beta.numel() != c {
+            return Err(msg(format!("snake_beta: {} alphas for {c} channels", alpha.numel())));
+        }
+        #[cfg(feature = "cuda")]
+        if let (Some(a), Some(al), Some(ib)) = (self.dev()?, alpha.dev()?, inv_beta.dev()?) {
+            return Self::from_dev_result(super::ops::snake_beta_device(&a, &al, &ib, c, l)?, self.shape.clone());
+        }
+        Ok(Self::host_only(
+            host::snake_beta(&self.host_cow()?, &alpha.host_cow()?, &inv_beta.host_cow()?, c, l),
+            self.shape.clone(),
+        ))
+    }
+
+    /// rotate_half rotary embedding (HF Llama / Qwen / Gemma convention) on
+    /// `[B, H, S, D]` with explicit `[S, R]` cos/sin tables; channels `[R, D)`
+    /// pass through. Positions are whatever built the tables.
+    pub fn rope_half(&self, cos: &CudaTensor, sin: &CudaTensor) -> Result<CudaTensor> {
+        let [_, _, s, d] = self.shape[..] else {
+            return Err(msg(format!("rope_half expects [B, H, S, D], got {:?}", self.shape)));
+        };
+        let r = match cos.shape[..] {
+            [cs, r] if cs == s && cos.shape == sin.shape && r % 2 == 0 && r > 0 && r <= d => r,
+            _ => return Err(msg(format!("rope_half tables {:?}/{:?} for S={s} D={d}", cos.shape, sin.shape))),
+        };
+        #[cfg(feature = "cuda")]
+        if let (Some(x), Some(c), Some(sn)) = (self.dev()?, cos.dev()?, sin.dev()?) {
+            return Self::from_dev_result(super::ops::rope_half_device(&x, &c, &sn, s, d, r)?, self.shape.clone());
+        }
+        Ok(Self::host_only(
+            host::rope_half(&self.host_cow()?, &cos.host_cow()?, &sin.host_cow()?, s, d, r),
+            self.shape.clone(),
+        ))
+    }
+
+    /// Grouped-query attention's key/value expansion: `[B, Hkv, S, D]` →
+    /// `[B, Hkv * rep, S, D]`, each kv head repeated `rep` times in place.
+    pub fn repeat_kv(&self, rep: usize) -> Result<CudaTensor> {
+        let [b, hkv, s, d] = self.shape[..] else {
+            return Err(msg(format!("repeat_kv expects [B, Hkv, S, D], got {:?}", self.shape)));
+        };
+        if rep == 1 {
+            return Ok(self.clone());
+        }
+        if rep == 0 {
+            return Err(msg("repeat_kv by zero"));
+        }
+        let shape = vec![b, hkv * rep, s, d];
+        #[cfg(feature = "cuda")]
+        if let Some(x) = self.dev()? {
+            return Self::from_dev_result(super::ops::repeat_kv_device(&x, hkv, rep, s * d)?, shape);
+        }
+        Ok(Self::host_only(host::repeat_kv(&self.host_cow()?, hkv, rep, s * d), shape))
+    }
+
     pub fn gelu_tanh(&self) -> CudaTensor {
         self.unary_op(
             #[cfg(feature = "cuda")]
@@ -1114,5 +1199,115 @@ mod tests {
         let e = (2.0f32).exp();
         let p = 1.0 / (1.0 + e);
         assert!((y.data[0] - p).abs() < 1e-6 && (y.data[2] - (1.0 - p)).abs() < 1e-6);
+    }
+}
+
+#[cfg(test)]
+mod encoder_op_tests {
+    use super::*;
+
+    #[test]
+    fn erf_matches_known_values() {
+        for (x, want) in [
+            (0.0, 0.0),
+            (0.1, 0.112_462_916_018_284_9),
+            (0.5, 0.520_499_877_813_046_5),
+            (1.0, 0.842_700_792_949_714_9),
+            (2.0, 0.995_322_265_018_952_7),
+            (3.5, 0.999_999_256_901_627_7),
+            (5.0, 0.999_999_999_998_462_5),
+        ] {
+            assert!((host::erf(x) - want).abs() < 1e-14, "erf({x}) = {}", host::erf(x));
+            assert!((host::erf(-x) + want).abs() < 1e-14, "erf is odd");
+        }
+        // Phi(1) * 1: the value every GELU table quotes.
+        assert!((f64::from(host::gelu_erf(1.0)) - 0.841_344_746_068_542_9).abs() < 1e-7);
+        // And it is not the tanh approximation.
+        assert!((host::gelu_erf(1.0) - host::gelu_tanh(1.0)).abs() > 1e-5);
+    }
+
+    /// HF `apply_rotary_pos_emb`: x * cos + rotate_half(x) * sin, tables built
+    /// as cat(freqs, freqs). Written out per element, independently of the op.
+    #[test]
+    fn rope_half_matches_the_hf_formula_and_passes_the_tail_through() {
+        let (b, h, s, d, r) = (2usize, 3usize, 5usize, 8usize, 6usize);
+        let x: Vec<f32> = (0..b * h * s * d).map(|i| ((i * 7 % 23) as f32 - 11.0) / 5.0).collect();
+        let half = r / 2;
+        let (mut cos, mut sin) = (vec![0f32; s * r], vec![0f32; s * r]);
+        for p in 0..s {
+            for k in 0..half {
+                let ang = (p as f32 + 2.0) * 10000f32.powf(-(2.0 * k as f32) / r as f32);
+                for j in [k, k + half] {
+                    cos[p * r + j] = ang.cos();
+                    sin[p * r + j] = ang.sin();
+                }
+            }
+        }
+        let xt = CudaTensor::from_vec(x.clone(), vec![b, h, s, d]).unwrap();
+        let out = xt
+            .rope_half(
+                &CudaTensor::from_vec(cos.clone(), vec![s, r]).unwrap(),
+                &CudaTensor::from_vec(sin.clone(), vec![s, r]).unwrap(),
+            )
+            .unwrap();
+        let got = out.host_cow().unwrap();
+        for bi in 0..b * h {
+            for p in 0..s {
+                let base = (bi * s + p) * d;
+                for j in 0..d {
+                    let want = if j >= r {
+                        x[base + j]
+                    } else {
+                        let rot = if j < half { -x[base + j + half] } else { x[base + j - half] };
+                        x[base + j] * cos[p * r + j] + rot * sin[p * r + j]
+                    };
+                    assert!((got[base + j] - want).abs() < 1e-6, "b{bi} p{p} j{j}");
+                }
+            }
+        }
+        // A rotation preserves the norm of the rotated channels.
+        let n0: f32 = x[..r].iter().map(|v| v * v).sum();
+        let n1: f32 = got[..r].iter().map(|v| v * v).sum();
+        assert!((n0 - n1).abs() < 1e-4);
+        assert!(xt.rope_half(&CudaTensor::zeros(&[s, 5]), &CudaTensor::zeros(&[s, 5])).is_err(), "odd R");
+    }
+
+    #[test]
+    fn repeat_kv_is_repeat_interleave_on_heads() {
+        let (b, hkv, s, d, rep) = (2usize, 2usize, 3usize, 2usize, 4usize);
+        let x: Vec<f32> = (0..b * hkv * s * d).map(|i| i as f32).collect();
+        let out = CudaTensor::from_vec(x.clone(), vec![b, hkv, s, d]).unwrap().repeat_kv(rep).unwrap();
+        assert_eq!(out.shape, vec![b, hkv * rep, s, d]);
+        let got = out.host_cow().unwrap();
+        for bi in 0..b {
+            for ho in 0..hkv * rep {
+                for k in 0..s * d {
+                    let want = x[(bi * hkv + ho / rep) * s * d + k];
+                    assert_eq!(got[(bi * hkv * rep + ho) * s * d + k], want);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn snake_and_leaky_relu() {
+        let (n, c, l) = (2usize, 3usize, 4usize);
+        let x: Vec<f32> = (0..n * c * l).map(|i| (i as f32 - 10.0) / 4.0).collect();
+        let alpha = [0.5f32, 1.0, 2.0];
+        let inv_beta = [2.0f32, 1.0, 0.25];
+        let out = CudaTensor::from_vec(x.clone(), vec![n, c, l])
+            .unwrap()
+            .snake_beta(
+                &CudaTensor::from_vec(alpha.to_vec(), vec![c]).unwrap(),
+                &CudaTensor::from_vec(inv_beta.to_vec(), vec![c]).unwrap(),
+            )
+            .unwrap();
+        for (i, (&g, &v)) in out.host_cow().unwrap().iter().zip(&x).enumerate() {
+            let ch = (i / l) % c;
+            let want = v + inv_beta[ch] * (alpha[ch] * v).sin().powi(2);
+            assert!((g - want).abs() < 1e-6);
+        }
+        let lr = CudaTensor::from_vec(vec![-2.0, 0.0, 3.0], vec![3]).unwrap().leaky_relu(0.1);
+        assert_eq!(&*lr.host_cow().unwrap(), &[-0.2, 0.0, 3.0]);
     }
 }

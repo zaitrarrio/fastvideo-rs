@@ -497,6 +497,38 @@ pub fn run(report: &mut Report, lim: Limits, seed: u64) -> StageResult<()> {
             c.cmp("cast_bf16_f32_plain", &got, &bits, 0.0)?;
         }
         {
+            // Ops the decoder-only text encoders and the audio decoders add.
+            // Each is held to its host twin, which the unit tests hold to an
+            // independent formula, so the chain reaches the kernel.
+            use fastvideo_cudarc::wan::ops::host;
+            let x = c.rand(4099, 2.0);
+            let got = down(&ops::unary_device(&up(&x)?, ops::ElemUnary::GeluErf)?)?;
+            c.cmp("gelu_erf", &got, &host::map1(&x, host::gelu_erf), op)?;
+            let got = down(&ops::leaky_relu_device(&up(&x)?, 0.1)?)?;
+            c.cmp("leaky_relu", &got, &host::map1(&x, |v| host::leaky_relu(v, 0.1)), 0.0)?;
+
+            let (n, ch, l) = (2usize, 7usize, 129usize);
+            let x = c.rand(n * ch * l, 1.5);
+            let alpha: Vec<f32> = c.rand(ch, 0.3).iter().map(|v| (1.0 + v).abs() + 0.1).collect();
+            let inv_beta: Vec<f32> = alpha.iter().map(|a| 1.0 / (a + 1e-9)).collect();
+            let got = down(&ops::snake_beta_device(&up(&x)?, &up(&alpha)?, &up(&inv_beta)?, ch, l)?)?;
+            c.cmp("snake_beta", &got, &host::snake_beta(&x, &alpha, &inv_beta, ch, l), op)?;
+
+            // Qwen3 / H3 head shape: D = 128 with 96 rotated channels, and the
+            // full-rotary case.
+            for (b, h, s, d, r) in [(1usize, 8usize, 77usize, 128usize, 96usize), (2, 4, 33, 64, 64)] {
+                let x = c.rand(b * h * s * d, 1.0);
+                let ang = c.rand(s * r, 3.0);
+                let (cs, sn): (Vec<f32>, Vec<f32>) = ang.iter().map(|a| (a.cos(), a.sin())).unzip();
+                let got = down(&ops::rope_half_device(&up(&x)?, &up(&cs)?, &up(&sn)?, s, d, r)?)?;
+                c.cmp(&format!("rope_half_d{d}_r{r}"), &got, &host::rope_half(&x, &cs, &sn, s, d, r), op)?;
+            }
+            let (b, hkv, s, d, rep) = (2usize, 8usize, 19usize, 128usize, 8usize);
+            let x = c.rand(b * hkv * s * d, 1.0);
+            let got = down(&ops::repeat_kv_device(&up(&x)?, hkv, rep, s * d)?)?;
+            c.cmp("repeat_kv_8x8", &got, &host::repeat_kv(&x, hkv, rep, s * d), 0.0)?;
+        }
+        {
             // Frame output: the device packer must produce byte-for-byte what
             // the host writer produced, including truncation and the clamp of
             // out-of-range decoder values. A one-code difference here would be

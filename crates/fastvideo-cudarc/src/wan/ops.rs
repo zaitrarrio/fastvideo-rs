@@ -40,6 +40,7 @@ pub enum ElemBinary {
 pub enum ElemUnary {
     Silu,
     GeluTanh,
+    GeluErf,
 }
 
 /// `bcast_binary` op codes (see the kernel).
@@ -115,6 +116,7 @@ pub fn unary_device(a: &CudaSlice<f32>, kind: ElemUnary) -> Result<CudaSlice<f32
     let f = match kind {
         ElemUnary::Silu => &dev.kernels.silu,
         ElemUnary::GeluTanh => &dev.kernels.gelu_tanh,
+        ElemUnary::GeluErf => &dev.kernels.gelu_erf,
     };
     launch!(dev.stream, f, cfg_n(a.len()); a, &mut out, &n).map_err(err)?;
     Ok(out)
@@ -896,6 +898,99 @@ pub mod host {
         x / (1.0 + (-x).exp())
     }
 
+    /// erf to double precision (W. J. Cody's rational approximations), since
+    /// std has none and the host path is the reference the kernel is held to.
+    pub fn erf(x: f64) -> f64 {
+        let ax = x.abs();
+        let r = if ax < 0.5 {
+            const A: [f64; 5] = [3.16112374387056560e0, 1.13864154151050156e2, 3.77485237685302021e2, 3.20937758913846947e3, 1.85777706184603153e-1];
+            const B: [f64; 4] = [2.36012909523441209e1, 2.44024637934444173e2, 1.28261652607737228e3, 2.84423683343917062e3];
+            let y = ax * ax;
+            let mut num = A[4] * y;
+            let mut den = y;
+            for i in 0..3 {
+                num = (num + A[i]) * y;
+                den = (den + B[i]) * y;
+            }
+            return x * (num + A[3]) / (den + B[3]);
+        } else if ax < 4.0 {
+            const C: [f64; 9] = [5.64188496988670089e-1, 8.88314979438837594e0, 6.61191906371416295e1, 2.98635138197400131e2, 8.81952221241769090e2, 1.71204761263407058e3, 2.05107837782607147e3, 1.23033935479799725e3, 2.15311535474403846e-8];
+            const D: [f64; 8] = [1.57449261107098347e1, 1.17693950891312499e2, 5.37181101862009858e2, 1.62138957456669019e3, 3.29079923573345963e3, 4.36261909014324716e3, 3.43936767414372164e3, 1.23033935480374942e3];
+            let mut num = C[8] * ax;
+            let mut den = ax;
+            for i in 0..7 {
+                num = (num + C[i]) * ax;
+                den = (den + D[i]) * ax;
+            }
+            1.0 - (-ax * ax).exp() * (num + C[7]) / (den + D[7])
+        } else {
+            const P: [f64; 6] = [3.05326634961232344e-1, 3.60344899949804439e-1, 1.25781726111229246e-1, 1.60837851487422766e-2, 6.58749161529837803e-4, 1.63153871373020978e-2];
+            const Q: [f64; 5] = [2.56852019228982242e0, 1.87295284992346725e0, 5.27905102951428412e-1, 6.05183413124413191e-2, 2.33520497626869185e-3];
+            let y = 1.0 / (ax * ax);
+            let mut num = P[5] * y;
+            let mut den = y;
+            for i in 0..4 {
+                num = (num + P[i]) * y;
+                den = (den + Q[i]) * y;
+            }
+            let t = y * (num + P[4]) / (den + Q[4]);
+            let t = (1.0 / std::f64::consts::PI.sqrt() - t) / ax;
+            1.0 - (-ax * ax).exp() * t
+        };
+        if x < 0.0 { -r } else { r }
+    }
+
+    pub fn gelu_erf(x: f32) -> f32 {
+        let x = f64::from(x);
+        (0.5 * x * (1.0 + erf(x * std::f64::consts::FRAC_1_SQRT_2))) as f32
+    }
+
+    pub fn leaky_relu(x: f32, slope: f32) -> f32 {
+        if x >= 0.0 { x } else { x * slope }
+    }
+
+    /// `[N, C, L]`: `x + inv_beta[c] * sin^2(alpha[c] x)`.
+    pub fn snake_beta(a: &[f32], alpha: &[f32], inv_beta: &[f32], c: usize, l: usize) -> Vec<f32> {
+        a.par_iter()
+            .enumerate()
+            .map(|(i, &x)| {
+                let ch = (i / l) % c;
+                let sn = (alpha[ch] * x).sin();
+                x + inv_beta[ch] * sn * sn
+            })
+            .collect()
+    }
+
+    /// rotate_half RoPE over channels `[0, r)` of `[B, H, S, D]`, `[S, R]` tables.
+    pub fn rope_half(x: &[f32], cos: &[f32], sin: &[f32], s: usize, d: usize, r: usize) -> Vec<f32> {
+        let half = r / 2;
+        x.par_iter()
+            .enumerate()
+            .map(|(i, &v)| {
+                let j = i % d;
+                if j >= r {
+                    return v;
+                }
+                let p = (i / d) % s;
+                let other = if j < half { -x[i + half] } else { x[i - half] };
+                v * cos[p * r + j] + other * sin[p * r + j]
+            })
+            .collect()
+    }
+
+    /// `[B, Hkv, S, D]` → `[B, Hkv * rep, S, D]`; `inner = S * D`.
+    pub fn repeat_kv(x: &[f32], hkv: usize, rep: usize, inner: usize) -> Vec<f32> {
+        let total = x.len() * rep;
+        (0..total)
+            .into_par_iter()
+            .map(|i| {
+                let h = (i / inner) % (hkv * rep);
+                let b = i / (inner * hkv * rep);
+                x[(b * hkv + h / rep) * inner + i % inner]
+            })
+            .collect()
+    }
+
     pub fn gelu_tanh(x: f32) -> f32 {
         let c = (2.0 / std::f32::consts::PI).sqrt();
         0.5 * x * (1.0 + (c * (x + 0.044715 * x * x * x)).tanh())
@@ -1200,6 +1295,70 @@ pub fn tanh_scaled_device(a: &CudaSlice<f32>, s: f32) -> Result<CudaSlice<f32>> 
     let sd = dev.stream.memcpy_stod(&[s]).map_err(err)?;
     let mut out = alloc(a.len())?;
     launch!(dev.stream, &dev.kernels.tanh_scaled, cfg_n(a.len()); a, &mut out, &sd, &n).map_err(err)?;
+    Ok(out)
+}
+
+// ---- decoder-only encoders and audio decoders ----------------------------
+
+#[cfg(feature = "cuda")]
+pub fn leaky_relu_device(a: &CudaSlice<f32>, slope: f32) -> Result<CudaSlice<f32>> {
+    let dev = ctx()?;
+    let n = a.len() as i64;
+    let mut out = alloc(a.len())?;
+    launch!(dev.stream, &dev.kernels.leaky_relu, cfg_n(a.len()); a, &slope, &mut out, &n).map_err(err)?;
+    Ok(out)
+}
+
+/// `x + inv_beta[c] * sin^2(alpha[c] * x)` over `[N, C, L]`.
+#[cfg(feature = "cuda")]
+pub fn snake_beta_device(
+    a: &CudaSlice<f32>,
+    alpha: &CudaSlice<f32>,
+    inv_beta: &CudaSlice<f32>,
+    c: usize,
+    l: usize,
+) -> Result<CudaSlice<f32>> {
+    let dev = ctx()?;
+    if alpha.len() != c || inv_beta.len() != c || c == 0 || l == 0 || a.len() % (c * l) != 0 {
+        return Err(err(format!("snake_beta: {} elements for [N, {c}, {l}] with {} alphas", a.len(), alpha.len())));
+    }
+    let (n, c, l) = (a.len() as i64, c as i64, l as i64);
+    let mut out = alloc(a.len())?;
+    launch!(dev.stream, &dev.kernels.snake_beta, cfg_n(a.len()); a, alpha, inv_beta, &mut out, &c, &l, &n).map_err(err)?;
+    Ok(out)
+}
+
+/// rotate_half RoPE over channels `[0, r)` of `[B, H, S, D]` with `[S, R]` tables.
+#[cfg(feature = "cuda")]
+pub fn rope_half_device(
+    x: &CudaSlice<f32>,
+    cos: &CudaSlice<f32>,
+    sin: &CudaSlice<f32>,
+    s: usize,
+    d: usize,
+    r: usize,
+) -> Result<CudaSlice<f32>> {
+    let dev = ctx()?;
+    if r == 0 || r % 2 != 0 || r > d || cos.len() != s * r || sin.len() != s * r || x.len() % (s * d) != 0 {
+        return Err(err(format!("rope_half: x {} for S={s} D={d} R={r}, tables {}", x.len(), cos.len())));
+    }
+    let (n, s, d, r) = (x.len() as i64, s as i64, d as i64, r as i64);
+    let mut out = alloc(x.len())?;
+    launch!(dev.stream, &dev.kernels.rope_half, cfg_n(x.len()); x, cos, sin, &mut out, &s, &d, &r, &n).map_err(err)?;
+    Ok(out)
+}
+
+/// `[B, Hkv, S, D]` → `[B, Hkv * rep, S, D]` (repeat_interleave on the head axis).
+#[cfg(feature = "cuda")]
+pub fn repeat_kv_device(x: &CudaSlice<f32>, hkv: usize, rep: usize, inner: usize) -> Result<CudaSlice<f32>> {
+    let dev = ctx()?;
+    if hkv == 0 || rep == 0 || inner == 0 || x.len() % (hkv * inner) != 0 {
+        return Err(err(format!("repeat_kv: {} elements for Hkv={hkv} inner={inner}", x.len())));
+    }
+    let total = x.len() * rep;
+    let (n, hkv, rep, inner) = (total as i64, hkv as i64, rep as i64, inner as i64);
+    let mut out = alloc(total)?;
+    launch!(dev.stream, &dev.kernels.repeat_kv, cfg_n(total); x, &mut out, &hkv, &rep, &inner, &n).map_err(err)?;
     Ok(out)
 }
 

@@ -1226,3 +1226,65 @@ extern "C" __global__ void pack_rgb_u8(
         dst[c] = (unsigned char)v;
     }
 }
+
+// ---- ops shared by the decoder-only text encoders and the audio decoders ----
+
+// Exact GELU, 0.5 x (1 + erf(x / sqrt 2)): what `nn.GELU()` means when a
+// checkpoint does not say "tanh". The two differ by ~1e-3, far above parity.
+extern "C" __global__ void gelu_erf(const float* a, float* out, long n) {
+    long i = IDX();
+    if (i < n) {
+        float x = a[i];
+        out[i] = 0.5f * x * (1.0f + erff(x * 0.70710678118654752f));
+    }
+}
+extern "C" __global__ void leaky_relu(const float* a, float slope, float* out, long n) {
+    long i = IDX();
+    if (i < n) {
+        float x = a[i];
+        out[i] = x >= 0.0f ? x : x * slope;
+    }
+}
+// Snake / SnakeBeta on [N, C, L]: x + inv_beta[c] * sin^2(alpha[c] x). The
+// caller resolves log-scale parameters and 1 / (beta + eps) once at load, so
+// one kernel serves DAC's Snake (beta = alpha) and BigVGAN's SnakeBeta.
+extern "C" __global__ void snake_beta(
+    const float* a, const float* alpha, const float* inv_beta, float* out, long c, long l, long n
+) {
+    long i = IDX();
+    if (i < n) {
+        long ch = (i / l) % c;
+        float x = a[i];
+        float sn = sinf(alpha[ch] * x);
+        out[i] = x + inv_beta[ch] * sn * sn;
+    }
+}
+// Rotary embedding in the rotate_half convention (HF Llama / Qwen / Gemma):
+// out = x * cos + rotate_half(x) * sin with rotate_half(x) = cat(-x2, x1),
+// over channels [0, r) of the head; channels [r, d) pass through (partial
+// rotary). x: [B, H, S, D]; cos, sin: [S, R] — explicit per-position tables, so
+// positions are whatever the caller says they are.
+extern "C" __global__ void rope_half(
+    const float* x, const float* cs, const float* sn, float* out, long s, long d, long r, long n
+) {
+    long i = IDX();
+    if (i >= n) return;
+    long j = i % d;
+    if (j >= r) {
+        out[i] = x[i];
+        return;
+    }
+    long p = (i / d) % s;
+    long half = r / 2;
+    float other = j < half ? -x[i + half] : x[i - half];
+    out[i] = x[i] * cs[p * r + j] + other * sn[p * r + j];
+}
+// Grouped-query attention: [B, Hkv, S, D] -> [B, Hkv * rep, S, D], each kv
+// head repeated `rep` times in place (torch repeat_interleave on dim 1).
+extern "C" __global__ void repeat_kv(const float* x, float* out, long hkv, long rep, long inner, long n) {
+    long i = IDX();
+    if (i >= n) return;
+    long h = (i / inner) % (hkv * rep);
+    long b = i / (inner * hkv * rep);
+    out[i] = x[(b * hkv + h / rep) * inner + i % inner];
+}
