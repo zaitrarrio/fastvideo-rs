@@ -8,5 +8,5 @@ pub mod rope;
 pub mod schedule;
 
 pub use config::{ltx2_19b, ltx2_19b_distilled, Ltx2Config};
-pub use rope::{Ltx2RopeTables, SplitRope};
+pub use rope::{Ltx2RopeTables, ScalarDivision, SplitRope};
 pub use schedule::Ltx2Schedule;

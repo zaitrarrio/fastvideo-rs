@@ -154,6 +154,10 @@ pub enum Stage {
         /// Later blocks and both velocities.
         #[arg(long, default_value_t = 2e-2)]
         max_rel: f64,
+        /// With a float32 reference in the file (`--dit-dtype both`): ours may
+        /// be this many times as far from float32 as the bf16 reference is.
+        #[arg(long, default_value_t = 1.25)]
+        floor_factor: f64,
     },
     /// The 8-step distilled loop from the oracle's noise on the oracle's
     /// connector outputs, diffed after every step; with `--weights`, the final
@@ -185,6 +189,9 @@ pub enum Stage {
         min_psnr_db: f64,
         #[arg(long, default_value_t = 35.0)]
         min_psnr_db_e2e: f64,
+        /// As for `dit`: the gate when `sample32.*` is in the file.
+        #[arg(long, default_value_t = 1.25)]
+        floor_factor: f64,
     },
     /// Generate a clip end to end: prompt → mp4 with sound, plus timings and
     /// peak VRAM. Needs `--mode fast`.
@@ -245,11 +252,11 @@ pub fn run(report: &mut Report, stage: &Stage) -> StageResult<()> {
         Stage::Vae { weights, oracle, device, max_abs, max_rmse, max_abs_streamed } => {
             vae(report, weights, oracle, device, [*max_abs, *max_rmse, *max_abs_streamed])
         }
-        Stage::Dit { dit: path, oracle, device, geometry, rope_only, max_abs_rope, max_rel_first, max_rel } => {
-            dit(report, path, oracle, device, *geometry, *rope_only, [*max_abs_rope, *max_rel_first, *max_rel])
+        Stage::Dit { dit: path, oracle, device, geometry, rope_only, max_abs_rope, max_rel_first, max_rel, floor_factor } => {
+            dit(report, path, oracle, device, *geometry, *rope_only, [*max_abs_rope, *max_rel_first, *max_rel, *floor_factor])
         }
-        Stage::Loop { dit: path, oracle, weights, device, geometry, max_rel_first, max_rel, min_psnr_db, min_psnr_db_e2e } => {
-            sample_loop(report, path, oracle, weights.as_deref(), device, *geometry, [*max_rel_first, *max_rel, *min_psnr_db, *min_psnr_db_e2e])
+        Stage::Loop { dit: path, oracle, weights, device, geometry, max_rel_first, max_rel, min_psnr_db, min_psnr_db_e2e, floor_factor } => {
+            sample_loop(report, path, oracle, weights.as_deref(), device, *geometry, [*max_rel_first, *max_rel, *min_psnr_db, *min_psnr_db_e2e, *floor_factor])
         }
         Stage::Gen { weights, dit: path, prompt, clip, seed, device, geometry, no_mp4 } => {
             gen(report, weights, path, prompt, clip, *seed, device, *geometry, !*no_mp4)
@@ -601,11 +608,79 @@ fn cuda(t: &F32Tensor) -> anyhow::Result<CudaTensor> {
     Ok(CudaTensor::from_vec(t.data.clone(), t.shape.clone())?)
 }
 
-fn dit(report: &mut Report, path: &Path, oracle: &Path, device: &str, g: Geometry, rope_only: bool, [max_abs_rope, max_rel_first, max_rel]: [f64; 3]) -> StageResult<()> {
+/// One of our tensors against the bf16 reference and, when the oracle ran
+/// `--dit-dtype both`, against the float32 one — with the distance *between*
+/// the two references as the floor.
+///
+/// bf16 weights widen to float32 exactly, so the float32 pass is the same
+/// function without rounding, and the bf16 pass is "the product". A port is
+/// wrong by what separates it from float32 *beyond* what separates the product
+/// from float32; against the bf16 dump alone, the reference's own noise is
+/// indistinguishable from ours.
+struct Judged {
+    name: String,
+    vs_bf16: crate::metrics::Diff,
+    vs_f32: Option<(crate::metrics::Diff, crate::metrics::Diff)>,
+    limit_bf16: f64,
+}
+
+impl Judged {
+    fn new(name: String, ours: &[f32], bf16: &F32Tensor, f32_ref: Option<&F32Tensor>, limit_bf16: f64) -> Self {
+        Self { name, vs_bf16: diff(ours, &bf16.data), vs_f32: f32_ref.map(|r| (diff(ours, &r.data), diff(&bf16.data, &r.data))), limit_bf16 }
+    }
+
+    fn to_json(&self) -> serde_json::Value {
+        match &self.vs_f32 {
+            Some((ours, floor)) => json!({"vs_bf16": self.vs_bf16.to_json(), "vs_f32": ours.to_json(), "reference_bf16_vs_f32": floor.to_json()}),
+            None => json!({"vs_bf16": self.vs_bf16.to_json()}),
+        }
+    }
+
+    /// With a float32 reference: ours must be within `factor` of the floor (or
+    /// under an absolute 1e-3, below which the comparison is rounding on both
+    /// sides). Without one: the published bf16 limit.
+    fn check(&self, report: &mut Report, factor: f64) -> StageResult<()> {
+        match &self.vs_f32 {
+            Some((ours, floor)) => {
+                let limit = (factor * floor.rel_l2).max(1e-3);
+                report.check(
+                    self.name.clone(),
+                    ours.within(limit),
+                    json!({"rel_l2_vs_f32": ours.rel_l2, "cosine_vs_f32": ours.cosine, "reference_bf16_vs_f32": floor.rel_l2, "rel_l2_vs_bf16": self.vs_bf16.rel_l2}),
+                    json!({"rel_l2_vs_f32": limit, "floor_factor": factor}),
+                )
+            }
+            None => {
+                // A relative error r between near-parallel vectors costs about r²/2
+                // of cosine; r² leaves room without admitting a sign or scale slip.
+                let cosine_min = 1.0 - self.limit_bf16 * self.limit_bf16;
+                report.check(
+                    self.name.clone(),
+                    self.vs_bf16.within(self.limit_bf16) && self.vs_bf16.cosine >= cosine_min,
+                    self.vs_bf16.to_json(),
+                    json!({"rel_l2": self.limit_bf16, "cosine_min": cosine_min}),
+                )
+            }
+        }
+    }
+}
+
+/// Every `stride`-th token of `[1, S, C]`, on the device — the oracle keeps the
+/// sub-layer taps of the long (video) stream that way and the short one whole.
+fn strided(t: &CudaTensor, stride: usize) -> anyhow::Result<Vec<f32>> {
+    let [_, tokens, width] = t.shape[..] else { anyhow::bail!("tap of shape {:?}", t.shape) };
+    if stride <= 1 || tokens <= 1024 {
+        return host(t);
+    }
+    let rows: Vec<usize> = (0..tokens).step_by(stride).collect();
+    host(&t.reshape(vec![tokens, width])?.index_select_rows(&rows)?)
+}
+
+fn dit(report: &mut Report, path: &Path, oracle: &Path, device: &str, g: Geometry, rope_only: bool, [max_abs_rope, max_rel_first, max_rel, floor_factor]: [f64; 4]) -> StageResult<()> {
     report.set("device", crate::gpu::init(device)?);
     let cfg = ltx2_19b_distilled();
     let t_cfg = &cfg.transformer;
-    let mut orc = load_oracle(oracle, &["dit.", "conn.video", "conn.audio"])?;
+    let mut orc = load_oracle(oracle, &["dit.", "dit32.", "conn.video", "conn.audio"])?;
     let video_in = take(&mut orc, "dit.video_in", oracle)?;
     let audio_in = take(&mut orc, "dit.audio_in", oracle)?;
     let grid = t_cfg.latent_grid(g.num_frames, g.height, g.width);
@@ -619,6 +694,8 @@ fn dit(report: &mut Report, path: &Path, oracle: &Path, device: &str, g: Geometr
     )?;
 
     // --- rotary tables: pure host arithmetic, judged to the last digits --------
+    // Built the way torch builds them on CUDA (scalar division as a multiply by
+    // the float32 reciprocal), which is where the oracle runs.
     let tables = Ltx2RopeTables::new(t_cfg, grid, audio_tokens, g.frame_rate as f32);
     let named: [(&str, &SplitRope); 4] = [("video", &tables.video), ("audio", &tables.audio), ("cross_video", &tables.cross_video), ("cross_audio", &tables.cross_audio)];
     let mut rope_diffs = Vec::new();
@@ -638,9 +715,17 @@ fn dit(report: &mut Report, path: &Path, oracle: &Path, device: &str, g: Geometr
 
     // --- one forward on the oracle's inputs -----------------------------------
     let timestep = take(&mut orc, "dit.timestep", oracle)?.data.first().copied().context("dit.timestep is empty")?;
+    let stride = orc.remove("dit.tap_stride").and_then(|t| t.data.first().copied()).map_or(1, |s| s as usize);
+    let has_f32 = orc.contains_key("dit32.video_out");
     let (map, layout) = open_distilled(path, "transformer")?;
     let keys = Keys::transformer(layout);
-    report.set("dit", json!({"source": path.display().to_string(), "layout": format!("{layout:?}"), "timestep": timestep, "video_tokens": video_in.shape[1], "audio_tokens": audio_in.shape[1]}));
+    report.set(
+        "dit",
+        json!({
+            "source": path.display().to_string(), "layout": format!("{layout:?}"), "timestep": timestep,
+            "video_tokens": video_in.shape[1], "audio_tokens": audio_in.shape[1], "float32_reference": has_f32, "tap_stride": stride,
+        }),
+    );
     let peak = crate::gpu::PeakMem::start();
     let timer = std::time::Instant::now();
     let model = Ltx2Transformer::load(&map, &keys, t_cfg)?;
@@ -649,36 +734,65 @@ fn dit(report: &mut Report, path: &Path, oracle: &Path, device: &str, g: Geometr
     let ropes = Ropes::upload(&tables)?;
     let text = model.project_text(&cuda(&take(&mut orc, "conn.video", oracle)?)?, &cuda(&take(&mut orc, "conn.audio", oracle)?)?)?;
     let (video, audio) = (cuda(&video_in)?, cuda(&audio_in)?);
-    // Blocks the oracle tapped: dit.blockNN.{video,audio}.
-    let tapped: Vec<usize> = (0..t_cfg.num_layers).filter(|i| orc.contains_key(&format!("dit.block{i:02}.video"))).collect();
-    let mut taps: Vec<(usize, Vec<f32>, Vec<f32>)> = Vec::new();
+    // What the oracle tapped: block outputs `dit.blockNN.{video,audio}` and, inside
+    // some blocks and at the heads, sub-layer taps under the names the DiT's probe
+    // emits. Only what the file holds is downloaded.
+    let wanted: std::collections::HashSet<String> = orc.keys().filter_map(|k| k.strip_prefix("dit.")).map(str::to_string).collect();
+    let mut ours: Vec<(String, Vec<f32>)> = Vec::new();
+    let mut probe_err: Option<anyhow::Error> = None;
     let ((v_out, a_out), seconds) = measure(report, "dit_forward", || {
+        let mut block_taps: Vec<(String, Vec<f32>)> = Vec::new();
         let mut observe = |i: usize, v: &CudaTensor, a: &CudaTensor| -> fastvideo_cudarc::wan::tensor::Result<()> {
-            if tapped.contains(&i) {
-                taps.push((i, v.host_cow()?.into_owned(), a.host_cow()?.into_owned()));
+            for (stream, t) in [("video", v), ("audio", a)] {
+                let name = format!("block{i:02}.{stream}");
+                if wanted.contains(&name) {
+                    block_taps.push((name, t.host_cow()?.into_owned()));
+                }
             }
             Ok(())
         };
-        let (v, a) = model.forward(&video, &audio, &text, timestep, &ropes, Some(&mut observe))?;
+        let mut probe = |name: &str, t: &CudaTensor| -> fastvideo_cudarc::wan::tensor::Result<()> {
+            if wanted.contains(name) && probe_err.is_none() {
+                match strided(t, stride) {
+                    Ok(values) => ours.push((name.to_string(), values)),
+                    Err(e) => probe_err = Some(e),
+                }
+            }
+            Ok(())
+        };
+        let (v, a) = model.forward_probed(&video, &audio, &text, timestep, &ropes, Some(&mut observe), Some(&mut probe))?;
+        ours.extend(block_taps);
         Ok((host(&v)?, host(&a)?))
     })?;
-    report.note("dit_forward", json!({"seconds": seconds, "includes": "block-tap downloads", "peak_vram_mib": peak.stop()}));
-
-    // Every metric lands before the first gate can stop the stage: the block at
-    // which the error starts to grow is the diagnosis.
-    let mut results = Vec::new();
-    for (i, v, a) in &taps {
-        for (stream, ours) in [("video", v), ("audio", a)] {
-            let name = format!("dit.block{i:02}.{stream}");
-            let d = diff(ours, &take(&mut orc, &name, oracle)?.data);
-            results.push((name, d, if *i == 0 { max_rel_first } else { max_rel }));
-        }
+    if let Some(e) = probe_err {
+        return Err(e.into());
     }
-    results.push(("dit.video_out".into(), diff(&v_out, &take(&mut orc, "dit.video_out", oracle)?.data), max_rel));
-    results.push(("dit.audio_out".into(), diff(&a_out, &take(&mut orc, "dit.audio_out", oracle)?.data), max_rel));
-    report.set("metrics", results.iter().map(|(n, d, _)| (n.clone(), d.to_json())).collect::<serde_json::Map<_, _>>());
-    for (name, d, limit) in &results {
-        report.check(name.clone(), d.within(*limit) && d.cosine >= 0.999, d.to_json(), json!({"rel_l2": limit, "cosine_min": 0.999}))?;
+    report.note("dit_forward", json!({"seconds": seconds, "includes": "tap downloads", "taps": ours.len(), "peak_vram_mib": peak.stop()}));
+    ours.push(("video_out".into(), v_out));
+    ours.push(("audio_out".into(), a_out));
+    // In execution order, so the report reads as the forward does.
+    let order = |n: &str| -> (usize, usize) {
+        let block = n.strip_prefix("block").and_then(|r| r.get(..2)).and_then(|b| b.parse().ok()).unwrap_or(usize::MAX);
+        let step = ["attn1_in", "attn1_out", "attn1_after", "attn2_in", "attn2_out", "attn2_after", "av_in", "av_out", "av_after", "ff_in", "ff_out"]
+            .iter()
+            .position(|s| n.ends_with(s))
+            .unwrap_or(99);
+        (block, step)
+    };
+    ours.sort_by_key(|(n, _)| (order(n), n.clone()));
+
+    // Every metric lands before the first gate can stop the stage: the first tap
+    // at which ours leaves the floor is the diagnosis.
+    let mut judged = Vec::new();
+    for (name, values) in &ours {
+        let bf16 = take(&mut orc, &format!("dit.{name}"), oracle)?;
+        let f32_ref = orc.remove(&format!("dit32.{name}"));
+        let limit = if name.starts_with("block00") { max_rel_first } else { max_rel };
+        judged.push(Judged::new(format!("dit.{name}"), values, &bf16, f32_ref.as_ref(), limit));
+    }
+    report.set("metrics", judged.iter().map(|j| (j.name.clone(), j.to_json())).collect::<serde_json::Map<_, _>>());
+    for j in &judged {
+        j.check(report, floor_factor)?;
     }
     Ok(())
 }
@@ -708,12 +822,12 @@ fn sample_loop(
     weights: Option<&Path>,
     device: &str,
     g: Geometry,
-    [max_rel_first, max_rel, min_psnr, min_psnr_e2e]: [f64; 4],
+    [max_rel_first, max_rel, min_psnr, min_psnr_e2e, floor_factor]: [f64; 5],
 ) -> StageResult<()> {
     report.set("device", crate::gpu::init(device)?);
     let cfg = ltx2_19b_distilled();
     let t_cfg = &cfg.transformer;
-    let mut orc = load_oracle(oracle, &["sample.", "conn.video", "conn.audio"])?;
+    let mut orc = load_oracle(oracle, &["sample.", "sample32.", "conn.video", "conn.audio"])?;
     let noise_v = take(&mut orc, "sample.video_noise", oracle)?;
     let noise_a = take(&mut orc, "sample.audio_noise", oracle)?;
     let grid = t_cfg.latent_grid(g.num_frames, g.height, g.width);
@@ -748,21 +862,22 @@ fn sample_loop(
     // Every step's metric lands before the first gate can stop the stage: where
     // the drift starts is the diagnosis.
     let last = steps.len().saturating_sub(1);
-    let mut results = Vec::new();
+    let mut results: Vec<Judged> = Vec::new();
     let mut oracle_final: Option<(F32Tensor, F32Tensor)> = None;
     for (i, (v, a, _)) in steps.iter().enumerate() {
+        // Linear in the step index between the two published bf16 limits.
+        let limit = max_rel_first + (max_rel - max_rel_first) * (i as f64 / last.max(1) as f64);
         let (want_v, want_a) = (take(&mut orc, &format!("sample.step{i}.video"), oracle)?, take(&mut orc, &format!("sample.step{i}.audio"), oracle)?);
-        results.push((format!("loop.step{i}.video"), diff(v, &want_v.data), i));
-        results.push((format!("loop.step{i}.audio"), diff(a, &want_a.data), i));
+        let (v32, a32) = (orc.remove(&format!("sample32.step{i}.video")), orc.remove(&format!("sample32.step{i}.audio")));
+        results.push(Judged::new(format!("loop.step{i}.video"), v, &want_v, v32.as_ref(), limit));
+        results.push(Judged::new(format!("loop.step{i}.audio"), a, &want_a, a32.as_ref(), limit));
         if i == last {
             oracle_final = Some((want_v, want_a));
         }
     }
-    report.set("metrics", results.iter().map(|(n, d, _)| (n.clone(), d.to_json())).collect::<serde_json::Map<_, _>>());
-    for (name, d, i) in &results {
-        // Linear in the step index between the two published limits.
-        let limit = max_rel_first + (max_rel - max_rel_first) * (*i as f64 / last.max(1) as f64);
-        report.check(name.clone(), d.within(limit) && d.cosine >= 0.99, d.to_json(), json!({"rel_l2": limit, "cosine_min": 0.99}))?;
+    report.set("metrics", results.iter().map(|j| (j.name.clone(), j.to_json())).collect::<serde_json::Map<_, _>>());
+    for j in &results {
+        j.check(report, floor_factor)?;
     }
 
     // --- decoded output, when the decoders are at hand -------------------------

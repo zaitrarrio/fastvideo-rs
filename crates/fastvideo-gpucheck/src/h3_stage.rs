@@ -80,12 +80,12 @@ pub enum Stage {
         oracle: PathBuf,
         #[arg(long, default_value = "cuda")]
         device: String,
-        /// Optional gate on the worst pixel (ImageNet-normalized RGB, before the
-        /// clamp). Always recorded; ungated until it is calibrated against a
-        /// TF32-free, math-SDPA reference (first hardware run: 8.8e-3 at rel
-        /// 3.6e-4 against a reference whose kernels were not pinned).
-        #[arg(long)]
-        max_abs: Option<f64>,
+        /// Worst pixel (ImageNet-normalized RGB, before the clamp). Calibrated on
+        /// the TF32-free, math-SDPA reference: measured 3.2e-5 at rel 1.5e-6.
+        /// (Against an unpinned reference it was 8.8e-3: that was the
+        /// reference's TF32, not the port.)
+        #[arg(long, default_value_t = 2e-4)]
+        max_abs: f64,
         #[arg(long, default_value_t = 1e-3)]
         max_rel: f64,
     },
@@ -340,7 +340,7 @@ fn audio_vae(report: &mut Report, weights: &Path, oracle: &Path, device: &str, m
     Ok(())
 }
 
-fn vae(report: &mut Report, weights: &Path, oracle: &Path, device: &str, max_abs: Option<f64>, max_rel: f64) -> StageResult<()> {
+fn vae(report: &mut Report, weights: &Path, oracle: &Path, device: &str, max_abs: f64, max_rel: f64) -> StageResult<()> {
     use fastvideo_cudarc::h3::vae::H3VideoDecoder;
     use fastvideo_models::h3::config::H3VideoVaeConfig;
 
@@ -397,7 +397,7 @@ fn vae(report: &mut Report, weights: &Path, oracle: &Path, device: &str, max_abs
         })
         .collect();
     report.note("vae_max_abs_per_frame", json!({"values": per_frame}));
-    report.check("vae_video_raw", max_abs.is_none_or(|m| d.max_abs <= m) && d.within(max_rel), d.to_json(), json!({"max_abs": max_abs, "rel_l2": max_rel}))?;
+    report.check("vae_video_raw", d.max_abs <= max_abs && d.within(max_rel), d.to_json(), json!({"max_abs": max_abs, "rel_l2": max_rel}))?;
     Ok(())
 }
 

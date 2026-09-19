@@ -75,7 +75,13 @@ def main() -> int:
     ap.add_argument("--seed", type=int, default=1024)
     ap.add_argument("--max-sequence-length", type=int, default=1024)
     ap.add_argument("--text-dtype", default="bfloat16", choices=["float32", "bfloat16"])
-    ap.add_argument("--dit-dtype", default="bfloat16", choices=["float32", "bfloat16"], help="float32 needs ~76 GB for weights")
+    ap.add_argument(
+        "--dit-dtype",
+        default="bfloat16",
+        choices=["float32", "bfloat16", "both"],
+        help="float32 needs ~76 GB for weights; 'both' runs bf16 (dit.*, sample.*) then float32 (dit32.*, sample32.*) and records the distance between them",
+    )
+    ap.add_argument("--tap-stride", type=int, default=16, help="keep every Nth video token of the sub-layer taps (100 MB each otherwise)")
     ap.add_argument("--vae-latent", default="3,8,12", help="F,H,W of the fixed latent for the VAE stage")
     ap.add_argument("--audio-latent-frames", type=int, default=26)
     ap.add_argument("--skip", default="", help="comma list of stages to skip: text,conn,dit,vae,audio")
@@ -345,22 +351,41 @@ def main() -> int:
         return x.transpose(1, 2).flatten(2, 3)
 
     transformer = None
+    sample_video = sample_audio = None
     if "dit" not in skip or args.sample:
+        import contextlib
+
         from diffusers import LTX2VideoTransformer3DModel
 
-        d_dtype = getattr(torch, args.dit_dtype)
+        # "both": the product's bf16 first (tensors `dit.*` / `sample.*`), then the same
+        # module widened to float32 (`dit32.*` / `sample32.*`). bf16 weights widen
+        # exactly, so the float32 pass is the same function without rounding: the
+        # distance between the two passes is the reference's own noise floor, and a
+        # port is only wrong by what it differs from float32 *beyond* that.
+        passes = ["bfloat16", "float32"] if args.dit_dtype == "both" else [args.dit_dtype]
         t0 = time.time()
-        transformer = load(LTX2VideoTransformer3DModel, "transformer", d_dtype, "diffusers")
+        transformer = load(LTX2VideoTransformer3DModel, "transformer", getattr(torch, passes[0]), "diffusers")
         timings["load_dit_s"] = time.time() - t0
         accepted = set(inspect.signature(transformer.forward).parameters)
+        current = {"dtype": getattr(torch, passes[0]), "sdpa": "default"}
 
         # pipeline_ltx2.py:1369-1374 — [B,3,S,2] and [B,1,L,2] patch bounds in seconds /
         # pixels; computed once, identical for every step.
         video_coords = transformer.rope.prepare_video_coords(1, lat_f, lat_h, lat_w, dev, fps=args.frame_rate)
         audio_coords = transformer.audio_rope.prepare_audio_coords(1, audio_n, dev)
 
+        def sdpa_context():
+            # The float32 pass wants the plain softmax(QK^T)V, not a fused kernel's
+            # reordering. It costs 32*S*S*4 bytes of scores (4.8 GB at 6144 tokens).
+            if current["sdpa"] != "math":
+                return contextlib.nullcontext()
+            from torch.nn.attention import SDPBackend, sdpa_kernel
+
+            return sdpa_kernel(SDPBackend.MATH)
+
         def dit(video: "torch.Tensor", audio: "torch.Tensor", timestep: "torch.Tensor"):
             """One unguided call, argument for argument pipeline_ltx2.py:1399-1421."""
+            d_dtype = current["dtype"]
             kwargs = dict(
                 hidden_states=video.to(dev, d_dtype),  # :1389 latents are fp32, cast per call
                 audio_hidden_states=audio.to(dev, d_dtype),
@@ -389,116 +414,220 @@ def main() -> int:
             )
             # Older diffusers releases predate some of these keywords.
             kwargs = {k: v for k, v in kwargs.items() if k in accepted}
-            with torch.no_grad():
-                v, a = transformer(**kwargs)
+            try:
+                with torch.no_grad(), sdpa_context():
+                    v, a = transformer(**kwargs)
+            except torch.OutOfMemoryError:
+                if current["sdpa"] != "math":
+                    raise
+                # 76 GB of float32 weights leave little room; the fused kernels are
+                # still float32 arithmetic, just not the textbook order.
+                print("[oracle] math SDPA ran out of memory in float32; falling back to the default kernel", file=sys.stderr)
+                current["sdpa"] = "default (math SDPA OOM)"
+                free()
+                with torch.no_grad():
+                    v, a = transformer(**kwargs)
             # pipeline_ltx2.py:1422-1423 — everything outside the model is float32.
             return v.float(), a.float()
 
-    # --- dit: one forward ----------------------------------------------------
-    if "dit" not in skip:
-        with torch.no_grad():
-            # The four RoPE tables, exactly as forward() builds them
-            # (transformer_ltx2.py:1505-1511): self-attn tables are [1,32,S,64] (video,
-            # 3 axes) and [1,32,L,32] (audio); the a↔v cross tables are time-only,
-            # [1,32,S,32] and [1,32,L,32].
-            for name, (cos, sin) in {
-                "video": transformer.rope(video_coords, device=dev),
-                "audio": transformer.audio_rope(audio_coords, device=dev),
-                "cross_video": transformer.cross_attn_rope(video_coords[:, 0:1, :], device=dev),
-                "cross_audio": transformer.cross_attn_audio_rope(audio_coords[:, 0:1, :], device=dev),
-            }.items():
-                out[f"dit.rope.{name}.cos"] = f32(cos)
-                out[f"dit.rope.{name}.sin"] = f32(sin)
-        out["dit.video_coords"] = f32(video_coords)
-        out["dit.audio_coords"] = f32(audio_coords)
+        def strided(t: "torch.Tensor") -> "torch.Tensor":
+            # Sub-layer taps of the video stream are [1, 6144, 4096] each — 100 MB — and
+            # there are two dozen of them per pass. Every `tap_stride`-th token is as
+            # good a sample for a relative error; the audio stream is kept whole.
+            return f32(t[:, :: args.tap_stride] if t.shape[1] > 1024 else t)
 
-        video_in = pack_video(cpu_randn((1, 128, lat_f, lat_h, lat_w), 0))  # [1, S, 128]
-        audio_in = pack_audio(cpu_randn((1, 8, audio_n, 16), 1))  # [1, L, 128]
-        # The scheduler's timesteps are float32(sigma) * 1000
-        # (scheduling_flow_match_euler_discrete.py:366-367); (B,) like pipeline :1396.
-        timestep = (torch.tensor([args.sigma], dtype=torch.float32) * 1000.0).to(dev)
-        out["dit.video_in"] = video_in
-        out["dit.audio_in"] = audio_in
-        out["dit.timestep"] = timestep.cpu()
+        def first(args_, kwargs_):
+            return args_[0] if args_ else kwargs_["hidden_states"]
 
-        n_blocks = len(transformer.transformer_blocks)
-        taps = sorted({0, n_blocks // 2, n_blocks - 1})
-        hooks = []
-        for i in taps:
-            # Each block returns (video [B,S,4096], audio [B,L,2048]) (transformer_ltx2.py:811).
-            def tap(_m, _i, o, i=i):
-                out[f"dit.block{i:02d}.video"] = f32(o[0])
-                out[f"dit.block{i:02d}.audio"] = f32(o[1])
+        def install_taps(prefix: str, n_blocks: int):
+            hooks = []
+            taps = sorted({0, n_blocks // 2, n_blocks - 1})
+            for i in taps:
+                # Each block returns (video [B,S,4096], audio [B,L,2048]) (transformer_ltx2.py:811).
+                def tap(_m, _i, o, i=i):
+                    out[f"{prefix}.block{i:02d}.video"] = f32(o[0])
+                    out[f"{prefix}.block{i:02d}.audio"] = f32(o[1])
 
-            hooks.append(transformer.transformer_blocks[i].register_forward_hook(tap))
-        t0 = time.time()
-        v, a = dit(video_in, audio_in, timestep)
-        torch.cuda.synchronize()
-        timings["dit_forward_s"] = time.time() - t0
-        for h in hooks:
-            h.remove()
-        out["dit.video_out"] = f32(v)  # velocity, [1, S, 128]
-        out["dit.audio_out"] = f32(a)  # velocity, [1, L, 128]
-        meta["dit_taps"] = taps
+                hooks.append(transformer.transformer_blocks[i].register_forward_hook(tap))
+            # Inside the first and the last block: for each sub-layer its input (the
+            # modulated norm), its output (before the gate) and the residual stream
+            # right after it — read as the input of the *next* norm, which is the only
+            # place the stream is visible from outside the block's forward().
+            streams = {
+                "video": [("attn1", "norm2"), ("attn2", "audio_to_video_norm"), ("audio_to_video_attn", "norm3"), ("ff", None)],
+                "audio": [("audio_attn1", "audio_norm2"), ("audio_attn2", "video_to_audio_norm"), ("video_to_audio_attn", "audio_norm3"), ("audio_ff", None)],
+            }
+            short = {"attn1": "attn1", "attn2": "attn2", "audio_to_video_attn": "av", "ff": "ff", "audio_attn1": "attn1", "audio_attn2": "attn2", "video_to_audio_attn": "av", "audio_ff": "ff"}
+            for i in sorted({0, n_blocks - 1}):
+                block = transformer.transformer_blocks[i]
+                for stream, layers in streams.items():
+                    for layer, next_norm in layers:
+                        base = f"{prefix}.block{i:02d}.{stream}.{short[layer]}"
 
-    # --- sample: the full distilled loop ------------------------------------
-    sample_video = sample_audio = None
-    if args.sample:
-        # The distilled scheduler config — no dynamic shift, no terminal stretch — makes
-        # set_timesteps(sigmas=…) return the list untouched plus a trailing 0, with
-        # timesteps = float32(sigma) * 1000 (scheduling_flow_match_euler_discrete.py:348-377).
-        # That is three lines of arithmetic, so it is done here and the scheduler class
-        # is only asked to agree: a constructor/keyword change in diffusers then costs a
-        # note in the meta file, not the run, and a dev-configured scheduler/ folder
-        # cannot silently shift the sigmas either way.
-        sigmas = torch.tensor(DISTILLED_SIGMA_VALUES + [0.0], dtype=torch.float32, device=dev)
-        timesteps = sigmas[:-1] * 1000.0
-        meta["sample_sigmas"] = [float(s) for s in sigmas]
-        try:
-            from diffusers import FlowMatchEulerDiscreteScheduler
+                        def pre(_m, a, k, base=base):
+                            out[f"{base}_in"] = strided(first(a, k))
 
-            sched = FlowMatchEulerDiscreteScheduler(
-                num_train_timesteps=1000, shift=1.0, use_dynamic_shifting=False, shift_terminal=None
-            )
-            sched.set_timesteps(sigmas=DISTILLED_SIGMA_VALUES, device=dev)
-            agree = bool(torch.equal(sched.sigmas.to(sigmas), sigmas) and torch.equal(sched.timesteps.to(timesteps), timesteps))
-            meta["sample_scheduler_check"] = {"agrees_with_diffusers": agree}
-            if not agree:
-                raise SystemExit(f"[oracle] diffusers scheduler disagrees: sigmas {sched.sigmas.tolist()}, timesteps {sched.timesteps.tolist()}")
-        except SystemExit:
-            raise
-        except Exception as e:  # API drift in the scheduler must not cost the trajectory
-            meta["sample_scheduler_check"] = {"error": repr(e)}
+                        def post(_m, _a, _k, o, base=base):
+                            out[f"{base}_out"] = strided(o)
 
-        # pipeline_ltx2.py:804-807, 844-845 — N(0,1) in float32, packed. The pipeline draws
-        # video then audio from one generator; here each has its own saved draw.
-        lat = pack_video(cpu_randn((1, 128, lat_f, lat_h, lat_w), 10)).to(dev)
-        aud = pack_audio(cpu_randn((1, 8, audio_n, 16), 11)).to(dev)
-        out["sample.video_noise"] = f32(lat)
-        out["sample.audio_noise"] = f32(aud)
-        t0 = time.time()
-        for i, t in enumerate(timesteps):
-            v, a = dit(lat, aud, t.expand(1))
-            # Unguided (guidance_scale=1, stg_scale=0, modality_scale=1, rescale=0), the
-            # pipeline still round-trips v → x0 → v in float32 (pipeline_ltx2.py:1466-1467,
-            # 1573-1574); kept so the step is bit-comparable with a real pipeline run.
-            sigma = sigmas[i]
-            v = (lat - (lat - v * sigma)) / sigma
-            a = (aud - (aud - a * sigma)) / sigma
-            # pipeline_ltx2.py:1577-1580 — scheduler.step is x ← x + (sigma_next - sigma) · v
-            # in float32, the same rule and the same sigmas for both streams.
-            dt = sigmas[i + 1] - sigma
-            lat = lat + dt * v
-            aud = aud + dt * a
-            out[f"sample.step{i}.video"] = f32(lat)
-            out[f"sample.step{i}.audio"] = f32(aud)
-        torch.cuda.synchronize()
-        timings["sample_s"] = time.time() - t0
-        sample_video, sample_audio = lat, aud
+                        hooks.append(getattr(block, layer).register_forward_pre_hook(pre, with_kwargs=True))
+                        hooks.append(getattr(block, layer).register_forward_hook(post, with_kwargs=True))
+                        if next_norm is not None:
+
+                            def after(_m, a, k, base=base):
+                                out[f"{base}_after"] = strided(first(a, k))
+
+                            hooks.append(getattr(block, next_norm).register_forward_pre_hook(after, with_kwargs=True))
+            # The output heads in pieces: LayerNorm out, then (1 + scale)·x + shift as
+            # proj_out receives it; proj_out's own output is `{prefix}.video_out`.
+            for stream, norm, proj in [("video", "norm_out", "proj_out"), ("audio", "audio_norm_out", "audio_proj_out")]:
+
+                def normed(_m, _a, _k, o, stream=stream):
+                    out[f"{prefix}.head.{stream}.norm"] = strided(o)
+
+                def modulated(_m, a, k, stream=stream):
+                    out[f"{prefix}.head.{stream}.modulated"] = strided(first(a, k) if a or "hidden_states" in k else k["input"])
+
+                hooks.append(getattr(transformer, norm).register_forward_hook(normed, with_kwargs=True))
+                hooks.append(getattr(transformer, proj).register_forward_pre_hook(modulated, with_kwargs=True))
+            return hooks, taps
+
+        def run_sample(prefix: str):
+            """The 8-step distilled loop in the current dtype; tensors `{prefix}.*`."""
+            # The distilled scheduler config — no dynamic shift, no terminal stretch — makes
+            # set_timesteps(sigmas=…) return the list untouched plus a trailing 0, with
+            # timesteps = float32(sigma) * 1000 (scheduling_flow_match_euler_discrete.py:348-377).
+            # That is three lines of arithmetic, so it is done here and the scheduler class
+            # is only asked to agree: a constructor/keyword change in diffusers then costs a
+            # note in the meta file, not the run, and a dev-configured scheduler/ folder
+            # cannot silently shift the sigmas either way.
+            sigmas = torch.tensor(DISTILLED_SIGMA_VALUES + [0.0], dtype=torch.float32, device=dev)
+            timesteps = sigmas[:-1] * 1000.0
+            meta["sample_sigmas"] = [float(s) for s in sigmas]
+            if "sample_scheduler_check" not in meta:
+                try:
+                    from diffusers import FlowMatchEulerDiscreteScheduler
+
+                    sched = FlowMatchEulerDiscreteScheduler(
+                        num_train_timesteps=1000, shift=1.0, use_dynamic_shifting=False, shift_terminal=None
+                    )
+                    sched.set_timesteps(sigmas=DISTILLED_SIGMA_VALUES, device=dev)
+                    agree = bool(torch.equal(sched.sigmas.to(sigmas), sigmas) and torch.equal(sched.timesteps.to(timesteps), timesteps))
+                    meta["sample_scheduler_check"] = {"agrees_with_diffusers": agree}
+                    if not agree:
+                        raise SystemExit(f"[oracle] diffusers scheduler disagrees: sigmas {sched.sigmas.tolist()}, timesteps {sched.timesteps.tolist()}")
+                except SystemExit:
+                    raise
+                except Exception as e:  # API drift in the scheduler must not cost the trajectory
+                    meta["sample_scheduler_check"] = {"error": repr(e)}
+
+            # pipeline_ltx2.py:804-807, 844-845 — N(0,1) in float32, packed. The pipeline draws
+            # video then audio from one generator; here each has its own saved draw.
+            lat = pack_video(cpu_randn((1, 128, lat_f, lat_h, lat_w), 10)).to(dev)
+            aud = pack_audio(cpu_randn((1, 8, audio_n, 16), 11)).to(dev)
+            out["sample.video_noise"] = f32(lat)
+            out["sample.audio_noise"] = f32(aud)
+            t0 = time.time()
+            for i, t in enumerate(timesteps):
+                v, a = dit(lat, aud, t.expand(1))
+                # Unguided (guidance_scale=1, stg_scale=0, modality_scale=1, rescale=0), the
+                # pipeline still round-trips v → x0 → v in float32 (pipeline_ltx2.py:1466-1467,
+                # 1573-1574); kept so the step is bit-comparable with a real pipeline run.
+                sigma = sigmas[i]
+                v = (lat - (lat - v * sigma)) / sigma
+                a = (aud - (aud - a * sigma)) / sigma
+                # pipeline_ltx2.py:1577-1580 — scheduler.step is x ← x + (sigma_next - sigma) · v
+                # in float32, the same rule and the same sigmas for both streams.
+                dt = sigmas[i + 1] - sigma
+                lat = lat + dt * v
+                aud = aud + dt * a
+                out[f"{prefix}.step{i}.video"] = f32(lat)
+                out[f"{prefix}.step{i}.audio"] = f32(aud)
+            torch.cuda.synchronize()
+            timings[f"{prefix}_s"] = time.time() - t0
+            return lat, aud
+
+    video_in = audio_in = timestep = None
+    for n_pass, pass_dtype in enumerate(passes if transformer is not None else []):
+        # The first pass keeps the historical names; a second pass can only be float32.
+        dit_prefix, sample_prefix = ("dit", "sample") if n_pass == 0 else ("dit32", "sample32")
+        current["dtype"] = getattr(torch, pass_dtype)
+        if pass_dtype == "float32":
+            # TF32 would make "float32" a 19-bit format on exactly the matmuls that matter.
+            torch.backends.cuda.matmul.allow_tf32 = False
+            torch.backends.cudnn.allow_tf32 = False
+            torch.set_float32_matmul_precision("highest")
+            current["sdpa"] = "math"
+            if n_pass > 0:
+                transformer.to(torch.float32)
+                free()
+        meta.setdefault("dit_passes", {})[dit_prefix] = {"dtype": pass_dtype, "tf32": pass_dtype != "float32" and bool(torch.backends.cuda.matmul.allow_tf32)}
+
+        # --- dit: one forward ------------------------------------------------
+        if "dit" not in skip:
+            if n_pass == 0:
+                with torch.no_grad():
+                    # The four RoPE tables, exactly as forward() builds them
+                    # (transformer_ltx2.py:1505-1511): self-attn tables are [1,32,S,64]
+                    # (video, 3 axes) and [1,32,L,32] (audio); the a↔v cross tables are
+                    # time-only, [1,32,S,32] and [1,32,L,32]. They are float32 whatever
+                    # the module dtype is.
+                    for name, (cos, sin) in {
+                        "video": transformer.rope(video_coords, device=dev),
+                        "audio": transformer.audio_rope(audio_coords, device=dev),
+                        "cross_video": transformer.cross_attn_rope(video_coords[:, 0:1, :], device=dev),
+                        "cross_audio": transformer.cross_attn_audio_rope(audio_coords[:, 0:1, :], device=dev),
+                    }.items():
+                        out[f"dit.rope.{name}.cos"] = f32(cos)
+                        out[f"dit.rope.{name}.sin"] = f32(sin)
+                        meta.setdefault("rope_dtypes", {})[name] = str(cos.dtype)
+                out["dit.video_coords"] = f32(video_coords)
+                out["dit.audio_coords"] = f32(audio_coords)
+
+                video_in = pack_video(cpu_randn((1, 128, lat_f, lat_h, lat_w), 0))  # [1, S, 128]
+                audio_in = pack_audio(cpu_randn((1, 8, audio_n, 16), 1))  # [1, L, 128]
+                # The scheduler's timesteps are float32(sigma) * 1000
+                # (scheduling_flow_match_euler_discrete.py:366-367); (B,) like pipeline :1396.
+                timestep = (torch.tensor([args.sigma], dtype=torch.float32) * 1000.0).to(dev)
+                out["dit.video_in"] = video_in
+                out["dit.audio_in"] = audio_in
+                out["dit.timestep"] = timestep.cpu()
+                out["dit.tap_stride"] = torch.tensor([float(args.tap_stride)])
+
+            hooks, taps = install_taps(dit_prefix, len(transformer.transformer_blocks))
+            t0 = time.time()
+            v, a = dit(video_in, audio_in, timestep)
+            torch.cuda.synchronize()
+            timings[f"{dit_prefix}_forward_s"] = time.time() - t0
+            for h in hooks:
+                h.remove()
+            out[f"{dit_prefix}.video_out"] = f32(v)  # velocity, [1, S, 128]
+            out[f"{dit_prefix}.audio_out"] = f32(a)  # velocity, [1, L, 128]
+            meta["dit_taps"] = taps
+            meta["dit_passes"][dit_prefix]["sdpa"] = current["sdpa"]
+
+        # --- sample: the full distilled loop ----------------------------------
+        if args.sample:
+            lat, aud = run_sample(sample_prefix)
+            if n_pass == 0:
+                # What gets decoded below is the product's trajectory.
+                sample_video, sample_audio = lat, aud
+
+    if transformer is not None and len(passes) == 2 and "dit" not in skip:
+        # The reference's own noise floor, tap by tap: rel-L2 of bf16 against float32.
+        floor = {}
+        for name in sorted(k for k in out if k.startswith("dit32.")):
+            a, b = out["dit." + name[len("dit32.") :]], out[name]
+            floor[name[len("dit32.") :]] = float((a - b).norm() / b.norm().clamp_min(1e-30))
+        for name in sorted(k for k in out if k.startswith("sample32.step")):
+            a, b = out["sample." + name[len("sample32.") :]], out[name]
+            floor["sample." + name[len("sample32.") :]] = float((a - b).norm() / b.norm().clamp_min(1e-30))
+        meta["dit_bf16_vs_f32"] = floor
 
     if transformer is not None:
-        # `dit` closes over the module; drop both or the 38 GB stays resident.
-        del transformer, dit
+        # Every closure over the module has to go, or its 38-76 GB stay resident
+        # through the VAE decodes.
+        del transformer, dit, install_taps, run_sample, sdpa_context
         free()
 
     # --- vae: AutoencoderKLLTX2Video decode ---------------------------------

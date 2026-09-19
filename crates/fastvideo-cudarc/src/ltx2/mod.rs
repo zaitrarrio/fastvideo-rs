@@ -19,6 +19,8 @@ pub mod vocoder;
 
 #[cfg(test)]
 mod manifest_tests;
+#[cfg(test)]
+mod reference_tests;
 
 use crate::wan::tensor::{CudaTensor, Result, TensorError};
 

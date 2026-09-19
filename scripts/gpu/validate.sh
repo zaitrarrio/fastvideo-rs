@@ -527,7 +527,11 @@ cmd_run() {
   ref_restore model && have_model_ref=1
   ref_restore parity && have_parity_ref=1
 
+  # A fresh box must have room for the tier's downloads. A reused one
+  # (--instance) already holds them, and the tier's figure is a rental filter,
+  # not a measurement: ask only for room to write outputs.
   local need_disk; need_disk=$(( $(tier_disk "$tier") - 10 ))
+  if [[ $OWN_INSTANCE -eq 0 ]]; then need_disk="${FV_NEED_DISK:-20}"; fi
   remote_run env 120 env "$need_disk"
   remote_run bootstrap 600 bootstrap
   # Downloads run in the background during the weight-free stages.
@@ -662,9 +666,11 @@ cmd_run() {
         --out "$odir/oracle.safetensors" --meta "$odir/oracle.json"
     fi
     STAGE_OPTIONAL=1 gpucheck_stage h3-dit 7200 --keep-going --mode fast h3 dit --weights "$wdir" --oracle "$odir/oracle.safetensors" || true
-    # The dense 8-rung ladder on the oracle's text and noise. Flash SDPA: a 38k
-    # token dense forward is ~316 chunked cuBLAS passes per block otherwise.
-    FV_STAGE_ENV="${FV_STAGE_ENV:-} FASTVIDEO_SDPA=flash" gpucheck_stage h3-loop 10800 --keep-going --mode fast h3 loop \
+    # The dense 8-rung ladder on the oracle's text and noise, on the default
+    # (chunked cuBLAS) SDPA: 87 s per 38k-token forward on an RTX PRO 6000. The
+    # tiled NVRTC "flash" kernel is ~20x SLOWER at this length (measured: 25
+    # blocks in 15 minutes) — it exists for memory, not speed.
+    gpucheck_stage h3-loop 3600 --keep-going --mode fast h3 loop \
       --weights "$wdir" --oracle "$odir/oracle.safetensors"
     log "h3-dit done"
     return 0
@@ -686,7 +692,9 @@ cmd_run() {
     remote_run oracle-venv 1800 oracle-venv "${FV_TORCH_BACKEND:-cu130}"
     remote_run wait-ltx2 5400 wait-weights "$wdir" 5400 transformer connectors text_encoder
     remote_run oracle-ltx2 7200 model-oracle ltx2 --weights "$wdir" --prompts "$OUTR/prompt.json" --skip vae,audio --sample \
-      --out "$odir/oracle.safetensors" --meta "$odir/oracle.json"
+      --dit-dtype "${FV_LTX2_DIT_DTYPE:-both}" --out "$odir/oracle.safetensors" --meta "$odir/oracle.json"
+    # `both`: a bf16 pass and a float32 pass of the same module, plus the
+    # reference's own bf16-vs-f32 distance per tap — the floor ours is judged by.
     # Tables first: no weights, seconds, and a layout bug is named by table.
     STAGE_OPTIONAL=1 gpucheck_stage ltx2-rope 600 --keep-going --mode fast ltx2 dit --rope-only \
       --dit "$wdir" --oracle "$odir/oracle.safetensors" || true

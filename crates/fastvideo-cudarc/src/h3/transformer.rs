@@ -379,7 +379,7 @@ impl FeedForward {
     }
 }
 
-struct Block {
+pub(crate) struct Block {
     norm1: CudaTensor,
     norm2: CudaTensor,
     attn: Attention,
@@ -387,7 +387,7 @@ struct Block {
 }
 
 impl Block {
-    fn load(map: &WeightMap, prefix: &str, cfg: &H3TransformerConfig, gate: bool) -> Result<Self> {
+    pub(crate) fn load(map: &WeightMap, prefix: &str, cfg: &H3TransformerConfig, gate: bool) -> Result<Self> {
         Ok(Self {
             norm1: pinned_weight(map, &format!("{prefix}.norm1.weight"), &[cfg.hidden_size])?,
             norm2: pinned_weight(map, &format!("{prefix}.norm2.weight"), &[cfg.hidden_size])?,

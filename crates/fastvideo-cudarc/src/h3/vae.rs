@@ -224,6 +224,12 @@ impl H3VideoDecoder {
     /// The ViT on `tiles`: `[B, t*h*w, C]` channel-last **denormalized**
     /// latents of one `(t, h, w)` geometry, to `B` clips of `[3, 4t, 16h, 16w]`.
     fn decode_tiles(&self, tiles: &CudaTensor, grid: [usize; 3]) -> Result<Vec<CudaTensor>> {
+        self.decode_tiles_observed(tiles, grid, &mut |_, _| Ok(()))
+    }
+
+    /// [`Self::decode_tiles`], showing `observe(block, x)` each ViT block's
+    /// `[B, tokens + 5, dim]` output (the diffusers reference tests hook the same point).
+    pub(crate) fn decode_tiles_observed(&self, tiles: &CudaTensor, grid: [usize; 3], observe: &mut dyn FnMut(usize, &CudaTensor) -> Result<()>) -> Result<Vec<CudaTensor>> {
         let cfg = &self.cfg;
         let (dim, heads, head_dim) = (cfg.decoder_dim(), cfg.decoder_num_attention_heads, cfg.decoder_attention_head_dim);
         let eps = cfg.decoder_norm_eps as f32;
@@ -250,7 +256,7 @@ impl H3VideoDecoder {
             let t = if norm { t.rms_norm(&self.qk_unit, eps)? } else { t };
             t.transpose(1, 2)
         };
-        for block in &self.blocks {
+        for (index, block) in self.blocks.iter().enumerate() {
             let n = x.rms_norm(&block.norm1, eps)?;
             let q = split(block.to_q.forward(&n)?, true)?.rope_half(&cos, &sin)?;
             let k = split(block.to_k.forward(&n)?, true)?.rope_half(&cos, &sin)?;
@@ -267,6 +273,7 @@ impl H3VideoDecoder {
             drop(h);
             let f = block.ff_out.forward(&value.mul(&gate.silu())?)?;
             x = x.add(&f.mul(&block.scale2)?)?;
+            observe(index, &x)?;
         }
         let x = x.layer_norm(eps, Some(&self.norm_out_weight), Some(&self.norm_out_bias))?;
         let x = self.proj_out.forward(&x.narrow(1, 0, patches)?)?;

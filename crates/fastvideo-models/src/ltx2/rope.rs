@@ -25,6 +25,31 @@
 
 use super::config::Ltx2TransformerConfig;
 
+/// How the reference divides a float32 tensor by a Python scalar — which
+/// depends on where it runs. torch's CUDA kernel multiplies by the float32
+/// reciprocal (`BinaryDivTrueKernel.cu`), its CPU kernel divides. The two
+/// differ by an ulp in a coordinate, and at the top of the frequency grid
+/// (angles up to 15 708 rad, where a float32 ulp is 2⁻¹⁰ rad) that is up to
+/// 2⁻¹⁰…2⁻⁹ in a cos/sin — exactly the residue first measured against a CUDA
+/// dump. Harmless, but free to remove: production mirrors CUDA, and the CPU
+/// fixtures are compared under `Exact`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ScalarDivision {
+    /// `x / d`: torch on the CPU, numpy.
+    Exact,
+    /// `x * (1 / d)` with the reciprocal rounded to float32: torch on CUDA.
+    Reciprocal,
+}
+
+impl ScalarDivision {
+    fn div(self, x: f32, d: f32) -> f32 {
+        match self {
+            Self::Exact => x / d,
+            Self::Reciprocal => x * (1.0 / d),
+        }
+    }
+}
+
 /// One rotary table in the reference's own layout: `[heads, tokens, half]`,
 /// head-major, `half = dim / heads / 2` — one value per rotated pair.
 #[derive(Debug, Clone, PartialEq)]
@@ -91,14 +116,14 @@ impl SplitRope {
 /// `[tokens, 3]` midpoints of each latent cell's extent in (seconds, px, px).
 /// Token order is frame-major, then row, then column — the packing order of
 /// the latents.
-fn video_midpoints(cfg: &Ltx2TransformerConfig, grid: [usize; 3], fps: f32) -> Vec<f32> {
+fn video_midpoints(cfg: &Ltx2TransformerConfig, grid: [usize; 3], fps: f32, division: ScalarDivision) -> Vec<f32> {
     let [frames, height, width] = grid;
     let [st, sh, sw] = cfg.vae_scale_factors.map(|s| s as f32);
     let time = |f: usize| -> f32 {
         // The first latent frame covers one pixel frame, every later one eight:
         // shift by causal_offset - stride and clamp at zero, then seconds.
-        let bound = |x: f32| (x * st + cfg.causal_offset as f32 - st).max(0.0) / fps;
-        (bound(f as f32) + bound(f as f32 + cfg.patch_size_t as f32)) / 2.0
+        let bound = |x: f32| division.div((x * st + cfg.causal_offset as f32 - st).max(0.0), fps);
+        division.div(bound(f as f32) + bound(f as f32 + cfg.patch_size_t as f32), 2.0)
     };
     let space = |i: usize, scale: f32| -> f32 { (i as f32 * scale + (i as f32 + cfg.patch_size as f32) * scale) / 2.0 };
     let mut out = Vec::with_capacity(frames * height * width * 3);
@@ -114,26 +139,29 @@ fn video_midpoints(cfg: &Ltx2TransformerConfig, grid: [usize; 3], fps: f32) -> V
 
 /// `[tokens, 3]` fractions for the video self-attention table: the midpoints
 /// over `(max_pos s, base_height, base_width)`.
-pub fn video_fractions(cfg: &Ltx2TransformerConfig, grid: [usize; 3], fps: f32) -> Vec<f32> {
+pub fn video_fractions(cfg: &Ltx2TransformerConfig, grid: [usize; 3], fps: f32, division: ScalarDivision) -> Vec<f32> {
     let max = [cfg.pos_embed_max_pos as f32, cfg.base_height as f32, cfg.base_width as f32];
-    video_midpoints(cfg, grid, fps).chunks_exact(3).flat_map(|c| [c[0] / max[0], c[1] / max[1], c[2] / max[2]]).collect()
+    video_midpoints(cfg, grid, fps, division)
+        .chunks_exact(3)
+        .flat_map(|c| [division.div(c[0], max[0]), division.div(c[1], max[1]), division.div(c[2], max[2])])
+        .collect()
 }
 
 /// Midpoint in seconds of each video token's temporal extent, divided by
 /// `max_seconds` — the single axis of the audio↔video cross-attention table.
-pub fn video_time_fractions(cfg: &Ltx2TransformerConfig, grid: [usize; 3], fps: f32, max_seconds: f32) -> Vec<f32> {
-    video_midpoints(cfg, grid, fps).chunks_exact(3).map(|c| c[0] / max_seconds).collect()
+pub fn video_time_fractions(cfg: &Ltx2TransformerConfig, grid: [usize; 3], fps: f32, max_seconds: f32, division: ScalarDivision) -> Vec<f32> {
+    video_midpoints(cfg, grid, fps, division).chunks_exact(3).map(|c| division.div(c[0], max_seconds)).collect()
 }
 
 /// Midpoint in seconds of audio latent `i`, over `max_seconds`. One latent is
 /// `audio_scale_factor` mel frames of `hop / rate` seconds, with the same
 /// causal first-frame shift as the video.
-pub fn audio_fractions(cfg: &Ltx2TransformerConfig, tokens: usize, max_seconds: f32) -> Vec<f32> {
+pub fn audio_fractions(cfg: &Ltx2TransformerConfig, tokens: usize, max_seconds: f32, division: ScalarDivision) -> Vec<f32> {
     let scale = cfg.audio_scale_factor as f32;
     let (hop, rate) = (cfg.audio_hop_length as f32, cfg.audio_sampling_rate as f32);
-    let bound = |x: f32| (x * scale + cfg.causal_offset as f32 - scale).max(0.0) * hop / rate;
+    let bound = |x: f32| division.div((x * scale + cfg.causal_offset as f32 - scale).max(0.0) * hop, rate);
     (0..tokens)
-        .map(|i| (bound(i as f32) + bound(i as f32 + cfg.audio_patch_size_t as f32)) / 2.0 / max_seconds)
+        .map(|i| division.div(division.div(bound(i as f32) + bound(i as f32 + cfg.audio_patch_size_t as f32), 2.0), max_seconds))
         .collect()
 }
 
@@ -158,29 +186,34 @@ pub struct Ltx2RopeTables {
 }
 
 impl Ltx2RopeTables {
+    /// The tables as the product builds them: on CUDA.
     pub fn new(cfg: &Ltx2TransformerConfig, grid: [usize; 3], audio_tokens: usize, fps: f32) -> Self {
+        Self::with_division(cfg, grid, audio_tokens, fps, ScalarDivision::Reciprocal)
+    }
+
+    pub fn with_division(cfg: &Ltx2TransformerConfig, grid: [usize; 3], audio_tokens: usize, fps: f32, division: ScalarDivision) -> Self {
         let theta = cfg.rope_theta;
         let cross_dim = cfg.audio_cross_attention_dim;
         // Both cross tables share one time base so equal instants rotate equally.
         let cross_max = cfg.pos_embed_max_pos.max(cfg.audio_pos_embed_max_pos) as f32;
         Self {
-            video: SplitRope::from_fractions(&video_fractions(cfg, grid, fps), 3, cfg.inner_dim(), cfg.num_attention_heads, theta),
+            video: SplitRope::from_fractions(&video_fractions(cfg, grid, fps, division), 3, cfg.inner_dim(), cfg.num_attention_heads, theta),
             audio: SplitRope::from_fractions(
-                &audio_fractions(cfg, audio_tokens, cfg.audio_pos_embed_max_pos as f32),
+                &audio_fractions(cfg, audio_tokens, cfg.audio_pos_embed_max_pos as f32, division),
                 1,
                 cfg.audio_inner_dim(),
                 cfg.audio_num_attention_heads,
                 theta,
             ),
             cross_video: SplitRope::from_fractions(
-                &video_time_fractions(cfg, grid, fps, cross_max),
+                &video_time_fractions(cfg, grid, fps, cross_max, division),
                 1,
                 cross_dim,
                 cfg.num_attention_heads,
                 theta,
             ),
             cross_audio: SplitRope::from_fractions(
-                &audio_fractions(cfg, audio_tokens, cross_max),
+                &audio_fractions(cfg, audio_tokens, cross_max, division),
                 1,
                 cross_dim,
                 cfg.audio_num_attention_heads,
@@ -200,7 +233,7 @@ mod tests {
 
     #[test]
     fn video_midpoints_follow_the_causal_first_frame() {
-        let f = video_fractions(&cfg(), [3, 2, 2], 24.0);
+        let f = video_fractions(&cfg(), [3, 2, 2], 24.0, ScalarDivision::Exact);
         assert_eq!(f.len(), 3 * 2 * 2 * 3);
         // Latent 0 covers pixel frame [0, 1), latent 1 [1, 9), latent 2 [9, 17).
         let seconds: Vec<f32> = (0..3).map(|i| f[i * 4 * 3] * 20.0).collect();
@@ -218,7 +251,7 @@ mod tests {
 
     #[test]
     fn audio_midpoints_are_ten_milliseconds_per_mel_frame() {
-        let f = audio_fractions(&cfg(), 4, 20.0);
+        let f = audio_fractions(&cfg(), 4, 20.0, ScalarDivision::Exact);
         // Latent 0 covers mel [0, 1), latent 1 [1, 5), latent 2 [5, 9): 10 ms each.
         for (got, want) in f.iter().zip([0.005, 0.03, 0.07, 0.11]) {
             assert!((got * 20.0 - want).abs() < 1e-6, "{got} vs {want}");
@@ -230,7 +263,7 @@ mod tests {
         // Video latent 1 spans [1/24, 9/24) s, midpoint 5/24 s. An audio
         // fraction forced to the same instant must give the same angles.
         let c = cfg();
-        let v = video_time_fractions(&c, [2, 1, 1], 24.0, 20.0);
+        let v = video_time_fractions(&c, [2, 1, 1], 24.0, 20.0, ScalarDivision::Reciprocal);
         let a = SplitRope::from_fractions(&[v[1]], 1, 2048, 32, c.rope_theta);
         let t = Ltx2RopeTables::new(&c, [2, 1, 1], 1, 24.0);
         let (s, r) = (t.cross_video.tokens, t.cross_video.half);
@@ -302,9 +335,10 @@ mod tests {
     /// torch is float32 — so the layout here is checked against the reference's
     /// own tensor plumbing, not against a second reading of it. Latent grid
     /// 3x2x3, 5 audio latents, 24 fps, production widths.
+    #[allow(clippy::excessive_precision)] // the digits are numpy's repr, kept verbatim
     #[test]
     fn tables_match_a_numpy_transliteration_of_the_reference() {
-        let t = Ltx2RopeTables::new(&cfg(), [3, 2, 3], 5, 24.0);
+        let t = Ltx2RopeTables::with_division(&cfg(), [3, 2, 3], 5, 24.0, ScalarDivision::Exact);
         let sums = |r: &SplitRope| (r.cos.iter().map(|&v| f64::from(v)).sum::<f64>(), r.sin.iter().map(|&v| f64::from(v)).sum::<f64>());
         for (name, table, want) in [
             ("video", &t.video, (-1456.788344584278, -526.246063605472)),
@@ -341,5 +375,25 @@ mod tests {
         close(at(&c, 0, 0, 0), (-4.371_139e-8, -1.0), "connector h0 p0 j0");
         close(at(&c, 29, 7, 63), (-0.960_290_3, -0.279_002_64), "connector h29 p7 j63");
         close(at(&c, 11, 3, 20), (0.925_963_9, -0.377_612_05), "connector h11 p3 j20");
+    }
+    /// The first hardware run found every table within cos 0.999999998 of the
+    /// reference but off by *exactly* 2^-10 (video time) and 2^-9 (audio) at
+    /// worst. That is not bfloat16: it is one float32 ulp of a 15 708 rad angle,
+    /// from torch-on-CUDA dividing by a scalar as a multiply by its reciprocal.
+    /// A numpy model of both conventions gives these same two numbers for the
+    /// production geometry, which is what pins `Reciprocal` as the product's.
+    #[allow(clippy::excessive_precision)]
+    #[test]
+    fn cuda_and_cpu_scalar_division_differ_by_the_residue_measured_on_hardware() {
+        let c = cfg();
+        let worst = |a: &SplitRope, b: &SplitRope| a.cos.iter().zip(&b.cos).map(|(x, y)| (x - y).abs()).fold(0f32, f32::max);
+        // Time is the only axis of these two tables, so one spatial cell is enough.
+        let exact = Ltx2RopeTables::with_division(&c, [16, 1, 1], 126, 24.0, ScalarDivision::Exact);
+        let cuda = Ltx2RopeTables::new(&c, [16, 1, 1], 126, 24.0);
+        assert_eq!(worst(&exact.cross_video, &cuda.cross_video), 0.000_976_562_44);
+        assert_eq!(worst(&exact.audio, &cuda.audio), 0.001_952_932_2);
+        // Halving and dividing by a power of two are exact either way.
+        assert_eq!(ScalarDivision::Reciprocal.div(3.0, 2.0), 1.5);
+        assert_eq!(ScalarDivision::Reciprocal.div(48.0, 2048.0), ScalarDivision::Exact.div(48.0, 2048.0));
     }
 }

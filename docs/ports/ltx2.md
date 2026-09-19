@@ -1155,3 +1155,40 @@ computed directly with the diffusers scheduler only asked to agree).
 Not reproduced, on purpose: the pipeline's `v → x₀ → v` float32 round trip with
 guidance off (§f), and diffusers' blended VAE tiling (§c).
 
+### Checked without a GPU
+
+* **Key manifests** (`ltx2/manifests/*.json`, `ltx2/manifest_tests.rs`): the
+  safetensors headers of every published file (HTTP range reads; repo, revision
+  and file recorded in each), and one test per loader that runs the real loader
+  at the production config against a recording weight generator: every
+  requested `(key, shape)` must exist, and no key of the component may go
+  unrequested. The DiT loads blocks 0 and 47 and substitutes the index for the
+  rest; both layouts go through `Keys`, and a separate test shows the rename
+  view is a bijection onto the single file. This settled §k.1's neighbour: the
+  single file keeps `text_embedding_projection.aggregate_embed` at its bare root.
+* **diffusers at toy sizes** (`scripts/gpu/ltx2_tiny_reference.py`,
+  `ltx2/fixtures/`, `ltx2/reference_tests.rs`): diffusers' own classes with tiny
+  configs and seeded weights, float32 on the CPU; the production loaders and
+  graphs reproduce the DiT (every block, all 48 sub-layer taps, both heads), the
+  connectors, the video VAE (whole and streamed), the audio VAE and the vocoder
+  to ≤ 5e-5.
+* **Scalar division.** torch on CUDA divides a tensor by a Python scalar as a
+  multiply by the float32 reciprocal; on the CPU it divides. In the rotary
+  coordinates (`/ fps`, `/ max_pos`, `· hop / rate`) that is one ulp, and at the
+  top of the frequency grid one float32 ulp of angle is 2⁻¹⁰ rad — the exact
+  residue (2⁻¹⁰ video time, 2⁻⁹ audio) the first hardware run measured.
+  `ScalarDivision::Reciprocal` is the production setting; the CPU fixtures use
+  `Exact`.
+
+### Reading a bf16 reference
+
+The reference keeps the residual stream in bf16 through 192 residual adds; the
+port keeps it in float32. Against a bf16 dump alone the reference's rounding is
+indistinguishable from a port error, so `ltx2_oracle.py --dit-dtype both` also
+runs the same module widened to float32 (`dit32.*`, `sample32.*`; TF32 off, math
+SDPA) and records the bf16-vs-float32 distance per tap. `ltx2 dit` / `ltx2 loop`
+then gate *ours vs float32* at `--floor-factor` (1.25) times that floor. Blocks
+0 and 47 and both heads are tapped sub-layer by sub-layer
+(`blockNN.{video,audio}.{attn1,attn2,av,ff}_{in,out,after}`,
+`head.*.{norm,modulated}`; every 16th video token).
+

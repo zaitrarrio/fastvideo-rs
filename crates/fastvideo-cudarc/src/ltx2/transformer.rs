@@ -155,6 +155,29 @@ pub struct TextConditioning {
 /// Called after each block with `(index, video, audio)`.
 pub type BlockObserver<'a> = &'a mut dyn FnMut(usize, &CudaTensor, &CudaTensor) -> Result<()>;
 
+/// Called with named intermediates, in the oracle's vocabulary
+/// (`ltx2_oracle.py`, `install_taps`): `blockNN.{video,audio}.{attn1,attn2,av,ff}_{in,out}`
+/// — a sub-layer's modulated-norm input and its output before the gate —
+/// `…_after` for the residual stream right after it, and
+/// `head.{video,audio}.{norm,modulated}`. Diagnostic only: it costs a closure
+/// call per tap and, for the head, one extra LayerNorm.
+pub type Probe<'a> = &'a mut dyn FnMut(&str, &CudaTensor) -> Result<()>;
+
+/// A probe that may be absent, with the block's name prefix filled in.
+struct Tap<'p, 'a> {
+    probe: Option<&'p mut Probe<'a>>,
+    block: usize,
+}
+
+impl Tap<'_, '_> {
+    fn emit(&mut self, stream: &str, what: &str, t: &CudaTensor) -> Result<()> {
+        match self.probe.as_mut() {
+            Some(p) => p(&format!("block{:02}.{stream}.{what}", self.block), t),
+            None => Ok(()),
+        }
+    }
+}
+
 pub struct Ltx2Transformer {
     cfg: Ltx2TransformerConfig,
     proj_in: Linear,
@@ -284,7 +307,22 @@ impl Ltx2Transformer {
         text: &TextConditioning,
         timestep: f32,
         ropes: &Ropes,
+        observer: Option<BlockObserver<'_>>,
+    ) -> Result<(CudaTensor, CudaTensor)> {
+        self.forward_probed(video, audio, text, timestep, ropes, observer, None)
+    }
+
+    /// [`Self::forward`] with sub-layer taps handed to `probe`.
+    #[allow(clippy::too_many_arguments)]
+    pub fn forward_probed(
+        &self,
+        video: &CudaTensor,
+        audio: &CudaTensor,
+        text: &TextConditioning,
+        timestep: f32,
+        ropes: &Ropes,
         mut observer: Option<BlockObserver<'_>>,
+        mut probe: Option<Probe<'_>>,
     ) -> Result<(CudaTensor, CudaTensor)> {
         if video.rank() != 3 || audio.rank() != 3 || video.shape[0] != 1 || audio.shape[0] != 1 {
             return Err(msg(format!("ltx2 dit expects [1, S, C] and [1, L, C], got {:?} and {:?}", video.shape, audio.shape)));
@@ -301,20 +339,26 @@ impl Ltx2Transformer {
         let mut xv = self.proj_in.forward(video)?;
         let mut xa = self.audio_proj_in.forward(audio)?;
         for (i, block) in self.blocks.iter().enumerate() {
-            (xv, xa) = self.block(block, xv, xa, text, &v_mod, &a_mod, ropes, eps)?;
+            let tap = Tap { probe: probe.as_mut(), block: i };
+            (xv, xa) = self.block(block, xv, xa, text, &v_mod, &a_mod, ropes, eps, tap)?;
             if let Some(obs) = observer.as_mut() {
                 obs(i, &xv, &xa)?;
             }
         }
-        let head = |x: &CudaTensor, tab: &CudaTensor, e: &CudaTensor, out: &Linear| -> Result<CudaTensor> {
+        let mut head = |stream: &str, x: &CudaTensor, tab: &CudaTensor, e: &CudaTensor, out: &Linear| -> Result<CudaTensor> {
             // (shift, scale) = table[2, D] + embedded; LayerNorm here, not RMSNorm.
             let dim = e.shape[1];
             let mods = tab.add(e)?.reshape(vec![1, 2, dim])?;
-            out.forward(&x.ln_adaln_e(&mods, 1, 0, eps)?)
+            let modulated = x.ln_adaln_e(&mods, 1, 0, eps)?;
+            if let Some(p) = probe.as_mut() {
+                p(&format!("head.{stream}.norm"), &x.layer_norm(eps, None, None)?)?;
+                p(&format!("head.{stream}.modulated"), &modulated)?;
+            }
+            out.forward(&modulated)
         };
         Ok((
-            head(&xv, &self.scale_shift_table, &v_embedded, &self.proj_out)?,
-            head(&xa, &self.audio_scale_shift_table, &a_embedded, &self.audio_proj_out)?,
+            head("video", &xv, &self.scale_shift_table, &v_embedded, &self.proj_out)?,
+            head("audio", &xa, &self.audio_scale_shift_table, &a_embedded, &self.audio_proj_out)?,
         ))
     }
 
@@ -329,6 +373,7 @@ impl Ltx2Transformer {
         a_mod: &StepModulation,
         ropes: &Ropes,
         eps: f32,
+        mut tap: Tap<'_, '_>,
     ) -> Result<(CudaTensor, CudaTensor)> {
         let (dv, da) = (xv.shape[2], xa.shape[2]);
         // table + per-step modulation, kept as [1, rows, D] for the gated adds.
@@ -338,13 +383,31 @@ impl Ltx2Transformer {
 
         // 1. self-attention.
         let h = rms_adaln(&xv, &row(&v_tab, 1)?, &row(&v_tab, 0)?, eps)?;
-        let xv = xv.residual_gate_add_e(&b.video.attn1.forward(&h, None, Some(&ropes.video), None)?, &v_gates, 2)?;
+        let u = b.video.attn1.forward(&h, None, Some(&ropes.video), None)?;
+        let xv = xv.residual_gate_add_e(&u, &v_gates, 2)?;
+        tap.emit("video", "attn1_in", &h)?;
+        tap.emit("video", "attn1_out", &u)?;
+        tap.emit("video", "attn1_after", &xv)?;
         let h = rms_adaln(&xa, &row(&a_tab, 1)?, &row(&a_tab, 0)?, eps)?;
-        let xa = xa.residual_gate_add_e(&b.audio.attn1.forward(&h, None, Some(&ropes.audio), None)?, &a_gates, 2)?;
+        let u = b.audio.attn1.forward(&h, None, Some(&ropes.audio), None)?;
+        let xa = xa.residual_gate_add_e(&u, &a_gates, 2)?;
+        tap.emit("audio", "attn1_in", &h)?;
+        tap.emit("audio", "attn1_out", &u)?;
+        tap.emit("audio", "attn1_after", &xa)?;
 
         // 2. text cross-attention: plain residual.
-        let xv = xv.add(&b.video.attn2.forward(&xv.rms_norm(&self.ones_video, eps)?, Some(&text.video), None, None)?)?;
-        let xa = xa.add(&b.audio.attn2.forward(&xa.rms_norm(&self.ones_audio, eps)?, Some(&text.audio), None, None)?)?;
+        let h = xv.rms_norm(&self.ones_video, eps)?;
+        let u = b.video.attn2.forward(&h, Some(&text.video), None, None)?;
+        let xv = xv.add(&u)?;
+        tap.emit("video", "attn2_in", &h)?;
+        tap.emit("video", "attn2_out", &u)?;
+        tap.emit("video", "attn2_after", &xv)?;
+        let h = xa.rms_norm(&self.ones_audio, eps)?;
+        let u = b.audio.attn2.forward(&h, Some(&text.audio), None, None)?;
+        let xa = xa.add(&u)?;
+        tap.emit("audio", "attn2_in", &h)?;
+        tap.emit("audio", "attn2_out", &u)?;
+        tap.emit("audio", "attn2_after", &xa)?;
 
         // 3. audio↔video, both directions from the same pre-update states.
         // Rows 0..3 of each side's table: a2v_scale, a2v_shift, v2a_scale, v2a_shift
@@ -354,16 +417,29 @@ impl Ltx2Transformer {
         let a2v_gate = row(&b.video.cross_table, 4)?.add(&v_mod.gate)?.reshape(vec![1, 1, dv])?;
         let v2a_gate = row(&b.audio.cross_table, 4)?.add(&a_mod.gate)?.reshape(vec![1, 1, da])?;
         let side = |x: &CudaTensor, cross: &CudaTensor, first: usize| rms_adaln(x, &row(cross, first)?, &row(cross, first + 1)?, eps);
-        let a2v = b.audio_to_video.forward(&side(&xv, &v_cross, 0)?, Some(&side(&xa, &a_cross, 0)?), Some(&ropes.cross_video), Some(&ropes.cross_audio))?;
-        let v2a = b.video_to_audio.forward(&side(&xa, &a_cross, 2)?, Some(&side(&xv, &v_cross, 2)?), Some(&ropes.cross_audio), Some(&ropes.cross_video))?;
+        let (a2v_q, v2a_q) = (side(&xv, &v_cross, 0)?, side(&xa, &a_cross, 2)?);
+        let a2v = b.audio_to_video.forward(&a2v_q, Some(&side(&xa, &a_cross, 0)?), Some(&ropes.cross_video), Some(&ropes.cross_audio))?;
+        let v2a = b.video_to_audio.forward(&v2a_q, Some(&side(&xv, &v_cross, 2)?), Some(&ropes.cross_audio), Some(&ropes.cross_video))?;
         let xv = xv.residual_gate_add_e(&a2v, &a2v_gate, 0)?;
         let xa = xa.residual_gate_add_e(&v2a, &v2a_gate, 0)?;
+        tap.emit("video", "av_in", &a2v_q)?;
+        tap.emit("video", "av_out", &a2v)?;
+        tap.emit("video", "av_after", &xv)?;
+        tap.emit("audio", "av_in", &v2a_q)?;
+        tap.emit("audio", "av_out", &v2a)?;
+        tap.emit("audio", "av_after", &xa)?;
 
         // 4. feed-forward.
         let h = rms_adaln(&xv, &row(&v_tab, 4)?, &row(&v_tab, 3)?, eps)?;
-        let xv = xv.residual_gate_add_e(&b.video.ff.forward(&h)?, &v_gates, 5)?;
+        let u = b.video.ff.forward(&h)?;
+        let xv = xv.residual_gate_add_e(&u, &v_gates, 5)?;
+        tap.emit("video", "ff_in", &h)?;
+        tap.emit("video", "ff_out", &u)?;
         let h = rms_adaln(&xa, &row(&a_tab, 4)?, &row(&a_tab, 3)?, eps)?;
-        let xa = xa.residual_gate_add_e(&b.audio.ff.forward(&h)?, &a_gates, 5)?;
+        let u = b.audio.ff.forward(&h)?;
+        let xa = xa.residual_gate_add_e(&u, &a_gates, 5)?;
+        tap.emit("audio", "ff_in", &h)?;
+        tap.emit("audio", "ff_out", &u)?;
         Ok((xv, xa))
     }
 }

@@ -9,3 +9,6 @@ pub mod vae;
 pub mod vsa;
 pub mod transformer;
 pub mod pipeline;
+
+#[cfg(test)]
+mod manifest_tests;
