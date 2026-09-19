@@ -10,6 +10,7 @@
 #![allow(unsafe_code)]
 
 pub mod h3;
+pub mod llm;
 pub mod ltx2;
 pub mod wan;
 

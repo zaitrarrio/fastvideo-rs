@@ -258,6 +258,38 @@ impl LazyStore {
         Ok((v.shape.to_vec(), out))
     }
 
+    /// F32 values of chosen rows of a 2-D float tensor, in the order given. An
+    /// embedding table is `[vocab, hidden]` and a prompt needs a few hundred
+    /// rows of it: this touches those pages and nothing else.
+    pub fn rows_f32(&self, key: &str, rows: &[usize]) -> Result<(usize, Vec<f32>), LoaderError> {
+        let v = self.view(key)?;
+        let [n, width] = v.shape[..] else {
+            return Err(LoaderError::Message(format!("{key}: rows_f32 needs a 2-D tensor, got {:?}", v.shape)));
+        };
+        let size = match v.dtype {
+            LazyDType::F32 => 4,
+            LazyDType::F16 | LazyDType::BF16 => 2,
+            other => return Err(LoaderError::Message(format!("{key}: {other:?} has no F32 conversion"))),
+        };
+        let mut out = Vec::with_capacity(rows.len() * width);
+        for &r in rows {
+            if r >= n {
+                return Err(LoaderError::Message(format!("{key}: row {r} of {n}")));
+            }
+            let bytes = &v.bytes[r * width * size..(r + 1) * width * size];
+            match v.dtype {
+                LazyDType::F32 => out.extend(bytes.chunks_exact(4).map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))),
+                LazyDType::BF16 => out.extend(
+                    bytes.chunks_exact(2).map(|c| crate::raw::bf16_bits_to_f32(u16::from_le_bytes([c[0], c[1]]))),
+                ),
+                _ => out.extend(
+                    bytes.chunks_exact(2).map(|c| crate::raw::f16_bits_to_f32(u16::from_le_bytes([c[0], c[1]]))),
+                ),
+            }
+        }
+        Ok((width, out))
+    }
+
     /// Little-endian bf16 bytes. Borrowed straight from the mapping when the
     /// tensor is stored as bf16 — the common case for every checkpoint these
     /// stores exist for — so the only copy made is the upload itself.
@@ -341,6 +373,7 @@ mod tests {
         assert_eq!(s.bytes_with_prefix("blocks.1"), 12);
         assert_eq!(s.to_f32("blocks.0.w").unwrap().1, vec![1.0, -2.0]);
         assert_eq!(s.to_f32("blocks.1.w").unwrap().1, vec![0.5, 4.0, 8.0]);
+        assert!(s.rows_f32("blocks.1.w", &[0]).is_err(), "rows of a 1-D tensor");
         // bf16 on disk is handed out without a copy.
         let (_, bytes) = s.to_bf16("blocks.0.w").unwrap();
         assert!(matches!(bytes, Cow::Borrowed(_)));
@@ -348,6 +381,18 @@ mod tests {
         // f32 on disk converts to the same bits the eager loader produces.
         let (_, conv) = s.to_bf16("blocks.1.w").unwrap();
         assert_eq!(&*conv, [bf16(0.5), bf16(4.0), bf16(8.0)].concat().as_slice());
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn rows_come_back_in_the_order_asked() {
+        let d = tmp("rows");
+        let table: Vec<u8> = (0..12).map(|i| i as f32).flat_map(bf16).collect();
+        write_st(&d.join("e.safetensors"), &[("embed", "BF16", vec![4, 3], table)]);
+        let s = LazyStore::open(&d).unwrap();
+        let (width, rows) = s.rows_f32("embed", &[3, 0, 3]).unwrap();
+        assert_eq!((width, rows), (3, vec![9.0, 10.0, 11.0, 0.0, 1.0, 2.0, 9.0, 10.0, 11.0]));
+        assert!(s.rows_f32("embed", &[4]).is_err());
         let _ = std::fs::remove_dir_all(&d);
     }
 
