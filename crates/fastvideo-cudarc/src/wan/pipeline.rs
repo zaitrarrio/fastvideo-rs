@@ -1001,14 +1001,28 @@ impl VideoWriter {
     /// frames; ffmpeg is spawned lazily on the first batch, once the frame
     /// size is known.
     pub fn spawn(dir: &Path, fps: u32, mp4: bool) -> Result<Self> {
+        Self::spawn_with_audio(dir, fps, mp4, None)
+    }
+
+    /// As [`Self::spawn`], muxing `audio` (a WAV already on disk — see
+    /// [`write_wav`]) into the mp4 as AAC. The audio-video models decode their
+    /// audio first, which takes milliseconds, so the track exists before the
+    /// first frame does and ffmpeg can still be fed frames as they decode.
+    pub fn spawn_with_audio(dir: &Path, fps: u32, mp4: bool, audio: Option<&Path>) -> Result<Self> {
         std::fs::create_dir_all(dir).map_err(|e| PipelineError::Message(e.to_string()))?;
+        if let Some(a) = audio {
+            if !a.is_file() {
+                return Err(PipelineError::Message(format!("audio track {} does not exist", a.display())));
+            }
+        }
+        let audio = audio.map(Path::to_path_buf);
         let dir = dir.to_path_buf();
         // Two chunks of backlog: enough that a slow PNG batch never stalls the
         // decoder, small enough that memory stays bounded.
         let (tx, rx) = std::sync::mpsc::sync_channel::<FrameBatch>(2);
         let worker = std::thread::Builder::new()
             .name("fv-video-writer".into())
-            .spawn(move || write_batches(rx, &dir, fps, mp4))
+            .spawn(move || write_batches(rx, &dir, fps, mp4, audio.as_deref()))
             .map_err(|e| PipelineError::Message(e.to_string()))?;
         Ok(Self { tx: Some(tx), worker: Some(worker) })
     }
@@ -1057,6 +1071,7 @@ fn write_batches(
     dir: &Path,
     fps: u32,
     mp4: bool,
+    audio: Option<&Path>,
 ) -> Result<(Vec<String>, Option<String>)> {
     use rayon::prelude::*;
     use std::io::Write as _;
@@ -1074,7 +1089,7 @@ fn write_batches(
             )));
         }
         if mp4 && fps > 0 && ffmpeg.is_none() {
-            ffmpeg = Some(spawn_ffmpeg_rgb(&out, w, h, fps)?);
+            ffmpeg = Some(spawn_ffmpeg_rgb(&out, w, h, fps, audio)?);
         }
         if let Some(child) = ffmpeg.as_mut() {
             let stdin = child
@@ -1116,32 +1131,78 @@ fn write_batches(
     Ok((paths, mp4_path))
 }
 
-fn spawn_ffmpeg_rgb(out: &Path, w: usize, h: usize, fps: u32) -> Result<std::process::Child> {
-    Command::new("ffmpeg")
-        .args([
-            "-y",
-            "-loglevel",
-            "error",
-            "-nostats",
-            "-f",
-            "rawvideo",
-            "-pix_fmt",
-            "rgb24",
-            "-s",
-            &format!("{w}x{h}"),
-            "-framerate",
-            &fps.to_string(),
-            "-i",
-            "-",
-            "-c:v",
-            "libx264",
-            "-pix_fmt",
-            "yuv420p",
-            &out.to_string_lossy(),
-        ])
+fn spawn_ffmpeg_rgb(out: &Path, w: usize, h: usize, fps: u32, audio: Option<&Path>) -> Result<std::process::Child> {
+    let mut cmd = Command::new("ffmpeg");
+    cmd.args(["-y", "-loglevel", "error", "-nostats", "-f", "rawvideo", "-pix_fmt", "rgb24", "-s"])
+        .arg(format!("{w}x{h}"))
+        .args(["-framerate", &fps.to_string(), "-i", "-"]);
+    if let Some(a) = audio {
+        // Input 1. Mapped explicitly so the track is never dropped silently,
+        // and the mp4 ends with the shorter stream: the two decoders round
+        // their lengths differently by a few milliseconds.
+        cmd.arg("-i").arg(a).args(["-map", "0:v:0", "-map", "1:a:0", "-c:a", "aac", "-b:a", "192k", "-shortest"]);
+    }
+    cmd.args(["-c:v", "libx264", "-pix_fmt", "yuv420p"])
+        .arg(out)
         .stdin(std::process::Stdio::piped())
         .spawn()
         .map_err(|e| PipelineError::Message(format!("ffmpeg not available: {e}")))
+}
+
+/// Interleaved `[-1, 1]` samples as a 16-bit PCM WAV. `samples.len()` must be
+/// a whole number of `channels`-wide frames. Out-of-range values saturate
+/// rather than wrap: a decoder overshooting by 1% must not become a click.
+pub fn write_wav(path: &Path, samples: &[f32], channels: u16, sample_rate: u32) -> Result<()> {
+    use std::io::Write as _;
+    if channels == 0 || samples.len() % usize::from(channels) != 0 {
+        return Err(PipelineError::Message(format!(
+            "{} samples is not whole {channels}-channel frames",
+            samples.len()
+        )));
+    }
+    let data_len = u32::try_from(samples.len() * 2)
+        .ok()
+        .filter(|n| *n <= u32::MAX - 36)
+        .ok_or_else(|| PipelineError::Message("audio too long for a WAV header".into()))?;
+    let block = channels * 2;
+    let mut buf = Vec::with_capacity(44 + samples.len() * 2);
+    buf.extend_from_slice(b"RIFF");
+    buf.extend_from_slice(&(36 + data_len).to_le_bytes());
+    buf.extend_from_slice(b"WAVEfmt ");
+    buf.extend_from_slice(&16u32.to_le_bytes());
+    buf.extend_from_slice(&1u16.to_le_bytes()); // PCM
+    buf.extend_from_slice(&channels.to_le_bytes());
+    buf.extend_from_slice(&sample_rate.to_le_bytes());
+    buf.extend_from_slice(&(sample_rate * u32::from(block)).to_le_bytes());
+    buf.extend_from_slice(&block.to_le_bytes());
+    buf.extend_from_slice(&16u16.to_le_bytes());
+    buf.extend_from_slice(b"data");
+    buf.extend_from_slice(&data_len.to_le_bytes());
+    for &v in samples {
+        let q = (v.clamp(-1.0, 1.0) * 32767.0).round() as i16;
+        buf.extend_from_slice(&q.to_le_bytes());
+    }
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir).map_err(|e| PipelineError::Message(e.to_string()))?;
+    }
+    std::fs::File::create(path)
+        .and_then(|mut f| f.write_all(&buf))
+        .map_err(|e| PipelineError::Message(format!("{}: {e}", path.display())))
+}
+
+/// `[channels, samples]` planar (what the audio decoders emit) → interleaved.
+pub fn interleave_audio(planar: &[f32], channels: usize) -> Result<Vec<f32>> {
+    if channels == 0 || planar.len() % channels != 0 {
+        return Err(PipelineError::Message(format!("{} samples over {channels} channels", planar.len())));
+    }
+    let n = planar.len() / channels;
+    let mut out = Vec::with_capacity(planar.len());
+    for i in 0..n {
+        for c in 0..channels {
+            out.push(planar[c * n + i]);
+        }
+    }
+    Ok(out)
 }
 
 /// Mux `frame-%03d.png` in `dir` into `dir/output.mp4`.
@@ -1227,6 +1288,69 @@ mod frame_output_tests {
         assert_eq!(last.get_pixel(0, 0).0, [200, 200, 200]);
         let first = image::open(&paths[0]).unwrap().to_rgb8();
         assert_eq!(first.get_pixel(0, 0).0, [10, 10, 10]);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn wav_header_and_samples_are_exact() {
+        let path = std::env::temp_dir().join(format!("fv-wav-{}.wav", std::process::id()));
+        // Stereo, planar in, 3 frames; one sample beyond full scale.
+        let inter = interleave_audio(&[0.0, 0.5, -1.0, 1.5, -0.25, 0.0], 2).unwrap();
+        assert_eq!(inter, vec![0.0, 1.5, 0.5, -0.25, -1.0, 0.0]);
+        write_wav(&path, &inter, 2, 32_000).unwrap();
+        let b = std::fs::read(&path).unwrap();
+        assert_eq!(&b[..4], b"RIFF");
+        assert_eq!(u32::from_le_bytes(b[4..8].try_into().unwrap()) as usize, b.len() - 8);
+        assert_eq!(u16::from_le_bytes(b[22..24].try_into().unwrap()), 2, "channels");
+        assert_eq!(u32::from_le_bytes(b[24..28].try_into().unwrap()), 32_000);
+        assert_eq!(u32::from_le_bytes(b[28..32].try_into().unwrap()), 32_000 * 4, "byte rate");
+        assert_eq!(u32::from_le_bytes(b[40..44].try_into().unwrap()), 12, "data bytes");
+        let pcm: Vec<i16> = b[44..].chunks_exact(2).map(|c| i16::from_le_bytes([c[0], c[1]])).collect();
+        assert_eq!(pcm, vec![0, 32767, 16384, -8192, -32767, 0], "saturates, never wraps");
+        assert!(write_wav(&path, &[0.0; 3], 2, 32_000).is_err(), "ragged frames");
+        let _ = std::fs::remove_file(&path);
+    }
+
+    /// End to end through real ffmpeg: frames pushed in batches plus a WAV
+    /// come out as one mp4 with a video and an AAC stream. Skipped where ffmpeg
+    /// is not installed (it is on every box that generates).
+    #[test]
+    fn mp4_carries_the_audio_track() {
+        let have = |bin: &str| Command::new(bin).arg("-version").output().is_ok_and(|o| o.status.success());
+        if !have("ffmpeg") || !have("ffprobe") {
+            eprintln!("skip: ffmpeg/ffprobe not installed");
+            return;
+        }
+        let dir = std::env::temp_dir().join(format!("fv-av-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let wav = dir.join("audio.wav");
+        let tone: Vec<f32> = (0..32_000).flat_map(|i| {
+            let v = (i as f32 * 440.0 * std::f32::consts::TAU / 32_000.0).sin() * 0.3;
+            [v, v]
+        }).collect();
+        write_wav(&wav, &tone, 2, 32_000).unwrap();
+        let (h, w, fps) = (32usize, 48usize, 24u32);
+        let mut writer = VideoWriter::spawn_with_audio(&dir.join("frames"), fps, true, Some(&wav)).unwrap();
+        for batch in 0..3 {
+            writer.push(batch * 8, h, w, vec![(60 * batch) as u8 + 40; 8 * h * w * 3]).unwrap();
+        }
+        let (frames, mp4) = writer.finish().unwrap();
+        assert_eq!(frames.len(), 24);
+        let probe = Command::new("ffprobe")
+            .args(["-v", "error", "-show_entries", "stream=codec_type,codec_name", "-of", "csv=p=0"])
+            .arg(mp4.expect("an mp4 was requested"))
+            .output()
+            .unwrap();
+        let streams = String::from_utf8_lossy(&probe.stdout);
+        assert!(streams.contains("h264,video") && streams.contains("aac,audio"), "streams: {streams}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_missing_audio_track_is_an_error_before_any_frame() {
+        let dir = std::env::temp_dir().join(format!("fv-writer-noaudio-{}", std::process::id()));
+        let err = VideoWriter::spawn_with_audio(&dir, 24, true, Some(Path::new("/no/such/track.wav")));
+        assert!(err.err().is_some_and(|e| e.to_string().contains("does not exist")));
         let _ = std::fs::remove_dir_all(&dir);
     }
 
