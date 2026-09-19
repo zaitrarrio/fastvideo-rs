@@ -2,6 +2,7 @@
 
 pub mod config;
 pub mod family;
+pub mod parity;
 pub mod pipeline;
 pub mod text;
 pub mod transformer;
@@ -18,8 +19,12 @@ pub use family::{
 };
 pub use pipeline::{Flux2Pipeline, GenerateConfig};
 pub use text::{
-    stack_layers_host, Flux2TextEncoder, Flux2TextKind, Qwen3Config, Qwen3Encoder, FLUX2_SYSTEM_MESSAGE,
+    flux2_dummy_text, flux2_text_len, format_flux2_prompt, format_mistral3_chat, format_qwen3_chat,
+    pad_token_ids, stack_layers_host, tokenize_flux2, Flux2TextEncoder, Flux2TextKind, Mistral3Config,
+    Mistral3Encoder, Qwen3Config, Qwen3Encoder, FLUX2_SYSTEM_MESSAGE,
 };
+pub use vae::group_norm;
 pub use transformer::Flux2Transformer2D;
 pub use vae::AutoencoderKlFlux2;
+pub use parity::{klein_1024_mu, mse, psnr};
 pub use weights::arch_from_transformer_config;

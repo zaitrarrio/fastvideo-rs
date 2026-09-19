@@ -599,6 +599,9 @@ cmd_run() {
 # Flux2 T2I vs upstream FastVideo on the same rented box. Default is Klein 4B
 # (4-step, no guidance) so the disk/VRAM ask stays closer to the Wan compare
 # tier. Override with FV_FLUX2_REPO / FV_FLUX2_STEPS / FV_FLUX2_GUIDANCE.
+# Rust generate uses real Qwen3/Mistral3 text + full 2D VAE when those
+# snapshots load. FASTVIDEO_FLUX2_DUMMY_TEXT=1 / FASTVIDEO_FLUX2_TEXT_LEN
+# are the A/B knobs if you need the old prompt-hash path.
 run_flux2_compare() {
   local repo="${FV_FLUX2_REPO:-black-forest-labs/FLUX.2-klein-4B}"
   local steps="${FV_FLUX2_STEPS:-4}"

@@ -29,5 +29,8 @@ cuda = [
 # Lean GPU path: only `fastvideo-cudarc` (no Candle kernels / Burn CubeCL).
 cuda-cudarc = ["fastvideo-cudarc/cuda"]
 
+[dev-dependencies]
+candle-nn.workspace = true
+
 [lints]
 workspace = true

@@ -1,9 +1,11 @@
 //! Flux2 text encoders: Mistral3 (dev) and Qwen3 (Klein).
 //!
-//! Upstream FastVideo loads both through Transformers `from_pretrained_local`.
-//! This crate ports the **postprocess** (layer-stack concat) and a Candle
-//! Qwen3-style encoder so Klein can run without Python. Full Mistral3 remains
-//! a documented HF-backed follow-up; tiny / dummy embeds cover CI smoke.
+//! Upstream FastVideo / Diffusers / BFL:
+//! - Klein: `Qwen3ForCausalLM`, stack hidden states `[9, 18, 27]`
+//! - Dev: `Mistral3ForConditionalGeneration` language model, stack `[10, 20, 30]`
+//!
+//! Both are decoder-only LMs (RMSNorm + GQA + SwiGLU + NeoX RoPE). Qwen3 adds
+//! QK-Norm. Tiny / dummy embeds stay available for CI.
 
 use candle_core::{DType, Device, IndexOp, Result, Tensor};
 use candle_nn::VarBuilder;
@@ -49,6 +51,70 @@ pub const FLUX2_SYSTEM_MESSAGE: &str =
      responses focusing on object relationships, object\nattribution and actions \
      without speculation.";
 
+/// Qwen3 chat string matching BFL `apply_chat_template(..., enable_thinking=False)`.
+pub fn format_qwen3_chat(prompt: &str) -> String {
+    format!("<|im_start|>user\n{prompt}<|im_end|>\n<|im_start|>assistant\n")
+}
+
+/// Mistral3 / Pixtral-style instruct wrap used by Diffusers Flux2 `format_input`.
+pub fn format_mistral3_chat(prompt: &str) -> String {
+    let cleaned = prompt.replace("[IMG]", "");
+    format!("[SYSTEM_PROMPT]{FLUX2_SYSTEM_MESSAGE}[/SYSTEM_PROMPT][INST]{cleaned}[/INST]")
+}
+
+pub fn format_flux2_prompt(kind: Flux2TextKind, prompt: &str) -> String {
+    match kind {
+        Flux2TextKind::Qwen3 => format_qwen3_chat(prompt),
+        Flux2TextKind::Mistral3 => format_mistral3_chat(prompt),
+    }
+}
+
+/// `FASTVIDEO_FLUX2_DUMMY_TEXT=1` keeps the prompt-hash stand-in (A/B vs real text).
+pub fn flux2_dummy_text() -> bool {
+    matches!(
+        std::env::var("FASTVIDEO_FLUX2_DUMMY_TEXT").as_deref(),
+        Ok("1") | Ok("true") | Ok("TRUE")
+    )
+}
+
+/// Override stacked-encoder sequence length (`FASTVIDEO_FLUX2_TEXT_LEN`).
+pub fn flux2_text_len(default: usize) -> usize {
+    std::env::var("FASTVIDEO_FLUX2_TEXT_LEN")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(default)
+        .max(1)
+}
+
+pub fn pad_token_ids(ids: &[u32], text_len: usize, pad_id: u32) -> (Vec<u32>, usize) {
+    let valid = ids.len().min(text_len).max(1);
+    let mut out = vec![pad_id; text_len];
+    let copy = ids.len().min(text_len);
+    if copy > 0 {
+        out[..copy].copy_from_slice(&ids[..copy]);
+    }
+    (out, valid)
+}
+
+/// Tokenize a *already formatted* Flux2 chat string. Specials live in the wrap.
+pub fn tokenize_flux2(path: &str, formatted: &str, max_len: usize) -> Result<(Vec<u32>, usize)> {
+    let tokenizer = tokenizers::Tokenizer::from_file(path)
+        .map_err(|e| candle_core::Error::Msg(format!("tokenizer load failed: {e}")))?;
+    let encoding = tokenizer
+        .encode(formatted, false)
+        .map_err(|e| candle_core::Error::Msg(format!("tokenize failed: {e}")))?;
+    let mut ids = encoding.get_ids().to_vec();
+    if ids.is_empty() {
+        ids.push(0);
+    }
+    if ids.len() > max_len {
+        ids.truncate(max_len);
+    }
+    let len = ids.len();
+    Ok((ids, len))
+}
+
+/// Decoder-only LM config shared by Qwen3 (Klein) and Mistral3 (dev).
 #[derive(Debug, Clone, PartialEq)]
 pub struct Qwen3Config {
     pub vocab_size: usize,
@@ -62,7 +128,12 @@ pub struct Qwen3Config {
     pub rope_theta: f32,
     pub max_position_embeddings: usize,
     pub text_len: usize,
+    pub pad_token_id: u32,
+    /// Qwen3 applies RMSNorm on Q/K per head; Mistral3 does not.
+    pub qk_norm: bool,
 }
+
+pub type Mistral3Config = Qwen3Config;
 
 impl Qwen3Config {
     /// FastVideo `Qwen3TextArchConfig` (Klein 4B).
@@ -79,6 +150,27 @@ impl Qwen3Config {
             rope_theta: 1_000_000.0,
             max_position_embeddings: 40960,
             text_len: 512,
+            pad_token_id: 151643,
+            qk_norm: true,
+        }
+    }
+
+    /// Mistral Small 3.1 24B language model (FLUX.2-dev text encoder).
+    pub fn mistral3_24b() -> Self {
+        Self {
+            vocab_size: 131072,
+            hidden_size: 5120,
+            intermediate_size: 32768,
+            num_hidden_layers: 40,
+            num_attention_heads: 32,
+            num_key_value_heads: 8,
+            head_dim: 128,
+            rms_norm_eps: 1e-5,
+            rope_theta: 1_000_000_000.0,
+            max_position_embeddings: 131072,
+            text_len: 512,
+            pad_token_id: 0,
+            qk_norm: false,
         }
     }
 
@@ -95,8 +187,97 @@ impl Qwen3Config {
             rope_theta: 10_000.0,
             max_position_embeddings: 64,
             text_len: 8,
+            pad_token_id: 0,
+            qk_norm: true,
         }
     }
+
+    pub fn mistral3_tiny() -> Self {
+        Self {
+            qk_norm: false,
+            pad_token_id: 0,
+            ..Self::tiny()
+        }
+    }
+
+    /// Override fields from a Hugging Face `text_encoder/config.json` body.
+    pub fn from_hf_json(kind: Flux2TextKind, raw: &str) -> std::result::Result<Self, String> {
+        let v: serde_json::Value =
+            serde_json::from_str(raw).map_err(|e| format!("text_encoder/config.json: {e}"))?;
+        let text = v
+            .get("text_config")
+            .filter(|c| c.is_object())
+            .cloned()
+            .unwrap_or(v);
+        let mut cfg = match kind {
+            Flux2TextKind::Qwen3 => Self::klein_4b(),
+            Flux2TextKind::Mistral3 => Self::mistral3_24b(),
+        };
+        if let Some(n) = text.get("vocab_size").and_then(|x| x.as_u64()) {
+            cfg.vocab_size = n as usize;
+        }
+        if let Some(n) = text.get("hidden_size").and_then(|x| x.as_u64()) {
+            cfg.hidden_size = n as usize;
+        }
+        if let Some(n) = text.get("intermediate_size").and_then(|x| x.as_u64()) {
+            cfg.intermediate_size = n as usize;
+        }
+        if let Some(n) = text.get("num_hidden_layers").and_then(|x| x.as_u64()) {
+            cfg.num_hidden_layers = n as usize;
+        }
+        if let Some(n) = text.get("num_attention_heads").and_then(|x| x.as_u64()) {
+            cfg.num_attention_heads = n as usize;
+        }
+        if let Some(n) = text.get("num_key_value_heads").and_then(|x| x.as_u64()) {
+            cfg.num_key_value_heads = n as usize;
+        }
+        if let Some(n) = text.get("head_dim").and_then(|x| x.as_u64()) {
+            cfg.head_dim = n as usize;
+        } else if cfg.num_attention_heads > 0 && cfg.head_dim == 0 {
+            cfg.head_dim = cfg.hidden_size / cfg.num_attention_heads;
+        }
+        if let Some(n) = text.get("rms_norm_eps").and_then(|x| x.as_f64()) {
+            cfg.rms_norm_eps = n;
+        }
+        if let Some(n) = text.get("rope_theta").and_then(|x| x.as_f64()) {
+            cfg.rope_theta = n as f32;
+        }
+        if let Some(n) = text.get("max_position_embeddings").and_then(|x| x.as_u64()) {
+            cfg.max_position_embeddings = n as usize;
+        }
+        if let Some(n) = text.get("pad_token_id").and_then(|x| x.as_u64()) {
+            cfg.pad_token_id = n as u32;
+        }
+        Ok(cfg)
+    }
+}
+
+fn apply_pp<'a>(vb: VarBuilder<'a>, prefix: &str) -> VarBuilder<'a> {
+    if prefix.is_empty() {
+        return vb;
+    }
+    prefix.split('.').fold(vb, |v, p| v.pp(p))
+}
+
+/// Walk common Hugging Face prefixes (`model.`, `language_model.model.`, …).
+pub fn resolve_text_vb<'a>(vb: VarBuilder<'a>, vocab: usize, hidden: usize) -> VarBuilder<'a> {
+    const PREFIXES: &[&str] = &[
+        "",
+        "model",
+        "language_model.model",
+        "model.language_model.model",
+        "language_model",
+        "model.language_model",
+    ];
+    for prefix in PREFIXES {
+        let candidate = apply_pp(vb.clone(), prefix);
+        if candidate.get((vocab, hidden), "embed_tokens.weight").is_ok()
+            || candidate.pp("embed_tokens").get((vocab, hidden), "weight").is_ok()
+        {
+            return candidate;
+        }
+    }
+    vb
 }
 
 #[derive(Debug, Clone)]
@@ -118,30 +299,40 @@ impl RmsNorm {
     }
 }
 
-struct Qwen3Attention {
+struct DecoderAttention {
     q_proj: Linear,
     k_proj: Linear,
     v_proj: Linear,
     o_proj: Linear,
-    q_norm: RmsNorm,
-    k_norm: RmsNorm,
+    q_norm: Option<RmsNorm>,
+    k_norm: Option<RmsNorm>,
     heads: usize,
     kv_heads: usize,
     head_dim: usize,
     rope_theta: f32,
 }
 
-impl Qwen3Attention {
+impl DecoderAttention {
     fn load(cfg: &Qwen3Config, vb: VarBuilder) -> Result<Self> {
         let q = cfg.num_attention_heads * cfg.head_dim;
         let kv = cfg.num_key_value_heads * cfg.head_dim;
+        let q_norm = if cfg.qk_norm {
+            Some(RmsNorm::load(cfg.head_dim, cfg.rms_norm_eps, vb.pp("q_norm"))?)
+        } else {
+            None
+        };
+        let k_norm = if cfg.qk_norm {
+            Some(RmsNorm::load(cfg.head_dim, cfg.rms_norm_eps, vb.pp("k_norm"))?)
+        } else {
+            None
+        };
         Ok(Self {
             q_proj: Linear::load(cfg.hidden_size, q, vb.pp("q_proj"))?,
             k_proj: Linear::load(cfg.hidden_size, kv, vb.pp("k_proj"))?,
             v_proj: Linear::load(cfg.hidden_size, kv, vb.pp("v_proj"))?,
             o_proj: Linear::load(q, cfg.hidden_size, vb.pp("o_proj"))?,
-            q_norm: RmsNorm::load(cfg.head_dim, cfg.rms_norm_eps, vb.pp("q_norm"))?,
-            k_norm: RmsNorm::load(cfg.head_dim, cfg.rms_norm_eps, vb.pp("k_norm"))?,
+            q_norm,
+            k_norm,
             heads: cfg.num_attention_heads,
             kv_heads: cfg.num_key_value_heads,
             head_dim: cfg.head_dim,
@@ -149,13 +340,19 @@ impl Qwen3Attention {
         })
     }
 
-    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+    fn forward(&self, xs: &Tensor, valid_len: Option<usize>) -> Result<Tensor> {
         let (b, s, _) = xs.dims3()?;
         let q = self.q_proj.forward(xs)?.reshape((b, s, self.heads, self.head_dim))?;
         let k = self.k_proj.forward(xs)?.reshape((b, s, self.kv_heads, self.head_dim))?;
         let v = self.v_proj.forward(xs)?.reshape((b, s, self.kv_heads, self.head_dim))?;
-        let q = apply_head_rms(&self.q_norm, &q)?;
-        let k = apply_head_rms(&self.k_norm, &k)?;
+        let q = match &self.q_norm {
+            Some(n) => apply_head_rms(n, &q)?,
+            None => q,
+        };
+        let k = match &self.k_norm {
+            Some(n) => apply_head_rms(n, &k)?,
+            None => k,
+        };
         let q = apply_rope_neox(&q, self.rope_theta)?;
         let k = apply_rope_neox(&k, self.rope_theta)?;
         let k = repeat_kv(&k, self.heads / self.kv_heads)?;
@@ -163,7 +360,7 @@ impl Qwen3Attention {
         let q = q.transpose(1, 2)?.contiguous()?;
         let k = k.transpose(1, 2)?.contiguous()?;
         let v = v.transpose(1, 2)?.contiguous()?;
-        let mask = causal_mask(s, xs.device(), xs.dtype())?;
+        let mask = causal_pad_mask(s, valid_len, xs.device(), xs.dtype())?;
         let attn = nn::scaled_dot_product_attention(&q, &k, &v, Some(&mask))?;
         let attn = attn
             .transpose(1, 2)?
@@ -224,11 +421,12 @@ fn apply_rope_neox(xs: &Tensor, theta: f32) -> Result<Tensor> {
         .reshape((b, s, h, d))
 }
 
-fn causal_mask(seq: usize, device: &Device, dtype: DType) -> Result<Tensor> {
+fn causal_pad_mask(seq: usize, valid_len: Option<usize>, device: &Device, dtype: DType) -> Result<Tensor> {
+    let valid = valid_len.unwrap_or(seq).min(seq);
     let mut data = vec![0.0f32; seq * seq];
     for q in 0..seq {
         for k in 0..seq {
-            if k > q {
+            if k > q || k >= valid {
                 data[q * seq + k] = -1e9;
             }
         }
@@ -236,13 +434,13 @@ fn causal_mask(seq: usize, device: &Device, dtype: DType) -> Result<Tensor> {
     Tensor::from_vec(data, (1, 1, seq, seq), device)?.to_dtype(dtype)
 }
 
-struct Qwen3Mlp {
+struct DecoderMlp {
     gate: Linear,
     up: Linear,
     down: Linear,
 }
 
-impl Qwen3Mlp {
+impl DecoderMlp {
     fn load(cfg: &Qwen3Config, vb: VarBuilder) -> Result<Self> {
         Ok(Self {
             gate: Linear::load(cfg.hidden_size, cfg.intermediate_size, vb.pp("gate_proj"))?,
@@ -257,50 +455,54 @@ impl Qwen3Mlp {
     }
 }
 
-struct Qwen3Layer {
+struct DecoderLayer {
     input_norm: RmsNorm,
-    attn: Qwen3Attention,
+    attn: DecoderAttention,
     post_norm: RmsNorm,
-    mlp: Qwen3Mlp,
+    mlp: DecoderMlp,
 }
 
-impl Qwen3Layer {
+impl DecoderLayer {
     fn load(cfg: &Qwen3Config, vb: VarBuilder) -> Result<Self> {
         Ok(Self {
             input_norm: RmsNorm::load(cfg.hidden_size, cfg.rms_norm_eps, vb.pp("input_layernorm"))?,
-            attn: Qwen3Attention::load(cfg, vb.pp("self_attn"))?,
+            attn: DecoderAttention::load(cfg, vb.pp("self_attn"))?,
             post_norm: RmsNorm::load(
                 cfg.hidden_size,
                 cfg.rms_norm_eps,
                 vb.pp("post_attention_layernorm"),
             )?,
-            mlp: Qwen3Mlp::load(cfg, vb.pp("mlp"))?,
+            mlp: DecoderMlp::load(cfg, vb.pp("mlp"))?,
         })
     }
 
-    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
-        let h = (xs + self.attn.forward(&self.input_norm.forward(xs)?)?)?;
+    fn forward(&self, xs: &Tensor, valid_len: Option<usize>) -> Result<Tensor> {
+        let h = (xs + self.attn.forward(&self.input_norm.forward(xs)?, valid_len)?)?;
         &h + self.mlp.forward(&self.post_norm.forward(&h)?)?
     }
 }
 
+/// Qwen3 / Mistral3 decoder-only encoder.
 pub struct Qwen3Encoder {
     embed: Tensor,
-    layers: Vec<Qwen3Layer>,
+    layers: Vec<DecoderLayer>,
     norm: RmsNorm,
     pub cfg: Qwen3Config,
     device: Device,
 }
 
+pub type Mistral3Encoder = Qwen3Encoder;
+
 impl Qwen3Encoder {
     pub fn load(cfg: Qwen3Config, vb: VarBuilder) -> Result<Self> {
+        let vb = resolve_text_vb(vb, cfg.vocab_size, cfg.hidden_size);
         let embed = match vb.get((cfg.vocab_size, cfg.hidden_size), "embed_tokens.weight") {
             Ok(t) => t,
             Err(_) => vb.pp("embed_tokens").get((cfg.vocab_size, cfg.hidden_size), "weight")?,
         };
         let mut layers = Vec::with_capacity(cfg.num_hidden_layers);
         for i in 0..cfg.num_hidden_layers {
-            layers.push(Qwen3Layer::load(&cfg, vb.pp("layers").pp(i))?);
+            layers.push(DecoderLayer::load(&cfg, vb.pp("layers").pp(i))?);
         }
         Ok(Self {
             embed,
@@ -317,6 +519,14 @@ impl Qwen3Encoder {
 
     /// Returns `(last_hidden, all_hidden_including_embedding)`.
     pub fn forward_hidden(&self, input_ids: &Tensor) -> Result<(Tensor, Vec<Tensor>)> {
+        self.forward_hidden_masked(input_ids, None)
+    }
+
+    pub fn forward_hidden_masked(
+        &self,
+        input_ids: &Tensor,
+        valid_len: Option<usize>,
+    ) -> Result<(Tensor, Vec<Tensor>)> {
         let mut hidden = {
             let ids = input_ids.flatten_all()?;
             let n = ids.dims1()?;
@@ -337,7 +547,7 @@ impl Qwen3Encoder {
         };
         let mut all = vec![hidden.clone()];
         for layer in &self.layers {
-            hidden = layer.forward(&hidden)?;
+            hidden = layer.forward(&hidden, valid_len)?;
             all.push(hidden.clone());
         }
         hidden = self.norm.forward(&hidden)?;
@@ -346,10 +556,10 @@ impl Qwen3Encoder {
     }
 }
 
-/// Flux2 text front-end: dummy (tiny), Qwen3 (Klein), or stacked hidden states.
+/// Flux2 text front-end: dummy (tiny), Qwen3 (Klein), Mistral3 (dev), or stacked hidden states.
 pub struct Flux2TextEncoder {
     pub kind: Flux2TextKind,
-    qwen: Option<Qwen3Encoder>,
+    lm: Option<Qwen3Encoder>,
     dummy_dim: usize,
     device: Device,
     dtype: DType,
@@ -359,7 +569,7 @@ impl Flux2TextEncoder {
     pub fn dummy(kind: Flux2TextKind, dim: usize, device: &Device, dtype: DType) -> Self {
         Self {
             kind,
-            qwen: None,
+            lm: None,
             dummy_dim: dim,
             device: device.clone(),
             dtype,
@@ -370,16 +580,34 @@ impl Flux2TextEncoder {
         Self {
             kind: Flux2TextKind::Qwen3,
             device: enc.device().clone(),
-            qwen: Some(enc),
+            lm: Some(enc),
             dummy_dim: 0,
             dtype,
         }
     }
 
+    pub fn mistral3(enc: Mistral3Encoder, dtype: DType) -> Self {
+        Self {
+            kind: Flux2TextKind::Mistral3,
+            device: enc.device().clone(),
+            lm: Some(enc),
+            dummy_dim: 0,
+            dtype,
+        }
+    }
+
+    pub fn lm_config(&self) -> Option<&Qwen3Config> {
+        self.lm.as_ref().map(|e| &e.cfg)
+    }
+
     pub fn encode_ids(&self, ids: &[u32]) -> Result<Tensor> {
-        if let Some(enc) = &self.qwen {
+        self.encode_ids_masked(ids, None)
+    }
+
+    pub fn encode_ids_masked(&self, ids: &[u32], valid_len: Option<usize>) -> Result<Tensor> {
+        if let Some(enc) = &self.lm {
             let input = Tensor::new(ids, enc.device())?.unsqueeze(0)?;
-            let (_last, all) = enc.forward_hidden(&input)?;
+            let (_last, all) = enc.forward_hidden_masked(&input, valid_len)?;
             return stack_selected(&all, self.kind.out_layers(), self.dtype);
         }
         let seq = ids.len().max(1);
@@ -438,5 +666,59 @@ mod tests {
         let (last, all) = enc.forward_hidden(&ids).unwrap();
         assert_eq!(last.dims(), &[1, 4, 16]);
         assert_eq!(all.len(), 3);
+    }
+
+    #[test]
+    fn tiny_mistral3_encodes_without_qk_norm() {
+        let device = Device::Cpu;
+        let vb = VarBuilder::zeros(DType::F32, &device);
+        let cfg = Qwen3Config::mistral3_tiny();
+        assert!(!cfg.qk_norm);
+        let enc = Qwen3Encoder::load(cfg, vb).unwrap();
+        let ids = Tensor::from_vec(vec![1u32, 2, 3, 4], (1, 4), &device).unwrap();
+        let (last, all) = enc.forward_hidden(&ids).unwrap();
+        assert_eq!(last.dims(), &[1, 4, 16]);
+        assert_eq!(all.len(), 3);
+        let text = Flux2TextEncoder::mistral3(enc, DType::F32);
+        let stacked = text.encode_ids(&[1, 2, 3, 4]).unwrap();
+        assert_eq!(stacked.dims(), &[1, 4, 48]);
+    }
+
+    #[test]
+    fn parses_qwen3_and_mistral3_config_json() {
+        let qwen = Qwen3Config::from_hf_json(
+            Flux2TextKind::Qwen3,
+            r#"{"hidden_size":2560,"num_hidden_layers":36,"vocab_size":151936,"head_dim":128}"#,
+        )
+        .unwrap();
+        assert_eq!(qwen.hidden_size, 2560);
+        assert!(qwen.qk_norm);
+        let mis = Qwen3Config::from_hf_json(
+            Flux2TextKind::Mistral3,
+            r#"{"text_config":{"hidden_size":5120,"num_hidden_layers":40,"vocab_size":131072}}"#,
+        )
+        .unwrap();
+        assert_eq!(mis.hidden_size, 5120);
+        assert_eq!(mis.num_hidden_layers, 40);
+        assert!(!mis.qk_norm);
+        assert_eq!(mis.hidden_size * 3, 15360);
+    }
+
+    #[test]
+    fn chat_wraps_include_prompt() {
+        let q = format_qwen3_chat("a banana");
+        assert!(q.contains("<|im_start|>user"));
+        assert!(q.contains("a banana"));
+        let m = format_mistral3_chat("a banana [IMG]");
+        assert!(m.contains("[SYSTEM_PROMPT]"));
+        assert!(m.contains("[INST]a banana [/INST]") || m.contains("a banana"));
+        assert!(!m.contains("[IMG]"));
+    }
+
+    #[test]
+    fn pad_ids_keeps_valid_prefix() {
+        let (ids, valid) = pad_token_ids(&[7, 8, 9], 6, 0);
+        assert_eq!(valid, 3);
+        assert_eq!(ids, vec![7, 8, 9, 0, 0, 0]);
     }
 }

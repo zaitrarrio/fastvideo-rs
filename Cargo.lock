@@ -1627,6 +1627,7 @@ name = "fastvideo-core"
 version = "0.1.0"
 dependencies = [
  "candle-core 0.11.0",
+ "candle-nn",
  "fastvideo-burn",
  "fastvideo-cudarc",
  "fastvideo-loader",

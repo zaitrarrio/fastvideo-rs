@@ -3,8 +3,8 @@
 use std::path::Path;
 
 use fastvideo_models::flux2::{
-    arch_from_transformer_config, compute_empirical_mu, packed_hw, unpatchify_2x2, Flux2ArchConfig,
-    Flux2TextKind, Flux2VaeConfig,
+    arch_from_transformer_config, compute_empirical_mu, packed_hw, tokenize_flux2, unpatchify_2x2,
+    Flux2ArchConfig, Flux2TextKind, Flux2VaeConfig, Qwen3Config,
 };
 use fastvideo_models::schedulers::FlowMatchEulerDiscreteScheduler;
 use rand::{Rng, SeedableRng};
@@ -15,6 +15,9 @@ use crate::wan::pipeline::write_frames;
 use crate::wan::tensor::{CudaTensor, TensorError};
 use crate::wan::weights::WeightMap;
 
+use super::text::{
+    flux2_dummy_text, flux2_text_len, format_flux2_prompt, pad_token_ids, Flux2TextEncoder, Qwen3Encoder,
+};
 use super::transformer::Flux2Transformer2D;
 use super::vae::AutoencoderKlFlux2;
 
@@ -64,6 +67,7 @@ impl Default for GenerateConfig {
 pub struct Flux2Pipeline {
     transformer: Flux2Transformer2D,
     vae: AutoencoderKlFlux2,
+    text: Flux2TextEncoder,
     tiny: bool,
     kind: Flux2TextKind,
 }
@@ -87,9 +91,14 @@ impl Flux2Pipeline {
         } else {
             Flux2ArchConfig::tiny()
         };
+        let text = match kind {
+            Flux2TextKind::Qwen3 => Flux2TextEncoder::qwen3(Qwen3Encoder::zeros(Qwen3Config::tiny())),
+            Flux2TextKind::Mistral3 => Flux2TextEncoder::dummy(kind, cfg.joint_attention_dim),
+        };
         Self {
             transformer: Flux2Transformer2D::zeros(cfg),
             vae: AutoencoderKlFlux2::zeros(Flux2VaeConfig::tiny()),
+            text,
             tiny: true,
             kind,
         }
@@ -102,16 +111,22 @@ impl Flux2Pipeline {
             cfg = arch_from_transformer_config(&cfg, &raw).map_err(PipelineError::Message)?;
         }
         let map = WeightMap::from_dir(&root.join("transformer")).map_err(PipelineError::from)?;
-        let transformer = Flux2Transformer2D::load(cfg, &map)?;
-        let vae = match WeightMap::from_dir(&root.join("vae")) {
-            Ok(vmap) => AutoencoderKlFlux2::load(Flux2VaeConfig::flux2(), &vmap).unwrap_or_else(|_| {
-                AutoencoderKlFlux2::zeros(Flux2VaeConfig::flux2())
-            }),
-            Err(_) => AutoencoderKlFlux2::zeros(Flux2VaeConfig::flux2()),
+        let transformer = Flux2Transformer2D::load(cfg.clone(), &map)?;
+        let vae_dir = root.join("vae");
+        let vae = match WeightMap::from_dir(&vae_dir) {
+            Ok(vmap) => AutoencoderKlFlux2::load(Flux2VaeConfig::flux2(), &vmap)?,
+            Err(e) => {
+                return Err(PipelineError::Message(format!(
+                    "Flux2 VAE load from {}: {e}",
+                    vae_dir.display()
+                )))
+            }
         };
+        let text = load_text_encoder(root, kind, cfg.joint_attention_dim)?;
         Ok(Self {
             transformer,
             vae,
+            text,
             tiny: false,
             kind,
         })
@@ -133,12 +148,8 @@ impl Flux2Pipeline {
         let mut rng = rand::rngs::StdRng::seed_from_u64(cfg.seed);
         let noise: Vec<f32> = (0..channels * seq).map(|_| rng.sample(StandardNormal)).collect();
         let mut latents = CudaTensor::from_vec(noise, vec![1, channels, 1, ph, pw])?;
-        let text_dim = self.transformer.cfg.joint_attention_dim;
-        let text_len = if self.tiny { 4 } else { 16 };
-        let embeds: Vec<f32> = (0..text_len * text_dim)
-            .map(|i| ((cfg.prompt.len() + i) as f32 * 0.001) % 1.0)
-            .collect();
-        let encoder = CudaTensor::from_vec(embeds, vec![1, text_len, text_dim])?;
+        let (ids, valid_len) = encode_prompt_ids(&self.text, cfg, self.tiny, self.transformer.cfg.joint_attention_dim);
+        let encoder = self.text.encode_ids(&ids, valid_len)?;
         let mu = compute_empirical_mu(seq, steps);
         let mut sched = FlowMatchEulerDiscreteScheduler::new(1000, 1.0);
         sched.set_timesteps_flux2(steps, Some(mu));
@@ -182,6 +193,67 @@ impl Flux2Pipeline {
     pub fn text_kind(&self) -> Flux2TextKind {
         self.kind
     }
+}
+
+fn load_text_encoder(root: &Path, kind: Flux2TextKind, joint_dim: usize) -> Result<Flux2TextEncoder> {
+    if flux2_dummy_text() {
+        return Ok(Flux2TextEncoder::dummy(kind, joint_dim));
+    }
+    let te = if root.join("text_encoder").is_dir() {
+        root.join("text_encoder")
+    } else {
+        root.join("text_encoder_2")
+    };
+    let Ok(tmap) = WeightMap::from_dir(&te) else {
+        return Ok(Flux2TextEncoder::dummy(kind, joint_dim));
+    };
+    let mut lm_cfg = match kind {
+        Flux2TextKind::Qwen3 => Qwen3Config::klein_4b(),
+        Flux2TextKind::Mistral3 => Qwen3Config::mistral3_24b(),
+    };
+    if let Ok(raw) = std::fs::read_to_string(te.join("config.json")) {
+        lm_cfg = Qwen3Config::from_hf_json(kind, &raw).map_err(PipelineError::Message)?;
+    }
+    let enc = Qwen3Encoder::load(lm_cfg, &tmap)?;
+    Ok(match kind {
+        Flux2TextKind::Qwen3 => Flux2TextEncoder::qwen3(enc),
+        Flux2TextKind::Mistral3 => Flux2TextEncoder::mistral3(enc),
+    })
+}
+
+fn encode_prompt_ids(
+    text: &Flux2TextEncoder,
+    cfg: &GenerateConfig,
+    tiny: bool,
+    joint_dim: usize,
+) -> (Vec<u32>, Option<usize>) {
+    if tiny {
+        let n = joint_dim.min(8) as u32;
+        return ((0..n).collect(), None);
+    }
+    let default_len = text.lm_config().map(|c| c.text_len).unwrap_or(512);
+    let text_len = flux2_text_len(default_len);
+    let pad_id = text.lm_config().map(|c| c.pad_token_id).unwrap_or(0);
+    let formatted = format_flux2_prompt(text.kind, &cfg.prompt);
+    let raw = if let Some(tok) = &cfg.tokenizer_path {
+        tokenize_flux2(tok, &formatted, text_len)
+            .or_else(|_| fastvideo_models::tokenize_prompt(tok, &cfg.prompt, text_len))
+            .map(|(ids, _)| ids)
+            .unwrap_or_else(|_| hash_ids(&cfg.prompt, text_len.min(32)))
+    } else {
+        hash_ids(&cfg.prompt, text_len.min(32))
+    };
+    let (ids, valid) = pad_token_ids(&raw, text_len, pad_id);
+    (ids, Some(valid))
+}
+
+fn hash_ids(prompt: &str, len: usize) -> Vec<u32> {
+    prompt
+        .bytes()
+        .chain(0u8..len as u8)
+        .take(len)
+        .map(|b| b as u32)
+        .collect()
 }
 
 #[cfg(test)]

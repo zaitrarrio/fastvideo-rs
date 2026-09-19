@@ -16,8 +16,8 @@ Real inference targets Vast.ai NVIDIA GPUs. Mac/CI stay on CPU (cudarc without
 | --- | --- |
 | Wan/FastWan HF id registry | done |
 | Flux2 HF id registry (dev + Klein 4B/9B) | done |
-| Flux2 Candle oracle (DiT + VAE + Klein Qwen3) | done (tiny + Diffusers load) |
-| Flux2 cudarc generate | done (DiT load/forward; VAE decode simplified) |
+| Flux2 Candle oracle (DiT + full 2D VAE + Qwen3/Mistral3) | done (tiny + Diffusers load) |
+| Flux2 cudarc generate | done (DiT + Qwen3/Mistral3 text + full 2D VAE decode) |
 | Flux2 Vast compare vs upstream | `validate.sh run compare-flux2` |
 | UniPC (Wan T2V) + FastWan DMD `[1000, 757, 522]` | done |
 | **cudarc** Wan generate (Diffusers load) | **primary** |
