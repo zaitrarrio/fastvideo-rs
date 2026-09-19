@@ -247,8 +247,11 @@ impl VideoGenerator {
             let components = load_diffusers_components(root, dtype, &device)
                 .map_err(|e| FastVideoError::Message(e.to_string()))?;
             let cfg_json = std::fs::read_to_string(root.join("transformer/config.json")).ok();
+            let text_cfg = std::fs::read_to_string(root.join("text_encoder/config.json"))
+                .ok()
+                .or_else(|| std::fs::read_to_string(root.join("text_encoder_2/config.json")).ok());
             let text_vb = Some(components.text);
-            fastvideo_models::flux2::Flux2Pipeline::load(
+            fastvideo_models::flux2::Flux2Pipeline::load_with_text_config(
                 components.transformer,
                 components.vae,
                 text_vb,
@@ -257,6 +260,7 @@ impl VideoGenerator {
                 kind,
                 device,
                 cfg_json.as_deref(),
+                text_cfg.as_deref(),
             )
             .map_err(candle_err)?
         };

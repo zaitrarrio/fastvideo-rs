@@ -19,10 +19,10 @@ Mapped from hao-ai-lab/FastVideo and published Diffusers layouts.
 | MLP | SwiGLU (`linear_in` → split/silu* → `linear_out`) | `swiglu` in both backends |
 | RoPE | 4-axis (`axes_dims_rope` [32,32,32,32], θ=2000) | `text_ids` / `image_ids` + pair-rotate |
 | Packed latents | 128-ch 2×2 pack (`in_channels=128`) | `pack_latents_2x2` / `unpatchify_2x2`; packed seq = `(H/8/2)*(W/8/2)` |
-| VAE | `AutoencoderKLFlux2` / `flux2vae` | Candle decode (ResNet + upsample); cudarc decode is a linear+upsample stand-in until the 2D stack is ported |
+| VAE | `AutoencoderKLFlux2` / `flux2vae` | Candle + cudarc decode: `post_quant_conv` → mid ResNets + spatial attn → up-block ResNets + nearest/conv upsample (last block has no upsample). Tiny CI path is still a short conv stack |
 | Scheduler | FlowMatchEuler + empirical μ | `FlowMatchEulerDiscreteScheduler::set_timesteps_flux2` + `compute_empirical_mu` |
-| Dev text | Mistral3 layers (10, 20, 30), joint 15360, guidance embeds, 50 steps | Layer-stack postprocess + dummy/tiny embeds. Full Mistral3 HF encoder is follow-up |
-| Klein text | Qwen3 layers (9, 18, 27), joint 7680, no guidance, 4 steps | Candle `Qwen3Encoder` + stack; cudarc uses prompt-hash dummy embeds this PR |
+| Dev text | Mistral3 layers (10, 20, 30), joint 15360, guidance embeds, 50 steps | Candle + cudarc `Mistral3` decoder-only LM (no QK-Norm), stack `(10,20,30)`. Tiny/CI stays dummy. Chat wrap is a string template, not Jinja `chat_template` |
+| Klein text | Qwen3 layers (9, 18, 27), joint 7680, no guidance, 4 steps | Candle + cudarc `Qwen3Encoder` (QK-Norm) + stack. GPU generate tokenizes + runs the real encoder when `text_encoder/` is present |
 | Dev HF id | `black-forest-labs/FLUX.2-dev` | Registry preset `flux2_dev` |
 | Klein HF ids | `black-forest-labs/FLUX.2-klein-4B`, `…-9B` | Presets `flux2_klein_4b` (5+20 blocks) and `flux2_klein_9b` |
 | Pipeline configs | `Flux2PipelineConfig`, `Flux2KleinPipelineConfig` | Same names on `WanModelDefinition.pipeline_config` |
@@ -61,6 +61,11 @@ cargo run -p fastvideo-cli --release --features cuda-cudarc -- generate \
 `--backend candle` is the oracle. `--backend cudarc` (default) is generate.
 Burn/Luminal stay frozen and refuse Flux2.
 
+Klein GPU generate runs the real Qwen3 encoder (and the full 2D VAE) when
+`text_encoder/` + `vae/` are on disk. `FASTVIDEO_FLUX2_DUMMY_TEXT=1` restores
+the prompt-hash stand-in; `FASTVIDEO_FLUX2_TEXT_LEN` overrides the 512-token
+pad used by BFL / FastVideo.
+
 ## Vast.ai API bench vs upstream
 
 No new rental stack. Same `VAST_API_KEY` from `.env` (never committed) and
@@ -98,25 +103,35 @@ Artifacts (same run dir as Wan compare):
 
 ## What is complete vs stubbed
 
-**Done (reviewable increment):**
+**Done:**
 
 - Shared Flux2 scaffolding (config, family helpers, weight-key map, registry,
   sampling presets, CLI `list-models` / `generate` / `bench` / `schedule`)
-- Candle oracle: DiT forward, 2D VAE decode, flow-match Euler + μ, tiny
-  generate for both families, Qwen3 encoder for Klein
-- cudarc generate: DiT load + forward, tiny + Diffusers `WeightMap` load,
-  simplified VAE decode, wired through `VideoGenerator`
-- End-to-end tiny smokes (cudarc dev, Candle Klein) and layout test that
+- Candle oracle: DiT forward, full 2D VAE decode (ResNet + mid attn + upsample),
+  flow-match Euler + μ, tiny generate for both families, Qwen3 **and** Mistral3
+  decoder-only encoders (HF `text_encoder/` + `config.json`)
+- cudarc generate: DiT load + forward, Qwen3 (Klein) and Mistral3 (dev) text
+  encoders (same Diffusers keys / layer stack as Candle), full 2D VAE decode,
+  wired through `VideoGenerator`
+- Parity tests: timestep/μ table, 2×2 pack, GroupNorm, tiny DiT/Qwen3 shapes,
+  Candle↔cudarc L2/PSNR on zero-weight tiny VAE + Qwen3 (see
+  `fastvideo_models::flux2::parity`)
+- End-to-end tiny smokes (cudarc dev, Candle/cudarc Klein) and layout test that
   checks a local HF snapshot when present
-- Vast `compare-flux2` tier + `upstream_bench.py --workload t2i`
+- Vast `compare-flux2` tier + `upstream_bench.py --workload t2i`. Real text +
+  VAE are the default whenever `text_encoder/` and `vae/` load. Escape hatches:
+  `FASTVIDEO_FLUX2_DUMMY_TEXT=1` (prompt-hash embeds), `FASTVIDEO_FLUX2_TEXT_LEN`
+  (default 512, matching BFL padding)
 
-**Not this PR:**
+**Still approximate / residual:**
 
-- Full Mistral3 text encoder (dev uses dummy/tiny embeds unless you feed
-  pre-stacked hidden states)
-- cudarc Qwen3 (Klein GPU generate uses prompt-hash dummy text this PR)
-- Bit-exact DiT/VAE parity vs FastVideo / Diffusers
-- Full cudarc 2D VAE (ResNet + upsample weights)
+- Bit-exact DiT/VAE vs FastVideo / Diffusers at full Klein/dev width (needs a
+  dumped tensor from a local snapshot; bf16 GEMM / SDPA rounding will not be
+  bitwise identical)
+- Chat-template tokenization is a fixed string wrap (Qwen `<|im_start|>` /
+  Mistral `[SYSTEM_PROMPT]…[INST]`), not the processor's Jinja `chat_template`
+- Mistral3 vision tower is unused (T2I text-only)
+- VAE tiling / slicing is not ported
 - FLUX.1 (see below)
 
 ## FLUX.1 follow-up checklist

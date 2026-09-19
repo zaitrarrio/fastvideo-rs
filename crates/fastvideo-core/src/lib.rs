@@ -427,4 +427,57 @@ mod tests {
             candle_core::DType::F32
         );
     }
+
+    #[test]
+    fn flux2_tiny_qwen3_candle_matches_cudarc() {
+        use candle_core::{Device, DType};
+        use candle_nn::VarBuilder;
+        use fastvideo_models::flux2::{psnr, Flux2TextEncoder, Qwen3Config, Qwen3Encoder};
+
+        let ids = [1u32, 2, 3, 4];
+        let candle_enc =
+            Qwen3Encoder::load(Qwen3Config::tiny(), VarBuilder::zeros(DType::F32, &Device::Cpu)).unwrap();
+        let candle = Flux2TextEncoder::qwen3(candle_enc, DType::F32)
+            .encode_ids(&ids)
+            .unwrap()
+            .flatten_all()
+            .unwrap()
+            .to_vec1::<f32>()
+            .unwrap();
+        let gpu = fastvideo_cudarc::flux2::Flux2TextEncoder::qwen3(
+            fastvideo_cudarc::flux2::Qwen3Encoder::zeros(Qwen3Config::tiny()),
+        )
+        .encode_ids(&ids, None)
+        .unwrap()
+        .host_cow()
+        .unwrap()
+        .to_vec();
+        assert_eq!(candle.len(), gpu.len());
+        let db = psnr(&candle, &gpu, 1.0).unwrap();
+        assert!(db.is_infinite() || db > 60.0, "qwen3 psnr={db}");
+    }
+
+    #[test]
+    fn flux2_small_vae_candle_matches_cudarc() {
+        use candle_core::{Device, DType, Tensor};
+        use candle_nn::VarBuilder;
+        use fastvideo_models::flux2::{psnr, AutoencoderKlFlux2, Flux2VaeConfig};
+
+        let cfg = Flux2VaeConfig::small();
+        let candle = AutoencoderKlFlux2::load(cfg.clone(), VarBuilder::zeros(DType::F32, &Device::Cpu)).unwrap();
+        let gpu = fastvideo_cudarc::flux2::AutoencoderKlFlux2::zeros(cfg.clone());
+        let z_c = Tensor::zeros((1, cfg.latent_channels, 1, 2, 2), DType::F32, &Device::Cpu).unwrap();
+        let z_g = fastvideo_cudarc::CudaTensor::zeros(&[1, cfg.latent_channels, 1, 2, 2]);
+        let a = candle
+            .decode(&z_c)
+            .unwrap()
+            .flatten_all()
+            .unwrap()
+            .to_vec1::<f32>()
+            .unwrap();
+        let b = gpu.decode(&z_g).unwrap().host_cow().unwrap().to_vec();
+        assert_eq!(a.len(), b.len());
+        let db = psnr(&a, &b, 1.0).unwrap();
+        assert!(db.is_infinite() || db > 60.0, "vae psnr={db}");
+    }
 }

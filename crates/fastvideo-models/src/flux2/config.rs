@@ -189,6 +189,20 @@ impl Flux2VaeConfig {
             spatial_compression_ratio: 4,
         }
     }
+
+    /// Small full-path decoder (3 up blocks) for Candle↔cudarc parity tests.
+    pub fn small() -> Self {
+        Self {
+            in_channels: 3,
+            out_channels: 3,
+            block_out_channels: vec![8, 8, 8],
+            layers_per_block: 1,
+            latent_channels: 4,
+            norm_num_groups: 2,
+            scaling_factor: 0.13025,
+            spatial_compression_ratio: 4,
+        }
+    }
 }
 
 /// Diffusers → FastVideo transformer key rewrite (identity for Diffusers).

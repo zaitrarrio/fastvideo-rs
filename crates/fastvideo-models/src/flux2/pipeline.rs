@@ -11,7 +11,10 @@ use crate::schedulers::FlowMatchEulerDiscreteScheduler;
 
 use super::config::{Flux2ArchConfig, Flux2VaeConfig};
 use super::family::{compute_empirical_mu, packed_hw};
-use super::text::{Flux2TextEncoder, Flux2TextKind, Qwen3Config, Qwen3Encoder};
+use super::text::{
+    flux2_dummy_text, flux2_text_len, format_flux2_prompt, pad_token_ids, tokenize_flux2,
+    Flux2TextEncoder, Flux2TextKind, Qwen3Config, Qwen3Encoder,
+};
 use super::transformer::Flux2Transformer2D;
 use super::vae::AutoencoderKlFlux2;
 use super::weights::arch_from_transformer_config;
@@ -98,18 +101,56 @@ impl Flux2Pipeline {
         device: Device,
         transformer_config_json: Option<&str>,
     ) -> Result<Self> {
+        Self::load_with_text_config(
+            transformer_vb,
+            vae_vb,
+            text_vb,
+            dit_cfg,
+            vae_cfg,
+            kind,
+            device,
+            transformer_config_json,
+            None,
+        )
+    }
+
+    /// Same as [`Self::load`] but honor `text_encoder/config.json` width / depth.
+    pub fn load_with_text_config(
+        transformer_vb: VarBuilder,
+        vae_vb: VarBuilder,
+        text_vb: Option<VarBuilder>,
+        dit_cfg: Flux2ArchConfig,
+        vae_cfg: Flux2VaeConfig,
+        kind: Flux2TextKind,
+        device: Device,
+        transformer_config_json: Option<&str>,
+        text_config_json: Option<&str>,
+    ) -> Result<Self> {
         let dit_cfg = match transformer_config_json {
             Some(raw) => arch_from_transformer_config(&dit_cfg, raw)
                 .map_err(|e| candle_core::Error::Msg(e))?,
             None => dit_cfg,
         };
         let dtype = transformer_vb.dtype();
-        let text = match (kind, text_vb) {
-            (Flux2TextKind::Qwen3, Some(vb)) => {
-                let enc = Qwen3Encoder::load(Qwen3Config::klein_4b(), vb)?;
-                Flux2TextEncoder::qwen3(enc, dtype)
+        let lm_cfg = match text_config_json {
+            Some(raw) => Qwen3Config::from_hf_json(kind, raw).map_err(candle_core::Error::Msg)?,
+            None => match kind {
+                Flux2TextKind::Qwen3 => Qwen3Config::klein_4b(),
+                Flux2TextKind::Mistral3 => Qwen3Config::mistral3_24b(),
+            },
+        };
+        let text = if flux2_dummy_text() {
+            Flux2TextEncoder::dummy(kind, dit_cfg.joint_attention_dim, &device, dtype)
+        } else {
+            match (kind, text_vb) {
+                (Flux2TextKind::Qwen3, Some(vb)) => {
+                    Flux2TextEncoder::qwen3(Qwen3Encoder::load(lm_cfg, vb)?, dtype)
+                }
+                (Flux2TextKind::Mistral3, Some(vb)) => {
+                    Flux2TextEncoder::mistral3(Qwen3Encoder::load(lm_cfg, vb)?, dtype)
+                }
+                _ => Flux2TextEncoder::dummy(kind, dit_cfg.joint_attention_dim, &device, dtype),
             }
-            _ => Flux2TextEncoder::dummy(kind, dit_cfg.joint_attention_dim, &device, dtype),
         };
         Ok(Self {
             text,
@@ -138,16 +179,8 @@ impl Flux2Pipeline {
         let mut rng = rand::rngs::StdRng::seed_from_u64(cfg.seed);
         let noise: Vec<f32> = (0..channels * seq).map(|_| rng.sample(StandardNormal)).collect();
         let mut latents = Tensor::from_vec(noise, (1, channels, 1, ph, pw), &self.device)?.to_dtype(self.dtype)?;
-        let ids: Vec<u32> = if self.tiny {
-            (0..self.transformer.cfg.joint_attention_dim.min(8) as u32).collect()
-        } else if let Some(tok) = &cfg.tokenizer_path {
-            crate::wan::tokenize_prompt(tok, &cfg.prompt, 512)
-                .map(|(ids, _)| ids)
-                .unwrap_or_else(|_| hash_ids(&cfg.prompt, 32))
-        } else {
-            hash_ids(&cfg.prompt, 32)
-        };
-        let encoder = self.text.encode_ids(&ids)?;
+        let (ids, valid_len) = encode_prompt_ids(&self.text, cfg, self.tiny, self.transformer.cfg.joint_attention_dim);
+        let encoder = self.text.encode_ids_masked(&ids, valid_len)?;
         let mu = compute_empirical_mu(seq, steps);
         let mut sched = FlowMatchEulerDiscreteScheduler::new(1000, 1.0);
         sched.set_timesteps_flux2(steps, Some(mu));
@@ -183,6 +216,32 @@ impl Flux2Pipeline {
         let frames = self.vae.decode(&unpacked)?;
         write_image(&frames, Path::new(&cfg.output_dir))
     }
+}
+
+fn encode_prompt_ids(
+    text: &Flux2TextEncoder,
+    cfg: &GenerateConfig,
+    tiny: bool,
+    joint_dim: usize,
+) -> (Vec<u32>, Option<usize>) {
+    if tiny {
+        let n = joint_dim.min(8) as u32;
+        return ((0..n).collect(), None);
+    }
+    let default_len = text.lm_config().map(|c| c.text_len).unwrap_or(512);
+    let text_len = flux2_text_len(default_len);
+    let pad_id = text.lm_config().map(|c| c.pad_token_id).unwrap_or(0);
+    let formatted = format_flux2_prompt(text.kind, &cfg.prompt);
+    let raw = if let Some(tok) = &cfg.tokenizer_path {
+        tokenize_flux2(tok, &formatted, text_len)
+            .or_else(|_| crate::wan::tokenize_prompt(tok, &cfg.prompt, text_len))
+            .map(|(ids, _)| ids)
+            .unwrap_or_else(|_| hash_ids(&cfg.prompt, text_len.min(32)))
+    } else {
+        hash_ids(&cfg.prompt, text_len.min(32))
+    };
+    let (ids, valid) = pad_token_ids(&raw, text_len, pad_id);
+    (ids, Some(valid))
 }
 
 fn hash_ids(prompt: &str, len: usize) -> Vec<u32> {

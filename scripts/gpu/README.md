@@ -69,8 +69,11 @@ scripts/gpu/validate.sh run compare-flux2  # Flux2 rust vs upstream FastVideo
 
 Flux2 compare knobs: `FV_FLUX2_REPO` (default `black-forest-labs/FLUX.2-klein-4B`),
 `FV_FLUX2_STEPS` (4), `FV_FLUX2_GUIDANCE` (1.0), `FV_FLUX2_HEIGHT` / `FV_FLUX2_WIDTH`
-(1024), `FV_FLUX2_PROMPT`. `docker.sh dist` builds `fv-gpucheck` and the
-`fastvideo` CLI; the CLI is what `remote.sh flux2-rust-bench` times. Details:
+(1024), `FV_FLUX2_PROMPT`. Rust generate uses real Qwen3/Mistral3 text + the
+full 2D VAE when those shards load; `FASTVIDEO_FLUX2_DUMMY_TEXT=1` and
+`FASTVIDEO_FLUX2_TEXT_LEN` are A/B overrides. `docker.sh dist` builds
+`fv-gpucheck` and the `fastvideo` CLI; the CLI is what `remote.sh
+flux2-rust-bench` times. Details:
 [docs/flux2-port.md](../../docs/flux2-port.md). No secrets in the repo — use
 `VAST_API_KEY` from `.env`.
 
