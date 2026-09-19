@@ -300,22 +300,27 @@ pub fn vsa_attention_device(
     let topk = topk.clamp(1, nb);
     let err = |e: device::DeviceError| TensorError::Message(e.to_string());
 
+    use super::stats::phase;
     // 1. Tile means, then coarse attention over tiles.
-    let (qc, kc, vc) = (
-        ops::vsa_tile_mean_device(q, plan, bh, seq, dim)?,
-        ops::vsa_tile_mean_device(k, plan, bh, seq, dim)?,
-        ops::vsa_tile_mean_device(v, plan, bh, seq, dim)?,
-    );
-    let mut scores = ops::alloc(bh * nb * nb)?;
-    device::matmul_linear_wt_strided_batched_f32(&qc, &kc, &mut scores, bh, nb, dim, nb, scale).map_err(err)?;
-    let probs = ops::softmax_last_device(&scores, nb)?;
-    let mut coarse = ops::alloc(bh * nb * dim)?;
-    device::matmul_2d_strided_batched_f32(&probs, &vc, &mut coarse, bh, nb, nb, dim).map_err(err)?;
+    let (qc, kc, vc) = phase("vsa_1_tile_mean", || {
+        Ok::<_, TensorError>((
+            ops::vsa_tile_mean_device(q, plan, bh, seq, dim)?,
+            ops::vsa_tile_mean_device(k, plan, bh, seq, dim)?,
+            ops::vsa_tile_mean_device(v, plan, bh, seq, dim)?,
+        ))
+    })?;
+    let (scores, coarse) = phase("vsa_2_coarse", || {
+        let mut scores = ops::alloc(bh * nb * nb)?;
+        device::matmul_linear_wt_strided_batched_f32(&qc, &kc, &mut scores, bh, nb, dim, nb, scale).map_err(err)?;
+        let probs = ops::softmax_last_device(&scores, nb)?;
+        let mut coarse = ops::alloc(bh * nb * dim)?;
+        device::matmul_2d_strided_batched_f32(&probs, &vc, &mut coarse, bh, nb, nb, dim).map_err(err)?;
+        Ok::<_, TensorError>((scores, coarse))
+    })?;
 
     // 2. Tiles to attend to, from the same coarse scores (pre-softmax order is
     //    the same, but top-k on the raw scores matches upstream).
-    let selected = ops::vsa_topk_device(&scores, bh * nb, nb, topk)?;
-    drop(probs);
+    let selected = phase("vsa_3_topk", || ops::vsa_topk_device(&scores, bh * nb, nb, topk))?;
     drop(scores);
 
     // 3. Fine stage. The fused kernel streams K/V from the tiled layout; the
@@ -332,19 +337,29 @@ pub fn vsa_attention_device(
     let mut q_base = 0usize;
     while q_base < nb {
         let g = group.min(nb - q_base);
-        let (kg, vg) = ops::vsa_gather_kv_device(k, v, &selected, plan, bh, g, seq, dim, topk, q_base)?;
+        // The gather is what the rejected fused kernel existed to remove; it is
+        // timed separately so its real share is a number rather than a guess.
+        let (kg, vg) = phase("vsa_4_gather_kv", || {
+            ops::vsa_gather_kv_device(k, v, &selected, plan, bh, g, seq, dim, topk, q_base)
+        })?;
         // Queries for these tiles, in padded slot order.
-        let qt = ops::vsa_gather_q_device(q, plan, bh, g, q_base, seq, dim)?;
+        let qt = phase("vsa_5_gather_q", || ops::vsa_gather_q_device(q, plan, bh, g, q_base, seq, dim))?;
         let rows = plan.tile_elems;
-        let mut s = ops::alloc(bh * g * rows * len)?;
-        device::matmul_linear_wt_strided_batched_bf16(&qt, &kg, &mut s, bh * g, rows, dim, len, scale)
-            .map_err(err)?;
-        ops::vsa_mask_pad_device(&mut s, &selected, plan, bh, g, rows, topk, q_base)?;
-        let p = ops::softmax_last_bf16_device(&s, len)?;
-        drop(s);
-        let mut sparse = ops::alloc(bh * g * rows * dim)?;
-        device::matmul_2d_strided_batched_bf16(&p, &vg, &mut sparse, bh * g, rows, len, dim).map_err(err)?;
-        ops::vsa_combine_device(&sparse, &coarse, gate, plan, &mut out, bh, g, q_base, seq, dim)?;
+        let p = phase("vsa_6_fine_qk_softmax", || {
+            let mut s = ops::alloc(bh * g * rows * len)?;
+            device::matmul_linear_wt_strided_batched_bf16(&qt, &kg, &mut s, bh * g, rows, dim, len, scale)
+                .map_err(err)?;
+            ops::vsa_mask_pad_device(&mut s, &selected, plan, bh, g, rows, topk, q_base)?;
+            ops::softmax_last_bf16_device(&s, len)
+        })?;
+        let sparse = phase("vsa_7_fine_pv", || {
+            let mut sparse = ops::alloc(bh * g * rows * dim)?;
+            device::matmul_2d_strided_batched_bf16(&p, &vg, &mut sparse, bh * g, rows, len, dim).map_err(err)?;
+            Ok::<_, TensorError>(sparse)
+        })?;
+        phase("vsa_8_combine", || {
+            ops::vsa_combine_device(&sparse, &coarse, gate, plan, &mut out, bh, g, q_base, seq, dim)
+        })?;
         q_base += g;
     }
     Ok(out)
