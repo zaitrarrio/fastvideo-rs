@@ -31,6 +31,7 @@ use fastvideo_models::h3::packing::{H3PackedLayout, RowRange};
 use fastvideo_models::h3::schedule::H3JointSchedule;
 
 use crate::wan::nn::{scaled_dot_product_attention, Linear};
+use crate::wan::stats::phase;
 use crate::wan::tensor::{CudaTensor, Result, TensorError};
 use crate::wan::weights::{cuda_tensor_shaped, WeightMap};
 
@@ -325,22 +326,22 @@ impl Attention {
                 None => Ok(t),
             }
         };
-        let q = qk(&self.to_q, &self.norm_q)?;
-        let k = qk(&self.to_k, &self.norm_k)?;
-        let v = self.to_v.forward(n)?.split_heads_bhsd(0, self.heads, self.head_dim)?;
+        let q = phase("h3_attn_q", || qk(&self.to_q, &self.norm_q))?;
+        let k = phase("h3_attn_k", || qk(&self.to_k, &self.norm_k))?;
+        let v = phase("h3_attn_v", || self.to_v.forward(n)?.split_heads_bhsd(0, self.heads, self.head_dim))?;
         let out = match mode {
             AttnMode::Dense => scaled_dot_product_attention(&q, &k, &v, None)?,
             AttnMode::Vsa(vsa) => {
                 // The gate is a plain projection of the same normed input:
                 // not normed, not rotated.
                 let gate = match &self.to_gate {
-                    Some(g) => Some(g.forward(n)?.split_heads_bhsd(0, self.heads, self.head_dim)?),
+                    Some(g) => Some(phase("h3_attn_gate", || g.forward(n)?.split_heads_bhsd(0, self.heads, self.head_dim))?),
                     None => None,
                 };
                 vsa.attend(q, k, v, gate)?
             }
         };
-        self.to_out.forward(&out.merge_heads()?)
+        phase("h3_attn_out", || self.to_out.forward(&out.merge_heads()?))
     }
 }
 
@@ -550,17 +551,13 @@ impl H3Transformer {
         let mut x = x;
         for (index, block) in self.blocks.iter().enumerate() {
             let mods = BlockMods::upload(&self.table, step, index, l)?;
-            let a = {
-                let n = mods.modulate(&x.rms_norm(&block.norm1, eps)?, SCALE_MSA, SHIFT_MSA)?;
-                block.attn.forward(&n, rope, mode)?
-            };
-            x = mods.gated_add(&x, &a, GATE_MSA)?;
+            let n = phase("h3_1_norm_msa", || mods.modulate(&x.rms_norm(&block.norm1, eps)?, SCALE_MSA, SHIFT_MSA))?;
+            let a = phase("h3_2_attn", || block.attn.forward(&n, rope, mode))?;
+            x = phase("h3_3_residual_msa", || mods.gated_add(&x, &a, GATE_MSA))?;
             drop(a);
-            let f = {
-                let n = mods.modulate(&x.rms_norm(&block.norm2, eps)?, SCALE_MLP, SHIFT_MLP)?;
-                block.ff.forward(&n)?
-            };
-            x = mods.gated_add(&x, &f, GATE_MLP)?;
+            let n = phase("h3_4_norm_ffn", || mods.modulate(&x.rms_norm(&block.norm2, eps)?, SCALE_MLP, SHIFT_MLP))?;
+            let f = phase("h3_5_ffn", || block.ff.forward(&n))?;
+            x = phase("h3_6_residual_ffn", || mods.gated_add(&x, &f, GATE_MLP))?;
             drop(f);
             if let Some(observe) = observer.as_mut() {
                 observe(&format!("block_{index}"), &x)?;

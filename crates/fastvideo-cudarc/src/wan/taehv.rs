@@ -1,8 +1,14 @@
-//! TAEHV — the tiny autoencoder decoder, as an alternative to the Wan VAE.
+//! TAEHV — the tiny autoencoder decoder, as an alternative to a full video VAE.
 //!
-//! Ported from <https://github.com/madebyollin/taehv> (`taehv.py`), weights
-//! `taew2_1.safetensors`, which serves Wan 2.1. Decoder only: text-to-video
-//! never encodes.
+//! Ported from <https://github.com/madebyollin/taehv> (`taehv.py`). Decoder only:
+//! text-to-video never encodes. Two checkpoints share the same block list and
+//! differ in the first/last conv, the spatial patch, and the temporal wrap:
+//!
+//! * [`TaeArch::Wan`] — `taew2_1.safetensors`, 16 channels, patch 1. Trim the
+//!   first `t_upscale - 1` frames of the whole clip → Wan's `4n+1`.
+//! * [`TaeArch::H3`] — `taeh3.safetensors`, 24 channels, patch 2. After the
+//!   same 4× time grow, wrap like MiniMax-H3's 17-frame clips
+//!   (`taehv.py` `_decode_h3_video`) → H3's `17n+5`.
 //!
 //! The Wan VAE is the largest single component of a clip we have not attacked —
 //! 3.9 s of a 23.7 s 8-second clip on an H100. TAEHV trades quality for roughly
@@ -62,6 +68,48 @@ fn msg(s: impl Into<String>) -> TensorError {
 const CLAMP_SCALE: f32 = 3.0;
 /// Frames the decoder emits before the first real one (`t_upscale - 1`).
 const FRAMES_TO_TRIM: usize = 3;
+/// Two stride-2 TGrows; the first TGrow is disabled (`stride == 1`).
+const T_UPSCALE: usize = 4;
+/// H3 encoder clips are 17 pixel frames = 5 latent tokens (`5 * t_upscale`).
+const H3_CHUNK_FRAMES: usize = 5 * T_UPSCALE;
+/// Trailing latent tokens the H3 encoder drops, in pixel frames (`3 * t_upscale`).
+const H3_TOKEN_DROP_FRAMES: usize = 3 * T_UPSCALE;
+
+/// Which checkpoint the sequential decoder was built for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TaeArch {
+    /// Wan 2.1: 16 latent channels, 8× spatial, `4T − 3` frames.
+    Wan,
+    /// MiniMax-H3: 24 latent channels, 16× spatial (`8×` upsample + pixel-shuffle 2),
+    /// then the 17-frame chunk wrap.
+    H3,
+}
+
+impl TaeArch {
+    pub fn latent_channels(self) -> usize {
+        match self {
+            Self::Wan => 16,
+            Self::H3 => 24,
+        }
+    }
+
+    /// Pixel-shuffle factor after the last conv. H3's 16× spatial is 8× nearest
+    /// plus this; Wan's last conv already emits RGB.
+    pub fn patch_size(self) -> usize {
+        match self {
+            Self::Wan => 1,
+            Self::H3 => 2,
+        }
+    }
+
+    fn first_conv_in(self) -> usize {
+        self.latent_channels()
+    }
+
+    fn last_conv_out(self) -> usize {
+        3 * self.patch_size() * self.patch_size()
+    }
+}
 
 struct Conv {
     weight: CudaTensor,
@@ -132,6 +180,7 @@ enum Block {
 }
 
 pub struct TaeHv {
+    arch: TaeArch,
     blocks: Vec<Block>,
 }
 
@@ -139,6 +188,13 @@ impl TaeHv {
     /// Load `taew2_1` from a directory holding `taew2_1.safetensors` (or any
     /// `WeightMap` whose keys are the reference's positional `decoder.N...`).
     pub fn load(map: &WeightMap) -> Result<Self> {
+        Self::load_arch(map, TaeArch::Wan)
+    }
+
+    /// Same sequential decoder as [`Self::load`], with the first and last conv
+    /// sized for `arch`. Keys stay `decoder.N...` — a renumbering would load
+    /// silently wrong weights.
+    pub fn load_arch(map: &WeightMap, arch: TaeArch) -> Result<Self> {
         use Block::*;
         let mem = |i: usize, n: usize| -> Result<Block> {
             Ok(Mem(MemBlock::load(map, &format!("decoder.{i}"), n)?))
@@ -153,9 +209,10 @@ impl TaeHv {
             })
         };
         Ok(Self {
+            arch,
             blocks: vec![
                 Clamp,
-                conv(1, 256, 16, true)?,
+                conv(1, 256, arch.first_conv_in(), true)?,
                 Relu,
                 mem(3, 256)?,
                 mem(4, 256)?,
@@ -176,9 +233,23 @@ impl TaeHv {
                 tgrow(19, 64, 2)?,
                 conv(20, 64, 64, false)?,
                 Relu,
-                conv(22, 3, 64, true)?,
+                conv(22, arch.last_conv_out(), 64, true)?,
             ],
         })
+    }
+
+    /// `path` is a directory of safetensors or a single `.safetensors` file.
+    pub fn load_from_path(path: &std::path::Path, arch: TaeArch) -> Result<Self> {
+        let map = if path.is_file() {
+            super::weights::WeightMap::open_files(&[path.to_path_buf()])?
+        } else {
+            super::weights::WeightMap::from_dir(path)?
+        };
+        Self::load_arch(&map, arch)
+    }
+
+    pub fn arch(&self) -> TaeArch {
+        self.arch
     }
 
     /// `[1, 16, T, H, W]` latents → `[1, 3, 4T-3, 8H, 8W]` in `[-1, 1]`.
@@ -207,8 +278,12 @@ impl TaeHv {
         let [n, c, t, h, w] = z.shape[..] else {
             return Err(msg(format!("taehv expects [N, C, T, H, W] latents, got {:?}", z.shape)));
         };
-        if n != 1 || c != 16 {
-            return Err(msg(format!("taehv (taew2_1) expects [1, 16, T, H, W], got {:?}", z.shape)));
+        let want_c = self.arch.latent_channels();
+        if n != 1 || c != want_c {
+            return Err(msg(format!("taehv ({:?}) expects [1, {want_c}, T, H, W], got {:?}", self.arch, z.shape)));
+        }
+        if self.arch == TaeArch::H3 {
+            return self.decode_streaming_h3(z, c, t, h, w, sink);
         }
 
         // Being parallel over frames is what makes TAEHV fast and what makes it
@@ -315,6 +390,96 @@ impl TaeHv {
         }
         Ok(x)
     }
+
+    /// H3: grow `4T` frames, pixel-shuffle to 16× spatial, then the reference's
+    /// 17-frame wrap (`taehv.py` `_decode_h3_video`). The wrap reads the whole
+    /// clip (pad to a multiple of 20, drop 3 prefix frames per group, drop the
+    /// last 12), so frames reach the sink after the decoder finishes.
+    fn decode_streaming_h3(
+        &self,
+        z: &CudaTensor,
+        c: usize,
+        t: usize,
+        h: usize,
+        w: usize,
+        sink: &mut dyn FnMut(usize, &CudaTensor) -> Result<()>,
+    ) -> Result<CudaTensor> {
+        let chunk = super::envflag::usize_flag("FASTVIDEO_TAEHV_CHUNK", 4).max(1);
+        let mut memory: Vec<Option<CudaTensor>> = (0..self.blocks.len()).map(|_| None).collect();
+        let mut raw: Vec<CudaTensor> = Vec::new();
+        let mut start = 0usize;
+        while start < t {
+            let len = chunk.min(t - start);
+            let zc = z.narrow(2, start, len)?;
+            let piece = pixel_shuffle2(&self.decode_chunk(&zc, c, len, h, w, &mut memory)?)?;
+            raw.push(piece);
+            start += len;
+        }
+        let refs: Vec<&CudaTensor> = raw.iter().collect();
+        let mut frames = apply_h3_wrap(&CudaTensor::cat(&refs, 0)?)?;
+        frames = frames.clamp(0.0, 1.0).mul_scalar(2.0).add_scalar(-1.0);
+        // Hand the writer 17-frame groups so mux overlaps the last copy.
+        let mut emitted = 0usize;
+        while emitted < frames.shape[0] {
+            let n = (frames.shape[0] - emitted).min(H3_CHUNK_FRAMES - FRAMES_TO_TRIM);
+            let batch = frames.narrow(0, emitted, n)?;
+            sink(emitted, &batch)?;
+            emitted += n;
+        }
+        let (f, oc, oh, ow) = (frames.shape[0], frames.shape[1], frames.shape[2], frames.shape[3]);
+        frames.reshape(vec![1, f, oc, oh, ow])?.permute(&[0, 2, 1, 3, 4])
+    }
+}
+
+/// Pixel frames TAEH3 emits for `latent_frames` DiT tokens. For every
+/// `5n + 2` latent count H3 requests, this is `17n + 5`.
+pub fn h3_decoded_frames(latent_frames: usize) -> usize {
+    h3_wrap_frame_count(latent_frames * T_UPSCALE)
+}
+
+/// After `4T` grown frames: pad T by `(-T) % 20` (Python unary-minus then
+/// modulo — pad, not crop), drop the first 3 of each 20, drop the last 12.
+fn h3_wrap_frame_count(raw_frames: usize) -> usize {
+    let pad = (H3_CHUNK_FRAMES - raw_frames % H3_CHUNK_FRAMES) % H3_CHUNK_FRAMES;
+    let groups = (raw_frames + pad) / H3_CHUNK_FRAMES;
+    groups * (H3_CHUNK_FRAMES - FRAMES_TO_TRIM) - H3_TOKEN_DROP_FRAMES
+}
+
+/// `F.pixel_shuffle(x, 2)` on `[F, C*4, H, W]` → `[F, C, 2H, 2W]`.
+fn pixel_shuffle2(x: &CudaTensor) -> Result<CudaTensor> {
+    let [f, c4, h, w] = x.shape[..] else {
+        return Err(msg(format!("pixel_shuffle2 expects [F, C, H, W], got {:?}", x.shape)));
+    };
+    if c4 % 4 != 0 {
+        return Err(msg(format!("pixel_shuffle2: {c4} channels is not 4× a channel count")));
+    }
+    let c = c4 / 4;
+    x.reshape(vec![f, c, 2, 2, h, w])?.permute(&[0, 1, 4, 2, 5, 3])?.reshape(vec![f, c, h * 2, w * 2])
+}
+
+/// `taehv.py` `_decode_h3_video` after the sequential decoder, before
+/// `postprocess_output_frames`. `x` is `[F, C, H, W]`.
+fn apply_h3_wrap(x: &CudaTensor) -> Result<CudaTensor> {
+    let [frames, c, h, w] = x.shape[..] else {
+        return Err(msg(format!("h3 wrap expects [F, C, H, W], got {:?}", x.shape)));
+    };
+    let pad = (H3_CHUNK_FRAMES - frames % H3_CHUNK_FRAMES) % H3_CHUNK_FRAMES;
+    let x = if pad == 0 {
+        x.clone()
+    } else {
+        let zeros = CudaTensor::zeros(&[pad, c, h, w]).to_device()?;
+        CudaTensor::cat(&[x, &zeros], 0)?
+    };
+    let groups = x.shape[0] / H3_CHUNK_FRAMES;
+    let body = x
+        .reshape(vec![groups, H3_CHUNK_FRAMES, c, h, w])?
+        .narrow(1, FRAMES_TO_TRIM, H3_CHUNK_FRAMES - FRAMES_TO_TRIM)?;
+    let kept = groups * (H3_CHUNK_FRAMES - FRAMES_TO_TRIM);
+    let x = body.reshape(vec![kept, c, h, w])?;
+    if kept <= H3_TOKEN_DROP_FRAMES {
+        return Err(msg(format!("h3 wrap: {frames} grown frames keep {kept}, cannot drop {H3_TOKEN_DROP_FRAMES}")));
+    }
+    x.narrow(0, 0, kept - H3_TOKEN_DROP_FRAMES)
 }
 
 /// The previous frame's value at each position, with zeros before the first.
@@ -504,5 +669,53 @@ mod tests {
     fn wrong_latent_channels_is_an_error() {
         let tae = TaeHv::load(&tiny_map()).expect("load");
         assert!(tae.decode(&CudaTensor::zeros(&[1, 32, 2, 2, 2])).is_err());
+    }
+
+    /// `(-T) % 20` pad, per-group prefix trim, drop last 12. The three
+    /// request lengths H3 accepts (`5n+2` latents) must land on `17n+5`.
+    #[test]
+    fn h3_wrap_matches_official_frame_counts() {
+        assert_eq!(h3_decoded_frames(2), 5);
+        assert_eq!(h3_decoded_frames(7), 22);
+        assert_eq!(h3_decoded_frames(37), 124);
+        assert_eq!(h3_decoded_frames(72), 243);
+        assert_eq!(h3_decoded_frames(107), 362);
+    }
+
+    /// Wrap is a gather: 28 grown frames → 22 kept, the pad zeros are exactly
+    /// the 12 that get dropped, so the output is raw frames 3..19 and 23..27.
+    #[test]
+    fn h3_wrap_keeps_the_reference_indices() {
+        let raw: Vec<f32> = (0..28).map(|v| v as f32).collect();
+        let x = CudaTensor::from_vec(raw, vec![28, 1, 1, 1]).unwrap();
+        let wrapped = apply_h3_wrap(&x).unwrap();
+        let got = wrapped.host_cow().unwrap();
+        let want: Vec<f32> = (3..20).chain(23..28).map(|v| v as f32).collect();
+        assert_eq!(got.as_ref(), want.as_slice());
+    }
+
+    #[test]
+    fn pixel_shuffle2_is_channel_to_spatial() {
+        // Channel-major 2×2 tiles: values 0..11 in [1, 12, 1, 1] become
+        // [1, 3, 2, 2] with each RGB channel a 2×2 of consecutive numbers.
+        let x = CudaTensor::from_vec((0..12).map(|v| v as f32).collect(), vec![1, 12, 1, 1]).unwrap();
+        let y = pixel_shuffle2(&x).unwrap();
+        assert_eq!(y.shape, vec![1, 3, 2, 2]);
+        assert_eq!(y.host_cow().unwrap().as_ref(), &[0.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0]);
+    }
+
+    #[test]
+    fn h3_two_latents_decode_to_five_frames_at_16x() {
+        let tae = TaeHv::load_arch(&tiny_map(), TaeArch::H3).expect("load");
+        let out = tae.decode(&CudaTensor::zeros(&[1, 24, 2, 2, 2])).expect("decode");
+        assert_eq!(out.shape, vec![1, 3, 5, 32, 32], "2 latents, 2×2, patch 2 → 5 frames at 16×");
+        let host = out.host_cow().unwrap();
+        assert!(host.iter().all(|v| (-1.0..=1.0).contains(v)));
+    }
+
+    #[test]
+    fn h3_rejects_wan_channel_count() {
+        let tae = TaeHv::load_arch(&tiny_map(), TaeArch::H3).expect("load");
+        assert!(tae.decode(&CudaTensor::zeros(&[1, 16, 2, 2, 2])).is_err());
     }
 }

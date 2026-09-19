@@ -190,3 +190,9 @@ pub fn phase_report() -> Vec<(&'static str, u64, f64)> {
     v.sort_by(|a, b| b.2.total_cmp(&a.2));
     v
 }
+
+/// Drop accumulated phase times. A `--warm` generate would otherwise fold
+/// the untimed pass into the report we quote.
+pub fn phase_reset() {
+    PHASES.lock().expect("phase lock").clear();
+}

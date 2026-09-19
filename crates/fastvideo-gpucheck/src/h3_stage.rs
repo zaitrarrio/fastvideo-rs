@@ -201,6 +201,10 @@ pub enum Stage {
         /// conditioning cached. The cold run's numbers are recorded beside them.
         #[arg(long)]
         warm: bool,
+        /// Directory or `taeh3.safetensors` file. Replaces the official ViT
+        /// decoder; the `vae/` snapshot is then unused.
+        #[arg(long)]
+        taeh3_weights: Option<PathBuf>,
         #[arg(long, default_value = "cuda")]
         device: String,
     },
@@ -244,7 +248,7 @@ pub fn run(report: &mut Report, stage: &Stage) -> StageResult<()> {
         Stage::Dit { weights, oracle, device, max_rel } => dit(report, weights, oracle, device, *max_rel),
         Stage::Loop { weights, oracle, device, max_rel, gated_steps } => ladder(report, weights, oracle, device, *max_rel, *gated_steps),
         Stage::Vsa { device, seed, max_rel } => vsa(report, device, *seed, *max_rel),
-        Stage::Gen { weights, prompt, seconds, seed, dense, no_mp4, clip_dir, adaln_cache, text_cache, no_text_cache, text_weights, text_encoder, compare_text_encoders, warm, device } => {
+        Stage::Gen { weights, prompt, seconds, seed, dense, no_mp4, clip_dir, adaln_cache, text_cache, no_text_cache, text_weights, text_encoder, compare_text_encoders, warm, taeh3_weights, device } => {
             let text_cache = if *no_text_cache {
                 None
             } else {
@@ -256,6 +260,7 @@ pub fn run(report: &mut Report, stage: &Stage) -> StageResult<()> {
                 text_root: text_weights.clone(),
                 text_cache,
                 text_encoder: fastvideo_cudarc::h3::pipeline::TextEncoderChoice::parse(text_encoder).map_err(|e| anyhow::anyhow!(e))?,
+                taeh3: taeh3_weights.clone(),
             };
             gen(report, weights, prompt, *seconds, *seed, !*no_mp4, clip_dir, options, *warm, *compare_text_encoders, device)
         }
@@ -849,6 +854,7 @@ fn gen(
             "attention": if options.dense { "dense, no gate" } else { "vsa-h3 0.8 + to_gate_compress" },
             "height": request.height, "width": request.width, "num_frames": request.num_frames,
             "text_cache": options.text_cache, "text_weights": options.text_root,
+            "video_vae": if options.taeh3.is_some() { "taeh3" } else { "official" },
         }),
     );
 
@@ -897,6 +903,9 @@ fn gen(
         let timer = std::time::Instant::now();
         let cold = pipeline.generate(&request, &clip_dir.join("cold"))?;
         report.note("cold_generation", timings(&cold, timer.elapsed().as_secs_f64()));
+        // The cold pass would otherwise sit in the same counters as the
+        // measured one; dit_phases should describe the timed generate only.
+        fastvideo_cudarc::wan::stats::phase_reset();
     }
     let timer = std::time::Instant::now();
     let out = pipeline.generate(&request, clip_dir)?;
@@ -906,6 +915,32 @@ fn gen(
     values["load_s"] = json!(load_s);
     values["peak_mib"] = json!(mem.stop());
     report.note("timings", values);
+    // Empty unless FASTVIDEO_PROFILE=1: each phase synchronizes, so this is
+    // where time goes, not a number to quote against an unprofiled clip.
+    // Nested names overlap (h3_2_attn contains h3_attn_* and vsa_h3_*), so
+    // each group's pct is of that group, not of a grand sum.
+    let phases = fastvideo_cudarc::wan::stats::phase_report();
+    if !phases.is_empty() {
+        let row = |n: &str, c: u64, s: f64, total: f64| {
+            json!({"phase": n, "calls": c, "seconds": s, "pct": if total > 0.0 { 100.0 * s / total } else { 0.0 }})
+        };
+        let group = |pred: &dyn Fn(&str) -> bool| {
+            let rows: Vec<_> = phases.iter().copied().filter(|(n, _, _)| pred(n)).collect();
+            let total: f64 = rows.iter().map(|(_, _, s)| s).sum();
+            json!({
+                "total_s": total,
+                "by_phase": rows.iter().map(|(n, c, s)| row(n, *c, *s, total)).collect::<Vec<_>>(),
+            })
+        };
+        report.set(
+            "dit_phases",
+            json!({
+                "block": group(&|n| n.starts_with("h3_") && !n.starts_with("h3_attn_")),
+                "attn": group(&|n| n.starts_with("h3_attn_")),
+                "vsa": group(&|n| n.starts_with("vsa_")),
+            }),
+        );
+    }
     report.set("output", json!({"frames": out.frames, "text_tokens": out.text_tokens, "sequence_length": out.sequence_length, "mp4": out.mp4, "wav": out.wav, "audio_samples_per_channel": out.geometry.audio_samples()}));
     if warm {
         report.check("warm_text_is_a_cache_hit", out.text_cache.as_str() != "miss", json!({"text_cache": out.text_cache.as_str(), "text_s": out.timings.text_s}), json!({"expected": "hit (or disabled)"}))?;

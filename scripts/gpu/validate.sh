@@ -758,12 +758,27 @@ cmd_run() {
       local repo="${FV_H3_REPO:-FastVideo/FastVideo-FastH3-8-Step-V2}" wdir="$WORK/weights/h3"
       # Qwen3-VL shards 12-14 hold layers past the tap, the final norm, the LM
       # head and the vision tower: never read, so never fetched.
+      local vae_globs=("vae/*") vae_wait=(vae)
+      if [[ "${FV_TAEH3:-0}" == 1 ]]; then
+        vae_globs=(); vae_wait=()
+      fi
       remote_run fetch-h3 120 fetch "$repo" "$wdir" "tokenizer/*" "text_encoder/*.json" \
         "text_encoder/model-0000[1-9]-of-00014.safetensors" "text_encoder/model-0001[01]-of-00014.safetensors" \
-        "transformer/*" "vae/*" "audio_vae/*"
-      remote_run wait-h3 7200 wait-weights "$wdir" 7200 text_encoder transformer vae audio_vae
+        "transformer/*" "${vae_globs[@]}" "audio_vae/*"
+      local taeh3_dir="$WORK/taeh3"
+      if [[ "${FV_TAEH3:-0}" == 1 ]]; then remote_run fetch-taeh3 300 fetch-taeh3 "$taeh3_dir"; fi
+      remote_run wait-h3 7200 wait-weights "$wdir" 7200 text_encoder transformer "${vae_wait[@]}" audio_vae
       local h3gen=(--mode fast h3 gen --weights "$wdir" --prompt "$prompt" --seconds "${FV_SECONDS:-5}"
         --seed "${FV_SEED:-1024}" --adaln-cache "$WORK/h3-adaln.cache")
+      # --profile is a global flag: each DiT/VSA phase synchronizes, so this
+      # run answers *where* the 94 s denoise goes, not *how long* a served
+      # request takes. FV_WARM=1 times the resident pipeline (the 94 s number).
+      if [[ "${FV_PROFILE:-0}" == 1 ]]; then h3gen=(--profile "${h3gen[@]}"); fi
+      if [[ "${FV_WARM:-0}" == 1 ]]; then h3gen+=(--warm); fi
+      if [[ "${FV_TAEH3:-0}" == 1 ]]; then
+        remote_run wait-taeh3 300 wait-taeh3 "$taeh3_dir" 300
+        h3gen+=(--taeh3-weights "$taeh3_dir")
+      fi
       if [[ "${FV_TEXT_PLAN:-0}" == 1 ]]; then
         # What text conditioning costs by each route, same prompt and seed:
         # streamed (layers prefetched through pinned memory), resident FP8 in a

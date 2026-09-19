@@ -48,6 +48,7 @@ use super::audio_vae::H3AudioDecoder;
 use super::text::{CacheStatus, HiddenStateEncoder};
 use super::transformer::{AttnMode, DeviceLayout, H3TextRefiner, H3Transformer};
 use super::vae::H3VideoDecoder;
+use crate::wan::taehv::{TaeArch, TaeHv};
 use super::vsa::H3Vsa;
 use crate::wan::pipeline::{frames_to_rgb8, interleave_audio, write_wav, PipelineError, Result, VideoWriter};
 use crate::wan::tensor::{CudaTensor, TensorError};
@@ -143,6 +144,10 @@ pub struct H3PipelineOptions {
     /// Conditioning cache directory ([`super::text_cache`]); `None` disables it.
     pub text_cache: Option<PathBuf>,
     pub text_encoder: TextEncoderChoice,
+    /// Directory or `taeh3.safetensors` file. When set, the official ViT
+    /// decoder is not loaded. `FASTVIDEO_TAEH3_WEIGHTS` is the same switch
+    /// when this is `None`.
+    pub taeh3: Option<PathBuf>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -244,6 +249,19 @@ pub struct H3LoadTimings {
     pub audio_vae_s: f64,
 }
 
+enum VideoDecoder {
+    Official(H3VideoDecoder),
+    Taeh3(TaeHv),
+}
+
+fn resolve_taeh3(explicit: Option<&Path>) -> Option<PathBuf> {
+    if let Some(p) = explicit {
+        return Some(p.to_path_buf());
+    }
+    let env = std::env::var("FASTVIDEO_TAEH3_WEIGHTS").unwrap_or_default();
+    if env.is_empty() { None } else { Some(PathBuf::from(env)) }
+}
+
 /// Everything but the text encoder, resident: load once, generate many times.
 pub struct H3Pipeline {
     root: PathBuf,
@@ -252,7 +270,7 @@ pub struct H3Pipeline {
     schedule: H3JointSchedule,
     refiner: H3TextRefiner,
     model: H3Transformer,
-    video_vae: H3VideoDecoder,
+    video_vae: VideoDecoder,
     audio_vae: H3AudioDecoder,
     text_encoder: Option<Box<dyn HiddenStateEncoder>>,
     pub load_timings: H3LoadTimings,
@@ -293,7 +311,15 @@ impl H3Pipeline {
         let model = H3Transformer::load_cached(cfg.clone(), &map, &schedule, !options.dense, options.adaln_cache.as_deref())?;
         timed(&mut load_timings.dit_s, timer);
         let timer = Instant::now();
-        let video_vae = H3VideoDecoder::load(H3VideoVaeConfig::fasth3_8step(), &WeightMap::open(&root.join("vae"))?)?;
+        let video_vae = match resolve_taeh3(options.taeh3.as_deref()) {
+            Some(path) => {
+                let tae = TaeHv::load_from_path(&path, TaeArch::H3)
+                    .map_err(|e| msg(format!("FASTVIDEO_TAEH3_WEIGHTS={}: {e}", path.display())))?;
+                crate::wan::log::info(format_args!("h3 vae=taeh3 ({})", path.display()));
+                VideoDecoder::Taeh3(tae)
+            }
+            None => VideoDecoder::Official(H3VideoDecoder::load(H3VideoVaeConfig::fasth3_8step(), &WeightMap::open(&root.join("vae"))?)?),
+        };
         timed(&mut load_timings.video_vae_s, timer);
         let timer = Instant::now();
         let audio_vae = H3AudioDecoder::load(H3AudioVaeConfig::fasth3_8step(), &WeightMap::open(&root.join("audio_vae"))?)?;
@@ -402,7 +428,7 @@ impl H3Pipeline {
         let mut writer = VideoWriter::spawn_with_audio(out_dir, H3_FPS as u32, request.mp4, Some(&wav))?;
         // The sink speaks TensorError; carry the writer's own error out beside it.
         let mut writer_error: Option<PipelineError> = None;
-        let decoded = self.video_vae.decode_streaming(&latents, &mut |offset, frames| {
+        let mut sink = |offset: usize, frames: &CudaTensor| {
             let (h, w) = (frames.shape[2], frames.shape[3]);
             let pushed = frames_to_rgb8(frames).and_then(|rgb| writer.push(offset, h, w, rgb));
             pushed.map_err(|e| {
@@ -410,11 +436,21 @@ impl H3Pipeline {
                 writer_error = Some(e);
                 TensorError::Message(text)
             })
-        });
+        };
+        let decoded = match &self.video_vae {
+            VideoDecoder::Official(vae) => vae.decode_streaming(&latents, &mut sink),
+            VideoDecoder::Taeh3(tae) => tae.decode_streaming(&latents, &mut sink).map(|v| v.shape[2]),
+        };
         let frames = match (decoded, writer_error) {
             (_, Some(e)) => return Err(e),
             (r, None) => r?,
         };
+        if frames != geometry.num_frames {
+            return Err(msg(format!(
+                "h3 video decode emitted {frames} frames, geometry wants {}",
+                geometry.num_frames
+            )));
+        }
         timings.video_decode_s = timer.elapsed().as_secs_f64();
         let timer = Instant::now();
         let (frame_paths, mp4) = writer.finish()?;

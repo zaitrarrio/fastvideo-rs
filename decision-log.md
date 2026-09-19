@@ -2,6 +2,16 @@
 
 Project code: FVID
 
+### FVID · 2026-09-19 · FVID-2026-09-19-taeh3-opt-in
+- Trigger: "yes, let's implement taeh3" after the TensorRT-vs-TAEH3 recommendation for H3 decode (22.9 s / 19% of a warm clip)
+- Options: TAEH3 opt-in (quality trade, same family as Wan TAEHV); TensorRT on the official ViT (~1.5× decode, new runtime); leave the official decoder
+- Decision: **port TAEH3** (`taeh3.safetensors`) behind `--taeh3-weights` / `FASTVIDEO_TAEH3_WEIGHTS` / `FV_TAEH3=1`. Official ViT stays the default. TensorRT not started.
+- Reason: decode is the only remaining non-DiT term worth cutting, and TAEH3 reuses the TAEHV port without adding TensorRT
+- Reversibility: cheap — unset the flag and the official decoder loads
+- Executed by: Executor
+- ADR: none
+- Verification: host tests green (`cargo test -p fastvideo-cudarc --lib taehv`: 13 passed, including wrap 37→124 / 72→243 / 107→362 and 2 latents → 5 frames at 16×). No GPU clip yet.
+
 ### FVID · 2026-09-19 · FVID-2026-09-19-text-plan-measured
 - Trigger: "lets run" — the text-encoding plan (oracle cache, conditioning cache + slim checkpoints, resident encoders, FP8 rows, prefetch) had only been checked on the host. All on RTX PRO 6000 96GB (user's choice; the one A100 80GB offer never booted, and 80 GB cannot hold H3 + a resident encoder or a float32 LTX-2 reference).
 - Kernels tier (RTX 3060, <1 cent): FP8 row codes and dequantized weights equal the host exactly; the scales were one ulp off because the device compiler turns `a / 448` into a reciprocal multiply — both sides now spell `a * (1/448)` and are exact. Prefetched encode == plain streamed encode, bit for bit, for stored-bf16 and stored-f32 checkpoints.

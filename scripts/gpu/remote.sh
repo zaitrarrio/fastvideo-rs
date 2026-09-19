@@ -257,6 +257,29 @@ cmd_wait_taehv() {
   log "taehv weights ok: $(du -h "$dest/taew2_1.safetensors" | cut -f1)"
 }
 
+# fetch-taeh3 <dest>: MiniMax-H3 tiny decoder (~10 MB) from madebyollin/taehv.
+cmd_fetch_taeh3() {
+  local dest="$1"
+  mkdir -p "$dest"
+  if [[ -f "$dest/.complete" ]]; then log "taeh3 weights already in $dest"; return 0; fi
+  log "fetching taeh3.safetensors → $dest (background)"
+  nohup bash "$ROOT/scripts/gpu/fetch-taeh3.sh" "$dest" >"$LOGS/fetch-taeh3.log" 2>&1 &
+  echo $! >"$dest/.fetch.pid"
+}
+
+cmd_wait_taeh3() {
+  local dest="$1" timeout_s="$2" waited=0
+  while [[ ! -f "$dest/.complete" ]]; do
+    if [[ -f "$dest/.fetch.pid" ]] && ! kill -0 "$(cat "$dest/.fetch.pid")" 2>/dev/null && [[ ! -f "$dest/.complete" ]]; then
+      tail -20 "$LOGS/fetch-taeh3.log" >&2 || true
+      die "taeh3 weight download died"
+    fi
+    (( waited < timeout_s )) || die "taeh3 weights not ready after ${timeout_s}s"
+    sleep 2; waited=$((waited + 2))
+  done
+  log "taeh3 weights ok: $(du -h "$dest/taeh3.safetensors" | cut -f1)"
+}
+
 # wait_weights <dest> <timeout_s> <component>...: block until the background
 # fetch finished and every shard of each component is complete on disk.
 cmd_wait_weights() {
@@ -470,6 +493,8 @@ case "$sub" in
   wait-weights) cmd_wait_weights "$@" ;;
   fetch-taehv) cmd_fetch_taehv "$@" ;;
   wait-taehv) cmd_wait_taehv "$@" ;;
+  fetch-taeh3) cmd_fetch_taeh3 "$@" ;;
+  wait-taeh3) cmd_wait_taeh3 "$@" ;;
   stage) cmd_stage "$@" ;;
   upstream-install) cmd_upstream_install "$@" ;;
   upstream-bench) cmd_upstream_bench "$@" ;;
@@ -477,5 +502,5 @@ case "$sub" in
   taehv-oracle) cmd_taehv_oracle "$@" ;;
   oracle-venv) cmd_oracle_venv "$@" ;;
   model-oracle) cmd_model_oracle "$@" ;;
-  *) die "usage: remote.sh env|bootstrap|cublas|fetch|wait-weights|fetch-taehv|wait-taehv|stage|upstream-install|upstream-bench|upstream-oracle|taehv-oracle|oracle-venv|model-oracle" ;;
+  *) die "usage: remote.sh env|bootstrap|cublas|fetch|wait-weights|fetch-taehv|wait-taehv|fetch-taeh3|wait-taeh3|stage|upstream-install|upstream-bench|upstream-oracle|taehv-oracle|oracle-venv|model-oracle" ;;
 esac
