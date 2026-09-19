@@ -132,6 +132,17 @@ impl DecoderConfig {
     pub fn num_layers(&self) -> usize {
         self.layers.len()
     }
+
+    /// Match a reference that ran the model in bfloat16. transformers casts
+    /// the embedding scale to the weight dtype before multiplying, so a bf16
+    /// Gemma-3-12B scales by exactly 62.0 rather than sqrt(3840) = 61.9677 — a
+    /// systematic 5e-4 that a per-tap gate is too coarse to see but that is
+    /// simply the wrong constant against such a reference. A float32 reference
+    /// wants the config as built.
+    pub fn for_bf16_reference(mut self) -> Self {
+        self.embed_scale = half::bf16::from_f32(self.embed_scale).to_f32();
+        self
+    }
 }
 
 /// `weight + offset`, on the device. Gemma stores `w` and computes `1 + w`.
@@ -319,9 +330,11 @@ fn embed(map: &WeightMap, cfg: &DecoderConfig, ids: &[u32]) -> Result<CudaTensor
 /// `k`, and tap `num_layers` is that last output *after the final norm* — the
 /// one entry of the tuple HF norms. Layers past the largest tap are not read.
 ///
-/// `positions` are the rotary positions (normally `0..S`, but a left-padded
-/// prompt starts its real tokens at 0); `attend[j]` says whether position `j`
-/// may be used as a key (false for padding).
+/// `positions` are the rotary positions, given explicitly because references
+/// disagree: transformers numbers a left-padded prompt `0..S` across the
+/// padding (real tokens end up at `S-n..S-1`), other stacks restart at the
+/// first real token. Pass what the reference used. `attend[j]` says whether
+/// position `j` may be used as a key (false for padding).
 ///
 /// Returns one `[1, S, hidden]` tensor per tap, in the order asked.
 pub fn hidden_states(
@@ -596,5 +609,8 @@ mod tests {
         assert_eq!(g.layers.iter().filter(|l| l.window.is_none()).count(), 8);
         assert_eq!(g.layers[5].rope_theta, 1_000_000.0);
         assert_eq!(g.layers[4].window, Some(1024));
+        assert!((g.embed_scale - 61.967_734).abs() < 1e-4);
+        assert_eq!(g.for_bf16_reference().embed_scale, 62.0);
+        assert_eq!(DecoderConfig::qwen3_vl_32b_text().for_bf16_reference().embed_scale, 1.0);
     }
 }

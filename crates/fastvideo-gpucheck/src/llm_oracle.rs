@@ -61,7 +61,9 @@ pub fn run(
     max_rel: f64,
 ) -> StageResult<()> {
     report.set("device", crate::gpu::init(device)?);
-    let mut cfg = family(family_name)?;
+    // The references this stage reads run in bf16 (the models do not fit a
+    // GPU in float32), so constants follow transformers' bf16 casts.
+    let mut cfg = family(family_name)?.for_bf16_reference();
     let mut orc = st::load(oracle)?;
     let ids = ints(&st::take(&mut orc, "input_ids", oracle)?, "input_ids")?;
     let positions = ints(&st::take(&mut orc, "positions", oracle)?, "positions")?;

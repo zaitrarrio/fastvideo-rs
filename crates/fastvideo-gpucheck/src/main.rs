@@ -32,7 +32,9 @@ mod rand_weights;
 mod reference;
 mod report;
 mod st;
+mod h3_stage;
 mod llm_oracle;
+mod ltx2_stage;
 mod taehv;
 
 use std::path::PathBuf;
@@ -232,6 +234,16 @@ enum Cmd {
         #[arg(long)]
         warm: bool,
     },
+    /// MiniMax-H3 / FastH3 stages (see `h3_stage.rs`).
+    H3 {
+        #[command(subcommand)]
+        stage: h3_stage::Stage,
+    },
+    /// LTX-2 stages (see `ltx2_stage.rs`).
+    Ltx2 {
+        #[command(subcommand)]
+        stage: ltx2_stage::Stage,
+    },
     /// A decoder-only text encoder (Qwen3-VL for MiniMax-H3, Gemma-3 for
     /// LTX-2) against transformers' hidden states, on the oracle's own tokens.
     Llm {
@@ -346,6 +358,8 @@ fn stage_name(cmd: &Cmd) -> &'static str {
         Cmd::Embed { .. } => "embed",
         Cmd::Probe { .. } => "probe",
         Cmd::Clip { .. } => "clip",
+        Cmd::H3 { .. } => "h3",
+        Cmd::Ltx2 { .. } => "ltx2",
         Cmd::Llm { .. } => "llm",
         Cmd::Compare { .. } => "compare",
         Cmd::Oracle { .. } => "oracle",
@@ -457,6 +471,8 @@ fn run(cli: &Cli, report: &mut Report) -> StageResult<()> {
                 warm: *warm,
             },
         ),
+        Cmd::H3 { stage } => h3_stage::run(report, stage),
+        Cmd::Ltx2 { stage } => ltx2_stage::run(report, stage),
         Cmd::Llm { weights, family, layer_prefix, oracle, device, max_rel } => {
             llm_oracle::run(report, weights, family, layer_prefix.as_deref(), oracle, device, *max_rel)
         }

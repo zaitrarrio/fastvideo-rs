@@ -1,0 +1,520 @@
+#!/usr/bin/env python3
+"""An external oracle for every stage of the LTX-2 port.
+
+Same contract as `upstream_oracle.py`: run the *reference* implementation
+(transformers' Gemma-3 and diffusers' LTX-2 classes) on the released weights,
+save both sides of every call, and let our stack be diffed against it stage by
+stage, so an error is attributed rather than merely detected. Inputs that are
+random are drawn on the CPU from a fixed seed and saved, so nothing depends on
+anyone's device RNG.
+
+Stages (each can be skipped; each frees its model before the next loads, so the
+whole thing fits one 96 GB card: Gemma-3-12B bf16 ~24 GB, DiT bf16 ~38 GB):
+
+    text      input_ids/attention_mask, the 49 stacked Gemma hidden states for
+              the real tokens                                  → the Gemma port
+    conn      text_proj_in output, video/audio connector outputs, in the
+              pipeline's own bf16 and again in float32       → the connectors
+    dit       RoPE tables, one forward on seeded latents for both streams,
+              with block 0 / mid / last outputs               → the DiT port
+    vae       decode of a fixed small latent                  → the video VAE
+    audio     audio-VAE mel and vocoder waveform of a fixed latent
+    sample    (--sample) the full 8-step distilled loop, every step's latents
+
+Tensor names carry the stage as a prefix. Everything is saved as float32 (ids
+and masks as int32); `--meta` records shapes, dtypes, timings and versions.
+
+`--llm-out` additionally writes the file `fv-gpucheck llm --family gemma3-12b
+--oracle <file>` reads (crates/fastvideo-gpucheck/src/llm_oracle.rs), all float32:
+
+    input_ids   [S]           token ids, left-padded to S = 1024
+    positions   [S]           the rotary position transformers used for each slot
+    attend      [S]           1.0 where the slot may be a key, 0.0 for padding
+    hidden_<k>  [1, S, 3840]  output_hidden_states[k]; 0 = scaled embeddings,
+                              k = output of decoder layer k, 48 = after the final norm
+
+LTX-2 consumes **all 49** states (pipeline_ltx2.py:350-352 stacks the whole tuple;
+connectors.py:427 unflattens it to [B, S, 3840, 49]), so `--llm-taps all` is the
+default; taps 1 and 6 (6 = output of the first global-attention layer) are the
+early-divergence probes and are always included.
+
+Line references are to diffusers `main` as read for docs/ports/ltx2.md:
+`pipeline_ltx2.py` = src/diffusers/pipelines/ltx2/pipeline_ltx2.py,
+`connectors.py` = src/diffusers/pipelines/ltx2/connectors.py,
+`transformer_ltx2.py` = src/diffusers/models/transformers/transformer_ltx2.py.
+
+`--weights` must be a *distilled* diffusers layout (the 8-sigma schedule is
+meaningless on the dev transformer): `rootonchair/LTX-2-19b-distilled`, or a
+local conversion of `ltx-2-19b-distilled.safetensors`. `Lightricks/LTX-2`'s own
+`transformer/` and `connectors/` are the dev model — both differ by hash.
+"""
+
+from __future__ import annotations
+
+import argparse
+import gc
+import inspect
+import json
+import sys
+import time
+
+# diffusers pipelines/ltx2/utils.py:27 — the schedule the checkpoint was distilled against.
+DISTILLED_SIGMA_VALUES = [1.0, 0.99375, 0.9875, 0.98125, 0.975, 0.909375, 0.725, 0.421875]
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--weights", default="rootonchair/LTX-2-19b-distilled", help="distilled diffusers layout (dir or hub id)")
+    ap.add_argument("--prompts", required=True, help="prompt JSON, same file the embed stage reads")
+    ap.add_argument("--name", default=None, help="which prompt to use (default: the first)")
+    ap.add_argument("--height", type=int, default=512)
+    ap.add_argument("--width", type=int, default=768)
+    ap.add_argument("--num-frames", type=int, default=121)
+    ap.add_argument("--frame-rate", type=float, default=24.0)
+    ap.add_argument("--sigma", type=float, default=0.725, help="noise level of the single DiT forward (a schedule entry)")
+    ap.add_argument("--seed", type=int, default=1024)
+    ap.add_argument("--max-sequence-length", type=int, default=1024)
+    ap.add_argument("--text-dtype", default="bfloat16", choices=["float32", "bfloat16"])
+    ap.add_argument("--dit-dtype", default="bfloat16", choices=["float32", "bfloat16"], help="float32 needs ~76 GB for weights")
+    ap.add_argument("--vae-latent", default="3,8,12", help="F,H,W of the fixed latent for the VAE stage")
+    ap.add_argument("--audio-latent-frames", type=int, default=26)
+    ap.add_argument("--skip", default="", help="comma list of stages to skip: text,conn,dit,vae,audio")
+    ap.add_argument("--sample", action="store_true", help="also run the full 8-step distilled loop")
+    ap.add_argument("--llm-out", default=None, help="also write the fv-gpucheck llm oracle file here")
+    ap.add_argument("--llm-taps", default="all", help="'all' (0..48, what LTX-2 consumes) or a comma list; 0,1,6,48 always kept")
+    ap.add_argument("--out", required=True)
+    ap.add_argument("--meta", required=True)
+    args = ap.parse_args()
+    skip = {s for s in args.skip.split(",") if s}
+    if "text" in skip and args.llm_out:
+        ap.error("--llm-out needs the text stage")
+    if "text" in skip and ("conn" not in skip or "dit" not in skip or args.sample):
+        # conn consumes text; dit and sample consume conn. Keeping the chain whole
+        # is what makes "our DiT on the oracle's embedding" a meaningful diff.
+        ap.error("--skip text requires --skip conn,dit and no --sample")
+    if "conn" in skip and ("dit" not in skip or args.sample):
+        ap.error("--skip conn requires --skip dit and no --sample")
+
+    import torch
+    from safetensors.torch import save_file
+
+    dev = "cuda"
+    spec = json.load(open(args.prompts))
+    entry = spec["prompts"][0] if args.name is None else next(p for p in spec["prompts"] if p["name"] == args.name)
+    prompt = entry["prompt"]
+
+    import diffusers
+    import transformers
+
+    meta: dict[str, object] = {
+        "prompt": prompt,
+        "name": entry["name"],
+        "weights": args.weights,
+        "torch": torch.__version__,
+        "cuda": torch.version.cuda,
+        "diffusers": diffusers.__version__,
+        "transformers": transformers.__version__,
+        "spec": {k: v for k, v in vars(args).items() if k not in ("out", "meta", "prompts", "llm_out")},
+        "timings": {},
+    }
+    out: dict[str, "torch.Tensor"] = {}
+    timings: dict[str, float] = meta["timings"]  # type: ignore[assignment]
+
+    def free() -> None:
+        # Call *after* `del`-ing the model in the caller's scope; a reference passed
+        # in here would keep the weights alive through the collection.
+        gc.collect()
+        torch.cuda.empty_cache()
+
+    def f32(t: "torch.Tensor") -> "torch.Tensor":
+        return t.detach().float().cpu().contiguous()
+
+    def cpu_randn(shape: tuple[int, ...], offset: int) -> "torch.Tensor":
+        # One generator per tensor, seed + offset, so adding a stage never shifts
+        # the draws of another.
+        g = torch.Generator(device="cpu").manual_seed(args.seed + offset)
+        return torch.randn(shape, generator=g, dtype=torch.float32)
+
+    # --- text: Gemma-3-12B ---------------------------------------------------
+    prompt_embeds = prompt_mask = None
+    if "text" not in skip:
+        from transformers import AutoTokenizer, Gemma3ForConditionalGeneration
+
+        t_dtype = getattr(torch, args.text_dtype)
+        tokenizer = AutoTokenizer.from_pretrained(args.weights, subfolder="tokenizer")
+        # pipeline_ltx2.py:327-331 — left padding, pad falls back to eos (Gemma has <pad>=0).
+        tokenizer.padding_side = "left"
+        if tokenizer.pad_token is None:
+            tokenizer.pad_token = tokenizer.eos_token
+
+        t0 = time.time()
+        # The shards are float32 on disk (48.7 GB); torch_dtype casts on load, which
+        # is what LTX2Pipeline.from_pretrained(torch_dtype=bfloat16) does too.
+        text_encoder = Gemma3ForConditionalGeneration.from_pretrained(
+            args.weights, subfolder="text_encoder", torch_dtype=t_dtype
+        ).eval().to(dev)
+        timings["load_text_s"] = time.time() - t0
+
+        # pipeline_ltx2.py:333-341 — no chat template, no system prompt: the stripped
+        # prompt, <bos> prepended by add_special_tokens, padded to max_length.
+        ti = tokenizer(
+            [prompt.strip()],
+            padding="max_length",
+            max_length=args.max_sequence_length,
+            truncation=True,
+            add_special_tokens=True,
+            return_tensors="pt",
+        )
+        ids, mask = ti.input_ids.to(dev), ti.attention_mask.to(dev)
+        n_tok = int(mask.sum())
+        with torch.no_grad():
+            t0 = time.time()
+            # pipeline_ltx2.py:347-349 — the multimodal wrapper, text only; position_ids are
+            # left to default, i.e. arange(1024) *including* the pad slots
+            # (modeling_gemma3.py:529-530), so real tokens sit at 1024-n … 1023.
+            enc = text_encoder(input_ids=ids, attention_mask=mask, output_hidden_states=True)
+            torch.cuda.synchronize()
+            timings["encode_s"] = time.time() - t0
+        # pipeline_ltx2.py:350-352 — 49 states (embeddings, 47 raw layer outputs, and the
+        # last one *after* the final norm, modeling_gemma3.py:588-591) stacked on a new
+        # last axis, then flattened: feature index = channel * 49 + layer.
+        stacked = torch.stack(enc.hidden_states, dim=-1)  # [1, 1024, 3840, 49]
+        prompt_embeds = stacked.flatten(2, 3).to(dtype=t_dtype)  # [1, 1024, 188160]
+        prompt_mask = mask
+
+        out["text.input_ids"] = ids.to(torch.int32).cpu()
+        out["text.attention_mask"] = mask.to(torch.int32).cpu()
+        # Pad rows are attention-masked garbage the connectors overwrite; only the
+        # real tokens (the last n, left padding) are a fair comparison. ~0.75 MB/token.
+        out["text.hidden_states"] = f32(stacked[0, args.max_sequence_length - n_tok :])  # [n, 3840, 49]
+        meta["tokens"] = n_tok
+
+        if args.llm_out:
+            n_states = len(enc.hidden_states)  # 49
+            want = set(range(n_states)) if args.llm_taps == "all" else {int(t) for t in args.llm_taps.split(",")}
+            want |= {0, 1, 6, n_states - 1}
+            s_len = ids.shape[1]
+            llm = {
+                "input_ids": ids[0].float().cpu(),  # exact in f32: vocab 262208 < 2^24
+                # transformers builds position_ids = arange(S) over the *padded* sequence
+                # when none are passed (modeling_gemma3.py:521-530) — it does not restart
+                # at the first real token — so slot j rotates by j, pads included.
+                "positions": torch.arange(s_len, dtype=torch.float32),
+                "attend": mask[0].float().cpu(),
+            }
+            for k in sorted(want):
+                llm[f"hidden_{k}"] = f32(enc.hidden_states[k])  # [1, S, 3840]
+            save_file(llm, args.llm_out)
+            meta["llm_oracle"] = {
+                "file": args.llm_out,
+                "taps": sorted(want),
+                "reference": f"transformers {transformers.__version__} Gemma3ForConditionalGeneration, {args.text_dtype} on cuda",
+                "dtype": args.text_dtype,
+                "device": "cuda",
+                "saved_as": "float32",
+                "padding": "left",
+                "positions": "arange(S) over the padded sequence; real tokens occupy the last n slots",
+                # In bf16 the sqrt(3840) embedding multiplier is rounded to the weight
+                # dtype first (modeling_gemma3.py:107): 62.0, not 61.967735.
+                "embed_scale_used": float(torch.tensor(3840.0**0.5).to(t_dtype)),
+                "attended": n_tok,
+            }
+        meta["text_hidden_states_layout"] = "[n_real_tokens, hidden=3840, state=49]; state 0 = scaled embeddings, 48 = post-norm"
+        del text_encoder, enc, stacked
+        free()
+
+    # --- conn: LTX2TextConnectors -------------------------------------------
+    conn_video = conn_audio = conn_mask = None
+    if "conn" not in skip:
+        from diffusers.pipelines.ltx2 import LTX2TextConnectors
+
+        t0 = time.time()
+        connectors = LTX2TextConnectors.from_pretrained(
+            args.weights, subfolder="connectors", torch_dtype=prompt_embeds.dtype
+        ).eval().to(dev)
+        timings["load_conn_s"] = time.time() - t0
+
+        captured: dict[str, "torch.Tensor"] = {}
+        # text_proj_in is the 188160→3840 bias-free Linear applied after the per-layer
+        # masked mean/range normalisation (connectors.py:451-459); its output is the
+        # first thing worth diffing, before any attention is involved.
+        hook = connectors.text_proj_in.register_forward_hook(lambda _m, _i, o: captured.__setitem__("proj", o))
+        with torch.no_grad():
+            # pipeline_ltx2.py:1237-1242 — returns (video [B,1024,3840], audio [B,1024,3840],
+            # mask [B,1024]). The registers replace every pad slot, so the mask comes
+            # back all ones (connectors.py:318, 472): the DiT never masks text.
+            conn_video, conn_audio, conn_mask = connectors(prompt_embeds, prompt_mask, padding_side="left")
+        hook.remove()
+        out["conn.proj"] = f32(captured["proj"])
+        out["conn.video"] = f32(conn_video)
+        out["conn.audio"] = f32(conn_audio)
+        out["conn.mask"] = conn_mask.to(torch.int32).cpu()
+
+        # The pipeline runs the normalisation — a sum over up to 1024×3840 values — in
+        # bf16. Re-running in float32 measures how much of our diff is that choice
+        # rather than a port error. Float32 weights are an exact widening of bf16.
+        connectors.float()
+        with torch.no_grad():
+            v32, a32, _ = connectors(prompt_embeds.float(), prompt_mask, padding_side="left")
+        out["conn.video_f32"] = f32(v32)
+        out["conn.audio_f32"] = f32(a32)
+        del connectors, v32, a32
+        free()
+
+    # --- latent geometry, shared by dit and sample --------------------------
+    # pipeline_ltx2.py:1261-1263 — 8x temporal (first frame kept whole), 32x spatial.
+    lat_f = (args.num_frames - 1) // 8 + 1
+    lat_h, lat_w = args.height // 32, args.width // 32
+    # pipeline_ltx2.py:1295-1299 — 16000/160/4 = 25 audio latents per second; Python
+    # round() is half-to-even.
+    audio_n = round(args.num_frames / args.frame_rate * (16000 / 160 / 4.0))
+    meta["latent_grid"] = [lat_f, lat_h, lat_w]
+    meta["video_tokens"] = lat_f * lat_h * lat_w
+    meta["audio_tokens"] = audio_n
+
+    def pack_video(x: "torch.Tensor") -> "torch.Tensor":
+        # LTX2Pipeline._pack_latents with patch 1/1 (pipeline_ltx2.py:648-668):
+        # [B,C,F,H,W] → [B, F*H*W, C], token order f-major, then h, then w.
+        return x.permute(0, 2, 3, 4, 1).flatten(1, 3)
+
+    def pack_audio(x: "torch.Tensor") -> "torch.Tensor":
+        # LTX2Pipeline._pack_audio_latents, patch-less branch (pipeline_ltx2.py:741-742):
+        # [B,C,L,M] → [B, L, C*M], feature index = channel * 16 + mel_bin.
+        return x.transpose(1, 2).flatten(2, 3)
+
+    transformer = None
+    if "dit" not in skip or args.sample:
+        from diffusers import LTX2VideoTransformer3DModel
+
+        d_dtype = getattr(torch, args.dit_dtype)
+        t0 = time.time()
+        transformer = LTX2VideoTransformer3DModel.from_pretrained(
+            args.weights, subfolder="transformer", torch_dtype=d_dtype
+        ).eval().to(dev)
+        timings["load_dit_s"] = time.time() - t0
+        accepted = set(inspect.signature(transformer.forward).parameters)
+
+        # pipeline_ltx2.py:1369-1374 — [B,3,S,2] and [B,1,L,2] patch bounds in seconds /
+        # pixels; computed once, identical for every step.
+        video_coords = transformer.rope.prepare_video_coords(1, lat_f, lat_h, lat_w, dev, fps=args.frame_rate)
+        audio_coords = transformer.audio_rope.prepare_audio_coords(1, audio_n, dev)
+
+        def dit(video: "torch.Tensor", audio: "torch.Tensor", timestep: "torch.Tensor"):
+            """One unguided call, argument for argument pipeline_ltx2.py:1399-1421."""
+            kwargs = dict(
+                hidden_states=video.to(dev, d_dtype),  # :1389 latents are fp32, cast per call
+                audio_hidden_states=audio.to(dev, d_dtype),
+                encoder_hidden_states=conn_video.to(d_dtype),
+                audio_encoder_hidden_states=conn_audio.to(d_dtype),
+                timestep=timestep,  # already sigma*1000 (transformer_ltx2.py:1406-1408)
+                sigma=timestep,  # LTX-2.3 prompt modulation only; inert for 2.0
+                encoder_attention_mask=conn_mask,
+                audio_encoder_attention_mask=conn_mask,
+                num_frames=lat_f,
+                height=lat_h,
+                width=lat_w,
+                fps=args.frame_rate,
+                audio_num_frames=audio_n,
+                video_coords=video_coords,
+                audio_coords=audio_coords,
+                isolate_modalities=False,
+                spatio_temporal_guidance_blocks=None,
+                perturbation_mask=None,
+                # Pipeline default True. With one shared sigma for both streams the
+                # "cross" timestep equals the own timestep, so 2.0 weights see the
+                # same numbers either way (transformer_ltx2.py:1560, 1576).
+                use_cross_timestep=True,
+                attention_kwargs=None,
+                return_dict=False,
+            )
+            # Older diffusers releases predate some of these keywords.
+            kwargs = {k: v for k, v in kwargs.items() if k in accepted}
+            with torch.no_grad():
+                v, a = transformer(**kwargs)
+            # pipeline_ltx2.py:1422-1423 — everything outside the model is float32.
+            return v.float(), a.float()
+
+    # --- dit: one forward ----------------------------------------------------
+    if "dit" not in skip:
+        with torch.no_grad():
+            # The four RoPE tables, exactly as forward() builds them
+            # (transformer_ltx2.py:1505-1511): self-attn tables are [1,32,S,64] (video,
+            # 3 axes) and [1,32,L,32] (audio); the a↔v cross tables are time-only,
+            # [1,32,S,32] and [1,32,L,32].
+            for name, (cos, sin) in {
+                "video": transformer.rope(video_coords, device=dev),
+                "audio": transformer.audio_rope(audio_coords, device=dev),
+                "cross_video": transformer.cross_attn_rope(video_coords[:, 0:1, :], device=dev),
+                "cross_audio": transformer.cross_attn_audio_rope(audio_coords[:, 0:1, :], device=dev),
+            }.items():
+                out[f"dit.rope.{name}.cos"] = f32(cos)
+                out[f"dit.rope.{name}.sin"] = f32(sin)
+        out["dit.video_coords"] = f32(video_coords)
+        out["dit.audio_coords"] = f32(audio_coords)
+
+        video_in = pack_video(cpu_randn((1, 128, lat_f, lat_h, lat_w), 0))  # [1, S, 128]
+        audio_in = pack_audio(cpu_randn((1, 8, audio_n, 16), 1))  # [1, L, 128]
+        # The scheduler's timesteps are float32(sigma) * 1000
+        # (scheduling_flow_match_euler_discrete.py:366-367); (B,) like pipeline :1396.
+        timestep = (torch.tensor([args.sigma], dtype=torch.float32) * 1000.0).to(dev)
+        out["dit.video_in"] = video_in
+        out["dit.audio_in"] = audio_in
+        out["dit.timestep"] = timestep.cpu()
+
+        n_blocks = len(transformer.transformer_blocks)
+        taps = sorted({0, n_blocks // 2, n_blocks - 1})
+        hooks = []
+        for i in taps:
+            # Each block returns (video [B,S,4096], audio [B,L,2048]) (transformer_ltx2.py:811).
+            def tap(_m, _i, o, i=i):
+                out[f"dit.block{i:02d}.video"] = f32(o[0])
+                out[f"dit.block{i:02d}.audio"] = f32(o[1])
+
+            hooks.append(transformer.transformer_blocks[i].register_forward_hook(tap))
+        t0 = time.time()
+        v, a = dit(video_in, audio_in, timestep)
+        torch.cuda.synchronize()
+        timings["dit_forward_s"] = time.time() - t0
+        for h in hooks:
+            h.remove()
+        out["dit.video_out"] = f32(v)  # velocity, [1, S, 128]
+        out["dit.audio_out"] = f32(a)  # velocity, [1, L, 128]
+        meta["dit_taps"] = taps
+
+    # --- sample: the full distilled loop ------------------------------------
+    sample_video = sample_audio = None
+    if args.sample:
+        from diffusers import FlowMatchEulerDiscreteScheduler
+
+        # The distilled scheduler config: no dynamic shift, no terminal stretch, so
+        # set_timesteps(sigmas=…) returns the list untouched plus a trailing 0
+        # (scheduling_flow_match_euler_discrete.py:348-377). Built explicitly rather
+        # than loaded so a dev-configured scheduler/ folder cannot silently shift it.
+        sched = FlowMatchEulerDiscreteScheduler(
+            num_train_timesteps=1000, shift=1.0, use_dynamic_shifting=False, shift_terminal=None
+        )
+        sched.set_timesteps(sigmas=DISTILLED_SIGMA_VALUES, device=dev)
+        meta["sample_sigmas"] = [float(s) for s in sched.sigmas]
+
+        # pipeline_ltx2.py:804-807, 844-845 — N(0,1) in float32, packed. The pipeline draws
+        # video then audio from one generator; here each has its own saved draw.
+        lat = pack_video(cpu_randn((1, 128, lat_f, lat_h, lat_w), 10)).to(dev)
+        aud = pack_audio(cpu_randn((1, 8, audio_n, 16), 11)).to(dev)
+        out["sample.video_noise"] = f32(lat)
+        out["sample.audio_noise"] = f32(aud)
+        t0 = time.time()
+        for i, t in enumerate(sched.timesteps):
+            v, a = dit(lat, aud, t.expand(1))
+            # Unguided (guidance_scale=1, stg_scale=0, modality_scale=1, rescale=0), the
+            # pipeline still round-trips v → x0 → v in float32 (pipeline_ltx2.py:1466-1467,
+            # 1573-1574); kept so the step is bit-comparable with a real pipeline run.
+            sigma = sched.sigmas[i]
+            v = (lat - (lat - v * sigma)) / sigma
+            a = (aud - (aud - a * sigma)) / sigma
+            # pipeline_ltx2.py:1577-1580 — x ← x + (sigma_next - sigma) · v. One scheduler
+            # serves both streams here: step() only reads sigmas[i], sigmas[i+1].
+            dt = sched.sigmas[i + 1] - sigma
+            lat = lat + dt * v
+            aud = aud + dt * a
+            out[f"sample.step{i}.video"] = f32(lat)
+            out[f"sample.step{i}.audio"] = f32(aud)
+        torch.cuda.synchronize()
+        timings["sample_s"] = time.time() - t0
+        sample_video, sample_audio = lat, aud
+
+    if transformer is not None:
+        # `dit` closes over the module; drop both or the 38 GB stays resident.
+        del transformer, dit
+        free()
+
+    # --- vae: AutoencoderKLLTX2Video decode ---------------------------------
+    if "vae" not in skip or sample_video is not None:
+        from diffusers import AutoencoderKLLTX2Video
+
+        vae = AutoencoderKLLTX2Video.from_pretrained(args.weights, subfolder="vae", torch_dtype=torch.float32).eval().to(dev)
+        mean = vae.latents_mean.view(1, -1, 1, 1, 1).float()
+        std = vae.latents_std.view(1, -1, 1, 1, 1).float()
+        out["vae.latents_mean"] = f32(vae.latents_mean)
+        out["vae.latents_std"] = f32(vae.latents_std)
+
+        def decode(z_norm: "torch.Tensor") -> "torch.Tensor":
+            # pipeline_ltx2.py:1638-1643 — z·std/scaling_factor + mean, then decode with
+            # timestep=None (config.timestep_conditioning is false, :1621-1622) and
+            # causal left to the config default (decoder_causal=false).
+            z = z_norm.to(dev) * std / vae.config.scaling_factor + mean
+            with torch.no_grad():
+                return vae.decode(z, None, return_dict=False)[0]
+
+        if "vae" not in skip:
+            f, h, w = (int(x) for x in args.vae_latent.split(","))
+            z = cpu_randn((1, 128, f, h, w), 20)  # DiT-space (normalised) latent
+            t0 = time.time()
+            video = decode(z)
+            torch.cuda.synchronize()
+            timings["vae_decode_s"] = time.time() - t0
+            out["vae.latent"] = z
+            out["vae.video"] = f32(video)  # [1, 3, 8(f-1)+1, 32h, 32w], nominally [-1, 1]
+        if sample_video is not None:
+            # pipeline_ltx2.py:1598-1605 — unpack [1,S,128] → [1,128,F,H,W].
+            z = sample_video.float().cpu().reshape(1, lat_f, lat_h, lat_w, 128).permute(0, 4, 1, 2, 3)
+            video = decode(z)
+            keep = sorted({0, video.shape[2] // 2, video.shape[2] - 1})
+            out["sample.frames"] = f32(video[:, :, keep])  # 3 of 121 frames; the rest is 570 MB
+            meta["sample_frames_kept"] = keep
+        del vae, decode
+        free()
+
+    # --- audio: AutoencoderKLLTX2Audio decode + LTX2Vocoder -----------------
+    if "audio" not in skip or sample_audio is not None:
+        from diffusers import AutoencoderKLLTX2Audio
+        from diffusers.pipelines.ltx2 import LTX2Vocoder
+
+        audio_vae = AutoencoderKLLTX2Audio.from_pretrained(
+            args.weights, subfolder="audio_vae", torch_dtype=torch.float32
+        ).eval().to(dev)
+        vocoder = LTX2Vocoder.from_pretrained(args.weights, subfolder="vocoder", torch_dtype=torch.float32).eval().to(dev)
+        out["audio.latents_mean"] = f32(audio_vae.latents_mean)  # [128] = 8 channels × 16 bins
+        out["audio.latents_std"] = f32(audio_vae.latents_std)
+        meta["vocoder_sample_rate"] = int(vocoder.config.output_sampling_rate)
+
+        def decode_audio(packed_norm: "torch.Tensor"):
+            # pipeline_ltx2.py:1607-1610 — de-normalise while still packed [B,L,128] (the
+            # statistics are per packed feature), then unpack to [B,8,L,16].
+            z = packed_norm.to(dev) * audio_vae.latents_std.float() + audio_vae.latents_mean.float()
+            z = z.unflatten(2, (-1, 16)).transpose(1, 2)
+            with torch.no_grad():
+                # pipeline_ltx2.py:1647-1648 — mel [B,2,4L-3,64] → waveform [B,2,240·(4L-3)]
+                # at vocoder.config.output_sampling_rate (24 kHz; the mel is 16 kHz/hop 160).
+                mel = audio_vae.decode(z, return_dict=False)[0]
+                return mel, vocoder(mel)
+
+        if "audio" not in skip:
+            packed = pack_audio(cpu_randn((1, 8, args.audio_latent_frames, 16), 30))
+            t0 = time.time()
+            mel, wave = decode_audio(packed)
+            torch.cuda.synchronize()
+            timings["audio_decode_s"] = time.time() - t0
+            out["audio.latent"] = packed
+            out["audio.mel"] = f32(mel)
+            out["audio.wave"] = f32(wave)
+        if sample_audio is not None:
+            mel, wave = decode_audio(sample_audio.float())
+            out["sample.mel"] = f32(mel)
+            out["sample.wave"] = f32(wave)
+        del audio_vae, vocoder, decode_audio
+        free()
+
+    meta["shapes"] = {k: list(v.shape) for k, v in out.items()}
+    meta["stats"] = {
+        k: {"mean": float(v.float().mean()), "std": float(v.float().std()), "absmax": float(v.float().abs().max())}
+        for k, v in out.items()
+        if v.numel() > 1
+    }
+    save_file({k: v.contiguous() for k, v in out.items()}, args.out)
+    json.dump(meta, open(args.meta, "w"), indent=2, sort_keys=True)
+    print(json.dumps({k: v for k, v in meta.items() if k != "stats"}, indent=2, sort_keys=True))
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

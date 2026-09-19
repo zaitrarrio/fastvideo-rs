@@ -1,0 +1,467 @@
+#!/usr/bin/env python3
+"""An external oracle for FastH3: text encoder, one DiT forward, the 8-step loop, both VAE decoders.
+
+Same contract as `upstream_oracle.py`: run the *reference* implementations
+(transformers' Qwen3-VL, diffusers' MiniMax-H3 classes) on the same weights,
+with every random input drawn from a seeded CPU generator and saved next to the
+outputs, so `fv-gpucheck` diffs our stack on byte-identical inputs and each
+stage's error is attributed rather than merely detected.
+
+Stages, each freed before the next so the whole script fits one 96 GB card:
+
+    1 text   Qwen3-VL-32B in bf16 (66.7 GB)        -> text_ids, text, text_h0, text_h1
+             and, with --llm-out, the file `fv-gpucheck llm --family qwen3-vl-32b` reads
+    2 dit    MiniMaxH3Transformer3DModel in bf16    -> dit_*, temb, adaln_block0, text_refined, block_*
+             (66.2 GB resident: diffusers ignores the 3.85 GB of to_gate_compress)
+    3 loop   the 8-forward FastH3 ladder, dense      -> loop_video, loop_audio
+    4 vae    AutoencoderKLMiniMaxH3, float32        -> vae_latent, vae_video_raw
+    5 audio  AutoencoderKLMiniMaxH3Audio, float32   -> audio_latent, audio_wave
+
+What this oracle is NOT, and the port must not pretend otherwise:
+
+  * diffusers has no VSA-H3 backend and no `to_gate_compress`. Stages 2 and 3 are
+    **dense attention with the compression-gate branch absent**. The checkpoint
+    was distilled *with* VSA at sparsity 0.8 and ships trained gates, so these
+    are the reference for our dense mode (`H3_VSA=off`), which validates every
+    weight, the packing, the RoPE, the AdaLN table and the scheduler. VSA-H3
+    itself has to be judged by (a) our VSA at sparsity 0 without the gate == our
+    dense, and (b) FastVideo's own pipeline; see docs/ports/h3.md section j.
+  * The DiT runs in bfloat16 (its float32 form is 140 GB). Everything is *saved*
+    as float32, which is lossless, but stage 2/3 limits have to allow for bf16
+    accumulation over 50 blocks. The text and VAE stages are the precision the
+    reference ships: bf16 for Qwen3-VL, float32 for both VAEs.
+
+Every tensor is written as float32, including ids, tags and indices (exact: all
+are far below 2^24): `fastvideo-gpucheck`'s safetensors reader accepts nothing
+else. `position_ids` are built in float64 upstream and cast to float32 as the
+first thing the rope does (FastVideo minimax_h3.py:85), so float32 is what the
+model consumes.
+
+Nothing here is run on the dev machine; every non-obvious line cites the
+upstream line it mirrors (diffusers `main`, FastVideo `main`, 2026-09-19).
+"""
+
+from __future__ import annotations
+
+import argparse
+import gc
+import inspect
+import json
+import sys
+import time
+
+REPO = "FastVideo/FastVideo-FastH3-8-Step-V2"
+
+# fastvideo_inference.json of the checkpoint; the diffusers scheduler configs
+# carry only the two shifts, so the ladder has to come from here.
+DMD_RUNGS = [999, 874, 749, 624, 500, 375, 250, 125]
+
+# diffusers modular_pipeline.py:24-26 / FastVideo packing.py:17-19.
+VIDEO_TAG, TEXT_TAG, AUDIO_TAG = 0, 1, 2
+AUDIO_CHANNELS = 2  # modular_pipeline.py:39
+TEXT_ENCODER_LAYER = 50  # encoders.py:35, packing.py:31 -> hidden_states[50]
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--weights", default=REPO, help="Hub id or a local snapshot dir of the FastH3 repo")
+    ap.add_argument("--prompts", required=True, help="prompt JSON, same file the embed stage reads")
+    ap.add_argument("--name", default=None, help="which prompt to use (default: the first)")
+    ap.add_argument("--height", type=int, default=768)
+    ap.add_argument("--width", type=int, default=1344)
+    ap.add_argument("--num-frames", type=int, default=124, help="17n+5; 124 = 5 s. 56 is a cheap 17-latent variant")
+    ap.add_argument("--seed", type=int, default=1024)
+    ap.add_argument("--dit-step", type=int, default=0, help="ladder index whose timesteps the single forward uses")
+    ap.add_argument("--dump-blocks", default="0,24,49", help="transformer blocks whose output is dumped, row-strided")
+    ap.add_argument("--block-row-stride", type=int, default=16, help="keep every k-th packed row of a block dump")
+    ap.add_argument("--vae-latent", default="12,32,48", help="T,H,W of the fixed video latent (2 chunks, 3x4 tiles)")
+    ap.add_argument("--audio-latents", type=int, default=50, help="length of the fixed audio latent, per channel")
+    ap.add_argument("--stages", default="text,dit,loop,vae,audio")
+    ap.add_argument("--device-map", default="cuda", help="passed to from_pretrained so shards stream to the GPU")
+    ap.add_argument("--llm-out", default=None, help="second file, in the `fv-gpucheck llm` oracle format")
+    ap.add_argument("--llm-taps", default="1,8,50", help="output_hidden_states indices written to --llm-out")
+    ap.add_argument("--out", required=True)
+    ap.add_argument("--meta", required=True)
+    args = ap.parse_args()
+    stages = set(args.stages.split(","))
+
+    import torch
+    import diffusers
+    import transformers
+    from safetensors.torch import save_file
+
+    spec = json.load(open(args.prompts))
+    entry = spec["prompts"][0] if args.name is None else next(p for p in spec["prompts"] if p["name"] == args.name)
+    prompt = entry["prompt"]
+
+    meta: dict[str, object] = {
+        "prompt": prompt,
+        "name": entry["name"],
+        "weights": args.weights,
+        "torch": torch.__version__,
+        "cuda": torch.version.cuda,
+        "diffusers": diffusers.__version__,
+        "transformers": transformers.__version__,
+        "spec": {
+            "height": args.height,
+            "width": args.width,
+            "num_frames": args.num_frames,
+            "seed": args.seed,
+            "dit_step": args.dit_step,
+            "dmd_rungs": DMD_RUNGS,
+            "block_row_stride": args.block_row_stride,
+            "attention": "dense (diffusers native SDPA); no VSA, no to_gate_compress",
+            "dit_dtype": "bfloat16 with proj_in/audio_proj_in/time_embedder/proj_out/audio_proj_out in float32",
+        },
+    }
+    out: dict[str, "torch.Tensor"] = {}
+    dev = "cuda"
+
+    def release() -> None:
+        # The caller `del`s its own names first; a helper cannot drop them for it.
+        gc.collect()
+        torch.cuda.empty_cache()
+
+    # --- 1. text encoder ----------------------------------------------------
+    # diffusers encoders.py:192 and FastVideo minimax_h3_conditioning.py:187 agree:
+    # the prompt verbatim, NO chat template, NO special tokens, no padding, no
+    # truncation. One sequence, so the attention mask is all ones.
+    from transformers import AutoTokenizer
+
+    tokenizer = AutoTokenizer.from_pretrained(args.weights, subfolder="tokenizer")
+    token_ids = tokenizer(prompt, add_special_tokens=False)["input_ids"]
+    meta["tokens"] = len(token_ids)
+    out["text_ids"] = torch.tensor(token_ids, dtype=torch.float32)  # ids < 151936 < 2^24: exact
+    # tokenizer_config.json lists seven `additional_special_tokens` (`<d>`, `</d>`,
+    # `<|cutoff|>`, `<|lyrics_*|>`, `<|caption_*|>`) that tokenizer.json does not
+    # define; transformers appends them at load time. H3 prompts wrap dialogue in
+    # `<d>...</d>`, so a port that reads tokenizer.json alone must add them with
+    # these ids. Recorded rather than assumed.
+    meta["tokenizer_len"] = len(tokenizer)
+    meta["added_special_token_ids"] = {
+        tok: tokenizer.convert_tokens_to_ids(tok)
+        for tok in tokenizer.additional_special_tokens
+        if tok.startswith(("<d>", "</d>", "<|cutoff", "<|lyrics", "<|caption"))
+    }
+
+    if "text" in stages:
+        from transformers import Qwen3VLForConditionalGeneration
+
+        t0 = time.time()
+        text_encoder = Qwen3VLForConditionalGeneration.from_pretrained(
+            args.weights, subfolder="text_encoder", torch_dtype=torch.bfloat16, device_map=args.device_map
+        ).eval()
+        meta["load_text_s"] = time.time() - t0
+
+        # encoders.py:63-70: a stack truncated to exactly 50 layers would return a
+        # post-norm last state, which is not hidden_states[50].
+        assert text_encoder.config.text_config.num_hidden_layers > TEXT_ENCODER_LAYER
+
+        input_ids = torch.tensor([token_ids], dtype=torch.long, device=dev)
+        kwargs = {}
+        # encoders.py:73,94: mm_token_type_ids is 0 for every text token. Older
+        # transformers releases have no such argument; for text-only ids the
+        # rotary layout is the same 1-D arange either way.
+        if "mm_token_type_ids" in inspect.signature(text_encoder.model.forward).parameters:
+            kwargs["mm_token_type_ids"] = torch.zeros_like(input_ids)
+        with torch.no_grad():
+            t0 = time.time()
+            # encoders.py:91-98: `.model`, not the top-level module, so the
+            # vocabulary projection never runs; causal LM attention throughout.
+            outputs = text_encoder.model(
+                input_ids=input_ids,
+                attention_mask=torch.ones_like(input_ids),
+                use_cache=False,
+                output_hidden_states=True,
+                **kwargs,
+            )
+            torch.cuda.synchronize()
+            meta["encode_s"] = time.time() - t0
+        hs = outputs.hidden_states
+        # HF convention: hidden_states[0] is the embedding output and
+        # hidden_states[i] the residual stream after decoder layer i-1. Index 50
+        # is therefore after layer **49** and has not been through `norm`
+        # (FastVideo minimax_h3_qwen3_vl.py:335 returns at layer_index + 1 == 50).
+        meta["num_hidden_states"] = len(hs)
+        prompt_embeds = hs[TEXT_ENCODER_LAYER]  # [1, N, 5120] bf16, encoders.py:99
+        out["text"] = prompt_embeds.float().cpu().contiguous()
+        out["text_h0"] = hs[0].float().cpu().contiguous()  # token embeddings: isolates the table gather
+        out["text_h1"] = hs[1].float().cpu().contiguous()  # after layer 0: isolates one GQA/RoPE/SwiGLU layer
+
+        if args.llm_out:
+            # crates/fastvideo-gpucheck/src/llm_oracle.rs. `hidden_<k>` is
+            # output_hidden_states[k]: k = 0 the embeddings, k the stream after k
+            # decoder layers (zero-based layer k-1), k = 64 the only normed entry.
+            # H3 consumes k = 50. For a text-only prompt the three mrope axes
+            # share the 1-D positions 0..S-1 (minimax_h3_qwen3_vl.py:584-587),
+            # and with one unpadded sequence every token may be attended.
+            n_tok = len(token_ids)
+            llm = {
+                "input_ids": torch.tensor(token_ids, dtype=torch.float32),
+                "positions": torch.arange(n_tok, dtype=torch.float32),
+                "attend": torch.ones(n_tok, dtype=torch.float32),
+            }
+            taps = [int(k) for k in args.llm_taps.split(",") if k != ""]
+            assert TEXT_ENCODER_LAYER in taps, "the tap H3 conditions on must be among --llm-taps"
+            for k in taps:
+                llm[f"hidden_{k}"] = hs[k].float().cpu().contiguous()  # [1, S, 5120]
+            save_file(llm, args.llm_out)
+            meta["llm_oracle"] = {
+                "file": args.llm_out,
+                "taps": taps,
+                "consumed_tap": TEXT_ENCODER_LAYER,
+                "reference_dtype": "bfloat16 on GPU (float32 is 133 GB and does not fit); saved as float32",
+            }
+        prompt_embeds = prompt_embeds.detach().clone()
+        del text_encoder, outputs, hs
+        release()
+    else:
+        # Later stages still need an embedding; a seeded stand-in keeps them runnable alone.
+        g = torch.Generator(device="cpu").manual_seed(args.seed + 1)
+        prompt_embeds = torch.randn((1, len(token_ids), 5120), generator=g, dtype=torch.float32).to(dev, torch.bfloat16)
+        out["text"] = prompt_embeds.float().cpu().contiguous()
+        meta["text_is_synthetic"] = True
+
+    # --- geometry and the packed layout --------------------------------------
+    # Uses diffusers' own builders rather than a transcription of them; FastVideo
+    # packing.py:227-298 is line-for-line the same layout.
+    from diffusers.modular_pipelines.minimax_h3.before_denoise import (
+        MiniMaxH3PrepareLayoutStep,
+        MiniMaxH3SetTimestepsStep,
+        patchify_video_latents,
+    )
+
+    assert args.num_frames % 17 == 5, "num_frames must be 17n + 5"
+    lat_t = (args.num_frames - 5) // 17 * 5 + 2  # packing.py:128-131
+    lat_h, lat_w = args.height // 16, args.width // 16
+    n_audio = int(round(args.num_frames / 24 * 40))  # packing.py:134-135
+    patch = (1, 2, 2)
+    text_tags = torch.full((len(token_ids),), TEXT_TAG, dtype=torch.long)  # encoders.py:205
+    (position_ids, token_tags, video_indices, audio_indices, text_indices, n_cond_v, n_cond_a) = (
+        MiniMaxH3PrepareLayoutStep.build_packed_sequence(
+            text_tags, lat_t, lat_h, lat_w, n_audio, patch, AUDIO_CHANNELS, AUDIO_TAG, VIDEO_TAG, ()
+        )
+    )
+    assert n_cond_v == 0 and n_cond_a == 0  # T2AV has no keyframe or reference rows
+    seq = position_ids.shape[0]
+    meta["latent_shape"] = [1, 24, lat_t, lat_h, lat_w]
+    meta["audio_latents_per_channel"] = n_audio
+    meta["sequence_length"] = seq
+    out["position_ids"] = position_ids.float().contiguous()  # [S, 3] (t, h, w); float64 upstream, float32 at the rope
+    out["token_tags"] = token_tags.float().contiguous()  # 0 video, 1 text, 2 audio
+
+    # One request generator, video noise first, then the audio rows
+    # (before_denoise.py:847-873, minimax_h3_latent_preparation.py:321-343). Drawn
+    # on the CPU, which is also what randn_tensor does with a CPU generator.
+    g = torch.Generator(device="cpu").manual_seed(args.seed)
+    video_noise = torch.randn((1, 24, lat_t, lat_h, lat_w), generator=g, dtype=torch.float32)
+    audio_noise = torch.randn((n_audio * AUDIO_CHANNELS, 32), generator=g, dtype=torch.float32)
+    out["video_noise"] = video_noise  # un-patchified, so our patchify is under test too
+    out["audio_noise"] = audio_noise  # rows: channel 0 latents 0..n-1, then channel 1
+
+    # --- the two schedules -----------------------------------------------------
+    # FastVideo minimax_h3_denoising.py:81-87. diffusers' own set_timesteps(9)
+    # would build linspace(1, 0, 9), whose first four sigmas are NOT the trained
+    # rungs (1.0 vs 0.999, ...), so the explicit-sigmas entry point is used.
+    from diffusers import MiniMaxH3Scheduler
+
+    scheduler = MiniMaxH3Scheduler.from_pretrained(args.weights, subfolder="scheduler")
+    audio_scheduler = MiniMaxH3Scheduler.from_pretrained(args.weights, subfolder="audio_scheduler")
+    assert scheduler.shift == 10.0 and audio_scheduler.shift == 3.0, (scheduler.shift, audio_scheduler.shift)
+    base = torch.tensor([s / 1000.0 for s in DMD_RUNGS] + [0.0], dtype=torch.float32)
+    for sch in (scheduler, audio_scheduler):
+        shift = float(sch.shift)
+        sch.set_timesteps(sigmas=shift * base / (1 + (shift - 1) * base), device=dev)
+    out["video_sigmas"] = scheduler.sigmas.float().cpu()
+    out["audio_sigmas"] = audio_scheduler.sigmas.float().cpu()
+    out["video_timesteps"] = scheduler.timesteps.float().cpu()  # t = 1 - sigma, what the DiT is conditioned on
+    out["audio_timesteps"] = audio_scheduler.timesteps.float().cpu()
+
+    def row_plan(i: int) -> tuple["torch.Tensor", "torch.Tensor"]:
+        v, a = float(scheduler.timesteps[i].item()), float(audio_scheduler.timesteps[i].item())
+        # minimax_h3_denoising.py:136-142; the two condition timesteps address no rows here.
+        unique, inverse = MiniMaxH3SetTimestepsStep.build_row_timesteps(
+            video_indices, audio_indices, 0, 0, len(token_ids), v, a, max(v, 0.999), 1.0
+        )
+        return unique.to(dev), inverse.to(dev)
+
+    # --- 2. one DiT forward ------------------------------------------------------
+    transformer = None
+    if stages & {"dit", "loop"}:
+        from diffusers import MiniMaxH3Transformer3DModel
+
+        t0 = time.time()
+        # bf16 request + _keep_in_fp32_modules (transformer_minimax_h3.py:444-451)
+        # reproduces FastVideo's precision split (minimax_h3.py:583-607). The
+        # checkpoint's 50 `attn.to_gate_compress.weight` tensors have no module
+        # here and are reported as unexpected keys, not loaded.
+        transformer = MiniMaxH3Transformer3DModel.from_pretrained(
+            args.weights, subfolder="transformer", torch_dtype=torch.bfloat16, device_map=args.device_map
+        ).eval()
+        meta["load_dit_s"] = time.time() - t0
+
+    layout = {
+        "token_tags": token_tags.to(dev),
+        "position_ids": position_ids.to(dev),
+        "video_indices": video_indices.to(dev),
+        "audio_indices": audio_indices.to(dev),
+        "text_indices": text_indices.to(dev),
+    }
+    video_rows = patchify_video_latents(video_noise, patch).to(dev)  # [Nv, 96], channel-major patch features
+    audio_rows = audio_noise.to(dev)
+
+    def forward(v_rows: "torch.Tensor", a_rows: "torch.Tensor", i: int) -> tuple["torch.Tensor", "torch.Tensor"]:
+        unique, inverse = row_plan(i)
+        # denoise.py:121-130: batch axis added here, latents stay float32, the
+        # prompt embedding stays in the conditioner's bf16.
+        return transformer(
+            hidden_states=v_rows[None],
+            audio_hidden_states=a_rows[None],
+            encoder_hidden_states=prompt_embeds.to(dev),
+            timestep=unique,
+            timestep_indices=inverse,
+            return_dict=False,
+            **layout,
+        )
+
+    if "dit" in stages:
+        stride = args.block_row_stride
+        hooks = []
+
+        def keep(name: str, rows: bool = False):
+            def hook(_module, _inputs, output):
+                # adaln_proj returns its six chunks as a tuple; everything else hooked here is one tensor.
+                t = torch.stack(output) if isinstance(output, tuple) else output
+                t = t[:, ::stride] if rows else t  # block outputs are [1, S, 5376]
+                out[name] = t.detach().float().cpu().contiguous()
+
+            return hook
+
+        # [n_t, 2688] float32: the one input every AdaLN projection shares.
+        hooks.append(transformer.time_embedder.register_forward_hook(keep("temb")))
+        # [6, n_t*3, 5376]: shift_msa, scale_msa, gate_msa, shift_mlp, scale_mlp, gate_mlp,
+        # rows [t0_video, t0_text, t0_audio, t1_video, ...]. The precomputed table is checked against this.
+        hooks.append(transformer.transformer_blocks[0].adaln_proj.register_forward_hook(keep("adaln_block0")))
+        hooks.append(transformer.token_refiner.register_forward_hook(keep("text_refined")))  # [1, N, 5376]
+        for b in [int(x) for x in args.dump_blocks.split(",") if x != ""]:
+            hooks.append(transformer.transformer_blocks[b].register_forward_hook(keep(f"block_{b}", rows=True)))
+
+        torch.cuda.reset_peak_memory_stats()  # otherwise this reports the text encoder's peak
+        unique, inverse = row_plan(args.dit_step)
+        out["dit_timesteps"] = unique.float().cpu()
+        out["dit_timestep_indices"] = inverse.float().cpu()  # per row, index into dit_timesteps
+        with torch.no_grad():
+            t0 = time.time()
+            v_out, a_out = forward(video_rows, audio_rows, args.dit_step)
+            torch.cuda.synchronize()
+            meta["dit_forward_s"] = time.time() - t0
+        for h in hooks:
+            h.remove()
+        out["dit_video"] = v_out.float().cpu().contiguous()  # [1, Nv, 96] data-ward velocity
+        out["dit_audio"] = a_out.float().cpu().contiguous()  # [1, 2*Na, 32]
+        meta["dit_peak_gib"] = torch.cuda.max_memory_allocated() / 2**30
+
+    # --- 3. the 8-forward loop ---------------------------------------------------
+    if "loop" in stages:
+        v_rows, a_rows = video_rows.clone(), audio_rows.clone()
+        per_step_v, per_step_a = [], []
+        with torch.no_grad():
+            t0 = time.time()
+            for i, (tv, ta) in enumerate(zip(scheduler.timesteps, audio_scheduler.timesteps)):
+                v_out, a_out = forward(v_rows, a_rows, i)
+                # denoise.py:225-237 / minimax_h3_denoising.py:226-237: float32
+                # velocity, the *timestep* (not the index) selects the step.
+                v_rows = scheduler.step(v_out[0].float(), tv, v_rows, return_dict=False)[0]
+                a_rows = audio_scheduler.step(a_out[0].float(), ta, a_rows, return_dict=False)[0]
+                per_step_v.append(v_rows.float().cpu())
+                per_step_a.append(a_rows.float().cpu())
+            torch.cuda.synchronize()
+            meta["loop_s"] = time.time() - t0
+        out["loop_video"] = torch.stack(per_step_v).contiguous()  # [8, Nv, 96]; [-1] is the clean latent rows
+        out["loop_audio"] = torch.stack(per_step_a).contiguous()  # [8, 2*Na, 32]
+
+    if transformer is not None:
+        del transformer
+        release()
+
+    # --- 4. video VAE decode -------------------------------------------------------
+    if "vae" in stages:
+        from diffusers import AutoencoderKLMiniMaxH3
+
+        t0 = time.time()
+        # float32 weights on disk and pinned float32 by _keep_in_fp32_modules
+        # (autoencoder_kl_minimax_h3.py:529-532). Tiling is on by default and is
+        # part of the released output (:520-523, :608-615); leave it on.
+        vae = AutoencoderKLMiniMaxH3.from_pretrained(args.weights, subfolder="vae", torch_dtype=torch.float32)
+        vae = vae.eval().to(dev)
+        meta["load_vae_s"] = time.time() - t0
+        assert vae.use_tiling and vae.tile_sample_min_height == 256 and vae.tile_sample_min_overlap_height == 64
+
+        vt, vh, vw = (int(x) for x in args.vae_latent.split(","))
+        g = torch.Generator(device="cpu").manual_seed(args.seed + 2)
+        latent = torch.randn((1, 24, vt, vh, vw), generator=g, dtype=torch.float32)
+        out["vae_latent"] = latent  # DiT-space (normalized); the port applies mean/std itself
+        mean = torch.tensor(vae.config.latents_mean, device=dev).view(1, -1, 1, 1, 1)
+        std = torch.tensor(vae.config.latents_std, device=dev).view(1, -1, 1, 1, 1)
+        z = latent.to(dev) * std + mean  # decoders.py:183-185
+        with torch.no_grad():
+            t0 = time.time()
+            raw = vae.decode(z, return_dict=False)[0]  # float32 end to end: the limit-setting reference
+            torch.cuda.synchronize()
+            meta["vae_decode_s"] = time.time() - t0
+            # decoders.py:187-188: the shipped recipe is float16 *autocast over float32 weights*.
+            # Measured here so the port's limit can be set against a known float16 cost.
+            with torch.autocast(device_type="cuda", dtype=torch.float16):
+                raw16 = vae.decode(z, return_dict=False)[0].float()
+        # ImageNet-normalized RGB, *before* `raw * pixel_std + pixel_mean` and the
+        # clamp to [0, 1] (decoders.py:189-191): a clamp would hide errors.
+        out["vae_video_raw"] = raw.float().cpu().contiguous()  # [1, 3, F, 16*vh, 16*vw]
+        meta["vae_video_shape"] = list(raw.shape)
+        meta["vae_fp16_autocast_vs_fp32"] = {
+            "max_abs": float((raw16 - raw).abs().max()),
+            "mean_abs": float((raw16 - raw).abs().mean()),
+        }
+        meta["vae_postprocess"] = "rgb01 = clamp(raw * [0.229,0.224,0.225] + [0.485,0.456,0.406], 0, 1)"
+        del vae, raw, raw16
+        release()
+
+    # --- 5. audio VAE decode --------------------------------------------------------
+    if "audio" in stages:
+        from diffusers import AutoencoderKLMiniMaxH3Audio
+
+        # float32: the DAC/BigVGAN stack loses ~20 dB under bfloat16
+        # (autoencoder_kl_minimax_h3_audio.py:531-534).
+        audio_vae = AutoencoderKLMiniMaxH3Audio.from_pretrained(
+            args.weights, subfolder="audio_vae", torch_dtype=torch.float32
+        )
+        audio_vae = audio_vae.eval().to(dev)
+        g = torch.Generator(device="cpu").manual_seed(args.seed + 3)
+        # Stereo is two mono batch items through the same weights (:26-27).
+        a_latent = torch.randn((AUDIO_CHANNELS, 32, args.audio_latents), generator=g, dtype=torch.float32)
+        out["audio_latent"] = a_latent
+        a_mean = torch.tensor(audio_vae.config.latents_mean, device=dev, dtype=torch.float32).view(1, -1, 1)
+        a_std = torch.tensor(audio_vae.config.latents_std, device=dev, dtype=torch.float32).view(1, -1, 1)
+        with torch.no_grad():
+            t0 = time.time()
+            wave = audio_vae.decode(a_latent.to(dev) * a_std + a_mean, return_dict=False)[0]  # decoders.py:243-247
+            torch.cuda.synchronize()
+            meta["audio_decode_s"] = time.time() - t0
+        assert wave.shape == (AUDIO_CHANNELS, 1, args.audio_latents * 800), wave.shape
+        out["audio_wave"] = wave[:, 0].float().cpu().contiguous()  # [2, 800*n], already clamped to [-1, 1]
+        del audio_vae, wave
+        release()
+
+    meta["stats"] = {
+        k: {"mean": float(v.double().mean()), "std": float(v.double().std()), "absmax": float(v.double().abs().max())}
+        for k, v in out.items()
+        if v.numel() > 1
+    }
+    meta["shapes"] = {k: [str(v.dtype), list(v.shape)] for k, v in out.items()}
+    save_file(out, args.out)
+    json.dump(meta, open(args.meta, "w"), indent=2, sort_keys=True)
+    print(json.dumps(meta, indent=2, sort_keys=True))
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
