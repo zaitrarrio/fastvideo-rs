@@ -1,8 +1,10 @@
 //! Backend-agnostic safetensors loading.
 //!
-//! Default [`load_raw_tensors`] converts everything to F32 for Burn / Luminal.
+//! Default [`load_raw_tensors`] converts float weights to F32 for Burn / Luminal.
 //! [`load_raw_tensors_native`] preserves on-disk F16/BF16/F32 bytes for CUDA
-//! backends that upload native dtypes.
+//! backends that upload native dtypes. Non-float tensors (I64 BatchNorm
+//! `num_batches_tracked` counters, and similarly I32/U8/BOOL) are unused at
+//! inference and skipped — never cast to float.
 //!
 //! Files are memory-mapped (not `std::fs::read`) and each tensor's dtype
 //! conversion runs on a `rayon` thread pool: for a multi-GB checkpoint (the
@@ -176,6 +178,12 @@ fn f32_bytes_le(values: &[f32]) -> Vec<u8> {
     out
 }
 
+/// Float weights we materialize. Integer / bool payloads are bookkeeping
+/// (e.g. `*.bn.num_batches_tracked`) and are dropped before convert.
+fn is_loadable_float(dtype: Dtype) -> bool {
+    matches!(dtype, Dtype::F32 | Dtype::F16 | Dtype::BF16)
+}
+
 fn view_to_f32(view: &TensorView<'_>) -> Result<(Vec<usize>, Vec<f32>), LoaderError> {
     let shape = view.shape().to_vec();
     let raw = view.data();
@@ -292,10 +300,26 @@ fn load_raw_tensors_with(
     // and parsing the safetensors header above is comparatively cheap
     // (header-only; tensor bytes are only touched on first access, whether
     // that's here or in the sequential fallback).
-    let entries: Vec<(String, TensorView<'_>)> = parsed
-        .iter()
-        .flat_map(|(_, st)| st.tensors())
-        .collect();
+    //
+    // Integer / bool tensors (I64 `num_batches_tracked`, I32/U8/BOOL, …) are
+    // unused at inference. Skip them here so both convert paths stay float-only
+    // and never cast bookkeeping counters to f32.
+    let mut skipped: Vec<(String, Dtype)> = Vec::new();
+    let mut entries: Vec<(String, TensorView<'_>)> = Vec::new();
+    for (name, view) in parsed.iter().flat_map(|(_, st)| st.tensors()) {
+        if is_loadable_float(view.dtype()) {
+            entries.push((name, view));
+        } else {
+            skipped.push((name, view.dtype()));
+        }
+    }
+    if !skipped.is_empty() {
+        let names: Vec<String> = skipped
+            .iter()
+            .map(|(name, dtype)| format!("{name} ({dtype:?})"))
+            .collect();
+        eprintln!("skipping non-float safetensors tensors: {}", names.join(", "));
+    }
 
     entries
         .into_par_iter()
@@ -441,6 +465,59 @@ mod tests {
         {
             assert!((a - e).abs() < 1e-6, "{a} vs {e}");
         }
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Flux2 AutoencoderKLFlux2 safetensors store float weights as BF16/F32
+    /// and unused BatchNorm counters as I64. Ingest must load the float and
+    /// omit the I64 — never cast integer tensors to f32.
+    #[test]
+    fn load_raw_tensors_skips_i64_bookkeeping() {
+        let dir = std::env::temp_dir().join(format!(
+            "fastvideo-loader-i64-skip-test-{}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let f32_vals = vec![0.25f32, -1.5, 2.0];
+        let f32_bytes = f32_bytes_le(&f32_vals);
+        let view_w = TensorView::new(Dtype::F32, vec![3], &f32_bytes).unwrap();
+
+        let i64_bytes = 7i64.to_le_bytes().to_vec();
+        let view_i64 = TensorView::new(Dtype::I64, vec![1], &i64_bytes).unwrap();
+
+        let i32_bytes = 3i32.to_le_bytes().to_vec();
+        let view_i32 = TensorView::new(Dtype::I32, vec![1], &i32_bytes).unwrap();
+
+        safetensors::serialize_to_file(
+            [
+                ("decoder.conv.weight", &view_w),
+                ("decoder.bn.num_batches_tracked", &view_i64),
+                ("decoder.bn.unused_i32", &view_i32),
+            ],
+            None,
+            &dir.join("vae.safetensors"),
+        )
+        .unwrap();
+
+        let native = load_raw_tensors_native(&dir).unwrap();
+        assert_eq!(native.len(), 1);
+        assert!(native.contains_key("decoder.conv.weight"));
+        assert!(!native.contains_key("decoder.bn.num_batches_tracked"));
+        assert!(!native.contains_key("decoder.bn.unused_i32"));
+        assert_eq!(native["decoder.conv.weight"].dtype, RawDType::F32);
+        assert_eq!(native["decoder.conv.weight"].shape, vec![3]);
+        assert_eq!(native["decoder.conv.weight"].to_f32_vec().unwrap(), f32_vals);
+
+        let f32_only = load_raw_tensors(&dir).unwrap();
+        assert_eq!(f32_only.len(), 1);
+        assert!(f32_only.contains_key("decoder.conv.weight"));
+        assert!(!f32_only.contains_key("decoder.bn.num_batches_tracked"));
+        assert_eq!(
+            f32_only["decoder.conv.weight"].as_f32_slice().unwrap(),
+            f32_vals.as_slice()
+        );
 
         let _ = std::fs::remove_dir_all(&dir);
     }
