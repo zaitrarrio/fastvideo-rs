@@ -9,6 +9,8 @@
 
 #![allow(unsafe_code)]
 
+pub mod h3;
+pub mod ltx2;
 pub mod wan;
 
 pub use wan::device::{resolve_device, DeviceError};
