@@ -5,3 +5,4 @@
 
 pub mod text;
 pub mod audio_vae;
+pub mod vae;

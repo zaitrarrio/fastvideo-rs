@@ -525,12 +525,18 @@ cmd_run() {
     local model repo wdir family patterns
     if [[ "$tier" == h3-text ]]; then
       model=h3 repo="${FV_H3_REPO:-FastVideo/FastVideo-FastH3-8-Step-V2}" family=qwen3-vl-32b
-      patterns=("text_encoder/*" "tokenizer/*" "processor/*")
+      # h3_oracle.py loads tokenizer/ and both scheduler configs whatever
+      # --stages says; the rest is per stage (docs/ports/h3.md).
+      patterns=("text_encoder/*" "tokenizer/*" "processor/*" "scheduler/*" "audio_scheduler/*")
     else
-      # `model-*` is the live shard set; `diffusion_pytorch_model-*` under the
-      # same directory is a stale 52 GB duplicate (docs/ports/ltx2.md).
-      model=ltx2 repo="${FV_LTX2_REPO:-Lightricks/LTX-2}" family=gemma3-12b
-      patterns=("text_encoder/model-*" "text_encoder/*.json" "tokenizer/*")
+      # The distilled model in diffusers layout: Lightricks/LTX-2's own
+      # transformer/ and connectors/ are the *dev* model, and the distilled
+      # weights ship only as a single file there. Everything that is not the DiT
+      # or the connectors is byte-identical between the two repos.
+      # `model-*` is the live text-encoder shard set; `diffusion_pytorch_model-*`
+      # beside it is a stale 52 GB duplicate (docs/ports/ltx2.md).
+      model=ltx2 repo="${FV_LTX2_REPO:-rootonchair/LTX-2-19b-distilled}" family=gemma3-12b
+      patterns=("text_encoder/model-*" "text_encoder/*.json" "tokenizer/*" "connectors/*")
     fi
     wdir="$WORK/weights/$model"
     remote_run "fetch-$model" 120 fetch "$repo" "$wdir" "${patterns[@]}"
@@ -544,7 +550,7 @@ cmd_run() {
     local odir="$OUTR/$model"
     local oargs=(--weights "$wdir" --prompts "$OUTR/prompt.json" --out "$odir/oracle.safetensors"
                  --meta "$odir/oracle.json" --llm-out "$odir/llm.safetensors")
-    if [[ "$model" == h3 ]]; then oargs+=(--stages text); else oargs+=(--skip conn,dit,vae,audio); fi
+    if [[ "$model" == h3 ]]; then oargs+=(--stages text); else oargs+=(--skip dit,vae,audio); fi
     remote_run "oracle-$model" 3600 model-oracle "$model" "${oargs[@]}"
     gpucheck_stage "llm-$model" 3600 --keep-going --mode fast llm --weights "$wdir/text_encoder" \
       --family "$family" --oracle "$odir/llm.safetensors" --device cuda
@@ -552,6 +558,11 @@ cmd_run() {
     # consumed hidden state(s) against the oracle's.
     if [[ "$model" == h3 ]]; then
       gpucheck_stage "h3-text" 3600 --keep-going --mode fast h3 text --weights "$wdir" \
+        --oracle "$odir/oracle.safetensors" --meta "$odir/oracle.json"
+    else
+      # Exact mode: Gemma streams a layer at a time and the connectors are
+      # 5.8 GB in f32, so nothing here needs bf16 to fit.
+      gpucheck_stage "ltx2-text" 5400 --keep-going --mode exact ltx2 text --weights "$wdir" --dit "$wdir" \
         --oracle "$odir/oracle.safetensors" --meta "$odir/oracle.json"
     fi
     log "${tier} done"

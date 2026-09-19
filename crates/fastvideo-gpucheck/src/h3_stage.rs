@@ -12,6 +12,7 @@ use std::path::{Path, PathBuf};
 use anyhow::Context;
 use fastvideo_cudarc::llm::DecoderConfig;
 use fastvideo_cudarc::wan::weights::WeightMap;
+use fastvideo_cudarc::CudaTensor;
 use serde_json::json;
 
 use crate::metrics::diff;
@@ -48,6 +49,20 @@ pub enum Stage {
         #[arg(long, default_value_t = 2e-3)]
         max_rel_layer0: f64,
     },
+    /// The BigVGAN audio decoder on the oracle's fixed latent, float32 on both sides.
+    AudioVae {
+        /// Root of the FastH3 snapshot (reads `audio_vae/`).
+        #[arg(long)]
+        weights: PathBuf,
+        /// `--out` file of `h3_oracle.py` (stage `audio`): `audio_latent`, `audio_wave`.
+        #[arg(long)]
+        oracle: PathBuf,
+        #[arg(long, default_value = "cuda")]
+        device: String,
+        /// Waveform samples live in [-1, 1]; both sides are float32.
+        #[arg(long, default_value_t = 1e-4)]
+        max_abs: f64,
+    },
 }
 
 pub fn run(report: &mut Report, stage: &Stage) -> StageResult<()> {
@@ -60,6 +75,7 @@ pub fn run(report: &mut Report, stage: &Stage) -> StageResult<()> {
         Stage::Text { weights, oracle, meta, prompt, device, max_rel, max_rel_layer0 } => {
             text(report, weights, oracle, meta.as_deref(), prompt.as_deref(), device, *max_rel, *max_rel_layer0)
         }
+        Stage::AudioVae { weights, oracle, device, max_abs } => audio_vae(report, weights, oracle, device, *max_abs),
     }
 }
 
@@ -164,5 +180,34 @@ fn text(
         let ok = if *limit == 0.0 { d.max_abs == 0.0 && d.non_finite == 0 } else { d.within(*limit) && d.cosine >= 0.999 };
         report.check(*name, ok, d.to_json(), json!({"rel_l2": limit, "cosine_min": 0.999}))?;
     }
+    Ok(())
+}
+
+fn audio_vae(report: &mut Report, weights: &Path, oracle: &Path, device: &str, max_abs: f64) -> StageResult<()> {
+    use fastvideo_cudarc::h3::audio_vae::H3AudioDecoder;
+    use fastvideo_models::h3::config::H3AudioVaeConfig;
+
+    report.set("device", crate::gpu::init(device)?);
+    let mut orc = st::load(oracle)?;
+    let latent = st::take(&mut orc, "audio_latent", oracle)?;
+    let want = st::take(&mut orc, "audio_wave", oracle)?;
+    drop(orc);
+
+    let timer = std::time::Instant::now();
+    let decoder = H3AudioDecoder::load(H3AudioVaeConfig::fasth3_8step(), &WeightMap::open(&weights.join("audio_vae"))?)?;
+    report.note("load_audio_vae", json!({"seconds": timer.elapsed().as_secs_f64()}));
+
+    let input = CudaTensor::from_vec(latent.data, latent.shape.clone())?;
+    let (wave, seconds) = measure(report, "audio_decode", || {
+        let out = decoder.decode(&input)?;
+        Ok((out.shape.clone(), out.host_cow()?.into_owned()))
+    })?;
+    report.note("audio_decode", json!({"seconds": seconds, "latent": latent.shape, "wave": wave.0}));
+    report.check("audio_wave_shape", wave.0 == want.shape, json!({"ours": wave.0}), json!({"reference": want.shape}))?;
+    let d = diff(&wave.1, &want.data);
+    // A clamp to [-1, 1] on both sides can hide an overdriven decode; say how much of it is railed.
+    let railed = want.data.iter().filter(|v| v.abs() >= 1.0).count() as f64 / want.data.len().max(1) as f64;
+    report.note("audio_wave_railed", json!({"fraction_of_reference_at_full_scale": railed}));
+    report.check("audio_wave", d.non_finite == 0 && d.max_abs <= max_abs, d.to_json(), json!({"max_abs": max_abs}))?;
     Ok(())
 }

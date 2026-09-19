@@ -45,8 +45,8 @@ impl SplitRope {
     /// If `dim` is not divisible by `2 · heads`, `axes` is zero, or `fractions`
     /// is not a whole number of tokens — all programming errors, not inputs.
     pub fn from_fractions(fractions: &[f32], axes: usize, dim: usize, heads: usize, theta: f64) -> Self {
-        assert!(axes > 0 && heads > 0 && dim % (2 * heads) == 0, "split rope: dim {dim}, {heads} heads, {axes} axes");
-        assert!(fractions.len() % axes == 0, "split rope: {} fractions over {axes} axes", fractions.len());
+        assert!(axes > 0 && heads > 0 && dim.is_multiple_of(2 * heads), "split rope: dim {dim}, {heads} heads, {axes} axes");
+        assert!(fractions.len().is_multiple_of(axes), "split rope: {} fractions over {axes} axes", fractions.len());
         let tokens = fractions.len() / axes;
         let slots = dim / 2;
         let half = slots / heads;
