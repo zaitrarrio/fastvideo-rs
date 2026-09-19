@@ -139,6 +139,9 @@ tasks:
 
   # DPH/MINUTES raise the tier's price and wall-clock ceilings — both bound the
   # worst case of a run, so raise them together and deliberately.
+  # SKIP_LOCAL=1 skips the Docker preflight: with a CI image or a remote-built
+  # dist already matching the tree, there is nothing left for it to prove, and
+  # on this machine it would build a CUDA 13 image under x86 emulation first.
   offers:
     desc: 'Cheapest matching offers, no rental (TIER=clip GPU=RTX_5090 DPH=3.20)'
     cmds:
@@ -147,7 +150,7 @@ tasks:
   run:
     desc: 'Rent and run a tier (TIER=kernels|parity|clip|compare)'
     cmds:
-      - '{{if .DPH}}MAX_DPH={{.DPH}} {{end}}{{if .MINUTES}}MAX_MINUTES={{.MINUTES}} {{end}}{{if .GPU}}FV_OFFER_QUERY_EXTRA=gpu_name={{.GPU}} {{end}}bash scripts/gpu/validate.sh run {{.TIER}}'
+      - '{{if .DPH}}MAX_DPH={{.DPH}} {{end}}{{if .MINUTES}}MAX_MINUTES={{.MINUTES}} {{end}}{{if .GPU}}FV_OFFER_QUERY_EXTRA=gpu_name={{.GPU}} {{end}}bash scripts/gpu/validate.sh run {{.TIER}}{{if .SKIP_LOCAL}} --skip-local{{end}}'
 
   kernels:
     desc: Kernel tier — kernels vs plain-Rust references (~$0.02)
