@@ -93,6 +93,15 @@ cmd_env() {
     "$disk_gb" "$ram_gb" "$cores" "$(IFS=,; echo "${libs[*]}")")"
   echo "$json" | tee "$OUT/env.json"
   [[ "$json" != *':false'* ]] || die "missing CUDA runtime libraries: $json"
+  # A rented GPU must be empty. Machine 111175 (2026-09-19) handed out RTX PRO
+  # 6000s with ~60 GB already held by another process: LTX-2 ran out of memory
+  # loading a 38 GB DiT and the H3 reference could not allocate 62 GB of 95.
+  # `env` failing marks the machine bad, so the harness moves to another offer.
+  local used; used="$(nvidia-smi --query-gpu=memory.used --format=csv,noheader,nounits | head -1 | tr -dc 0-9)"
+  if [[ "${used:-0}" -gt "${FV_MAX_GPU_USED_MIB:-2048}" ]]; then
+    nvidia-smi --query-compute-apps=pid,used_memory --format=csv || true
+    die "GPU is not empty: ${used} MiB in use before anything of ours ran"
+  fi
   # Every library must actually load (catches wrong arch / missing deps), not just exist.
   python3 - "$FV_LIBDIR" <<'PY' || die "a CUDA runtime library failed to load"
 import ctypes, os, sys
