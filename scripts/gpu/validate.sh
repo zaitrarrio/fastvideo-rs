@@ -43,7 +43,13 @@ FAST_W="$WORK/weights/fastwan21-1.3b"
 
 # ---- tier definitions ---------------------------------------------------------
 # Offer filter, $/hr ceiling, hard wall-clock cap (watchdog destroys at the cap).
-tier_query() {
+# FV_GPU_RAM_MIN overrides a tier's VRAM floor (e.g. 78 to admit an 80 GB A100
+# for a model that peaks well under it); FV_DISK_GB the disk rented, for a box
+# that will be kept and reused by tiers needing more than the first one.
+tier_query() { local q; q="$(tier_query_base "$1")" || return 1
+  if [[ -n "${FV_GPU_RAM_MIN:-}" ]]; then q="$(sed -E "s/gpu_ram>=[0-9]+/gpu_ram>=${FV_GPU_RAM_MIN}/" <<<"$q")"; fi
+  echo "$q"; }
+tier_query_base() {
   # FV_OFFER_QUERY_EXTRA narrows the search, e.g. "gpu_name=RTX_4070S".
   # cuda_vers>=13.0 is the driver floor for the CUDA 13.0 runtime libraries
   # the image ships (>= 580); there is no minor-version compatibility across
@@ -368,7 +374,7 @@ create_instance() {
   local tier="$1" offer="$2"
   local label out
   label="${FV_LABEL_PREFIX}-$(date -u +%Y%m%d%H%M%S)-$tier"
-  if ! out="$(vastai create instance "$offer" --image "$IMAGE" --disk "$(tier_disk "$tier")" --ssh --direct \
+  if ! out="$(vastai create instance "$offer" --image "$IMAGE" --disk "${FV_DISK_GB:-$(tier_disk "$tier")}" --ssh --direct \
           --label "$label" --cancel-unavail --raw 2>&1)"; then
     log "create failed for offer $offer: $(head -c 300 <<<"$out")"
     return 1
