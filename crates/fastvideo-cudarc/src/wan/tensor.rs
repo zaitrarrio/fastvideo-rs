@@ -712,6 +712,23 @@ impl CudaTensor {
         .expect("silu")
     }
 
+    /// Value-first SwiGLU: last dim is `(v, g)` and the result is `v * silu(g)`.
+    /// One pass over the packed buffer — last-dim [`Self::narrow`] copies each half.
+    pub fn swiglu_value_first(&self) -> Result<CudaTensor> {
+        let last = *self.shape.last().ok_or_else(|| msg("swiglu_value_first: empty shape"))?;
+        if last == 0 || last % 2 != 0 {
+            return Err(msg(format!("swiglu_value_first: last dim {last} is not 2*H")));
+        }
+        let half = last / 2;
+        let mut out_shape = self.shape.clone();
+        *out_shape.last_mut().unwrap() = half;
+        #[cfg(feature = "cuda")]
+        if let Some(x) = self.dev()? {
+            return Self::from_dev_result(super::ops::swiglu_value_first_device(&x, half)?, out_shape);
+        }
+        Ok(Self::host_only(host::swiglu_value_first(&self.host_cow()?, half), out_shape))
+    }
+
     /// Exact GELU (erf). `gelu_tanh` is the approximation; a checkpoint means
     /// one or the other and they differ by ~1e-3.
     pub fn gelu_erf(&self) -> CudaTensor {

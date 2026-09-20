@@ -256,6 +256,10 @@ pub fn run(report: &mut Report, lim: Limits, seed: u64) -> StageResult<()> {
             c.cmp(&format!("add_scalar_n{n}"), &down(&ops::add_scalar_device(&da, 0.5)?)?, &a.iter().map(|v| v + 0.5).collect::<Vec<_>>(), op)?;
             let want: Vec<f32> = a.iter().map(|&v| v / (1.0 + (-v).exp())).collect();
             c.cmp(&format!("silu_n{n}"), &down(&ops::unary_device(&da, ops::ElemUnary::Silu)?)?, &want, op)?;
+            let half = (n / 2).max(1);
+            let packed = c.rand(2 * half, 1.0);
+            let want = host::swiglu_value_first(&packed, half);
+            c.cmp(&format!("swiglu_h{half}"), &down(&ops::swiglu_value_first_device(&up(&packed)?, half)?)?, &want, op)?;
             let want: Vec<f32> = a.iter().map(|&v| ref_gelu_tanh(v)).collect();
             c.cmp(&format!("gelu_tanh_n{n}"), &down(&ops::unary_device(&da, ops::ElemUnary::GeluTanh)?)?, &want, op)?;
             c.cmp(&format!("clamp_n{n}"), &down(&ops::clamp_device(&da, -0.3, 0.7)?)?, &a.iter().map(|v| v.clamp(-0.3, 0.7)).collect::<Vec<_>>(), op)?;

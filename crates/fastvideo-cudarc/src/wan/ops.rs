@@ -122,6 +122,19 @@ pub fn unary_device(a: &CudaSlice<f32>, kind: ElemUnary) -> Result<CudaSlice<f32
     Ok(out)
 }
 
+/// Last dim `(v, g)` → `v * silu(g)`. `x.len()` is `rows * 2 * half`.
+#[cfg(feature = "cuda")]
+pub fn swiglu_value_first_device(x: &CudaSlice<f32>, half: usize) -> Result<CudaSlice<f32>> {
+    check("swiglu_value_first", half > 0 && x.len() % (2 * half) == 0)?;
+    let dev = ctx()?;
+    let n = x.len() / 2;
+    let half_i = half as i64;
+    let n_i = n as i64;
+    let mut out = alloc(n)?;
+    launch!(dev.stream, &dev.kernels.swiglu_value_first, cfg_n(n); x, &mut out, &half_i, &n_i).map_err(err)?;
+    Ok(out)
+}
+
 #[cfg(feature = "cuda")]
 pub fn mul_scalar_device(a: &CudaSlice<f32>, s: f32) -> Result<CudaSlice<f32>> {
     let dev = ctx()?;
@@ -1056,6 +1069,28 @@ pub mod host {
         x / (1.0 + (-x).exp())
     }
 
+    /// Value-first SwiGLU over a packed `[rows, 2*half]` last dim.
+    pub fn swiglu_value_first(x: &[f32], half: usize) -> Vec<f32> {
+        let width = 2 * half;
+        debug_assert!(half > 0 && x.len() % width == 0);
+        let n = x.len() / 2;
+        let mut out = vec![0.0; n];
+        if n >= PAR_MIN {
+            out.par_iter_mut().enumerate().for_each(|(i, o)| {
+                let row = i / half;
+                let col = i % half;
+                *o = x[row * width + col] * silu(x[row * width + half + col]);
+            });
+        } else {
+            for (i, o) in out.iter_mut().enumerate() {
+                let row = i / half;
+                let col = i % half;
+                *o = x[row * width + col] * silu(x[row * width + half + col]);
+            }
+        }
+        out
+    }
+
     /// erf to double precision (W. J. Cody's rational approximations), since
     /// std has none and the host path is the reference the kernel is held to.
     pub fn erf(x: f64) -> f64 {
@@ -1870,5 +1905,21 @@ mod tma_layout {
         assert!(mma_swz_tma(63, 63) < 64 * 128);
         assert_eq!(mma_swz_tma(0, 64), 64 * 128);
         assert!(mma_swz_tma(63, 127) < 2 * 64 * 128);
+    }
+}
+
+#[cfg(test)]
+mod swiglu {
+    #[test]
+    fn swiglu_value_first_is_v_times_silu_g() {
+        let half = 4;
+        let x: Vec<f32> = (0..2 * 2 * half).map(|i| (i as f32 * 0.3 - 1.1).sin()).collect();
+        let got = super::host::swiglu_value_first(&x, half);
+        for i in 0..got.len() {
+            let row = i / half;
+            let col = i % half;
+            let want = x[row * 2 * half + col] * super::host::silu(x[row * 2 * half + half + col]);
+            assert!((got[i] - want).abs() < 1e-6, "i={i}");
+        }
     }
 }

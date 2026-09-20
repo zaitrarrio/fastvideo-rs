@@ -2,6 +2,16 @@
 
 Project code: FVID
 
+### FVID · 2026-09-20 · FVID-2026-09-20-fused-swiglu-next
+- Trigger: "commit, push, then proceed to next steps" after unchunked FFN measured as a wash
+- Options: fused value-first silu×mul kernel; process-wide `FASTVIDEO_FP8` on FFN; prefix SDPA; more MMA load work
+- Decision: **fuse `h3_ffn_act`**. Last-dim `narrow` copies both `[S, ffn]` halves before a separate silu and mul. One `swiglu_value_first` pass. Then a profiled H3-gen+TAEH3.
+- Reason: FFN is still 38.1 s; act is 7.0 s / 18% of it and the only new slice. `FASTVIDEO_FP8` stays off (`FVID-2026-09-18-fp8-linears-measured`).
+- Reversibility: cheap — FeedForward can go back to `narrow` + `silu` + `mul`
+- Executed by: Executor
+- ADR: none
+- Verification: pending (host H3 transformer tests, then Max-Q `--profile --warm` + TAEH3)
+
 ### FVID · 2026-09-20 · FVID-2026-09-20-ffn-unchunk-next
 - Trigger: "commit, push and continue" after fused QKVG measured as a wash
 - Options: process-wide `FASTVIDEO_FP8` on H3 FFN; keep FFN in bf16 through SwiGLU; unchunk the 8192-row FFN GEMM on 5s clips; fused silu×mul kernel

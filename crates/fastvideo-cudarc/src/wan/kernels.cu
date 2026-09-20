@@ -27,6 +27,17 @@ extern "C" __global__ void silu(const float* a, float* out, long n) {
         out[i] = x / (1.0f + expf(-x));
     }
 }
+// Value-first SwiGLU: last dim is (v, g), out = v * silu(g). One pass over
+// the packed [rows, 2*half] buffer so last-dim narrow does not copy both halves.
+extern "C" __global__ void swiglu_value_first(const float* x, float* out, long half, long n) {
+    long i = IDX();
+    if (i >= n) return;
+    long col = i % half;
+    long row = i / half;
+    float v = x[row * (2 * half) + col];
+    float g = x[row * (2 * half) + half + col];
+    out[i] = v * (g / (1.0f + expf(-g)));
+}
 // TAEHV's Clamp block: a soft limiter, not a hard clamp, so the decoder never
 // sees a latent far outside the range it was trained on.
 extern "C" __global__ void tanh_scaled(const float* a, float* out, const float* s, long n) {

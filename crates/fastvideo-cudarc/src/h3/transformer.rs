@@ -370,8 +370,8 @@ impl Attention {
 }
 
 /// Bias-free SwiGLU with the **value half first**: `ff_out(v * silu(g))` for
-/// `(v, g) = chunk(ff_in(x), 2)`. Row-chunked: the `[S, 2 * ffn]` intermediate
-/// is never whole.
+/// `(v, g) = chunk(ff_in(x), 2)`. The act is one `swiglu_value_first` pass.
+/// Row-chunked only when `[S, 2 * ffn]` f32 would exceed [`FFN_WHOLE_BYTES`].
 pub(crate) struct FeedForward {
     ff_in: Linear,
     ff_out: Linear,
@@ -395,11 +395,7 @@ impl FeedForward {
         while start < rows {
             let len = chunk.min(rows - start);
             let h = phase("h3_ffn_in", || self.ff_in.forward(&n.narrow(1, start, len)?))?;
-            let act = phase("h3_ffn_act", || {
-                let value = h.narrow(2, 0, self.ffn_dim)?;
-                let gate = h.narrow(2, self.ffn_dim, self.ffn_dim)?.silu();
-                value.mul(&gate)
-            })?;
+            let act = phase("h3_ffn_act", || h.swiglu_value_first())?;
             drop(h);
             parts.push(phase("h3_ffn_out", || self.ff_out.forward(&act))?);
             start += len;
@@ -640,6 +636,28 @@ pub(crate) mod tests {
     fn five_second_h3_ffn_is_one_gemm() {
         assert_eq!(ffn_row_chunk(37_966, 14_336), 37_966);
         assert_eq!(ffn_row_chunk(109_000, 14_336), FFN_ROW_CHUNK);
+    }
+
+    #[test]
+    fn swiglu_value_first_matches_narrow_silu_mul() {
+        let (rows, half) = (5usize, 7usize);
+        let x: Vec<f32> = (0..rows * 2 * half).map(|i| (i as f32 * 0.17 - 1.3).sin()).collect();
+        let t = CudaTensor::from_vec(x.clone(), vec![1, rows, 2 * half]).unwrap();
+        let got = t.swiglu_value_first().unwrap();
+        assert_eq!(got.shape, vec![1, rows, half]);
+        let want: Vec<f32> = (0..rows * half)
+            .map(|i| {
+                let r = i / half;
+                let c = i % half;
+                x[r * 2 * half + c] * silu(x[r * 2 * half + half + c])
+            })
+            .collect();
+        let g = got.host_cow().unwrap();
+        for (i, (a, b)) in g.iter().zip(&want).enumerate() {
+            assert!((a - b).abs() < 1e-6, "i={i} {a} vs {b}");
+        }
+        let odd = CudaTensor::from_vec(vec![1.0, 2.0, 3.0], vec![1, 3]).unwrap();
+        assert!(odd.swiglu_value_first().is_err());
     }
 
     pub(crate) fn weights() -> WeightMap {

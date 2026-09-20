@@ -69,6 +69,7 @@ kernel_fns!(
     mul_scalar,
     add_scalar,
     silu,
+    swiglu_value_first,
     gelu_tanh,
     clamp_f,
     fill_f,
