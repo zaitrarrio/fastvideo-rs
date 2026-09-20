@@ -8,9 +8,12 @@
 #   docker.sh refs [--parity]  CPU-path reference dumps → artifacts/gpucheck/refs/ (saves billed GPU idle time)
 #   docker.sh image            runtime image (CUDA 12.4 runtime + binary) for NVIDIA Linux hosts
 #   docker.sh gpu <args...>    run fv-gpucheck on a local NVIDIA GPU: docker run --gpus all
+#   docker.sh runtime-image-repo [ref]  GHCR repo for this git ref (main vs branch package)
 #
 # Everything is keyed by a build id (hash of the Rust sources), so stale
 # binaries and references are rebuilt instead of silently reused.
+# GHCR: main owns fastvideo-rs-runtime; other branches get a separate
+# fastvideo-rs-runtime-<sanitized-ref> package and never push to main's.
 set -euo pipefail
 # shellcheck source=scripts/gpu/lib.sh
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
@@ -33,6 +36,46 @@ require_docker() {
 fv_build_id() {
   (cd "$FV_ROOT" && git ls-files -z -co --exclude-standard -- crates Cargo.toml Cargo.lock rust-toolchain.toml docker/gpucheck.Dockerfile \
     | LC_ALL=C sort -z | xargs -0 shasum -a 256 | shasum -a 256 | cut -c1-16)
+}
+
+# GHCR owner for the runtime image (lowercase). CI sets GITHUB_REPOSITORY_OWNER.
+fv_ghcr_owner() {
+  printf '%s' "${GITHUB_REPOSITORY_OWNER:-zaitrarrio}" | tr '[:upper:]' '[:lower:]'
+}
+
+# Docker/GHCR name segment: lowercase, no slashes, [a-z0-9] plus internal '-'.
+fv_sanitize_image_ref() {
+  printf '%s' "$1" | tr '[:upper:]' '[:lower:]' | sed -E 's/[^a-z0-9]+/-/g; s/^-+//; s/-+$//' | cut -c1-80
+}
+
+# Print the GHCR repository (no tag) for the gpucheck runtime image.
+#   main  → ghcr.io/<owner>/fastvideo-rs-runtime
+#   else  → ghcr.io/<owner>/fastvideo-rs-runtime-<sanitized-ref>
+# Optional arg is the git ref name (CI passes GITHUB_REF_NAME). Otherwise
+# GITHUB_REF_NAME, then `git branch --show-current`. Unknown/detached refs
+# do not resolve to main's package.
+fv_runtime_image_repo() {
+  local ref="${1:-}"
+  local owner main_repo safe
+  owner="$(fv_ghcr_owner)"
+  main_repo="ghcr.io/${owner}/fastvideo-rs-runtime"
+  if [[ -z "$ref" ]]; then
+    if [[ -n "${GITHUB_REF_NAME:-}" ]]; then
+      ref="$GITHUB_REF_NAME"
+    else
+      ref="$(git -C "$FV_ROOT" branch --show-current 2>/dev/null || true)"
+    fi
+  fi
+  if [[ "$ref" == main ]]; then
+    printf '%s\n' "$main_repo"
+    return 0
+  fi
+  safe="$(fv_sanitize_image_ref "$ref")"
+  if [[ -z "$safe" || "$safe" == main ]]; then
+    printf '%s\n' "${main_repo}-detached"
+    return 0
+  fi
+  printf '%s\n' "${main_repo}-${safe}"
 }
 
 cmd_builder() {
@@ -154,8 +197,8 @@ cmd_image() {
   cmd_dist
   require_docker
   log "building $RUNTIME_IMAGE"
-  # Same Dockerfile CI publishes to GHCR (`:build-<id>` / `:sha-<short>` on every
-  # branch; `:latest` only from main). Reuse the local dist binary instead of recompiling.
+  # Same Dockerfile CI publishes to GHCR (main package vs per-branch package).
+  # Reuse the local dist binary instead of recompiling.
   docker buildx build --platform "$PLATFORM" -f "$DOCKERFILE" --target runtime \
     --build-context binary="$DIST" -t "$RUNTIME_IMAGE" --load "$FV_ROOT" >&2
 }
@@ -188,5 +231,6 @@ case "${1:-}" in
   image) cmd_image ;;
   gpu) shift; cmd_gpu "$@" ;;
   build-id) fv_build_id ;;
-  *) sed -n '2,14p' "$0" | sed 's/^# \{0,1\}//'; exit 2 ;;
+  runtime-image-repo) shift; fv_runtime_image_repo "$@" ;;
+  *) sed -n '2,16p' "$0" | sed 's/^# \{0,1\}//'; exit 2 ;;
 esac

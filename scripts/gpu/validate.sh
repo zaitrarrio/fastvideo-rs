@@ -20,8 +20,12 @@ DIST="$FV_ROOT/artifacts/gpucheck/dist"
 LOCAL_REFS="$FV_ROOT/artifacts/gpucheck/refs"
 # Small runtime image built by .github/workflows/gpucheck-runtime-image.yml:
 # CUDA runtime libraries cudarc loads + fv-gpucheck + scripts (no PyTorch).
-IMAGE_REPO="${VAST_IMAGE_REPO:-ghcr.io/zaitrarrio/fastvideo-rs-runtime}"
+# Default repo is computed from the git ref (main vs per-branch GHCR package).
+IMAGE_REPO="${VAST_IMAGE_REPO:-}"
 IMAGE="${VAST_IMAGE:-}"
+# Public CUDA base when this ref's GHCR package has no image yet. Feature
+# branches never fall back to main's fastvideo-rs-runtime.
+LEAN_IMAGE="${VAST_IMAGE_FALLBACK:-nvidia/cuda:12.4.1-cudnn-runtime-ubuntu22.04}"
 # The image bakes the binary and scripts here; uploads land in the same place.
 FV_REMOTE_DIR="${VAST_REMOTE_DIR:-/opt/fastvideo-rs}"
 # Machines that failed to boot / never accepted ssh / failed env or bootstrap.
@@ -81,23 +85,37 @@ bad_hosts_json() {
 }
 
 # ---- image ------------------------------------------------------------------------
-# Prefer the CI image built from exactly these sources (binary baked in, no
-# upload); otherwise :latest (main's runtime libraries) plus an uploaded binary.
-# CI publishes :build-<id> on push to the branch or main; only main updates :latest.
+# Prefer the CI image for this git ref's GHCR package (binary baked in, no
+# upload). Main's package is ghcr.io/<owner>/fastvideo-rs-runtime; other
+# branches use fastvideo-rs-runtime-<sanitized-ref> and never pull main's
+# :latest. Same-package :latest (stale binary, CUDA libs) is ok; otherwise
+# a public CUDA base plus an uploaded local binary.
+image_exists() {
+  command -v docker >/dev/null 2>&1 && docker manifest inspect "$1" >/dev/null 2>&1
+}
+
 resolve_image() {
   local build_id="$1"
   if [[ -n "$IMAGE" ]]; then
     log "image $IMAGE (VAST_IMAGE override; uploading binary)"
     return 0
   fi
-  if command -v docker >/dev/null 2>&1 && docker manifest inspect "$IMAGE_REPO:build-$build_id" >/dev/null 2>&1; then
+  if [[ -z "$IMAGE_REPO" ]]; then
+    IMAGE_REPO="$("$DOCKER_SH" runtime-image-repo)"
+  fi
+  if image_exists "$IMAGE_REPO:build-$build_id"; then
     IMAGE="$IMAGE_REPO:build-$build_id"
     IMAGE_HAS_BUILD=1
     log "image $IMAGE (CI-built from these sources; binary baked in)"
-  else
-    IMAGE="$IMAGE_REPO:latest"
-    log "image $IMAGE (no CI image for build $build_id yet — CI publishes :build-$build_id on push to this branch or main; only main updates :latest; uploading local binary)"
+    return 0
   fi
+  if image_exists "$IMAGE_REPO:latest"; then
+    IMAGE="$IMAGE_REPO:latest"
+    log "image $IMAGE (no :build-$build_id on $IMAGE_REPO yet — CI publishes that tag on push to this branch; uploading local binary)"
+    return 0
+  fi
+  IMAGE="$LEAN_IMAGE"
+  log "image $IMAGE (no CI image at $IMAGE_REPO for build $build_id — CI publishes $IMAGE_REPO:build-$build_id on push to this branch; main's fastvideo-rs-runtime is not used; uploading local binary)"
 }
 
 # ---- preflight: local, free ------------------------------------------------------

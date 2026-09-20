@@ -9,10 +9,12 @@
 # build    Compiles the release binary from the repo (CI path).
 # binary   The binary + build id. Locally overridden with
 #          `--build-context binary=artifacts/gpucheck/dist` to reuse `docker.sh dist`.
-# runtime  What a GPU box runs (ghcr.io/zaitrarrio/fastvideo-rs-runtime): Ubuntu
-#          22.04 + only the CUDA libraries cudarc loads (pinned NVIDIA wheels) +
-#          rsync/ffmpeg/HF downloader + the binary and scripts. No PyTorch, no
-#          toolkit: ~1.5GB compressed instead of ~9GB, so hosts boot quickly.
+# runtime  What a GPU box runs. Main publishes ghcr.io/<owner>/fastvideo-rs-runtime;
+#          other branches publish a separate fastvideo-rs-runtime-<sanitized-ref>
+#          package. Ubuntu 22.04 + only the CUDA libraries cudarc loads (pinned
+#          NVIDIA wheels) + rsync/ffmpeg/HF downloader + the binary and scripts.
+#          No PyTorch, no toolkit: ~1.5GB compressed instead of ~9GB, so hosts
+#          boot quickly.
 
 FROM ubuntu:22.04 AS builder
 ARG DEBIAN_FRONTEND=noninteractive
