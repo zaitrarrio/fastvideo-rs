@@ -2,6 +2,16 @@
 
 Project code: FVID
 
+### FVID · 2026-09-19 · FVID-2026-09-19-sm120-is-not-umma
+- Trigger: "continue" after the TAEH3 A/B, queued as Blackwell UMMA on `vsa_h3_3_mma`
+- Options: port FastVideo's sm100a `tcgen05` kernel; write UMMA from scratch; TMA + existing `mma.sync` on SM12x; FP8 fine stage
+- Decision: **do not write UMMA.** RTX PRO 6000 is SM12x: no TMEM, no `tcgen05`. FastVideo's sm100a body is `#if __CUDA_ARCH__ == 1000 && SM100_ALL` and ptxas rejects it for `sm_120`. Peak BF16 here is still `mma.sync`. Skip H3 prefix query tiles in the MMA grid (SDPA overwrites them). Next kernel work is TMA 128B-swizzled K/V loads around the current MMA, not a new ISA.
+- Reason: Colfax / CUTLASS / Triton all document consumer Blackwell as MMAv2 + TMA; the 5s clip is already ~130 TFLOPS of BF16 MMA, so a wrong-ISA rewrite cannot land
+- Reversibility: cheap — prefix skip is a grid offset; TMA stays unstarted
+- Executed by: Executor
+- ADR: none
+- Verification: host VSA tests; prefix skip is 11/671 query tiles on the 5s layout (~1.6% of the MMA grid)
+
 ### FVID · 2026-09-19 · FVID-2026-09-19-h3-profile-next
 - Trigger: "proceed" after the H3 `--profile` gen on an RTX PRO 6000 WS (`20260919T223558Z-h3-gen`). Block: attn 62%, FFN 31%. VSA: MMA 78%, prefix_dense 17%. QKVG four-way even.
 - Options: split-softmax / persistent prefix; fused QKVG; FFN fusion; Blackwell UMMA on `vsa_h3_3_mma`; TAEH3 A/B (already coded)

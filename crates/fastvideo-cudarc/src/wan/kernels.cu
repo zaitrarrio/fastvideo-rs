@@ -932,17 +932,22 @@ __device__ __forceinline__ void mma_load_tile(unsigned int smem, const unsigned 
 // token count per tile (padding columns are masked to -inf, as the reference
 // does with `right_fill`). Output is f32 in the same tile-slot order the
 // gather path produces, so `vsa_combine` is shared.
+//
+// `q_base` skips leading query tiles (H3 prefix rows that SDPA overwrites).
+// SM12x (RTX 50 / PRO 6000) has no tcgen05/TMEM — this mma.sync body IS the
+// peak BF16 path there. FastVideo's sm100a kernel is B200-only.
 extern "C" __global__ void __launch_bounds__(128, 2) vsa_mma_attn(
     const unsigned short* __restrict__ qt, const unsigned short* __restrict__ kt,
     const unsigned short* __restrict__ vt, const unsigned int* __restrict__ selected,
     const int* __restrict__ block_sizes, float* __restrict__ out,
-    int num_tiles, int topk, float scale_log2
+    int num_tiles, int topk, float scale_log2, int q_base
 ) {
 #if defined(__CUDA_ARCH__) && __CUDA_ARCH__ >= 800
     extern __shared__ __align__(128) unsigned char mma_smem[];
     const int tid = threadIdx.x, lane = tid & 31, warp = tid >> 5;
     const int g = lane >> 2, t = lane & 3;
-    const int qtile = blockIdx.x, bh = blockIdx.y;
+    const int qtile = q_base + (int)blockIdx.x, bh = blockIdx.y;
+    if (qtile >= num_tiles) return;
     const long padded = (long)num_tiles * MMA_TILE;
     const unsigned short* qb = qt + (bh * padded + (long)qtile * MMA_TILE) * MMA_DIM;
     const unsigned short* kb = kt + bh * padded * MMA_DIM;
@@ -1085,7 +1090,7 @@ extern "C" __global__ void __launch_bounds__(128, 2) vsa_mma_attn(
     // it runs anyway the build was compiled for the wrong arch — trap, so that
     // reports as a CUDA error instead of as an uninitialised output buffer.
     (void)qt; (void)kt; (void)vt; (void)selected; (void)block_sizes; (void)out;
-    (void)num_tiles; (void)topk; (void)scale_log2;
+    (void)num_tiles; (void)topk; (void)scale_log2; (void)q_base;
     __trap();
 #endif
 }

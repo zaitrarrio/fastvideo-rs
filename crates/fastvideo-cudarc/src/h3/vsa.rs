@@ -347,17 +347,27 @@ impl H3Vsa {
             ops::vsa_topk_device(slice(&biased)?, bh * n, n, topk)
         })?;
 
-        // 4. Fine stage over every query tile with that uniform list.
+        // 4. Fine stage. Prefix query tiles are overwritten by SDPA below, so
+        //    the tensor-core grid starts at `prefix_tiles` unless this pass is
+        //    already dense (topk == n) and those rows are the final output.
         let mut out = ops::fill_device(bh * seq * dim, 0.0)?;
         let gate_slice = gate.as_ref().map(slice).transpose()?;
         let sm = device::global_device().map_or(0, |d| d.sm_major);
         let forced_gather = crate::wan::envflag::string_flag("FASTVIDEO_VSA_KERNEL", "auto") == "gather";
         if sm >= 8 && dim == 128 && !forced_gather {
-            let sparse = phase("vsa_h3_3_mma", || ops::vsa_mma_attn_device(qd, kd, vd, &selected, &dp.plan, bh, seq, dim, topk, scale))?;
+            let prefix = self.plan.prefix_tiles;
+            let (q_base, q_tiles) = if topk < n && prefix > 0 && prefix < n {
+                (prefix, n - prefix)
+            } else {
+                (0, n)
+            };
+            let sparse = phase("vsa_h3_3_mma", || {
+                ops::vsa_mma_attn_range_device(qd, kd, vd, &selected, &dp.plan, bh, seq, dim, topk, scale, q_base, q_tiles)
+            })?;
             ops::vsa_combine_device(&sparse, &coarse, gate_slice, &dp.plan, &mut out, bh, n, 0, seq, dim)?;
         } else {
             let (rows, len) = (TILE_ELEMS, topk * TILE_ELEMS);
-            let mut q_base = 0usize;
+            let mut q_base = if topk < n { self.plan.prefix_tiles } else { 0 };
             while q_base < n {
                 let g = self.group.min(n - q_base);
                 let (kg, vg) = ops::vsa_gather_kv_device(kd, vd, &selected, &dp.plan, bh, g, seq, dim, topk, q_base)?;
@@ -433,6 +443,8 @@ mod tests {
             let l = H3PackedLayout::from_geometry(&H3Geometry::default_16x9(seconds).unwrap(), 256).unwrap();
             let p = H3TilePlan::new(&l).unwrap();
             assert_eq!((p.prefix_tiles, p.video_tiles, p.k_vid(0.8)), (prefix, video, k_vid), "{seconds} s");
+            // MMA skips prefix query tiles whenever SDPA will overwrite them.
+            assert!(prefix < p.num_tiles(), "{seconds} s: prefix skip needs a video tail");
         }
     }
 

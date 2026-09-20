@@ -766,6 +766,10 @@ pub fn vsa_tile_qkv_device(
 /// tile streams its top-k key tiles through `mma.sync` with an online softmax
 /// — the structure every reference block-sparse kernel uses. Output is f32 in
 /// tile-slot order, the same contract as [`vsa_fused_attn_device`].
+///
+/// `q_base` / `q_tiles` restrict the grid to a slice of query tiles. H3 uses
+/// this to skip prefix tiles that `vsa_h3_4_prefix_dense` overwrites. The
+/// skipped slots stay zero so [`vsa_combine_device`] can still walk every tile.
 #[cfg(feature = "cuda")]
 #[allow(clippy::too_many_arguments)]
 pub fn vsa_mma_attn_device(
@@ -780,6 +784,27 @@ pub fn vsa_mma_attn_device(
     topk: usize,
     scale: f32,
 ) -> Result<CudaSlice<f32>> {
+    vsa_mma_attn_range_device(q, k, v, selected, plan, bh, seq, dim, topk, scale, 0, plan.num_tiles)
+}
+
+/// Like [`vsa_mma_attn_device`], but only query tiles `[q_base, q_base + q_tiles)`.
+#[cfg(feature = "cuda")]
+#[allow(clippy::too_many_arguments)]
+pub fn vsa_mma_attn_range_device(
+    q: &CudaSlice<f32>,
+    k: &CudaSlice<f32>,
+    v: &CudaSlice<f32>,
+    selected: &CudaSlice<u32>,
+    plan: &VsaPlanDev,
+    bh: usize,
+    seq: usize,
+    dim: usize,
+    topk: usize,
+    scale: f32,
+    q_base: usize,
+    q_tiles: usize,
+) -> Result<CudaSlice<f32>> {
+    use crate::wan::stats::phase;
     const THREADS: u32 = 128;
     const TILE: usize = 64;
     const DIM: usize = 128;
@@ -788,13 +813,17 @@ pub fn vsa_mma_attn_device(
     let dev = ctx()?;
     check("vsa_mma_attn needs sm80+", dev.sm_major >= 8)?;
     let nb = plan.num_tiles;
+    let q_tiles = q_tiles.min(nb.saturating_sub(q_base));
+    check("vsa_mma_attn q range", q_tiles > 0 && q_base + q_tiles <= nb)?;
     let padded = nb * TILE;
 
-    let (qt, kt, vt) = (
-        vsa_tile_qkv_device(q, plan, bh, seq, dim)?,
-        vsa_tile_qkv_device(k, plan, bh, seq, dim)?,
-        vsa_tile_qkv_device(v, plan, bh, seq, dim)?,
-    );
+    let (qt, kt, vt) = phase("vsa_mma_tile", || {
+        Ok::<_, TensorError>((
+            vsa_tile_qkv_device(q, plan, bh, seq, dim)?,
+            vsa_tile_qkv_device(k, plan, bh, seq, dim)?,
+            vsa_tile_qkv_device(v, plan, bh, seq, dim)?,
+        ))
+    })?;
 
     // K[2] + V[2] tiles of 64x128 bf16: 64 KiB, past the 48 KiB default, so
     // the function has to opt in. Once per process; there is one device.
@@ -811,16 +840,21 @@ pub fn vsa_mma_attn_device(
         return Err(TensorError::Message(format!("vsa_mma_attn: dynamic shared opt-in failed: {e}")));
     }
 
-    let mut out = alloc(bh * padded * dim)?;
+    // Zero-fill so skipped prefix tiles stay a defined 0 for combine.
+    let mut out = if q_base == 0 && q_tiles == nb {
+        alloc(bh * padded * dim)?
+    } else {
+        fill_device(bh * padded * dim, 0.0)?
+    };
     let cfg = LaunchConfig {
-        grid_dim: (nb as u32, bh as u32, 1),
+        grid_dim: (q_tiles as u32, bh as u32, 1),
         block_dim: (THREADS, 1, 1),
         shared_mem_bytes: shared,
     };
-    let (nt, tk) = (nb as i32, topk as i32);
+    let (nt, tk, qb) = (nb as i32, topk as i32, q_base as i32);
     let scale_log2 = scale * std::f32::consts::LOG2_E;
     launch!(dev.stream, &dev.kernels.vsa_mma_attn, cfg;
-        &qt, &kt, &vt, selected, &plan.block_sizes, &mut out, &nt, &tk, &scale_log2)
+        &qt, &kt, &vt, selected, &plan.block_sizes, &mut out, &nt, &tk, &scale_log2, &qb)
     .map_err(err)?;
     Ok(out)
 }
