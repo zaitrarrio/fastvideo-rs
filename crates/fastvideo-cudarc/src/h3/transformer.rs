@@ -52,8 +52,21 @@ fn pinned_weight(map: &WeightMap, key: &str, shape: &[usize]) -> Result<CudaTens
     Ok(t)
 }
 
-/// Rows per FFN pass: `[8192, 28672]` float32 is just under 1 GiB.
+/// Rows per FFN pass when the full `[S, 2*ffn]` f32 buffer would exceed
+/// [`FFN_WHOLE_BYTES`]. `[8192, 28672]` is just under 1 GiB.
 const FFN_ROW_CHUNK: usize = 8192;
+/// 5s H3 is 4.0 GiB for that buffer (M=37966); keep one GEMM. 109k-row
+/// layouts still chunk.
+const FFN_WHOLE_BYTES: u64 = 6 << 30;
+
+fn ffn_row_chunk(rows: usize, ffn_dim: usize) -> usize {
+    let whole = rows as u64 * (2 * ffn_dim as u64) * 4;
+    if whole <= FFN_WHOLE_BYTES {
+        rows
+    } else {
+        FFN_ROW_CHUNK
+    }
+}
 
 /// Parameter order inside one modality's AdaLN slice (`y.chunk(6, dim=-1)`).
 const SHIFT_MSA: usize = 0;
@@ -376,16 +389,23 @@ impl FeedForward {
 
     fn forward(&self, n: &CudaTensor) -> Result<CudaTensor> {
         let rows = n.shape[1];
-        let mut parts = Vec::with_capacity(rows.div_ceil(FFN_ROW_CHUNK));
+        let chunk = ffn_row_chunk(rows, self.ffn_dim);
+        let mut parts = Vec::with_capacity(rows.div_ceil(chunk).max(1));
         let mut start = 0;
         while start < rows {
-            let len = FFN_ROW_CHUNK.min(rows - start);
-            let h = self.ff_in.forward(&n.narrow(1, start, len)?)?;
-            let value = h.narrow(2, 0, self.ffn_dim)?;
-            let gate = h.narrow(2, self.ffn_dim, self.ffn_dim)?.silu();
+            let len = chunk.min(rows - start);
+            let h = phase("h3_ffn_in", || self.ff_in.forward(&n.narrow(1, start, len)?))?;
+            let act = phase("h3_ffn_act", || {
+                let value = h.narrow(2, 0, self.ffn_dim)?;
+                let gate = h.narrow(2, self.ffn_dim, self.ffn_dim)?.silu();
+                value.mul(&gate)
+            })?;
             drop(h);
-            parts.push(self.ff_out.forward(&value.mul(&gate)?)?);
+            parts.push(phase("h3_ffn_out", || self.ff_out.forward(&act))?);
             start += len;
+        }
+        if parts.len() == 1 {
+            return Ok(parts.pop().unwrap());
         }
         CudaTensor::cat(&parts.iter().collect::<Vec<_>>(), 1)
     }
@@ -614,6 +634,12 @@ pub(crate) mod tests {
             qk_norm_eps: 1e-5,
             final_norm_eps: 1e-5,
         }
+    }
+
+    #[test]
+    fn five_second_h3_ffn_is_one_gemm() {
+        assert_eq!(ffn_row_chunk(37_966, 14_336), 37_966);
+        assert_eq!(ffn_row_chunk(109_000, 14_336), FFN_ROW_CHUNK);
     }
 
     pub(crate) fn weights() -> WeightMap {

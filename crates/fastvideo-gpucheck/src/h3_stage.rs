@@ -935,8 +935,9 @@ fn gen(
         report.set(
             "dit_phases",
             json!({
-                "block": group(&|n| n.starts_with("h3_") && !n.starts_with("h3_attn_")),
+                "block": group(&|n| n.starts_with("h3_") && !n.starts_with("h3_attn_") && !n.starts_with("h3_ffn_")),
                 "attn": group(&|n| n.starts_with("h3_attn_")),
+                "ffn": group(&|n| n.starts_with("h3_ffn_")),
                 "vsa": group(&|n| n.starts_with("vsa_")),
             }),
         );
