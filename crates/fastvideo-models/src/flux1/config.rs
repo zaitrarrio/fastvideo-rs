@@ -75,7 +75,7 @@ impl Flux1ArchConfig {
             pooled_projection_dim: 8,
             timestep_guidance_channels: 16,
             mlp_ratio: 2.0,
-            axes_dims_rope: [2, 3, 3],
+            axes_dims_rope: [2, 2, 4],
             rope_theta: 10_000.0,
             eps: 1e-6,
             guidance_embeds: true,

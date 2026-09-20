@@ -1,16 +1,11 @@
 //! CLIP-L + T5-XXL on `CudaTensor` (mirrors `fastvideo_models::flux1::text`).
 
-use fastvideo_models::flux1::{
-    flux1_dummy_text, flux1_t5_len, pad_token_ids, tokenize_flux1, ClipTextConfig, T5Config,
-};
+use fastvideo_models::flux1::{flux1_dummy_text, flux1_t5_len, ClipTextConfig, T5Config};
+pub use fastvideo_models::flux1::{pad_token_ids, tokenize_flux1};
 
 use crate::wan::nn::{self, Linear};
-use crate::wan::tensor::{CudaTensor, Result, TensorError};
+use crate::wan::tensor::{CudaTensor, Result};
 use crate::wan::weights::{self, WeightMap};
-
-fn msg(s: impl Into<String>) -> TensorError {
-    TensorError::Message(s.into())
-}
 
 pub fn dummy_text() -> bool {
     flux1_dummy_text()
@@ -549,8 +544,6 @@ fn dummy_encode(
         CudaTensor::from_vec(pool, vec![1, pooled])?,
     ))
 }
-
-pub use fastvideo_models::flux1::{pad_token_ids, tokenize_flux1};
 
 #[cfg(test)]
 mod tests {

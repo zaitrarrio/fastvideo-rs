@@ -4,7 +4,7 @@
 //! `T5EncoderModel` (T5-v1.1-XXL, last hidden). Tiny / dummy embeds stay
 //! available for CI.
 
-use candle_core::{DType, Device, IndexOp, Result, Tensor};
+use candle_core::{DType, Device, IndexOp, Result, Tensor, D};
 use candle_nn::VarBuilder;
 
 use crate::nn::{self, Linear};
@@ -57,7 +57,7 @@ impl ClipTextConfig {
     }
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone)]
 pub struct T5Config {
     pub inner: Umt5Config,
     pub text_len: usize,
@@ -534,7 +534,7 @@ impl ClipTextEncoder {
             .index_select(&ids.flatten_all()?, 0)?
             .reshape((b, s, self.cfg.hidden_size))?;
         let pos = self.pos_emb.narrow(0, 0, s)?.reshape((1, s, self.cfg.hidden_size))?;
-        let mut hidden = (tok + pos.broadcast_as(tok.shape())?)?;
+        let mut hidden = tok.broadcast_add(&pos)?;
         let mask = causal_mask(s, hidden.device(), hidden.dtype())?;
         for layer in &self.layers {
             hidden = layer.forward(&hidden, Some(&mask))?;
