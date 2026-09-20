@@ -2,6 +2,16 @@
 
 Project code: FVID
 
+### FVID · 2026-09-20 · FVID-2026-09-20-fused-qkvg-next
+- Trigger: "commit and push then continue with next strategy" after TMA measured as noise on 5s H3
+- Options: fused QKVG GEMM; FFN / SM12x FP8; prefix SDPA; more MMA load work
+- Decision: **fused QKVG first** (one `Linear::load_fused` of `to_q`/`to_k`/`to_v`/`to_gate_compress`, same per-head RMSNorm+RoPE). Then a profiled H3-gen+TAEH3.
+- Reason: QKVG+out is 36 s / 29% of denoise and currently rereads the 520 MB activation four times; FFN is the same size pile but a separate slice
+- Reversibility: cheap — separate linears are a load-path revert; `FASTVIDEO_VSA_KERNEL` is untouched
+- Executed by: Executor
+- ADR: none
+- Verification: pending (host H3 transformer tests, then Max-Q `--profile --warm` + TAEH3)
+
 ### FVID · 2026-09-20 · FVID-2026-09-20-tma-kernels-first
 - Trigger: "proceed" after ranking remaining H3 levers (TMA measure, fused QKVG, FP8 FFN, tiled QKV, prefix SDPA)
 - Options: kernels A/B of TMA vs `mma` on sm90+; skip to fused QKVG/FFN; profiled H3-gen first
@@ -10,7 +20,7 @@ Project code: FVID
 - Reversibility: cheap — `FASTVIDEO_VSA_KERNEL=mma` is the Ampere path
 - Executed by: Executor
 - ADR: none
-- Verification: **fail** — 5060 Ti sm_120, Ampere `vsa_mma_5x6x9` rel_l2 0.0028 then TMA `CUDA_ERROR_ILLEGAL_ADDRESS`. Cause: `shared::cluster` TMA (SM12x has CTA TMA only) + tensormaps not `__grid_constant__`. Fix in tree; re-measure.
+- Verification: **pass** on 5060 Ti sm_120 after `shared::cta` + `__grid_constant__`. `vsa_tma_*` matches `vsa_mma_*` (rel_l2 0.00282). Profiled H3-gen+TAEH3 on Max-Q 6000: warm denoise **123.5 s** (Ampere was 124.7 s — TMA is noise). `vsa_mma_tile` 2.5 s / 6% of VSA; fine MMA 26.9 s; QKVG+out 36.0 s; FFN 37.3 s. Next lever is fused QKVG / FFN, not more MMA loads.
 
 ### FVID · 2026-09-19 · FVID-2026-09-19-sm120-is-not-umma
 - Trigger: "continue" after the TAEH3 A/B, queued as Blackwell UMMA on `vsa_h3_3_mma`
