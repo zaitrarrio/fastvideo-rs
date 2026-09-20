@@ -7,6 +7,7 @@ pub mod text;
 pub mod audio_vae;
 pub mod vae;
 pub mod vsa;
+pub mod mlx;
 pub mod transformer;
 pub mod pipeline;
 

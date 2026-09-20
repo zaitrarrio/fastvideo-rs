@@ -73,6 +73,14 @@ struct Cli {
     /// this, so it is opt-in per stage and never inferred from the device.
     #[arg(long, global = true)]
     fp8: bool,
+    /// Per-tensor E4M3 GEMM on H3 `ff_in`/`ff_out` only. Does not set
+    /// process-wide `FASTVIDEO_FP8`. Quality is a clip A/B, not a default.
+    #[arg(long, global = true)]
+    h3_ffn_fp8: bool,
+    /// MLX affine weight-only INT8/6/4 (group 64) on H3 attn/FFN. Own fused
+    /// dequant-in-tile GEMM. Does not set process-wide `FASTVIDEO_FP8`.
+    #[arg(long, global = true, value_name = "BITS")]
+    h3_affine: Option<String>,
     /// Time each DiT block phase. Synchronizes per phase, so a profiled run
     /// measures *where* the time goes and must not be quoted for *how long*.
     #[arg(long, global = true)]
@@ -527,6 +535,12 @@ fn main() {
     }
     if cli.fp8 {
         std::env::set_var("FASTVIDEO_FP8", "1");
+    }
+    if cli.h3_ffn_fp8 {
+        std::env::set_var("FASTVIDEO_H3_FFN_FP8", "1");
+    }
+    if let Some(bits) = &cli.h3_affine {
+        std::env::set_var("FASTVIDEO_H3_AFFINE", bits);
     }
     if cli.profile {
         std::env::set_var("FASTVIDEO_PROFILE", "1");

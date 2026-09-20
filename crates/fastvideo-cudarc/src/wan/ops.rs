@@ -1790,6 +1790,91 @@ pub fn fp8_rows_quantize_device(w: &CudaSlice<f32>, rows: usize, cols: usize) ->
     Ok((q, scales))
 }
 
+// ---- MLX affine (group-64 INT8/6/4) ---------------------------------------
+
+/// `[rows, cols]` f32 → packed affine codes and per-group scales/biases.
+#[cfg(feature = "cuda")]
+pub fn affine_quantize_device(
+    w: &CudaSlice<f32>,
+    rows: usize,
+    cols: usize,
+    bits: u8,
+    group: usize,
+) -> Result<(CudaSlice<u8>, CudaSlice<f32>, CudaSlice<f32>)> {
+    let dev = ctx()?;
+    let ng = super::affine::n_groups(cols, group)?;
+    let pb = super::affine::packed_bytes(cols, bits)?;
+    if w.len() != rows * cols {
+        return Err(err(format!("affine_quantize: {} elements for [{rows}, {cols}]", w.len())));
+    }
+    let mut q = unsafe { dev.stream.alloc::<u8>((rows * pb).max(1)) }.map_err(err)?;
+    let mut scales = alloc(rows * ng)?;
+    let mut biases = alloc(rows * ng)?;
+    let n = (rows * ng) as i64;
+    let (c, b, g) = (cols as i64, bits as i64, group as i64);
+    launch!(dev.stream, &dev.kernels.affine_quantize, cfg_n(rows * ng); w, &mut q, &mut scales, &mut biases, &c, &b, &g, &n)
+        .map_err(err)?;
+    Ok((q, scales, biases))
+}
+
+/// Packed affine codes → f32 weight.
+#[cfg(feature = "cuda")]
+pub fn affine_dequant_device(
+    q: &CudaSlice<u8>,
+    scales: &CudaSlice<f32>,
+    biases: &CudaSlice<f32>,
+    cols: usize,
+    bits: u8,
+    group: usize,
+) -> Result<CudaSlice<f32>> {
+    let dev = ctx()?;
+    let pb = super::affine::packed_bytes(cols, bits)?;
+    if pb == 0 || q.len() % pb != 0 {
+        return Err(err(format!("affine_dequant: {} packed bytes, {pb} per row", q.len())));
+    }
+    let rows = q.len() / pb;
+    let n = rows * cols;
+    let mut out = alloc(n.max(1))?;
+    let (c, b, g, nn) = (cols as i64, bits as i64, group as i64, n as i64);
+    launch!(dev.stream, &dev.kernels.affine_dequant, cfg_n(n); q, scales, biases, &mut out, &c, &b, &g, &nn).map_err(err)?;
+    Ok(out)
+}
+
+/// Fused `X[m,k] @ W[n,k]ᵀ` with in-tile affine dequant. Does not materialize W.
+#[cfg(feature = "cuda")]
+pub fn affine_gemm_device(
+    x: &CudaSlice<f32>,
+    q: &CudaSlice<u8>,
+    scales: &CudaSlice<f32>,
+    biases: &CudaSlice<f32>,
+    m: usize,
+    n: usize,
+    k: usize,
+    bits: u8,
+    group: usize,
+) -> Result<CudaSlice<f32>> {
+    let dev = ctx()?;
+    if group == 0 || k % group != 0 {
+        return Err(err(format!("affine_gemm: k={k} not divisible by group {group}")));
+    }
+    if x.len() != m * k {
+        return Err(err(format!("affine_gemm: {} activations for [{m}, {k}]", x.len())));
+    }
+    let mut c = alloc((m * n).max(1))?;
+    let cfg = LaunchConfig {
+        grid_dim: (n.div_ceil(16) as u32, m.div_ceil(16) as u32, 1),
+        block_dim: (256, 1, 1),
+        shared_mem_bytes: 0,
+    };
+    let (mm, nn, kk, b, g) = (m as i64, n as i64, k as i64, bits as i64, group as i64);
+    launch!(
+        dev.stream, &dev.kernels.affine_w16_gemm, cfg;
+        x, q, scales, biases, &mut c, &mm, &nn, &kk, &b, &g
+    )
+    .map_err(err)?;
+    Ok(c)
+}
+
 /// E4M3 codes with per-row scales → a bfloat16 weight, for the bf16 GEMM.
 #[cfg(feature = "cuda")]
 pub fn fp8_rows_dequant_bf16_device(q: &CudaSlice<u8>, scales: &CudaSlice<f32>, cols: usize) -> Result<CudaSlice<half::bf16>> {

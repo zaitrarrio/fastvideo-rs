@@ -319,9 +319,20 @@ impl Attention {
             names.push(format!("{prefix}.to_gate_compress"));
         }
         let keys: Vec<&str> = names.iter().map(String::as_str).collect();
+        let (qkvg, to_out) = if let Some(bits) = crate::wan::affine::bits_from_env() {
+            (
+                Linear::load_fused_affine(map, &keys, hidden, inner, false, bits)?,
+                Linear::load_affine(map, &format!("{prefix}.to_out.0"), inner, hidden, false, bits)?,
+            )
+        } else {
+            (
+                Linear::load_fused(map, &keys, hidden, inner, false)?,
+                Linear::load(map, &format!("{prefix}.to_out.0"), inner, hidden, false)?,
+            )
+        };
         Ok(Self {
-            qkvg: Linear::load_fused(map, &keys, hidden, inner, false)?,
-            to_out: Linear::load(map, &format!("{prefix}.to_out.0"), inner, hidden, false)?,
+            qkvg,
+            to_out,
             has_gate: gate,
             norm_q: pinned_weight(map, &format!("{prefix}.norm_q.weight"), &[d])?,
             norm_k: pinned_weight(map, &format!("{prefix}.norm_k.weight"), &[d])?,
@@ -378,13 +389,31 @@ pub(crate) struct FeedForward {
     ffn_dim: usize,
 }
 
+/// H3 FFN only — not process-wide `FASTVIDEO_FP8` (Wan QAD path, all linears).
+fn h3_ffn_fp8() -> bool {
+    static FLAG: crate::wan::envflag::CachedBool = crate::wan::envflag::CachedBool::new();
+    FLAG.get_or_init(|| crate::wan::envflag::bool_flag("FASTVIDEO_H3_FFN_FP8", false))
+}
+
 impl FeedForward {
     fn load(map: &WeightMap, prefix: &str, cfg: &H3TransformerConfig) -> Result<Self> {
-        Ok(Self {
-            ff_in: Linear::load(map, &format!("{prefix}.net.0.proj"), cfg.hidden_size, 2 * cfg.ffn_dim, false)?,
-            ff_out: Linear::load(map, &format!("{prefix}.net.2"), cfg.ffn_dim, cfg.hidden_size, false)?,
-            ffn_dim: cfg.ffn_dim,
-        })
+        let (ff_in, ff_out) = if let Some(bits) = crate::wan::affine::bits_from_env() {
+            (
+                Linear::load_affine(map, &format!("{prefix}.net.0.proj"), cfg.hidden_size, 2 * cfg.ffn_dim, false, bits)?,
+                Linear::load_affine(map, &format!("{prefix}.net.2"), cfg.ffn_dim, cfg.hidden_size, false, bits)?,
+            )
+        } else if h3_ffn_fp8() {
+            (
+                Linear::load_fp8_gemm(map, &format!("{prefix}.net.0.proj"), cfg.hidden_size, 2 * cfg.ffn_dim, false)?,
+                Linear::load_fp8_gemm(map, &format!("{prefix}.net.2"), cfg.ffn_dim, cfg.hidden_size, false)?,
+            )
+        } else {
+            (
+                Linear::load(map, &format!("{prefix}.net.0.proj"), cfg.hidden_size, 2 * cfg.ffn_dim, false)?,
+                Linear::load(map, &format!("{prefix}.net.2"), cfg.ffn_dim, cfg.hidden_size, false)?,
+            )
+        };
+        Ok(Self { ff_in, ff_out, ffn_dim: cfg.ffn_dim })
     }
 
     fn forward(&self, n: &CudaTensor) -> Result<CudaTensor> {
@@ -636,6 +665,24 @@ pub(crate) mod tests {
     fn five_second_h3_ffn_is_one_gemm() {
         assert_eq!(ffn_row_chunk(37_966, 14_336), 37_966);
         assert_eq!(ffn_row_chunk(109_000, 14_336), FFN_ROW_CHUNK);
+    }
+
+    #[test]
+    fn five_second_h3_tokens_need_fp8_row_pad() {
+        assert_eq!(37_756usize.next_multiple_of(16), 37_760);
+        assert!(!h3_ffn_fp8());
+        assert!(crate::wan::affine::bits_from_env().is_none());
+        let a = Linear::load(&weights(), "blocks.0.ff.net.0.proj", 12, 20, false).unwrap();
+        let b = Linear::load_fp8_gemm(&weights(), "blocks.0.ff.net.0.proj", 12, 20, false).unwrap();
+        assert!(!b.is_fp8_gemm());
+        let x = CudaTensor::from_vec(seeded(3 * 12, 0.2), vec![1, 3, 12]).unwrap();
+        let ya = a.forward(&x).unwrap();
+        let yb = b.forward(&x).unwrap();
+        let ya = ya.host_cow().unwrap();
+        let yb = yb.host_cow().unwrap();
+        for (u, v) in ya.iter().zip(yb.iter()) {
+            assert!((u - v).abs() < 1e-6);
+        }
     }
 
     #[test]

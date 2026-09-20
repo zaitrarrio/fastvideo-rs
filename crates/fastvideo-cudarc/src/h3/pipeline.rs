@@ -303,12 +303,25 @@ impl H3Pipeline {
             timed(&mut load_timings.text_encoder_s, timer);
         }
 
-        let map = WeightMap::open(&root.join("transformer"))?;
+        let (map, mlx) = match super::mlx::find(root) {
+            Some(dir) => {
+                let (map, spec) = super::mlx::open_map(&dir)?;
+                crate::wan::log::info(format_args!(
+                    "h3 dit=mlx affine int{} g{} ({})",
+                    spec.bits,
+                    spec.group_size,
+                    spec.weights.display()
+                ));
+                (map, Some(spec))
+            }
+            None => (WeightMap::open(&root.join("transformer"))?, None),
+        };
+        let with_gate = !options.dense && mlx.as_ref().is_none_or(|s| s.vsa_capable);
         let timer = Instant::now();
         let refiner = H3TextRefiner::load(&cfg, &map)?;
         timed(&mut load_timings.refiner_s, timer);
         let timer = Instant::now();
-        let model = H3Transformer::load_cached(cfg.clone(), &map, &schedule, !options.dense, options.adaln_cache.as_deref())?;
+        let model = H3Transformer::load_cached(cfg.clone(), &map, &schedule, with_gate, options.adaln_cache.as_deref())?;
         timed(&mut load_timings.dit_s, timer);
         let timer = Instant::now();
         let video_vae = match resolve_taeh3(options.taeh3.as_deref()) {

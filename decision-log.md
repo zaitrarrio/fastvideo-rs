@@ -2,6 +2,26 @@
 
 Project code: FVID
 
+### FVID · 2026-09-20 · FVID-2026-09-20-h3-mlx-affine
+- Trigger: "implement our own kernel and also port the MLX work"
+- Options: 4-step Preview / 90% VSA A/B; community GGUF/nunchaku; process-wide `FASTVIDEO_FP8`; first-party affine W8A16 + official MLX recipe
+- Decision: **first-party CUDA kernel** for FastVideo's MLX affine group-64 INT8/INT6/INT4 (weight-only, activations BF16/F32) and load `mlx_h3_dit.safetensors` / quantize-on-load from the official FastH3 DiT. Fused dequant-in-tile GEMM — do not materialize a full bf16 weight. Not nunchaku. FFN E4M3 stays off (`FVID-2026-09-20-h3-ffn-fp8-ab`).
+- Reason: there is no official CUDA FP8/NVFP4 H3 DiT; MLX INT8 is the published weight-only grid (`mode=affine`, group 64, `w = scale * q + bias`). A whole-weight dequant would spend the VRAM we are trying to save.
+- Reversibility: cheap — unset `FASTVIDEO_H3_AFFINE` / `--h3-affine`
+- Executed by: Executor
+- ADR: none
+- Verification: pending — host quant/dequant/GEMM tests; GPU parity in the kernels tier; no rental this slice
+
+### FVID · 2026-09-20 · FVID-2026-09-20-h3-ffn-fp8-ab
+- Trigger: "proceed" after ranking remaining H3 levers: FFN GEMMs 33 s, MMA 28 s, prefix 11 s
+- Options: H3-only FP8 on `ff_in`/`ff_out`; fuse Q/K RMSNorm+RoPE (6.7 s); process-wide `FASTVIDEO_FP8`; prefix SDPA
+- Decision: **H3-only E4M3 GEMM on the two FFN linears** (`FASTVIDEO_H3_FFN_FP8` / `--h3-ffn-fp8`). Same-box bf16 vs FP8 A/B, same prompt/seed. Do not set process-wide `FASTVIDEO_FP8`. Pad the token axis to a multiple of 16 (5s H3 is 37756).
+- Reason: the cheap fuses are done; 33 s is the remaining FFN pile. Wan process-wide FP8 was −4.8% / 16.9 dB (`FVID-2026-09-18-fp8-linears-measured`) — this clip decides whether H3's larger GEMMs beat activation-quant overhead, and whether the quality is usable.
+- Reversibility: cheap — unset the flag
+- Executed by: Executor
+- ADR: none
+- Verification: host tests pass. Same Max-Q machine 132178 `20260920T114626Z-h3-gen`: warm denoise **122.5 → 116.5 s (−4.9%)**. FFN 34.5 → 28.1 s — `h3_ffn_in` 21.6 → 16.7, `h3_ffn_out` 11.1 → 9.6, act 1.8 unchanged. Load 82 → 114 s. Peak 82.5 → 71.0 GiB. Clip PSNR vs bf16 **20.3 dB** (Y 18.6). Same shape as Wan: a few percent, unusable frames. **Flag stays off.**
+
 ### FVID · 2026-09-20 · FVID-2026-09-20-fused-swiglu-next
 - Trigger: "commit, push, then proceed to next steps" after unchunked FFN measured as a wash
 - Options: fused value-first silu×mul kernel; process-wide `FASTVIDEO_FP8` on FFN; prefix SDPA; more MMA load work

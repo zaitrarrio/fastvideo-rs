@@ -566,6 +566,39 @@ pub fn run(report: &mut Report, lim: Limits, seed: u64) -> StageResult<()> {
             }
         }
         {
+            // MLX affine group-64: codes/scales/biases match the host twin, and
+            // the fused W8A16 GEMM equals dequant-then-matmul (no full weight).
+            use fastvideo_cudarc::wan::affine;
+            for bits in [8u8, 6, 4] {
+                let (rows, cols) = (5usize, 128usize);
+                let mut w = c.rand(rows * cols, 1.0);
+                for (r, row) in w.chunks_mut(cols).enumerate() {
+                    let g = if r == 2 { 0.0 } else { 4f32.powi((r % 3) as i32 - 1) };
+                    row.iter_mut().for_each(|v| *v *= g);
+                }
+                let (hq, hs, hb) = affine::quantize(&w, rows, cols, bits).map_err(|e| anyhow::anyhow!("{e}"))?;
+                let (q, scales, biases) = ops::affine_quantize_device(&up(&w)?, rows, cols, bits, affine::GROUP)?;
+                let dq = dev()?.stream.memcpy_dtov(&q)?;
+                let mism = dq.iter().zip(&hq).filter(|(a, b)| a != b).count();
+                c.report.check(
+                    &format!("affine_codes_int{bits}_{rows}x{cols}"),
+                    mism == 0,
+                    serde_json::json!({"mismatched_codes": mism, "n": dq.len()}),
+                    serde_json::json!({"mismatched_codes": 0}),
+                )?;
+                c.cmp(&format!("affine_scales_int{bits}"), &down(&scales)?, &hs, 0.0)?;
+                c.cmp(&format!("affine_biases_int{bits}"), &down(&biases)?, &hb, 0.0)?;
+                let got = down(&ops::affine_dequant_device(&q, &scales, &biases, cols, bits, affine::GROUP)?)?;
+                let want = affine::dequant(&hq, &hs, &hb, cols, bits).map_err(|e| anyhow::anyhow!("{e}"))?;
+                c.cmp(&format!("affine_dequant_int{bits}"), &got, &want, 0.0)?;
+                let (m, n, k) = (7usize, rows, cols);
+                let x = c.rand(m * k, 0.8);
+                let yg = down(&ops::affine_gemm_device(&up(&x)?, &q, &scales, &biases, m, n, k, bits, affine::GROUP)?)?;
+                let yg_host = affine::gemm(&x, &hq, &hs, &hb, m, n, k, bits).map_err(|e| anyhow::anyhow!("{e}"))?;
+                c.cmp(&format!("affine_gemm_int{bits}"), &yg, &yg_host, 1e-4)?;
+            }
+        }
+        {
             // The streamed text encoder stages layer i+1 (pinned memory, copy
             // stream) while layer i computes. Same bits as the plain path, for
             // a stored-bf16 and a stored-f32 checkpoint.

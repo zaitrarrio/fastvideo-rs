@@ -796,7 +796,13 @@ cmd_run() {
         STAGE_OPTIONAL=1 gpucheck_stage "gen-$name-cached" 7200 "${h3gen[@]}" --clip-dir "$clip/$name-cached/frames" \
           --text-encoder auto --text-cache "$tcache" || true
       else
-        gpucheck_stage "gen-$name" 7200 "${h3gen[@]}" --clip-dir "$clip/$name/frames"
+        if [[ "${FV_H3_FFN_FP8:-0}" == 1 ]]; then
+          # Same prompt/seed/cache, two gens: bf16 FFN vs H3-only E4M3 FFN.
+          gpucheck_stage "gen-$name-bf16" 7200 "${h3gen[@]}" --clip-dir "$clip/$name-bf16/frames"
+          gpucheck_stage "gen-$name-fp8" 7200 --h3-ffn-fp8 "${h3gen[@]}" --clip-dir "$clip/$name-fp8/frames"
+        else
+          gpucheck_stage "gen-$name" 7200 "${h3gen[@]}" --clip-dir "$clip/$name/frames"
+        fi
       fi
     else
       local repo="${FV_LTX2_BASE_REPO:-Lightricks/LTX-2}" wdir="$WORK/weights/ltx2"

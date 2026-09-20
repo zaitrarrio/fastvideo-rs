@@ -1640,3 +1640,140 @@ extern "C" __global__ void fp8_rows_dequant_bf16(const unsigned char* q, const f
     if ((u & 0x8000u) != 0u && (hi & 0x7F80u) != 0x7F80u && (hi & 0x7FFFu) != 0x7F7Fu) hi += 1u;
     out[i] = (unsigned short)hi;
 }
+
+// FastVideo MLX affine (group 64, bits 4/6/8). Groups along the last dim of
+// a [rows, cols] weight. Dequant is scale * q + bias with MLX's far-edge
+// representable-zero flip. Packing matches mlx affine_quantize.cu byte packs:
+// INT8 1:1, INT4 two nibbles/byte (low first), INT6 four values / 3 bytes.
+__device__ __forceinline__ unsigned char fv_affine_code(const unsigned char* packed, long col, long bits) {
+    if (bits == 8) return packed[col];
+    if (bits == 4) {
+        unsigned char b = packed[col >> 1];
+        return (col & 1) ? (unsigned char)(b >> 4) : (unsigned char)(b & 0x0f);
+    }
+    const unsigned char* w = packed + (col >> 2) * 3;
+    int p = (int)(col & 3);
+    if (p == 0) return (unsigned char)(w[0] & 0x3f);
+    if (p == 1) return (unsigned char)(((w[0] >> 6) & 0x03) + ((w[1] & 0x0f) << 2));
+    if (p == 2) return (unsigned char)(((w[1] >> 4) & 0x0f) + ((w[2] & 0x03) << 4));
+    return (unsigned char)((w[2] >> 2) & 0x3f);
+}
+__device__ __forceinline__ long fv_affine_packed_cols(long cols, long bits) {
+    if (bits == 8) return cols;
+    if (bits == 4) return cols / 2;
+    return cols * 3 / 4;
+}
+__device__ __forceinline__ void fv_affine_pack_group(unsigned char* packed, long col0, long bits, const unsigned char* codes, long group) {
+    if (bits == 8) {
+        for (long i = 0; i < group; i++) packed[col0 + i] = codes[i];
+        return;
+    }
+    if (bits == 4) {
+        long o = col0 / 2;
+        for (long i = 0; i < group; i += 2) packed[o + i / 2] = (unsigned char)(codes[i] | (codes[i + 1] << 4));
+        return;
+    }
+    long o = (col0 / 4) * 3;
+    for (long i = 0; i < group; i += 4) {
+        packed[o] = (unsigned char)(codes[i] | ((codes[i + 1] & 0x03) << 6));
+        packed[o + 1] = (unsigned char)(((codes[i + 1] >> 2) & 0x0f) | ((codes[i + 2] & 0x0f) << 4));
+        packed[o + 2] = (unsigned char)(((codes[i + 2] >> 4) & 0x03) | (codes[i + 3] << 2));
+        o += 3;
+    }
+}
+// One thread per (row, group).
+extern "C" __global__ void affine_quantize(
+    const float* w, unsigned char* q, float* scales, float* biases,
+    long cols, long bits, long group, long n_groups
+) {
+    long i = IDX();
+    if (i >= n_groups) return;
+    long ng = cols / group;
+    long row = i / ng;
+    long g = i % ng;
+    const float* wg = w + row * cols + g * group;
+    float w_min = wg[0], w_max = wg[0];
+    for (long t = 1; t < group; t++) {
+        w_min = fminf(w_min, wg[t]);
+        w_max = fmaxf(w_max, wg[t]);
+    }
+    float n_bins = (float)((1 << (int)bits) - 1);
+    float scale = fmaxf((w_max - w_min) / n_bins, 1e-7f);
+    int side = fabsf(w_min) > fabsf(w_max);
+    scale = side ? scale : -scale;
+    float edge = side ? w_min : w_max;
+    float q0 = roundf(edge / scale);
+    int at_zero = q0 == 0.0f;
+    scale = at_zero ? scale : edge / q0;
+    float bias = at_zero ? 0.0f : edge;
+    scales[i] = scale;
+    biases[i] = bias;
+    unsigned char codes[128];
+    for (long t = 0; t < group; t++) {
+        float qq = roundf((wg[t] - bias) / scale);
+        codes[t] = (unsigned char)fminf(fmaxf(qq, 0.0f), n_bins);
+    }
+    long pb = fv_affine_packed_cols(cols, bits);
+    fv_affine_pack_group(q + row * pb, g * group, bits, codes, group);
+}
+extern "C" __global__ void affine_dequant(
+    const unsigned char* q, const float* scales, const float* biases, float* out,
+    long cols, long bits, long group, long n
+) {
+    long i = IDX();
+    if (i >= n) return;
+    long row = i / cols;
+    long col = i % cols;
+    long ng = cols / group;
+    long pb = fv_affine_packed_cols(cols, bits);
+    float s = scales[row * ng + col / group];
+    float b = biases[row * ng + col / group];
+    float code = (float)fv_affine_code(q + row * pb, col, bits);
+    out[i] = s * code + b;
+}
+// Fused W8/W6/W4 A16 GEMM: C[m,n] = X[m,k] @ W[n,k]^T without materializing W.
+// 16x16 output tiles, one group (64) of K per iteration, dequant into shared.
+#define FV_AFFINE_TM 16
+#define FV_AFFINE_TN 16
+#define FV_AFFINE_TK 64
+extern "C" __global__ void affine_w16_gemm(
+    const float* x, const unsigned char* q, const float* scales, const float* biases,
+    float* c, long m, long n, long k, long bits, long group
+) {
+    int lm = threadIdx.x / FV_AFFINE_TN;
+    int ln = threadIdx.x % FV_AFFINE_TN;
+    long gi = (long)blockIdx.y * FV_AFFINE_TM + lm;
+    long gj = (long)blockIdx.x * FV_AFFINE_TN + ln;
+    __shared__ float Xs[FV_AFFINE_TM][FV_AFFINE_TK];
+    __shared__ float Ws[FV_AFFINE_TN][FV_AFFINE_TK];
+    long ng = k / group;
+    long pb = fv_affine_packed_cols(k, bits);
+    float acc = 0.0f;
+    for (long g = 0; g < ng; g++) {
+        for (int t = threadIdx.x; t < FV_AFFINE_TM * FV_AFFINE_TK; t += blockDim.x) {
+            int rr = t / FV_AFFINE_TK;
+            int cc = t % FV_AFFINE_TK;
+            long row = (long)blockIdx.y * FV_AFFINE_TM + rr;
+            long col = g * group + cc;
+            Xs[rr][cc] = (row < m && col < k) ? x[row * k + col] : 0.0f;
+        }
+        for (int t = threadIdx.x; t < FV_AFFINE_TN * FV_AFFINE_TK; t += blockDim.x) {
+            int rr = t / FV_AFFINE_TK;
+            int cc = t % FV_AFFINE_TK;
+            long row = (long)blockIdx.x * FV_AFFINE_TN + rr;
+            long col = g * group + cc;
+            if (row < n && col < k) {
+                float s = scales[row * ng + g];
+                float b = biases[row * ng + g];
+                Ws[rr][cc] = s * (float)fv_affine_code(q + row * pb, col, bits) + b;
+            } else {
+                Ws[rr][cc] = 0.0f;
+            }
+        }
+        __syncthreads();
+        #pragma unroll
+        for (int t = 0; t < FV_AFFINE_TK; t++) acc += Xs[lm][t] * Ws[ln][t];
+        __syncthreads();
+    }
+    if (gi < m && gj < n) c[gi * n + gj] = acc;
+}

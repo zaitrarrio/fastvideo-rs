@@ -43,6 +43,9 @@ pub struct Linear {
     /// models that must be resident and do not fit at bf16. Dequantized to bf16
     /// before each GEMM, so activations and the GEMM itself are untouched.
     weight_fp8_rows: Option<std::sync::Arc<Fp8Rows>>,
+    /// FastVideo MLX affine (group-64 INT8/6/4). Fused dequant-in-tile GEMM;
+    /// the bf16 weight is never materialized.
+    weight_affine: Option<std::sync::Arc<super::affine::AffineWeight>>,
 }
 
 /// FP8 linears are opt-in and never a default.
@@ -107,6 +110,7 @@ impl Linear {
                         weight_bf16: None,
                         weight_fp8: Some(std::sync::Arc::new(q)),
                         weight_fp8_rows: None,
+                        weight_affine: None,
                     });
                 }
                 Err(why) => {
@@ -129,6 +133,7 @@ impl Linear {
                 weight_bf16: Some(std::sync::Arc::new(slice)),
                 weight_fp8: None,
                 weight_fp8_rows: None,
+                weight_affine: None,
             });
         }
         weight.pin_device()?;
@@ -142,6 +147,7 @@ impl Linear {
             #[cfg(feature = "cuda")]
             weight_fp8: None,
             weight_fp8_rows: None,
+            weight_affine: None,
         })
     }
 
@@ -248,6 +254,7 @@ impl Linear {
             weight_bf16: Some(std::sync::Arc::new(slice)),
             weight_fp8: None,
             weight_fp8_rows: None,
+            weight_affine: None,
         }))
     }
 
@@ -271,6 +278,7 @@ impl Linear {
             weight_bf16: Some(std::sync::Arc::new(weight)),
             weight_fp8: None,
             weight_fp8_rows: None,
+            weight_affine: None,
         })
     }
 
@@ -342,12 +350,147 @@ impl Linear {
             #[cfg(feature = "cuda")]
             weight_fp8: None,
             weight_fp8_rows: Some(std::sync::Arc::new(rows)),
+            weight_affine: None,
         })
     }
 
     /// Whether this linear holds its weight as per-row FP8.
     pub fn is_fp8_rows(&self) -> bool {
         self.weight_fp8_rows.is_some()
+    }
+
+    /// Whether this linear holds an MLX affine (group-64) weight.
+    pub fn is_affine(&self) -> bool {
+        self.weight_affine.is_some()
+    }
+
+    /// Load `prefix.weight` as MLX affine INT8/6/4 (group 64). Prefers a
+    /// pre-quantized `{weight, weight.scales, weight.biases}` triple; otherwise
+    /// quantizes the float weight on load. Weight-only: activations stay F32.
+    pub fn load_affine(
+        map: &super::weights::WeightMap,
+        prefix: &str,
+        in_dim: usize,
+        out_dim: usize,
+        has_bias: bool,
+        bits: u8,
+    ) -> Result<Self> {
+        Self::load_fused_affine(map, &[prefix], in_dim, out_dim, has_bias, bits)
+    }
+
+    /// Several same-input projections stacked as one affine linear (fused QKVG).
+    pub fn load_fused_affine(
+        map: &super::weights::WeightMap,
+        prefixes: &[&str],
+        in_dim: usize,
+        out_dim: usize,
+        has_bias: bool,
+        bits: u8,
+    ) -> Result<Self> {
+        let aff = super::affine::load_fused(map, prefixes, in_dim, out_dim, bits)?;
+        let rows = prefixes.len() * out_dim;
+        let bias = if has_bias {
+            let mut b = Vec::with_capacity(rows);
+            for prefix in prefixes {
+                let bt = super::weights::cuda_tensor_shaped(map, &super::weights::join_key(prefix, "bias"), &[out_dim])?;
+                b.extend_from_slice(&bt.host_cow()?);
+            }
+            let mut b = CudaTensor::from_vec(b, vec![rows])?;
+            b.pin_device()?;
+            Some(b)
+        } else {
+            None
+        };
+        static SAID: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+        super::log::info_once(&SAID, format_args!("h3 affine: MLX group-64 INT{bits} fused GEMM"));
+        Ok(Self {
+            weight: CudaTensor::from_vec(Vec::new(), vec![0, in_dim])?,
+            bias,
+            in_dim,
+            out_dim: rows,
+            #[cfg(feature = "cuda")]
+            weight_bf16: None,
+            #[cfg(feature = "cuda")]
+            weight_fp8: None,
+            weight_fp8_rows: None,
+            weight_affine: Some(std::sync::Arc::new(aff)),
+        })
+    }
+
+    /// Per-tensor E4M3 GEMM weight (the `FASTVIDEO_FP8` path), not weight-only rows.
+    pub fn is_fp8_gemm(&self) -> bool {
+        #[cfg(feature = "cuda")]
+        {
+            self.weight_fp8.is_some()
+        }
+        #[cfg(not(feature = "cuda"))]
+        {
+            false
+        }
+    }
+
+    /// Load one linear onto the per-tensor E4M3 GEMM path without setting
+    /// process-wide `FASTVIDEO_FP8`. Falls back to [`Self::load`] when there is
+    /// no device or the shape is not 16-aligned (token count is padded later).
+    pub fn load_fp8_gemm(
+        map: &super::weights::WeightMap,
+        prefix: &str,
+        in_dim: usize,
+        out_dim: usize,
+        has_bias: bool,
+    ) -> Result<Self> {
+        #[cfg(feature = "cuda")]
+        if let Some(lin) = Self::try_load_fp8_gemm(map, prefix, in_dim, out_dim, has_bias)? {
+            return Ok(lin);
+        }
+        Self::load(map, prefix, in_dim, out_dim, has_bias)
+    }
+
+    #[cfg(feature = "cuda")]
+    fn try_load_fp8_gemm(
+        map: &super::weights::WeightMap,
+        prefix: &str,
+        in_dim: usize,
+        out_dim: usize,
+        has_bias: bool,
+    ) -> Result<Option<Self>> {
+        let Some(dev) = super::device::global_device() else {
+            return Ok(None);
+        };
+        if !stats::device_expected() {
+            return Ok(None);
+        }
+        match super::fp8::fp8_gemm_supported(&dev, out_dim, 16, in_dim) {
+            Ok(()) => {}
+            Err(why) => {
+                static WARNED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+                super::log::info_once(&WARNED, format_args!("h3 ffn fp8 disabled: {why}"));
+                return Ok(None);
+            }
+        }
+        let wt = super::weights::cuda_tensor_shaped(map, &super::weights::join_key(prefix, "weight"), &[out_dim, in_dim])?;
+        let host = wt.host_cow()?;
+        static SAID: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+        super::log::info_once(&SAID, format_args!("h3 ffn fp8: per-tensor E4M3 GEMM"));
+        let q = super::fp8::Fp8Weight::quantize(&dev, &host, out_dim, in_dim)?;
+        stats::record_h2d(host.len());
+        let bias = if has_bias {
+            let mut b = super::weights::cuda_tensor_shaped(map, &super::weights::join_key(prefix, "bias"), &[out_dim])?;
+            b.pin_device()?;
+            Some(b)
+        } else {
+            None
+        };
+        Ok(Some(Self {
+            weight: CudaTensor::from_vec(Vec::new(), vec![0, in_dim])?,
+            bias,
+            in_dim,
+            out_dim,
+            weight_bf16: None,
+            weight_fp8: Some(std::sync::Arc::new(q)),
+            weight_fp8_rows: None,
+            weight_affine: None,
+        }))
     }
 
     pub fn out_dim(&self) -> usize {
@@ -380,14 +523,45 @@ impl Linear {
     fn forward_act(&self, xs: &CudaTensor, gelu: bool) -> Result<CudaTensor> {
         let (m, k, out_shape) = self.out_shape(xs)?;
         let n = self.out_dim();
+        if let Some(aff) = self.weight_affine.as_deref() {
+            let mut c = {
+                #[cfg(feature = "cuda")]
+                {
+                    if aff.is_device() {
+                        let x = xs.dev()?.ok_or_else(|| msg("affine linear without a device"))?;
+                        CudaTensor::from_dev_result(aff.gemm_device(&x, m)?, out_shape)?
+                    } else {
+                        CudaTensor::from_vec(aff.gemm_host(&xs.host_cow()?, m)?, out_shape)?
+                    }
+                }
+                #[cfg(not(feature = "cuda"))]
+                {
+                    CudaTensor::from_vec(aff.gemm_host(&xs.host_cow()?, m)?, out_shape)?
+                }
+            };
+            if let Some(b) = &self.bias {
+                let dim = c.rank() - 1;
+                c = c.add_bias(b, dim)?;
+            }
+            return Ok(if gelu { c.gelu_tanh() } else { c });
+        }
         #[cfg(feature = "cuda")]
         if let Some(wq) = &self.weight_fp8 {
             use cudarc::driver::{DevicePtr, DevicePtrMut};
             let dev = super::device::global_device().ok_or_else(|| msg("no device"))?;
             let ltc = super::fp8::lt_context(&dev)?;
             let x = xs.dev()?.ok_or_else(|| msg("fp8 linear without a device"))?;
-            let (xq, x_scale) = super::ops::quantize_e4m3_device(&x)?;
-            let mut c = super::ops::alloc((m * n).max(1))?;
+            // Token count is not always a multiple of 16 (5s H3 is 37756). Pad
+            // so cuBLASLt will take the shape; drop the extra rows after.
+            let m_gemm = m.next_multiple_of(16);
+            let (xq, x_scale) = if m_gemm == m {
+                super::ops::quantize_e4m3_device(&x)?
+            } else {
+                let mut xp = dev.stream.alloc_zeros::<f32>((m_gemm * k).max(1)).map_err(|e| msg(e.to_string()))?;
+                super::ops::block_copy_device(&x, &mut xp, 1, m * k, m * k, m_gemm * k, 0, 0)?;
+                super::ops::quantize_e4m3_device(&xp)?
+            };
+            let mut c = super::ops::alloc((m_gemm * n).max(1))?;
             {
                 let (wp, _gw) = wq.data.device_ptr(&dev.stream);
                 let (wsp, _gws) = wq.scale.device_ptr(&dev.stream);
@@ -398,7 +572,12 @@ impl Linear {
                 // leading dimension n is a column-major [n, m] with the same
                 // leading dimension, so the weight goes in as A and the
                 // activations as B, and (m, n, k) becomes (out, tokens, in).
-                unsafe { super::fp8::gemm_e4m3(&dev, &ltc, n, m, k, wp, wsp, xp, xsp, cp)? };
+                unsafe { super::fp8::gemm_e4m3(&dev, &ltc, n, m_gemm, k, wp, wsp, xp, xsp, cp)? };
+            }
+            if m_gemm != m {
+                let mut keep = super::ops::alloc((m * n).max(1))?;
+                super::ops::block_copy_device(&c, &mut keep, 1, m * n, m_gemm * n, m * n, 0, 0)?;
+                c = keep;
             }
             match (&self.bias, gelu) {
                 (Some(b), true) => {
@@ -696,5 +875,29 @@ mod fp8_rows_tests {
         }
         let (qz, sz) = host::fp8_rows_quantize(&[0.0; 6], 2, 3);
         assert_eq!((qz, sz), (vec![0u8; 6], vec![1.0, 1.0]));
+    }
+
+    #[test]
+    fn affine_int8_forward_is_dequant_matmul() {
+        let (i, o) = (64usize, 8usize);
+        let map = WeightMap::generated(move |_, shape| {
+            let n: usize = shape.iter().product();
+            (0..n).map(|k| ((k as f32 * 0.19).sin()) * (0.4 + (k % 9) as f32 * 0.05)).collect()
+        });
+        let lin = Linear::load_affine(&map, "p", i, o, true, 8).unwrap();
+        assert!(lin.is_affine());
+        let w = crate::wan::weights::cuda_tensor_shaped(&map, "p.weight", &[o, i]).unwrap().host_cow().unwrap().into_owned();
+        let b = crate::wan::weights::cuda_tensor_shaped(&map, "p.bias", &[o]).unwrap().host_cow().unwrap().into_owned();
+        let (q, s, bi) = crate::wan::affine::quantize(&w, o, i, 8).unwrap();
+        let wd = crate::wan::affine::dequant(&q, &s, &bi, i, 8).unwrap();
+        let x: Vec<f32> = (0..3 * i).map(|k| (k as f32 * 0.37).sin()).collect();
+        let y = lin.forward(&CudaTensor::from_vec(x.clone(), vec![3, i]).unwrap()).unwrap();
+        let got = y.host_cow().unwrap();
+        for t in 0..3 {
+            for r in 0..o {
+                let want: f32 = (0..i).map(|c| x[t * i + c] * wd[r * i + c]).sum::<f32>() + b[r];
+                assert!((got[t * o + r] - want).abs() <= 1e-4 * want.abs().max(1.0), "token {t} row {r}");
+            }
+        }
     }
 }
