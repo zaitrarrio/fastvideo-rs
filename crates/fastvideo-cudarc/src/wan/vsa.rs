@@ -254,6 +254,8 @@ pub enum FineKernel {
     FusedScalar,
     /// Streams K/V through `mma.sync` bf16 tensor cores with an online
     /// softmax, as the reference kernels do. Needs sm80+ and dim 128.
+    /// On sm90+ the same math loads tiles via TMA 128B swizzle unless
+    /// `FASTVIDEO_VSA_TMA=0` or `FASTVIDEO_VSA_KERNEL=mma`.
     Mma,
 }
 

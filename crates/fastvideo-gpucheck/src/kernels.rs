@@ -846,6 +846,15 @@ pub fn run(report: &mut Report, lim: Limits, seed: u64) -> StageResult<()> {
                 std::env::remove_var("FASTVIDEO_VSA_KERNEL");
                 let tag = format!("vsa_mma_{}x{}x{}_h{heads}_d{dim}_k{topk}", grid.0, grid.1, grid.2);
                 c.cmp(&tag, &dev.stream.memcpy_dtov(&got)?, &want, 2e-2)?;
+                if dev.sm_major >= 9 {
+                    std::env::set_var("FASTVIDEO_VSA_KERNEL", "tma");
+                    let got = vsa::vsa_attention_device(
+                        &qd, &kd, &vd, Some(&gd), &plan_dev, topk, bh, seq, dim, scale, nb,
+                    )?;
+                    std::env::remove_var("FASTVIDEO_VSA_KERNEL");
+                    let tag = format!("vsa_tma_{}x{}x{}_h{heads}_d{dim}_k{topk}", grid.0, grid.1, grid.2);
+                    c.cmp(&tag, &dev.stream.memcpy_dtov(&got)?, &want, 2e-2)?;
+                }
             } else {
                 c.report.note(
                     format!("vsa_mma_{}x{}x{}_skipped", grid.0, grid.1, grid.2),

@@ -10,7 +10,7 @@ Project code: FVID
 - Reversibility: cheap — prefix skip is a grid offset; TMA stays unstarted
 - Executed by: Executor
 - ADR: none
-- Verification: host VSA tests; prefix skip is 11/671 query tiles on the 5s layout (~1.6% of the MMA grid)
+- Verification: host VSA tests; prefix skip is 11/671 query tiles on the 5s layout (~1.6% of the MMA grid). TMA 128B-swizzle kernel (`vsa_mma_attn_tma`) added for sm90+; Ampere `cp.async` remains `FASTVIDEO_VSA_KERNEL=mma`. GPU parity pending (`vsa_tma_*` in the kernels tier).
 
 ### FVID · 2026-09-19 · FVID-2026-09-19-h3-profile-next
 - Trigger: "proceed" after the H3 `--profile` gen on an RTX PRO 6000 WS (`20260919T223558Z-h3-gen`). Block: attn 62%, FFN 31%. VSA: MMA 78%, prefix_dense 17%. QKVG four-way even.

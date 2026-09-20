@@ -3,7 +3,7 @@
 #
 #   docker.sh builder          build the builder image (Rust + NVRTC, no GPU)
 #   docker.sh test             unit tests (gpucheck + cudarc) in the builder
-#   docker.sh nvrtc            compile every NVRTC kernel for sm 7.5–9.0 (no GPU)
+#   docker.sh nvrtc            compile every NVRTC kernel for sm 7.5–12.0 (no GPU)
 #   docker.sh dist             release binary → artifacts/gpucheck/dist/ (shipped to rented boxes)
 #   docker.sh refs [--parity]  CPU-path reference dumps → artifacts/gpucheck/refs/ (saves billed GPU idle time)
 #   docker.sh image            runtime image (CUDA 13.0 runtime + binary) for NVIDIA Linux hosts

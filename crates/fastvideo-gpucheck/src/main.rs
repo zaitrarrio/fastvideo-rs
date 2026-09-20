@@ -146,7 +146,7 @@ enum Cmd {
     /// NVRTC-compile the kernel module for each compute capability (no GPU).
     #[cfg(feature = "cuda")]
     Nvrtc {
-        #[arg(long, default_value = "7.5,8.0,8.6,8.9,9.0")]
+        #[arg(long, default_value = "7.5,8.0,8.6,8.9,9.0,10.0,12.0")]
         sm: String,
     },
     /// Create the CUDA context (cuBLAS, cuDNN, all kernels) and report the GPU.

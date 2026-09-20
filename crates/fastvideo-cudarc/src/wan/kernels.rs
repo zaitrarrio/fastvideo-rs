@@ -56,6 +56,7 @@ kernel_fns!(
     repeat_kv,
     pack_rgb_u8,
     vsa_mma_attn,
+    vsa_mma_attn_tma,
     vsa_tile_qkv,
     tanh_scaled,
     quantize_e4m3,

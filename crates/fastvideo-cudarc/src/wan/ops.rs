@@ -825,20 +825,11 @@ pub fn vsa_mma_attn_range_device(
         ))
     })?;
 
-    // K[2] + V[2] tiles of 64x128 bf16: 64 KiB, past the 48 KiB default, so
-    // the function has to opt in. Once per process; there is one device.
-    let shared = (4 * TILE * DIM * 2) as u32;
-    static OPT_IN: std::sync::Once = std::sync::Once::new();
-    let mut opt_err = None;
-    OPT_IN.call_once(|| {
-        use cudarc::driver::sys::CUfunction_attribute_enum::CU_FUNC_ATTRIBUTE_MAX_DYNAMIC_SHARED_SIZE_BYTES;
-        if let Err(e) = dev.kernels.vsa_mma_attn.set_attribute(CU_FUNC_ATTRIBUTE_MAX_DYNAMIC_SHARED_SIZE_BYTES, shared as i32) {
-            opt_err = Some(e.to_string());
-        }
-    });
-    if let Some(e) = opt_err {
-        return Err(TensorError::Message(format!("vsa_mma_attn: dynamic shared opt-in failed: {e}")));
-    }
+    // K[2] + V[2] tiles of 64x128 bf16: 64 KiB, plus two mbarriers on the TMA
+    // path. Past the 48 KiB default, so the function has to opt in.
+    let shared_mma = (4 * TILE * DIM * 2) as u32;
+    let shared_tma = shared_mma + 32;
+    opt_in_dynamic_shared(&dev.kernels.vsa_mma_attn, shared_mma)?;
 
     // Zero-fill so skipped prefix tiles stay a defined 0 for combine.
     let mut out = if q_base == 0 && q_tiles == nb {
@@ -846,17 +837,150 @@ pub fn vsa_mma_attn_range_device(
     } else {
         fill_device(bh * padded * dim, 0.0)?
     };
+    let (nt, tk, qb) = (nb as i32, topk as i32, q_base as i32);
+    let scale_log2 = scale * std::f32::consts::LOG2_E;
+    let want_tma = tma_requested(dev.sm_major);
+    if want_tma {
+        match encode_qkv_panels(&qt, &kt, &vt, bh, padded) {
+            Ok(maps) => {
+                opt_in_dynamic_shared(&dev.kernels.vsa_mma_attn_tma, shared_tma)?;
+                static LOGGED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+                crate::wan::log::info_once(&LOGGED, format_args!("vsa fine kernel: Tma (sm{}, 128B swizzle)", dev.sm_major));
+                let cfg = LaunchConfig {
+                    grid_dim: (q_tiles as u32, bh as u32, 1),
+                    block_dim: (THREADS, 1, 1),
+                    shared_mem_bytes: shared_tma,
+                };
+                launch!(dev.stream, &dev.kernels.vsa_mma_attn_tma, cfg;
+                    &maps.tq0, &maps.tq1, &maps.tk0, &maps.tk1, &maps.tv0, &maps.tv1,
+                    selected, &plan.block_sizes, &mut out, &nt, &tk, &scale_log2, &qb)
+                .map_err(err)?;
+                return Ok(out);
+            }
+            Err(e) => {
+                static LOGGED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+                crate::wan::log::info_once(&LOGGED, format_args!("vsa TMA encode failed, using cp.async: {e}"));
+            }
+        }
+    }
     let cfg = LaunchConfig {
         grid_dim: (q_tiles as u32, bh as u32, 1),
         block_dim: (THREADS, 1, 1),
-        shared_mem_bytes: shared,
+        shared_mem_bytes: shared_mma,
     };
-    let (nt, tk, qb) = (nb as i32, topk as i32, q_base as i32);
-    let scale_log2 = scale * std::f32::consts::LOG2_E;
     launch!(dev.stream, &dev.kernels.vsa_mma_attn, cfg;
         &qt, &kt, &vt, selected, &plan.block_sizes, &mut out, &nt, &tk, &scale_log2, &qb)
     .map_err(err)?;
     Ok(out)
+}
+
+#[cfg(feature = "cuda")]
+fn tma_requested(sm_major: i32) -> bool {
+    use crate::wan::envflag::string_flag;
+    if string_flag("FASTVIDEO_VSA_TMA", "1") == "0" {
+        return false;
+    }
+    let pick = string_flag("FASTVIDEO_VSA_KERNEL", "auto");
+    if pick == "mma" {
+        return false; // explicit Ampere path for A/B
+    }
+    if pick == "tma" {
+        return sm_major >= 9;
+    }
+    sm_major >= 9
+}
+
+#[cfg(feature = "cuda")]
+fn opt_in_dynamic_shared(func: &cudarc::driver::CudaFunction, shared: u32) -> Result<()> {
+    use cudarc::driver::sys::CUfunction_attribute_enum::CU_FUNC_ATTRIBUTE_MAX_DYNAMIC_SHARED_SIZE_BYTES;
+    // Once per function per process. Two kernels, two Once locks.
+    // set_attribute is idempotent; a failed first call is the one we surface.
+    if let Err(e) = func.set_attribute(CU_FUNC_ATTRIBUTE_MAX_DYNAMIC_SHARED_SIZE_BYTES, shared as i32) {
+        return Err(TensorError::Message(format!("vsa_mma_attn: dynamic shared opt-in failed: {e}")));
+    }
+    Ok(())
+}
+
+/// 128-byte-aligned tensormap, passed by value (DeviceRepr) as a kernel arg.
+#[cfg(feature = "cuda")]
+#[repr(C, align(128))]
+#[derive(Clone, Copy)]
+struct FvTensorMap {
+    opaque: [u64; 16],
+}
+
+#[cfg(feature = "cuda")]
+unsafe impl cudarc::driver::DeviceRepr for FvTensorMap {}
+
+#[cfg(feature = "cuda")]
+struct QkvMaps {
+    tq0: FvTensorMap,
+    tq1: FvTensorMap,
+    tk0: FvTensorMap,
+    tk1: FvTensorMap,
+    tv0: FvTensorMap,
+    tv1: FvTensorMap,
+}
+
+#[cfg(feature = "cuda")]
+fn encode_qkv_panels(
+    q: &CudaSlice<half::bf16>,
+    k: &CudaSlice<half::bf16>,
+    v: &CudaSlice<half::bf16>,
+    bh: usize,
+    padded: usize,
+) -> Result<QkvMaps> {
+    use cudarc::driver::DevicePtr;
+    let dev = ctx()?;
+    let rows = (bh * padded) as u64;
+    let (qp, _gq) = q.device_ptr(&dev.stream);
+    let (kp, _gk) = k.device_ptr(&dev.stream);
+    let (vp, _gv) = v.device_ptr(&dev.stream);
+    Ok(QkvMaps {
+        tq0: encode_bf16_panel(qp, rows, 0)?,
+        tq1: encode_bf16_panel(qp, rows, 64)?,
+        tk0: encode_bf16_panel(kp, rows, 0)?,
+        tk1: encode_bf16_panel(kp, rows, 64)?,
+        tv0: encode_bf16_panel(vp, rows, 0)?,
+        tv1: encode_bf16_panel(vp, rows, 64)?,
+    })
+}
+
+#[cfg(feature = "cuda")]
+fn encode_bf16_panel(ptr: cudarc::driver::sys::CUdeviceptr, rows: u64, col0: u64) -> Result<FvTensorMap> {
+    use cudarc::driver::sys::{
+        self, CUtensorMapDataType, CUtensorMapFloatOOBfill, CUtensorMapInterleave, CUtensorMapL2promotion,
+        CUtensorMapSwizzle,
+    };
+    check("tma panel rows", rows >= 64)?;
+    let mut raw = std::mem::MaybeUninit::<sys::CUtensorMap>::zeroed();
+    let addr = (ptr as u64 + col0 * 2) as *mut std::ffi::c_void;
+    let global_dim = [64u64, rows];
+    let global_strides = [256u64];
+    let box_dim = [64u32, 64u32];
+    let elem_strides = [1u32, 1u32];
+    let st = unsafe {
+        sys::cuTensorMapEncodeTiled(
+            raw.as_mut_ptr(),
+            CUtensorMapDataType::CU_TENSOR_MAP_DATA_TYPE_BFLOAT16,
+            2,
+            addr,
+            global_dim.as_ptr(),
+            global_strides.as_ptr(),
+            box_dim.as_ptr(),
+            elem_strides.as_ptr(),
+            CUtensorMapInterleave::CU_TENSOR_MAP_INTERLEAVE_NONE,
+            CUtensorMapSwizzle::CU_TENSOR_MAP_SWIZZLE_128B,
+            CUtensorMapL2promotion::CU_TENSOR_MAP_L2_PROMOTION_L2_128B,
+            CUtensorMapFloatOOBfill::CU_TENSOR_MAP_FLOAT_OOB_FILL_NONE,
+        )
+    };
+    if st != sys::CUresult::CUDA_SUCCESS {
+        return Err(TensorError::Message(format!("cuTensorMapEncodeTiled col{col0}: {st:?}")));
+    }
+    let map = unsafe { raw.assume_init() };
+    debug_assert_eq!(std::mem::size_of_val(&map), std::mem::size_of::<FvTensorMap>());
+    Ok(unsafe { std::mem::transmute_copy(&map) })
 }
 
 /// Scatter `coarse * gate + sparse` back into token order.
@@ -1722,4 +1846,29 @@ pub fn dequantize_e4m3_device(a: &CudaSlice<u8>, scale: &CudaSlice<f32>) -> Resu
     let mut out = alloc(a.len().max(1))?;
     launch!(dev.stream, &dev.kernels.dequantize_e4m3, cfg_n(a.len()); a, &mut out, scale, &n).map_err(err)?;
     Ok(out)
+}
+
+#[cfg(test)]
+mod tma_layout {
+    /// Mirrors `mma_swz_tma` in kernels.cu: two 64-col 128B-swizzled panels.
+    fn mma_swz_tma(row: u32, col: u32) -> u32 {
+        let panel = col >> 6;
+        let c = col & 63;
+        panel * (64 * 128) + row * 128 + (((c >> 3) ^ (row & 7)) << 4) + ((c & 7) << 1)
+    }
+
+    #[test]
+    fn tma_swizzle_spreads_an_8_row_ldmatrix_across_banks() {
+        for col in [0u32, 8, 16, 32, 48, 64, 80, 112] {
+            let banks: Vec<u32> = (0..8).map(|r| (mma_swz_tma(r, col) / 4) % 32).collect();
+            assert!(banks.iter().any(|&b| b != banks[0]), "col {col} collapsed to one bank: {banks:?}");
+        }
+    }
+
+    #[test]
+    fn tma_swizzle_panels_do_not_overlap() {
+        assert!(mma_swz_tma(63, 63) < 64 * 128);
+        assert_eq!(mma_swz_tma(0, 64), 64 * 128);
+        assert!(mma_swz_tma(63, 127) < 2 * 64 * 128);
+    }
 }

@@ -107,7 +107,7 @@ tasks:
     cmds: ['bash scripts/gpu/docker.sh test']
 
   nvrtc:
-    desc: Compile every CUDA kernel for sm75-sm90 (no GPU)
+    desc: Compile every CUDA kernel for sm75-sm120 (no GPU)
     deps: [docker:up]
     cmds: ['bash scripts/gpu/docker.sh nvrtc']
 
