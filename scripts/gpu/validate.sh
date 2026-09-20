@@ -796,7 +796,16 @@ cmd_run() {
         STAGE_OPTIONAL=1 gpucheck_stage "gen-$name-cached" 7200 "${h3gen[@]}" --clip-dir "$clip/$name-cached/frames" \
           --text-encoder auto --text-cache "$tcache" || true
       else
-        if [[ "${FV_H3_FFN_FP8:-0}" == 1 ]]; then
+        if [[ -n "${FV_H3_AFFINE:-}" && "${FV_H3_AFFINE}" != "0" && "${FV_H3_AFFINE}" != "off" ]]; then
+          # Same prompt/seed/cache, two gens: bf16 DiT vs MLX affine INT8/6/4.
+          local bits="${FV_H3_AFFINE}"
+          case "$bits" in 1|on|true|yes) bits=int8 ;; esac
+          gpucheck_stage "gen-$name-bf16" 7200 "${h3gen[@]}" --clip-dir "$clip/$name-bf16/frames"
+          gpucheck_stage "gen-$name-affine" 7200 --h3-affine "$bits" "${h3gen[@]}" --clip-dir "$clip/$name-affine/frames"
+          local a="$clip/$name-bf16/frames/output.mp4" b="$clip/$name-affine/frames/output.mp4"
+          log "affine A/B PSNR ($bits) $a vs $b"
+          fv_ssh "$HOST" "$PORT" "ffmpeg -hide_banner -i '$a' -i '$b' -lavfi '[0:v][1:v]psnr' -f null - 2>&1 | tail -8" || true
+        elif [[ "${FV_H3_FFN_FP8:-0}" == 1 ]]; then
           # Same prompt/seed/cache, two gens: bf16 FFN vs H3-only E4M3 FFN.
           gpucheck_stage "gen-$name-bf16" 7200 "${h3gen[@]}" --clip-dir "$clip/$name-bf16/frames"
           gpucheck_stage "gen-$name-fp8" 7200 --h3-ffn-fp8 "${h3gen[@]}" --clip-dir "$clip/$name-fp8/frames"

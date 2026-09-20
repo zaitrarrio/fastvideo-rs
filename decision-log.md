@@ -10,7 +10,7 @@ Project code: FVID
 - Reversibility: cheap — unset `FASTVIDEO_H3_AFFINE` / `--h3-affine`
 - Executed by: Executor
 - ADR: none
-- Verification: pending — host quant/dequant/GEMM tests; GPU parity in the kernels tier; no rental this slice
+- Verification: host tests pass. Same Max-Q machine 147132 `20260920T151313Z-h3-gen` (`51767696`): bf16 warm denoise **125.6 s** / 15.0–16.0 s/step, peak 82482 MiB. INT8 affine fused GEMM (`--h3-affine int8`, quantize-on-load): step 1 **589.3 s**, step 2 **590.3 s** (~38×). Sole GPU process. Killed mid-step-3 — no PSNR, no warm affine. **Flag stays off.** Kernel is correctness-first (16×16 tiles, no tensor cores); do not enable until a fast GEMM exists.
 
 ### FVID · 2026-09-20 · FVID-2026-09-20-h3-ffn-fp8-ab
 - Trigger: "proceed" after ranking remaining H3 levers: FFN GEMMs 33 s, MMA 28 s, prefix 11 s
