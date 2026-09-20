@@ -48,6 +48,8 @@ FAST_W="$WORK/weights/fastwan21-1.3b"
 # that will be kept and reused by tiers needing more than the first one.
 tier_query() { local q; q="$(tier_query_base "$1")" || return 1
   if [[ -n "${FV_GPU_RAM_MIN:-}" ]]; then q="$(sed -E "s/gpu_ram>=[0-9]+/gpu_ram>=${FV_GPU_RAM_MIN}/" <<<"$q")"; fi
+  # Cap VRAM (e.g. H100-80: exclude NVL 94). Appended; Vast ANDs query terms.
+  if [[ -n "${FV_GPU_RAM_MAX:-}" ]]; then q="$q gpu_ram<=${FV_GPU_RAM_MAX}"; fi
   echo "$q"; }
 tier_query_base() {
   # FV_OFFER_QUERY_EXTRA narrows the search, e.g. "gpu_name=RTX_4070S".
@@ -98,17 +100,20 @@ tier_query_base() {
     # 70 GB DiT and both decoders; LTX-2 reads 49 GB of Gemma, the 43 GB
     # single-file DiT and its decoders. No python, no oracle: our binary only.
     h3-gen) echo "$base gpu_ram>=90 disk_space>=220 cpu_ram>=64 inet_down>=1000" ;;
+    # Encoder × residency matrix: streamed 32B / recovered-8B on 80 GB cards;
+    # FV_GPU_RAM_MIN=78 (A100/H100) or 140 (H200). TAEH3, no oracle.
+    h3-matrix) echo "$base gpu_ram>=78 disk_space>=280 cpu_ram>=64 inet_down>=1000" ;;
     ltx2-gen) echo "$base gpu_ram>=90 disk_space>=180 cpu_ram>=64 inet_down>=1000" ;;
     ltx2-text) echo "$base gpu_ram>=90 disk_space>=180 cpu_ram>=64 inet_down>=800" ;;
     # A build box: the GPU is irrelevant, so this asks for the cheapest thing
     # with cores and RAM for a release cargo build plus nvcc for 7 SMs.
     build) echo "num_gpus=1 cuda_vers>=13.0 reliability>0.97 rentable=true verified=true direct_port_count>=1 inet_down>=200 cpu_cores>=8 cpu_ram>=16 disk_space>=40 ${FV_OFFER_QUERY_EXTRA:-}" ;;
-    *) die "unknown tier '$1' (mathprobe|kernels|parity|clip|compare|gen|oracle|fp8|taehv|vaeab|build|h3-text|ltx2-text|h3-vae|ltx2-vae|h3-dit|ltx2-dit|h3-vsa|h3-gen|ltx2-gen)" ;;
+    *) die "unknown tier '$1' (mathprobe|kernels|parity|clip|compare|gen|oracle|fp8|taehv|vaeab|build|h3-text|ltx2-text|h3-vae|ltx2-vae|h3-dit|ltx2-dit|h3-vsa|h3-gen|h3-matrix|ltx2-gen)" ;;
   esac
 }
-tier_max_dph() { case "$1" in mathprobe) echo 0.40 ;; kernels) echo 0.25 ;; parity) echo 0.40 ;; clip) echo 0.60 ;; compare) echo 0.60 ;; gen) echo 0.80 ;; oracle) echo 1.60 ;; fp8) echo 0.80 ;; taehv) echo 0.40 ;; vaeab) echo 0.80 ;; build) echo 0.20 ;; h3-text | ltx2-text) echo 2.00 ;; h3-vae) echo 1.00 ;; ltx2-vae) echo 0.80 ;; h3-dit | ltx2-dit | h3-gen | ltx2-gen) echo 2.00 ;; h3-vsa) echo 0.40 ;; esac; }
-tier_max_minutes() { case "$1" in mathprobe) echo 30 ;; kernels) echo 40 ;; parity) echo 75 ;; clip) echo 180 ;; compare) echo 240 ;; gen) echo 180 ;; oracle) echo 150 ;; fp8) echo 90 ;; taehv) echo 60 ;; vaeab) echo 90 ;; build) echo 45 ;; h3-text | ltx2-text) echo 150 ;; h3-vae | ltx2-vae) echo 90 ;; h3-dit | ltx2-dit) echo 180 ;; h3-gen | ltx2-gen) echo 150 ;; h3-vsa) echo 40 ;; esac; }
-tier_disk() { case "$1" in mathprobe) echo 40 ;; kernels) echo 40 ;; parity) echo 60 ;; clip) echo 100 ;; compare) echo 180 ;; gen) echo 100 ;; oracle) echo 160 ;; fp8) echo 100 ;; taehv) echo 60 ;; vaeab) echo 100 ;; build) echo 40 ;; h3-text) echo 220 ;; ltx2-text) echo 180 ;; h3-vae) echo 100 ;; ltx2-vae) echo 80 ;; h3-dit) echo 200 ;; ltx2-dit) echo 260 ;; h3-vsa) echo 40 ;; h3-gen) echo 220 ;; ltx2-gen) echo 180 ;; esac; }
+tier_max_dph() { case "$1" in mathprobe) echo 0.40 ;; kernels) echo 0.25 ;; parity) echo 0.40 ;; clip) echo 0.60 ;; compare) echo 0.60 ;; gen) echo 0.80 ;; oracle) echo 1.60 ;; fp8) echo 0.80 ;; taehv) echo 0.40 ;; vaeab) echo 0.80 ;; build) echo 0.20 ;; h3-text | ltx2-text) echo 2.00 ;; h3-vae) echo 1.00 ;; ltx2-vae) echo 0.80 ;; h3-dit | ltx2-dit | h3-gen | ltx2-gen | h3-matrix) echo 2.50 ;; h3-vsa) echo 0.40 ;; esac; }
+tier_max_minutes() { case "$1" in mathprobe) echo 30 ;; kernels) echo 40 ;; parity) echo 75 ;; clip) echo 180 ;; compare) echo 240 ;; gen) echo 180 ;; oracle) echo 150 ;; fp8) echo 90 ;; taehv) echo 60 ;; vaeab) echo 90 ;; build) echo 45 ;; h3-text | ltx2-text) echo 150 ;; h3-vae | ltx2-vae) echo 90 ;; h3-dit | ltx2-dit) echo 180 ;; h3-gen | ltx2-gen) echo 150 ;; h3-matrix) echo 360 ;; h3-vsa) echo 40 ;; esac; }
+tier_disk() { case "$1" in mathprobe) echo 40 ;; kernels) echo 40 ;; parity) echo 60 ;; clip) echo 100 ;; compare) echo 180 ;; gen) echo 100 ;; oracle) echo 160 ;; fp8) echo 100 ;; taehv) echo 60 ;; vaeab) echo 100 ;; build) echo 40 ;; h3-text) echo 220 ;; ltx2-text) echo 180 ;; h3-vae) echo 100 ;; ltx2-vae) echo 80 ;; h3-dit) echo 200 ;; ltx2-dit) echo 260 ;; h3-vsa) echo 40 ;; h3-gen) echo 220 ;; h3-matrix) echo 280 ;; ltx2-gen) echo 180 ;; esac; }
 
 usage() { sed -n '2,12p' "$0" | sed 's/^# \{0,1\}//'; exit 2; }
 
@@ -271,7 +276,10 @@ remote_run() {
       alive="${tail_part##*@@ALIVE@@}"
       text="${text%$'\n'}"
       if [[ -n "$text" ]]; then
-        printf '%s\n' "${text%$'\n'}" | sed "s/^/  [$name] /" >&2
+        # Matrix cells set FV_TEST_ID so every streamed line carries the id.
+        local prefix="[$name]"
+        [[ -n "${FV_TEST_ID:-}" ]] && prefix="[${FV_TEST_ID}]"
+        printf '%s\n' "${text%$'\n'}" | sed "s/^/  $prefix /" >&2
         offset=$(( offset + $(printf '%s' "$text" | wc -c) ))
       fi
       [[ -n "$rc" ]] && break
@@ -389,14 +397,23 @@ create_instance() {
 
 # wait_ready: 0 once ssh works; 1 if the host never boots or never accepts ssh
 # (a bad host, not a bad test) so the caller can destroy it and move on.
+# FV_IMAGE_PULL_TIMEOUT (default 120s for h3-matrix via caller, else unset):
+# fail fast while actual_status is still loading/creating.
 wait_ready() {
   local t0; t0=$(date +%s)
-  local status=""
+  local status="" pull_cap="${FV_IMAGE_PULL_TIMEOUT:-0}"
   while :; do
     status="$(vastai show instance "$INSTANCE" --raw 2>/dev/null | jq -r '.actual_status // "unknown"')" || status=unknown
     case "$status" in
       running) break ;;
       exited|offline|error) log "instance $INSTANCE entered '$status'"; return 1 ;;
+      loading|creating|created)
+        if (( pull_cap > 0 )) && (( $(date +%s) - t0 >= pull_cap )); then
+          log "instance $INSTANCE still '$status' after ${pull_cap}s (image pull timeout)"
+          bad_host_record "$CURRENT_MACHINE" "image-pull-timeout"
+          return 1
+        fi
+        ;;
     esac
     if (( $(date +%s) - t0 >= ${FV_BOOT_TIMEOUT:-600} )); then
       log "instance $INSTANCE not running after ${FV_BOOT_TIMEOUT:-600}s (status=$status)"
@@ -483,6 +500,10 @@ oracle_store() {
 cmd_run() {
   local tier="${1:-}"; [[ -n "$tier" ]] || usage; shift
   tier_query "$tier" >/dev/null
+  if [[ "$tier" == h3-matrix ]]; then
+    export FV_IMAGE_PULL_TIMEOUT="${FV_IMAGE_PULL_TIMEOUT:-120}"
+    KEEP=1  # reuse until the SKU's cells finish; destroy in the matrix path
+  fi
   local offer="" skip_local=0 budget_min="${FV_CLIP_BUDGET_MIN:-45}"
   while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -584,6 +605,17 @@ cmd_run() {
   else
     log "uploading prebuilt fv-gpucheck (build $build_id; box has '${remote_bid:-none}')"
     fv_rsync_to "$HOST" "$PORT" "$DIST/" "$FV_REMOTE_DIR/target/release/"
+  fi
+  # Slim runtime path: bake hf-fm into PATH even when the GHCR image is still
+  # the previous Python-based tag (binary upload is the matrix failsafe).
+  if [[ -x "$DIST/hf-fm" ]]; then
+    fv_rsync_to "$HOST" "$PORT" "$DIST/hf-fm" "$FV_REMOTE_DIR/target/release/hf-fm"
+    [[ -x "$DIST/hf-fetch-model" ]] && fv_rsync_to "$HOST" "$PORT" "$DIST/hf-fetch-model" "$FV_REMOTE_DIR/target/release/hf-fetch-model"
+    fv_ssh "$HOST" "$PORT" "install -m 755 $FV_REMOTE_DIR/target/release/hf-fm /usr/local/bin/hf-fm
+      [[ -x $FV_REMOTE_DIR/target/release/hf-fetch-model ]] && install -m 755 $FV_REMOTE_DIR/target/release/hf-fetch-model /usr/local/bin/hf-fetch-model
+      command -v hf-fm"
+  elif ! fv_ssh "$HOST" "$PORT" "command -v hf-fm >/dev/null"; then
+    die "hf-fm missing on the box and not in $DIST — rebuild with build-remote or push a runtime image that bakes hf-fetch-model"
   fi
   # CPU-path references are cached per ref key (scripts/gpu/lib.sh fv_ref_key):
   # a hit uploads them and skips that CPU-reference stage entirely.
@@ -747,6 +779,11 @@ cmd_run() {
   if [[ "$tier" == h3-vsa ]]; then
     gpucheck_stage h3-vsa 1800 --keep-going --mode fast h3 vsa
     log "h3-vsa done"
+    return 0
+  fi
+  # Checkpoint × encoder × residency matrix (TAEH3, --warm, no oracle).
+  if [[ "$tier" == h3-matrix ]]; then
+    run_h3_matrix
     return 0
   fi
   # Generation, end to end, by our binary alone: prompt in, mp4 with an audio
@@ -1105,6 +1142,199 @@ cmd_run() {
     STAGE_OPTIONAL=1 remote_run "upstream-$backend" "${FV_UPSTREAM_TIMEOUT:-3600}" upstream-bench "$backend" "${ub[@]}" ${extra[@]+"${extra[@]}"} || true
   done
   log "T4 PASS"
+}
+
+# ---- h3-matrix ------------------------------------------------------------------
+# Kill leftover GPU processes and require empty VRAM. Restart the instance if
+# VRAM stays dirty (image already local — no pull).
+h3_matrix_gpu_empty() {
+  local used
+  # killall matches the process name only. Do NOT use `pkill -f hf-fm` — that
+  # also matches this ssh command line and kills the session (rc 255).
+  fv_ssh "$HOST" "$PORT" "killall -9 fv-gpucheck hf-fm hf-fetch-model 2>/dev/null || true; sleep 2" || true
+  used="$(fv_ssh "$HOST" "$PORT" "nvidia-smi --query-gpu=memory.used --format=csv,noheader,nounits | head -1 | tr -dc 0-9" || echo 0)"
+  if [[ "${used:-0}" -gt "${FV_MAX_GPU_USED_MIB:-2048}" ]]; then
+    log "GPU still ${used} MiB used — restarting instance $INSTANCE (no re-rent)"
+    # Pull timeout does not apply to a restart (image already local).
+    local saved_pull="${FV_IMAGE_PULL_TIMEOUT:-}"
+    unset FV_IMAGE_PULL_TIMEOUT
+    vastai restart instance "$INSTANCE" >/dev/null || die "vastai restart failed"
+    HOST=""; PORT=""
+    wait_ready || die "instance $INSTANCE unreachable after restart"
+    [[ -n "$saved_pull" ]] && export FV_IMAGE_PULL_TIMEOUT="$saved_pull"
+    used="$(fv_ssh "$HOST" "$PORT" "nvidia-smi --query-gpu=memory.used --format=csv,noheader,nounits | head -1 | tr -dc 0-9" || echo 0)"
+    [[ "${used:-0}" -le "${FV_MAX_GPU_USED_MIB:-2048}" ]] || die "GPU still dirty after restart: ${used} MiB"
+  fi
+  log "GPU empty (${used:-0} MiB used)"
+}
+
+# Weight dir for a recipe name (`v2` → `h3-v2`, …).
+h3_matrix_weights() {
+  case "$1" in
+    v2|8step) echo "$WORK/weights/h3-v2" ;;
+    4step-vsa|preview-vsa) echo "$WORK/weights/h3-4step-vsa" ;;
+    4step-dense|preview-dense) echo "$WORK/weights/h3-4step-dense" ;;
+    *) die "unknown matrix recipe $1" ;;
+  esac
+}
+
+# One cell: TEST_ID, GPU clear, nohup gen. Args: sku recipe encoder residency
+h3_matrix_cell() {
+  local sku="$1" recipe="$2" encoder="$3" residency="$4"
+  local test_id prior
+  # Reattach after a mid-matrix fix: keep a prior successful clip for this cell.
+  prior="$(fv_ssh "$HOST" "$PORT" "ls -1d $OUTR/clips/*-${sku}-${recipe}-${encoder}-${residency}/frames/output.mp4 2>/dev/null | head -1" || true)"
+  if [[ -n "$prior" ]]; then
+    test_id="$(basename "$(dirname "$(dirname "$prior")")")"
+    log "skip cell ${sku}/${recipe}/${encoder}/${residency} — reusing $test_id"
+    printf '%s\n' "$test_id" >>"$RUN_DIR/matrix-test-ids.txt"
+    return 0
+  fi
+  test_id="$(date -u +%Y%m%dT%H%M%SZ)-${sku}-${recipe}-${encoder}-${residency}"
+  test_id="${test_id//_/-}"
+  export FV_TEST_ID="$test_id"
+  log "▶ TEST_ID=$test_id"
+  h3_matrix_gpu_empty
+  local clip="$OUTR/clips/$test_id"
+  local wdir; wdir="$(h3_matrix_weights "$recipe")"
+  local taeh3_dir="$WORK/taeh3"
+  local tcache="$WORK/h3-text-cache-$recipe"
+  local adaln="$WORK/h3-adaln-$recipe.cache"
+  local h3gen=(--mode fast h3 gen --weights "$wdir" --prompt "$FV_PROMPT" --seconds "${FV_SECONDS:-5}"
+    --seed "${FV_SEED:-1024}" --adaln-cache "$adaln" --warm --taeh3-weights "$taeh3_dir"
+    --h3-recipe "$recipe" --clip-dir "$clip/frames")
+  case "$encoder/$residency" in
+    stock/streamed)
+      # Write the conditioning cache so a later cache-hit cell can reuse it.
+      h3gen+=(--text-encoder streamed --text-cache "$tcache")
+      ;;
+    stock/cache-hit)
+      h3gen+=(--text-encoder streamed --text-cache "$tcache")
+      ;;
+    stock/resident-fp8|stock/resident-bf16)
+      h3gen+=(--text-encoder "${residency}" --text-cache "$tcache")
+      ;;
+    recovered-8b/resident-bf16)
+      h3gen+=(--text-encoder recovered-8b --text-weights "$WORK/weights/recovered-8b" --text-cache "$tcache")
+      ;;
+    *) die "unknown matrix cell $encoder/$residency" ;;
+  esac
+  gpucheck_stage "$test_id" 7200 "${h3gen[@]}"
+  printf '%s\n' "$test_id" >>"$RUN_DIR/matrix-test-ids.txt"
+  unset FV_TEST_ID
+}
+
+# PSNR between two clips that share this box (8B vs stock on the same checkpoint).
+h3_matrix_psnr() {
+  local a_id="$1" b_id="$2" label="$3"
+  local a="$OUTR/clips/$a_id/frames/output.mp4" b="$OUTR/clips/$b_id/frames/output.mp4"
+  log "PSNR $label: $a_id vs $b_id"
+  local out
+  out="$(fv_ssh "$HOST" "$PORT" "ffmpeg -hide_banner -i '$a' -i '$b' -lavfi '[0:v][1:v]psnr' -f null - 2>&1 | tail -5" || true)"
+  printf '%s\n' "$out" | sed "s/^/  [psnr] /" >&2
+  printf '%s\t%s\t%s\t%s\n' "$label" "$a_id" "$b_id" "$(printf '%s' "$out" | tr '\n' ' ')" >>"$RUN_DIR/matrix-psnr.tsv"
+}
+
+run_h3_matrix() {
+  local prompt="${FV_PROMPT:-A man in his thirties talking to the camera in a bright living room, medium close-up, natural expressions and hand gestures, soft window light. He says: <d>Hello, this was generated entirely in Rust.</d>}"
+  export FV_PROMPT="$prompt"
+  local sku="${FV_MATRIX_SKU:-}"
+  if [[ -z "$sku" ]]; then
+    case "${FV_OFFER_QUERY_EXTRA:-}" in
+      *[Hh]200*) sku=h200 ;;
+      *[Hh]100*) sku=h100 ;;
+      *[Aa]100*) sku=a100 ;;
+      *) sku=auto ;;
+    esac
+  fi
+  sku="$(tr '[:upper:]' '[:lower:]' <<<"$sku")"
+  log "h3-matrix sku=$sku instance=$INSTANCE"
+  mkdir -p "$RUN_DIR"
+  : >"$RUN_DIR/matrix-test-ids.txt"
+  : >"$RUN_DIR/matrix-psnr.tsv"
+
+  # --- fetches (shared on this box for every cell) ---
+  local v2_repo="${FV_H3_REPO:-FastVideo/FastVideo-FastH3-8-Step-V2}"
+  local v2="$WORK/weights/h3-v2"
+  local preview_vsa_repo="${FV_H3_PREVIEW_VSA_REPO:-FastVideo/FastVideo-FastH3-4-step-Preview-v1-VSA-DataFree}"
+  local preview_dense_repo="${FV_H3_PREVIEW_DENSE_REPO:-FastVideo/FastVideo-FastH3-4-step-Preview-v1-Dense-DataFree}"
+  local text_pat=("tokenizer/*" "text_encoder/*.json"
+    "text_encoder/model-0000[1-9]-of-00014.safetensors" "text_encoder/model-0001[01]-of-00014.safetensors")
+  remote_run fetch-v2 120 fetch "$v2_repo" "$v2" "${text_pat[@]}" "transformer/*" "audio_vae/*"
+  local taeh3_dir="$WORK/taeh3"
+  remote_run fetch-taeh3 300 fetch-taeh3 "$taeh3_dir"
+  remote_run wait-v2 7200 wait-weights "$v2" 7200 text_encoder transformer audio_vae
+  remote_run wait-taeh3 300 wait-taeh3 "$taeh3_dir" 300
+
+  local recovered="$WORK/weights/recovered-8b"
+  remote_run fetch-8b 120 fetch SearchingMan/MiniMax-H3-Text-Encoders "$recovered" \
+    "text_encoders/recovered_8b/qwen3vl_8b_minimax_h3_recovered_bf16.safetensors" \
+    "text_encoders/recovered_8b/ara.safetensors" \
+    "text_encoders/recovered_8b/conditioning_adapter.safetensors" \
+    "text_encoders/recovered_8b/minimax_h3_recovered_8b_manifest.json"
+  # SearchingMan layout is nested; verify leaves, not component dirs.
+  remote_run wait-8b 7200 wait-weights "$recovered" 7200
+
+  # --- V2 cells (all SKUs) ---
+  local id_v2_stock id_v2_8b id_v2_cache
+  h3_matrix_cell "$sku" v2 stock streamed
+  id_v2_stock="$(tail -1 "$RUN_DIR/matrix-test-ids.txt")"
+  h3_matrix_cell "$sku" v2 recovered-8b resident-bf16
+  id_v2_8b="$(tail -1 "$RUN_DIR/matrix-test-ids.txt")"
+  h3_matrix_cell "$sku" v2 stock cache-hit
+  id_v2_cache="$(tail -1 "$RUN_DIR/matrix-test-ids.txt")"
+  h3_matrix_psnr "$id_v2_stock" "$id_v2_8b" "v2-stock-vs-8b"
+
+  if [[ "$sku" == h200 ]]; then
+    h3_matrix_cell "$sku" v2 stock resident-fp8
+    h3_matrix_cell "$sku" v2 stock resident-bf16
+
+    # Preview VSA + Dense (H200 first). Repos may need FV_H3_PREVIEW_* overrides.
+    local pvsa="$WORK/weights/h3-4step-vsa"
+    STAGE_OPTIONAL=1 remote_run fetch-preview-vsa 120 fetch "$preview_vsa_repo" "$pvsa" \
+      "transformer/*" "audio_vae/*" || true
+    if fv_ssh "$HOST" "$PORT" "test -f $pvsa/.complete"; then
+      fv_ssh "$HOST" "$PORT" "ln -sfn $v2/text_encoder $pvsa/text_encoder; ln -sfn $v2/tokenizer $pvsa/tokenizer"
+      remote_run wait-preview-vsa 7200 wait-weights "$pvsa" 7200 transformer audio_vae
+      local id_pv_stock id_pv_8b
+      h3_matrix_cell "$sku" 4step-vsa stock streamed
+      id_pv_stock="$(tail -1 "$RUN_DIR/matrix-test-ids.txt")"
+      h3_matrix_cell "$sku" 4step-vsa recovered-8b resident-bf16
+      id_pv_8b="$(tail -1 "$RUN_DIR/matrix-test-ids.txt")"
+      h3_matrix_cell "$sku" 4step-vsa stock cache-hit
+      h3_matrix_psnr "$id_pv_stock" "$id_pv_8b" "4step-vsa-stock-vs-8b"
+    else
+      log "preview VSA fetch skipped/failed — set FV_H3_PREVIEW_VSA_REPO if the Hub id differs"
+      printf 'skip\t4step-vsa\tpreview-repo-missing\n' >>"$RUN_DIR/matrix-skips.tsv"
+    fi
+
+    local pdense="$WORK/weights/h3-4step-dense"
+    STAGE_OPTIONAL=1 remote_run fetch-preview-dense 120 fetch "$preview_dense_repo" "$pdense" \
+      "transformer/*" "audio_vae/*" || true
+    if fv_ssh "$HOST" "$PORT" "test -f $pdense/.complete"; then
+      fv_ssh "$HOST" "$PORT" "ln -sfn $v2/text_encoder $pdense/text_encoder; ln -sfn $v2/tokenizer $pdense/tokenizer"
+      remote_run wait-preview-dense 7200 wait-weights "$pdense" 7200 transformer audio_vae
+      h3_matrix_cell "$sku" 4step-dense stock streamed
+    else
+      log "preview Dense fetch skipped/failed — set FV_H3_PREVIEW_DENSE_REPO if needed"
+      printf 'skip\t4step-dense\tpreview-repo-missing\n' >>"$RUN_DIR/matrix-skips.tsv"
+    fi
+  fi
+
+  # Optional second wave on 80 GB after H200 Preview is signed off.
+  if [[ "${FV_MATRIX_PREVIEW_80:-0}" == 1 && "$sku" != h200 ]]; then
+    local pvsa="$WORK/weights/h3-4step-vsa"
+    remote_run fetch-preview-vsa 120 fetch "$preview_vsa_repo" "$pvsa" "transformer/*" "audio_vae/*"
+    fv_ssh "$HOST" "$PORT" "ln -sfn $v2/text_encoder $pvsa/text_encoder; ln -sfn $v2/tokenizer $pvsa/tokenizer"
+    remote_run wait-preview-vsa 7200 wait-weights "$pvsa" 7200 transformer audio_vae
+    h3_matrix_cell "$sku" 4step-vsa stock streamed
+    h3_matrix_cell "$sku" 4step-vsa recovered-8b resident-bf16
+  fi
+
+  log "h3-matrix done for $sku; TEST_IDs:"
+  cat "$RUN_DIR/matrix-test-ids.txt" >&2 || true
+  # Allow cleanup to destroy this SKU's box.
+  KEEP=0
 }
 
 cmd_reap() {

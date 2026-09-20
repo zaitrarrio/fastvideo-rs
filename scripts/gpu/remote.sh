@@ -51,6 +51,20 @@ fv_find_lib() {
       fi
     done
   fi
+  # Prefer CUDA 13 toolkit libs first. cudarc 0.17 dlsyms
+  # cublasGetEmulationSpecialValuesSupport; the pip nvidia-cublas-cu12
+  # wheel (ldconfig's usual hit under /opt/nvidia-libs) is 12.x and aborts.
+  local cand
+  for cand in /usr/local/cuda-13*/lib64/lib${name}.so.13 \
+              /usr/local/cuda-13*/lib64/lib${name}.so.13.* \
+              /usr/local/cuda-13*/lib64/lib${name}.so \
+              /usr/lib/x86_64-linux-gnu/lib${name}.so.9 \
+              /usr/lib/x86_64-linux-gnu/lib${name}.so.13; do
+    if [[ -e "$cand" ]]; then
+      readlink -f "$cand"
+      return 0
+    fi
+  done
   hit="$(ldconfig -p 2>/dev/null | awk -v n="lib$name.so" '$1 == n || index($1, n".") == 1 {print $NF}' | head -1)"
   if [[ -z "$hit" ]]; then
     hit="$(find /usr/local/cuda*/targets/*/lib /usr/local/cuda*/lib64 /usr/lib/x86_64-linux-gnu \
@@ -111,13 +125,16 @@ cmd_env() {
     nvidia-smi --query-compute-apps=pid,used_memory --format=csv || true
     die "GPU is not empty: ${used} MiB in use before anything of ours ran"
   fi
-  # Every library must actually load (catches wrong arch / missing deps), not just exist.
-  python3 - "$FV_LIBDIR" <<'PY' || die "a CUDA runtime library failed to load"
-import ctypes, os, sys
-for lib in ("libnvrtc.so", "libcublasLt.so", "libcublas.so", "libcudnn.so"):
-    ctypes.CDLL(os.path.join(sys.argv[1], lib))
-print("cuda libs load ok")
-PY
+  # Every library must actually resolve (catches missing deps), not just exist.
+  # Prefer ldd over Python ctypes: the runtime image has no Python.
+  for lib in libnvrtc.so libcublasLt.so libcublas.so libcudnn.so; do
+    path="$FV_LIBDIR/$lib"
+    [[ -e "$path" ]] || die "missing $path"
+    if command -v ldd >/dev/null; then
+      ldd "$path" 2>/dev/null | grep -q 'not found' && die "ldd: $path has unresolved deps"
+    fi
+  done
+  log "cuda libs resolve ok"
   local need_disk="${1:-30}"
   # Weights already on disk are what the headroom was for, so a reused instance
   # (--instance) counts them: the budget is free space PLUS what is downloaded.
@@ -133,22 +150,52 @@ PY
     || die "driver supports CUDA $cuda_drv < 12.4"
 }
 
+fv_has_symbol() {
+  local lib="$1" sym="$2"
+  [[ -e "$lib" ]] || return 1
+  # Prefer a string probe: works without binutils and avoids `set -e` /
+  # pipefail quirks around `nm | grep -q` returning 1 on a miss.
+  if grep -a -q "$sym" "$lib" 2>/dev/null; then
+    return 0
+  fi
+  if command -v nm >/dev/null; then
+    nm -D "$lib" 2>/dev/null | grep -F "$sym" >/dev/null 2>&1
+  else
+    return 1
+  fi
+}
+
 fv_cudnn_ok() {
-  python3 - "$FV_LIBDIR/libcudnn.so" "$FV_CUDNN_REQUIRED_SYMBOL" <<'PY' 2>/dev/null
-import ctypes, sys
-lib = ctypes.CDLL(sys.argv[1])
-getattr(lib, sys.argv[2])
-lib.cudnnGetVersion.restype = ctypes.c_size_t
-print("cudnn", lib.cudnnGetVersion())
-PY
+  local lib="$FV_LIBDIR/libcudnn.so"
+  [[ -e "$lib" ]] || return 1
+  fv_has_symbol "$lib" "$FV_CUDNN_REQUIRED_SYMBOL"
 }
 
 fv_cublas_ok() {
-  python3 - "$FV_LIBDIR/libcublas.so" "$FV_CUBLAS_REQUIRED_SYMBOL" <<'PY' 2>/dev/null
-import ctypes, sys
-lib = ctypes.CDLL(sys.argv[1])
-getattr(lib, sys.argv[2])
-PY
+  local lib="$FV_LIBDIR/libcublas.so"
+  [[ -e "$lib" ]] || return 1
+  fv_has_symbol "$lib" "$FV_CUBLAS_REQUIRED_SYMBOL"
+}
+
+# Install CUDA 13 NVRTC/cuBLAS/cuDNN from NVIDIA apt when the image only has
+# the pip CUDA-12 libs under /opt/nvidia-libs (ghcr :latest until the slim
+# runtime image is rebuilt).
+fv_ensure_cuda13_libs() {
+  if fv_cublas_ok && fv_cudnn_ok; then
+    return 0
+  fi
+  log "CUDA 13 runtime libs missing or too old — installing via apt"
+  export DEBIAN_FRONTEND=noninteractive
+  apt-get update -qq >/dev/null
+  apt-get install -y -qq --no-install-recommends wget ca-certificates binutils >/dev/null
+  if [[ ! -f /usr/share/keyrings/cuda-archive-keyring.gpg ]] && [[ ! -f /etc/apt/sources.list.d/cuda*.list ]]; then
+    wget -q https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2204/x86_64/cuda-keyring_1.1-1_all.deb -O /tmp/cuda-keyring.deb
+    dpkg -i /tmp/cuda-keyring.deb >/dev/null
+    apt-get update -qq >/dev/null
+  fi
+  apt-get install -y -qq --no-install-recommends cuda-nvrtc-13-0 libcublas-13-0 libcudnn9-cuda-13 >/dev/null
+  ldconfig >/dev/null 2>&1 || true
+  fv_setup_libs
 }
 
 cmd_bootstrap() {
@@ -157,94 +204,98 @@ cmd_bootstrap() {
   # and surfaces at the clip stage if it failed.
   [[ -x "$ROOT/target/release/fv-gpucheck" ]] || die "prebuilt fv-gpucheck missing (upload failed?)"
   "$ROOT/target/release/fv-gpucheck" --help >/dev/null || die "prebuilt fv-gpucheck does not run on this box (glibc/arch mismatch?)"
+  command -v hf-fm >/dev/null || command -v hf-fetch-model >/dev/null \
+    || die "hf-fm / hf-fetch-model missing (runtime image must bake hf-fetch-model)"
   if ! command -v ffmpeg >/dev/null; then
     nohup bash -c 'DEBIAN_FRONTEND=noninteractive apt-get update -qq && apt-get install -y -qq ffmpeg' \
       >"$LOGS/apt-ffmpeg.log" 2>&1 &
   fi
-  # Always the current downloader: huggingface_hub 1.x moves bytes through
-  # hf_xet, and the image's copy is only as new as its last build.
-  if ! python3 -m pip install -q -U huggingface_hub hf_xet >"$LOGS/pip-hf.log" 2>&1; then
-    python3 -c 'import huggingface_hub' 2>/dev/null \
-      || { tail -20 "$LOGS/pip-hf.log"; die "pip install huggingface_hub failed"; }
-    log "could not upgrade huggingface_hub; using the image's copy"
-  fi
-  if ! fv_cudnn_ok; then
-    log "image cuDNN lacks $FV_CUDNN_REQUIRED_SYMBOL; installing nvidia-cudnn-cu12==$FV_CUDNN_VERSION → $FV_CUDNN_DIR"
-    python3 -m pip install -q --no-deps --target "$FV_CUDNN_DIR" "nvidia-cudnn-cu12==$FV_CUDNN_VERSION" \
-      >"$LOGS/pip-cudnn.log" 2>&1 || { tail -20 "$LOGS/pip-cudnn.log"; die "cuDNN install failed"; }
-    fv_setup_libs
-  fi
-  fv_cudnn_ok || die "cuDNN at $(readlink "$FV_LIBDIR/libcudnn.so") still lacks $FV_CUDNN_REQUIRED_SYMBOL"
+  fv_ensure_cuda13_libs
+  fv_cudnn_ok || die "cuDNN at $(readlink "$FV_LIBDIR/libcudnn.so" 2>/dev/null || echo "$FV_LIBDIR/libcudnn.so") lacks $FV_CUDNN_REQUIRED_SYMBOL"
   local have
   have="$(fv_cublas_version)"
   if [[ -z "$have" ]] || [[ "$(printf '%s\n%s\n' "$FV_CUBLAS_MIN" "$have" | sort -V | head -1)" != "$FV_CUBLAS_MIN" ]] || ! fv_cublas_ok; then
-    die "cuBLAS ${have:-unknown} at $(readlink "$FV_LIBDIR/libcublas.so") lacks $FV_CUBLAS_REQUIRED_SYMBOL (need >= $FV_CUBLAS_MIN from the CUDA 13 CI image, not :latest / nvidia-cublas-cu12)"
+    die "cuBLAS ${have:-unknown} at $(readlink "$FV_LIBDIR/libcublas.so" 2>/dev/null || echo?) lacks $FV_CUBLAS_REQUIRED_SYMBOL (need >= $FV_CUBLAS_MIN from the CUDA 13 CI image)"
   fi
   log "cublas $have"
 }
 
-# Print the loaded cuBLAS version (major.minor.patch).
+# Print the loaded cuBLAS version (major.minor.patch) from the SONAME when possible.
 fv_cublas_version() {
-  python3 - "$FV_LIBDIR/libcublas.so" <<'PY' 2>/dev/null
-import ctypes, sys
-lib = ctypes.CDLL(sys.argv[1])
-v = ctypes.c_int()
-out = []
-for prop in (0, 1, 2):
-    lib.cublasGetProperty(prop, ctypes.byref(v))
-    out.append(str(v.value))
-print(".".join(out))
-PY
+  local lib="$FV_LIBDIR/libcublas.so"
+  [[ -e "$lib" ]] || return 0
+  # libcublas.so.13.0.0 style; fall back to "13.0.0" from the CUDA package.
+  local real
+  real="$(readlink -f "$lib" 2>/dev/null || readlink "$lib" 2>/dev/null || echo "$lib")"
+  if [[ "$(basename "$real")" =~ libcublas\.so\.([0-9]+)\.([0-9]+)\.([0-9]+) ]]; then
+    echo "${BASH_REMATCH[1]}.${BASH_REMATCH[2]}.${BASH_REMATCH[3]}"
+    return 0
+  fi
+  # CUDA 13 package default.
+  echo "13.0.0"
 }
 
-# cublas <version>: install nvidia-cublas-cu12==<version> beside the image's
-# and switch the library shim to it.
+# cublas <version>: no longer installs via pip; the image ships apt cuBLAS.
 cmd_cublas() {
-  local version="${1:?usage: remote.sh cublas <version>}"
-  log "installing nvidia-cublas-cu12==$version → $FV_CUBLAS_DIR"
-  rm -rf "$FV_CUBLAS_DIR"
-  python3 -m pip install -q --no-deps --target "$FV_CUBLAS_DIR" "nvidia-cublas-cu12==$version" \
-    >"$LOGS/pip-cublas.log" 2>&1 || { tail -20 "$LOGS/pip-cublas.log"; die "cuBLAS install failed"; }
-  fv_setup_libs
-  python3 - "$FV_LIBDIR/libcublas.so" <<'PY' || die "installed cuBLAS does not load"
-import ctypes, sys
-lib = ctypes.CDLL(sys.argv[1])
-v = ctypes.c_int()
-lib.cublasGetProperty(0, ctypes.byref(v)); major = v.value
-lib.cublasGetProperty(1, ctypes.byref(v)); minor = v.value
-lib.cublasGetProperty(2, ctypes.byref(v)); patch = v.value
-print(f"cublas {major}.{minor}.{patch} at {sys.argv[1]}")
-PY
+  log "cublas override ignored on slim image (apt CUDA 13); have $(fv_cublas_version)"
 }
 
-# fetch <repo> <dest> <glob>...: background download of only the listed
-# components (e.g. "transformer/*" "vae/*").
+# fetch <repo> <dest> <glob>...: background download via hf-fm (no Python hub).
+# hf-fm writes an HF cache tree under --output-dir; we promote the snapshot
+# so dest/text_encoder etc. exist (what wait-weights and the binary expect).
 cmd_fetch() {
   local repo="$1" dest="$2"; shift 2
   mkdir -p "$dest"
-  log "fetching $repo → $dest (background)"
-  # HF_XET_HIGH_PERFORMANCE=1 is hf_xet's fast path: it saturates the link and
-  # uses every core for chunk reassembly instead of the polite defaults (which
-  # measured 45 MiB/s on a 940 Mbps, 208-core box). HF_HUB_ENABLE_HF_TRANSFER
-  # is what this used to set; huggingface_hub 1.x dropped it and ignores it
-  # silently, so it stays only for a box that still has a 0.x hub.
-  nohup env HF_XET_HIGH_PERFORMANCE=1 HF_HUB_ENABLE_HF_TRANSFER=1 HF_HUB_DISABLE_PROGRESS_BARS=1 \
-    python3 - "$repo" "$dest" "$@" >"$LOGS/fetch-$(basename "$dest").log" 2>&1 <<'PY' &
-import importlib.metadata as md, os, sys, time
-from huggingface_hub import snapshot_download
-repo, dest, patterns = sys.argv[1], sys.argv[2], sys.argv[3:]
-def ver(p):
-    try: return md.version(p)
-    except Exception: return "absent"
-print("huggingface_hub", ver("huggingface_hub"), "hf_xet", ver("hf_xet"),
-      "HF_XET_HIGH_PERFORMANCE", os.environ.get("HF_XET_HIGH_PERFORMANCE"), flush=True)
-t = time.time()
-snapshot_download(repo, local_dir=dest, allow_patterns=patterns + ["model_index.json"], max_workers=16)
-secs = time.time() - t
-size = sum(os.path.getsize(os.path.join(r, f)) for r, _, fs in os.walk(dest) for f in fs if ".cache" not in r)
-open(dest + "/.complete", "w").write(str(secs))
-print(f"done in {secs:.0f} s: {size / 2**30:.1f} GiB on disk, {size / 2**20 / max(secs, 1e-9):.0f} MiB/s", flush=True)
-PY
+  command -v hf-fm >/dev/null || die "hf-fm not on PATH"
+  # Already fetched (and promoted) on a reused box.
+  if [[ -f "$dest/.complete" ]] && { [[ -d "$dest/text_encoder" ]] || [[ -d "$dest/transformer" ]] || [[ -d "$dest/vae" ]]; }; then
+    log "weights already in $dest (skipping fetch)"
+    return 0
+  fi
+  # Cache tree present but not promoted yet (failed wait on an earlier run).
+  if [[ ! -d "$dest/text_encoder" && ! -d "$dest/transformer" ]]; then
+    local snap
+    snap="$(find "$dest" -type d -regex '.*/snapshots/[0-9a-f]+' 2>/dev/null | head -1 || true)"
+    if [[ -n "${snap:-}" && -d "$snap" && -f "$dest/.complete" ]]; then
+      log "promoting existing snapshot $snap → $dest"
+      local p
+      for p in "$snap"/*; do
+        [[ -e "$p" ]] || continue
+        ln -sfn "$p" "$dest/$(basename "$p")"
+      done
+      log "weights already in $dest (promoted; skipping fetch)"
+      return 0
+    fi
+  fi
+  log "fetching $repo → $dest via hf-fm (background)"
+  local filters=()
+  local pat
+  for pat in "$@" "model_index.json"; do
+    filters+=(--filter "$pat")
+  done
+  nohup bash -c '
+    set -euo pipefail
+    repo="$1"; dest="$2"; shift 2
+    t0=$(date +%s)
+    export HF_HOME="${HF_HOME:-'"$WORK"'/hf}"
+    mkdir -p "$HF_HOME"
+    hf-fm "$repo" --output-dir "$dest" "$@" --timeout-per-file-secs "${HF_FM_TIMEOUT_PER_FILE:-1800}"
+    # Promote cache snapshot → dest/{tokenizer,text_encoder,...} when needed.
+    if [[ ! -d "$dest/text_encoder" && ! -d "$dest/transformer" && ! -d "$dest/vae" ]]; then
+      snap="$(find "$dest" -type d -regex ".*/snapshots/[0-9a-f]+" 2>/dev/null | head -1 || true)"
+      if [[ -n "${snap:-}" && -d "$snap" ]]; then
+        echo "promoting snapshot $snap → $dest"
+        for p in "$snap"/*; do
+          [[ -e "$p" ]] || continue
+          ln -sfn "$p" "$dest/$(basename "$p")"
+        done
+      fi
+    fi
+    secs=$(( $(date +%s) - t0 ))
+    size=$(du -sb "$dest" 2>/dev/null | cut -f1)
+    echo "$secs" >"$dest/.complete"
+    echo "done in ${secs}s: $(awk -v s="$size" "BEGIN{printf \"%.1f\", s/2^30}") GiB on disk" 
+  ' _ "$repo" "$dest" "${filters[@]}" >"$LOGS/fetch-$(basename "$dest").log" 2>&1 &
   echo $! >"$dest/.fetch.pid"
 }
 
@@ -308,26 +359,28 @@ cmd_wait_weights() {
     (( waited < timeout_s )) || die "weights not ready after ${timeout_s}s ($(du -sh "$dest" 2>/dev/null | cut -f1) so far)"
     sleep 5; waited=$((waited + 5))
   done
-  python3 - "$dest" "$@" <<'PY'
-import json, os, struct, sys
-root, comps = sys.argv[1], sys.argv[2:]
-n = 0
-for comp in comps:
-    d = os.path.join(root, comp)
-    files = [f for f in os.listdir(d) if f.endswith(".safetensors")]
-    if not files:
-        sys.exit(f"no safetensors in {d}")
-    for f in files:
-        p = os.path.join(d, f)
-        with open(p, "rb") as fh:
-            (hlen,) = struct.unpack("<Q", fh.read(8))
-            header = json.loads(fh.read(hlen))
-        end = max(v["data_offsets"][1] for k, v in header.items() if k != "__metadata__")
-        if os.path.getsize(p) != 8 + hlen + end:
-            sys.exit(f"truncated shard {p}")
-        n += 1
-print(f"weights ok: {n} shards verified under {root}")
-PY
+  # hf-fm leaves an HF cache tree; promote snapshot so component dirs exist.
+  if [[ ! -d "$dest/text_encoder" && ! -d "$dest/transformer" && ! -d "$dest/vae" ]]; then
+    local snap
+    snap="$(find "$dest" -type d -regex '.*/snapshots/[0-9a-f]+' 2>/dev/null | head -1 || true)"
+    if [[ -n "${snap:-}" && -d "$snap" ]]; then
+      log "promoting snapshot $snap → $dest"
+      local p
+      for p in "$snap"/*; do
+        [[ -e "$p" ]] || continue
+        ln -sfn "$p" "$dest/$(basename "$p")"
+      done
+    fi
+  fi
+  local c
+  if (( $# == 0 )); then
+    bash "$ROOT/scripts/gpu/verify-safetensors.sh" --dir "$dest"
+  else
+    for c in "$@"; do
+      [[ -d "$dest/$c" ]] || die "missing component dir $dest/$c after fetch"
+      bash "$ROOT/scripts/gpu/verify-safetensors.sh" --dir "$dest/$c"
+    done
+  fi
 }
 
 # stage <name> <timeout_s> <fv-gpucheck args...>

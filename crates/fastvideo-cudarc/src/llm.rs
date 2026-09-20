@@ -24,6 +24,119 @@ fn msg(s: impl Into<String>) -> TensorError {
     TensorError::Message(s.into())
 }
 
+/// `W += scale * lora_up @ lora_down` with Comfy shapes `lora_down: [r, in]`,
+/// `lora_up: [out, r]`. Host-only; used by SearchingMan ARA and unit tests.
+pub fn merge_comfy_lora_into(
+    weight: &mut [f32],
+    ara: &WeightMap,
+    base: &str,
+    out_dim: usize,
+    in_dim: usize,
+    scale: f32,
+) -> Result<()> {
+    if weight.len() != out_dim * in_dim {
+        return Err(msg(format!("lora merge: {} elements for [{out_dim}, {in_dim}]", weight.len())));
+    }
+    let down_key = format!("{base}.lora_down.weight");
+    let up_key = format!("{base}.lora_up.weight");
+    let lazy = ara.lazy().ok_or_else(|| msg("ara map is not lazy"))?;
+    let d = lazy.view(&down_key).map_err(|e| msg(e.to_string()))?;
+    let u = lazy.view(&up_key).map_err(|e| msg(e.to_string()))?;
+    if d.shape.len() != 2 || u.shape.len() != 2 {
+        return Err(msg(format!("{base}: lora tensors must be rank-2")));
+    }
+    let (r, in_a) = (d.shape[0], d.shape[1]);
+    let (out_b, r_b) = (u.shape[0], u.shape[1]);
+    if in_a != in_dim || out_b != out_dim || r != r_b {
+        return Err(msg(format!(
+            "{base}: lora shapes down {:?} up {:?} vs weight [{out_dim}, {in_dim}]",
+            d.shape, u.shape
+        )));
+    }
+    let down = cuda_tensor_shaped(ara, &down_key, &[r, in_dim])?.host_cow()?.into_owned();
+    let up = cuda_tensor_shaped(ara, &up_key, &[out_dim, r])?.host_cow()?.into_owned();
+    merge_comfy_lora_host(weight, &down, &up, out_dim, in_dim, r, scale);
+    Ok(())
+}
+
+/// Host fold: `W[out, in] += scale * up[out, r] @ down[r, in]`.
+pub fn merge_comfy_lora_host(
+    weight: &mut [f32],
+    down: &[f32],
+    up: &[f32],
+    out_dim: usize,
+    in_dim: usize,
+    rank: usize,
+    scale: f32,
+) {
+    debug_assert_eq!(weight.len(), out_dim * in_dim);
+    debug_assert_eq!(down.len(), rank * in_dim);
+    debug_assert_eq!(up.len(), out_dim * rank);
+    for o in 0..out_dim {
+        for i in 0..in_dim {
+            let mut acc = 0f32;
+            for k in 0..rank {
+                acc += up[o * rank + k] * down[k * in_dim + i];
+            }
+            weight[o * in_dim + i] += scale * acc;
+        }
+    }
+}
+
+/// Conditioning adapter host math: `proj(RMSNorm(x)) + up(silu(down(RMSNorm(x))))`.
+pub fn conditioning_adapter_host(
+    x: &[f32],
+    seq: usize,
+    hidden: usize,
+    out: usize,
+    bottleneck: usize,
+    norm: &[f32],
+    proj: &[f32],
+    down: &[f32],
+    up: &[f32],
+    eps: f32,
+) -> Vec<f32> {
+    debug_assert_eq!(x.len(), seq * hidden);
+    debug_assert_eq!(norm.len(), hidden);
+    debug_assert_eq!(proj.len(), out * hidden);
+    debug_assert_eq!(down.len(), bottleneck * hidden);
+    debug_assert_eq!(up.len(), out * bottleneck);
+    let mut y = vec![0f32; seq * out];
+    for s in 0..seq {
+        let row = &x[s * hidden..(s + 1) * hidden];
+        let mut mean_sq = 0f32;
+        for &v in row {
+            mean_sq += v * v;
+        }
+        mean_sq /= hidden as f32;
+        let inv = 1.0 / (mean_sq + eps).sqrt();
+        let mut xn = vec![0f32; hidden];
+        for i in 0..hidden {
+            xn[i] = row[i] * inv * norm[i];
+        }
+        let mut bottleneck_act = vec![0f32; bottleneck];
+        for b in 0..bottleneck {
+            let mut acc = 0f32;
+            for i in 0..hidden {
+                acc += down[b * hidden + i] * xn[i];
+            }
+            bottleneck_act[b] = acc / (1.0 + (-acc).exp()); // silu
+        }
+        for o in 0..out {
+            let mut direct = 0f32;
+            for i in 0..hidden {
+                direct += proj[o * hidden + i] * xn[i];
+            }
+            let mut residual = 0f32;
+            for b in 0..bottleneck {
+                residual += up[o * bottleneck + b] * bottleneck_act[b];
+            }
+            y[s * out + o] = direct + residual;
+        }
+    }
+    y
+}
+
 /// How a decoder's linear weights rest on the device.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum WeightPrecision {
@@ -114,6 +227,33 @@ impl DecoderConfig {
         }
     }
 
+    /// Text half of Qwen3-VL-8B as packaged by SearchingMan's recovered_8b
+    /// release: 24 language layers, hidden 4096, keys under `model.layers`
+    /// (no `language_model.` prefix). Tap 24 is the un-normed residual after
+    /// layer 23; a 4096→5120 conditioning adapter then matches the DiT.
+    pub fn qwen3_vl_8b_text() -> Self {
+        let head_dim = 128;
+        Self {
+            vocab: 151_936,
+            hidden: 4096,
+            heads: 32,
+            kv_heads: 8,
+            head_dim,
+            intermediate: 12288,
+            rms_eps: 1e-6,
+            norm_offset: 0.0,
+            act: Act::Silu,
+            qk_norm: true,
+            sandwich_norms: false,
+            embed_scale: 1.0,
+            attn_scale: (head_dim as f32).powf(-0.5),
+            layers: vec![LayerAttn { rope_theta: 5_000_000.0, rope_factor: 1.0, window: None }; 24],
+            layer_prefix: "model.layers".into(),
+            embed_key: "model.embed_tokens.weight".into(),
+            final_norm_key: "model.norm.weight".into(),
+        }
+    }
+
     /// The text half of Gemma-3-12B: five sliding-window layers (1024 tokens,
     /// rotary base 1e4) then one global layer (base 1e6, positions / 8).
     pub fn gemma3_12b_text() -> Self {
@@ -175,26 +315,6 @@ fn norm_from(w: CudaTensor, offset: f32) -> Result<CudaTensor> {
     Ok(w)
 }
 
-struct Layer {
-    q: Linear,
-    k: Linear,
-    v: Linear,
-    o: Linear,
-    gate: Linear,
-    up: Linear,
-    down: Linear,
-    q_norm: Option<CudaTensor>,
-    k_norm: Option<CudaTensor>,
-    /// Before attention.
-    norm_attn_in: CudaTensor,
-    /// After attention, before its residual add (sandwich norms only).
-    norm_attn_out: Option<CudaTensor>,
-    /// Before the MLP.
-    norm_mlp_in: CudaTensor,
-    /// After the MLP, before its residual add (sandwich norms only).
-    norm_mlp_out: Option<CudaTensor>,
-}
-
 /// The seven projections of a layer: key suffix, input width, output width.
 fn linear_specs(cfg: &DecoderConfig) -> [(&'static str, usize, usize); 7] {
     let (h, d) = (cfg.hidden, cfg.head_dim);
@@ -225,6 +345,26 @@ fn norm_specs(cfg: &DecoderConfig) -> Vec<(&'static str, usize)> {
     v
 }
 
+pub(crate) struct Layer {
+    q: Linear,
+    k: Linear,
+    v: Linear,
+    o: Linear,
+    gate: Linear,
+    up: Linear,
+    down: Linear,
+    q_norm: Option<CudaTensor>,
+    k_norm: Option<CudaTensor>,
+    /// Before attention.
+    norm_attn_in: CudaTensor,
+    /// After attention, before its residual add (sandwich norms only).
+    norm_attn_out: Option<CudaTensor>,
+    /// Before the MLP.
+    norm_mlp_in: CudaTensor,
+    /// After the MLP, before its residual add (sandwich norms only).
+    norm_mlp_out: Option<CudaTensor>,
+}
+
 impl Layer {
     fn load(map: &WeightMap, cfg: &DecoderConfig, index: usize, precision: WeightPrecision) -> Result<Self> {
         let p = format!("{}.{index}", cfg.layer_prefix);
@@ -241,7 +381,7 @@ impl Layer {
     /// One layer from wherever its parts come from: the checkpoint directly, or
     /// a layer the prefetcher already staged. Both go through here so the two
     /// cannot disagree on which key feeds which slot.
-    fn assemble(
+    pub(crate) fn assemble(
         cfg: &DecoderConfig,
         lin: &mut dyn FnMut(&str, usize, usize) -> Result<Linear>,
         norm: &mut dyn FnMut(&str, usize) -> Result<CudaTensor>,
@@ -471,7 +611,14 @@ fn encode<S: LayerSource>(
         }
     }
     if last == n {
-        x = x.rms_norm(&source.final_norm()?, cfg.rms_eps)?;
+        // Tap `num_layers` is normally post-final-norm (HF). SearchingMan's
+        // recovered-8B tap-24 is the *un-normed* residual after the last
+        // block — `load_with_comfy_lora` leaves final_norm unloaded so we
+        // keep x as-is when the norm is not resident.
+        match source.final_norm() {
+            Ok(norm) => x = x.rms_norm(&norm, cfg.rms_eps)?,
+            Err(_) => {}
+        }
     }
     keep(last, &x);
     out.into_iter()
@@ -715,6 +862,54 @@ impl ResidentDecoder {
     /// original shards or a slim rewrite — since both go through `Linear::load`.
     pub fn load(map: &WeightMap, cfg: &DecoderConfig, layers: usize) -> Result<Self> {
         Self::load_with(map, cfg, layers, WeightPrecision::Native)
+    }
+
+    /// [`Self::load_with`] merging Comfy-style LoRA adapters (`lora_down` /
+    /// `lora_up`, scale = `alpha / rank`) into the listed layers before the
+    /// linear is pinned. SearchingMan ARA uses this shape on layers 16..=23.
+    pub fn load_with_comfy_lora(
+        map: &WeightMap,
+        ara: &WeightMap,
+        cfg: &DecoderConfig,
+        layers: usize,
+        lora_layers: &[usize],
+        suffixes: &[&str],
+        alpha: f32,
+        rank: usize,
+    ) -> Result<Self> {
+        let n = cfg.num_layers();
+        if layers == 0 || layers > n {
+            return Err(msg(format!("llm: {layers} resident layers of a {n}-layer model")));
+        }
+        let scale = alpha / rank as f32;
+        let mut loaded = Vec::with_capacity(layers);
+        for i in 0..layers {
+            let p = format!("{}.{i}", cfg.layer_prefix);
+            let apply = lora_layers.contains(&i);
+            let layer = Layer::assemble(
+                cfg,
+                &mut |name, in_dim, out_dim| {
+                    let key = format!("{p}.{name}");
+                    let wt = cuda_tensor_shaped(map, &format!("{key}.weight"), &[out_dim, in_dim])?;
+                    let mut w = wt.host_cow()?.into_owned();
+                    if apply && suffixes.iter().any(|s| *s == name) {
+                        let base = format!("layers.{i}.{name}");
+                        merge_comfy_lora_into(&mut w, ara, &base, out_dim, in_dim, scale)?;
+                    }
+                    Linear::from_tensors(CudaTensor::from_vec(w, vec![out_dim, in_dim])?, None)
+                },
+                &mut |name, width| norm_weight(map, &format!("{p}.{name}.weight"), width, cfg.norm_offset),
+            )?;
+            loaded.push(layer);
+            crate::wan::log::info(format_args!("llm resident layer {}/{layers}", i + 1));
+        }
+        Ok(Self {
+            cfg: cfg.clone(),
+            layers: loaded,
+            final_norm: None,
+            embed: EmbedTable::load(map, cfg)?,
+            precision: WeightPrecision::Native,
+        })
     }
 
     /// [`Self::load`] with the linear weights held at `precision`. Norms, the
