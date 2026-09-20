@@ -10,7 +10,7 @@ Project code: FVID
 - Reversibility: cheap — `FFN_ROW_CHUNK` remains the fallback
 - Executed by: Executor
 - ADR: none
-- Verification: pending (host H3 transformer tests, then Max-Q `--profile --warm` + TAEH3)
+- Verification: host tests pass. Same Max-Q machine 103044 `20260920T102145Z-h3-gen`: warm denoise **125.9 s** vs 123.5–125.5. FFN still 38.1 s — `h3_ffn_in` 20.6 s, `h3_ffn_out` 10.5 s, **`h3_ffn_act` 7.0 s**. Peak 82 GiB unchanged. **Wash** on wall time; act is the only new slice worth a kernel.
 
 ### FVID · 2026-09-20 · FVID-2026-09-20-fused-qkvg-next
 - Trigger: "commit and push then continue with next strategy" after TMA measured as noise on 5s H3
