@@ -1,0 +1,23 @@
+---
+description: Stream remote job logs (Vast, Runpod, CI GPU boxes) into chat without waiting to be asked
+alwaysApply: true
+---
+
+# Remote job logs
+
+When you start or inherit a **remote** process — Vast, Runpod, a rented build box, `validate.sh run`, `build-remote`, or any long ssh/GPU job — **show the logs in chat as they happen**. Do not wait for "show me logs."
+
+- Paste driver output as soon as the job starts (offer, instance, ssh, image, env).
+- Keep posting until the job ends: stage start/ok/fail, step timings, errors, panics, pass/fail, cost.
+- Skip high-frequency spam (`block 12/50`, per-layer load). Keep the lines that say where time or money went.
+- Watch the driver terminal (and remote `*.log` once ssh works). Re-arm a short wake so the next step lands in chat, not only in a file.
+- On failure, paste the fatal lines in the same turn you say it failed.
+
+```
+# ❌ BAD
+Started h3-gen on a 6000. I'll report when it finishes.
+
+# ✅ GOOD
+[22:42:24] ▶ gen --profile --warm
+[fastvideo] h3 step 3/8: 31.4s
+```

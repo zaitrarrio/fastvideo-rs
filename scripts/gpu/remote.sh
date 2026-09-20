@@ -30,17 +30,26 @@ FV_CUDNN_REQUIRED_SYMBOL="cudnnBackendPopulateCudaGraph"
 # it replaces the image's for every later stage on this box.
 FV_CUBLAS_DIR="$WORK/fv-cublas"
 # Minimum cuBLAS: older builds lack Blackwell kernels (generic FP32 only).
-FV_CUBLAS_MIN="${FV_CUBLAS_MIN:-12.9.1}"
+# cudarc 0.17 also dlsyms CUDA-13 entry points (`cublasGetEmulationSpecialValuesSupport`);
+# 12.9.1 loads and then aborts. The CI image ships libcublas 13.1.1 — do not
+# "upgrade" a 12.9 image with nvidia-cublas-cu12; that wheel still lacks the symbol.
+FV_CUBLAS_MIN="${FV_CUBLAS_MIN:-13.0.0}"
 FV_CUBLAS_VERSION="${FV_CUBLAS_VERSION:-12.9.1.4}"
+FV_CUBLAS_REQUIRED_SYMBOL="${FV_CUBLAS_REQUIRED_SYMBOL:-cublasGetEmulationSpecialValuesSupport}"
 fv_find_lib() {
   local name="$1" hit=""
   if [[ "$name" == cudnn && -e "$FV_CUDNN_DIR/nvidia/cudnn/lib/libcudnn.so.9" ]]; then
     readlink -f "$FV_CUDNN_DIR/nvidia/cudnn/lib/libcudnn.so.9"
     return 0
   fi
-  if [[ "$name" == cublas* && -e "$FV_CUBLAS_DIR/nvidia/cublas/lib/lib$name.so.12" ]]; then
-    readlink -f "$FV_CUBLAS_DIR/nvidia/cublas/lib/lib$name.so.12"
-    return 0
+  if [[ "$name" == cublas* ]]; then
+    local pip
+    for pip in "$FV_CUBLAS_DIR/nvidia/cublas/lib/lib$name.so.13" "$FV_CUBLAS_DIR/nvidia/cublas/lib/lib$name.so.12"; do
+      if [[ -e "$pip" ]]; then
+        readlink -f "$pip"
+        return 0
+      fi
+    done
   fi
   hit="$(ldconfig -p 2>/dev/null | awk -v n="lib$name.so" '$1 == n || index($1, n".") == 1 {print $NF}' | head -1)"
   if [[ -z "$hit" ]]; then
@@ -134,6 +143,14 @@ print("cudnn", lib.cudnnGetVersion())
 PY
 }
 
+fv_cublas_ok() {
+  python3 - "$FV_LIBDIR/libcublas.so" "$FV_CUBLAS_REQUIRED_SYMBOL" <<'PY' 2>/dev/null
+import ctypes, sys
+lib = ctypes.CDLL(sys.argv[1])
+getattr(lib, sys.argv[2])
+PY
+}
+
 cmd_bootstrap() {
   # The binary arrives prebuilt (scripts/gpu/docker.sh dist); only runtime
   # helpers are installed here. ffmpeg (mp4 mux) installs in the background
@@ -160,11 +177,10 @@ cmd_bootstrap() {
   fv_cudnn_ok || die "cuDNN at $(readlink "$FV_LIBDIR/libcudnn.so") still lacks $FV_CUDNN_REQUIRED_SYMBOL"
   local have
   have="$(fv_cublas_version)"
-  if [[ -z "$have" ]] || [[ "$(printf '%s\n%s\n' "$FV_CUBLAS_MIN" "$have" | sort -V | head -1)" != "$FV_CUBLAS_MIN" ]]; then
-    log "image cuBLAS ${have:-unknown} < $FV_CUBLAS_MIN"
-    cmd_cublas "$FV_CUBLAS_VERSION"
+  if [[ -z "$have" ]] || [[ "$(printf '%s\n%s\n' "$FV_CUBLAS_MIN" "$have" | sort -V | head -1)" != "$FV_CUBLAS_MIN" ]] || ! fv_cublas_ok; then
+    die "cuBLAS ${have:-unknown} at $(readlink "$FV_LIBDIR/libcublas.so") lacks $FV_CUBLAS_REQUIRED_SYMBOL (need >= $FV_CUBLAS_MIN from the CUDA 13 CI image, not :latest / nvidia-cublas-cu12)"
   fi
-  log "cublas $(fv_cublas_version)"
+  log "cublas $have"
 }
 
 # Print the loaded cuBLAS version (major.minor.patch).

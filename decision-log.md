@@ -2,6 +2,26 @@
 
 Project code: FVID
 
+### FVID · 2026-09-19 · FVID-2026-09-19-h3-profile-next
+- Trigger: "proceed" after the H3 `--profile` gen on an RTX PRO 6000 WS (`20260919T223558Z-h3-gen`). Block: attn 62%, FFN 31%. VSA: MMA 78%, prefix_dense 17%. QKVG four-way even.
+- Options: split-softmax / persistent prefix; fused QKVG; FFN fusion; Blackwell UMMA on `vsa_h3_3_mma`; TAEH3 A/B (already coded)
+- Decision: **TAEH3 warm A/B first** (no `--profile`, same prompt/seed as the official 22.9 s decode). Then MMA for sm_120. Park split-softmax. Bootstrap fails if cuBLAS lacks `cublasGetEmulationSpecialValuesSupport` instead of aborting in `dlsym`.
+- Reason: decode is 19% of E2E and the flag already exists; prefix is 5% of denoise; MMA is the VSA term we own
+- Reversibility: cheap — TAEH3 is opt-in; the symbol check only refuses a known-bad `:latest`
+- Executed by: Executor
+- ADR: none
+- Verification: same Max-Q, no `--profile`. Official (`20260919T225958Z-h3-gen`): warm decode **28.97 s**, denoise 124.7 s, E2E 154.2 s. TAEH3 (`20260919T231221Z-h3-gen`): warm decode **0.98 s** (~30×), denoise 125.0 s, E2E 126.6 s. Clip `artifacts/clips/20260919T231221Z-h3-gen/h3-taeh3.mp4`.
+
+### FVID · 2026-09-19 · FVID-2026-09-19-remote-job-logs
+- Trigger: "make a note to always show logs for remote processes including Vast and Runpod jobs" after an H3 profile rental where logs only appeared when asked
+- Options: wait until asked; stream driver logs into chat for the life of the job
+- Decision: **always paste remote-job logs in chat** (Vast, Runpod, rented build boxes, `validate.sh` / `build-remote`). Stage lines and step timings; skip per-block spam
+- Reason: billed GPU time is invisible if the only output is a terminal file
+- Reversibility: cheap — drop `.cursor/rules/remote-job-logs.mdc`
+- Executed by: Executor
+- ADR: none
+- Verification: rule file present; H3 profile watcher still posting step lines
+
 ### FVID · 2026-09-19 · FVID-2026-09-19-taeh3-opt-in
 - Trigger: "yes, let's implement taeh3" after the TensorRT-vs-TAEH3 recommendation for H3 decode (22.9 s / 19% of a warm clip)
 - Options: TAEH3 opt-in (quality trade, same family as Wan TAEHV); TensorRT on the official ViT (~1.5× decode, new runtime); leave the official decoder
@@ -10,7 +30,7 @@ Project code: FVID
 - Reversibility: cheap — unset the flag and the official decoder loads
 - Executed by: Executor
 - ADR: none
-- Verification: host tests green (`cargo test -p fastvideo-cudarc --lib taehv`: 13 passed, including wrap 37→124 / 72→243 / 107→362 and 2 latents → 5 frames at 16×). No GPU clip yet.
+- Verification: host tests green (`cargo test -p fastvideo-cudarc --lib taehv`: 13 passed). GPU A/B on Max-Q: TAEH3 warm decode **0.98 s** vs official **28.97 s**; denoise unchanged (~125 s); clip not flat (std 0.28).
 
 ### FVID · 2026-09-19 · FVID-2026-09-19-text-plan-measured
 - Trigger: "lets run" — the text-encoding plan (oracle cache, conditioning cache + slim checkpoints, resident encoders, FP8 rows, prefetch) had only been checked on the host. All on RTX PRO 6000 96GB (user's choice; the one A100 80GB offer never booted, and 80 GB cannot hold H3 + a resident encoder or a float32 LTX-2 reference).

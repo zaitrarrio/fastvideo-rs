@@ -758,16 +758,20 @@ cmd_run() {
       local repo="${FV_H3_REPO:-FastVideo/FastVideo-FastH3-8-Step-V2}" wdir="$WORK/weights/h3"
       # Qwen3-VL shards 12-14 hold layers past the tap, the final norm, the LM
       # head and the vision tower: never read, so never fetched.
-      local vae_globs=("vae/*") vae_wait=(vae)
-      if [[ "${FV_TAEH3:-0}" == 1 ]]; then
-        vae_globs=(); vae_wait=()
+      # Bash 3.2 + set -u treats "${empty[@]}" as unbound; do not empty the
+      # arrays and expand them — omit the official VAE glob instead.
+      local fetch_h3=(fetch "$repo" "$wdir" "tokenizer/*" "text_encoder/*.json"
+        "text_encoder/model-0000[1-9]-of-00014.safetensors" "text_encoder/model-0001[01]-of-00014.safetensors"
+        "transformer/*" "audio_vae/*")
+      local wait_h3=(wait-weights "$wdir" 7200 text_encoder transformer audio_vae)
+      if [[ "${FV_TAEH3:-0}" != 1 ]]; then
+        fetch_h3+=("vae/*")
+        wait_h3+=(vae)
       fi
-      remote_run fetch-h3 120 fetch "$repo" "$wdir" "tokenizer/*" "text_encoder/*.json" \
-        "text_encoder/model-0000[1-9]-of-00014.safetensors" "text_encoder/model-0001[01]-of-00014.safetensors" \
-        "transformer/*" "${vae_globs[@]}" "audio_vae/*"
+      remote_run fetch-h3 120 "${fetch_h3[@]}"
       local taeh3_dir="$WORK/taeh3"
       if [[ "${FV_TAEH3:-0}" == 1 ]]; then remote_run fetch-taeh3 300 fetch-taeh3 "$taeh3_dir"; fi
-      remote_run wait-h3 7200 wait-weights "$wdir" 7200 text_encoder transformer "${vae_wait[@]}" audio_vae
+      remote_run wait-h3 7200 "${wait_h3[@]}"
       local h3gen=(--mode fast h3 gen --weights "$wdir" --prompt "$prompt" --seconds "${FV_SECONDS:-5}"
         --seed "${FV_SEED:-1024}" --adaln-cache "$WORK/h3-adaln.cache")
       # --profile is a global flag: each DiT/VSA phase synchronizes, so this
