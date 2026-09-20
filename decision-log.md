@@ -10,7 +10,7 @@ Project code: FVID
 - Reversibility: cheap — FeedForward can go back to `narrow` + `silu` + `mul`
 - Executed by: Executor
 - ADR: none
-- Verification: pending (host H3 transformer tests, then Max-Q `--profile --warm` + TAEH3)
+- Verification: host tests pass. Max-Q machine 147132 `20260920T104313Z-h3-gen`: warm denoise **122.5 s** vs 125.9. FFN 34.6 s — `h3_ffn_in` 21.7 s, `h3_ffn_out` 11.1 s, **`h3_ffn_act` 1.83 s** (was 7.0 s). Peak 82.6 GiB. Act is the cut; GEMMs unchanged. Wall ~3 s on a different Max-Q, so treat E2E as noise-adjacent.
 
 ### FVID · 2026-09-20 · FVID-2026-09-20-ffn-unchunk-next
 - Trigger: "commit, push and continue" after fused QKVG measured as a wash
