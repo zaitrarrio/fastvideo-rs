@@ -96,6 +96,8 @@ pub struct DiffusersComponents {
     pub transformer_2: Option<VarBuilder<'static>>,
     pub vae: VarBuilder<'static>,
     pub text: VarBuilder<'static>,
+    /// FLUX.1 T5-XXL (`text_encoder_2/`) when CLIP already occupies `text`.
+    pub text_2: Option<VarBuilder<'static>>,
     /// Wan I2V CLIP ViT-H (`image_encoder/`).
     pub image_encoder: Option<VarBuilder<'static>>,
 }
@@ -124,14 +126,24 @@ pub fn load_diffusers_components(
     let vae = var_builder_from_dir(&root.join("vae"), dtype, device)?;
     // UMT5-XXL is ~11GB BF16. Keep it on CPU so the 24GB GPU can hold DiT + VAE decode.
     let (host, host_dtype) = cpu_offload_for_cuda(device, dtype);
-    let text = {
-        let te = root.join("text_encoder");
-        eprintln!("loading text encoder on {host:?} dtype={host_dtype:?}");
-        if te.is_dir() {
-            var_builder_from_dir(&te, host_dtype, &host)?
-        } else {
-            var_builder_from_dir(&root.join("text_encoder_2"), host_dtype, &host)?
+    let text_dir = root.join("text_encoder");
+    let text2_dir = root.join("text_encoder_2");
+    eprintln!("loading text encoder on {host:?} dtype={host_dtype:?}");
+    let text = if text_dir.is_dir() {
+        var_builder_from_dir(&text_dir, host_dtype, &host)?
+    } else {
+        var_builder_from_dir(&text2_dir, host_dtype, &host)?
+    };
+    let text_2 = if text_dir.is_dir() && text2_dir.is_dir() {
+        match collect_safetensors(&text2_dir) {
+            Ok(files) if !files.is_empty() => {
+                eprintln!("loading text_encoder_2 on {host:?} dtype={host_dtype:?}");
+                Some(var_builder_from_dir(&text2_dir, host_dtype, &host)?)
+            }
+            _ => None,
         }
+    } else {
+        None
     };
     let image_encoder = {
         let dir = root.join("image_encoder");
@@ -151,6 +163,7 @@ pub fn load_diffusers_components(
         transformer_2,
         vae,
         text,
+        text_2,
         image_encoder,
     })
 }
@@ -229,6 +242,40 @@ mod tests {
             !root.join("transformer_2").is_dir(),
             "1.3B T2V is a single DiT; MoE transformer_2 belongs on A14B"
         );
+    }
+
+    #[test]
+    fn flux1_diffusers_layout_without_loading_weights() {
+        let Some(root) = fastvideo_models::flux1::weights::local_flux1("black-forest-labs/FLUX.1-dev")
+            .or_else(|| fastvideo_models::flux1::weights::local_flux1("black-forest-labs/FLUX.1-schnell"))
+        else {
+            eprintln!("skip: FLUX.1 Diffusers snapshot not in HF cache / FASTVIDEO_WEIGHTS");
+            return;
+        };
+        assert!(root.join("transformer").is_dir());
+        assert!(root.join("vae").is_dir());
+        assert!(root.join("text_encoder").is_dir());
+        assert!(root.join("text_encoder_2").is_dir() || root.join("tokenizer_2").is_dir());
+        if let Some(raw) = fastvideo_models::flux1::weights::transformer_config_json(&root) {
+            let cfg = fastvideo_models::flux1::arch_from_transformer_config(
+                &fastvideo_models::flux1::Flux1ArchConfig::flux1_dev(),
+                &raw,
+            )
+            .unwrap();
+            assert_eq!(cfg.in_channels, 64);
+            assert_eq!(cfg.joint_attention_dim, 4096);
+            assert_eq!(cfg.axes_dims_rope.len(), 3);
+        }
+        let index = root.join("transformer/diffusion_pytorch_model.safetensors.index.json");
+        if index.is_file() {
+            let keys = weight_map_keys(&index).unwrap();
+            for required in fastvideo_models::flux1::FLUX1_TRANSFORMER_REQUIRED_KEYS {
+                assert!(
+                    keys.iter().any(|k| k == required || k.ends_with(required)),
+                    "missing FLUX.1 key {required}"
+                );
+            }
+        }
     }
 
     #[test]

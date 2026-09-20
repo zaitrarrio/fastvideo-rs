@@ -5,8 +5,8 @@ behavioral oracle, cudarc is the generate path, Diffusers safetensors load
 through `fastvideo-loader` / `WeightMap`, registry + CLI select models, and
 `scripts/gpu/` benches rust vs upstream FastVideo on one Vast.ai box.
 
-**Priority in this PR:** FLUX.2-dev + Klein. FLUX.1 is a follow-up (checklist
-at the end).
+**Priority:** FLUX.2-dev + Klein. FLUX.1 is implemented in
+[flux1-port.md](flux1-port.md) (this file keeps the Flux2 inventory).
 
 ## Inventory (upstream → rust)
 
@@ -24,7 +24,7 @@ Mapped from hao-ai-lab/FastVideo and published Diffusers layouts.
 | Dev text | Mistral3 layers (10, 20, 30), joint 15360, guidance embeds, 50 steps | Candle + cudarc `Mistral3` decoder-only LM (no QK-Norm), stack `(10,20,30)`. Tiny/CI stays dummy. Chat wrap is a string template, not Jinja `chat_template` |
 | Klein text | Qwen3 layers (9, 18, 27), joint 7680, no guidance, 4 steps | Candle + cudarc `Qwen3Encoder` (QK-Norm) + stack. GPU generate tokenizes + runs the real encoder when `text_encoder/` is present |
 | Dev HF id | `black-forest-labs/FLUX.2-dev` | Registry preset `flux2_dev` |
-| Klein HF ids | `black-forest-labs/FLUX.2-klein-4B`, `…-9B` | Presets `flux2_klein_4b` (5+20 blocks) and `flux2_klein_9b` |
+| Klein HF ids | `black-forest-labs/FLUX.2-klein-4B`, `…-9B` | Presets `flux2_klein_4b` (5+20, 24 heads, joint 7680, Qwen3-4B) and `flux2_klein_9b` (8+24, 32 heads, joint 12288, Qwen3-8B) |
 | Pipeline configs | `Flux2PipelineConfig`, `Flux2KleinPipelineConfig` | Same names on `WanModelDefinition.pipeline_config` |
 | Weight keys | Diffusers `transformer/` + `vae/` | `FLUX2_TRANSFORMER_REQUIRED_KEYS` / `FLUX2_VAE_REQUIRED_KEYS`; arch from `transformer/config.json` |
 
@@ -93,6 +93,19 @@ Overrides: `FV_FLUX2_REPO`, `FV_FLUX2_STEPS`, `FV_FLUX2_GUIDANCE`,
 (`dense` default; `fused` / `mem_eff` for the A/B — never `flash`).
 Prompts also live in `scripts/gpu/prompts-flux2.json`.
 
+Second-tier Flux2 targets (same `compare-flux2` runner):
+
+```bash
+# Klein 9B (4-step, Qwen3-8B)
+FV_FLUX2_REPO=black-forest-labs/FLUX.2-klein-9B \
+  scripts/gpu/validate.sh run compare-flux2
+
+# FLUX.2-dev (50-step, Mistral3; larger VRAM/disk)
+FV_FLUX2_REPO=black-forest-labs/FLUX.2-dev \
+FV_FLUX2_STEPS=50 FV_FLUX2_GUIDANCE=4.0 \
+  scripts/gpu/validate.sh run compare-flux2
+```
+
 Artifacts (same run dir as Wan compare):
 
 - `remote/upstream-TORCH_SDPA.json` — load seconds, warmup, median/min generate
@@ -137,35 +150,13 @@ Artifacts (same run dir as Wan compare):
   Mistral `[SYSTEM_PROMPT]…[INST]`), not the processor's Jinja `chat_template`
 - Mistral3 vision tower is unused (T2I text-only)
 - VAE tiling / slicing is not ported
-- FLUX.1 (see below)
+- Full-width Klein 9B / Flux2-dev Vast compare is a second-tier override
+  (`FV_FLUX2_REPO=…`); default smoke stays Klein 4B
 
-## FLUX.1 follow-up checklist
+## FLUX.1
 
-Do this in a later PR; do not invent a third architecture.
-
-1. **Inventory** Diffusers / FastVideo FLUX.1: `FluxTransformer2DModel`
-   (double+single stream, but **3-axis RoPE**, `in_channels=64`,
-   `joint_attention_dim=4096`, `guidance_embeds=true`), CLIP-L + T5-XXL text,
-   `AutoencoderKL` (SD3-style, 16 latent channels, no 2×2 pack),
-   FlowMatchEuler **without** Flux2 empirical μ.
-2. **Reuse Flux2 DiT scaffolding** where the graph matches (double/single
-   blocks, modulation, AdaLN). Split only the bits that differ: RoPE rank,
-   pack/unpack, guidance default, text concat (CLIP pooled + T5 tokens).
-3. **Candle oracle first:** CLIP + T5 (or load precomputed embeds), DiT
-   forward, VAE decode, tiny generate. Registry key
-   `black-forest-labs/FLUX.1-dev` (and schnell if the pipeline config exists).
-4. **cudarc generate** after Candle tiny+layout tests pass. Same
-   `VideoGenerator` / CLI flags (`--frames 1`).
-5. **Loader:** Diffusers `transformer/`, `vae/`, `text_encoder/`,
-   `text_encoder_2/`, `tokenizer/`, `tokenizer_2/`. Required-key table +
-   `transformer/config.json` override, mirroring `arch_from_transformer_config`.
-6. **Tests:** FastVideo already compares FLUX.1 vs Diffusers — port the
-   numerical checks that fit (timestep table, pack math, a tiny forward).
-7. **Vast:** add `compare-flux1` or a `FV_FLUX_FAMILY=flux1` override on the
-   existing `compare-flux2` path. Same `upstream_bench.py --workload t2i`
-   (`--model-path black-forest-labs/FLUX.1-dev`, 50 steps, guidance 3.5).
-8. **Do not** unfreeze Burn/Luminal for FLUX.1.
-
-Suggested HF ids: `black-forest-labs/FLUX.1-dev`,
-`black-forest-labs/FLUX.1-schnell`. Pipeline config lives at
-FastVideo `configs/pipelines/flux.py`.
+Implemented. See [flux1-port.md](flux1-port.md) for the inventory, CLI, and
+`compare-flux1` / `FV_FLUX_FAMILY=flux1` Vast instructions. Checklist items
+from the original follow-up (Candle first, then cudarc, CLIP+T5, 3-axis RoPE,
+SD3 VAE, `calculate_shift`, no Burn/Luminal) are landed; a GPU Vast run
+against upstream FastVideo is still outstanding.

@@ -12,8 +12,9 @@ pub use generator::{
     median_u128, BenchStats, ClipBenchStats, GenerateOutput, LoadOptions, VideoGenerator,
 };
 pub use registry::{
-    resolve_model, resolve_wan, Flux2ModelDefinition, ModelDefinition, ModelFamily, SamplingAlgorithm,
-    WanModelDefinition, FLUX2_MODEL_DEFINITIONS, WAN_MODEL_DEFINITIONS,
+    resolve_model, resolve_wan, Flux1ModelDefinition, Flux2ModelDefinition, ModelDefinition, ModelFamily,
+    SamplingAlgorithm, WanModelDefinition, FLUX1_MODEL_DEFINITIONS, FLUX2_MODEL_DEFINITIONS,
+    WAN_MODEL_DEFINITIONS,
 };
 pub use sampling::{sampling_from_definition, InferencePreset, SamplingParam, ALL_PRESETS};
 
@@ -391,6 +392,62 @@ mod tests {
         assert_eq!(klein.definition.preset, "flux2_klein_4b");
         assert_eq!(klein.sampling.num_inference_steps, 4);
         let out = klein.generate_video("a banana on a table").unwrap();
+        assert!(std::path::Path::new(&out.frame_paths[0]).exists());
+
+        let klein9 = VideoGenerator::from_pretrained(
+            "black-forest-labs/FLUX.2-klein-9B",
+            LoadOptions {
+                backend: BackendKind::Cudarc,
+                tiny: true,
+                output_path: Some(persist_dir("flux2-klein-9b-tiny")),
+                ..LoadOptions::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(klein9.definition.preset, "flux2_klein_9b");
+        assert_eq!(klein9.sampling.num_inference_steps, 4);
+        let out = klein9.generate_video("a banana on a table").unwrap();
+        assert!(std::path::Path::new(&out.frame_paths[0]).exists());
+    }
+
+    #[test]
+    fn flux1_registry_and_tiny_generate() {
+        let gen = VideoGenerator::from_pretrained(
+            "black-forest-labs/FLUX.1-dev",
+            LoadOptions {
+                backend: BackendKind::Cudarc,
+                tiny: true,
+                output_path: Some(persist_dir("flux1-dev-tiny")),
+                ..LoadOptions::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(gen.definition.family, crate::registry::ModelFamily::Flux1);
+        assert_eq!(gen.definition.preset, "flux1_dev");
+        assert_eq!(gen.sampling.height, 1024);
+        assert_eq!(gen.sampling.num_frames, 1);
+        assert_eq!(gen.sampling.num_inference_steps, 50);
+        assert!((gen.sampling.guidance_scale - 3.5).abs() < 1e-6);
+        let out = gen.generate_video("a banana on a table").unwrap();
+        assert!(out.frame_paths[0].ends_with(".png"));
+        assert!(std::path::Path::new(&out.frame_paths[0]).exists());
+        let profile = std::path::Path::new(&gen.output_path).join("profile.json");
+        assert!(profile.exists(), "flux1 profile.json");
+
+        let schnell = VideoGenerator::from_pretrained(
+            "black-forest-labs/FLUX.1-schnell",
+            LoadOptions {
+                backend: BackendKind::Candle,
+                tiny: true,
+                output_path: Some(persist_dir("flux1-schnell-tiny")),
+                ..LoadOptions::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(schnell.definition.preset, "flux1_schnell");
+        assert_eq!(schnell.sampling.num_inference_steps, 4);
+        assert_eq!(schnell.sampling.guidance_scale, 0.0);
+        let out = schnell.generate_video("a banana on a table").unwrap();
         assert!(std::path::Path::new(&out.frame_paths[0]).exists());
     }
 

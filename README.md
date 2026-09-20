@@ -1,11 +1,12 @@
 # fastvideo-rs
 
 Rust inference port of [FastVideo](https://github.com/hao-ai-lab/FastVideo) for the
-Wan / FastWan family and **FLUX.2** (dev + Klein). **Primary generate path:
-cudarc CUDA** (lean `--features cuda-cudarc`). Candle remains a frozen
-behavioral oracle for ports; Burn and Luminal are frozen (no new Wan/Flux
-features). Flux2 inventory, Vast benches, and the FLUX.1 follow-up list live in
-[docs/flux2-port.md](docs/flux2-port.md).
+Wan / FastWan family, **FLUX.2** (dev + Klein), and **FLUX.1** (dev + schnell).
+**Primary generate path: cudarc CUDA** (lean `--features cuda-cudarc`). Candle
+remains a frozen behavioral oracle for ports; Burn and Luminal are frozen (no
+new Wan/Flux features). Flux2 inventory lives in
+[docs/flux2-port.md](docs/flux2-port.md); FLUX.1 in
+[docs/flux1-port.md](docs/flux1-port.md).
 
 Real inference targets Vast.ai NVIDIA GPUs. Mac/CI stay on CPU (cudarc without
 `--features cuda` / `cuda-cudarc` errors if CUDA is requested).
@@ -18,7 +19,10 @@ Real inference targets Vast.ai NVIDIA GPUs. Mac/CI stay on CPU (cudarc without
 | Flux2 HF id registry (dev + Klein 4B/9B) | done |
 | Flux2 Candle oracle (DiT + full 2D VAE + Qwen3/Mistral3) | done (tiny + Diffusers load) |
 | Flux2 cudarc generate | done (DiT + Qwen3/Mistral3 text + full 2D VAE decode) |
-| Flux2 Vast compare vs upstream | `validate.sh run compare-flux2` |
+| Flux2 Vast compare vs upstream | `validate.sh run compare-flux2` (Klein 9B / dev via `FV_FLUX2_REPO`) |
+| FLUX.1 HF id registry (dev + schnell) | done |
+| FLUX.1 Candle + cudarc generate | done (CLIP-L + T5-XXL, 3-axis RoPE, SD3 VAE; tiny smokes) |
+| FLUX.1 Vast compare vs upstream | `validate.sh run compare-flux1` (needs a GPU run) |
 | UniPC (Wan T2V) + FastWan DMD `[1000, 757, 522]` | done |
 | **cudarc** Wan generate (Diffusers load) | **primary** |
 | MoE `transformer_2` + dual CFG | cudarc done |
@@ -47,6 +51,9 @@ cargo run -p fastvideo-cli -- generate \
 cargo run -p fastvideo-cli -- generate \
   --model black-forest-labs/FLUX.2-dev \
   --tiny --output /tmp/flux2-tiny
+cargo run -p fastvideo-cli -- generate \
+  --model black-forest-labs/FLUX.1-schnell \
+  --tiny --output /tmp/flux1-tiny
 ```
 
 Default `--backend` is `cudarc`.
@@ -111,9 +118,9 @@ Crates cache in the Docker volume `fastvideo-rs-cargo-registry`. Copy the binary
 crates/
   fastvideo-ops        TensorBackend trait + host CPU reference
   fastvideo-core       registry, SamplingParam, VideoGenerator
-  fastvideo-models     Wan + Flux2 DiT / VAE / text + schedulers (Candle oracle)
+  fastvideo-models     Wan + Flux2 + FLUX.1 DiT / VAE / text + schedulers (Candle oracle)
   fastvideo-loader     Diffusers safetensors load
-  fastvideo-cudarc     **primary** Wan + Flux2 generate (cuBLAS / NVRTC / cuDNN)
+  fastvideo-cudarc     **primary** Wan + Flux2 + FLUX.1 generate (cuBLAS / NVRTC / cuDNN)
   fastvideo-candle     frozen Candle backend
   fastvideo-burn       frozen Burn Wan
   fastvideo-luminal    frozen Luminal Wan

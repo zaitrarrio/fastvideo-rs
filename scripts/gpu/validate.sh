@@ -9,6 +9,8 @@
 #
 # tiers: kernels (T1) | parity (T2) | clip (T3) | compare (T4, Wan + upstream FastVideo)
 #        compare-flux2 (Flux2 T2I rust vs upstream FastVideo on the same box)
+#        compare-flux1 (FLUX.1 T2I; default schnell). FV_FLUX_FAMILY=flux1 on
+#        compare-flux2 selects the same runner.
 #        each Wan tier includes the ones before it.
 set -euo pipefail
 # shellcheck source=scripts/gpu/lib.sh
@@ -56,12 +58,13 @@ tier_query() {
     compare) echo "$base gpu_ram>=24 disk_space>=180 cpu_ram>=80 inet_down>=500" ;;
     # Flux2 T2I vs upstream FastVideo (same box). Klein 4B is the default smoke.
     compare-flux2) echo "$base gpu_ram>=24 disk_space>=180 cpu_ram>=80 inet_down>=500" ;;
-    *) die "unknown tier '$1' (mathprobe|kernels|parity|clip|compare|compare-flux2)" ;;
+    compare-flux1) echo "$base gpu_ram>=24 disk_space>=180 cpu_ram>=80 inet_down>=500" ;;
+    *) die "unknown tier '$1' (mathprobe|kernels|parity|clip|compare|compare-flux2|compare-flux1)" ;;
   esac
 }
-tier_max_dph() { case "$1" in mathprobe) echo 0.40 ;; kernels) echo 0.25 ;; parity) echo 0.40 ;; clip) echo 0.60 ;; compare|compare-flux2) echo 0.60 ;; esac; }
-tier_max_minutes() { case "$1" in mathprobe) echo 30 ;; kernels) echo 40 ;; parity) echo 75 ;; clip) echo 180 ;; compare|compare-flux2) echo 240 ;; esac; }
-tier_disk() { case "$1" in mathprobe) echo 40 ;; kernels) echo 40 ;; parity) echo 60 ;; clip) echo 100 ;; compare|compare-flux2) echo 180 ;; esac; }
+tier_max_dph() { case "$1" in mathprobe) echo 0.40 ;; kernels) echo 0.25 ;; parity) echo 0.40 ;; clip) echo 0.60 ;; compare|compare-flux2|compare-flux1) echo 0.60 ;; esac; }
+tier_max_minutes() { case "$1" in mathprobe) echo 30 ;; kernels) echo 40 ;; parity) echo 75 ;; clip) echo 180 ;; compare|compare-flux2|compare-flux1) echo 240 ;; esac; }
+tier_disk() { case "$1" in mathprobe) echo 40 ;; kernels) echo 40 ;; parity) echo 60 ;; clip) echo 100 ;; compare|compare-flux2|compare-flux1) echo 180 ;; esac; }
 
 usage() { sed -n '2,12p' "$0" | sed 's/^# \{0,1\}//'; exit 2; }
 
@@ -503,8 +506,8 @@ cmd_run() {
   local need_disk; need_disk=$(( $(tier_disk "$tier") - 10 ))
   remote_run env 120 env "$need_disk"
   remote_run bootstrap 600 bootstrap
-  if [[ "$tier" == compare-flux2 ]]; then
-    run_flux2_compare
+  if [[ "$tier" == compare-flux2 || "$tier" == compare-flux1 ]]; then
+    run_flux_compare "$tier"
     return 0
   fi
   # Downloads run in the background during the weight-free stages.
@@ -615,47 +618,72 @@ cmd_run() {
   log "T4 PASS"
 }
 
-# Flux2 T2I vs upstream FastVideo on the same rented box. Default is Klein 4B
-# (4-step, no guidance) so the disk/VRAM ask stays closer to the Wan compare
-# tier. Override with FV_FLUX2_REPO / FV_FLUX2_STEPS / FV_FLUX2_GUIDANCE.
-# Rust generate uses real Qwen3/Mistral3 text + full 2D VAE when those
-# snapshots load. FASTVIDEO_FLUX2_DUMMY_TEXT=1 / FASTVIDEO_FLUX2_TEXT_LEN
-# are the A/B knobs if you need the old prompt-hash path.
-run_flux2_compare() {
-  local repo="${FV_FLUX2_REPO:-black-forest-labs/FLUX.2-klein-4B}"
-  local steps="${FV_FLUX2_STEPS:-4}"
-  local guidance="${FV_FLUX2_GUIDANCE:-1.0}"
-  local height="${FV_FLUX2_HEIGHT:-1024}"
-  local width="${FV_FLUX2_WIDTH:-1024}"
-  local prompt="${FV_FLUX2_PROMPT:-a photo of a banana on a wooden table, studio lighting}"
-  local flux_w="$WORK/weights/flux2"
-  log "Flux2 compare: repo=$repo ${height}x${width} steps=$steps guidance=$guidance"
-  remote_run fetch-flux2 120 fetch "$repo" "$flux_w" "transformer/*" "vae/*" "text_encoder/*" "tokenizer/*" "scheduler/*"
-  remote_run wait-flux2 1800 wait-weights "$flux_w" 1800 transformer vae
+# Flux T2I vs upstream FastVideo on the same rented box.
+#   compare-flux2 → Klein 4B defaults (4-step, guidance 1.0)
+#   compare-flux1 → FLUX.1-schnell defaults (4-step, guidance 0)
+# FV_FLUX_FAMILY=flux1 on compare-flux2 selects the FLUX.1 runner.
+# Override with FV_FLUX2_* / FV_FLUX1_* (repo, steps, guidance, HxW, prompt).
+run_flux_compare() {
+  local tier="${1:-compare-flux2}"
+  local family="${FV_FLUX_FAMILY:-}"
+  if [[ -z "$family" ]]; then
+    if [[ "$tier" == compare-flux1 ]]; then
+      family=flux1
+    else
+      family=flux2
+    fi
+  fi
+  family="$(printf '%s' "$family" | tr '[:upper:]' '[:lower:]')"
+  local repo steps guidance height width prompt flux_w fetch_extra label rust_out rust_timeout
+  if [[ "$family" == flux1 ]]; then
+    repo="${FV_FLUX1_REPO:-${FV_FLUX2_REPO:-black-forest-labs/FLUX.1-schnell}}"
+    steps="${FV_FLUX1_STEPS:-${FV_FLUX2_STEPS:-4}}"
+    guidance="${FV_FLUX1_GUIDANCE:-${FV_FLUX2_GUIDANCE:-0}}"
+    height="${FV_FLUX1_HEIGHT:-${FV_FLUX2_HEIGHT:-1024}}"
+    width="${FV_FLUX1_WIDTH:-${FV_FLUX2_WIDTH:-1024}}"
+    prompt="${FV_FLUX1_PROMPT:-${FV_FLUX2_PROMPT:-a photo of a banana on a wooden table, studio lighting}}"
+    flux_w="$WORK/weights/flux1"
+    fetch_extra=("text_encoder_2/*" "tokenizer_2/*")
+    label="FLUX.1"
+    rust_out="$OUTR/flux1-rust"
+    rust_timeout="${FV_FLUX1_RUST_TIMEOUT:-${FV_FLUX2_RUST_TIMEOUT:-1800}}"
+    export FV_FLUX2_WARMUP="${FV_FLUX1_WARMUP:-${FV_FLUX2_WARMUP:-1}}"
+    export FV_FLUX2_RUNS="${FV_FLUX1_RUNS:-${FV_FLUX2_RUNS:-${FV_UPSTREAM_RUNS:-2}}}"
+  else
+    repo="${FV_FLUX2_REPO:-black-forest-labs/FLUX.2-klein-4B}"
+    steps="${FV_FLUX2_STEPS:-4}"
+    guidance="${FV_FLUX2_GUIDANCE:-1.0}"
+    height="${FV_FLUX2_HEIGHT:-1024}"
+    width="${FV_FLUX2_WIDTH:-1024}"
+    prompt="${FV_FLUX2_PROMPT:-a photo of a banana on a wooden table, studio lighting}"
+    flux_w="$WORK/weights/flux2"
+    fetch_extra=()
+    label="Flux2"
+    rust_out="$OUTR/flux2-rust"
+    rust_timeout="${FV_FLUX2_RUST_TIMEOUT:-1800}"
+    export FV_FLUX2_WARMUP="${FV_FLUX2_WARMUP:-1}"
+    export FV_FLUX2_RUNS="${FV_FLUX2_RUNS:-${FV_UPSTREAM_RUNS:-2}}"
+  fi
+  log "$label compare: repo=$repo ${height}x${width} steps=$steps guidance=$guidance"
+  remote_run "fetch-$family" 120 fetch "$repo" "$flux_w" "transformer/*" "vae/*" "text_encoder/*" "tokenizer/*" "scheduler/*" ${fetch_extra[@]+"${fetch_extra[@]}"}
+  remote_run "wait-$family" 1800 wait-weights "$flux_w" 1800 transformer vae
   remote_run upstream-install "${FV_UPSTREAM_INSTALL_TIMEOUT:-2400}" upstream-install "${FV_TORCH_BACKEND:-cu126}"
-  # Warm/median: rust `fastvideo bench --warmup/--runs` matches upstream_bench.py
-  # (1 discarded generate + N timed). Override rust independently with
-  # FV_FLUX2_WARMUP / FV_FLUX2_RUNS; otherwise both sides use FV_UPSTREAM_RUNS.
-  export FV_FLUX2_WARMUP="${FV_FLUX2_WARMUP:-1}"
-  export FV_FLUX2_RUNS="${FV_FLUX2_RUNS:-${FV_UPSTREAM_RUNS:-2}}"
   local ub=(--model-path "$repo" --workload t2i --height "$height" --width "$width" --num-frames 1
             --steps "$steps" --guidance "$guidance" --fps 1 --seed 0 --runs "${FV_UPSTREAM_RUNS:-2}"
             --prompt "$prompt")
   local backend
   for backend in ${FV_UPSTREAM_BACKENDS:-TORCH_SDPA}; do
-    STAGE_OPTIONAL=1 remote_run "upstream-flux2-$backend" "${FV_UPSTREAM_TIMEOUT:-3600}" \
+    STAGE_OPTIONAL=1 remote_run "upstream-$family-$backend" "${FV_UPSTREAM_TIMEOUT:-3600}" \
       upstream-bench "$backend" "${ub[@]}" || true
   done
-  # Rust path: `fastvideo bench` (cuda-cudarc), not fv-gpucheck. The CLI is
-  # uploaded from artifacts/gpucheck/dist/fastvideo when docker.sh dist built it.
   local rust_bin="$FV_REMOTE_DIR/target/release/fastvideo"
   if fv_ssh "$HOST" "$PORT" "test -x $rust_bin"; then
-    STAGE_OPTIONAL=1 remote_run rust-flux2 "${FV_FLUX2_RUST_TIMEOUT:-1800}" flux2-rust-bench \
-      "$repo" "$flux_w" "$height" "$width" "$steps" "$guidance" 0 "$prompt" "$OUTR/flux2-rust" || true
+    STAGE_OPTIONAL=1 remote_run "rust-$family" "$rust_timeout" flux2-rust-bench \
+      "$repo" "$flux_w" "$height" "$width" "$steps" "$guidance" 0 "$prompt" "$rust_out" || true
   else
-    log "no $rust_bin on the box — rust Flux2 bench skipped (docker.sh dist builds it next to fv-gpucheck)"
+    log "no $rust_bin on the box — rust $label bench skipped (docker.sh dist builds it next to fv-gpucheck)"
   fi
-  log "Flux2 compare PASS (see remote/upstream-*.json and remote/flux2-rust/bench.json)"
+  log "$label compare PASS (see remote/upstream-*.json and remote/${family}-rust/bench.json)"
 }
 
 cmd_reap() {

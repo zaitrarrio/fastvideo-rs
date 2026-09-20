@@ -298,6 +298,9 @@ impl AutoencoderKlFlux2 {
             x = x.reshape((b, c, h, w))?;
         }
         x = (x * (1.0 / self.cfg.scaling_factor as f64))?;
+        if self.cfg.shift_factor != 0.0 {
+            x = (x + self.cfg.shift_factor as f64)?;
+        }
         if let Some(pq) = &self.post_quant {
             x = pq.forward(&x)?;
         }

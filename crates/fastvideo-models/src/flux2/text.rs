@@ -155,6 +155,28 @@ impl Qwen3Config {
         }
     }
 
+    /// Qwen3-8B language model used by FLUX.2 Klein 9B (stack 9/18/27 → 12288).
+    pub fn klein_9b() -> Self {
+        Self {
+            hidden_size: 4096,
+            intermediate_size: 12288,
+            num_attention_heads: 32,
+            num_key_value_heads: 8,
+            head_dim: 128,
+            ..Self::klein_4b()
+        }
+    }
+
+    pub fn from_preset(preset: &str) -> Self {
+        if preset.contains("9b") {
+            Self::klein_9b()
+        } else if preset.contains("klein") {
+            Self::klein_4b()
+        } else {
+            Self::mistral3_24b()
+        }
+    }
+
     /// Mistral Small 3.1 24B language model (FLUX.2-dev text encoder).
     pub fn mistral3_24b() -> Self {
         Self {
@@ -213,6 +235,13 @@ impl Qwen3Config {
             Flux2TextKind::Qwen3 => Self::klein_4b(),
             Flux2TextKind::Mistral3 => Self::mistral3_24b(),
         };
+        if kind == Flux2TextKind::Qwen3 {
+            if let Some(h) = text.get("hidden_size").and_then(|x| x.as_u64()) {
+                if h == 4096 {
+                    cfg = Self::klein_9b();
+                }
+            }
+        }
         if let Some(n) = text.get("vocab_size").and_then(|x| x.as_u64()) {
             cfg.vocab_size = n as usize;
         }
@@ -693,6 +722,15 @@ mod tests {
         .unwrap();
         assert_eq!(qwen.hidden_size, 2560);
         assert!(qwen.qk_norm);
+        let qwen9 = Qwen3Config::from_hf_json(
+            Flux2TextKind::Qwen3,
+            r#"{"hidden_size":4096,"num_hidden_layers":36,"vocab_size":151936,"head_dim":128}"#,
+        )
+        .unwrap();
+        assert_eq!(qwen9.hidden_size, 4096);
+        assert_eq!(qwen9.intermediate_size, 12288);
+        assert_eq!(qwen9.hidden_size * 3, 12288);
+        assert_eq!(Qwen3Config::from_preset("flux2_klein_9b").hidden_size, 4096);
         let mis = Qwen3Config::from_hf_json(
             Flux2TextKind::Mistral3,
             r#"{"text_config":{"hidden_size":5120,"num_hidden_layers":40,"vocab_size":131072}}"#,

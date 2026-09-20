@@ -70,12 +70,15 @@ impl Flux2ArchConfig {
         }
     }
 
-    /// FLUX.2 Klein 9B: same Klein pipeline; layer counts inferred from
-    /// `transformer/config.json` or checkpoint keys when present.
+    /// FLUX.2 Klein 9B distilled (Qwen3-8B text, no guidance embeds).
+    /// Native `Klein9BParams` / mlx-vlm: 8+24 blocks, 32 heads, joint 12288.
     pub fn flux2_klein_9b() -> Self {
         Self {
+            num_layers: 8,
+            num_single_layers: 24,
+            num_attention_heads: 32,
+            joint_attention_dim: 12288,
             guidance_embeds: false,
-            joint_attention_dim: 7680,
             ..Self::base()
         }
     }
@@ -160,6 +163,8 @@ pub struct Flux2VaeConfig {
     pub latent_channels: usize,
     pub norm_num_groups: usize,
     pub scaling_factor: f32,
+    /// Diffusers `shift_factor` applied after `1/scale` (Flux2 is 0).
+    pub shift_factor: f32,
     pub spatial_compression_ratio: usize,
 }
 
@@ -173,6 +178,22 @@ impl Flux2VaeConfig {
             latent_channels: 32,
             norm_num_groups: 32,
             scaling_factor: 0.13025,
+            shift_factor: 0.0,
+            spatial_compression_ratio: 8,
+        }
+    }
+
+    /// FLUX.1 SD3-style AutoencoderKL (16 latent channels, shift+scale).
+    pub fn flux1() -> Self {
+        Self {
+            in_channels: 3,
+            out_channels: 3,
+            block_out_channels: vec![128, 256, 512, 512],
+            layers_per_block: 2,
+            latent_channels: 16,
+            norm_num_groups: 32,
+            scaling_factor: 0.3611,
+            shift_factor: 0.1159,
             spatial_compression_ratio: 8,
         }
     }
@@ -186,6 +207,7 @@ impl Flux2VaeConfig {
             latent_channels: 8,
             norm_num_groups: 2,
             scaling_factor: 0.13025,
+            shift_factor: 0.0,
             spatial_compression_ratio: 4,
         }
     }
@@ -200,6 +222,7 @@ impl Flux2VaeConfig {
             latent_channels: 4,
             norm_num_groups: 2,
             scaling_factor: 0.13025,
+            shift_factor: 0.0,
             spatial_compression_ratio: 4,
         }
     }
@@ -246,6 +269,13 @@ mod tests {
         assert_eq!(klein.joint_attention_dim, 7680);
         assert!(!klein.guidance_embeds);
         assert_eq!(klein.hidden_size(), 3072);
+        let klein9 = Flux2ArchConfig::flux2_klein_9b();
+        assert_eq!(klein9.num_layers, 8);
+        assert_eq!(klein9.num_single_layers, 24);
+        assert_eq!(klein9.num_attention_heads, 32);
+        assert_eq!(klein9.joint_attention_dim, 12288);
+        assert_eq!(klein9.hidden_size(), 4096);
+        assert!(!klein9.guidance_embeds);
     }
 
     #[test]
@@ -266,6 +296,14 @@ mod tests {
         assert_eq!(
             Flux2ArchConfig::from_preset("flux2_klein_4b").num_layers,
             5
+        );
+        assert_eq!(
+            Flux2ArchConfig::from_preset("flux2_klein_9b").num_layers,
+            8
+        );
+        assert_eq!(
+            Flux2ArchConfig::from_preset("flux2_klein_9b").joint_attention_dim,
+            12288
         );
         assert!(Flux2ArchConfig::from_preset("flux2_dev").guidance_embeds);
     }

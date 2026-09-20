@@ -135,6 +135,7 @@ impl Flux2Pipeline {
         let lm_cfg = match text_config_json {
             Some(raw) => Qwen3Config::from_hf_json(kind, raw).map_err(candle_core::Error::Msg)?,
             None => match kind {
+                Flux2TextKind::Qwen3 if dit_cfg.joint_attention_dim >= 12288 => Qwen3Config::klein_9b(),
                 Flux2TextKind::Qwen3 => Qwen3Config::klein_4b(),
                 Flux2TextKind::Mistral3 => Qwen3Config::mistral3_24b(),
             },

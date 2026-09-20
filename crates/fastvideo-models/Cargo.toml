@@ -3,7 +3,7 @@ name = "fastvideo-models"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "Wan/FastWan and Flux2 model components and diffusion schedulers."
+description = "Wan/FastWan, Flux2, and FLUX.1 model components and diffusion schedulers."
 
 [dependencies]
 candle-core.workspace = true

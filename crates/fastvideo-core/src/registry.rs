@@ -1,7 +1,8 @@
-//! Wan/FastWan and Flux2 model registry.
+//! Wan/FastWan, Flux2, and FLUX.1 model registry.
 //!
 //! Wan entries are ported from FastVideo `fastvideo/models/wan/definition.py`.
 //! Flux2 entries follow `fastvideo/registry.py` (`FLUX.2-dev`, Klein 4B/9B).
+//! FLUX.1 entries follow FastVideo `configs/pipelines/flux.py`.
 
 use crate::error::{FastVideoError, Result};
 use crate::sampling::WorkloadType;
@@ -10,6 +11,7 @@ use crate::sampling::WorkloadType;
 pub enum ModelFamily {
     Wan,
     Flux2,
+    Flux1,
 }
 
 impl ModelFamily {
@@ -17,6 +19,7 @@ impl ModelFamily {
         match self {
             Self::Wan => "wan",
             Self::Flux2 => "flux2",
+            Self::Flux1 => "flux1",
         }
     }
 }
@@ -55,6 +58,7 @@ pub struct WanModelDefinition {
 
 pub type ModelDefinition = WanModelDefinition;
 pub type Flux2ModelDefinition = WanModelDefinition;
+pub type Flux1ModelDefinition = WanModelDefinition;
 
 impl WanModelDefinition {
     pub fn matches(&self, path_or_class: &str) -> bool {
@@ -131,6 +135,42 @@ macro_rules! flux2_defn {
     ) => {
         WanModelDefinition {
             family: ModelFamily::Flux2,
+            pipeline_config: $pipe,
+            preset: $preset,
+            sampling: SamplingAlgorithm::FlowMatchEuler,
+            hf_model_paths: $paths,
+            workload_types: $work,
+            match_any: {
+                #[allow(unused_assignments, unused_mut)]
+                let mut v: &[&str] = &[];
+                $(v = $any;)?
+                v
+            },
+            match_all: {
+                #[allow(unused_assignments, unused_mut)]
+                let mut v: &[&str] = &[];
+                $(v = $all;)?
+                v
+            },
+            exclude: {
+                #[allow(unused_assignments, unused_mut)]
+                let mut v: &[&str] = &[];
+                $(v = $ex;)?
+                v
+            },
+        }
+    };
+}
+
+macro_rules! flux1_defn {
+    (
+        $pipe:expr, $preset:expr, $paths:expr, $work:expr
+        $(, match_any = $any:expr)?
+        $(, match_all = $all:expr)?
+        $(, exclude = $ex:expr)?
+    ) => {
+        WanModelDefinition {
+            family: ModelFamily::Flux1,
             pipeline_config: $pipe,
             preset: $preset,
             sampling: SamplingAlgorithm::FlowMatchEuler,
@@ -318,6 +358,32 @@ pub static FLUX2_MODEL_DEFINITIONS: &[WanModelDefinition] = &[
     ),
 ];
 
+/// FLUX.1 T2I ids (schnell first so it wins over the broader `flux.1` detector).
+pub static FLUX1_MODEL_DEFINITIONS: &[WanModelDefinition] = &[
+    flux1_defn!(
+        "FluxPipelineConfig",
+        "flux1_schnell",
+        &["black-forest-labs/FLUX.1-schnell"],
+        &[WorkloadType::T2I],
+        match_any = &["flux.1-schnell", "flux1-schnell", "flux-1-schnell"]
+    ),
+    flux1_defn!(
+        "FluxPipelineConfig",
+        "flux1_dev",
+        &["black-forest-labs/FLUX.1-dev"],
+        &[WorkloadType::T2I],
+        match_any = &["flux.1-dev", "flux1-dev", "flux-1-dev"]
+    ),
+    flux1_defn!(
+        "FluxPipelineConfig",
+        "flux1_dev",
+        &[],
+        &[WorkloadType::T2I],
+        match_any = &["flux.1", "flux1", "flux_1", "flux-1"],
+        exclude = &["schnell", "flux.2", "flux2"]
+    ),
+];
+
 fn resolve_in<'a>(
     table: &'a [WanModelDefinition],
     model_id: &str,
@@ -338,18 +404,17 @@ pub fn resolve_wan(model_id: &str) -> Result<&'static WanModelDefinition> {
         .ok_or_else(|| FastVideoError::UnknownModel(model_id.to_string()))
 }
 
-/// Resolve Wan or Flux2. Flux2 exact ids win over Wan detectors.
+/// Resolve Wan, Flux2, or FLUX.1. Exact HF ids win over fuzzy detectors.
 pub fn resolve_model(model_id: &str) -> Result<&'static WanModelDefinition> {
-    if let Some(def) = FLUX2_MODEL_DEFINITIONS
-        .iter()
-        .find(|d| d.hf_model_paths.iter().any(|p| p.eq_ignore_ascii_case(model_id)))
-    {
-        return Ok(def);
+    for table in [FLUX1_MODEL_DEFINITIONS, FLUX2_MODEL_DEFINITIONS, WAN_MODEL_DEFINITIONS] {
+        if let Some(def) = table
+            .iter()
+            .find(|d| d.hf_model_paths.iter().any(|p| p.eq_ignore_ascii_case(model_id)))
+        {
+            return Ok(def);
+        }
     }
-    if let Some(def) = WAN_MODEL_DEFINITIONS
-        .iter()
-        .find(|d| d.hf_model_paths.iter().any(|p| p.eq_ignore_ascii_case(model_id)))
-    {
+    if let Some(def) = resolve_in(FLUX1_MODEL_DEFINITIONS, model_id) {
         return Ok(def);
     }
     if let Some(def) = resolve_in(FLUX2_MODEL_DEFINITIONS, model_id) {
@@ -430,5 +495,21 @@ mod tests {
         let fuzzy = resolve_model("local/FLUX.2-klein-preview").unwrap();
         assert!(fuzzy.preset.contains("klein"));
         assert!(resolve_wan("black-forest-labs/FLUX.2-dev").is_err());
+    }
+
+    #[test]
+    fn resolves_flux1_dev_and_schnell() {
+        let dev = resolve_model("black-forest-labs/FLUX.1-dev").unwrap();
+        assert_eq!(dev.family, ModelFamily::Flux1);
+        assert_eq!(dev.preset, "flux1_dev");
+        assert_eq!(dev.sampling, SamplingAlgorithm::FlowMatchEuler);
+        let schnell = resolve_model("black-forest-labs/FLUX.1-schnell").unwrap();
+        assert_eq!(schnell.preset, "flux1_schnell");
+        let fuzzy = resolve_model("local/FLUX.1-preview").unwrap();
+        assert_eq!(fuzzy.preset, "flux1_dev");
+        assert_eq!(
+            resolve_model("black-forest-labs/FLUX.2-dev").unwrap().family,
+            ModelFamily::Flux2
+        );
     }
 }

@@ -23,6 +23,7 @@ Nothing is compared against another framework. The references are:
 | **T1** `run kernels` | cheapest Ampere+ ≥8 GB | CUDA context; every NVRTC kernel, cuBLAS GEMMs and bf16 linears, dense/flash attention, cuDNN conv2d/conv3d and temporal unfold vs plain-Rust math; random-weight UMT5/DiT/VAE/UniPC/DMD GPU vs CPU path (exact and fast) | 10–15 min | $0.02–0.04 |
 | `run compare` | 24GB+, 180GB disk | our clip stages **and** upstream FastVideo on the same box: install torch+fastvideo in a venv, time the same 8s clip per attention backend | ~50-70 min | ~$0.20-0.30 |
 | `run compare-flux2` | 24GB+, 180GB disk | Flux2 T2I (default Klein 4B) rust `fastvideo bench` **and** upstream FastVideo `--workload t2i` on the same box and prompt | ~30–90 min (weight fetch) | ~$0.15–0.40 |
+| `run compare-flux1` | 24GB+, 180GB disk | FLUX.1 T2I (default schnell) rust `fastvideo bench` **and** upstream FastVideo `--workload t2i` | ~30–90 min | ~$0.15–0.40 |
 | **T2** `run parity` | ≥16 GB | T1, plus real 1.3B DiT forward, VAE decode and 2-step UniPC, GPU vs CPU path | 45–75 min (CPU reference is slow) | $0.10–0.30 |
 | **T3** `run clip` | ≥24 GB, ≥80 GB RAM | T2, plus real prompt embeddings from cudarc UMT5-XXL on the GPU; a probe that projects 8s-clip time and VRAM before committing; two 8s clips (129 frames, 448×832, FastWan DMD) with per-step NaN and time guards and video quality gates; exact vs fast drift on a 2s clip | 90–150 min | $0.30–0.90 |
 
@@ -65,6 +66,7 @@ scripts/gpu/validate.sh run kernels      # T1
 scripts/gpu/validate.sh run clip         # T1 → T2 → T3 on one box
 scripts/gpu/validate.sh offers compare-flux2
 scripts/gpu/validate.sh run compare-flux2  # Flux2 rust vs upstream FastVideo
+scripts/gpu/validate.sh run compare-flux1  # FLUX.1 schnell vs upstream
 ```
 
 Flux2 compare knobs: `FV_FLUX2_REPO` (default `black-forest-labs/FLUX.2-klein-4B`),
@@ -74,6 +76,15 @@ warm-median protocol: `--warmup` (default 1) + `--runs` (default 2). Override
 with `FV_FLUX2_WARMUP` / `FV_FLUX2_RUNS`, or set `FV_UPSTREAM_RUNS` to move
 both sides together. Compare rust `median_ms` to upstream `median_seconds`.
 `profile.json` is the last timed rust generate.
+
+Second-tier Flux2: `FV_FLUX2_REPO=black-forest-labs/FLUX.2-klein-9B` or
+`…/FLUX.2-dev` with `FV_FLUX2_STEPS=50 FV_FLUX2_GUIDANCE=4.0`.
+
+FLUX.1 compare knobs: `FV_FLUX1_REPO` (default `black-forest-labs/FLUX.1-schnell`),
+`FV_FLUX1_STEPS` (4), `FV_FLUX1_GUIDANCE` (0), same HxW/prompt. For FLUX.1-dev:
+`FV_FLUX1_REPO=black-forest-labs/FLUX.1-dev FV_FLUX1_STEPS=50 FV_FLUX1_GUIDANCE=3.5`.
+`FV_FLUX_FAMILY=flux1 scripts/gpu/validate.sh run compare-flux2` selects the
+same runner. See [docs/flux1-port.md](../../docs/flux1-port.md).
 
 SDPA A/B (default stays `dense`, same as tag `flux2-rope-p0-pre-fused-sdpa`):
 

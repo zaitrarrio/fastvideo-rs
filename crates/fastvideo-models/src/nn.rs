@@ -42,6 +42,14 @@ pub fn silu(xs: &Tensor) -> Result<Tensor> {
     (x.clone() * candle_nn::ops::sigmoid(&x)?)?.to_dtype(dtype)
 }
 
+/// OpenAI CLIP `quick_gelu`: `x * sigmoid(1.702 x)`.
+pub fn quick_gelu(xs: &Tensor) -> Result<Tensor> {
+    let dtype = xs.dtype();
+    let x = xs.to_dtype(DType::F32)?;
+    let s = candle_nn::ops::sigmoid(&(&x * 1.702)?)?;
+    (x * s)?.to_dtype(dtype)
+}
+
 /// GELU tanh approximation used by Diffusers `gelu-approximate` / `gelu_pytorch_tanh`.
 pub fn gelu_tanh(xs: &Tensor) -> Result<Tensor> {
     let dtype = xs.dtype();

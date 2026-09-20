@@ -3,7 +3,7 @@ name = "fastvideo-cudarc"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "cudarc CUDA Wan T2V and Flux2 T2I backend for fastvideo-rs."
+description = "cudarc CUDA Wan T2V and Flux2 / FLUX.1 T2I backend for fastvideo-rs."
 
 [dependencies]
 fastvideo-ops.workspace = true

@@ -449,6 +449,9 @@ impl AutoencoderKlFlux2 {
             x = x.reshape(vec![b, c, h, w])?;
         }
         x = x.mul_scalar(1.0 / self.cfg.scaling_factor);
+        if self.cfg.shift_factor != 0.0 {
+            x = x.add_scalar(self.cfg.shift_factor);
+        }
         if let Some(pq) = &self.post_quant {
             x = pq.forward(&x)?;
         }

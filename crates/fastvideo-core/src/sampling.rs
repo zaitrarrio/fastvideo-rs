@@ -340,13 +340,41 @@ pub static FLUX2_KLEIN_4B: InferencePreset = InferencePreset {
 
 pub static FLUX2_KLEIN_9B: InferencePreset = InferencePreset {
     name: "flux2_klein_9b",
-    description: "FLUX.2 Klein 9B distilled T2I (Qwen3, 4-step)",
+    description: "FLUX.2 Klein 9B distilled T2I (Qwen3-8B, 4-step)",
     workload_type: WorkloadType::T2I,
     height: Some(1024),
     width: Some(1024),
     num_frames: Some(1),
     fps: 1,
     guidance_scale: 1.0,
+    guidance_scale_2: None,
+    num_inference_steps: 4,
+    negative_prompt: "",
+};
+
+pub static FLUX1_DEV: InferencePreset = InferencePreset {
+    name: "flux1_dev",
+    description: "FLUX.1-dev T2I (CLIP-L + T5-XXL, 50-step, guidance 3.5)",
+    workload_type: WorkloadType::T2I,
+    height: Some(1024),
+    width: Some(1024),
+    num_frames: Some(1),
+    fps: 1,
+    guidance_scale: 3.5,
+    guidance_scale_2: None,
+    num_inference_steps: 50,
+    negative_prompt: "",
+};
+
+pub static FLUX1_SCHNELL: InferencePreset = InferencePreset {
+    name: "flux1_schnell",
+    description: "FLUX.1-schnell T2I (CLIP-L + T5-XXL, 4-step, guidance 0)",
+    workload_type: WorkloadType::T2I,
+    height: Some(1024),
+    width: Some(1024),
+    num_frames: Some(1),
+    fps: 1,
+    guidance_scale: 0.0,
     guidance_scale_2: None,
     num_inference_steps: 4,
     negative_prompt: "",
@@ -371,6 +399,8 @@ pub static ALL_PRESETS: &[&InferencePreset] = &[
     &FLUX2_DEV,
     &FLUX2_KLEIN_4B,
     &FLUX2_KLEIN_9B,
+    &FLUX1_DEV,
+    &FLUX1_SCHNELL,
 ];
 
 /// Default flow-shift / DMD schedule from FastVideo pipeline configs.
@@ -430,6 +460,12 @@ pub fn pipeline_defaults(def: &WanModelDefinition) -> PipelineDefaults {
             dmd_steps: None,
             boundary_ratio: None,
             embedded_cfg_scale: None,
+        },
+        "FluxPipelineConfig" => PipelineDefaults {
+            flow_shift: 1.0,
+            dmd_steps: None,
+            boundary_ratio: None,
+            embedded_cfg_scale: Some(3.5),
         },
         _ => match def.sampling {
             SamplingAlgorithm::Dmd => PipelineDefaults {

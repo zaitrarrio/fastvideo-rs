@@ -9,6 +9,7 @@
 
 #![allow(unsafe_code)]
 
+pub mod flux1;
 pub mod flux2;
 pub mod wan;
 
