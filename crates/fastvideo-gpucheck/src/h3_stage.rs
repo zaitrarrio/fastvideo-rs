@@ -187,8 +187,8 @@ pub enum Stage {
         #[arg(long)]
         text_weights: Option<PathBuf>,
         /// `auto` (resident-fp8 when >= 85 GB are free before anything loads,
-        /// else streamed), `streamed`, `resident-fp8`, `resident-bf16`. The
-        /// conditioning cache stays in front of whichever is chosen.
+        /// else streamed), `streamed`, `resident-fp8`, `resident-bf16`, or
+        /// `recovered-8b` (SearchingMan Qwen3-VL-8B + ARA + adapter).
         #[arg(long, default_value = "auto")]
         text_encoder: String,
         /// With a resident encoder: also encode the prompt by streaming (~10 s,
@@ -205,6 +205,10 @@ pub enum Stage {
         /// decoder; the `vae/` snapshot is then unused.
         #[arg(long)]
         taeh3_weights: Option<PathBuf>,
+        /// DMD recipe: `8step` / `v2`, `4step-vsa` / `preview-vsa`, `4step-dense`
+        /// / `preview-dense`. Default: read `fastvideo_inference.json` or 8-step.
+        #[arg(long)]
+        h3_recipe: Option<String>,
         #[arg(long, default_value = "cuda")]
         device: String,
     },
@@ -248,7 +252,7 @@ pub fn run(report: &mut Report, stage: &Stage) -> StageResult<()> {
         Stage::Dit { weights, oracle, device, max_rel } => dit(report, weights, oracle, device, *max_rel),
         Stage::Loop { weights, oracle, device, max_rel, gated_steps } => ladder(report, weights, oracle, device, *max_rel, *gated_steps),
         Stage::Vsa { device, seed, max_rel } => vsa(report, device, *seed, *max_rel),
-        Stage::Gen { weights, prompt, seconds, seed, dense, no_mp4, clip_dir, adaln_cache, text_cache, no_text_cache, text_weights, text_encoder, compare_text_encoders, warm, taeh3_weights, device } => {
+        Stage::Gen { weights, prompt, seconds, seed, dense, no_mp4, clip_dir, adaln_cache, text_cache, no_text_cache, text_weights, text_encoder, compare_text_encoders, warm, taeh3_weights, h3_recipe, device } => {
             let text_cache = if *no_text_cache {
                 None
             } else {
@@ -261,6 +265,7 @@ pub fn run(report: &mut Report, stage: &Stage) -> StageResult<()> {
                 text_cache,
                 text_encoder: fastvideo_cudarc::h3::pipeline::TextEncoderChoice::parse(text_encoder).map_err(|e| anyhow::anyhow!(e))?,
                 taeh3: taeh3_weights.clone(),
+                recipe: h3_recipe.clone(),
             };
             gen(report, weights, prompt, *seconds, *seed, !*no_mp4, clip_dir, options, *warm, *compare_text_encoders, device)
         }

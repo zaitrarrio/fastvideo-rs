@@ -34,8 +34,8 @@ require_tools vastai jq rsync git
 vast_check_auth
 
 build_id="$(cd "$FV_ROOT" && bash scripts/gpu/docker.sh build-id)"
-if [[ -x "$DIST/fv-gpucheck" && "$(cat "$DIST/fv-gpucheck.build-id" 2>/dev/null)" == "$build_id" ]]; then
-  log "dist already matches build $build_id"; exit 0
+if [[ -x "$DIST/fv-gpucheck" && "$(cat "$DIST/fv-gpucheck.build-id" 2>/dev/null)" == "$build_id" && -x "$DIST/hf-fm" ]]; then
+  log "dist already matches build $build_id (fv-gpucheck + hf-fm)"; exit 0
 fi
 
 max_dph="${MAX_DPH:-$(tier_max_dph build)}"
@@ -73,17 +73,22 @@ log "syncing source (git-tracked files only)"
 fv_ssh "$HOST" "$PORT" "mkdir -p $REMOTE"
 (cd "$FV_ROOT" && git ls-files -z | rsync -az --files-from=- --from0 -e "ssh -p $PORT -o StrictHostKeyChecking=no" . "root@$HOST:$REMOTE/") >/dev/null
 
-log "building release with ahead-of-time cubins"
+log "building release with ahead-of-time cubins + hf-fm"
 fv_ssh "$HOST" "$PORT" "set -euo pipefail; cd $REMOTE
   export PATH=\$HOME/.cargo/bin:/usr/local/cuda-13.0/bin:\$PATH NVCC=/usr/local/cuda-13.0/bin/nvcc \
          CUDARC_CUDA_VERSION=13000 CARGO_PROFILE_RELEASE_LTO=off CARGO_PROFILE_RELEASE_CODEGEN_UNITS=16
   cargo build --release -p fastvideo-gpucheck --features cuda 2>&1 | tee build.log | grep -E 'warning: fastvideo-cudarc|Compiling fastvideo|Finished|error' || true
   grep -q 'embedded cubins for sm' build.log || { echo 'build.rs did not embed cubins'; exit 1; }
   echo '$build_id' > target/release/fv-gpucheck.build-id
-  ./target/release/fv-gpucheck --out /tmp/gate nvrtc >/dev/null && python3 -c \"import json;print('aot_sms', json.load(open('/tmp/gate/nvrtc.json'))['context'].get('aot_sms'))\""
+  ./target/release/fv-gpucheck --out /tmp/gate nvrtc >/dev/null && python3 -c \"import json;print('aot_sms', json.load(open('/tmp/gate/nvrtc.json'))['context'].get('aot_sms'))\"
+  cargo install hf-fetch-model --features cli --root /tmp/hf-fm-root 2>&1 | tee -a build.log | grep -E 'Installed|Compiling hf|Finished|error' || true
+  test -x /tmp/hf-fm-root/bin/hf-fm"
 
 mkdir -p "$DIST"
 fv_rsync_from "$HOST" "$PORT" "$REMOTE/target/release/fv-gpucheck" "$DIST/fv-gpucheck" >/dev/null
 fv_rsync_from "$HOST" "$PORT" "$REMOTE/target/release/fv-gpucheck.build-id" "$DIST/fv-gpucheck.build-id" >/dev/null
-chmod +x "$DIST/fv-gpucheck"
-log "dist: $DIST/fv-gpucheck ($(du -h "$DIST/fv-gpucheck" | cut -f1), build $build_id) in $(( $(date +%s) - T_START ))s"
+fv_rsync_from "$HOST" "$PORT" "/tmp/hf-fm-root/bin/hf-fm" "$DIST/hf-fm" >/dev/null
+fv_rsync_from "$HOST" "$PORT" "/tmp/hf-fm-root/bin/hf-fetch-model" "$DIST/hf-fetch-model" >/dev/null || true
+chmod +x "$DIST/fv-gpucheck" "$DIST/hf-fm"
+[[ -x "$DIST/hf-fetch-model" ]] && chmod +x "$DIST/hf-fetch-model"
+log "dist: $DIST/fv-gpucheck ($(du -h "$DIST/fv-gpucheck" | cut -f1), build $build_id) + hf-fm in $(( $(date +%s) - T_START ))s"

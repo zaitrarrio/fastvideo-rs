@@ -192,6 +192,50 @@ pub fn encode_prompt(root: &Path, prompt: &str) -> Result<(Vec<u32>, CudaTensor)
     Ok((text.ids, text.hidden))
 }
 
+/// SearchingMan recovered-8B path: tokenize with the DiT snapshot's H3
+/// tokenizer, encode with a resident [`super::recovered_8b::Recovered8bEncoder`]
+/// (tap 24 + adapter → `[1, S, 5120]`). Cache entries are keyed as width 5120.
+pub fn encode_prompt_recovered(
+    tokenizer_root: &Path,
+    _encoder_root: &Path,
+    prompt: &str,
+    cache_dir: Option<&Path>,
+    resident: Option<&dyn HiddenStateEncoder>,
+) -> Result<TextConditioning> {
+    use super::recovered_8b::RECOVERED_8B_TAP;
+    use super::text_cache as cache;
+    let encoder = resident.ok_or_else(|| msg("recovered-8b: resident encoder required"))?;
+    let ids = tokenize(tokenizer_root, prompt)?;
+    let tap = RECOVERED_8B_TAP;
+    let out_hidden = 5120usize;
+    let Some(dir) = cache_dir else {
+        let hidden = encoder.hidden_state(&ids, tap)?;
+        return Ok(TextConditioning {
+            ids,
+            hidden,
+            cache: CacheStatus::Disabled,
+            encoder: encoder.kind(),
+        });
+    };
+    let tokenizer_path = tokenizer_root.join("tokenizer").join("tokenizer.json");
+    let tokenizer_bytes =
+        std::fs::read(&tokenizer_path).map_err(|e| msg(format!("{}: {e}", tokenizer_path.display())))?;
+    // Identity is the encoder kind + tap; recovered weights are not a LazyStore
+    // under text_encoder/, so we fingerprint the kind string instead.
+    let identity = cache::sha256(format!("recovered-8b-tap{tap}").as_bytes());
+    let key = cache::cache_key(prompt, &cache::sha256(&tokenizer_bytes), tap, &identity);
+    let (entry, hit) = cache::get_or_compute(dir, &key, &ids, out_hidden, || {
+        Ok(encoder.hidden_state(&ids, tap)?.host_cow()?.into_owned())
+    })?;
+    let hidden = CudaTensor::from_vec(entry.data, vec![1, ids.len(), out_hidden])?.to_device()?;
+    Ok(TextConditioning {
+        ids,
+        hidden,
+        cache: if hit { CacheStatus::Hit } else { CacheStatus::Miss },
+        encoder: if hit { "cache" } else { encoder.kind() },
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

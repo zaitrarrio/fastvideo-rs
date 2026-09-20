@@ -469,7 +469,7 @@ impl H3TextEncoderConfig {
 #[derive(Debug, Clone, PartialEq)]
 pub struct H3InferenceContract {
     /// DMD rungs; `rung / 1000` is the *unshifted* sigma of each forward.
-    pub dmd_denoising_steps: [u32; 8],
+    pub dmd_denoising_steps: Vec<u32>,
     /// Sigma-grid points, terminal zero included (`transformer_forwards + 1`).
     pub num_inference_steps: usize,
     pub transformer_forwards: usize,
@@ -479,12 +479,14 @@ pub struct H3InferenceContract {
     pub vsa_sparsity: f64,
     /// Tokens per VSA tile; 64 is the `(4, 4, 4)` tile.
     pub vsa_tile_size: usize,
+    /// Dense attention without `to_gate_compress` / VSA (Preview Dense).
+    pub dense: bool,
 }
 
 impl H3InferenceContract {
     pub fn fasth3_8step() -> Self {
         Self {
-            dmd_denoising_steps: [999, 874, 749, 624, 500, 375, 250, 125],
+            dmd_denoising_steps: vec![999, 874, 749, 624, 500, 375, 250, 125],
             num_inference_steps: 9,
             transformer_forwards: 8,
             video_scheduler_shift: 10.0,
@@ -492,6 +494,49 @@ impl H3InferenceContract {
             guidance_scale: 1.0,
             vsa_sparsity: 0.8,
             vsa_tile_size: 64,
+            dense: false,
+        }
+    }
+
+    /// FastH3 Preview VSA: 4 forwards, video shift 12, 90% sparsity.
+    pub fn fasth3_4step_vsa() -> Self {
+        Self {
+            dmd_denoising_steps: vec![999, 749, 500, 250],
+            num_inference_steps: 5,
+            transformer_forwards: 4,
+            video_scheduler_shift: 12.0,
+            audio_scheduler_shift: 3.0,
+            guidance_scale: 1.0,
+            vsa_sparsity: 0.9,
+            vsa_tile_size: 64,
+            dense: false,
+        }
+    }
+
+    /// FastH3 Preview Dense: same 4-rung ladder as VSA Preview, no VSA / gate.
+    pub fn fasth3_4step_dense() -> Self {
+        Self {
+            dmd_denoising_steps: vec![999, 749, 500, 250],
+            num_inference_steps: 5,
+            transformer_forwards: 4,
+            video_scheduler_shift: 12.0,
+            audio_scheduler_shift: 3.0,
+            guidance_scale: 1.0,
+            vsa_sparsity: 0.0,
+            vsa_tile_size: 64,
+            dense: true,
+        }
+    }
+
+    /// Named recipe: `8step` / `v2`, `4step-vsa` / `preview-vsa`, `4step-dense` / `preview-dense`.
+    pub fn named(name: &str) -> Result<Self, String> {
+        match name {
+            "8step" | "v2" | "fasth3-8step" => Ok(Self::fasth3_8step()),
+            "4step-vsa" | "preview-vsa" | "fasth3-4step-vsa" => Ok(Self::fasth3_4step_vsa()),
+            "4step-dense" | "preview-dense" | "fasth3-4step-dense" => Ok(Self::fasth3_4step_dense()),
+            other => Err(format!(
+                "unknown H3 recipe '{other}' (8step|4step-vsa|4step-dense)"
+            )),
         }
     }
 }
@@ -763,10 +808,25 @@ mod tests {
 
     #[test]
     fn contract_is_consistent() {
-        let c = H3InferenceContract::fasth3_8step();
-        assert_eq!(c.dmd_denoising_steps.len(), c.transformer_forwards);
-        assert_eq!(c.num_inference_steps, c.transformer_forwards + 1);
-        assert!(c.dmd_denoising_steps.windows(2).all(|w| w[0] > w[1]));
+        for c in [
+            H3InferenceContract::fasth3_8step(),
+            H3InferenceContract::fasth3_4step_vsa(),
+            H3InferenceContract::fasth3_4step_dense(),
+        ] {
+            assert_eq!(c.dmd_denoising_steps.len(), c.transformer_forwards);
+            assert_eq!(c.num_inference_steps, c.transformer_forwards + 1);
+            assert!(c.dmd_denoising_steps.windows(2).all(|w| w[0] > w[1]));
+            let j = super::super::schedule::H3JointSchedule::from_contract(&c).unwrap();
+            assert_eq!(j.num_steps(), c.transformer_forwards);
+        }
+        assert!(!H3InferenceContract::fasth3_4step_vsa().dense);
+        assert!(H3InferenceContract::fasth3_4step_dense().dense);
+        assert_eq!(H3InferenceContract::fasth3_4step_vsa().vsa_sparsity, 0.9);
+        assert_eq!(
+            H3InferenceContract::named("preview-vsa").unwrap(),
+            H3InferenceContract::fasth3_4step_vsa()
+        );
+        assert!(H3InferenceContract::named("nope").is_err());
     }
 
     #[test]

@@ -1290,12 +1290,12 @@ run_h3_matrix() {
     h3_matrix_cell "$sku" v2 stock resident-bf16
 
     # Preview VSA + Dense (H200 first). Repos may need FV_H3_PREVIEW_* overrides.
+    # `fetch` only starts hf-fm in the background — wait for .complete before cells.
     local pvsa="$WORK/weights/h3-4step-vsa"
     STAGE_OPTIONAL=1 remote_run fetch-preview-vsa 120 fetch "$preview_vsa_repo" "$pvsa" \
       "transformer/*" "audio_vae/*" || true
-    if fv_ssh "$HOST" "$PORT" "test -f $pvsa/.complete"; then
+    if STAGE_OPTIONAL=1 remote_run wait-preview-vsa 7200 wait-weights "$pvsa" 7200 transformer audio_vae; then
       fv_ssh "$HOST" "$PORT" "ln -sfn $v2/text_encoder $pvsa/text_encoder; ln -sfn $v2/tokenizer $pvsa/tokenizer"
-      remote_run wait-preview-vsa 7200 wait-weights "$pvsa" 7200 transformer audio_vae
       local id_pv_stock id_pv_8b
       h3_matrix_cell "$sku" 4step-vsa stock streamed
       id_pv_stock="$(tail -1 "$RUN_DIR/matrix-test-ids.txt")"
@@ -1311,9 +1311,8 @@ run_h3_matrix() {
     local pdense="$WORK/weights/h3-4step-dense"
     STAGE_OPTIONAL=1 remote_run fetch-preview-dense 120 fetch "$preview_dense_repo" "$pdense" \
       "transformer/*" "audio_vae/*" || true
-    if fv_ssh "$HOST" "$PORT" "test -f $pdense/.complete"; then
+    if STAGE_OPTIONAL=1 remote_run wait-preview-dense 7200 wait-weights "$pdense" 7200 transformer audio_vae; then
       fv_ssh "$HOST" "$PORT" "ln -sfn $v2/text_encoder $pdense/text_encoder; ln -sfn $v2/tokenizer $pdense/tokenizer"
-      remote_run wait-preview-dense 7200 wait-weights "$pdense" 7200 transformer audio_vae
       h3_matrix_cell "$sku" 4step-dense stock streamed
     else
       log "preview Dense fetch skipped/failed — set FV_H3_PREVIEW_DENSE_REPO if needed"

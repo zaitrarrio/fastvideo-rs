@@ -10,6 +10,7 @@ pub mod vsa;
 pub mod mlx;
 pub mod transformer;
 pub mod pipeline;
+pub mod recovered_8b;
 
 #[cfg(test)]
 mod manifest_tests;

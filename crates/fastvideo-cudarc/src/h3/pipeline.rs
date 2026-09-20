@@ -37,7 +37,8 @@ use std::path::{Path, PathBuf};
 use std::time::Instant;
 
 use fastvideo_models::h3::config::{
-    H3AudioVaeConfig, H3Geometry, H3TransformerConfig, H3VideoVaeConfig, H3_AUDIO_CHANNELS, H3_FPS,
+    H3AudioVaeConfig, H3Geometry, H3InferenceContract, H3TransformerConfig, H3VideoVaeConfig,
+    H3_AUDIO_CHANNELS, H3_FPS,
 };
 use fastvideo_models::h3::packing::{patchify, H3PackedLayout};
 use fastvideo_models::h3::schedule::{H3JointSchedule, H3Schedule};
@@ -92,6 +93,8 @@ pub enum TextEncoderChoice {
     ResidentBf16,
     /// Resident with weight-only FP8 rows (24.4 GB): fits beside the DiT at 5 s.
     ResidentFp8,
+    /// SearchingMan recovered Qwen3-VL-8B + ARA + 4096→5120 adapter (~11 GiB).
+    Recovered8b,
 }
 
 /// Free device memory at which `Auto` keeps the encoder resident: DiT 41 +
@@ -105,7 +108,10 @@ impl TextEncoderChoice {
             "streamed" => Ok(Self::Streamed),
             "resident-bf16" => Ok(Self::ResidentBf16),
             "resident-fp8" => Ok(Self::ResidentFp8),
-            other => Err(format!("unknown text encoder '{other}' (auto|streamed|resident-fp8|resident-bf16)")),
+            "recovered-8b" => Ok(Self::Recovered8b),
+            other => Err(format!(
+                "unknown text encoder '{other}' (auto|streamed|resident-fp8|resident-bf16|recovered-8b)"
+            )),
         }
     }
 
@@ -123,7 +129,7 @@ impl TextEncoderChoice {
         match self {
             Self::ResidentBf16 => Some(crate::llm::WeightPrecision::Native),
             Self::ResidentFp8 => Some(crate::llm::WeightPrecision::Fp8Rows),
-            Self::Auto | Self::Streamed => None,
+            Self::Auto | Self::Streamed | Self::Recovered8b => None,
         }
     }
 }
@@ -132,7 +138,8 @@ impl TextEncoderChoice {
 pub struct H3PipelineOptions {
     /// Dense attention without the compression gate: the parity mode the
     /// diffusers oracle judges. The checkpoint was distilled with VSA-H3, so
-    /// the default (`false`) is what it should be served with.
+    /// the default (`false`) is what it should be served with. A dense recipe
+    /// forces this to `true`.
     pub dense: bool,
     /// Memoize the precomputed AdaLN table here (155 MB). Building it reads
     /// 26 GB of projections nothing else needs; the file is validated against
@@ -148,6 +155,72 @@ pub struct H3PipelineOptions {
     /// decoder is not loaded. `FASTVIDEO_TAEH3_WEIGHTS` is the same switch
     /// when this is `None`.
     pub taeh3: Option<PathBuf>,
+    /// Named DMD recipe (`8step`, `4step-vsa`, `4step-dense`). When unset,
+    /// `fastvideo_inference.json` under the weight root (or `transformer/`) is
+    /// read if present; otherwise the 8-step V2 contract.
+    pub recipe: Option<String>,
+}
+
+/// Resolve the inference contract: explicit recipe name, then
+/// `fastvideo_inference.json`, then the 8-step V2 default.
+pub fn resolve_contract(root: &Path, recipe: Option<&str>) -> Result<H3InferenceContract> {
+    if let Some(name) = recipe {
+        return H3InferenceContract::named(name).map_err(msg);
+    }
+    for rel in ["fastvideo_inference.json", "transformer/fastvideo_inference.json"] {
+        let path = root.join(rel);
+        if path.is_file() {
+            return contract_from_inference_json(&path);
+        }
+    }
+    Ok(H3InferenceContract::fasth3_8step())
+}
+
+fn contract_from_inference_json(path: &Path) -> Result<H3InferenceContract> {
+    let text = std::fs::read_to_string(path).map_err(|e| msg(format!("{}: {e}", path.display())))?;
+    let v: serde_json::Value =
+        serde_json::from_str(&text).map_err(|e| msg(format!("{}: {e}", path.display())))?;
+    let rungs = v
+        .get("dmd_denoising_steps")
+        .and_then(|x| x.as_array())
+        .ok_or_else(|| msg(format!("{}: missing dmd_denoising_steps", path.display())))?;
+    let rungs: Vec<u32> = rungs
+        .iter()
+        .map(|x| {
+            x.as_u64()
+                .map(|n| n as u32)
+                .ok_or_else(|| msg(format!("{}: non-integer dmd rung", path.display())))
+        })
+        .collect::<Result<_>>()?;
+    let video_shift = v
+        .get("flow_shift")
+        .or_else(|| v.get("video_scheduler_shift"))
+        .and_then(|x| x.as_f64())
+        .unwrap_or(10.0);
+    let audio_shift = v
+        .get("audio_flow_shift")
+        .or_else(|| v.get("audio_scheduler_shift"))
+        .and_then(|x| x.as_f64())
+        .unwrap_or(3.0);
+    let vsa = v.get("vsa_sparsity").and_then(|x| x.as_f64()).unwrap_or(0.8);
+    let dense = v.get("dense").and_then(|x| x.as_bool()).unwrap_or(vsa <= 0.0);
+    // Match the published Preview / V2 contracts when the JSON is the usual shape.
+    match (rungs.as_slice(), dense) {
+        ([999, 874, 749, 624, 500, 375, 250, 125], false) => Ok(H3InferenceContract::fasth3_8step()),
+        ([999, 749, 500, 250], false) => Ok(H3InferenceContract::fasth3_4step_vsa()),
+        ([999, 749, 500, 250], true) => Ok(H3InferenceContract::fasth3_4step_dense()),
+        _ => Ok(H3InferenceContract {
+            num_inference_steps: rungs.len() + 1,
+            transformer_forwards: rungs.len(),
+            dmd_denoising_steps: rungs,
+            video_scheduler_shift: video_shift,
+            audio_scheduler_shift: audio_shift,
+            guidance_scale: v.get("guidance_scale").and_then(|x| x.as_f64()).unwrap_or(1.0),
+            vsa_sparsity: vsa,
+            vsa_tile_size: 64,
+            dense,
+        }),
+    }
 }
 
 #[derive(Debug, Clone, Default)]
@@ -267,6 +340,7 @@ pub struct H3Pipeline {
     root: PathBuf,
     options: H3PipelineOptions,
     cfg: H3TransformerConfig,
+    contract: H3InferenceContract,
     schedule: H3JointSchedule,
     refiner: H3TextRefiner,
     model: H3Transformer,
@@ -280,8 +354,13 @@ impl H3Pipeline {
     /// `root` is the FastH3 snapshot (`transformer/`, `vae/`, `audio_vae/`, and
     /// `tokenizer/` + `text_encoder/` unless `options.text_root` says otherwise).
     pub fn load(root: &Path, options: H3PipelineOptions) -> Result<Self> {
+        let contract = resolve_contract(root, options.recipe.as_deref())?;
         let cfg = H3TransformerConfig::fasth3_8step();
-        let schedule = H3JointSchedule::fasth3_8step();
+        let schedule = H3JointSchedule::from_contract(&contract).map_err(msg)?;
+        let mut options = options;
+        if contract.dense {
+            options.dense = true;
+        }
         let mut load_timings = H3LoadTimings::default();
         let timed = |slot: &mut f64, timer: Instant| *slot = timer.elapsed().as_secs_f64();
 
@@ -289,15 +368,20 @@ impl H3Pipeline {
         // device with f32 transients (524 MB for the widest matrix), which
         // should happen while the card is otherwise empty.
         let free = crate::wan::device::free_memory().map(|(free, _)| free);
-        let mut options = options;
         options.text_encoder = options.text_encoder.resolve(free);
         let timer = Instant::now();
-        let text_encoder: Option<Box<dyn HiddenStateEncoder>> = match options.text_encoder.precision() {
-            Some(precision) => {
+        let text_encoder: Option<Box<dyn HiddenStateEncoder>> = match options.text_encoder {
+            TextEncoderChoice::Recovered8b => {
                 let text_root = options.text_root.as_deref().unwrap_or(root);
-                Some(Box::new(super::text::load_resident_encoder(text_root, precision)?))
+                Some(Box::new(super::recovered_8b::Recovered8bEncoder::load(text_root)?))
             }
-            None => None,
+            other => match other.precision() {
+                Some(precision) => {
+                    let text_root = options.text_root.as_deref().unwrap_or(root);
+                    Some(Box::new(super::text::load_resident_encoder(text_root, precision)?))
+                }
+                None => None,
+            },
         };
         if text_encoder.is_some() {
             timed(&mut load_timings.text_encoder_s, timer);
@@ -317,6 +401,14 @@ impl H3Pipeline {
             None => (WeightMap::open(&root.join("transformer"))?, None),
         };
         let with_gate = !options.dense && mlx.as_ref().is_none_or(|s| s.vsa_capable);
+        crate::wan::log::info(format_args!(
+            "h3 recipe={} steps={} video_shift={} vsa={} dense={}",
+            options.recipe.as_deref().unwrap_or("auto"),
+            contract.transformer_forwards,
+            contract.video_scheduler_shift,
+            contract.vsa_sparsity,
+            options.dense
+        ));
         let timer = Instant::now();
         let refiner = H3TextRefiner::load(&cfg, &map)?;
         timed(&mut load_timings.refiner_s, timer);
@@ -337,13 +429,18 @@ impl H3Pipeline {
         let timer = Instant::now();
         let audio_vae = H3AudioDecoder::load(H3AudioVaeConfig::fasth3_8step(), &WeightMap::open(&root.join("audio_vae"))?)?;
         timed(&mut load_timings.audio_vae_s, timer);
-        Ok(Self { root: root.to_path_buf(), options, cfg, schedule, refiner, model, video_vae, audio_vae, text_encoder, load_timings })
+        Ok(Self { root: root.to_path_buf(), options, cfg, contract, schedule, refiner, model, video_vae, audio_vae, text_encoder, load_timings })
     }
 
     /// Replace the text encoder (tests, or an encoder built elsewhere). It is
     /// consulted only on a conditioning-cache miss.
     pub fn with_text_encoder(mut self, encoder: Box<dyn HiddenStateEncoder>) -> Self {
-        if !matches!(self.options.text_encoder, TextEncoderChoice::ResidentBf16 | TextEncoderChoice::ResidentFp8) {
+        if !matches!(
+            self.options.text_encoder,
+            TextEncoderChoice::ResidentBf16
+                | TextEncoderChoice::ResidentFp8
+                | TextEncoderChoice::Recovered8b
+        ) {
             self.options.text_encoder = TextEncoderChoice::ResidentFp8;
         }
         self.text_encoder = Some(encoder);
@@ -390,13 +487,56 @@ impl H3Pipeline {
 
         // --- text: cache, else resident, else ~50 GB streamed one layer at a time ---
         let timer = Instant::now();
-        let resident = match (self.options.text_encoder.precision(), &self.text_encoder) {
-            (None, _) => None,
-            (Some(_), Some(encoder)) => Some(encoder.as_ref()),
-            (Some(_), None) => return Err(msg(format!("text encoder {:?} was requested but is not loaded", self.options.text_encoder))),
+        let resident = match (&self.options.text_encoder, &self.text_encoder) {
+            (_, Some(encoder))
+                if matches!(
+                    self.options.text_encoder,
+                    TextEncoderChoice::ResidentBf16
+                        | TextEncoderChoice::ResidentFp8
+                        | TextEncoderChoice::Recovered8b
+                ) =>
+            {
+                Some(encoder.as_ref())
+            }
+            (TextEncoderChoice::Streamed | TextEncoderChoice::Auto, _) => None,
+            (_, None) if matches!(
+                self.options.text_encoder,
+                TextEncoderChoice::ResidentBf16
+                    | TextEncoderChoice::ResidentFp8
+                    | TextEncoderChoice::Recovered8b
+            ) =>
+            {
+                return Err(msg(format!(
+                    "text encoder {:?} was requested but is not loaded",
+                    self.options.text_encoder
+                )));
+            }
+            _ => None,
         };
-        let text_root = self.options.text_root.as_deref().unwrap_or(&self.root);
-        let text = super::text::encode_prompt_with(text_root, &request.prompt, self.options.text_cache.as_deref(), resident)?;
+        // Tokenizer always comes from the DiT snapshot (H3 markers). Recovered
+        // 8B weights live under text_root and have no tokenizer of their own.
+        let (tokenizer_root, encoder_root) = if matches!(self.options.text_encoder, TextEncoderChoice::Recovered8b) {
+            (self.root.as_path(), self.options.text_root.as_deref().unwrap_or(&self.root))
+        } else {
+            let r = self.options.text_root.as_deref().unwrap_or(&self.root);
+            (r, r)
+        };
+        let text = if matches!(self.options.text_encoder, TextEncoderChoice::Recovered8b) {
+            super::text::encode_prompt_recovered(
+                tokenizer_root,
+                encoder_root,
+                &request.prompt,
+                self.options.text_cache.as_deref(),
+                resident,
+            )?
+        } else {
+            super::text::encode_prompt_with(
+                tokenizer_root,
+                &request.prompt,
+                self.options.text_cache.as_deref(),
+                resident,
+            )?
+        };
         timings.text_s = timer.elapsed().as_secs_f64();
         let timer = Instant::now();
         let text_refined = self.refiner.forward(&text.hidden)?;
@@ -405,7 +545,15 @@ impl H3Pipeline {
         // --- DiT --------------------------------------------------------------------
         let layout = H3PackedLayout::from_geometry(&geometry, text.ids.len()).map_err(msg)?;
         let sequence_length = layout.sequence_length();
-        let vsa = if self.options.dense { None } else { Some(H3Vsa::new(&layout, cfg.num_attention_heads, cfg.attention_head_dim, super::vsa::H3VsaConfig::fasth3_8step())?) };
+        let vsa = if self.options.dense {
+            None
+        } else {
+            let vsa_cfg = super::vsa::H3VsaConfig {
+                sparsity: self.contract.vsa_sparsity,
+                group: crate::wan::envflag::usize_flag("FASTVIDEO_VSA_GROUP", 8).max(1),
+            };
+            Some(H3Vsa::new(&layout, cfg.num_attention_heads, cfg.attention_head_dim, vsa_cfg)?)
+        };
         let mode = vsa.as_ref().map_or(AttnMode::Dense, AttnMode::Vsa);
         let layout = DeviceLayout::new(cfg, layout)?;
         let (video_noise, audio_noise) = seeded_noise(cfg, &geometry, request.seed).map_err(msg)?;

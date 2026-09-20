@@ -2,6 +2,23 @@
 
 Project code: FVID
 
+### FVID · 2026-09-20 · FVID-2026-09-20-h3-encoder-matrix
+- Trigger: checkpoint × encoder × residency matrix (V2 / Preview VSA / Preview Dense × stock streamed / SearchingMan 8B / cache-hit / resident-fp8|bf16 on H200)
+- Options: RunPod network volume; serialize SKUs; keep Python hub fetch; custom `fv-gpucheck fetch`
+- Decision: **Vast, three parallel SKUs** (A100-80, H100-80 not NVL, H200). Slim runtime: **hf-fm**, no Python. Contracts `fasth3_4step_vsa` / `fasth3_4step_dense`; `--text-encoder recovered-8b`. Tier `h3-matrix`: reuse box, GPU-empty/restart between cells, nohup, `TEST_ID` on every log line, `FV_IMAGE_PULL_TIMEOUT=120`. Preview Hub ids: `…-4-step-Preview-v1-VSA-DataFree` / `…-Dense-DataFree`. Flag defaults unchanged.
+- Reason: parallel CDN pulls beat serial volume copy; TAEH3 keeps decode off the critical path; PSNR (same box) gates 8B drift, not a host oracle.
+- Reversibility: cheap — tier is opt-in; encoder choice is a CLI flag
+- Executed by: Executor
+- ADR: none
+- Verification: **pass** (build `22bfa760236939c7`). Driver logs: `artifacts/gpucheck/matrix-logs/{a100,h100,h200}.driver.log`. Runs: `…/20260920T192357Z-h3-matrix` (A100), `…/192358Z` (H100+H200 V2), `…/194151Z` (H200 Preview). All three Vast boxes destroyed.
+  - **V2 stock streamed** `--warm`: H200 ~9.0 s/step peak ~60 GiB; A100 ~16.2 s/step; H100 ~12.0 s/step.
+  - **V2 recovered-8b** resident-bf16 PASS (same step times): H200 `20260920T192610Z-…` 198 s peak **68768 MiB**; A100 `20260920T192617Z-…` 393 s peak **68414 MiB**; H100 `20260920T192706Z-…` 277 s peak **69978 MiB**.
+  - **V2 cache-hit** PASS on all three. H200 also **resident-fp8** `20260920T193237Z-…` peak **82816 MiB** + **resident-bf16** `20260920T193552Z-…`.
+  - PSNR stock-vs-8b: A100 **15.23 dB**; H200 **15.03 dB**; H100 **14.95 dB**.
+  - **Preview 4step-vsa** (H200): stock `20260920T195013Z-…` warm denoise **30.9 s** (~7.7 s×4) peak 60 GiB; 8b `20260920T195159Z-…` same ~7.7 s/step peak **69408 MiB**; cache-hit `20260920T195355Z-…`; PSNR stock-vs-8b **15.60 dB**.
+  - **Preview 4step-dense** stock `20260920T195557Z-…` ~**42 s/step** ×4, warm denoise **168.8 s**, peak **57092 MiB** (~5.5× VSA).
+  - Preview first attempt skipped: async `fetch` checked `.complete` before `wait-weights` — fixed in `validate.sh`.
+
 ### FVID · 2026-09-20 · FVID-2026-09-20-h3-mlx-affine
 - Trigger: "implement our own kernel and also port the MLX work"
 - Options: 4-step Preview / 90% VSA A/B; community GGUF/nunchaku; process-wide `FASTVIDEO_FP8`; first-party affine W8A16 + official MLX recipe

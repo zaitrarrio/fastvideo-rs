@@ -258,6 +258,16 @@ impl H3JointSchedule {
             .unwrap_or_else(|e| unreachable!("{e}"))
     }
 
+    pub fn fasth3_4step_vsa() -> Self {
+        Self::from_contract(&H3InferenceContract::fasth3_4step_vsa())
+            .unwrap_or_else(|e| unreachable!("{e}"))
+    }
+
+    pub fn fasth3_4step_dense() -> Self {
+        Self::from_contract(&H3InferenceContract::fasth3_4step_dense())
+            .unwrap_or_else(|e| unreachable!("{e}"))
+    }
+
     pub fn num_steps(&self) -> usize {
         self.video.num_steps()
     }
@@ -453,6 +463,36 @@ mod tests {
         assert_eq!(
             H3Schedule::scale_noise(0.0, &clean, &noise).unwrap(),
             vec![10.0]
+        );
+    }
+
+    #[test]
+    fn four_step_preview_ladder() {
+        // Preview VSA / Dense: rungs [999, 749, 500, 250], video shift 12, audio 3.
+        const RUNGS4: [u32; 4] = [999, 749, 500, 250];
+        let v = H3Schedule::from_dmd_rungs(&RUNGS4, 12.0).unwrap();
+        let a = H3Schedule::from_dmd_rungs(&RUNGS4, 3.0).unwrap();
+        assert_eq!(v.num_steps(), 4);
+        assert_eq!(a.num_steps(), 4);
+        // Closed forms at half-integers: 0.5 -> 12*0.5/(1+11*0.5) = 6/6.5 = 12/13;
+        // 0.25 -> 3/(1+2.75) = 0.8. Audio: 0.5 -> 0.75, 0.25 -> 0.5.
+        assert!((f64::from(v.sigmas[2]) - 12.0 / 13.0).abs() < 1e-7);
+        assert_eq!(v.sigmas[3], 0.8);
+        assert_eq!(a.sigmas[2], 0.75);
+        assert_eq!(a.sigmas[3], 0.5);
+        assert_eq!(v.sigmas[4], 0.0);
+        // First rung is still 0.999, not 1.0.
+        assert!(v.sigmas[0] < 1.0 && v.timesteps[0] > 0.0);
+        for i in 0..4 {
+            assert!(v.sigmas[i] > a.sigmas[i], "step {i}");
+        }
+        let j = H3JointSchedule::fasth3_4step_vsa();
+        assert_eq!(j.num_steps(), 4);
+        assert_eq!(j.video.sigmas, v.sigmas);
+        assert_eq!(j.audio.sigmas, a.sigmas);
+        assert_eq!(
+            H3JointSchedule::fasth3_4step_dense().video.sigmas,
+            j.video.sigmas
         );
     }
 
