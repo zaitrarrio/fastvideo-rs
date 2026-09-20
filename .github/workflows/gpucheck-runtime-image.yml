@@ -1,12 +1,17 @@
 # Builds the GPU validation runtime image (fv-gpucheck + CUDA runtime libraries)
 # and pushes it to GHCR, so rented GPU boxes pull a small prebuilt image instead
 # of a ~9GB PyTorch image plus an upload. See scripts/gpu/README.md.
+#
+# Tags: every run pushes :build-<id> and :sha-<short>. :latest moves only on
+# main. Feature-branch runs also push :branch-<sanitized-ref>.
 name: gpucheck-runtime-image
 
 on:
   workflow_dispatch:
   push:
-    branches: [main]
+    # All branches, including names with slashes (e.g. cursor/…). Tags do not
+    # match `branches`, so a tag push does not publish an image.
+    branches: ["**"]
     paths:
       - "crates/**"
       - "Cargo.toml"
@@ -36,9 +41,27 @@ jobs:
         id: meta
         run: |
           # Same hash scripts/gpu/validate.sh uses to match a box's binary to local sources.
-          echo "build_id=$(bash scripts/gpu/docker.sh build-id)" >> "$GITHUB_OUTPUT"
-          echo "image=ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/fastvideo-rs-runtime" >> "$GITHUB_OUTPUT"
-          echo "short_sha=${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
+          image="ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/fastvideo-rs-runtime"
+          build_id="$(bash scripts/gpu/docker.sh build-id)"
+          short_sha="${GITHUB_SHA::7}"
+          echo "build_id=${build_id}" >> "$GITHUB_OUTPUT"
+          echo "image=${image}" >> "$GITHUB_OUTPUT"
+          echo "short_sha=${short_sha}" >> "$GITHUB_OUTPUT"
+          {
+            echo "tags<<EOF"
+            echo "${image}:build-${build_id}"
+            echo "${image}:sha-${short_sha}"
+            if [[ "$GITHUB_REF" == refs/heads/main ]]; then
+              echo "${image}:latest"
+            else
+              # Docker tags cannot contain '/'; alias feature-branch images.
+              safe="$(printf '%s' "$GITHUB_REF_NAME" | tr '[:upper:]' '[:lower:]' | sed -E 's/[^a-z0-9._-]+/-/g; s/^[-.]+//; s/[-.]+$//' | cut -c1-120)"
+              if [[ -n "$safe" ]]; then
+                echo "${image}:branch-${safe}"
+              fi
+            fi
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
 
       - uses: docker/setup-buildx-action@v3
 
@@ -58,10 +81,7 @@ jobs:
           push: true
           build-args: |
             BUILD_ID=${{ steps.meta.outputs.build_id }}
-          tags: |
-            ${{ steps.meta.outputs.image }}:build-${{ steps.meta.outputs.build_id }}
-            ${{ steps.meta.outputs.image }}:sha-${{ steps.meta.outputs.short_sha }}
-            ${{ steps.meta.outputs.image }}:latest
+          tags: ${{ steps.meta.outputs.tags }}
           labels: |
             org.opencontainers.image.revision=${{ github.sha }}
             dev.fastvideo.build-id=${{ steps.meta.outputs.build_id }}

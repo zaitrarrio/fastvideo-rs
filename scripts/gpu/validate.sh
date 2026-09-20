@@ -82,7 +82,8 @@ bad_hosts_json() {
 
 # ---- image ------------------------------------------------------------------------
 # Prefer the CI image built from exactly these sources (binary baked in, no
-# upload); otherwise :latest for the runtime libraries plus an uploaded binary.
+# upload); otherwise :latest (main's runtime libraries) plus an uploaded binary.
+# CI publishes :build-<id> on push to the branch or main; only main updates :latest.
 resolve_image() {
   local build_id="$1"
   if [[ -n "$IMAGE" ]]; then
@@ -95,7 +96,7 @@ resolve_image() {
     log "image $IMAGE (CI-built from these sources; binary baked in)"
   else
     IMAGE="$IMAGE_REPO:latest"
-    log "image $IMAGE (no CI image for build $build_id yet — push to main to publish one; uploading local binary)"
+    log "image $IMAGE (no CI image for build $build_id yet — CI publishes :build-$build_id on push to this branch or main; only main updates :latest; uploading local binary)"
   fi
 }
 
