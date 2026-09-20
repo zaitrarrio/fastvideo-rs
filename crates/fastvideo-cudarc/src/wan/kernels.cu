@@ -1137,8 +1137,10 @@ __device__ __forceinline__ void mma_tma_fence() {
 }
 __device__ __forceinline__ void mma_tma_2d(unsigned int smem, const FvTensorMap* tm,
                                           unsigned int mbar, int x, int y) {
+    // SM12x has no cluster TMA (`shared::cluster` illegal-addresses). The CTA
+    // form is PTX ISA 86 / SM90, so Hopper and Blackwell-WS share one path.
     asm volatile(
-        "cp.async.bulk.tensor.2d.shared::cluster.global.tile.mbarrier::complete_tx::bytes"
+        "cp.async.bulk.tensor.2d.shared::cta.global.tile.mbarrier::complete_tx::bytes"
         " [%0], [%1, {%3, %4}], [%2];\n"
         :: "r"(smem), "l"(tm), "r"(mbar), "r"(x), "r"(y) : "memory");
 }
@@ -1152,8 +1154,9 @@ __device__ __forceinline__ void mma_tma_tile(unsigned int smem, const FvTensorMa
 #endif
 
 extern "C" __global__ void __launch_bounds__(128, 2) vsa_mma_attn_tma(
-    FvTensorMap tq0, FvTensorMap tq1, FvTensorMap tk0, FvTensorMap tk1,
-    FvTensorMap tv0, FvTensorMap tv1,
+    const __grid_constant__ FvTensorMap tq0, const __grid_constant__ FvTensorMap tq1,
+    const __grid_constant__ FvTensorMap tk0, const __grid_constant__ FvTensorMap tk1,
+    const __grid_constant__ FvTensorMap tv0, const __grid_constant__ FvTensorMap tv1,
     const unsigned int* __restrict__ selected, const int* __restrict__ block_sizes,
     float* __restrict__ out, int num_tiles, int topk, float scale_log2, int q_base
 ) {

@@ -2,6 +2,16 @@
 
 Project code: FVID
 
+### FVID · 2026-09-20 · FVID-2026-09-20-tma-kernels-first
+- Trigger: "proceed" after ranking remaining H3 levers (TMA measure, fused QKVG, FP8 FFN, tiled QKV, prefix SDPA)
+- Options: kernels A/B of TMA vs `mma` on sm90+; skip to fused QKVG/FFN; profiled H3-gen first
+- Decision: **kernels A/B first** (`compute_cap>=900`, T1). Then a profiled H3-gen + TAEH3 only if TMA matches the host reference.
+- Reason: TMA is coded and unmeasured; FFN/QKVG work is wasted if `vsa_h3_3_mma` is still load-bound
+- Reversibility: cheap — `FASTVIDEO_VSA_KERNEL=mma` is the Ampere path
+- Executed by: Executor
+- ADR: none
+- Verification: **fail** — 5060 Ti sm_120, Ampere `vsa_mma_5x6x9` rel_l2 0.0028 then TMA `CUDA_ERROR_ILLEGAL_ADDRESS`. Cause: `shared::cluster` TMA (SM12x has CTA TMA only) + tensormaps not `__grid_constant__`. Fix in tree; re-measure.
+
 ### FVID · 2026-09-19 · FVID-2026-09-19-sm120-is-not-umma
 - Trigger: "continue" after the TAEH3 A/B, queued as Blackwell UMMA on `vsa_h3_3_mma`
 - Options: port FastVideo's sm100a `tcgen05` kernel; write UMMA from scratch; TMA + existing `mma.sync` on SM12x; FP8 fine stage
