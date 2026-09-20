@@ -2,6 +2,16 @@
 
 Project code: FVID
 
+### FVID · 2026-09-20 · FVID-2026-09-20-ffn-unchunk-next
+- Trigger: "commit, push and continue" after fused QKVG measured as a wash
+- Options: process-wide `FASTVIDEO_FP8` on H3 FFN; keep FFN in bf16 through SwiGLU; unchunk the 8192-row FFN GEMM on 5s clips; fused silu×mul kernel
+- Decision: **do not turn on `FASTVIDEO_FP8`.** Unchunk FFN when `[S, 2*ffn]` f32 fits in 6 GiB (5s = 4.0 GiB; 109k rows still chunks). Split `h3_ffn_in` / `h3_ffn_act` / `h3_ffn_out` so the next profile names the GEMMs. Then a profiled H3-gen+TAEH3.
+- Reason: FFN is ~38 s / 31% and matches BF16 FLOPs; Wan FP8 linears were −4.8% with 16.9 dB frames (`FVID-2026-09-18-fp8-linears-measured`). Five M=8192 GEMMs are the cheap thing to stop doing
+- Reversibility: cheap — `FFN_ROW_CHUNK` remains the fallback
+- Executed by: Executor
+- ADR: none
+- Verification: pending (host H3 transformer tests, then Max-Q `--profile --warm` + TAEH3)
+
 ### FVID · 2026-09-20 · FVID-2026-09-20-fused-qkvg-next
 - Trigger: "commit and push then continue with next strategy" after TMA measured as noise on 5s H3
 - Options: fused QKVG GEMM; FFN / SM12x FP8; prefix SDPA; more MMA load work
@@ -10,7 +20,7 @@ Project code: FVID
 - Reversibility: cheap — separate linears are a load-path revert; `FASTVIDEO_VSA_KERNEL` is untouched
 - Executed by: Executor
 - ADR: none
-- Verification: pending (host H3 transformer tests, then Max-Q `--profile --warm` + TAEH3)
+- Verification: host tests pass. Max-Q 6000 `20260920T100022Z-h3-gen`: warm denoise **125.5 s** vs TMA-only 123.5 s. Attn still 36.5 s (fused GEMM 21.3 s, Q/K prep 6.7 s, out 6.6 s). Peak 82 GiB vs 78. **Wash.** FFN 38.6 s is the remaining pile.
 
 ### FVID · 2026-09-20 · FVID-2026-09-20-tma-kernels-first
 - Trigger: "proceed" after ranking remaining H3 levers (TMA measure, fused QKVG, FP8 FFN, tiled QKV, prefix SDPA)

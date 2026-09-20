@@ -19,8 +19,9 @@
 //!
 //! **Activation lifetime is managed by hand.** Q/K/V are 7168 wide (wider than
 //! the 5376 residual) and the FFN is 28672; at 109k rows nothing of that size
-//! may outlive its use. Projections are dropped as soon as attention has
-//! consumed them and the FFN runs in row chunks.
+//! may outlive its use. The QKVG GEMM is one fused projection (`[q; k; v]` or
+//! `[q; k; v; gate]`), split into BHSD immediately, and dropped; the FFN runs
+//! in row chunks.
 //!
 //! Attention here is dense, which is what the diffusers oracle judges. The
 //! trained recipe (VSA-H3 with the `to_gate_compress` branch) plugs in through
@@ -282,13 +283,13 @@ impl BlockMods {
 // ---------------------------------------------------------------------------
 
 pub(crate) struct Attention {
-    to_q: Linear,
-    to_k: Linear,
-    to_v: Linear,
+    /// `[q; k; v]` or `[q; k; v; gate]` stacked on the output dim. One GEMM
+    /// so the 520 MB activation is read once; per-head RMSNorm+RoPE still
+    /// run on the Q/K slices (H3 norms over `head_dim`, not Wan's full dim).
+    qkvg: Linear,
     to_out: Linear,
-    /// VSA's compression-branch gate; absent in dense mode, where loading it
-    /// would cost 3.85 GB for a branch that mode does not have.
-    to_gate: Option<Linear>,
+    /// VSA's compression-branch gate lives in `qkvg`'s last `inner` columns.
+    has_gate: bool,
     /// `[head_dim]`, shared by every head.
     norm_q: CudaTensor,
     norm_k: CudaTensor,
@@ -300,13 +301,15 @@ pub(crate) struct Attention {
 impl Attention {
     fn load(map: &WeightMap, prefix: &str, cfg: &H3TransformerConfig, gate: bool) -> Result<Self> {
         let (hidden, inner, d) = (cfg.hidden_size, cfg.inner_dim(), cfg.attention_head_dim);
-        let lin = |name: &str, i: usize, o: usize| Linear::load(map, &format!("{prefix}.{name}"), i, o, false);
+        let mut names = vec![format!("{prefix}.to_q"), format!("{prefix}.to_k"), format!("{prefix}.to_v")];
+        if gate {
+            names.push(format!("{prefix}.to_gate_compress"));
+        }
+        let keys: Vec<&str> = names.iter().map(String::as_str).collect();
         Ok(Self {
-            to_q: lin("to_q", hidden, inner)?,
-            to_k: lin("to_k", hidden, inner)?,
-            to_v: lin("to_v", hidden, inner)?,
-            to_out: lin("to_out.0", inner, hidden)?,
-            to_gate: if gate { Some(lin("to_gate_compress", hidden, inner)?) } else { None },
+            qkvg: Linear::load_fused(map, &keys, hidden, inner, false)?,
+            to_out: Linear::load(map, &format!("{prefix}.to_out.0"), inner, hidden, false)?,
+            has_gate: gate,
             norm_q: pinned_weight(map, &format!("{prefix}.norm_q.weight"), &[d])?,
             norm_k: pinned_weight(map, &format!("{prefix}.norm_k.weight"), &[d])?,
             heads: cfg.num_attention_heads,
@@ -317,30 +320,38 @@ impl Attention {
 
     /// `n`: `[1, S, hidden]`. `rope`: `[S, R]` cos/sin, or `None` (refiner).
     fn forward(&self, n: &CudaTensor, rope: Option<(&CudaTensor, &CudaTensor)>, mode: AttnMode<'_>) -> Result<CudaTensor> {
-        // Project, split to [1, H, S, D], norm over D (the per-head RMSNorm:
-        // one [D] weight for all heads), rotate. Each intermediate dies here.
-        let qk = |proj: &Linear, norm: &CudaTensor| -> Result<CudaTensor> {
-            let t = proj.forward(n)?.split_heads_bhsd(0, self.heads, self.head_dim)?.rms_norm(norm, self.eps)?;
+        let packed = phase("h3_attn_qkvg", || self.qkvg.forward(n))?;
+        let inner = self.heads * self.head_dim;
+        // Per-head RMSNorm over D (one [D] weight for all heads), then RoPE.
+        // Wan's fused `qk_norm_rope_bhsd` norms over heads*d — wrong here.
+        let q = phase("h3_attn_q", || {
+            let t = packed.split_heads_bhsd(0, self.heads, self.head_dim)?.rms_norm(&self.norm_q, self.eps)?;
             match rope {
                 Some((cos, sin)) => t.rope_half(cos, sin),
                 None => Ok(t),
             }
-        };
-        let q = phase("h3_attn_q", || qk(&self.to_q, &self.norm_q))?;
-        let k = phase("h3_attn_k", || qk(&self.to_k, &self.norm_k))?;
-        let v = phase("h3_attn_v", || self.to_v.forward(n)?.split_heads_bhsd(0, self.heads, self.head_dim))?;
+        })?;
+        let k = phase("h3_attn_k", || {
+            let t = packed.split_heads_bhsd(inner, self.heads, self.head_dim)?.rms_norm(&self.norm_k, self.eps)?;
+            match rope {
+                Some((cos, sin)) => t.rope_half(cos, sin),
+                None => Ok(t),
+            }
+        })?;
+        let v = phase("h3_attn_v", || packed.split_heads_bhsd(2 * inner, self.heads, self.head_dim))?;
         let out = match mode {
             AttnMode::Dense => scaled_dot_product_attention(&q, &k, &v, None)?,
             AttnMode::Vsa(vsa) => {
-                // The gate is a plain projection of the same normed input:
-                // not normed, not rotated.
-                let gate = match &self.to_gate {
-                    Some(g) => Some(phase("h3_attn_gate", || g.forward(n)?.split_heads_bhsd(0, self.heads, self.head_dim))?),
-                    None => None,
+                // Gate is a plain projection of the same input: not normed, not rotated.
+                let gate = if self.has_gate {
+                    Some(phase("h3_attn_gate", || packed.split_heads_bhsd(3 * inner, self.heads, self.head_dim))?)
+                } else {
+                    None
                 };
                 vsa.attend(q, k, v, gate)?
             }
         };
+        drop(packed);
         phase("h3_attn_out", || self.to_out.forward(&out.merge_heads()?))
     }
 }
