@@ -271,6 +271,10 @@ pub enum Stage {
         /// `resident` or `streamed`. `FASTVIDEO_LTX2_TEXT` overrides.
         #[arg(long, default_value = "auto")]
         text: String,
+        /// Distilled two-stage: half-res stage-1 → spatial ×2 → 3-step stage-2.
+        /// Requires `--model-version 2.5` and `latent_upsampler/` under `--weights`.
+        #[arg(long, default_value_t = false)]
+        two_stage: bool,
     },
     /// CPU only: rewrite the text encoder as the language model alone, its
     /// projections narrowed float32 → bf16 once, in load order (47 GB → 25.5 GB,
@@ -328,7 +332,23 @@ pub fn run(report: &mut Report, stage: &Stage) -> StageResult<()> {
         Stage::Loop { dit: path, oracle, weights, device, geometry, max_rel_first, max_rel, min_psnr_db, min_psnr_db_e2e, floor_factor } => {
             sample_loop(report, path, oracle, weights.as_deref(), device, *geometry, [*max_rel_first, *max_rel, *min_psnr_db, *min_psnr_db_e2e, *floor_factor])
         }
-        Stage::Gen { model_version, weights, dit: path, prompt, clip, seed, device, geometry, no_mp4, text_cache, no_text_cache, warm, text_weights, text } => {
+        Stage::Gen {
+            model_version,
+            weights,
+            dit: path,
+            prompt,
+            clip,
+            seed,
+            device,
+            geometry,
+            no_mp4,
+            text_cache,
+            no_text_cache,
+            warm,
+            text_weights,
+            text,
+            two_stage,
+        } => {
             let text_cache = if *no_text_cache { None } else { text_cache.clone().or_else(fastvideo_cudarc::ltx2::text_cache::default_dir) };
             let text_residency = match text.as_str() {
                 "auto" => TextResidency::Auto,
@@ -337,7 +357,20 @@ pub fn run(report: &mut Report, stage: &Stage) -> StageResult<()> {
                 other => return Err(anyhow::anyhow!("--text {other}: expected auto, resident or streamed").into()),
             };
             let paths = Ltx2Paths { weights: weights.clone(), dit: path.clone(), text: text_weights.clone() };
-            gen(report, *model_version, &paths, &PipelineOptions { text_cache, text_residency }, prompt, clip, *seed, device, *geometry, !*no_mp4, *warm)
+            gen(
+                report,
+                *model_version,
+                &paths,
+                &PipelineOptions { text_cache, text_residency },
+                prompt,
+                clip,
+                *seed,
+                device,
+                *geometry,
+                !*no_mp4,
+                *warm,
+                *two_stage,
+            )
         }
         Stage::SlimText { weights, slim, embed, shard_gib } => slim_text(report, weights, slim, embed, *shard_gib),
     }
@@ -1038,12 +1071,14 @@ fn gen(
     g: Geometry,
     mp4: bool,
     warm: bool,
+    two_stage: bool,
 ) -> StageResult<()> {
     report.set("device", crate::gpu::init(device)?);
     report.set("model_version", match model_version {
         ModelVersion::V20 => "2.0",
         ModelVersion::V25 => "2.5",
     });
+    report.set("two_stage", two_stage);
     let cfg = model_version.config();
     let request = Ltx2Request {
         prompt: prompt.to_string(),
@@ -1054,8 +1089,15 @@ fn gen(
         seed,
         output_dir: clip.to_path_buf(),
         mp4,
+        two_stage,
     };
-    report.set("request", json!({"prompt": prompt, "height": g.height, "width": g.width, "num_frames": g.num_frames, "frame_rate": g.frame_rate, "seed": seed}));
+    report.set(
+        "request",
+        json!({
+            "prompt": prompt, "height": g.height, "width": g.width, "num_frames": g.num_frames,
+            "frame_rate": g.frame_rate, "seed": seed, "two_stage": two_stage,
+        }),
+    );
     let peak = crate::gpu::PeakMem::start();
     let wall = std::time::Instant::now();
     let mut pipeline = Ltx2Pipeline::load(paths, &cfg, options)?;
@@ -1086,7 +1128,8 @@ fn gen(
     report.set(
         "timings",
         json!({
-            "warm": warm, "wall_s": wall_s, "generate_s": generate_s, "load_s": pipeline.load_s, "text_s": t.text_s, "denoise_s": t.denoise_s,
+            "warm": warm, "wall_s": wall_s, "generate_s": generate_s, "load_s": pipeline.load_s, "text_s": t.text_s,
+            "denoise_s": t.denoise_s, "stage1_s": t.stage1_s, "upsample_s": t.upsample_s, "stage2_s": t.stage2_s,
             "step_s": t.step_s, "decode_audio_s": t.decode_audio_s, "decode_video_s": t.decode_video_s, "write_s": t.write_s,
         }),
     );
@@ -1103,8 +1146,9 @@ fn gen(
     report.set("outputs", json!({"mp4": out.mp4, "wav": out.wav, "frames": out.frames.len(), "first_frame": out.frames.first()}));
     report.set("tokens", json!({"prompt": out.prompt_tokens, "video": out.video_tokens, "audio": out.audio_tokens}));
 
+    let want_steps = if two_stage { 11 } else { 8 };
     let finite = stats.iter().all(|s| s["non_finite"] == json!(0) && s["video_std"].as_f64().is_some_and(|v| v > 1e-4));
-    report.check("gen.latents_finite", finite && stats.len() == 8, json!({"steps": stats.len()}), json!({"steps": 8, "non_finite": 0}))?;
+    report.check("gen.latents_finite", finite && stats.len() == want_steps, json!({"steps": stats.len()}), json!({"steps": want_steps, "non_finite": 0}))?;
     report.check("gen.frames", out.frames.len() == g.num_frames, json!({"frames": out.frames.len()}), json!({"frames": g.num_frames}))?;
     let wav_bytes = std::fs::metadata(&out.wav).map(|m| m.len()).unwrap_or(0);
     let want_samples = cfg.vocoder.waveform_samples(cfg.audio_vae.mel_frames(out.audio_tokens));

@@ -11,6 +11,7 @@
 pub mod attention;
 pub mod audio_vae;
 pub mod keys;
+pub mod latent_upsampler;
 pub mod pipeline;
 pub mod slim;
 pub mod text;

@@ -1,12 +1,13 @@
-# LTX-2.5 (22B, distilled) stage-1 — port specification
+# LTX-2.5 (22B, distilled) — port specification
 
-First ship: **distilled stage-1 T2AV only** (Gemma 4 + distilled DiT + conv
-video VAE + audio VAE/vocoder), CFG=1, ancestral Euler. No diffusion decoder,
-duration head, prompt enhancer, or stage-2 upsampler.
+**Distilled T2AV**: Gemma 4 + distilled DiT + conv video VAE + audio
+VAE/vocoder (BWE @ 48 kHz), CFG=1, ancestral Euler. Optional **two-stage**
+path: half-res stage-1 → spatial latent upsampler ×2 → 3-step stage-2 at full
+res. No diffusion decoder, duration head, or prompt enhancer.
 
 Sources (read 2026-09-21): `Lightricks/LTX-2.5-Diffusers` configs,
 `Lightricks/LTX-2` `packages/ltx-pipelines` / `ltx-core`, diffusers
-`transformer_ltx2.py` on `main`.
+`transformer_ltx2.py` / `latent_upsampler.py` on `main`.
 
 Sibling: [ltx2.md](ltx2.md) documents the LTX-2.0 port this extends.
 
@@ -24,14 +25,38 @@ Prefer the Diffusers pack for oracle parity (`Lightricks/LTX-2.5-Diffusers`):
 | Conv video VAE | `vae/` (or Comfy `vae/ltx-2.5-video-vae-conv-bf16.safetensors`) |
 | Audio VAE | `audio_vae/` |
 | Vocoder | `vocoder/` → **`LTX2VocoderWithBWE`** @ 48 kHz |
+| Spatial upsampler | `latent_upsampler/` (two-stage only) |
 
 Comfy split pack (`Lightricks/LTX-2.5`): one `.safetensors` per component;
 projections may live inside the Gemma4 file. Key remap lives in
 `ltx-core` `gemma_assets` / connector ops.
 
-Distilled DiT declares `model_version` ≥ 2.5 in safetensors metadata → stage-1
+Distilled DiT declares `model_version` ≥ 2.5 in safetensors metadata → denoise
 uses **ancestral** Euler (`eta=1`, `s_noise=1`, noise seed = pipeline seed +
-10000). Same 8-sigma list as 2.0.
+10000). Stage-1: 8-sigma list; stage-2: tail `[0.909375, 0.725, 0.421875]`.
+
+---
+
+## Two-stage distilled
+
+Request `height`/`width` = **final** canvas (multiples of **64**). Stage 1 runs
+at half resolution; audio tokens match the full clip length (unchanged by the
+spatial upsampler).
+
+1. Ancestral stage-1 at `H/2 × W/2` (8 steps) → DiT-normalized packed latents.
+2. Unpack video → **de-normalize** (`ẑ·std/scaling + mean`) →
+   `LTX2LatentUpsamplerModel` → **re-normalize** → pack. Audio passthrough.
+3. Renoise video and audio: `x ← σ·ε + (1−σ)·x` with `σ = 0.909375`.
+4. Ancestral stage-2 at full `H×W` (3 steps), same DiT (no stage-2 LoRA on the
+   distilled transformer).
+5. Decode once (conv VAE + BWE vocoder).
+
+Upsampler architecture (`latent_upsampler/config.json` on 2.5):
+`in_channels=128`, `mid_channels=1024`, `num_blocks_per_stage=4`, `dims=3`,
+`use_rational_resampler=false` → Conv3d stem + 4 ResBlocks (GroupNorm-32 +
+SiLU) → per-frame Conv2d→PixelShuffle(2) → 4 ResBlocks → Conv3d head.
+
+First validation canvas: final **768×512×121** (stage-1 **384×256**).
 
 ---
 
@@ -90,9 +115,9 @@ Not isomorphic to 2.0: `decoder_block_out_channels=[256,512,512,1024]`,
 
 ## Out of scope (this milestone)
 
-Diffusion decoder / DiffVAE, duration head, prompt enhancer, stage-2 spatial
-upsampler, multishot/keyframes, dev DiT + CFG/STG/modality guidance, Comfy
-int8/nvfp4.
+Diffusion decoder / DiffVAE, duration head, prompt enhancer, multishot/keyframes,
+dev DiT + CFG/STG/modality guidance, Comfy int8/nvfp4, official 1536×1024 canvas
+(VRAM scale-up after 768×512 two-stage is green).
 
 ---
 
@@ -100,10 +125,9 @@ int8/nvfp4.
 
 Host: config constructors, gated-attn unit test, ancestral step math vs
 `EulerAncestralDiffusionStep`, key-layout detection; vocoder SnakeBeta + BWE
-forward (`ltx2::vocoder`, including Hann-sinc / MelSTFT / `bwe_generator`).
+forward; latent upsampler geometry.
 
-GPU: `FV_LTX2_VERSION=2.5 scripts/gpu/validate.sh run ltx2-gen` after Diffusers
-weights are local. Distilled stage-1 gen (8 ancestral steps, conv VAE, BWE
-48 kHz wav) passed remotely 2026-09-21 — clip
-`artifacts/clips/20260921T213121Z-ltx2-gen/ltx25-bwe.mp4`. Oracle taps vs
-diffusers/`ltx-pipelines` remain optional follow-up.
+GPU: `FV_LTX2_VERSION=2.5 scripts/gpu/validate.sh run ltx2-gen` (single-stage)
+and `FV_LTX2_TWO_STAGE=1` for two-stage. Stage-1 BWE clip
+`artifacts/clips/20260921T213121Z-ltx2-gen/ltx25-bwe.mp4`. Two-stage remote
+pending. Oracle taps vs diffusers/`ltx-pipelines` remain optional.

@@ -945,6 +945,45 @@ fn half_bf16_round(x: f32) -> f32 {
     f32::from_bits(kept)
 }
 
+/// `latent_upsampler/config.json` — spatial ×2 for distilled two-stage.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Ltx2LatentUpsamplerConfig {
+    pub in_channels: usize,
+    pub mid_channels: usize,
+    pub num_blocks_per_stage: usize,
+    /// Always 3 for the shipped spatial upsampler (Conv3d resblocks).
+    pub dims: usize,
+    pub spatial_upsample: bool,
+    pub temporal_upsample: bool,
+    /// When false (LTX-2.5 pack): `Conv2d → PixelShuffle(2)`. When true: rational resampler.
+    pub use_rational_resampler: bool,
+    pub rational_spatial_scale: f64,
+}
+
+impl Ltx2LatentUpsamplerConfig {
+    /// `Lightricks/LTX-2.5-Diffusers` `latent_upsampler/config.json`.
+    pub fn ltx2_5_22b() -> Self {
+        Self {
+            in_channels: 128,
+            mid_channels: 1024,
+            num_blocks_per_stage: 4,
+            dims: 3,
+            spatial_upsample: true,
+            temporal_upsample: false,
+            use_rational_resampler: false,
+            rational_spatial_scale: 2.0,
+        }
+    }
+
+    pub fn spatial_factor(&self) -> usize {
+        if self.use_rational_resampler {
+            self.rational_spatial_scale as usize
+        } else {
+            2
+        }
+    }
+}
+
 /// Pipeline-level defaults shared by diffusers `LTX2Pipeline.__call__` and the
 /// Lightricks `PipelineParams` for LTX-2.0.
 #[derive(Debug, Clone, PartialEq)]
@@ -976,6 +1015,7 @@ pub struct Ltx2Config {
     pub scheduler: Ltx2SchedulerConfig,
     pub text_encoder: Gemma3TextConfig,
     pub gemma4: Option<Gemma4TextConfig>,
+    pub latent_upsampler: Option<Ltx2LatentUpsamplerConfig>,
     pub defaults: Ltx2PipelineDefaults,
 }
 
@@ -991,6 +1031,7 @@ pub fn ltx2_19b() -> Ltx2Config {
         scheduler: Ltx2SchedulerConfig::ltx2_19b(),
         text_encoder: Gemma3TextConfig::ltx2_19b(),
         gemma4: None,
+        latent_upsampler: None,
         defaults: Ltx2PipelineDefaults::ltx2_19b(),
     }
 }
@@ -1001,7 +1042,7 @@ pub fn ltx2_19b_distilled() -> Ltx2Config {
     Ltx2Config { scheduler: Ltx2SchedulerConfig::ltx2_19b_distilled(), ..ltx2_19b() }
 }
 
-/// LTX-2.5 distilled stage-1 T2AV (Gemma 4 + 2.5 DiT/VAE/vocoder/connectors).
+/// LTX-2.5 distilled T2AV (Gemma 4 + 2.5 DiT/VAE/vocoder/connectors + spatial upsampler).
 pub fn ltx2_5_22b_distilled() -> Ltx2Config {
     Ltx2Config {
         version: Ltx2ModelVersion::V25,
@@ -1011,6 +1052,7 @@ pub fn ltx2_5_22b_distilled() -> Ltx2Config {
         vocoder: Ltx2VocoderConfig::ltx2_5_22b_bwe(),
         scheduler: Ltx2SchedulerConfig::ltx2_19b_distilled(),
         gemma4: Some(Gemma4TextConfig::ltx2_5_22b()),
+        latent_upsampler: Some(Ltx2LatentUpsamplerConfig::ltx2_5_22b()),
         ..ltx2_19b()
     }
 }
@@ -1246,5 +1288,10 @@ mod tests {
         assert!(!cfg.scheduler.use_dynamic_shifting);
         assert!(cfg.vocoder.with_bwe);
         assert_eq!(cfg.vocoder.output_sampling_rate, 48000);
+        let up = cfg.latent_upsampler.as_ref().expect("2.5 ships spatial upsampler config");
+        assert_eq!(up.mid_channels, 1024);
+        assert!(!up.use_rational_resampler);
+        assert_eq!(up.spatial_factor(), 2);
+        assert!(ltx2_19b().latent_upsampler.is_none());
     }
 }

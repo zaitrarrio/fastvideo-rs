@@ -34,6 +34,7 @@ use crate::wan::weights::WeightMap;
 
 use super::audio_vae::AudioDecoder;
 use super::keys::Keys;
+use super::latent_upsampler::LatentUpsampler;
 use super::text::{HiddenStack, PaddedPrompt, TextConnectors};
 use super::text_cache::{cache_key, weights_identity, CachedContexts, TextCache};
 use super::transformer::{pack_video, unpack_video, Ltx2Transformer, Ropes, TextConditioning};
@@ -82,6 +83,8 @@ pub struct Ltx2Request {
     pub output_dir: PathBuf,
     /// Also mux `output.mp4` (needs ffmpeg on the PATH).
     pub mp4: bool,
+    /// Distilled two-stage: half-res stage-1 → spatial ×2 upsampler → 3-step stage-2.
+    pub two_stage: bool,
 }
 
 impl Ltx2Request {
@@ -96,13 +99,21 @@ impl Ltx2Request {
             seed: 10,
             output_dir: output_dir.into(),
             mp4: true,
+            two_stage: false,
         }
     }
 
-    /// The model card's constraints: H and W divisible by 32, `8k + 1` frames.
+    /// The model card's constraints: H and W divisible by 32 (64 when two-stage),
+    /// `8k + 1` frames.
     pub fn validate(&self) -> Result<()> {
-        if self.height == 0 || self.width == 0 || !self.height.is_multiple_of(32) || !self.width.is_multiple_of(32) {
-            return Err(err(format!("ltx2: {}x{} — height and width must be positive multiples of 32", self.width, self.height)));
+        let multiple = if self.two_stage { 64 } else { 32 };
+        if self.height == 0 || self.width == 0 || !self.height.is_multiple_of(multiple) || !self.width.is_multiple_of(multiple) {
+            return Err(err(format!(
+                "ltx2: {}x{} — height and width must be positive multiples of {multiple}{}",
+                self.width,
+                self.height,
+                if self.two_stage { " for two-stage" } else { "" }
+            )));
         }
         if self.num_frames % 8 != 1 {
             return Err(err(format!("ltx2: {} frames — the frame count must be 8k + 1", self.num_frames)));
@@ -122,6 +133,9 @@ pub struct Ltx2Timings {
     pub load_s: f64,
     pub text_s: f64,
     pub denoise_s: f64,
+    pub stage1_s: f64,
+    pub upsample_s: f64,
+    pub stage2_s: f64,
     pub step_s: Vec<f64>,
     pub decode_audio_s: f64,
     pub decode_video_s: f64,
@@ -208,6 +222,13 @@ fn apply_ancestral(
     Ok(CudaTensor::from_vec(x, sample.shape.clone())?)
 }
 
+/// `x ← σ·ε + (1−σ)·x` — stage-2 entry renoise (video and audio).
+fn renoise(x: &CudaTensor, sigma: f32, rng: &mut rand::rngs::StdRng) -> Result<CudaTensor> {
+    let n = x.numel();
+    let noise = CudaTensor::from_vec((0..n).map(|_| rng.sample::<f32, _>(StandardNormal)).collect(), x.shape.clone())?;
+    Ok(CudaTensor::lincomb(&[(sigma, &noise), (1.0 - sigma, x)])?)
+}
+
 /// Distilled ancestral loop (LTX-2.5): velocity → `x0`, then
 /// `EulerAncestralDiffusionStep` at each sigma.
 pub fn denoise_ancestral(
@@ -238,20 +259,33 @@ pub fn denoise_ancestral(
     Ok((video, audio))
 }
 
-/// The three decoders of the output side.
+/// The three decoders of the output side, plus the optional spatial upsampler.
 pub struct Decoders {
     pub video: VideoDecoder,
     pub audio: AudioDecoder,
     pub vocoder: Vocoder,
+    pub upsampler: Option<LatentUpsampler>,
 }
 
 impl Decoders {
     pub fn load(weights: &Path, cfg: &Ltx2Config) -> Result<Self> {
         let open = |sub: &str| WeightMap::open(&weights.join(sub));
+        let upsampler = match &cfg.latent_upsampler {
+            Some(ucfg) => {
+                let dir = weights.join("latent_upsampler");
+                if dir.is_dir() {
+                    Some(LatentUpsampler::load(&WeightMap::open(&dir)?, ucfg)?)
+                } else {
+                    None
+                }
+            }
+            None => None,
+        };
         Ok(Self {
             video: VideoDecoder::load(&open("vae")?, &cfg.vae)?,
             audio: AudioDecoder::load(&open("audio_vae")?, &cfg.audio_vae)?,
             vocoder: Vocoder::load(&open("vocoder")?, &cfg.vocoder)?,
+            upsampler,
         })
     }
 }
@@ -641,8 +675,18 @@ impl Ltx2Pipeline {
     pub fn generate(&mut self, req: &Ltx2Request, use_text_cache: bool, observer: Option<StepObserver<'_>>) -> Result<Ltx2Output> {
         req.validate()?;
         let cfg = &self.cfg;
+        if req.two_stage {
+            if cfg.version != Ltx2ModelVersion::V25 {
+                return Err(err("ltx2: --two-stage requires model version 2.5"));
+            }
+            if self.decoders.upsampler.is_none() {
+                return Err(err("ltx2: two-stage needs weights/latent_upsampler (missing beside --weights)"));
+            }
+        }
         let mut timings = Ltx2Timings::default();
-        let grid = cfg.transformer.latent_grid(req.num_frames, req.height, req.width);
+        let (stage1_h, stage1_w) = if req.two_stage { (req.height / 2, req.width / 2) } else { (req.height, req.width) };
+        let grid1 = cfg.transformer.latent_grid(req.num_frames, stage1_h, stage1_w);
+        let grid_full = cfg.transformer.latent_grid(req.num_frames, req.height, req.width);
         let audio_tokens = cfg.transformer.audio_tokens(req.num_frames, req.frame_rate);
         if audio_tokens == 0 {
             return Err(err("ltx2: the clip is too short for a single audio latent"));
@@ -654,37 +698,93 @@ impl Ltx2Pipeline {
         let timer = Instant::now();
         let text = self.model.project_text(&contexts.video, &contexts.audio)?;
         drop(contexts);
-        let ropes = Ropes::new(&cfg.transformer, grid, audio_tokens, req.frame_rate as f32)?;
-        let (video, audio) = initial_noise(cfg, grid, audio_tokens, req.seed)?;
+        let ropes = Ropes::new(&cfg.transformer, grid1, audio_tokens, req.frame_rate as f32)?;
+        let (video, audio) = initial_noise(cfg, grid1, audio_tokens, req.seed)?;
         let mut step_s = Vec::new();
         let mut observer = observer;
-        let mut record = |i: usize, v: &CudaTensor, a: &CudaTensor, s: f64| -> Result<()> {
-            step_s.push(s);
-            match observer.as_mut() {
-                Some(obs) => obs(i, v, a, s),
-                None => Ok(()),
+        let schedule = Ltx2Schedule::distilled();
+        let (mut video, mut audio) = {
+            let mut record = |i: usize, v: &CudaTensor, a: &CudaTensor, s: f64| -> Result<()> {
+                step_s.push(s);
+                match observer.as_mut() {
+                    Some(obs) => obs(i, v, a, s),
+                    None => Ok(()),
+                }
+            };
+            if cfg.version == Ltx2ModelVersion::V25 {
+                denoise_ancestral(
+                    &self.model,
+                    &text,
+                    &ropes,
+                    &schedule,
+                    video,
+                    audio,
+                    AncestralOpts { eta: 1.0, s_noise: 1.0, noise_seed: req.seed + 10_000 },
+                    Some(&mut record),
+                )?
+            } else {
+                denoise(&self.model, &text, &ropes, &schedule, video, audio, Some(&mut record))?
             }
         };
-        let schedule = Ltx2Schedule::distilled();
-        let (video, audio) = if cfg.version == Ltx2ModelVersion::V25 {
-            denoise_ancestral(
-                &self.model,
-                &text,
-                &ropes,
-                &schedule,
-                video,
-                audio,
-                AncestralOpts { eta: 1.0, s_noise: 1.0, noise_seed: req.seed + 10_000 },
-                Some(&mut record),
-            )?
-        } else {
-            denoise(&self.model, &text, &ropes, &schedule, video, audio, Some(&mut record))?
-        };
-        timings.denoise_s = timer.elapsed().as_secs_f64();
-        timings.step_s = step_s;
-        drop((text, ropes));
+        timings.stage1_s = timer.elapsed().as_secs_f64();
+        drop(ropes);
 
-        let written = decode_and_write(&self.decoders, &video, &audio, grid, &req.output_dir, req.frame_rate, req.mp4)?;
+        let decode_grid = if req.two_stage {
+            let up = self.decoders.upsampler.as_ref().expect("checked above");
+            let up_timer = Instant::now();
+            let unpacked = unpack_video(&video, grid1)?;
+            let denorm = self.decoders.video.denormalize(&unpacked)?;
+            let upsampled = up.forward(&denorm)?;
+            let renorm = self.decoders.video.normalize(&upsampled)?;
+            video = pack_video(&renorm)?;
+            sync()?;
+            timings.upsample_s = up_timer.elapsed().as_secs_f64();
+            crate::wan::log::info(format_args!(
+                "ltx2 upsample {:.2}s → latent grid {:?}",
+                timings.upsample_s, grid_full
+            ));
+
+            let sigma = Ltx2Schedule::distilled_stage_2().sigmas[0] as f32;
+            let mut rng = rand::rngs::StdRng::seed_from_u64(req.seed + 20_000);
+            video = renoise(&video, sigma, &mut rng)?;
+            audio = renoise(&audio, sigma, &mut rng)?;
+
+            let s2_timer = Instant::now();
+            let ropes2 = Ropes::new(&cfg.transformer, grid_full, audio_tokens, req.frame_rate as f32)?;
+            let schedule2 = Ltx2Schedule::distilled_stage_2();
+            let step_offset = step_s.len();
+            let (v2, a2) = {
+                let mut record2 = |i: usize, v: &CudaTensor, a: &CudaTensor, s: f64| -> Result<()> {
+                    step_s.push(s);
+                    match observer.as_mut() {
+                        Some(obs) => obs(step_offset + i, v, a, s),
+                        None => Ok(()),
+                    }
+                };
+                denoise_ancestral(
+                    &self.model,
+                    &text,
+                    &ropes2,
+                    &schedule2,
+                    video,
+                    audio,
+                    AncestralOpts { eta: 1.0, s_noise: 1.0, noise_seed: req.seed + 30_000 },
+                    Some(&mut record2),
+                )?
+            };
+            video = v2;
+            audio = a2;
+            timings.stage2_s = s2_timer.elapsed().as_secs_f64();
+            drop(ropes2);
+            grid_full
+        } else {
+            grid1
+        };
+        timings.denoise_s = timings.stage1_s + timings.upsample_s + timings.stage2_s;
+        timings.step_s = step_s;
+        drop(text);
+
+        let written = decode_and_write(&self.decoders, &video, &audio, decode_grid, &req.output_dir, req.frame_rate, req.mp4)?;
         timings.decode_audio_s = written.decode_audio_s;
         timings.decode_video_s = written.decode_video_s;
         timings.write_s = written.write_s;
@@ -693,7 +793,7 @@ impl Ltx2Pipeline {
             mp4: written.mp4,
             wav: written.wav,
             prompt_tokens: text_report.tokens,
-            video_tokens: grid.iter().product(),
+            video_tokens: decode_grid.iter().product(),
             audio_tokens,
             text: text_report,
             timings,
@@ -872,6 +972,7 @@ mod tests {
             video: VideoDecoder::load(&map, &cfg.vae).unwrap(),
             audio: AudioDecoder::load(&map, &cfg.audio_vae).unwrap(),
             vocoder: Vocoder::load(&map, &cfg.vocoder).unwrap(),
+            upsampler: None,
         };
         let (video, audio) = initial_noise(&cfg, [2, 2, 2], 3, 1).unwrap();
         let dir = std::env::temp_dir().join(format!("fv-ltx2-pipeline-{}", std::process::id()));
@@ -899,7 +1000,10 @@ mod tests {
         assert!(Ltx2Request { height: 500, ..ok.clone() }.validate().is_err());
         assert!(Ltx2Request { num_frames: 120, ..ok.clone() }.validate().is_err());
         assert!(Ltx2Request { prompt: "  ".into(), ..ok.clone() }.validate().is_err());
-        assert!(Ltx2Request { frame_rate: 0.0, ..ok }.validate().is_err());
+        assert!(Ltx2Request { frame_rate: 0.0, ..ok.clone() }.validate().is_err());
+        // Two-stage needs multiples of 64 (half-res still lands on the VAE grid).
+        assert!(Ltx2Request { two_stage: true, ..ok.clone() }.validate().is_ok());
+        assert!(Ltx2Request { two_stage: true, height: 544, width: 960, ..ok }.validate().is_err());
     }
     /// Hit, miss and bypass, with the expensive part replaced by a counter.
     #[test]

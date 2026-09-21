@@ -901,6 +901,7 @@ cmd_run() {
       fi
     else
       # FV_LTX2_VERSION=2.5 → Diffusers LTX-2.5 pack + ancestral gen (docs/ports/ltx25.md).
+      # FV_LTX2_TWO_STAGE=1 → distilled two-stage (half-res → upsampler → stage-2).
       local ltx_ver="${FV_LTX2_VERSION:-2.0}"
       local repo wdir
       local ltxgen=(--mode fast ltx2 gen --prompt "$prompt" --seed "${FV_SEED:-10}")
@@ -909,9 +910,12 @@ cmd_run() {
         wdir="$WORK/weights/ltx2-5"
         remote_run fetch-ltx2-5 120 fetch "$repo" "$wdir" \
           "tokenizer/*" "text_encoder/model-*" "text_encoder/*.json" \
-          "connectors/*" "transformer/*" "vae/*" "audio_vae/*" "vocoder/*"
+          "connectors/*" "transformer/*" "vae/*" "audio_vae/*" "vocoder/*" "latent_upsampler/*"
         ltxgen+=(--model-version 2.5 --weights "$wdir" --dit "$wdir")
-        remote_run wait-ltx2-5 10800 wait-weights "$wdir" 10800 text_encoder connectors transformer vae audio_vae vocoder
+        if [[ "${FV_LTX2_TWO_STAGE:-0}" == 1 ]]; then
+          ltxgen+=(--two-stage)
+        fi
+        remote_run wait-ltx2-5 10800 wait-weights "$wdir" 10800 text_encoder connectors transformer vae audio_vae vocoder latent_upsampler
         gpucheck_stage "gen-$name" 10800 "${ltxgen[@]}" --clip "$clip/$name/frames"
       else
         repo="${FV_LTX2_BASE_REPO:-Lightricks/LTX-2}"

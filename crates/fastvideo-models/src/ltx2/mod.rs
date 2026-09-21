@@ -9,9 +9,9 @@ pub mod schedule;
 
 pub use config::{
     ltx2_19b, ltx2_19b_distilled, ltx2_5_22b_distilled, Gemma3TextConfig, Gemma4TextConfig, Ltx2AudioVaeConfig,
-    Ltx2ConnectorsConfig, Ltx2ModelVersion, Ltx2PipelineDefaults, Ltx2RopeType, Ltx2SchedulerConfig,
-    Ltx2BweConfig, Ltx2TransformerConfig, Ltx2VaeDecoderStage, Ltx2VaeDecoderUpsampler, Ltx2VaeUpsampleKind,
-    Ltx2VideoVaeConfig, Ltx2VocoderConfig, Ltx2Config,
+    Ltx2BweConfig, Ltx2ConnectorsConfig, Ltx2LatentUpsamplerConfig, Ltx2ModelVersion, Ltx2PipelineDefaults,
+    Ltx2RopeType, Ltx2SchedulerConfig, Ltx2TransformerConfig, Ltx2VaeDecoderStage, Ltx2VaeDecoderUpsampler,
+    Ltx2VaeUpsampleKind, Ltx2VideoVaeConfig, Ltx2VocoderConfig, Ltx2Config,
 };
 pub use rope::{Ltx2RopeTables, ScalarDivision, SplitRope};
 pub use schedule::{AncestralOpts, Ltx2Schedule};

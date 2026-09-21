@@ -362,6 +362,16 @@ impl VideoDecoder {
         y.reshape(vec![c, p, p, f, h, w])?.permute(&[0, 3, 4, 2, 5, 1])?.reshape(vec![1, c, f, p * h, p * w])
     }
 
+    /// DiT-normalized → VAE-space: `z = ẑ · std / scaling + mean`.
+    pub fn denormalize(&self, latents: &CudaTensor) -> Result<CudaTensor> {
+        latents.mul(&self.latents_std)?.mul_scalar(1.0 / self.cfg.scaling_factor as f32).add(&self.latents_mean)
+    }
+
+    /// VAE-space → DiT-normalized: `ẑ = (z − mean) / std · scaling`.
+    pub fn normalize(&self, latents: &CudaTensor) -> Result<CudaTensor> {
+        Ok(latents.sub(&self.latents_mean)?.div(&self.latents_std)?.mul_scalar(self.cfg.scaling_factor as f32))
+    }
+
     /// DiT-space (normalised) latents `[1, C, F, H, W]` → video
     /// `[1, 3, 8(F-1)+1, 32H, 32W]`, handing each run of finished frames to
     /// `sink(frame_offset, frames)` as `[frames, 3, H, W]`, in order, while the
@@ -388,7 +398,7 @@ impl VideoDecoder {
             return Err(msg(format!("ltx2 vae expects [1, {}, F, H>=2, W>=2] latents, got {:?}", self.cfg.latent_channels, latents.shape)));
         }
         let eps = self.cfg.pixel_norm_eps as f32;
-        let z = latents.mul(&self.latents_std)?.mul_scalar(1.0 / self.cfg.scaling_factor as f32).add(&self.latents_mean)?;
+        let z = self.denormalize(latents)?;
         let mut x = self.conv_in.push(&mut ConvState::default(), Some(z), true)?.ok_or_else(|| msg("ltx2 vae: conv_in produced no frames"))?;
         let (last_block, early) = self.blocks.split_last().ok_or_else(|| msg("ltx2 vae: no blocks"))?;
         for block in early {
