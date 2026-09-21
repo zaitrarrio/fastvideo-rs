@@ -2,6 +2,21 @@
 
 Project code: FVID
 
+### FVID · 2026-09-20 · FVID-2026-09-20-h3-matrix-followup
+- Trigger: after encoder matrix pass — run remaining weight/SKU gaps (Synthetic Step1900, Preview on 80 GB, longer clip)
+- Options: full matrix re-rent; serialize; skip Synthetic; raise res instead of duration
+- Decision: **followup wave** (`FV_MATRIX_WAVE=followup`): skip V2 gens; H200 = DataFree baseline + Synthetic-Step1900 + DataFree **15s**; A100/H100 = Preview VSA stock + recovered-8b (`FV_MATRIX_PREVIEW_80` on). Same Vast parallel / reuse-box / TEST_ID / GPU-empty strategy. No LoRA-on-base, no v0.2, no dense+8b.
+- Reason: quality A/B for Synthetic, 80 GB fit check, and a blog-scale duration sample without re-paying V2
+- Reversibility: cheap — wave is env-gated; cells skip on clip reuse
+- Executed by: Executor
+- ADR: none
+- Verification: **pass** (build `22bfa760236939c7`, relaunch after credit top-up). Drivers: `artifacts/gpucheck/matrix-logs/{a100,h100,h200}.followup.driver.log`. Shared run dir `…/20260921T013704Z-h3-matrix`. Boxes destroyed: A100 `51837932`, H100 `51837933`, H200 `51837935`. First attempt aborted (credit→$0).
+  - **Preview-80 A100**: stock `021329Z` ~14.9 s/step; recovered-8b `021709Z`; PSNR stock-vs-8b **16.86 dB**. Run ~$0.75 / 44 min.
+  - **Preview-80 H100**: stock `020132Z` ~10.6 s/step; recovered-8b `020416Z`; PSNR stock-vs-8b **16.37 dB**. Run ~$1.47 / 31 min.
+  - **H200 DataFree** `021152Z`: warm ~7.7–8.3 s/step, peak **59780 MiB**.
+  - **H200 Synthetic-Step1900** `022439Z`: warm ~7.7–10.0 s/step, peak **61028 MiB**. PSNR datafree-vs-synth1900 **15.38 dB**.
+  - **H200 DataFree 15s** `022639Z`: warm **~33.2 s/step** ×4, denoise **133.0 s**, peak **91008 MiB**, 362 frames. Run ~$3.70 / 55 min.
+
 ### FVID · 2026-09-20 · FVID-2026-09-20-h3-encoder-matrix
 - Trigger: checkpoint × encoder × residency matrix (V2 / Preview VSA / Preview Dense × stock streamed / SearchingMan 8B / cache-hit / resident-fp8|bf16 on H200)
 - Options: RunPod network volume; serialize SKUs; keep Python hub fetch; custom `fv-gpucheck fetch`

@@ -102,7 +102,7 @@ tier_query_base() {
     h3-gen) echo "$base gpu_ram>=90 disk_space>=220 cpu_ram>=64 inet_down>=1000" ;;
     # Encoder × residency matrix: streamed 32B / recovered-8B on 80 GB cards;
     # FV_GPU_RAM_MIN=78 (A100/H100) or 140 (H200). TAEH3, no oracle.
-    h3-matrix) echo "$base gpu_ram>=78 disk_space>=280 cpu_ram>=64 inet_down>=1000" ;;
+    h3-matrix) echo "$base gpu_ram>=78 disk_space>=360 cpu_ram>=64 inet_down>=1000" ;;
     ltx2-gen) echo "$base gpu_ram>=90 disk_space>=180 cpu_ram>=64 inet_down>=1000" ;;
     ltx2-text) echo "$base gpu_ram>=90 disk_space>=180 cpu_ram>=64 inet_down>=800" ;;
     # A build box: the GPU is irrelevant, so this asks for the cheapest thing
@@ -113,7 +113,7 @@ tier_query_base() {
 }
 tier_max_dph() { case "$1" in mathprobe) echo 0.40 ;; kernels) echo 0.25 ;; parity) echo 0.40 ;; clip) echo 0.60 ;; compare) echo 0.60 ;; gen) echo 0.80 ;; oracle) echo 1.60 ;; fp8) echo 0.80 ;; taehv) echo 0.40 ;; vaeab) echo 0.80 ;; build) echo 0.20 ;; h3-text | ltx2-text) echo 2.00 ;; h3-vae) echo 1.00 ;; ltx2-vae) echo 0.80 ;; h3-dit | ltx2-dit | h3-gen | ltx2-gen | h3-matrix) echo 2.50 ;; h3-vsa) echo 0.40 ;; esac; }
 tier_max_minutes() { case "$1" in mathprobe) echo 30 ;; kernels) echo 40 ;; parity) echo 75 ;; clip) echo 180 ;; compare) echo 240 ;; gen) echo 180 ;; oracle) echo 150 ;; fp8) echo 90 ;; taehv) echo 60 ;; vaeab) echo 90 ;; build) echo 45 ;; h3-text | ltx2-text) echo 150 ;; h3-vae | ltx2-vae) echo 90 ;; h3-dit | ltx2-dit) echo 180 ;; h3-gen | ltx2-gen) echo 150 ;; h3-matrix) echo 360 ;; h3-vsa) echo 40 ;; esac; }
-tier_disk() { case "$1" in mathprobe) echo 40 ;; kernels) echo 40 ;; parity) echo 60 ;; clip) echo 100 ;; compare) echo 180 ;; gen) echo 100 ;; oracle) echo 160 ;; fp8) echo 100 ;; taehv) echo 60 ;; vaeab) echo 100 ;; build) echo 40 ;; h3-text) echo 220 ;; ltx2-text) echo 180 ;; h3-vae) echo 100 ;; ltx2-vae) echo 80 ;; h3-dit) echo 200 ;; ltx2-dit) echo 260 ;; h3-vsa) echo 40 ;; h3-gen) echo 220 ;; h3-matrix) echo 280 ;; ltx2-gen) echo 180 ;; esac; }
+tier_disk() { case "$1" in mathprobe) echo 40 ;; kernels) echo 40 ;; parity) echo 60 ;; clip) echo 100 ;; compare) echo 180 ;; gen) echo 100 ;; oracle) echo 160 ;; fp8) echo 100 ;; taehv) echo 60 ;; vaeab) echo 100 ;; build) echo 40 ;; h3-text) echo 220 ;; ltx2-text) echo 180 ;; h3-vae) echo 100 ;; ltx2-vae) echo 80 ;; h3-dit) echo 200 ;; ltx2-dit) echo 260 ;; h3-vsa) echo 40 ;; h3-gen) echo 220 ;; h3-matrix) echo 360 ;; ltx2-gen) echo 180 ;; esac; }
 
 usage() { sed -n '2,12p' "$0" | sed 's/^# \{0,1\}//'; exit 2; }
 
@@ -1168,20 +1168,52 @@ h3_matrix_gpu_empty() {
   log "GPU empty (${used:-0} MiB used)"
 }
 
-# Weight dir for a recipe name (`v2` → `h3-v2`, …).
+# Weight dir for a matrix recipe key (`v2` → `h3-v2`, synth siblings share 4step-vsa contract).
 h3_matrix_weights() {
   case "$1" in
     v2|8step) echo "$WORK/weights/h3-v2" ;;
     4step-vsa|preview-vsa) echo "$WORK/weights/h3-4step-vsa" ;;
+    4step-vsa-synth1300) echo "$WORK/weights/h3-4step-vsa-synth1300" ;;
+    4step-vsa-synth1900) echo "$WORK/weights/h3-4step-vsa-synth1900" ;;
     4step-dense|preview-dense) echo "$WORK/weights/h3-4step-dense" ;;
     *) die "unknown matrix recipe $1" ;;
   esac
+}
+
+# CLI --h3-recipe for a matrix key (synth cells reuse the Preview VSA ladder).
+h3_matrix_inference_recipe() {
+  case "$1" in
+    v2|8step) echo v2 ;;
+    4step-vsa|preview-vsa|4step-vsa-synth1300|4step-vsa-synth1900) echo 4step-vsa ;;
+    4step-dense|preview-dense) echo 4step-dense ;;
+    *) die "unknown matrix recipe $1" ;;
+  esac
+}
+
+# Clip seconds from residency (`streamed-15s` → 15, else FV_SECONDS/5).
+h3_matrix_seconds() {
+  local residency="$1"
+  case "$residency" in
+    *-15s|15s) echo 15 ;;
+    *-10s|10s) echo 10 ;;
+    *) echo "${FV_SECONDS:-5}" ;;
+  esac
+}
+
+# Strip duration suffix for encoder wiring (`streamed-15s` → `streamed`).
+h3_matrix_residency_base() {
+  local r="$1"
+  r="${r%-15s}"
+  r="${r%-10s}"
+  echo "$r"
 }
 
 # One cell: TEST_ID, GPU clear, nohup gen. Args: sku recipe encoder residency
 h3_matrix_cell() {
   local sku="$1" recipe="$2" encoder="$3" residency="$4"
   local test_id prior
+  local res_base; res_base="$(h3_matrix_residency_base "$residency")"
+  local secs; secs="$(h3_matrix_seconds "$residency")"
   # Reattach after a mid-matrix fix: keep a prior successful clip for this cell.
   prior="$(fv_ssh "$HOST" "$PORT" "ls -1d $OUTR/clips/*-${sku}-${recipe}-${encoder}-${residency}/frames/output.mp4 2>/dev/null | head -1" || true)"
   if [[ -n "$prior" ]]; then
@@ -1197,13 +1229,16 @@ h3_matrix_cell() {
   h3_matrix_gpu_empty
   local clip="$OUTR/clips/$test_id"
   local wdir; wdir="$(h3_matrix_weights "$recipe")"
+  local irecipe; irecipe="$(h3_matrix_inference_recipe "$recipe")"
   local taeh3_dir="$WORK/taeh3"
   local tcache="$WORK/h3-text-cache-$recipe"
   local adaln="$WORK/h3-adaln-$recipe.cache"
-  local h3gen=(--mode fast h3 gen --weights "$wdir" --prompt "$FV_PROMPT" --seconds "${FV_SECONDS:-5}"
+  local stage_timeout=7200
+  (( secs > 5 )) && stage_timeout=10800
+  local h3gen=(--mode fast h3 gen --weights "$wdir" --prompt "$FV_PROMPT" --seconds "$secs"
     --seed "${FV_SEED:-1024}" --adaln-cache "$adaln" --warm --taeh3-weights "$taeh3_dir"
-    --h3-recipe "$recipe" --clip-dir "$clip/frames")
-  case "$encoder/$residency" in
+    --h3-recipe "$irecipe" --clip-dir "$clip/frames")
+  case "$encoder/$res_base" in
     stock/streamed)
       # Write the conditioning cache so a later cache-hit cell can reuse it.
       h3gen+=(--text-encoder streamed --text-cache "$tcache")
@@ -1212,14 +1247,14 @@ h3_matrix_cell() {
       h3gen+=(--text-encoder streamed --text-cache "$tcache")
       ;;
     stock/resident-fp8|stock/resident-bf16)
-      h3gen+=(--text-encoder "${residency}" --text-cache "$tcache")
+      h3gen+=(--text-encoder "${res_base}" --text-cache "$tcache")
       ;;
     recovered-8b/resident-bf16)
       h3gen+=(--text-encoder recovered-8b --text-weights "$WORK/weights/recovered-8b" --text-cache "$tcache")
       ;;
     *) die "unknown matrix cell $encoder/$residency" ;;
   esac
-  gpucheck_stage "$test_id" 7200 "${h3gen[@]}"
+  gpucheck_stage "$test_id" "$stage_timeout" "${h3gen[@]}"
   printf '%s\n' "$test_id" >>"$RUN_DIR/matrix-test-ids.txt"
   unset FV_TEST_ID
 }
@@ -1248,16 +1283,20 @@ run_h3_matrix() {
     esac
   fi
   sku="$(tr '[:upper:]' '[:lower:]' <<<"$sku")"
-  log "h3-matrix sku=$sku instance=$INSTANCE"
+  # full (default) | followup — skip V2 gens; synth1900 + Preview-80 + 15s on H200.
+  local wave="${FV_MATRIX_WAVE:-full}"
+  log "h3-matrix sku=$sku wave=$wave instance=$INSTANCE"
   mkdir -p "$RUN_DIR"
   : >"$RUN_DIR/matrix-test-ids.txt"
   : >"$RUN_DIR/matrix-psnr.tsv"
+  : >"$RUN_DIR/matrix-skips.tsv"
 
   # --- fetches (shared on this box for every cell) ---
   local v2_repo="${FV_H3_REPO:-FastVideo/FastVideo-FastH3-8-Step-V2}"
   local v2="$WORK/weights/h3-v2"
   local preview_vsa_repo="${FV_H3_PREVIEW_VSA_REPO:-FastVideo/FastVideo-FastH3-4-step-Preview-v1-VSA-DataFree}"
   local preview_dense_repo="${FV_H3_PREVIEW_DENSE_REPO:-FastVideo/FastVideo-FastH3-4-step-Preview-v1-Dense-DataFree}"
+  local synth1900_repo="${FV_H3_PREVIEW_SYNTH1900_REPO:-FastVideo/FastVideo-FastH3-4-step-Preview-v1-VSA-Synthetic-Step1900}"
   local text_pat=("tokenizer/*" "text_encoder/*.json"
     "text_encoder/model-0000[1-9]-of-00014.safetensors" "text_encoder/model-0001[01]-of-00014.safetensors")
   remote_run fetch-v2 120 fetch "$v2_repo" "$v2" "${text_pat[@]}" "transformer/*" "audio_vae/*"
@@ -1275,17 +1314,22 @@ run_h3_matrix() {
   # SearchingMan layout is nested; verify leaves, not component dirs.
   remote_run wait-8b 7200 wait-weights "$recovered" 7200
 
-  # --- V2 cells (all SKUs) ---
+  # --- V2 cells (all SKUs) — skipped on followup wave (already signed off) ---
   local id_v2_stock id_v2_8b id_v2_cache
-  h3_matrix_cell "$sku" v2 stock streamed
-  id_v2_stock="$(tail -1 "$RUN_DIR/matrix-test-ids.txt")"
-  h3_matrix_cell "$sku" v2 recovered-8b resident-bf16
-  id_v2_8b="$(tail -1 "$RUN_DIR/matrix-test-ids.txt")"
-  h3_matrix_cell "$sku" v2 stock cache-hit
-  id_v2_cache="$(tail -1 "$RUN_DIR/matrix-test-ids.txt")"
-  h3_matrix_psnr "$id_v2_stock" "$id_v2_8b" "v2-stock-vs-8b"
+  if [[ "$wave" != followup ]]; then
+    h3_matrix_cell "$sku" v2 stock streamed
+    id_v2_stock="$(tail -1 "$RUN_DIR/matrix-test-ids.txt")"
+    h3_matrix_cell "$sku" v2 recovered-8b resident-bf16
+    id_v2_8b="$(tail -1 "$RUN_DIR/matrix-test-ids.txt")"
+    h3_matrix_cell "$sku" v2 stock cache-hit
+    id_v2_cache="$(tail -1 "$RUN_DIR/matrix-test-ids.txt")"
+    h3_matrix_psnr "$id_v2_stock" "$id_v2_8b" "v2-stock-vs-8b"
+  else
+    log "wave=followup — skipping V2 gen cells"
+    printf 'skip\tv2\twave-followup\n' >>"$RUN_DIR/matrix-skips.tsv"
+  fi
 
-  if [[ "$sku" == h200 ]]; then
+  if [[ "$sku" == h200 && "$wave" != followup ]]; then
     h3_matrix_cell "$sku" v2 stock resident-fp8
     h3_matrix_cell "$sku" v2 stock resident-bf16
 
@@ -1320,14 +1364,66 @@ run_h3_matrix() {
     fi
   fi
 
-  # Optional second wave on 80 GB after H200 Preview is signed off.
-  if [[ "${FV_MATRIX_PREVIEW_80:-0}" == 1 && "$sku" != h200 ]]; then
+  # --- Followup wave (H200): DataFree baseline + Synthetic Step1900 + 15s ---
+  if [[ "$sku" == h200 && "$wave" == followup ]]; then
     local pvsa="$WORK/weights/h3-4step-vsa"
-    remote_run fetch-preview-vsa 120 fetch "$preview_vsa_repo" "$pvsa" "transformer/*" "audio_vae/*"
-    fv_ssh "$HOST" "$PORT" "ln -sfn $v2/text_encoder $pvsa/text_encoder; ln -sfn $v2/tokenizer $pvsa/tokenizer"
-    remote_run wait-preview-vsa 7200 wait-weights "$pvsa" 7200 transformer audio_vae
-    h3_matrix_cell "$sku" 4step-vsa stock streamed
-    h3_matrix_cell "$sku" 4step-vsa recovered-8b resident-bf16
+    STAGE_OPTIONAL=1 remote_run fetch-preview-vsa 120 fetch "$preview_vsa_repo" "$pvsa" \
+      "transformer/*" "audio_vae/*" || true
+    if STAGE_OPTIONAL=1 remote_run wait-preview-vsa 7200 wait-weights "$pvsa" 7200 transformer audio_vae; then
+      fv_ssh "$HOST" "$PORT" "ln -sfn $v2/text_encoder $pvsa/text_encoder; ln -sfn $v2/tokenizer $pvsa/tokenizer"
+      local id_df_stock
+      h3_matrix_cell "$sku" 4step-vsa stock streamed
+      id_df_stock="$(tail -1 "$RUN_DIR/matrix-test-ids.txt")"
+    else
+      log "preview VSA DataFree fetch failed — synth PSNR baseline unavailable"
+      printf 'skip\t4step-vsa\tpreview-repo-missing\n' >>"$RUN_DIR/matrix-skips.tsv"
+      id_df_stock=""
+    fi
+
+    local psynth="$WORK/weights/h3-4step-vsa-synth1900"
+    STAGE_OPTIONAL=1 remote_run fetch-preview-synth1900 120 fetch "$synth1900_repo" "$psynth" \
+      "transformer/*" "audio_vae/*" || true
+    if STAGE_OPTIONAL=1 remote_run wait-preview-synth1900 7200 wait-weights "$psynth" 7200 transformer audio_vae; then
+      fv_ssh "$HOST" "$PORT" "ln -sfn $v2/text_encoder $psynth/text_encoder; ln -sfn $v2/tokenizer $psynth/tokenizer"
+      local id_sy_stock
+      h3_matrix_cell "$sku" 4step-vsa-synth1900 stock streamed
+      id_sy_stock="$(tail -1 "$RUN_DIR/matrix-test-ids.txt")"
+      if [[ -n "$id_df_stock" ]]; then
+        h3_matrix_psnr "$id_df_stock" "$id_sy_stock" "4step-vsa-datafree-vs-synth1900"
+      fi
+    else
+      log "preview VSA Synthetic-Step1900 fetch skipped/failed — set FV_H3_PREVIEW_SYNTH1900_REPO if needed"
+      printf 'skip\t4step-vsa-synth1900\tpreview-repo-missing\n' >>"$RUN_DIR/matrix-skips.tsv"
+    fi
+
+    # Longer clip on recommended DataFree Preview VSA (same res ladder as seconds=15).
+    if [[ -n "$id_df_stock" ]] || fv_ssh "$HOST" "$PORT" "test -f $pvsa/.complete"; then
+      fv_ssh "$HOST" "$PORT" "ln -sfn $v2/text_encoder $pvsa/text_encoder; ln -sfn $v2/tokenizer $pvsa/tokenizer" || true
+      h3_matrix_cell "$sku" 4step-vsa stock streamed-15s
+    else
+      printf 'skip\t4step-vsa-15s\tno-datafree-weights\n' >>"$RUN_DIR/matrix-skips.tsv"
+    fi
+  fi
+
+  # Preview VSA on 80 GB (A100/H100). followup wave always; full wave via FV_MATRIX_PREVIEW_80=1.
+  local preview80="${FV_MATRIX_PREVIEW_80:-0}"
+  [[ "$wave" == followup ]] && preview80=1
+  if [[ "$preview80" == 1 && "$sku" != h200 ]]; then
+    local pvsa="$WORK/weights/h3-4step-vsa"
+    STAGE_OPTIONAL=1 remote_run fetch-preview-vsa 120 fetch "$preview_vsa_repo" "$pvsa" \
+      "transformer/*" "audio_vae/*" || true
+    if STAGE_OPTIONAL=1 remote_run wait-preview-vsa 7200 wait-weights "$pvsa" 7200 transformer audio_vae; then
+      fv_ssh "$HOST" "$PORT" "ln -sfn $v2/text_encoder $pvsa/text_encoder; ln -sfn $v2/tokenizer $pvsa/tokenizer"
+      local id_p80_stock id_p80_8b
+      h3_matrix_cell "$sku" 4step-vsa stock streamed
+      id_p80_stock="$(tail -1 "$RUN_DIR/matrix-test-ids.txt")"
+      h3_matrix_cell "$sku" 4step-vsa recovered-8b resident-bf16
+      id_p80_8b="$(tail -1 "$RUN_DIR/matrix-test-ids.txt")"
+      h3_matrix_psnr "$id_p80_stock" "$id_p80_8b" "4step-vsa-stock-vs-8b"
+    else
+      log "preview VSA on 80 GB fetch skipped/failed"
+      printf 'skip\t4step-vsa-80\tpreview-repo-missing\n' >>"$RUN_DIR/matrix-skips.tsv"
+    fi
   fi
 
   log "h3-matrix done for $sku; TEST_IDs:"
