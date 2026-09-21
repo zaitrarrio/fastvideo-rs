@@ -552,6 +552,55 @@ impl Ltx2ConnectorsConfig {
     }
 }
 
+/// `bwe_generator` + MelSTFT geometry inside `LTX2VocoderWithBWE`
+/// (`vocoder/config.json` on LTX-2.5).
+#[derive(Debug, Clone, PartialEq)]
+pub struct Ltx2BweConfig {
+    pub in_channels: usize,
+    pub hidden_channels: usize,
+    pub out_channels: usize,
+    pub upsample_kernel_sizes: Vec<usize>,
+    pub upsample_factors: Vec<usize>,
+    pub filter_length: usize,
+    pub hop_length: usize,
+    pub window_length: usize,
+    pub num_mel_channels: usize,
+}
+
+impl Ltx2BweConfig {
+    /// Diffusers `LTX2VocoderWithBWE` defaults for LTX-2.5.
+    pub fn ltx2_5_22b() -> Self {
+        Self {
+            in_channels: 128,
+            hidden_channels: 512,
+            out_channels: 2,
+            upsample_kernel_sizes: vec![12, 11, 4, 4, 4],
+            upsample_factors: vec![6, 5, 2, 2, 2],
+            filter_length: 512,
+            hop_length: 80,
+            window_length: 512,
+            num_mel_channels: 64,
+        }
+    }
+
+    pub fn total_upsample_factor(&self) -> usize {
+        self.upsample_factors.iter().product()
+    }
+
+    pub fn upsample_padding(&self, stage: usize) -> usize {
+        (self.upsample_kernel_sizes[stage] - self.upsample_factors[stage]) / 2
+    }
+
+    pub fn stage_channels(&self, stage: usize) -> usize {
+        self.hidden_channels >> (stage + 1)
+    }
+
+    /// STFT frequency bins = `filter_length / 2 + 1`.
+    pub fn n_freqs(&self) -> usize {
+        self.filter_length / 2 + 1
+    }
+}
+
 /// `vocoder/config.json` — `LTX2Vocoder` (HiFi-GAN generator).
 #[derive(Debug, Clone, PartialEq)]
 pub struct Ltx2VocoderConfig {
@@ -572,6 +621,8 @@ pub struct Ltx2VocoderConfig {
     pub input_sampling_rate: usize,
     /// `LTX2VocoderWithBWE` (LTX-2.5): SnakeBeta + band-width extension stack.
     pub with_bwe: bool,
+    /// `bwe_generator` + MelSTFT when [`Self::with_bwe`].
+    pub bwe: Option<Ltx2BweConfig>,
 }
 
 impl Ltx2VocoderConfig {
@@ -590,11 +641,11 @@ impl Ltx2VocoderConfig {
             output_sampling_rate: 24000,
             input_sampling_rate: 16000,
             with_bwe: false,
+            bwe: None,
         }
     }
 
-    /// `LTX2VocoderWithBWE` in LTX-2.5 (`vocoder/config.json`); BWE sub-stack not
-    /// modeled here beyond the flag and main upsampler geometry.
+    /// `LTX2VocoderWithBWE` in LTX-2.5 (`vocoder/config.json`).
     pub fn ltx2_5_22b_bwe() -> Self {
         Self {
             in_channels: 128,
@@ -606,6 +657,7 @@ impl Ltx2VocoderConfig {
             input_sampling_rate: 16000,
             final_tanh: false,
             with_bwe: true,
+            bwe: Some(Ltx2BweConfig::ltx2_5_22b()),
             ..Self::ltx2_19b()
         }
     }
@@ -632,10 +684,14 @@ impl Ltx2VocoderConfig {
 
     /// Exact waveform length at `output_sampling_rate`: main stack telescopes to
     /// `mel · total_upsample_factor`, then BWE lifts 16 kHz → 48 kHz by
-    /// `rate_upsample` (nearest-neighbor stand-in until SnakeBeta BWE lands).
+    /// `rate_upsample`.
     pub fn waveform_samples(&self, mel_frames: usize) -> usize {
+        // Parenthesize so `kernel - 2·pad` lands before the subtract — stage 0 of
+        // the 2.5 stack is `(L-1)·5 + 11 - 6`, and `(L-1)·5 - 6` underflows usize
+        // for small L.
         let base = (0..self.upsample_factors.len()).fold(mel_frames, |len, i| {
-            (len - 1) * self.upsample_factors[i] - 2 * self.upsample_padding(i) + self.upsample_kernel_sizes[i]
+            (len - 1) * self.upsample_factors[i] + self.upsample_kernel_sizes[i]
+                - 2 * self.upsample_padding(i)
         });
         base * self.rate_upsample()
     }
@@ -1172,6 +1228,11 @@ mod tests {
         assert_eq!(v.waveform_samples(501), 501 * 160 * 3);
         assert_eq!(v.stage_channels(0), 768);
         assert_eq!(v.stage_channels(5), 24);
+        let bwe = v.bwe.as_ref().expect("2.5 ships BWE geometry");
+        assert_eq!(bwe.total_upsample_factor(), 240);
+        assert_eq!(bwe.hop_length, 80);
+        assert_eq!(bwe.n_freqs(), 257);
+        assert_eq!(bwe.stage_channels(4), 16);
         let a = Ltx2AudioVaeConfig::ltx2_19b();
         // Main stack is 16 kHz; BWE rate lift brings the product to 48 kHz.
         assert_eq!(v.total_upsample_factor() * a.sample_rate * v.rate_upsample(), a.mel_hop_length * v.output_sampling_rate);

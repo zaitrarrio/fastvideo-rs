@@ -1,17 +1,14 @@
-//! `LTX2Vocoder`: a HiFi-GAN generator from the stereo log-mel to a 24 kHz
-//! stereo waveform.
+//! `LTX2Vocoder` / `LTX2VocoderWithBWE`: HiFi-GAN from stereo log-mel to waveform.
 //!
 //! The mel arrives as `[B, 2, T, 64]` and is read as 128 channels over `T`
-//! frames (channel index `stereo · 64 + mel_bin`). Five transposed convolutions
-//! upsample ×6·5·2·2·2 = ×240; every stage satisfies `kernel - 2·pad = stride`,
-//! so the lengths are exact multiples with no output padding. After each one,
-//! three residual blocks with kernels 3, 7 and 11 run **in parallel on the same
-//! input** and are averaged — not chained.
+//! frames (channel index `stereo · 64 + mel_bin`). Upsample stages telescope
+//! the time axis; every stage satisfies `kernel - 2·pad = stride`, so lengths
+//! are exact multiples. After each upsample, three residual blocks (kernels
+//! 3 / 7 / 11) run **in parallel on the same input** and are averaged.
 //!
-//! Two constants are not what the config suggests: the activation before
-//! `conv_out` is a bare `nn.LeakyReLU()` — slope **0.01**, not the 0.1 used
-//! everywhere else — and LTX-2.0 has neither Snake activations nor the
-//! anti-aliased resampling around them (that is LTX-2.3's vocoder).
+//! LTX-2.0: LeakyReLU path, 24 kHz out, no BWE.
+//! LTX-2.5: SnakeBeta + antialias main stack @ 16 kHz, then MelSTFT →
+//! `bwe_generator` residual + Hann-sinc ×3 skip → 48 kHz.
 //!
 //! Weight norm: the published diffusers checkpoint stores plain weights. An
 //! original HiFi-GAN checkpoint stores `weight_g` / `weight_v` (or torch's
@@ -19,7 +16,7 @@
 //! `g · v / ‖v‖` once at load, so the graph never sees them.
 //! See docs/ports/ltx2.md §d.
 
-use fastvideo_models::ltx2::config::Ltx2VocoderConfig;
+use fastvideo_models::ltx2::config::{Ltx2BweConfig, Ltx2VocoderConfig};
 
 use crate::wan::ops::PadMode;
 use crate::wan::tensor::{CudaTensor, Result};
@@ -37,8 +34,13 @@ const UP_CROP_RIGHT: usize = UP_PAD * AA_RATIO + (FILTER_TAPS - AA_RATIO + 1) / 
 const DOWN_PAD_LEFT: usize = FILTER_TAPS / 2 - 1; // 5
 const DOWN_PAD_RIGHT: usize = FILTER_TAPS / 2; // 6
 
-/// Nearest-neighbor upsample along the last axis of `[B, C, L]` — stand-in for
-/// the BWE Hann-sinc 16→48 kHz lift until MelSTFT+`bwe_generator` are wired.
+/// Hann-sinc `UpSample1d(ratio=3, window_type="hann")` constants from
+/// diffusers `vocoder.py` (rolloff 0.99, lowpass_filter_width 6).
+const HANN_ROLLOFF: f32 = 0.99;
+const HANN_LOWPASS_WIDTH: f32 = 6.0;
+
+/// Nearest-neighbor upsample along the last axis of `[B, C, L]` — fallback when
+/// BWE checkpoint keys are absent.
 fn upsample_time_nearest(x: &CudaTensor, ratio: usize) -> Result<CudaTensor> {
     let [b, c, l] = match x.shape[..] {
         [b, c, l] => [b, c, l],
@@ -72,10 +74,36 @@ fn host_values(map: &WeightMap, key: &str, shape: &[usize]) -> Result<Vec<f32>> 
 
 fn depthwise_filter(taps: &[f32], channels: usize) -> Result<CudaTensor> {
     let data: Vec<f32> = (0..channels).flat_map(|_| taps.iter().copied()).collect();
-    pinned(data, vec![channels, 1, FILTER_TAPS])
+    pinned(data, vec![channels, 1, taps.len()])
 }
 
-/// `Activation1d(SnakeBeta)`: upsample ×2 → SnakeBeta → downsample ×2.
+/// `sinc(x) = sin(πx)/(πx)` (PyTorch / numpy).
+fn sinc(x: f32) -> f32 {
+    if x.abs() < 1e-8 {
+        1.0
+    } else {
+        (std::f32::consts::PI * x).sin() / (std::f32::consts::PI * x)
+    }
+}
+
+/// Hann-windowed sinc kernel for `UpSample1d(..., window_type="hann")`.
+fn hann_sinc_kernel(ratio: usize) -> (Vec<f32>, usize, usize, usize, usize) {
+    let width = (HANN_LOWPASS_WIDTH / HANN_ROLLOFF).ceil() as usize;
+    let kernel_size = 2 * width * ratio + 1;
+    let pad = width;
+    let pad_left = 2 * width * ratio;
+    let pad_right = kernel_size - ratio;
+    let mut taps = Vec::with_capacity(kernel_size);
+    for i in 0..kernel_size {
+        let time = (i as f32 / ratio as f32 - width as f32) * HANN_ROLLOFF;
+        let clamped = time.clamp(-HANN_LOWPASS_WIDTH, HANN_LOWPASS_WIDTH);
+        let window = (clamped * std::f32::consts::PI / HANN_LOWPASS_WIDTH / 2.0).cos().powi(2);
+        taps.push(sinc(time) * window * HANN_ROLLOFF / ratio as f32);
+    }
+    (taps, kernel_size, pad, pad_left, pad_right)
+}
+
+/// Alias-free SnakeBeta: upsample ×2 → SnakeBeta → downsample ×2.
 struct AliasFreeSnake {
     alpha: CudaTensor,
     inv_beta: CudaTensor,
@@ -160,7 +188,12 @@ impl Conv1d {
             return Err(msg(format!("{prefix}: \"same\" padding needs an odd kernel, got {kernel}")));
         }
         let bias_key = format!("{prefix}.bias");
-        let mut bias = if map.has_tensor(&bias_key) {
+        let has_weight = map.has_tensor(&format!("{prefix}.weight"))
+            || map.has_tensor(&format!("{prefix}.weight_g"))
+            || map.has_tensor(&format!("{prefix}.parametrizations.weight.original0"));
+        // Omit → zeros when the checkpoint has weights but no bias (`final_bias=false`).
+        // Synthetic `WeightMap::generated` invents every key so host refs stay in sync.
+        let mut bias = if map.has_tensor(&bias_key) || (!has_weight && map.contains(&bias_key)) {
             cuda_tensor_shaped(map, &bias_key, &[cout])?
         } else {
             CudaTensor::zeros(&[cout])
@@ -238,80 +271,126 @@ enum StageResnets {
     Amp(Vec<AmpBlock>),
 }
 
-pub struct Vocoder {
-    cfg: Ltx2VocoderConfig,
+/// Geometry shared by the main HiFi-GAN and `bwe_generator`.
+struct StackGeom {
+    in_channels: usize,
+    hidden_channels: usize,
+    out_channels: usize,
+    upsample_kernel_sizes: Vec<usize>,
+    upsample_factors: Vec<usize>,
+    resnet_kernel_sizes: [usize; 3],
+    resnet_dilations: [[usize; 3]; 3],
+    leaky_relu_negative_slope: f64,
+    final_leaky_relu_negative_slope: f64,
+    final_tanh: bool,
+}
+
+impl StackGeom {
+    fn from_main(cfg: &Ltx2VocoderConfig) -> Self {
+        Self {
+            in_channels: cfg.in_channels,
+            hidden_channels: cfg.hidden_channels,
+            out_channels: cfg.out_channels,
+            upsample_kernel_sizes: cfg.upsample_kernel_sizes.clone(),
+            upsample_factors: cfg.upsample_factors.clone(),
+            resnet_kernel_sizes: cfg.resnet_kernel_sizes,
+            resnet_dilations: cfg.resnet_dilations,
+            leaky_relu_negative_slope: cfg.leaky_relu_negative_slope,
+            final_leaky_relu_negative_slope: cfg.final_leaky_relu_negative_slope,
+            final_tanh: cfg.final_tanh,
+        }
+    }
+
+    fn from_bwe(cfg: &Ltx2VocoderConfig, bwe: &Ltx2BweConfig) -> Self {
+        Self {
+            in_channels: bwe.in_channels,
+            hidden_channels: bwe.hidden_channels,
+            out_channels: bwe.out_channels,
+            upsample_kernel_sizes: bwe.upsample_kernel_sizes.clone(),
+            upsample_factors: bwe.upsample_factors.clone(),
+            resnet_kernel_sizes: cfg.resnet_kernel_sizes,
+            resnet_dilations: cfg.resnet_dilations,
+            leaky_relu_negative_slope: cfg.leaky_relu_negative_slope,
+            final_leaky_relu_negative_slope: cfg.final_leaky_relu_negative_slope,
+            final_tanh: false,
+        }
+    }
+
+    fn upsample_padding(&self, stage: usize) -> usize {
+        (self.upsample_kernel_sizes[stage] - self.upsample_factors[stage]) / 2
+    }
+
+    fn stage_channels(&self, stage: usize) -> usize {
+        self.hidden_channels >> (stage + 1)
+    }
+}
+
+struct HiFiGan {
+    geom: StackGeom,
     conv_in: Conv1d,
-    /// Per upsample stage: the transposed conv and its parallel residual blocks.
     stages: Vec<(Upsampler, StageResnets)>,
-    /// Alias-free Snake before `conv_out` (2.5); `None` → LeakyReLU 0.01 (2.0).
     act_out: Option<AliasFreeSnake>,
     conv_out: Conv1d,
 }
 
-impl Vocoder {
-    /// `map` is the diffusers `vocoder/` folder.
-    pub fn load(map: &WeightMap, cfg: &Ltx2VocoderConfig) -> Result<Self> {
-        // LTX-2.5 nests the HiFi-GAN under `vocoder.*` and adds `bwe_generator.*`.
-        // SnakeBeta on the main path is required for audible audio; BWE (Hann-sinc
-        // ×3 + MelSTFT + residual) is still approximated by nearest ×3.
-        let root = if map.has_tensor("vocoder.conv_in.weight")
-            || map.has_tensor("vocoder.conv_in.weight_g")
-            || map.has_tensor("vocoder.parametrizations.weight.original0")
-        {
-            "vocoder."
-        } else {
-            ""
-        };
+impl HiFiGan {
+    /// `force_snake`: invent SnakeBeta when the map is a generator (host tests for
+    /// LTX-2.5). Real checkpoints are detected via `act_out.act.alpha` keys.
+    fn load(map: &WeightMap, root: &str, geom: StackGeom, force_snake: bool) -> Result<Self> {
         let snake = map.has_tensor(&format!("{root}act_out.act.alpha"))
-            || map.has_tensor(&format!("{root}resnets.0.acts1.0.act.alpha"));
-        if cfg.with_bwe && snake {
-            eprintln!(
-                "ltx2 vocoder: SnakeBeta main stack (prefix `{root}`); \
-                 BWE residual deferred — nearest ×{} lifts 16→48 kHz",
-                cfg.rate_upsample()
-            );
-        } else if cfg.with_bwe {
-            eprintln!(
-                "ltx2 vocoder: with_bwe=true but no SnakeBeta keys under `{root}` — \
-                 using LeakyReLU path (synthetic / incomplete checkpoint)"
-            );
-        }
+            || map.has_tensor(&format!("{root}resnets.0.acts1.0.act.alpha"))
+            || (force_snake && map.contains(&format!("{root}act_out.act.alpha")));
         let taps = if snake {
-            Some(host_values(map, &format!("{root}act_out.upsample.filter"), &[1, 1, FILTER_TAPS])?)
+            // Prefer checkpoint taps; for WeightMap::generated invent zeros →
+            // fall back to a unit impulse so alias-free geometry still runs.
+            let key = format!("{root}act_out.upsample.filter");
+            let mut t = host_values(map, &key, &[1, 1, FILTER_TAPS])?;
+            if t.iter().all(|v| *v == 0.0) {
+                t[FILTER_TAPS / 2] = 1.0;
+            }
+            Some(t)
         } else {
             None
         };
-        let per_stage = cfg.resnet_kernel_sizes.len();
-        let mut stages = Vec::with_capacity(cfg.upsample_factors.len());
-        let mut cin = cfg.hidden_channels;
-        for (i, (&stride, &kernel)) in cfg.upsample_factors.iter().zip(&cfg.upsample_kernel_sizes).enumerate() {
-            let cout = cfg.stage_channels(i);
+        let per_stage = geom.resnet_kernel_sizes.len();
+        let mut stages = Vec::with_capacity(geom.upsample_factors.len());
+        let mut cin = geom.hidden_channels;
+        for (i, (&stride, &kernel)) in geom.upsample_factors.iter().zip(&geom.upsample_kernel_sizes).enumerate() {
+            let cout = geom.stage_channels(i);
             if kernel < stride || cout == 0 || cout * 2 != cin {
-                return Err(msg(format!("vocoder stage {i}: kernel {kernel}, stride {stride}, {cin} -> {cout} channels")));
+                return Err(msg(format!("{root}stage {i}: kernel {kernel}, stride {stride}, {cin} -> {cout} channels")));
             }
             let prefix = format!("{root}upsamplers.{i}");
             let bias_key = format!("{prefix}.bias");
-            let mut bias = if map.has_tensor(&bias_key) {
+            let has_weight = map.has_tensor(&format!("{prefix}.weight"))
+                || map.has_tensor(&format!("{prefix}.weight_g"))
+                || map.has_tensor(&format!("{prefix}.parametrizations.weight.original0"));
+            let mut bias = if map.has_tensor(&bias_key) || (!has_weight && map.contains(&bias_key)) {
                 cuda_tensor_shaped(map, &bias_key, &[cout])?
             } else {
                 CudaTensor::zeros(&[cout])
             };
             bias.pin_device()?;
-            let up = Upsampler { weight: conv_weight(map, &prefix, &[cin, cout, kernel])?, bias, stride, padding: cfg.upsample_padding(i) };
+            let up = Upsampler {
+                weight: conv_weight(map, &prefix, &[cin, cout, kernel])?,
+                bias,
+                stride,
+                padding: geom.upsample_padding(i),
+            };
             let blocks = if let Some(taps) = taps.as_deref() {
-                let amps = cfg
+                let amps = geom
                     .resnet_kernel_sizes
                     .iter()
-                    .zip(&cfg.resnet_dilations)
+                    .zip(&geom.resnet_dilations)
                     .enumerate()
                     .map(|(j, (&k, dilations))| AmpBlock::load(map, &format!("{root}resnets.{}", i * per_stage + j), cout, k, dilations, taps))
                     .collect::<Result<Vec<_>>>()?;
                 StageResnets::Amp(amps)
             } else {
-                let leaky = cfg
+                let leaky = geom
                     .resnet_kernel_sizes
                     .iter()
-                    .zip(&cfg.resnet_dilations)
+                    .zip(&geom.resnet_dilations)
                     .enumerate()
                     .map(|(j, (&k, dilations))| {
                         let p = format!("{root}resnets.{}", i * per_stage + j);
@@ -335,28 +414,24 @@ impl Vocoder {
         }
         let act_out = taps.as_deref().map(|t| AliasFreeSnake::load(map, &format!("{root}act_out"), cin, t)).transpose()?;
         Ok(Self {
-            conv_in: Conv1d::load(map, &format!("{root}conv_in"), cfg.in_channels, cfg.hidden_channels, 7, 1)?,
+            conv_in: Conv1d::load(map, &format!("{root}conv_in"), geom.in_channels, geom.hidden_channels, 7, 1)?,
             stages,
             act_out,
-            conv_out: Conv1d::load(map, &format!("{root}conv_out"), cin, cfg.out_channels, 7, 1)?,
-            cfg: cfg.clone(),
+            conv_out: Conv1d::load(map, &format!("{root}conv_out"), cin, geom.out_channels, 7, 1)?,
+            geom,
         })
     }
 
-    /// Mel `[B, 2, T, 64]` → waveform `[B, 2, factor·T]` in `[-1, 1]` at
-    /// `output_sampling_rate`. For BWE checkpoints the SnakeBeta main stack
-    /// emits 16 kHz–rate samples; nearest ×`rate_upsample` lifts to 48 kHz
-    /// until Hann-sinc + `bwe_generator` land.
-    pub fn forward(&self, mel: &CudaTensor) -> Result<CudaTensor> {
+    /// Mel `[B, C, T, M]` → waveform `[B, out, L]`.
+    fn forward(&self, mel: &CudaTensor) -> Result<CudaTensor> {
         let [b, c, t, m] = mel.shape[..] else {
-            return Err(msg(format!("vocoder expects mel [B, C, T, M], got {:?}", mel.shape)));
+            return Err(msg(format!("HiFi-GAN expects mel [B, C, T, M], got {:?}", mel.shape)));
         };
-        if c * m != self.cfg.in_channels || t == 0 {
-            return Err(msg(format!("vocoder expects {} mel channels, got {c} x {m} in {:?}", self.cfg.in_channels, mel.shape)));
+        if c * m != self.geom.in_channels || t == 0 {
+            return Err(msg(format!("HiFi-GAN expects {} mel channels, got {c} x {m} in {:?}", self.geom.in_channels, mel.shape)));
         }
-        let slope = self.cfg.leaky_relu_negative_slope as f32;
+        let slope = self.geom.leaky_relu_negative_slope as f32;
         let snake = self.act_out.is_some();
-        // [B, C, T, M] → [B, C, M, T] → [B, C·M, T].
         let mut x = self.conv_in.forward(&mel.permute(&[0, 1, 3, 2])?.reshape(vec![b, c * m, t])?)?;
         for (up, blocks) in &self.stages {
             x = if snake {
@@ -374,12 +449,240 @@ impl Vocoder {
         let x = if let Some(act) = &self.act_out {
             self.conv_out.forward(&act.forward(&x)?)?
         } else {
-            self.conv_out.forward(&x.leaky_relu(self.cfg.final_leaky_relu_negative_slope as f32))?
+            self.conv_out.forward(&x.leaky_relu(self.geom.final_leaky_relu_negative_slope as f32))?
         };
-        let x = if self.cfg.final_tanh { tanh(&x)? } else { x };
+        if self.geom.final_tanh {
+            tanh(&x)
+        } else {
+            Ok(x)
+        }
+    }
+}
+
+/// Causal MelSTFT: checkpoint `forward_basis` + `mel_basis` (bf16 in the pack).
+struct MelStft {
+    forward_basis: CudaTensor, // [2·n_freqs, 1, filter_length]
+    mel_basis: CudaTensor,     // [num_mel, n_freqs]
+    hop_length: usize,
+    window_length: usize,
+    n_freqs: usize,
+    num_mel: usize,
+}
+
+impl MelStft {
+    fn load(map: &WeightMap, bwe: &Ltx2BweConfig) -> Result<Self> {
+        let n_freqs = bwe.n_freqs();
+        Ok(Self {
+            forward_basis: {
+                let mut t = cuda_tensor_shaped(map, "mel_stft.stft_fn.forward_basis", &[n_freqs * 2, 1, bwe.filter_length])?;
+                t.pin_device()?;
+                t
+            },
+            mel_basis: {
+                let mut t = cuda_tensor_shaped(map, "mel_stft.mel_basis", &[bwe.num_mel_channels, n_freqs])?;
+                t.pin_device()?;
+                t
+            },
+            hop_length: bwe.hop_length,
+            window_length: bwe.window_length,
+            n_freqs,
+            num_mel: bwe.num_mel_channels,
+        })
+    }
+
+    /// Waveform `[N, L]` → log-mel `[N, num_mel, frames]`.
+    fn forward_flat(&self, wave: &CudaTensor) -> Result<CudaTensor> {
+        let [n, l] = match wave.shape[..] {
+            [n, l] => [n, l],
+            _ => return Err(msg(format!("MelSTFT expects [N, L], got {:?}", wave.shape))),
+        };
+        let left = self.window_length.saturating_sub(self.hop_length);
+        let x = wave.reshape(vec![n, 1, l])?.pad(2, left, 0, PadMode::Zeros)?;
+        let spec = x.conv1d(&self.forward_basis, None, 0, self.hop_length, 1, 1)?;
+        // Magnitude + mel projection on host: `matmul` refuses the unbatched
+        // `[M, F] @ [N, F, T]` broadcast on CUDA builds (no device path).
+        let frames = spec.shape[2];
+        let data = spec.host_cow()?;
+        let mel_w = self.mel_basis.host_cow()?;
+        let mut log_mel = vec![0f32; n * self.num_mel * frames];
+        for bi in 0..n {
+            for m in 0..self.num_mel {
+                for t in 0..frames {
+                    let mut acc = 0f32;
+                    for f in 0..self.n_freqs {
+                        let re = data[((bi * 2 * self.n_freqs + f) * frames) + t];
+                        let im = data[((bi * 2 * self.n_freqs + self.n_freqs + f) * frames) + t];
+                        let mag = (re * re + im * im).sqrt();
+                        acc += mel_w[m * self.n_freqs + f] * mag;
+                    }
+                    log_mel[(bi * self.num_mel + m) * frames + t] = acc.max(1e-5).ln();
+                }
+            }
+        }
+        CudaTensor::from_vec(log_mel, vec![n, self.num_mel, frames])
+    }
+}
+
+/// Hann-sinc skip resampler: 16 kHz → 48 kHz.
+struct HannResampler {
+    taps: Vec<f32>,
+    ratio: usize,
+    pad: usize,
+    pad_left: usize,
+    pad_right: usize,
+}
+
+impl HannResampler {
+    fn new(ratio: usize) -> Self {
+        let (taps, _k, pad, pad_left, pad_right) = hann_sinc_kernel(ratio);
+        Self { taps, ratio, pad, pad_left, pad_right }
+    }
+
+    fn forward(&self, x: &CudaTensor) -> Result<CudaTensor> {
+        let [b, c, l] = match x.shape[..] {
+            [b, c, l] => [b, c, l],
+            _ => return Err(msg(format!("Hann resampler expects [B, C, L], got {:?}", x.shape))),
+        };
+        let filter = depthwise_filter(&self.taps, c)?;
+        let up = x
+            .pad(2, self.pad, self.pad, PadMode::Replicate)?
+            .conv_transpose1d(&filter, None, 0, self.ratio, 1, c, 0)?
+            .try_mul_scalar(self.ratio as f32)?;
+        let crop = up.shape[2].saturating_sub(self.pad_left + self.pad_right);
+        if crop == 0 {
+            return Err(msg(format!("Hann resampler crop empty from len {} (in {l})", up.shape[2])));
+        }
+        let out = up.narrow(2, self.pad_left, crop)?;
+        if out.shape != [b, c, l * self.ratio] && out.shape[2] < l * self.ratio {
+            // Length can be slightly longer than ratio·L; caller crops.
+        }
+        let _ = (b, c);
+        Ok(out)
+    }
+}
+
+struct BwePath {
+    mel_stft: MelStft,
+    generator: HiFiGan,
+    resampler: HannResampler,
+    hop_length: usize,
+    rate: usize,
+}
+
+impl BwePath {
+    fn load(map: &WeightMap, cfg: &Ltx2VocoderConfig, bwe: &Ltx2BweConfig) -> Result<Self> {
+        Ok(Self {
+            mel_stft: MelStft::load(map, bwe)?,
+            generator: HiFiGan::load(map, "bwe_generator.", StackGeom::from_bwe(cfg, bwe), true)?,
+            resampler: HannResampler::new(cfg.rate_upsample()),
+            hop_length: bwe.hop_length,
+            rate: cfg.rate_upsample(),
+        })
+    }
+
+    /// 16 kHz waveform `[B, C, L]` → 48 kHz `[B, C, rate·L]` in `[-1, 1]`.
+    fn forward(&self, x: &CudaTensor) -> Result<CudaTensor> {
+        let [b, c, num_samples] = match x.shape[..] {
+            [b, c, n] => [b, c, n],
+            _ => return Err(msg(format!("BWE expects [B, C, L], got {:?}", x.shape))),
+        };
+        let rem = num_samples % self.hop_length;
+        let x_pad = if rem == 0 {
+            x.clone()
+        } else {
+            x.pad(2, 0, self.hop_length - rem, PadMode::Zeros)?
+        };
+        let flat = x_pad.reshape(vec![b * c, x_pad.shape[2]])?;
+        let mel = self.mel_stft.forward_flat(&flat)?; // [B·C, M, frames]
+        let frames = mel.shape[2];
+        let mel = mel.reshape(vec![b, c, self.mel_stft.num_mel, frames])?.permute(&[0, 1, 3, 2])?;
+        let residual = self.generator.forward(&mel)?;
+        let skip = self.resampler.forward(x)?;
+        // Align lengths then residual-add + clamp.
+        let out_len = num_samples * self.rate;
+        let r_len = residual.shape[2].min(skip.shape[2]).min(out_len);
+        let residual = residual.narrow(2, 0, r_len)?;
+        let skip = skip.narrow(2, 0, r_len)?;
+        let mut wave = residual.add(&skip)?.clamp(-1.0, 1.0);
+        if r_len < out_len {
+            wave = wave.pad(2, 0, out_len - r_len, PadMode::Zeros)?;
+        } else if wave.shape[2] > out_len {
+            wave = wave.narrow(2, 0, out_len)?;
+        }
+        Ok(wave)
+    }
+}
+
+fn should_load_bwe(map: &WeightMap, cfg: &Ltx2VocoderConfig) -> bool {
+    if !cfg.with_bwe || cfg.bwe.is_none() {
+        return false;
+    }
+    if map.has_tensor("mel_stft.mel_basis")
+        || map.has_tensor("bwe_generator.conv_in.weight")
+        || map.has_tensor("bwe_generator.conv_in.weight_g")
+    {
+        return true;
+    }
+    // WeightMap::generated: invent BWE so host tests exercise the path.
+    map.contains("mel_stft.mel_basis") && !map.has_tensor("conv_in.weight") && !map.has_tensor("vocoder.conv_in.weight")
+}
+
+pub struct Vocoder {
+    cfg: Ltx2VocoderConfig,
+    main: HiFiGan,
+    bwe: Option<BwePath>,
+}
+
+impl Vocoder {
+    /// `map` is the diffusers `vocoder/` folder.
+    pub fn load(map: &WeightMap, cfg: &Ltx2VocoderConfig) -> Result<Self> {
+        // LTX-2.5 nests the HiFi-GAN under `vocoder.*` and adds `bwe_generator.*`.
+        let root = if map.has_tensor("vocoder.conv_in.weight")
+            || map.has_tensor("vocoder.conv_in.weight_g")
+            || map.has_tensor("vocoder.parametrizations.weight.original0")
+            || (cfg.with_bwe && map.contains("vocoder.conv_in.weight") && !map.has_tensor("conv_in.weight"))
+        {
+            "vocoder."
+        } else {
+            ""
+        };
+        let snake = map.has_tensor(&format!("{root}act_out.act.alpha"))
+            || map.has_tensor(&format!("{root}resnets.0.acts1.0.act.alpha"))
+            || (cfg.with_bwe && map.contains(&format!("{root}act_out.act.alpha")));
+        let load_bwe = should_load_bwe(map, cfg);
+        if cfg.with_bwe && snake && load_bwe {
+            eprintln!("ltx2 vocoder: SnakeBeta main (`{root}`) + BWE (Hann-sinc ×{} + MelSTFT + bwe_generator)", cfg.rate_upsample());
+        } else if cfg.with_bwe && snake {
+            eprintln!(
+                "ltx2 vocoder: SnakeBeta main (`{root}`); BWE keys absent — nearest ×{} lifts 16→48 kHz",
+                cfg.rate_upsample()
+            );
+        } else if cfg.with_bwe {
+            eprintln!(
+                "ltx2 vocoder: with_bwe=true but no SnakeBeta keys under `{root}` — \
+                 using LeakyReLU path (synthetic / incomplete checkpoint)"
+            );
+        }
+        let main = HiFiGan::load(map, root, StackGeom::from_main(cfg), cfg.with_bwe)?;
+        let bwe = if load_bwe {
+            let bwe_cfg = cfg.bwe.as_ref().ok_or_else(|| msg("with_bwe but missing Ltx2BweConfig"))?;
+            Some(BwePath::load(map, cfg, bwe_cfg)?)
+        } else {
+            None
+        };
+        Ok(Self { cfg: cfg.clone(), main, bwe })
+    }
+
+    /// Mel `[B, 2, T, 64]` → waveform `[B, 2, factor·T]` in `[-1, 1]` at
+    /// `output_sampling_rate`.
+    pub fn forward(&self, mel: &CudaTensor) -> Result<CudaTensor> {
+        let x = self.main.forward(mel)?;
         let ratio = self.cfg.rate_upsample();
         if ratio <= 1 {
             return Ok(x);
+        }
+        if let Some(bwe) = &self.bwe {
+            return bwe.forward(&x);
         }
         upsample_time_nearest(&x, ratio)
     }
@@ -487,16 +790,23 @@ mod tests {
             let (w, b) = (get(&map, &format!("upsamplers.{i}.weight"), &[cin, cout, k]), get(&map, &format!("upsamplers.{i}.bias"), &[cout]));
             x = conv_transpose1d(&leaky(&x, 0.1), &w, &b, k, s, (k - s) / 2);
             let mut mean = vec![0f32; x.v.len()];
-            for (j, &rk) in [3usize, 7, 11].iter().enumerate() {
-                let mut r = x.clone();
-                for (n, d) in [1usize, 3, 5].into_iter().enumerate() {
-                    let p = format!("resnets.{}", i * 3 + j);
-                    let (w1, b1) = load(&format!("{p}.convs1.{n}"), cout, cout, rk);
-                    let (w2, b2) = load(&format!("{p}.convs2.{n}"), cout, cout, rk);
-                    let h = conv1d(&leaky(&conv1d(&leaky(&r, 0.1), &w1, &b1, rk, d), 0.1), &w2, &b2, rk, 1);
-                    r.v.iter_mut().zip(&h.v).for_each(|(a, b)| *a += b);
+            for j in 0..3 {
+                let p = format!("resnets.{}", i * 3 + j);
+                let ks = cfg.resnet_kernel_sizes[j];
+                let mut y = x.clone();
+                for n in 0..3 {
+                    let d = cfg.resnet_dilations[j][n];
+                    let (w1, b1) = load(&format!("{p}.convs1.{n}"), cout, cout, ks);
+                    let (w2, b2) = load(&format!("{p}.convs2.{n}"), cout, cout, ks);
+                    let h = conv1d(&leaky(&y, 0.1), &w1, &b1, ks, d);
+                    let h = conv1d(&leaky(&h, 0.1), &w2, &b2, ks, 1);
+                    for (a, b) in y.v.iter_mut().zip(&h.v) {
+                        *a += *b;
+                    }
                 }
-                mean.iter_mut().zip(&r.v).for_each(|(a, b)| *a += b / 3.0);
+                for (a, b) in mean.iter_mut().zip(&y.v) {
+                    *a += *b / 3.0;
+                }
             }
             x.v = mean;
             cin = cout;
@@ -529,10 +839,24 @@ mod tests {
     }
 
     #[test]
-    fn ltx25_bwe_config_loads_main_stack() {
+    fn hann_sinc_kernel_sums_near_one_and_has_expected_geometry() {
+        let (taps, k, pad, pad_left, pad_right) = hann_sinc_kernel(3);
+        assert_eq!((k, pad, pad_left, pad_right), (43, 7, 42, 40));
+        let sum: f32 = taps.iter().sum();
+        assert!((sum - 1.0).abs() < 1e-3, "sum={sum}");
+    }
+
+    #[test]
+    fn ltx25_bwe_path_loads_and_forwards() {
         let cfg = Ltx2VocoderConfig::ltx2_5_22b_bwe();
-        Vocoder::load(&weights(), &cfg).expect("load main 6-stage stack");
-        assert_eq!(cfg.waveform_samples(10), 10 * cfg.total_upsample_factor() * cfg.rate_upsample());
+        let voc = Vocoder::load(&weights(), &cfg).expect("load BWE vocoder");
+        assert!(voc.bwe.is_some(), "generated map should invent BWE weights");
+        let mel = CudaTensor::zeros(&[1, 2, 2, 64]);
+        let wave = voc.forward(&mel).expect("BWE forward");
+        assert_eq!(wave.shape[0], 1);
+        assert_eq!(wave.shape[1], 2);
+        assert_eq!(wave.shape[2], cfg.waveform_samples(2));
+        assert!(wave.host_cow().unwrap().iter().all(|v| v.is_finite() && *v >= -1.0 && *v <= 1.0));
     }
 
     #[test]

@@ -99,7 +99,11 @@ int8/nvfp4.
 ## Verification
 
 Host: config constructors, gated-attn unit test, ancestral step math vs
-`EulerAncestralDiffusionStep`, key-layout detection.
+`EulerAncestralDiffusionStep`, key-layout detection; vocoder SnakeBeta + BWE
+forward (`ltx2::vocoder`, including Hann-sinc / MelSTFT / `bwe_generator`).
 
-GPU: `fv-gpucheck ltx2 … --model-version 2.5` after Diffusers weights are
-local; oracle taps vs diffusers/`ltx-pipelines` distilled stage-1.
+GPU: `FV_LTX2_VERSION=2.5 scripts/gpu/validate.sh run ltx2-gen` after Diffusers
+weights are local. Distilled stage-1 gen (8 ancestral steps, conv VAE, BWE
+48 kHz wav) passed remotely 2026-09-21 — clip
+`artifacts/clips/20260921T213121Z-ltx2-gen/ltx25-bwe.mp4`. Oracle taps vs
+diffusers/`ltx-pipelines` remain optional follow-up.
