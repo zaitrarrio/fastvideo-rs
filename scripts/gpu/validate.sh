@@ -594,6 +594,21 @@ cmd_run() {
   LAST_STAGE=upload
   fv_ssh "$HOST" "$PORT" "mkdir -p $FV_REMOTE_DIR/scripts $FV_REMOTE_DIR/target/release $OUTR/refs"
   fv_rsync_to "$HOST" "$PORT" "$FV_ROOT/scripts/" "$FV_REMOTE_DIR/scripts/" --delete --exclude '.env*'
+  # Gated Hub repos (LTX-2.5): seed the HF token file for hf-fm without putting
+  # the secret on the ssh argv. validate.sh never ships .env*; this is the opt-in path.
+  local hf_tok_file="${HF_HOME:-$HOME/.cache/huggingface}/token"
+  if [[ -n "${HF_TOKEN:-}" ]]; then
+    mkdir -p "$RUN_DIR/.hf"
+    printf '%s\n' "$HF_TOKEN" >"$RUN_DIR/.hf/token"
+    chmod 600 "$RUN_DIR/.hf/token"
+    hf_tok_file="$RUN_DIR/.hf/token"
+  fi
+  if [[ -f "$hf_tok_file" ]]; then
+    fv_ssh "$HOST" "$PORT" "mkdir -p /root/.cache/huggingface $WORK/hf"
+    fv_rsync_to "$HOST" "$PORT" "$hf_tok_file" "/root/.cache/huggingface/token"
+    fv_ssh "$HOST" "$PORT" "chmod 600 /root/.cache/huggingface/token; cp -f /root/.cache/huggingface/token $WORK/hf/token; chmod 600 $WORK/hf/token"
+    log "seeded HF token on box for gated Hub fetches"
+  fi
   # Ask the box which build it holds rather than inferring it from the image
   # we would pick today: a reused instance (--instance) was created from an
   # older image, and trusting "the image has the binary" ran a stale

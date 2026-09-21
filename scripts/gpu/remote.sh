@@ -273,12 +273,18 @@ cmd_fetch() {
   for pat in "$@" "model_index.json"; do
     filters+=(--filter "$pat")
   done
+  # Gated Hub packs (LTX-2.5): prefer env, else the token file seeded by validate.sh.
   nohup bash -c '
     set -euo pipefail
     repo="$1"; dest="$2"; shift 2
     t0=$(date +%s)
     export HF_HOME="${HF_HOME:-'"$WORK"'/hf}"
     mkdir -p "$HF_HOME"
+    if [[ -z "${HF_TOKEN:-}" ]]; then
+      for tok in "$HF_HOME/token" /root/.cache/huggingface/token; do
+        if [[ -f "$tok" ]]; then export HF_TOKEN="$(tr -d "[:space:]" <"$tok")"; break; fi
+      done
+    fi
     hf-fm "$repo" --output-dir "$dest" "$@" --timeout-per-file-secs "${HF_FM_TIMEOUT_PER_FILE:-1800}"
     # Promote cache snapshot → dest/{tokenizer,text_encoder,...} when needed.
     if [[ ! -d "$dest/text_encoder" && ! -d "$dest/transformer" && ! -d "$dest/vae" ]]; then

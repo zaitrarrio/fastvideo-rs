@@ -69,7 +69,7 @@ def main() -> int:
         "--model-version",
         default="2.0",
         choices=["2.0", "2.5"],
-        help="2.0: LTX-2 19B distilled (default). 2.5: LTX-2.5 22B — TODO: load Lightricks/LTX-2.5-Diffusers, Gemma4, ancestral sample loop",
+        help="2.0: LTX-2 19B distilled (default). 2.5: LTX-2.5 22B Distilled (Gemma4 + ancestral Euler)",
     )
     ap.add_argument("--prompts", required=True, help="prompt JSON, same file the embed stage reads")
     ap.add_argument("--name", default=None, help="which prompt to use (default: the first)")
@@ -97,6 +97,8 @@ def main() -> int:
     ap.add_argument("--out", required=True)
     ap.add_argument("--meta", required=True)
     args = ap.parse_args()
+    if args.model_version == "2.5" and args.weights == "rootonchair/LTX-2-19b-distilled":
+        args.weights = "Lightricks/LTX-2.5-Diffusers"
     skip = {s for s in args.skip.split(",") if s}
     if "text" in skip and args.llm_out:
         ap.error("--llm-out needs the text stage")
@@ -171,10 +173,10 @@ def main() -> int:
             model = model.to(dtype)
         return model.eval().to(dev)
 
-    # --- text: Gemma-3-12B ---------------------------------------------------
+    # --- text: Gemma-3-12B (2.0) / Gemma-4-12B (2.5) -------------------------
     prompt_embeds = prompt_mask = None
     if "text" not in skip:
-        from transformers import AutoTokenizer, Gemma3ForConditionalGeneration
+        from transformers import AutoTokenizer
 
         t_dtype = getattr(torch, args.text_dtype)
         tokenizer = AutoTokenizer.from_pretrained(args.weights, subfolder="tokenizer")
@@ -186,8 +188,36 @@ def main() -> int:
         t0 = time.time()
         # The shards are float32 on disk (48.7 GB); torch_dtype casts on load, which
         # is what LTX2Pipeline.from_pretrained(torch_dtype=bfloat16) does too.
-        text_encoder = load(Gemma3ForConditionalGeneration, "text_encoder", t_dtype, "transformers")
+        text_cls = None
+        text_cls_name = "Gemma3ForConditionalGeneration"
+        if args.model_version == "2.5":
+            # Prefer the dedicated Gemma4 class when transformers ships it; fall back
+            # to AutoModel so a newer Hub config still loads against an older wheel.
+            for name in (
+                "Gemma4ForConditionalGeneration",
+                "Gemma4Model",
+                "AutoModelForCausalLM",
+            ):
+                try:
+                    import transformers as _tf
+
+                    text_cls = getattr(_tf, name, None)
+                    if text_cls is not None:
+                        text_cls_name = name
+                        break
+                except Exception:
+                    text_cls = None
+            if text_cls is None:
+                from transformers import AutoModelForCausalLM as text_cls
+
+                text_cls_name = "AutoModelForCausalLM"
+        else:
+            from transformers import Gemma3ForConditionalGeneration as text_cls
+
+        text_encoder = load(text_cls, "text_encoder", t_dtype, "transformers")
         timings["load_text_s"] = time.time() - t0
+        meta["text_encoder_class"] = text_cls_name
+        meta["model_version"] = args.model_version
 
         # pipeline_ltx2.py:333-341 — no chat template, no system prompt: the stripped
         # prompt, <bos> prepended by add_special_tokens, padded to max_length.
@@ -533,20 +563,50 @@ def main() -> int:
             aud = pack_audio(cpu_randn((1, 8, audio_n, 16), 11)).to(dev)
             out["sample.video_noise"] = f32(lat)
             out["sample.audio_noise"] = f32(aud)
+            ancestral = args.model_version == "2.5"
+            meta["sample_sampler"] = "ancestral_euler" if ancestral else "euler"
+            # Lightricks DistilledPipeline: eta=1, s_noise=1, noise seed = pipeline seed + 10000.
+            anc_g = torch.Generator(device="cpu").manual_seed(args.seed + 10_000) if ancestral else None
             t0 = time.time()
             for i, t in enumerate(timesteps):
                 v, a = dit(lat, aud, t.expand(1))
-                # Unguided (guidance_scale=1, stg_scale=0, modality_scale=1, rescale=0), the
-                # pipeline still round-trips v → x0 → v in float32 (pipeline_ltx2.py:1466-1467,
-                # 1573-1574); kept so the step is bit-comparable with a real pipeline run.
-                sigma = sigmas[i]
-                v = (lat - (lat - v * sigma)) / sigma
-                a = (aud - (aud - a * sigma)) / sigma
-                # pipeline_ltx2.py:1577-1580 — scheduler.step is x ← x + (sigma_next - sigma) · v
-                # in float32, the same rule and the same sigmas for both streams.
-                dt = sigmas[i + 1] - sigma
-                lat = lat + dt * v
-                aud = aud + dt * a
+                sigma = float(sigmas[i])
+                sigma_next = float(sigmas[i + 1])
+                if ancestral:
+                    # velocity → x0, then EulerAncestralDiffusionStep (see Ltx2Schedule::ancestral_step).
+                    den_v = lat - v * sigma
+                    den_a = aud - a * sigma
+                    if sigma_next == 0.0:
+                        lat, aud = den_v, den_a
+                    else:
+                        eta = 1.0
+                        s_noise = 1.0
+                        downstep_ratio = 1.0 + (sigma_next / sigma - 1.0) * eta
+                        sigma_down = sigma_next * downstep_ratio
+                        scale = sigma_down / sigma
+                        blend = 1.0 - scale
+                        lat = scale * lat + blend * den_v
+                        aud = scale * aud + blend * den_a
+                        if eta > 0.0:
+                            alpha_next = 1.0 - sigma_next
+                            alpha_down = 1.0 - sigma_down
+                            renoise = max(0.0, sigma_next**2 - sigma_down**2 * alpha_next**2 / (alpha_down**2)) ** 0.5
+                            factor = alpha_next / alpha_down
+                            nv = torch.randn(lat.shape, generator=anc_g, dtype=torch.float32).to(dev)
+                            na = torch.randn(aud.shape, generator=anc_g, dtype=torch.float32).to(dev)
+                            lat = factor * lat + nv * (s_noise * renoise)
+                            aud = factor * aud + na * (s_noise * renoise)
+                else:
+                    # Unguided (guidance_scale=1, stg_scale=0, modality_scale=1, rescale=0), the
+                    # pipeline still round-trips v → x0 → v in float32 (pipeline_ltx2.py:1466-1467,
+                    # 1573-1574); kept so the step is bit-comparable with a real pipeline run.
+                    v = (lat - (lat - v * sigma)) / sigma
+                    a = (aud - (aud - a * sigma)) / sigma
+                    # pipeline_ltx2.py:1577-1580 — scheduler.step is x ← x + (sigma_next - sigma) · v
+                    # in float32, the same rule and the same sigmas for both streams.
+                    dt = sigma_next - sigma
+                    lat = lat + dt * v
+                    aud = aud + dt * a
                 out[f"{prefix}.step{i}.video"] = f32(lat)
                 out[f"{prefix}.step{i}.audio"] = f32(aud)
             torch.cuda.synchronize()

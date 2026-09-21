@@ -72,11 +72,17 @@ struct Conv1d {
 
 impl Conv1d {
     /// `padding = "same"` for an odd kernel: `dilation · (k - 1) / 2` each side.
+    /// Bias is optional (`final_bias=false` on LTX-2.5 `conv_out`).
     fn load(map: &WeightMap, prefix: &str, cin: usize, cout: usize, kernel: usize, dilation: usize) -> Result<Self> {
         if kernel.is_multiple_of(2) {
             return Err(msg(format!("{prefix}: \"same\" padding needs an odd kernel, got {kernel}")));
         }
-        let mut bias = cuda_tensor_shaped(map, &format!("{prefix}.bias"), &[cout])?;
+        let bias_key = format!("{prefix}.bias");
+        let mut bias = if map.has_tensor(&bias_key) {
+            cuda_tensor_shaped(map, &bias_key, &[cout])?
+        } else {
+            CudaTensor::zeros(&[cout])
+        };
         bias.pin_device()?;
         Ok(Self { weight: conv_weight(map, prefix, &[cout, cin, kernel])?, bias, padding: dilation * (kernel - 1) / 2, dilation })
     }
@@ -122,14 +128,22 @@ pub struct Vocoder {
 impl Vocoder {
     /// `map` is the diffusers `vocoder/` folder.
     pub fn load(map: &WeightMap, cfg: &Ltx2VocoderConfig) -> Result<Self> {
-        // LTX-2.5 `LTX2VocoderWithBWE` adds a second SnakeBeta stack for band-width
-        // extension. Stage-1 gen only needs the main HiFi-GAN path at 48 kHz geometry;
-        // we load that stack with LeakyReLU activations (checkpoint uses SnakeBeta) and
-        // skip BWE weights until alias-free Snake is wired.
+        // LTX-2.5 `LTX2VocoderWithBWE` nests the HiFi-GAN under `vocoder.*` and adds a
+        // `bwe_generator.*` SnakeBeta stack. Stage-1 gen only needs the main path;
+        // Snake/BWE stay unloaded until alias-free activations are wired.
+        let root = if map.has_tensor("vocoder.conv_in.weight")
+            || map.has_tensor("vocoder.conv_in.weight_g")
+            || map.has_tensor("vocoder.parametrizations.weight.original0")
+        {
+            "vocoder."
+        } else {
+            ""
+        };
         if cfg.with_bwe {
             eprintln!(
-                "ltx2 vocoder: with_bwe=true — loading main upsampler stack only; \
-                 BWE/SnakeBeta activations approximated with LeakyReLU (audio parity not expected)"
+                "ltx2 vocoder: with_bwe=true — loading main upsampler stack only \
+                 (key prefix `{root}`); BWE/SnakeBeta activations approximated with LeakyReLU \
+                 (audio parity not expected)"
             );
         }
         let per_stage = cfg.resnet_kernel_sizes.len();
@@ -140,8 +154,13 @@ impl Vocoder {
             if kernel < stride || cout == 0 || cout * 2 != cin {
                 return Err(msg(format!("vocoder stage {i}: kernel {kernel}, stride {stride}, {cin} -> {cout} channels")));
             }
-            let prefix = format!("upsamplers.{i}");
-            let mut bias = cuda_tensor_shaped(map, &format!("{prefix}.bias"), &[cout])?;
+            let prefix = format!("{root}upsamplers.{i}");
+            let bias_key = format!("{prefix}.bias");
+            let mut bias = if map.has_tensor(&bias_key) {
+                cuda_tensor_shaped(map, &bias_key, &[cout])?
+            } else {
+                CudaTensor::zeros(&[cout])
+            };
             bias.pin_device()?;
             let up = Upsampler { weight: conv_weight(map, &prefix, &[cin, cout, kernel])?, bias, stride, padding: cfg.upsample_padding(i) };
             let blocks = cfg
@@ -150,7 +169,7 @@ impl Vocoder {
                 .zip(&cfg.resnet_dilations)
                 .enumerate()
                 .map(|(j, (&k, dilations))| {
-                    let p = format!("resnets.{}", i * per_stage + j);
+                    let p = format!("{root}resnets.{}", i * per_stage + j);
                     let convs = dilations
                         .iter()
                         .enumerate()
@@ -163,9 +182,9 @@ impl Vocoder {
             cin = cout;
         }
         Ok(Self {
-            conv_in: Conv1d::load(map, "conv_in", cfg.in_channels, cfg.hidden_channels, 7, 1)?,
+            conv_in: Conv1d::load(map, &format!("{root}conv_in"), cfg.in_channels, cfg.hidden_channels, 7, 1)?,
             stages,
-            conv_out: Conv1d::load(map, "conv_out", cin, cfg.out_channels, 7, 1)?,
+            conv_out: Conv1d::load(map, &format!("{root}conv_out"), cin, cfg.out_channels, 7, 1)?,
             cfg: cfg.clone(),
         })
     }

@@ -115,11 +115,113 @@ fn err(path: &Path, what: impl std::fmt::Display) -> LoaderError {
     LoaderError::Message(format!("{}: {what}", path.display()))
 }
 
+/// Diffusers packs sometimes ship both a consolidated `.safetensors` and the
+/// numbered shards it was split into (same keys, double the bytes). Prefer the
+/// `*.safetensors.index.json` weight_map when present; otherwise, if numbered
+/// shards exist, drop the unnumbered sibling that shares their stem prefix.
+fn resolve_shard_files(dir: &Path) -> Result<Vec<PathBuf>, LoaderError> {
+    let mut indices = Vec::new();
+    for entry in std::fs::read_dir(dir).map_err(|e| err(dir, e))? {
+        let path = entry.map_err(|e| err(dir, e))?.path();
+        let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+        if name.ends_with(".safetensors.index.json") {
+            indices.push(path);
+        }
+    }
+    indices.sort();
+    if !indices.is_empty() {
+        let mut shards = std::collections::BTreeSet::new();
+        for index in &indices {
+            let raw = std::fs::read_to_string(index).map_err(|e| err(index, e))?;
+            let v: serde_json::Value =
+                serde_json::from_str(&raw).map_err(|e| err(index, format!("weight index json: {e}")))?;
+            let map = v
+                .get("weight_map")
+                .and_then(|m| m.as_object())
+                .ok_or_else(|| err(index, "missing weight_map"))?;
+            for file in map.values() {
+                let name = file
+                    .as_str()
+                    .ok_or_else(|| err(index, "weight_map value is not a string"))?;
+                shards.insert(dir.join(name));
+            }
+        }
+        let files: Vec<PathBuf> = shards.into_iter().collect();
+        if files.is_empty() {
+            return Err(err(dir, "weight_map listed no shard files"));
+        }
+        for f in &files {
+            if !f.is_file() {
+                return Err(err(f, "listed in weight_map but missing on disk"));
+            }
+        }
+        return Ok(files);
+    }
+
+    let mut files = collect_safetensors(dir)?;
+    // Drop consolidated twins of numbered shards:
+    // `foo.safetensors` when `foo-00001-of-00008.safetensors` exists.
+    let mut numbered_prefixes = std::collections::BTreeSet::new();
+    for p in &files {
+        let Some(stem) = p
+            .file_name()
+            .and_then(|n| n.to_str())
+            .and_then(|n| n.strip_suffix(".safetensors"))
+        else {
+            continue;
+        };
+        if let Some(prefix) = sharded_stem_prefix(stem) {
+            numbered_prefixes.insert(prefix.to_string());
+        }
+    }
+    if !numbered_prefixes.is_empty() {
+        files.retain(|p| {
+            let Some(stem) = p
+                .file_name()
+                .and_then(|n| n.to_str())
+                .and_then(|n| n.strip_suffix(".safetensors"))
+            else {
+                return true;
+            };
+            !numbered_prefixes.contains(stem)
+        });
+    }
+    Ok(files)
+}
+
+/// `foo-00001-of-00008` → `Some("foo")`; anything else → `None`.
+fn sharded_stem_prefix(stem: &str) -> Option<&str> {
+    let bytes = stem.as_bytes();
+    let mut i = bytes.len();
+    while i > 0 && bytes[i - 1].is_ascii_digit() {
+        i -= 1;
+    }
+    if i < 4 || &stem[i.saturating_sub(4)..i] != "-of-" {
+        return None;
+    }
+    let m_start = i;
+    i -= 4; // skip "-of-"
+    let of_end = i;
+    while i > 0 && bytes[i - 1].is_ascii_digit() {
+        i -= 1;
+    }
+    if i == 0 || bytes[i - 1] != b'-' {
+        return None;
+    }
+    let n = &stem[i..of_end];
+    let m = &stem[m_start..];
+    if n.is_empty() || m.is_empty() {
+        return None;
+    }
+    Some(&stem[..i - 1])
+}
+
 impl LazyStore {
-    /// Every `.safetensors` under `dir`, recursively. An `*.index.json` is not
-    /// needed and not read: the shard headers are the index.
+    /// Every `.safetensors` under `dir`, recursively. When a Diffusers
+    /// `*.safetensors.index.json` is present, only the shards it lists are
+    /// opened (avoids consolidated+sharded duplicates in LTX-2.5 packs).
     pub fn open(dir: &Path) -> Result<Self, LoaderError> {
-        let files = collect_safetensors(dir)?;
+        let files = resolve_shard_files(dir)?;
         if files.is_empty() {
             return Err(LoaderError::Message(format!(
                 "no .safetensors files under {}",
@@ -420,6 +522,55 @@ mod tests {
         let e = LazyStore::open(&d).unwrap_err().to_string();
         assert!(e.contains("truncated"), "{e}");
         let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn index_json_and_consolidated_twin_are_deduped() {
+        let d = tmp("index-dup");
+        write_st(&d.join("model.safetensors"), &[("w", "F32", vec![1], vec![0u8; 4])]);
+        write_st(
+            &d.join("model-00001-of-00001.safetensors"),
+            &[("w", "F32", vec![1], 1.0f32.to_le_bytes().to_vec())],
+        );
+        // Without an index, numbered shards win over the consolidated twin.
+        let s = LazyStore::open(&d).unwrap();
+        assert_eq!(s.len(), 1);
+        assert_eq!(s.to_f32("w").unwrap().1, vec![1.0]);
+
+        let d2 = tmp("index-map");
+        write_st(
+            &d2.join("model-00001-of-00002.safetensors"),
+            &[("a", "F32", vec![1], 2.0f32.to_le_bytes().to_vec())],
+        );
+        write_st(
+            &d2.join("model-00002-of-00002.safetensors"),
+            &[("b", "F32", vec![1], 3.0f32.to_le_bytes().to_vec())],
+        );
+        // Consolidated twin must be ignored when the index points at the shards.
+        write_st(
+            &d2.join("model.safetensors"),
+            &[
+                ("a", "F32", vec![1], vec![0u8; 4]),
+                ("b", "F32", vec![1], vec![0u8; 4]),
+            ],
+        );
+        let index = serde_json::json!({
+            "weight_map": {
+                "a": "model-00001-of-00002.safetensors",
+                "b": "model-00002-of-00002.safetensors"
+            }
+        });
+        std::fs::write(
+            d2.join("model.safetensors.index.json"),
+            serde_json::to_vec_pretty(&index).unwrap(),
+        )
+        .unwrap();
+        let s = LazyStore::open(&d2).unwrap();
+        assert_eq!(s.len(), 2);
+        assert_eq!(s.to_f32("a").unwrap().1, vec![2.0]);
+        assert_eq!(s.to_f32("b").unwrap().1, vec![3.0]);
+        let _ = std::fs::remove_dir_all(&d);
+        let _ = std::fs::remove_dir_all(&d2);
     }
 
     #[test]
