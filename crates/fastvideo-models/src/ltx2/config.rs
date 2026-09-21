@@ -356,8 +356,10 @@ impl Ltx2VideoVaeConfig {
         layers.reverse();
         let mut factors: Vec<usize> = self.upsample_factor.to_vec();
         factors.reverse();
-        let mut kinds: Vec<Ltx2VaeUpsampleKind> = self.upsample_type.to_vec();
-        kinds.reverse();
+        // `upsample_type` is listed in decode order (`up_blocks.0` …), same as the
+        // reversed execution walk below — unlike `upsample_factor`, which is stored
+        // in the checkpoint's encoder order.
+        let kinds = self.upsample_type.clone();
         let mut residuals: Vec<bool> = self.upsample_residual.to_vec();
         residuals.reverse();
         let mut out = vec![Ltx2VaeDecoderStage {
@@ -1144,9 +1146,10 @@ mod tests {
         assert_eq!(stages.len(), 5);
         assert_eq!(stages[0].channels, 1024);
         assert_eq!(stages[1].upsampler.as_ref().map(|u| u.conv_out_channels), Some(4096));
-        assert_eq!(stages[2].upsampler.as_ref().map(|u| u.stride), Some((2, 1, 1)));
-        assert_eq!(stages[2].upsampler.as_ref().map(|u| u.residual), Some(false));
-        assert_eq!(stages[3].upsampler.as_ref().map(|u| u.stride), Some((1, 2, 2)));
+        assert_eq!(stages[2].upsampler.as_ref().map(|u| u.stride), Some((2, 2, 2)));
+        assert_eq!(stages[3].upsampler.as_ref().map(|u| u.stride), Some((2, 1, 1)));
+        assert!(stages.iter().all(|s| s.upsampler.as_ref().map(|u| u.residual) != Some(true)));
+        assert_eq!(stages[4].upsampler.as_ref().map(|u| u.stride), Some((1, 2, 2)));
     }
 
     #[test]

@@ -10,7 +10,7 @@ Project code: FVID
 - Reversibility: cheap — version enum + opt-in weight roots
 - Executed by: Executor
 - ADR: none
-- Verification: *(in progress — host configs/gates/ancestral; GPU gen after weight fetch)*
+- Verification: **host pass** (2026-09-21). Spec `docs/ports/ltx25.md`. `cargo test -p fastvideo-cudarc ltx2 --lib` 65 ok; `fastvideo-models` ltx2 32 ok; `fv-gpucheck ltx2 gen --model-version 2.5`. Shipped: Gemma4 TE (`DecoderConfig::gemma4_12b_text`), gated DiT + `ff_bias=false` + cross_attn_mod AdaLN, per-modality connectors, ancestral Euler, conv VAE typed upsamplers, vocoder main stack (BWE/Snake approximated with LeakyReLU). **GPU gen deferred** — local disk ~22 GiB free (weights ≫40 GiB); fetch `Lightricks/LTX-2.5-Diffusers` on a Vast box then `ltx2 gen --model-version 2.5`.
 
 ### FVID · 2026-09-20 · FVID-2026-09-20-h3-matrix-followup
 - Trigger: after encoder matrix pass — run remaining weight/SKU gaps (Synthetic Step1900, Preview on 80 GB, longer clip)

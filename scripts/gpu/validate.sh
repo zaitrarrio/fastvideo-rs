@@ -851,29 +851,44 @@ cmd_run() {
         fi
       fi
     else
-      local repo="${FV_LTX2_BASE_REPO:-Lightricks/LTX-2}" wdir="$WORK/weights/ltx2"
-      remote_run fetch-ltx2 120 fetch "$repo" "$wdir" "tokenizer/*" "text_encoder/model-*" "text_encoder/*.json" \
-        "vae/*" "audio_vae/*" "vocoder/*" "ltx-2-19b-distilled.safetensors"
-      local ltxgen=(--mode fast ltx2 gen --weights "$wdir" --dit "$wdir/ltx-2-19b-distilled.safetensors"
-        --prompt "$prompt" --seed "${FV_SEED:-10}")
-      if [[ "${FV_TEXT_PLAN:-0}" == 1 ]]; then
-        # The slim checkpoint is CPU work: it runs as soon as the text encoder has
-        # landed, while the 43 GB DiT file is still downloading.
-        local slim="$WORK/ltx2-slim" tcache="$WORK/ltx2-text-cache"
-        remote_run wait-ltx2-text 7200 wait-weights "$wdir" 7200 text_encoder
-        gpucheck_stage ltx2-slim-text 3600 --mode fast ltx2 slim-text --weights "$wdir" --slim "$slim"
-        remote_run wait-ltx2 7200 wait-weights "$wdir" 7200 text_encoder vae audio_vae vocoder
-        gpucheck_stage "gen-$name-streamed" 7200 "${ltxgen[@]}" --clip "$clip/$name-streamed/frames" \
-          --text streamed --no-text-cache
-        STAGE_OPTIONAL=1 gpucheck_stage "gen-$name-streamed-slim" 7200 "${ltxgen[@]}" --clip "$clip/$name-streamed-slim/frames" \
-          --text streamed --no-text-cache --text-weights "$slim" || true
-        STAGE_OPTIONAL=1 gpucheck_stage "gen-$name-resident" 7200 "${ltxgen[@]}" --clip "$clip/$name-resident/frames" \
-          --text resident --text-weights "$slim" --warm --text-cache "$tcache" || true
-        STAGE_OPTIONAL=1 gpucheck_stage "gen-$name-cached" 7200 "${ltxgen[@]}" --clip "$clip/$name-cached/frames" \
-          --text resident --text-weights "$slim" --text-cache "$tcache" || true
+      # FV_LTX2_VERSION=2.5 → Diffusers LTX-2.5 pack + ancestral gen (docs/ports/ltx25.md).
+      local ltx_ver="${FV_LTX2_VERSION:-2.0}"
+      local repo wdir
+      local ltxgen=(--mode fast ltx2 gen --prompt "$prompt" --seed "${FV_SEED:-10}")
+      if [[ "$ltx_ver" == "2.5" ]]; then
+        repo="${FV_LTX2_BASE_REPO:-Lightricks/LTX-2.5-Diffusers}"
+        wdir="$WORK/weights/ltx2-5"
+        remote_run fetch-ltx2-5 120 fetch "$repo" "$wdir" \
+          "tokenizer/*" "text_encoder/model-*" "text_encoder/*.json" \
+          "connectors/*" "transformer/*" "vae/*" "audio_vae/*" "vocoder/*"
+        ltxgen+=(--model-version 2.5 --weights "$wdir" --dit "$wdir/transformer")
+        remote_run wait-ltx2-5 10800 wait-weights "$wdir" 10800 text_encoder connectors transformer vae audio_vae vocoder
+        gpucheck_stage "gen-$name" 10800 "${ltxgen[@]}" --clip "$clip/$name/frames"
       else
-        remote_run wait-ltx2 7200 wait-weights "$wdir" 7200 text_encoder vae audio_vae vocoder
-        gpucheck_stage "gen-$name" 7200 "${ltxgen[@]}" --clip "$clip/$name/frames"
+        repo="${FV_LTX2_BASE_REPO:-Lightricks/LTX-2}"
+        wdir="$WORK/weights/ltx2"
+        remote_run fetch-ltx2 120 fetch "$repo" "$wdir" "tokenizer/*" "text_encoder/model-*" "text_encoder/*.json" \
+          "vae/*" "audio_vae/*" "vocoder/*" "ltx-2-19b-distilled.safetensors"
+        ltxgen+=(--weights "$wdir" --dit "$wdir/ltx-2-19b-distilled.safetensors")
+        if [[ "${FV_TEXT_PLAN:-0}" == 1 ]]; then
+          # The slim checkpoint is CPU work: it runs as soon as the text encoder has
+          # landed, while the 43 GB DiT file is still downloading.
+          local slim="$WORK/ltx2-slim" tcache="$WORK/ltx2-text-cache"
+          remote_run wait-ltx2-text 7200 wait-weights "$wdir" 7200 text_encoder
+          gpucheck_stage ltx2-slim-text 3600 --mode fast ltx2 slim-text --weights "$wdir" --slim "$slim"
+          remote_run wait-ltx2 7200 wait-weights "$wdir" 7200 text_encoder vae audio_vae vocoder
+          gpucheck_stage "gen-$name-streamed" 7200 "${ltxgen[@]}" --clip "$clip/$name-streamed/frames" \
+            --text streamed --no-text-cache
+          STAGE_OPTIONAL=1 gpucheck_stage "gen-$name-streamed-slim" 7200 "${ltxgen[@]}" --clip "$clip/$name-streamed-slim/frames" \
+            --text streamed --no-text-cache --text-weights "$slim" || true
+          STAGE_OPTIONAL=1 gpucheck_stage "gen-$name-resident" 7200 "${ltxgen[@]}" --clip "$clip/$name-resident/frames" \
+            --text resident --text-weights "$slim" --warm --text-cache "$tcache" || true
+          STAGE_OPTIONAL=1 gpucheck_stage "gen-$name-cached" 7200 "${ltxgen[@]}" --clip "$clip/$name-cached/frames" \
+            --text resident --text-weights "$slim" --text-cache "$tcache" || true
+        else
+          remote_run wait-ltx2 7200 wait-weights "$wdir" 7200 text_encoder vae audio_vae vocoder
+          gpucheck_stage "gen-$name" 7200 "${ltxgen[@]}" --clip "$clip/$name/frames"
+        fi
       fi
     fi
     log "GEN done: $name"
