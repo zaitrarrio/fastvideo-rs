@@ -200,8 +200,9 @@ fn depth_to_space(y: &CudaTensor, stride: (usize, usize, usize)) -> Result<CudaT
     match (st, sh, sw) {
         (2, 1, 1) => y.reshape(vec![c, 2, f, h, w])?.permute(&[0, 2, 1, 3, 4])?.reshape(vec![1, c, 2 * f, h, w]),
         (1, 2, 2) => {
-            let spatial = y.reshape(vec![c * 2, 2, 2, f, h, w])?.permute(&[0, 3, 4, 1, 5, 2])?.reshape(vec![c, 2, f, 4 * h * w])?;
-            spatial.permute(&[0, 2, 1, 3])?.reshape(vec![1, c, f, 2 * h, 2 * w])
+            // Channel layout matches `d2s`: out[c,f,2h+j,2w+k] = y[c·4 + j·2 + k, f, h, w].
+            // (Do not reuse the 8× spatiotemporal reshape — that needs 8C in.)
+            y.reshape(vec![c, 2, 2, f, h, w])?.permute(&[0, 3, 4, 1, 5, 2])?.reshape(vec![1, c, f, 2 * h, 2 * w])
         }
         _ => Err(msg(format!("depth_to_space: unsupported stride ({st}, {sh}, {sw})"))),
     }
@@ -687,6 +688,19 @@ mod tests {
         let got = depth_to_space(&CudaTensor::from_vec(y.v.clone(), vec![1, 16, 2, 2, 3]).unwrap(), (2, 2, 2)).unwrap();
         assert_eq!(got.shape, vec![1, 2, 4, 4, 6]);
         assert_eq!(&*got.host_cow().unwrap(), &d2s(&y, (2, 2, 2)).v[..]);
+    }
+
+    #[test]
+    fn depth_to_space_spatial_and_temporal_match_reference() {
+        let spatial = Vol { c: 8, f: 2, h: 2, w: 3, v: (0..8 * 2 * 2 * 3).map(|i| (i as f32 * 0.17).sin()).collect() };
+        let got_s = depth_to_space(&CudaTensor::from_vec(spatial.v.clone(), vec![1, 8, 2, 2, 3]).unwrap(), (1, 2, 2)).unwrap();
+        assert_eq!(got_s.shape, vec![1, 2, 2, 4, 6]);
+        assert_eq!(&*got_s.host_cow().unwrap(), &d2s(&spatial, (1, 2, 2)).v[..]);
+
+        let temporal = Vol { c: 6, f: 3, h: 2, w: 2, v: (0..6 * 3 * 2 * 2).map(|i| (i as f32 * 0.11).cos()).collect() };
+        let got_t = depth_to_space(&CudaTensor::from_vec(temporal.v.clone(), vec![1, 6, 3, 2, 2]).unwrap(), (2, 1, 1)).unwrap();
+        assert_eq!(got_t.shape, vec![1, 3, 6, 2, 2]);
+        assert_eq!(&*got_t.host_cow().unwrap(), &d2s(&temporal, (2, 1, 1)).v[..]);
     }
 
     #[test]

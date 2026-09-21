@@ -405,11 +405,16 @@ fn read_prompt(oracle: &Path, meta: Option<&Path>, prompt: Option<&str>) -> anyh
 
 /// The distilled DiT/connectors: the single file, or a diffusers component
 /// folder named `component` under (or at) `path`.
+///
+/// Also accepts `--dit …/transformer` when looking up `connectors`: the sibling
+/// `…/connectors` directory is used (Diffusers split pack).
 fn open_distilled(path: &Path, component: &str) -> anyhow::Result<(WeightMap, Layout)> {
     let map = if path.is_file() {
         WeightMap::open_files(&[path.to_path_buf()])?
     } else if path.join(component).is_dir() {
         WeightMap::open(&path.join(component))?
+    } else if let Some(sibling) = path.parent().map(|p| p.join(component)).filter(|p| p.is_dir()) {
+        WeightMap::open(&sibling)?
     } else if path.is_dir() {
         WeightMap::open(path)?
     } else {

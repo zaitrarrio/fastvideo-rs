@@ -124,7 +124,7 @@ struct Block {
 
 /// The per-step modulation every block adds its own tables to.
 struct StepModulation {
-    /// `[6, dim]` from `time_embed` / `audio_time_embed`.
+    /// `[6 or 9, dim]` from `time_embed` / `audio_time_embed`.
     main: CudaTensor,
     /// `[4, dim]` from `av_cross_attn_*_scale_shift`.
     cross: CudaTensor,
@@ -447,9 +447,11 @@ impl Ltx2Transformer {
     ) -> Result<(CudaTensor, CudaTensor)> {
         let (dv, da) = (xv.shape[2], xa.shape[2]);
         // table + per-step modulation, kept as [1, rows, D] for the gated adds.
+        // LTX-2.0: 6 rows; LTX-2.5 (`cross_attn_mod`): 9 rows (extra text-Q AdaLN + gate).
         let v_tab = b.video.scale_shift_table.add(&v_mod.main)?;
         let a_tab = b.audio.scale_shift_table.add(&a_mod.main)?;
-        let (v_gates, a_gates) = (v_tab.reshape(vec![1, 6, dv])?, a_tab.reshape(vec![1, 6, da])?);
+        let (v_rows, a_rows) = (v_tab.shape[0], a_tab.shape[0]);
+        let (v_gates, a_gates) = (v_tab.reshape(vec![1, v_rows, dv])?, a_tab.reshape(vec![1, a_rows, da])?);
 
         // 1. self-attention.
         let h = rms_adaln(&xv, &row(&v_tab, 1)?, &row(&v_tab, 0)?, eps)?;

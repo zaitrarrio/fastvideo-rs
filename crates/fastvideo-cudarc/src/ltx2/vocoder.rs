@@ -26,6 +26,29 @@ use crate::wan::weights::{cuda_tensor_shaped, WeightMap};
 
 use super::{msg, tanh};
 
+/// Nearest-neighbor upsample along the last axis of `[B, C, L]` — stand-in for
+/// the BWE 16→48 kHz lift until SnakeBeta resampling is implemented.
+fn upsample_time_nearest(x: &CudaTensor, ratio: usize) -> Result<CudaTensor> {
+    let [b, c, l] = match x.shape[..] {
+        [b, c, l] => [b, c, l],
+        _ => return Err(msg(format!("vocoder rate upsample expects [B, C, L], got {:?}", x.shape))),
+    };
+    if ratio == 0 {
+        return Err(msg("vocoder rate upsample ratio must be ≥ 1"));
+    }
+    if ratio == 1 {
+        return Ok(x.clone());
+    }
+    let src = x.host_cow()?;
+    let mut out = Vec::with_capacity(b * c * l * ratio);
+    for v in src.iter() {
+        for _ in 0..ratio {
+            out.push(*v);
+        }
+    }
+    CudaTensor::from_vec(out, vec![b, c, l * ratio])
+}
+
 /// `w = g · v / ‖v‖`, the norm taken over everything but axis 0 (torch's
 /// `weight_norm(dim=0)`). `v` is row-major with `rows` leading entries.
 fn fold_weight_norm(g: &[f32], v: &[f32], rows: usize) -> Vec<f32> {
@@ -189,8 +212,10 @@ impl Vocoder {
         })
     }
 
-    /// Mel `[B, 2, T, 64]` → waveform `[B, 2, 240·T]` in `[-1, 1]` at
-    /// `output_sampling_rate`.
+    /// Mel `[B, 2, T, 64]` → waveform `[B, 2, factor·T]` in `[-1, 1]` at
+    /// `output_sampling_rate`. For BWE checkpoints the main stack emits
+    /// 16 kHz–rate samples; we nearest-upsample ×`rate_upsample` to 48 kHz
+    /// until the SnakeBeta BWE generator is wired.
     pub fn forward(&self, mel: &CudaTensor) -> Result<CudaTensor> {
         let [b, c, t, m] = mel.shape[..] else {
             return Err(msg(format!("vocoder expects mel [B, C, T, M], got {:?}", mel.shape)));
@@ -208,11 +233,12 @@ impl Vocoder {
             x = CudaTensor::lincomb(&outs.iter().map(|o| (share, o)).collect::<Vec<_>>())?;
         }
         let x = self.conv_out.forward(&x.leaky_relu(self.cfg.final_leaky_relu_negative_slope as f32))?;
-        if self.cfg.final_tanh {
-            tanh(&x)
-        } else {
-            Ok(x)
+        let x = if self.cfg.final_tanh { tanh(&x)? } else { x };
+        let ratio = self.cfg.rate_upsample();
+        if ratio <= 1 {
+            return Ok(x);
         }
+        upsample_time_nearest(&x, ratio)
     }
 
     pub fn sample_rate(&self) -> usize {

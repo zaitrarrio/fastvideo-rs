@@ -318,11 +318,17 @@ pub fn decode_and_write(dec: &Decoders, video: &CudaTensor, audio: &CudaTensor, 
 
 /// The distilled DiT/connectors: the single file, or `component` under a
 /// diffusers root (or the component folder itself).
+///
+/// Also accepts `--dit …/transformer` when looking up `connectors`: the sibling
+/// `…/connectors` directory is used (Diffusers split pack).
 pub fn open_distilled(path: &Path, component: &str) -> Result<WeightMap> {
     let map = if path.is_file() {
         WeightMap::open_files(&[path.to_path_buf()])?
     } else if path.join(component).is_dir() {
         WeightMap::open(&path.join(component))?
+    } else if let Some(sibling) = path.parent().map(|p| p.join(component)).filter(|p| p.is_dir()) {
+        // `path` is already a component dir (e.g. `…/transformer`); open the sibling.
+        WeightMap::open(&sibling)?
     } else if path.is_dir() {
         WeightMap::open(path)?
     } else {
@@ -488,6 +494,8 @@ impl TextEncoder {
                 weights_identity(&self.paths.dit, None)?
             } else if self.paths.dit.join("connectors").is_dir() {
                 weights_identity(&self.paths.dit.join("connectors"), None)?
+            } else if let Some(sibling) = self.paths.dit.parent().map(|p| p.join("connectors")).filter(|p| p.is_dir()) {
+                weights_identity(&sibling, None)?
             } else {
                 weights_identity(&self.paths.dit, None)?
             };

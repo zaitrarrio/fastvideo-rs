@@ -10,7 +10,7 @@ Project code: FVID
 - Reversibility: cheap — version enum + opt-in weight roots
 - Executed by: Executor
 - ADR: none
-- Verification: **host pass** (2026-09-21). Spec `docs/ports/ltx25.md`. `cargo test -p fastvideo-cudarc ltx2 --lib` 65 ok; `fastvideo-models` ltx2 32 ok; `fv-gpucheck ltx2 gen --model-version 2.5`. Shipped: Gemma4 TE (`DecoderConfig::gemma4_12b_text`), gated DiT + `ff_bias=false` + cross_attn_mod AdaLN, per-modality connectors, ancestral Euler, conv VAE typed upsamplers, vocoder main stack (BWE/Snake approximated with LeakyReLU). **GPU gen deferred** — local disk ~22 GiB free (weights ≫40 GiB); fetch `Lightricks/LTX-2.5-Diffusers` on a Vast box then `ltx2 gen --model-version 2.5`.
+- Verification: **host pass + remote GPU gen pass** (2026-09-21). Spec `docs/ports/ltx25.md`. `cargo test -p fastvideo-cudarc ltx2 --lib` / models ltx2 ok; `fv-gpucheck ltx2 gen --model-version 2.5`. Shipped: Gemma4 TE (`DecoderConfig::gemma4_12b_text`), gated DiT + `ff_bias=false` + cross_attn_mod AdaLN (9-row), per-modality connectors, ancestral Euler, conv VAE typed upsamplers (spatial d2s), vocoder main stack + ×3 16→48 kHz stand-in for BWE. **Remote:** Maryland `51923820` (`20260921T142958Z-ltx2-gen`), ~$0.444 / 17 min: 8 ancestral steps ~2.3–2.5 s, **121** frames, 48 kHz stereo wav (240480 samples), mp4 `artifacts/clips/20260921T142958Z-ltx2-gen/ltx25-stage1.mp4`.
 
 ### FVID · 2026-09-20 · FVID-2026-09-20-h3-matrix-followup
 - Trigger: after encoder matrix pass — run remaining weight/SKU gaps (Synthetic Step1900, Preview on 80 GB, longer clip)

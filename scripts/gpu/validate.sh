@@ -103,7 +103,8 @@ tier_query_base() {
     # Encoder × residency matrix: streamed 32B / recovered-8B on 80 GB cards;
     # FV_GPU_RAM_MIN=78 (A100/H100) or 140 (H200). TAEH3, no oracle.
     h3-matrix) echo "$base gpu_ram>=78 disk_space>=360 cpu_ram>=64 inet_down>=1000" ;;
-    ltx2-gen) echo "$base gpu_ram>=90 disk_space>=180 cpu_ram>=64 inet_down>=1000" ;;
+    # LTX-2.5 Diffusers is ~100 GiB: advertised ≤2 Gbps hosts often crawl; require 4 Gbps+.
+    ltx2-gen) echo "$base gpu_ram>=90 disk_space>=180 cpu_ram>=64 inet_down>=4000" ;;
     ltx2-text) echo "$base gpu_ram>=90 disk_space>=180 cpu_ram>=64 inet_down>=800" ;;
     # A build box: the GPU is irrelevant, so this asks for the cheapest thing
     # with cores and RAM for a release cargo build plus nvcc for 7 SMs.
@@ -876,7 +877,7 @@ cmd_run() {
         remote_run fetch-ltx2-5 120 fetch "$repo" "$wdir" \
           "tokenizer/*" "text_encoder/model-*" "text_encoder/*.json" \
           "connectors/*" "transformer/*" "vae/*" "audio_vae/*" "vocoder/*"
-        ltxgen+=(--model-version 2.5 --weights "$wdir" --dit "$wdir/transformer")
+        ltxgen+=(--model-version 2.5 --weights "$wdir" --dit "$wdir")
         remote_run wait-ltx2-5 10800 wait-weights "$wdir" 10800 text_encoder connectors transformer vae audio_vae vocoder
         gpucheck_stage "gen-$name" 10800 "${ltxgen[@]}" --clip "$clip/$name/frames"
       else
