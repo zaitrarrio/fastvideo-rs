@@ -141,8 +141,8 @@ fn connectors_match_diffusers_on_a_tiny_config() {
 fn video_vae_matches_diffusers_on_a_tiny_config() {
     let cfg = Ltx2VideoVaeConfig {
         latent_channels: 4,
-        decoder_block_out_channels: [8, 16, 32],
-        decoder_layers_per_block: [1, 1, 1, 1],
+        decoder_block_out_channels: vec![8, 16, 32],
+        decoder_layers_per_block: vec![1, 1, 1, 1],
         patch_size: 2,
         ..Ltx2VideoVaeConfig::ltx2_19b()
     };
@@ -172,8 +172,8 @@ fn audio_vae_and_vocoder_match_diffusers_on_tiny_configs() {
     let cfg = Ltx2VocoderConfig {
         in_channels: 16,
         hidden_channels: 64,
-        upsample_kernel_sizes: [7, 4, 4, 4, 4],
-        upsample_factors: [3, 2, 2, 2, 2],
+        upsample_kernel_sizes: vec![7, 4, 4, 4, 4],
+        upsample_factors: vec![3, 2, 2, 2, 2],
         ..Ltx2VocoderConfig::ltx2_19b()
     };
     let map = fixture("vocoder_tiny.st");

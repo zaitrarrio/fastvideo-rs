@@ -14,6 +14,15 @@
 
 use super::config::Ltx2SchedulerConfig;
 
+/// Ancestral Euler knobs for LTX-2.5 stage 1 (`eta=1`, `s_noise=1`, noise RNG
+/// seeded `pipeline_seed + 10000` in the reference).
+#[derive(Debug, Clone, Copy)]
+pub struct AncestralOpts {
+    pub eta: f64,
+    pub s_noise: f64,
+    pub noise_seed: u64,
+}
+
 /// Stage 1 (or single-stage) distilled schedule: 8 model evaluations.
 pub const DISTILLED_SIGMA_VALUES: [f64; 8] = [1.0, 0.99375, 0.9875, 0.98125, 0.975, 0.909375, 0.725, 0.421875];
 
@@ -103,6 +112,51 @@ impl Ltx2Schedule {
         let dt = self.dt(i) as f32;
         for (x, v) in sample.iter_mut().zip(velocity) {
             *x += dt * v;
+        }
+    }
+
+    /// Rectified-flow `x0` from a velocity prediction at noise level `sigma`
+    /// (`x += dt·v` Euler convention used by the DiT).
+    pub fn denoised_from_velocity(sample: f32, velocity: f32, sigma: f64) -> f32 {
+        sample - (sigma as f32) * velocity
+    }
+
+    /// One `EulerAncestralDiffusionStep` (rectified flow). When `sigma_next` is
+    /// zero, `sample` is replaced with `denoised`. If `eta > 0`, `noise` must
+    /// be the same length as `sample` (drawn with `s_noise` scaling).
+    pub fn ancestral_step(
+        sample: &mut [f32],
+        denoised: &[f32],
+        sigma: f64,
+        sigma_next: f64,
+        eta: f64,
+        s_noise: f64,
+        noise: Option<&[f32]>,
+    ) {
+        assert_eq!(sample.len(), denoised.len());
+        if sigma_next == 0.0 {
+            sample.copy_from_slice(denoised);
+            return;
+        }
+        let downstep_ratio = 1.0 + (sigma_next / sigma - 1.0) * eta;
+        let sigma_down = sigma_next * downstep_ratio;
+        let scale = sigma_down / sigma;
+        let blend = 1.0 - scale;
+        for (x, d) in sample.iter_mut().zip(denoised) {
+            *x = (scale * f64::from(*x) + blend * f64::from(*d)) as f32;
+        }
+        if eta > 0.0 {
+            let noise = noise.expect("ancestral renoise needs a noise vector when eta > 0");
+            assert_eq!(noise.len(), sample.len());
+            let alpha_next = 1.0 - sigma_next;
+            let alpha_down = 1.0 - sigma_down;
+            let renoise_coeff = (sigma_next * sigma_next - sigma_down * sigma_down * alpha_next * alpha_next / (alpha_down * alpha_down))
+                .max(0.0)
+                .sqrt();
+            let factor = alpha_next / alpha_down;
+            for (x, n) in sample.iter_mut().zip(noise) {
+                *x = (factor * f64::from(*x) + f64::from(*n) * s_noise * renoise_coeff) as f32;
+            }
         }
     }
 }
@@ -238,5 +292,33 @@ mod tests {
         let mut x = [2.0_f32, -2.0];
         renoise(&mut x, &[1.0, 1.0], 0.75);
         assert_eq!(x, [1.25, 0.25]);
+    }
+
+    #[test]
+    fn ancestral_step_matches_hand_formula() {
+        let (sigma, sigma_next) = (0.975_f64, 0.909_375);
+        let (x0, v0) = (1.2_f32, -0.4_f32);
+        let denoised = Ltx2Schedule::denoised_from_velocity(x0, v0, sigma);
+        assert!((denoised - (x0 - sigma as f32 * v0)).abs() < 1e-6);
+        let eta = 1.0;
+        let downstep_ratio = 1.0 + (sigma_next / sigma - 1.0) * eta;
+        let sigma_down = sigma_next * downstep_ratio;
+        let scale = sigma_down / sigma;
+        let blend = 1.0 - scale;
+        let mut x = [x0];
+        let mut want = scale as f32 * x0 + blend as f32 * denoised;
+        let _alpha = 1.0 - sigma;
+        let alpha_next = 1.0 - sigma_next;
+        let alpha_down = 1.0 - sigma_down;
+        let renoise_coeff = (sigma_next * sigma_next - sigma_down * sigma_down * alpha_next * alpha_next / (alpha_down * alpha_down))
+            .max(0.0)
+            .sqrt();
+        let noise = 0.5_f32;
+        want = (alpha_next / alpha_down) as f32 * want + noise * renoise_coeff as f32;
+        Ltx2Schedule::ancestral_step(&mut x, &[denoised], sigma, sigma_next, eta, 1.0, Some(&[noise]));
+        assert!((x[0] - want).abs() < 1e-5, "{} vs {want}", x[0]);
+        let mut terminal = [x0];
+        Ltx2Schedule::ancestral_step(&mut terminal, &[denoised], sigma, 0.0, eta, 1.0, None);
+        assert!((terminal[0] - denoised).abs() < 1e-6);
     }
 }

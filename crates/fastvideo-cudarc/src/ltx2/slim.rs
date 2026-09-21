@@ -83,6 +83,9 @@ pub fn load_order(cfg: &DecoderConfig) -> Vec<String> {
         };
         keys.extend(norms.iter().map(|n| format!("{p}.{n}.weight")));
         for lin in ["self_attn.q_proj", "self_attn.k_proj", "self_attn.v_proj", "self_attn.o_proj", "mlp.gate_proj", "mlp.up_proj", "mlp.down_proj"] {
+            if cfg.attention_k_eq_v && lin == "self_attn.v_proj" {
+                continue;
+            }
             keys.push(format!("{p}.{lin}.weight"));
         }
         if cfg.qk_norm {
@@ -228,10 +231,11 @@ mod tests {
             sandwich_norms: sandwich,
             embed_scale: 1.0,
             attn_scale: 0.5,
-            layers: vec![LayerAttn { rope_theta: 10_000.0, rope_factor: 1.0, window: None }; 2],
+            layers: vec![LayerAttn::global(10_000.0, 1.0); 2],
             layer_prefix: "language_model.model.layers".into(),
             embed_key: "language_model.model.embed_tokens.weight".into(),
             final_norm_key: "language_model.model.norm.weight".into(),
+            attention_k_eq_v: false,
         }
     }
 

@@ -84,6 +84,7 @@ pub struct Attention {
     to_k: Linear,
     to_v: Linear,
     to_out: Linear,
+    to_gate_logits: Option<Linear>,
     norm_q: CudaTensor,
     norm_k: CudaTensor,
     dims: AttentionDims,
@@ -93,7 +94,7 @@ pub struct Attention {
 impl Attention {
     /// `prefix` is the diffusers module path (`transformer_blocks.3.attn1`);
     /// `keys` spells it for the checkpoint at hand.
-    pub fn load(map: &WeightMap, keys: &Keys, prefix: &str, dims: AttentionDims, eps: f32) -> Result<Self> {
+    pub fn load(map: &WeightMap, keys: &Keys, prefix: &str, dims: AttentionDims, eps: f32, gated: bool) -> Result<Self> {
         let inner = dims.inner();
         let lin = |name: &str, i: usize, o: usize| Linear::load(map, &keys.key(&format!("{prefix}.{name}")), i, o, true);
         let norm = |name: &str| -> Result<CudaTensor> {
@@ -101,16 +102,30 @@ impl Attention {
             w.pin_device()?;
             Ok(w)
         };
+        let to_gate_logits = if gated {
+            Some(lin("to_gate_logits", dims.query_dim, dims.heads)?)
+        } else {
+            None
+        };
         Ok(Self {
             to_q: lin("to_q", dims.query_dim, inner)?,
             to_k: lin("to_k", dims.context_dim, inner)?,
             to_v: lin("to_v", dims.context_dim, inner)?,
             to_out: lin("to_out.0", inner, dims.query_dim)?,
+            to_gate_logits,
             norm_q: norm("norm_q")?,
             norm_k: norm("norm_k")?,
             dims,
             eps,
         })
+    }
+
+    /// Per-head `2·σ(logits)` on SDPA output, diffusers `LTX2AudioVideoAttnProcessor`.
+    fn apply_head_gates(&self, out: &CudaTensor, gate_logits: &CudaTensor) -> Result<CudaTensor> {
+        let heads = self.dims.heads;
+        let gates = gate_logits.try_sigmoid()?.try_mul_scalar(2.0)?;
+        let gates = gates.permute(&[0, 2, 1])?.reshape(vec![1, heads, gates.shape[1], 1])?;
+        out.mul(&gates)
     }
 
     /// `x`: `[1, Sq, query_dim]`. `context`: `[1, Sk, context_dim]`, or `None`
@@ -126,6 +141,10 @@ impl Attention {
         k_rope: Option<&DeviceRope>,
     ) -> Result<CudaTensor> {
         let (heads, d) = (self.dims.heads, self.dims.head_dim);
+        let gate_logits = match &self.to_gate_logits {
+            Some(l) => Some(l.forward(x)?),
+            None => None,
+        };
         let ctx = context.unwrap_or(x);
         let q = self.to_q.forward(x)?.rms_norm(&self.norm_q, self.eps)?.split_heads_bhsd(0, heads, d)?;
         let k = self.to_k.forward(ctx)?.rms_norm(&self.norm_k, self.eps)?.split_heads_bhsd(0, heads, d)?;
@@ -135,7 +154,11 @@ impl Attention {
             None => (q, k),
         };
         let out = scaled_dot_product_attention(&q, &k, &v, Some((d as f32).powf(-0.5)))?;
-        self.to_out.forward(&out.merge_heads()?)
+        let merged = match gate_logits {
+            Some(logits) => self.apply_head_gates(&out, &logits)?.merge_heads()?,
+            None => out.merge_heads()?,
+        };
+        self.to_out.forward(&merged)
     }
 }
 
@@ -147,10 +170,10 @@ pub struct FeedForward {
 }
 
 impl FeedForward {
-    pub fn load(map: &WeightMap, keys: &Keys, prefix: &str, dim: usize, inner: usize) -> Result<Self> {
+    pub fn load(map: &WeightMap, keys: &Keys, prefix: &str, dim: usize, inner: usize, has_bias: bool) -> Result<Self> {
         Ok(Self {
-            up: Linear::load(map, &keys.key(&format!("{prefix}.net.0.proj")), dim, inner, true)?,
-            down: Linear::load(map, &keys.key(&format!("{prefix}.net.2")), inner, dim, true)?,
+            up: Linear::load(map, &keys.key(&format!("{prefix}.net.0.proj")), dim, inner, has_bias)?,
+            down: Linear::load(map, &keys.key(&format!("{prefix}.net.2")), inner, dim, has_bias)?,
         })
     }
 
@@ -204,11 +227,14 @@ pub(crate) mod tests {
         ctx: &[Vec<f32>],
         q_rope: Option<&SplitRope>,
         k_rope: Option<&SplitRope>,
+        gated: bool,
     ) -> Vec<Vec<f32>> {
         let (inner, h, d) = (dims.inner(), dims.heads, dims.head_dim);
         let w = |n: &str, o: usize, i: usize| (get(map, &format!("{prefix}.{n}.weight"), &[o, i]), get(map, &format!("{prefix}.{n}.bias"), &[o]));
         let (wq, wk, wv, wo) = (w("to_q", inner, dims.query_dim), w("to_k", inner, dims.context_dim), w("to_v", inner, dims.context_dim), w("to_out.0", dims.query_dim, inner));
+        let gate_w = gated.then(|| w("to_gate_logits", dims.heads, dims.query_dim));
         let (nq, nk) = (get(map, &format!("{prefix}.norm_q.weight"), &[inner]), get(map, &format!("{prefix}.norm_k.weight"), &[inner]));
+        let sigmoid = |v: f32| 1.0 / (1.0 + (-v).exp());
         let rotate = |v: &[f32], rope: Option<&SplitRope>, tok: usize| -> Vec<f32> {
             let Some(r) = rope else { return v.to_vec() };
             let mut out = v.to_vec();
@@ -231,17 +257,26 @@ pub(crate) mod tests {
             .collect();
         let v: Vec<Vec<f32>> = ctx.iter().map(|c| linear(c, &wv.0, &wv.1)).collect();
         q.iter()
-            .map(|qi| {
+            .enumerate()
+            .map(|(tok, qi)| {
                 let mut merged = vec![0f32; inner];
+                let gates: Vec<f32> = gate_w
+                    .as_ref()
+                    .map(|(gw, gb)| {
+                        let logits = linear(&x[tok], gw, gb);
+                        logits.iter().map(|l| 2.0 * sigmoid(*l)).collect()
+                    })
+                    .unwrap_or_else(|| vec![1.0; h]);
                 for head in 0..h {
                     let span = head * d..(head + 1) * d;
                     let scores: Vec<f32> = k.iter().map(|kj| qi[span.clone()].iter().zip(&kj[span.clone()]).map(|(a, b)| a * b).sum::<f32>() / (d as f32).sqrt()).collect();
                     let mx = scores.iter().copied().fold(f32::MIN, f32::max);
                     let z: f32 = scores.iter().map(|s| (s - mx).exp()).sum();
+                    let g = gates[head];
                     for (j, s) in scores.iter().enumerate() {
                         let p = (s - mx).exp() / z;
                         for c in 0..d {
-                            merged[head * d + c] += p * v[j][head * d + c];
+                            merged[head * d + c] += p * v[j][head * d + c] * g;
                         }
                     }
                 }
@@ -276,7 +311,7 @@ pub(crate) mod tests {
     fn self_attention_with_a_per_head_table_matches_a_loop_reference() {
         let dims = AttentionDims { query_dim: 12, context_dim: 12, heads: 3, head_dim: 4 };
         let map = weights();
-        let attn = Attention::load(&map, &Keys::transformer(Layout::Diffusers), "blk.attn1", dims, 1e-6).unwrap();
+        let attn = Attention::load(&map, &Keys::transformer(Layout::Diffusers), "blk.attn1", dims, 1e-6, false).unwrap();
         let x = tokens(5, 12, 0.37);
         // Three axes over a 12-wide table: 2 freqs per axis, no pad; the three
         // heads get different slices of it.
@@ -284,7 +319,7 @@ pub(crate) mod tests {
         let table = SplitRope::from_fractions(&fr, 3, 12, 3, 10_000.0);
         let rope = DeviceRope::upload(&table).unwrap();
         let got = attn.forward(&tensor(&x), None, Some(&rope), None).unwrap();
-        let want = attention_reference(&map, "blk.attn1", dims, &x, &x, Some(&table), None);
+        let want = attention_reference(&map, "blk.attn1", dims, &x, &x, Some(&table), None, false);
         assert_close(&rows(&got, 12), &want, 2e-5, "self attention");
         // The table really is per head: rotating every head with head 0's
         // slice must give a different answer.
@@ -305,7 +340,7 @@ pub(crate) mod tests {
         // head layout — the audio→video shape in miniature.
         let dims = AttentionDims { query_dim: 16, context_dim: 8, heads: 2, head_dim: 4 };
         let map = weights();
-        let attn = Attention::load(&map, &Keys::transformer(Layout::Diffusers), "blk.a2v", dims, 1e-6).unwrap();
+        let attn = Attention::load(&map, &Keys::transformer(Layout::Diffusers), "blk.a2v", dims, 1e-6, false).unwrap();
         let (x, ctx) = (tokens(6, 16, 0.21), tokens(3, 8, 0.53));
         let qt = SplitRope::from_fractions(&[0.0, 0.1, 0.2, 0.3, 0.4, 0.5], 1, 8, 2, 10_000.0);
         let kt = SplitRope::from_fractions(&[0.05, 0.25, 0.45], 1, 8, 2, 10_000.0);
@@ -313,7 +348,7 @@ pub(crate) mod tests {
             .forward(&tensor(&x), Some(&tensor(&ctx)), Some(&DeviceRope::upload(&qt).unwrap()), Some(&DeviceRope::upload(&kt).unwrap()))
             .unwrap();
         assert_eq!(got.shape, vec![1, 6, 16]);
-        let want = attention_reference(&map, "blk.a2v", dims, &x, &ctx, Some(&qt), Some(&kt));
+        let want = attention_reference(&map, "blk.a2v", dims, &x, &ctx, Some(&qt), Some(&kt), false);
         assert_close(&rows(&got, 16), &want, 2e-5, "a2v attention");
     }
 
@@ -321,10 +356,10 @@ pub(crate) mod tests {
     fn text_cross_attention_is_not_rotated() {
         let dims = AttentionDims { query_dim: 8, context_dim: 8, heads: 2, head_dim: 4 };
         let map = weights();
-        let attn = Attention::load(&map, &Keys::transformer(Layout::Diffusers), "blk.attn2", dims, 1e-6).unwrap();
+        let attn = Attention::load(&map, &Keys::transformer(Layout::Diffusers), "blk.attn2", dims, 1e-6, false).unwrap();
         let (x, ctx) = (tokens(4, 8, 0.4), tokens(7, 8, 0.9));
         let got = attn.forward(&tensor(&x), Some(&tensor(&ctx)), None, None).unwrap();
-        let want = attention_reference(&map, "blk.attn2", dims, &x, &ctx, None, None);
+        let want = attention_reference(&map, "blk.attn2", dims, &x, &ctx, None, None, false);
         assert_close(&rows(&got, 8), &want, 2e-5, "text cross attention");
     }
 
@@ -337,9 +372,27 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn gated_attention_matches_two_sigmoid_per_head_reference() {
+        let dims = AttentionDims { query_dim: 12, context_dim: 12, heads: 3, head_dim: 4 };
+        let map = weights();
+        let attn = Attention::load(&map, &Keys::transformer(Layout::Diffusers), "blk.gattn", dims, 1e-6, true).unwrap();
+        let x = tokens(4, 12, 0.31);
+        let got = attn.forward(&tensor(&x), None, None, None).unwrap();
+        let want = attention_reference(&map, "blk.gattn", dims, &x, &x, None, None, true);
+        assert_close(&rows(&got, 12), &want, 2e-5, "gated self attention");
+    }
+
+    #[test]
+    fn feed_forward_loads_without_bias_when_requested() {
+        let map = weights();
+        let err = FeedForward::load(&map, &Keys::transformer(Layout::Diffusers), "blk.nobias_ff", 6, 24, false);
+        assert!(err.is_ok());
+    }
+
+    #[test]
     fn feed_forward_is_linear_tanh_gelu_linear() {
         let map = weights();
-        let ff = FeedForward::load(&map, &Keys::transformer(Layout::Diffusers), "blk.ff", 6, 24).unwrap();
+        let ff = FeedForward::load(&map, &Keys::transformer(Layout::Diffusers), "blk.ff", 6, 24, true).unwrap();
         let x = tokens(3, 6, 0.77);
         let got = ff.forward(&tensor(&x)).unwrap();
         let (w0, b0) = (get(&map, "blk.ff.net.0.proj.weight", &[24, 6]), get(&map, "blk.ff.net.0.proj.bias", &[24]));

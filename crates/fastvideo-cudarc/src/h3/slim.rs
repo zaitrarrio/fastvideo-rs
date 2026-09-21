@@ -126,10 +126,11 @@ mod tests {
             sandwich_norms: false,
             embed_scale: 1.0,
             attn_scale: 0.5,
-            layers: vec![LayerAttn { rope_theta: 5_000_000.0, rope_factor: 1.0, window: None }; 4],
+            layers: vec![LayerAttn::global(5_000_000.0, 1.0); 4],
             layer_prefix: "model.language_model.layers".into(),
             embed_key: "model.language_model.embed_tokens.weight".into(),
             final_norm_key: "model.language_model.norm.weight".into(),
+            attention_k_eq_v: false,
         }
     }
 

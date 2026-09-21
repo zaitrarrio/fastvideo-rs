@@ -100,6 +100,11 @@ impl Keys {
     /// releases disagree on whether that sits under the DiT root, so probe.
     pub fn text_proj_in(&self, map: &WeightMap) -> Result<String> {
         if self.layout == Layout::Diffusers {
+            for name in ["video_text_proj_in", "text_proj_in"] {
+                if map.has_tensor(&format!("{name}.weight")) {
+                    return Ok(name.to_string());
+                }
+            }
             return Ok("text_proj_in".to_string());
         }
         let candidates = Self::text_proj_in_candidates();

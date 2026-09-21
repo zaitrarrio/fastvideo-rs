@@ -1,4 +1,4 @@
-//! The text path: prompt → Gemma-3-12B hidden states → the two connector
+//! The text path: prompt → Gemma-3/4-12B hidden states → the two connector
 //! transformers → one context per stream.
 //!
 //! LTX-2 does not condition on a text encoder's output. It stacks **all 49**
@@ -184,7 +184,7 @@ pub struct Connector {
 }
 
 impl Connector {
-    fn load(map: &WeightMap, keys: &Keys, name: &str, shape: ConnectorShape, eps: f32) -> Result<Self> {
+    fn load(map: &WeightMap, keys: &Keys, name: &str, shape: ConnectorShape, eps: f32, gated: bool) -> Result<Self> {
         let ConnectorShape { heads, head_dim, layers, registers } = shape;
         let dim = heads * head_dim;
         let dims = AttentionDims { query_dim: dim, context_dim: dim, heads, head_dim };
@@ -192,8 +192,8 @@ impl Connector {
             .map(|i| {
                 let p = format!("{name}.transformer_blocks.{i}");
                 Ok(Block1d {
-                    attn: Attention::load(map, keys, &format!("{p}.attn1"), dims, eps)?,
-                    ff: FeedForward::load(map, keys, &format!("{p}.ff"), dim, dim * 4)?,
+                    attn: Attention::load(map, keys, &format!("{p}.attn1"), dims, eps, gated)?,
+                    ff: FeedForward::load(map, keys, &format!("{p}.ff"), dim, dim * 4, true)?,
                 })
             })
             .collect::<Result<Vec<_>>>()?;
@@ -239,9 +239,10 @@ pub struct TextContexts {
     pub audio: CudaTensor,
 }
 
-/// `LTX2TextConnectors` for LTX-2.0: one shared projection, two connectors.
+/// `LTX2TextConnectors`: shared or per-modality text projections, two connectors.
 pub struct TextConnectors {
-    text_proj_in: Linear,
+    video_proj: Linear,
+    audio_proj: Linear,
     video: Connector,
     audio: Connector,
     cfg: Ltx2ConnectorsConfig,
@@ -255,17 +256,33 @@ impl TextConnectors {
     /// [`Self::load`] with the text projection's module prefix given, not
     /// probed — the probe needs a real checkpoint to look into.
     pub(crate) fn load_with_projection(map: &WeightMap, keys: &Keys, cfg: &Ltx2ConnectorsConfig, text_proj_in: &str) -> Result<Self> {
-        if cfg.per_modality_projections || cfg.proj_bias {
-            return Err(msg("connectors: per-modality projections / projection bias are LTX-2.3, not supported"));
-        }
-        if cfg.video_connector_num_attention_heads * cfg.video_connector_attention_head_dim != cfg.caption_channels
+        let eps = cfg.norm_eps as f32;
+        let bias = cfg.proj_bias;
+        let video_dim = cfg.inner_dim();
+        let audio_dim = cfg.audio_inner_dim();
+        if cfg.per_modality_projections {
+            if cfg.video_connector_num_attention_heads * cfg.video_connector_attention_head_dim != video_dim
+                || cfg.audio_connector_num_attention_heads * cfg.audio_connector_attention_head_dim != audio_dim
+            {
+                return Err(msg("connectors: per-modality head geometry must match video/audio hidden dims"));
+            }
+        } else if cfg.video_connector_num_attention_heads * cfg.video_connector_attention_head_dim != cfg.caption_channels
             || cfg.audio_connector_num_attention_heads * cfg.audio_connector_attention_head_dim != cfg.caption_channels
         {
             return Err(msg("connectors: LTX-2.0 connectors are as wide as the caption channels"));
         }
-        let eps = cfg.norm_eps as f32;
+        let (video_proj, audio_proj) = if cfg.per_modality_projections {
+            (
+                Linear::load(map, "video_text_proj_in", cfg.text_proj_in_features(), video_dim, bias)?,
+                Linear::load(map, "audio_text_proj_in", cfg.text_proj_in_features(), audio_dim, bias)?,
+            )
+        } else {
+            let shared = Linear::load(map, text_proj_in, cfg.text_proj_in_features(), cfg.caption_channels, false)?;
+            (shared.clone(), shared)
+        };
         Ok(Self {
-            text_proj_in: Linear::load(map, text_proj_in, cfg.text_proj_in_features(), cfg.caption_channels, false)?,
+            video_proj,
+            audio_proj,
             video: Connector::load(
                 map,
                 keys,
@@ -277,6 +294,7 @@ impl TextConnectors {
                     registers: cfg.video_connector_num_learnable_registers,
                 },
                 eps,
+                cfg.video_gated_attn,
             )?,
             audio: Connector::load(
                 map,
@@ -289,6 +307,7 @@ impl TextConnectors {
                     registers: cfg.audio_connector_num_learnable_registers,
                 },
                 eps,
+                cfg.audio_gated_attn,
             )?,
             cfg: cfg.clone(),
         })
@@ -308,9 +327,9 @@ impl TextConnectors {
         }
         let packed = stack.normalized(self.cfg.norm_scale_factor, self.cfg.norm_eps);
         let packed = CudaTensor::from_vec(packed, vec![stack.tokens, self.cfg.text_proj_in_features()])?;
-        let proj = self.text_proj_in.forward(&packed)?;
+        let video_proj = self.video_proj.forward(&packed)?;
+        let audio_proj = self.audio_proj.forward(&packed)?;
         drop(packed);
-        // Both connectors have the same geometry, hence one table.
         let table = SplitRope::from_fractions(
             &connector_fractions(total, self.cfg.connector_rope_base_seq_len),
             1,
@@ -319,9 +338,9 @@ impl TextConnectors {
             self.cfg.rope_theta,
         );
         let rope = DeviceRope::upload(&table)?;
-        let video = self.video.forward(&proj, &rope, total)?;
+        let video = self.video.forward(&video_proj, &rope, total)?;
         let audio = if (self.audio.heads, self.audio.dim) == (self.video.heads, self.video.dim) {
-            self.audio.forward(&proj, &rope, total)?
+            self.audio.forward(&audio_proj, &rope, total)?
         } else {
             let table = SplitRope::from_fractions(
                 &connector_fractions(total, self.cfg.connector_rope_base_seq_len),
@@ -330,9 +349,9 @@ impl TextConnectors {
                 self.audio.heads,
                 self.cfg.rope_theta,
             );
-            self.audio.forward(&proj, &DeviceRope::upload(&table)?, total)?
+            self.audio.forward(&audio_proj, &DeviceRope::upload(&table)?, total)?
         };
-        Ok(TextContexts { proj, video, audio })
+        Ok(TextContexts { proj: video_proj, video, audio })
     }
 }
 
@@ -421,7 +440,7 @@ mod tests {
             for i in 0..layers {
                 let p = format!("{name}.transformer_blocks.{i}");
                 let h: Vec<Vec<f32>> = x.iter().map(|v| rms(v, None, 1e-6)).collect();
-                let a = attention_reference(&map, &format!("{p}.attn1"), dims, &h, &h, Some(&table), None);
+                let a = attention_reference(&map, &format!("{p}.attn1"), dims, &h, &h, Some(&table), None, false);
                 x.iter_mut().zip(&a).for_each(|(v, a)| v.iter_mut().zip(a).for_each(|(v, a)| *v += a));
                 let (w0, b0) = (get(&map, &format!("{p}.ff.net.0.proj.weight"), &[32, dim]), get(&map, &format!("{p}.ff.net.0.proj.bias"), &[32]));
                 let (w2, b2) = (get(&map, &format!("{p}.ff.net.2.weight"), &[dim, 32]), get(&map, &format!("{p}.ff.net.2.bias"), &[dim]));
@@ -468,10 +487,11 @@ mod tests {
             sandwich_norms: true,
             embed_scale: 2.0,
             attn_scale: 0.5,
-            layers: vec![LayerAttn { rope_theta: 10_000.0, rope_factor: 1.0, window: Some(4) }, LayerAttn { rope_theta: 1e6, rope_factor: 8.0, window: None }],
+            layers: vec![LayerAttn { rope_theta: 10_000.0, rope_factor: 1.0, window: Some(4), q_heads: None, q_head_dim: None, kv_heads: None, kv_head_dim: None, partial_rotary: None }, LayerAttn::global(1e6, 8.0)],
             layer_prefix: "lm.layers".into(),
             embed_key: "lm.embed.weight".into(),
             final_norm_key: "lm.norm.weight".into(),
+            attention_k_eq_v: false,
         };
         let prompt = PaddedPrompt::from_ids(&[2, 7, 9, 4], 32).unwrap();
         let streamed = HiddenStack::encode(&weights(), &cfg, &prompt).unwrap();

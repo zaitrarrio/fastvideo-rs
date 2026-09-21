@@ -25,7 +25,7 @@
 //!
 //! `FASTVIDEO_LLM_PREFETCH=0` turns it off.
 
-use super::{linear_specs, norm_from, norm_specs, DecoderConfig, Layer, LayerSource};
+use super::{linear_specs, max_layer_linear_elems, norm_from, norm_specs, DecoderConfig, Layer, LayerSource};
 use crate::wan::nn::Linear;
 use crate::wan::stats;
 use crate::wan::tensor::{CudaTensor, Result, TensorError};
@@ -74,7 +74,7 @@ impl<'a> Stage<'a> {
             return None;
         }
         let dev = crate::wan::device::global_device()?;
-        let elems: usize = linear_specs(cfg).iter().map(|(_, i, o)| i * o).sum();
+        let elems = max_layer_linear_elems(cfg);
         let made = dev.ctx.new_stream().and_then(|copy| {
             // Every element is written before it is read.
             let pinned = unsafe { dev.ctx.alloc_pinned::<bf16>(elems) }?;
@@ -153,7 +153,10 @@ fn stage_layer(
     let mut fill = Duration::ZERO;
     let mut linears = Vec::with_capacity(7);
     let mut at = 0;
-    for (name, i, o) in linear_specs(cfg) {
+    for (name, i, o) in linear_specs(cfg, index) {
+        if cfg.attention_k_eq_v && name == "self_attn.v_proj" {
+            continue;
+        }
         let key = format!("{p}.{name}.weight");
         let shape = lazy.shape(&key).ok_or_else(|| msg(format!("key {key}: not in the checkpoint")))?;
         if shape != [o, i] {
@@ -174,7 +177,7 @@ fn stage_layer(
     }
     let t = Instant::now();
     let mut norms = Vec::new();
-    for (name, width) in norm_specs(cfg) {
+    for (name, width) in norm_specs(cfg, index) {
         let key = format!("{p}.{name}.weight");
         let (shape, values) = lazy.to_f32(&key).map_err(|e| msg(e.to_string()))?;
         if shape != [width] {
@@ -231,9 +234,10 @@ impl LayerSource for Prefetched<'_> {
         let cfg = self.cfg;
         let mut linears = staged.linears.into_iter();
         let mut norms: Vec<(&str, Option<Vec<f32>>)> =
-            norm_specs(cfg).into_iter().map(|(n, _)| n).zip(staged.norms.into_iter().map(Some)).collect();
+            norm_specs(cfg, index).into_iter().map(|(n, _)| n).zip(staged.norms.into_iter().map(Some)).collect();
         let layer = Layer::assemble(
             cfg,
+            index,
             &mut |name, i, o| {
                 let w = linears.next().ok_or_else(|| msg(format!("llm prefetch: no weight staged for {name}")))?;
                 Linear::from_device_bf16(w, i, o)

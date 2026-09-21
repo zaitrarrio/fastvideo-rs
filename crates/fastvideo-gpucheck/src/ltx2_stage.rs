@@ -28,7 +28,7 @@ use fastvideo_cudarc::ltx2::vocoder::Vocoder;
 use fastvideo_cudarc::wan::pipeline::{interleave_audio, write_wav};
 use fastvideo_cudarc::CudaTensor;
 use fastvideo_cudarc::wan::weights::WeightMap;
-use fastvideo_models::ltx2::config::{ltx2_19b_distilled, Ltx2Config};
+use fastvideo_models::ltx2::config::{ltx2_19b_distilled, ltx2_5_22b_distilled, Ltx2Config};
 use fastvideo_models::ltx2::{Ltx2RopeTables, Ltx2Schedule, SplitRope};
 use serde_json::json;
 
@@ -36,6 +36,26 @@ use crate::metrics::diff;
 use crate::model::measure;
 use crate::report::{Report, StageResult};
 use crate::st::F32Tensor;
+
+/// Which distilled LTX checkpoint the port targets (`gen` loads the matching config).
+#[derive(Debug, Clone, Copy, clap::ValueEnum)]
+pub enum ModelVersion {
+    /// LTX-2.0 19B distilled, deterministic Euler stage 1.
+    #[value(name = "2.0")]
+    V20,
+    /// LTX-2.5 22B distilled, ancestral Euler stage 1.
+    #[value(name = "2.5")]
+    V25,
+}
+
+impl ModelVersion {
+    pub fn config(self) -> Ltx2Config {
+        match self {
+            Self::V20 => ltx2_19b_distilled(),
+            Self::V25 => ltx2_5_22b_distilled(),
+        }
+    }
+}
 
 #[derive(clap::Subcommand, Debug)]
 pub enum Stage {
@@ -206,6 +226,9 @@ pub enum Stage {
     /// Generate a clip end to end: prompt → mp4 with sound, plus timings and
     /// peak VRAM. Needs `--mode fast`.
     Gen {
+        /// Distilled model family: `2.0` (19B, Euler) or `2.5` (22B, ancestral).
+        #[arg(long, value_enum, default_value_t = ModelVersion::V20)]
+        model_version: ModelVersion,
         /// A diffusers LTX-2 snapshot: `tokenizer/`, `text_encoder/`, `vae/`,
         /// `audio_vae/`, `vocoder/`.
         #[arg(long)]
@@ -305,7 +328,7 @@ pub fn run(report: &mut Report, stage: &Stage) -> StageResult<()> {
         Stage::Loop { dit: path, oracle, weights, device, geometry, max_rel_first, max_rel, min_psnr_db, min_psnr_db_e2e, floor_factor } => {
             sample_loop(report, path, oracle, weights.as_deref(), device, *geometry, [*max_rel_first, *max_rel, *min_psnr_db, *min_psnr_db_e2e, *floor_factor])
         }
-        Stage::Gen { weights, dit: path, prompt, clip, seed, device, geometry, no_mp4, text_cache, no_text_cache, warm, text_weights, text } => {
+        Stage::Gen { model_version, weights, dit: path, prompt, clip, seed, device, geometry, no_mp4, text_cache, no_text_cache, warm, text_weights, text } => {
             let text_cache = if *no_text_cache { None } else { text_cache.clone().or_else(fastvideo_cudarc::ltx2::text_cache::default_dir) };
             let text_residency = match text.as_str() {
                 "auto" => TextResidency::Auto,
@@ -314,7 +337,7 @@ pub fn run(report: &mut Report, stage: &Stage) -> StageResult<()> {
                 other => return Err(anyhow::anyhow!("--text {other}: expected auto, resident or streamed").into()),
             };
             let paths = Ltx2Paths { weights: weights.clone(), dit: path.clone(), text: text_weights.clone() };
-            gen(report, &paths, &PipelineOptions { text_cache, text_residency }, prompt, clip, *seed, device, *geometry, !*no_mp4, *warm)
+            gen(report, *model_version, &paths, &PipelineOptions { text_cache, text_residency }, prompt, clip, *seed, device, *geometry, !*no_mp4, *warm)
         }
         Stage::SlimText { weights, slim, embed, shard_gib } => slim_text(report, weights, slim, embed, *shard_gib),
     }
@@ -1000,6 +1023,7 @@ fn sample_loop(
 #[allow(clippy::too_many_arguments)]
 fn gen(
     report: &mut Report,
+    model_version: ModelVersion,
     paths: &Ltx2Paths,
     options: &PipelineOptions,
     prompt: &str,
@@ -1011,7 +1035,11 @@ fn gen(
     warm: bool,
 ) -> StageResult<()> {
     report.set("device", crate::gpu::init(device)?);
-    let cfg = ltx2_19b_distilled();
+    report.set("model_version", match model_version {
+        ModelVersion::V20 => "2.0",
+        ModelVersion::V25 => "2.5",
+    });
+    let cfg = model_version.config();
     let request = Ltx2Request {
         prompt: prompt.to_string(),
         height: g.height,

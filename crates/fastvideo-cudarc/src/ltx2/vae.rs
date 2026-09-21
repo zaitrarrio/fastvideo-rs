@@ -49,10 +49,11 @@ use crate::wan::weights::{cuda_tensor_shaped, WeightMap};
 
 use super::{msg, ones};
 
-/// A 3×3×3 conv: reflect-padded in space, streamed in time.
+/// A 3×3×3 conv: reflect- or zero-padded in space, streamed in time.
 struct TemporalConv {
     weight: CudaTensor,
     bias: CudaTensor,
+    spatial_pad: PadMode,
 }
 
 /// What a [`TemporalConv`] remembers between chunks: the last two frames of its
@@ -71,12 +72,12 @@ fn cat_time(parts: &[&CudaTensor]) -> Result<CudaTensor> {
 }
 
 impl TemporalConv {
-    fn load(map: &WeightMap, prefix: &str, cin: usize, cout: usize) -> Result<Self> {
+    fn load(map: &WeightMap, prefix: &str, cin: usize, cout: usize, spatial_pad: PadMode) -> Result<Self> {
         let mut weight = cuda_tensor_shaped(map, &format!("{prefix}.conv.weight"), &[cout, cin, 3, 3, 3])?;
         let mut bias = cuda_tensor_shaped(map, &format!("{prefix}.conv.bias"), &[cout])?;
         weight.pin_device()?;
         bias.pin_device()?;
-        Ok(Self { weight, bias })
+        Ok(Self { weight, bias, spatial_pad })
     }
 
     /// Feed the next frames of the stream (`None`: no new frames), `last` when
@@ -100,7 +101,7 @@ impl TemporalConv {
         if n < 3 {
             return Ok(None);
         }
-        let padded = seq.pad(3, 1, 1, PadMode::Reflect)?.pad(4, 1, 1, PadMode::Reflect)?;
+        let padded = seq.pad(3, 1, 1, self.spatial_pad)?.pad(4, 1, 1, self.spatial_pad)?;
         drop(seq);
         padded.conv3d(&self.weight, Some(&self.bias), [0, 0, 0], [1, 1, 1]).map(Some)
     }
@@ -149,10 +150,10 @@ struct ResnetState {
 }
 
 impl Resnet {
-    fn load(map: &WeightMap, prefix: &str, ch: usize) -> Result<Self> {
+    fn load(map: &WeightMap, prefix: &str, ch: usize, spatial_pad: PadMode) -> Result<Self> {
         Ok(Self {
-            conv1: TemporalConv::load(map, &format!("{prefix}.conv1"), ch, ch)?,
-            conv2: TemporalConv::load(map, &format!("{prefix}.conv2"), ch, ch)?,
+            conv1: TemporalConv::load(map, &format!("{prefix}.conv1"), ch, ch, spatial_pad)?,
+            conv2: TemporalConv::load(map, &format!("{prefix}.conv2"), ch, ch, spatial_pad)?,
             ones: ones(ch)?,
         })
     }
@@ -169,10 +170,8 @@ impl Resnet {
     }
 }
 
-/// `[1, 8C, f, h, w]` → `[1, C, 2f, 2h, 2w]` with
-/// `out[c, 2f+i, 2h+j, 2w+k] = y[((c·2+i)·2+j)·2+k, f, h, w]`, in two moves so
-/// no permute exceeds rank 6: space first, then time.
-fn depth_to_space(y: &CudaTensor) -> Result<CudaTensor> {
+/// `[1, 8C, f, h, w]` → `[1, C, 2f, 2h, 2w]` — spatiotemporal (2, 2, 2).
+fn depth_to_space_spatiotemporal(y: &CudaTensor) -> Result<CudaTensor> {
     let [b, c8, f, h, w] = y.shape[..] else {
         return Err(msg(format!("depth_to_space expects [1, 8C, F, H, W], got {:?}", y.shape)));
     };
@@ -180,14 +179,39 @@ fn depth_to_space(y: &CudaTensor) -> Result<CudaTensor> {
         return Err(msg(format!("depth_to_space expects [1, 8C, F, H, W], got {:?}", y.shape)));
     }
     let c = c8 / 8;
-    // [C·2(i), j, k, f, h, w] → [C·2, f, h, j, w, k].
     let spatial = y.reshape(vec![c * 2, 2, 2, f, h, w])?.permute(&[0, 3, 4, 1, 5, 2])?.reshape(vec![c, 2, f, 4 * h * w])?;
-    // [C, i, f, HW] → [C, f, i, HW].
     spatial.permute(&[0, 2, 1, 3])?.reshape(vec![1, c, 2 * f, 2 * h, 2 * w])
+}
+
+/// `[1, C·st·sh·sw, f, h, w]` → `[1, C, st·f, sh·h, sw·w]`.
+fn depth_to_space(y: &CudaTensor, stride: (usize, usize, usize)) -> Result<CudaTensor> {
+    let (st, sh, sw) = stride;
+    if (st, sh, sw) == (2, 2, 2) {
+        return depth_to_space_spatiotemporal(y);
+    }
+    let prod = st * sh * sw;
+    let [b, cprod, f, h, w] = y.shape[..] else {
+        return Err(msg(format!("depth_to_space expects [1, C·stride, F, H, W], got {:?}", y.shape)));
+    };
+    if b != 1 || cprod % prod != 0 {
+        return Err(msg(format!("depth_to_space expects [1, C·stride, F, H, W], got {:?}", y.shape)));
+    }
+    let c = cprod / prod;
+    match (st, sh, sw) {
+        (2, 1, 1) => y.reshape(vec![c, 2, f, h, w])?.permute(&[0, 2, 1, 3, 4])?.reshape(vec![1, c, 2 * f, h, w]),
+        (1, 2, 2) => {
+            let spatial = y.reshape(vec![c * 2, 2, 2, f, h, w])?.permute(&[0, 3, 4, 1, 5, 2])?.reshape(vec![c, 2, f, 4 * h * w])?;
+            spatial.permute(&[0, 2, 1, 3])?.reshape(vec![1, c, f, 2 * h, 2 * w])
+        }
+        _ => Err(msg(format!("depth_to_space: unsupported stride ({st}, {sh}, {sw})"))),
+    }
 }
 
 struct Upsampler {
     conv: TemporalConv,
+    stride: (usize, usize, usize),
+    residual: bool,
+    drop_first_frame: bool,
 }
 
 #[derive(Default)]
@@ -199,12 +223,24 @@ struct UpsamplerState {
 
 impl Upsampler {
     fn push(&self, state: &mut UpsamplerState, x: Option<CudaTensor>, last: bool) -> Result<Option<CudaTensor>> {
-        state.skip.push(x.as_ref())?;
+        let skip_in = if self.residual { x.as_ref() } else { None };
+        state.skip.push(skip_in)?;
         let Some(y) = self.conv.push(&mut state.conv, x, last)? else { return Ok(None) };
-        let residual = depth_to_space(&state.skip.pop(frames(&y))?)?;
-        // `repeat` on the channel axis: output channel c reads residual channel c mod C/8.
-        let tiled = CudaTensor::cat(&[&residual, &residual, &residual, &residual], 1)?;
-        let out = depth_to_space(&y)?.add(&tiled)?;
+        let mut out = depth_to_space(&y, self.stride)?;
+        if self.residual {
+            let residual = depth_to_space(&state.skip.pop(frames(&y))?, self.stride)?;
+            let main_ch = out.shape[1];
+            let res_ch = residual.shape[1];
+            if !main_ch.is_multiple_of(res_ch) {
+                return Err(msg(format!("ltx2 vae upsampler: {main_ch} channels vs residual {res_ch}")));
+            }
+            let tiles = main_ch / res_ch;
+            let tiled = CudaTensor::cat(&(0..tiles).map(|_| &residual).collect::<Vec<_>>(), 1)?;
+            out = out.add(&tiled)?;
+        }
+        if !self.drop_first_frame {
+            return Ok(Some(out));
+        }
         if state.dropped_first {
             return Ok(Some(out));
         }
@@ -264,29 +300,40 @@ pub struct VideoDecoder {
 impl VideoDecoder {
     /// `map` is the diffusers `vae/` folder.
     pub fn load(map: &WeightMap, cfg: &Ltx2VideoVaeConfig) -> Result<Self> {
-        if cfg.timestep_conditioning || cfg.decoder_causal || !cfg.decoder_reflect_padding || cfg.patch_size_t != 1 {
-            return Err(msg("ltx2 vae: only the non-causal, reflect-padded, unconditioned LTX-2.0 decoder is supported"));
+        if cfg.timestep_conditioning || cfg.decoder_causal || cfg.patch_size_t != 1 {
+            return Err(msg("ltx2 vae: timestep conditioning, causal decode, or patch_size_t != 1 are not supported"));
         }
-        if cfg.decoder_inject_noise.iter().any(|&n| n) || cfg.upsample_residual.iter().any(|&r| !r) || cfg.upsample_factor.iter().any(|&f| f != 2) {
-            return Err(msg("ltx2 vae: noise injection / non-residual or non-×2 upsamplers are not part of LTX-2.0"));
+        if cfg.decoder_inject_noise.iter().any(|&n| n) {
+            return Err(msg("ltx2 vae: decoder noise injection is not supported"));
         }
+        if cfg.upsample_type.len() != cfg.upsample_factor.len() || cfg.upsample_residual.len() != cfg.upsample_factor.len() {
+            return Err(msg("ltx2 vae: upsample_type / upsample_residual length must match upsample_factor"));
+        }
+        let spatial_pad = if cfg.decoder_reflect_padding { PadMode::Reflect } else { PadMode::Zeros };
         let stages = cfg.decoder_stages();
         let mut blocks = Vec::with_capacity(stages.len());
-        let mut cin = stages[0].0;
-        for (i, &(ch, layers, up)) in stages.iter().enumerate() {
+        let mut cin = stages[0].channels;
+        for (i, stage) in stages.iter().enumerate() {
             let prefix = if i == 0 { "decoder.mid_block".to_string() } else { format!("decoder.up_blocks.{}", i - 1) };
-            let upsampler = match up {
-                Some(conv_out) => {
-                    if conv_out != ch * 8 || cin != ch * 2 {
-                        return Err(msg(format!("ltx2 vae stage {i}: upsampler {cin} -> {conv_out} for {ch} channels")));
+            let upsampler = match &stage.upsampler {
+                Some(up) => {
+                    if up.in_channels != cin {
+                        return Err(msg(format!("ltx2 vae stage {i}: upsampler expects {} in, block has {cin}", up.in_channels)));
                     }
-                    Some(Upsampler { conv: TemporalConv::load(map, &format!("{prefix}.upsamplers.0.conv"), cin, conv_out)? })
+                    Some(Upsampler {
+                        conv: TemporalConv::load(map, &format!("{prefix}.upsamplers.0.conv"), up.in_channels, up.conv_out_channels, spatial_pad)?,
+                        stride: up.stride,
+                        residual: up.residual,
+                        drop_first_frame: up.drop_first_frame,
+                    })
                 }
                 None => None,
             };
-            let resnets = (0..layers).map(|n| Resnet::load(map, &format!("{prefix}.resnets.{n}"), ch)).collect::<Result<Vec<_>>>()?;
+            let resnets = (0..stage.resnet_layers)
+                .map(|n| Resnet::load(map, &format!("{prefix}.resnets.{n}"), stage.channels, spatial_pad))
+                .collect::<Result<Vec<_>>>()?;
             blocks.push(Block { upsampler, resnets });
-            cin = ch;
+            cin = stage.channels;
         }
         let z = cfg.latent_channels;
         let stat = |key: &str| -> Result<CudaTensor> {
@@ -297,10 +344,10 @@ impl VideoDecoder {
         Ok(Self {
             latents_mean: stat("latents_mean")?,
             latents_std: stat("latents_std")?,
-            conv_in: TemporalConv::load(map, "decoder.conv_in", z, stages[0].0)?,
+            conv_in: TemporalConv::load(map, "decoder.conv_in", z, stages[0].channels, spatial_pad)?,
             blocks,
             ones_out: ones(cin)?,
-            conv_out: TemporalConv::load(map, "decoder.conv_out", cin, cfg.out_channels * cfg.patch_size * cfg.patch_size)?,
+            conv_out: TemporalConv::load(map, "decoder.conv_out", cin, cfg.out_channels * cfg.patch_size * cfg.patch_size, spatial_pad)?,
             cfg: cfg.clone(),
         })
     }
@@ -467,16 +514,22 @@ mod tests {
     }
 
     /// The spec's index map, literally.
-    fn d2s(y: &Vol) -> Vol {
-        let mut out = Vol::zeros(y.c / 8, 2 * y.f, 2 * y.h, 2 * y.w);
+    fn d2s(y: &Vol, stride: (usize, usize, usize)) -> Vol {
+        let (st, sh, sw) = stride;
+        let prod = st * sh * sw;
+        let mut out = Vol::zeros(y.c / prod, st * y.f, sh * y.h, sw * y.w);
         for c in 0..out.c {
             for f in 0..y.f {
                 for h in 0..y.h {
                     for w in 0..y.w {
-                        for ijk in 0..8 {
-                            let (i, j, k) = (ijk / 4, ijk / 2 % 2, ijk % 2);
-                            let at = out.idx(c, 2 * f + i, 2 * h + j, 2 * w + k);
-                            out.v[at] = y.v[y.idx(c * 8 + ijk, f, h, w)];
+                        for i in 0..st {
+                            for j in 0..sh {
+                                for k in 0..sw {
+                                    let ijk = i * (sh * sw) + j * sw + k;
+                                    let at = out.idx(c, st * f + i, sh * h + j, sw * w + k);
+                                    out.v[at] = y.v[y.idx(c * prod + ijk, f, h, w)];
+                                }
+                            }
                         }
                     }
                 }
@@ -497,8 +550,8 @@ mod tests {
     fn tiny() -> Ltx2VideoVaeConfig {
         Ltx2VideoVaeConfig {
             latent_channels: 4,
-            decoder_block_out_channels: [16, 32, 64],
-            decoder_layers_per_block: [1, 1, 1, 1],
+            decoder_block_out_channels: vec![16, 32, 64],
+            decoder_layers_per_block: vec![1, 1, 1, 1],
             patch_size: 2,
             ..Ltx2VideoVaeConfig::ltx2_19b()
         }
@@ -512,23 +565,28 @@ mod tests {
             x.v[c * per..(c + 1) * per].iter_mut().for_each(|v| *v = *v * std[c] + mean[c]);
         }
         let stages = cfg.decoder_stages();
-        let mut x = conv3(map, "decoder.conv_in", &x, stages[0].0);
-        for (i, &(ch, layers, up)) in stages.iter().enumerate() {
+        let mut x = conv3(map, "decoder.conv_in", &x, stages[0].channels);
+        for (i, stage) in stages.iter().enumerate() {
             let prefix = if i == 0 { "decoder.mid_block".to_string() } else { format!("decoder.up_blocks.{}", i - 1) };
-            if let Some(conv_out) = up {
-                let main = drop_first_frame(&d2s(&conv3(map, &format!("{prefix}.upsamplers.0.conv"), &x, conv_out)));
-                let res = drop_first_frame(&d2s(&x));
-                assert_eq!((main.c, res.c), (ch, ch / 4));
-                let per = main.f * main.h * main.w;
-                let mut sum = main.clone();
-                for c in 0..ch {
-                    for p in 0..per {
-                        sum.v[c * per + p] += res.v[(c % res.c) * per + p];
+            if let Some(up) = &stage.upsampler {
+                let main = d2s(&conv3(map, &format!("{prefix}.upsamplers.0.conv"), &x, up.conv_out_channels), up.stride);
+                let main = if up.drop_first_frame { drop_first_frame(&main) } else { main };
+                let mut sum = main;
+                if up.residual {
+                    let res = d2s(&x, up.stride);
+                    let res = if up.drop_first_frame { drop_first_frame(&res) } else { res };
+                    let tiles = sum.c / res.c;
+                    let per = sum.f * sum.h * sum.w;
+                    for c in 0..sum.c {
+                        for p in 0..per {
+                            sum.v[c * per + p] += res.v[(c % res.c) * per + p];
+                        }
                     }
+                    assert_eq!(tiles, sum.c / res.c);
                 }
                 x = sum;
             }
-            for n in 0..layers {
+            for n in 0..stage.resnet_layers {
                 x = resnet(map, &format!("{prefix}.resnets.{n}"), &x);
             }
         }
@@ -626,9 +684,16 @@ mod tests {
     #[test]
     fn depth_to_space_follows_the_documented_index_map() {
         let y = Vol { c: 16, f: 2, h: 2, w: 3, v: (0..16 * 2 * 2 * 3).map(|i| i as f32).collect() };
-        let got = depth_to_space(&CudaTensor::from_vec(y.v.clone(), vec![1, 16, 2, 2, 3]).unwrap()).unwrap();
+        let got = depth_to_space(&CudaTensor::from_vec(y.v.clone(), vec![1, 16, 2, 2, 3]).unwrap(), (2, 2, 2)).unwrap();
         assert_eq!(got.shape, vec![1, 2, 4, 4, 6]);
-        assert_eq!(&*got.host_cow().unwrap(), &d2s(&y).v[..]);
+        assert_eq!(&*got.host_cow().unwrap(), &d2s(&y, (2, 2, 2)).v[..]);
+    }
+
+    #[test]
+    fn ltx25_config_loads_synthetic_weights() {
+        let cfg = Ltx2VideoVaeConfig::ltx2_5_22b();
+        let _ = cfg.decoder_stages();
+        VideoDecoder::load(&weights(), &cfg).expect("load");
     }
 
     #[test]

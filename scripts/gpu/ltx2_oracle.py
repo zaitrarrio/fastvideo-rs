@@ -65,6 +65,12 @@ DISTILLED_SIGMA_VALUES = [1.0, 0.99375, 0.9875, 0.98125, 0.975, 0.909375, 0.725,
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--weights", default="rootonchair/LTX-2-19b-distilled", help="distilled diffusers layout (dir or hub id)")
+    ap.add_argument(
+        "--model-version",
+        default="2.0",
+        choices=["2.0", "2.5"],
+        help="2.0: LTX-2 19B distilled (default). 2.5: LTX-2.5 22B — TODO: load Lightricks/LTX-2.5-Diffusers, Gemma4, ancestral sample loop",
+    )
     ap.add_argument("--prompts", required=True, help="prompt JSON, same file the embed stage reads")
     ap.add_argument("--name", default=None, help="which prompt to use (default: the first)")
     ap.add_argument("--height", type=int, default=512)

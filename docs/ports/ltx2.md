@@ -5,6 +5,9 @@ checkpoint on one RTX PRO 6000 (96 GB, sm_120), every stage judged against
 diffusers by `scripts/gpu/ltx2_oracle.py`. Config structs and the sigma schedule
 live in `crates/fastvideo-models/src/ltx2/{config,schedule}.rs`.
 
+For **LTX-2.5** (Gemma 4, gated DiT, conv VAE, BWE vocoder, ancestral stage-1)
+see [ltx25.md](ltx25.md).
+
 Source abbreviations (line numbers are for the copies read on 2026-09-19;
 diffusers `main`, transformers `v4.57.3`, Lightricks/LTX-2 `main` unless a commit
 is given):

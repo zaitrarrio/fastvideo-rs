@@ -256,10 +256,11 @@ mod tests {
             sandwich_norms: false,
             embed_scale: 1.0,
             attn_scale: 0.5,
-            layers: vec![LayerAttn { rope_theta: 5_000_000.0, rope_factor: 1.0, window: None }; 3],
+            layers: vec![LayerAttn::global(5_000_000.0, 1.0); 3],
             layer_prefix: "m.layers".into(),
             embed_key: "m.embed.weight".into(),
             final_norm_key: "m.norm.weight".into(),
+            attention_k_eq_v: false,
         }
     }
 

@@ -98,13 +98,21 @@ pub fn weights_identity(path: &Path, prefix: Option<&str>) -> Result<[u8; 32]> {
 }
 
 /// Everything the conditioning depends on, hashed.
-pub fn cache_key(prompt: &str, tokenizer_json: &[u8], max_len: usize, gemma: &[u8; 32], connectors: &[u8; 32]) -> String {
+pub fn cache_key(
+    prompt: &str,
+    tokenizer_json: &[u8],
+    max_len: usize,
+    text_encoder_kind: &[u8],
+    gemma: &[u8; 32],
+    connectors: &[u8; 32],
+) -> String {
     let mut h = Sha256::new();
     field(&mut h, b"fastvideo ltx2 text conditioning v1");
     // The pipeline strips the prompt before tokenising; so does the key.
     field(&mut h, prompt.trim().as_bytes());
     field(&mut h, &digest(tokenizer_json));
     field(&mut h, &(max_len as u64).to_le_bytes());
+    field(&mut h, text_encoder_kind);
     field(&mut h, gemma);
     field(&mut h, connectors);
     hex(&h.finalize())
@@ -217,18 +225,19 @@ mod tests {
 
     #[test]
     fn the_key_is_stable_and_moves_with_every_input() {
-        let (g, c) = ([1u8; 32], [2u8; 32]);
-        let key = cache_key("a red fox", b"tokenizer", 1024, &g, &c);
+        let (g, c, kind) = ([1u8; 32], [2u8; 32], b"gemma3-12b");
+        let key = cache_key("a red fox", b"tokenizer", 1024, kind, &g, &c);
         assert_eq!(key.len(), 64);
         // Pinned: a changed key format silently orphans every cache on disk.
-        assert_eq!(key, "2f4bbf8d7094ee3ca1f6e7144c94ec227c84b98444bfaeace4d64076982c1445");
-        assert_eq!(key, cache_key("  a red fox\n", b"tokenizer", 1024, &g, &c), "the prompt is stripped, as the pipeline strips it");
+        assert_eq!(key, "b944238de5c5d7fd7b54990f15928a65e4930ef0da2b4a78241a1035c7d9d27c");
+        assert_eq!(key, cache_key("  a red fox\n", b"tokenizer", 1024, kind, &g, &c), "the prompt is stripped, as the pipeline strips it");
         for other in [
-            cache_key("a red fox.", b"tokenizer", 1024, &g, &c),
-            cache_key("a red fox", b"tokenizer2", 1024, &g, &c),
-            cache_key("a red fox", b"tokenizer", 512, &g, &c),
-            cache_key("a red fox", b"tokenizer", 1024, &c, &c),
-            cache_key("a red fox", b"tokenizer", 1024, &g, &g),
+            cache_key("a red fox.", b"tokenizer", 1024, kind, &g, &c),
+            cache_key("a red fox", b"tokenizer2", 1024, kind, &g, &c),
+            cache_key("a red fox", b"tokenizer", 512, kind, &g, &c),
+            cache_key("a red fox", b"tokenizer", 1024, b"gemma4-12b", &g, &c),
+            cache_key("a red fox", b"tokenizer", 1024, kind, &c, &c),
+            cache_key("a red fox", b"tokenizer", 1024, kind, &g, &g),
         ] {
             assert_ne!(key, other);
         }

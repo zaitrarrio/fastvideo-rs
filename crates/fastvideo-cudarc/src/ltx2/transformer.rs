@@ -16,9 +16,11 @@
 //! `rms(x)·(1 + scale)` of AdaLN is therefore the RMSNorm kernel with
 //! `1 + scale` as its weight, followed by one broadcast add.
 //!
-//! LTX-2.0 only: no gated attention, no prompt AdaLN, no STG/perturbed
-//! attention, no masks (the connectors leave no padding), batch 1.
-//! See docs/ports/ltx2.md §e.
+//! LTX-2.0 is the default path (6-row AdaLN, caption projections, ungated
+//! attention). LTX-2.5 adds gated SDPA, 9-row AdaLN + prompt K/V tables,
+//! optional global `prompt_adaln`, and `ff_bias=false` on the video FFN.
+//! Perturbed/STG attention is not wired in the forward path (distilled CFG=1).
+//! See docs/ports/ltx2.md §e and docs/ports/ltx25.md.
 
 use fastvideo_models::ltx2::config::Ltx2TransformerConfig;
 use fastvideo_models::ltx2::Ltx2RopeTables;
@@ -94,15 +96,23 @@ fn rms_adaln(x: &CudaTensor, scale: &CudaTensor, shift: &CudaTensor, eps: f32) -
     x.rms_norm(&scale.try_add_scalar(1.0)?, eps)?.add(shift)
 }
 
+/// `x · (1 + scale) + shift` with broadcast `[1, dim]` modulation rows.
+fn scale_shift(x: &CudaTensor, scale: &CudaTensor, shift: &CudaTensor) -> Result<CudaTensor> {
+    x.mul(&scale.try_add_scalar(1.0)?)?.add(shift)
+}
+
 /// One stream's half of a block.
 struct StreamBlock {
     attn1: Attention,
     attn2: Attention,
     ff: FeedForward,
-    /// `[6, dim]`: shift_msa, scale_msa, gate_msa, shift_mlp, scale_mlp, gate_mlp.
+    /// `[6 or 9, dim]`: MSA/MLP AdaLN rows; optional rows 6..8 modulate text Q.
     scale_shift_table: CudaTensor,
     /// `[5, dim]`: a2v_scale, a2v_shift, v2a_scale, v2a_shift, gate.
     cross_table: CudaTensor,
+    /// `[2, dim]` prompt K/V shift/scale when `cross_attn_mod`.
+    prompt_table: Option<CudaTensor>,
+    cross_attn_mod: bool,
 }
 
 struct Block {
@@ -182,10 +192,12 @@ pub struct Ltx2Transformer {
     cfg: Ltx2TransformerConfig,
     proj_in: Linear,
     audio_proj_in: Linear,
-    caption_projection: CaptionProjection,
-    audio_caption_projection: CaptionProjection,
+    caption_projection: Option<CaptionProjection>,
+    audio_caption_projection: Option<CaptionProjection>,
     time_embed: AdaLnSingle,
     audio_time_embed: AdaLnSingle,
+    prompt_adaln: Option<AdaLnSingle>,
+    audio_prompt_adaln: Option<AdaLnSingle>,
     cross_video_scale_shift: AdaLnSingle,
     cross_audio_scale_shift: AdaLnSingle,
     cross_video_gate: AdaLnSingle,
@@ -195,6 +207,9 @@ pub struct Ltx2Transformer {
     audio_scale_shift_table: CudaTensor,
     proj_out: Linear,
     audio_proj_out: Linear,
+    /// Loaded when `use_keyframes_abs_pos_embedding`; keyframe pipelines only.
+    #[expect(dead_code, reason = "T2AV forward does not take a keyframe mask yet")]
+    keyframes_abs_pos_embedding: Option<CudaTensor>,
     blocks: Vec<Block>,
     ones_video: CudaTensor,
     ones_audio: CudaTensor,
@@ -219,14 +234,11 @@ impl Ltx2Transformer {
     /// the production config without materialising 19B parameters; a model
     /// loaded this way is not the model.
     pub(crate) fn load_blocks(map: &WeightMap, keys: &Keys, cfg: &Ltx2TransformerConfig, which: &[usize]) -> Result<Self> {
-        if cfg.gated_attn || cfg.audio_gated_attn || cfg.cross_attn_mod || cfg.audio_cross_attn_mod || cfg.perturbed_attn || !cfg.use_prompt_embeddings {
-            return Err(msg("ltx2 dit: gated attention, prompt modulation and perturbed attention are LTX-2.3+, not supported"));
-        }
         if cfg.norm_elementwise_affine || cfg.patch_size != 1 || cfg.patch_size_t != 1 || !cfg.attention_bias || !cfg.attention_out_bias {
             return Err(msg("ltx2 dit: expected weightless block norms, 1x1x1 patches and biased attention"));
         }
         if cfg.cross_attention_dim != cfg.inner_dim() || cfg.audio_cross_attention_dim != cfg.audio_inner_dim() {
-            return Err(msg("ltx2 dit: the caption projections must lift the text to each stream's own width"));
+            return Err(msg("ltx2 dit: cross_attention_dim must match each stream width (projected text or connector output)"));
         }
         let (dv, da, eps) = (cfg.inner_dim(), cfg.audio_inner_dim(), cfg.norm_eps as f32);
         let (hv, ha) = (cfg.num_attention_heads, cfg.audio_num_attention_heads);
@@ -235,6 +247,9 @@ impl Ltx2Transformer {
         // Both directions attend in the audio head layout.
         let a2v_dims = AttentionDims { query_dim: dv, context_dim: da, ..audio_dims };
         let v2a_dims = AttentionDims { query_dim: da, context_dim: dv, ..audio_dims };
+        let video_mod_rows = if cfg.cross_attn_mod { 9 } else { 6 };
+        let audio_mod_rows = if cfg.audio_cross_attn_mod { 9 } else { 6 };
+        let prompt_mod = cfg.cross_attn_mod || cfg.audio_cross_attn_mod;
 
         let mut blocks = Vec::with_capacity(which.len());
         for &i in which {
@@ -242,24 +257,38 @@ impl Ltx2Transformer {
                 return Err(msg(format!("ltx2 dit: block {i} of a {}-block model", cfg.num_layers)));
             }
             let p = format!("transformer_blocks.{i}");
-            let attn = |name: &str, dims: AttentionDims| Attention::load(map, keys, &format!("{p}.{name}"), dims, eps);
+            let attn = |name: &str, dims: AttentionDims, gated: bool| Attention::load(map, keys, &format!("{p}.{name}"), dims, eps, gated);
+            let video_gated = cfg.gated_attn;
+            let audio_gated = cfg.audio_gated_attn;
             blocks.push(Block {
                 video: StreamBlock {
-                    attn1: attn("attn1", video_dims)?,
-                    attn2: attn("attn2", video_dims)?,
-                    ff: FeedForward::load(map, keys, &format!("{p}.ff"), dv, cfg.ff_inner_dim())?,
-                    scale_shift_table: table(map, &keys.key(&format!("{p}.scale_shift_table")), 6, dv)?,
+                    attn1: attn("attn1", video_dims, video_gated)?,
+                    attn2: attn("attn2", video_dims, video_gated)?,
+                    ff: FeedForward::load(map, keys, &format!("{p}.ff"), dv, cfg.ff_inner_dim(), cfg.ff_bias)?,
+                    scale_shift_table: table(map, &keys.key(&format!("{p}.scale_shift_table")), video_mod_rows, dv)?,
                     cross_table: table(map, &keys.key(&format!("{p}.video_a2v_cross_attn_scale_shift_table")), 5, dv)?,
+                    prompt_table: if prompt_mod {
+                        Some(table(map, &keys.key(&format!("{p}.prompt_scale_shift_table")), 2, dv)?)
+                    } else {
+                        None
+                    },
+                    cross_attn_mod: cfg.cross_attn_mod,
                 },
                 audio: StreamBlock {
-                    attn1: attn("audio_attn1", audio_dims)?,
-                    attn2: attn("audio_attn2", audio_dims)?,
-                    ff: FeedForward::load(map, keys, &format!("{p}.audio_ff"), da, cfg.audio_ff_inner_dim())?,
-                    scale_shift_table: table(map, &keys.key(&format!("{p}.audio_scale_shift_table")), 6, da)?,
+                    attn1: attn("audio_attn1", audio_dims, audio_gated)?,
+                    attn2: attn("audio_attn2", audio_dims, audio_gated)?,
+                    ff: FeedForward::load(map, keys, &format!("{p}.audio_ff"), da, cfg.audio_ff_inner_dim(), cfg.audio_ff_bias)?,
+                    scale_shift_table: table(map, &keys.key(&format!("{p}.audio_scale_shift_table")), audio_mod_rows, da)?,
                     cross_table: table(map, &keys.key(&format!("{p}.audio_a2v_cross_attn_scale_shift_table")), 5, da)?,
+                    prompt_table: if prompt_mod {
+                        Some(table(map, &keys.key(&format!("{p}.audio_prompt_scale_shift_table")), 2, da)?)
+                    } else {
+                        None
+                    },
+                    cross_attn_mod: cfg.audio_cross_attn_mod,
                 },
-                audio_to_video: attn("audio_to_video_attn", a2v_dims)?,
-                video_to_audio: attn("video_to_audio_attn", v2a_dims)?,
+                audio_to_video: attn("audio_to_video_attn", a2v_dims, video_gated)?,
+                video_to_audio: attn("video_to_audio_attn", v2a_dims, audio_gated)?,
             });
             if (i + 1) % 8 == 0 || i + 1 == cfg.num_layers {
                 let free = crate::wan::device::free_memory().map_or(-1.0, |(f, _)| f as f64 / f64::from(1u32 << 30));
@@ -267,13 +296,36 @@ impl Ltx2Transformer {
             }
         }
         let ada = |name: &str, dim: usize, rows: usize| AdaLnSingle::load(map, keys, name, dim, rows, cfg.timestep_proj_dim);
+        let caption = |name: &str, caption: usize, dim: usize| -> Result<Option<CaptionProjection>> {
+            if cfg.use_prompt_embeddings {
+                Ok(Some(CaptionProjection::load(map, keys, name, caption, dim)?))
+            } else {
+                Ok(None)
+            }
+        };
+        let prompt_ada = |name: &str, dim: usize| -> Result<Option<AdaLnSingle>> {
+            if prompt_mod && cfg.use_prompt_adaln_single {
+                Ok(Some(ada(name, dim, 2)?))
+            } else {
+                Ok(None)
+            }
+        };
+        let keyframes = if cfg.use_keyframes_abs_pos_embedding {
+            let mut t = cuda_tensor_shaped(map, &keys.key("keyframes_abs_pos_embedding"), &[1, dv])?;
+            t.pin_device()?;
+            Some(t)
+        } else {
+            None
+        };
         Ok(Self {
             proj_in: Linear::load(map, &keys.key("proj_in"), cfg.in_channels, dv, true)?,
             audio_proj_in: Linear::load(map, &keys.key("audio_proj_in"), cfg.audio_in_channels, da, true)?,
-            caption_projection: CaptionProjection::load(map, keys, "caption_projection", cfg.caption_channels, dv)?,
-            audio_caption_projection: CaptionProjection::load(map, keys, "audio_caption_projection", cfg.caption_channels, da)?,
-            time_embed: ada("time_embed", dv, 6)?,
-            audio_time_embed: ada("audio_time_embed", da, 6)?,
+            caption_projection: caption("caption_projection", cfg.caption_channels, dv)?,
+            audio_caption_projection: caption("audio_caption_projection", cfg.caption_channels, da)?,
+            time_embed: ada("time_embed", dv, video_mod_rows)?,
+            audio_time_embed: ada("audio_time_embed", da, audio_mod_rows)?,
+            prompt_adaln: prompt_ada("prompt_adaln", dv)?,
+            audio_prompt_adaln: prompt_ada("audio_prompt_adaln", da)?,
             cross_video_scale_shift: ada("av_cross_attn_video_scale_shift", dv, 4)?,
             cross_audio_scale_shift: ada("av_cross_attn_audio_scale_shift", da, 4)?,
             cross_video_gate: ada("av_cross_attn_video_a2v_gate", dv, 1)?,
@@ -282,6 +334,7 @@ impl Ltx2Transformer {
             audio_scale_shift_table: table(map, &keys.key("audio_scale_shift_table"), 2, da)?,
             proj_out: Linear::load(map, &keys.key("proj_out"), dv, cfg.out_channels, true)?,
             audio_proj_out: Linear::load(map, &keys.key("audio_proj_out"), da, cfg.audio_out_channels, true)?,
+            keyframes_abs_pos_embedding: keyframes,
             blocks,
             ones_video: ones(dv)?,
             ones_audio: ones(da)?,
@@ -293,9 +346,19 @@ impl Ltx2Transformer {
         &self.cfg
     }
 
-    /// The connectors' `[1, T, 3840]` contexts, lifted to each stream's width.
+    /// Connector text at `[1, T, caption_channels]` or, when
+    /// `use_prompt_embeddings` is false, already at each stream's width.
     pub fn project_text(&self, video: &CudaTensor, audio: &CudaTensor) -> Result<TextConditioning> {
-        Ok(TextConditioning { video: self.caption_projection.forward(video)?, audio: self.audio_caption_projection.forward(audio)? })
+        Ok(TextConditioning {
+            video: match &self.caption_projection {
+                Some(p) => p.forward(video)?,
+                None => video.clone(),
+            },
+            audio: match &self.audio_caption_projection {
+                Some(p) => p.forward(audio)?,
+                None => audio.clone(),
+            },
+        })
     }
 
     /// One joint forward. `video`: packed latents `[1, S, 128]`; `audio`:
@@ -336,12 +399,16 @@ impl Ltx2Transformer {
         let (a_main, a_embedded) = self.audio_time_embed.forward(timestep)?;
         let v_mod = StepModulation { main: v_main, cross: self.cross_video_scale_shift.forward(timestep)?.0, gate: self.cross_video_gate.forward(gate_t)?.0 };
         let a_mod = StepModulation { main: a_main, cross: self.cross_audio_scale_shift.forward(timestep)?.0, gate: self.cross_audio_gate.forward(gate_t)?.0 };
+        let (v_prompt, a_prompt) = match (&self.prompt_adaln, &self.audio_prompt_adaln) {
+            (Some(p), Some(a)) => (Some(p.forward(timestep)?.0), Some(a.forward(timestep)?.0)),
+            _ => (None, None),
+        };
 
         let mut xv = self.proj_in.forward(video)?;
         let mut xa = self.audio_proj_in.forward(audio)?;
         for (i, block) in self.blocks.iter().enumerate() {
             let tap = Tap { probe: probe.as_mut(), block: i };
-            (xv, xa) = self.block(block, xv, xa, text, &v_mod, &a_mod, ropes, eps, tap)?;
+            (xv, xa) = self.block(block, xv, xa, text, &v_mod, &a_mod, v_prompt.as_ref(), a_prompt.as_ref(), ropes, eps, tap)?;
             if let Some(obs) = observer.as_mut() {
                 obs(i, &xv, &xa)?;
             }
@@ -372,6 +439,8 @@ impl Ltx2Transformer {
         text: &TextConditioning,
         v_mod: &StepModulation,
         a_mod: &StepModulation,
+        v_prompt: Option<&CudaTensor>,
+        a_prompt: Option<&CudaTensor>,
         ropes: &Ropes,
         eps: f32,
         mut tap: Tap<'_, '_>,
@@ -396,16 +465,34 @@ impl Ltx2Transformer {
         tap.emit("audio", "attn1_out", &u)?;
         tap.emit("audio", "attn1_after", &xa)?;
 
-        // 2. text cross-attention: plain residual.
-        let h = xv.rms_norm(&self.ones_video, eps)?;
-        let u = b.video.attn2.forward(&h, Some(&text.video), None, None)?;
-        let xv = xv.add(&u)?;
+        // 2. text cross-attention (optional Q/KV AdaLN + output gate, LTX-2.5).
+        let text_cross = |stream: &StreamBlock, x: &CudaTensor, ctx: &CudaTensor, tab: &CudaTensor, ones: &CudaTensor, prompt: Option<&CudaTensor>, dim: usize| -> Result<(CudaTensor, CudaTensor, CudaTensor)> {
+            let mut h = x.rms_norm(ones, eps)?;
+            if stream.cross_attn_mod {
+                h = scale_shift(&h, &row(tab, 7)?, &row(tab, 6)?)?;
+            }
+            let mut enc = ctx.clone();
+            if let Some(pt) = &stream.prompt_table {
+                let tab_p = match prompt {
+                    Some(t) => pt.add(t)?,
+                    None => pt.clone(),
+                };
+                enc = scale_shift(&enc, &row(&tab_p, 1)?, &row(&tab_p, 0)?)?;
+            }
+            let u = stream.attn2.forward(&h, Some(&enc), None, None)?;
+            let u = if stream.cross_attn_mod {
+                u.mul(&row(tab, 8)?.reshape(vec![1, 1, dim])?)?
+            } else {
+                u
+            };
+            let out = x.add(&u)?;
+            Ok((h, u, out))
+        };
+        let (h, u, xv) = text_cross(&b.video, &xv, &text.video, &v_tab, &self.ones_video, v_prompt, dv)?;
         tap.emit("video", "attn2_in", &h)?;
         tap.emit("video", "attn2_out", &u)?;
         tap.emit("video", "attn2_after", &xv)?;
-        let h = xa.rms_norm(&self.ones_audio, eps)?;
-        let u = b.audio.attn2.forward(&h, Some(&text.audio), None, None)?;
-        let xa = xa.add(&u)?;
+        let (h, u, xa) = text_cross(&b.audio, &xa, &text.audio, &a_tab, &self.ones_audio, a_prompt, da)?;
         tap.emit("audio", "attn2_in", &h)?;
         tap.emit("audio", "attn2_out", &u)?;
         tap.emit("audio", "attn2_after", &xa)?;
@@ -591,17 +678,17 @@ mod tests {
             let at = table_plus(&map, &format!("{p}.audio_scale_shift_table"), 6, da, &a_main);
             // 1. self-attention: rows shift, scale, gate.
             let h = adaln_norm(&xv, &vt[1], &vt[0]);
-            let u = attention_reference(&map, &format!("{p}.attn1"), vd, &h, &h, Some(&tables.video), None);
+            let u = attention_reference(&map, &format!("{p}.attn1"), vd, &h, &h, Some(&tables.video), None, false);
             gated_add(&mut xv, &u, &vt[2]);
             let h = adaln_norm(&xa, &at[1], &at[0]);
-            let u = attention_reference(&map, &format!("{p}.audio_attn1"), ad, &h, &h, Some(&tables.audio), None);
+            let u = attention_reference(&map, &format!("{p}.audio_attn1"), ad, &h, &h, Some(&tables.audio), None, false);
             gated_add(&mut xa, &u, &at[2]);
             // 2. text cross-attention.
             let h: Vec<Vec<f32>> = xv.iter().map(|v| rms(v, None, 1e-6)).collect();
-            let u = attention_reference(&map, &format!("{p}.attn2"), vd, &h, &tv, None, None);
+            let u = attention_reference(&map, &format!("{p}.attn2"), vd, &h, &tv, None, None, false);
             xv.iter_mut().zip(&u).for_each(|(a, b)| add(a, b));
             let h: Vec<Vec<f32>> = xa.iter().map(|v| rms(v, None, 1e-6)).collect();
-            let u = attention_reference(&map, &format!("{p}.audio_attn2"), ad, &h, &ta, None, None);
+            let u = attention_reference(&map, &format!("{p}.audio_attn2"), ad, &h, &ta, None, None, false);
             xa.iter_mut().zip(&u).for_each(|(a, b)| add(a, b));
             // 3. a↔v from the same pre-update states; rows scale, shift per direction.
             let vc = table_plus(&map, &format!("{p}.video_a2v_cross_attn_scale_shift_table"), 5, dv, &v_cross);
@@ -616,6 +703,7 @@ mod tests {
                 &adaln_norm(&xa, &ac[0], &ac[1]),
                 Some(&tables.cross_video),
                 Some(&tables.cross_audio),
+                false,
             );
             let v2a = attention_reference(
                 &map,
@@ -625,6 +713,7 @@ mod tests {
                 &adaln_norm(&xv, &vc[2], &vc[3]),
                 Some(&tables.cross_audio),
                 Some(&tables.cross_video),
+                false,
             );
             gated_add(&mut xv, &a2v, &g_v);
             gated_add(&mut xa, &v2a, &g_a);
@@ -664,10 +753,33 @@ mod tests {
         assert!(unpack_video(&p, [2, 2, 3]).is_err());
     }
 
+    fn tiny_ltx25() -> Ltx2TransformerConfig {
+        Ltx2TransformerConfig {
+            in_channels: 6,
+            out_channels: 6,
+            num_attention_heads: 2,
+            attention_head_dim: 8,
+            cross_attention_dim: 16,
+            audio_in_channels: 5,
+            audio_out_channels: 5,
+            audio_num_attention_heads: 2,
+            audio_attention_head_dim: 4,
+            audio_cross_attention_dim: 8,
+            num_layers: 1,
+            caption_channels: 12,
+            timestep_proj_dim: 8,
+            ff_bias: false,
+            ..Ltx2TransformerConfig::ltx2_5_22b()
+        }
+    }
+
     #[test]
-    fn features_of_later_checkpoints_are_refused_at_load() {
-        let cfg = Ltx2TransformerConfig { gated_attn: true, ..tiny() };
-        let err = Ltx2Transformer::load(&weights(), &Keys::transformer(Layout::Diffusers), &cfg).err().map(|e| e.to_string());
-        assert!(err.is_some_and(|e| e.contains("LTX-2.3")));
+    fn load_blocks_accepts_ltx2_5_flags_on_one_block() {
+        let cfg = tiny_ltx25();
+        let model = Ltx2Transformer::load_blocks(&weights(), &Keys::transformer(Layout::Diffusers), &cfg, &[0]).unwrap();
+        assert_eq!(model.blocks.len(), 1);
+        assert!(model.caption_projection.is_none());
+        assert!(model.blocks[0].video.prompt_table.is_some());
+        assert_eq!(model.blocks[0].video.scale_shift_table.shape, [9, 16]);
     }
 }

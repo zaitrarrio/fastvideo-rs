@@ -159,6 +159,7 @@ pub enum Act {
 
 /// What one layer's attention sees: its rotary base and, for local layers, a
 /// sliding window. Gemma-3 alternates; Qwen uses one setting throughout.
+/// Gemma-4 full-attention layers may override head layout and partial rotary.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct LayerAttn {
     pub rope_theta: f64,
@@ -166,6 +167,35 @@ pub struct LayerAttn {
     pub rope_factor: f64,
     /// Attend only to keys with `query - key < window`.
     pub window: Option<usize>,
+    /// When set, overrides [`DecoderConfig::heads`] / [`DecoderConfig::head_dim`].
+    pub q_heads: Option<usize>,
+    pub q_head_dim: Option<usize>,
+    pub kv_heads: Option<usize>,
+    pub kv_head_dim: Option<usize>,
+    /// Fraction of each head width that gets RoPE (`rope_half` table width); the
+    /// tail passes through. Gemma-4 full layers use 0.25 on `global_head_dim`.
+    pub partial_rotary: Option<f64>,
+}
+
+impl LayerAttn {
+    pub const fn sliding(rope_theta: f64, window: usize) -> Self {
+        Self { rope_theta, rope_factor: 1.0, window: Some(window), q_heads: None, q_head_dim: None, kv_heads: None, kv_head_dim: None, partial_rotary: None }
+    }
+
+    pub const fn global(rope_theta: f64, rope_factor: f64) -> Self {
+        Self { rope_theta, rope_factor, window: None, q_heads: None, q_head_dim: None, kv_heads: None, kv_head_dim: None, partial_rotary: None }
+    }
+
+    /// RoPE table width for a head of `head_dim` channels.
+    pub fn rotary_width(&self, head_dim: usize) -> usize {
+        match self.partial_rotary {
+            Some(f) => {
+                let r = (head_dim as f64 * f).round() as usize;
+                r.max(2) & !1
+            }
+            None => head_dim,
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -198,9 +228,27 @@ pub struct DecoderConfig {
     pub layer_prefix: String,
     pub embed_key: String,
     pub final_norm_key: String,
+    /// Gemma-4: K and V share one projection; only `k_proj` is loaded.
+    pub attention_k_eq_v: bool,
 }
 
 impl DecoderConfig {
+    pub fn layer_heads(&self, layer: usize) -> usize {
+        self.layers[layer].q_heads.unwrap_or(self.heads)
+    }
+
+    pub fn layer_head_dim(&self, layer: usize) -> usize {
+        self.layers[layer].q_head_dim.unwrap_or(self.head_dim)
+    }
+
+    pub fn layer_kv_heads(&self, layer: usize) -> usize {
+        self.layers[layer].kv_heads.unwrap_or(self.kv_heads)
+    }
+
+    pub fn layer_kv_head_dim(&self, layer: usize) -> usize {
+        self.layers[layer].kv_head_dim.unwrap_or(self.head_dim)
+    }
+
     /// The text half of Qwen3-VL-32B (`text_config` of the checkpoint MiniMax-H3
     /// ships). For text-only input the three M-RoPE axes carry the same
     /// position, which makes the interleaved M-RoPE an ordinary rotary.
@@ -220,10 +268,11 @@ impl DecoderConfig {
             sandwich_norms: false,
             embed_scale: 1.0,
             attn_scale: (head_dim as f32).powf(-0.5),
-            layers: vec![LayerAttn { rope_theta: 5_000_000.0, rope_factor: 1.0, window: None }; 64],
+            layers: vec![LayerAttn::global(5_000_000.0, 1.0); 64],
             layer_prefix: "model.language_model.layers".into(),
             embed_key: "model.language_model.embed_tokens.weight".into(),
             final_norm_key: "model.language_model.norm.weight".into(),
+            attention_k_eq_v: false,
         }
     }
 
@@ -247,10 +296,11 @@ impl DecoderConfig {
             sandwich_norms: false,
             embed_scale: 1.0,
             attn_scale: (head_dim as f32).powf(-0.5),
-            layers: vec![LayerAttn { rope_theta: 5_000_000.0, rope_factor: 1.0, window: None }; 24],
+            layers: vec![LayerAttn::global(5_000_000.0, 1.0); 24],
             layer_prefix: "model.layers".into(),
             embed_key: "model.embed_tokens.weight".into(),
             final_norm_key: "model.norm.weight".into(),
+            attention_k_eq_v: false,
         }
     }
 
@@ -260,9 +310,9 @@ impl DecoderConfig {
         let layers = (0..48)
             .map(|i| {
                 if (i + 1) % 6 == 0 {
-                    LayerAttn { rope_theta: 1_000_000.0, rope_factor: 8.0, window: None }
+                    LayerAttn::global(1_000_000.0, 8.0)
                 } else {
-                    LayerAttn { rope_theta: 10_000.0, rope_factor: 1.0, window: Some(1024) }
+                    LayerAttn::sliding(10_000.0, 1024)
                 }
             })
             .collect();
@@ -285,6 +335,58 @@ impl DecoderConfig {
             layer_prefix: "language_model.model.layers".into(),
             embed_key: "language_model.model.embed_tokens.weight".into(),
             final_norm_key: "language_model.model.norm.weight".into(),
+            attention_k_eq_v: false,
+        }
+    }
+
+    /// Gemma-4-12B unified text tower in `Lightricks/LTX-2.5-Diffusers`
+    /// (`text_encoder/config.json` → `text_config`). Sliding layers match
+    /// Gemma-3; every sixth layer is full attention with `global_head_dim=512`,
+    /// one KV head, and partial rotary (0.25). Keys are `model.language_model.*`
+    /// in the Diffusers pack (Gemma-3 LTX-2 uses `language_model.model.*`).
+    ///
+    /// TODO: full-attention layers use `rope_type=proportional` in HF; this path
+    /// uses the same inverse-frequency layout as Gemma-3 global layers (θ=1e6,
+    /// positions ÷ 8) with partial rotary on the first 128 of 512 channels.
+    pub fn gemma4_12b_text() -> Self {
+        let global = LayerAttn {
+            rope_theta: 1_000_000.0,
+            rope_factor: 8.0,
+            window: None,
+            q_heads: None,
+            q_head_dim: Some(512),
+            kv_heads: Some(1),
+            kv_head_dim: Some(512),
+            partial_rotary: Some(0.25),
+        };
+        let layers = (0..48)
+            .map(|i| {
+                if (i + 1) % 6 == 0 {
+                    global
+                } else {
+                    LayerAttn::sliding(10_000.0, 1024)
+                }
+            })
+            .collect();
+        Self {
+            vocab: 262_144,
+            hidden: 3840,
+            heads: 16,
+            kv_heads: 8,
+            head_dim: 256,
+            intermediate: 15360,
+            rms_eps: 1e-6,
+            norm_offset: 1.0,
+            act: Act::GeluTanh,
+            qk_norm: true,
+            sandwich_norms: true,
+            embed_scale: (3840f32).sqrt(),
+            attn_scale: (256f32).powf(-0.5),
+            layers,
+            layer_prefix: "model.language_model.layers".into(),
+            embed_key: "model.language_model.embed_tokens.weight".into(),
+            final_norm_key: "model.language_model.norm.weight".into(),
+            attention_k_eq_v: true,
         }
     }
 
@@ -316,31 +418,42 @@ fn norm_from(w: CudaTensor, offset: f32) -> Result<CudaTensor> {
 }
 
 /// The seven projections of a layer: key suffix, input width, output width.
-fn linear_specs(cfg: &DecoderConfig) -> [(&'static str, usize, usize); 7] {
-    let (h, d) = (cfg.hidden, cfg.head_dim);
+fn linear_specs(cfg: &DecoderConfig, layer: usize) -> [(&'static str, usize, usize); 7] {
+    let h = cfg.hidden;
+    let hq = cfg.layer_heads(layer);
+    let hkv = cfg.layer_kv_heads(layer);
+    let dq = cfg.layer_head_dim(layer);
+    let dkv = cfg.layer_kv_head_dim(layer);
     [
-        ("self_attn.q_proj", h, cfg.heads * d),
-        ("self_attn.k_proj", h, cfg.kv_heads * d),
-        ("self_attn.v_proj", h, cfg.kv_heads * d),
-        ("self_attn.o_proj", cfg.heads * d, h),
+        ("self_attn.q_proj", h, hq * dq),
+        ("self_attn.k_proj", h, hkv * dkv),
+        ("self_attn.v_proj", h, hkv * dkv),
+        ("self_attn.o_proj", hq * dq, h),
         ("mlp.gate_proj", h, cfg.intermediate),
         ("mlp.up_proj", h, cfg.intermediate),
         ("mlp.down_proj", cfg.intermediate, h),
     ]
 }
 
+/// Largest linear weight block in any layer (for prefetch pinned sizing).
+pub(crate) fn max_layer_linear_elems(cfg: &DecoderConfig) -> usize {
+    (0..cfg.num_layers()).map(|i| linear_specs(cfg, i).iter().map(|(_, i, o)| i * o).sum()).max().unwrap_or(0)
+}
+
 /// The norm weights of a layer: key suffix (without `.weight`) and width.
 #[cfg_attr(not(feature = "cuda"), allow(dead_code))]
-fn norm_specs(cfg: &DecoderConfig) -> Vec<(&'static str, usize)> {
-    let (h, d) = (cfg.hidden, cfg.head_dim);
+fn norm_specs(cfg: &DecoderConfig, layer: usize) -> Vec<(&'static str, usize)> {
+    let h = cfg.hidden;
+    let dq = cfg.layer_head_dim(layer);
+    let dkv = cfg.layer_kv_head_dim(layer);
     let mut v = vec![("input_layernorm", h), ("post_attention_layernorm", h)];
     if cfg.sandwich_norms {
         v.push(("pre_feedforward_layernorm", h));
         v.push(("post_feedforward_layernorm", h));
     }
     if cfg.qk_norm {
-        v.push(("self_attn.q_norm", d));
-        v.push(("self_attn.k_norm", d));
+        v.push(("self_attn.q_norm", dq));
+        v.push(("self_attn.k_norm", dkv));
     }
     v
 }
@@ -348,7 +461,7 @@ fn norm_specs(cfg: &DecoderConfig) -> Vec<(&'static str, usize)> {
 pub(crate) struct Layer {
     q: Linear,
     k: Linear,
-    v: Linear,
+    v: Option<Linear>,
     o: Linear,
     gate: Linear,
     up: Linear,
@@ -370,6 +483,7 @@ impl Layer {
         let p = format!("{}.{index}", cfg.layer_prefix);
         Self::assemble(
             cfg,
+            index,
             &mut |name, i, o| match precision {
                 WeightPrecision::Native => Linear::load(map, &format!("{p}.{name}"), i, o, false),
                 WeightPrecision::Fp8Rows => Linear::load_fp8_rows(map, &format!("{p}.{name}"), i, o, false),
@@ -383,11 +497,12 @@ impl Layer {
     /// cannot disagree on which key feeds which slot.
     pub(crate) fn assemble(
         cfg: &DecoderConfig,
+        layer: usize,
         lin: &mut dyn FnMut(&str, usize, usize) -> Result<Linear>,
         norm: &mut dyn FnMut(&str, usize) -> Result<CudaTensor>,
     ) -> Result<Self> {
-        let (h, d) = (cfg.hidden, cfg.head_dim);
-        let [q, k, v, o, gate, up, down] = linear_specs(cfg);
+        let h = cfg.hidden;
+        let [q, k, v, o, gate, up, down] = linear_specs(cfg, layer);
         // The two families name the pre-MLP norm differently: in a sandwich
         // layer `post_attention_layernorm` really is after attention and the
         // pre-MLP norm is `pre_feedforward_layernorm`.
@@ -400,16 +515,18 @@ impl Layer {
         } else {
             (None, norm("post_attention_layernorm", h)?, None)
         };
+        let dq = cfg.layer_head_dim(layer);
+        let dkv = cfg.layer_kv_head_dim(layer);
         Ok(Self {
             q: lin(q.0, q.1, q.2)?,
             k: lin(k.0, k.1, k.2)?,
-            v: lin(v.0, v.1, v.2)?,
+            v: if cfg.attention_k_eq_v { None } else { Some(lin(v.0, v.1, v.2)?) },
             o: lin(o.0, o.1, o.2)?,
             gate: lin(gate.0, gate.1, gate.2)?,
             up: lin(up.0, up.1, up.2)?,
             down: lin(down.0, down.1, down.2)?,
-            q_norm: if cfg.qk_norm { Some(norm("self_attn.q_norm", d)?) } else { None },
-            k_norm: if cfg.qk_norm { Some(norm("self_attn.k_norm", d)?) } else { None },
+            q_norm: if cfg.qk_norm { Some(norm("self_attn.q_norm", dq)?) } else { None },
+            k_norm: if cfg.qk_norm { Some(norm("self_attn.k_norm", dkv)?) } else { None },
             norm_attn_in: norm("input_layernorm", h)?,
             norm_attn_out: attn_out,
             norm_mlp_in: mlp_in,
@@ -417,21 +534,29 @@ impl Layer {
         })
     }
 
-    /// `x`: `[1, S, hidden]`. `cos`/`sin`: `[S, head_dim]`. `mask`: `[1, 1, S, S]`.
+    /// `x`: `[1, S, hidden]`. `cos`/`sin`: `[S, R]` with `R` the rotary width.
+    /// `mask`: `[1, 1, S, S]`.
     fn forward(
         &self,
         cfg: &DecoderConfig,
+        layer: usize,
         x: &CudaTensor,
         cos: &CudaTensor,
         sin: &CudaTensor,
         mask: &CudaTensor,
     ) -> Result<CudaTensor> {
         let s = x.shape[1];
-        let (hq, hkv, d) = (cfg.heads, cfg.kv_heads, cfg.head_dim);
+        let hq = cfg.layer_heads(layer);
+        let hkv = cfg.layer_kv_heads(layer);
+        let dq = cfg.layer_head_dim(layer);
+        let dkv = cfg.layer_kv_head_dim(layer);
+        if hq % hkv != 0 {
+            return Err(msg(format!("llm layer {layer}: {hq} query heads over {hkv} kv heads")));
+        }
 
         let h = x.rms_norm(&self.norm_attn_in, cfg.rms_eps)?;
         // [1, S, H*D] -> [1, S, H, D]: the per-head norm is an RMSNorm over D.
-        let split = |t: CudaTensor, heads: usize, norm: &Option<CudaTensor>| -> Result<CudaTensor> {
+        let split = |t: CudaTensor, heads: usize, d: usize, norm: &Option<CudaTensor>| -> Result<CudaTensor> {
             let t = t.reshape(vec![1, s, heads, d])?;
             let t = match norm {
                 Some(w) => t.rms_norm(w, cfg.rms_eps)?,
@@ -439,12 +564,14 @@ impl Layer {
             };
             t.transpose(1, 2)
         };
-        let q = split(self.q.forward(&h)?, hq, &self.q_norm)?.rope_half(cos, sin)?;
-        let k = split(self.k.forward(&h)?, hkv, &self.k_norm)?.rope_half(cos, sin)?;
-        let v = split(self.v.forward(&h)?, hkv, &None)?;
+        let q = split(self.q.forward(&h)?, hq, dq, &self.q_norm)?.rope_half(cos, sin)?;
+        let k_h = self.k.forward(&h)?;
+        let v_h = if let Some(v) = &self.v { v.forward(&h)? } else { k_h.clone() };
+        let k = split(k_h, hkv, dkv, &self.k_norm)?.rope_half(cos, sin)?;
+        let v = split(v_h, hkv, dkv, &None)?;
         let (k, v) = (k.repeat_kv(hq / hkv)?, v.repeat_kv(hq / hkv)?);
         let a = scaled_dot_product_attention_masked(&q, &k, &v, Some(cfg.attn_scale), Some(mask))?;
-        let a = self.o.forward(&a.transpose(1, 2)?.reshape(vec![1, s, hq * d])?)?;
+        let a = self.o.forward(&a.transpose(1, 2)?.reshape(vec![1, s, hq * dq])?)?;
         let a = match &self.norm_attn_out {
             Some(w) => a.rms_norm(w, cfg.rms_eps)?,
             None => a,
@@ -466,24 +593,26 @@ impl Layer {
     }
 }
 
-/// `[S, head_dim]` cos/sin in the rotate_half layout (`cat(freqs, freqs)`),
-/// computed in f64 like the references do before casting.
+/// `[S, R]` cos/sin in the rotate_half layout (`cat(freqs, freqs)`),
+/// computed in f64 like the references do before casting. `head_dim` is the
+/// per-head channel width; `R` is the rotary table width (full head or partial).
 fn rope_tables(positions: &[u32], head_dim: usize, la: &LayerAttn) -> Result<(CudaTensor, CudaTensor)> {
-    let half = head_dim / 2;
+    let r = la.rotary_width(head_dim);
+    let half = r / 2;
     let s = positions.len();
-    let (mut cos, mut sin) = (vec![0f32; s * head_dim], vec![0f32; s * head_dim]);
+    let (mut cos, mut sin) = (vec![0f32; s * r], vec![0f32; s * r]);
     for (p, &pos) in positions.iter().enumerate() {
         for k in 0..half {
             let inv = la.rope_theta.powf(-((2 * k) as f64) / head_dim as f64);
             let ang = f64::from(pos) / la.rope_factor * inv;
             for j in [k, k + half] {
-                cos[p * head_dim + j] = ang.cos() as f32;
-                sin[p * head_dim + j] = ang.sin() as f32;
+                cos[p * r + j] = ang.cos() as f32;
+                sin[p * r + j] = ang.sin() as f32;
             }
         }
     }
-    let mut c = CudaTensor::from_vec(cos, vec![s, head_dim])?;
-    let mut sn = CudaTensor::from_vec(sin, vec![s, head_dim])?;
+    let mut c = CudaTensor::from_vec(cos, vec![s, r])?;
+    let mut sn = CudaTensor::from_vec(sin, vec![s, r])?;
     c.pin_device()?;
     sn.pin_device()?;
     Ok((c, sn))
@@ -572,9 +701,6 @@ fn encode<S: LayerSource>(
     if s == 0 || positions.len() != s || attend.len() != s {
         return Err(msg(format!("llm: {s} ids, {} positions, {} attend flags", positions.len(), attend.len())));
     }
-    if cfg.heads % cfg.kv_heads != 0 || cfg.head_dim % 2 != 0 {
-        return Err(msg(format!("llm: {} heads over {} kv heads, head_dim {}", cfg.heads, cfg.kv_heads, cfg.head_dim)));
-    }
     let n = cfg.num_layers();
     let last = *taps.iter().max().ok_or_else(|| msg("llm: no taps requested"))?;
     if last > n {
@@ -593,19 +719,20 @@ fn encode<S: LayerSource>(
     let mut x = embedded;
     // Rotary tables and masks are shared by every layer with the same settings
     // (one kind for Qwen, two for Gemma-3), so build each once.
-    let mut ropes: Vec<(LayerAttn, (CudaTensor, CudaTensor))> = Vec::new();
+    let mut ropes: Vec<(LayerAttn, usize, (CudaTensor, CudaTensor))> = Vec::new();
     let mut masks: Vec<(Option<usize>, CudaTensor)> = Vec::new();
     for (i, la) in cfg.layers.iter().enumerate().take(last) {
         keep(i, &x);
-        if !ropes.iter().any(|(k, _)| k == la) {
-            ropes.push((*la, rope_tables(positions, cfg.head_dim, la)?));
+        let hd = cfg.layer_head_dim(i);
+        if !ropes.iter().any(|(k, h, _)| k == la && *h == hd) {
+            ropes.push((*la, hd, rope_tables(positions, hd, la)?));
         }
         if !masks.iter().any(|(w, _)| *w == la.window) {
             masks.push((la.window, attn_mask(attend, la.window)?));
         }
-        let (cos, sin) = &ropes.iter().find(|(k, _)| k == la).expect("just inserted").1;
+        let (cos, sin) = &ropes.iter().find(|(k, h, _)| k == la && *h == hd).expect("just inserted").2;
         let mask = &masks.iter().find(|(w, _)| *w == la.window).expect("just inserted").1;
-        x = source.with_layer(i, |layer| layer.forward(cfg, &x, cos, sin, mask))?;
+        x = source.with_layer(i, |layer| layer.forward(cfg, i, &x, cos, sin, mask))?;
         if progress {
             crate::wan::log::info(format_args!("llm layer {}/{last}", i + 1));
         }
@@ -709,8 +836,8 @@ pub fn prefetch_self_check(dir: &std::path::Path, stored_bf16: bool) -> Result<P
     let mut tensors: Vec<(String, Vec<usize>)> = vec![(cfg.embed_key.clone(), vec![cfg.vocab, cfg.hidden])];
     for l in 0..cfg.num_layers() {
         let p = format!("{}.{l}", cfg.layer_prefix);
-        tensors.extend(linear_specs(&cfg).iter().map(|(n, i, o)| (format!("{p}.{n}.weight"), vec![*o, *i])));
-        tensors.extend(norm_specs(&cfg).iter().map(|(n, w)| (format!("{p}.{n}.weight"), vec![*w])));
+        tensors.extend(linear_specs(&cfg, l).iter().map(|(n, i, o)| (format!("{p}.{n}.weight"), vec![*o, *i])));
+        tensors.extend(norm_specs(&cfg, l).iter().map(|(n, w)| (format!("{p}.{n}.weight"), vec![*w])));
     }
     tensors.push((cfg.final_norm_key.clone(), vec![cfg.hidden]));
 
@@ -888,6 +1015,7 @@ impl ResidentDecoder {
             let apply = lora_layers.contains(&i);
             let layer = Layer::assemble(
                 cfg,
+                i,
                 &mut |name, in_dim, out_dim| {
                     let key = format!("{p}.{name}");
                     let wt = cuda_tensor_shaped(map, &format!("{key}.weight"), &[out_dim, in_dim])?;
@@ -992,12 +1120,22 @@ mod tests {
             embed_scale: if sandwich { 8f32.sqrt() } else { 1.0 },
             attn_scale: 0.5,
             layers: vec![
-                LayerAttn { rope_theta: 10_000.0, rope_factor: 1.0, window: if sandwich { Some(2) } else { None } },
-                LayerAttn { rope_theta: 1_000_000.0, rope_factor: if sandwich { 8.0 } else { 1.0 }, window: None },
+                LayerAttn {
+                    rope_theta: 10_000.0,
+                    rope_factor: 1.0,
+                    window: if sandwich { Some(2) } else { None },
+                    q_heads: None,
+                    q_head_dim: None,
+                    kv_heads: None,
+                    kv_head_dim: None,
+                    partial_rotary: None,
+                },
+                LayerAttn::global(1_000_000.0, if sandwich { 8.0 } else { 1.0 }),
             ],
             layer_prefix: "m.layers".into(),
             embed_key: "m.embed.weight".into(),
             final_norm_key: "m.norm.weight".into(),
+            attention_k_eq_v: false,
         }
     }
 
@@ -1232,10 +1370,11 @@ mod tests {
     /// have been staged, with the same width, and nothing staged may go unused.
     #[test]
     fn the_specs_are_exactly_what_a_layer_asks_for() {
-        for cfg in [tiny(false), tiny(true), DecoderConfig::qwen3_vl_32b_text(), DecoderConfig::gemma3_12b_text()] {
+        for cfg in [tiny(false), tiny(true), DecoderConfig::qwen3_vl_32b_text(), DecoderConfig::gemma3_12b_text(), DecoderConfig::gemma4_12b_text()] {
             let (mut lins, mut norms) = (Vec::new(), Vec::new());
             Layer::assemble(
                 &cfg,
+                0,
                 &mut |name, i, o| {
                     lins.push((name.to_string(), i, o));
                     Ok(Linear::zeros(i, o, false))
@@ -1246,9 +1385,12 @@ mod tests {
                 },
             )
             .unwrap();
-            let want: Vec<_> = linear_specs(&cfg).iter().map(|(n, i, o)| (n.to_string(), *i, *o)).collect();
+            let mut want: Vec<_> = linear_specs(&cfg, 0).iter().map(|(n, i, o)| (n.to_string(), *i, *o)).collect();
+            if cfg.attention_k_eq_v {
+                want.retain(|(n, _, _)| n != "self_attn.v_proj");
+            }
             assert_eq!(lins, want, "linears are served in spec order");
-            let mut staged: Vec<_> = norm_specs(&cfg).iter().map(|(n, w)| (n.to_string(), *w)).collect();
+            let mut staged: Vec<_> = norm_specs(&cfg, 0).iter().map(|(n, w)| (n.to_string(), *w)).collect();
             staged.sort();
             norms.sort();
             assert_eq!(norms, staged);
@@ -1268,5 +1410,24 @@ mod tests {
         assert!((g.embed_scale - 61.967_734).abs() < 1e-4);
         assert_eq!(g.for_bf16_reference().embed_scale, 62.0);
         assert_eq!(DecoderConfig::qwen3_vl_32b_text().for_bf16_reference().embed_scale, 1.0);
+    }
+
+    #[test]
+    fn gemma4_12b_text_layout() {
+        let g = DecoderConfig::gemma4_12b_text();
+        assert_eq!(g.num_layers(), 48);
+        assert_eq!(g.vocab, 262_144);
+        assert!(g.attention_k_eq_v);
+        assert_eq!(g.layer_prefix, "model.language_model.layers");
+        let globals: Vec<usize> = (0..g.num_layers()).filter(|&i| g.layers[i].window.is_none()).collect();
+        assert_eq!(globals, vec![5, 11, 17, 23, 29, 35, 41, 47]);
+        assert_eq!(g.layers[4].window, Some(1024));
+        assert_eq!(g.layers[5].rope_theta, 1_000_000.0);
+        assert_eq!(g.layer_head_dim(5), 512);
+        assert_eq!(g.layer_kv_heads(5), 1);
+        assert_eq!(g.layers[5].partial_rotary, Some(0.25));
+        assert_eq!(g.layers[5].rotary_width(512), 128);
+        assert_eq!(g.layer_head_dim(0), 256);
+        assert_eq!(g.for_bf16_reference().embed_scale, 62.0);
     }
 }

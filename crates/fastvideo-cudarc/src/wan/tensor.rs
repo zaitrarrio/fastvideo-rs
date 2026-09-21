@@ -712,6 +712,14 @@ impl CudaTensor {
         .expect("silu")
     }
 
+    /// Element-wise σ(x). Small tensors (e.g. per-head gate logits) only.
+    pub fn try_sigmoid(&self) -> Result<CudaTensor> {
+        let out = super::ops::host::map1(&self.host_cow()?, |x| 1.0 / (1.0 + (-x).exp()));
+        let mut t = Self::host_only(out, self.shape.clone());
+        t.pin_device()?;
+        Ok(t)
+    }
+
     /// Value-first SwiGLU: last dim is `(v, g)` and the result is `v * silu(g)`.
     /// One pass over the packed buffer — last-dim [`Self::narrow`] copies each half.
     pub fn swiglu_value_first(&self) -> Result<CudaTensor> {

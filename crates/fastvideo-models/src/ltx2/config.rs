@@ -6,7 +6,14 @@
 //! so a serde derive can be dropped in once this crate takes the dependency.
 //! `fastvideo-models` has no serde today, so the published values are
 //! hand-written constructors, checked below against the numbers the weight
-//! headers imply. See docs/ports/ltx2.md for where each number comes from.
+//! headers imply. See docs/ports/ltx2.md and docs/ports/ltx25.md.
+
+/// Checkpoint family: LTX-2.0 dev/distilled vs LTX-2.5 distilled stage-1.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Ltx2ModelVersion {
+    V20,
+    V25,
+}
 
 /// How `LTX2Attention` rotates q/k. LTX-2.0 ships `"split"`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -67,6 +74,10 @@ pub struct Ltx2TransformerConfig {
     pub audio_cross_attn_mod: bool,
     pub use_prompt_embeddings: bool,
     pub perturbed_attn: bool,
+    pub ff_bias: bool,
+    pub audio_ff_bias: bool,
+    pub use_prompt_adaln_single: bool,
+    pub use_keyframes_abs_pos_embedding: bool,
 }
 
 impl Ltx2TransformerConfig {
@@ -114,6 +125,27 @@ impl Ltx2TransformerConfig {
             audio_cross_attn_mod: false,
             use_prompt_embeddings: true,
             perturbed_attn: false,
+            ff_bias: true,
+            audio_ff_bias: true,
+            use_prompt_adaln_single: true,
+            use_keyframes_abs_pos_embedding: false,
+        }
+    }
+
+    /// `Lightricks/LTX-2.5-Diffusers` distilled DiT (`transformer/config.json`).
+    pub fn ltx2_5_22b() -> Self {
+        Self {
+            gated_attn: true,
+            cross_attn_mod: true,
+            audio_gated_attn: true,
+            audio_cross_attn_mod: true,
+            use_prompt_embeddings: false,
+            perturbed_attn: true,
+            ff_bias: false,
+            audio_ff_bias: true,
+            use_prompt_adaln_single: true,
+            use_keyframes_abs_pos_embedding: true,
+            ..Self::ltx2_19b()
         }
     }
 
@@ -186,20 +218,64 @@ pub fn round_half_even(x: f64) -> f64 {
     }
 }
 
+/// `LTX2VideoUpsampler3d.upsample_type` in diffusers (`autoencoder_kl_ltx2.py`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Ltx2VaeUpsampleKind {
+    SpatioTemporal,
+    Temporal,
+    Spatial,
+}
+
+impl Ltx2VaeUpsampleKind {
+    /// Depth-to-space stride `(T, H, W)` for this upsampler kind.
+    pub fn stride(self) -> (usize, usize, usize) {
+        match self {
+            Self::SpatioTemporal => (2, 2, 2),
+            Self::Temporal => (2, 1, 1),
+            Self::Spatial => (1, 2, 2),
+        }
+    }
+
+    pub fn stride_product(self) -> usize {
+        let (t, h, w) = self.stride();
+        t * h * w
+    }
+}
+
+/// One decoder upsampler before a stage's resnets (`decoder_stages`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Ltx2VaeDecoderUpsampler {
+    pub in_channels: usize,
+    pub conv_out_channels: usize,
+    pub stride: (usize, usize, usize),
+    pub residual: bool,
+    /// Drop the first output frame when the temporal stride is greater than 1.
+    pub drop_first_frame: bool,
+}
+
+/// One decoder stage: `mid_block` or an `up_blocks.*` entry.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Ltx2VaeDecoderStage {
+    pub channels: usize,
+    pub resnet_layers: usize,
+    pub upsampler: Option<Ltx2VaeDecoderUpsampler>,
+}
+
 /// `vae/config.json` — `AutoencoderKLLTX2Video`.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Ltx2VideoVaeConfig {
     pub in_channels: usize,
     pub out_channels: usize,
     pub latent_channels: usize,
-    pub block_out_channels: [usize; 4],
-    pub decoder_block_out_channels: [usize; 3],
-    pub layers_per_block: [usize; 5],
-    pub decoder_layers_per_block: [usize; 4],
-    pub decoder_spatio_temporal_scaling: [bool; 3],
-    pub decoder_inject_noise: [bool; 4],
-    pub upsample_residual: [bool; 3],
-    pub upsample_factor: [usize; 3],
+    pub block_out_channels: Vec<usize>,
+    pub decoder_block_out_channels: Vec<usize>,
+    pub layers_per_block: Vec<usize>,
+    pub decoder_layers_per_block: Vec<usize>,
+    pub decoder_spatio_temporal_scaling: Vec<bool>,
+    pub decoder_inject_noise: Vec<bool>,
+    pub upsample_residual: Vec<bool>,
+    pub upsample_factor: Vec<usize>,
+    pub upsample_type: Vec<Ltx2VaeUpsampleKind>,
     pub timestep_conditioning: bool,
     pub patch_size: usize,
     pub patch_size_t: usize,
@@ -222,14 +298,19 @@ impl Ltx2VideoVaeConfig {
             in_channels: 3,
             out_channels: 3,
             latent_channels: 128,
-            block_out_channels: [256, 512, 1024, 2048],
-            decoder_block_out_channels: [256, 512, 1024],
-            layers_per_block: [4, 6, 6, 2, 2],
-            decoder_layers_per_block: [5, 5, 5, 5],
-            decoder_spatio_temporal_scaling: [true, true, true],
-            decoder_inject_noise: [false, false, false, false],
-            upsample_residual: [true, true, true],
-            upsample_factor: [2, 2, 2],
+            block_out_channels: vec![256, 512, 1024, 2048],
+            decoder_block_out_channels: vec![256, 512, 1024],
+            layers_per_block: vec![4, 6, 6, 2, 2],
+            decoder_layers_per_block: vec![5, 5, 5, 5],
+            decoder_spatio_temporal_scaling: vec![true, true, true],
+            decoder_inject_noise: vec![false, false, false, false],
+            upsample_residual: vec![true, true, true],
+            upsample_factor: vec![2, 2, 2],
+            upsample_type: vec![
+                Ltx2VaeUpsampleKind::SpatioTemporal,
+                Ltx2VaeUpsampleKind::SpatioTemporal,
+                Ltx2VaeUpsampleKind::SpatioTemporal,
+            ],
             timestep_conditioning: false,
             patch_size: 4,
             patch_size_t: 1,
@@ -244,24 +325,65 @@ impl Ltx2VideoVaeConfig {
         }
     }
 
-    /// Decoder stages in execution order: `(resnet channels, resnet count,
-    /// upsampler conv out-channels)`. The first is `mid_block` (no upsampler);
+    /// Conv video VAE in `Lightricks/LTX-2.5-Diffusers` (`vae/config.json`).
+    pub fn ltx2_5_22b() -> Self {
+        Self {
+            block_out_channels: vec![256, 512, 1024, 1024],
+            decoder_block_out_channels: vec![256, 512, 512, 1024],
+            layers_per_block: vec![4, 6, 4, 2, 2],
+            decoder_layers_per_block: vec![4, 6, 4, 2, 2],
+            decoder_spatio_temporal_scaling: vec![true, true, true, true],
+            decoder_inject_noise: vec![false, false, false, false, false],
+            upsample_residual: vec![false, false, false, false],
+            upsample_factor: vec![2, 2, 1, 2],
+            upsample_type: vec![
+                Ltx2VaeUpsampleKind::SpatioTemporal,
+                Ltx2VaeUpsampleKind::SpatioTemporal,
+                Ltx2VaeUpsampleKind::Temporal,
+                Ltx2VaeUpsampleKind::Spatial,
+            ],
+            decoder_reflect_padding: false,
+            ..Self::ltx2_19b()
+        }
+    }
+
+    /// Decoder stages in execution order. The first is `mid_block` (no upsampler);
     /// each later stage's upsampler runs *before* its resnets.
-    pub fn decoder_stages(&self) -> Vec<(usize, usize, Option<usize>)> {
+    pub fn decoder_stages(&self) -> Vec<Ltx2VaeDecoderStage> {
         let mut widths: Vec<usize> = self.decoder_block_out_channels.to_vec();
         widths.reverse();
         let mut layers: Vec<usize> = self.decoder_layers_per_block.to_vec();
         layers.reverse();
         let mut factors: Vec<usize> = self.upsample_factor.to_vec();
         factors.reverse();
-        let mut out = vec![(widths[0], layers[0], None)];
-        let mut prev = widths[0];
+        let mut kinds: Vec<Ltx2VaeUpsampleKind> = self.upsample_type.to_vec();
+        kinds.reverse();
+        let mut residuals: Vec<bool> = self.upsample_residual.to_vec();
+        residuals.reverse();
+        let mut out = vec![Ltx2VaeDecoderStage {
+            channels: widths[0],
+            resnet_layers: layers[0],
+            upsampler: None,
+        }];
         for (i, &w) in widths.iter().enumerate() {
-            let ch = w / factors[i];
-            // Conv to `ch * 2*2*2` channels, then depth-to-space by (2, 2, 2).
-            out.push((ch, layers[i + 1], Some(ch * 8)));
-            debug_assert_eq!(prev, ch * factors[i]);
-            prev = ch;
+            let factor = factors[i];
+            let ch = w / factor;
+            let kind = kinds[i];
+            let stride = kind.stride();
+            let sp = kind.stride_product();
+            let conv_out = (w * sp) / factor;
+            debug_assert_eq!(out.last().map(|s| s.channels), Some(w));
+            out.push(Ltx2VaeDecoderStage {
+                channels: ch,
+                resnet_layers: layers[i + 1],
+                upsampler: Some(Ltx2VaeDecoderUpsampler {
+                    in_channels: w,
+                    conv_out_channels: conv_out,
+                    stride,
+                    residual: residuals[i],
+                    drop_first_frame: stride.0 > 1,
+                }),
+            });
         }
         out
     }
@@ -356,6 +478,10 @@ pub struct Ltx2ConnectorsConfig {
     pub rope_type: Ltx2RopeType,
     pub per_modality_projections: bool,
     pub proj_bias: bool,
+    pub video_gated_attn: bool,
+    pub audio_gated_attn: bool,
+    pub video_hidden_dim: usize,
+    pub audio_hidden_dim: usize,
     /// `per_layer_masked_mean_norm(scale_factor=8)` default, `connectors.py:18`.
     pub norm_scale_factor: f64,
     pub norm_eps: f64,
@@ -381,8 +507,31 @@ impl Ltx2ConnectorsConfig {
             rope_type: Ltx2RopeType::Split,
             per_modality_projections: false,
             proj_bias: false,
+            video_gated_attn: false,
+            audio_gated_attn: false,
+            video_hidden_dim: 3840,
+            audio_hidden_dim: 3840,
             norm_scale_factor: 8.0,
             norm_eps: 1e-6,
+        }
+    }
+
+    /// `Lightricks/LTX-2.5-Diffusers` (`connectors/config.json`).
+    pub fn ltx2_5_22b() -> Self {
+        Self {
+            video_connector_num_attention_heads: 32,
+            video_connector_attention_head_dim: 128,
+            video_connector_num_layers: 8,
+            audio_connector_num_attention_heads: 32,
+            audio_connector_attention_head_dim: 64,
+            audio_connector_num_layers: 8,
+            per_modality_projections: true,
+            proj_bias: true,
+            video_gated_attn: true,
+            audio_gated_attn: true,
+            video_hidden_dim: 4096,
+            audio_hidden_dim: 2048,
+            ..Self::ltx2_19b()
         }
     }
 
@@ -391,9 +540,13 @@ impl Ltx2ConnectorsConfig {
         self.caption_channels * self.text_proj_in_factor
     }
 
-    /// Both connectors are 30 × 128 = 3840 wide.
+    /// Video connector stream width (`video_hidden_dim` on 2.5).
     pub fn inner_dim(&self) -> usize {
-        self.video_connector_num_attention_heads * self.video_connector_attention_head_dim
+        self.video_hidden_dim
+    }
+
+    pub fn audio_inner_dim(&self) -> usize {
+        self.audio_hidden_dim
     }
 }
 
@@ -403,8 +556,8 @@ pub struct Ltx2VocoderConfig {
     pub in_channels: usize,
     pub hidden_channels: usize,
     pub out_channels: usize,
-    pub upsample_kernel_sizes: [usize; 5],
-    pub upsample_factors: [usize; 5],
+    pub upsample_kernel_sizes: Vec<usize>,
+    pub upsample_factors: Vec<usize>,
     pub resnet_kernel_sizes: [usize; 3],
     pub resnet_dilations: [[usize; 3]; 3],
     pub leaky_relu_negative_slope: f64,
@@ -413,6 +566,8 @@ pub struct Ltx2VocoderConfig {
     pub final_leaky_relu_negative_slope: f64,
     pub final_tanh: bool,
     pub output_sampling_rate: usize,
+    /// `LTX2VocoderWithBWE` (LTX-2.5): SnakeBeta + band-width extension stack.
+    pub with_bwe: bool,
 }
 
 impl Ltx2VocoderConfig {
@@ -421,14 +576,31 @@ impl Ltx2VocoderConfig {
             in_channels: 128,
             hidden_channels: 1024,
             out_channels: 2,
-            upsample_kernel_sizes: [16, 15, 8, 4, 4],
-            upsample_factors: [6, 5, 2, 2, 2],
+            upsample_kernel_sizes: vec![16, 15, 8, 4, 4],
+            upsample_factors: vec![6, 5, 2, 2, 2],
             resnet_kernel_sizes: [3, 7, 11],
             resnet_dilations: [[1, 3, 5], [1, 3, 5], [1, 3, 5]],
             leaky_relu_negative_slope: 0.1,
             final_leaky_relu_negative_slope: 0.01,
             final_tanh: true,
             output_sampling_rate: 24000,
+            with_bwe: false,
+        }
+    }
+
+    /// `LTX2VocoderWithBWE` in LTX-2.5 (`vocoder/config.json`); BWE sub-stack not
+    /// modeled here beyond the flag and main upsampler geometry.
+    pub fn ltx2_5_22b_bwe() -> Self {
+        Self {
+            in_channels: 128,
+            hidden_channels: 1536,
+            out_channels: 2,
+            upsample_kernel_sizes: vec![11, 4, 4, 4, 4, 4],
+            upsample_factors: vec![5, 2, 2, 2, 2, 2],
+            output_sampling_rate: 48000,
+            final_tanh: false,
+            with_bwe: true,
+            ..Self::ltx2_19b()
         }
     }
 
@@ -590,6 +762,105 @@ impl Gemma3TextConfig {
     }
 }
 
+/// `text_encoder/config.json` → `text_config` (Gemma-4-12B unified text tower).
+#[derive(Debug, Clone, PartialEq)]
+pub struct Gemma4TextConfig {
+    pub vocab_size: usize,
+    pub hidden_size: usize,
+    pub intermediate_size: usize,
+    pub num_hidden_layers: usize,
+    pub num_attention_heads: usize,
+    pub num_key_value_heads: usize,
+    pub head_dim: usize,
+    pub global_head_dim: usize,
+    pub num_global_key_value_heads: usize,
+    pub query_pre_attn_scalar: f64,
+    pub rms_norm_eps: f64,
+    pub rope_theta_full: f64,
+    pub rope_theta_sliding: f64,
+    pub rope_scaling_factor: f64,
+    pub partial_rotary_factor_full: f64,
+    pub sliding_window: usize,
+    pub sliding_window_pattern: usize,
+    pub max_position_embeddings: usize,
+    pub attention_bias: bool,
+    pub attention_k_eq_v: bool,
+    pub attn_logit_softcapping: Option<f64>,
+    pub final_logit_softcapping: Option<f64>,
+    pub pad_token_id: u32,
+    pub eos_token_id: u32,
+    pub bos_token_id: u32,
+}
+
+impl Gemma4TextConfig {
+    pub fn ltx2_5_22b() -> Self {
+        Self {
+            vocab_size: 262_144,
+            hidden_size: 3840,
+            intermediate_size: 15360,
+            num_hidden_layers: 48,
+            num_attention_heads: 16,
+            num_key_value_heads: 8,
+            head_dim: 256,
+            global_head_dim: 512,
+            num_global_key_value_heads: 1,
+            query_pre_attn_scalar: 256.0,
+            rms_norm_eps: 1e-6,
+            rope_theta_full: 1_000_000.0,
+            rope_theta_sliding: 10_000.0,
+            rope_scaling_factor: 8.0,
+            partial_rotary_factor_full: 0.25,
+            sliding_window: 1024,
+            sliding_window_pattern: 6,
+            max_position_embeddings: 262_144,
+            attention_bias: false,
+            attention_k_eq_v: true,
+            attn_logit_softcapping: None,
+            final_logit_softcapping: Some(30.0),
+            pad_token_id: 0,
+            eos_token_id: 1,
+            bos_token_id: 2,
+        }
+    }
+
+    pub fn is_global_layer(&self, layer: usize) -> bool {
+        (layer + 1).is_multiple_of(self.sliding_window_pattern)
+    }
+
+    pub fn attention_scale(&self) -> f64 {
+        self.query_pre_attn_scalar.powf(-0.5)
+    }
+
+    pub fn q_dim(&self, layer: usize) -> usize {
+        if self.is_global_layer(layer) {
+            self.num_attention_heads * self.global_head_dim
+        } else {
+            self.num_attention_heads * self.head_dim
+        }
+    }
+
+    pub fn kv_dim(&self, layer: usize) -> usize {
+        if self.is_global_layer(layer) {
+            self.num_global_key_value_heads * self.global_head_dim
+        } else {
+            self.num_key_value_heads * self.head_dim
+        }
+    }
+
+    pub fn embed_scale(&self, bf16: bool) -> f32 {
+        let s = (self.hidden_size as f32).sqrt();
+        if bf16 {
+            half_bf16_round(s)
+        } else {
+            s
+        }
+    }
+
+    pub fn num_hidden_states(&self) -> usize {
+        self.num_hidden_layers + 1
+    }
+}
+
 /// Round an f32 to the nearest bfloat16 (8 exponent bits, 7 mantissa bits),
 /// ties to even. Only for normal, in-range values — all this module needs.
 fn half_bf16_round(x: f32) -> f32 {
@@ -627,6 +898,7 @@ impl Ltx2PipelineDefaults {
 /// Every component config for one checkpoint.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Ltx2Config {
+    pub version: Ltx2ModelVersion,
     pub transformer: Ltx2TransformerConfig,
     pub vae: Ltx2VideoVaeConfig,
     pub audio_vae: Ltx2AudioVaeConfig,
@@ -634,12 +906,14 @@ pub struct Ltx2Config {
     pub vocoder: Ltx2VocoderConfig,
     pub scheduler: Ltx2SchedulerConfig,
     pub text_encoder: Gemma3TextConfig,
+    pub gemma4: Option<Gemma4TextConfig>,
     pub defaults: Ltx2PipelineDefaults,
 }
 
 /// `Lightricks/LTX-2` as published (the dev transformer and its scheduler).
 pub fn ltx2_19b() -> Ltx2Config {
     Ltx2Config {
+        version: Ltx2ModelVersion::V20,
         transformer: Ltx2TransformerConfig::ltx2_19b(),
         vae: Ltx2VideoVaeConfig::ltx2_19b(),
         audio_vae: Ltx2AudioVaeConfig::ltx2_19b(),
@@ -647,6 +921,7 @@ pub fn ltx2_19b() -> Ltx2Config {
         vocoder: Ltx2VocoderConfig::ltx2_19b(),
         scheduler: Ltx2SchedulerConfig::ltx2_19b(),
         text_encoder: Gemma3TextConfig::ltx2_19b(),
+        gemma4: None,
         defaults: Ltx2PipelineDefaults::ltx2_19b(),
     }
 }
@@ -655,6 +930,20 @@ pub fn ltx2_19b() -> Ltx2Config {
 /// connector weights, and a scheduler that leaves the sigma list alone.
 pub fn ltx2_19b_distilled() -> Ltx2Config {
     Ltx2Config { scheduler: Ltx2SchedulerConfig::ltx2_19b_distilled(), ..ltx2_19b() }
+}
+
+/// LTX-2.5 distilled stage-1 T2AV (Gemma 4 + 2.5 DiT/VAE/vocoder/connectors).
+pub fn ltx2_5_22b_distilled() -> Ltx2Config {
+    Ltx2Config {
+        version: Ltx2ModelVersion::V25,
+        transformer: Ltx2TransformerConfig::ltx2_5_22b(),
+        vae: Ltx2VideoVaeConfig::ltx2_5_22b(),
+        connectors: Ltx2ConnectorsConfig::ltx2_5_22b(),
+        vocoder: Ltx2VocoderConfig::ltx2_5_22b_bwe(),
+        scheduler: Ltx2SchedulerConfig::ltx2_19b_distilled(),
+        gemma4: Some(Gemma4TextConfig::ltx2_5_22b()),
+        ..ltx2_19b()
+    }
 }
 
 #[cfg(test)]
@@ -723,7 +1012,42 @@ mod tests {
         // upsamplers 1024→4096, 512→2048, 256→1024.
         assert_eq!(
             c.decoder_stages(),
-            vec![(1024, 5, None), (512, 5, Some(4096)), (256, 5, Some(2048)), (128, 5, Some(1024))]
+            vec![
+                Ltx2VaeDecoderStage { channels: 1024, resnet_layers: 5, upsampler: None },
+                Ltx2VaeDecoderStage {
+                    channels: 512,
+                    resnet_layers: 5,
+                    upsampler: Some(Ltx2VaeDecoderUpsampler {
+                        in_channels: 1024,
+                        conv_out_channels: 4096,
+                        stride: (2, 2, 2),
+                        residual: true,
+                        drop_first_frame: true,
+                    }),
+                },
+                Ltx2VaeDecoderStage {
+                    channels: 256,
+                    resnet_layers: 5,
+                    upsampler: Some(Ltx2VaeDecoderUpsampler {
+                        in_channels: 512,
+                        conv_out_channels: 2048,
+                        stride: (2, 2, 2),
+                        residual: true,
+                        drop_first_frame: true,
+                    }),
+                },
+                Ltx2VaeDecoderStage {
+                    channels: 128,
+                    resnet_layers: 5,
+                    upsampler: Some(Ltx2VaeDecoderUpsampler {
+                        in_channels: 256,
+                        conv_out_channels: 1024,
+                        stride: (2, 2, 2),
+                        residual: true,
+                        drop_first_frame: true,
+                    }),
+                },
+            ]
         );
         assert_eq!(c.decoded_frames(16), 121);
         assert_eq!(c.decoded_frames(1), 1);
@@ -743,6 +1067,7 @@ mod tests {
         assert_eq!(v.in_channels, a.output_channels * a.mel_bins);
         assert_eq!(v.total_upsample_factor(), 240);
         assert_eq!((0..5).map(|i| v.upsample_padding(i)).collect::<Vec<_>>(), vec![5, 5, 3, 1, 1]);
+        assert!(!v.with_bwe);
         assert_eq!((0..5).map(|i| v.stage_channels(i)).collect::<Vec<_>>(), vec![512, 256, 128, 64, 32]);
         assert_eq!(v.waveform_samples(501), 501 * 240);
         // One mel frame is 10 ms at either rate: 160 samples @ 16 kHz in, 240 @ 24 kHz out.
@@ -789,5 +1114,57 @@ mod tests {
         assert!(dev.scheduler.use_dynamic_shifting && !dist.scheduler.use_dynamic_shifting);
         assert_eq!(dev.scheduler.shift_terminal, Some(0.1));
         assert_eq!(dist.scheduler.shift_terminal, None);
+    }
+
+    #[test]
+    fn ltx25_transformer_flags() {
+        let c = Ltx2TransformerConfig::ltx2_5_22b();
+        assert!(c.gated_attn && c.audio_gated_attn && c.cross_attn_mod && c.audio_cross_attn_mod);
+        assert!(c.perturbed_attn && c.use_keyframes_abs_pos_embedding);
+        assert!(!c.ff_bias && c.audio_ff_bias);
+        assert!(!c.use_prompt_embeddings && c.use_prompt_adaln_single);
+        assert_eq!(c.inner_dim(), 4096);
+        assert_eq!(c.num_layers, 48);
+    }
+
+    #[test]
+    fn ltx25_connectors() {
+        let c = Ltx2ConnectorsConfig::ltx2_5_22b();
+        assert!(c.per_modality_projections && c.proj_bias);
+        assert!(c.video_gated_attn && c.audio_gated_attn);
+        assert_eq!(c.video_hidden_dim, 4096);
+        assert_eq!(c.audio_hidden_dim, 2048);
+        assert_eq!(c.video_connector_num_layers, 8);
+        assert_eq!(c.text_proj_in_factor, Gemma4TextConfig::ltx2_5_22b().num_hidden_states());
+    }
+
+    #[test]
+    fn ltx25_video_vae_decoder_stages() {
+        let stages = Ltx2VideoVaeConfig::ltx2_5_22b().decoder_stages();
+        assert_eq!(stages.len(), 5);
+        assert_eq!(stages[0].channels, 1024);
+        assert_eq!(stages[1].upsampler.as_ref().map(|u| u.conv_out_channels), Some(4096));
+        assert_eq!(stages[2].upsampler.as_ref().map(|u| u.stride), Some((2, 1, 1)));
+        assert_eq!(stages[2].upsampler.as_ref().map(|u| u.residual), Some(false));
+        assert_eq!(stages[3].upsampler.as_ref().map(|u| u.stride), Some((1, 2, 2)));
+    }
+
+    #[test]
+    fn ltx25_vocoder_geometry() {
+        let v = Ltx2VocoderConfig::ltx2_5_22b_bwe();
+        assert_eq!(v.upsample_factors.len(), 6);
+        assert_eq!(v.total_upsample_factor(), 160);
+        assert_eq!(v.stage_channels(0), 768);
+        assert_eq!(v.stage_channels(5), 24);
+    }
+
+    #[test]
+    fn ltx25_bundle_version() {
+        let cfg = ltx2_5_22b_distilled();
+        assert_eq!(cfg.version, Ltx2ModelVersion::V25);
+        assert!(cfg.gemma4.is_some());
+        assert!(!cfg.scheduler.use_dynamic_shifting);
+        assert!(cfg.vocoder.with_bwe);
+        assert_eq!(cfg.vocoder.output_sampling_rate, 48000);
     }
 }

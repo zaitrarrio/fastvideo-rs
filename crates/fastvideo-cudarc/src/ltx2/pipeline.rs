@@ -22,8 +22,8 @@
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
-use fastvideo_models::ltx2::config::Ltx2Config;
-use fastvideo_models::ltx2::Ltx2Schedule;
+use fastvideo_models::ltx2::config::{Ltx2Config, Ltx2ModelVersion};
+use fastvideo_models::ltx2::{AncestralOpts, Ltx2Schedule};
 use rand::{Rng, SeedableRng};
 use rand_distr::StandardNormal;
 
@@ -181,6 +181,56 @@ pub fn denoise(
         sync()?;
         let secs = timer.elapsed().as_secs_f64();
         crate::wan::log::info(format_args!("ltx2 step {}/{} sigma {:.6} ({secs:.2}s)", i + 1, schedule.num_steps(), schedule.sigmas[i]));
+        if let Some(obs) = observer.as_mut() {
+            obs(i, &video, &audio, secs)?;
+        }
+    }
+    Ok((video, audio))
+}
+
+fn apply_ancestral(
+    sample: &CudaTensor,
+    velocity: &CudaTensor,
+    sigma: f64,
+    sigma_next: f64,
+    opts: AncestralOpts,
+    rng: &mut rand::rngs::StdRng,
+) -> Result<CudaTensor> {
+    let mut x = sample.host_cow()?.into_owned();
+    let v = velocity.host_cow()?;
+    let denoised: Vec<f32> = x.iter().zip(v.iter()).map(|(s, vel)| Ltx2Schedule::denoised_from_velocity(*s, *vel, sigma)).collect();
+    let noise = if opts.eta > 0.0 {
+        Some((0..x.len()).map(|_| rng.sample::<f32, _>(StandardNormal)).collect::<Vec<f32>>())
+    } else {
+        None
+    };
+    Ltx2Schedule::ancestral_step(&mut x, &denoised, sigma, sigma_next, opts.eta, opts.s_noise, noise.as_deref());
+    Ok(CudaTensor::from_vec(x, sample.shape.clone())?)
+}
+
+/// Distilled ancestral loop (LTX-2.5): velocity → `x0`, then
+/// `EulerAncestralDiffusionStep` at each sigma.
+pub fn denoise_ancestral(
+    model: &Ltx2Transformer,
+    text: &TextConditioning,
+    ropes: &Ropes,
+    schedule: &Ltx2Schedule,
+    mut video: CudaTensor,
+    mut audio: CudaTensor,
+    opts: AncestralOpts,
+    mut observer: Option<StepObserver<'_>>,
+) -> Result<(CudaTensor, CudaTensor)> {
+    let mut rng = rand::rngs::StdRng::seed_from_u64(opts.noise_seed);
+    for i in 0..schedule.num_steps() {
+        let timer = Instant::now();
+        let sigma = schedule.sigmas[i];
+        let sigma_next = schedule.sigmas[i + 1];
+        let (v_video, v_audio) = model.forward(&video, &audio, text, schedule.timestep_f32(i), ropes, None)?;
+        video = apply_ancestral(&video, &v_video, sigma, sigma_next, opts, &mut rng)?;
+        audio = apply_ancestral(&audio, &v_audio, sigma, sigma_next, opts, &mut rng)?;
+        sync()?;
+        let secs = timer.elapsed().as_secs_f64();
+        crate::wan::log::info(format_args!("ltx2 ancestral step {}/{} sigma {:.6} ({secs:.2}s)", i + 1, schedule.num_steps(), sigma));
         if let Some(obs) = observer.as_mut() {
             obs(i, &video, &audio, secs)?;
         }
@@ -389,19 +439,39 @@ impl TextEncoder {
         self.paths.text_root().join("tokenizer").join("tokenizer.json")
     }
 
-    fn decoder_config() -> DecoderConfig {
+    fn decoder_config(cfg: &Ltx2Config) -> DecoderConfig {
         // The product runs Gemma in bf16, where the embedding multiplier is 62.0.
-        DecoderConfig::gemma3_12b_text().for_bf16_reference()
+        let dc = if cfg.gemma4.is_some() || cfg.version == Ltx2ModelVersion::V25 {
+            DecoderConfig::gemma4_12b_text()
+        } else {
+            DecoderConfig::gemma3_12b_text()
+        };
+        dc.for_bf16_reference()
+    }
+
+    fn text_encoder_kind(cfg: &Ltx2Config) -> &'static [u8] {
+        if cfg.gemma4.is_some() || cfg.version == Ltx2ModelVersion::V25 {
+            b"gemma4-12b"
+        } else {
+            b"gemma3-12b"
+        }
     }
 
     /// Device bytes a resident text path would add, from the shapes alone.
     fn resident_bytes(&self) -> u64 {
-        let (g, c) = (Self::decoder_config(), &self.cfg.connectors);
+        let g = Self::decoder_config(&self.cfg);
+        let c = &self.cfg.connectors;
         let width: u64 = if crate::wan::nn::bf16_linears_active() { 2 } else { 4 };
-        let per_layer = g.hidden * (g.heads + 2 * g.kv_heads) * g.head_dim + g.heads * g.head_dim * g.hidden + 3 * g.hidden * g.intermediate;
+        let per_layer: u64 = (0..g.num_layers())
+            .map(|i| {
+                let (hq, hkv, dq, dkv, h) = (g.layer_heads(i), g.layer_kv_heads(i), g.layer_head_dim(i), g.layer_kv_head_dim(i), g.hidden);
+                let v = if g.attention_k_eq_v { 0 } else { h * hkv * dkv };
+                (h * hq * dq + h * hkv * dkv + v + hq * dq * h + 3 * h * g.intermediate) as u64
+            })
+            .sum();
         let d = c.inner_dim();
         let connector = (c.video_connector_num_layers + c.audio_connector_num_layers) * (4 * d * d + 8 * d * d) + c.text_proj_in_features() * c.caption_channels;
-        (g.num_layers() * per_layer + connector) as u64 * width
+        (per_layer + connector as u64) * width
     }
 
     fn key(&mut self, prompt: &str) -> Result<String> {
@@ -424,7 +494,14 @@ impl TextEncoder {
             self.identity = Some((tokenizer, gemma, connectors));
         }
         let (tokenizer, gemma, connectors) = self.identity.as_ref().ok_or_else(|| err("ltx2: text identity missing"))?;
-        Ok(cache_key(prompt, tokenizer, self.cfg.defaults.max_sequence_length, gemma, connectors))
+        Ok(cache_key(
+            prompt,
+            tokenizer,
+            self.cfg.defaults.max_sequence_length,
+            Self::text_encoder_kind(&self.cfg),
+            gemma,
+            connectors,
+        ))
     }
 
     fn load_connectors(&self) -> Result<TextConnectors> {
@@ -447,7 +524,7 @@ impl TextEncoder {
             return Ok(());
         }
         let timer = Instant::now();
-        let cfg = Self::decoder_config();
+        let cfg = Self::decoder_config(&self.cfg);
         let map = WeightMap::open(&self.paths.text_root().join("text_encoder"))?;
         let gemma = ResidentDecoder::load(&map, &cfg, cfg.num_layers())?;
         let connectors = self.load_connectors()?;
@@ -466,7 +543,7 @@ impl TextEncoder {
             Some(r) => r.connectors.forward(&HiddenStack::encode_resident(&r.gemma, padded)?, padded.max_len())?,
             None => {
                 let gemma = WeightMap::open(&self.paths.text_root().join("text_encoder"))?;
-                let stack = HiddenStack::encode(&gemma, &Self::decoder_config(), padded)?;
+                let stack = HiddenStack::encode(&gemma, &Self::decoder_config(&self.cfg), padded)?;
                 drop(gemma);
                 self.load_connectors()?.forward(&stack, padded.max_len())?
             }
@@ -580,7 +657,21 @@ impl Ltx2Pipeline {
                 None => Ok(()),
             }
         };
-        let (video, audio) = denoise(&self.model, &text, &ropes, &Ltx2Schedule::distilled(), video, audio, Some(&mut record))?;
+        let schedule = Ltx2Schedule::distilled();
+        let (video, audio) = if cfg.version == Ltx2ModelVersion::V25 {
+            denoise_ancestral(
+                &self.model,
+                &text,
+                &ropes,
+                &schedule,
+                video,
+                audio,
+                AncestralOpts { eta: 1.0, s_noise: 1.0, noise_seed: req.seed + 10_000 },
+                Some(&mut record),
+            )?
+        } else {
+            denoise(&self.model, &text, &ropes, &schedule, video, audio, Some(&mut record))?
+        };
         timings.denoise_s = timer.elapsed().as_secs_f64();
         timings.step_s = step_s;
         drop((text, ropes));
@@ -640,8 +731,8 @@ mod tests {
             },
             vae: Ltx2VideoVaeConfig {
                 latent_channels: 4,
-                decoder_block_out_channels: [16, 32, 64],
-                decoder_layers_per_block: [1, 1, 1, 1],
+                decoder_block_out_channels: vec![16, 32, 64],
+                decoder_layers_per_block: vec![1, 1, 1, 1],
                 patch_size: 2,
                 ..Ltx2VideoVaeConfig::ltx2_19b()
             },
@@ -649,8 +740,8 @@ mod tests {
             vocoder: Ltx2VocoderConfig {
                 in_channels: 16,
                 hidden_channels: 64,
-                upsample_kernel_sizes: [7, 4, 4, 4, 4],
-                upsample_factors: [3, 2, 2, 2, 2],
+                upsample_kernel_sizes: vec![7, 4, 4, 4, 4],
+                upsample_factors: vec![3, 2, 2, 2, 2],
                 ..Ltx2VocoderConfig::ltx2_19b()
             },
             ..ltx2_19b_distilled()
@@ -691,6 +782,46 @@ mod tests {
 
     /// The loop against the update written out on the host, step by step, with
     /// the model evaluated at `1000·σ_i`.
+    #[test]
+    fn ancestral_one_step_matches_host_reference() {
+        let cfg = tiny();
+        let (model, text, ropes, grid, audio_tokens) = model_and_inputs(&cfg);
+        let (video, audio) = initial_noise(&cfg, grid, audio_tokens, 11).unwrap();
+        let schedule = Ltx2Schedule::distilled();
+        let opts = AncestralOpts { eta: 1.0, s_noise: 1.0, noise_seed: 99 };
+        let mut rng = rand::rngs::StdRng::seed_from_u64(opts.noise_seed);
+        let i = 4usize;
+        let sigma = schedule.sigmas[i];
+        let sigma_next = schedule.sigmas[i + 1];
+        let t = schedule.timestep_f32(i);
+        let (vv, va) = model.forward(&video, &audio, &text, t, &ropes, None).unwrap();
+        let mut want_v = video.host_cow().unwrap().into_owned();
+        let mut want_a = audio.host_cow().unwrap().into_owned();
+        let den_v: Vec<f32> = want_v
+            .iter()
+            .zip(vv.host_cow().unwrap().iter())
+            .map(|(x, v)| Ltx2Schedule::denoised_from_velocity(*x, *v, sigma))
+            .collect();
+        let den_a: Vec<f32> = want_a
+            .iter()
+            .zip(va.host_cow().unwrap().iter())
+            .map(|(x, v)| Ltx2Schedule::denoised_from_velocity(*x, *v, sigma))
+            .collect();
+        let noise_v: Vec<f32> = (0..want_v.len()).map(|_| rng.sample::<f32, _>(StandardNormal)).collect();
+        let noise_a: Vec<f32> = (0..want_a.len()).map(|_| rng.sample::<f32, _>(StandardNormal)).collect();
+        Ltx2Schedule::ancestral_step(&mut want_v, &den_v, sigma, sigma_next, opts.eta, opts.s_noise, Some(&noise_v));
+        Ltx2Schedule::ancestral_step(&mut want_a, &den_a, sigma, sigma_next, opts.eta, opts.s_noise, Some(&noise_a));
+        let mut rng2 = rand::rngs::StdRng::seed_from_u64(opts.noise_seed);
+        let got_v = apply_ancestral(&video, &vv, sigma, sigma_next, opts, &mut rng2).unwrap();
+        let got_a = apply_ancestral(&audio, &va, sigma, sigma_next, opts, &mut rng2).unwrap();
+        for (a, b) in got_v.host_cow().unwrap().iter().zip(&want_v) {
+            assert!((a - b).abs() < 1e-5, "video: {a} vs {b}");
+        }
+        for (a, b) in got_a.host_cow().unwrap().iter().zip(&want_a) {
+            assert!((a - b).abs() < 1e-5, "audio: {a} vs {b}");
+        }
+    }
+
     #[test]
     fn denoise_is_eight_euler_steps_on_the_distilled_sigmas() {
         let cfg = tiny();

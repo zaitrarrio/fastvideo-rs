@@ -122,6 +122,16 @@ pub struct Vocoder {
 impl Vocoder {
     /// `map` is the diffusers `vocoder/` folder.
     pub fn load(map: &WeightMap, cfg: &Ltx2VocoderConfig) -> Result<Self> {
+        // LTX-2.5 `LTX2VocoderWithBWE` adds a second SnakeBeta stack for band-width
+        // extension. Stage-1 gen only needs the main HiFi-GAN path at 48 kHz geometry;
+        // we load that stack with LeakyReLU activations (checkpoint uses SnakeBeta) and
+        // skip BWE weights until alias-free Snake is wired.
+        if cfg.with_bwe {
+            eprintln!(
+                "ltx2 vocoder: with_bwe=true — loading main upsampler stack only; \
+                 BWE/SnakeBeta activations approximated with LeakyReLU (audio parity not expected)"
+            );
+        }
         let per_stage = cfg.resnet_kernel_sizes.len();
         let mut stages = Vec::with_capacity(cfg.upsample_factors.len());
         let mut cin = cfg.hidden_channels;
@@ -251,8 +261,8 @@ mod tests {
         Ltx2VocoderConfig {
             in_channels: 6,
             hidden_channels: 8,
-            upsample_kernel_sizes: [7, 4, 4, 4, 4],
-            upsample_factors: [3, 2, 2, 2, 2],
+            upsample_kernel_sizes: vec![7, 4, 4, 4, 4],
+            upsample_factors: vec![3, 2, 2, 2, 2],
             ..Ltx2VocoderConfig::ltx2_19b()
         }
     }
@@ -328,6 +338,13 @@ mod tests {
         // Two rows: ‖(3, 4)‖ = 5, ‖(0, 2)‖ = 2.
         let w = fold_weight_norm(&[10.0, -1.0], &[3.0, 4.0, 0.0, 2.0], 2);
         assert_eq!(w, vec![6.0, 8.0, 0.0, -1.0]);
+    }
+
+    #[test]
+    fn ltx25_bwe_config_loads_main_stack() {
+        let cfg = Ltx2VocoderConfig::ltx2_5_22b_bwe();
+        Vocoder::load(&weights(), &cfg).expect("load main 6-stage stack");
+        assert_eq!(cfg.waveform_samples(10), 10 * cfg.total_upsample_factor());
     }
 
     #[test]

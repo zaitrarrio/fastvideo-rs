@@ -2,6 +2,16 @@
 
 Project code: FVID
 
+### FVID · 2026-09-21 · FVID-2026-09-21-ltx25-stage1
+- Trigger: "let's implement LTX 2.5" after H3 matrix; user locked scope to distilled stage-1 + conv VAE, no extras unless they help perf
+- Options: full 2.5 stack (DiffVAE/diffusion decoder, duration head, enhancer, two-stage); stage-1 only; Comfy-only vs Diffusers pack
+- Decision: **distilled stage-1 T2AV** on the existing `ltx2` modules with `Ltx2ModelVersion::V25`. Weights: `Lightricks/LTX-2.5-Diffusers` (oracle) / Comfy split pack. Gemma4 unified TE, 22B distilled DiT (`ff_bias=false`, gated attn, cross_attn_mod, `use_prompt_embeddings=false`), conv video VAE, audio VAE + **BWE vocoder** (required by checkpoint). Ancestral Euler for `model_version≥2.5`. Keep 2.0 path. Spec: `docs/ports/ltx25.md`.
+- Reason: matches the 2.0 milestone shape; official distilled stage-1 still needs gated/cross-attn-mod DiT + Gemma4 + BWE — those are checkpoint contracts, not optional product extras. Diffusion decoder / duration / stage-2 deferred.
+- Reversibility: cheap — version enum + opt-in weight roots
+- Executed by: Executor
+- ADR: none
+- Verification: *(in progress — host configs/gates/ancestral; GPU gen after weight fetch)*
+
 ### FVID · 2026-09-20 · FVID-2026-09-20-h3-matrix-followup
 - Trigger: after encoder matrix pass — run remaining weight/SKU gaps (Synthetic Step1900, Preview on 80 GB, longer clip)
 - Options: full matrix re-rent; serialize; skip Synthetic; raise res instead of duration
