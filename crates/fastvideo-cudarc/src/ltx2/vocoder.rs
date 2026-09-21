@@ -21,13 +21,24 @@
 
 use fastvideo_models::ltx2::config::Ltx2VocoderConfig;
 
+use crate::wan::ops::PadMode;
 use crate::wan::tensor::{CudaTensor, Result};
 use crate::wan::weights::{cuda_tensor_shaped, WeightMap};
 
 use super::{msg, tanh};
 
+/// Alias-free SnakeBeta geometry — same 12-tap / ratio-2 layout as H3 BigVGAN
+/// (`MiniMaxH3AudioUpSample1d` / `LowPassFilter1d`) and LTX-2.5 `Activation1d`.
+const FILTER_TAPS: usize = 12;
+const AA_RATIO: usize = 2;
+const UP_PAD: usize = FILTER_TAPS / AA_RATIO - 1; // 5
+const UP_CROP_LEFT: usize = UP_PAD * AA_RATIO + (FILTER_TAPS - AA_RATIO) / 2; // 15
+const UP_CROP_RIGHT: usize = UP_PAD * AA_RATIO + (FILTER_TAPS - AA_RATIO + 1) / 2; // 15
+const DOWN_PAD_LEFT: usize = FILTER_TAPS / 2 - 1; // 5
+const DOWN_PAD_RIGHT: usize = FILTER_TAPS / 2; // 6
+
 /// Nearest-neighbor upsample along the last axis of `[B, C, L]` — stand-in for
-/// the BWE 16→48 kHz lift until SnakeBeta resampling is implemented.
+/// the BWE Hann-sinc 16→48 kHz lift until MelSTFT+`bwe_generator` are wired.
 fn upsample_time_nearest(x: &CudaTensor, ratio: usize) -> Result<CudaTensor> {
     let [b, c, l] = match x.shape[..] {
         [b, c, l] => [b, c, l],
@@ -47,6 +58,54 @@ fn upsample_time_nearest(x: &CudaTensor, ratio: usize) -> Result<CudaTensor> {
         }
     }
     CudaTensor::from_vec(out, vec![b, c, l * ratio])
+}
+
+fn pinned(data: Vec<f32>, shape: Vec<usize>) -> Result<CudaTensor> {
+    let mut t = CudaTensor::from_vec(data, shape)?;
+    t.pin_device()?;
+    Ok(t)
+}
+
+fn host_values(map: &WeightMap, key: &str, shape: &[usize]) -> Result<Vec<f32>> {
+    Ok(cuda_tensor_shaped(map, key, shape)?.host_cow()?.into_owned())
+}
+
+fn depthwise_filter(taps: &[f32], channels: usize) -> Result<CudaTensor> {
+    let data: Vec<f32> = (0..channels).flat_map(|_| taps.iter().copied()).collect();
+    pinned(data, vec![channels, 1, FILTER_TAPS])
+}
+
+/// `Activation1d(SnakeBeta)`: upsample ×2 → SnakeBeta → downsample ×2.
+struct AliasFreeSnake {
+    alpha: CudaTensor,
+    inv_beta: CudaTensor,
+    filter: CudaTensor,
+}
+
+impl AliasFreeSnake {
+    fn load(map: &WeightMap, prefix: &str, channels: usize, taps: &[f32]) -> Result<Self> {
+        let alpha = host_values(map, &format!("{prefix}.act.alpha"), &[channels])?;
+        let beta = host_values(map, &format!("{prefix}.act.beta"), &[channels])?;
+        Ok(Self {
+            alpha: pinned(alpha.iter().map(|a| a.exp()).collect(), vec![channels])?,
+            inv_beta: pinned(beta.iter().map(|b| 1.0 / (b.exp() + 1e-9f32)).collect(), vec![channels])?,
+            filter: depthwise_filter(taps, channels)?,
+        })
+    }
+
+    fn forward(&self, x: &CudaTensor) -> Result<CudaTensor> {
+        let (channels, len) = (x.shape[1], x.shape[2]);
+        let up = x
+            .pad(2, UP_PAD, UP_PAD, PadMode::Replicate)?
+            .conv_transpose1d(&self.filter, None, 0, AA_RATIO, 1, channels, 0)?
+            .try_mul_scalar(AA_RATIO as f32)?;
+        let up = up.narrow(2, UP_CROP_LEFT, up.shape[2] - UP_CROP_LEFT - UP_CROP_RIGHT)?;
+        if up.shape[2] != AA_RATIO * len {
+            return Err(msg(format!("vocoder alias-free upsample produced {} samples from {len}", up.shape[2])));
+        }
+        let act = up.snake_beta(&self.alpha, &self.inv_beta)?;
+        act.pad(2, DOWN_PAD_LEFT, DOWN_PAD_RIGHT, PadMode::Replicate)?.conv1d(&self.filter, None, 0, AA_RATIO, 1, channels)
+    }
 }
 
 /// `w = g · v / ‖v‖`, the norm taken over everything but axis 0 (torch's
@@ -124,7 +183,7 @@ struct Upsampler {
 }
 
 /// One HiFi-GAN residual block: for each dilation, a dilated conv then a plain
-/// one, LeakyReLU before each, added back.
+/// one, LeakyReLU before each, added back. LTX-2.0 only.
 struct ResBlock {
     convs: Vec<(Conv1d, Conv1d)>,
 }
@@ -140,20 +199,61 @@ impl ResBlock {
     }
 }
 
+/// BigVGAN `AMPBlock1`: per dilation `x += conv2(act2(conv1(act1(x))))` with
+/// alias-free SnakeBeta. LTX-2.5 `vocoder.resnets.*`.
+struct AmpBlock {
+    stages: Vec<(AliasFreeSnake, Conv1d, AliasFreeSnake, Conv1d)>,
+}
+
+impl AmpBlock {
+    fn load(map: &WeightMap, prefix: &str, channels: usize, kernel: usize, dilations: &[usize], taps: &[f32]) -> Result<Self> {
+        let stages = dilations
+            .iter()
+            .enumerate()
+            .map(|(d, &dilation)| {
+                Ok((
+                    AliasFreeSnake::load(map, &format!("{prefix}.acts1.{d}"), channels, taps)?,
+                    Conv1d::load(map, &format!("{prefix}.convs1.{d}"), channels, channels, kernel, dilation)?,
+                    AliasFreeSnake::load(map, &format!("{prefix}.acts2.{d}"), channels, taps)?,
+                    Conv1d::load(map, &format!("{prefix}.convs2.{d}"), channels, channels, kernel, 1)?,
+                ))
+            })
+            .collect::<Result<Vec<_>>>()?;
+        Ok(Self { stages })
+    }
+
+    fn forward(&self, x: &CudaTensor) -> Result<CudaTensor> {
+        let mut x = x.clone();
+        for (act1, conv1, act2, conv2) in &self.stages {
+            let r = act1.forward(&x)?.conv1d(&conv1.weight, Some(&conv1.bias), conv1.padding, 1, conv1.dilation, 1)?;
+            let r = act2.forward(&r)?.conv1d(&conv2.weight, Some(&conv2.bias), conv2.padding, 1, conv2.dilation, 1)?;
+            x = x.add(&r)?;
+        }
+        Ok(x)
+    }
+}
+
+enum StageResnets {
+    Leaky(Vec<ResBlock>),
+    Amp(Vec<AmpBlock>),
+}
+
 pub struct Vocoder {
     cfg: Ltx2VocoderConfig,
     conv_in: Conv1d,
     /// Per upsample stage: the transposed conv and its parallel residual blocks.
-    stages: Vec<(Upsampler, Vec<ResBlock>)>,
+    stages: Vec<(Upsampler, StageResnets)>,
+    /// Alias-free Snake before `conv_out` (2.5); `None` → LeakyReLU 0.01 (2.0).
+    act_out: Option<AliasFreeSnake>,
     conv_out: Conv1d,
 }
 
 impl Vocoder {
     /// `map` is the diffusers `vocoder/` folder.
     pub fn load(map: &WeightMap, cfg: &Ltx2VocoderConfig) -> Result<Self> {
-        // LTX-2.5 `LTX2VocoderWithBWE` nests the HiFi-GAN under `vocoder.*` and adds a
-        // `bwe_generator.*` SnakeBeta stack. Stage-1 gen only needs the main path;
-        // Snake/BWE stay unloaded until alias-free activations are wired.
+        // LTX-2.5 nests the HiFi-GAN under `vocoder.*` and adds `bwe_generator.*`.
+        // SnakeBeta on the main path is required for audible audio; BWE (Hann-sinc
+        // ×3 + MelSTFT + residual) is still approximated by nearest ×3.
         let root = if map.has_tensor("vocoder.conv_in.weight")
             || map.has_tensor("vocoder.conv_in.weight_g")
             || map.has_tensor("vocoder.parametrizations.weight.original0")
@@ -162,13 +262,25 @@ impl Vocoder {
         } else {
             ""
         };
-        if cfg.with_bwe {
+        let snake = map.has_tensor(&format!("{root}act_out.act.alpha"))
+            || map.has_tensor(&format!("{root}resnets.0.acts1.0.act.alpha"));
+        if cfg.with_bwe && snake {
             eprintln!(
-                "ltx2 vocoder: with_bwe=true — loading main upsampler stack only \
-                 (key prefix `{root}`); BWE/SnakeBeta activations approximated with LeakyReLU \
-                 (audio parity not expected)"
+                "ltx2 vocoder: SnakeBeta main stack (prefix `{root}`); \
+                 BWE residual deferred — nearest ×{} lifts 16→48 kHz",
+                cfg.rate_upsample()
+            );
+        } else if cfg.with_bwe {
+            eprintln!(
+                "ltx2 vocoder: with_bwe=true but no SnakeBeta keys under `{root}` — \
+                 using LeakyReLU path (synthetic / incomplete checkpoint)"
             );
         }
+        let taps = if snake {
+            Some(host_values(map, &format!("{root}act_out.upsample.filter"), &[1, 1, FILTER_TAPS])?)
+        } else {
+            None
+        };
         let per_stage = cfg.resnet_kernel_sizes.len();
         let mut stages = Vec::with_capacity(cfg.upsample_factors.len());
         let mut cin = cfg.hidden_channels;
@@ -186,36 +298,55 @@ impl Vocoder {
             };
             bias.pin_device()?;
             let up = Upsampler { weight: conv_weight(map, &prefix, &[cin, cout, kernel])?, bias, stride, padding: cfg.upsample_padding(i) };
-            let blocks = cfg
-                .resnet_kernel_sizes
-                .iter()
-                .zip(&cfg.resnet_dilations)
-                .enumerate()
-                .map(|(j, (&k, dilations))| {
-                    let p = format!("{root}resnets.{}", i * per_stage + j);
-                    let convs = dilations
-                        .iter()
-                        .enumerate()
-                        .map(|(n, &d)| Ok((Conv1d::load(map, &format!("{p}.convs1.{n}"), cout, cout, k, d)?, Conv1d::load(map, &format!("{p}.convs2.{n}"), cout, cout, k, 1)?)))
-                        .collect::<Result<Vec<_>>>()?;
-                    Ok(ResBlock { convs })
-                })
-                .collect::<Result<Vec<_>>>()?;
+            let blocks = if let Some(taps) = taps.as_deref() {
+                let amps = cfg
+                    .resnet_kernel_sizes
+                    .iter()
+                    .zip(&cfg.resnet_dilations)
+                    .enumerate()
+                    .map(|(j, (&k, dilations))| AmpBlock::load(map, &format!("{root}resnets.{}", i * per_stage + j), cout, k, dilations, taps))
+                    .collect::<Result<Vec<_>>>()?;
+                StageResnets::Amp(amps)
+            } else {
+                let leaky = cfg
+                    .resnet_kernel_sizes
+                    .iter()
+                    .zip(&cfg.resnet_dilations)
+                    .enumerate()
+                    .map(|(j, (&k, dilations))| {
+                        let p = format!("{root}resnets.{}", i * per_stage + j);
+                        let convs = dilations
+                            .iter()
+                            .enumerate()
+                            .map(|(n, &d)| {
+                                Ok((
+                                    Conv1d::load(map, &format!("{p}.convs1.{n}"), cout, cout, k, d)?,
+                                    Conv1d::load(map, &format!("{p}.convs2.{n}"), cout, cout, k, 1)?,
+                                ))
+                            })
+                            .collect::<Result<Vec<_>>>()?;
+                        Ok(ResBlock { convs })
+                    })
+                    .collect::<Result<Vec<_>>>()?;
+                StageResnets::Leaky(leaky)
+            };
             stages.push((up, blocks));
             cin = cout;
         }
+        let act_out = taps.as_deref().map(|t| AliasFreeSnake::load(map, &format!("{root}act_out"), cin, t)).transpose()?;
         Ok(Self {
             conv_in: Conv1d::load(map, &format!("{root}conv_in"), cfg.in_channels, cfg.hidden_channels, 7, 1)?,
             stages,
+            act_out,
             conv_out: Conv1d::load(map, &format!("{root}conv_out"), cin, cfg.out_channels, 7, 1)?,
             cfg: cfg.clone(),
         })
     }
 
     /// Mel `[B, 2, T, 64]` → waveform `[B, 2, factor·T]` in `[-1, 1]` at
-    /// `output_sampling_rate`. For BWE checkpoints the main stack emits
-    /// 16 kHz–rate samples; we nearest-upsample ×`rate_upsample` to 48 kHz
-    /// until the SnakeBeta BWE generator is wired.
+    /// `output_sampling_rate`. For BWE checkpoints the SnakeBeta main stack
+    /// emits 16 kHz–rate samples; nearest ×`rate_upsample` lifts to 48 kHz
+    /// until Hann-sinc + `bwe_generator` land.
     pub fn forward(&self, mel: &CudaTensor) -> Result<CudaTensor> {
         let [b, c, t, m] = mel.shape[..] else {
             return Err(msg(format!("vocoder expects mel [B, C, T, M], got {:?}", mel.shape)));
@@ -224,15 +355,27 @@ impl Vocoder {
             return Err(msg(format!("vocoder expects {} mel channels, got {c} x {m} in {:?}", self.cfg.in_channels, mel.shape)));
         }
         let slope = self.cfg.leaky_relu_negative_slope as f32;
+        let snake = self.act_out.is_some();
         // [B, C, T, M] → [B, C, M, T] → [B, C·M, T].
         let mut x = self.conv_in.forward(&mel.permute(&[0, 1, 3, 2])?.reshape(vec![b, c * m, t])?)?;
         for (up, blocks) in &self.stages {
-            x = x.leaky_relu(slope).conv_transpose1d(&up.weight, Some(&up.bias), up.padding, up.stride, 1, 1, 0)?;
-            let outs = blocks.iter().map(|r| r.forward(&x, slope)).collect::<Result<Vec<_>>>()?;
+            x = if snake {
+                x.conv_transpose1d(&up.weight, Some(&up.bias), up.padding, up.stride, 1, 1, 0)?
+            } else {
+                x.leaky_relu(slope).conv_transpose1d(&up.weight, Some(&up.bias), up.padding, up.stride, 1, 1, 0)?
+            };
+            let outs = match blocks {
+                StageResnets::Leaky(rs) => rs.iter().map(|r| r.forward(&x, slope)).collect::<Result<Vec<_>>>()?,
+                StageResnets::Amp(amps) => amps.iter().map(|r| r.forward(&x)).collect::<Result<Vec<_>>>()?,
+            };
             let share = 1.0 / outs.len() as f32;
             x = CudaTensor::lincomb(&outs.iter().map(|o| (share, o)).collect::<Vec<_>>())?;
         }
-        let x = self.conv_out.forward(&x.leaky_relu(self.cfg.final_leaky_relu_negative_slope as f32))?;
+        let x = if let Some(act) = &self.act_out {
+            self.conv_out.forward(&act.forward(&x)?)?
+        } else {
+            self.conv_out.forward(&x.leaky_relu(self.cfg.final_leaky_relu_negative_slope as f32))?
+        };
         let x = if self.cfg.final_tanh { tanh(&x)? } else { x };
         let ratio = self.cfg.rate_upsample();
         if ratio <= 1 {
@@ -389,7 +532,7 @@ mod tests {
     fn ltx25_bwe_config_loads_main_stack() {
         let cfg = Ltx2VocoderConfig::ltx2_5_22b_bwe();
         Vocoder::load(&weights(), &cfg).expect("load main 6-stage stack");
-        assert_eq!(cfg.waveform_samples(10), 10 * cfg.total_upsample_factor());
+        assert_eq!(cfg.waveform_samples(10), 10 * cfg.total_upsample_factor() * cfg.rate_upsample());
     }
 
     #[test]

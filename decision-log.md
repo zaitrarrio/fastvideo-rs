@@ -10,7 +10,7 @@ Project code: FVID
 - Reversibility: cheap — version enum + opt-in weight roots
 - Executed by: Executor
 - ADR: none
-- Verification: **host pass + remote GPU gen pass** (2026-09-21). Spec `docs/ports/ltx25.md`. `cargo test -p fastvideo-cudarc ltx2 --lib` / models ltx2 ok; `fv-gpucheck ltx2 gen --model-version 2.5`. Shipped: Gemma4 TE (`DecoderConfig::gemma4_12b_text`), gated DiT + `ff_bias=false` + cross_attn_mod AdaLN (9-row), per-modality connectors, ancestral Euler, conv VAE typed upsamplers (spatial d2s), vocoder main stack + ×3 16→48 kHz stand-in for BWE. **Remote:** Maryland `51923820` (`20260921T142958Z-ltx2-gen`), ~$0.444 / 17 min: 8 ancestral steps ~2.3–2.5 s, **121** frames, 48 kHz stereo wav (240480 samples), mp4 `artifacts/clips/20260921T142958Z-ltx2-gen/ltx25-stage1.mp4`.
+- Verification: **host pass + remote GPU gen pass** (2026-09-21). Spec `docs/ports/ltx25.md`. `cargo test -p fastvideo-cudarc ltx2 --lib` / models ltx2 ok; `fv-gpucheck ltx2 gen --model-version 2.5`. Shipped: Gemma4 TE (`DecoderConfig::gemma4_12b_text`), gated DiT + `ff_bias=false` + cross_attn_mod AdaLN (9-row), per-modality connectors, ancestral Euler, conv VAE typed upsamplers (spatial d2s), vocoder **SnakeBeta AMP** main stack + ×3 16→48 kHz stand-in for BWE. **Remote:** Texas `51956651` (`20260921T193442Z-ltx2-gen`), ~$0.485 / 18 min: SnakeBeta path logged, 8 ancestral steps ~1.8 s, **121** frames, audible 48 kHz stereo, mp4 `artifacts/clips/20260921T193442Z-ltx2-gen/ltx25-stage1.mp4`. (Earlier silent clip was LeakyReLU stub.)
 
 ### FVID · 2026-09-20 · FVID-2026-09-20-h3-matrix-followup
 - Trigger: after encoder matrix pass — run remaining weight/SKU gaps (Synthetic Step1900, Preview on 80 GB, longer clip)
