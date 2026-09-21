@@ -22,10 +22,16 @@ RUNS="${FV_RUNS:-$FV_ROOT/artifacts/gpucheck/runs}"
 DOCKER_SH="$FV_ROOT/scripts/gpu/docker.sh"
 DIST="$FV_ROOT/artifacts/gpucheck/dist"
 LOCAL_REFS="$FV_ROOT/artifacts/gpucheck/refs"
-# Small runtime image built by .github/workflows/gpucheck-runtime-image.yml:
-# CUDA runtime libraries cudarc loads + fv-gpucheck + scripts (no PyTorch).
-IMAGE_REPO="${VAST_IMAGE_REPO:-ghcr.io/zaitrarrio/fastvideo-rs-runtime}"
+# Slim runtime (default): .github/workflows/gpucheck-runtime-image.yml — CUDA 13
+# libs + fv-gpucheck, no PyTorch. Vast pytorch images are only for tiers that
+# need Python+torch; see image_flavor_for_tier / resolve_image.
+IMAGE_REPO_SLIM="${VAST_IMAGE_REPO:-ghcr.io/zaitrarrio/fastvideo-rs-runtime}"
+IMAGE_REPO_PYTORCH="${VAST_IMAGE_REPO_PYTORCH:-ghcr.io/zaitrarrio/fastvideo-rs-vast}"
+IMAGE_REPO_ORACLE="${VAST_IMAGE_REPO_ORACLE:-ghcr.io/zaitrarrio/fastvideo-rs-vast-oracle}"
+IMAGE_REPO="$IMAGE_REPO_SLIM"
 IMAGE="${VAST_IMAGE:-}"
+# slim | pytorch | oracle | auto (default: pick from tier). Override with VAST_IMAGE_FLAVOR.
+IMAGE_FLAVOR="${VAST_IMAGE_FLAVOR:-auto}"
 # The image bakes the binary and scripts here; uploads land in the same place.
 FV_REMOTE_DIR="${VAST_REMOTE_DIR:-/opt/fastvideo-rs}"
 # Machines that failed to boot / never accepted ssh / failed env or bootstrap.
@@ -138,21 +144,48 @@ bad_hosts_json() {
 }
 
 # ---- image ------------------------------------------------------------------------
+# Slim = default (cudarc only). Vast pytorch/oracle images only when the tier
+# runs Python with torch (transformers/diffusers/FastVideo).
+image_flavor_for_tier() {
+  case "$1" in
+    # Prebaked transformers/diffusers in /venv/main.
+    oracle | h3-text | ltx2-text | h3-vae | ltx2-vae | h3-dit | ltx2-dit) echo oracle ;;
+    # Torch present; upstream/taehv still install their own venv on top.
+    compare | taehv | vaeab) echo pytorch ;;
+    # Everything else is fv-gpucheck only — stay on the slim image.
+    *) echo slim ;;
+  esac
+}
+
 # Prefer the CI image built from exactly these sources (binary baked in, no
 # upload); otherwise :latest for the runtime libraries plus an uploaded binary.
 resolve_image() {
-  local build_id="$1"
+  local build_id="$1" tier="${2:-}" flavor="$IMAGE_FLAVOR"
   if [[ -n "$IMAGE" ]]; then
     log "image $IMAGE (VAST_IMAGE override; uploading binary)"
     return 0
   fi
+  if [[ "$flavor" == "auto" ]]; then
+    if [[ -n "$tier" ]]; then
+      flavor="$(image_flavor_for_tier "$tier")"
+    else
+      flavor=slim
+    fi
+  fi
+  case "$flavor" in
+    slim) IMAGE_REPO="$IMAGE_REPO_SLIM" ;;
+    pytorch) IMAGE_REPO="$IMAGE_REPO_PYTORCH" ;;
+    oracle) IMAGE_REPO="$IMAGE_REPO_ORACLE" ;;
+    *) die "unknown VAST_IMAGE_FLAVOR='$flavor' (slim|pytorch|oracle|auto)" ;;
+  esac
+  IMAGE_FLAVOR="$flavor"
   if command -v docker >/dev/null 2>&1 && docker manifest inspect "$IMAGE_REPO:build-$build_id" >/dev/null 2>&1; then
     IMAGE="$IMAGE_REPO:build-$build_id"
     IMAGE_HAS_BUILD=1
-    log "image $IMAGE (CI-built from these sources; binary baked in)"
+    log "image $IMAGE (flavor=$flavor; CI-built from these sources; binary baked in)"
   else
     IMAGE="$IMAGE_REPO:latest"
-    log "image $IMAGE (no CI image for build $build_id yet — push to main to publish one; uploading local binary)"
+    log "image $IMAGE (flavor=$flavor; no CI image for build $build_id yet — push to publish one; uploading local binary)"
   fi
 }
 
@@ -528,7 +561,7 @@ cmd_run() {
   local build_id
   build_id="$("$DOCKER_SH" build-id)"
   [[ "$(cat "$DIST/fv-gpucheck.build-id" 2>/dev/null)" == "$build_id" ]] || die "dist binary is stale; run: bash scripts/gpu/dist-ci.sh (CI-built, no GPU) — or $DOCKER_SH dist to build locally"
-  resolve_image "$build_id"
+  resolve_image "$build_id" "$tier"
 
   local max_dph mins
   max_dph="${MAX_DPH:-$(tier_max_dph "$tier")}"

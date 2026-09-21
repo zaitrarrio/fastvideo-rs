@@ -92,17 +92,34 @@ Settings come from `.env` (gitignored; `FV_ENV_FILE` points elsewhere), and shel
 
 ## Docker
 
-Everything builds in Docker (`docker/gpucheck.Dockerfile`, driven by
-`scripts/gpu/docker.sh`), never on the host:
+Everything builds in Docker (`docker/gpucheck.Dockerfile` for the slim path,
+`docker/vast-pytorch.Dockerfile` when a tier needs Python+torch), driven by
+`scripts/gpu/docker.sh`, never on the host:
 
 ```bash
 scripts/gpu/docker.sh test            # unit tests
 scripts/gpu/docker.sh nvrtc           # compile every kernel for sm 7.5–9.0 (no GPU)
 scripts/gpu/docker.sh dist            # release binary → artifacts/gpucheck/dist/
 scripts/gpu/docker.sh refs [--parity] # CPU-path references → artifacts/gpucheck/refs/<ref key>/
-scripts/gpu/docker.sh image           # CUDA runtime image with the binary
+scripts/gpu/docker.sh image           # slim CUDA runtime (no PyTorch) — default rentals
+scripts/gpu/docker.sh vast-image      # FROM vastai/pytorch — only for torch tiers
+scripts/gpu/docker.sh vast-oracle     # vast-image + transformers/diffusers in /venv/main
 scripts/gpu/docker.sh gpu <stage...>  # GPU stages on a local NVIDIA GPU
 ```
+
+**Image policy:** rentals default to the slim GHCR image
+(`ghcr.io/zaitrarrio/fastvideo-rs-runtime`). `validate.sh` switches to a
+`vastai/pytorch`-based image only when the tier needs Python with torch:
+
+| Flavor | Image | Tiers |
+| --- | --- | --- |
+| `slim` (default) | `fastvideo-rs-runtime` | kernels, mathprobe, parity, clip, gen, fp8, build, h3-vsa, h3-gen, ltx2-gen, h3-matrix, … |
+| `pytorch` | `fastvideo-rs-vast` | compare, taehv, vaeab |
+| `oracle` | `fastvideo-rs-vast-oracle` | oracle, h3-text, ltx2-text, h3-vae, ltx2-vae, h3-dit, ltx2-dit |
+
+Override with `VAST_IMAGE_FLAVOR=slim|pytorch|oracle|auto` or `VAST_IMAGE=…`.
+Base pin: `FV_VAST_PYTORCH_IMAGE` / build-arg `VAST_PYTORCH_IMAGE`
+(default `vastai/pytorch:cuda-13.0.3-auto`).
 
 - **Builder image:** Ubuntu 22.04, the same glibc as the Vast image, with Rust and NVRTC 12.4. It needs no CUDA toolkit, because cudarc loads CUDA libraries at run time. The cargo registry and target dir live in named volumes, so rebuilds are incremental. The repo is mounted with `.env` masked.
 - **Build id:** a hash of `crates/`, `Cargo.toml`, `Cargo.lock` and `rust-toolchain.toml`. `run` refuses a stale binary. The rented box only receives `scripts/` and the binary, so it compiles nothing.

@@ -489,6 +489,16 @@ cmd_oracle_venv() {
   export HF_HOME="$WORK/hf"
   mkdir -p "$HF_HOME"
   export PATH="$HOME/.local/bin:$PATH"
+  # Image baked /venv/main with transformers+diffusers (vast-oracle flavor).
+  if [[ -n "${FV_ORACLE_PYTHON:-}" && -x "${FV_ORACLE_PYTHON}" ]] \
+    || { [[ -x /venv/main/bin/python ]] && /venv/main/bin/python -c 'import torch, transformers, diffusers' 2>/dev/null; }; then
+    ORACLE_VENV=/venv/main
+    export FV_ORACLE_PYTHON="${FV_ORACLE_PYTHON:-/venv/main/bin/python}"
+    log "oracle python prebaked ($FV_ORACLE_PYTHON) — skipping uv install"
+    "$FV_ORACLE_PYTHON" -c 'import torch, transformers, diffusers; print("torch", torch.__version__, "cuda", torch.version.cuda, "transformers", transformers.__version__, "diffusers", diffusers.__version__)' >&2 \
+      || die "prebaked oracle python import failed"
+    return 0
+  fi
   ensure_cc
   command -v git >/dev/null || { apt-get update -qq >/dev/null 2>&1 || true; apt-get install -y -qq --no-install-recommends git >/dev/null 2>&1 || die "could not install git"; }
   if [[ ! -x "$ORACLE_VENV/bin/python" ]]; then
@@ -525,7 +535,8 @@ cmd_model_oracle() {
   local model="$1"; shift
   export HF_HOME="$WORK/hf"
   export PATH="$HOME/.local/bin:$PATH"
-  [[ -x "$ORACLE_VENV/bin/python" ]] || die "oracle venv missing (run oracle-venv)"
+  local py="${FV_ORACLE_PYTHON:-$ORACLE_VENV/bin/python}"
+  [[ -x "$py" ]] || die "oracle python missing (run oracle-venv)"
   [[ -f "$ROOT/scripts/gpu/${model}_oracle.py" ]] || die "no oracle script for '$model'"
   mkdir -p "$OUT/$model"
   ensure_cc
@@ -535,7 +546,7 @@ cmd_model_oracle() {
   # CUDNN_STATUS_SUBLIBRARY_LOADING_FAILED. torch must see only its bundled CUDA.
   env -u LD_LIBRARY_PATH CC="${CC:-$(command -v gcc || command -v cc)}" PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True \
     HF_XET_HIGH_PERFORMANCE=1 \
-    "$ORACLE_VENV/bin/python" "$ROOT/scripts/gpu/${model}_oracle.py" "$@"
+    "$py" "$ROOT/scripts/gpu/${model}_oracle.py" "$@"
 }
 
 cmd_upstream_oracle() {

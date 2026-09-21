@@ -6,7 +6,9 @@
 #   docker.sh nvrtc            compile every NVRTC kernel for sm 7.5–12.0 (no GPU)
 #   docker.sh dist             release binary → artifacts/gpucheck/dist/ (shipped to rented boxes)
 #   docker.sh refs [--parity]  CPU-path reference dumps → artifacts/gpucheck/refs/ (saves billed GPU idle time)
-#   docker.sh image            runtime image (CUDA 13.0 runtime + binary) for NVIDIA Linux hosts
+#   docker.sh image            slim runtime (Ubuntu + CUDA 13 libs + binary; no PyTorch)
+#   docker.sh vast-image       Vast image FROM vastai/pytorch (runtime target)
+#   docker.sh vast-oracle      Vast image FROM vastai/pytorch + transformers/diffusers
 #   docker.sh gpu <args...>    run fv-gpucheck on a local NVIDIA GPU: docker run --gpus all
 #
 # Everything is keyed by a build id (hash of the Rust sources), so stale
@@ -17,7 +19,12 @@ source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 
 BUILDER_IMAGE="${FV_BUILDER_IMAGE:-fastvideo-rs/gpucheck-builder:cu130}"
 RUNTIME_IMAGE="${FV_RUNTIME_IMAGE:-fastvideo-rs-runtime:local}"
+VAST_IMAGE="${FV_VAST_IMAGE:-fastvideo-rs-vast:local}"
+VAST_ORACLE_IMAGE="${FV_VAST_ORACLE_IMAGE:-fastvideo-rs-vast-oracle:local}"
 DOCKERFILE="$FV_ROOT/docker/gpucheck.Dockerfile"
+VAST_DOCKERFILE="$FV_ROOT/docker/vast-pytorch.Dockerfile"
+# Pin so local builds match CI; override with FV_VAST_PYTORCH_IMAGE.
+VAST_PYTORCH_BASE="${FV_VAST_PYTORCH_IMAGE:-vastai/pytorch:cuda-13.0.3-auto}"
 DIST="$FV_ROOT/artifacts/gpucheck/dist"
 REFS="$FV_ROOT/artifacts/gpucheck/refs"
 LOCAL_OUT="$FV_ROOT/artifacts/gpucheck/local"
@@ -31,7 +38,7 @@ require_docker() {
 
 # Hash of everything that affects the binary (sources + builder image/profile).
 fv_build_id() {
-  (cd "$FV_ROOT" && git ls-files -z -co --exclude-standard -- crates Cargo.toml Cargo.lock rust-toolchain.toml docker/gpucheck.Dockerfile \
+  (cd "$FV_ROOT" && git ls-files -z -co --exclude-standard -- crates Cargo.toml Cargo.lock rust-toolchain.toml docker/gpucheck.Dockerfile docker/vast-pytorch.Dockerfile \
     | LC_ALL=C sort -z | xargs -0 shasum -a 256 | shasum -a 256 | cut -c1-16)
 }
 
@@ -154,6 +161,25 @@ cmd_image() {
     --build-context binary="$DIST" -t "$RUNTIME_IMAGE" --load "$FV_ROOT" >&2
 }
 
+# Vast images: FROM vastai/pytorch (host-cached) + our binary. Reuse dist when present.
+cmd_vast_image() {
+  local target="${1:-runtime}" tag="$VAST_IMAGE"
+  [[ "$target" == "oracle" ]] && tag="$VAST_ORACLE_IMAGE"
+  cmd_dist
+  require_docker
+  log "building $tag (FROM $VAST_PYTORCH_BASE, target=$target)"
+  docker buildx build --platform "$PLATFORM" -f "$VAST_DOCKERFILE" --target "$target" \
+    --build-arg "VAST_PYTORCH_IMAGE=$VAST_PYTORCH_BASE" \
+    --build-arg "BUILD_ID=$(fv_build_id)" \
+    --build-context binary="$DIST" \
+    -t "$tag" --load "$FV_ROOT" >&2
+  log "built $tag"
+}
+
+cmd_vast_oracle() {
+  cmd_vast_image oracle
+}
+
 cmd_gpu() {
   require_docker
   if ! docker info --format '{{json .Runtimes}}' | grep -q nvidia \
@@ -180,7 +206,9 @@ case "${1:-}" in
   dist) shift; cmd_dist "$@" ;;
   refs) shift; cmd_refs "$@" ;;
   image) cmd_image ;;
+  vast-image) cmd_vast_image runtime ;;
+  vast-oracle) cmd_vast_oracle ;;
   gpu) shift; cmd_gpu "$@" ;;
   build-id) fv_build_id ;;
-  *) sed -n '2,14p' "$0" | sed 's/^# \{0,1\}//'; exit 2 ;;
+  *) sed -n '2,16p' "$0" | sed 's/^# \{0,1\}//'; exit 2 ;;
 esac
