@@ -1,16 +1,23 @@
-//! FastVideo-rs inference core: registry, sampling, and VideoGenerator.
-
+pub mod av_generate;
 pub mod backend_kind;
 pub mod error;
 pub mod generator;
 pub mod registry;
 pub mod sampling;
 
+pub use av_generate::{generate_av, AvGenerateOptions, AvGenerateOutput};
 pub use backend_kind::BackendKind;
 pub use error::{FastVideoError, Result};
 pub use generator::{BenchStats, ClipBenchStats, GenerateOutput, LoadOptions, VideoGenerator};
-pub use registry::{resolve_wan, SamplingAlgorithm, WanModelDefinition, WAN_MODEL_DEFINITIONS};
-pub use sampling::{sampling_from_definition, InferencePreset, SamplingParam, ALL_PRESETS};
+pub use registry::{
+    all_registered_ids, resolve, resolve_wan, FamilyModelDefinition, Ltx2Line, ModelFamily,
+    ResolvedModel, SamplingAlgorithm, WanModelDefinition, H3_MODEL_DEFINITIONS,
+    LTX2_MODEL_DEFINITIONS, WAN_MODEL_DEFINITIONS,
+};
+pub use sampling::{
+    sampling_from_definition, AudioSamplingParam, ImageSamplingParam, InferencePreset,
+    SamplingParam, WorkloadType, ALL_PRESETS,
+};
 
 #[cfg(test)]
 mod tests {

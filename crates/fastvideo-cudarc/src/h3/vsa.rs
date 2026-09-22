@@ -74,14 +74,19 @@ pub struct H3TilePlan {
 
 impl H3TilePlan {
     pub fn new(layout: &H3PackedLayout) -> Result<Self> {
-        if layout.text.start != 0 || layout.audio.start != layout.text.end() || layout.video.start != layout.audio.end() {
-            return Err(msg("vsa-h3: the packed layout must be [text | audio | video]"));
+        let contiguous = layout.text.start == 0
+            && layout.cond.start == layout.text.end()
+            && layout.audio.start == layout.cond.end()
+            && layout.video.start == layout.audio.end();
+        if !contiguous {
+            return Err(msg("vsa-h3: the packed layout must be [text | cond | audio | video]"));
         }
         let mut slot_src: Vec<i32> = Vec::new();
         let mut block_sizes: Vec<u32> = Vec::new();
         let mut prefix_row_tile = Vec::with_capacity(layout.video.start);
         // Zero-length segments are dropped; a segment's last tile may be short.
-        for segment in [layout.text, layout.audio] {
+        // Prefix = text + keyframe cond + audio (FastVideo VSA-H3).
+        for segment in [layout.text, layout.cond, layout.audio] {
             let mut row = segment.start;
             while row < segment.end() {
                 let size = TILE_ELEMS.min(segment.end() - row);

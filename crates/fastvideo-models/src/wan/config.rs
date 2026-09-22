@@ -173,14 +173,19 @@ impl WanVideoArchConfig {
 
     pub fn from_preset(preset: &str) -> Self {
         match preset {
-            "wan_t2v_1_3b" | "fast_wan_t2v_480p" | "wan_fun_1_3b_inp" | "wan_fun_1_3b_control" => {
-                Self::wan_t2v_1_3b()
-            }
-            "wan_t2v_14b" => Self::wan_t2v_14b(),
+            "wan_t2v_1_3b" | "fast_wan_t2v_480p" | "wan_fun_1_3b_inp" | "wan_fun_1_3b_control"
+            | "turbo_t2v_1_3b" => Self::wan_t2v_1_3b(),
+            "wan_t2v_14b" | "turbo_t2v_14b" => Self::wan_t2v_14b(),
             "wan_i2v_14b_480p" | "wan_i2v_14b_720p" => Self::wan_i2v_14b(),
             "wan_2_2_ti2v_5b" | "fast_wan_2_2_ti2v_5b" | "lucy_edit_dev" => Self::wan_2_2_ti2v_5b(),
             "wan_2_2_t2v_a14b" | "sf_wan_2_2_t2v_a14b" => Self::wan_2_2_t2v_a14b(),
-            "wan_2_2_i2v_a14b" | "sf_wan_2_2_i2v_a14b" => Self::wan_2_2_i2v_a14b(),
+            "wan_2_2_i2v_a14b" | "sf_wan_2_2_i2v_a14b" | "turbo_i2v_a14b" => {
+                let mut cfg = Self::wan_2_2_i2v_a14b();
+                if preset == "turbo_i2v_a14b" {
+                    cfg.boundary_ratio = Some(0.9);
+                }
+                cfg
+            }
             "sf_wan_t2v_1_3b" => Self::sf_wan_t2v_1_3b(),
             _ => Self::wan_t2v_1_3b(),
         }

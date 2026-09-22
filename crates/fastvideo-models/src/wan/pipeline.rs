@@ -28,8 +28,12 @@ pub struct GenerateConfig {
     pub output_dir: String,
     pub tiny: bool,
     pub is_dmd: bool,
+    /// TurboWan rCM sampler (mutually exclusive with `is_dmd` in practice).
+    pub is_rcm: bool,
     pub flow_shift: f64,
     pub dmd_steps: Option<Vec<i32>>,
+    /// rCM `sigma_max` (T2V 80 / I2V 200). Ignored unless `is_rcm`.
+    pub rcm_sigma_max: Option<f64>,
     pub tokenizer_path: Option<String>,
     /// First-frame path for I2V (PNG/JPEG). Required when the DiT is 36-channel.
     pub image_path: Option<String>,
@@ -52,8 +56,10 @@ impl Default for GenerateConfig {
             output_dir: "out".into(),
             tiny: false,
             is_dmd: false,
+            is_rcm: false,
             flow_shift: 5.0,
             dmd_steps: None,
+            rcm_sigma_max: None,
             tokenizer_path: None,
             image_path: None,
             guidance_scale_2: None,

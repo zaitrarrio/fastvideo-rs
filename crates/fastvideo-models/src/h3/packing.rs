@@ -6,19 +6,20 @@
 //! modality it is lives entirely in the layout built here:
 //!
 //! ```text
-//! [ text rows (N) | audio rows, left then right (2 Na) | video rows (T * h * w) ]
+//! [ text | optional keyframe cond (video tag) | audio L/R | video ]
 //! ```
+//!
+//! T2AV has no keyframes; FL2VA inserts one latent-frame of condition rows per
+//! `first` / `last` anchor between text and audio (`packing.py:210-281`).
 //!
 //! * `token_tags` pick the AdaLN modality (0 video, 1 text, 2 audio);
 //! * `position_ids` are **float** `(t, h, w)` rotary coordinates on one shared
 //!   clock: a unit of `t` is 1/40 s, which is one audio latent, so audio latent
 //!   `a` and the video frame shown at `a / 40` s rotate alike. Text token `i`
-//!   sits at `t = i`, and everything else starts at `t = N`;
-//! * text rows take the **video** timestep.
-//!
-//! With no keyframes (this checkpoint is T2AV only) the three segments are
-//! contiguous ranges, which is what lets the device graph use `narrow` / `cat`
-//! instead of index scatter.
+//!   sits at `t = i`, and target audio/video start at `t = N` even when
+//!   keyframe rows sit in the sequence between text and audio;
+//! * text rows take the **video** timestep; keyframe rows take
+//!   `max(video_t, KEYFRAME_NOISE_AUG)`.
 //!
 //! Positions are built in float64 exactly as numpy / torch do and cast to
 //! float32 where the reference casts them (first line of its rope).
@@ -34,6 +35,28 @@ const FRAME_RESCALE: f64 = 5.0 / 3.0;
 const FRAMES_PER_LATENT: [f64; 5] = [1.0, 4.0, 4.0, 4.0, 4.0];
 /// `_ROPE_SPATIAL_SCALE`: a square canvas spans `[0, 32)` on both axes.
 const SPATIAL_SCALE: f64 = 32.0;
+
+/// FastVideo `MINIMAX_H3_KEYFRAME_NOISE_AUG`: keyframe latents are noised to
+/// this floor and read that AdaLN timestep during denoise.
+pub const KEYFRAME_NOISE_AUG: f32 = 0.999;
+
+/// FL2VA keyframe placement on the target rotary clock (`packing.py:241-248`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum KeyframeAnchor {
+    /// First latent frame of the target clip (`t = N`).
+    First,
+    /// Last pixel-frame tick of the target clip.
+    Last,
+}
+
+impl KeyframeAnchor {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::First => "first",
+            Self::Last => "last",
+        }
+    }
+}
 
 /// A contiguous run of packed rows.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -51,12 +74,16 @@ impl RowRange {
 #[derive(Debug, Clone, PartialEq)]
 pub struct H3PackedLayout {
     pub text: RowRange,
+    /// Keyframe condition rows (video tag); empty for T2AV.
+    pub cond: RowRange,
     pub audio: RowRange,
     pub video: RowRange,
     /// Audio latents per stereo channel (`audio.len / 2`).
     pub audio_latents: usize,
     /// Video token grid `(t, h, w)`; rows are frame-major, then row-major.
     pub token_grid: (usize, usize, usize),
+    /// Ordered FL2VA anchors that produced [`Self::cond`] (empty = T2AV).
+    pub keyframe_anchors: Vec<KeyframeAnchor>,
     /// `(t, h, w)` per row, float64 as the reference builds them.
     pub position_ids: Vec<[f64; 3]>,
     /// 0 video, 1 text, 2 audio.
@@ -86,10 +113,32 @@ pub fn temporal_position_grid(latent_frames: usize, origin: f64) -> Vec<f64> {
         .collect()
 }
 
+/// Sum of frame spans over `latent_frames` (FastVideo `_temporal_position_span`).
+pub fn temporal_position_span(latent_frames: usize) -> f64 {
+    (0..latent_frames)
+        .map(|f| FRAME_RESCALE * FRAMES_PER_LATENT[f % FRAMES_PER_LATENT.len()])
+        .sum()
+}
+
 impl H3PackedLayout {
-    /// `build_packed_sequence` for a request with no keyframes or references.
-    /// `latent` is the VAE latent `(T, H, W)`; `patch` the DiT patch.
-    pub fn new(text_tokens: usize, latent: (usize, usize, usize), audio_latents: usize, patch: [usize; 3]) -> Result<Self, String> {
+    /// T2AV: no keyframe anchors.
+    pub fn new(
+        text_tokens: usize,
+        latent: (usize, usize, usize),
+        audio_latents: usize,
+        patch: [usize; 3],
+    ) -> Result<Self, String> {
+        Self::with_keyframes(text_tokens, latent, audio_latents, patch, &[])
+    }
+
+    /// `build_packed_sequence` with optional FL2VA `first` / `last` anchors.
+    pub fn with_keyframes(
+        text_tokens: usize,
+        latent: (usize, usize, usize),
+        audio_latents: usize,
+        patch: [usize; 3],
+        anchors: &[KeyframeAnchor],
+    ) -> Result<Self, String> {
         let (lt, lh, lw) = latent;
         let [pt, ph, pw] = patch;
         if text_tokens == 0 {
@@ -98,20 +147,50 @@ impl H3PackedLayout {
         if pt == 0 || ph == 0 || pw == 0 || lt == 0 || lt % pt != 0 || lh % ph != 0 || lw % pw != 0 {
             return Err(format!("latents {lt}x{lh}x{lw} are not divisible by the patch {patch:?}"));
         }
+        for (i, a) in anchors.iter().enumerate() {
+            if anchors[..i].contains(a) {
+                return Err(format!("duplicate keyframe anchor {}", a.as_str()));
+            }
+        }
         let grid = (lt / pt, lh / ph, lw / pw);
         let rows_per_frame = grid.1 * grid.2;
-        let text = RowRange { start: 0, len: text_tokens };
-        let audio = RowRange { start: text.end(), len: audio_latents * H3_AUDIO_CHANNELS };
-        let video = RowRange { start: audio.end(), len: grid.0 * rows_per_frame };
+        let text = RowRange {
+            start: 0,
+            len: text_tokens,
+        };
+        let cond = RowRange {
+            start: text.end(),
+            len: anchors.len() * rows_per_frame,
+        };
+        let audio = RowRange {
+            start: cond.end(),
+            len: audio_latents * H3_AUDIO_CHANNELS,
+        };
+        let video = RowRange {
+            start: audio.end(),
+            len: grid.0 * rows_per_frame,
+        };
         let origin = text_tokens as f64;
 
         let sqrt_area = ((lh * lw) as f64).sqrt();
         let hgrid = spatial_position_grid(lh, ph, sqrt_area);
         let wgrid = spatial_position_grid(lw, pw, sqrt_area);
         let tgrid = temporal_position_grid(grid.0, origin);
+        let last_t = origin + temporal_position_span(grid.0) - FRAME_RESCALE;
 
         let mut position_ids = Vec::with_capacity(video.end());
         position_ids.extend((0..text_tokens).map(|i| [i as f64, 0.0, 0.0]));
+        for &anchor in anchors {
+            let t = match anchor {
+                KeyframeAnchor::First => origin,
+                KeyframeAnchor::Last => last_t,
+            };
+            for h in &hgrid {
+                for w in &wgrid {
+                    position_ids.push([t, *h, *w]);
+                }
+            }
+        }
         // Left channel at the first width coordinate, right at the last: the
         // stereo image is placed on the picture's horizontal axis.
         let edges = [wgrid[0], wgrid[wgrid.len() - 1]];
@@ -124,28 +203,73 @@ impl H3PackedLayout {
             }
         }
         let mut token_tags = vec![TAG_TEXT; text.len];
+        token_tags.extend(std::iter::repeat_n(TAG_VIDEO, cond.len));
         token_tags.extend(std::iter::repeat_n(TAG_AUDIO, audio.len));
         token_tags.extend(std::iter::repeat_n(TAG_VIDEO, video.len));
-        Ok(Self { text, audio, video, audio_latents, token_grid: grid, position_ids, token_tags })
+        Ok(Self {
+            text,
+            cond,
+            audio,
+            video,
+            audio_latents,
+            token_grid: grid,
+            keyframe_anchors: anchors.to_vec(),
+            position_ids,
+            token_tags,
+        })
     }
 
     pub fn from_geometry(geometry: &H3Geometry, text_tokens: usize) -> Result<Self, String> {
         let patch = H3TransformerConfig::fasth3_8step().patch_size;
-        Self::new(text_tokens, (geometry.latent_frames, geometry.latent_height, geometry.latent_width), geometry.audio_latents, patch)
+        Self::new(
+            text_tokens,
+            (
+                geometry.latent_frames,
+                geometry.latent_height,
+                geometry.latent_width,
+            ),
+            geometry.audio_latents,
+            patch,
+        )
+    }
+
+    pub fn from_geometry_with_keyframes(
+        geometry: &H3Geometry,
+        text_tokens: usize,
+        anchors: &[KeyframeAnchor],
+    ) -> Result<Self, String> {
+        let patch = H3TransformerConfig::fasth3_8step().patch_size;
+        Self::with_keyframes(
+            text_tokens,
+            (
+                geometry.latent_frames,
+                geometry.latent_height,
+                geometry.latent_width,
+            ),
+            geometry.audio_latents,
+            patch,
+            anchors,
+        )
     }
 
     pub fn sequence_length(&self) -> usize {
         self.video.end()
     }
 
+    pub fn has_keyframes(&self) -> bool {
+        self.cond.len > 0
+    }
+
     /// Per-row index into the forward's sorted-unique timestep list
-    /// (`build_row_timesteps`): audio rows read the audio timestep, text and
-    /// video rows the video one.
+    /// (`build_row_timesteps`). Audio rows read the audio timestep; keyframe
+    /// rows the condition timestep; text and target video the video one.
     pub fn timestep_indices(&self, timesteps: &H3RowTimesteps) -> Vec<usize> {
-        self.token_tags
-            .iter()
-            .map(|&tag| if tag == TAG_AUDIO { timesteps.audio_index } else { timesteps.video_index })
-            .collect()
+        let mut out = Vec::with_capacity(self.token_tags.len());
+        out.extend(std::iter::repeat_n(timesteps.video_index, self.text.len));
+        out.extend(std::iter::repeat_n(timesteps.condition_index, self.cond.len));
+        out.extend(std::iter::repeat_n(timesteps.audio_index, self.audio.len));
+        out.extend(std::iter::repeat_n(timesteps.video_index, self.video.len));
+        out
     }
 
     /// `[S, 6 * F]` cos and sin tables for the MM-RoPE, `cat(A, A)` with
@@ -276,7 +400,15 @@ mod tests {
     #[test]
     fn rows_are_text_then_left_then_right_audio_then_video() {
         let l = H3PackedLayout::new(3, (2, 4, 4), 2, [1, 2, 2]).unwrap();
-        assert_eq!((l.text, l.audio, l.video), (RowRange { start: 0, len: 3 }, RowRange { start: 3, len: 4 }, RowRange { start: 7, len: 8 }));
+        assert_eq!(l.cond.len, 0);
+        assert_eq!(
+            (l.text, l.audio, l.video),
+            (
+                RowRange { start: 0, len: 3 },
+                RowRange { start: 3, len: 4 },
+                RowRange { start: 7, len: 8 }
+            )
+        );
         assert_eq!(l.sequence_length(), 15);
         assert_eq!(l.token_tags, vec![1, 1, 1, 2, 2, 2, 2, 0, 0, 0, 0, 0, 0, 0, 0]);
         // Square 4x4 latent: grid(4, 2, 4) = 32 * (0, 0.5) = (0, 16) on both axes.
@@ -289,6 +421,43 @@ mod tests {
         assert_eq!(l.position_ids[8], [3.0, 0.0, 16.0], "x varies fastest");
         assert_eq!(l.position_ids[9], [3.0, 16.0, 0.0]);
         assert_eq!(l.position_ids[11], [3.0 + 5.0 / 3.0, 0.0, 0.0], "frame 1 is one pixel frame later");
+    }
+
+    #[test]
+    fn fl2va_first_inserts_cond_between_text_and_audio() {
+        let l = H3PackedLayout::with_keyframes(
+            3,
+            (2, 4, 4),
+            2,
+            [1, 2, 2],
+            &[KeyframeAnchor::First],
+        )
+        .unwrap();
+        assert_eq!(l.cond, RowRange { start: 3, len: 4 });
+        assert_eq!(l.audio.start, 7);
+        assert_eq!(l.video.start, 11);
+        assert_eq!(l.sequence_length(), 19);
+        assert_eq!(&l.token_tags[3..7], &[0, 0, 0, 0]);
+        // First keyframe shares t = N with video frame 0; audio/video origins
+        // stay at N (not shifted by the cond segment length).
+        assert_eq!(l.position_ids[3], [3.0, 0.0, 0.0]);
+        assert_eq!(l.position_ids[7], [3.0, 0.0, 0.0], "audio still at t = N");
+        assert_eq!(l.position_ids[11], [3.0, 0.0, 0.0], "video still at t = N");
+    }
+
+    #[test]
+    fn fl2va_last_uses_end_of_clip_tick() {
+        let l = H3PackedLayout::with_keyframes(
+            3,
+            (2, 4, 4),
+            1,
+            [1, 2, 2],
+            &[KeyframeAnchor::Last],
+        )
+        .unwrap();
+        let want = 3.0 + temporal_position_span(2) - FRAME_RESCALE;
+        assert!((l.position_ids[3][0] - want).abs() < 1e-12);
+        assert_eq!(l.position_ids[3][1], 0.0);
     }
 
     #[test]

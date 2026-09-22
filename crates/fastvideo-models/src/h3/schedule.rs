@@ -179,8 +179,8 @@ impl H3Schedule {
 }
 
 /// The distinct timesteps of one forward and which of them each modality reads
-/// (`build_row_timesteps`, `packing.py:489-500`, for a request with no
-/// condition rows). Text rows take the **video** timestep.
+/// (`build_row_timesteps`, FastVideo `packing.py`). Text rows take the **video**
+/// timestep; keyframe condition rows take `max(video, KEYFRAME_NOISE_AUG)`.
 #[derive(Debug, Clone, PartialEq)]
 pub struct H3RowTimesteps {
     /// Sorted ascending, duplicates removed (`torch.unique(sorted=True)`): the
@@ -188,19 +188,34 @@ pub struct H3RowTimesteps {
     pub timesteps: Vec<f32>,
     pub video_index: usize,
     pub audio_index: usize,
+    /// Index of the keyframe condition timestep (equals `video_index` when
+    /// there are no keyframes / the values coincide).
+    pub condition_index: usize,
 }
 
 impl H3RowTimesteps {
     pub fn new(video_timestep: f32, audio_timestep: f32) -> Self {
-        let mut timesteps = vec![video_timestep, audio_timestep];
+        Self::with_condition(video_timestep, audio_timestep, video_timestep)
+    }
+
+    /// FL2VA: `condition_video_timestep = max(video_t, KEYFRAME_NOISE_AUG)`.
+    pub fn with_condition(
+        video_timestep: f32,
+        audio_timestep: f32,
+        condition_video_timestep: f32,
+    ) -> Self {
+        let mut timesteps = vec![video_timestep, audio_timestep, condition_video_timestep];
         timesteps.sort_by(f32::total_cmp);
         timesteps.dedup();
         let find = |t: f32| timesteps.iter().position(|&u| u == t).unwrap_or(0);
-        let (video_index, audio_index) = (find(video_timestep), find(audio_timestep));
+        let video_index = find(video_timestep);
+        let audio_index = find(audio_timestep);
+        let condition_index = find(condition_video_timestep);
         Self {
             timesteps,
             video_index,
             audio_index,
+            condition_index,
         }
     }
 

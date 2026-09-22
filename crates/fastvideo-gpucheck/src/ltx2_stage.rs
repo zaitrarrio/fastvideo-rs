@@ -28,7 +28,7 @@ use fastvideo_cudarc::ltx2::vocoder::Vocoder;
 use fastvideo_cudarc::wan::pipeline::{interleave_audio, write_wav};
 use fastvideo_cudarc::CudaTensor;
 use fastvideo_cudarc::wan::weights::WeightMap;
-use fastvideo_models::ltx2::config::{ltx2_19b_distilled, ltx2_5_22b_distilled, Ltx2Config};
+use fastvideo_models::ltx2::config::{ltx2_19b_distilled, ltx2_23_22b_distilled, ltx2_5_22b_distilled, Ltx2Config};
 use fastvideo_models::ltx2::{Ltx2RopeTables, Ltx2Schedule, SplitRope};
 use serde_json::json;
 
@@ -43,6 +43,9 @@ pub enum ModelVersion {
     /// LTX-2.0 19B distilled, deterministic Euler stage 1.
     #[value(name = "2.0")]
     V20,
+    /// LTX-2.3 22B distilled, Euler + optional 5+2 / 8+3 two-stage.
+    #[value(name = "2.3")]
+    V23,
     /// LTX-2.5 22B distilled, ancestral Euler stage 1.
     #[value(name = "2.5")]
     V25,
@@ -52,6 +55,7 @@ impl ModelVersion {
     pub fn config(self) -> Ltx2Config {
         match self {
             Self::V20 => ltx2_19b_distilled(),
+            Self::V23 => ltx2_23_22b_distilled(),
             Self::V25 => ltx2_5_22b_distilled(),
         }
     }
@@ -1083,6 +1087,7 @@ fn gen(
     report.set("device", crate::gpu::init(device)?);
     report.set("model_version", match model_version {
         ModelVersion::V20 => "2.0",
+        ModelVersion::V23 => "2.3",
         ModelVersion::V25 => "2.5",
     });
     report.set("two_stage", two_stage);
@@ -1099,6 +1104,12 @@ fn gen(
         mp4,
         two_stage,
         diff_vae,
+        negative_prompt: String::new(),
+        guidance_scale: 1.0,
+        audio_guidance_scale: 1.0,
+        num_inference_steps: None,
+        refine_steps: None,
+        image_path: None,
     };
     report.set(
         "request",

@@ -11,6 +11,8 @@ pub enum SamplingAlgorithm {
     UniPc,
     Dmd,
     CausalDmd,
+    /// TurboDiffusion rCM (1–4 step); SLA attention preferred but dense works.
+    Rcm,
 }
 
 impl SamplingAlgorithm {
@@ -19,6 +21,7 @@ impl SamplingAlgorithm {
             Self::UniPc => "unipc",
             Self::Dmd => "dmd",
             Self::CausalDmd => "causal_dmd",
+            Self::Rcm => "rcm",
         }
     }
 }
@@ -148,6 +151,31 @@ pub static WAN_MODEL_DEFINITIONS: &[WanModelDefinition] = &[
         &["IRMChen/Wan2.1-Fun-1.3B-Control-Diffusers"],
         &[]
     ),
+    // TurboDiffusion / TurboWan — before generic Wan fuzzy matches.
+    defn!(
+        "TurboDiffusionT2V_1_3B_Config",
+        "turbo_t2v_1_3b",
+        SamplingAlgorithm::Rcm,
+        &["loayrashid/TurboWan2.1-T2V-1.3B-Diffusers"],
+        &[WorkloadType::T2V],
+        match_any = &["turbowan2.1-t2v-1.3b", "turbodiffusion-t2v-1.3b"]
+    ),
+    defn!(
+        "TurboDiffusionT2V_14B_Config",
+        "turbo_t2v_14b",
+        SamplingAlgorithm::Rcm,
+        &["loayrashid/TurboWan2.1-T2V-14B-Diffusers"],
+        &[WorkloadType::T2V],
+        match_any = &["turbowan2.1-t2v-14b", "turbodiffusion-t2v-14b"]
+    ),
+    defn!(
+        "TurboDiffusionI2V_A14B_Config",
+        "turbo_i2v_a14b",
+        SamplingAlgorithm::Rcm,
+        &["loayrashid/TurboWan2.2-I2V-A14B-Diffusers"],
+        &[WorkloadType::I2V],
+        match_any = &["turbowan2.2-i2v", "turbodiffusion-i2v"]
+    ),
     defn!(
         "FastWan2_1_T2V_480P_Config",
         "fast_wan_t2v_480p",
@@ -252,6 +280,273 @@ pub fn resolve_wan(model_id: &str) -> Result<&'static WanModelDefinition> {
         .ok_or_else(|| FastVideoError::UnknownModel(model_id.to_string()))
 }
 
+// ---- Cross-family registry (Wan + LTX + H3; more families in later phases) ----
+
+/// Top-level model family. Matches FastVideo's registry groupings for ids we port.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ModelFamily {
+    Wan,
+    Ltx2,
+    H3,
+}
+
+impl ModelFamily {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Wan => "wan",
+            Self::Ltx2 => "ltx2",
+            Self::H3 => "h3",
+        }
+    }
+}
+
+/// Distilled / base LTX checkpoint line (maps to [`fastvideo_models::ltx2::Ltx2ModelVersion`] at generate).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Ltx2Line {
+    /// LTX-2.0 distilled (8-step CFG=1).
+    Distilled20,
+    /// LTX-2.5 distilled stage-1 (ancestral + Gemma4 + BWE).
+    Distilled25,
+    /// LTX-2.0 base (40-step CFG).
+    Base20,
+    /// LTX-2.3 distilled (5+2 / 8+3 Euler + Gemma3 + BWE + spatial upscaler).
+    Distilled23,
+    /// LTX-2.3 base (30-step CFG; STG deferred).
+    Base23,
+}
+
+/// Non-Wan family entry: exact Hub ids + preset + workloads.
+#[derive(Debug, Clone, Copy)]
+pub struct FamilyModelDefinition {
+    pub family: ModelFamily,
+    pub preset: &'static str,
+    pub hf_model_paths: &'static [&'static str],
+    pub workload_types: &'static [WorkloadType],
+    pub match_any: &'static [&'static str],
+    /// Set for [`ModelFamily::Ltx2`].
+    pub ltx_line: Option<Ltx2Line>,
+}
+
+impl FamilyModelDefinition {
+    fn matches_exact(&self, model_id: &str) -> bool {
+        self.hf_model_paths
+            .iter()
+            .any(|p| p.eq_ignore_ascii_case(model_id))
+    }
+
+    fn matches_fuzzy(&self, model_id: &str) -> bool {
+        let value = model_id.to_ascii_lowercase();
+        if self.matches_exact(model_id) {
+            return true;
+        }
+        if !self.match_any.is_empty() {
+            return self.match_any.iter().any(|t| value.contains(t));
+        }
+        self.hf_model_paths
+            .iter()
+            .any(|p| value.contains(&p.to_ascii_lowercase()))
+            || value.contains(&self.preset.replace('_', "-"))
+    }
+}
+
+/// Result of [`resolve`]: Wan keeps its rich definition; LTX/H3 use [`FamilyModelDefinition`].
+#[derive(Debug, Clone, Copy)]
+pub enum ResolvedModel {
+    Wan(&'static WanModelDefinition),
+    Family(&'static FamilyModelDefinition),
+}
+
+impl ResolvedModel {
+    pub fn family(self) -> ModelFamily {
+        match self {
+            Self::Wan(_) => ModelFamily::Wan,
+            Self::Family(d) => d.family,
+        }
+    }
+
+    pub fn preset(self) -> &'static str {
+        match self {
+            Self::Wan(d) => d.preset,
+            Self::Family(d) => d.preset,
+        }
+    }
+
+    pub fn hf_model_paths(self) -> &'static [&'static str] {
+        match self {
+            Self::Wan(d) => d.hf_model_paths,
+            Self::Family(d) => d.hf_model_paths,
+        }
+    }
+
+    pub fn workload_types(self) -> &'static [WorkloadType] {
+        match self {
+            Self::Wan(d) => d.workload_types,
+            Self::Family(d) => d.workload_types,
+        }
+    }
+}
+
+macro_rules! family_defn {
+    (
+        $family:expr, $preset:expr, $paths:expr, $work:expr
+        $(, match_any = $any:expr)?
+        $(, ltx_line = $ltx:expr)?
+    ) => {
+        FamilyModelDefinition {
+            family: $family,
+            preset: $preset,
+            hf_model_paths: $paths,
+            workload_types: $work,
+            match_any: {
+                #[allow(unused_assignments, unused_mut)]
+                let mut v: &[&str] = &[];
+                $(v = $any;)?
+                v
+            },
+            ltx_line: {
+                #[allow(unused_assignments, unused_mut)]
+                let mut v: Option<Ltx2Line> = None;
+                $(v = Some($ltx);)?
+                v
+            },
+        }
+    };
+}
+
+/// LTX-2 / 2.3 / 2.5 Hub ids we recognize.
+pub static LTX2_MODEL_DEFINITIONS: &[FamilyModelDefinition] = &[
+    family_defn!(
+        ModelFamily::Ltx2,
+        "ltx2_distilled_20",
+        &[
+            "FastVideo/LTX2-Distilled-Diffusers",
+            "rootonchair/LTX-2-19b-distilled",
+        ],
+        &[WorkloadType::T2AV],
+        match_any = &["ltx2-distilled", "ltx-2-19b-distilled"],
+        ltx_line = Ltx2Line::Distilled20
+    ),
+    family_defn!(
+        ModelFamily::Ltx2,
+        "ltx2_distilled_25",
+        &["Lightricks/LTX-2.5-Diffusers"],
+        &[WorkloadType::T2AV],
+        match_any = &["ltx-2.5", "ltx2.5"],
+        ltx_line = Ltx2Line::Distilled25
+    ),
+    family_defn!(
+        ModelFamily::Ltx2,
+        "ltx2_base_20",
+        &[
+            "Lightricks/LTX-2",
+            "FastVideo/LTX2-base",
+            "FastVideo/LTX2-Diffusers",
+        ],
+        &[WorkloadType::T2AV],
+        match_any = &["ltx2-base", "ltx-2-diffusers"],
+        ltx_line = Ltx2Line::Base20
+    ),
+    family_defn!(
+        ModelFamily::Ltx2,
+        "ltx2_distilled_23",
+        &[
+            "FastVideo/LTX-2.3-Distilled-Diffusers",
+            "FastVideo/LTX2.3-Distilled-Diffusers",
+            "diffusers/LTX-2.3-Distilled-Diffusers",
+        ],
+        &[WorkloadType::T2AV, WorkloadType::I2V],
+        match_any = &["ltx-2.3-distilled", "ltx2.3-distilled"],
+        ltx_line = Ltx2Line::Distilled23
+    ),
+    family_defn!(
+        ModelFamily::Ltx2,
+        "ltx2_base_23",
+        &[
+            "Lightricks/LTX-2.3",
+            "FastVideo/LTX2.3-base",
+            "FastVideo/LTX2.3-Diffusers",
+            "diffusers/LTX-2.3-Diffusers",
+        ],
+        &[WorkloadType::T2AV, WorkloadType::I2V],
+        match_any = &["ltx-2.3", "ltx2.3"],
+        ltx_line = Ltx2Line::Base23
+    ),
+];
+
+/// MiniMax-H3 / FastH3 Hub ids.
+pub static H3_MODEL_DEFINITIONS: &[FamilyModelDefinition] = &[
+    family_defn!(
+        ModelFamily::H3,
+        "fasth3_8step",
+        &[
+            "FastVideo/FastVideo-FastH3-8-Step-V2",
+            "FastVideo/FastVideo-Minimax-FastH3-Preview-v0.2",
+        ],
+        &[WorkloadType::T2AV],
+        match_any = &["fasth3", "fast-h3"]
+    ),
+    family_defn!(
+        ModelFamily::H3,
+        "minimax_h3",
+        &["MiniMaxAI/MiniMax-H3"],
+        &[WorkloadType::T2AV, WorkloadType::FL2VA, WorkloadType::Ref2VA],
+        match_any = &["minimax-h3", "minimax_h3"]
+    ),
+];
+
+fn resolve_family_table(table: &'static [FamilyModelDefinition], model_id: &str) -> Option<&'static FamilyModelDefinition> {
+    table
+        .iter()
+        .find(|d| d.matches_exact(model_id))
+        .or_else(|| table.iter().find(|d| d.matches_fuzzy(model_id)))
+}
+
+/// Resolve any registered family. Exact Hub ids win within each table; Wan is
+/// tried first so Wan-specific detectors do not steal LTX/H3 ids.
+pub fn resolve(model_id: &str) -> Result<ResolvedModel> {
+    if let Ok(wan) = resolve_wan(model_id) {
+        // Prefer an exact LTX/H3 Hub id when Wan fuzzy-matched something else.
+        let wan_exact = wan
+            .hf_model_paths
+            .iter()
+            .any(|p| p.eq_ignore_ascii_case(model_id));
+        if wan_exact {
+            return Ok(ResolvedModel::Wan(wan));
+        }
+    }
+    if let Some(d) = resolve_family_table(LTX2_MODEL_DEFINITIONS, model_id) {
+        return Ok(ResolvedModel::Family(d));
+    }
+    if let Some(d) = resolve_family_table(H3_MODEL_DEFINITIONS, model_id) {
+        return Ok(ResolvedModel::Family(d));
+    }
+    if let Ok(wan) = resolve_wan(model_id) {
+        return Ok(ResolvedModel::Wan(wan));
+    }
+    Err(FastVideoError::UnknownModel(model_id.to_string()))
+}
+
+/// Every registered Hub id for `list-models` (Wan, then LTX, then H3).
+pub fn all_registered_ids() -> Vec<(ModelFamily, &'static str, &'static str)> {
+    let mut out = Vec::new();
+    for d in WAN_MODEL_DEFINITIONS {
+        for id in d.hf_model_paths {
+            out.push((ModelFamily::Wan, *id, d.preset));
+        }
+    }
+    for d in LTX2_MODEL_DEFINITIONS {
+        for id in d.hf_model_paths {
+            out.push((d.family, *id, d.preset));
+        }
+    }
+    for d in H3_MODEL_DEFINITIONS {
+        for id in d.hf_model_paths {
+            out.push((d.family, *id, d.preset));
+        }
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -285,6 +580,23 @@ mod tests {
         let def = resolve_wan("FastVideo/FastWan2.1-T2V-1.3B-Diffusers").unwrap();
         assert_eq!(def.preset, "fast_wan_t2v_480p");
         assert_eq!(def.sampling, SamplingAlgorithm::Dmd);
+    }
+
+    #[test]
+    fn resolves_turbowan_rcm() {
+        let t2v = resolve_wan("loayrashid/TurboWan2.1-T2V-1.3B-Diffusers").unwrap();
+        assert_eq!(t2v.preset, "turbo_t2v_1_3b");
+        assert_eq!(t2v.sampling, SamplingAlgorithm::Rcm);
+        assert!(t2v.workload_types.contains(&WorkloadType::T2V));
+
+        let t2v14 = resolve_wan("turbowan2.1-t2v-14b").unwrap();
+        assert_eq!(t2v14.preset, "turbo_t2v_14b");
+        assert_eq!(t2v14.sampling, SamplingAlgorithm::Rcm);
+
+        let i2v = resolve_wan("loayrashid/TurboWan2.2-I2V-A14B-Diffusers").unwrap();
+        assert_eq!(i2v.preset, "turbo_i2v_a14b");
+        assert_eq!(i2v.sampling, SamplingAlgorithm::Rcm);
+        assert!(i2v.workload_types.contains(&WorkloadType::I2V));
     }
 
     #[test]
@@ -324,5 +636,49 @@ mod tests {
                 .sampling,
             SamplingAlgorithm::CausalDmd
         );
+    }
+
+    #[test]
+    fn resolve_cross_family() {
+        let wan = resolve("Wan-AI/Wan2.1-T2V-1.3B-Diffusers").unwrap();
+        assert_eq!(wan.family(), ModelFamily::Wan);
+        assert_eq!(wan.preset(), "wan_t2v_1_3b");
+
+        let ltx25 = resolve("Lightricks/LTX-2.5-Diffusers").unwrap();
+        assert_eq!(ltx25.family(), ModelFamily::Ltx2);
+        assert_eq!(ltx25.preset(), "ltx2_distilled_25");
+        match ltx25 {
+            ResolvedModel::Family(d) => assert_eq!(d.ltx_line, Some(Ltx2Line::Distilled25)),
+            _ => panic!("expected family"),
+        }
+
+        let ltx20 = resolve("FastVideo/LTX2-Distilled-Diffusers").unwrap();
+        assert_eq!(ltx20.preset(), "ltx2_distilled_20");
+
+        let ltx23 = resolve("FastVideo/LTX-2.3-Distilled-Diffusers").unwrap();
+        assert_eq!(ltx23.preset(), "ltx2_distilled_23");
+        match ltx23 {
+            ResolvedModel::Family(d) => assert_eq!(d.ltx_line, Some(Ltx2Line::Distilled23)),
+            _ => panic!("expected family"),
+        }
+        let ltx23_base = resolve("diffusers/LTX-2.3-Diffusers").unwrap();
+        assert_eq!(ltx23_base.preset(), "ltx2_base_23");
+
+        let h3 = resolve("MiniMaxAI/MiniMax-H3").unwrap();
+        assert_eq!(h3.family(), ModelFamily::H3);
+        assert!(h3.workload_types().contains(&WorkloadType::FL2VA));
+
+        let fasth3 = resolve("FastVideo/FastVideo-FastH3-8-Step-V2").unwrap();
+        assert_eq!(fasth3.preset(), "fasth3_8step");
+
+        assert!(resolve("not-a-real/model").is_err());
+    }
+
+    #[test]
+    fn list_models_covers_families() {
+        let ids = all_registered_ids();
+        assert!(ids.iter().any(|(f, id, _)| *f == ModelFamily::Wan && id.contains("Wan2.1")));
+        assert!(ids.iter().any(|(f, id, _)| *f == ModelFamily::Ltx2 && id.contains("LTX-2.5")));
+        assert!(ids.iter().any(|(f, id, _)| *f == ModelFamily::H3 && id.contains("MiniMax-H3")));
     }
 }

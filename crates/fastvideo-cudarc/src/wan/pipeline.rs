@@ -6,7 +6,8 @@ use std::path::Path;
 use std::process::Command;
 
 use fastvideo_models::schedulers::{
-    DmdSchedule, FlowUniPCMultistepScheduler, UniPcTerm, FAST_WAN_1_3B_DMD_STEPS,
+    DmdSchedule, FlowUniPCMultistepScheduler, RcmSchedule, UniPcTerm, FAST_WAN_1_3B_DMD_STEPS,
+    RCM_SIGMA_MAX_T2V,
 };
 use fastvideo_models::wan::{
     i2v_first_frame_mask, moe_expert, MoeExpert, Umt5Config, WanVaeConfig, WanVideoArchConfig,
@@ -94,8 +95,12 @@ pub struct GenerateConfig {
     pub output_dir: String,
     pub tiny: bool,
     pub is_dmd: bool,
+    /// TurboWan rCM sampler.
+    pub is_rcm: bool,
     pub flow_shift: f64,
     pub dmd_steps: Option<Vec<i32>>,
+    /// rCM `sigma_max` (T2V 80 / I2V 200).
+    pub rcm_sigma_max: Option<f64>,
     pub tokenizer_path: Option<String>,
     /// First-frame path for I2V (PNG/JPEG).
     pub image_path: Option<String>,
@@ -123,8 +128,10 @@ impl Default for GenerateConfig {
             output_dir: "out".into(),
             tiny: false,
             is_dmd: false,
+            is_rcm: false,
             flow_shift: 5.0,
             dmd_steps: None,
+            rcm_sigma_max: None,
             tokenizer_path: None,
             image_path: None,
             control_path: None,
@@ -372,7 +379,7 @@ impl WanPipeline {
 
         let (z_c, z_t, z_h, z_w) = self.latent_shape(cfg);
         super::log::info(format_args!(
-            "generate preset={} tiny={} {}x{} frames={} steps={} dmd={} latent=1x{}x{}x{}x{} \
+            "generate preset={} tiny={} {}x{} frames={} steps={} dmd={} rcm={} latent=1x{}x{}x{}x{} \
              resident={} cuda={}",
             self.preset,
             self.tiny,
@@ -381,6 +388,7 @@ impl WanPipeline {
             cfg.num_frames,
             cfg.num_inference_steps,
             cfg.is_dmd,
+            cfg.is_rcm,
             z_c,
             z_t,
             z_h,
@@ -388,6 +396,9 @@ impl WanPipeline {
             super::resident::residency_enabled(),
             cuda_context_live(),
         ));
+        if cfg.is_rcm {
+            warn_sla_backend();
+        }
         let control_src = cfg
             .control_path
             .as_ref()
@@ -479,6 +490,7 @@ impl WanPipeline {
 
     /// Seeded `StdRng` + `StandardNormal` noise, in the same order as the
     /// Candle pipeline, so both backends start from bit-identical latents.
+    /// rCM scales by `sigmas[0]` (`x₀ = noise · σ₀`).
     pub fn initial_latents(&self, cfg: &GenerateConfig) -> Result<CudaTensor> {
         let (z_c, z_t, z_h, z_w) = self.latent_shape(cfg);
         let mut rng = rand::rngs::StdRng::seed_from_u64(cfg.seed);
@@ -486,7 +498,13 @@ impl WanPipeline {
         let noise: Vec<f32> = (0..n_el)
             .map(|_| rng.sample::<f32, _>(StandardNormal))
             .collect();
-        Ok(CudaTensor::from_vec(noise, vec![1, z_c, z_t, z_h, z_w])?)
+        let mut latents = CudaTensor::from_vec(noise, vec![1, z_c, z_t, z_h, z_w])?;
+        if cfg.is_rcm {
+            let sigma = cfg.rcm_sigma_max.unwrap_or(RCM_SIGMA_MAX_T2V);
+            let scale = RcmSchedule::new(cfg.num_inference_steps.max(1), sigma).init_noise_scale() as f32;
+            latents = latents.mul_scalar(scale);
+        }
+        Ok(latents)
     }
 
     /// Text-to-video denoise from precomputed `[neg, prompt]` embeddings
@@ -519,8 +537,8 @@ impl WanPipeline {
         let latents = latents.to_device()?;
         let encoder_hs = encoder_hs.clone().to_device()?;
         let boundary = cfg.boundary_ratio.or(self.boundary_ratio);
-        // DMD students are distilled for a single conditional pass.
-        let (guidance, guidance_2) = if cfg.is_dmd {
+        // DMD / rCM students are distilled for a single conditional pass.
+        let (guidance, guidance_2) = if cfg.is_dmd || cfg.is_rcm {
             (1.0, 1.0)
         } else {
             (cfg.guidance_scale, cfg.guidance_scale_2.unwrap_or(cfg.guidance_scale))
@@ -535,7 +553,16 @@ impl WanPipeline {
             guidance_2,
             tea_cache: TeaCache::from_env(),
         };
-        if cfg.is_dmd {
+        if cfg.is_rcm {
+            let sigma = cfg.rcm_sigma_max.unwrap_or(RCM_SIGMA_MAX_T2V);
+            let sched = RcmSchedule::new(cfg.num_inference_steps.max(1), sigma);
+            super::log::info(format_args!(
+                "denoise=rcm steps={} sigma_max={sigma}",
+                sched.num_steps()
+            ));
+            let _denoise = super::log::StepTimer::start(format!("rcm {} steps", sched.num_steps()));
+            rcm_denoise(latents, &encoder_hs, &sched, cfg.seed, &mut ctx, observer)
+        } else if cfg.is_dmd {
             let steps = cfg.dmd_steps.clone().unwrap_or_else(|| FAST_WAN_1_3B_DMD_STEPS.to_vec());
             super::log::info(format_args!("denoise=dmd steps={}", steps.len()));
             let sched = DmdSchedule::new(&steps, 1000);
@@ -833,6 +860,50 @@ fn dmd_denoise(
         notify(&mut observer, i, total, t, &latents)?;
     }
     Ok(latents)
+}
+
+/// TurboDiffusion rCM: same x0 / re-noise shape as DMD, TrigFlow→RF sigmas.
+fn rcm_denoise(
+    mut latents: CudaTensor,
+    encoder_hs: &CudaTensor,
+    sched: &RcmSchedule,
+    seed: u64,
+    ctx: &mut DenoiseCtx<'_>,
+    mut observer: Option<&mut StepObserver<'_>>,
+) -> Result<CudaTensor> {
+    let total = sched.num_steps();
+    for i in 0..total {
+        let c = sched.step_coeffs(i);
+        let t = c.model_timestep;
+        let _step = super::log::StepTimer::start(format!("rcm step {}/{total} t={t:.3}", i + 1));
+        let velocity = dit_cfg(ctx, &latents, encoder_hs, t)?;
+        let x0 = CudaTensor::lincomb(&[(1.0, &latents), (-(c.t_cur as f32), &velocity)])?;
+        latents = if c.t_next == 0.0 {
+            x0
+        } else {
+            let noise = dmd_noise(seed, i, &latents.shape)?;
+            CudaTensor::lincomb(&[(1.0 - c.t_next as f32, &x0), (c.t_next as f32, &noise)])?
+        };
+        super::device::synchronize().map_err(|e| PipelineError::Message(e.to_string()))?;
+        notify(&mut observer, i, total, t, &latents)?;
+    }
+    Ok(latents)
+}
+
+fn warn_sla_backend() {
+    static ONCE: std::sync::Once = std::sync::Once::new();
+    ONCE.call_once(|| {
+        let backend = std::env::var("FASTVIDEO_ATTENTION_BACKEND").unwrap_or_default();
+        if backend.eq_ignore_ascii_case("SLA_ATTN") || backend.eq_ignore_ascii_case("sla") {
+            super::log::info(format_args!(
+                "TurboWan: FASTVIDEO_ATTENTION_BACKEND={backend} requested; SLA kernels are not ported yet — using dense SDPA"
+            ));
+        } else {
+            super::log::info(format_args!(
+                "TurboWan: dense SDPA (set FASTVIDEO_ATTENTION_BACKEND=SLA_ATTN when SLA lands)"
+            ));
+        }
+    });
 }
 
 /// Σ coef·term over one UniPC plan combination.

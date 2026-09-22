@@ -198,6 +198,13 @@ impl VideoGenerator {
             self.definition.sampling,
             SamplingAlgorithm::Dmd | SamplingAlgorithm::CausalDmd
         );
+        let is_rcm = matches!(self.definition.sampling, SamplingAlgorithm::Rcm);
+        if is_rcm {
+            return Err(FastVideoError::NotImplemented {
+                component: "TurboWan rCM".into(),
+                detail: "use --backend cudarc for TurboDiffusion / TurboWan".into(),
+            });
+        }
         let is_i2v = self.definition.workload_types.contains(&WorkloadType::I2V);
         if is_i2v && !self.tiny && self.image_path.is_none() {
             return Err(FastVideoError::NotImplemented {
@@ -230,8 +237,10 @@ impl VideoGenerator {
             output_dir: self.output_path.clone(),
             tiny: self.tiny,
             is_dmd,
+            is_rcm: false,
             flow_shift: f64::from(self.pipeline.flow_shift),
             dmd_steps: self.pipeline.dmd_steps.map(|s| s.to_vec()),
+            rcm_sigma_max: None,
             tokenizer_path,
             image_path: self.image_path.clone(),
             guidance_scale_2: self.sampling.guidance_scale_2,
@@ -291,6 +300,12 @@ impl VideoGenerator {
             self.definition.sampling,
             SamplingAlgorithm::Dmd | SamplingAlgorithm::CausalDmd
         );
+        if matches!(self.definition.sampling, SamplingAlgorithm::Rcm) {
+            return Err(FastVideoError::NotImplemented {
+                component: "TurboWan rCM".into(),
+                detail: "use --backend cudarc for TurboDiffusion / TurboWan".into(),
+            });
+        }
         if self.definition.workload_types.contains(&WorkloadType::I2V) && !self.tiny {
             return Err(FastVideoError::NotImplemented {
                 component: "I2V generate".into(),
@@ -374,6 +389,7 @@ impl VideoGenerator {
             self.definition.sampling,
             SamplingAlgorithm::Dmd | SamplingAlgorithm::CausalDmd
         );
+        let is_rcm = matches!(self.definition.sampling, SamplingAlgorithm::Rcm);
         if self.num_gpus > 1 {
             // Sequence-parallel smoke: shard SDPA query dim across logical ranks.
             std::env::set_var("FASTVIDEO_SP_WORLD", self.num_gpus.to_string());
@@ -423,8 +439,10 @@ impl VideoGenerator {
             output_dir: self.output_path.clone(),
             tiny: self.tiny,
             is_dmd,
+            is_rcm,
             flow_shift: f64::from(self.pipeline.flow_shift),
             dmd_steps: self.pipeline.dmd_steps.map(|s| s.to_vec()),
+            rcm_sigma_max: self.pipeline.rcm_sigma_max,
             tokenizer_path: None,
             image_path: self.image_path.clone(),
             control_path: self.control_path.clone(),

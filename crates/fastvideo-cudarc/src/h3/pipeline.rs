@@ -69,13 +69,39 @@ pub struct H3Request {
     pub num_frames: usize,
     /// Write `output.mp4` (needs ffmpeg) next to the PNG frames.
     pub mp4: bool,
+    /// FL2VA first-frame image (canvas-fitted). Encode not wired yet.
+    pub first_image: Option<std::path::PathBuf>,
+    /// FL2VA last-frame image. Encode not wired yet.
+    pub last_image: Option<std::path::PathBuf>,
 }
 
 impl H3Request {
     /// The default 16:9 canvas (768 x 1344) for a whole number of seconds.
     pub fn seconds(prompt: impl Into<String>, seconds: usize, seed: u64) -> std::result::Result<Self, String> {
         let g = H3Geometry::default_16x9(seconds)?;
-        Ok(Self { prompt: prompt.into(), seed, height: g.height, width: g.width, num_frames: g.num_frames, mp4: true })
+        Ok(Self {
+            prompt: prompt.into(),
+            seed,
+            height: g.height,
+            width: g.width,
+            num_frames: g.num_frames,
+            mp4: true,
+            first_image: None,
+            last_image: None,
+        })
+    }
+
+    /// Ordered FL2VA anchors implied by the request images.
+    pub fn keyframe_anchors(&self) -> Vec<fastvideo_models::h3::packing::KeyframeAnchor> {
+        use fastvideo_models::h3::packing::KeyframeAnchor;
+        let mut a = Vec::new();
+        if self.first_image.is_some() {
+            a.push(KeyframeAnchor::First);
+        }
+        if self.last_image.is_some() {
+            a.push(KeyframeAnchor::Last);
+        }
+        a
     }
 }
 

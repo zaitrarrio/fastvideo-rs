@@ -26,6 +26,11 @@ pub struct AncestralOpts {
 /// Stage 1 (or single-stage) distilled schedule: 8 model evaluations.
 pub const DISTILLED_SIGMA_VALUES: [f64; 8] = [1.0, 0.99375, 0.9875, 0.98125, 0.975, 0.909375, 0.725, 0.421875];
 
+/// Distilled list including the terminal 0 — FastVideo's
+/// `_distilled_subset_sigmas` indexes this 9-long table.
+const DISTILLED_SIGMA_WITH_TERMINAL: [f64; 9] =
+    [1.0, 0.99375, 0.9875, 0.98125, 0.975, 0.909375, 0.725, 0.421875, 0.0];
+
 /// Stage 2 refinement after the ×2 latent upsampler: the tail of the list
 /// above, 3 evaluations. The stage-1 result is re-noised to the first entry.
 pub const STAGE_2_DISTILLED_SIGMA_VALUES: [f64; 3] = [0.909375, 0.725, 0.421875];
@@ -57,9 +62,66 @@ impl Ltx2Schedule {
         Self::from_sigmas(&DISTILLED_SIGMA_VALUES, 1000)
     }
 
+    /// Distilled subset for `steps` ∈ [1, 8]: same algorithm as FastVideo
+    /// `_distilled_subset_sigmas` — preserve endpoints, pick interior indices
+    /// that minimize `(max_gap, last_gap, sum_gap²)`.
+    ///
+    /// Used by LTX-2.3 for stage-1 when `num_inference_steps` is 5 (the `5+2`
+    /// recipe) rather than the full 8.
+    pub fn distilled_subset(steps: usize) -> Result<Self, String> {
+        let max_steps = DISTILLED_SIGMA_WITH_TERMINAL.len() - 1;
+        if steps < 1 || steps > max_steps {
+            return Err(format!("ltx2 distilled subset supports steps in [1, {max_steps}], got {steps}"));
+        }
+        if steps == max_steps {
+            return Ok(Self::distilled());
+        }
+        let max_index = DISTILLED_SIGMA_WITH_TERMINAL.len() - 1;
+        let interior_count = steps - 1;
+        let interiors: Vec<usize> = (1..max_index).collect();
+        let mut best_key: Option<(f64, f64, f64)> = None;
+        let mut best: Option<Vec<usize>> = None;
+        for combo in combinations(&interiors, interior_count) {
+            let mut candidate = Vec::with_capacity(steps + 1);
+            candidate.push(0);
+            candidate.extend_from_slice(&combo);
+            candidate.push(max_index);
+            let gaps: Vec<f64> = candidate
+                .windows(2)
+                .map(|w| DISTILLED_SIGMA_WITH_TERMINAL[w[0]] - DISTILLED_SIGMA_WITH_TERMINAL[w[1]])
+                .collect();
+            let key = (
+                gaps.iter().cloned().fold(f64::NEG_INFINITY, f64::max),
+                *gaps.last().unwrap_or(&0.0),
+                gaps.iter().map(|g| g * g).sum::<f64>(),
+            );
+            if best_key.map(|k| key < k).unwrap_or(true) {
+                best_key = Some(key);
+                best = Some(candidate);
+            }
+        }
+        let indices = best.ok_or_else(|| "ltx2: failed to build distilled subset".to_string())?;
+        // Drop the terminal 0; `from_sigmas` appends it.
+        let sigmas: Vec<f64> = indices[..indices.len() - 1]
+            .iter()
+            .map(|&i| DISTILLED_SIGMA_WITH_TERMINAL[i])
+            .collect();
+        Ok(Self::from_sigmas(&sigmas, 1000))
+    }
+
     /// The 3-step stage-2 schedule.
     pub fn distilled_stage_2() -> Self {
         Self::from_sigmas(&STAGE_2_DISTILLED_SIGMA_VALUES, 1000)
+    }
+
+    /// Stage-2 refine: only 2 or 3 steps are supported (FastVideo LTX-2 refine).
+    /// The 2-step recipe keeps `[0.909375, 0.421875]` (omits `0.725`).
+    pub fn distilled_stage_2_steps(steps: usize) -> Result<Self, String> {
+        match steps {
+            3 => Ok(Self::distilled_stage_2()),
+            2 => Ok(Self::from_sigmas(&[STAGE_2_DISTILLED_SIGMA_VALUES[0], STAGE_2_DISTILLED_SIGMA_VALUES[2]], 1000)),
+            n => Err(format!("ltx2 refine supports only 2 or 3 steps, got {n}")),
+        }
     }
 
     /// The dev model's schedule for `num_inference_steps` steps at a given
@@ -178,6 +240,36 @@ pub fn renoise(latent: &mut [f32], noise: &[f32], noise_scale: f32) {
     }
 }
 
+/// Lexicographic combinations of `items` taken `k` at a time (no itertools).
+fn combinations(items: &[usize], k: usize) -> Vec<Vec<usize>> {
+    if k == 0 {
+        return vec![vec![]];
+    }
+    if k > items.len() {
+        return vec![];
+    }
+    let mut out = Vec::new();
+    let mut stack: Vec<(usize, Vec<usize>)> = vec![(0, Vec::new())];
+    while let Some((start, prefix)) = stack.pop() {
+        if prefix.len() == k {
+            out.push(prefix);
+            continue;
+        }
+        let need = k - prefix.len();
+        let remaining = items.len().saturating_sub(start);
+        if remaining < need {
+            continue;
+        }
+        // Push in reverse so the forward order stays lexicographic when popping.
+        for i in (start..=items.len() - need).rev() {
+            let mut next = prefix.clone();
+            next.push(items[i]);
+            stack.push((i + 1, next));
+        }
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -213,6 +305,27 @@ mod tests {
         assert_eq!(b.num_steps(), 3);
         assert_eq!(&a.sigmas[5..], &b.sigmas[..]);
         assert_eq!(STAGE_2_DISTILLED_SIGMA_VALUES[0], 0.909_375);
+    }
+
+    #[test]
+    fn distilled_subset_matches_fastvideo_5_and_8() {
+        let s8 = Ltx2Schedule::distilled_subset(8).unwrap();
+        assert_eq!(s8, Ltx2Schedule::distilled());
+        // FastVideo 5-step: indices [0,4,5,6,7,8] → drop terminal for from_sigmas.
+        let s5 = Ltx2Schedule::distilled_subset(5).unwrap();
+        assert_eq!(s5.num_steps(), 5);
+        assert_eq!(s5.sigmas, vec![1.0, 0.975, 0.909_375, 0.725, 0.421_875, 0.0]);
+        assert!(Ltx2Schedule::distilled_subset(0).is_err());
+        assert!(Ltx2Schedule::distilled_subset(9).is_err());
+    }
+
+    #[test]
+    fn stage_2_two_step_omits_mid_sigma() {
+        let s = Ltx2Schedule::distilled_stage_2_steps(2).unwrap();
+        assert_eq!(s.sigmas, vec![0.909_375, 0.421_875, 0.0]);
+        assert_eq!(Ltx2Schedule::distilled_stage_2_steps(3).unwrap(), Ltx2Schedule::distilled_stage_2());
+        assert!(Ltx2Schedule::distilled_stage_2_steps(1).is_err());
+        assert!(Ltx2Schedule::distilled_stage_2_steps(4).is_err());
     }
 
     #[test]

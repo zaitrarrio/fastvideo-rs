@@ -8,10 +8,12 @@
 //! hand-written constructors, checked below against the numbers the weight
 //! headers imply. See docs/ports/ltx2.md and docs/ports/ltx25.md.
 
-/// Checkpoint family: LTX-2.0 dev/distilled vs LTX-2.5 distilled stage-1.
+/// Checkpoint family: LTX-2.0, LTX-2.3 (Gemma3 + 2.5 DiT/VAE/BWE/upsampler), LTX-2.5.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Ltx2ModelVersion {
     V20,
+    /// FastVideo / Lightricks LTX-2.3 distilled (22B-class DiT, Gemma-3, BWE, spatial upscaler; no DiffVAE).
+    V23,
     V25,
 }
 
@@ -1125,6 +1127,38 @@ pub fn ltx2_5_22b_distilled() -> Ltx2Config {
     }
 }
 
+/// LTX-2.3 distilled (`FastVideo/LTX-2.3-Distilled-Diffusers`): same DiT/VAE/BWE/
+/// connector geometry as 2.5, Gemma-3 text (no Gemma-4), spatial upscaler, no DiffVAE.
+pub fn ltx2_23_22b_distilled() -> Ltx2Config {
+    Ltx2Config {
+        version: Ltx2ModelVersion::V23,
+        transformer: Ltx2TransformerConfig::ltx2_5_22b(),
+        vae: Ltx2VideoVaeConfig::ltx2_5_22b(),
+        connectors: Ltx2ConnectorsConfig::ltx2_5_22b(),
+        vocoder: Ltx2VocoderConfig::ltx2_5_22b_bwe(),
+        scheduler: Ltx2SchedulerConfig::ltx2_19b_distilled(),
+        gemma4: None,
+        latent_upsampler: Some(Ltx2LatentUpsamplerConfig::ltx2_5_22b()),
+        diffusion_decoder: None,
+        ..ltx2_19b()
+    }
+}
+
+/// LTX-2.3 base (dev schedule, 30-step default at generate time; STG deferred).
+pub fn ltx2_23_22b() -> Ltx2Config {
+    Ltx2Config {
+        version: Ltx2ModelVersion::V23,
+        transformer: Ltx2TransformerConfig::ltx2_5_22b(),
+        vae: Ltx2VideoVaeConfig::ltx2_5_22b(),
+        connectors: Ltx2ConnectorsConfig::ltx2_5_22b(),
+        vocoder: Ltx2VocoderConfig::ltx2_5_22b_bwe(),
+        gemma4: None,
+        latent_upsampler: Some(Ltx2LatentUpsamplerConfig::ltx2_5_22b()),
+        diffusion_decoder: None,
+        ..ltx2_19b()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1367,5 +1401,21 @@ mod tests {
         assert_eq!(dd.model_output_type, "x0");
         assert_eq!(dd.stage_channels, vec![2048, 1024, 512, 512, 256]);
         assert!(ltx2_19b().diffusion_decoder.is_none());
+    }
+
+    #[test]
+    fn ltx23_bundle_version() {
+        let cfg = ltx2_23_22b_distilled();
+        assert_eq!(cfg.version, Ltx2ModelVersion::V23);
+        assert!(cfg.gemma4.is_none());
+        assert!(!cfg.scheduler.use_dynamic_shifting);
+        assert!(cfg.vocoder.with_bwe);
+        assert!(cfg.latent_upsampler.is_some());
+        assert!(cfg.diffusion_decoder.is_none());
+        assert!(cfg.transformer.gated_attn);
+        assert!(cfg.connectors.per_modality_projections);
+        let base = ltx2_23_22b();
+        assert_eq!(base.version, Ltx2ModelVersion::V23);
+        assert!(base.scheduler.use_dynamic_shifting);
     }
 }

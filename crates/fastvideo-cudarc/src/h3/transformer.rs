@@ -258,14 +258,20 @@ impl AdaLnTable {
 
 /// One block's modulation on the device: a `[1, 6, hidden]` table per segment.
 struct BlockMods {
-    /// In packed order: text, audio, video.
-    segments: [(RowRange, CudaTensor); 3],
+    /// In packed order: text, optional keyframe cond (video AdaLN), audio, video.
+    segments: Vec<(RowRange, CudaTensor)>,
 }
 
 impl BlockMods {
     fn upload(table: &AdaLnTable, step: usize, block: usize, layout: &H3PackedLayout) -> Result<Self> {
         let up = |tag: u8| CudaTensor::from_vec(table.block_slot(step, block, tag).to_vec(), vec![1, ADALN_PARAMS, table.hidden])?.to_device();
-        Ok(Self { segments: [(layout.text, up(TAG_TEXT)?), (layout.audio, up(TAG_AUDIO)?), (layout.video, up(TAG_VIDEO)?)] })
+        let mut segments = vec![(layout.text, up(TAG_TEXT)?)];
+        if layout.cond.len > 0 {
+            segments.push((layout.cond, up(TAG_VIDEO)?));
+        }
+        segments.push((layout.audio, up(TAG_AUDIO)?));
+        segments.push((layout.video, up(TAG_VIDEO)?));
+        Ok(Self { segments })
     }
 
     /// `n * (1 + scale[a]) + shift[a]` with `a` the row's modality.
@@ -585,6 +591,11 @@ impl H3Transformer {
         let hidden = cfg.hidden_size;
         if step >= self.table.steps() {
             return Err(msg(format!("h3 dit: step {step} of a {}-step AdaLN table", self.table.steps())));
+        }
+        if l.cond.len > 0 {
+            return Err(msg(
+                "h3 dit: keyframe condition rows need encode + packed cond; FL2VA encode is not wired yet",
+            ));
         }
         if video_rows.shape != [l.video.len, cfg.video_patch_dim()] || audio_rows.shape != [l.audio.len, cfg.audio_in_channels] || text.shape != [1, l.text.len, hidden] {
             return Err(msg(format!(

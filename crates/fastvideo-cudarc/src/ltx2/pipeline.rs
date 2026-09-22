@@ -84,15 +84,29 @@ pub struct Ltx2Request {
     pub output_dir: PathBuf,
     /// Also mux `output.mp4` (needs ffmpeg on the PATH).
     pub mp4: bool,
-    /// Distilled two-stage: half-res stage-1 → spatial ×2 upsampler → 3-step stage-2.
+    /// Distilled two-stage: half-res stage-1 → spatial ×2 upsampler → stage-2 refine.
     pub two_stage: bool,
     /// DiffVAE: diffusion video decoder instead of the conv VAE (audio unchanged).
     pub diff_vae: bool,
+    /// Empty = unconditional branch uses empty tokenization when CFG is on.
+    pub negative_prompt: String,
+    /// Video CFG (`uncond + scale * (cond - uncond)`). Distilled stays at 1.0.
+    pub guidance_scale: f32,
+    /// Audio CFG scale. Distilled stays at 1.0; base often 7.0.
+    pub audio_guidance_scale: f32,
+    /// Base/dev step count (`None` → 40 for 2.0, 30 for 2.3). Distilled: subset
+    /// size (`None` → 8); with `--two-stage`, stage-1 steps (5 → implies refine 2).
+    pub num_inference_steps: Option<usize>,
+    /// Two-stage refine steps (`None` → 3, or 2 when stage-1 is 5). Only 2 or 3.
+    pub refine_steps: Option<usize>,
+    /// First-frame image for I2V (`None` = T2AV). Needs a VAE encoder (not yet).
+    pub image_path: Option<PathBuf>,
 }
 
 impl Ltx2Request {
     pub fn new(cfg: &Ltx2Config, prompt: impl Into<String>, output_dir: impl Into<PathBuf>) -> Self {
         let d = &cfg.defaults;
+        let base = cfg.scheduler.use_dynamic_shifting;
         Self {
             prompt: prompt.into(),
             height: d.height,
@@ -104,6 +118,12 @@ impl Ltx2Request {
             mp4: true,
             two_stage: false,
             diff_vae: false,
+            negative_prompt: String::new(),
+            guidance_scale: if base { 4.0 } else { 1.0 },
+            audio_guidance_scale: if base { 7.0 } else { 1.0 },
+            num_inference_steps: None,
+            refine_steps: None,
+            image_path: None,
         }
     }
 
@@ -125,7 +145,22 @@ impl Ltx2Request {
         if self.frame_rate.is_nan() || self.frame_rate <= 0.0 || self.prompt.trim().is_empty() {
             return Err(err("ltx2: needs a positive frame rate and a non-empty prompt"));
         }
+        if let Some(n) = self.refine_steps {
+            if n != 2 && n != 3 {
+                return Err(err(format!("ltx2: refine_steps must be 2 or 3, got {n}")));
+            }
+        }
         Ok(())
+    }
+
+    /// Stage-1 distilled step count (defaults to 8).
+    pub fn stage1_steps(&self) -> usize {
+        self.num_inference_steps.unwrap_or(8)
+    }
+
+    /// Stage-2 refine step count: explicit, else 2 when stage-1 is 5, else 3.
+    pub fn stage2_steps(&self) -> usize {
+        self.refine_steps.unwrap_or(if self.stage1_steps() == 5 { 2 } else { 3 })
     }
 }
 
@@ -206,6 +241,46 @@ pub fn denoise(
     Ok((video, audio))
 }
 
+/// Base/dev CFG Euler: two forwards per step, then
+/// `v = uncond + scale * (cond - uncond)` separately for video and audio.
+pub fn denoise_cfg(
+    model: &Ltx2Transformer,
+    text_cond: &TextConditioning,
+    text_uncond: &TextConditioning,
+    ropes: &Ropes,
+    schedule: &Ltx2Schedule,
+    video_scale: f32,
+    audio_scale: f32,
+    mut video: CudaTensor,
+    mut audio: CudaTensor,
+    mut observer: Option<StepObserver<'_>>,
+) -> Result<(CudaTensor, CudaTensor)> {
+    for i in 0..schedule.num_steps() {
+        let timer = Instant::now();
+        let t = schedule.timestep_f32(i);
+        let (vc, ac) = model.forward(&video, &audio, text_cond, t, ropes, None)?;
+        let (vu, au) = model.forward(&video, &audio, text_uncond, t, ropes, None)?;
+        // scale * cond + (1 - scale) * uncond
+        let v_video = CudaTensor::lincomb(&[(video_scale, &vc), (1.0 - video_scale, &vu)])?;
+        let v_audio = CudaTensor::lincomb(&[(audio_scale, &ac), (1.0 - audio_scale, &au)])?;
+        let dt = schedule.dt(i) as f32;
+        video = CudaTensor::lincomb(&[(1.0, &video), (dt, &v_video)])?;
+        audio = CudaTensor::lincomb(&[(1.0, &audio), (dt, &v_audio)])?;
+        sync()?;
+        let secs = timer.elapsed().as_secs_f64();
+        crate::wan::log::info(format_args!(
+            "ltx2 cfg step {}/{} sigma {:.6} v_gs={video_scale} a_gs={audio_scale} ({secs:.2}s)",
+            i + 1,
+            schedule.num_steps(),
+            schedule.sigmas[i]
+        ));
+        if let Some(obs) = observer.as_mut() {
+            obs(i, &video, &audio, secs)?;
+        }
+    }
+    Ok((video, audio))
+}
+
 fn apply_ancestral(
     sample: &CudaTensor,
     velocity: &CudaTensor,
@@ -276,11 +351,13 @@ impl Decoders {
         let open = |sub: &str| WeightMap::open(&weights.join(sub));
         let upsampler = match &cfg.latent_upsampler {
             Some(ucfg) => {
-                let dir = weights.join("latent_upsampler");
-                if dir.is_dir() {
-                    Some(LatentUpsampler::load(&WeightMap::open(&dir)?, ucfg)?)
-                } else {
-                    None
+                let dir = ["latent_upsampler", "spatial_upscaler", "spatial_upsampler"]
+                    .iter()
+                    .map(|name| weights.join(name))
+                    .find(|p| p.is_dir());
+                match dir {
+                    Some(dir) => Some(LatentUpsampler::load(&WeightMap::open(&dir)?, ucfg)?),
+                    None => None,
                 }
             }
             None => None,
@@ -415,21 +492,32 @@ pub fn decode_diffvae_and_write(
 /// diffusers root (or the component folder itself).
 ///
 /// Also accepts `--dit …/transformer` when looking up `connectors`: the sibling
-/// `…/connectors` directory is used (Diffusers split pack).
+/// `…/connectors` (or `…/text_embedding_projection` on LTX-2.3 packs) is used.
 pub fn open_distilled(path: &Path, component: &str) -> Result<WeightMap> {
-    let map = if path.is_file() {
-        WeightMap::open_files(&[path.to_path_buf()])?
-    } else if path.join(component).is_dir() {
-        WeightMap::open(&path.join(component))?
-    } else if let Some(sibling) = path.parent().map(|p| p.join(component)).filter(|p| p.is_dir()) {
-        // `path` is already a component dir (e.g. `…/transformer`); open the sibling.
-        WeightMap::open(&sibling)?
-    } else if path.is_dir() {
-        WeightMap::open(path)?
+    let aliases: &[&str] = if component == "connectors" {
+        &["connectors", "text_embedding_projection"]
     } else {
-        return Err(err(format!("{} is neither a .safetensors file nor a directory", path.display())));
+        &[component]
     };
-    Ok(map)
+    for name in aliases {
+        if path.is_file() {
+            return Ok(WeightMap::open_files(&[path.to_path_buf()])?);
+        }
+        if path.join(name).is_dir() {
+            return Ok(WeightMap::open(&path.join(name))?);
+        }
+        if let Some(sibling) = path.parent().map(|p| p.join(name)).filter(|p| p.is_dir()) {
+            return Ok(WeightMap::open(&sibling)?);
+        }
+    }
+    if path.is_dir() && component != "connectors" {
+        return Ok(WeightMap::open(path)?);
+    }
+    Err(err(format!(
+        "{}: no {component} (tried {})",
+        path.display(),
+        aliases.join(", ")
+    )))
 }
 
 /// Whether the conditioning cache answered.
@@ -589,7 +677,17 @@ impl TextEncoder {
                 weights_identity(&self.paths.dit, None)?
             } else if self.paths.dit.join("connectors").is_dir() {
                 weights_identity(&self.paths.dit.join("connectors"), None)?
+            } else if self.paths.dit.join("text_embedding_projection").is_dir() {
+                weights_identity(&self.paths.dit.join("text_embedding_projection"), None)?
             } else if let Some(sibling) = self.paths.dit.parent().map(|p| p.join("connectors")).filter(|p| p.is_dir()) {
+                weights_identity(&sibling, None)?
+            } else if let Some(sibling) = self
+                .paths
+                .dit
+                .parent()
+                .map(|p| p.join("text_embedding_projection"))
+                .filter(|p| p.is_dir())
+            {
                 weights_identity(&sibling, None)?
             } else {
                 weights_identity(&self.paths.dit, None)?
@@ -759,12 +857,19 @@ impl Ltx2Pipeline {
     pub fn generate(&mut self, req: &Ltx2Request, use_text_cache: bool, observer: Option<StepObserver<'_>>) -> Result<Ltx2Output> {
         req.validate()?;
         let cfg = self.cfg.clone();
+        if req.image_path.is_some() {
+            return Err(err(
+                "ltx2: I2V (--image) needs the video VAE encoder; T2AV works today — encoder lands next",
+            ));
+        }
         if req.two_stage {
-            if cfg.version != Ltx2ModelVersion::V25 {
-                return Err(err("ltx2: --two-stage requires model version 2.5"));
+            if !matches!(cfg.version, Ltx2ModelVersion::V23 | Ltx2ModelVersion::V25) {
+                return Err(err("ltx2: --two-stage requires model version 2.3 or 2.5"));
             }
             if self.decoders.upsampler.is_none() {
-                return Err(err("ltx2: two-stage needs weights/latent_upsampler (missing beside --weights)"));
+                return Err(err(
+                    "ltx2: two-stage needs weights/latent_upsampler|spatial_upscaler (missing beside --weights)",
+                ));
             }
         }
         if req.diff_vae {
@@ -789,6 +894,14 @@ impl Ltx2Pipeline {
 
         let (contexts, text_report) = self.text.encode(&req.prompt, use_text_cache)?;
         timings.text_s = text_report.seconds;
+        let use_cfg = req.guidance_scale != 1.0 || req.audio_guidance_scale != 1.0;
+        let uncond_contexts = if use_cfg {
+            let (c, rep) = self.text.encode(&req.negative_prompt, use_text_cache)?;
+            timings.text_s += rep.seconds;
+            Some(c)
+        } else {
+            None
+        };
 
         let timer = Instant::now();
         self.ensure_dit()?;
@@ -796,12 +909,28 @@ impl Ltx2Pipeline {
             let model = self.model.as_ref().expect("ensure_dit");
             model.project_text(&contexts.video, &contexts.audio)?
         };
+        let text_uncond = match &uncond_contexts {
+            Some(c) => {
+                let model = self.model.as_ref().expect("ensure_dit");
+                Some(model.project_text(&c.video, &c.audio)?)
+            }
+            None => None,
+        };
         drop(contexts);
+        drop(uncond_contexts);
         let ropes = Ropes::new(&cfg.transformer, grid1, audio_tokens, req.frame_rate as f32)?;
         let (video, audio) = initial_noise(&cfg, grid1, audio_tokens, req.seed)?;
         let mut step_s = Vec::new();
         let mut observer = observer;
-        let schedule = Ltx2Schedule::distilled();
+        let video_seq_len = grid1[0] * grid1[1] * grid1[2];
+        let default_dev_steps = if cfg.version == Ltx2ModelVersion::V23 { 30 } else { 40 };
+        let schedule = if cfg.scheduler.use_dynamic_shifting {
+            let steps = req.num_inference_steps.unwrap_or(default_dev_steps);
+            Ltx2Schedule::dev(&cfg.scheduler, steps, video_seq_len)
+        } else {
+            Ltx2Schedule::distilled_subset(req.stage1_steps()).map_err(err)?
+        };
+        let ancestral = cfg.version == Ltx2ModelVersion::V25;
         let (mut video, mut audio) = {
             let model = self.model.as_ref().expect("ensure_dit");
             let mut record = |i: usize, v: &CudaTensor, a: &CudaTensor, s: f64| -> Result<()> {
@@ -811,7 +940,7 @@ impl Ltx2Pipeline {
                     None => Ok(()),
                 }
             };
-            if cfg.version == Ltx2ModelVersion::V25 {
+            if ancestral {
                 denoise_ancestral(
                     model,
                     &text,
@@ -820,6 +949,19 @@ impl Ltx2Pipeline {
                     video,
                     audio,
                     AncestralOpts { eta: 1.0, s_noise: 1.0, noise_seed: req.seed + 10_000 },
+                    Some(&mut record),
+                )?
+            } else if let Some(ref uncond) = text_uncond {
+                denoise_cfg(
+                    model,
+                    &text,
+                    uncond,
+                    &ropes,
+                    &schedule,
+                    req.guidance_scale,
+                    req.audio_guidance_scale,
+                    video,
+                    audio,
                     Some(&mut record),
                 )?
             } else {
@@ -844,14 +986,14 @@ impl Ltx2Pipeline {
                 timings.upsample_s, grid_full
             ));
 
-            let sigma = Ltx2Schedule::distilled_stage_2().sigmas[0] as f32;
+            let schedule2 = Ltx2Schedule::distilled_stage_2_steps(req.stage2_steps()).map_err(err)?;
+            let sigma = schedule2.sigmas[0] as f32;
             let mut rng = rand::rngs::StdRng::seed_from_u64(req.seed + 20_000);
             video = renoise(&video, sigma, &mut rng)?;
             audio = renoise(&audio, sigma, &mut rng)?;
 
             let s2_timer = Instant::now();
             let ropes2 = Ropes::new(&cfg.transformer, grid_full, audio_tokens, req.frame_rate as f32)?;
-            let schedule2 = Ltx2Schedule::distilled_stage_2();
             let step_offset = step_s.len();
             let (v2, a2) = {
                 let model = self.model.as_ref().expect("ensure_dit");
@@ -862,16 +1004,33 @@ impl Ltx2Pipeline {
                         None => Ok(()),
                     }
                 };
-                denoise_ancestral(
-                    model,
-                    &text,
-                    &ropes2,
-                    &schedule2,
-                    video,
-                    audio,
-                    AncestralOpts { eta: 1.0, s_noise: 1.0, noise_seed: req.seed + 30_000 },
-                    Some(&mut record2),
-                )?
+                if ancestral {
+                    denoise_ancestral(
+                        model,
+                        &text,
+                        &ropes2,
+                        &schedule2,
+                        video,
+                        audio,
+                        AncestralOpts { eta: 1.0, s_noise: 1.0, noise_seed: req.seed + 30_000 },
+                        Some(&mut record2),
+                    )?
+                } else if let Some(ref uncond) = text_uncond {
+                    denoise_cfg(
+                        model,
+                        &text,
+                        uncond,
+                        &ropes2,
+                        &schedule2,
+                        req.guidance_scale,
+                        req.audio_guidance_scale,
+                        video,
+                        audio,
+                        Some(&mut record2),
+                    )?
+                } else {
+                    denoise(model, &text, &ropes2, &schedule2, video, audio, Some(&mut record2))?
+                }
             };
             video = v2;
             audio = a2;
