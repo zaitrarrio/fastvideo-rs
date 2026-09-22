@@ -92,6 +92,9 @@ struct GenerateArgs {
     /// H3 FL2VA last-frame image (PNG or JPEG).
     #[arg(long)]
     last_image: Option<String>,
+    /// H3 Ref2VA image reference (repeatable, ordered). Needs MiniMax-H3 `transformer_ref/`.
+    #[arg(long = "ref")]
+    references: Vec<String>,
     /// Control / reference frame for Fun Control / Lucy (PNG or JPEG).
     #[arg(long)]
     control: Option<String>,
@@ -141,6 +144,8 @@ struct GenerateToml {
     seed: Option<u64>,
     image: Option<String>,
     last_image: Option<String>,
+    /// Ordered Ref2VA image paths.
+    references: Option<Vec<String>>,
     control: Option<String>,
     output: Option<String>,
     prompt: Option<String>,
@@ -321,6 +326,19 @@ fn main() -> Result<()> {
                         refine_steps: args.refine_steps.or(file.refine_steps),
                         image_path: args.image.or(file.image).map(PathBuf::from),
                         last_image_path: args.last_image.or(file.last_image).map(PathBuf::from),
+                        reference_images: {
+                            let mut refs: Vec<PathBuf> =
+                                args.references.into_iter().map(PathBuf::from).collect();
+                            if refs.is_empty() {
+                                refs = file
+                                    .references
+                                    .unwrap_or_default()
+                                    .into_iter()
+                                    .map(PathBuf::from)
+                                    .collect();
+                            }
+                            refs
+                        },
                         h3_recipe: args.h3_recipe,
                         h3_seconds: args.seconds,
                     };

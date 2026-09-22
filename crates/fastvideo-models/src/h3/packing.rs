@@ -6,11 +6,15 @@
 //! modality it is lives entirely in the layout built here:
 //!
 //! ```text
-//! [ text | optional keyframe cond (video tag) | audio L/R | video ]
+//! [ text | optional keyframe / Ref2VA image refs (video tag) | audio L/R | video ]
 //! ```
 //!
 //! T2AV has no keyframes; FL2VA inserts one latent-frame of condition rows per
 //! `first` / `last` anchor between text and audio (`packing.py:210-281`).
+//! Image-only Ref2VA inserts one latent frame per reference image on the same
+//! segment (`build_ref2va_packed_sequence` with image refs only — contiguous).
+//! Video/audio references interleave and need index gathers (not yet on this
+//! layout).
 //!
 //! * `token_tags` pick the AdaLN modality (0 video, 1 text, 2 audio);
 //! * `position_ids` are **float** `(t, h, w)` rotary coordinates on one shared
@@ -25,6 +29,7 @@
 //! float32 where the reference casts them (first line of its rope).
 
 use super::config::{H3Geometry, H3TransformerConfig, H3_AUDIO_CHANNELS, TAG_AUDIO, TAG_TEXT, TAG_VIDEO};
+use super::reference::PreparedImageRef;
 use super::schedule::H3RowTimesteps;
 
 /// `MINIMAX_H3_ROPE_FRAME_RESCALE`: rotary time units per pixel frame
@@ -219,6 +224,99 @@ impl H3PackedLayout {
         })
     }
 
+    /// Image-only Ref2VA: `[text | ref images… | target audio | target video]`.
+    /// Each image is one latent frame on its own spatial canvas; rotary `t`
+    /// advances by 1 per image (`build_ref2va_packed_sequence`).
+    pub fn with_image_references(
+        text_tokens: usize,
+        latent: (usize, usize, usize),
+        audio_latents: usize,
+        patch: [usize; 3],
+        images: &[PreparedImageRef],
+    ) -> Result<Self, String> {
+        let (lt, lh, lw) = latent;
+        let [pt, ph, pw] = patch;
+        if text_tokens == 0 {
+            return Err("an H3 request needs at least one text row".into());
+        }
+        if images.is_empty() {
+            return Err("Ref2VA image packing needs at least one prepared image".into());
+        }
+        if pt != 1 || ph == 0 || pw == 0 || lt == 0 || lt % pt != 0 || lh % ph != 0 || lw % pw != 0 {
+            return Err(format!("latents {lt}x{lh}x{lw} are not divisible by the patch {patch:?}"));
+        }
+        let mut cond_len = 0usize;
+        let mut image_rows = Vec::with_capacity(images.len());
+        for img in images {
+            let rows = img.rows_per_frame(patch)?;
+            image_rows.push(rows);
+            cond_len += rows;
+        }
+        let grid = (lt / pt, lh / ph, lw / pw);
+        let rows_per_frame = grid.1 * grid.2;
+        let text = RowRange {
+            start: 0,
+            len: text_tokens,
+        };
+        let cond = RowRange {
+            start: text.end(),
+            len: cond_len,
+        };
+        let audio = RowRange {
+            start: cond.end(),
+            len: audio_latents * H3_AUDIO_CHANNELS,
+        };
+        let video = RowRange {
+            start: audio.end(),
+            len: grid.0 * rows_per_frame,
+        };
+
+        let mut position_ids = Vec::with_capacity(video.end());
+        position_ids.extend((0..text_tokens).map(|i| [i as f64, 0.0, 0.0]));
+        let mut rotary_time = text_tokens as f64;
+        for (img, &n_rows) in images.iter().zip(&image_rows) {
+            let sqrt_area = ((img.latent_height * img.latent_width) as f64).sqrt();
+            let hgrid = spatial_position_grid(img.latent_height, ph, sqrt_area);
+            let wgrid = spatial_position_grid(img.latent_width, pw, sqrt_area);
+            debug_assert_eq!(hgrid.len() * wgrid.len(), n_rows);
+            for h in &hgrid {
+                for w in &wgrid {
+                    position_ids.push([rotary_time, *h, *w]);
+                }
+            }
+            rotary_time += 1.0;
+        }
+
+        let sqrt_area = ((lh * lw) as f64).sqrt();
+        let hgrid = spatial_position_grid(lh, ph, sqrt_area);
+        let wgrid = spatial_position_grid(lw, pw, sqrt_area);
+        let tgrid = temporal_position_grid(grid.0, rotary_time);
+        let edges = [wgrid[0], wgrid[wgrid.len() - 1]];
+        for edge in edges.iter().take(H3_AUDIO_CHANNELS) {
+            position_ids.extend((0..audio_latents).map(|a| [rotary_time + a as f64, 0.0, *edge]));
+        }
+        for t in &tgrid {
+            for h in &hgrid {
+                position_ids.extend(wgrid.iter().map(|w| [*t, *h, *w]));
+            }
+        }
+        let mut token_tags = vec![TAG_TEXT; text.len];
+        token_tags.extend(std::iter::repeat_n(TAG_VIDEO, cond.len));
+        token_tags.extend(std::iter::repeat_n(TAG_AUDIO, audio.len));
+        token_tags.extend(std::iter::repeat_n(TAG_VIDEO, video.len));
+        Ok(Self {
+            text,
+            cond,
+            audio,
+            video,
+            audio_latents,
+            token_grid: grid,
+            keyframe_anchors: Vec::new(),
+            position_ids,
+            token_tags,
+        })
+    }
+
     pub fn from_geometry(geometry: &H3Geometry, text_tokens: usize) -> Result<Self, String> {
         let patch = H3TransformerConfig::fasth3_8step().patch_size;
         Self::new(
@@ -249,6 +347,25 @@ impl H3PackedLayout {
             geometry.audio_latents,
             patch,
             anchors,
+        )
+    }
+
+    pub fn from_geometry_with_image_refs(
+        geometry: &H3Geometry,
+        text_tokens: usize,
+        images: &[PreparedImageRef],
+    ) -> Result<Self, String> {
+        let patch = H3TransformerConfig::fasth3_8step().patch_size;
+        Self::with_image_references(
+            text_tokens,
+            (
+                geometry.latent_frames,
+                geometry.latent_height,
+                geometry.latent_width,
+            ),
+            geometry.audio_latents,
+            patch,
+            images,
         )
     }
 
@@ -530,6 +647,35 @@ mod tests {
         let want = 3.0 + temporal_position_span(2) - FRAME_RESCALE;
         assert!((l.position_ids[3][0] - want).abs() < 1e-12);
         assert_eq!(l.position_ids[3][1], 0.0);
+    }
+
+    #[test]
+    fn ref2va_images_advance_rotary_clock_then_target() {
+        use super::super::reference::PreparedImageRef;
+        // Two 4x4 latent images → 4 rows each; target 2x4x4 + 2 audio latents.
+        let imgs = [
+            PreparedImageRef {
+                height: 64,
+                width: 64,
+                latent_height: 4,
+                latent_width: 4,
+            },
+            PreparedImageRef {
+                height: 64,
+                width: 64,
+                latent_height: 4,
+                latent_width: 4,
+            },
+        ];
+        let l = H3PackedLayout::with_image_references(3, (2, 4, 4), 2, [1, 2, 2], &imgs).unwrap();
+        assert_eq!(l.cond, RowRange { start: 3, len: 8 });
+        assert_eq!(l.audio.start, 11);
+        assert_eq!(l.video.start, 15);
+        // First image at t = N, second at t = N+1; target audio/video start at N+2.
+        assert_eq!(l.position_ids[3][0], 3.0);
+        assert_eq!(l.position_ids[7][0], 4.0);
+        assert_eq!(l.position_ids[11][0], 5.0, "target audio at rotary_time after images");
+        assert_eq!(l.position_ids[15][0], 5.0, "target video shares that origin");
     }
 
     #[test]

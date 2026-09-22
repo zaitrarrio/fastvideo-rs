@@ -35,6 +35,8 @@ pub struct AvGenerateOptions {
     pub image_path: Option<PathBuf>,
     /// H3 FL2VA last-frame image.
     pub last_image_path: Option<PathBuf>,
+    /// Ordered H3 Ref2VA image reference paths (video/audio refs later).
+    pub reference_images: Vec<PathBuf>,
     /// FastH3 recipe name (`8step`, `4step-vsa`, …).
     pub h3_recipe: Option<String>,
     /// H3 clip length in whole seconds (5..=15); overrides default geometry.
@@ -168,19 +170,25 @@ fn generate_ltx2(def: &'static FamilyModelDefinition, opts: AvGenerateOptions) -
 
 fn generate_h3(def: &'static FamilyModelDefinition, opts: AvGenerateOptions) -> Result<AvGenerateOutput> {
     require_cuda(&opts.device)?;
-    if def.preset == "minimax_h3" {
-        // Base MiniMax-H3 T2AV uses a different schedule / AdaLN than FastH3;
-        // Ref2VA still needs transformer_ref. FL2VA encode is on the FastH3 path.
+    let has_refs = !opts.reference_images.is_empty();
+    let has_fl2va = opts.image_path.is_some() || opts.last_image_path.is_some();
+    if def.preset == "minimax_h3" && !has_refs && !has_fl2va {
         return Err(FastVideoError::NotImplemented {
             component: "minimax_h3".into(),
-            detail: "use a FastH3 checkpoint for T2AV/FL2VA; Ref2VA is not wired yet".into(),
+            detail: "base MiniMax-H3 T2AV schedule/AdaLN not wired; use FastH3 for T2AV, or pass --image/--last-image (FL2VA) / --ref (Ref2VA images)".into(),
         });
+    }
+    if has_refs && has_fl2va {
+        return Err(FastVideoError::Message(
+            "pass either FL2VA (--image/--last-image) or Ref2VA (--ref), not both".into(),
+        ));
     }
 
     #[cfg(feature = "cuda-cudarc")]
     {
         use fastvideo_cudarc::h3::pipeline::{generate, H3PipelineOptions, H3Request};
         use fastvideo_cudarc::wan::device::resolve_device;
+        use fastvideo_models::h3::reference::{H3ReferenceSpec, ReferenceKind};
 
         resolve_device(&opts.device).map_err(|e| FastVideoError::Message(e.to_string()))?;
         let weights = weights_root(&opts)?;
@@ -199,6 +207,14 @@ fn generate_h3(def: &'static FamilyModelDefinition, opts: AvGenerateOptions) -> 
         request.mp4 = opts.save_mp4;
         request.first_image = opts.image_path;
         request.last_image = opts.last_image_path;
+        request.references = opts
+            .reference_images
+            .into_iter()
+            .map(|path| H3ReferenceSpec {
+                path,
+                kind: ReferenceKind::Image,
+            })
+            .collect();
         let recipe = opts.h3_recipe.or_else(|| match def.preset {
             "fasth3_8step" => Some("8step".into()),
             _ => None,
@@ -206,6 +222,7 @@ fn generate_h3(def: &'static FamilyModelDefinition, opts: AvGenerateOptions) -> 
         let options = H3PipelineOptions {
             recipe,
             text_root: opts.text_weights,
+            ref2va: has_refs,
             ..H3PipelineOptions::default()
         };
         let out = generate(&weights, options, &request, &opts.output)

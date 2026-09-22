@@ -482,7 +482,7 @@ pub static H3_MODEL_DEFINITIONS: &[FamilyModelDefinition] = &[
             "FastVideo/FastVideo-FastH3-8-Step-V2",
             "FastVideo/FastVideo-Minimax-FastH3-Preview-v0.2",
         ],
-        &[WorkloadType::T2AV],
+        &[WorkloadType::T2AV, WorkloadType::FL2VA],
         match_any = &["fasth3", "fast-h3"]
     ),
     family_defn!(

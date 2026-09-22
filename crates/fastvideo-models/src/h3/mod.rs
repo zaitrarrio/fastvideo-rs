@@ -5,5 +5,6 @@
 
 pub mod config;
 pub mod packing;
+pub mod reference;
 pub mod schedule;
 pub mod tokenizer;

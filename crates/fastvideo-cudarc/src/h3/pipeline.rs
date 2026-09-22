@@ -41,6 +41,9 @@ use fastvideo_models::h3::config::{
     H3_AUDIO_CHANNELS, H3_FPS,
 };
 use fastvideo_models::h3::packing::{patchify, H3PackedLayout, KeyframeAnchor};
+use fastvideo_models::h3::reference::{
+    resolve_reference_image_size, validate_references, H3ReferenceSpec, PreparedImageRef, ReferenceKind,
+};
 use fastvideo_models::h3::schedule::{H3JointSchedule, H3Schedule};
 use rand::{Rng, SeedableRng};
 use rand_distr::StandardNormal;
@@ -74,6 +77,8 @@ pub struct H3Request {
     pub first_image: Option<std::path::PathBuf>,
     /// FL2VA last-frame image.
     pub last_image: Option<std::path::PathBuf>,
+    /// Ordered Ref2VA references (image-only for now; video/audio later).
+    pub references: Vec<H3ReferenceSpec>,
 }
 
 impl H3Request {
@@ -89,6 +94,7 @@ impl H3Request {
             mp4: true,
             first_image: None,
             last_image: None,
+            references: Vec::new(),
         })
     }
 
@@ -102,6 +108,10 @@ impl H3Request {
             a.push(KeyframeAnchor::Last);
         }
         a
+    }
+
+    pub fn is_ref2va(&self) -> bool {
+        !self.references.is_empty()
     }
 }
 
@@ -185,6 +195,8 @@ pub struct H3PipelineOptions {
     /// `fastvideo_inference.json` under the weight root (or `transformer/`) is
     /// read if present; otherwise the 8-step V2 contract.
     pub recipe: Option<String>,
+    /// Load `transformer_ref/` (Ref2VA) instead of `transformer/` (T2AV/FL2VA).
+    pub ref2va: bool,
 }
 
 /// Resolve the inference contract: explicit recipe name, then
@@ -415,7 +427,7 @@ impl H3Pipeline {
         }
 
         let (map, mlx) = match super::mlx::find(root) {
-            Some(dir) => {
+            Some(dir) if !options.ref2va => {
                 let (map, spec) = super::mlx::open_map(&dir)?;
                 crate::wan::log::info(format_args!(
                     "h3 dit=mlx affine int{} g{} ({})",
@@ -425,7 +437,22 @@ impl H3Pipeline {
                 ));
                 (map, Some(spec))
             }
-            None => (WeightMap::open(&root.join("transformer"))?, None),
+            _ => {
+                let dit = if options.ref2va {
+                    let p = root.join("transformer_ref");
+                    if !p.is_dir() {
+                        return Err(msg(format!(
+                            "Ref2VA needs {} (MiniMax-H3 Base Ref2VA partition)",
+                            p.display()
+                        )));
+                    }
+                    crate::wan::log::info(format_args!("h3 dit=transformer_ref"));
+                    p
+                } else {
+                    root.join("transformer")
+                };
+                (WeightMap::open(&dit)?, None)
+            }
         };
         let with_gate = !options.dense && mlx.as_ref().is_none_or(|s| s.vsa_capable);
         crate::wan::log::info(format_args!(
@@ -570,24 +597,47 @@ impl H3Pipeline {
         timings.refine_s = timer.elapsed().as_secs_f64();
 
         // --- DiT --------------------------------------------------------------------
+        if request.is_ref2va() && !self.options.ref2va {
+            return Err(msg(
+                "Ref2VA request needs H3PipelineOptions.ref2va (load transformer_ref/)",
+            ));
+        }
+        if !request.is_ref2va() && self.options.ref2va {
+            return Err(msg("transformer_ref/ was loaded but the request has no references"));
+        }
+        if request.is_ref2va() && (request.first_image.is_some() || request.last_image.is_some()) {
+            return Err(msg("Ref2VA and FL2VA keyframes cannot be combined in one request"));
+        }
+        if request.is_ref2va() {
+            for r in &request.references {
+                if r.kind != ReferenceKind::Image {
+                    return Err(msg(format!(
+                        "Ref2VA {} references are not wired yet (image-only for now)",
+                        r.kind.as_str()
+                    )));
+                }
+            }
+            validate_references(&request.references).map_err(msg)?;
+        }
+
         let anchors = request.keyframe_anchors();
-        let layout = if anchors.is_empty() {
-            H3PackedLayout::from_geometry(&geometry, text.ids.len()).map_err(msg)?
+        let (layout, cond_rows) = if request.is_ref2va() {
+            let (prepared, rows) = encode_ref2va_image_rows(&self.root, cfg, &request.references, request.seed)?;
+            let layout =
+                H3PackedLayout::from_geometry_with_image_refs(&geometry, text.ids.len(), &prepared).map_err(msg)?;
+            (layout, Some(rows))
+        } else if anchors.is_empty() {
+            (
+                H3PackedLayout::from_geometry(&geometry, text.ids.len()).map_err(msg)?,
+                None,
+            )
         } else {
-            H3PackedLayout::from_geometry_with_keyframes(&geometry, text.ids.len(), &anchors).map_err(msg)?
+            let layout =
+                H3PackedLayout::from_geometry_with_keyframes(&geometry, text.ids.len(), &anchors).map_err(msg)?;
+            let rows = encode_fl2va_cond_rows(&self.root, cfg, &geometry, request, &anchors)?;
+            (layout, Some(rows))
         };
         let sequence_length = layout.sequence_length();
-        let cond_rows = if anchors.is_empty() {
-            None
-        } else {
-            Some(encode_fl2va_cond_rows(
-                &self.root,
-                cfg,
-                &geometry,
-                request,
-                &anchors,
-            )?)
-        };
         let vsa = if self.options.dense {
             None
         } else {
@@ -744,6 +794,65 @@ fn encode_fl2va_cond_rows(
         let refs: Vec<&CudaTensor> = parts.iter().collect();
         Ok(CudaTensor::cat(&refs, 0)?)
     }
+}
+
+/// Encode ordered Ref2VA image references (2048 short-edge canvases).
+fn encode_ref2va_image_rows(
+    root: &Path,
+    cfg: &H3TransformerConfig,
+    references: &[H3ReferenceSpec],
+    seed: u64,
+) -> Result<(Vec<PreparedImageRef>, CudaTensor)> {
+    let vae_cfg = H3VideoVaeConfig::fasth3_8step();
+    let ratio = vae_cfg.spatial_compression_ratio();
+    let encoder = H3VideoEncoder::load(vae_cfg, &WeightMap::open(&root.join("vae"))?)?;
+    let mut prepared = Vec::with_capacity(references.len());
+    let mut parts = Vec::with_capacity(references.len());
+    for (i, spec) in references.iter().enumerate() {
+        let img = image::open(&spec.path)
+            .map_err(|e| msg(format!("open {}: {e}", spec.path.display())))?
+            .into_rgb8();
+        let (sw, sh) = (img.width() as usize, img.height() as usize);
+        let (out_h, out_w) = resolve_reference_image_size(sw, sh).map_err(msg)?;
+        let prep = PreparedImageRef::from_pixel_size(out_h, out_w, ratio).map_err(msg)?;
+        crate::wan::log::info(format_args!(
+            "h3 ref2va: encode image {} {}x{} → {}x{} ({})",
+            i + 1,
+            sw,
+            sh,
+            out_w,
+            out_h,
+            spec.path.display()
+        ));
+        let z = encoder.encode_keyframe_file(
+            &spec.path,
+            out_h,
+            out_w,
+            true, // stretch to exact canvas (LANCZOS path via prepare_keyframe stretch)
+            true,
+            seed.wrapping_add(31 + i as u64),
+        )?;
+        let host = z.host_cow()?.into_owned();
+        let shape = [cfg.in_channels, 1, prep.latent_height, prep.latent_width];
+        if host.len() != shape.iter().product::<usize>() {
+            return Err(msg(format!(
+                "h3 ref2va: encoded latent len {} != {:?}",
+                host.len(),
+                shape
+            )));
+        }
+        let rows = patchify(&host, shape, cfg.patch_size).map_err(msg)?;
+        let n_rows = prep.rows_per_frame(cfg.patch_size).map_err(msg)?;
+        parts.push(CudaTensor::from_vec(rows, vec![n_rows, cfg.video_patch_dim()])?.to_device()?);
+        prepared.push(prep);
+    }
+    let cond = if parts.len() == 1 {
+        parts.pop().unwrap()
+    } else {
+        let refs: Vec<&CudaTensor> = parts.iter().collect();
+        CudaTensor::cat(&refs, 0)?
+    };
+    Ok((prepared, cond))
 }
 
 /// Load, generate one clip, drop everything.
