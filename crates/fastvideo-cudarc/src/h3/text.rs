@@ -145,6 +145,9 @@ pub struct TextConditioning {
     pub cache: CacheStatus,
     /// Which encoder ran; `"cache"` on a hit, when none did.
     pub encoder: &'static str,
+    /// Per-token DiT AdaLN tags for the text span (`TAG_TEXT` / `TAG_VIDEO`).
+    /// Empty for text-only prompts (packing defaults every text row to TAG_TEXT).
+    pub token_tags: Vec<u8>,
 }
 
 /// The conditioning the DiT consumes for `prompt`.
@@ -169,7 +172,7 @@ pub fn encode_prompt_with(root: &Path, prompt: &str, cache_dir: Option<&Path>, r
     let encoder: &dyn HiddenStateEncoder = resident.unwrap_or(&streamed);
     let Some(dir) = cache_dir else {
         let hidden = encoder.hidden_state(&ids, tap)?;
-        return Ok(TextConditioning { ids, hidden, cache: CacheStatus::Disabled, encoder: encoder.kind() });
+        return Ok(TextConditioning { ids, hidden, cache: CacheStatus::Disabled, encoder: encoder.kind(), token_tags: Vec::new() });
     };
 
     let tokenizer_path = root.join("tokenizer").join("tokenizer.json");
@@ -183,6 +186,7 @@ pub fn encode_prompt_with(root: &Path, prompt: &str, cache_dir: Option<&Path>, r
         hidden,
         cache: if hit { CacheStatus::Hit } else { CacheStatus::Miss },
         encoder: if hit { "cache" } else { encoder.kind() },
+        token_tags: Vec::new(),
     })
 }
 
@@ -215,6 +219,7 @@ pub fn encode_prompt_recovered(
             hidden,
             cache: CacheStatus::Disabled,
             encoder: encoder.kind(),
+            token_tags: Vec::new(),
         });
     };
     let tokenizer_path = tokenizer_root.join("tokenizer").join("tokenizer.json");
@@ -233,7 +238,296 @@ pub fn encode_prompt_recovered(
         hidden,
         cache: if hit { CacheStatus::Hit } else { CacheStatus::Miss },
         encoder: if hit { "cache" } else { encoder.kind() },
+        token_tags: Vec::new(),
     })
+}
+
+/// One RGB image for multimodal encode (HWC u8).
+pub struct VisionImage<'a> {
+    pub rgb: &'a [u8],
+    pub height: usize,
+    pub width: usize,
+}
+
+/// One video for multimodal encode: packed HWC frames at 24 fps canvas size.
+pub struct VisionVideo<'a> {
+    pub frames: &'a [u8],
+    pub num_frames: usize,
+    pub height: usize,
+    pub width: usize,
+}
+
+/// FL2VA / Ref2VA multimodal text: presentation → vision tower → mRoPE LM.
+pub fn encode_multimodal(
+    root: &Path,
+    prompt: &str,
+    images: &[VisionImage<'_>],
+    videos: &[VisionVideo<'_>],
+    refs: Option<&[fastvideo_models::h3::presentation::PresentationRef]>,
+) -> Result<TextConditioning> {
+    use fastvideo_models::h3::config::{H3TextEncoderConfig, H3VisionConfig};
+    use fastvideo_models::h3::mrope::build_mrope_positions;
+    use fastvideo_models::h3::presentation::{
+        build_fl2va_presentation, build_ref2va_presentation, PresentationRef,
+    };
+    use fastvideo_models::h3::vision_preprocess::{
+        prepare_vision_image, prepare_vision_video, sample_qwen_video_frames,
+    };
+
+    let text_cfg = H3TextEncoderConfig::fasth3_8step();
+    let vision_cfg = H3VisionConfig::fasth3_8step();
+    let tok_path = root.join("tokenizer").join("tokenizer.json");
+    let tokenizer = H3Tokenizer::from_file(&tok_path).map_err(msg)?;
+
+    // Prepare vision pixels + grids; collect pad counts for the presentation.
+    let map = WeightMap::open(&root.join("text_encoder"))?;
+    let vision = super::vision::H3VisionTower::load(vision_cfg.clone(), &map)?;
+
+    let mut image_prepared = Vec::with_capacity(images.len());
+    let mut image_grids = Vec::with_capacity(images.len());
+    let mut image_token_counts = Vec::with_capacity(images.len());
+    for img in images {
+        let prep = prepare_vision_image(img.rgb, img.height, img.width, &vision_cfg).map_err(msg)?;
+        image_token_counts.push(prep.grid.num_tokens(vision_cfg.spatial_merge_size).map_err(msg)?);
+        image_grids.push([prep.grid.temporal, prep.grid.height, prep.grid.width]);
+        image_prepared.push(prep);
+    }
+
+    let mut video_prepared = Vec::with_capacity(videos.len());
+    let mut video_grids = Vec::with_capacity(videos.len());
+    let mut video_token_counts = Vec::with_capacity(videos.len());
+    let mut video_timestamps = Vec::with_capacity(videos.len());
+    for vid in videos {
+        let (indices, timestamps) = sample_qwen_video_frames(
+            vid.num_frames,
+            vision_cfg.video_sample_fps(),
+            vision_cfg.temporal_patch_size,
+        )
+        .map_err(msg)?;
+        let frame_bytes = vid.height * vid.width * 3;
+        let mut sampled = Vec::with_capacity(indices.len() * frame_bytes);
+        for &idx in &indices {
+            let start = idx.min(vid.num_frames - 1) * frame_bytes;
+            sampled.extend_from_slice(&vid.frames[start..start + frame_bytes]);
+        }
+        let prep = prepare_vision_video(
+            &sampled,
+            indices.len(),
+            vid.height,
+            vid.width,
+            &vision_cfg,
+        )
+        .map_err(msg)?;
+        if prep.grid.temporal != timestamps.len() {
+            return Err(msg(format!(
+                "vision video: grid T={} vs {} timestamps",
+                prep.grid.temporal,
+                timestamps.len()
+            )));
+        }
+        video_token_counts.push(prep.grid.num_tokens(vision_cfg.spatial_merge_size).map_err(msg)?);
+        video_grids.push([prep.grid.temporal, prep.grid.height, prep.grid.width]);
+        video_timestamps.push(timestamps);
+        video_prepared.push(prep);
+    }
+
+    let presentation = if let Some(ordered) = refs {
+        // Rebuild ordered refs with computed token counts / timestamps.
+        let mut rebuilt = Vec::with_capacity(ordered.len());
+        let mut ii = 0usize;
+        let mut vi = 0usize;
+        for r in ordered {
+            match r {
+                PresentationRef::Image { .. } => {
+                    rebuilt.push(PresentationRef::Image {
+                        token_count: *image_token_counts
+                            .get(ii)
+                            .ok_or_else(|| msg("ref presentation: fewer images than Image refs"))?,
+                    });
+                    ii += 1;
+                }
+                PresentationRef::Video { .. } => {
+                    rebuilt.push(PresentationRef::Video {
+                        token_count: *video_token_counts
+                            .get(vi)
+                            .ok_or_else(|| msg("ref presentation: fewer videos than Video refs"))?,
+                        block_timestamps: video_timestamps[vi].clone(),
+                    });
+                    vi += 1;
+                }
+                PresentationRef::Audio => rebuilt.push(PresentationRef::Audio),
+            }
+        }
+        if ii != image_token_counts.len() || vi != video_token_counts.len() {
+            return Err(msg("ref presentation: image/video counts do not match refs"));
+        }
+        build_ref2va_presentation(&tokenizer, &text_cfg, prompt, &rebuilt).map_err(msg)?
+    } else {
+        if !videos.is_empty() {
+            return Err(msg("FL2VA multimodal encode does not take video refs"));
+        }
+        build_fl2va_presentation(&tokenizer, &text_cfg, prompt, &image_token_counts).map_err(msg)?
+    };
+
+    let ids = presentation.token_ids.clone();
+    let token_tags = presentation.token_tags.clone();
+
+    // Vision forward (batch all images / all videos).
+    let (image_features, image_deepstack) = if image_prepared.is_empty() {
+        (None, None)
+    } else {
+        let mut pixels = Vec::new();
+        let mut grids = Vec::new();
+        let patch_dim = image_prepared[0].patch_dim;
+        for p in &image_prepared {
+            if p.patch_dim != patch_dim {
+                return Err(msg("image patch_dim mismatch across batch"));
+            }
+            pixels.extend_from_slice(&p.pixels);
+            grids.push(p.grid.clone());
+        }
+        let (feat, deep) = vision.forward_grids(&pixels, patch_dim, &grids)?;
+        (Some(feat), Some(deep))
+    };
+
+    let (video_features, video_deepstack) = if video_prepared.is_empty() {
+        (None, None)
+    } else {
+        let mut pixels = Vec::new();
+        let mut grids = Vec::new();
+        let patch_dim = video_prepared[0].patch_dim;
+        for p in &video_prepared {
+            if p.patch_dim != patch_dim {
+                return Err(msg("video patch_dim mismatch across batch"));
+            }
+            pixels.extend_from_slice(&p.pixels);
+            grids.push(p.grid.clone());
+        }
+        let (feat, deep) = vision.forward_grids(&pixels, patch_dim, &grids)?;
+        (Some(feat), Some(deep))
+    };
+
+    let cfg = DecoderConfig::qwen3_vl_32b_text().for_bf16_reference();
+    let tap = text_cfg.output_hidden_state_index;
+    let (embedded, image_mask, video_mask) = llm::embed_with_vision(
+        &map,
+        &cfg,
+        &ids,
+        text_cfg.image_token_id,
+        image_features.as_ref(),
+        text_cfg.video_token_id,
+        video_features.as_ref(),
+    )?;
+
+    let visual_mask: Vec<bool> = image_mask
+        .iter()
+        .zip(video_mask.iter())
+        .map(|(&i, &v)| i || v)
+        .collect();
+    let deepstack = merge_deepstack(
+        image_deepstack,
+        video_deepstack,
+        &image_mask,
+        &video_mask,
+        &visual_mask,
+        cfg.hidden,
+    )?;
+
+    let mrope_positions = build_mrope_positions(
+        &ids,
+        &text_cfg,
+        vision_cfg.spatial_merge_size,
+        &image_grids,
+        &video_grids,
+    )
+    .map_err(msg)?;
+    let mm = llm::MultimodalCtx {
+        mrope_positions,
+        mrope_section: text_cfg.mrope_section,
+        visual_mask,
+        deepstack,
+    };
+    let attend = vec![true; ids.len()];
+    let mut taps = llm::hidden_states_multimodal(&map, &cfg, embedded, &attend, &[tap], &mm)?;
+    let hidden = taps
+        .pop()
+        .ok_or_else(|| msg("h3 multimodal: decoder returned no hidden state"))?;
+
+    Ok(TextConditioning {
+        ids,
+        hidden,
+        cache: CacheStatus::Disabled,
+        encoder: "streamed-multimodal",
+        token_tags,
+    })
+}
+
+fn merge_deepstack(
+    image: Option<Vec<CudaTensor>>,
+    video: Option<Vec<CudaTensor>>,
+    image_mask: &[bool],
+    video_mask: &[bool],
+    visual_mask: &[bool],
+    hidden: usize,
+) -> Result<Vec<CudaTensor>> {
+    match (image, video) {
+        (None, None) => Ok(Vec::new()),
+        (Some(img), None) => Ok(img),
+        (None, Some(vid)) => Ok(vid),
+        (Some(img), Some(vid)) => {
+            if img.len() != vid.len() {
+                return Err(msg("deepstack depth mismatch between image and video"));
+            }
+            let n_vis = visual_mask.iter().filter(|&&m| m).count();
+            let mut out = Vec::with_capacity(img.len());
+            for (im, vd) in img.into_iter().zip(vid.into_iter()) {
+                let ih = im.host_cow()?;
+                let vh = vd.host_cow()?;
+                let mut combined = vec![0f32; n_vis * hidden];
+                let mut ii = 0usize;
+                let mut vi = 0usize;
+                let mut oi = 0usize;
+                for s in 0..visual_mask.len() {
+                    if !visual_mask[s] {
+                        continue;
+                    }
+                    if image_mask[s] {
+                        combined[oi * hidden..(oi + 1) * hidden]
+                            .copy_from_slice(&ih[ii * hidden..(ii + 1) * hidden]);
+                        ii += 1;
+                    } else if video_mask[s] {
+                        combined[oi * hidden..(oi + 1) * hidden]
+                            .copy_from_slice(&vh[vi * hidden..(vi + 1) * hidden]);
+                        vi += 1;
+                    }
+                    oi += 1;
+                }
+                out.push(CudaTensor::from_vec(combined, vec![n_vis, hidden])?.to_device()?);
+            }
+            Ok(out)
+        }
+    }
+}
+
+/// Convenience: FL2VA keyframe images only.
+pub fn encode_fl2va_multimodal(
+    root: &Path,
+    prompt: &str,
+    images: &[VisionImage<'_>],
+) -> Result<TextConditioning> {
+    encode_multimodal(root, prompt, images, &[], None)
+}
+
+/// Convenience: Ref2VA ordered presentation refs (media buffers parallel to
+/// Image/Video entries in `refs`; Audio entries carry no vision buffer).
+pub fn encode_ref2va_multimodal(
+    root: &Path,
+    prompt: &str,
+    refs: &[fastvideo_models::h3::presentation::PresentationRef],
+    images: &[VisionImage<'_>],
+    videos: &[VisionVideo<'_>],
+) -> Result<TextConditioning> {
+    encode_multimodal(root, prompt, images, videos, Some(refs))
 }
 
 #[cfg(test)]

@@ -618,6 +618,111 @@ fn rope_tables(positions: &[u32], head_dim: usize, la: &LayerAttn) -> Result<(Cu
     Ok((c, sn))
 }
 
+/// Qwen3-VL interleaved mRoPE: three position axes + `mrope_section` frequency
+/// interleave (`apply_interleaved_mrope` in transformers). `positions[s] =
+/// [temporal, height, width]`.
+fn rope_tables_mrope(
+    positions: &[[f64; 3]],
+    mrope_section: [usize; 3],
+    head_dim: usize,
+    la: &LayerAttn,
+) -> Result<(CudaTensor, CudaTensor)> {
+    let r = la.rotary_width(head_dim);
+    let half = r / 2;
+    if mrope_section.iter().sum::<usize>() != half {
+        return Err(msg(format!(
+            "llm mRoPE: section {:?} sums to {}, need head_dim/2={half}",
+            mrope_section, mrope_section.iter().sum::<usize>()
+        )));
+    }
+    let s = positions.len();
+    let (mut cos, mut sin) = (vec![0f32; s * r], vec![0f32; s * r]);
+    for (p, pos) in positions.iter().enumerate() {
+        let mut axis_freq = vec![[0f64; 3]; half];
+        for k in 0..half {
+            let inv = la.rope_theta.powf(-((2 * k) as f64) / head_dim as f64) / la.rope_factor;
+            for a in 0..3 {
+                axis_freq[k][a] = pos[a] * inv;
+            }
+        }
+        // Interleave: start from temporal, overwrite H/W slots.
+        let mut interleaved = vec![0f64; half];
+        for k in 0..half {
+            interleaved[k] = axis_freq[k][0];
+        }
+        for (dim, offset) in [(1usize, 1usize), (2, 2)] {
+            let length = mrope_section[dim] * 3;
+            let mut idx = offset;
+            while idx < length && idx < half {
+                interleaved[idx] = axis_freq[idx][dim];
+                idx += 3;
+            }
+        }
+        for k in 0..half {
+            let ang = interleaved[k];
+            for j in [k, k + half] {
+                cos[p * r + j] = ang.cos() as f32;
+                sin[p * r + j] = ang.sin() as f32;
+            }
+        }
+    }
+    let mut c = CudaTensor::from_vec(cos, vec![s, r])?;
+    let mut sn = CudaTensor::from_vec(sin, vec![s, r])?;
+    c.pin_device()?;
+    sn.pin_device()?;
+    Ok((c, sn))
+}
+
+/// Optional vision inject for Qwen3-VL DeepStack + mRoPE.
+pub struct MultimodalCtx {
+    /// Per-token `[t, h, w]` rotary positions (length = sequence).
+    pub mrope_positions: Vec<[f64; 3]>,
+    pub mrope_section: [usize; 3],
+    /// True at image/video pad tokens (vision features were scattered here).
+    pub visual_mask: Vec<bool>,
+    /// DeepStack features for the first `deepstack.len()` LM layers: each
+    /// `[n_visual, hidden]` matching `visual_mask` true count in order.
+    pub deepstack: Vec<CudaTensor>,
+}
+
+fn inject_deepstack(x: &CudaTensor, visual_mask: &[bool], deep: &CudaTensor) -> Result<CudaTensor> {
+    let [b, s, h] = match x.shape[..] {
+        [b, s, h] => [b, s, h],
+        _ => return Err(msg(format!("deepstack expects [B,S,H], got {:?}", x.shape))),
+    };
+    if b != 1 || visual_mask.len() != s {
+        return Err(msg(format!(
+            "deepstack: batch={b} mask={} seq={s}",
+            visual_mask.len()
+        )));
+    }
+    let n_vis = visual_mask.iter().filter(|&&m| m).count();
+    if deep.shape != [n_vis, h] {
+        return Err(msg(format!(
+            "deepstack features {:?} vs {n_vis} visual × hidden {h}",
+            deep.shape
+        )));
+    }
+    if n_vis == 0 {
+        return Ok(x.clone());
+    }
+    let mut host = x.host_cow()?.into_owned();
+    let deep_h = deep.host_cow()?;
+    let mut vi = 0usize;
+    for (si, &is_vis) in visual_mask.iter().enumerate() {
+        if !is_vis {
+            continue;
+        }
+        let base = si * h;
+        let db = vi * h;
+        for d in 0..h {
+            host[base + d] += deep_h[db + d];
+        }
+        vi += 1;
+    }
+    CudaTensor::from_vec(host, vec![1, s, h])?.to_device()
+}
+
 /// Additive `[1, 1, S, S]` mask: causal, keys limited to `attend`, and to the
 /// last `window` positions when the layer is local.
 fn attn_mask(attend: &[bool], window: Option<usize>) -> Result<CudaTensor> {
@@ -696,10 +801,23 @@ fn encode<S: LayerSource>(
     attend: &[bool],
     taps: &[usize],
     progress: bool,
+    multimodal: Option<&MultimodalCtx>,
 ) -> Result<Vec<CudaTensor>> {
     let s = embedded.shape[1];
-    if s == 0 || positions.len() != s || attend.len() != s {
-        return Err(msg(format!("llm: {s} ids, {} positions, {} attend flags", positions.len(), attend.len())));
+    if s == 0 || attend.len() != s {
+        return Err(msg(format!("llm: {s} ids, {} attend flags", attend.len())));
+    }
+    if multimodal.is_none() && positions.len() != s {
+        return Err(msg(format!("llm: {s} ids, {} positions", positions.len())));
+    }
+    if let Some(mm) = multimodal {
+        if mm.mrope_positions.len() != s || mm.visual_mask.len() != s {
+            return Err(msg(format!(
+                "llm multimodal: seq={s} mrope={} mask={}",
+                mm.mrope_positions.len(),
+                mm.visual_mask.len()
+            )));
+        }
     }
     let n = cfg.num_layers();
     let last = *taps.iter().max().ok_or_else(|| msg("llm: no taps requested"))?;
@@ -725,7 +843,12 @@ fn encode<S: LayerSource>(
         keep(i, &x);
         let hd = cfg.layer_head_dim(i);
         if !ropes.iter().any(|(k, h, _)| k == la && *h == hd) {
-            ropes.push((*la, hd, rope_tables(positions, hd, la)?));
+            let tables = if let Some(mm) = multimodal {
+                rope_tables_mrope(&mm.mrope_positions, mm.mrope_section, hd, la)?
+            } else {
+                rope_tables(positions, hd, la)?
+            };
+            ropes.push((*la, hd, tables));
         }
         if !masks.iter().any(|(w, _)| *w == la.window) {
             masks.push((la.window, attn_mask(attend, la.window)?));
@@ -733,6 +856,11 @@ fn encode<S: LayerSource>(
         let (cos, sin) = &ropes.iter().find(|(k, h, _)| k == la && *h == hd).expect("just inserted").2;
         let mask = &masks.iter().find(|(w, _)| *w == la.window).expect("just inserted").1;
         x = source.with_layer(i, |layer| layer.forward(cfg, i, &x, cos, sin, mask))?;
+        if let Some(mm) = multimodal {
+            if let Some(deep) = mm.deepstack.get(i) {
+                x = inject_deepstack(&x, &mm.visual_mask, deep)?;
+            }
+        }
         if progress {
             crate::wan::log::info(format_args!("llm layer {}/{last}", i + 1));
         }
@@ -776,7 +904,112 @@ pub fn hidden_states(
     attend: &[bool],
     taps: &[usize],
 ) -> Result<Vec<CudaTensor>> {
-    hidden_states_opt(map, cfg, ids, positions, attend, taps, true, true)
+    hidden_states_opt(map, cfg, ids, positions, attend, taps, true, true, None)
+}
+
+/// Like [`hidden_states`], but starts from pre-built embeddings (vision pads
+/// already scattered) and applies Qwen3-VL mRoPE + DeepStack.
+pub fn hidden_states_multimodal(
+    map: &WeightMap,
+    cfg: &DecoderConfig,
+    embedded: CudaTensor,
+    attend: &[bool],
+    taps: &[usize],
+    multimodal: &MultimodalCtx,
+) -> Result<Vec<CudaTensor>> {
+    let s = embedded.shape.get(1).copied().unwrap_or(0);
+    if s == 0 {
+        return Err(msg("llm: empty multimodal prompt"));
+    }
+    let positions: Vec<u32> = (0..s as u32).collect();
+    #[cfg(feature = "cuda")]
+    if let Some(stage) = map.lazy().and_then(|lazy| prefetch::Stage::new(lazy, cfg)) {
+        let last = taps.iter().copied().max().unwrap_or(0).min(cfg.num_layers());
+        return stage.run(map, cfg, last, |source| {
+            encode(cfg, source, embedded, &positions, attend, taps, true, Some(multimodal))
+        });
+    }
+    encode(
+        cfg,
+        &mut Streamed { map, cfg },
+        embedded,
+        &positions,
+        attend,
+        taps,
+        true,
+        Some(multimodal),
+    )
+}
+
+/// Scatter token embedding rows, then replace pad positions with vision features.
+pub fn embed_with_vision(
+    map: &WeightMap,
+    cfg: &DecoderConfig,
+    ids: &[u32],
+    image_token_id: u32,
+    image_features: Option<&CudaTensor>,
+    video_token_id: u32,
+    video_features: Option<&CudaTensor>,
+) -> Result<(CudaTensor, Vec<bool>, Vec<bool>)> {
+    let mut embedded = embed(map, cfg, ids)?;
+    let mut image_mask = vec![false; ids.len()];
+    let mut video_mask = vec![false; ids.len()];
+    for (i, &id) in ids.iter().enumerate() {
+        if id == image_token_id {
+            image_mask[i] = true;
+        } else if id == video_token_id {
+            video_mask[i] = true;
+        }
+    }
+    if let Some(feat) = image_features {
+        embedded = scatter_visual_embeds(&embedded, &image_mask, feat, "image")?;
+    } else if image_mask.iter().any(|&m| m) {
+        return Err(msg("llm: image pad tokens present but no image features"));
+    }
+    if let Some(feat) = video_features {
+        embedded = scatter_visual_embeds(&embedded, &video_mask, feat, "video")?;
+    } else if video_mask.iter().any(|&m| m) {
+        return Err(msg("llm: video pad tokens present but no video features"));
+    }
+    Ok((embedded, image_mask, video_mask))
+}
+
+fn scatter_visual_embeds(
+    embedded: &CudaTensor,
+    mask: &[bool],
+    features: &CudaTensor,
+    label: &str,
+) -> Result<CudaTensor> {
+    let [b, s, h] = match embedded.shape[..] {
+        [b, s, h] => [b, s, h],
+        _ => return Err(msg(format!("embed scatter expects [B,S,H], got {:?}", embedded.shape))),
+    };
+    if b != 1 || mask.len() != s {
+        return Err(msg(format!("{label} scatter: bad mask/seq")));
+    }
+    let n = mask.iter().filter(|&&m| m).count();
+    if features.shape != [n, h] {
+        return Err(msg(format!(
+            "Qwen3-VL {label} features and placeholder tokens do not match: tokens={n}, features={:?}",
+            features.shape
+        )));
+    }
+    if n == 0 {
+        return Ok(embedded.clone());
+    }
+    let mut host = embedded.host_cow()?.into_owned();
+    let feat = features.host_cow()?;
+    let mut vi = 0usize;
+    for (si, &is_pad) in mask.iter().enumerate() {
+        if !is_pad {
+            continue;
+        }
+        let base = si * h;
+        let fb = vi * h;
+        host[base..base + h].copy_from_slice(&feat[fb..fb + h]);
+        vi += 1;
+    }
+    CudaTensor::from_vec(host, vec![1, s, h])?.to_device()
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -789,6 +1022,7 @@ fn hidden_states_opt(
     taps: &[usize],
     allow_prefetch: bool,
     progress: bool,
+    multimodal: Option<&MultimodalCtx>,
 ) -> Result<Vec<CudaTensor>> {
     if ids.is_empty() {
         return Err(msg("llm: empty prompt"));
@@ -799,10 +1033,21 @@ fn hidden_states_opt(
     #[cfg(feature = "cuda")]
     if let Some(stage) = map.lazy().filter(|_| allow_prefetch).and_then(|lazy| prefetch::Stage::new(lazy, cfg)) {
         let last = taps.iter().copied().max().unwrap_or(0).min(cfg.num_layers());
-        return stage.run(map, cfg, last, |source| encode(cfg, source, embedded, positions, attend, taps, progress));
+        return stage.run(map, cfg, last, |source| {
+            encode(cfg, source, embedded, positions, attend, taps, progress, multimodal)
+        });
     }
     let _ = allow_prefetch;
-    encode(cfg, &mut Streamed { map, cfg }, embedded, positions, attend, taps, progress)
+    encode(
+        cfg,
+        &mut Streamed { map, cfg },
+        embedded,
+        positions,
+        attend,
+        taps,
+        progress,
+        multimodal,
+    )
 }
 
 /// Result of [`prefetch_self_check`].
@@ -871,8 +1116,8 @@ pub fn prefetch_self_check(dir: &std::path::Path, stored_bf16: bool) -> Result<P
     let positions: Vec<u32> = (0..ids.len() as u32).collect();
     let attend = vec![true; ids.len()];
     let taps: Vec<usize> = (0..=cfg.num_layers()).collect();
-    let ahead = hidden_states_opt(&map, &cfg, &ids, &positions, &attend, &taps, true, false)?;
-    let plain = hidden_states_opt(&map, &cfg, &ids, &positions, &attend, &taps, false, false)?;
+    let ahead = hidden_states_opt(&map, &cfg, &ids, &positions, &attend, &taps, true, false, None)?;
+    let plain = hidden_states_opt(&map, &cfg, &ids, &positions, &attend, &taps, false, false, None)?;
     let (mut worst, mut elements) = (0f32, 0usize);
     for (a, b) in ahead.iter().zip(&plain) {
         let (a, b) = (a.host_cow()?, b.host_cow()?);
@@ -1076,7 +1321,32 @@ impl ResidentDecoder {
         let h = self.cfg.hidden;
         let x = CudaTensor::from_vec(self.embed.rows(ids, h)?, vec![1, ids.len(), h])?.to_device()?;
         let x = if self.cfg.embed_scale == 1.0 { x } else { x.try_mul_scalar(self.cfg.embed_scale)? };
-        encode(&self.cfg, &mut Resident(self), x, positions, attend, taps, false)
+        encode(&self.cfg, &mut Resident(self), x, positions, attend, taps, false, None)
+    }
+
+    /// Multimodal forward: pre-scattered embeds + mRoPE + DeepStack.
+    pub fn hidden_states_multimodal(
+        &self,
+        embedded: CudaTensor,
+        attend: &[bool],
+        taps: &[usize],
+        multimodal: &MultimodalCtx,
+    ) -> Result<Vec<CudaTensor>> {
+        let s = embedded.shape.get(1).copied().unwrap_or(0);
+        if s == 0 {
+            return Err(msg("llm: empty multimodal prompt"));
+        }
+        let positions: Vec<u32> = (0..s as u32).collect();
+        encode(
+            &self.cfg,
+            &mut Resident(self),
+            embedded,
+            &positions,
+            attend,
+            taps,
+            false,
+            Some(multimodal),
+        )
     }
 
     /// Device bytes the layers occupy, from the shapes: linears at the width

@@ -79,7 +79,7 @@ pub struct H3Request {
     pub first_image: Option<std::path::PathBuf>,
     /// FL2VA last-frame image.
     pub last_image: Option<std::path::PathBuf>,
-    /// Ordered Ref2VA references (image-only for now; video/audio later).
+    /// Ordered Ref2VA references (image / video / audio).
     pub references: Vec<H3ReferenceSpec>,
 }
 
@@ -579,7 +579,15 @@ impl H3Pipeline {
             let r = self.options.text_root.as_deref().unwrap_or(&self.root);
             (r, r)
         };
-        let text = if matches!(self.options.text_encoder, TextEncoderChoice::Recovered8b) {
+        let needs_vl = !request.keyframe_anchors().is_empty() || request.is_ref2va();
+        let text = if needs_vl {
+            if matches!(self.options.text_encoder, TextEncoderChoice::Recovered8b) {
+                return Err(msg(
+                    "FL2VA/Ref2VA multimodal text needs Qwen3-VL-32B with vision tower; recovered-8b is text-only",
+                ));
+            }
+            encode_request_multimodal(encoder_root, request)?
+        } else if matches!(self.options.text_encoder, TextEncoderChoice::Recovered8b) {
             super::text::encode_prompt_recovered(
                 tokenizer_root,
                 encoder_root,
@@ -617,7 +625,7 @@ impl H3Pipeline {
         }
 
         let anchors = request.keyframe_anchors();
-        let (layout, cond_rows, cond_audio_rows) = if request.is_ref2va() {
+        let (mut layout, cond_rows, cond_audio_rows) = if request.is_ref2va() {
             let encoded = encode_ref2va_conditions(&self.root, cfg, &geometry, &request.references, request.seed)?;
             let layout = H3PackedLayout::with_references(
                 text.ids.len(),
@@ -644,6 +652,9 @@ impl H3Pipeline {
             let rows = encode_fl2va_cond_rows(&self.root, cfg, &geometry, request, &anchors)?;
             (layout, Some(rows), None)
         };
+        if !text.token_tags.is_empty() {
+            layout.set_text_token_tags(&text.token_tags).map_err(msg)?;
+        }
         let sequence_length = layout.sequence_length();
         // Interleaved Ref2VA condition audio breaks VSA's contiguous-prefix tiles.
         let force_dense = layout.num_condition_audio_rows > 0;
@@ -746,6 +757,89 @@ impl H3Pipeline {
             timings,
         })
     }
+}
+
+/// Qwen3-VL multimodal text for FL2VA keyframes / Ref2VA ordered refs.
+fn encode_request_multimodal(text_root: &Path, request: &H3Request) -> Result<super::text::TextConditioning> {
+    use fastvideo_models::h3::presentation::PresentationRef;
+    use super::text::{VisionImage, VisionVideo};
+
+    if request.is_ref2va() {
+        let mut images_owned: Vec<(Vec<u8>, usize, usize)> = Vec::new();
+        let mut videos_owned: Vec<(Vec<u8>, usize, usize, usize)> = Vec::new();
+        let mut refs = Vec::new();
+        for spec in &request.references {
+            match spec.kind {
+                ReferenceKind::Audio => refs.push(PresentationRef::Audio),
+                ReferenceKind::Image => {
+                    let img = image::open(&spec.path)
+                        .map_err(|e| msg(format!("open {}: {e}", spec.path.display())))?
+                        .into_rgb8();
+                    let (w, h) = (img.width() as usize, img.height() as usize);
+                    images_owned.push((img.into_raw(), h, w));
+                    refs.push(PresentationRef::Image { token_count: 0 });
+                }
+                ReferenceKind::Video => {
+                    // Cap decode length; Qwen samples at 2 fps from 24 fps.
+                    let (frames, w, h, _fps) = super::media::decode_video_rgb(&spec.path, 24 * 16)?;
+                    let n = frames.len() / (w * h * 3);
+                    videos_owned.push((frames, n, h, w));
+                    refs.push(PresentationRef::Video {
+                        token_count: 0,
+                        block_timestamps: Vec::new(),
+                    });
+                }
+            }
+        }
+        let images: Vec<VisionImage<'_>> = images_owned
+            .iter()
+            .map(|(rgb, h, w)| VisionImage {
+                rgb,
+                height: *h,
+                width: *w,
+            })
+            .collect();
+        let videos: Vec<VisionVideo<'_>> = videos_owned
+            .iter()
+            .map(|(frames, n, h, w)| VisionVideo {
+                frames,
+                num_frames: *n,
+                height: *h,
+                width: *w,
+            })
+            .collect();
+        crate::wan::log::info(format_args!(
+            "h3 ref2va: Qwen-VL multimodal ({} images, {} videos)",
+            images.len(),
+            videos.len()
+        ));
+        return Ok(super::text::encode_ref2va_multimodal(
+            text_root,
+            &request.prompt,
+            &refs,
+            &images,
+            &videos,
+        )?);
+    }
+
+    let mut owned = Vec::new();
+    for path in [&request.first_image, &request.last_image].into_iter().flatten() {
+        let img = image::open(path)
+            .map_err(|e| msg(format!("open {}: {e}", path.display())))?
+            .into_rgb8();
+        let (w, h) = (img.width() as usize, img.height() as usize);
+        owned.push((img.into_raw(), h, w));
+    }
+    let images: Vec<VisionImage<'_>> = owned
+        .iter()
+        .map(|(rgb, h, w)| VisionImage {
+            rgb,
+            height: *h,
+            width: *w,
+        })
+        .collect();
+    crate::wan::log::info(format_args!("h3 fl2va: Qwen-VL multimodal ({} images)", images.len()));
+    Ok(super::text::encode_fl2va_multimodal(text_root, &request.prompt, &images)?)
 }
 
 /// GPU-encode FL2VA keyframe images → patchified cond rows (`[Nc, patch_dim]`).

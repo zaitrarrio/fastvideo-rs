@@ -464,6 +464,62 @@ impl H3TextEncoderConfig {
     }
 }
 
+/// Qwen3-VL vision tower sizes used by MiniMax-H3 (FastVideo
+/// `minimax_h3_qwen3_vl` arch config).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct H3VisionConfig {
+    pub depth: usize,
+    pub hidden_size: usize,
+    pub intermediate_size: usize,
+    pub num_heads: usize,
+    pub in_channels: usize,
+    pub patch_size: usize,
+    pub spatial_merge_size: usize,
+    pub temporal_patch_size: usize,
+    pub out_hidden_size: usize,
+    pub num_position_embeddings: usize,
+    pub deepstack_visual_indexes: [usize; 3],
+    pub min_pixels: usize,
+    pub max_pixels: usize,
+    /// Qwen presentation sample rate for reference videos.
+    pub video_sample_fps_num: usize,
+    pub video_sample_fps_den: usize,
+}
+
+impl H3VisionConfig {
+    pub fn fasth3_8step() -> Self {
+        Self {
+            depth: 27,
+            hidden_size: 1152,
+            intermediate_size: 4304,
+            num_heads: 16,
+            in_channels: 3,
+            patch_size: 16,
+            spatial_merge_size: 2,
+            temporal_patch_size: 2,
+            out_hidden_size: 5120,
+            num_position_embeddings: 2304,
+            deepstack_visual_indexes: [8, 16, 24],
+            min_pixels: 56 * 56,
+            max_pixels: 28 * 28 * 1280,
+            video_sample_fps_num: 2,
+            video_sample_fps_den: 1,
+        }
+    }
+
+    pub fn head_dim(&self) -> usize {
+        self.hidden_size / self.num_heads
+    }
+
+    pub fn num_grid_per_side(&self) -> usize {
+        (self.num_position_embeddings as f64).sqrt() as usize
+    }
+
+    pub fn video_sample_fps(&self) -> f64 {
+        self.video_sample_fps_num as f64 / self.video_sample_fps_den as f64
+    }
+}
+
 /// `fastvideo_inference.json` plus the two `scheduler_config.json` shifts: the
 /// recipe this distilled checkpoint was trained for.
 #[derive(Debug, Clone, PartialEq)]

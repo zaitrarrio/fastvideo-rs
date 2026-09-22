@@ -131,6 +131,25 @@ pub fn temporal_position_span(latent_frames: usize) -> f64 {
 }
 
 impl H3PackedLayout {
+    /// Override the text-span AdaLN tags (FL2VA / Ref2VA Qwen presentation may
+    /// mark vision pads as [`TAG_VIDEO`]). `tags.len()` must equal `self.text.len`.
+    pub fn set_text_token_tags(&mut self, tags: &[u8]) -> Result<(), String> {
+        if tags.len() != self.text.len {
+            return Err(format!(
+                "text token tags: {} values for {} text rows",
+                tags.len(),
+                self.text.len
+            ));
+        }
+        for (i, &t) in tags.iter().enumerate() {
+            if t != TAG_TEXT && t != TAG_VIDEO {
+                return Err(format!("text token tags may only be text or video, got {t} at {i}"));
+            }
+            self.token_tags[self.text.start + i] = t;
+        }
+        Ok(())
+    }
+
     /// T2AV: no keyframe anchors.
     pub fn new(
         text_tokens: usize,

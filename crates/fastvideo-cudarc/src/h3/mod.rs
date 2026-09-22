@@ -8,6 +8,7 @@ pub mod audio_vae;
 pub mod media;
 pub mod vae;
 pub mod vae_encoder;
+pub mod vision;
 pub mod vsa;
 pub mod mlx;
 pub mod transformer;
