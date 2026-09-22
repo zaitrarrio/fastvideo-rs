@@ -145,6 +145,7 @@ fn dit_layout_forward_and_ladder_match_diffusers() {
                 Ok(())
             }),
             None,
+            None,
         )
         .expect("forward");
     assert_eq!(blocks.len(), cfg.num_layers);
@@ -157,7 +158,7 @@ fn dit_layout_forward_and_ladder_match_diffusers() {
     // The whole ladder: both shifts, the plus sign, sigma-from-timestep and the ratio.
     let (nv, na) = (video_rows.numel(), audio_rows.numel());
     let (want_video, want_audio) = (values(&map, "ref.loop_video").1, values(&map, "ref.loop_audio").1);
-    denoise(&model, &device_layout, &refined, video_rows, audio_rows, &schedule, AttnMode::Dense, None, &mut |i, v, a| {
+    denoise(&model, &device_layout, &refined, video_rows, audio_rows, &schedule, AttnMode::Dense, None, None, &mut |i, v, a| {
         assert_close(&format!("loop video step {i}"), &v.host_cow()?, &want_video[i * nv..(i + 1) * nv], 2e-5);
         assert_close(&format!("loop audio step {i}"), &a.host_cow()?, &want_audio[i * na..(i + 1) * na], 2e-5);
         Ok(())

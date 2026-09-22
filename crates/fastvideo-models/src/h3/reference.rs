@@ -4,6 +4,8 @@
 //! Video/audio decode stays at the call site (cudarc / CLI); this module is the
 //! host contract the packed layout and encoders consume.
 
+use super::config::H3_AUDIO_CHANNELS;
+
 /// Released short-edge for reference images (`MINIMAX_H3_REFERENCE_IMAGE_SHORT_EDGE`).
 pub const REFERENCE_IMAGE_SHORT_EDGE: usize = 2048;
 /// Canvas multiple (VAE spatial + patch).
@@ -81,6 +83,92 @@ impl PreparedImageRef {
         }
         Ok((self.latent_height / ph) * (self.latent_width / pw))
     }
+}
+
+/// One prepared Ref2VA medium with latent geometry resolved (post-encode plan).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PreparedReference {
+    Image(PreparedImageRef),
+    /// Visual latents; optional soundtrack audio latents (stereo rows = 2 * Na).
+    Video {
+        num_latent_frames: usize,
+        latent_height: usize,
+        latent_width: usize,
+        num_audio_latents: usize,
+    },
+    Audio {
+        num_audio_latents: usize,
+    },
+}
+
+impl PreparedReference {
+    pub fn kind(&self) -> ReferenceKind {
+        match self {
+            Self::Image(_) => ReferenceKind::Image,
+            Self::Video { .. } => ReferenceKind::Video,
+            Self::Audio { .. } => ReferenceKind::Audio,
+        }
+    }
+
+    pub fn has_audio(&self) -> bool {
+        match self {
+            Self::Image(_) => false,
+            Self::Video {
+                num_audio_latents, ..
+            } => *num_audio_latents > 0,
+            Self::Audio { .. } => true,
+        }
+    }
+
+    pub fn num_audio_latents(&self) -> usize {
+        match self {
+            Self::Image(_) => 0,
+            Self::Video {
+                num_audio_latents, ..
+            }
+            | Self::Audio { num_audio_latents } => *num_audio_latents,
+        }
+    }
+
+    pub fn video_rows(&self, patch: [usize; 3]) -> Result<usize, String> {
+        let [pt, ph, pw] = patch;
+        match self {
+            Self::Audio { .. } => Ok(0),
+            Self::Image(img) => img.rows_per_frame(patch),
+            Self::Video {
+                num_latent_frames,
+                latent_height,
+                latent_width,
+                ..
+            } => {
+                if *num_latent_frames == 0
+                    || *latent_height == 0
+                    || *latent_width == 0
+                    || num_latent_frames % pt != 0
+                    || latent_height % ph != 0
+                    || latent_width % pw != 0
+                {
+                    return Err(format!(
+                        "video ref geometry {num_latent_frames}x{latent_height}x{latent_width} not divisible by {patch:?}"
+                    ));
+                }
+                Ok((num_latent_frames / pt) * (latent_height / ph) * (latent_width / pw))
+            }
+        }
+    }
+
+    pub fn audio_rows(&self) -> usize {
+        self.num_audio_latents() * H3_AUDIO_CHANNELS
+    }
+}
+
+/// Ordered segment of the Ref2VA condition span (for packing projected rows).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RefSegment {
+    /// Consume `rows` from the condition-video stream.
+    Video { rows: usize },
+    /// Consume `rows` from the condition-audio stream.
+    Audio { rows: usize },
 }
 
 /// Resolve the released 2048-short-edge reference-image canvas.

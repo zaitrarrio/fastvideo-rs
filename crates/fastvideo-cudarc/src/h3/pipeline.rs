@@ -42,7 +42,8 @@ use fastvideo_models::h3::config::{
 };
 use fastvideo_models::h3::packing::{patchify, H3PackedLayout, KeyframeAnchor};
 use fastvideo_models::h3::reference::{
-    resolve_reference_image_size, validate_references, H3ReferenceSpec, PreparedImageRef, ReferenceKind,
+    resolve_reference_image_size, validate_references, H3ReferenceSpec, PreparedImageRef,
+    PreparedReference, ReferenceKind,
 };
 use fastvideo_models::h3::schedule::{H3JointSchedule, H3Schedule};
 use rand::{Rng, SeedableRng};
@@ -322,11 +323,13 @@ pub fn denoise(
     schedule: &H3JointSchedule,
     mode: AttnMode<'_>,
     cond_rows: Option<&CudaTensor>,
+    cond_audio_rows: Option<&CudaTensor>,
     observe: &mut dyn FnMut(usize, &CudaTensor, &CudaTensor) -> Result<()>,
 ) -> Result<(CudaTensor, CudaTensor)> {
     let (mut video, mut audio) = (video_rows, audio_rows);
     for step in 0..schedule.num_steps() {
-        let (v_video, v_audio) = model.forward(step, &video, &audio, text_refined, layout, mode, None, cond_rows)?;
+        let (v_video, v_audio) =
+            model.forward(step, &video, &audio, text_refined, layout, mode, None, cond_rows, cond_audio_rows)?;
         video = scheduler_step(&schedule.video, step, &video, &v_video)?;
         audio = scheduler_step(&schedule.audio, step, &audio, &v_audio)?;
         observe(step, &video, &audio)?;
@@ -612,7 +615,7 @@ impl H3Pipeline {
             for r in &request.references {
                 if r.kind != ReferenceKind::Image {
                     return Err(msg(format!(
-                        "Ref2VA {} references are not wired yet (image-only for now)",
+                        "Ref2VA {} references: packing is ready; GPU encode for video/audio is next",
                         r.kind.as_str()
                     )));
                 }
@@ -623,8 +626,19 @@ impl H3Pipeline {
         let anchors = request.keyframe_anchors();
         let (layout, cond_rows) = if request.is_ref2va() {
             let (prepared, rows) = encode_ref2va_image_rows(&self.root, cfg, &request.references, request.seed)?;
-            let layout =
-                H3PackedLayout::from_geometry_with_image_refs(&geometry, text.ids.len(), &prepared).map_err(msg)?;
+            let refs: Vec<_> = prepared.into_iter().map(PreparedReference::Image).collect();
+            let layout = H3PackedLayout::with_references(
+                text.ids.len(),
+                (
+                    geometry.latent_frames,
+                    geometry.latent_height,
+                    geometry.latent_width,
+                ),
+                geometry.audio_latents,
+                cfg.patch_size,
+                &refs,
+            )
+            .map_err(msg)?;
             (layout, Some(rows))
         } else if anchors.is_empty() {
             (
@@ -638,7 +652,12 @@ impl H3Pipeline {
             (layout, Some(rows))
         };
         let sequence_length = layout.sequence_length();
-        let vsa = if self.options.dense {
+        // Interleaved Ref2VA condition audio breaks VSA's contiguous-prefix tiles.
+        let force_dense = layout.num_condition_audio_rows > 0;
+        let vsa = if self.options.dense || force_dense {
+            if force_dense && !self.options.dense {
+                crate::wan::log::info(format_args!("h3 ref2va: dense attention (interleaved condition audio)"));
+            }
             None
         } else {
             let vsa_cfg = super::vsa::H3VsaConfig {
@@ -666,6 +685,7 @@ impl H3Pipeline {
             &self.schedule,
             mode,
             cond_rows.as_ref(),
+            None,
             &mut |step, _, _| {
                 crate::wan::device::synchronize().map_err(|e| msg(e.to_string()))?;
                 step_s.push(last.elapsed().as_secs_f64());

@@ -29,7 +29,7 @@
 //! float32 where the reference casts them (first line of its rope).
 
 use super::config::{H3Geometry, H3TransformerConfig, H3_AUDIO_CHANNELS, TAG_AUDIO, TAG_TEXT, TAG_VIDEO};
-use super::reference::PreparedImageRef;
+use super::reference::{PreparedImageRef, PreparedReference, RefSegment};
 use super::schedule::H3RowTimesteps;
 
 /// `MINIMAX_H3_ROPE_FRAME_RESCALE`: rotary time units per pixel frame
@@ -79,16 +79,21 @@ impl RowRange {
 #[derive(Debug, Clone, PartialEq)]
 pub struct H3PackedLayout {
     pub text: RowRange,
-    /// Keyframe condition rows (video tag); empty for T2AV.
+    /// Contiguous condition video rows (FL2VA / image-only Ref2VA); empty when
+    /// [`Self::ref_segments`] is non-empty (interleaved Ref2VA).
     pub cond: RowRange,
     pub audio: RowRange,
     pub video: RowRange,
-    /// Audio latents per stereo channel (`audio.len / 2`).
+    /// Audio latents per stereo channel for the **target** (`audio.len / 2`).
     pub audio_latents: usize,
     /// Video token grid `(t, h, w)`; rows are frame-major, then row-major.
     pub token_grid: (usize, usize, usize),
-    /// Ordered FL2VA anchors that produced [`Self::cond`] (empty = T2AV).
+    /// Ordered FL2VA anchors that produced [`Self::cond`] (empty = T2AV / Ref2VA).
     pub keyframe_anchors: Vec<KeyframeAnchor>,
+    /// Interleaved Ref2VA condition segments between text and target audio.
+    pub ref_segments: Vec<RefSegment>,
+    pub num_condition_video_rows: usize,
+    pub num_condition_audio_rows: usize,
     /// `(t, h, w)` per row, float64 as the reference builds them.
     pub position_ids: Vec<[f64; 3]>,
     /// 0 video, 1 text, 2 audio.
@@ -219,6 +224,9 @@ impl H3PackedLayout {
             audio_latents,
             token_grid: grid,
             keyframe_anchors: anchors.to_vec(),
+            ref_segments: Vec::new(),
+            num_condition_video_rows: cond.len,
+            num_condition_audio_rows: 0,
             position_ids,
             token_tags,
         })
@@ -312,6 +320,181 @@ impl H3PackedLayout {
             audio_latents,
             token_grid: grid,
             keyframe_anchors: Vec::new(),
+            ref_segments: images
+                .iter()
+                .zip(&image_rows)
+                .map(|(_, &n)| RefSegment::Video { rows: n })
+                .collect(),
+            num_condition_video_rows: cond.len,
+            num_condition_audio_rows: 0,
+            position_ids,
+            token_tags,
+        })
+    }
+
+    /// Full Ref2VA: `[text | ordered refs (possibly interleaved audio/video) | target audio | target video]`.
+    pub fn with_references(
+        text_tokens: usize,
+        latent: (usize, usize, usize),
+        audio_latents: usize,
+        patch: [usize; 3],
+        references: &[PreparedReference],
+    ) -> Result<Self, String> {
+        let (lt, lh, lw) = latent;
+        let [pt, ph, pw] = patch;
+        if text_tokens == 0 {
+            return Err("an H3 request needs at least one text row".into());
+        }
+        if references.is_empty() {
+            return Err("Ref2VA requires at least one prepared reference".into());
+        }
+        if pt != 1 || ph == 0 || pw == 0 || lt == 0 || lt % pt != 0 || lh % ph != 0 || lw % pw != 0 {
+            return Err(format!("latents {lt}x{lh}x{lw} are not divisible by the patch {patch:?}"));
+        }
+        if audio_latents == 0 {
+            return Err("Ref2VA target audio latents must be positive".into());
+        }
+
+        let mut ref_segments = Vec::new();
+        let mut num_condition_video_rows = 0usize;
+        let mut num_condition_audio_rows = 0usize;
+        for r in references {
+            if matches!(r, PreparedReference::Audio { .. }) && !r.has_audio() {
+                return Err("an audio reference must carry audio latents".into());
+            }
+            if r.has_audio() && r.num_audio_latents() == 0 {
+                return Err("an audio-bearing reference has no audio latents".into());
+            }
+            let vrows = r.video_rows(patch)?;
+            let arows = r.audio_rows();
+            match r {
+                PreparedReference::Image(_) => {
+                    ref_segments.push(RefSegment::Video { rows: vrows });
+                    num_condition_video_rows += vrows;
+                }
+                PreparedReference::Audio { .. } => {
+                    ref_segments.push(RefSegment::Audio { rows: arows });
+                    num_condition_audio_rows += arows;
+                }
+                PreparedReference::Video { .. } => {
+                    if arows > 0 {
+                        ref_segments.push(RefSegment::Audio { rows: arows });
+                        num_condition_audio_rows += arows;
+                    }
+                    ref_segments.push(RefSegment::Video { rows: vrows });
+                    num_condition_video_rows += vrows;
+                }
+            }
+        }
+
+        let grid = (lt / pt, lh / ph, lw / pw);
+        let rows_per_frame = grid.1 * grid.2;
+        let text = RowRange {
+            start: 0,
+            len: text_tokens,
+        };
+        let cond_span = num_condition_video_rows + num_condition_audio_rows;
+        // Contiguous `cond` only when every condition row is video (image-only).
+        let image_only = num_condition_audio_rows == 0;
+        let cond = RowRange {
+            start: text.end(),
+            len: if image_only { num_condition_video_rows } else { 0 },
+        };
+        let audio = RowRange {
+            start: text.end() + cond_span,
+            len: audio_latents * H3_AUDIO_CHANNELS,
+        };
+        let video = RowRange {
+            start: audio.end(),
+            len: grid.0 * rows_per_frame,
+        };
+
+        let mut position_ids = Vec::with_capacity(video.end());
+        position_ids.extend((0..text_tokens).map(|i| [i as f64, 0.0, 0.0]));
+        let mut rotary_time = text_tokens as f64;
+        let mut token_tags = vec![TAG_TEXT; text_tokens];
+
+        let target_sqrt = ((lh * lw) as f64).sqrt();
+        let target_wgrid = spatial_position_grid(lw, pw, target_sqrt);
+
+        for r in references {
+            match r {
+                PreparedReference::Image(img) => {
+                    let sqrt_area = ((img.latent_height * img.latent_width) as f64).sqrt();
+                    let hgrid = spatial_position_grid(img.latent_height, ph, sqrt_area);
+                    let wgrid = spatial_position_grid(img.latent_width, pw, sqrt_area);
+                    for h in &hgrid {
+                        for w in &wgrid {
+                            position_ids.push([rotary_time, *h, *w]);
+                        }
+                    }
+                    token_tags.extend(std::iter::repeat_n(TAG_VIDEO, hgrid.len() * wgrid.len()));
+                    rotary_time += 1.0;
+                }
+                PreparedReference::Audio { num_audio_latents: na } => {
+                    let edges = [target_wgrid[0], target_wgrid[target_wgrid.len() - 1]];
+                    for edge in edges.iter().take(H3_AUDIO_CHANNELS) {
+                        position_ids.extend((0..*na).map(|a| [rotary_time + a as f64, 0.0, *edge]));
+                    }
+                    token_tags.extend(std::iter::repeat_n(TAG_AUDIO, *na * H3_AUDIO_CHANNELS));
+                    rotary_time += *na as f64;
+                }
+                PreparedReference::Video {
+                    num_latent_frames,
+                    latent_height,
+                    latent_width,
+                    num_audio_latents: na,
+                } => {
+                    let sqrt_area = ((*latent_height * *latent_width) as f64).sqrt();
+                    let hgrid = spatial_position_grid(*latent_height, ph, sqrt_area);
+                    let wgrid = spatial_position_grid(*latent_width, pw, sqrt_area);
+                    if *na > 0 {
+                        let edges = [wgrid[0], wgrid[wgrid.len() - 1]];
+                        for edge in edges.iter().take(H3_AUDIO_CHANNELS) {
+                            position_ids.extend((0..*na).map(|a| [rotary_time + a as f64, 0.0, *edge]));
+                        }
+                        token_tags.extend(std::iter::repeat_n(TAG_AUDIO, *na * H3_AUDIO_CHANNELS));
+                    }
+                    let tgrid = temporal_position_grid(*num_latent_frames, rotary_time);
+                    for t in &tgrid {
+                        for h in &hgrid {
+                            position_ids.extend(wgrid.iter().map(|w| [*t, *h, *w]));
+                        }
+                    }
+                    let vrows = tgrid.len() * hgrid.len() * wgrid.len();
+                    token_tags.extend(std::iter::repeat_n(TAG_VIDEO, vrows));
+                    let span = temporal_position_span(*num_latent_frames);
+                    rotary_time += (*na as f64).max(span);
+                }
+            }
+        }
+
+        let hgrid = spatial_position_grid(lh, ph, target_sqrt);
+        let wgrid = target_wgrid;
+        let tgrid = temporal_position_grid(grid.0, rotary_time);
+        let edges = [wgrid[0], wgrid[wgrid.len() - 1]];
+        for edge in edges.iter().take(H3_AUDIO_CHANNELS) {
+            position_ids.extend((0..audio_latents).map(|a| [rotary_time + a as f64, 0.0, *edge]));
+        }
+        token_tags.extend(std::iter::repeat_n(TAG_AUDIO, audio.len));
+        for t in &tgrid {
+            for h in &hgrid {
+                position_ids.extend(wgrid.iter().map(|w| [*t, *h, *w]));
+            }
+        }
+        token_tags.extend(std::iter::repeat_n(TAG_VIDEO, video.len));
+
+        Ok(Self {
+            text,
+            cond,
+            audio,
+            video,
+            audio_latents,
+            token_grid: grid,
+            keyframe_anchors: Vec::new(),
+            ref_segments,
+            num_condition_video_rows,
+            num_condition_audio_rows,
             position_ids,
             token_tags,
         })
@@ -676,6 +859,41 @@ mod tests {
         assert_eq!(l.position_ids[7][0], 4.0);
         assert_eq!(l.position_ids[11][0], 5.0, "target audio at rotary_time after images");
         assert_eq!(l.position_ids[15][0], 5.0, "target video shares that origin");
+    }
+
+    #[test]
+    fn ref2va_mixed_interleaves_audio_and_video_refs() {
+        use super::super::config::{TAG_AUDIO, TAG_TEXT, TAG_VIDEO};
+        use super::super::reference::PreparedReference;
+        let refs = [
+            PreparedReference::Image(PreparedImageRef {
+                height: 64,
+                width: 32,
+                latent_height: 4,
+                latent_width: 2,
+            }),
+            PreparedReference::Video {
+                num_latent_frames: 2,
+                latent_height: 2,
+                latent_width: 4,
+                num_audio_latents: 2,
+            },
+            PreparedReference::Audio {
+                num_audio_latents: 1,
+            },
+        ];
+        let l = H3PackedLayout::with_references(3, (2, 4, 4), 2, [1, 2, 2], &refs).unwrap();
+        // image 2 rows + video visual 4 + video audio 4 + audio ref 2
+        assert_eq!(l.num_condition_video_rows, 6);
+        assert_eq!(l.num_condition_audio_rows, 6);
+        assert_eq!(l.cond.len, 0, "interleaved: cond range unused");
+        assert_eq!(l.audio.start, 3 + 12);
+        assert_eq!(l.ref_segments.len(), 4); // image, vid-audio, vid-video, audio
+        assert_eq!(l.token_tags[..3], [TAG_TEXT; 3]);
+        assert_eq!(&l.token_tags[3..5], &[TAG_VIDEO; 2]);
+        assert_eq!(&l.token_tags[5..9], &[TAG_AUDIO; 4]);
+        assert_eq!(&l.token_tags[9..13], &[TAG_VIDEO; 4]);
+        assert_eq!(&l.token_tags[13..15], &[TAG_AUDIO; 2]);
     }
 
     #[test]

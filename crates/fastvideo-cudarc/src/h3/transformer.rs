@@ -76,8 +76,8 @@ const SHIFT_MLP: usize = 3;
 const SCALE_MLP: usize = 4;
 const GATE_MLP: usize = 5;
 const ADALN_PARAMS: usize = 6;
-/// "H3ADALN2": bump when the table layout changes (v2 adds FL2VA keyframe mods).
-const CACHE_MAGIC: u64 = u64::from_le_bytes(*b"H3ADALN2");
+/// "H3ADALN3": v3 stores KEYFRAME_NOISE_AUG AdaLN for all modality tags.
+const CACHE_MAGIC: u64 = u64::from_le_bytes(*b"H3ADALN3");
 
 /// Called with a name and a tensor at the points the oracle hooks
 /// (`block_<i>`: that block's `[1, S, hidden]` output).
@@ -143,7 +143,7 @@ pub struct AdaLnTable {
     block_mods: Vec<f32>,
     /// `[steps, 2 (video, audio timestep), 2 (shift, 1 + scale), hidden]`.
     out_mods: Vec<f32>,
-    /// `[blocks, 6, hidden]`: TAG_VIDEO AdaLN at [`KEYFRAME_NOISE_AUG`].
+/// `[blocks, 3, 6, hidden]`: AdaLN at [`KEYFRAME_NOISE_AUG`] for every modality tag.
     keyframe_mods: Vec<f32>,
     /// `[steps, 2, time_embed_dim]`: `temb` for (video, audio), kept for the oracle.
     pub temb: Vec<Vec<f32>>,
@@ -167,7 +167,7 @@ impl AdaLnTable {
 
         let slice = ADALN_PARAMS * hidden;
         let mut block_mods = vec![0f32; steps * cfg.num_layers * MODALITY_NUM * slice];
-        let mut keyframe_mods = vec![0f32; cfg.num_layers * slice];
+        let mut keyframe_mods = vec![0f32; cfg.num_layers * MODALITY_NUM * slice];
         for b in 0..cfg.num_layers {
             let proj = Linear::load(map, &format!("transformer_blocks.{b}.adaln_proj.linear"), te, cfg.adaln_out_dim(), true)?;
             let y = proj.forward(&s)?;
@@ -187,14 +187,16 @@ impl AdaLnTable {
                     }
                 }
             }
-            // KEYFRAME_NOISE_AUG row → TAG_VIDEO AdaLN for condition rows.
+            // KEYFRAME_NOISE_AUG row → all modality tags for Ref2VA/FL2VA condition rows.
             let kf_row = 2 * steps;
-            let m = usize::from(TAG_VIDEO);
-            let src = &y[kf_row * width + m * slice..kf_row * width + (m + 1) * slice];
-            let dst = &mut keyframe_mods[b * slice..][..slice];
-            dst.copy_from_slice(src);
-            for p in [SCALE_MSA, SCALE_MLP] {
-                dst[p * hidden..(p + 1) * hidden].iter_mut().for_each(|v| *v += 1.0);
+            for tag in [TAG_VIDEO, TAG_TEXT, TAG_AUDIO] {
+                let m = usize::from(tag);
+                let src = &y[kf_row * width + m * slice..kf_row * width + (m + 1) * slice];
+                let dst = &mut keyframe_mods[(b * MODALITY_NUM + m) * slice..][..slice];
+                dst.copy_from_slice(src);
+                for p in [SCALE_MSA, SCALE_MLP] {
+                    dst[p * hidden..(p + 1) * hidden].iter_mut().for_each(|v| *v += 1.0);
+                }
             }
             crate::wan::log::info(format_args!("h3 adaln table: block {}/{}", b + 1, cfg.num_layers));
         }
@@ -241,7 +243,7 @@ impl AdaLnTable {
         let sizes = [
             steps * cfg.num_layers * MODALITY_NUM * ADALN_PARAMS * cfg.hidden_size,
             2 * steps * 2 * cfg.hidden_size,
-            cfg.num_layers * ADALN_PARAMS * cfg.hidden_size,
+            cfg.num_layers * MODALITY_NUM * ADALN_PARAMS * cfg.hidden_size,
             2 * steps * cfg.time_embed_dim,
         ];
 
@@ -297,10 +299,10 @@ impl AdaLnTable {
         &self.block_mods[((step * self.blocks + block) * MODALITY_NUM + usize::from(tag)) * slice..][..slice]
     }
 
-    /// TAG_VIDEO AdaLN at [`KEYFRAME_NOISE_AUG`] for FL2VA condition rows.
-    pub fn keyframe_slot(&self, block: usize) -> &[f32] {
+    /// AdaLN at [`KEYFRAME_NOISE_AUG`] for `(block, tag)`.
+    pub fn keyframe_slot(&self, block: usize, tag: u8) -> &[f32] {
         let slice = ADALN_PARAMS * self.hidden;
-        &self.keyframe_mods[block * slice..][..slice]
+        &self.keyframe_mods[(block * MODALITY_NUM + usize::from(tag)) * slice..][..slice]
     }
 
     /// `(shift, 1 + scale)` of `norm_out` for the video (`audio = false`) or
@@ -311,22 +313,37 @@ impl AdaLnTable {
     }
 }
 
-/// One block's modulation on the device: a `[1, 6, hidden]` table per segment.
+/// One block's modulation on the device: a `[1, 6, hidden]` table per contiguous
+/// same-tag run (T2AV/FL2VA and interleaved Ref2VA).
 struct BlockMods {
-    /// In packed order: text, optional keyframe cond (video AdaLN), audio, video.
     segments: Vec<(RowRange, CudaTensor)>,
 }
 
 impl BlockMods {
     fn upload(table: &AdaLnTable, step: usize, block: usize, layout: &H3PackedLayout) -> Result<Self> {
-        let up = |tag: u8| CudaTensor::from_vec(table.block_slot(step, block, tag).to_vec(), vec![1, ADALN_PARAMS, table.hidden])?.to_device();
-        let mut segments = vec![(layout.text, up(TAG_TEXT)?)];
-        if layout.cond.len > 0 {
-            let e = CudaTensor::from_vec(table.keyframe_slot(block).to_vec(), vec![1, ADALN_PARAMS, table.hidden])?.to_device()?;
-            segments.push((layout.cond, e));
+        let up_ladder = |tag: u8| {
+            CudaTensor::from_vec(table.block_slot(step, block, tag).to_vec(), vec![1, ADALN_PARAMS, table.hidden])?.to_device()
+        };
+        let up_keyframe = |tag: u8| {
+            CudaTensor::from_vec(table.keyframe_slot(block, tag).to_vec(), vec![1, ADALN_PARAMS, table.hidden])?.to_device()
+        };
+        let mut segments = Vec::new();
+        for (range, tag) in tag_runs(&layout.token_tags) {
+            if range.len == 0 {
+                continue;
+            }
+            // Condition rows sit before the target-audio segment; they read the
+            // KEYFRAME_NOISE_AUG AdaLN (FL2VA + Ref2VA). Target audio/video and
+            // text use the ladder timestep for this step.
+            let e = if range.start >= layout.audio.start {
+                up_ladder(tag)?
+            } else if tag == TAG_TEXT {
+                up_ladder(TAG_TEXT)?
+            } else {
+                up_keyframe(tag)?
+            };
+            segments.push((range, e));
         }
-        segments.push((layout.audio, up(TAG_AUDIO)?));
-        segments.push((layout.video, up(TAG_VIDEO)?));
         Ok(Self { segments })
     }
 
@@ -351,6 +368,22 @@ impl BlockMods {
             .collect::<Result<Vec<_>>>()?;
         CudaTensor::cat(&parts.iter().collect::<Vec<_>>(), 1)
     }
+}
+
+/// Contiguous same-tag runs over the packed sequence.
+fn tag_runs(tags: &[u8]) -> Vec<(RowRange, u8)> {
+    let mut out = Vec::new();
+    let mut i = 0usize;
+    while i < tags.len() {
+        let tag = tags[i];
+        let mut j = i + 1;
+        while j < tags.len() && tags[j] == tag {
+            j += 1;
+        }
+        out.push((RowRange { start: i, len: j - i }, tag));
+        i = j;
+    }
+    out
 }
 
 // ---------------------------------------------------------------------------
@@ -628,11 +661,9 @@ impl H3Transformer {
         self.has_gate
     }
 
-    /// One forward at ladder step `step`. `video_rows`: `[Nv, 96]` patchified
-    /// latents; `audio_rows`: `[2 Na, 32]`; `text`: the **refined** prompt
-    /// `[1, N, hidden]`. `cond_rows`: optional FL2VA keyframe rows
-    /// `[Nc, 96]` (fixed across steps). Returns the data-ward velocities for
-    /// video and audio only.
+    /// One forward at ladder step `step`. `video_rows` / `audio_rows` are the
+    /// **target** modality rows. `cond_rows` / `cond_audio_rows` are fixed
+    /// Ref2VA/FL2VA condition rows (video-tagged and audio-tagged).
     pub fn forward(
         &self,
         step: usize,
@@ -643,6 +674,7 @@ impl H3Transformer {
         mode: AttnMode<'_>,
         mut observer: Option<Observer<'_>>,
         cond_rows: Option<&CudaTensor>,
+        cond_audio_rows: Option<&CudaTensor>,
     ) -> Result<(CudaTensor, CudaTensor)> {
         let cfg = &self.cfg;
         let l = &layout.layout;
@@ -656,30 +688,68 @@ impl H3Transformer {
                 video_rows.shape, audio_rows.shape, text.shape, l.text.len, l.audio.len, l.video.len
             )));
         }
-        if l.cond.len > 0 {
-            let cond = cond_rows.ok_or_else(|| msg("h3 dit: layout has keyframe cond rows but no cond_rows were passed"))?;
-            if cond.shape != [l.cond.len, cfg.video_patch_dim()] {
+        let want_v = l.num_condition_video_rows;
+        let want_a = l.num_condition_audio_rows;
+        match (want_v, cond_rows) {
+            (0, None) => {}
+            (n, Some(c)) if c.shape == [n, cfg.video_patch_dim()] => {}
+            (n, got) => {
                 return Err(msg(format!(
-                    "h3 dit: cond rows {:?} for layout cond len {}",
-                    cond.shape, l.cond.len
+                    "h3 dit: need {n} cond video rows, got {:?}",
+                    got.map(|t| t.shape.clone())
                 )));
             }
-        } else if cond_rows.is_some() {
-            return Err(msg("h3 dit: cond_rows passed but layout has no keyframe segment"));
+        }
+        match (want_a, cond_audio_rows) {
+            (0, None) => {}
+            (n, Some(c)) if c.shape == [n, cfg.audio_in_channels] => {}
+            (n, got) => {
+                return Err(msg(format!(
+                    "h3 dit: need {n} cond audio rows, got {:?}",
+                    got.map(|t| t.shape.clone())
+                )));
+            }
         }
         if matches!(mode, AttnMode::Vsa(_)) && !self.has_gate {
             return Err(msg("h3 dit: VSA needs to_gate_compress; load the transformer with the gate"));
+        }
+        if matches!(mode, AttnMode::Vsa(_)) && want_a > 0 {
+            return Err(msg("h3 dit: interleaved Ref2VA condition audio needs dense attention (VSA prefix assumes contiguous layout)"));
         }
         let seq = l.sequence_length();
         let x = {
             let video = self.proj_in.forward(video_rows)?;
             let audio = self.audio_proj_in.forward(audio_rows)?;
             let text_rows = text.reshape(vec![l.text.len, hidden])?;
-            if l.cond.len > 0 {
+            if want_v == 0 && want_a == 0 {
+                CudaTensor::cat(&[&text_rows, &audio, &video], 0)?.reshape_owned(vec![1, seq, hidden])?
+            } else if want_a == 0 {
+                // Contiguous condition video (FL2VA / image-only Ref2VA).
                 let cond = self.proj_in.forward(cond_rows.unwrap())?;
                 CudaTensor::cat(&[&text_rows, &cond, &audio, &video], 0)?.reshape_owned(vec![1, seq, hidden])?
             } else {
-                CudaTensor::cat(&[&text_rows, &audio, &video], 0)?.reshape_owned(vec![1, seq, hidden])?
+                // Interleaved Ref2VA: project streams then cat by ref_segments.
+                let cv = self.proj_in.forward(cond_rows.unwrap())?;
+                let ca = self.audio_proj_in.forward(cond_audio_rows.unwrap())?;
+                let mut parts: Vec<CudaTensor> = Vec::with_capacity(2 + l.ref_segments.len() + 2);
+                parts.push(text_rows);
+                let (mut vi, mut ai) = (0usize, 0usize);
+                for seg in &l.ref_segments {
+                    match *seg {
+                        fastvideo_models::h3::reference::RefSegment::Video { rows } => {
+                            parts.push(cv.narrow(0, vi, rows)?);
+                            vi += rows;
+                        }
+                        fastvideo_models::h3::reference::RefSegment::Audio { rows } => {
+                            parts.push(ca.narrow(0, ai, rows)?);
+                            ai += rows;
+                        }
+                    }
+                }
+                parts.push(audio);
+                parts.push(video);
+                let refs: Vec<&CudaTensor> = parts.iter().collect();
+                CudaTensor::cat(&refs, 0)?.reshape_owned(vec![1, seq, hidden])?
             }
         };
         let rope = Some((&layout.cos, &layout.sin));
@@ -958,6 +1028,7 @@ pub(crate) mod tests {
                     Ok(())
                 }),
                 None,
+                None,
             )
             .unwrap();
         assert_eq!(seen, vec![("block_0".to_string(), vec![1, 8, 12]), ("block_1".to_string(), vec![1, 8, 12])]);
@@ -1034,7 +1105,7 @@ pub(crate) mod tests {
         let dl = DeviceLayout::new(&cfg, layout).unwrap();
         let run = |map: &WeightMap, mode: AttnMode<'_>| -> Vec<f32> {
             let model = H3Transformer::load(cfg.clone(), map, &schedule, true).unwrap();
-            let (v, a) = model.forward(0, &video, &audio, &text, &dl, mode, None, None).unwrap();
+            let (v, a) = model.forward(0, &video, &audio, &text, &dl, mode, None, None, None).unwrap();
             v.host_cow().unwrap().iter().chain(a.host_cow().unwrap().iter()).copied().collect()
         };
         let dense = run(&zero_gate(), AttnMode::Dense);
@@ -1045,7 +1116,7 @@ pub(crate) mod tests {
         assert!(gated.iter().zip(&dense_live).any(|(a, b)| (a - b).abs() > 1e-4), "a trained gate changes the output");
         // Without the gate weights loaded, VSA is refused rather than silently run gateless.
         let no_gate = H3Transformer::load(cfg.clone(), &weights(), &schedule, false).unwrap();
-        assert!(no_gate.forward(0, &video, &audio, &text, &dl, AttnMode::Vsa(&vsa), None, None).is_err());
+        assert!(no_gate.forward(0, &video, &audio, &text, &dl, AttnMode::Vsa(&vsa), None, None, None).is_err());
     }
 
     #[test]
