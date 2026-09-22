@@ -40,7 +40,7 @@ use fastvideo_models::h3::config::{
     H3AudioVaeConfig, H3Geometry, H3InferenceContract, H3TransformerConfig, H3VideoVaeConfig,
     H3_AUDIO_CHANNELS, H3_FPS,
 };
-use fastvideo_models::h3::packing::{patchify, H3PackedLayout};
+use fastvideo_models::h3::packing::{patchify, H3PackedLayout, KeyframeAnchor};
 use fastvideo_models::h3::schedule::{H3JointSchedule, H3Schedule};
 use rand::{Rng, SeedableRng};
 use rand_distr::StandardNormal;
@@ -49,6 +49,7 @@ use super::audio_vae::H3AudioDecoder;
 use super::text::{CacheStatus, HiddenStateEncoder};
 use super::transformer::{AttnMode, DeviceLayout, H3TextRefiner, H3Transformer};
 use super::vae::H3VideoDecoder;
+use super::vae_encoder::H3VideoEncoder;
 use crate::wan::taehv::{TaeArch, TaeHv};
 use super::vsa::H3Vsa;
 use crate::wan::pipeline::{frames_to_rgb8, interleave_audio, write_wav, PipelineError, Result, VideoWriter};
@@ -69,9 +70,9 @@ pub struct H3Request {
     pub num_frames: usize,
     /// Write `output.mp4` (needs ffmpeg) next to the PNG frames.
     pub mp4: bool,
-    /// FL2VA first-frame image (canvas-fitted). Encode not wired yet.
+    /// FL2VA first-frame image (canvas-fitted, GPU VAE encode).
     pub first_image: Option<std::path::PathBuf>,
-    /// FL2VA last-frame image. Encode not wired yet.
+    /// FL2VA last-frame image.
     pub last_image: Option<std::path::PathBuf>,
 }
 
@@ -92,8 +93,7 @@ impl H3Request {
     }
 
     /// Ordered FL2VA anchors implied by the request images.
-    pub fn keyframe_anchors(&self) -> Vec<fastvideo_models::h3::packing::KeyframeAnchor> {
-        use fastvideo_models::h3::packing::KeyframeAnchor;
+    pub fn keyframe_anchors(&self) -> Vec<KeyframeAnchor> {
         let mut a = Vec::new();
         if self.first_image.is_some() {
             a.push(KeyframeAnchor::First);
@@ -309,11 +309,12 @@ pub fn denoise(
     audio_rows: CudaTensor,
     schedule: &H3JointSchedule,
     mode: AttnMode<'_>,
+    cond_rows: Option<&CudaTensor>,
     observe: &mut dyn FnMut(usize, &CudaTensor, &CudaTensor) -> Result<()>,
 ) -> Result<(CudaTensor, CudaTensor)> {
     let (mut video, mut audio) = (video_rows, audio_rows);
     for step in 0..schedule.num_steps() {
-        let (v_video, v_audio) = model.forward(step, &video, &audio, text_refined, layout, mode, None)?;
+        let (v_video, v_audio) = model.forward(step, &video, &audio, text_refined, layout, mode, None, cond_rows)?;
         video = scheduler_step(&schedule.video, step, &video, &v_video)?;
         audio = scheduler_step(&schedule.audio, step, &audio, &v_audio)?;
         observe(step, &video, &audio)?;
@@ -569,8 +570,24 @@ impl H3Pipeline {
         timings.refine_s = timer.elapsed().as_secs_f64();
 
         // --- DiT --------------------------------------------------------------------
-        let layout = H3PackedLayout::from_geometry(&geometry, text.ids.len()).map_err(msg)?;
+        let anchors = request.keyframe_anchors();
+        let layout = if anchors.is_empty() {
+            H3PackedLayout::from_geometry(&geometry, text.ids.len()).map_err(msg)?
+        } else {
+            H3PackedLayout::from_geometry_with_keyframes(&geometry, text.ids.len(), &anchors).map_err(msg)?
+        };
         let sequence_length = layout.sequence_length();
+        let cond_rows = if anchors.is_empty() {
+            None
+        } else {
+            Some(encode_fl2va_cond_rows(
+                &self.root,
+                cfg,
+                &geometry,
+                request,
+                &anchors,
+            )?)
+        };
         let vsa = if self.options.dense {
             None
         } else {
@@ -590,16 +607,26 @@ impl H3Pipeline {
         let mut last = Instant::now();
         let steps = self.schedule.num_steps();
         let mut step_s = Vec::with_capacity(steps);
-        let (video_rows, audio_rows) = denoise(&self.model, &layout, &text_refined, video_rows, audio_rows, &self.schedule, mode, &mut |step, _, _| {
-            crate::wan::device::synchronize().map_err(|e| msg(e.to_string()))?;
-            step_s.push(last.elapsed().as_secs_f64());
-            crate::wan::log::info(format_args!("h3 step {}/{steps}: {:.1}s", step + 1, step_s[step]));
-            last = Instant::now();
-            Ok(())
-        })?;
+        let (video_rows, audio_rows) = denoise(
+            &self.model,
+            &layout,
+            &text_refined,
+            video_rows,
+            audio_rows,
+            &self.schedule,
+            mode,
+            cond_rows.as_ref(),
+            &mut |step, _, _| {
+                crate::wan::device::synchronize().map_err(|e| msg(e.to_string()))?;
+                step_s.push(last.elapsed().as_secs_f64());
+                crate::wan::log::info(format_args!("h3 step {}/{steps}: {:.1}s", step + 1, step_s[step]));
+                last = Instant::now();
+                Ok(())
+            },
+        )?;
         timings.denoise_s = timer.elapsed().as_secs_f64();
         timings.step_s = step_s;
-        drop((vsa, layout, text_refined));
+        drop((vsa, layout, text_refined, cond_rows));
 
         // --- audio first: the WAV must exist before the muxer starts -------------------
         let timer = Instant::now();
@@ -655,6 +682,67 @@ impl H3Pipeline {
             wav,
             timings,
         })
+    }
+}
+
+/// GPU-encode FL2VA keyframe images → patchified cond rows (`[Nc, patch_dim]`).
+fn encode_fl2va_cond_rows(
+    root: &Path,
+    cfg: &H3TransformerConfig,
+    geometry: &H3Geometry,
+    request: &H3Request,
+    anchors: &[KeyframeAnchor],
+) -> Result<CudaTensor> {
+    let encoder = H3VideoEncoder::load(
+        H3VideoVaeConfig::fasth3_8step(),
+        &WeightMap::open(&root.join("vae"))?,
+    )?;
+    let mut parts = Vec::with_capacity(anchors.len());
+    for (i, anchor) in anchors.iter().enumerate() {
+        let path = match anchor {
+            KeyframeAnchor::First => request
+                .first_image
+                .as_deref()
+                .ok_or_else(|| msg("FL2VA first keyframe requested but first_image is missing"))?,
+            KeyframeAnchor::Last => request
+                .last_image
+                .as_deref()
+                .ok_or_else(|| msg("FL2VA last keyframe requested but last_image is missing"))?,
+        };
+        crate::wan::log::info(format_args!(
+            "h3 fl2va: encode {} ({})",
+            anchor.as_str(),
+            path.display()
+        ));
+        // Noise-aug seed distinct from video/audio noise.
+        let seed = request.seed.wrapping_add(17 + i as u64);
+        let z = encoder.encode_keyframe_file(
+            path,
+            request.height,
+            request.width,
+            false,
+            true,
+            seed,
+        )?;
+        // z: [1, C, 1, h, w] → patchify one latent frame into DiT rows.
+        let host = z.host_cow()?.into_owned();
+        let shape = [cfg.in_channels, 1, geometry.latent_height, geometry.latent_width];
+        if host.len() != shape.iter().product::<usize>() {
+            return Err(msg(format!(
+                "h3 fl2va: encoded latent len {} != {:?}",
+                host.len(),
+                shape
+            )));
+        }
+        let rows = patchify(&host, shape, cfg.patch_size).map_err(msg)?;
+        let n_rows = geometry.latent_height / cfg.patch_size[1] * geometry.latent_width / cfg.patch_size[2];
+        parts.push(CudaTensor::from_vec(rows, vec![n_rows, cfg.video_patch_dim()])?.to_device()?);
+    }
+    if parts.len() == 1 {
+        Ok(parts.pop().unwrap())
+    } else {
+        let refs: Vec<&CudaTensor> = parts.iter().collect();
+        Ok(CudaTensor::cat(&refs, 0)?)
     }
 }
 

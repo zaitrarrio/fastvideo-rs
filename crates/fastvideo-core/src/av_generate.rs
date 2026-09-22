@@ -31,7 +31,7 @@ pub struct AvGenerateOptions {
     pub num_inference_steps: Option<u32>,
     /// LTX two-stage refine steps (2 or 3).
     pub refine_steps: Option<u32>,
-    /// First-frame image for LTX I2V / H3 FL2VA (encoders not fully wired yet).
+    /// First-frame image for LTX I2V / H3 FL2VA (H3 encodes on GPU via cudarc).
     pub image_path: Option<PathBuf>,
     /// H3 FL2VA last-frame image.
     pub last_image_path: Option<PathBuf>,
@@ -168,21 +168,12 @@ fn generate_ltx2(def: &'static FamilyModelDefinition, opts: AvGenerateOptions) -
 
 fn generate_h3(def: &'static FamilyModelDefinition, opts: AvGenerateOptions) -> Result<AvGenerateOutput> {
     require_cuda(&opts.device)?;
-    let fl2va = opts.image_path.is_some() || opts.last_image_path.is_some();
-    if fl2va {
-        return Err(FastVideoError::NotImplemented {
-            component: "h3 FL2VA".into(),
-            detail: "keyframe packing is ready; video VAE encode + scale_noise into denoise is next"
-                .into(),
-        });
-    }
     if def.preset == "minimax_h3" {
         // Base MiniMax-H3 T2AV uses a different schedule / AdaLN than FastH3;
-        // FL2VA/Ref2VA also need VAE encode. Keep the gate until those land.
+        // Ref2VA still needs transformer_ref. FL2VA encode is on the FastH3 path.
         return Err(FastVideoError::NotImplemented {
             component: "minimax_h3".into(),
-            detail: "use a FastH3 checkpoint for T2AV; pass --image/--last-image for FL2VA once encode lands"
-                .into(),
+            detail: "use a FastH3 checkpoint for T2AV/FL2VA; Ref2VA is not wired yet".into(),
         });
     }
 

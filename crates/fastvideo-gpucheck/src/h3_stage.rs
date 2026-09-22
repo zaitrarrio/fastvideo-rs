@@ -682,6 +682,7 @@ fn dit(report: &mut Report, weights: &Path, oracle: &Path, device: &str, max_rel
                 }
                 Ok(())
             }),
+            None,
         )?;
         Ok((out.0.host_cow()?.into_owned(), out.1.host_cow()?.into_owned()))
     })?;
@@ -737,7 +738,7 @@ fn ladder(report: &mut Report, weights: &Path, oracle: &Path, device: &str, max_
     let mem = crate::gpu::PeakMem::start();
     let (_, seconds) = measure(report, "loop", || {
         let mut last = std::time::Instant::now();
-        denoise(&model, &device_layout, &refined, video_rows, audio_rows, &schedule, AttnMode::Dense, &mut |step, video, audio| {
+        denoise(&model, &device_layout, &refined, video_rows, audio_rows, &schedule, AttnMode::Dense, None, &mut |step, video, audio| {
             let (dv, da) = (
                 diff(&video.host_cow()?, &want_video.data[step * nv..(step + 1) * nv]),
                 diff(&audio.host_cow()?, &want_audio.data[step * na..(step + 1) * na]),

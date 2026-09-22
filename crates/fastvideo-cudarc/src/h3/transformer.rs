@@ -28,7 +28,7 @@
 //! [`AttnMode`].
 
 use fastvideo_models::h3::config::{H3TransformerConfig, MODALITY_NUM, TAG_AUDIO, TAG_TEXT, TAG_VIDEO};
-use fastvideo_models::h3::packing::{H3PackedLayout, RowRange};
+use fastvideo_models::h3::packing::{H3PackedLayout, KEYFRAME_NOISE_AUG, RowRange};
 use fastvideo_models::h3::schedule::H3JointSchedule;
 
 use crate::wan::nn::{scaled_dot_product_attention, Linear};
@@ -76,8 +76,8 @@ const SHIFT_MLP: usize = 3;
 const SCALE_MLP: usize = 4;
 const GATE_MLP: usize = 5;
 const ADALN_PARAMS: usize = 6;
-/// "H3ADALN1": bump the digit when the table layout changes.
-const CACHE_MAGIC: u64 = u64::from_le_bytes(*b"H3ADALN1");
+/// "H3ADALN2": bump when the table layout changes (v2 adds FL2VA keyframe mods).
+const CACHE_MAGIC: u64 = u64::from_le_bytes(*b"H3ADALN2");
 
 /// Called with a name and a tensor at the points the oracle hooks
 /// (`block_<i>`: that block's `[1, S, hidden]` output).
@@ -129,11 +129,12 @@ pub fn time_embeddings(cfg: &H3TransformerConfig, map: &WeightMap, timesteps: &[
         .collect())
 }
 
-/// Every AdaLN modulation a T2AV run of one ladder reads, on the host.
+/// Every AdaLN modulation a T2AV/FL2VA run of one ladder reads, on the host.
 ///
 /// Slots are `[video, text, audio]` (the modality tags). Video and text rows
-/// take the video timestep, audio rows the audio one. Scales are stored as
-/// `1 + scale`, the form the block multiplies by.
+/// take the video timestep, audio rows the audio one. Keyframe condition rows
+/// (FL2VA) take [`KEYFRAME_NOISE_AUG`] with the video tag — a constant of the
+/// ladder, stored once per block. Scales are stored as `1 + scale`.
 pub struct AdaLnTable {
     steps: usize,
     blocks: usize,
@@ -142,6 +143,8 @@ pub struct AdaLnTable {
     block_mods: Vec<f32>,
     /// `[steps, 2 (video, audio timestep), 2 (shift, 1 + scale), hidden]`.
     out_mods: Vec<f32>,
+    /// `[blocks, 6, hidden]`: TAG_VIDEO AdaLN at [`KEYFRAME_NOISE_AUG`].
+    keyframe_mods: Vec<f32>,
     /// `[steps, 2, time_embed_dim]`: `temb` for (video, audio), kept for the oracle.
     pub temb: Vec<Vec<f32>>,
 }
@@ -152,15 +155,19 @@ impl AdaLnTable {
     pub fn precompute(cfg: &H3TransformerConfig, map: &WeightMap, schedule: &H3JointSchedule) -> Result<Self> {
         let steps = schedule.num_steps();
         let (hidden, te) = (cfg.hidden_size, cfg.time_embed_dim);
-        // Row 2i is the video timestep of step i, row 2i + 1 the audio one.
-        let timesteps: Vec<f32> = (0..steps).flat_map(|i| [schedule.video.timesteps[i], schedule.audio.timesteps[i]]).collect();
-        let temb = time_embeddings(cfg, map, &timesteps)?;
+        // Row 2i is the video timestep of step i, row 2i + 1 the audio one;
+        // final row is KEYFRAME_NOISE_AUG for FL2VA condition AdaLN.
+        let mut timesteps: Vec<f32> = (0..steps).flat_map(|i| [schedule.video.timesteps[i], schedule.audio.timesteps[i]]).collect();
+        timesteps.push(KEYFRAME_NOISE_AUG);
+        let temb_all = time_embeddings(cfg, map, &timesteps)?;
+        let temb: Vec<Vec<f32>> = temb_all[..2 * steps].to_vec();
         // silu in float32, THEN the cast the projection applies.
-        let silu: Vec<f32> = temb.iter().flatten().map(|&v| v / (1.0 + (-v).exp())).collect();
-        let s = pinned(silu, vec![2 * steps, te])?;
+        let silu: Vec<f32> = temb_all.iter().flatten().map(|&v| v / (1.0 + (-v).exp())).collect();
+        let s = pinned(silu, vec![2 * steps + 1, te])?;
 
         let slice = ADALN_PARAMS * hidden;
         let mut block_mods = vec![0f32; steps * cfg.num_layers * MODALITY_NUM * slice];
+        let mut keyframe_mods = vec![0f32; cfg.num_layers * slice];
         for b in 0..cfg.num_layers {
             let proj = Linear::load(map, &format!("transformer_blocks.{b}.adaln_proj.linear"), te, cfg.adaln_out_dim(), true)?;
             let y = proj.forward(&s)?;
@@ -180,18 +187,37 @@ impl AdaLnTable {
                     }
                 }
             }
+            // KEYFRAME_NOISE_AUG row → TAG_VIDEO AdaLN for condition rows.
+            let kf_row = 2 * steps;
+            let m = usize::from(TAG_VIDEO);
+            let src = &y[kf_row * width + m * slice..kf_row * width + (m + 1) * slice];
+            let dst = &mut keyframe_mods[b * slice..][..slice];
+            dst.copy_from_slice(src);
+            for p in [SCALE_MSA, SCALE_MLP] {
+                dst[p * hidden..(p + 1) * hidden].iter_mut().for_each(|v| *v += 1.0);
+            }
             crate::wan::log::info(format_args!("h3 adaln table: block {}/{}", b + 1, cfg.num_layers));
         }
 
+        // Out mods only need the ladder timesteps (video/audio heads), not keyframe.
+        let s_ladder = s.narrow(0, 0, 2 * steps)?;
         let proj = Linear::load(map, "norm_out.linear", te, 2 * hidden, true)?;
-        let y = proj.forward(&s)?;
+        let y = proj.forward(&s_ladder)?;
         let y = y.host_cow()?;
         // `shift, scale = chunk(2)`: shift first.
         let mut out_mods = y.to_vec();
         for row in out_mods.chunks_exact_mut(2 * hidden) {
             row[hidden..].iter_mut().for_each(|v| *v += 1.0);
         }
-        Ok(Self { steps, blocks: cfg.num_layers, hidden, block_mods, out_mods, temb })
+        Ok(Self {
+            steps,
+            blocks: cfg.num_layers,
+            hidden,
+            block_mods,
+            out_mods,
+            keyframe_mods,
+            temb,
+        })
     }
 
     /// [`Self::precompute`], memoized in `cache`. Building the table reads
@@ -210,8 +236,14 @@ impl AdaLnTable {
         let steps = schedule.num_steps();
         let mut header: Vec<u64> = vec![CACHE_MAGIC, fingerprint, steps as u64, cfg.num_layers as u64, cfg.hidden_size as u64, cfg.time_embed_dim as u64];
         header.extend((0..steps).flat_map(|i| [schedule.video.timesteps[i], schedule.audio.timesteps[i]]).map(|t| u64::from(t.to_bits())));
+        header.push(u64::from(KEYFRAME_NOISE_AUG.to_bits()));
         let header: Vec<u8> = header.iter().flat_map(|v| v.to_le_bytes()).collect();
-        let sizes = [steps * cfg.num_layers * MODALITY_NUM * ADALN_PARAMS * cfg.hidden_size, 2 * steps * 2 * cfg.hidden_size, 2 * steps * cfg.time_embed_dim];
+        let sizes = [
+            steps * cfg.num_layers * MODALITY_NUM * ADALN_PARAMS * cfg.hidden_size,
+            2 * steps * 2 * cfg.hidden_size,
+            cfg.num_layers * ADALN_PARAMS * cfg.hidden_size,
+            2 * steps * cfg.time_embed_dim,
+        ];
 
         if let Ok(bytes) = std::fs::read(path) {
             let want = header.len() + 4 * sizes.iter().sum::<usize>();
@@ -219,16 +251,33 @@ impl AdaLnTable {
                 let mut values = bytes[header.len()..].chunks_exact(4).map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]));
                 let block_mods: Vec<f32> = values.by_ref().take(sizes[0]).collect();
                 let out_mods: Vec<f32> = values.by_ref().take(sizes[1]).collect();
+                let keyframe_mods: Vec<f32> = values.by_ref().take(sizes[2]).collect();
                 let flat: Vec<f32> = values.collect();
                 let temb = flat.chunks_exact(cfg.time_embed_dim).map(<[f32]>::to_vec).collect();
                 crate::wan::log::info(format_args!("h3 adaln table: read from {}", path.display()));
-                return Ok(Self { steps, blocks: cfg.num_layers, hidden: cfg.hidden_size, block_mods, out_mods, temb });
+                return Ok(Self {
+                    steps,
+                    blocks: cfg.num_layers,
+                    hidden: cfg.hidden_size,
+                    block_mods,
+                    out_mods,
+                    keyframe_mods,
+                    temb,
+                });
             }
             crate::wan::log::info(format_args!("h3 adaln table: {} is for another checkpoint or ladder; rebuilding", path.display()));
         }
         let table = Self::precompute(cfg, map, schedule)?;
         let mut bytes = header;
-        bytes.extend(table.block_mods.iter().chain(&table.out_mods).chain(table.temb.iter().flatten()).flat_map(|v| v.to_le_bytes()));
+        bytes.extend(
+            table
+                .block_mods
+                .iter()
+                .chain(&table.out_mods)
+                .chain(&table.keyframe_mods)
+                .chain(table.temb.iter().flatten())
+                .flat_map(|v| v.to_le_bytes()),
+        );
         // A cache that cannot be written costs the next start some time, not this run its result.
         let written = path.parent().map_or(Ok(()), std::fs::create_dir_all).and_then(|()| std::fs::write(path, &bytes));
         if let Err(e) = written {
@@ -246,6 +295,12 @@ impl AdaLnTable {
     pub fn block_slot(&self, step: usize, block: usize, tag: u8) -> &[f32] {
         let slice = ADALN_PARAMS * self.hidden;
         &self.block_mods[((step * self.blocks + block) * MODALITY_NUM + usize::from(tag)) * slice..][..slice]
+    }
+
+    /// TAG_VIDEO AdaLN at [`KEYFRAME_NOISE_AUG`] for FL2VA condition rows.
+    pub fn keyframe_slot(&self, block: usize) -> &[f32] {
+        let slice = ADALN_PARAMS * self.hidden;
+        &self.keyframe_mods[block * slice..][..slice]
     }
 
     /// `(shift, 1 + scale)` of `norm_out` for the video (`audio = false`) or
@@ -267,7 +322,8 @@ impl BlockMods {
         let up = |tag: u8| CudaTensor::from_vec(table.block_slot(step, block, tag).to_vec(), vec![1, ADALN_PARAMS, table.hidden])?.to_device();
         let mut segments = vec![(layout.text, up(TAG_TEXT)?)];
         if layout.cond.len > 0 {
-            segments.push((layout.cond, up(TAG_VIDEO)?));
+            let e = CudaTensor::from_vec(table.keyframe_slot(block).to_vec(), vec![1, ADALN_PARAMS, table.hidden])?.to_device()?;
+            segments.push((layout.cond, e));
         }
         segments.push((layout.audio, up(TAG_AUDIO)?));
         segments.push((layout.video, up(TAG_VIDEO)?));
@@ -574,8 +630,9 @@ impl H3Transformer {
 
     /// One forward at ladder step `step`. `video_rows`: `[Nv, 96]` patchified
     /// latents; `audio_rows`: `[2 Na, 32]`; `text`: the **refined** prompt
-    /// `[1, N, hidden]`. Returns the data-ward velocities, same shapes as the
-    /// two row inputs.
+    /// `[1, N, hidden]`. `cond_rows`: optional FL2VA keyframe rows
+    /// `[Nc, 96]` (fixed across steps). Returns the data-ward velocities for
+    /// video and audio only.
     pub fn forward(
         &self,
         step: usize,
@@ -585,6 +642,7 @@ impl H3Transformer {
         layout: &DeviceLayout,
         mode: AttnMode<'_>,
         mut observer: Option<Observer<'_>>,
+        cond_rows: Option<&CudaTensor>,
     ) -> Result<(CudaTensor, CudaTensor)> {
         let cfg = &self.cfg;
         let l = &layout.layout;
@@ -592,16 +650,22 @@ impl H3Transformer {
         if step >= self.table.steps() {
             return Err(msg(format!("h3 dit: step {step} of a {}-step AdaLN table", self.table.steps())));
         }
-        if l.cond.len > 0 {
-            return Err(msg(
-                "h3 dit: keyframe condition rows need encode + packed cond; FL2VA encode is not wired yet",
-            ));
-        }
         if video_rows.shape != [l.video.len, cfg.video_patch_dim()] || audio_rows.shape != [l.audio.len, cfg.audio_in_channels] || text.shape != [1, l.text.len, hidden] {
             return Err(msg(format!(
                 "h3 dit: rows video {:?} audio {:?} text {:?} for a layout of {} + {} + {}",
                 video_rows.shape, audio_rows.shape, text.shape, l.text.len, l.audio.len, l.video.len
             )));
+        }
+        if l.cond.len > 0 {
+            let cond = cond_rows.ok_or_else(|| msg("h3 dit: layout has keyframe cond rows but no cond_rows were passed"))?;
+            if cond.shape != [l.cond.len, cfg.video_patch_dim()] {
+                return Err(msg(format!(
+                    "h3 dit: cond rows {:?} for layout cond len {}",
+                    cond.shape, l.cond.len
+                )));
+            }
+        } else if cond_rows.is_some() {
+            return Err(msg("h3 dit: cond_rows passed but layout has no keyframe segment"));
         }
         if matches!(mode, AttnMode::Vsa(_)) && !self.has_gate {
             return Err(msg("h3 dit: VSA needs to_gate_compress; load the transformer with the gate"));
@@ -610,7 +674,13 @@ impl H3Transformer {
         let x = {
             let video = self.proj_in.forward(video_rows)?;
             let audio = self.audio_proj_in.forward(audio_rows)?;
-            CudaTensor::cat(&[&text.reshape(vec![l.text.len, hidden])?, &audio, &video], 0)?.reshape_owned(vec![1, seq, hidden])?
+            let text_rows = text.reshape(vec![l.text.len, hidden])?;
+            if l.cond.len > 0 {
+                let cond = self.proj_in.forward(cond_rows.unwrap())?;
+                CudaTensor::cat(&[&text_rows, &cond, &audio, &video], 0)?.reshape_owned(vec![1, seq, hidden])?
+            } else {
+                CudaTensor::cat(&[&text_rows, &audio, &video], 0)?.reshape_owned(vec![1, seq, hidden])?
+            }
         };
         let rope = Some((&layout.cos, &layout.sin));
         let eps = cfg.norm_eps as f32;
@@ -887,6 +957,7 @@ pub(crate) mod tests {
                     seen.push((name.to_string(), t.shape.clone()));
                     Ok(())
                 }),
+                None,
             )
             .unwrap();
         assert_eq!(seen, vec![("block_0".to_string(), vec![1, 8, 12]), ("block_1".to_string(), vec![1, 8, 12])]);
@@ -963,7 +1034,7 @@ pub(crate) mod tests {
         let dl = DeviceLayout::new(&cfg, layout).unwrap();
         let run = |map: &WeightMap, mode: AttnMode<'_>| -> Vec<f32> {
             let model = H3Transformer::load(cfg.clone(), map, &schedule, true).unwrap();
-            let (v, a) = model.forward(0, &video, &audio, &text, &dl, mode, None).unwrap();
+            let (v, a) = model.forward(0, &video, &audio, &text, &dl, mode, None, None).unwrap();
             v.host_cow().unwrap().iter().chain(a.host_cow().unwrap().iter()).copied().collect()
         };
         let dense = run(&zero_gate(), AttnMode::Dense);
@@ -974,7 +1045,7 @@ pub(crate) mod tests {
         assert!(gated.iter().zip(&dense_live).any(|(a, b)| (a - b).abs() > 1e-4), "a trained gate changes the output");
         // Without the gate weights loaded, VSA is refused rather than silently run gateless.
         let no_gate = H3Transformer::load(cfg.clone(), &weights(), &schedule, false).unwrap();
-        assert!(no_gate.forward(0, &video, &audio, &text, &dl, AttnMode::Vsa(&vsa), None).is_err());
+        assert!(no_gate.forward(0, &video, &audio, &text, &dl, AttnMode::Vsa(&vsa), None, None).is_err());
     }
 
     #[test]
