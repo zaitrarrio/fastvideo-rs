@@ -825,16 +825,32 @@ fn encode_ref2va_conditions(
     seed: u64,
 ) -> Result<Ref2VaEncoded> {
     let vae_cfg = H3VideoVaeConfig::fasth3_8step();
+    let audio_cfg = H3AudioVaeConfig::fasth3_8step();
     let ratio = vae_cfg.spatial_compression_ratio();
+    let sample_rate = audio_cfg.sampling_rate as u32;
     let encoder = H3VideoEncoder::load(vae_cfg, &WeightMap::open(&root.join("vae"))?)?;
+    let audio_map = WeightMap::open(&root.join("audio_vae"))?;
+    let audio_encoder = super::audio_vae::H3AudioEncoder::load(audio_cfg, &audio_map)?;
     let mut prepared = Vec::with_capacity(references.len());
     let mut video_parts = Vec::new();
+    let mut audio_parts = Vec::new();
+    let max_audio_samples = geometry.num_frames * sample_rate as usize / H3_FPS;
+
     for (i, spec) in references.iter().enumerate() {
         match spec.kind {
             ReferenceKind::Audio => {
-                return Err(msg(
-                    "Ref2VA audio references: GPU audio VAE encoder is next; pass image/video refs for now",
+                crate::wan::log::info(format_args!(
+                    "h3 ref2va: encode audio {} ({})",
+                    i + 1,
+                    spec.path.display()
                 ));
+                let planar = super::media::decode_audio_stereo_f32(&spec.path, sample_rate, max_audio_samples)?;
+                let rows = audio_encoder.encode_stereo_planar(&planar)?;
+                let na = rows.shape[0] / H3_AUDIO_CHANNELS;
+                audio_parts.push(rows);
+                prepared.push(PreparedReference::Audio {
+                    num_audio_latents: na,
+                });
             }
             ReferenceKind::Image => {
                 let img = image::open(&spec.path)
@@ -889,9 +905,8 @@ fn encode_ref2va_conditions(
                 let keep = n24.min(geometry.num_frames);
                 let (keep, out_h, out_w) =
                     plan_reference_video_canvas(src_h, src_w, n24, keep).map_err(msg)?;
-                let trimmed = &resampled[..keep * src_h * src_w * 3];
                 let trimmed_n = trim_reference_num_frames(keep).map_err(msg)?.min(keep);
-                let trimmed = &trimmed[..trimmed_n * src_h * src_w * 3];
+                let trimmed = &resampled[..trimmed_n * src_h * src_w * 3];
                 let frames = super::media::resize_rgb_frames(trimmed, trimmed_n, src_h, src_w, out_h, out_w)?;
                 crate::wan::log::info(format_args!(
                     "h3 ref2va: encode video {} {} frames @ {:.3}fps → {}x{} / {}f ({})",
@@ -926,10 +941,15 @@ fn encode_ref2va_conditions(
                 let rows = patchify(&host, shape, cfg.patch_size).map_err(msg)?;
                 let n_rows = (lt / cfg.patch_size[0]) * (lh / cfg.patch_size[1]) * (lw / cfg.patch_size[2]);
                 video_parts.push(CudaTensor::from_vec(rows, vec![n_rows, cfg.video_patch_dim()])?.to_device()?);
-                // Soundtrack encode lands with the audio VAE encoder; motion-only until then.
+
+                let mut num_audio_latents = 0usize;
                 if super::media::probe_has_audio(&spec.path).unwrap_or(false) {
+                    let planar = super::media::decode_audio_stereo_f32(&spec.path, sample_rate, max_audio_samples)?;
+                    let arows = audio_encoder.encode_stereo_planar(&planar)?;
+                    num_audio_latents = arows.shape[0] / H3_AUDIO_CHANNELS;
+                    audio_parts.push(arows);
                     crate::wan::log::info(format_args!(
-                        "h3 ref2va: skipping soundtrack on video {} (audio encoder next)",
+                        "h3 ref2va: encode soundtrack {} → {num_audio_latents} audio latents",
                         i + 1
                     ));
                 }
@@ -937,7 +957,7 @@ fn encode_ref2va_conditions(
                     num_latent_frames: lt,
                     latent_height: lh,
                     latent_width: lw,
-                    num_audio_latents: 0,
+                    num_audio_latents,
                 });
             }
         }
@@ -951,10 +971,18 @@ fn encode_ref2va_conditions(
         let refs: Vec<&CudaTensor> = video_parts.iter().collect();
         CudaTensor::cat(&refs, 0)?
     };
+    let audio_rows = if audio_parts.is_empty() {
+        None
+    } else if audio_parts.len() == 1 {
+        Some(audio_parts.pop().unwrap())
+    } else {
+        let refs: Vec<&CudaTensor> = audio_parts.iter().collect();
+        Some(CudaTensor::cat(&refs, 0)?)
+    };
     Ok(Ref2VaEncoded {
         prepared,
         video_rows,
-        audio_rows: None,
+        audio_rows,
     })
 }
 

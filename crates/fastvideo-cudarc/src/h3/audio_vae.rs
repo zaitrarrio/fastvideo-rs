@@ -296,6 +296,381 @@ impl H3AudioDecoder {
     }
 }
 
+// ---- encoder (DAC + pre_block) ---------------------------------------------
+
+/// Plain Snake: `x + (α+ε)⁻¹ sin(α x)²`. Reuses the SnakeBeta kernel with a
+/// precomputed reciprocal gain.
+struct Snake1d {
+    alpha: CudaTensor,
+    inv_alpha: CudaTensor,
+}
+
+impl Snake1d {
+    fn load(map: &WeightMap, prefix: &str, channels: usize) -> Result<Self> {
+        let alpha = host_values(map, &format!("{prefix}.alpha"), &[1, channels, 1])?;
+        let inv: Vec<f32> = alpha.iter().map(|&a| 1.0 / (a + 1e-9)).collect();
+        Ok(Self {
+            alpha: pinned(alpha, vec![channels])?,
+            inv_alpha: pinned(inv, vec![channels])?,
+        })
+    }
+
+    fn forward(&self, x: &CudaTensor) -> Result<CudaTensor> {
+        x.snake_beta(&self.alpha, &self.inv_alpha)
+    }
+}
+
+struct AudioResidualUnit {
+    snake1: Snake1d,
+    conv1: Conv,
+    dil: usize,
+    snake2: Snake1d,
+    conv2: Conv,
+}
+
+impl AudioResidualUnit {
+    fn load(map: &WeightMap, prefix: &str, dim: usize, dilation: usize) -> Result<Self> {
+        Ok(Self {
+            snake1: Snake1d::load(map, &format!("{prefix}.block.0"), dim)?,
+            conv1: Conv::load_weight_normed(map, &format!("{prefix}.block.1"), [dim, dim, 7], Some(dim))?,
+            dil: dilation,
+            snake2: Snake1d::load(map, &format!("{prefix}.block.2"), dim)?,
+            conv2: Conv::load_weight_normed(map, &format!("{prefix}.block.3"), [dim, dim, 1], Some(dim))?,
+        })
+    }
+
+    fn forward(&self, x: &CudaTensor) -> Result<CudaTensor> {
+        let pad = ((7 - 1) * self.dil) / 2;
+        let r = self.snake1.forward(x)?.conv1d(&self.conv1.weight, self.conv1.bias.as_ref(), pad, 1, self.dil, 1)?;
+        let r = self.snake2.forward(&r)?.conv1d(&self.conv2.weight, self.conv2.bias.as_ref(), 0, 1, 1, 1)?;
+        let shrink = (x.shape[2] - r.shape[2]) / 2;
+        let x = if shrink > 0 {
+            x.narrow(2, shrink, r.shape[2])?
+        } else {
+            x.clone()
+        };
+        x.add(&r)
+    }
+}
+
+struct AudioEncoderBlock {
+    units: [AudioResidualUnit; 3],
+    snake: Snake1d,
+    down: Conv,
+    stride: usize,
+}
+
+impl AudioEncoderBlock {
+    fn load(map: &WeightMap, prefix: &str, dim: usize, stride: usize) -> Result<Self> {
+        let half = dim / 2;
+        Ok(Self {
+            units: [
+                AudioResidualUnit::load(map, &format!("{prefix}.block.0"), half, 1)?,
+                AudioResidualUnit::load(map, &format!("{prefix}.block.1"), half, 3)?,
+                AudioResidualUnit::load(map, &format!("{prefix}.block.2"), half, 9)?,
+            ],
+            snake: Snake1d::load(map, &format!("{prefix}.block.3"), half)?,
+            down: Conv::load_weight_normed(
+                map,
+                &format!("{prefix}.block.4"),
+                [dim, half, 2 * stride],
+                Some(dim),
+            )?,
+            stride,
+        })
+    }
+
+    fn forward(&self, x: &CudaTensor) -> Result<CudaTensor> {
+        let mut h = x.clone();
+        for u in &self.units {
+            h = u.forward(&h)?;
+        }
+        let h = self.snake.forward(&h)?;
+        let pad = self.stride.div_ceil(2);
+        h.conv1d(&self.down.weight, self.down.bias.as_ref(), pad, self.stride, 1, 1)
+    }
+}
+
+struct DacEncoder {
+    conv_in: Conv,
+    blocks: Vec<AudioEncoderBlock>,
+    snake_out: Snake1d,
+    conv_out: Conv,
+}
+
+impl DacEncoder {
+    fn load(cfg: &H3AudioVaeConfig, map: &WeightMap) -> Result<Self> {
+        let mut d = cfg.encoder_dim;
+        let conv_in = Conv::load_weight_normed(map, "encoder.block.0", [d, 1, 7], Some(d))?;
+        let mut blocks = Vec::with_capacity(cfg.encoder_rates.len());
+        // Sequential indices in `encoder.block`: 0=conv_in, then one block per stride, then snake+conv.
+        for (i, &stride) in cfg.encoder_rates.iter().enumerate() {
+            d *= 2;
+            blocks.push(AudioEncoderBlock::load(map, &format!("encoder.block.{}", i + 1), d, stride)?);
+        }
+        let snake_out = Snake1d::load(map, &format!("encoder.block.{}", blocks.len() + 1), d)?;
+        let conv_out = Conv::load_weight_normed(
+            map,
+            &format!("encoder.block.{}", blocks.len() + 2),
+            [cfg.latent_dim, d, 3],
+            Some(cfg.latent_dim),
+        )?;
+        Ok(Self {
+            conv_in,
+            blocks,
+            snake_out,
+            conv_out,
+        })
+    }
+
+    fn forward(&self, x: &CudaTensor) -> Result<CudaTensor> {
+        let mut h = x.conv1d(&self.conv_in.weight, self.conv_in.bias.as_ref(), 3, 1, 1, 1)?;
+        for b in &self.blocks {
+            h = b.forward(&h)?;
+        }
+        let h = self.snake_out.forward(&h)?;
+        h.conv1d(&self.conv_out.weight, self.conv_out.bias.as_ref(), 1, 1, 1, 1)
+    }
+}
+
+/// `pre_block`: residual causal-attention + GeGLU, 2048 → 32.
+struct AudioPreBlock {
+    norm1: (CudaTensor, CudaTensor),
+    norm2: (CudaTensor, CudaTensor),
+    norm3: (CudaTensor, CudaTensor),
+    qkv: CudaTensor,
+    q_bias: CudaTensor,
+    v_bias: CudaTensor,
+    proj: crate::wan::nn::Linear,
+    skip: crate::wan::nn::Linear,
+    mlp_w0: crate::wan::nn::Linear,
+    mlp_w1: crate::wan::nn::Linear,
+    mlp_w2: crate::wan::nn::Linear,
+    mlp_norm: (CudaTensor, CudaTensor),
+    num_heads: usize,
+    in_dim: usize,
+    out_dim: usize,
+}
+
+impl AudioPreBlock {
+    fn load(cfg: &H3AudioVaeConfig, map: &WeightMap) -> Result<Self> {
+        let (idin, out) = (cfg.latent_dim, cfg.latent_channels);
+        let heads = cfg.num_attention_heads;
+        let ln = |key: &str, n: usize| -> Result<(CudaTensor, CudaTensor)> {
+            Ok((
+                pinned(host_values(map, &format!("{key}.weight"), &[n])?, vec![n])?,
+                pinned(host_values(map, &format!("{key}.bias"), &[n])?, vec![n])?,
+            ))
+        };
+        let linear = |prefix: &str, i: usize, o: usize| -> Result<crate::wan::nn::Linear> {
+            crate::wan::nn::Linear::load(map, prefix, i, o, true)
+        };
+        Ok(Self {
+            norm1: ln("pre_block.norm1", idin)?,
+            norm2: ln("pre_block.norm2", out)?,
+            norm3: ln("pre_block.norm3", idin)?,
+            qkv: pinned(host_values(map, "pre_block.attn.qkv.weight", &[idin * 3, idin])?, vec![idin * 3, idin])?,
+            q_bias: pinned(host_values(map, "pre_block.attn.q_bias", &[idin])?, vec![idin])?,
+            v_bias: pinned(host_values(map, "pre_block.attn.v_bias", &[idin])?, vec![idin])?,
+            proj: linear("pre_block.attn.proj", out, out)?,
+            skip: linear("pre_block.proj", idin, out)?,
+            mlp_norm: ln("pre_block.mlp.norm", out)?,
+            mlp_w0: linear("pre_block.mlp.w0", out, out * 2)?,
+            mlp_w1: linear("pre_block.mlp.w1", out, out * 2)?,
+            mlp_w2: linear("pre_block.mlp.w2", out * 2, out)?,
+            num_heads: heads,
+            in_dim: idin,
+            out_dim: out,
+        })
+    }
+
+    fn forward(&self, x: &CudaTensor) -> Result<CudaTensor> {
+        // x: [B, L, C_in]
+        let n1 = x.layer_norm(1e-5, Some(&self.norm1.0), Some(&self.norm1.1))?;
+        let attn = self.causal_attn(&n1)?;
+        let n3 = x.layer_norm(1e-5, Some(&self.norm3.0), Some(&self.norm3.1))?;
+        let mut h = self.skip.forward(&n3)?.add(&attn)?;
+        let n2 = h.layer_norm(1e-5, Some(&self.norm2.0), Some(&self.norm2.1))?;
+        let mn = n2.layer_norm(1e-5, Some(&self.mlp_norm.0), Some(&self.mlp_norm.1))?;
+        let g = self.mlp_w0.forward(&mn)?.gelu_tanh();
+        let v = self.mlp_w1.forward(&mn)?;
+        let m = self.mlp_w2.forward(&g.mul(&v)?)?;
+        h.add(&m)
+    }
+
+    fn causal_attn(&self, x: &CudaTensor) -> Result<CudaTensor> {
+        let [b, s, c] = x.shape[..] else {
+            return Err(msg(format!("pre_block attn expects [B,S,C], got {:?}", x.shape)));
+        };
+        if c != self.in_dim {
+            return Err(msg(format!("pre_block attn width {c} != {}", self.in_dim)));
+        }
+        let head_dim = self.in_dim / self.num_heads;
+        // Host causal path: S is O(40 * seconds) ≤ ~600 — fine for one-shot encode.
+        let xh = x.host_cow()?.into_owned();
+        let w = self.qkv.host_cow()?.into_owned();
+        let qb = self.q_bias.host_cow()?.into_owned();
+        let vb = self.v_bias.host_cow()?.into_owned();
+        let mut out = vec![0f32; b * s * self.out_dim];
+        let scale = 1.0 / (head_dim as f32).sqrt();
+        for bi in 0..b {
+            let base = bi * s * c;
+            // QKV: [S, 3C]
+            let mut qkv = vec![0f32; s * 3 * c];
+            for t in 0..s {
+                for o in 0..(3 * c) {
+                    let mut acc = 0f64;
+                    for i in 0..c {
+                        acc += f64::from(xh[base + t * c + i]) * f64::from(w[o * c + i]);
+                    }
+                    let bias = if o < c {
+                        qb[o]
+                    } else if o >= 2 * c {
+                        vb[o - 2 * c]
+                    } else {
+                        0.0
+                    };
+                    qkv[t * 3 * c + o] = acc as f32 + bias;
+                }
+            }
+            // Mean-pool heads → [S, head_dim], then adaptive pool → [S, out_dim].
+            let mut pooled = vec![0f32; s * self.out_dim];
+            for t in 0..s {
+                // Causal attention per head then mean — but FastVideo means after
+                // full attention. Match: attend with [H,S,D], mean over H, pool D→out.
+                let mut head_out = vec![0f32; self.num_heads * head_dim];
+                for h in 0..self.num_heads {
+                    let mut scores = vec![0f32; s];
+                    for k in 0..=t {
+                        let mut dot = 0f64;
+                        for d in 0..head_dim {
+                            let q = qkv[t * 3 * c + h * head_dim + d];
+                            let kk = qkv[k * 3 * c + c + h * head_dim + d];
+                            dot += f64::from(q) * f64::from(kk);
+                        }
+                        scores[k] = (dot as f32) * scale;
+                    }
+                    // Softmax over 0..=t
+                    let max = scores[..=t].iter().cloned().fold(f32::NEG_INFINITY, f32::max);
+                    let mut sum = 0f32;
+                    for k in 0..=t {
+                        scores[k] = (scores[k] - max).exp();
+                        sum += scores[k];
+                    }
+                    for d in 0..head_dim {
+                        let mut acc = 0f32;
+                        for k in 0..=t {
+                            let v = qkv[k * 3 * c + 2 * c + h * head_dim + d];
+                            acc += scores[k] / sum * v;
+                        }
+                        head_out[h * head_dim + d] = acc;
+                    }
+                }
+                // Mean over heads → [head_dim]
+                let mut mean = vec![0f32; head_dim];
+                for h in 0..self.num_heads {
+                    for d in 0..head_dim {
+                        mean[d] += head_out[h * head_dim + d] / self.num_heads as f32;
+                    }
+                }
+                adaptive_avg_pool1d_into(&mean, &mut pooled[t * self.out_dim..][..self.out_dim]);
+            }
+            out[bi * s * self.out_dim..(bi + 1) * s * self.out_dim].copy_from_slice(&pooled);
+        }
+        let pooled = CudaTensor::from_vec(out, vec![b, s, self.out_dim])?.to_device()?;
+        self.proj.forward(&pooled)
+    }
+}
+
+fn adaptive_avg_pool1d_into(src: &[f32], dst: &mut [f32]) {
+    let (lin, lout) = (src.len(), dst.len());
+    for (j, d) in dst.iter_mut().enumerate() {
+        let start = (j * lin) / lout;
+        let end = ((j + 1) * lin + lout - 1) / lout;
+        let end = end.max(start + 1).min(lin);
+        let mut sum = 0f32;
+        for v in &src[start..end] {
+            sum += *v;
+        }
+        *d = sum / (end - start) as f32;
+    }
+}
+
+/// DAC encoder + `pre_block` + `mean_proj`. Returns **normalized** latents
+/// `[B, 32, L]` ready for DiT rows (`normalize_latents(mode())`).
+pub struct H3AudioEncoder {
+    cfg: H3AudioVaeConfig,
+    encoder: DacEncoder,
+    pre_block: AudioPreBlock,
+    mean_proj: Conv,
+    mean: CudaTensor,
+    std: CudaTensor,
+}
+
+impl H3AudioEncoder {
+    pub fn load(cfg: H3AudioVaeConfig, map: &WeightMap) -> Result<Self> {
+        let lc = cfg.latent_channels;
+        let to_col = |v: &[f64]| pinned(v.iter().map(|&x| x as f32).collect(), vec![1, v.len(), 1]);
+        Ok(Self {
+            encoder: DacEncoder::load(&cfg, map)?,
+            pre_block: AudioPreBlock::load(&cfg, map)?,
+            mean_proj: Conv {
+                weight: pinned(host_values(map, "mean_proj.weight", &[lc, lc, 1])?, vec![lc, lc, 1])?,
+                bias: Some(pinned(host_values(map, "mean_proj.bias", &[lc])?, vec![lc])?),
+            },
+            mean: to_col(&cfg.latents_mean[..lc])?,
+            std: to_col(&cfg.latents_std[..lc])?,
+            cfg,
+        })
+    }
+
+    pub fn config(&self) -> &H3AudioVaeConfig {
+        &self.cfg
+    }
+
+    /// Encode mono waveforms `[B, 1, samples]` → normalized latents `[B, 32, L]`.
+    /// Right-pads to a multiple of the hop length (800).
+    pub fn encode(&self, sample: &CudaTensor) -> Result<CudaTensor> {
+        let [_b, ch, len] = sample.shape[..] else {
+            return Err(msg(format!("audio encode expects [B,1,S], got {:?}", sample.shape)));
+        };
+        if ch != 1 || len == 0 {
+            return Err(msg(format!("audio encode: bad shape {:?}", sample.shape)));
+        }
+        let hop = self.cfg.hop_length();
+        let pad = (hop - len % hop) % hop;
+        let x = if pad > 0 {
+            sample.pad(2, 0, pad, PadMode::Zeros)?
+        } else {
+            sample.clone()
+        };
+        let h = self.encoder.forward(&x)?; // [B, 2048, L]
+        let h = h.permute(&[0, 2, 1])?; // [B, L, 2048]
+        let h = self.pre_block.forward(&h)?; // [B, L, 32]
+        let h = h.permute(&[0, 2, 1])?; // [B, 32, L]
+        let mean = h.conv1d(&self.mean_proj.weight, self.mean_proj.bias.as_ref(), 0, 1, 1, 1)?;
+        mean.sub(&self.mean)?.div(&self.std)
+    }
+
+    /// Stereo planar `[2 * samples]` → DiT rows `[2 * Na, 32]` (L then R).
+    pub fn encode_stereo_planar(&self, planar: &[f32]) -> Result<CudaTensor> {
+        if planar.len() < 2 || planar.len() % 2 != 0 {
+            return Err(msg(format!("stereo planar needs even length, got {}", planar.len())));
+        }
+        let samples = planar.len() / 2;
+        let mut nchw = vec![0f32; 2 * samples];
+        nchw[..samples].copy_from_slice(&planar[..samples]);
+        nchw[samples..].copy_from_slice(&planar[samples..]);
+        let x = CudaTensor::from_vec(nchw, vec![2, 1, samples])?.to_device()?;
+        let z = self.encode(&x)?; // [2, 32, Na]
+        let [_, c, na] = z.shape[..] else {
+            return Err(msg(format!("audio encode produced {:?}", z.shape)));
+        };
+        // → [2, Na, 32] → [2*Na, 32]
+        z.permute(&[0, 2, 1])?.reshape(vec![2 * na, c])
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
