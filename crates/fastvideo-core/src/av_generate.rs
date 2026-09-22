@@ -63,6 +63,9 @@ pub fn generate_av(resolved: ResolvedModel, opts: AvGenerateOptions) -> Result<A
             ModelFamily::H3 => generate_h3(def, opts),
             ModelFamily::Hunyuan15 => generate_hunyuan15(def, opts),
             ModelFamily::Kandinsky5 => generate_kandinsky5(def, opts),
+            ModelFamily::Cosmos => generate_cosmos(def, opts),
+            ModelFamily::LongCat => generate_longcat(def, opts),
+            ModelFamily::LingBot => generate_lingbot(def, opts),
             ModelFamily::Wan => unreachable!(),
         },
     }
@@ -371,6 +374,208 @@ fn generate_kandinsky5(def: &'static FamilyModelDefinition, opts: AvGenerateOpti
         let _ = (def, opts);
         Err(FastVideoError::Message(
             "rebuild with --features cuda-cudarc to generate Kandinsky 5".into(),
+        ))
+    }
+}
+
+fn generate_cosmos(def: &'static FamilyModelDefinition, opts: AvGenerateOptions) -> Result<AvGenerateOutput> {
+    require_cuda(&opts.device)?;
+    #[cfg(feature = "cuda-cudarc")]
+    {
+        use fastvideo_cudarc::cosmos::pipeline::{CosmosPipeline, CosmosRequest};
+        use fastvideo_cudarc::wan::device::resolve_device;
+        use fastvideo_models::cosmos::CosmosPreset;
+
+        resolve_device(&opts.device).map_err(|e| FastVideoError::Message(e.to_string()))?;
+        let weights = weights_root(&opts)?;
+        let preset = match def.preset {
+            "cosmos2_v2w_2b" => CosmosPreset::V2w2b,
+            "cosmos2_v2w_14b" => CosmosPreset::V2w14b,
+            other => {
+                return Err(FastVideoError::Message(format!(
+                    "unknown Cosmos preset {other}"
+                )));
+            }
+        };
+        let mut pipe = CosmosPipeline::open(&weights, preset)
+            .map_err(|e| FastVideoError::Message(e.to_string()))?;
+        if weights.join("transformer").is_dir() {
+            pipe.load_dit()
+                .map_err(|e| FastVideoError::Message(e.to_string()))?;
+        }
+        if weights.join("vae").is_dir() {
+            pipe.load_vae()
+                .map_err(|e| FastVideoError::Message(e.to_string()))?;
+        }
+        let mut request = CosmosRequest::v2w_2b(opts.prompt, opts.seed);
+        request.preset = preset;
+        request.image_path = opts.image_path.clone();
+        if let Some(h) = opts.height {
+            request.height = h as usize;
+        }
+        if let Some(w) = opts.width {
+            request.width = w as usize;
+        }
+        if let Some(f) = opts.num_frames {
+            request.num_frames = f as usize;
+        }
+        if let Some(s) = opts.num_inference_steps {
+            request.num_steps = s as usize;
+        }
+        pipe.generate(&request, &opts.output)
+            .map_err(|e| FastVideoError::Message(e.to_string()))?;
+        let mut frame_paths: Vec<PathBuf> = Vec::new();
+        if opts.output.is_dir() {
+            if let Ok(rd) = std::fs::read_dir(&opts.output) {
+                for ent in rd.flatten() {
+                    let p = ent.path();
+                    if p.extension().and_then(|e| e.to_str()) == Some("png") {
+                        frame_paths.push(p);
+                    }
+                }
+                frame_paths.sort();
+            }
+        }
+        Ok(AvGenerateOutput {
+            family: ModelFamily::Cosmos,
+            preset: def.preset,
+            frame_paths,
+            mp4: None,
+            wav: None,
+        })
+    }
+    #[cfg(not(feature = "cuda-cudarc"))]
+    {
+        let _ = (def, opts);
+        Err(FastVideoError::Message(
+            "rebuild with --features cuda-cudarc to generate Cosmos".into(),
+        ))
+    }
+}
+
+fn generate_longcat(def: &'static FamilyModelDefinition, opts: AvGenerateOptions) -> Result<AvGenerateOutput> {
+    require_cuda(&opts.device)?;
+    #[cfg(feature = "cuda-cudarc")]
+    {
+        use fastvideo_cudarc::longcat::pipeline::{LongCatPipeline, LongCatRequest};
+        use fastvideo_cudarc::wan::device::resolve_device;
+        use fastvideo_models::longcat::LongCatPreset;
+
+        resolve_device(&opts.device).map_err(|e| FastVideoError::Message(e.to_string()))?;
+        let weights = weights_root(&opts)?;
+        let preset = match def.preset {
+            "longcat_t2v_480p" => LongCatPreset::T2v480p,
+            "longcat_t2v_720p" => LongCatPreset::T2v720p,
+            other => {
+                return Err(FastVideoError::Message(format!(
+                    "unknown LongCat preset {other}"
+                )));
+            }
+        };
+        let mut pipe = LongCatPipeline::open(&weights, preset)
+            .map_err(|e| FastVideoError::Message(e.to_string()))?;
+        if weights.join("transformer").is_dir() {
+            pipe.load_dit()
+                .map_err(|e| FastVideoError::Message(e.to_string()))?;
+        }
+        if weights.join("vae").is_dir() {
+            pipe.load_vae()
+                .map_err(|e| FastVideoError::Message(e.to_string()))?;
+        }
+        let mut request = LongCatRequest::t2v_480p(opts.prompt, opts.seed);
+        request.preset = preset;
+        request.enable_bsa = preset.enable_bsa();
+        request.height = preset.default_height();
+        request.width = preset.default_width();
+        if let Some(h) = opts.height {
+            request.height = h as usize;
+        }
+        if let Some(w) = opts.width {
+            request.width = w as usize;
+        }
+        if let Some(f) = opts.num_frames {
+            request.num_frames = f as usize;
+        }
+        if let Some(s) = opts.num_inference_steps {
+            request.num_steps = s as usize;
+        }
+        pipe.generate(&request, &opts.output)
+            .map_err(|e| FastVideoError::Message(e.to_string()))?;
+        Ok(AvGenerateOutput {
+            family: ModelFamily::LongCat,
+            preset: def.preset,
+            frame_paths: Vec::new(),
+            mp4: None,
+            wav: None,
+        })
+    }
+    #[cfg(not(feature = "cuda-cudarc"))]
+    {
+        let _ = (def, opts);
+        Err(FastVideoError::Message(
+            "rebuild with --features cuda-cudarc to generate LongCat".into(),
+        ))
+    }
+}
+
+fn generate_lingbot(def: &'static FamilyModelDefinition, opts: AvGenerateOptions) -> Result<AvGenerateOutput> {
+    require_cuda(&opts.device)?;
+    #[cfg(feature = "cuda-cudarc")]
+    {
+        use fastvideo_cudarc::lingbot::pipeline::{LingBotPipeline, LingBotRequest};
+        use fastvideo_cudarc::wan::device::resolve_device;
+        use fastvideo_models::lingbot::LingBotPreset;
+
+        resolve_device(&opts.device).map_err(|e| FastVideoError::Message(e.to_string()))?;
+        let weights = weights_root(&opts)?;
+        let preset = match def.preset {
+            "lingbot_dense_1_3b" => LingBotPreset::Dense13b,
+            "lingbot_moe_30b" => LingBotPreset::Moe30b,
+            other => {
+                return Err(FastVideoError::Message(format!(
+                    "unknown LingBot preset {other}"
+                )));
+            }
+        };
+        let mut pipe = LingBotPipeline::open(&weights, preset)
+            .map_err(|e| FastVideoError::Message(e.to_string()))?;
+        if weights.join("transformer").is_dir() {
+            pipe.load_dit()
+                .map_err(|e| FastVideoError::Message(e.to_string()))?;
+        }
+        if weights.join("vae").is_dir() {
+            pipe.load_vae()
+                .map_err(|e| FastVideoError::Message(e.to_string()))?;
+        }
+        let mut request = LingBotRequest::dense_1_3b(opts.prompt, opts.seed);
+        request.preset = preset;
+        if let Some(h) = opts.height {
+            request.height = h as usize;
+        }
+        if let Some(w) = opts.width {
+            request.width = w as usize;
+        }
+        if let Some(f) = opts.num_frames {
+            request.num_frames = f as usize;
+        }
+        if let Some(s) = opts.num_inference_steps {
+            request.num_steps = s as usize;
+        }
+        pipe.generate(&request, &opts.output)
+            .map_err(|e| FastVideoError::Message(e.to_string()))?;
+        Ok(AvGenerateOutput {
+            family: ModelFamily::LingBot,
+            preset: def.preset,
+            frame_paths: Vec::new(),
+            mp4: None,
+            wav: None,
+        })
+    }
+    #[cfg(not(feature = "cuda-cudarc"))]
+    {
+        let _ = (def, opts);
+        Err(FastVideoError::Message(
+            "rebuild with --features cuda-cudarc to generate LingBot".into(),
         ))
     }
 }

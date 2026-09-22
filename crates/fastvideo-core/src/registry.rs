@@ -290,6 +290,9 @@ pub enum ModelFamily {
     H3,
     Hunyuan15,
     Kandinsky5,
+    Cosmos,
+    LongCat,
+    LingBot,
 }
 
 impl ModelFamily {
@@ -300,6 +303,9 @@ impl ModelFamily {
             Self::H3 => "h3",
             Self::Hunyuan15 => "hunyuan15",
             Self::Kandinsky5 => "kandinsky5",
+            Self::Cosmos => "cosmos",
+            Self::LongCat => "longcat",
+            Self::LingBot => "lingbot",
         }
     }
 }
@@ -558,6 +564,60 @@ pub static KANDINSKY5_MODEL_DEFINITIONS: &[FamilyModelDefinition] = &[
     ),
 ];
 
+/// Cosmos Predict2 Video2World Hub ids.
+pub static COSMOS_MODEL_DEFINITIONS: &[FamilyModelDefinition] = &[
+    family_defn!(
+        ModelFamily::Cosmos,
+        "cosmos2_v2w_2b",
+        &["nvidia/Cosmos-Predict2-2B-Video2World"],
+        &[WorkloadType::I2V],
+        match_any = &["cosmos-predict2-2b-video2world", "cosmos2-2b-v2w"]
+    ),
+    family_defn!(
+        ModelFamily::Cosmos,
+        "cosmos2_v2w_14b",
+        &["nvidia/Cosmos-Predict2-14B-Video2World"],
+        &[WorkloadType::I2V],
+        match_any = &["cosmos-predict2-14b-video2world", "cosmos2-14b-v2w"]
+    ),
+];
+
+/// LongCat-Video Hub ids.
+pub static LONGCAT_MODEL_DEFINITIONS: &[FamilyModelDefinition] = &[
+    family_defn!(
+        ModelFamily::LongCat,
+        "longcat_t2v_480p",
+        &["FastVideo/LongCat-Video-T2V-Diffusers"],
+        &[WorkloadType::T2V],
+        match_any = &["longcat-video-t2v", "longcat-t2v-480p"]
+    ),
+    family_defn!(
+        ModelFamily::LongCat,
+        "longcat_t2v_720p",
+        &["FastVideo/LongCat-Video-T2V-Diffusers"],
+        &[WorkloadType::T2V],
+        match_any = &["longcat-t2v-720p", "longcat-720p-bsa"]
+    ),
+];
+
+/// LingBot-Video Hub ids.
+pub static LINGBOT_MODEL_DEFINITIONS: &[FamilyModelDefinition] = &[
+    family_defn!(
+        ModelFamily::LingBot,
+        "lingbot_dense_1_3b",
+        &["robbyant/lingbot-video-dense-1.3b"],
+        &[WorkloadType::T2V],
+        match_any = &["lingbot-video-dense", "lingbot-dense-1.3b"]
+    ),
+    family_defn!(
+        ModelFamily::LingBot,
+        "lingbot_moe_30b",
+        &["robbyant/lingbot-video-moe-30b-a3b"],
+        &[WorkloadType::T2V],
+        match_any = &["lingbot-video-moe", "lingbot-moe-30b"]
+    ),
+];
+
 fn resolve_family_table(table: &'static [FamilyModelDefinition], model_id: &str) -> Option<&'static FamilyModelDefinition> {
     table
         .iter()
@@ -590,6 +650,15 @@ pub fn resolve(model_id: &str) -> Result<ResolvedModel> {
     if let Some(d) = resolve_family_table(KANDINSKY5_MODEL_DEFINITIONS, model_id) {
         return Ok(ResolvedModel::Family(d));
     }
+    if let Some(d) = resolve_family_table(COSMOS_MODEL_DEFINITIONS, model_id) {
+        return Ok(ResolvedModel::Family(d));
+    }
+    if let Some(d) = resolve_family_table(LONGCAT_MODEL_DEFINITIONS, model_id) {
+        return Ok(ResolvedModel::Family(d));
+    }
+    if let Some(d) = resolve_family_table(LINGBOT_MODEL_DEFINITIONS, model_id) {
+        return Ok(ResolvedModel::Family(d));
+    }
     if let Ok(wan) = resolve_wan(model_id) {
         return Ok(ResolvedModel::Wan(wan));
     }
@@ -620,6 +689,21 @@ pub fn all_registered_ids() -> Vec<(ModelFamily, &'static str, &'static str)> {
         }
     }
     for d in KANDINSKY5_MODEL_DEFINITIONS {
+        for id in d.hf_model_paths {
+            out.push((d.family, *id, d.preset));
+        }
+    }
+    for d in COSMOS_MODEL_DEFINITIONS {
+        for id in d.hf_model_paths {
+            out.push((d.family, *id, d.preset));
+        }
+    }
+    for d in LONGCAT_MODEL_DEFINITIONS {
+        for id in d.hf_model_paths {
+            out.push((d.family, *id, d.preset));
+        }
+    }
+    for d in LINGBOT_MODEL_DEFINITIONS {
         for id in d.hf_model_paths {
             out.push((d.family, *id, d.preset));
         }
@@ -760,6 +844,20 @@ mod tests {
         assert_eq!(k5.family(), ModelFamily::Kandinsky5);
         assert_eq!(k5.preset(), "k5_lite_t2v_5s");
 
+        let cosmos = resolve("nvidia/Cosmos-Predict2-2B-Video2World").unwrap();
+        assert_eq!(cosmos.family(), ModelFamily::Cosmos);
+        assert_eq!(cosmos.preset(), "cosmos2_v2w_2b");
+
+        let longcat = resolve("FastVideo/LongCat-Video-T2V-Diffusers").unwrap();
+        assert_eq!(longcat.family(), ModelFamily::LongCat);
+        assert_eq!(longcat.preset(), "longcat_t2v_480p");
+        let longcat_720 = resolve("longcat-t2v-720p").unwrap();
+        assert_eq!(longcat_720.preset(), "longcat_t2v_720p");
+
+        let lingbot = resolve("robbyant/lingbot-video-dense-1.3b").unwrap();
+        assert_eq!(lingbot.family(), ModelFamily::LingBot);
+        assert_eq!(lingbot.preset(), "lingbot_dense_1_3b");
+
         assert!(resolve("not-a-real/model").is_err());
     }
 
@@ -775,5 +873,11 @@ mod tests {
         assert!(ids
             .iter()
             .any(|(f, id, _)| *f == ModelFamily::Kandinsky5 && id.contains("Kandinsky-5.0")));
+        assert!(ids
+            .iter()
+            .any(|(f, id, _)| *f == ModelFamily::LongCat && id.contains("LongCat")));
+        assert!(ids
+            .iter()
+            .any(|(f, id, _)| *f == ModelFamily::LingBot && id.contains("lingbot")));
     }
 }

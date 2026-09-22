@@ -9,10 +9,13 @@
 
 #![allow(unsafe_code)]
 
+pub mod cosmos;
 pub mod h3;
 pub mod hunyuan15;
 pub mod kandinsky5;
+pub mod lingbot;
 pub mod llm;
+pub mod longcat;
 pub mod ltx2;
 pub mod wan;
 
