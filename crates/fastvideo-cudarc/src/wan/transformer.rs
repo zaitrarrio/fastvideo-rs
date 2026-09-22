@@ -33,6 +33,8 @@ struct WanAttention {
     norm_k: CudaTensor,
     add_k: Option<Linear>,
     add_v: Option<Linear>,
+    /// TurboWan SLA linear-branch projection (`head_dim → head_dim`); self-attn only.
+    proj_l: Option<Linear>,
     heads: usize,
     dim_head: usize,
     eps: f32,
@@ -52,6 +54,11 @@ impl WanAttention {
             norm_k: pinned(CudaTensor::ones(&[dim]))?,
             add_k,
             add_v,
+            proj_l: if cross || !super::sla::sla_enabled() {
+                None
+            } else {
+                Some(Linear::zeros(dim / heads, dim / heads, true))
+            },
             heads,
             dim_head: dim / heads,
             eps,
@@ -76,6 +83,17 @@ impl WanAttention {
         } else {
             (Linear::load_fused(map, &[&key("to_q"), &key("to_k"), &key("to_v")], dim, dim, true)?, None)
         };
+        let dim_head = dim / heads;
+        let proj_l = if cross {
+            None
+        } else {
+            // Prefer checkpoint proj_l; otherwise zeros so SLA still runs (o_l→0).
+            match super::sla::load_proj_l(map, prefix, dim_head)? {
+                Some(p) => Some(p),
+                None if super::sla::sla_enabled() => Some(Linear::zeros(dim_head, dim_head, true)),
+                None => None,
+            }
+        };
         Ok(Self {
             q_or_qkv,
             kv,
@@ -84,8 +102,9 @@ impl WanAttention {
             norm_k: pinned(weights::cuda_tensor_shaped(map, &key("norm_k.weight"), &[dim])?)?,
             add_k,
             add_v,
+            proj_l,
             heads,
-            dim_head: dim / heads,
+            dim_head,
             eps,
         })
     }
@@ -109,6 +128,12 @@ impl WanAttention {
         let q = qkv.qk_norm_rope_bhsd(0, self.heads, &self.norm_q, rope(), self.eps)?;
         let k = qkv.qk_norm_rope_bhsd(dim, self.heads, &self.norm_k, rope(), self.eps)?;
         let v = qkv.split_heads_bhsd(2 * dim, self.heads, self.dim_head)?;
+        // TurboWan SLA: block top-k sparse + linear attention (self-attn only).
+        if super::sla::sla_enabled() && mask.is_none() {
+            let cfg = super::sla::SlaConfig::from_env();
+            let out = super::sla::sla_attention(&q, &k, &v, self.proj_l.as_ref(), &cfg)?;
+            return self.to_out.forward(&out.merge_heads()?);
+        }
         // VSA needs both the tiling for this grid and the checkpoint's gate;
         // without either it is not the configuration the weights were trained
         // for, so fall back to the dense path rather than approximate it.

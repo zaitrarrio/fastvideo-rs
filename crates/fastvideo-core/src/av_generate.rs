@@ -61,6 +61,8 @@ pub fn generate_av(resolved: ResolvedModel, opts: AvGenerateOptions) -> Result<A
         ResolvedModel::Family(def) => match def.family {
             ModelFamily::Ltx2 => generate_ltx2(def, opts),
             ModelFamily::H3 => generate_h3(def, opts),
+            ModelFamily::Hunyuan15 => generate_hunyuan15(def, opts),
+            ModelFamily::Kandinsky5 => generate_kandinsky5(def, opts),
             ModelFamily::Wan => unreachable!(),
         },
     }
@@ -240,6 +242,127 @@ fn generate_h3(def: &'static FamilyModelDefinition, opts: AvGenerateOptions) -> 
         let _ = (def, opts);
         Err(FastVideoError::Message(
             "rebuild with --features cuda-cudarc to generate LTX/H3".into(),
+        ))
+    }
+}
+
+fn generate_hunyuan15(def: &'static FamilyModelDefinition, opts: AvGenerateOptions) -> Result<AvGenerateOutput> {
+    require_cuda(&opts.device)?;
+    #[cfg(feature = "cuda-cudarc")]
+    {
+        use fastvideo_cudarc::hunyuan15::pipeline::{Hunyuan15Pipeline, Hunyuan15Request};
+        use fastvideo_cudarc::wan::device::resolve_device;
+        use fastvideo_models::hunyuan15::Hunyuan15Preset;
+
+        resolve_device(&opts.device).map_err(|e| FastVideoError::Message(e.to_string()))?;
+        let weights = weights_root(&opts)?;
+        let preset = match def.preset {
+            "hy15_480p_t2v" => Hunyuan15Preset::T2v480p,
+            "hy15_480p_i2v_distilled" => Hunyuan15Preset::I2v480pDistilled,
+            "hy15_720p_t2v" => Hunyuan15Preset::T2v720p,
+            "hy15_720p_i2v_distilled" => Hunyuan15Preset::I2v720pDistilled,
+            "hy15_1080p_sr" => Hunyuan15Preset::Sr1080p,
+            other => {
+                return Err(FastVideoError::Message(format!(
+                    "unknown Hunyuan15 preset {other}"
+                )));
+            }
+        };
+        let mut pipe = Hunyuan15Pipeline::open(&weights, preset)
+            .map_err(|e| FastVideoError::Message(e.to_string()))?;
+        // Optional early weight check so missing transformer/ fails loudly.
+        if weights.join("transformer").is_dir() {
+            pipe.load_dit()
+                .map_err(|e| FastVideoError::Message(e.to_string()))?;
+        }
+        if weights.join("vae").is_dir() {
+            pipe.load_vae()
+                .map_err(|e| FastVideoError::Message(e.to_string()))?;
+        }
+        let mut request = Hunyuan15Request::t2v_480p(opts.prompt, opts.seed);
+        request.preset = preset;
+        if let Some(h) = opts.height {
+            request.height = h as usize;
+        }
+        if let Some(w) = opts.width {
+            request.width = w as usize;
+        }
+        if let Some(f) = opts.num_frames {
+            request.num_frames = f as usize;
+        }
+        if let Some(s) = opts.num_inference_steps {
+            request.num_steps = s as usize;
+        }
+        request.image_path = opts.image_path;
+        pipe.generate(&request, &opts.output)
+            .map_err(|e| FastVideoError::Message(e.to_string()))?;
+        Ok(AvGenerateOutput {
+            family: ModelFamily::Hunyuan15,
+            preset: def.preset,
+            frame_paths: Vec::new(),
+            mp4: None,
+            wav: None,
+        })
+    }
+    #[cfg(not(feature = "cuda-cudarc"))]
+    {
+        let _ = (def, opts);
+        Err(FastVideoError::Message(
+            "rebuild with --features cuda-cudarc to generate HunyuanVideo 1.5".into(),
+        ))
+    }
+}
+
+fn generate_kandinsky5(def: &'static FamilyModelDefinition, opts: AvGenerateOptions) -> Result<AvGenerateOutput> {
+    require_cuda(&opts.device)?;
+    #[cfg(feature = "cuda-cudarc")]
+    {
+        use fastvideo_cudarc::kandinsky5::pipeline::{Kandinsky5Pipeline, Kandinsky5Request};
+        use fastvideo_cudarc::wan::device::resolve_device;
+        use fastvideo_models::kandinsky5::Kandinsky5Preset;
+
+        resolve_device(&opts.device).map_err(|e| FastVideoError::Message(e.to_string()))?;
+        let weights = weights_root(&opts)?;
+        let preset = match def.preset {
+            "k5_lite_t2v_5s" => Kandinsky5Preset::LiteT2v5s,
+            "k5_pro_t2v_5s" => Kandinsky5Preset::ProT2v5s,
+            other => {
+                return Err(FastVideoError::Message(format!(
+                    "unknown Kandinsky5 preset {other}"
+                )));
+            }
+        };
+        let pipe = Kandinsky5Pipeline::open(&weights, preset)
+            .map_err(|e| FastVideoError::Message(e.to_string()))?;
+        let mut request = Kandinsky5Request::lite_5s(opts.prompt, opts.seed);
+        request.preset = preset;
+        if let Some(h) = opts.height {
+            request.height = h as usize;
+        }
+        if let Some(w) = opts.width {
+            request.width = w as usize;
+        }
+        if let Some(f) = opts.num_frames {
+            request.num_frames = f as usize;
+        }
+        if let Some(s) = opts.num_inference_steps {
+            request.num_steps = s as usize;
+        }
+        pipe.generate(&request, &opts.output)
+            .map_err(|e| FastVideoError::Message(e.to_string()))?;
+        Ok(AvGenerateOutput {
+            family: ModelFamily::Kandinsky5,
+            preset: def.preset,
+            frame_paths: Vec::new(),
+            mp4: None,
+            wav: None,
+        })
+    }
+    #[cfg(not(feature = "cuda-cudarc"))]
+    {
+        let _ = (def, opts);
+        Err(FastVideoError::Message(
+            "rebuild with --features cuda-cudarc to generate Kandinsky 5".into(),
         ))
     }
 }

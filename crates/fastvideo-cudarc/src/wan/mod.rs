@@ -23,6 +23,7 @@ pub mod resident;
 pub mod sp;
 pub mod stats;
 pub mod vsa;
+pub mod sla;
 pub mod taehv;
 pub mod tensor;
 pub mod transformer;

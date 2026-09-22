@@ -1,6 +1,8 @@
 //! Host-side model math and configs consumed by `fastvideo-cudarc`.
 
 pub mod h3;
+pub mod hunyuan15;
+pub mod kandinsky5;
 pub mod ltx2;
 pub mod schedulers;
 pub mod wan;

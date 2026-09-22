@@ -44,4 +44,33 @@ impl Umt5Config {
             eps: 1e-6,
         }
     }
+
+    /// `google/byt5-small` encoder half (HunyuanVideo 1.5 `text_encoder_2`).
+    pub fn byt5_small() -> Self {
+        Self {
+            vocab_size: 384,
+            d_model: 1472,
+            d_kv: 64,
+            d_ff: 3584,
+            num_heads: 6,
+            num_layers: 12,
+            relative_attention_num_buckets: 32,
+            relative_attention_max_distance: 128,
+            dropout: 0.0,
+            eps: 1e-6,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn byt5_small_matches_hy15_dim() {
+        let c = Umt5Config::byt5_small();
+        assert_eq!(c.d_model, 1472);
+        assert_eq!(c.num_layers, 12);
+        assert_eq!(c.vocab_size, 384);
+    }
 }

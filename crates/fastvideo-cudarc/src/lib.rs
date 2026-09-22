@@ -10,6 +10,8 @@
 #![allow(unsafe_code)]
 
 pub mod h3;
+pub mod hunyuan15;
+pub mod kandinsky5;
 pub mod llm;
 pub mod ltx2;
 pub mod wan;

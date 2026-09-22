@@ -24,7 +24,7 @@ fn write_sidecar(dir: Option<&str>, name: &str, value: &serde_json::Value) {
 #[derive(Parser)]
 #[command(
     name = "fastvideo",
-    about = "Rust FastVideo inference (Wan / LTX-2 / FastH3; cudarc CUDA primary)."
+    about = "Rust FastVideo inference (Wan / LTX-2 / FastH3 / Hunyuan 1.5; cudarc CUDA primary)."
 )]
 struct Cli {
     #[command(subcommand)]
@@ -33,7 +33,7 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
-    /// List registered Hugging Face ids (Wan, LTX-2, H3).
+    /// List registered Hugging Face ids (Wan, LTX-2, H3, Hunyuan15).
     ListModels,
     /// Resolve a model id and run generation (use --tiny for Wan zero-weight smoke).
     Generate(GenerateArgs),

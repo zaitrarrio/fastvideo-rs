@@ -11,7 +11,7 @@ pub enum SamplingAlgorithm {
     UniPc,
     Dmd,
     CausalDmd,
-    /// TurboDiffusion rCM (1–4 step); SLA attention preferred but dense works.
+    /// TurboDiffusion rCM (1–4 step); SLA via `FASTVIDEO_ATTENTION_BACKEND=SLA_ATTN`.
     Rcm,
 }
 
@@ -288,6 +288,8 @@ pub enum ModelFamily {
     Wan,
     Ltx2,
     H3,
+    Hunyuan15,
+    Kandinsky5,
 }
 
 impl ModelFamily {
@@ -296,6 +298,8 @@ impl ModelFamily {
             Self::Wan => "wan",
             Self::Ltx2 => "ltx2",
             Self::H3 => "h3",
+            Self::Hunyuan15 => "hunyuan15",
+            Self::Kandinsky5 => "kandinsky5",
         }
     }
 }
@@ -494,6 +498,66 @@ pub static H3_MODEL_DEFINITIONS: &[FamilyModelDefinition] = &[
     ),
 ];
 
+/// HunyuanVideo 1.5 Hub ids (FastVideo `hunyuan15` presets).
+pub static HUNYUAN15_MODEL_DEFINITIONS: &[FamilyModelDefinition] = &[
+    family_defn!(
+        ModelFamily::Hunyuan15,
+        "hy15_480p_t2v",
+        &["hunyuanvideo-community/HunyuanVideo-1.5-Diffusers-480p_t2v"],
+        &[WorkloadType::T2V],
+        match_any = &["hunyuanvideo-1.5-diffusers-480p_t2v", "hy15-480p-t2v"]
+    ),
+    family_defn!(
+        ModelFamily::Hunyuan15,
+        "hy15_480p_i2v_distilled",
+        &["hunyuanvideo-community/HunyuanVideo-1.5-Diffusers-480p_i2v_step_distilled"],
+        &[WorkloadType::I2V],
+        match_any = &["480p_i2v_step_distilled", "hy15-480p-i2v"]
+    ),
+    family_defn!(
+        ModelFamily::Hunyuan15,
+        "hy15_720p_t2v",
+        &["hunyuanvideo-community/HunyuanVideo-1.5-Diffusers-720p_t2v"],
+        &[WorkloadType::T2V],
+        match_any = &["hunyuanvideo-1.5-diffusers-720p_t2v", "hy15-720p-t2v"]
+    ),
+    family_defn!(
+        ModelFamily::Hunyuan15,
+        "hy15_720p_i2v_distilled",
+        &["hunyuanvideo-community/HunyuanVideo-1.5-Diffusers-720p_i2v_distilled"],
+        &[WorkloadType::I2V],
+        match_any = &["720p_i2v_distilled", "hy15-720p-i2v"]
+    ),
+    family_defn!(
+        ModelFamily::Hunyuan15,
+        "hy15_1080p_sr",
+        &[
+            "weizhou03/HunyuanVideo-1.5-Diffusers-1080p",
+            "weizhou03/HunyuanVideo-1.5-Diffusers-1080p-2SR",
+        ],
+        &[WorkloadType::T2V],
+        match_any = &["hunyuanvideo-1.5-diffusers-1080p", "hy15-1080p"]
+    ),
+];
+
+/// Kandinsky 5.0 Hub ids (FastVideo `kandinsky5` presets).
+pub static KANDINSKY5_MODEL_DEFINITIONS: &[FamilyModelDefinition] = &[
+    family_defn!(
+        ModelFamily::Kandinsky5,
+        "k5_lite_t2v_5s",
+        &["kandinskylab/Kandinsky-5.0-T2V-Lite-sft-5s-Diffusers"],
+        &[WorkloadType::T2V],
+        match_any = &["kandinsky-5.0-t2v-lite", "k5-lite-t2v"]
+    ),
+    family_defn!(
+        ModelFamily::Kandinsky5,
+        "k5_pro_t2v_5s",
+        &["kandinskylab/Kandinsky-5.0-T2V-Pro-sft-5s-Diffusers"],
+        &[WorkloadType::T2V],
+        match_any = &["kandinsky-5.0-t2v-pro", "k5-pro-t2v"]
+    ),
+];
+
 fn resolve_family_table(table: &'static [FamilyModelDefinition], model_id: &str) -> Option<&'static FamilyModelDefinition> {
     table
         .iter()
@@ -520,13 +584,19 @@ pub fn resolve(model_id: &str) -> Result<ResolvedModel> {
     if let Some(d) = resolve_family_table(H3_MODEL_DEFINITIONS, model_id) {
         return Ok(ResolvedModel::Family(d));
     }
+    if let Some(d) = resolve_family_table(HUNYUAN15_MODEL_DEFINITIONS, model_id) {
+        return Ok(ResolvedModel::Family(d));
+    }
+    if let Some(d) = resolve_family_table(KANDINSKY5_MODEL_DEFINITIONS, model_id) {
+        return Ok(ResolvedModel::Family(d));
+    }
     if let Ok(wan) = resolve_wan(model_id) {
         return Ok(ResolvedModel::Wan(wan));
     }
     Err(FastVideoError::UnknownModel(model_id.to_string()))
 }
 
-/// Every registered Hub id for `list-models` (Wan, then LTX, then H3).
+/// Every registered Hub id for `list-models` (Wan, then LTX, H3, Hunyuan15, Kandinsky5).
 pub fn all_registered_ids() -> Vec<(ModelFamily, &'static str, &'static str)> {
     let mut out = Vec::new();
     for d in WAN_MODEL_DEFINITIONS {
@@ -540,6 +610,16 @@ pub fn all_registered_ids() -> Vec<(ModelFamily, &'static str, &'static str)> {
         }
     }
     for d in H3_MODEL_DEFINITIONS {
+        for id in d.hf_model_paths {
+            out.push((d.family, *id, d.preset));
+        }
+    }
+    for d in HUNYUAN15_MODEL_DEFINITIONS {
+        for id in d.hf_model_paths {
+            out.push((d.family, *id, d.preset));
+        }
+    }
+    for d in KANDINSKY5_MODEL_DEFINITIONS {
         for id in d.hf_model_paths {
             out.push((d.family, *id, d.preset));
         }
@@ -671,6 +751,15 @@ mod tests {
         let fasth3 = resolve("FastVideo/FastVideo-FastH3-8-Step-V2").unwrap();
         assert_eq!(fasth3.preset(), "fasth3_8step");
 
+        let hy = resolve("hunyuanvideo-community/HunyuanVideo-1.5-Diffusers-480p_t2v").unwrap();
+        assert_eq!(hy.family(), ModelFamily::Hunyuan15);
+        assert_eq!(hy.preset(), "hy15_480p_t2v");
+        assert!(hy.workload_types().contains(&WorkloadType::T2V));
+
+        let k5 = resolve("kandinskylab/Kandinsky-5.0-T2V-Lite-sft-5s-Diffusers").unwrap();
+        assert_eq!(k5.family(), ModelFamily::Kandinsky5);
+        assert_eq!(k5.preset(), "k5_lite_t2v_5s");
+
         assert!(resolve("not-a-real/model").is_err());
     }
 
@@ -680,5 +769,11 @@ mod tests {
         assert!(ids.iter().any(|(f, id, _)| *f == ModelFamily::Wan && id.contains("Wan2.1")));
         assert!(ids.iter().any(|(f, id, _)| *f == ModelFamily::Ltx2 && id.contains("LTX-2.5")));
         assert!(ids.iter().any(|(f, id, _)| *f == ModelFamily::H3 && id.contains("MiniMax-H3")));
+        assert!(ids
+            .iter()
+            .any(|(f, id, _)| *f == ModelFamily::Hunyuan15 && id.contains("HunyuanVideo-1.5")));
+        assert!(ids
+            .iter()
+            .any(|(f, id, _)| *f == ModelFamily::Kandinsky5 && id.contains("Kandinsky-5.0")));
     }
 }

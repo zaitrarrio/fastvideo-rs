@@ -304,6 +304,35 @@ impl DecoderConfig {
         }
     }
 
+    /// Text half of Qwen2.5-VL-7B-Instruct (HunyuanVideo 1.5 Diffusers
+    /// `text_encoder/`). Hidden 3584, 28 layers, no QK-norm. Tap
+    /// `num_layers - 2` (=26) matches Diffusers `hidden_states[-3]` after
+    /// cropping the 108-token system template.
+    pub fn qwen25_vl_7b_text() -> Self {
+        let head_dim = 128;
+        Self {
+            vocab: 152_064,
+            hidden: 3584,
+            heads: 28,
+            kv_heads: 4,
+            head_dim,
+            intermediate: 18_944,
+            rms_eps: 1e-6,
+            norm_offset: 0.0,
+            act: Act::Silu,
+            qk_norm: false,
+            sandwich_norms: false,
+            embed_scale: 1.0,
+            attn_scale: (head_dim as f32).powf(-0.5),
+            layers: vec![LayerAttn::global(1_000_000.0, 1.0); 28],
+            // Diffusers text-only pack; raw Qwen weights use `model.language_model.*`.
+            layer_prefix: "model.layers".into(),
+            embed_key: "model.embed_tokens.weight".into(),
+            final_norm_key: "model.norm.weight".into(),
+            attention_k_eq_v: false,
+        }
+    }
+
     /// The text half of Gemma-3-12B: five sliding-window layers (1024 tokens,
     /// rotary base 1e4) then one global layer (base 1e6, positions / 8).
     pub fn gemma3_12b_text() -> Self {
@@ -1640,7 +1669,14 @@ mod tests {
     /// have been staged, with the same width, and nothing staged may go unused.
     #[test]
     fn the_specs_are_exactly_what_a_layer_asks_for() {
-        for cfg in [tiny(false), tiny(true), DecoderConfig::qwen3_vl_32b_text(), DecoderConfig::gemma3_12b_text(), DecoderConfig::gemma4_12b_text()] {
+        for cfg in [
+            tiny(false),
+            tiny(true),
+            DecoderConfig::qwen3_vl_32b_text(),
+            DecoderConfig::qwen25_vl_7b_text(),
+            DecoderConfig::gemma3_12b_text(),
+            DecoderConfig::gemma4_12b_text(),
+        ] {
             let (mut lins, mut norms) = (Vec::new(), Vec::new());
             Layer::assemble(
                 &cfg,

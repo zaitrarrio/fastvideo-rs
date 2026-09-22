@@ -893,14 +893,15 @@ fn rcm_denoise(
 fn warn_sla_backend() {
     static ONCE: std::sync::Once = std::sync::Once::new();
     ONCE.call_once(|| {
-        let backend = std::env::var("FASTVIDEO_ATTENTION_BACKEND").unwrap_or_default();
-        if backend.eq_ignore_ascii_case("SLA_ATTN") || backend.eq_ignore_ascii_case("sla") {
+        if super::sla::sla_enabled() {
+            let cfg = super::sla::SlaConfig::from_env();
             super::log::info(format_args!(
-                "TurboWan: FASTVIDEO_ATTENTION_BACKEND={backend} requested; SLA kernels are not ported yet — using dense SDPA"
+                "TurboWan: SLA attention (topk={:.2} BLKQ={} BLKK={})",
+                cfg.topk_ratio, cfg.blk_q, cfg.blk_k
             ));
         } else {
             super::log::info(format_args!(
-                "TurboWan: dense SDPA (set FASTVIDEO_ATTENTION_BACKEND=SLA_ATTN when SLA lands)"
+                "TurboWan: dense SDPA (set FASTVIDEO_ATTENTION_BACKEND=SLA_ATTN for Sparse-Linear Attention)"
             ));
         }
     });
