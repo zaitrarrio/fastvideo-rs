@@ -1,0 +1,18 @@
+[package]
+name = "fastvideo-mlx"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Apple Silicon MLX scaffold for FastMetal-QAD / FastH3 (no CUDA)."
+rust-version.workspace = true
+
+[dependencies]
+# mlx-rs (or FastVideo MLX FFI) lands behind the `mlx` feature on aarch64 macOS.
+
+[features]
+default = []
+# Opt-in Metal/MLX bindings. Compiles only as a flag today; graph wiring TBD.
+mlx = []
+
+[lints]
+workspace = true

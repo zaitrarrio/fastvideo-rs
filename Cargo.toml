@@ -8,6 +8,7 @@ members = [
     "crates/fastvideo-cudarc",
     "crates/fastvideo-cli",
     "crates/fastvideo-gpucheck",
+    "crates/fastvideo-mlx",
 ]
 
 [workspace.package]

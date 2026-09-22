@@ -300,6 +300,12 @@ pub enum ModelFamily {
     GameCraft,
     HyWorld,
     ZImage,
+    Sd35,
+    Flux,
+    Flux2,
+    GlmImage,
+    StableAudio,
+    MmAudio,
 }
 
 impl ModelFamily {
@@ -320,6 +326,12 @@ impl ModelFamily {
             Self::GameCraft => "gamecraft",
             Self::HyWorld => "hyworld",
             Self::ZImage => "zimage",
+            Self::Sd35 => "sd35",
+            Self::Flux => "flux",
+            Self::Flux2 => "flux2",
+            Self::GlmImage => "glm_image",
+            Self::StableAudio => "stable_audio",
+            Self::MmAudio => "mmaudio",
         }
     }
 }
@@ -755,6 +767,93 @@ pub static ZIMAGE_MODEL_DEFINITIONS: &[FamilyModelDefinition] = &[
     ),
 ];
 
+/// SD 3.5 T2I Hub ids.
+pub static SD35_MODEL_DEFINITIONS: &[FamilyModelDefinition] = &[
+    family_defn!(
+        ModelFamily::Sd35,
+        "sd35_medium",
+        &["stabilityai/stable-diffusion-3.5-medium"],
+        &[WorkloadType::T2I],
+        match_any = &["stable-diffusion-3.5", "sd35", "sd3.5"]
+    ),
+];
+
+/// FLUX.1 T2I Hub ids.
+pub static FLUX_MODEL_DEFINITIONS: &[FamilyModelDefinition] = &[
+    family_defn!(
+        ModelFamily::Flux,
+        "flux1_dev",
+        &["black-forest-labs/FLUX.1-dev"],
+        &[WorkloadType::T2I],
+        match_any = &["flux.1-dev", "flux1-dev", "flux-1-dev"]
+    ),
+];
+
+/// FLUX.2 T2I Hub ids.
+pub static FLUX2_MODEL_DEFINITIONS: &[FamilyModelDefinition] = &[
+    family_defn!(
+        ModelFamily::Flux2,
+        "flux2_klein_4b",
+        &["black-forest-labs/FLUX.2-klein-4B"],
+        &[WorkloadType::T2I],
+        match_any = &["flux.2-klein-4b", "flux2-klein-4b"]
+    ),
+    family_defn!(
+        ModelFamily::Flux2,
+        "flux2_klein_9b",
+        &["black-forest-labs/FLUX.2-klein-9B"],
+        &[WorkloadType::T2I],
+        match_any = &["flux.2-klein-9b", "flux2-klein-9b"]
+    ),
+    family_defn!(
+        ModelFamily::Flux2,
+        "flux2_dev",
+        &["black-forest-labs/FLUX.2-dev"],
+        &[WorkloadType::T2I],
+        match_any = &["flux.2-dev", "flux2-dev"]
+    ),
+];
+
+/// GLM-Image T2I Hub ids.
+pub static GLM_IMAGE_MODEL_DEFINITIONS: &[FamilyModelDefinition] = &[
+    family_defn!(
+        ModelFamily::GlmImage,
+        "glm_image",
+        &["zai-org/GLM-Image"],
+        &[WorkloadType::T2I],
+        match_any = &["glm-image", "glm_image"]
+    ),
+];
+
+/// Stable Audio Open T2A Hub ids.
+pub static STABLE_AUDIO_MODEL_DEFINITIONS: &[FamilyModelDefinition] = &[
+    family_defn!(
+        ModelFamily::StableAudio,
+        "stable_audio_open_1_0",
+        &["FastVideo/stable-audio-open-1.0-Diffusers"],
+        &[WorkloadType::T2A],
+        match_any = &["stable-audio-open-1.0", "stable_audio_open_1_0"]
+    ),
+    family_defn!(
+        ModelFamily::StableAudio,
+        "stable_audio_open_small",
+        &["FastVideo/stable-audio-open-small-Diffusers"],
+        &[WorkloadType::T2A],
+        match_any = &["stable-audio-open-small", "stable_audio_open_small"]
+    ),
+];
+
+/// MMAudio T2A/V2A Hub ids (reserved; prefer `MMAUDIO_MODEL_PATH`).
+pub static MMAUDIO_MODEL_DEFINITIONS: &[FamilyModelDefinition] = &[
+    family_defn!(
+        ModelFamily::MmAudio,
+        "mmaudio_large_44k_v2",
+        &["FastVideo/MMAudio-large-44k-v2-Diffusers"],
+        &[WorkloadType::V2A, WorkloadType::T2A],
+        match_any = &["mmaudio-large", "mmaudio"]
+    ),
+];
+
 fn resolve_family_table(table: &'static [FamilyModelDefinition], model_id: &str) -> Option<&'static FamilyModelDefinition> {
     table
         .iter()
@@ -815,6 +914,24 @@ pub fn resolve(model_id: &str) -> Result<ResolvedModel> {
         return Ok(ResolvedModel::Family(d));
     }
     if let Some(d) = resolve_family_table(ZIMAGE_MODEL_DEFINITIONS, model_id) {
+        return Ok(ResolvedModel::Family(d));
+    }
+    if let Some(d) = resolve_family_table(SD35_MODEL_DEFINITIONS, model_id) {
+        return Ok(ResolvedModel::Family(d));
+    }
+    if let Some(d) = resolve_family_table(FLUX_MODEL_DEFINITIONS, model_id) {
+        return Ok(ResolvedModel::Family(d));
+    }
+    if let Some(d) = resolve_family_table(FLUX2_MODEL_DEFINITIONS, model_id) {
+        return Ok(ResolvedModel::Family(d));
+    }
+    if let Some(d) = resolve_family_table(GLM_IMAGE_MODEL_DEFINITIONS, model_id) {
+        return Ok(ResolvedModel::Family(d));
+    }
+    if let Some(d) = resolve_family_table(STABLE_AUDIO_MODEL_DEFINITIONS, model_id) {
+        return Ok(ResolvedModel::Family(d));
+    }
+    if let Some(d) = resolve_family_table(MMAUDIO_MODEL_DEFINITIONS, model_id) {
         return Ok(ResolvedModel::Family(d));
     }
     if let Ok(wan) = resolve_wan(model_id) {
@@ -897,6 +1014,36 @@ pub fn all_registered_ids() -> Vec<(ModelFamily, &'static str, &'static str)> {
         }
     }
     for d in ZIMAGE_MODEL_DEFINITIONS {
+        for id in d.hf_model_paths {
+            out.push((d.family, *id, d.preset));
+        }
+    }
+    for d in SD35_MODEL_DEFINITIONS {
+        for id in d.hf_model_paths {
+            out.push((d.family, *id, d.preset));
+        }
+    }
+    for d in FLUX_MODEL_DEFINITIONS {
+        for id in d.hf_model_paths {
+            out.push((d.family, *id, d.preset));
+        }
+    }
+    for d in FLUX2_MODEL_DEFINITIONS {
+        for id in d.hf_model_paths {
+            out.push((d.family, *id, d.preset));
+        }
+    }
+    for d in GLM_IMAGE_MODEL_DEFINITIONS {
+        for id in d.hf_model_paths {
+            out.push((d.family, *id, d.preset));
+        }
+    }
+    for d in STABLE_AUDIO_MODEL_DEFINITIONS {
+        for id in d.hf_model_paths {
+            out.push((d.family, *id, d.preset));
+        }
+    }
+    for d in MMAUDIO_MODEL_DEFINITIONS {
         for id in d.hf_model_paths {
             out.push((d.family, *id, d.preset));
         }
@@ -1076,6 +1223,29 @@ mod tests {
         assert_eq!(zimg.family(), ModelFamily::ZImage);
         assert_eq!(zimg.preset(), "zimage_turbo");
 
+        let sd35 = resolve("stabilityai/stable-diffusion-3.5-medium").unwrap();
+        assert_eq!(sd35.family(), ModelFamily::Sd35);
+        assert_eq!(sd35.preset(), "sd35_medium");
+
+        let flux = resolve("black-forest-labs/FLUX.1-dev").unwrap();
+        assert_eq!(flux.family(), ModelFamily::Flux);
+
+        let flux2 = resolve("black-forest-labs/FLUX.2-klein-4B").unwrap();
+        assert_eq!(flux2.preset(), "flux2_klein_4b");
+        let flux2_dev = resolve("black-forest-labs/FLUX.2-dev").unwrap();
+        assert_eq!(flux2_dev.preset(), "flux2_dev");
+
+        let glm = resolve("zai-org/GLM-Image").unwrap();
+        assert_eq!(glm.family(), ModelFamily::GlmImage);
+
+        let sa = resolve("FastVideo/stable-audio-open-small-Diffusers").unwrap();
+        assert_eq!(sa.family(), ModelFamily::StableAudio);
+        assert!(sa.workload_types().contains(&WorkloadType::T2A));
+
+        let mma = resolve("FastVideo/MMAudio-large-44k-v2-Diffusers").unwrap();
+        assert_eq!(mma.family(), ModelFamily::MmAudio);
+        assert!(mma.workload_types().contains(&WorkloadType::V2A));
+
         assert!(resolve("not-a-real/model").is_err());
     }
 
@@ -1118,5 +1288,23 @@ mod tests {
         assert!(ids
             .iter()
             .any(|(f, id, _)| *f == ModelFamily::ZImage && id.contains("Z-Image")));
+        assert!(ids
+            .iter()
+            .any(|(f, id, _)| *f == ModelFamily::Sd35 && id.contains("stable-diffusion-3.5")));
+        assert!(ids
+            .iter()
+            .any(|(f, id, _)| *f == ModelFamily::Flux && id.contains("FLUX.1")));
+        assert!(ids
+            .iter()
+            .any(|(f, id, _)| *f == ModelFamily::Flux2 && id.contains("FLUX.2")));
+        assert!(ids
+            .iter()
+            .any(|(f, id, _)| *f == ModelFamily::GlmImage && id.contains("GLM-Image")));
+        assert!(ids
+            .iter()
+            .any(|(f, id, _)| *f == ModelFamily::StableAudio && id.contains("stable-audio")));
+        assert!(ids
+            .iter()
+            .any(|(f, id, _)| *f == ModelFamily::MmAudio && id.contains("MMAudio")));
     }
 }

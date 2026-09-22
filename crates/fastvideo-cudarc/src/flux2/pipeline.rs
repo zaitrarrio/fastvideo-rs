@@ -1,13 +1,13 @@
-//! Z-Image T2I generate scaffold: noise → DiT → AutoencoderKL → PNG.
+//! FLUX.2 T2I generate scaffold.
 
 use std::path::{Path, PathBuf};
 
+use fastvideo_models::flux2::{Flux2Config, Flux2Preset};
 use fastvideo_models::vae::AutoencoderKlConfig;
-use fastvideo_models::zimage::{ZImageConfig, ZImagePreset, ZImageTransformerConfig};
 use rand::SeedableRng;
 use rand_distr::{Distribution, StandardNormal};
 
-use super::transformer::ZImageTransformer;
+use super::transformer::Flux2Transformer;
 use crate::vae::AutoencoderKl;
 use crate::wan::pipeline::{PipelineError, Result};
 use crate::wan::tensor::CudaTensor;
@@ -18,7 +18,7 @@ fn msg(s: impl Into<String>) -> PipelineError {
 }
 
 #[derive(Debug, Clone)]
-pub struct ZImageRequest {
+pub struct Flux2Request {
     pub prompt: String,
     pub negative_prompt: String,
     pub seed: u64,
@@ -26,12 +26,11 @@ pub struct ZImageRequest {
     pub width: usize,
     pub num_steps: usize,
     pub guidance_scale: f32,
-    pub preset: ZImagePreset,
+    pub preset: Flux2Preset,
 }
 
-impl ZImageRequest {
-    pub fn turbo(prompt: impl Into<String>, seed: u64) -> Self {
-        let preset = ZImagePreset::Turbo;
+impl Flux2Request {
+    pub fn for_preset(preset: Flux2Preset, prompt: impl Into<String>, seed: u64) -> Self {
         Self {
             prompt: prompt.into(),
             negative_prompt: String::new(),
@@ -45,19 +44,19 @@ impl ZImageRequest {
     }
 }
 
-pub struct ZImagePipeline {
+pub struct Flux2Pipeline {
     pub root: PathBuf,
-    pub cfg: ZImageConfig,
-    pub preset: ZImagePreset,
-    pub dit: Option<ZImageTransformer>,
+    pub cfg: Flux2Config,
+    pub preset: Flux2Preset,
+    pub dit: Option<Flux2Transformer>,
     pub vae: Option<AutoencoderKl>,
 }
 
-impl ZImagePipeline {
-    pub fn open(root: impl Into<PathBuf>, preset: ZImagePreset) -> Result<Self> {
+impl Flux2Pipeline {
+    pub fn open(root: impl Into<PathBuf>, preset: Flux2Preset) -> Result<Self> {
         Ok(Self {
             root: root.into(),
-            cfg: ZImageConfig::for_preset(preset),
+            cfg: Flux2Config::for_preset(preset),
             preset,
             dit: None,
             vae: None,
@@ -66,23 +65,23 @@ impl ZImagePipeline {
 
     pub fn load_dit(&mut self) -> Result<()> {
         let map = WeightMap::open(&self.root.join("transformer")).map_err(|e| msg(e.to_string()))?;
-        self.dit = Some(ZImageTransformer::load(self.cfg.dit.clone(), &map)?);
+        self.dit = Some(Flux2Transformer::load(self.cfg.dit.clone(), &map)?);
         Ok(())
     }
 
     pub fn load_dit_zeros_tiny(&mut self) -> Result<()> {
-        self.cfg = ZImageConfig::tiny();
-        self.dit = Some(ZImageTransformer::zeros(self.cfg.dit.clone())?);
+        self.cfg = Flux2Config::tiny();
+        self.dit = Some(Flux2Transformer::zeros(self.cfg.dit.clone())?);
         Ok(())
     }
 
     pub fn load_vae(&mut self) -> Result<()> {
-        let vae_dir = self.root.join("vae");
-        let cfg = if self.cfg.dit.dim < 1000 {
-            AutoencoderKlConfig::tiny(self.cfg.dit.out_channels)
+        let cfg = if self.cfg.dit.num_layers <= 2 {
+            AutoencoderKlConfig::tiny(16)
         } else {
-            AutoencoderKlConfig::sd3()
+            AutoencoderKlConfig::flux2()
         };
+        let vae_dir = self.root.join("vae");
         if vae_dir.is_dir() {
             let map = WeightMap::open(&vae_dir).map_err(|e| msg(e.to_string()))?;
             self.vae = Some(AutoencoderKl::load(cfg, &map)?);
@@ -93,41 +92,32 @@ impl ZImagePipeline {
     }
 
     pub fn load_vae_stub(&mut self) {
-        let cfg = if self.cfg.dit.dim < 1000 {
-            AutoencoderKlConfig::tiny(self.cfg.dit.out_channels)
+        let cfg = if self.cfg.dit.num_layers <= 2 {
+            AutoencoderKlConfig::tiny(16)
         } else {
-            AutoencoderKlConfig::sd3()
+            AutoencoderKlConfig::flux2()
         };
         self.vae = Some(AutoencoderKl::zeros(cfg));
     }
 
     fn encode_text(&self, _prompt: &str) -> Result<CudaTensor> {
-        // Qwen3 encode hook: zeros until `text_encoder/` + tokenizer present.
-        Ok(CudaTensor::zeros(&[1, 16, self.cfg.dit.cap_feat_dim]))
+        Ok(CudaTensor::zeros(&[1, 16, self.cfg.dit.joint_attention_dim]))
     }
 
-    pub fn generate(&self, request: &ZImageRequest, out_path: &Path) -> Result<()> {
-        let dit = self.dit.as_ref().ok_or_else(|| {
-            msg("Z-Image: call load_dit() after placing Diffusers `transformer/` under --weights")
-        })?;
-        let vae = self.vae.as_ref().ok_or_else(|| {
-            msg("Z-Image: call load_vae() or load_vae_stub()")
-        })?;
-
+    pub fn generate(&self, request: &Flux2Request, out_path: &Path) -> Result<()> {
+        let dit = self.dit.as_ref().ok_or_else(|| msg("FLUX.2: call load_dit()"))?;
+        let vae = self.vae.as_ref().ok_or_else(|| msg("FLUX.2: call load_vae() or load_vae_stub()"))?;
         let text = self.encode_text(&request.prompt)?;
-        let (lh, lw) = self.cfg.dit.latent_spatial(request.height, request.width);
-        let (lh, lw) = if self.cfg.dit.dim < 1000 {
-            (8usize, 8usize)
+        let (ph, pw, c) = if self.cfg.dit.num_layers <= 2 {
+            (8usize, 8usize, self.cfg.dit.in_channels)
         } else {
-            (lh, lw)
+            let (ph, pw) = self.cfg.dit.packed_spatial(request.height, request.width);
+            (ph, pw, self.cfg.dit.in_channels)
         };
-        let c = self.cfg.dit.out_channels;
-        let n = c * lh * lw;
-
+        let n = c * ph * pw;
         let mut sched = self.cfg.schedule(request.num_steps);
         let timesteps = sched.inference_timesteps().to_vec();
         let sigmas = sched.inference_sigmas().to_vec();
-
         let mut rng = rand::rngs::StdRng::seed_from_u64(request.seed);
         let mut sample: Vec<f32> = (0..n)
             .map(|_| {
@@ -135,47 +125,51 @@ impl ZImagePipeline {
                 z * (sigmas[0] as f32)
             })
             .collect();
-
         for &t in &timesteps {
-            let lat = CudaTensor::from_vec(sample.clone(), vec![1, c, lh, lw])?;
-            let pred = dit.forward(&lat, &text, t as f32)?;
+            let lat = CudaTensor::from_vec(sample.clone(), vec![1, c, ph, pw])?;
+            let pred = dit.forward(&lat, &text, t as f32, request.guidance_scale)?;
             let vel = pred.host_cow()?;
             sample = sched.step_euler(&sample, &vel[..n]).map_err(msg)?;
-            let _ = request.guidance_scale;
-            let _ = &request.negative_prompt;
         }
-
-        let latents = CudaTensor::from_vec(sample, vec![1, c, lh, lw])?;
+        let vae_c = vae.cfg.latent_channels;
+        let (vh, vw) = if self.cfg.dit.num_layers <= 2 { (ph, pw) } else { (ph * 2, pw * 2) };
+        let mut unpacked = vec![0f32; vae_c * vh * vw];
+        let pack = (c / vae_c).max(1);
+        for y in 0..vh {
+            for x in 0..vw {
+                let (py, px) = if self.cfg.dit.num_layers <= 2 { (y, x) } else { (y / 2, x / 2) };
+                for ch in 0..vae_c {
+                    let mut acc = 0f32;
+                    for k in 0..pack {
+                        let src_c = ch * pack + k;
+                        if src_c < c && py < ph && px < pw {
+                            acc += sample[(src_c * ph + py) * pw + px];
+                        }
+                    }
+                    unpacked[(ch * vh + y) * vw + x] = acc / pack as f32;
+                }
+            }
+        }
+        let latents = CudaTensor::from_vec(unpacked, vec![1, vae_c, vh, vw])?;
         let scaled = vae.scale_latents(&latents)?;
         let pixels = vae.decode(&scaled)?;
         let [_, _, hf, wf] = match pixels.shape[..] {
             [1, 3, hf, wf] => [1, 3, hf, wf],
-            _ => {
-                return Err(msg(format!(
-                    "zimage decode shape {:?} want [1,3,H,W]",
-                    pixels.shape
-                )))
-            }
+            _ => return Err(msg(format!("flux2 decode {:?}", pixels.shape))),
         };
         let data = pixels.host_cow()?;
         let mut rgb = vec![0u8; 3 * hf * wf];
         for i in 0..hf * wf {
             for ch in 0..3 {
-                let v = data[ch * hf * wf + i];
-                rgb[i * 3 + ch] = (v * 255.0).round().clamp(0.0, 255.0) as u8;
+                rgb[i * 3 + ch] = (data[ch * hf * wf + i] * 255.0).round().clamp(0.0, 255.0) as u8;
             }
         }
         if let Some(parent) = out_path.parent() {
             std::fs::create_dir_all(parent).map_err(|e| msg(e.to_string()))?;
         }
-        image::save_buffer(
-            out_path,
-            &rgb,
-            wf as u32,
-            hf as u32,
-            image::ColorType::Rgb8,
-        )
-        .map_err(|e| msg(e.to_string()))?;
+        image::save_buffer(out_path, &rgb, wf as u32, hf as u32, image::ColorType::Rgb8)
+            .map_err(|e| msg(e.to_string()))?;
+        let _ = &request.negative_prompt;
         Ok(())
     }
 }
@@ -185,23 +179,15 @@ mod tests {
     use super::*;
 
     #[test]
-    fn request_defaults() {
-        let r = ZImageRequest::turbo("a garden", 0);
-        assert_eq!(r.height, 1024);
-        assert_eq!(r.num_steps, 8);
-        assert_eq!(r.guidance_scale, 0.0);
-    }
-
-    #[test]
     fn tiny_generate_png() {
-        let mut pipe = ZImagePipeline::open("/tmp/zimage-missing", ZImagePreset::Turbo).unwrap();
+        let mut pipe = Flux2Pipeline::open("/tmp/flux2-missing", Flux2Preset::Klein4b).unwrap();
         pipe.load_dit_zeros_tiny().unwrap();
         pipe.load_vae_stub();
-        let mut r = ZImageRequest::turbo("test", 1);
+        let mut r = Flux2Request::for_preset(Flux2Preset::Klein4b, "test", 1);
         r.height = 64;
         r.width = 64;
         r.num_steps = 2;
-        let dir = std::env::temp_dir().join("zimage-tiny-test.png");
+        let dir = std::env::temp_dir().join("flux2-tiny-test.png");
         pipe.generate(&r, &dir).unwrap();
         assert!(dir.is_file());
         let _ = std::fs::remove_file(&dir);

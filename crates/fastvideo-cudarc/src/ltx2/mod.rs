@@ -11,6 +11,7 @@
 pub mod attention;
 pub mod audio_vae;
 pub mod diffusion_decoder;
+pub mod i2v_encode;
 pub mod keys;
 pub mod latent_upsampler;
 pub mod pipeline;

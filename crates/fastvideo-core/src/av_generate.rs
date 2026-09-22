@@ -73,6 +73,12 @@ pub fn generate_av(resolved: ResolvedModel, opts: AvGenerateOptions) -> Result<A
             ModelFamily::GameCraft => generate_gamecraft(def, opts),
             ModelFamily::HyWorld => generate_hyworld(def, opts),
             ModelFamily::ZImage => generate_zimage(def, opts),
+            ModelFamily::Sd35 => generate_sd35(def, opts),
+            ModelFamily::Flux => generate_flux(def, opts),
+            ModelFamily::Flux2 => generate_flux2(def, opts),
+            ModelFamily::GlmImage => generate_glm_image(def, opts),
+            ModelFamily::StableAudio => generate_stable_audio(def, opts),
+            ModelFamily::MmAudio => generate_mmaudio(def, opts),
             ModelFamily::Wan => unreachable!(),
         },
     }
@@ -922,6 +928,9 @@ fn generate_zimage(
         if weights.join("transformer").is_dir() {
             pipe.load_dit()
                 .map_err(|e| FastVideoError::Message(e.to_string()))?;
+        } else {
+            pipe.load_dit_zeros_tiny()
+                .map_err(|e| FastVideoError::Message(e.to_string()))?;
         }
         if weights.join("vae").is_dir() {
             pipe.load_vae()
@@ -959,6 +968,392 @@ fn generate_zimage(
         let _ = (def, opts);
         Err(FastVideoError::Message(
             "rebuild with --features cuda-cudarc to generate Z-Image".into(),
+        ))
+    }
+}
+
+fn generate_sd35(
+    def: &'static FamilyModelDefinition,
+    opts: AvGenerateOptions,
+) -> Result<AvGenerateOutput> {
+    require_cuda(&opts.device)?;
+    #[cfg(feature = "cuda-cudarc")]
+    {
+        use fastvideo_cudarc::sd35::pipeline::{Sd35Pipeline, Sd35Request};
+        use fastvideo_cudarc::wan::device::resolve_device;
+        use fastvideo_models::sd35::Sd35Preset;
+
+        resolve_device(&opts.device).map_err(|e| FastVideoError::Message(e.to_string()))?;
+        let weights = weights_root(&opts)?;
+        let preset = match def.preset {
+            "sd35_medium" => Sd35Preset::Medium,
+            other => {
+                return Err(FastVideoError::Message(format!("unknown SD3.5 preset {other}")));
+            }
+        };
+        let mut pipe = Sd35Pipeline::open(&weights, preset)
+            .map_err(|e| FastVideoError::Message(e.to_string()))?;
+        if weights.join("transformer").is_dir() {
+            pipe.load_dit()
+                .map_err(|e| FastVideoError::Message(e.to_string()))?;
+        } else {
+            pipe.load_dit_zeros_tiny()
+                .map_err(|e| FastVideoError::Message(e.to_string()))?;
+        }
+        if weights.join("vae").is_dir() {
+            pipe.load_vae()
+                .map_err(|e| FastVideoError::Message(e.to_string()))?;
+        } else {
+            pipe.load_vae_stub();
+        }
+        let mut request = Sd35Request::medium(opts.prompt, opts.seed);
+        if let Some(h) = opts.height {
+            request.height = h as usize;
+        }
+        if let Some(w) = opts.width {
+            request.width = w as usize;
+        }
+        if let Some(s) = opts.num_inference_steps {
+            request.num_steps = s as usize;
+        }
+        if let Some(g) = opts.guidance_scale {
+            request.guidance_scale = g;
+        }
+        std::fs::create_dir_all(&opts.output).map_err(|e| FastVideoError::Message(e.to_string()))?;
+        let out_png = opts.output.join("sd35.png");
+        pipe.generate(&request, &out_png)
+            .map_err(|e| FastVideoError::Message(e.to_string()))?;
+        Ok(AvGenerateOutput {
+            family: ModelFamily::Sd35,
+            preset: def.preset,
+            frame_paths: vec![out_png.display().to_string()],
+            mp4: None,
+            wav: None,
+        })
+    }
+    #[cfg(not(feature = "cuda-cudarc"))]
+    {
+        let _ = (def, opts);
+        Err(FastVideoError::Message(
+            "rebuild with --features cuda-cudarc to generate SD 3.5".into(),
+        ))
+    }
+}
+
+fn generate_flux(
+    def: &'static FamilyModelDefinition,
+    opts: AvGenerateOptions,
+) -> Result<AvGenerateOutput> {
+    require_cuda(&opts.device)?;
+    #[cfg(feature = "cuda-cudarc")]
+    {
+        use fastvideo_cudarc::flux::pipeline::{FluxPipeline, FluxRequest};
+        use fastvideo_cudarc::wan::device::resolve_device;
+        use fastvideo_models::flux::FluxPreset;
+
+        resolve_device(&opts.device).map_err(|e| FastVideoError::Message(e.to_string()))?;
+        let weights = weights_root(&opts)?;
+        let preset = match def.preset {
+            "flux1_dev" => FluxPreset::Dev,
+            other => {
+                return Err(FastVideoError::Message(format!("unknown FLUX.1 preset {other}")));
+            }
+        };
+        let mut pipe = FluxPipeline::open(&weights, preset)
+            .map_err(|e| FastVideoError::Message(e.to_string()))?;
+        if weights.join("transformer").is_dir() {
+            pipe.load_dit()
+                .map_err(|e| FastVideoError::Message(e.to_string()))?;
+        } else {
+            pipe.load_dit_zeros_tiny()
+                .map_err(|e| FastVideoError::Message(e.to_string()))?;
+        }
+        if weights.join("vae").is_dir() {
+            pipe.load_vae()
+                .map_err(|e| FastVideoError::Message(e.to_string()))?;
+        } else {
+            pipe.load_vae_stub();
+        }
+        let mut request = FluxRequest::dev(opts.prompt, opts.seed);
+        if let Some(h) = opts.height {
+            request.height = h as usize;
+        }
+        if let Some(w) = opts.width {
+            request.width = w as usize;
+        }
+        if let Some(s) = opts.num_inference_steps {
+            request.num_steps = s as usize;
+        }
+        if let Some(g) = opts.guidance_scale {
+            request.guidance_scale = g;
+        }
+        std::fs::create_dir_all(&opts.output).map_err(|e| FastVideoError::Message(e.to_string()))?;
+        let out_png = opts.output.join("flux.png");
+        pipe.generate(&request, &out_png)
+            .map_err(|e| FastVideoError::Message(e.to_string()))?;
+        Ok(AvGenerateOutput {
+            family: ModelFamily::Flux,
+            preset: def.preset,
+            frame_paths: vec![out_png.display().to_string()],
+            mp4: None,
+            wav: None,
+        })
+    }
+    #[cfg(not(feature = "cuda-cudarc"))]
+    {
+        let _ = (def, opts);
+        Err(FastVideoError::Message(
+            "rebuild with --features cuda-cudarc to generate FLUX.1".into(),
+        ))
+    }
+}
+
+fn generate_flux2(
+    def: &'static FamilyModelDefinition,
+    opts: AvGenerateOptions,
+) -> Result<AvGenerateOutput> {
+    require_cuda(&opts.device)?;
+    #[cfg(feature = "cuda-cudarc")]
+    {
+        use fastvideo_cudarc::flux2::pipeline::{Flux2Pipeline, Flux2Request};
+        use fastvideo_cudarc::wan::device::resolve_device;
+        use fastvideo_models::flux2::Flux2Preset;
+
+        resolve_device(&opts.device).map_err(|e| FastVideoError::Message(e.to_string()))?;
+        let weights = weights_root(&opts)?;
+        let preset = match def.preset {
+            "flux2_klein_4b" => Flux2Preset::Klein4b,
+            "flux2_klein_9b" => Flux2Preset::Klein9b,
+            "flux2_dev" => Flux2Preset::Dev,
+            other => {
+                return Err(FastVideoError::Message(format!("unknown FLUX.2 preset {other}")));
+            }
+        };
+        let mut pipe = Flux2Pipeline::open(&weights, preset)
+            .map_err(|e| FastVideoError::Message(e.to_string()))?;
+        if weights.join("transformer").is_dir() {
+            pipe.load_dit()
+                .map_err(|e| FastVideoError::Message(e.to_string()))?;
+        } else {
+            pipe.load_dit_zeros_tiny()
+                .map_err(|e| FastVideoError::Message(e.to_string()))?;
+        }
+        if weights.join("vae").is_dir() {
+            pipe.load_vae()
+                .map_err(|e| FastVideoError::Message(e.to_string()))?;
+        } else {
+            pipe.load_vae_stub();
+        }
+        let mut request = Flux2Request::for_preset(preset, opts.prompt, opts.seed);
+        if let Some(h) = opts.height {
+            request.height = h as usize;
+        }
+        if let Some(w) = opts.width {
+            request.width = w as usize;
+        }
+        if let Some(s) = opts.num_inference_steps {
+            request.num_steps = s as usize;
+        }
+        if let Some(g) = opts.guidance_scale {
+            request.guidance_scale = g;
+        }
+        std::fs::create_dir_all(&opts.output).map_err(|e| FastVideoError::Message(e.to_string()))?;
+        let out_png = opts.output.join("flux2.png");
+        pipe.generate(&request, &out_png)
+            .map_err(|e| FastVideoError::Message(e.to_string()))?;
+        Ok(AvGenerateOutput {
+            family: ModelFamily::Flux2,
+            preset: def.preset,
+            frame_paths: vec![out_png.display().to_string()],
+            mp4: None,
+            wav: None,
+        })
+    }
+    #[cfg(not(feature = "cuda-cudarc"))]
+    {
+        let _ = (def, opts);
+        Err(FastVideoError::Message(
+            "rebuild with --features cuda-cudarc to generate FLUX.2".into(),
+        ))
+    }
+}
+
+fn generate_glm_image(
+    def: &'static FamilyModelDefinition,
+    opts: AvGenerateOptions,
+) -> Result<AvGenerateOutput> {
+    require_cuda(&opts.device)?;
+    #[cfg(feature = "cuda-cudarc")]
+    {
+        use fastvideo_cudarc::glm_image::pipeline::{GlmImagePipeline, GlmImageRequest};
+        use fastvideo_cudarc::wan::device::resolve_device;
+        use fastvideo_models::glm_image::GlmImagePreset;
+
+        resolve_device(&opts.device).map_err(|e| FastVideoError::Message(e.to_string()))?;
+        let weights = weights_root(&opts)?;
+        let preset = match def.preset {
+            "glm_image" => GlmImagePreset::Base,
+            other => {
+                return Err(FastVideoError::Message(format!("unknown GLM-Image preset {other}")));
+            }
+        };
+        let mut pipe = GlmImagePipeline::open(&weights, preset)
+            .map_err(|e| FastVideoError::Message(e.to_string()))?;
+        if weights.join("transformer").is_dir() {
+            pipe.load_dit()
+                .map_err(|e| FastVideoError::Message(e.to_string()))?;
+        } else {
+            pipe.load_dit_zeros_tiny()
+                .map_err(|e| FastVideoError::Message(e.to_string()))?;
+        }
+        if weights.join("vae").is_dir() {
+            pipe.load_vae()
+                .map_err(|e| FastVideoError::Message(e.to_string()))?;
+        } else {
+            pipe.load_vae_stub();
+        }
+        let mut request = GlmImageRequest::base(opts.prompt, opts.seed);
+        if let Some(h) = opts.height {
+            request.height = h as usize;
+        }
+        if let Some(w) = opts.width {
+            request.width = w as usize;
+        }
+        if let Some(s) = opts.num_inference_steps {
+            request.num_steps = s as usize;
+        }
+        if let Some(g) = opts.guidance_scale {
+            request.guidance_scale = g;
+        }
+        std::fs::create_dir_all(&opts.output).map_err(|e| FastVideoError::Message(e.to_string()))?;
+        let out_png = opts.output.join("glm-image.png");
+        pipe.generate(&request, &out_png)
+            .map_err(|e| FastVideoError::Message(e.to_string()))?;
+        Ok(AvGenerateOutput {
+            family: ModelFamily::GlmImage,
+            preset: def.preset,
+            frame_paths: vec![out_png.display().to_string()],
+            mp4: None,
+            wav: None,
+        })
+    }
+    #[cfg(not(feature = "cuda-cudarc"))]
+    {
+        let _ = (def, opts);
+        Err(FastVideoError::Message(
+            "rebuild with --features cuda-cudarc to generate GLM-Image".into(),
+        ))
+    }
+}
+
+fn generate_stable_audio(
+    def: &'static FamilyModelDefinition,
+    opts: AvGenerateOptions,
+) -> Result<AvGenerateOutput> {
+    require_cuda(&opts.device)?;
+    #[cfg(feature = "cuda-cudarc")]
+    {
+        use fastvideo_cudarc::stable_audio::pipeline::{StableAudioPipeline, StableAudioRequest};
+        use fastvideo_cudarc::wan::device::resolve_device;
+        use fastvideo_models::stable_audio::StableAudioPreset;
+
+        resolve_device(&opts.device).map_err(|e| FastVideoError::Message(e.to_string()))?;
+        let weights = weights_root(&opts)?;
+        let preset = match def.preset {
+            "stable_audio_open_1_0" => StableAudioPreset::Open10,
+            "stable_audio_open_small" => StableAudioPreset::OpenSmall,
+            other => {
+                return Err(FastVideoError::Message(format!(
+                    "unknown Stable Audio preset {other}"
+                )));
+            }
+        };
+        let mut pipe = StableAudioPipeline::open(&weights, preset)
+            .map_err(|e| FastVideoError::Message(e.to_string()))?;
+        if weights.join("transformer").is_dir() {
+            pipe.load_dit()
+                .map_err(|e| FastVideoError::Message(e.to_string()))?;
+        } else {
+            pipe.load_dit_zeros_tiny()
+                .map_err(|e| FastVideoError::Message(e.to_string()))?;
+        }
+        pipe.load_vae_stub();
+        let mut request = StableAudioRequest::for_preset(preset, opts.prompt, opts.seed);
+        if let Some(s) = opts.num_inference_steps {
+            request.num_steps = s as usize;
+        }
+        std::fs::create_dir_all(&opts.output).map_err(|e| FastVideoError::Message(e.to_string()))?;
+        let out_wav = opts.output.join("stable-audio.wav");
+        pipe.generate(&request, &out_wav)
+            .map_err(|e| FastVideoError::Message(e.to_string()))?;
+        Ok(AvGenerateOutput {
+            family: ModelFamily::StableAudio,
+            preset: def.preset,
+            frame_paths: vec![],
+            mp4: None,
+            wav: Some(out_wav.display().to_string()),
+        })
+    }
+    #[cfg(not(feature = "cuda-cudarc"))]
+    {
+        let _ = (def, opts);
+        Err(FastVideoError::Message(
+            "rebuild with --features cuda-cudarc to generate Stable Audio".into(),
+        ))
+    }
+}
+
+fn generate_mmaudio(
+    def: &'static FamilyModelDefinition,
+    opts: AvGenerateOptions,
+) -> Result<AvGenerateOutput> {
+    require_cuda(&opts.device)?;
+    #[cfg(feature = "cuda-cudarc")]
+    {
+        use fastvideo_cudarc::mmaudio::pipeline::{MmAudioPipeline, MmAudioRequest};
+        use fastvideo_cudarc::wan::device::resolve_device;
+        use fastvideo_models::mmaudio::MmAudioPreset;
+
+        resolve_device(&opts.device).map_err(|e| FastVideoError::Message(e.to_string()))?;
+        let weights = MmAudioPipeline::resolve_root(weights_root(&opts)?);
+        let preset = match def.preset {
+            "mmaudio_large_44k_v2" => MmAudioPreset::Large44kV2,
+            other => {
+                return Err(FastVideoError::Message(format!("unknown MMAudio preset {other}")));
+            }
+        };
+        let mut pipe = MmAudioPipeline::open(&weights, preset)
+            .map_err(|e| FastVideoError::Message(e.to_string()))?;
+        if weights.join("transformer").is_dir() {
+            pipe.load_dit()
+                .map_err(|e| FastVideoError::Message(e.to_string()))?;
+        } else {
+            pipe.load_dit_zeros_tiny()
+                .map_err(|e| FastVideoError::Message(e.to_string()))?;
+        }
+        pipe.load_vae_stub();
+        let mut request = MmAudioRequest::t2a(opts.prompt, opts.seed);
+        request.video_path = opts.image_path.clone();
+        if let Some(s) = opts.num_inference_steps {
+            request.num_steps = s as usize;
+        }
+        std::fs::create_dir_all(&opts.output).map_err(|e| FastVideoError::Message(e.to_string()))?;
+        let out_wav = opts.output.join("mmaudio.wav");
+        pipe.generate(&request, &out_wav)
+            .map_err(|e| FastVideoError::Message(e.to_string()))?;
+        Ok(AvGenerateOutput {
+            family: ModelFamily::MmAudio,
+            preset: def.preset,
+            frame_paths: vec![],
+            mp4: None,
+            wav: Some(out_wav.display().to_string()),
+        })
+    }
+    #[cfg(not(feature = "cuda-cudarc"))]
+    {
+        let _ = (def, opts);
+        Err(FastVideoError::Message(
+            "rebuild with --features cuda-cudarc to generate MMAudio".into(),
         ))
     }
 }

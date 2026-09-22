@@ -11,8 +11,11 @@
 
 pub mod cosmos;
 pub mod dreamx;
+pub mod flux;
+pub mod flux2;
 pub mod gamecraft;
 pub mod gen3c;
+pub mod glm_image;
 pub mod h3;
 pub mod hunyuan15;
 pub mod hyworld;
@@ -23,6 +26,10 @@ pub mod llm;
 pub mod longcat;
 pub mod ltx2;
 pub mod matrixgame;
+pub mod mmaudio;
+pub mod stable_audio;
+pub mod sd35;
+pub mod vae;
 pub mod wan;
 pub mod zimage;
 

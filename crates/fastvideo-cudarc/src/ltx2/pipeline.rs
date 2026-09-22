@@ -99,7 +99,8 @@ pub struct Ltx2Request {
     pub num_inference_steps: Option<usize>,
     /// Two-stage refine steps (`None` → 3, or 2 when stage-1 is 5). Only 2 or 3.
     pub refine_steps: Option<usize>,
-    /// First-frame image for I2V (`None` = T2AV). Needs a VAE encoder (not yet).
+    /// First-frame image for I2V (`None` = T2AV). Uses VAE encode stub until
+    /// the full encoder lands.
     pub image_path: Option<PathBuf>,
 }
 
@@ -857,11 +858,6 @@ impl Ltx2Pipeline {
     pub fn generate(&mut self, req: &Ltx2Request, use_text_cache: bool, observer: Option<StepObserver<'_>>) -> Result<Ltx2Output> {
         req.validate()?;
         let cfg = self.cfg.clone();
-        if req.image_path.is_some() {
-            return Err(err(
-                "ltx2: I2V (--image) needs the video VAE encoder; T2AV works today — encoder lands next",
-            ));
-        }
         if req.two_stage {
             if !matches!(cfg.version, Ltx2ModelVersion::V23 | Ltx2ModelVersion::V25) {
                 return Err(err("ltx2: --two-stage requires model version 2.3 or 2.5"));
@@ -919,7 +915,22 @@ impl Ltx2Pipeline {
         drop(contexts);
         drop(uncond_contexts);
         let ropes = Ropes::new(&cfg.transformer, grid1, audio_tokens, req.frame_rate as f32)?;
-        let (video, audio) = initial_noise(&cfg, grid1, audio_tokens, req.seed)?;
+        let (mut video, audio) = initial_noise(&cfg, grid1, audio_tokens, req.seed)?;
+        if let Some(ref image_path) = req.image_path {
+            let spat = cfg.transformer.vae_scale_factors[1];
+            let first = super::i2v_encode::encode_first_frame_stub(
+                image_path,
+                stage1_h,
+                stage1_w,
+                cfg.transformer.in_channels,
+                spat,
+            )?;
+            video = super::i2v_encode::condition_first_frame(&video, grid1, &first)?;
+            crate::wan::log::info(format_args!(
+                "ltx2: I2V first-frame stub encode from {}",
+                image_path.display()
+            ));
+        }
         let mut step_s = Vec::new();
         let mut observer = observer;
         let video_seq_len = grid1[0] * grid1[1] * grid1[2];

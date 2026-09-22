@@ -459,6 +459,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "fastvideo-mlx"
+version = "0.1.0"
+
+[[package]]
 name = "fastvideo-models"
 version = "0.1.0"
 dependencies = [

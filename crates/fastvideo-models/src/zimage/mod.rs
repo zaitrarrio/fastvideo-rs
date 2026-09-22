@@ -1,6 +1,7 @@
 //! Z-Image host configs (2D DiT T2I). Spec: docs/ports/z-image.md.
 
 use crate::schedulers::FlowMatchEulerDiscreteScheduler;
+use crate::vae::AutoencoderKlConfig;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ZImagePreset {
@@ -107,6 +108,7 @@ impl ZImageTransformerConfig {
 #[derive(Debug, Clone, PartialEq)]
 pub struct ZImageConfig {
     pub dit: ZImageTransformerConfig,
+    pub vae: AutoencoderKlConfig,
     pub flow_shift: f64,
 }
 
@@ -114,6 +116,7 @@ impl ZImageConfig {
     pub fn for_preset(preset: ZImagePreset) -> Self {
         Self {
             dit: ZImageTransformerConfig::turbo(),
+            vae: AutoencoderKlConfig::sd3(),
             flow_shift: preset.flow_shift(),
         }
     }
@@ -121,6 +124,7 @@ impl ZImageConfig {
     pub fn tiny() -> Self {
         Self {
             dit: ZImageTransformerConfig::tiny(),
+            vae: AutoencoderKlConfig::tiny(4),
             flow_shift: 3.0,
         }
     }
