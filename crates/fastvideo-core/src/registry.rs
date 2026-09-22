@@ -843,14 +843,21 @@ pub static STABLE_AUDIO_MODEL_DEFINITIONS: &[FamilyModelDefinition] = &[
     ),
 ];
 
-/// MMAudio T2A/V2A Hub ids (reserved; prefer `MMAUDIO_MODEL_PATH`).
+/// MMAudio T2A/V2A Hub ids.
+///
+/// Public upstream pack is `hkchengrex/MMAudio` (native `.pth`, not Diffusers).
+/// Diffusers conversion remains `FastVideo/MMAudio-large-44k-v2-Diffusers`
+/// (reserved). Prefer `MMAUDIO_MODEL_PATH` for a local converted layout.
 pub static MMAUDIO_MODEL_DEFINITIONS: &[FamilyModelDefinition] = &[
     family_defn!(
         ModelFamily::MmAudio,
         "mmaudio_large_44k_v2",
-        &["FastVideo/MMAudio-large-44k-v2-Diffusers"],
+        &[
+            "hkchengrex/MMAudio",
+            "FastVideo/MMAudio-large-44k-v2-Diffusers",
+        ],
         &[WorkloadType::V2A, WorkloadType::T2A],
-        match_any = &["mmaudio-large", "mmaudio"]
+        match_any = &["mmaudio-large", "mmaudio", "mmaudio_large_44k_v2"]
     ),
 ];
 
@@ -1245,6 +1252,9 @@ mod tests {
         let mma = resolve("FastVideo/MMAudio-large-44k-v2-Diffusers").unwrap();
         assert_eq!(mma.family(), ModelFamily::MmAudio);
         assert!(mma.workload_types().contains(&WorkloadType::V2A));
+        let mma_pub = resolve("hkchengrex/MMAudio").unwrap();
+        assert_eq!(mma_pub.family(), ModelFamily::MmAudio);
+        assert_eq!(mma_pub.preset(), "mmaudio_large_44k_v2");
 
         assert!(resolve("not-a-real/model").is_err());
     }

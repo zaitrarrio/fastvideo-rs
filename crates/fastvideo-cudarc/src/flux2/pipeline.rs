@@ -100,8 +100,31 @@ impl Flux2Pipeline {
         self.vae = Some(AutoencoderKl::zeros(cfg));
     }
 
-    fn encode_text(&self, _prompt: &str) -> Result<CudaTensor> {
-        Ok(CudaTensor::zeros(&[1, 16, self.cfg.dit.joint_attention_dim]))
+    fn encode_text(&self, prompt: &str) -> Result<CudaTensor> {
+        let allow_zeros = self.cfg.dit.num_layers <= 2;
+        let dim = self.cfg.dit.joint_attention_dim;
+        let te = self.root.join("text_encoder");
+        let te2 = self.root.join("text_encoder_2");
+        let enc_dir = if te2.is_dir() { te2 } else { te };
+        crate::text_encode::zeros_or_encode(allow_zeros, &[1, 16, dim], &enc_dir, || {
+            if self.root.join("text_encoder_2").is_dir() {
+                let emb = crate::text_encode::encode_t5_xxl(
+                    &self.root,
+                    "text_encoder_2",
+                    "tokenizer_2",
+                    prompt,
+                    512,
+                )?;
+                return crate::text_encode::broadcast_to_dim(&emb, dim);
+            }
+            let emb = crate::text_encode::encode_clip_l_hidden(
+                &self.root,
+                "text_encoder",
+                "tokenizer",
+                prompt,
+            )?;
+            crate::text_encode::broadcast_to_dim(&emb, dim)
+        })
     }
 
     pub fn generate(&self, request: &Flux2Request, out_path: &Path) -> Result<()> {

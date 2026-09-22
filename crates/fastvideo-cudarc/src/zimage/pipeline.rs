@@ -3,7 +3,7 @@
 use std::path::{Path, PathBuf};
 
 use fastvideo_models::vae::AutoencoderKlConfig;
-use fastvideo_models::zimage::{ZImageConfig, ZImagePreset, ZImageTransformerConfig};
+use fastvideo_models::zimage::{ZImageConfig, ZImagePreset};
 use rand::SeedableRng;
 use rand_distr::{Distribution, StandardNormal};
 
@@ -101,9 +101,13 @@ impl ZImagePipeline {
         self.vae = Some(AutoencoderKl::zeros(cfg));
     }
 
-    fn encode_text(&self, _prompt: &str) -> Result<CudaTensor> {
-        // Qwen3 encode hook: zeros until `text_encoder/` + tokenizer present.
-        Ok(CudaTensor::zeros(&[1, 16, self.cfg.dit.cap_feat_dim]))
+    fn encode_text(&self, prompt: &str) -> Result<CudaTensor> {
+        let allow_zeros = self.cfg.dit.n_layers <= 2 || self.cfg.dit.dim < 1000;
+        let dim = self.cfg.dit.cap_feat_dim;
+        let te = self.root.join("text_encoder");
+        crate::text_encode::zeros_or_encode(allow_zeros, &[1, 16, dim], &te, || {
+            crate::text_encode::encode_qwen3_cap(&self.root, prompt, 512, dim)
+        })
     }
 
     pub fn generate(&self, request: &ZImageRequest, out_path: &Path) -> Result<()> {

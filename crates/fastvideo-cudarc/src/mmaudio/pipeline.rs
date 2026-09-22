@@ -89,16 +89,71 @@ impl MmAudioPipeline {
         });
     }
 
-    fn encode_text(&self, _prompt: &str) -> Result<CudaTensor> {
-        Ok(CudaTensor::zeros(&[1, 16, self.cfg.dit.text_dim]))
+    fn encode_text(&self, prompt: &str) -> Result<CudaTensor> {
+        let allow_zeros = self.cfg.dit.num_layers <= 2;
+        let dim = self.cfg.dit.text_dim;
+        let te = self.root.join("text_encoder");
+        crate::text_encode::zeros_or_encode(allow_zeros, &[1, 16, dim], &te, || {
+            let map = WeightMap::open(&te).map_err(|e| msg(e.to_string()))?;
+            if map.contains("encoder.block.0.layer.0.SelfAttention.q.weight")
+                || map.contains("shared.weight")
+                || map.contains("encoder.embed_tokens.weight")
+            {
+                let emb = crate::text_encode::encode_t5_11b(
+                    &self.root,
+                    "text_encoder",
+                    "tokenizer",
+                    prompt,
+                    64,
+                )?;
+                return crate::text_encode::broadcast_to_dim(&emb, dim);
+            }
+            let emb = crate::text_encode::encode_clip_l_hidden(
+                &self.root,
+                "text_encoder",
+                "tokenizer",
+                prompt,
+            )?;
+            crate::text_encode::broadcast_to_dim(&emb, dim)
+        })
     }
 
     fn encode_visual(&self, path: Option<&Path>) -> Result<Option<CudaTensor>> {
-        if path.is_none() {
+        let Some(p) = path else {
             return Ok(None);
+        };
+        let allow_zeros = self.cfg.dit.num_layers <= 2;
+        let dim = self.cfg.dit.visual_dim;
+        let ve = self.root.join("image_encoder");
+        if !ve.is_dir() && !allow_zeros {
+            return Err(msg(format!(
+                "MMAudio V2A: video path {} set but missing {} (Synchformer/CLIP visual)",
+                p.display(),
+                ve.display()
+            )));
         }
-        // Synchformer/CLIP visual encode hook — zeros until weights present.
-        Ok(Some(CudaTensor::zeros(&[1, 16, self.cfg.dit.visual_dim])))
+        if !ve.is_dir() {
+            return Ok(Some(CudaTensor::zeros(&[1, 16, dim])));
+        }
+        // Visual graph: reuse CLIP sequence path when weights look like CLIP;
+        // otherwise clear error (no silent zeros with weights present).
+        let map = WeightMap::open(&ve).map_err(|e| msg(e.to_string()))?;
+        if map.contains("text_model.embeddings.token_embedding.weight")
+            || map.contains("vision_model.embeddings.patch_embedding.weight")
+            || map.contains("embeddings.patch_embedding.weight")
+        {
+            // Frame path reserved for Synchformer; until wired, CLIP text tower
+            // on the prompt is not correct for visual — error clearly.
+            return Err(msg(format!(
+                "MMAudio: {} present (visual keys detected) but Synchformer frame encode \
+                 is not wired yet; refuse zeros with weights present",
+                ve.display()
+            )));
+        }
+        Err(msg(format!(
+            "MMAudio: {} present but no recognized Synchformer/CLIP visual keys",
+            ve.display()
+        )))
     }
 
     pub fn generate(&self, request: &MmAudioRequest, out_path: &Path) -> Result<()> {

@@ -272,8 +272,8 @@ impl ClipTextModel {
         })
     }
 
-    /// `input_ids` length ≤ `max_position_embeddings` → pooled `[1, hidden]`.
-    pub fn encode_pooled(&self, input_ids: &[u32]) -> Result<CudaTensor> {
+    /// Full last-layer hidden states `[1, S, D]` (pre-pool).
+    pub fn encode_hidden(&self, input_ids: &[u32]) -> Result<CudaTensor> {
         let s = input_ids.len();
         if s == 0 || s > self.cfg.max_position_embeddings {
             return Err(msg(format!(
@@ -290,15 +290,19 @@ impl ClipTextModel {
         for layer in &self.layers {
             h = layer.forward(&h, &mask)?;
         }
-        h = nn::layer_norm(
+        nn::layer_norm(
             &h,
             self.cfg.layer_norm_eps,
             Some(&self.final_ln_w),
             Some(&self.final_ln_b),
-        )?;
+        )
+    }
+
+    /// `input_ids` length ≤ `max_position_embeddings` → pooled `[1, hidden]`.
+    pub fn encode_pooled(&self, input_ids: &[u32]) -> Result<CudaTensor> {
+        let h = self.encode_hidden(input_ids)?;
         let eos_pos = pool_eos_index(input_ids, self.cfg.eos_token_id);
-        let row = h.narrow(1, eos_pos, 1)?.squeeze(1)?; // [1, D]
-        Ok(row)
+        h.narrow(1, eos_pos, 1)?.squeeze(1) // [1, D]
     }
 }
 
@@ -322,6 +326,23 @@ pub fn encode_pooled_from_dir(root: &Path, prompt: &str) -> Result<CudaTensor> {
     let map = WeightMap::open(&root.join("text_encoder_2")).map_err(|e| msg(e.to_string()))?;
     let model = ClipTextModel::load(&map, cfg)?;
     model.encode_pooled(&ids)
+}
+
+/// Encode CLIP-L sequence embeds from `text_encoder/` + `tokenizer/` (FLUX/SD3).
+pub fn encode_hidden_from_dir(
+    root: &Path,
+    text_encoder_subdir: &str,
+    tokenizer_subdir: &str,
+    prompt: &str,
+) -> Result<CudaTensor> {
+    use fastvideo_models::kandinsky5::tokenize_clip_at;
+    let cfg = ClipTextConfig::vit_l_14();
+    let ids = tokenize_clip_at(root, tokenizer_subdir, prompt, cfg.max_position_embeddings)
+        .map_err(msg)?;
+    let map =
+        WeightMap::open(&root.join(text_encoder_subdir)).map_err(|e| msg(e.to_string()))?;
+    let model = ClipTextModel::load(&map, cfg)?;
+    model.encode_hidden(&ids)
 }
 
 #[cfg(test)]

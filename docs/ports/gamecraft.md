@@ -43,6 +43,6 @@ layout (same family lineage; GameCraft predates HY 1.5 but shares block shape).
 | cudarc DiT (reuse Hunyuan15 with 33-ch) + tiny forward | landed |
 | Generate scaffold | landed |
 | Plücker trajectory builder (`create_camera_trajectory`) | landed |
-| CameraNet CNN fuse into Hunyuan15 DiT | external blocker (needs `camera_net.*` weights) |
+| CameraNet CNN fuse into Hunyuan15 DiT | probe+inject when `camera_net.*` keys present (`world_fuse`) |
 
 Host path reuses Hunyuan15 encode/denoise/VAE; no refuse stubs for those cores.

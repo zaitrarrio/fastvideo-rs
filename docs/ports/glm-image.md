@@ -42,4 +42,4 @@ VAE: AutoencoderKL 16-ch (SD3-style).
 | Registry + CLI T2I path | landed |
 | cudarc DiT (tiny zeros + load hook) | landed |
 | Generate scaffold | landed |
-| GLM AR encoder / full weight parity | external blocker |
+| GLM AR encoder / full weight parity | CLIP broadcast when CLIP keys present; else clear GLM AR error; Hub probes |

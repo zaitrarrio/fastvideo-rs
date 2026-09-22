@@ -107,8 +107,35 @@ impl StableAudioPipeline {
         });
     }
 
-    fn encode_text(&self, _prompt: &str) -> Result<CudaTensor> {
-        Ok(CudaTensor::zeros(&[1, 16, self.cfg.dit.cross_attention_dim]))
+    fn encode_text(&self, prompt: &str) -> Result<CudaTensor> {
+        let allow_zeros = self.cfg.dit.num_layers <= 2;
+        let dim = self.cfg.dit.cross_attention_dim;
+        let te = self.root.join("text_encoder");
+        crate::text_encode::zeros_or_encode(allow_zeros, &[1, 16, dim], &te, || {
+            // Stable Audio Open: T5 projected to cross_attention_dim (often 768).
+            // Prefer T5-11B when d_model matches after broadcast; else CLIP-L.
+            let map = WeightMap::open(&te).map_err(|e| msg(e.to_string()))?;
+            if map.contains("encoder.block.0.layer.0.SelfAttention.q.weight")
+                || map.contains("encoder.embed_tokens.weight")
+                || map.contains("shared.weight")
+            {
+                let emb = crate::text_encode::encode_t5_11b(
+                    &self.root,
+                    "text_encoder",
+                    "tokenizer",
+                    prompt,
+                    64,
+                )?;
+                return crate::text_encode::broadcast_to_dim(&emb, dim);
+            }
+            let emb = crate::text_encode::encode_clip_l_hidden(
+                &self.root,
+                "text_encoder",
+                "tokenizer",
+                prompt,
+            )?;
+            crate::text_encode::broadcast_to_dim(&emb, dim)
+        })
     }
 
     pub fn generate(&self, request: &StableAudioRequest, out_path: &Path) -> Result<()> {

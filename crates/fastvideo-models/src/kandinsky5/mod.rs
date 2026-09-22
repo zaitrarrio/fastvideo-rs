@@ -9,4 +9,4 @@ pub mod text;
 pub use config::{Kandinsky5Preset, Kandinsky5TransformerConfig};
 pub use rope::{apply_rope, rope_1d, rope_3d};
 pub use schedule::Kandinsky5Schedule;
-pub use text::tokenize_clip;
+pub use text::{tokenize_clip, tokenize_clip_at};

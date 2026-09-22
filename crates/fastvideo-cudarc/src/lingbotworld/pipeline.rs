@@ -106,7 +106,11 @@ impl LingBotWorldPipeline {
             msg("LingBot-World: call load_dit() after placing Diffusers `transformer/` under --weights")
         })?;
         let cam_emb = self.camera_embedding(request);
-        let _ = (&request.image_path, &request.prompt, &cam_emb);
+        let fuse = crate::world_fuse::WorldFuse::try_load(
+            &self.root,
+            crate::world_fuse::FuseKind::CamInjector,
+            self.cfg.wan.out_channels,
+        )?;
 
         let spat = 8usize;
         let temp = 4usize;
@@ -135,11 +139,17 @@ impl LingBotWorldPipeline {
         let enc = CudaTensor::zeros(&[1, 16, self.cfg.wan.text_dim]);
         for &t in &timesteps {
             let lat = CudaTensor::from_vec(sample.clone(), vec![1, c, lt, lh, lw])?;
+            let lat = if let Some(ref f) = fuse {
+                f.fuse_into_latents(&lat, &cam_emb)?
+            } else {
+                lat
+            };
             let ts = CudaTensor::from_vec(vec![t as f32], vec![1])?;
             let pred = dit.forward(&lat, &ts, &enc)?;
             let vel = pred.host_cow()?;
             sample = sched.step_euler(&sample, &vel[..n]).map_err(msg)?;
         }
+        let _ = (&request.image_path, &request.prompt);
 
         let vae = self.vae.as_ref().ok_or_else(|| {
             msg("LingBot-World: call load_vae() after placing Diffusers `vae/` under --weights")

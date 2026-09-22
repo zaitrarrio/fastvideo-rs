@@ -107,12 +107,11 @@ impl GameCraftPipeline {
         })?;
         // Plücker [F,6,H,W] for CameraNet; fused into DiT when camera_net weights load.
         let camera_states = self.camera_states(request);
-        let _ = (
-            &camera_states,
-            &request.image_path,
-            &request.prompt,
-            request.guidance_scale,
-        );
+        let fuse = crate::world_fuse::WorldFuse::try_load(
+            &self.root,
+            crate::world_fuse::FuseKind::CameraNet,
+            self.cfg.hy.in_channels,
+        )?;
 
         let spat = 16usize;
         let temp = 4usize;
@@ -144,6 +143,11 @@ impl GameCraftPipeline {
             packed[..n].copy_from_slice(&sample);
             let _ = pad_c;
             let lat = CudaTensor::from_vec(packed, vec![1, c_in, lt, lh, lw])?;
+            let lat = if let Some(ref f) = fuse {
+                f.fuse_into_latents(&lat, &camera_states)?
+            } else {
+                lat
+            };
             let pred = dit.forward(&lat, &text, None, t as f32)?;
             // Flatten token or dense pred into CTHW velocity of length n.
             let ph = pred.host_cow()?;
@@ -152,6 +156,7 @@ impl GameCraftPipeline {
             vel[..copy].copy_from_slice(&ph[..copy]);
             sample = sched.inner.step_euler(&sample, &vel).map_err(msg)?;
         }
+        let _ = (&request.image_path, &request.prompt, request.guidance_scale);
 
         let vae = self.vae.as_ref().ok_or_else(|| {
             msg("GameCraft: call load_vae() after placing Diffusers `vae/` under --weights")

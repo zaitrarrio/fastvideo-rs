@@ -11,4 +11,4 @@ pub use config::{CosmosPreset, CosmosTransformerConfig, ExtraPosEmbed};
 pub use rope::{apply_rope_real, rope_cos_sin};
 pub use schedule::CosmosSchedule;
 pub use t5_config::T5Config;
-pub use text::tokenize_t5;
+pub use text::{tokenize_t5, tokenize_t5_at};

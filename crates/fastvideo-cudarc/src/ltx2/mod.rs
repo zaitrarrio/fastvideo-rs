@@ -20,6 +20,7 @@ pub mod text;
 pub mod text_cache;
 pub mod transformer;
 pub mod vae;
+pub mod vae_encoder;
 pub mod vocoder;
 
 #[cfg(test)]

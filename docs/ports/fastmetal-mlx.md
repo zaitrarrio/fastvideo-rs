@@ -19,6 +19,24 @@ compiles the scaffold and asserts platform gating.
 
 ---
 
+## Metal / mlx-rs gate
+
+[`mlx-rs`](https://crates.io/crates/mlx-rs) **0.25+** exists and exposes Metal
+(`features = ["metal"]`), but it only builds on Apple Silicon. This tree:
+
+- Ships host stubs (`MlxArrayStub`, `MetalGate`) that compile everywhere.
+- Does **not** declare `mlx-rs` in workspace `Cargo.toml` (keeps x86_64/Linux CI green).
+- Documents the target-specific dep to add on an aarch64 Mac when wiring graphs:
+
+```toml
+[target.'cfg(all(target_os = "macos", target_arch = "aarch64"))'.dependencies]
+mlx-rs = { version = "0.25", optional = true, default-features = false, features = ["metal"] }
+```
+
+`MetalGate::metal_ready()` stays false until that dep is linked.
+
+---
+
 ## Hub ids
 
 | preset | Hub id | notes |
@@ -38,6 +56,6 @@ CUDA FastWan-QAD remains the NVIDIA path; do not load MLX packs into cudarc.
 |---|---|
 | Spec (this file) | landed |
 | `fastvideo-mlx` crate (configs + scaffold generate) | landed |
-| Platform gate + tiny tests | landed |
-| mlx-rs / Metal DiT + TAEHV | external blocker (Apple Silicon + MLX bindings) |
+| Platform / Metal gate + host `MlxArrayStub` + weights layout check | landed |
+| mlx-rs / Metal DiT + TAEHV | external (Apple Silicon + target-specific mlx-rs dep) |
 | Registry Hub ids for CLI list | deferred (CUDA registry stays NVIDIA; MLX is separate entry) |

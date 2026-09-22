@@ -1,13 +1,14 @@
-//! Minimal Z-Image 2D DiT graph (tiny zeros + load hook).
+//! Minimal Z-Image 2D DiT graph (tiny zeros + Diffusers key probes).
 //!
 //! Full 30-layer noise/context refiners land with weight parity; this module
 //! provides a shape-correct forward for host unit tests and generate scaffold.
 
 use fastvideo_models::zimage::ZImageTransformerConfig;
 
+use crate::hub_keys::{self, zimage as zkeys};
 use crate::wan::pipeline::{PipelineError, Result};
 use crate::wan::tensor::CudaTensor;
-use crate::wan::weights::WeightMap;
+use crate::wan::weights::{self, WeightMap};
 
 fn msg(s: impl Into<String>) -> PipelineError {
     PipelineError::Message(s.into())
@@ -23,6 +24,8 @@ pub struct ZImageTransformer {
     pub out_b: CudaTensor,
     /// AdaLN timestep MLP (tiny: dim → dim).
     pub time_w: CudaTensor,
+    /// First Diffusers probe key that matched (if any).
+    pub loaded_key: Option<String>,
 }
 
 impl ZImageTransformer {
@@ -36,15 +39,50 @@ impl ZImageTransformer {
             out_b: CudaTensor::zeros(&[in_f]),
             time_w: CudaTensor::zeros(&[cfg.dim, cfg.dim]),
             cfg,
+            loaded_key: None,
         })
     }
 
-    /// Load hook: currently requires zeros-compatible shapes; full key map TBD.
-    pub fn load(cfg: ZImageTransformerConfig, _map: &WeightMap) -> Result<Self> {
-        // Until Diffusers key mapping lands, open path returns zeros so generate
-        // can run structurally after `load_dit` is called with a weights root.
-        let _ = _map;
-        Self::zeros(cfg)
+    /// Load against a Diffusers `transformer/` map.
+    ///
+    /// Expected probes (any one required for full packs): see
+    /// [`crate::hub_keys::zimage::PROBES`]. Tiny configs may fall back to zeros
+    /// when probes miss; full packs error.
+    pub fn load(cfg: ZImageTransformerConfig, map: &WeightMap) -> Result<Self> {
+        let hit = hub_keys::first_present(map, zkeys::PROBES);
+        let tiny = cfg.n_layers <= 2 || cfg.dim < 1000;
+        if hit.is_none() && !tiny {
+            return Err(msg(hub_keys::require_any(map, "zimage", zkeys::PROBES).unwrap_err()));
+        }
+        let mut s = Self::zeros(cfg.clone())?;
+        s.loaded_key = hit;
+        // Best-effort: load final / patch linears when shapes match Diffusers.
+        let p = cfg.patch_size;
+        let in_f = cfg.in_channels * p * p;
+        for key in [
+            "final_layer.linear.weight",
+            "proj_out.weight",
+            "all_x_embedder.weight",
+            "x_embedder.weight",
+        ] {
+            if map.contains(key) {
+                if let Ok(t) = weights::cuda_tensor_shaped(map, key, &[in_f, cfg.dim]) {
+                    if key.contains("embed") {
+                        s.patch_w = t;
+                    } else {
+                        // [out, in] vs [dim, in_f]
+                        if let Ok(t2) = weights::cuda_tensor_shaped(map, key, &[cfg.dim, in_f]) {
+                            s.out_w = t2;
+                        } else {
+                            let _ = t;
+                        }
+                    }
+                } else if let Ok(t) = weights::cuda_tensor_shaped(map, key, &[cfg.dim, in_f]) {
+                    s.out_w = t;
+                }
+            }
+        }
+        Ok(s)
     }
 
     /// Forward: `[1,C,H,W]` latents + text `[1,S,D]` + timestep → same spatial shape.
@@ -73,8 +111,6 @@ impl ZImageTransformer {
                 "zimage spatial {h}x{w} not divisible by patch {p}"
             )));
         }
-        // Identity residual scaled by normalized timestep (keeps denoise stable
-        // for zero-weight tiny graphs).
         let scale = (timestep / self.cfg.t_scale).clamp(0.0, 1.0);
         let data = latents.host_cow()?;
         let mut out = data.to_vec();

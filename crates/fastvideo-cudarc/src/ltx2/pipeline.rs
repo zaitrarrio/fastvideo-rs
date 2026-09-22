@@ -918,16 +918,18 @@ impl Ltx2Pipeline {
         let (mut video, audio) = initial_noise(&cfg, grid1, audio_tokens, req.seed)?;
         if let Some(ref image_path) = req.image_path {
             let spat = cfg.transformer.vae_scale_factors[1];
-            let first = super::i2v_encode::encode_first_frame_stub(
+            let vae_dir = self.weights.join("vae");
+            let first = super::i2v_encode::encode_first_frame(
                 image_path,
                 stage1_h,
                 stage1_w,
                 cfg.transformer.in_channels,
                 spat,
+                Some(vae_dir.as_path()),
             )?;
             video = super::i2v_encode::condition_first_frame(&video, grid1, &first)?;
             crate::wan::log::info(format_args!(
-                "ltx2: I2V first-frame stub encode from {}",
+                "ltx2: I2V first-frame encode from {}",
                 image_path.display()
             ));
         }

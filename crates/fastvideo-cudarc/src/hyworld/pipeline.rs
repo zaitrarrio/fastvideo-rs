@@ -104,7 +104,19 @@ impl HyWorldPipeline {
         })?;
         let pose = self.pose_input(request)?;
         let siglip = self.siglip_tokens();
-        let _ = (&pose, &siglip, &request.image_path, &request.prompt);
+        let action_fuse = crate::world_fuse::WorldFuse::try_load(
+            &self.root,
+            crate::world_fuse::FuseKind::Action,
+            self.cfg.hy.in_channels,
+        )?;
+        let siglip_fuse = crate::world_fuse::WorldFuse::try_load(
+            &self.root,
+            crate::world_fuse::FuseKind::Siglip,
+            self.cfg.hy.in_channels,
+        )?;
+        let mut control = pose.viewmats.clone();
+        control.extend(pose.action_labels.iter().map(|&v| v as f32));
+        control.extend_from_slice(&siglip);
 
         let spat = 16usize;
         let temp = 4usize;
@@ -134,6 +146,13 @@ impl HyWorldPipeline {
             let mut packed = vec![0f32; c_in * spatial];
             packed[..n].copy_from_slice(&sample);
             let lat = CudaTensor::from_vec(packed, vec![1, c_in, lt, lh, lw])?;
+            let mut lat = lat;
+            if let Some(ref f) = action_fuse {
+                lat = f.fuse_into_latents(&lat, &control)?;
+            }
+            if let Some(ref f) = siglip_fuse {
+                lat = f.fuse_into_latents(&lat, &siglip)?;
+            }
             let pred = dit.forward(&lat, &text, None, t as f32)?;
             let ph = pred.host_cow()?;
             let mut vel = vec![0f32; n];
@@ -141,6 +160,7 @@ impl HyWorldPipeline {
             vel[..copy].copy_from_slice(&ph[..copy]);
             sample = sched.inner.step_euler(&sample, &vel).map_err(msg)?;
         }
+        let _ = (&request.image_path, &request.prompt);
 
         let vae = self.vae.as_ref().ok_or_else(|| {
             msg("HY-World: call load_vae() after placing Diffusers `vae/` under --weights")

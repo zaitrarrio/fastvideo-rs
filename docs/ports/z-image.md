@@ -47,8 +47,8 @@ Schedule: FlowMatch Euler, `sigma_min=0`, reference discrete timesteps.
 | Registry + CLI T2I path | landed |
 | cudarc DiT (tiny zeros + load hook) | landed |
 | Generate scaffold (noise → DiT → VAE → PNG) | landed |
-| Qwen3 text encode | external blocker (zeros tokens until encoder weights) |
-| AutoencoderKL decode path (structured upsample + scale) | landed |
-| Full 30-layer DiT / VAE weight key parity | external blocker (needs Hub weights + key map) |
+| Qwen3 text encode | landed when `text_encoder/` present (Qwen3-VL-4B tap); else clear error / tiny zeros |
+| AutoencoderKL decode + encode path | landed |
+| Full 30-layer DiT / VAE weight key parity | Hub-gated (probes in `hub_keys::zimage`) |
 
 Host path: no refuse stubs for denoise/VAE decode when graphs are present.

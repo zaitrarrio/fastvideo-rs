@@ -1,20 +1,55 @@
-//! LTX-2 I2V first-frame VAE **encode stub**.
+//! LTX-2 I2V first-frame VAE encode.
 //!
-//! Full `AutoencoderKLLTX2Video` encoder is not wired yet. This path loads an
-//! RGB still, nearest-downsamples by the VAE spatial factor (32), and expands
-//! into 128 latent channels so generate can condition the first latent frame
-//! instead of refusing `--image`.
+//! Prefers [`super::vae_encoder::VideoEncoder`] when Diffusers `encoder.*`
+//! keys are present under `vae/`. Otherwise uses a spatial downsample stub so
+//! `--image` still conditions frame 0 instead of refusing.
 
 use std::path::Path;
 
+use fastvideo_models::ltx2::config::Ltx2VideoVaeConfig;
+
 use crate::wan::pipeline::{PipelineError, Result};
 use crate::wan::tensor::CudaTensor;
+use crate::wan::weights::WeightMap;
+
+use super::vae_encoder::VideoEncoder;
 
 fn msg(s: impl Into<String>) -> PipelineError {
     PipelineError::Message(s.into())
 }
 
 /// Encode a first-frame image into a single latent frame `[1, C, 1, H, W]`.
+///
+/// When `vae_dir` contains encoder keys, runs the real (partial) Diffusers
+/// encoder path; otherwise falls back to spatial stub.
+pub fn encode_first_frame(
+    path: &Path,
+    pixel_height: usize,
+    pixel_width: usize,
+    latent_channels: usize,
+    spatial_compression: usize,
+    vae_dir: Option<&Path>,
+) -> Result<CudaTensor> {
+    if let Some(dir) = vae_dir {
+        if dir.is_dir() {
+            let map = WeightMap::open(dir).map_err(|e| msg(e.to_string()))?;
+            let mut cfg = Ltx2VideoVaeConfig::ltx2_19b();
+            cfg.latent_channels = latent_channels;
+            if let Some(enc) = VideoEncoder::try_load(&map, &cfg)? {
+                return enc.encode_first_frame(path, pixel_height, pixel_width);
+            }
+        }
+    }
+    encode_first_frame_stub(
+        path,
+        pixel_height,
+        pixel_width,
+        latent_channels,
+        spatial_compression,
+    )
+}
+
+/// Spatial downsample stub (no `encoder.*` weights).
 pub fn encode_first_frame_stub(
     path: &Path,
     pixel_height: usize,
@@ -67,7 +102,7 @@ pub fn encode_first_frame_stub(
     CudaTensor::from_vec(lat, vec![1, latent_channels, 1, lh, lw]).map_err(Into::into)
 }
 
-/// Overwrite frame 0 of packed video tokens with the stub-encoded still.
+/// Overwrite frame 0 of packed video tokens with the encoded still.
 pub fn condition_first_frame(
     packed_video: &CudaTensor,
     grid: [usize; 3],
@@ -99,11 +134,10 @@ pub fn condition_first_frame(
     }
     let mut host = video.host_cow()?.to_vec();
     let cond = first_frame.host_cow()?;
-    // Blend: replace first frame with conditioned latent (noise_aug ≈ 0 for stub).
     for ch in 0..c {
         for y in 0..h {
             for x in 0..w {
-                let dst = ((ch * f) * h + y) * w + x; // frame 0
+                let dst = ((ch * f) * h + y) * w + x;
                 let src = (ch * h + y) * w + x;
                 host[dst] = cond[src];
             }
@@ -116,7 +150,7 @@ pub fn condition_first_frame(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use image::{RgbImage, Rgb};
+    use image::{Rgb, RgbImage};
 
     #[test]
     fn stub_encode_shape() {

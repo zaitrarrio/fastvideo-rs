@@ -101,8 +101,31 @@ impl GlmImagePipeline {
         self.vae = Some(AutoencoderKl::zeros(cfg));
     }
 
-    fn encode_text(&self, _prompt: &str) -> Result<CudaTensor> {
-        Ok(CudaTensor::zeros(&[1, 16, self.cfg.dit.text_embed_dim]))
+    fn encode_text(&self, prompt: &str) -> Result<CudaTensor> {
+        let allow_zeros = self.cfg.dit.num_layers <= 2;
+        let dim = self.cfg.dit.text_embed_dim;
+        let te = self.root.join("text_encoder");
+        crate::text_encode::zeros_or_encode(allow_zeros, &[1, 16, dim], &te, || {
+            // Prefer CLIP sequence + channel broadcast; GLM AR tower keys are
+            // distinct — if CLIP keys are absent, fail clearly (no zeros).
+            let map = WeightMap::open(&te).map_err(|e| msg(e.to_string()))?;
+            if map.contains("text_model.embeddings.token_embedding.weight")
+                || map.contains("embeddings.token_embedding.weight")
+            {
+                let emb = crate::text_encode::encode_clip_l_hidden(
+                    &self.root,
+                    "text_encoder",
+                    "tokenizer",
+                    prompt,
+                )?;
+                return crate::text_encode::broadcast_to_dim(&emb, dim);
+            }
+            Err(msg(format!(
+                "glm_image: {} present but GLM AR / CLIP text keys not recognized \
+                 (need text_model.embeddings.token_embedding.weight or GLM AR pack)",
+                te.display()
+            )))
+        })
     }
 
     pub fn generate(&self, request: &GlmImageRequest, out_path: &Path) -> Result<()> {

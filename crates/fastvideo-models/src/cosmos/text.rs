@@ -8,7 +8,18 @@ pub fn tokenize_t5(
     prompt: &str,
     max_len: usize,
 ) -> Result<(Vec<u32>, Vec<bool>), String> {
-    let path = root.join("tokenizer").join("tokenizer.json");
+    tokenize_t5_at(root, "tokenizer", prompt, max_len)
+}
+
+/// Same as [`tokenize_t5`] but reads `root/{subdir}/tokenizer.json`
+/// (e.g. FLUX `tokenizer_2`, SD3.5 `tokenizer_3`).
+pub fn tokenize_t5_at(
+    root: &Path,
+    subdir: &str,
+    prompt: &str,
+    max_len: usize,
+) -> Result<(Vec<u32>, Vec<bool>), String> {
+    let path = root.join(subdir).join("tokenizer.json");
     if !path.is_file() {
         return Err(format!("missing {}", path.display()));
     }

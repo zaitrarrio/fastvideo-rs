@@ -47,4 +47,4 @@ Small preset: fewer layers (scaffold uses **12**).
 | `fastvideo-models::stable_audio` | landed |
 | Registry + generate (wav scaffold) | landed |
 | cudarc DiT (tiny zeros + load hook) | landed |
-| Audio VAE / T5 encode | external blocker |
+| Audio VAE / T5 encode | T5-11B or CLIP text when `text_encoder/` present; audio VAE still stub decode |

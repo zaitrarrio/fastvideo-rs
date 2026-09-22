@@ -101,8 +101,19 @@ impl FluxPipeline {
         self.vae = Some(AutoencoderKl::zeros(cfg));
     }
 
-    fn encode_text(&self, _prompt: &str) -> Result<CudaTensor> {
-        Ok(CudaTensor::zeros(&[1, 16, self.cfg.dit.joint_attention_dim]))
+    fn encode_text(&self, prompt: &str) -> Result<CudaTensor> {
+        let allow_zeros = self.cfg.dit.num_layers <= 2;
+        let dim = self.cfg.dit.joint_attention_dim;
+        // FLUX.1: T5-XXL in `text_encoder_2` / `tokenizer_2`; CLIP-L is pooled separately.
+        let te = self.root.join("text_encoder_2");
+        crate::text_encode::zeros_or_encode(allow_zeros, &[1, 16, dim], &te, || {
+            let emb =
+                crate::text_encode::encode_t5_xxl(&self.root, "text_encoder_2", "tokenizer_2", prompt, 512)?;
+            if emb.shape.get(2).copied() != Some(dim) {
+                return crate::text_encode::broadcast_to_dim(&emb, dim);
+            }
+            Ok(emb)
+        })
     }
 
     pub fn generate(&self, request: &FluxRequest, out_path: &Path) -> Result<()> {

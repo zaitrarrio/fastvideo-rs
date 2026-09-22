@@ -1,10 +1,13 @@
 # MMAudio — port specification
 
 FastVideo family `mmaudio`: multimodal audio DiT for **V2A** / **T2A**.
-Registered Hub id `FastVideo/MMAudio-large-44k-v2-Diffusers` is reserved but
-not yet public — convert official weights locally and set `MMAUDIO_MODEL_PATH`.
 
-Sources (read 2026-09-22): FastVideo support matrix note on MMAudio.
+Public upstream Hub id: **`hkchengrex/MMAudio`** (native `.pth` layout, not
+Diffusers). Diffusers conversion id `FastVideo/MMAudio-large-44k-v2-Diffusers`
+remains reserved. Convert locally and set `MMAUDIO_MODEL_PATH` to a Diffusers-
+shaped root (`transformer/`, `text_encoder/`, …).
+
+Sources (read 2026-09-22): FastVideo support matrix; hkchengrex/MMAudio.
 
 ---
 
@@ -12,7 +15,8 @@ Sources (read 2026-09-22): FastVideo support matrix note on MMAudio.
 
 | preset | Hub id | notes |
 |---|---|---|
-| `mmaudio_large_44k_v2` | `FastVideo/MMAudio-large-44k-v2-Diffusers` | reserved; use `MMAUDIO_MODEL_PATH` |
+| `mmaudio_large_44k_v2` | `hkchengrex/MMAudio` | public native weights |
+| (alias) | `FastVideo/MMAudio-large-44k-v2-Diffusers` | reserved Diffusers pack |
 
 Sample rate **44100**, workloads **V2A** + **T2A**.
 
@@ -39,4 +43,6 @@ Until public Diffusers config lands, scaffold uses:
 | `fastvideo-models::mmaudio` | landed |
 | Registry + generate (wav scaffold) | landed |
 | cudarc DiT (tiny zeros + load hook) | landed |
-| Public Hub weights / Synchformer+CLIP | external blocker (`MMAUDIO_MODEL_PATH`) |
+| Text encode (T5-11B / CLIP when dirs present) | landed |
+| Synchformer visual encode | external (clear error if `image_encoder/` present without graph) |
+| Public Hub Diffusers conversion | use `MMAUDIO_MODEL_PATH` or convert from `hkchengrex/MMAudio` |

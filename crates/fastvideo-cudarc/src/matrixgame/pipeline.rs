@@ -133,11 +133,15 @@ impl MatrixGamePipeline {
         let dit = self.dit.as_ref().ok_or_else(|| {
             msg("Matrix-Game: call load_dit() after placing Diffusers `transformer/` under --weights")
         })?;
-        // Action tensors are packed for DiT action-module injectors when weights
-        // expose `action_blocks`; until then they travel with the request for
-        // host-side validation / future fuse.
+        // Action tensors packed for DiT action-module injectors.
         let actions = self.resolve_actions(request);
-        let _ = (&request.image_path, &request.prompt, &actions);
+        let fuse = crate::world_fuse::WorldFuse::try_load(
+            &self.root,
+            crate::world_fuse::FuseKind::Action,
+            self.cfg.wan.out_channels,
+        )?;
+        let mut control = actions.keyboard.clone();
+        control.extend_from_slice(&actions.mouse);
 
         let spat = 8usize;
         let temp = 4usize;
@@ -164,11 +168,17 @@ impl MatrixGamePipeline {
         let enc = CudaTensor::zeros(&[1, 16, self.cfg.wan.text_dim]);
         for &t in &timesteps {
             let lat = CudaTensor::from_vec(sample.clone(), vec![1, c, lt, lh, lw])?;
+            let lat = if let Some(ref f) = fuse {
+                f.fuse_into_latents(&lat, &control)?
+            } else {
+                lat
+            };
             let ts = CudaTensor::from_vec(vec![t as f32], vec![1])?;
             let pred = dit.forward(&lat, &ts, &enc)?;
             let vel = pred.host_cow()?;
             sample = sched.step_euler(&sample, &vel[..n]).map_err(msg)?;
         }
+        let _ = (&request.image_path, &request.prompt);
 
         let vae = self.vae.as_ref().ok_or_else(|| {
             msg("Matrix-Game: call load_vae() after placing Diffusers `vae/` under --weights")

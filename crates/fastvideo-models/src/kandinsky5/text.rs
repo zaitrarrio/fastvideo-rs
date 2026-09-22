@@ -4,10 +4,20 @@ use std::path::Path;
 
 /// Diffusers `tokenizer_2` CLIPTokenizer via `tokenizer.json`.
 pub fn tokenize_clip(root: &Path, prompt: &str, max_length: usize) -> Result<Vec<u32>, String> {
-    let path = root.join("tokenizer_2").join("tokenizer.json");
+    tokenize_clip_at(root, "tokenizer_2", prompt, max_length)
+}
+
+/// CLIP tokenize from `root/{subdir}/tokenizer.json` (FLUX/SD3 use `tokenizer/`).
+pub fn tokenize_clip_at(
+    root: &Path,
+    subdir: &str,
+    prompt: &str,
+    max_length: usize,
+) -> Result<Vec<u32>, String> {
+    let path = root.join(subdir).join("tokenizer.json");
     if !path.is_file() {
         return Err(format!(
-            "k5 CLIP: missing {} (need HuggingFace CLIP tokenizer.json)",
+            "CLIP: missing {} (need HuggingFace CLIP tokenizer.json)",
             path.display()
         ));
     }

@@ -41,4 +41,4 @@ Latents packed: VAE 16-ch → DiT **64**-ch (2×2 pack).
 | Registry + CLI T2I path | landed |
 | cudarc DiT (tiny zeros + load hook) | landed |
 | Generate scaffold | landed |
-| CLIP+T5 encode / full weight parity | external blocker |
+| CLIP+T5 encode / full weight parity | T5-XXL via `text_encoder_2` when present; Hub key probes |

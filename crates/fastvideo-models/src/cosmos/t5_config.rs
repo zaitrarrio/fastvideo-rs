@@ -34,6 +34,26 @@ impl T5Config {
         }
     }
 
+    /// `google/t5-v1_1-xxl` encoder half — FLUX.1 / SD3.5 `text_encoder_2` / `_3`.
+    ///
+    /// Diffusers keys: `encoder.embed_tokens|shared`, `encoder.block.{i}.*`,
+    /// `encoder.final_layer_norm.weight`. Gated-GELU (`wi_0` / `wi_1` / `wo`).
+    pub fn t5_xxl() -> Self {
+        Self {
+            vocab_size: 32_128,
+            d_model: 4096,
+            d_kv: 64,
+            d_ff: 10_240,
+            num_heads: 64,
+            num_layers: 24,
+            relative_attention_num_buckets: 32,
+            relative_attention_max_distance: 128,
+            eps: 1e-6,
+            is_gated: true,
+            max_sequence_length: 512,
+        }
+    }
+
     pub fn tiny() -> Self {
         Self {
             vocab_size: 128,
@@ -62,5 +82,13 @@ mod tests {
         assert_eq!(c.num_layers, 24);
         assert!(!c.is_gated);
         assert_eq!(c.max_sequence_length, 512);
+    }
+
+    #[test]
+    fn t5_xxl_matches_flux_joint_dim() {
+        let c = T5Config::t5_xxl();
+        assert_eq!(c.d_model, 4096);
+        assert!(c.is_gated);
+        assert_eq!(c.num_layers, 24);
     }
 }

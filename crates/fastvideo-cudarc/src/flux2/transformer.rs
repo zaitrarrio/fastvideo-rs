@@ -1,7 +1,8 @@
-//! Minimal FLUX.2 DiT graph (tiny zeros + load hook).
+//! Minimal FLUX.2 DiT graph (tiny zeros + Diffusers key probes).
 
 use fastvideo_models::flux2::Flux2TransformerConfig;
 
+use crate::hub_keys::{self, flux2 as fkeys};
 use crate::wan::pipeline::{PipelineError, Result};
 use crate::wan::tensor::CudaTensor;
 use crate::wan::weights::WeightMap;
@@ -12,16 +13,29 @@ fn msg(s: impl Into<String>) -> PipelineError {
 
 pub struct Flux2Transformer {
     pub cfg: Flux2TransformerConfig,
+    pub loaded_key: Option<String>,
 }
 
 impl Flux2Transformer {
     pub fn zeros(cfg: Flux2TransformerConfig) -> Result<Self> {
-        Ok(Self { cfg })
+        Ok(Self {
+            cfg,
+            loaded_key: None,
+        })
     }
 
-    pub fn load(cfg: Flux2TransformerConfig, _map: &WeightMap) -> Result<Self> {
-        let _ = _map;
-        Self::zeros(cfg)
+    pub fn load(cfg: Flux2TransformerConfig, map: &WeightMap) -> Result<Self> {
+        let hit = hub_keys::first_present(map, fkeys::PROBES);
+        let tiny = cfg.num_layers <= 2;
+        if hit.is_none() && !tiny {
+            return Err(msg(
+                hub_keys::require_any(map, "flux2", fkeys::PROBES).unwrap_err(),
+            ));
+        }
+        Ok(Self {
+            cfg,
+            loaded_key: hit,
+        })
     }
 
     pub fn forward(
@@ -37,10 +51,17 @@ impl Flux2Transformer {
         }
         let (b, c, h, w) = (shape[0], shape[1], shape[2], shape[3]);
         if c != self.cfg.in_channels {
-            return Err(msg(format!("flux2 in_channels {} vs {}", c, self.cfg.in_channels)));
+            return Err(msg(format!(
+                "flux2 in_channels {} vs {}",
+                c, self.cfg.in_channels
+            )));
         }
         let scale = (timestep / 1000.0).clamp(0.0, 1.0);
-        let g = if self.cfg.guidance_embeds { guidance / 10.0 } else { 0.0 };
+        let g = if self.cfg.guidance_embeds {
+            guidance / 10.0
+        } else {
+            0.0
+        };
         let data = latents.host_cow()?;
         let mut out = data.to_vec();
         for v in &mut out {
