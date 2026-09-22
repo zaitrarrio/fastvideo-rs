@@ -92,7 +92,9 @@ struct GenerateArgs {
     /// H3 FL2VA last-frame image (PNG or JPEG).
     #[arg(long)]
     last_image: Option<String>,
-    /// H3 Ref2VA image reference (repeatable, ordered). Needs MiniMax-H3 `transformer_ref/`.
+    /// H3 Ref2VA reference (repeatable, ordered). Image / video / audio by
+    /// extension; needs MiniMax-H3 `transformer_ref/`. Video soundtrack and
+    /// standalone audio refs need the audio VAE encoder (next).
     #[arg(long = "ref")]
     references: Vec<String>,
     /// Control / reference frame for Fun Control / Lucy (PNG or JPEG).

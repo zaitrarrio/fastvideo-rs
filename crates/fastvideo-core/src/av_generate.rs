@@ -175,7 +175,7 @@ fn generate_h3(def: &'static FamilyModelDefinition, opts: AvGenerateOptions) -> 
     if def.preset == "minimax_h3" && !has_refs && !has_fl2va {
         return Err(FastVideoError::NotImplemented {
             component: "minimax_h3".into(),
-            detail: "base MiniMax-H3 T2AV schedule/AdaLN not wired; use FastH3 for T2AV, or pass --image/--last-image (FL2VA) / --ref (Ref2VA images)".into(),
+            detail: "base MiniMax-H3 T2AV schedule/AdaLN not wired; use FastH3 for T2AV, or pass --image/--last-image (FL2VA) / --ref (Ref2VA image/video)".into(),
         });
     }
     if has_refs && has_fl2va {
@@ -188,7 +188,7 @@ fn generate_h3(def: &'static FamilyModelDefinition, opts: AvGenerateOptions) -> 
     {
         use fastvideo_cudarc::h3::pipeline::{generate, H3PipelineOptions, H3Request};
         use fastvideo_cudarc::wan::device::resolve_device;
-        use fastvideo_models::h3::reference::{H3ReferenceSpec, ReferenceKind};
+        use fastvideo_models::h3::reference::{infer_reference_kind, H3ReferenceSpec};
 
         resolve_device(&opts.device).map_err(|e| FastVideoError::Message(e.to_string()))?;
         let weights = weights_root(&opts)?;
@@ -210,9 +210,9 @@ fn generate_h3(def: &'static FamilyModelDefinition, opts: AvGenerateOptions) -> 
         request.references = opts
             .reference_images
             .into_iter()
-            .map(|path| H3ReferenceSpec {
-                path,
-                kind: ReferenceKind::Image,
+            .map(|path| {
+                let kind = infer_reference_kind(&path);
+                H3ReferenceSpec { path, kind }
             })
             .collect();
         let recipe = opts.h3_recipe.or_else(|| match def.preset {

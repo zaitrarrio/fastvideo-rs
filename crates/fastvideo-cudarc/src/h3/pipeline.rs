@@ -42,7 +42,8 @@ use fastvideo_models::h3::config::{
 };
 use fastvideo_models::h3::packing::{patchify, H3PackedLayout, KeyframeAnchor};
 use fastvideo_models::h3::reference::{
-    resolve_reference_image_size, validate_references, H3ReferenceSpec, PreparedImageRef,
+    plan_reference_video_canvas, resample_reference_frames, resolve_reference_image_size,
+    trim_reference_num_frames, validate_references, H3ReferenceSpec, PreparedImageRef,
     PreparedReference, ReferenceKind,
 };
 use fastvideo_models::h3::schedule::{H3JointSchedule, H3Schedule};
@@ -612,21 +613,12 @@ impl H3Pipeline {
             return Err(msg("Ref2VA and FL2VA keyframes cannot be combined in one request"));
         }
         if request.is_ref2va() {
-            for r in &request.references {
-                if r.kind != ReferenceKind::Image {
-                    return Err(msg(format!(
-                        "Ref2VA {} references: packing is ready; GPU encode for video/audio is next",
-                        r.kind.as_str()
-                    )));
-                }
-            }
             validate_references(&request.references).map_err(msg)?;
         }
 
         let anchors = request.keyframe_anchors();
-        let (layout, cond_rows) = if request.is_ref2va() {
-            let (prepared, rows) = encode_ref2va_image_rows(&self.root, cfg, &request.references, request.seed)?;
-            let refs: Vec<_> = prepared.into_iter().map(PreparedReference::Image).collect();
+        let (layout, cond_rows, cond_audio_rows) = if request.is_ref2va() {
+            let encoded = encode_ref2va_conditions(&self.root, cfg, &geometry, &request.references, request.seed)?;
             let layout = H3PackedLayout::with_references(
                 text.ids.len(),
                 (
@@ -636,20 +628,21 @@ impl H3Pipeline {
                 ),
                 geometry.audio_latents,
                 cfg.patch_size,
-                &refs,
+                &encoded.prepared,
             )
             .map_err(msg)?;
-            (layout, Some(rows))
+            (layout, Some(encoded.video_rows), encoded.audio_rows)
         } else if anchors.is_empty() {
             (
                 H3PackedLayout::from_geometry(&geometry, text.ids.len()).map_err(msg)?,
+                None,
                 None,
             )
         } else {
             let layout =
                 H3PackedLayout::from_geometry_with_keyframes(&geometry, text.ids.len(), &anchors).map_err(msg)?;
             let rows = encode_fl2va_cond_rows(&self.root, cfg, &geometry, request, &anchors)?;
-            (layout, Some(rows))
+            (layout, Some(rows), None)
         };
         let sequence_length = layout.sequence_length();
         // Interleaved Ref2VA condition audio breaks VSA's contiguous-prefix tiles.
@@ -685,7 +678,7 @@ impl H3Pipeline {
             &self.schedule,
             mode,
             cond_rows.as_ref(),
-            None,
+            cond_audio_rows.as_ref(),
             &mut |step, _, _| {
                 crate::wan::device::synchronize().map_err(|e| msg(e.to_string()))?;
                 step_s.push(last.elapsed().as_secs_f64());
@@ -696,7 +689,7 @@ impl H3Pipeline {
         )?;
         timings.denoise_s = timer.elapsed().as_secs_f64();
         timings.step_s = step_s;
-        drop((vsa, layout, text_refined, cond_rows));
+        drop((vsa, layout, text_refined, cond_rows, cond_audio_rows));
 
         // --- audio first: the WAV must exist before the muxer starts -------------------
         let timer = Instant::now();
@@ -816,63 +809,153 @@ fn encode_fl2va_cond_rows(
     }
 }
 
-/// Encode ordered Ref2VA image references (2048 short-edge canvases).
-fn encode_ref2va_image_rows(
+struct Ref2VaEncoded {
+    prepared: Vec<PreparedReference>,
+    video_rows: CudaTensor,
+    audio_rows: Option<CudaTensor>,
+}
+
+/// Encode ordered Ref2VA references (images at 2048 short-edge; videos at the
+/// clip's own 768-short-edge canvas, trimmed to VAE chunk geometry).
+fn encode_ref2va_conditions(
     root: &Path,
     cfg: &H3TransformerConfig,
+    geometry: &H3Geometry,
     references: &[H3ReferenceSpec],
     seed: u64,
-) -> Result<(Vec<PreparedImageRef>, CudaTensor)> {
+) -> Result<Ref2VaEncoded> {
     let vae_cfg = H3VideoVaeConfig::fasth3_8step();
     let ratio = vae_cfg.spatial_compression_ratio();
     let encoder = H3VideoEncoder::load(vae_cfg, &WeightMap::open(&root.join("vae"))?)?;
     let mut prepared = Vec::with_capacity(references.len());
-    let mut parts = Vec::with_capacity(references.len());
+    let mut video_parts = Vec::new();
     for (i, spec) in references.iter().enumerate() {
-        let img = image::open(&spec.path)
-            .map_err(|e| msg(format!("open {}: {e}", spec.path.display())))?
-            .into_rgb8();
-        let (sw, sh) = (img.width() as usize, img.height() as usize);
-        let (out_h, out_w) = resolve_reference_image_size(sw, sh).map_err(msg)?;
-        let prep = PreparedImageRef::from_pixel_size(out_h, out_w, ratio).map_err(msg)?;
-        crate::wan::log::info(format_args!(
-            "h3 ref2va: encode image {} {}x{} → {}x{} ({})",
-            i + 1,
-            sw,
-            sh,
-            out_w,
-            out_h,
-            spec.path.display()
-        ));
-        let z = encoder.encode_keyframe_file(
-            &spec.path,
-            out_h,
-            out_w,
-            true, // stretch to exact canvas (LANCZOS path via prepare_keyframe stretch)
-            true,
-            seed.wrapping_add(31 + i as u64),
-        )?;
-        let host = z.host_cow()?.into_owned();
-        let shape = [cfg.in_channels, 1, prep.latent_height, prep.latent_width];
-        if host.len() != shape.iter().product::<usize>() {
-            return Err(msg(format!(
-                "h3 ref2va: encoded latent len {} != {:?}",
-                host.len(),
-                shape
-            )));
+        match spec.kind {
+            ReferenceKind::Audio => {
+                return Err(msg(
+                    "Ref2VA audio references: GPU audio VAE encoder is next; pass image/video refs for now",
+                ));
+            }
+            ReferenceKind::Image => {
+                let img = image::open(&spec.path)
+                    .map_err(|e| msg(format!("open {}: {e}", spec.path.display())))?
+                    .into_rgb8();
+                let (sw, sh) = (img.width() as usize, img.height() as usize);
+                let (out_h, out_w) = resolve_reference_image_size(sw, sh).map_err(msg)?;
+                let prep = PreparedImageRef::from_pixel_size(out_h, out_w, ratio).map_err(msg)?;
+                crate::wan::log::info(format_args!(
+                    "h3 ref2va: encode image {} {}x{} → {}x{} ({})",
+                    i + 1,
+                    sw,
+                    sh,
+                    out_w,
+                    out_h,
+                    spec.path.display()
+                ));
+                let z = encoder.encode_keyframe_file(
+                    &spec.path,
+                    out_h,
+                    out_w,
+                    true,
+                    true,
+                    seed.wrapping_add(31 + i as u64),
+                )?;
+                let host = z.host_cow()?.into_owned();
+                let shape = [cfg.in_channels, 1, prep.latent_height, prep.latent_width];
+                if host.len() != shape.iter().product::<usize>() {
+                    return Err(msg(format!(
+                        "h3 ref2va: encoded latent len {} != {:?}",
+                        host.len(),
+                        shape
+                    )));
+                }
+                let rows = patchify(&host, shape, cfg.patch_size).map_err(msg)?;
+                let n_rows = prep.rows_per_frame(cfg.patch_size).map_err(msg)?;
+                video_parts.push(CudaTensor::from_vec(rows, vec![n_rows, cfg.video_patch_dim()])?.to_device()?);
+                prepared.push(PreparedReference::Image(prep));
+            }
+            ReferenceKind::Video => {
+                let max_src = ((geometry.num_frames as f64) * 2.0).ceil() as usize + 8;
+                let max_src = max_src.max(geometry.num_frames + H3_FPS);
+                crate::wan::log::info(format_args!(
+                    "h3 ref2va: decode video {} ({})",
+                    i + 1,
+                    spec.path.display()
+                ));
+                let (raw, src_w, src_h, fps) = super::media::decode_video_rgb(&spec.path, max_src)?;
+                let src_frames = raw.len() / (src_w * src_h * 3);
+                let (resampled, n24) =
+                    resample_reference_frames(&raw, src_frames, src_h, src_w, fps).map_err(msg)?;
+                let keep = n24.min(geometry.num_frames);
+                let (keep, out_h, out_w) =
+                    plan_reference_video_canvas(src_h, src_w, n24, keep).map_err(msg)?;
+                let trimmed = &resampled[..keep * src_h * src_w * 3];
+                let trimmed_n = trim_reference_num_frames(keep).map_err(msg)?.min(keep);
+                let trimmed = &trimmed[..trimmed_n * src_h * src_w * 3];
+                let frames = super::media::resize_rgb_frames(trimmed, trimmed_n, src_h, src_w, out_h, out_w)?;
+                crate::wan::log::info(format_args!(
+                    "h3 ref2va: encode video {} {} frames @ {:.3}fps → {}x{} / {}f ({})",
+                    i + 1,
+                    src_frames,
+                    fps,
+                    out_w,
+                    out_h,
+                    trimmed_n,
+                    spec.path.display()
+                ));
+                let z = encoder.encode_rgb_frames(
+                    &frames,
+                    trimmed_n,
+                    out_h,
+                    out_w,
+                    true,
+                    seed.wrapping_add(31 + i as u64),
+                )?;
+                let host = z.host_cow()?.into_owned();
+                let lt = z.shape[2];
+                let lh = z.shape[3];
+                let lw = z.shape[4];
+                let shape = [cfg.in_channels, lt, lh, lw];
+                if host.len() != shape.iter().product::<usize>() {
+                    return Err(msg(format!(
+                        "h3 ref2va: video latent len {} != {:?}",
+                        host.len(),
+                        shape
+                    )));
+                }
+                let rows = patchify(&host, shape, cfg.patch_size).map_err(msg)?;
+                let n_rows = (lt / cfg.patch_size[0]) * (lh / cfg.patch_size[1]) * (lw / cfg.patch_size[2]);
+                video_parts.push(CudaTensor::from_vec(rows, vec![n_rows, cfg.video_patch_dim()])?.to_device()?);
+                // Soundtrack encode lands with the audio VAE encoder; motion-only until then.
+                if super::media::probe_has_audio(&spec.path).unwrap_or(false) {
+                    crate::wan::log::info(format_args!(
+                        "h3 ref2va: skipping soundtrack on video {} (audio encoder next)",
+                        i + 1
+                    ));
+                }
+                prepared.push(PreparedReference::Video {
+                    num_latent_frames: lt,
+                    latent_height: lh,
+                    latent_width: lw,
+                    num_audio_latents: 0,
+                });
+            }
         }
-        let rows = patchify(&host, shape, cfg.patch_size).map_err(msg)?;
-        let n_rows = prep.rows_per_frame(cfg.patch_size).map_err(msg)?;
-        parts.push(CudaTensor::from_vec(rows, vec![n_rows, cfg.video_patch_dim()])?.to_device()?);
-        prepared.push(prep);
     }
-    let cond = if parts.len() == 1 {
-        parts.pop().unwrap()
+    if video_parts.is_empty() {
+        return Err(msg("Ref2VA requires at least one visual (image/video) reference"));
+    }
+    let video_rows = if video_parts.len() == 1 {
+        video_parts.pop().unwrap()
     } else {
-        let refs: Vec<&CudaTensor> = parts.iter().collect();
+        let refs: Vec<&CudaTensor> = video_parts.iter().collect();
         CudaTensor::cat(&refs, 0)?
     };
-    Ok((prepared, cond))
+    Ok(Ref2VaEncoded {
+        prepared,
+        video_rows,
+        audio_rows: None,
+    })
 }
 
 /// Load, generate one clip, drop everything.

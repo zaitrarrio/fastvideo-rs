@@ -4,7 +4,9 @@
 //! Video/audio decode stays at the call site (cudarc / CLI); this module is the
 //! host contract the packed layout and encoders consume.
 
-use super::config::H3_AUDIO_CHANNELS;
+use super::config::{
+    resolve_canvas_size, H3_AUDIO_CHANNELS, H3_FRAMES_PER_CHUNK, H3_FPS, H3_LATENTS_PER_CHUNK,
+};
 
 /// Released short-edge for reference images (`MINIMAX_H3_REFERENCE_IMAGE_SHORT_EDGE`).
 pub const REFERENCE_IMAGE_SHORT_EDGE: usize = 2048;
@@ -186,6 +188,96 @@ pub fn resolve_reference_image_size(width: usize, height: usize) -> Result<(usiz
     Ok((out_h, out_w))
 }
 
+/// Infer Ref2VA kind from a path extension (CLI `--ref` convenience).
+pub fn infer_reference_kind(path: &std::path::Path) -> ReferenceKind {
+    match path
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("")
+        .to_ascii_lowercase()
+        .as_str()
+    {
+        "mp4" | "mov" | "webm" | "mkv" | "avi" | "m4v" | "mpeg" | "mpg" => ReferenceKind::Video,
+        "wav" | "mp3" | "flac" | "ogg" | "m4a" | "aac" | "opus" => ReferenceKind::Audio,
+        _ => ReferenceKind::Image,
+    }
+}
+
+/// Trim video references to the causal VAE's complete chunk geometry
+/// (`trim_reference_num_frames`): `((n - 5) // 17).max(1) * 17 + 5`.
+pub fn trim_reference_num_frames(num_frames: usize) -> Result<usize, String> {
+    if num_frames < 1 {
+        return Err(format!("a reference video must have at least one frame, got {num_frames}"));
+    }
+    let chunks = (num_frames.saturating_sub(H3_LATENTS_PER_CHUNK)) / H3_FRAMES_PER_CHUNK;
+    Ok(chunks.max(1) * H3_FRAMES_PER_CHUNK + H3_LATENTS_PER_CHUNK)
+}
+
+/// Nearest-resample reference frames onto H3's fixed 24 fps timeline
+/// (FastVideo `resample_reference_frames`: `np.repeat` with slot diffs).
+/// `frames` is `T * H * W * 3` uint8 (channel-last).
+pub fn resample_reference_frames(
+    frames: &[u8],
+    num_frames: usize,
+    height: usize,
+    width: usize,
+    fps: f64,
+) -> Result<(Vec<u8>, usize), String> {
+    let frame_bytes = height.checked_mul(width).and_then(|n| n.checked_mul(3)).ok_or_else(|| {
+        format!("reference video frame size overflow {height}x{width}")
+    })?;
+    if num_frames == 0 || frames.len() != num_frames * frame_bytes {
+        return Err(format!(
+            "reference video must be non-empty RGB frames, got {num_frames} frames / {} bytes",
+            frames.len()
+        ));
+    }
+    if fps <= 0.0 {
+        return Err(format!("a reference video must have a positive frame rate, got {fps}"));
+    }
+    if (fps - H3_FPS as f64).abs() < 1e-9 {
+        return Ok((frames.to_vec(), num_frames));
+    }
+    let scale = H3_FPS as f64 / fps;
+    let mut slots = Vec::with_capacity(num_frames + 1);
+    for i in 0..num_frames {
+        slots.push(((i as f64) * scale + 0.5).floor() as i64);
+    }
+    let append = ((num_frames as f64) * scale + 0.5).floor() as i64;
+    slots.push(append);
+    let out_len: usize = slots.windows(2).map(|w| (w[1] - w[0]).max(0) as usize).sum();
+    if out_len == 0 {
+        return Err("resampling a reference video produced zero frames".into());
+    }
+    let mut out = Vec::with_capacity(out_len * frame_bytes);
+    for i in 0..num_frames {
+        let repeats = (slots[i + 1] - slots[i]).max(0) as usize;
+        let start = i * frame_bytes;
+        for _ in 0..repeats {
+            out.extend_from_slice(&frames[start..start + frame_bytes]);
+        }
+    }
+    Ok((out, out_len))
+}
+
+/// Trim to `num_frames` and resolve a 768-short-edge canvas for the clip's
+/// aspect ratio. Returns `(frames_hwc, out_h, out_w)` — caller still resizes.
+pub fn plan_reference_video_canvas(
+    src_height: usize,
+    src_width: usize,
+    num_frames: usize,
+    keep_frames: usize,
+) -> Result<(usize, usize, usize), String> {
+    if src_height == 0 || src_width == 0 || num_frames == 0 {
+        return Err(format!(
+            "a reference video must be non-empty RGB frames, got {num_frames}x{src_height}x{src_width}"
+        ));
+    }
+    let keep = keep_frames.min(num_frames).max(1);
+    let (out_h, out_w) = resolve_canvas_size(src_width as f64, src_height as f64)?;
+    Ok((keep, out_h, out_w))
+}
+
 /// Validate ordered Ref2VA specs against per-modality and total caps.
 pub fn validate_references(refs: &[H3ReferenceSpec]) -> Result<(), String> {
     if refs.is_empty() {
@@ -235,6 +327,28 @@ mod tests {
         assert_eq!(h.min(w), 2048);
         assert_eq!(h % 32, 0);
         assert_eq!(w % 32, 0);
+    }
+
+    #[test]
+    fn trim_reference_snaps_to_17n_plus_5() {
+        assert_eq!(trim_reference_num_frames(1).unwrap(), 22);
+        assert_eq!(trim_reference_num_frames(22).unwrap(), 22);
+        assert_eq!(trim_reference_num_frames(50).unwrap(), 39);
+        assert_eq!(trim_reference_num_frames(125).unwrap(), 124);
+    }
+
+    #[test]
+    fn resample_doubles_at_half_rate() {
+        let (h, w, t) = (2, 2, 3);
+        let mut frames = vec![0u8; t * h * w * 3];
+        for i in 0..t {
+            frames[i * h * w * 3] = i as u8 + 1;
+        }
+        let (out, n) = resample_reference_frames(&frames, t, h, w, 12.0).unwrap();
+        assert_eq!(n, 6);
+        assert_eq!(out[0], 1);
+        assert_eq!(out[h * w * 3], 1);
+        assert_eq!(out[2 * h * w * 3], 2);
     }
 
     #[test]

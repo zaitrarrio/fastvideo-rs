@@ -371,22 +371,57 @@ impl H3VideoEncoder {
     }
 
     /// Encode RGB video `[1, 3, T, H, W]` already in ImageNet-normalized space.
-    /// Returns de-normalized latents `[1, C, t, h, w]` (mean of moments).
+    /// Returns **normalized** latents `[1, C, t, h, w]` — the DiT / decode
+    /// input convention (`(mean - latents_mean) / latents_std`), matching
+    /// FastVideo `normalize_latents(posterior.mode())`.
+    ///
+    /// `T = 1` skips temporal chunking (FL2VA / image refs). `T > 1` pads to a
+    /// multiple of [`H3VideoVaeConfig::clip_length`], encodes each clip, then
+    /// drops [`H3VideoVaeConfig::token_drop`] trailing latents — matching
+    /// diffusers `_encode`.
     pub fn encode(&self, x: &CudaTensor) -> Result<CudaTensor> {
         if x.rank() != 5 || x.shape[1] != 3 {
             return Err(msg(format!("h3 encode expects [1,3,T,H,W], got {:?}", x.shape)));
         }
-        let moments = if x.shape[2] == 1 {
-            self.encode_clip(x)?
-        } else {
-            return Err(msg(
-                "h3 encode: multi-frame video chunking not wired yet; pass a single keyframe (T=1)",
-            ));
-        };
-        // DiagonalGaussian: first half = mean.
+        let moments = self.encode_temporal(x)?;
+        // DiagonalGaussian: first half = mean (mode).
         let mean = moments.narrow(1, 0, self.cfg.latent_channels)?;
-        // Match decoder's `(z - mean) / std` inverse: store `z = mean * std + mean_shift`.
-        mean.mul(&self.std)?.add(&self.mean)
+        mean.sub(&self.mean)?.div(&self.std)
+    }
+
+    fn encode_temporal(&self, x: &CudaTensor) -> Result<CudaTensor> {
+        let clip = self.cfg.clip_length;
+        let num_frames = x.shape[2];
+        if num_frames == 1 {
+            return self.encode_clip(x);
+        }
+        let mut x = x.clone();
+        if num_frames % clip != 0 {
+            let pad = (clip - num_frames % clip) % clip;
+            let last = x.narrow(2, num_frames - 1, 1)?;
+            let mut parts = Vec::with_capacity(1 + pad);
+            parts.push(x);
+            for _ in 0..pad {
+                parts.push(last.clone());
+            }
+            let refs: Vec<&CudaTensor> = parts.iter().collect();
+            x = CudaTensor::cat(&refs, 2)?;
+        }
+        let n_clips = x.shape[2] / clip;
+        let mut clips = Vec::with_capacity(n_clips);
+        for i in 0..n_clips {
+            clips.push(self.encode_clip(&x.narrow(2, i * clip, clip)?)?);
+        }
+        let refs: Vec<&CudaTensor> = clips.iter().collect();
+        let mut moments = CudaTensor::cat(&refs, 2)?;
+        if self.cfg.token_drop > 0 {
+            let keep = moments.shape[2].saturating_sub(self.cfg.token_drop);
+            if keep == 0 {
+                return Err(msg("h3 encode: token_drop removed every latent frame"));
+            }
+            moments = moments.narrow(2, 0, keep)?;
+        }
+        Ok(moments)
     }
 
     fn encode_clip(&self, x: &CudaTensor) -> Result<CudaTensor> {
@@ -434,6 +469,50 @@ impl H3VideoEncoder {
     ) -> Result<CudaTensor> {
         let rgb = load_rgb_imagenet(path, width, height, stretch)?;
         let x = CudaTensor::from_vec(rgb, vec![1, 3, 1, height, width])?.to_device()?;
+        let mut z = self.encode(&x)?;
+        if noise_aug {
+            z = scale_noise_latent(&z, KEYFRAME_NOISE_AUG, seed)?;
+        }
+        Ok(z)
+    }
+
+    /// Encode a channel-major RGB video already resized to `(height, width)`.
+    /// `frames` is `T * 3 * H * W` in `[0,1]` (or call with ImageNet-normalized
+    /// values via [`Self::encode`] directly). Values here are ImageNet-normalized
+    /// the same way as keyframes.
+    pub fn encode_rgb_frames(
+        &self,
+        frames_u8: &[u8],
+        num_frames: usize,
+        height: usize,
+        width: usize,
+        noise_aug: bool,
+        seed: u64,
+    ) -> Result<CudaTensor> {
+        if frames_u8.len() != num_frames * height * width * 3 || num_frames == 0 {
+            return Err(msg(format!(
+                "h3 encode frames: {} bytes for {num_frames}x{height}x{width}",
+                frames_u8.len()
+            )));
+        }
+        let mut rgb = vec![0f32; num_frames * 3 * height * width];
+        // u8 HWC frames → ImageNet NCHW (channel-major over T).
+        for t in 0..num_frames {
+            for y in 0..height {
+                for x in 0..width {
+                    let src = ((t * height + y) * width + x) * 3;
+                    for c in 0..3 {
+                        let v01 = frames_u8[src + c] as f32 / 255.0;
+                        let mean = H3_PIXEL_MEAN[c] as f32;
+                        let std = H3_PIXEL_STD[c] as f32;
+                        // layout: [C, T, H, W]
+                        let dst = ((c * num_frames + t) * height + y) * width + x;
+                        rgb[dst] = (v01 - mean) / std;
+                    }
+                }
+            }
+        }
+        let x = CudaTensor::from_vec(rgb, vec![1, 3, num_frames, height, width])?.to_device()?;
         let mut z = self.encode(&x)?;
         if noise_aug {
             z = scale_noise_latent(&z, KEYFRAME_NOISE_AUG, seed)?;
