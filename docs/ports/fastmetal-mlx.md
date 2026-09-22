@@ -21,19 +21,35 @@ compiles the scaffold and asserts platform gating.
 
 ## Metal / mlx-rs gate
 
-[`mlx-rs`](https://crates.io/crates/mlx-rs) **0.25+** exists and exposes Metal
-(`features = ["metal"]`), but it only builds on Apple Silicon. This tree:
-
-- Ships host stubs (`MlxArrayStub`, `MetalGate`) that compile everywhere.
-- Does **not** declare `mlx-rs` in workspace `Cargo.toml` (keeps x86_64/Linux CI green).
-- Documents the target-specific dep to add on an aarch64 Mac when wiring graphs:
+[`mlx-rs`](https://crates.io/crates/mlx-rs) **0.25+** is wired as a
+**target-specific optional** dependency (Apple Silicon only):
 
 ```toml
 [target.'cfg(all(target_os = "macos", target_arch = "aarch64"))'.dependencies]
 mlx-rs = { version = "0.25", optional = true, default-features = false, features = ["metal"] }
+
+[features]
+mlx = ["dep:mlx-rs"]
 ```
 
-`MetalGate::metal_ready()` stays false until that dep is linked.
+On x86_64/Linux CI the target dep is skipped entirely. On aarch64 macOS:
+
+```text
+cargo check -p fastvideo-mlx --features mlx
+```
+
+`MetalGate::mlx_rs_linked()` / `metal_ready()` become true only under
+`feature = "mlx"` **and** `aarch64-apple-darwin`.
+
+Documented mlx-rs APIs used (no invented surfaces):
+
+| API | use |
+|---|---|
+| `mlx_rs::ops::zeros::<f32>` | allocate Metal/unified arrays |
+| `mlx_rs::Array::from_slice` | host → Array |
+| `mlx_rs::Device::gpu` + `set_default` | select Metal |
+
+Host stubs (`MlxArrayStub`, `MlxArray` fallback) compile everywhere.
 
 ---
 
@@ -57,5 +73,6 @@ CUDA FastWan-QAD remains the NVIDIA path; do not load MLX packs into cudarc.
 | Spec (this file) | landed |
 | `fastvideo-mlx` crate (configs + scaffold generate) | landed |
 | Platform / Metal gate + host `MlxArrayStub` + weights layout check | landed |
-| mlx-rs / Metal DiT + TAEHV | external (Apple Silicon + target-specific mlx-rs dep) |
+| Target-optional mlx-rs (`Array` / `zeros` / `Device::gpu`) | landed on aarch64 + `--features mlx` |
+| mlx-rs / Metal DiT + TAEHV graphs | external (gate open; graph TBD) |
 | Registry Hub ids for CLI list | deferred (CUDA registry stays NVIDIA; MLX is separate entry) |

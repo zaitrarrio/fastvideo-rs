@@ -1,7 +1,8 @@
 //! LTX-2 I2V first-frame VAE encode.
 //!
 //! Prefers [`super::vae_encoder::VideoEncoder`] when Diffusers `encoder.*`
-//! keys are present under `vae/`. Otherwise uses a spatial downsample stub so
+//! keys are present under `vae/` (full ResNet/downsample stack when
+//! `down_blocks` load). Otherwise uses a spatial downsample stub so
 //! `--image` still conditions frame 0 instead of refusing.
 
 use std::path::Path;

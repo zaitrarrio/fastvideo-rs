@@ -105,10 +105,32 @@ impl GlmImagePipeline {
         let allow_zeros = self.cfg.dit.num_layers <= 2;
         let dim = self.cfg.dit.text_embed_dim;
         let te = self.root.join("text_encoder");
-        crate::text_encode::zeros_or_encode(allow_zeros, &[1, 16, dim], &te, || {
-            // Prefer CLIP sequence + channel broadcast; GLM AR tower keys are
-            // distinct — if CLIP keys are absent, fail clearly (no zeros).
+        let ar = self.root.join("vision_language_encoder");
+
+        if te.is_dir() {
             let map = WeightMap::open(&te).map_err(|e| msg(e.to_string()))?;
+            // Hub layout: ByT5 glyph encoder (d_model=1472).
+            if super::ar_text::byt5_probes::PROBES
+                .iter()
+                .any(|k| map.contains(k))
+            {
+                let emb = super::ar_text::encode_byt5_glyphs(
+                    &self.root,
+                    "text_encoder",
+                    prompt,
+                    256,
+                )?;
+                // AR pack present → run text tower (refuse silent skip).
+                if ar.is_dir() {
+                    let _ = super::ar_text::encode_ar_hidden(
+                        &self.root,
+                        "vision_language_encoder",
+                        prompt,
+                        64,
+                    )?;
+                }
+                return crate::text_encode::broadcast_to_dim(&emb, dim);
+            }
             if map.contains("text_model.embeddings.token_embedding.weight")
                 || map.contains("embeddings.token_embedding.weight")
             {
@@ -120,12 +142,30 @@ impl GlmImagePipeline {
                 )?;
                 return crate::text_encode::broadcast_to_dim(&emb, dim);
             }
-            Err(msg(format!(
-                "glm_image: {} present but GLM AR / CLIP text keys not recognized \
-                 (need text_model.embeddings.token_embedding.weight or GLM AR pack)",
+            return Err(msg(format!(
+                "glm_image: {} present but neither ByT5 (encoder.block/shared.weight) \
+                 nor CLIP text keys recognized",
                 te.display()
-            )))
-        })
+            )));
+        }
+
+        if ar.is_dir() {
+            let emb = super::ar_text::encode_ar_hidden(
+                &self.root,
+                "vision_language_encoder",
+                prompt,
+                64,
+            )?;
+            return crate::text_encode::broadcast_to_dim(&emb, dim);
+        }
+
+        if allow_zeros {
+            return Ok(CudaTensor::zeros(&[1, 16, dim]));
+        }
+        Err(msg(format!(
+            "glm_image: missing text_encoder/ and vision_language_encoder/ under {}",
+            self.root.display()
+        )))
     }
 
     pub fn generate(&self, request: &GlmImageRequest, out_path: &Path) -> Result<()> {

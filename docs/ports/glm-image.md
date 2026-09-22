@@ -42,4 +42,18 @@ VAE: AutoencoderKL 16-ch (SD3-style).
 | Registry + CLI T2I path | landed |
 | cudarc DiT (tiny zeros + load hook) | landed |
 | Generate scaffold | landed |
-| GLM AR encoder / full weight parity | CLIP broadcast when CLIP keys present; else clear GLM AR error; Hub probes |
+| GLM AR encoder / full weight parity | ByT5 glyph (`text_encoder/`) + AR text LM (`vision_language_encoder/`) when present; prior VQ `generate()` deferred |
+
+### Text / AR notes (Diffusers `GlmImagePipeline`)
+
+Hub layout (`zai-org/GLM-Image`):
+
+| dir | class | role |
+|---|---|---|
+| `text_encoder/` | `T5EncoderModel` (ByT5-small, d_model **1472**) | glyph / prompt embeds |
+| `vision_language_encoder/` | `GlmImageForConditionalGeneration` | AR text LM (hidden **4096**, 40 layers) → prior tokens |
+| `tokenizer/` | `ByT5Tokenizer` | byte-level glyph ids |
+
+This tree runs real ByT5 + AR **text** hidden-state graphs when those dirs exist.
+CLIP-only is a legacy fallback, not treated as sufficient when ByT5/AR packs are
+present. Full AR prior VQ token `generate()` + upsample remains external.

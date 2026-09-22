@@ -44,5 +44,16 @@ Until public Diffusers config lands, scaffold uses:
 | Registry + generate (wav scaffold) | landed |
 | cudarc DiT (tiny zeros + load hook) | landed |
 | Text encode (T5-11B / CLIP when dirs present) | landed |
-| Synchformer visual encode | external (clear error if `image_encoder/` present without graph) |
+| Synchformer visual encode (`vfeat_extractor.*`, ~24 fps × 768-d) | landed when `image_encoder/` has Synchformer keys |
 | Public Hub Diffusers conversion | use `MMAUDIO_MODEL_PATH` or convert from `hkchengrex/MMAudio` |
+
+### Synchformer notes
+
+Upstream: [hkchengrex/MMAudio](https://github.com/hkchengrex/MMAudio) `ext/synchformer`
+(MotionFormer visual half) + [v-iashin/Synchformer](https://github.com/v-iashin/Synchformer).
+
+- Input frames **224×224**, partitioned into clips of **16** with stride **8**.
+- Each clip → **8** tokens (Identity time agg) → sequence length
+  `8 * (⌊(T−16)/8⌋ + 1)` ≈ **24 fps** for 8–10 s @ 25 fps sample rate.
+- Feature dim **768**; broadcast into DiT `visual_dim` (1024 scaffold).
+- Clear error if `image_encoder/` exists without Synchformer probes (no silent zeros).

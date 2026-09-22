@@ -12,21 +12,17 @@
 //!
 //! # Metal / mlx-rs gate
 //!
-//! [`mlx-rs`](https://crates.io/crates/mlx-rs) (v0.25+) provides real Metal
-//! bindings but **only builds on Apple Silicon**. This workspace intentionally
-//! does **not** depend on `mlx-rs` in `Cargo.toml` so `cargo check` works on
-//! x86_64 / Linux CI. On an aarch64 Mac, enable with:
+//! [`mlx-rs`](https://crates.io/crates/mlx-rs) **0.25+** is declared as a
+//! **target-specific optional** dependency (Apple Silicon only). On this
+//! workspace's x86_64/Linux CI the dep is skipped. On an aarch64 Mac:
 //!
 //! ```text
 //! cargo check -p fastvideo-mlx --features mlx
 //! ```
 //!
-//! and add a target-specific dependency locally:
-//!
-//! ```toml
-//! [target.'cfg(all(target_os = "macos", target_arch = "aarch64"))'.dependencies]
-//! mlx-rs = { version = "0.25", optional = true, default-features = false, features = ["metal"] }
-//! ```
+//! Linked APIs (from mlx-rs docs, not invented): `Array::from_slice`,
+//! `ops::zeros`, `Device::gpu` / `Device::set_default`. DiT/TAEHV graphs are
+//! still scaffold-only after the gate opens.
 //!
 //! Spec: docs/ports/fastmetal-mlx.md.
 
@@ -36,4 +32,4 @@ pub mod metal;
 
 pub use config::{FastH3MlxPreset, FastMetalPreset, MlxModelSpec};
 pub use generate::{MlxGenerateRequest, MlxGenerateScaffold};
-pub use metal::{MetalGate, MlxArrayStub, MlxDeviceKind};
+pub use metal::{MetalGate, MlxArray, MlxArrayStub, MlxDeviceKind};

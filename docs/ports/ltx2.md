@@ -1230,10 +1230,11 @@ runs one untimed generation first (cache bypassed) and reports the second.
 | layer | status |
 |---|---|
 | First-frame RGB → latent (`ltx2/i2v_encode.rs`) | landed |
-| Diffusers `encoder.*` partial path (`ltx2/vae_encoder.rs`) | landed when keys present |
-| Full `AutoencoderKLLTX2Video` encoder ResNet/downsample parity | external (Hub weights) |
+| Diffusers `encoder.*` full ResNet/downsample (`ltx2/vae_encoder.rs`) | landed when `encoder.down_blocks.*` present |
+| Stem-only `conv_in` fallback | landed when only stem keys present |
 | Spatial stub fallback (no encoder keys) | landed |
 | Per-token timesteps / STG | deferred |
 
-`--image` prefers the Diffusers encoder path when `vae/` has `encoder.*` keys;
-otherwise the spatial stub conditions latent frame 0.
+`--image` prefers the Diffusers encoder path when `vae/` has `encoder.*` keys
+(full stack when down_blocks load; otherwise stem); otherwise the spatial stub
+conditions latent frame 0.

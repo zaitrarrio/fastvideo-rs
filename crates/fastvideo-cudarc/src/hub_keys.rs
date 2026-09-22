@@ -68,6 +68,40 @@ pub mod glm_image {
     ];
 }
 
+/// GLM-Image AR tower under `vision_language_encoder/`.
+pub mod glm_image_ar {
+    pub const PROBES: &[&str] = &[
+        "model.language_model.embed_tokens.weight",
+        "language_model.embed_tokens.weight",
+        "model.embed_tokens.weight",
+        "model.language_model.layers.0.self_attn.q_proj.weight",
+        "language_model.layers.0.self_attn.q_proj.weight",
+    ];
+}
+
+/// GLM-Image ByT5 glyph encoder under `text_encoder/`.
+pub mod glm_image_byt5 {
+    pub const PROBES: &[&str] = &[
+        "encoder.block.0.layer.0.SelfAttention.q.weight",
+        "encoder.embed_tokens.weight",
+        "shared.weight",
+        "encoder.final_layer_norm.weight",
+    ];
+}
+
+/// MMAudio Synchformer visual under `image_encoder/`.
+pub mod mmaudio_synchformer {
+    pub const PROBES: &[&str] = &[
+        "vfeat_extractor.patch_embed_3d.proj.weight",
+        "vfeat_extractor.blocks.0.attn.qkv.weight",
+        "vfeat_extractor.spatial_attn_agg.cls_token",
+        "vfeat_extractor.norm.weight",
+        "patch_embed_3d.proj.weight",
+        "blocks.0.attn.qkv.weight",
+        "spatial_attn_agg.cls_token",
+    ];
+}
+
 /// Stable Audio DiT `transformer/`.
 pub mod stable_audio {
     pub const PROBES: &[&str] = &[
@@ -161,5 +195,8 @@ mod tests {
         assert!(!zimage::PROBES.is_empty());
         assert!(!autoencoder_kl::PROBES.is_empty());
         assert!(!world::CAMERA_NET.is_empty());
+        assert!(!glm_image_ar::PROBES.is_empty());
+        assert!(!mmaudio_synchformer::PROBES.is_empty());
+        assert!(ltx2_vae_encoder::PROBES.iter().any(|k| k.contains("down_blocks")));
     }
 }

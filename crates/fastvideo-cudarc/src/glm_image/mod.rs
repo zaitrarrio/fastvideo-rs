@@ -1,5 +1,6 @@
 //! GLM-Image T2I. Spec: docs/ports/glm-image.md.
 
+pub mod ar_text;
 pub mod pipeline;
 pub mod transformer;
 

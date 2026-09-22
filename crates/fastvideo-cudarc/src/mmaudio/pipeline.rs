@@ -127,7 +127,7 @@ impl MmAudioPipeline {
         let ve = self.root.join("image_encoder");
         if !ve.is_dir() && !allow_zeros {
             return Err(msg(format!(
-                "MMAudio V2A: video path {} set but missing {} (Synchformer/CLIP visual)",
+                "MMAudio V2A: video path {} set but missing {} (Synchformer visual)",
                 p.display(),
                 ve.display()
             )));
@@ -135,24 +135,31 @@ impl MmAudioPipeline {
         if !ve.is_dir() {
             return Ok(Some(CudaTensor::zeros(&[1, 16, dim])));
         }
-        // Visual graph: reuse CLIP sequence path when weights look like CLIP;
-        // otherwise clear error (no silent zeros with weights present).
         let map = WeightMap::open(&ve).map_err(|e| msg(e.to_string()))?;
-        if map.contains("text_model.embeddings.token_embedding.weight")
-            || map.contains("vision_model.embeddings.patch_embedding.weight")
+        if let Some(sync) = super::synchformer::SynchformerVisual::try_load(&map)? {
+            let frames = super::synchformer::load_sync_frames(
+                p,
+                super::synchformer::SEGMENT_SIZE,
+            )?;
+            let feat = sync.encode_frame_chw(&frames)?; // [1, L, 768]
+            return crate::text_encode::broadcast_to_dim(&feat, dim).map(Some);
+        }
+        // CLIP vision keys alone are not Synchformer sync features — refuse.
+        if map.contains("vision_model.embeddings.patch_embedding.weight")
             || map.contains("embeddings.patch_embedding.weight")
+            || map.contains("visual.conv1.weight")
         {
-            // Frame path reserved for Synchformer; until wired, CLIP text tower
-            // on the prompt is not correct for visual — error clearly.
             return Err(msg(format!(
-                "MMAudio: {} present (visual keys detected) but Synchformer frame encode \
-                 is not wired yet; refuse zeros with weights present",
+                "MMAudio: {} has CLIP/vision keys but no Synchformer \
+                 (need vfeat_extractor.patch_embed_3d / spatial_attn_agg); \
+                 refuse zeros with weights present",
                 ve.display()
             )));
         }
         Err(msg(format!(
-            "MMAudio: {} present but no recognized Synchformer/CLIP visual keys",
-            ve.display()
+            "MMAudio: {} present but no recognized Synchformer keys {:?}",
+            ve.display(),
+            super::synchformer::probes::PROBES.iter().take(3).collect::<Vec<_>>()
         )))
     }
 

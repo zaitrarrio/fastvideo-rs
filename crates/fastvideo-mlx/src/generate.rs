@@ -123,9 +123,23 @@ impl MlxGenerateScaffold {
         }
         #[cfg(feature = "mlx")]
         {
-            let _ = (&self.weights, request, out_dir, noise, layout);
+            let _ = (&self.weights, request, out_dir, &noise, &layout);
             if MetalGate::metal_ready() {
-                Err("mlx feature + Metal ready but DiT/TAEHV graph not wired yet".into())
+                // Documented mlx-rs path: select Metal + allocate a real Array.
+                crate::metal::MlxArray::select_metal_device()?;
+                let shape = noise.shape.clone();
+                let _arr = crate::metal::MlxArray::zeros(&shape)?;
+                std::fs::create_dir_all(out_dir).map_err(|e| e.to_string())?;
+                let status = out_dir.join("mlx-metal-status.json");
+                let body = format!(
+                    "{{\n  \"status\": \"metal_gate_ok\",\n  \"hub\": \"{}\",\n  \"gate\": \"{}\",\n  \"noise_shape\": {:?},\n  \"layout\": {:?},\n  \"note\": \"mlx-rs Array allocated; DiT/TAEHV graph not wired yet\"\n}}\n",
+                    self.spec.hub_id(),
+                    MetalGate::status_message(),
+                    shape,
+                    layout
+                );
+                std::fs::write(&status, body).map_err(|e| e.to_string())?;
+                Ok(status)
             } else {
                 Err(format!(
                     "mlx feature enabled but Metal not ready ({})",
