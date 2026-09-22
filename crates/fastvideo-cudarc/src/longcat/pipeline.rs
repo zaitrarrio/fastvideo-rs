@@ -110,12 +110,10 @@ impl LongCatPipeline {
     }
 
     pub fn generate(&self, request: &LongCatRequest, out_dir: &Path) -> Result<()> {
-        let mut cfg = self.dit_cfg.clone();
-        cfg.enable_bsa = request.enable_bsa || self.preset.enable_bsa();
+        let enable_bsa = request.enable_bsa || self.preset.enable_bsa();
         let dit = self.dit.as_ref().ok_or_else(|| {
             msg("LongCat: call load_dit() after placing Diffusers `transformer/` under --weights")
         })?;
-        let _ = cfg; // BSA applied at load time; runtime flag documented.
         let text = self.encode_text(&request.prompt)?;
 
         let (spat, temp) = (8usize, 4usize);
@@ -140,7 +138,7 @@ impl LongCatPipeline {
 
         for (i, &t) in timesteps.iter().enumerate() {
             let lat = CudaTensor::from_vec(sample.clone(), vec![1, c, lt, lh, lw])?;
-            let velocity = dit.forward(&lat, &text, t as f32)?;
+            let velocity = dit.forward_with_bsa(&lat, &text, t as f32, enable_bsa)?;
             let vel = velocity.host_cow()?;
             sample = sched
                 .inner

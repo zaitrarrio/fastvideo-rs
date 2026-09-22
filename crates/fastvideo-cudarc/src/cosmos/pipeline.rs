@@ -24,9 +24,19 @@ fn msg(s: impl Into<String>) -> PipelineError {
 /// Default Diffusers `sigma_conditioning` for Video2World cond frames.
 pub const SIGMA_CONDITIONING: f64 = 0.0001;
 
+/// Diffusers `DEFAULT_NEGATIVE_PROMPT` for Cosmos2VideoToWorldPipeline.
+pub const DEFAULT_NEGATIVE_PROMPT: &str = "The video captures a series of frames showing ugly scenes, static with no motion, motion blur, \
+over-saturation, shaky footage, low resolution, grainy texture, pixelated images, poorly lit areas, \
+underexposed and overexposed scenes, poor color balance, washed out colors, choppy sequences, \
+jerky movements, low frame rate, artifacting, color banding, unnatural transitions, outdated special effects, \
+fake elements, unconvincing visuals, poorly edited content, jump cuts, visual noise, and flickering. \
+Overall, the video is of poor quality.";
+
 #[derive(Debug, Clone)]
 pub struct CosmosRequest {
     pub prompt: String,
+    /// Empty → Diffusers [`DEFAULT_NEGATIVE_PROMPT`] when CFG is on.
+    pub negative_prompt: String,
     pub seed: u64,
     pub height: usize,
     pub width: usize,
@@ -44,6 +54,7 @@ impl CosmosRequest {
     pub fn v2w_2b(prompt: impl Into<String>, seed: u64) -> Self {
         Self {
             prompt: prompt.into(),
+            negative_prompt: String::new(),
             seed,
             height: 704,
             width: 1280,
@@ -54,6 +65,18 @@ impl CosmosRequest {
             preset: CosmosPreset::V2w2b,
             image_path: None,
             sigma_conditioning: SIGMA_CONDITIONING,
+        }
+    }
+
+    pub fn do_classifier_free_guidance(&self) -> bool {
+        self.guidance_scale > 1.0
+    }
+
+    pub fn resolved_negative_prompt(&self) -> &str {
+        if self.negative_prompt.is_empty() {
+            DEFAULT_NEGATIVE_PROMPT
+        } else {
+            &self.negative_prompt
         }
     }
 }
@@ -179,11 +202,83 @@ impl CosmosPipeline {
         Ok((cond_latents, cond_mask, num_cond_latent))
     }
 
+    /// Pack noise/cond into DiT input and build per-frame AdaLN timesteps.
+    fn pack_step(
+        &self,
+        sample: &[f32],
+        cond_latents: &[f32],
+        cond_mask: &[f32],
+        c_in: f64,
+        current_t: f32,
+        t_cond: f32,
+        lt: usize,
+        lh: usize,
+        lw: usize,
+        c: usize,
+    ) -> Result<(CudaTensor, Vec<f32>)> {
+        let spatial = lt * lh * lw;
+        let mut packed = vec![0f32; self.dit_cfg.in_channels * spatial];
+        let mut frame_ts = vec![current_t; lt];
+        for j in 0..spatial {
+            let m = cond_mask[j];
+            let ti = j / (lh * lw);
+            if m > 0.5 {
+                frame_ts[ti] = t_cond;
+            }
+            for ch in 0..c {
+                let idx = ch * spatial + j;
+                let scaled = sample[idx] * c_in as f32;
+                packed[idx] = m * cond_latents[idx] + (1.0 - m) * scaled;
+            }
+            packed[c * spatial + j] = m;
+        }
+        let lat = CudaTensor::from_vec(packed, vec![1, self.dit_cfg.in_channels, lt, lh, lw])?;
+        Ok((lat, frame_ts))
+    }
+
+    fn edm_denoise(
+        &self,
+        sample: &[f32],
+        pred: &CudaTensor,
+        cond_latents: &[f32],
+        cond_mask: &[f32],
+        c_skip: f64,
+        c_out: f64,
+        n: usize,
+        spatial: usize,
+        c: usize,
+    ) -> Result<Vec<f32>> {
+        let ph = pred.host_cow()?;
+        if ph.len() < n {
+            return Err(msg(format!("cosmos pred {} vs {n}", ph.len())));
+        }
+        let mut denoised = vec![0f32; n];
+        for j in 0..n {
+            denoised[j] = c_skip as f32 * sample[j] + c_out as f32 * ph[j];
+        }
+        for j in 0..spatial {
+            let m = cond_mask[j];
+            if m > 0.5 {
+                for ch in 0..c {
+                    let idx = ch * spatial + j;
+                    denoised[idx] = cond_latents[idx];
+                }
+            }
+        }
+        Ok(denoised)
+    }
+
     pub fn generate(&self, request: &CosmosRequest, out_dir: &Path) -> Result<()> {
         let dit = self.dit.as_ref().ok_or_else(|| {
             msg("Cosmos: call load_dit() after placing Diffusers `transformer/` under --weights")
         })?;
-        let text = self.encode_text(&request.prompt)?;
+        let text_pos = self.encode_text(&request.prompt)?;
+        let do_cfg = request.do_classifier_free_guidance();
+        let text_neg = if do_cfg {
+            Some(self.encode_text(request.resolved_negative_prompt())?)
+        } else {
+            None
+        };
 
         let spat = 8usize;
         let temp = 4usize;
@@ -210,44 +305,48 @@ impl CosmosPipeline {
             .collect();
 
         let t_cond = (request.sigma_conditioning / (request.sigma_conditioning + 1.0)) as f32;
+        let fps = Some(request.fps as f32);
 
         for (i, &sigma) in sigmas.iter().enumerate() {
             let (c_in, c_skip, c_out) = CosmosSchedule::edm_coeffs(sigma);
             let current_t = (sigma / (sigma + 1.0)) as f32;
-            // Pack [noise*c_in | condition_mask] with cond frames replaced by init latents.
-            let mut packed = vec![0f32; self.dit_cfg.in_channels * spatial];
-            for j in 0..spatial {
-                let m = cond_mask[j];
-                for ch in 0..c {
-                    let idx = ch * spatial + j;
-                    let scaled = sample[idx] * c_in as f32;
-                    packed[idx] = m * cond_latents[idx] + (1.0 - m) * scaled;
+            let (lat, frame_ts) = self.pack_step(
+                &sample,
+                &cond_latents,
+                &cond_mask,
+                c_in,
+                current_t,
+                t_cond,
+                lt,
+                lh,
+                lw,
+                c,
+            )?;
+
+            let pred_pos = dit.forward(&lat, &text_pos, &frame_ts, fps)?;
+            let mut denoised =
+                self.edm_denoise(&sample, &pred_pos, &cond_latents, &cond_mask, c_skip, c_out, n, spatial, c)?;
+
+            if let Some(neg) = text_neg.as_ref() {
+                let pred_neg = dit.forward(&lat, neg, &frame_ts, fps)?;
+                let denoised_neg = self.edm_denoise(
+                    &sample,
+                    &pred_neg,
+                    &cond_latents,
+                    &cond_mask,
+                    c_skip,
+                    c_out,
+                    n,
+                    spatial,
+                    c,
+                )?;
+                // Diffusers: noise_pred = pos + guidance_scale * (pos - uncond)
+                let g = request.guidance_scale;
+                for j in 0..n {
+                    denoised[j] = denoised[j] + g * (denoised[j] - denoised_neg[j]);
                 }
-                packed[c * spatial + j] = m;
             }
-            let lat =
-                CudaTensor::from_vec(packed, vec![1, self.dit_cfg.in_channels, lt, lh, lw])?;
-            // Scalar timestep: use current_t (cond-frame AdaLN nuance deferred).
-            let _ = t_cond;
-            let pred = dit.forward(&lat, &text, current_t, Some(request.fps as f32))?;
-            let ph = pred.host_cow()?;
-            if ph.len() < n {
-                return Err(msg(format!("cosmos pred {} vs {n}", ph.len())));
-            }
-            // Denoised = c_skip * sample + c_out * pred; then force cond frames.
-            let mut denoised = vec![0f32; n];
-            for j in 0..n {
-                denoised[j] = c_skip as f32 * sample[j] + c_out as f32 * ph[j];
-            }
-            for j in 0..spatial {
-                let m = cond_mask[j];
-                if m > 0.5 {
-                    for ch in 0..c {
-                        let idx = ch * spatial + j;
-                        denoised[idx] = cond_latents[idx];
-                    }
-                }
-            }
+
             let mut deriv = vec![0f32; n];
             for j in 0..n {
                 deriv[j] = (sample[j] - denoised[j]) / (sigma as f32).max(1e-6);
@@ -332,5 +431,14 @@ mod tests {
         let r = CosmosRequest::v2w_2b("a cat", 0);
         assert!(r.image_path.is_none());
         assert!((r.sigma_conditioning - SIGMA_CONDITIONING).abs() < 1e-12);
+        assert!(r.do_classifier_free_guidance());
+        assert_eq!(r.resolved_negative_prompt(), DEFAULT_NEGATIVE_PROMPT);
+    }
+
+    #[test]
+    fn cfg_off_when_scale_one() {
+        let mut r = CosmosRequest::v2w_2b("a cat", 0);
+        r.guidance_scale = 1.0;
+        assert!(!r.do_classifier_free_guidance());
     }
 }

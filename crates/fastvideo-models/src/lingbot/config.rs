@@ -3,6 +3,19 @@
 /// Diffusers / FastVideo prompt template crop (system+user prefix tokens).
 pub const PROMPT_CROP_START: usize = 140;
 
+/// FastVideo `PROMPT_TEMPLATE` for LingBot-Video T2V (Qwen chat turns).
+pub const PROMPT_TEMPLATE: &str = "<|im_start|>system\nGiven a user input that may include a text prompt alone, \
+a text prompt with an image reference, or a text prompt with a video reference \
+or a video reference alone, generate an \"Enhanced prompt\" that provides detailed \
+visual descriptions suitable for video generation. Evaluate the level of detail \
+in the user's input: if it is simple, enrich it by adding specifics about colors, \
+shapes, sizes, textures, lighting, motion dynamics, camera movement, temporal \
+progression, and spatial relationships to create vivid, concrete, and temporally \
+coherent scenes to create vivid and concrete scenes. Please generate only the \
+enhanced description for the prompt below and avoid including any additional \
+commentary or evaluations:<|im_end|>\n<|im_start|>user\n{}<|im_end|>\n\
+<|im_start|>assistant\n";
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LingBotPreset {
     Dense13b,
@@ -39,6 +52,11 @@ pub struct LingBotTransformerConfig {
     pub norm_eps: f32,
     pub num_experts: usize,
     pub num_experts_per_tok: usize,
+    /// Per-expert FFN width when MoE (`moe_intermediate_size`).
+    pub moe_intermediate_size: usize,
+    pub score_func_sigmoid: bool,
+    pub norm_topk_prob: bool,
+    pub routed_scaling_factor: f32,
 }
 
 impl LingBotTransformerConfig {
@@ -59,17 +77,23 @@ impl LingBotTransformerConfig {
             norm_eps: 1e-6,
             num_experts: 0,
             num_experts_per_tok: 8,
+            moe_intermediate_size: 512,
+            score_func_sigmoid: true,
+            norm_topk_prob: true,
+            routed_scaling_factor: 1.0,
         }
     }
 
     pub fn moe_30b() -> Self {
         let mut c = Self::dense_1_3b();
-        // MoE scaffold sizes — refine from Hub config when weights land.
+        // MoE 30B-A3B (FastVideo + Hub packaging): 128 experts, 8 active.
         c.hidden_size = 4096;
         c.num_attention_heads = 32;
         c.depth = 40;
         c.intermediate_size = 11_008;
-        c.num_experts = 64;
+        c.num_experts = 128;
+        c.num_experts_per_tok = 8;
+        c.moe_intermediate_size = 512;
         c
     }
 
@@ -97,7 +121,20 @@ impl LingBotTransformerConfig {
             norm_eps: 1e-6,
             num_experts: 0,
             num_experts_per_tok: 2,
+            moe_intermediate_size: 16,
+            score_func_sigmoid: true,
+            norm_topk_prob: true,
+            routed_scaling_factor: 1.0,
         }
+    }
+
+    /// Tiny MoE graph for unit tests (4 experts, top-2).
+    pub fn tiny_moe() -> Self {
+        let mut c = Self::tiny();
+        c.num_experts = 4;
+        c.num_experts_per_tok = 2;
+        c.moe_intermediate_size = 16;
+        c
     }
 
     pub fn head_dim(&self) -> usize {
@@ -107,6 +144,26 @@ impl LingBotTransformerConfig {
     pub fn is_moe(&self) -> bool {
         self.num_experts > 0
     }
+}
+
+/// Apply [`PROMPT_TEMPLATE`] then tokenize with Diffusers `tokenizer/`.
+pub fn tokenize_lingbot_prompt(
+    root: &std::path::Path,
+    prompt: &str,
+    max_length: usize,
+) -> Result<Vec<u32>, String> {
+    let path = root.join("tokenizer").join("tokenizer.json");
+    let tokenizer = tokenizers::Tokenizer::from_file(&path)
+        .map_err(|e| format!("{}: {e}", path.display()))?;
+    let body = PROMPT_TEMPLATE.replace("{}", prompt);
+    let encoding = tokenizer
+        .encode(body.as_str(), true)
+        .map_err(|e| format!("lingbot qwen tokenize: {e}"))?;
+    let mut ids = encoding.get_ids().to_vec();
+    if ids.len() > max_length {
+        ids.truncate(max_length);
+    }
+    Ok(ids)
 }
 
 #[cfg(test)]
@@ -124,7 +181,17 @@ mod tests {
     }
 
     #[test]
+    fn moe_preset() {
+        let c = LingBotTransformerConfig::moe_30b();
+        assert!(c.is_moe());
+        assert_eq!(c.num_experts, 128);
+        assert_eq!(c.num_experts_per_tok, 8);
+        assert_eq!(c.moe_intermediate_size, 512);
+    }
+
+    #[test]
     fn crop_constant() {
         assert_eq!(PROMPT_CROP_START, 140);
+        assert!(PROMPT_TEMPLATE.contains("<|im_start|>assistant"));
     }
 }

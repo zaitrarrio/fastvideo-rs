@@ -1,12 +1,12 @@
-//! LongCat DiT (`LongCatVideoTransformer3DModel`) — dense attn path.
-//!
-//! BSA (`enable_bsa`) is stored for registry/CLI parity; tiny/forward uses dense SDPA.
+//! LongCat DiT (`LongCatVideoTransformer3DModel`) with optional BSA.
 
 use fastvideo_models::longcat::LongCatTransformerConfig;
 
 use crate::wan::nn::{self, Linear};
 use crate::wan::tensor::{CudaTensor, Result, TensorError};
 use crate::wan::weights::{self, WeightMap};
+
+use super::bsa::{flash_attn_bsa_3d, BsaParams};
 
 fn msg(s: impl Into<String>) -> TensorError {
     TensorError::Message(s.into())
@@ -47,7 +47,12 @@ impl Attn {
         })
     }
 
-    fn forward(&self, hidden: &CudaTensor, encoder: Option<&CudaTensor>) -> Result<CudaTensor> {
+    fn forward(
+        &self,
+        hidden: &CudaTensor,
+        encoder: Option<&CudaTensor>,
+        bsa: Option<( [usize; 3], BsaParams )>,
+    ) -> Result<CudaTensor> {
         let [b, s, _] = match hidden.shape[..] {
             [b, s, d] => [b, s, d],
             _ => return Err(msg(format!("longcat attn: {:?}", hidden.shape))),
@@ -67,7 +72,13 @@ impl Attn {
         let q = to_bhsd(q, s)?;
         let k = to_bhsd(k, ks)?;
         let v = to_bhsd(v, ks)?;
-        let out = nn::scaled_dot_product_attention_masked(&q, &k, &v, None, None)?;
+        // BSA is self-attn only (T>1); cross-attn stays dense.
+        let out = match (encoder, bsa) {
+            (None, Some((thw, params))) if thw[0] > 1 => {
+                flash_attn_bsa_3d(&q, &k, &v, thw, params)?
+            }
+            _ => nn::scaled_dot_product_attention_masked(&q, &k, &v, None, None)?,
+        };
         self.to_out.forward(&out.merge_heads()?)
     }
 }
@@ -141,7 +152,13 @@ impl Block {
         })
     }
 
-    fn forward(&self, x: &CudaTensor, y: &CudaTensor, temb: &CudaTensor) -> Result<CudaTensor> {
+    fn forward(
+        &self,
+        x: &CudaTensor,
+        y: &CudaTensor,
+        temb: &CudaTensor,
+        bsa: Option<( [usize; 3], BsaParams )>,
+    ) -> Result<CudaTensor> {
         let mods = self.adaln.forward(&temb.silu())?;
         let shift_msa = mods.narrow(1, 0, self.dim)?;
         let scale_msa = mods.narrow(1, self.dim, self.dim)?;
@@ -158,11 +175,11 @@ impl Block {
         let n = n
             .mul(&expand_token(&scale_msa, x.shape[1])?.try_add_scalar(1.0)?)?
             .add(&expand_token(&shift_msa, x.shape[1])?)?;
-        let a = self.attn.forward(&n, None)?;
+        let a = self.attn.forward(&n, None, bsa)?;
         let mut h = x.add(&a.mul(&expand_token(&gate_msa, x.shape[1])?)?)?;
 
         let nc = h.rms_norm(&self.norm_cross, 1e-6)?;
-        let c = self.cross.forward(&nc, Some(y))?;
+        let c = self.cross.forward(&nc, Some(y), None)?;
         h = h.add(&c)?;
 
         let n = nn::layer_norm(&h, 1e-6, None, None)?;
@@ -271,6 +288,17 @@ impl LongCatTransformer {
         encoder: &CudaTensor,
         timestep: f32,
     ) -> Result<CudaTensor> {
+        self.forward_with_bsa(hidden, encoder, timestep, self.cfg.enable_bsa)
+    }
+
+    /// Like [`Self::forward`] but overrides `enable_bsa` (CLI / preset runtime).
+    pub fn forward_with_bsa(
+        &self,
+        hidden: &CudaTensor,
+        encoder: &CudaTensor,
+        timestep: f32,
+        enable_bsa: bool,
+    ) -> Result<CudaTensor> {
         let [b, c, t, h, w] = match hidden.shape[..] {
             [b, c, t, h, w] => [b, c, t, h, w],
             _ => return Err(msg(format!("longcat dit: {:?}", hidden.shape))),
@@ -281,14 +309,20 @@ impl LongCatTransformer {
                 self.cfg.in_channels
             )));
         }
-        // BSA flag reserved; dense path always for this port stage.
-        let _bsa = self.cfg.enable_bsa;
 
         let [pt, ph, pw] = self.cfg.patch_size;
         let pe_t = t / pt;
         let pe_h = h / ph;
         let pe_w = w / pw;
         let seq = pe_t * pe_h * pe_w;
+        let bsa = if enable_bsa {
+            Some((
+                [pe_t, pe_h, pe_w],
+                BsaParams::from_config(self.cfg.bsa_sparsity, self.cfg.bsa_chunk),
+            ))
+        } else {
+            None
+        };
         let host = hidden.host_cow()?;
         let cin = c;
         let mut tokens = vec![0f32; b * seq * cin * pt * ph * pw];
@@ -337,7 +371,7 @@ impl LongCatTransformer {
             .forward(&self.caption_1.forward(encoder)?.silu())?;
 
         for block in &self.blocks {
-            hs = block.forward(&hs, &y, &temb)?;
+            hs = block.forward(&hs, &y, &temb, bsa)?;
         }
 
         let mods = self.final_adaln.forward(&temb.silu())?;
@@ -395,6 +429,20 @@ mod tests {
     #[test]
     fn tiny_forward_shapes() {
         let cfg = LongCatTransformerConfig::tiny();
+        let dit = LongCatTransformer::zeros(cfg.clone()).unwrap();
+        let x = CudaTensor::zeros(&[1, cfg.in_channels, 2, 4, 4]);
+        let enc = CudaTensor::zeros(&[1, 4, cfg.caption_channels]);
+        let out = dit.forward(&x, &enc, 500.0).unwrap();
+        assert_eq!(out.shape, vec![1, cfg.out_channels, 2, 4, 4]);
+    }
+
+    #[test]
+    fn tiny_forward_with_bsa() {
+        let mut cfg = LongCatTransformerConfig::tiny();
+        cfg.enable_bsa = true;
+        cfg.bsa_sparsity = 0.5;
+        cfg.bsa_chunk = [1, 1, 1];
+        // pe_t=2, pe_h=2, pe_w=2 with patch [1,2,2] on [2,4,4].
         let dit = LongCatTransformer::zeros(cfg.clone()).unwrap();
         let x = CudaTensor::zeros(&[1, cfg.in_channels, 2, 4, 4]);
         let enc = CudaTensor::zeros(&[1, 4, cfg.caption_channels]);

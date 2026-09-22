@@ -276,10 +276,35 @@ impl DecoderConfig {
         }
     }
 
-    /// Text half of Qwen3-VL-8B as packaged by SearchingMan's recovered_8b
-    /// release: 24 language layers, hidden 4096, keys under `model.layers`
-    /// (no `language_model.` prefix). Tap 24 is the un-normed residual after
-    /// layer 23; a 4096→5120 conditioning adapter then matches the DiT.
+    /// Text half of Qwen3-VL-4B as used by LingBot-Video (`hidden=2560`,
+    /// 36 layers). FastVideo `LingBotVideoQwen3VLTextArchConfig`.
+    pub fn qwen3_vl_4b_text() -> Self {
+        let head_dim = 128;
+        Self {
+            vocab: 151_936,
+            hidden: 2560,
+            heads: 32,
+            kv_heads: 8,
+            head_dim,
+            intermediate: 9728,
+            rms_eps: 1e-6,
+            norm_offset: 0.0,
+            act: Act::Silu,
+            qk_norm: true,
+            sandwich_norms: false,
+            embed_scale: 1.0,
+            attn_scale: (head_dim as f32).powf(-0.5),
+            layers: vec![LayerAttn::global(5_000_000.0, 1.0); 36],
+            // Diffusers text-only pack often drops `language_model.`; try both
+            // at load time via WeightMap key probing in callers.
+            layer_prefix: "model.language_model.layers".into(),
+            embed_key: "model.language_model.embed_tokens.weight".into(),
+            final_norm_key: "model.language_model.norm.weight".into(),
+            attention_k_eq_v: false,
+        }
+    }
+
+    /// Alias: SearchingMan recovered Qwen3-VL-8B layout under `model.layers`.
     pub fn qwen3_vl_8b_text() -> Self {
         let head_dim = 128;
         Self {

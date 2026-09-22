@@ -1,5 +1,6 @@
 //! LongCat-Video. Spec: docs/ports/longcat.md.
 
+pub mod bsa;
 pub mod pipeline;
 pub mod transformer;
 

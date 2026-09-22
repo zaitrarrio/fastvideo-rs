@@ -37,6 +37,12 @@ Default canvas ~480×832, 93 frames, fps 15.
 Block: AdaLN-6 → self-attn (optional BSA) → LayerNorm cross-attn → SwiGLU FFN.
 BSA params default `sparsity=0.9375`, `chunk_3d_shape_{q,k}=[4,4,4]`.
 
+### BSA algorithm (host reference)
+
+Matches Meituan `flash_attn_bsa_3d`: rearrange THW → 3D chunks → mean-pool Q/K →
+top-`(1-sparsity)` KV blocks per query block → sparse SDPA. Falls back to dense
+SDPA when latent dims are not divisible by the chunk shape (tiny graphs).
+
 ---
 
 ## Text / VAE / schedule
@@ -57,7 +63,7 @@ BSA params default `sparsity=0.9375`, `chunk_3d_shape_{q,k}=[4,4,4]`.
 | `fastvideo-models::longcat` config / schedule | landed |
 | Registry + CLI path | landed |
 | cudarc DiT + tiny forward (dense attn) | landed |
-| BSA sparse path | stub (`enable_bsa` stored; dense SDPA) |
-| UMT5 text | zeros fallback / reuse Wan UMT5 when weights present |
+| BSA sparse path (`enable_bsa` / 720p) | landed |
+| UMT5 text | encode when weights present; zeros dry-run without `text_encoder/` |
 | Wan VAE decode + PNG | landed |
 | Denoise loop | landed (FlowMatch Euler) |

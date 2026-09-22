@@ -1,4 +1,4 @@
-//! LingBot generate: Qwen3 stub → DiT Euler → Wan VAE → PNG.
+//! LingBot generate: Qwen3-VL → DiT Euler → Wan VAE → PNG.
 
 use std::path::{Path, PathBuf};
 
@@ -14,6 +14,7 @@ use crate::wan::tensor::CudaTensor;
 use crate::wan::vae::AutoencoderKlWan;
 use crate::wan::weights::WeightMap;
 
+use super::text;
 use super::transformer::LingBotTransformer;
 
 fn msg(s: impl Into<String>) -> PipelineError {
@@ -78,12 +79,18 @@ impl LingBotPipeline {
         Ok(())
     }
 
-    fn encode_text(&self, _prompt: &str) -> Result<CudaTensor> {
+    /// Qwen3-VL encode when `text_encoder/` + tokenizer exist; else zero embeds.
+    fn encode_text(&self, prompt: &str) -> Result<CudaTensor> {
         let te = self.root.join("text_encoder");
+        let tok = self.root.join("tokenizer").join("tokenizer.json");
+        if te.is_dir() && tok.is_file() {
+            return text::encode_prompt(&self.root, prompt, self.dit_cfg.text_dim)
+                .map_err(|e| msg(e.to_string()));
+        }
         if te.is_dir() {
             return Err(msg(format!(
-                "lingbot Qwen3-VL text_encoder present but encode not ported yet \
-                 (crop={PROMPT_CROP_START}); remove text_encoder for zero-embed dry-runs"
+                "lingbot text_encoder present but tokenizer/tokenizer.json missing \
+                 (crop={PROMPT_CROP_START})"
             )));
         }
         Ok(CudaTensor::zeros(&[1, 16, self.dit_cfg.text_dim]))

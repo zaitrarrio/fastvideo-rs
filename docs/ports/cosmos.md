@@ -55,6 +55,8 @@ AdaLN-Zero → GELU FF. Final AdaLN + linear unpatch.
 | AutoencoderKLWan | Reuse Wan VAE graph (`vae/`) |
 | Schedule | FlowMatch + Karras-ish σ; denoise uses `c_in/c_skip/c_out` EDM packing |
 | Cond | `condition_mask` + first-frame latents (Video2World) |
+| CFG | Dual DiT pass when `guidance_scale > 1`; default negative = Diffusers `DEFAULT_NEGATIVE_PROMPT` |
+| AdaLN | Per-frame `[B,1,T,1,1]` packing: cond frames use `t_conditioning`, free frames use `current_t` |
 
 ---
 
@@ -66,9 +68,12 @@ AdaLN-Zero → GELU FF. Final AdaLN + linear unpatch.
 | `fastvideo-models::cosmos` config / rope / schedule / T5Config | landed |
 | Registry + CLI path | landed |
 | cudarc DiT + tiny forward | landed |
-| T5 text (`T5Encoder` classic Relu, zeros fallback) | landed |
+| T5 text (`T5Encoder` classic Relu; encode when `text_encoder/` + tokenizer present) | landed |
 | Wan VAE decode + PNG frame dump | landed |
 | Video2World cond (`condition_mask` + first-frame encode) | landed |
+| CFG dual-pass (pos + neg embeds, `guidance_scale`) | landed |
+| Per-frame AdaLN / `t_conditioning` packing | landed |
 
-Host path: T5 → EDM Euler DiT → Wan VAE → `frame_*.png`. Optional `--image` packs
-first-frame latents into cond channels per Diffusers `prepare_latents`.
+Host path: T5 → EDM Euler DiT (CFG) → Wan VAE → `frame_*.png`. Optional `--image` packs
+first-frame latents into cond channels per Diffusers `prepare_latents`. Safety /
+`CosmosSafetyChecker` intentionally out of scope.

@@ -313,19 +313,23 @@ impl TimeEmbed {
         })
     }
 
-    fn forward(&self, timestep_scalar: f32, batch: usize) -> Result<(CudaTensor, CudaTensor)> {
-        // Timesteps embedding (flip_sin_to_cos) → [B, hidden]
+    /// Embed a row of timesteps (`len = N`) → temb / embedded `[N, C]`.
+    ///
+    /// Diffusers `CosmosTransformer3DModel` accepts either `[B]` or flattened
+    /// `[B*T]` from a `[B,1,T,1,1]` Video2World packing.
+    fn forward_per_row(&self, timesteps: &[f32]) -> Result<(CudaTensor, CudaTensor)> {
+        let n = timesteps.len();
         let half = self.time_proj_dim / 2;
-        let mut emb = vec![0f32; batch * self.time_proj_dim];
-        for b in 0..batch {
+        let mut emb = vec![0f32; n * self.time_proj_dim];
+        for (row, &ts) in timesteps.iter().enumerate() {
             for i in 0..half {
                 let freq = (-(10_000f32.ln()) * (i as f32) / half as f32).exp();
-                let arg = timestep_scalar * freq;
-                emb[b * self.time_proj_dim + i] = arg.cos();
-                emb[b * self.time_proj_dim + half + i] = arg.sin();
+                let arg = ts * freq;
+                emb[row * self.time_proj_dim + i] = arg.cos();
+                emb[row * self.time_proj_dim + half + i] = arg.sin();
             }
         }
-        let proj = CudaTensor::from_vec(emb, vec![batch, self.time_proj_dim])?;
+        let proj = CudaTensor::from_vec(emb, vec![n, self.time_proj_dim])?;
         let temb = self
             .t_linear_2
             .forward(&self.t_linear_1.forward(&proj)?.silu())?;
@@ -456,12 +460,16 @@ impl CosmosTransformer {
     }
 
     /// `hidden` `[B,C,T,H,W]` already including condition (+ optional pad later).
-    /// `encoder` `[B,S,text_dim]`. `timestep` scalar in `[0,1]` Cosos `current_t`.
+    /// `encoder` `[B,S,text_dim]`.
+    ///
+    /// `frame_timesteps` length `T` (Diffusers `[B,1,T,1,1]` Video2World packing):
+    /// cond frames use `t_conditioning`, free frames use `current_t`. When every
+    /// frame shares one value this is equivalent to a scalar AdaLN path.
     pub fn forward(
         &self,
         hidden: &CudaTensor,
         encoder: &CudaTensor,
-        timestep: f32,
+        frame_timesteps: &[f32],
         fps: Option<f32>,
     ) -> Result<CudaTensor> {
         let [b, c, t, h, w] = match hidden.shape[..] {
@@ -527,14 +535,25 @@ impl CosmosTransformer {
                 }
             }
         }
+        if frame_timesteps.len() != t {
+            return Err(msg(format!(
+                "cosmos dit: frame_timesteps len {} vs T={t}",
+                frame_timesteps.len()
+            )));
+        }
         let flat = CudaTensor::from_vec(tokens, vec![b * seq, cin * p_t * p_h * p_w])?;
         let mut hs = self.patch.forward(&flat)?.reshape(vec![b, seq, self.cfg.hidden_size()])?;
 
         let extra = self.learnable_pos(b, pe_t, pe_h, pe_w)?;
-        let (temb, embedded) = self.time.forward(timestep, b)?;
-        // Expand [B,C] → [B,S,C] for per-token AdaLN.
-        let temb_s = expand_tokens(&temb, seq)?;
-        let emb_s = expand_tokens(&embedded, seq)?;
+        // Per-frame AdaLN: embed each of T timesteps, then expand to THW tokens
+        // (p_t==1 so pe_t == t), matching Diffusers `[BT,C] → [B,THW,C]`.
+        let mut rows = Vec::with_capacity(b * t);
+        for _ in 0..b {
+            rows.extend_from_slice(frame_timesteps);
+        }
+        let (temb_bt, emb_bt) = self.time.forward_per_row(&rows)?;
+        let temb_s = expand_frame_tokens(&temb_bt, b, pe_t, pe_h, pe_w)?;
+        let emb_s = expand_frame_tokens(&emb_bt, b, pe_t, pe_h, pe_w)?;
 
         for block in &self.blocks {
             hs = block.forward(
@@ -641,20 +660,39 @@ impl CosmosTransformer {
     }
 }
 
-fn expand_tokens(x: &CudaTensor, seq: usize) -> Result<CudaTensor> {
-    // [B, C] → [B, S, C]
-    let [b, c] = match x.shape[..] {
-        [b, c] => [b, c],
-        _ => return Err(msg(format!("expand_tokens: {:?}", x.shape))),
+/// `[B*T, C]` → `[B, T*H*W, C]` by repeating each frame embedding across H×W.
+fn expand_frame_tokens(
+    x: &CudaTensor,
+    batch: usize,
+    pe_t: usize,
+    pe_h: usize,
+    pe_w: usize,
+) -> Result<CudaTensor> {
+    let [n, c] = match x.shape[..] {
+        [n, c] => [n, c],
+        _ => return Err(msg(format!("expand_frame_tokens: {:?}", x.shape))),
     };
+    if n != batch * pe_t {
+        return Err(msg(format!(
+            "expand_frame_tokens: rows {n} vs B*T={}",
+            batch * pe_t
+        )));
+    }
+    let seq = pe_t * pe_h * pe_w;
     let host = x.host_cow()?;
-    let mut out = vec![0f32; b * seq * c];
-    for bi in 0..b {
-        for s in 0..seq {
-            out[(bi * seq + s) * c..][..c].copy_from_slice(&host[bi * c..][..c]);
+    let mut out = vec![0f32; batch * seq * c];
+    for bi in 0..batch {
+        for ti in 0..pe_t {
+            let src = &host[(bi * pe_t + ti) * c..][..c];
+            for yi in 0..pe_h {
+                for xi in 0..pe_w {
+                    let tok = (ti * pe_h + yi) * pe_w + xi;
+                    out[(bi * seq + tok) * c..][..c].copy_from_slice(src);
+                }
+            }
         }
     }
-    Ok(CudaTensor::from_vec(out, vec![b, seq, c])?)
+    Ok(CudaTensor::from_vec(out, vec![batch, seq, c])?)
 }
 
 #[cfg(test)]
@@ -668,7 +706,18 @@ mod tests {
         // T=2,H=4,W=4, C=in (5) — padding added inside
         let x = CudaTensor::zeros(&[1, cfg.in_channels, 2, 4, 4]);
         let enc = CudaTensor::zeros(&[1, 4, cfg.text_embed_dim]);
-        let out = dit.forward(&x, &enc, 0.5, Some(16.0)).unwrap();
+        let out = dit.forward(&x, &enc, &[0.5, 0.5], Some(16.0)).unwrap();
+        assert_eq!(out.shape, vec![1, cfg.out_channels, 2, 4, 4]);
+    }
+
+    #[test]
+    fn per_frame_timestep_packing() {
+        let cfg = CosmosTransformerConfig::tiny();
+        let dit = CosmosTransformer::zeros(cfg.clone()).unwrap();
+        let x = CudaTensor::zeros(&[1, cfg.in_channels, 2, 4, 4]);
+        let enc = CudaTensor::zeros(&[1, 4, cfg.text_embed_dim]);
+        // Cond frame 0 uses near-zero t_conditioning; frame 1 uses current_t.
+        let out = dit.forward(&x, &enc, &[0.0001, 0.7], Some(16.0)).unwrap();
         assert_eq!(out.shape, vec![1, cfg.out_channels, 2, 4, 4]);
     }
 }

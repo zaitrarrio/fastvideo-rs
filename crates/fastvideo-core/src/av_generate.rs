@@ -410,6 +410,10 @@ fn generate_cosmos(def: &'static FamilyModelDefinition, opts: AvGenerateOptions)
         let mut request = CosmosRequest::v2w_2b(opts.prompt, opts.seed);
         request.preset = preset;
         request.image_path = opts.image_path.clone();
+        request.negative_prompt = opts.negative_prompt.clone();
+        if let Some(g) = opts.guidance_scale {
+            request.guidance_scale = g;
+        }
         if let Some(h) = opts.height {
             request.height = h as usize;
         }
