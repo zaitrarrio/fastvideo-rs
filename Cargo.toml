@@ -5,7 +5,6 @@ members = [
     "crates/fastvideo-core",
     "crates/fastvideo-models",
     "crates/fastvideo-loader",
-    "crates/fastvideo-luminal",
     "crates/fastvideo-cudarc",
     "crates/fastvideo-cli",
     "crates/fastvideo-gpucheck",
@@ -16,7 +15,7 @@ version = "0.1.0"
 edition = "2021"
 license = "Apache-2.0"
 rust-version = "1.85"
-description = "Rust inference port of FastVideo for Wan/FastWan, running on cudarc (Candle as the reference, Luminal frozen)."
+description = "Rust inference port of FastVideo (Wan / LTX / H3) on cudarc CUDA."
 repository = "https://github.com/zaitrarrio/fastvideo-rs"
 
 [workspace.dependencies]
@@ -26,15 +25,12 @@ serde = { version = "1", features = ["derive"] }
 thiserror = "2"
 serde_json = "1"
 toml = "0.8"
-candle-core = "0.11"
-candle-nn = "0.11"
 hf-hub = { version = "0.4", default-features = false, features = ["ureq"] }
 safetensors = "0.6"
 tokenizers = { version = "0.22", default-features = false, features = ["onig"] }
 image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
 rand = "0.9"
 rand_distr = "0.5"
-luminal = "0.2"
 memmap2 = "0.9"
 sha2 = "0.10"
 rayon = "1"
@@ -43,7 +39,6 @@ fastvideo-ops = { path = "crates/fastvideo-ops" }
 fastvideo-core = { path = "crates/fastvideo-core" }
 fastvideo-models = { path = "crates/fastvideo-models" }
 fastvideo-loader = { path = "crates/fastvideo-loader" }
-fastvideo-luminal = { path = "crates/fastvideo-luminal" }
 fastvideo-cudarc = { path = "crates/fastvideo-cudarc" }
 cudarc = { version = "0.17", default-features = false, features = ["std", "driver", "cublas", "cublaslt", "cudnn", "nvrtc", "f16", "cuda-version-from-build-system", "dynamic-loading"] }
 

@@ -68,7 +68,7 @@ hostport="${url#ssh://root@}"
 host="${hostport%:*}"
 port="${hostport##*:}"
 
-# Default: cudarc-only lean path. Override e.g. FASTVIDEO_BENCH_BACKENDS=candle,cudarc
+# Default: cudarc-only.
 BENCH_BACKENDS="${FASTVIDEO_BENCH_BACKENDS:-cudarc}"
 BENCH_BACKENDS="${BENCH_BACKENDS// /,}"
 # H100/H200=90, 4090=89; override with VAST_CUDA_COMPUTE_CAP.
@@ -169,29 +169,13 @@ cat > "$RUN_DIR/run.json" <<RUN
 RUN
 echo "artifacts $RUN_DIR"
 
-# Pick CUDA Cargo features from requested backends.
-# candle/burn need the full `cuda` feature (Candle kernels + CubeCL).
-# cudarc-only smoke uses lean `cuda-cudarc` to skip those cold builds.
-NEED_FULL_CUDA=0
-for BACKEND in $FASTVIDEO_BENCH_BACKENDS; do
-  case "$BACKEND" in
-    candle|burn) NEED_FULL_CUDA=1 ;;
-  esac
-done
-if [ "$NEED_FULL_CUDA" = "1" ]; then
-  CUDA_FEATURES=cuda
-else
-  CUDA_FEATURES=cuda-cudarc
-fi
+# Pick CUDA Cargo features (cudarc-only).
+CUDA_FEATURES=cuda-cudarc
 echo "building --features $CUDA_FEATURES (release); backends=$FASTVIDEO_BENCH_BACKENDS"
 
 # Skip lib tests on the GPU box — they run on remote CPU and burn billable time.
-# Use `--features` matching the bench backend. MODE=test just builds and exits.
-if [ "$CUDA_FEATURES" = "cuda-cudarc" ]; then
-  cargo build --release --features cuda-cudarc -p fastvideo-cli
-else
-  cargo build --release --features cuda -p fastvideo-cli
-fi
+# MODE=test just builds and exits.
+cargo build --release --features cuda-cudarc -p fastvideo-cli
 
 if [ "$MODE" = "test" ]; then
   echo "MODE=$MODE done artifacts=$RUN_DIR"
@@ -201,13 +185,6 @@ fi
 if [ ! -d "$WEIGHTS/transformer" ]; then
   echo "pulling 1.3B + CLIP weights"
   bash scripts/vast-pull-weights.sh
-fi
-
-if [ "$MODE" != "test" ] && [ "$CUDA_FEATURES" = "cuda" ]; then
-  export FASTVIDEO_GPU_SMOKE=1
-  # Note: smoke test removed to save billable CPU time on the H200.
-  # Run `cargo test -p fastvideo-core --features cuda --release cuda_1_3b_smoke_gated`
-  # locally if you need this gate.
 fi
 
 CLIP_IMG="$RUN_DIR/clip/cond.png"
@@ -224,76 +201,30 @@ PY
 if [ "$MODE" != "test" ]; then
   BACKENDS="${FASTVIDEO_BENCH_BACKENDS:-cudarc}"
   for BACKEND in $BACKENDS; do
-    if [ "$BACKEND" = "candle" ] || [ "$BACKEND" = "burn" ] || [ "$BACKEND" = "cudarc" ]; then
-      DTYPE=f32
-      [ "$BACKEND" = "candle" ] && DTYPE=bf16
-      [ "$BACKEND" = "cudarc" ] && DTYPE=f32
-      echo "=== bench tiny ($BACKEND cuda) ==="
-      ./target/release/fastvideo generate \
-        --model FastVideo/FastWan2.1-T2V-1.3B-Diffusers \
-        --backend "$BACKEND" \
-        --tiny --device cuda --dtype "$DTYPE" --output "$RUN_DIR/tiny-$BACKEND" \
-        --prompt "A curious raccoon in a field of sunflowers." || {
-          echo "warn: tiny $BACKEND cuda failed"; continue
-        }
-    else
-      echo "=== bench tiny ($BACKEND cpu compile) ==="
-      ./target/release/fastvideo generate \
-        --model FastVideo/FastWan2.1-T2V-1.3B-Diffusers \
-        --backend "$BACKEND" \
-        --tiny --device cpu --dtype f32 --output "$RUN_DIR/tiny-$BACKEND" \
-        --prompt "A curious raccoon in a field of sunflowers." || {
-          echo "warn: tiny $BACKEND failed"; continue
-        }
+    if [ "$BACKEND" != "cudarc" ]; then
+      echo "warn: backend $BACKEND removed; only cudarc is supported"
+      continue
     fi
+    echo "=== bench tiny (cudarc cuda) ==="
+    ./target/release/fastvideo generate \
+      --model FastVideo/FastWan2.1-T2V-1.3B-Diffusers \
+      --backend cudarc \
+      --tiny --device cuda --dtype f32 --output "$RUN_DIR/tiny-cudarc" \
+      --prompt "A curious raccoon in a field of sunflowers." || {
+        echo "warn: tiny cudarc cuda failed"; continue
+      }
 
-    if [ "$BACKEND" = "cudarc" ]; then
-      echo "=== bench 1.3B smoke ($BACKEND cuda) ==="
-      ./target/release/fastvideo bench \
-        --model Wan-AI/Wan2.1-T2V-1.3B-Diffusers \
-        --backend cudarc \
-        --device cuda --dtype f32 \
-        --weights "$WEIGHTS" \
-        --frames 9 --steps 2 --height 256 --width 256 --guidance 1.0 \
-        --output "$RUN_DIR/smoke-256-$BACKEND" \
-        --prompt "A curious raccoon in a field of sunflowers." || {
-          echo "warn: 1.3B smoke $BACKEND failed"
-        }
-    elif [ "$BACKEND" = "candle" ]; then
-      echo "=== bench 1.3B smoke ($BACKEND cuda) ==="
-      ./target/release/fastvideo bench \
-        --model Wan-AI/Wan2.1-T2V-1.3B-Diffusers \
-        --backend candle \
-        --device cuda --dtype bf16 \
-        --weights "$WEIGHTS" \
-        --frames 9 --steps 2 --height 256 --width 256 --guidance 1.0 \
-        --output "$RUN_DIR/smoke-256-$BACKEND" \
-        --prompt "A curious raccoon in a field of sunflowers."
-    elif [ "$BACKEND" = "burn" ]; then
-      echo "=== bench 1.3B smoke ($BACKEND cuda f32) ==="
-      ./target/release/fastvideo bench \
-        --model Wan-AI/Wan2.1-T2V-1.3B-Diffusers \
-        --backend burn \
-        --device cuda --dtype f32 \
-        --weights "$WEIGHTS" \
-        --frames 9 --steps 2 --height 256 --width 256 --guidance 1.0 \
-        --output "$RUN_DIR/smoke-256-$BACKEND" \
-        --prompt "A curious raccoon in a field of sunflowers." || {
-          echo "warn: 1.3B smoke $BACKEND failed"
-        }
-    else
-      echo "=== bench 1.3B smoke ($BACKEND cpu f32) ==="
-      ./target/release/fastvideo generate \
-        --model Wan-AI/Wan2.1-T2V-1.3B-Diffusers \
-        --backend "$BACKEND" \
-        --device cpu --dtype f32 \
-        --weights "$WEIGHTS" \
-        --frames 9 --steps 2 --height 256 --width 256 --guidance 1.0 \
-        --output "$RUN_DIR/smoke-256-$BACKEND" \
-        --prompt "A curious raccoon in a field of sunflowers." || {
-          echo "warn: 1.3B smoke $BACKEND failed (host graph may OOM or be slow)"
-        }
-    fi
+    echo "=== bench 1.3B smoke (cudarc cuda) ==="
+    ./target/release/fastvideo bench \
+      --model Wan-AI/Wan2.1-T2V-1.3B-Diffusers \
+      --backend cudarc \
+      --device cuda --dtype f32 \
+      --weights "$WEIGHTS" \
+      --frames 9 --steps 2 --height 256 --width 256 --guidance 1.0 \
+      --output "$RUN_DIR/smoke-256-cudarc" \
+      --prompt "A curious raccoon in a field of sunflowers." || {
+        echo "warn: 1.3B smoke cudarc failed"
+      }
   done
 
   if [ -d "$CLIP_ROOT/image_encoder" ]; then

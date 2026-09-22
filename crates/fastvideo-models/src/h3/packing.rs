@@ -349,6 +349,78 @@ fn for_each_patch_element(shape: [usize; 4], patch: [usize; 3], mut visit: impl 
     }
 }
 
+/// FastVideo `keyframe_condition_noise`: Gaussian noise shaped like one
+/// keyframe latent frame, already patchified into DiT rows.
+pub fn keyframe_condition_noise_rows(
+    latent_height: usize,
+    latent_width: usize,
+    latent_channels: usize,
+    patch: [usize; 3],
+    seed: u64,
+) -> Result<Vec<f32>, String> {
+    use rand::{Rng, SeedableRng};
+    use rand_distr::StandardNormal;
+    let [pt, ph, pw] = patch;
+    if latent_height % ph != 0 || latent_width % pw != 0 || pt == 0 {
+        return Err(format!(
+            "keyframe noise: {latent_height}x{latent_width} not divisible by patch {patch:?}"
+        ));
+    }
+    let shape = [latent_channels, 1, latent_height, latent_width];
+    let n = shape.iter().product::<usize>();
+    let mut rng = rand::rngs::StdRng::seed_from_u64(seed);
+    let noise: Vec<f32> = (0..n).map(|_| rng.sample::<f32, _>(StandardNormal)).collect();
+    patchify(&noise, shape, patch)
+}
+
+/// FastVideo `prepare_keyframe_image` canvas fit: cover-crop (or stretch) to
+/// `(width, height)`. Returns RGB floats in `[-1, 1]`, channel-major `CHW`.
+pub fn prepare_keyframe_rgb(
+    rgb: &[u8],
+    src_w: usize,
+    src_h: usize,
+    width: usize,
+    height: usize,
+    stretch: bool,
+) -> Result<Vec<f32>, String> {
+    if rgb.len() != src_w * src_h * 3 || src_w == 0 || src_h == 0 || width == 0 || height == 0 {
+        return Err(format!(
+            "keyframe rgb: {} bytes for {src_w}x{src_h} → {width}x{height}",
+            rgb.len()
+        ));
+    }
+    if src_w == width && src_h == height {
+        return Ok(rgb
+            .chunks(3)
+            .flat_map(|p| p.iter().map(|&c| f32::from(c) / 127.5 - 1.0))
+            .collect());
+    }
+    // Nearest-neighbor cover-crop (stretch = force resize). Full Lanczos lives
+    // with the encode path once `image` is wired in cudarc.
+    let (rw, rh, left, top) = if stretch {
+        (width, height, 0usize, 0usize)
+    } else {
+        let scale = (width as f64 / src_w as f64).max(height as f64 / src_h as f64);
+        let rw = (src_w as f64 * scale).round().max(width as f64) as usize;
+        let rh = (src_h as f64 * scale).round().max(height as f64) as usize;
+        let left = rw.saturating_sub(width) / 2;
+        let top = rh.saturating_sub(height) / 2;
+        (rw, rh, left, top)
+    };
+    let mut out = vec![0f32; 3 * height * width];
+    for y in 0..height {
+        for x in 0..width {
+            let sx = ((x + left) * src_w / rw).min(src_w - 1);
+            let sy = ((y + top) * src_h / rh).min(src_h - 1);
+            let si = (sy * src_w + sx) * 3;
+            for c in 0..3 {
+                out[c * height * width + y * width + x] = f32::from(rgb[si + c]) / 127.5 - 1.0;
+            }
+        }
+    }
+    Ok(out)
+}
+
 /// `unpack_audio_tokens`: rows `[2 Na, C]` (left channel's latents, then the
 /// right's) to `[2, C, Na]`.
 pub fn unpack_audio_rows(rows: &[f32], audio_latents: usize, channels: usize) -> Result<Vec<f32>, String> {
@@ -510,5 +582,22 @@ mod tests {
         let rows: Vec<f32> = (0..12).map(|v| v as f32).collect();
         let out = unpack_audio_rows(&rows, 2, 3).unwrap();
         assert_eq!(out, vec![0.0, 3.0, 1.0, 4.0, 2.0, 5.0, 6.0, 9.0, 7.0, 10.0, 8.0, 11.0]);
+    }
+
+    #[test]
+    fn prepare_keyframe_identity_and_cover() {
+        let rgb: Vec<u8> = (0..12).map(|v| v as u8).collect(); // 2x2
+        let id = prepare_keyframe_rgb(&rgb, 2, 2, 2, 2, false).unwrap();
+        assert_eq!(id.len(), 12);
+        assert!((id[0] - (0.0 / 127.5 - 1.0)).abs() < 1e-5);
+        let stretched = prepare_keyframe_rgb(&rgb, 2, 2, 4, 4, true).unwrap();
+        assert_eq!(stretched.len(), 3 * 4 * 4);
+    }
+
+    #[test]
+    fn keyframe_noise_patchifies_one_frame() {
+        let rows = keyframe_condition_noise_rows(4, 4, 2, [1, 2, 2], 7).unwrap();
+        // 2×2 patches × (2 channels × 1×2×2) features = 32
+        assert_eq!(rows.len(), 32);
     }
 }

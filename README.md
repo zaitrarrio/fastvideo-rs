@@ -117,11 +117,11 @@ Crates cache in the Docker volume `fastvideo-rs-cargo-registry`. Copy the binary
 crates/
   fastvideo-ops        TensorBackend trait + host CPU reference
   fastvideo-core       registry, SamplingParam, VideoGenerator
-  fastvideo-models     Wan DiT / VAE / UMT5 + schedulers (Candle oracle)
-  fastvideo-loader     Diffusers safetensors load
-  fastvideo-cudarc     **primary** Wan generate (cuBLAS / NVRTC / cuDNN)
-  fastvideo-luminal    frozen Luminal Wan
+  fastvideo-models     schedulers, packing, architecture configs
+  fastvideo-loader     Diffusers safetensors (mmap / lazy)
+  fastvideo-cudarc     **primary** Wan / LTX / H3 generate (cuBLAS / NVRTC / cuDNN)
   fastvideo-cli        `fastvideo` binary
+  fastvideo-gpucheck   GPU parity / stage checks
 scripts/
   vast-sync.sh         rsync onto the Vast box
   vast-setup-cuda.sh   rustup + CUDA 12.4 nvcc

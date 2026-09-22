@@ -20,8 +20,7 @@ toml.workspace = true
 
 [features]
 default = []
-cuda = ["fastvideo-core/cuda", "fastvideo-models/cuda"]
-# Lean: cudarc backend only (skips Candle CUDA kernels).
+cuda = ["cuda-cudarc"]
 cuda-cudarc = ["fastvideo-core/cuda-cudarc"]
 
 [lints]

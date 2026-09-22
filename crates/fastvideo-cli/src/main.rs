@@ -204,20 +204,12 @@ struct ScheduleArgs {
 
 #[derive(Clone, Copy, ValueEnum)]
 enum CliBackend {
-    Host,
-    Candle,
-    Luminal,
     Cudarc,
 }
 
 impl From<CliBackend> for BackendKind {
-    fn from(value: CliBackend) -> Self {
-        match value {
-            CliBackend::Host => Self::Host,
-            CliBackend::Candle => Self::Candle,
-            CliBackend::Luminal => Self::Luminal,
-            CliBackend::Cudarc => Self::Cudarc,
-        }
+    fn from(_value: CliBackend) -> Self {
+        Self::Cudarc
     }
 }
 

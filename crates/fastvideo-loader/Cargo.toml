@@ -6,8 +6,6 @@ license.workspace = true
 description = "Hugging Face Diffusers loaders and weight-name mapping."
 
 [dependencies]
-candle-core.workspace = true
-candle-nn.workspace = true
 fastvideo-models.workspace = true
 safetensors = { workspace = true }
 thiserror = { workspace = true }
@@ -17,16 +15,12 @@ rayon.workspace = true
 
 [features]
 default = []
-cuda = ["candle-core/cuda", "candle-nn/cuda"]
 
 [lints.rust]
 # `memmap2::Mmap::map` is `unsafe fn` (the file can in principle be mutated
 # or truncated out from under the mapping) — the same narrow, well-precedented
-# unsafe use every mmap-based safetensors loader in the ecosystem makes
-# (candle, mistral.rs, llama.cpp's Rust bindings, safetensors' own Python
-# `safe_open`). Scoped to this crate only, mirroring `fastvideo-cudarc`'s
-# override for its CUDA FFI; the workspace default stays `forbid` everywhere
-# else. The single call site is in `raw.rs::mmap_file`.
+# unsafe use every mmap-based safetensors loader in the ecosystem makes.
+# Scoped to this crate only; the workspace default stays `forbid` elsewhere.
 unsafe_code = "allow"
 
 [lints.clippy]

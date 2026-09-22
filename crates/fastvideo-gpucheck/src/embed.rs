@@ -46,7 +46,8 @@ pub fn run(report: &mut Report, weights: &Path, prompts: &Path, out: &Path, devi
     report.note("load_text_encoder", json!({"seconds": timer.elapsed().as_secs_f64()}));
 
     let encode = |s: &str| -> anyhow::Result<CudaTensor> {
-        let (ids, len) = fastvideo_models::tokenize_prompt(&tokenizer, s, TEXT_LEN)?;
+        let (ids, len) = fastvideo_models::tokenize_prompt(&tokenizer, s, TEXT_LEN)
+            .map_err(anyhow::Error::msg)?;
         Ok(pad_prompt_embeds(&text.forward(&ids, 1, ids.len())?, &[len], TEXT_LEN)?)
     };
     let timer = Instant::now();

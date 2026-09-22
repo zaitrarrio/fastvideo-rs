@@ -145,7 +145,6 @@ mod tests {
         let gen = VideoGenerator::from_pretrained(
             "FastVideo/FastWan2.1-T2V-1.3B-Diffusers",
             LoadOptions {
-                backend: BackendKind::Host,
                 tiny: false,
                 ..LoadOptions::default()
             },
@@ -154,85 +153,59 @@ mod tests {
         assert_eq!(gen.sampling.num_inference_steps, 3);
         assert_eq!(gen.sampling.height, 448);
         assert_eq!(gen.pipeline.dmd_steps, Some(&[1000, 757, 522][..]));
+        // Without weights / tiny, generate should fail.
         assert!(gen.generate_video("a raccoon").is_err());
     }
 
     #[test]
-    fn host_unipc_generate_tokenizes_cached_umt5() {
+    fn cudarc_tiny_generate_write_png() {
+        let device = if cfg!(feature = "cuda") {
+            "cuda".into()
+        } else {
+            "cpu".into()
+        };
         let gen = VideoGenerator::from_pretrained(
-            "Wan-AI/Wan2.1-T2V-1.3B-Diffusers",
+            "FastVideo/FastWan2.1-T2V-1.3B-Diffusers",
             LoadOptions {
-                backend: BackendKind::Host,
-                output_path: Some(persist_dir("host-unipc")),
+                backend: BackendKind::Cudarc,
+                tiny: true,
+                device,
+                output_path: Some(persist_dir("cudarc-tiny")),
                 ..LoadOptions::default()
             },
         )
         .unwrap();
-        assert_eq!(gen.definition.sampling, SamplingAlgorithm::UniPc);
-        let out = match gen.generate_video("A curious raccoon in a field of sunflowers.") {
-            Ok(out) => out,
-            Err(err) if err.to_string().contains("tokenizer.json") => {
-                eprintln!("skip: {err}");
-                return;
-            }
-            Err(err) => panic!("{err}"),
-        };
-        let path = out.frame_paths.first().expect("latents json");
-        let body = std::fs::read_to_string(path).unwrap();
-        assert!(body.contains("token_ids"));
-        assert!(!body.contains("\"token_ids\":[0,1,2,3]"));
-        assert!(body.contains("\"backend\":\"host\""));
-    }
-
-    #[test]
-    fn luminal_cudarc_tiny_generate_write_png() {
-        for backend in [BackendKind::Luminal, BackendKind::Cudarc] {
-            let device = if cfg!(feature = "cuda")
-                && matches!(backend, BackendKind::Cudarc)
-            {
-                "cuda".into()
-            } else {
-                "cpu".into()
-            };
-            let gen = VideoGenerator::from_pretrained(
-                "FastVideo/FastWan2.1-T2V-1.3B-Diffusers",
-                LoadOptions {
-                    backend,
-                    tiny: true,
-                    device,
-                    output_path: Some(persist_dir(&format!("{backend}-tiny"))),
-                    ..LoadOptions::default()
-                },
-            )
+        let out = gen
+            .generate_video("A curious raccoon in a field of sunflowers.")
             .unwrap();
-            let out = gen
-                .generate_video("A curious raccoon in a field of sunflowers.")
-                .unwrap();
-            assert!(
-                std::path::Path::new(&out.frame_paths[0]).exists(),
-                "{backend} missing {}",
-                out.frame_paths[0]
-            );
-            assert!(
-                out.frame_paths[0].ends_with(".png"),
-                "{backend} expected PNG, got {}",
-                out.frame_paths[0]
-            );
-        }
+        assert!(
+            std::path::Path::new(&out.frame_paths[0]).exists(),
+            "missing {}",
+            out.frame_paths[0]
+        );
+        assert!(
+            out.frame_paths[0].ends_with(".png"),
+            "expected PNG, got {}",
+            out.frame_paths[0]
+        );
     }
 
     #[test]
-    fn i2v_generate_is_explicit() {
+    fn i2v_generate_needs_image_or_weights() {
         let gen = VideoGenerator::from_pretrained(
             "Wan-AI/Wan2.1-I2V-14B-480P-Diffusers",
             LoadOptions {
-                backend: BackendKind::Candle,
+                tiny: false,
                 ..LoadOptions::default()
             },
         )
         .unwrap();
         let err = gen.generate_video("a cat").unwrap_err();
-        assert!(err.to_string().contains("I2V"));
+        let msg = err.to_string().to_ascii_lowercase();
+        assert!(
+            msg.contains("i2v") || msg.contains("image") || msg.contains("weights"),
+            "{err}"
+        );
     }
 
     #[test]
@@ -259,13 +232,10 @@ mod tests {
     }
 
     #[test]
-    fn candle_resolves_cached_1_3b_snapshot() {
+    fn resolves_cached_1_3b_snapshot_layout() {
         let gen = VideoGenerator::from_pretrained(
             "Wan-AI/Wan2.1-T2V-1.3B-Diffusers",
-            LoadOptions {
-                backend: BackendKind::Candle,
-                ..LoadOptions::default()
-            },
+            LoadOptions::default(),
         )
         .unwrap();
         let Some(root) = gen.resolved_weights_dir() else {
@@ -284,7 +254,7 @@ mod tests {
         let gen = VideoGenerator::from_pretrained(
             "FastVideo/FastWan2.1-T2V-1.3B-Diffusers",
             LoadOptions {
-                backend: BackendKind::Candle,
+                backend: BackendKind::Cudarc,
                 tiny: true,
                 device: "cuda".into(),
                 dtype: Some("f32".into()),
@@ -307,7 +277,7 @@ mod tests {
         let gen = VideoGenerator::from_pretrained(
             "Wan-AI/Wan2.1-T2V-1.3B-Diffusers",
             LoadOptions {
-                backend: BackendKind::Candle,
+                backend: BackendKind::Cudarc,
                 device: "cuda".into(),
                 dtype: Some("bf16".into()),
                 height: Some(256),
@@ -361,38 +331,9 @@ mod tests {
     }
 
     #[test]
-    fn candle_tiny_generate_writes_png() {
-        let gen = VideoGenerator::from_pretrained(
-            "FastVideo/FastWan2.1-T2V-1.3B-Diffusers",
-            LoadOptions {
-                backend: BackendKind::Candle,
-                tiny: true,
-                output_path: Some(persist_dir("candle-tiny")),
-                ..LoadOptions::default()
-            },
-        )
-        .unwrap();
-        let out = gen.generate_video("a raccoon").unwrap();
-        assert!(!out.frame_paths.is_empty());
-        assert!(std::path::Path::new(&out.frame_paths[0]).exists());
-    }
-
-    #[cfg(not(feature = "cuda"))]
-    #[test]
-    fn cuda_device_requires_feature() {
-        let err = crate::generator::resolve_candle_device("cuda").unwrap_err();
-        assert!(err.to_string().contains("features cuda"));
-    }
-
-    #[test]
-    fn cuda_defaults_to_bf16() {
-        assert_eq!(
-            crate::generator::resolve_dtype(None, "cuda").unwrap(),
-            candle_core::DType::BF16
-        );
-        assert_eq!(
-            crate::generator::resolve_dtype(None, "cpu").unwrap(),
-            candle_core::DType::F32
-        );
+    fn removed_backends_are_rejected() {
+        assert!("candle".parse::<BackendKind>().is_err());
+        assert!("luminal".parse::<BackendKind>().is_err());
+        assert_eq!("cudarc".parse::<BackendKind>().unwrap(), BackendKind::Cudarc);
     }
 }
