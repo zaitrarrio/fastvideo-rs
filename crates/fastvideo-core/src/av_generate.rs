@@ -332,8 +332,16 @@ fn generate_kandinsky5(def: &'static FamilyModelDefinition, opts: AvGenerateOpti
                 )));
             }
         };
-        let pipe = Kandinsky5Pipeline::open(&weights, preset)
+        let mut pipe = Kandinsky5Pipeline::open(&weights, preset)
             .map_err(|e| FastVideoError::Message(e.to_string()))?;
+        if weights.join("transformer").is_dir() {
+            pipe.load_dit()
+                .map_err(|e| FastVideoError::Message(e.to_string()))?;
+        }
+        if weights.join("vae").is_dir() {
+            pipe.load_vae()
+                .map_err(|e| FastVideoError::Message(e.to_string()))?;
+        }
         let mut request = Kandinsky5Request::lite_5s(opts.prompt, opts.seed);
         request.preset = preset;
         if let Some(h) = opts.height {

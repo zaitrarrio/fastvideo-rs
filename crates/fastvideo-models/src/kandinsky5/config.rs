@@ -57,7 +57,7 @@ impl Kandinsky5TransformerConfig {
         }
     }
 
-    /// Tiny graph for unit tests.
+    /// Tiny graph for unit tests (matches Diffusers issue repro sizes).
     pub fn tiny() -> Self {
         Self {
             in_visual_dim: 4,
@@ -75,6 +75,23 @@ impl Kandinsky5TransformerConfig {
             qwen_crop_start: 0,
         }
     }
+
+    pub fn head_dim(&self) -> usize {
+        self.axes_dims.iter().sum()
+    }
+
+    pub fn num_heads(&self) -> usize {
+        self.model_dim / self.head_dim()
+    }
+
+    /// Channel count fed to `visual_embeddings` after optional I2V pack.
+    pub fn visual_embed_in_dim(&self) -> usize {
+        if self.visual_cond {
+            2 * self.in_visual_dim + 1
+        } else {
+            self.in_visual_dim
+        }
+    }
 }
 
 #[cfg(test)]
@@ -86,6 +103,8 @@ mod tests {
         let c = Kandinsky5TransformerConfig::lite();
         assert_eq!(c.model_dim, 1792);
         assert_eq!(c.num_visual_blocks, 32);
-        assert_eq!(c.axes_dims.iter().sum::<usize>(), 64);
+        assert_eq!(c.head_dim(), 64);
+        assert_eq!(c.num_heads(), 28);
+        assert_eq!(c.visual_embed_in_dim(), 33);
     }
 }

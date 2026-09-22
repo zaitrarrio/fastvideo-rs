@@ -68,8 +68,12 @@ until then load Refuse with a clear message.
 | layer | status |
 |---|---|
 | Spec (this file) | landed |
-| `fastvideo-models::kandinsky5` config | landed |
-| Registry + CLI refuse path | landed |
-| DiT / text / VAE / generate | not started |
+| `fastvideo-models::kandinsky5` config / rope / schedule | landed |
+| Registry + CLI path | landed |
+| cudarc DiT (text + visual blocks) + tiny forward | landed |
+| Qwen mid-layer crop 129 | landed (needs pack weights) |
+| CLIP text pooled | landed (CLIP-L ViT-L/14 → pooler) |
+| HunyuanVideo-16 VAE | landed (GroupNorm decode + tiny shapes) |
+| Denoise loop | landed through VAE decode |
 
 Reuse Hunyuan15 Qwen mid-layer encode patterns; FlowMatch Euler schedule.
