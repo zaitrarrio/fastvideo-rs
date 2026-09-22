@@ -910,12 +910,15 @@ cmd_run() {
         wdir="$WORK/weights/ltx2-5"
         remote_run fetch-ltx2-5 120 fetch "$repo" "$wdir" \
           "tokenizer/*" "text_encoder/model-*" "text_encoder/*.json" \
-          "connectors/*" "transformer/*" "vae/*" "audio_vae/*" "vocoder/*" "latent_upsampler/*"
+          "connectors/*" "transformer/*" "vae/*" "audio_vae/*" "vocoder/*" "latent_upsampler/*" "diffusion_decoder/*"
         ltxgen+=(--model-version 2.5 --weights "$wdir" --dit "$wdir")
         if [[ "${FV_LTX2_TWO_STAGE:-0}" == 1 ]]; then
           ltxgen+=(--two-stage)
         fi
-        remote_run wait-ltx2-5 10800 wait-weights "$wdir" 10800 text_encoder connectors transformer vae audio_vae vocoder latent_upsampler
+        if [[ "${FV_LTX2_DIFF_VAE:-0}" == 1 ]]; then
+          ltxgen+=(--diff-vae)
+        fi
+        remote_run wait-ltx2-5 10800 wait-weights "$wdir" 10800 text_encoder connectors transformer vae audio_vae vocoder latent_upsampler diffusion_decoder
         gpucheck_stage "gen-$name" 10800 "${ltxgen[@]}" --clip "$clip/$name/frames"
       else
         repo="${FV_LTX2_BASE_REPO:-Lightricks/LTX-2}"

@@ -2,6 +2,26 @@
 
 Project code: FVID
 
+### FVID · 2026-09-22 · FVID-2026-09-22-ltx25-diffvae
+- Trigger: after distilled two-stage green — ship opt-in **DiffVAE** video decode on the validated 2.5 stack (conv VAE stays default; audio unchanged)
+- Options: DiffVAE 1-step x0 untiled @ 768×512; defer tiling / NATTEN / multi-step stage-5 / two-stage+DiffVAE
+- Decision: **`LTX2VideoDiffusionDecoderModel`** as opt-in path: denorm latents → NA stages 1–4 + PixelShuffle → stage-5 single x0 @ `t=1.0`; gather+SDPA NA (inward window); drop DiT before decode. `Ltx2Request::diff_vae` / `--diff-vae` / `FV_LTX2_DIFF_VAE=1`; fetch `diffusion_decoder/*` on 2.5 weight pull.
+- Reason: peer quality decode path per Diffusers 2.5 pack; first green scoped to single-stage distilled without tiling
+- Reversibility: cheap — flag off keeps conv VAE decode
+- Executed by: Executor
+- ADR: none
+- Verification: **host pass + remote GPU gen pass** (2026-09-22). `cargo test -p fastvideo-cudarc ltx2::diffusion_decoder`; `fv-gpucheck ltx2 gen --model-version 2.5 --diff-vae`. RTX PRO 6000 WS `51982652` (~$0.779 / 33 min): 8 ancestral ~18.1 s, **DiffVAE decode ~884.4 s** (host NA), audio decode ~0.4 s; **121** frames, wav 48 kHz / 240480 samples, peak **70469 MiB**, mp4 `artifacts/clips/20260922T001443Z-ltx2-gen/ltx25-diffvae.mp4`. Build `77cf645514609c38`.
+
+### FVID · 2026-09-21 · FVID-2026-09-21-ltx25-two-stage
+- Trigger: after stage-1 + BWE green — pick next 2.5 extension
+- Options: distilled two-stage (half-res → spatial upsampler → 3-step stage-2); DiffVAE/diffusion decoder; duration head; prompt enhancer; 1536×1024 scale-up
+- Decision: **distilled two-stage** on the validated stage-1 path. Same DiT; new `latent_upsampler/`; no stage-2 LoRA on distilled DiT. Validate at final **768×512** (stage-1 384×256) so stage-2 token count matches single-stage.
+- Reason: official recipe; VRAM stays in existing `ltx2-gen` tier; other extras still out of scope
+- Reversibility: cheap — `Ltx2Request::two_stage` / `--two-stage` / `FV_LTX2_TWO_STAGE=1`
+- Executed by: Executor
+- ADR: none
+- Verification: **host pass + remote GPU gen pass** (2026-09-21). `cargo test` latent_upsampler + request validation; `fv-gpucheck ltx2 gen --model-version 2.5 --two-stage`. RTX PRO 6000 WS `51970730` (~$0.560 / 25 min): stage-1 8 ancestral ~7.6 s, upsample 0.19 s → grid `[16,16,24]`, stage-2 3 ancestral ~11.6 s (~3.56 s/step), decode video ~3.9 s; **11** steps finite, **121** frames, wav 48 kHz / 240480 samples, peak **82117 MiB**, mp4 `artifacts/clips/20260921T220546Z-ltx2-gen/ltx25-two-stage.mp4`.
+
 ### FVID · 2026-09-21 · FVID-2026-09-21-ltx25-stage1
 - Trigger: "let's implement LTX 2.5" after H3 matrix; user locked scope to distilled stage-1 + conv VAE, no extras unless they help perf
 - Options: full 2.5 stack (DiffVAE/diffusion decoder, duration head, enhancer, two-stage); stage-1 only; Comfy-only vs Diffusers pack

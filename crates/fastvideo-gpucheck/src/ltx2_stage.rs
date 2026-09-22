@@ -275,6 +275,10 @@ pub enum Stage {
         /// Requires `--model-version 2.5` and `latent_upsampler/` under `--weights`.
         #[arg(long, default_value_t = false)]
         two_stage: bool,
+        /// DiffVAE diffusion video decoder instead of the conv VAE.
+        /// Requires `--model-version 2.5` and `diffusion_decoder/` under `--weights`.
+        #[arg(long, default_value_t = false)]
+        diff_vae: bool,
     },
     /// CPU only: rewrite the text encoder as the language model alone, its
     /// projections narrowed float32 → bf16 once, in load order (47 GB → 25.5 GB,
@@ -348,6 +352,7 @@ pub fn run(report: &mut Report, stage: &Stage) -> StageResult<()> {
             text_weights,
             text,
             two_stage,
+            diff_vae,
         } => {
             let text_cache = if *no_text_cache { None } else { text_cache.clone().or_else(fastvideo_cudarc::ltx2::text_cache::default_dir) };
             let text_residency = match text.as_str() {
@@ -370,6 +375,7 @@ pub fn run(report: &mut Report, stage: &Stage) -> StageResult<()> {
                 !*no_mp4,
                 *warm,
                 *two_stage,
+                *diff_vae,
             )
         }
         Stage::SlimText { weights, slim, embed, shard_gib } => slim_text(report, weights, slim, embed, *shard_gib),
@@ -1072,6 +1078,7 @@ fn gen(
     mp4: bool,
     warm: bool,
     two_stage: bool,
+    diff_vae: bool,
 ) -> StageResult<()> {
     report.set("device", crate::gpu::init(device)?);
     report.set("model_version", match model_version {
@@ -1079,6 +1086,7 @@ fn gen(
         ModelVersion::V25 => "2.5",
     });
     report.set("two_stage", two_stage);
+    report.set("diff_vae", diff_vae);
     let cfg = model_version.config();
     let request = Ltx2Request {
         prompt: prompt.to_string(),
@@ -1090,12 +1098,13 @@ fn gen(
         output_dir: clip.to_path_buf(),
         mp4,
         two_stage,
+        diff_vae,
     };
     report.set(
         "request",
         json!({
             "prompt": prompt, "height": g.height, "width": g.width, "num_frames": g.num_frames,
-            "frame_rate": g.frame_rate, "seed": seed, "two_stage": two_stage,
+            "frame_rate": g.frame_rate, "seed": seed, "two_stage": two_stage, "diff_vae": diff_vae,
         }),
     );
     let peak = crate::gpu::PeakMem::start();

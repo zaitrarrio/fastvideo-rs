@@ -10,6 +10,7 @@
 
 pub mod attention;
 pub mod audio_vae;
+pub mod diffusion_decoder;
 pub mod keys;
 pub mod latent_upsampler;
 pub mod pipeline;

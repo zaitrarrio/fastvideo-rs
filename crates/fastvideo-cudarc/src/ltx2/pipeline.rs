@@ -33,6 +33,7 @@ use crate::wan::tensor::{CudaTensor, TensorError};
 use crate::wan::weights::WeightMap;
 
 use super::audio_vae::AudioDecoder;
+use super::diffusion_decoder::DiffusionDecoder;
 use super::keys::Keys;
 use super::latent_upsampler::LatentUpsampler;
 use super::text::{HiddenStack, PaddedPrompt, TextConnectors};
@@ -85,6 +86,8 @@ pub struct Ltx2Request {
     pub mp4: bool,
     /// Distilled two-stage: half-res stage-1 → spatial ×2 upsampler → 3-step stage-2.
     pub two_stage: bool,
+    /// DiffVAE: diffusion video decoder instead of the conv VAE (audio unchanged).
+    pub diff_vae: bool,
 }
 
 impl Ltx2Request {
@@ -100,6 +103,7 @@ impl Ltx2Request {
             output_dir: output_dir.into(),
             mp4: true,
             two_stage: false,
+            diff_vae: false,
         }
     }
 
@@ -336,6 +340,63 @@ pub fn decode_and_write(dec: &Decoders, video: &CudaTensor, audio: &CudaTensor, 
         (_, Some(e)) => return Err(e),
         (Err(e), None) => return Err(e.into()),
         (Ok(_), None) => {}
+    }
+    let decode_video_s = timer.elapsed().as_secs_f64();
+    let timer = Instant::now();
+    let (frames, mp4_path) = writer.finish()?;
+    Ok(Written {
+        frames,
+        mp4: mp4_path,
+        wav: wav.to_string_lossy().into_owned(),
+        decode_audio_s,
+        decode_video_s,
+        write_s: timer.elapsed().as_secs_f64(),
+    })
+}
+
+/// Like [`decode_and_write`], but video goes through DiffVAE (de-norm → 1-step x0).
+pub fn decode_diffvae_and_write(
+    dec: &Decoders,
+    diffvae: &DiffusionDecoder,
+    video: &CudaTensor,
+    audio: &CudaTensor,
+    grid: [usize; 3],
+    dir: &Path,
+    frame_rate: f64,
+    mp4: bool,
+    seed: u64,
+) -> Result<Written> {
+    std::fs::create_dir_all(dir).map_err(|e| err(format!("{}: {e}", dir.display())))?;
+    let timer = Instant::now();
+    let wave = dec.vocoder.forward(&dec.audio.decode_packed(audio)?)?;
+    let channels = wave.shape[1];
+    let wav = dir.join("audio.wav");
+    let rate = u32::try_from(dec.vocoder.sample_rate()).map_err(|_| err("ltx2: vocoder sample rate out of range"))?;
+    let channel_count = u16::try_from(channels).map_err(|_| err("ltx2: too many audio channels"))?;
+    write_wav(&wav, &interleave_audio(&wave.host_cow()?, channels)?, channel_count, rate)?;
+    let decode_audio_s = timer.elapsed().as_secs_f64();
+
+    let timer = Instant::now();
+    let unpacked = unpack_video(video, grid)?;
+    let denorm = dec.video.denormalize(&unpacked)?;
+    let rgb = diffvae.decode(&denorm, seed)?; // [1, 3, F, H, W]
+    let [_, _, f, h, w] = match rgb.shape[..] {
+        [1, 3, f, h, w] => [1, 3, f, h, w],
+        _ => return Err(err(format!("DiffVAE expected [1,3,F,H,W], got {:?}", rgb.shape))),
+    };
+    // [1,3,F,H,W] → [F,3,H,W] for the writer.
+    let frames_nchw = rgb.permute(&[0, 2, 1, 3, 4])?.reshape(vec![f, 3, h, w])?;
+    let fps = frame_rate.round().max(1.0) as u32;
+    let mut writer = VideoWriter::spawn_with_audio(dir, fps, mp4, Some(&wav))?;
+    // Chunk frames to bound peak host RGB buffers.
+    const CHUNK: usize = 8;
+    let mut offset = 0usize;
+    while offset < f {
+        let n = (f - offset).min(CHUNK);
+        let chunk = frames_nchw.narrow(0, offset, n)?;
+        let rgb8 = frames_to_rgb8(&chunk)?;
+        writer.push(offset, h, w, rgb8)?;
+        offset += n;
     }
     let decode_video_s = timer.elapsed().as_secs_f64();
     let timer = Instant::now();
@@ -651,9 +712,13 @@ pub struct PipelineOptions {
 /// The models of a stage-1 run, loaded once and kept: the DiT (37.8 GB) and the
 /// three decoders (~3 GB). A second generation pays for text, denoise and
 /// decode only — and for text not even that when the prompt was seen before.
+/// `model` is `None` after a DiffVAE decode (DiT dropped for VRAM); the next
+/// generate reloads it from `dit`.
 pub struct Ltx2Pipeline {
     cfg: Ltx2Config,
-    model: Ltx2Transformer,
+    dit: PathBuf,
+    weights: PathBuf,
+    model: Option<Ltx2Transformer>,
     decoders: Decoders,
     text: TextEncoder,
     /// Seconds [`Self::load`] took.
@@ -667,20 +732,50 @@ impl Ltx2Pipeline {
         let model = Ltx2Transformer::load(&map, &Keys::transformer(Keys::detect(&map)), &cfg.transformer)?;
         let decoders = Decoders::load(&paths.weights, cfg)?;
         sync()?;
-        Ok(Self { cfg: cfg.clone(), model, decoders, text: TextEncoder::new(paths, cfg, options), load_s: timer.elapsed().as_secs_f64() })
+        Ok(Self {
+            cfg: cfg.clone(),
+            dit: paths.dit.clone(),
+            weights: paths.weights.clone(),
+            model: Some(model),
+            decoders,
+            text: TextEncoder::new(paths, cfg, options),
+            load_s: timer.elapsed().as_secs_f64(),
+        })
+    }
+
+    fn ensure_dit(&mut self) -> Result<&Ltx2Transformer> {
+        if self.model.is_none() {
+            crate::wan::log::info(format_args!("ltx2: reloading DiT after DiffVAE decode"));
+            let map = open_distilled(&self.dit, "transformer")?;
+            let model = Ltx2Transformer::load(&map, &Keys::transformer(Keys::detect(&map)), &self.cfg.transformer)?;
+            sync()?;
+            self.model = Some(model);
+        }
+        Ok(self.model.as_ref().expect("just loaded"))
     }
 
     /// One clip. `use_text_cache = false` bypasses the conditioning cache for
     /// this call only.
     pub fn generate(&mut self, req: &Ltx2Request, use_text_cache: bool, observer: Option<StepObserver<'_>>) -> Result<Ltx2Output> {
         req.validate()?;
-        let cfg = &self.cfg;
+        let cfg = self.cfg.clone();
         if req.two_stage {
             if cfg.version != Ltx2ModelVersion::V25 {
                 return Err(err("ltx2: --two-stage requires model version 2.5"));
             }
             if self.decoders.upsampler.is_none() {
                 return Err(err("ltx2: two-stage needs weights/latent_upsampler (missing beside --weights)"));
+            }
+        }
+        if req.diff_vae {
+            if cfg.version != Ltx2ModelVersion::V25 {
+                return Err(err("ltx2: --diff-vae requires model version 2.5"));
+            }
+            if cfg.diffusion_decoder.is_none() {
+                return Err(err("ltx2: --diff-vae needs diffusion_decoder config (2.5 pack)"));
+            }
+            if !self.weights.join("diffusion_decoder").is_dir() {
+                return Err(err("ltx2: --diff-vae needs weights/diffusion_decoder"));
             }
         }
         let mut timings = Ltx2Timings::default();
@@ -696,14 +791,19 @@ impl Ltx2Pipeline {
         timings.text_s = text_report.seconds;
 
         let timer = Instant::now();
-        let text = self.model.project_text(&contexts.video, &contexts.audio)?;
+        self.ensure_dit()?;
+        let text = {
+            let model = self.model.as_ref().expect("ensure_dit");
+            model.project_text(&contexts.video, &contexts.audio)?
+        };
         drop(contexts);
         let ropes = Ropes::new(&cfg.transformer, grid1, audio_tokens, req.frame_rate as f32)?;
-        let (video, audio) = initial_noise(cfg, grid1, audio_tokens, req.seed)?;
+        let (video, audio) = initial_noise(&cfg, grid1, audio_tokens, req.seed)?;
         let mut step_s = Vec::new();
         let mut observer = observer;
         let schedule = Ltx2Schedule::distilled();
         let (mut video, mut audio) = {
+            let model = self.model.as_ref().expect("ensure_dit");
             let mut record = |i: usize, v: &CudaTensor, a: &CudaTensor, s: f64| -> Result<()> {
                 step_s.push(s);
                 match observer.as_mut() {
@@ -713,7 +813,7 @@ impl Ltx2Pipeline {
             };
             if cfg.version == Ltx2ModelVersion::V25 {
                 denoise_ancestral(
-                    &self.model,
+                    model,
                     &text,
                     &ropes,
                     &schedule,
@@ -723,7 +823,7 @@ impl Ltx2Pipeline {
                     Some(&mut record),
                 )?
             } else {
-                denoise(&self.model, &text, &ropes, &schedule, video, audio, Some(&mut record))?
+                denoise(model, &text, &ropes, &schedule, video, audio, Some(&mut record))?
             }
         };
         timings.stage1_s = timer.elapsed().as_secs_f64();
@@ -754,6 +854,7 @@ impl Ltx2Pipeline {
             let schedule2 = Ltx2Schedule::distilled_stage_2();
             let step_offset = step_s.len();
             let (v2, a2) = {
+                let model = self.model.as_ref().expect("ensure_dit");
                 let mut record2 = |i: usize, v: &CudaTensor, a: &CudaTensor, s: f64| -> Result<()> {
                     step_s.push(s);
                     match observer.as_mut() {
@@ -762,7 +863,7 @@ impl Ltx2Pipeline {
                     }
                 };
                 denoise_ancestral(
-                    &self.model,
+                    model,
                     &text,
                     &ropes2,
                     &schedule2,
@@ -784,7 +885,27 @@ impl Ltx2Pipeline {
         timings.step_s = step_s;
         drop(text);
 
-        let written = decode_and_write(&self.decoders, &video, &audio, decode_grid, &req.output_dir, req.frame_rate, req.mp4)?;
+        let written = if req.diff_vae {
+            // Free DiT before loading DiffVAE (~0.8 GB + large activations).
+            self.model = None;
+            sync()?;
+            crate::wan::log::info(format_args!("ltx2: DiffVAE decode (DiT dropped)"));
+            let dd_cfg = cfg.diffusion_decoder.as_ref().expect("checked above");
+            let diffvae = DiffusionDecoder::load(&WeightMap::open(&self.weights.join("diffusion_decoder"))?, dd_cfg)?;
+            decode_diffvae_and_write(
+                &self.decoders,
+                &diffvae,
+                &video,
+                &audio,
+                decode_grid,
+                &req.output_dir,
+                req.frame_rate,
+                req.mp4,
+                req.seed + 40_000,
+            )?
+        } else {
+            decode_and_write(&self.decoders, &video, &audio, decode_grid, &req.output_dir, req.frame_rate, req.mp4)?
+        };
         timings.decode_audio_s = written.decode_audio_s;
         timings.decode_video_s = written.decode_video_s;
         timings.write_s = written.write_s;

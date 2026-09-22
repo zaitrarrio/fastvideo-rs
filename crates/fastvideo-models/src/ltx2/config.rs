@@ -984,6 +984,71 @@ impl Ltx2LatentUpsamplerConfig {
     }
 }
 
+/// `diffusion_decoder/config.json` — LTX-2.5 diffusion video decoder (DiffVAE).
+#[derive(Debug, Clone, PartialEq)]
+pub struct Ltx2DiffusionDecoderConfig {
+    pub out_channels: usize,
+    pub latent_channels: usize,
+    pub patch_size: usize,
+    pub scaling_factor: f32,
+    pub head_dim: usize,
+    pub stage_channels: Vec<usize>,
+    pub stage_depths: Vec<usize>,
+    /// Kernels for deterministic stages 0..n-2: `(T, H, W)` each.
+    pub stage_kernels: Vec<[usize; 3]>,
+    pub upsample_strides: Vec<[usize; 3]>,
+    pub upsample_channel_reductions: Vec<usize>,
+    pub stage5_kernel: [usize; 3],
+    pub t_emb_dim: usize,
+    pub timestep_scale_multiplier: f32,
+    /// `"x0"` (shipped) or `"v"`.
+    pub model_output_type: &'static str,
+    pub num_inference_steps: usize,
+    pub spatial_compression_ratio: usize,
+    pub temporal_compression_ratio: usize,
+    pub mlp_ratio: f64,
+}
+
+impl Ltx2DiffusionDecoderConfig {
+    /// Diffusers `LTX2VideoDiffusionDecoderModel` defaults / LTX-2.5 pack.
+    pub fn ltx2_5_22b() -> Self {
+        Self {
+            out_channels: 3,
+            latent_channels: 128,
+            patch_size: 4,
+            scaling_factor: 1.0,
+            head_dim: 64,
+            stage_channels: vec![2048, 1024, 512, 512, 256],
+            stage_depths: vec![4, 6, 4, 2, 8],
+            stage_kernels: vec![[3, 7, 7], [3, 7, 7], [3, 5, 5], [3, 5, 5]],
+            upsample_strides: vec![[1, 2, 2], [2, 1, 1], [2, 2, 2], [2, 2, 2]],
+            upsample_channel_reductions: vec![2, 2, 1, 2],
+            stage5_kernel: [11, 11, 11],
+            t_emb_dim: 384,
+            timestep_scale_multiplier: 1000.0,
+            model_output_type: "x0",
+            num_inference_steps: 1,
+            spatial_compression_ratio: 32,
+            temporal_compression_ratio: 8,
+            mlp_ratio: 4.0,
+        }
+    }
+
+    pub fn swiglu_hidden_dim(&self, dim: usize) -> usize {
+        let raw = (dim as f64 * self.mlp_ratio) as usize;
+        (raw + 15) / 16 * 16
+    }
+
+    /// Ghost latent frames padded for NATTEN inward window shift on stage 0.
+    pub fn trailing_pad_latent_frames(&self) -> usize {
+        (self.stage_kernels[0][0] / 2) * 2
+    }
+
+    pub fn context_channels(&self) -> usize {
+        *self.stage_channels.last().expect("stage_channels")
+    }
+}
+
 /// Pipeline-level defaults shared by diffusers `LTX2Pipeline.__call__` and the
 /// Lightricks `PipelineParams` for LTX-2.0.
 #[derive(Debug, Clone, PartialEq)]
@@ -1016,6 +1081,7 @@ pub struct Ltx2Config {
     pub text_encoder: Gemma3TextConfig,
     pub gemma4: Option<Gemma4TextConfig>,
     pub latent_upsampler: Option<Ltx2LatentUpsamplerConfig>,
+    pub diffusion_decoder: Option<Ltx2DiffusionDecoderConfig>,
     pub defaults: Ltx2PipelineDefaults,
 }
 
@@ -1032,6 +1098,7 @@ pub fn ltx2_19b() -> Ltx2Config {
         text_encoder: Gemma3TextConfig::ltx2_19b(),
         gemma4: None,
         latent_upsampler: None,
+        diffusion_decoder: None,
         defaults: Ltx2PipelineDefaults::ltx2_19b(),
     }
 }
@@ -1042,7 +1109,7 @@ pub fn ltx2_19b_distilled() -> Ltx2Config {
     Ltx2Config { scheduler: Ltx2SchedulerConfig::ltx2_19b_distilled(), ..ltx2_19b() }
 }
 
-/// LTX-2.5 distilled T2AV (Gemma 4 + 2.5 DiT/VAE/vocoder/connectors + spatial upsampler).
+/// LTX-2.5 distilled T2AV (Gemma 4 + 2.5 DiT/VAE/vocoder/connectors + spatial upsampler + DiffVAE).
 pub fn ltx2_5_22b_distilled() -> Ltx2Config {
     Ltx2Config {
         version: Ltx2ModelVersion::V25,
@@ -1053,6 +1120,7 @@ pub fn ltx2_5_22b_distilled() -> Ltx2Config {
         scheduler: Ltx2SchedulerConfig::ltx2_19b_distilled(),
         gemma4: Some(Gemma4TextConfig::ltx2_5_22b()),
         latent_upsampler: Some(Ltx2LatentUpsamplerConfig::ltx2_5_22b()),
+        diffusion_decoder: Some(Ltx2DiffusionDecoderConfig::ltx2_5_22b()),
         ..ltx2_19b()
     }
 }
@@ -1293,5 +1361,11 @@ mod tests {
         assert!(!up.use_rational_resampler);
         assert_eq!(up.spatial_factor(), 2);
         assert!(ltx2_19b().latent_upsampler.is_none());
+        let dd = cfg.diffusion_decoder.as_ref().expect("2.5 ships DiffVAE config");
+        assert_eq!(dd.patch_size, 4);
+        assert_eq!(dd.num_inference_steps, 1);
+        assert_eq!(dd.model_output_type, "x0");
+        assert_eq!(dd.stage_channels, vec![2048, 1024, 512, 512, 256]);
+        assert!(ltx2_19b().diffusion_decoder.is_none());
     }
 }

@@ -3,11 +3,13 @@
 **Distilled T2AV**: Gemma 4 + distilled DiT + conv video VAE + audio
 VAE/vocoder (BWE @ 48 kHz), CFG=1, ancestral Euler. Optional **two-stage**
 path: half-res stage-1 → spatial latent upsampler ×2 → 3-step stage-2 at full
-res. No diffusion decoder, duration head, or prompt enhancer.
+res. Optional **DiffVAE** (diffusion video decoder) replaces the conv VAE
+decode for higher fidelity. No duration head or prompt enhancer.
 
 Sources (read 2026-09-21): `Lightricks/LTX-2.5-Diffusers` configs,
 `Lightricks/LTX-2` `packages/ltx-pipelines` / `ltx-core`, diffusers
-`transformer_ltx2.py` / `latent_upsampler.py` on `main`.
+`transformer_ltx2.py` / `latent_upsampler.py` / `ltx2_diffusion_decoder.py`
+on `main`.
 
 Sibling: [ltx2.md](ltx2.md) documents the LTX-2.0 port this extends.
 
@@ -26,6 +28,7 @@ Prefer the Diffusers pack for oracle parity (`Lightricks/LTX-2.5-Diffusers`):
 | Audio VAE | `audio_vae/` |
 | Vocoder | `vocoder/` → **`LTX2VocoderWithBWE`** @ 48 kHz |
 | Spatial upsampler | `latent_upsampler/` (two-stage only) |
+| Diffusion decoder | `diffusion_decoder/` (DiffVAE; ~0.83 GB) |
 
 Comfy split pack (`Lightricks/LTX-2.5`): one `.safetensors` per component;
 projections may live inside the Gemma4 file. Key remap lives in
@@ -49,7 +52,7 @@ spatial upsampler).
 3. Renoise video and audio: `x ← σ·ε + (1−σ)·x` with `σ = 0.909375`.
 4. Ancestral stage-2 at full `H×W` (3 steps), same DiT (no stage-2 LoRA on the
    distilled transformer).
-5. Decode once (conv VAE + BWE vocoder).
+5. Decode once (conv VAE or DiffVAE + BWE vocoder).
 
 Upsampler architecture (`latent_upsampler/config.json` on 2.5):
 `in_channels=128`, `mid_channels=1024`, `num_blocks_per_stage=4`, `dims=3`,
@@ -57,6 +60,30 @@ Upsampler architecture (`latent_upsampler/config.json` on 2.5):
 SiLU) → per-frame Conv2d→PixelShuffle(2) → 4 ResBlocks → Conv3d head.
 
 First validation canvas: final **768×512×121** (stage-1 **384×256**).
+
+---
+
+## DiffVAE (diffusion video decoder)
+
+Opt-in replacement for the **video** conv VAE decoder
+(`LTX2VideoDiffusionDecoderModel`). Encoding and audio stay on `vae/` /
+`audio_vae/` + BWE. Driven like Diffusers’ `LTX2VideoDiffusionDecodePipeline`:
+hand **de-normalized** latents; the decoder draws its own pixel noise.
+
+1. Drop the DiT (VRAM) → load `diffusion_decoder/`.
+2. Stages 1–4: deterministic neighborhood-attention upsample → context volume
+   (PixelShuffle strides `(1,2,2)`, `(2,1,1)`, `(2,2,2)`, `(2,2,2)`).
+3. Stage 5: patchify (`patch_size=4`), `x_t ~ N(0,1)`, **one** x0 step at
+   `t=1.0` (`decoder_num_inference_steps=1`) → RGB.
+4. Neighborhood attention: gather + SDPA with NATTEN’s inward-shifted fixed
+   window (no Hub `kernels`/NATTEN). 3D RoPE as in
+   `LTX2VideoVaeRotaryPosEmbed3D`.
+5. Audio: existing packed-latent → audio VAE → BWE vocoder (unchanged).
+
+Shipped defaults: `stage_channels=(2048,1024,512,512,256)`,
+`stage_depths=(4,6,4,2,8)`, stage-5 kernel `(11,11,11)`, `head_dim=64`.
+Tiling and multi-step stage-5 are deferred; first green is **untiled**
+768×512×121 single-stage.
 
 ---
 
@@ -115,9 +142,9 @@ Not isomorphic to 2.0: `decoder_block_out_channels=[256,512,512,1024]`,
 
 ## Out of scope (this milestone)
 
-Diffusion decoder / DiffVAE, duration head, prompt enhancer, multishot/keyframes,
-dev DiT + CFG/STG/modality guidance, Comfy int8/nvfp4, official 1536×1024 canvas
-(VRAM scale-up after 768×512 two-stage is green).
+DiffVAE tiling / multi-step stage-5 / two-stage+DiffVAE combo, duration head,
+prompt enhancer, multishot/keyframes, dev DiT + CFG/STG/modality guidance,
+Comfy int8/nvfp4, official 1536×1024 canvas.
 
 ---
 
@@ -125,9 +152,12 @@ dev DiT + CFG/STG/modality guidance, Comfy int8/nvfp4, official 1536×1024 canva
 
 Host: config constructors, gated-attn unit test, ancestral step math vs
 `EulerAncestralDiffusionStep`, key-layout detection; vocoder SnakeBeta + BWE
-forward; latent upsampler geometry.
+forward; latent upsampler geometry; DiffVAE NA window + 1-step shape.
 
 GPU: `FV_LTX2_VERSION=2.5 scripts/gpu/validate.sh run ltx2-gen` (single-stage)
-and `FV_LTX2_TWO_STAGE=1` for two-stage. Stage-1 BWE clip
+and `FV_LTX2_TWO_STAGE=1` for two-stage; `FV_LTX2_DIFF_VAE=1` for DiffVAE.
+Stage-1 BWE clip
 `artifacts/clips/20260921T213121Z-ltx2-gen/ltx25-bwe.mp4`. Two-stage remote
+pass: `artifacts/clips/20260921T220546Z-ltx2-gen/ltx25-two-stage.mp4`
+(RTX PRO 6000 WS `51970730`, 768×512×121, 11 ancestral steps). DiffVAE remote
 pending. Oracle taps vs diffusers/`ltx-pipelines` remain optional.
