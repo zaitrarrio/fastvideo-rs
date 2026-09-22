@@ -67,8 +67,9 @@ Schedule matches Cosmos EDM packing but **`sigma_data=0.5`**,
 | `fastvideo-models::gen3c` config / schedule / trajectory ids | landed |
 | Registry + CLI path | landed |
 | cudarc DiT (reuse `CosmosTransformer` with GEN3C dims) | landed |
-| Generate scaffold (T5 → EDM → Wan VAE; zero buffers without MoGe) | landed |
-| MoGe depth + warp cache | deferred (host packs zeros; trajectory metadata only) |
+| Generate scaffold (T5 → EDM → Wan VAE; warp buffers packed) | landed |
+| 3D cache trajectory + forward warp + buffer pack | landed |
+| MoGe depth network weights | external blocker (hook: `depth_path` / synthetic depth) |
 
 Host path: reuse Cosmos encode/denoise/VAE graphs with GEN3C channel layout and
 `sigma_data=0.5`. No refuse/zeros stubs for core encode/denoise/VAE.

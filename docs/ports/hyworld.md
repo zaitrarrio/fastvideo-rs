@@ -37,6 +37,8 @@ PR #1027.
 | Registry + CLI path | landed |
 | cudarc DiT (reuse Hunyuan15) + tiny forward | landed |
 | Generate scaffold | landed |
-| SigLIP / action_in / camera RoPE | deferred (pose string stored) |
+| Pose string → viewmats / `action_in` labels | landed |
+| SigLIP vision encode | external blocker (zeros tokens + load hook for `image_encoder/`) |
+| Camera RoPE fuse into Hunyuan15 | external blocker (needs hyworld camera RoPE weights) |
 
 Host path reuses Hunyuan15 encode/denoise/VAE.

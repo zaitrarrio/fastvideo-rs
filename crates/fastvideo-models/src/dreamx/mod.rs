@@ -1,5 +1,9 @@
 //! DreamX-World host configs (Wan TI2V-5B + cam). Spec: docs/ports/dreamx.md.
 
+pub mod camera;
+
+pub use camera::{build_dreamx_camera_condition, DreamXCameraCondition};
+
 use crate::wan::WanVideoArchConfig;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

@@ -1,9 +1,11 @@
-//! HY-WorldPlay generate scaffold on Hunyuan15 DiT / VAE.
+//! HY-WorldPlay generate on Hunyuan15 DiT / VAE with action_in + camera pack.
 
 use std::path::{Path, PathBuf};
 
 use fastvideo_models::hunyuan15::Hunyuan15Schedule;
-use fastvideo_models::hyworld::{HyWorldConfig, HyWorldPreset};
+use fastvideo_models::hyworld::{
+    compute_latent_num, pose_to_input, HyWorldConfig, HyWorldPoseInput, HyWorldPreset,
+};
 use rand::SeedableRng;
 use rand_distr::{Distribution, StandardNormal};
 
@@ -86,11 +88,23 @@ impl HyWorldPipeline {
         Ok(())
     }
 
+    pub fn pose_input(&self, request: &HyWorldRequest) -> Result<HyWorldPoseInput> {
+        let lat = compute_latent_num(request.num_frames);
+        pose_to_input(&request.pose, lat).map_err(msg)
+    }
+
+    /// SigLIP token placeholder until vision weights are under `image_encoder/`.
+    pub fn siglip_tokens(&self) -> Vec<f32> {
+        HyWorldPoseInput::zeros_siglip_tokens(self.cfg.siglip_tokens, self.cfg.siglip_dim)
+    }
+
     pub fn generate(&self, request: &HyWorldRequest, out_dir: &Path) -> Result<()> {
         let dit = self.dit.as_ref().ok_or_else(|| {
             msg("HY-World: call load_dit() after placing Diffusers `transformer/` under --weights")
         })?;
-        let _ = (&request.pose, &request.image_path, &request.prompt);
+        let pose = self.pose_input(request)?;
+        let siglip = self.siglip_tokens();
+        let _ = (&pose, &siglip, &request.image_path, &request.prompt);
 
         let spat = 16usize;
         let temp = 4usize;
@@ -183,5 +197,17 @@ mod tests {
         let text = CudaTensor::zeros(&[1, 4, cfg.text_embed_dim]);
         let out = dit.forward(&lat, &text, None, 500.0).unwrap();
         assert!(!out.shape.is_empty());
+    }
+
+    #[test]
+    fn pose_action_in() {
+        let pipe =
+            HyWorldPipeline::open("/tmp/hyw-missing", HyWorldPreset::Bidirectional).unwrap();
+        let r = HyWorldRequest::bidirectional("walk", 0);
+        let pose = pipe.pose_input(&r).unwrap();
+        assert_eq!(pose.action_labels.len(), pose.latent_num);
+        assert!(pose.action_labels.iter().any(|&a| a != 0));
+        let sig = pipe.siglip_tokens();
+        assert_eq!(sig.len(), pipe.cfg.siglip_tokens * pipe.cfg.siglip_dim);
     }
 }

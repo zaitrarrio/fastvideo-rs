@@ -1,12 +1,14 @@
-//! GEN3C generate scaffold: T5 → Cosmos DiT (GEN3C channels) → Wan VAE.
+//! GEN3C generate: T5 → Cosmos DiT (GEN3C channels + 3D warp buffers) → Wan VAE.
 //!
-//! Reuses [`crate::cosmos::CosmosTransformer`] for encode/denoise; 3D cache
-//! buffers are packed as zeros until MoGe warp lands.
+//! Host warp math is online; MoGe depth is an optional external hook
+//! (`depth_path` or [`synthetic_depth`]).
 
 use std::path::{Path, PathBuf};
 
 use fastvideo_models::gen3c::{
-    CameraRotation, Gen3CPreset, Gen3CSchedule, Gen3CTransformerConfig, TrajectoryType,
+    default_intrinsics, generate_camera_trajectory, identity4, pack_rgb_buffers, pack_vae_buffers,
+    render_trajectory, synthetic_depth, CameraRotation, Gen3CPreset, Gen3CSchedule,
+    Gen3CTransformerConfig, TrajectoryType,
 };
 use fastvideo_models::wan::WanVaeConfig;
 use rand::SeedableRng;
@@ -48,6 +50,12 @@ pub struct Gen3CRequest {
     pub movement_distance: f32,
     pub camera_rotation: CameraRotation,
     pub sigma_conditioning: f64,
+    /// Optional MoGe depth map (`H*W` f32 raw or `.npy` not required — grayscale PNG).
+    /// When absent, uses constant [`synthetic_depth`] at `center_depth`.
+    pub depth_path: Option<PathBuf>,
+    pub center_depth: f32,
+    /// When true, pack RGB warp stub buffers; when VAE is loaded, prefer VAE-encoded warps.
+    pub use_geometry_conditioning: bool,
 }
 
 impl Gen3CRequest {
@@ -69,6 +77,9 @@ impl Gen3CRequest {
             movement_distance: 0.3,
             camera_rotation: CameraRotation::CenterFacing,
             sigma_conditioning: preset.sigma_conditional(),
+            depth_path: None,
+            center_depth: 1.0,
+            use_geometry_conditioning: true,
         }
     }
 
@@ -147,72 +158,203 @@ impl Gen3CPipeline {
         Ok(CudaTensor::zeros(&[1, 16, self.gen_cfg.text_embed_dim]))
     }
 
-    /// First-frame VAE encode → condition mask; 3D buffers stay zero without MoGe.
-    fn prepare_conditioning(
+    /// First-frame VAE encode → condition mask; build 3D warp buffers from depth+trajectory.
+    pub(crate) fn prepare_conditioning(
         &self,
         request: &Gen3CRequest,
         lt: usize,
         lh: usize,
         lw: usize,
-    ) -> Result<(Vec<f32>, Vec<f32>, usize)> {
+    ) -> Result<(Vec<f32>, Vec<f32>, Vec<f32>, usize)> {
         let c = self.gen_cfg.latent_channels;
         let spatial = lt * lh * lw;
         let mut cond_latents = vec![0f32; c * spatial];
         let mut cond_mask = vec![0f32; spatial];
+        let buf_ch = self.gen_cfg.buffer_channels();
+        let mut buffers = vec![0f32; buf_ch * spatial];
+
         let Some(path) = request.image_path.as_ref() else {
-            return Ok((cond_latents, cond_mask, 0));
+            return Ok((cond_latents, cond_mask, buffers, 0));
         };
-        let vae = self.vae.as_ref().ok_or_else(|| {
-            msg("GEN3C image_path set: call load_vae() so Wan VAE can encode")
-        })?;
+
         let video = load_rgb_frame(path, request.height, request.width)?;
-        let encoded = vae
-            .encode_video(&video)
-            .map_err(|e| msg(e.to_string()))?;
-        let encoded = vae
-            .normalize_latents(&encoded)
-            .map_err(|e| msg(e.to_string()))?;
-        let encoded = encoded
-            .try_mul_scalar(self.preset.sigma_data() as f32)
-            .map_err(|e| msg(e.to_string()))?;
-        let eh = encoded.host_cow()?;
-        let [_, ec, et, ey, ex] = match encoded.shape[..] {
-            [1, ec, et, ey, ex] => [1, ec, et, ey, ex],
-            _ => {
+        let rgb = video.host_cow()?;
+        // video is [1,3,1,H,W]
+        let rgb_chw: Vec<f32> = rgb[0..3 * request.height * request.width].to_vec();
+
+        if let Some(vae) = self.vae.as_ref() {
+            let encoded = vae
+                .encode_video(&video)
+                .map_err(|e| msg(e.to_string()))?;
+            let encoded = vae
+                .normalize_latents(&encoded)
+                .map_err(|e| msg(e.to_string()))?;
+            let encoded = encoded
+                .try_mul_scalar(self.preset.sigma_data() as f32)
+                .map_err(|e| msg(e.to_string()))?;
+            let eh = encoded.host_cow()?;
+            let [_, ec, et, ey, ex] = match encoded.shape[..] {
+                [1, ec, et, ey, ex] => [1, ec, et, ey, ex],
+                _ => {
+                    return Err(msg(format!(
+                        "gen3c cond encode shape {:?} want [1,C,T,H,W]",
+                        encoded.shape
+                    )))
+                }
+            };
+            if ec != c || ey != lh || ex != lw {
                 return Err(msg(format!(
-                    "gen3c cond encode shape {:?} want [1,C,T,H,W]",
-                    encoded.shape
-                )))
+                    "gen3c cond latent [{ec},{et},{ey},{ex}] vs want [{c},*,{lh},{lw}]"
+                )));
             }
-        };
-        if ec != c || ey != lh || ex != lw {
-            return Err(msg(format!(
-                "gen3c cond latent [{ec},{et},{ey},{ex}] vs want [{c},*,{lh},{lw}]"
-            )));
-        }
-        let num_cond_latent = 1usize.min(lt).min(et);
-        for ti in 0..num_cond_latent {
-            for y in 0..lh {
-                for x in 0..lw {
-                    let cell = ti * lh * lw + y * lw + x;
-                    cond_mask[cell] = 1.0;
-                    for ch in 0..c {
-                        let src = ((ch * et + ti) * ey + y) * ex + x;
-                        cond_latents[ch * spatial + cell] = eh[src];
+            let num_cond_latent = 1usize.min(lt).min(et);
+            for ti in 0..num_cond_latent {
+                for y in 0..lh {
+                    for x in 0..lw {
+                        let cell = ti * lh * lw + y * lw + x;
+                        cond_mask[cell] = 1.0;
+                        for ch in 0..c {
+                            let src = ((ch * et + ti) * ey + y) * ex + x;
+                            cond_latents[ch * spatial + cell] = eh[src];
+                        }
                     }
                 }
             }
+        } else {
+            // No VAE: still mark first latent frame conditioned (zeros) so mask path works.
+            for y in 0..lh {
+                for x in 0..lw {
+                    cond_mask[y * lw + x] = 1.0;
+                }
+            }
         }
-        let _ = (request.trajectory, request.movement_distance, request.camera_rotation);
-        Ok((cond_latents, cond_mask, num_cond_latent))
+
+        if request.use_geometry_conditioning {
+            let depth = if let Some(dp) = request.depth_path.as_ref() {
+                load_depth_map(dp, request.height, request.width)?
+            } else {
+                synthetic_depth(request.height, request.width, request.center_depth)
+            };
+            let (w2cs, ks) = generate_camera_trajectory(
+                request.trajectory,
+                request.num_frames.min(lt.max(2)),
+                request.movement_distance,
+                request.camera_rotation,
+                request.center_depth,
+                request.height,
+                request.width,
+            );
+            let src_w2c = identity4();
+            let src_k = default_intrinsics(request.height, request.width);
+            // Subsample trajectory to frame_buffer_max warps for the cache.
+            let n_buf = self.gen_cfg.frame_buffer_max;
+            let step = (w2cs.len() / n_buf).max(1);
+            let mut sel_w2c = Vec::new();
+            let mut sel_k = Vec::new();
+            for i in 0..n_buf {
+                let idx = (i * step).min(w2cs.len() - 1);
+                sel_w2c.push(w2cs[idx]);
+                sel_k.push(ks[idx]);
+            }
+            let warps = render_trajectory(
+                &rgb_chw,
+                &depth,
+                request.height,
+                request.width,
+                &src_w2c,
+                &src_k,
+                &sel_w2c,
+                &sel_k,
+            );
+
+            if let Some(vae) = self.vae.as_ref() {
+                let mut encoded_bufs = Vec::new();
+                let mut mask_bufs = Vec::new();
+                for (warp_rgb, warp_mask) in &warps {
+                    let tensor = CudaTensor::from_vec(
+                        warp_rgb.clone(),
+                        vec![1, 3, 1, request.height, request.width],
+                    )?;
+                    let enc = vae
+                        .encode_video(&tensor)
+                        .map_err(|e| msg(e.to_string()))?;
+                    let enc = vae
+                        .normalize_latents(&enc)
+                        .map_err(|e| msg(e.to_string()))?;
+                    let eh = enc.host_cow()?;
+                    let mut flat = vec![0f32; c * spatial];
+                    let [_, ec, et, ey, ex] = match enc.shape[..] {
+                        [1, ec, et, ey, ex] => [1, ec, et, ey, ex],
+                        _ => {
+                            return Err(msg(format!("gen3c warp encode {:?}", enc.shape)))
+                        }
+                    };
+                    let n_t = et.min(lt);
+                    for ch in 0..c.min(ec) {
+                        for ti in 0..n_t {
+                            for y in 0..lh.min(ey) {
+                                for x in 0..lw.min(ex) {
+                                    let src = ((ch * et + ti) * ey + y) * ex + x;
+                                    let dst = ti * lh * lw + y * lw + x;
+                                    flat[ch * spatial + dst] = eh[src];
+                                }
+                            }
+                        }
+                    }
+                    encoded_bufs.push(flat);
+                    // Downsample mask to latent grid.
+                    let mut mlat = vec![0f32; spatial];
+                    for ti in 0..lt {
+                        for y in 0..lh {
+                            for x in 0..lw {
+                                let sy = (((y as f32 + 0.5) * request.height as f32 / lh as f32)
+                                    as usize)
+                                    .min(request.height - 1);
+                                let sx = (((x as f32 + 0.5) * request.width as f32 / lw as f32)
+                                    as usize)
+                                    .min(request.width - 1);
+                                mlat[ti * lh * lw + y * lw + x] =
+                                    warp_mask[sy * request.width + sx];
+                            }
+                        }
+                    }
+                    mask_bufs.push(mlat);
+                }
+                buffers = pack_vae_buffers(
+                    &encoded_bufs,
+                    &mask_bufs,
+                    c,
+                    lt,
+                    lh,
+                    lw,
+                    self.gen_cfg.frame_buffer_max,
+                    self.gen_cfg.channels_per_buffer,
+                );
+            } else {
+                buffers = pack_rgb_buffers(
+                    &warps,
+                    request.height,
+                    request.width,
+                    lt,
+                    lh,
+                    lw,
+                    self.gen_cfg.frame_buffer_max,
+                    self.gen_cfg.channels_per_buffer,
+                );
+            }
+        }
+
+        let num_cond = if request.image_path.is_some() { 1 } else { 0 };
+        Ok((cond_latents, cond_mask, buffers, num_cond))
     }
 
-    /// Pack noise + mask + zero 3D buffers into DiT input channels.
+    /// Pack noise + mask + 3D warp buffers into DiT input channels.
     fn pack_step(
         &self,
         sample: &[f32],
         cond_latents: &[f32],
         cond_mask: &[f32],
+        buffers: &[f32],
         c_in: f64,
         current_t: f32,
         t_cond: f32,
@@ -225,6 +367,7 @@ impl Gen3CPipeline {
         let in_ch = self.gen_cfg.in_channels();
         let mut packed = vec![0f32; in_ch * spatial];
         let mut frame_ts = vec![current_t; lt];
+        let buf_ch = self.gen_cfg.buffer_channels();
         for j in 0..spatial {
             let m = cond_mask[j];
             let ti = j / (lh * lw);
@@ -236,9 +379,13 @@ impl Gen3CPipeline {
                 let scaled = sample[idx] * c_in as f32;
                 packed[idx] = m * cond_latents[idx] + (1.0 - m) * scaled;
             }
-            // condition mask channel
             packed[c * spatial + j] = m;
-            // remaining buffer channels stay 0 (MoGe deferred)
+            for ch in 0..buf_ch {
+                let src = ch * spatial + j;
+                if src < buffers.len() {
+                    packed[(c + 1 + ch) * spatial + j] = buffers[src];
+                }
+            }
         }
         let lat = CudaTensor::from_vec(packed, vec![1, in_ch, lt, lh, lw])?;
         Ok((lat, frame_ts))
@@ -295,7 +442,7 @@ impl Gen3CPipeline {
         let c = self.gen_cfg.latent_channels;
         let spatial = lt * lh * lw;
 
-        let (cond_latents, cond_mask, _n_cond) =
+        let (cond_latents, cond_mask, buffers, _n_cond) =
             self.prepare_conditioning(request, lt, lh, lw)?;
 
         let sched = self.schedule(request.num_steps);
@@ -321,6 +468,7 @@ impl Gen3CPipeline {
                 &sample,
                 &cond_latents,
                 &cond_mask,
+                &buffers,
                 c_in,
                 current_t,
                 t_cond,
@@ -412,6 +560,27 @@ impl Gen3CPipeline {
     }
 }
 
+fn load_depth_map(path: &Path, height: usize, width: usize) -> Result<Vec<f32>> {
+    let img = image::open(path)
+        .map_err(|e| msg(format!("open depth {}: {e}", path.display())))?
+        .into_luma8();
+    let img = image::imageops::resize(
+        &img,
+        width as u32,
+        height as u32,
+        image::imageops::FilterType::Triangle,
+    );
+    let mut depth = vec![0f32; height * width];
+    for y in 0..height {
+        for x in 0..width {
+            // Map 0..255 → 0.1..10.0 meters (MoGe-scale stand-in).
+            let v = f32::from(img.get_pixel(x as u32, y as u32)[0]) / 255.0;
+            depth[y * width + x] = 0.1 + v * 9.9;
+        }
+    }
+    Ok(depth)
+}
+
 fn load_rgb_frame(path: &Path, height: usize, width: usize) -> Result<CudaTensor> {
     let img = image::open(path)
         .map_err(|e| msg(format!("open image {}: {e}", path.display())))?
@@ -459,5 +628,19 @@ mod tests {
         let enc = CudaTensor::zeros(&[1, 4, cfg.text_embed_dim]);
         let out = dit.forward(&x, &enc, &[0.5, 0.5], Some(24.0)).unwrap();
         assert_eq!(out.shape, vec![1, cfg.out_channels, 2, 4, 4]);
+    }
+
+    #[test]
+    fn warp_buffers_without_image() {
+        let pipe = Gen3CPipeline::open("/tmp/gen3c-missing", Gen3CPreset::Cosmos7b).unwrap();
+        let mut r = Gen3CRequest::cosmos_7b("a scene", 0);
+        r.num_frames = 9;
+        r.height = 64;
+        r.width = 64;
+        let (cond, mask, buf, n) = pipe.prepare_conditioning(&r, 3, 8, 8).unwrap();
+        assert_eq!(n, 0);
+        assert_eq!(cond.len(), pipe.gen_cfg.latent_channels * 3 * 8 * 8);
+        assert!(mask.iter().all(|&m| m == 0.0));
+        assert_eq!(buf.len(), pipe.gen_cfg.buffer_channels() * 3 * 8 * 8);
     }
 }

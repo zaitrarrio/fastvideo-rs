@@ -1,8 +1,10 @@
-//! DreamX generate scaffold on Wan 5B DiT / VAE.
+//! DreamX generate on Wan 5B DiT / VAE with PRoPE camera pack.
 
 use std::path::{Path, PathBuf};
 
-use fastvideo_models::dreamx::{DreamXConfig, DreamXPreset};
+use fastvideo_models::dreamx::{
+    build_dreamx_camera_condition, DreamXCameraCondition, DreamXConfig, DreamXPreset,
+};
 use fastvideo_models::schedulers::FlowMatchEulerDiscreteScheduler;
 use fastvideo_models::wan::WanVaeConfig;
 use rand::SeedableRng;
@@ -91,16 +93,22 @@ impl DreamXPipeline {
         Ok(())
     }
 
+    pub fn camera_condition(&self, request: &DreamXRequest) -> Result<DreamXCameraCondition> {
+        build_dreamx_camera_condition(
+            &request.action_list,
+            &request.action_speed_list,
+            request.num_frames,
+        )
+        .map_err(msg)
+    }
+
     pub fn generate(&self, request: &DreamXRequest, out_dir: &Path) -> Result<()> {
         let dit = self.dit.as_ref().ok_or_else(|| {
             msg("DreamX: call load_dit() after placing Diffusers `transformer/` under --weights")
         })?;
-        let _ = (
-            &request.action_list,
-            &request.action_speed_list,
-            &request.image_path,
-            &request.prompt,
-        );
+        // viewmats + K for PRoPE control adapter (injected when adapter weights load).
+        let cam = self.camera_condition(request)?;
+        let _ = (&request.image_path, &request.prompt, &cam);
 
         let spat = 8usize;
         let temp = 4usize;
@@ -191,5 +199,14 @@ mod tests {
         let enc = CudaTensor::zeros(&[1, 4, cfg.text_dim]);
         let out = dit.forward(&x, &ts, &enc).unwrap();
         assert_eq!(out.shape[1], cfg.out_channels);
+    }
+
+    #[test]
+    fn builds_prope_camera() {
+        let pipe = DreamXPipeline::open("/tmp/dreamx-missing", DreamXPreset::Cam5b).unwrap();
+        let r = DreamXRequest::for_preset(DreamXPreset::Cam5b, "drive", 0);
+        let cam = pipe.camera_condition(&r).unwrap();
+        assert!(cam.num_latent_frames > 1);
+        assert_eq!(cam.viewmats.len(), cam.num_latent_frames * 16);
     }
 }

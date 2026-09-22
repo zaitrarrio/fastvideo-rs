@@ -15,6 +15,7 @@ pub mod ltx2;
 pub mod matrixgame;
 pub mod schedulers;
 pub mod wan;
+pub mod zimage;
 
 pub use schedulers::{
     DmdSchedule, FlowMatchEulerDiscreteScheduler, FlowUniPCMultistepScheduler, RcmSchedule,

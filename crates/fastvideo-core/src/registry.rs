@@ -299,6 +299,7 @@ pub enum ModelFamily {
     LingBotWorld,
     GameCraft,
     HyWorld,
+    ZImage,
 }
 
 impl ModelFamily {
@@ -318,6 +319,7 @@ impl ModelFamily {
             Self::LingBotWorld => "lingbotworld",
             Self::GameCraft => "gamecraft",
             Self::HyWorld => "hyworld",
+            Self::ZImage => "zimage",
         }
     }
 }
@@ -742,6 +744,17 @@ pub static HYWORLD_MODEL_DEFINITIONS: &[FamilyModelDefinition] = &[
     ),
 ];
 
+/// Z-Image T2I Hub ids.
+pub static ZIMAGE_MODEL_DEFINITIONS: &[FamilyModelDefinition] = &[
+    family_defn!(
+        ModelFamily::ZImage,
+        "zimage_turbo",
+        &["Tongyi-MAI/Z-Image-Turbo"],
+        &[WorkloadType::T2I],
+        match_any = &["z-image", "zimage"]
+    ),
+];
+
 fn resolve_family_table(table: &'static [FamilyModelDefinition], model_id: &str) -> Option<&'static FamilyModelDefinition> {
     table
         .iter()
@@ -799,6 +812,9 @@ pub fn resolve(model_id: &str) -> Result<ResolvedModel> {
         return Ok(ResolvedModel::Family(d));
     }
     if let Some(d) = resolve_family_table(HYWORLD_MODEL_DEFINITIONS, model_id) {
+        return Ok(ResolvedModel::Family(d));
+    }
+    if let Some(d) = resolve_family_table(ZIMAGE_MODEL_DEFINITIONS, model_id) {
         return Ok(ResolvedModel::Family(d));
     }
     if let Ok(wan) = resolve_wan(model_id) {
@@ -876,6 +892,11 @@ pub fn all_registered_ids() -> Vec<(ModelFamily, &'static str, &'static str)> {
         }
     }
     for d in HYWORLD_MODEL_DEFINITIONS {
+        for id in d.hf_model_paths {
+            out.push((d.family, *id, d.preset));
+        }
+    }
+    for d in ZIMAGE_MODEL_DEFINITIONS {
         for id in d.hf_model_paths {
             out.push((d.family, *id, d.preset));
         }
@@ -1051,6 +1072,10 @@ mod tests {
         let hyw = resolve("FastVideo/HY-WorldPlay-Bidirectional-Diffusers").unwrap();
         assert_eq!(hyw.family(), ModelFamily::HyWorld);
 
+        let zimg = resolve("Tongyi-MAI/Z-Image-Turbo").unwrap();
+        assert_eq!(zimg.family(), ModelFamily::ZImage);
+        assert_eq!(zimg.preset(), "zimage_turbo");
+
         assert!(resolve("not-a-real/model").is_err());
     }
 
@@ -1090,5 +1115,8 @@ mod tests {
         assert!(ids
             .iter()
             .any(|(f, id, _)| *f == ModelFamily::HyWorld && id.contains("WorldPlay")));
+        assert!(ids
+            .iter()
+            .any(|(f, id, _)| *f == ModelFamily::ZImage && id.contains("Z-Image")));
     }
 }

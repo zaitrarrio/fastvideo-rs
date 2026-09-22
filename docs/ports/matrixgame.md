@@ -60,6 +60,7 @@ VAE: Wan (MG2) / Wan2.2 light VAE (MG3).
 | Registry + CLI path | landed |
 | cudarc DiT (reuse `WanTransformer3D`) + tiny forward | landed |
 | Generate scaffold (UMT5 optional → Wan denoise → VAE) | landed |
-| Full action-module injectors / causal KV | deferred (metadata + zero action tensors) |
+| Keyboard/mouse action packing + auto presets | landed |
+| DiT action-module attention injectors / causal KV | external blocker (needs action_block weights fused into Wan DiT) |
 
 Host path reuses Wan encode/denoise/VAE; no refuse stubs for those cores.

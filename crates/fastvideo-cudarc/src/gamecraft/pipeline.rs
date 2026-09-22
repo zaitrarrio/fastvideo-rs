@@ -1,8 +1,10 @@
-//! GameCraft generate scaffold on Hunyuan15 DiT / VAE.
+//! GameCraft generate on Hunyuan15 DiT / VAE with Plücker CameraNet states.
 
 use std::path::{Path, PathBuf};
 
-use fastvideo_models::gamecraft::{GameCraftConfig, GameCraftPreset};
+use fastvideo_models::gamecraft::{
+    create_camera_trajectory, GameCraftConfig, GameCraftPreset,
+};
 use fastvideo_models::hunyuan15::Hunyuan15Schedule;
 use rand::SeedableRng;
 use rand_distr::{Distribution, StandardNormal};
@@ -89,13 +91,24 @@ impl GameCraftPipeline {
         Ok(())
     }
 
+    pub fn camera_states(&self, request: &GameCraftRequest) -> Vec<f32> {
+        create_camera_trajectory(
+            &request.action,
+            request.height,
+            request.width,
+            request.num_frames,
+            request.action_speed,
+        )
+    }
+
     pub fn generate(&self, request: &GameCraftRequest, out_dir: &Path) -> Result<()> {
         let dit = self.dit.as_ref().ok_or_else(|| {
             msg("GameCraft: call load_dit() after placing Diffusers `transformer/` under --weights")
         })?;
+        // Plücker [F,6,H,W] for CameraNet; fused into DiT when camera_net weights load.
+        let camera_states = self.camera_states(request);
         let _ = (
-            &request.action,
-            request.action_speed,
+            &camera_states,
             &request.image_path,
             &request.prompt,
             request.guidance_scale,
@@ -194,5 +207,14 @@ mod tests {
         let text = CudaTensor::zeros(&[1, 4, cfg.text_embed_dim]);
         let out = dit.forward(&lat, &text, None, 500.0).unwrap();
         assert!(!out.shape.is_empty());
+    }
+
+    #[test]
+    fn plucker_camera_states() {
+        let pipe = GameCraftPipeline::open("/tmp/gc-missing", GameCraftPreset::I2v).unwrap();
+        let r = GameCraftRequest::i2v("temple", 0);
+        let cam = pipe.camera_states(&r);
+        assert_eq!(cam.len(), r.num_frames * 6 * r.height * r.width);
+        assert!(cam.iter().any(|&v| v.abs() > 1e-8));
     }
 }

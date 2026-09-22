@@ -38,6 +38,7 @@ Sources (read 2026-09-22): FastVideo `configs/pipelines/lingbotworld.py` /
 | Registry + CLI path | landed |
 | cudarc DiT (reuse Wan I2V A14B) + tiny forward | landed |
 | Generate scaffold | landed |
-| Cam injector weights / c2ws packing | deferred |
+| Relative c2ws + Plücker injector pack | landed |
+| `poses.npy` / `c2ws_mlp` weight fuse | external blocker (npy load hook + injector Linear weights) |
 
 Host path reuses Wan I2V encode/denoise/VAE.

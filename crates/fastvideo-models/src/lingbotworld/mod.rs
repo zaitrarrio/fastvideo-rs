@@ -1,5 +1,12 @@
 //! LingBot-World host configs (Wan2.2 I2V + cam). Spec: docs/ports/lingbotworld.md.
 
+pub mod camera;
+
+pub use camera::{
+    compute_relative_poses, get_plucker_embeddings, prepare_camera_embedding,
+    synthetic_orbit_c2ws, Mat4,
+};
+
 use crate::wan::WanVideoArchConfig;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

@@ -72,6 +72,7 @@ pub fn generate_av(resolved: ResolvedModel, opts: AvGenerateOptions) -> Result<A
             ModelFamily::LingBotWorld => generate_lingbotworld(def, opts),
             ModelFamily::GameCraft => generate_gamecraft(def, opts),
             ModelFamily::HyWorld => generate_hyworld(def, opts),
+            ModelFamily::ZImage => generate_zimage(def, opts),
             ModelFamily::Wan => unreachable!(),
         },
     }
@@ -891,6 +892,73 @@ fn generate_hyworld(
         let _ = (def, opts);
         Err(FastVideoError::Message(
             "rebuild with --features cuda-cudarc to generate HY-World".into(),
+        ))
+    }
+}
+
+fn generate_zimage(
+    def: &'static FamilyModelDefinition,
+    opts: AvGenerateOptions,
+) -> Result<AvGenerateOutput> {
+    require_cuda(&opts.device)?;
+    #[cfg(feature = "cuda-cudarc")]
+    {
+        use fastvideo_cudarc::wan::device::resolve_device;
+        use fastvideo_cudarc::zimage::pipeline::{ZImagePipeline, ZImageRequest};
+        use fastvideo_models::zimage::ZImagePreset;
+
+        resolve_device(&opts.device).map_err(|e| FastVideoError::Message(e.to_string()))?;
+        let weights = weights_root(&opts)?;
+        let preset = match def.preset {
+            "zimage_turbo" => ZImagePreset::Turbo,
+            other => {
+                return Err(FastVideoError::Message(format!(
+                    "unknown Z-Image preset {other}"
+                )));
+            }
+        };
+        let mut pipe = ZImagePipeline::open(&weights, preset)
+            .map_err(|e| FastVideoError::Message(e.to_string()))?;
+        if weights.join("transformer").is_dir() {
+            pipe.load_dit()
+                .map_err(|e| FastVideoError::Message(e.to_string()))?;
+        }
+        if weights.join("vae").is_dir() {
+            pipe.load_vae()
+                .map_err(|e| FastVideoError::Message(e.to_string()))?;
+        } else {
+            pipe.load_vae_stub();
+        }
+        let mut request = ZImageRequest::turbo(opts.prompt, opts.seed);
+        if let Some(h) = opts.height {
+            request.height = h as usize;
+        }
+        if let Some(w) = opts.width {
+            request.width = w as usize;
+        }
+        if let Some(s) = opts.num_inference_steps {
+            request.num_steps = s as usize;
+        }
+        if let Some(g) = opts.guidance_scale {
+            request.guidance_scale = g;
+        }
+        std::fs::create_dir_all(&opts.output).map_err(|e| FastVideoError::Message(e.to_string()))?;
+        let out_png = opts.output.join("zimage.png");
+        pipe.generate(&request, &out_png)
+            .map_err(|e| FastVideoError::Message(e.to_string()))?;
+        Ok(AvGenerateOutput {
+            family: ModelFamily::ZImage,
+            preset: def.preset,
+            frame_paths: vec![out_png.display().to_string()],
+            mp4: None,
+            wav: None,
+        })
+    }
+    #[cfg(not(feature = "cuda-cudarc"))]
+    {
+        let _ = (def, opts);
+        Err(FastVideoError::Message(
+            "rebuild with --features cuda-cudarc to generate Z-Image".into(),
         ))
     }
 }

@@ -1,5 +1,9 @@
 //! HunyuanGameCraft host configs. Spec: docs/ports/gamecraft.md.
 
+pub mod camera;
+
+pub use camera::{create_camera_trajectory, resolve_action};
+
 use crate::hunyuan15::Hunyuan15TransformerConfig;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

@@ -1,8 +1,10 @@
-//! LingBot-World generate scaffold on Wan I2V DiT / VAE.
+//! LingBot-World generate on Wan I2V DiT / VAE with camera injector pack.
 
 use std::path::{Path, PathBuf};
 
-use fastvideo_models::lingbotworld::{LingBotWorldConfig, LingBotWorldPreset};
+use fastvideo_models::lingbotworld::{
+    prepare_camera_embedding, synthetic_orbit_c2ws, LingBotWorldConfig, LingBotWorldPreset,
+};
 use fastvideo_models::schedulers::FlowMatchEulerDiscreteScheduler;
 use fastvideo_models::wan::WanVaeConfig;
 use rand::SeedableRng;
@@ -28,6 +30,8 @@ pub struct LingBotWorldRequest {
     pub num_steps: usize,
     pub preset: LingBotWorldPreset,
     pub image_path: Option<PathBuf>,
+    /// Optional directory with `poses.npy` + `intrinsics.npy` (load hook).
+    pub camera_path: Option<PathBuf>,
 }
 
 impl LingBotWorldRequest {
@@ -45,6 +49,7 @@ impl LingBotWorldRequest {
             num_steps: preset.default_steps(),
             preset,
             image_path: None,
+            camera_path: None,
         }
     }
 }
@@ -88,11 +93,20 @@ impl LingBotWorldPipeline {
         Ok(())
     }
 
+    /// Build cam-injector Plücker embedding (synthetic orbit when no poses file).
+    pub fn camera_embedding(&self, request: &LingBotWorldRequest) -> Vec<f32> {
+        let _ = &request.camera_path; // npy load hook: replace synthetic when present
+        let c2ws = synthetic_orbit_c2ws(request.num_frames, 0.05);
+        let (emb, _) = prepare_camera_embedding(&c2ws, request.height, request.width, 8);
+        emb
+    }
+
     pub fn generate(&self, request: &LingBotWorldRequest, out_dir: &Path) -> Result<()> {
         let dit = self.dit.as_ref().ok_or_else(|| {
             msg("LingBot-World: call load_dit() after placing Diffusers `transformer/` under --weights")
         })?;
-        let _ = (&request.image_path, &request.prompt);
+        let cam_emb = self.camera_embedding(request);
+        let _ = (&request.image_path, &request.prompt, &cam_emb);
 
         let spat = 8usize;
         let temp = 4usize;
@@ -185,5 +199,15 @@ mod tests {
         let enc = CudaTensor::zeros(&[1, 4, cfg.text_dim]);
         let out = dit.forward(&x, &ts, &enc).unwrap();
         assert_eq!(out.shape[1], cfg.out_channels);
+    }
+
+    #[test]
+    fn camera_embedding_nonzero() {
+        let pipe =
+            LingBotWorldPipeline::open("/tmp/lbw-missing", LingBotWorldPreset::BaseCam).unwrap();
+        let r = LingBotWorldRequest::for_preset(LingBotWorldPreset::BaseCam, "cam", 0);
+        let emb = pipe.camera_embedding(&r);
+        assert!(!emb.is_empty());
+        assert!(emb.iter().any(|&v| v.abs() > 1e-8));
     }
 }

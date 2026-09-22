@@ -24,6 +24,7 @@ pub mod longcat;
 pub mod ltx2;
 pub mod matrixgame;
 pub mod wan;
+pub mod zimage;
 
 pub use wan::device::{resolve_device, DeviceError};
 pub use wan::{

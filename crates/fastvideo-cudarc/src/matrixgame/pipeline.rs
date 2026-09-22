@@ -1,8 +1,10 @@
-//! Matrix-Game generate scaffold on Wan DiT / VAE.
+//! Matrix-Game generate on Wan DiT / VAE with keyboard/mouse action packing.
 
 use std::path::{Path, PathBuf};
 
-use fastvideo_models::matrixgame::{MatrixGameConfig, MatrixGamePreset};
+use fastvideo_models::matrixgame::{
+    create_action_presets, ActionPack, MatrixGameConfig, MatrixGamePreset,
+};
 use fastvideo_models::schedulers::FlowMatchEulerDiscreteScheduler;
 use fastvideo_models::wan::WanVaeConfig;
 use rand::SeedableRng;
@@ -31,6 +33,8 @@ pub struct MatrixGameRequest {
     pub image_path: Option<PathBuf>,
     pub keyboard_cond: Option<Vec<f32>>,
     pub mouse_cond: Option<Vec<f32>>,
+    /// When action tensors are absent, build a deterministic preset (seeded).
+    pub auto_actions: bool,
 }
 
 impl MatrixGameRequest {
@@ -47,6 +51,7 @@ impl MatrixGameRequest {
             image_path: None,
             keyboard_cond: None,
             mouse_cond: None,
+            auto_actions: true,
         }
     }
 }
@@ -93,16 +98,46 @@ impl MatrixGamePipeline {
         Ok(())
     }
 
+    pub fn resolve_actions(&self, request: &MatrixGameRequest) -> ActionPack {
+        if let (Some(kb), Some(mouse)) = (&request.keyboard_cond, &request.mouse_cond) {
+            let kb_dim = self.cfg.keyboard_dim;
+            let mut pack = ActionPack::zeros(request.num_frames, kb_dim);
+            for t in 0..request.num_frames {
+                let src = (t * kb_dim).min(kb.len().saturating_sub(kb_dim));
+                if src + kb_dim <= kb.len() {
+                    pack.keyboard[t * kb_dim..(t + 1) * kb_dim]
+                        .copy_from_slice(&kb[src..src + kb_dim]);
+                } else if kb.len() >= kb_dim {
+                    pack.keyboard[t * kb_dim..(t + 1) * kb_dim]
+                        .copy_from_slice(&kb[..kb_dim]);
+                }
+                let ms = if mouse.len() >= (t + 1) * 2 {
+                    [mouse[t * 2], mouse[t * 2 + 1]]
+                } else if mouse.len() >= 2 {
+                    [mouse[0], mouse[1]]
+                } else {
+                    [0.0, 0.0]
+                };
+                pack.mouse[t * 2] = ms[0];
+                pack.mouse[t * 2 + 1] = ms[1];
+            }
+            return pack;
+        }
+        if request.auto_actions {
+            return create_action_presets(request.preset, request.num_frames, request.seed);
+        }
+        ActionPack::zeros(request.num_frames, self.cfg.keyboard_dim)
+    }
+
     pub fn generate(&self, request: &MatrixGameRequest, out_dir: &Path) -> Result<()> {
         let dit = self.dit.as_ref().ok_or_else(|| {
             msg("Matrix-Game: call load_dit() after placing Diffusers `transformer/` under --weights")
         })?;
-        let _ = (
-            &request.keyboard_cond,
-            &request.mouse_cond,
-            &request.image_path,
-            &request.prompt,
-        );
+        // Action tensors are packed for DiT action-module injectors when weights
+        // expose `action_blocks`; until then they travel with the request for
+        // host-side validation / future fuse.
+        let actions = self.resolve_actions(request);
+        let _ = (&request.image_path, &request.prompt, &actions);
 
         let spat = 8usize;
         let temp = 4usize;
@@ -196,5 +231,17 @@ mod tests {
         let out = dit.forward(&x, &ts, &enc).unwrap();
         assert_eq!(out.shape[0], 1);
         assert_eq!(out.shape[1], cfg.out_channels);
+    }
+
+    #[test]
+    fn resolves_auto_actions() {
+        let pipe =
+            MatrixGamePipeline::open("/tmp/mg-missing", MatrixGamePreset::Mg2BaseDistilled)
+                .unwrap();
+        let r = MatrixGameRequest::for_preset(MatrixGamePreset::Mg2BaseDistilled, "", 7);
+        let a = pipe.resolve_actions(&r);
+        assert_eq!(a.num_frames, r.num_frames);
+        assert_eq!(a.keyboard_dim, 4);
+        assert!(a.keyboard.iter().any(|&x| x > 0.0));
     }
 }

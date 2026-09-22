@@ -1,5 +1,12 @@
 //! Matrix-Game host configs (Wan DiT + action dims). Spec: docs/ports/matrixgame.md.
 
+pub mod actions;
+
+pub use actions::{
+    constant_action, create_action_presets, expand_action_to_frames, keyboard_vec, mouse_vec,
+    ActionPack,
+};
+
 use crate::wan::WanVideoArchConfig;
 
 /// Hub recipe.

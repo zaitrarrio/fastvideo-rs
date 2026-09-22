@@ -41,6 +41,7 @@ Sources (read 2026-09-22): FastVideo `configs/pipelines/dreamx_world.py`,
 | Registry + CLI path | landed |
 | cudarc DiT (reuse Wan TI2V-5B) + tiny forward | landed |
 | Generate scaffold | landed |
-| PRoPE cam self-attn / action trajectory pack | deferred (action list stored; zero cam tokens) |
+| Action → viewmats / K (PRoPE camera pack) | landed |
+| PRoPE self-attn / control-adapter fuse | external blocker (needs `add_control_adapter` weights in DiT) |
 
 Host path reuses Wan 5B encode/denoise/VAE graphs.

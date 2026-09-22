@@ -1,5 +1,13 @@
 //! HY-WorldPlay host configs. Spec: docs/ports/hyworld.md.
 
+pub mod pose;
+pub mod trajectory;
+
+pub use pose::{
+    compute_latent_num, parse_pose_string, pose_to_input, HyWorldPoseInput, DEFAULT_FORWARD_SPEED,
+};
+pub use trajectory::{generate_camera_trajectory_local, Motion};
+
 use crate::hunyuan15::Hunyuan15TransformerConfig;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -38,6 +46,9 @@ pub struct HyWorldConfig {
     pub hy: Hunyuan15TransformerConfig,
     pub has_action_in: bool,
     pub has_siglip: bool,
+    /// SigLIP token dim (load hook; zeros until vision weights present).
+    pub siglip_dim: usize,
+    pub siglip_tokens: usize,
 }
 
 impl HyWorldConfig {
@@ -46,6 +57,8 @@ impl HyWorldConfig {
             hy: Hunyuan15TransformerConfig::fasthunyuan15(),
             has_action_in: true,
             has_siglip: true,
+            siglip_dim: 1152,
+            siglip_tokens: 256,
         }
     }
 
@@ -54,6 +67,8 @@ impl HyWorldConfig {
             hy: Hunyuan15TransformerConfig::tiny(),
             has_action_in: true,
             has_siglip: true,
+            siglip_dim: 32,
+            siglip_tokens: 4,
         }
     }
 }
