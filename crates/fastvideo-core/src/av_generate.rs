@@ -67,6 +67,11 @@ pub fn generate_av(resolved: ResolvedModel, opts: AvGenerateOptions) -> Result<A
             ModelFamily::LongCat => generate_longcat(def, opts),
             ModelFamily::LingBot => generate_lingbot(def, opts),
             ModelFamily::Gen3C => generate_gen3c(def, opts),
+            ModelFamily::MatrixGame => generate_matrixgame(def, opts),
+            ModelFamily::DreamX => generate_dreamx(def, opts),
+            ModelFamily::LingBotWorld => generate_lingbotworld(def, opts),
+            ModelFamily::GameCraft => generate_gamecraft(def, opts),
+            ModelFamily::HyWorld => generate_hyworld(def, opts),
             ModelFamily::Wan => unreachable!(),
         },
     }
@@ -532,6 +537,360 @@ fn generate_gen3c(def: &'static FamilyModelDefinition, opts: AvGenerateOptions) 
         let _ = (def, opts);
         Err(FastVideoError::Message(
             "rebuild with --features cuda-cudarc to generate GEN3C".into(),
+        ))
+    }
+}
+
+#[cfg(feature = "cuda-cudarc")]
+fn collect_png_frames(output: &std::path::Path) -> Vec<String> {
+    let mut frame_paths: Vec<String> = Vec::new();
+    if output.is_dir() {
+        if let Ok(rd) = std::fs::read_dir(output) {
+            for ent in rd.flatten() {
+                let p = ent.path();
+                if p.extension().and_then(|e| e.to_str()) == Some("png") {
+                    frame_paths.push(p.display().to_string());
+                }
+            }
+            frame_paths.sort();
+        }
+    }
+    frame_paths
+}
+
+fn generate_matrixgame(
+    def: &'static FamilyModelDefinition,
+    opts: AvGenerateOptions,
+) -> Result<AvGenerateOutput> {
+    require_cuda(&opts.device)?;
+    #[cfg(feature = "cuda-cudarc")]
+    {
+        use fastvideo_cudarc::matrixgame::pipeline::{MatrixGamePipeline, MatrixGameRequest};
+        use fastvideo_cudarc::wan::device::resolve_device;
+        use fastvideo_models::matrixgame::MatrixGamePreset;
+
+        resolve_device(&opts.device).map_err(|e| FastVideoError::Message(e.to_string()))?;
+        let weights = weights_root(&opts)?;
+        let preset = match def.preset {
+            "mg2_base_distilled" => MatrixGamePreset::Mg2BaseDistilled,
+            "mg2_gta_distilled" => MatrixGamePreset::Mg2GtaDistilled,
+            "mg2_templerun_distilled" => MatrixGamePreset::Mg2TempleRunDistilled,
+            "mg2_base" => MatrixGamePreset::Mg2Base,
+            "mg3_base_distilled" => MatrixGamePreset::Mg3BaseDistilled,
+            other => {
+                return Err(FastVideoError::Message(format!(
+                    "unknown Matrix-Game preset {other}"
+                )));
+            }
+        };
+        let mut pipe = MatrixGamePipeline::open(&weights, preset)
+            .map_err(|e| FastVideoError::Message(e.to_string()))?;
+        if weights.join("transformer").is_dir() {
+            pipe.load_dit()
+                .map_err(|e| FastVideoError::Message(e.to_string()))?;
+        }
+        if weights.join("vae").is_dir() {
+            pipe.load_vae()
+                .map_err(|e| FastVideoError::Message(e.to_string()))?;
+        }
+        let mut request = MatrixGameRequest::for_preset(preset, opts.prompt, opts.seed);
+        request.image_path = opts.image_path.clone();
+        if let Some(g) = opts.guidance_scale {
+            request.guidance_scale = g;
+        }
+        if let Some(h) = opts.height {
+            request.height = h as usize;
+        }
+        if let Some(w) = opts.width {
+            request.width = w as usize;
+        }
+        if let Some(f) = opts.num_frames {
+            request.num_frames = f as usize;
+        }
+        if let Some(s) = opts.num_inference_steps {
+            request.num_steps = s as usize;
+        }
+        pipe.generate(&request, &opts.output)
+            .map_err(|e| FastVideoError::Message(e.to_string()))?;
+        Ok(AvGenerateOutput {
+            family: ModelFamily::MatrixGame,
+            preset: def.preset,
+            frame_paths: collect_png_frames(&opts.output),
+            mp4: None,
+            wav: None,
+        })
+    }
+    #[cfg(not(feature = "cuda-cudarc"))]
+    {
+        let _ = (def, opts);
+        Err(FastVideoError::Message(
+            "rebuild with --features cuda-cudarc to generate Matrix-Game".into(),
+        ))
+    }
+}
+
+fn generate_dreamx(
+    def: &'static FamilyModelDefinition,
+    opts: AvGenerateOptions,
+) -> Result<AvGenerateOutput> {
+    require_cuda(&opts.device)?;
+    #[cfg(feature = "cuda-cudarc")]
+    {
+        use fastvideo_cudarc::dreamx::pipeline::{DreamXPipeline, DreamXRequest};
+        use fastvideo_cudarc::wan::device::resolve_device;
+        use fastvideo_models::dreamx::DreamXPreset;
+
+        resolve_device(&opts.device).map_err(|e| FastVideoError::Message(e.to_string()))?;
+        let weights = weights_root(&opts)?;
+        let preset = match def.preset {
+            "dreamx_5b_cam" => DreamXPreset::Cam5b,
+            "dreamx_5b_ar" => DreamXPreset::Ar5b,
+            other => {
+                return Err(FastVideoError::Message(format!(
+                    "unknown DreamX preset {other}"
+                )));
+            }
+        };
+        let mut pipe = DreamXPipeline::open(&weights, preset)
+            .map_err(|e| FastVideoError::Message(e.to_string()))?;
+        if weights.join("transformer").is_dir() {
+            pipe.load_dit()
+                .map_err(|e| FastVideoError::Message(e.to_string()))?;
+        }
+        if weights.join("vae").is_dir() {
+            pipe.load_vae()
+                .map_err(|e| FastVideoError::Message(e.to_string()))?;
+        }
+        let mut request = DreamXRequest::for_preset(preset, opts.prompt, opts.seed);
+        request.image_path = opts.image_path.clone();
+        if let Some(g) = opts.guidance_scale {
+            request.guidance_scale = g;
+        }
+        if let Some(h) = opts.height {
+            request.height = h as usize;
+        }
+        if let Some(w) = opts.width {
+            request.width = w as usize;
+        }
+        if let Some(f) = opts.num_frames {
+            request.num_frames = f as usize;
+        }
+        if let Some(s) = opts.num_inference_steps {
+            request.num_steps = s as usize;
+        }
+        pipe.generate(&request, &opts.output)
+            .map_err(|e| FastVideoError::Message(e.to_string()))?;
+        Ok(AvGenerateOutput {
+            family: ModelFamily::DreamX,
+            preset: def.preset,
+            frame_paths: collect_png_frames(&opts.output),
+            mp4: None,
+            wav: None,
+        })
+    }
+    #[cfg(not(feature = "cuda-cudarc"))]
+    {
+        let _ = (def, opts);
+        Err(FastVideoError::Message(
+            "rebuild with --features cuda-cudarc to generate DreamX".into(),
+        ))
+    }
+}
+
+fn generate_lingbotworld(
+    def: &'static FamilyModelDefinition,
+    opts: AvGenerateOptions,
+) -> Result<AvGenerateOutput> {
+    require_cuda(&opts.device)?;
+    #[cfg(feature = "cuda-cudarc")]
+    {
+        use fastvideo_cudarc::lingbotworld::pipeline::{
+            LingBotWorldPipeline, LingBotWorldRequest,
+        };
+        use fastvideo_cudarc::wan::device::resolve_device;
+        use fastvideo_models::lingbotworld::LingBotWorldPreset;
+
+        resolve_device(&opts.device).map_err(|e| FastVideoError::Message(e.to_string()))?;
+        let weights = weights_root(&opts)?;
+        let preset = match def.preset {
+            "lingbotworld_base_cam" => LingBotWorldPreset::BaseCam,
+            "lingbotworld2_causal_fast" => LingBotWorldPreset::V2CausalFast,
+            other => {
+                return Err(FastVideoError::Message(format!(
+                    "unknown LingBot-World preset {other}"
+                )));
+            }
+        };
+        let mut pipe = LingBotWorldPipeline::open(&weights, preset)
+            .map_err(|e| FastVideoError::Message(e.to_string()))?;
+        if weights.join("transformer").is_dir() {
+            pipe.load_dit()
+                .map_err(|e| FastVideoError::Message(e.to_string()))?;
+        }
+        if weights.join("vae").is_dir() {
+            pipe.load_vae()
+                .map_err(|e| FastVideoError::Message(e.to_string()))?;
+        }
+        let mut request = LingBotWorldRequest::for_preset(preset, opts.prompt, opts.seed);
+        request.image_path = opts.image_path.clone();
+        if let Some(h) = opts.height {
+            request.height = h as usize;
+        }
+        if let Some(w) = opts.width {
+            request.width = w as usize;
+        }
+        if let Some(f) = opts.num_frames {
+            request.num_frames = f as usize;
+        }
+        if let Some(s) = opts.num_inference_steps {
+            request.num_steps = s as usize;
+        }
+        pipe.generate(&request, &opts.output)
+            .map_err(|e| FastVideoError::Message(e.to_string()))?;
+        Ok(AvGenerateOutput {
+            family: ModelFamily::LingBotWorld,
+            preset: def.preset,
+            frame_paths: collect_png_frames(&opts.output),
+            mp4: None,
+            wav: None,
+        })
+    }
+    #[cfg(not(feature = "cuda-cudarc"))]
+    {
+        let _ = (def, opts);
+        Err(FastVideoError::Message(
+            "rebuild with --features cuda-cudarc to generate LingBot-World".into(),
+        ))
+    }
+}
+
+fn generate_gamecraft(
+    def: &'static FamilyModelDefinition,
+    opts: AvGenerateOptions,
+) -> Result<AvGenerateOutput> {
+    require_cuda(&opts.device)?;
+    #[cfg(feature = "cuda-cudarc")]
+    {
+        use fastvideo_cudarc::gamecraft::pipeline::{GameCraftPipeline, GameCraftRequest};
+        use fastvideo_cudarc::wan::device::resolve_device;
+        use fastvideo_models::gamecraft::GameCraftPreset;
+
+        resolve_device(&opts.device).map_err(|e| FastVideoError::Message(e.to_string()))?;
+        let weights = weights_root(&opts)?;
+        let preset = match def.preset {
+            "gamecraft_i2v" => GameCraftPreset::I2v,
+            other => {
+                return Err(FastVideoError::Message(format!(
+                    "unknown GameCraft preset {other}"
+                )));
+            }
+        };
+        let mut pipe = GameCraftPipeline::open(&weights, preset)
+            .map_err(|e| FastVideoError::Message(e.to_string()))?;
+        if weights.join("transformer").is_dir() {
+            pipe.load_dit()
+                .map_err(|e| FastVideoError::Message(e.to_string()))?;
+        }
+        if weights.join("vae").is_dir() {
+            pipe.load_vae()
+                .map_err(|e| FastVideoError::Message(e.to_string()))?;
+        }
+        let mut request = GameCraftRequest::i2v(opts.prompt, opts.seed);
+        request.image_path = opts.image_path.clone();
+        if let Some(g) = opts.guidance_scale {
+            request.guidance_scale = g;
+        }
+        if let Some(h) = opts.height {
+            request.height = h as usize;
+        }
+        if let Some(w) = opts.width {
+            request.width = w as usize;
+        }
+        if let Some(f) = opts.num_frames {
+            request.num_frames = f as usize;
+        }
+        if let Some(s) = opts.num_inference_steps {
+            request.num_steps = s as usize;
+        }
+        pipe.generate(&request, &opts.output)
+            .map_err(|e| FastVideoError::Message(e.to_string()))?;
+        Ok(AvGenerateOutput {
+            family: ModelFamily::GameCraft,
+            preset: def.preset,
+            frame_paths: collect_png_frames(&opts.output),
+            mp4: None,
+            wav: None,
+        })
+    }
+    #[cfg(not(feature = "cuda-cudarc"))]
+    {
+        let _ = (def, opts);
+        Err(FastVideoError::Message(
+            "rebuild with --features cuda-cudarc to generate GameCraft".into(),
+        ))
+    }
+}
+
+fn generate_hyworld(
+    def: &'static FamilyModelDefinition,
+    opts: AvGenerateOptions,
+) -> Result<AvGenerateOutput> {
+    require_cuda(&opts.device)?;
+    #[cfg(feature = "cuda-cudarc")]
+    {
+        use fastvideo_cudarc::hyworld::pipeline::{HyWorldPipeline, HyWorldRequest};
+        use fastvideo_cudarc::wan::device::resolve_device;
+        use fastvideo_models::hyworld::HyWorldPreset;
+
+        resolve_device(&opts.device).map_err(|e| FastVideoError::Message(e.to_string()))?;
+        let weights = weights_root(&opts)?;
+        let preset = match def.preset {
+            "hyworld_bidirectional" => HyWorldPreset::Bidirectional,
+            other => {
+                return Err(FastVideoError::Message(format!(
+                    "unknown HY-World preset {other}"
+                )));
+            }
+        };
+        let mut pipe = HyWorldPipeline::open(&weights, preset)
+            .map_err(|e| FastVideoError::Message(e.to_string()))?;
+        if weights.join("transformer").is_dir() {
+            pipe.load_dit()
+                .map_err(|e| FastVideoError::Message(e.to_string()))?;
+        }
+        if weights.join("vae").is_dir() {
+            pipe.load_vae()
+                .map_err(|e| FastVideoError::Message(e.to_string()))?;
+        }
+        let mut request = HyWorldRequest::bidirectional(opts.prompt, opts.seed);
+        request.image_path = opts.image_path.clone();
+        if let Some(h) = opts.height {
+            request.height = h as usize;
+        }
+        if let Some(w) = opts.width {
+            request.width = w as usize;
+        }
+        if let Some(f) = opts.num_frames {
+            request.num_frames = f as usize;
+        }
+        if let Some(s) = opts.num_inference_steps {
+            request.num_steps = s as usize;
+        }
+        pipe.generate(&request, &opts.output)
+            .map_err(|e| FastVideoError::Message(e.to_string()))?;
+        Ok(AvGenerateOutput {
+            family: ModelFamily::HyWorld,
+            preset: def.preset,
+            frame_paths: collect_png_frames(&opts.output),
+            mp4: None,
+            wav: None,
+        })
+    }
+    #[cfg(not(feature = "cuda-cudarc"))]
+    {
+        let _ = (def, opts);
+        Err(FastVideoError::Message(
+            "rebuild with --features cuda-cudarc to generate HY-World".into(),
         ))
     }
 }

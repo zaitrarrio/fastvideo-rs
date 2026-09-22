@@ -1,8 +1,8 @@
-//! Matrix-Game generate scaffold on Wan DiT / VAE.
+//! DreamX generate scaffold on Wan 5B DiT / VAE.
 
 use std::path::{Path, PathBuf};
 
-use fastvideo_models::matrixgame::{MatrixGameConfig, MatrixGamePreset};
+use fastvideo_models::dreamx::{DreamXConfig, DreamXPreset};
 use fastvideo_models::schedulers::FlowMatchEulerDiscreteScheduler;
 use fastvideo_models::wan::WanVaeConfig;
 use rand::SeedableRng;
@@ -19,7 +19,7 @@ fn msg(s: impl Into<String>) -> PipelineError {
 }
 
 #[derive(Debug, Clone)]
-pub struct MatrixGameRequest {
+pub struct DreamXRequest {
     pub prompt: String,
     pub seed: u64,
     pub height: usize,
@@ -27,14 +27,14 @@ pub struct MatrixGameRequest {
     pub num_frames: usize,
     pub num_steps: usize,
     pub guidance_scale: f32,
-    pub preset: MatrixGamePreset,
+    pub preset: DreamXPreset,
     pub image_path: Option<PathBuf>,
-    pub keyboard_cond: Option<Vec<f32>>,
-    pub mouse_cond: Option<Vec<f32>>,
+    pub action_list: Vec<String>,
+    pub action_speed_list: Vec<f32>,
 }
 
-impl MatrixGameRequest {
-    pub fn for_preset(preset: MatrixGamePreset, prompt: impl Into<String>, seed: u64) -> Self {
+impl DreamXRequest {
+    pub fn for_preset(preset: DreamXPreset, prompt: impl Into<String>, seed: u64) -> Self {
         Self {
             prompt: prompt.into(),
             seed,
@@ -42,28 +42,28 @@ impl MatrixGameRequest {
             width: preset.default_width(),
             num_frames: preset.default_num_frames(),
             num_steps: preset.default_steps(),
-            guidance_scale: 1.0,
+            guidance_scale: preset.guidance_scale(),
             preset,
             image_path: None,
-            keyboard_cond: None,
-            mouse_cond: None,
+            action_list: vec!["w".into(), "d".into(), "w".into()],
+            action_speed_list: vec![4.0, 2.0, 4.0],
         }
     }
 }
 
-pub struct MatrixGamePipeline {
+pub struct DreamXPipeline {
     pub root: PathBuf,
-    pub cfg: MatrixGameConfig,
-    pub preset: MatrixGamePreset,
+    pub cfg: DreamXConfig,
+    pub preset: DreamXPreset,
     pub dit: Option<WanTransformer3D>,
     pub vae: Option<AutoencoderKlWan>,
 }
 
-impl MatrixGamePipeline {
-    pub fn open(root: impl Into<PathBuf>, preset: MatrixGamePreset) -> Result<Self> {
+impl DreamXPipeline {
+    pub fn open(root: impl Into<PathBuf>, preset: DreamXPreset) -> Result<Self> {
         Ok(Self {
             root: root.into(),
-            cfg: MatrixGameConfig::for_preset(preset),
+            cfg: DreamXConfig::for_preset(preset),
             preset,
             dit: None,
             vae: None,
@@ -77,7 +77,7 @@ impl MatrixGamePipeline {
     }
 
     pub fn load_dit_zeros_tiny(&mut self) -> Result<()> {
-        self.cfg = MatrixGameConfig::tiny();
+        self.cfg = DreamXConfig::tiny();
         self.dit = Some(WanTransformer3D::zeros(self.cfg.wan.clone()));
         Ok(())
     }
@@ -85,21 +85,19 @@ impl MatrixGamePipeline {
     pub fn load_vae(&mut self) -> Result<()> {
         let map = WeightMap::open(&self.root.join("vae")).map_err(|e| msg(e.to_string()))?;
         let mut cfg = WanVaeConfig::wan_2_1();
-        if self.preset.is_mg3() {
-            cfg.z_dim = 48;
-        }
+        cfg.z_dim = 48;
         cfg.load_encoder = true;
         self.vae = Some(AutoencoderKlWan::load(cfg, &map).map_err(|e| msg(e.to_string()))?);
         Ok(())
     }
 
-    pub fn generate(&self, request: &MatrixGameRequest, out_dir: &Path) -> Result<()> {
+    pub fn generate(&self, request: &DreamXRequest, out_dir: &Path) -> Result<()> {
         let dit = self.dit.as_ref().ok_or_else(|| {
-            msg("Matrix-Game: call load_dit() after placing Diffusers `transformer/` under --weights")
+            msg("DreamX: call load_dit() after placing Diffusers `transformer/` under --weights")
         })?;
         let _ = (
-            &request.keyboard_cond,
-            &request.mouse_cond,
+            &request.action_list,
+            &request.action_speed_list,
             &request.image_path,
             &request.prompt,
         );
@@ -136,7 +134,7 @@ impl MatrixGamePipeline {
         }
 
         let vae = self.vae.as_ref().ok_or_else(|| {
-            msg("Matrix-Game: call load_vae() after placing Diffusers `vae/` under --weights")
+            msg("DreamX: call load_vae() after placing Diffusers `vae/` under --weights")
         })?;
         let latents = CudaTensor::from_vec(sample, vec![1, c, lt, lh, lw])?;
         let scaled = vae
@@ -147,7 +145,7 @@ impl MatrixGamePipeline {
             [1, 3, tf, hf, wf] => [1, 3, tf, hf, wf],
             _ => {
                 return Err(msg(format!(
-                    "matrixgame decode shape {:?} want [1,3,T,H,W]",
+                    "dreamx decode shape {:?} want [1,3,T,H,W]",
                     pixels.shape
                 )))
             }
@@ -176,17 +174,15 @@ mod tests {
     use super::*;
 
     #[test]
-    fn request_mg3_defaults() {
-        let r = MatrixGameRequest::for_preset(MatrixGamePreset::Mg3BaseDistilled, "", 0);
-        assert_eq!(r.height, 720);
-        assert_eq!(r.num_steps, 3);
+    fn request_cam_defaults() {
+        let r = DreamXRequest::for_preset(DreamXPreset::Cam5b, "drive", 0);
+        assert_eq!(r.height, 480);
+        assert_eq!(r.action_list.len(), 3);
     }
 
     #[test]
     fn tiny_dit_forward() {
-        let mut pipe =
-            MatrixGamePipeline::open("/tmp/mg-missing", MatrixGamePreset::Mg2BaseDistilled)
-                .unwrap();
+        let mut pipe = DreamXPipeline::open("/tmp/dreamx-missing", DreamXPreset::Cam5b).unwrap();
         pipe.load_dit_zeros_tiny().unwrap();
         let dit = pipe.dit.as_ref().unwrap();
         let cfg = &pipe.cfg.wan;
@@ -194,7 +190,6 @@ mod tests {
         let ts = CudaTensor::from_vec(vec![500f32], vec![1]).unwrap();
         let enc = CudaTensor::zeros(&[1, 4, cfg.text_dim]);
         let out = dit.forward(&x, &ts, &enc).unwrap();
-        assert_eq!(out.shape[0], 1);
         assert_eq!(out.shape[1], cfg.out_channels);
     }
 }

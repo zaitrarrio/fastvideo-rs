@@ -102,10 +102,9 @@ impl MatrixGameConfig {
         let wan = if preset.is_mg3() {
             WanVideoArchConfig::wan_2_2_ti2v_5b()
         } else {
-            // FastVideo MatrixGame2WanVideoArchConfig: Wan defaults + image_dim.
+            // Wan 14B defaults + CLIP image; keep text_dim for UMT5 graph.
             let mut w = WanVideoArchConfig::wan_t2v_14b();
             w.image_dim = Some(1280);
-            w.text_dim = 0;
             w
         };
         Self {

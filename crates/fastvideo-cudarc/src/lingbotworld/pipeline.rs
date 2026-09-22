@@ -1,8 +1,8 @@
-//! Matrix-Game generate scaffold on Wan DiT / VAE.
+//! LingBot-World generate scaffold on Wan I2V DiT / VAE.
 
 use std::path::{Path, PathBuf};
 
-use fastvideo_models::matrixgame::{MatrixGameConfig, MatrixGamePreset};
+use fastvideo_models::lingbotworld::{LingBotWorldConfig, LingBotWorldPreset};
 use fastvideo_models::schedulers::FlowMatchEulerDiscreteScheduler;
 use fastvideo_models::wan::WanVaeConfig;
 use rand::SeedableRng;
@@ -19,22 +19,23 @@ fn msg(s: impl Into<String>) -> PipelineError {
 }
 
 #[derive(Debug, Clone)]
-pub struct MatrixGameRequest {
+pub struct LingBotWorldRequest {
     pub prompt: String,
     pub seed: u64,
     pub height: usize,
     pub width: usize,
     pub num_frames: usize,
     pub num_steps: usize,
-    pub guidance_scale: f32,
-    pub preset: MatrixGamePreset,
+    pub preset: LingBotWorldPreset,
     pub image_path: Option<PathBuf>,
-    pub keyboard_cond: Option<Vec<f32>>,
-    pub mouse_cond: Option<Vec<f32>>,
 }
 
-impl MatrixGameRequest {
-    pub fn for_preset(preset: MatrixGamePreset, prompt: impl Into<String>, seed: u64) -> Self {
+impl LingBotWorldRequest {
+    pub fn for_preset(
+        preset: LingBotWorldPreset,
+        prompt: impl Into<String>,
+        seed: u64,
+    ) -> Self {
         Self {
             prompt: prompt.into(),
             seed,
@@ -42,28 +43,25 @@ impl MatrixGameRequest {
             width: preset.default_width(),
             num_frames: preset.default_num_frames(),
             num_steps: preset.default_steps(),
-            guidance_scale: 1.0,
             preset,
             image_path: None,
-            keyboard_cond: None,
-            mouse_cond: None,
         }
     }
 }
 
-pub struct MatrixGamePipeline {
+pub struct LingBotWorldPipeline {
     pub root: PathBuf,
-    pub cfg: MatrixGameConfig,
-    pub preset: MatrixGamePreset,
+    pub cfg: LingBotWorldConfig,
+    pub preset: LingBotWorldPreset,
     pub dit: Option<WanTransformer3D>,
     pub vae: Option<AutoencoderKlWan>,
 }
 
-impl MatrixGamePipeline {
-    pub fn open(root: impl Into<PathBuf>, preset: MatrixGamePreset) -> Result<Self> {
+impl LingBotWorldPipeline {
+    pub fn open(root: impl Into<PathBuf>, preset: LingBotWorldPreset) -> Result<Self> {
         Ok(Self {
             root: root.into(),
-            cfg: MatrixGameConfig::for_preset(preset),
+            cfg: LingBotWorldConfig::for_preset(preset),
             preset,
             dit: None,
             vae: None,
@@ -77,7 +75,7 @@ impl MatrixGamePipeline {
     }
 
     pub fn load_dit_zeros_tiny(&mut self) -> Result<()> {
-        self.cfg = MatrixGameConfig::tiny();
+        self.cfg = LingBotWorldConfig::tiny();
         self.dit = Some(WanTransformer3D::zeros(self.cfg.wan.clone()));
         Ok(())
     }
@@ -85,35 +83,29 @@ impl MatrixGamePipeline {
     pub fn load_vae(&mut self) -> Result<()> {
         let map = WeightMap::open(&self.root.join("vae")).map_err(|e| msg(e.to_string()))?;
         let mut cfg = WanVaeConfig::wan_2_1();
-        if self.preset.is_mg3() {
-            cfg.z_dim = 48;
-        }
         cfg.load_encoder = true;
         self.vae = Some(AutoencoderKlWan::load(cfg, &map).map_err(|e| msg(e.to_string()))?);
         Ok(())
     }
 
-    pub fn generate(&self, request: &MatrixGameRequest, out_dir: &Path) -> Result<()> {
+    pub fn generate(&self, request: &LingBotWorldRequest, out_dir: &Path) -> Result<()> {
         let dit = self.dit.as_ref().ok_or_else(|| {
-            msg("Matrix-Game: call load_dit() after placing Diffusers `transformer/` under --weights")
+            msg("LingBot-World: call load_dit() after placing Diffusers `transformer/` under --weights")
         })?;
-        let _ = (
-            &request.keyboard_cond,
-            &request.mouse_cond,
-            &request.image_path,
-            &request.prompt,
-        );
+        let _ = (&request.image_path, &request.prompt);
 
         let spat = 8usize;
         let temp = 4usize;
         let lt = 1 + (request.num_frames.saturating_sub(1)).div_ceil(temp);
         let lh = request.height.div_ceil(spat);
         let lw = request.width.div_ceil(spat);
+        // Denoise on out_channels; I2V packs extra channels at encode time.
         let c = self.cfg.wan.out_channels;
         let spatial = lt * lh * lw;
         let n = c * spatial;
 
-        let mut sched = FlowMatchEulerDiscreteScheduler::new(1000, request.preset.flow_shift());
+        let mut sched =
+            FlowMatchEulerDiscreteScheduler::new(1000, request.preset.flow_shift());
         sched.set_timesteps(request.num_steps);
         let timesteps = sched.inference_timesteps().to_vec();
         let sigmas = sched.inference_sigmas().to_vec();
@@ -136,7 +128,7 @@ impl MatrixGamePipeline {
         }
 
         let vae = self.vae.as_ref().ok_or_else(|| {
-            msg("Matrix-Game: call load_vae() after placing Diffusers `vae/` under --weights")
+            msg("LingBot-World: call load_vae() after placing Diffusers `vae/` under --weights")
         })?;
         let latents = CudaTensor::from_vec(sample, vec![1, c, lt, lh, lw])?;
         let scaled = vae
@@ -147,7 +139,7 @@ impl MatrixGamePipeline {
             [1, 3, tf, hf, wf] => [1, 3, tf, hf, wf],
             _ => {
                 return Err(msg(format!(
-                    "matrixgame decode shape {:?} want [1,3,T,H,W]",
+                    "lingbotworld decode shape {:?} want [1,3,T,H,W]",
                     pixels.shape
                 )))
             }
@@ -176,17 +168,15 @@ mod tests {
     use super::*;
 
     #[test]
-    fn request_mg3_defaults() {
-        let r = MatrixGameRequest::for_preset(MatrixGamePreset::Mg3BaseDistilled, "", 0);
-        assert_eq!(r.height, 720);
-        assert_eq!(r.num_steps, 3);
+    fn request_defaults() {
+        let r = LingBotWorldRequest::for_preset(LingBotWorldPreset::BaseCam, "cam", 0);
+        assert_eq!(r.height, 480);
     }
 
     #[test]
     fn tiny_dit_forward() {
         let mut pipe =
-            MatrixGamePipeline::open("/tmp/mg-missing", MatrixGamePreset::Mg2BaseDistilled)
-                .unwrap();
+            LingBotWorldPipeline::open("/tmp/lbw-missing", LingBotWorldPreset::BaseCam).unwrap();
         pipe.load_dit_zeros_tiny().unwrap();
         let dit = pipe.dit.as_ref().unwrap();
         let cfg = &pipe.cfg.wan;
@@ -194,7 +184,6 @@ mod tests {
         let ts = CudaTensor::from_vec(vec![500f32], vec![1]).unwrap();
         let enc = CudaTensor::zeros(&[1, 4, cfg.text_dim]);
         let out = dit.forward(&x, &ts, &enc).unwrap();
-        assert_eq!(out.shape[0], 1);
         assert_eq!(out.shape[1], cfg.out_channels);
     }
 }

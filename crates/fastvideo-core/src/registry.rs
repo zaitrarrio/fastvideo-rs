@@ -294,6 +294,11 @@ pub enum ModelFamily {
     LongCat,
     LingBot,
     Gen3C,
+    MatrixGame,
+    DreamX,
+    LingBotWorld,
+    GameCraft,
+    HyWorld,
 }
 
 impl ModelFamily {
@@ -308,6 +313,11 @@ impl ModelFamily {
             Self::LongCat => "longcat",
             Self::LingBot => "lingbot",
             Self::Gen3C => "gen3c",
+            Self::MatrixGame => "matrixgame",
+            Self::DreamX => "dreamx_world",
+            Self::LingBotWorld => "lingbotworld",
+            Self::GameCraft => "gamecraft",
+            Self::HyWorld => "hyworld",
         }
     }
 }
@@ -631,6 +641,107 @@ pub static GEN3C_MODEL_DEFINITIONS: &[FamilyModelDefinition] = &[
     ),
 ];
 
+/// Matrix-Game Hub ids.
+pub static MATRIXGAME_MODEL_DEFINITIONS: &[FamilyModelDefinition] = &[
+    family_defn!(
+        ModelFamily::MatrixGame,
+        "mg2_base_distilled",
+        &["FastVideo/Matrix-Game-2.0-Base-Distilled-Diffusers"],
+        &[WorkloadType::I2V],
+        match_any = &["matrix-game-2.0-base-distilled", "mg2-base-distilled"]
+    ),
+    family_defn!(
+        ModelFamily::MatrixGame,
+        "mg2_gta_distilled",
+        &["FastVideo/Matrix-Game-2.0-GTA-Distilled-Diffusers"],
+        &[WorkloadType::I2V],
+        match_any = &["matrix-game-2.0-gta-distilled", "mg2-gta"]
+    ),
+    family_defn!(
+        ModelFamily::MatrixGame,
+        "mg2_templerun_distilled",
+        &["FastVideo/Matrix-Game-2.0-TempleRun-Distilled-Diffusers"],
+        &[WorkloadType::I2V],
+        match_any = &["matrix-game-2.0-templerun", "mg2-templerun"]
+    ),
+    family_defn!(
+        ModelFamily::MatrixGame,
+        "mg2_base",
+        &[
+            "FastVideo/Matrix-Game-2.0-Base-Diffusers",
+            "FastVideo/Matrix-Game-2.0-GTA-Diffusers",
+            "FastVideo/Matrix-Game-2.0-TempleRun-Diffusers",
+        ],
+        &[WorkloadType::I2V],
+        match_any = &["matrix-game-2.0-base-diffusers", "mg2-base"]
+    ),
+    family_defn!(
+        ModelFamily::MatrixGame,
+        "mg3_base_distilled",
+        &["FastVideo/Matrix-Game-3.0-Base-Distilled-Diffusers"],
+        &[WorkloadType::I2V],
+        match_any = &["matrix-game-3.0", "mg3-base"]
+    ),
+];
+
+/// DreamX-World Hub ids.
+pub static DREAMX_MODEL_DEFINITIONS: &[FamilyModelDefinition] = &[
+    family_defn!(
+        ModelFamily::DreamX,
+        "dreamx_5b_cam",
+        &["FastVideo/DreamX-World-5B-Cam-Diffusers"],
+        &[WorkloadType::I2V],
+        match_any = &["dreamx-world-5b-cam", "dreamx_5b_cam"]
+    ),
+    family_defn!(
+        ModelFamily::DreamX,
+        "dreamx_5b_ar",
+        &["FastVideo/DreamX-World-5B-Diffusers"],
+        &[WorkloadType::I2V],
+        match_any = &["dreamx-world-5b-diffusers", "dreamx_5b_ar"]
+    ),
+];
+
+/// LingBot-World Hub ids.
+pub static LINGBOTWORLD_MODEL_DEFINITIONS: &[FamilyModelDefinition] = &[
+    family_defn!(
+        ModelFamily::LingBotWorld,
+        "lingbotworld_base_cam",
+        &["FastVideo/LingBot-World-Base-Cam-Diffusers"],
+        &[WorkloadType::I2V],
+        match_any = &["lingbot-world-base-cam", "lingbotworld_base_cam"]
+    ),
+    family_defn!(
+        ModelFamily::LingBotWorld,
+        "lingbotworld2_causal_fast",
+        &["robbyant/lingbot-world-v2-14b-causal-fast"],
+        &[WorkloadType::I2V],
+        match_any = &["lingbot-world-v2", "lingbotworld2"]
+    ),
+];
+
+/// HunyuanGameCraft Hub ids.
+pub static GAMECRAFT_MODEL_DEFINITIONS: &[FamilyModelDefinition] = &[
+    family_defn!(
+        ModelFamily::GameCraft,
+        "gamecraft_i2v",
+        &["FastVideo/HunyuanGameCraft-Diffusers"],
+        &[WorkloadType::I2V],
+        match_any = &["hunyuangamecraft", "gamecraft"]
+    ),
+];
+
+/// HY-WorldPlay Hub ids.
+pub static HYWORLD_MODEL_DEFINITIONS: &[FamilyModelDefinition] = &[
+    family_defn!(
+        ModelFamily::HyWorld,
+        "hyworld_bidirectional",
+        &["FastVideo/HY-WorldPlay-Bidirectional-Diffusers"],
+        &[WorkloadType::I2V],
+        match_any = &["hy-worldplay", "hyworld"]
+    ),
+];
+
 fn resolve_family_table(table: &'static [FamilyModelDefinition], model_id: &str) -> Option<&'static FamilyModelDefinition> {
     table
         .iter()
@@ -673,6 +784,21 @@ pub fn resolve(model_id: &str) -> Result<ResolvedModel> {
         return Ok(ResolvedModel::Family(d));
     }
     if let Some(d) = resolve_family_table(GEN3C_MODEL_DEFINITIONS, model_id) {
+        return Ok(ResolvedModel::Family(d));
+    }
+    if let Some(d) = resolve_family_table(MATRIXGAME_MODEL_DEFINITIONS, model_id) {
+        return Ok(ResolvedModel::Family(d));
+    }
+    if let Some(d) = resolve_family_table(DREAMX_MODEL_DEFINITIONS, model_id) {
+        return Ok(ResolvedModel::Family(d));
+    }
+    if let Some(d) = resolve_family_table(LINGBOTWORLD_MODEL_DEFINITIONS, model_id) {
+        return Ok(ResolvedModel::Family(d));
+    }
+    if let Some(d) = resolve_family_table(GAMECRAFT_MODEL_DEFINITIONS, model_id) {
+        return Ok(ResolvedModel::Family(d));
+    }
+    if let Some(d) = resolve_family_table(HYWORLD_MODEL_DEFINITIONS, model_id) {
         return Ok(ResolvedModel::Family(d));
     }
     if let Ok(wan) = resolve_wan(model_id) {
@@ -725,6 +851,31 @@ pub fn all_registered_ids() -> Vec<(ModelFamily, &'static str, &'static str)> {
         }
     }
     for d in GEN3C_MODEL_DEFINITIONS {
+        for id in d.hf_model_paths {
+            out.push((d.family, *id, d.preset));
+        }
+    }
+    for d in MATRIXGAME_MODEL_DEFINITIONS {
+        for id in d.hf_model_paths {
+            out.push((d.family, *id, d.preset));
+        }
+    }
+    for d in DREAMX_MODEL_DEFINITIONS {
+        for id in d.hf_model_paths {
+            out.push((d.family, *id, d.preset));
+        }
+    }
+    for d in LINGBOTWORLD_MODEL_DEFINITIONS {
+        for id in d.hf_model_paths {
+            out.push((d.family, *id, d.preset));
+        }
+    }
+    for d in GAMECRAFT_MODEL_DEFINITIONS {
+        for id in d.hf_model_paths {
+            out.push((d.family, *id, d.preset));
+        }
+    }
+    for d in HYWORLD_MODEL_DEFINITIONS {
         for id in d.hf_model_paths {
             out.push((d.family, *id, d.preset));
         }
@@ -883,6 +1034,23 @@ mod tests {
         assert_eq!(gen3c.family(), ModelFamily::Gen3C);
         assert_eq!(gen3c.preset(), "gen3c_cosmos_7b");
 
+        let mg3 = resolve("FastVideo/Matrix-Game-3.0-Base-Distilled-Diffusers").unwrap();
+        assert_eq!(mg3.family(), ModelFamily::MatrixGame);
+        assert_eq!(mg3.preset(), "mg3_base_distilled");
+
+        let dreamx = resolve("FastVideo/DreamX-World-5B-Cam-Diffusers").unwrap();
+        assert_eq!(dreamx.family(), ModelFamily::DreamX);
+        assert_eq!(dreamx.preset(), "dreamx_5b_cam");
+
+        let lbw = resolve("FastVideo/LingBot-World-Base-Cam-Diffusers").unwrap();
+        assert_eq!(lbw.family(), ModelFamily::LingBotWorld);
+
+        let gc = resolve("FastVideo/HunyuanGameCraft-Diffusers").unwrap();
+        assert_eq!(gc.family(), ModelFamily::GameCraft);
+
+        let hyw = resolve("FastVideo/HY-WorldPlay-Bidirectional-Diffusers").unwrap();
+        assert_eq!(hyw.family(), ModelFamily::HyWorld);
+
         assert!(resolve("not-a-real/model").is_err());
     }
 
@@ -907,5 +1075,20 @@ mod tests {
         assert!(ids
             .iter()
             .any(|(f, id, _)| *f == ModelFamily::Gen3C && id.contains("GEN3C")));
+        assert!(ids
+            .iter()
+            .any(|(f, id, _)| *f == ModelFamily::MatrixGame && id.contains("Matrix-Game")));
+        assert!(ids
+            .iter()
+            .any(|(f, id, _)| *f == ModelFamily::DreamX && id.contains("DreamX")));
+        assert!(ids
+            .iter()
+            .any(|(f, id, _)| *f == ModelFamily::LingBotWorld && id.contains("LingBot-World")));
+        assert!(ids
+            .iter()
+            .any(|(f, id, _)| *f == ModelFamily::GameCraft && id.contains("GameCraft")));
+        assert!(ids
+            .iter()
+            .any(|(f, id, _)| *f == ModelFamily::HyWorld && id.contains("WorldPlay")));
     }
 }
