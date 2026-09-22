@@ -10,6 +10,7 @@
 #![allow(unsafe_code)]
 
 pub mod cosmos;
+pub mod gen3c;
 pub mod h3;
 pub mod hunyuan15;
 pub mod kandinsky5;

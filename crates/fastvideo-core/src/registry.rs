@@ -293,6 +293,7 @@ pub enum ModelFamily {
     Cosmos,
     LongCat,
     LingBot,
+    Gen3C,
 }
 
 impl ModelFamily {
@@ -306,6 +307,7 @@ impl ModelFamily {
             Self::Cosmos => "cosmos",
             Self::LongCat => "longcat",
             Self::LingBot => "lingbot",
+            Self::Gen3C => "gen3c",
         }
     }
 }
@@ -618,6 +620,17 @@ pub static LINGBOT_MODEL_DEFINITIONS: &[FamilyModelDefinition] = &[
     ),
 ];
 
+/// GEN3C (Cosmos + 3D cache) Hub ids.
+pub static GEN3C_MODEL_DEFINITIONS: &[FamilyModelDefinition] = &[
+    family_defn!(
+        ModelFamily::Gen3C,
+        "gen3c_cosmos_7b",
+        &["FastVideo/GEN3C-Cosmos-7B-Diffusers"],
+        &[WorkloadType::I2V],
+        match_any = &["gen3c-cosmos", "gen3c_cosmos_7b"]
+    ),
+];
+
 fn resolve_family_table(table: &'static [FamilyModelDefinition], model_id: &str) -> Option<&'static FamilyModelDefinition> {
     table
         .iter()
@@ -657,6 +670,9 @@ pub fn resolve(model_id: &str) -> Result<ResolvedModel> {
         return Ok(ResolvedModel::Family(d));
     }
     if let Some(d) = resolve_family_table(LINGBOT_MODEL_DEFINITIONS, model_id) {
+        return Ok(ResolvedModel::Family(d));
+    }
+    if let Some(d) = resolve_family_table(GEN3C_MODEL_DEFINITIONS, model_id) {
         return Ok(ResolvedModel::Family(d));
     }
     if let Ok(wan) = resolve_wan(model_id) {
@@ -704,6 +720,11 @@ pub fn all_registered_ids() -> Vec<(ModelFamily, &'static str, &'static str)> {
         }
     }
     for d in LINGBOT_MODEL_DEFINITIONS {
+        for id in d.hf_model_paths {
+            out.push((d.family, *id, d.preset));
+        }
+    }
+    for d in GEN3C_MODEL_DEFINITIONS {
         for id in d.hf_model_paths {
             out.push((d.family, *id, d.preset));
         }
@@ -858,6 +879,10 @@ mod tests {
         assert_eq!(lingbot.family(), ModelFamily::LingBot);
         assert_eq!(lingbot.preset(), "lingbot_dense_1_3b");
 
+        let gen3c = resolve("FastVideo/GEN3C-Cosmos-7B-Diffusers").unwrap();
+        assert_eq!(gen3c.family(), ModelFamily::Gen3C);
+        assert_eq!(gen3c.preset(), "gen3c_cosmos_7b");
+
         assert!(resolve("not-a-real/model").is_err());
     }
 
@@ -879,5 +904,8 @@ mod tests {
         assert!(ids
             .iter()
             .any(|(f, id, _)| *f == ModelFamily::LingBot && id.contains("lingbot")));
+        assert!(ids
+            .iter()
+            .any(|(f, id, _)| *f == ModelFamily::Gen3C && id.contains("GEN3C")));
     }
 }

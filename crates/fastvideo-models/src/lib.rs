@@ -1,12 +1,18 @@
 //! Host-side model math and configs consumed by `fastvideo-cudarc`.
 
 pub mod cosmos;
+pub mod dreamx;
+pub mod gamecraft;
+pub mod gen3c;
 pub mod h3;
 pub mod hunyuan15;
+pub mod hyworld;
 pub mod kandinsky5;
 pub mod lingbot;
+pub mod lingbotworld;
 pub mod longcat;
 pub mod ltx2;
+pub mod matrixgame;
 pub mod schedulers;
 pub mod wan;
 
