@@ -266,6 +266,7 @@ pub fn run(report: &mut Report, stage: &Stage) -> StageResult<()> {
                 text_encoder: fastvideo_cudarc::h3::pipeline::TextEncoderChoice::parse(text_encoder).map_err(|e| anyhow::anyhow!(e))?,
                 taeh3: taeh3_weights.clone(),
                 recipe: h3_recipe.clone(),
+                ref2va: false,
             };
             gen(report, weights, prompt, *seconds, *seed, !*no_mp4, clip_dir, options, *warm, *compare_text_encoders, device)
         }

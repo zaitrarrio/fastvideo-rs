@@ -918,6 +918,17 @@ cmd_run() {
         if [[ "${FV_LTX2_DIFF_VAE:-0}" == 1 ]]; then
           ltxgen+=(--diff-vae)
         fi
+        if [[ -n "${FV_IMAGE:-}" ]]; then
+          local img_remote="$WORK/i2v-first.png"
+          if [[ "$FV_IMAGE" == /* && ! -f "$FV_IMAGE" ]]; then
+            img_remote="$FV_IMAGE"
+          else
+            [[ -f "$FV_IMAGE" ]] || die "FV_IMAGE is not a file: $FV_IMAGE"
+            fv_rsync_to "$HOST" "$PORT" "$FV_IMAGE" "$img_remote" >/dev/null
+          fi
+          ltxgen+=(--image "$img_remote")
+          log "I2V first-frame encode from $img_remote"
+        fi
         remote_run wait-ltx2-5 10800 wait-weights "$wdir" 10800 text_encoder connectors transformer vae audio_vae vocoder latent_upsampler diffusion_decoder
         gpucheck_stage "gen-$name" 10800 "${ltxgen[@]}" --clip "$clip/$name/frames"
       else

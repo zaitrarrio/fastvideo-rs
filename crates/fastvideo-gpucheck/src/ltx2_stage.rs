@@ -283,6 +283,9 @@ pub enum Stage {
         /// Requires `--model-version 2.5` and `diffusion_decoder/` under `--weights`.
         #[arg(long, default_value_t = false)]
         diff_vae: bool,
+        /// First-frame PNG/JPEG for I2V encode (`docs/ports/ltx2.md`).
+        #[arg(long)]
+        image: Option<PathBuf>,
     },
     /// CPU only: rewrite the text encoder as the language model alone, its
     /// projections narrowed float32 → bf16 once, in load order (47 GB → 25.5 GB,
@@ -357,6 +360,7 @@ pub fn run(report: &mut Report, stage: &Stage) -> StageResult<()> {
             text,
             two_stage,
             diff_vae,
+            image,
         } => {
             let text_cache = if *no_text_cache { None } else { text_cache.clone().or_else(fastvideo_cudarc::ltx2::text_cache::default_dir) };
             let text_residency = match text.as_str() {
@@ -380,6 +384,7 @@ pub fn run(report: &mut Report, stage: &Stage) -> StageResult<()> {
                 *warm,
                 *two_stage,
                 *diff_vae,
+                image.as_deref(),
             )
         }
         Stage::SlimText { weights, slim, embed, shard_gib } => slim_text(report, weights, slim, embed, *shard_gib),
@@ -1083,6 +1088,7 @@ fn gen(
     warm: bool,
     two_stage: bool,
     diff_vae: bool,
+    image: Option<&Path>,
 ) -> StageResult<()> {
     report.set("device", crate::gpu::init(device)?);
     report.set("model_version", match model_version {
@@ -1109,13 +1115,14 @@ fn gen(
         audio_guidance_scale: 1.0,
         num_inference_steps: None,
         refine_steps: None,
-        image_path: None,
+        image_path: image.map(Path::to_path_buf),
     };
     report.set(
         "request",
         json!({
             "prompt": prompt, "height": g.height, "width": g.width, "num_frames": g.num_frames,
             "frame_rate": g.frame_rate, "seed": seed, "two_stage": two_stage, "diff_vae": diff_vae,
+            "image": image.map(|p| p.display().to_string()),
         }),
     );
     let peak = crate::gpu::PeakMem::start();
