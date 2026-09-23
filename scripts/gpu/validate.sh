@@ -860,6 +860,12 @@ cmd_run() {
       local fetch_h3=(fetch "$repo" "$wdir" "tokenizer/*" "text_encoder/*.json"
         "text_encoder/model-0000[1-9]-of-00014.safetensors" "text_encoder/model-0001[01]-of-00014.safetensors"
         "transformer/*" "audio_vae/*")
+      # MiniMax-H3's index lists all 14 text-encoder shards. Tap 50 never reads
+      # 12-14, but opening the index requires every listed file to exist.
+      # FastH3 packs ship a trimmed index, so the 8-step fetch stays at 1-11.
+      if [[ "$recipe" == sol-h3* ]]; then
+        fetch_h3+=("text_encoder/model-0001[2-4]-of-00014.safetensors")
+      fi
       local wait_h3=(wait-weights "$wdir" 7200 text_encoder transformer audio_vae)
       if [[ "${FV_TAEH3:-0}" != 1 ]]; then
         fetch_h3+=("vae/*")
