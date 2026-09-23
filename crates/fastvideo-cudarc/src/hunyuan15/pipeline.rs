@@ -145,6 +145,12 @@ impl Hunyuan15Pipeline {
         // feeds `in_channels` to the DiT — zero-pad cond channels for T2V.
         let pad_c = c_in.saturating_sub(c_out);
 
+        if fastvideo_models::hunyuan15::sol::teacache_requested(
+            std::env::var("FASTVIDEO_HUNYUAN15_SOL").ok().as_deref(),
+        ) {
+            crate::wan::log::info(format_args!("{}", fastvideo_models::hunyuan15::sol::GAP));
+        }
+
         for (step, &t) in timesteps.iter().enumerate() {
             let lat = pack_latents(&sample, c_out, lt, lh, lw, pad_c)?;
             let text2 = Some(&cond.byt5);

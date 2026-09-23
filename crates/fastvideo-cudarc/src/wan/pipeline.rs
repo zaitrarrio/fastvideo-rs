@@ -842,6 +842,11 @@ impl EasyCacheRuntime {
         if family.is_empty() || matches!(family.as_str(), "0" | "off" | "none" | "false") {
             return Ok(None);
         }
+        if family == "taylorseer" {
+            return Err(PipelineError::Message(
+                fastvideo_models::wan::sol_cache::taylorseer_unported_reason().into(),
+            ));
+        }
         if family != "easycache" && family != "teacache" {
             return Err(PipelineError::Message(format!(
                 "FASTVIDEO_WAN_SOL_CACHE={family} is not supported (easycache or teacache)"

@@ -303,16 +303,16 @@ impl CosmosPipeline {
 
         let t_cond = (request.sigma_conditioning / (request.sigma_conditioning + 1.0)) as f32;
         let fps = Some(request.fps as f32);
-        if std::env::var("FASTVIDEO_COSMOS_SOL")
-            .map(|v| v == "1" || v.eq_ignore_ascii_case("teacache"))
-            .unwrap_or(false)
-        {
+        let sol_tea = fastvideo_models::cosmos::sol::teacache_requested(
+            std::env::var("FASTVIDEO_COSMOS_SOL").ok().as_deref(),
+        );
+        if sol_tea {
+            dit.enable_sol_teacache();
             crate::wan::log::info(format_args!(
-                "cosmos sol: teacache thr {} start {} max {}, fp4 skips first/last {} (time-embed signal and nvfp4 are not applied)",
+                "cosmos sol: teacache thr {} start {} max {} (time-embed relative L1, block residual, nvfp4 not applied)",
                 fastvideo_models::cosmos::sol::TEACACHE_THRESHOLD,
                 fastvideo_models::cosmos::sol::TEACACHE_START_STEP,
                 fastvideo_models::cosmos::sol::TEACACHE_MAX_CONSECUTIVE,
-                fastvideo_models::cosmos::sol::FP4_SKIP_FIRST,
             ));
         }
 
@@ -332,6 +332,9 @@ impl CosmosPipeline {
                 c,
             )?;
 
+            if sol_tea {
+                dit.arm_sol_teacache(i);
+            }
             let pred_pos = dit.forward(&lat, &text_pos, &frame_ts, fps)?;
             let mut denoised = self.edm_denoise(
                 &sample,

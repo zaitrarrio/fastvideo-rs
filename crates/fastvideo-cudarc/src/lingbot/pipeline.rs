@@ -123,6 +123,12 @@ impl LingBotPipeline {
             })
             .collect();
 
+        if fastvideo_models::lingbot::sol::requested(
+            std::env::var("FASTVIDEO_LINGBOT_SOL").ok().as_deref(),
+        ) {
+            crate::wan::log::info(format_args!("{}", fastvideo_models::lingbot::sol::GAP));
+        }
+
         for &t in &timesteps {
             let lat = CudaTensor::from_vec(sample.clone(), vec![1, c, lt, lh, lw])?;
             let velocity = dit.forward(&lat, &text, t as f32)?;

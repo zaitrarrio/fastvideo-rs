@@ -4,6 +4,7 @@
 pub mod config;
 pub mod rope;
 pub mod schedule;
+pub mod sol;
 
 pub use config::{
     tokenize_lingbot_prompt, LingBotPreset, LingBotTransformerConfig, PROMPT_CROP_START,

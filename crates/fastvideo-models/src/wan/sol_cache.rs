@@ -4,6 +4,16 @@
 //! EasyCache decides from the raw latent and reuses `output - input`.
 //! TeaCache decides from the timestep projection and reuses the residual
 //! across the transformer blocks. Defaults match the published env.
+//!
+//! TaylorSeer stays unported: `wan_cache.py` `TaylorSeerRuntime` installs
+//! diffusers `TaylorSeerCacheHook` and forecasts `proj_out`. This repo has
+//! neither the hook nor that extrapolation.
+
+/// Why `FASTVIDEO_WAN_SOL_CACHE=taylorseer` is rejected.
+pub fn taylorseer_unported_reason() -> &'static str {
+    "wan sol: TaylorSeer stays unported (wan_cache.py forecasts proj_out through \
+     diffusers TaylorSeerCacheHook, which this repo does not contain)"
+}
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct EasyCacheDecision {
@@ -180,6 +190,13 @@ mod tests {
     #[test]
     fn rejects_a_non_positive_threshold() {
         assert!(EasyCache::new(4, 0.0, 7, 1).is_err());
+    }
+
+    #[test]
+    fn taylorseer_names_the_missing_hook() {
+        let reason = taylorseer_unported_reason();
+        assert!(reason.contains("TaylorSeer"));
+        assert!(reason.contains("diffusers"));
     }
 }
 

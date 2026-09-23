@@ -554,6 +554,13 @@ impl H3Pipeline {
             contract.vsa_sparsity,
             options.dense
         ));
+        if fastvideo_models::h3::sol::sol_attn_requested(
+            std::env::var("FASTVIDEO_H3_SOL_ATTN").ok().as_deref(),
+        ) {
+            crate::wan::log::info(format_args!(
+                "h3 sol-attn: stage-1 update 0 dense, later updates layer 0 dense and layers 1-49 tau 1/1.25/1.5 (dense SDPA until the kernel is linked)"
+            ));
+        }
         let mut lora = if options.recipe.as_deref().is_some_and(is_sol_h3_recipe) {
             let spec = if options.ref2va {
                 SolH3AdapterSpec::ref2va()

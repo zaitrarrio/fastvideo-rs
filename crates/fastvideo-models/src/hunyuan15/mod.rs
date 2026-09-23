@@ -4,6 +4,7 @@
 pub mod config;
 pub mod rope;
 pub mod schedule;
+pub mod sol;
 pub mod text;
 
 pub use config::{

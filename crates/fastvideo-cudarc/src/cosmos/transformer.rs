@@ -3,6 +3,9 @@
 //! Latents `[B,C,T,H,W]` with optional condition + padding channels. Tiny
 //! configs exercise patch → blocks → unpatch without Hub weights.
 
+use std::sync::{Arc, Mutex};
+
+use fastvideo_models::cosmos::sol::SolCosmosTea;
 use fastvideo_models::cosmos::{
     apply_rope_real, rope_cos_sin, CosmosTransformerConfig, ExtraPosEmbed,
 };
@@ -352,6 +355,16 @@ impl TimeEmbed {
     }
 }
 
+/// Per-branch block residual for Cosmos TeaCache. Armed by the denoise loop.
+struct CosmosTeaRuntime {
+    state: SolCosmosTea,
+    pending_step: Option<usize>,
+    cond_next: bool,
+    active_cond: Option<bool>,
+    cond_residual: Option<CudaTensor>,
+    uncond_residual: Option<CudaTensor>,
+}
+
 pub struct CosmosTransformer {
     pub cfg: CosmosTransformerConfig,
     patch: Linear,
@@ -363,6 +376,8 @@ pub struct CosmosTransformer {
     pos_t: Option<CudaTensor>,
     pos_h: Option<CudaTensor>,
     pos_w: Option<CudaTensor>,
+    /// Empty unless `FASTVIDEO_COSMOS_SOL=teacache`.
+    sol_tea: Arc<Mutex<Option<CosmosTeaRuntime>>>,
 }
 
 impl CosmosTransformer {
@@ -402,6 +417,7 @@ impl CosmosTransformer {
             pos_t,
             pos_h,
             pos_w,
+            sol_tea: Default::default(),
             cfg,
         })
     }
@@ -460,8 +476,93 @@ impl CosmosTransformer {
             pos_t,
             pos_h,
             pos_w,
+            sol_tea: Default::default(),
             cfg,
         })
+    }
+
+    /// Install time-embed TeaCache. The default path leaves this empty.
+    pub fn enable_sol_teacache(&self) {
+        let mut slot = self.sol_tea.lock().expect("cosmos sol tea");
+        *slot = Some(CosmosTeaRuntime {
+            state: SolCosmosTea::official(),
+            pending_step: None,
+            cond_next: true,
+            active_cond: None,
+            cond_residual: None,
+            uncond_residual: None,
+        });
+    }
+
+    pub fn sol_teacache_enabled(&self) -> bool {
+        self.sol_tea.lock().expect("cosmos sol tea").is_some()
+    }
+
+    /// Mark the next forward (cond, then uncond) as `step`. No-op when TeaCache is off.
+    pub fn arm_sol_teacache(&self, step: usize) {
+        let mut slot = self.sol_tea.lock().expect("cosmos sol tea");
+        if let Some(runtime) = slot.as_mut() {
+            runtime.pending_step = Some(step);
+            runtime.cond_next = true;
+        }
+    }
+
+    /// `Some(true)` reuses the block residual. `Some(false)` runs the blocks.
+    /// `None` leaves the forward dense.
+    fn begin_sol_tea(&self, signal: &CudaTensor) -> Result<Option<bool>> {
+        let mut slot = self.sol_tea.lock().expect("cosmos sol tea");
+        let Some(runtime) = slot.as_mut() else {
+            return Ok(None);
+        };
+        let Some(step) = runtime.pending_step else {
+            return Ok(None);
+        };
+        let cond = runtime.cond_next;
+        runtime.cond_next = false;
+        let compute = if cond {
+            let host = signal.host_cow()?;
+            runtime.state.decide(step, &host)
+        } else {
+            runtime.state.follow()
+        };
+        runtime.active_cond = Some(cond);
+        if compute {
+            Ok(Some(false))
+        } else {
+            crate::wan::log::debug(format_args!(
+                "cosmos sol teacache reuse step {step} {}",
+                if cond { "cond" } else { "uncond" }
+            ));
+            Ok(Some(true))
+        }
+    }
+
+    fn add_sol_tea_residual(&self, hidden: CudaTensor) -> Result<CudaTensor> {
+        let residual = {
+            let mut slot = self.sol_tea.lock().expect("cosmos sol tea");
+            let runtime = slot.as_mut().expect("cosmos sol tea");
+            let cond = runtime.active_cond.take().expect("cosmos sol tea branch");
+            if cond {
+                runtime.cond_residual.clone()
+            } else {
+                runtime.uncond_residual.clone()
+            }
+            .expect("cosmos sol tea residual")
+        };
+        hidden.add(&residual)
+    }
+
+    fn finish_sol_tea(&self, before: &CudaTensor, after: &CudaTensor) -> Result<()> {
+        let mut slot = self.sol_tea.lock().expect("cosmos sol tea");
+        let runtime = slot.as_mut().expect("cosmos sol tea");
+        let cond = runtime.active_cond.take().expect("cosmos sol tea branch");
+        let residual = after.sub(before)?;
+        if cond {
+            runtime.cond_residual = Some(residual);
+        } else {
+            runtime.uncond_residual = Some(residual);
+        }
+        Ok(())
     }
 
     /// `hidden` `[B,C,T,H,W]` already including condition (+ optional pad later).
@@ -563,8 +664,21 @@ impl CosmosTransformer {
         let temb_s = expand_frame_tokens(&temb_bt, b, pe_t, pe_h, pe_w)?;
         let emb_s = expand_frame_tokens(&emb_bt, b, pe_t, pe_h, pe_w)?;
 
-        for block in &self.blocks {
-            hs = block.forward(&hs, encoder, &emb_s, &temb_s, (&cos, &sin), extra.as_ref())?;
+        let tea = self.begin_sol_tea(&temb_bt)?;
+        if tea == Some(true) {
+            hs = self.add_sol_tea_residual(hs)?;
+        } else {
+            let before = if tea == Some(false) {
+                Some(hs.clone())
+            } else {
+                None
+            };
+            for block in &self.blocks {
+                hs = block.forward(&hs, encoder, &emb_s, &temb_s, (&cos, &sin), extra.as_ref())?;
+            }
+            if let Some(before) = before.as_ref() {
+                self.finish_sol_tea(before, &hs)?;
+            }
         }
 
         // Final AdaLN (shift/scale only)
@@ -719,5 +833,47 @@ mod tests {
         // Cond frame 0 uses near-zero t_conditioning; frame 1 uses current_t.
         let out = dit.forward(&x, &enc, &[0.0001, 0.7], Some(16.0)).unwrap();
         assert_eq!(out.shape, vec![1, cfg.out_channels, 2, 4, 4]);
+    }
+
+    #[test]
+    fn sol_teacache_off_path_matches_dense() {
+        let cfg = CosmosTransformerConfig::tiny();
+        let dit = CosmosTransformer::zeros(cfg.clone()).unwrap();
+        let x = CudaTensor::zeros(&[1, cfg.in_channels, 2, 4, 4]);
+        let enc = CudaTensor::zeros(&[1, 4, cfg.text_embed_dim]);
+        let ts = [0.5f32, 0.5];
+        let dense = dit.forward(&x, &enc, &ts, Some(16.0)).unwrap();
+        dit.arm_sol_teacache(10);
+        let still = dit.forward(&x, &enc, &ts, Some(16.0)).unwrap();
+        assert_eq!(
+            dense.host_cow().unwrap().as_ref(),
+            still.host_cow().unwrap().as_ref()
+        );
+        assert!(!dit.sol_teacache_enabled());
+    }
+
+    #[test]
+    fn sol_teacache_reuse_keeps_the_output_head() {
+        let cfg = CosmosTransformerConfig::tiny();
+        let dit = CosmosTransformer::zeros(cfg.clone()).unwrap();
+        let x = CudaTensor::zeros(&[1, cfg.in_channels, 2, 4, 4]);
+        let enc = CudaTensor::zeros(&[1, 4, cfg.text_embed_dim]);
+        let ts = [0.4f32, 0.6];
+        dit.enable_sol_teacache();
+        assert!(dit.sol_teacache_enabled());
+        let mut last = None;
+        for step in 0..14 {
+            dit.arm_sol_teacache(step);
+            let out = dit.forward(&x, &enc, &ts, Some(16.0)).unwrap();
+            assert_eq!(out.shape, vec![1, cfg.out_channels, 2, 4, 4]);
+            last = Some(out);
+        }
+        // Same latents and timesteps: residual reuse equals the last compute.
+        let dense = CosmosTransformer::zeros(cfg).unwrap();
+        let expect = dense.forward(&x, &enc, &ts, Some(16.0)).unwrap();
+        assert_eq!(
+            last.unwrap().host_cow().unwrap().as_ref(),
+            expect.host_cow().unwrap().as_ref()
+        );
     }
 }

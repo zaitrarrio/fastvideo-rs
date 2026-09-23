@@ -10,5 +10,6 @@ pub mod packing;
 pub mod presentation;
 pub mod reference;
 pub mod schedule;
+pub mod sol;
 pub mod tokenizer;
 pub mod vision_preprocess;
