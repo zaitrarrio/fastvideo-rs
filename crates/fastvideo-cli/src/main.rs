@@ -1,9 +1,12 @@
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand, ValueEnum};
-use fastvideo_core::{BackendKind, LoadOptions, VideoGenerator, WAN_MODEL_DEFINITIONS};
-use fastvideo_models::{DmdSchedule, FlowUniPCMultistepScheduler};
+use fastvideo_core::{
+    all_registered_ids, generate_av, resolve, AvGenerateOptions, BackendKind, LoadOptions,
+    ResolvedModel, VideoGenerator,
+};
+use fastvideo_models::{DmdSchedule, FlowUniPCMultistepScheduler, RcmSchedule};
 use serde::Deserialize;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 fn write_sidecar(dir: Option<&str>, name: &str, value: &serde_json::Value) {
     let Some(dir) = dir.filter(|d| !d.is_empty()) else {
@@ -21,7 +24,7 @@ fn write_sidecar(dir: Option<&str>, name: &str, value: &serde_json::Value) {
 #[derive(Parser)]
 #[command(
     name = "fastvideo",
-    about = "Rust Wan/FastWan inference (cudarc CUDA primary; Burn/Candle/Luminal frozen)."
+    about = "Rust FastVideo inference (Wan / LTX / H3 / T2I / T2A; cudarc CUDA primary)."
 )]
 struct Cli {
     #[command(subcommand)]
@@ -30,13 +33,13 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
-    /// List registered Wan/FastWan Hugging Face ids.
+    /// List registered Hugging Face ids (Wan, LTX, H3, image, audio families).
     ListModels,
-    /// Resolve a model id and run generation (use --tiny for a zero-weight smoke test).
+    /// Resolve a model id and run generation (use --tiny for Wan zero-weight smoke).
     Generate(GenerateArgs),
     /// Time CUDA generate (Vast GPU). Not a laptop CPU job.
     Bench(BenchArgs),
-    /// Print the flow-match or DMD sigma table for a resolved model.
+    /// Print the flow-match or DMD sigma table for a resolved Wan model.
     Schedule(ScheduleArgs),
 }
 
@@ -83,9 +86,16 @@ struct GenerateArgs {
     guidance_2: Option<f32>,
     #[arg(long)]
     seed: Option<u64>,
-    /// First-frame image for I2V (PNG or JPEG).
+    /// First-frame image for I2V / H3 FL2VA (PNG or JPEG).
     #[arg(long)]
     image: Option<String>,
+    /// H3 FL2VA last-frame image (PNG or JPEG).
+    #[arg(long)]
+    last_image: Option<String>,
+    /// H3 Ref2VA reference (repeatable, ordered). Image / video / audio by
+    /// extension; needs MiniMax-H3 `transformer_ref/`.
+    #[arg(long = "ref")]
+    references: Vec<String>,
     /// Control / reference frame for Fun Control / Lucy (PNG or JPEG).
     #[arg(long)]
     control: Option<String>,
@@ -96,6 +106,42 @@ struct GenerateArgs {
     /// Mux PNG frames to `output.mp4` via ffmpeg (same as FASTVIDEO_SAVE_MP4=1).
     #[arg(long, default_value_t = false)]
     save_mp4: bool,
+    /// LTX distilled two-stage (2.3 / 2.5): half-res → upsampler → refine.
+    #[arg(long, default_value_t = false)]
+    two_stage: bool,
+    /// LTX-2.5: DiffVAE video decode instead of conv VAE.
+    #[arg(long, default_value_t = false)]
+    diff_vae: bool,
+    /// LTX two-stage refine steps (2 or 3). Default: 2 when `--steps 5`, else 3.
+    #[arg(long)]
+    refine_steps: Option<u32>,
+    /// LTX-2.5 stage-2 Sol route: layer 0 dense, later layers at tau 1 / 1.25 / 1.5.
+    /// Requires `--two-stage` and 3 refine steps. Sol layers still use dense SDPA.
+    #[arg(long, default_value_t = false)]
+    sol_stage2: bool,
+    /// LTX-2.3 stage-2 PISA route: layers 0-1 dense, later video layers at sparsity 0.9.
+    /// Requires `--two-stage` and 3 refine steps. Sparse layers still use dense SDPA.
+    #[arg(long, default_value_t = false)]
+    pisa_stage2: bool,
+    /// LTX-2.3 official HQ: 15-step stage-1 + 3-sigma refine, guidance 3, 1920×1088 / 241f.
+    /// Requires the 2.3 base line (`Lightricks/LTX-2.3`). Also `FASTVIDEO_LTX2_HQ=1`.
+    #[arg(long, default_value_t = false)]
+    ltx23_hq: bool,
+    /// FastH3 / Sol-H3 recipe (`8step`, `4step-vsa`, `4step-dense`, `sol-h3`, `sol-h3-ref2va`, `sol-h3-spark`).
+    #[arg(long)]
+    h3_recipe: Option<String>,
+    /// Sol-H3 LoRA adapter. Default: searched next to the MiniMax-H3 snapshot.
+    #[arg(long)]
+    h3_adapter: Option<String>,
+    /// FastH3 duration in whole seconds (5..=15).
+    #[arg(long)]
+    seconds: Option<u32>,
+    /// Alternate root for `tokenizer/` + `text_encoder/` (LTX slim / H3 slim).
+    #[arg(long)]
+    text_weights: Option<String>,
+    /// Alternate DiT root for LTX (default: `<weights>/transformer`).
+    #[arg(long)]
+    dit: Option<String>,
 }
 
 /// Minimal TOML overlay for `generate` (not full upstream YAML).
@@ -113,6 +159,9 @@ struct GenerateToml {
     guidance_scale_2: Option<f32>,
     seed: Option<u64>,
     image: Option<String>,
+    last_image: Option<String>,
+    /// Ordered Ref2VA image paths.
+    references: Option<Vec<String>>,
     control: Option<String>,
     output: Option<String>,
     prompt: Option<String>,
@@ -122,11 +171,16 @@ struct GenerateToml {
     fps: Option<u32>,
     dtype: Option<String>,
     device: Option<String>,
+    refine_steps: Option<u32>,
+    two_stage: Option<bool>,
+    sol_stage2: Option<bool>,
+    pisa_stage2: Option<bool>,
+    ltx23_hq: Option<bool>,
+    diff_vae: Option<bool>,
 }
 
 fn load_generate_toml(path: &str) -> Result<GenerateToml> {
-    let body = std::fs::read_to_string(path)
-        .with_context(|| format!("read --config {path}"))?;
+    let body = std::fs::read_to_string(path).with_context(|| format!("read --config {path}"))?;
     toml::from_str(&body).with_context(|| format!("parse --config {path}"))
 }
 
@@ -173,22 +227,12 @@ struct ScheduleArgs {
 
 #[derive(Clone, Copy, ValueEnum)]
 enum CliBackend {
-    Host,
-    Burn,
-    Candle,
-    Luminal,
     Cudarc,
 }
 
 impl From<CliBackend> for BackendKind {
-    fn from(value: CliBackend) -> Self {
-        match value {
-            CliBackend::Host => Self::Host,
-            CliBackend::Burn => Self::Burn,
-            CliBackend::Candle => Self::Candle,
-            CliBackend::Luminal => Self::Luminal,
-            CliBackend::Cudarc => Self::Cudarc,
-        }
+    fn from(_value: CliBackend) -> Self {
+        Self::Cudarc
     }
 }
 
@@ -196,14 +240,8 @@ fn main() -> Result<()> {
     let cli = Cli::parse();
     match cli.command {
         Commands::ListModels => {
-            for def in WAN_MODEL_DEFINITIONS {
-                for id in def.hf_model_paths {
-                    println!(
-                        "{id}\tpreset={}\tsampling={}",
-                        def.preset,
-                        def.sampling.as_str()
-                    );
-                }
+            for (family, id, preset) in all_registered_ids() {
+                println!("{}\tfamily={}\tpreset={preset}", id, family.as_str());
             }
         }
         Commands::Generate(args) => {
@@ -217,52 +255,138 @@ fn main() -> Result<()> {
                 .prompt
                 .or(file.prompt)
                 .unwrap_or_else(|| "A curious raccoon in a field of sunflowers.".into());
-            let gen = VideoGenerator::from_pretrained(
-                &args.model,
-                LoadOptions {
-                    backend: args.backend.into(),
-                    num_gpus: args.num_gpus,
-                    tiny: args.tiny,
-                    weights_path: args.weights,
-                    output_path: args.output.or(file.output),
-                    device: if args.device != "cpu" {
-                        args.device
-                    } else {
-                        file.device.unwrap_or(args.device)
-                    },
-                    dtype: args.dtype.or(file.dtype),
-                    height: args.height.or(file.height),
-                    width: args.width.or(file.width),
-                    num_frames: args.frames.or(file.frames).or(file.num_frames),
-                    num_inference_steps: args
-                        .steps
-                        .or(file.steps)
-                        .or(file.num_inference_steps),
-                    guidance_scale: args
-                        .guidance
-                        .or(file.guidance)
-                        .or(file.guidance_scale),
-                    guidance_scale_2: args
-                        .guidance_2
-                        .or(file.guidance_2)
-                        .or(file.guidance_scale_2),
-                    seed: args.seed.or(file.seed),
-                    negative_prompt: args.negative.or(file.negative),
-                    image_path: args.image.or(file.image),
-                    control_path: args.control.or(file.control),
-                    save_mp4: args.save_mp4 || file.save_mp4.unwrap_or(false),
-                },
-            )?;
-            println!("{}", gen.summary());
-            match gen.generate_video(&prompt) {
-                Ok(out) => {
-                    if let Some(path) = out.frame_paths.first() {
-                        println!("wrote {} frames, first={path}", out.frame_paths.len());
+            let resolved = resolve(&args.model)?;
+            match resolved {
+                ResolvedModel::Wan(_) => {
+                    let gen = VideoGenerator::from_pretrained(
+                        &args.model,
+                        LoadOptions {
+                            backend: args.backend.into(),
+                            num_gpus: args.num_gpus,
+                            tiny: args.tiny,
+                            weights_path: args.weights,
+                            output_path: args.output.or(file.output),
+                            device: if args.device != "cpu" {
+                                args.device
+                            } else {
+                                file.device.unwrap_or(args.device)
+                            },
+                            dtype: args.dtype.or(file.dtype),
+                            height: args.height.or(file.height),
+                            width: args.width.or(file.width),
+                            num_frames: args.frames.or(file.frames).or(file.num_frames),
+                            num_inference_steps: args
+                                .steps
+                                .or(file.steps)
+                                .or(file.num_inference_steps),
+                            guidance_scale: args.guidance.or(file.guidance).or(file.guidance_scale),
+                            guidance_scale_2: args
+                                .guidance_2
+                                .or(file.guidance_2)
+                                .or(file.guidance_scale_2),
+                            seed: args.seed.or(file.seed),
+                            negative_prompt: args.negative.or(file.negative),
+                            image_path: args.image.or(file.image),
+                            control_path: args.control.or(file.control),
+                            save_mp4: args.save_mp4 || file.save_mp4.unwrap_or(false),
+                        },
+                    )?;
+                    println!("{}", gen.summary());
+                    match gen.generate_video(&prompt) {
+                        Ok(out) => {
+                            if let Some(path) = out.frame_paths.first() {
+                                println!("wrote {} frames, first={path}", out.frame_paths.len());
+                            }
+                        }
+                        Err(err) => {
+                            eprintln!("{err}");
+                            std::process::exit(2);
+                        }
                     }
                 }
-                Err(err) => {
-                    eprintln!("{err}");
-                    std::process::exit(2);
+                ResolvedModel::Family(def) => {
+                    if args.tiny {
+                        anyhow::bail!(
+                            "--tiny is Wan-only; LTX/H3 need real weights (family={})",
+                            def.family.as_str()
+                        );
+                    }
+                    let output = PathBuf::from(
+                        args.output
+                            .or(file.output)
+                            .unwrap_or_else(|| format!("outputs/{}", def.preset)),
+                    );
+                    let av = AvGenerateOptions {
+                        weights: args.weights.map(PathBuf::from),
+                        text_weights: args.text_weights.map(PathBuf::from),
+                        dit: args.dit.map(PathBuf::from),
+                        output,
+                        prompt,
+                        seed: args.seed.or(file.seed).unwrap_or(1024),
+                        height: args.height.or(file.height),
+                        width: args.width.or(file.width),
+                        num_frames: args.frames.or(file.frames).or(file.num_frames),
+                        device: if args.device != "cpu" {
+                            args.device
+                        } else {
+                            file.device.unwrap_or_else(|| "cuda".into())
+                        },
+                        save_mp4: args.save_mp4 || file.save_mp4.unwrap_or(false),
+                        two_stage: args.two_stage || file.two_stage.unwrap_or(false),
+                        diff_vae: args.diff_vae || file.diff_vae.unwrap_or(false),
+                        negative_prompt: args.negative.or(file.negative).unwrap_or_default(),
+                        guidance_scale: args.guidance.or(file.guidance).or(file.guidance_scale),
+                        audio_guidance_scale: args
+                            .guidance_2
+                            .or(file.guidance_2)
+                            .or(file.guidance_scale_2),
+                        num_inference_steps: args.steps.or(file.steps).or(file.num_inference_steps),
+                        refine_steps: args.refine_steps.or(file.refine_steps),
+                        sol_stage2: args.sol_stage2 || file.sol_stage2.unwrap_or(false),
+                        pisa_stage2: args.pisa_stage2 || file.pisa_stage2.unwrap_or(false),
+                        ltx23_hq: args.ltx23_hq || file.ltx23_hq.unwrap_or(false),
+                        image_path: args.image.or(file.image).map(PathBuf::from),
+                        last_image_path: args.last_image.or(file.last_image).map(PathBuf::from),
+                        reference_images: {
+                            let mut refs: Vec<PathBuf> =
+                                args.references.into_iter().map(PathBuf::from).collect();
+                            if refs.is_empty() {
+                                refs = file
+                                    .references
+                                    .unwrap_or_default()
+                                    .into_iter()
+                                    .map(PathBuf::from)
+                                    .collect();
+                            }
+                            refs
+                        },
+                        h3_recipe: args.h3_recipe,
+                        h3_adapter: args.h3_adapter.map(PathBuf::from),
+                        h3_seconds: args.seconds,
+                    };
+                    println!(
+                        "family={} preset={} device={}",
+                        def.family.as_str(),
+                        def.preset,
+                        av.device
+                    );
+                    match generate_av(resolved, av) {
+                        Ok(out) => {
+                            if let Some(path) = out.frame_paths.first() {
+                                println!("wrote {} frames, first={path}", out.frame_paths.len());
+                            }
+                            if let Some(wav) = out.wav {
+                                println!("wav={wav}");
+                            }
+                            if let Some(mp4) = out.mp4 {
+                                println!("mp4={mp4}");
+                            }
+                        }
+                        Err(err) => {
+                            eprintln!("{err}");
+                            std::process::exit(2);
+                        }
+                    }
                 }
             }
         }
@@ -295,9 +419,9 @@ fn main() -> Result<()> {
             )?;
             println!("{}", gen.summary());
             if args.clip_only {
-                let image = args.image.ok_or_else(|| {
-                    anyhow::anyhow!("--clip-only needs --image <png|jpeg>")
-                })?;
+                let image = args
+                    .image
+                    .ok_or_else(|| anyhow::anyhow!("--clip-only needs --image <png|jpeg>"))?;
                 match gen.bench_clip(&image) {
                     Ok(stats) => {
                         let json = serde_json::json!({
@@ -354,10 +478,17 @@ fn main() -> Result<()> {
             }
         }
         Commands::Schedule(args) => {
-            let gen = VideoGenerator::from_pretrained(
-                &args.model,
-                LoadOptions::default(),
-            )?;
+            match resolve(&args.model)? {
+                ResolvedModel::Wan(_) => {}
+                ResolvedModel::Family(def) => {
+                    anyhow::bail!(
+                        "schedule is Wan-only for now (got family={} preset={})",
+                        def.family.as_str(),
+                        def.preset
+                    );
+                }
+            }
+            let gen = VideoGenerator::from_pretrained(&args.model, LoadOptions::default())?;
             println!("{}", gen.summary());
             match gen.definition.sampling {
                 fastvideo_core::SamplingAlgorithm::Dmd
@@ -370,11 +501,23 @@ fn main() -> Result<()> {
                     println!("dmd_timesteps={:?}", sched.train_timesteps);
                     println!("dmd_sigmas={:?}", sched.sigmas);
                 }
-                fastvideo_core::SamplingAlgorithm::UniPc => {
-                    let mut sched = FlowUniPCMultistepScheduler::new(
-                        1000,
-                        f64::from(gen.pipeline.flow_shift),
+                fastvideo_core::SamplingAlgorithm::Rcm => {
+                    let sigma = gen
+                        .pipeline
+                        .rcm_sigma_max
+                        .unwrap_or(fastvideo_models::schedulers::RCM_SIGMA_MAX_T2V);
+                    let sched = RcmSchedule::new(gen.sampling.num_inference_steps as usize, sigma);
+                    println!(
+                        "rcm_sigma_max={sigma} init_noise_scale={:.6} n={}",
+                        sched.init_noise_scale(),
+                        sched.num_steps()
                     );
+                    println!("rcm_sigmas={:?}", sched.sigmas);
+                    println!("rcm_timesteps={:?}", sched.timesteps);
+                }
+                fastvideo_core::SamplingAlgorithm::UniPc => {
+                    let mut sched =
+                        FlowUniPCMultistepScheduler::new(1000, f64::from(gen.pipeline.flow_shift));
                     sched.set_timesteps(gen.sampling.num_inference_steps as usize);
                     println!(
                         "unipc_first_timestep={:.6} last={:.6} n={} first_sigma={:.6} i64_t0={}",

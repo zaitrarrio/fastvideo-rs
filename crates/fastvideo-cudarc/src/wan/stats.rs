@@ -18,6 +18,10 @@ static FALLBACKS: Mutex<BTreeMap<&'static str, u64>> = Mutex::new(BTreeMap::new(
 static H2D_COUNT: AtomicU64 = AtomicU64::new(0);
 static H2D_BYTES: AtomicU64 = AtomicU64::new(0);
 static D2H_COUNT: AtomicU64 = AtomicU64::new(0);
+/// Every NVRTC kernel launch, counted at the one macro they all go through.
+/// Launch overhead is a few microseconds each, so this is what turns "maybe we
+/// are launch-bound" into an arithmetic claim.
+static LAUNCHES: AtomicU64 = AtomicU64::new(0);
 static D2H_BYTES: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -28,6 +32,7 @@ pub struct Snapshot {
     pub h2d_bytes: u64,
     pub d2h_count: u64,
     pub d2h_bytes: u64,
+    pub launches: u64,
 }
 
 impl Snapshot {
@@ -50,6 +55,7 @@ impl Snapshot {
             h2d_bytes: self.h2d_bytes - earlier.h2d_bytes,
             d2h_count: self.d2h_count - earlier.d2h_count,
             d2h_bytes: self.d2h_bytes - earlier.d2h_bytes,
+            launches: self.launches - earlier.launches,
         }
     }
 }
@@ -61,12 +67,19 @@ pub fn snapshot() -> Snapshot {
         h2d_bytes: H2D_BYTES.load(Relaxed),
         d2h_count: D2H_COUNT.load(Relaxed),
         d2h_bytes: D2H_BYTES.load(Relaxed),
+        launches: LAUNCHES.load(Relaxed),
     }
+}
+
+/// Counted by the `launch!` macro, so no call site can forget.
+#[inline]
+pub(crate) fn record_launch() {
+    LAUNCHES.fetch_add(1, Relaxed);
 }
 
 pub fn reset() {
     FALLBACKS.lock().expect("stats lock").clear();
-    for c in [&H2D_COUNT, &H2D_BYTES, &D2H_COUNT, &D2H_BYTES] {
+    for c in [&H2D_COUNT, &H2D_BYTES, &D2H_COUNT, &D2H_BYTES, &LAUNCHES] {
         c.store(0, Relaxed);
     }
 }
@@ -131,4 +144,55 @@ mod tests {
         assert_eq!(d.host_fallbacks.get("cat"), Some(&1));
         assert_eq!(d.h2d_count, 3);
     }
+}
+
+// ---- phase profiling ------------------------------------------------------
+
+/// `FASTVIDEO_PROFILE=1`: accumulate wall time per named phase of the DiT
+/// block.
+///
+/// Arithmetic on the measured GEMM throughput says ~90% of a denoising step is
+/// *not* the linear algebra, but that says nothing about *which* of the ~3,100
+/// launches per step the time is in. This splits a block into its six phases so
+/// fusion work can be aimed instead of guessed.
+///
+/// Each phase synchronizes, which is what makes the numbers attributable and
+/// also why this is off by default: ~180 extra syncs per step is small against
+/// a 5s step but is still a perturbation, so profile runs and timed runs are
+/// deliberately not the same run.
+static PHASES: Mutex<BTreeMap<&'static str, (u64, f64)>> = Mutex::new(BTreeMap::new());
+
+pub fn profiling() -> bool {
+    static ON: super::envflag::CachedBool = super::envflag::CachedBool::new();
+    ON.get_or_init(|| super::envflag::bool_flag("FASTVIDEO_PROFILE", false))
+}
+
+/// Times `f` under `name` when profiling is on, and is a plain call otherwise.
+pub fn phase<T>(name: &'static str, f: impl FnOnce() -> T) -> T {
+    if !profiling() {
+        return f();
+    }
+    let t = std::time::Instant::now();
+    let out = f();
+    let _ = super::device::synchronize();
+    let secs = t.elapsed().as_secs_f64();
+    let mut g = PHASES.lock().expect("phase lock");
+    let e = g.entry(name).or_insert((0, 0.0));
+    e.0 += 1;
+    e.1 += secs;
+    out
+}
+
+/// `(calls, seconds)` per phase, sorted by total time descending.
+pub fn phase_report() -> Vec<(&'static str, u64, f64)> {
+    let g = PHASES.lock().expect("phase lock");
+    let mut v: Vec<_> = g.iter().map(|(k, (c, s))| (*k, *c, *s)).collect();
+    v.sort_by(|a, b| b.2.total_cmp(&a.2));
+    v
+}
+
+/// Drop accumulated phase times. A `--warm` generate would otherwise fold
+/// the untimed pass into the report we quote.
+pub fn phase_reset() {
+    PHASES.lock().expect("phase lock").clear();
 }

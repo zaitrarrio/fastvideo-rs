@@ -1,29 +1,36 @@
 //! Native Wan graph on cudarc: UMT5 → DiT → feat-cache VAE, device-resident
 //! on CUDA (see [`tensor`]) with plain-Rust reference ops on CPU runs.
 
-pub mod device;
-#[cfg(feature = "cuda")]
-pub mod kernels;
+pub mod affine;
+pub mod ar_cache;
 pub mod attn;
 pub mod bf16_gemm;
 pub mod clip;
 #[cfg(feature = "cuda")]
 pub mod conv;
+pub mod device;
 pub mod envflag;
+#[cfg(feature = "cuda")]
+pub mod fp8;
 pub mod fused;
 pub mod hopper;
+#[cfg(feature = "cuda")]
+pub mod kernels;
 pub mod log;
 pub mod nn;
+pub mod nvfp4;
 pub mod ops;
 pub mod pipeline;
 pub mod resident;
+pub mod sla;
 pub mod sp;
 pub mod stats;
-pub mod vsa;
+pub mod taehv;
 pub mod tensor;
 pub mod transformer;
 pub mod umt5;
 pub mod vae;
+pub mod vsa;
 pub mod weights;
 
 pub use clip::{ClipVision, ClipVisionConfig};

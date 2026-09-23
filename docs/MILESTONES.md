@@ -339,8 +339,85 @@ lost, because the binding constraint was never structure but tensor cores.
 Two independent experiments now say the same thing: **do not hand-write
 attention math that cuBLAS can express on this hardware.**
 
+## 2026-09-18, 07:42–09:01 — The prompt was never reaching the model
+
+Every clip we had generated rendered the *subject* of its prompt and none of
+the scene. "A golden retriever sprints along the shoreline at sunset, waves
+breaking around its paws" gave a static dog on grass; "a piper cub takes off"
+gave a hand holding a green pepper. Upstream FastVideo, on the same GPU and the
+same weights, rendered the puppy on a beach with waves.
+
+**Why 42 green runs never saw it.** Every gate compared fastvideo-rs to
+fastvideo-rs. `parity` is GPU vs our own CPU path — and it feeds the DiT
+*random* embeddings, on the stated grounds that "numerical parity doesn't need
+real text", so it never touched the text encoder at all. `compare` diffs two of
+our own clip dirs, exact mode against fast mode. The video-quality gates score
+luma, temporal MAD and clipping, so a coherent *wrong* video passes all of
+them. A shared algorithmic error is invisible to a self-comparison, and this
+one was copy-pasted into all four backends, so cross-backend agreement was
+worth nothing either.
+
+**The oracle tier.** `upstream_oracle.py` runs transformers' UMT5 and
+diffusers' `WanTransformer3DModel` on the same weights and saves its inputs and
+outputs; `fv-gpucheck oracle` replays them through us on byte-identical
+tensors. Three checks, designed to *attribute* rather than detect:
+
+| check | ours | isolates |
+| --- | --- | --- |
+| `text` | our embedding vs the reference | the UMT5 port |
+| `dit` | our DiT on the **reference** embedding | the DiT port |
+| `e2e` | our DiT on **our** embedding | what a clip gets |
+
+Giving both sides the same conditioning in `dit` is what makes text-vs-DiT
+decidable instead of one number meaning "something is wrong".
+
+**First run, before any fix** (`20260918T124220Z-oracle`, L40S 44GB):
+
+| check | cosine | rel_l2 | |
+| --- | ---: | ---: | --- |
+| text | 0.268 | 1.296 | FAIL |
+| dit | 0.9999999 | 0.00045 | PASS |
+| e2e | 0.823 | 0.607 | FAIL |
+
+**The DiT port was exact the whole time.** Every attention, RoPE, patch-embed,
+adaLN, VSA and bf16 change was correct. The entire failure was one inverted
+comparison in the text encoder.
+
+**The bug.** `relative_position_bucket` added the half-table offset when the key
+came *before* the query; HF adds it when `relative_position > 0`, i.e. after.
+The two halves of the learned 32-row relative attention bias were swapped. For
+a 12-token prompt, 132 of 144 entries were wrong — only the zero-distance
+diagonal survived:
+
+```
+query 5   HF  : [5, 4, 3, 2, 1, 0, 17, 18, 19, 20, 21, 22]
+          ours: [21,20,19,18,17, 0,  1,  2,  3,  4,  5,  6]
+```
+
+UMT5 has no absolute or rotary positional encoding, so this bias — injected
+into all 24 encoder layers — is the model's only word-order signal. Mirroring
+it preserves token identity but binds modifiers, verbs and prepositional
+phrases to the wrong side: the subject survives, the scene does not.
+
+**After the fix** (`20260918T131903Z-oracle`, same tier, same oracle file):
+
+| check | before | after |
+| --- | ---: | ---: |
+| text rel_l2 | 1.296 | **1.8e-6** |
+| dit rel_l2 | 0.00045 | 0.00045 |
+| e2e rel_l2 | 0.607 | **0.00045** |
+
+Our UMT5 now matches transformers to float32 round-off, and `e2e` has collapsed
+onto `dit` — the text encoder contributes no error. One predicate, fixed in
+four backends, with a regression test whose expectations come from HF's formula
+rather than from our output.
+
+Cost of finding it: **$0.67** across two oracle runs, most of it the upstream
+pip install.
+
 ## Totals
 
-- **42 validation runs**, **$1.79** of GPU time end to end.
+- **60 validation runs.** The first 42 cost **$1.79** end to end; the two
+  oracle runs that found and confirmed the UMT5 bug added **$0.67**.
 - A full T3 tier — kernels, models, parity, text encoding, two 8s clips and a precision comparison — costs **$0.066** and 19 minutes.
 - Cached CPU references save 648 s of billed CPU work per run.

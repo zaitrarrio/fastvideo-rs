@@ -1,5 +1,5 @@
 # Free preflight for scripts/gpu/README.md: the cudarc crates build, and every
-# NVRTC kernel compiles (needs only libnvrtc — no driver, no GPU).
+# kernel compiles for every SM via nvcc (ahead of time) and NVRTC (run-time path).
 name: gpucheck-t0
 
 on:
@@ -32,28 +32,30 @@ jobs:
         run: cargo test -p fastvideo-gpucheck -p fastvideo-cudarc --lib --bins
       - name: CUDA feature type-check
         env:
-          CUDARC_CUDA_VERSION: "12040"
+          CUDARC_CUDA_VERSION: "13000"
         run: cargo check -p fastvideo-gpucheck --features cuda
 
   nvrtc-compile:
     runs-on: ubuntu-22.04
     timeout-minutes: 30
     env:
-      CUDARC_CUDA_VERSION: "12040"
-      LD_LIBRARY_PATH: /usr/local/cuda-12.4/lib64
+      CUDARC_CUDA_VERSION: "13000"
+      LD_LIBRARY_PATH: /usr/local/cuda-13.0/lib64
+      NVCC: /usr/local/cuda-13.0/bin/nvcc
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
-      - name: Install NVRTC 12.4 (runtime only)
+      - name: Install CUDA 13.0 nvcc + NVRTC (no driver, no GPU)
         run: |
           wget -q https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2204/x86_64/cuda-keyring_1.1-1_all.deb
           sudo dpkg -i cuda-keyring_1.1-1_all.deb
           sudo apt-get update -qq
-          sudo apt-get install -y -qq cuda-nvrtc-12-4
-      - name: Compile every kernel for sm 7.5 / 8.0 / 8.6 / 8.9 / 9.0
+          sudo apt-get install -y -qq cuda-nvcc-13-0 cuda-nvrtc-13-0 cuda-nvrtc-dev-13-0
+      - name: Build with ahead-of-time cubins, then run both compile gates
         run: |
-          cargo build --release -p fastvideo-gpucheck --features cuda
+          cargo build --release -p fastvideo-gpucheck --features cuda 2>&1 | tee build.log
+          grep -q "embedded cubins for sm" build.log || { echo "build.rs did not find nvcc"; exit 1; }
           ./target/release/fv-gpucheck --out gpucheck-out nvrtc
       - uses: actions/upload-artifact@v4
         if: always()

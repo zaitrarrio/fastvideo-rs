@@ -1,0 +1,249 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>FastVideo Control</title>
+<style>
+  :root {
+    --bg: #0f1115; --panel: #171a21; --line: #262b36; --text: #e6e9ef;
+    --dim: #949cad; --accent: #6ea8fe; --ok: #4ade80; --bad: #f87171; --warn: #fbbf24;
+  }
+  @media (prefers-color-scheme: light) {
+    :root:not([data-theme="dark"]) {
+      --bg: #f6f7f9; --panel: #fff; --line: #e3e6ea; --text: #16181d;
+      --dim: #5c6472; --accent: #2563eb; --ok: #15803d; --bad: #b91c1c; --warn: #a16207;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font: 14px/1.5 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+    padding: 0 16px 48px;
+  }
+  header { max-width: 1100px; margin: 0 auto; padding: 24px 0 8px; }
+  h1 { font-size: 20px; margin: 0 0 4px; letter-spacing: -0.01em; }
+  header p { margin: 0; color: var(--dim); }
+  main { max-width: 1100px; margin: 0 auto; display: grid; gap: 16px; }
+  @media (min-width: 900px) { main { grid-template-columns: 1fr 1fr; } .wide { grid-column: 1 / -1; } }
+  section { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 16px; }
+  h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .06em; color: var(--dim); margin: 0 0 12px; }
+  label { display: block; font-size: 12px; color: var(--dim); margin: 10px 0 4px; }
+  input, select, textarea, button {
+    font: inherit; color: var(--text); background: var(--bg);
+    border: 1px solid var(--line); border-radius: 7px; padding: 8px 10px; width: 100%;
+  }
+  textarea { min-height: 86px; resize: vertical; }
+  button {
+    background: var(--accent); color: #fff; border: none; cursor: pointer; font-weight: 600;
+  }
+  button:disabled { opacity: .5; cursor: not-allowed; }
+  button.ghost { background: transparent; color: var(--text); border: 1px solid var(--line); font-weight: 500; }
+  .row { display: flex; gap: 8px; align-items: end; flex-wrap: wrap; }
+  .row > * { flex: 1 1 120px; }
+  .grid3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th { text-align: left; color: var(--dim); font-weight: 500; padding: 6px 8px; border-bottom: 1px solid var(--line); }
+  td { padding: 6px 8px; border-bottom: 1px solid var(--line); }
+  tr.pick:hover { background: rgba(110,168,254,.08); cursor: pointer; }
+  tr.sel { background: rgba(110,168,254,.16); }
+  .muted { color: var(--dim); }
+  .tag { display: inline-block; padding: 1px 7px; border-radius: 99px; font-size: 11px; border: 1px solid var(--line); }
+  .ok { color: var(--ok); } .bad { color: var(--bad); } .warn { color: var(--warn); }
+  pre#log {
+    margin: 0; padding: 12px; background: var(--bg); border: 1px solid var(--line);
+    border-radius: 8px; height: 320px; overflow: auto; font-size: 12px;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace; white-space: pre-wrap; word-break: break-word;
+  }
+  video { width: 100%; border-radius: 8px; background: #000; margin-top: 8px; }
+  .note { font-size: 12px; color: var(--dim); margin-top: 10px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>FastVideo Control</h1>
+  <p>Rent a GPU, deploy the model, generate a clip. Talks to the Vast REST API from your machine; the key stays in <code>.env</code>.</p>
+</header>
+
+<main>
+  <section>
+    <h2>1 · Find a machine</h2>
+    <div class="row">
+      <div style="flex:2 1 160px">
+        <label for="gpu">GPU filter</label>
+        <select id="gpu">
+          <option value="">Any</option>
+          <option>RTX_5090</option><option>RTX_4090</option>
+          <option>RTX_3090</option><option>RTX_3090_Ti</option>
+          <option>RTX_A6000</option><option>RTX_A5000</option>
+        </select>
+      </div>
+      <div style="flex:0 0 110px"><label>&nbsp;</label><button id="search">Search</button></div>
+    </div>
+    <div style="max-height:220px;overflow:auto;margin-top:12px">
+      <table id="offers"><tbody><tr><td class="muted">No search yet.</td></tr></tbody></table>
+    </div>
+    <p class="note">Picking an offer only filters which GPU gets rented — the run still chooses the cheapest match.</p>
+  </section>
+
+  <section>
+    <h2>2 · Prompt</h2>
+    <label for="prompt">Describe the clip</label>
+    <textarea id="prompt" placeholder="A golden retriever sprints along the shoreline at sunset, waves breaking around its paws, warm backlight."></textarea>
+    <div class="grid3">
+      <div><label for="frames">Frames</label><input id="frames" type="number" value="129" min="5" step="4"></div>
+      <div><label for="steps">Steps</label><input id="steps" type="number" value="3" min="1" max="50"></div>
+      <div><label for="res">Resolution</label>
+        <select id="res"><option value="448x832">448×832</option><option value="256x448">256×448</option></select>
+      </div>
+    </div>
+    <div class="row" style="margin-top:12px">
+      <div style="flex:2 1 auto">
+        <label for="instance">Reuse instance (optional)</label>
+        <input id="instance" placeholder="fresh machine">
+      </div>
+      <div style="flex:0 0 130px"><label>&nbsp;</label><button id="go">Generate</button></div>
+    </div>
+    <p class="note" id="reuse-note">A fresh machine is deployed for each run. Reusing one skips the ~5&nbsp;min deploy but
+      accumulates GPU memory, which has caused out-of-memory failures.</p>
+  </section>
+
+  <section class="wide">
+    <h2>3 · Progress <span id="status" class="tag">idle</span></h2>
+    <pre id="log">Nothing running.</pre>
+    <div class="row" style="margin-top:10px">
+      <div style="flex:0 0 120px"><button id="stop" class="ghost" disabled>Stop</button></div>
+      <div class="muted" id="elapsed" style="flex:1 1 auto;align-self:center"></div>
+    </div>
+  </section>
+
+  <section class="wide">
+    <h2>4 · Clips</h2>
+    <div class="row">
+      <div style="flex:3 1 260px">
+        <label for="clips">Generated</label>
+        <select id="clips"><option value="">None yet</option></select>
+      </div>
+      <div style="flex:0 0 110px"><label>&nbsp;</label><button id="refresh" class="ghost">Refresh</button></div>
+    </div>
+    <video id="player" controls playsinline></video>
+  </section>
+
+  <section class="wide">
+    <h2>Running instances</h2>
+    <table id="instances"><tbody><tr><td class="muted">None.</td></tr></tbody></table>
+    <p class="note">Instances bill by the hour while they exist. Destroy them when you're done.</p>
+  </section>
+</main>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const api = async (path, opts) => (await fetch(path, opts)).json();
+const post = (path, body) =>
+  api(path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body || {}) });
+
+let picked = '';           // selected GPU model, not a specific offer
+let since = 0;             // how much of the job log we already have
+
+$('search').onclick = async () => {
+  const body = $('offers').querySelector('tbody');
+  body.innerHTML = '<tr><td class="muted">Searching…</td></tr>';
+  const list = await api('/api/offers?tier=gen&gpu=' + encodeURIComponent($('gpu').value));
+  if (!list.length) { body.innerHTML = '<tr><td class="muted">No offers under the price cap.</td></tr>'; return; }
+  if (list[0] && list[0].error) { body.innerHTML = `<tr><td class="bad">${list[0].error}</td></tr>`; return; }
+  body.innerHTML = '<tr><th>GPU</th><th>VRAM</th><th>$/hr</th><th>sm</th><th>rel</th><th>Net</th><th>Where</th></tr>' +
+    list.map(o => `<tr class="pick" data-gpu="${(o.gpu||'').replace(/\s+/g, '_')}" title="offer ${o.id} · machine ${o.machine} · CUDA ${o.cuda}">
+      <td>${o.gpu}</td><td>${o.vram}GB</td><td>$${o.dph.toFixed(3)}</td>
+      <td class="muted">${o.sm}</td><td class="muted">${o.reliability}</td>
+      <td>${o.inet}Mbps</td><td class="muted">${o.where}</td></tr>`).join('');
+  body.querySelectorAll('tr.pick').forEach(tr => tr.onclick = () => {
+    body.querySelectorAll('tr').forEach(r => r.classList.remove('sel'));
+    tr.classList.add('sel');
+    picked = tr.dataset.gpu;
+  });
+};
+
+$('go').onclick = async () => {
+  const [h, w] = $('res').value.split('x');
+  const res = await post('/api/generate', {
+    prompt: $('prompt').value,
+    frames: +$('frames').value, steps: +$('steps').value,
+    height: +h, width: +w,
+    gpu: picked || $('gpu').value,
+    instance: $('instance').value.trim(),
+    keep: !!$('instance').value.trim(),
+  });
+  if (!res.started) { alert(res.message || res.error || 'could not start'); return; }
+  since = 0; $('log').textContent = '';
+  poll();
+};
+
+$('stop').onclick = () => post('/api/stop');
+
+async function poll() {
+  const j = await api('/api/job?since=' + since);
+  if (j.lines && j.lines.length) {
+    const box = $('log');
+    const stick = box.scrollTop + box.clientHeight >= box.scrollHeight - 30;
+    box.textContent += (box.textContent ? '\n' : '') + j.lines.join('\n');
+    if (stick) box.scrollTop = box.scrollHeight;
+    since = j.total;
+  }
+  const tag = $('status');
+  if (j.running) {
+    tag.textContent = j.label || 'running'; tag.className = 'tag warn';
+    $('elapsed').textContent = j.elapsed + 's elapsed';
+    $('stop').disabled = false;
+    setTimeout(poll, 1200);
+  } else {
+    $('stop').disabled = true;
+    if (j.rc === null) { tag.textContent = 'idle'; tag.className = 'tag'; }
+    else if (j.rc === 0) { tag.textContent = 'done'; tag.className = 'tag ok'; loadClips(); }
+    else { tag.textContent = 'failed (rc ' + j.rc + ')'; tag.className = 'tag bad'; loadClips(); }
+    loadInstances();
+  }
+}
+
+async function loadClips() {
+  const list = await api('/api/clips');
+  const sel = $('clips');
+  const keep = sel.value;
+  sel.innerHTML = list.length
+    ? list.map(c => `<option value="${c.name}">${c.name} — ${c.when} (${c.size_mb} MB)</option>`).join('')
+    : '<option value="">None yet</option>';
+  if (list.length) {
+    sel.value = list.some(c => c.name === keep) ? keep : list[0].name;
+    show(sel.value);
+  }
+}
+const show = (name) => { if (name) $('player').src = '/clip/' + name.split('/').map(encodeURIComponent).join('/'); };
+$('clips').onchange = (e) => show(e.target.value);
+$('refresh').onclick = loadClips;
+
+async function loadInstances() {
+  const list = await api('/api/instances');
+  const body = $('instances').querySelector('tbody');
+  if (list[0] && list[0].error) {
+    body.innerHTML = `<tr><td class="bad">${list[0].error}</td></tr>`; return;
+  }
+  body.innerHTML = list.length
+    ? '<tr><th>ID</th><th>GPU</th><th>Status</th><th>ssh</th><th>$/hr</th><th></th></tr>' + list.map(i => `<tr>
+        <td>${i.id}</td><td>${i.gpu || ''}</td><td>${i.status || ''}</td>
+        <td class="muted">${i.ssh || ''}</td>
+        <td>${i.dph ? '$' + (+i.dph).toFixed(3) : ''}</td>
+        <td><button class="ghost kill" data-id="${i.id}" style="width:auto;padding:3px 10px">Destroy</button></td>
+      </tr>`).join('')
+    : '<tr><td class="muted">None.</td></tr>';
+  body.querySelectorAll('.kill').forEach(b => b.onclick = async () => {
+    if (!confirm('Destroy instance ' + b.dataset.id + '? This cannot be undone.')) return;
+    b.disabled = true;
+    await post('/api/destroy', { id: b.dataset.id });
+    loadInstances();
+  });
+}
+
+loadClips(); loadInstances(); poll();
+setInterval(loadInstances, 30000);
+</script>
+</body>
+</html>

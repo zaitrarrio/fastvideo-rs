@@ -58,19 +58,34 @@ impl VideoStats {
             f.push(format!("non_finite={}", self.non_finite));
         }
         if self.frame_std_min < g.frame_std_min {
-            f.push(format!("flat frame (std {:.2} < {})", self.frame_std_min, g.frame_std_min));
+            f.push(format!(
+                "flat frame (std {:.2} < {})",
+                self.frame_std_min, g.frame_std_min
+            ));
         }
         if self.clipped_fraction > g.clipped_fraction_max {
-            f.push(format!("saturated ({:.3} > {})", self.clipped_fraction, g.clipped_fraction_max));
+            f.push(format!(
+                "saturated ({:.3} > {})",
+                self.clipped_fraction, g.clipped_fraction_max
+            ));
         }
         if self.frames > 1 && self.temporal_mad_mean < g.temporal_mad_min {
-            f.push(format!("frozen (mad {:.3} < {})", self.temporal_mad_mean, g.temporal_mad_min));
+            f.push(format!(
+                "frozen (mad {:.3} < {})",
+                self.temporal_mad_mean, g.temporal_mad_min
+            ));
         }
         if self.temporal_mad_mean > g.temporal_mad_max {
-            f.push(format!("incoherent (mad {:.2} > {})", self.temporal_mad_mean, g.temporal_mad_max));
+            f.push(format!(
+                "incoherent (mad {:.2} > {})",
+                self.temporal_mad_mean, g.temporal_mad_max
+            ));
         }
         if self.luma_jump_max > g.luma_jump_max {
-            f.push(format!("flash (luma jump {:.2} > {})", self.luma_jump_max, g.luma_jump_max));
+            f.push(format!(
+                "flash (luma jump {:.2} > {})",
+                self.luma_jump_max, g.luma_jump_max
+            ));
         }
         f
     }
@@ -128,7 +143,13 @@ pub fn video_stats(video: &[f32], shape: &[usize]) -> Result<VideoStats> {
         luma_jump_max = luma_jump_max.max((frame_mean[t] - frame_mean[t - 1]).abs());
     }
     let _ = c;
-    let avg = |v: &[f64]| if v.is_empty() { 0.0 } else { v.iter().sum::<f64>() / v.len() as f64 };
+    let avg = |v: &[f64]| {
+        if v.is_empty() {
+            0.0
+        } else {
+            v.iter().sum::<f64>() / v.len() as f64
+        }
+    };
     Ok(VideoStats {
         frames: f,
         height: h,
@@ -155,16 +176,28 @@ pub fn contact_sheet(video: &[f32], shape: &[usize], path: &Path) -> Result<()> 
     let mut img = image::RgbImage::new((tw * cols) as u32, (th * rows) as u32);
     let plane = h * w;
     for k in 0..tiles {
-        let t = if tiles == 1 { 0 } else { k * (f - 1) / (tiles - 1) };
+        let t = if tiles == 1 {
+            0
+        } else {
+            k * (f - 1) / (tiles - 1)
+        };
         for y in 0..th {
             for x in 0..tw {
                 let i = (y * stride) * w + x * stride;
                 let mut rgb = [0u8; 3];
                 for (ch, out) in rgb.iter_mut().enumerate() {
                     let v = video[(ch * f + t) * plane + i];
-                    *out = if v.is_finite() { ((v + 1.0) * 127.5).clamp(0.0, 255.0) as u8 } else { 255 };
+                    *out = if v.is_finite() {
+                        ((v + 1.0) * 127.5).clamp(0.0, 255.0) as u8
+                    } else {
+                        255
+                    };
                 }
-                img.put_pixel((x + (k % cols) * tw) as u32, (y + (k / cols) * th) as u32, image::Rgb(rgb));
+                img.put_pixel(
+                    (x + (k % cols) * tw) as u32,
+                    (y + (k / cols) * th) as u32,
+                    image::Rgb(rgb),
+                );
             }
         }
     }
@@ -179,7 +212,12 @@ pub fn contact_sheet(video: &[f32], shape: &[usize], path: &Path) -> Result<()> 
 mod tests {
     use super::*;
 
-    fn video(f: usize, h: usize, w: usize, px: impl Fn(usize, usize, usize, usize) -> f32) -> Vec<f32> {
+    fn video(
+        f: usize,
+        h: usize,
+        w: usize,
+        px: impl Fn(usize, usize, usize, usize) -> f32,
+    ) -> Vec<f32> {
         let mut v = vec![0.0; 3 * f * h * w];
         for ch in 0..3 {
             for t in 0..f {
@@ -215,6 +253,9 @@ mod tests {
     fn nan_frame_fails() {
         let v = video(2, 4, 4, |_, t, _, _| if t == 1 { f32::NAN } else { 0.5 });
         let s = video_stats(&v, &[1, 3, 2, 4, 4]).unwrap();
-        assert!(s.failures(&QualityGates::default()).iter().any(|f| f.starts_with("non_finite")));
+        assert!(s
+            .failures(&QualityGates::default())
+            .iter()
+            .any(|f| f.starts_with("non_finite")));
     }
 }

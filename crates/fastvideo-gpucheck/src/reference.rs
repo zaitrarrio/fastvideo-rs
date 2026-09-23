@@ -81,16 +81,25 @@ impl RefIo {
             (None, Some(dir)) => {
                 let path = dir.join(format!("{stage}.safetensors"));
                 let meta: serde_json::Value = serde_json::from_str(
-                    &std::fs::read_to_string(path.with_extension("json"))
-                        .with_context(|| format!("no reference manifest for {} (run with --dump first)", path.display()))?,
+                    &std::fs::read_to_string(path.with_extension("json")).with_context(|| {
+                        format!(
+                            "no reference manifest for {} (run with --dump first)",
+                            path.display()
+                        )
+                    })?,
                 )?;
                 if meta["device"] != "cpu" || meta["mode"] != "exact" {
-                    bail!("{}: reference must come from --device cpu --mode exact, got {meta}", path.display());
+                    bail!(
+                        "{}: reference must come from --device cpu --mode exact, got {meta}",
+                        path.display()
+                    );
                 }
                 // References are keyed by the CPU-path sources that produce
                 // them (scripts/gpu/lib.sh fv_ref_key), not the binary: GPU-only
                 // changes reuse them, CPU-path changes must re-dump.
-                if let (Some(want), Ok(have)) = (meta["ref_key"].as_str(), std::env::var("FV_REF_KEY")) {
+                if let (Some(want), Ok(have)) =
+                    (meta["ref_key"].as_str(), std::env::var("FV_REF_KEY"))
+                {
                     if want != have {
                         bail!("reference key {want} != this run's {have}: CPU-path sources changed; re-dump");
                     }
@@ -101,7 +110,9 @@ impl RefIo {
                     videos: None,
                 })
             }
-            _ => bail!("pass exactly one of --dump <dir> (CPU path) or --reference <dir> (GPU run)"),
+            _ => {
+                bail!("pass exactly one of --dump <dir> (CPU path) or --reference <dir> (GPU run)")
+            }
         }
     }
 
@@ -150,7 +161,9 @@ impl RefIo {
                 outputs.push((name.to_string(), F32Tensor::new(shape.to_vec(), data)?));
                 Ok(())
             }
-            RefIo::Compare { reference, path, .. } => {
+            RefIo::Compare {
+                reference, path, ..
+            } => {
                 let want = reference
                     .get(name)
                     .with_context(|| format!("{} has no output `{name}`", path.display()))?;
@@ -168,14 +181,25 @@ impl RefIo {
                 if video {
                     values["psnr_db"] = jf(psnr(&data, &want.data, 2.0));
                 }
-                report.check(name, d.within(rel_limit), values, json!({"rel_l2": rel_limit}))
+                report.check(
+                    name,
+                    d.within(rel_limit),
+                    values,
+                    json!({"rel_l2": rel_limit}),
+                )
             }
         }
     }
 
-    pub fn finish(self, report: &mut Report, mode: crate::mode::Mode, device: &str) -> anyhow::Result<()> {
+    pub fn finish(
+        self,
+        report: &mut Report,
+        mode: crate::mode::Mode,
+        device: &str,
+    ) -> anyhow::Result<()> {
         if let RefIo::Dump { path, outputs, .. } = self {
-            let refs: Vec<(&str, &F32Tensor)> = outputs.iter().map(|(n, t)| (n.as_str(), t)).collect();
+            let refs: Vec<(&str, &F32Tensor)> =
+                outputs.iter().map(|(n, t)| (n.as_str(), t)).collect();
             st::save(&path, &refs)?;
             let meta = json!({
                 "device": device,
@@ -184,7 +208,10 @@ impl RefIo {
                 "ref_key": std::env::var("FV_REF_KEY").ok(),
                 "outputs": outputs.iter().map(|(n, t)| json!({"name": n, "shape": t.shape})).collect::<Vec<_>>(),
             });
-            std::fs::write(path.with_extension("json"), serde_json::to_string_pretty(&meta)?)?;
+            std::fs::write(
+                path.with_extension("json"),
+                serde_json::to_string_pretty(&meta)?,
+            )?;
             report.set("reference_written", path);
         }
         Ok(())

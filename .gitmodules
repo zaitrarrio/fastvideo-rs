@@ -1,0 +1,6 @@
+[submodule "third_party/cuda-oxide"]
+	path = third_party/cuda-oxide
+	url = https://github.com/NVlabs/cuda-oxide.git
+[submodule "third_party/cutile-rs"]
+	path = third_party/cutile-rs
+	url = https://github.com/NVlabs/cutile-rs.git

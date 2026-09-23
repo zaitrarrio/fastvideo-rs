@@ -8,8 +8,8 @@ use fastvideo_cudarc::{CudaTensor, GenerateConfig, LoadParts, WanPipeline};
 use serde_json::json;
 
 use crate::mode::{limits, Mode};
-use crate::rand_weights::randn;
 use crate::model::{decode_video, measure};
+use crate::rand_weights::randn;
 use crate::reference::{Out, RefIo};
 use crate::report::{Report, StageResult};
 
@@ -17,12 +17,26 @@ fn host(t: &CudaTensor) -> anyhow::Result<Vec<f32>> {
     Ok(t.host_cow()?.into_owned())
 }
 
-pub fn run(report: &mut Report, refs: &mut RefIo, weights: &Path, device: &str, mode: Mode) -> StageResult<()> {
+pub fn run(
+    report: &mut Report,
+    refs: &mut RefIo,
+    weights: &Path,
+    device: &str,
+    mode: Mode,
+) -> StageResult<()> {
     let lim = limits(mode);
     report.set("limits", lim);
     report.set("device", crate::gpu::init(device)?);
 
-    let (pipe, load_s) = measure(report, "load", || Ok(WanPipeline::load_with(weights, "wan_t2v_1_3b", LoadParts { text_encoder: false })?))?;
+    let (pipe, load_s) = measure(report, "load", || {
+        Ok(WanPipeline::load_with(
+            weights,
+            "wan_t2v_1_3b",
+            LoadParts {
+                text_encoder: false,
+            },
+        )?)
+    })?;
     report.note("load", json!({"seconds": load_s}));
     let gpu = crate::gpu::on_gpu(device);
 
@@ -37,7 +51,9 @@ pub fn run(report: &mut Report, refs: &mut RefIo, weights: &Path, device: &str, 
     let lat = CudaTensor::from_vec(randn(103, n_lat, 1.0), lat_shape.clone())?;
     let t999 = CudaTensor::from_vec(vec![999.0], vec![1])?;
     let cond = embeds.narrow(0, 1, 1)?;
-    let forward = || -> anyhow::Result<CudaTensor> { Ok(pipe.transformer().forward_ctx(&lat, &t999, &cond, None)?) };
+    let forward = || -> anyhow::Result<CudaTensor> {
+        Ok(pipe.transformer().forward_ctx(&lat, &t999, &cond, None)?)
+    };
     let z = CudaTensor::from_vec(randn(104, n_lat, 1.0), lat_shape.clone())?;
     if gpu {
         // Warm-up: kernel setup, cuDNN plans and allocator growth stay out of timings.
@@ -46,12 +62,28 @@ pub fn run(report: &mut Report, refs: &mut RefIo, weights: &Path, device: &str, 
     }
     let (y, s) = measure(report, "dit_forward_t999", forward)?;
     let y = host(&y)?;
-    refs.output(report, "dit_forward_t999", &lat_shape, y, lim.forward, s, Out::Tensor)?;
+    refs.output(
+        report,
+        "dit_forward_t999",
+        &lat_shape,
+        y,
+        lim.forward,
+        s,
+        Out::Tensor,
+    )?;
 
     let (video, s) = measure(report, "vae_decode", || Ok(pipe.decode_latents(&z)?))?;
     let shape = video.shape.clone();
     let video = host(&video)?;
-    refs.output(report, "vae_decode", &shape, video, lim.forward, s, Out::Video)?;
+    refs.output(
+        report,
+        "vae_decode",
+        &shape,
+        video,
+        lim.forward,
+        s,
+        Out::Video,
+    )?;
 
     let cfg = GenerateConfig {
         height: 128,
@@ -63,9 +95,27 @@ pub fn run(report: &mut Report, refs: &mut RefIo, weights: &Path, device: &str, 
         seed: 105,
         ..GenerateConfig::default()
     };
-    let (out, denoise_s) = measure(report, "unipc_2step_cfg5", || Ok(pipe.denoise(&cfg, pipe.initial_latents(&cfg)?, &embeds, None)?))?;
+    let (out, denoise_s) = measure(report, "unipc_2step_cfg5", || {
+        Ok(pipe.denoise(&cfg, pipe.initial_latents(&cfg)?, &embeds, None)?)
+    })?;
     let data = host(&out)?;
-    refs.output(report, "unipc_2step_cfg5", &out.shape.clone(), data, lim.denoise, denoise_s, Out::Tensor)?;
-    decode_video(report, refs, &pipe, &out, "unipc_2step_cfg5_video", lim.denoise, denoise_s)?;
+    refs.output(
+        report,
+        "unipc_2step_cfg5",
+        &out.shape.clone(),
+        data,
+        lim.denoise,
+        denoise_s,
+        Out::Tensor,
+    )?;
+    decode_video(
+        report,
+        refs,
+        &pipe,
+        &out,
+        "unipc_2step_cfg5_video",
+        lim.denoise,
+        denoise_s,
+    )?;
     Ok(())
 }

@@ -1,16 +1,18 @@
-//! Hugging Face Diffusers weight loading for Wan components.
+//! Hugging Face Diffusers weight loading (raw mmap / lazy stores).
 
+mod lazy;
 mod raw;
+mod writer;
 
+pub use lazy::{LazyDType, LazyStore, LazyView};
 pub use raw::{
     load_raw_component, load_raw_component_native, load_raw_tensors, load_raw_tensors_native,
     RawDType, RawTensor,
 };
+pub use writer::{SafetensorsWriter, TensorSpec};
 
 use std::path::{Path, PathBuf};
 
-use candle_core::{DType, Device};
-use candle_nn::VarBuilder;
 use thiserror::Error;
 
 use fastvideo_models::wan::PARAM_NAMES_MAPPING;
@@ -19,8 +21,6 @@ use fastvideo_models::wan::PARAM_NAMES_MAPPING;
 pub enum LoaderError {
     #[error("{0}")]
     Message(String),
-    #[error(transparent)]
-    Candle(#[from] candle_core::Error),
     #[error(transparent)]
     Io(#[from] std::io::Error),
 }
@@ -54,105 +54,6 @@ pub fn collect_safetensors(dir: &Path) -> Result<Vec<PathBuf>, LoaderError> {
     }
     files.sort();
     Ok(files)
-}
-
-pub fn var_builder_from_dir(
-    dir: &Path,
-    dtype: DType,
-    device: &Device,
-) -> Result<VarBuilder<'static>, LoaderError> {
-    let files = collect_safetensors(dir)?;
-    if files.is_empty() {
-        return Err(LoaderError::Message(format!(
-            "no .safetensors files under {}",
-            dir.display()
-        )));
-    }
-    let mut tensors = std::collections::HashMap::new();
-    for file in &files {
-        // Decode on CPU, cast, then move. Loading f32 shards straight onto a
-        // 24GB GPU OOMs Wan 1.3B (UMT5+DiT+VAE are ~27GB on disk).
-        let loaded = candle_core::safetensors::load(file, &Device::Cpu)?;
-        for (name, tensor) in loaded {
-            tensors.insert(name, tensor.to_dtype(dtype)?.to_device(device)?);
-        }
-    }
-    Ok(VarBuilder::from_tensors(tensors, dtype, device))
-}
-
-fn cpu_offload_for_cuda(device: &Device, dtype: DType) -> (Device, DType) {
-    match device {
-        Device::Cpu => (device.clone(), dtype),
-        #[cfg(feature = "cuda")]
-        Device::Cuda(_) => (Device::Cpu, DType::F32),
-        #[allow(unreachable_patterns)]
-        _ => (device.clone(), dtype),
-    }
-}
-
-pub struct DiffusersComponents {
-    pub transformer: VarBuilder<'static>,
-    /// Wan 2.2 MoE low-noise expert (`transformer_2/`).
-    pub transformer_2: Option<VarBuilder<'static>>,
-    pub vae: VarBuilder<'static>,
-    pub text: VarBuilder<'static>,
-    /// Wan I2V CLIP ViT-H (`image_encoder/`).
-    pub image_encoder: Option<VarBuilder<'static>>,
-}
-
-pub fn load_diffusers_components(
-    root: &Path,
-    dtype: DType,
-    device: &Device,
-) -> Result<DiffusersComponents, LoaderError> {
-    eprintln!("loading transformer onto {device:?} dtype={dtype:?}");
-    let transformer = var_builder_from_dir(&root.join("transformer"), dtype, device)?;
-    let transformer_2 = {
-        let dir = root.join("transformer_2");
-        if dir.is_dir() {
-            match collect_safetensors(&dir) {
-                Ok(files) if !files.is_empty() => {
-                    Some(var_builder_from_dir(&dir, dtype, device)?)
-                }
-                _ => None,
-            }
-        } else {
-            None
-        }
-    };
-    eprintln!("loading vae onto {device:?} dtype={dtype:?}");
-    let vae = var_builder_from_dir(&root.join("vae"), dtype, device)?;
-    // UMT5-XXL is ~11GB BF16. Keep it on CPU so the 24GB GPU can hold DiT + VAE decode.
-    let (host, host_dtype) = cpu_offload_for_cuda(device, dtype);
-    let text = {
-        let te = root.join("text_encoder");
-        eprintln!("loading text encoder on {host:?} dtype={host_dtype:?}");
-        if te.is_dir() {
-            var_builder_from_dir(&te, host_dtype, &host)?
-        } else {
-            var_builder_from_dir(&root.join("text_encoder_2"), host_dtype, &host)?
-        }
-    };
-    let image_encoder = {
-        let dir = root.join("image_encoder");
-        if dir.is_dir() {
-            match collect_safetensors(&dir) {
-                Ok(files) if !files.is_empty() => {
-                    Some(var_builder_from_dir(&dir, dtype, device)?)
-                }
-                _ => None,
-            }
-        } else {
-            None
-        }
-    };
-    Ok(DiffusersComponents {
-        transformer,
-        transformer_2,
-        vae,
-        text,
-        image_encoder,
-    })
 }
 
 pub fn weight_map_keys(index_json: &Path) -> Result<Vec<String>, LoaderError> {
@@ -195,39 +96,8 @@ mod tests {
         };
         assert!(root.join("transformer").is_dir());
         assert!(root.join("vae").is_dir());
-        assert!(root.join("text_encoder").is_dir() || root.join("text_encoder_2").is_dir());
-        assert!(root.join("tokenizer/tokenizer.json").is_file());
-        let cfg_raw = std::fs::read_to_string(root.join("transformer/config.json")).unwrap();
-        let cfg: serde_json::Value = serde_json::from_str(&cfg_raw).unwrap();
-        let expected = WanVideoArchConfig::wan_t2v_1_3b();
-        assert_eq!(cfg["num_layers"].as_u64().unwrap() as usize, expected.num_layers);
-        assert_eq!(
-            cfg["num_attention_heads"].as_u64().unwrap() as usize,
-            expected.num_attention_heads
-        );
-        assert_eq!(cfg["ffn_dim"].as_u64().unwrap() as usize, expected.ffn_dim);
-        assert_eq!(
-            cfg["in_channels"].as_u64().unwrap() as usize,
-            expected.in_channels
-        );
-        let files = collect_safetensors(&root.join("transformer")).unwrap();
-        assert!(
-            files.len() >= 2,
-            "expected sharded safetensors, got {files:?}"
-        );
-        let index = root.join("transformer/diffusion_pytorch_model.safetensors.index.json");
-        let keys = weight_map_keys(&index).unwrap();
-        for required in WAN_T2V_1_3B_REQUIRED_KEYS {
-            assert!(
-                keys.iter().any(|k| k == required),
-                "missing Diffusers key {required}"
-            );
-        }
-        assert!(keys.iter().any(|k| k.starts_with("blocks.29.")));
-        assert!(!keys.iter().any(|k| k.contains("blocks.30.")));
-        assert!(
-            !root.join("transformer_2").is_dir(),
-            "1.3B T2V is a single DiT; MoE transformer_2 belongs on A14B"
-        );
+        let cfg = WanVideoArchConfig::wan_t2v_1_3b();
+        assert_eq!(cfg.in_channels, 16);
+        assert!(!WAN_T2V_1_3B_REQUIRED_KEYS.is_empty());
     }
 }

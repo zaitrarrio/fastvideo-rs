@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 use std::time::Instant;
 
 use anyhow::Context;
-use fastvideo_cudarc::wan::pipeline::{mux_mp4, write_frames, PipelineError};
+use fastvideo_cudarc::wan::pipeline::{frames_to_rgb8, PipelineError, VideoWriter};
 use fastvideo_cudarc::{CudaTensor, DenoiseStep, GenerateConfig, LoadParts, WanPipeline};
 use serde::Serialize;
 use serde_json::json;
@@ -327,6 +327,8 @@ pub struct ClipArgs<'a> {
     pub budget_min: f64,
     pub gates: QualityGates,
     pub save_mp4: bool,
+    /// Generate once untimed before the measured pass (see `--warm`).
+    pub warm: bool,
 }
 
 pub fn clip(report: &mut Report, args: ClipArgs<'_>) -> StageResult<()> {
@@ -338,9 +340,30 @@ pub fn clip(report: &mut Report, args: ClipArgs<'_>) -> StageResult<()> {
     let run_timer = Instant::now();
     let pipe = load_pipeline(report, args.weights)?;
     let embeds = load_embeds(args.embeds)?;
+    let load_s = run_timer.elapsed().as_secs_f64();
     let cfg = spec.generate_config();
     let noise = pipe.initial_latents(&cfg)?;
     let budget_s = args.budget_min * 60.0;
+
+    // A process's first clip pays for what a second one does not: allocator
+    // growth, cuBLAS handles and heuristics, first kernel launches. `--warm`
+    // spends one whole generation on that, so the timings below describe a
+    // resident pipeline answering its next request.
+    let warm_s = if args.warm {
+        let t = Instant::now();
+        let l = pipe.denoise(&cfg, noise.clone(), &embeds, None)?;
+        let v = pipe.decode_latents(&l)?;
+        let _ = frames_to_rgb8(
+            &v.reshape(vec![3, v.shape[2], v.shape[3], v.shape[4]])?
+                .permute(&[1, 0, 2, 3])?,
+        )?;
+        let s = t.elapsed().as_secs_f64();
+        eprintln!("warm-up generation {s:.2}s (untimed)");
+        Some(s)
+    } else {
+        None
+    };
+    let gen_timer = Instant::now();
 
     #[derive(Default)]
     struct Trace {
@@ -416,21 +439,25 @@ pub fn clip(report: &mut Report, args: ClipArgs<'_>) -> StageResult<()> {
     }
     st::save(&clip_dir.join("latents.safetensors"), &saved)?;
 
+    // Frames go to disk while the decoder is still working: each finished
+    // chunk is packed to 8-bit RGB on the device and handed to a writer thread
+    // that encodes PNGs in parallel and streams rgb24 into ffmpeg. `write_s`
+    // is then only the tail that outlives the decode, not the whole encode.
     let mem = PeakMem::start();
     let t = Instant::now();
-    let video = pipe.decode_latents(&latents)?;
+    let frames_dir = clip_dir.join("frames");
+    let mut writer = VideoWriter::spawn(&frames_dir, spec.fps, args.save_mp4)?;
+    let video = pipe.decode_latents_streaming(&latents, &mut |offset, frames| {
+        let (h, w) = (frames.shape[2], frames.shape[3]);
+        writer.push(offset, h, w, frames_to_rgb8(frames)?)
+    })?;
     let video_host = video.host_cow()?.into_owned();
     let vae_s = t.elapsed().as_secs_f64();
     let vae_peak = mem.stop();
 
     let t = Instant::now();
-    let frames_dir = clip_dir.join("frames");
-    let paths = write_frames(&video, &frames_dir)?;
-    let mp4 = if args.save_mp4 {
-        mux_mp4(&frames_dir, spec.fps).map_err(|e| anyhow::anyhow!("{e}"))?
-    } else {
-        String::new()
-    };
+    let (paths, mp4) = writer.finish()?;
+    let mp4 = mp4.unwrap_or_default();
     contact_sheet(
         &video_host,
         &video.shape,
@@ -439,20 +466,65 @@ pub fn clip(report: &mut Report, args: ClipArgs<'_>) -> StageResult<()> {
     let write_s = t.elapsed().as_secs_f64();
 
     let total_s = run_timer.elapsed().as_secs_f64();
+    let generate_s = gen_timer.elapsed().as_secs_f64();
     let seconds_of_video = spec.frames as f64 / f64::from(spec.fps);
+    eprintln!(
+        "{} generation {generate_s:.2}s for {seconds_of_video:.2}s of video: denoise {denoise_s:.2}s, decode {vae_s:.2}s, write tail {write_s:.2}s (load {load_s:.2}s)",
+        if args.warm { "warm" } else { "cold" }
+    );
     report.set(
         "timings",
         json!({
+            "warm": args.warm,
+            "warmup_s": warm_s,
+            "load_s": load_s,
             "denoise_s": denoise_s,
             "per_step_s": denoise_s / spec.steps as f64,
             "vae_decode_s": vae_s,
             "write_s": write_s,
+            // denoise + decode + write: what a request costs once loaded.
+            "generate_s": generate_s,
             "total_s": total_s,
             "video_seconds": seconds_of_video,
-            "seconds_per_video_second": total_s / seconds_of_video,
+            "seconds_per_video_second": generate_s / seconds_of_video,
             "peak_mib": {"denoise": denoise_peak, "vae": vae_peak},
         }),
     );
+    // Recorded, not just printed: kernel launches are the number that decides
+    // whether the remaining gap to upstream is launch overhead or arithmetic,
+    // and "how many launches per step" is only answerable from a real clip.
+    {
+        let st = fastvideo_cudarc::wan::stats::snapshot();
+        report.set(
+            "device_stats",
+            json!({
+                "kernel_launches": st.launches,
+                "launches_per_step": st.launches as f64 / spec.steps as f64,
+                "h2d_count": st.h2d_count,
+                "d2h_count": st.d2h_count,
+                "h2d_mib": st.h2d_bytes >> 20,
+                "d2h_mib": st.d2h_bytes >> 20,
+                "host_fallbacks": st.host_fallbacks,
+            }),
+        );
+        // Empty unless FASTVIDEO_PROFILE=1: phase timing synchronizes, so a
+        // profiled run is deliberately not the run we quote timings from.
+        let phases = fastvideo_cudarc::wan::stats::phase_report();
+        if !phases.is_empty() {
+            let total: f64 = phases.iter().map(|(_, _, s)| s).sum();
+            report.set(
+                "dit_phases",
+                json!({
+                    "total_s": total,
+                    "by_phase": phases
+                        .iter()
+                        .map(|(n, c, s)| json!({"phase": n, "calls": c, "seconds": s,
+                                                "pct": if total > 0.0 { 100.0 * s / total } else { 0.0 }}))
+                        .collect::<Vec<_>>(),
+                }),
+            );
+        }
+    }
     report.set(
         "artifacts",
         json!({"frames": paths.len(), "mp4": mp4, "dir": clip_dir}),

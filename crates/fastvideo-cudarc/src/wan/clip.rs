@@ -222,11 +222,7 @@ impl ClipVision {
         };
         let mut layers = Vec::with_capacity(cfg.num_hidden_layers);
         for i in 0..cfg.num_hidden_layers {
-            layers.push(ClipEncoderLayer::load(
-                map,
-                &format!("{enc}.{i}"),
-                cfg,
-            )?);
+            layers.push(ClipEncoderLayer::load(map, &format!("{enc}.{i}"), cfg)?);
         }
         Ok(Self {
             class_embedding: weights::cuda_tensor_shaped(

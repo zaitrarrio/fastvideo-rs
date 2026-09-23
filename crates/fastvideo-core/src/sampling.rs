@@ -13,7 +13,88 @@ pub const NEGATIVE_PROMPT_CN: &str = "色调艳丽，过曝，静态，细节模
 pub enum WorkloadType {
     T2V,
     I2V,
+    /// Text → video + audio (LTX-2 / FastH3).
+    T2AV,
+    /// First-/last-frame → video + audio (full MiniMax-H3).
+    FL2VA,
+    /// Ordered references → video + audio (full MiniMax-H3).
+    Ref2VA,
+    T2I,
+    T2A,
+    V2A,
+    /// Fun Control, Lucy edit, world/camera models.
+    Control,
     Other,
+}
+
+impl WorkloadType {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::T2V => "t2v",
+            Self::I2V => "i2v",
+            Self::T2AV => "t2av",
+            Self::FL2VA => "fl2va",
+            Self::Ref2VA => "ref2va",
+            Self::T2I => "t2i",
+            Self::T2A => "t2a",
+            Self::V2A => "v2a",
+            Self::Control => "control",
+            Self::Other => "other",
+        }
+    }
+}
+
+/// Sampling knobs for text-to-image families (Phase 4). Not used by Wan/LTX/H3 video paths.
+#[derive(Debug, Clone)]
+pub struct ImageSamplingParam {
+    pub prompt: Option<String>,
+    pub negative_prompt: String,
+    pub output_path: String,
+    pub seed: u64,
+    pub height: u32,
+    pub width: u32,
+    pub num_inference_steps: u32,
+    pub guidance_scale: f32,
+}
+
+impl Default for ImageSamplingParam {
+    fn default() -> Self {
+        Self {
+            prompt: None,
+            negative_prompt: String::new(),
+            output_path: "outputs/".into(),
+            seed: 1024,
+            height: 1024,
+            width: 1024,
+            num_inference_steps: 28,
+            guidance_scale: 3.5,
+        }
+    }
+}
+
+/// Sampling knobs for text-/video-to-audio (Phase 5).
+#[derive(Debug, Clone)]
+pub struct AudioSamplingParam {
+    pub prompt: Option<String>,
+    pub output_path: String,
+    pub seed: u64,
+    /// Target duration in seconds.
+    pub duration_s: f32,
+    pub sample_rate: u32,
+    pub num_inference_steps: u32,
+}
+
+impl Default for AudioSamplingParam {
+    fn default() -> Self {
+        Self {
+            prompt: None,
+            output_path: "outputs/".into(),
+            seed: 1024,
+            duration_s: 10.0,
+            sample_rate: 44_100,
+            num_inference_steps: 100,
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -309,6 +390,48 @@ pub static SF_WAN_2_2_I2V_A14B: InferencePreset = InferencePreset {
     negative_prompt: NEGATIVE_PROMPT_CN,
 };
 
+pub static TURBO_T2V_1_3B: InferencePreset = InferencePreset {
+    name: "turbo_t2v_1_3b",
+    description: "TurboWan 2.1 T2V 1.3B (rCM 4-step)",
+    workload_type: WorkloadType::T2V,
+    height: Some(480),
+    width: Some(832),
+    num_frames: Some(81),
+    fps: 16,
+    guidance_scale: 1.0,
+    guidance_scale_2: None,
+    num_inference_steps: 4,
+    negative_prompt: "",
+};
+
+pub static TURBO_T2V_14B: InferencePreset = InferencePreset {
+    name: "turbo_t2v_14b",
+    description: "TurboWan 2.1 T2V 14B (rCM 4-step)",
+    workload_type: WorkloadType::T2V,
+    height: Some(720),
+    width: Some(1280),
+    num_frames: Some(81),
+    fps: 16,
+    guidance_scale: 1.0,
+    guidance_scale_2: None,
+    num_inference_steps: 4,
+    negative_prompt: "",
+};
+
+pub static TURBO_I2V_A14B: InferencePreset = InferencePreset {
+    name: "turbo_i2v_a14b",
+    description: "TurboWan 2.2 I2V A14B (rCM 4-step)",
+    workload_type: WorkloadType::I2V,
+    height: Some(720),
+    width: Some(1280),
+    num_frames: Some(81),
+    fps: 16,
+    guidance_scale: 1.0,
+    guidance_scale_2: None,
+    num_inference_steps: 4,
+    negative_prompt: "",
+};
+
 pub static ALL_PRESETS: &[&InferencePreset] = &[
     &WAN_T2V_1_3B,
     &WAN_T2V_14B,
@@ -325,57 +448,95 @@ pub static ALL_PRESETS: &[&InferencePreset] = &[
     &SF_WAN_T2V_1_3B,
     &SF_WAN_2_2_T2V_A14B,
     &SF_WAN_2_2_I2V_A14B,
+    &TURBO_T2V_1_3B,
+    &TURBO_T2V_14B,
+    &TURBO_I2V_A14B,
 ];
 
-/// Default flow-shift / DMD schedule from FastVideo pipeline configs.
+/// Default flow-shift / DMD / rCM schedule from FastVideo pipeline configs.
 pub fn pipeline_defaults(def: &WanModelDefinition) -> PipelineDefaults {
     match def.pipeline_config {
         "WanT2V480PConfig" => PipelineDefaults {
             flow_shift: 3.0,
             dmd_steps: None,
             boundary_ratio: None,
+            rcm_sigma_max: None,
         },
-        "WanT2V720PConfig" | "WanI2V720PConfig" | "Wan2_2_TI2V_5B_Config"
+        "WanT2V720PConfig"
+        | "WanI2V720PConfig"
+        | "Wan2_2_TI2V_5B_Config"
         | "SelfForcingWanT2V480PConfig" => PipelineDefaults {
             flow_shift: 5.0,
             dmd_steps: None,
             boundary_ratio: None,
+            rcm_sigma_max: None,
         },
         "FastWan2_1_T2V_480P_Config" => PipelineDefaults {
             flow_shift: 8.0,
             dmd_steps: Some(&[1000, 757, 522]),
             boundary_ratio: None,
+            rcm_sigma_max: None,
         },
         "FastWan2_2_TI2V_5B_Config" => PipelineDefaults {
             flow_shift: 5.0,
             dmd_steps: Some(&[1000, 757, 522]),
             boundary_ratio: None,
+            rcm_sigma_max: None,
         },
         "Wan2_2_T2V_A14B_Config" => PipelineDefaults {
             flow_shift: 12.0,
             dmd_steps: Some(&[1000, 750, 500, 250]),
             boundary_ratio: Some(0.875),
+            rcm_sigma_max: None,
         },
         "Wan2_2_I2V_A14B_Config" => PipelineDefaults {
             flow_shift: 5.0,
             dmd_steps: None,
             boundary_ratio: Some(0.875),
+            rcm_sigma_max: None,
         },
         "SelfForcingWan2_2_T2V480PConfig" => PipelineDefaults {
             flow_shift: 12.0,
             dmd_steps: Some(&[1000, 850, 700, 550, 350, 275, 200, 125]),
             boundary_ratio: Some(0.875),
+            rcm_sigma_max: None,
+        },
+        "TurboDiffusionT2V_1_3B_Config" => PipelineDefaults {
+            flow_shift: 3.0,
+            dmd_steps: None,
+            boundary_ratio: None,
+            rcm_sigma_max: Some(80.0),
+        },
+        "TurboDiffusionT2V_14B_Config" => PipelineDefaults {
+            flow_shift: 5.0,
+            dmd_steps: None,
+            boundary_ratio: None,
+            rcm_sigma_max: Some(80.0),
+        },
+        "TurboDiffusionI2V_A14B_Config" => PipelineDefaults {
+            flow_shift: 5.0,
+            dmd_steps: None,
+            boundary_ratio: Some(0.9),
+            rcm_sigma_max: Some(200.0),
         },
         _ => match def.sampling {
             SamplingAlgorithm::Dmd => PipelineDefaults {
                 flow_shift: 8.0,
                 dmd_steps: Some(&[1000, 757, 522]),
                 boundary_ratio: None,
+                rcm_sigma_max: None,
+            },
+            SamplingAlgorithm::Rcm => PipelineDefaults {
+                flow_shift: 3.0,
+                dmd_steps: None,
+                boundary_ratio: None,
+                rcm_sigma_max: Some(80.0),
             },
             _ => PipelineDefaults {
                 flow_shift: 3.0,
                 dmd_steps: None,
                 boundary_ratio: None,
+                rcm_sigma_max: None,
             },
         },
     }
@@ -386,4 +547,6 @@ pub struct PipelineDefaults {
     pub flow_shift: f32,
     pub dmd_steps: Option<&'static [i32]>,
     pub boundary_ratio: Option<f32>,
+    /// TurboWan rCM `sigma_max` (`None` = not an rCM preset).
+    pub rcm_sigma_max: Option<f64>,
 }

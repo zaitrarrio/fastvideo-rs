@@ -25,8 +25,12 @@ The account already has Vast.ai GPU capacity. A running RTX 4090
 
 ## Consequences
 
-- CUDA toolkit (`nvcc`) must exist on the Vast image. Runtime PyTorch images
-  need `scripts/vast-setup-cuda.sh`.
+- Default rentals use the **slim** GHCR image (CUDA runtime libs + `fv-gpucheck`,
+  no PyTorch). CUDA toolkit (`nvcc`) is only needed when compiling on a box;
+  then `scripts/vast-setup-cuda.sh` still applies on a pytorch *runtime* image.
+- Tiers that need Python+torch (oracle, compare, taehv, H3/LTX-2 reference
+  stages) rent images **FROM `vastai/pytorch`** (`docker/vast-pytorch.Dockerfile`),
+  selected automatically by `validate.sh` (`VAST_IMAGE_FLAVOR=auto`).
 - Scripts (`vast-generate.sh`, `docker-build-cuda.sh`, default bench backends)
   target cudarc.
 - Weights live on the instance disk, not in this git repo.

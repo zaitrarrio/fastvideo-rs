@@ -43,7 +43,9 @@ pub struct DeviceBuffer {
 #[cfg(feature = "cuda")]
 impl std::fmt::Debug for DeviceBuffer {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("DeviceBuffer").field("len", &self.slice.len()).finish()
+        f.debug_struct("DeviceBuffer")
+            .field("len", &self.slice.len())
+            .finish()
     }
 }
 
@@ -109,7 +111,9 @@ fn repeat_plan(big: &[usize], small: &[usize]) -> Option<(usize, usize)> {
         return None;
     }
     let pad = big.len() - small.len();
-    let padded: Vec<usize> = std::iter::repeat_n(1, pad).chain(small.iter().copied()).collect();
+    let padded: Vec<usize> = std::iter::repeat_n(1, pad)
+        .chain(small.iter().copied())
+        .collect();
     let non_one: Vec<usize> = (0..padded.len()).filter(|&i| padded[i] != 1).collect();
     let (lo, hi) = match (non_one.first(), non_one.last()) {
         (Some(&lo), Some(&hi)) => (lo, hi + 1),
@@ -125,8 +129,16 @@ fn broadcast_shapes(a: &[usize], b: &[usize]) -> Result<Vec<usize>> {
     let rank = a.len().max(b.len());
     let mut out = vec![1; rank];
     for (i, o) in out.iter_mut().enumerate() {
-        let da = if i < rank - a.len() { 1 } else { a[i - (rank - a.len())] };
-        let db = if i < rank - b.len() { 1 } else { b[i - (rank - b.len())] };
+        let da = if i < rank - a.len() {
+            1
+        } else {
+            a[i - (rank - a.len())]
+        };
+        let db = if i < rank - b.len() {
+            1
+        } else {
+            b[i - (rank - b.len())]
+        };
         if da == db || da == 1 || db == 1 {
             *o = da.max(db);
         } else {
@@ -183,11 +195,23 @@ impl CudaTensor {
 
     /// Wrap a device buffer (no host copy).
     #[cfg(feature = "cuda")]
-    pub fn from_device_slice(slice: cudarc::driver::CudaSlice<f32>, shape: Vec<usize>) -> Result<Self> {
+    pub fn from_device_slice(
+        slice: cudarc::driver::CudaSlice<f32>,
+        shape: Vec<usize>,
+    ) -> Result<Self> {
         if slice.len() != numel(&shape) {
-            return Err(msg(format!("device len {} != shape {:?}", slice.len(), shape)));
+            return Err(msg(format!(
+                "device len {} != shape {:?}",
+                slice.len(),
+                shape
+            )));
         }
-        Ok(Self::device_only(DeviceBuffer { slice: std::sync::Arc::new(slice) }, shape))
+        Ok(Self::device_only(
+            DeviceBuffer {
+                slice: std::sync::Arc::new(slice),
+            },
+            shape,
+        ))
     }
 
     #[cfg(feature = "cuda")]
@@ -215,10 +239,16 @@ impl CudaTensor {
     pub fn host_cow(&self) -> Result<Cow<'_, [f32]>> {
         #[cfg(feature = "cuda")]
         if !self.host_valid {
-            let buf = self.device.as_ref().ok_or_else(|| msg("tensor has neither host nor device data"))?;
+            let buf = self
+                .device
+                .as_ref()
+                .ok_or_else(|| msg("tensor has neither host nor device data"))?;
             let dev = super::device::global_device()
                 .ok_or_else(|| msg("host_cow: device tensor but no global CUDA device"))?;
-            let v = dev.stream.memcpy_dtov(buf.slice.as_ref()).map_err(|e| msg(e.to_string()))?;
+            let v = dev
+                .stream
+                .memcpy_dtov(buf.slice.as_ref())
+                .map_err(|e| msg(e.to_string()))?;
             stats::record_d2h(v.len());
             return Ok(Cow::Owned(v));
         }
@@ -256,9 +286,14 @@ impl CudaTensor {
         #[cfg(feature = "cuda")]
         if self.device.is_none() && stats::device_expected() {
             let dev = super::device::global_device().ok_or_else(|| msg("no global CUDA device"))?;
-            let slice = dev.stream.memcpy_stod(&self.data).map_err(|e| msg(e.to_string()))?;
+            let slice = dev
+                .stream
+                .memcpy_stod(&self.data)
+                .map_err(|e| msg(e.to_string()))?;
             stats::record_h2d(self.data.len());
-            self.device = Some(DeviceBuffer { slice: std::sync::Arc::new(slice) });
+            self.device = Some(DeviceBuffer {
+                slice: std::sync::Arc::new(slice),
+            });
         }
         Ok(())
     }
@@ -292,14 +327,20 @@ impl CudaTensor {
             return Ok(None);
         }
         let dev = super::device::global_device().ok_or_else(|| msg("no global CUDA device"))?;
-        let slice = dev.stream.memcpy_stod(&self.data).map_err(|e| msg(e.to_string()))?;
+        let slice = dev
+            .stream
+            .memcpy_stod(&self.data)
+            .map_err(|e| msg(e.to_string()))?;
         stats::record_h2d(self.data.len());
         Ok(Some(DevRef::Owned(slice)))
     }
 
     /// Wrap an op result: device buffer, or host data.
     #[cfg(feature = "cuda")]
-    pub(crate) fn from_dev_result(slice: cudarc::driver::CudaSlice<f32>, shape: Vec<usize>) -> Result<Self> {
+    pub(crate) fn from_dev_result(
+        slice: cudarc::driver::CudaSlice<f32>,
+        shape: Vec<usize>,
+    ) -> Result<Self> {
         Self::from_device_slice(slice, shape)
     }
 
@@ -322,7 +363,10 @@ impl CudaTensor {
         let rank = self.rank() as isize;
         let a = if axis < 0 { rank + axis } else { axis };
         if a < 0 || a >= rank {
-            Err(msg(format!("axis {axis} invalid for shape {:?}", self.shape)))
+            Err(msg(format!(
+                "axis {axis} invalid for shape {:?}",
+                self.shape
+            )))
         } else {
             Ok(a as usize)
         }
@@ -352,7 +396,10 @@ impl CudaTensor {
 
     pub fn squeeze(&self, dim: usize) -> Result<CudaTensor> {
         if self.dim(dim)? != 1 {
-            return Err(msg(format!("squeeze expected size 1 at {dim}, got {:?}", self.shape)));
+            return Err(msg(format!(
+                "squeeze expected size 1 at {dim}, got {:?}",
+                self.shape
+            )));
         }
         let mut shape = self.shape.clone();
         shape.remove(dim);
@@ -377,15 +424,26 @@ impl CudaTensor {
     pub fn permute(&self, dims: &[usize]) -> Result<CudaTensor> {
         let rank = self.rank();
         let mut seen = vec![false; rank];
-        if dims.len() != rank || dims.iter().any(|&d| d >= rank || std::mem::replace(&mut seen[d], true)) {
-            return Err(msg(format!("invalid permute {dims:?} for {:?}", self.shape)));
+        if dims.len() != rank
+            || dims
+                .iter()
+                .any(|&d| d >= rank || std::mem::replace(&mut seen[d], true))
+        {
+            return Err(msg(format!(
+                "invalid permute {dims:?} for {:?}",
+                self.shape
+            )));
         }
         let out_shape: Vec<usize> = dims.iter().map(|&d| self.shape[d]).collect();
         if dims.iter().enumerate().all(|(i, &d)| i == d) {
             return Ok(self.clone());
         }
         // Moving only singleton axes is a reshape.
-        let non_one: Vec<usize> = dims.iter().copied().filter(|&d| self.shape[d] != 1).collect();
+        let non_one: Vec<usize> = dims
+            .iter()
+            .copied()
+            .filter(|&d| self.shape[d] != 1)
+            .collect();
         if non_one.windows(2).all(|w| w[0] < w[1]) {
             return Ok(self.with_shape(out_shape));
         }
@@ -397,7 +455,10 @@ impl CudaTensor {
             }
         }
         stats::host_fallback("permute", format_args!("{:?} {dims:?}", self.shape))?;
-        Ok(Self::host_only(host::permute(&self.host_cow()?, &self.shape, dims), out_shape))
+        Ok(Self::host_only(
+            host::permute(&self.host_cow()?, &self.shape, dims),
+            out_shape,
+        ))
     }
 
     pub fn transpose(&self, dim0: usize, dim1: usize) -> Result<CudaTensor> {
@@ -414,7 +475,10 @@ impl CudaTensor {
     pub fn narrow(&self, dim: usize, start: usize, len: usize) -> Result<CudaTensor> {
         let d = self.dim(dim)?;
         if start + len > d {
-            return Err(msg(format!("narrow dim={dim} start={start} len={len} of {:?}", self.shape)));
+            return Err(msg(format!(
+                "narrow dim={dim} start={start} len={len} of {:?}",
+                self.shape
+            )));
         }
         if start == 0 && len == d {
             return Ok(self.clone());
@@ -425,7 +489,16 @@ impl CudaTensor {
         #[cfg(feature = "cuda")]
         if let Some(src) = self.dev()? {
             let mut out = super::ops::alloc(numel(&out_shape).max(1))?;
-            super::ops::block_copy_device(&src, &mut out, outer, len * inner, d * inner, len * inner, start * inner, 0)?;
+            super::ops::block_copy_device(
+                &src,
+                &mut out,
+                outer,
+                len * inner,
+                d * inner,
+                len * inner,
+                start * inner,
+                0,
+            )?;
             return Self::from_dev_result(out, out_shape);
         }
         stats::host_fallback("narrow", format_args!("{:?} dim={dim}", self.shape))?;
@@ -444,7 +517,9 @@ impl CudaTensor {
             return Err(msg("chunk size not divisible"));
         }
         let size = d / chunks;
-        (0..chunks).map(|i| self.narrow(dim, i * size, size)).collect()
+        (0..chunks)
+            .map(|i| self.narrow(dim, i * size, size))
+            .collect()
     }
 
     pub fn cat(tensors: &[&CudaTensor], dim: usize) -> Result<CudaTensor> {
@@ -453,8 +528,17 @@ impl CudaTensor {
         let mut out_shape = first.shape.clone();
         let mut cat_len = 0usize;
         for t in tensors {
-            if t.rank() != rank || t.shape.iter().zip(&first.shape).enumerate().any(|(i, (a, b))| i != dim && a != b) {
-                return Err(msg(format!("cat shape mismatch at dim {dim}: {:?} vs {:?}", t.shape, first.shape)));
+            if t.rank() != rank
+                || t.shape
+                    .iter()
+                    .zip(&first.shape)
+                    .enumerate()
+                    .any(|(i, (a, b))| i != dim && a != b)
+            {
+                return Err(msg(format!(
+                    "cat shape mismatch at dim {dim}: {:?} vs {:?}",
+                    t.shape, first.shape
+                )));
             }
             cat_len += t.shape[dim];
         }
@@ -470,13 +554,25 @@ impl CudaTensor {
             for t in tensors {
                 let len = t.shape[dim] * inner;
                 if let Some(src) = t.dev()? {
-                    super::ops::block_copy_device(&src, &mut out, outer, len, len, cat_len * inner, 0, offset)?;
+                    super::ops::block_copy_device(
+                        &src,
+                        &mut out,
+                        outer,
+                        len,
+                        len,
+                        cat_len * inner,
+                        0,
+                        offset,
+                    )?;
                 }
                 offset += len;
             }
             return Self::from_dev_result(out, out_shape);
         }
-        let hosts = tensors.iter().map(|t| t.host_cow()).collect::<Result<Vec<_>>>()?;
+        let hosts = tensors
+            .iter()
+            .map(|t| t.host_cow())
+            .collect::<Result<Vec<_>>>()?;
         let mut out = Vec::with_capacity(numel(&out_shape));
         for o in 0..outer {
             for (t, h) in tensors.iter().zip(&hosts) {
@@ -485,6 +581,94 @@ impl CudaTensor {
             }
         }
         Ok(Self::host_only(out, out_shape))
+    }
+
+    /// Pad one axis with zeros, a reflection, or the edge sample — `torch`'s
+    /// `constant`, `reflect` and `replicate`. Pad several axes by calling it
+    /// once per axis: for these modes the result is the same in any order.
+    pub fn pad(
+        &self,
+        dim: usize,
+        left: usize,
+        right: usize,
+        mode: super::ops::PadMode,
+    ) -> Result<CudaTensor> {
+        if left == 0 && right == 0 {
+            return Ok(self.clone());
+        }
+        let d = self.dim(dim)?;
+        if d == 0 || (mode == super::ops::PadMode::Reflect && left.max(right) >= d) {
+            return Err(msg(format!(
+                "pad: {mode:?} by ({left}, {right}) on an axis of {d}"
+            )));
+        }
+        let mut out_shape = self.shape.clone();
+        out_shape[dim] = d + left + right;
+        let (_, inner) = self.blocks(dim);
+        #[cfg(feature = "cuda")]
+        if let Some(src) = self.dev()? {
+            return Self::from_dev_result(
+                super::ops::pad_axis_device(&src, d, inner, left, right, mode)?,
+                out_shape,
+            );
+        }
+        Ok(Self::host_only(
+            host::pad_axis(&self.host_cow()?, d, inner, left, right, mode),
+            out_shape,
+        ))
+    }
+
+    /// GroupNorm over `[N, C, ...]` with affine `weight`/`bias` of `[C]`.
+    /// `silu` folds the activation that follows it in every ResNet block here.
+    pub fn group_norm(
+        &self,
+        groups: usize,
+        weight: &CudaTensor,
+        bias: &CudaTensor,
+        eps: f32,
+        silu: bool,
+    ) -> Result<CudaTensor> {
+        if self.rank() < 2 {
+            return Err(msg(format!(
+                "group_norm expects [N, C, ...], got {:?}",
+                self.shape
+            )));
+        }
+        let c = self.shape[1];
+        let spatial = numel(&self.shape[2..]);
+        #[cfg(feature = "cuda")]
+        let n = self.shape[0];
+        if groups == 0
+            || c % groups != 0
+            || weight.numel() != c
+            || bias.numel() != c
+            || self.numel() == 0
+        {
+            return Err(msg(format!(
+                "group_norm: {:?} in {groups} groups, weight {:?}",
+                self.shape, weight.shape
+            )));
+        }
+        #[cfg(feature = "cuda")]
+        if let (Some(x), Some(w), Some(b)) = (self.dev()?, weight.dev()?, bias.dev()?) {
+            return Self::from_dev_result(
+                super::ops::group_norm_device(&x, &w, &b, n, c, spatial, groups, eps, silu)?,
+                self.shape.clone(),
+            );
+        }
+        Ok(Self::host_only(
+            host::group_norm(
+                &self.host_cow()?,
+                &weight.host_cow()?,
+                &bias.host_cow()?,
+                c,
+                spatial,
+                groups,
+                eps,
+                silu,
+            ),
+            self.shape.clone(),
+        ))
     }
 
     pub fn pad_zeros(&self, dim: usize, left: usize, right: usize) -> Result<CudaTensor> {
@@ -498,7 +682,16 @@ impl CudaTensor {
         #[cfg(feature = "cuda")]
         if let Some(src) = self.dev()? {
             let mut out = super::ops::fill_device(numel(&out_shape).max(1), 0.0)?;
-            super::ops::block_copy_device(&src, &mut out, outer, d * inner, d * inner, out_shape[dim] * inner, 0, left * inner)?;
+            super::ops::block_copy_device(
+                &src,
+                &mut out,
+                outer,
+                d * inner,
+                d * inner,
+                out_shape[dim] * inner,
+                0,
+                left * inner,
+            )?;
             return Self::from_dev_result(out, out_shape);
         }
         let src = self.host_cow()?;
@@ -519,10 +712,16 @@ impl CudaTensor {
                     BcastOp::Sub => super::ops::ElemBinary::Sub,
                     _ => super::ops::ElemBinary::Mul,
                 };
-                return Self::from_dev_result(super::ops::elem_binary_device(&a, &b, kind)?, self.shape.clone());
+                return Self::from_dev_result(
+                    super::ops::elem_binary_device(&a, &b, kind)?,
+                    self.shape.clone(),
+                );
             }
             let (a, b) = (self.host_cow()?, other.host_cow()?);
-            return Ok(Self::host_only(host::map2(&a, &b, |x, y| op.apply(x, y)), self.shape.clone()));
+            return Ok(Self::host_only(
+                host::map2(&a, &b, |x, y| op.apply(x, y)),
+                self.shape.clone(),
+            ));
         }
         let out_shape = broadcast_shapes(&self.shape, &other.shape)?;
         // `big` carries the full output shape; ops are swapped when it is `other`.
@@ -545,12 +744,25 @@ impl CudaTensor {
                 return Self::from_dev_result(out, out_shape);
             }
             let (a, b) = (big.host_cow()?, small.host_cow()?);
-            return Ok(Self::host_only(host::bcast_binary(&a, &b, inner, period, op), out_shape));
+            return Ok(Self::host_only(
+                host::bcast_binary(&a, &b, inner, period, op),
+                out_shape,
+            ));
         }
-        stats::host_fallback("broadcast", format_args!("{:?} {op:?} {:?}", self.shape, other.shape))?;
+        stats::host_fallback(
+            "broadcast",
+            format_args!("{:?} {op:?} {:?}", self.shape, other.shape),
+        )?;
         let (a, b) = (self.host_cow()?, other.host_cow()?);
-        let (sa, sb, so) = (strides(&self.shape), strides(&other.shape), strides(&out_shape));
-        let (pa, pb) = (out_shape.len() - self.rank(), out_shape.len() - other.rank());
+        let (sa, sb, so) = (
+            strides(&self.shape),
+            strides(&other.shape),
+            strides(&out_shape),
+        );
+        let (pa, pb) = (
+            out_shape.len() - self.rank(),
+            out_shape.len() - other.rank(),
+        );
         let mut out = vec![0.0f32; numel(&out_shape)];
         for (i, o) in out.iter_mut().enumerate() {
             let (mut ia, mut ib, mut rem) = (0usize, 0usize, i);
@@ -593,21 +805,39 @@ impl CudaTensor {
         }
         #[cfg(feature = "cuda")]
         if stats::device_expected() {
-            let refs = terms.iter().map(|(_, t)| t.dev()).collect::<Result<Vec<_>>>()?;
+            let refs = terms
+                .iter()
+                .map(|(_, t)| t.dev())
+                .collect::<Result<Vec<_>>>()?;
             if refs.iter().all(Option::is_some) {
-                let slices: Vec<(f32, &cudarc::driver::CudaSlice<f32>)> =
-                    terms.iter().zip(&refs).map(|((c, _), r)| (*c, &**r.as_ref().unwrap())).collect();
-                return Self::from_dev_result(super::ops::lincomb_device(&slices)?, first.shape.clone());
+                let slices: Vec<(f32, &cudarc::driver::CudaSlice<f32>)> = terms
+                    .iter()
+                    .zip(&refs)
+                    .map(|((c, _), r)| (*c, &**r.as_ref().unwrap()))
+                    .collect();
+                return Self::from_dev_result(
+                    super::ops::lincomb_device(&slices)?,
+                    first.shape.clone(),
+                );
             }
         }
-        let hosts = terms.iter().map(|(_, t)| t.host_cow()).collect::<Result<Vec<_>>>()?;
-        let pairs: Vec<(f32, &[f32])> = terms.iter().zip(&hosts).map(|((c, _), h)| (*c, &h[..])).collect();
+        let hosts = terms
+            .iter()
+            .map(|(_, t)| t.host_cow())
+            .collect::<Result<Vec<_>>>()?;
+        let pairs: Vec<(f32, &[f32])> = terms
+            .iter()
+            .zip(&hosts)
+            .map(|((c, _), h)| (*c, &h[..]))
+            .collect();
         Ok(Self::host_only(host::lincomb(&pairs), first.shape.clone()))
     }
 
     fn unary_op(
         &self,
-        #[cfg(feature = "cuda")] device: impl FnOnce(&cudarc::driver::CudaSlice<f32>) -> Result<cudarc::driver::CudaSlice<f32>>,
+        #[cfg(feature = "cuda")] device: impl FnOnce(
+            &cudarc::driver::CudaSlice<f32>,
+        ) -> Result<cudarc::driver::CudaSlice<f32>>,
         #[cfg(not(feature = "cuda"))] _device: impl FnOnce(&()) -> Result<()>,
         host_fn: impl Fn(f32) -> f32 + Sync,
     ) -> Result<CudaTensor> {
@@ -615,7 +845,10 @@ impl CudaTensor {
         if let Some(a) = self.dev()? {
             return Self::from_dev_result(device(&a)?, self.shape.clone());
         }
-        Ok(Self::host_only(host::map1(&self.host_cow()?, host_fn), self.shape.clone()))
+        Ok(Self::host_only(
+            host::map1(&self.host_cow()?, host_fn),
+            self.shape.clone(),
+        ))
     }
 
     pub fn add_scalar(&self, s: f32) -> CudaTensor {
@@ -668,6 +901,169 @@ impl CudaTensor {
         .expect("silu")
     }
 
+    /// Element-wise σ(x). Small tensors (e.g. per-head gate logits) only.
+    pub fn try_sigmoid(&self) -> Result<CudaTensor> {
+        let out = super::ops::host::map1(&self.host_cow()?, |x| 1.0 / (1.0 + (-x).exp()));
+        let mut t = Self::host_only(out, self.shape.clone());
+        t.pin_device()?;
+        Ok(t)
+    }
+
+    /// Value-first SwiGLU: last dim is `(v, g)` and the result is `v * silu(g)`.
+    /// One pass over the packed buffer — last-dim [`Self::narrow`] copies each half.
+    pub fn swiglu_value_first(&self) -> Result<CudaTensor> {
+        let last = *self
+            .shape
+            .last()
+            .ok_or_else(|| msg("swiglu_value_first: empty shape"))?;
+        if last == 0 || last % 2 != 0 {
+            return Err(msg(format!(
+                "swiglu_value_first: last dim {last} is not 2*H"
+            )));
+        }
+        let half = last / 2;
+        let mut out_shape = self.shape.clone();
+        *out_shape.last_mut().unwrap() = half;
+        #[cfg(feature = "cuda")]
+        if let Some(x) = self.dev()? {
+            return Self::from_dev_result(
+                super::ops::swiglu_value_first_device(&x, half)?,
+                out_shape,
+            );
+        }
+        Ok(Self::host_only(
+            host::swiglu_value_first(&self.host_cow()?, half),
+            out_shape,
+        ))
+    }
+
+    /// Exact GELU (erf). `gelu_tanh` is the approximation; a checkpoint means
+    /// one or the other and they differ by ~1e-3.
+    pub fn gelu_erf(&self) -> CudaTensor {
+        self.unary_op(
+            #[cfg(feature = "cuda")]
+            |a| super::ops::unary_device(a, super::ops::ElemUnary::GeluErf),
+            #[cfg(not(feature = "cuda"))]
+            |_| Ok(()),
+            host::gelu_erf,
+        )
+        .expect("gelu_erf")
+    }
+
+    pub fn leaky_relu(&self, slope: f32) -> CudaTensor {
+        self.unary_op(
+            #[cfg(feature = "cuda")]
+            |a| super::ops::leaky_relu_device(a, slope),
+            #[cfg(not(feature = "cuda"))]
+            |_| Ok(()),
+            move |x| host::leaky_relu(x, slope),
+        )
+        .expect("leaky_relu")
+    }
+
+    /// Snake / SnakeBeta over `[N, C, L]`: `x + inv_beta[c] * sin^2(alpha[c] x)`.
+    /// `alpha` and `inv_beta` are `[C]`, already out of log space and with the
+    /// `1 / (beta + eps)` taken, so every Snake variant is this one call.
+    pub fn snake_beta(&self, alpha: &CudaTensor, inv_beta: &CudaTensor) -> Result<CudaTensor> {
+        let [_, c, l] = self.shape[..] else {
+            return Err(msg(format!(
+                "snake_beta expects [N, C, L], got {:?}",
+                self.shape
+            )));
+        };
+        if alpha.numel() != c || inv_beta.numel() != c {
+            return Err(msg(format!(
+                "snake_beta: {} alphas for {c} channels",
+                alpha.numel()
+            )));
+        }
+        #[cfg(feature = "cuda")]
+        if let (Some(a), Some(al), Some(ib)) = (self.dev()?, alpha.dev()?, inv_beta.dev()?) {
+            return Self::from_dev_result(
+                super::ops::snake_beta_device(&a, &al, &ib, c, l)?,
+                self.shape.clone(),
+            );
+        }
+        Ok(Self::host_only(
+            host::snake_beta(
+                &self.host_cow()?,
+                &alpha.host_cow()?,
+                &inv_beta.host_cow()?,
+                c,
+                l,
+            ),
+            self.shape.clone(),
+        ))
+    }
+
+    /// rotate_half rotary embedding (HF Llama / Qwen / Gemma convention) on
+    /// `[B, H, S, D]` with explicit `[S, R]` cos/sin tables; channels `[R, D)`
+    /// pass through. Positions are whatever built the tables.
+    pub fn rope_half(&self, cos: &CudaTensor, sin: &CudaTensor) -> Result<CudaTensor> {
+        let [_, _, s, d] = self.shape[..] else {
+            return Err(msg(format!(
+                "rope_half expects [B, H, S, D], got {:?}",
+                self.shape
+            )));
+        };
+        let r = match cos.shape[..] {
+            [cs, r] if cs == s && cos.shape == sin.shape && r % 2 == 0 && r > 0 && r <= d => r,
+            _ => {
+                return Err(msg(format!(
+                    "rope_half tables {:?}/{:?} for S={s} D={d}",
+                    cos.shape, sin.shape
+                )))
+            }
+        };
+        #[cfg(feature = "cuda")]
+        if let (Some(x), Some(c), Some(sn)) = (self.dev()?, cos.dev()?, sin.dev()?) {
+            return Self::from_dev_result(
+                super::ops::rope_half_device(&x, &c, &sn, s, d, r)?,
+                self.shape.clone(),
+            );
+        }
+        Ok(Self::host_only(
+            host::rope_half(
+                &self.host_cow()?,
+                &cos.host_cow()?,
+                &sin.host_cow()?,
+                s,
+                d,
+                r,
+            ),
+            self.shape.clone(),
+        ))
+    }
+
+    /// Grouped-query attention's key/value expansion: `[B, Hkv, S, D]` →
+    /// `[B, Hkv * rep, S, D]`, each kv head repeated `rep` times in place.
+    pub fn repeat_kv(&self, rep: usize) -> Result<CudaTensor> {
+        let [b, hkv, s, d] = self.shape[..] else {
+            return Err(msg(format!(
+                "repeat_kv expects [B, Hkv, S, D], got {:?}",
+                self.shape
+            )));
+        };
+        if rep == 1 {
+            return Ok(self.clone());
+        }
+        if rep == 0 {
+            return Err(msg("repeat_kv by zero"));
+        }
+        let shape = vec![b, hkv * rep, s, d];
+        #[cfg(feature = "cuda")]
+        if let Some(x) = self.dev()? {
+            return Self::from_dev_result(
+                super::ops::repeat_kv_device(&x, hkv, rep, s * d)?,
+                shape,
+            );
+        }
+        Ok(Self::host_only(
+            host::repeat_kv(&self.host_cow()?, hkv, rep, s * d),
+            shape,
+        ))
+    }
+
     pub fn gelu_tanh(&self) -> CudaTensor {
         self.unary_op(
             #[cfg(feature = "cuda")]
@@ -682,7 +1078,10 @@ impl CudaTensor {
     /// Host-only elementwise math with no device kernel (not on any hot path).
     fn host_unary(&self, op: &'static str, f: impl Fn(f32) -> f32 + Sync) -> Result<CudaTensor> {
         stats::host_fallback(op, format_args!("{:?}", self.shape))?;
-        Ok(Self::host_only(host::map1(&self.host_cow()?, f), self.shape.clone()))
+        Ok(Self::host_only(
+            host::map1(&self.host_cow()?, f),
+            self.shape.clone(),
+        ))
     }
 
     pub fn sqrt(&self) -> Result<CudaTensor> {
@@ -732,28 +1131,34 @@ impl CudaTensor {
         if numel(a_batch) == batch && numel(b_batch) == batch {
             if let (Some(a), Some(b)) = (self.dev()?, other.dev()?) {
                 let mut c = super::ops::alloc((batch * m * n).max(1))?;
-                super::device::matmul_2d_strided_batched(&a, &b, &mut c, batch, m, k, n).map_err(|e| msg(e.to_string()))?;
+                super::device::matmul_2d_strided_batched(&a, &b, &mut c, batch, m, k, n)
+                    .map_err(|e| msg(e.to_string()))?;
                 return Self::from_dev_result(c, out_shape);
             }
         }
-        stats::host_fallback("matmul", format_args!("{:?} @ {:?}", self.shape, other.shape))?;
+        stats::host_fallback(
+            "matmul",
+            format_args!("{:?} @ {:?}", self.shape, other.shape),
+        )?;
         let (a, b) = (self.host_cow()?, other.host_cow()?);
         let (a_n, b_n) = (numel(a_batch), numel(b_batch));
         let mut out = vec![0.0f32; batch * m * n];
         use rayon::prelude::*;
-        out.par_chunks_mut((m * n).max(1)).enumerate().for_each(|(bi, o)| {
-            let (ai, bj) = (if a_n == 1 { 0 } else { bi }, if b_n == 1 { 0 } else { bi });
-            let (a, b) = (&a[ai * m * k..][..m * k], &b[bj * k * n..][..k * n]);
-            for i in 0..m {
-                let row = &mut o[i * n..(i + 1) * n];
-                for t in 0..k {
-                    let av = a[i * k + t];
-                    for (r, &bv) in row.iter_mut().zip(&b[t * n..(t + 1) * n]) {
-                        *r += av * bv;
+        out.par_chunks_mut((m * n).max(1))
+            .enumerate()
+            .for_each(|(bi, o)| {
+                let (ai, bj) = (if a_n == 1 { 0 } else { bi }, if b_n == 1 { 0 } else { bi });
+                let (a, b) = (&a[ai * m * k..][..m * k], &b[bj * k * n..][..k * n]);
+                for i in 0..m {
+                    let row = &mut o[i * n..(i + 1) * n];
+                    for t in 0..k {
+                        let av = a[i * k + t];
+                        for (r, &bv) in row.iter_mut().zip(&b[t * n..(t + 1) * n]) {
+                            *r += av * bv;
+                        }
                     }
                 }
-            }
-        });
+            });
         Ok(Self::host_only(out, out_shape))
     }
 
@@ -767,9 +1172,15 @@ impl CudaTensor {
         let width = self.shape[axis];
         #[cfg(feature = "cuda")]
         if let Some(a) = self.dev()? {
-            return Self::from_dev_result(super::ops::softmax_last_device(&a, width)?, self.shape.clone());
+            return Self::from_dev_result(
+                super::ops::softmax_last_device(&a, width)?,
+                self.shape.clone(),
+            );
         }
-        Ok(Self::host_only(host::softmax_last(&self.host_cow()?, width), self.shape.clone()))
+        Ok(Self::host_only(
+            host::softmax_last(&self.host_cow()?, width),
+            self.shape.clone(),
+        ))
     }
 
     /// RMS norm over the last dim.
@@ -780,13 +1191,27 @@ impl CudaTensor {
         }
         #[cfg(feature = "cuda")]
         if let (Some(a), Some(w)) = (self.dev()?, weight.dev()?) {
-            return Self::from_dev_result(super::ops::rms_norm_last_device(&a, &w, eps)?, self.shape.clone());
+            return Self::from_dev_result(
+                super::ops::rms_norm_last_device(&a, &w, eps)?,
+                self.shape.clone(),
+            );
         }
-        Ok(Self::host_only(host::rms_norm_last(&self.host_cow()?, &weight.host_cow()?, eps), self.shape.clone()))
+        Ok(Self::host_only(
+            host::rms_norm_last(&self.host_cow()?, &weight.host_cow()?, eps),
+            self.shape.clone(),
+        ))
     }
 
-    pub fn layer_norm(&self, eps: f32, weight: Option<&CudaTensor>, bias: Option<&CudaTensor>) -> Result<CudaTensor> {
-        let width = *self.shape.last().ok_or_else(|| msg("layer_norm on scalar"))?;
+    pub fn layer_norm(
+        &self,
+        eps: f32,
+        weight: Option<&CudaTensor>,
+        bias: Option<&CudaTensor>,
+    ) -> Result<CudaTensor> {
+        let width = *self
+            .shape
+            .last()
+            .ok_or_else(|| msg("layer_norm on scalar"))?;
         let affine = match (weight, bias) {
             (Some(w), Some(b)) => Some((w, b)),
             (None, None) => None,
@@ -796,7 +1221,10 @@ impl CudaTensor {
         if let Some(a) = self.dev()? {
             let out = match affine {
                 Some((w, b)) => {
-                    let (w, b) = (w.dev()?.ok_or_else(|| msg("weight"))?, b.dev()?.ok_or_else(|| msg("bias"))?);
+                    let (w, b) = (
+                        w.dev()?.ok_or_else(|| msg("weight"))?,
+                        b.dev()?.ok_or_else(|| msg("bias"))?,
+                    );
                     super::ops::layer_norm_last_device(&a, Some((&w, &b)), width, eps)?
                 }
                 None => super::ops::layer_norm_last_device(&a, None, width, eps)?,
@@ -805,7 +1233,9 @@ impl CudaTensor {
         }
         let x = self.host_cow()?;
         let out = match affine {
-            Some((w, b)) => host::layer_norm_last(&x, width, Some((&w.host_cow()?, &b.host_cow()?)), eps),
+            Some((w, b)) => {
+                host::layer_norm_last(&x, width, Some((&w.host_cow()?, &b.host_cow()?)), eps)
+            }
             None => host::layer_norm_last(&x, width, None, eps),
         };
         Ok(Self::host_only(out, self.shape.clone()))
@@ -815,7 +1245,11 @@ impl CudaTensor {
     pub fn add_bias(mut self, bias: &CudaTensor, dim: usize) -> Result<CudaTensor> {
         let c = self.dim(dim)?;
         if bias.numel() != c {
-            return Err(msg(format!("bias len {} != dim {dim} of {:?}", bias.numel(), self.shape)));
+            return Err(msg(format!(
+                "bias len {} != dim {dim} of {:?}",
+                bias.numel(),
+                self.shape
+            )));
         }
         let inner = numel(&self.shape[dim + 1..]);
         #[cfg(feature = "cuda")]
@@ -839,38 +1273,289 @@ impl CudaTensor {
     }
 
     /// Cross-correlation of NCHW `self` with OIHW `weight`.
-    pub fn conv2d(&self, weight: &CudaTensor, bias: Option<&CudaTensor>, padding: usize, stride: usize) -> Result<CudaTensor> {
-        self.conv_nd(weight, bias, &[padding, padding], &[stride.max(1), stride.max(1)])
+    /// 1-D convolution, PyTorch `Conv1d` semantics. `self`: `[N, C, L]`,
+    /// `weight`: `[C_out, C / groups, K]`. On the device this is a cuDNN conv2d
+    /// over a unit height, so dilation and groups cost nothing extra.
+    pub fn conv1d(
+        &self,
+        weight: &CudaTensor,
+        bias: Option<&CudaTensor>,
+        padding: usize,
+        stride: usize,
+        dilation: usize,
+        groups: usize,
+    ) -> Result<CudaTensor> {
+        let ([n, c, l], [oc, cg, k]) =
+            (self.dims3("conv1d input")?, weight.dims3("conv1d weight")?);
+        if stride == 0
+            || dilation == 0
+            || groups == 0
+            || k == 0
+            || c % groups != 0
+            || oc % groups != 0
+            || cg * groups != c
+        {
+            return Err(msg(format!(
+                "conv1d: x={:?} w={:?} groups={groups}",
+                self.shape, weight.shape
+            )));
+        }
+        if l + 2 * padding < dilation * (k - 1) + 1 {
+            return Err(msg(format!("conv1d: kernel reach exceeds input: x={:?} w={:?} pad={padding} dilation={dilation}", self.shape, weight.shape)));
+        }
+        #[cfg(feature = "cuda")]
+        if let (Some(x), Some(w)) = (self.dev()?, weight.dev()?) {
+            let (y, ys) = super::conv::cudnn_conv_ext(
+                &x,
+                &[n, c, 1, l],
+                &w,
+                &[oc, cg, 1, k],
+                &[0, padding],
+                &[1, stride],
+                &[1, dilation],
+                groups,
+            )
+            .map_err(|e| msg(e.to_string()))?;
+            let y = Self::from_dev_result(y, vec![n, oc, ys[3]])?;
+            return match bias {
+                Some(b) => y.add_bias(b, 1),
+                None => Ok(y),
+            };
+        }
+        let (y, lo) = host::conv1d(
+            &self.host_cow()?,
+            (n, c, l),
+            &weight.host_cow()?,
+            (oc, k),
+            padding,
+            stride,
+            dilation,
+            groups,
+        );
+        let y = Self::host_only(y, vec![n, oc, lo]);
+        match bias {
+            Some(b) => y.add_bias(b, 1),
+            None => Ok(y),
+        }
+    }
+
+    /// 1-D transposed convolution, PyTorch `ConvTranspose1d` semantics. `self`:
+    /// `[N, C, L]`, `weight`: `[C, C_out / groups, K]`; output length
+    /// `(L - 1) * stride - 2 * padding + dilation * (K - 1) + output_padding + 1`.
+    #[allow(clippy::too_many_arguments)]
+    pub fn conv_transpose1d(
+        &self,
+        weight: &CudaTensor,
+        bias: Option<&CudaTensor>,
+        padding: usize,
+        stride: usize,
+        dilation: usize,
+        groups: usize,
+        output_padding: usize,
+    ) -> Result<CudaTensor> {
+        let ([n, c, l], [wc, og, k]) = (
+            self.dims3("conv_transpose1d input")?,
+            weight.dims3("conv_transpose1d weight")?,
+        );
+        if stride == 0
+            || dilation == 0
+            || groups == 0
+            || k == 0
+            || l == 0
+            || wc != c
+            || c % groups != 0
+        {
+            return Err(msg(format!(
+                "conv_transpose1d: x={:?} w={:?} groups={groups}",
+                self.shape, weight.shape
+            )));
+        }
+        if (l - 1) * stride + dilation * (k - 1) + output_padding + 1 <= 2 * padding {
+            return Err(msg(format!(
+                "conv_transpose1d: padding {padding} leaves no output for x={:?} w={:?}",
+                self.shape, weight.shape
+            )));
+        }
+        let oc = og * groups;
+        #[cfg(feature = "cuda")]
+        if let (Some(x), Some(w)) = (self.dev()?, weight.dev()?) {
+            let (y, ys) = super::conv::cudnn_conv_transpose(
+                &x,
+                &[n, c, 1, l],
+                &w,
+                &[c, og, 1, k],
+                &[0, padding],
+                &[1, stride],
+                &[1, dilation],
+                groups,
+                &[0, output_padding],
+            )
+            .map_err(|e| msg(e.to_string()))?;
+            let y = Self::from_dev_result(y, vec![n, oc, ys[3]])?;
+            return match bias {
+                Some(b) => y.add_bias(b, 1),
+                None => Ok(y),
+            };
+        }
+        let (y, lo) = host::conv_transpose1d(
+            &self.host_cow()?,
+            (n, c, l),
+            &weight.host_cow()?,
+            (og, k),
+            padding,
+            stride,
+            dilation,
+            groups,
+            output_padding,
+        );
+        let y = Self::host_only(y, vec![n, oc, lo]);
+        match bias {
+            Some(b) => y.add_bias(b, 1),
+            None => Ok(y),
+        }
+    }
+
+    fn dims3(&self, what: &str) -> Result<[usize; 3]> {
+        match self.shape[..] {
+            [a, b, c] => Ok([a, b, c]),
+            _ => Err(msg(format!("{what} must be rank 3, got {:?}", self.shape))),
+        }
+    }
+
+    pub fn conv2d(
+        &self,
+        weight: &CudaTensor,
+        bias: Option<&CudaTensor>,
+        padding: usize,
+        stride: usize,
+    ) -> Result<CudaTensor> {
+        self.conv_nd(
+            weight,
+            bias,
+            &[padding, padding],
+            &[stride.max(1), stride.max(1)],
+        )
     }
 
     /// Cross-correlation of NCDHW `self` with OIDHW `weight`, symmetric
     /// zero padding `pad` per spatial axis (causal time padding is the caller's).
-    pub fn conv3d(&self, weight: &CudaTensor, bias: Option<&CudaTensor>, pad: [usize; 3], stride: [usize; 3]) -> Result<CudaTensor> {
+    pub fn conv3d(
+        &self,
+        weight: &CudaTensor,
+        bias: Option<&CudaTensor>,
+        pad: [usize; 3],
+        stride: [usize; 3],
+    ) -> Result<CudaTensor> {
         self.conv_nd(weight, bias, &pad, &stride)
     }
 
-    fn conv_nd(&self, weight: &CudaTensor, bias: Option<&CudaTensor>, pad: &[usize], stride: &[usize]) -> Result<CudaTensor> {
-        let spatial = self.rank().saturating_sub(2);
-        if !(2..=3).contains(&spatial) || weight.rank() != self.rank() || weight.shape[1] != self.shape[1] {
-            return Err(msg(format!("conv shapes: x={:?} w={:?}", self.shape, weight.shape)));
+    /// [`Self::conv3d`] with groups. Depthwise filters use `groups == channels`
+    /// and a weight of `[C, 1, k, 1, 1]`.
+    pub fn conv3d_groups(
+        &self,
+        weight: &CudaTensor,
+        bias: Option<&CudaTensor>,
+        pad: [usize; 3],
+        stride: [usize; 3],
+        groups: usize,
+    ) -> Result<CudaTensor> {
+        if groups == 1 {
+            return self.conv3d(weight, bias, pad, stride);
+        }
+        if groups == 0 || self.rank() != 5 || weight.rank() != 5 {
+            return Err(msg(format!(
+                "conv3d groups {groups}: x={:?} w={:?}",
+                self.shape, weight.shape
+            )));
+        }
+        let cin = self.shape[1];
+        let cout = weight.shape[0];
+        if cin % groups != 0 || cout % groups != 0 || weight.shape[1] != cin / groups {
+            return Err(msg(format!(
+                "conv3d groups {groups}: x={:?} w={:?}",
+                self.shape, weight.shape
+            )));
         }
         #[cfg(feature = "cuda")]
-        let one_by_one = weight.shape[2..].iter().all(|&k| k == 1) && pad.iter().all(|&p| p == 0) && stride.iter().all(|&s| s == 1);
+        if let (Some(x), Some(w)) = (self.dev()?, weight.dev()?) {
+            let (y, y_shape) = super::conv::cudnn_conv_ext(
+                &x,
+                &self.shape,
+                &w,
+                &weight.shape,
+                &pad,
+                &stride,
+                &[1, 1, 1],
+                groups,
+            )
+            .map_err(|e| msg(e.to_string()))?;
+            let y = Self::from_dev_result(y, y_shape)?;
+            return match bias {
+                Some(b) => y.add_bias(b, 1),
+                None => Ok(y),
+            };
+        }
+        let cin_g = cin / groups;
+        let cout_g = cout / groups;
+        let mut parts = Vec::with_capacity(groups);
+        for g in 0..groups {
+            let xg = self.narrow(1, g * cin_g, cin_g)?;
+            let wg = weight.narrow(0, g * cout_g, cout_g)?;
+            parts.push(xg.conv3d(&wg, None, pad, stride)?);
+        }
+        let refs: Vec<&CudaTensor> = parts.iter().collect();
+        let y = Self::cat(&refs, 1)?;
+        match bias {
+            Some(b) => y.add_bias(b, 1),
+            None => Ok(y),
+        }
+    }
+
+    fn conv_nd(
+        &self,
+        weight: &CudaTensor,
+        bias: Option<&CudaTensor>,
+        pad: &[usize],
+        stride: &[usize],
+    ) -> Result<CudaTensor> {
+        let spatial = self.rank().saturating_sub(2);
+        if !(2..=3).contains(&spatial)
+            || weight.rank() != self.rank()
+            || weight.shape[1] != self.shape[1]
+        {
+            return Err(msg(format!(
+                "conv shapes: x={:?} w={:?}",
+                self.shape, weight.shape
+            )));
+        }
+        #[cfg(feature = "cuda")]
+        let one_by_one = weight.shape[2..].iter().all(|&k| k == 1)
+            && pad.iter().all(|&p| p == 0)
+            && stride.iter().all(|&s| s == 1);
         let (n, c, oc) = (self.shape[0], self.shape[1], weight.shape[0]);
         #[cfg(feature = "cuda")]
         if let (Some(x), Some(w)) = (self.dev()?, weight.dev()?) {
             let (y, y_shape) = if one_by_one {
                 let s = numel(&self.shape[2..]);
                 let mut y = super::ops::alloc((n * oc * s).max(1))?;
-                super::device::matmul_shared_left(&w, &x, &mut y, n, oc, c, s).map_err(|e| msg(e.to_string()))?;
+                super::device::matmul_shared_left(&w, &x, &mut y, n, oc, c, s)
+                    .map_err(|e| msg(e.to_string()))?;
                 let mut shape = self.shape.clone();
                 shape[1] = oc;
                 (y, shape)
             } else if spatial == 3 {
-                super::conv::conv3d(&x, &self.shape, &w, &weight.shape, [pad[0], pad[1], pad[2]], [stride[0], stride[1], stride[2]])
-                    .map_err(|e| msg(e.to_string()))?
+                super::conv::conv3d(
+                    &x,
+                    &self.shape,
+                    &w,
+                    &weight.shape,
+                    [pad[0], pad[1], pad[2]],
+                    [stride[0], stride[1], stride[2]],
+                )
+                .map_err(|e| msg(e.to_string()))?
             } else {
-                super::conv::cudnn_conv(&x, &self.shape, &w, &weight.shape, pad, stride).map_err(|e| msg(e.to_string()))?
+                super::conv::cudnn_conv(&x, &self.shape, &w, &weight.shape, pad, stride)
+                    .map_err(|e| msg(e.to_string()))?
             };
             let y = Self::from_dev_result(y, y_shape)?;
             return match bias {
@@ -883,17 +1568,48 @@ impl CudaTensor {
         let (data, shape) = if spatial == 2 {
             let (h, wd) = (self.shape[2], self.shape[3]);
             let (kh, kw) = (weight.shape[2], weight.shape[3]);
-            let (y, oh, ow) = host::conv2d(&x, &w, n, c, h, wd, oc, kh, kw, [pad[0], pad[1]], [stride[0], stride[1]]);
+            let (y, oh, ow) = host::conv2d(
+                &x,
+                &w,
+                n,
+                c,
+                h,
+                wd,
+                oc,
+                kh,
+                kw,
+                [pad[0], pad[1]],
+                [stride[0], stride[1]],
+            );
             (y, vec![n, oc, oh, ow])
         } else {
             // Reference 3-D conv: pad time explicitly, unfold, conv2d, permute back.
-            let padded = if pad[0] > 0 { self.pad_zeros(2, pad[0], pad[0])? } else { self.clone() };
+            let padded = if pad[0] > 0 {
+                self.pad_zeros(2, pad[0], pad[0])?
+            } else {
+                self.clone()
+            };
             let px = padded.host_cow()?;
             let (t, h, wd) = (padded.shape[2], padded.shape[3], padded.shape[4]);
             let (kt, kh, kw) = (weight.shape[2], weight.shape[3], weight.shape[4]);
             let (unfolded, ot) = host::temporal_unfold(&px, n, c, t, h, wd, kt, stride[0]);
-            let (y, oh, ow) = host::conv2d(&unfolded, &w, n * ot, c * kt, h, wd, oc, kh, kw, [pad[1], pad[2]], [stride[1], stride[2]]);
-            (host::permute(&y, &[n, ot, oc, oh, ow], &[0, 2, 1, 3, 4]), vec![n, oc, ot, oh, ow])
+            let (y, oh, ow) = host::conv2d(
+                &unfolded,
+                &w,
+                n * ot,
+                c * kt,
+                h,
+                wd,
+                oc,
+                kh,
+                kw,
+                [pad[1], pad[2]],
+                [stride[1], stride[2]],
+            );
+            (
+                host::permute(&y, &[n, ot, oc, oh, ow], &[0, 2, 1, 3, 4]),
+                vec![n, oc, ot, oh, ow],
+            )
         };
         let y = Self::host_only(data, shape);
         match bias {
@@ -908,15 +1624,23 @@ impl CudaTensor {
         }
         let (n, c, h, w) = (self.shape[0], self.shape[1], self.shape[2], self.shape[3]);
         if out_h % h != 0 || out_w % w != 0 {
-            return Err(msg(format!("upsample_nearest2d needs integer factors: {h}x{w} -> {out_h}x{out_w}")));
+            return Err(msg(format!(
+                "upsample_nearest2d needs integer factors: {h}x{w} -> {out_h}x{out_w}"
+            )));
         }
         let (fy, fx) = (out_h / h, out_w / w);
         let out_shape = vec![n, c, out_h, out_w];
         #[cfg(feature = "cuda")]
         if let Some(x) = self.dev()? {
-            return Self::from_dev_result(super::ops::upsample_nearest_device(&x, n * c, h, w, fy, fx)?, out_shape);
+            return Self::from_dev_result(
+                super::ops::upsample_nearest_device(&x, n * c, h, w, fy, fx)?,
+                out_shape,
+            );
         }
-        Ok(Self::host_only(host::upsample_nearest(&self.host_cow()?, n * c, h, w, fy, fx), out_shape))
+        Ok(Self::host_only(
+            host::upsample_nearest(&self.host_cow()?, n * c, h, w, fy, fx),
+            out_shape,
+        ))
     }
 
     /// Embedding lookup for a table kept in host memory: gather the rows on
@@ -955,7 +1679,10 @@ impl CudaTensor {
         #[cfg(feature = "cuda")]
         if let Some(table) = self.dev()? {
             let idx: Vec<u32> = indices.iter().map(|&i| i as u32).collect();
-            return Self::from_dev_result(super::ops::index_select_rows_device(&table, d, &idx)?, out_shape);
+            return Self::from_dev_result(
+                super::ops::index_select_rows_device(&table, d, &idx)?,
+                out_shape,
+            );
         }
         let host = self.host_cow()?;
         let mut data = Vec::with_capacity(indices.len() * d);
@@ -1068,7 +1795,12 @@ mod tests {
     fn conv3d_reference_matches_naive() {
         let (n, c, tt, h, w, oc) = (1usize, 2usize, 4usize, 5usize, 6usize, 3usize);
         let x = t(seq(n * c * tt * h * w), &[n, c, tt, h, w]);
-        let wt = t((0..oc * c * 27).map(|i| ((i * 7) % 11) as f32 * 0.1 - 0.5).collect(), &[oc, c, 3, 3, 3]);
+        let wt = t(
+            (0..oc * c * 27)
+                .map(|i| ((i * 7) % 11) as f32 * 0.1 - 0.5)
+                .collect(),
+            &[oc, c, 3, 3, 3],
+        );
         let bias = t(vec![0.1, -0.2, 0.3], &[oc]);
         let y = x.conv3d(&wt, Some(&bias), [0, 1, 1], [1, 1, 1]).unwrap();
         assert_eq!(y.shape, vec![n, oc, tt - 2, h, w]);
@@ -1085,7 +1817,8 @@ mod tests {
                                         if iy < 1 || ix < 1 || iy > h || ix > w {
                                             continue;
                                         }
-                                        acc += x.data[((ci * tt + ot + dt) * h + iy - 1) * w + ix - 1]
+                                        acc += x.data
+                                            [((ci * tt + ot + dt) * h + iy - 1) * w + ix - 1]
                                             * wt.data[((o * c + ci) * 3 + dt) * 9 + dy * 3 + dx];
                                     }
                                 }
@@ -1114,5 +1847,330 @@ mod tests {
         let e = (2.0f32).exp();
         let p = 1.0 / (1.0 + e);
         assert!((y.data[0] - p).abs() < 1e-6 && (y.data[2] - (1.0 - p)).abs() < 1e-6);
+    }
+}
+
+#[cfg(test)]
+mod encoder_op_tests {
+    use super::*;
+
+    #[test]
+    fn erf_matches_known_values() {
+        for (x, want) in [
+            (0.0, 0.0),
+            (0.1, 0.112_462_916_018_284_9),
+            (0.5, 0.520_499_877_813_046_5),
+            (1.0, 0.842_700_792_949_714_9),
+            (2.0, 0.995_322_265_018_952_7),
+            (3.5, 0.999_999_256_901_627_7),
+            (5.0, 0.999_999_999_998_462_5),
+        ] {
+            assert!(
+                (host::erf(x) - want).abs() < 1e-14,
+                "erf({x}) = {}",
+                host::erf(x)
+            );
+            assert!((host::erf(-x) + want).abs() < 1e-14, "erf is odd");
+        }
+        // Phi(1) * 1: the value every GELU table quotes.
+        assert!((f64::from(host::gelu_erf(1.0)) - 0.841_344_746_068_542_9).abs() < 1e-7);
+        // And it is not the tanh approximation.
+        assert!((host::gelu_erf(1.0) - host::gelu_tanh(1.0)).abs() > 1e-5);
+    }
+
+    /// HF `apply_rotary_pos_emb`: x * cos + rotate_half(x) * sin, tables built
+    /// as cat(freqs, freqs). Written out per element, independently of the op.
+    #[test]
+    fn rope_half_matches_the_hf_formula_and_passes_the_tail_through() {
+        let (b, h, s, d, r) = (2usize, 3usize, 5usize, 8usize, 6usize);
+        let x: Vec<f32> = (0..b * h * s * d)
+            .map(|i| ((i * 7 % 23) as f32 - 11.0) / 5.0)
+            .collect();
+        let half = r / 2;
+        let (mut cos, mut sin) = (vec![0f32; s * r], vec![0f32; s * r]);
+        for p in 0..s {
+            for k in 0..half {
+                let ang = (p as f32 + 2.0) * 10000f32.powf(-(2.0 * k as f32) / r as f32);
+                for j in [k, k + half] {
+                    cos[p * r + j] = ang.cos();
+                    sin[p * r + j] = ang.sin();
+                }
+            }
+        }
+        let xt = CudaTensor::from_vec(x.clone(), vec![b, h, s, d]).unwrap();
+        let out = xt
+            .rope_half(
+                &CudaTensor::from_vec(cos.clone(), vec![s, r]).unwrap(),
+                &CudaTensor::from_vec(sin.clone(), vec![s, r]).unwrap(),
+            )
+            .unwrap();
+        let got = out.host_cow().unwrap();
+        for bi in 0..b * h {
+            for p in 0..s {
+                let base = (bi * s + p) * d;
+                for j in 0..d {
+                    let want = if j >= r {
+                        x[base + j]
+                    } else {
+                        let rot = if j < half {
+                            -x[base + j + half]
+                        } else {
+                            x[base + j - half]
+                        };
+                        x[base + j] * cos[p * r + j] + rot * sin[p * r + j]
+                    };
+                    assert!((got[base + j] - want).abs() < 1e-6, "b{bi} p{p} j{j}");
+                }
+            }
+        }
+        // A rotation preserves the norm of the rotated channels.
+        let n0: f32 = x[..r].iter().map(|v| v * v).sum();
+        let n1: f32 = got[..r].iter().map(|v| v * v).sum();
+        assert!((n0 - n1).abs() < 1e-4);
+        assert!(
+            xt.rope_half(&CudaTensor::zeros(&[s, 5]), &CudaTensor::zeros(&[s, 5]))
+                .is_err(),
+            "odd R"
+        );
+    }
+
+    #[test]
+    fn repeat_kv_is_repeat_interleave_on_heads() {
+        let (b, hkv, s, d, rep) = (2usize, 2usize, 3usize, 2usize, 4usize);
+        let x: Vec<f32> = (0..b * hkv * s * d).map(|i| i as f32).collect();
+        let out = CudaTensor::from_vec(x.clone(), vec![b, hkv, s, d])
+            .unwrap()
+            .repeat_kv(rep)
+            .unwrap();
+        assert_eq!(out.shape, vec![b, hkv * rep, s, d]);
+        let got = out.host_cow().unwrap();
+        for bi in 0..b {
+            for ho in 0..hkv * rep {
+                for k in 0..s * d {
+                    let want = x[(bi * hkv + ho / rep) * s * d + k];
+                    assert_eq!(got[(bi * hkv * rep + ho) * s * d + k], want);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn snake_and_leaky_relu() {
+        let (n, c, l) = (2usize, 3usize, 4usize);
+        let x: Vec<f32> = (0..n * c * l).map(|i| (i as f32 - 10.0) / 4.0).collect();
+        let alpha = [0.5f32, 1.0, 2.0];
+        let inv_beta = [2.0f32, 1.0, 0.25];
+        let out = CudaTensor::from_vec(x.clone(), vec![n, c, l])
+            .unwrap()
+            .snake_beta(
+                &CudaTensor::from_vec(alpha.to_vec(), vec![c]).unwrap(),
+                &CudaTensor::from_vec(inv_beta.to_vec(), vec![c]).unwrap(),
+            )
+            .unwrap();
+        for (i, (&g, &v)) in out.host_cow().unwrap().iter().zip(&x).enumerate() {
+            let ch = (i / l) % c;
+            let want = v + inv_beta[ch] * (alpha[ch] * v).sin().powi(2);
+            assert!((g - want).abs() < 1e-6);
+        }
+        let lr = CudaTensor::from_vec(vec![-2.0, 0.0, 3.0], vec![3])
+            .unwrap()
+            .leaky_relu(0.1);
+        assert_eq!(&*lr.host_cow().unwrap(), &[-0.2, 0.0, 3.0]);
+    }
+}
+
+#[cfg(test)]
+mod conv1d_tests {
+    use super::*;
+
+    fn seq(n: usize, mul: usize, modulo: usize) -> Vec<f32> {
+        (0..n)
+            .map(|i| ((i * mul) % modulo) as f32 / modulo as f32 - 0.4)
+            .collect()
+    }
+
+    fn dot(a: &[f32], b: &[f32]) -> f64 {
+        a.iter()
+            .zip(b)
+            .map(|(x, y)| f64::from(*x) * f64::from(*y))
+            .sum()
+    }
+
+    /// PyTorch's documented example shapes, worked by hand.
+    #[test]
+    fn small_cases_by_hand() {
+        let x = CudaTensor::from_vec(vec![1.0, 2.0, 3.0, 4.0, 5.0], vec![1, 1, 5]).unwrap();
+        let w = CudaTensor::from_vec(vec![1.0, 0.0, -1.0], vec![1, 1, 3]).unwrap();
+        // Same padding, dilation 2: reach 5, pad 2.
+        let y = x.conv1d(&w, None, 2, 1, 2, 1).unwrap();
+        assert_eq!(y.shape, vec![1, 1, 5]);
+        assert_eq!(&*y.host_cow().unwrap(), &[-3.0, -4.0, -4.0, 2.0, 3.0]);
+        // Stride 2, no padding.
+        let y = x.conv1d(&w, None, 0, 2, 1, 1).unwrap();
+        assert_eq!(&*y.host_cow().unwrap(), &[-2.0, -2.0]);
+
+        // Transposed, stride 2, kernel [1, 1]: every sample held for two.
+        let x3 = CudaTensor::from_vec(vec![1.0, 2.0, 3.0], vec![1, 1, 3]).unwrap();
+        let w2 = CudaTensor::from_vec(vec![1.0, 1.0], vec![1, 1, 2]).unwrap();
+        let bias = CudaTensor::from_vec(vec![0.5], vec![1]).unwrap();
+        let y = x3
+            .conv_transpose1d(&w2, Some(&bias), 0, 2, 1, 1, 0)
+            .unwrap();
+        assert_eq!(&*y.host_cow().unwrap(), &[1.5, 1.5, 2.5, 2.5, 3.5, 3.5]);
+        // output_padding appends a position no input reaches: bias only.
+        let y = x3
+            .conv_transpose1d(&w2, Some(&bias), 0, 2, 1, 1, 1)
+            .unwrap();
+        assert_eq!(y.shape, vec![1, 1, 7]);
+        assert_eq!(y.host_cow().unwrap()[6], 0.5);
+        // HiFi-GAN style upsampler: kernel 4, stride 2, padding 1 doubles the length.
+        let w4 = CudaTensor::from_vec(vec![1.0; 4], vec![1, 1, 4]).unwrap();
+        assert_eq!(
+            x3.conv_transpose1d(&w4, None, 1, 2, 1, 1, 0).unwrap().shape,
+            vec![1, 1, 6]
+        );
+    }
+
+    /// A transposed convolution is the adjoint of the convolution with the same
+    /// weight: <conv(x), y> = <x, conv_T(y)>. Holds for every stride, dilation,
+    /// padding and grouping, and neither side is written in terms of the other.
+    #[test]
+    fn transpose_is_the_adjoint_of_conv() {
+        for (c, oc, k, pad, stride, dil, groups, l) in [
+            (
+                4usize, 6usize, 3usize, 1usize, 1usize, 1usize, 1usize, 9usize,
+            ),
+            (4, 6, 4, 1, 2, 1, 2, 10),
+            (6, 6, 5, 4, 1, 2, 6, 11),
+            (3, 9, 7, 3, 3, 1, 3, 13),
+        ] {
+            let lo = (l + 2 * pad - dil * (k - 1) - 1) / stride + 1;
+            // Pick the output_padding that makes conv_T map length lo back to l.
+            let out_pad = l - ((lo - 1) * stride + dil * (k - 1) + 1 - 2 * pad);
+            let x = CudaTensor::from_vec(seq(2 * c * l, 7, 31), vec![2, c, l]).unwrap();
+            let w =
+                CudaTensor::from_vec(seq(oc * (c / groups) * k, 11, 29), vec![oc, c / groups, k])
+                    .unwrap();
+            let y = CudaTensor::from_vec(seq(2 * oc * lo, 13, 37), vec![2, oc, lo]).unwrap();
+            let ax = x.conv1d(&w, None, pad, stride, dil, groups).unwrap();
+            assert_eq!(ax.shape, vec![2, oc, lo]);
+            let aty = y
+                .conv_transpose1d(&w, None, pad, stride, dil, groups, out_pad)
+                .unwrap();
+            assert_eq!(aty.shape, vec![2, c, l]);
+            let lhs = dot(&ax.host_cow().unwrap(), &y.host_cow().unwrap());
+            let rhs = dot(&x.host_cow().unwrap(), &aty.host_cow().unwrap());
+            assert!(
+                (lhs - rhs).abs() < 1e-4 * lhs.abs().max(1.0),
+                "c={c} oc={oc} k={k} g={groups}: {lhs} vs {rhs}"
+            );
+        }
+    }
+
+    #[test]
+    fn bad_shapes_are_errors() {
+        let x = CudaTensor::zeros(&[1, 4, 8]);
+        assert!(
+            x.conv1d(&CudaTensor::zeros(&[6, 3, 3]), None, 1, 1, 1, 1)
+                .is_err(),
+            "channel mismatch"
+        );
+        assert!(
+            x.conv1d(&CudaTensor::zeros(&[6, 2, 3]), None, 1, 1, 1, 4)
+                .is_err(),
+            "groups do not divide"
+        );
+        assert!(
+            x.conv1d(&CudaTensor::zeros(&[6, 4, 3]), None, 0, 1, 8, 1)
+                .is_err(),
+            "reach exceeds input"
+        );
+        assert!(x
+            .conv_transpose1d(&CudaTensor::zeros(&[3, 2, 3]), None, 0, 1, 1, 1, 0)
+            .is_err());
+    }
+}
+
+#[cfg(test)]
+mod vae_op_tests {
+    use super::*;
+    use crate::wan::ops::PadMode;
+
+    #[test]
+    fn pad_modes_match_torch() {
+        let x = CudaTensor::from_vec(vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0], vec![1, 2, 3]).unwrap();
+        let pad = |mode| {
+            x.pad(2, 2, 1, mode)
+                .unwrap()
+                .host_cow()
+                .unwrap()
+                .into_owned()
+        };
+        // torch.nn.functional.pad(x, (2, 1), mode=...)
+        assert_eq!(
+            pad(PadMode::Reflect),
+            vec![3.0, 2.0, 1.0, 2.0, 3.0, 2.0, 6.0, 5.0, 4.0, 5.0, 6.0, 5.0]
+        );
+        assert_eq!(
+            pad(PadMode::Replicate),
+            vec![1.0, 1.0, 1.0, 2.0, 3.0, 3.0, 4.0, 4.0, 4.0, 5.0, 6.0, 6.0]
+        );
+        assert_eq!(
+            pad(PadMode::Zeros),
+            x.pad_zeros(2, 2, 1)
+                .unwrap()
+                .host_cow()
+                .unwrap()
+                .into_owned()
+        );
+        // A middle axis: rows move as whole blocks.
+        let rows = x.pad(1, 1, 0, PadMode::Reflect).unwrap();
+        assert_eq!(rows.shape, vec![1, 3, 3]);
+        assert_eq!(
+            &*rows.host_cow().unwrap(),
+            &[4.0, 5.0, 6.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0]
+        );
+        assert!(
+            x.pad(2, 3, 0, PadMode::Reflect).is_err(),
+            "reflect needs pad < len"
+        );
+        assert!(x.pad(2, 3, 0, PadMode::Replicate).is_ok());
+    }
+
+    #[test]
+    fn group_norm_normalizes_each_group() {
+        let (n, c, sp, g) = (2usize, 4usize, 5usize, 2usize);
+        let x: Vec<f32> = (0..n * c * sp)
+            .map(|i| ((i * 37 % 19) as f32 - 7.0) * 0.3 + (i / (2 * sp)) as f32)
+            .collect();
+        let xt = CudaTensor::from_vec(x.clone(), vec![n, c, sp]).unwrap();
+        let ones = CudaTensor::ones(&[c]);
+        let zeros = CudaTensor::zeros(&[c]);
+        let y = xt.group_norm(g, &ones, &zeros, 1e-6, false).unwrap();
+        let yv = y.host_cow().unwrap();
+        for grp in yv.chunks(c / g * sp) {
+            let m: f32 = grp.iter().sum::<f32>() / grp.len() as f32;
+            let v: f32 = grp.iter().map(|a| (a - m).powi(2)).sum::<f32>() / grp.len() as f32;
+            assert!(m.abs() < 1e-5 && (v - 1.0).abs() < 1e-4, "mean {m} var {v}");
+        }
+        // Affine is per channel, and SiLU is applied after it.
+        let w = CudaTensor::from_vec(vec![2.0, 1.0, 0.5, 3.0], vec![c]).unwrap();
+        let b = CudaTensor::from_vec(vec![0.1, -0.2, 0.3, 0.0], vec![c]).unwrap();
+        let ya = xt.group_norm(g, &w, &b, 1e-6, false).unwrap();
+        let ys = xt.group_norm(g, &w, &b, 1e-6, true).unwrap();
+        let (wv, bv) = ([2.0f32, 1.0, 0.5, 3.0], [0.1f32, -0.2, 0.3, 0.0]);
+        for (i, ((a, s), base)) in ya
+            .host_cow()
+            .unwrap()
+            .iter()
+            .zip(ys.host_cow().unwrap().iter())
+            .zip(yv.iter())
+            .enumerate()
+        {
+            let ch = (i / sp) % c;
+            assert!((a - (base * wv[ch] + bv[ch])).abs() < 1e-5);
+            assert!((s - a / (1.0 + (-a).exp())).abs() < 1e-6);
+        }
+        assert!(xt.group_norm(3, &ones, &zeros, 1e-6, false).is_err());
     }
 }

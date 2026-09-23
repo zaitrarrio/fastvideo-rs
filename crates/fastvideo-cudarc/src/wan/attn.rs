@@ -31,11 +31,18 @@ static PROBS_BF16_CACHE: super::envflag::CachedBool = super::envflag::CachedBool
 fn probs_bf16() -> bool {
     PROBS_BF16_CACHE.get_or_init(|| super::envflag::bool_flag("FASTVIDEO_ATTN_PROBS_BF16", true))
         && super::stats::device_expected()
-        && super::device::global_device().is_some_and(|d| d.gemm_math == super::device::GemmMath::Bf16)
+        && super::device::global_device()
+            .is_some_and(|d| d.gemm_math == super::device::GemmMath::Bf16)
 }
 
-fn bhsd(q: &CudaTensor, k: &CudaTensor, v: &CudaTensor) -> Option<(usize, usize, usize, usize, usize)> {
-    let [b, h, sq, d] = q.shape[..] else { return None };
+fn bhsd(
+    q: &CudaTensor,
+    k: &CudaTensor,
+    v: &CudaTensor,
+) -> Option<(usize, usize, usize, usize, usize)> {
+    let [b, h, sq, d] = q.shape[..] else {
+        return None;
+    };
     let sk = k.shape.get(2).copied()?;
     (k.shape == [b, h, sk, d] && v.shape == [b, h, sk, d]).then_some((b, h, sq, sk, d))
 }
@@ -43,8 +50,15 @@ fn bhsd(q: &CudaTensor, k: &CudaTensor, v: &CudaTensor) -> Option<(usize, usize,
 /// Tiled flash attention on-device (`FASTVIDEO_SDPA=flash`). `None` when the
 /// head dim is outside the kernel's limits or no device is expected.
 #[cfg(feature = "cuda")]
-pub fn device_flash_sdpa(q: &CudaTensor, k: &CudaTensor, v: &CudaTensor, scale: Option<f32>) -> Result<Option<CudaTensor>> {
-    let Some((b, h, sq, sk, d)) = bhsd(q, k, v) else { return Ok(None) };
+pub fn device_flash_sdpa(
+    q: &CudaTensor,
+    k: &CudaTensor,
+    v: &CudaTensor,
+    scale: Option<f32>,
+) -> Result<Option<CudaTensor>> {
+    let Some((b, h, sq, sk, d)) = bhsd(q, k, v) else {
+        return Ok(None);
+    };
     if d == 0 || d % 32 != 0 || d > FLASH_MAX_HEAD_DIM {
         return Ok(None);
     }
@@ -55,7 +69,10 @@ pub fn device_flash_sdpa(q: &CudaTensor, k: &CudaTensor, v: &CudaTensor, scale: 
     let scale = scale.unwrap_or(1.0 / (d as f32).sqrt());
     let bh = b * h;
     static ONCE: AtomicBool = AtomicBool::new(false);
-    super::log::info_once(&ONCE, format_args!("sdpa: GPU flash-tiled B={b} H={h} Sq={sq} Sk={sk} D={d}"));
+    super::log::info_once(
+        &ONCE,
+        format_args!("sdpa: GPU flash-tiled B={b} H={h} Sq={sq} Sk={sk} D={d}"),
+    );
     let mut out = super::ops::alloc(bh * sq * d)?;
     let (bh_i, sq_i, sk_i, d_i) = (bh as i32, sq as i32, sk as i32, d as i32);
     super::kernels::launch!(dev.stream, &dev.kernels.flash_attn_f32, super::kernels::cfg_flash(bh, sq, d);
@@ -65,7 +82,12 @@ pub fn device_flash_sdpa(q: &CudaTensor, k: &CudaTensor, v: &CudaTensor, scale: 
 }
 
 #[cfg(not(feature = "cuda"))]
-pub fn device_flash_sdpa(_q: &CudaTensor, _k: &CudaTensor, _v: &CudaTensor, _scale: Option<f32>) -> Result<Option<CudaTensor>> {
+pub fn device_flash_sdpa(
+    _q: &CudaTensor,
+    _k: &CudaTensor,
+    _v: &CudaTensor,
+    _scale: Option<f32>,
+) -> Result<Option<CudaTensor>> {
     Ok(None)
 }
 
@@ -73,7 +95,12 @@ pub fn device_flash_sdpa(_q: &CudaTensor, _k: &CudaTensor, _v: &CudaTensor, _sca
 /// the query axis chunked so the score buffer stays under
 /// [`DENSE_SCORE_BUDGET`]. `None` when no device is expected.
 #[cfg(feature = "cuda")]
-pub fn device_dense_sdpa(q: &CudaTensor, k: &CudaTensor, v: &CudaTensor, scale: Option<f32>) -> Result<Option<CudaTensor>> {
+pub fn device_dense_sdpa(
+    q: &CudaTensor,
+    k: &CudaTensor,
+    v: &CudaTensor,
+    scale: Option<f32>,
+) -> Result<Option<CudaTensor>> {
     device_dense_sdpa_with_budget(q, k, v, scale, DENSE_SCORE_BUDGET)
 }
 
@@ -88,7 +115,9 @@ pub fn device_dense_sdpa_with_budget(
     score_budget: usize,
 ) -> Result<Option<CudaTensor>> {
     use super::device;
-    let Some((b, h, sq, sk, d)) = bhsd(q, k, v) else { return Ok(None) };
+    let Some((b, h, sq, sk, d)) = bhsd(q, k, v) else {
+        return Ok(None);
+    };
     let (Some(qd), Some(kd), Some(vd)) = (q.dev()?, k.dev()?, v.dev()?) else {
         return Ok(None);
     };
@@ -96,26 +125,36 @@ pub fn device_dense_sdpa_with_budget(
     let bh = b * h;
     let chunk = (score_budget / (bh * sk).max(1)).clamp(1, sq.max(1));
     static ONCE: AtomicBool = AtomicBool::new(false);
-    super::log::info_once(&ONCE, format_args!("sdpa: device dense B={b} H={h} Sq={sq} Sk={sk} D={d} query_chunk={chunk}"));
+    super::log::info_once(
+        &ONCE,
+        format_args!("sdpa: device dense B={b} H={h} Sq={sq} Sk={sk} D={d} query_chunk={chunk}"),
+    );
     let err = |e: device::DeviceError| msg(e.to_string());
     let mut out = super::ops::alloc((bh * sq * d).max(1))?;
     // The probability matrix is `bh*sq*sk` — far larger than Q, K, V — so in
     // fast mode it is stored as bf16, halving the dominant traffic. `V` is cast
     // once to match. Exact mode keeps F32 so it stays comparable to the CPU path.
-    let v_bf16 = if probs_bf16() { Some(super::ops::cast_f32_bf16_device(&vd)?) } else { None };
+    let v_bf16 = if probs_bf16() {
+        Some(super::ops::cast_f32_bf16_device(&vd)?)
+    } else {
+        None
+    };
     if chunk >= sq {
         let mut scores = super::ops::alloc((bh * sq * sk).max(1))?;
-        device::matmul_linear_wt_strided_batched(&qd, &kd, &mut scores, bh, sq, d, sk, scale).map_err(err)?;
+        device::matmul_linear_wt_strided_batched(&qd, &kd, &mut scores, bh, sq, d, sk, scale)
+            .map_err(err)?;
         match &v_bf16 {
             Some(vb) => {
                 let probs = super::ops::softmax_last_bf16_device(&scores, sk)?;
                 drop(scores);
-                device::matmul_2d_strided_batched_bf16(&probs, vb, &mut out, bh, sq, sk, d).map_err(err)?;
+                device::matmul_2d_strided_batched_bf16(&probs, vb, &mut out, bh, sq, sk, d)
+                    .map_err(err)?;
             }
             None => {
                 let probs = super::ops::softmax_last_device(&scores, sk)?;
                 drop(scores);
-                device::matmul_2d_strided_batched(&probs, &vd, &mut out, bh, sq, sk, d).map_err(err)?;
+                device::matmul_2d_strided_batched(&probs, &vd, &mut out, bh, sq, sk, d)
+                    .map_err(err)?;
             }
         }
     } else {
@@ -124,21 +163,49 @@ pub fn device_dense_sdpa_with_budget(
             let qlen = chunk.min(sq - start);
             let q_view = qd.slice(start * d..);
             let mut scores = super::ops::alloc(bh * qlen * sk)?;
-            device::matmul_linear_wt_strided_batched_x_view(&q_view, sq * d, &kd, &mut scores, bh, qlen, d, sk, scale)
-                .map_err(err)?;
+            device::matmul_linear_wt_strided_batched_x_view(
+                &q_view,
+                sq * d,
+                &kd,
+                &mut scores,
+                bh,
+                qlen,
+                d,
+                sk,
+                scale,
+            )
+            .map_err(err)?;
             let mut out_view = out.slice_mut(start * d..);
             match &v_bf16 {
                 Some(vb) => {
                     let probs = super::ops::softmax_last_bf16_device(&scores, sk)?;
                     drop(scores);
-                    device::matmul_2d_strided_batched_out_view_bf16(&probs, vb, &mut out_view, sq * d, bh, qlen, sk, d)
-                        .map_err(err)?;
+                    device::matmul_2d_strided_batched_out_view_bf16(
+                        &probs,
+                        vb,
+                        &mut out_view,
+                        sq * d,
+                        bh,
+                        qlen,
+                        sk,
+                        d,
+                    )
+                    .map_err(err)?;
                 }
                 None => {
                     let probs = super::ops::softmax_last_device(&scores, sk)?;
                     drop(scores);
-                    device::matmul_2d_strided_batched_out_view(&probs, &vd, &mut out_view, sq * d, bh, qlen, sk, d)
-                        .map_err(err)?;
+                    device::matmul_2d_strided_batched_out_view(
+                        &probs,
+                        &vd,
+                        &mut out_view,
+                        sq * d,
+                        bh,
+                        qlen,
+                        sk,
+                        d,
+                    )
+                    .map_err(err)?;
                 }
             }
             start += qlen;
@@ -148,12 +215,22 @@ pub fn device_dense_sdpa_with_budget(
 }
 
 #[cfg(not(feature = "cuda"))]
-pub fn device_dense_sdpa(_q: &CudaTensor, _k: &CudaTensor, _v: &CudaTensor, _scale: Option<f32>) -> Result<Option<CudaTensor>> {
+pub fn device_dense_sdpa(
+    _q: &CudaTensor,
+    _k: &CudaTensor,
+    _v: &CudaTensor,
+    _scale: Option<f32>,
+) -> Result<Option<CudaTensor>> {
     Ok(None)
 }
 
 /// Online-softmax tiled attention on host (`FASTVIDEO_SDPA=host`, CPU runs).
-pub(crate) fn flash_style_sdpa_host(q: &CudaTensor, k: &CudaTensor, v: &CudaTensor, scale: Option<f32>) -> Result<CudaTensor> {
+pub(crate) fn flash_style_sdpa_host(
+    q: &CudaTensor,
+    k: &CudaTensor,
+    v: &CudaTensor,
+    scale: Option<f32>,
+) -> Result<CudaTensor> {
     let (b, h, sq, sk, d) = bhsd(q, k, v).ok_or_else(|| msg("flash sdpa shape mismatch"))?;
     host_only_op("sdpa_host", format_args!("q={:?} k={:?}", q.shape, k.shape))?;
     let scale = scale.unwrap_or(1.0 / (d as f32).sqrt());
@@ -177,7 +254,11 @@ pub(crate) fn flash_style_sdpa_host(q: &CudaTensor, k: &CudaTensor, v: &CudaTens
                 .collect();
             let tile_max = scores.iter().copied().fold(f32::NEG_INFINITY, f32::max);
             let m_new = m_i.max(tile_max);
-            let alpha = if m_i.is_finite() { (m_i - m_new).exp() } else { 0.0 };
+            let alpha = if m_i.is_finite() {
+                (m_i - m_new).exp()
+            } else {
+                0.0
+            };
             o.iter_mut().for_each(|x| *x *= alpha);
             l_i *= alpha;
             for (tj, s) in scores.iter().enumerate() {
@@ -199,7 +280,13 @@ pub(crate) fn flash_style_sdpa_host(q: &CudaTensor, k: &CudaTensor, v: &CudaTens
 
 /// Block-sparse local+sink window attention (`FASTVIDEO_VSA=1`). Host only:
 /// a GPU run errors instead of computing it on the CPU.
-pub fn block_sparse_sdpa(q: &CudaTensor, k: &CudaTensor, v: &CudaTensor, scale: Option<f32>, window: usize) -> Result<CudaTensor> {
+pub fn block_sparse_sdpa(
+    q: &CudaTensor,
+    k: &CudaTensor,
+    v: &CudaTensor,
+    scale: Option<f32>,
+    window: usize,
+) -> Result<CudaTensor> {
     let (b, h, sq, sk, d) = bhsd(q, k, v).ok_or_else(|| msg("sparse sdpa shape mismatch"))?;
     host_only_op("block_sparse_sdpa", format_args!("q={:?}", q.shape))?;
     let scale = scale.unwrap_or(1.0 / (d as f32).sqrt());
@@ -211,10 +298,17 @@ pub fn block_sparse_sdpa(q: &CudaTensor, k: &CudaTensor, v: &CudaTensor, scale: 
         for qi in 0..sq {
             let q_off = bh * sq * d + qi * d;
             let (lo, hi) = (qi.saturating_sub(window), (qi + window + 1).min(sk));
-            let idx: Vec<usize> = (0..sk).filter(|&j| j < sink || (j >= lo && j < hi)).collect();
+            let idx: Vec<usize> = (0..sk)
+                .filter(|&j| j < sink || (j >= lo && j < hi))
+                .collect();
             let scores: Vec<f32> = idx
                 .iter()
-                .map(|&j| (0..d).map(|t| qh[q_off + t] * kh[bh * sk * d + j * d + t]).sum::<f32>() * scale)
+                .map(|&j| {
+                    (0..d)
+                        .map(|t| qh[q_off + t] * kh[bh * sk * d + j * d + t])
+                        .sum::<f32>()
+                        * scale
+                })
                 .collect();
             let m = scores.iter().copied().fold(f32::NEG_INFINITY, f32::max);
             let exps: Vec<f32> = scores.iter().map(|s| (s - m).exp()).collect();
@@ -232,12 +326,16 @@ pub fn block_sparse_sdpa(q: &CudaTensor, k: &CudaTensor, v: &CudaTensor, scale: 
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use super::super::nn::scaled_dot_product_attention;
+    use super::*;
 
     #[test]
     fn host_flash_matches_composed() {
-        let q = CudaTensor::from_vec((0..24).map(|x| (x as f32) * 0.01).collect(), vec![1, 2, 3, 4]).unwrap();
+        let q = CudaTensor::from_vec(
+            (0..24).map(|x| (x as f32) * 0.01).collect(),
+            vec![1, 2, 3, 4],
+        )
+        .unwrap();
         let dense = scaled_dot_product_attention(&q, &q, &q, None).unwrap();
         let flash = flash_style_sdpa_host(&q, &q, &q, None).unwrap();
         for (a, b) in dense.data.iter().zip(&flash.data) {

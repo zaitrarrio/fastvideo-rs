@@ -104,7 +104,8 @@ impl PeakMem {
         let handle = self.handle.take()?;
         let _ = handle.join();
         if let Some((free, total)) = mem_info() {
-            self.peak.fetch_max((total - free) / (1 << 20), Ordering::Relaxed);
+            self.peak
+                .fetch_max((total - free) / (1 << 20), Ordering::Relaxed);
         }
         Some(self.peak.load(Ordering::Relaxed))
     }

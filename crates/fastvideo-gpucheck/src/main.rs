@@ -17,13 +17,17 @@
 
 mod embed;
 mod gpu;
+mod h3_stage;
 #[cfg(feature = "cuda")]
 mod kernels;
+mod llm_oracle;
+mod ltx2_stage;
 #[cfg(feature = "cuda")]
 mod mathprobe;
 mod metrics;
 mod mode;
 mod model;
+mod oracle;
 mod parity;
 mod perf;
 mod quality;
@@ -31,6 +35,7 @@ mod rand_weights;
 mod reference;
 mod report;
 mod st;
+mod taehv;
 
 use std::path::PathBuf;
 
@@ -63,6 +68,28 @@ struct Cli {
     /// compare against dense references and must not use it.
     #[arg(long, global = true)]
     vsa: bool,
+    /// Run the DiT linears in FP8 E4M3. Per-tensor scales are coarse enough
+    /// that only a checkpoint distilled against them (FastWan-QAD) should use
+    /// this, so it is opt-in per stage and never inferred from the device.
+    #[arg(long, global = true)]
+    fp8: bool,
+    /// Per-tensor E4M3 GEMM on H3 `ff_in`/`ff_out` only. Does not set
+    /// process-wide `FASTVIDEO_FP8`. Quality is a clip A/B, not a default.
+    #[arg(long, global = true)]
+    h3_ffn_fp8: bool,
+    /// MLX affine weight-only INT8/6/4 (group 64) on H3 attn/FFN. Own fused
+    /// dequant-in-tile GEMM. Does not set process-wide `FASTVIDEO_FP8`.
+    #[arg(long, global = true, value_name = "BITS")]
+    h3_affine: Option<String>,
+    /// Time each DiT block phase. Synchronizes per phase, so a profiled run
+    /// measures *where* the time goes and must not be quoted for *how long*.
+    #[arg(long, global = true)]
+    profile: bool,
+    /// Decode through TAEHV instead of the Wan VAE. Takes the directory
+    /// holding taew2_1.safetensors, because those weights ship separately from
+    /// the Wan checkpoint and there is nowhere sensible to guess.
+    #[arg(long, global = true)]
+    taehv_weights: Option<PathBuf>,
     /// Latent frames per VAE decode pass. Like --vsa this is per stage: exact
     /// parity already sits at the edge of a 24GB card, and a bigger chunk
     /// tips it over.
@@ -127,7 +154,7 @@ enum Cmd {
     /// NVRTC-compile the kernel module for each compute capability (no GPU).
     #[cfg(feature = "cuda")]
     Nvrtc {
-        #[arg(long, default_value = "7.5,8.0,8.6,8.9,9.0")]
+        #[arg(long, default_value = "7.5,8.0,8.6,8.9,9.0,10.0,12.0")]
         sm: String,
     },
     /// Create the CUDA context (cuBLAS, cuDNN, all kernels) and report the GPU.
@@ -209,6 +236,44 @@ enum Cmd {
         budget_min: f64,
         #[arg(long)]
         no_mp4: bool,
+        /// Run one untimed generation first, so the reported timings are a
+        /// warm process (weights resident, allocator grown, first launches
+        /// done) rather than the first clip after load.
+        #[arg(long)]
+        warm: bool,
+    },
+    /// MiniMax-H3 / FastH3 stages (see `h3_stage.rs`).
+    H3 {
+        #[command(subcommand)]
+        stage: h3_stage::Stage,
+    },
+    /// LTX-2 stages (see `ltx2_stage.rs`).
+    Ltx2 {
+        #[command(subcommand)]
+        stage: ltx2_stage::Stage,
+    },
+    /// A decoder-only text encoder (Qwen3-VL for MiniMax-H3, Gemma-3 for
+    /// LTX-2) against transformers' hidden states, on the oracle's own tokens.
+    Llm {
+        /// The text encoder's weight directory (sharded safetensors).
+        #[arg(long)]
+        weights: PathBuf,
+        /// `qwen3-vl-32b` or `gemma3-12b`.
+        #[arg(long)]
+        family: String,
+        /// Key of the layer list (e.g. `model.language_model.layers`); probed
+        /// when omitted.
+        #[arg(long)]
+        layer_prefix: Option<String>,
+        /// Reference written by the model's oracle script: input_ids,
+        /// positions, attend and one hidden_<k> per tap.
+        #[arg(long)]
+        oracle: PathBuf,
+        #[arg(long, default_value = "cuda")]
+        device: String,
+        /// bf16 weights on both sides, through dozens of layers.
+        #[arg(long, default_value_t = 0.05)]
+        max_rel: f64,
     },
     /// Compare two clip runs (e.g. fast vs exact) of the same seed and prompt.
     Compare {
@@ -224,6 +289,38 @@ enum Cmd {
         max_latent_rel: f64,
         #[arg(long, default_value_t = 20.0)]
         min_psnr: f64,
+    },
+    /// Diff our TAEHV decoder against madebyollin's own implementation.
+    Taehv {
+        /// Directory holding taew2_1.safetensors (the oracle fetches it there).
+        #[arg(long)]
+        weights: PathBuf,
+        /// Written by scripts/gpu/taehv_oracle.py.
+        #[arg(long)]
+        oracle: PathBuf,
+        #[arg(long, default_value = "cuda")]
+        device: String,
+        #[arg(long, default_value_t = 0.02)]
+        max_rel: f64,
+    },
+    /// Diff our text encoder and one DiT step against an external reference.
+    Oracle {
+        #[arg(long)]
+        weights: PathBuf,
+        /// Written by scripts/gpu/upstream_oracle.py.
+        #[arg(long)]
+        oracle: PathBuf,
+        /// Our own embeds for the same prompt (from the embed stage).
+        #[arg(long)]
+        embeds: PathBuf,
+        #[arg(long, default_value = "cuda")]
+        device: String,
+        #[arg(long, default_value_t = 0.02)]
+        max_text_rel: f64,
+        #[arg(long, default_value_t = 0.05)]
+        max_dit_rel: f64,
+        #[arg(long, default_value_t = 0.05)]
+        max_e2e_rel: f64,
     },
 }
 
@@ -269,7 +366,12 @@ fn stage_name(cmd: &Cmd) -> &'static str {
         Cmd::Embed { .. } => "embed",
         Cmd::Probe { .. } => "probe",
         Cmd::Clip { .. } => "clip",
+        Cmd::H3 { .. } => "h3",
+        Cmd::Ltx2 { .. } => "ltx2",
+        Cmd::Llm { .. } => "llm",
         Cmd::Compare { .. } => "compare",
+        Cmd::Oracle { .. } => "oracle",
+        Cmd::Taehv { .. } => "taehv",
     }
 }
 
@@ -279,6 +381,9 @@ fn run(cli: &Cli, report: &mut Report) -> StageResult<()> {
     match &cli.cmd {
         #[cfg(feature = "cuda")]
         Cmd::Nvrtc { sm } => {
+            // Which SMs this binary carries real SASS for. Empty means it was
+            // built without nvcc and will NVRTC-compile on every box.
+            report.set("aot_sms", fastvideo_cudarc::wan::kernels::aot_sms());
             let archs = sm
                 .split(',')
                 .map(|s| {
@@ -359,6 +464,7 @@ fn run(cli: &Cli, report: &mut Report) -> StageResult<()> {
             name,
             budget_min,
             no_mp4,
+            warm,
         } => perf::clip(
             report,
             perf::ClipArgs {
@@ -370,7 +476,26 @@ fn run(cli: &Cli, report: &mut Report) -> StageResult<()> {
                 budget_min: *budget_min,
                 gates: quality::QualityGates::default(),
                 save_mp4: !no_mp4,
+                warm: *warm,
             },
+        ),
+        Cmd::H3 { stage } => h3_stage::run(report, stage),
+        Cmd::Ltx2 { stage } => ltx2_stage::run(report, stage),
+        Cmd::Llm {
+            weights,
+            family,
+            layer_prefix,
+            oracle,
+            device,
+            max_rel,
+        } => llm_oracle::run(
+            report,
+            weights,
+            family,
+            layer_prefix.as_deref(),
+            oracle,
+            device,
+            *max_rel,
         ),
         Cmd::Compare {
             a,
@@ -388,6 +513,32 @@ fn run(cli: &Cli, report: &mut Report) -> StageResult<()> {
                 min_psnr: *min_psnr,
             },
         ),
+        Cmd::Taehv {
+            weights,
+            oracle,
+            device,
+            max_rel,
+        } => taehv::run(report, weights, oracle, device, *max_rel),
+        Cmd::Oracle {
+            weights,
+            oracle,
+            embeds,
+            device,
+            max_text_rel,
+            max_dit_rel,
+            max_e2e_rel,
+        } => oracle::run(
+            report,
+            weights,
+            oracle,
+            embeds,
+            device,
+            oracle::OracleGates {
+                max_text_rel: *max_text_rel,
+                max_dit_rel: *max_dit_rel,
+                max_e2e_rel: *max_e2e_rel,
+            },
+        ),
     }
 }
 
@@ -397,6 +548,21 @@ fn main() {
     cli.mode.apply_env();
     if cli.vsa {
         std::env::set_var("FASTVIDEO_VSA", "1");
+    }
+    if cli.fp8 {
+        std::env::set_var("FASTVIDEO_FP8", "1");
+    }
+    if cli.h3_ffn_fp8 {
+        std::env::set_var("FASTVIDEO_H3_FFN_FP8", "1");
+    }
+    if let Some(bits) = &cli.h3_affine {
+        std::env::set_var("FASTVIDEO_H3_AFFINE", bits);
+    }
+    if cli.profile {
+        std::env::set_var("FASTVIDEO_PROFILE", "1");
+    }
+    if let Some(p) = &cli.taehv_weights {
+        std::env::set_var("FASTVIDEO_TAEHV_WEIGHTS", p);
     }
     if let Some(n) = cli.vae_chunk {
         std::env::set_var("FASTVIDEO_VAE_CHUNK", n.to_string());

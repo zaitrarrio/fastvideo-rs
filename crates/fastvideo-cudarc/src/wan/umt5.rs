@@ -11,11 +11,7 @@ fn t5_layer_norm(xs: &CudaTensor, weight: &CudaTensor, eps: f32) -> Result<CudaT
     xs.rms_norm(weight, eps)
 }
 
-fn relative_position_bucket(
-    seq_len: usize,
-    num_buckets: usize,
-    max_distance: usize,
-) -> Vec<usize> {
+fn relative_position_bucket(seq_len: usize, num_buckets: usize, max_distance: usize) -> Vec<usize> {
     let mut buckets = vec![0usize; seq_len * seq_len];
     let num_buckets = num_buckets as i64;
     let max_exact = num_buckets / 4;
@@ -25,10 +21,13 @@ fn relative_position_bucket(
             let mut relative = j - i;
             let mut bucket = 0i64;
             let n_buckets = num_buckets / 2;
-            if relative < 0 {
+            // The upper half of the table is for keys *after* the query:
+            // HF adds the offset on `relative_position > 0`. Inverting this
+            // swaps the two halves and the encoder reads word order backwards.
+            if relative > 0 {
                 bucket += n_buckets;
-                relative = -relative;
             }
+            relative = relative.abs();
             let is_small = relative < max_exact;
             let relative_log = ((relative as f64 / max_exact as f64).ln()
                 / (max_distance as f64 / max_exact as f64).ln()
@@ -64,9 +63,27 @@ impl DenseGated {
 
     fn load(map: &WeightMap, prefix: &str, cfg: &Umt5Config) -> Result<Self> {
         Ok(Self {
-            wi_0: Linear::load(map, &weights::join_key(prefix, "wi_0"), cfg.d_model, cfg.d_ff, false)?,
-            wi_1: Linear::load(map, &weights::join_key(prefix, "wi_1"), cfg.d_model, cfg.d_ff, false)?,
-            wo: Linear::load(map, &weights::join_key(prefix, "wo"), cfg.d_ff, cfg.d_model, false)?,
+            wi_0: Linear::load(
+                map,
+                &weights::join_key(prefix, "wi_0"),
+                cfg.d_model,
+                cfg.d_ff,
+                false,
+            )?,
+            wi_1: Linear::load(
+                map,
+                &weights::join_key(prefix, "wi_1"),
+                cfg.d_model,
+                cfg.d_ff,
+                false,
+            )?,
+            wo: Linear::load(
+                map,
+                &weights::join_key(prefix, "wo"),
+                cfg.d_ff,
+                cfg.d_model,
+                false,
+            )?,
         })
     }
 
@@ -105,10 +122,34 @@ impl SelfAttention {
     fn load(map: &WeightMap, prefix: &str, cfg: &Umt5Config) -> Result<Self> {
         let inner = cfg.num_heads * cfg.d_kv;
         Ok(Self {
-            q: Linear::load(map, &weights::join_key(prefix, "q"), cfg.d_model, inner, false)?,
-            k: Linear::load(map, &weights::join_key(prefix, "k"), cfg.d_model, inner, false)?,
-            v: Linear::load(map, &weights::join_key(prefix, "v"), cfg.d_model, inner, false)?,
-            o: Linear::load(map, &weights::join_key(prefix, "o"), inner, cfg.d_model, false)?,
+            q: Linear::load(
+                map,
+                &weights::join_key(prefix, "q"),
+                cfg.d_model,
+                inner,
+                false,
+            )?,
+            k: Linear::load(
+                map,
+                &weights::join_key(prefix, "k"),
+                cfg.d_model,
+                inner,
+                false,
+            )?,
+            v: Linear::load(
+                map,
+                &weights::join_key(prefix, "v"),
+                cfg.d_model,
+                inner,
+                false,
+            )?,
+            o: Linear::load(
+                map,
+                &weights::join_key(prefix, "o"),
+                inner,
+                cfg.d_model,
+                false,
+            )?,
             relative_bias: weights::cuda_tensor_shaped(
                 map,
                 &weights::join_key(prefix, "relative_attention_bias.weight"),
@@ -150,10 +191,10 @@ impl SelfAttention {
         let bias = CudaTensor::from_vec(bias, vec![1, self.n_heads, s, s])?;
         scores = scores.add(&bias)?;
         let attn = scores.softmax(-1)?;
-        let ctx = attn
-            .matmul(&v)?
-            .transpose(1, 2)?
-            .reshape(vec![b, s, self.n_heads * self.d_kv])?;
+        let ctx =
+            attn.matmul(&v)?
+                .transpose(1, 2)?
+                .reshape(vec![b, s, self.n_heads * self.d_kv])?;
         self.o.forward(&ctx)
     }
 }
@@ -190,7 +231,11 @@ impl EncoderLayer {
                 &weights::join_key(prefix, "layer.0.layer_norm.weight"),
                 &[cfg.d_model],
             )?,
-            ff: DenseGated::load(map, &weights::join_key(prefix, "layer.1.DenseReluDense"), cfg)?,
+            ff: DenseGated::load(
+                map,
+                &weights::join_key(prefix, "layer.1.DenseReluDense"),
+                cfg,
+            )?,
             ln2: weights::cuda_tensor_shaped(
                 map,
                 &weights::join_key(prefix, "layer.1.layer_norm.weight"),
@@ -242,7 +287,11 @@ impl Umt5Encoder {
         };
         let mut layers = Vec::with_capacity(cfg.num_layers);
         for i in 0..cfg.num_layers {
-            layers.push(EncoderLayer::load(map, &format!("encoder.block.{i}"), &cfg)?);
+            layers.push(EncoderLayer::load(
+                map,
+                &format!("encoder.block.{i}"),
+                &cfg,
+            )?);
         }
         Ok(Self {
             embed: weights::cuda_tensor_shaped(map, embed_key, &[cfg.vocab_size, cfg.d_model])?,
@@ -291,4 +340,34 @@ pub fn pad_prompt_embeds(
     }
     let refs: Vec<&CudaTensor> = rows.iter().collect();
     CudaTensor::cat(&refs, 0)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Buckets for a 12-token encoder, from HF's `UMT5Attention._relative_position_bucket`
+    /// (`relative_buckets += (relative_position > 0) * num_buckets; abs(...)`).
+    ///
+    /// This is the one property the whole encoder's word order rests on: UMT5
+    /// has no absolute or rotary positions, so a mirrored table is the only
+    /// thing standing between "a dog running on a beach" and "a dog".
+    #[test]
+    fn relative_buckets_match_the_hf_reference() {
+        let s = 12;
+        let got = relative_position_bucket(s, 32, 128);
+        // Query 0: every key is at or after it, so all land in the upper half.
+        let row0: Vec<usize> = (0..s).map(|j| got[j]).collect();
+        assert_eq!(row0, vec![0, 17, 18, 19, 20, 21, 22, 23, 24, 24, 24, 24]);
+        // Query 5: keys before it stay low, keys after it take the +16 offset.
+        let row5: Vec<usize> = (0..s).map(|j| got[5 * s + j]).collect();
+        assert_eq!(row5, vec![5, 4, 3, 2, 1, 0, 17, 18, 19, 20, 21, 22]);
+        // Query 11: every key is at or before it, so nothing takes the offset.
+        let row11: Vec<usize> = (0..s).map(|j| got[11 * s + j]).collect();
+        assert_eq!(row11, vec![8, 8, 8, 8, 7, 6, 5, 4, 3, 2, 1, 0]);
+        // Only the diagonal is symmetric; swapping the halves would keep just it.
+        for i in 0..s {
+            assert_eq!(got[i * s + i], 0, "self-attention distance is bucket 0");
+        }
+    }
 }

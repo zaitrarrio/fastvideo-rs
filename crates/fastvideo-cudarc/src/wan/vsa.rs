@@ -96,7 +96,15 @@ impl TilePlan {
                 }
             }
         }
-        Ok(Self { grid, tiles, seq, padded, slot_src, token_slot, block_sizes })
+        Ok(Self {
+            grid,
+            tiles,
+            seq,
+            padded,
+            slot_src,
+            token_slot,
+            block_sizes,
+        })
     }
 }
 
@@ -121,7 +129,10 @@ pub fn vsa_attention_host(
     let want = b * heads * seq * dim;
     for (name, buf) in [("q", q), ("k", k), ("v", v)] {
         if buf.len() != want {
-            return Err(TensorError::Message(format!("vsa: {name} has {} elements, want {want}", buf.len())));
+            return Err(TensorError::Message(format!(
+                "vsa: {name} has {} elements, want {want}",
+                buf.len()
+            )));
         }
     }
     if gate.is_some_and(|g| g.len() != want) {
@@ -149,7 +160,11 @@ pub fn vsa_attention_host(
             }
             for slot in tile * TILE_ELEMS..tile * TILE_ELEMS + plan.block_sizes[tile] as usize {
                 let token = plan.slot_src[slot] as usize;
-                let (qr, kr, vr) = (row(q, base, token, dim), row(k, base, token, dim), row(v, base, token, dim));
+                let (qr, kr, vr) = (
+                    row(q, base, token, dim),
+                    row(k, base, token, dim),
+                    row(v, base, token, dim),
+                );
                 for d in 0..dim {
                     qc[tile * dim + d] += qr[d];
                     kc[tile * dim + d] += kr[d];
@@ -169,8 +184,9 @@ pub fn vsa_attention_host(
         for qt in 0..nb {
             let s = &mut scores[qt * nb..(qt + 1) * nb];
             for (kt, slot) in s.iter_mut().enumerate() {
-                let dot: f64 =
-                    (0..dim).map(|d| f64::from(qc[qt * dim + d]) * f64::from(kc[kt * dim + d])).sum();
+                let dot: f64 = (0..dim)
+                    .map(|d| f64::from(qc[qt * dim + d]) * f64::from(kc[kt * dim + d]))
+                    .sum();
                 *slot = (dot * f64::from(scale)) as f32;
             }
             let m = s.iter().copied().fold(f32::NEG_INFINITY, f32::max);
@@ -190,9 +206,7 @@ pub fn vsa_attention_host(
         let mut order: Vec<u32> = (0..nb as u32).collect();
         for qt in 0..nb {
             let s = &scores[qt * nb..(qt + 1) * nb];
-            order.sort_by(|&a, &b| {
-                s[b as usize].total_cmp(&s[a as usize]).then(a.cmp(&b))
-            });
+            order.sort_by(|&a, &b| s[b as usize].total_cmp(&s[a as usize]).then(a.cmp(&b)));
             selected[qt * topk..(qt + 1) * topk].copy_from_slice(&order[..topk]);
             order.sort_unstable();
         }
@@ -210,13 +224,18 @@ pub fn vsa_attention_host(
                     let kt = kt as usize;
                     for kslot in kt * TILE_ELEMS..kt * TILE_ELEMS + plan.block_sizes[kt] as usize {
                         let ktok = plan.slot_src[kslot] as usize;
-                        let dot: f64 =
-                            (0..dim).map(|d| f64::from(qr[d]) * f64::from(k[base + ktok * dim + d])).sum();
+                        let dot: f64 = (0..dim)
+                            .map(|d| f64::from(qr[d]) * f64::from(k[base + ktok * dim + d]))
+                            .sum();
                         let s = (dot * f64::from(scale)) as f32;
                         // Online softmax: rescale the running sums when a new
                         // maximum arrives, so long tile lists stay stable.
                         if s > m {
-                            let shrink = if m.is_finite() { f64::from(m - s).exp() } else { 0.0 };
+                            let shrink = if m.is_finite() {
+                                f64::from(m - s).exp()
+                            } else {
+                                0.0
+                            };
                             z *= shrink;
                             for a in acc.iter_mut() {
                                 *a *= shrink;
@@ -242,11 +261,58 @@ pub fn vsa_attention_host(
     Ok(out)
 }
 
-/// `FASTVIDEO_VSA_FUSED=1` runs the fine stage as one fused kernel instead of
-/// gather + batched GEMM.
+/// Which fine-stage implementation runs.
 #[cfg(feature = "cuda")]
-fn fused_enabled() -> bool {
-    super::envflag::bool_flag("FASTVIDEO_VSA_FUSED", false)
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FineKernel {
+    /// Gather selected K/V into dense buffers per query tile, then cuBLAS.
+    /// Materialises every tile ~topk times; measured at ~21% of the DiT.
+    Gather,
+    /// The scalar-f32 fused kernel: streams K/V, but no tensor cores. Kept
+    /// as the measured negative result it is (8x slower than Gather).
+    FusedScalar,
+    /// Streams K/V through `mma.sync` bf16 tensor cores with an online
+    /// softmax, as the reference kernels do. Needs sm80+ and dim 128.
+    /// On sm90+ the same math loads tiles via TMA 128B swizzle unless
+    /// `FASTVIDEO_VSA_TMA=0` or `FASTVIDEO_VSA_KERNEL=mma`.
+    Mma,
+}
+
+/// `FASTVIDEO_VSA_KERNEL=auto|gather|fused|mma`. `FASTVIDEO_VSA_FUSED=1` is
+/// the old spelling of `fused`.
+///
+/// `auto` picks by hardware: the tensor-core kernel wherever `mma.sync` bf16
+/// exists (sm80+) at Wan's geometry, the gather path otherwise. It became the
+/// default in the commit that recorded its verification — kernels tier on an
+/// RTX 5090, rel_l2 0.0029/0.0031 against the host reference, 2.98x / 2.85x /
+/// 5.42x faster than the gather path at 1,456 / 4,368 / 13,104 tokens. Its
+/// first run had been selected by default *before* verification, on a build
+/// where a missing arch mapping compiled the body out; a default may only
+/// point at a verified kernel, which is why the flip is its own commit.
+#[cfg(feature = "cuda")]
+fn fine_kernel(dim: usize, tile_elems: usize) -> FineKernel {
+    use super::envflag::{bool_flag, string_flag};
+    let pick = string_flag("FASTVIDEO_VSA_KERNEL", "auto");
+    let sm = super::device::global_device()
+        .map(|d| d.sm_major)
+        .unwrap_or(0);
+    let mma_ok = sm >= 8 && dim == 128 && tile_elems == TILE_ELEMS;
+    let chosen = match pick.as_str() {
+        "gather" => FineKernel::Gather,
+        "fused" => FineKernel::FusedScalar,
+        "mma" => FineKernel::Mma,
+        _ if bool_flag("FASTVIDEO_VSA_FUSED", false) => FineKernel::FusedScalar,
+        _ if mma_ok => FineKernel::Mma,
+        _ => FineKernel::Gather,
+    };
+    // An explicit ask for a kernel the hardware cannot run is an error at the
+    // call site, not a silent substitution; `auto` is the only fallback.
+    static LOGGED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+    super::log::info_once(
+        &LOGGED,
+        format_args!("vsa fine kernel: {chosen:?} (sm{sm}, dim {dim}, {pick})"),
+    );
+    chosen
 }
 
 /// Everything a VSA layer needs for one latent grid: the uploaded tiling, how
@@ -269,7 +335,12 @@ impl VsaCtx {
         let plan = TilePlan::new(grid)?;
         let topk = topk_for(sparsity, plan.num_tiles());
         let dev = super::ops::vsa_plan_upload(&plan.slot_src, &plan.block_sizes, TILE_ELEMS)?;
-        Ok(Self { plan: dev, topk, seq: plan.seq, group: group.max(1) })
+        Ok(Self {
+            plan: dev,
+            topk,
+            seq: plan.seq,
+            group: group.max(1),
+        })
     }
 }
 
@@ -300,51 +371,97 @@ pub fn vsa_attention_device(
     let topk = topk.clamp(1, nb);
     let err = |e: device::DeviceError| TensorError::Message(e.to_string());
 
+    use super::stats::phase;
     // 1. Tile means, then coarse attention over tiles.
-    let (qc, kc, vc) = (
-        ops::vsa_tile_mean_device(q, plan, bh, seq, dim)?,
-        ops::vsa_tile_mean_device(k, plan, bh, seq, dim)?,
-        ops::vsa_tile_mean_device(v, plan, bh, seq, dim)?,
-    );
-    let mut scores = ops::alloc(bh * nb * nb)?;
-    device::matmul_linear_wt_strided_batched_f32(&qc, &kc, &mut scores, bh, nb, dim, nb, scale).map_err(err)?;
-    let probs = ops::softmax_last_device(&scores, nb)?;
-    let mut coarse = ops::alloc(bh * nb * dim)?;
-    device::matmul_2d_strided_batched_f32(&probs, &vc, &mut coarse, bh, nb, nb, dim).map_err(err)?;
+    let (qc, kc, vc) = phase("vsa_1_tile_mean", || {
+        Ok::<_, TensorError>((
+            ops::vsa_tile_mean_device(q, plan, bh, seq, dim)?,
+            ops::vsa_tile_mean_device(k, plan, bh, seq, dim)?,
+            ops::vsa_tile_mean_device(v, plan, bh, seq, dim)?,
+        ))
+    })?;
+    let (scores, coarse) = phase("vsa_2_coarse", || {
+        let mut scores = ops::alloc(bh * nb * nb)?;
+        device::matmul_linear_wt_strided_batched_f32(&qc, &kc, &mut scores, bh, nb, dim, nb, scale)
+            .map_err(err)?;
+        let probs = ops::softmax_last_device(&scores, nb)?;
+        let mut coarse = ops::alloc(bh * nb * dim)?;
+        device::matmul_2d_strided_batched_f32(&probs, &vc, &mut coarse, bh, nb, nb, dim)
+            .map_err(err)?;
+        Ok::<_, TensorError>((scores, coarse))
+    })?;
 
     // 2. Tiles to attend to, from the same coarse scores (pre-softmax order is
     //    the same, but top-k on the raw scores matches upstream).
-    let selected = ops::vsa_topk_device(&scores, bh * nb, nb, topk)?;
-    drop(probs);
+    let selected = phase("vsa_3_topk", || {
+        ops::vsa_topk_device(&scores, bh * nb, nb, topk)
+    })?;
     drop(scores);
 
     // 3. Fine stage. The fused kernel streams K/V from the tiled layout; the
     //    gather path materialises them and lets cuBLAS use tensor cores. Which
     //    is faster is hardware-dependent, so it is a flag, not a decision.
     let mut out = ops::fill_device(bh * seq * dim, 0.0)?;
-    if fused_enabled() {
-        let sparse = ops::vsa_fused_attn_device(q, k, v, &selected, plan, bh, seq, dim, topk, scale)?;
-        ops::vsa_combine_device(&sparse, &coarse, gate, plan, &mut out, bh, nb, 0, seq, dim)?;
-        return Ok(out);
+    match fine_kernel(dim, plan.tile_elems) {
+        FineKernel::Mma => {
+            let sparse = phase("vsa_4_mma", || {
+                ops::vsa_mma_attn_device(q, k, v, &selected, plan, bh, seq, dim, topk, scale)
+            })?;
+            phase("vsa_8_combine", || {
+                ops::vsa_combine_device(&sparse, &coarse, gate, plan, &mut out, bh, nb, 0, seq, dim)
+            })?;
+            return Ok(out);
+        }
+        FineKernel::FusedScalar => {
+            let sparse =
+                ops::vsa_fused_attn_device(q, k, v, &selected, plan, bh, seq, dim, topk, scale)?;
+            ops::vsa_combine_device(&sparse, &coarse, gate, plan, &mut out, bh, nb, 0, seq, dim)?;
+            return Ok(out);
+        }
+        FineKernel::Gather => {}
     }
     let len = topk * plan.tile_elems;
     let group = group.clamp(1, nb);
     let mut q_base = 0usize;
     while q_base < nb {
         let g = group.min(nb - q_base);
-        let (kg, vg) = ops::vsa_gather_kv_device(k, v, &selected, plan, bh, g, seq, dim, topk, q_base)?;
+        // The gather is what the rejected fused kernel existed to remove; it is
+        // timed separately so its real share is a number rather than a guess.
+        let (kg, vg) = phase("vsa_4_gather_kv", || {
+            ops::vsa_gather_kv_device(k, v, &selected, plan, bh, g, seq, dim, topk, q_base)
+        })?;
         // Queries for these tiles, in padded slot order.
-        let qt = ops::vsa_gather_q_device(q, plan, bh, g, q_base, seq, dim)?;
+        let qt = phase("vsa_5_gather_q", || {
+            ops::vsa_gather_q_device(q, plan, bh, g, q_base, seq, dim)
+        })?;
         let rows = plan.tile_elems;
-        let mut s = ops::alloc(bh * g * rows * len)?;
-        device::matmul_linear_wt_strided_batched_bf16(&qt, &kg, &mut s, bh * g, rows, dim, len, scale)
+        let p = phase("vsa_6_fine_qk_softmax", || {
+            let mut s = ops::alloc(bh * g * rows * len)?;
+            device::matmul_linear_wt_strided_batched_bf16(
+                &qt,
+                &kg,
+                &mut s,
+                bh * g,
+                rows,
+                dim,
+                len,
+                scale,
+            )
             .map_err(err)?;
-        ops::vsa_mask_pad_device(&mut s, &selected, plan, bh, g, rows, topk, q_base)?;
-        let p = ops::softmax_last_bf16_device(&s, len)?;
-        drop(s);
-        let mut sparse = ops::alloc(bh * g * rows * dim)?;
-        device::matmul_2d_strided_batched_bf16(&p, &vg, &mut sparse, bh * g, rows, len, dim).map_err(err)?;
-        ops::vsa_combine_device(&sparse, &coarse, gate, plan, &mut out, bh, g, q_base, seq, dim)?;
+            ops::vsa_mask_pad_device(&mut s, &selected, plan, bh, g, rows, topk, q_base)?;
+            ops::softmax_last_bf16_device(&s, len)
+        })?;
+        let sparse = phase("vsa_7_fine_pv", || {
+            let mut sparse = ops::alloc(bh * g * rows * dim)?;
+            device::matmul_2d_strided_batched_bf16(&p, &vg, &mut sparse, bh * g, rows, len, dim)
+                .map_err(err)?;
+            Ok::<_, TensorError>(sparse)
+        })?;
+        phase("vsa_8_combine", || {
+            ops::vsa_combine_device(
+                &sparse, &coarse, gate, plan, &mut out, bh, g, q_base, seq, dim,
+            )
+        })?;
         q_base += g;
     }
     Ok(out)
@@ -376,7 +493,10 @@ mod tests {
                 assert_eq!(p.token_slot[token] as usize, slot);
             }
             assert!(seen.iter().all(|&s| s), "grid {grid:?} lost a token");
-            assert_eq!(p.block_sizes.iter().map(|&n| n as usize).sum::<usize>(), p.seq);
+            assert_eq!(
+                p.block_sizes.iter().map(|&n| n as usize).sum::<usize>(),
+                p.seq
+            );
             assert!(p.block_sizes.iter().all(|&n| n as usize <= TILE_ELEMS));
         }
     }
@@ -420,7 +540,9 @@ mod tests {
             let mut s = seed;
             (0..n)
                 .map(|_| {
-                    s = s.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+                    s = s
+                        .wrapping_mul(6364136223846793005)
+                        .wrapping_add(1442695040888963407);
                     ((s >> 33) as f32 / (1u64 << 31) as f32) - 0.5
                 })
                 .collect()
@@ -429,8 +551,19 @@ mod tests {
         let gate = vec![0.0f32; n];
         let scale = 1.0 / (dim as f32).sqrt();
 
-        let got = vsa_attention_host(&q, &k, &v, Some(&gate), &plan, plan.num_tiles(), b, heads, dim, scale)
-            .unwrap();
+        let got = vsa_attention_host(
+            &q,
+            &k,
+            &v,
+            Some(&gate),
+            &plan,
+            plan.num_tiles(),
+            b,
+            heads,
+            dim,
+            scale,
+        )
+        .unwrap();
 
         // Plain dense attention over the same tokens.
         let mut want = vec![0.0f32; n];
@@ -439,14 +572,19 @@ mod tests {
             for i in 0..seq {
                 let s: Vec<f32> = (0..seq)
                     .map(|j| {
-                        (0..dim).map(|d| q[base + i * dim + d] * k[base + j * dim + d]).sum::<f32>() * scale
+                        (0..dim)
+                            .map(|d| q[base + i * dim + d] * k[base + j * dim + d])
+                            .sum::<f32>()
+                            * scale
                     })
                     .collect();
                 let m = s.iter().copied().fold(f32::NEG_INFINITY, f32::max);
                 let e: Vec<f64> = s.iter().map(|x| f64::from(x - m).exp()).collect();
                 let z: f64 = e.iter().sum();
                 for d in 0..dim {
-                    let acc: f64 = (0..seq).map(|j| e[j] * f64::from(v[base + j * dim + d])).sum();
+                    let acc: f64 = (0..seq)
+                        .map(|j| e[j] * f64::from(v[base + j * dim + d]))
+                        .sum();
                     want[base + i * dim + d] = (acc / z) as f32;
                 }
             }
@@ -469,16 +607,50 @@ mod tests {
         let scale = 1.0 / (dim as f32).sqrt();
         let nb = plan.num_tiles();
 
-        let zero = vsa_attention_host(&q, &k, &v, Some(&vec![0.0; n]), &plan, nb, b, heads, dim, scale).unwrap();
-        let one = vsa_attention_host(&q, &k, &v, Some(&vec![1.0; n]), &plan, nb, b, heads, dim, scale).unwrap();
+        let zero = vsa_attention_host(
+            &q,
+            &k,
+            &v,
+            Some(&vec![0.0; n]),
+            &plan,
+            nb,
+            b,
+            heads,
+            dim,
+            scale,
+        )
+        .unwrap();
+        let one = vsa_attention_host(
+            &q,
+            &k,
+            &v,
+            Some(&vec![1.0; n]),
+            &plan,
+            nb,
+            b,
+            heads,
+            dim,
+            scale,
+        )
+        .unwrap();
         let none = vsa_attention_host(&q, &k, &v, None, &plan, nb, b, heads, dim, scale).unwrap();
         // gate=None means a gate of one, and `one - zero` is exactly the
         // coarse term: individual components can vanish, so compare in bulk.
         for i in 0..n {
-            assert!((one[i] - none[i]).abs() < 1e-6, "gate=1 must equal gate=None at {i}");
+            assert!(
+                (one[i] - none[i]).abs() < 1e-6,
+                "gate=1 must equal gate=None at {i}"
+            );
         }
-        let spread = one.iter().zip(&zero).map(|(a, b)| (a - b).abs()).fold(0.0f32, f32::max);
-        assert!(spread > 1e-4, "gating the coarse branch changed nothing (max delta {spread})");
+        let spread = one
+            .iter()
+            .zip(&zero)
+            .map(|(a, b)| (a - b).abs())
+            .fold(0.0f32, f32::max);
+        assert!(
+            spread > 1e-4,
+            "gating the coarse branch changed nothing (max delta {spread})"
+        );
     }
 
     #[test]
@@ -491,14 +663,32 @@ mod tests {
             s = s.wrapping_mul(6364136223846793005).wrapping_add(1);
             ((s >> 33) as f32 / (1u64 << 31) as f32) - 0.5
         };
-        let (q, k, v): (Vec<f32>, Vec<f32>, Vec<f32>) =
-            ((0..n).map(|_| rnd()).collect(), (0..n).map(|_| rnd()).collect(), (0..n).map(|_| rnd()).collect());
+        let (q, k, v): (Vec<f32>, Vec<f32>, Vec<f32>) = (
+            (0..n).map(|_| rnd()).collect(),
+            (0..n).map(|_| rnd()).collect(),
+            (0..n).map(|_| rnd()).collect(),
+        );
         let scale = 1.0 / (dim as f32).sqrt();
         let nb = plan.num_tiles();
-        let sparse = vsa_attention_host(&q, &k, &v, None, &plan, topk_for(0.8, nb), b, heads, dim, scale).unwrap();
+        let sparse = vsa_attention_host(
+            &q,
+            &k,
+            &v,
+            None,
+            &plan,
+            topk_for(0.8, nb),
+            b,
+            heads,
+            dim,
+            scale,
+        )
+        .unwrap();
         assert!(sparse.iter().all(|x| x.is_finite()));
         let dense = vsa_attention_host(&q, &k, &v, None, &plan, nb, b, heads, dim, scale).unwrap();
         assert!(dense.iter().all(|x| x.is_finite()));
-        assert!(sparse.iter().zip(&dense).any(|(a, b)| (a - b).abs() > 1e-6), "sparsity changed nothing");
+        assert!(
+            sparse.iter().zip(&dense).any(|(a, b)| (a - b).abs() > 1e-6),
+            "sparsity changed nothing"
+        );
     }
 }

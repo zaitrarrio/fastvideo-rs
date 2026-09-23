@@ -14,3 +14,5 @@ artifacts/
 *.bin
 *.gguf
 .cache/
+__pycache__/
+rust_out

@@ -1,0 +1,23 @@
+[package]
+name = "fastvideo-mlx"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Apple Silicon MLX scaffold for FastMetal-QAD / FastH3 (no CUDA)."
+rust-version.workspace = true
+
+[dependencies]
+# Host stubs always; mlx-rs only on Apple Silicon (see target section).
+
+[target.'cfg(all(target_os = "macos", target_arch = "aarch64"))'.dependencies]
+# Real Metal bindings. Optional so `cargo check -p fastvideo-mlx` stays green
+# without `--features mlx`; enable with `--features mlx` on aarch64 macOS.
+mlx-rs = { version = "0.25", optional = true, default-features = false, features = ["metal"] }
+
+[features]
+default = []
+# Links mlx-rs on aarch64-apple-darwin only (target-specific optional dep).
+mlx = ["dep:mlx-rs"]
+
+[lints]
+workspace = true

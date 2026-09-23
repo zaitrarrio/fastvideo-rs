@@ -51,14 +51,21 @@ pub fn load(path: &Path) -> Result<HashMap<String, F32Tensor>> {
     let mut out = HashMap::new();
     for (name, view) in st.tensors() {
         if view.dtype() != Dtype::F32 {
-            bail!("{}: tensor {name} is {:?}, expected F32", path.display(), view.dtype());
+            bail!(
+                "{}: tensor {name} is {:?}, expected F32",
+                path.display(),
+                view.dtype()
+            );
         }
         let data = view
             .data()
             .chunks_exact(4)
             .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
             .collect();
-        out.insert(name.to_string(), F32Tensor::new(view.shape().to_vec(), data)?);
+        out.insert(
+            name.to_string(),
+            F32Tensor::new(view.shape().to_vec(), data)?,
+        );
     }
     Ok(out)
 }
@@ -76,7 +83,11 @@ mod tests {
     fn roundtrip() {
         let dir = std::env::temp_dir().join("fv-gpucheck-st-roundtrip");
         let path = dir.join("t.safetensors");
-        let t = F32Tensor::new(vec![2, 3], vec![1.0, 2.0, 3.0, -4.0, 5.5, f32::MIN_POSITIVE]).unwrap();
+        let t = F32Tensor::new(
+            vec![2, 3],
+            vec![1.0, 2.0, 3.0, -4.0, 5.5, f32::MIN_POSITIVE],
+        )
+        .unwrap();
         save(&path, &[("x", &t)]).unwrap();
         let mut back = load(&path).unwrap();
         let x = take(&mut back, "x", &path).unwrap();

@@ -7,26 +7,16 @@ description = "FastVideo-rs pipeline core: registry, sampling, VideoGenerator."
 
 [dependencies]
 thiserror.workspace = true
-candle-core.workspace = true
 fastvideo-models.workspace = true
 fastvideo-loader.workspace = true
 fastvideo-ops.workspace = true
-fastvideo-burn.workspace = true
-fastvideo-luminal.workspace = true
 fastvideo-cudarc.workspace = true
 serde_json.workspace = true
 
 [features]
 default = []
-# Full CUDA stack (Candle kernels + Burn CubeCL + cudarc). Slow cold builds.
-cuda = [
-    "candle-core/cuda",
-    "fastvideo-models/cuda",
-    "fastvideo-loader/cuda",
-    "fastvideo-burn/cuda",
-    "cuda-cudarc",
-]
-# Lean GPU path: only `fastvideo-cudarc` (no Candle kernels / Burn CubeCL).
+# CUDA via cudarc (primary / only GPU path).
+cuda = ["cuda-cudarc"]
 cuda-cudarc = ["fastvideo-cudarc/cuda"]
 
 [lints]

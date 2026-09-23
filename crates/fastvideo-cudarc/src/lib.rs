@@ -9,7 +9,34 @@
 
 #![allow(unsafe_code)]
 
+pub mod cosmos;
+pub mod dreamx;
+pub mod flux;
+pub mod flux2;
+pub mod gamecraft;
+pub mod gen3c;
+pub mod glm_image;
+pub mod h3;
+pub mod hub_keys;
+pub mod hunyuan15;
+pub mod hyworld;
+pub mod kandinsky5;
+pub mod lingbot;
+pub mod lingbotworld;
+pub mod llm;
+pub mod longcat;
+pub mod ltx2;
+pub mod matrixgame;
+pub mod mmaudio;
+pub mod pisa_attn;
+pub mod sd35;
+pub mod sol_attn;
+pub mod stable_audio;
+pub mod text_encode;
+pub mod vae;
 pub mod wan;
+pub mod world_fuse;
+pub mod zimage;
 
 pub use wan::device::{resolve_device, DeviceError};
 pub use wan::{
@@ -17,7 +44,7 @@ pub use wan::{
     WanPipeline,
 };
 
-use fastvideo_ops::{Device, DType, HostBackend, HostTensor, OpsError, TensorBackend};
+use fastvideo_ops::{DType, Device, HostBackend, HostTensor, OpsError, TensorBackend};
 
 #[derive(Debug, Clone, Copy, Default)]
 pub struct CudarcBackend;
@@ -34,11 +61,19 @@ impl TensorBackend for CudarcBackend {
         HostBackend::map_device(device)
     }
 
-    fn zeros(shape: &[usize], dtype: DType, device: &Self::Device) -> Result<Self::Tensor, OpsError> {
+    fn zeros(
+        shape: &[usize],
+        dtype: DType,
+        device: &Self::Device,
+    ) -> Result<Self::Tensor, OpsError> {
         HostBackend::zeros(shape, dtype, device)
     }
 
-    fn from_f32(data: &[f32], shape: &[usize], device: &Self::Device) -> Result<Self::Tensor, OpsError> {
+    fn from_f32(
+        data: &[f32],
+        shape: &[usize],
+        device: &Self::Device,
+    ) -> Result<Self::Tensor, OpsError> {
         HostBackend::from_f32(data, shape, device)
     }
 
@@ -82,7 +117,11 @@ impl TensorBackend for CudarcBackend {
         HostBackend::softmax(a, dim)
     }
 
-    fn rms_norm(a: &Self::Tensor, weight: &Self::Tensor, eps: f32) -> Result<Self::Tensor, OpsError> {
+    fn rms_norm(
+        a: &Self::Tensor,
+        weight: &Self::Tensor,
+        eps: f32,
+    ) -> Result<Self::Tensor, OpsError> {
         HostBackend::rms_norm(a, weight, eps)
     }
 

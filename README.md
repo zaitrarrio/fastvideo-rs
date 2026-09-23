@@ -3,7 +3,7 @@
 Rust inference port of [FastVideo](https://github.com/hao-ai-lab/FastVideo) for the
 Wan / FastWan family. **Primary generate path: cudarc CUDA** (lean
 `--features cuda-cudarc`). Candle remains a frozen behavioral oracle for ports;
-Burn and Luminal are frozen (no new Wan features).
+Luminal is frozen (no new Wan features).
 
 Real inference targets Vast.ai NVIDIA GPUs. Mac/CI stay on CPU (cudarc without
 `--features cuda` / `cuda-cudarc` errors if CUDA is requested).
@@ -23,11 +23,26 @@ Real inference targets Vast.ai NVIDIA GPUs. Mac/CI stay on CPU (cudarc without
 | TeaCache / chunked SDPA / resident weights | TeaCache Wan2.1 poly (`FASTVIDEO_TEACACHE=1`); residency + BF16 default-on CUDA (`FASTVIDEO_RESIDENT=0` / `FASTVIDEO_BF16=0` escape); dense SDPA (+ SP via `--num-gpus`); Hopper defaults: TF32 (`FASTVIDEO_TF32=0` off), device UniPC (`FASTVIDEO_DEVICE_SCHED=0` off), SDPA chunk (`FASTVIDEO_SDPA_CHUNK`); logging via `FASTVIDEO_LOG` (`0`/`info`/`debug`); GPU-path auditing: `FASTVIDEO_STRICT_DEVICE=1` hard-fails a hot op (layer_norm/modulate/gate_mul/attention) that silently falls back to host compute with a live device instead of quietly running slower; `FASTVIDEO_DEVICE_STATS=1` prints a non-fatal per-op device-vs-host dispatch summary after `generate()` |
 | Fun Control / Lucy edit | supported via `--control` / `--image` (latent inject or I2V pack) |
 | Fun InP | supported (1.3B arch + `--image` I2V pack path) |
-| Candle / Burn / Luminal | **frozen** |
+| Candle / Luminal | **frozen** |
 | Sequence parallel | `--num-gpus N` (query-seq shard, real per-rank devices via `FASTVIDEO_SP_WORLD`, host-mediated all-gather) |
 | VSA | `FASTVIDEO_VSA=1` → in-tree block-sparse SDPA (hard-fail without flag) |
 | Flash-style SDPA | default (`FASTVIDEO_SDPA=flash`); `dense` / `sparse` overrides |
 | GPU tests + benches | Vast (`scripts/vast-gpu-bench.sh`) |
+
+## Tasks
+
+Everything below is wrapped in a [Taskfile](https://taskfile.dev) — `task` alone lists them.
+
+```bash
+task check      # lint, tests, the NVRTC gate, cuda type-check — no GPU, no cost
+task up         # build the dist binary, then open the control panel
+task clip       # rent a GPU and run the full validation tier (~$0.12)
+task gen PROMPT="a dog running on a beach"
+task instances  # what is currently billing
+task reap       # destroy every fvgpu-* instance
+```
+
+Tasks that rent hardware say so in their description, with what a run costs.
 
 ## CLI (CPU / CI)
 
@@ -102,13 +117,11 @@ Crates cache in the Docker volume `fastvideo-rs-cargo-registry`. Copy the binary
 crates/
   fastvideo-ops        TensorBackend trait + host CPU reference
   fastvideo-core       registry, SamplingParam, VideoGenerator
-  fastvideo-models     Wan DiT / VAE / UMT5 + schedulers (Candle oracle)
-  fastvideo-loader     Diffusers safetensors load
-  fastvideo-cudarc     **primary** Wan generate (cuBLAS / NVRTC / cuDNN)
-  fastvideo-candle     frozen Candle backend
-  fastvideo-burn       frozen Burn Wan
-  fastvideo-luminal    frozen Luminal Wan
+  fastvideo-models     schedulers, packing, architecture configs
+  fastvideo-loader     Diffusers safetensors (mmap / lazy)
+  fastvideo-cudarc     **primary** Wan / LTX / H3 generate (cuBLAS / NVRTC / cuDNN)
   fastvideo-cli        `fastvideo` binary
+  fastvideo-gpucheck   GPU parity / stage checks
 scripts/
   vast-sync.sh         rsync onto the Vast box
   vast-setup-cuda.sh   rustup + CUDA 12.4 nvcc

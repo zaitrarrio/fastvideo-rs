@@ -1,24 +1,15 @@
 use std::str::FromStr;
 
-/// Runtime backend selected by the user. Maps onto a `TensorBackend` impl.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+/// Runtime backend. Only cudarc remains; other names are rejected.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub enum BackendKind {
-    Host,
-    Burn,
-    Candle,
-    Luminal,
+    #[default]
     Cudarc,
 }
 
 impl BackendKind {
     pub fn as_str(self) -> &'static str {
-        match self {
-            Self::Host => "host",
-            Self::Burn => "burn",
-            Self::Candle => "candle",
-            Self::Luminal => "luminal",
-            Self::Cudarc => "cudarc",
-        }
+        "cudarc"
     }
 }
 
@@ -33,14 +24,11 @@ impl FromStr for BackendKind {
 
     fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
         match s.to_ascii_lowercase().as_str() {
-            "host" | "cpu" | "ref" => Ok(Self::Host),
-            "burn" => Ok(Self::Burn),
-            "candle" => Ok(Self::Candle),
-            "luminal" | "luminar" => Ok(Self::Luminal),
-            "cudarc" | "cdarc" | "cuda-native" => Ok(Self::Cudarc),
-            other => Err(format!(
-                "unknown backend `{other}` (expected host, burn, candle, luminal, or cudarc)"
-            )),
+            "cudarc" | "cdarc" | "cuda-native" | "cuda" => Ok(Self::Cudarc),
+            "candle" | "luminal" | "luminar" | "host" | "cpu" | "ref" | "burn" => {
+                Err(format!("backend `{s}` was removed; use cudarc"))
+            }
+            other => Err(format!("unknown backend `{other}` (expected cudarc)")),
         }
     }
 }
