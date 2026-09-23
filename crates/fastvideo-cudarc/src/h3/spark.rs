@@ -2,8 +2,8 @@
 //! at `d7c01b9011f2e8439493f6c02c29995a27df276f`, attention forced off) and
 //! `H3ToLTXConvAdapter` (`stage2_ops/h3_ltx_adapter/model.py`).
 //!
-//! The joint 3-step LTX refiner also needs `encode_audio`. This module stops
-//! at the cropped video latent.
+//! The joint 3-step LTX refiner is `Ltx2Pipeline::refine_joint`. It runs when
+//! `FASTVIDEO_LTX2_WEIGHTS` is set, on this cropped video latent plus the H3 PCM.
 
 use std::path::{Path, PathBuf};
 

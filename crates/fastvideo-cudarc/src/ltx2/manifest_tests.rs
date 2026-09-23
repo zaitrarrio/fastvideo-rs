@@ -29,6 +29,7 @@ use crate::llm::{self, DecoderConfig};
 use crate::wan::weights::WeightMap;
 
 use super::audio_vae::AudioDecoder;
+use super::audio_vae::AudioEncoder;
 use super::keys::{Keys, Layout};
 use super::text::TextConnectors;
 use super::transformer::Ltx2Transformer;
@@ -127,6 +128,19 @@ fn audio_vae_loader_asks_for_exactly_the_published_decoder() {
         k.starts_with("decoder.") || k.starts_with("latents_")
     }));
     assert_clean("audio_vae", problems);
+}
+
+#[test]
+fn audio_encoder_loader_asks_for_exactly_the_published_encoder() {
+    let published = manifest(include_str!("manifests/audio_vae.json"));
+    let (map, seen) = recording();
+    AudioEncoder::load(&map, &ltx2_19b_distilled().audio_vae).expect("load");
+    let seen = seen.lock().expect("lock").clone();
+    let mut problems = mismatches(&seen, &published);
+    problems.extend(unrequested(&seen, &published, |k| {
+        k.starts_with("encoder.") || k.starts_with("latents_")
+    }));
+    assert_clean("audio_vae encoder", problems);
 }
 
 #[test]

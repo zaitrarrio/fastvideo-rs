@@ -717,14 +717,14 @@ impl H3Pipeline {
 
     /// Generate one clip into `out_dir`: `frame-NNN.png`, `audio.wav`, and
     /// `output.mp4` with the audio muxed in.
-    fn spark_bridge(&self, latents: &CudaTensor) -> Result<()> {
+    fn spark_bridge(&self, latents: &CudaTensor) -> Result<Option<CudaTensor>> {
         if !self
             .options
             .recipe
             .as_deref()
             .is_some_and(fastvideo_models::h3::lora::is_sol_h3_spark_recipe)
         {
-            return Ok(());
+            return Ok(None);
         }
         match super::spark::SparkBridge::resolve(&self.root).map_err(|e| msg(e.to_string()))? {
             None => {
@@ -733,15 +733,22 @@ impl H3Pipeline {
                     fastvideo_models::h3::spark::UPSCALER_FILE,
                     self.root.display()
                 ));
-                Ok(())
+                Ok(None)
             }
             Some(bridge) => {
                 let refined = bridge.forward(latents).map_err(|e| msg(e.to_string()))?;
+                if std::env::var_os("FASTVIDEO_LTX2_WEIGHTS").is_none() {
+                    crate::wan::log::info(format_args!(
+                        "h3 sol-h3-spark: refiner video latent {:?}. Set FASTVIDEO_LTX2_WEIGHTS to run the 3-step LTX refiner. H3 decode continues.",
+                        refined.shape
+                    ));
+                    return Ok(None);
+                }
                 crate::wan::log::info(format_args!(
-                    "h3 sol-h3-spark: refiner video latent {:?}. Joint 3-step LTX refine needs encode_audio, which this crate does not have. H3 decode continues.",
+                    "h3 sol-h3-spark: refiner video latent {:?}. 3-step LTX refiner follows H3 decode.",
                     refined.shape
                 ));
-                Ok(())
+                Ok(Some(refined))
             }
         }
     }
@@ -988,7 +995,7 @@ impl H3Pipeline {
             geometry.token_grid,
             cfg.patch_size,
         )?;
-        self.spark_bridge(&latents)?;
+        let refined_video = self.spark_bridge(&latents)?;
         let timer = Instant::now();
         let mut writer =
             VideoWriter::spawn_with_audio(out_dir, H3_FPS as u32, request.mp4, Some(&wav))?;
@@ -1023,6 +1030,14 @@ impl H3Pipeline {
         let timer = Instant::now();
         let (frame_paths, mp4) = writer.finish()?;
         timings.write_s = timer.elapsed().as_secs_f64();
+        if let Some(video) = refined_video {
+            let refined = refine_spark(request, &video, &wave, sample_rate, out_dir)?;
+            crate::wan::log::info(format_args!(
+                "h3 sol-h3-spark: refined {} ({} frames)",
+                refined.mp4.as_deref().unwrap_or(refined.wav.as_str()),
+                refined.frames.len()
+            ));
+        }
 
         Ok(H3Output {
             geometry,
@@ -1037,6 +1052,63 @@ impl H3Pipeline {
             timings,
         })
     }
+}
+
+/// Load LTX-2.5 and run the 3-step joint refiner into `out_dir/refined`.
+/// The H3 DiT stays resident; this is a second model in the same process.
+fn refine_spark(
+    request: &H3Request,
+    video: &CudaTensor,
+    wave: &[f32],
+    sample_rate: u32,
+    out_dir: &Path,
+) -> Result<crate::ltx2::pipeline::Ltx2Output> {
+    use crate::ltx2::pipeline::{Ltx2Paths, Ltx2Pipeline, PipelineOptions};
+
+    let weights = match std::env::var("FASTVIDEO_LTX2_WEIGHTS") {
+        Ok(raw) => PathBuf::from(raw),
+        Err(_) => {
+            return Err(msg(
+                "h3 sol-h3-spark: FASTVIDEO_LTX2_WEIGHTS was unset before the refiner",
+            ))
+        }
+    };
+    if !weights.is_dir() {
+        return Err(msg(format!(
+            "h3 sol-h3-spark: FASTVIDEO_LTX2_WEIGHTS {} is not a directory",
+            weights.display()
+        )));
+    }
+    let dit = std::env::var("FASTVIDEO_LTX2_DIT")
+        .ok()
+        .map(PathBuf::from)
+        .unwrap_or_else(|| weights.join("transformer"));
+    let cfg = fastvideo_models::ltx2::ltx2_5_22b_distilled();
+    crate::wan::log::info(format_args!(
+        "h3 sol-h3-spark: loading LTX-2.5 from {} (DiT {}) beside the resident H3 model",
+        weights.display(),
+        dit.display()
+    ));
+    let mut pipeline = Ltx2Pipeline::load(
+        &Ltx2Paths {
+            weights,
+            dit,
+            text: None,
+        },
+        &cfg,
+        &PipelineOptions::default(),
+    )?;
+    pipeline.refine_joint(
+        video,
+        wave,
+        H3_AUDIO_CHANNELS,
+        sample_rate,
+        &request.prompt,
+        request.seed,
+        f64::from(H3_FPS as u32),
+        &out_dir.join("refined"),
+        request.mp4,
+    )
 }
 
 /// Qwen3-VL multimodal text for FL2VA keyframes / Ref2VA ordered refs.

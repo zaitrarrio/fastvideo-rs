@@ -19,7 +19,8 @@ pub const STAGE1_FORWARDS: usize = 4;
 
 /// Sol-H3-Spark draft canvas (`models/minimax_h3/Sol-H3-Spark` README).
 /// The H3×2 upscaler and H3-to-LTX adapter run when their checkpoints are
-/// configured. The joint 3-step LTX refiner still needs an audio VAE encode.
+/// configured. `FASTVIDEO_LTX2_WEIGHTS` then runs the joint 3-step LTX refiner
+/// on the bridged latent and the H3 PCM.
 pub const SPARK_DRAFT_WIDTH: usize = 672;
 pub const SPARK_DRAFT_HEIGHT: usize = 384;
 pub const SPARK_DRAFT_FRAMES: usize = 124;

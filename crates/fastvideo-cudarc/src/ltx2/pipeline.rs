@@ -34,7 +34,7 @@ use crate::wan::pipeline::{
 use crate::wan::tensor::{CudaTensor, TensorError};
 use crate::wan::weights::WeightMap;
 
-use super::audio_vae::AudioDecoder;
+use super::audio_vae::{conform_audio_time, pack_audio_latent, AudioDecoder, AudioEncoder};
 use super::diffusion_decoder::DiffusionDecoder;
 use super::keys::Keys;
 use super::latent_upsampler::LatentUpsampler;
@@ -1543,6 +1543,232 @@ impl Ltx2Pipeline {
             timings,
         })
     }
+
+    /// Spark joint refiner: a normalized video latent plus the draft PCM,
+    /// three stage-2 updates, then the video VAE muxed with that same PCM.
+    pub fn refine_joint(
+        &mut self,
+        video: &CudaTensor,
+        wave_planar: &[f32],
+        wave_channels: usize,
+        wave_rate: u32,
+        prompt: &str,
+        seed: u64,
+        frame_rate: f64,
+        out_dir: &Path,
+        mp4: bool,
+    ) -> Result<Ltx2Output> {
+        let cfg = self.cfg.clone();
+        let [b, c, f, h, w] = video.shape[..] else {
+            return Err(err(format!(
+                "ltx2 refine: video latent must be [1, C, F, H, W], got {:?}",
+                video.shape
+            )));
+        };
+        if b != 1 || c != cfg.transformer.in_channels || f == 0 || frame_rate <= 0.0 {
+            return Err(err(format!(
+                "ltx2 refine: expected [1, {}, F, H, W] at a positive frame rate, got {:?} @ {frame_rate}",
+                cfg.transformer.in_channels, video.shape
+            )));
+        }
+        let [st, sh, sw] = cfg.transformer.vae_scale_factors;
+        let pixel_frames = (f - 1) * st + 1;
+        let grid = [f, h, w];
+        if cfg.transformer.latent_grid(pixel_frames, h * sh, w * sw) != grid {
+            return Err(err(format!(
+                "ltx2 refine: latent {:?} is not the {pixel_frames}x{}x{} grid",
+                video.shape,
+                h * sh,
+                w * sw
+            )));
+        }
+        let audio_tokens = cfg.transformer.audio_tokens(pixel_frames, frame_rate);
+        if audio_tokens == 0 {
+            return Err(err(
+                "ltx2 refine: the clip is too short for a single audio latent",
+            ));
+        }
+
+        let encoder = AudioEncoder::load(&open_audio_encoder(&self.weights)?, &cfg.audio_vae)?;
+        let encoded = encoder.encode_waveform(wave_planar, wave_channels, wave_rate)?;
+        drop(encoder);
+        let [eb, ec, _, em] = encoded.shape[..] else {
+            return Err(err(format!(
+                "ltx2 refine: encoded audio {:?}, expected 4 dims",
+                encoded.shape
+            )));
+        };
+        if eb != 1 || ec != cfg.audio_vae.latent_channels || em != cfg.audio_vae.latent_mel_bins() {
+            return Err(err(format!(
+                "ltx2 refine: encoded audio {:?}, expected [1, {}, T, {}]",
+                encoded.shape,
+                cfg.audio_vae.latent_channels,
+                cfg.audio_vae.latent_mel_bins()
+            )));
+        }
+        let audio = pack_audio_latent(&conform_audio_time(&encoded, audio_tokens)?)?;
+        if audio.shape[2] != cfg.transformer.audio_in_channels {
+            return Err(err(format!(
+                "ltx2 refine: packed audio {:?}, DiT wants {} features",
+                audio.shape, cfg.transformer.audio_in_channels
+            )));
+        }
+        let video = pack_video(video)?;
+
+        let mut timings = Ltx2Timings::default();
+        let (contexts, text_report) = self.text.encode(prompt, true)?;
+        timings.text_s = text_report.seconds;
+        let strength = fastvideo_models::ltx2::lora::stage_strengths(cfg.version)
+            .map(|(_, stage2)| stage2)
+            .unwrap_or(0.0);
+        let schedule = Ltx2Schedule::distilled_stage_2_steps(3).map_err(err)?;
+        crate::wan::log::info(format_args!(
+            "ltx2 refine: 3 steps {:?}, sol stage-2, {}, grid {:?}, {} audio tokens",
+            &schedule.sigmas,
+            self.lora_note(true),
+            grid,
+            audio_tokens
+        ));
+        self.dit_for(strength)?;
+        self.arm_requested();
+        let text = {
+            let model = self.model.as_ref().expect("dit");
+            model.project_text(&contexts.video, &contexts.audio)?
+        };
+        let sigma = schedule.sigmas[0] as f32;
+        let mut rng = rand::rngs::StdRng::seed_from_u64(seed + 20_000);
+        let video = renoise(&video, sigma, &mut rng)?;
+        let audio = renoise(&audio, sigma, &mut rng)?;
+        let ropes = Ropes::new(&cfg.transformer, grid, audio_tokens, frame_rate as f32)?;
+        let timer = Instant::now();
+        let ancestral = cfg.version == Ltx2ModelVersion::V25;
+        let (video, _audio) = {
+            let model = self.model.as_ref().expect("dit");
+            if ancestral {
+                denoise_ancestral(
+                    model,
+                    &text,
+                    &ropes,
+                    &schedule,
+                    video,
+                    audio,
+                    AncestralOpts {
+                        eta: 1.0,
+                        s_noise: 1.0,
+                        noise_seed: seed + 30_000,
+                    },
+                    None,
+                    Ltx2Stage2Attn::Sol,
+                )?
+            } else {
+                denoise(
+                    model,
+                    &text,
+                    &ropes,
+                    &schedule,
+                    video,
+                    audio,
+                    None,
+                    Ltx2Stage2Attn::Sol,
+                )?
+            }
+        };
+        timings.stage2_s = timer.elapsed().as_secs_f64();
+        timings.denoise_s = timings.stage2_s;
+        drop(ropes);
+        drop(text);
+
+        std::fs::create_dir_all(out_dir).map_err(|e| err(format!("{}: {e}", out_dir.display())))?;
+        let timer = Instant::now();
+        let wav = out_dir.join("audio.wav");
+        let channel_count = u16::try_from(wave_channels)
+            .map_err(|_| err("ltx2 refine: too many audio channels"))?;
+        write_wav(
+            &wav,
+            &interleave_audio(wave_planar, wave_channels)?,
+            channel_count,
+            wave_rate,
+        )?;
+        timings.decode_audio_s = timer.elapsed().as_secs_f64();
+
+        let timer = Instant::now();
+        let fps = frame_rate.round().max(1.0) as u32;
+        let mut writer = VideoWriter::spawn_with_audio(out_dir, fps, mp4, Some(&wav))?;
+        let mut sink_err: Option<PipelineError> = None;
+        let mut sink =
+            |offset: usize, frames: &CudaTensor| -> std::result::Result<(), TensorError> {
+                let (h, w) = (frames.shape[2], frames.shape[3]);
+                match frames_to_rgb8(frames).and_then(|rgb| writer.push(offset, h, w, rgb)) {
+                    Ok(()) => Ok(()),
+                    Err(e) => {
+                        let text = e.to_string();
+                        sink_err = Some(e);
+                        Err(TensorError::Message(text))
+                    }
+                }
+            };
+        let decoded = self
+            .decoders
+            .video
+            .decode_streaming(&unpack_video(&video, grid)?, &mut sink);
+        match (decoded, sink_err) {
+            (_, Some(e)) => return Err(e),
+            (Err(e), None) => return Err(e.into()),
+            (Ok(_), None) => {}
+        };
+        timings.decode_video_s = timer.elapsed().as_secs_f64();
+        let timer = Instant::now();
+        let (frames, mp4_path) = writer.finish()?;
+        timings.write_s = timer.elapsed().as_secs_f64();
+        Ok(Ltx2Output {
+            frames,
+            mp4: mp4_path,
+            wav: wav.to_string_lossy().into_owned(),
+            prompt_tokens: text_report.tokens,
+            video_tokens: grid.iter().product(),
+            audio_tokens,
+            text: text_report,
+            timings,
+        })
+    }
+}
+
+fn open_audio_encoder(weights: &Path) -> Result<WeightMap> {
+    if let Ok(raw) = std::env::var("FASTVIDEO_LTX2_AUDIO_VAE") {
+        let path = PathBuf::from(raw);
+        if path.is_file() {
+            return Ok(WeightMap::open_files(&[path])?);
+        }
+        if path.is_dir() {
+            return Ok(WeightMap::open(&path)?);
+        }
+        return Err(err(format!(
+            "ltx2 audio encode: FASTVIDEO_LTX2_AUDIO_VAE {} is not a file or directory",
+            path.display()
+        )));
+    }
+    let dir = weights.join("audio_vae");
+    if dir.is_dir() {
+        let map = WeightMap::open(&dir)?;
+        if map.has_tensor("encoder.conv_in.conv.weight")
+            || map.has_tensor("audio_vae.encoder.conv_in.conv.weight")
+        {
+            return Ok(map);
+        }
+    }
+    let name = "ltx-2.5-audio-vae-bf16.safetensors";
+    for path in [
+        weights.join("vae").join(name),
+        weights.join(name),
+        weights.join("audio_vae").join(name),
+    ] {
+        if path.is_file() {
+            return Ok(WeightMap::open_files(&[path])?);
+        }
+    }
+    Err(err(
+        "ltx2 audio encode needs audio_vae/ with encoder.* (or ltx-2.5-audio-vae-bf16.safetensors, or FASTVIDEO_LTX2_AUDIO_VAE)",
+    ))
 }
 
 /// Load, generate one clip, drop everything.
