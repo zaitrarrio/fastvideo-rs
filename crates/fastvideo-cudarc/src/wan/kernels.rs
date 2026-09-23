@@ -49,6 +49,9 @@ kernel_fns!(
     affine_quantize,
     affine_dequant,
     affine_w16_gemm,
+    nvfp4_w4a4_gemm,
+    nvfp4_kv_dequant,
+    ln_adaln_e_rope_half,
     pad_axis,
     group_norm_stats,
     group_norm_apply,
@@ -235,6 +238,13 @@ pub fn cfg_rows(rows: usize) -> LaunchConfig {
         block_dim: (ROW_BLOCK_THREADS, 1, 1),
         shared_mem_bytes: ROW_BLOCK_THREADS * std::mem::size_of::<f32>() as u32,
     }
+}
+
+/// Reduction scratch plus one row of `width` floats (AdaLN+RoPE fusion).
+pub fn cfg_rows_with_row(rows: usize, width: usize) -> LaunchConfig {
+    let mut cfg = cfg_rows(rows);
+    cfg.shared_mem_bytes += width.max(1) as u32 * std::mem::size_of::<f32>() as u32;
+    cfg
 }
 
 /// Tiled flash attention: grid = bh*sq blocks, block = d threads.

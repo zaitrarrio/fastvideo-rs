@@ -753,6 +753,7 @@ impl Attention {
         let v = phase("h3_attn_v", || {
             packed.split_heads_bhsd(2 * inner, self.heads, self.head_dim)
         })?;
+        let (k, v) = crate::wan::nvfp4::maybe_kv(k, v)?;
         let out = match mode {
             AttnMode::Dense => scaled_dot_product_attention(&q, &k, &v, None)?,
             AttnMode::Vsa(vsa) => {

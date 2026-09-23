@@ -12,7 +12,7 @@ use cudarc::driver::CudaSlice;
 #[cfg(feature = "cuda")]
 use super::device::{self, DeviceContext};
 #[cfg(feature = "cuda")]
-use super::kernels::{cfg_n, cfg_rows, launch};
+use super::kernels::{cfg_n, cfg_rows, cfg_rows_with_row, launch};
 #[cfg(feature = "cuda")]
 use super::tensor::TensorError;
 use super::tensor::{CudaTensor, Result};
@@ -431,6 +431,55 @@ pub fn ln_adaln_e_device(
     let mut out = alloc(x.len())?;
     launch!(dev.stream, &dev.kernels.ln_adaln_e, cfg_rows(batch * seq);
         x, e, &mut out, &args[0], &args[1], &args[2], &args[3], &args[4], &args[5], &eps)
+    .map_err(err)?;
+    Ok(out)
+}
+
+/// `rope_half(ln_adaln_e(x))` in one launch. `x` is BHSD; `e` is `[B, e_rows, D]`.
+#[cfg(feature = "cuda")]
+#[allow(clippy::too_many_arguments)]
+pub fn ln_adaln_e_rope_half_device(
+    x: &CudaSlice<f32>,
+    e: &CudaSlice<f32>,
+    cos: &CudaSlice<f32>,
+    sin: &CudaSlice<f32>,
+    batch: usize,
+    heads: usize,
+    seq: usize,
+    dim: usize,
+    e_rows: usize,
+    scale_slot: usize,
+    shift_slot: usize,
+    r: usize,
+    eps: f32,
+) -> Result<CudaSlice<f32>> {
+    let tokens = batch * heads * seq;
+    check(
+        "ln_adaln_e_rope_half",
+        x.len() == tokens * dim
+            && e.len() == batch * e_rows * dim
+            && cos.len() == seq * r
+            && sin.len() == seq * r
+            && r <= dim
+            && r % 2 == 0,
+    )?;
+    let dev = ctx()?;
+    let args = [
+        batch as i32,
+        heads as i32,
+        seq as i32,
+        dim as i32,
+        e_rows as i32,
+        scale_slot as i32,
+        shift_slot as i32,
+        r as i32,
+    ];
+    let mut out = alloc(x.len())?;
+    launch!(
+        dev.stream, &dev.kernels.ln_adaln_e_rope_half, cfg_rows_with_row(tokens, dim);
+        x, e, cos, sin, &mut out,
+        &args[0], &args[1], &args[2], &args[3], &args[4], &args[5], &args[6], &args[7], &eps
+    )
     .map_err(err)?;
     Ok(out)
 }
@@ -1749,6 +1798,26 @@ pub mod host {
         out
     }
 
+    /// `rope_half(ln_adaln_e(x))` for BHSD `x` and AdaLN table `[B, e_rows, D]`.
+    #[allow(clippy::too_many_arguments)]
+    pub fn ln_adaln_e_rope_half(
+        x: &[f32],
+        e: &[f32],
+        cos: &[f32],
+        sin: &[f32],
+        heads: usize,
+        seq: usize,
+        dim: usize,
+        e_rows: usize,
+        scale_slot: usize,
+        shift_slot: usize,
+        r: usize,
+        eps: f32,
+    ) -> Vec<f32> {
+        let adaln = ln_adaln_e(x, e, heads * seq, dim, e_rows, scale_slot, shift_slot, eps);
+        rope_half(&adaln, cos, sin, seq, dim, r)
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub fn residual_gate_add_e(
         h: &[f32],
@@ -2332,6 +2401,83 @@ pub fn affine_gemm_device(
     )
     .map_err(err)?;
     Ok(c)
+}
+
+/// Packed W4A4 GEMM: uploads activation packs, dequants both sides in-tile.
+#[cfg(feature = "cuda")]
+pub fn nvfp4_gemm_device(
+    a_packed: &[u8],
+    a_scales: &[u8],
+    a_decode: f32,
+    w_packed: &CudaSlice<u8>,
+    w_scales: &CudaSlice<u8>,
+    w_decode: &CudaSlice<f32>,
+    m: usize,
+    n: usize,
+    k: usize,
+) -> Result<CudaSlice<f32>> {
+    let dev = ctx()?;
+    if k == 0 || !k.is_multiple_of(16) {
+        return Err(err(format!("nvfp4 gemm: k={k} is not a multiple of 16")));
+    }
+    if a_packed.len() != m * (k / 2) || a_scales.len() != m * (k / 16) {
+        return Err(err(format!(
+            "nvfp4 gemm: A pack {} / scales {} for [{m}, {k}]",
+            a_packed.len(),
+            a_scales.len()
+        )));
+    }
+    let ap = dev.stream.memcpy_stod(a_packed).map_err(err)?;
+    let ascales = dev.stream.memcpy_stod(a_scales).map_err(err)?;
+    let mut c = alloc((m * n).max(1))?;
+    let cfg = LaunchConfig {
+        grid_dim: (n.div_ceil(16) as u32, m.div_ceil(16) as u32, 1),
+        block_dim: (256, 1, 1),
+        shared_mem_bytes: 0,
+    };
+    let (mm, nn, kk) = (m as i64, n as i64, k as i64);
+    launch!(
+        dev.stream, &dev.kernels.nvfp4_w4a4_gemm, cfg;
+        &ap, &ascales, w_packed, w_scales, w_decode, &mut c, &mm, &nn, &kk, &a_decode
+    )
+    .map_err(err)?;
+    Ok(c)
+}
+
+/// Packed NVFP4 rows → FP32. `decode[row] = amax / (e2m1_max * e4m3_max)`.
+#[cfg(feature = "cuda")]
+pub fn nvfp4_kv_dequant_device(
+    packed: &CudaSlice<u8>,
+    scales: &CudaSlice<u8>,
+    decode: &CudaSlice<f32>,
+    rows: usize,
+    cols: usize,
+) -> Result<CudaSlice<f32>> {
+    let dev = ctx()?;
+    if cols == 0 || !cols.is_multiple_of(16) {
+        return Err(err(format!(
+            "nvfp4 kv: cols {cols} is not a multiple of 16"
+        )));
+    }
+    if packed.len() != rows * (cols / 2)
+        || scales.len() != rows * (cols / 16)
+        || decode.len() != rows
+    {
+        return Err(err(format!(
+            "nvfp4 kv: pack {} scales {} decode {} for [{rows}, {cols}]",
+            packed.len(),
+            scales.len(),
+            decode.len()
+        )));
+    }
+    let mut out = alloc((rows * cols).max(1))?;
+    let (rr, cc) = (rows as i64, cols as i64);
+    launch!(
+        dev.stream, &dev.kernels.nvfp4_kv_dequant, cfg_n(rows * cols);
+        packed, scales, decode, &mut out, &rr, &cc
+    )
+    .map_err(err)?;
+    Ok(out)
 }
 
 /// E4M3 codes with per-row scales → a bfloat16 weight, for the bf16 GEMM.

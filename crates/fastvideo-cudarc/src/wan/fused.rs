@@ -57,6 +57,67 @@ impl CudaTensor {
         Ok(Self::host_only(out, self.shape.clone()))
     }
 
+    /// `rope_half(ln_adaln_e(x))` in one launch when `FASTVIDEO_NVFP4` is on
+    /// and `self` is BHSD with AdaLN over the head width. Off keeps the two
+    /// existing launches (caller should use [`Self::ln_adaln_e`] then
+    /// [`Self::rope_half`]); this method still matches that composition.
+    pub fn ln_adaln_e_rope_half(
+        &self,
+        e: &CudaTensor,
+        scale_slot: usize,
+        shift_slot: usize,
+        eps: f32,
+        cos: &CudaTensor,
+        sin: &CudaTensor,
+    ) -> Result<CudaTensor> {
+        let [batch, heads, seq, dim] = self.shape[..] else {
+            return Err(msg(format!(
+                "ln_adaln_e_rope_half expects [b, h, s, d], got {:?}",
+                self.shape
+            )));
+        };
+        let e_rows = e.shape.get(1).copied().unwrap_or(0);
+        if e.shape != [batch, e_rows, dim] || scale_slot >= e_rows || shift_slot >= e_rows {
+            return Err(msg(format!(
+                "ln_adaln_e_rope_half table {:?} for {:?}",
+                e.shape, self.shape
+            )));
+        }
+        let r = cos.shape.get(1).copied().unwrap_or(0);
+        if cos.shape != [seq, r] || sin.shape != [seq, r] || r > dim || r % 2 != 0 {
+            return Err(msg(format!(
+                "ln_adaln_e_rope_half rope {:?}/{:?} for S={seq} D={dim}",
+                cos.shape, sin.shape
+            )));
+        }
+        #[cfg(feature = "cuda")]
+        if fastvideo_models::nvfp4::from_env().is_some() {
+            if let (Some(x), Some(ed), Some(c), Some(s)) =
+                (self.dev()?, e.dev()?, cos.dev()?, sin.dev()?)
+            {
+                let out = super::ops::ln_adaln_e_rope_half_device(
+                    &x, &ed, &c, &s, batch, heads, seq, dim, e_rows, scale_slot, shift_slot, r, eps,
+                )?;
+                return Self::from_dev_result(out, self.shape.clone());
+            }
+        }
+        let out = host::ln_adaln_e_rope_half(
+            &self.host_cow()?,
+            &e.host_cow()?,
+            &cos.host_cow()?,
+            &sin.host_cow()?,
+            heads,
+            seq,
+            dim,
+            e_rows,
+            scale_slot,
+            shift_slot,
+            r,
+            eps,
+        );
+        Ok(Self::host_only(out, self.shape.clone()))
+    }
+
     /// `self + update * e[:, slot]` (gated residual) for `[batch, seq, dim]`.
     pub fn residual_gate_add_e(
         &self,
@@ -341,5 +402,30 @@ mod tests {
         let v = x.split_heads_bhsd(2 * width, heads, d).unwrap();
         let merged = v.merge_heads().unwrap();
         assert_eq!(merged.data, x.narrow(2, 2 * width, width).unwrap().data);
+    }
+
+    #[test]
+    fn ln_adaln_e_rope_half_matches_the_two_ops() {
+        let (b, h, s, d) = (2usize, 2usize, 3usize, 4usize);
+        let x = t(vals(b * h * s * d, 0.7), &[b, h, s, d]);
+        let e = t(vals(b * 6 * d, 0.3), &[b, 6, d]);
+        let angles = vals(s * d, 2.1);
+        let cos = t(angles.iter().map(|a| a.cos()).collect(), &[s, d]);
+        let sin = t(angles.iter().map(|a| a.sin()).collect(), &[s, d]);
+        let got = x.ln_adaln_e_rope_half(&e, 1, 0, 1e-6, &cos, &sin).unwrap();
+        let flat = t(x.data.clone(), &[b, h * s, d]);
+        let adaln = flat.ln_adaln_e(&e, 1, 0, 1e-6).unwrap();
+        let want = t(adaln.data.clone(), &[b, h, s, d])
+            .rope_half(&cos, &sin)
+            .unwrap();
+        assert_eq!(got.shape, want.shape);
+        for i in 0..got.data.len() {
+            assert!(
+                (got.data[i] - want.data[i]).abs() < 1e-5,
+                "elem {i}: {} vs {}",
+                got.data[i],
+                want.data[i]
+            );
+        }
     }
 }

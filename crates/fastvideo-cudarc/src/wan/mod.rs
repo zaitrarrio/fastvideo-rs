@@ -17,6 +17,7 @@ pub mod hopper;
 pub mod kernels;
 pub mod log;
 pub mod nn;
+pub mod nvfp4;
 pub mod ops;
 pub mod pipeline;
 pub mod resident;

@@ -209,6 +209,7 @@ impl Attention {
             Some(rope) => (rope.apply(&q)?, k_rope.unwrap_or(rope).apply(&k)?),
             None => (q, k),
         };
+        let (k, v) = crate::wan::nvfp4::maybe_kv(k, v)?;
         let scale = Some((d as f32).powf(-0.5));
         let kernel = if context.is_some() {
             VideoAttnKernel::Dense

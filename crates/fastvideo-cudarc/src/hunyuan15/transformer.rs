@@ -199,6 +199,7 @@ impl DoubleBlock {
         let q = CudaTensor::cat(&[&iq, &tq], 2)?;
         let k = CudaTensor::cat(&[&ik, &tk], 2)?;
         let v = CudaTensor::cat(&[&iv, &tv], 2)?;
+        let (k, v) = crate::wan::nvfp4::maybe_kv(k, v)?;
         let attn = nn::scaled_dot_product_attention_masked(&q, &k, &v, None, None)?;
         let img_len = img.shape[1];
         let txt_len = attn.shape[2] - img_len;

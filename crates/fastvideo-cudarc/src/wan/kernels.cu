@@ -1777,3 +1777,158 @@ extern "C" __global__ void affine_w16_gemm(
     }
     if (gi < m && gj < n) c[gi * n + gj] = acc;
 }
+
+// ---- LongLive NVFP4 (FourOverSix host recipe on the portable NVRTC stack) --
+// E2M1 nibble table (low nibble first). No cuda_fp4.h — NVRTC on sm_90/sm_120
+// must stay open-coded like fv_e4m3_to_f32.
+__device__ __constant__ float fv_e2m1_lut[16] = {
+    0.0f, 0.5f, 1.0f, 1.5f, 2.0f, 3.0f, 4.0f, 6.0f,
+    -0.0f, -0.5f, -1.0f, -1.5f, -2.0f, -3.0f, -4.0f, -6.0f
+};
+
+__device__ __forceinline__ float fv_nvfp4_scale(unsigned char e4, float decode) {
+    return fv_e4m3_to_f32(e4) * decode;
+}
+
+// C[m,n] = A_dequant[m,k] @ W_dequant[n,k]^T. Packed E2M1 + E4M3 block scales
+// + one amax per tensor (A) / per output row (W). Block 16 along K. FP32 acc.
+// Does not materialize an FP32 weight.
+#define FV_NVFP4_TM 16
+#define FV_NVFP4_TN 16
+#define FV_NVFP4_TK 16
+extern "C" __global__ void nvfp4_w4a4_gemm(
+    const unsigned char* a_packed, const unsigned char* a_scales,
+    const unsigned char* w_packed, const unsigned char* w_scales,
+    const float* w_amax, float* c,
+    long m, long n, long k, float a_decode
+) {
+    int lm = threadIdx.x / FV_NVFP4_TN;
+    int ln = threadIdx.x % FV_NVFP4_TN;
+    long gi = (long)blockIdx.y * FV_NVFP4_TM + lm;
+    long gj = (long)blockIdx.x * FV_NVFP4_TN + ln;
+    __shared__ float As[FV_NVFP4_TM][FV_NVFP4_TK];
+    __shared__ float Ws[FV_NVFP4_TN][FV_NVFP4_TK];
+    long n_blocks = k / FV_NVFP4_TK;
+    long packed_cols = k / 2;
+    float acc = 0.0f;
+    for (long b = 0; b < n_blocks; b++) {
+        for (int t = threadIdx.x; t < FV_NVFP4_TM * FV_NVFP4_TK; t += blockDim.x) {
+            int rr = t / FV_NVFP4_TK;
+            int cc = t % FV_NVFP4_TK;
+            long row = (long)blockIdx.y * FV_NVFP4_TM + rr;
+            long col = b * FV_NVFP4_TK + cc;
+            if (row < m && col < k) {
+                unsigned char byte = a_packed[row * packed_cols + col / 2];
+                unsigned char nib = (cc & 1) ? (byte >> 4) : (byte & 0x0F);
+                float s = fv_nvfp4_scale(a_scales[row * n_blocks + b], a_decode);
+                As[rr][cc] = fv_e2m1_lut[nib] * s;
+            } else {
+                As[rr][cc] = 0.0f;
+            }
+        }
+        for (int t = threadIdx.x; t < FV_NVFP4_TN * FV_NVFP4_TK; t += blockDim.x) {
+            int rr = t / FV_NVFP4_TK;
+            int cc = t % FV_NVFP4_TK;
+            long row = (long)blockIdx.x * FV_NVFP4_TN + rr;
+            long col = b * FV_NVFP4_TK + cc;
+            if (row < n && col < k) {
+                unsigned char byte = w_packed[row * packed_cols + col / 2];
+                unsigned char nib = (cc & 1) ? (byte >> 4) : (byte & 0x0F);
+                float s = fv_nvfp4_scale(w_scales[row * n_blocks + b], w_amax[row]);
+                Ws[rr][cc] = fv_e2m1_lut[nib] * s;
+            } else {
+                Ws[rr][cc] = 0.0f;
+            }
+        }
+        __syncthreads();
+        #pragma unroll
+        for (int t = 0; t < FV_NVFP4_TK; t++) acc += As[lm][t] * Ws[ln][t];
+        __syncthreads();
+    }
+    if (gi < m && gj < n) c[gi * n + gj] = acc;
+}
+
+// Packed NVFP4 [rows, cols/2] + E4M3 [rows, cols/16] + per-row decode → FP32.
+// Feeds attention; no cache structure. Layout is row-major last-dim blocks.
+extern "C" __global__ void nvfp4_kv_dequant(
+    const unsigned char* packed, const unsigned char* scales,
+    const float* decode, float* out, long rows, long cols
+) {
+    long i = IDX();
+    long n = rows * cols;
+    if (i >= n) return;
+    long row = i / cols;
+    long col = i % cols;
+    long n_blocks = cols / 16;
+    unsigned char byte = packed[row * (cols / 2) + col / 2];
+    unsigned char nib = (col & 1) ? (byte >> 4) : (byte & 0x0F);
+    float s = fv_nvfp4_scale(scales[row * n_blocks + col / 16], decode[row]);
+    out[i] = fv_e2m1_lut[nib] * s;
+}
+
+// ln_adaln_e then rope_half on the same tensor: x [B, H, S, D] stored BHSD,
+// e [B, e_rows, D] (AdaLN over the head width), cos/sin [S, R].
+// Mathematically the two existing host/device ops in sequence.
+extern "C" __global__ void ln_adaln_e_rope_half(
+    const float* x, const float* e, const float* cs, const float* sn, float* out,
+    int batch, int heads, int seq, int dim, int e_rows,
+    int scale_slot, int shift_slot, int r, float eps
+) {
+    extern __shared__ float sdata[];
+    int row = blockIdx.x;
+    int tokens = batch * heads * seq;
+    if (row >= tokens) return;
+    int tid = threadIdx.x;
+    int nthreads = blockDim.x;
+    int s = row % seq;
+    int t = row / seq;
+    int h = t % heads;
+    int b = t / heads;
+    (void)h;
+    const float* src = x + (long)row * dim;
+    float* dst = out + (long)row * dim;
+    const float* sc = e + ((long)b * e_rows + scale_slot) * dim;
+    const float* sh = e + ((long)b * e_rows + shift_slot) * dim;
+
+    float local_sum = 0.0f;
+    for (int j = tid; j < dim; j += nthreads) local_sum += src[j];
+    sdata[tid] = local_sum;
+    __syncthreads();
+    for (int st = nthreads >> 1; st > 0; st >>= 1) {
+        if (tid < st) sdata[tid] += sdata[tid + st];
+        __syncthreads();
+    }
+    float mean = sdata[0] / (float)dim;
+    __syncthreads();
+
+    float local_var = 0.0f;
+    for (int j = tid; j < dim; j += nthreads) {
+        float d = src[j] - mean;
+        local_var += d * d;
+    }
+    sdata[tid] = local_var;
+    __syncthreads();
+    for (int st = nthreads >> 1; st > 0; st >>= 1) {
+        if (tid < st) sdata[tid] += sdata[tid + st];
+        __syncthreads();
+    }
+    float inv = rsqrtf(sdata[0] / (float)dim + eps);
+    __syncthreads();
+
+    // AdaLN into the tail of shared so rope_half can read both halves.
+    float* adaln = sdata + nthreads;
+    for (int j = tid; j < dim; j += nthreads) {
+        adaln[j] = (src[j] - mean) * inv * (1.0f + sc[j]) + sh[j];
+    }
+    __syncthreads();
+
+    int half = r / 2;
+    for (int j = tid; j < dim; j += nthreads) {
+        float y = adaln[j];
+        if (j < r) {
+            float other = j < half ? -adaln[j + half] : adaln[j - half];
+            y = adaln[j] * cs[(long)s * r + j] + other * sn[(long)s * r + j];
+        }
+        dst[j] = y;
+    }
+}

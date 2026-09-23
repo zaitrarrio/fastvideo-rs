@@ -179,6 +179,12 @@ impl WanAttention {
         let q = qkv.qk_norm_rope_bhsd(0, self.heads, &self.norm_q, rope(), self.eps)?;
         let k = qkv.qk_norm_rope_bhsd(dim, self.heads, &self.norm_k, rope(), self.eps)?;
         let v = qkv.split_heads_bhsd(2 * dim, self.heads, self.dim_head)?;
+        // LongLive KV dequant runs beforehand on the K/V this block already
+        // materializes, then attention reads those dense tensors. No AR cache.
+        // AdaLN stays `ln_adaln_e`
+        // and RoPE stays `qk_norm_rope_bhsd` — those tensors do not share a
+        // layout with `ln_adaln_e_rope_half` (hidden [B,S,C] vs Q/K [B,H,S,D]).
+        let (k, v) = super::nvfp4::maybe_kv(k, v)?;
         // TurboWan SLA: block top-k sparse + linear attention (self-attn only).
         if super::sla::sla_enabled() && mask.is_none() {
             let cfg = super::sla::SlaConfig::from_env();
@@ -287,6 +293,7 @@ impl WanAttention {
             k = CudaTensor::cat(&[&ik, &k], 2)?;
             v = CudaTensor::cat(&[&iv, &v], 2)?;
         }
+        let (k, v) = super::nvfp4::maybe_kv(k, v)?;
         self.attend(&q, &k, &v, None)
     }
 }

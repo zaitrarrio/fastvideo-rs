@@ -49,10 +49,10 @@ pub struct Linear {
     /// FastVideo MLX affine (group-64 INT8/6/4). Fused dequant-in-tile GEMM;
     /// the bf16 weight is never materialized.
     weight_affine: Option<std::sync::Arc<super::affine::AffineWeight>>,
-    /// LongLive NVFP4 W4A4 (`FASTVIDEO_NVFP4`). Weight already reconstructed
-    /// at load; activations are fake-quantized each forward. `None` is today's
-    /// dense path.
-    nvfp4: Option<fastvideo_models::nvfp4::ScaleRule>,
+    /// LongLive NVFP4 W4A4 (`FASTVIDEO_NVFP4`). The weight was reconstructed
+    /// at load. Each forward reconstructs the activation, then the existing
+    /// GEMM runs. `None` is today's dense path.
+    nvfp4_act: Option<fastvideo_models::nvfp4::ScaleRule>,
 }
 
 /// LongLive NVFP4 on every prefix of a fused linear. Conservative: one
@@ -69,24 +69,6 @@ fn nvfp4_rule_for(prefixes: &[&str], in_dim: usize) -> Option<fastvideo_models::
         return None;
     }
     Some(rule)
-}
-
-fn nvfp4_activations(
-    xs: &CudaTensor,
-    rule: fastvideo_models::nvfp4::ScaleRule,
-) -> Result<CudaTensor> {
-    let k = *xs
-        .shape
-        .last()
-        .ok_or_else(|| msg("nvfp4 linear on a scalar"))?;
-    if k == 0 || !k.is_multiple_of(fastvideo_models::nvfp4::BLOCK) {
-        return Ok(xs.clone());
-    }
-    let m = xs.numel() / k;
-    let q = fastvideo_models::nvfp4::reconstruct(&xs.host_cow()?, m, k, rule).map_err(msg)?;
-    let mut t = CudaTensor::from_vec(q, xs.shape.clone())?;
-    t.pin_device()?;
-    Ok(t)
 }
 
 /// FP8 linears are opt-in and never a default.
@@ -133,7 +115,7 @@ impl Linear {
     fn from_tensors_with(
         mut weight: CudaTensor,
         mut bias: Option<CudaTensor>,
-        nvfp4: Option<fastvideo_models::nvfp4::ScaleRule>,
+        nvfp4_act: Option<fastvideo_models::nvfp4::ScaleRule>,
     ) -> Result<Self> {
         if weight.rank() != 2 || bias.as_ref().is_some_and(|b| b.numel() != weight.shape[0]) {
             return Err(msg(format!(
@@ -147,7 +129,7 @@ impl Linear {
             b.pin_device()?;
         }
         #[cfg(feature = "cuda")]
-        if nvfp4.is_none() && fp8_linears() {
+        if nvfp4_act.is_none() && fp8_linears() {
             let dev = super::device::global_device().ok_or_else(|| msg("no device"))?;
             // A shape cuBLASLt cannot serve falls back to bf16/F32 rather than
             // failing the run, but says so once: a silent fallback would let an
@@ -166,7 +148,7 @@ impl Linear {
                         weight_fp8: Some(std::sync::Arc::new(q)),
                         weight_fp8_rows: None,
                         weight_affine: None,
-                        nvfp4: None,
+                        nvfp4_act: None,
                     });
                 }
                 Err(why) => {
@@ -198,7 +180,7 @@ impl Linear {
                 weight_fp8: None,
                 weight_fp8_rows: None,
                 weight_affine: None,
-                nvfp4,
+                nvfp4_act,
             });
         }
         weight.pin_device()?;
@@ -213,7 +195,7 @@ impl Linear {
             weight_fp8: None,
             weight_fp8_rows: None,
             weight_affine: None,
-            nvfp4,
+            nvfp4_act,
         })
     }
 
@@ -251,6 +233,48 @@ impl Linear {
                 return Ok(l);
             }
         }
+        if let Some(rule) = nvfp4 {
+            let mut w = Vec::with_capacity(prefixes.len() * out_dim * in_dim);
+            let mut b = Vec::with_capacity(prefixes.len() * out_dim);
+            for prefix in prefixes {
+                let wt = super::weights::cuda_tensor_shaped(
+                    map,
+                    &super::weights::join_key(prefix, "weight"),
+                    &[out_dim, in_dim],
+                )?;
+                let rec =
+                    fastvideo_models::nvfp4::reconstruct(&wt.host_cow()?, out_dim, in_dim, rule)
+                        .map_err(msg)?;
+                w.extend_from_slice(&rec);
+                if has_bias {
+                    let bt = super::weights::cuda_tensor_shaped(
+                        map,
+                        &super::weights::join_key(prefix, "bias"),
+                        &[out_dim],
+                    )?;
+                    b.extend_from_slice(&bt.host_cow()?);
+                }
+            }
+            static SAID: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+            super::log::info_once(
+                &SAID,
+                format_args!(
+                    "longlive nvfp4: W4A4 {} dequant beforehand, then the existing GEMM ({})",
+                    rule.as_str(),
+                    fastvideo_models::nvfp4::ENV
+                ),
+            );
+            let rows = prefixes.len() * out_dim;
+            return Self::from_tensors_with(
+                CudaTensor::from_vec(w, vec![rows, in_dim])?,
+                if has_bias {
+                    Some(CudaTensor::from_vec(b, vec![rows])?)
+                } else {
+                    None
+                },
+                Some(rule),
+            );
+        }
         let mut w = Vec::with_capacity(prefixes.len() * out_dim * in_dim);
         let mut b = Vec::with_capacity(prefixes.len() * out_dim);
         for prefix in prefixes {
@@ -259,15 +283,7 @@ impl Linear {
                 &super::weights::join_key(prefix, "weight"),
                 &[out_dim, in_dim],
             )?;
-            let host = wt.host_cow()?;
-            if let Some(rule) = nvfp4 {
-                w.extend(
-                    fastvideo_models::nvfp4::reconstruct(&host, out_dim, in_dim, rule)
-                        .map_err(msg)?,
-                );
-            } else {
-                w.extend_from_slice(&host);
-            }
+            w.extend_from_slice(&wt.host_cow()?);
             if has_bias {
                 let bt = super::weights::cuda_tensor_shaped(
                     map,
@@ -277,17 +293,6 @@ impl Linear {
                 b.extend_from_slice(&bt.host_cow()?);
             }
         }
-        if let Some(rule) = nvfp4 {
-            static SAID: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
-            super::log::info_once(
-                &SAID,
-                format_args!(
-                    "longlive nvfp4: W4A4 {} dequant-then-matmul ({})",
-                    rule.as_str(),
-                    fastvideo_models::nvfp4::ENV
-                ),
-            );
-        }
         let rows = prefixes.len() * out_dim;
         Self::from_tensors_with(
             CudaTensor::from_vec(w, vec![rows, in_dim])?,
@@ -296,7 +301,7 @@ impl Linear {
             } else {
                 None
             },
-            nvfp4,
+            None,
         )
     }
 
@@ -366,7 +371,7 @@ impl Linear {
             weight_fp8: None,
             weight_fp8_rows: None,
             weight_affine: None,
-            nvfp4: None,
+            nvfp4_act: None,
         }))
     }
 
@@ -394,7 +399,7 @@ impl Linear {
             weight_fp8: None,
             weight_fp8_rows: None,
             weight_affine: None,
-            nvfp4: None,
+            nvfp4_act: None,
         })
     }
 
@@ -479,7 +484,7 @@ impl Linear {
             weight_fp8: None,
             weight_fp8_rows: Some(std::sync::Arc::new(rows)),
             weight_affine: None,
-            nvfp4: None,
+            nvfp4_act: None,
         })
     }
 
@@ -495,7 +500,7 @@ impl Linear {
 
     /// LongLive NVFP4 W4A4 (`FASTVIDEO_NVFP4`) is active on this linear.
     pub fn is_nvfp4(&self) -> bool {
-        self.nvfp4.is_some()
+        self.nvfp4_act.is_some()
     }
 
     /// Load `prefix.weight` as MLX affine INT8/6/4 (group 64). Prefers a
@@ -555,7 +560,7 @@ impl Linear {
             weight_fp8: None,
             weight_fp8_rows: None,
             weight_affine: Some(std::sync::Arc::new(aff)),
-            nvfp4: None,
+            nvfp4_act: None,
         })
     }
 
@@ -641,7 +646,7 @@ impl Linear {
             weight_fp8: Some(std::sync::Arc::new(q)),
             weight_fp8_rows: None,
             weight_affine: None,
-            nvfp4: None,
+            nvfp4_act: None,
         }))
     }
 
@@ -676,10 +681,10 @@ impl Linear {
     }
 
     fn forward_act(&self, xs: &CudaTensor, gelu: bool) -> Result<CudaTensor> {
-        let xs_q;
-        let xs = if let Some(rule) = self.nvfp4 {
-            xs_q = nvfp4_activations(xs, rule)?;
-            &xs_q
+        let owned;
+        let xs = if let Some(rule) = self.nvfp4_act {
+            owned = super::nvfp4::dequant_beforehand(xs, rule)?;
+            &owned
         } else {
             xs
         };
@@ -1168,13 +1173,69 @@ mod fp8_rows_tests {
 
     #[test]
     fn nvfp4_stays_off_when_the_flag_is_unset() {
-        let prev = std::env::var(fastvideo_models::nvfp4::ENV).ok();
-        std::env::remove_var(fastvideo_models::nvfp4::ENV);
-        let lin = Linear::load(&map(), "blocks.0.attn1.to_q", 16, 8, true).unwrap();
-        match prev {
-            Some(v) => std::env::set_var(fastvideo_models::nvfp4::ENV, v),
-            None => std::env::remove_var(fastvideo_models::nvfp4::ENV),
-        }
-        assert!(!lin.is_nvfp4());
+        fastvideo_models::nvfp4::with_env(None, || {
+            let lin = Linear::load(&map(), "blocks.0.attn1.to_q", 16, 8, true).unwrap();
+            assert!(!lin.is_nvfp4());
+        });
+    }
+
+    #[test]
+    fn nvfp4_on_dequants_beforehand_and_matches_reconstructed_gemm() {
+        fastvideo_models::nvfp4::with_env(Some("1"), || {
+            let (i, o) = (16usize, 8usize);
+            let lin = Linear::load(&map(), "blocks.0.attn1.to_q", i, o, true).unwrap();
+            assert!(lin.is_nvfp4());
+            assert_eq!(lin.weight.shape, vec![o, i]);
+            let w = crate::wan::weights::cuda_tensor_shaped(
+                &map(),
+                "blocks.0.attn1.to_q.weight",
+                &[o, i],
+            )
+            .unwrap()
+            .host_cow()
+            .unwrap()
+            .into_owned();
+            let b =
+                crate::wan::weights::cuda_tensor_shaped(&map(), "blocks.0.attn1.to_q.bias", &[o])
+                    .unwrap()
+                    .host_cow()
+                    .unwrap()
+                    .into_owned();
+            let rec_w = fastvideo_models::nvfp4::reconstruct(
+                &w,
+                o,
+                i,
+                fastvideo_models::nvfp4::ScaleRule::Mse,
+            )
+            .unwrap();
+            let stored = lin.weight.host_cow().unwrap();
+            for (a, b) in rec_w.iter().zip(stored.iter()) {
+                assert!((a - b).abs() <= 1e-6, "stored weight {b} vs dequant {a}");
+            }
+            let x: Vec<f32> = (0..2 * i).map(|k| (k as f32 * 0.37).sin()).collect();
+            let rec_x = fastvideo_models::nvfp4::reconstruct(
+                &x,
+                2,
+                i,
+                fastvideo_models::nvfp4::ScaleRule::Mse,
+            )
+            .unwrap();
+            let y = lin
+                .forward(&CudaTensor::from_vec(x, vec![2, i]).unwrap())
+                .unwrap();
+            let got = y.host_cow().unwrap();
+            for t in 0..2 {
+                for r in 0..o {
+                    let want: f32 = (0..i)
+                        .map(|c| rec_x[t * i + c] * rec_w[r * i + c])
+                        .sum::<f32>()
+                        + b[r];
+                    assert!(
+                        (got[t * o + r] - want).abs() <= 1e-4 * want.abs().max(1.0),
+                        "token {t} row {r}"
+                    );
+                }
+            }
+        });
     }
 }
