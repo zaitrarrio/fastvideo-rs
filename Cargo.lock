@@ -565,6 +565,7 @@ dependencies = [
 name = "fastvideo-models"
 version = "0.1.0"
 dependencies = [
+ "fastvideo-ops",
  "rand",
  "rand_distr",
  "rayon",

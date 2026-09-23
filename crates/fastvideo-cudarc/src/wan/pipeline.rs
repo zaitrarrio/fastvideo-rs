@@ -376,7 +376,7 @@ impl WanPipeline {
         let (z_c, z_t, z_h, z_w) = self.latent_shape(cfg);
         super::log::info(format_args!(
             "generate preset={} tiny={} {}x{} frames={} steps={} dmd={} rcm={} latent=1x{}x{}x{}x{} \
-             resident={} cuda={}",
+             nvfp4={} resident={} cuda={}",
             self.preset,
             self.tiny,
             cfg.width,
@@ -389,6 +389,9 @@ impl WanPipeline {
             z_t,
             z_h,
             z_w,
+            fastvideo_models::nvfp4::from_env()
+                .map(|r| r.as_str())
+                .unwrap_or("off"),
             super::resident::residency_enabled(),
             cuda_context_live(),
         ));

@@ -6,6 +6,7 @@ license.workspace = true
 description = "Wan/LTX/H3 host math: schedulers, packing, architecture configs."
 
 [dependencies]
+fastvideo-ops.workspace = true
 rand.workspace = true
 rand_distr.workspace = true
 rayon.workspace = true

@@ -49,6 +49,44 @@ pub struct Linear {
     /// FastVideo MLX affine (group-64 INT8/6/4). Fused dequant-in-tile GEMM;
     /// the bf16 weight is never materialized.
     weight_affine: Option<std::sync::Arc<super::affine::AffineWeight>>,
+    /// LongLive NVFP4 W4A4 (`FASTVIDEO_NVFP4`). Weight already reconstructed
+    /// at load; activations are fake-quantized each forward. `None` is today's
+    /// dense path.
+    nvfp4: Option<fastvideo_models::nvfp4::ScaleRule>,
+}
+
+/// LongLive NVFP4 on every prefix of a fused linear. Conservative: one
+/// filtered module (time/head/norm) keeps the whole stack dense.
+fn nvfp4_rule_for(prefixes: &[&str], in_dim: usize) -> Option<fastvideo_models::nvfp4::ScaleRule> {
+    let rule = fastvideo_models::nvfp4::from_env()?;
+    if in_dim == 0 || !in_dim.is_multiple_of(fastvideo_models::nvfp4::BLOCK) {
+        return None;
+    }
+    if prefixes
+        .iter()
+        .any(|p| fastvideo_models::nvfp4::linear_stays_dense(p))
+    {
+        return None;
+    }
+    Some(rule)
+}
+
+fn nvfp4_activations(
+    xs: &CudaTensor,
+    rule: fastvideo_models::nvfp4::ScaleRule,
+) -> Result<CudaTensor> {
+    let k = *xs
+        .shape
+        .last()
+        .ok_or_else(|| msg("nvfp4 linear on a scalar"))?;
+    if k == 0 || !k.is_multiple_of(fastvideo_models::nvfp4::BLOCK) {
+        return Ok(xs.clone());
+    }
+    let m = xs.numel() / k;
+    let q = fastvideo_models::nvfp4::reconstruct(&xs.host_cow()?, m, k, rule).map_err(msg)?;
+    let mut t = CudaTensor::from_vec(q, xs.shape.clone())?;
+    t.pin_device()?;
+    Ok(t)
 }
 
 /// FP8 linears are opt-in and never a default.
@@ -88,7 +126,15 @@ pub fn bf16_linears_active() -> bool {
 
 impl Linear {
     /// Wrap weight/bias and keep them on the device (a no-op on CPU runs).
-    pub fn from_tensors(mut weight: CudaTensor, mut bias: Option<CudaTensor>) -> Result<Self> {
+    pub fn from_tensors(weight: CudaTensor, bias: Option<CudaTensor>) -> Result<Self> {
+        Self::from_tensors_with(weight, bias, None)
+    }
+
+    fn from_tensors_with(
+        mut weight: CudaTensor,
+        mut bias: Option<CudaTensor>,
+        nvfp4: Option<fastvideo_models::nvfp4::ScaleRule>,
+    ) -> Result<Self> {
         if weight.rank() != 2 || bias.as_ref().is_some_and(|b| b.numel() != weight.shape[0]) {
             return Err(msg(format!(
                 "linear weight {:?} bias {:?}",
@@ -101,7 +147,7 @@ impl Linear {
             b.pin_device()?;
         }
         #[cfg(feature = "cuda")]
-        if fp8_linears() {
+        if nvfp4.is_none() && fp8_linears() {
             let dev = super::device::global_device().ok_or_else(|| msg("no device"))?;
             // A shape cuBLASLt cannot serve falls back to bf16/F32 rather than
             // failing the run, but says so once: a silent fallback would let an
@@ -120,6 +166,7 @@ impl Linear {
                         weight_fp8: Some(std::sync::Arc::new(q)),
                         weight_fp8_rows: None,
                         weight_affine: None,
+                        nvfp4: None,
                     });
                 }
                 Err(why) => {
@@ -151,6 +198,7 @@ impl Linear {
                 weight_fp8: None,
                 weight_fp8_rows: None,
                 weight_affine: None,
+                nvfp4,
             });
         }
         weight.pin_device()?;
@@ -165,6 +213,7 @@ impl Linear {
             weight_fp8: None,
             weight_fp8_rows: None,
             weight_affine: None,
+            nvfp4,
         })
     }
 
@@ -195,8 +244,9 @@ impl Linear {
         out_dim: usize,
         has_bias: bool,
     ) -> Result<Self> {
+        let nvfp4 = nvfp4_rule_for(prefixes, in_dim);
         #[cfg(feature = "cuda")]
-        if bf16_linears() && !fp8_linears() {
+        if nvfp4.is_none() && bf16_linears() && !fp8_linears() {
             if let Some(l) = Self::load_fused_bf16(map, prefixes, in_dim, out_dim, has_bias)? {
                 return Ok(l);
             }
@@ -209,7 +259,15 @@ impl Linear {
                 &super::weights::join_key(prefix, "weight"),
                 &[out_dim, in_dim],
             )?;
-            w.extend_from_slice(&wt.host_cow()?);
+            let host = wt.host_cow()?;
+            if let Some(rule) = nvfp4 {
+                w.extend(
+                    fastvideo_models::nvfp4::reconstruct(&host, out_dim, in_dim, rule)
+                        .map_err(msg)?,
+                );
+            } else {
+                w.extend_from_slice(&host);
+            }
             if has_bias {
                 let bt = super::weights::cuda_tensor_shaped(
                     map,
@@ -219,14 +277,26 @@ impl Linear {
                 b.extend_from_slice(&bt.host_cow()?);
             }
         }
+        if let Some(rule) = nvfp4 {
+            static SAID: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+            super::log::info_once(
+                &SAID,
+                format_args!(
+                    "longlive nvfp4: W4A4 {} dequant-then-matmul ({})",
+                    rule.as_str(),
+                    fastvideo_models::nvfp4::ENV
+                ),
+            );
+        }
         let rows = prefixes.len() * out_dim;
-        Self::from_tensors(
+        Self::from_tensors_with(
             CudaTensor::from_vec(w, vec![rows, in_dim])?,
             if has_bias {
                 Some(CudaTensor::from_vec(b, vec![rows])?)
             } else {
                 None
             },
+            nvfp4,
         )
     }
 
@@ -296,6 +366,7 @@ impl Linear {
             weight_fp8: None,
             weight_fp8_rows: None,
             weight_affine: None,
+            nvfp4: None,
         }))
     }
 
@@ -323,6 +394,7 @@ impl Linear {
             weight_fp8: None,
             weight_fp8_rows: None,
             weight_affine: None,
+            nvfp4: None,
         })
     }
 
@@ -407,6 +479,7 @@ impl Linear {
             weight_fp8: None,
             weight_fp8_rows: Some(std::sync::Arc::new(rows)),
             weight_affine: None,
+            nvfp4: None,
         })
     }
 
@@ -418,6 +491,11 @@ impl Linear {
     /// Whether this linear holds an MLX affine (group-64) weight.
     pub fn is_affine(&self) -> bool {
         self.weight_affine.is_some()
+    }
+
+    /// LongLive NVFP4 W4A4 (`FASTVIDEO_NVFP4`) is active on this linear.
+    pub fn is_nvfp4(&self) -> bool {
+        self.nvfp4.is_some()
     }
 
     /// Load `prefix.weight` as MLX affine INT8/6/4 (group 64). Prefers a
@@ -477,6 +555,7 @@ impl Linear {
             weight_fp8: None,
             weight_fp8_rows: None,
             weight_affine: Some(std::sync::Arc::new(aff)),
+            nvfp4: None,
         })
     }
 
@@ -562,6 +641,7 @@ impl Linear {
             weight_fp8: Some(std::sync::Arc::new(q)),
             weight_fp8_rows: None,
             weight_affine: None,
+            nvfp4: None,
         }))
     }
 
@@ -596,6 +676,13 @@ impl Linear {
     }
 
     fn forward_act(&self, xs: &CudaTensor, gelu: bool) -> Result<CudaTensor> {
+        let xs_q;
+        let xs = if let Some(rule) = self.nvfp4 {
+            xs_q = nvfp4_activations(xs, rule)?;
+            &xs_q
+        } else {
+            xs
+        };
         let (m, k, out_shape) = self.out_shape(xs)?;
         let n = self.out_dim();
         if let Some(aff) = self.weight_affine.as_deref() {
@@ -1077,5 +1164,17 @@ mod fp8_rows_tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn nvfp4_stays_off_when_the_flag_is_unset() {
+        let prev = std::env::var(fastvideo_models::nvfp4::ENV).ok();
+        std::env::remove_var(fastvideo_models::nvfp4::ENV);
+        let lin = Linear::load(&map(), "blocks.0.attn1.to_q", 16, 8, true).unwrap();
+        match prev {
+            Some(v) => std::env::set_var(fastvideo_models::nvfp4::ENV, v),
+            None => std::env::remove_var(fastvideo_models::nvfp4::ENV),
+        }
+        assert!(!lin.is_nvfp4());
     }
 }
