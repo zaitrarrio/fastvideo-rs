@@ -4,6 +4,7 @@
 pub mod config;
 pub mod rope;
 pub mod schedule;
+pub mod sol;
 pub mod t5_config;
 pub mod text;
 

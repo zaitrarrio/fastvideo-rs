@@ -591,6 +591,49 @@ pub struct WanTransformer3D {
     vsa_cache: std::sync::Arc<
         std::sync::Mutex<std::collections::HashMap<(usize, usize, usize), std::sync::Arc<VsaCtx>>>,
     >,
+    /// Sol TeaCache block residual. Empty unless `FASTVIDEO_WAN_SOL_CACHE=teacache`.
+    sol_tea: std::sync::Arc<std::sync::Mutex<Option<SolTeaRuntime>>>,
+}
+
+use fastvideo_models::wan::sol_cache::{SolTeaCache, TeaBranch};
+
+/// Per-branch block residual for Sol TeaCache. Armed by the denoise loop.
+#[derive(Debug)]
+struct SolTeaRuntime {
+    state: SolTeaCache,
+    pending: Option<(TeaBranch, usize)>,
+    active: Option<TeaBranch>,
+    cond_signal: Option<CudaTensor>,
+    uncond_signal: Option<CudaTensor>,
+    cond_residual: Option<CudaTensor>,
+    uncond_residual: Option<CudaTensor>,
+}
+
+fn relative_l1(current: &CudaTensor, previous: &CudaTensor) -> Result<f64> {
+    let cur = current.host_cow()?;
+    let prev = previous.host_cow()?;
+    let n = cur.len().max(1) as f64;
+    let mut num = 0.0;
+    let mut den = 0.0;
+    for (a, b) in cur.iter().zip(prev.iter()) {
+        num += (f64::from(*a) - f64::from(*b)).abs();
+        den += f64::from(*b).abs();
+    }
+    Ok((num / n) / (den / n).max(1e-8))
+}
+
+fn env_usize(name: &str, default: usize) -> usize {
+    std::env::var(name)
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(default)
+}
+
+fn env_f64(name: &str, default: f64) -> f64 {
+    std::env::var(name)
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(default)
 }
 
 impl WanTransformer3D {
@@ -618,6 +661,7 @@ impl WanTransformer3D {
             rotary_cache: Default::default(),
             #[cfg(feature = "cuda")]
             vsa_cache: Default::default(),
+            sol_tea: Default::default(),
             cfg,
         })
     }
@@ -683,6 +727,7 @@ impl WanTransformer3D {
             rotary_cache: Default::default(),
             #[cfg(feature = "cuda")]
             vsa_cache: Default::default(),
+            sol_tea: Default::default(),
             cfg,
         })
     }
@@ -711,6 +756,140 @@ impl WanTransformer3D {
         y.reshape(vec![b, t, dim, hh, ww])?
             .permute(&[0, 1, 3, 4, 2])?
             .reshape(vec![b, t * hh * ww, dim])
+    }
+
+    /// Install or clear Sol TeaCache for this denoise. `teacache` reads the
+    /// published defaults (threshold 0.12, warmup 2, cooldown the last 2).
+    pub fn configure_sol_teacache(&self, num_steps: usize) -> Result<()> {
+        let family = std::env::var("FASTVIDEO_WAN_SOL_CACHE").unwrap_or_default();
+        let family = family.trim().to_ascii_lowercase();
+        let mut slot = self.sol_tea.lock().expect("sol tea");
+        if family != "teacache" {
+            *slot = None;
+            return Ok(());
+        }
+        let coefficients =
+            std::env::var("FASTVIDEO_WAN_TEACACHE_COEFFS").unwrap_or_else(|_| "1.0,0.0".into());
+        let coefficients: Vec<f64> = coefficients
+            .split(',')
+            .filter_map(|part| part.trim().parse().ok())
+            .collect();
+        let state = SolTeaCache::new(
+            env_f64("FASTVIDEO_WAN_TEACACHE_THRESH", 0.12),
+            env_usize("FASTVIDEO_WAN_TEACACHE_START", 2),
+            env_usize("FASTVIDEO_WAN_TEACACHE_END", num_steps.saturating_sub(2)),
+            env_usize("FASTVIDEO_WAN_TEACACHE_MAX_HITS", 0),
+            env_usize("FASTVIDEO_WAN_TEACACHE_PERIODIC", 0),
+            coefficients,
+        )
+        .map_err(TensorError::Message)?;
+        super::log::info(format_args!(
+            "wan sol teacache: threshold {} start {} end {} (block residual, dense head)",
+            state.threshold, state.start_step, state.end_step
+        ));
+        *slot = Some(SolTeaRuntime {
+            state,
+            pending: None,
+            active: None,
+            cond_signal: None,
+            uncond_signal: None,
+            cond_residual: None,
+            uncond_residual: None,
+        });
+        Ok(())
+    }
+
+    pub fn sol_teacache_enabled(&self) -> bool {
+        self.sol_tea.lock().expect("sol tea").is_some()
+    }
+
+    /// Mark the next forward as one CFG branch of `step`. No-op when TeaCache is off.
+    pub fn arm_sol_teacache(&self, cond: bool, step: usize) {
+        let mut slot = self.sol_tea.lock().expect("sol tea");
+        if let Some(runtime) = slot.as_mut() {
+            runtime.pending = Some((
+                if cond {
+                    TeaBranch::Cond
+                } else {
+                    TeaBranch::Uncond
+                },
+                step,
+            ));
+        }
+    }
+
+    /// `Some(true)` reuses the block residual. `Some(false)` runs the blocks.
+    /// `None` leaves the forward dense and does not touch the cache.
+    fn begin_sol_tea(&self, signal: &CudaTensor) -> Result<Option<bool>> {
+        let mut slot = self.sol_tea.lock().expect("sol tea");
+        let Some(runtime) = slot.as_mut() else {
+            return Ok(None);
+        };
+        let Some((branch, step)) = runtime.pending.take() else {
+            return Ok(None);
+        };
+        if signal.shape.first().copied().unwrap_or(0) != 1 {
+            static ONCE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+            super::log::info_once(
+                &ONCE,
+                format_args!("wan sol teacache: batched forward stays dense"),
+            );
+            return Ok(None);
+        }
+        let rel = if runtime.state.needs_signal(branch, step) {
+            let previous = match branch {
+                TeaBranch::Cond => runtime.cond_signal.as_ref(),
+                TeaBranch::Uncond => runtime.uncond_signal.as_ref(),
+            }
+            .expect("teacache signal");
+            relative_l1(signal, previous)?
+        } else {
+            0.0
+        };
+        let decision = runtime.state.decide(branch, step, rel);
+        let stored = signal.clone();
+        match branch {
+            TeaBranch::Cond => runtime.cond_signal = Some(stored),
+            TeaBranch::Uncond => runtime.uncond_signal = Some(stored),
+        }
+        runtime.active = Some(branch);
+        if decision.compute {
+            Ok(Some(false))
+        } else {
+            runtime.state.note_reused(branch);
+            super::log::debug(format_args!(
+                "wan sol teacache reuse step {step} reason {}",
+                decision.reason
+            ));
+            Ok(Some(true))
+        }
+    }
+
+    fn add_sol_tea_residual(&self, hidden: CudaTensor) -> Result<CudaTensor> {
+        let residual = {
+            let mut slot = self.sol_tea.lock().expect("sol tea");
+            let runtime = slot.as_mut().expect("sol tea");
+            let branch = runtime.active.take().expect("sol tea branch");
+            match branch {
+                TeaBranch::Cond => runtime.cond_residual.clone(),
+                TeaBranch::Uncond => runtime.uncond_residual.clone(),
+            }
+            .expect("sol tea residual")
+        };
+        hidden.add(&residual)
+    }
+
+    fn finish_sol_tea(&self, before: &CudaTensor, after: &CudaTensor) -> Result<()> {
+        let mut slot = self.sol_tea.lock().expect("sol tea");
+        let runtime = slot.as_mut().expect("sol tea");
+        let branch = runtime.active.take().expect("sol tea branch");
+        runtime.state.note_computed(branch);
+        let residual = after.sub(before)?;
+        match branch {
+            TeaBranch::Cond => runtime.cond_residual = Some(residual),
+            TeaBranch::Uncond => runtime.uncond_residual = Some(residual),
+        }
+        Ok(())
     }
 
     pub fn forward(
@@ -817,16 +996,29 @@ impl WanTransformer3D {
         // VSA applies to the self-attention grid only, and only when the
         // checkpoint carries the gates it was trained with.
         let vsa = self.vsa_for(t, h, w)?;
-        for block in &self.blocks {
-            hidden = block.forward(
-                &hidden,
-                &encoder,
-                &timestep_proj,
-                &rope,
-                image.as_ref(),
-                mask.as_ref(),
-                vsa.as_deref(),
-            )?;
+        let tea = self.begin_sol_tea(&timestep_proj)?;
+        let block_in = if tea == Some(false) {
+            Some(hidden.clone())
+        } else {
+            None
+        };
+        if tea == Some(true) {
+            hidden = self.add_sol_tea_residual(hidden)?;
+        } else {
+            for block in &self.blocks {
+                hidden = block.forward(
+                    &hidden,
+                    &encoder,
+                    &timestep_proj,
+                    &rope,
+                    image.as_ref(),
+                    mask.as_ref(),
+                    vsa.as_deref(),
+                )?;
+            }
+            if let Some(before) = block_in.as_ref() {
+                self.finish_sol_tea(before, &hidden)?;
+            }
         }
         // Output head: table [1, 2, dim] + temb broadcast over both rows.
         let temb_rows = temb.unsqueeze(1)?;

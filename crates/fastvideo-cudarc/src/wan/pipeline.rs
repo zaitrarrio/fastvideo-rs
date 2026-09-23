@@ -563,9 +563,13 @@ impl WanPipeline {
         };
         let tea_cache = TeaCache::from_env();
         let easy_cache = EasyCacheRuntime::from_env(n_steps)?;
-        if tea_cache.enabled && easy_cache.is_some() {
+        self.dit.configure_sol_teacache(n_steps)?;
+        if let Some(low) = &self.dit_2 {
+            low.configure_sol_teacache(n_steps)?;
+        }
+        if tea_cache.enabled && (easy_cache.is_some() || self.dit.sol_teacache_enabled()) {
             return Err(PipelineError::Message(
-                "FASTVIDEO_TEACACHE and FASTVIDEO_WAN_SOL_CACHE=easycache both set".into(),
+                "FASTVIDEO_TEACACHE and FASTVIDEO_WAN_SOL_CACHE both set".into(),
             ));
         }
         let mut ctx = DenoiseCtx {
@@ -578,6 +582,7 @@ impl WanPipeline {
             guidance_2,
             tea_cache,
             easy_cache,
+            sol_tea_step: 0,
         };
         if cfg.is_rcm {
             let sigma = cfg.rcm_sigma_max.unwrap_or(RCM_SIGMA_MAX_T2V);
@@ -683,6 +688,7 @@ struct DenoiseCtx<'a> {
     guidance_2: f32,
     tea_cache: TeaCache,
     easy_cache: Option<EasyCacheRuntime>,
+    sol_tea_step: usize,
 }
 
 /// Simple residual TeaCache with Wan2.1-1.3B poly rescale (upstream TeaCache4Wan2.1).
@@ -836,10 +842,13 @@ impl EasyCacheRuntime {
         if family.is_empty() || matches!(family.as_str(), "0" | "off" | "none" | "false") {
             return Ok(None);
         }
-        if family != "easycache" {
+        if family != "easycache" && family != "teacache" {
             return Err(PipelineError::Message(format!(
-                "FASTVIDEO_WAN_SOL_CACHE={family} is not supported (easycache)"
+                "FASTVIDEO_WAN_SOL_CACHE={family} is not supported (easycache or teacache)"
             )));
+        }
+        if family == "teacache" {
+            return Ok(None);
         }
         let threshold = std::env::var("FASTVIDEO_WAN_EASYCACHE_THRESH")
             .ok()
@@ -998,6 +1007,12 @@ fn dit_cfg(
     if ctx.easy_cache.is_some() {
         return dit_cfg_easy(ctx, latents, encoder_hs, t);
     }
+    let tea_step = ctx.sol_tea_step;
+    let tea_on =
+        ctx.high.sol_teacache_enabled() || ctx.low.is_some_and(|dit| dit.sol_teacache_enabled());
+    if tea_on {
+        ctx.sol_tea_step += 1;
+    }
     if let Some(cached) = ctx.tea_cache.maybe_reuse(latents) {
         static TEA: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
         let n = TEA.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
@@ -1016,10 +1031,14 @@ fn dit_cfg(
     let t1 = CudaTensor::from_vec(vec![t], vec![1])?;
 
     let out = if (scale - 1.0).abs() < 1e-6 {
+        if tea_on {
+            dit.arm_sol_teacache(true, tea_step);
+        }
         dit.forward_ctx(&latent_in, &t1, &cond_hs, ctx.image)?
-    } else if ctx.i2v.is_none() && ctx.image.is_none() && rows == 2 {
+    } else if !tea_on && ctx.i2v.is_none() && ctx.image.is_none() && rows == 2 {
         // One batch-2 forward for [uncond, cond]: the embeddings are already
-        // in that order, so only the latents are duplicated.
+        // in that order, so only the latents are duplicated. Sol TeaCache
+        // needs one branch per forward, so it takes the split path below.
         let latent_batch = CudaTensor::cat(&[&latent_in, &latent_in], 0)?;
         let t_batch = CudaTensor::from_vec(vec![t, t], vec![2])?;
         let out_batch = dit.forward_ctx(&latent_batch, &t_batch, encoder_hs, None)?;
@@ -1029,7 +1048,13 @@ fn dit_cfg(
         CudaTensor::lincomb(&[(1.0 - scale, &uncond), (scale, &cond)])?
     } else {
         let uncond_hs = encoder_hs.narrow(0, 0, 1)?;
+        if tea_on {
+            dit.arm_sol_teacache(true, tea_step);
+        }
         let cond = dit.forward_ctx(&latent_in, &t1, &cond_hs, ctx.image)?;
+        if tea_on {
+            dit.arm_sol_teacache(false, tea_step);
+        }
         let uncond = dit.forward_ctx(&latent_in, &t1, &uncond_hs, ctx.image)?;
         CudaTensor::lincomb(&[(1.0 - scale, &uncond), (scale, &cond)])?
     };

@@ -303,6 +303,18 @@ impl CosmosPipeline {
 
         let t_cond = (request.sigma_conditioning / (request.sigma_conditioning + 1.0)) as f32;
         let fps = Some(request.fps as f32);
+        if std::env::var("FASTVIDEO_COSMOS_SOL")
+            .map(|v| v == "1" || v.eq_ignore_ascii_case("teacache"))
+            .unwrap_or(false)
+        {
+            crate::wan::log::info(format_args!(
+                "cosmos sol: teacache thr {} start {} max {}, fp4 skips first/last {} (time-embed signal and nvfp4 are not applied)",
+                fastvideo_models::cosmos::sol::TEACACHE_THRESHOLD,
+                fastvideo_models::cosmos::sol::TEACACHE_START_STEP,
+                fastvideo_models::cosmos::sol::TEACACHE_MAX_CONSECUTIVE,
+                fastvideo_models::cosmos::sol::FP4_SKIP_FIRST,
+            ));
+        }
 
         for (i, &sigma) in sigmas.iter().enumerate() {
             let (c_in, c_skip, c_out) = CosmosSchedule::edm_coeffs(sigma);
