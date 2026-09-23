@@ -21,8 +21,8 @@ pub fn tokenize_clip_at(
             path.display()
         ));
     }
-    let tokenizer = tokenizers::Tokenizer::from_file(&path)
-        .map_err(|e| format!("{}: {e}", path.display()))?;
+    let tokenizer =
+        tokenizers::Tokenizer::from_file(&path).map_err(|e| format!("{}: {e}", path.display()))?;
     let encoding = tokenizer
         .encode(prompt, true)
         .map_err(|e| format!("clip tokenize: {e}"))?;

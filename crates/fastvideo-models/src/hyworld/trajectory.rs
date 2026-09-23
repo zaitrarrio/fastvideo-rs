@@ -134,10 +134,13 @@ mod tests {
 
     #[test]
     fn forward_moves_z() {
-        let motions = vec![Motion {
-            forward: 0.08,
-            ..Default::default()
-        }; 4];
+        let motions = vec![
+            Motion {
+                forward: 0.08,
+                ..Default::default()
+            };
+            4
+        ];
         let poses = generate_camera_trajectory_local(&motions);
         assert_eq!(poses.len(), 5);
         assert!(poses[4][2][3].abs() > poses[0][2][3].abs());

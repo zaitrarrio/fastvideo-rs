@@ -65,7 +65,8 @@ impl Sd35Pipeline {
     }
 
     pub fn load_dit(&mut self) -> Result<()> {
-        let map = WeightMap::open(&self.root.join("transformer")).map_err(|e| msg(e.to_string()))?;
+        let map =
+            WeightMap::open(&self.root.join("transformer")).map_err(|e| msg(e.to_string()))?;
         self.dit = Some(Sd35Transformer::load(self.cfg.dit.clone(), &map)?);
         Ok(())
     }
@@ -107,8 +108,13 @@ impl Sd35Pipeline {
         // SD3.5: T5-XXL lives in `text_encoder_3` / `tokenizer_3`.
         let te = self.root.join("text_encoder_3");
         crate::text_encode::zeros_or_encode(allow_zeros, &[1, 16, dim], &te, || {
-            let emb =
-                crate::text_encode::encode_t5_xxl(&self.root, "text_encoder_3", "tokenizer_3", prompt, 256)?;
+            let emb = crate::text_encode::encode_t5_xxl(
+                &self.root,
+                "text_encoder_3",
+                "tokenizer_3",
+                prompt,
+                256,
+            )?;
             if emb.shape.get(2).copied() != Some(dim) {
                 return crate::text_encode::broadcast_to_dim(&emb, dim);
             }
@@ -120,7 +126,10 @@ impl Sd35Pipeline {
         let dit = self.dit.as_ref().ok_or_else(|| {
             msg("SD3.5: call load_dit() after placing Diffusers `transformer/` under --weights")
         })?;
-        let vae = self.vae.as_ref().ok_or_else(|| msg("SD3.5: call load_vae() or load_vae_stub()"))?;
+        let vae = self
+            .vae
+            .as_ref()
+            .ok_or_else(|| msg("SD3.5: call load_vae() or load_vae_stub()"))?;
 
         let text = self.encode_text(&request.prompt)?;
         let (lh, lw) = if self.cfg.dit.num_layers <= 2 {

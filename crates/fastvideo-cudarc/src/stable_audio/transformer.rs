@@ -28,9 +28,12 @@ impl StableAudioTransformer {
         let hit = hub_keys::first_present(map, sakeys::PROBES);
         let tiny = cfg.num_layers <= 2;
         if hit.is_none() && !tiny {
-            return Err(msg(
-                hub_keys::require_any(map, "stable_audio", sakeys::PROBES).unwrap_err(),
-            ));
+            return Err(msg(hub_keys::require_any(
+                map,
+                "stable_audio",
+                sakeys::PROBES,
+            )
+            .unwrap_err()));
         }
         Ok(Self {
             cfg,

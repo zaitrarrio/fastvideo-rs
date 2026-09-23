@@ -16,7 +16,9 @@ pub struct VisionTokenCount {
 /// Ordered Ref2VA medium for presentation (geometry already prepared).
 #[derive(Debug, Clone)]
 pub enum PresentationRef {
-    Image { token_count: usize },
+    Image {
+        token_count: usize,
+    },
     /// `token_count` is the total merged vision pads (`T*H*W / merge²`).
     Video {
         token_count: usize,
@@ -82,8 +84,19 @@ pub fn build_fl2va_presentation(
     let mut token_ids = Vec::new();
     let mut token_tags = Vec::new();
     for (i, &count) in image_token_counts.iter().enumerate() {
-        emit_text(tokenizer, &format!("<Picture {}>: ", i + 1), &mut token_ids, &mut token_tags)?;
-        emit_vision(cfg, cfg.image_token_id, count, &mut token_ids, &mut token_tags)?;
+        emit_text(
+            tokenizer,
+            &format!("<Picture {}>: ", i + 1),
+            &mut token_ids,
+            &mut token_tags,
+        )?;
+        emit_vision(
+            cfg,
+            cfg.image_token_id,
+            count,
+            &mut token_ids,
+            &mut token_tags,
+        )?;
     }
     emit_text(tokenizer, prompt, &mut token_ids, &mut token_tags)?;
     if token_ids.is_empty() {
@@ -124,7 +137,13 @@ pub fn build_ref2va_presentation(
                     &mut token_ids,
                     &mut token_tags,
                 )?;
-                emit_vision(cfg, cfg.image_token_id, *token_count, &mut token_ids, &mut token_tags)?;
+                emit_vision(
+                    cfg,
+                    cfg.image_token_id,
+                    *token_count,
+                    &mut token_ids,
+                    &mut token_tags,
+                )?;
             }
             PresentationRef::Video {
                 token_count,
@@ -145,7 +164,13 @@ pub fn build_ref2va_presentation(
                         &mut token_tags,
                     )?;
                 }
-                emit_vision(cfg, cfg.video_token_id, *token_count, &mut token_ids, &mut token_tags)?;
+                emit_vision(
+                    cfg,
+                    cfg.video_token_id,
+                    *token_count,
+                    &mut token_ids,
+                    &mut token_tags,
+                )?;
             }
         }
     }
@@ -195,7 +220,11 @@ mod tests {
         assert!(p.token_ids.contains(&cfg.vision_start_token_id));
         assert!(p.token_ids.contains(&cfg.image_token_id));
         assert!(p.token_ids.contains(&cfg.vision_end_token_id));
-        let pads = p.token_ids.iter().filter(|&&id| id == cfg.image_token_id).count();
+        let pads = p
+            .token_ids
+            .iter()
+            .filter(|&&id| id == cfg.image_token_id)
+            .count();
         assert_eq!(pads, 3);
         assert_eq!(p.token_tags.len(), p.token_ids.len());
         assert!(p.token_tags.iter().any(|&t| t == TAG_VIDEO));
@@ -215,7 +244,11 @@ mod tests {
             },
         ];
         let p = build_ref2va_presentation(&tok, &cfg, "a dog", &refs).unwrap();
-        let video_pads = p.token_ids.iter().filter(|&&id| id == cfg.video_token_id).count();
+        let video_pads = p
+            .token_ids
+            .iter()
+            .filter(|&&id| id == cfg.video_token_id)
+            .count();
         assert_eq!(video_pads, 8);
         assert_eq!(p.len(), p.token_tags.len());
     }

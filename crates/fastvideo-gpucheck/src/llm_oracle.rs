@@ -67,10 +67,18 @@ pub fn run(
     let mut orc = st::load(oracle)?;
     let ids = ints(&st::take(&mut orc, "input_ids", oracle)?, "input_ids")?;
     let positions = ints(&st::take(&mut orc, "positions", oracle)?, "positions")?;
-    let attend: Vec<bool> = st::take(&mut orc, "attend", oracle)?.data.iter().map(|&v| v != 0.0).collect();
+    let attend: Vec<bool> = st::take(&mut orc, "attend", oracle)?
+        .data
+        .iter()
+        .map(|&v| v != 0.0)
+        .collect();
     let mut taps: Vec<(usize, st::F32Tensor)> = orc
         .into_iter()
-        .filter_map(|(k, t)| k.strip_prefix("hidden_").and_then(|n| n.parse().ok()).map(|n| (n, t)))
+        .filter_map(|(k, t)| {
+            k.strip_prefix("hidden_")
+                .and_then(|n| n.parse().ok())
+                .map(|n| (n, t))
+        })
         .collect();
     taps.sort_by_key(|(k, _)| *k);
     if taps.is_empty() {
@@ -83,13 +91,21 @@ pub fn run(
     let probe = |p: &str| map.has_tensor(&format!("{p}.0.input_layernorm.weight"));
     let prefix = match layer_prefix {
         Some(p) => p.to_string(),
-        None => [cfg.layer_prefix.as_str(), "model.language_model.layers", "language_model.model.layers", "model.layers"]
-            .into_iter()
-            .find(|p| probe(p))
-            .ok_or_else(|| anyhow::anyhow!("no decoder layers found under {}", weights.display()))?
-            .to_string(),
+        None => [
+            cfg.layer_prefix.as_str(),
+            "model.language_model.layers",
+            "language_model.model.layers",
+            "model.layers",
+        ]
+        .into_iter()
+        .find(|p| probe(p))
+        .ok_or_else(|| anyhow::anyhow!("no decoder layers found under {}", weights.display()))?
+        .to_string(),
     };
-    let root = prefix.strip_suffix(".layers").unwrap_or(&prefix).to_string();
+    let root = prefix
+        .strip_suffix(".layers")
+        .unwrap_or(&prefix)
+        .to_string();
     cfg.layer_prefix = prefix;
     cfg.embed_key = format!("{root}.embed_tokens.weight");
     cfg.final_norm_key = format!("{root}.norm.weight");
@@ -110,13 +126,22 @@ pub fn run(
     let want: Vec<usize> = taps.iter().map(|(k, _)| *k).collect();
     let (ours, seconds) = measure(report, "forward", || {
         let out = llm::hidden_states(&map, &cfg, &ids, &positions, &attend, &want)?;
-        out.iter().map(|t| Ok(t.host_cow()?.into_owned())).collect::<anyhow::Result<Vec<_>>>()
+        out.iter()
+            .map(|t| Ok(t.host_cow()?.into_owned()))
+            .collect::<anyhow::Result<Vec<_>>>()
     })?;
-    report.note("forward", json!({"seconds": seconds, "layers_run": want.iter().max()}));
+    report.note(
+        "forward",
+        json!({"seconds": seconds, "layers_run": want.iter().max()}),
+    );
 
     let h = cfg.hidden;
     let keep = |v: &[f32]| -> Vec<f32> {
-        v.chunks_exact(h).zip(&attend).filter(|(_, a)| **a).flat_map(|(row, _)| row.iter().copied()).collect()
+        v.chunks_exact(h)
+            .zip(&attend)
+            .filter(|(_, a)| **a)
+            .flat_map(|(row, _)| row.iter().copied())
+            .collect()
     };
     // Every tap's metric lands before the first gate can stop the stage: the
     // layer at which the error starts to grow is the diagnosis.
@@ -125,14 +150,29 @@ pub fn run(
         .zip(&ours)
         .map(|((k, t), got)| {
             if t.data.len() != got.len() {
-                anyhow::bail!("hidden_{k}: oracle has {} values, we produced {}", t.data.len(), got.len());
+                anyhow::bail!(
+                    "hidden_{k}: oracle has {} values, we produced {}",
+                    t.data.len(),
+                    got.len()
+                );
             }
             Ok((*k, diff(&keep(got), &keep(&t.data))))
         })
         .collect::<anyhow::Result<_>>()?;
-    report.set("metrics", diffs.iter().map(|(k, d)| (format!("hidden_{k}"), d.to_json())).collect::<serde_json::Map<_, _>>());
+    report.set(
+        "metrics",
+        diffs
+            .iter()
+            .map(|(k, d)| (format!("hidden_{k}"), d.to_json()))
+            .collect::<serde_json::Map<_, _>>(),
+    );
     for (k, d) in &diffs {
-        report.check(&format!("hidden_{k}"), d.within(max_rel), d.to_json(), json!({"rel_l2": max_rel}))?;
+        report.check(
+            &format!("hidden_{k}"),
+            d.within(max_rel),
+            d.to_json(),
+            json!({"rel_l2": max_rel}),
+        )?;
     }
     Ok(())
 }

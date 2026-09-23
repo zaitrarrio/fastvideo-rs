@@ -29,7 +29,7 @@ impl Flux2Transformer {
         let tiny = cfg.num_layers <= 2;
         if hit.is_none() && !tiny {
             return Err(msg(
-                hub_keys::require_any(map, "flux2", fkeys::PROBES).unwrap_err(),
+                hub_keys::require_any(map, "flux2", fkeys::PROBES).unwrap_err()
             ));
         }
         Ok(Self {

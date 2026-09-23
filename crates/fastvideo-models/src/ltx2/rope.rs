@@ -69,9 +69,22 @@ impl SplitRope {
     /// # Panics
     /// If `dim` is not divisible by `2 · heads`, `axes` is zero, or `fractions`
     /// is not a whole number of tokens — all programming errors, not inputs.
-    pub fn from_fractions(fractions: &[f32], axes: usize, dim: usize, heads: usize, theta: f64) -> Self {
-        assert!(axes > 0 && heads > 0 && dim.is_multiple_of(2 * heads), "split rope: dim {dim}, {heads} heads, {axes} axes");
-        assert!(fractions.len().is_multiple_of(axes), "split rope: {} fractions over {axes} axes", fractions.len());
+    pub fn from_fractions(
+        fractions: &[f32],
+        axes: usize,
+        dim: usize,
+        heads: usize,
+        theta: f64,
+    ) -> Self {
+        assert!(
+            axes > 0 && heads > 0 && dim.is_multiple_of(2 * heads),
+            "split rope: dim {dim}, {heads} heads, {axes} axes"
+        );
+        assert!(
+            fractions.len().is_multiple_of(axes),
+            "split rope: {} fractions over {axes} axes",
+            fractions.len()
+        );
         let tokens = fractions.len() / axes;
         let slots = dim / 2;
         let half = slots / heads;
@@ -80,11 +93,18 @@ impl SplitRope {
         // torch.linspace(0, 1, n, float64) → theta ** that → · pi/2 → float32.
         let freqs: Vec<f32> = (0..n)
             .map(|k| {
-                let e = if n == 1 { 0.0 } else { k as f64 / (n - 1) as f64 };
+                let e = if n == 1 {
+                    0.0
+                } else {
+                    k as f64 / (n - 1) as f64
+                };
                 (theta.powf(e) * std::f64::consts::FRAC_PI_2) as f32
             })
             .collect();
-        let (mut cos, mut sin) = (vec![1f32; heads * tokens * half], vec![0f32; heads * tokens * half]);
+        let (mut cos, mut sin) = (
+            vec![1f32; heads * tokens * half],
+            vec![0f32; heads * tokens * half],
+        );
         for t in 0..tokens {
             for m in pad..slots {
                 let (k, a) = ((m - pad) / axes, (m - pad) % axes);
@@ -97,7 +117,13 @@ impl SplitRope {
                 sin[at] = f64::from(angle).sin() as f32;
             }
         }
-        Self { heads, tokens, half, cos, sin }
+        Self {
+            heads,
+            tokens,
+            half,
+            cos,
+            sin,
+        }
     }
 
     /// The same table for a rotate_half kernel that takes `[rows, head_dim]`
@@ -107,7 +133,9 @@ impl SplitRope {
     /// `[B, H, S, D]` tensor viewed as `[B, 1, H·S, D]`.
     pub fn rotate_half_tables(&self) -> (Vec<f32>, Vec<f32>) {
         let widen = |v: &[f32]| -> Vec<f32> {
-            v.chunks_exact(self.half).flat_map(|row| row.iter().chain(row.iter()).copied()).collect()
+            v.chunks_exact(self.half)
+                .flat_map(|row| row.iter().chain(row.iter()).copied())
+                .collect()
         };
         (widen(&self.cos), widen(&self.sin))
     }
@@ -116,16 +144,26 @@ impl SplitRope {
 /// `[tokens, 3]` midpoints of each latent cell's extent in (seconds, px, px).
 /// Token order is frame-major, then row, then column — the packing order of
 /// the latents.
-fn video_midpoints(cfg: &Ltx2TransformerConfig, grid: [usize; 3], fps: f32, division: ScalarDivision) -> Vec<f32> {
+fn video_midpoints(
+    cfg: &Ltx2TransformerConfig,
+    grid: [usize; 3],
+    fps: f32,
+    division: ScalarDivision,
+) -> Vec<f32> {
     let [frames, height, width] = grid;
     let [st, sh, sw] = cfg.vae_scale_factors.map(|s| s as f32);
     let time = |f: usize| -> f32 {
         // The first latent frame covers one pixel frame, every later one eight:
         // shift by causal_offset - stride and clamp at zero, then seconds.
         let bound = |x: f32| division.div((x * st + cfg.causal_offset as f32 - st).max(0.0), fps);
-        division.div(bound(f as f32) + bound(f as f32 + cfg.patch_size_t as f32), 2.0)
+        division.div(
+            bound(f as f32) + bound(f as f32 + cfg.patch_size_t as f32),
+            2.0,
+        )
     };
-    let space = |i: usize, scale: f32| -> f32 { (i as f32 * scale + (i as f32 + cfg.patch_size as f32) * scale) / 2.0 };
+    let space = |i: usize, scale: f32| -> f32 {
+        (i as f32 * scale + (i as f32 + cfg.patch_size as f32) * scale) / 2.0
+    };
     let mut out = Vec::with_capacity(frames * height * width * 3);
     for f in 0..frames {
         for h in 0..height {
@@ -139,36 +177,80 @@ fn video_midpoints(cfg: &Ltx2TransformerConfig, grid: [usize; 3], fps: f32, divi
 
 /// `[tokens, 3]` fractions for the video self-attention table: the midpoints
 /// over `(max_pos s, base_height, base_width)`.
-pub fn video_fractions(cfg: &Ltx2TransformerConfig, grid: [usize; 3], fps: f32, division: ScalarDivision) -> Vec<f32> {
-    let max = [cfg.pos_embed_max_pos as f32, cfg.base_height as f32, cfg.base_width as f32];
+pub fn video_fractions(
+    cfg: &Ltx2TransformerConfig,
+    grid: [usize; 3],
+    fps: f32,
+    division: ScalarDivision,
+) -> Vec<f32> {
+    let max = [
+        cfg.pos_embed_max_pos as f32,
+        cfg.base_height as f32,
+        cfg.base_width as f32,
+    ];
     video_midpoints(cfg, grid, fps, division)
         .chunks_exact(3)
-        .flat_map(|c| [division.div(c[0], max[0]), division.div(c[1], max[1]), division.div(c[2], max[2])])
+        .flat_map(|c| {
+            [
+                division.div(c[0], max[0]),
+                division.div(c[1], max[1]),
+                division.div(c[2], max[2]),
+            ]
+        })
         .collect()
 }
 
 /// Midpoint in seconds of each video token's temporal extent, divided by
 /// `max_seconds` — the single axis of the audio↔video cross-attention table.
-pub fn video_time_fractions(cfg: &Ltx2TransformerConfig, grid: [usize; 3], fps: f32, max_seconds: f32, division: ScalarDivision) -> Vec<f32> {
-    video_midpoints(cfg, grid, fps, division).chunks_exact(3).map(|c| division.div(c[0], max_seconds)).collect()
+pub fn video_time_fractions(
+    cfg: &Ltx2TransformerConfig,
+    grid: [usize; 3],
+    fps: f32,
+    max_seconds: f32,
+    division: ScalarDivision,
+) -> Vec<f32> {
+    video_midpoints(cfg, grid, fps, division)
+        .chunks_exact(3)
+        .map(|c| division.div(c[0], max_seconds))
+        .collect()
 }
 
 /// Midpoint in seconds of audio latent `i`, over `max_seconds`. One latent is
 /// `audio_scale_factor` mel frames of `hop / rate` seconds, with the same
 /// causal first-frame shift as the video.
-pub fn audio_fractions(cfg: &Ltx2TransformerConfig, tokens: usize, max_seconds: f32, division: ScalarDivision) -> Vec<f32> {
+pub fn audio_fractions(
+    cfg: &Ltx2TransformerConfig,
+    tokens: usize,
+    max_seconds: f32,
+    division: ScalarDivision,
+) -> Vec<f32> {
     let scale = cfg.audio_scale_factor as f32;
     let (hop, rate) = (cfg.audio_hop_length as f32, cfg.audio_sampling_rate as f32);
-    let bound = |x: f32| division.div((x * scale + cfg.causal_offset as f32 - scale).max(0.0) * hop, rate);
+    let bound = |x: f32| {
+        division.div(
+            (x * scale + cfg.causal_offset as f32 - scale).max(0.0) * hop,
+            rate,
+        )
+    };
     (0..tokens)
-        .map(|i| division.div(division.div(bound(i as f32) + bound(i as f32 + cfg.audio_patch_size_t as f32), 2.0), max_seconds))
+        .map(|i| {
+            division.div(
+                division.div(
+                    bound(i as f32) + bound(i as f32 + cfg.audio_patch_size_t as f32),
+                    2.0,
+                ),
+                max_seconds,
+            )
+        })
         .collect()
 }
 
 /// The connectors' 1-D table: position `p` of `tokens` has fraction
 /// `p / base_seq_len`.
 pub fn connector_fractions(tokens: usize, base_seq_len: usize) -> Vec<f32> {
-    (0..tokens).map(|p| p as f32 / base_seq_len as f32).collect()
+    (0..tokens)
+        .map(|p| p as f32 / base_seq_len as f32)
+        .collect()
 }
 
 /// The four tables one DiT forward needs. They depend only on the request's
@@ -187,19 +269,41 @@ pub struct Ltx2RopeTables {
 
 impl Ltx2RopeTables {
     /// The tables as the product builds them: on CUDA.
-    pub fn new(cfg: &Ltx2TransformerConfig, grid: [usize; 3], audio_tokens: usize, fps: f32) -> Self {
+    pub fn new(
+        cfg: &Ltx2TransformerConfig,
+        grid: [usize; 3],
+        audio_tokens: usize,
+        fps: f32,
+    ) -> Self {
         Self::with_division(cfg, grid, audio_tokens, fps, ScalarDivision::Reciprocal)
     }
 
-    pub fn with_division(cfg: &Ltx2TransformerConfig, grid: [usize; 3], audio_tokens: usize, fps: f32, division: ScalarDivision) -> Self {
+    pub fn with_division(
+        cfg: &Ltx2TransformerConfig,
+        grid: [usize; 3],
+        audio_tokens: usize,
+        fps: f32,
+        division: ScalarDivision,
+    ) -> Self {
         let theta = cfg.rope_theta;
         let cross_dim = cfg.audio_cross_attention_dim;
         // Both cross tables share one time base so equal instants rotate equally.
         let cross_max = cfg.pos_embed_max_pos.max(cfg.audio_pos_embed_max_pos) as f32;
         Self {
-            video: SplitRope::from_fractions(&video_fractions(cfg, grid, fps, division), 3, cfg.inner_dim(), cfg.num_attention_heads, theta),
+            video: SplitRope::from_fractions(
+                &video_fractions(cfg, grid, fps, division),
+                3,
+                cfg.inner_dim(),
+                cfg.num_attention_heads,
+                theta,
+            ),
             audio: SplitRope::from_fractions(
-                &audio_fractions(cfg, audio_tokens, cfg.audio_pos_embed_max_pos as f32, division),
+                &audio_fractions(
+                    cfg,
+                    audio_tokens,
+                    cfg.audio_pos_embed_max_pos as f32,
+                    division,
+                ),
                 1,
                 cfg.audio_inner_dim(),
                 cfg.audio_num_attention_heads,
@@ -308,8 +412,22 @@ mod tests {
         let t = Ltx2RopeTables::new(&cfg(), [2, 2, 3], 5, 24.0);
         assert_eq!((t.video.heads, t.video.tokens, t.video.half), (32, 12, 64));
         assert_eq!((t.audio.heads, t.audio.tokens, t.audio.half), (32, 5, 32));
-        assert_eq!((t.cross_video.heads, t.cross_video.tokens, t.cross_video.half), (32, 12, 32));
-        assert_eq!((t.cross_audio.heads, t.cross_audio.tokens, t.cross_audio.half), (32, 5, 32));
+        assert_eq!(
+            (
+                t.cross_video.heads,
+                t.cross_video.tokens,
+                t.cross_video.half
+            ),
+            (32, 12, 32)
+        );
+        assert_eq!(
+            (
+                t.cross_audio.heads,
+                t.cross_audio.tokens,
+                t.cross_audio.half
+            ),
+            (32, 5, 32)
+        );
         // Two identity slots in front of the video table: head 0, pairs 0 and 1.
         assert_eq!(&t.video.cos[..2], &[1.0, 1.0]);
         assert_eq!(&t.video.sin[..2], &[0.0, 0.0]);
@@ -339,42 +457,116 @@ mod tests {
     #[test]
     fn tables_match_a_numpy_transliteration_of_the_reference() {
         let t = Ltx2RopeTables::with_division(&cfg(), [3, 2, 3], 5, 24.0, ScalarDivision::Exact);
-        let sums = |r: &SplitRope| (r.cos.iter().map(|&v| f64::from(v)).sum::<f64>(), r.sin.iter().map(|&v| f64::from(v)).sum::<f64>());
+        let sums = |r: &SplitRope| {
+            (
+                r.cos.iter().map(|&v| f64::from(v)).sum::<f64>(),
+                r.sin.iter().map(|&v| f64::from(v)).sum::<f64>(),
+            )
+        };
         for (name, table, want) in [
             ("video", &t.video, (-1456.788344584278, -526.246063605472)),
             ("audio", &t.audio, (-266.3353606130113, -141.95092843251768)),
-            ("cross_video", &t.cross_video, (-962.3432892755955, -534.2277238606475)),
-            ("cross_audio", &t.cross_audio, (-266.3353606130113, -141.95092843251768)),
+            (
+                "cross_video",
+                &t.cross_video,
+                (-962.3432892755955, -534.2277238606475),
+            ),
+            (
+                "cross_audio",
+                &t.cross_audio,
+                (-266.3353606130113, -141.95092843251768),
+            ),
         ] {
             let got = sums(table);
-            assert!((got.0 - want.0).abs() < 1e-4 && (got.1 - want.1).abs() < 1e-4, "{name}: sums {got:?} vs {want:?}");
+            assert!(
+                (got.0 - want.0).abs() < 1e-4 && (got.1 - want.1).abs() < 1e-4,
+                "{name}: sums {got:?} vs {want:?}"
+            );
         }
         let at = |r: &SplitRope, h: usize, tok: usize, j: usize| {
             let i = (h * r.tokens + tok) * r.half + j;
             (r.cos[i], r.sin[i])
         };
         let close = |got: (f32, f32), want: (f32, f32), what: &str| {
-            assert!((got.0 - want.0).abs() < 2e-7 && (got.1 - want.1).abs() < 2e-7, "{what}: {got:?} vs {want:?}");
+            assert!(
+                (got.0 - want.0).abs() < 2e-7 && (got.1 - want.1).abs() < 2e-7,
+                "{what}: {got:?} vs {want:?}"
+            );
         };
         close(at(&t.video, 0, 0, 0), (1.0, 0.0), "video identity pad");
-        close(at(&t.video, 0, 0, 2), (0.003_272_483_8, -0.999_994_64), "video h0 t0 j2");
-        close(at(&t.video, 0, 0, 3), (0.024_541_136, -0.999_698_8), "video h0 t0 j3");
-        close(at(&t.video, 5, 7, 13), (0.846_158_03, -0.532_932_1), "video h5 t7 j13");
-        close(at(&t.video, 31, 17, 63), (-0.382_976_6, 0.923_758_03), "video h31 t17 j63");
-        close(at(&t.video, 17, 9, 40), (0.999_613_7, 0.027_792_243), "video h17 t9 j40");
-        close(at(&t.cross_video, 0, 6, 0), (0.032_718_97, -0.999_464_57), "cross_video h0 t6 j0");
-        close(at(&t.cross_video, 31, 17, 31), (-0.866_037, 0.499_979_88), "cross_video h31 t17 j31");
-        close(at(&t.cross_video, 12, 11, 5), (0.707_948_03, -0.706_264_56), "cross_video h12 t11 j5");
-        close(at(&t.audio, 0, 0, 0), (0.000_785_426_24, -0.999_999_7), "audio h0 t0 j0");
-        close(at(&t.audio, 31, 4, 31), (-1.0, -6.892_973e-5), "audio h31 t4 j31");
-        close(at(&t.audio, 9, 3, 17), (0.598_838_4, 0.800_869_94), "audio h9 t3 j17");
+        close(
+            at(&t.video, 0, 0, 2),
+            (0.003_272_483_8, -0.999_994_64),
+            "video h0 t0 j2",
+        );
+        close(
+            at(&t.video, 0, 0, 3),
+            (0.024_541_136, -0.999_698_8),
+            "video h0 t0 j3",
+        );
+        close(
+            at(&t.video, 5, 7, 13),
+            (0.846_158_03, -0.532_932_1),
+            "video h5 t7 j13",
+        );
+        close(
+            at(&t.video, 31, 17, 63),
+            (-0.382_976_6, 0.923_758_03),
+            "video h31 t17 j63",
+        );
+        close(
+            at(&t.video, 17, 9, 40),
+            (0.999_613_7, 0.027_792_243),
+            "video h17 t9 j40",
+        );
+        close(
+            at(&t.cross_video, 0, 6, 0),
+            (0.032_718_97, -0.999_464_57),
+            "cross_video h0 t6 j0",
+        );
+        close(
+            at(&t.cross_video, 31, 17, 31),
+            (-0.866_037, 0.499_979_88),
+            "cross_video h31 t17 j31",
+        );
+        close(
+            at(&t.cross_video, 12, 11, 5),
+            (0.707_948_03, -0.706_264_56),
+            "cross_video h12 t11 j5",
+        );
+        close(
+            at(&t.audio, 0, 0, 0),
+            (0.000_785_426_24, -0.999_999_7),
+            "audio h0 t0 j0",
+        );
+        close(
+            at(&t.audio, 31, 4, 31),
+            (-1.0, -6.892_973e-5),
+            "audio h31 t4 j31",
+        );
+        close(
+            at(&t.audio, 9, 3, 17),
+            (0.598_838_4, 0.800_869_94),
+            "audio h9 t3 j17",
+        );
 
         let c = SplitRope::from_fractions(&connector_fractions(8, 4096), 1, 3840, 30, 10_000.0);
         let got = sums(&c);
-        assert!((got.0 + 769.1431764554143).abs() < 1e-4 && (got.1 + 343.0537126405907).abs() < 1e-4, "connector sums {got:?}");
+        assert!(
+            (got.0 + 769.1431764554143).abs() < 1e-4 && (got.1 + 343.0537126405907).abs() < 1e-4,
+            "connector sums {got:?}"
+        );
         close(at(&c, 0, 0, 0), (-4.371_139e-8, -1.0), "connector h0 p0 j0");
-        close(at(&c, 29, 7, 63), (-0.960_290_3, -0.279_002_64), "connector h29 p7 j63");
-        close(at(&c, 11, 3, 20), (0.925_963_9, -0.377_612_05), "connector h11 p3 j20");
+        close(
+            at(&c, 29, 7, 63),
+            (-0.960_290_3, -0.279_002_64),
+            "connector h29 p7 j63",
+        );
+        close(
+            at(&c, 11, 3, 20),
+            (0.925_963_9, -0.377_612_05),
+            "connector h11 p3 j20",
+        );
     }
     /// The first hardware run found every table within cos 0.999999998 of the
     /// reference but off by *exactly* 2^-10 (video time) and 2^-9 (audio) at
@@ -386,14 +578,26 @@ mod tests {
     #[test]
     fn cuda_and_cpu_scalar_division_differ_by_the_residue_measured_on_hardware() {
         let c = cfg();
-        let worst = |a: &SplitRope, b: &SplitRope| a.cos.iter().zip(&b.cos).map(|(x, y)| (x - y).abs()).fold(0f32, f32::max);
+        let worst = |a: &SplitRope, b: &SplitRope| {
+            a.cos
+                .iter()
+                .zip(&b.cos)
+                .map(|(x, y)| (x - y).abs())
+                .fold(0f32, f32::max)
+        };
         // Time is the only axis of these two tables, so one spatial cell is enough.
         let exact = Ltx2RopeTables::with_division(&c, [16, 1, 1], 126, 24.0, ScalarDivision::Exact);
         let cuda = Ltx2RopeTables::new(&c, [16, 1, 1], 126, 24.0);
-        assert_eq!(worst(&exact.cross_video, &cuda.cross_video), 0.000_976_562_44);
+        assert_eq!(
+            worst(&exact.cross_video, &cuda.cross_video),
+            0.000_976_562_44
+        );
         assert_eq!(worst(&exact.audio, &cuda.audio), 0.001_952_932_2);
         // Halving and dividing by a power of two are exact either way.
         assert_eq!(ScalarDivision::Reciprocal.div(3.0, 2.0), 1.5);
-        assert_eq!(ScalarDivision::Reciprocal.div(48.0, 2048.0), ScalarDivision::Exact.div(48.0, 2048.0));
+        assert_eq!(
+            ScalarDivision::Reciprocal.div(48.0, 2048.0),
+            ScalarDivision::Exact.div(48.0, 2048.0)
+        );
     }
 }

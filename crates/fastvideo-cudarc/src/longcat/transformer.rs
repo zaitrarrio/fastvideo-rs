@@ -51,7 +51,7 @@ impl Attn {
         &self,
         hidden: &CudaTensor,
         encoder: Option<&CudaTensor>,
-        bsa: Option<( [usize; 3], BsaParams )>,
+        bsa: Option<([usize; 3], BsaParams)>,
     ) -> Result<CudaTensor> {
         let [b, s, _] = match hidden.shape[..] {
             [b, s, d] => [b, s, d],
@@ -142,7 +142,13 @@ impl Block {
         let dim = cfg.hidden_size;
         let key = |n: &str| weights::join_key(prefix, n);
         Ok(Self {
-            adaln: Linear::load(map, &key("adaln_linear_1"), cfg.adaln_tembed_dim, 6 * dim, true)?,
+            adaln: Linear::load(
+                map,
+                &key("adaln_linear_1"),
+                cfg.adaln_tembed_dim,
+                6 * dim,
+                true,
+            )?,
             norm_attn: true,
             attn: Attn::load(map, &key("self_attn"), dim, cfg.num_heads)?,
             norm_cross: weights::cuda_tensor_shaped(map, &key("norm_cross.weight"), &[dim])?,
@@ -157,7 +163,7 @@ impl Block {
         x: &CudaTensor,
         y: &CudaTensor,
         temb: &CudaTensor,
-        bsa: Option<( [usize; 3], BsaParams )>,
+        bsa: Option<([usize; 3], BsaParams)>,
     ) -> Result<CudaTensor> {
         let mods = self.adaln.forward(&temb.silu())?;
         let shift_msa = mods.narrow(1, 0, self.dim)?;
@@ -266,10 +272,22 @@ impl LongCatTransformer {
                 cfg.adaln_tembed_dim,
                 true,
             )?,
-            caption_1: Linear::load(map, "caption_embedder.linear_1", cfg.caption_channels, dim, true)?,
+            caption_1: Linear::load(
+                map,
+                "caption_embedder.linear_1",
+                cfg.caption_channels,
+                dim,
+                true,
+            )?,
             caption_2: Linear::load(map, "caption_embedder.linear_2", dim, dim, true)?,
             blocks,
-            final_adaln: Linear::load(map, "final_layer.adaln_linear", cfg.adaln_tembed_dim, 2 * dim, true)?,
+            final_adaln: Linear::load(
+                map,
+                "final_layer.adaln_linear",
+                cfg.adaln_tembed_dim,
+                2 * dim,
+                true,
+            )?,
             final_norm: true,
             final_proj: Linear::load(
                 map,
@@ -406,9 +424,8 @@ impl LongCatTransformer {
                                             * w
                                             + xi * pw
                                             + pwi);
-                                        pixels[dst] = oh[((bi * seq + tok)
-                                            * (pt * ph * pw * oc))
-                                            + o];
+                                        pixels[dst] =
+                                            oh[((bi * seq + tok) * (pt * ph * pw * oc)) + o];
                                         o += 1;
                                     }
                                 }

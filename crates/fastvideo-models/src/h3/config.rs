@@ -520,11 +520,23 @@ impl H3VisionConfig {
     }
 }
 
+/// How the sigma grid is built. FastH3 checkpoints name DMD rungs. Sol-H3
+/// calls diffusers `set_timesteps(5)` after `set_shift`, which is the uniform
+/// linspace, not those rungs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum H3SigmaSource {
+    /// `dmd_denoising_steps / 1000`, then the modality shift.
+    Dmd,
+    /// `linspace(1, 0, num_inference_steps)` then the modality shift.
+    Uniform,
+}
+
 /// `fastvideo_inference.json` plus the two `scheduler_config.json` shifts: the
 /// recipe this distilled checkpoint was trained for.
 #[derive(Debug, Clone, PartialEq)]
 pub struct H3InferenceContract {
     /// DMD rungs; `rung / 1000` is the *unshifted* sigma of each forward.
+    /// Empty when [`Self::sigma_source`] is [`H3SigmaSource::Uniform`].
     pub dmd_denoising_steps: Vec<u32>,
     /// Sigma-grid points, terminal zero included (`transformer_forwards + 1`).
     pub num_inference_steps: usize,
@@ -535,8 +547,9 @@ pub struct H3InferenceContract {
     pub vsa_sparsity: f64,
     /// Tokens per VSA tile; 64 is the `(4, 4, 4)` tile.
     pub vsa_tile_size: usize,
-    /// Dense attention without `to_gate_compress` / VSA (Preview Dense).
+    /// Dense attention without `to_gate_compress` / VSA (Preview Dense, Sol-H3 1-GPU).
     pub dense: bool,
+    pub sigma_source: H3SigmaSource,
 }
 
 impl H3InferenceContract {
@@ -551,6 +564,7 @@ impl H3InferenceContract {
             vsa_sparsity: 0.8,
             vsa_tile_size: 64,
             dense: false,
+            sigma_source: H3SigmaSource::Dmd,
         }
     }
 
@@ -566,6 +580,7 @@ impl H3InferenceContract {
             vsa_sparsity: 0.9,
             vsa_tile_size: 64,
             dense: false,
+            sigma_source: H3SigmaSource::Dmd,
         }
     }
 
@@ -581,17 +596,45 @@ impl H3InferenceContract {
             vsa_sparsity: 0.0,
             vsa_tile_size: 64,
             dense: true,
+            sigma_source: H3SigmaSource::Dmd,
         }
     }
 
-    /// Named recipe: `8step` / `v2`, `4step-vsa` / `preview-vsa`, `4step-dense` / `preview-dense`.
+    /// Sol-H3 1-GPU profile ([NVlabs Sol-H3](https://github.com/NVlabs/Sana/tree/sol-engine/models/minimax_h3/Sol-H3)).
+    ///
+    /// MiniMax-H3 base plus a fused four-step adapter (FastH3 dense-datafree
+    /// for T2V/I2V, lightx2v turbo for Ref2VA). Diffusers
+    /// `set_timesteps(5)` after video shift 12 and audio shift 3: four
+    /// forwards on the uniform grid, dense attention. SOL/BSA is Sol-H3's
+    /// multi-GPU profile and is not this path.
+    pub fn sol_h3() -> Self {
+        Self {
+            dmd_denoising_steps: Vec::new(),
+            num_inference_steps: 5,
+            transformer_forwards: 4,
+            video_scheduler_shift: 12.0,
+            audio_scheduler_shift: 3.0,
+            guidance_scale: 1.0,
+            vsa_sparsity: 0.0,
+            vsa_tile_size: 64,
+            dense: true,
+            sigma_source: H3SigmaSource::Uniform,
+        }
+    }
+
+    /// Named recipe: `8step` / `v2`, `4step-vsa` / `preview-vsa`,
+    /// `4step-dense` / `preview-dense`, `sol-h3` (and `sol-h3-ref2va`).
     pub fn named(name: &str) -> Result<Self, String> {
         match name {
             "8step" | "v2" | "fasth3-8step" => Ok(Self::fasth3_8step()),
             "4step-vsa" | "preview-vsa" | "fasth3-4step-vsa" => Ok(Self::fasth3_4step_vsa()),
-            "4step-dense" | "preview-dense" | "fasth3-4step-dense" => Ok(Self::fasth3_4step_dense()),
+            "4step-dense" | "preview-dense" | "fasth3-4step-dense" => {
+                Ok(Self::fasth3_4step_dense())
+            }
+            "sol-h3" | "sol_h3" | "sol-h3-t2v" | "sol-h3-i2v" | "sol-h3-ref2va"
+            | "sol_h3_ref2va" => Ok(Self::sol_h3()),
             other => Err(format!(
-                "unknown H3 recipe '{other}' (8step|4step-vsa|4step-dense)"
+                "unknown H3 recipe '{other}' (8step|4step-vsa|4step-dense|sol-h3)"
             )),
         }
     }
@@ -869,12 +912,24 @@ mod tests {
             H3InferenceContract::fasth3_4step_vsa(),
             H3InferenceContract::fasth3_4step_dense(),
         ] {
+            assert_eq!(c.sigma_source, H3SigmaSource::Dmd);
             assert_eq!(c.dmd_denoising_steps.len(), c.transformer_forwards);
             assert_eq!(c.num_inference_steps, c.transformer_forwards + 1);
             assert!(c.dmd_denoising_steps.windows(2).all(|w| w[0] > w[1]));
             let j = super::super::schedule::H3JointSchedule::from_contract(&c).unwrap();
             assert_eq!(j.num_steps(), c.transformer_forwards);
         }
+        let sol = H3InferenceContract::sol_h3();
+        assert_eq!(sol.sigma_source, H3SigmaSource::Uniform);
+        assert!(sol.dense);
+        assert!(sol.dmd_denoising_steps.is_empty());
+        assert_eq!(
+            super::super::schedule::H3JointSchedule::from_contract(&sol)
+                .unwrap()
+                .num_steps(),
+            4
+        );
+        assert_eq!(H3InferenceContract::named("sol-h3-ref2va").unwrap(), sol);
         assert!(!H3InferenceContract::fasth3_4step_vsa().dense);
         assert!(H3InferenceContract::fasth3_4step_dense().dense);
         assert_eq!(H3InferenceContract::fasth3_4step_vsa().vsa_sparsity, 0.9);

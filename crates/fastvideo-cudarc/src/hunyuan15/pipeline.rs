@@ -79,7 +79,8 @@ impl Hunyuan15Pipeline {
     }
 
     pub fn load_dit(&mut self) -> Result<()> {
-        let map = WeightMap::open(&self.root.join("transformer")).map_err(|e| msg(e.to_string()))?;
+        let map =
+            WeightMap::open(&self.root.join("transformer")).map_err(|e| msg(e.to_string()))?;
         self.dit = Some(Hunyuan15Transformer::load(self.dit_cfg.clone(), &map)?);
         Ok(())
     }
@@ -150,10 +151,7 @@ impl Hunyuan15Pipeline {
             let velocity = dit.forward(&lat, &cond.qwen, text2, t as f32)?;
             // DiT returns `[B, T*H*W, out_channels]` — flatten to CTHW host.
             let vel = tokens_to_cthw(&velocity, c_out, lt, lh, lw)?;
-            sample = sched
-                .inner
-                .step_euler(&sample, &vel)
-                .map_err(|e| msg(e))?;
+            sample = sched.inner.step_euler(&sample, &vel).map_err(|e| msg(e))?;
             let _ = step;
         }
 
@@ -208,21 +206,21 @@ fn pack_latents(
         )));
     }
     if pad_c == 0 {
-        return Ok(CudaTensor::from_vec(sample.to_vec(), vec![1, c_out, t, h, w])?);
+        return Ok(CudaTensor::from_vec(
+            sample.to_vec(),
+            vec![1, c_out, t, h, w],
+        )?);
     }
     let mut packed = vec![0f32; (c_out + pad_c) * t * h * w];
     // Layout C,T,H,W — copy noise channels, leave cond/mask zero.
     packed[..want].copy_from_slice(sample);
-    Ok(CudaTensor::from_vec(packed, vec![1, c_out + pad_c, t, h, w])?)
+    Ok(CudaTensor::from_vec(
+        packed,
+        vec![1, c_out + pad_c, t, h, w],
+    )?)
 }
 
-fn tokens_to_cthw(
-    tokens: &CudaTensor,
-    c: usize,
-    t: usize,
-    h: usize,
-    w: usize,
-) -> Result<Vec<f32>> {
+fn tokens_to_cthw(tokens: &CudaTensor, c: usize, t: usize, h: usize, w: usize) -> Result<Vec<f32>> {
     let seq = t * h * w;
     if tokens.shape != [1, seq, c] {
         return Err(msg(format!(

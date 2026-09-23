@@ -35,7 +35,10 @@ pub fn merge_comfy_lora_into(
     scale: f32,
 ) -> Result<()> {
     if weight.len() != out_dim * in_dim {
-        return Err(msg(format!("lora merge: {} elements for [{out_dim}, {in_dim}]", weight.len())));
+        return Err(msg(format!(
+            "lora merge: {} elements for [{out_dim}, {in_dim}]",
+            weight.len()
+        )));
     }
     let down_key = format!("{base}.lora_down.weight");
     let up_key = format!("{base}.lora_up.weight");
@@ -53,8 +56,12 @@ pub fn merge_comfy_lora_into(
             d.shape, u.shape
         )));
     }
-    let down = cuda_tensor_shaped(ara, &down_key, &[r, in_dim])?.host_cow()?.into_owned();
-    let up = cuda_tensor_shaped(ara, &up_key, &[out_dim, r])?.host_cow()?.into_owned();
+    let down = cuda_tensor_shaped(ara, &down_key, &[r, in_dim])?
+        .host_cow()?
+        .into_owned();
+    let up = cuda_tensor_shaped(ara, &up_key, &[out_dim, r])?
+        .host_cow()?
+        .into_owned();
     merge_comfy_lora_host(weight, &down, &up, out_dim, in_dim, r, scale);
     Ok(())
 }
@@ -179,11 +186,29 @@ pub struct LayerAttn {
 
 impl LayerAttn {
     pub const fn sliding(rope_theta: f64, window: usize) -> Self {
-        Self { rope_theta, rope_factor: 1.0, window: Some(window), q_heads: None, q_head_dim: None, kv_heads: None, kv_head_dim: None, partial_rotary: None }
+        Self {
+            rope_theta,
+            rope_factor: 1.0,
+            window: Some(window),
+            q_heads: None,
+            q_head_dim: None,
+            kv_heads: None,
+            kv_head_dim: None,
+            partial_rotary: None,
+        }
     }
 
     pub const fn global(rope_theta: f64, rope_factor: f64) -> Self {
-        Self { rope_theta, rope_factor, window: None, q_heads: None, q_head_dim: None, kv_heads: None, kv_head_dim: None, partial_rotary: None }
+        Self {
+            rope_theta,
+            rope_factor,
+            window: None,
+            q_heads: None,
+            q_head_dim: None,
+            kv_heads: None,
+            kv_head_dim: None,
+            partial_rotary: None,
+        }
     }
 
     /// RoPE table width for a head of `head_dim` channels.
@@ -466,7 +491,11 @@ fn norm_weight(map: &WeightMap, key: &str, width: usize, offset: f32) -> Result<
 }
 
 fn norm_from(w: CudaTensor, offset: f32) -> Result<CudaTensor> {
-    let mut w = if offset == 0.0 { w } else { w.try_add_scalar(offset)? };
+    let mut w = if offset == 0.0 {
+        w
+    } else {
+        w.try_add_scalar(offset)?
+    };
     w.pin_device()?;
     Ok(w)
 }
@@ -491,7 +520,10 @@ fn linear_specs(cfg: &DecoderConfig, layer: usize) -> [(&'static str, usize, usi
 
 /// Largest linear weight block in any layer (for prefetch pinned sizing).
 pub(crate) fn max_layer_linear_elems(cfg: &DecoderConfig) -> usize {
-    (0..cfg.num_layers()).map(|i| linear_specs(cfg, i).iter().map(|(_, i, o)| i * o).sum()).max().unwrap_or(0)
+    (0..cfg.num_layers())
+        .map(|i| linear_specs(cfg, i).iter().map(|(_, i, o)| i * o).sum())
+        .max()
+        .unwrap_or(0)
 }
 
 /// The norm weights of a layer: key suffix (without `.weight`) and width.
@@ -533,16 +565,25 @@ pub(crate) struct Layer {
 }
 
 impl Layer {
-    fn load(map: &WeightMap, cfg: &DecoderConfig, index: usize, precision: WeightPrecision) -> Result<Self> {
+    fn load(
+        map: &WeightMap,
+        cfg: &DecoderConfig,
+        index: usize,
+        precision: WeightPrecision,
+    ) -> Result<Self> {
         let p = format!("{}.{index}", cfg.layer_prefix);
         Self::assemble(
             cfg,
             index,
             &mut |name, i, o| match precision {
                 WeightPrecision::Native => Linear::load(map, &format!("{p}.{name}"), i, o, false),
-                WeightPrecision::Fp8Rows => Linear::load_fp8_rows(map, &format!("{p}.{name}"), i, o, false),
+                WeightPrecision::Fp8Rows => {
+                    Linear::load_fp8_rows(map, &format!("{p}.{name}"), i, o, false)
+                }
             },
-            &mut |name, width| norm_weight(map, &format!("{p}.{name}.weight"), width, cfg.norm_offset),
+            &mut |name, width| {
+                norm_weight(map, &format!("{p}.{name}.weight"), width, cfg.norm_offset)
+            },
         )
     }
 
@@ -574,13 +615,25 @@ impl Layer {
         Ok(Self {
             q: lin(q.0, q.1, q.2)?,
             k: lin(k.0, k.1, k.2)?,
-            v: if cfg.attention_k_eq_v { None } else { Some(lin(v.0, v.1, v.2)?) },
+            v: if cfg.attention_k_eq_v {
+                None
+            } else {
+                Some(lin(v.0, v.1, v.2)?)
+            },
             o: lin(o.0, o.1, o.2)?,
             gate: lin(gate.0, gate.1, gate.2)?,
             up: lin(up.0, up.1, up.2)?,
             down: lin(down.0, down.1, down.2)?,
-            q_norm: if cfg.qk_norm { Some(norm("self_attn.q_norm", dq)?) } else { None },
-            k_norm: if cfg.qk_norm { Some(norm("self_attn.k_norm", dkv)?) } else { None },
+            q_norm: if cfg.qk_norm {
+                Some(norm("self_attn.q_norm", dq)?)
+            } else {
+                None
+            },
+            k_norm: if cfg.qk_norm {
+                Some(norm("self_attn.k_norm", dkv)?)
+            } else {
+                None
+            },
             norm_attn_in: norm("input_layernorm", h)?,
             norm_attn_out: attn_out,
             norm_mlp_in: mlp_in,
@@ -605,12 +658,18 @@ impl Layer {
         let dq = cfg.layer_head_dim(layer);
         let dkv = cfg.layer_kv_head_dim(layer);
         if hq % hkv != 0 {
-            return Err(msg(format!("llm layer {layer}: {hq} query heads over {hkv} kv heads")));
+            return Err(msg(format!(
+                "llm layer {layer}: {hq} query heads over {hkv} kv heads"
+            )));
         }
 
         let h = x.rms_norm(&self.norm_attn_in, cfg.rms_eps)?;
         // [1, S, H*D] -> [1, S, H, D]: the per-head norm is an RMSNorm over D.
-        let split = |t: CudaTensor, heads: usize, d: usize, norm: &Option<CudaTensor>| -> Result<CudaTensor> {
+        let split = |t: CudaTensor,
+                     heads: usize,
+                     d: usize,
+                     norm: &Option<CudaTensor>|
+         -> Result<CudaTensor> {
             let t = t.reshape(vec![1, s, heads, d])?;
             let t = match norm {
                 Some(w) => t.rms_norm(w, cfg.rms_eps)?,
@@ -620,12 +679,18 @@ impl Layer {
         };
         let q = split(self.q.forward(&h)?, hq, dq, &self.q_norm)?.rope_half(cos, sin)?;
         let k_h = self.k.forward(&h)?;
-        let v_h = if let Some(v) = &self.v { v.forward(&h)? } else { k_h.clone() };
+        let v_h = if let Some(v) = &self.v {
+            v.forward(&h)?
+        } else {
+            k_h.clone()
+        };
         let k = split(k_h, hkv, dkv, &self.k_norm)?.rope_half(cos, sin)?;
         let v = split(v_h, hkv, dkv, &None)?;
         let (k, v) = (k.repeat_kv(hq / hkv)?, v.repeat_kv(hq / hkv)?);
         let a = scaled_dot_product_attention_masked(&q, &k, &v, Some(cfg.attn_scale), Some(mask))?;
-        let a = self.o.forward(&a.transpose(1, 2)?.reshape(vec![1, s, hq * dq])?)?;
+        let a = self
+            .o
+            .forward(&a.transpose(1, 2)?.reshape(vec![1, s, hq * dq])?)?;
         let a = match &self.norm_attn_out {
             Some(w) => a.rms_norm(w, cfg.rms_eps)?,
             None => a,
@@ -650,7 +715,11 @@ impl Layer {
 /// `[S, R]` cos/sin in the rotate_half layout (`cat(freqs, freqs)`),
 /// computed in f64 like the references do before casting. `head_dim` is the
 /// per-head channel width; `R` is the rotary table width (full head or partial).
-fn rope_tables(positions: &[u32], head_dim: usize, la: &LayerAttn) -> Result<(CudaTensor, CudaTensor)> {
+fn rope_tables(
+    positions: &[u32],
+    head_dim: usize,
+    la: &LayerAttn,
+) -> Result<(CudaTensor, CudaTensor)> {
     let r = la.rotary_width(head_dim);
     let half = r / 2;
     let s = positions.len();
@@ -686,7 +755,8 @@ fn rope_tables_mrope(
     if mrope_section.iter().sum::<usize>() != half {
         return Err(msg(format!(
             "llm mRoPE: section {:?} sums to {}, need head_dim/2={half}",
-            mrope_section, mrope_section.iter().sum::<usize>()
+            mrope_section,
+            mrope_section.iter().sum::<usize>()
         )));
     }
     let s = positions.len();
@@ -803,15 +873,19 @@ fn embed(map: &WeightMap, cfg: &DecoderConfig, ids: &[u32]) -> Result<CudaTensor
     let rows: Vec<usize> = ids.iter().map(|&i| i as usize).collect();
     let x = match map.lazy() {
         Some(lazy) => {
-            let (width, values) = lazy.rows_f32(&cfg.embed_key, &rows).map_err(|e| msg(e.to_string()))?;
+            let (width, values) = lazy
+                .rows_f32(&cfg.embed_key, &rows)
+                .map_err(|e| msg(e.to_string()))?;
             if width != cfg.hidden {
-                return Err(msg(format!("{}: width {width} != hidden {}", cfg.embed_key, cfg.hidden)));
+                return Err(msg(format!(
+                    "{}: width {width} != hidden {}",
+                    cfg.embed_key, cfg.hidden
+                )));
             }
             CudaTensor::from_vec(values, vec![rows.len(), width])?.to_device()?
         }
-        None => {
-            cuda_tensor_shaped(map, &cfg.embed_key, &[cfg.vocab, cfg.hidden])?.embedding_rows(&rows)?
-        }
+        None => cuda_tensor_shaped(map, &cfg.embed_key, &[cfg.vocab, cfg.hidden])?
+            .embedding_rows(&rows)?,
     };
     let x = x.reshape(vec![1, ids.len(), cfg.hidden])?;
     if cfg.embed_scale == 1.0 {
@@ -841,7 +915,12 @@ impl LayerSource for Streamed<'_> {
     }
 
     fn final_norm(&mut self) -> Result<CudaTensor> {
-        norm_weight(self.map, &self.cfg.final_norm_key, self.cfg.hidden, self.cfg.norm_offset)
+        norm_weight(
+            self.map,
+            &self.cfg.final_norm_key,
+            self.cfg.hidden,
+            self.cfg.norm_offset,
+        )
     }
 }
 
@@ -874,7 +953,10 @@ fn encode<S: LayerSource>(
         }
     }
     let n = cfg.num_layers();
-    let last = *taps.iter().max().ok_or_else(|| msg("llm: no taps requested"))?;
+    let last = *taps
+        .iter()
+        .max()
+        .ok_or_else(|| msg("llm: no taps requested"))?;
     if last > n {
         return Err(msg(format!("llm: tap {last} of a {n}-layer model")));
     }
@@ -907,8 +989,16 @@ fn encode<S: LayerSource>(
         if !masks.iter().any(|(w, _)| *w == la.window) {
             masks.push((la.window, attn_mask(attend, la.window)?));
         }
-        let (cos, sin) = &ropes.iter().find(|(k, h, _)| k == la && *h == hd).expect("just inserted").2;
-        let mask = &masks.iter().find(|(w, _)| *w == la.window).expect("just inserted").1;
+        let (cos, sin) = &ropes
+            .iter()
+            .find(|(k, h, _)| k == la && *h == hd)
+            .expect("just inserted")
+            .2;
+        let mask = &masks
+            .iter()
+            .find(|(w, _)| *w == la.window)
+            .expect("just inserted")
+            .1;
         x = source.with_layer(i, |layer| layer.forward(cfg, i, &x, cos, sin, mask))?;
         if let Some(mm) = multimodal {
             if let Some(deep) = mm.deepstack.get(i) {
@@ -978,9 +1068,23 @@ pub fn hidden_states_multimodal(
     let positions: Vec<u32> = (0..s as u32).collect();
     #[cfg(feature = "cuda")]
     if let Some(stage) = map.lazy().and_then(|lazy| prefetch::Stage::new(lazy, cfg)) {
-        let last = taps.iter().copied().max().unwrap_or(0).min(cfg.num_layers());
+        let last = taps
+            .iter()
+            .copied()
+            .max()
+            .unwrap_or(0)
+            .min(cfg.num_layers());
         return stage.run(map, cfg, last, |source| {
-            encode(cfg, source, embedded, &positions, attend, taps, true, Some(multimodal))
+            encode(
+                cfg,
+                source,
+                embedded,
+                &positions,
+                attend,
+                taps,
+                true,
+                Some(multimodal),
+            )
         });
     }
     encode(
@@ -1036,7 +1140,12 @@ fn scatter_visual_embeds(
 ) -> Result<CudaTensor> {
     let [b, s, h] = match embedded.shape[..] {
         [b, s, h] => [b, s, h],
-        _ => return Err(msg(format!("embed scatter expects [B,S,H], got {:?}", embedded.shape))),
+        _ => {
+            return Err(msg(format!(
+                "embed scatter expects [B,S,H], got {:?}",
+                embedded.shape
+            )))
+        }
     };
     if b != 1 || mask.len() != s {
         return Err(msg(format!("{label} scatter: bad mask/seq")));
@@ -1085,10 +1194,21 @@ fn hidden_states_opt(
     // With a mapped checkpoint and bf16 linears, the next layer is read and
     // uploaded (pinned memory, its own stream) while this one computes.
     #[cfg(feature = "cuda")]
-    if let Some(stage) = map.lazy().filter(|_| allow_prefetch).and_then(|lazy| prefetch::Stage::new(lazy, cfg)) {
-        let last = taps.iter().copied().max().unwrap_or(0).min(cfg.num_layers());
+    if let Some(stage) = map
+        .lazy()
+        .filter(|_| allow_prefetch)
+        .and_then(|lazy| prefetch::Stage::new(lazy, cfg))
+    {
+        let last = taps
+            .iter()
+            .copied()
+            .max()
+            .unwrap_or(0)
+            .min(cfg.num_layers());
         return stage.run(map, cfg, last, |source| {
-            encode(cfg, source, embedded, positions, attend, taps, progress, multimodal)
+            encode(
+                cfg, source, embedded, positions, attend, taps, progress, multimodal,
+            )
         });
     }
     let _ = allow_prefetch;
@@ -1127,29 +1247,55 @@ pub struct PrefetchCheck {
 pub fn prefetch_self_check(dir: &std::path::Path, stored_bf16: bool) -> Result<PrefetchCheck> {
     use fastvideo_loader::{LazyDType, SafetensorsWriter, TensorSpec};
     let mut cfg = DecoderConfig::gemma3_12b_text();
-    (cfg.vocab, cfg.hidden, cfg.heads, cfg.kv_heads, cfg.head_dim, cfg.intermediate) = (48, 96, 4, 2, 24, 256);
+    (
+        cfg.vocab,
+        cfg.hidden,
+        cfg.heads,
+        cfg.kv_heads,
+        cfg.head_dim,
+        cfg.intermediate,
+    ) = (48, 96, 4, 2, 24, 256);
     cfg.layers.truncate(9);
     let bf16_file = stored_bf16;
-    let (stored, label) = if bf16_file { (LazyDType::BF16, "BF16") } else { (LazyDType::F32, "F32") };
+    let (stored, label) = if bf16_file {
+        (LazyDType::BF16, "BF16")
+    } else {
+        (LazyDType::F32, "F32")
+    };
 
-    let mut tensors: Vec<(String, Vec<usize>)> = vec![(cfg.embed_key.clone(), vec![cfg.vocab, cfg.hidden])];
+    let mut tensors: Vec<(String, Vec<usize>)> =
+        vec![(cfg.embed_key.clone(), vec![cfg.vocab, cfg.hidden])];
     for l in 0..cfg.num_layers() {
         let p = format!("{}.{l}", cfg.layer_prefix);
-        tensors.extend(linear_specs(&cfg, l).iter().map(|(n, i, o)| (format!("{p}.{n}.weight"), vec![*o, *i])));
-        tensors.extend(norm_specs(&cfg, l).iter().map(|(n, w)| (format!("{p}.{n}.weight"), vec![*w])));
+        tensors.extend(
+            linear_specs(&cfg, l)
+                .iter()
+                .map(|(n, i, o)| (format!("{p}.{n}.weight"), vec![*o, *i])),
+        );
+        tensors.extend(
+            norm_specs(&cfg, l)
+                .iter()
+                .map(|(n, w)| (format!("{p}.{n}.weight"), vec![*w])),
+        );
     }
     tensors.push((cfg.final_norm_key.clone(), vec![cfg.hidden]));
 
     std::fs::create_dir_all(dir).map_err(|e| msg(e.to_string()))?;
     let path = dir.join(format!("prefetch-check-{label}.safetensors"));
-    let specs: Vec<TensorSpec> = tensors.iter().map(|(k, s)| TensorSpec::new(k.clone(), stored.clone(), s.clone())).collect();
+    let specs: Vec<TensorSpec> = tensors
+        .iter()
+        .map(|(k, s)| TensorSpec::new(k.clone(), stored.clone(), s.clone()))
+        .collect();
     let mut w = SafetensorsWriter::create(&path, &specs, &[]).map_err(|e| msg(e.to_string()))?;
     for (key, shape) in &tensors {
-        let seed = key.bytes().fold(7u32, |a, b| a.wrapping_mul(31).wrapping_add(u32::from(b)));
+        let seed = key
+            .bytes()
+            .fold(7u32, |a, b| a.wrapping_mul(31).wrapping_add(u32::from(b)));
         let is_norm = key.contains("norm");
         let mut bytes = Vec::new();
         for i in 0..shape.iter().product::<usize>() {
-            let v = (seed.wrapping_add(i as u32).wrapping_mul(2_654_435_761) >> 8) as f32 / (1u32 << 24) as f32;
+            let v = (seed.wrapping_add(i as u32).wrapping_mul(2_654_435_761) >> 8) as f32
+                / (1u32 << 24) as f32;
             let v = if is_norm { 0.5 + v } else { (v - 0.5) * 0.2 };
             if bf16_file {
                 bytes.extend_from_slice(&half::bf16::from_f32(v).to_bits().to_le_bytes());
@@ -1162,7 +1308,9 @@ pub fn prefetch_self_check(dir: &std::path::Path, stored_bf16: bool) -> Result<P
     w.finish().map_err(|e| msg(e.to_string()))?;
 
     let map = WeightMap::open_files(std::slice::from_ref(&path))?;
-    let lazy = map.lazy().ok_or_else(|| msg("prefetch self-check: the map is not lazy"))?;
+    let lazy = map
+        .lazy()
+        .ok_or_else(|| msg("prefetch self-check: the map is not lazy"))?;
     if prefetch::Stage::new(lazy, &cfg).is_none() {
         return Err(msg("prefetch self-check: prefetching is unavailable here (bf16 linears off, or no pinned memory)"));
     }
@@ -1170,8 +1318,12 @@ pub fn prefetch_self_check(dir: &std::path::Path, stored_bf16: bool) -> Result<P
     let positions: Vec<u32> = (0..ids.len() as u32).collect();
     let attend = vec![true; ids.len()];
     let taps: Vec<usize> = (0..=cfg.num_layers()).collect();
-    let ahead = hidden_states_opt(&map, &cfg, &ids, &positions, &attend, &taps, true, false, None)?;
-    let plain = hidden_states_opt(&map, &cfg, &ids, &positions, &attend, &taps, false, false, None)?;
+    let ahead = hidden_states_opt(
+        &map, &cfg, &ids, &positions, &attend, &taps, true, false, None,
+    )?;
+    let plain = hidden_states_opt(
+        &map, &cfg, &ids, &positions, &attend, &taps, false, false, None,
+    )?;
     let (mut worst, mut elements) = (0f32, 0usize);
     for (a, b) in ahead.iter().zip(&plain) {
         let (a, b) = (a.host_cow()?, b.host_cow()?);
@@ -1179,11 +1331,19 @@ pub fn prefetch_self_check(dir: &std::path::Path, stored_bf16: bool) -> Result<P
         for (x, y) in a.iter().zip(b.iter()) {
             let d = (x - y).abs();
             // A NaN on either side must fail, not vanish in a `max`.
-            worst = if d.is_nan() { f32::INFINITY } else { worst.max(d) };
+            worst = if d.is_nan() {
+                f32::INFINITY
+            } else {
+                worst.max(d)
+            };
         }
     }
     let _ = std::fs::remove_file(&path);
-    Ok(PrefetchCheck { stored: label, max_abs_diff: worst, elements })
+    Ok(PrefetchCheck {
+        stored: label,
+        max_abs_diff: worst,
+        elements,
+    })
 }
 
 #[cfg(feature = "cuda")]
@@ -1204,12 +1364,19 @@ impl EmbedTable {
         if let Some(lazy) = map.lazy() {
             let v = lazy.view(&cfg.embed_key).map_err(|e| msg(e.to_string()))?;
             if v.shape != [cfg.vocab, cfg.hidden] {
-                return Err(msg(format!("{}: shape {:?}, expected [{}, {}]", cfg.embed_key, v.shape, cfg.vocab, cfg.hidden)));
+                return Err(msg(format!(
+                    "{}: shape {:?}, expected [{}, {}]",
+                    cfg.embed_key, v.shape, cfg.vocab, cfg.hidden
+                )));
             }
             return match v.dtype {
                 LazyDType::BF16 => Ok(Self::Bf16(v.bytes.to_vec())),
                 LazyDType::F16 => Ok(Self::F16(v.bytes.to_vec())),
-                LazyDType::F32 => Ok(Self::F32(lazy.to_f32(&cfg.embed_key).map_err(|e| msg(e.to_string()))?.1)),
+                LazyDType::F32 => Ok(Self::F32(
+                    lazy.to_f32(&cfg.embed_key)
+                        .map_err(|e| msg(e.to_string()))?
+                        .1,
+                )),
                 other => Err(msg(format!("{}: {other:?} embedding table", cfg.embed_key))),
             };
         }
@@ -1223,15 +1390,23 @@ impl EmbedTable {
             let r = id as usize;
             match self {
                 Self::F32(t) => {
-                    let row = t.get(r * hidden..(r + 1) * hidden).ok_or_else(|| msg(format!("llm: token id {id} past the embedding table")))?;
+                    let row = t.get(r * hidden..(r + 1) * hidden).ok_or_else(|| {
+                        msg(format!("llm: token id {id} past the embedding table"))
+                    })?;
                     out.extend_from_slice(row);
                 }
                 Self::Bf16(b) | Self::F16(b) => {
-                    let row = b.get(r * hidden * 2..(r + 1) * hidden * 2).ok_or_else(|| msg(format!("llm: token id {id} past the embedding table")))?;
+                    let row = b.get(r * hidden * 2..(r + 1) * hidden * 2).ok_or_else(|| {
+                        msg(format!("llm: token id {id} past the embedding table"))
+                    })?;
                     let half_is_bf16 = matches!(self, Self::Bf16(_));
                     out.extend(row.chunks_exact(2).map(|c| {
                         let bits = u16::from_le_bytes([c[0], c[1]]);
-                        if half_is_bf16 { half::bf16::from_bits(bits).to_f32() } else { half::f16::from_bits(bits).to_f32() }
+                        if half_is_bf16 {
+                            half::bf16::from_bits(bits).to_f32()
+                        } else {
+                            half::f16::from_bits(bits).to_f32()
+                        }
                     }));
                 }
             }
@@ -1271,13 +1446,18 @@ struct Resident<'a>(&'a ResidentDecoder);
 impl LayerSource for Resident<'_> {
     fn with_layer<R>(&mut self, index: usize, f: impl FnOnce(&Layer) -> Result<R>) -> Result<R> {
         let layer = self.0.layers.get(index).ok_or_else(|| {
-            msg(format!("llm: layer {index} is not resident (loaded {})", self.0.layers.len()))
+            msg(format!(
+                "llm: layer {index} is not resident (loaded {})",
+                self.0.layers.len()
+            ))
         })?;
         f(layer)
     }
 
     fn final_norm(&mut self) -> Result<CudaTensor> {
-        self.0.final_norm.clone().ok_or_else(|| msg("llm: the final norm is not resident (load every layer to tap the last state)"))
+        self.0.final_norm.clone().ok_or_else(|| {
+            msg("llm: the final norm is not resident (load every layer to tap the last state)")
+        })
     }
 }
 
@@ -1305,7 +1485,9 @@ impl ResidentDecoder {
     ) -> Result<Self> {
         let n = cfg.num_layers();
         if layers == 0 || layers > n {
-            return Err(msg(format!("llm: {layers} resident layers of a {n}-layer model")));
+            return Err(msg(format!(
+                "llm: {layers} resident layers of a {n}-layer model"
+            )));
         }
         let scale = alpha / rank as f32;
         let mut loaded = Vec::with_capacity(layers);
@@ -1325,7 +1507,9 @@ impl ResidentDecoder {
                     }
                     Linear::from_tensors(CudaTensor::from_vec(w, vec![out_dim, in_dim])?, None)
                 },
-                &mut |name, width| norm_weight(map, &format!("{p}.{name}.weight"), width, cfg.norm_offset),
+                &mut |name, width| {
+                    norm_weight(map, &format!("{p}.{name}.weight"), width, cfg.norm_offset)
+                },
             )?;
             loaded.push(layer);
             crate::wan::log::info(format_args!("llm resident layer {}/{layers}", i + 1));
@@ -1341,10 +1525,17 @@ impl ResidentDecoder {
 
     /// [`Self::load`] with the linear weights held at `precision`. Norms, the
     /// embedding table and all activations are unaffected.
-    pub fn load_with(map: &WeightMap, cfg: &DecoderConfig, layers: usize, precision: WeightPrecision) -> Result<Self> {
+    pub fn load_with(
+        map: &WeightMap,
+        cfg: &DecoderConfig,
+        layers: usize,
+        precision: WeightPrecision,
+    ) -> Result<Self> {
         let n = cfg.num_layers();
         if layers == 0 || layers > n {
-            return Err(msg(format!("llm: {layers} resident layers of a {n}-layer model")));
+            return Err(msg(format!(
+                "llm: {layers} resident layers of a {n}-layer model"
+            )));
         }
         let mut loaded = Vec::with_capacity(layers);
         for i in 0..layers {
@@ -1352,11 +1543,22 @@ impl ResidentDecoder {
             crate::wan::log::info(format_args!("llm resident layer {}/{layers}", i + 1));
         }
         let final_norm = if layers == n {
-            Some(norm_weight(map, &cfg.final_norm_key, cfg.hidden, cfg.norm_offset)?)
+            Some(norm_weight(
+                map,
+                &cfg.final_norm_key,
+                cfg.hidden,
+                cfg.norm_offset,
+            )?)
         } else {
             None
         };
-        Ok(Self { cfg: cfg.clone(), layers: loaded, final_norm, embed: EmbedTable::load(map, cfg)?, precision })
+        Ok(Self {
+            cfg: cfg.clone(),
+            layers: loaded,
+            final_norm,
+            embed: EmbedTable::load(map, cfg)?,
+            precision,
+        })
     }
 
     pub fn config(&self) -> &DecoderConfig {
@@ -1368,14 +1570,34 @@ impl ResidentDecoder {
     }
 
     /// Same contract and same numbers as the free [`hidden_states`].
-    pub fn hidden_states(&self, ids: &[u32], positions: &[u32], attend: &[bool], taps: &[usize]) -> Result<Vec<CudaTensor>> {
+    pub fn hidden_states(
+        &self,
+        ids: &[u32],
+        positions: &[u32],
+        attend: &[bool],
+        taps: &[usize],
+    ) -> Result<Vec<CudaTensor>> {
         if ids.is_empty() {
             return Err(msg("llm: empty prompt"));
         }
         let h = self.cfg.hidden;
-        let x = CudaTensor::from_vec(self.embed.rows(ids, h)?, vec![1, ids.len(), h])?.to_device()?;
-        let x = if self.cfg.embed_scale == 1.0 { x } else { x.try_mul_scalar(self.cfg.embed_scale)? };
-        encode(&self.cfg, &mut Resident(self), x, positions, attend, taps, false, None)
+        let x =
+            CudaTensor::from_vec(self.embed.rows(ids, h)?, vec![1, ids.len(), h])?.to_device()?;
+        let x = if self.cfg.embed_scale == 1.0 {
+            x
+        } else {
+            x.try_mul_scalar(self.cfg.embed_scale)?
+        };
+        encode(
+            &self.cfg,
+            &mut Resident(self),
+            x,
+            positions,
+            attend,
+            taps,
+            false,
+            None,
+        )
     }
 
     /// Multimodal forward: pre-scattered embeds + mRoPE + DeepStack.
@@ -1407,15 +1629,27 @@ impl ResidentDecoder {
     /// they were loaded (bf16 under bf16 GEMM math, f32 otherwise), norms in f32.
     pub fn device_bytes(&self) -> u64 {
         let c = &self.cfg;
-        let linear = c.hidden * (c.heads + 2 * c.kv_heads) * c.head_dim + c.heads * c.head_dim * c.hidden + 3 * c.hidden * c.intermediate;
-        let norms = c.hidden * if c.sandwich_norms { 4 } else { 2 } + if c.qk_norm { 2 * c.head_dim } else { 0 };
+        let linear = c.hidden * (c.heads + 2 * c.kv_heads) * c.head_dim
+            + c.heads * c.head_dim * c.hidden
+            + 3 * c.hidden * c.intermediate;
+        let norms = c.hidden * if c.sandwich_norms { 4 } else { 2 }
+            + if c.qk_norm { 2 * c.head_dim } else { 0 };
         // Per-row FP8: a byte per parameter plus one f32 scale per output row.
-        let scale_rows = (c.heads + 2 * c.kv_heads) * c.head_dim + c.hidden + 2 * c.intermediate + c.hidden;
+        let scale_rows =
+            (c.heads + 2 * c.kv_heads) * c.head_dim + c.hidden + 2 * c.intermediate + c.hidden;
         let per_layer = match self.precision {
             WeightPrecision::Fp8Rows => linear + scale_rows * 4,
-            WeightPrecision::Native => linear * if crate::wan::nn::bf16_linears_active() { 2 } else { 4 },
+            WeightPrecision::Native => {
+                linear
+                    * if crate::wan::nn::bf16_linears_active() {
+                        2
+                    } else {
+                        4
+                    }
+            }
         };
-        (self.layers.len() * (per_layer + norms * 4) + self.final_norm.as_ref().map_or(0, |_| c.hidden * 4)) as u64
+        (self.layers.len() * (per_layer + norms * 4)
+            + self.final_norm.as_ref().map_or(0, |_| c.hidden * 4)) as u64
     }
 
     /// Host bytes held by the embedding table.
@@ -1466,12 +1700,19 @@ mod tests {
     /// Deterministic weights by key, small enough to keep activations tame.
     fn weights() -> WeightMap {
         WeightMap::generated(|key, shape| {
-            let seed = key.bytes().fold(7u32, |a, b| a.wrapping_mul(31).wrapping_add(u32::from(b)));
+            let seed = key
+                .bytes()
+                .fold(7u32, |a, b| a.wrapping_mul(31).wrapping_add(u32::from(b)));
             let n: usize = shape.iter().product();
             (0..n)
                 .map(|i| {
-                    let v = (seed.wrapping_add(i as u32).wrapping_mul(2_654_435_761) >> 8) as f32 / (1u32 << 24) as f32;
-                    if key.contains("norm") { 0.5 + v } else { v - 0.5 }
+                    let v = (seed.wrapping_add(i as u32).wrapping_mul(2_654_435_761) >> 8) as f32
+                        / (1u32 << 24) as f32;
+                    if key.contains("norm") {
+                        0.5 + v
+                    } else {
+                        v - 0.5
+                    }
                 })
                 .collect()
         })
@@ -1497,10 +1738,16 @@ mod tests {
             let h = cfg.hidden;
             for p in 0..3 {
                 for j in 0..h {
-                    assert!((a[0][p * h + j] - b[0][p * h + j]).abs() < 1e-6, "sandwich={sandwich} pos {p}");
+                    assert!(
+                        (a[0][p * h + j] - b[0][p * h + j]).abs() < 1e-6,
+                        "sandwich={sandwich} pos {p}"
+                    );
                 }
             }
-            assert!((0..h).any(|j| (a[0][3 * h + j] - b[0][3 * h + j]).abs() > 1e-4), "position 3 must differ");
+            assert!(
+                (0..h).any(|j| (a[0][3 * h + j] - b[0][3 * h + j]).abs() > 1e-4),
+                "position 3 must differ"
+            );
         }
     }
 
@@ -1522,7 +1769,10 @@ mod tests {
         // Same tap 1 whether or not layer 2 and the final norm are ever run.
         assert_eq!(run(&cfg, &ids, &[1])[0], run(&cfg, &ids, &[1, 2])[0]);
         let pos = [0u32, 1, 2];
-        assert!(hidden_states(&weights(), &cfg, &ids, &pos, &[true; 3], &[3]).is_err(), "tap past the model");
+        assert!(
+            hidden_states(&weights(), &cfg, &ids, &pos, &[true; 3], &[3]).is_err(),
+            "tap past the model"
+        );
     }
 
     fn weights_embed(cfg: &DecoderConfig) -> (Vec<usize>, Vec<f32>) {
@@ -1541,16 +1791,42 @@ mod tests {
         let got = &run(&cfg, &ids, &[1])[0];
 
         let map = weights();
-        let get = |key: &str, shape: &[usize]| cuda_tensor_shaped(&map, key, shape).unwrap().host_cow().unwrap().into_owned();
-        let (h, hq, hkv, d, ff, s) = (cfg.hidden, cfg.heads, cfg.kv_heads, cfg.head_dim, cfg.intermediate, ids.len());
+        let get = |key: &str, shape: &[usize]| {
+            cuda_tensor_shaped(&map, key, shape)
+                .unwrap()
+                .host_cow()
+                .unwrap()
+                .into_owned()
+        };
+        let (h, hq, hkv, d, ff, s) = (
+            cfg.hidden,
+            cfg.heads,
+            cfg.kv_heads,
+            cfg.head_dim,
+            cfg.intermediate,
+            ids.len(),
+        );
         let table = get(&cfg.embed_key, &[cfg.vocab, h]);
-        let x: Vec<Vec<f32>> = ids.iter().map(|&i| table[i as usize * h..(i as usize + 1) * h].to_vec()).collect();
+        let x: Vec<Vec<f32>> = ids
+            .iter()
+            .map(|&i| table[i as usize * h..(i as usize + 1) * h].to_vec())
+            .collect();
         let rms = |v: &[f32], w: &[f32]| -> Vec<f32> {
             let ms = v.iter().map(|a| a * a).sum::<f32>() / v.len() as f32;
-            v.iter().zip(w).map(|(a, g)| a / (ms + cfg.rms_eps).sqrt() * g).collect()
+            v.iter()
+                .zip(w)
+                .map(|(a, g)| a / (ms + cfg.rms_eps).sqrt() * g)
+                .collect()
         };
         let lin = |v: &[f32], w: &[f32], o: usize| -> Vec<f32> {
-            (0..o).map(|r| v.iter().enumerate().map(|(c, a)| a * w[r * v.len() + c]).sum()).collect()
+            (0..o)
+                .map(|r| {
+                    v.iter()
+                        .enumerate()
+                        .map(|(c, a)| a * w[r * v.len() + c])
+                        .sum()
+                })
+                .collect()
         };
         let p = "m.layers.0";
         let (wq, wk, wv, wo) = (
@@ -1559,8 +1835,14 @@ mod tests {
             get(&format!("{p}.self_attn.v_proj.weight"), &[hkv * d, h]),
             get(&format!("{p}.self_attn.o_proj.weight"), &[h, hq * d]),
         );
-        let (qn, kn) = (get(&format!("{p}.self_attn.q_norm.weight"), &[d]), get(&format!("{p}.self_attn.k_norm.weight"), &[d]));
-        let (n1, n2) = (get(&format!("{p}.input_layernorm.weight"), &[h]), get(&format!("{p}.post_attention_layernorm.weight"), &[h]));
+        let (qn, kn) = (
+            get(&format!("{p}.self_attn.q_norm.weight"), &[d]),
+            get(&format!("{p}.self_attn.k_norm.weight"), &[d]),
+        );
+        let (n1, n2) = (
+            get(&format!("{p}.input_layernorm.weight"), &[h]),
+            get(&format!("{p}.post_attention_layernorm.weight"), &[h]),
+        );
         let final_norm = get(&cfg.final_norm_key, &[h]);
         let (wg, wu, wd) = (
             get(&format!("{p}.mlp.gate_proj.weight"), &[ff, h]),
@@ -1589,19 +1871,34 @@ mod tests {
                         .map(|hd| {
                             let t = full[hd * d..(hd + 1) * d].to_vec();
                             let t = norm.map_or(t.clone(), |g| rms(&t, g));
-                            if rot { rope(&t, pos) } else { t }
+                            if rot {
+                                rope(&t, pos)
+                            } else {
+                                t
+                            }
                         })
                         .collect()
                 })
                 .collect()
         };
-        let (q, k, v) = (heads(&wq, hq, Some(&qn), true), heads(&wk, hkv, Some(&kn), true), heads(&wv, hkv, None, false));
+        let (q, k, v) = (
+            heads(&wq, hq, Some(&qn), true),
+            heads(&wk, hkv, Some(&kn), true),
+            heads(&wv, hkv, None, false),
+        );
         for i in 0..s {
             let mut attn = vec![0f32; hq * d];
             for hd in 0..hq {
                 let kv = hd / (hq / hkv);
                 let scores: Vec<f32> = (0..=i)
-                    .map(|j| q[i][hd].iter().zip(&k[j][kv]).map(|(a, b)| a * b).sum::<f32>() * cfg.attn_scale)
+                    .map(|j| {
+                        q[i][hd]
+                            .iter()
+                            .zip(&k[j][kv])
+                            .map(|(a, b)| a * b)
+                            .sum::<f32>()
+                            * cfg.attn_scale
+                    })
                     .collect();
                 let mx = scores.iter().cloned().fold(f32::MIN, f32::max);
                 let z: f32 = scores.iter().map(|sc| (sc - mx).exp()).sum();
@@ -1612,15 +1909,32 @@ mod tests {
                     }
                 }
             }
-            let after: Vec<f32> = x[i].iter().zip(lin(&attn, &wo, h)).map(|(a, b)| a + b).collect();
+            let after: Vec<f32> = x[i]
+                .iter()
+                .zip(lin(&attn, &wo, h))
+                .map(|(a, b)| a + b)
+                .collect();
             let m = rms(&after, &n2);
             let (g, u) = (lin(&m, &wg, ff), lin(&m, &wu, ff));
-            let act: Vec<f32> = g.iter().zip(&u).map(|(a, b)| a / (1.0 + (-a).exp()) * b).collect();
-            let want: Vec<f32> = after.iter().zip(lin(&act, &wd, h)).map(|(a, b)| a + b).collect();
+            let act: Vec<f32> = g
+                .iter()
+                .zip(&u)
+                .map(|(a, b)| a / (1.0 + (-a).exp()) * b)
+                .collect();
+            let want: Vec<f32> = after
+                .iter()
+                .zip(lin(&act, &wd, h))
+                .map(|(a, b)| a + b)
+                .collect();
             // Tap 1 of a one-layer model is the last tap, which HF returns normed.
             let want = rms(&want, &final_norm);
             for j in 0..h {
-                assert!((got[i * h + j] - want[j]).abs() < 2e-5, "pos {i} ch {j}: {} vs {}", got[i * h + j], want[j]);
+                assert!(
+                    (got[i * h + j] - want[j]).abs() < 2e-5,
+                    "pos {i} ch {j}: {} vs {}",
+                    got[i * h + j],
+                    want[j]
+                );
             }
         }
     }
@@ -1643,11 +1957,20 @@ mod tests {
                 }
             }
             let one = ResidentDecoder::load(&weights(), &cfg, 1).unwrap();
-            let got = one.hidden_states(&[1, 3, 0], &[0, 1, 2], &[true; 3], &[1]).unwrap();
+            let got = one
+                .hidden_states(&[1, 3, 0], &[0, 1, 2], &[true; 3], &[1])
+                .unwrap();
             assert_eq!(run(&cfg, &[1, 3, 0], &[1])[0], &*got[0].host_cow().unwrap());
-            assert!(one.hidden_states(&[1, 3, 0], &[0, 1, 2], &[true; 3], &[2]).is_err(), "tap past the resident layers");
+            assert!(
+                one.hidden_states(&[1, 3, 0], &[0, 1, 2], &[true; 3], &[2])
+                    .is_err(),
+                "tap past the resident layers"
+            );
             assert!(full.device_bytes() > one.device_bytes());
-            assert!(full.hidden_states(&[16], &[0], &[true], &[1]).is_err(), "token id past the table");
+            assert!(
+                full.hidden_states(&[16], &[0], &[true], &[1]).is_err(),
+                "token id past the table"
+            );
         }
         assert!(ResidentDecoder::load(&weights(), &tiny(false), 3).is_err());
     }
@@ -1661,21 +1984,49 @@ mod tests {
         let ids = [1u32, 3, 0, 2, 5];
         let pos: Vec<u32> = (0..5).collect();
         let native = ResidentDecoder::load(&weights(), &cfg, 2).unwrap();
-        let fp8 = ResidentDecoder::load_with(&weights(), &cfg, 2, WeightPrecision::Fp8Rows).unwrap();
-        assert_eq!((native.precision(), fp8.precision()), (WeightPrecision::Native, WeightPrecision::Fp8Rows));
-        let a = native.hidden_states(&ids, &pos, &[true; 5], &[2]).unwrap().remove(0).host_cow().unwrap().into_owned();
-        let b = fp8.hidden_states(&ids, &pos, &[true; 5], &[2]).unwrap().remove(0).host_cow().unwrap().into_owned();
-        let num: f64 = a.iter().zip(&b).map(|(x, y)| f64::from(x - y).powi(2)).sum();
+        let fp8 =
+            ResidentDecoder::load_with(&weights(), &cfg, 2, WeightPrecision::Fp8Rows).unwrap();
+        assert_eq!(
+            (native.precision(), fp8.precision()),
+            (WeightPrecision::Native, WeightPrecision::Fp8Rows)
+        );
+        let a = native
+            .hidden_states(&ids, &pos, &[true; 5], &[2])
+            .unwrap()
+            .remove(0)
+            .host_cow()
+            .unwrap()
+            .into_owned();
+        let b = fp8
+            .hidden_states(&ids, &pos, &[true; 5], &[2])
+            .unwrap()
+            .remove(0)
+            .host_cow()
+            .unwrap()
+            .into_owned();
+        let num: f64 = a
+            .iter()
+            .zip(&b)
+            .map(|(x, y)| f64::from(x - y).powi(2))
+            .sum();
         let den: f64 = a.iter().map(|x| f64::from(*x).powi(2)).sum();
         let rel = (num / den).sqrt();
         assert!(rel > 0.0, "fp8 must actually quantize");
         assert!(rel < 0.08, "fp8 drifted {rel} from the native encoder");
-        let again = fp8.hidden_states(&ids, &pos, &[true; 5], &[2]).unwrap().remove(0);
+        let again = fp8
+            .hidden_states(&ids, &pos, &[true; 5], &[2])
+            .unwrap()
+            .remove(0);
         assert_eq!(b, &*again.host_cow().unwrap());
         // A byte per parameter plus a scale per row: under half of f32 even at
         // this toy width, where the scales are a large share of a tiny layer
         // (at Qwen3-VL-32B's width they are 0.03% and 50 layers come to 24.4 GB).
-        assert!(fp8.device_bytes() * 2 < native.device_bytes(), "{} vs {}", fp8.device_bytes(), native.device_bytes());
+        assert!(
+            fp8.device_bytes() * 2 < native.device_bytes(),
+            "{} vs {}",
+            fp8.device_bytes(),
+            native.device_bytes()
+        );
     }
 
     #[test]
@@ -1716,12 +2067,18 @@ mod tests {
                 },
             )
             .unwrap();
-            let mut want: Vec<_> = linear_specs(&cfg, 0).iter().map(|(n, i, o)| (n.to_string(), *i, *o)).collect();
+            let mut want: Vec<_> = linear_specs(&cfg, 0)
+                .iter()
+                .map(|(n, i, o)| (n.to_string(), *i, *o))
+                .collect();
             if cfg.attention_k_eq_v {
                 want.retain(|(n, _, _)| n != "self_attn.v_proj");
             }
             assert_eq!(lins, want, "linears are served in spec order");
-            let mut staged: Vec<_> = norm_specs(&cfg, 0).iter().map(|(n, w)| (n.to_string(), *w)).collect();
+            let mut staged: Vec<_> = norm_specs(&cfg, 0)
+                .iter()
+                .map(|(n, w)| (n.to_string(), *w))
+                .collect();
             staged.sort();
             norms.sort();
             assert_eq!(norms, staged);
@@ -1731,8 +2088,18 @@ mod tests {
     #[test]
     fn presets_have_consistent_shapes() {
         let q = DecoderConfig::qwen3_vl_32b_text();
-        assert_eq!((q.num_layers(), q.heads * q.head_dim, q.kv_heads * q.head_dim), (64, 8192, 1024));
-        assert_eq!((q.vocab, DecoderConfig::gemma3_12b_text().vocab), (151_936, 262_208));
+        assert_eq!(
+            (
+                q.num_layers(),
+                q.heads * q.head_dim,
+                q.kv_heads * q.head_dim
+            ),
+            (64, 8192, 1024)
+        );
+        assert_eq!(
+            (q.vocab, DecoderConfig::gemma3_12b_text().vocab),
+            (151_936, 262_208)
+        );
         let g = DecoderConfig::gemma3_12b_text();
         assert_eq!(g.num_layers(), 48);
         assert_eq!(g.layers.iter().filter(|l| l.window.is_none()).count(), 8);
@@ -1740,7 +2107,12 @@ mod tests {
         assert_eq!(g.layers[4].window, Some(1024));
         assert!((g.embed_scale - 61.967_734).abs() < 1e-4);
         assert_eq!(g.for_bf16_reference().embed_scale, 62.0);
-        assert_eq!(DecoderConfig::qwen3_vl_32b_text().for_bf16_reference().embed_scale, 1.0);
+        assert_eq!(
+            DecoderConfig::qwen3_vl_32b_text()
+                .for_bf16_reference()
+                .embed_scale,
+            1.0
+        );
     }
 
     #[test]
@@ -1750,7 +2122,9 @@ mod tests {
         assert_eq!(g.vocab, 262_144);
         assert!(g.attention_k_eq_v);
         assert_eq!(g.layer_prefix, "model.language_model.layers");
-        let globals: Vec<usize> = (0..g.num_layers()).filter(|&i| g.layers[i].window.is_none()).collect();
+        let globals: Vec<usize> = (0..g.num_layers())
+            .filter(|&i| g.layers[i].window.is_none())
+            .collect();
         assert_eq!(globals, vec![5, 11, 17, 23, 29, 35, 41, 47]);
         assert_eq!(g.layers[4].window, Some(1024));
         assert_eq!(g.layers[5].rope_theta, 1_000_000.0);

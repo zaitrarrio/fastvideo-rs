@@ -63,7 +63,11 @@ fn main() {
         .unwrap_or_else(|_| DEFAULT_SMS.to_string())
         .split(',')
         .filter(|s| !s.trim().is_empty())
-        .map(|s| s.trim().parse().expect("FV_CUBIN_SMS entries are integers like 89"))
+        .map(|s| {
+            s.trim()
+                .parse()
+                .expect("FV_CUBIN_SMS entries are integers like 89")
+        })
         .collect();
 
     let mut entries = String::new();
@@ -71,14 +75,20 @@ fn main() {
         let cubin = out.join(format!("kernels_sm{sm}.cubin"));
         let ptx = out.join(format!("kernels_compute{sm}.ptx"));
         // Same options NVRTC gets: fast math (which implies ftz and fmad).
-        for (kind, arch, dest) in [("-cubin", format!("sm_{sm}"), &cubin), ("-ptx", format!("compute_{sm}"), &ptx)] {
+        for (kind, arch, dest) in [
+            ("-cubin", format!("sm_{sm}"), &cubin),
+            ("-ptx", format!("compute_{sm}"), &ptx),
+        ] {
             let status = Command::new(&nvcc)
                 .args([kind, "-arch", &arch, "-O3", "--use_fast_math", "-o"])
                 .arg(dest)
                 .arg(SRC)
                 .status()
                 .unwrap_or_else(|e| panic!("running {}: {e}", nvcc.display()));
-            assert!(status.success(), "nvcc {kind} -arch={arch} failed for {SRC}");
+            assert!(
+                status.success(),
+                "nvcc {kind} -arch={arch} failed for {SRC}"
+            );
         }
         entries.push_str(&format!(
             "    AotKernel {{ sm: {sm}, cubin: include_bytes!({:?}), ptx: include_str!({:?}) }},\n",
@@ -86,6 +96,14 @@ fn main() {
             ptx.display()
         ));
     }
-    fs::write(&table, format!("pub static AOT: &[AotKernel] = &[\n{entries}];\n")).expect("write aot.rs");
-    println!("cargo:warning=fastvideo-cudarc: embedded cubins for sm {:?} via {}", sms, nvcc.display());
+    fs::write(
+        &table,
+        format!("pub static AOT: &[AotKernel] = &[\n{entries}];\n"),
+    )
+    .expect("write aot.rs");
+    println!(
+        "cargo:warning=fastvideo-cudarc: embedded cubins for sm {:?} via {}",
+        sms,
+        nvcc.display()
+    );
 }

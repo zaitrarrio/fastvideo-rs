@@ -46,9 +46,7 @@ pub fn flash_attn_bsa_3d(
     let sk = k.shape[2];
     let [t, h, w] = latent_thw;
     if t * h * w != sq || t * h * w != sk {
-        return Err(msg(format!(
-            "bsa latent {t}x{h}x{w} vs seq q={sq} k={sk}"
-        )));
+        return Err(msg(format!("bsa latent {t}x{h}x{w} vs seq q={sq} k={sk}")));
     }
     let [tq, hq, wq] = params.chunk_q;
     let [tk, hk, wk] = params.chunk_k;
@@ -148,10 +146,7 @@ pub fn flash_attn_bsa_3d(
                         }
                         scores[si] = s * scale;
                     }
-                    let m = scores
-                        .iter()
-                        .copied()
-                        .fold(f32::NEG_INFINITY, f32::max);
+                    let m = scores.iter().copied().fold(f32::NEG_INFINITY, f32::max);
                     let exps: Vec<f32> = scores.iter().map(|s| (s - m).exp()).collect();
                     let z: f32 = exps.iter().sum::<f32>().max(1e-20);
                     let o_off = q_off;
@@ -167,7 +162,8 @@ pub fn flash_attn_bsa_3d(
         }
     }
 
-    let out_thw = rearrange_3d_block_to_thw(&out_blocked, b, heads, nt_q, nh_q, nw_q, tq, hq, wq, d);
+    let out_thw =
+        rearrange_3d_block_to_thw(&out_blocked, b, heads, nt_q, nh_q, nw_q, tq, hq, wq, d);
     CudaTensor::from_vec(out_thw, vec![b, heads, sq, d])
 }
 
@@ -277,9 +273,7 @@ mod tests {
         let w = 2usize;
         let seq = t * h * w;
         let d = 4usize;
-        let data: Vec<f32> = (0..1 * 1 * seq * d)
-            .map(|i| (i as f32) * 0.01)
-            .collect();
+        let data: Vec<f32> = (0..1 * 1 * seq * d).map(|i| (i as f32) * 0.01).collect();
         let q = CudaTensor::from_vec(data.clone(), vec![1, 1, seq, d]).unwrap();
         let k = CudaTensor::from_vec(data.clone(), vec![1, 1, seq, d]).unwrap();
         let v = CudaTensor::from_vec(data, vec![1, 1, seq, d]).unwrap();

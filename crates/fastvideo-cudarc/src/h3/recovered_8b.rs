@@ -49,7 +49,13 @@ impl ConditioningAdapter {
         Ok(Self {
             norm,
             proj: Linear::load(map, "proj", RECOVERED_8B_HIDDEN, RECOVERED_8B_OUT, false)?,
-            down: Linear::load(map, "down", RECOVERED_8B_HIDDEN, RECOVERED_8B_BOTTLENECK, false)?,
+            down: Linear::load(
+                map,
+                "down",
+                RECOVERED_8B_HIDDEN,
+                RECOVERED_8B_BOTTLENECK,
+                false,
+            )?,
             up: Linear::load(map, "up", RECOVERED_8B_BOTTLENECK, RECOVERED_8B_OUT, false)?,
             eps,
         })
@@ -82,7 +88,8 @@ impl Recovered8bEncoder {
     /// holds the four files).
     pub fn load(root: &Path) -> Result<Self> {
         let dir = resolve_recovered_dir(root)?;
-        let base = WeightMap::open_files(&[dir.join("qwen3vl_8b_minimax_h3_recovered_bf16.safetensors")])?;
+        let base =
+            WeightMap::open_files(&[dir.join("qwen3vl_8b_minimax_h3_recovered_bf16.safetensors")])?;
         let ara = WeightMap::open_files(&[dir.join("ara.safetensors")])?;
         let adapter_map = WeightMap::open_files(&[dir.join("conditioning_adapter.safetensors")])?;
         let cfg = DecoderConfig::qwen3_vl_8b_text().for_bf16_reference();
@@ -123,7 +130,9 @@ impl HiddenStateEncoder for Recovered8bEncoder {
         let mut taps = self
             .decoder
             .hidden_states(ids, &positions, &attend, &[RECOVERED_8B_TAP])?;
-        let hidden = taps.pop().ok_or_else(|| msg("recovered-8b: no hidden state"))?;
+        let hidden = taps
+            .pop()
+            .ok_or_else(|| msg("recovered-8b: no hidden state"))?;
         self.adapter.forward(&hidden)
     }
 

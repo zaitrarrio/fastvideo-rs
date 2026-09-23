@@ -119,7 +119,8 @@ impl Gen3CPipeline {
     }
 
     pub fn load_dit(&mut self) -> Result<()> {
-        let map = WeightMap::open(&self.root.join("transformer")).map_err(|e| msg(e.to_string()))?;
+        let map =
+            WeightMap::open(&self.root.join("transformer")).map_err(|e| msg(e.to_string()))?;
         self.dit = Some(CosmosTransformer::load(self.gen_cfg.to_cosmos(), &map)?);
         Ok(())
     }
@@ -183,9 +184,7 @@ impl Gen3CPipeline {
         let rgb_chw: Vec<f32> = rgb[0..3 * request.height * request.width].to_vec();
 
         if let Some(vae) = self.vae.as_ref() {
-            let encoded = vae
-                .encode_video(&video)
-                .map_err(|e| msg(e.to_string()))?;
+            let encoded = vae.encode_video(&video).map_err(|e| msg(e.to_string()))?;
             let encoded = vae
                 .normalize_latents(&encoded)
                 .map_err(|e| msg(e.to_string()))?;
@@ -275,9 +274,7 @@ impl Gen3CPipeline {
                         warp_rgb.clone(),
                         vec![1, 3, 1, request.height, request.width],
                     )?;
-                    let enc = vae
-                        .encode_video(&tensor)
-                        .map_err(|e| msg(e.to_string()))?;
+                    let enc = vae.encode_video(&tensor).map_err(|e| msg(e.to_string()))?;
                     let enc = vae
                         .normalize_latents(&enc)
                         .map_err(|e| msg(e.to_string()))?;
@@ -285,9 +282,7 @@ impl Gen3CPipeline {
                     let mut flat = vec![0f32; c * spatial];
                     let [_, ec, et, ey, ex] = match enc.shape[..] {
                         [1, ec, et, ey, ex] => [1, ec, et, ey, ex],
-                        _ => {
-                            return Err(msg(format!("gen3c warp encode {:?}", enc.shape)))
-                        }
+                        _ => return Err(msg(format!("gen3c warp encode {:?}", enc.shape))),
                     };
                     let n_t = et.min(lt);
                     for ch in 0..c.min(ec) {

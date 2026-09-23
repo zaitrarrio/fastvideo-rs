@@ -19,7 +19,13 @@ use crate::model::measure;
 use crate::report::{Report, StageResult};
 use crate::st;
 
-pub fn run(report: &mut Report, weights: &Path, oracle: &Path, device: &str, max_rel: f64) -> StageResult<()> {
+pub fn run(
+    report: &mut Report,
+    weights: &Path,
+    oracle: &Path,
+    device: &str,
+    max_rel: f64,
+) -> StageResult<()> {
     report.set("device", crate::gpu::init(device)?);
     report.set("gates", json!({ "rel_l2": max_rel }));
 
@@ -32,7 +38,10 @@ pub fn run(report: &mut Report, weights: &Path, oracle: &Path, device: &str, max
             latent.shape
         )));
     };
-    report.set("shapes", json!({ "latent": latent.shape, "video": want.shape }));
+    report.set(
+        "shapes",
+        json!({ "latent": latent.shape, "video": want.shape }),
+    );
 
     // The oracle stores frames first; our decode takes [N, C, T, H, W].
     let z = CudaTensor::from_vec(latent.data.clone(), vec![t, c, h, w])?
@@ -68,10 +77,23 @@ pub fn run(report: &mut Report, weights: &Path, oracle: &Path, device: &str, max
         )?;
         return Ok(());
     }
-    report.check("video_shape", true, json!({ "shape": got.shape }), json!({}))?;
+    report.check(
+        "video_shape",
+        true,
+        json!({ "shape": got.shape }),
+        json!({}),
+    )?;
 
     let d = diff(&got_host, &want.data);
-    report.set("metrics", json!({ "video": d.to_json(), "seconds": decode_s }));
-    report.check("video", d.within(max_rel), d.to_json(), json!({ "rel_l2": max_rel }))?;
+    report.set(
+        "metrics",
+        json!({ "video": d.to_json(), "seconds": decode_s }),
+    );
+    report.check(
+        "video",
+        d.within(max_rel),
+        d.to_json(),
+        json!({ "rel_l2": max_rel }),
+    )?;
     Ok(())
 }

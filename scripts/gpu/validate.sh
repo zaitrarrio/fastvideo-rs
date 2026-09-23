@@ -72,7 +72,7 @@ tier_query_base() {
     clip) echo "$base gpu_ram>=24 disk_space>=100 cpu_ram>=80 inet_down>=500" ;;
     # Same box runs our clip stages and upstream FastVideo: + torch wheels and
     # upstream's own copy of the weights in the HF cache.
-    compare) echo "$base gpu_ram>=24 disk_space>=180 cpu_ram>=80 inet_down>=500" ;;
+    compare) echo "$base gpu_ram>=24 disk_space>=200 cpu_ram>=80 inet_down>=500" ;;
     # `gen` is the UI's path: deploy, encode one prompt, generate one clip.
     gen) echo "$base gpu_ram>=24 disk_space>=100 cpu_ram>=80 inet_down>=500" ;;
     # The oracle holds UMT5-XXL in torch float32 (~22GB) before the DiT loads;
@@ -110,8 +110,8 @@ tier_query_base() {
     # FV_GPU_RAM_MIN=78 (A100/H100) or 140 (H200). TAEH3, no oracle.
     h3-matrix) echo "$base gpu_ram>=78 disk_space>=360 cpu_ram>=64 inet_down>=1000" ;;
     # LTX-2.5 Diffusers is ~100 GiB: advertised ≤2 Gbps hosts often crawl; require 4 Gbps+.
-    ltx2-gen) echo "$base gpu_ram>=90 disk_space>=180 cpu_ram>=64 inet_down>=4000" ;;
-    ltx2-text) echo "$base gpu_ram>=90 disk_space>=180 cpu_ram>=64 inet_down>=800" ;;
+    ltx2-gen) echo "$base gpu_ram>=90 disk_space>=200 cpu_ram>=64 inet_down>=4000" ;;
+    ltx2-text) echo "$base gpu_ram>=90 disk_space>=200 cpu_ram>=64 inet_down>=800" ;;
     # A build box: the GPU is irrelevant, so this asks for the cheapest thing
     # with cores and RAM for a release cargo build plus nvcc for 7 SMs.
     build) echo "num_gpus=1 cuda_vers>=13.0 reliability>0.97 rentable=true verified=true direct_port_count>=1 inet_down>=200 cpu_cores>=8 cpu_ram>=16 disk_space>=40 ${FV_OFFER_QUERY_EXTRA:-}" ;;
@@ -120,7 +120,7 @@ tier_query_base() {
 }
 tier_max_dph() { case "$1" in mathprobe) echo 0.40 ;; kernels) echo 0.25 ;; parity) echo 0.40 ;; clip) echo 0.60 ;; compare) echo 0.60 ;; gen) echo 0.80 ;; oracle) echo 1.60 ;; fp8) echo 0.80 ;; taehv) echo 0.40 ;; vaeab) echo 0.80 ;; build) echo 0.20 ;; h3-text | ltx2-text) echo 2.00 ;; h3-vae) echo 1.00 ;; ltx2-vae) echo 0.80 ;; h3-dit | ltx2-dit | h3-gen | ltx2-gen | h3-matrix) echo 2.50 ;; h3-vsa) echo 0.40 ;; esac; }
 tier_max_minutes() { case "$1" in mathprobe) echo 30 ;; kernels) echo 40 ;; parity) echo 75 ;; clip) echo 180 ;; compare) echo 240 ;; gen) echo 180 ;; oracle) echo 150 ;; fp8) echo 90 ;; taehv) echo 60 ;; vaeab) echo 90 ;; build) echo 45 ;; h3-text | ltx2-text) echo 150 ;; h3-vae | ltx2-vae) echo 90 ;; h3-dit | ltx2-dit) echo 180 ;; h3-gen | ltx2-gen) echo 150 ;; h3-matrix) echo 360 ;; h3-vsa) echo 40 ;; esac; }
-tier_disk() { case "$1" in mathprobe) echo 40 ;; kernels) echo 40 ;; parity) echo 60 ;; clip) echo 100 ;; compare) echo 180 ;; gen) echo 100 ;; oracle) echo 160 ;; fp8) echo 100 ;; taehv) echo 60 ;; vaeab) echo 100 ;; build) echo 40 ;; h3-text) echo 220 ;; ltx2-text) echo 180 ;; h3-vae) echo 100 ;; ltx2-vae) echo 80 ;; h3-dit) echo 200 ;; ltx2-dit) echo 260 ;; h3-vsa) echo 40 ;; h3-gen) echo 220 ;; h3-matrix) echo 360 ;; ltx2-gen) echo 180 ;; esac; }
+tier_disk() { case "$1" in mathprobe) echo 40 ;; kernels) echo 40 ;; parity) echo 60 ;; clip) echo 100 ;; compare) echo 200 ;; gen) echo 100 ;; oracle) echo 160 ;; fp8) echo 100 ;; taehv) echo 60 ;; vaeab) echo 100 ;; build) echo 40 ;; h3-text) echo 220 ;; ltx2-text) echo 200 ;; h3-vae) echo 100 ;; ltx2-vae) echo 80 ;; h3-dit) echo 200 ;; ltx2-dit) echo 260 ;; h3-vsa) echo 40 ;; h3-gen) echo 220 ;; h3-matrix) echo 360 ;; ltx2-gen) echo 200 ;; esac; }
 
 usage() { sed -n '2,12p' "$0" | sed 's/^# \{0,1\}//'; exit 2; }
 
@@ -841,7 +841,18 @@ cmd_run() {
     local prompt="${FV_PROMPT:-A man in his thirties talking to the camera in a bright living room, medium close-up, natural expressions and hand gestures, soft window light. He says: <d>Hello, this was generated entirely in Rust.</d>}"
     local name="${FV_CLIP_NAME:-$tier-$(date -u +%Y%m%d%H%M%S)}" clip="$OUTR/clips"
     if [[ "$tier" == h3-gen ]]; then
-      local repo="${FV_H3_REPO:-FastVideo/FastVideo-FastH3-8-Step-V2}" wdir="$WORK/weights/h3"
+      # FV_H3_RECIPE=sol-h3 loads base MiniMax-H3 and fuses the 4-step LoRA.
+      # The FastH3-8-Step checkpoint is already merged and is the wrong pack.
+      local recipe="${FV_H3_RECIPE:-}"
+      local repo="${FV_H3_REPO:-}"
+      if [[ -z "$repo" ]]; then
+        if [[ "$recipe" == sol-h3* ]]; then
+          repo="MiniMaxAI/MiniMax-H3"
+        else
+          repo="FastVideo/FastVideo-FastH3-8-Step-V2"
+        fi
+      fi
+      local wdir="$WORK/weights/h3"
       # Qwen3-VL shards 12-14 hold layers past the tap, the final norm, the LM
       # head and the vision tower: never read, so never fetched.
       # Bash 3.2 + set -u treats "${empty[@]}" as unbound; do not empty the
@@ -855,11 +866,23 @@ cmd_run() {
         wait_h3+=(vae)
       fi
       remote_run fetch-h3 120 "${fetch_h3[@]}"
+      local adapter_dir=""
+      if [[ "$recipe" == sol-h3* ]]; then
+        # Resolver finds this next to the snapshot: FastH3-4-step-Preview-v1-LoRA/dense-datafree/.
+        adapter_dir="$wdir/FastH3-4-step-Preview-v1-LoRA"
+        remote_run fetch-sol-adapter 120 fetch "FastVideo/FastVideo-FastH3-4-step-Preview-v1-LoRA" "$adapter_dir" \
+          "dense-datafree/adapter_model.safetensors"
+      fi
       local taeh3_dir="$WORK/taeh3"
       if [[ "${FV_TAEH3:-0}" == 1 ]]; then remote_run fetch-taeh3 300 fetch-taeh3 "$taeh3_dir"; fi
       remote_run wait-h3 7200 "${wait_h3[@]}"
+      if [[ -n "$adapter_dir" ]]; then
+        remote_run wait-sol-adapter 1800 wait-weights "$adapter_dir" 1800
+      fi
       local h3gen=(--mode fast h3 gen --weights "$wdir" --prompt "$prompt" --seconds "${FV_SECONDS:-5}"
         --seed "${FV_SEED:-1024}" --adaln-cache "$WORK/h3-adaln.cache")
+      if [[ -n "$recipe" ]]; then h3gen+=(--h3-recipe "$recipe"); fi
+      if [[ -n "${FV_H3_TEXT_ENCODER:-}" ]]; then h3gen+=(--text-encoder "$FV_H3_TEXT_ENCODER"); fi
       # --profile is a global flag: each DiT/VSA phase synchronizes, so this
       # run answers *where* the 94 s denoise goes, not *how long* a served
       # request takes. FV_WARM=1 times the resident pipeline (the 94 s number).

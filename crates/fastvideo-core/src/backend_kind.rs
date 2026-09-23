@@ -25,9 +25,9 @@ impl FromStr for BackendKind {
     fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
         match s.to_ascii_lowercase().as_str() {
             "cudarc" | "cdarc" | "cuda-native" | "cuda" => Ok(Self::Cudarc),
-            "candle" | "luminal" | "luminar" | "host" | "cpu" | "ref" | "burn" => Err(format!(
-                "backend `{s}` was removed; use cudarc"
-            )),
+            "candle" | "luminal" | "luminar" | "host" | "cpu" | "ref" | "burn" => {
+                Err(format!("backend `{s}` was removed; use cudarc"))
+            }
             other => Err(format!("unknown backend `{other}` (expected cudarc)")),
         }
     }

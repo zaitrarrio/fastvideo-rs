@@ -19,8 +19,12 @@ impl Flux2Preset {
         }
     }
 
-    pub fn default_height(self) -> usize { 1024 }
-    pub fn default_width(self) -> usize { 1024 }
+    pub fn default_height(self) -> usize {
+        1024
+    }
+    pub fn default_width(self) -> usize {
+        1024
+    }
 
     pub fn default_steps(self) -> usize {
         match self {
@@ -29,7 +33,9 @@ impl Flux2Preset {
         }
     }
 
-    pub fn flow_shift(self) -> f64 { 1.0 }
+    pub fn flow_shift(self) -> f64 {
+        1.0
+    }
 
     pub fn guidance_scale(self) -> f32 {
         match self {

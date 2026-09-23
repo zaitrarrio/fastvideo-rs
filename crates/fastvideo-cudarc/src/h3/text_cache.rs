@@ -76,12 +76,25 @@ pub fn tap_keys(cfg: &DecoderConfig, tap: usize) -> Vec<String> {
         let p = format!("{}.{layer}", cfg.layer_prefix);
         let mut names = Vec::new();
         if cfg.sandwich_norms {
-            names.extend(["post_attention_layernorm.weight", "pre_feedforward_layernorm.weight", "post_feedforward_layernorm.weight"]);
+            names.extend([
+                "post_attention_layernorm.weight",
+                "pre_feedforward_layernorm.weight",
+                "post_feedforward_layernorm.weight",
+            ]);
         } else {
             names.push("post_attention_layernorm.weight");
         }
-        names.extend(["self_attn.q_proj.weight", "self_attn.k_proj.weight", "self_attn.v_proj.weight", "self_attn.o_proj.weight"]);
-        names.extend(["mlp.gate_proj.weight", "mlp.up_proj.weight", "mlp.down_proj.weight"]);
+        names.extend([
+            "self_attn.q_proj.weight",
+            "self_attn.k_proj.weight",
+            "self_attn.v_proj.weight",
+            "self_attn.o_proj.weight",
+        ]);
+        names.extend([
+            "mlp.gate_proj.weight",
+            "mlp.up_proj.weight",
+            "mlp.down_proj.weight",
+        ]);
         if cfg.qk_norm {
             names.extend(["self_attn.q_norm.weight", "self_attn.k_norm.weight"]);
         }
@@ -104,10 +117,20 @@ pub fn encoder_identity(store: &LazyStore, cfg: &DecoderConfig, tap: usize) -> R
         let view = store.view(&key).map_err(|e| msg(e.to_string()))?;
         h.field(key.as_bytes());
         h.field(view.dtype.as_str().as_bytes());
-        h.field(&view.shape.iter().flat_map(|d| (*d as u64).to_le_bytes()).collect::<Vec<u8>>());
+        h.field(
+            &view
+                .shape
+                .iter()
+                .flat_map(|d| (*d as u64).to_le_bytes())
+                .collect::<Vec<u8>>(),
+        );
     }
     let last = tap.saturating_sub(1);
-    for key in [cfg.embed_key.clone(), format!("{}.0.input_layernorm.weight", cfg.layer_prefix), format!("{}.{last}.input_layernorm.weight", cfg.layer_prefix)] {
+    for key in [
+        cfg.embed_key.clone(),
+        format!("{}.0.input_layernorm.weight", cfg.layer_prefix),
+        format!("{}.{last}.input_layernorm.weight", cfg.layer_prefix),
+    ] {
         let view = store.view(&key).map_err(|e| msg(e.to_string()))?;
         h.field(&view.bytes[..SAMPLE_BYTES.min(view.bytes.len())]);
     }
@@ -115,7 +138,12 @@ pub fn encoder_identity(store: &LazyStore, cfg: &DecoderConfig, tap: usize) -> R
 }
 
 /// The cache key. Every input is length-prefixed; the magic versions the scheme.
-pub fn cache_key(prompt: &str, tokenizer_sha256: &[u8; 32], tap: usize, encoder_identity: &[u8; 32]) -> [u8; 32] {
+pub fn cache_key(
+    prompt: &str,
+    tokenizer_sha256: &[u8; 32],
+    tap: usize,
+    encoder_identity: &[u8; 32],
+) -> [u8; 32] {
     let mut h = Fields::new();
     h.field(MAGIC);
     h.field(prompt.as_bytes());
@@ -159,14 +187,24 @@ fn deserialize(bytes: &[u8]) -> Option<CachedText> {
     if body.len() < 24 || &body[..8] != MAGIC || sha256(body) != digest {
         return None;
     }
-    let word = |at: usize| usize::try_from(u64::from_le_bytes(body[at..at + 8].try_into().ok()?)).ok();
+    let word =
+        |at: usize| usize::try_from(u64::from_le_bytes(body[at..at + 8].try_into().ok()?)).ok();
     let (tokens, width) = (word(8)?, word(16)?);
     let ids_end = 24usize.checked_add(tokens.checked_mul(4)?)?;
-    if tokens == 0 || width == 0 || body.len() != ids_end.checked_add(tokens.checked_mul(width)?.checked_mul(4)?)? {
+    if tokens == 0
+        || width == 0
+        || body.len() != ids_end.checked_add(tokens.checked_mul(width)?.checked_mul(4)?)?
+    {
         return None;
     }
-    let ids = body[24..ids_end].chunks_exact(4).map(|c| u32::from_le_bytes([c[0], c[1], c[2], c[3]])).collect();
-    let data = body[ids_end..].chunks_exact(4).map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]])).collect();
+    let ids = body[24..ids_end]
+        .chunks_exact(4)
+        .map(|c| u32::from_le_bytes([c[0], c[1], c[2], c[3]]))
+        .collect();
+    let data = body[ids_end..]
+        .chunks_exact(4)
+        .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
+        .collect();
     Some(CachedText { ids, width, data })
 }
 
@@ -174,34 +212,60 @@ fn deserialize(bytes: &[u8]) -> Option<CachedText> {
 /// exactly `ids`. Anything else is a miss.
 pub fn load(dir: &Path, key: &[u8; 32], ids: &[u32], width: usize) -> Option<CachedText> {
     let entry = deserialize(&std::fs::read(entry_path(dir, key)).ok()?)?;
-    (entry.ids == ids && entry.width == width && entry.data.iter().all(|v| v.is_finite())).then_some(entry)
+    (entry.ids == ids && entry.width == width && entry.data.iter().all(|v| v.is_finite()))
+        .then_some(entry)
 }
 
 /// Write atomically (temp file + rename), so a run killed mid-write leaves no
 /// half entry under the final name. Returns the error as text for a log line:
 /// failing to cache is never fatal.
-pub fn store(dir: &Path, key: &[u8; 32], entry: &CachedText) -> std::result::Result<PathBuf, String> {
+pub fn store(
+    dir: &Path,
+    key: &[u8; 32],
+    entry: &CachedText,
+) -> std::result::Result<PathBuf, String> {
     if entry.ids.is_empty() || entry.data.len() != entry.ids.len() * entry.width {
-        return Err(format!("{} values for {} tokens of width {}", entry.data.len(), entry.ids.len(), entry.width));
+        return Err(format!(
+            "{} values for {} tokens of width {}",
+            entry.data.len(),
+            entry.ids.len(),
+            entry.width
+        ));
     }
     std::fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
     let path = entry_path(dir, key);
     let tmp = path.with_extension(format!("tmp{}", std::process::id()));
-    std::fs::write(&tmp, serialize(entry)).and_then(|()| std::fs::rename(&tmp, &path)).map_err(|e| {
-        let _ = std::fs::remove_file(&tmp);
-        format!("{}: {e}", path.display())
-    })?;
+    std::fs::write(&tmp, serialize(entry))
+        .and_then(|()| std::fs::rename(&tmp, &path))
+        .map_err(|e| {
+            let _ = std::fs::remove_file(&tmp);
+            format!("{}: {e}", path.display())
+        })?;
     Ok(path)
 }
 
 /// `load`, else `compute` and `store`. Returns the entry and whether it was a hit.
-pub fn get_or_compute(dir: &Path, key: &[u8; 32], ids: &[u32], width: usize, compute: impl FnOnce() -> Result<Vec<f32>>) -> Result<(CachedText, bool)> {
+pub fn get_or_compute(
+    dir: &Path,
+    key: &[u8; 32],
+    ids: &[u32],
+    width: usize,
+    compute: impl FnOnce() -> Result<Vec<f32>>,
+) -> Result<(CachedText, bool)> {
     if let Some(hit) = load(dir, key, ids, width) {
         return Ok((hit, true));
     }
-    let entry = CachedText { ids: ids.to_vec(), width, data: compute()? };
+    let entry = CachedText {
+        ids: ids.to_vec(),
+        width,
+        data: compute()?,
+    };
     if entry.data.len() != ids.len() * width {
-        return Err(msg(format!("text encoder produced {} values for {} tokens of width {width}", entry.data.len(), ids.len())));
+        return Err(msg(format!(
+            "text encoder produced {} values for {} tokens of width {width}",
+            entry.data.len(),
+            ids.len()
+        )));
     }
     if let Err(e) = store(dir, key, &entry) {
         crate::wan::log::info(format_args!("h3 text cache: not written ({e})"));
@@ -214,7 +278,8 @@ mod tests {
     use super::*;
 
     fn temp_dir(tag: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!("fv-h3-text-cache-{tag}-{}", std::process::id()));
+        let dir =
+            std::env::temp_dir().join(format!("fv-h3-text-cache-{tag}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         dir
     }
@@ -224,9 +289,21 @@ mod tests {
         let (tok, enc) = ([1u8; 32], [2u8; 32]);
         let key = cache_key("a dog <d>hi</d>", &tok, 50, &enc);
         // Pinned: changing the derivation silently would orphan every cache on disk.
-        assert_eq!(hex(&key), hex(&cache_key("a dog <d>hi</d>", &tok, 50, &enc)));
-        assert_eq!(hex(&key), "86ae3a4c85ef1725102bce88852a0d444061550701b8b40f29a6e3cca11652b5", "update this constant together with MAGIC");
-        for other in [cache_key("a dog <d>hi</d> ", &tok, 50, &enc), cache_key("a dog <d>hi</d>", &[3; 32], 50, &enc), cache_key("a dog <d>hi</d>", &tok, 49, &enc), cache_key("a dog <d>hi</d>", &tok, 50, &[4; 32])] {
+        assert_eq!(
+            hex(&key),
+            hex(&cache_key("a dog <d>hi</d>", &tok, 50, &enc))
+        );
+        assert_eq!(
+            hex(&key),
+            "86ae3a4c85ef1725102bce88852a0d444061550701b8b40f29a6e3cca11652b5",
+            "update this constant together with MAGIC"
+        );
+        for other in [
+            cache_key("a dog <d>hi</d> ", &tok, 50, &enc),
+            cache_key("a dog <d>hi</d>", &[3; 32], 50, &enc),
+            cache_key("a dog <d>hi</d>", &tok, 49, &enc),
+            cache_key("a dog <d>hi</d>", &tok, 50, &[4; 32]),
+        ] {
             assert_ne!(other, key);
         }
     }
@@ -261,14 +338,22 @@ mod tests {
     fn a_damaged_entry_is_a_miss_not_an_error() {
         let dir = temp_dir("damage");
         let key = [9u8; 32];
-        let entry = CachedText { ids: vec![1, 2], width: 3, data: vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0] };
+        let entry = CachedText {
+            ids: vec![1, 2],
+            width: 3,
+            data: vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0],
+        };
         let path = store(&dir, &key, &entry).unwrap();
         assert_eq!(load(&dir, &key, &[1, 2], 3), Some(entry.clone()));
         let good = std::fs::read(&path).unwrap();
 
         for cut in [good.len() - 1, good.len() - 32, 30, 8, 0] {
             std::fs::write(&path, &good[..cut]).unwrap();
-            assert_eq!(load(&dir, &key, &[1, 2], 3), None, "truncated to {cut} bytes");
+            assert_eq!(
+                load(&dir, &key, &[1, 2], 3),
+                None,
+                "truncated to {cut} bytes"
+            );
         }
         let mut flipped = good.clone();
         flipped[30] ^= 0x10;
@@ -285,11 +370,16 @@ mod tests {
         assert_eq!(load(&dir, &key, &[1, 2], 3), None);
 
         // ...and the next request simply recomputes over it.
-        let (again, hit) = get_or_compute(&dir, &key, &[1, 2], 3, || Ok(entry.data.clone())).unwrap();
+        let (again, hit) =
+            get_or_compute(&dir, &key, &[1, 2], 3, || Ok(entry.data.clone())).unwrap();
         assert!(!hit);
         assert_eq!(again, entry);
         assert_eq!(load(&dir, &key, &[1, 2], 3), Some(entry));
-        assert_eq!(load(&dir, &[8u8; 32], &[1, 2], 3), None, "an absent file is a miss");
+        assert_eq!(
+            load(&dir, &[8u8; 32], &[1, 2], 3),
+            None,
+            "an absent file is a miss"
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -300,7 +390,12 @@ mod tests {
         assert_eq!(keys.len(), 1 + 50 * 11);
         assert_eq!(keys[0], "model.language_model.embed_tokens.weight");
         assert!(keys[1].starts_with("model.language_model.layers.0."));
-        assert!(keys.last().unwrap().starts_with("model.language_model.layers.49."));
-        assert!(keys.iter().all(|k| !k.contains("layers.50.") && !k.ends_with("language_model.norm.weight")));
+        assert!(keys
+            .last()
+            .unwrap()
+            .starts_with("model.language_model.layers.49."));
+        assert!(keys
+            .iter()
+            .all(|k| !k.contains("layers.50.") && !k.ends_with("language_model.norm.weight")));
     }
 }

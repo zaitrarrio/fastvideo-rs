@@ -52,7 +52,9 @@ impl ZImageTransformer {
         let hit = hub_keys::first_present(map, zkeys::PROBES);
         let tiny = cfg.n_layers <= 2 || cfg.dim < 1000;
         if hit.is_none() && !tiny {
-            return Err(msg(hub_keys::require_any(map, "zimage", zkeys::PROBES).unwrap_err()));
+            return Err(msg(
+                hub_keys::require_any(map, "zimage", zkeys::PROBES).unwrap_err()
+            ));
         }
         let mut s = Self::zeros(cfg.clone())?;
         s.loaded_key = hit;
@@ -94,9 +96,7 @@ impl ZImageTransformer {
     ) -> Result<CudaTensor> {
         let shape = &latents.shape;
         if shape.len() != 4 {
-            return Err(msg(format!(
-                "zimage want [B,C,H,W], got {shape:?}"
-            )));
+            return Err(msg(format!("zimage want [B,C,H,W], got {shape:?}")));
         }
         let (b, c, h, w) = (shape[0], shape[1], shape[2], shape[3]);
         if c != self.cfg.in_channels {
@@ -117,7 +117,14 @@ impl ZImageTransformer {
         for v in &mut out {
             *v *= 1.0 - 0.1 * scale;
         }
-        let _ = (&self.patch_w, &self.patch_b, &self.out_w, &self.out_b, &self.time_w, b);
+        let _ = (
+            &self.patch_w,
+            &self.patch_b,
+            &self.out_w,
+            &self.out_b,
+            &self.time_w,
+            b,
+        );
         CudaTensor::from_vec(out, vec![b, self.cfg.out_channels, h, w]).map_err(Into::into)
     }
 }

@@ -3,8 +3,8 @@
 pub mod camera;
 
 pub use camera::{
-    compute_relative_poses, get_plucker_embeddings, prepare_camera_embedding,
-    synthetic_orbit_c2ws, Mat4,
+    compute_relative_poses, get_plucker_embeddings, prepare_camera_embedding, synthetic_orbit_c2ws,
+    Mat4,
 };
 
 use crate::wan::WanVideoArchConfig;

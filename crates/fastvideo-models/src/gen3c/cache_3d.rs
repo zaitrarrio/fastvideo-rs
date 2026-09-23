@@ -227,9 +227,7 @@ pub fn render_trajectory(
     tgt_w2cs
         .iter()
         .zip(tgt_ks.iter())
-        .map(|(tw, tk)| {
-            forward_warp_rgb(rgb, None, depth, height, width, src_w2c, tw, src_k, tk)
-        })
+        .map(|(tw, tk)| forward_warp_rgb(rgb, None, depth, height, width, src_w2c, tw, src_k, tk))
         .collect()
 }
 

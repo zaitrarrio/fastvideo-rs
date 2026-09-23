@@ -126,9 +126,7 @@ impl VitBlock {
             .reshape(vec![b, n, self.heads, self.head_dim])?
             .permute(&[0, 2, 1, 3])?;
         let attn = nn::scaled_dot_product_attention(&q, &k, &v, None)?;
-        let attn = attn
-            .permute(&[0, 2, 1, 3])?
-            .reshape(vec![b, n, hd])?;
+        let attn = attn.permute(&[0, 2, 1, 3])?.reshape(vec![b, n, hd])?;
         let x = x.add(&self.proj.forward(&attn)?)?;
         let nrm = x.layer_norm(1e-6, Some(&self.norm2_w), Some(&self.norm2_b))?;
         let h = nn::gelu(&self.fc1.forward(&nrm)?);
@@ -248,9 +246,7 @@ impl SpatialAgg {
             .reshape(vec![bt, n, self.heads, head_dim])?
             .permute(&[0, 2, 1, 3])?;
         let attn = nn::scaled_dot_product_attention(&q, &k, &v, None)?;
-        let attn = attn
-            .permute(&[0, 2, 1, 3])?
-            .reshape(vec![bt, n, hd])?;
+        let attn = attn.permute(&[0, 2, 1, 3])?.reshape(vec![bt, n, hd])?;
         let x = x.add(&self.out_proj.forward(&attn)?)?;
         let nrm = x.layer_norm(1e-6, Some(&self.norm2_w), Some(&self.norm2_b))?;
         let h = nn::gelu(&self.linear1.forward(&nrm)?);
@@ -405,11 +401,7 @@ impl SynchformerVisual {
                     for xi in 0..gw {
                         let tok = ((ti * gh) + yi) * gw + xi;
                         for od in 0..dout {
-                            let mut acc = self
-                                .patch_bias
-                                .as_ref()
-                                .map(|b| b[od])
-                                .unwrap_or(0.0);
+                            let mut acc = self.patch_bias.as_ref().map(|b| b[od]).unwrap_or(0.0);
                             for ct in 0..kt {
                                 let fr = frames[ti * tt + ct];
                                 for c in 0..3 {
@@ -419,7 +411,8 @@ impl SynchformerVisual {
                                             let px = xi * p + dx;
                                             let pix = fr[(c * h + py) * w + px];
                                             let widx = ((((od * 3 + c) * kt + ct) * p + dy) * p
-                                                + dx) as usize;
+                                                + dx)
+                                                as usize;
                                             acc += pw[widx] * pix;
                                         }
                                     }

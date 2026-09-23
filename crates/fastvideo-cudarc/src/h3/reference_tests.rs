@@ -19,7 +19,9 @@
 
 use std::path::PathBuf;
 
-use fastvideo_models::h3::config::{H3AudioVaeConfig, H3TransformerConfig, H3VideoVaeConfig, TAG_AUDIO, TAG_TEXT, TAG_VIDEO};
+use fastvideo_models::h3::config::{
+    H3AudioVaeConfig, H3TransformerConfig, H3VideoVaeConfig, TAG_AUDIO, TAG_TEXT, TAG_VIDEO,
+};
 use fastvideo_models::h3::packing::{patchify, H3PackedLayout};
 use fastvideo_models::h3::schedule::H3JointSchedule;
 
@@ -32,7 +34,9 @@ use super::transformer::{AttnMode, DeviceLayout, H3TextRefiner, H3Transformer};
 use super::vae::H3VideoDecoder;
 
 fn fixture(name: &str) -> WeightMap {
-    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src/h3/fixtures").join(name);
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("src/h3/fixtures")
+        .join(name);
     WeightMap::open_files(&[path.clone()]).unwrap_or_else(|e| panic!("{}: {e}", path.display()))
 }
 
@@ -47,7 +51,13 @@ fn tensor(map: &WeightMap, key: &str) -> CudaTensor {
 
 /// Relative L2 against a reference slice, naming the worst element.
 fn assert_close(what: &str, got: &[f32], want: &[f32], max_rel: f64) {
-    assert_eq!(got.len(), want.len(), "{what}: {} values vs the reference's {}", got.len(), want.len());
+    assert_eq!(
+        got.len(),
+        want.len(),
+        "{what}: {} values vs the reference's {}",
+        got.len(),
+        want.len()
+    );
     let (mut err, mut norm, mut worst) = (0f64, 0f64, (0usize, 0f32, 0f32));
     for (i, (a, b)) in got.iter().zip(want).enumerate() {
         let d = f64::from(a - b);
@@ -59,11 +69,22 @@ fn assert_close(what: &str, got: &[f32], want: &[f32], max_rel: f64) {
     }
     assert!(norm > 0.0, "{what}: an all-zero reference proves nothing");
     let rel = (err / norm).sqrt();
-    assert!(rel <= max_rel, "{what}: rel L2 {rel:.3e} > {max_rel:.0e}; worst at {}: ours {} vs reference {}", worst.0, worst.1, worst.2);
+    assert!(
+        rel <= max_rel,
+        "{what}: rel L2 {rel:.3e} > {max_rel:.0e}; worst at {}: ours {} vs reference {}",
+        worst.0,
+        worst.1,
+        worst.2
+    );
 }
 
 fn assert_matches(what: &str, got: &CudaTensor, map: &WeightMap, key: &str, max_rel: f64) {
-    assert_close(what, &got.host_cow().expect("host"), &values(map, key).1, max_rel);
+    assert_close(
+        what,
+        &got.host_cow().expect("host"),
+        &values(map, key).1,
+        max_rel,
+    );
 }
 
 fn dit_config() -> H3TransformerConfig {
@@ -95,16 +116,42 @@ fn dit_layout_forward_and_ladder_match_diffusers() {
     let h = cfg.hidden_size;
     // 5 text tokens, 3 audio latents per channel, a 3 x 4 x 6 latent (h3_tiny_reference.py).
     let layout = H3PackedLayout::new(5, (3, 4, 6), 3, cfg.patch_size).expect("layout");
-    let positions: Vec<f32> = layout.position_ids.iter().flatten().map(|&p| p as f32).collect();
-    assert_eq!(positions, values(&map, "ref.position_ids").1, "packed positions, exact as float32");
+    let positions: Vec<f32> = layout
+        .position_ids
+        .iter()
+        .flatten()
+        .map(|&p| p as f32)
+        .collect();
+    assert_eq!(
+        positions,
+        values(&map, "ref.position_ids").1,
+        "packed positions, exact as float32"
+    );
     let tags: Vec<f32> = layout.token_tags.iter().map(|&t| f32::from(t)).collect();
     assert_eq!(tags, values(&map, "ref.token_tags").1);
 
     let (noise_shape, noise) = values(&map, "in.video_noise");
-    let rows = patchify(&noise, [noise_shape[1], noise_shape[2], noise_shape[3], noise_shape[4]], cfg.patch_size).expect("patchify");
-    assert_eq!(rows, values(&map, "ref.video_rows").1, "channel-major patch features");
+    let rows = patchify(
+        &noise,
+        [
+            noise_shape[1],
+            noise_shape[2],
+            noise_shape[3],
+            noise_shape[4],
+        ],
+        cfg.patch_size,
+    )
+    .expect("patchify");
+    assert_eq!(
+        rows,
+        values(&map, "ref.video_rows").1,
+        "channel-major patch features"
+    );
 
-    let refined = H3TextRefiner::load(&cfg, &map).expect("refiner").forward(&tensor(&map, "in.text")).expect("refine");
+    let refined = H3TextRefiner::load(&cfg, &map)
+        .expect("refiner")
+        .forward(&tensor(&map, "in.text"))
+        .expect("refine");
     assert_matches("text_refined", &refined, &map, "ref.text_refined", 1e-5);
 
     let schedule = H3JointSchedule::fasth3_8step();
@@ -112,7 +159,11 @@ fn dit_layout_forward_and_ladder_match_diffusers() {
     let step = values(&map, "in.step").1[0] as usize;
     let table = model.adaln_table();
     // temb rows are the sorted-unique timesteps: video (smaller t) then audio.
-    let temb: Vec<f32> = table.temb[2 * step].iter().chain(&table.temb[2 * step + 1]).copied().collect();
+    let temb: Vec<f32> = table.temb[2 * step]
+        .iter()
+        .chain(&table.temb[2 * step + 1])
+        .copied()
+        .collect();
     assert_close("temb", &temb, &values(&map, "ref.temb").1, 1e-6);
     // ref.adaln_<b> is [6 params, n_t * 3 rows, hidden]; T2AV reads rows 0, 1 and 5.
     for block in 0..cfg.num_layers {
@@ -123,13 +174,19 @@ fn dit_layout_forward_and_ladder_match_diffusers() {
             for p in 0..6 {
                 let plus = if p == 1 || p == 4 { 1.0 } else { 0.0 }; // the table stores 1 + scale
                 let ours: Vec<f32> = slot[p * h..(p + 1) * h].iter().map(|v| v - plus).collect();
-                assert_close(&format!("adaln block {block} tag {tag} param {p}"), &ours, &want[(p * 6 + row) * h..(p * 6 + row + 1) * h], 1e-5);
+                assert_close(
+                    &format!("adaln block {block} tag {tag} param {p}"),
+                    &ours,
+                    &want[(p * 6 + row) * h..(p * 6 + row + 1) * h],
+                    1e-5,
+                );
             }
         }
     }
 
     let device_layout = DeviceLayout::new(&cfg, layout.clone()).expect("rope");
-    let video_rows = CudaTensor::from_vec(rows, vec![layout.video.len, cfg.video_patch_dim()]).expect("rows");
+    let video_rows =
+        CudaTensor::from_vec(rows, vec![layout.video.len, cfg.video_patch_dim()]).expect("rows");
     let audio_rows = tensor(&map, "in.audio_rows");
     let mut blocks: Vec<(String, Vec<f32>)> = Vec::new();
     let (video, audio) = model
@@ -157,12 +214,36 @@ fn dit_layout_forward_and_ladder_match_diffusers() {
 
     // The whole ladder: both shifts, the plus sign, sigma-from-timestep and the ratio.
     let (nv, na) = (video_rows.numel(), audio_rows.numel());
-    let (want_video, want_audio) = (values(&map, "ref.loop_video").1, values(&map, "ref.loop_audio").1);
-    denoise(&model, &device_layout, &refined, video_rows, audio_rows, &schedule, AttnMode::Dense, None, None, &mut |i, v, a| {
-        assert_close(&format!("loop video step {i}"), &v.host_cow()?, &want_video[i * nv..(i + 1) * nv], 2e-5);
-        assert_close(&format!("loop audio step {i}"), &a.host_cow()?, &want_audio[i * na..(i + 1) * na], 2e-5);
-        Ok(())
-    })
+    let (want_video, want_audio) = (
+        values(&map, "ref.loop_video").1,
+        values(&map, "ref.loop_audio").1,
+    );
+    denoise(
+        &model,
+        &device_layout,
+        &refined,
+        video_rows,
+        audio_rows,
+        &schedule,
+        AttnMode::Dense,
+        None,
+        None,
+        &mut |i, v, a| {
+            assert_close(
+                &format!("loop video step {i}"),
+                &v.host_cow()?,
+                &want_video[i * nv..(i + 1) * nv],
+                2e-5,
+            );
+            assert_close(
+                &format!("loop audio step {i}"),
+                &a.host_cow()?,
+                &want_audio[i * na..(i + 1) * na],
+                2e-5,
+            );
+            Ok(())
+        },
+    )
     .expect("ladder");
 }
 
@@ -176,7 +257,10 @@ fn vae_config(map: &WeightMap) -> H3VideoVaeConfig {
     cfg.decoder_ffn_mult = 2;
     cfg.tile_sample_min_size = 8;
     cfg.tile_sample_min_overlap = 4;
-    for (name, dst) in [("in.latents_mean", &mut cfg.latents_mean), ("in.latents_std", &mut cfg.latents_std)] {
+    for (name, dst) in [
+        ("in.latents_mean", &mut cfg.latents_mean),
+        ("in.latents_std", &mut cfg.latents_std),
+    ] {
         for (d, v) in dst.iter_mut().zip(values(map, name).1) {
             *d = f64::from(v);
         }
@@ -191,7 +275,13 @@ fn video_decoder_matches_diffusers_tile_by_tile_and_stitched() {
 
     // One tile through the ViT alone: [1, C, 7, 2, 2] denormalized, as the reference feeds it.
     let tile = tensor(&map, "in.tile");
-    let tokens = tile.reshape(tile.shape[1..].to_vec()).expect("drop batch").permute(&[1, 2, 3, 0]).expect("channel last").reshape(vec![1, 28, 5]).expect("tokens");
+    let tokens = tile
+        .reshape(tile.shape[1..].to_vec())
+        .expect("drop batch")
+        .permute(&[1, 2, 3, 0])
+        .expect("channel last")
+        .reshape(vec![1, 28, 5])
+        .expect("tokens");
     let mut taps: Vec<(usize, Vec<f32>)> = Vec::new();
     let out = decoder
         .decode_tiles_observed(&tokens, [7, 2, 2], &mut |block, x| {
@@ -201,7 +291,12 @@ fn video_decoder_matches_diffusers_tile_by_tile_and_stitched() {
         .expect("tile")
         .remove(0);
     for (block, got) in &taps {
-        assert_close(&format!("tile block {block}"), got, &values(&map, &format!("ref.tile_block_{block}")).1, 1e-5);
+        assert_close(
+            &format!("tile block {block}"),
+            got,
+            &values(&map, &format!("ref.tile_block_{block}")).1,
+            1e-5,
+        );
     }
     assert_matches("tile", &out, &map, "ref.tile", 1e-5);
 
@@ -214,7 +309,8 @@ fn video_decoder_matches_diffusers_tile_by_tile_and_stitched() {
             let host = chunk.host_cow()?;
             let f = chunk.shape[1];
             for ch in 0..3 {
-                video[(ch * frames + offset) * plane..][..f * plane].copy_from_slice(&host[ch * f * plane..(ch + 1) * f * plane]);
+                video[(ch * frames + offset) * plane..][..f * plane]
+                    .copy_from_slice(&host[ch * f * plane..(ch + 1) * f * plane]);
             }
             Ok(())
         })
@@ -232,7 +328,10 @@ fn audio_decoder_matches_diffusers_stage_by_stage() {
     cfg.decoder_dim = 128;
     cfg.decoder_rates = [5, 2, 2, 2, 2, 2, 2];
     cfg.decoder_kernel_sizes = [9, 4, 4, 4, 4, 4, 4];
-    for (name, dst) in [("in.latents_mean", &mut cfg.latents_mean), ("in.latents_std", &mut cfg.latents_std)] {
+    for (name, dst) in [
+        ("in.latents_mean", &mut cfg.latents_mean),
+        ("in.latents_std", &mut cfg.latents_std),
+    ] {
         for (d, v) in dst.iter_mut().zip(values(&map, name).1) {
             *d = f64::from(v);
         }
@@ -241,14 +340,25 @@ fn audio_decoder_matches_diffusers_stage_by_stage() {
     let mut seen = 0usize;
     let wave = decoder
         .decode_observed(&tensor(&map, "in.latent"), &mut |name, x| {
-            assert_close(name, &x.host_cow()?, &values(&map, &format!("ref.{name}")).1, 1e-5);
+            assert_close(
+                name,
+                &x.host_cow()?,
+                &values(&map, &format!("ref.{name}")).1,
+                1e-5,
+            );
             seen += 1;
             Ok(())
         })
         .expect("decode");
-    assert_eq!(seen, 1 + 2 * 7, "conv_pre, then up_i and stage_i for seven stages");
+    assert_eq!(
+        seen,
+        1 + 2 * 7,
+        "conv_pre, then up_i and stage_i for seven stages"
+    );
     assert_matches("wave", &wave, &map, "ref.wave", 1e-5);
     // The DiT's row layout (left channel's latents, then the right's) decodes to the same stereo pair.
-    let from_rows = decoder.decode_rows(&tensor(&map, "in.rows"), 2).expect("rows");
+    let from_rows = decoder
+        .decode_rows(&tensor(&map, "in.rows"), 2)
+        .expect("rows");
     assert_matches("wave from rows", &from_rows, &map, "ref.wave", 1e-5);
 }

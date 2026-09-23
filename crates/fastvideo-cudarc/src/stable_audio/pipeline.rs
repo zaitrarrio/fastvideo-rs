@@ -49,7 +49,12 @@ impl AudioVaeStub {
     pub fn decode(&self, latents: &CudaTensor) -> Result<Vec<f32>> {
         let [_, c, t] = match latents.shape[..] {
             [1, c, t] => [1, c, t],
-            _ => return Err(msg(format!("audio vae want [1,C,T], got {:?}", latents.shape))),
+            _ => {
+                return Err(msg(format!(
+                    "audio vae want [1,C,T], got {:?}",
+                    latents.shape
+                )))
+            }
         };
         let data = latents.host_cow()?;
         let samples = t * self.hop_length;
@@ -88,7 +93,8 @@ impl StableAudioPipeline {
     }
 
     pub fn load_dit(&mut self) -> Result<()> {
-        let map = WeightMap::open(&self.root.join("transformer")).map_err(|e| msg(e.to_string()))?;
+        let map =
+            WeightMap::open(&self.root.join("transformer")).map_err(|e| msg(e.to_string()))?;
         self.dit = Some(StableAudioTransformer::load(self.cfg.dit.clone(), &map)?);
         Ok(())
     }
@@ -102,7 +108,11 @@ impl StableAudioPipeline {
     pub fn load_vae_stub(&mut self) {
         self.vae = Some(AudioVaeStub {
             latent_channels: self.cfg.dit.out_channels,
-            hop_length: if self.cfg.dit.sample_size <= 32 { 8 } else { self.preset.hop_length() },
+            hop_length: if self.cfg.dit.sample_size <= 32 {
+                8
+            } else {
+                self.preset.hop_length()
+            },
             audio_channels: self.cfg.audio_channels,
         });
     }
@@ -139,8 +149,14 @@ impl StableAudioPipeline {
     }
 
     pub fn generate(&self, request: &StableAudioRequest, out_path: &Path) -> Result<()> {
-        let dit = self.dit.as_ref().ok_or_else(|| msg("Stable Audio: call load_dit()"))?;
-        let vae = self.vae.as_ref().ok_or_else(|| msg("Stable Audio: call load_vae_stub()"))?;
+        let dit = self
+            .dit
+            .as_ref()
+            .ok_or_else(|| msg("Stable Audio: call load_dit()"))?;
+        let vae = self
+            .vae
+            .as_ref()
+            .ok_or_else(|| msg("Stable Audio: call load_vae_stub()"))?;
         let text = self.encode_text(&request.prompt)?;
         let tlen = if self.cfg.dit.num_layers <= 2 {
             self.cfg.dit.sample_size
@@ -170,7 +186,12 @@ impl StableAudioPipeline {
         }
         let latents = CudaTensor::from_vec(sample, vec![1, c, tlen])?;
         let pcm = vae.decode(&latents)?;
-        write_wav(out_path, &pcm, request.sample_rate, self.cfg.audio_channels as u16)?;
+        write_wav(
+            out_path,
+            &pcm,
+            request.sample_rate,
+            self.cfg.audio_channels as u16,
+        )?;
         Ok(())
     }
 }
@@ -218,7 +239,8 @@ mod tests {
 
     #[test]
     fn tiny_generate_wav() {
-        let mut pipe = StableAudioPipeline::open("/tmp/sa-missing", StableAudioPreset::OpenSmall).unwrap();
+        let mut pipe =
+            StableAudioPipeline::open("/tmp/sa-missing", StableAudioPreset::OpenSmall).unwrap();
         pipe.load_dit_zeros_tiny().unwrap();
         pipe.load_vae_stub();
         let mut r = StableAudioRequest::for_preset(StableAudioPreset::OpenSmall, "drums", 1);

@@ -141,7 +141,8 @@ pub fn encode_byt5_glyphs(
     let cfg = Umt5Config::byt5_small();
     let enc = Umt5Encoder::load(cfg, &map).map_err(|e| msg(e.to_string()))?;
     let ids = tokenize_byt5(prompt, max_length);
-    enc.forward(&ids, 1, max_length).map_err(|e| msg(e.to_string()))
+    enc.forward(&ids, 1, max_length)
+        .map_err(|e| msg(e.to_string()))
 }
 
 #[cfg(test)]

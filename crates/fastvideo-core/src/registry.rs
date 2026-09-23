@@ -42,10 +42,9 @@ impl WanModelDefinition {
     pub fn matches(&self, path_or_class: &str) -> bool {
         let value = path_or_class.to_ascii_lowercase();
         let any_ok = if self.match_any.is_empty() {
-            self.hf_model_paths
-                .iter()
-                .any(|p| value.contains(&p.to_ascii_lowercase()) || p.to_ascii_lowercase().contains(&value))
-                || value.contains(&self.preset.replace('_', "-"))
+            self.hf_model_paths.iter().any(|p| {
+                value.contains(&p.to_ascii_lowercase()) || p.to_ascii_lowercase().contains(&value)
+            }) || value.contains(&self.preset.replace('_', "-"))
                 || value.contains(&self.preset.replace('_', ""))
         } else {
             self.match_any.iter().any(|token| value.contains(token))
@@ -268,10 +267,11 @@ pub static WAN_MODEL_DEFINITIONS: &[WanModelDefinition] = &[
 /// Resolve a Hugging Face repo id or local path to a Wan definition.
 /// Exact HF ids win, then first-match detectors.
 pub fn resolve_wan(model_id: &str) -> Result<&'static WanModelDefinition> {
-    if let Some(def) = WAN_MODEL_DEFINITIONS
-        .iter()
-        .find(|d| d.hf_model_paths.iter().any(|p| p.eq_ignore_ascii_case(model_id)))
-    {
+    if let Some(def) = WAN_MODEL_DEFINITIONS.iter().find(|d| {
+        d.hf_model_paths
+            .iter()
+            .any(|p| p.eq_ignore_ascii_case(model_id))
+    }) {
         return Ok(def);
     }
     WAN_MODEL_DEFINITIONS
@@ -511,6 +511,26 @@ pub static LTX2_MODEL_DEFINITIONS: &[FamilyModelDefinition] = &[
 
 /// MiniMax-H3 / FastH3 Hub ids.
 pub static H3_MODEL_DEFINITIONS: &[FamilyModelDefinition] = &[
+    // Before `minimax_h3`: `minimax-h3-turbo` also contains `minimax-h3`.
+    family_defn!(
+        ModelFamily::H3,
+        "sol_h3_ref2va",
+        &["lightx2v/Minimax-h3-Turbo"],
+        &[WorkloadType::Ref2VA],
+        match_any = &["sol-h3-ref2va", "sol_h3_ref2va", "minimax-h3-turbo"]
+    ),
+    family_defn!(
+        ModelFamily::H3,
+        "sol_h3",
+        &["FastVideo/FastH3-4-step-Preview-v1-LoRA"],
+        &[
+            WorkloadType::T2AV,
+            WorkloadType::I2V,
+            WorkloadType::FL2VA,
+            WorkloadType::Ref2VA,
+        ],
+        match_any = &["sol-h3", "sol_h3"]
+    ),
     family_defn!(
         ModelFamily::H3,
         "fasth3_8step",
@@ -525,7 +545,11 @@ pub static H3_MODEL_DEFINITIONS: &[FamilyModelDefinition] = &[
         ModelFamily::H3,
         "minimax_h3",
         &["MiniMaxAI/MiniMax-H3"],
-        &[WorkloadType::T2AV, WorkloadType::FL2VA, WorkloadType::Ref2VA],
+        &[
+            WorkloadType::T2AV,
+            WorkloadType::FL2VA,
+            WorkloadType::Ref2VA
+        ],
         match_any = &["minimax-h3", "minimax_h3"]
     ),
 ];
@@ -645,15 +669,13 @@ pub static LINGBOT_MODEL_DEFINITIONS: &[FamilyModelDefinition] = &[
 ];
 
 /// GEN3C (Cosmos + 3D cache) Hub ids.
-pub static GEN3C_MODEL_DEFINITIONS: &[FamilyModelDefinition] = &[
-    family_defn!(
-        ModelFamily::Gen3C,
-        "gen3c_cosmos_7b",
-        &["FastVideo/GEN3C-Cosmos-7B-Diffusers"],
-        &[WorkloadType::I2V],
-        match_any = &["gen3c-cosmos", "gen3c_cosmos_7b"]
-    ),
-];
+pub static GEN3C_MODEL_DEFINITIONS: &[FamilyModelDefinition] = &[family_defn!(
+    ModelFamily::Gen3C,
+    "gen3c_cosmos_7b",
+    &["FastVideo/GEN3C-Cosmos-7B-Diffusers"],
+    &[WorkloadType::I2V],
+    match_any = &["gen3c-cosmos", "gen3c_cosmos_7b"]
+)];
 
 /// Matrix-Game Hub ids.
 pub static MATRIXGAME_MODEL_DEFINITIONS: &[FamilyModelDefinition] = &[
@@ -735,59 +757,49 @@ pub static LINGBOTWORLD_MODEL_DEFINITIONS: &[FamilyModelDefinition] = &[
 ];
 
 /// HunyuanGameCraft Hub ids.
-pub static GAMECRAFT_MODEL_DEFINITIONS: &[FamilyModelDefinition] = &[
-    family_defn!(
-        ModelFamily::GameCraft,
-        "gamecraft_i2v",
-        &["FastVideo/HunyuanGameCraft-Diffusers"],
-        &[WorkloadType::I2V],
-        match_any = &["hunyuangamecraft", "gamecraft"]
-    ),
-];
+pub static GAMECRAFT_MODEL_DEFINITIONS: &[FamilyModelDefinition] = &[family_defn!(
+    ModelFamily::GameCraft,
+    "gamecraft_i2v",
+    &["FastVideo/HunyuanGameCraft-Diffusers"],
+    &[WorkloadType::I2V],
+    match_any = &["hunyuangamecraft", "gamecraft"]
+)];
 
 /// HY-WorldPlay Hub ids.
-pub static HYWORLD_MODEL_DEFINITIONS: &[FamilyModelDefinition] = &[
-    family_defn!(
-        ModelFamily::HyWorld,
-        "hyworld_bidirectional",
-        &["FastVideo/HY-WorldPlay-Bidirectional-Diffusers"],
-        &[WorkloadType::I2V],
-        match_any = &["hy-worldplay", "hyworld"]
-    ),
-];
+pub static HYWORLD_MODEL_DEFINITIONS: &[FamilyModelDefinition] = &[family_defn!(
+    ModelFamily::HyWorld,
+    "hyworld_bidirectional",
+    &["FastVideo/HY-WorldPlay-Bidirectional-Diffusers"],
+    &[WorkloadType::I2V],
+    match_any = &["hy-worldplay", "hyworld"]
+)];
 
 /// Z-Image T2I Hub ids.
-pub static ZIMAGE_MODEL_DEFINITIONS: &[FamilyModelDefinition] = &[
-    family_defn!(
-        ModelFamily::ZImage,
-        "zimage_turbo",
-        &["Tongyi-MAI/Z-Image-Turbo"],
-        &[WorkloadType::T2I],
-        match_any = &["z-image", "zimage"]
-    ),
-];
+pub static ZIMAGE_MODEL_DEFINITIONS: &[FamilyModelDefinition] = &[family_defn!(
+    ModelFamily::ZImage,
+    "zimage_turbo",
+    &["Tongyi-MAI/Z-Image-Turbo"],
+    &[WorkloadType::T2I],
+    match_any = &["z-image", "zimage"]
+)];
 
 /// SD 3.5 T2I Hub ids.
-pub static SD35_MODEL_DEFINITIONS: &[FamilyModelDefinition] = &[
-    family_defn!(
-        ModelFamily::Sd35,
-        "sd35_medium",
-        &["stabilityai/stable-diffusion-3.5-medium"],
-        &[WorkloadType::T2I],
-        match_any = &["stable-diffusion-3.5", "sd35", "sd3.5"]
-    ),
-];
+pub static SD35_MODEL_DEFINITIONS: &[FamilyModelDefinition] = &[family_defn!(
+    ModelFamily::Sd35,
+    "sd35_medium",
+    &["stabilityai/stable-diffusion-3.5-medium"],
+    &[WorkloadType::T2I],
+    match_any = &["stable-diffusion-3.5", "sd35", "sd3.5"]
+)];
 
 /// FLUX.1 T2I Hub ids.
-pub static FLUX_MODEL_DEFINITIONS: &[FamilyModelDefinition] = &[
-    family_defn!(
-        ModelFamily::Flux,
-        "flux1_dev",
-        &["black-forest-labs/FLUX.1-dev"],
-        &[WorkloadType::T2I],
-        match_any = &["flux.1-dev", "flux1-dev", "flux-1-dev"]
-    ),
-];
+pub static FLUX_MODEL_DEFINITIONS: &[FamilyModelDefinition] = &[family_defn!(
+    ModelFamily::Flux,
+    "flux1_dev",
+    &["black-forest-labs/FLUX.1-dev"],
+    &[WorkloadType::T2I],
+    match_any = &["flux.1-dev", "flux1-dev", "flux-1-dev"]
+)];
 
 /// FLUX.2 T2I Hub ids.
 pub static FLUX2_MODEL_DEFINITIONS: &[FamilyModelDefinition] = &[
@@ -815,15 +827,13 @@ pub static FLUX2_MODEL_DEFINITIONS: &[FamilyModelDefinition] = &[
 ];
 
 /// GLM-Image T2I Hub ids.
-pub static GLM_IMAGE_MODEL_DEFINITIONS: &[FamilyModelDefinition] = &[
-    family_defn!(
-        ModelFamily::GlmImage,
-        "glm_image",
-        &["zai-org/GLM-Image"],
-        &[WorkloadType::T2I],
-        match_any = &["glm-image", "glm_image"]
-    ),
-];
+pub static GLM_IMAGE_MODEL_DEFINITIONS: &[FamilyModelDefinition] = &[family_defn!(
+    ModelFamily::GlmImage,
+    "glm_image",
+    &["zai-org/GLM-Image"],
+    &[WorkloadType::T2I],
+    match_any = &["glm-image", "glm_image"]
+)];
 
 /// Stable Audio Open T2A Hub ids.
 pub static STABLE_AUDIO_MODEL_DEFINITIONS: &[FamilyModelDefinition] = &[
@@ -848,20 +858,21 @@ pub static STABLE_AUDIO_MODEL_DEFINITIONS: &[FamilyModelDefinition] = &[
 /// Public upstream pack is `hkchengrex/MMAudio` (native `.pth`, not Diffusers).
 /// Diffusers conversion remains `FastVideo/MMAudio-large-44k-v2-Diffusers`
 /// (reserved). Prefer `MMAUDIO_MODEL_PATH` for a local converted layout.
-pub static MMAUDIO_MODEL_DEFINITIONS: &[FamilyModelDefinition] = &[
-    family_defn!(
-        ModelFamily::MmAudio,
-        "mmaudio_large_44k_v2",
-        &[
-            "hkchengrex/MMAudio",
-            "FastVideo/MMAudio-large-44k-v2-Diffusers",
-        ],
-        &[WorkloadType::V2A, WorkloadType::T2A],
-        match_any = &["mmaudio-large", "mmaudio", "mmaudio_large_44k_v2"]
-    ),
-];
+pub static MMAUDIO_MODEL_DEFINITIONS: &[FamilyModelDefinition] = &[family_defn!(
+    ModelFamily::MmAudio,
+    "mmaudio_large_44k_v2",
+    &[
+        "hkchengrex/MMAudio",
+        "FastVideo/MMAudio-large-44k-v2-Diffusers",
+    ],
+    &[WorkloadType::V2A, WorkloadType::T2A],
+    match_any = &["mmaudio-large", "mmaudio", "mmaudio_large_44k_v2"]
+)];
 
-fn resolve_family_table(table: &'static [FamilyModelDefinition], model_id: &str) -> Option<&'static FamilyModelDefinition> {
+fn resolve_family_table(
+    table: &'static [FamilyModelDefinition],
+    model_id: &str,
+) -> Option<&'static FamilyModelDefinition> {
     table
         .iter()
         .find(|d| d.matches_exact(model_id))
@@ -1182,6 +1193,14 @@ mod tests {
         let fasth3 = resolve("FastVideo/FastVideo-FastH3-8-Step-V2").unwrap();
         assert_eq!(fasth3.preset(), "fasth3_8step");
 
+        let sol = resolve("FastVideo/FastH3-4-step-Preview-v1-LoRA").unwrap();
+        assert_eq!(sol.preset(), "sol_h3");
+        assert!(sol.workload_types().contains(&WorkloadType::I2V));
+        let sol_ref = resolve("lightx2v/Minimax-h3-Turbo").unwrap();
+        assert_eq!(sol_ref.preset(), "sol_h3_ref2va");
+        assert_eq!(resolve("sol-h3").unwrap().preset(), "sol_h3");
+        assert_eq!(resolve("sol-h3-ref2va").unwrap().preset(), "sol_h3_ref2va");
+
         let hy = resolve("hunyuanvideo-community/HunyuanVideo-1.5-Diffusers-480p_t2v").unwrap();
         assert_eq!(hy.family(), ModelFamily::Hunyuan15);
         assert_eq!(hy.preset(), "hy15_480p_t2v");
@@ -1262,9 +1281,15 @@ mod tests {
     #[test]
     fn list_models_covers_families() {
         let ids = all_registered_ids();
-        assert!(ids.iter().any(|(f, id, _)| *f == ModelFamily::Wan && id.contains("Wan2.1")));
-        assert!(ids.iter().any(|(f, id, _)| *f == ModelFamily::Ltx2 && id.contains("LTX-2.5")));
-        assert!(ids.iter().any(|(f, id, _)| *f == ModelFamily::H3 && id.contains("MiniMax-H3")));
+        assert!(ids
+            .iter()
+            .any(|(f, id, _)| *f == ModelFamily::Wan && id.contains("Wan2.1")));
+        assert!(ids
+            .iter()
+            .any(|(f, id, _)| *f == ModelFamily::Ltx2 && id.contains("LTX-2.5")));
+        assert!(ids
+            .iter()
+            .any(|(f, id, _)| *f == ModelFamily::H3 && id.contains("MiniMax-H3")));
         assert!(ids
             .iter()
             .any(|(f, id, _)| *f == ModelFamily::Hunyuan15 && id.contains("HunyuanVideo-1.5")));

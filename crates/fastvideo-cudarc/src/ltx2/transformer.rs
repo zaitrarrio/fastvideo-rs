@@ -45,8 +45,17 @@ struct AdaLnSingle {
 }
 
 impl AdaLnSingle {
-    fn load(map: &WeightMap, keys: &Keys, name: &str, dim: usize, rows: usize, sinusoid: usize) -> Result<Self> {
-        let lin = |suffix: &str, i: usize, o: usize| Linear::load(map, &keys.key(&format!("{name}.{suffix}")), i, o, true);
+    fn load(
+        map: &WeightMap,
+        keys: &Keys,
+        name: &str,
+        dim: usize,
+        rows: usize,
+        sinusoid: usize,
+    ) -> Result<Self> {
+        let lin = |suffix: &str, i: usize, o: usize| {
+            Linear::load(map, &keys.key(&format!("{name}.{suffix}")), i, o, true)
+        };
         Ok(Self {
             linear_1: lin("emb.timestep_embedder.linear_1", sinusoid, dim)?,
             linear_2: lin("emb.timestep_embedder.linear_2", dim, dim)?,
@@ -60,9 +69,15 @@ impl AdaLnSingle {
     /// `(modulation [rows, dim], embedded [1, dim])` for one timestep
     /// (`1000·sigma`).
     fn forward(&self, timestep: f32) -> Result<(CudaTensor, CudaTensor)> {
-        let s = sinusoidal_timesteps(&CudaTensor::from_vec(vec![timestep], vec![1])?, self.sinusoid)?;
+        let s = sinusoidal_timesteps(
+            &CudaTensor::from_vec(vec![timestep], vec![1])?,
+            self.sinusoid,
+        )?;
         let e = self.linear_2.forward(&self.linear_1.forward(&s)?.silu())?;
-        let m = self.linear.forward(&e.silu())?.reshape(vec![self.rows, self.dim])?;
+        let m = self
+            .linear
+            .forward(&e.silu())?
+            .reshape(vec![self.rows, self.dim])?;
         Ok((m, e))
     }
 }
@@ -76,7 +91,13 @@ struct CaptionProjection {
 impl CaptionProjection {
     fn load(map: &WeightMap, keys: &Keys, name: &str, caption: usize, dim: usize) -> Result<Self> {
         Ok(Self {
-            linear_1: Linear::load(map, &keys.key(&format!("{name}.linear_1")), caption, dim, true)?,
+            linear_1: Linear::load(
+                map,
+                &keys.key(&format!("{name}.linear_1")),
+                caption,
+                dim,
+                true,
+            )?,
             linear_2: Linear::load(map, &keys.key(&format!("{name}.linear_2")), dim, dim, true)?,
         })
     }
@@ -92,7 +113,12 @@ fn row(t: &CudaTensor, r: usize) -> Result<CudaTensor> {
 }
 
 /// `rms(x) · (1 + scale) + shift` with a weightless RMSNorm.
-fn rms_adaln(x: &CudaTensor, scale: &CudaTensor, shift: &CudaTensor, eps: f32) -> Result<CudaTensor> {
+fn rms_adaln(
+    x: &CudaTensor,
+    scale: &CudaTensor,
+    shift: &CudaTensor,
+    eps: f32,
+) -> Result<CudaTensor> {
     x.rms_norm(&scale.try_add_scalar(1.0)?, eps)?.add(shift)
 }
 
@@ -141,7 +167,12 @@ pub struct Ropes {
 }
 
 impl Ropes {
-    pub fn new(cfg: &Ltx2TransformerConfig, grid: [usize; 3], audio_tokens: usize, fps: f32) -> Result<Self> {
+    pub fn new(
+        cfg: &Ltx2TransformerConfig,
+        grid: [usize; 3],
+        audio_tokens: usize,
+        fps: f32,
+    ) -> Result<Self> {
         Self::upload(&Ltx2RopeTables::new(cfg, grid, audio_tokens, fps))
     }
 
@@ -233,20 +264,52 @@ impl Ltx2Transformer {
     /// are always loaded. For the key-manifest tests, which check the loader at
     /// the production config without materialising 19B parameters; a model
     /// loaded this way is not the model.
-    pub(crate) fn load_blocks(map: &WeightMap, keys: &Keys, cfg: &Ltx2TransformerConfig, which: &[usize]) -> Result<Self> {
-        if cfg.norm_elementwise_affine || cfg.patch_size != 1 || cfg.patch_size_t != 1 || !cfg.attention_bias || !cfg.attention_out_bias {
-            return Err(msg("ltx2 dit: expected weightless block norms, 1x1x1 patches and biased attention"));
+    pub(crate) fn load_blocks(
+        map: &WeightMap,
+        keys: &Keys,
+        cfg: &Ltx2TransformerConfig,
+        which: &[usize],
+    ) -> Result<Self> {
+        if cfg.norm_elementwise_affine
+            || cfg.patch_size != 1
+            || cfg.patch_size_t != 1
+            || !cfg.attention_bias
+            || !cfg.attention_out_bias
+        {
+            return Err(msg(
+                "ltx2 dit: expected weightless block norms, 1x1x1 patches and biased attention",
+            ));
         }
-        if cfg.cross_attention_dim != cfg.inner_dim() || cfg.audio_cross_attention_dim != cfg.audio_inner_dim() {
+        if cfg.cross_attention_dim != cfg.inner_dim()
+            || cfg.audio_cross_attention_dim != cfg.audio_inner_dim()
+        {
             return Err(msg("ltx2 dit: cross_attention_dim must match each stream width (projected text or connector output)"));
         }
         let (dv, da, eps) = (cfg.inner_dim(), cfg.audio_inner_dim(), cfg.norm_eps as f32);
         let (hv, ha) = (cfg.num_attention_heads, cfg.audio_num_attention_heads);
-        let video_dims = AttentionDims { query_dim: dv, context_dim: dv, heads: hv, head_dim: cfg.attention_head_dim };
-        let audio_dims = AttentionDims { query_dim: da, context_dim: da, heads: ha, head_dim: cfg.audio_attention_head_dim };
+        let video_dims = AttentionDims {
+            query_dim: dv,
+            context_dim: dv,
+            heads: hv,
+            head_dim: cfg.attention_head_dim,
+        };
+        let audio_dims = AttentionDims {
+            query_dim: da,
+            context_dim: da,
+            heads: ha,
+            head_dim: cfg.audio_attention_head_dim,
+        };
         // Both directions attend in the audio head layout.
-        let a2v_dims = AttentionDims { query_dim: dv, context_dim: da, ..audio_dims };
-        let v2a_dims = AttentionDims { query_dim: da, context_dim: dv, ..audio_dims };
+        let a2v_dims = AttentionDims {
+            query_dim: dv,
+            context_dim: da,
+            ..audio_dims
+        };
+        let v2a_dims = AttentionDims {
+            query_dim: da,
+            context_dim: dv,
+            ..audio_dims
+        };
         let video_mod_rows = if cfg.cross_attn_mod { 9 } else { 6 };
         let audio_mod_rows = if cfg.audio_cross_attn_mod { 9 } else { 6 };
         let prompt_mod = cfg.cross_attn_mod || cfg.audio_cross_attn_mod;
@@ -254,21 +317,48 @@ impl Ltx2Transformer {
         let mut blocks = Vec::with_capacity(which.len());
         for &i in which {
             if i >= cfg.num_layers {
-                return Err(msg(format!("ltx2 dit: block {i} of a {}-block model", cfg.num_layers)));
+                return Err(msg(format!(
+                    "ltx2 dit: block {i} of a {}-block model",
+                    cfg.num_layers
+                )));
             }
             let p = format!("transformer_blocks.{i}");
-            let attn = |name: &str, dims: AttentionDims, gated: bool| Attention::load(map, keys, &format!("{p}.{name}"), dims, eps, gated);
+            let attn = |name: &str, dims: AttentionDims, gated: bool| {
+                Attention::load(map, keys, &format!("{p}.{name}"), dims, eps, gated)
+            };
             let video_gated = cfg.gated_attn;
             let audio_gated = cfg.audio_gated_attn;
             blocks.push(Block {
                 video: StreamBlock {
                     attn1: attn("attn1", video_dims, video_gated)?,
                     attn2: attn("attn2", video_dims, video_gated)?,
-                    ff: FeedForward::load(map, keys, &format!("{p}.ff"), dv, cfg.ff_inner_dim(), cfg.ff_bias)?,
-                    scale_shift_table: table(map, &keys.key(&format!("{p}.scale_shift_table")), video_mod_rows, dv)?,
-                    cross_table: table(map, &keys.key(&format!("{p}.video_a2v_cross_attn_scale_shift_table")), 5, dv)?,
+                    ff: FeedForward::load(
+                        map,
+                        keys,
+                        &format!("{p}.ff"),
+                        dv,
+                        cfg.ff_inner_dim(),
+                        cfg.ff_bias,
+                    )?,
+                    scale_shift_table: table(
+                        map,
+                        &keys.key(&format!("{p}.scale_shift_table")),
+                        video_mod_rows,
+                        dv,
+                    )?,
+                    cross_table: table(
+                        map,
+                        &keys.key(&format!("{p}.video_a2v_cross_attn_scale_shift_table")),
+                        5,
+                        dv,
+                    )?,
                     prompt_table: if prompt_mod {
-                        Some(table(map, &keys.key(&format!("{p}.prompt_scale_shift_table")), 2, dv)?)
+                        Some(table(
+                            map,
+                            &keys.key(&format!("{p}.prompt_scale_shift_table")),
+                            2,
+                            dv,
+                        )?)
                     } else {
                         None
                     },
@@ -277,11 +367,33 @@ impl Ltx2Transformer {
                 audio: StreamBlock {
                     attn1: attn("audio_attn1", audio_dims, audio_gated)?,
                     attn2: attn("audio_attn2", audio_dims, audio_gated)?,
-                    ff: FeedForward::load(map, keys, &format!("{p}.audio_ff"), da, cfg.audio_ff_inner_dim(), cfg.audio_ff_bias)?,
-                    scale_shift_table: table(map, &keys.key(&format!("{p}.audio_scale_shift_table")), audio_mod_rows, da)?,
-                    cross_table: table(map, &keys.key(&format!("{p}.audio_a2v_cross_attn_scale_shift_table")), 5, da)?,
+                    ff: FeedForward::load(
+                        map,
+                        keys,
+                        &format!("{p}.audio_ff"),
+                        da,
+                        cfg.audio_ff_inner_dim(),
+                        cfg.audio_ff_bias,
+                    )?,
+                    scale_shift_table: table(
+                        map,
+                        &keys.key(&format!("{p}.audio_scale_shift_table")),
+                        audio_mod_rows,
+                        da,
+                    )?,
+                    cross_table: table(
+                        map,
+                        &keys.key(&format!("{p}.audio_a2v_cross_attn_scale_shift_table")),
+                        5,
+                        da,
+                    )?,
                     prompt_table: if prompt_mod {
-                        Some(table(map, &keys.key(&format!("{p}.audio_prompt_scale_shift_table")), 2, da)?)
+                        Some(table(
+                            map,
+                            &keys.key(&format!("{p}.audio_prompt_scale_shift_table")),
+                            2,
+                            da,
+                        )?)
                     } else {
                         None
                     },
@@ -291,18 +403,28 @@ impl Ltx2Transformer {
                 video_to_audio: attn("video_to_audio_attn", v2a_dims, audio_gated)?,
             });
             if (i + 1) % 8 == 0 || i + 1 == cfg.num_layers {
-                let free = crate::wan::device::free_memory().map_or(-1.0, |(f, _)| f as f64 / f64::from(1u32 << 30));
-                crate::wan::log::info(format_args!("ltx2 dit: loaded block {}/{} ({free:.1} GiB free)", i + 1, cfg.num_layers));
+                let free = crate::wan::device::free_memory()
+                    .map_or(-1.0, |(f, _)| f as f64 / f64::from(1u32 << 30));
+                crate::wan::log::info(format_args!(
+                    "ltx2 dit: loaded block {}/{} ({free:.1} GiB free)",
+                    i + 1,
+                    cfg.num_layers
+                ));
             }
         }
-        let ada = |name: &str, dim: usize, rows: usize| AdaLnSingle::load(map, keys, name, dim, rows, cfg.timestep_proj_dim);
-        let caption = |name: &str, caption: usize, dim: usize| -> Result<Option<CaptionProjection>> {
-            if cfg.use_prompt_embeddings {
-                Ok(Some(CaptionProjection::load(map, keys, name, caption, dim)?))
-            } else {
-                Ok(None)
-            }
+        let ada = |name: &str, dim: usize, rows: usize| {
+            AdaLnSingle::load(map, keys, name, dim, rows, cfg.timestep_proj_dim)
         };
+        let caption =
+            |name: &str, caption: usize, dim: usize| -> Result<Option<CaptionProjection>> {
+                if cfg.use_prompt_embeddings {
+                    Ok(Some(CaptionProjection::load(
+                        map, keys, name, caption, dim,
+                    )?))
+                } else {
+                    Ok(None)
+                }
+            };
         let prompt_ada = |name: &str, dim: usize| -> Result<Option<AdaLnSingle>> {
             if prompt_mod && cfg.use_prompt_adaln_single {
                 Ok(Some(ada(name, dim, 2)?))
@@ -311,7 +433,8 @@ impl Ltx2Transformer {
             }
         };
         let keyframes = if cfg.use_keyframes_abs_pos_embedding {
-            let mut t = cuda_tensor_shaped(map, &keys.key("keyframes_abs_pos_embedding"), &[1, dv])?;
+            let mut t =
+                cuda_tensor_shaped(map, &keys.key("keyframes_abs_pos_embedding"), &[1, dv])?;
             t.pin_device()?;
             Some(t)
         } else {
@@ -319,9 +442,19 @@ impl Ltx2Transformer {
         };
         Ok(Self {
             proj_in: Linear::load(map, &keys.key("proj_in"), cfg.in_channels, dv, true)?,
-            audio_proj_in: Linear::load(map, &keys.key("audio_proj_in"), cfg.audio_in_channels, da, true)?,
+            audio_proj_in: Linear::load(
+                map,
+                &keys.key("audio_proj_in"),
+                cfg.audio_in_channels,
+                da,
+                true,
+            )?,
             caption_projection: caption("caption_projection", cfg.caption_channels, dv)?,
-            audio_caption_projection: caption("audio_caption_projection", cfg.caption_channels, da)?,
+            audio_caption_projection: caption(
+                "audio_caption_projection",
+                cfg.caption_channels,
+                da,
+            )?,
             time_embed: ada("time_embed", dv, video_mod_rows)?,
             audio_time_embed: ada("audio_time_embed", da, audio_mod_rows)?,
             prompt_adaln: prompt_ada("prompt_adaln", dv)?,
@@ -333,7 +466,13 @@ impl Ltx2Transformer {
             scale_shift_table: table(map, &keys.key("scale_shift_table"), 2, dv)?,
             audio_scale_shift_table: table(map, &keys.key("audio_scale_shift_table"), 2, da)?,
             proj_out: Linear::load(map, &keys.key("proj_out"), dv, cfg.out_channels, true)?,
-            audio_proj_out: Linear::load(map, &keys.key("audio_proj_out"), da, cfg.audio_out_channels, true)?,
+            audio_proj_out: Linear::load(
+                map,
+                &keys.key("audio_proj_out"),
+                da,
+                cfg.audio_out_channels,
+                true,
+            )?,
             keyframes_abs_pos_embedding: keyframes,
             blocks,
             ones_video: ones(dv)?,
@@ -389,16 +528,29 @@ impl Ltx2Transformer {
         mut probe: Option<Probe<'_>>,
     ) -> Result<(CudaTensor, CudaTensor)> {
         if video.rank() != 3 || audio.rank() != 3 || video.shape[0] != 1 || audio.shape[0] != 1 {
-            return Err(msg(format!("ltx2 dit expects [1, S, C] and [1, L, C], got {:?} and {:?}", video.shape, audio.shape)));
+            return Err(msg(format!(
+                "ltx2 dit expects [1, S, C] and [1, L, C], got {:?} and {:?}",
+                video.shape, audio.shape
+            )));
         }
         let eps = self.cfg.norm_eps as f32;
         // The a↔v gate embedders see the timestep rescaled by
         // cross_attn_timestep_scale_multiplier / timestep_scale_multiplier (= 1).
-        let gate_t = timestep * (self.cfg.cross_attn_timestep_scale_multiplier / self.cfg.timestep_scale_multiplier) as f32;
+        let gate_t = timestep
+            * (self.cfg.cross_attn_timestep_scale_multiplier / self.cfg.timestep_scale_multiplier)
+                as f32;
         let (v_main, v_embedded) = self.time_embed.forward(timestep)?;
         let (a_main, a_embedded) = self.audio_time_embed.forward(timestep)?;
-        let v_mod = StepModulation { main: v_main, cross: self.cross_video_scale_shift.forward(timestep)?.0, gate: self.cross_video_gate.forward(gate_t)?.0 };
-        let a_mod = StepModulation { main: a_main, cross: self.cross_audio_scale_shift.forward(timestep)?.0, gate: self.cross_audio_gate.forward(gate_t)?.0 };
+        let v_mod = StepModulation {
+            main: v_main,
+            cross: self.cross_video_scale_shift.forward(timestep)?.0,
+            gate: self.cross_video_gate.forward(gate_t)?.0,
+        };
+        let a_mod = StepModulation {
+            main: a_main,
+            cross: self.cross_audio_scale_shift.forward(timestep)?.0,
+            gate: self.cross_audio_gate.forward(gate_t)?.0,
+        };
         let (v_prompt, a_prompt) = match (&self.prompt_adaln, &self.audio_prompt_adaln) {
             (Some(p), Some(a)) => (Some(p.forward(timestep)?.0), Some(a.forward(timestep)?.0)),
             _ => (None, None),
@@ -407,26 +559,61 @@ impl Ltx2Transformer {
         let mut xv = self.proj_in.forward(video)?;
         let mut xa = self.audio_proj_in.forward(audio)?;
         for (i, block) in self.blocks.iter().enumerate() {
-            let tap = Tap { probe: probe.as_mut(), block: i };
-            (xv, xa) = self.block(block, xv, xa, text, &v_mod, &a_mod, v_prompt.as_ref(), a_prompt.as_ref(), ropes, eps, tap)?;
+            let tap = Tap {
+                probe: probe.as_mut(),
+                block: i,
+            };
+            (xv, xa) = self.block(
+                block,
+                xv,
+                xa,
+                text,
+                &v_mod,
+                &a_mod,
+                v_prompt.as_ref(),
+                a_prompt.as_ref(),
+                ropes,
+                eps,
+                tap,
+            )?;
             if let Some(obs) = observer.as_mut() {
                 obs(i, &xv, &xa)?;
             }
         }
-        let mut head = |stream: &str, x: &CudaTensor, tab: &CudaTensor, e: &CudaTensor, out: &Linear| -> Result<CudaTensor> {
+        let mut head = |stream: &str,
+                        x: &CudaTensor,
+                        tab: &CudaTensor,
+                        e: &CudaTensor,
+                        out: &Linear|
+         -> Result<CudaTensor> {
             // (shift, scale) = table[2, D] + embedded; LayerNorm here, not RMSNorm.
             let dim = e.shape[1];
             let mods = tab.add(e)?.reshape(vec![1, 2, dim])?;
             let modulated = x.ln_adaln_e(&mods, 1, 0, eps)?;
             if let Some(p) = probe.as_mut() {
-                p(&format!("head.{stream}.norm"), &x.layer_norm(eps, None, None)?)?;
+                p(
+                    &format!("head.{stream}.norm"),
+                    &x.layer_norm(eps, None, None)?,
+                )?;
                 p(&format!("head.{stream}.modulated"), &modulated)?;
             }
             out.forward(&modulated)
         };
         Ok((
-            head("video", &xv, &self.scale_shift_table, &v_embedded, &self.proj_out)?,
-            head("audio", &xa, &self.audio_scale_shift_table, &a_embedded, &self.audio_proj_out)?,
+            head(
+                "video",
+                &xv,
+                &self.scale_shift_table,
+                &v_embedded,
+                &self.proj_out,
+            )?,
+            head(
+                "audio",
+                &xa,
+                &self.audio_scale_shift_table,
+                &a_embedded,
+                &self.audio_proj_out,
+            )?,
         ))
     }
 
@@ -451,7 +638,10 @@ impl Ltx2Transformer {
         let v_tab = b.video.scale_shift_table.add(&v_mod.main)?;
         let a_tab = b.audio.scale_shift_table.add(&a_mod.main)?;
         let (v_rows, a_rows) = (v_tab.shape[0], a_tab.shape[0]);
-        let (v_gates, a_gates) = (v_tab.reshape(vec![1, v_rows, dv])?, a_tab.reshape(vec![1, a_rows, da])?);
+        let (v_gates, a_gates) = (
+            v_tab.reshape(vec![1, v_rows, dv])?,
+            a_tab.reshape(vec![1, a_rows, da])?,
+        );
 
         // 1. self-attention.
         let h = rms_adaln(&xv, &row(&v_tab, 1)?, &row(&v_tab, 0)?, eps)?;
@@ -468,7 +658,14 @@ impl Ltx2Transformer {
         tap.emit("audio", "attn1_after", &xa)?;
 
         // 2. text cross-attention (optional Q/KV AdaLN + output gate, LTX-2.5).
-        let text_cross = |stream: &StreamBlock, x: &CudaTensor, ctx: &CudaTensor, tab: &CudaTensor, ones: &CudaTensor, prompt: Option<&CudaTensor>, dim: usize| -> Result<(CudaTensor, CudaTensor, CudaTensor)> {
+        let text_cross = |stream: &StreamBlock,
+                          x: &CudaTensor,
+                          ctx: &CudaTensor,
+                          tab: &CudaTensor,
+                          ones: &CudaTensor,
+                          prompt: Option<&CudaTensor>,
+                          dim: usize|
+         -> Result<(CudaTensor, CudaTensor, CudaTensor)> {
             let mut h = x.rms_norm(ones, eps)?;
             if stream.cross_attn_mod {
                 h = scale_shift(&h, &row(tab, 7)?, &row(tab, 6)?)?;
@@ -490,11 +687,27 @@ impl Ltx2Transformer {
             let out = x.add(&u)?;
             Ok((h, u, out))
         };
-        let (h, u, xv) = text_cross(&b.video, &xv, &text.video, &v_tab, &self.ones_video, v_prompt, dv)?;
+        let (h, u, xv) = text_cross(
+            &b.video,
+            &xv,
+            &text.video,
+            &v_tab,
+            &self.ones_video,
+            v_prompt,
+            dv,
+        )?;
         tap.emit("video", "attn2_in", &h)?;
         tap.emit("video", "attn2_out", &u)?;
         tap.emit("video", "attn2_after", &xv)?;
-        let (h, u, xa) = text_cross(&b.audio, &xa, &text.audio, &a_tab, &self.ones_audio, a_prompt, da)?;
+        let (h, u, xa) = text_cross(
+            &b.audio,
+            &xa,
+            &text.audio,
+            &a_tab,
+            &self.ones_audio,
+            a_prompt,
+            da,
+        )?;
         tap.emit("audio", "attn2_in", &h)?;
         tap.emit("audio", "attn2_out", &u)?;
         tap.emit("audio", "attn2_after", &xa)?;
@@ -504,12 +717,28 @@ impl Ltx2Transformer {
         // (scale first here); row 4 is the gate, modulated by its own embedder.
         let v_cross = b.video.cross_table.narrow(0, 0, 4)?.add(&v_mod.cross)?;
         let a_cross = b.audio.cross_table.narrow(0, 0, 4)?.add(&a_mod.cross)?;
-        let a2v_gate = row(&b.video.cross_table, 4)?.add(&v_mod.gate)?.reshape(vec![1, 1, dv])?;
-        let v2a_gate = row(&b.audio.cross_table, 4)?.add(&a_mod.gate)?.reshape(vec![1, 1, da])?;
-        let side = |x: &CudaTensor, cross: &CudaTensor, first: usize| rms_adaln(x, &row(cross, first)?, &row(cross, first + 1)?, eps);
+        let a2v_gate = row(&b.video.cross_table, 4)?
+            .add(&v_mod.gate)?
+            .reshape(vec![1, 1, dv])?;
+        let v2a_gate = row(&b.audio.cross_table, 4)?
+            .add(&a_mod.gate)?
+            .reshape(vec![1, 1, da])?;
+        let side = |x: &CudaTensor, cross: &CudaTensor, first: usize| {
+            rms_adaln(x, &row(cross, first)?, &row(cross, first + 1)?, eps)
+        };
         let (a2v_q, v2a_q) = (side(&xv, &v_cross, 0)?, side(&xa, &a_cross, 2)?);
-        let a2v = b.audio_to_video.forward(&a2v_q, Some(&side(&xa, &a_cross, 0)?), Some(&ropes.cross_video), Some(&ropes.cross_audio))?;
-        let v2a = b.video_to_audio.forward(&v2a_q, Some(&side(&xv, &v_cross, 2)?), Some(&ropes.cross_audio), Some(&ropes.cross_video))?;
+        let a2v = b.audio_to_video.forward(
+            &a2v_q,
+            Some(&side(&xa, &a_cross, 0)?),
+            Some(&ropes.cross_video),
+            Some(&ropes.cross_audio),
+        )?;
+        let v2a = b.video_to_audio.forward(
+            &v2a_q,
+            Some(&side(&xv, &v_cross, 2)?),
+            Some(&ropes.cross_audio),
+            Some(&ropes.cross_video),
+        )?;
         let xv = xv.residual_gate_add_e(&a2v, &a2v_gate, 0)?;
         let xa = xa.residual_gate_add_e(&v2a, &v2a_gate, 0)?;
         tap.emit("video", "av_in", &a2v_q)?;
@@ -537,7 +766,10 @@ impl Ltx2Transformer {
 /// `[1, C, F, H, W]` → `[1, F·H·W, C]`, tokens frame-major, then row, then column.
 pub fn pack_video(latents: &CudaTensor) -> Result<CudaTensor> {
     let [b, c, f, h, w] = latents.shape[..] else {
-        return Err(msg(format!("pack_video expects [1, C, F, H, W], got {:?}", latents.shape)));
+        return Err(msg(format!(
+            "pack_video expects [1, C, F, H, W], got {:?}",
+            latents.shape
+        )));
     };
     latents.reshape(vec![b, c, f * h * w])?.permute(&[0, 2, 1])
 }
@@ -545,18 +777,25 @@ pub fn pack_video(latents: &CudaTensor) -> Result<CudaTensor> {
 /// The inverse of [`pack_video`] for a `[frames, height, width]` grid.
 pub fn unpack_video(tokens: &CudaTensor, grid: [usize; 3]) -> Result<CudaTensor> {
     let [b, s, c] = tokens.shape[..] else {
-        return Err(msg(format!("unpack_video expects [1, S, C], got {:?}", tokens.shape)));
+        return Err(msg(format!(
+            "unpack_video expects [1, S, C], got {:?}",
+            tokens.shape
+        )));
     };
     let [f, h, w] = grid;
     if s != f * h * w {
-        return Err(msg(format!("unpack_video: {s} tokens for a {f}x{h}x{w} grid")));
+        return Err(msg(format!(
+            "unpack_video: {s} tokens for a {f}x{h}x{w} grid"
+        )));
     }
     tokens.permute(&[0, 2, 1])?.reshape(vec![b, c, f, h, w])
 }
 
 #[cfg(test)]
 mod tests {
-    use super::super::attention::tests::{assert_close, attention_reference, get, linear, rms, rows, tensor, tokens, weights};
+    use super::super::attention::tests::{
+        assert_close, attention_reference, get, linear, rms, rows, tensor, tokens, weights,
+    };
     use super::super::keys::Layout;
     use super::*;
 
@@ -592,43 +831,102 @@ mod tests {
     }
 
     fn lin(map: &WeightMap, prefix: &str, x: &[f32], o: usize) -> Vec<f32> {
-        linear(x, &get(map, &format!("{prefix}.weight"), &[o, x.len()]), &get(map, &format!("{prefix}.bias"), &[o]))
+        linear(
+            x,
+            &get(map, &format!("{prefix}.weight"), &[o, x.len()]),
+            &get(map, &format!("{prefix}.bias"), &[o]),
+        )
     }
 
     /// `(modulation rows, embedded)` of an AdaLN-single, from its definition.
-    fn adaln(map: &WeightMap, name: &str, t: f32, dim: usize, rows_n: usize) -> (Vec<Vec<f32>>, Vec<f32>) {
+    fn adaln(
+        map: &WeightMap,
+        name: &str,
+        t: f32,
+        dim: usize,
+        rows_n: usize,
+    ) -> (Vec<Vec<f32>>, Vec<f32>) {
         let half = 4;
         let s: Vec<f32> = (0..8)
             .map(|i| {
                 let arg = t * (-(10000f32.ln()) * (i % half) as f32 / half as f32).exp();
-                if i < half { arg.cos() } else { arg.sin() }
+                if i < half {
+                    arg.cos()
+                } else {
+                    arg.sin()
+                }
             })
             .collect();
-        let h: Vec<f32> = lin(map, &format!("{name}.emb.timestep_embedder.linear_1"), &s, dim).into_iter().map(silu).collect();
-        let e = lin(map, &format!("{name}.emb.timestep_embedder.linear_2"), &h, dim);
-        let m = lin(map, &format!("{name}.linear"), &e.iter().map(|v| silu(*v)).collect::<Vec<_>>(), rows_n * dim);
+        let h: Vec<f32> = lin(
+            map,
+            &format!("{name}.emb.timestep_embedder.linear_1"),
+            &s,
+            dim,
+        )
+        .into_iter()
+        .map(silu)
+        .collect();
+        let e = lin(
+            map,
+            &format!("{name}.emb.timestep_embedder.linear_2"),
+            &h,
+            dim,
+        );
+        let m = lin(
+            map,
+            &format!("{name}.linear"),
+            &e.iter().map(|v| silu(*v)).collect::<Vec<_>>(),
+            rows_n * dim,
+        );
         (m.chunks_exact(dim).map(<[f32]>::to_vec).collect(), e)
     }
 
-    fn table_plus(map: &WeightMap, key: &str, rows_n: usize, dim: usize, m: &[Vec<f32>]) -> Vec<Vec<f32>> {
+    fn table_plus(
+        map: &WeightMap,
+        key: &str,
+        rows_n: usize,
+        dim: usize,
+        m: &[Vec<f32>],
+    ) -> Vec<Vec<f32>> {
         let t = get(map, key, &[rows_n, dim]);
-        (0..m.len()).map(|r| t[r * dim..(r + 1) * dim].iter().zip(&m[r]).map(|(a, b)| a + b).collect()).collect()
+        (0..m.len())
+            .map(|r| {
+                t[r * dim..(r + 1) * dim]
+                    .iter()
+                    .zip(&m[r])
+                    .map(|(a, b)| a + b)
+                    .collect()
+            })
+            .collect()
     }
 
     fn adaln_norm(x: &[Vec<f32>], scale: &[f32], shift: &[f32]) -> Vec<Vec<f32>> {
-        x.iter().map(|v| rms(v, None, 1e-6).iter().enumerate().map(|(i, n)| n * (1.0 + scale[i]) + shift[i]).collect()).collect()
+        x.iter()
+            .map(|v| {
+                rms(v, None, 1e-6)
+                    .iter()
+                    .enumerate()
+                    .map(|(i, n)| n * (1.0 + scale[i]) + shift[i])
+                    .collect()
+            })
+            .collect()
     }
 
     fn gated_add(x: &mut [Vec<f32>], update: &[Vec<f32>], gate: &[f32]) {
         for (v, u) in x.iter_mut().zip(update) {
-            v.iter_mut().enumerate().for_each(|(i, a)| *a += u[i] * gate[i]);
+            v.iter_mut()
+                .enumerate()
+                .for_each(|(i, a)| *a += u[i] * gate[i]);
         }
     }
 
     fn ff(map: &WeightMap, prefix: &str, x: &[Vec<f32>], dim: usize) -> Vec<Vec<f32>> {
         x.iter()
             .map(|v| {
-                let up: Vec<f32> = lin(map, &format!("{prefix}.net.0.proj"), v, dim * 4).into_iter().map(gelu).collect();
+                let up: Vec<f32> = lin(map, &format!("{prefix}.net.0.proj"), v, dim * 4)
+                    .into_iter()
+                    .map(gelu)
+                    .collect();
                 lin(map, &format!("{prefix}.net.2"), &up, dim)
             })
             .collect()
@@ -641,28 +939,58 @@ mod tests {
     fn forward_matches_a_loop_reference() {
         let cfg = tiny();
         let map = weights();
-        let model = Ltx2Transformer::load(&map, &Keys::transformer(Layout::Diffusers), &cfg).unwrap();
+        let model =
+            Ltx2Transformer::load(&map, &Keys::transformer(Layout::Diffusers), &cfg).unwrap();
         let (grid, l, t_len, timestep) = ([2usize, 1, 3], 4usize, 5usize, 725.0f32);
         let s = 6;
         let tables = Ltx2RopeTables::new(&cfg, grid, l, 24.0);
         let ropes = Ropes::upload(&tables).unwrap();
         let (video, audio) = (tokens(s, 6, 0.41), tokens(l, 5, 0.83));
         let (ctx_v, ctx_a) = (tokens(t_len, 12, 0.29), tokens(t_len, 12, 0.57));
-        let text = model.project_text(&tensor(&ctx_v), &tensor(&ctx_a)).unwrap();
+        let text = model
+            .project_text(&tensor(&ctx_v), &tensor(&ctx_a))
+            .unwrap();
         let mut seen = Vec::new();
         let mut obs = |i: usize, v: &CudaTensor, a: &CudaTensor| -> Result<()> {
             seen.push((i, rows(v, 16), rows(a, 8)));
             Ok(())
         };
-        let (got_v, got_a) = model.forward(&tensor(&video), &tensor(&audio), &text, timestep, &ropes, Some(&mut obs)).unwrap();
-        assert_eq!((got_v.shape.clone(), got_a.shape.clone()), (vec![1, s, 6], vec![1, l, 5]));
+        let (got_v, got_a) = model
+            .forward(
+                &tensor(&video),
+                &tensor(&audio),
+                &text,
+                timestep,
+                &ropes,
+                Some(&mut obs),
+            )
+            .unwrap();
+        assert_eq!(
+            (got_v.shape.clone(), got_a.shape.clone()),
+            (vec![1, s, 6], vec![1, l, 5])
+        );
         assert_eq!(seen.len(), 2, "one observation per block");
 
         let (dv, da) = (16usize, 8usize);
         let caption = |name: &str, x: &[Vec<f32>], d: usize| -> Vec<Vec<f32>> {
-            x.iter().map(|v| lin(&map, &format!("{name}.linear_2"), &lin(&map, &format!("{name}.linear_1"), v, d).into_iter().map(gelu).collect::<Vec<_>>(), d)).collect()
+            x.iter()
+                .map(|v| {
+                    lin(
+                        &map,
+                        &format!("{name}.linear_2"),
+                        &lin(&map, &format!("{name}.linear_1"), v, d)
+                            .into_iter()
+                            .map(gelu)
+                            .collect::<Vec<_>>(),
+                        d,
+                    )
+                })
+                .collect()
         };
-        let (tv, ta) = (caption("caption_projection", &ctx_v, dv), caption("audio_caption_projection", &ctx_a, da));
+        let (tv, ta) = (
+            caption("caption_projection", &ctx_v, dv),
+            caption("audio_caption_projection", &ctx_a, da),
+        );
         let (v_main, v_emb) = adaln(&map, "time_embed", timestep, dv, 6);
         let (a_main, a_emb) = adaln(&map, "audio_time_embed", timestep, da, 6);
         let v_cross = adaln(&map, "av_cross_attn_video_scale_shift", timestep, dv, 4).0;
@@ -671,36 +999,115 @@ mod tests {
         let a_gate = adaln(&map, "av_cross_attn_audio_v2a_gate", timestep, da, 1).0;
 
         let mut xv: Vec<Vec<f32>> = video.iter().map(|v| lin(&map, "proj_in", v, dv)).collect();
-        let mut xa: Vec<Vec<f32>> = audio.iter().map(|v| lin(&map, "audio_proj_in", v, da)).collect();
-        let vd = AttentionDims { query_dim: dv, context_dim: dv, heads: 2, head_dim: 8 };
-        let ad = AttentionDims { query_dim: da, context_dim: da, heads: 2, head_dim: 4 };
+        let mut xa: Vec<Vec<f32>> = audio
+            .iter()
+            .map(|v| lin(&map, "audio_proj_in", v, da))
+            .collect();
+        let vd = AttentionDims {
+            query_dim: dv,
+            context_dim: dv,
+            heads: 2,
+            head_dim: 8,
+        };
+        let ad = AttentionDims {
+            query_dim: da,
+            context_dim: da,
+            heads: 2,
+            head_dim: 4,
+        };
         for (i, tap) in seen.iter().enumerate() {
             let p = format!("transformer_blocks.{i}");
             let vt = table_plus(&map, &format!("{p}.scale_shift_table"), 6, dv, &v_main);
-            let at = table_plus(&map, &format!("{p}.audio_scale_shift_table"), 6, da, &a_main);
+            let at = table_plus(
+                &map,
+                &format!("{p}.audio_scale_shift_table"),
+                6,
+                da,
+                &a_main,
+            );
             // 1. self-attention: rows shift, scale, gate.
             let h = adaln_norm(&xv, &vt[1], &vt[0]);
-            let u = attention_reference(&map, &format!("{p}.attn1"), vd, &h, &h, Some(&tables.video), None, false);
+            let u = attention_reference(
+                &map,
+                &format!("{p}.attn1"),
+                vd,
+                &h,
+                &h,
+                Some(&tables.video),
+                None,
+                false,
+            );
             gated_add(&mut xv, &u, &vt[2]);
             let h = adaln_norm(&xa, &at[1], &at[0]);
-            let u = attention_reference(&map, &format!("{p}.audio_attn1"), ad, &h, &h, Some(&tables.audio), None, false);
+            let u = attention_reference(
+                &map,
+                &format!("{p}.audio_attn1"),
+                ad,
+                &h,
+                &h,
+                Some(&tables.audio),
+                None,
+                false,
+            );
             gated_add(&mut xa, &u, &at[2]);
             // 2. text cross-attention.
             let h: Vec<Vec<f32>> = xv.iter().map(|v| rms(v, None, 1e-6)).collect();
-            let u = attention_reference(&map, &format!("{p}.attn2"), vd, &h, &tv, None, None, false);
+            let u =
+                attention_reference(&map, &format!("{p}.attn2"), vd, &h, &tv, None, None, false);
             xv.iter_mut().zip(&u).for_each(|(a, b)| add(a, b));
             let h: Vec<Vec<f32>> = xa.iter().map(|v| rms(v, None, 1e-6)).collect();
-            let u = attention_reference(&map, &format!("{p}.audio_attn2"), ad, &h, &ta, None, None, false);
+            let u = attention_reference(
+                &map,
+                &format!("{p}.audio_attn2"),
+                ad,
+                &h,
+                &ta,
+                None,
+                None,
+                false,
+            );
             xa.iter_mut().zip(&u).for_each(|(a, b)| add(a, b));
             // 3. a↔v from the same pre-update states; rows scale, shift per direction.
-            let vc = table_plus(&map, &format!("{p}.video_a2v_cross_attn_scale_shift_table"), 5, dv, &v_cross);
-            let ac = table_plus(&map, &format!("{p}.audio_a2v_cross_attn_scale_shift_table"), 5, da, &a_cross);
-            let g_v: Vec<f32> = get(&map, &format!("{p}.video_a2v_cross_attn_scale_shift_table"), &[5, dv])[4 * dv..].iter().zip(&v_gate[0]).map(|(a, b)| a + b).collect();
-            let g_a: Vec<f32> = get(&map, &format!("{p}.audio_a2v_cross_attn_scale_shift_table"), &[5, da])[4 * da..].iter().zip(&a_gate[0]).map(|(a, b)| a + b).collect();
+            let vc = table_plus(
+                &map,
+                &format!("{p}.video_a2v_cross_attn_scale_shift_table"),
+                5,
+                dv,
+                &v_cross,
+            );
+            let ac = table_plus(
+                &map,
+                &format!("{p}.audio_a2v_cross_attn_scale_shift_table"),
+                5,
+                da,
+                &a_cross,
+            );
+            let g_v: Vec<f32> = get(
+                &map,
+                &format!("{p}.video_a2v_cross_attn_scale_shift_table"),
+                &[5, dv],
+            )[4 * dv..]
+                .iter()
+                .zip(&v_gate[0])
+                .map(|(a, b)| a + b)
+                .collect();
+            let g_a: Vec<f32> = get(
+                &map,
+                &format!("{p}.audio_a2v_cross_attn_scale_shift_table"),
+                &[5, da],
+            )[4 * da..]
+                .iter()
+                .zip(&a_gate[0])
+                .map(|(a, b)| a + b)
+                .collect();
             let a2v = attention_reference(
                 &map,
                 &format!("{p}.audio_to_video_attn"),
-                AttentionDims { query_dim: dv, context_dim: da, ..ad },
+                AttentionDims {
+                    query_dim: dv,
+                    context_dim: da,
+                    ..ad
+                },
                 &adaln_norm(&xv, &vc[0], &vc[1]),
                 &adaln_norm(&xa, &ac[0], &ac[1]),
                 Some(&tables.cross_video),
@@ -710,7 +1117,11 @@ mod tests {
             let v2a = attention_reference(
                 &map,
                 &format!("{p}.video_to_audio_attn"),
-                AttentionDims { query_dim: da, context_dim: dv, ..ad },
+                AttentionDims {
+                    query_dim: da,
+                    context_dim: dv,
+                    ..ad
+                },
                 &adaln_norm(&xa, &ac[2], &ac[3]),
                 &adaln_norm(&xv, &vc[2], &vc[3]),
                 Some(&tables.cross_audio),
@@ -720,32 +1131,72 @@ mod tests {
             gated_add(&mut xv, &a2v, &g_v);
             gated_add(&mut xa, &v2a, &g_a);
             // 4. feed-forward.
-            let u = ff(&map, &format!("{p}.ff"), &adaln_norm(&xv, &vt[4], &vt[3]), dv);
+            let u = ff(
+                &map,
+                &format!("{p}.ff"),
+                &adaln_norm(&xv, &vt[4], &vt[3]),
+                dv,
+            );
             gated_add(&mut xv, &u, &vt[5]);
-            let u = ff(&map, &format!("{p}.audio_ff"), &adaln_norm(&xa, &at[4], &at[3]), da);
+            let u = ff(
+                &map,
+                &format!("{p}.audio_ff"),
+                &adaln_norm(&xa, &at[4], &at[3]),
+                da,
+            );
             gated_add(&mut xa, &u, &at[5]);
             assert_eq!(tap.0, i);
             assert_close(&tap.1, &xv, 2e-4, &format!("block {i} video"));
             assert_close(&tap.2, &xa, 2e-4, &format!("block {i} audio"));
         }
-        let head = |x: &[Vec<f32>], tab: &str, e: &[f32], out: &str, d: usize, c: usize| -> Vec<Vec<f32>> {
+        let head = |x: &[Vec<f32>],
+                    tab: &str,
+                    e: &[f32],
+                    out: &str,
+                    d: usize,
+                    c: usize|
+         -> Vec<Vec<f32>> {
             let t = get(&map, tab, &[2, d]);
             x.iter()
                 .map(|v| {
                     let mean = v.iter().sum::<f32>() / d as f32;
                     let var = v.iter().map(|a| (a - mean).powi(2)).sum::<f32>() / d as f32;
-                    let n: Vec<f32> = v.iter().enumerate().map(|(i, a)| (a - mean) / (var + 1e-6).sqrt() * (1.0 + t[d + i] + e[i]) + t[i] + e[i]).collect();
+                    let n: Vec<f32> = v
+                        .iter()
+                        .enumerate()
+                        .map(|(i, a)| {
+                            (a - mean) / (var + 1e-6).sqrt() * (1.0 + t[d + i] + e[i]) + t[i] + e[i]
+                        })
+                        .collect();
                     lin(&map, out, &n, c)
                 })
                 .collect()
         };
-        assert_close(&rows(&got_v, 6), &head(&xv, "scale_shift_table", &v_emb, "proj_out", dv, 6), 2e-4, "video velocity");
-        assert_close(&rows(&got_a, 5), &head(&xa, "audio_scale_shift_table", &a_emb, "audio_proj_out", da, 5), 2e-4, "audio velocity");
+        assert_close(
+            &rows(&got_v, 6),
+            &head(&xv, "scale_shift_table", &v_emb, "proj_out", dv, 6),
+            2e-4,
+            "video velocity",
+        );
+        assert_close(
+            &rows(&got_a, 5),
+            &head(
+                &xa,
+                "audio_scale_shift_table",
+                &a_emb,
+                "audio_proj_out",
+                da,
+                5,
+            ),
+            2e-4,
+            "audio velocity",
+        );
     }
 
     #[test]
     fn packing_is_frame_major_then_row_then_column() {
-        let z = CudaTensor::from_vec((0..12).map(|i| i as f32).collect(), vec![1, 2, 2, 1, 3]).unwrap();
+        let z =
+            CudaTensor::from_vec((0..12).map(|i| i as f32).collect(), vec![1, 2, 2, 1, 3]).unwrap();
         let p = pack_video(&z).unwrap();
         assert_eq!(p.shape, vec![1, 6, 2]);
         // Token (f=1, h=0, w=2) = index 5: channel 0 → 5, channel 1 → 11.
@@ -778,7 +1229,13 @@ mod tests {
     #[test]
     fn load_blocks_accepts_ltx2_5_flags_on_one_block() {
         let cfg = tiny_ltx25();
-        let model = Ltx2Transformer::load_blocks(&weights(), &Keys::transformer(Layout::Diffusers), &cfg, &[0]).unwrap();
+        let model = Ltx2Transformer::load_blocks(
+            &weights(),
+            &Keys::transformer(Layout::Diffusers),
+            &cfg,
+            &[0],
+        )
+        .unwrap();
         assert_eq!(model.blocks.len(), 1);
         assert!(model.caption_projection.is_none());
         assert!(model.blocks[0].video.prompt_table.is_some());

@@ -30,29 +30,48 @@ pub struct Prompt {
 
 const TEXT_LEN: usize = 512;
 
-pub fn run(report: &mut Report, weights: &Path, prompts: &Path, out: &Path, device: &str) -> StageResult<()> {
+pub fn run(
+    report: &mut Report,
+    weights: &Path,
+    prompts: &Path,
+    out: &Path,
+    device: &str,
+) -> StageResult<()> {
     report.set("device", crate::gpu::init(device)?);
     let file: PromptFile = serde_json::from_str(
         &std::fs::read_to_string(prompts).with_context(|| format!("read {}", prompts.display()))?,
     )?;
     let tokenizer = weights.join("tokenizer").join("tokenizer.json");
-    let tokenizer = tokenizer.to_str().context("tokenizer path is not UTF-8")?.to_string();
+    let tokenizer = tokenizer
+        .to_str()
+        .context("tokenizer path is not UTF-8")?
+        .to_string();
 
     let timer = Instant::now();
     let text = {
         let map = WeightMap::from_dir(&weights.join("text_encoder"))?;
         Umt5Encoder::load(Umt5Config::xxl(), &map)?
     };
-    report.note("load_text_encoder", json!({"seconds": timer.elapsed().as_secs_f64()}));
+    report.note(
+        "load_text_encoder",
+        json!({"seconds": timer.elapsed().as_secs_f64()}),
+    );
 
     let encode = |s: &str| -> anyhow::Result<CudaTensor> {
         let (ids, len) = fastvideo_models::tokenize_prompt(&tokenizer, s, TEXT_LEN)
             .map_err(anyhow::Error::msg)?;
-        Ok(pad_prompt_embeds(&text.forward(&ids, 1, ids.len())?, &[len], TEXT_LEN)?)
+        Ok(pad_prompt_embeds(
+            &text.forward(&ids, 1, ids.len())?,
+            &[len],
+            TEXT_LEN,
+        )?)
     };
     let timer = Instant::now();
     let negative = encode(&file.negative)?;
-    report.note("encode_negative", json!({"seconds": timer.elapsed().as_secs_f64()}));
+    report.note(
+        "encode_negative",
+        json!({"seconds": timer.elapsed().as_secs_f64()}),
+    );
 
     std::fs::create_dir_all(out)?;
     for p in &file.prompts {

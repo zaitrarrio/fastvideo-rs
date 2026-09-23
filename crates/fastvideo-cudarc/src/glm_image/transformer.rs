@@ -29,7 +29,7 @@ impl GlmImageTransformer {
         let tiny = cfg.num_layers <= 2;
         if hit.is_none() && !tiny {
             return Err(msg(
-                hub_keys::require_any(map, "glm_image", gkeys::PROBES).unwrap_err(),
+                hub_keys::require_any(map, "glm_image", gkeys::PROBES).unwrap_err()
             ));
         }
         Ok(Self {

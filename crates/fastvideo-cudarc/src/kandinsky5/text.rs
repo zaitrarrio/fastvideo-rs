@@ -2,8 +2,8 @@
 
 use std::path::Path;
 
-use fastvideo_models::kandinsky5::Kandinsky5TransformerConfig;
 use fastvideo_models::hunyuan15::tokenize_qwen;
+use fastvideo_models::kandinsky5::Kandinsky5TransformerConfig;
 
 use crate::hunyuan15::text::{encode_qwen_ids, Hunyuan15TextConditioning};
 use crate::llm::DecoderConfig;
@@ -59,12 +59,9 @@ fn encode_clip_pooled(root: &Path, prompt: &str, dim: usize) -> Result<CudaTenso
             clip_cfg.hidden_size
         )));
     }
-    let ids = fastvideo_models::kandinsky5::tokenize_clip(
-        root,
-        prompt,
-        clip_cfg.max_position_embeddings,
-    )
-    .map_err(msg)?;
+    let ids =
+        fastvideo_models::kandinsky5::tokenize_clip(root, prompt, clip_cfg.max_position_embeddings)
+            .map_err(msg)?;
     let map = WeightMap::open(&root.join("text_encoder_2")).map_err(|e| msg(e.to_string()))?;
     let model = ClipTextModel::load(&map, clip_cfg)?;
     model.encode_pooled(&ids)

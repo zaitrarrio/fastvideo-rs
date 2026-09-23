@@ -50,11 +50,7 @@ pub fn apply_rope_real(
     head_dim: usize,
 ) {
     let half = head_dim / 2;
-    let rope_half = if seq == 0 {
-        0
-    } else {
-        cos.len() / seq
-    };
+    let rope_half = if seq == 0 { 0 } else { cos.len() / seq };
     let n = half.min(rope_half);
     for b in 0..batch {
         for h in 0..heads {

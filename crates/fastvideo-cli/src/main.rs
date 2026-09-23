@@ -115,9 +115,12 @@ struct GenerateArgs {
     /// LTX two-stage refine steps (2 or 3). Default: 2 when `--steps 5`, else 3.
     #[arg(long)]
     refine_steps: Option<u32>,
-    /// FastH3 DMD recipe (`8step`, `4step-vsa`, `4step-dense`).
+    /// FastH3 / Sol-H3 recipe (`8step`, `4step-vsa`, `4step-dense`, `sol-h3`, `sol-h3-ref2va`).
     #[arg(long)]
     h3_recipe: Option<String>,
+    /// Sol-H3 LoRA adapter. Default: searched next to the MiniMax-H3 snapshot.
+    #[arg(long)]
+    h3_adapter: Option<String>,
     /// FastH3 duration in whole seconds (5..=15).
     #[arg(long)]
     seconds: Option<u32>,
@@ -162,8 +165,7 @@ struct GenerateToml {
 }
 
 fn load_generate_toml(path: &str) -> Result<GenerateToml> {
-    let body = std::fs::read_to_string(path)
-        .with_context(|| format!("read --config {path}"))?;
+    let body = std::fs::read_to_string(path).with_context(|| format!("read --config {path}"))?;
     toml::from_str(&body).with_context(|| format!("parse --config {path}"))
 }
 
@@ -262,10 +264,7 @@ fn main() -> Result<()> {
                                 .steps
                                 .or(file.steps)
                                 .or(file.num_inference_steps),
-                            guidance_scale: args
-                                .guidance
-                                .or(file.guidance)
-                                .or(file.guidance_scale),
+                            guidance_scale: args.guidance.or(file.guidance).or(file.guidance_scale),
                             guidance_scale_2: args
                                 .guidance_2
                                 .or(file.guidance_2)
@@ -322,7 +321,10 @@ fn main() -> Result<()> {
                         diff_vae: args.diff_vae || file.diff_vae.unwrap_or(false),
                         negative_prompt: args.negative.or(file.negative).unwrap_or_default(),
                         guidance_scale: args.guidance.or(file.guidance).or(file.guidance_scale),
-                        audio_guidance_scale: args.guidance_2.or(file.guidance_2).or(file.guidance_scale_2),
+                        audio_guidance_scale: args
+                            .guidance_2
+                            .or(file.guidance_2)
+                            .or(file.guidance_scale_2),
                         num_inference_steps: args.steps.or(file.steps).or(file.num_inference_steps),
                         refine_steps: args.refine_steps.or(file.refine_steps),
                         image_path: args.image.or(file.image).map(PathBuf::from),
@@ -341,6 +343,7 @@ fn main() -> Result<()> {
                             refs
                         },
                         h3_recipe: args.h3_recipe,
+                        h3_adapter: args.h3_adapter.map(PathBuf::from),
                         h3_seconds: args.seconds,
                     };
                     println!(
@@ -398,9 +401,9 @@ fn main() -> Result<()> {
             )?;
             println!("{}", gen.summary());
             if args.clip_only {
-                let image = args.image.ok_or_else(|| {
-                    anyhow::anyhow!("--clip-only needs --image <png|jpeg>")
-                })?;
+                let image = args
+                    .image
+                    .ok_or_else(|| anyhow::anyhow!("--clip-only needs --image <png|jpeg>"))?;
                 match gen.bench_clip(&image) {
                     Ok(stats) => {
                         let json = serde_json::json!({
@@ -467,10 +470,7 @@ fn main() -> Result<()> {
                     );
                 }
             }
-            let gen = VideoGenerator::from_pretrained(
-                &args.model,
-                LoadOptions::default(),
-            )?;
+            let gen = VideoGenerator::from_pretrained(&args.model, LoadOptions::default())?;
             println!("{}", gen.summary());
             match gen.definition.sampling {
                 fastvideo_core::SamplingAlgorithm::Dmd
@@ -488,8 +488,7 @@ fn main() -> Result<()> {
                         .pipeline
                         .rcm_sigma_max
                         .unwrap_or(fastvideo_models::schedulers::RCM_SIGMA_MAX_T2V);
-                    let sched =
-                        RcmSchedule::new(gen.sampling.num_inference_steps as usize, sigma);
+                    let sched = RcmSchedule::new(gen.sampling.num_inference_steps as usize, sigma);
                     println!(
                         "rcm_sigma_max={sigma} init_noise_scale={:.6} n={}",
                         sched.init_noise_scale(),
@@ -499,10 +498,8 @@ fn main() -> Result<()> {
                     println!("rcm_timesteps={:?}", sched.timesteps);
                 }
                 fastvideo_core::SamplingAlgorithm::UniPc => {
-                    let mut sched = FlowUniPCMultistepScheduler::new(
-                        1000,
-                        f64::from(gen.pipeline.flow_shift),
-                    );
+                    let mut sched =
+                        FlowUniPCMultistepScheduler::new(1000, f64::from(gen.pipeline.flow_shift));
                     sched.set_timesteps(gen.sampling.num_inference_steps as usize);
                     println!(
                         "unipc_first_timestep={:.6} last={:.6} n={} first_sigma={:.6} i64_t0={}",

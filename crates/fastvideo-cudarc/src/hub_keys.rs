@@ -170,7 +170,10 @@ pub mod world {
 
 /// First present probe key, or `None`.
 pub fn first_present(map: &WeightMap, probes: &[&str]) -> Option<String> {
-    probes.iter().find(|k| map.contains(k)).map(|s| (*s).to_string())
+    probes
+        .iter()
+        .find(|k| map.contains(k))
+        .map(|s| (*s).to_string())
 }
 
 /// Require at least one probe key; return the hit or a clear error listing probes.
@@ -197,6 +200,8 @@ mod tests {
         assert!(!world::CAMERA_NET.is_empty());
         assert!(!glm_image_ar::PROBES.is_empty());
         assert!(!mmaudio_synchformer::PROBES.is_empty());
-        assert!(ltx2_vae_encoder::PROBES.iter().any(|k| k.contains("down_blocks")));
+        assert!(ltx2_vae_encoder::PROBES
+            .iter()
+            .any(|k| k.contains("down_blocks")));
     }
 }

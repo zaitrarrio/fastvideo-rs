@@ -40,11 +40,18 @@ fn host(t: &CudaTensor) -> anyhow::Result<Vec<f32>> {
 /// The conditional row of an embeds file, as `[1, text_len, dim]`.
 fn cond_row(t: &F32Tensor, path: &Path) -> anyhow::Result<CudaTensor> {
     let [b, len, dim] = t.shape[..] else {
-        anyhow::bail!("{}: expected [rows, text_len, dim], got {:?}", path.display(), t.shape);
+        anyhow::bail!(
+            "{}: expected [rows, text_len, dim], got {:?}",
+            path.display(),
+            t.shape
+        );
     };
     // Our embed stage writes [negative, prompt]; the oracle writes the prompt alone.
     let row = if b > 1 { 1 } else { 0 };
-    Ok(CudaTensor::from_vec(t.data[row * len * dim..(row + 1) * len * dim].to_vec(), vec![1, len, dim])?)
+    Ok(CudaTensor::from_vec(
+        t.data[row * len * dim..(row + 1) * len * dim].to_vec(),
+        vec![1, len, dim],
+    )?)
 }
 
 pub fn run(
@@ -74,7 +81,10 @@ pub fn run(
     let mut ours = st::load(embeds)?;
     let e_text = st::take(&mut ours, "embeds", embeds)?;
 
-    report.set("shapes", json!({"text": o_text.shape, "noise": o_noise.shape, "dit": o_dit.shape}));
+    report.set(
+        "shapes",
+        json!({"text": o_text.shape, "noise": o_noise.shape, "dit": o_dit.shape}),
+    );
     let cond_oracle = cond_row(&o_text, oracle)?;
     let cond_ours = cond_row(&e_text, embeds)?;
 
@@ -84,7 +94,13 @@ pub fn run(
     let t = CudaTensor::from_vec(o_step.data.clone(), vec![1])?;
 
     let (pipe, load_s) = measure(report, "load", || {
-        Ok(WanPipeline::load_with(weights, "wan_t2v_1_3b", LoadParts { text_encoder: false })?)
+        Ok(WanPipeline::load_with(
+            weights,
+            "wan_t2v_1_3b",
+            LoadParts {
+                text_encoder: false,
+            },
+        )?)
     })?;
     report.note("load", json!({"seconds": load_s}));
 
@@ -110,8 +126,23 @@ pub fn run(
             "seconds": {"dit": dit_s, "e2e": e2e_s},
         }),
     );
-    report.check("text", d_text.within(gates.max_text_rel), d_text.to_json(), json!({"rel_l2": gates.max_text_rel}))?;
-    report.check("dit", d_dit.within(gates.max_dit_rel), d_dit.to_json(), json!({"rel_l2": gates.max_dit_rel}))?;
-    report.check("e2e", d_e2e.within(gates.max_e2e_rel), d_e2e.to_json(), json!({"rel_l2": gates.max_e2e_rel}))?;
+    report.check(
+        "text",
+        d_text.within(gates.max_text_rel),
+        d_text.to_json(),
+        json!({"rel_l2": gates.max_text_rel}),
+    )?;
+    report.check(
+        "dit",
+        d_dit.within(gates.max_dit_rel),
+        d_dit.to_json(),
+        json!({"rel_l2": gates.max_dit_rel}),
+    )?;
+    report.check(
+        "e2e",
+        d_e2e.within(gates.max_e2e_rel),
+        d_e2e.to_json(),
+        json!({"rel_l2": gates.max_e2e_rel}),
+    )?;
     Ok(())
 }

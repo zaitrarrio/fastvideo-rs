@@ -70,7 +70,8 @@ impl HyWorldPipeline {
     }
 
     pub fn load_dit(&mut self) -> Result<()> {
-        let map = WeightMap::open(&self.root.join("transformer")).map_err(|e| msg(e.to_string()))?;
+        let map =
+            WeightMap::open(&self.root.join("transformer")).map_err(|e| msg(e.to_string()))?;
         self.dit = Some(Hunyuan15Transformer::load(self.cfg.hy.clone(), &map)?);
         Ok(())
     }
@@ -221,8 +222,7 @@ mod tests {
 
     #[test]
     fn pose_action_in() {
-        let pipe =
-            HyWorldPipeline::open("/tmp/hyw-missing", HyWorldPreset::Bidirectional).unwrap();
+        let pipe = HyWorldPipeline::open("/tmp/hyw-missing", HyWorldPreset::Bidirectional).unwrap();
         let r = HyWorldRequest::bidirectional("walk", 0);
         let pose = pipe.pose_input(&r).unwrap();
         assert_eq!(pose.action_labels.len(), pose.latent_num);

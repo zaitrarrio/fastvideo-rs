@@ -65,7 +65,8 @@ impl Kandinsky5Pipeline {
     }
 
     pub fn load_dit(&mut self) -> Result<()> {
-        let map = WeightMap::open(&self.root.join("transformer")).map_err(|e| msg(e.to_string()))?;
+        let map =
+            WeightMap::open(&self.root.join("transformer")).map_err(|e| msg(e.to_string()))?;
         self.dit = Some(Kandinsky5Transformer::load(self.dit_cfg.clone(), &map)?);
         Ok(())
     }
@@ -194,7 +195,10 @@ fn pack_visual(
         return Err(msg(format!("k5 pack: {} vs {want}", sample.len())));
     }
     if c_in == c_noise {
-        return Ok(CudaTensor::from_vec(sample.to_vec(), vec![1, t, h, w, c_noise])?);
+        return Ok(CudaTensor::from_vec(
+            sample.to_vec(),
+            vec![1, t, h, w, c_noise],
+        )?);
     }
     // visual_cond: [noise | zeros_cond | zeros_mask]
     let mut packed = vec![0f32; t * h * w * c_in];

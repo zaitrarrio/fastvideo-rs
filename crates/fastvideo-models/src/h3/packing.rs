@@ -28,7 +28,9 @@
 //! Positions are built in float64 exactly as numpy / torch do and cast to
 //! float32 where the reference casts them (first line of its rope).
 
-use super::config::{H3Geometry, H3TransformerConfig, H3_AUDIO_CHANNELS, TAG_AUDIO, TAG_TEXT, TAG_VIDEO};
+use super::config::{
+    H3Geometry, H3TransformerConfig, H3_AUDIO_CHANNELS, TAG_AUDIO, TAG_TEXT, TAG_VIDEO,
+};
 use super::reference::{PreparedImageRef, PreparedReference, RefSegment};
 use super::schedule::H3RowTimesteps;
 
@@ -108,7 +110,9 @@ pub fn spatial_position_grid(dim: usize, patch: usize, sqrt_area: f64) -> Vec<f6
     let left = (1.0 - ratio) / 2.0;
     let n = dim / patch;
     let step = ((left + ratio) - left) / n as f64;
-    (0..n).map(|k| (k as f64 * step + left) * SPATIAL_SCALE).collect()
+    (0..n)
+        .map(|k| (k as f64 * step + left) * SPATIAL_SCALE)
+        .collect()
 }
 
 /// `origin + [0, cumsum(spans)[:-1]]` with spans `5/3 * (1, 4, 4, 4, 4)` repeating.
@@ -143,7 +147,9 @@ impl H3PackedLayout {
         }
         for (i, &t) in tags.iter().enumerate() {
             if t != TAG_TEXT && t != TAG_VIDEO {
-                return Err(format!("text token tags may only be text or video, got {t} at {i}"));
+                return Err(format!(
+                    "text token tags may only be text or video, got {t} at {i}"
+                ));
             }
             self.token_tags[self.text.start + i] = t;
         }
@@ -173,8 +179,11 @@ impl H3PackedLayout {
         if text_tokens == 0 {
             return Err("an H3 request needs at least one text row".into());
         }
-        if pt == 0 || ph == 0 || pw == 0 || lt == 0 || lt % pt != 0 || lh % ph != 0 || lw % pw != 0 {
-            return Err(format!("latents {lt}x{lh}x{lw} are not divisible by the patch {patch:?}"));
+        if pt == 0 || ph == 0 || pw == 0 || lt == 0 || lt % pt != 0 || lh % ph != 0 || lw % pw != 0
+        {
+            return Err(format!(
+                "latents {lt}x{lh}x{lw} are not divisible by the patch {patch:?}"
+            ));
         }
         for (i, a) in anchors.iter().enumerate() {
             if anchors[..i].contains(a) {
@@ -269,8 +278,11 @@ impl H3PackedLayout {
         if images.is_empty() {
             return Err("Ref2VA image packing needs at least one prepared image".into());
         }
-        if pt != 1 || ph == 0 || pw == 0 || lt == 0 || lt % pt != 0 || lh % ph != 0 || lw % pw != 0 {
-            return Err(format!("latents {lt}x{lh}x{lw} are not divisible by the patch {patch:?}"));
+        if pt != 1 || ph == 0 || pw == 0 || lt == 0 || lt % pt != 0 || lh % ph != 0 || lw % pw != 0
+        {
+            return Err(format!(
+                "latents {lt}x{lh}x{lw} are not divisible by the patch {patch:?}"
+            ));
         }
         let mut cond_len = 0usize;
         let mut image_rows = Vec::with_capacity(images.len());
@@ -367,8 +379,11 @@ impl H3PackedLayout {
         if references.is_empty() {
             return Err("Ref2VA requires at least one prepared reference".into());
         }
-        if pt != 1 || ph == 0 || pw == 0 || lt == 0 || lt % pt != 0 || lh % ph != 0 || lw % pw != 0 {
-            return Err(format!("latents {lt}x{lh}x{lw} are not divisible by the patch {patch:?}"));
+        if pt != 1 || ph == 0 || pw == 0 || lt == 0 || lt % pt != 0 || lh % ph != 0 || lw % pw != 0
+        {
+            return Err(format!(
+                "latents {lt}x{lh}x{lw} are not divisible by the patch {patch:?}"
+            ));
         }
         if audio_latents == 0 {
             return Err("Ref2VA target audio latents must be positive".into());
@@ -417,7 +432,11 @@ impl H3PackedLayout {
         let image_only = num_condition_audio_rows == 0;
         let cond = RowRange {
             start: text.end(),
-            len: if image_only { num_condition_video_rows } else { 0 },
+            len: if image_only {
+                num_condition_video_rows
+            } else {
+                0
+            },
         };
         let audio = RowRange {
             start: text.end() + cond_span,
@@ -450,7 +469,9 @@ impl H3PackedLayout {
                     token_tags.extend(std::iter::repeat_n(TAG_VIDEO, hgrid.len() * wgrid.len()));
                     rotary_time += 1.0;
                 }
-                PreparedReference::Audio { num_audio_latents: na } => {
+                PreparedReference::Audio {
+                    num_audio_latents: na,
+                } => {
                     let edges = [target_wgrid[0], target_wgrid[target_wgrid.len() - 1]];
                     for edge in edges.iter().take(H3_AUDIO_CHANNELS) {
                         position_ids.extend((0..*na).map(|a| [rotary_time + a as f64, 0.0, *edge]));
@@ -470,7 +491,8 @@ impl H3PackedLayout {
                     if *na > 0 {
                         let edges = [wgrid[0], wgrid[wgrid.len() - 1]];
                         for edge in edges.iter().take(H3_AUDIO_CHANNELS) {
-                            position_ids.extend((0..*na).map(|a| [rotary_time + a as f64, 0.0, *edge]));
+                            position_ids
+                                .extend((0..*na).map(|a| [rotary_time + a as f64, 0.0, *edge]));
                         }
                         token_tags.extend(std::iter::repeat_n(TAG_AUDIO, *na * H3_AUDIO_CHANNELS));
                     }
@@ -585,7 +607,10 @@ impl H3PackedLayout {
     pub fn timestep_indices(&self, timesteps: &H3RowTimesteps) -> Vec<usize> {
         let mut out = Vec::with_capacity(self.token_tags.len());
         out.extend(std::iter::repeat_n(timesteps.video_index, self.text.len));
-        out.extend(std::iter::repeat_n(timesteps.condition_index, self.cond.len));
+        out.extend(std::iter::repeat_n(
+            timesteps.condition_index,
+            self.cond.len,
+        ));
         out.extend(std::iter::repeat_n(timesteps.audio_index, self.audio.len));
         out.extend(std::iter::repeat_n(timesteps.video_index, self.video.len));
         out
@@ -628,12 +653,17 @@ pub fn patchify(latents: &[f32], shape: [usize; 4], patch: [usize; 3]) -> Result
     let [c, t, h, w] = shape;
     let [pt, ph, pw] = patch;
     if latents.len() != c * t * h * w || t % pt != 0 || h % ph != 0 || w % pw != 0 {
-        return Err(format!("patchify: {} values for {shape:?} with patch {patch:?}", latents.len()));
+        return Err(format!(
+            "patchify: {} values for {shape:?} with patch {patch:?}",
+            latents.len()
+        ));
     }
     let (gt, gh, gw) = (t / pt, h / ph, w / pw);
     let width = c * pt * ph * pw;
     let mut rows = vec![0f32; gt * gh * gw * width];
-    for_each_patch_element(shape, patch, |row, feature, source| rows[row * width + feature] = latents[source]);
+    for_each_patch_element(shape, patch, |row, feature, source| {
+        rows[row * width + feature] = latents[source]
+    });
     Ok(rows)
 }
 
@@ -642,16 +672,25 @@ pub fn unpatchify(rows: &[f32], shape: [usize; 4], patch: [usize; 3]) -> Result<
     let [c, t, h, w] = shape;
     let [pt, ph, pw] = patch;
     if rows.len() != c * t * h * w || t % pt != 0 || h % ph != 0 || w % pw != 0 {
-        return Err(format!("unpatchify: {} values for {shape:?} with patch {patch:?}", rows.len()));
+        return Err(format!(
+            "unpatchify: {} values for {shape:?} with patch {patch:?}",
+            rows.len()
+        ));
     }
     let width = c * pt * ph * pw;
     let mut latents = vec![0f32; rows.len()];
-    for_each_patch_element(shape, patch, |row, feature, source| latents[source] = rows[row * width + feature]);
+    for_each_patch_element(shape, patch, |row, feature, source| {
+        latents[source] = rows[row * width + feature]
+    });
     Ok(latents)
 }
 
 /// Calls `visit(row, feature, latent_index)` for every latent element.
-fn for_each_patch_element(shape: [usize; 4], patch: [usize; 3], mut visit: impl FnMut(usize, usize, usize)) {
+fn for_each_patch_element(
+    shape: [usize; 4],
+    patch: [usize; 3],
+    mut visit: impl FnMut(usize, usize, usize),
+) {
     let [c, t, h, w] = shape;
     let [pt, ph, pw] = patch;
     let (gh, gw) = (h / ph, w / pw);
@@ -688,7 +727,9 @@ pub fn keyframe_condition_noise_rows(
     let shape = [latent_channels, 1, latent_height, latent_width];
     let n = shape.iter().product::<usize>();
     let mut rng = rand::rngs::StdRng::seed_from_u64(seed);
-    let noise: Vec<f32> = (0..n).map(|_| rng.sample::<f32, _>(StandardNormal)).collect();
+    let noise: Vec<f32> = (0..n)
+        .map(|_| rng.sample::<f32, _>(StandardNormal))
+        .collect();
     patchify(&noise, shape, patch)
 }
 
@@ -742,15 +783,23 @@ pub fn prepare_keyframe_rgb(
 
 /// `unpack_audio_tokens`: rows `[2 Na, C]` (left channel's latents, then the
 /// right's) to `[2, C, Na]`.
-pub fn unpack_audio_rows(rows: &[f32], audio_latents: usize, channels: usize) -> Result<Vec<f32>, String> {
+pub fn unpack_audio_rows(
+    rows: &[f32],
+    audio_latents: usize,
+    channels: usize,
+) -> Result<Vec<f32>, String> {
     if audio_latents == 0 || rows.len() != H3_AUDIO_CHANNELS * audio_latents * channels {
-        return Err(format!("audio rows: {} values for {audio_latents} latents of {channels} channels", rows.len()));
+        return Err(format!(
+            "audio rows: {} values for {audio_latents} latents of {channels} channels",
+            rows.len()
+        ));
     }
     let mut out = vec![0f32; rows.len()];
     for ch in 0..H3_AUDIO_CHANNELS {
         for a in 0..audio_latents {
             for c in 0..channels {
-                out[(ch * channels + c) * audio_latents + a] = rows[(ch * audio_latents + a) * channels + c];
+                out[(ch * channels + c) * audio_latents + a] =
+                    rows[(ch * audio_latents + a) * channels + c];
             }
         }
     }
@@ -768,9 +817,16 @@ mod tests {
         let h = spatial_position_grid(48, 2, a);
         let w = spatial_position_grid(84, 2, a);
         assert_eq!((h.len(), w.len()), (24, 42));
-        assert!((h[0] - 3.9051368637047297).abs() < 1e-12 && (h[23] - 27.08695787493733).abs() < 1e-12);
-        assert!((w[0] + 5.166010488516722).abs() < 1e-12 && (w[41] - 36.15810522715877).abs() < 1e-12);
-        assert!(((h[1] - h[0]) - (w[1] - w[0])).abs() < 1e-12, "one step on both axes");
+        assert!(
+            (h[0] - 3.9051368637047297).abs() < 1e-12 && (h[23] - 27.08695787493733).abs() < 1e-12
+        );
+        assert!(
+            (w[0] + 5.166010488516722).abs() < 1e-12 && (w[41] - 36.15810522715877).abs() < 1e-12
+        );
+        assert!(
+            ((h[1] - h[0]) - (w[1] - w[0])).abs() < 1e-12,
+            "one step on both axes"
+        );
         // A square canvas spans [0, 32).
         let sq = spatial_position_grid(48, 2, 48.0);
         assert_eq!((sq[0], sq[12]), (0.0, 16.0));
@@ -779,11 +835,22 @@ mod tests {
     #[test]
     fn latent_frames_sit_on_a_40_hz_clock_with_a_one_frame_chunk_head() {
         let t = temporal_position_grid(37, 0.0);
-        let want = [0.0, 5.0 / 3.0, 25.0 / 3.0, 15.0, 65.0 / 3.0, 85.0 / 3.0, 30.0];
+        let want = [
+            0.0,
+            5.0 / 3.0,
+            25.0 / 3.0,
+            15.0,
+            65.0 / 3.0,
+            85.0 / 3.0,
+            30.0,
+        ];
         for (got, want) in t.iter().zip(want) {
             assert!((got - want).abs() < 1e-12, "{got} vs {want}");
         }
-        assert!((t[36] - 200.0).abs() < 1e-9, "latent 36 starts at frame 120 = 5 s = 200 ticks");
+        assert!(
+            (t[36] - 200.0).abs() < 1e-9,
+            "latent 36 starts at frame 120 = 5 s = 200 ticks"
+        );
         assert_eq!(temporal_position_grid(2, 7.0)[0], 7.0);
     }
 
@@ -801,29 +868,43 @@ mod tests {
             )
         );
         assert_eq!(l.sequence_length(), 15);
-        assert_eq!(l.token_tags, vec![1, 1, 1, 2, 2, 2, 2, 0, 0, 0, 0, 0, 0, 0, 0]);
+        assert_eq!(
+            l.token_tags,
+            vec![1, 1, 1, 2, 2, 2, 2, 0, 0, 0, 0, 0, 0, 0, 0]
+        );
         // Square 4x4 latent: grid(4, 2, 4) = 32 * (0, 0.5) = (0, 16) on both axes.
         assert_eq!(l.position_ids[1], [1.0, 0.0, 0.0]);
-        assert_eq!(l.position_ids[3], [3.0, 0.0, 0.0], "left channel, latent 0: t = N, w = wgrid[0]");
+        assert_eq!(
+            l.position_ids[3],
+            [3.0, 0.0, 0.0],
+            "left channel, latent 0: t = N, w = wgrid[0]"
+        );
         assert_eq!(l.position_ids[4], [4.0, 0.0, 0.0]);
-        assert_eq!(l.position_ids[5], [3.0, 0.0, 16.0], "right channel restarts the clock at w = wgrid[last]");
+        assert_eq!(
+            l.position_ids[5],
+            [3.0, 0.0, 16.0],
+            "right channel restarts the clock at w = wgrid[last]"
+        );
         assert_eq!(l.position_ids[6], [4.0, 0.0, 16.0]);
-        assert_eq!(l.position_ids[7], [3.0, 0.0, 0.0], "video frame 0 starts at t = N");
+        assert_eq!(
+            l.position_ids[7],
+            [3.0, 0.0, 0.0],
+            "video frame 0 starts at t = N"
+        );
         assert_eq!(l.position_ids[8], [3.0, 0.0, 16.0], "x varies fastest");
         assert_eq!(l.position_ids[9], [3.0, 16.0, 0.0]);
-        assert_eq!(l.position_ids[11], [3.0 + 5.0 / 3.0, 0.0, 0.0], "frame 1 is one pixel frame later");
+        assert_eq!(
+            l.position_ids[11],
+            [3.0 + 5.0 / 3.0, 0.0, 0.0],
+            "frame 1 is one pixel frame later"
+        );
     }
 
     #[test]
     fn fl2va_first_inserts_cond_between_text_and_audio() {
-        let l = H3PackedLayout::with_keyframes(
-            3,
-            (2, 4, 4),
-            2,
-            [1, 2, 2],
-            &[KeyframeAnchor::First],
-        )
-        .unwrap();
+        let l =
+            H3PackedLayout::with_keyframes(3, (2, 4, 4), 2, [1, 2, 2], &[KeyframeAnchor::First])
+                .unwrap();
         assert_eq!(l.cond, RowRange { start: 3, len: 4 });
         assert_eq!(l.audio.start, 7);
         assert_eq!(l.video.start, 11);
@@ -838,14 +919,8 @@ mod tests {
 
     #[test]
     fn fl2va_last_uses_end_of_clip_tick() {
-        let l = H3PackedLayout::with_keyframes(
-            3,
-            (2, 4, 4),
-            1,
-            [1, 2, 2],
-            &[KeyframeAnchor::Last],
-        )
-        .unwrap();
+        let l = H3PackedLayout::with_keyframes(3, (2, 4, 4), 1, [1, 2, 2], &[KeyframeAnchor::Last])
+            .unwrap();
         let want = 3.0 + temporal_position_span(2) - FRAME_RESCALE;
         assert!((l.position_ids[3][0] - want).abs() < 1e-12);
         assert_eq!(l.position_ids[3][1], 0.0);
@@ -876,8 +951,14 @@ mod tests {
         // First image at t = N, second at t = N+1; target audio/video start at N+2.
         assert_eq!(l.position_ids[3][0], 3.0);
         assert_eq!(l.position_ids[7][0], 4.0);
-        assert_eq!(l.position_ids[11][0], 5.0, "target audio at rotary_time after images");
-        assert_eq!(l.position_ids[15][0], 5.0, "target video shares that origin");
+        assert_eq!(
+            l.position_ids[11][0], 5.0,
+            "target audio at rotary_time after images"
+        );
+        assert_eq!(
+            l.position_ids[15][0], 5.0,
+            "target video shares that origin"
+        );
     }
 
     #[test]
@@ -920,7 +1001,10 @@ mod tests {
         let g = H3Geometry::default_16x9(5).unwrap();
         let l = H3PackedLayout::from_geometry(&g, 256).unwrap();
         assert_eq!(l.sequence_length(), 37_966);
-        assert_eq!((l.audio.len, l.video.len, l.token_grid), (414, 37_296, (37, 24, 42)));
+        assert_eq!(
+            (l.audio.len, l.video.len, l.token_grid),
+            (414, 37_296, (37, 24, 42))
+        );
         assert_eq!(l.position_ids.len(), l.token_tags.len());
         let last = l.position_ids[l.sequence_length() - 1];
         assert!((last[0] - 456.0).abs() < 1e-9 && (last[2] - 36.15810522715877).abs() < 1e-12);
@@ -964,7 +1048,10 @@ mod tests {
         // 2 latents per channel, 3 features: rows L0, L1, R0, R1.
         let rows: Vec<f32> = (0..12).map(|v| v as f32).collect();
         let out = unpack_audio_rows(&rows, 2, 3).unwrap();
-        assert_eq!(out, vec![0.0, 3.0, 1.0, 4.0, 2.0, 5.0, 6.0, 9.0, 7.0, 10.0, 8.0, 11.0]);
+        assert_eq!(
+            out,
+            vec![0.0, 3.0, 1.0, 4.0, 2.0, 5.0, 6.0, 9.0, 7.0, 10.0, 8.0, 11.0]
+        );
     }
 
     #[test]

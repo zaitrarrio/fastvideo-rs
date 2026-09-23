@@ -299,8 +299,7 @@ impl WanPipeline {
         })?;
         if let Some(tokenizer) = cfg.tokenizer_path.as_ref() {
             let (prompt_ids, prompt_len) = tokenize_prompt(tokenizer, &cfg.prompt, text_len)?;
-            let (neg_ids, neg_len) =
-                tokenize_prompt(tokenizer, &cfg.negative_prompt, text_len)?;
+            let (neg_ids, neg_len) = tokenize_prompt(tokenizer, &cfg.negative_prompt, text_len)?;
             let prompt_embeds = text.forward(&prompt_ids, 1, prompt_ids.len())?;
             let neg_embeds = text.forward(&neg_ids, 1, neg_ids.len())?;
             let prompt_embeds = pad_prompt_embeds(&prompt_embeds, &[prompt_len], text_len)?;
@@ -366,10 +365,7 @@ impl WanPipeline {
             self.preset.as_str(),
             "wan_fun_1_3b_control" | "lucy_edit_dev"
         ) && !self.tiny;
-        if needs_control
-            && cfg.control_path.is_none()
-            && cfg.image_path.is_none()
-        {
+        if needs_control && cfg.control_path.is_none() && cfg.image_path.is_none() {
             return Err(PipelineError::Message(format!(
                 "preset `{}` needs --control <png|jpeg> (or --image) for control/edit \
                  conditioning. Pass a reference frame to enable the Fun Control / Lucy path.",
@@ -469,7 +465,11 @@ impl WanPipeline {
                 Err(e) => super::log::info(format_args!("mp4 mux skipped: {e}")),
             }
         }
-        super::log::info(format_args!("wrote {} png frames → {}", paths.len(), cfg.output_dir));
+        super::log::info(format_args!(
+            "wrote {} png frames → {}",
+            paths.len(),
+            cfg.output_dir
+        ));
         log_device_stats_if_enabled();
         Ok(paths)
     }
@@ -501,7 +501,8 @@ impl WanPipeline {
         let mut latents = CudaTensor::from_vec(noise, vec![1, z_c, z_t, z_h, z_w])?;
         if cfg.is_rcm {
             let sigma = cfg.rcm_sigma_max.unwrap_or(RCM_SIGMA_MAX_T2V);
-            let scale = RcmSchedule::new(cfg.num_inference_steps.max(1), sigma).init_noise_scale() as f32;
+            let scale =
+                RcmSchedule::new(cfg.num_inference_steps.max(1), sigma).init_noise_scale() as f32;
             latents = latents.mul_scalar(scale);
         }
         Ok(latents)
@@ -541,7 +542,10 @@ impl WanPipeline {
         let (guidance, guidance_2) = if cfg.is_dmd || cfg.is_rcm {
             (1.0, 1.0)
         } else {
-            (cfg.guidance_scale, cfg.guidance_scale_2.unwrap_or(cfg.guidance_scale))
+            (
+                cfg.guidance_scale,
+                cfg.guidance_scale_2.unwrap_or(cfg.guidance_scale),
+            )
         };
         let mut ctx = DenoiseCtx {
             high: &self.dit,
@@ -563,7 +567,10 @@ impl WanPipeline {
             let _denoise = super::log::StepTimer::start(format!("rcm {} steps", sched.num_steps()));
             rcm_denoise(latents, &encoder_hs, &sched, cfg.seed, &mut ctx, observer)
         } else if cfg.is_dmd {
-            let steps = cfg.dmd_steps.clone().unwrap_or_else(|| FAST_WAN_1_3B_DMD_STEPS.to_vec());
+            let steps = cfg
+                .dmd_steps
+                .clone()
+                .unwrap_or_else(|| FAST_WAN_1_3B_DMD_STEPS.to_vec());
             super::log::info(format_args!("denoise=dmd steps={}", steps.len()));
             let sched = DmdSchedule::new(&steps, 1000);
             let _denoise = super::log::StepTimer::start(format!("dmd {} steps", steps.len()));
@@ -571,8 +578,12 @@ impl WanPipeline {
         } else {
             let mut sched = FlowUniPCMultistepScheduler::new(1000, cfg.flow_shift);
             sched.set_timesteps(cfg.num_inference_steps);
-            super::log::info(format_args!("denoise=unipc steps={}", cfg.num_inference_steps));
-            let _denoise = super::log::StepTimer::start(format!("unipc {} steps", cfg.num_inference_steps));
+            super::log::info(format_args!(
+                "denoise=unipc steps={}",
+                cfg.num_inference_steps
+            ));
+            let _denoise =
+                super::log::StepTimer::start(format!("unipc {} steps", cfg.num_inference_steps));
             unipc_denoise(latents, &encoder_hs, &mut sched, &mut ctx, observer)
         }
     }
@@ -676,13 +687,25 @@ impl TeaCache {
             .and_then(|s| s.parse().ok())
             .unwrap_or(0.08);
         // Wan2.1 T2V 1.3B coefficients (use_ret_steps=False) from TeaCache4Wan2.1.
-        let coefficients = [2.39676752e3, -1.31110545e3, 2.01331979e2, -8.29855975, 1.37887774e-1];
+        let coefficients = [
+            2.39676752e3,
+            -1.31110545e3,
+            2.01331979e2,
+            -8.29855975,
+            1.37887774e-1,
+        ];
         let ret_steps = std::env::var("FASTVIDEO_TEACACHE_RET")
             .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
             .unwrap_or(false);
         let coefficients = if ret_steps {
             // use_ret_steps=True coeffs for 1.3B
-            [-5.21862437e4, 9.23041404e3, -5.28275948e2, 1.36987616e1, -4.99875664e-2]
+            [
+                -5.21862437e4,
+                9.23041404e3,
+                -5.28275948e2,
+                1.36987616e1,
+                -4.99875664e-2,
+            ]
         } else {
             coefficients
         };
@@ -792,7 +815,11 @@ fn dit_cfg(
     let latent_in = pack_dit_input(latents, ctx.i2v)?;
     // `encoder_hs` is `[negative, prompt]`; a single row is the prompt alone.
     let rows = encoder_hs.shape[0];
-    let cond_hs = if rows > 1 { encoder_hs.narrow(0, 1, 1)? } else { encoder_hs.clone() };
+    let cond_hs = if rows > 1 {
+        encoder_hs.narrow(0, 1, 1)?
+    } else {
+        encoder_hs.clone()
+    };
     let t1 = CudaTensor::from_vec(vec![t], vec![1])?;
 
     let out = if (scale - 1.0).abs() < 1e-6 {
@@ -817,18 +844,33 @@ fn dit_cfg(
     Ok(out)
 }
 
-fn notify(observer: &mut Option<&mut StepObserver<'_>>, index: usize, total: usize, timestep: f32, latents: &CudaTensor) -> Result<()> {
+fn notify(
+    observer: &mut Option<&mut StepObserver<'_>>,
+    index: usize,
+    total: usize,
+    timestep: f32,
+    latents: &CudaTensor,
+) -> Result<()> {
     match observer.as_deref_mut() {
-        Some(obs) => obs(&DenoiseStep { index, total, timestep, latents }),
+        Some(obs) => obs(&DenoiseStep {
+            index,
+            total,
+            timestep,
+            latents,
+        }),
         None => Ok(()),
     }
 }
 
 /// Seeded standard-normal noise for DMD step `i` (independent per step).
 fn dmd_noise(seed: u64, step: usize, shape: &[usize]) -> Result<CudaTensor> {
-    let mut rng = rand::rngs::StdRng::seed_from_u64(seed ^ (0x9E37_79B9_7F4A_7C15u64.wrapping_mul(step as u64 + 1)));
+    let mut rng = rand::rngs::StdRng::seed_from_u64(
+        seed ^ (0x9E37_79B9_7F4A_7C15u64.wrapping_mul(step as u64 + 1)),
+    );
     let n: usize = shape.iter().product();
-    let noise: Vec<f32> = (0..n).map(|_| rng.sample::<f32, _>(StandardNormal)).collect();
+    let noise: Vec<f32> = (0..n)
+        .map(|_| rng.sample::<f32, _>(StandardNormal))
+        .collect();
     Ok(CudaTensor::from_vec(noise, shape.to_vec())?.to_device()?)
 }
 
@@ -920,7 +962,8 @@ fn unipc_combine(
         let t = match term {
             UniPcTerm::Sample => sample,
             UniPcTerm::Converted => converted,
-            UniPcTerm::LastSample => last_sample.ok_or_else(|| PipelineError::Message("unipc: plan needs a last sample".into()))?,
+            UniPcTerm::LastSample => last_sample
+                .ok_or_else(|| PipelineError::Message("unipc: plan needs a last sample".into()))?,
             UniPcTerm::History(k) => history
                 .get(*k)
                 .ok_or_else(|| PipelineError::Message(format!("unipc: plan needs history[{k}]")))?,
@@ -940,19 +983,33 @@ fn unipc_denoise(
     ctx: &mut DenoiseCtx<'_>,
     mut observer: Option<&mut StepObserver<'_>>,
 ) -> Result<CudaTensor> {
-    let ts: Vec<f32> = sched.inference_timesteps_i64().iter().map(|t| *t as f32).collect();
+    let ts: Vec<f32> = sched
+        .inference_timesteps_i64()
+        .iter()
+        .map(|t| *t as f32)
+        .collect();
     let mut history = std::collections::VecDeque::new();
     let mut last_sample: Option<CudaTensor> = None;
     for (i, &t) in ts.iter().enumerate() {
-        let _step = super::log::StepTimer::start(format!("unipc step {}/{} t={t:.0}", i + 1, ts.len()));
+        let _step =
+            super::log::StepTimer::start(format!("unipc step {}/{} t={t:.0}", i + 1, ts.len()));
         let velocity = dit_cfg(ctx, &latents, encoder_hs, t)?;
         let plan = sched.plan_step().map_err(PipelineError::Message)?;
-        let converted = CudaTensor::lincomb(&[(1.0, &latents), (-(plan.convert_scale as f32), &velocity)])?;
+        let converted =
+            CudaTensor::lincomb(&[(1.0, &latents), (-(plan.convert_scale as f32), &velocity)])?;
         let corrected = match &plan.corrector {
-            Some(terms) => unipc_combine(terms, &latents, last_sample.as_ref(), &converted, &history)?,
+            Some(terms) => {
+                unipc_combine(terms, &latents, last_sample.as_ref(), &converted, &history)?
+            }
             None => latents.clone(),
         };
-        let prev = unipc_combine(&plan.predictor, &corrected, last_sample.as_ref(), &converted, &history)?;
+        let prev = unipc_combine(
+            &plan.predictor,
+            &corrected,
+            last_sample.as_ref(),
+            &converted,
+            &history,
+        )?;
         history.push_front(converted);
         history.truncate(plan.history_len);
         last_sample = Some(corrected);
@@ -1000,7 +1057,12 @@ pub fn write_frames(video: &CudaTensor, dir: &Path) -> Result<Vec<String>> {
             video.shape
         )));
     }
-    let (c, t, h, w) = (video.shape[1], video.shape[2], video.shape[3], video.shape[4]);
+    let (c, t, h, w) = (
+        video.shape[1],
+        video.shape[2],
+        video.shape[3],
+        video.shape[4],
+    );
     if c < 3 {
         return Err(PipelineError::Message("video needs RGB channels".into()));
     }
@@ -1028,14 +1090,18 @@ pub fn frames_to_rgb8(frames: &CudaTensor) -> Result<Vec<u8>> {
         )));
     };
     if c != 3 {
-        return Err(PipelineError::Message(format!("frames_to_rgb8 needs 3 channels, got {c}")));
+        return Err(PipelineError::Message(format!(
+            "frames_to_rgb8 needs 3 channels, got {c}"
+        )));
     }
     #[cfg(feature = "cuda")]
     {
         let mut on_device = frames.clone();
         on_device.ensure_device()?;
         if let Some(slice) = on_device.device_slice() {
-            return Ok(super::ops::pack_rgb_u8_device(slice, f, h, w, 127.5, 127.5)?);
+            return Ok(super::ops::pack_rgb_u8_device(
+                slice, f, h, w, 127.5, 127.5,
+            )?);
         }
     }
     let host = frames.host_cow()?;
@@ -1084,7 +1150,10 @@ impl VideoWriter {
         std::fs::create_dir_all(dir).map_err(|e| PipelineError::Message(e.to_string()))?;
         if let Some(a) = audio {
             if !a.is_file() {
-                return Err(PipelineError::Message(format!("audio track {} does not exist", a.display())));
+                return Err(PipelineError::Message(format!(
+                    "audio track {} does not exist",
+                    a.display()
+                )));
             }
         }
         let audio = audio.map(Path::to_path_buf);
@@ -1096,7 +1165,10 @@ impl VideoWriter {
             .name("fv-video-writer".into())
             .spawn(move || write_batches(rx, &dir, fps, mp4, audio.as_deref()))
             .map_err(|e| PipelineError::Message(e.to_string()))?;
-        Ok(Self { tx: Some(tx), worker: Some(worker) })
+        Ok(Self {
+            tx: Some(tx),
+            worker: Some(worker),
+        })
     }
 
     /// Queue `[frames, h, w, 3]` bytes starting at frame `offset`. Batches must
@@ -1124,7 +1196,9 @@ impl VideoWriter {
             Some(h) => h
                 .join()
                 .map_err(|_| PipelineError::Message("video writer thread panicked".into()))?,
-            None => Err(PipelineError::Message("video writer already finished".into())),
+            None => Err(PipelineError::Message(
+                "video writer already finished".into(),
+            )),
         }
     }
 }
@@ -1179,7 +1253,8 @@ fn write_batches(
                 let img = image::RgbImage::from_raw(w as u32, h as u32, frame.to_vec())
                     .ok_or_else(|| PipelineError::Message("rgb buffer size mismatch".into()))?;
                 let path = dir.join(format!("frame-{:03}.png", offset + i));
-                img.save(&path).map_err(|e| PipelineError::Message(e.to_string()))?;
+                img.save(&path)
+                    .map_err(|e| PipelineError::Message(e.to_string()))?;
                 Ok(path.to_string_lossy().into_owned())
             })
             .collect();
@@ -1194,7 +1269,9 @@ fn write_batches(
                 .wait()
                 .map_err(|e| PipelineError::Message(format!("ffmpeg: {e}")))?;
             if !status.success() {
-                return Err(PipelineError::Message(format!("ffmpeg failed with {status}")));
+                return Err(PipelineError::Message(format!(
+                    "ffmpeg failed with {status}"
+                )));
             }
             Some(out.to_string_lossy().into_owned())
         }
@@ -1203,16 +1280,42 @@ fn write_batches(
     Ok((paths, mp4_path))
 }
 
-fn spawn_ffmpeg_rgb(out: &Path, w: usize, h: usize, fps: u32, audio: Option<&Path>) -> Result<std::process::Child> {
+fn spawn_ffmpeg_rgb(
+    out: &Path,
+    w: usize,
+    h: usize,
+    fps: u32,
+    audio: Option<&Path>,
+) -> Result<std::process::Child> {
     let mut cmd = Command::new("ffmpeg");
-    cmd.args(["-y", "-loglevel", "error", "-nostats", "-f", "rawvideo", "-pix_fmt", "rgb24", "-s"])
-        .arg(format!("{w}x{h}"))
-        .args(["-framerate", &fps.to_string(), "-i", "-"]);
+    cmd.args([
+        "-y",
+        "-loglevel",
+        "error",
+        "-nostats",
+        "-f",
+        "rawvideo",
+        "-pix_fmt",
+        "rgb24",
+        "-s",
+    ])
+    .arg(format!("{w}x{h}"))
+    .args(["-framerate", &fps.to_string(), "-i", "-"]);
     if let Some(a) = audio {
         // Input 1. Mapped explicitly so the track is never dropped silently,
         // and the mp4 ends with the shorter stream: the two decoders round
         // their lengths differently by a few milliseconds.
-        cmd.arg("-i").arg(a).args(["-map", "0:v:0", "-map", "1:a:0", "-c:a", "aac", "-b:a", "192k", "-shortest"]);
+        cmd.arg("-i").arg(a).args([
+            "-map",
+            "0:v:0",
+            "-map",
+            "1:a:0",
+            "-c:a",
+            "aac",
+            "-b:a",
+            "192k",
+            "-shortest",
+        ]);
     }
     cmd.args(["-c:v", "libx264", "-pix_fmt", "yuv420p"])
         .arg(out)
@@ -1265,7 +1368,10 @@ pub fn write_wav(path: &Path, samples: &[f32], channels: u16, sample_rate: u32) 
 /// `[channels, samples]` planar (what the audio decoders emit) → interleaved.
 pub fn interleave_audio(planar: &[f32], channels: usize) -> Result<Vec<f32>> {
     if channels == 0 || planar.len() % channels != 0 {
-        return Err(PipelineError::Message(format!("{} samples over {channels} channels", planar.len())));
+        return Err(PipelineError::Message(format!(
+            "{} samples over {channels} channels",
+            planar.len()
+        )));
     }
     let n = planar.len() / channels;
     let mut out = Vec::with_capacity(planar.len());
@@ -1372,14 +1478,39 @@ mod frame_output_tests {
         write_wav(&path, &inter, 2, 32_000).unwrap();
         let b = std::fs::read(&path).unwrap();
         assert_eq!(&b[..4], b"RIFF");
-        assert_eq!(u32::from_le_bytes(b[4..8].try_into().unwrap()) as usize, b.len() - 8);
-        assert_eq!(u16::from_le_bytes(b[22..24].try_into().unwrap()), 2, "channels");
+        assert_eq!(
+            u32::from_le_bytes(b[4..8].try_into().unwrap()) as usize,
+            b.len() - 8
+        );
+        assert_eq!(
+            u16::from_le_bytes(b[22..24].try_into().unwrap()),
+            2,
+            "channels"
+        );
         assert_eq!(u32::from_le_bytes(b[24..28].try_into().unwrap()), 32_000);
-        assert_eq!(u32::from_le_bytes(b[28..32].try_into().unwrap()), 32_000 * 4, "byte rate");
-        assert_eq!(u32::from_le_bytes(b[40..44].try_into().unwrap()), 12, "data bytes");
-        let pcm: Vec<i16> = b[44..].chunks_exact(2).map(|c| i16::from_le_bytes([c[0], c[1]])).collect();
-        assert_eq!(pcm, vec![0, 32767, 16384, -8192, -32767, 0], "saturates, never wraps");
-        assert!(write_wav(&path, &[0.0; 3], 2, 32_000).is_err(), "ragged frames");
+        assert_eq!(
+            u32::from_le_bytes(b[28..32].try_into().unwrap()),
+            32_000 * 4,
+            "byte rate"
+        );
+        assert_eq!(
+            u32::from_le_bytes(b[40..44].try_into().unwrap()),
+            12,
+            "data bytes"
+        );
+        let pcm: Vec<i16> = b[44..]
+            .chunks_exact(2)
+            .map(|c| i16::from_le_bytes([c[0], c[1]]))
+            .collect();
+        assert_eq!(
+            pcm,
+            vec![0, 32767, 16384, -8192, -32767, 0],
+            "saturates, never wraps"
+        );
+        assert!(
+            write_wav(&path, &[0.0; 3], 2, 32_000).is_err(),
+            "ragged frames"
+        );
         let _ = std::fs::remove_file(&path);
     }
 
@@ -1388,7 +1519,12 @@ mod frame_output_tests {
     /// is not installed (it is on every box that generates).
     #[test]
     fn mp4_carries_the_audio_track() {
-        let have = |bin: &str| Command::new(bin).arg("-version").output().is_ok_and(|o| o.status.success());
+        let have = |bin: &str| {
+            Command::new(bin)
+                .arg("-version")
+                .output()
+                .is_ok_and(|o| o.status.success())
+        };
         if !have("ffmpeg") || !have("ffprobe") {
             eprintln!("skip: ffmpeg/ffprobe not installed");
             return;
@@ -1396,33 +1532,56 @@ mod frame_output_tests {
         let dir = std::env::temp_dir().join(format!("fv-av-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         let wav = dir.join("audio.wav");
-        let tone: Vec<f32> = (0..32_000).flat_map(|i| {
-            let v = (i as f32 * 440.0 * std::f32::consts::TAU / 32_000.0).sin() * 0.3;
-            [v, v]
-        }).collect();
+        let tone: Vec<f32> = (0..32_000)
+            .flat_map(|i| {
+                let v = (i as f32 * 440.0 * std::f32::consts::TAU / 32_000.0).sin() * 0.3;
+                [v, v]
+            })
+            .collect();
         write_wav(&wav, &tone, 2, 32_000).unwrap();
         let (h, w, fps) = (32usize, 48usize, 24u32);
-        let mut writer = VideoWriter::spawn_with_audio(&dir.join("frames"), fps, true, Some(&wav)).unwrap();
+        let mut writer =
+            VideoWriter::spawn_with_audio(&dir.join("frames"), fps, true, Some(&wav)).unwrap();
         for batch in 0..3 {
-            writer.push(batch * 8, h, w, vec![(60 * batch) as u8 + 40; 8 * h * w * 3]).unwrap();
+            writer
+                .push(
+                    batch * 8,
+                    h,
+                    w,
+                    vec![(60 * batch) as u8 + 40; 8 * h * w * 3],
+                )
+                .unwrap();
         }
         let (frames, mp4) = writer.finish().unwrap();
         assert_eq!(frames.len(), 24);
         let probe = Command::new("ffprobe")
-            .args(["-v", "error", "-show_entries", "stream=codec_type,codec_name", "-of", "csv=p=0"])
+            .args([
+                "-v",
+                "error",
+                "-show_entries",
+                "stream=codec_type,codec_name",
+                "-of",
+                "csv=p=0",
+            ])
             .arg(mp4.expect("an mp4 was requested"))
             .output()
             .unwrap();
         let streams = String::from_utf8_lossy(&probe.stdout);
-        assert!(streams.contains("h264,video") && streams.contains("aac,audio"), "streams: {streams}");
+        assert!(
+            streams.contains("h264,video") && streams.contains("aac,audio"),
+            "streams: {streams}"
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
     fn a_missing_audio_track_is_an_error_before_any_frame() {
         let dir = std::env::temp_dir().join(format!("fv-writer-noaudio-{}", std::process::id()));
-        let err = VideoWriter::spawn_with_audio(&dir, 24, true, Some(Path::new("/no/such/track.wav")));
-        assert!(err.err().is_some_and(|e| e.to_string().contains("does not exist")));
+        let err =
+            VideoWriter::spawn_with_audio(&dir, 24, true, Some(Path::new("/no/such/track.wav")));
+        assert!(err
+            .err()
+            .is_some_and(|e| e.to_string().contains("does not exist")));
         let _ = std::fs::remove_dir_all(&dir);
     }
 

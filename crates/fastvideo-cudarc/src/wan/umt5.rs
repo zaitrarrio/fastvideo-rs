@@ -11,11 +11,7 @@ fn t5_layer_norm(xs: &CudaTensor, weight: &CudaTensor, eps: f32) -> Result<CudaT
     xs.rms_norm(weight, eps)
 }
 
-fn relative_position_bucket(
-    seq_len: usize,
-    num_buckets: usize,
-    max_distance: usize,
-) -> Vec<usize> {
+fn relative_position_bucket(seq_len: usize, num_buckets: usize, max_distance: usize) -> Vec<usize> {
     let mut buckets = vec![0usize; seq_len * seq_len];
     let num_buckets = num_buckets as i64;
     let max_exact = num_buckets / 4;
@@ -67,9 +63,27 @@ impl DenseGated {
 
     fn load(map: &WeightMap, prefix: &str, cfg: &Umt5Config) -> Result<Self> {
         Ok(Self {
-            wi_0: Linear::load(map, &weights::join_key(prefix, "wi_0"), cfg.d_model, cfg.d_ff, false)?,
-            wi_1: Linear::load(map, &weights::join_key(prefix, "wi_1"), cfg.d_model, cfg.d_ff, false)?,
-            wo: Linear::load(map, &weights::join_key(prefix, "wo"), cfg.d_ff, cfg.d_model, false)?,
+            wi_0: Linear::load(
+                map,
+                &weights::join_key(prefix, "wi_0"),
+                cfg.d_model,
+                cfg.d_ff,
+                false,
+            )?,
+            wi_1: Linear::load(
+                map,
+                &weights::join_key(prefix, "wi_1"),
+                cfg.d_model,
+                cfg.d_ff,
+                false,
+            )?,
+            wo: Linear::load(
+                map,
+                &weights::join_key(prefix, "wo"),
+                cfg.d_ff,
+                cfg.d_model,
+                false,
+            )?,
         })
     }
 
@@ -108,10 +122,34 @@ impl SelfAttention {
     fn load(map: &WeightMap, prefix: &str, cfg: &Umt5Config) -> Result<Self> {
         let inner = cfg.num_heads * cfg.d_kv;
         Ok(Self {
-            q: Linear::load(map, &weights::join_key(prefix, "q"), cfg.d_model, inner, false)?,
-            k: Linear::load(map, &weights::join_key(prefix, "k"), cfg.d_model, inner, false)?,
-            v: Linear::load(map, &weights::join_key(prefix, "v"), cfg.d_model, inner, false)?,
-            o: Linear::load(map, &weights::join_key(prefix, "o"), inner, cfg.d_model, false)?,
+            q: Linear::load(
+                map,
+                &weights::join_key(prefix, "q"),
+                cfg.d_model,
+                inner,
+                false,
+            )?,
+            k: Linear::load(
+                map,
+                &weights::join_key(prefix, "k"),
+                cfg.d_model,
+                inner,
+                false,
+            )?,
+            v: Linear::load(
+                map,
+                &weights::join_key(prefix, "v"),
+                cfg.d_model,
+                inner,
+                false,
+            )?,
+            o: Linear::load(
+                map,
+                &weights::join_key(prefix, "o"),
+                inner,
+                cfg.d_model,
+                false,
+            )?,
             relative_bias: weights::cuda_tensor_shaped(
                 map,
                 &weights::join_key(prefix, "relative_attention_bias.weight"),
@@ -153,10 +191,10 @@ impl SelfAttention {
         let bias = CudaTensor::from_vec(bias, vec![1, self.n_heads, s, s])?;
         scores = scores.add(&bias)?;
         let attn = scores.softmax(-1)?;
-        let ctx = attn
-            .matmul(&v)?
-            .transpose(1, 2)?
-            .reshape(vec![b, s, self.n_heads * self.d_kv])?;
+        let ctx =
+            attn.matmul(&v)?
+                .transpose(1, 2)?
+                .reshape(vec![b, s, self.n_heads * self.d_kv])?;
         self.o.forward(&ctx)
     }
 }
@@ -193,7 +231,11 @@ impl EncoderLayer {
                 &weights::join_key(prefix, "layer.0.layer_norm.weight"),
                 &[cfg.d_model],
             )?,
-            ff: DenseGated::load(map, &weights::join_key(prefix, "layer.1.DenseReluDense"), cfg)?,
+            ff: DenseGated::load(
+                map,
+                &weights::join_key(prefix, "layer.1.DenseReluDense"),
+                cfg,
+            )?,
             ln2: weights::cuda_tensor_shaped(
                 map,
                 &weights::join_key(prefix, "layer.1.layer_norm.weight"),
@@ -245,7 +287,11 @@ impl Umt5Encoder {
         };
         let mut layers = Vec::with_capacity(cfg.num_layers);
         for i in 0..cfg.num_layers {
-            layers.push(EncoderLayer::load(map, &format!("encoder.block.{i}"), &cfg)?);
+            layers.push(EncoderLayer::load(
+                map,
+                &format!("encoder.block.{i}"),
+                &cfg,
+            )?);
         }
         Ok(Self {
             embed: weights::cuda_tensor_shaped(map, embed_key, &[cfg.vocab_size, cfg.d_model])?,

@@ -74,7 +74,11 @@ mod arch_tests {
         assert_eq!(nvrtc_arch(8, 9), Some("compute_89"));
         assert_eq!(nvrtc_arch(8, 6), Some("compute_80"));
         assert_eq!(nvrtc_arch(7, 5), Some("compute_75"));
-        assert_eq!(nvrtc_arch(13, 0), Some("compute_120"), "unknown future SM must not be None");
+        assert_eq!(
+            nvrtc_arch(13, 0),
+            Some("compute_120"),
+            "unknown future SM must not be None"
+        );
         assert_eq!(nvrtc_arch(7, 0), None, "Volta is genuinely unsupported");
     }
 }

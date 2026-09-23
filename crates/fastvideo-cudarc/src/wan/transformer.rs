@@ -41,9 +41,18 @@ struct WanAttention {
 }
 
 impl WanAttention {
-    fn zeros(dim: usize, heads: usize, eps: f32, cross: bool, added_kv: Option<usize>) -> Result<Self> {
+    fn zeros(
+        dim: usize,
+        heads: usize,
+        eps: f32,
+        cross: bool,
+        added_kv: Option<usize>,
+    ) -> Result<Self> {
         let (add_k, add_v) = match added_kv {
-            Some(extra) => (Some(Linear::zeros(extra, dim, true)), Some(Linear::zeros(extra, dim, true))),
+            Some(extra) => (
+                Some(Linear::zeros(extra, dim, true)),
+                Some(Linear::zeros(extra, dim, true)),
+            ),
             None => (None, None),
         };
         Ok(Self {
@@ -66,7 +75,15 @@ impl WanAttention {
     }
 
     #[allow(clippy::too_many_arguments)]
-    fn load(map: &WeightMap, prefix: &str, dim: usize, heads: usize, eps: f32, cross: bool, added_kv: Option<usize>) -> Result<Self> {
+    fn load(
+        map: &WeightMap,
+        prefix: &str,
+        dim: usize,
+        heads: usize,
+        eps: f32,
+        cross: bool,
+        added_kv: Option<usize>,
+    ) -> Result<Self> {
         let key = |name: &str| weights::join_key(prefix, name);
         let (add_k, add_v) = match added_kv {
             Some(extra) => (
@@ -78,10 +95,25 @@ impl WanAttention {
         let (q_or_qkv, kv) = if cross {
             (
                 Linear::load(map, &key("to_q"), dim, dim, true)?,
-                Some(Linear::load_fused(map, &[&key("to_k"), &key("to_v")], dim, dim, true)?),
+                Some(Linear::load_fused(
+                    map,
+                    &[&key("to_k"), &key("to_v")],
+                    dim,
+                    dim,
+                    true,
+                )?),
             )
         } else {
-            (Linear::load_fused(map, &[&key("to_q"), &key("to_k"), &key("to_v")], dim, dim, true)?, None)
+            (
+                Linear::load_fused(
+                    map,
+                    &[&key("to_q"), &key("to_k"), &key("to_v")],
+                    dim,
+                    dim,
+                    true,
+                )?,
+                None,
+            )
         };
         let dim_head = dim / heads;
         let proj_l = if cross {
@@ -98,8 +130,16 @@ impl WanAttention {
             q_or_qkv,
             kv,
             to_out: Linear::load(map, &key("to_out.0"), dim, dim, true)?,
-            norm_q: pinned(weights::cuda_tensor_shaped(map, &key("norm_q.weight"), &[dim])?)?,
-            norm_k: pinned(weights::cuda_tensor_shaped(map, &key("norm_k.weight"), &[dim])?)?,
+            norm_q: pinned(weights::cuda_tensor_shaped(
+                map,
+                &key("norm_q.weight"),
+                &[dim],
+            )?)?,
+            norm_k: pinned(weights::cuda_tensor_shaped(
+                map,
+                &key("norm_k.weight"),
+                &[dim],
+            )?)?,
             add_k,
             add_v,
             proj_l,
@@ -109,7 +149,13 @@ impl WanAttention {
         })
     }
 
-    fn attend(&self, q: &CudaTensor, k: &CudaTensor, v: &CudaTensor, mask: Option<&CudaTensor>) -> Result<CudaTensor> {
+    fn attend(
+        &self,
+        q: &CudaTensor,
+        k: &CudaTensor,
+        v: &CudaTensor,
+        mask: Option<&CudaTensor>,
+    ) -> Result<CudaTensor> {
         let attn = nn::scaled_dot_product_attention_masked(q, k, v, None, mask)?;
         self.to_out.forward(&attn.merge_heads()?)
     }
@@ -124,7 +170,12 @@ impl WanAttention {
     ) -> Result<CudaTensor> {
         let dim = self.heads * self.dim_head;
         let qkv = self.q_or_qkv.forward(hidden)?;
-        let rope = || Some(Rope { cos: &rope.0, sin: &rope.1 });
+        let rope = || {
+            Some(Rope {
+                cos: &rope.0,
+                sin: &rope.1,
+            })
+        };
         let q = qkv.qk_norm_rope_bhsd(0, self.heads, &self.norm_q, rope(), self.eps)?;
         let k = qkv.qk_norm_rope_bhsd(dim, self.heads, &self.norm_k, rope(), self.eps)?;
         let v = qkv.split_heads_bhsd(2 * dim, self.heads, self.dim_head)?;
@@ -140,7 +191,9 @@ impl WanAttention {
         if let (Some(ctx), Some(gate)) = (vsa, gate) {
             // The gate shares q/k/v's projection input but takes no RoPE and
             // no norm, matching upstream.
-            let g = gate.forward(hidden)?.split_heads_bhsd(0, self.heads, self.dim_head)?;
+            let g = gate
+                .forward(hidden)?
+                .split_heads_bhsd(0, self.heads, self.dim_head)?;
             if let Some(out) = self.attend_vsa(&q, &k, &v, &g, ctx)? {
                 // Same tail as the dense path: VSA returns BHSD attention, which
                 // still has to be merged back to [b, seq, dim] and projected.
@@ -167,14 +220,28 @@ impl WanAttention {
         if seq != ctx.seq {
             return Ok(None);
         }
-        let (Some(qd), Some(kd), Some(vd), Some(gd)) = (q.dev()?, k.dev()?, v.dev()?, gate.dev()?) else {
+        let (Some(qd), Some(kd), Some(vd), Some(gd)) = (q.dev()?, k.dev()?, v.dev()?, gate.dev()?)
+        else {
             return Ok(None);
         };
         let scale = 1.0 / (dim as f32).sqrt();
         let out = super::vsa::vsa_attention_device(
-            &qd, &kd, &vd, Some(&gd), &ctx.plan, ctx.topk, b * heads, seq, dim, scale, ctx.group,
+            &qd,
+            &kd,
+            &vd,
+            Some(&gd),
+            &ctx.plan,
+            ctx.topk,
+            b * heads,
+            seq,
+            dim,
+            scale,
+            ctx.group,
         )?;
-        Ok(Some(CudaTensor::from_device_slice(out, vec![b, heads, seq, dim])?))
+        Ok(Some(CudaTensor::from_device_slice(
+            out,
+            vec![b, heads, seq, dim],
+        )?))
     }
 
     #[cfg(not(feature = "cuda"))]
@@ -189,16 +256,34 @@ impl WanAttention {
         Ok(None)
     }
 
-    fn forward_cross(&self, hidden: &CudaTensor, encoder: &CudaTensor, image: Option<&CudaTensor>) -> Result<CudaTensor> {
+    fn forward_cross(
+        &self,
+        hidden: &CudaTensor,
+        encoder: &CudaTensor,
+        image: Option<&CudaTensor>,
+    ) -> Result<CudaTensor> {
         let dim = self.heads * self.dim_head;
-        let kv_proj = self.kv.as_ref().ok_or_else(|| TensorError::Message("cross attention without kv".into()))?;
-        let q = self.q_or_qkv.forward(hidden)?.qk_norm_rope_bhsd(0, self.heads, &self.norm_q, None, self.eps)?;
+        let kv_proj = self
+            .kv
+            .as_ref()
+            .ok_or_else(|| TensorError::Message("cross attention without kv".into()))?;
+        let q = self.q_or_qkv.forward(hidden)?.qk_norm_rope_bhsd(
+            0,
+            self.heads,
+            &self.norm_q,
+            None,
+            self.eps,
+        )?;
         let kv = kv_proj.forward(encoder)?;
         let mut k = kv.qk_norm_rope_bhsd(0, self.heads, &self.norm_k, None, self.eps)?;
         let mut v = kv.split_heads_bhsd(dim, self.heads, self.dim_head)?;
         if let (Some(add_k), Some(add_v), Some(img)) = (&self.add_k, &self.add_v, image) {
-            let ik = add_k.forward(img)?.split_heads_bhsd(0, self.heads, self.dim_head)?;
-            let iv = add_v.forward(img)?.split_heads_bhsd(0, self.heads, self.dim_head)?;
+            let ik = add_k
+                .forward(img)?
+                .split_heads_bhsd(0, self.heads, self.dim_head)?;
+            let iv = add_v
+                .forward(img)?
+                .split_heads_bhsd(0, self.heads, self.dim_head)?;
             k = CudaTensor::cat(&[&ik, &k], 2)?;
             v = CudaTensor::cat(&[&iv, &v], 2)?;
         }
@@ -225,7 +310,12 @@ fn rotary_1d(dim: usize, seq: usize, theta: f64) -> (Vec<f32>, Vec<f32>) {
 }
 
 /// 3-D RoPE tables `[seq, head_dim]` (time, height, width split of the head).
-fn wan_rope(cfg: &WanVideoArchConfig, frames: usize, height: usize, width: usize) -> Result<(CudaTensor, CudaTensor)> {
+fn wan_rope(
+    cfg: &WanVideoArchConfig,
+    frames: usize,
+    height: usize,
+    width: usize,
+) -> Result<(CudaTensor, CudaTensor)> {
     let d = cfg.attention_head_dim;
     let h_dim = 2 * (d / 6);
     let w_dim = h_dim;
@@ -235,7 +325,11 @@ fn wan_rope(cfg: &WanVideoArchConfig, frames: usize, height: usize, width: usize
         (h_dim, rotary_1d(h_dim, cfg.rope_max_seq_len, 10000.0)),
         (w_dim, rotary_1d(w_dim, cfg.rope_max_seq_len, 10000.0)),
     ];
-    let (ppf, pph, ppw) = (frames / cfg.patch_size[0], height / cfg.patch_size[1], width / cfg.patch_size[2]);
+    let (ppf, pph, ppw) = (
+        frames / cfg.patch_size[0],
+        height / cfg.patch_size[1],
+        width / cfg.patch_size[2],
+    );
     let seq = ppf * pph * ppw;
     let mut cos = Vec::with_capacity(seq * d);
     let mut sin = Vec::with_capacity(seq * d);
@@ -249,7 +343,10 @@ fn wan_rope(cfg: &WanVideoArchConfig, frames: usize, height: usize, width: usize
             }
         }
     }
-    Ok((CudaTensor::from_vec(cos, vec![seq, d])?, CudaTensor::from_vec(sin, vec![seq, d])?))
+    Ok((
+        CudaTensor::from_vec(cos, vec![seq, d])?,
+        CudaTensor::from_vec(sin, vec![seq, d])?,
+    ))
 }
 
 #[derive(Debug, Clone)]
@@ -272,12 +369,21 @@ struct MlpEmbed {
 
 impl MlpEmbed {
     fn zeros(in_dim: usize, dim: usize) -> Self {
-        Self { linear_1: Linear::zeros(in_dim, dim, true), linear_2: Linear::zeros(dim, dim, true) }
+        Self {
+            linear_1: Linear::zeros(in_dim, dim, true),
+            linear_2: Linear::zeros(dim, dim, true),
+        }
     }
 
     fn load(map: &WeightMap, prefix: &str, in_dim: usize, dim: usize) -> Result<Self> {
         Ok(Self {
-            linear_1: Linear::load(map, &weights::join_key(prefix, "linear_1"), in_dim, dim, true)?,
+            linear_1: Linear::load(
+                map,
+                &weights::join_key(prefix, "linear_1"),
+                in_dim,
+                dim,
+                true,
+            )?,
             linear_2: Linear::load(map, &weights::join_key(prefix, "linear_2"), dim, dim, true)?,
         })
     }
@@ -307,12 +413,28 @@ impl ImageEmbedder {
     fn load(map: &WeightMap, prefix: &str, in_dim: usize, out_dim: usize) -> Result<Self> {
         let key = |name: &str| weights::join_key(prefix, name);
         Ok(Self {
-            norm1_w: pinned(weights::cuda_tensor_shaped(map, &key("norm1.weight"), &[in_dim])?)?,
-            norm1_b: pinned(weights::cuda_tensor_shaped(map, &key("norm1.bias"), &[in_dim])?)?,
+            norm1_w: pinned(weights::cuda_tensor_shaped(
+                map,
+                &key("norm1.weight"),
+                &[in_dim],
+            )?)?,
+            norm1_b: pinned(weights::cuda_tensor_shaped(
+                map,
+                &key("norm1.bias"),
+                &[in_dim],
+            )?)?,
             proj: Linear::load(map, &key("ff.net.0.proj"), in_dim, in_dim, true)?,
             out: Linear::load(map, &key("ff.net.2"), in_dim, out_dim, true)?,
-            norm2_w: pinned(weights::cuda_tensor_shaped(map, &key("norm2.weight"), &[out_dim])?)?,
-            norm2_b: pinned(weights::cuda_tensor_shaped(map, &key("norm2.bias"), &[out_dim])?)?,
+            norm2_w: pinned(weights::cuda_tensor_shaped(
+                map,
+                &key("norm2.weight"),
+                &[out_dim],
+            )?)?,
+            norm2_b: pinned(weights::cuda_tensor_shaped(
+                map,
+                &key("norm2.bias"),
+                &[out_dim],
+            )?)?,
         })
     }
 
@@ -355,7 +477,10 @@ impl WanBlock {
             attn2: WanAttention::zeros(dim, heads, cfg.eps, true, cfg.added_kv_proj_dim)?,
             norm2_weight: pinned(CudaTensor::ones(&[dim]))?,
             norm2_bias: pinned(CudaTensor::zeros(&[dim]))?,
-            ffn: FeedForward { proj: Linear::zeros(dim, cfg.ffn_dim, true), out: Linear::zeros(cfg.ffn_dim, dim, true) },
+            ffn: FeedForward {
+                proj: Linear::zeros(dim, cfg.ffn_dim, true),
+                out: Linear::zeros(cfg.ffn_dim, dim, true),
+            },
             scale_shift_table: pinned(CudaTensor::zeros(&[1, 6, dim]))?,
         })
     }
@@ -373,14 +498,34 @@ impl WanBlock {
                 .contains(&key("to_gate_compress.weight"))
                 .then(|| Linear::load(map, &key("to_gate_compress"), dim, dim, true))
                 .transpose()?,
-            attn2: WanAttention::load(map, &key("attn2"), dim, heads, cfg.eps, true, cfg.added_kv_proj_dim)?,
-            norm2_weight: pinned(weights::cuda_tensor_shaped(map, &key("norm2.weight"), &[dim])?)?,
-            norm2_bias: pinned(weights::cuda_tensor_shaped(map, &key("norm2.bias"), &[dim])?)?,
+            attn2: WanAttention::load(
+                map,
+                &key("attn2"),
+                dim,
+                heads,
+                cfg.eps,
+                true,
+                cfg.added_kv_proj_dim,
+            )?,
+            norm2_weight: pinned(weights::cuda_tensor_shaped(
+                map,
+                &key("norm2.weight"),
+                &[dim],
+            )?)?,
+            norm2_bias: pinned(weights::cuda_tensor_shaped(
+                map,
+                &key("norm2.bias"),
+                &[dim],
+            )?)?,
             ffn: FeedForward {
                 proj: Linear::load(map, &key("ffn.net.0.proj"), dim, cfg.ffn_dim, true)?,
                 out: Linear::load(map, &key("ffn.net.2"), cfg.ffn_dim, dim, true)?,
             },
-            scale_shift_table: pinned(weights::cuda_tensor_shaped(map, &key("scale_shift_table"), &[1, 6, dim])?)?,
+            scale_shift_table: pinned(weights::cuda_tensor_shaped(
+                map,
+                &key("scale_shift_table"),
+                &[1, 6, dim],
+            )?)?,
         })
     }
 
@@ -396,11 +541,16 @@ impl WanBlock {
     ) -> Result<CudaTensor> {
         use super::stats::phase;
         let e = timestep_proj.add(&self.scale_shift_table)?;
-        let normed = phase("1_norm_msa", || hidden.ln_adaln_e(&e, SCALE_MSA, SHIFT_MSA, self.eps))?;
-        let attn = phase("2_self_attn", || {
-            self.attn1.forward_self(&normed, rope, mask, self.gate.as_ref(), vsa)
+        let normed = phase("1_norm_msa", || {
+            hidden.ln_adaln_e(&e, SCALE_MSA, SHIFT_MSA, self.eps)
         })?;
-        let hidden = phase("3_residual_msa", || hidden.residual_gate_add_e(&attn, &e, GATE_MSA))?;
+        let attn = phase("2_self_attn", || {
+            self.attn1
+                .forward_self(&normed, rope, mask, self.gate.as_ref(), vsa)
+        })?;
+        let hidden = phase("3_residual_msa", || {
+            hidden.residual_gate_add_e(&attn, &e, GATE_MSA)
+        })?;
 
         let normed = phase("4_norm_cross", || {
             hidden.layer_norm(self.eps, Some(&self.norm2_weight), Some(&self.norm2_bias))
@@ -409,9 +559,13 @@ impl WanBlock {
             Ok::<_, TensorError>(hidden.add(&self.attn2.forward_cross(&normed, encoder, image)?)?)
         })?;
 
-        let normed = phase("6_norm_ffn", || hidden.ln_adaln_e(&e, SCALE_FFN, SHIFT_FFN, self.eps))?;
+        let normed = phase("6_norm_ffn", || {
+            hidden.ln_adaln_e(&e, SCALE_FFN, SHIFT_FFN, self.eps)
+        })?;
         let ff = phase("7_ffn", || self.ffn.forward(&normed))?;
-        phase("8_residual_ffn", || hidden.residual_gate_add_e(&ff, &e, GATE_FFN))
+        phase("8_residual_ffn", || {
+            hidden.residual_gate_add_e(&ff, &e, GATE_FFN)
+        })
     }
 }
 
@@ -429,7 +583,9 @@ pub struct WanTransformer3D {
     scale_shift_table: CudaTensor, // [1, 2, dim]
     freq_dim: usize,
     /// RoPE tables keyed by `(seq_len, head_dim)`: built and uploaded once.
-    rotary_cache: std::sync::Arc<std::sync::Mutex<std::collections::HashMap<(usize, usize), (CudaTensor, CudaTensor)>>>,
+    rotary_cache: std::sync::Arc<
+        std::sync::Mutex<std::collections::HashMap<(usize, usize), (CudaTensor, CudaTensor)>>,
+    >,
     /// VSA tiling per latent grid, built once and shared by every layer.
     #[cfg(feature = "cuda")]
     vsa_cache: std::sync::Arc<
@@ -445,7 +601,9 @@ impl WanTransformer3D {
     fn try_zeros(cfg: WanVideoArchConfig) -> Result<Self> {
         let dim = cfg.hidden_size();
         let p = cfg.patch_size;
-        let blocks = (0..cfg.num_layers).map(|_| WanBlock::zeros(&cfg)).collect::<Result<Vec<_>>>()?;
+        let blocks = (0..cfg.num_layers)
+            .map(|_| WanBlock::zeros(&cfg))
+            .collect::<Result<Vec<_>>>()?;
         Ok(Self {
             patch_weight: pinned(CudaTensor::zeros(&[dim, cfg.in_channels, p[0], p[1], p[2]]))?,
             patch_bias: pinned(CudaTensor::zeros(&[dim]))?,
@@ -475,18 +633,51 @@ impl WanTransformer3D {
             .map(|i| WanBlock::load(map, &format!("blocks.{i}"), &cfg))
             .collect::<Result<Vec<_>>>()?;
         let image_embedder = match (cfg.image_dim, cfg.added_kv_proj_dim) {
-            (Some(in_dim), Some(out_dim)) => Some(ImageEmbedder::load(map, "condition_embedder.image_embedder", in_dim, out_dim)?),
+            (Some(in_dim), Some(out_dim)) => Some(ImageEmbedder::load(
+                map,
+                "condition_embedder.image_embedder",
+                in_dim,
+                out_dim,
+            )?),
             _ => None,
         };
         Ok(Self {
-            patch_weight: pinned(weights::cuda_tensor_shaped(map, "patch_embedding.weight", &[dim, cfg.in_channels, p[0], p[1], p[2]])?)?,
-            patch_bias: pinned(weights::cuda_tensor_shaped(map, "patch_embedding.bias", &[dim])?)?,
-            time_embedder: MlpEmbed::load(map, "condition_embedder.time_embedder", cfg.freq_dim, dim)?,
+            patch_weight: pinned(weights::cuda_tensor_shaped(
+                map,
+                "patch_embedding.weight",
+                &[dim, cfg.in_channels, p[0], p[1], p[2]],
+            )?)?,
+            patch_bias: pinned(weights::cuda_tensor_shaped(
+                map,
+                "patch_embedding.bias",
+                &[dim],
+            )?)?,
+            time_embedder: MlpEmbed::load(
+                map,
+                "condition_embedder.time_embedder",
+                cfg.freq_dim,
+                dim,
+            )?,
             time_proj: Linear::load(map, "condition_embedder.time_proj", dim, dim * 6, true)?,
-            text_embedder: MlpEmbed::load(map, "condition_embedder.text_embedder", cfg.text_dim, dim)?,
+            text_embedder: MlpEmbed::load(
+                map,
+                "condition_embedder.text_embedder",
+                cfg.text_dim,
+                dim,
+            )?,
             image_embedder,
-            proj_out: Linear::load(map, "proj_out", dim, cfg.out_channels * p.iter().product::<usize>(), true)?,
-            scale_shift_table: pinned(weights::cuda_tensor_shaped(map, "scale_shift_table", &[1, 2, dim])?)?,
+            proj_out: Linear::load(
+                map,
+                "proj_out",
+                dim,
+                cfg.out_channels * p.iter().product::<usize>(),
+                true,
+            )?,
+            scale_shift_table: pinned(weights::cuda_tensor_shaped(
+                map,
+                "scale_shift_table",
+                &[1, 2, dim],
+            )?)?,
             freq_dim: cfg.freq_dim,
             blocks,
             rotary_cache: Default::default(),
@@ -499,14 +690,21 @@ impl WanTransformer3D {
     /// `[B, C, T, H, W]` → `[B, seq, dim]` via a stride-`p` conv per frame.
     fn patch_embed(&self, xs: &CudaTensor) -> Result<CudaTensor> {
         let [b, c, t, h, w] = xs.shape[..] else {
-            return Err(TensorError::Message(format!("patch_embed expects BCTHW, got {:?}", xs.shape)));
+            return Err(TensorError::Message(format!(
+                "patch_embed expects BCTHW, got {:?}",
+                xs.shape
+            )));
         };
         let p = self.cfg.patch_size;
         let dim = self.cfg.hidden_size();
         if p[0] != 1 {
-            return Err(TensorError::Message("patch_embed supports temporal patch size 1 (Wan)".into()));
+            return Err(TensorError::Message(
+                "patch_embed supports temporal patch size 1 (Wan)".into(),
+            ));
         }
-        let x = xs.permute(&[0, 2, 1, 3, 4])?.reshape(vec![b * t, c, h, w])?;
+        let x = xs
+            .permute(&[0, 2, 1, 3, 4])?
+            .reshape(vec![b * t, c, h, w])?;
         let k = self.patch_weight.reshape(vec![dim, c, p[1], p[2]])?;
         let y = x.conv2d(&k, Some(&self.patch_bias), 0, p[1])?;
         let (hh, ww) = (y.shape[2], y.shape[3]);
@@ -515,7 +713,12 @@ impl WanTransformer3D {
             .reshape(vec![b, t * hh * ww, dim])
     }
 
-    pub fn forward(&self, latents: &CudaTensor, timestep: &CudaTensor, encoder: &CudaTensor) -> Result<CudaTensor> {
+    pub fn forward(
+        &self,
+        latents: &CudaTensor,
+        timestep: &CudaTensor,
+        encoder: &CudaTensor,
+    ) -> Result<CudaTensor> {
         self.forward_ctx(latents, timestep, encoder, None)
     }
 
@@ -529,7 +732,8 @@ impl WanTransformer3D {
         // No live device means a CPU run, where VSA has no device path: fall
         // back to dense rather than failing to upload a tiling. Say so, rather
         // than silently running dense while the caller believes VSA is on.
-        if super::device::global_device().is_none() || !self.blocks.iter().any(|b| b.gate.is_some()) {
+        if super::device::global_device().is_none() || !self.blocks.iter().any(|b| b.gate.is_some())
+        {
             static ONCE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
             super::log::info_once(
                 &ONCE,
@@ -582,7 +786,10 @@ impl WanTransformer3D {
         image: Option<&CudaTensor>,
     ) -> Result<CudaTensor> {
         let [b, _c, t, h, w] = latents.shape[..] else {
-            return Err(TensorError::Message(format!("forward expects BCTHW latents, got {:?}", latents.shape)));
+            return Err(TensorError::Message(format!(
+                "forward expects BCTHW latents, got {:?}",
+                latents.shape
+            )));
         };
         let dim = self.cfg.hidden_size();
         let rope = self.rotary_for(t, h, w)?;
@@ -594,8 +801,13 @@ impl WanTransformer3D {
             None
         };
         let mut hidden = self.patch_embed(latents)?;
-        let temb = self.time_embedder.forward_silu(&nn::sinusoidal_timesteps(timestep, self.freq_dim)?)?;
-        let timestep_proj = self.time_proj.forward(&temb.silu())?.reshape(vec![b, 6, dim])?;
+        let temb = self
+            .time_embedder
+            .forward_silu(&nn::sinusoidal_timesteps(timestep, self.freq_dim)?)?;
+        let timestep_proj = self
+            .time_proj
+            .forward(&temb.silu())?
+            .reshape(vec![b, 6, dim])?;
         let encoder = self.text_embedder.forward_gelu(encoder)?;
         let image = match (image, &self.image_embedder) {
             (Some(img), Some(emb)) => Some(emb.forward(img)?),
@@ -606,8 +818,15 @@ impl WanTransformer3D {
         // checkpoint carries the gates it was trained with.
         let vsa = self.vsa_for(t, h, w)?;
         for block in &self.blocks {
-            hidden =
-                block.forward(&hidden, &encoder, &timestep_proj, &rope, image.as_ref(), mask.as_ref(), vsa.as_deref())?;
+            hidden = block.forward(
+                &hidden,
+                &encoder,
+                &timestep_proj,
+                &rope,
+                image.as_ref(),
+                mask.as_ref(),
+                vsa.as_deref(),
+            )?;
         }
         // Output head: table [1, 2, dim] + temb broadcast over both rows.
         let temb_rows = temb.unsqueeze(1)?;
@@ -618,12 +837,21 @@ impl WanTransformer3D {
     }
 
     /// `[B, seq, oc*pt*ph*pw]` → `[B, oc, T, H, W]` (temporal patch size 1).
-    fn unpatchify(&self, hidden: CudaTensor, b: usize, t: usize, h: usize, w: usize) -> Result<CudaTensor> {
+    fn unpatchify(
+        &self,
+        hidden: CudaTensor,
+        b: usize,
+        t: usize,
+        h: usize,
+        w: usize,
+    ) -> Result<CudaTensor> {
         let p = self.cfg.patch_size;
         let oc = self.cfg.out_channels;
         let (ppf, pph, ppw) = (t / p[0], h / p[1], w / p[2]);
         if p[0] != 1 {
-            return Err(TensorError::Message("unpatchify supports temporal patch size 1 (Wan)".into()));
+            return Err(TensorError::Message(
+                "unpatchify supports temporal patch size 1 (Wan)".into(),
+            ));
         }
         // [b*ppf, pph, ppw, ph, pw, oc] → [b*ppf, oc, pph, ph, ppw, pw]
         let x = hidden

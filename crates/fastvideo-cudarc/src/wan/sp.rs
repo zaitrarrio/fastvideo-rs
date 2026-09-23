@@ -40,9 +40,10 @@ pub fn all_gather_seq(shards: &[CudaTensor], dim: usize) -> Result<CudaTensor> {
 pub fn shard_tensor(xs: &CudaTensor, dim: usize, rank: usize, world: usize) -> Result<CudaTensor> {
     let seq = xs.dim(dim)?;
     let ranges = shard_ranges(seq, world);
-    let (start, len) = ranges.get(rank).copied().ok_or_else(|| {
-        TensorError::Message(format!("SP rank {rank} out of world {world}"))
-    })?;
+    let (start, len) = ranges
+        .get(rank)
+        .copied()
+        .ok_or_else(|| TensorError::Message(format!("SP rank {rank} out of world {world}")))?;
     xs.narrow(dim, start, len)
 }
 
@@ -73,7 +74,8 @@ mod tests {
 
     #[test]
     fn all_gather_roundtrip() {
-        let a = CudaTensor::from_vec((0..12).map(|x| x as f32).collect(), vec![1, 1, 4, 3]).unwrap();
+        let a =
+            CudaTensor::from_vec((0..12).map(|x| x as f32).collect(), vec![1, 1, 4, 3]).unwrap();
         let s0 = shard_tensor(&a, 2, 0, 2).unwrap();
         let s1 = shard_tensor(&a, 2, 1, 2).unwrap();
         let g = all_gather_seq(&[s0, s1], 2).unwrap();

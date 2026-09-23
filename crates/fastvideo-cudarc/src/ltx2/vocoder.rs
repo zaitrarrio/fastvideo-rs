@@ -44,7 +44,12 @@ const HANN_LOWPASS_WIDTH: f32 = 6.0;
 fn upsample_time_nearest(x: &CudaTensor, ratio: usize) -> Result<CudaTensor> {
     let [b, c, l] = match x.shape[..] {
         [b, c, l] => [b, c, l],
-        _ => return Err(msg(format!("vocoder rate upsample expects [B, C, L], got {:?}", x.shape))),
+        _ => {
+            return Err(msg(format!(
+                "vocoder rate upsample expects [B, C, L], got {:?}",
+                x.shape
+            )))
+        }
     };
     if ratio == 0 {
         return Err(msg("vocoder rate upsample ratio must be ≥ 1"));
@@ -69,7 +74,9 @@ fn pinned(data: Vec<f32>, shape: Vec<usize>) -> Result<CudaTensor> {
 }
 
 fn host_values(map: &WeightMap, key: &str, shape: &[usize]) -> Result<Vec<f32>> {
-    Ok(cuda_tensor_shaped(map, key, shape)?.host_cow()?.into_owned())
+    Ok(cuda_tensor_shaped(map, key, shape)?
+        .host_cow()?
+        .into_owned())
 }
 
 fn depthwise_filter(taps: &[f32], channels: usize) -> Result<CudaTensor> {
@@ -97,7 +104,9 @@ fn hann_sinc_kernel(ratio: usize) -> (Vec<f32>, usize, usize, usize, usize) {
     for i in 0..kernel_size {
         let time = (i as f32 / ratio as f32 - width as f32) * HANN_ROLLOFF;
         let clamped = time.clamp(-HANN_LOWPASS_WIDTH, HANN_LOWPASS_WIDTH);
-        let window = (clamped * std::f32::consts::PI / HANN_LOWPASS_WIDTH / 2.0).cos().powi(2);
+        let window = (clamped * std::f32::consts::PI / HANN_LOWPASS_WIDTH / 2.0)
+            .cos()
+            .powi(2);
         taps.push(sinc(time) * window * HANN_ROLLOFF / ratio as f32);
     }
     (taps, kernel_size, pad, pad_left, pad_right)
@@ -116,7 +125,10 @@ impl AliasFreeSnake {
         let beta = host_values(map, &format!("{prefix}.act.beta"), &[channels])?;
         Ok(Self {
             alpha: pinned(alpha.iter().map(|a| a.exp()).collect(), vec![channels])?,
-            inv_beta: pinned(beta.iter().map(|b| 1.0 / (b.exp() + 1e-9f32)).collect(), vec![channels])?,
+            inv_beta: pinned(
+                beta.iter().map(|b| 1.0 / (b.exp() + 1e-9f32)).collect(),
+                vec![channels],
+            )?,
             filter: depthwise_filter(taps, channels)?,
         })
     }
@@ -129,10 +141,14 @@ impl AliasFreeSnake {
             .try_mul_scalar(AA_RATIO as f32)?;
         let up = up.narrow(2, UP_CROP_LEFT, up.shape[2] - UP_CROP_LEFT - UP_CROP_RIGHT)?;
         if up.shape[2] != AA_RATIO * len {
-            return Err(msg(format!("vocoder alias-free upsample produced {} samples from {len}", up.shape[2])));
+            return Err(msg(format!(
+                "vocoder alias-free upsample produced {} samples from {len}",
+                up.shape[2]
+            )));
         }
         let act = up.snake_beta(&self.alpha, &self.inv_beta)?;
-        act.pad(2, DOWN_PAD_LEFT, DOWN_PAD_RIGHT, PadMode::Replicate)?.conv1d(&self.filter, None, 0, AA_RATIO, 1, channels)
+        act.pad(2, DOWN_PAD_LEFT, DOWN_PAD_RIGHT, PadMode::Replicate)?
+            .conv1d(&self.filter, None, 0, AA_RATIO, 1, channels)
     }
 }
 
@@ -143,7 +159,11 @@ fn fold_weight_norm(g: &[f32], v: &[f32], rows: usize) -> Vec<f32> {
     v.chunks_exact(inner.max(1))
         .zip(g)
         .flat_map(|(row, g)| {
-            let norm = row.iter().map(|a| f64::from(*a).powi(2)).sum::<f64>().sqrt();
+            let norm = row
+                .iter()
+                .map(|a| f64::from(*a).powi(2))
+                .sum::<f64>()
+                .sqrt();
             let k = (f64::from(*g) / norm) as f32;
             row.iter().map(move |a| a * k)
         })
@@ -155,18 +175,32 @@ fn conv_weight(map: &WeightMap, prefix: &str, shape: &[usize]) -> Result<CudaTen
     let plain = format!("{prefix}.weight");
     let pairs = [
         (format!("{prefix}.weight_g"), format!("{prefix}.weight_v")),
-        (format!("{prefix}.parametrizations.weight.original0"), format!("{prefix}.parametrizations.weight.original1")),
+        (
+            format!("{prefix}.parametrizations.weight.original0"),
+            format!("{prefix}.parametrizations.weight.original1"),
+        ),
     ];
-    let folded = if map.has_tensor(&plain) { None } else { pairs.iter().find(|(g, v)| map.has_tensor(g) && map.has_tensor(v)) };
+    let folded = if map.has_tensor(&plain) {
+        None
+    } else {
+        pairs
+            .iter()
+            .find(|(g, v)| map.has_tensor(g) && map.has_tensor(v))
+    };
     let mut w = match folded {
         None => cuda_tensor_shaped(map, &plain, shape)?,
         Some((g, v)) => {
             let v = cuda_tensor_shaped(map, v, shape)?;
             let (g_shape, g) = map.get_f32(g)?;
             if g.len() != shape[0] {
-                return Err(msg(format!("{prefix}: weight-norm gain {g_shape:?} for a weight of {shape:?}")));
+                return Err(msg(format!(
+                    "{prefix}: weight-norm gain {g_shape:?} for a weight of {shape:?}"
+                )));
             }
-            CudaTensor::from_vec(fold_weight_norm(&g, &v.host_cow()?, shape[0]), shape.to_vec())?
+            CudaTensor::from_vec(
+                fold_weight_norm(&g, &v.host_cow()?, shape[0]),
+                shape.to_vec(),
+            )?
         }
     };
     w.pin_device()?;
@@ -183,9 +217,18 @@ struct Conv1d {
 impl Conv1d {
     /// `padding = "same"` for an odd kernel: `dilation · (k - 1) / 2` each side.
     /// Bias is optional (`final_bias=false` on LTX-2.5 `conv_out`).
-    fn load(map: &WeightMap, prefix: &str, cin: usize, cout: usize, kernel: usize, dilation: usize) -> Result<Self> {
+    fn load(
+        map: &WeightMap,
+        prefix: &str,
+        cin: usize,
+        cout: usize,
+        kernel: usize,
+        dilation: usize,
+    ) -> Result<Self> {
         if kernel.is_multiple_of(2) {
-            return Err(msg(format!("{prefix}: \"same\" padding needs an odd kernel, got {kernel}")));
+            return Err(msg(format!(
+                "{prefix}: \"same\" padding needs an odd kernel, got {kernel}"
+            )));
         }
         let bias_key = format!("{prefix}.bias");
         let has_weight = map.has_tensor(&format!("{prefix}.weight"))
@@ -199,11 +242,23 @@ impl Conv1d {
             CudaTensor::zeros(&[cout])
         };
         bias.pin_device()?;
-        Ok(Self { weight: conv_weight(map, prefix, &[cout, cin, kernel])?, bias, padding: dilation * (kernel - 1) / 2, dilation })
+        Ok(Self {
+            weight: conv_weight(map, prefix, &[cout, cin, kernel])?,
+            bias,
+            padding: dilation * (kernel - 1) / 2,
+            dilation,
+        })
     }
 
     fn forward(&self, x: &CudaTensor) -> Result<CudaTensor> {
-        x.conv1d(&self.weight, Some(&self.bias), self.padding, 1, self.dilation, 1)
+        x.conv1d(
+            &self.weight,
+            Some(&self.bias),
+            self.padding,
+            1,
+            self.dilation,
+            1,
+        )
     }
 }
 
@@ -239,16 +294,37 @@ struct AmpBlock {
 }
 
 impl AmpBlock {
-    fn load(map: &WeightMap, prefix: &str, channels: usize, kernel: usize, dilations: &[usize], taps: &[f32]) -> Result<Self> {
+    fn load(
+        map: &WeightMap,
+        prefix: &str,
+        channels: usize,
+        kernel: usize,
+        dilations: &[usize],
+        taps: &[f32],
+    ) -> Result<Self> {
         let stages = dilations
             .iter()
             .enumerate()
             .map(|(d, &dilation)| {
                 Ok((
                     AliasFreeSnake::load(map, &format!("{prefix}.acts1.{d}"), channels, taps)?,
-                    Conv1d::load(map, &format!("{prefix}.convs1.{d}"), channels, channels, kernel, dilation)?,
+                    Conv1d::load(
+                        map,
+                        &format!("{prefix}.convs1.{d}"),
+                        channels,
+                        channels,
+                        kernel,
+                        dilation,
+                    )?,
                     AliasFreeSnake::load(map, &format!("{prefix}.acts2.{d}"), channels, taps)?,
-                    Conv1d::load(map, &format!("{prefix}.convs2.{d}"), channels, channels, kernel, 1)?,
+                    Conv1d::load(
+                        map,
+                        &format!("{prefix}.convs2.{d}"),
+                        channels,
+                        channels,
+                        kernel,
+                        1,
+                    )?,
                 ))
             })
             .collect::<Result<Vec<_>>>()?;
@@ -258,8 +334,22 @@ impl AmpBlock {
     fn forward(&self, x: &CudaTensor) -> Result<CudaTensor> {
         let mut x = x.clone();
         for (act1, conv1, act2, conv2) in &self.stages {
-            let r = act1.forward(&x)?.conv1d(&conv1.weight, Some(&conv1.bias), conv1.padding, 1, conv1.dilation, 1)?;
-            let r = act2.forward(&r)?.conv1d(&conv2.weight, Some(&conv2.bias), conv2.padding, 1, conv2.dilation, 1)?;
+            let r = act1.forward(&x)?.conv1d(
+                &conv1.weight,
+                Some(&conv1.bias),
+                conv1.padding,
+                1,
+                conv1.dilation,
+                1,
+            )?;
+            let r = act2.forward(&r)?.conv1d(
+                &conv2.weight,
+                Some(&conv2.bias),
+                conv2.padding,
+                1,
+                conv2.dilation,
+                1,
+            )?;
             x = x.add(&r)?;
         }
         Ok(x)
@@ -355,17 +445,25 @@ impl HiFiGan {
         let per_stage = geom.resnet_kernel_sizes.len();
         let mut stages = Vec::with_capacity(geom.upsample_factors.len());
         let mut cin = geom.hidden_channels;
-        for (i, (&stride, &kernel)) in geom.upsample_factors.iter().zip(&geom.upsample_kernel_sizes).enumerate() {
+        for (i, (&stride, &kernel)) in geom
+            .upsample_factors
+            .iter()
+            .zip(&geom.upsample_kernel_sizes)
+            .enumerate()
+        {
             let cout = geom.stage_channels(i);
             if kernel < stride || cout == 0 || cout * 2 != cin {
-                return Err(msg(format!("{root}stage {i}: kernel {kernel}, stride {stride}, {cin} -> {cout} channels")));
+                return Err(msg(format!(
+                    "{root}stage {i}: kernel {kernel}, stride {stride}, {cin} -> {cout} channels"
+                )));
             }
             let prefix = format!("{root}upsamplers.{i}");
             let bias_key = format!("{prefix}.bias");
             let has_weight = map.has_tensor(&format!("{prefix}.weight"))
                 || map.has_tensor(&format!("{prefix}.weight_g"))
                 || map.has_tensor(&format!("{prefix}.parametrizations.weight.original0"));
-            let mut bias = if map.has_tensor(&bias_key) || (!has_weight && map.contains(&bias_key)) {
+            let mut bias = if map.has_tensor(&bias_key) || (!has_weight && map.contains(&bias_key))
+            {
                 cuda_tensor_shaped(map, &bias_key, &[cout])?
             } else {
                 CudaTensor::zeros(&[cout])
@@ -383,7 +481,16 @@ impl HiFiGan {
                     .iter()
                     .zip(&geom.resnet_dilations)
                     .enumerate()
-                    .map(|(j, (&k, dilations))| AmpBlock::load(map, &format!("{root}resnets.{}", i * per_stage + j), cout, k, dilations, taps))
+                    .map(|(j, (&k, dilations))| {
+                        AmpBlock::load(
+                            map,
+                            &format!("{root}resnets.{}", i * per_stage + j),
+                            cout,
+                            k,
+                            dilations,
+                            taps,
+                        )
+                    })
                     .collect::<Result<Vec<_>>>()?;
                 StageResnets::Amp(amps)
             } else {
@@ -399,8 +506,22 @@ impl HiFiGan {
                             .enumerate()
                             .map(|(n, &d)| {
                                 Ok((
-                                    Conv1d::load(map, &format!("{p}.convs1.{n}"), cout, cout, k, d)?,
-                                    Conv1d::load(map, &format!("{p}.convs2.{n}"), cout, cout, k, 1)?,
+                                    Conv1d::load(
+                                        map,
+                                        &format!("{p}.convs1.{n}"),
+                                        cout,
+                                        cout,
+                                        k,
+                                        d,
+                                    )?,
+                                    Conv1d::load(
+                                        map,
+                                        &format!("{p}.convs2.{n}"),
+                                        cout,
+                                        cout,
+                                        k,
+                                        1,
+                                    )?,
                                 ))
                             })
                             .collect::<Result<Vec<_>>>()?;
@@ -412,12 +533,29 @@ impl HiFiGan {
             stages.push((up, blocks));
             cin = cout;
         }
-        let act_out = taps.as_deref().map(|t| AliasFreeSnake::load(map, &format!("{root}act_out"), cin, t)).transpose()?;
+        let act_out = taps
+            .as_deref()
+            .map(|t| AliasFreeSnake::load(map, &format!("{root}act_out"), cin, t))
+            .transpose()?;
         Ok(Self {
-            conv_in: Conv1d::load(map, &format!("{root}conv_in"), geom.in_channels, geom.hidden_channels, 7, 1)?,
+            conv_in: Conv1d::load(
+                map,
+                &format!("{root}conv_in"),
+                geom.in_channels,
+                geom.hidden_channels,
+                7,
+                1,
+            )?,
             stages,
             act_out,
-            conv_out: Conv1d::load(map, &format!("{root}conv_out"), cin, geom.out_channels, 7, 1)?,
+            conv_out: Conv1d::load(
+                map,
+                &format!("{root}conv_out"),
+                cin,
+                geom.out_channels,
+                7,
+                1,
+            )?,
             geom,
         })
     }
@@ -425,23 +563,45 @@ impl HiFiGan {
     /// Mel `[B, C, T, M]` → waveform `[B, out, L]`.
     fn forward(&self, mel: &CudaTensor) -> Result<CudaTensor> {
         let [b, c, t, m] = mel.shape[..] else {
-            return Err(msg(format!("HiFi-GAN expects mel [B, C, T, M], got {:?}", mel.shape)));
+            return Err(msg(format!(
+                "HiFi-GAN expects mel [B, C, T, M], got {:?}",
+                mel.shape
+            )));
         };
         if c * m != self.geom.in_channels || t == 0 {
-            return Err(msg(format!("HiFi-GAN expects {} mel channels, got {c} x {m} in {:?}", self.geom.in_channels, mel.shape)));
+            return Err(msg(format!(
+                "HiFi-GAN expects {} mel channels, got {c} x {m} in {:?}",
+                self.geom.in_channels, mel.shape
+            )));
         }
         let slope = self.geom.leaky_relu_negative_slope as f32;
         let snake = self.act_out.is_some();
-        let mut x = self.conv_in.forward(&mel.permute(&[0, 1, 3, 2])?.reshape(vec![b, c * m, t])?)?;
+        let mut x = self
+            .conv_in
+            .forward(&mel.permute(&[0, 1, 3, 2])?.reshape(vec![b, c * m, t])?)?;
         for (up, blocks) in &self.stages {
             x = if snake {
                 x.conv_transpose1d(&up.weight, Some(&up.bias), up.padding, up.stride, 1, 1, 0)?
             } else {
-                x.leaky_relu(slope).conv_transpose1d(&up.weight, Some(&up.bias), up.padding, up.stride, 1, 1, 0)?
+                x.leaky_relu(slope).conv_transpose1d(
+                    &up.weight,
+                    Some(&up.bias),
+                    up.padding,
+                    up.stride,
+                    1,
+                    1,
+                    0,
+                )?
             };
             let outs = match blocks {
-                StageResnets::Leaky(rs) => rs.iter().map(|r| r.forward(&x, slope)).collect::<Result<Vec<_>>>()?,
-                StageResnets::Amp(amps) => amps.iter().map(|r| r.forward(&x)).collect::<Result<Vec<_>>>()?,
+                StageResnets::Leaky(rs) => rs
+                    .iter()
+                    .map(|r| r.forward(&x, slope))
+                    .collect::<Result<Vec<_>>>()?,
+                StageResnets::Amp(amps) => amps
+                    .iter()
+                    .map(|r| r.forward(&x))
+                    .collect::<Result<Vec<_>>>()?,
             };
             let share = 1.0 / outs.len() as f32;
             x = CudaTensor::lincomb(&outs.iter().map(|o| (share, o)).collect::<Vec<_>>())?;
@@ -449,7 +609,8 @@ impl HiFiGan {
         let x = if let Some(act) = &self.act_out {
             self.conv_out.forward(&act.forward(&x)?)?
         } else {
-            self.conv_out.forward(&x.leaky_relu(self.geom.final_leaky_relu_negative_slope as f32))?
+            self.conv_out
+                .forward(&x.leaky_relu(self.geom.final_leaky_relu_negative_slope as f32))?
         };
         if self.geom.final_tanh {
             tanh(&x)
@@ -474,12 +635,20 @@ impl MelStft {
         let n_freqs = bwe.n_freqs();
         Ok(Self {
             forward_basis: {
-                let mut t = cuda_tensor_shaped(map, "mel_stft.stft_fn.forward_basis", &[n_freqs * 2, 1, bwe.filter_length])?;
+                let mut t = cuda_tensor_shaped(
+                    map,
+                    "mel_stft.stft_fn.forward_basis",
+                    &[n_freqs * 2, 1, bwe.filter_length],
+                )?;
                 t.pin_device()?;
                 t
             },
             mel_basis: {
-                let mut t = cuda_tensor_shaped(map, "mel_stft.mel_basis", &[bwe.num_mel_channels, n_freqs])?;
+                let mut t = cuda_tensor_shaped(
+                    map,
+                    "mel_stft.mel_basis",
+                    &[bwe.num_mel_channels, n_freqs],
+                )?;
                 t.pin_device()?;
                 t
             },
@@ -497,7 +666,9 @@ impl MelStft {
             _ => return Err(msg(format!("MelSTFT expects [N, L], got {:?}", wave.shape))),
         };
         let left = self.window_length.saturating_sub(self.hop_length);
-        let x = wave.reshape(vec![n, 1, l])?.pad(2, left, 0, PadMode::Zeros)?;
+        let x = wave
+            .reshape(vec![n, 1, l])?
+            .pad(2, left, 0, PadMode::Zeros)?;
         let spec = x.conv1d(&self.forward_basis, None, 0, self.hop_length, 1, 1)?;
         // Magnitude + mel projection on host: `matmul` refuses the unbatched
         // `[M, F] @ [N, F, T]` broadcast on CUDA builds (no device path).
@@ -535,13 +706,24 @@ struct HannResampler {
 impl HannResampler {
     fn new(ratio: usize) -> Self {
         let (taps, _k, pad, pad_left, pad_right) = hann_sinc_kernel(ratio);
-        Self { taps, ratio, pad, pad_left, pad_right }
+        Self {
+            taps,
+            ratio,
+            pad,
+            pad_left,
+            pad_right,
+        }
     }
 
     fn forward(&self, x: &CudaTensor) -> Result<CudaTensor> {
         let [b, c, l] = match x.shape[..] {
             [b, c, l] => [b, c, l],
-            _ => return Err(msg(format!("Hann resampler expects [B, C, L], got {:?}", x.shape))),
+            _ => {
+                return Err(msg(format!(
+                    "Hann resampler expects [B, C, L], got {:?}",
+                    x.shape
+                )))
+            }
         };
         let filter = depthwise_filter(&self.taps, c)?;
         let up = x
@@ -550,7 +732,10 @@ impl HannResampler {
             .try_mul_scalar(self.ratio as f32)?;
         let crop = up.shape[2].saturating_sub(self.pad_left + self.pad_right);
         if crop == 0 {
-            return Err(msg(format!("Hann resampler crop empty from len {} (in {l})", up.shape[2])));
+            return Err(msg(format!(
+                "Hann resampler crop empty from len {} (in {l})",
+                up.shape[2]
+            )));
         }
         let out = up.narrow(2, self.pad_left, crop)?;
         if out.shape != [b, c, l * self.ratio] && out.shape[2] < l * self.ratio {
@@ -595,7 +780,9 @@ impl BwePath {
         let flat = x_pad.reshape(vec![b * c, x_pad.shape[2]])?;
         let mel = self.mel_stft.forward_flat(&flat)?; // [B·C, M, frames]
         let frames = mel.shape[2];
-        let mel = mel.reshape(vec![b, c, self.mel_stft.num_mel, frames])?.permute(&[0, 1, 3, 2])?;
+        let mel = mel
+            .reshape(vec![b, c, self.mel_stft.num_mel, frames])?
+            .permute(&[0, 1, 3, 2])?;
         let residual = self.generator.forward(&mel)?;
         let skip = self.resampler.forward(x)?;
         // Align lengths then residual-add + clamp.
@@ -624,7 +811,9 @@ fn should_load_bwe(map: &WeightMap, cfg: &Ltx2VocoderConfig) -> bool {
         return true;
     }
     // WeightMap::generated: invent BWE so host tests exercise the path.
-    map.contains("mel_stft.mel_basis") && !map.has_tensor("conv_in.weight") && !map.has_tensor("vocoder.conv_in.weight")
+    map.contains("mel_stft.mel_basis")
+        && !map.has_tensor("conv_in.weight")
+        && !map.has_tensor("vocoder.conv_in.weight")
 }
 
 pub struct Vocoder {
@@ -640,7 +829,9 @@ impl Vocoder {
         let root = if map.has_tensor("vocoder.conv_in.weight")
             || map.has_tensor("vocoder.conv_in.weight_g")
             || map.has_tensor("vocoder.parametrizations.weight.original0")
-            || (cfg.with_bwe && map.contains("vocoder.conv_in.weight") && !map.has_tensor("conv_in.weight"))
+            || (cfg.with_bwe
+                && map.contains("vocoder.conv_in.weight")
+                && !map.has_tensor("conv_in.weight"))
         {
             "vocoder."
         } else {
@@ -665,12 +856,19 @@ impl Vocoder {
         }
         let main = HiFiGan::load(map, root, StackGeom::from_main(cfg), cfg.with_bwe)?;
         let bwe = if load_bwe {
-            let bwe_cfg = cfg.bwe.as_ref().ok_or_else(|| msg("with_bwe but missing Ltx2BweConfig"))?;
+            let bwe_cfg = cfg
+                .bwe
+                .as_ref()
+                .ok_or_else(|| msg("with_bwe but missing Ltx2BweConfig"))?;
             Some(BwePath::load(map, cfg, bwe_cfg)?)
         } else {
             None
         };
-        Ok(Self { cfg: cfg.clone(), main, bwe })
+        Ok(Self {
+            cfg: cfg.clone(),
+            main,
+            bwe,
+        })
     }
 
     /// Mel `[B, 2, T, 64]` → waveform `[B, 2, factor·T]` in `[-1, 1]` at
@@ -722,7 +920,11 @@ mod tests {
                 v[o * x.l + t] = acc;
             }
         }
-        Sig { c: b.len(), l: x.l, v }
+        Sig {
+            c: b.len(),
+            l: x.l,
+            v,
+        }
     }
 
     /// Scatter form of `ConvTranspose1d`, weight `[in, out, k]`.
@@ -745,7 +947,13 @@ mod tests {
     }
 
     fn leaky(x: &Sig, slope: f32) -> Sig {
-        Sig { v: x.v.iter().map(|&a| if a >= 0.0 { a } else { a * slope }).collect(), ..x.clone() }
+        Sig {
+            v: x.v
+                .iter()
+                .map(|&a| if a >= 0.0 { a } else { a * slope })
+                .collect(),
+            ..x.clone()
+        }
     }
 
     fn tiny() -> Ltx2VocoderConfig {
@@ -762,18 +970,30 @@ mod tests {
     fn vocoder_matches_a_loop_reference() {
         // The five-stage shape is fixed by the config arrays; halving 8 channels
         // five times does not work, so check the geometry error first…
-        assert!(Vocoder::load(&weights(), &tiny()).is_err(), "8 → 4 → 2 → 1 → 0 channels must be refused");
+        assert!(
+            Vocoder::load(&weights(), &tiny()).is_err(),
+            "8 → 4 → 2 → 1 → 0 channels must be refused"
+        );
         // …and run the reference on a config that does: 64 hidden channels.
-        let cfg = Ltx2VocoderConfig { hidden_channels: 64, ..tiny() };
+        let cfg = Ltx2VocoderConfig {
+            hidden_channels: 64,
+            ..tiny()
+        };
         let map = weights();
         let voc = Vocoder::load(&map, &cfg).unwrap();
         let (t, m) = (3usize, 3usize);
         let mel: Vec<f32> = (0..2 * t * m).map(|i| (i as f32 * 0.61).sin()).collect();
-        let got = voc.forward(&CudaTensor::from_vec(mel.clone(), vec![1, 2, t, m]).unwrap()).unwrap();
+        let got = voc
+            .forward(&CudaTensor::from_vec(mel.clone(), vec![1, 2, t, m]).unwrap())
+            .unwrap();
         assert_eq!(got.shape, vec![1, 2, t * 3 * 2 * 2 * 2 * 2]);
 
         // Channel = stereo · M + bin, time last.
-        let mut x = Sig { c: 2 * m, l: t, v: vec![0.0; 2 * m * t] };
+        let mut x = Sig {
+            c: 2 * m,
+            l: t,
+            v: vec![0.0; 2 * m * t],
+        };
         for s in 0..2 {
             for ti in 0..t {
                 for bin in 0..m {
@@ -781,13 +1001,26 @@ mod tests {
                 }
             }
         }
-        let load = |p: &str, o: usize, i: usize, k: usize| (get(&map, &format!("{p}.weight"), &[o, i, k]), get(&map, &format!("{p}.bias"), &[o]));
+        let load = |p: &str, o: usize, i: usize, k: usize| {
+            (
+                get(&map, &format!("{p}.weight"), &[o, i, k]),
+                get(&map, &format!("{p}.bias"), &[o]),
+            )
+        };
         let (w, b) = load("conv_in", 64, 6, 7);
         let mut x = conv1d(&x, &w, &b, 7, 1);
         let mut cin = 64;
-        for (i, (&s, &k)) in cfg.upsample_factors.iter().zip(&cfg.upsample_kernel_sizes).enumerate() {
+        for (i, (&s, &k)) in cfg
+            .upsample_factors
+            .iter()
+            .zip(&cfg.upsample_kernel_sizes)
+            .enumerate()
+        {
             let cout = cin / 2;
-            let (w, b) = (get(&map, &format!("upsamplers.{i}.weight"), &[cin, cout, k]), get(&map, &format!("upsamplers.{i}.bias"), &[cout]));
+            let (w, b) = (
+                get(&map, &format!("upsamplers.{i}.weight"), &[cin, cout, k]),
+                get(&map, &format!("upsamplers.{i}.bias"), &[cout]),
+            );
             x = conv_transpose1d(&leaky(&x, 0.1), &w, &b, k, s, (k - s) / 2);
             let mut mean = vec![0f32; x.v.len()];
             for j in 0..3 {
@@ -812,7 +1045,11 @@ mod tests {
             cin = cout;
         }
         let (w, b) = load("conv_out", 2, cin, 7);
-        let want: Vec<f32> = conv1d(&leaky(&x, 0.01), &w, &b, 7, 1).v.iter().map(|v| v.tanh()).collect();
+        let want: Vec<f32> = conv1d(&leaky(&x, 0.01), &w, &b, 7, 1)
+            .v
+            .iter()
+            .map(|v| v.tanh())
+            .collect();
         let got = got.host_cow().unwrap();
         assert_eq!(got.len(), want.len());
         for (i, (a, b)) in got.iter().zip(&want).enumerate() {
@@ -827,7 +1064,11 @@ mod tests {
         let cfg = Ltx2VocoderConfig::ltx2_19b();
         assert_eq!(cfg.waveform_samples(501), 120_240);
         for i in 0..5 {
-            assert_eq!(cfg.upsample_kernel_sizes[i] - 2 * cfg.upsample_padding(i), cfg.upsample_factors[i], "stage {i}");
+            assert_eq!(
+                cfg.upsample_kernel_sizes[i] - 2 * cfg.upsample_padding(i),
+                cfg.upsample_factors[i],
+                "stage {i}"
+            );
         }
     }
 
@@ -856,12 +1097,23 @@ mod tests {
         assert_eq!(wave.shape[0], 1);
         assert_eq!(wave.shape[1], 2);
         assert_eq!(wave.shape[2], cfg.waveform_samples(2));
-        assert!(wave.host_cow().unwrap().iter().all(|v| v.is_finite() && *v >= -1.0 && *v <= 1.0));
+        assert!(wave
+            .host_cow()
+            .unwrap()
+            .iter()
+            .all(|v| v.is_finite() && *v >= -1.0 && *v <= 1.0));
     }
 
     #[test]
     fn a_mel_with_the_wrong_channel_count_is_refused() {
-        let voc = Vocoder::load(&weights(), &Ltx2VocoderConfig { hidden_channels: 64, ..tiny() }).unwrap();
+        let voc = Vocoder::load(
+            &weights(),
+            &Ltx2VocoderConfig {
+                hidden_channels: 64,
+                ..tiny()
+            },
+        )
+        .unwrap();
         assert!(voc.forward(&CudaTensor::zeros(&[1, 2, 4, 5])).is_err());
     }
 }

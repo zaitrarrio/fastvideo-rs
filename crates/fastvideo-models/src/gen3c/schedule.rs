@@ -35,10 +35,7 @@ impl Gen3CSchedule {
             *last = sigma_min;
         }
         sigmas.push(sigma_min);
-        let timesteps: Vec<f64> = sigmas[..n]
-            .iter()
-            .map(|s| s / (s + 1.0) * 1000.0)
-            .collect();
+        let timesteps: Vec<f64> = sigmas[..n].iter().map(|s| s / (s + 1.0) * 1000.0).collect();
         Self {
             sigmas,
             timesteps,

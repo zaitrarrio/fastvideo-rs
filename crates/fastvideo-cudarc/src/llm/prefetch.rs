@@ -25,7 +25,9 @@
 //!
 //! `FASTVIDEO_LLM_PREFETCH=0` turns it off.
 
-use super::{linear_specs, max_layer_linear_elems, norm_from, norm_specs, DecoderConfig, Layer, LayerSource};
+use super::{
+    linear_specs, max_layer_linear_elems, norm_from, norm_specs, DecoderConfig, Layer, LayerSource,
+};
 use crate::wan::nn::Linear;
 use crate::wan::stats;
 use crate::wan::tensor::{CudaTensor, Result, TensorError};
@@ -42,7 +44,8 @@ fn msg(s: impl Into<String>) -> TensorError {
 }
 
 fn enabled() -> bool {
-    std::env::var("FASTVIDEO_LLM_PREFETCH").map_or(true, |v| v != "0") && crate::wan::nn::bf16_linears_active()
+    std::env::var("FASTVIDEO_LLM_PREFETCH").map_or(true, |v| v != "0")
+        && crate::wan::nn::bf16_linears_active()
 }
 
 /// One layer, uploaded and complete on the device.
@@ -81,7 +84,12 @@ impl<'a> Stage<'a> {
             Ok((copy, pinned))
         });
         match made {
-            Ok((copy, pinned)) => Some(Self { lazy, copy, compute: dev.stream.clone(), pinned }),
+            Ok((copy, pinned)) => Some(Self {
+                lazy,
+                copy,
+                compute: dev.stream.clone(),
+                pinned,
+            }),
             Err(e) => {
                 crate::wan::log::info(format_args!(
                     "llm prefetch off: {e} ({} MiB of pinned memory asked for)",
@@ -100,14 +108,28 @@ impl<'a> Stage<'a> {
         last: usize,
         f: impl FnOnce(&mut Prefetched<'_>) -> Result<R>,
     ) -> Result<R> {
-        let Stage { lazy, copy, compute, pinned } = self;
+        let Stage {
+            lazy,
+            copy,
+            compute,
+            pinned,
+        } = self;
         std::thread::scope(|scope| {
             // One layer waits in the channel while the worker stages the next.
             let (tx, rx) = sync_channel::<Result<StagedLayer>>(1);
             let worker_copy = copy.clone();
             scope.spawn(move || worker(lazy, cfg, last, &worker_copy, pinned, &tx));
-            let mut source =
-                Prefetched { map, cfg, rx, copy, compute, next: 0, starved: Duration::ZERO, fill: Duration::ZERO, upload: Duration::ZERO };
+            let mut source = Prefetched {
+                map,
+                cfg,
+                rx,
+                copy,
+                compute,
+                next: 0,
+                starved: Duration::ZERO,
+                fill: Duration::ZERO,
+                upload: Duration::ZERO,
+            };
             let out = f(&mut source);
             if out.is_ok() {
                 source.report();
@@ -158,9 +180,14 @@ fn stage_layer(
             continue;
         }
         let key = format!("{p}.{name}.weight");
-        let shape = lazy.shape(&key).ok_or_else(|| msg(format!("key {key}: not in the checkpoint")))?;
+        let shape = lazy
+            .shape(&key)
+            .ok_or_else(|| msg(format!("key {key}: not in the checkpoint")))?;
         if shape != [o, i] {
-            return Err(msg(format!("key {key}: shape {shape:?} != expected {:?}", [o, i])));
+            return Err(msg(format!(
+                "key {key}: shape {shape:?} != expected {:?}",
+                [o, i]
+            )));
         }
         let region = &mut host[at..at + i * o];
         at += i * o;
@@ -181,14 +208,23 @@ fn stage_layer(
         let key = format!("{p}.{name}.weight");
         let (shape, values) = lazy.to_f32(&key).map_err(|e| msg(e.to_string()))?;
         if shape != [width] {
-            return Err(msg(format!("key {key}: shape {shape:?} != expected {:?}", [width])));
+            return Err(msg(format!(
+                "key {key}: shape {shape:?} != expected {:?}",
+                [width]
+            )));
         }
         norms.push(values);
     }
     fill += t.elapsed();
     let t = Instant::now();
     copy.synchronize().map_err(err)?;
-    Ok(StagedLayer { index, linears, norms, fill, copy: t.elapsed() })
+    Ok(StagedLayer {
+        index,
+        linears,
+        norms,
+        fill,
+        copy: t.elapsed(),
+    })
 }
 
 pub(super) struct Prefetched<'a> {
@@ -219,13 +255,22 @@ impl Prefetched<'_> {
 impl LayerSource for Prefetched<'_> {
     fn with_layer<R>(&mut self, index: usize, f: impl FnOnce(&Layer) -> Result<R>) -> Result<R> {
         if index != self.next {
-            return Err(msg(format!("llm prefetch: layer {index} asked for, {} staged", self.next)));
+            return Err(msg(format!(
+                "llm prefetch: layer {index} asked for, {} staged",
+                self.next
+            )));
         }
         let t = Instant::now();
-        let staged = self.rx.recv().map_err(|_| msg("llm prefetch: the staging thread stopped"))??;
+        let staged = self
+            .rx
+            .recv()
+            .map_err(|_| msg("llm prefetch: the staging thread stopped"))??;
         self.starved += t.elapsed();
         if staged.index != index {
-            return Err(msg(format!("llm prefetch: got layer {}, wanted {index}", staged.index)));
+            return Err(msg(format!(
+                "llm prefetch: got layer {}, wanted {index}",
+                staged.index
+            )));
         }
         self.next += 1;
         self.fill += staged.fill;
@@ -233,13 +278,18 @@ impl LayerSource for Prefetched<'_> {
 
         let cfg = self.cfg;
         let mut linears = staged.linears.into_iter();
-        let mut norms: Vec<(&str, Option<Vec<f32>>)> =
-            norm_specs(cfg, index).into_iter().map(|(n, _)| n).zip(staged.norms.into_iter().map(Some)).collect();
+        let mut norms: Vec<(&str, Option<Vec<f32>>)> = norm_specs(cfg, index)
+            .into_iter()
+            .map(|(n, _)| n)
+            .zip(staged.norms.into_iter().map(Some))
+            .collect();
         let layer = Layer::assemble(
             cfg,
             index,
             &mut |name, i, o| {
-                let w = linears.next().ok_or_else(|| msg(format!("llm prefetch: no weight staged for {name}")))?;
+                let w = linears
+                    .next()
+                    .ok_or_else(|| msg(format!("llm prefetch: no weight staged for {name}")))?;
                 Linear::from_device_bf16(w, i, o)
             },
             // `assemble` asks for norms in its own order; serve them by name.
@@ -256,7 +306,10 @@ impl LayerSource for Prefetched<'_> {
             let out = f(&layer);
             // The layer's memory belongs to the copy stream. Hold its free back
             // until the kernels queued above have run.
-            let done = self.compute.record_event(None).and_then(|e| self.copy.wait(&e));
+            let done = self
+                .compute
+                .record_event(None)
+                .and_then(|e| self.copy.wait(&e));
             drop(layer);
             done.map_err(|e| msg(format!("llm prefetch, layer {index}: {e}")))?;
             out
@@ -265,6 +318,11 @@ impl LayerSource for Prefetched<'_> {
     }
 
     fn final_norm(&mut self) -> Result<CudaTensor> {
-        super::norm_weight(self.map, &self.cfg.final_norm_key, self.cfg.hidden, self.cfg.norm_offset)
+        super::norm_weight(
+            self.map,
+            &self.cfg.final_norm_key,
+            self.cfg.hidden,
+            self.cfg.norm_offset,
+        )
     }
 }

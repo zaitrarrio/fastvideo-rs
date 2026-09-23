@@ -219,8 +219,13 @@ pub fn create_camera_trajectory(
     let motion = resolve_action(action);
     let mut position = [0f32; 3];
     let mut rotation = [0f32; 3];
-    let (positions, rotations) =
-        generate_motion_segment(&mut position, &mut rotation, motion, action_speed, num_frames);
+    let (positions, rotations) = generate_motion_segment(
+        &mut position,
+        &mut rotation,
+        motion,
+        action_speed,
+        num_frames,
+    );
 
     // Intrinsics from GameCraft pose format.
     let (fx0, fy0, cx0, cy0) = (0.50505f32, 0.8979f32, 0.5f32, 0.5f32);
@@ -245,7 +250,11 @@ pub fn create_camera_trajectory(
     let mut abs_w2c: Vec<[[f32; 4]; 4]> = Vec::with_capacity(num_frames);
     // Identity first
     abs_w2c.push(target);
-    for (pos, rot) in positions.iter().zip(rotations.iter()).take(num_frames.saturating_sub(1)) {
+    for (pos, rot) in positions
+        .iter()
+        .zip(rotations.iter())
+        .take(num_frames.saturating_sub(1))
+    {
         let r = quat_to_rot(euler_to_quat(rot[0], rot[1], rot[2]));
         abs_w2c.push([
             [r[0][0], r[0][1], r[0][2], pos[0]],

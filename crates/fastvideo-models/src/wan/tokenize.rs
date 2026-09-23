@@ -1,6 +1,10 @@
 //! Host-side UMT5 prompt tokenization (tokenizers crate; no tensor backend).
 
-pub fn tokenize_prompt(path: &str, text: &str, max_len: usize) -> Result<(Vec<u32>, usize), String> {
+pub fn tokenize_prompt(
+    path: &str,
+    text: &str,
+    max_len: usize,
+) -> Result<(Vec<u32>, usize), String> {
     let tokenizer = tokenizers::Tokenizer::from_file(path)
         .map_err(|e| format!("tokenizer load failed: {e}"))?;
     let encoding = tokenizer

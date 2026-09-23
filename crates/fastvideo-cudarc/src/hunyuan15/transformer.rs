@@ -85,10 +85,30 @@ impl DoubleBlock {
             img_mlp_fc2: Linear::load(map, &key("img_mlp.fc_out"), mlp, h, true)?,
             txt_mlp_fc1: Linear::load(map, &key("txt_mlp.fc_in"), h, mlp, true)?,
             txt_mlp_fc2: Linear::load(map, &key("txt_mlp.fc_out"), mlp, h, true)?,
-            img_q_norm: qk_norm_weight(map, &key("img_attn_q_norm.weight"), cfg.num_attention_heads, cfg.attention_head_dim)?,
-            img_k_norm: qk_norm_weight(map, &key("img_attn_k_norm.weight"), cfg.num_attention_heads, cfg.attention_head_dim)?,
-            txt_q_norm: qk_norm_weight(map, &key("txt_attn_q_norm.weight"), cfg.num_attention_heads, cfg.attention_head_dim)?,
-            txt_k_norm: qk_norm_weight(map, &key("txt_attn_k_norm.weight"), cfg.num_attention_heads, cfg.attention_head_dim)?,
+            img_q_norm: qk_norm_weight(
+                map,
+                &key("img_attn_q_norm.weight"),
+                cfg.num_attention_heads,
+                cfg.attention_head_dim,
+            )?,
+            img_k_norm: qk_norm_weight(
+                map,
+                &key("img_attn_k_norm.weight"),
+                cfg.num_attention_heads,
+                cfg.attention_head_dim,
+            )?,
+            txt_q_norm: qk_norm_weight(
+                map,
+                &key("txt_attn_q_norm.weight"),
+                cfg.num_attention_heads,
+                cfg.attention_head_dim,
+            )?,
+            txt_k_norm: qk_norm_weight(
+                map,
+                &key("txt_attn_k_norm.weight"),
+                cfg.num_attention_heads,
+                cfg.attention_head_dim,
+            )?,
             heads: cfg.num_attention_heads,
             dim_head: cfg.attention_head_dim,
             eps: cfg.rms_eps,
@@ -133,10 +153,20 @@ impl DoubleBlock {
         let parts_i = mods_i.chunk(6, mods_i.rank() - 1)?;
         let parts_t = mods_t.chunk(6, mods_t.rank() - 1)?;
         let (i_sh, i_sc, i_gate, i_msh, i_msc, i_mgate) = (
-            &parts_i[0], &parts_i[1], &parts_i[2], &parts_i[3], &parts_i[4], &parts_i[5],
+            &parts_i[0],
+            &parts_i[1],
+            &parts_i[2],
+            &parts_i[3],
+            &parts_i[4],
+            &parts_i[5],
         );
         let (t_sh, t_sc, t_gate, t_msh, t_msc, t_mgate) = (
-            &parts_t[0], &parts_t[1], &parts_t[2], &parts_t[3], &parts_t[4], &parts_t[5],
+            &parts_t[0],
+            &parts_t[1],
+            &parts_t[2],
+            &parts_t[3],
+            &parts_t[4],
+            &parts_t[5],
         );
 
         let img_n = scale_shift(&img.layer_norm(1e-6, None, None)?, i_sc, i_sh)?;
@@ -153,7 +183,8 @@ impl DoubleBlock {
             rope.map(|(c, s)| Rope { cos: c, sin: s }),
             self.eps,
         )?;
-        let iv = iqkv.split_heads_bhsd(2 * self.heads * self.dim_head, self.heads, self.dim_head)?;
+        let iv =
+            iqkv.split_heads_bhsd(2 * self.heads * self.dim_head, self.heads, self.dim_head)?;
         let tq = tqkv.qk_norm_rope_bhsd(0, self.heads, &self.txt_q_norm, None, self.eps)?;
         let tk = tqkv.qk_norm_rope_bhsd(
             self.heads * self.dim_head,
@@ -162,7 +193,8 @@ impl DoubleBlock {
             None,
             self.eps,
         )?;
-        let tv = tqkv.split_heads_bhsd(2 * self.heads * self.dim_head, self.heads, self.dim_head)?;
+        let tv =
+            tqkv.split_heads_bhsd(2 * self.heads * self.dim_head, self.heads, self.dim_head)?;
 
         let q = CudaTensor::cat(&[&iq, &tq], 2)?;
         let k = CudaTensor::cat(&[&ik, &tk], 2)?;
@@ -180,12 +212,16 @@ impl DoubleBlock {
         let txt_m = scale_shift(&txt.layer_norm(1e-6, None, None)?, t_msc, t_msh)?;
         let img = gated(
             &img,
-            &self.img_mlp_fc2.forward(&self.img_mlp_fc1.forward(&img_m)?.gelu_tanh())?,
+            &self
+                .img_mlp_fc2
+                .forward(&self.img_mlp_fc1.forward(&img_m)?.gelu_tanh())?,
             i_mgate,
         )?;
         let txt = gated(
             &txt,
-            &self.txt_mlp_fc2.forward(&self.txt_mlp_fc1.forward(&txt_m)?.gelu_tanh())?,
+            &self
+                .txt_mlp_fc2
+                .forward(&self.txt_mlp_fc1.forward(&txt_m)?.gelu_tanh())?,
             t_mgate,
         )?;
         Ok((img, txt))
@@ -233,14 +269,51 @@ impl Hunyuan15Transformer {
             .collect::<Result<Vec<_>>>()?;
         Ok(Self {
             img_in: Linear::load(map, &key("img_in.proj"), cfg.in_channels, h, true)?,
-            time_in: Linear::load(map, &key("time_in.timestep_embedder.mlp.fc_in"), 256, h, true)?,
-            time_in_2: Linear::load(map, &key("time_in.timestep_embedder.mlp.fc_out"), h, h, true)?,
-            txt_proj: Linear::load(map, &key("txt_in.input_embedder"), cfg.text_embed_dim, h, true)?,
-            txt2_proj: Linear::load(map, &key("txt_in_2.linear_3"), cfg.text_embed_2_dim, h, true).or_else(|_| {
-                Linear::load(map, &key("txt_in_2.linear_1"), cfg.text_embed_2_dim, h, true)
+            time_in: Linear::load(
+                map,
+                &key("time_in.timestep_embedder.mlp.fc_in"),
+                256,
+                h,
+                true,
+            )?,
+            time_in_2: Linear::load(
+                map,
+                &key("time_in.timestep_embedder.mlp.fc_out"),
+                h,
+                h,
+                true,
+            )?,
+            txt_proj: Linear::load(
+                map,
+                &key("txt_in.input_embedder"),
+                cfg.text_embed_dim,
+                h,
+                true,
+            )?,
+            txt2_proj: Linear::load(
+                map,
+                &key("txt_in_2.linear_3"),
+                cfg.text_embed_2_dim,
+                h,
+                true,
+            )
+            .or_else(|_| {
+                Linear::load(
+                    map,
+                    &key("txt_in_2.linear_1"),
+                    cfg.text_embed_2_dim,
+                    h,
+                    true,
+                )
             })?,
             blocks,
-            final_mod: Linear::load(map, &key("final_layer.adaLN_modulation.linear"), h, 2 * h, true)?,
+            final_mod: Linear::load(
+                map,
+                &key("final_layer.adaLN_modulation.linear"),
+                h,
+                2 * h,
+                true,
+            )?,
             final_linear: Linear::load(map, &key("final_layer.linear"), h, cfg.out_channels, true)?,
             cfg,
         })
@@ -260,7 +333,12 @@ impl Hunyuan15Transformer {
     ) -> Result<CudaTensor> {
         let [b, c, t, h, w] = match latents.shape[..] {
             [b, c, t, h, w] => [b, c, t, h, w],
-            _ => return Err(msg(format!("hy15: latents {:?} want [B,C,T,H,W]", latents.shape))),
+            _ => {
+                return Err(msg(format!(
+                    "hy15: latents {:?} want [B,C,T,H,W]",
+                    latents.shape
+                )))
+            }
         };
         if c != self.cfg.in_channels {
             return Err(msg(format!(
@@ -269,12 +347,16 @@ impl Hunyuan15Transformer {
             )));
         }
         let seq = t * h * w;
-        let x = latents.permute(&[0, 2, 3, 4, 1])?.reshape(vec![b, seq, c])?;
+        let x = latents
+            .permute(&[0, 2, 3, 4, 1])?
+            .reshape(vec![b, seq, c])?;
         let mut img = self.img_in.forward(&x)?;
 
         let temb = sinusoid_timestep(timestep, 256);
         let temb = CudaTensor::from_vec(temb, vec![1, 256])?.to_device()?;
-        let vec = self.time_in_2.forward(&self.time_in.forward(&temb)?.silu())?;
+        let vec = self
+            .time_in_2
+            .forward(&self.time_in.forward(&temb)?.silu())?;
         let vec = vec.reshape(vec![1, self.cfg.hidden_size()])?;
 
         let mut txt = self.txt_proj.forward(text)?;
@@ -284,10 +366,10 @@ impl Hunyuan15Transformer {
         }
 
         let rope_tables = Hunyuan15RopeTables::build(&self.cfg, t, h, w).map_err(msg)?;
-        let cos =
-            CudaTensor::from_vec(rope_tables.cos, vec![seq, self.cfg.attention_head_dim])?.to_device()?;
-        let sin =
-            CudaTensor::from_vec(rope_tables.sin, vec![seq, self.cfg.attention_head_dim])?.to_device()?;
+        let cos = CudaTensor::from_vec(rope_tables.cos, vec![seq, self.cfg.attention_head_dim])?
+            .to_device()?;
+        let sin = CudaTensor::from_vec(rope_tables.sin, vec![seq, self.cfg.attention_head_dim])?
+            .to_device()?;
         let rope = (cos, sin);
 
         for block in &self.blocks {

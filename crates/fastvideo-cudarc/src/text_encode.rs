@@ -165,7 +165,12 @@ pub fn encode_qwen3_cap(
 pub fn broadcast_to_dim(src: &CudaTensor, out_dim: usize) -> Result<CudaTensor> {
     let [b, s, d] = match src.shape[..] {
         [b, s, d] => [b, s, d],
-        _ => return Err(msg(format!("broadcast_to_dim want [B,S,D], got {:?}", src.shape))),
+        _ => {
+            return Err(msg(format!(
+                "broadcast_to_dim want [B,S,D], got {:?}",
+                src.shape
+            )))
+        }
     };
     if d == out_dim {
         return Ok(src.clone());
@@ -210,18 +215,24 @@ mod tests {
 
     #[test]
     fn zeros_or_encode_allow() {
-        let t = zeros_or_encode(true, &[1, 4, 8], Path::new("/tmp/no-such-te-xyz"), || {
-            unreachable!()
-        })
+        let t = zeros_or_encode(
+            true,
+            &[1, 4, 8],
+            Path::new("/tmp/no-such-te-xyz"),
+            || unreachable!(),
+        )
         .unwrap();
         assert_eq!(t.shape, vec![1, 4, 8]);
     }
 
     #[test]
     fn zeros_or_encode_refuse() {
-        let err = zeros_or_encode(false, &[1, 4, 8], Path::new("/tmp/no-such-te-xyz"), || {
-            unreachable!()
-        })
+        let err = zeros_or_encode(
+            false,
+            &[1, 4, 8],
+            Path::new("/tmp/no-such-te-xyz"),
+            || unreachable!(),
+        )
         .unwrap_err();
         assert!(err.to_string().contains("missing"));
     }

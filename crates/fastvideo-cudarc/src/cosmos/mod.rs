@@ -5,8 +5,6 @@ pub mod t5;
 pub mod text;
 pub mod transformer;
 
-pub use pipeline::{
-    CosmosPipeline, CosmosRequest, DEFAULT_NEGATIVE_PROMPT, SIGMA_CONDITIONING,
-};
+pub use pipeline::{CosmosPipeline, CosmosRequest, DEFAULT_NEGATIVE_PROMPT, SIGMA_CONDITIONING};
 pub use t5::T5Encoder;
 pub use transformer::CosmosTransformer;

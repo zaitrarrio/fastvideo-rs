@@ -63,8 +63,16 @@ impl Attn {
             to_k: Linear::load(map, &key("to_key"), dim, dim, true)?,
             to_v: Linear::load(map, &key("to_value"), dim, dim, true)?,
             out: Linear::load(map, &key("out_layer"), dim, dim, true)?,
-            q_norm: pinned(weights::cuda_tensor_shaped(map, &key("query_norm.weight"), &[head_dim])?)?,
-            k_norm: pinned(weights::cuda_tensor_shaped(map, &key("key_norm.weight"), &[head_dim])?)?,
+            q_norm: pinned(weights::cuda_tensor_shaped(
+                map,
+                &key("query_norm.weight"),
+                &[head_dim],
+            )?)?,
+            k_norm: pinned(weights::cuda_tensor_shaped(
+                map,
+                &key("key_norm.weight"),
+                &[head_dim],
+            )?)?,
             heads,
             head_dim,
             eps: 1e-6,
@@ -185,7 +193,13 @@ impl Modulation {
         }
     }
 
-    fn load(map: &WeightMap, prefix: &str, time_dim: usize, model_dim: usize, n: usize) -> Result<Self> {
+    fn load(
+        map: &WeightMap,
+        prefix: &str,
+        time_dim: usize,
+        model_dim: usize,
+        n: usize,
+    ) -> Result<Self> {
         Ok(Self {
             out: Linear::load(
                 map,
@@ -221,9 +235,25 @@ impl TextBlock {
 
     fn load(map: &WeightMap, prefix: &str, cfg: &Kandinsky5TransformerConfig) -> Result<Self> {
         Ok(Self {
-            mod_: Modulation::load(map, &format!("{prefix}.text_modulation"), cfg.time_dim, cfg.model_dim, 6)?,
-            attn: Attn::load(map, &format!("{prefix}.self_attention"), cfg.model_dim, cfg.head_dim())?,
-            ff: FeedForward::load(map, &format!("{prefix}.feed_forward"), cfg.model_dim, cfg.ff_dim)?,
+            mod_: Modulation::load(
+                map,
+                &format!("{prefix}.text_modulation"),
+                cfg.time_dim,
+                cfg.model_dim,
+                6,
+            )?,
+            attn: Attn::load(
+                map,
+                &format!("{prefix}.self_attention"),
+                cfg.model_dim,
+                cfg.head_dim(),
+            )?,
+            ff: FeedForward::load(
+                map,
+                &format!("{prefix}.feed_forward"),
+                cfg.model_dim,
+                cfg.ff_dim,
+            )?,
         })
     }
 
@@ -233,7 +263,9 @@ impl TextBlock {
         let attn_p = parts[0].chunk(3, parts[0].rank() - 1)?;
         let ff_p = parts[1].chunk(3, parts[1].rank() - 1)?;
         let n = x.layer_norm(1e-6, None, None)?;
-        let out = self.attn.forward(&scale_shift(&n, &attn_p[1], &attn_p[0])?, None, Some(rope))?;
+        let out = self
+            .attn
+            .forward(&scale_shift(&n, &attn_p[1], &attn_p[0])?, None, Some(rope))?;
         let x = gated(x, &out, &attn_p[2])?;
         let n = x.layer_norm(1e-6, None, None)?;
         let out = self.ff.forward(&scale_shift(&n, &ff_p[1], &ff_p[0])?)?;
@@ -261,10 +293,31 @@ impl VisualBlock {
 
     fn load(map: &WeightMap, prefix: &str, cfg: &Kandinsky5TransformerConfig) -> Result<Self> {
         Ok(Self {
-            mod_: Modulation::load(map, &format!("{prefix}.visual_modulation"), cfg.time_dim, cfg.model_dim, 9)?,
-            self_attn: Attn::load(map, &format!("{prefix}.self_attention"), cfg.model_dim, cfg.head_dim())?,
-            cross_attn: Attn::load(map, &format!("{prefix}.cross_attention"), cfg.model_dim, cfg.head_dim())?,
-            ff: FeedForward::load(map, &format!("{prefix}.feed_forward"), cfg.model_dim, cfg.ff_dim)?,
+            mod_: Modulation::load(
+                map,
+                &format!("{prefix}.visual_modulation"),
+                cfg.time_dim,
+                cfg.model_dim,
+                9,
+            )?,
+            self_attn: Attn::load(
+                map,
+                &format!("{prefix}.self_attention"),
+                cfg.model_dim,
+                cfg.head_dim(),
+            )?,
+            cross_attn: Attn::load(
+                map,
+                &format!("{prefix}.cross_attention"),
+                cfg.model_dim,
+                cfg.head_dim(),
+            )?,
+            ff: FeedForward::load(
+                map,
+                &format!("{prefix}.feed_forward"),
+                cfg.model_dim,
+                cfg.ff_dim,
+            )?,
         })
     }
 
@@ -282,15 +335,17 @@ impl VisualBlock {
         let ff_p = parts[2].chunk(3, parts[2].rank() - 1)?;
 
         let n = visual.layer_norm(1e-6, None, None)?;
-        let out = self
-            .self_attn
-            .forward(&scale_shift(&n, &self_p[1], &self_p[0])?, None, Some(rope))?;
+        let out =
+            self.self_attn
+                .forward(&scale_shift(&n, &self_p[1], &self_p[0])?, None, Some(rope))?;
         let visual = gated(visual, &out, &self_p[2])?;
 
         let n = visual.layer_norm(1e-6, None, None)?;
-        let out = self
-            .cross_attn
-            .forward(&scale_shift(&n, &cross_p[1], &cross_p[0])?, Some(text), None)?;
+        let out = self.cross_attn.forward(
+            &scale_shift(&n, &cross_p[1], &cross_p[0])?,
+            Some(text),
+            None,
+        )?;
         let visual = gated(&visual, &out, &cross_p[2])?;
 
         let n = visual.layer_norm(1e-6, None, None)?;
@@ -347,10 +402,34 @@ impl Kandinsky5Transformer {
             .map(|i| VisualBlock::load(map, &format!("visual_transformer_blocks.{i}"), &cfg))
             .collect::<Result<Vec<_>>>()?;
         Ok(Self {
-            time_in: Linear::load(map, "time_embeddings.in_layer", cfg.model_dim, cfg.time_dim, true)?,
-            time_out: Linear::load(map, "time_embeddings.out_layer", cfg.time_dim, cfg.time_dim, true)?,
-            text_in: Linear::load(map, "text_embeddings.in_layer", cfg.in_text_dim, cfg.model_dim, true)?,
-            pooled_in: Linear::load(map, "pooled_text_embeddings.in_layer", cfg.in_text_dim2, cfg.time_dim, true)?,
+            time_in: Linear::load(
+                map,
+                "time_embeddings.in_layer",
+                cfg.model_dim,
+                cfg.time_dim,
+                true,
+            )?,
+            time_out: Linear::load(
+                map,
+                "time_embeddings.out_layer",
+                cfg.time_dim,
+                cfg.time_dim,
+                true,
+            )?,
+            text_in: Linear::load(
+                map,
+                "text_embeddings.in_layer",
+                cfg.in_text_dim,
+                cfg.model_dim,
+                true,
+            )?,
+            pooled_in: Linear::load(
+                map,
+                "pooled_text_embeddings.in_layer",
+                cfg.in_text_dim2,
+                cfg.time_dim,
+                true,
+            )?,
             visual_in: Linear::load(
                 map,
                 "visual_embeddings.in_layer",
@@ -410,7 +489,9 @@ impl Kandinsky5Transformer {
             .reshape(vec![b, tp, pt, hp, ph, wp, pw, c])?
             .permute(&[0, 1, 3, 5, 2, 4, 6, 7])?
             .reshape(vec![b, tp, hp, wp, pt * ph * pw * c])?;
-        let mut visual = self.visual_in.forward(&x.reshape(vec![b, tp * hp * wp, pt * ph * pw * c])?)?;
+        let mut visual =
+            self.visual_in
+                .forward(&x.reshape(vec![b, tp * hp * wp, pt * ph * pw * c])?)?;
         visual = visual.reshape(vec![b, tp, hp, wp, self.cfg.model_dim])?;
 
         let mut text = self.text_in.forward(text)?;
@@ -418,12 +499,21 @@ impl Kandinsky5Transformer {
 
         let temb = sinusoid_timestep(timestep, self.cfg.model_dim);
         let temb = CudaTensor::from_vec(temb, vec![1, self.cfg.model_dim])?.to_device()?;
-        let mut time = self.time_out.forward(&self.time_in.forward(&temb)?.silu())?;
-        let pooled = self.pooled_in.forward(pooled)?.layer_norm(1e-6, None, None)?;
+        let mut time = self
+            .time_out
+            .forward(&self.time_in.forward(&temb)?.silu())?;
+        let pooled = self
+            .pooled_in
+            .forward(pooled)?
+            .layer_norm(1e-6, None, None)?;
         time = time.add(&pooled)?;
 
         let text_len = text.shape[1];
-        let text_rope = rope_1d(self.cfg.head_dim(), &(0..text_len).collect::<Vec<_>>(), 10000.0);
+        let text_rope = rope_1d(
+            self.cfg.head_dim(),
+            &(0..text_len).collect::<Vec<_>>(),
+            10000.0,
+        );
         for block in &self.text_blocks {
             text = block.forward(&text, &time, &text_rope)?;
         }
@@ -446,7 +536,9 @@ impl Kandinsky5Transformer {
 
         let mods = self.out_mod.forward(&time)?.unsqueeze(1)?;
         let parts = mods.chunk(2, mods.rank() - 1)?;
-        let n = visual.reshape(vec![b, seq, self.cfg.model_dim])?.layer_norm(1e-6, None, None)?;
+        let n = visual
+            .reshape(vec![b, seq, self.cfg.model_dim])?
+            .layer_norm(1e-6, None, None)?;
         // scale/shift broadcast: Diffusers uses [:, None, None] on time — we have [B,1,D]
         let n = scale_shift(&n, &parts[1], &parts[0])?;
         let tokens = self.out_linear.forward(&n)?;

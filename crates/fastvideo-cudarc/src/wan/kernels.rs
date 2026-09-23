@@ -184,7 +184,8 @@ impl KernelFns {
             if let Some(k) = aot::AOT.iter().find(|k| k.sm == want) {
                 // cuModuleLoad takes a path; the bytes go through a per-process
                 // temp file that is removed once the module is resident.
-                let path = std::env::temp_dir().join(format!("fv-gpucheck-{}-sm{want}.cubin", std::process::id()));
+                let path = std::env::temp_dir()
+                    .join(format!("fv-gpucheck-{}-sm{want}.cubin", std::process::id()));
                 std::fs::write(&path, k.cubin)
                     .map_err(|e| DeviceError::Message(format!("write {}: {e}", path.display())))?;
                 let loaded = ctx.load_module(cudarc::nvrtc::Ptx::from_file(&path));

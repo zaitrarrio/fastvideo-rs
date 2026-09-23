@@ -24,14 +24,20 @@ pub struct TensorSpec {
 
 impl TensorSpec {
     pub fn new(name: impl Into<String>, dtype: LazyDType, shape: Vec<usize>) -> Self {
-        Self { name: name.into(), dtype, shape }
+        Self {
+            name: name.into(),
+            dtype,
+            shape,
+        }
     }
 
     fn bytes(&self) -> Result<usize, LoaderError> {
-        let size = self
-            .dtype
-            .size()
-            .ok_or_else(|| LoaderError::Message(format!("{}: {:?} has no fixed element size", self.name, self.dtype)))?;
+        let size = self.dtype.size().ok_or_else(|| {
+            LoaderError::Message(format!(
+                "{}: {:?} has no fixed element size",
+                self.name, self.dtype
+            ))
+        })?;
         Ok(self.shape.iter().product::<usize>() * size)
     }
 }
@@ -53,19 +59,36 @@ impl SafetensorsWriter {
     /// Write the header for `specs` (file order = slice order) and return a
     /// writer expecting their data in that order. `metadata` lands in
     /// `__metadata__`: say where the file came from and what was done to it.
-    pub fn create(path: &Path, specs: &[TensorSpec], metadata: &[(&str, &str)]) -> Result<Self, LoaderError> {
+    pub fn create(
+        path: &Path,
+        specs: &[TensorSpec],
+        metadata: &[(&str, &str)],
+    ) -> Result<Self, LoaderError> {
         let mut seen = std::collections::HashSet::new();
         let mut header = String::from("{");
         if !metadata.is_empty() {
-            let meta: serde_json::Map<String, serde_json::Value> =
-                metadata.iter().map(|(k, v)| ((*k).to_string(), serde_json::Value::String((*v).to_string()))).collect();
-            header.push_str(&format!("\"__metadata__\":{},", serde_json::Value::Object(meta)));
+            let meta: serde_json::Map<String, serde_json::Value> = metadata
+                .iter()
+                .map(|(k, v)| {
+                    (
+                        (*k).to_string(),
+                        serde_json::Value::String((*v).to_string()),
+                    )
+                })
+                .collect();
+            header.push_str(&format!(
+                "\"__metadata__\":{},",
+                serde_json::Value::Object(meta)
+            ));
         }
         let mut layout = Vec::with_capacity(specs.len());
         let mut offset = 0usize;
         for (i, spec) in specs.iter().enumerate() {
             if spec.name == "__metadata__" || !seen.insert(spec.name.as_str()) {
-                return Err(io(path, format!("duplicate or reserved tensor name '{}'", spec.name)));
+                return Err(io(
+                    path,
+                    format!("duplicate or reserved tensor name '{}'", spec.name),
+                ));
             }
             let len = spec.bytes()?;
             if i > 0 {
@@ -95,10 +118,18 @@ impl SafetensorsWriter {
         let mut part = path.as_os_str().to_owned();
         part.push(".part");
         let part = PathBuf::from(part);
-        let mut out = BufWriter::with_capacity(8 << 20, File::create(&part).map_err(|e| io(&part, e))?);
-        out.write_all(&(header.len() as u64).to_le_bytes()).map_err(|e| io(&part, e))?;
+        let mut out =
+            BufWriter::with_capacity(8 << 20, File::create(&part).map_err(|e| io(&part, e))?);
+        out.write_all(&(header.len() as u64).to_le_bytes())
+            .map_err(|e| io(&part, e))?;
         out.write_all(header.as_bytes()).map_err(|e| io(&part, e))?;
-        Ok(Self { out, path: path.to_path_buf(), part, layout, next: 0 })
+        Ok(Self {
+            out,
+            path: path.to_path_buf(),
+            part,
+            layout,
+            next: 0,
+        })
     }
 
     /// The tensor the writer expects next, if any.
@@ -109,15 +140,23 @@ impl SafetensorsWriter {
     /// Append the next tensor's little-endian bytes. Out-of-order names and
     /// wrong lengths are errors: either would silently shift every later tensor.
     pub fn write(&mut self, name: &str, bytes: &[u8]) -> Result<(), LoaderError> {
-        let (want, len) = self
-            .layout
-            .get(self.next)
-            .ok_or_else(|| io(&self.path, format!("'{name}' written after the last declared tensor")))?;
+        let (want, len) = self.layout.get(self.next).ok_or_else(|| {
+            io(
+                &self.path,
+                format!("'{name}' written after the last declared tensor"),
+            )
+        })?;
         if want != name {
-            return Err(io(&self.path, format!("expected tensor '{want}' next, got '{name}'")));
+            return Err(io(
+                &self.path,
+                format!("expected tensor '{want}' next, got '{name}'"),
+            ));
         }
         if bytes.len() != *len {
-            return Err(io(&self.path, format!("'{name}': {} bytes written, {len} declared", bytes.len())));
+            return Err(io(
+                &self.path,
+                format!("'{name}': {} bytes written, {len} declared", bytes.len()),
+            ));
         }
         self.out.write_all(bytes).map_err(|e| io(&self.part, e))?;
         self.next += 1;
@@ -127,10 +166,19 @@ impl SafetensorsWriter {
     /// Flush and move the file to its final name. Fails if tensors are missing.
     pub fn finish(mut self) -> Result<(), LoaderError> {
         if let Some(missing) = self.expecting() {
-            return Err(io(&self.path, format!("unfinished: '{missing}' and {} more not written", self.layout.len() - self.next - 1)));
+            return Err(io(
+                &self.path,
+                format!(
+                    "unfinished: '{missing}' and {} more not written",
+                    self.layout.len() - self.next - 1
+                ),
+            ));
         }
         self.out.flush().map_err(|e| io(&self.part, e))?;
-        self.out.get_ref().sync_all().map_err(|e| io(&self.part, e))?;
+        self.out
+            .get_ref()
+            .sync_all()
+            .map_err(|e| io(&self.part, e))?;
         std::fs::rename(&self.part, &self.path).map_err(|e| io(&self.path, e))
     }
 }
@@ -161,7 +209,10 @@ mod tests {
         let d = tmp("roundtrip");
         let path = d.join("slim.safetensors");
         let a: Vec<u8> = (0..12u8).collect(); // [2, 3] bf16
-        let b: Vec<u8> = [1.5f32, -2.0].iter().flat_map(|v| v.to_le_bytes()).collect();
+        let b: Vec<u8> = [1.5f32, -2.0]
+            .iter()
+            .flat_map(|v| v.to_le_bytes())
+            .collect();
         let specs = [
             TensorSpec::new("layers.1.w", LazyDType::BF16, vec![2, 3]),
             TensorSpec::new("layers.0.b \"quoted\"", LazyDType::F32, vec![2]),
@@ -172,14 +223,23 @@ mod tests {
         w.write("layers.1.w", &a).unwrap();
         w.write("layers.0.b \"quoted\"", &b).unwrap();
         w.write("q", &[9, 8, 7, 6]).unwrap();
-        assert!(!path.exists(), "the final name must not appear before finish()");
+        assert!(
+            !path.exists(),
+            "the final name must not appear before finish()"
+        );
         w.finish().unwrap();
 
         let s = LazyStore::open(&d).unwrap();
         assert_eq!(s.len(), 3);
         assert_eq!(s.view("layers.1.w").unwrap().bytes, a.as_slice());
-        assert_eq!(s.to_f32("layers.0.b \"quoted\"").unwrap().1, vec![1.5, -2.0]);
-        assert_eq!((s.view("q").unwrap().dtype, s.view("q").unwrap().bytes), (&LazyDType::F8E4M3, &[9u8, 8, 7, 6][..]));
+        assert_eq!(
+            s.to_f32("layers.0.b \"quoted\"").unwrap().1,
+            vec![1.5, -2.0]
+        );
+        assert_eq!(
+            (s.view("q").unwrap().dtype, s.view("q").unwrap().bytes),
+            (&LazyDType::F8E4M3, &[9u8, 8, 7, 6][..])
+        );
         // Data starts 8-byte aligned and the header keeps file order.
         let raw = std::fs::read(&path).unwrap();
         let hlen = u64::from_le_bytes(raw[..8].try_into().unwrap()) as usize;
@@ -193,19 +253,40 @@ mod tests {
     fn order_and_sizes_are_enforced_and_nothing_half_written_survives() {
         let d = tmp("strict");
         let path = d.join("x.safetensors");
-        let specs = [TensorSpec::new("a", LazyDType::F32, vec![1]), TensorSpec::new("b", LazyDType::F32, vec![2])];
+        let specs = [
+            TensorSpec::new("a", LazyDType::F32, vec![1]),
+            TensorSpec::new("b", LazyDType::F32, vec![2]),
+        ];
         let mut w = SafetensorsWriter::create(&path, &specs, &[]).unwrap();
-        assert!(w.write("b", &[0; 8]).unwrap_err().to_string().contains("expected tensor 'a'"));
-        assert!(w.write("a", &[0; 3]).unwrap_err().to_string().contains("4 declared"));
+        assert!(w
+            .write("b", &[0; 8])
+            .unwrap_err()
+            .to_string()
+            .contains("expected tensor 'a'"));
+        assert!(w
+            .write("a", &[0; 3])
+            .unwrap_err()
+            .to_string()
+            .contains("4 declared"));
         w.write("a", &[0; 4]).unwrap();
         let e = w.finish().unwrap_err().to_string();
         assert!(e.contains("unfinished") && e.contains("'b'"), "{e}");
         assert!(!path.exists());
-        assert!(std::fs::read_dir(&d).unwrap().next().is_none(), "the .part file must be removed");
+        assert!(
+            std::fs::read_dir(&d).unwrap().next().is_none(),
+            "the .part file must be removed"
+        );
 
-        let dup = [TensorSpec::new("a", LazyDType::F32, vec![1]), TensorSpec::new("a", LazyDType::F32, vec![1])];
+        let dup = [
+            TensorSpec::new("a", LazyDType::F32, vec![1]),
+            TensorSpec::new("a", LazyDType::F32, vec![1]),
+        ];
         assert!(SafetensorsWriter::create(&path, &dup, &[]).is_err());
-        let odd = [TensorSpec::new("p", LazyDType::Other("I64".into()), vec![1])];
+        let odd = [TensorSpec::new(
+            "p",
+            LazyDType::Other("I64".into()),
+            vec![1],
+        )];
         assert!(SafetensorsWriter::create(&path, &odd, &[]).is_err());
         let _ = std::fs::remove_dir_all(&d);
     }

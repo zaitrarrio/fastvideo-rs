@@ -30,7 +30,8 @@ fn mat4_mul(a: &Mat4, b: &Mat4) -> Mat4 {
     let mut out = [[0f32; 4]; 4];
     for i in 0..4 {
         for j in 0..4 {
-            out[i][j] = a[i][0] * b[0][j] + a[i][1] * b[1][j] + a[i][2] * b[2][j] + a[i][3] * b[3][j];
+            out[i][j] =
+                a[i][0] * b[0][j] + a[i][1] * b[1][j] + a[i][2] * b[2][j] + a[i][3] * b[3][j];
         }
     }
     out
@@ -113,7 +114,9 @@ pub fn get_plucker_embeddings(
                 let i = x as f32 + 0.5;
                 let j = y as f32 + 0.5;
                 let mut dir = [(i - cx) / fx, (j - cy) / fy, 1.0];
-                let n = (dir[0] * dir[0] + dir[1] * dir[1] + dir[2] * dir[2]).sqrt().max(1e-8);
+                let n = (dir[0] * dir[0] + dir[1] * dir[1] + dir[2] * dir[2])
+                    .sqrt()
+                    .max(1e-8);
                 dir = [dir[0] / n, dir[1] / n, dir[2] / n];
                 // rays_d = dir @ R^T
                 let rays_d = [

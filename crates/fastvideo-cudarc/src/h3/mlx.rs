@@ -32,9 +32,13 @@ pub fn find(root: &Path) -> Option<PathBuf> {
 }
 
 pub fn read_manifest(dir: &Path) -> Result<MlxH3Manifest> {
-    let text = std::fs::read_to_string(dir.join(MANIFEST)).map_err(|e| msg(format!("{}: {e}", dir.join(MANIFEST).display())))?;
-    let v: serde_json::Value = serde_json::from_str(&text).map_err(|e| msg(format!("mlx_h3_dit.json: {e}")))?;
-    let q = v.get("quantization").ok_or_else(|| msg("mlx_h3_dit.json: missing quantization"))?;
+    let text = std::fs::read_to_string(dir.join(MANIFEST))
+        .map_err(|e| msg(format!("{}: {e}", dir.join(MANIFEST).display())))?;
+    let v: serde_json::Value =
+        serde_json::from_str(&text).map_err(|e| msg(format!("mlx_h3_dit.json: {e}")))?;
+    let q = v
+        .get("quantization")
+        .ok_or_else(|| msg("mlx_h3_dit.json: missing quantization"))?;
     let mode = q.get("mode").and_then(|x| x.as_str()).unwrap_or("affine");
     if mode != "affine" {
         return Err(msg(format!("mlx_h3_dit.json: unsupported mode {mode}")));
@@ -45,10 +49,21 @@ pub fn read_manifest(dir: &Path) -> Result<MlxH3Manifest> {
     }
     let group_size = q.get("group_size").and_then(|x| x.as_u64()).unwrap_or(64) as usize;
     if group_size != affine::GROUP {
-        return Err(msg(format!("mlx_h3_dit.json: group_size={group_size}, this kernel is {}", affine::GROUP)));
+        return Err(msg(format!(
+            "mlx_h3_dit.json: group_size={group_size}, this kernel is {}",
+            affine::GROUP
+        )));
     }
-    let vsa_capable = v.pointer("/vsa/capable").and_then(|x| x.as_bool()).unwrap_or(false);
-    Ok(MlxH3Manifest { bits, group_size, vsa_capable, weights: dir.join(WEIGHTS) })
+    let vsa_capable = v
+        .pointer("/vsa/capable")
+        .and_then(|x| x.as_bool())
+        .unwrap_or(false);
+    Ok(MlxH3Manifest {
+        bits,
+        group_size,
+        vsa_capable,
+        weights: dir.join(WEIGHTS),
+    })
 }
 
 /// Open the MLX artifact (flattened `blocks.` keys) and set `FASTVIDEO_H3_AFFINE`.
@@ -75,7 +90,10 @@ mod tests {
         .unwrap();
         std::fs::write(dir.join(WEIGHTS), []).unwrap();
         let spec = read_manifest(&dir).unwrap();
-        assert_eq!((spec.bits, spec.group_size, spec.vsa_capable), (8, 64, false));
+        assert_eq!(
+            (spec.bits, spec.group_size, spec.vsa_capable),
+            (8, 64, false)
+        );
         assert_eq!(find(&dir).as_deref(), Some(dir.as_path()));
         let _ = std::fs::remove_dir_all(&dir);
     }

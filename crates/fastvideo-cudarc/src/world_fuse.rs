@@ -59,11 +59,7 @@ pub struct WorldFuse {
 
 impl WorldFuse {
     /// Probe `transformer/` (or `image_encoder/` for SigLIP) and load a fuse.
-    pub fn try_load(
-        root: &Path,
-        kind: FuseKind,
-        out_channels: usize,
-    ) -> Result<Option<Self>> {
+    pub fn try_load(root: &Path, kind: FuseKind, out_channels: usize) -> Result<Option<Self>> {
         let dir = if kind == FuseKind::Siglip {
             let ie = root.join("image_encoder");
             if ie.is_dir() {
@@ -102,7 +98,10 @@ impl WorldFuse {
                 }
             }
         } else {
-            (out_channels, Linear::zeros(out_channels, out_channels, true))
+            (
+                out_channels,
+                Linear::zeros(out_channels, out_channels, true),
+            )
         };
         Ok(Some(Self {
             kind,
@@ -229,7 +228,9 @@ mod tests {
             out_channels: 4,
         };
         let lat = CudaTensor::zeros(&[1, 4, 2, 2, 2]);
-        let out = fuse.fuse_into_latents(&lat, &[1.0, 0.0, -1.0, 0.5]).unwrap();
+        let out = fuse
+            .fuse_into_latents(&lat, &[1.0, 0.0, -1.0, 0.5])
+            .unwrap();
         assert_eq!(out.shape, lat.shape);
     }
 }

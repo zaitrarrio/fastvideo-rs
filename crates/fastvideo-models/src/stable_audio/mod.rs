@@ -16,13 +16,27 @@ impl StableAudioPreset {
         }
     }
 
-    pub fn sample_rate(self) -> u32 { 44_100 }
-    pub fn audio_channels(self) -> usize { 2 }
-    pub fn duration_s(self) -> f32 { 10.0 }
-    pub fn default_steps(self) -> usize { 100 }
-    pub fn hop_length(self) -> usize { 2048 }
-    pub fn sample_size_audio(self) -> usize { 2_097_152 }
-    pub fn latent_length(self) -> usize { self.sample_size_audio() / self.hop_length() }
+    pub fn sample_rate(self) -> u32 {
+        44_100
+    }
+    pub fn audio_channels(self) -> usize {
+        2
+    }
+    pub fn duration_s(self) -> f32 {
+        10.0
+    }
+    pub fn default_steps(self) -> usize {
+        100
+    }
+    pub fn hop_length(self) -> usize {
+        2048
+    }
+    pub fn sample_size_audio(self) -> usize {
+        2_097_152
+    }
+    pub fn latent_length(self) -> usize {
+        self.sample_size_audio() / self.hop_length()
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]

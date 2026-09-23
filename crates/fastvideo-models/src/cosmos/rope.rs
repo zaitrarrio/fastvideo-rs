@@ -43,10 +43,8 @@ pub fn rope_cos_sin(
     let fw = freqs_half(dim_w, w_theta);
     let ft = freqs_half(dim_t, t_theta);
 
-    let max_axis = cfg.max_size[0]
-        .max(cfg.max_size[1])
-        .max(cfg.max_size[2])
-        / p_t.max(p_h).max(p_w);
+    let max_axis =
+        cfg.max_size[0].max(cfg.max_size[1]).max(cfg.max_size[2]) / p_t.max(p_h).max(p_w);
     let _ = max_axis;
 
     let base_fps = 24.0f32;

@@ -85,13 +85,14 @@ impl DeviceContext {
         let (sm_major, sm_minor) = ctx.compute_capability().unwrap_or((0, 0));
         let stream = ctx.default_stream();
         let cublas = cudarc::cublas::CudaBlas::new(stream.clone())?;
-        let gemm_math = if super::bf16_gemm::bf16_enabled() && super::hopper::is_tensor_core_gpu(sm_major) {
-            GemmMath::Bf16
-        } else if super::hopper::tf32_enabled() && super::hopper::is_tensor_core_gpu(sm_major) {
-            GemmMath::Tf32
-        } else {
-            GemmMath::F32
-        };
+        let gemm_math =
+            if super::bf16_gemm::bf16_enabled() && super::hopper::is_tensor_core_gpu(sm_major) {
+                GemmMath::Bf16
+            } else if super::hopper::tf32_enabled() && super::hopper::is_tensor_core_gpu(sm_major) {
+                GemmMath::Tf32
+            } else {
+                GemmMath::F32
+            };
         let cudnn = cudarc::cudnn::Cudnn::new(stream.clone())?;
         let (kernels, origin) = super::kernels::KernelFns::load_for(&ctx, sm_major, sm_minor)?;
         super::log::info(format_args!(
@@ -132,7 +133,11 @@ fn keep_memory_pool(ctx: &Arc<cudarc::driver::CudaContext>) {
     }
     unsafe {
         let mut pool: sys::CUmemoryPool = std::ptr::null_mut();
-        if sys::cuDeviceGetDefaultMemPool(&mut pool, ctx.cu_device()).result().is_err() || pool.is_null() {
+        if sys::cuDeviceGetDefaultMemPool(&mut pool, ctx.cu_device())
+            .result()
+            .is_err()
+            || pool.is_null()
+        {
             return;
         }
         let mut threshold = u64::MAX;
@@ -215,7 +220,10 @@ pub fn global_device() -> Option<Arc<DeviceContext>> {
     GLOBAL_CACHE.with(|cache| {
         let mut cache = cache.borrow_mut();
         if cache.0 != generation {
-            *cache = (generation, global_slot().lock().expect("device lock").clone());
+            *cache = (
+                generation,
+                global_slot().lock().expect("device lock").clone(),
+            );
         }
         cache.1.clone()
     })
@@ -304,7 +312,10 @@ unsafe fn gemm_raw(
     batch: usize,
 ) -> Result<()> {
     let r32 = cudarc::cublas::sys::cudaDataType_t::CUDA_R_32F;
-    gemm_raw_ty(dev, transa, m, n, k, alpha, a, lda, stride_a, b, ldb, stride_b, c, ldc, stride_c, batch, r32, None)
+    gemm_raw_ty(
+        dev, transa, m, n, k, alpha, a, lda, stride_a, b, ldb, stride_b, c, ldc, stride_c, batch,
+        r32, None,
+    )
 }
 
 /// [`gemm_raw`] with the A/B element type spelled out (C stays F32). bf16
@@ -399,7 +410,10 @@ fn size_check(what: &str, ok: bool, detail: impl FnOnce() -> String) -> Result<(
     if ok {
         Ok(())
     } else {
-        Err(DeviceError::Message(format!("{what} size mismatch: {}", detail())))
+        Err(DeviceError::Message(format!(
+            "{what} size mismatch: {}",
+            detail()
+        )))
     }
 }
 
@@ -428,9 +442,18 @@ pub fn matmul_linear_wt_device(
 ) -> Result<()> {
     use cudarc::driver::{DevicePtr, DevicePtrMut};
     let dev = global_device().ok_or_else(no_device)?;
-    size_check("matmul_linear_wt", x.len() == m * k && w.len() == n * k && out.len() == m * n, || {
-        format!("x={} w={} out={} m={m} k={k} n={n}", x.len(), w.len(), out.len())
-    })?;
+    size_check(
+        "matmul_linear_wt",
+        x.len() == m * k && w.len() == n * k && out.len() == m * n,
+        || {
+            format!(
+                "x={} w={} out={} m={m} k={k} n={n}",
+                x.len(),
+                w.len(),
+                out.len()
+            )
+        },
+    )?;
     let (wp, _rw) = w.device_ptr(&dev.stream);
     let (xp, _rx) = x.device_ptr(&dev.stream);
     let (cp, _rc) = out.device_ptr_mut(&dev.stream);
@@ -452,9 +475,18 @@ pub fn matmul_linear_wt_math(
     use cudarc::cublas::sys;
     use cudarc::driver::{DevicePtr, DevicePtrMut};
     let dev = global_device().ok_or_else(no_device)?;
-    size_check("matmul_linear_wt_math", x.len() == m * k && w.len() == n * k && out.len() == m * n, || {
-        format!("x={} w={} out={} m={m} k={k} n={n}", x.len(), w.len(), out.len())
-    })?;
+    size_check(
+        "matmul_linear_wt_math",
+        x.len() == m * k && w.len() == n * k && out.len() == m * n,
+        || {
+            format!(
+                "x={} w={} out={} m={m} k={k} n={n}",
+                x.len(),
+                w.len(),
+                out.len()
+            )
+        },
+    )?;
     let (wp, _rw) = w.device_ptr(&dev.stream);
     let (xp, _rx) = x.device_ptr(&dev.stream);
     let (cp, _rc) = out.device_ptr_mut(&dev.stream);
@@ -500,9 +532,18 @@ pub fn matmul_linear_wt_bf16(
     use cudarc::cublas::sys;
     use cudarc::driver::{DevicePtr, DevicePtrMut};
     let dev = global_device().ok_or_else(no_device)?;
-    size_check("matmul_linear_wt_bf16", x.len() == m * k && w.len() == n * k && out.len() == m * n, || {
-        format!("x={} w={} out={} m={m} k={k} n={n}", x.len(), w.len(), out.len())
-    })?;
+    size_check(
+        "matmul_linear_wt_bf16",
+        x.len() == m * k && w.len() == n * k && out.len() == m * n,
+        || {
+            format!(
+                "x={} w={} out={} m={m} k={k} n={n}",
+                x.len(),
+                w.len(),
+                out.len()
+            )
+        },
+    )?;
     let (wp, _rw) = w.device_ptr(&dev.stream);
     let (xp, _rx) = x.device_ptr(&dev.stream);
     let (cp, _rc) = out.device_ptr_mut(&dev.stream);
@@ -553,12 +594,38 @@ pub fn matmul_linear_wt_strided_batched(
     size_check(
         "strided wt gemm",
         x.len() == batch * m * k && w.len() == batch * n * k && out.len() == batch * m * n,
-        || format!("x={} w={} out={} batch={batch} m={m} k={k} n={n}", x.len(), w.len(), out.len()),
+        || {
+            format!(
+                "x={} w={} out={} batch={batch} m={m} k={k} n={n}",
+                x.len(),
+                w.len(),
+                out.len()
+            )
+        },
     )?;
     let (wp, _rw) = w.device_ptr(&dev.stream);
     let (xp, _rx) = x.device_ptr(&dev.stream);
     let (cp, _rc) = out.device_ptr_mut(&dev.stream);
-    unsafe { gemm_raw(&dev, true, n, m, k, scale, wp, k, n * k, xp, k, m * k, cp, n, m * n, batch) }
+    unsafe {
+        gemm_raw(
+            &dev,
+            true,
+            n,
+            m,
+            k,
+            scale,
+            wp,
+            k,
+            n * k,
+            xp,
+            k,
+            m * k,
+            cp,
+            n,
+            m * n,
+            batch,
+        )
+    }
 }
 
 /// [`matmul_linear_wt_strided_batched`] pinned to F32 math regardless of the
@@ -582,14 +649,40 @@ pub fn matmul_linear_wt_strided_batched_f32(
     size_check(
         "strided wt gemm (f32-pinned)",
         x.len() == batch * m * k && w.len() == batch * n * k && out.len() == batch * m * n,
-        || format!("x={} w={} out={} batch={batch} m={m} k={k} n={n}", x.len(), w.len(), out.len()),
+        || {
+            format!(
+                "x={} w={} out={} batch={batch} m={m} k={k} n={n}",
+                x.len(),
+                w.len(),
+                out.len()
+            )
+        },
     )?;
     let (wp, _rw) = w.device_ptr(&dev.stream);
     let (xp, _rx) = x.device_ptr(&dev.stream);
     let (cp, _rc) = out.device_ptr_mut(&dev.stream);
     let r32 = cudarc::cublas::sys::cudaDataType_t::CUDA_R_32F;
     unsafe {
-        gemm_raw_ty(&dev, true, n, m, k, scale, wp, k, n * k, xp, k, m * k, cp, n, m * n, batch, r32, Some(GemmMath::F32))
+        gemm_raw_ty(
+            &dev,
+            true,
+            n,
+            m,
+            k,
+            scale,
+            wp,
+            k,
+            n * k,
+            xp,
+            k,
+            m * k,
+            cp,
+            n,
+            m * n,
+            batch,
+            r32,
+            Some(GemmMath::F32),
+        )
     }
 }
 
@@ -609,14 +702,40 @@ pub fn matmul_2d_strided_batched_f32(
     size_check(
         "strided gemm (f32-pinned)",
         a.len() == batch * m * k && b.len() == batch * k * n && out.len() == batch * m * n,
-        || format!("a={} b={} out={} batch={batch} ({m},{k})@({k},{n})", a.len(), b.len(), out.len()),
+        || {
+            format!(
+                "a={} b={} out={} batch={batch} ({m},{k})@({k},{n})",
+                a.len(),
+                b.len(),
+                out.len()
+            )
+        },
     )?;
     let (bp, _rb) = b.device_ptr(&dev.stream);
     let (ap, _ra) = a.device_ptr(&dev.stream);
     let (cp, _rc) = out.device_ptr_mut(&dev.stream);
     let r32 = cudarc::cublas::sys::cudaDataType_t::CUDA_R_32F;
     unsafe {
-        gemm_raw_ty(&dev, false, n, m, k, 1.0, bp, n, k * n, ap, k, m * k, cp, n, m * n, batch, r32, Some(GemmMath::F32))
+        gemm_raw_ty(
+            &dev,
+            false,
+            n,
+            m,
+            k,
+            1.0,
+            bp,
+            n,
+            k * n,
+            ap,
+            k,
+            m * k,
+            cp,
+            n,
+            m * n,
+            batch,
+            r32,
+            Some(GemmMath::F32),
+        )
     }
 }
 
@@ -639,13 +758,41 @@ pub fn matmul_linear_wt_strided_batched_bf16(
     size_check(
         "strided wt gemm (bf16)",
         x.len() == batch * m * k && w.len() == batch * n * k && out.len() == batch * m * n,
-        || format!("x={} w={} out={} batch={batch} m={m} k={k} n={n}", x.len(), w.len(), out.len()),
+        || {
+            format!(
+                "x={} w={} out={} batch={batch} m={m} k={k} n={n}",
+                x.len(),
+                w.len(),
+                out.len()
+            )
+        },
     )?;
     let (wp, _rw) = w.device_ptr(&dev.stream);
     let (xp, _rx) = x.device_ptr(&dev.stream);
     let (cp, _rc) = out.device_ptr_mut(&dev.stream);
     let bf = cudarc::cublas::sys::cudaDataType_t::CUDA_R_16BF;
-    unsafe { gemm_raw_ty(&dev, true, n, m, k, scale, wp, k, n * k, xp, k, m * k, cp, n, m * n, batch, bf, None) }
+    unsafe {
+        gemm_raw_ty(
+            &dev,
+            true,
+            n,
+            m,
+            k,
+            scale,
+            wp,
+            k,
+            n * k,
+            xp,
+            k,
+            m * k,
+            cp,
+            n,
+            m * n,
+            batch,
+            bf,
+            None,
+        )
+    }
 }
 
 /// Strided-batched row-major `(m,k) @ (k,n)` over `batch` tiles (attention `P @ V`).
@@ -664,12 +811,38 @@ pub fn matmul_2d_strided_batched(
     size_check(
         "strided gemm",
         a.len() == batch * m * k && b.len() == batch * k * n && out.len() == batch * m * n,
-        || format!("a={} b={} out={} batch={batch} ({m},{k})@({k},{n})", a.len(), b.len(), out.len()),
+        || {
+            format!(
+                "a={} b={} out={} batch={batch} ({m},{k})@({k},{n})",
+                a.len(),
+                b.len(),
+                out.len()
+            )
+        },
     )?;
     let (bp, _rb) = b.device_ptr(&dev.stream);
     let (ap, _ra) = a.device_ptr(&dev.stream);
     let (cp, _rc) = out.device_ptr_mut(&dev.stream);
-    unsafe { gemm_raw(&dev, false, n, m, k, 1.0, bp, n, k * n, ap, k, m * k, cp, n, m * n, batch) }
+    unsafe {
+        gemm_raw(
+            &dev,
+            false,
+            n,
+            m,
+            k,
+            1.0,
+            bp,
+            n,
+            k * n,
+            ap,
+            k,
+            m * k,
+            cp,
+            n,
+            m * n,
+            batch,
+        )
+    }
 }
 
 /// `W [oc, ic] @ X [ic, s]` repeated over `batch` inputs with one shared `W`
@@ -689,13 +862,39 @@ pub fn matmul_shared_left(
     size_check(
         "shared-left gemm",
         w.len() == oc * ic && x.len() == batch * ic * s && out.len() == batch * oc * s,
-        || format!("w={} x={} out={} batch={batch} oc={oc} ic={ic} s={s}", w.len(), x.len(), out.len()),
+        || {
+            format!(
+                "w={} x={} out={} batch={batch} oc={oc} ic={ic} s={s}",
+                w.len(),
+                x.len(),
+                out.len()
+            )
+        },
     )?;
     let (xp, _rx) = x.device_ptr(&dev.stream);
     let (wp, _rw) = w.device_ptr(&dev.stream);
     let (cp, _rc) = out.device_ptr_mut(&dev.stream);
     // Column-major: C[s×oc] = X[s×ic] * W[ic×oc]; W is shared (stride 0).
-    unsafe { gemm_raw(&dev, false, s, oc, ic, 1.0, xp, s, ic * s, wp, ic, 0, cp, s, oc * s, batch) }
+    unsafe {
+        gemm_raw(
+            &dev,
+            false,
+            s,
+            oc,
+            ic,
+            1.0,
+            xp,
+            s,
+            ic * s,
+            wp,
+            ic,
+            0,
+            cp,
+            s,
+            oc * s,
+            batch,
+        )
+    }
 }
 
 /// Minimum element count a strided-batched view needs: `batch` tiles of
@@ -728,12 +927,38 @@ pub fn matmul_linear_wt_strided_batched_x_view(
     size_check(
         "strided wt gemm (x-view)",
         x.len() >= x_required && w.len() == batch * n * k && out.len() == batch * m * n,
-        || format!("x={} (need >= {x_required}) w={} out={} batch={batch} m={m} k={k} n={n}", x.len(), w.len(), out.len()),
+        || {
+            format!(
+                "x={} (need >= {x_required}) w={} out={} batch={batch} m={m} k={k} n={n}",
+                x.len(),
+                w.len(),
+                out.len()
+            )
+        },
     )?;
     let (wp, _rw) = w.device_ptr(&dev.stream);
     let (xp, _rx) = x.device_ptr(&dev.stream);
     let (cp, _rc) = out.device_ptr_mut(&dev.stream);
-    unsafe { gemm_raw(&dev, true, n, m, k, scale, wp, k, n * k, xp, k, outer_stride_x, cp, n, m * n, batch) }
+    unsafe {
+        gemm_raw(
+            &dev,
+            true,
+            n,
+            m,
+            k,
+            scale,
+            wp,
+            k,
+            n * k,
+            xp,
+            k,
+            outer_stride_x,
+            cp,
+            n,
+            m * n,
+            batch,
+        )
+    }
 }
 
 /// Chunked-attention variant of [`matmul_2d_strided_batched`]: `out` is a view
@@ -757,12 +982,38 @@ pub fn matmul_2d_strided_batched_out_view(
     size_check(
         "strided gemm (out-view)",
         a.len() == batch * m * k && b.len() == batch * k * n && out.len() >= out_required,
-        || format!("a={} b={} out={} (need >= {out_required}) batch={batch} ({m},{k})@({k},{n})", a.len(), b.len(), out.len()),
+        || {
+            format!(
+                "a={} b={} out={} (need >= {out_required}) batch={batch} ({m},{k})@({k},{n})",
+                a.len(),
+                b.len(),
+                out.len()
+            )
+        },
     )?;
     let (bp, _rb) = b.device_ptr(&dev.stream);
     let (ap, _ra) = a.device_ptr(&dev.stream);
     let (cp, _rc) = out.device_ptr_mut(&dev.stream);
-    unsafe { gemm_raw(&dev, false, n, m, k, 1.0, bp, n, k * n, ap, k, m * k, cp, n, outer_stride_c, batch) }
+    unsafe {
+        gemm_raw(
+            &dev,
+            false,
+            n,
+            m,
+            k,
+            1.0,
+            bp,
+            n,
+            k * n,
+            ap,
+            k,
+            m * k,
+            cp,
+            n,
+            outer_stride_c,
+            batch,
+        )
+    }
 }
 
 /// Attention `P [batch,m,k] @ V [batch,k,n]` with bfloat16 operands and an F32
@@ -783,13 +1034,41 @@ pub fn matmul_2d_strided_batched_bf16(
     size_check(
         "strided gemm (bf16)",
         a.len() == batch * m * k && b.len() == batch * k * n && out.len() == batch * m * n,
-        || format!("a={} b={} out={} batch={batch} ({m},{k})@({k},{n})", a.len(), b.len(), out.len()),
+        || {
+            format!(
+                "a={} b={} out={} batch={batch} ({m},{k})@({k},{n})",
+                a.len(),
+                b.len(),
+                out.len()
+            )
+        },
     )?;
     let (bp, _rb) = b.device_ptr(&dev.stream);
     let (ap, _ra) = a.device_ptr(&dev.stream);
     let (cp, _rc) = out.device_ptr_mut(&dev.stream);
     let bf = cudarc::cublas::sys::cudaDataType_t::CUDA_R_16BF;
-    unsafe { gemm_raw_ty(&dev, false, n, m, k, 1.0, bp, n, k * n, ap, k, m * k, cp, n, m * n, batch, bf, None) }
+    unsafe {
+        gemm_raw_ty(
+            &dev,
+            false,
+            n,
+            m,
+            k,
+            1.0,
+            bp,
+            n,
+            k * n,
+            ap,
+            k,
+            m * k,
+            cp,
+            n,
+            m * n,
+            batch,
+            bf,
+            None,
+        )
+    }
 }
 
 /// [`matmul_2d_strided_batched_bf16`] writing into a strided view of a larger
@@ -812,13 +1091,41 @@ pub fn matmul_2d_strided_batched_out_view_bf16(
     size_check(
         "strided gemm (bf16, out-view)",
         a.len() == batch * m * k && b.len() == batch * k * n && out.len() >= out_required,
-        || format!("a={} b={} out={} (need >= {out_required}) batch={batch} ({m},{k})@({k},{n})", a.len(), b.len(), out.len()),
+        || {
+            format!(
+                "a={} b={} out={} (need >= {out_required}) batch={batch} ({m},{k})@({k},{n})",
+                a.len(),
+                b.len(),
+                out.len()
+            )
+        },
     )?;
     let (bp, _rb) = b.device_ptr(&dev.stream);
     let (ap, _ra) = a.device_ptr(&dev.stream);
     let (cp, _rc) = out.device_ptr_mut(&dev.stream);
     let bf = cudarc::cublas::sys::cudaDataType_t::CUDA_R_16BF;
-    unsafe { gemm_raw_ty(&dev, false, n, m, k, 1.0, bp, n, k * n, ap, k, m * k, cp, n, outer_stride_c, batch, bf, None) }
+    unsafe {
+        gemm_raw_ty(
+            &dev,
+            false,
+            n,
+            m,
+            k,
+            1.0,
+            bp,
+            n,
+            k * n,
+            ap,
+            k,
+            m * k,
+            cp,
+            n,
+            outer_stride_c,
+            batch,
+            bf,
+            None,
+        )
+    }
 }
 
 /// Resolve device from CLI spec (`cpu`, `cuda`, `cuda:0`).

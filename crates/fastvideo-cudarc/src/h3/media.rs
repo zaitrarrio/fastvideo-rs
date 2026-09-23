@@ -25,7 +25,8 @@ pub fn probe_video(path: &Path) -> Result<(usize, usize, f64)> {
             "stream=width,height,avg_frame_rate,r_frame_rate",
             "-of",
             "csv=p=0",
-            path.to_str().ok_or_else(|| msg("video path is not utf-8"))?,
+            path.to_str()
+                .ok_or_else(|| msg("video path is not utf-8"))?,
         ])
         .output()
         .map_err(|e| msg(format!("ffprobe not available: {e}")))?;
@@ -41,13 +42,19 @@ pub fn probe_video(path: &Path) -> Result<(usize, usize, f64)> {
     if parts.len() < 3 {
         return Err(msg(format!("ffprobe: unexpected video metadata `{line}`")));
     }
-    let width: usize = parts[0].parse().map_err(|_| msg(format!("ffprobe width: {}", parts[0])))?;
-    let height: usize = parts[1].parse().map_err(|_| msg(format!("ffprobe height: {}", parts[1])))?;
-    let fps = parse_rate(parts[2]).or_else(|| parts.get(3).and_then(|p| parse_rate(p))).ok_or_else(|| {
-        msg(format!("ffprobe: no frame rate in `{line}`"))
-    })?;
+    let width: usize = parts[0]
+        .parse()
+        .map_err(|_| msg(format!("ffprobe width: {}", parts[0])))?;
+    let height: usize = parts[1]
+        .parse()
+        .map_err(|_| msg(format!("ffprobe height: {}", parts[1])))?;
+    let fps = parse_rate(parts[2])
+        .or_else(|| parts.get(3).and_then(|p| parse_rate(p)))
+        .ok_or_else(|| msg(format!("ffprobe: no frame rate in `{line}`")))?;
     if width == 0 || height == 0 || fps <= 0.0 {
-        return Err(msg(format!("ffprobe: bad geometry {width}x{height} @ {fps}")));
+        return Err(msg(format!(
+            "ffprobe: bad geometry {width}x{height} @ {fps}"
+        )));
     }
     Ok((width, height, fps))
 }
@@ -95,7 +102,8 @@ pub fn decode_video_rgb(path: &Path, max_frames: usize) -> Result<(Vec<u8>, usiz
             "error",
             "-nostats",
             "-i",
-            path.to_str().ok_or_else(|| msg("video path is not utf-8"))?,
+            path.to_str()
+                .ok_or_else(|| msg("video path is not utf-8"))?,
             "-an",
             "-frames:v",
             &max_frames.to_string(),
@@ -109,9 +117,14 @@ pub fn decode_video_rgb(path: &Path, max_frames: usize) -> Result<(Vec<u8>, usiz
         .stderr(Stdio::piped())
         .spawn()
         .map_err(|e| msg(format!("ffmpeg not available: {e}")))?;
-    let mut stdout = child.stdout.take().ok_or_else(|| msg("ffmpeg stdout closed"))?;
+    let mut stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| msg("ffmpeg stdout closed"))?;
     let mut buf = Vec::new();
-    stdout.read_to_end(&mut buf).map_err(|e| msg(format!("ffmpeg stdout: {e}")))?;
+    stdout
+        .read_to_end(&mut buf)
+        .map_err(|e| msg(format!("ffmpeg stdout: {e}")))?;
     let status = child.wait().map_err(|e| msg(format!("ffmpeg: {e}")))?;
     if !status.success() {
         return Err(msg(format!("ffmpeg decode failed with {status}")));
@@ -128,14 +141,19 @@ pub fn decode_video_rgb(path: &Path, max_frames: usize) -> Result<(Vec<u8>, usiz
 
 /// Decode the first audio stream to stereo f32le at `sample_rate`, truncated to
 /// `max_samples` per channel. Returns planar `[L...][R...]` of equal length.
-pub fn decode_audio_stereo_f32(path: &Path, sample_rate: u32, max_samples: usize) -> Result<Vec<f32>> {
+pub fn decode_audio_stereo_f32(
+    path: &Path,
+    sample_rate: u32,
+    max_samples: usize,
+) -> Result<Vec<f32>> {
     let mut child = Command::new("ffmpeg")
         .args([
             "-v",
             "error",
             "-nostats",
             "-i",
-            path.to_str().ok_or_else(|| msg("audio path is not utf-8"))?,
+            path.to_str()
+                .ok_or_else(|| msg("audio path is not utf-8"))?,
             "-vn",
             "-ac",
             "2",
@@ -149,15 +167,23 @@ pub fn decode_audio_stereo_f32(path: &Path, sample_rate: u32, max_samples: usize
         .stderr(Stdio::piped())
         .spawn()
         .map_err(|e| msg(format!("ffmpeg not available: {e}")))?;
-    let mut stdout = child.stdout.take().ok_or_else(|| msg("ffmpeg stdout closed"))?;
+    let mut stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| msg("ffmpeg stdout closed"))?;
     let mut raw = Vec::new();
-    stdout.read_to_end(&mut raw).map_err(|e| msg(format!("ffmpeg stdout: {e}")))?;
+    stdout
+        .read_to_end(&mut raw)
+        .map_err(|e| msg(format!("ffmpeg stdout: {e}")))?;
     let status = child.wait().map_err(|e| msg(format!("ffmpeg: {e}")))?;
     if !status.success() {
         return Err(msg(format!("ffmpeg audio decode failed with {status}")));
     }
     if raw.len() % 8 != 0 {
-        return Err(msg(format!("ffmpeg audio: {} bytes not stereo f32", raw.len())));
+        return Err(msg(format!(
+            "ffmpeg audio: {} bytes not stereo f32",
+            raw.len()
+        )));
     }
     let interleaved: Vec<f32> = raw
         .chunks_exact(4)
@@ -200,9 +226,18 @@ pub fn resize_rgb_frames(
     let mut out = Vec::with_capacity(num_frames * dst_bytes);
     for t in 0..num_frames {
         let start = t * src_bytes;
-        let img = image::RgbImage::from_raw(src_w as u32, src_h as u32, frames[start..start + src_bytes].to_vec())
-            .ok_or_else(|| msg("resize: invalid rgb buffer"))?;
-        let resized = image::imageops::resize(&img, dst_w as u32, dst_h as u32, image::imageops::FilterType::Lanczos3);
+        let img = image::RgbImage::from_raw(
+            src_w as u32,
+            src_h as u32,
+            frames[start..start + src_bytes].to_vec(),
+        )
+        .ok_or_else(|| msg("resize: invalid rgb buffer"))?;
+        let resized = image::imageops::resize(
+            &img,
+            dst_w as u32,
+            dst_h as u32,
+            image::imageops::FilterType::Lanczos3,
+        );
         out.extend_from_slice(resized.as_raw());
     }
     Ok(out)

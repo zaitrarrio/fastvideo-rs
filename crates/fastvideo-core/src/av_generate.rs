@@ -3,9 +3,9 @@
 use std::path::PathBuf;
 
 use crate::error::{FastVideoError, Result};
-use crate::registry::{FamilyModelDefinition, ModelFamily, ResolvedModel};
 #[cfg(feature = "cuda-cudarc")]
 use crate::registry::Ltx2Line;
+use crate::registry::{FamilyModelDefinition, ModelFamily, ResolvedModel};
 
 /// Extra knobs for audio-video families (ignored by Wan).
 #[derive(Debug, Clone, Default)]
@@ -37,8 +37,10 @@ pub struct AvGenerateOptions {
     pub last_image_path: Option<PathBuf>,
     /// Ordered H3 Ref2VA image reference paths (video/audio refs later).
     pub reference_images: Vec<PathBuf>,
-    /// FastH3 recipe name (`8step`, `4step-vsa`, …).
+    /// FastH3 recipe name (`8step`, `4step-vsa`, `sol-h3`, …).
     pub h3_recipe: Option<String>,
+    /// Sol-H3 LoRA safetensors. Unset: searched beside the MiniMax-H3 root.
+    pub h3_adapter: Option<PathBuf>,
     /// H3 clip length in whole seconds (5..=15); overrides default geometry.
     pub h3_seconds: Option<u32>,
 }
@@ -113,7 +115,10 @@ fn weights_root(opts: &AvGenerateOptions) -> Result<PathBuf> {
         })
 }
 
-fn generate_ltx2(def: &'static FamilyModelDefinition, opts: AvGenerateOptions) -> Result<AvGenerateOutput> {
+fn generate_ltx2(
+    def: &'static FamilyModelDefinition,
+    opts: AvGenerateOptions,
+) -> Result<AvGenerateOutput> {
     require_cuda(&opts.device)?;
     let line = def.ltx_line.ok_or_else(|| {
         FastVideoError::Message(format!("ltx preset {} missing ltx_line", def.preset))
@@ -121,7 +126,9 @@ fn generate_ltx2(def: &'static FamilyModelDefinition, opts: AvGenerateOptions) -
 
     #[cfg(feature = "cuda-cudarc")]
     {
-        use fastvideo_cudarc::ltx2::pipeline::{Ltx2Paths, Ltx2Pipeline, Ltx2Request, PipelineOptions};
+        use fastvideo_cudarc::ltx2::pipeline::{
+            Ltx2Paths, Ltx2Pipeline, Ltx2Request, PipelineOptions,
+        };
         use fastvideo_cudarc::wan::device::resolve_device;
         use fastvideo_models::ltx2::{
             ltx2_19b, ltx2_19b_distilled, ltx2_23_22b, ltx2_23_22b_distilled, ltx2_5_22b_distilled,
@@ -155,8 +162,14 @@ fn generate_ltx2(def: &'static FamilyModelDefinition, opts: AvGenerateOptions) -
             two_stage: opts.two_stage,
             diff_vae: opts.diff_vae,
             negative_prompt: opts.negative_prompt,
-            guidance_scale: opts.guidance_scale.unwrap_or(if is_base { 4.0 } else { 1.0 }),
-            audio_guidance_scale: opts.audio_guidance_scale.unwrap_or(if is_base { 7.0 } else { 1.0 }),
+            guidance_scale: opts
+                .guidance_scale
+                .unwrap_or(if is_base { 4.0 } else { 1.0 }),
+            audio_guidance_scale: opts.audio_guidance_scale.unwrap_or(if is_base {
+                7.0
+            } else {
+                1.0
+            }),
             num_inference_steps: opts.num_inference_steps.map(|n| n as usize),
             refine_steps: opts.refine_steps.map(|n| n as usize),
             image_path: opts.image_path,
@@ -186,7 +199,10 @@ fn generate_ltx2(def: &'static FamilyModelDefinition, opts: AvGenerateOptions) -
     }
 }
 
-fn generate_h3(def: &'static FamilyModelDefinition, opts: AvGenerateOptions) -> Result<AvGenerateOutput> {
+fn generate_h3(
+    def: &'static FamilyModelDefinition,
+    opts: AvGenerateOptions,
+) -> Result<AvGenerateOutput> {
     require_cuda(&opts.device)?;
     let has_refs = !opts.reference_images.is_empty();
     let has_fl2va = opts.image_path.is_some() || opts.last_image_path.is_some();
@@ -211,8 +227,8 @@ fn generate_h3(def: &'static FamilyModelDefinition, opts: AvGenerateOptions) -> 
         resolve_device(&opts.device).map_err(|e| FastVideoError::Message(e.to_string()))?;
         let weights = weights_root(&opts)?;
         let seconds = opts.h3_seconds.unwrap_or(5) as usize;
-        let mut request = H3Request::seconds(opts.prompt, seconds, opts.seed)
-            .map_err(FastVideoError::Message)?;
+        let mut request =
+            H3Request::seconds(opts.prompt, seconds, opts.seed).map_err(FastVideoError::Message)?;
         if let Some(h) = opts.height {
             request.height = h as usize;
         }
@@ -235,12 +251,15 @@ fn generate_h3(def: &'static FamilyModelDefinition, opts: AvGenerateOptions) -> 
             .collect();
         let recipe = opts.h3_recipe.or_else(|| match def.preset {
             "fasth3_8step" => Some("8step".into()),
+            "sol_h3" => Some("sol-h3".into()),
+            "sol_h3_ref2va" => Some("sol-h3-ref2va".into()),
             _ => None,
         });
         let options = H3PipelineOptions {
             recipe,
             text_root: opts.text_weights,
-            ref2va: has_refs,
+            ref2va: has_refs || def.preset == "sol_h3_ref2va",
+            adapter: opts.h3_adapter,
             ..H3PipelineOptions::default()
         };
         let out = generate(&weights, options, &request, &opts.output)
@@ -262,7 +281,10 @@ fn generate_h3(def: &'static FamilyModelDefinition, opts: AvGenerateOptions) -> 
     }
 }
 
-fn generate_hunyuan15(def: &'static FamilyModelDefinition, opts: AvGenerateOptions) -> Result<AvGenerateOutput> {
+fn generate_hunyuan15(
+    def: &'static FamilyModelDefinition,
+    opts: AvGenerateOptions,
+) -> Result<AvGenerateOutput> {
     require_cuda(&opts.device)?;
     #[cfg(feature = "cuda-cudarc")]
     {
@@ -329,7 +351,10 @@ fn generate_hunyuan15(def: &'static FamilyModelDefinition, opts: AvGenerateOptio
     }
 }
 
-fn generate_kandinsky5(def: &'static FamilyModelDefinition, opts: AvGenerateOptions) -> Result<AvGenerateOutput> {
+fn generate_kandinsky5(
+    def: &'static FamilyModelDefinition,
+    opts: AvGenerateOptions,
+) -> Result<AvGenerateOutput> {
     require_cuda(&opts.device)?;
     #[cfg(feature = "cuda-cudarc")]
     {
@@ -391,7 +416,10 @@ fn generate_kandinsky5(def: &'static FamilyModelDefinition, opts: AvGenerateOpti
     }
 }
 
-fn generate_cosmos(def: &'static FamilyModelDefinition, opts: AvGenerateOptions) -> Result<AvGenerateOutput> {
+fn generate_cosmos(
+    def: &'static FamilyModelDefinition,
+    opts: AvGenerateOptions,
+) -> Result<AvGenerateOutput> {
     require_cuda(&opts.device)?;
     #[cfg(feature = "cuda-cudarc")]
     {
@@ -470,7 +498,10 @@ fn generate_cosmos(def: &'static FamilyModelDefinition, opts: AvGenerateOptions)
     }
 }
 
-fn generate_gen3c(def: &'static FamilyModelDefinition, opts: AvGenerateOptions) -> Result<AvGenerateOutput> {
+fn generate_gen3c(
+    def: &'static FamilyModelDefinition,
+    opts: AvGenerateOptions,
+) -> Result<AvGenerateOutput> {
     require_cuda(&opts.device)?;
     #[cfg(feature = "cuda-cudarc")]
     {
@@ -711,9 +742,7 @@ fn generate_lingbotworld(
     require_cuda(&opts.device)?;
     #[cfg(feature = "cuda-cudarc")]
     {
-        use fastvideo_cudarc::lingbotworld::pipeline::{
-            LingBotWorldPipeline, LingBotWorldRequest,
-        };
+        use fastvideo_cudarc::lingbotworld::pipeline::{LingBotWorldPipeline, LingBotWorldRequest};
         use fastvideo_cudarc::wan::device::resolve_device;
         use fastvideo_models::lingbotworld::LingBotWorldPreset;
 
@@ -951,7 +980,8 @@ fn generate_zimage(
         if let Some(g) = opts.guidance_scale {
             request.guidance_scale = g;
         }
-        std::fs::create_dir_all(&opts.output).map_err(|e| FastVideoError::Message(e.to_string()))?;
+        std::fs::create_dir_all(&opts.output)
+            .map_err(|e| FastVideoError::Message(e.to_string()))?;
         let out_png = opts.output.join("zimage.png");
         pipe.generate(&request, &out_png)
             .map_err(|e| FastVideoError::Message(e.to_string()))?;
@@ -988,7 +1018,9 @@ fn generate_sd35(
         let preset = match def.preset {
             "sd35_medium" => Sd35Preset::Medium,
             other => {
-                return Err(FastVideoError::Message(format!("unknown SD3.5 preset {other}")));
+                return Err(FastVideoError::Message(format!(
+                    "unknown SD3.5 preset {other}"
+                )));
             }
         };
         let mut pipe = Sd35Pipeline::open(&weights, preset)
@@ -1019,7 +1051,8 @@ fn generate_sd35(
         if let Some(g) = opts.guidance_scale {
             request.guidance_scale = g;
         }
-        std::fs::create_dir_all(&opts.output).map_err(|e| FastVideoError::Message(e.to_string()))?;
+        std::fs::create_dir_all(&opts.output)
+            .map_err(|e| FastVideoError::Message(e.to_string()))?;
         let out_png = opts.output.join("sd35.png");
         pipe.generate(&request, &out_png)
             .map_err(|e| FastVideoError::Message(e.to_string()))?;
@@ -1056,7 +1089,9 @@ fn generate_flux(
         let preset = match def.preset {
             "flux1_dev" => FluxPreset::Dev,
             other => {
-                return Err(FastVideoError::Message(format!("unknown FLUX.1 preset {other}")));
+                return Err(FastVideoError::Message(format!(
+                    "unknown FLUX.1 preset {other}"
+                )));
             }
         };
         let mut pipe = FluxPipeline::open(&weights, preset)
@@ -1087,7 +1122,8 @@ fn generate_flux(
         if let Some(g) = opts.guidance_scale {
             request.guidance_scale = g;
         }
-        std::fs::create_dir_all(&opts.output).map_err(|e| FastVideoError::Message(e.to_string()))?;
+        std::fs::create_dir_all(&opts.output)
+            .map_err(|e| FastVideoError::Message(e.to_string()))?;
         let out_png = opts.output.join("flux.png");
         pipe.generate(&request, &out_png)
             .map_err(|e| FastVideoError::Message(e.to_string()))?;
@@ -1126,7 +1162,9 @@ fn generate_flux2(
             "flux2_klein_9b" => Flux2Preset::Klein9b,
             "flux2_dev" => Flux2Preset::Dev,
             other => {
-                return Err(FastVideoError::Message(format!("unknown FLUX.2 preset {other}")));
+                return Err(FastVideoError::Message(format!(
+                    "unknown FLUX.2 preset {other}"
+                )));
             }
         };
         let mut pipe = Flux2Pipeline::open(&weights, preset)
@@ -1157,7 +1195,8 @@ fn generate_flux2(
         if let Some(g) = opts.guidance_scale {
             request.guidance_scale = g;
         }
-        std::fs::create_dir_all(&opts.output).map_err(|e| FastVideoError::Message(e.to_string()))?;
+        std::fs::create_dir_all(&opts.output)
+            .map_err(|e| FastVideoError::Message(e.to_string()))?;
         let out_png = opts.output.join("flux2.png");
         pipe.generate(&request, &out_png)
             .map_err(|e| FastVideoError::Message(e.to_string()))?;
@@ -1194,7 +1233,9 @@ fn generate_glm_image(
         let preset = match def.preset {
             "glm_image" => GlmImagePreset::Base,
             other => {
-                return Err(FastVideoError::Message(format!("unknown GLM-Image preset {other}")));
+                return Err(FastVideoError::Message(format!(
+                    "unknown GLM-Image preset {other}"
+                )));
             }
         };
         let mut pipe = GlmImagePipeline::open(&weights, preset)
@@ -1225,7 +1266,8 @@ fn generate_glm_image(
         if let Some(g) = opts.guidance_scale {
             request.guidance_scale = g;
         }
-        std::fs::create_dir_all(&opts.output).map_err(|e| FastVideoError::Message(e.to_string()))?;
+        std::fs::create_dir_all(&opts.output)
+            .map_err(|e| FastVideoError::Message(e.to_string()))?;
         let out_png = opts.output.join("glm-image.png");
         pipe.generate(&request, &out_png)
             .map_err(|e| FastVideoError::Message(e.to_string()))?;
@@ -1282,7 +1324,8 @@ fn generate_stable_audio(
         if let Some(s) = opts.num_inference_steps {
             request.num_steps = s as usize;
         }
-        std::fs::create_dir_all(&opts.output).map_err(|e| FastVideoError::Message(e.to_string()))?;
+        std::fs::create_dir_all(&opts.output)
+            .map_err(|e| FastVideoError::Message(e.to_string()))?;
         let out_wav = opts.output.join("stable-audio.wav");
         pipe.generate(&request, &out_wav)
             .map_err(|e| FastVideoError::Message(e.to_string()))?;
@@ -1319,7 +1362,9 @@ fn generate_mmaudio(
         let preset = match def.preset {
             "mmaudio_large_44k_v2" => MmAudioPreset::Large44kV2,
             other => {
-                return Err(FastVideoError::Message(format!("unknown MMAudio preset {other}")));
+                return Err(FastVideoError::Message(format!(
+                    "unknown MMAudio preset {other}"
+                )));
             }
         };
         let mut pipe = MmAudioPipeline::open(&weights, preset)
@@ -1337,7 +1382,8 @@ fn generate_mmaudio(
         if let Some(s) = opts.num_inference_steps {
             request.num_steps = s as usize;
         }
-        std::fs::create_dir_all(&opts.output).map_err(|e| FastVideoError::Message(e.to_string()))?;
+        std::fs::create_dir_all(&opts.output)
+            .map_err(|e| FastVideoError::Message(e.to_string()))?;
         let out_wav = opts.output.join("mmaudio.wav");
         pipe.generate(&request, &out_wav)
             .map_err(|e| FastVideoError::Message(e.to_string()))?;
@@ -1358,7 +1404,10 @@ fn generate_mmaudio(
     }
 }
 
-fn generate_longcat(def: &'static FamilyModelDefinition, opts: AvGenerateOptions) -> Result<AvGenerateOutput> {
+fn generate_longcat(
+    def: &'static FamilyModelDefinition,
+    opts: AvGenerateOptions,
+) -> Result<AvGenerateOutput> {
     require_cuda(&opts.device)?;
     #[cfg(feature = "cuda-cudarc")]
     {
@@ -1423,7 +1472,10 @@ fn generate_longcat(def: &'static FamilyModelDefinition, opts: AvGenerateOptions
     }
 }
 
-fn generate_lingbot(def: &'static FamilyModelDefinition, opts: AvGenerateOptions) -> Result<AvGenerateOutput> {
+fn generate_lingbot(
+    def: &'static FamilyModelDefinition,
+    opts: AvGenerateOptions,
+) -> Result<AvGenerateOutput> {
     require_cuda(&opts.device)?;
     #[cfg(feature = "cuda-cudarc")]
     {

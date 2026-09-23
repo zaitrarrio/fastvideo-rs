@@ -42,7 +42,7 @@ pub use wan::{
     WanPipeline,
 };
 
-use fastvideo_ops::{Device, DType, HostBackend, HostTensor, OpsError, TensorBackend};
+use fastvideo_ops::{DType, Device, HostBackend, HostTensor, OpsError, TensorBackend};
 
 #[derive(Debug, Clone, Copy, Default)]
 pub struct CudarcBackend;
@@ -59,11 +59,19 @@ impl TensorBackend for CudarcBackend {
         HostBackend::map_device(device)
     }
 
-    fn zeros(shape: &[usize], dtype: DType, device: &Self::Device) -> Result<Self::Tensor, OpsError> {
+    fn zeros(
+        shape: &[usize],
+        dtype: DType,
+        device: &Self::Device,
+    ) -> Result<Self::Tensor, OpsError> {
         HostBackend::zeros(shape, dtype, device)
     }
 
-    fn from_f32(data: &[f32], shape: &[usize], device: &Self::Device) -> Result<Self::Tensor, OpsError> {
+    fn from_f32(
+        data: &[f32],
+        shape: &[usize],
+        device: &Self::Device,
+    ) -> Result<Self::Tensor, OpsError> {
         HostBackend::from_f32(data, shape, device)
     }
 
@@ -107,7 +115,11 @@ impl TensorBackend for CudarcBackend {
         HostBackend::softmax(a, dim)
     }
 
-    fn rms_norm(a: &Self::Tensor, weight: &Self::Tensor, eps: f32) -> Result<Self::Tensor, OpsError> {
+    fn rms_norm(
+        a: &Self::Tensor,
+        weight: &Self::Tensor,
+        eps: f32,
+    ) -> Result<Self::Tensor, OpsError> {
         HostBackend::rms_norm(a, weight, eps)
     }
 

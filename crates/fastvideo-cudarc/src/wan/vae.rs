@@ -16,7 +16,9 @@ fn pinned(mut t: CudaTensor) -> CudaTensor {
 
 /// A `[c, 1, 1(, 1)]` gamma as a pinned `[c]` vector.
 fn gamma(map: &WeightMap, key: &str, shape: &[usize]) -> Result<CudaTensor> {
-    Ok(pinned(weights::cuda_tensor_shaped(map, key, shape)?.reshape(vec![shape[0]])?))
+    Ok(pinned(
+        weights::cuda_tensor_shaped(map, key, shape)?.reshape(vec![shape[0]])?,
+    ))
 }
 
 const LATENTS_MEAN: [f32; 16] = [
@@ -77,9 +79,17 @@ struct CausalConv3d {
 }
 
 impl CausalConv3d {
-    fn zeros(in_c: usize, out_c: usize, kernel: [usize; 3], stride: [usize; 3], pad: [usize; 3]) -> Self {
+    fn zeros(
+        in_c: usize,
+        out_c: usize,
+        kernel: [usize; 3],
+        stride: [usize; 3],
+        pad: [usize; 3],
+    ) -> Self {
         Self {
-            weight: pinned(CudaTensor::zeros(&[out_c, in_c, kernel[0], kernel[1], kernel[2]])),
+            weight: pinned(CudaTensor::zeros(&[
+                out_c, in_c, kernel[0], kernel[1], kernel[2],
+            ])),
             bias: pinned(CudaTensor::zeros(&[out_c])),
             stride,
             pad,
@@ -101,7 +111,11 @@ impl CausalConv3d {
                 &weights::join_key(prefix, "weight"),
                 &[out_c, in_c, kernel[0], kernel[1], kernel[2]],
             )?),
-            bias: pinned(weights::cuda_tensor_shaped(map, &weights::join_key(prefix, "bias"), &[out_c])?),
+            bias: pinned(weights::cuda_tensor_shaped(
+                map,
+                &weights::join_key(prefix, "bias"),
+                &[out_c],
+            )?),
             stride,
             pad,
         })
@@ -113,7 +127,11 @@ impl CausalConv3d {
 
     /// Causal time padding (`2*pad_t` frames in front, filled from the feat
     /// cache first), symmetric spatial padding inside the conv.
-    fn forward_with_cache(&self, xs: &CudaTensor, cache_x: Option<&CudaTensor>) -> Result<CudaTensor> {
+    fn forward_with_cache(
+        &self,
+        xs: &CudaTensor,
+        cache_x: Option<&CudaTensor>,
+    ) -> Result<CudaTensor> {
         let mut x = xs.clone();
         let mut pad_t = 2 * self.pad[0];
         if let Some(c) = cache_x {
@@ -125,7 +143,12 @@ impl CausalConv3d {
         if pad_t > 0 {
             x = x.pad_zeros(2, pad_t, 0)?;
         }
-        x.conv3d(&self.weight, Some(&self.bias), [0, self.pad[1], self.pad[2]], self.stride)
+        x.conv3d(
+            &self.weight,
+            Some(&self.bias),
+            [0, self.pad[1], self.pad[2]],
+            self.stride,
+        )
     }
 }
 
@@ -222,7 +245,11 @@ impl ResidualBlock {
             None
         };
         Ok(Self {
-            norm1: gamma(map, &weights::join_key(prefix, "norm1.gamma"), &[in_dim, 1, 1, 1])?,
+            norm1: gamma(
+                map,
+                &weights::join_key(prefix, "norm1.gamma"),
+                &[in_dim, 1, 1, 1],
+            )?,
             conv1: CausalConv3d::load(
                 map,
                 &weights::join_key(prefix, "conv1"),
@@ -232,7 +259,11 @@ impl ResidualBlock {
                 [1, 1, 1],
                 [1, 1, 1],
             )?,
-            norm2: gamma(map, &weights::join_key(prefix, "norm2.gamma"), &[out_dim, 1, 1, 1])?,
+            norm2: gamma(
+                map,
+                &weights::join_key(prefix, "norm2.gamma"),
+                &[out_dim, 1, 1, 1],
+            )?,
             conv2: CausalConv3d::load(
                 map,
                 &weights::join_key(prefix, "conv2"),
@@ -282,9 +313,21 @@ impl AttentionBlock {
         let key = |name: &str| weights::join_key(prefix, name);
         Ok(Self {
             norm: gamma(map, &key("norm.gamma"), &[dim, 1, 1])?,
-            qkv: pinned(weights::cuda_tensor_shaped(map, &key("to_qkv.weight"), &[dim * 3, dim, 1, 1])?),
-            qkv_bias: pinned(weights::cuda_tensor_shaped(map, &key("to_qkv.bias"), &[dim * 3])?),
-            proj: pinned(weights::cuda_tensor_shaped(map, &key("proj.weight"), &[dim, dim, 1, 1])?),
+            qkv: pinned(weights::cuda_tensor_shaped(
+                map,
+                &key("to_qkv.weight"),
+                &[dim * 3, dim, 1, 1],
+            )?),
+            qkv_bias: pinned(weights::cuda_tensor_shaped(
+                map,
+                &key("to_qkv.bias"),
+                &[dim * 3],
+            )?),
+            proj: pinned(weights::cuda_tensor_shaped(
+                map,
+                &key("proj.weight"),
+                &[dim, dim, 1, 1],
+            )?),
             proj_bias: pinned(weights::cuda_tensor_shaped(map, &key("proj.bias"), &[dim])?),
         })
     }
@@ -296,10 +339,16 @@ impl AttentionBlock {
         let (t, h, w) = match xs.shape[..] {
             [_, _, t, h, w] => (t, h, w),
             [_, _, h, w] => (1, h, w),
-            _ => return Err(TensorError::Message(format!("attention block input {:?}", xs.shape))),
+            _ => {
+                return Err(TensorError::Message(format!(
+                    "attention block input {:?}",
+                    xs.shape
+                )))
+            }
         };
         let frames = if xs.rank() == 5 {
-            xs.permute(&[0, 2, 1, 3, 4])?.reshape(vec![b * t, c, h, w])?
+            xs.permute(&[0, 2, 1, 3, 4])?
+                .reshape(vec![b * t, c, h, w])?
         } else {
             xs.clone()
         };
@@ -378,8 +427,16 @@ impl Resample {
         };
         Ok(Self {
             mode,
-            conv_w: pinned(weights::cuda_tensor_shaped(map, &weights::join_key(prefix, "resample.1.weight"), &[out, dim, 3, 3])?),
-            conv_b: pinned(weights::cuda_tensor_shaped(map, &weights::join_key(prefix, "resample.1.bias"), &[out])?),
+            conv_w: pinned(weights::cuda_tensor_shaped(
+                map,
+                &weights::join_key(prefix, "resample.1.weight"),
+                &[out, dim, 3, 3],
+            )?),
+            conv_b: pinned(weights::cuda_tensor_shaped(
+                map,
+                &weights::join_key(prefix, "resample.1.bias"),
+                &[out],
+            )?),
             time_conv,
         })
     }
@@ -435,12 +492,7 @@ struct UpBlock {
 }
 
 impl UpBlock {
-    fn zeros(
-        in_dim: usize,
-        out_dim: usize,
-        n_res: usize,
-        upsample: Option<ResampleMode>,
-    ) -> Self {
+    fn zeros(in_dim: usize, out_dim: usize, n_res: usize, upsample: Option<ResampleMode>) -> Self {
         let mut resnets = Vec::new();
         let mut current = in_dim;
         for _ in 0..=n_res {
@@ -605,7 +657,11 @@ impl WanDecoder {
             mid_attn,
             mid_res1,
             up_blocks,
-            norm_out: gamma(map, &weights::join_key(prefix, "norm_out.gamma"), &[out_dim, 1, 1, 1])?,
+            norm_out: gamma(
+                map,
+                &weights::join_key(prefix, "norm_out.gamma"),
+                &[out_dim, 1, 1, 1],
+            )?,
             conv_out: CausalConv3d::load(
                 map,
                 &weights::join_key(prefix, "conv_out"),
@@ -780,7 +836,15 @@ impl WanEncoder {
         )?));
         let mid = format!("{d}.mid_block");
         Ok(Self {
-            conv_in: CausalConv3d::load(map, &format!("{d}.conv_in"), 3, 96, [3, 3, 3], [1, 1, 1], [1, 1, 1])?,
+            conv_in: CausalConv3d::load(
+                map,
+                &format!("{d}.conv_in"),
+                3,
+                96,
+                [3, 3, 3],
+                [1, 1, 1],
+                [1, 1, 1],
+            )?,
             blocks,
             mid_res0: ResidualBlock::load(map, &format!("{mid}.resnets.0"), 384, 384)?,
             mid_attn: AttentionBlock::load(map, &format!("{mid}.attentions.0"), 384)?,
@@ -920,7 +984,9 @@ impl AutoencoderKlWan {
         while i < t {
             let n = if i == 0 { 1 } else { chunk.min(t - i) };
             cache.begin_pass();
-            let piece = self.decoder.forward(&z.narrow(2, i, n)?, Some(&mut cache))?;
+            let piece = self
+                .decoder
+                .forward(&z.narrow(2, i, n)?, Some(&mut cache))?;
             // [1, 3, f, H, W] → [f, 3, H, W] for the sink; a small copy next to
             // the decode that produced it.
             let (f, hh, ww) = (piece.shape[2], piece.shape[3], piece.shape[4]);
@@ -989,7 +1055,11 @@ mod tests {
         }
 
         // 4 * (5 - 1) + 1 = 17 output frames, whatever the chunk size.
-        assert_eq!(shapes[0][2], 4 * (latent_frames - 1) + 1, "unchunked frame count");
+        assert_eq!(
+            shapes[0][2],
+            4 * (latent_frames - 1) + 1,
+            "unchunked frame count"
+        );
         for (i, shape) in shapes.iter().enumerate() {
             assert_eq!(shape, &shapes[0], "chunk size {i} changed the output shape");
         }

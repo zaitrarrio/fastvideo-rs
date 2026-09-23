@@ -68,7 +68,10 @@ fn patchify(x: &CudaTensor, p: usize) -> Result<CudaTensor> {
         return Err(msg(format!("patchify: {h}x{w} not divisible by {p}")));
     }
     // [B, C, F, H/p, p, W/p, p] → permute (0,1,6,4,2,3,5) → [B, C, p, p, F, H/p, W/p]
-    let y = permute_any(&x.reshape(vec![b, c, f, h / p, p, w / p, p])?, &[0, 1, 6, 4, 2, 3, 5])?;
+    let y = permute_any(
+        &x.reshape(vec![b, c, f, h / p, p, w / p, p])?,
+        &[0, 1, 6, 4, 2, 3, 5],
+    )?;
     y.reshape(vec![b, c * p * p, f, h / p, w / p])
 }
 
@@ -82,7 +85,10 @@ fn unpatchify(x: &CudaTensor, p: usize) -> Result<CudaTensor> {
     }
     let c = c4 / (p * p);
     // Inverse of patchify permute.
-    let y = permute_any(&x.reshape(vec![b, c, p, p, f, h, w])?, &[0, 1, 4, 5, 3, 6, 2])?;
+    let y = permute_any(
+        &x.reshape(vec![b, c, p, p, f, h, w])?,
+        &[0, 1, 4, 5, 3, 6, 2],
+    )?;
     y.reshape(vec![b, c, f, h * p, w * p])
 }
 
@@ -103,7 +109,15 @@ fn rope_dim_split(head_dim: usize) -> (usize, usize, usize) {
     (dim_t, dim_hw, dim_hw)
 }
 
-fn rotate_pairs(x: &[f32], positions: &[f32], inv_freqs: &[f32], axis_len: usize, stride_axis: usize, outer: usize, inner: usize) -> Vec<f32> {
+fn rotate_pairs(
+    x: &[f32],
+    positions: &[f32],
+    inv_freqs: &[f32],
+    axis_len: usize,
+    stride_axis: usize,
+    outer: usize,
+    inner: usize,
+) -> Vec<f32> {
     // x layout: for each of `outer` blocks of `axis_len * inner` floats, rotate pairs along axis.
     let mut out = x.to_vec();
     let pairs = inv_freqs.len();
@@ -130,10 +144,20 @@ fn rotate_pairs(x: &[f32], positions: &[f32], inv_freqs: &[f32], axis_len: usize
 }
 
 fn inv_freqs(dim: usize, base: f32) -> Vec<f32> {
-    (0..dim / 2).map(|i| (1.0 / base.powf(2.0 * i as f32 / dim as f32))).collect()
+    (0..dim / 2)
+        .map(|i| (1.0 / base.powf(2.0 * i as f32 / dim as f32)))
+        .collect()
 }
 
-fn apply_rope3d(x: &[f32], b: usize, t: usize, h: usize, w: usize, heads: usize, head_dim: usize) -> Vec<f32> {
+fn apply_rope3d(
+    x: &[f32],
+    b: usize,
+    t: usize,
+    h: usize,
+    w: usize,
+    heads: usize,
+    head_dim: usize,
+) -> Vec<f32> {
     let (dt, dh, dw) = rope_dim_split(head_dim);
     let inv_t = inv_freqs(dt, 10_000.0);
     let inv_h = inv_freqs(dh, 10_000.0);
@@ -278,9 +302,17 @@ struct NeighborhoodAttention {
 }
 
 impl NeighborhoodAttention {
-    fn load(map: &WeightMap, prefix: &str, dim: usize, head_dim: usize, kernel: [usize; 3]) -> Result<Self> {
+    fn load(
+        map: &WeightMap,
+        prefix: &str,
+        dim: usize,
+        head_dim: usize,
+        kernel: [usize; 3],
+    ) -> Result<Self> {
         if !dim.is_multiple_of(head_dim) {
-            return Err(msg(format!("NA: dim {dim} not divisible by head_dim {head_dim}")));
+            return Err(msg(format!(
+                "NA: dim {dim} not divisible by head_dim {head_dim}"
+            )));
         }
         Ok(Self {
             to_q: lin(map, &format!("{prefix}.to_q"), dim, dim, true)?,
@@ -304,7 +336,10 @@ impl NeighborhoodAttention {
         };
         let (kt, kh, kw) = (self.kernel[0], self.kernel[1], self.kernel[2]);
         if t < kt || h < kh || w < kw {
-            return Err(msg(format!("NA grid ({t},{h},{w}) smaller than kernel {:?}", self.kernel)));
+            return Err(msg(format!(
+                "NA grid ({t},{h},{w}) smaller than kernel {:?}",
+                self.kernel
+            )));
         }
         let q = self.to_q.forward(x)?;
         let k = self.to_k.forward(x)?;
@@ -338,7 +373,18 @@ impl NeighborhoodAttention {
         }
         qh = apply_rope3d(&qh, b, t, h, w, self.heads, self.head_dim);
         kh = apply_rope3d(&kh, b, t, h, w, self.heads, self.head_dim);
-        let out = neighborhood_attn_host(&qh, &kh, &vh, b, t, h, w, self.heads, self.head_dim, self.kernel);
+        let out = neighborhood_attn_host(
+            &qh,
+            &kh,
+            &vh,
+            b,
+            t,
+            h,
+            w,
+            self.heads,
+            self.head_dim,
+            self.kernel,
+        );
         let flat = CudaTensor::from_vec(out, vec![b, t, h, w, c])?;
         self.to_out.forward(&flat)
     }
@@ -362,7 +408,12 @@ impl SwiGLU {
     fn forward(&self, x: &CudaTensor) -> Result<CudaTensor> {
         let [b, t, h, w, c] = match x.shape[..] {
             [b, t, h, w, c] => [b, t, h, w, c],
-            _ => return Err(msg(format!("SwiGLU expects [B,T,H,W,C], got {:?}", x.shape))),
+            _ => {
+                return Err(msg(format!(
+                    "SwiGLU expects [B,T,H,W,C], got {:?}",
+                    x.shape
+                )))
+            }
         };
         let tokens = t * h * w;
         if tokens <= SWIGLU_TILE {
@@ -394,10 +445,23 @@ struct NaBlock {
 }
 
 impl NaBlock {
-    fn load(map: &WeightMap, prefix: &str, dim: usize, head_dim: usize, kernel: [usize; 3], hidden: usize) -> Result<Self> {
+    fn load(
+        map: &WeightMap,
+        prefix: &str,
+        dim: usize,
+        head_dim: usize,
+        kernel: [usize; 3],
+        hidden: usize,
+    ) -> Result<Self> {
         Ok(Self {
             norm1: rms_w(map, &format!("{prefix}.norm1"), dim)?,
-            attn: NeighborhoodAttention::load(map, &format!("{prefix}.attn"), dim, head_dim, kernel)?,
+            attn: NeighborhoodAttention::load(
+                map,
+                &format!("{prefix}.attn"),
+                dim,
+                head_dim,
+                kernel,
+            )?,
             norm2: rms_w(map, &format!("{prefix}.norm2"), dim)?,
             mlp: SwiGLU::load(map, &format!("{prefix}.mlp"), dim, hidden)?,
         })
@@ -418,7 +482,16 @@ struct AdaLnZero {
 
 impl AdaLnZero {
     fn load(map: &WeightMap, prefix: &str, dim: usize, t_emb: usize) -> Result<Self> {
-        Ok(Self { proj: lin(map, &format!("{prefix}.proj"), t_emb, ADALN_CHUNKS * dim, true)?, dim })
+        Ok(Self {
+            proj: lin(
+                map,
+                &format!("{prefix}.proj"),
+                t_emb,
+                ADALN_CHUNKS * dim,
+                true,
+            )?,
+            dim,
+        })
     }
 
     /// Seven `[B,1,1,1,C]` chunks.
@@ -453,22 +526,47 @@ struct DiffusionNaBlock {
 }
 
 impl DiffusionNaBlock {
-    fn load(map: &WeightMap, prefix: &str, dim: usize, ctx: usize, head_dim: usize, kernel: [usize; 3], hidden: usize) -> Result<Self> {
+    fn load(
+        map: &WeightMap,
+        prefix: &str,
+        dim: usize,
+        ctx: usize,
+        head_dim: usize,
+        kernel: [usize; 3],
+        hidden: usize,
+    ) -> Result<Self> {
         Ok(Self {
             context_proj: lin(map, &format!("{prefix}.context_proj"), ctx, dim, true)?,
             scale_shift_table: pinned(
-                cuda_tensor_shaped(map, &format!("{prefix}.scale_shift_table"), &[ADALN_CHUNKS, dim])?.host_cow()?.into_owned(),
+                cuda_tensor_shaped(
+                    map,
+                    &format!("{prefix}.scale_shift_table"),
+                    &[ADALN_CHUNKS, dim],
+                )?
+                .host_cow()?
+                .into_owned(),
                 vec![ADALN_CHUNKS, dim],
             )?,
             norm1: rms_w(map, &format!("{prefix}.norm1"), dim)?,
-            attn: NeighborhoodAttention::load(map, &format!("{prefix}.attn"), dim, head_dim, kernel)?,
+            attn: NeighborhoodAttention::load(
+                map,
+                &format!("{prefix}.attn"),
+                dim,
+                head_dim,
+                kernel,
+            )?,
             norm2: rms_w(map, &format!("{prefix}.norm2"), dim)?,
             mlp: SwiGLU::load(map, &format!("{prefix}.mlp"), dim, hidden)?,
             dim,
         })
     }
 
-    fn forward(&self, x: &CudaTensor, context: &CudaTensor, mod_chunks: &[CudaTensor]) -> Result<CudaTensor> {
+    fn forward(
+        &self,
+        x: &CudaTensor,
+        context: &CudaTensor,
+        mod_chunks: &[CudaTensor],
+    ) -> Result<CudaTensor> {
         let table = self.scale_shift_table.host_cow()?;
         let mut scale_msa = mod_chunks[0].host_cow()?.into_owned();
         let mut shift_msa = mod_chunks[1].host_cow()?.into_owned();
@@ -491,10 +589,14 @@ impl DiffusionNaBlock {
         let x = x.add(&self.context_proj.forward(context)?)?;
         let n1 = nn::rms_norm(&x, &self.norm1, 1e-6)?;
         let ones = CudaTensor::ones(&[b, 1, 1, 1, self.dim]);
-        let h = self.attn.forward(&n1.mul(&ones.add(&scale_msa)?)?.add(&shift_msa)?)?;
+        let h = self
+            .attn
+            .forward(&n1.mul(&ones.add(&scale_msa)?)?.add(&shift_msa)?)?;
         let x = x.add(&h)?;
         let n2 = nn::rms_norm(&x, &self.norm2, 1e-6)?;
-        let h = self.mlp.forward(&n2.mul(&ones.add(&scale_mlp)?)?.add(&shift_mlp)?)?;
+        let h = self
+            .mlp
+            .forward(&n2.mul(&ones.add(&scale_mlp)?)?.add(&shift_mlp)?)?;
         x.add(&h)
     }
 }
@@ -506,7 +608,13 @@ struct PixelShuffleUpsampler {
 }
 
 impl PixelShuffleUpsampler {
-    fn load(map: &WeightMap, prefix: &str, in_ch: usize, stride: [usize; 3], reduction: usize) -> Result<Self> {
+    fn load(
+        map: &WeightMap,
+        prefix: &str,
+        in_ch: usize,
+        stride: [usize; 3],
+        reduction: usize,
+    ) -> Result<Self> {
         let proj_out = stride.iter().product::<usize>() * in_ch / reduction;
         let out_channels = proj_out / stride.iter().product::<usize>();
         Ok(Self {
@@ -519,7 +627,12 @@ impl PixelShuffleUpsampler {
     fn forward(&self, x: &CudaTensor, drop_leading: bool) -> Result<CudaTensor> {
         let [b, f, h, w, _] = match x.shape[..] {
             [b, f, h, w, c] => [b, f, h, w, c],
-            _ => return Err(msg(format!("upsample expects [B,T,H,W,C], got {:?}", x.shape))),
+            _ => {
+                return Err(msg(format!(
+                    "upsample expects [B,T,H,W,C], got {:?}",
+                    x.shape
+                )))
+            }
         };
         let [st, sh, sw] = self.stride;
         let y = self.proj.forward(x)?;
@@ -547,8 +660,20 @@ impl TimestepEmbed {
     fn load(map: &WeightMap, prefix: &str, emb_dim: usize) -> Result<Self> {
         // PixArtAlphaCombinedTimestepSizeEmbeddings → timestep_embedder (TimestepEmbedding).
         Ok(Self {
-            linear_1: lin(map, &format!("{prefix}.timestep_embedder.linear_1"), 256, emb_dim, true)?,
-            linear_2: lin(map, &format!("{prefix}.timestep_embedder.linear_2"), emb_dim, emb_dim, true)?,
+            linear_1: lin(
+                map,
+                &format!("{prefix}.timestep_embedder.linear_1"),
+                256,
+                emb_dim,
+                true,
+            )?,
+            linear_2: lin(
+                map,
+                &format!("{prefix}.timestep_embedder.linear_2"),
+                emb_dim,
+                emb_dim,
+                true,
+            )?,
             sinusoid: 256,
         })
     }
@@ -595,7 +720,16 @@ impl DiffusionDecoder {
             let kernel = cfg.stage_kernels[stage];
             let depth = cfg.stage_depths[stage];
             let blocks = (0..depth)
-                .map(|i| NaBlock::load(map, &format!("{p}.det_stages.{stage}.{i}"), dim, cfg.head_dim, kernel, hidden))
+                .map(|i| {
+                    NaBlock::load(
+                        map,
+                        &format!("{p}.det_stages.{stage}.{i}"),
+                        dim,
+                        cfg.head_dim,
+                        kernel,
+                        hidden,
+                    )
+                })
                 .collect::<Result<Vec<_>>>()?;
             det_stages.push(blocks);
             upsamples.push(PixelShuffleUpsampler::load(
@@ -623,10 +757,18 @@ impl DiffusionDecoder {
             })
             .collect::<Result<Vec<_>>>()?;
         // Outer model buffers (may be zeros/ones if not written; VAE stats used by pipeline denorm).
-        let mean = cuda_tensor_shaped(map, "latents_mean", &[cfg.latent_channels]).unwrap_or_else(|_| CudaTensor::zeros(&[cfg.latent_channels]));
-        let std = cuda_tensor_shaped(map, "latents_std", &[cfg.latent_channels]).unwrap_or_else(|_| CudaTensor::ones(&[cfg.latent_channels]));
+        let mean = cuda_tensor_shaped(map, "latents_mean", &[cfg.latent_channels])
+            .unwrap_or_else(|_| CudaTensor::zeros(&[cfg.latent_channels]));
+        let std = cuda_tensor_shaped(map, "latents_std", &[cfg.latent_channels])
+            .unwrap_or_else(|_| CudaTensor::ones(&[cfg.latent_channels]));
         Ok(Self {
-            conv_in: lin(map, &format!("{p}.conv_in"), cfg.latent_channels, cfg.stage_channels[0], true)?,
+            conv_in: lin(
+                map,
+                &format!("{p}.conv_in"),
+                cfg.latent_channels,
+                cfg.stage_channels[0],
+                true,
+            )?,
             t_embedder: TimestepEmbed::load(map, &format!("{p}.t_embedder"), cfg.t_emb_dim)?,
             conv_in_x_t: lin(map, &format!("{p}.conv_in_x_t"), pix_ch, s5, true)?,
             shared_adaln: AdaLnZero::load(map, &format!("{p}.shared_adaln"), s5, cfg.t_emb_dim)?,
@@ -686,8 +828,15 @@ impl DiffusionDecoder {
         Ok(x)
     }
 
-    fn diffusion_step(&self, context: &CudaTensor, x_t: &CudaTensor, timestep: f32) -> Result<CudaTensor> {
-        let t_emb = self.t_embedder.forward(timestep * self.cfg.timestep_scale_multiplier)?;
+    fn diffusion_step(
+        &self,
+        context: &CudaTensor,
+        x_t: &CudaTensor,
+        timestep: f32,
+    ) -> Result<CudaTensor> {
+        let t_emb = self
+            .t_embedder
+            .forward(timestep * self.cfg.timestep_scale_multiplier)?;
         // Expand batch if needed.
         let b = context.shape[0];
         let t_emb = if b > 1 {
@@ -724,7 +873,9 @@ impl DiffusionDecoder {
         let (hf, wf) = (hp * p, wp * p);
         let n = b * self.cfg.out_channels * frames * hf * wf;
         let mut rng = rand::rngs::StdRng::seed_from_u64(seed);
-        let noise: Vec<f32> = (0..n).map(|_| rng.sample::<f32, _>(StandardNormal)).collect();
+        let noise: Vec<f32> = (0..n)
+            .map(|_| rng.sample::<f32, _>(StandardNormal))
+            .collect();
         let x_t = CudaTensor::from_vec(noise, vec![b, self.cfg.out_channels, frames, hf, wf])?;
         // Shipped: 1-step x0 at t=1 → prediction is the image.
         self.diffusion_step(&context, &x_t, 1.0)
@@ -769,7 +920,11 @@ mod tests {
 
     #[test]
     fn patchify_unpatchify_roundtrip() {
-        let x = CudaTensor::from_vec((0..2 * 4 * 3 * 4 * 6).map(|i| i as f32).collect(), vec![2, 4, 3, 4, 6]).unwrap();
+        let x = CudaTensor::from_vec(
+            (0..2 * 4 * 3 * 4 * 6).map(|i| i as f32).collect(),
+            vec![2, 4, 3, 4, 6],
+        )
+        .unwrap();
         let y = unpatchify(&patchify(&x, 2).unwrap(), 2).unwrap();
         assert_eq!(y.shape, x.shape);
         assert_eq!(&*y.host_cow().unwrap(), &*x.host_cow().unwrap());

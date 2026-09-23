@@ -27,8 +27,10 @@
 //! trained recipe (VSA-H3 with the `to_gate_compress` branch) plugs in through
 //! [`AttnMode`].
 
-use fastvideo_models::h3::config::{H3TransformerConfig, MODALITY_NUM, TAG_AUDIO, TAG_TEXT, TAG_VIDEO};
-use fastvideo_models::h3::packing::{H3PackedLayout, KEYFRAME_NOISE_AUG, RowRange};
+use fastvideo_models::h3::config::{
+    H3TransformerConfig, MODALITY_NUM, TAG_AUDIO, TAG_TEXT, TAG_VIDEO,
+};
+use fastvideo_models::h3::packing::{H3PackedLayout, RowRange, KEYFRAME_NOISE_AUG};
 use fastvideo_models::h3::schedule::H3JointSchedule;
 
 use crate::wan::nn::{scaled_dot_product_attention, Linear};
@@ -46,10 +48,60 @@ fn pinned(data: Vec<f32>, shape: Vec<usize>) -> Result<CudaTensor> {
     Ok(t)
 }
 
-fn pinned_weight(map: &WeightMap, key: &str, shape: &[usize]) -> Result<CudaTensor> {
-    let mut t = cuda_tensor_shaped(map, key, shape)?;
-    t.pin_device()?;
-    Ok(t)
+fn pinned_weight(
+    map: &WeightMap,
+    key: &str,
+    shape: &[usize],
+    lora: &mut Option<super::lora::H3LoraFuse>,
+) -> Result<CudaTensor> {
+    let Some(fuse) = lora.as_mut() else {
+        let mut t = cuda_tensor_shaped(map, key, shape)?;
+        t.pin_device()?;
+        return Ok(t);
+    };
+    let (got, mut data) = map.get_f32(key)?;
+    if got.as_slice() != shape {
+        return Err(msg(format!(
+            "key {key}: shape {got:?} != expected {shape:?}"
+        )));
+    }
+    fuse.fuse(key, &mut data, shape)?;
+    pinned(data, shape.to_vec())
+}
+
+/// `Linear::load`, or the same matrix after a Sol-H3 adapter update.
+fn load_linear(
+    map: &WeightMap,
+    prefix: &str,
+    in_dim: usize,
+    out_dim: usize,
+    has_bias: bool,
+    lora: &mut Option<super::lora::H3LoraFuse>,
+) -> Result<Linear> {
+    let Some(fuse) = lora.as_mut() else {
+        return Linear::load(map, prefix, in_dim, out_dim, has_bias);
+    };
+    let wkey = format!("{prefix}.weight");
+    let (shape, mut weight) = map.get_f32(&wkey)?;
+    if shape != [out_dim, in_dim] {
+        return Err(msg(format!(
+            "key {wkey}: shape {shape:?} != expected {:?}",
+            [out_dim, in_dim]
+        )));
+    }
+    fuse.fuse(&wkey, &mut weight, &shape)?;
+    let bias = if has_bias {
+        let bkey = format!("{prefix}.bias");
+        let (bs, mut bias) = map.get_f32(&bkey)?;
+        if bs != [out_dim] {
+            return Err(msg(format!("key {bkey}: shape {bs:?} != [{out_dim}]")));
+        }
+        fuse.fuse(&bkey, &mut bias, &bs)?;
+        Some(CudaTensor::from_vec(bias, vec![out_dim])?)
+    } else {
+        None
+    };
+    Linear::from_tensors(CudaTensor::from_vec(weight, vec![out_dim, in_dim])?, bias)
 }
 
 /// Rows per FFN pass when the full `[S, 2*ffn]` f32 buffer would exceed
@@ -101,17 +153,42 @@ pub enum AttnMode<'a> {
 /// sinusoid with cos first and an unscaled `t in [0, 1]`, then
 /// `linear_2(silu(linear_1(.)))`. 16 vectors per checkpoint, so exactness
 /// matters more than speed; sums accumulate in float64.
-pub fn time_embeddings(cfg: &H3TransformerConfig, map: &WeightMap, timesteps: &[f32]) -> Result<Vec<Vec<f32>>> {
+pub fn time_embeddings(
+    cfg: &H3TransformerConfig,
+    map: &WeightMap,
+    timesteps: &[f32],
+    lora: &mut Option<super::lora::H3LoraFuse>,
+) -> Result<Vec<Vec<f32>>> {
     let (freq, hidden, out) = (cfg.freq_dim, cfg.time_embed_hidden_dim, cfg.time_embed_dim);
-    let host = |key: &str, shape: &[usize]| -> Result<Vec<f32>> { Ok(cuda_tensor_shaped(map, key, shape)?.host_cow()?.into_owned()) };
-    let (w1, b1) = (host("time_embedder.linear_1.weight", &[hidden, freq])?, host("time_embedder.linear_1.bias", &[hidden])?);
-    let (w2, b2) = (host("time_embedder.linear_2.weight", &[out, hidden])?, host("time_embedder.linear_2.bias", &[out])?);
+    let mut host = |key: &str, shape: &[usize]| -> Result<Vec<f32>> {
+        let mut data = cuda_tensor_shaped(map, key, shape)?
+            .host_cow()?
+            .into_owned();
+        if let Some(fuse) = lora.as_mut() {
+            fuse.fuse(key, &mut data, shape)?;
+        }
+        Ok(data)
+    };
+    let (w1, b1) = (
+        host("time_embedder.linear_1.weight", &[hidden, freq])?,
+        host("time_embedder.linear_1.bias", &[hidden])?,
+    );
+    let (w2, b2) = (
+        host("time_embedder.linear_2.weight", &[out, hidden])?,
+        host("time_embedder.linear_2.bias", &[out])?,
+    );
     let half = freq / 2;
     let linear = |x: &[f32], w: &[f32], b: &[f32]| -> Vec<f32> {
         use rayon::prelude::*;
         b.par_iter()
             .enumerate()
-            .map(|(r, &bias)| (f64::from(bias) + x.iter().zip(&w[r * x.len()..(r + 1) * x.len()]).map(|(a, c)| f64::from(*a) * f64::from(*c)).sum::<f64>()) as f32)
+            .map(|(r, &bias)| {
+                (f64::from(bias)
+                    + x.iter()
+                        .zip(&w[r * x.len()..(r + 1) * x.len()])
+                        .map(|(a, c)| f64::from(*a) * f64::from(*c))
+                        .sum::<f64>()) as f32
+            })
             .collect()
     };
     Ok(timesteps
@@ -123,7 +200,10 @@ pub fn time_embeddings(cfg: &H3TransformerConfig, map: &WeightMap, timesteps: &[
                 emb[k] = (t * f).cos();
                 emb[half + k] = (t * f).sin();
             }
-            let h: Vec<f32> = linear(&emb, &w1, &b1).into_iter().map(|v| v / (1.0 + (-v).exp())).collect();
+            let h: Vec<f32> = linear(&emb, &w1, &b1)
+                .into_iter()
+                .map(|v| v / (1.0 + (-v).exp()))
+                .collect();
             linear(&h, &w2, &b2)
         })
         .collect())
@@ -143,7 +223,7 @@ pub struct AdaLnTable {
     block_mods: Vec<f32>,
     /// `[steps, 2 (video, audio timestep), 2 (shift, 1 + scale), hidden]`.
     out_mods: Vec<f32>,
-/// `[blocks, 3, 6, hidden]`: AdaLN at [`KEYFRAME_NOISE_AUG`] for every modality tag.
+    /// `[blocks, 3, 6, hidden]`: AdaLN at [`KEYFRAME_NOISE_AUG`] for every modality tag.
     keyframe_mods: Vec<f32>,
     /// `[steps, 2, time_embed_dim]`: `temb` for (video, audio), kept for the oracle.
     pub temb: Vec<Vec<f32>>,
@@ -152,24 +232,50 @@ pub struct AdaLnTable {
 impl AdaLnTable {
     /// Stream each projection through the device once. Device peak is one
     /// `adaln_proj` (520 MB as bf16) plus a `[2 * steps, 96768]` result.
-    pub fn precompute(cfg: &H3TransformerConfig, map: &WeightMap, schedule: &H3JointSchedule) -> Result<Self> {
+    pub fn precompute(
+        cfg: &H3TransformerConfig,
+        map: &WeightMap,
+        schedule: &H3JointSchedule,
+    ) -> Result<Self> {
+        Self::precompute_with(cfg, map, schedule, &mut None)
+    }
+
+    pub fn precompute_with(
+        cfg: &H3TransformerConfig,
+        map: &WeightMap,
+        schedule: &H3JointSchedule,
+        lora: &mut Option<super::lora::H3LoraFuse>,
+    ) -> Result<Self> {
         let steps = schedule.num_steps();
         let (hidden, te) = (cfg.hidden_size, cfg.time_embed_dim);
         // Row 2i is the video timestep of step i, row 2i + 1 the audio one;
         // final row is KEYFRAME_NOISE_AUG for FL2VA condition AdaLN.
-        let mut timesteps: Vec<f32> = (0..steps).flat_map(|i| [schedule.video.timesteps[i], schedule.audio.timesteps[i]]).collect();
+        let mut timesteps: Vec<f32> = (0..steps)
+            .flat_map(|i| [schedule.video.timesteps[i], schedule.audio.timesteps[i]])
+            .collect();
         timesteps.push(KEYFRAME_NOISE_AUG);
-        let temb_all = time_embeddings(cfg, map, &timesteps)?;
+        let temb_all = time_embeddings(cfg, map, &timesteps, lora)?;
         let temb: Vec<Vec<f32>> = temb_all[..2 * steps].to_vec();
         // silu in float32, THEN the cast the projection applies.
-        let silu: Vec<f32> = temb_all.iter().flatten().map(|&v| v / (1.0 + (-v).exp())).collect();
+        let silu: Vec<f32> = temb_all
+            .iter()
+            .flatten()
+            .map(|&v| v / (1.0 + (-v).exp()))
+            .collect();
         let s = pinned(silu, vec![2 * steps + 1, te])?;
 
         let slice = ADALN_PARAMS * hidden;
         let mut block_mods = vec![0f32; steps * cfg.num_layers * MODALITY_NUM * slice];
         let mut keyframe_mods = vec![0f32; cfg.num_layers * MODALITY_NUM * slice];
         for b in 0..cfg.num_layers {
-            let proj = Linear::load(map, &format!("transformer_blocks.{b}.adaln_proj.linear"), te, cfg.adaln_out_dim(), true)?;
+            let proj = load_linear(
+                map,
+                &format!("transformer_blocks.{b}.adaln_proj.linear"),
+                te,
+                cfg.adaln_out_dim(),
+                true,
+                lora,
+            )?;
             let y = proj.forward(&s)?;
             let y = y.host_cow()?;
             drop(proj);
@@ -180,10 +286,13 @@ impl AdaLnTable {
                     // Within one timestep's output, modality m owns [m * 6H, (m + 1) * 6H).
                     let row = if tag == TAG_AUDIO { 2 * i + 1 } else { 2 * i };
                     let src = &y[row * width + m * slice..row * width + (m + 1) * slice];
-                    let dst = &mut block_mods[((i * cfg.num_layers + b) * MODALITY_NUM + m) * slice..][..slice];
+                    let dst = &mut block_mods
+                        [((i * cfg.num_layers + b) * MODALITY_NUM + m) * slice..][..slice];
                     dst.copy_from_slice(src);
                     for p in [SCALE_MSA, SCALE_MLP] {
-                        dst[p * hidden..(p + 1) * hidden].iter_mut().for_each(|v| *v += 1.0);
+                        dst[p * hidden..(p + 1) * hidden]
+                            .iter_mut()
+                            .for_each(|v| *v += 1.0);
                     }
                 }
             }
@@ -195,15 +304,21 @@ impl AdaLnTable {
                 let dst = &mut keyframe_mods[(b * MODALITY_NUM + m) * slice..][..slice];
                 dst.copy_from_slice(src);
                 for p in [SCALE_MSA, SCALE_MLP] {
-                    dst[p * hidden..(p + 1) * hidden].iter_mut().for_each(|v| *v += 1.0);
+                    dst[p * hidden..(p + 1) * hidden]
+                        .iter_mut()
+                        .for_each(|v| *v += 1.0);
                 }
             }
-            crate::wan::log::info(format_args!("h3 adaln table: block {}/{}", b + 1, cfg.num_layers));
+            crate::wan::log::info(format_args!(
+                "h3 adaln table: block {}/{}",
+                b + 1,
+                cfg.num_layers
+            ));
         }
 
         // Out mods only need the ladder timesteps (video/audio heads), not keyframe.
         let s_ladder = s.narrow(0, 0, 2 * steps)?;
-        let proj = Linear::load(map, "norm_out.linear", te, 2 * hidden, true)?;
+        let proj = load_linear(map, "norm_out.linear", te, 2 * hidden, true, lora)?;
         let y = proj.forward(&s_ladder)?;
         let y = y.host_cow()?;
         // `shift, scale = chunk(2)`: shift first.
@@ -227,17 +342,51 @@ impl AdaLnTable {
     /// skips more than a third of the checkpoint. The file is keyed by the
     /// ladder's timesteps and a fingerprint of the checkpoint (block 0's AdaLN
     /// bias bytes); anything that does not match is rebuilt, never trusted.
-    pub fn load_or_precompute(cfg: &H3TransformerConfig, map: &WeightMap, schedule: &H3JointSchedule, cache: Option<&std::path::Path>) -> Result<Self> {
+    pub fn load_or_precompute(
+        cfg: &H3TransformerConfig,
+        map: &WeightMap,
+        schedule: &H3JointSchedule,
+        cache: Option<&std::path::Path>,
+    ) -> Result<Self> {
+        Self::load_or_precompute_with(cfg, map, schedule, cache, &mut None)
+    }
+
+    pub fn load_or_precompute_with(
+        cfg: &H3TransformerConfig,
+        map: &WeightMap,
+        schedule: &H3JointSchedule,
+        cache: Option<&std::path::Path>,
+        lora: &mut Option<super::lora::H3LoraFuse>,
+    ) -> Result<Self> {
+        // A fused adapter changes the projections the cache was built from.
+        if lora.is_some() {
+            return Self::precompute_with(cfg, map, schedule, lora);
+        }
         let (Some(path), Some(lazy)) = (cache, map.lazy()) else {
             return Self::precompute(cfg, map, schedule);
         };
         let fingerprint = {
-            let view = lazy.view("transformer_blocks.0.adaln_proj.linear.bias").map_err(|e| msg(e.to_string()))?;
-            view.bytes.iter().fold(0xcbf2_9ce4_8422_2325u64, |h, b| (h ^ u64::from(*b)).wrapping_mul(0x0100_0000_01b3))
+            let view = lazy
+                .view("transformer_blocks.0.adaln_proj.linear.bias")
+                .map_err(|e| msg(e.to_string()))?;
+            view.bytes.iter().fold(0xcbf2_9ce4_8422_2325u64, |h, b| {
+                (h ^ u64::from(*b)).wrapping_mul(0x0100_0000_01b3)
+            })
         };
         let steps = schedule.num_steps();
-        let mut header: Vec<u64> = vec![CACHE_MAGIC, fingerprint, steps as u64, cfg.num_layers as u64, cfg.hidden_size as u64, cfg.time_embed_dim as u64];
-        header.extend((0..steps).flat_map(|i| [schedule.video.timesteps[i], schedule.audio.timesteps[i]]).map(|t| u64::from(t.to_bits())));
+        let mut header: Vec<u64> = vec![
+            CACHE_MAGIC,
+            fingerprint,
+            steps as u64,
+            cfg.num_layers as u64,
+            cfg.hidden_size as u64,
+            cfg.time_embed_dim as u64,
+        ];
+        header.extend(
+            (0..steps)
+                .flat_map(|i| [schedule.video.timesteps[i], schedule.audio.timesteps[i]])
+                .map(|t| u64::from(t.to_bits())),
+        );
         header.push(u64::from(KEYFRAME_NOISE_AUG.to_bits()));
         let header: Vec<u8> = header.iter().flat_map(|v| v.to_le_bytes()).collect();
         let sizes = [
@@ -250,12 +399,17 @@ impl AdaLnTable {
         if let Ok(bytes) = std::fs::read(path) {
             let want = header.len() + 4 * sizes.iter().sum::<usize>();
             if bytes.len() == want && bytes[..header.len()] == header[..] {
-                let mut values = bytes[header.len()..].chunks_exact(4).map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]));
+                let mut values = bytes[header.len()..]
+                    .chunks_exact(4)
+                    .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]));
                 let block_mods: Vec<f32> = values.by_ref().take(sizes[0]).collect();
                 let out_mods: Vec<f32> = values.by_ref().take(sizes[1]).collect();
                 let keyframe_mods: Vec<f32> = values.by_ref().take(sizes[2]).collect();
                 let flat: Vec<f32> = values.collect();
-                let temb = flat.chunks_exact(cfg.time_embed_dim).map(<[f32]>::to_vec).collect();
+                let temb = flat
+                    .chunks_exact(cfg.time_embed_dim)
+                    .map(<[f32]>::to_vec)
+                    .collect();
                 crate::wan::log::info(format_args!("h3 adaln table: read from {}", path.display()));
                 return Ok(Self {
                     steps,
@@ -267,9 +421,12 @@ impl AdaLnTable {
                     temb,
                 });
             }
-            crate::wan::log::info(format_args!("h3 adaln table: {} is for another checkpoint or ladder; rebuilding", path.display()));
+            crate::wan::log::info(format_args!(
+                "h3 adaln table: {} is for another checkpoint or ladder; rebuilding",
+                path.display()
+            ));
         }
-        let table = Self::precompute(cfg, map, schedule)?;
+        let table = Self::precompute_with(cfg, map, schedule, lora)?;
         let mut bytes = header;
         bytes.extend(
             table
@@ -281,9 +438,15 @@ impl AdaLnTable {
                 .flat_map(|v| v.to_le_bytes()),
         );
         // A cache that cannot be written costs the next start some time, not this run its result.
-        let written = path.parent().map_or(Ok(()), std::fs::create_dir_all).and_then(|()| std::fs::write(path, &bytes));
+        let written = path
+            .parent()
+            .map_or(Ok(()), std::fs::create_dir_all)
+            .and_then(|()| std::fs::write(path, &bytes));
         if let Err(e) = written {
-            crate::wan::log::info(format_args!("h3 adaln table: could not write {}: {e}", path.display()));
+            crate::wan::log::info(format_args!(
+                "h3 adaln table: could not write {}: {e}",
+                path.display()
+            ));
         }
         Ok(table)
     }
@@ -296,7 +459,8 @@ impl AdaLnTable {
     /// gate_msa, shift_mlp, 1 + scale_mlp, gate_mlp.
     pub fn block_slot(&self, step: usize, block: usize, tag: u8) -> &[f32] {
         let slice = ADALN_PARAMS * self.hidden;
-        &self.block_mods[((step * self.blocks + block) * MODALITY_NUM + usize::from(tag)) * slice..][..slice]
+        &self.block_mods[((step * self.blocks + block) * MODALITY_NUM + usize::from(tag)) * slice..]
+            [..slice]
     }
 
     /// AdaLN at [`KEYFRAME_NOISE_AUG`] for `(block, tag)`.
@@ -308,7 +472,8 @@ impl AdaLnTable {
     /// `(shift, 1 + scale)` of `norm_out` for the video (`audio = false`) or
     /// audio timestep of `step`. Per timestep, not per modality.
     pub fn out_slot(&self, step: usize, audio: bool) -> (&[f32], &[f32]) {
-        let row = &self.out_mods[(2 * step + usize::from(audio)) * 2 * self.hidden..][..2 * self.hidden];
+        let row =
+            &self.out_mods[(2 * step + usize::from(audio)) * 2 * self.hidden..][..2 * self.hidden];
         row.split_at(self.hidden)
     }
 }
@@ -320,12 +485,25 @@ struct BlockMods {
 }
 
 impl BlockMods {
-    fn upload(table: &AdaLnTable, step: usize, block: usize, layout: &H3PackedLayout) -> Result<Self> {
+    fn upload(
+        table: &AdaLnTable,
+        step: usize,
+        block: usize,
+        layout: &H3PackedLayout,
+    ) -> Result<Self> {
         let up_ladder = |tag: u8| {
-            CudaTensor::from_vec(table.block_slot(step, block, tag).to_vec(), vec![1, ADALN_PARAMS, table.hidden])?.to_device()
+            CudaTensor::from_vec(
+                table.block_slot(step, block, tag).to_vec(),
+                vec![1, ADALN_PARAMS, table.hidden],
+            )?
+            .to_device()
         };
         let up_keyframe = |tag: u8| {
-            CudaTensor::from_vec(table.keyframe_slot(block, tag).to_vec(), vec![1, ADALN_PARAMS, table.hidden])?.to_device()
+            CudaTensor::from_vec(
+                table.keyframe_slot(block, tag).to_vec(),
+                vec![1, ADALN_PARAMS, table.hidden],
+            )?
+            .to_device()
         };
         let mut segments = Vec::new();
         for (range, tag) in tag_runs(&layout.token_tags) {
@@ -353,7 +531,11 @@ impl BlockMods {
             .segments
             .iter()
             .filter(|(range, _)| range.len > 0)
-            .map(|(range, e)| n.narrow(1, range.start, range.len)?.mul(&e.narrow(1, scale, 1)?)?.add(&e.narrow(1, shift, 1)?))
+            .map(|(range, e)| {
+                n.narrow(1, range.start, range.len)?
+                    .mul(&e.narrow(1, scale, 1)?)?
+                    .add(&e.narrow(1, shift, 1)?)
+            })
             .collect::<Result<Vec<_>>>()?;
         CudaTensor::cat(&parts.iter().collect::<Vec<_>>(), 1)
     }
@@ -364,7 +546,13 @@ impl BlockMods {
             .segments
             .iter()
             .filter(|(range, _)| range.len > 0)
-            .map(|(range, e)| x.narrow(1, range.start, range.len)?.residual_gate_add_e(&update.narrow(1, range.start, range.len)?, e, gate))
+            .map(|(range, e)| {
+                x.narrow(1, range.start, range.len)?.residual_gate_add_e(
+                    &update.narrow(1, range.start, range.len)?,
+                    e,
+                    gate,
+                )
+            })
             .collect::<Result<Vec<_>>>()?;
         CudaTensor::cat(&parts.iter().collect::<Vec<_>>(), 1)
     }
@@ -380,7 +568,13 @@ fn tag_runs(tags: &[u8]) -> Vec<(RowRange, u8)> {
         while j < tags.len() && tags[j] == tag {
             j += 1;
         }
-        out.push((RowRange { start: i, len: j - i }, tag));
+        out.push((
+            RowRange {
+                start: i,
+                len: j - i,
+            },
+            tag,
+        ));
         i = j;
     }
     out
@@ -407,17 +601,70 @@ pub(crate) struct Attention {
 }
 
 impl Attention {
-    fn load(map: &WeightMap, prefix: &str, cfg: &H3TransformerConfig, gate: bool) -> Result<Self> {
+    fn load(
+        map: &WeightMap,
+        prefix: &str,
+        cfg: &H3TransformerConfig,
+        gate: bool,
+        lora: &mut Option<super::lora::H3LoraFuse>,
+    ) -> Result<Self> {
         let (hidden, inner, d) = (cfg.hidden_size, cfg.inner_dim(), cfg.attention_head_dim);
-        let mut names = vec![format!("{prefix}.to_q"), format!("{prefix}.to_k"), format!("{prefix}.to_v")];
+        let mut names = vec![
+            format!("{prefix}.to_q"),
+            format!("{prefix}.to_k"),
+            format!("{prefix}.to_v"),
+        ];
         if gate {
             names.push(format!("{prefix}.to_gate_compress"));
+        }
+        if lora.is_some() {
+            let mut stacked = Vec::with_capacity(names.len() * inner * hidden);
+            for name in &names {
+                let key = format!("{name}.weight");
+                let (shape, mut row) = map.get_f32(&key)?;
+                if shape != [inner, hidden] {
+                    return Err(msg(format!(
+                        "key {key}: shape {shape:?} != [{inner}, {hidden}]"
+                    )));
+                }
+                lora.as_mut().unwrap().fuse(&key, &mut row, &shape)?;
+                stacked.extend(row);
+            }
+            let qkvg = Linear::from_tensors(
+                CudaTensor::from_vec(stacked, vec![names.len() * inner, hidden])?,
+                None,
+            )?;
+            let to_out = load_linear(
+                map,
+                &format!("{prefix}.to_out.0"),
+                inner,
+                hidden,
+                false,
+                lora,
+            )?;
+            return Ok(Self {
+                qkvg,
+                to_out,
+                has_gate: gate,
+                norm_q: pinned_weight(map, &format!("{prefix}.norm_q.weight"), &[d], lora)?,
+                norm_k: pinned_weight(map, &format!("{prefix}.norm_k.weight"), &[d], lora)?,
+                heads: cfg.num_attention_heads,
+                head_dim: d,
+                eps: cfg.qk_norm_eps as f32,
+            });
         }
         let keys: Vec<&str> = names.iter().map(String::as_str).collect();
         let (qkvg, to_out) = if let Some(bits) = crate::wan::affine::bits_from_env() {
             (
                 Linear::load_fused_affine(map, &keys, hidden, inner, false, bits)?,
-                Linear::load_affine(map, &format!("{prefix}.to_out.0"), inner, hidden, false, bits)?,
+                Linear::load_affine(
+                    map,
+                    &format!("{prefix}.to_out.0"),
+                    inner,
+                    hidden,
+                    false,
+                    bits,
+                )?,
             )
         } else {
             (
@@ -429,8 +676,8 @@ impl Attention {
             qkvg,
             to_out,
             has_gate: gate,
-            norm_q: pinned_weight(map, &format!("{prefix}.norm_q.weight"), &[d])?,
-            norm_k: pinned_weight(map, &format!("{prefix}.norm_k.weight"), &[d])?,
+            norm_q: pinned_weight(map, &format!("{prefix}.norm_q.weight"), &[d], lora)?,
+            norm_k: pinned_weight(map, &format!("{prefix}.norm_k.weight"), &[d], lora)?,
             heads: cfg.num_attention_heads,
             head_dim: d,
             eps: cfg.qk_norm_eps as f32,
@@ -438,32 +685,45 @@ impl Attention {
     }
 
     /// `n`: `[1, S, hidden]`. `rope`: `[S, R]` cos/sin, or `None` (refiner).
-    fn forward(&self, n: &CudaTensor, rope: Option<(&CudaTensor, &CudaTensor)>, mode: AttnMode<'_>) -> Result<CudaTensor> {
+    fn forward(
+        &self,
+        n: &CudaTensor,
+        rope: Option<(&CudaTensor, &CudaTensor)>,
+        mode: AttnMode<'_>,
+    ) -> Result<CudaTensor> {
         let packed = phase("h3_attn_qkvg", || self.qkvg.forward(n))?;
         let inner = self.heads * self.head_dim;
         // Per-head RMSNorm over D (one [D] weight for all heads), then RoPE.
         // Wan's fused `qk_norm_rope_bhsd` norms over heads*d — wrong here.
         let q = phase("h3_attn_q", || {
-            let t = packed.split_heads_bhsd(0, self.heads, self.head_dim)?.rms_norm(&self.norm_q, self.eps)?;
+            let t = packed
+                .split_heads_bhsd(0, self.heads, self.head_dim)?
+                .rms_norm(&self.norm_q, self.eps)?;
             match rope {
                 Some((cos, sin)) => t.rope_half(cos, sin),
                 None => Ok(t),
             }
         })?;
         let k = phase("h3_attn_k", || {
-            let t = packed.split_heads_bhsd(inner, self.heads, self.head_dim)?.rms_norm(&self.norm_k, self.eps)?;
+            let t = packed
+                .split_heads_bhsd(inner, self.heads, self.head_dim)?
+                .rms_norm(&self.norm_k, self.eps)?;
             match rope {
                 Some((cos, sin)) => t.rope_half(cos, sin),
                 None => Ok(t),
             }
         })?;
-        let v = phase("h3_attn_v", || packed.split_heads_bhsd(2 * inner, self.heads, self.head_dim))?;
+        let v = phase("h3_attn_v", || {
+            packed.split_heads_bhsd(2 * inner, self.heads, self.head_dim)
+        })?;
         let out = match mode {
             AttnMode::Dense => scaled_dot_product_attention(&q, &k, &v, None)?,
             AttnMode::Vsa(vsa) => {
                 // Gate is a plain projection of the same input: not normed, not rotated.
                 let gate = if self.has_gate {
-                    Some(phase("h3_attn_gate", || packed.split_heads_bhsd(3 * inner, self.heads, self.head_dim))?)
+                    Some(phase("h3_attn_gate", || {
+                        packed.split_heads_bhsd(3 * inner, self.heads, self.head_dim)
+                    })?)
                 } else {
                     None
                 };
@@ -491,24 +751,92 @@ fn h3_ffn_fp8() -> bool {
 }
 
 impl FeedForward {
-    fn load(map: &WeightMap, prefix: &str, cfg: &H3TransformerConfig) -> Result<Self> {
+    fn load(
+        map: &WeightMap,
+        prefix: &str,
+        cfg: &H3TransformerConfig,
+        lora: &mut Option<super::lora::H3LoraFuse>,
+    ) -> Result<Self> {
+        if lora.is_some() {
+            return Ok(Self {
+                ff_in: load_linear(
+                    map,
+                    &format!("{prefix}.net.0.proj"),
+                    cfg.hidden_size,
+                    2 * cfg.ffn_dim,
+                    false,
+                    lora,
+                )?,
+                ff_out: load_linear(
+                    map,
+                    &format!("{prefix}.net.2"),
+                    cfg.ffn_dim,
+                    cfg.hidden_size,
+                    false,
+                    lora,
+                )?,
+                ffn_dim: cfg.ffn_dim,
+            });
+        }
         let (ff_in, ff_out) = if let Some(bits) = crate::wan::affine::bits_from_env() {
             (
-                Linear::load_affine(map, &format!("{prefix}.net.0.proj"), cfg.hidden_size, 2 * cfg.ffn_dim, false, bits)?,
-                Linear::load_affine(map, &format!("{prefix}.net.2"), cfg.ffn_dim, cfg.hidden_size, false, bits)?,
+                Linear::load_affine(
+                    map,
+                    &format!("{prefix}.net.0.proj"),
+                    cfg.hidden_size,
+                    2 * cfg.ffn_dim,
+                    false,
+                    bits,
+                )?,
+                Linear::load_affine(
+                    map,
+                    &format!("{prefix}.net.2"),
+                    cfg.ffn_dim,
+                    cfg.hidden_size,
+                    false,
+                    bits,
+                )?,
             )
         } else if h3_ffn_fp8() {
             (
-                Linear::load_fp8_gemm(map, &format!("{prefix}.net.0.proj"), cfg.hidden_size, 2 * cfg.ffn_dim, false)?,
-                Linear::load_fp8_gemm(map, &format!("{prefix}.net.2"), cfg.ffn_dim, cfg.hidden_size, false)?,
+                Linear::load_fp8_gemm(
+                    map,
+                    &format!("{prefix}.net.0.proj"),
+                    cfg.hidden_size,
+                    2 * cfg.ffn_dim,
+                    false,
+                )?,
+                Linear::load_fp8_gemm(
+                    map,
+                    &format!("{prefix}.net.2"),
+                    cfg.ffn_dim,
+                    cfg.hidden_size,
+                    false,
+                )?,
             )
         } else {
             (
-                Linear::load(map, &format!("{prefix}.net.0.proj"), cfg.hidden_size, 2 * cfg.ffn_dim, false)?,
-                Linear::load(map, &format!("{prefix}.net.2"), cfg.ffn_dim, cfg.hidden_size, false)?,
+                Linear::load(
+                    map,
+                    &format!("{prefix}.net.0.proj"),
+                    cfg.hidden_size,
+                    2 * cfg.ffn_dim,
+                    false,
+                )?,
+                Linear::load(
+                    map,
+                    &format!("{prefix}.net.2"),
+                    cfg.ffn_dim,
+                    cfg.hidden_size,
+                    false,
+                )?,
             )
         };
-        Ok(Self { ff_in, ff_out, ffn_dim: cfg.ffn_dim })
+        Ok(Self {
+            ff_in,
+            ff_out,
+            ffn_dim: cfg.ffn_dim,
+        })
     }
 
     fn forward(&self, n: &CudaTensor) -> Result<CudaTensor> {
@@ -518,7 +846,9 @@ impl FeedForward {
         let mut start = 0;
         while start < rows {
             let len = chunk.min(rows - start);
-            let h = phase("h3_ffn_in", || self.ff_in.forward(&n.narrow(1, start, len)?))?;
+            let h = phase("h3_ffn_in", || {
+                self.ff_in.forward(&n.narrow(1, start, len)?)
+            })?;
             let act = phase("h3_ffn_act", || h.swiglu_value_first())?;
             drop(h);
             parts.push(phase("h3_ffn_out", || self.ff_out.forward(&act))?);
@@ -539,12 +869,28 @@ pub(crate) struct Block {
 }
 
 impl Block {
-    pub(crate) fn load(map: &WeightMap, prefix: &str, cfg: &H3TransformerConfig, gate: bool) -> Result<Self> {
+    pub(crate) fn load(
+        map: &WeightMap,
+        prefix: &str,
+        cfg: &H3TransformerConfig,
+        gate: bool,
+        lora: &mut Option<super::lora::H3LoraFuse>,
+    ) -> Result<Self> {
         Ok(Self {
-            norm1: pinned_weight(map, &format!("{prefix}.norm1.weight"), &[cfg.hidden_size])?,
-            norm2: pinned_weight(map, &format!("{prefix}.norm2.weight"), &[cfg.hidden_size])?,
-            attn: Attention::load(map, &format!("{prefix}.attn"), cfg, gate)?,
-            ff: FeedForward::load(map, &format!("{prefix}.ff"), cfg)?,
+            norm1: pinned_weight(
+                map,
+                &format!("{prefix}.norm1.weight"),
+                &[cfg.hidden_size],
+                lora,
+            )?,
+            norm2: pinned_weight(
+                map,
+                &format!("{prefix}.norm2.weight"),
+                &[cfg.hidden_size],
+                lora,
+            )?,
+            attn: Attention::load(map, &format!("{prefix}.attn"), cfg, gate, lora)?,
+            ff: FeedForward::load(map, &format!("{prefix}.ff"), cfg, lora)?,
         })
     }
 }
@@ -561,12 +907,40 @@ pub struct H3TextRefiner {
 
 impl H3TextRefiner {
     pub fn load(cfg: &H3TransformerConfig, map: &WeightMap) -> Result<Self> {
+        Self::load_with(cfg, map, &mut None)
+    }
+
+    pub fn load_with(
+        cfg: &H3TransformerConfig,
+        map: &WeightMap,
+        lora: &mut Option<super::lora::H3LoraFuse>,
+    ) -> Result<Self> {
         Ok(Self {
-            context_embedder: Linear::load(map, "context_embedder", cfg.text_dim, cfg.hidden_size, true)?,
+            context_embedder: load_linear(
+                map,
+                "context_embedder",
+                cfg.text_dim,
+                cfg.hidden_size,
+                true,
+                lora,
+            )?,
             blocks: (0..cfg.num_refiner_layers)
-                .map(|i| Block::load(map, &format!("token_refiner.refiner_blocks.{i}"), cfg, false))
+                .map(|i| {
+                    Block::load(
+                        map,
+                        &format!("token_refiner.refiner_blocks.{i}"),
+                        cfg,
+                        false,
+                        lora,
+                    )
+                })
                 .collect::<Result<Vec<_>>>()?,
-            final_norm: pinned_weight(map, "token_refiner.final_norm.weight", &[cfg.hidden_size])?,
+            final_norm: pinned_weight(
+                map,
+                "token_refiner.final_norm.weight",
+                &[cfg.hidden_size],
+                lora,
+            )?,
             eps: cfg.norm_eps as f32,
             final_eps: cfg.final_norm_eps as f32,
         })
@@ -577,7 +951,10 @@ impl H3TextRefiner {
     pub fn forward(&self, text: &CudaTensor) -> Result<CudaTensor> {
         let mut e = self.context_embedder.forward(text)?;
         for block in &self.blocks {
-            let a = block.attn.forward(&e.rms_norm(&block.norm1, self.eps)?, None, AttnMode::Dense)?;
+            let a =
+                block
+                    .attn
+                    .forward(&e.rms_norm(&block.norm1, self.eps)?, None, AttnMode::Dense)?;
             e = e.add(&a)?;
             let f = block.ff.forward(&e.rms_norm(&block.norm2, self.eps)?)?;
             e = e.add(&f)?;
@@ -598,7 +975,11 @@ impl DeviceLayout {
     pub fn new(cfg: &H3TransformerConfig, layout: H3PackedLayout) -> Result<Self> {
         let (cos, sin) = layout.rope_tables(&cfg.rope_inv_freq());
         let shape = vec![layout.sequence_length(), cfg.rotary_dim()];
-        Ok(Self { cos: pinned(cos, shape.clone())?, sin: pinned(sin, shape)?, layout })
+        Ok(Self {
+            cos: pinned(cos, shape.clone())?,
+            sin: pinned(sin, shape)?,
+            layout,
+        })
     }
 }
 
@@ -618,31 +999,95 @@ impl H3Transformer {
     /// Loads the resident part of the stack (41 GiB as bf16 with the VSA gates,
     /// 37 GiB without) and precomputes the AdaLN table for `schedule`.
     /// `with_gate` loads `to_gate_compress`, which only [`AttnMode::Vsa`] reads.
-    pub fn load(cfg: H3TransformerConfig, map: &WeightMap, schedule: &H3JointSchedule, with_gate: bool) -> Result<Self> {
+    pub fn load(
+        cfg: H3TransformerConfig,
+        map: &WeightMap,
+        schedule: &H3JointSchedule,
+        with_gate: bool,
+    ) -> Result<Self> {
         Self::load_cached(cfg, map, schedule, with_gate, None)
     }
 
     /// [`Self::load`] with the AdaLN table memoized at `adaln_cache`
     /// (see [`AdaLnTable::load_or_precompute`]).
-    pub fn load_cached(cfg: H3TransformerConfig, map: &WeightMap, schedule: &H3JointSchedule, with_gate: bool, adaln_cache: Option<&std::path::Path>) -> Result<Self> {
+    pub fn load_cached(
+        cfg: H3TransformerConfig,
+        map: &WeightMap,
+        schedule: &H3JointSchedule,
+        with_gate: bool,
+        adaln_cache: Option<&std::path::Path>,
+    ) -> Result<Self> {
+        Self::load_with(cfg, map, schedule, with_gate, adaln_cache, &mut None)
+    }
+
+    pub fn load_with(
+        cfg: H3TransformerConfig,
+        map: &WeightMap,
+        schedule: &H3JointSchedule,
+        with_gate: bool,
+        adaln_cache: Option<&std::path::Path>,
+        lora: &mut Option<super::lora::H3LoraFuse>,
+    ) -> Result<Self> {
         if cfg.rotary_dim() > cfg.attention_head_dim || cfg.freq_dim % 2 != 0 {
-            return Err(msg(format!("h3 dit: {} rotary channels of a {}-wide head", cfg.rotary_dim(), cfg.attention_head_dim)));
+            return Err(msg(format!(
+                "h3 dit: {} rotary channels of a {}-wide head",
+                cfg.rotary_dim(),
+                cfg.attention_head_dim
+            )));
         }
-        let table = AdaLnTable::load_or_precompute(&cfg, map, schedule, adaln_cache)?;
+        let table = AdaLnTable::load_or_precompute_with(&cfg, map, schedule, adaln_cache, lora)?;
         let blocks = (0..cfg.num_layers)
             .map(|i| {
-                let block = Block::load(map, &format!("transformer_blocks.{i}"), &cfg, with_gate);
-                crate::wan::log::info(format_args!("h3 dit: block {}/{} resident", i + 1, cfg.num_layers));
+                let block = Block::load(
+                    map,
+                    &format!("transformer_blocks.{i}"),
+                    &cfg,
+                    with_gate,
+                    lora,
+                );
+                crate::wan::log::info(format_args!(
+                    "h3 dit: block {}/{} resident",
+                    i + 1,
+                    cfg.num_layers
+                ));
                 block
             })
             .collect::<Result<Vec<_>>>()?;
         Ok(Self {
-            proj_in: Linear::load(map, "proj_in", cfg.video_patch_dim(), cfg.hidden_size, true)?,
-            audio_proj_in: Linear::load(map, "audio_proj_in", cfg.audio_in_channels, cfg.hidden_size, true)?,
+            proj_in: load_linear(
+                map,
+                "proj_in",
+                cfg.video_patch_dim(),
+                cfg.hidden_size,
+                true,
+                lora,
+            )?,
+            audio_proj_in: load_linear(
+                map,
+                "audio_proj_in",
+                cfg.audio_in_channels,
+                cfg.hidden_size,
+                true,
+                lora,
+            )?,
             blocks,
-            norm_out: pinned_weight(map, "norm_out.norm.weight", &[cfg.hidden_size])?,
-            proj_out: Linear::load(map, "proj_out", cfg.hidden_size, cfg.video_patch_dim(), true)?,
-            audio_proj_out: Linear::load(map, "audio_proj_out", cfg.hidden_size, cfg.audio_in_channels, true)?,
+            norm_out: pinned_weight(map, "norm_out.norm.weight", &[cfg.hidden_size], lora)?,
+            proj_out: load_linear(
+                map,
+                "proj_out",
+                cfg.hidden_size,
+                cfg.video_patch_dim(),
+                true,
+                lora,
+            )?,
+            audio_proj_out: load_linear(
+                map,
+                "audio_proj_out",
+                cfg.hidden_size,
+                cfg.audio_in_channels,
+                true,
+                lora,
+            )?,
             table,
             has_gate: with_gate,
             cfg,
@@ -680,12 +1125,23 @@ impl H3Transformer {
         let l = &layout.layout;
         let hidden = cfg.hidden_size;
         if step >= self.table.steps() {
-            return Err(msg(format!("h3 dit: step {step} of a {}-step AdaLN table", self.table.steps())));
+            return Err(msg(format!(
+                "h3 dit: step {step} of a {}-step AdaLN table",
+                self.table.steps()
+            )));
         }
-        if video_rows.shape != [l.video.len, cfg.video_patch_dim()] || audio_rows.shape != [l.audio.len, cfg.audio_in_channels] || text.shape != [1, l.text.len, hidden] {
+        if video_rows.shape != [l.video.len, cfg.video_patch_dim()]
+            || audio_rows.shape != [l.audio.len, cfg.audio_in_channels]
+            || text.shape != [1, l.text.len, hidden]
+        {
             return Err(msg(format!(
                 "h3 dit: rows video {:?} audio {:?} text {:?} for a layout of {} + {} + {}",
-                video_rows.shape, audio_rows.shape, text.shape, l.text.len, l.audio.len, l.video.len
+                video_rows.shape,
+                audio_rows.shape,
+                text.shape,
+                l.text.len,
+                l.audio.len,
+                l.video.len
             )));
         }
         let want_v = l.num_condition_video_rows;
@@ -711,7 +1167,9 @@ impl H3Transformer {
             }
         }
         if matches!(mode, AttnMode::Vsa(_)) && !self.has_gate {
-            return Err(msg("h3 dit: VSA needs to_gate_compress; load the transformer with the gate"));
+            return Err(msg(
+                "h3 dit: VSA needs to_gate_compress; load the transformer with the gate",
+            ));
         }
         if matches!(mode, AttnMode::Vsa(_)) && want_a > 0 {
             return Err(msg("h3 dit: interleaved Ref2VA condition audio needs dense attention (VSA prefix assumes contiguous layout)"));
@@ -722,11 +1180,13 @@ impl H3Transformer {
             let audio = self.audio_proj_in.forward(audio_rows)?;
             let text_rows = text.reshape(vec![l.text.len, hidden])?;
             if want_v == 0 && want_a == 0 {
-                CudaTensor::cat(&[&text_rows, &audio, &video], 0)?.reshape_owned(vec![1, seq, hidden])?
+                CudaTensor::cat(&[&text_rows, &audio, &video], 0)?
+                    .reshape_owned(vec![1, seq, hidden])?
             } else if want_a == 0 {
                 // Contiguous condition video (FL2VA / image-only Ref2VA).
                 let cond = self.proj_in.forward(cond_rows.unwrap())?;
-                CudaTensor::cat(&[&text_rows, &cond, &audio, &video], 0)?.reshape_owned(vec![1, seq, hidden])?
+                CudaTensor::cat(&[&text_rows, &cond, &audio, &video], 0)?
+                    .reshape_owned(vec![1, seq, hidden])?
             } else {
                 // Interleaved Ref2VA: project streams then cat by ref_segments.
                 let cv = self.proj_in.forward(cond_rows.unwrap())?;
@@ -758,18 +1218,26 @@ impl H3Transformer {
         let mut x = x;
         for (index, block) in self.blocks.iter().enumerate() {
             let mods = BlockMods::upload(&self.table, step, index, l)?;
-            let n = phase("h3_1_norm_msa", || mods.modulate(&x.rms_norm(&block.norm1, eps)?, SCALE_MSA, SHIFT_MSA))?;
+            let n = phase("h3_1_norm_msa", || {
+                mods.modulate(&x.rms_norm(&block.norm1, eps)?, SCALE_MSA, SHIFT_MSA)
+            })?;
             let a = phase("h3_2_attn", || block.attn.forward(&n, rope, mode))?;
             x = phase("h3_3_residual_msa", || mods.gated_add(&x, &a, GATE_MSA))?;
             drop(a);
-            let n = phase("h3_4_norm_ffn", || mods.modulate(&x.rms_norm(&block.norm2, eps)?, SCALE_MLP, SHIFT_MLP))?;
+            let n = phase("h3_4_norm_ffn", || {
+                mods.modulate(&x.rms_norm(&block.norm2, eps)?, SCALE_MLP, SHIFT_MLP)
+            })?;
             let f = phase("h3_5_ffn", || block.ff.forward(&n))?;
             x = phase("h3_6_residual_ffn", || mods.gated_add(&x, &f, GATE_MLP))?;
             drop(f);
             if let Some(observe) = observer.as_mut() {
                 observe(&format!("block_{index}"), &x)?;
             }
-            crate::wan::log::info(format_args!("h3 dit step {step}: block {}/{}", index + 1, self.blocks.len()));
+            crate::wan::log::info(format_args!(
+                "h3 dit step {step}: block {}/{}",
+                index + 1,
+                self.blocks.len()
+            ));
         }
 
         // Both heads are defined on every row; only each modality's own rows are read.
@@ -777,10 +1245,16 @@ impl H3Transformer {
             let (shift, scale) = self.table.out_slot(step, audio);
             let scale = CudaTensor::from_vec(scale.to_vec(), vec![hidden])?;
             let shift = CudaTensor::from_vec(shift.to_vec(), vec![hidden])?;
-            let n = x.narrow(1, range.start, range.len)?.rms_norm(&self.norm_out, cfg.final_norm_eps as f32)?;
-            proj.forward(&n.mul(&scale)?.add(&shift)?)?.reshape(vec![range.len, proj.out_dim()])
+            let n = x
+                .narrow(1, range.start, range.len)?
+                .rms_norm(&self.norm_out, cfg.final_norm_eps as f32)?;
+            proj.forward(&n.mul(&scale)?.add(&shift)?)?
+                .reshape(vec![range.len, proj.out_dim()])
         };
-        Ok((head(l.video, false, &self.proj_out)?, head(l.audio, true, &self.audio_proj_out)?))
+        Ok((
+            head(l.video, false, &self.proj_out)?,
+            head(l.audio, true, &self.audio_proj_out)?,
+        ))
     }
 }
 
@@ -839,7 +1313,9 @@ pub(crate) mod tests {
     #[test]
     fn swiglu_value_first_matches_narrow_silu_mul() {
         let (rows, half) = (5usize, 7usize);
-        let x: Vec<f32> = (0..rows * 2 * half).map(|i| (i as f32 * 0.17 - 1.3).sin()).collect();
+        let x: Vec<f32> = (0..rows * 2 * half)
+            .map(|i| (i as f32 * 0.17 - 1.3).sin())
+            .collect();
         let t = CudaTensor::from_vec(x.clone(), vec![1, rows, 2 * half]).unwrap();
         let got = t.swiglu_value_first().unwrap();
         assert_eq!(got.shape, vec![1, rows, half]);
@@ -860,31 +1336,51 @@ pub(crate) mod tests {
 
     pub(crate) fn weights() -> WeightMap {
         WeightMap::generated(|key, shape| {
-            let seed = key.bytes().fold(13u32, |a, b| a.wrapping_mul(31).wrapping_add(u32::from(b)));
+            let seed = key
+                .bytes()
+                .fold(13u32, |a, b| a.wrapping_mul(31).wrapping_add(u32::from(b)));
             let n: usize = shape.iter().product();
             (0..n)
                 .map(|i| {
-                    let u = (seed.wrapping_add(i as u32).wrapping_mul(2_654_435_761) >> 8) as f32 / (1u32 << 24) as f32;
-                    if key.contains("norm") { 0.5 + u } else { (u - 0.5) * 0.8 }
+                    let u = (seed.wrapping_add(i as u32).wrapping_mul(2_654_435_761) >> 8) as f32
+                        / (1u32 << 24) as f32;
+                    if key.contains("norm") {
+                        0.5 + u
+                    } else {
+                        (u - 0.5) * 0.8
+                    }
                 })
                 .collect()
         })
     }
 
     fn get(map: &WeightMap, key: &str, shape: &[usize]) -> Vec<f32> {
-        cuda_tensor_shaped(map, key, shape).unwrap().host_cow().unwrap().into_owned()
+        cuda_tensor_shaped(map, key, shape)
+            .unwrap()
+            .host_cow()
+            .unwrap()
+            .into_owned()
     }
 
     fn lin(map: &WeightMap, prefix: &str, x: &[f32], o: usize, bias: bool) -> Vec<f32> {
         let i = x.len();
         let w = get(map, &format!("{prefix}.weight"), &[o, i]);
-        let b = if bias { get(map, &format!("{prefix}.bias"), &[o]) } else { vec![0.0; o] };
-        (0..o).map(|r| b[r] + (0..i).map(|c| x[c] * w[r * i + c]).sum::<f32>()).collect()
+        let b = if bias {
+            get(map, &format!("{prefix}.bias"), &[o])
+        } else {
+            vec![0.0; o]
+        };
+        (0..o)
+            .map(|r| b[r] + (0..i).map(|c| x[c] * w[r * i + c]).sum::<f32>())
+            .collect()
     }
 
     fn rms(v: &[f32], w: &[f32], eps: f32) -> Vec<f32> {
         let ms = v.iter().map(|a| a * a).sum::<f32>() / v.len() as f32;
-        v.iter().zip(w).map(|(a, g)| a / (ms + eps).sqrt() * g).collect()
+        v.iter()
+            .zip(w)
+            .map(|(a, g)| a / (ms + eps).sqrt() * g)
+            .collect()
     }
 
     fn silu(v: f32) -> f32 {
@@ -902,14 +1398,27 @@ pub(crate) mod tests {
         angles: Option<&[[f32; 3]]>,
         mods: Option<&[Vec<f32>]>,
     ) -> Vec<Vec<f32>> {
-        let (h, heads, d, eps) = (cfg.hidden_size, cfg.num_attention_heads, cfg.attention_head_dim, 1e-5f32);
+        let (h, heads, d, eps) = (
+            cfg.hidden_size,
+            cfg.num_attention_heads,
+            cfg.attention_head_dim,
+            1e-5f32,
+        );
         let s = x.len();
-        let (n1, n2) = (get(map, &format!("{prefix}.norm1.weight"), &[h]), get(map, &format!("{prefix}.norm2.weight"), &[h]));
-        let (nq, nk) = (get(map, &format!("{prefix}.attn.norm_q.weight"), &[d]), get(map, &format!("{prefix}.attn.norm_k.weight"), &[d]));
+        let (n1, n2) = (
+            get(map, &format!("{prefix}.norm1.weight"), &[h]),
+            get(map, &format!("{prefix}.norm2.weight"), &[h]),
+        );
+        let (nq, nk) = (
+            get(map, &format!("{prefix}.attn.norm_q.weight"), &[d]),
+            get(map, &format!("{prefix}.attn.norm_k.weight"), &[d]),
+        );
         // mods[row] = [shift_msa, scale_msa, gate_msa, shift_mlp, scale_mlp, gate_mlp] x hidden, RAW scales.
         let modulate = |v: Vec<f32>, row: usize, shift: usize, scale: usize| -> Vec<f32> {
             match mods {
-                Some(m) => (0..h).map(|c| v[c] * (1.0 + m[row][scale * h + c]) + m[row][shift * h + c]).collect(),
+                Some(m) => (0..h)
+                    .map(|c| v[c] * (1.0 + m[row][scale * h + c]) + m[row][shift * h + c])
+                    .collect(),
                 None => v,
             }
         };
@@ -924,7 +1433,11 @@ pub(crate) mod tests {
             }
             out
         };
-        let normed: Vec<Vec<f32>> = x.iter().enumerate().map(|(r, v)| modulate(rms(v, &n1, eps), r, 0, 1)).collect();
+        let normed: Vec<Vec<f32>> = x
+            .iter()
+            .enumerate()
+            .map(|(r, v)| modulate(rms(v, &n1, eps), r, 0, 1))
+            .collect();
         let proj = |name: &str, norm: Option<&[f32]>| -> Vec<Vec<Vec<f32>>> {
             normed
                 .iter()
@@ -940,12 +1453,25 @@ pub(crate) mod tests {
                 })
                 .collect()
         };
-        let (q, k, v) = (proj("to_q", Some(&nq)), proj("to_k", Some(&nk)), proj("to_v", None));
+        let (q, k, v) = (
+            proj("to_q", Some(&nq)),
+            proj("to_k", Some(&nk)),
+            proj("to_v", None),
+        );
         (0..s)
             .map(|i| {
                 let mut attn = vec![0f32; heads * d];
                 for hd in 0..heads {
-                    let scores: Vec<f32> = (0..s).map(|j| q[i][hd].iter().zip(&k[j][hd]).map(|(a, b)| a * b).sum::<f32>() / (d as f32).sqrt()).collect();
+                    let scores: Vec<f32> = (0..s)
+                        .map(|j| {
+                            q[i][hd]
+                                .iter()
+                                .zip(&k[j][hd])
+                                .map(|(a, b)| a * b)
+                                .sum::<f32>()
+                                / (d as f32).sqrt()
+                        })
+                        .collect();
                     let mx = scores.iter().cloned().fold(f32::MIN, f32::max);
                     let z: f32 = scores.iter().map(|sc| (sc - mx).exp()).sum();
                     for (j, sc) in scores.iter().enumerate() {
@@ -957,8 +1483,16 @@ pub(crate) mod tests {
                 let o = lin(map, &format!("{prefix}.attn.to_out.0"), &attn, h, false);
                 let after: Vec<f32> = (0..h).map(|c| x[i][c] + gate(i, 2, c) * o[c]).collect();
                 let m = modulate(rms(&after, &n2, eps), i, 3, 4);
-                let f = lin(map, &format!("{prefix}.ff.net.0.proj"), &m, 2 * cfg.ffn_dim, false);
-                let act: Vec<f32> = (0..cfg.ffn_dim).map(|c| f[c] * silu(f[cfg.ffn_dim + c])).collect();
+                let f = lin(
+                    map,
+                    &format!("{prefix}.ff.net.0.proj"),
+                    &m,
+                    2 * cfg.ffn_dim,
+                    false,
+                );
+                let act: Vec<f32> = (0..cfg.ffn_dim)
+                    .map(|c| f[c] * silu(f[cfg.ffn_dim + c]))
+                    .collect();
                 let o = lin(map, &format!("{prefix}.ff.net.2"), &act, h, false);
                 (0..h).map(|c| after[c] + gate(i, 5, c) * o[c]).collect()
             })
@@ -973,7 +1507,16 @@ pub(crate) mod tests {
             emb[k] = (t * f).cos();
             emb[half + k] = (t * f).sin();
         }
-        let h: Vec<f32> = lin(map, "time_embedder.linear_1", &emb, cfg.time_embed_hidden_dim, true).into_iter().map(silu).collect();
+        let h: Vec<f32> = lin(
+            map,
+            "time_embedder.linear_1",
+            &emb,
+            cfg.time_embed_hidden_dim,
+            true,
+        )
+        .into_iter()
+        .map(silu)
+        .collect();
         lin(map, "time_embedder.linear_2", &h, cfg.time_embed_dim, true)
     }
 
@@ -985,15 +1528,24 @@ pub(crate) mod tests {
     fn the_refiner_is_a_plain_pre_norm_stack_without_rope() {
         let (cfg, map) = (tiny_cfg(), weights());
         let text = seeded(4 * cfg.text_dim, 0.7);
-        let got = H3TextRefiner::load(&cfg, &map).unwrap().forward(&CudaTensor::from_vec(text.clone(), vec![1, 4, cfg.text_dim]).unwrap()).unwrap();
+        let got = H3TextRefiner::load(&cfg, &map)
+            .unwrap()
+            .forward(&CudaTensor::from_vec(text.clone(), vec![1, 4, cfg.text_dim]).unwrap())
+            .unwrap();
         assert_eq!(got.shape, vec![1, 4, cfg.hidden_size]);
-        let x: Vec<Vec<f32>> = text.chunks(cfg.text_dim).map(|r| lin(&map, "context_embedder", r, cfg.hidden_size, true)).collect();
+        let x: Vec<Vec<f32>> = text
+            .chunks(cfg.text_dim)
+            .map(|r| lin(&map, "context_embedder", r, cfg.hidden_size, true))
+            .collect();
         let x = ref_block(&cfg, &map, "token_refiner.refiner_blocks.0", &x, None, None);
         let fin = get(&map, "token_refiner.final_norm.weight", &[cfg.hidden_size]);
         let got = got.host_cow().unwrap();
         for (r, row) in x.iter().enumerate() {
             for (c, w) in rms(row, &fin, 1e-5).iter().enumerate() {
-                assert!((got[r * cfg.hidden_size + c] - w).abs() < 2e-5, "row {r} ch {c}");
+                assert!(
+                    (got[r * cfg.hidden_size + c] - w).abs() < 2e-5,
+                    "row {r} ch {c}"
+                );
             }
         }
     }
@@ -1031,23 +1583,53 @@ pub(crate) mod tests {
                 None,
             )
             .unwrap();
-        assert_eq!(seen, vec![("block_0".to_string(), vec![1, 8, 12]), ("block_1".to_string(), vec![1, 8, 12])]);
+        assert_eq!(
+            seen,
+            vec![
+                ("block_0".to_string(), vec![1, 8, 12]),
+                ("block_1".to_string(), vec![1, 8, 12])
+            ]
+        );
 
         // --- reference ---
         let h = cfg.hidden_size;
         let ts = schedule.row_timesteps(step).unwrap();
         let ts_index = layout.timestep_indices(&ts);
-        let temb: Vec<Vec<f32>> = ts.timesteps.iter().map(|&t| ref_temb(&cfg, &map, t)).collect();
+        let temb: Vec<Vec<f32>> = ts
+            .timesteps
+            .iter()
+            .map(|&t| ref_temb(&cfg, &map, t))
+            .collect();
         let mut x: Vec<Vec<f32>> = text.chunks(h).map(<[f32]>::to_vec).collect();
-        x.extend(audio.chunks(cfg.audio_in_channels).map(|r| lin(&map, "audio_proj_in", r, h, true)));
-        x.extend(video.chunks(cfg.video_patch_dim()).map(|r| lin(&map, "proj_in", r, h, true)));
-        let angles: Vec<[f32; 3]> = layout.position_ids.iter().map(|p| [p[0] as f32, p[1] as f32, p[2] as f32]).collect();
+        x.extend(
+            audio
+                .chunks(cfg.audio_in_channels)
+                .map(|r| lin(&map, "audio_proj_in", r, h, true)),
+        );
+        x.extend(
+            video
+                .chunks(cfg.video_patch_dim())
+                .map(|r| lin(&map, "proj_in", r, h, true)),
+        );
+        let angles: Vec<[f32; 3]> = layout
+            .position_ids
+            .iter()
+            .map(|p| [p[0] as f32, p[1] as f32, p[2] as f32])
+            .collect();
         for b in 0..cfg.num_layers {
             let p = format!("transformer_blocks.{b}");
             // y.view(n_t * 3, 6H): row = timestep_index * 3 + tag.
             let tables: Vec<Vec<f32>> = temb
                 .iter()
-                .map(|e| lin(&map, &format!("{p}.adaln_proj.linear"), &e.iter().map(|&v| silu(v)).collect::<Vec<_>>(), 18 * h, true))
+                .map(|e| {
+                    lin(
+                        &map,
+                        &format!("{p}.adaln_proj.linear"),
+                        &e.iter().map(|&v| silu(v)).collect::<Vec<_>>(),
+                        18 * h,
+                        true,
+                    )
+                })
                 .collect();
             let mods: Vec<Vec<f32>> = (0..x.len())
                 .map(|r| {
@@ -1061,20 +1643,44 @@ pub(crate) mod tests {
         let out_rows = |range: RowRange, proj: &str, width: usize| -> Vec<f32> {
             (range.start..range.end())
                 .flat_map(|r| {
-                    let ss = lin(&map, "norm_out.linear", &temb[ts_index[r]].iter().map(|&v| silu(v)).collect::<Vec<_>>(), 2 * h, true);
+                    let ss = lin(
+                        &map,
+                        "norm_out.linear",
+                        &temb[ts_index[r]]
+                            .iter()
+                            .map(|&v| silu(v))
+                            .collect::<Vec<_>>(),
+                        2 * h,
+                        true,
+                    );
                     let n = rms(&x[r], &nw, 1e-5);
                     let y: Vec<f32> = (0..h).map(|c| n[c] * (1.0 + ss[h + c]) + ss[c]).collect();
                     lin(&map, proj, &y, width, true)
                 })
                 .collect()
         };
-        let (wv, wa) = (out_rows(layout.video, "proj_out", cfg.video_patch_dim()), out_rows(layout.audio, "audio_proj_out", cfg.audio_in_channels));
-        assert_eq!((gv.shape.clone(), ga.shape.clone()), (vec![nv, cfg.video_patch_dim()], vec![na, cfg.audio_in_channels]));
-        for (name, got, want) in [("video", gv.host_cow().unwrap(), wv), ("audio", ga.host_cow().unwrap(), wa)] {
+        let (wv, wa) = (
+            out_rows(layout.video, "proj_out", cfg.video_patch_dim()),
+            out_rows(layout.audio, "audio_proj_out", cfg.audio_in_channels),
+        );
+        assert_eq!(
+            (gv.shape.clone(), ga.shape.clone()),
+            (
+                vec![nv, cfg.video_patch_dim()],
+                vec![na, cfg.audio_in_channels]
+            )
+        );
+        for (name, got, want) in [
+            ("video", gv.host_cow().unwrap(), wv),
+            ("audio", ga.host_cow().unwrap(), wa),
+        ] {
             let scale = want.iter().fold(0f32, |m, v| m.max(v.abs()));
             assert!(scale > 1e-3, "{name}: a zero reference proves nothing");
             for (i, (g, w)) in got.iter().zip(&want).enumerate() {
-                assert!((g - w).abs() < 1e-4 * scale.max(1.0), "{name}[{i}]: {g} vs {w}");
+                assert!(
+                    (g - w).abs() < 1e-4 * scale.max(1.0),
+                    "{name}[{i}]: {g} vs {w}"
+                );
             }
         }
     }
@@ -1093,30 +1699,83 @@ pub(crate) mod tests {
                 if key.contains("to_gate_compress") {
                     return vec![0.0; shape.iter().product()];
                 }
-                cuda_tensor_shaped(&base, key, shape).unwrap().host_cow().unwrap().into_owned()
+                cuda_tensor_shaped(&base, key, shape)
+                    .unwrap()
+                    .host_cow()
+                    .unwrap()
+                    .into_owned()
             })
         };
         let layout = H3PackedLayout::new(3, (2, 4, 4), 2, cfg.patch_size).unwrap();
         let (nv, na, nt) = (layout.video.len, layout.audio.len, layout.text.len);
-        let video = CudaTensor::from_vec(seeded(nv * cfg.video_patch_dim(), 0.41), vec![nv, cfg.video_patch_dim()]).unwrap();
-        let audio = CudaTensor::from_vec(seeded(na * cfg.audio_in_channels, 0.23), vec![na, cfg.audio_in_channels]).unwrap();
-        let text = CudaTensor::from_vec(seeded(nt * cfg.hidden_size, 0.57), vec![1, nt, cfg.hidden_size]).unwrap();
-        let vsa = H3Vsa::new(&layout, cfg.num_attention_heads, cfg.attention_head_dim, H3VsaConfig { sparsity: 0.0, group: 1 }).unwrap();
+        let video = CudaTensor::from_vec(
+            seeded(nv * cfg.video_patch_dim(), 0.41),
+            vec![nv, cfg.video_patch_dim()],
+        )
+        .unwrap();
+        let audio = CudaTensor::from_vec(
+            seeded(na * cfg.audio_in_channels, 0.23),
+            vec![na, cfg.audio_in_channels],
+        )
+        .unwrap();
+        let text = CudaTensor::from_vec(
+            seeded(nt * cfg.hidden_size, 0.57),
+            vec![1, nt, cfg.hidden_size],
+        )
+        .unwrap();
+        let vsa = H3Vsa::new(
+            &layout,
+            cfg.num_attention_heads,
+            cfg.attention_head_dim,
+            H3VsaConfig {
+                sparsity: 0.0,
+                group: 1,
+            },
+        )
+        .unwrap();
         let dl = DeviceLayout::new(&cfg, layout).unwrap();
         let run = |map: &WeightMap, mode: AttnMode<'_>| -> Vec<f32> {
             let model = H3Transformer::load(cfg.clone(), map, &schedule, true).unwrap();
-            let (v, a) = model.forward(0, &video, &audio, &text, &dl, mode, None, None, None).unwrap();
-            v.host_cow().unwrap().iter().chain(a.host_cow().unwrap().iter()).copied().collect()
+            let (v, a) = model
+                .forward(0, &video, &audio, &text, &dl, mode, None, None, None)
+                .unwrap();
+            v.host_cow()
+                .unwrap()
+                .iter()
+                .chain(a.host_cow().unwrap().iter())
+                .copied()
+                .collect()
         };
         let dense = run(&zero_gate(), AttnMode::Dense);
         let sparse = run(&zero_gate(), AttnMode::Vsa(&vsa));
-        assert!(dense.iter().zip(&sparse).all(|(a, b)| (a - b).abs() < 1e-5), "zero gate: VSA at sparsity 0 is dense");
+        assert!(
+            dense.iter().zip(&sparse).all(|(a, b)| (a - b).abs() < 1e-5),
+            "zero gate: VSA at sparsity 0 is dense"
+        );
         let gated = run(&weights(), AttnMode::Vsa(&vsa));
         let dense_live = run(&weights(), AttnMode::Dense);
-        assert!(gated.iter().zip(&dense_live).any(|(a, b)| (a - b).abs() > 1e-4), "a trained gate changes the output");
+        assert!(
+            gated
+                .iter()
+                .zip(&dense_live)
+                .any(|(a, b)| (a - b).abs() > 1e-4),
+            "a trained gate changes the output"
+        );
         // Without the gate weights loaded, VSA is refused rather than silently run gateless.
         let no_gate = H3Transformer::load(cfg.clone(), &weights(), &schedule, false).unwrap();
-        assert!(no_gate.forward(0, &video, &audio, &text, &dl, AttnMode::Vsa(&vsa), None, None, None).is_err());
+        assert!(no_gate
+            .forward(
+                0,
+                &video,
+                &audio,
+                &text,
+                &dl,
+                AttnMode::Vsa(&vsa),
+                None,
+                None,
+                None
+            )
+            .is_err());
     }
 
     #[test]
@@ -1125,21 +1784,44 @@ pub(crate) mod tests {
         let schedule = H3JointSchedule::fasth3_8step();
         let table = AdaLnTable::precompute(&cfg, &map, &schedule).unwrap();
         let (h, step, block) = (cfg.hidden_size, 5, 1);
-        let ts = H3RowTimesteps::new(schedule.video.timesteps[step], schedule.audio.timesteps[step]);
+        let ts = H3RowTimesteps::new(
+            schedule.video.timesteps[step],
+            schedule.audio.timesteps[step],
+        );
         assert_eq!(ts.adaln_rows(), [0, 1, 5]);
-        for (tag, t) in [(TAG_VIDEO, schedule.video.timesteps[step]), (TAG_TEXT, schedule.video.timesteps[step]), (TAG_AUDIO, schedule.audio.timesteps[step])] {
+        for (tag, t) in [
+            (TAG_VIDEO, schedule.video.timesteps[step]),
+            (TAG_TEXT, schedule.video.timesteps[step]),
+            (TAG_AUDIO, schedule.audio.timesteps[step]),
+        ] {
             let s: Vec<f32> = ref_temb(&cfg, &map, t).into_iter().map(silu).collect();
-            let y = lin(&map, &format!("transformer_blocks.{block}.adaln_proj.linear"), &s, 18 * h, true);
+            let y = lin(
+                &map,
+                &format!("transformer_blocks.{block}.adaln_proj.linear"),
+                &s,
+                18 * h,
+                true,
+            );
             let want = &y[usize::from(tag) * 6 * h..(usize::from(tag) + 1) * 6 * h];
             let got = table.block_slot(step, block, tag);
             for p in 0..6 {
-                let plus = if p == SCALE_MSA || p == SCALE_MLP { 1.0 } else { 0.0 };
+                let plus = if p == SCALE_MSA || p == SCALE_MLP {
+                    1.0
+                } else {
+                    0.0
+                };
                 for c in 0..h {
-                    assert!((got[p * h + c] - (want[p * h + c] + plus)).abs() < 1e-5, "tag {tag} param {p} ch {c}");
+                    assert!(
+                        (got[p * h + c] - (want[p * h + c] + plus)).abs() < 1e-5,
+                        "tag {tag} param {p} ch {c}"
+                    );
                 }
             }
         }
         let want = ref_temb(&cfg, &map, schedule.audio.timesteps[step]);
-        assert!(table.temb[2 * step + 1].iter().zip(&want).all(|(a, b)| (a - b).abs() < 1e-6));
+        assert!(table.temb[2 * step + 1]
+            .iter()
+            .zip(&want)
+            .all(|(a, b)| (a - b).abs() < 1e-6));
     }
 }

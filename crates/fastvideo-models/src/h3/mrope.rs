@@ -43,7 +43,11 @@ pub fn build_mrope_positions(
                 .iter()
                 .map(|p| p[0].max(p[1]).max(p[2]))
                 .fold(f64::NEG_INFINITY, f64::max);
-            let offset = if offset.is_finite() { offset + 1.0 } else { 0.0 };
+            let offset = if offset.is_finite() {
+                offset + 1.0
+            } else {
+                0.0
+            };
             append_text_span(&mut positions, remain, offset);
             break;
         };
@@ -53,7 +57,11 @@ pub fn build_mrope_positions(
             .iter()
             .map(|p| p[0].max(p[1]).max(p[2]))
             .fold(f64::NEG_INFINITY, f64::max);
-        let offset = if offset.is_finite() { offset + 1.0 } else { 0.0 };
+        let offset = if offset.is_finite() {
+            offset + 1.0
+        } else {
+            0.0
+        };
         append_text_span(&mut positions, text_len, offset);
 
         let grid = if is_image {
@@ -130,11 +138,7 @@ fn vision_llm_positions(frames: usize, gh: usize, gw: usize, offset: f64) -> Vec
     for t in 0..frames {
         for h in 0..gh {
             for w in 0..gw {
-                out.push([
-                    offset + t as f64,
-                    offset + h as f64,
-                    offset + w as f64,
-                ]);
+                out.push([offset + t as f64, offset + h as f64, offset + w as f64]);
             }
         }
     }

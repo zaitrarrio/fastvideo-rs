@@ -24,7 +24,10 @@ impl Mode {
                 ("FASTVIDEO_TEACACHE", "0"),
             ] {
                 if std::env::var(k).is_ok_and(|cur| cur != v) {
-                    eprintln!("mode=exact overrides {k}={} → {v}", std::env::var(k).unwrap_or_default());
+                    eprintln!(
+                        "mode=exact overrides {k}={} → {v}",
+                        std::env::var(k).unwrap_or_default()
+                    );
                 }
                 std::env::set_var(k, v);
             }

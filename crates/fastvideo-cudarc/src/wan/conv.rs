@@ -15,7 +15,9 @@
 
 use std::collections::HashMap;
 
-use cudarc::cudnn::{sys, ConvBackwardData, ConvDescriptor, ConvForward, FilterDescriptor, TensorDescriptor};
+use cudarc::cudnn::{
+    sys, ConvBackwardData, ConvDescriptor, ConvForward, FilterDescriptor, TensorDescriptor,
+};
 use cudarc::driver::CudaSlice;
 
 use super::device::{global_device, DeviceContext, DeviceError, Result};
@@ -40,7 +42,14 @@ struct ConvKey {
 
 impl ConvKey {
     /// Dense, undilated, forward: every convolution the video VAEs run.
-    fn plain(x: &[usize], w: &[usize], pad: &[usize], stride: &[usize], fma: bool, bf16: bool) -> Self {
+    fn plain(
+        x: &[usize],
+        w: &[usize],
+        pad: &[usize],
+        stride: &[usize],
+        fma: bool,
+        bf16: bool,
+    ) -> Self {
         Self {
             x: x.to_vec(),
             w: w.to_vec(),
@@ -137,7 +146,9 @@ fn out_shape(key: &ConvKey) -> Result<Vec<usize>> {
         ))
     };
     if w.len() != x.len()
-        || [pad.len(), stride.len(), dil.len(), key.out_pad.len()].iter().any(|&l| l != spatial)
+        || [pad.len(), stride.len(), dil.len(), key.out_pad.len()]
+            .iter()
+            .any(|&l| l != spatial)
         || key.groups == 0
         || stride.iter().chain(dil.iter()).any(|&v| v == 0)
         || x[1] % key.groups != 0
@@ -209,16 +220,30 @@ fn build_plan(dev: &DeviceContext, key: &ConvKey) -> Result<ConvPlan> {
     })?;
     let dims = |s: &[usize]| s.iter().map(|&d| d as i32).collect::<Vec<i32>>();
     let x = cudnn.create_nd_tensor::<f32>(&dims(&key.x), &contiguous_strides(&key.x))?;
-    let w = cudnn.create_nd_filter::<f32>(sys::cudnnTensorFormat_t::CUDNN_TENSOR_NCHW, &dims(&key.w))?;
+    let w = cudnn
+        .create_nd_filter::<f32>(sys::cudnnTensorFormat_t::CUDNN_TENSOR_NCHW, &dims(&key.w))?;
     let y = cudnn.create_nd_tensor::<f32>(&dims(&y_shape), &contiguous_strides(&y_shape))?;
-    let op = ConvForward { conv: &conv, x: &x, w: &w, y: &y };
+    let op = ConvForward {
+        conv: &conv,
+        x: &x,
+        w: &w,
+        y: &y,
+    };
     let algo = op.pick_algorithm()?;
     let workspace_bytes = op.get_workspace_size(algo)?;
     super::log::debug(format_args!(
         "conv plan x={:?} w={:?} pad={:?} stride={:?} algo={algo:?} workspace={}B",
         key.x, key.w, key.pad, key.stride, workspace_bytes
     ));
-    Ok(ConvPlan { conv, x, w, y, algo, workspace_bytes, y_shape })
+    Ok(ConvPlan {
+        conv,
+        x,
+        w,
+        y,
+        algo,
+        workspace_bytes,
+        y_shape,
+    })
 }
 
 fn build_plan_bf16(dev: &DeviceContext, key: &ConvKey) -> Result<ConvPlanBf16> {
@@ -230,17 +255,32 @@ fn build_plan_bf16(dev: &DeviceContext, key: &ConvKey) -> Result<ConvPlanBf16> {
     conv.set_math_type(sys::cudnnMathType_t::CUDNN_TENSOR_OP_MATH)?;
     let dims = |s: &[usize]| s.iter().map(|&d| d as i32).collect::<Vec<i32>>();
     let x = cudnn.create_nd_tensor::<half::bf16>(&dims(&key.x), &contiguous_strides(&key.x))?;
-    let w = cudnn
-        .create_nd_filter::<half::bf16>(sys::cudnnTensorFormat_t::CUDNN_TENSOR_NCHW, &dims(&key.w))?;
+    let w = cudnn.create_nd_filter::<half::bf16>(
+        sys::cudnnTensorFormat_t::CUDNN_TENSOR_NCHW,
+        &dims(&key.w),
+    )?;
     let y = cudnn.create_nd_tensor::<half::bf16>(&dims(&y_shape), &contiguous_strides(&y_shape))?;
-    let op = ConvForward { conv: &conv, x: &x, w: &w, y: &y };
+    let op = ConvForward {
+        conv: &conv,
+        x: &x,
+        w: &w,
+        y: &y,
+    };
     let algo = op.pick_algorithm()?;
     let workspace_bytes = op.get_workspace_size(algo)?;
     super::log::debug(format_args!(
         "conv plan (bf16) x={:?} w={:?} algo={algo:?} workspace={}B",
         key.x, key.w, workspace_bytes
     ));
-    Ok(ConvPlanBf16 { conv, x, w, y, algo, workspace_bytes, y_shape })
+    Ok(ConvPlanBf16 {
+        conv,
+        x,
+        w,
+        y,
+        algo,
+        workspace_bytes,
+        y_shape,
+    })
 }
 
 /// [`cudnn_conv`] with bf16 operands: cast in, convolve, cast back. Worth it
@@ -253,7 +293,8 @@ pub fn cudnn_conv_bf16(
     pad: &[usize],
     stride: &[usize],
 ) -> Result<(CudaSlice<f32>, Vec<usize>)> {
-    let dev = global_device().ok_or_else(|| DeviceError::Message("no global CUDA device context".into()))?;
+    let dev = global_device()
+        .ok_or_else(|| DeviceError::Message("no global CUDA device context".into()))?;
     let cast = |e: super::tensor::TensorError| DeviceError::Message(e.to_string());
     let xb = super::ops::cast_f32_bf16_device(x).map_err(cast)?;
     let wb = super::ops::cast_f32_bf16_device(w).map_err(cast)?;
@@ -268,16 +309,32 @@ pub fn cudnn_conv_bf16(
         cache.workspace = None;
         cache.workspace = Some(unsafe { dev.stream.alloc::<u8>(need) }?);
     }
-    let ConvCache { plans_bf16, workspace, .. } = &mut *cache;
+    let ConvCache {
+        plans_bf16,
+        workspace,
+        ..
+    } = &mut *cache;
     let plan = &plans_bf16[&key];
     let n_out: usize = plan.y_shape.iter().product();
     let mut yb = unsafe { dev.stream.alloc::<half::bf16>(n_out) }?;
-    let op = ConvForward { conv: &plan.conv, x: &plan.x, w: &plan.w, y: &plan.y };
+    let op = ConvForward {
+        conv: &plan.conv,
+        x: &plan.x,
+        w: &plan.w,
+        y: &plan.y,
+    };
     unsafe {
         // cudarc types alpha/beta as the output element type and converts them
         // to cuDNN's F32 scaling parameter internally.
         let (alpha, beta) = (half::bf16::from_f32(1.0), half::bf16::from_f32(0.0));
-        op.launch(plan.algo, if need > 0 { workspace.as_mut() } else { None }, (alpha, beta), &xb, &wb, &mut yb)?;
+        op.launch(
+            plan.algo,
+            if need > 0 { workspace.as_mut() } else { None },
+            (alpha, beta),
+            &xb,
+            &wb,
+            &mut yb,
+        )?;
     }
     let y_shape = plan.y_shape.clone();
     drop(cache);
@@ -298,8 +355,14 @@ pub fn cudnn_conv(
     cudnn_conv_ext(x, x_shape, w, w_shape, pad, stride, &vec![1; pad.len()], 1)
 }
 
-fn check_buffers(x: &CudaSlice<f32>, x_shape: &[usize], w: &CudaSlice<f32>, w_shape: &[usize]) -> Result<()> {
-    if x.len() != x_shape.iter().product::<usize>() || w.len() != w_shape.iter().product::<usize>() {
+fn check_buffers(
+    x: &CudaSlice<f32>,
+    x_shape: &[usize],
+    w: &CudaSlice<f32>,
+    w_shape: &[usize],
+) -> Result<()> {
+    if x.len() != x_shape.iter().product::<usize>() || w.len() != w_shape.iter().product::<usize>()
+    {
         return Err(DeviceError::Message(format!(
             "conv buffer mismatch: x.len={} shape={x_shape:?} w.len={} shape={w_shape:?}",
             x.len(),
@@ -323,7 +386,8 @@ pub fn cudnn_conv_ext(
     dilation: &[usize],
     groups: usize,
 ) -> Result<(CudaSlice<f32>, Vec<usize>)> {
-    let dev = global_device().ok_or_else(|| DeviceError::Message("no global CUDA device context".into()))?;
+    let dev = global_device()
+        .ok_or_else(|| DeviceError::Message("no global CUDA device context".into()))?;
     check_buffers(x, x_shape, w, w_shape)?;
     let mut key = ConvKey::plain(x_shape, w_shape, pad, stride, fma_math(&dev), false);
     key.dilation = dilation.to_vec();
@@ -338,11 +402,18 @@ pub fn cudnn_conv_ext(
         cache.workspace = None;
         cache.workspace = Some(unsafe { dev.stream.alloc::<u8>(need) }?);
     }
-    let ConvCache { plans, workspace, .. } = &mut *cache;
+    let ConvCache {
+        plans, workspace, ..
+    } = &mut *cache;
     let plan = &plans[&key];
     let n_out: usize = plan.y_shape.iter().product();
     let mut y = unsafe { dev.stream.alloc::<f32>(n_out) }?;
-    let op = ConvForward { conv: &plan.conv, x: &plan.x, w: &plan.w, y: &plan.y };
+    let op = ConvForward {
+        conv: &plan.conv,
+        x: &plan.x,
+        w: &plan.w,
+        y: &plan.y,
+    };
     unsafe {
         op.launch(
             plan.algo,
@@ -367,16 +438,30 @@ fn build_transpose_plan(dev: &DeviceContext, key: &ConvKey) -> Result<ConvTransp
     })?;
     let dims = |s: &[usize]| s.iter().map(|&d| d as i32).collect::<Vec<i32>>();
     let x = cudnn.create_nd_tensor::<f32>(&dims(&key.x), &contiguous_strides(&key.x))?;
-    let w = cudnn.create_nd_filter::<f32>(sys::cudnnTensorFormat_t::CUDNN_TENSOR_NCHW, &dims(&key.w))?;
+    let w = cudnn
+        .create_nd_filter::<f32>(sys::cudnnTensorFormat_t::CUDNN_TENSOR_NCHW, &dims(&key.w))?;
     let y = cudnn.create_nd_tensor::<f32>(&dims(&y_shape), &contiguous_strides(&y_shape))?;
-    let op = ConvBackwardData { conv: &conv, dx: &y, w: &w, dy: &x };
+    let op = ConvBackwardData {
+        conv: &conv,
+        dx: &y,
+        w: &w,
+        dy: &x,
+    };
     let algo = op.pick_algorithm()?;
     let workspace_bytes = op.get_workspace_size(algo)?;
     super::log::debug(format_args!(
         "conv-transpose plan x={:?} w={:?} pad={:?} stride={:?} algo={algo:?} workspace={}B",
         key.x, key.w, key.pad, key.stride, workspace_bytes
     ));
-    Ok(ConvTransposePlan { conv, x, w, y, algo, workspace_bytes, y_shape })
+    Ok(ConvTransposePlan {
+        conv,
+        x,
+        w,
+        y,
+        algo,
+        workspace_bytes,
+        y_shape,
+    })
 }
 
 /// Transposed convolution, PyTorch `ConvTranspose` semantics: `w` is
@@ -395,7 +480,8 @@ pub fn cudnn_conv_transpose(
     groups: usize,
     out_pad: &[usize],
 ) -> Result<(CudaSlice<f32>, Vec<usize>)> {
-    let dev = global_device().ok_or_else(|| DeviceError::Message("no global CUDA device context".into()))?;
+    let dev = global_device()
+        .ok_or_else(|| DeviceError::Message("no global CUDA device context".into()))?;
     check_buffers(x, x_shape, w, w_shape)?;
     let mut key = ConvKey::plain(x_shape, w_shape, pad, stride, fma_math(&dev), false);
     key.dilation = dilation.to_vec();
@@ -412,13 +498,22 @@ pub fn cudnn_conv_transpose(
         cache.workspace = None;
         cache.workspace = Some(unsafe { dev.stream.alloc::<u8>(need) }?);
     }
-    let ConvCache { plans_transpose, workspace, .. } = &mut *cache;
+    let ConvCache {
+        plans_transpose,
+        workspace,
+        ..
+    } = &mut *cache;
     let plan = &plans_transpose[&key];
     let n_out: usize = plan.y_shape.iter().product();
     // Backward-data with beta = 0 writes every output element, including the
     // `out_pad` tail no input reaches (it gets zero), so no pre-clear is needed.
     let mut y = unsafe { dev.stream.alloc::<f32>(n_out) }?;
-    let op = ConvBackwardData { conv: &plan.conv, dx: &plan.y, w: &plan.w, dy: &plan.x };
+    let op = ConvBackwardData {
+        conv: &plan.conv,
+        dx: &plan.y,
+        w: &plan.w,
+        dy: &plan.x,
+    };
     unsafe {
         op.launch(
             plan.algo,
@@ -452,7 +547,9 @@ pub fn conv3d(
 ) -> Result<(CudaSlice<f32>, Vec<usize>)> {
     let run = |pick: Conv3dPick| -> Result<(CudaSlice<f32>, Vec<usize>)> {
         match pick {
-            Conv3dPick::Unfold if pad[0] == 0 => conv3d_unfold(x, x_shape, w, w_shape, [pad[1], pad[2]], stride),
+            Conv3dPick::Unfold if pad[0] == 0 => {
+                conv3d_unfold(x, x_shape, w, w_shape, [pad[1], pad[2]], stride)
+            }
             Conv3dPick::CudnnBf16 => cudnn_conv_bf16(x, x_shape, w, w_shape, &pad, &stride),
             _ => cudnn_conv(x, x_shape, w, w_shape, &pad, &stride),
         }
@@ -463,9 +560,16 @@ pub fn conv3d(
         "cudnn-bf16" => return run(Conv3dPick::CudnnBf16),
         _ => {}
     }
-    let dev = global_device().ok_or_else(|| DeviceError::Message("no global CUDA device context".into()))?;
+    let dev = global_device()
+        .ok_or_else(|| DeviceError::Message("no global CUDA device context".into()))?;
     let key = ConvKey::plain(x_shape, w_shape, &pad, &stride, fma_math(&dev), false);
-    let known = dev.conv.lock().expect("conv cache lock").conv3d_pick.get(&key).copied();
+    let known = dev
+        .conv
+        .lock()
+        .expect("conv cache lock")
+        .conv3d_pick
+        .get(&key)
+        .copied();
     if let Some(pick) = known {
         return run(pick);
     }
@@ -498,8 +602,15 @@ pub fn conv3d(
         }
     }
     let (_, pick) = best.expect("at least one conv3d backend");
-    super::log::info(format_args!("conv3d x={x_shape:?} w={w_shape:?}: {} → {pick:?}", report.join(", ")));
-    dev.conv.lock().expect("conv cache lock").conv3d_pick.insert(key, pick);
+    super::log::info(format_args!(
+        "conv3d x={x_shape:?} w={w_shape:?}: {} → {pick:?}",
+        report.join(", ")
+    ));
+    dev.conv
+        .lock()
+        .expect("conv cache lock")
+        .conv3d_pick
+        .insert(key, pick);
     run(pick)
 }
 
@@ -514,24 +625,35 @@ pub fn conv3d_unfold(
     pad_hw: [usize; 2],
     stride: [usize; 3],
 ) -> Result<(CudaSlice<f32>, Vec<usize>)> {
-    let dev = global_device().ok_or_else(|| DeviceError::Message("no global CUDA device context".into()))?;
+    let dev = global_device()
+        .ok_or_else(|| DeviceError::Message("no global CUDA device context".into()))?;
     let (n, c, t, h, wd) = (x_shape[0], x_shape[1], x_shape[2], x_shape[3], x_shape[4]);
     let (oc, kt) = (w_shape[0], w_shape[2]);
     let st = stride[0].max(1);
     if t < kt {
-        return Err(DeviceError::Message(format!("conv3d unfold: t={t} < kt={kt}")));
+        return Err(DeviceError::Message(format!(
+            "conv3d unfold: t={t} < kt={kt}"
+        )));
     }
     let ot = (t - kt) / st + 1;
     let unfolded_shape = [n * ot, c * kt, h, wd];
     let total: usize = unfolded_shape.iter().product();
     let mut unfolded = unsafe { dev.stream.alloc::<f32>(total) }?;
-    let (c_i, t_i, h_i, w_i, kt_i, st_i, ot_i) =
-        (c as i64, t as i64, h as i64, wd as i64, kt as i64, st as i64, ot as i64);
+    let (c_i, t_i, h_i, w_i, kt_i, st_i, ot_i) = (
+        c as i64, t as i64, h as i64, wd as i64, kt as i64, st as i64, ot as i64,
+    );
     let total_i = total as i64;
     super::kernels::launch!(dev.stream, &dev.kernels.temporal_unfold, super::kernels::cfg_n(total);
         x, &mut unfolded, &total_i, &c_i, &t_i, &h_i, &w_i, &kt_i, &st_i, &ot_i)?;
     let w2 = [oc, c * kt, w_shape[3], w_shape[4]];
-    let (y2, y2_shape) = cudnn_conv(&unfolded, &unfolded_shape, w, &w2, &pad_hw, &[stride[1], stride[2]])?;
+    let (y2, y2_shape) = cudnn_conv(
+        &unfolded,
+        &unfolded_shape,
+        w,
+        &w2,
+        &pad_hw,
+        &[stride[1], stride[2]],
+    )?;
     drop(unfolded);
     // [n*ot, oc, oh, ow] → [n, oc, ot, oh, ow].
     let (oh, ow) = (y2_shape[2], y2_shape[3]);

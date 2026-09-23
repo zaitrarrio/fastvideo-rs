@@ -34,7 +34,12 @@ pub const MIN_SM: (i32, i32) = (8, 9);
 /// Returns a reason rather than a bare `false`: a silent fallback to bf16 would
 /// make an FP8 benchmark quietly measure bf16, which is the exact failure mode
 /// that let cuBLAS 12.4 report fake bf16 numbers on Blackwell.
-pub fn fp8_gemm_supported(dev: &DeviceContext, m: usize, n: usize, k: usize) -> std::result::Result<(), String> {
+pub fn fp8_gemm_supported(
+    dev: &DeviceContext,
+    m: usize,
+    n: usize,
+    k: usize,
+) -> std::result::Result<(), String> {
     if (dev.sm_major, dev.sm_minor) < MIN_SM {
         return Err(format!(
             "FP8 needs sm{}{} or newer, this device is sm{}{}",
@@ -71,7 +76,11 @@ impl LtContext {
             .stream
             .alloc_zeros::<u8>(workspace_bytes)
             .map_err(|e| TensorError::Message(format!("cuBLASLt workspace alloc failed: {e}")))?;
-        Ok(Self { handle, workspace, workspace_bytes })
+        Ok(Self {
+            handle,
+            workspace,
+            workspace_bytes,
+        })
     }
 }
 
@@ -109,7 +118,11 @@ impl Drop for Pref {
     }
 }
 
-unsafe fn set_attr<T>(desc: lt::cublasLtMatmulDesc_t, attr: lt::cublasLtMatmulDescAttributes_t, v: &T) -> Result<()> {
+unsafe fn set_attr<T>(
+    desc: lt::cublasLtMatmulDesc_t,
+    attr: lt::cublasLtMatmulDescAttributes_t,
+    v: &T,
+) -> Result<()> {
     check(
         lt::cublasLtMatmulDescSetAttribute(
             desc,
@@ -154,7 +167,11 @@ pub unsafe fn gemm_e4m3(
 
     let mut desc: lt::cublasLtMatmulDesc_t = std::ptr::null_mut();
     check(
-        lt::cublasLtMatmulDescCreate(&mut desc, lt::cublasComputeType_t::CUBLAS_COMPUTE_32F, f32_ty),
+        lt::cublasLtMatmulDescCreate(
+            &mut desc,
+            lt::cublasComputeType_t::CUBLAS_COMPUTE_32F,
+            f32_ty,
+        ),
         "cublasLtMatmulDescCreate",
     )?;
     let desc = Desc(desc);
@@ -164,23 +181,51 @@ pub unsafe fn gemm_e4m3(
     use cudarc::cublas::sys::cublasOperation_t;
     let op_t = cublasOperation_t::CUBLAS_OP_T as i32;
     let op_n = cublasOperation_t::CUBLAS_OP_N as i32;
-    set_attr(desc.0, lt::cublasLtMatmulDescAttributes_t::CUBLASLT_MATMUL_DESC_TRANSA, &op_t)?;
-    set_attr(desc.0, lt::cublasLtMatmulDescAttributes_t::CUBLASLT_MATMUL_DESC_TRANSB, &op_n)?;
-    set_attr(desc.0, lt::cublasLtMatmulDescAttributes_t::CUBLASLT_MATMUL_DESC_A_SCALE_POINTER, &a_scale)?;
-    set_attr(desc.0, lt::cublasLtMatmulDescAttributes_t::CUBLASLT_MATMUL_DESC_B_SCALE_POINTER, &b_scale)?;
+    set_attr(
+        desc.0,
+        lt::cublasLtMatmulDescAttributes_t::CUBLASLT_MATMUL_DESC_TRANSA,
+        &op_t,
+    )?;
+    set_attr(
+        desc.0,
+        lt::cublasLtMatmulDescAttributes_t::CUBLASLT_MATMUL_DESC_TRANSB,
+        &op_n,
+    )?;
+    set_attr(
+        desc.0,
+        lt::cublasLtMatmulDescAttributes_t::CUBLASLT_MATMUL_DESC_A_SCALE_POINTER,
+        &a_scale,
+    )?;
+    set_attr(
+        desc.0,
+        lt::cublasLtMatmulDescAttributes_t::CUBLASLT_MATMUL_DESC_B_SCALE_POINTER,
+        &b_scale,
+    )?;
 
     let mut la: lt::cublasLtMatrixLayout_t = std::ptr::null_mut();
     let mut lb: lt::cublasLtMatrixLayout_t = std::ptr::null_mut();
     let mut ld: lt::cublasLtMatrixLayout_t = std::ptr::null_mut();
-    check(lt::cublasLtMatrixLayoutCreate(&mut la, e4m3, k as u64, m as u64, k as i64), "layout A")?;
+    check(
+        lt::cublasLtMatrixLayoutCreate(&mut la, e4m3, k as u64, m as u64, k as i64),
+        "layout A",
+    )?;
     let la = Layout(la);
-    check(lt::cublasLtMatrixLayoutCreate(&mut lb, e4m3, k as u64, n as u64, k as i64), "layout B")?;
+    check(
+        lt::cublasLtMatrixLayoutCreate(&mut lb, e4m3, k as u64, n as u64, k as i64),
+        "layout B",
+    )?;
     let lb = Layout(lb);
-    check(lt::cublasLtMatrixLayoutCreate(&mut ld, f32_ty, m as u64, n as u64, m as i64), "layout D")?;
+    check(
+        lt::cublasLtMatrixLayoutCreate(&mut ld, f32_ty, m as u64, n as u64, m as i64),
+        "layout D",
+    )?;
     let ld = Layout(ld);
 
     let mut pref: lt::cublasLtMatmulPreference_t = std::ptr::null_mut();
-    check(lt::cublasLtMatmulPreferenceCreate(&mut pref), "cublasLtMatmulPreferenceCreate")?;
+    check(
+        lt::cublasLtMatmulPreferenceCreate(&mut pref),
+        "cublasLtMatmulPreferenceCreate",
+    )?;
     let pref = Pref(pref);
     let ws = ltc.workspace_bytes;
     check(
@@ -259,7 +304,9 @@ pub unsafe fn gemm_e4m3(
 static LT: std::sync::Mutex<Option<std::sync::Arc<LtContext>>> = std::sync::Mutex::new(None);
 
 pub fn lt_context(dev: &DeviceContext) -> Result<std::sync::Arc<LtContext>> {
-    let mut guard = LT.lock().map_err(|_| TensorError::Message("cuBLASLt context poisoned".into()))?;
+    let mut guard = LT
+        .lock()
+        .map_err(|_| TensorError::Message("cuBLASLt context poisoned".into()))?;
     if let Some(c) = guard.as_ref() {
         return Ok(c.clone());
     }
@@ -295,7 +342,9 @@ impl Fp8Weight {
         }
         let amax = w.iter().fold(0.0f32, |a, &b| a.max(b.abs()));
         if !amax.is_finite() {
-            return Err(TensorError::Message("fp8 weight has a non-finite amax".into()));
+            return Err(TensorError::Message(
+                "fp8 weight has a non-finite amax".into(),
+            ));
         }
         let (scale_v, inv) = fp8::scale_for_amax(amax);
         let bytes: Vec<u8> = w.iter().map(|&v| fp8::f32_to_e4m3(v * inv)).collect();
@@ -307,6 +356,11 @@ impl Fp8Weight {
             .stream
             .memcpy_stod(&[scale_v])
             .map_err(|e| TensorError::Message(format!("fp8 scale upload: {e}")))?;
-        Ok(Self { data, scale, out_dim, in_dim })
+        Ok(Self {
+            data,
+            scale,
+            out_dim,
+            in_dim,
+        })
     }
 }

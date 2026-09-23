@@ -213,7 +213,13 @@ impl ResnetBlock {
         })
     }
 
-    fn load(map: &WeightMap, prefix: &str, in_c: usize, out_c: usize, groups: usize) -> Result<Self> {
+    fn load(
+        map: &WeightMap,
+        prefix: &str,
+        in_c: usize,
+        out_c: usize,
+        groups: usize,
+    ) -> Result<Self> {
         let key = |n: &str| weights::join_key(prefix, n);
         Ok(Self {
             norm1: GroupNormAffine::load(map, &key("norm1"), in_c, groups.min(in_c).max(1))?,
@@ -221,7 +227,13 @@ impl ResnetBlock {
             norm2: GroupNormAffine::load(map, &key("norm2"), out_c, groups.min(out_c).max(1))?,
             conv2: CausalConv3d::load(map, &key("conv2"), out_c, out_c, 3)?,
             shortcut: if in_c != out_c {
-                Some(CausalConv3d::load(map, &key("conv_shortcut"), in_c, out_c, 1)?)
+                Some(CausalConv3d::load(
+                    map,
+                    &key("conv_shortcut"),
+                    in_c,
+                    out_c,
+                    1,
+                )?)
             } else {
                 None
             },
@@ -254,7 +266,10 @@ struct AttnBlock {
 impl AttnBlock {
     fn zeros(c: usize, groups: usize) -> Result<Self> {
         let w = |rows: usize| -> Result<nn::Linear> {
-            nn::Linear::from_tensors(CudaTensor::zeros(&[rows, c]), Some(CudaTensor::zeros(&[rows])))
+            nn::Linear::from_tensors(
+                CudaTensor::zeros(&[rows, c]),
+                Some(CudaTensor::zeros(&[rows])),
+            )
         };
         Ok(Self {
             group_norm: GroupNormAffine::zeros(c, groups.min(c).max(1))?,
@@ -289,9 +304,7 @@ impl AttnBlock {
         let n_hw = h * w;
         let seq = t * n_hw;
         // [B,C,T,H,W] → [B, S, C]
-        let flat = x
-            .permute(&[0, 2, 3, 4, 1])?
-            .reshape(vec![b, seq, c])?;
+        let flat = x.permute(&[0, 2, 3, 4, 1])?.reshape(vec![b, seq, c])?;
         let residual = flat.clone();
         // group_norm over channels: [B,C,S]
         let n = flat.permute(&[0, 2, 1])?;
@@ -349,7 +362,13 @@ impl MidBlock {
         })
     }
 
-    fn load(map: &WeightMap, prefix: &str, c: usize, groups: usize, add_attn: bool) -> Result<Self> {
+    fn load(
+        map: &WeightMap,
+        prefix: &str,
+        c: usize,
+        groups: usize,
+        add_attn: bool,
+    ) -> Result<Self> {
         Ok(Self {
             resnets: vec![
                 ResnetBlock::load(map, &format!("{prefix}.resnets.0"), c, c, groups)?,
@@ -721,9 +740,6 @@ mod tests {
         // T=2,H=1,W=1 → temporal×4 spatial×8 → T=5, H=8, W=8
         let lat = CudaTensor::zeros(&[1, 4, 2, 1, 1]);
         let out = vae.decode(&lat).unwrap();
-        assert_eq!(
-            out.shape,
-            vec![1, 3, pixel_frames(2, 4), 8, 8]
-        );
+        assert_eq!(out.shape, vec![1, 3, pixel_frames(2, 4), 8, 8]);
     }
 }

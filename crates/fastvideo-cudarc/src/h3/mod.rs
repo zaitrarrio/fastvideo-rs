@@ -3,21 +3,22 @@
 //! DAC-style audio VAE. Shares tensor/ops/nn/attention with [`crate::wan`].
 //! See docs/ports/h3.md.
 
-pub mod text;
 pub mod audio_vae;
+pub mod lora;
 pub mod media;
+pub mod mlx;
+pub mod pipeline;
+pub mod recovered_8b;
+pub mod text;
+pub mod transformer;
 pub mod vae;
 pub mod vae_encoder;
 pub mod vision;
 pub mod vsa;
-pub mod mlx;
-pub mod transformer;
-pub mod pipeline;
-pub mod recovered_8b;
 
 #[cfg(test)]
 mod manifest_tests;
 #[cfg(test)]
 mod reference_tests;
-pub mod text_cache;
 pub mod slim;
+pub mod text_cache;

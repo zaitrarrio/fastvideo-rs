@@ -20,7 +20,8 @@ struct Conv3d {
 
 impl Conv3d {
     fn load(map: &WeightMap, prefix: &str, cin: usize, cout: usize) -> Result<Self> {
-        let mut weight = cuda_tensor_shaped(map, &format!("{prefix}.weight"), &[cout, cin, 3, 3, 3])?;
+        let mut weight =
+            cuda_tensor_shaped(map, &format!("{prefix}.weight"), &[cout, cin, 3, 3, 3])?;
         let mut bias = cuda_tensor_shaped(map, &format!("{prefix}.bias"), &[cout])?;
         weight.pin_device()?;
         bias.pin_device()?;
@@ -67,7 +68,11 @@ impl GroupNorm {
         let mut bias = cuda_tensor_shaped(map, &format!("{prefix}.bias"), &[channels])?;
         weight.pin_device()?;
         bias.pin_device()?;
-        Ok(Self { weight, bias, groups: 32 })
+        Ok(Self {
+            weight,
+            bias,
+            groups: 32,
+        })
     }
 
     fn forward(&self, x: &CudaTensor) -> Result<CudaTensor> {
@@ -104,14 +109,23 @@ impl ResBlock {
 fn pixel_shuffle2(x: &CudaTensor) -> Result<CudaTensor> {
     let [n, c4, h, w] = match x.shape[..] {
         [n, c4, h, w] => [n, c4, h, w],
-        _ => return Err(msg(format!("pixel_shuffle2 expects [N, C, H, W], got {:?}", x.shape))),
+        _ => {
+            return Err(msg(format!(
+                "pixel_shuffle2 expects [N, C, H, W], got {:?}",
+                x.shape
+            )))
+        }
     };
     if !c4.is_multiple_of(4) {
-        return Err(msg(format!("pixel_shuffle2: channel count {c4} is not 4·C")));
+        return Err(msg(format!(
+            "pixel_shuffle2: channel count {c4} is not 4·C"
+        )));
     }
     let c = c4 / 4;
     // [N, C, 2, 2, H, W] → [N, C, H, 2, W, 2] → [N, C, 2H, 2W].
-    x.reshape(vec![n, c, 2, 2, h, w])?.permute(&[0, 1, 4, 2, 5, 3])?.reshape(vec![n, c, h * 2, w * 2])
+    x.reshape(vec![n, c, 2, 2, h, w])?
+        .permute(&[0, 1, 4, 2, 5, 3])?
+        .reshape(vec![n, c, h * 2, w * 2])
 }
 
 pub struct LatentUpsampler {
@@ -129,16 +143,21 @@ impl LatentUpsampler {
     /// `map` is the diffusers `latent_upsampler/` folder.
     pub fn load(map: &WeightMap, cfg: &Ltx2LatentUpsamplerConfig) -> Result<Self> {
         if cfg.dims != 3 || !cfg.spatial_upsample || cfg.temporal_upsample {
-            return Err(msg("ltx2 latent upsampler: only dims=3 spatial-only is supported"));
+            return Err(msg(
+                "ltx2 latent upsampler: only dims=3 spatial-only is supported",
+            ));
         }
         if cfg.use_rational_resampler {
             return Err(msg("ltx2 latent upsampler: rational resampler is not supported (2.5 pack uses PixelShuffle)"));
         }
         let mid = cfg.mid_channels;
         let n = cfg.num_blocks_per_stage;
-        let res_blocks = (0..n).map(|i| ResBlock::load(map, &format!("res_blocks.{i}"), mid)).collect::<Result<Vec<_>>>()?;
-        let post_blocks =
-            (0..n).map(|i| ResBlock::load(map, &format!("post_upsample_res_blocks.{i}"), mid)).collect::<Result<Vec<_>>>()?;
+        let res_blocks = (0..n)
+            .map(|i| ResBlock::load(map, &format!("res_blocks.{i}"), mid))
+            .collect::<Result<Vec<_>>>()?;
+        let post_blocks = (0..n)
+            .map(|i| ResBlock::load(map, &format!("post_upsample_res_blocks.{i}"), mid))
+            .collect::<Result<Vec<_>>>()?;
         Ok(Self {
             initial_conv: Conv3d::load(map, "initial_conv", cfg.in_channels, mid)?,
             initial_norm: GroupNorm::load(map, "initial_norm", mid)?,
@@ -154,32 +173,45 @@ impl LatentUpsampler {
     pub fn forward(&self, x: &CudaTensor) -> Result<CudaTensor> {
         let [b, c, f, h, w] = match x.shape[..] {
             [b, c, f, h, w] => [b, c, f, h, w],
-            _ => return Err(msg(format!("latent upsampler expects [B, C, F, H, W], got {:?}", x.shape))),
+            _ => {
+                return Err(msg(format!(
+                    "latent upsampler expects [B, C, F, H, W], got {:?}",
+                    x.shape
+                )))
+            }
         };
         if c != self.cfg.in_channels || f == 0 || h == 0 || w == 0 {
             return Err(msg(format!(
                 "latent upsampler expects [{}, {}, F, H, W], got {:?}",
-                "B",
-                self.cfg.in_channels,
-                x.shape
+                "B", self.cfg.in_channels, x.shape
             )));
         }
-        let mut y = self.initial_norm.forward(&self.initial_conv.forward(x)?)?.silu();
+        let mut y = self
+            .initial_norm
+            .forward(&self.initial_conv.forward(x)?)?
+            .silu();
         for block in &self.res_blocks {
             y = block.forward(&y)?;
         }
         // [B, C, F, H, W] → [B·F, C, H, W] for the 2-D upsample.
         let mid = y.shape[1];
-        let flat = y.permute(&[0, 2, 1, 3, 4])?.reshape(vec![b * f, mid, h, w])?;
+        let flat = y
+            .permute(&[0, 2, 1, 3, 4])?
+            .reshape(vec![b * f, mid, h, w])?;
         let up = pixel_shuffle2(&self.upsample_conv.forward(&flat)?)?;
         let (h2, w2) = (up.shape[2], up.shape[3]);
-        let mut y = up.reshape(vec![b, f, mid, h2, w2])?.permute(&[0, 2, 1, 3, 4])?;
+        let mut y = up
+            .reshape(vec![b, f, mid, h2, w2])?
+            .permute(&[0, 2, 1, 3, 4])?;
         for block in &self.post_blocks {
             y = block.forward(&y)?;
         }
         let out = self.final_conv.forward(&y)?;
         if out.shape != [b, c, f, h * 2, w * 2] {
-            return Err(msg(format!("latent upsampler produced {:?} from {:?}", out.shape, x.shape)));
+            return Err(msg(format!(
+                "latent upsampler produced {:?} from {:?}",
+                out.shape, x.shape
+            )));
         }
         Ok(out)
     }
@@ -212,7 +244,10 @@ mod tests {
 
     #[test]
     fn rational_resampler_is_refused() {
-        let cfg = Ltx2LatentUpsamplerConfig { use_rational_resampler: true, ..Ltx2LatentUpsamplerConfig::ltx2_5_22b() };
+        let cfg = Ltx2LatentUpsamplerConfig {
+            use_rational_resampler: true,
+            ..Ltx2LatentUpsamplerConfig::ltx2_5_22b()
+        };
         assert!(LatentUpsampler::load(&weights(), &cfg).is_err());
     }
 }

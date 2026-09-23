@@ -65,7 +65,8 @@ impl GlmImagePipeline {
     }
 
     pub fn load_dit(&mut self) -> Result<()> {
-        let map = WeightMap::open(&self.root.join("transformer")).map_err(|e| msg(e.to_string()))?;
+        let map =
+            WeightMap::open(&self.root.join("transformer")).map_err(|e| msg(e.to_string()))?;
         self.dit = Some(GlmImageTransformer::load(self.cfg.dit.clone(), &map)?);
         Ok(())
     }
@@ -114,12 +115,8 @@ impl GlmImagePipeline {
                 .iter()
                 .any(|k| map.contains(k))
             {
-                let emb = super::ar_text::encode_byt5_glyphs(
-                    &self.root,
-                    "text_encoder",
-                    prompt,
-                    256,
-                )?;
+                let emb =
+                    super::ar_text::encode_byt5_glyphs(&self.root, "text_encoder", prompt, 256)?;
                 // AR pack present → run text tower (refuse silent skip).
                 if ar.is_dir() {
                     let _ = super::ar_text::encode_ar_hidden(
@@ -169,8 +166,14 @@ impl GlmImagePipeline {
     }
 
     pub fn generate(&self, request: &GlmImageRequest, out_path: &Path) -> Result<()> {
-        let dit = self.dit.as_ref().ok_or_else(|| msg("GLM-Image: call load_dit()"))?;
-        let vae = self.vae.as_ref().ok_or_else(|| msg("GLM-Image: call load_vae() or load_vae_stub()"))?;
+        let dit = self
+            .dit
+            .as_ref()
+            .ok_or_else(|| msg("GLM-Image: call load_dit()"))?;
+        let vae = self
+            .vae
+            .as_ref()
+            .ok_or_else(|| msg("GLM-Image: call load_vae() or load_vae_stub()"))?;
         let text = self.encode_text(&request.prompt)?;
         let (lh, lw) = if self.cfg.dit.num_layers <= 2 {
             (8usize, 8usize)

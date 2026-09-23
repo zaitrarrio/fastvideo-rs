@@ -58,7 +58,10 @@ impl PaddedPrompt {
     /// truncation side is the right even though its padding side is the left.
     pub fn from_ids(ids: &[u32], max_len: usize) -> Result<Self> {
         if ids.is_empty() || max_len == 0 {
-            return Err(msg(format!("prompt: {} ids into {max_len} slots", ids.len())));
+            return Err(msg(format!(
+                "prompt: {} ids into {max_len} slots",
+                ids.len()
+            )));
         }
         let real = ids.len().min(max_len);
         let mut padded = vec![PAD_ID; max_len - real];
@@ -69,7 +72,12 @@ impl PaddedPrompt {
     /// `pipeline_ltx2.py:327-341`: the stripped prompt, no chat template, no
     /// system prompt, `<bos>` prepended by the tokenizer's own post-processor.
     pub fn tokenize(tokenizer_json: &Path, prompt: &str, max_len: usize) -> Result<Self> {
-        let path = tokenizer_json.to_str().ok_or_else(|| msg(format!("tokenizer path {} is not UTF-8", tokenizer_json.display())))?;
+        let path = tokenizer_json.to_str().ok_or_else(|| {
+            msg(format!(
+                "tokenizer path {} is not UTF-8",
+                tokenizer_json.display()
+            ))
+        })?;
         let (ids, _) = fastvideo_models::tokenize_prompt(path, prompt.trim(), max_len)
             .map_err(|e| msg(format!("tokenize with {}: {e}", tokenizer_json.display())))?;
         Self::from_ids(&ids, max_len)
@@ -91,7 +99,9 @@ impl PaddedPrompt {
 
     /// 1 for real tokens, 0 for padding — the tokenizer's `attention_mask`.
     pub fn attention_mask(&self) -> Vec<u32> {
-        (0..self.ids.len()).map(|i| u32::from(i >= self.ids.len() - self.real)).collect()
+        (0..self.ids.len())
+            .map(|i| u32::from(i >= self.ids.len() - self.real))
+            .collect()
     }
 }
 
@@ -106,21 +116,49 @@ pub struct HiddenStack {
 
 impl HiddenStack {
     /// From the oracle's / pipeline's `[tokens, hidden, states]` layout.
-    pub fn from_interleaved(data: &[f32], tokens: usize, hidden: usize, states: usize) -> Result<Self> {
+    pub fn from_interleaved(
+        data: &[f32],
+        tokens: usize,
+        hidden: usize,
+        states: usize,
+    ) -> Result<Self> {
         if data.len() != tokens * hidden * states || data.is_empty() {
-            return Err(msg(format!("hidden stack: {} values for [{tokens}, {hidden}, {states}]", data.len())));
+            return Err(msg(format!(
+                "hidden stack: {} values for [{tokens}, {hidden}, {states}]",
+                data.len()
+            )));
         }
-        let states = (0..states).map(|l| data.iter().skip(l).step_by(states).copied().collect()).collect();
-        Ok(Self { tokens, hidden, states })
+        let states = (0..states)
+            .map(|l| data.iter().skip(l).step_by(states).copied().collect())
+            .collect();
+        Ok(Self {
+            tokens,
+            hidden,
+            states,
+        })
     }
 
     /// Run Gemma over the real tokens and keep every hidden state. `cfg` decides
     /// the embedding scale (`for_bf16_reference` to match the product).
     pub fn encode(map: &WeightMap, cfg: &DecoderConfig, prompt: &PaddedPrompt) -> Result<Self> {
         let taps: Vec<usize> = (0..=cfg.num_layers()).collect();
-        let out = llm::hidden_states(map, cfg, prompt.real_ids(), &prompt.real_positions(), &vec![true; prompt.real], &taps)?;
-        let states = out.iter().map(|t| Ok(t.host_cow()?.into_owned())).collect::<Result<Vec<_>>>()?;
-        Ok(Self { tokens: prompt.real, hidden: cfg.hidden, states })
+        let out = llm::hidden_states(
+            map,
+            cfg,
+            prompt.real_ids(),
+            &prompt.real_positions(),
+            &vec![true; prompt.real],
+            &taps,
+        )?;
+        let states = out
+            .iter()
+            .map(|t| Ok(t.host_cow()?.into_owned()))
+            .collect::<Result<Vec<_>>>()?;
+        Ok(Self {
+            tokens: prompt.real,
+            hidden: cfg.hidden,
+            states,
+        })
     }
 
     /// [`Self::encode`] on a decoder that is already on the device: the same
@@ -128,9 +166,21 @@ impl HiddenStack {
     pub fn encode_resident(decoder: &llm::ResidentDecoder, prompt: &PaddedPrompt) -> Result<Self> {
         let cfg = decoder.config();
         let taps: Vec<usize> = (0..=cfg.num_layers()).collect();
-        let out = decoder.hidden_states(prompt.real_ids(), &prompt.real_positions(), &vec![true; prompt.real], &taps)?;
-        let states = out.iter().map(|t| Ok(t.host_cow()?.into_owned())).collect::<Result<Vec<_>>>()?;
-        Ok(Self { tokens: prompt.real, hidden: cfg.hidden, states })
+        let out = decoder.hidden_states(
+            prompt.real_ids(),
+            &prompt.real_positions(),
+            &vec![true; prompt.real],
+            &taps,
+        )?;
+        let states = out
+            .iter()
+            .map(|t| Ok(t.host_cow()?.into_owned()))
+            .collect::<Result<Vec<_>>>()?;
+        Ok(Self {
+            tokens: prompt.real,
+            hidden: cfg.hidden,
+            states,
+        })
     }
 
     /// `per_layer_masked_mean_norm` over the real tokens, packed the way
@@ -147,7 +197,11 @@ impl HiddenStack {
         for (l, state) in self.states.iter().enumerate() {
             let sum: f64 = state.iter().map(|&v| f64::from(v)).sum();
             let mean = sum / (state.len() as f64 + eps);
-            let (lo, hi) = state.iter().fold((f32::INFINITY, f32::NEG_INFINITY), |(lo, hi), &v| (lo.min(v), hi.max(v)));
+            let (lo, hi) = state
+                .iter()
+                .fold((f32::INFINITY, f32::NEG_INFINITY), |(lo, hi), &v| {
+                    (lo.min(v), hi.max(v))
+                });
             let k = scale / (f64::from(hi) - f64::from(lo) + eps);
             for (i, &v) in state.iter().enumerate() {
                 let (t, c) = (i / self.hidden, i % self.hidden);
@@ -184,10 +238,27 @@ pub struct Connector {
 }
 
 impl Connector {
-    fn load(map: &WeightMap, keys: &Keys, name: &str, shape: ConnectorShape, eps: f32, gated: bool) -> Result<Self> {
-        let ConnectorShape { heads, head_dim, layers, registers } = shape;
+    fn load(
+        map: &WeightMap,
+        keys: &Keys,
+        name: &str,
+        shape: ConnectorShape,
+        eps: f32,
+        gated: bool,
+    ) -> Result<Self> {
+        let ConnectorShape {
+            heads,
+            head_dim,
+            layers,
+            registers,
+        } = shape;
         let dim = heads * head_dim;
-        let dims = AttentionDims { query_dim: dim, context_dim: dim, heads, head_dim };
+        let dims = AttentionDims {
+            query_dim: dim,
+            context_dim: dim,
+            heads,
+            head_dim,
+        };
         let blocks = (0..layers)
             .map(|i| {
                 let p = format!("{name}.transformer_blocks.{i}");
@@ -197,9 +268,20 @@ impl Connector {
                 })
             })
             .collect::<Result<Vec<_>>>()?;
-        let mut table = cuda_tensor_shaped(map, &keys.key(&format!("{name}.learnable_registers")), &[registers, dim])?;
+        let mut table = cuda_tensor_shaped(
+            map,
+            &keys.key(&format!("{name}.learnable_registers")),
+            &[registers, dim],
+        )?;
         table.pin_device()?;
-        Ok(Self { registers: table, blocks, ones: ones(dim)?, heads, dim, eps })
+        Ok(Self {
+            registers: table,
+            blocks,
+            ones: ones(dim)?,
+            heads,
+            dim,
+            eps,
+        })
     }
 
     /// `proj`: `[tokens, dim]`, the real tokens only, in order. Returns
@@ -207,10 +289,18 @@ impl Connector {
     /// `p` filled with `registers[p mod R]`, then attended without a mask.
     fn forward(&self, proj: &CudaTensor, rope: &DeviceRope, total: usize) -> Result<CudaTensor> {
         let [tokens, dim] = proj.shape[..] else {
-            return Err(msg(format!("connector expects [tokens, {}], got {:?}", self.dim, proj.shape)));
+            return Err(msg(format!(
+                "connector expects [tokens, {}], got {:?}",
+                self.dim, proj.shape
+            )));
         };
         let count = self.registers.shape[0];
-        if dim != self.dim || tokens == 0 || tokens > total || count == 0 || !total.is_multiple_of(count) {
+        if dim != self.dim
+            || tokens == 0
+            || tokens > total
+            || count == 0
+            || !total.is_multiple_of(count)
+        {
             return Err(msg(format!("connector: {tokens} tokens of width {dim} into {total} slots with {count} registers")));
         }
         let mut x = if tokens == total {
@@ -255,29 +345,60 @@ impl TextConnectors {
 
     /// [`Self::load`] with the text projection's module prefix given, not
     /// probed — the probe needs a real checkpoint to look into.
-    pub(crate) fn load_with_projection(map: &WeightMap, keys: &Keys, cfg: &Ltx2ConnectorsConfig, text_proj_in: &str) -> Result<Self> {
+    pub(crate) fn load_with_projection(
+        map: &WeightMap,
+        keys: &Keys,
+        cfg: &Ltx2ConnectorsConfig,
+        text_proj_in: &str,
+    ) -> Result<Self> {
         let eps = cfg.norm_eps as f32;
         let bias = cfg.proj_bias;
         let video_dim = cfg.inner_dim();
         let audio_dim = cfg.audio_inner_dim();
         if cfg.per_modality_projections {
-            if cfg.video_connector_num_attention_heads * cfg.video_connector_attention_head_dim != video_dim
-                || cfg.audio_connector_num_attention_heads * cfg.audio_connector_attention_head_dim != audio_dim
+            if cfg.video_connector_num_attention_heads * cfg.video_connector_attention_head_dim
+                != video_dim
+                || cfg.audio_connector_num_attention_heads * cfg.audio_connector_attention_head_dim
+                    != audio_dim
             {
-                return Err(msg("connectors: per-modality head geometry must match video/audio hidden dims"));
+                return Err(msg(
+                    "connectors: per-modality head geometry must match video/audio hidden dims",
+                ));
             }
-        } else if cfg.video_connector_num_attention_heads * cfg.video_connector_attention_head_dim != cfg.caption_channels
-            || cfg.audio_connector_num_attention_heads * cfg.audio_connector_attention_head_dim != cfg.caption_channels
+        } else if cfg.video_connector_num_attention_heads * cfg.video_connector_attention_head_dim
+            != cfg.caption_channels
+            || cfg.audio_connector_num_attention_heads * cfg.audio_connector_attention_head_dim
+                != cfg.caption_channels
         {
-            return Err(msg("connectors: LTX-2.0 connectors are as wide as the caption channels"));
+            return Err(msg(
+                "connectors: LTX-2.0 connectors are as wide as the caption channels",
+            ));
         }
         let (video_proj, audio_proj) = if cfg.per_modality_projections {
             (
-                Linear::load(map, "video_text_proj_in", cfg.text_proj_in_features(), video_dim, bias)?,
-                Linear::load(map, "audio_text_proj_in", cfg.text_proj_in_features(), audio_dim, bias)?,
+                Linear::load(
+                    map,
+                    "video_text_proj_in",
+                    cfg.text_proj_in_features(),
+                    video_dim,
+                    bias,
+                )?,
+                Linear::load(
+                    map,
+                    "audio_text_proj_in",
+                    cfg.text_proj_in_features(),
+                    audio_dim,
+                    bias,
+                )?,
             )
         } else {
-            let shared = Linear::load(map, text_proj_in, cfg.text_proj_in_features(), cfg.caption_channels, false)?;
+            let shared = Linear::load(
+                map,
+                text_proj_in,
+                cfg.text_proj_in_features(),
+                cfg.caption_channels,
+                false,
+            )?;
             (shared.clone(), shared)
         };
         Ok(Self {
@@ -316,7 +437,9 @@ impl TextConnectors {
     /// `total` is the padded prompt length (1024): the register fill and the
     /// rotary table both depend on it, not on how many tokens are real.
     pub fn forward(&self, stack: &HiddenStack, total: usize) -> Result<TextContexts> {
-        if stack.states.len() != self.cfg.text_proj_in_factor || stack.hidden != self.cfg.caption_channels {
+        if stack.states.len() != self.cfg.text_proj_in_factor
+            || stack.hidden != self.cfg.caption_channels
+        {
             return Err(msg(format!(
                 "connectors want {} states of width {}, got {} of width {}",
                 self.cfg.text_proj_in_factor,
@@ -326,7 +449,8 @@ impl TextConnectors {
             )));
         }
         let packed = stack.normalized(self.cfg.norm_scale_factor, self.cfg.norm_eps);
-        let packed = CudaTensor::from_vec(packed, vec![stack.tokens, self.cfg.text_proj_in_features()])?;
+        let packed =
+            CudaTensor::from_vec(packed, vec![stack.tokens, self.cfg.text_proj_in_features()])?;
         let video_proj = self.video_proj.forward(&packed)?;
         let audio_proj = self.audio_proj.forward(&packed)?;
         drop(packed);
@@ -349,15 +473,22 @@ impl TextConnectors {
                 self.audio.heads,
                 self.cfg.rope_theta,
             );
-            self.audio.forward(&audio_proj, &DeviceRope::upload(&table)?, total)?
+            self.audio
+                .forward(&audio_proj, &DeviceRope::upload(&table)?, total)?
         };
-        Ok(TextContexts { proj: video_proj, video, audio })
+        Ok(TextContexts {
+            proj: video_proj,
+            video,
+            audio,
+        })
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::super::attention::tests::{assert_close, attention_reference, get, linear, rms, rows, weights};
+    use super::super::attention::tests::{
+        assert_close, attention_reference, get, linear, rms, rows, weights,
+    };
     use super::super::keys::Layout;
     use super::*;
 
@@ -378,7 +509,9 @@ mod tests {
     #[test]
     fn each_state_is_normalised_by_its_own_mean_and_range() {
         // 2 tokens × 3 channels × 2 states, interleaved [t, c, l].
-        let data: Vec<f32> = vec![1.0, 10.0, 2.0, 20.0, 3.0, 30.0, 4.0, 40.0, 5.0, 50.0, 6.0, -60.0];
+        let data: Vec<f32> = vec![
+            1.0, 10.0, 2.0, 20.0, 3.0, 30.0, 4.0, 40.0, 5.0, 50.0, 6.0, -60.0,
+        ];
         let stack = HiddenStack::from_interleaved(&data, 2, 3, 2).unwrap();
         assert_eq!(stack.states[0], vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0]);
         assert_eq!(stack.states[1], vec![10.0, 20.0, 30.0, 40.0, 50.0, -60.0]);
@@ -389,7 +522,11 @@ mod tests {
                 for c in 0..3 {
                     let want = 8.0 * (data[(t * 3 + c) * 2 + l] - mean) / range;
                     let at = t * 6 + c * 2 + l;
-                    assert!((got[at] - want).abs() < 1e-5, "state {l} token {t} ch {c}: {} vs {want}", got[at]);
+                    assert!(
+                        (got[at] - want).abs() < 1e-5,
+                        "state {l} token {t} ch {c}: {} vs {want}",
+                        got[at]
+                    );
                 }
             }
         }
@@ -421,7 +558,9 @@ mod tests {
         let map = weights();
         let model = TextConnectors::load(&map, &Keys::connectors(Layout::Diffusers), &cfg).unwrap();
         let (tokens, total, dim) = (3usize, 8usize, 8usize);
-        let data: Vec<f32> = (0..tokens * dim * 3).map(|i| (i as f32 * 0.31).sin() * 2.0 + 0.2).collect();
+        let data: Vec<f32> = (0..tokens * dim * 3)
+            .map(|i| (i as f32 * 0.31).sin() * 2.0 + 0.2)
+            .collect();
         let stack = HiddenStack::from_interleaved(&data, tokens, dim, 3).unwrap();
         let got = model.forward(&stack, total).unwrap();
         assert_eq!(got.video.shape, vec![1, total, dim]);
@@ -429,25 +568,71 @@ mod tests {
 
         let packed = stack.normalized(8.0, 1e-6);
         let w = get(&map, "text_proj_in.weight", &[dim, dim * 3]);
-        let proj: Vec<Vec<f32>> = packed.chunks_exact(dim * 3).map(|r| linear(r, &w, &vec![0.0; dim])).collect();
+        let proj: Vec<Vec<f32>> = packed
+            .chunks_exact(dim * 3)
+            .map(|r| linear(r, &w, &vec![0.0; dim]))
+            .collect();
         assert_close(&rows(&got.proj, dim), &proj, 1e-5, "text_proj_in");
 
         let table = SplitRope::from_fractions(&connector_fractions(total, 16), 1, dim, 2, 10_000.0);
-        let dims = AttentionDims { query_dim: dim, context_dim: dim, heads: 2, head_dim: 4 };
-        for (name, layers, ours) in [("video_connector", 2, &got.video), ("audio_connector", 1, &got.audio)] {
+        let dims = AttentionDims {
+            query_dim: dim,
+            context_dim: dim,
+            heads: 2,
+            head_dim: 4,
+        };
+        for (name, layers, ours) in [
+            ("video_connector", 2, &got.video),
+            ("audio_connector", 1, &got.audio),
+        ] {
             let reg = get(&map, &format!("{name}.learnable_registers"), &[4, dim]);
-            let mut x: Vec<Vec<f32>> = (0..total).map(|p| if p < tokens { proj[p].clone() } else { reg[(p % 4) * dim..(p % 4 + 1) * dim].to_vec() }).collect();
+            let mut x: Vec<Vec<f32>> = (0..total)
+                .map(|p| {
+                    if p < tokens {
+                        proj[p].clone()
+                    } else {
+                        reg[(p % 4) * dim..(p % 4 + 1) * dim].to_vec()
+                    }
+                })
+                .collect();
             for i in 0..layers {
                 let p = format!("{name}.transformer_blocks.{i}");
                 let h: Vec<Vec<f32>> = x.iter().map(|v| rms(v, None, 1e-6)).collect();
-                let a = attention_reference(&map, &format!("{p}.attn1"), dims, &h, &h, Some(&table), None, false);
-                x.iter_mut().zip(&a).for_each(|(v, a)| v.iter_mut().zip(a).for_each(|(v, a)| *v += a));
-                let (w0, b0) = (get(&map, &format!("{p}.ff.net.0.proj.weight"), &[32, dim]), get(&map, &format!("{p}.ff.net.0.proj.bias"), &[32]));
-                let (w2, b2) = (get(&map, &format!("{p}.ff.net.2.weight"), &[dim, 32]), get(&map, &format!("{p}.ff.net.2.bias"), &[dim]));
-                let gelu = |v: f32| 0.5 * v * (1.0 + ((2.0 / std::f32::consts::PI).sqrt() * (v + 0.044_715 * v * v * v)).tanh());
+                let a = attention_reference(
+                    &map,
+                    &format!("{p}.attn1"),
+                    dims,
+                    &h,
+                    &h,
+                    Some(&table),
+                    None,
+                    false,
+                );
+                x.iter_mut()
+                    .zip(&a)
+                    .for_each(|(v, a)| v.iter_mut().zip(a).for_each(|(v, a)| *v += a));
+                let (w0, b0) = (
+                    get(&map, &format!("{p}.ff.net.0.proj.weight"), &[32, dim]),
+                    get(&map, &format!("{p}.ff.net.0.proj.bias"), &[32]),
+                );
+                let (w2, b2) = (
+                    get(&map, &format!("{p}.ff.net.2.weight"), &[dim, 32]),
+                    get(&map, &format!("{p}.ff.net.2.bias"), &[dim]),
+                );
+                let gelu = |v: f32| {
+                    0.5 * v
+                        * (1.0
+                            + ((2.0 / std::f32::consts::PI).sqrt() * (v + 0.044_715 * v * v * v))
+                                .tanh())
+                };
                 for v in &mut x {
-                    let up: Vec<f32> = linear(&rms(v, None, 1e-6), &w0, &b0).into_iter().map(gelu).collect();
-                    v.iter_mut().zip(linear(&up, &w2, &b2)).for_each(|(v, f)| *v += f);
+                    let up: Vec<f32> = linear(&rms(v, None, 1e-6), &w0, &b0)
+                        .into_iter()
+                        .map(gelu)
+                        .collect();
+                    v.iter_mut()
+                        .zip(linear(&up, &w2, &b2))
+                        .for_each(|(v, f)| *v += f);
                 }
             }
             let want: Vec<Vec<f32>> = x.iter().map(|v| rms(v, None, 1e-6)).collect();
@@ -458,7 +643,8 @@ mod tests {
     #[test]
     fn a_full_length_prompt_uses_no_registers() {
         let cfg = tiny();
-        let model = TextConnectors::load(&weights(), &Keys::connectors(Layout::Diffusers), &cfg).unwrap();
+        let model =
+            TextConnectors::load(&weights(), &Keys::connectors(Layout::Diffusers), &cfg).unwrap();
         let data: Vec<f32> = (0..4 * 8 * 3).map(|i| (i as f32 * 0.17).cos()).collect();
         let stack = HiddenStack::from_interleaved(&data, 4, 8, 3).unwrap();
         assert_eq!(model.forward(&stack, 4).unwrap().video.shape, vec![1, 4, 8]);
@@ -487,7 +673,19 @@ mod tests {
             sandwich_norms: true,
             embed_scale: 2.0,
             attn_scale: 0.5,
-            layers: vec![LayerAttn { rope_theta: 10_000.0, rope_factor: 1.0, window: Some(4), q_heads: None, q_head_dim: None, kv_heads: None, kv_head_dim: None, partial_rotary: None }, LayerAttn::global(1e6, 8.0)],
+            layers: vec![
+                LayerAttn {
+                    rope_theta: 10_000.0,
+                    rope_factor: 1.0,
+                    window: Some(4),
+                    q_heads: None,
+                    q_head_dim: None,
+                    kv_heads: None,
+                    kv_head_dim: None,
+                    partial_rotary: None,
+                },
+                LayerAttn::global(1e6, 8.0),
+            ],
             layer_prefix: "lm.layers".into(),
             embed_key: "lm.embed.weight".into(),
             final_norm_key: "lm.norm.weight".into(),
@@ -495,8 +693,15 @@ mod tests {
         };
         let prompt = PaddedPrompt::from_ids(&[2, 7, 9, 4], 32).unwrap();
         let streamed = HiddenStack::encode(&weights(), &cfg, &prompt).unwrap();
-        let resident = HiddenStack::encode_resident(&ResidentDecoder::load(&weights(), &cfg, 2).unwrap(), &prompt).unwrap();
-        assert_eq!((streamed.tokens, streamed.hidden, streamed.states.len()), (4, 8, 3));
+        let resident = HiddenStack::encode_resident(
+            &ResidentDecoder::load(&weights(), &cfg, 2).unwrap(),
+            &prompt,
+        )
+        .unwrap();
+        assert_eq!(
+            (streamed.tokens, streamed.hidden, streamed.states.len()),
+            (4, 8, 3)
+        );
         assert_eq!(streamed.states, resident.states);
     }
 }

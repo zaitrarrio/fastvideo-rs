@@ -70,7 +70,8 @@ impl MmAudioPipeline {
     }
 
     pub fn load_dit(&mut self) -> Result<()> {
-        let map = WeightMap::open(&self.root.join("transformer")).map_err(|e| msg(e.to_string()))?;
+        let map =
+            WeightMap::open(&self.root.join("transformer")).map_err(|e| msg(e.to_string()))?;
         self.dit = Some(MmAudioTransformer::load(self.cfg.dit.clone(), &map)?);
         Ok(())
     }
@@ -84,7 +85,11 @@ impl MmAudioPipeline {
     pub fn load_vae_stub(&mut self) {
         self.vae = Some(AudioVaeStub {
             latent_channels: self.cfg.dit.out_channels,
-            hop_length: if self.cfg.dit.sample_size <= 32 { 8 } else { self.preset.hop_length() },
+            hop_length: if self.cfg.dit.sample_size <= 32 {
+                8
+            } else {
+                self.preset.hop_length()
+            },
             audio_channels: self.cfg.audio_channels,
         });
     }
@@ -137,10 +142,7 @@ impl MmAudioPipeline {
         }
         let map = WeightMap::open(&ve).map_err(|e| msg(e.to_string()))?;
         if let Some(sync) = super::synchformer::SynchformerVisual::try_load(&map)? {
-            let frames = super::synchformer::load_sync_frames(
-                p,
-                super::synchformer::SEGMENT_SIZE,
-            )?;
+            let frames = super::synchformer::load_sync_frames(p, super::synchformer::SEGMENT_SIZE)?;
             let feat = sync.encode_frame_chw(&frames)?; // [1, L, 768]
             return crate::text_encode::broadcast_to_dim(&feat, dim).map(Some);
         }
@@ -159,13 +161,22 @@ impl MmAudioPipeline {
         Err(msg(format!(
             "MMAudio: {} present but no recognized Synchformer keys {:?}",
             ve.display(),
-            super::synchformer::probes::PROBES.iter().take(3).collect::<Vec<_>>()
+            super::synchformer::probes::PROBES
+                .iter()
+                .take(3)
+                .collect::<Vec<_>>()
         )))
     }
 
     pub fn generate(&self, request: &MmAudioRequest, out_path: &Path) -> Result<()> {
-        let dit = self.dit.as_ref().ok_or_else(|| msg("MMAudio: call load_dit()"))?;
-        let vae = self.vae.as_ref().ok_or_else(|| msg("MMAudio: call load_vae_stub()"))?;
+        let dit = self
+            .dit
+            .as_ref()
+            .ok_or_else(|| msg("MMAudio: call load_dit()"))?;
+        let vae = self
+            .vae
+            .as_ref()
+            .ok_or_else(|| msg("MMAudio: call load_vae_stub()"))?;
         let text = self.encode_text(&request.prompt)?;
         let visual = self.encode_visual(request.video_path.as_deref())?;
         let tlen = if self.cfg.dit.num_layers <= 2 {
@@ -212,8 +223,8 @@ mod tests {
 
     #[test]
     fn tiny_generate_wav() {
-        let mut pipe = MmAudioPipeline::open("/tmp/mmaudio-missing", MmAudioPreset::Large44kV2)
-            .unwrap();
+        let mut pipe =
+            MmAudioPipeline::open("/tmp/mmaudio-missing", MmAudioPreset::Large44kV2).unwrap();
         pipe.load_dit_zeros_tiny().unwrap();
         pipe.load_vae_stub();
         let mut r = MmAudioRequest::t2a("rain", 1);

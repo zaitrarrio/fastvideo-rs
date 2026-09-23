@@ -4,7 +4,9 @@ use std::time::Instant;
 use crate::backend_kind::BackendKind;
 use crate::error::{FastVideoError, Result};
 use crate::registry::{resolve_wan, SamplingAlgorithm, WanModelDefinition};
-use crate::sampling::{pipeline_defaults, sampling_from_definition, PipelineDefaults, SamplingParam};
+use crate::sampling::{
+    pipeline_defaults, sampling_from_definition, PipelineDefaults, SamplingParam,
+};
 
 #[derive(Debug, Clone)]
 pub struct LoadOptions {

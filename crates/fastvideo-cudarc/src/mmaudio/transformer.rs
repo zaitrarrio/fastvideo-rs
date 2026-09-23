@@ -37,7 +37,10 @@ impl MmAudioTransformer {
         }
         let (b, c, t) = (shape[0], shape[1], shape[2]);
         if c != self.cfg.in_channels {
-            return Err(msg(format!("mmaudio in_channels {} vs {}", c, self.cfg.in_channels)));
+            return Err(msg(format!(
+                "mmaudio in_channels {} vs {}",
+                c, self.cfg.in_channels
+            )));
         }
         let scale = (timestep / 1000.0).clamp(0.0, 1.0);
         let data = latents.host_cow()?;

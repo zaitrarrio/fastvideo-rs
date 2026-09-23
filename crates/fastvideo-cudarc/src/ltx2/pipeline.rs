@@ -28,7 +28,9 @@ use rand::{Rng, SeedableRng};
 use rand_distr::StandardNormal;
 
 use crate::llm::{DecoderConfig, ResidentDecoder};
-use crate::wan::pipeline::{frames_to_rgb8, interleave_audio, write_wav, PipelineError, Result, VideoWriter};
+use crate::wan::pipeline::{
+    frames_to_rgb8, interleave_audio, write_wav, PipelineError, Result, VideoWriter,
+};
 use crate::wan::tensor::{CudaTensor, TensorError};
 use crate::wan::weights::WeightMap;
 
@@ -105,7 +107,11 @@ pub struct Ltx2Request {
 }
 
 impl Ltx2Request {
-    pub fn new(cfg: &Ltx2Config, prompt: impl Into<String>, output_dir: impl Into<PathBuf>) -> Self {
+    pub fn new(
+        cfg: &Ltx2Config,
+        prompt: impl Into<String>,
+        output_dir: impl Into<PathBuf>,
+    ) -> Self {
         let d = &cfg.defaults;
         let base = cfg.scheduler.use_dynamic_shifting;
         Self {
@@ -132,7 +138,11 @@ impl Ltx2Request {
     /// `8k + 1` frames.
     pub fn validate(&self) -> Result<()> {
         let multiple = if self.two_stage { 64 } else { 32 };
-        if self.height == 0 || self.width == 0 || !self.height.is_multiple_of(multiple) || !self.width.is_multiple_of(multiple) {
+        if self.height == 0
+            || self.width == 0
+            || !self.height.is_multiple_of(multiple)
+            || !self.width.is_multiple_of(multiple)
+        {
             return Err(err(format!(
                 "ltx2: {}x{} — height and width must be positive multiples of {multiple}{}",
                 self.width,
@@ -141,10 +151,15 @@ impl Ltx2Request {
             )));
         }
         if self.num_frames % 8 != 1 {
-            return Err(err(format!("ltx2: {} frames — the frame count must be 8k + 1", self.num_frames)));
+            return Err(err(format!(
+                "ltx2: {} frames — the frame count must be 8k + 1",
+                self.num_frames
+            )));
         }
         if self.frame_rate.is_nan() || self.frame_rate <= 0.0 || self.prompt.trim().is_empty() {
-            return Err(err("ltx2: needs a positive frame rate and a non-empty prompt"));
+            return Err(err(
+                "ltx2: needs a positive frame rate and a non-empty prompt",
+            ));
         }
         if let Some(n) = self.refine_steps {
             if n != 2 && n != 3 {
@@ -161,7 +176,8 @@ impl Ltx2Request {
 
     /// Stage-2 refine step count: explicit, else 2 when stage-1 is 5, else 3.
     pub fn stage2_steps(&self) -> usize {
-        self.refine_steps.unwrap_or(if self.stage1_steps() == 5 { 2 } else { 3 })
+        self.refine_steps
+            .unwrap_or(if self.stage1_steps() == 5 { 2 } else { 3 })
     }
 }
 
@@ -199,16 +215,33 @@ pub struct Ltx2Output {
 /// `[1, F·H·W, 128]` drawn first, then audio `[1, L, 128]`, from one generator
 /// — the order the reference pipeline draws them in. (Its draws come from
 /// torch's generator; ours cannot reproduce those bits, only the contract.)
-pub fn initial_noise(cfg: &Ltx2Config, grid: [usize; 3], audio_tokens: usize, seed: u64) -> Result<(CudaTensor, CudaTensor)> {
+pub fn initial_noise(
+    cfg: &Ltx2Config,
+    grid: [usize; 3],
+    audio_tokens: usize,
+    seed: u64,
+) -> Result<(CudaTensor, CudaTensor)> {
     let mut rng = rand::rngs::StdRng::seed_from_u64(seed);
-    let mut draw = |n: usize| -> Vec<f32> { (0..n).map(|_| rng.sample::<f32, _>(StandardNormal)).collect() };
+    let mut draw = |n: usize| -> Vec<f32> {
+        (0..n)
+            .map(|_| rng.sample::<f32, _>(StandardNormal))
+            .collect()
+    };
     let c = cfg.transformer.in_channels;
     let [f, h, w] = grid;
     let video = CudaTensor::from_vec(draw(c * f * h * w), vec![1, c, f, h, w])?;
-    let (ac, bins) = (cfg.audio_vae.latent_channels, cfg.audio_vae.latent_mel_bins());
+    let (ac, bins) = (
+        cfg.audio_vae.latent_channels,
+        cfg.audio_vae.latent_mel_bins(),
+    );
     // [1, C, L, M] → [1, L, C·M]: feature index = channel · bins + bin.
-    let audio = CudaTensor::from_vec(draw(ac * audio_tokens * bins), vec![1, ac, audio_tokens, bins])?;
-    let audio = audio.permute(&[0, 2, 1, 3])?.reshape(vec![1, audio_tokens, ac * bins])?;
+    let audio = CudaTensor::from_vec(
+        draw(ac * audio_tokens * bins),
+        vec![1, ac, audio_tokens, bins],
+    )?;
+    let audio = audio
+        .permute(&[0, 2, 1, 3])?
+        .reshape(vec![1, audio_tokens, ac * bins])?;
     Ok((pack_video(&video)?, audio))
 }
 
@@ -228,13 +261,19 @@ pub fn denoise(
 ) -> Result<(CudaTensor, CudaTensor)> {
     for i in 0..schedule.num_steps() {
         let timer = Instant::now();
-        let (v_video, v_audio) = model.forward(&video, &audio, text, schedule.timestep_f32(i), ropes, None)?;
+        let (v_video, v_audio) =
+            model.forward(&video, &audio, text, schedule.timestep_f32(i), ropes, None)?;
         let dt = schedule.dt(i) as f32;
         video = CudaTensor::lincomb(&[(1.0, &video), (dt, &v_video)])?;
         audio = CudaTensor::lincomb(&[(1.0, &audio), (dt, &v_audio)])?;
         sync()?;
         let secs = timer.elapsed().as_secs_f64();
-        crate::wan::log::info(format_args!("ltx2 step {}/{} sigma {:.6} ({secs:.2}s)", i + 1, schedule.num_steps(), schedule.sigmas[i]));
+        crate::wan::log::info(format_args!(
+            "ltx2 step {}/{} sigma {:.6} ({secs:.2}s)",
+            i + 1,
+            schedule.num_steps(),
+            schedule.sigmas[i]
+        ));
         if let Some(obs) = observer.as_mut() {
             obs(i, &video, &audio, secs)?;
         }
@@ -292,20 +331,41 @@ fn apply_ancestral(
 ) -> Result<CudaTensor> {
     let mut x = sample.host_cow()?.into_owned();
     let v = velocity.host_cow()?;
-    let denoised: Vec<f32> = x.iter().zip(v.iter()).map(|(s, vel)| Ltx2Schedule::denoised_from_velocity(*s, *vel, sigma)).collect();
+    let denoised: Vec<f32> = x
+        .iter()
+        .zip(v.iter())
+        .map(|(s, vel)| Ltx2Schedule::denoised_from_velocity(*s, *vel, sigma))
+        .collect();
     let noise = if opts.eta > 0.0 {
-        Some((0..x.len()).map(|_| rng.sample::<f32, _>(StandardNormal)).collect::<Vec<f32>>())
+        Some(
+            (0..x.len())
+                .map(|_| rng.sample::<f32, _>(StandardNormal))
+                .collect::<Vec<f32>>(),
+        )
     } else {
         None
     };
-    Ltx2Schedule::ancestral_step(&mut x, &denoised, sigma, sigma_next, opts.eta, opts.s_noise, noise.as_deref());
+    Ltx2Schedule::ancestral_step(
+        &mut x,
+        &denoised,
+        sigma,
+        sigma_next,
+        opts.eta,
+        opts.s_noise,
+        noise.as_deref(),
+    );
     Ok(CudaTensor::from_vec(x, sample.shape.clone())?)
 }
 
 /// `x ← σ·ε + (1−σ)·x` — stage-2 entry renoise (video and audio).
 fn renoise(x: &CudaTensor, sigma: f32, rng: &mut rand::rngs::StdRng) -> Result<CudaTensor> {
     let n = x.numel();
-    let noise = CudaTensor::from_vec((0..n).map(|_| rng.sample::<f32, _>(StandardNormal)).collect(), x.shape.clone())?;
+    let noise = CudaTensor::from_vec(
+        (0..n)
+            .map(|_| rng.sample::<f32, _>(StandardNormal))
+            .collect(),
+        x.shape.clone(),
+    )?;
     Ok(CudaTensor::lincomb(&[(sigma, &noise), (1.0 - sigma, x)])?)
 }
 
@@ -326,12 +386,18 @@ pub fn denoise_ancestral(
         let timer = Instant::now();
         let sigma = schedule.sigmas[i];
         let sigma_next = schedule.sigmas[i + 1];
-        let (v_video, v_audio) = model.forward(&video, &audio, text, schedule.timestep_f32(i), ropes, None)?;
+        let (v_video, v_audio) =
+            model.forward(&video, &audio, text, schedule.timestep_f32(i), ropes, None)?;
         video = apply_ancestral(&video, &v_video, sigma, sigma_next, opts, &mut rng)?;
         audio = apply_ancestral(&audio, &v_audio, sigma, sigma_next, opts, &mut rng)?;
         sync()?;
         let secs = timer.elapsed().as_secs_f64();
-        crate::wan::log::info(format_args!("ltx2 ancestral step {}/{} sigma {:.6} ({secs:.2}s)", i + 1, schedule.num_steps(), sigma));
+        crate::wan::log::info(format_args!(
+            "ltx2 ancestral step {}/{} sigma {:.6} ({secs:.2}s)",
+            i + 1,
+            schedule.num_steps(),
+            sigma
+        ));
         if let Some(obs) = observer.as_mut() {
             obs(i, &video, &audio, secs)?;
         }
@@ -386,15 +452,30 @@ pub struct Written {
 /// Final packed latents → `audio.wav`, `frame-NNN.png` and (when `mp4`)
 /// `output.mp4` in `dir`. Audio is decoded and written first so the muxer can
 /// take it as an input while frames are still arriving.
-pub fn decode_and_write(dec: &Decoders, video: &CudaTensor, audio: &CudaTensor, grid: [usize; 3], dir: &Path, frame_rate: f64, mp4: bool) -> Result<Written> {
+pub fn decode_and_write(
+    dec: &Decoders,
+    video: &CudaTensor,
+    audio: &CudaTensor,
+    grid: [usize; 3],
+    dir: &Path,
+    frame_rate: f64,
+    mp4: bool,
+) -> Result<Written> {
     std::fs::create_dir_all(dir).map_err(|e| err(format!("{}: {e}", dir.display())))?;
     let timer = Instant::now();
     let wave = dec.vocoder.forward(&dec.audio.decode_packed(audio)?)?;
     let channels = wave.shape[1];
     let wav = dir.join("audio.wav");
-    let rate = u32::try_from(dec.vocoder.sample_rate()).map_err(|_| err("ltx2: vocoder sample rate out of range"))?;
-    let channel_count = u16::try_from(channels).map_err(|_| err("ltx2: too many audio channels"))?;
-    write_wav(&wav, &interleave_audio(&wave.host_cow()?, channels)?, channel_count, rate)?;
+    let rate = u32::try_from(dec.vocoder.sample_rate())
+        .map_err(|_| err("ltx2: vocoder sample rate out of range"))?;
+    let channel_count =
+        u16::try_from(channels).map_err(|_| err("ltx2: too many audio channels"))?;
+    write_wav(
+        &wav,
+        &interleave_audio(&wave.host_cow()?, channels)?,
+        channel_count,
+        rate,
+    )?;
     let decode_audio_s = timer.elapsed().as_secs_f64();
 
     let timer = Instant::now();
@@ -413,7 +494,9 @@ pub fn decode_and_write(dec: &Decoders, video: &CudaTensor, audio: &CudaTensor, 
             }
         }
     };
-    let decoded = dec.video.decode_streaming(&unpack_video(video, grid)?, &mut sink);
+    let decoded = dec
+        .video
+        .decode_streaming(&unpack_video(video, grid)?, &mut sink);
     match (decoded, sink_err) {
         (_, Some(e)) => return Err(e),
         (Err(e), None) => return Err(e.into()),
@@ -449,9 +532,16 @@ pub fn decode_diffvae_and_write(
     let wave = dec.vocoder.forward(&dec.audio.decode_packed(audio)?)?;
     let channels = wave.shape[1];
     let wav = dir.join("audio.wav");
-    let rate = u32::try_from(dec.vocoder.sample_rate()).map_err(|_| err("ltx2: vocoder sample rate out of range"))?;
-    let channel_count = u16::try_from(channels).map_err(|_| err("ltx2: too many audio channels"))?;
-    write_wav(&wav, &interleave_audio(&wave.host_cow()?, channels)?, channel_count, rate)?;
+    let rate = u32::try_from(dec.vocoder.sample_rate())
+        .map_err(|_| err("ltx2: vocoder sample rate out of range"))?;
+    let channel_count =
+        u16::try_from(channels).map_err(|_| err("ltx2: too many audio channels"))?;
+    write_wav(
+        &wav,
+        &interleave_audio(&wave.host_cow()?, channels)?,
+        channel_count,
+        rate,
+    )?;
     let decode_audio_s = timer.elapsed().as_secs_f64();
 
     let timer = Instant::now();
@@ -460,7 +550,12 @@ pub fn decode_diffvae_and_write(
     let rgb = diffvae.decode(&denorm, seed)?; // [1, 3, F, H, W]
     let [_, _, f, h, w] = match rgb.shape[..] {
         [1, 3, f, h, w] => [1, 3, f, h, w],
-        _ => return Err(err(format!("DiffVAE expected [1,3,F,H,W], got {:?}", rgb.shape))),
+        _ => {
+            return Err(err(format!(
+                "DiffVAE expected [1,3,F,H,W], got {:?}",
+                rgb.shape
+            )))
+        }
     };
     // [1,3,F,H,W] → [F,3,H,W] for the writer.
     let frames_nchw = rgb.permute(&[0, 2, 1, 3, 4])?.reshape(vec![f, 3, h, w])?;
@@ -577,7 +672,11 @@ impl TextResidency {
             Some(v) if v.eq_ignore_ascii_case("resident") => Self::Resident,
             Some(v) if v.eq_ignore_ascii_case("streamed") => Self::Streamed,
             Some(v) if v.eq_ignore_ascii_case("auto") => Self::Auto,
-            Some(v) => return Err(err(format!("FASTVIDEO_LTX2_TEXT={v}: expected resident, streamed or auto"))),
+            Some(v) => {
+                return Err(err(format!(
+                    "FASTVIDEO_LTX2_TEXT={v}: expected resident, streamed or auto"
+                )))
+            }
         };
         Ok(match asked {
             Self::Resident => true,
@@ -626,7 +725,10 @@ impl TextEncoder {
     }
 
     fn tokenizer_path(&self) -> PathBuf {
-        self.paths.text_root().join("tokenizer").join("tokenizer.json")
+        self.paths
+            .text_root()
+            .join("tokenizer")
+            .join("tokenizer.json")
     }
 
     fn decoder_config(cfg: &Ltx2Config) -> DecoderConfig {
@@ -651,27 +753,43 @@ impl TextEncoder {
     fn resident_bytes(&self) -> u64 {
         let g = Self::decoder_config(&self.cfg);
         let c = &self.cfg.connectors;
-        let width: u64 = if crate::wan::nn::bf16_linears_active() { 2 } else { 4 };
+        let width: u64 = if crate::wan::nn::bf16_linears_active() {
+            2
+        } else {
+            4
+        };
         let per_layer: u64 = (0..g.num_layers())
             .map(|i| {
-                let (hq, hkv, dq, dkv, h) = (g.layer_heads(i), g.layer_kv_heads(i), g.layer_head_dim(i), g.layer_kv_head_dim(i), g.hidden);
+                let (hq, hkv, dq, dkv, h) = (
+                    g.layer_heads(i),
+                    g.layer_kv_heads(i),
+                    g.layer_head_dim(i),
+                    g.layer_kv_head_dim(i),
+                    g.hidden,
+                );
                 let v = if g.attention_k_eq_v { 0 } else { h * hkv * dkv };
                 (h * hq * dq + h * hkv * dkv + v + hq * dq * h + 3 * h * g.intermediate) as u64
             })
             .sum();
         let d = c.inner_dim();
-        let connector = (c.video_connector_num_layers + c.audio_connector_num_layers) * (4 * d * d + 8 * d * d) + c.text_proj_in_features() * c.caption_channels;
+        let connector = (c.video_connector_num_layers + c.audio_connector_num_layers)
+            * (4 * d * d + 8 * d * d)
+            + c.text_proj_in_features() * c.caption_channels;
         (per_layer + connector as u64) * width
     }
 
     fn key(&mut self, prompt: &str) -> Result<String> {
         if self.identity.is_none() {
-            let tokenizer = std::fs::read(self.tokenizer_path()).map_err(|e| err(format!("{}: {e}", self.tokenizer_path().display())))?;
+            let tokenizer = std::fs::read(self.tokenizer_path())
+                .map_err(|e| err(format!("{}: {e}", self.tokenizer_path().display())))?;
             let text_dir = self.paths.text_root().join("text_encoder");
             // `Lightricks/LTX-2` keeps a stale duplicate shard set next to the real
             // one; when the real one is there, it alone identifies the encoder.
             let has_model_set = std::fs::read_dir(&text_dir)
-                .map(|d| d.filter_map(|e| e.ok()).any(|e| e.file_name().to_string_lossy().starts_with("model-")))
+                .map(|d| {
+                    d.filter_map(|e| e.ok())
+                        .any(|e| e.file_name().to_string_lossy().starts_with("model-"))
+                })
                 .unwrap_or(false);
             let gemma = weights_identity(&text_dir, has_model_set.then_some("model-"))?;
             let connectors = if self.paths.dit.is_file() {
@@ -680,7 +798,13 @@ impl TextEncoder {
                 weights_identity(&self.paths.dit.join("connectors"), None)?
             } else if self.paths.dit.join("text_embedding_projection").is_dir() {
                 weights_identity(&self.paths.dit.join("text_embedding_projection"), None)?
-            } else if let Some(sibling) = self.paths.dit.parent().map(|p| p.join("connectors")).filter(|p| p.is_dir()) {
+            } else if let Some(sibling) = self
+                .paths
+                .dit
+                .parent()
+                .map(|p| p.join("connectors"))
+                .filter(|p| p.is_dir())
+            {
                 weights_identity(&sibling, None)?
             } else if let Some(sibling) = self
                 .paths
@@ -695,7 +819,10 @@ impl TextEncoder {
             };
             self.identity = Some((tokenizer, gemma, connectors));
         }
-        let (tokenizer, gemma, connectors) = self.identity.as_ref().ok_or_else(|| err("ltx2: text identity missing"))?;
+        let (tokenizer, gemma, connectors) = self
+            .identity
+            .as_ref()
+            .ok_or_else(|| err("ltx2: text identity missing"))?;
         Ok(cache_key(
             prompt,
             tokenizer,
@@ -708,7 +835,11 @@ impl TextEncoder {
 
     fn load_connectors(&self) -> Result<TextConnectors> {
         let map = open_distilled(&self.paths.dit, "connectors")?;
-        Ok(TextConnectors::load(&map, &Keys::connectors(Keys::detect(&map)), &self.cfg.connectors)?)
+        Ok(TextConnectors::load(
+            &map,
+            &Keys::connectors(Keys::detect(&map)),
+            &self.cfg.connectors,
+        )?)
     }
 
     /// Decide once, on the first prompt that actually has to be encoded, and
@@ -721,7 +852,10 @@ impl TextEncoder {
         let free = crate::wan::device::free_memory().map(|(free, _)| free);
         let needed = self.resident_bytes() + RESIDENT_HEADROOM;
         if !self.residency.resolve(env.as_deref(), free, needed)? {
-            crate::wan::log::info(format_args!("ltx2 text: streamed (free {:?} bytes, resident needs {needed})", free));
+            crate::wan::log::info(format_args!(
+                "ltx2 text: streamed (free {:?} bytes, resident needs {needed})",
+                free
+            ));
             self.residency = TextResidency::Streamed;
             return Ok(());
         }
@@ -731,7 +865,11 @@ impl TextEncoder {
         let gemma = ResidentDecoder::load(&map, &cfg, cfg.num_layers())?;
         let connectors = self.load_connectors()?;
         sync()?;
-        crate::wan::log::info(format_args!("ltx2 text: resident, {:.1} GiB on device, loaded in {:.1}s", gemma.device_bytes() as f64 / f64::from(1u32 << 30), timer.elapsed().as_secs_f64()));
+        crate::wan::log::info(format_args!(
+            "ltx2 text: resident, {:.1} GiB on device, loaded in {:.1}s",
+            gemma.device_bytes() as f64 / f64::from(1u32 << 30),
+            timer.elapsed().as_secs_f64()
+        ));
         self.resident = Some(ResidentText { gemma, connectors });
         self.residency = TextResidency::Resident;
         Ok(())
@@ -742,7 +880,10 @@ impl TextEncoder {
     fn compute(&mut self, padded: &PaddedPrompt) -> Result<CachedContexts> {
         self.ensure_backend()?;
         let out = match &self.resident {
-            Some(r) => r.connectors.forward(&HiddenStack::encode_resident(&r.gemma, padded)?, padded.max_len())?,
+            Some(r) => r.connectors.forward(
+                &HiddenStack::encode_resident(&r.gemma, padded)?,
+                padded.max_len(),
+            )?,
             None => {
                 let gemma = WeightMap::open(&self.paths.text_root().join("text_encoder"))?;
                 let stack = HiddenStack::encode(&gemma, &Self::decoder_config(&self.cfg), padded)?;
@@ -750,7 +891,10 @@ impl TextEncoder {
                 self.load_connectors()?.forward(&stack, padded.max_len())?
             }
         };
-        Ok(CachedContexts { video: out.video, audio: out.audio })
+        Ok(CachedContexts {
+            video: out.video,
+            audio: out.audio,
+        })
     }
 
     /// `"resident"`, `"streamed"`, or `"undecided"` while only cache hits have
@@ -765,18 +909,45 @@ impl TextEncoder {
 
     /// `use_cache = false` neither reads nor writes the cache (a warm-up run
     /// must not turn the run it warms up for into a hit).
-    pub fn encode(&mut self, prompt: &str, use_cache: bool) -> Result<(CachedContexts, TextReport)> {
+    pub fn encode(
+        &mut self,
+        prompt: &str,
+        use_cache: bool,
+    ) -> Result<(CachedContexts, TextReport)> {
         let timer = Instant::now();
-        let padded = PaddedPrompt::tokenize(&self.tokenizer_path(), prompt, self.cfg.defaults.max_sequence_length)?;
-        let key = if use_cache && self.cache.is_some() { Some(self.key(prompt)?) } else { None };
+        let padded = PaddedPrompt::tokenize(
+            &self.tokenizer_path(),
+            prompt,
+            self.cfg.defaults.max_sequence_length,
+        )?;
+        let key = if use_cache && self.cache.is_some() {
+            Some(self.key(prompt)?)
+        } else {
+            None
+        };
         // Taken out so the compute closure can borrow the encoder mutably.
         let cache = self.cache.take();
-        let result = cached_or(cache.as_ref(), key.as_deref(), &padded, || self.compute(&padded));
+        let result = cached_or(cache.as_ref(), key.as_deref(), &padded, || {
+            self.compute(&padded)
+        });
         self.cache = cache;
         let (contexts, outcome) = result?;
         sync()?;
-        let mode = if outcome == CacheOutcome::Hit { "cache" } else { self.mode() };
-        Ok((contexts, TextReport { cache: outcome, mode, tokens: padded.real, seconds: timer.elapsed().as_secs_f64(), key }))
+        let mode = if outcome == CacheOutcome::Hit {
+            "cache"
+        } else {
+            self.mode()
+        };
+        Ok((
+            contexts,
+            TextReport {
+                cache: outcome,
+                mode,
+                tokens: padded.real,
+                seconds: timer.elapsed().as_secs_f64(),
+                key,
+            },
+        ))
     }
 }
 
@@ -789,7 +960,9 @@ fn cached_or(
     padded: &PaddedPrompt,
     compute: impl FnOnce() -> Result<CachedContexts>,
 ) -> Result<(CachedContexts, CacheOutcome)> {
-    let (Some(cache), Some(key)) = (cache, key) else { return Ok((compute()?, CacheOutcome::Off)) };
+    let (Some(cache), Some(key)) = (cache, key) else {
+        return Ok((compute()?, CacheOutcome::Off));
+    };
     if let Some(hit) = cache.load(key, padded) {
         return Ok((hit, CacheOutcome::Hit));
     }
@@ -828,7 +1001,11 @@ impl Ltx2Pipeline {
     pub fn load(paths: &Ltx2Paths, cfg: &Ltx2Config, options: &PipelineOptions) -> Result<Self> {
         let timer = Instant::now();
         let map = open_distilled(&paths.dit, "transformer")?;
-        let model = Ltx2Transformer::load(&map, &Keys::transformer(Keys::detect(&map)), &cfg.transformer)?;
+        let model = Ltx2Transformer::load(
+            &map,
+            &Keys::transformer(Keys::detect(&map)),
+            &cfg.transformer,
+        )?;
         let decoders = Decoders::load(&paths.weights, cfg)?;
         sync()?;
         Ok(Self {
@@ -846,7 +1023,11 @@ impl Ltx2Pipeline {
         if self.model.is_none() {
             crate::wan::log::info(format_args!("ltx2: reloading DiT after DiffVAE decode"));
             let map = open_distilled(&self.dit, "transformer")?;
-            let model = Ltx2Transformer::load(&map, &Keys::transformer(Keys::detect(&map)), &self.cfg.transformer)?;
+            let model = Ltx2Transformer::load(
+                &map,
+                &Keys::transformer(Keys::detect(&map)),
+                &self.cfg.transformer,
+            )?;
             sync()?;
             self.model = Some(model);
         }
@@ -855,7 +1036,12 @@ impl Ltx2Pipeline {
 
     /// One clip. `use_text_cache = false` bypasses the conditioning cache for
     /// this call only.
-    pub fn generate(&mut self, req: &Ltx2Request, use_text_cache: bool, observer: Option<StepObserver<'_>>) -> Result<Ltx2Output> {
+    pub fn generate(
+        &mut self,
+        req: &Ltx2Request,
+        use_text_cache: bool,
+        observer: Option<StepObserver<'_>>,
+    ) -> Result<Ltx2Output> {
         req.validate()?;
         let cfg = self.cfg.clone();
         if req.two_stage {
@@ -873,16 +1059,26 @@ impl Ltx2Pipeline {
                 return Err(err("ltx2: --diff-vae requires model version 2.5"));
             }
             if cfg.diffusion_decoder.is_none() {
-                return Err(err("ltx2: --diff-vae needs diffusion_decoder config (2.5 pack)"));
+                return Err(err(
+                    "ltx2: --diff-vae needs diffusion_decoder config (2.5 pack)",
+                ));
             }
             if !self.weights.join("diffusion_decoder").is_dir() {
                 return Err(err("ltx2: --diff-vae needs weights/diffusion_decoder"));
             }
         }
         let mut timings = Ltx2Timings::default();
-        let (stage1_h, stage1_w) = if req.two_stage { (req.height / 2, req.width / 2) } else { (req.height, req.width) };
-        let grid1 = cfg.transformer.latent_grid(req.num_frames, stage1_h, stage1_w);
-        let grid_full = cfg.transformer.latent_grid(req.num_frames, req.height, req.width);
+        let (stage1_h, stage1_w) = if req.two_stage {
+            (req.height / 2, req.width / 2)
+        } else {
+            (req.height, req.width)
+        };
+        let grid1 = cfg
+            .transformer
+            .latent_grid(req.num_frames, stage1_h, stage1_w);
+        let grid_full = cfg
+            .transformer
+            .latent_grid(req.num_frames, req.height, req.width);
         let audio_tokens = cfg.transformer.audio_tokens(req.num_frames, req.frame_rate);
         if audio_tokens == 0 {
             return Err(err("ltx2: the clip is too short for a single audio latent"));
@@ -936,7 +1132,11 @@ impl Ltx2Pipeline {
         let mut step_s = Vec::new();
         let mut observer = observer;
         let video_seq_len = grid1[0] * grid1[1] * grid1[2];
-        let default_dev_steps = if cfg.version == Ltx2ModelVersion::V23 { 30 } else { 40 };
+        let default_dev_steps = if cfg.version == Ltx2ModelVersion::V23 {
+            30
+        } else {
+            40
+        };
         let schedule = if cfg.scheduler.use_dynamic_shifting {
             let steps = req.num_inference_steps.unwrap_or(default_dev_steps);
             Ltx2Schedule::dev(&cfg.scheduler, steps, video_seq_len)
@@ -961,7 +1161,11 @@ impl Ltx2Pipeline {
                     &schedule,
                     video,
                     audio,
-                    AncestralOpts { eta: 1.0, s_noise: 1.0, noise_seed: req.seed + 10_000 },
+                    AncestralOpts {
+                        eta: 1.0,
+                        s_noise: 1.0,
+                        noise_seed: req.seed + 10_000,
+                    },
                     Some(&mut record),
                 )?
             } else if let Some(ref uncond) = text_uncond {
@@ -978,7 +1182,15 @@ impl Ltx2Pipeline {
                     Some(&mut record),
                 )?
             } else {
-                denoise(model, &text, &ropes, &schedule, video, audio, Some(&mut record))?
+                denoise(
+                    model,
+                    &text,
+                    &ropes,
+                    &schedule,
+                    video,
+                    audio,
+                    Some(&mut record),
+                )?
             }
         };
         timings.stage1_s = timer.elapsed().as_secs_f64();
@@ -999,24 +1211,31 @@ impl Ltx2Pipeline {
                 timings.upsample_s, grid_full
             ));
 
-            let schedule2 = Ltx2Schedule::distilled_stage_2_steps(req.stage2_steps()).map_err(err)?;
+            let schedule2 =
+                Ltx2Schedule::distilled_stage_2_steps(req.stage2_steps()).map_err(err)?;
             let sigma = schedule2.sigmas[0] as f32;
             let mut rng = rand::rngs::StdRng::seed_from_u64(req.seed + 20_000);
             video = renoise(&video, sigma, &mut rng)?;
             audio = renoise(&audio, sigma, &mut rng)?;
 
             let s2_timer = Instant::now();
-            let ropes2 = Ropes::new(&cfg.transformer, grid_full, audio_tokens, req.frame_rate as f32)?;
+            let ropes2 = Ropes::new(
+                &cfg.transformer,
+                grid_full,
+                audio_tokens,
+                req.frame_rate as f32,
+            )?;
             let step_offset = step_s.len();
             let (v2, a2) = {
                 let model = self.model.as_ref().expect("ensure_dit");
-                let mut record2 = |i: usize, v: &CudaTensor, a: &CudaTensor, s: f64| -> Result<()> {
-                    step_s.push(s);
-                    match observer.as_mut() {
-                        Some(obs) => obs(step_offset + i, v, a, s),
-                        None => Ok(()),
-                    }
-                };
+                let mut record2 =
+                    |i: usize, v: &CudaTensor, a: &CudaTensor, s: f64| -> Result<()> {
+                        step_s.push(s);
+                        match observer.as_mut() {
+                            Some(obs) => obs(step_offset + i, v, a, s),
+                            None => Ok(()),
+                        }
+                    };
                 if ancestral {
                     denoise_ancestral(
                         model,
@@ -1025,7 +1244,11 @@ impl Ltx2Pipeline {
                         &schedule2,
                         video,
                         audio,
-                        AncestralOpts { eta: 1.0, s_noise: 1.0, noise_seed: req.seed + 30_000 },
+                        AncestralOpts {
+                            eta: 1.0,
+                            s_noise: 1.0,
+                            noise_seed: req.seed + 30_000,
+                        },
                         Some(&mut record2),
                     )?
                 } else if let Some(ref uncond) = text_uncond {
@@ -1042,7 +1265,15 @@ impl Ltx2Pipeline {
                         Some(&mut record2),
                     )?
                 } else {
-                    denoise(model, &text, &ropes2, &schedule2, video, audio, Some(&mut record2))?
+                    denoise(
+                        model,
+                        &text,
+                        &ropes2,
+                        &schedule2,
+                        video,
+                        audio,
+                        Some(&mut record2),
+                    )?
                 }
             };
             video = v2;
@@ -1063,7 +1294,10 @@ impl Ltx2Pipeline {
             sync()?;
             crate::wan::log::info(format_args!("ltx2: DiffVAE decode (DiT dropped)"));
             let dd_cfg = cfg.diffusion_decoder.as_ref().expect("checked above");
-            let diffvae = DiffusionDecoder::load(&WeightMap::open(&self.weights.join("diffusion_decoder"))?, dd_cfg)?;
+            let diffvae = DiffusionDecoder::load(
+                &WeightMap::open(&self.weights.join("diffusion_decoder"))?,
+                dd_cfg,
+            )?;
             decode_diffvae_and_write(
                 &self.decoders,
                 &diffvae,
@@ -1076,7 +1310,15 @@ impl Ltx2Pipeline {
                 req.seed + 40_000,
             )?
         } else {
-            decode_and_write(&self.decoders, &video, &audio, decode_grid, &req.output_dir, req.frame_rate, req.mp4)?
+            decode_and_write(
+                &self.decoders,
+                &video,
+                &audio,
+                decode_grid,
+                &req.output_dir,
+                req.frame_rate,
+                req.mp4,
+            )?
         };
         timings.decode_audio_s = written.decode_audio_s;
         timings.decode_video_s = written.decode_video_s;
@@ -1095,7 +1337,13 @@ impl Ltx2Pipeline {
 }
 
 /// Load, generate one clip, drop everything.
-pub fn generate(paths: &Ltx2Paths, cfg: &Ltx2Config, req: &Ltx2Request, options: &PipelineOptions, observer: Option<StepObserver<'_>>) -> Result<Ltx2Output> {
+pub fn generate(
+    paths: &Ltx2Paths,
+    cfg: &Ltx2Config,
+    req: &Ltx2Request,
+    options: &PipelineOptions,
+    observer: Option<StepObserver<'_>>,
+) -> Result<Ltx2Output> {
     req.validate()?;
     let mut pipeline = Ltx2Pipeline::load(paths, cfg, options)?;
     let mut out = pipeline.generate(req, true, observer)?;
@@ -1108,7 +1356,10 @@ mod tests {
     use super::super::attention::tests::weights;
     use super::super::keys::Layout;
     use super::*;
-    use fastvideo_models::ltx2::config::{ltx2_19b_distilled, Ltx2AudioVaeConfig, Ltx2TransformerConfig, Ltx2VideoVaeConfig, Ltx2VocoderConfig};
+    use fastvideo_models::ltx2::config::{
+        ltx2_19b_distilled, Ltx2AudioVaeConfig, Ltx2TransformerConfig, Ltx2VideoVaeConfig,
+        Ltx2VocoderConfig,
+    };
 
     /// A whole LTX-2 in miniature: the latent widths are tied together the way
     /// the real ones are (4 VAE channels = DiT in/out; 2 × 2 audio features).
@@ -1137,7 +1388,13 @@ mod tests {
                 patch_size: 2,
                 ..Ltx2VideoVaeConfig::ltx2_19b()
             },
-            audio_vae: Ltx2AudioVaeConfig { base_channels: 2, num_res_blocks: 1, latent_channels: 2, mel_bins: 8, ..Ltx2AudioVaeConfig::ltx2_19b() },
+            audio_vae: Ltx2AudioVaeConfig {
+                base_channels: 2,
+                num_res_blocks: 1,
+                latent_channels: 2,
+                mel_bins: 8,
+                ..Ltx2AudioVaeConfig::ltx2_19b()
+            },
             vocoder: Ltx2VocoderConfig {
                 in_channels: 16,
                 hidden_channels: 64,
@@ -1149,9 +1406,22 @@ mod tests {
         }
     }
 
-    fn model_and_inputs(cfg: &Ltx2Config) -> (Ltx2Transformer, TextConditioning, Ropes, [usize; 3], usize) {
-        let model = Ltx2Transformer::load(&weights(), &Keys::transformer(Layout::Diffusers), &cfg.transformer).unwrap();
-        let ctx = |k: f32| CudaTensor::from_vec((0..3 * 12).map(|i| (i as f32 * k).sin()).collect(), vec![1, 3, 12]).unwrap();
+    fn model_and_inputs(
+        cfg: &Ltx2Config,
+    ) -> (Ltx2Transformer, TextConditioning, Ropes, [usize; 3], usize) {
+        let model = Ltx2Transformer::load(
+            &weights(),
+            &Keys::transformer(Layout::Diffusers),
+            &cfg.transformer,
+        )
+        .unwrap();
+        let ctx = |k: f32| {
+            CudaTensor::from_vec(
+                (0..3 * 12).map(|i| (i as f32 * k).sin()).collect(),
+                vec![1, 3, 12],
+            )
+            .unwrap()
+        };
         let text = model.project_text(&ctx(0.3), &ctx(0.7)).unwrap();
         let (grid, audio_tokens) = ([2usize, 2, 2], 3usize);
         let ropes = Ropes::new(&cfg.transformer, grid, audio_tokens, 24.0).unwrap();
@@ -1162,15 +1432,27 @@ mod tests {
     fn noise_is_seeded_packed_and_video_is_drawn_first() {
         let cfg = tiny();
         let (v, a) = initial_noise(&cfg, [2, 2, 3], 5, 7).unwrap();
-        assert_eq!((v.shape.clone(), a.shape.clone()), (vec![1, 12, 4], vec![1, 5, 4]));
+        assert_eq!(
+            (v.shape.clone(), a.shape.clone()),
+            (vec![1, 12, 4], vec![1, 5, 4])
+        );
         let (v2, a2) = initial_noise(&cfg, [2, 2, 3], 5, 7).unwrap();
         assert_eq!(&*v.host_cow().unwrap(), &*v2.host_cow().unwrap());
         assert_eq!(&*a.host_cow().unwrap(), &*a2.host_cow().unwrap());
-        assert_ne!(&*v.host_cow().unwrap(), &*initial_noise(&cfg, [2, 2, 3], 5, 8).unwrap().0.host_cow().unwrap());
+        assert_ne!(
+            &*v.host_cow().unwrap(),
+            &*initial_noise(&cfg, [2, 2, 3], 5, 8)
+                .unwrap()
+                .0
+                .host_cow()
+                .unwrap()
+        );
         // One generator: the first draw is video channel 0 at token 0, and the
         // audio draws start right after the 4·12 video values.
         let mut rng = rand::rngs::StdRng::seed_from_u64(7);
-        let all: Vec<f32> = (0..48 + 20).map(|_| rng.sample::<f32, _>(StandardNormal)).collect();
+        let all: Vec<f32> = (0..48 + 20)
+            .map(|_| rng.sample::<f32, _>(StandardNormal))
+            .collect();
         assert_eq!(v.host_cow().unwrap()[0], all[0]);
         // Packed token t, feature c ← unpacked [c, t]: token 1 feature 0 is draw 1.
         assert_eq!(v.host_cow().unwrap()[4], all[1]);
@@ -1189,13 +1471,19 @@ mod tests {
         let (model, text, ropes, grid, audio_tokens) = model_and_inputs(&cfg);
         let (video, audio) = initial_noise(&cfg, grid, audio_tokens, 11).unwrap();
         let schedule = Ltx2Schedule::distilled();
-        let opts = AncestralOpts { eta: 1.0, s_noise: 1.0, noise_seed: 99 };
+        let opts = AncestralOpts {
+            eta: 1.0,
+            s_noise: 1.0,
+            noise_seed: 99,
+        };
         let mut rng = rand::rngs::StdRng::seed_from_u64(opts.noise_seed);
         let i = 4usize;
         let sigma = schedule.sigmas[i];
         let sigma_next = schedule.sigmas[i + 1];
         let t = schedule.timestep_f32(i);
-        let (vv, va) = model.forward(&video, &audio, &text, t, &ropes, None).unwrap();
+        let (vv, va) = model
+            .forward(&video, &audio, &text, t, &ropes, None)
+            .unwrap();
         let mut want_v = video.host_cow().unwrap().into_owned();
         let mut want_a = audio.host_cow().unwrap().into_owned();
         let den_v: Vec<f32> = want_v
@@ -1208,10 +1496,30 @@ mod tests {
             .zip(va.host_cow().unwrap().iter())
             .map(|(x, v)| Ltx2Schedule::denoised_from_velocity(*x, *v, sigma))
             .collect();
-        let noise_v: Vec<f32> = (0..want_v.len()).map(|_| rng.sample::<f32, _>(StandardNormal)).collect();
-        let noise_a: Vec<f32> = (0..want_a.len()).map(|_| rng.sample::<f32, _>(StandardNormal)).collect();
-        Ltx2Schedule::ancestral_step(&mut want_v, &den_v, sigma, sigma_next, opts.eta, opts.s_noise, Some(&noise_v));
-        Ltx2Schedule::ancestral_step(&mut want_a, &den_a, sigma, sigma_next, opts.eta, opts.s_noise, Some(&noise_a));
+        let noise_v: Vec<f32> = (0..want_v.len())
+            .map(|_| rng.sample::<f32, _>(StandardNormal))
+            .collect();
+        let noise_a: Vec<f32> = (0..want_a.len())
+            .map(|_| rng.sample::<f32, _>(StandardNormal))
+            .collect();
+        Ltx2Schedule::ancestral_step(
+            &mut want_v,
+            &den_v,
+            sigma,
+            sigma_next,
+            opts.eta,
+            opts.s_noise,
+            Some(&noise_v),
+        );
+        Ltx2Schedule::ancestral_step(
+            &mut want_a,
+            &den_a,
+            sigma,
+            sigma_next,
+            opts.eta,
+            opts.s_noise,
+            Some(&noise_a),
+        );
         let mut rng2 = rand::rngs::StdRng::seed_from_u64(opts.noise_seed);
         let got_v = apply_ancestral(&video, &vv, sigma, sigma_next, opts, &mut rng2).unwrap();
         let got_a = apply_ancestral(&audio, &va, sigma, sigma_next, opts, &mut rng2).unwrap();
@@ -1234,19 +1542,47 @@ mod tests {
             seen.push((i, v.host_cow()?.into_owned()));
             Ok(())
         };
-        let (got_v, got_a) = denoise(&model, &text, &ropes, &schedule, video.clone(), audio.clone(), Some(&mut obs)).unwrap();
-        assert_eq!(seen.iter().map(|(i, _)| *i).collect::<Vec<_>>(), (0..8).collect::<Vec<_>>());
+        let (got_v, got_a) = denoise(
+            &model,
+            &text,
+            &ropes,
+            &schedule,
+            video.clone(),
+            audio.clone(),
+            Some(&mut obs),
+        )
+        .unwrap();
+        assert_eq!(
+            seen.iter().map(|(i, _)| *i).collect::<Vec<_>>(),
+            (0..8).collect::<Vec<_>>()
+        );
 
-        let sigmas = [1.0f64, 0.99375, 0.9875, 0.98125, 0.975, 0.909375, 0.725, 0.421875, 0.0];
-        let (mut xv, mut xa) = (video.host_cow().unwrap().into_owned(), audio.host_cow().unwrap().into_owned());
+        let sigmas = [
+            1.0f64, 0.99375, 0.9875, 0.98125, 0.975, 0.909375, 0.725, 0.421875, 0.0,
+        ];
+        let (mut xv, mut xa) = (
+            video.host_cow().unwrap().into_owned(),
+            audio.host_cow().unwrap().into_owned(),
+        );
         for i in 0..8 {
             let t = (sigmas[i] as f32) * 1000.0;
             let (vv, va) = model
-                .forward(&CudaTensor::from_vec(xv.clone(), video.shape.clone()).unwrap(), &CudaTensor::from_vec(xa.clone(), audio.shape.clone()).unwrap(), &text, t, &ropes, None)
+                .forward(
+                    &CudaTensor::from_vec(xv.clone(), video.shape.clone()).unwrap(),
+                    &CudaTensor::from_vec(xa.clone(), audio.shape.clone()).unwrap(),
+                    &text,
+                    t,
+                    &ropes,
+                    None,
+                )
                 .unwrap();
             let dt = (sigmas[i + 1] - sigmas[i]) as f32;
-            xv.iter_mut().zip(vv.host_cow().unwrap().iter()).for_each(|(x, v)| *x += dt * v);
-            xa.iter_mut().zip(va.host_cow().unwrap().iter()).for_each(|(x, v)| *x += dt * v);
+            xv.iter_mut()
+                .zip(vv.host_cow().unwrap().iter())
+                .for_each(|(x, v)| *x += dt * v);
+            xa.iter_mut()
+                .zip(va.host_cow().unwrap().iter())
+                .for_each(|(x, v)| *x += dt * v);
             for (a, b) in seen[i].1.iter().zip(&xv) {
                 assert!((a - b).abs() < 1e-5, "step {i}: {a} vs {b}");
             }
@@ -1280,7 +1616,10 @@ mod tests {
         let wav = std::fs::read(&out.wav).unwrap();
         assert_eq!(&wav[..4], b"RIFF");
         assert_eq!(wav.len(), 44 + 9 * 48 * 2 * 2);
-        assert_eq!(u32::from_le_bytes([wav[24], wav[25], wav[26], wav[27]]), 24_000);
+        assert_eq!(
+            u32::from_le_bytes([wav[24], wav[25], wav[26], wav[27]]),
+            24_000
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -1289,19 +1628,55 @@ mod tests {
         let cfg = ltx2_19b_distilled();
         let ok = Ltx2Request::new(&cfg, "a cat", "/tmp/x");
         assert!(ok.validate().is_ok());
-        assert_eq!((ok.width, ok.height, ok.num_frames, ok.seed), (768, 512, 121, 10));
-        assert!(Ltx2Request { height: 500, ..ok.clone() }.validate().is_err());
-        assert!(Ltx2Request { num_frames: 120, ..ok.clone() }.validate().is_err());
-        assert!(Ltx2Request { prompt: "  ".into(), ..ok.clone() }.validate().is_err());
-        assert!(Ltx2Request { frame_rate: 0.0, ..ok.clone() }.validate().is_err());
+        assert_eq!(
+            (ok.width, ok.height, ok.num_frames, ok.seed),
+            (768, 512, 121, 10)
+        );
+        assert!(Ltx2Request {
+            height: 500,
+            ..ok.clone()
+        }
+        .validate()
+        .is_err());
+        assert!(Ltx2Request {
+            num_frames: 120,
+            ..ok.clone()
+        }
+        .validate()
+        .is_err());
+        assert!(Ltx2Request {
+            prompt: "  ".into(),
+            ..ok.clone()
+        }
+        .validate()
+        .is_err());
+        assert!(Ltx2Request {
+            frame_rate: 0.0,
+            ..ok.clone()
+        }
+        .validate()
+        .is_err());
         // Two-stage needs multiples of 64 (half-res still lands on the VAE grid).
-        assert!(Ltx2Request { two_stage: true, ..ok.clone() }.validate().is_ok());
-        assert!(Ltx2Request { two_stage: true, height: 544, width: 960, ..ok }.validate().is_err());
+        assert!(Ltx2Request {
+            two_stage: true,
+            ..ok.clone()
+        }
+        .validate()
+        .is_ok());
+        assert!(Ltx2Request {
+            two_stage: true,
+            height: 544,
+            width: 960,
+            ..ok
+        }
+        .validate()
+        .is_err());
     }
     /// Hit, miss and bypass, with the expensive part replaced by a counter.
     #[test]
     fn the_cache_computes_once_per_prompt_and_a_bypass_neither_reads_nor_writes() {
-        let dir = std::env::temp_dir().join(format!("fv-ltx2-pipeline-cache-{}", std::process::id()));
+        let dir =
+            std::env::temp_dir().join(format!("fv-ltx2-pipeline-cache-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         let cache = TextCache::new(&dir);
         let padded = PaddedPrompt::from_ids(&[2, 5, 9], 8).unwrap();
@@ -1314,19 +1689,39 @@ mod tests {
             })
         };
         // Bypassed: computed, nothing written.
-        assert_eq!(cached_or(Some(&cache), None, &padded, compute).unwrap().1, CacheOutcome::Off);
+        assert_eq!(
+            cached_or(Some(&cache), None, &padded, compute).unwrap().1,
+            CacheOutcome::Off
+        );
         assert!(!cache.path("k").exists());
-        assert_eq!(cached_or(Some(&cache), Some("k"), &padded, compute).unwrap().1, CacheOutcome::Miss);
+        assert_eq!(
+            cached_or(Some(&cache), Some("k"), &padded, compute)
+                .unwrap()
+                .1,
+            CacheOutcome::Miss
+        );
         let (hit, outcome) = cached_or(Some(&cache), Some("k"), &padded, compute).unwrap();
-        assert_eq!((outcome, calls.get()), (CacheOutcome::Hit, 2), "the third call must not compute");
+        assert_eq!(
+            (outcome, calls.get()),
+            (CacheOutcome::Hit, 2),
+            "the third call must not compute"
+        );
         assert_eq!(&*hit.video.host_cow().unwrap(), &[1.0, 2.0, 3.0, 4.0]);
         // A truncated entry: a miss that recomputes and repairs the file.
         let whole = std::fs::read(cache.path("k")).unwrap();
         std::fs::write(cache.path("k"), &whole[..whole.len() - 5]).unwrap();
-        assert_eq!(cached_or(Some(&cache), Some("k"), &padded, compute).unwrap().1, CacheOutcome::Miss);
+        assert_eq!(
+            cached_or(Some(&cache), Some("k"), &padded, compute)
+                .unwrap()
+                .1,
+            CacheOutcome::Miss
+        );
         assert_eq!(std::fs::read(cache.path("k")).unwrap(), whole);
         // No cache at all.
-        assert_eq!(cached_or(None, Some("k"), &padded, compute).unwrap().1, CacheOutcome::Off);
+        assert_eq!(
+            cached_or(None, Some("k"), &padded, compute).unwrap().1,
+            CacheOutcome::Off
+        );
         assert_eq!(calls.get(), 4);
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -1334,28 +1729,58 @@ mod tests {
     fn auto_residency_needs_a_device_with_room_and_the_environment_overrides() {
         let gib = |n: u64| n << 30;
         let auto = TextResidency::Auto;
-        assert!(auto.resolve(None, Some(gib(50)), gib(34)).unwrap(), "96 GB card, DiT loaded: room");
-        assert!(!auto.resolve(None, Some(gib(20)), gib(34)).unwrap(), "48 GB card: stream");
-        assert!(!auto.resolve(None, None, gib(34)).unwrap(), "no device: stream");
+        assert!(
+            auto.resolve(None, Some(gib(50)), gib(34)).unwrap(),
+            "96 GB card, DiT loaded: room"
+        );
+        assert!(
+            !auto.resolve(None, Some(gib(20)), gib(34)).unwrap(),
+            "48 GB card: stream"
+        );
+        assert!(
+            !auto.resolve(None, None, gib(34)).unwrap(),
+            "no device: stream"
+        );
         assert!(auto.resolve(Some("resident"), Some(0), gib(34)).unwrap());
-        assert!(!auto.resolve(Some(" Streamed "), Some(gib(90)), gib(34)).unwrap());
-        assert!(TextResidency::Resident.resolve(Some("auto"), Some(gib(90)), gib(34)).unwrap());
-        assert!(!TextResidency::Streamed.resolve(None, Some(gib(90)), gib(34)).unwrap());
-        assert!(TextResidency::Resident.resolve(Some(""), None, gib(34)).unwrap(), "an empty variable is unset");
+        assert!(!auto
+            .resolve(Some(" Streamed "), Some(gib(90)), gib(34))
+            .unwrap());
+        assert!(TextResidency::Resident
+            .resolve(Some("auto"), Some(gib(90)), gib(34))
+            .unwrap());
+        assert!(!TextResidency::Streamed
+            .resolve(None, Some(gib(90)), gib(34))
+            .unwrap());
+        assert!(
+            TextResidency::Resident
+                .resolve(Some(""), None, gib(34))
+                .unwrap(),
+            "an empty variable is unset"
+        );
         assert!(auto.resolve(Some("maybe"), None, 0).is_err());
     }
 
     #[test]
     fn the_resident_text_path_is_sized_from_the_published_shapes() {
-        let paths = Ltx2Paths { weights: "/nonexistent".into(), dit: "/nonexistent".into(), text: None };
+        let paths = Ltx2Paths {
+            weights: "/nonexistent".into(),
+            dit: "/nonexistent".into(),
+            text: None,
+        };
         let enc = TextEncoder::new(&paths, &ltx2_19b_distilled(), &PipelineOptions::default());
         // CPU build: float32 widths. Gemma's 48 layers of projections are
         // 10.76 B parameters, the connectors 1.43 B (docs/ports/ltx2.md §g).
         let params = enc.resident_bytes() / 4;
-        assert_eq!(params, 48 * 224_133_120 + (4 * 12 * 3840 * 3840 + 188_160 * 3840));
+        assert_eq!(
+            params,
+            48 * 224_133_120 + (4 * 12 * 3840 * 3840 + 188_160 * 3840)
+        );
         assert_eq!(enc.mode(), "undecided");
         assert_eq!(paths.text_root(), Path::new("/nonexistent"));
-        let slim = Ltx2Paths { text: Some("/slim".into()), ..paths };
+        let slim = Ltx2Paths {
+            text: Some("/slim".into()),
+            ..paths
+        };
         assert_eq!(slim.text_root(), Path::new("/slim"));
     }
 }

@@ -115,11 +115,7 @@ pub fn constant_action(
 /// Deterministic action preset sequence (FastVideo `create_action_presets` simplified).
 ///
 /// Cycles forward → left → right (and camera pans when mouse is enabled).
-pub fn create_action_presets(
-    preset: MatrixGamePreset,
-    num_frames: usize,
-    seed: u64,
-) -> ActionPack {
+pub fn create_action_presets(preset: MatrixGamePreset, num_frames: usize, seed: u64) -> ActionPack {
     let kb_dim = preset.keyboard_dim();
     let mut pack = ActionPack::zeros(num_frames, kb_dim);
     let use_mouse = kb_dim != 7;

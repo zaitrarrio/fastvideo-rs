@@ -64,7 +64,8 @@ impl Flux2Pipeline {
     }
 
     pub fn load_dit(&mut self) -> Result<()> {
-        let map = WeightMap::open(&self.root.join("transformer")).map_err(|e| msg(e.to_string()))?;
+        let map =
+            WeightMap::open(&self.root.join("transformer")).map_err(|e| msg(e.to_string()))?;
         self.dit = Some(Flux2Transformer::load(self.cfg.dit.clone(), &map)?);
         Ok(())
     }
@@ -128,8 +129,14 @@ impl Flux2Pipeline {
     }
 
     pub fn generate(&self, request: &Flux2Request, out_path: &Path) -> Result<()> {
-        let dit = self.dit.as_ref().ok_or_else(|| msg("FLUX.2: call load_dit()"))?;
-        let vae = self.vae.as_ref().ok_or_else(|| msg("FLUX.2: call load_vae() or load_vae_stub()"))?;
+        let dit = self
+            .dit
+            .as_ref()
+            .ok_or_else(|| msg("FLUX.2: call load_dit()"))?;
+        let vae = self
+            .vae
+            .as_ref()
+            .ok_or_else(|| msg("FLUX.2: call load_vae() or load_vae_stub()"))?;
         let text = self.encode_text(&request.prompt)?;
         let (ph, pw, c) = if self.cfg.dit.num_layers <= 2 {
             (8usize, 8usize, self.cfg.dit.in_channels)
@@ -155,12 +162,20 @@ impl Flux2Pipeline {
             sample = sched.step_euler(&sample, &vel[..n]).map_err(msg)?;
         }
         let vae_c = vae.cfg.latent_channels;
-        let (vh, vw) = if self.cfg.dit.num_layers <= 2 { (ph, pw) } else { (ph * 2, pw * 2) };
+        let (vh, vw) = if self.cfg.dit.num_layers <= 2 {
+            (ph, pw)
+        } else {
+            (ph * 2, pw * 2)
+        };
         let mut unpacked = vec![0f32; vae_c * vh * vw];
         let pack = (c / vae_c).max(1);
         for y in 0..vh {
             for x in 0..vw {
-                let (py, px) = if self.cfg.dit.num_layers <= 2 { (y, x) } else { (y / 2, x / 2) };
+                let (py, px) = if self.cfg.dit.num_layers <= 2 {
+                    (y, x)
+                } else {
+                    (y / 2, x / 2)
+                };
                 for ch in 0..vae_c {
                     let mut acc = 0f32;
                     for k in 0..pack {

@@ -36,7 +36,9 @@ impl Sd35Transformer {
         let hit = hub_keys::first_present(map, sdkeys::PROBES);
         let tiny = cfg.num_layers <= 2;
         if hit.is_none() && !tiny {
-            return Err(msg(hub_keys::require_any(map, "sd35", sdkeys::PROBES).unwrap_err()));
+            return Err(msg(
+                hub_keys::require_any(map, "sd35", sdkeys::PROBES).unwrap_err()
+            ));
         }
         let mut s = Self::zeros(cfg.clone())?;
         s.loaded_key = hit;
@@ -45,8 +47,11 @@ impl Sd35Transformer {
         let dim = cfg.inner_dim();
         // PatchEmbed proj is Conv2d [dim, in_c, p, p] — fold to [in_f, dim] if needed.
         if map.contains("pos_embed.proj.weight") {
-            if let Ok(t) = weights::cuda_tensor_shaped(map, "pos_embed.proj.weight", &[dim, cfg.in_channels, p, p])
-            {
+            if let Ok(t) = weights::cuda_tensor_shaped(
+                map,
+                "pos_embed.proj.weight",
+                &[dim, cfg.in_channels, p, p],
+            ) {
                 let host = t.host_cow()?;
                 let mut flat = vec![0f32; in_f * dim];
                 // [dim, in_c, p, p] → treat as [dim, in_f] then transpose → [in_f, dim]
@@ -78,11 +83,16 @@ impl Sd35Transformer {
         }
         let (b, c, h, w) = (shape[0], shape[1], shape[2], shape[3]);
         if c != self.cfg.in_channels {
-            return Err(msg(format!("sd35 in_channels {} vs {}", c, self.cfg.in_channels)));
+            return Err(msg(format!(
+                "sd35 in_channels {} vs {}",
+                c, self.cfg.in_channels
+            )));
         }
         let p = self.cfg.patch_size;
         if h % p != 0 || w % p != 0 {
-            return Err(msg(format!("sd35 spatial {h}x{w} not divisible by patch {p}")));
+            return Err(msg(format!(
+                "sd35 spatial {h}x{w} not divisible by patch {p}"
+            )));
         }
         let scale = (timestep / 1000.0).clamp(0.0, 1.0);
         let data = latents.host_cow()?;

@@ -45,7 +45,9 @@ const DOWN_PAD_LEFT: usize = FILTER_TAPS / 2 - 1; // 5
 const DOWN_PAD_RIGHT: usize = FILTER_TAPS / 2; // 6
 
 fn host_values(map: &WeightMap, key: &str, shape: &[usize]) -> Result<Vec<f32>> {
-    Ok(cuda_tensor_shaped(map, key, shape)?.host_cow()?.into_owned())
+    Ok(cuda_tensor_shaped(map, key, shape)?
+        .host_cow()?
+        .into_owned())
 }
 
 fn pinned(data: Vec<f32>, shape: Vec<usize>) -> Result<CudaTensor> {
@@ -59,12 +61,20 @@ fn pinned(data: Vec<f32>, shape: Vec<usize>) -> Result<CudaTensor> {
 /// *input* channels of a `ConvTranspose1d`.
 pub fn fold_weight_norm(g: &[f32], v: &[f32], rows: usize) -> Result<Vec<f32>> {
     if rows == 0 || g.len() != rows || v.len() % rows != 0 {
-        return Err(msg(format!("weight norm: {} gains for {rows} rows of {} values", g.len(), v.len())));
+        return Err(msg(format!(
+            "weight norm: {} gains for {rows} rows of {} values",
+            g.len(),
+            v.len()
+        )));
     }
     let width = v.len() / rows;
     let mut out = Vec::with_capacity(v.len());
     for (row, &gain) in v.chunks_exact(width).zip(g) {
-        let norm = row.iter().map(|&x| f64::from(x) * f64::from(x)).sum::<f64>().sqrt();
+        let norm = row
+            .iter()
+            .map(|&x| f64::from(x) * f64::from(x))
+            .sum::<f64>()
+            .sqrt();
         let scale = (f64::from(gain) / norm) as f32;
         out.extend(row.iter().map(|&x| x * scale));
     }
@@ -78,12 +88,20 @@ struct Conv {
 }
 
 impl Conv {
-    fn load_weight_normed(map: &WeightMap, prefix: &str, shape: [usize; 3], bias_len: Option<usize>) -> Result<Self> {
+    fn load_weight_normed(
+        map: &WeightMap,
+        prefix: &str,
+        shape: [usize; 3],
+        bias_len: Option<usize>,
+    ) -> Result<Self> {
         let g = host_values(map, &format!("{prefix}.weight_g"), &[shape[0], 1, 1])?;
         let v = host_values(map, &format!("{prefix}.weight_v"), &shape)?;
         let weight = pinned(fold_weight_norm(&g, &v, shape[0])?, shape.to_vec())?;
         let bias = match bias_len {
-            Some(n) => Some(pinned(host_values(map, &format!("{prefix}.bias"), &[n])?, vec![n])?),
+            Some(n) => Some(pinned(
+                host_values(map, &format!("{prefix}.bias"), &[n])?,
+                vec![n],
+            )?),
             None => None,
         };
         Ok(Self { weight, bias })
@@ -111,7 +129,10 @@ impl AliasFreeSnake {
         let beta = host_values(map, &format!("{prefix}.act.beta"), &[channels])?;
         Ok(Self {
             alpha: pinned(alpha.iter().map(|a| a.exp()).collect(), vec![channels])?,
-            inv_beta: pinned(beta.iter().map(|b| 1.0 / (b.exp() + 1e-9f32)).collect(), vec![channels])?,
+            inv_beta: pinned(
+                beta.iter().map(|b| 1.0 / (b.exp() + 1e-9f32)).collect(),
+                vec![channels],
+            )?,
             filter: depthwise_filter(taps, channels)?,
         })
     }
@@ -125,11 +146,15 @@ impl AliasFreeSnake {
             .try_mul_scalar(RATIO as f32)?;
         let up = up.narrow(2, UP_CROP_LEFT, up.shape[2] - UP_CROP_LEFT - UP_CROP_RIGHT)?;
         if up.shape[2] != RATIO * len {
-            return Err(msg(format!("alias-free upsample produced {} samples from {len}", up.shape[2])));
+            return Err(msg(format!(
+                "alias-free upsample produced {} samples from {len}",
+                up.shape[2]
+            )));
         }
         let act = up.snake_beta(&self.alpha, &self.inv_beta)?;
         // Down: 2L + 11 -> (2L + 11 - 12) / 2 + 1 = L.
-        act.pad(2, DOWN_PAD_LEFT, DOWN_PAD_RIGHT, PadMode::Replicate)?.conv1d(&self.filter, None, 0, RATIO, 1, channels)
+        act.pad(2, DOWN_PAD_LEFT, DOWN_PAD_RIGHT, PadMode::Replicate)?
+            .conv1d(&self.filter, None, 0, RATIO, 1, channels)
     }
 }
 
@@ -141,7 +166,14 @@ struct AmpBlock {
 }
 
 impl AmpBlock {
-    fn load(map: &WeightMap, prefix: &str, channels: usize, kernel: usize, dilations: &[usize], taps: &[f32]) -> Result<Self> {
+    fn load(
+        map: &WeightMap,
+        prefix: &str,
+        channels: usize,
+        kernel: usize,
+        dilations: &[usize],
+        taps: &[f32],
+    ) -> Result<Self> {
         let shape = [channels, channels, kernel];
         let stages = dilations
             .iter()
@@ -149,11 +181,31 @@ impl AmpBlock {
             .map(|(d, &dilation)| {
                 // `activations[0::2]` feed `convs1`, `activations[1::2]` feed `convs2`.
                 Ok((
-                    AliasFreeSnake::load(map, &format!("{prefix}.activations.{}", 2 * d), channels, taps)?,
-                    Conv::load_weight_normed(map, &format!("{prefix}.convs1.{d}"), shape, Some(channels))?,
+                    AliasFreeSnake::load(
+                        map,
+                        &format!("{prefix}.activations.{}", 2 * d),
+                        channels,
+                        taps,
+                    )?,
+                    Conv::load_weight_normed(
+                        map,
+                        &format!("{prefix}.convs1.{d}"),
+                        shape,
+                        Some(channels),
+                    )?,
                     dilation,
-                    AliasFreeSnake::load(map, &format!("{prefix}.activations.{}", 2 * d + 1), channels, taps)?,
-                    Conv::load_weight_normed(map, &format!("{prefix}.convs2.{d}"), shape, Some(channels))?,
+                    AliasFreeSnake::load(
+                        map,
+                        &format!("{prefix}.activations.{}", 2 * d + 1),
+                        channels,
+                        taps,
+                    )?,
+                    Conv::load_weight_normed(
+                        map,
+                        &format!("{prefix}.convs2.{d}"),
+                        shape,
+                        Some(channels),
+                    )?,
                 ))
             })
             .collect::<Result<Vec<_>>>()?;
@@ -164,8 +216,22 @@ impl AmpBlock {
         let mut x = x.clone();
         for (act1, conv1, dilation, act2, conv2) in &self.stages {
             let pad1 = (self.kernel * dilation - dilation) / 2;
-            let r = act1.forward(&x)?.conv1d(&conv1.weight, conv1.bias.as_ref(), pad1, 1, *dilation, 1)?;
-            let r = act2.forward(&r)?.conv1d(&conv2.weight, conv2.bias.as_ref(), (self.kernel - 1) / 2, 1, 1, 1)?;
+            let r = act1.forward(&x)?.conv1d(
+                &conv1.weight,
+                conv1.bias.as_ref(),
+                pad1,
+                1,
+                *dilation,
+                1,
+            )?;
+            let r = act2.forward(&r)?.conv1d(
+                &conv2.weight,
+                conv2.bias.as_ref(),
+                (self.kernel - 1) / 2,
+                1,
+                1,
+                1,
+            )?;
             x = x.add(&r)?;
         }
         Ok(x)
@@ -194,25 +260,60 @@ impl H3AudioDecoder {
     pub fn load(cfg: H3AudioVaeConfig, map: &WeightMap) -> Result<Self> {
         let stages = cfg.decoder_rates.len();
         if cfg.decoder_dim >> stages == 0 {
-            return Err(msg(format!("audio decoder: {} channels cannot halve {stages} times", cfg.decoder_dim)));
+            return Err(msg(format!(
+                "audio decoder: {} channels cannot halve {stages} times",
+                cfg.decoder_dim
+            )));
         }
         // All 128 filter buffers hold the same Kaiser-sinc kernel; read one.
-        let taps = host_values(map, "decoder.activation_post.upsample.filter", &[1, 1, FILTER_TAPS])?;
+        let taps = host_values(
+            map,
+            "decoder.activation_post.upsample.filter",
+            &[1, 1, FILTER_TAPS],
+        )?;
         let (lc, ld) = (cfg.latent_channels, cfg.latent_dim);
         let dec_in_proj = Conv {
-            weight: pinned(host_values(map, "dec_in_proj.weight", &[ld, lc, 1])?, vec![ld, lc, 1])?,
-            bias: Some(pinned(host_values(map, "dec_in_proj.bias", &[ld])?, vec![ld])?),
+            weight: pinned(
+                host_values(map, "dec_in_proj.weight", &[ld, lc, 1])?,
+                vec![ld, lc, 1],
+            )?,
+            bias: Some(pinned(
+                host_values(map, "dec_in_proj.bias", &[ld])?,
+                vec![ld],
+            )?),
         };
-        let conv_pre = Conv::load_weight_normed(map, "decoder.conv_pre", [cfg.decoder_dim, ld, 7], Some(cfg.decoder_dim))?;
+        let conv_pre = Conv::load_weight_normed(
+            map,
+            "decoder.conv_pre",
+            [cfg.decoder_dim, ld, 7],
+            Some(cfg.decoder_dim),
+        )?;
         let mut ups = Vec::with_capacity(stages);
         let mut resblocks = Vec::with_capacity(stages * cfg.resblock_kernel_sizes.len());
         for i in 0..stages {
             let (cin, cout) = cfg.upsampler_channels(i);
             // ConvTranspose1d weight is [in, out, K]: weight norm runs over dim 0 = in.
-            ups.push(Conv::load_weight_normed(map, &format!("decoder.ups.{i}.0"), [cin, cout, cfg.decoder_kernel_sizes[i]], Some(cout))?);
-            for (j, (&kernel, dilations)) in cfg.resblock_kernel_sizes.iter().zip(&cfg.resblock_dilation_sizes).enumerate() {
+            ups.push(Conv::load_weight_normed(
+                map,
+                &format!("decoder.ups.{i}.0"),
+                [cin, cout, cfg.decoder_kernel_sizes[i]],
+                Some(cout),
+            )?);
+            for (j, (&kernel, dilations)) in cfg
+                .resblock_kernel_sizes
+                .iter()
+                .zip(&cfg.resblock_dilation_sizes)
+                .enumerate()
+            {
                 let index = i * cfg.resblock_kernel_sizes.len() + j;
-                resblocks.push(AmpBlock::load(map, &format!("decoder.resblocks.{index}"), cout, kernel, dilations, &taps)?);
+                resblocks.push(AmpBlock::load(
+                    map,
+                    &format!("decoder.resblocks.{index}"),
+                    cout,
+                    kernel,
+                    dilations,
+                    &taps,
+                )?);
             }
         }
         let last = cfg.decoder_dim >> stages;
@@ -246,20 +347,52 @@ impl H3AudioDecoder {
     /// `stage_<i>` (after the averaged AMP blocks; `stage_6` is the input of
     /// the final activation). A waveform-only comparison says that an error
     /// exists; these say where it enters.
-    pub fn decode_observed(&self, latents: &CudaTensor, observe: &mut dyn FnMut(&str, &CudaTensor) -> Result<()>) -> Result<CudaTensor> {
+    pub fn decode_observed(
+        &self,
+        latents: &CudaTensor,
+        observe: &mut dyn FnMut(&str, &CudaTensor) -> Result<()>,
+    ) -> Result<CudaTensor> {
         let [batch, channels, len] = latents.shape[..] else {
-            return Err(msg(format!("audio decode expects [B, C, L], got {:?}", latents.shape)));
+            return Err(msg(format!(
+                "audio decode expects [B, C, L], got {:?}",
+                latents.shape
+            )));
         };
         if channels != self.cfg.latent_channels || len == 0 {
-            return Err(msg(format!("audio decode: latents {:?} for {} latent channels", latents.shape, self.cfg.latent_channels)));
+            return Err(msg(format!(
+                "audio decode: latents {:?} for {} latent channels",
+                latents.shape, self.cfg.latent_channels
+            )));
         }
         let z = latents.mul(&self.std)?.add(&self.mean)?;
-        let x = z.conv1d(&self.dec_in_proj.weight, self.dec_in_proj.bias.as_ref(), 0, 1, 1, 1)?;
-        let mut x = x.conv1d(&self.conv_pre.weight, self.conv_pre.bias.as_ref(), 3, 1, 1, 1)?;
+        let x = z.conv1d(
+            &self.dec_in_proj.weight,
+            self.dec_in_proj.bias.as_ref(),
+            0,
+            1,
+            1,
+            1,
+        )?;
+        let mut x = x.conv1d(
+            &self.conv_pre.weight,
+            self.conv_pre.bias.as_ref(),
+            3,
+            1,
+            1,
+            1,
+        )?;
         observe("conv_pre", &x)?;
         let kernels = self.cfg.resblock_kernel_sizes.len();
         for (i, up) in self.ups.iter().enumerate() {
-            x = x.conv_transpose1d(&up.weight, up.bias.as_ref(), self.cfg.upsampler_padding(i), self.cfg.decoder_rates[i], 1, 1, 0)?;
+            x = x.conv_transpose1d(
+                &up.weight,
+                up.bias.as_ref(),
+                self.cfg.upsampler_padding(i),
+                self.cfg.decoder_rates[i],
+                1,
+                1,
+                0,
+            )?;
             observe(&format!("up_{i}"), &x)?;
             // The parallel AMP blocks all read the same upsampled signal.
             let mut sum: Option<CudaTensor> = None;
@@ -270,14 +403,21 @@ impl H3AudioDecoder {
                     None => y,
                 });
             }
-            x = sum.ok_or_else(|| msg("audio decoder without resblocks"))?.div(&self.num_kernels)?;
+            x = sum
+                .ok_or_else(|| msg("audio decoder without resblocks"))?
+                .div(&self.num_kernels)?;
             observe(&format!("stage_{i}"), &x)?;
         }
         let x = self.activation_post.forward(&x)?;
-        let x = x.conv1d(&self.conv_post.weight, None, 3, 1, 1, 1)?.clamp(-1.0, 1.0);
+        let x = x
+            .conv1d(&self.conv_post.weight, None, 3, 1, 1, 1)?
+            .clamp(-1.0, 1.0);
         let samples = len * self.cfg.hop_length();
         if x.shape != [batch, 1, samples] {
-            return Err(msg(format!("audio decode produced {:?}, expected [{batch}, 1, {samples}]", x.shape)));
+            return Err(msg(format!(
+                "audio decode produced {:?}, expected [{batch}, 1, {samples}]",
+                x.shape
+            )));
         }
         x.reshape(vec![batch, samples])
     }
@@ -286,12 +426,20 @@ impl H3AudioDecoder {
     /// left channel's latents, then the right's) to a waveform `[channels, 800 Na]`.
     pub fn decode_rows(&self, rows: &CudaTensor, audio_channels: usize) -> Result<CudaTensor> {
         let [n, width] = rows.shape[..] else {
-            return Err(msg(format!("audio rows must be [rows, {}], got {:?}", self.cfg.latent_channels, rows.shape)));
+            return Err(msg(format!(
+                "audio rows must be [rows, {}], got {:?}",
+                self.cfg.latent_channels, rows.shape
+            )));
         };
         if audio_channels == 0 || n % audio_channels != 0 || width != self.cfg.latent_channels {
-            return Err(msg(format!("audio rows {:?} over {audio_channels} channels", rows.shape)));
+            return Err(msg(format!(
+                "audio rows {:?} over {audio_channels} channels",
+                rows.shape
+            )));
         }
-        let latents = rows.reshape(vec![audio_channels, n / audio_channels, width])?.permute(&[0, 2, 1])?;
+        let latents = rows
+            .reshape(vec![audio_channels, n / audio_channels, width])?
+            .permute(&[0, 2, 1])?;
         self.decode(&latents)
     }
 }
@@ -332,17 +480,41 @@ impl AudioResidualUnit {
     fn load(map: &WeightMap, prefix: &str, dim: usize, dilation: usize) -> Result<Self> {
         Ok(Self {
             snake1: Snake1d::load(map, &format!("{prefix}.block.0"), dim)?,
-            conv1: Conv::load_weight_normed(map, &format!("{prefix}.block.1"), [dim, dim, 7], Some(dim))?,
+            conv1: Conv::load_weight_normed(
+                map,
+                &format!("{prefix}.block.1"),
+                [dim, dim, 7],
+                Some(dim),
+            )?,
             dil: dilation,
             snake2: Snake1d::load(map, &format!("{prefix}.block.2"), dim)?,
-            conv2: Conv::load_weight_normed(map, &format!("{prefix}.block.3"), [dim, dim, 1], Some(dim))?,
+            conv2: Conv::load_weight_normed(
+                map,
+                &format!("{prefix}.block.3"),
+                [dim, dim, 1],
+                Some(dim),
+            )?,
         })
     }
 
     fn forward(&self, x: &CudaTensor) -> Result<CudaTensor> {
         let pad = ((7 - 1) * self.dil) / 2;
-        let r = self.snake1.forward(x)?.conv1d(&self.conv1.weight, self.conv1.bias.as_ref(), pad, 1, self.dil, 1)?;
-        let r = self.snake2.forward(&r)?.conv1d(&self.conv2.weight, self.conv2.bias.as_ref(), 0, 1, 1, 1)?;
+        let r = self.snake1.forward(x)?.conv1d(
+            &self.conv1.weight,
+            self.conv1.bias.as_ref(),
+            pad,
+            1,
+            self.dil,
+            1,
+        )?;
+        let r = self.snake2.forward(&r)?.conv1d(
+            &self.conv2.weight,
+            self.conv2.bias.as_ref(),
+            0,
+            1,
+            1,
+            1,
+        )?;
         let shrink = (x.shape[2] - r.shape[2]) / 2;
         let x = if shrink > 0 {
             x.narrow(2, shrink, r.shape[2])?
@@ -387,7 +559,14 @@ impl AudioEncoderBlock {
         }
         let h = self.snake.forward(&h)?;
         let pad = self.stride.div_ceil(2);
-        h.conv1d(&self.down.weight, self.down.bias.as_ref(), pad, self.stride, 1, 1)
+        h.conv1d(
+            &self.down.weight,
+            self.down.bias.as_ref(),
+            pad,
+            self.stride,
+            1,
+            1,
+        )
     }
 }
 
@@ -406,7 +585,12 @@ impl DacEncoder {
         // Sequential indices in `encoder.block`: 0=conv_in, then one block per stride, then snake+conv.
         for (i, &stride) in cfg.encoder_rates.iter().enumerate() {
             d *= 2;
-            blocks.push(AudioEncoderBlock::load(map, &format!("encoder.block.{}", i + 1), d, stride)?);
+            blocks.push(AudioEncoderBlock::load(
+                map,
+                &format!("encoder.block.{}", i + 1),
+                d,
+                stride,
+            )?);
         }
         let snake_out = Snake1d::load(map, &format!("encoder.block.{}", blocks.len() + 1), d)?;
         let conv_out = Conv::load_weight_normed(
@@ -429,7 +613,14 @@ impl DacEncoder {
             h = b.forward(&h)?;
         }
         let h = self.snake_out.forward(&h)?;
-        h.conv1d(&self.conv_out.weight, self.conv_out.bias.as_ref(), 1, 1, 1, 1)
+        h.conv1d(
+            &self.conv_out.weight,
+            self.conv_out.bias.as_ref(),
+            1,
+            1,
+            1,
+            1,
+        )
     }
 }
 
@@ -469,9 +660,18 @@ impl AudioPreBlock {
             norm1: ln("pre_block.norm1", idin)?,
             norm2: ln("pre_block.norm2", out)?,
             norm3: ln("pre_block.norm3", idin)?,
-            qkv: pinned(host_values(map, "pre_block.attn.qkv.weight", &[idin * 3, idin])?, vec![idin * 3, idin])?,
-            q_bias: pinned(host_values(map, "pre_block.attn.q_bias", &[idin])?, vec![idin])?,
-            v_bias: pinned(host_values(map, "pre_block.attn.v_bias", &[idin])?, vec![idin])?,
+            qkv: pinned(
+                host_values(map, "pre_block.attn.qkv.weight", &[idin * 3, idin])?,
+                vec![idin * 3, idin],
+            )?,
+            q_bias: pinned(
+                host_values(map, "pre_block.attn.q_bias", &[idin])?,
+                vec![idin],
+            )?,
+            v_bias: pinned(
+                host_values(map, "pre_block.attn.v_bias", &[idin])?,
+                vec![idin],
+            )?,
             proj: linear("pre_block.attn.proj", out, out)?,
             skip: linear("pre_block.proj", idin, out)?,
             mlp_norm: ln("pre_block.mlp.norm", out)?,
@@ -500,7 +700,10 @@ impl AudioPreBlock {
 
     fn causal_attn(&self, x: &CudaTensor) -> Result<CudaTensor> {
         let [b, s, c] = x.shape[..] else {
-            return Err(msg(format!("pre_block attn expects [B,S,C], got {:?}", x.shape)));
+            return Err(msg(format!(
+                "pre_block attn expects [B,S,C], got {:?}",
+                x.shape
+            )));
         };
         if c != self.in_dim {
             return Err(msg(format!("pre_block attn width {c} != {}", self.in_dim)));
@@ -551,7 +754,10 @@ impl AudioPreBlock {
                         scores[k] = (dot as f32) * scale;
                     }
                     // Softmax over 0..=t
-                    let max = scores[..=t].iter().cloned().fold(f32::NEG_INFINITY, f32::max);
+                    let max = scores[..=t]
+                        .iter()
+                        .cloned()
+                        .fold(f32::NEG_INFINITY, f32::max);
                     let mut sum = 0f32;
                     for k in 0..=t {
                         scores[k] = (scores[k] - max).exp();
@@ -615,8 +821,14 @@ impl H3AudioEncoder {
             encoder: DacEncoder::load(&cfg, map)?,
             pre_block: AudioPreBlock::load(&cfg, map)?,
             mean_proj: Conv {
-                weight: pinned(host_values(map, "mean_proj.weight", &[lc, lc, 1])?, vec![lc, lc, 1])?,
-                bias: Some(pinned(host_values(map, "mean_proj.bias", &[lc])?, vec![lc])?),
+                weight: pinned(
+                    host_values(map, "mean_proj.weight", &[lc, lc, 1])?,
+                    vec![lc, lc, 1],
+                )?,
+                bias: Some(pinned(
+                    host_values(map, "mean_proj.bias", &[lc])?,
+                    vec![lc],
+                )?),
             },
             mean: to_col(&cfg.latents_mean[..lc])?,
             std: to_col(&cfg.latents_std[..lc])?,
@@ -632,7 +844,10 @@ impl H3AudioEncoder {
     /// Right-pads to a multiple of the hop length (800).
     pub fn encode(&self, sample: &CudaTensor) -> Result<CudaTensor> {
         let [_b, ch, len] = sample.shape[..] else {
-            return Err(msg(format!("audio encode expects [B,1,S], got {:?}", sample.shape)));
+            return Err(msg(format!(
+                "audio encode expects [B,1,S], got {:?}",
+                sample.shape
+            )));
         };
         if ch != 1 || len == 0 {
             return Err(msg(format!("audio encode: bad shape {:?}", sample.shape)));
@@ -648,14 +863,24 @@ impl H3AudioEncoder {
         let h = h.permute(&[0, 2, 1])?; // [B, L, 2048]
         let h = self.pre_block.forward(&h)?; // [B, L, 32]
         let h = h.permute(&[0, 2, 1])?; // [B, 32, L]
-        let mean = h.conv1d(&self.mean_proj.weight, self.mean_proj.bias.as_ref(), 0, 1, 1, 1)?;
+        let mean = h.conv1d(
+            &self.mean_proj.weight,
+            self.mean_proj.bias.as_ref(),
+            0,
+            1,
+            1,
+            1,
+        )?;
         mean.sub(&self.mean)?.div(&self.std)
     }
 
     /// Stereo planar `[2 * samples]` → DiT rows `[2 * Na, 32]` (L then R).
     pub fn encode_stereo_planar(&self, planar: &[f32]) -> Result<CudaTensor> {
         if planar.len() < 2 || planar.len() % 2 != 0 {
-            return Err(msg(format!("stereo planar needs even length, got {}", planar.len())));
+            return Err(msg(format!(
+                "stereo planar needs even length, got {}",
+                planar.len()
+            )));
         }
         let samples = planar.len() / 2;
         let mut nchw = vec![0f32; 2 * samples];
@@ -687,19 +912,28 @@ mod tests {
 
     fn weights() -> WeightMap {
         WeightMap::generated(|key, shape| {
-            let seed = key.bytes().fold(11u32, |a, b| a.wrapping_mul(31).wrapping_add(u32::from(b)));
+            let seed = key
+                .bytes()
+                .fold(11u32, |a, b| a.wrapping_mul(31).wrapping_add(u32::from(b)));
             let n: usize = shape.iter().product();
             if key.ends_with("filter") {
                 // A plausible normalized low-pass; the same for every key, as in the checkpoint.
-                let raw: Vec<f32> = (0..n).map(|i| 1.0 + (i as f32 - 5.5).abs().recip()).collect();
+                let raw: Vec<f32> = (0..n)
+                    .map(|i| 1.0 + (i as f32 - 5.5).abs().recip())
+                    .collect();
                 let sum: f32 = raw.iter().sum();
                 return raw.iter().map(|v| v / sum).collect();
             }
             let fan = (n / shape[0].max(1)).max(1) as f32;
             (0..n)
                 .map(|i| {
-                    let u = (seed.wrapping_add(i as u32).wrapping_mul(2_654_435_761) >> 8) as f32 / (1u32 << 24) as f32;
-                    if key.ends_with("weight_g") { 0.5 + u } else { (u - 0.5) * 2.0 / fan.sqrt() }
+                    let u = (seed.wrapping_add(i as u32).wrapping_mul(2_654_435_761) >> 8) as f32
+                        / (1u32 << 24) as f32;
+                    if key.ends_with("weight_g") {
+                        0.5 + u
+                    } else {
+                        (u - 0.5) * 2.0 / fan.sqrt()
+                    }
                 })
                 .collect()
         })
@@ -710,7 +944,11 @@ mod tests {
     type Signal = Vec<Vec<f32>>;
 
     fn get(map: &WeightMap, key: &str, shape: &[usize]) -> Vec<f32> {
-        cuda_tensor_shaped(map, key, shape).unwrap().host_cow().unwrap().into_owned()
+        cuda_tensor_shaped(map, key, shape)
+            .unwrap()
+            .host_cow()
+            .unwrap()
+            .into_owned()
     }
 
     /// Effective weight of a weight-normed conv, `[d0][d1][k]` flattened.
@@ -720,7 +958,11 @@ mod tests {
         let width = shape[1] * shape[2];
         let mut w = vec![0f32; v.len()];
         for r in 0..shape[0] {
-            let norm = v[r * width..(r + 1) * width].iter().map(|x| x * x).sum::<f32>().sqrt();
+            let norm = v[r * width..(r + 1) * width]
+                .iter()
+                .map(|x| x * x)
+                .sum::<f32>()
+                .sqrt();
             for i in 0..width {
                 w[r * width + i] = g[r] * v[r * width + i] / norm;
             }
@@ -728,7 +970,15 @@ mod tests {
         w
     }
 
-    fn ref_conv(x: &Signal, w: &[f32], bias: Option<&[f32]>, out: usize, k: usize, pad: usize, dilation: usize) -> Signal {
+    fn ref_conv(
+        x: &Signal,
+        w: &[f32],
+        bias: Option<&[f32]>,
+        out: usize,
+        k: usize,
+        pad: usize,
+        dilation: usize,
+    ) -> Signal {
         let (cin, len) = (x.len(), x[0].len());
         let lo = len + 2 * pad - dilation * (k - 1);
         (0..out)
@@ -752,7 +1002,15 @@ mod tests {
     }
 
     /// ConvTranspose1d, weight `[in][out][k]`: scatter each input sample.
-    fn ref_conv_transpose(x: &Signal, w: &[f32], bias: &[f32], out: usize, k: usize, stride: usize, pad: usize) -> Signal {
+    fn ref_conv_transpose(
+        x: &Signal,
+        w: &[f32],
+        bias: &[f32],
+        out: usize,
+        k: usize,
+        stride: usize,
+        pad: usize,
+    ) -> Signal {
         let (cin, len) = (x.len(), x[0].len());
         let full = (len - 1) * stride + k;
         let mut y = vec![vec![0f32; full]; out];
@@ -765,7 +1023,10 @@ mod tests {
                 }
             }
         }
-        y.iter().enumerate().map(|(o, row)| row[pad..full - pad].iter().map(|v| v + bias[o]).collect()).collect()
+        y.iter()
+            .enumerate()
+            .map(|(o, row)| row[pad..full - pad].iter().map(|v| v + bias[o]).collect())
+            .collect()
     }
 
     fn replicate(row: &[f32], left: usize, right: usize) -> Vec<f32> {
@@ -790,9 +1051,14 @@ mod tests {
                     }
                 }
                 let up = &up[15..up.len() - 15];
-                let act: Vec<f32> = up.iter().map(|&v| v + (alpha[ch].exp() * v).sin().powi(2) / (beta[ch].exp() + 1e-9)).collect();
+                let act: Vec<f32> = up
+                    .iter()
+                    .map(|&v| v + (alpha[ch].exp() * v).sin().powi(2) / (beta[ch].exp() + 1e-9))
+                    .collect();
                 let padded = replicate(&act, 5, 6);
-                (0..row.len()).map(|t| (0..12).map(|j| padded[2 * t + j] * taps[j]).sum()).collect()
+                (0..row.len())
+                    .map(|t| (0..12).map(|j| padded[2 * t + j] * taps[j]).sum())
+                    .collect()
             })
             .collect()
     }
@@ -803,16 +1069,44 @@ mod tests {
         let z: Signal = latent
             .iter()
             .enumerate()
-            .map(|(c, row)| row.iter().map(|v| v * cfg.latents_std[c] as f32 + cfg.latents_mean[c] as f32).collect())
+            .map(|(c, row)| {
+                row.iter()
+                    .map(|v| v * cfg.latents_std[c] as f32 + cfg.latents_mean[c] as f32)
+                    .collect()
+            })
             .collect();
-        let x = ref_conv(&z, &get(map, "dec_in_proj.weight", &[ld, lc, 1]), Some(&get(map, "dec_in_proj.bias", &[ld])), ld, 1, 0, 1);
+        let x = ref_conv(
+            &z,
+            &get(map, "dec_in_proj.weight", &[ld, lc, 1]),
+            Some(&get(map, "dec_in_proj.bias", &[ld])),
+            ld,
+            1,
+            0,
+            1,
+        );
         let d = cfg.decoder_dim;
-        let mut x = ref_conv(&x, &wn(map, "decoder.conv_pre", [d, ld, 7]), Some(&get(map, "decoder.conv_pre.bias", &[d])), d, 7, 3, 1);
+        let mut x = ref_conv(
+            &x,
+            &wn(map, "decoder.conv_pre", [d, ld, 7]),
+            Some(&get(map, "decoder.conv_pre.bias", &[d])),
+            d,
+            7,
+            3,
+            1,
+        );
         for i in 0..7 {
             let (cin, cout) = cfg.upsampler_channels(i);
             let (k, r) = (cfg.decoder_kernel_sizes[i], cfg.decoder_rates[i]);
             let p = format!("decoder.ups.{i}.0");
-            x = ref_conv_transpose(&x, &wn(map, &p, [cin, cout, k]), &get(map, &format!("{p}.bias"), &[cout]), cout, k, r, (k - r) / 2);
+            x = ref_conv_transpose(
+                &x,
+                &wn(map, &p, [cin, cout, k]),
+                &get(map, &format!("{p}.bias"), &[cout]),
+                cout,
+                k,
+                r,
+                (k - r) / 2,
+            );
             let mut sum = vec![vec![0f32; x[0].len()]; cout];
             for (j, &kernel) in cfg.resblock_kernel_sizes.iter().enumerate() {
                 let p = format!("decoder.resblocks.{}", 3 * i + j);
@@ -820,10 +1114,27 @@ mod tests {
                 for (di, &dil) in cfg.resblock_dilation_sizes[j].iter().enumerate() {
                     let a = ref_alias_free(map, &format!("{p}.activations.{}", 2 * di), &h, &taps);
                     let c1 = format!("{p}.convs1.{di}");
-                    let r1 = ref_conv(&a, &wn(map, &c1, [cout, cout, kernel]), Some(&get(map, &format!("{c1}.bias"), &[cout])), cout, kernel, dil * (kernel - 1) / 2, dil);
-                    let a = ref_alias_free(map, &format!("{p}.activations.{}", 2 * di + 1), &r1, &taps);
+                    let r1 = ref_conv(
+                        &a,
+                        &wn(map, &c1, [cout, cout, kernel]),
+                        Some(&get(map, &format!("{c1}.bias"), &[cout])),
+                        cout,
+                        kernel,
+                        dil * (kernel - 1) / 2,
+                        dil,
+                    );
+                    let a =
+                        ref_alias_free(map, &format!("{p}.activations.{}", 2 * di + 1), &r1, &taps);
                     let c2 = format!("{p}.convs2.{di}");
-                    let r2 = ref_conv(&a, &wn(map, &c2, [cout, cout, kernel]), Some(&get(map, &format!("{c2}.bias"), &[cout])), cout, kernel, (kernel - 1) / 2, 1);
+                    let r2 = ref_conv(
+                        &a,
+                        &wn(map, &c2, [cout, cout, kernel]),
+                        Some(&get(map, &format!("{c2}.bias"), &[cout])),
+                        cout,
+                        kernel,
+                        (kernel - 1) / 2,
+                        1,
+                    );
                     for (hr, rr) in h.iter_mut().zip(&r2) {
                         hr.iter_mut().zip(rr).for_each(|(a, b)| *a += b);
                     }
@@ -832,11 +1143,22 @@ mod tests {
                     sr.iter_mut().zip(hr).for_each(|(a, b)| *a += b);
                 }
             }
-            x = sum.into_iter().map(|row| row.into_iter().map(|v| v / 3.0).collect()).collect();
+            x = sum
+                .into_iter()
+                .map(|row| row.into_iter().map(|v| v / 3.0).collect())
+                .collect();
         }
         let x = ref_alias_free(map, "decoder.activation_post", &x, &taps);
         let last = x.len();
-        let y = ref_conv(&x, &wn(map, "decoder.conv_post", [1, last, 7]), None, 1, 7, 3, 1);
+        let y = ref_conv(
+            &x,
+            &wn(map, "decoder.conv_post", [1, last, 7]),
+            None,
+            1,
+            7,
+            3,
+            1,
+        );
         y[0].iter().map(|v| v.clamp(-1.0, 1.0)).collect()
     }
 
@@ -853,17 +1175,27 @@ mod tests {
         let (cfg, map) = (tiny_cfg(), weights());
         let dec = H3AudioDecoder::load(cfg.clone(), &map).unwrap();
         let (b, c, l) = (2usize, cfg.latent_channels, 3usize);
-        let lat: Vec<f32> = (0..b * c * l).map(|i| ((i * 37 % 23) as f32 - 11.0) * 0.07).collect();
-        let got = dec.decode(&CudaTensor::from_vec(lat.clone(), vec![b, c, l]).unwrap()).unwrap();
+        let lat: Vec<f32> = (0..b * c * l)
+            .map(|i| ((i * 37 % 23) as f32 - 11.0) * 0.07)
+            .collect();
+        let got = dec
+            .decode(&CudaTensor::from_vec(lat.clone(), vec![b, c, l]).unwrap())
+            .unwrap();
         assert_eq!(got.shape, vec![b, l * cfg.hop_length()]);
         assert_eq!(cfg.hop_length(), 320);
         let got = got.host_cow().unwrap();
         let mut energy = 0.0f32;
         for bi in 0..b {
-            let signal: Signal = (0..c).map(|ch| lat[(bi * c + ch) * l..(bi * c + ch + 1) * l].to_vec()).collect();
+            let signal: Signal = (0..c)
+                .map(|ch| lat[(bi * c + ch) * l..(bi * c + ch + 1) * l].to_vec())
+                .collect();
             let want = reference(&cfg, &map, &signal);
             assert_eq!(want.len(), l * 320);
-            for (t, (g, w)) in got[bi * l * 320..(bi + 1) * l * 320].iter().zip(&want).enumerate() {
+            for (t, (g, w)) in got[bi * l * 320..(bi + 1) * l * 320]
+                .iter()
+                .zip(&want)
+                .enumerate()
+            {
                 assert!((g - w).abs() < 2e-5, "channel {bi} sample {t}: {g} vs {w}");
                 energy += w * w;
             }
@@ -877,10 +1209,20 @@ mod tests {
         let dec = H3AudioDecoder::load(cfg.clone(), &map).unwrap();
         let (na, c) = (2usize, cfg.latent_channels);
         let rows: Vec<f32> = (0..2 * na * c).map(|i| (i as f32 * 0.31).sin()).collect();
-        let stereo = dec.decode_rows(&CudaTensor::from_vec(rows.clone(), vec![2 * na, c]).unwrap(), 2).unwrap();
+        let stereo = dec
+            .decode_rows(
+                &CudaTensor::from_vec(rows.clone(), vec![2 * na, c]).unwrap(),
+                2,
+            )
+            .unwrap();
         // The right channel alone: rows Na..2Na, as [1, C, Na].
-        let right: Vec<f32> = (0..c).flat_map(|ch| (0..na).map(move |a| (na + a, ch))).map(|(r, ch)| rows[r * c + ch]).collect();
-        let mono = dec.decode(&CudaTensor::from_vec(right, vec![1, c, na]).unwrap()).unwrap();
+        let right: Vec<f32> = (0..c)
+            .flat_map(|ch| (0..na).map(move |a| (na + a, ch)))
+            .map(|(r, ch)| rows[r * c + ch])
+            .collect();
+        let mono = dec
+            .decode(&CudaTensor::from_vec(right, vec![1, c, na]).unwrap())
+            .unwrap();
         let (s, m) = (stereo.host_cow().unwrap(), mono.host_cow().unwrap());
         assert_eq!(&s[m.len()..], &m[..]);
     }

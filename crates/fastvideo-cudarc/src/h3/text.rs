@@ -42,16 +42,25 @@ pub fn tokenize(root: &Path, prompt: &str) -> Result<Vec<u32>> {
 /// `hidden_states[tap]` for already-tokenized text: `[1, S, hidden]`, un-normed
 /// for any tap short of the last layer. One unpadded sequence, so positions
 /// are `0..S` and every token may be attended.
-pub fn encode_ids(map: &WeightMap, cfg: &DecoderConfig, ids: &[u32], tap: usize) -> Result<CudaTensor> {
+pub fn encode_ids(
+    map: &WeightMap,
+    cfg: &DecoderConfig,
+    ids: &[u32],
+    tap: usize,
+) -> Result<CudaTensor> {
     if tap >= cfg.num_layers() {
         // The last tap is the one entry HF norms; H3 was trained on an
         // un-normed mid-stack state and a normed one is a different input.
-        return Err(msg(format!("h3 text: tap {tap} of a {}-layer decoder would be post-norm", cfg.num_layers())));
+        return Err(msg(format!(
+            "h3 text: tap {tap} of a {}-layer decoder would be post-norm",
+            cfg.num_layers()
+        )));
     }
     let positions: Vec<u32> = (0..ids.len() as u32).collect();
     let attend = vec![true; ids.len()];
     let mut taps = llm::hidden_states(map, cfg, ids, &positions, &attend, &[tap])?;
-    taps.pop().ok_or_else(|| msg("h3 text: the decoder returned no hidden state"))
+    taps.pop()
+        .ok_or_else(|| msg("h3 text: the decoder returned no hidden state"))
 }
 
 /// Something that turns token ids into `hidden_states[tap]`. Two kinds exist:
@@ -95,7 +104,8 @@ impl HiddenStateEncoder for crate::llm::ResidentDecoder {
     fn hidden_state(&self, ids: &[u32], tap: usize) -> Result<CudaTensor> {
         let positions: Vec<u32> = (0..ids.len() as u32).collect();
         let mut taps = self.hidden_states(ids, &positions, &vec![true; ids.len()], &[tap])?;
-        taps.pop().ok_or_else(|| msg("h3 text: the resident decoder returned no hidden state"))
+        taps.pop()
+            .ok_or_else(|| msg("h3 text: the resident decoder returned no hidden state"))
     }
 
     fn kind(&self) -> &'static str {
@@ -114,10 +124,18 @@ impl HiddenStateEncoder for crate::llm::ResidentDecoder {
 /// exactly the layers tap 50 needs, no final norm. The precision is
 /// per-instance; the process-wide `FASTVIDEO_FP8` flag is not involved (it
 /// would quantize the DiT as well).
-pub fn load_resident_encoder(root: &Path, precision: crate::llm::WeightPrecision) -> Result<crate::llm::ResidentDecoder> {
+pub fn load_resident_encoder(
+    root: &Path,
+    precision: crate::llm::WeightPrecision,
+) -> Result<crate::llm::ResidentDecoder> {
     let map = WeightMap::open(&root.join("text_encoder"))?;
     let cfg = DecoderConfig::qwen3_vl_32b_text().for_bf16_reference();
-    crate::llm::ResidentDecoder::load_with(&map, &cfg, H3TextEncoderConfig::fasth3_8step().output_hidden_state_index, precision)
+    crate::llm::ResidentDecoder::load_with(
+        &map,
+        &cfg,
+        H3TextEncoderConfig::fasth3_8step().output_hidden_state_index,
+        precision,
+    )
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -161,30 +179,58 @@ pub struct TextConditioning {
 /// mapped for their headers (the key needs the encoder's identity) but no
 /// weight is streamed and no forward runs. `resident` replaces the streaming
 /// encoder on a miss.
-pub fn encode_prompt_with(root: &Path, prompt: &str, cache_dir: Option<&Path>, resident: Option<&dyn HiddenStateEncoder>) -> Result<TextConditioning> {
+pub fn encode_prompt_with(
+    root: &Path,
+    prompt: &str,
+    cache_dir: Option<&Path>,
+    resident: Option<&dyn HiddenStateEncoder>,
+) -> Result<TextConditioning> {
     use super::text_cache as cache;
     let ids = tokenize(root, prompt)?;
     let map = WeightMap::open(&root.join("text_encoder"))?;
     // The reference encoder runs in bf16; follow its constant casts.
     let cfg = DecoderConfig::qwen3_vl_32b_text().for_bf16_reference();
     let tap = H3TextEncoderConfig::fasth3_8step().output_hidden_state_index;
-    let streamed = StreamedEncoder { map: &map, cfg: &cfg };
+    let streamed = StreamedEncoder {
+        map: &map,
+        cfg: &cfg,
+    };
     let encoder: &dyn HiddenStateEncoder = resident.unwrap_or(&streamed);
     let Some(dir) = cache_dir else {
         let hidden = encoder.hidden_state(&ids, tap)?;
-        return Ok(TextConditioning { ids, hidden, cache: CacheStatus::Disabled, encoder: encoder.kind(), token_tags: Vec::new() });
+        return Ok(TextConditioning {
+            ids,
+            hidden,
+            cache: CacheStatus::Disabled,
+            encoder: encoder.kind(),
+            token_tags: Vec::new(),
+        });
     };
 
     let tokenizer_path = root.join("tokenizer").join("tokenizer.json");
-    let tokenizer_bytes = std::fs::read(&tokenizer_path).map_err(|e| msg(format!("{}: {e}", tokenizer_path.display())))?;
-    let store = map.lazy().ok_or_else(|| msg("h3 text: the encoder checkpoint was not opened lazily"))?;
-    let key = cache::cache_key(prompt, &cache::sha256(&tokenizer_bytes), tap, &cache::encoder_identity(store, &cfg, tap)?);
-    let (entry, hit) = cache::get_or_compute(dir, &key, &ids, cfg.hidden, || Ok(encoder.hidden_state(&ids, tap)?.host_cow()?.into_owned()))?;
+    let tokenizer_bytes = std::fs::read(&tokenizer_path)
+        .map_err(|e| msg(format!("{}: {e}", tokenizer_path.display())))?;
+    let store = map
+        .lazy()
+        .ok_or_else(|| msg("h3 text: the encoder checkpoint was not opened lazily"))?;
+    let key = cache::cache_key(
+        prompt,
+        &cache::sha256(&tokenizer_bytes),
+        tap,
+        &cache::encoder_identity(store, &cfg, tap)?,
+    );
+    let (entry, hit) = cache::get_or_compute(dir, &key, &ids, cfg.hidden, || {
+        Ok(encoder.hidden_state(&ids, tap)?.host_cow()?.into_owned())
+    })?;
     let hidden = CudaTensor::from_vec(entry.data, vec![1, ids.len(), cfg.hidden])?.to_device()?;
     Ok(TextConditioning {
         ids,
         hidden,
-        cache: if hit { CacheStatus::Hit } else { CacheStatus::Miss },
+        cache: if hit {
+            CacheStatus::Hit
+        } else {
+            CacheStatus::Miss
+        },
         encoder: if hit { "cache" } else { encoder.kind() },
         token_tags: Vec::new(),
     })
@@ -223,8 +269,8 @@ pub fn encode_prompt_recovered(
         });
     };
     let tokenizer_path = tokenizer_root.join("tokenizer").join("tokenizer.json");
-    let tokenizer_bytes =
-        std::fs::read(&tokenizer_path).map_err(|e| msg(format!("{}: {e}", tokenizer_path.display())))?;
+    let tokenizer_bytes = std::fs::read(&tokenizer_path)
+        .map_err(|e| msg(format!("{}: {e}", tokenizer_path.display())))?;
     // Identity is the encoder kind + tap; recovered weights are not a LazyStore
     // under text_encoder/, so we fingerprint the kind string instead.
     let identity = cache::sha256(format!("recovered-8b-tap{tap}").as_bytes());
@@ -236,7 +282,11 @@ pub fn encode_prompt_recovered(
     Ok(TextConditioning {
         ids,
         hidden,
-        cache: if hit { CacheStatus::Hit } else { CacheStatus::Miss },
+        cache: if hit {
+            CacheStatus::Hit
+        } else {
+            CacheStatus::Miss
+        },
         encoder: if hit { "cache" } else { encoder.kind() },
         token_tags: Vec::new(),
     })
@@ -287,8 +337,13 @@ pub fn encode_multimodal(
     let mut image_grids = Vec::with_capacity(images.len());
     let mut image_token_counts = Vec::with_capacity(images.len());
     for img in images {
-        let prep = prepare_vision_image(img.rgb, img.height, img.width, &vision_cfg).map_err(msg)?;
-        image_token_counts.push(prep.grid.num_tokens(vision_cfg.spatial_merge_size).map_err(msg)?);
+        let prep =
+            prepare_vision_image(img.rgb, img.height, img.width, &vision_cfg).map_err(msg)?;
+        image_token_counts.push(
+            prep.grid
+                .num_tokens(vision_cfg.spatial_merge_size)
+                .map_err(msg)?,
+        );
         image_grids.push([prep.grid.temporal, prep.grid.height, prep.grid.width]);
         image_prepared.push(prep);
     }
@@ -310,14 +365,9 @@ pub fn encode_multimodal(
             let start = idx.min(vid.num_frames - 1) * frame_bytes;
             sampled.extend_from_slice(&vid.frames[start..start + frame_bytes]);
         }
-        let prep = prepare_vision_video(
-            &sampled,
-            indices.len(),
-            vid.height,
-            vid.width,
-            &vision_cfg,
-        )
-        .map_err(msg)?;
+        let prep =
+            prepare_vision_video(&sampled, indices.len(), vid.height, vid.width, &vision_cfg)
+                .map_err(msg)?;
         if prep.grid.temporal != timestamps.len() {
             return Err(msg(format!(
                 "vision video: grid T={} vs {} timestamps",
@@ -325,7 +375,11 @@ pub fn encode_multimodal(
                 timestamps.len()
             )));
         }
-        video_token_counts.push(prep.grid.num_tokens(vision_cfg.spatial_merge_size).map_err(msg)?);
+        video_token_counts.push(
+            prep.grid
+                .num_tokens(vision_cfg.spatial_merge_size)
+                .map_err(msg)?,
+        );
         video_grids.push([prep.grid.temporal, prep.grid.height, prep.grid.width]);
         video_timestamps.push(timestamps);
         video_prepared.push(prep);
@@ -359,7 +413,9 @@ pub fn encode_multimodal(
             }
         }
         if ii != image_token_counts.len() || vi != video_token_counts.len() {
-            return Err(msg("ref presentation: image/video counts do not match refs"));
+            return Err(msg(
+                "ref presentation: image/video counts do not match refs",
+            ));
         }
         build_ref2va_presentation(&tokenizer, &text_cfg, prompt, &rebuilt).map_err(msg)?
     } else {
@@ -560,11 +616,18 @@ mod tests {
 
     fn weights() -> WeightMap {
         WeightMap::generated(|key, shape| {
-            let seed = key.bytes().fold(3u32, |a, b| a.wrapping_mul(31).wrapping_add(u32::from(b)));
+            let seed = key
+                .bytes()
+                .fold(3u32, |a, b| a.wrapping_mul(31).wrapping_add(u32::from(b)));
             (0..shape.iter().product::<usize>())
                 .map(|i| {
-                    let v = (seed.wrapping_add(i as u32).wrapping_mul(2_654_435_761) >> 8) as f32 / (1u32 << 24) as f32;
-                    if key.contains("norm") { 0.5 + v } else { v - 0.5 }
+                    let v = (seed.wrapping_add(i as u32).wrapping_mul(2_654_435_761) >> 8) as f32
+                        / (1u32 << 24) as f32;
+                    if key.contains("norm") {
+                        0.5 + v
+                    } else {
+                        v - 0.5
+                    }
                 })
                 .collect()
         })
@@ -580,27 +643,57 @@ mod tests {
         let mut two = cfg.clone();
         two.layers.truncate(2);
         let pos: Vec<u32> = (0..4).collect();
-        let normed = llm::hidden_states(&weights(), &two, &ids, &pos, &[true; 4], &[2]).unwrap().remove(0);
+        let normed = llm::hidden_states(&weights(), &two, &ids, &pos, &[true; 4], &[2])
+            .unwrap()
+            .remove(0);
         let w = crate::wan::weights::cuda_tensor_shaped(&weights(), "m.norm.weight", &[8]).unwrap();
         let want = got.rms_norm(&w, cfg.rms_eps).unwrap();
         let (a, b) = (want.host_cow().unwrap(), normed.host_cow().unwrap());
         assert!(a.iter().zip(b.iter()).all(|(x, y)| (x - y).abs() < 1e-6));
-        assert!(got.host_cow().unwrap().iter().zip(b.iter()).any(|(x, y)| (x - y).abs() > 1e-3));
+        assert!(got
+            .host_cow()
+            .unwrap()
+            .iter()
+            .zip(b.iter())
+            .any(|(x, y)| (x - y).abs() > 1e-3));
     }
 
     #[test]
     fn the_resident_encoder_is_the_streamed_one_with_the_weights_left_in_place() {
         let (cfg, ids, map) = (tiny(), [1u32, 3, 0, 2], weights());
-        let streamed = StreamedEncoder { map: &map, cfg: &cfg }.hidden_state(&ids, 2).unwrap();
+        let streamed = StreamedEncoder {
+            map: &map,
+            cfg: &cfg,
+        }
+        .hidden_state(&ids, 2)
+        .unwrap();
         let resident = crate::llm::ResidentDecoder::load(&map, &cfg, 2).unwrap();
         let again = HiddenStateEncoder::hidden_state(&resident, &ids, 2).unwrap();
         assert_eq!(&*streamed.host_cow().unwrap(), &*again.host_cow().unwrap());
-        assert_eq!((StreamedEncoder { map: &map, cfg: &cfg }.kind(), resident.kind()), ("streamed", "resident-bf16"));
+        assert_eq!(
+            (
+                StreamedEncoder {
+                    map: &map,
+                    cfg: &cfg
+                }
+                .kind(),
+                resident.kind()
+            ),
+            ("streamed", "resident-bf16")
+        );
         // Weight-only FP8 is a different, nearby function: close, not equal, and it says what it is.
-        let fp8 = crate::llm::ResidentDecoder::load_with(&map, &cfg, 2, crate::llm::WeightPrecision::Fp8Rows).unwrap();
+        let fp8 = crate::llm::ResidentDecoder::load_with(
+            &map,
+            &cfg,
+            2,
+            crate::llm::WeightPrecision::Fp8Rows,
+        )
+        .unwrap();
         let quantized = HiddenStateEncoder::hidden_state(&fp8, &ids, 2).unwrap();
         let (a, b) = (streamed.host_cow().unwrap(), quantized.host_cow().unwrap());
-        let (err, norm) = a.iter().zip(b.iter()).fold((0f64, 0f64), |(e, n), (x, y)| (e + f64::from(x - y).powi(2), n + f64::from(*x).powi(2)));
+        let (err, norm) = a.iter().zip(b.iter()).fold((0f64, 0f64), |(e, n), (x, y)| {
+            (e + f64::from(x - y).powi(2), n + f64::from(*x).powi(2))
+        });
         let rel = (err / norm).sqrt();
         assert!(rel > 0.0 && rel < 0.1, "fp8 rows vs native: rel {rel}");
         assert_eq!(fp8.kind(), "resident-fp8");

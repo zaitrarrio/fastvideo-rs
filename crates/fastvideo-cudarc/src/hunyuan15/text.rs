@@ -135,8 +135,14 @@ pub fn encode_prompt(
     let ids = tokenize_qwen(root, prompt, defaults.qwen_max_length).map_err(msg)?;
     let attend = vec![true; ids.len()];
     let map = WeightMap::open(&root.join("text_encoder")).map_err(|e| msg(e.to_string()))?;
-    let (qwen, qwen_attend) =
-        encode_qwen_ids(&map, &qwen_cfg, &ids, &attend, defaults.text_crop_start, tap)?;
+    let (qwen, qwen_attend) = encode_qwen_ids(
+        &map,
+        &qwen_cfg,
+        &ids,
+        &attend,
+        defaults.text_crop_start,
+        tap,
+    )?;
 
     let glyph = extract_glyph_texts(prompt);
     let (byt5, byt5_attend) = encode_byt5(

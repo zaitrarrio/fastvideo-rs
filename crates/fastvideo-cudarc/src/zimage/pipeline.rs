@@ -65,7 +65,8 @@ impl ZImagePipeline {
     }
 
     pub fn load_dit(&mut self) -> Result<()> {
-        let map = WeightMap::open(&self.root.join("transformer")).map_err(|e| msg(e.to_string()))?;
+        let map =
+            WeightMap::open(&self.root.join("transformer")).map_err(|e| msg(e.to_string()))?;
         self.dit = Some(ZImageTransformer::load(self.cfg.dit.clone(), &map)?);
         Ok(())
     }
@@ -114,9 +115,10 @@ impl ZImagePipeline {
         let dit = self.dit.as_ref().ok_or_else(|| {
             msg("Z-Image: call load_dit() after placing Diffusers `transformer/` under --weights")
         })?;
-        let vae = self.vae.as_ref().ok_or_else(|| {
-            msg("Z-Image: call load_vae() or load_vae_stub()")
-        })?;
+        let vae = self
+            .vae
+            .as_ref()
+            .ok_or_else(|| msg("Z-Image: call load_vae() or load_vae_stub()"))?;
 
         let text = self.encode_text(&request.prompt)?;
         let (lh, lw) = self.cfg.dit.latent_spatial(request.height, request.width);
@@ -172,14 +174,8 @@ impl ZImagePipeline {
         if let Some(parent) = out_path.parent() {
             std::fs::create_dir_all(parent).map_err(|e| msg(e.to_string()))?;
         }
-        image::save_buffer(
-            out_path,
-            &rgb,
-            wf as u32,
-            hf as u32,
-            image::ColorType::Rgb8,
-        )
-        .map_err(|e| msg(e.to_string()))?;
+        image::save_buffer(out_path, &rgb, wf as u32, hf as u32, image::ColorType::Rgb8)
+            .map_err(|e| msg(e.to_string()))?;
         Ok(())
     }
 }

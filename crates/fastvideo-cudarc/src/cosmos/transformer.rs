@@ -58,15 +58,29 @@ impl Attn {
         })
     }
 
-    fn load(map: &WeightMap, prefix: &str, dim: usize, heads: usize, head_dim: usize) -> Result<Self> {
+    fn load(
+        map: &WeightMap,
+        prefix: &str,
+        dim: usize,
+        heads: usize,
+        head_dim: usize,
+    ) -> Result<Self> {
         let key = |n: &str| weights::join_key(prefix, n);
         Ok(Self {
             to_q: Linear::load(map, &key("to_q"), dim, dim, false)?,
             to_k: Linear::load(map, &key("to_k"), dim, dim, false)?,
             to_v: Linear::load(map, &key("to_v"), dim, dim, false)?,
             to_out: Linear::load(map, &key("to_out.0"), dim, dim, false)?,
-            q_norm: pinned(weights::cuda_tensor_shaped(map, &key("norm_q.weight"), &[head_dim])?)?,
-            k_norm: pinned(weights::cuda_tensor_shaped(map, &key("norm_k.weight"), &[head_dim])?)?,
+            q_norm: pinned(weights::cuda_tensor_shaped(
+                map,
+                &key("norm_q.weight"),
+                &[head_dim],
+            )?)?,
+            k_norm: pinned(weights::cuda_tensor_shaped(
+                map,
+                &key("norm_k.weight"),
+                &[head_dim],
+            )?)?,
             heads,
             head_dim,
             eps: 1e-6,
@@ -376,10 +390,7 @@ impl CosmosTransformer {
             patch: Linear::from_tensors(CudaTensor::zeros(&[dim, patch_in]), None)?,
             blocks,
             time: TimeEmbed::zeros(dim)?,
-            norm_out_l1: Linear::from_tensors(
-                CudaTensor::zeros(&[cfg.adaln_lora_dim, dim]),
-                None,
-            )?,
+            norm_out_l1: Linear::from_tensors(CudaTensor::zeros(&[cfg.adaln_lora_dim, dim]), None)?,
             norm_out_l2: Linear::from_tensors(
                 CudaTensor::zeros(&[2 * dim, cfg.adaln_lora_dim]),
                 None,
@@ -431,13 +442,7 @@ impl CosmosTransformer {
             patch: Linear::load(map, "patch_embed.proj", patch_in, dim, false)?,
             blocks,
             time: TimeEmbed::load(map, dim)?,
-            norm_out_l1: Linear::load(
-                map,
-                "norm_out.linear_1",
-                dim,
-                cfg.adaln_lora_dim,
-                false,
-            )?,
+            norm_out_l1: Linear::load(map, "norm_out.linear_1", dim, cfg.adaln_lora_dim, false)?,
             norm_out_l2: Linear::load(
                 map,
                 "norm_out.linear_2",
@@ -542,7 +547,10 @@ impl CosmosTransformer {
             )));
         }
         let flat = CudaTensor::from_vec(tokens, vec![b * seq, cin * p_t * p_h * p_w])?;
-        let mut hs = self.patch.forward(&flat)?.reshape(vec![b, seq, self.cfg.hidden_size()])?;
+        let mut hs = self
+            .patch
+            .forward(&flat)?
+            .reshape(vec![b, seq, self.cfg.hidden_size()])?;
 
         let extra = self.learnable_pos(b, pe_t, pe_h, pe_w)?;
         // Per-frame AdaLN: embed each of T timesteps, then expand to THW tokens
@@ -556,14 +564,7 @@ impl CosmosTransformer {
         let emb_s = expand_frame_tokens(&emb_bt, b, pe_t, pe_h, pe_w)?;
 
         for block in &self.blocks {
-            hs = block.forward(
-                &hs,
-                encoder,
-                &emb_s,
-                &temb_s,
-                (&cos, &sin),
-                extra.as_ref(),
-            )?;
+            hs = block.forward(&hs, encoder, &emb_s, &temb_s, (&cos, &sin), extra.as_ref())?;
         }
 
         // Final AdaLN (shift/scale only)
@@ -596,9 +597,8 @@ impl CosmosTransformer {
                                             * w
                                             + xi * p_w
                                             + pw);
-                                        pixels[dst] = oh[((bi * seq + tok)
-                                            * (p_t * p_h * p_w * oc))
-                                            + o];
+                                        pixels[dst] =
+                                            oh[((bi * seq + tok) * (p_t * p_h * p_w * oc)) + o];
                                         o += 1;
                                     }
                                 }

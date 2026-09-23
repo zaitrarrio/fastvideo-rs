@@ -353,7 +353,10 @@ pub fn clip(report: &mut Report, args: ClipArgs<'_>) -> StageResult<()> {
         let t = Instant::now();
         let l = pipe.denoise(&cfg, noise.clone(), &embeds, None)?;
         let v = pipe.decode_latents(&l)?;
-        let _ = frames_to_rgb8(&v.reshape(vec![3, v.shape[2], v.shape[3], v.shape[4]])?.permute(&[1, 0, 2, 3])?)?;
+        let _ = frames_to_rgb8(
+            &v.reshape(vec![3, v.shape[2], v.shape[3], v.shape[4]])?
+                .permute(&[1, 0, 2, 3])?,
+        )?;
         let s = t.elapsed().as_secs_f64();
         eprintln!("warm-up generation {s:.2}s (untimed)");
         Some(s)

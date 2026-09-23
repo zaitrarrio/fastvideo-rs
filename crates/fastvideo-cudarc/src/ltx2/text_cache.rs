@@ -70,25 +70,40 @@ pub fn weights_identity(path: &Path, prefix: Option<&str>) -> Result<[u8; 32]> {
             .map_err(|e| io(e, path))?
             .filter_map(|entry| entry.ok().map(|e| e.path()))
             .filter(|p| p.extension().is_some_and(|x| x == "safetensors"))
-            .filter(|p| prefix.is_none_or(|pre| p.file_name().is_some_and(|n| n.to_string_lossy().starts_with(pre))))
+            .filter(|p| {
+                prefix.is_none_or(|pre| {
+                    p.file_name()
+                        .is_some_and(|n| n.to_string_lossy().starts_with(pre))
+                })
+            })
             .collect()
     };
     if files.is_empty() {
-        return Err(msg(format!("{}: no safetensors files to identify", path.display())));
+        return Err(msg(format!(
+            "{}: no safetensors files to identify",
+            path.display()
+        )));
     }
     files.sort();
     let mut h = Sha256::new();
     for file in &files {
         let mut f = std::fs::File::open(file).map_err(|e| io(e, file))?;
         let size = f.metadata().map_err(|e| io(e, file))?.len();
-        field(&mut h, file.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default().as_bytes());
+        field(
+            &mut h,
+            file.file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_default()
+                .as_bytes(),
+        );
         field(&mut h, &size.to_le_bytes());
         let mut buf = vec![0u8; PROBE.min(size) as usize];
         f.read_exact(&mut buf).map_err(|e| io(e, file))?;
         field(&mut h, &buf);
         if size > PROBE {
             let tail = PROBE.min(size - PROBE);
-            f.seek(SeekFrom::End(-(tail as i64))).map_err(|e| io(e, file))?;
+            f.seek(SeekFrom::End(-(tail as i64)))
+                .map_err(|e| io(e, file))?;
             buf.truncate(tail as usize);
             f.read_exact(&mut buf).map_err(|e| io(e, file))?;
             field(&mut h, &buf);
@@ -121,8 +136,14 @@ pub fn cache_key(
 /// `$FASTVIDEO_CACHE`, else `$XDG_CACHE_HOME/fastvideo`, else `~/.cache/fastvideo`,
 /// under `ltx2-text`. `None` when the environment names no home at all.
 pub fn default_dir() -> Option<PathBuf> {
-    let var = |k: &str| std::env::var_os(k).filter(|v| !v.is_empty()).map(PathBuf::from);
-    let root = var("FASTVIDEO_CACHE").or_else(|| var("XDG_CACHE_HOME").map(|p| p.join("fastvideo"))).or_else(|| var("HOME").map(|p| p.join(".cache").join("fastvideo")))?;
+    let var = |k: &str| {
+        std::env::var_os(k)
+            .filter(|v| !v.is_empty())
+            .map(PathBuf::from)
+    };
+    let root = var("FASTVIDEO_CACHE")
+        .or_else(|| var("XDG_CACHE_HOME").map(|p| p.join("fastvideo")))
+        .or_else(|| var("HOME").map(|p| p.join(".cache").join("fastvideo")))?;
     Some(root.join("ltx2-text"))
 }
 
@@ -140,7 +161,13 @@ impl TextCache {
     }
 
     /// Write atomically: a reader never sees half an entry under the final name.
-    pub fn store(&self, key: &str, prompt: &PaddedPrompt, video: &CudaTensor, audio: &CudaTensor) -> Result<()> {
+    pub fn store(
+        &self,
+        key: &str,
+        prompt: &PaddedPrompt,
+        video: &CudaTensor,
+        audio: &CudaTensor,
+    ) -> Result<()> {
         let io = |e: std::io::Error| msg(format!("text cache {}: {e}", self.dir.display()));
         let mut body = Vec::new();
         body.extend_from_slice(MAGIC);
@@ -162,7 +189,10 @@ impl TextCache {
         std::fs::create_dir_all(&self.dir).map_err(io)?;
         let part = self.dir.join(format!("{key}.{}.part", std::process::id()));
         let mut f = std::fs::File::create(&part).map_err(io)?;
-        f.write_all(&body).and_then(|()| f.write_all(&seal)).and_then(|()| f.sync_all()).map_err(io)?;
+        f.write_all(&body)
+            .and_then(|()| f.write_all(&seal))
+            .and_then(|()| f.sync_all())
+            .map_err(io)?;
         drop(f);
         std::fs::rename(&part, self.path(key)).map_err(io)
     }
@@ -186,7 +216,10 @@ impl TextCache {
             return None;
         }
         let (len, real) = (u32_at(take(4)?) as usize, u32_at(take(4)?) as usize);
-        let ids: Vec<u32> = take(len.checked_mul(4)?)?.chunks_exact(4).map(u32_at).collect();
+        let ids: Vec<u32> = take(len.checked_mul(4)?)?
+            .chunks_exact(4)
+            .map(u32_at)
+            .collect();
         if ids != prompt.ids || real != prompt.real {
             return None;
         }
@@ -195,9 +228,17 @@ impl TextCache {
             if rank > 8 {
                 return None;
             }
-            let shape: Vec<usize> = take(rank * 8)?.chunks_exact(8).map(|c| u64::from_le_bytes([c[0], c[1], c[2], c[3], c[4], c[5], c[6], c[7]]) as usize).collect();
+            let shape: Vec<usize> = take(rank * 8)?
+                .chunks_exact(8)
+                .map(|c| {
+                    u64::from_le_bytes([c[0], c[1], c[2], c[3], c[4], c[5], c[6], c[7]]) as usize
+                })
+                .collect();
             let n = shape.iter().try_fold(1usize, |a, d| a.checked_mul(*d))?;
-            let data: Vec<f32> = take(n.checked_mul(4)?)?.chunks_exact(4).map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]])).collect();
+            let data: Vec<f32> = take(n.checked_mul(4)?)?
+                .chunks_exact(4)
+                .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
+                .collect();
             CudaTensor::from_vec(data, shape).ok()
         };
         let (video, audio) = (tensor()?, tensor()?);
@@ -210,7 +251,8 @@ mod tests {
     use super::*;
 
     fn scratch(name: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!("fv-ltx2-textcache-{name}-{}", std::process::id()));
+        let dir =
+            std::env::temp_dir().join(format!("fv-ltx2-textcache-{name}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         dir
@@ -218,8 +260,14 @@ mod tests {
 
     fn contexts() -> (PaddedPrompt, CudaTensor, CudaTensor) {
         let prompt = PaddedPrompt::from_ids(&[2, 17, 99], 8).unwrap();
-        let video = CudaTensor::from_vec((0..24).map(|i| i as f32 * 0.5 - 3.0).collect(), vec![1, 8, 3]).unwrap();
-        let audio = CudaTensor::from_vec((0..16).map(|i| (i as f32).sin()).collect(), vec![1, 8, 2]).unwrap();
+        let video = CudaTensor::from_vec(
+            (0..24).map(|i| i as f32 * 0.5 - 3.0).collect(),
+            vec![1, 8, 3],
+        )
+        .unwrap();
+        let audio =
+            CudaTensor::from_vec((0..16).map(|i| (i as f32).sin()).collect(), vec![1, 8, 2])
+                .unwrap();
         (prompt, video, audio)
     }
 
@@ -229,8 +277,15 @@ mod tests {
         let key = cache_key("a red fox", b"tokenizer", 1024, kind, &g, &c);
         assert_eq!(key.len(), 64);
         // Pinned: a changed key format silently orphans every cache on disk.
-        assert_eq!(key, "b944238de5c5d7fd7b54990f15928a65e4930ef0da2b4a78241a1035c7d9d27c");
-        assert_eq!(key, cache_key("  a red fox\n", b"tokenizer", 1024, kind, &g, &c), "the prompt is stripped, as the pipeline strips it");
+        assert_eq!(
+            key,
+            "b944238de5c5d7fd7b54990f15928a65e4930ef0da2b4a78241a1035c7d9d27c"
+        );
+        assert_eq!(
+            key,
+            cache_key("  a red fox\n", b"tokenizer", 1024, kind, &g, &c),
+            "the prompt is stripped, as the pipeline strips it"
+        );
         for other in [
             cache_key("a red fox.", b"tokenizer", 1024, kind, &g, &c),
             cache_key("a red fox", b"tokenizer2", 1024, kind, &g, &c),
@@ -255,7 +310,10 @@ mod tests {
         assert_eq!(&*hit.audio.host_cow().unwrap(), &*audio.host_cow().unwrap());
         assert!(cache.load("another-key", &prompt).is_none());
         // No .part files are left behind.
-        let names: Vec<_> = std::fs::read_dir(cache.path("k").parent().unwrap()).unwrap().map(|e| e.unwrap().file_name()).collect();
+        let names: Vec<_> = std::fs::read_dir(cache.path("k").parent().unwrap())
+            .unwrap()
+            .map(|e| e.unwrap().file_name())
+            .collect();
         assert_eq!(names.len(), 1, "{names:?}");
     }
 
@@ -278,27 +336,46 @@ mod tests {
         let whole = std::fs::read(cache.path("k")).unwrap();
         for cut in [0, 7, 40, whole.len() / 2, whole.len() - 1] {
             std::fs::write(cache.path("k"), &whole[..cut]).unwrap();
-            assert!(cache.load("k", &prompt).is_none(), "{cut} of {} bytes", whole.len());
+            assert!(
+                cache.load("k", &prompt).is_none(),
+                "{cut} of {} bytes",
+                whole.len()
+            );
         }
         let mut flipped = whole.clone();
         flipped[whole.len() / 2] ^= 1;
         std::fs::write(cache.path("k"), &flipped).unwrap();
         assert!(cache.load("k", &prompt).is_none(), "one flipped bit");
         std::fs::write(cache.path("k"), &whole).unwrap();
-        assert!(cache.load("k", &prompt).is_some(), "the intact entry still hits");
+        assert!(
+            cache.load("k", &prompt).is_some(),
+            "the intact entry still hits"
+        );
     }
 
     #[test]
     fn a_checkpoint_is_identified_by_its_files_without_being_parsed() {
         let dir = scratch("ident");
-        std::fs::write(dir.join("model-00001-of-00002.safetensors"), vec![7u8; 3000]).unwrap();
+        std::fs::write(
+            dir.join("model-00001-of-00002.safetensors"),
+            vec![7u8; 3000],
+        )
+        .unwrap();
         std::fs::write(dir.join("model-00002-of-00002.safetensors"), vec![9u8; 100]).unwrap();
-        std::fs::write(dir.join("diffusion_pytorch_model-00001-of-00012.safetensors"), vec![1u8; 50]).unwrap();
+        std::fs::write(
+            dir.join("diffusion_pytorch_model-00001-of-00012.safetensors"),
+            vec![1u8; 50],
+        )
+        .unwrap();
         std::fs::write(dir.join("config.json"), b"{}").unwrap();
         let id = weights_identity(&dir, Some("model-")).unwrap();
         assert_eq!(id, weights_identity(&dir, Some("model-")).unwrap());
         // The stale duplicate set is outside the prefix; touching it changes nothing.
-        std::fs::write(dir.join("diffusion_pytorch_model-00001-of-00012.safetensors"), vec![2u8; 60]).unwrap();
+        std::fs::write(
+            dir.join("diffusion_pytorch_model-00001-of-00012.safetensors"),
+            vec![2u8; 60],
+        )
+        .unwrap();
         assert_eq!(id, weights_identity(&dir, Some("model-")).unwrap());
         assert_ne!(id, weights_identity(&dir, None).unwrap());
         // Same size, different bytes: a fine-tune with the same layout.

@@ -73,7 +73,8 @@ impl DreamXPipeline {
     }
 
     pub fn load_dit(&mut self) -> Result<()> {
-        let map = WeightMap::open(&self.root.join("transformer")).map_err(|e| msg(e.to_string()))?;
+        let map =
+            WeightMap::open(&self.root.join("transformer")).map_err(|e| msg(e.to_string()))?;
         self.dit = Some(WanTransformer3D::load(self.cfg.wan.clone(), &map)?);
         Ok(())
     }

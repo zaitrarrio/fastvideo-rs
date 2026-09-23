@@ -37,10 +37,7 @@ impl CosmosSchedule {
         }
         // Append terminal for Euler (duplicate min → zero-ish step).
         sigmas.push(sigma_min);
-        let timesteps: Vec<f64> = sigmas[..n]
-            .iter()
-            .map(|s| s / (s + 1.0) * 1000.0)
-            .collect();
+        let timesteps: Vec<f64> = sigmas[..n].iter().map(|s| s / (s + 1.0) * 1000.0).collect();
         Self {
             sigmas,
             timesteps,
@@ -66,7 +63,12 @@ impl CosmosSchedule {
     }
 
     /// Euler: `x_{i+1} = x_i + (σ_{i+1} - σ_i) * d`.
-    pub fn step_euler(&self, sample: &[f32], derivative: &[f32], step: usize) -> Result<Vec<f32>, String> {
+    pub fn step_euler(
+        &self,
+        sample: &[f32],
+        derivative: &[f32],
+        step: usize,
+    ) -> Result<Vec<f32>, String> {
         if sample.len() != derivative.len() {
             return Err(format!(
                 "cosmos step: sample {} vs deriv {}",
@@ -75,7 +77,10 @@ impl CosmosSchedule {
             ));
         }
         if step + 1 >= self.sigmas.len() {
-            return Err(format!("cosmos step {step} past sigmas {}", self.sigmas.len()));
+            return Err(format!(
+                "cosmos step {step} past sigmas {}",
+                self.sigmas.len()
+            ));
         }
         let ds = (self.sigmas[step + 1] - self.sigmas[step]) as f32;
         Ok(sample

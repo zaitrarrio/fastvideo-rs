@@ -2,9 +2,7 @@
 
 use std::path::{Path, PathBuf};
 
-use fastvideo_models::cosmos::{
-    CosmosPreset, CosmosSchedule, CosmosTransformerConfig,
-};
+use fastvideo_models::cosmos::{CosmosPreset, CosmosSchedule, CosmosTransformerConfig};
 use fastvideo_models::wan::WanVaeConfig;
 use rand::SeedableRng;
 use rand_distr::{Distribution, StandardNormal};
@@ -105,7 +103,8 @@ impl CosmosPipeline {
     }
 
     pub fn load_dit(&mut self) -> Result<()> {
-        let map = WeightMap::open(&self.root.join("transformer")).map_err(|e| msg(e.to_string()))?;
+        let map =
+            WeightMap::open(&self.root.join("transformer")).map_err(|e| msg(e.to_string()))?;
         self.dit = Some(CosmosTransformer::load(self.dit_cfg.clone(), &map)?);
         Ok(())
     }
@@ -158,9 +157,7 @@ impl CosmosPipeline {
         })?;
         let video = load_rgb_frame(path, request.height, request.width)?;
         // Single cond frame → 1 latent frame with Wan temporal factor 4.
-        let encoded = vae
-            .encode_video(&video)
-            .map_err(|e| msg(e.to_string()))?;
+        let encoded = vae.encode_video(&video).map_err(|e| msg(e.to_string()))?;
         let encoded = vae
             .normalize_latents(&encoded)
             .map_err(|e| msg(e.to_string()))?;
@@ -324,8 +321,17 @@ impl CosmosPipeline {
             )?;
 
             let pred_pos = dit.forward(&lat, &text_pos, &frame_ts, fps)?;
-            let mut denoised =
-                self.edm_denoise(&sample, &pred_pos, &cond_latents, &cond_mask, c_skip, c_out, n, spatial, c)?;
+            let mut denoised = self.edm_denoise(
+                &sample,
+                &pred_pos,
+                &cond_latents,
+                &cond_mask,
+                c_skip,
+                c_out,
+                n,
+                spatial,
+                c,
+            )?;
 
             if let Some(neg) = text_neg.as_ref() {
                 let pred_neg = dit.forward(&lat, neg, &frame_ts, fps)?;

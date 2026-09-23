@@ -98,8 +98,10 @@ impl Report {
 
     /// Attach arbitrary context (config, timings, device info) to the report.
     pub fn set(&mut self, key: &str, value: impl Serialize) {
-        self.extra
-            .insert(key.to_string(), serde_json::to_value(value).unwrap_or(Value::Null));
+        self.extra.insert(
+            key.to_string(),
+            serde_json::to_value(value).unwrap_or(Value::Null),
+        );
     }
 
     /// Record a check; return `Err` (fail-fast) when it did not pass.
@@ -214,5 +216,7 @@ pub fn fastvideo_env() -> Map<String, Value> {
         .filter(|(k, _)| k.starts_with("FASTVIDEO_"))
         .collect();
     vars.sort();
-    vars.into_iter().map(|(k, v)| (k, Value::String(v))).collect()
+    vars.into_iter()
+        .map(|(k, v)| (k, Value::String(v)))
+        .collect()
 }

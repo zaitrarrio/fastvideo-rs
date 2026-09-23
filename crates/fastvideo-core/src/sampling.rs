@@ -462,7 +462,9 @@ pub fn pipeline_defaults(def: &WanModelDefinition) -> PipelineDefaults {
             boundary_ratio: None,
             rcm_sigma_max: None,
         },
-        "WanT2V720PConfig" | "WanI2V720PConfig" | "Wan2_2_TI2V_5B_Config"
+        "WanT2V720PConfig"
+        | "WanI2V720PConfig"
+        | "Wan2_2_TI2V_5B_Config"
         | "SelfForcingWanT2V480PConfig" => PipelineDefaults {
             flow_shift: 5.0,
             dmd_steps: None,

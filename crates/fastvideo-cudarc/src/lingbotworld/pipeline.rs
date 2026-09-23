@@ -35,11 +35,7 @@ pub struct LingBotWorldRequest {
 }
 
 impl LingBotWorldRequest {
-    pub fn for_preset(
-        preset: LingBotWorldPreset,
-        prompt: impl Into<String>,
-        seed: u64,
-    ) -> Self {
+    pub fn for_preset(preset: LingBotWorldPreset, prompt: impl Into<String>, seed: u64) -> Self {
         Self {
             prompt: prompt.into(),
             seed,
@@ -74,7 +70,8 @@ impl LingBotWorldPipeline {
     }
 
     pub fn load_dit(&mut self) -> Result<()> {
-        let map = WeightMap::open(&self.root.join("transformer")).map_err(|e| msg(e.to_string()))?;
+        let map =
+            WeightMap::open(&self.root.join("transformer")).map_err(|e| msg(e.to_string()))?;
         self.dit = Some(WanTransformer3D::load(self.cfg.wan.clone(), &map)?);
         Ok(())
     }
@@ -122,8 +119,7 @@ impl LingBotWorldPipeline {
         let spatial = lt * lh * lw;
         let n = c * spatial;
 
-        let mut sched =
-            FlowMatchEulerDiscreteScheduler::new(1000, request.preset.flow_shift());
+        let mut sched = FlowMatchEulerDiscreteScheduler::new(1000, request.preset.flow_shift());
         sched.set_timesteps(request.num_steps);
         let timesteps = sched.inference_timesteps().to_vec();
         let sigmas = sched.inference_sigmas().to_vec();

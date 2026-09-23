@@ -70,7 +70,9 @@ impl CausalConv {
         let mut x = x.clone();
         if self.spatial_pad > 0 {
             let p = self.spatial_pad;
-            x = x.pad(3, p, p, PadMode::Reflect)?.pad(4, p, p, PadMode::Reflect)?;
+            x = x
+                .pad(3, p, p, PadMode::Reflect)?
+                .pad(4, p, p, PadMode::Reflect)?;
         }
         if self.temporal_pad > 0 {
             // Causal: replicate first frame (Diffusers LTX) — use zeros pad for
@@ -111,8 +113,22 @@ impl Resnet {
             None
         };
         Ok(Self {
-            conv1: CausalConv::load(map, &format!("{prefix}.conv1"), cin, cout, [3, 3, 3], [1, 1, 1])?,
-            conv2: CausalConv::load(map, &format!("{prefix}.conv2"), cout, cout, [3, 3, 3], [1, 1, 1])?,
+            conv1: CausalConv::load(
+                map,
+                &format!("{prefix}.conv1"),
+                cin,
+                cout,
+                [3, 3, 3],
+                [1, 1, 1],
+            )?,
+            conv2: CausalConv::load(
+                map,
+                &format!("{prefix}.conv2"),
+                cout,
+                cout,
+                [3, 3, 3],
+                [1, 1, 1],
+            )?,
             ones: {
                 let mut t = CudaTensor::ones(&[cout]);
                 t.pin_device()?;
@@ -149,7 +165,12 @@ struct Downsampler3d {
 }
 
 impl Downsampler3d {
-    fn try_load(map: &WeightMap, prefix: &str, in_ch: usize, out_ch: usize) -> Result<Option<Self>> {
+    fn try_load(
+        map: &WeightMap,
+        prefix: &str,
+        in_ch: usize,
+        out_ch: usize,
+    ) -> Result<Option<Self>> {
         // Nested: `{prefix}.conv.conv.weight` (Downsampler wraps CausalConv).
         let nested = format!("{prefix}.conv.conv.weight");
         let flat = format!("{prefix}.conv.weight");
@@ -426,9 +447,7 @@ impl VideoEncoder {
             .take_while(|i| {
                 map.contains(&format!(
                     "encoder.down_blocks.{i}.resnets.0.conv1.conv.weight"
-                )) || map.contains(&format!(
-                    "encoder.down_blocks.{i}.resnets.0.conv1.weight"
-                ))
+                )) || map.contains(&format!("encoder.down_blocks.{i}.resnets.0.conv1.weight"))
             })
             .count();
         let mut down_blocks = Vec::with_capacity(n_down);
@@ -437,9 +456,7 @@ impl VideoEncoder {
                 .take_while(|r| {
                     map.contains(&format!(
                         "encoder.down_blocks.{i}.resnets.{r}.conv1.conv.weight"
-                    )) || map.contains(&format!(
-                        "encoder.down_blocks.{i}.resnets.{r}.conv1.weight"
-                    ))
+                    )) || map.contains(&format!("encoder.down_blocks.{i}.resnets.{r}.conv1.weight"))
                 })
                 .count()
                 .max(1);
@@ -613,8 +630,7 @@ impl VideoEncoder {
             let std = self.latents_std.get(ch).copied().unwrap_or(1.0).max(1e-6);
             for i in 0..(f * h * w) {
                 let v = host[ch * f * h * w + i];
-                lat[ch * f * h * w + i] =
-                    (v - mean) / std * self.cfg.scaling_factor as f32;
+                lat[ch * f * h * w + i] = (v - mean) / std * self.cfg.scaling_factor as f32;
             }
         }
         CudaTensor::from_vec(lat, vec![1, c, f, h, w]).map_err(Into::into)
@@ -690,8 +706,7 @@ impl VideoEncoder {
                     let v = feat[(src_c * fh + y0.min(fh - 1)) * fw + x0.min(fw - 1)];
                     let mean = self.latents_mean.get(ch).copied().unwrap_or(0.0);
                     let std = self.latents_std.get(ch).copied().unwrap_or(1.0).max(1e-6);
-                    lat[(ch * lh + y) * lw + x] =
-                        (v - mean) / std * self.cfg.scaling_factor as f32;
+                    lat[(ch * lh + y) * lw + x] = (v - mean) / std * self.cfg.scaling_factor as f32;
                 }
             }
         }

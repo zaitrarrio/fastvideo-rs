@@ -4,7 +4,8 @@
 pub const PROMPT_CROP_START: usize = 140;
 
 /// FastVideo `PROMPT_TEMPLATE` for LingBot-Video T2V (Qwen chat turns).
-pub const PROMPT_TEMPLATE: &str = "<|im_start|>system\nGiven a user input that may include a text prompt alone, \
+pub const PROMPT_TEMPLATE: &str =
+    "<|im_start|>system\nGiven a user input that may include a text prompt alone, \
 a text prompt with an image reference, or a text prompt with a video reference \
 or a video reference alone, generate an \"Enhanced prompt\" that provides detailed \
 visual descriptions suitable for video generation. Evaluate the level of detail \
@@ -153,8 +154,8 @@ pub fn tokenize_lingbot_prompt(
     max_length: usize,
 ) -> Result<Vec<u32>, String> {
     let path = root.join("tokenizer").join("tokenizer.json");
-    let tokenizer = tokenizers::Tokenizer::from_file(&path)
-        .map_err(|e| format!("{}: {e}", path.display()))?;
+    let tokenizer =
+        tokenizers::Tokenizer::from_file(&path).map_err(|e| format!("{}: {e}", path.display()))?;
     let body = PROMPT_TEMPLATE.replace("{}", prompt);
     let encoding = tokenizer
         .encode(body.as_str(), true)

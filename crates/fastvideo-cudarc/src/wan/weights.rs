@@ -130,7 +130,9 @@ impl WeightMap {
     pub fn get_f32(&self, key: &str) -> Result<(Vec<usize>, Vec<f32>)> {
         let key = self.resolved(key);
         if let Some(lazy) = &self.lazy {
-            return lazy.to_f32(&key).map_err(|e| TensorError::Message(e.to_string()));
+            return lazy
+                .to_f32(&key)
+                .map_err(|e| TensorError::Message(e.to_string()));
         }
         let t = self.require(&key)?;
         let values = t
@@ -143,7 +145,9 @@ impl WeightMap {
     pub fn get_bf16_bytes(&self, key: &str) -> Result<(Vec<usize>, Vec<u8>)> {
         let key = self.resolved(key);
         if let Some(lazy) = &self.lazy {
-            let (shape, bytes) = lazy.to_bf16(&key).map_err(|e| TensorError::Message(e.to_string()))?;
+            let (shape, bytes) = lazy
+                .to_bf16(&key)
+                .map_err(|e| TensorError::Message(e.to_string()))?;
             return Ok((shape, bytes.into_owned()));
         }
         let t = self.require(&key)?;
@@ -176,7 +180,9 @@ impl WeightMap {
     pub fn get_raw(&self, key: &str) -> Result<(Vec<usize>, Vec<u8>)> {
         let key = self.resolved(key);
         if let Some(lazy) = &self.lazy {
-            let view = lazy.view(&key).map_err(|e| TensorError::Message(e.to_string()))?;
+            let view = lazy
+                .view(&key)
+                .map_err(|e| TensorError::Message(e.to_string()))?;
             return Ok((view.shape.to_vec(), view.bytes.to_vec()));
         }
         let t = self.require(&key)?;
@@ -192,9 +198,13 @@ impl WeightMap {
     /// so a checkpoint loads to identical device bits either way.
     #[cfg(feature = "cuda")]
     pub fn lazy_bf16(&self, key: &str) -> Result<Option<(Vec<usize>, Vec<half::bf16>)>> {
-        let Some(lazy) = &self.lazy else { return Ok(None) };
+        let Some(lazy) = &self.lazy else {
+            return Ok(None);
+        };
         let key = self.resolved(key);
-        let view = lazy.view(&key).map_err(|e| TensorError::Message(e.to_string()))?;
+        let view = lazy
+            .view(&key)
+            .map_err(|e| TensorError::Message(e.to_string()))?;
         let mut values = vec![half::bf16::ZERO; view.numel()];
         fill_bf16(lazy, &key, &mut values)?;
         Ok(Some((view.shape.to_vec(), values)))
@@ -210,25 +220,37 @@ impl WeightMap {
 pub(crate) fn fill_bf16(lazy: &LazyStore, key: &str, out: &mut [half::bf16]) -> Result<()> {
     use fastvideo_loader::LazyDType;
     use rayon::prelude::*;
-    let view = lazy.view(key).map_err(|e| TensorError::Message(e.to_string()))?;
+    let view = lazy
+        .view(key)
+        .map_err(|e| TensorError::Message(e.to_string()))?;
     if view.numel() != out.len() {
-        return Err(TensorError::Message(format!("key {key}: {} elements into a buffer of {}", view.numel(), out.len())));
+        return Err(TensorError::Message(format!(
+            "key {key}: {} elements into a buffer of {}",
+            view.numel(),
+            out.len()
+        )));
     }
     // Chunked so a 130M-element tensor is a few hundred tasks, not one per element.
     const CHUNK: usize = 1 << 18;
     if *view.dtype == LazyDType::BF16 {
-        out.par_chunks_mut(CHUNK).zip(view.bytes.par_chunks(2 * CHUNK)).for_each(|(o, b)| {
-            for (o, c) in o.iter_mut().zip(b.chunks_exact(2)) {
-                *o = half::bf16::from_bits(u16::from_le_bytes([c[0], c[1]]));
-            }
-        });
+        out.par_chunks_mut(CHUNK)
+            .zip(view.bytes.par_chunks(2 * CHUNK))
+            .for_each(|(o, b)| {
+                for (o, c) in o.iter_mut().zip(b.chunks_exact(2)) {
+                    *o = half::bf16::from_bits(u16::from_le_bytes([c[0], c[1]]));
+                }
+            });
     } else {
-        let (_, f) = lazy.to_f32(key).map_err(|e| TensorError::Message(e.to_string()))?;
-        out.par_chunks_mut(CHUNK).zip(f.par_chunks(CHUNK)).for_each(|(o, f)| {
-            for (o, &v) in o.iter_mut().zip(f) {
-                *o = half::bf16::from_f32(v);
-            }
-        });
+        let (_, f) = lazy
+            .to_f32(key)
+            .map_err(|e| TensorError::Message(e.to_string()))?;
+        out.par_chunks_mut(CHUNK)
+            .zip(f.par_chunks(CHUNK))
+            .for_each(|(o, f)| {
+                for (o, &v) in o.iter_mut().zip(f) {
+                    *o = half::bf16::from_f32(v);
+                }
+            });
     }
     Ok(())
 }
@@ -276,8 +298,12 @@ mod tests {
     fn fill_bf16_copies_bf16_and_rounds_the_rest() {
         use fastvideo_loader::{LazyDType, SafetensorsWriter, TensorSpec};
         let n = (1usize << 18) + 5;
-        let f: Vec<f32> = (0..n).map(|i| ((i as f32) * 0.37).sin() * 10f32.powi((i % 9) as i32 - 4)).collect();
-        let mut bits: Vec<u16> = (0..n).map(|i| (i as u32).wrapping_mul(40_503) as u16).collect();
+        let f: Vec<f32> = (0..n)
+            .map(|i| ((i as f32) * 0.37).sin() * 10f32.powi((i % 9) as i32 - 4))
+            .collect();
+        let mut bits: Vec<u16> = (0..n)
+            .map(|i| (i as u32).wrapping_mul(40_503) as u16)
+            .collect();
         bits[0] = 0x7fc1; // a NaN payload
         bits[1] = 0x8000; // -0
         let h: Vec<half::f16> = f.iter().map(|&v| half::f16::from_f32(v)).collect();
@@ -291,9 +317,26 @@ mod tests {
             TensorSpec::new("h", LazyDType::F16, vec![n]),
         ];
         let mut w = SafetensorsWriter::create(&path, &specs, &[]).unwrap();
-        w.write("b", &bits.iter().flat_map(|v| v.to_le_bytes()).collect::<Vec<u8>>()).unwrap();
-        w.write("f", &f.iter().flat_map(|v| v.to_le_bytes()).collect::<Vec<u8>>()).unwrap();
-        w.write("h", &h.iter().flat_map(|v| v.to_bits().to_le_bytes()).collect::<Vec<u8>>()).unwrap();
+        w.write(
+            "b",
+            &bits
+                .iter()
+                .flat_map(|v| v.to_le_bytes())
+                .collect::<Vec<u8>>(),
+        )
+        .unwrap();
+        w.write(
+            "f",
+            &f.iter().flat_map(|v| v.to_le_bytes()).collect::<Vec<u8>>(),
+        )
+        .unwrap();
+        w.write(
+            "h",
+            &h.iter()
+                .flat_map(|v| v.to_bits().to_le_bytes())
+                .collect::<Vec<u8>>(),
+        )
+        .unwrap();
         w.finish().unwrap();
         let lazy = LazyStore::open_files(std::slice::from_ref(&path)).unwrap();
 
@@ -301,11 +344,20 @@ mod tests {
         fill_bf16(&lazy, "b", &mut out).unwrap();
         assert!(out.iter().zip(&bits).all(|(o, b)| o.to_bits() == *b));
         fill_bf16(&lazy, "f", &mut out).unwrap();
-        assert!(out.iter().zip(&f).all(|(o, v)| o.to_bits() == half::bf16::from_f32(*v).to_bits()));
+        assert!(out
+            .iter()
+            .zip(&f)
+            .all(|(o, v)| o.to_bits() == half::bf16::from_f32(*v).to_bits()));
         fill_bf16(&lazy, "h", &mut out).unwrap();
-        assert!(out.iter().zip(&h).all(|(o, v)| o.to_bits() == half::bf16::from_f32(v.to_f32()).to_bits()));
+        assert!(out
+            .iter()
+            .zip(&h)
+            .all(|(o, v)| o.to_bits() == half::bf16::from_f32(v.to_f32()).to_bits()));
 
-        assert!(fill_bf16(&lazy, "b", &mut out[..n - 1]).is_err(), "a short buffer must be refused");
+        assert!(
+            fill_bf16(&lazy, "b", &mut out[..n - 1]).is_err(),
+            "a short buffer must be refused"
+        );
         assert!(fill_bf16(&lazy, "absent", &mut out).is_err());
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -335,7 +387,10 @@ mod tests {
             .iter()
             .flat_map(|v| half::bf16::from_f32(*v).to_bits().to_le_bytes())
             .collect();
-        let b: Vec<u8> = [10.0f32, 20.0].iter().flat_map(|v| v.to_le_bytes()).collect();
+        let b: Vec<u8> = [10.0f32, 20.0]
+            .iter()
+            .flat_map(|v| v.to_le_bytes())
+            .collect();
         let header = format!(
             r#"{{"proj.weight":{{"dtype":"BF16","shape":[2,3],"data_offsets":[0,{}]}},"proj.bias":{{"dtype":"F32","shape":[2],"data_offsets":[{},{}]}}}}"#,
             w.len(),
@@ -352,7 +407,10 @@ mod tests {
         let map = WeightMap::open(&dir).unwrap();
         assert!(map.has_tensor("proj.weight") && !map.has_tensor("proj.nope"));
         assert_eq!(map.shape("proj.weight"), Some(vec![2, 3]));
-        assert!(cuda_tensor_shaped(&map, "proj.weight", &[3, 2]).is_err(), "shape must be checked");
+        assert!(
+            cuda_tensor_shaped(&map, "proj.weight", &[3, 2]).is_err(),
+            "shape must be checked"
+        );
         let lin = crate::wan::nn::Linear::load(&map, "proj", 3, 2, true).unwrap();
         let x = CudaTensor::from_vec(vec![1.0, 1.0, 1.0], vec![1, 3]).unwrap();
         let y = lin.forward(&x).unwrap();
@@ -379,14 +437,21 @@ mod tests {
         )
         .unwrap();
         w.write("blocks.0.attn.to_q.weight", &codes).unwrap();
-        w.write("blocks.0.attn.to_q.weight.scales", &scales).unwrap();
+        w.write("blocks.0.attn.to_q.weight.scales", &scales)
+            .unwrap();
         w.finish().unwrap();
-        let map = WeightMap::open_files(&[path]).unwrap().with_mlx_h3_aliases();
+        let map = WeightMap::open_files(&[path])
+            .unwrap()
+            .with_mlx_h3_aliases();
         assert!(map.has_tensor("transformer_blocks.0.attn.to_q.weight"));
         assert!(map.has_tensor("transformer_blocks.0.attn.to_q.weight.scales"));
-        let (shape, raw) = map.get_raw("transformer_blocks.0.attn.to_q.weight").unwrap();
+        let (shape, raw) = map
+            .get_raw("transformer_blocks.0.attn.to_q.weight")
+            .unwrap();
         assert_eq!((shape, raw), (vec![2, 2], codes));
-        let (_, s) = map.get_f32("transformer_blocks.0.attn.to_q.weight.scales").unwrap();
+        let (_, s) = map
+            .get_f32("transformer_blocks.0.attn.to_q.weight.scales")
+            .unwrap();
         assert_eq!(s, vec![0.5]);
         let _ = std::fs::remove_dir_all(&dir);
     }

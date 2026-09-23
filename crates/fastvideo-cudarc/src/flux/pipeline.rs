@@ -65,7 +65,8 @@ impl FluxPipeline {
     }
 
     pub fn load_dit(&mut self) -> Result<()> {
-        let map = WeightMap::open(&self.root.join("transformer")).map_err(|e| msg(e.to_string()))?;
+        let map =
+            WeightMap::open(&self.root.join("transformer")).map_err(|e| msg(e.to_string()))?;
         self.dit = Some(FluxTransformer::load(self.cfg.dit.clone(), &map)?);
         Ok(())
     }
@@ -107,8 +108,13 @@ impl FluxPipeline {
         // FLUX.1: T5-XXL in `text_encoder_2` / `tokenizer_2`; CLIP-L is pooled separately.
         let te = self.root.join("text_encoder_2");
         crate::text_encode::zeros_or_encode(allow_zeros, &[1, 16, dim], &te, || {
-            let emb =
-                crate::text_encode::encode_t5_xxl(&self.root, "text_encoder_2", "tokenizer_2", prompt, 512)?;
+            let emb = crate::text_encode::encode_t5_xxl(
+                &self.root,
+                "text_encoder_2",
+                "tokenizer_2",
+                prompt,
+                512,
+            )?;
             if emb.shape.get(2).copied() != Some(dim) {
                 return crate::text_encode::broadcast_to_dim(&emb, dim);
             }
@@ -117,8 +123,14 @@ impl FluxPipeline {
     }
 
     pub fn generate(&self, request: &FluxRequest, out_path: &Path) -> Result<()> {
-        let dit = self.dit.as_ref().ok_or_else(|| msg("FLUX.1: call load_dit()"))?;
-        let vae = self.vae.as_ref().ok_or_else(|| msg("FLUX.1: call load_vae() or load_vae_stub()"))?;
+        let dit = self
+            .dit
+            .as_ref()
+            .ok_or_else(|| msg("FLUX.1: call load_dit()"))?;
+        let vae = self
+            .vae
+            .as_ref()
+            .ok_or_else(|| msg("FLUX.1: call load_vae() or load_vae_stub()"))?;
         let text = self.encode_text(&request.prompt)?;
         // Tiny path: operate directly in packed/DiT channel space at 8×8.
         let (ph, pw, c) = if self.cfg.dit.num_layers <= 2 {
@@ -153,8 +165,16 @@ impl FluxPipeline {
         };
         let mut unpacked = vec![0f32; vae_c * vh * vw];
         let pack = (c / vae_c).max(1);
-        for y in 0..vh.min(if self.cfg.dit.num_layers <= 2 { ph } else { ph * 2 }) {
-            for x in 0..vw.min(if self.cfg.dit.num_layers <= 2 { pw } else { pw * 2 }) {
+        for y in 0..vh.min(if self.cfg.dit.num_layers <= 2 {
+            ph
+        } else {
+            ph * 2
+        }) {
+            for x in 0..vw.min(if self.cfg.dit.num_layers <= 2 {
+                pw
+            } else {
+                pw * 2
+            }) {
                 let (py, px) = if self.cfg.dit.num_layers <= 2 {
                     (y, x)
                 } else {

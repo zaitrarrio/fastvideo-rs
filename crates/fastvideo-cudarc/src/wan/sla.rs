@@ -366,7 +366,11 @@ fn softmax_row(x: &[f32], out: &mut [f32]) {
 }
 
 /// Optional `proj_l` under an attention prefix; `None` when absent.
-pub fn load_proj_l(map: &super::weights::WeightMap, prefix: &str, head_dim: usize) -> Result<Option<Linear>> {
+pub fn load_proj_l(
+    map: &super::weights::WeightMap,
+    prefix: &str,
+    head_dim: usize,
+) -> Result<Option<Linear>> {
     let key = |name: &str| super::weights::join_key(prefix, name);
     let candidates = [
         key("proj_l"),

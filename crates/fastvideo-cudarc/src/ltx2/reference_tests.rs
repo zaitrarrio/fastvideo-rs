@@ -13,7 +13,10 @@
 
 use std::path::PathBuf;
 
-use fastvideo_models::ltx2::config::{Ltx2AudioVaeConfig, Ltx2ConnectorsConfig, Ltx2TransformerConfig, Ltx2VideoVaeConfig, Ltx2VocoderConfig};
+use fastvideo_models::ltx2::config::{
+    Ltx2AudioVaeConfig, Ltx2ConnectorsConfig, Ltx2TransformerConfig, Ltx2VideoVaeConfig,
+    Ltx2VocoderConfig,
+};
 use fastvideo_models::ltx2::{Ltx2RopeTables, ScalarDivision};
 
 use crate::wan::tensor::CudaTensor;
@@ -27,8 +30,11 @@ use super::vae::VideoDecoder;
 use super::vocoder::Vocoder;
 
 fn fixture(name: &str) -> WeightMap {
-    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src/ltx2/fixtures").join(name);
-    WeightMap::open_files(std::slice::from_ref(&path)).unwrap_or_else(|e| panic!("{}: {e}", path.display()))
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("src/ltx2/fixtures")
+        .join(name);
+    WeightMap::open_files(std::slice::from_ref(&path))
+        .unwrap_or_else(|e| panic!("{}: {e}", path.display()))
 }
 
 fn tensor(map: &WeightMap, key: &str) -> CudaTensor {
@@ -39,7 +45,12 @@ fn tensor(map: &WeightMap, key: &str) -> CudaTensor {
 /// Relative L2 and the worst element, with the shape checked first.
 fn assert_matches(what: &str, got: &CudaTensor, map: &WeightMap, key: &str, max_rel: f64) {
     let (shape, want) = map.get_f32(key).unwrap_or_else(|e| panic!("{key}: {e}"));
-    assert_eq!(got.numel(), want.len(), "{what}: ours {:?} vs reference {shape:?}", got.shape);
+    assert_eq!(
+        got.numel(),
+        want.len(),
+        "{what}: ours {:?} vs reference {shape:?}",
+        got.shape
+    );
     let got = got.host_cow().expect("host");
     let (mut err, mut norm, mut worst) = (0f64, 0f64, (0usize, 0f32, 0f32));
     for (i, (a, b)) in got.iter().zip(&want).enumerate() {
@@ -51,7 +62,13 @@ fn assert_matches(what: &str, got: &CudaTensor, map: &WeightMap, key: &str, max_
         }
     }
     let rel = (err / norm.max(1e-30)).sqrt();
-    assert!(rel <= max_rel, "{what}: rel L2 {rel:.3e} > {max_rel:.0e}; worst at {}: ours {} vs reference {}", worst.0, worst.1, worst.2);
+    assert!(
+        rel <= max_rel,
+        "{what}: rel L2 {rel:.3e} > {max_rel:.0e}; worst at {}: ours {} vs reference {}",
+        worst.0,
+        worst.1,
+        worst.2
+    );
 }
 
 #[test]
@@ -72,22 +89,31 @@ fn dit_matches_diffusers_on_a_tiny_config() {
         ..Ltx2TransformerConfig::ltx2_19b()
     };
     let map = fixture("dit_tiny.st");
-    let model = Ltx2Transformer::load(&map, &Keys::transformer(Layout::Diffusers), &cfg).expect("load");
+    let model =
+        Ltx2Transformer::load(&map, &Keys::transformer(Layout::Diffusers), &cfg).expect("load");
     // The fixture was made on the CPU, where torch divides rather than
     // multiplying by a reciprocal.
     let tables = Ltx2RopeTables::with_division(&cfg, [3, 2, 3], 5, 24.0, ScalarDivision::Exact);
-    let cos = CudaTensor::from_vec(tables.video.cos.clone(), vec![tables.video.cos.len()]).expect("cos");
-    let sin = CudaTensor::from_vec(tables.video.sin.clone(), vec![tables.video.sin.len()]).expect("sin");
+    let cos =
+        CudaTensor::from_vec(tables.video.cos.clone(), vec![tables.video.cos.len()]).expect("cos");
+    let sin =
+        CudaTensor::from_vec(tables.video.sin.clone(), vec![tables.video.sin.len()]).expect("sin");
     assert_matches("video rope cos", &cos, &map, "ref.rope.video.cos", 1e-6);
     assert_matches("video rope sin", &sin, &map, "ref.rope.video.sin", 1e-6);
 
     let ropes = Ropes::upload(&tables).expect("ropes");
-    let text = model.project_text(&tensor(&map, "ref.ctx_video"), &tensor(&map, "ref.ctx_audio")).expect("text");
+    let text = model
+        .project_text(
+            &tensor(&map, "ref.ctx_video"),
+            &tensor(&map, "ref.ctx_audio"),
+        )
+        .expect("text");
     let mut taps = Vec::new();
-    let mut observe = |i: usize, v: &CudaTensor, a: &CudaTensor| -> crate::wan::tensor::Result<()> {
-        taps.push((i, v.clone(), a.clone()));
-        Ok(())
-    };
+    let mut observe =
+        |i: usize, v: &CudaTensor, a: &CudaTensor| -> crate::wan::tensor::Result<()> {
+            taps.push((i, v.clone(), a.clone()));
+            Ok(())
+        };
     // Every sub-layer tap the oracle's hooks produce, under the oracle's names.
     let mut probed = Vec::new();
     let mut probe = |name: &str, t: &CudaTensor| -> crate::wan::tensor::Result<()> {
@@ -95,7 +121,15 @@ fn dit_matches_diffusers_on_a_tiny_config() {
         Ok(())
     };
     let (v, a) = model
-        .forward_probed(&tensor(&map, "ref.video_in"), &tensor(&map, "ref.audio_in"), &text, 725.0, &ropes, Some(&mut observe), Some(&mut probe))
+        .forward_probed(
+            &tensor(&map, "ref.video_in"),
+            &tensor(&map, "ref.audio_in"),
+            &text,
+            725.0,
+            &ropes,
+            Some(&mut observe),
+            Some(&mut probe),
+        )
         .expect("forward");
     // 2 blocks x 2 streams x (4 sub-layers x in/out + 3 "after") + 2 heads x 2.
     assert_eq!(probed.len(), 2 * 2 * 11 + 4);
@@ -103,8 +137,20 @@ fn dit_matches_diffusers_on_a_tiny_config() {
         assert_matches(name, t, &map, &format!("ref.{name}"), 5e-5);
     }
     for (i, tv, ta) in &taps {
-        assert_matches(&format!("block {i} video"), tv, &map, &format!("ref.block{i}.video"), 2e-5);
-        assert_matches(&format!("block {i} audio"), ta, &map, &format!("ref.block{i}.audio"), 2e-5);
+        assert_matches(
+            &format!("block {i} video"),
+            tv,
+            &map,
+            &format!("ref.block{i}.video"),
+            2e-5,
+        );
+        assert_matches(
+            &format!("block {i} audio"),
+            ta,
+            &map,
+            &format!("ref.block{i}.audio"),
+            2e-5,
+        );
     }
     assert_eq!(taps.len(), 2);
     assert_matches("video velocity", &v, &map, "ref.video_out", 5e-5);
@@ -128,11 +174,17 @@ fn connectors_match_diffusers_on_a_tiny_config() {
         ..Ltx2ConnectorsConfig::ltx2_19b()
     };
     let map = fixture("connectors_tiny.st");
-    let model = TextConnectors::load(&map, &Keys::connectors(Layout::Diffusers), &cfg).expect("load");
+    let model =
+        TextConnectors::load(&map, &Keys::connectors(Layout::Diffusers), &cfg).expect("load");
     // Three real tokens, left-padded to eight by the reference.
     let (shape, states) = map.get_f32("ref.hidden_states").expect("states");
     assert_eq!(shape, vec![3, 8, 3]);
-    let out = model.forward(&HiddenStack::from_interleaved(&states, 3, 8, 3).expect("stack"), 8).expect("forward");
+    let out = model
+        .forward(
+            &HiddenStack::from_interleaved(&states, 3, 8, 3).expect("stack"),
+            8,
+        )
+        .expect("forward");
     assert_matches("video context", &out.video, &map, "ref.video", 2e-5);
     assert_matches("audio context", &out.audio, &map, "ref.audio", 2e-5);
 }
@@ -149,7 +201,13 @@ fn video_vae_matches_diffusers_on_a_tiny_config() {
     let map = fixture("vae_tiny.st");
     let dec = VideoDecoder::load(&map, &cfg).expect("load");
     let z = tensor(&map, "ref.latent");
-    assert_matches("decoded video", &dec.decode(&z).expect("decode"), &map, "ref.video", 5e-5);
+    assert_matches(
+        "decoded video",
+        &dec.decode(&z).expect("decode"),
+        &map,
+        "ref.video",
+        5e-5,
+    );
     // And streamed in the smallest chunks: the same video.
     let mut pieces = Vec::new();
     dec.decode_streaming_chunked(&z, 1, &mut |_, f| {
@@ -158,16 +216,32 @@ fn video_vae_matches_diffusers_on_a_tiny_config() {
     })
     .expect("streamed decode");
     assert!(pieces.len() > 1);
-    let all = CudaTensor::cat(&pieces.iter().collect::<Vec<_>>(), 0).expect("cat").permute(&[1, 0, 2, 3]).expect("permute");
+    let all = CudaTensor::cat(&pieces.iter().collect::<Vec<_>>(), 0)
+        .expect("cat")
+        .permute(&[1, 0, 2, 3])
+        .expect("permute");
     assert_matches("streamed video", &all, &map, "ref.video", 5e-5);
 }
 
 #[test]
 fn audio_vae_and_vocoder_match_diffusers_on_tiny_configs() {
-    let cfg = Ltx2AudioVaeConfig { base_channels: 4, num_res_blocks: 1, latent_channels: 2, mel_bins: 8, ..Ltx2AudioVaeConfig::ltx2_19b() };
+    let cfg = Ltx2AudioVaeConfig {
+        base_channels: 4,
+        num_res_blocks: 1,
+        latent_channels: 2,
+        mel_bins: 8,
+        ..Ltx2AudioVaeConfig::ltx2_19b()
+    };
     let map = fixture("audio_vae_tiny.st");
     let dec = AudioDecoder::load(&map, &cfg).expect("load");
-    assert_matches("mel", &dec.decode_packed(&tensor(&map, "ref.latent")).expect("decode"), &map, "ref.mel", 5e-5);
+    assert_matches(
+        "mel",
+        &dec.decode_packed(&tensor(&map, "ref.latent"))
+            .expect("decode"),
+        &map,
+        "ref.mel",
+        5e-5,
+    );
 
     let cfg = Ltx2VocoderConfig {
         in_channels: 16,
@@ -178,5 +252,11 @@ fn audio_vae_and_vocoder_match_diffusers_on_tiny_configs() {
     };
     let map = fixture("vocoder_tiny.st");
     let voc = Vocoder::load(&map, &cfg).expect("load");
-    assert_matches("waveform", &voc.forward(&tensor(&map, "ref.mel")).expect("forward"), &map, "ref.wave", 5e-5);
+    assert_matches(
+        "waveform",
+        &voc.forward(&tensor(&map, "ref.mel")).expect("forward"),
+        &map,
+        "ref.wave",
+        5e-5,
+    );
 }

@@ -21,7 +21,13 @@ fn action_to_motion(c: char) -> Option<&'static str> {
     }
 }
 
-fn translation_step(motion: &str, yaw_deg: f32, pitch_deg: f32, value: f32, duration: usize) -> [f32; 3] {
+fn translation_step(
+    motion: &str,
+    yaw_deg: f32,
+    pitch_deg: f32,
+    value: f32,
+    duration: usize,
+) -> [f32; 3] {
     let duration = duration.max(1) as f32;
     match motion {
         "forward" | "backward" => {
@@ -190,7 +196,13 @@ pub fn build_dreamx_camera_condition(
             let Some(motion) = action_to_motion(ch.to_ascii_lowercase()) else {
                 continue;
             };
-            let ts = translation_step(motion, cur_rot[1], cur_rot[0], speed * TRANSLATION_BASE, duration);
+            let ts = translation_step(
+                motion,
+                cur_rot[1],
+                cur_rot[0],
+                speed * TRANSLATION_BASE,
+                duration,
+            );
             let rs = rotation_step(motion, speed * ROTATION_BASE, duration);
             for i in 0..3 {
                 t_step[i] += ts[i];
@@ -238,7 +250,13 @@ pub fn build_dreamx_camera_condition(
         let i0 = src.floor() as usize;
         let i1 = (i0 + 1).min(positions.len() - 1);
         let frac = src - i0 as f32;
-        let (t, r) = lerp_pose(&positions[i0], &rotations[i0], &positions[i1], &rotations[i1], frac);
+        let (t, r) = lerp_pose(
+            &positions[i0],
+            &rotations[i0],
+            &positions[i1],
+            &rotations[i1],
+            frac,
+        );
         latent_pos.push(t);
         latent_rot.push(r);
     }
@@ -300,10 +318,8 @@ fn mat4_mul(a: &[[f32; 4]; 4], b: &[[f32; 4]; 4]) -> [[f32; 4]; 4] {
     let mut out = [[0f32; 4]; 4];
     for i in 0..4 {
         for j in 0..4 {
-            out[i][j] = a[i][0] * b[0][j]
-                + a[i][1] * b[1][j]
-                + a[i][2] * b[2][j]
-                + a[i][3] * b[3][j];
+            out[i][j] =
+                a[i][0] * b[0][j] + a[i][1] * b[1][j] + a[i][2] * b[2][j] + a[i][3] * b[3][j];
         }
     }
     out

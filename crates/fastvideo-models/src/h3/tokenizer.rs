@@ -63,8 +63,10 @@ impl H3Tokenizer {
         // One call, in order: ids are handed out consecutively from the
         // current vocabulary size, exactly as transformers' `add_tokens` does
         // through this same library. Tokens already present keep their id.
-        let tokens: Vec<AddedToken> =
-            H3_ADDED_SPECIAL_TOKENS.iter().map(|t| AddedToken::from(*t, true)).collect();
+        let tokens: Vec<AddedToken> = H3_ADDED_SPECIAL_TOKENS
+            .iter()
+            .map(|t| AddedToken::from(*t, true))
+            .collect();
         inner.add_special_tokens(&tokens);
         let added = H3_ADDED_SPECIAL_TOKENS
             .iter()
@@ -87,12 +89,18 @@ impl H3Tokenizer {
     /// them (`151669..=151675`). False for a `tokenizer.json` with a different
     /// vocabulary, which would address the wrong embedding rows.
     pub fn added_ids_match_reference(&self) -> bool {
-        self.added.iter().zip(H3_FIRST_ADDED_ID..).all(|((_, id), want)| *id == want)
+        self.added
+            .iter()
+            .zip(H3_FIRST_ADDED_ID..)
+            .all(|((_, id), want)| *id == want)
     }
 
     /// Token ids of `prompt`, verbatim: no template, no special tokens.
     pub fn encode(&self, prompt: &str) -> Result<Vec<u32>, String> {
-        let encoding = self.inner.encode(prompt, false).map_err(|e| format!("tokenize: {e}"))?;
+        let encoding = self
+            .inner
+            .encode(prompt, false)
+            .map_err(|e| format!("tokenize: {e}"))?;
         let ids = encoding.get_ids().to_vec();
         if ids.is_empty() {
             return Err("the prompt tokenizes to nothing; H3 needs at least one text row".into());
@@ -104,7 +112,9 @@ impl H3Tokenizer {
             ));
         }
         if let Some(bad) = ids.iter().find(|&&id| id >= H3_VOCAB_ROWS) {
-            return Err(format!("token id {bad} is outside the {H3_VOCAB_ROWS}-row embedding table"));
+            return Err(format!(
+                "token id {bad} is outside the {H3_VOCAB_ROWS}-row embedding table"
+            ));
         }
         Ok(ids)
     }
@@ -136,17 +146,35 @@ mod tests {
     #[test]
     fn the_prompt_is_encoded_without_template_tokens() {
         let t = H3Tokenizer::from_bytes(TINY.as_bytes()).unwrap();
-        assert_eq!(t.encode("a dog says hi").unwrap(), vec![2, 3, 4, 8], "no [CLS] in front");
+        assert_eq!(
+            t.encode("a dog says hi").unwrap(),
+            vec![2, 3, 4, 8],
+            "no [CLS] in front"
+        );
     }
 
     #[test]
     fn dialogue_markers_are_single_tokens_appended_after_the_vocabulary() {
         let t = H3Tokenizer::from_bytes(TINY.as_bytes()).unwrap();
-        let ids: Vec<u32> = t.added_special_token_ids().iter().map(|(_, id)| *id).collect();
-        assert_eq!(ids, (9..16).collect::<Vec<u32>>(), "consecutive, in the listed order");
+        let ids: Vec<u32> = t
+            .added_special_token_ids()
+            .iter()
+            .map(|(_, id)| *id)
+            .collect();
+        assert_eq!(
+            ids,
+            (9..16).collect::<Vec<u32>>(),
+            "consecutive, in the listed order"
+        );
         assert_eq!(t.added_special_token_ids()[1].0, "</d>");
-        assert_eq!(t.encode("a dog says <d>hi</d>").unwrap(), vec![2, 3, 4, 9, 8, 10]);
-        assert!(!t.added_ids_match_reference(), "a toy vocabulary does not end at 151668");
+        assert_eq!(
+            t.encode("a dog says <d>hi</d>").unwrap(),
+            vec![2, 3, 4, 9, 8, 10]
+        );
+        assert!(
+            !t.added_ids_match_reference(),
+            "a toy vocabulary does not end at 151668"
+        );
     }
 
     #[test]

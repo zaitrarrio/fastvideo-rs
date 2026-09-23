@@ -40,11 +40,17 @@ const SINGLE_FILE_ROOT: &str = "model.diffusion_model";
 
 impl Keys {
     pub fn transformer(layout: Layout) -> Self {
-        Self { layout, component: Component::Transformer }
+        Self {
+            layout,
+            component: Component::Transformer,
+        }
     }
 
     pub fn connectors(layout: Layout) -> Self {
-        Self { layout, component: Component::Connectors }
+        Self {
+            layout,
+            component: Component::Connectors,
+        }
     }
 
     /// Guess the layout from what the map holds. A generated map (tests) has no
@@ -73,12 +79,24 @@ impl Keys {
                 (Component::Transformer, "audio_proj_in") => "audio_patchify_proj",
                 (Component::Transformer, "time_embed") => "adaln_single",
                 (Component::Transformer, "audio_time_embed") => "audio_adaln_single",
-                (Component::Transformer, "av_cross_attn_video_scale_shift") => "av_ca_video_scale_shift_adaln_single",
-                (Component::Transformer, "av_cross_attn_audio_scale_shift") => "av_ca_audio_scale_shift_adaln_single",
-                (Component::Transformer, "av_cross_attn_video_a2v_gate") => "av_ca_a2v_gate_adaln_single",
-                (Component::Transformer, "av_cross_attn_audio_v2a_gate") => "av_ca_v2a_gate_adaln_single",
-                (Component::Transformer, "video_a2v_cross_attn_scale_shift_table") => "scale_shift_table_a2v_ca_video",
-                (Component::Transformer, "audio_a2v_cross_attn_scale_shift_table") => "scale_shift_table_a2v_ca_audio",
+                (Component::Transformer, "av_cross_attn_video_scale_shift") => {
+                    "av_ca_video_scale_shift_adaln_single"
+                }
+                (Component::Transformer, "av_cross_attn_audio_scale_shift") => {
+                    "av_ca_audio_scale_shift_adaln_single"
+                }
+                (Component::Transformer, "av_cross_attn_video_a2v_gate") => {
+                    "av_ca_a2v_gate_adaln_single"
+                }
+                (Component::Transformer, "av_cross_attn_audio_v2a_gate") => {
+                    "av_ca_v2a_gate_adaln_single"
+                }
+                (Component::Transformer, "video_a2v_cross_attn_scale_shift_table") => {
+                    "scale_shift_table_a2v_ca_video"
+                }
+                (Component::Transformer, "audio_a2v_cross_attn_scale_shift_table") => {
+                    "scale_shift_table_a2v_ca_audio"
+                }
                 (Component::Connectors, "video_connector") => "video_embeddings_connector",
                 (Component::Connectors, "audio_connector") => "audio_embeddings_connector",
                 (Component::Connectors, "transformer_blocks") => "transformer_1d_blocks",
@@ -92,7 +110,10 @@ impl Keys {
     /// `ltx-2-19b-distilled.safetensors` uses the first (outside the DiT root);
     /// the second is kept for re-exports that nest everything.
     pub(crate) fn text_proj_in_candidates() -> [String; 2] {
-        ["text_embedding_projection.aggregate_embed".to_string(), format!("{SINGLE_FILE_ROOT}.text_embedding_projection.aggregate_embed")]
+        [
+            "text_embedding_projection.aggregate_embed".to_string(),
+            format!("{SINGLE_FILE_ROOT}.text_embedding_projection.aggregate_embed"),
+        ]
     }
 
     /// Module prefix of the connectors' `text_proj_in` (188160 → 3840). In the
@@ -112,7 +133,11 @@ impl Keys {
             .iter()
             .find(|c| map.has_tensor(&format!("{c}.weight")))
             .cloned()
-            .ok_or_else(|| msg(format!("no text projection in the checkpoint; looked for {candidates:?} (+ `.weight`)")))
+            .ok_or_else(|| {
+                msg(format!(
+                    "no text projection in the checkpoint; looked for {candidates:?} (+ `.weight`)"
+                ))
+            })
     }
 }
 
@@ -123,7 +148,10 @@ mod tests {
     #[test]
     fn diffusers_names_pass_through() {
         let k = Keys::transformer(Layout::Diffusers);
-        assert_eq!(k.key("transformer_blocks.3.attn1.norm_q.weight"), "transformer_blocks.3.attn1.norm_q.weight");
+        assert_eq!(
+            k.key("transformer_blocks.3.attn1.norm_q.weight"),
+            "transformer_blocks.3.attn1.norm_q.weight"
+        );
     }
 
     /// The table in docs/ports/ltx2.md §g, read right to left.
@@ -134,21 +162,55 @@ mod tests {
             ("proj_in", "patchify_proj"),
             ("audio_proj_in.bias", "audio_patchify_proj.bias"),
             ("proj_out.weight", "proj_out.weight"),
-            ("time_embed.emb.timestep_embedder.linear_1", "adaln_single.emb.timestep_embedder.linear_1"),
+            (
+                "time_embed.emb.timestep_embedder.linear_1",
+                "adaln_single.emb.timestep_embedder.linear_1",
+            ),
             ("audio_time_embed.linear", "audio_adaln_single.linear"),
-            ("av_cross_attn_video_scale_shift.linear", "av_ca_video_scale_shift_adaln_single.linear"),
-            ("av_cross_attn_audio_scale_shift.linear", "av_ca_audio_scale_shift_adaln_single.linear"),
-            ("av_cross_attn_video_a2v_gate.linear", "av_ca_a2v_gate_adaln_single.linear"),
-            ("av_cross_attn_audio_v2a_gate.linear", "av_ca_v2a_gate_adaln_single.linear"),
-            ("transformer_blocks.7.video_a2v_cross_attn_scale_shift_table", "transformer_blocks.7.scale_shift_table_a2v_ca_video"),
-            ("transformer_blocks.7.audio_a2v_cross_attn_scale_shift_table", "transformer_blocks.7.scale_shift_table_a2v_ca_audio"),
-            ("transformer_blocks.7.audio_scale_shift_table", "transformer_blocks.7.audio_scale_shift_table"),
-            ("transformer_blocks.7.audio_to_video_attn.norm_k.weight", "transformer_blocks.7.audio_to_video_attn.k_norm.weight"),
-            ("transformer_blocks.7.ff.net.0.proj", "transformer_blocks.7.ff.net.0.proj"),
+            (
+                "av_cross_attn_video_scale_shift.linear",
+                "av_ca_video_scale_shift_adaln_single.linear",
+            ),
+            (
+                "av_cross_attn_audio_scale_shift.linear",
+                "av_ca_audio_scale_shift_adaln_single.linear",
+            ),
+            (
+                "av_cross_attn_video_a2v_gate.linear",
+                "av_ca_a2v_gate_adaln_single.linear",
+            ),
+            (
+                "av_cross_attn_audio_v2a_gate.linear",
+                "av_ca_v2a_gate_adaln_single.linear",
+            ),
+            (
+                "transformer_blocks.7.video_a2v_cross_attn_scale_shift_table",
+                "transformer_blocks.7.scale_shift_table_a2v_ca_video",
+            ),
+            (
+                "transformer_blocks.7.audio_a2v_cross_attn_scale_shift_table",
+                "transformer_blocks.7.scale_shift_table_a2v_ca_audio",
+            ),
+            (
+                "transformer_blocks.7.audio_scale_shift_table",
+                "transformer_blocks.7.audio_scale_shift_table",
+            ),
+            (
+                "transformer_blocks.7.audio_to_video_attn.norm_k.weight",
+                "transformer_blocks.7.audio_to_video_attn.k_norm.weight",
+            ),
+            (
+                "transformer_blocks.7.ff.net.0.proj",
+                "transformer_blocks.7.ff.net.0.proj",
+            ),
             ("caption_projection.linear_1", "caption_projection.linear_1"),
         ];
         for (diffusers, original) in cases {
-            assert_eq!(k.key(diffusers), format!("model.diffusion_model.{original}"), "{diffusers}");
+            assert_eq!(
+                k.key(diffusers),
+                format!("model.diffusion_model.{original}"),
+                "{diffusers}"
+            );
         }
     }
 
@@ -159,16 +221,28 @@ mod tests {
             c.key("video_connector.transformer_blocks.1.attn1.norm_q.weight"),
             "model.diffusion_model.video_embeddings_connector.transformer_1d_blocks.1.attn1.q_norm.weight"
         );
-        assert_eq!(c.key("audio_connector.learnable_registers"), "model.diffusion_model.audio_embeddings_connector.learnable_registers");
+        assert_eq!(
+            c.key("audio_connector.learnable_registers"),
+            "model.diffusion_model.audio_embeddings_connector.learnable_registers"
+        );
         let t = Keys::transformer(Layout::SingleFile);
-        assert!(t.key("transformer_blocks.0.attn1.to_q").contains(".transformer_blocks.0."));
+        assert!(t
+            .key("transformer_blocks.0.attn1.to_q")
+            .contains(".transformer_blocks.0."));
     }
 
     #[test]
     fn a_generated_map_reads_as_diffusers() {
         let map = WeightMap::generated(|_, shape| vec![0.0; shape.iter().product()]);
         assert_eq!(Keys::detect(&map), Layout::Diffusers);
-        assert_eq!(Keys::connectors(Layout::Diffusers).text_proj_in(&map).unwrap(), "text_proj_in");
-        assert!(Keys::connectors(Layout::SingleFile).text_proj_in(&map).is_err());
+        assert_eq!(
+            Keys::connectors(Layout::Diffusers)
+                .text_proj_in(&map)
+                .unwrap(),
+            "text_proj_in"
+        );
+        assert!(Keys::connectors(Layout::SingleFile)
+            .text_proj_in(&map)
+            .is_err());
     }
 }

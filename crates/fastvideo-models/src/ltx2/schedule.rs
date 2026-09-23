@@ -24,12 +24,15 @@ pub struct AncestralOpts {
 }
 
 /// Stage 1 (or single-stage) distilled schedule: 8 model evaluations.
-pub const DISTILLED_SIGMA_VALUES: [f64; 8] = [1.0, 0.99375, 0.9875, 0.98125, 0.975, 0.909375, 0.725, 0.421875];
+pub const DISTILLED_SIGMA_VALUES: [f64; 8] = [
+    1.0, 0.99375, 0.9875, 0.98125, 0.975, 0.909375, 0.725, 0.421875,
+];
 
 /// Distilled list including the terminal 0 — FastVideo's
 /// `_distilled_subset_sigmas` indexes this 9-long table.
-const DISTILLED_SIGMA_WITH_TERMINAL: [f64; 9] =
-    [1.0, 0.99375, 0.9875, 0.98125, 0.975, 0.909375, 0.725, 0.421875, 0.0];
+const DISTILLED_SIGMA_WITH_TERMINAL: [f64; 9] = [
+    1.0, 0.99375, 0.9875, 0.98125, 0.975, 0.909375, 0.725, 0.421875, 0.0,
+];
 
 /// Stage 2 refinement after the ×2 latent upsampler: the tail of the list
 /// above, 3 evaluations. The stage-1 result is re-noised to the first entry.
@@ -54,7 +57,11 @@ impl Ltx2Schedule {
         let timesteps = sigmas.iter().map(|s| s * n).collect();
         let mut sigmas = sigmas.to_vec();
         sigmas.push(0.0);
-        Self { sigmas, timesteps, num_train_timesteps }
+        Self {
+            sigmas,
+            timesteps,
+            num_train_timesteps,
+        }
     }
 
     /// The 8-step distilled schedule.
@@ -71,7 +78,9 @@ impl Ltx2Schedule {
     pub fn distilled_subset(steps: usize) -> Result<Self, String> {
         let max_steps = DISTILLED_SIGMA_WITH_TERMINAL.len() - 1;
         if steps < 1 || steps > max_steps {
-            return Err(format!("ltx2 distilled subset supports steps in [1, {max_steps}], got {steps}"));
+            return Err(format!(
+                "ltx2 distilled subset supports steps in [1, {max_steps}], got {steps}"
+            ));
         }
         if steps == max_steps {
             return Ok(Self::distilled());
@@ -119,7 +128,13 @@ impl Ltx2Schedule {
     pub fn distilled_stage_2_steps(steps: usize) -> Result<Self, String> {
         match steps {
             3 => Ok(Self::distilled_stage_2()),
-            2 => Ok(Self::from_sigmas(&[STAGE_2_DISTILLED_SIGMA_VALUES[0], STAGE_2_DISTILLED_SIGMA_VALUES[2]], 1000)),
+            2 => Ok(Self::from_sigmas(
+                &[
+                    STAGE_2_DISTILLED_SIGMA_VALUES[0],
+                    STAGE_2_DISTILLED_SIGMA_VALUES[2],
+                ],
+                1000,
+            )),
             n => Err(format!("ltx2 refine supports only 2 or 3 steps, got {n}")),
         }
     }
@@ -127,15 +142,29 @@ impl Ltx2Schedule {
     /// The dev model's schedule for `num_inference_steps` steps at a given
     /// video token count: `linspace(1, 1/N, N)`, exponential time shift by
     /// `mu(seq_len)`, then a stretch so the last sigma equals `shift_terminal`.
-    pub fn dev(cfg: &Ltx2SchedulerConfig, num_inference_steps: usize, video_seq_len: usize) -> Self {
+    pub fn dev(
+        cfg: &Ltx2SchedulerConfig,
+        num_inference_steps: usize,
+        video_seq_len: usize,
+    ) -> Self {
         let n = num_inference_steps.max(1);
         let mut sigmas: Vec<f64> = (0..n)
-            .map(|i| if n == 1 { 1.0 } else { 1.0 + (1.0 / n as f64 - 1.0) * i as f64 / (n - 1) as f64 })
+            .map(|i| {
+                if n == 1 {
+                    1.0
+                } else {
+                    1.0 + (1.0 / n as f64 - 1.0) * i as f64 / (n - 1) as f64
+                }
+            })
             .collect();
         if cfg.use_dynamic_shifting {
             let mu = dynamic_shift_mu(cfg, video_seq_len);
             // exponential: exp(mu) / (exp(mu) + (1/t - 1)); linear: mu / (mu + (1/t - 1)).
-            let k = if cfg.exponential_time_shift { mu.exp() } else { mu };
+            let k = if cfg.exponential_time_shift {
+                mu.exp()
+            } else {
+                mu
+            };
             for s in &mut sigmas {
                 *s = k / (k + (1.0 / *s - 1.0));
             }
@@ -212,7 +241,8 @@ impl Ltx2Schedule {
             assert_eq!(noise.len(), sample.len());
             let alpha_next = 1.0 - sigma_next;
             let alpha_down = 1.0 - sigma_down;
-            let renoise_coeff = (sigma_next * sigma_next - sigma_down * sigma_down * alpha_next * alpha_next / (alpha_down * alpha_down))
+            let renoise_coeff = (sigma_next * sigma_next
+                - sigma_down * sigma_down * alpha_next * alpha_next / (alpha_down * alpha_down))
                 .max(0.0)
                 .sqrt();
             let factor = alpha_next / alpha_down;
@@ -226,7 +256,8 @@ impl Ltx2Schedule {
 /// `calculate_shift`: a line through `(base_seq_len, base_shift)` and
 /// `(max_seq_len, max_shift)`, **not clamped** — 24576 tokens gives mu ≈ 9.38.
 pub fn dynamic_shift_mu(cfg: &Ltx2SchedulerConfig, video_seq_len: usize) -> f64 {
-    let m = (cfg.max_shift - cfg.base_shift) / (cfg.max_image_seq_len as f64 - cfg.base_image_seq_len as f64);
+    let m = (cfg.max_shift - cfg.base_shift)
+        / (cfg.max_image_seq_len as f64 - cfg.base_image_seq_len as f64);
     let b = cfg.base_shift - m * cfg.base_image_seq_len as f64;
     video_seq_len as f64 * m + b
 }
@@ -296,7 +327,10 @@ mod tests {
         // The steps sum to exactly -1: noise all the way to data.
         let total: f64 = (0..8).map(|i| s.dt(i)).sum();
         assert!(close(total, -1.0, 1e-12));
-        assert_eq!(s.timesteps, vec![1000.0, 993.75, 987.5, 981.25, 975.0, 909.375, 725.0, 421.875]);
+        assert_eq!(
+            s.timesteps,
+            vec![1000.0, 993.75, 987.5, 981.25, 975.0, 909.375, 725.0, 421.875]
+        );
     }
 
     #[test]
@@ -314,7 +348,10 @@ mod tests {
         // FastVideo 5-step: indices [0,4,5,6,7,8] → drop terminal for from_sigmas.
         let s5 = Ltx2Schedule::distilled_subset(5).unwrap();
         assert_eq!(s5.num_steps(), 5);
-        assert_eq!(s5.sigmas, vec![1.0, 0.975, 0.909_375, 0.725, 0.421_875, 0.0]);
+        assert_eq!(
+            s5.sigmas,
+            vec![1.0, 0.975, 0.909_375, 0.725, 0.421_875, 0.0]
+        );
         assert!(Ltx2Schedule::distilled_subset(0).is_err());
         assert!(Ltx2Schedule::distilled_subset(9).is_err());
     }
@@ -323,7 +360,10 @@ mod tests {
     fn stage_2_two_step_omits_mid_sigma() {
         let s = Ltx2Schedule::distilled_stage_2_steps(2).unwrap();
         assert_eq!(s.sigmas, vec![0.909_375, 0.421_875, 0.0]);
-        assert_eq!(Ltx2Schedule::distilled_stage_2_steps(3).unwrap(), Ltx2Schedule::distilled_stage_2());
+        assert_eq!(
+            Ltx2Schedule::distilled_stage_2_steps(3).unwrap(),
+            Ltx2Schedule::distilled_stage_2()
+        );
         assert!(Ltx2Schedule::distilled_stage_2_steps(1).is_err());
         assert!(Ltx2Schedule::distilled_stage_2_steps(4).is_err());
     }
@@ -343,9 +383,17 @@ mod tests {
         assert!(close(dynamic_shift_mu(&cfg, 1024), 0.95, 1e-12));
         assert!(close(dynamic_shift_mu(&cfg, 4096), 2.05, 1e-12));
         // 768x512x121 → 6144 tokens: 0.95 + 5120 · 1.1/3072.
-        assert!(close(dynamic_shift_mu(&cfg, 6144), 2.783_333_333_333_333, 1e-12));
+        assert!(close(
+            dynamic_shift_mu(&cfg, 6144),
+            2.783_333_333_333_333,
+            1e-12
+        ));
         // 1536x1024x121 → 24576 tokens, far past max_shift.
-        assert!(close(dynamic_shift_mu(&cfg, 24576), 9.383_333_333_333_333, 1e-12));
+        assert!(close(
+            dynamic_shift_mu(&cfg, 24576),
+            9.383_333_333_333_333,
+            1e-12
+        ));
     }
 
     #[test]
@@ -355,7 +403,13 @@ mod tests {
         //   t = [1, .75, .5, .25] → e/(e + 1/t - 1) = [1, .958856, .885947, .721396]
         //   stretch by (1 - .721396)/0.9 → [1, .867083, .631569, .1]
         let s = Ltx2Schedule::dev(&cfg, 4, 4096);
-        let want = [1.0, 0.867_083_205_818_382_4, 0.631_568_571_232_125_7, 0.1, 0.0];
+        let want = [
+            1.0,
+            0.867_083_205_818_382_4,
+            0.631_568_571_232_125_7,
+            0.1,
+            0.0,
+        ];
         for (got, want) in s.sigmas.iter().zip(want) {
             assert!(close(*got, want, 1e-12), "{got} vs {want}");
         }
@@ -423,12 +477,21 @@ mod tests {
         let _alpha = 1.0 - sigma;
         let alpha_next = 1.0 - sigma_next;
         let alpha_down = 1.0 - sigma_down;
-        let renoise_coeff = (sigma_next * sigma_next - sigma_down * sigma_down * alpha_next * alpha_next / (alpha_down * alpha_down))
+        let renoise_coeff = (sigma_next * sigma_next
+            - sigma_down * sigma_down * alpha_next * alpha_next / (alpha_down * alpha_down))
             .max(0.0)
             .sqrt();
         let noise = 0.5_f32;
         want = (alpha_next / alpha_down) as f32 * want + noise * renoise_coeff as f32;
-        Ltx2Schedule::ancestral_step(&mut x, &[denoised], sigma, sigma_next, eta, 1.0, Some(&[noise]));
+        Ltx2Schedule::ancestral_step(
+            &mut x,
+            &[denoised],
+            sigma,
+            sigma_next,
+            eta,
+            1.0,
+            Some(&[noise]),
+        );
         assert!((x[0] - want).abs() < 1e-5, "{} vs {want}", x[0]);
         let mut terminal = [x0];
         Ltx2Schedule::ancestral_step(&mut terminal, &[denoised], sigma, 0.0, eta, 1.0, None);

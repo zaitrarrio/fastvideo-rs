@@ -55,7 +55,13 @@ pub(crate) fn pinned(data: Vec<f32>, shape: Vec<usize>) -> Result<CudaTensor> {
 pub(crate) fn tanh(x: &CudaTensor) -> Result<CudaTensor> {
     #[cfg(feature = "cuda")]
     if let Some(d) = x.dev()? {
-        return CudaTensor::from_dev_result(crate::wan::ops::tanh_scaled_device(&d, 1.0)?, x.shape.clone());
+        return CudaTensor::from_dev_result(
+            crate::wan::ops::tanh_scaled_device(&d, 1.0)?,
+            x.shape.clone(),
+        );
     }
-    CudaTensor::from_vec(x.host_cow()?.iter().map(|v| v.tanh()).collect(), x.shape.clone())
+    CudaTensor::from_vec(
+        x.host_cow()?.iter().map(|v| v.tanh()).collect(),
+        x.shape.clone(),
+    )
 }

@@ -28,7 +28,10 @@ pub fn bool_flag(name: &str, default: bool) -> bool {
 
 /// Parse a `usize` env flag, falling back to `default` when unset or invalid.
 pub fn f64_flag(name: &str, default: f64) -> f64 {
-    std::env::var(name).ok().and_then(|v| v.trim().parse().ok()).unwrap_or(default)
+    std::env::var(name)
+        .ok()
+        .and_then(|v| v.trim().parse().ok())
+        .unwrap_or(default)
 }
 
 pub fn usize_flag(name: &str, default: usize) -> usize {
@@ -83,7 +86,8 @@ impl CachedBool {
             Self::FALSE => false,
             _ => {
                 let v = compute();
-                self.0.store(if v { Self::TRUE } else { Self::FALSE }, Relaxed);
+                self.0
+                    .store(if v { Self::TRUE } else { Self::FALSE }, Relaxed);
                 v
             }
         }

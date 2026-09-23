@@ -334,6 +334,9 @@ mod tests {
     fn removed_backends_are_rejected() {
         assert!("candle".parse::<BackendKind>().is_err());
         assert!("luminal".parse::<BackendKind>().is_err());
-        assert_eq!("cudarc".parse::<BackendKind>().unwrap(), BackendKind::Cudarc);
+        assert_eq!(
+            "cudarc".parse::<BackendKind>().unwrap(),
+            BackendKind::Cudarc
+        );
     }
 }

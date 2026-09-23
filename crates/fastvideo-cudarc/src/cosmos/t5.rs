@@ -10,11 +10,7 @@ fn t5_layer_norm(xs: &CudaTensor, weight: &CudaTensor, eps: f32) -> Result<CudaT
     xs.rms_norm(weight, eps)
 }
 
-fn relative_position_bucket(
-    seq_len: usize,
-    num_buckets: usize,
-    max_distance: usize,
-) -> Vec<usize> {
+fn relative_position_bucket(seq_len: usize, num_buckets: usize, max_distance: usize) -> Vec<usize> {
     let mut buckets = vec![0usize; seq_len * seq_len];
     let num_buckets = num_buckets as i64;
     let max_exact = num_buckets / 4;
@@ -47,8 +43,15 @@ fn relative_position_bucket(
 
 #[derive(Debug, Clone)]
 enum DenseFf {
-    Relu { wi: Linear, wo: Linear },
-    Gated { wi_0: Linear, wi_1: Linear, wo: Linear },
+    Relu {
+        wi: Linear,
+        wo: Linear,
+    },
+    Gated {
+        wi_0: Linear,
+        wi_1: Linear,
+        wo: Linear,
+    },
 }
 
 impl DenseFf {
@@ -163,10 +166,34 @@ impl SelfAttention {
     fn load(map: &WeightMap, prefix: &str, cfg: &T5Config, has_bias: bool) -> Result<Self> {
         let inner = cfg.num_heads * cfg.d_kv;
         Ok(Self {
-            q: Linear::load(map, &weights::join_key(prefix, "q"), cfg.d_model, inner, false)?,
-            k: Linear::load(map, &weights::join_key(prefix, "k"), cfg.d_model, inner, false)?,
-            v: Linear::load(map, &weights::join_key(prefix, "v"), cfg.d_model, inner, false)?,
-            o: Linear::load(map, &weights::join_key(prefix, "o"), inner, cfg.d_model, false)?,
+            q: Linear::load(
+                map,
+                &weights::join_key(prefix, "q"),
+                cfg.d_model,
+                inner,
+                false,
+            )?,
+            k: Linear::load(
+                map,
+                &weights::join_key(prefix, "k"),
+                cfg.d_model,
+                inner,
+                false,
+            )?,
+            v: Linear::load(
+                map,
+                &weights::join_key(prefix, "v"),
+                cfg.d_model,
+                inner,
+                false,
+            )?,
+            o: Linear::load(
+                map,
+                &weights::join_key(prefix, "o"),
+                inner,
+                cfg.d_model,
+                false,
+            )?,
             relative_bias: if has_bias {
                 Some(weights::cuda_tensor_shaped(
                     map,
@@ -239,10 +266,10 @@ impl SelfAttention {
             scores = CudaTensor::from_vec(host, scores.shape.clone())?;
         }
         let attn = scores.softmax(-1)?;
-        let ctx = attn
-            .matmul(&v)?
-            .transpose(1, 2)?
-            .reshape(vec![b, s, self.n_heads * self.d_kv])?;
+        let ctx =
+            attn.matmul(&v)?
+                .transpose(1, 2)?
+                .reshape(vec![b, s, self.n_heads * self.d_kv])?;
         self.o.forward(&ctx)
     }
 }
@@ -280,7 +307,11 @@ impl EncoderLayer {
                 &weights::join_key(prefix, "layer.0.layer_norm.weight"),
                 &[cfg.d_model],
             )?,
-            ff: DenseFf::load(map, &weights::join_key(prefix, "layer.1.DenseReluDense"), cfg)?,
+            ff: DenseFf::load(
+                map,
+                &weights::join_key(prefix, "layer.1.DenseReluDense"),
+                cfg,
+            )?,
             ln2: weights::cuda_tensor_shaped(
                 map,
                 &weights::join_key(prefix, "layer.1.layer_norm.weight"),

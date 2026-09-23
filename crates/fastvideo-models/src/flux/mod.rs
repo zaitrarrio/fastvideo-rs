@@ -9,12 +9,24 @@ pub enum FluxPreset {
 }
 
 impl FluxPreset {
-    pub fn as_str(self) -> &'static str { "flux1_dev" }
-    pub fn default_height(self) -> usize { 1024 }
-    pub fn default_width(self) -> usize { 1024 }
-    pub fn default_steps(self) -> usize { 28 }
-    pub fn flow_shift(self) -> f64 { 1.0 }
-    pub fn guidance_scale(self) -> f32 { 3.5 }
+    pub fn as_str(self) -> &'static str {
+        "flux1_dev"
+    }
+    pub fn default_height(self) -> usize {
+        1024
+    }
+    pub fn default_width(self) -> usize {
+        1024
+    }
+    pub fn default_steps(self) -> usize {
+        28
+    }
+    pub fn flow_shift(self) -> f64 {
+        1.0
+    }
+    pub fn guidance_scale(self) -> f32 {
+        3.5
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]

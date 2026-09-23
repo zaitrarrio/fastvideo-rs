@@ -8,12 +8,24 @@ pub enum MmAudioPreset {
 }
 
 impl MmAudioPreset {
-    pub fn as_str(self) -> &'static str { "mmaudio_large_44k_v2" }
-    pub fn sample_rate(self) -> u32 { 44_100 }
-    pub fn audio_channels(self) -> usize { 2 }
-    pub fn duration_s(self) -> f32 { 10.0 }
-    pub fn default_steps(self) -> usize { 25 }
-    pub fn hop_length(self) -> usize { 512 }
+    pub fn as_str(self) -> &'static str {
+        "mmaudio_large_44k_v2"
+    }
+    pub fn sample_rate(self) -> u32 {
+        44_100
+    }
+    pub fn audio_channels(self) -> usize {
+        2
+    }
+    pub fn duration_s(self) -> f32 {
+        10.0
+    }
+    pub fn default_steps(self) -> usize {
+        25
+    }
+    pub fn hop_length(self) -> usize {
+        512
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]

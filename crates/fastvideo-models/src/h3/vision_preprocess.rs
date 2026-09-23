@@ -17,7 +17,9 @@ pub fn smart_resize(
     max_pixels: usize,
 ) -> Result<(usize, usize), String> {
     if height == 0 || width == 0 || factor == 0 {
-        return Err(format!("smart_resize: bad size {height}x{width} factor {factor}"));
+        return Err(format!(
+            "smart_resize: bad size {height}x{width} factor {factor}"
+        ));
     }
     if height.max(width) as f64 / height.min(width) as f64 > 200.0 {
         return Err(format!(
@@ -271,7 +273,8 @@ fn resize_rgb_bilinear(rgb: &[u8], sh: usize, sw: usize, dh: usize, dw: usize) -
                 let p = |yy: usize, xx: usize| rgb[(yy * sw + xx) * 3 + c] as f64;
                 let top = p(y0, x0) * (1.0 - fx) + p(y0, x1) * fx;
                 let bot = p(y1, x0) * (1.0 - fx) + p(y1, x1) * fx;
-                out[(y * dw + x) * 3 + c] = (top * (1.0 - fy) + bot * fy).round().clamp(0.0, 255.0) as u8;
+                out[(y * dw + x) * 3 + c] =
+                    (top * (1.0 - fy) + bot * fy).round().clamp(0.0, 255.0) as u8;
             }
         }
     }
@@ -301,9 +304,7 @@ pub fn sample_qwen_video_frames(
     if indices.is_empty() {
         indices.push(0);
     }
-    let mut timestamps: Vec<f64> = (0..indices.len())
-        .map(|i| i as f64 / sample_fps)
-        .collect();
+    let mut timestamps: Vec<f64> = (0..indices.len()).map(|i| i as f64 / sample_fps).collect();
     while timestamps.len() % temporal_patch != 0 {
         timestamps.push(*timestamps.last().unwrap());
         indices.push(*indices.last().unwrap());

@@ -66,7 +66,8 @@ impl LingBotPipeline {
     }
 
     pub fn load_dit(&mut self) -> Result<()> {
-        let map = WeightMap::open(&self.root.join("transformer")).map_err(|e| msg(e.to_string()))?;
+        let map =
+            WeightMap::open(&self.root.join("transformer")).map_err(|e| msg(e.to_string()))?;
         self.dit = Some(LingBotTransformer::load(self.dit_cfg.clone(), &map)?);
         Ok(())
     }
@@ -133,7 +134,9 @@ impl LingBotPipeline {
             msg("LingBot: call load_vae() after placing Diffusers `vae/` under --weights")
         })?;
         let latents = CudaTensor::from_vec(sample, vec![1, c, lt, lh, lw])?;
-        let scaled = vae.scale_latents(&latents).map_err(|e| msg(e.to_string()))?;
+        let scaled = vae
+            .scale_latents(&latents)
+            .map_err(|e| msg(e.to_string()))?;
         let pixels = vae.decode(&scaled).map_err(|e| msg(e.to_string()))?;
         let [_, _, tf, hf, wf] = match pixels.shape[..] {
             [1, 3, tf, hf, wf] => [1, 3, tf, hf, wf],

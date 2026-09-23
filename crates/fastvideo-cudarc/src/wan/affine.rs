@@ -83,13 +83,17 @@ pub fn packed_bytes(cols: usize, bits: u8) -> Result<usize> {
         8 => Ok(cols),
         4 if cols % 2 == 0 => Ok(cols / 2),
         6 if cols % 4 == 0 => Ok(cols * 3 / 4),
-        _ => Err(msg(format!("affine: cols {cols} is not packable at {bits}-bit"))),
+        _ => Err(msg(format!(
+            "affine: cols {cols} is not packable at {bits}-bit"
+        ))),
     }
 }
 
 pub fn n_groups(cols: usize, group: usize) -> Result<usize> {
     if group == 0 || cols % group != 0 {
-        return Err(msg(format!("affine: cols {cols} is not divisible by group {group}")));
+        return Err(msg(format!(
+            "affine: cols {cols} is not divisible by group {group}"
+        )));
     }
     Ok(cols / group)
 }
@@ -157,7 +161,11 @@ fn unpack_code(packed: &[u8], col: usize, bits: u8) -> u8 {
         8 => packed[col],
         4 => {
             let b = packed[col / 2];
-            if col % 2 == 0 { b & 0x0f } else { b >> 4 }
+            if col % 2 == 0 {
+                b & 0x0f
+            } else {
+                b >> 4
+            }
         }
         6 => {
             let w = &packed[(col / 4) * 3..];
@@ -173,7 +181,12 @@ fn unpack_code(packed: &[u8], col: usize, bits: u8) -> u8 {
 }
 
 /// `[rows, cols]` f32 → packed codes and `[rows, cols/group]` scales/biases.
-pub fn quantize(w: &[f32], rows: usize, cols: usize, bits: u8) -> Result<(Vec<u8>, Vec<f32>, Vec<f32>)> {
+pub fn quantize(
+    w: &[f32],
+    rows: usize,
+    cols: usize,
+    bits: u8,
+) -> Result<(Vec<u8>, Vec<f32>, Vec<f32>)> {
     quantize_grouped(w, rows, cols, bits, GROUP)
 }
 
@@ -185,7 +198,10 @@ pub fn quantize_grouped(
     group: usize,
 ) -> Result<(Vec<u8>, Vec<f32>, Vec<f32>)> {
     if w.len() != rows * cols {
-        return Err(msg(format!("affine quantize: {} values for [{rows}, {cols}]", w.len())));
+        return Err(msg(format!(
+            "affine quantize: {} values for [{rows}, {cols}]",
+            w.len()
+        )));
     }
     let ng = n_groups(cols, group)?;
     let pb = packed_bytes(cols, bits)?;
@@ -208,7 +224,13 @@ pub fn quantize_grouped(
 }
 
 /// Packed codes → f32 weight (`scale * q + bias` per group).
-pub fn dequant(codes: &[u8], scales: &[f32], biases: &[f32], cols: usize, bits: u8) -> Result<Vec<f32>> {
+pub fn dequant(
+    codes: &[u8],
+    scales: &[f32],
+    biases: &[f32],
+    cols: usize,
+    bits: u8,
+) -> Result<Vec<f32>> {
     dequant_grouped(codes, scales, biases, cols, bits, GROUP)
 }
 
@@ -222,12 +244,18 @@ pub fn dequant_grouped(
 ) -> Result<Vec<f32>> {
     let pb = packed_bytes(cols, bits)?;
     if pb == 0 || codes.len() % pb != 0 {
-        return Err(msg(format!("affine dequant: {} packed bytes, {pb} per row", codes.len())));
+        return Err(msg(format!(
+            "affine dequant: {} packed bytes, {pb} per row",
+            codes.len()
+        )));
     }
     let rows = codes.len() / pb;
     let ng = n_groups(cols, group)?;
     if scales.len() != rows * ng || biases.len() != rows * ng {
-        return Err(msg(format!("affine dequant: {} scales for {rows}x{ng}", scales.len())));
+        return Err(msg(format!(
+            "affine dequant: {} scales for {rows}x{ng}",
+            scales.len()
+        )));
     }
     let mut out = vec![0f32; rows * cols];
     for r in 0..rows {
@@ -268,25 +296,33 @@ pub fn gemm_grouped(
     group: usize,
 ) -> Result<Vec<f32>> {
     if x.len() != m * k {
-        return Err(msg(format!("affine gemm: {} activations for [{m}, {k}]", x.len())));
+        return Err(msg(format!(
+            "affine gemm: {} activations for [{m}, {k}]",
+            x.len()
+        )));
     }
     let w = dequant_grouped(codes, scales, biases, k, bits, group)?;
     if w.len() != n * k {
-        return Err(msg(format!("affine gemm: dequant [{}, {k}] for n={n}", w.len() / k.max(1))));
+        return Err(msg(format!(
+            "affine gemm: dequant [{}, {k}] for n={n}",
+            w.len() / k.max(1)
+        )));
     }
     use rayon::prelude::*;
     let mut out = vec![0f32; m * n];
-    out.par_chunks_mut(n.max(1)).enumerate().for_each(|(i, row)| {
-        let xi = &x[i * k..(i + 1) * k];
-        for (j, o) in row.iter_mut().enumerate() {
-            let wj = &w[j * k..(j + 1) * k];
-            let mut acc = 0.0f32;
-            for t in 0..k {
-                acc += xi[t] * wj[t];
+    out.par_chunks_mut(n.max(1))
+        .enumerate()
+        .for_each(|(i, row)| {
+            let xi = &x[i * k..(i + 1) * k];
+            for (j, o) in row.iter_mut().enumerate() {
+                let wj = &w[j * k..(j + 1) * k];
+                let mut acc = 0.0f32;
+                for t in 0..k {
+                    acc += xi[t] * wj[t];
+                }
+                *o = acc;
             }
-            *o = acc;
-        }
-    });
+        });
     Ok(out)
 }
 
@@ -322,7 +358,15 @@ impl AffineWeight {
                 GROUP
             )));
         }
-        Ok(Self { rows, cols, bits, group: GROUP, host: Some((codes, scales, biases)), #[cfg(feature = "cuda")] dev: None })
+        Ok(Self {
+            rows,
+            cols,
+            bits,
+            group: GROUP,
+            host: Some((codes, scales, biases)),
+            #[cfg(feature = "cuda")]
+            dev: None,
+        })
     }
 
     #[cfg(feature = "cuda")]
@@ -334,9 +378,18 @@ impl AffineWeight {
             return Ok(());
         };
         let dev = super::device::global_device().ok_or_else(|| msg("no device"))?;
-        let q = dev.stream.memcpy_stod(codes).map_err(|e| msg(e.to_string()))?;
-        let s = dev.stream.memcpy_stod(scales).map_err(|e| msg(e.to_string()))?;
-        let b = dev.stream.memcpy_stod(biases).map_err(|e| msg(e.to_string()))?;
+        let q = dev
+            .stream
+            .memcpy_stod(codes)
+            .map_err(|e| msg(e.to_string()))?;
+        let s = dev
+            .stream
+            .memcpy_stod(scales)
+            .map_err(|e| msg(e.to_string()))?;
+        let b = dev
+            .stream
+            .memcpy_stod(biases)
+            .map_err(|e| msg(e.to_string()))?;
         stats::record_h2d(codes.len() + (scales.len() + biases.len()) * 4);
         self.dev = Some((q, s, b));
         self.host = None;
@@ -344,13 +397,23 @@ impl AffineWeight {
     }
 
     #[cfg(feature = "cuda")]
-    pub fn gemm_device(&self, x: &cudarc::driver::CudaSlice<f32>, m: usize) -> Result<cudarc::driver::CudaSlice<f32>> {
-        let (q, s, b) = self.dev.as_ref().ok_or_else(|| msg("affine weight is not on the device"))?;
+    pub fn gemm_device(
+        &self,
+        x: &cudarc::driver::CudaSlice<f32>,
+        m: usize,
+    ) -> Result<cudarc::driver::CudaSlice<f32>> {
+        let (q, s, b) = self
+            .dev
+            .as_ref()
+            .ok_or_else(|| msg("affine weight is not on the device"))?;
         super::ops::affine_gemm_device(x, q, s, b, m, self.rows, self.cols, self.bits, self.group)
     }
 
     pub fn gemm_host(&self, x: &[f32], m: usize) -> Result<Vec<f32>> {
-        let (q, s, b) = self.host.as_ref().ok_or_else(|| msg("affine linear: device weight but no device tensor to multiply"))?;
+        let (q, s, b) = self
+            .host
+            .as_ref()
+            .ok_or_else(|| msg("affine linear: device weight but no device tensor to multiply"))?;
         gemm(x, q, s, b, m, self.rows, self.cols, self.bits)
     }
 }
@@ -433,12 +496,18 @@ fn load_packed(
     }
     let (_, scales) = map.get_f32(&format!("{key}.scales"))?;
     if scales.len() != out_dim * ng {
-        return Err(msg(format!("key {key}.scales: {} values != {out_dim}x{ng}", scales.len())));
+        return Err(msg(format!(
+            "key {key}.scales: {} values != {out_dim}x{ng}",
+            scales.len()
+        )));
     }
     let biases = if map.has_tensor(&format!("{key}.biases")) {
         let (_, b) = map.get_f32(&format!("{key}.biases"))?;
         if b.len() != out_dim * ng {
-            return Err(msg(format!("key {key}.biases: {} values != {out_dim}x{ng}", b.len())));
+            return Err(msg(format!(
+                "key {key}.biases: {} values != {out_dim}x{ng}",
+                b.len()
+            )));
         }
         b
     } else {
@@ -452,7 +521,9 @@ mod tests {
     use super::*;
 
     fn seeded(n: usize, seed: f32) -> Vec<f32> {
-        (0..n).map(|i| ((i as f32 * 0.37 + seed).sin()) * (1.0 + (i % 11) as f32 * 0.15)).collect()
+        (0..n)
+            .map(|i| ((i as f32 * 0.37 + seed).sin()) * (1.0 + (i % 11) as f32 * 0.15))
+            .collect()
     }
 
     #[test]
@@ -464,12 +535,21 @@ mod tests {
         for r in 0..rows {
             for g in 0..cols / GROUP {
                 let sl = r * cols + g * GROUP;
-                let span = w[sl..sl + GROUP].iter().fold(f32::MAX, |a, v| a.min(*v)).abs()
-                    + w[sl..sl + GROUP].iter().fold(f32::MIN, |a, v| a.max(*v)).abs();
+                let span = w[sl..sl + GROUP]
+                    .iter()
+                    .fold(f32::MAX, |a, v| a.min(*v))
+                    .abs()
+                    + w[sl..sl + GROUP]
+                        .iter()
+                        .fold(f32::MIN, |a, v| a.max(*v))
+                        .abs();
                 let step = (span / 255.0).max(1e-6);
                 for c in 0..GROUP {
                     let (orig, got) = (w[sl + c], d[sl + c]);
-                    assert!((orig - got).abs() <= step + 1e-5, "r{r} g{g} c{c}: {orig} -> {got} step={step}");
+                    assert!(
+                        (orig - got).abs() <= step + 1e-5,
+                        "r{r} g{g} c{c}: {orig} -> {got} step={step}"
+                    );
                 }
             }
         }
@@ -483,10 +563,14 @@ mod tests {
             let (q, s, b) = quantize(&w, 1, cols, bits).unwrap();
             let d = dequant(&q, &s, &b, cols, bits).unwrap();
             let n_bins = ((1u32 << bits) - 1) as f32;
-            let span = w.iter().fold(f32::MAX, |a, v| a.min(*v)).abs() + w.iter().fold(f32::MIN, |a, v| a.max(*v)).abs();
+            let span = w.iter().fold(f32::MAX, |a, v| a.min(*v)).abs()
+                + w.iter().fold(f32::MIN, |a, v| a.max(*v)).abs();
             let step = (span / n_bins).max(1e-6);
             for (i, (orig, got)) in w.iter().zip(&d).enumerate() {
-                assert!((orig - got).abs() <= step + 1e-5, "bits={bits} i={i}: {orig} -> {got}");
+                assert!(
+                    (orig - got).abs() <= step + 1e-5,
+                    "bits={bits} i={i}: {orig} -> {got}"
+                );
             }
         }
     }
@@ -508,7 +592,10 @@ mod tests {
         w[0] = -1.0;
         w[1] = 3.0;
         let (scale, bias, codes) = quantize_group(&w, 8);
-        assert!(scale < 0.0, "scale should flip when |min| <= |max|: {scale}");
+        assert!(
+            scale < 0.0,
+            "scale should flip when |min| <= |max|: {scale}"
+        );
         assert!((bias - 3.0).abs() < 1e-6);
         assert_eq!(codes[1], 0); // far edge sits on code 0 after the flip
         let restored_min = scale * codes[0] as f32 + bias;
@@ -529,7 +616,10 @@ mod tests {
             for j in 0..n {
                 let want: f32 = (0..k).map(|t| x[i * k + t] * wd[j * k + t]).sum();
                 let g = got[i * n + j];
-                assert!((g - want).abs() <= 1e-4 * want.abs().max(1.0), "m{i} n{j}: {g} vs {want}");
+                assert!(
+                    (g - want).abs() <= 1e-4 * want.abs().max(1.0),
+                    "m{i} n{j}: {g} vs {want}"
+                );
             }
         }
     }

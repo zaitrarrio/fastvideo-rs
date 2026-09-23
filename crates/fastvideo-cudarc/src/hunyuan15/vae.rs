@@ -129,7 +129,12 @@ impl Conv1x1 {
 fn rms_l2_channels(x: &CudaTensor, gamma: &CudaTensor) -> Result<CudaTensor> {
     let [n, c, t, h, w] = match x.shape[..] {
         [n, c, t, h, w] => [n, c, t, h, w],
-        _ => return Err(msg(format!("hy15 rms expects [B,C,T,H,W], got {:?}", x.shape))),
+        _ => {
+            return Err(msg(format!(
+                "hy15 rms expects [B,C,T,H,W], got {:?}",
+                x.shape
+            )))
+        }
     };
     if gamma.numel() != c {
         return Err(msg(format!("hy15 rms gamma {:?} for C={c}", gamma.shape)));
@@ -195,7 +200,9 @@ fn dcae_upsample_rearrange(x: &CudaTensor, r1: usize, r2: usize, r3: usize) -> R
     };
     let factor = r1 * r2 * r3;
     if packed % factor != 0 {
-        return Err(msg(format!("dcae upsample: C={packed} not divisible by {factor}")));
+        return Err(msg(format!(
+            "dcae upsample: C={packed} not divisible by {factor}"
+        )));
     }
     let c = packed / factor;
     // view (b,r1,r2,r3,c,f,h,w) → permute (0,4,5,1,6,2,7,3) → (b,c,f*r1,h*r2,w*r3)
@@ -378,7 +385,13 @@ impl Upsample {
         })
     }
 
-    fn load(map: &WeightMap, prefix: &str, in_c: usize, out_c: usize, add_temporal: bool) -> Result<Self> {
+    fn load(
+        map: &WeightMap,
+        prefix: &str,
+        in_c: usize,
+        out_c: usize,
+        add_temporal: bool,
+    ) -> Result<Self> {
         let factor = if add_temporal { 8 } else { 4 };
         Ok(Self {
             conv: CausalConv3d::load(map, prefix, in_c, out_c * factor, 3)?,

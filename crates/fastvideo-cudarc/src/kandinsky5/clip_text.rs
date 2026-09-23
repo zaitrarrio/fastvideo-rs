@@ -88,7 +88,10 @@ struct ClipTextAttention {
 impl ClipTextAttention {
     fn zeros(dim: usize, heads: usize) -> Result<Self> {
         let w = || {
-            Linear::from_tensors(CudaTensor::zeros(&[dim, dim]), Some(CudaTensor::zeros(&[dim])))
+            Linear::from_tensors(
+                CudaTensor::zeros(&[dim, dim]),
+                Some(CudaTensor::zeros(&[dim])),
+            )
         };
         Ok(Self {
             q: w()?,
@@ -252,11 +255,7 @@ impl ClipTextModel {
         }
         Ok(Self {
             token_embed: weights::cuda_tensor_shaped(map, &te, &[cfg.vocab_size, d])?,
-            pos_embed: weights::cuda_tensor_shaped(
-                map,
-                &pe,
-                &[cfg.max_position_embeddings, d],
-            )?,
+            pos_embed: weights::cuda_tensor_shaped(map, &pe, &[cfg.max_position_embeddings, d])?,
             layers,
             final_ln_w: weights::cuda_tensor_shaped(
                 map,
@@ -339,8 +338,7 @@ pub fn encode_hidden_from_dir(
     let cfg = ClipTextConfig::vit_l_14();
     let ids = tokenize_clip_at(root, tokenizer_subdir, prompt, cfg.max_position_embeddings)
         .map_err(msg)?;
-    let map =
-        WeightMap::open(&root.join(text_encoder_subdir)).map_err(|e| msg(e.to_string()))?;
+    let map = WeightMap::open(&root.join(text_encoder_subdir)).map_err(|e| msg(e.to_string()))?;
     let model = ClipTextModel::load(&map, cfg)?;
     model.encode_hidden(&ids)
 }

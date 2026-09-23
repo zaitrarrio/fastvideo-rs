@@ -5,13 +5,26 @@
 //! host contract the packed layout and encoders consume.
 
 use super::config::{
-    resolve_canvas_size, H3_AUDIO_CHANNELS, H3_FRAMES_PER_CHUNK, H3_FPS, H3_LATENTS_PER_CHUNK,
+    resolve_canvas_size, H3_AUDIO_CHANNELS, H3_FPS, H3_FRAMES_PER_CHUNK, H3_LATENTS_PER_CHUNK,
+    H3_MAX_PIXELS,
 };
 
 /// Released short-edge for reference images (`MINIMAX_H3_REFERENCE_IMAGE_SHORT_EDGE`).
 pub const REFERENCE_IMAGE_SHORT_EDGE: usize = 2048;
 /// Canvas multiple (VAE spatial + patch).
 pub const CANVAS_MULTIPLE: usize = 32;
+
+/// How a Ref2VA reference image is fit to a canvas.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ReferenceImageResize {
+    /// Recipe default: 2048 short edge, except Sol-H3 which uses [`Self::Match`].
+    #[default]
+    Auto,
+    /// Official diffusers 2048-short-edge preprocessing (upscales).
+    Diffusers,
+    /// Sol-H3 `match`: never upscale; cap area at the 768×1344 canvas.
+    Match,
+}
 
 pub const MAX_REFERENCE_IMAGES: usize = 9;
 pub const MAX_REFERENCE_VIDEOS: usize = 3;
@@ -55,9 +68,15 @@ pub struct PreparedImageRef {
 }
 
 impl PreparedImageRef {
-    pub fn from_pixel_size(height: usize, width: usize, spatial_compression: usize) -> Result<Self, String> {
+    pub fn from_pixel_size(
+        height: usize,
+        width: usize,
+        spatial_compression: usize,
+    ) -> Result<Self, String> {
         if height == 0 || width == 0 || spatial_compression == 0 {
-            return Err(format!("bad image ref size {width}x{height} / {spatial_compression}"));
+            return Err(format!(
+                "bad image ref size {width}x{height} / {spatial_compression}"
+            ));
         }
         if height % spatial_compression != 0 || width % spatial_compression != 0 {
             return Err(format!(
@@ -173,14 +192,53 @@ pub enum RefSegment {
     Audio { rows: usize },
 }
 
-/// Resolve the released 2048-short-edge reference-image canvas.
-pub fn resolve_reference_image_size(width: usize, height: usize) -> Result<(usize, usize), String> {
+/// `(height, width)` for a reference image under `mode`.
+/// [`ReferenceImageResize::Auto`] is the 2048-short-edge canvas; Sol-H3
+/// resolves `Auto` to [`ReferenceImageResize::Match`] before calling this.
+pub fn resolve_reference_image_size_with(
+    width: usize,
+    height: usize,
+    mode: ReferenceImageResize,
+) -> Result<(usize, usize), String> {
+    match mode {
+        ReferenceImageResize::Auto | ReferenceImageResize::Diffusers => {
+            resolve_reference_image_size(width, height)
+        }
+        ReferenceImageResize::Match => resolve_reference_image_match(width, height),
+    }
+}
+
+/// Sol-H3 `match` profile: scale is `min(1, sqrt(768*1344 / area))`, then snap
+/// to multiples of 32 with Python's half-to-even `round`.
+pub fn resolve_reference_image_match(
+    width: usize,
+    height: usize,
+) -> Result<(usize, usize), String> {
+    check_reference_aspect(width, height)?;
+    let area = (width as f64) * (height as f64);
+    let scale = ((H3_MAX_PIXELS as f64) / area).sqrt().min(1.0);
+    let multiple = CANVAS_MULTIPLE as f64;
+    let snap = |v: f64| ((v / multiple).round_ties_even() * multiple).max(multiple) as usize;
+    Ok((snap(height as f64 * scale), snap(width as f64 * scale)))
+}
+
+fn check_reference_aspect(width: usize, height: usize) -> Result<(), String> {
     if width == 0 || height == 0 {
-        return Err(format!("reference image must have a positive size, got {width}x{height}"));
+        return Err(format!(
+            "reference image must have a positive size, got {width}x{height}"
+        ));
     }
     if width > 4 * height || height > 4 * width {
-        return Err(format!("reference image must be within 1:4 and 4:1, got {width}x{height}"));
+        return Err(format!(
+            "reference image must be within 1:4 and 4:1, got {width}x{height}"
+        ));
     }
+    Ok(())
+}
+
+/// Resolve the released 2048-short-edge reference-image canvas.
+pub fn resolve_reference_image_size(width: usize, height: usize) -> Result<(usize, usize), String> {
+    check_reference_aspect(width, height)?;
     let scale = REFERENCE_IMAGE_SHORT_EDGE as f64 / (width.min(height) as f64);
     let multiple = CANVAS_MULTIPLE as f64;
     let out_h = ((height as f64 * scale / multiple).round() * multiple).max(multiple) as usize;
@@ -207,7 +265,9 @@ pub fn infer_reference_kind(path: &std::path::Path) -> ReferenceKind {
 /// (`trim_reference_num_frames`): `((n - 5) // 17).max(1) * 17 + 5`.
 pub fn trim_reference_num_frames(num_frames: usize) -> Result<usize, String> {
     if num_frames < 1 {
-        return Err(format!("a reference video must have at least one frame, got {num_frames}"));
+        return Err(format!(
+            "a reference video must have at least one frame, got {num_frames}"
+        ));
     }
     let chunks = (num_frames.saturating_sub(H3_LATENTS_PER_CHUNK)) / H3_FRAMES_PER_CHUNK;
     Ok(chunks.max(1) * H3_FRAMES_PER_CHUNK + H3_LATENTS_PER_CHUNK)
@@ -223,9 +283,10 @@ pub fn resample_reference_frames(
     width: usize,
     fps: f64,
 ) -> Result<(Vec<u8>, usize), String> {
-    let frame_bytes = height.checked_mul(width).and_then(|n| n.checked_mul(3)).ok_or_else(|| {
-        format!("reference video frame size overflow {height}x{width}")
-    })?;
+    let frame_bytes = height
+        .checked_mul(width)
+        .and_then(|n| n.checked_mul(3))
+        .ok_or_else(|| format!("reference video frame size overflow {height}x{width}"))?;
     if num_frames == 0 || frames.len() != num_frames * frame_bytes {
         return Err(format!(
             "reference video must be non-empty RGB frames, got {num_frames} frames / {} bytes",
@@ -233,7 +294,9 @@ pub fn resample_reference_frames(
         ));
     }
     if fps <= 0.0 {
-        return Err(format!("a reference video must have a positive frame rate, got {fps}"));
+        return Err(format!(
+            "a reference video must have a positive frame rate, got {fps}"
+        ));
     }
     if (fps - H3_FPS as f64).abs() < 1e-9 {
         return Ok((frames.to_vec(), num_frames));
@@ -245,7 +308,10 @@ pub fn resample_reference_frames(
     }
     let append = ((num_frames as f64) * scale + 0.5).floor() as i64;
     slots.push(append);
-    let out_len: usize = slots.windows(2).map(|w| (w[1] - w[0]).max(0) as usize).sum();
+    let out_len: usize = slots
+        .windows(2)
+        .map(|w| (w[1] - w[0]).max(0) as usize)
+        .sum();
     if out_len == 0 {
         return Err("resampling a reference video produced zero frames".into());
     }
@@ -319,6 +385,21 @@ mod tests {
     fn short_edge_2048_square() {
         let (h, w) = resolve_reference_image_size(1024, 1024).unwrap();
         assert_eq!((h, w), (2048, 2048));
+    }
+
+    #[test]
+    fn match_keeps_the_validated_ref_and_caps_area() {
+        // Sol-H3 validation source is 1104×832. Scale stays 1 (under the cap).
+        // 1104/32 = 34.5, and Python round-half-to-even snaps that to 1088.
+        assert_eq!(
+            resolve_reference_image_match(1104, 832).unwrap(),
+            (832, 1088)
+        );
+        let (h, w) = resolve_reference_image_match(4000, 3000).unwrap();
+        assert!(h % 32 == 0 && w % 32 == 0);
+        assert!(h < 3000 && w < 4000);
+        let area = (h as f64) * (w as f64);
+        assert!(area <= (768 * 1344) as f64 * 1.15);
     }
 
     #[test]

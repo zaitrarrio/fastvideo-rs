@@ -37,14 +37,15 @@ use std::path::{Path, PathBuf};
 use std::time::Instant;
 
 use fastvideo_models::h3::config::{
-    H3AudioVaeConfig, H3Geometry, H3InferenceContract, H3TransformerConfig, H3VideoVaeConfig,
-    H3_AUDIO_CHANNELS, H3_FPS,
+    H3AudioVaeConfig, H3Geometry, H3InferenceContract, H3SigmaSource, H3TransformerConfig,
+    H3VideoVaeConfig, H3_AUDIO_CHANNELS, H3_FPS,
 };
+use fastvideo_models::h3::lora::{is_sol_h3_recipe, sol_h3_forces_ref2va, SolH3AdapterSpec};
 use fastvideo_models::h3::packing::{patchify, H3PackedLayout, KeyframeAnchor};
 use fastvideo_models::h3::reference::{
-    plan_reference_video_canvas, resample_reference_frames, resolve_reference_image_size,
+    plan_reference_video_canvas, resample_reference_frames, resolve_reference_image_size_with,
     trim_reference_num_frames, validate_references, H3ReferenceSpec, PreparedImageRef,
-    PreparedReference, ReferenceKind,
+    PreparedReference, ReferenceImageResize, ReferenceKind,
 };
 use fastvideo_models::h3::schedule::{H3JointSchedule, H3Schedule};
 use rand::{Rng, SeedableRng};
@@ -55,9 +56,11 @@ use super::text::{CacheStatus, HiddenStateEncoder};
 use super::transformer::{AttnMode, DeviceLayout, H3TextRefiner, H3Transformer};
 use super::vae::H3VideoDecoder;
 use super::vae_encoder::H3VideoEncoder;
-use crate::wan::taehv::{TaeArch, TaeHv};
 use super::vsa::H3Vsa;
-use crate::wan::pipeline::{frames_to_rgb8, interleave_audio, write_wav, PipelineError, Result, VideoWriter};
+use crate::wan::pipeline::{
+    frames_to_rgb8, interleave_audio, write_wav, PipelineError, Result, VideoWriter,
+};
+use crate::wan::taehv::{TaeArch, TaeHv};
 use crate::wan::tensor::{CudaTensor, TensorError};
 use crate::wan::weights::WeightMap;
 
@@ -85,7 +88,11 @@ pub struct H3Request {
 
 impl H3Request {
     /// The default 16:9 canvas (768 x 1344) for a whole number of seconds.
-    pub fn seconds(prompt: impl Into<String>, seconds: usize, seed: u64) -> std::result::Result<Self, String> {
+    pub fn seconds(
+        prompt: impl Into<String>,
+        seconds: usize,
+        seed: u64,
+    ) -> std::result::Result<Self, String> {
         let g = H3Geometry::default_16x9(seconds)?;
         Ok(Self {
             prompt: prompt.into(),
@@ -157,7 +164,9 @@ impl TextEncoderChoice {
     /// (`None`: no device, or it would not say). Explicit choices pass through.
     pub fn resolve(self, free_bytes: Option<u64>) -> Self {
         match self {
-            Self::Auto if free_bytes.is_some_and(|f| f >= AUTO_RESIDENT_FREE_BYTES) => Self::ResidentFp8,
+            Self::Auto if free_bytes.is_some_and(|f| f >= AUTO_RESIDENT_FREE_BYTES) => {
+                Self::ResidentFp8
+            }
             Self::Auto => Self::Streamed,
             explicit => explicit,
         }
@@ -193,12 +202,16 @@ pub struct H3PipelineOptions {
     /// decoder is not loaded. `FASTVIDEO_TAEH3_WEIGHTS` is the same switch
     /// when this is `None`.
     pub taeh3: Option<PathBuf>,
-    /// Named DMD recipe (`8step`, `4step-vsa`, `4step-dense`). When unset,
+    /// Named DMD recipe (`8step`, `4step-vsa`, `4step-dense`, `sol-h3`). When unset,
     /// `fastvideo_inference.json` under the weight root (or `transformer/`) is
     /// read if present; otherwise the 8-step V2 contract.
     pub recipe: Option<String>,
     /// Load `transformer_ref/` (Ref2VA) instead of `transformer/` (T2AV/FL2VA).
     pub ref2va: bool,
+    /// Sol-H3 adapter file. When unset, `sol-h3` searches beside the weight root.
+    pub adapter: Option<PathBuf>,
+    /// Ref2VA reference-image fit. `Auto` is 2048 short-edge, and `match` for Sol-H3.
+    pub reference_image_resize: ReferenceImageResize,
 }
 
 /// Resolve the inference contract: explicit recipe name, then
@@ -207,7 +220,10 @@ pub fn resolve_contract(root: &Path, recipe: Option<&str>) -> Result<H3Inference
     if let Some(name) = recipe {
         return H3InferenceContract::named(name).map_err(msg);
     }
-    for rel in ["fastvideo_inference.json", "transformer/fastvideo_inference.json"] {
+    for rel in [
+        "fastvideo_inference.json",
+        "transformer/fastvideo_inference.json",
+    ] {
         let path = root.join(rel);
         if path.is_file() {
             return contract_from_inference_json(&path);
@@ -217,7 +233,8 @@ pub fn resolve_contract(root: &Path, recipe: Option<&str>) -> Result<H3Inference
 }
 
 fn contract_from_inference_json(path: &Path) -> Result<H3InferenceContract> {
-    let text = std::fs::read_to_string(path).map_err(|e| msg(format!("{}: {e}", path.display())))?;
+    let text =
+        std::fs::read_to_string(path).map_err(|e| msg(format!("{}: {e}", path.display())))?;
     let v: serde_json::Value =
         serde_json::from_str(&text).map_err(|e| msg(format!("{}: {e}", path.display())))?;
     let rungs = v
@@ -242,11 +259,19 @@ fn contract_from_inference_json(path: &Path) -> Result<H3InferenceContract> {
         .or_else(|| v.get("audio_scheduler_shift"))
         .and_then(|x| x.as_f64())
         .unwrap_or(3.0);
-    let vsa = v.get("vsa_sparsity").and_then(|x| x.as_f64()).unwrap_or(0.8);
-    let dense = v.get("dense").and_then(|x| x.as_bool()).unwrap_or(vsa <= 0.0);
+    let vsa = v
+        .get("vsa_sparsity")
+        .and_then(|x| x.as_f64())
+        .unwrap_or(0.8);
+    let dense = v
+        .get("dense")
+        .and_then(|x| x.as_bool())
+        .unwrap_or(vsa <= 0.0);
     // Match the published Preview / V2 contracts when the JSON is the usual shape.
     match (rungs.as_slice(), dense) {
-        ([999, 874, 749, 624, 500, 375, 250, 125], false) => Ok(H3InferenceContract::fasth3_8step()),
+        ([999, 874, 749, 624, 500, 375, 250, 125], false) => {
+            Ok(H3InferenceContract::fasth3_8step())
+        }
         ([999, 749, 500, 250], false) => Ok(H3InferenceContract::fasth3_4step_vsa()),
         ([999, 749, 500, 250], true) => Ok(H3InferenceContract::fasth3_4step_dense()),
         _ => Ok(H3InferenceContract {
@@ -255,10 +280,14 @@ fn contract_from_inference_json(path: &Path) -> Result<H3InferenceContract> {
             dmd_denoising_steps: rungs,
             video_scheduler_shift: video_shift,
             audio_scheduler_shift: audio_shift,
-            guidance_scale: v.get("guidance_scale").and_then(|x| x.as_f64()).unwrap_or(1.0),
+            guidance_scale: v
+                .get("guidance_scale")
+                .and_then(|x| x.as_f64())
+                .unwrap_or(1.0),
             vsa_sparsity: vsa,
             vsa_tile_size: 64,
             dense,
+            sigma_source: H3SigmaSource::Dmd,
         }),
     }
 }
@@ -295,21 +324,42 @@ pub struct H3Output {
 /// second, drawn directly in row layout. Torch's CPU sampler is not
 /// reproduced, so a seed names a different (equally valid) sample than it does
 /// upstream; parity runs inject the oracle's noise instead.
-pub fn seeded_noise(cfg: &H3TransformerConfig, geometry: &H3Geometry, seed: u64) -> std::result::Result<(Vec<f32>, Vec<f32>), String> {
+pub fn seeded_noise(
+    cfg: &H3TransformerConfig,
+    geometry: &H3Geometry,
+    seed: u64,
+) -> std::result::Result<(Vec<f32>, Vec<f32>), String> {
     let mut rng = rand::rngs::StdRng::seed_from_u64(seed);
-    let shape = [cfg.in_channels, geometry.latent_frames, geometry.latent_height, geometry.latent_width];
-    let video: Vec<f32> = (0..shape.iter().product::<usize>()).map(|_| rng.sample::<f32, _>(StandardNormal)).collect();
-    let audio: Vec<f32> = (0..geometry.audio_rows() * cfg.audio_in_channels).map(|_| rng.sample::<f32, _>(StandardNormal)).collect();
+    let shape = [
+        cfg.in_channels,
+        geometry.latent_frames,
+        geometry.latent_height,
+        geometry.latent_width,
+    ];
+    let video: Vec<f32> = (0..shape.iter().product::<usize>())
+        .map(|_| rng.sample::<f32, _>(StandardNormal))
+        .collect();
+    let audio: Vec<f32> = (0..geometry.audio_rows() * cfg.audio_in_channels)
+        .map(|_| rng.sample::<f32, _>(StandardNormal))
+        .collect();
     Ok((patchify(&video, shape, cfg.patch_size)?, audio))
 }
 
 /// One Euler step of `MiniMaxH3Scheduler.step` on device rows, in the
 /// reference's order of operations: `x0 = x + sigma_t v`, then
 /// `r x + (1 - r) x0`.
-pub fn scheduler_step(schedule: &H3Schedule, step: usize, sample: &CudaTensor, velocity: &CudaTensor) -> Result<CudaTensor> {
+pub fn scheduler_step(
+    schedule: &H3Schedule,
+    step: usize,
+    sample: &CudaTensor,
+    velocity: &CudaTensor,
+) -> Result<CudaTensor> {
     let c = schedule.step_coeffs(step).map_err(msg)?;
     let denoised = CudaTensor::lincomb(&[(1.0, sample), (c.sigma_from_timestep, velocity)])?;
-    Ok(CudaTensor::lincomb(&[(c.ratio, sample), (1.0 - c.ratio, &denoised)])?)
+    Ok(CudaTensor::lincomb(&[
+        (c.ratio, sample),
+        (1.0 - c.ratio, &denoised),
+    ])?)
 }
 
 /// The 8-forward ladder. `observe(step, video_rows, audio_rows)` sees the
@@ -329,8 +379,17 @@ pub fn denoise(
 ) -> Result<(CudaTensor, CudaTensor)> {
     let (mut video, mut audio) = (video_rows, audio_rows);
     for step in 0..schedule.num_steps() {
-        let (v_video, v_audio) =
-            model.forward(step, &video, &audio, text_refined, layout, mode, None, cond_rows, cond_audio_rows)?;
+        let (v_video, v_audio) = model.forward(
+            step,
+            &video,
+            &audio,
+            text_refined,
+            layout,
+            mode,
+            None,
+            cond_rows,
+            cond_audio_rows,
+        )?;
         video = scheduler_step(&schedule.video, step, &video, &v_video)?;
         audio = scheduler_step(&schedule.audio, step, &audio, &v_audio)?;
         observe(step, &video, &audio)?;
@@ -342,16 +401,28 @@ pub fn denoise(
 /// (channel-major features) to `[1, C, T, H, W]`. The reference's 8-D permute
 /// is past the device permute's rank limit; with the singleton temporal patch
 /// dropped it is rank 6.
-pub fn unpatchify_rows(rows: &CudaTensor, channels: usize, grid: (usize, usize, usize), patch: [usize; 3]) -> std::result::Result<CudaTensor, TensorError> {
+pub fn unpatchify_rows(
+    rows: &CudaTensor,
+    channels: usize,
+    grid: (usize, usize, usize),
+    patch: [usize; 3],
+) -> std::result::Result<CudaTensor, TensorError> {
     let [pt, ph, pw] = patch;
     let (t, h, w) = grid;
     if pt != 1 {
-        return Err(TensorError::Message(format!("unpatchify: temporal patch {pt} is not supported (H3 uses 1)")));
+        return Err(TensorError::Message(format!(
+            "unpatchify: temporal patch {pt} is not supported (H3 uses 1)"
+        )));
     }
     if rows.shape != [t * h * w, channels * ph * pw] {
-        return Err(TensorError::Message(format!("unpatchify: rows {:?} for grid {grid:?}, {channels} channels, patch {patch:?}", rows.shape)));
+        return Err(TensorError::Message(format!(
+            "unpatchify: rows {:?} for grid {grid:?}, {channels} channels, patch {patch:?}",
+            rows.shape
+        )));
     }
-    rows.reshape(vec![t, h, w, channels, ph, pw])?.permute(&[3, 0, 1, 4, 2, 5])?.reshape(vec![1, channels, t, h * ph, w * pw])
+    rows.reshape(vec![t, h, w, channels, ph, pw])?
+        .permute(&[3, 0, 1, 4, 2, 5])?
+        .reshape(vec![1, channels, t, h * ph, w * pw])
 }
 
 /// Seconds spent in [`H3Pipeline::load`], by component.
@@ -375,7 +446,11 @@ fn resolve_taeh3(explicit: Option<&Path>) -> Option<PathBuf> {
         return Some(p.to_path_buf());
     }
     let env = std::env::var("FASTVIDEO_TAEH3_WEIGHTS").unwrap_or_default();
-    if env.is_empty() { None } else { Some(PathBuf::from(env)) }
+    if env.is_empty() {
+        None
+    } else {
+        Some(PathBuf::from(env))
+    }
 }
 
 /// Everything but the text encoder, resident: load once, generate many times.
@@ -397,10 +472,18 @@ impl H3Pipeline {
     /// `root` is the FastH3 snapshot (`transformer/`, `vae/`, `audio_vae/`, and
     /// `tokenizer/` + `text_encoder/` unless `options.text_root` says otherwise).
     pub fn load(root: &Path, options: H3PipelineOptions) -> Result<Self> {
+        let mut options = options;
+        if options.recipe.as_deref().is_some_and(sol_h3_forces_ref2va) {
+            options.ref2va = true;
+        }
+        if options.recipe.as_deref().is_some_and(is_sol_h3_recipe)
+            && options.reference_image_resize == ReferenceImageResize::Auto
+        {
+            options.reference_image_resize = ReferenceImageResize::Match;
+        }
         let contract = resolve_contract(root, options.recipe.as_deref())?;
         let cfg = H3TransformerConfig::fasth3_8step();
         let schedule = H3JointSchedule::from_contract(&contract).map_err(msg)?;
-        let mut options = options;
         if contract.dense {
             options.dense = true;
         }
@@ -416,12 +499,16 @@ impl H3Pipeline {
         let text_encoder: Option<Box<dyn HiddenStateEncoder>> = match options.text_encoder {
             TextEncoderChoice::Recovered8b => {
                 let text_root = options.text_root.as_deref().unwrap_or(root);
-                Some(Box::new(super::recovered_8b::Recovered8bEncoder::load(text_root)?))
+                Some(Box::new(super::recovered_8b::Recovered8bEncoder::load(
+                    text_root,
+                )?))
             }
             other => match other.precision() {
                 Some(precision) => {
                     let text_root = options.text_root.as_deref().unwrap_or(root);
-                    Some(Box::new(super::text::load_resident_encoder(text_root, precision)?))
+                    Some(Box::new(super::text::load_resident_encoder(
+                        text_root, precision,
+                    )?))
                 }
                 None => None,
             },
@@ -467,11 +554,44 @@ impl H3Pipeline {
             contract.vsa_sparsity,
             options.dense
         ));
+        let mut lora = if options.recipe.as_deref().is_some_and(is_sol_h3_recipe) {
+            let spec = if options.ref2va {
+                SolH3AdapterSpec::ref2va()
+            } else {
+                SolH3AdapterSpec::t2v_i2v()
+            };
+            let path = spec
+                .resolve(root, options.adapter.as_deref())
+                .map_err(msg)?;
+            let fuse = super::lora::H3LoraFuse::open(&map, &path, spec.alpha, spec.scale)?;
+            crate::wan::log::info(format_args!(
+                "h3 sol-h3: fuse {} pairs rank={} alpha={} scale={} diffs={} ({})",
+                fuse.pairs_total,
+                fuse.rank,
+                fuse.alpha,
+                fuse.effective_scale(),
+                fuse.diffs_total,
+                path.display()
+            ));
+            Some(fuse)
+        } else {
+            None
+        };
         let timer = Instant::now();
-        let refiner = H3TextRefiner::load(&cfg, &map)?;
+        let refiner = H3TextRefiner::load_with(&cfg, &map, &mut lora)?;
         timed(&mut load_timings.refiner_s, timer);
         let timer = Instant::now();
-        let model = H3Transformer::load_cached(cfg.clone(), &map, &schedule, with_gate, options.adaln_cache.as_deref())?;
+        let model = H3Transformer::load_with(
+            cfg.clone(),
+            &map,
+            &schedule,
+            with_gate,
+            options.adaln_cache.as_deref(),
+            &mut lora,
+        )?;
+        if let Some(fuse) = lora.as_ref() {
+            fuse.finish()?;
+        }
         timed(&mut load_timings.dit_s, timer);
         let timer = Instant::now();
         let video_vae = match resolve_taeh3(options.taeh3.as_deref()) {
@@ -481,13 +601,31 @@ impl H3Pipeline {
                 crate::wan::log::info(format_args!("h3 vae=taeh3 ({})", path.display()));
                 VideoDecoder::Taeh3(tae)
             }
-            None => VideoDecoder::Official(H3VideoDecoder::load(H3VideoVaeConfig::fasth3_8step(), &WeightMap::open(&root.join("vae"))?)?),
+            None => VideoDecoder::Official(H3VideoDecoder::load(
+                H3VideoVaeConfig::fasth3_8step(),
+                &WeightMap::open(&root.join("vae"))?,
+            )?),
         };
         timed(&mut load_timings.video_vae_s, timer);
         let timer = Instant::now();
-        let audio_vae = H3AudioDecoder::load(H3AudioVaeConfig::fasth3_8step(), &WeightMap::open(&root.join("audio_vae"))?)?;
+        let audio_vae = H3AudioDecoder::load(
+            H3AudioVaeConfig::fasth3_8step(),
+            &WeightMap::open(&root.join("audio_vae"))?,
+        )?;
         timed(&mut load_timings.audio_vae_s, timer);
-        Ok(Self { root: root.to_path_buf(), options, cfg, contract, schedule, refiner, model, video_vae, audio_vae, text_encoder, load_timings })
+        Ok(Self {
+            root: root.to_path_buf(),
+            options,
+            cfg,
+            contract,
+            schedule,
+            refiner,
+            model,
+            video_vae,
+            audio_vae,
+            text_encoder,
+            load_timings,
+        })
     }
 
     /// Replace the text encoder (tests, or an encoder built elsewhere). It is
@@ -507,7 +645,9 @@ impl H3Pipeline {
 
     /// `(kind, device bytes)` of the encoder a cache miss will use.
     pub fn text_encoder(&self) -> (&'static str, u64) {
-        self.text_encoder.as_ref().map_or(("streamed", 0), |e| (e.kind(), e.resident_bytes()))
+        self.text_encoder
+            .as_ref()
+            .map_or(("streamed", 0), |e| (e.kind(), e.resident_bytes()))
     }
 
     /// Encode `prompt` with the resident encoder AND by streaming, bypassing
@@ -516,9 +656,12 @@ impl H3Pipeline {
     /// conditioning; this is that number for the prompt at hand. `None` when
     /// the encoder is streamed anyway. Costs one streamed encode (~10 s).
     pub fn text_encoder_drift(&self, prompt: &str) -> Result<Option<(f64, f64)>> {
-        let Some(resident) = &self.text_encoder else { return Ok(None) };
+        let Some(resident) = &self.text_encoder else {
+            return Ok(None);
+        };
         let text_root = self.options.text_root.as_deref().unwrap_or(&self.root);
-        let ours = super::text::encode_prompt_with(text_root, prompt, None, Some(resident.as_ref()))?;
+        let ours =
+            super::text::encode_prompt_with(text_root, prompt, None, Some(resident.as_ref()))?;
         let streamed = super::text::encode_prompt_with(text_root, prompt, None, None)?;
         let (a, b) = (ours.hidden.host_cow()?, streamed.hidden.host_cow()?);
         let (mut err, mut aa, mut bb, mut ab) = (0f64, 0f64, 0f64, 0f64);
@@ -529,7 +672,10 @@ impl H3Pipeline {
             bb += y * y;
             ab += x * y;
         }
-        Ok(Some(((err / bb.max(1e-300)).sqrt(), ab / (aa * bb).sqrt().max(1e-300))))
+        Ok(Some((
+            (err / bb.max(1e-300)).sqrt(),
+            ab / (aa * bb).sqrt().max(1e-300),
+        )))
     }
 
     pub fn options(&self) -> &H3PipelineOptions {
@@ -540,7 +686,8 @@ impl H3Pipeline {
     /// `output.mp4` with the audio muxed in.
     pub fn generate(&self, request: &H3Request, out_dir: &Path) -> Result<H3Output> {
         let cfg = &self.cfg;
-        let geometry = H3Geometry::new(request.height, request.width, request.num_frames).map_err(msg)?;
+        let geometry =
+            H3Geometry::new(request.height, request.width, request.num_frames).map_err(msg)?;
         let mut timings = H3Timings::default();
 
         // --- text: cache, else resident, else ~50 GB streamed one layer at a time ---
@@ -557,12 +704,13 @@ impl H3Pipeline {
                 Some(encoder.as_ref())
             }
             (TextEncoderChoice::Streamed | TextEncoderChoice::Auto, _) => None,
-            (_, None) if matches!(
-                self.options.text_encoder,
-                TextEncoderChoice::ResidentBf16
-                    | TextEncoderChoice::ResidentFp8
-                    | TextEncoderChoice::Recovered8b
-            ) =>
+            (_, None)
+                if matches!(
+                    self.options.text_encoder,
+                    TextEncoderChoice::ResidentBf16
+                        | TextEncoderChoice::ResidentFp8
+                        | TextEncoderChoice::Recovered8b
+                ) =>
             {
                 return Err(msg(format!(
                     "text encoder {:?} was requested but is not loaded",
@@ -573,12 +721,16 @@ impl H3Pipeline {
         };
         // Tokenizer always comes from the DiT snapshot (H3 markers). Recovered
         // 8B weights live under text_root and have no tokenizer of their own.
-        let (tokenizer_root, encoder_root) = if matches!(self.options.text_encoder, TextEncoderChoice::Recovered8b) {
-            (self.root.as_path(), self.options.text_root.as_deref().unwrap_or(&self.root))
-        } else {
-            let r = self.options.text_root.as_deref().unwrap_or(&self.root);
-            (r, r)
-        };
+        let (tokenizer_root, encoder_root) =
+            if matches!(self.options.text_encoder, TextEncoderChoice::Recovered8b) {
+                (
+                    self.root.as_path(),
+                    self.options.text_root.as_deref().unwrap_or(&self.root),
+                )
+            } else {
+                let r = self.options.text_root.as_deref().unwrap_or(&self.root);
+                (r, r)
+            };
         let needs_vl = !request.keyframe_anchors().is_empty() || request.is_ref2va();
         let text = if needs_vl {
             if matches!(self.options.text_encoder, TextEncoderChoice::Recovered8b) {
@@ -615,10 +767,14 @@ impl H3Pipeline {
             ));
         }
         if !request.is_ref2va() && self.options.ref2va {
-            return Err(msg("transformer_ref/ was loaded but the request has no references"));
+            return Err(msg(
+                "transformer_ref/ was loaded but the request has no references",
+            ));
         }
         if request.is_ref2va() && (request.first_image.is_some() || request.last_image.is_some()) {
-            return Err(msg("Ref2VA and FL2VA keyframes cannot be combined in one request"));
+            return Err(msg(
+                "Ref2VA and FL2VA keyframes cannot be combined in one request",
+            ));
         }
         if request.is_ref2va() {
             validate_references(&request.references).map_err(msg)?;
@@ -626,7 +782,14 @@ impl H3Pipeline {
 
         let anchors = request.keyframe_anchors();
         let (mut layout, cond_rows, cond_audio_rows) = if request.is_ref2va() {
-            let encoded = encode_ref2va_conditions(&self.root, cfg, &geometry, &request.references, request.seed)?;
+            let encoded = encode_ref2va_conditions(
+                &self.root,
+                cfg,
+                &geometry,
+                &request.references,
+                request.seed,
+                self.options.reference_image_resize,
+            )?;
             let layout = H3PackedLayout::with_references(
                 text.ids.len(),
                 (
@@ -648,7 +811,8 @@ impl H3Pipeline {
             )
         } else {
             let layout =
-                H3PackedLayout::from_geometry_with_keyframes(&geometry, text.ids.len(), &anchors).map_err(msg)?;
+                H3PackedLayout::from_geometry_with_keyframes(&geometry, text.ids.len(), &anchors)
+                    .map_err(msg)?;
             let rows = encode_fl2va_cond_rows(&self.root, cfg, &geometry, request, &anchors)?;
             (layout, Some(rows), None)
         };
@@ -660,7 +824,9 @@ impl H3Pipeline {
         let force_dense = layout.num_condition_audio_rows > 0;
         let vsa = if self.options.dense || force_dense {
             if force_dense && !self.options.dense {
-                crate::wan::log::info(format_args!("h3 ref2va: dense attention (interleaved condition audio)"));
+                crate::wan::log::info(format_args!(
+                    "h3 ref2va: dense attention (interleaved condition audio)"
+                ));
             }
             None
         } else {
@@ -668,13 +834,26 @@ impl H3Pipeline {
                 sparsity: self.contract.vsa_sparsity,
                 group: crate::wan::envflag::usize_flag("FASTVIDEO_VSA_GROUP", 8).max(1),
             };
-            Some(H3Vsa::new(&layout, cfg.num_attention_heads, cfg.attention_head_dim, vsa_cfg)?)
+            Some(H3Vsa::new(
+                &layout,
+                cfg.num_attention_heads,
+                cfg.attention_head_dim,
+                vsa_cfg,
+            )?)
         };
         let mode = vsa.as_ref().map_or(AttnMode::Dense, AttnMode::Vsa);
         let layout = DeviceLayout::new(cfg, layout)?;
         let (video_noise, audio_noise) = seeded_noise(cfg, &geometry, request.seed).map_err(msg)?;
-        let video_rows = CudaTensor::from_vec(video_noise, vec![geometry.video_rows(), cfg.video_patch_dim()])?.to_device()?;
-        let audio_rows = CudaTensor::from_vec(audio_noise, vec![geometry.audio_rows(), cfg.audio_in_channels])?.to_device()?;
+        let video_rows = CudaTensor::from_vec(
+            video_noise,
+            vec![geometry.video_rows(), cfg.video_patch_dim()],
+        )?
+        .to_device()?;
+        let audio_rows = CudaTensor::from_vec(
+            audio_noise,
+            vec![geometry.audio_rows(), cfg.audio_in_channels],
+        )?
+        .to_device()?;
 
         let timer = Instant::now();
         let mut last = Instant::now();
@@ -693,7 +872,11 @@ impl H3Pipeline {
             &mut |step, _, _| {
                 crate::wan::device::synchronize().map_err(|e| msg(e.to_string()))?;
                 step_s.push(last.elapsed().as_secs_f64());
-                crate::wan::log::info(format_args!("h3 step {}/{steps}: {:.1}s", step + 1, step_s[step]));
+                crate::wan::log::info(format_args!(
+                    "h3 step {}/{steps}: {:.1}s",
+                    step + 1,
+                    step_s[step]
+                ));
                 last = Instant::now();
                 Ok(())
             },
@@ -705,15 +888,30 @@ impl H3Pipeline {
         // --- audio first: the WAV must exist before the muxer starts -------------------
         let timer = Instant::now();
         let sample_rate = self.audio_vae.config().sampling_rate as u32;
-        let wave = self.audio_vae.decode_rows(&audio_rows, H3_AUDIO_CHANNELS)?.host_cow()?.into_owned();
+        let wave = self
+            .audio_vae
+            .decode_rows(&audio_rows, H3_AUDIO_CHANNELS)?
+            .host_cow()?
+            .into_owned();
         let wav = out_dir.join("audio.wav");
-        write_wav(&wav, &interleave_audio(&wave, H3_AUDIO_CHANNELS)?, H3_AUDIO_CHANNELS as u16, sample_rate)?;
+        write_wav(
+            &wav,
+            &interleave_audio(&wave, H3_AUDIO_CHANNELS)?,
+            H3_AUDIO_CHANNELS as u16,
+            sample_rate,
+        )?;
         timings.audio_decode_s = timer.elapsed().as_secs_f64();
 
         // --- video: chunks go to the writer as they decode -------------------------------
-        let latents = unpatchify_rows(&video_rows, cfg.in_channels, geometry.token_grid, cfg.patch_size)?;
+        let latents = unpatchify_rows(
+            &video_rows,
+            cfg.in_channels,
+            geometry.token_grid,
+            cfg.patch_size,
+        )?;
         let timer = Instant::now();
-        let mut writer = VideoWriter::spawn_with_audio(out_dir, H3_FPS as u32, request.mp4, Some(&wav))?;
+        let mut writer =
+            VideoWriter::spawn_with_audio(out_dir, H3_FPS as u32, request.mp4, Some(&wav))?;
         // The sink speaks TensorError; carry the writer's own error out beside it.
         let mut writer_error: Option<PipelineError> = None;
         let mut sink = |offset: usize, frames: &CudaTensor| {
@@ -727,7 +925,9 @@ impl H3Pipeline {
         };
         let decoded = match &self.video_vae {
             VideoDecoder::Official(vae) => vae.decode_streaming(&latents, &mut sink),
-            VideoDecoder::Taeh3(tae) => tae.decode_streaming(&latents, &mut sink).map(|v| v.shape[2]),
+            VideoDecoder::Taeh3(tae) => tae
+                .decode_streaming(&latents, &mut sink)
+                .map(|v| v.shape[2]),
         };
         let frames = match (decoded, writer_error) {
             (_, Some(e)) => return Err(e),
@@ -760,9 +960,12 @@ impl H3Pipeline {
 }
 
 /// Qwen3-VL multimodal text for FL2VA keyframes / Ref2VA ordered refs.
-fn encode_request_multimodal(text_root: &Path, request: &H3Request) -> Result<super::text::TextConditioning> {
-    use fastvideo_models::h3::presentation::PresentationRef;
+fn encode_request_multimodal(
+    text_root: &Path,
+    request: &H3Request,
+) -> Result<super::text::TextConditioning> {
     use super::text::{VisionImage, VisionVideo};
+    use fastvideo_models::h3::presentation::PresentationRef;
 
     if request.is_ref2va() {
         let mut images_owned: Vec<(Vec<u8>, usize, usize)> = Vec::new();
@@ -823,7 +1026,10 @@ fn encode_request_multimodal(text_root: &Path, request: &H3Request) -> Result<su
     }
 
     let mut owned = Vec::new();
-    for path in [&request.first_image, &request.last_image].into_iter().flatten() {
+    for path in [&request.first_image, &request.last_image]
+        .into_iter()
+        .flatten()
+    {
         let img = image::open(path)
             .map_err(|e| msg(format!("open {}: {e}", path.display())))?
             .into_rgb8();
@@ -838,8 +1044,15 @@ fn encode_request_multimodal(text_root: &Path, request: &H3Request) -> Result<su
             width: *w,
         })
         .collect();
-    crate::wan::log::info(format_args!("h3 fl2va: Qwen-VL multimodal ({} images)", images.len()));
-    Ok(super::text::encode_fl2va_multimodal(text_root, &request.prompt, &images)?)
+    crate::wan::log::info(format_args!(
+        "h3 fl2va: Qwen-VL multimodal ({} images)",
+        images.len()
+    ));
+    Ok(super::text::encode_fl2va_multimodal(
+        text_root,
+        &request.prompt,
+        &images,
+    )?)
 }
 
 /// GPU-encode FL2VA keyframe images → patchified cond rows (`[Nc, patch_dim]`).
@@ -856,16 +1069,15 @@ fn encode_fl2va_cond_rows(
     )?;
     let mut parts = Vec::with_capacity(anchors.len());
     for (i, anchor) in anchors.iter().enumerate() {
-        let path = match anchor {
-            KeyframeAnchor::First => request
-                .first_image
-                .as_deref()
-                .ok_or_else(|| msg("FL2VA first keyframe requested but first_image is missing"))?,
-            KeyframeAnchor::Last => request
-                .last_image
-                .as_deref()
-                .ok_or_else(|| msg("FL2VA last keyframe requested but last_image is missing"))?,
-        };
+        let path =
+            match anchor {
+                KeyframeAnchor::First => request.first_image.as_deref().ok_or_else(|| {
+                    msg("FL2VA first keyframe requested but first_image is missing")
+                })?,
+                KeyframeAnchor::Last => request.last_image.as_deref().ok_or_else(|| {
+                    msg("FL2VA last keyframe requested but last_image is missing")
+                })?,
+            };
         crate::wan::log::info(format_args!(
             "h3 fl2va: encode {} ({})",
             anchor.as_str(),
@@ -873,17 +1085,16 @@ fn encode_fl2va_cond_rows(
         ));
         // Noise-aug seed distinct from video/audio noise.
         let seed = request.seed.wrapping_add(17 + i as u64);
-        let z = encoder.encode_keyframe_file(
-            path,
-            request.height,
-            request.width,
-            false,
-            true,
-            seed,
-        )?;
+        let z =
+            encoder.encode_keyframe_file(path, request.height, request.width, false, true, seed)?;
         // z: [1, C, 1, h, w] → patchify one latent frame into DiT rows.
         let host = z.host_cow()?.into_owned();
-        let shape = [cfg.in_channels, 1, geometry.latent_height, geometry.latent_width];
+        let shape = [
+            cfg.in_channels,
+            1,
+            geometry.latent_height,
+            geometry.latent_width,
+        ];
         if host.len() != shape.iter().product::<usize>() {
             return Err(msg(format!(
                 "h3 fl2va: encoded latent len {} != {:?}",
@@ -892,7 +1103,8 @@ fn encode_fl2va_cond_rows(
             )));
         }
         let rows = patchify(&host, shape, cfg.patch_size).map_err(msg)?;
-        let n_rows = geometry.latent_height / cfg.patch_size[1] * geometry.latent_width / cfg.patch_size[2];
+        let n_rows =
+            geometry.latent_height / cfg.patch_size[1] * geometry.latent_width / cfg.patch_size[2];
         parts.push(CudaTensor::from_vec(rows, vec![n_rows, cfg.video_patch_dim()])?.to_device()?);
     }
     if parts.len() == 1 {
@@ -917,6 +1129,7 @@ fn encode_ref2va_conditions(
     geometry: &H3Geometry,
     references: &[H3ReferenceSpec],
     seed: u64,
+    resize: ReferenceImageResize,
 ) -> Result<Ref2VaEncoded> {
     let vae_cfg = H3VideoVaeConfig::fasth3_8step();
     let audio_cfg = H3AudioVaeConfig::fasth3_8step();
@@ -938,7 +1151,11 @@ fn encode_ref2va_conditions(
                     i + 1,
                     spec.path.display()
                 ));
-                let planar = super::media::decode_audio_stereo_f32(&spec.path, sample_rate, max_audio_samples)?;
+                let planar = super::media::decode_audio_stereo_f32(
+                    &spec.path,
+                    sample_rate,
+                    max_audio_samples,
+                )?;
                 let rows = audio_encoder.encode_stereo_planar(&planar)?;
                 let na = rows.shape[0] / H3_AUDIO_CHANNELS;
                 audio_parts.push(rows);
@@ -951,7 +1168,8 @@ fn encode_ref2va_conditions(
                     .map_err(|e| msg(format!("open {}: {e}", spec.path.display())))?
                     .into_rgb8();
                 let (sw, sh) = (img.width() as usize, img.height() as usize);
-                let (out_h, out_w) = resolve_reference_image_size(sw, sh).map_err(msg)?;
+                let (out_h, out_w) =
+                    resolve_reference_image_size_with(sw, sh, resize).map_err(msg)?;
                 let prep = PreparedImageRef::from_pixel_size(out_h, out_w, ratio).map_err(msg)?;
                 crate::wan::log::info(format_args!(
                     "h3 ref2va: encode image {} {}x{} → {}x{} ({})",
@@ -981,7 +1199,9 @@ fn encode_ref2va_conditions(
                 }
                 let rows = patchify(&host, shape, cfg.patch_size).map_err(msg)?;
                 let n_rows = prep.rows_per_frame(cfg.patch_size).map_err(msg)?;
-                video_parts.push(CudaTensor::from_vec(rows, vec![n_rows, cfg.video_patch_dim()])?.to_device()?);
+                video_parts.push(
+                    CudaTensor::from_vec(rows, vec![n_rows, cfg.video_patch_dim()])?.to_device()?,
+                );
                 prepared.push(PreparedReference::Image(prep));
             }
             ReferenceKind::Video => {
@@ -1001,7 +1221,9 @@ fn encode_ref2va_conditions(
                     plan_reference_video_canvas(src_h, src_w, n24, keep).map_err(msg)?;
                 let trimmed_n = trim_reference_num_frames(keep).map_err(msg)?.min(keep);
                 let trimmed = &resampled[..trimmed_n * src_h * src_w * 3];
-                let frames = super::media::resize_rgb_frames(trimmed, trimmed_n, src_h, src_w, out_h, out_w)?;
+                let frames = super::media::resize_rgb_frames(
+                    trimmed, trimmed_n, src_h, src_w, out_h, out_w,
+                )?;
                 crate::wan::log::info(format_args!(
                     "h3 ref2va: encode video {} {} frames @ {:.3}fps → {}x{} / {}f ({})",
                     i + 1,
@@ -1033,12 +1255,19 @@ fn encode_ref2va_conditions(
                     )));
                 }
                 let rows = patchify(&host, shape, cfg.patch_size).map_err(msg)?;
-                let n_rows = (lt / cfg.patch_size[0]) * (lh / cfg.patch_size[1]) * (lw / cfg.patch_size[2]);
-                video_parts.push(CudaTensor::from_vec(rows, vec![n_rows, cfg.video_patch_dim()])?.to_device()?);
+                let n_rows =
+                    (lt / cfg.patch_size[0]) * (lh / cfg.patch_size[1]) * (lw / cfg.patch_size[2]);
+                video_parts.push(
+                    CudaTensor::from_vec(rows, vec![n_rows, cfg.video_patch_dim()])?.to_device()?,
+                );
 
                 let mut num_audio_latents = 0usize;
                 if super::media::probe_has_audio(&spec.path).unwrap_or(false) {
-                    let planar = super::media::decode_audio_stereo_f32(&spec.path, sample_rate, max_audio_samples)?;
+                    let planar = super::media::decode_audio_stereo_f32(
+                        &spec.path,
+                        sample_rate,
+                        max_audio_samples,
+                    )?;
                     let arows = audio_encoder.encode_stereo_planar(&planar)?;
                     num_audio_latents = arows.shape[0] / H3_AUDIO_CHANNELS;
                     audio_parts.push(arows);
@@ -1057,7 +1286,9 @@ fn encode_ref2va_conditions(
         }
     }
     if video_parts.is_empty() {
-        return Err(msg("Ref2VA requires at least one visual (image/video) reference"));
+        return Err(msg(
+            "Ref2VA requires at least one visual (image/video) reference",
+        ));
     }
     let video_rows = if video_parts.len() == 1 {
         video_parts.pop().unwrap()
@@ -1081,7 +1312,12 @@ fn encode_ref2va_conditions(
 }
 
 /// Load, generate one clip, drop everything.
-pub fn generate(root: &Path, options: H3PipelineOptions, request: &H3Request, out_dir: &Path) -> Result<H3Output> {
+pub fn generate(
+    root: &Path,
+    options: H3PipelineOptions,
+    request: &H3Request,
+    out_dir: &Path,
+) -> Result<H3Output> {
     H3Pipeline::load(root, options)?.generate(request, out_dir)
 }
 
@@ -1095,7 +1331,13 @@ mod tests {
         let (c, t, h, w) = (3usize, 2usize, 4usize, 6usize);
         let lat: Vec<f32> = (0..c * t * h * w).map(|v| v as f32).collect();
         let rows = patchify(&lat, [c, t, h, w], [1, 2, 2]).unwrap();
-        let got = unpatchify_rows(&CudaTensor::from_vec(rows.clone(), vec![t * 2 * 3, c * 4]).unwrap(), c, (t, 2, 3), [1, 2, 2]).unwrap();
+        let got = unpatchify_rows(
+            &CudaTensor::from_vec(rows.clone(), vec![t * 2 * 3, c * 4]).unwrap(),
+            c,
+            (t, 2, 3),
+            [1, 2, 2],
+        )
+        .unwrap();
         assert_eq!(got.shape, vec![1, c, t, h, w]);
         assert_eq!(&*got.host_cow().unwrap(), &lat[..]);
         assert_eq!(unpatchify(&rows, [c, t, h, w], [1, 2, 2]).unwrap(), lat);
@@ -1106,8 +1348,15 @@ mod tests {
         let schedule = H3JointSchedule::fasth3_8step();
         let x = vec![0.5f32, -1.25, 2.0];
         let v = vec![1.0f32, 0.25, -0.5];
-        let (xt, vt) = (CudaTensor::from_vec(x.clone(), vec![3, 1]).unwrap(), CudaTensor::from_vec(v.clone(), vec![3, 1]).unwrap());
-        for (sched, step) in [(&schedule.video, 0usize), (&schedule.audio, 4), (&schedule.video, 7)] {
+        let (xt, vt) = (
+            CudaTensor::from_vec(x.clone(), vec![3, 1]).unwrap(),
+            CudaTensor::from_vec(v.clone(), vec![3, 1]).unwrap(),
+        );
+        for (sched, step) in [
+            (&schedule.video, 0usize),
+            (&schedule.audio, 4),
+            (&schedule.video, 7),
+        ] {
             let got = scheduler_step(sched, step, &xt, &vt).unwrap();
             let want = sched.step(step, &x, &v).unwrap();
             for (g, w) in got.host_cow().unwrap().iter().zip(&want) {
@@ -1125,9 +1374,21 @@ mod tests {
         use TextEncoderChoice::*;
         assert_eq!(Auto.resolve(Some(95_000_000_000)), ResidentFp8);
         assert_eq!(Auto.resolve(Some(AUTO_RESIDENT_FREE_BYTES)), ResidentFp8);
-        assert_eq!(Auto.resolve(Some(79_000_000_000)), Streamed, "an 80 GB card streams");
-        assert_eq!(Auto.resolve(None), Streamed, "no device, no resident encoder");
-        assert_eq!(Streamed.resolve(Some(u64::MAX)), Streamed, "an explicit choice is not second-guessed");
+        assert_eq!(
+            Auto.resolve(Some(79_000_000_000)),
+            Streamed,
+            "an 80 GB card streams"
+        );
+        assert_eq!(
+            Auto.resolve(None),
+            Streamed,
+            "no device, no resident encoder"
+        );
+        assert_eq!(
+            Streamed.resolve(Some(u64::MAX)),
+            Streamed,
+            "an explicit choice is not second-guessed"
+        );
         assert_eq!(ResidentFp8.resolve(Some(0)), ResidentFp8);
         for name in ["auto", "streamed", "resident-fp8", "resident-bf16"] {
             assert!(TextEncoderChoice::parse(name).is_ok());
@@ -1141,10 +1402,17 @@ mod tests {
         let g = H3Geometry::default_16x9(5).unwrap();
         let (video, audio) = seeded_noise(&cfg, &g, 7).unwrap();
         assert_eq!((video.len(), audio.len()), (37_296 * 96, 414 * 32));
-        assert_eq!(seeded_noise(&cfg, &g, 7).unwrap().1, audio, "a seed names one sample");
+        assert_eq!(
+            seeded_noise(&cfg, &g, 7).unwrap().1,
+            audio,
+            "a seed names one sample"
+        );
         assert_ne!(seeded_noise(&cfg, &g, 8).unwrap().1, audio);
         let mean = video.iter().map(|&v| f64::from(v)).sum::<f64>() / video.len() as f64;
         let var = video.iter().map(|&v| f64::from(v).powi(2)).sum::<f64>() / video.len() as f64;
-        assert!(mean.abs() < 5e-3 && (var - 1.0).abs() < 5e-3, "N(0, 1): mean {mean} var {var}");
+        assert!(
+            mean.abs() < 5e-3 && (var - 1.0).abs() < 5e-3,
+            "N(0, 1): mean {mean} var {var}"
+        );
     }
 }

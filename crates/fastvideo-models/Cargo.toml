@@ -8,6 +8,7 @@ description = "Wan/LTX/H3 host math: schedulers, packing, architecture configs."
 [dependencies]
 rand.workspace = true
 rand_distr.workspace = true
+rayon.workspace = true
 thiserror = { workspace = true }
 tokenizers.workspace = true
 

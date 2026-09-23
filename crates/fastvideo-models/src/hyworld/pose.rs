@@ -4,7 +4,7 @@
 //! SigLIP vision encode is an external weight hook; this module emits the
 //! `action_in` integer labels + camera tensors the DiT consumes.
 
-use super::trajectory::{generate_camera_trajectory_local, Motion, Mat4};
+use super::trajectory::{generate_camera_trajectory_local, Mat4, Motion};
 
 pub const DEFAULT_FORWARD_SPEED: f32 = 0.08;
 pub const DEFAULT_YAW_SPEED: f32 = 3.0_f32.to_radians();
@@ -110,7 +110,8 @@ fn mul4(a: &Mat4, b: &Mat4) -> Mat4 {
     let mut out = [[0f32; 4]; 4];
     for i in 0..4 {
         for j in 0..4 {
-            out[i][j] = a[i][0] * b[0][j] + a[i][1] * b[1][j] + a[i][2] * b[2][j] + a[i][3] * b[3][j];
+            out[i][j] =
+                a[i][0] * b[0][j] + a[i][1] * b[1][j] + a[i][2] * b[2][j] + a[i][3] * b[3][j];
         }
     }
     out
@@ -201,9 +202,10 @@ pub fn pose_to_input(pose_string: &str, latent_num: usize) -> Result<HyWorldPose
     let move_norm_valid = 0.0001f32;
     for i in 1..latent_num {
         let move_dirs = [relative[i][0][3], relative[i][1][3], relative[i][2][3]];
-        let move_norm =
-            (move_dirs[0] * move_dirs[0] + move_dirs[1] * move_dirs[1] + move_dirs[2] * move_dirs[2])
-                .sqrt();
+        let move_norm = (move_dirs[0] * move_dirs[0]
+            + move_dirs[1] * move_dirs[1]
+            + move_dirs[2] * move_dirs[2])
+            .sqrt();
         let mut trans = [0i32; 4];
         let mut rotate = [0i32; 4];
         if move_norm > move_norm_valid {
@@ -260,8 +262,13 @@ mod tests {
 
     #[test]
     fn parses_w31() {
-        let m = parse_pose_string("w-31", DEFAULT_FORWARD_SPEED, DEFAULT_YAW_SPEED, DEFAULT_PITCH_SPEED)
-            .unwrap();
+        let m = parse_pose_string(
+            "w-31",
+            DEFAULT_FORWARD_SPEED,
+            DEFAULT_YAW_SPEED,
+            DEFAULT_PITCH_SPEED,
+        )
+        .unwrap();
         assert_eq!(m.len(), 31);
         assert!(m[0].forward > 0.0);
     }

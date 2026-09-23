@@ -251,14 +251,22 @@ pub struct H3JointSchedule {
 
 impl H3JointSchedule {
     pub fn from_contract(contract: &H3InferenceContract) -> Result<Self, String> {
-        let video = H3Schedule::from_dmd_rungs(
-            &contract.dmd_denoising_steps,
-            contract.video_scheduler_shift,
-        )?;
-        let audio = H3Schedule::from_dmd_rungs(
-            &contract.dmd_denoising_steps,
-            contract.audio_scheduler_shift,
-        )?;
+        let (video, audio) = match contract.sigma_source {
+            super::config::H3SigmaSource::Dmd => (
+                H3Schedule::from_dmd_rungs(
+                    &contract.dmd_denoising_steps,
+                    contract.video_scheduler_shift,
+                )?,
+                H3Schedule::from_dmd_rungs(
+                    &contract.dmd_denoising_steps,
+                    contract.audio_scheduler_shift,
+                )?,
+            ),
+            super::config::H3SigmaSource::Uniform => (
+                H3Schedule::uniform(contract.num_inference_steps, contract.video_scheduler_shift)?,
+                H3Schedule::uniform(contract.num_inference_steps, contract.audio_scheduler_shift)?,
+            ),
+        };
         if contract.num_inference_steps != video.sigmas.len()
             || contract.transformer_forwards != video.num_steps()
         {
@@ -281,6 +289,10 @@ impl H3JointSchedule {
     pub fn fasth3_4step_dense() -> Self {
         Self::from_contract(&H3InferenceContract::fasth3_4step_dense())
             .unwrap_or_else(|e| unreachable!("{e}"))
+    }
+
+    pub fn sol_h3() -> Self {
+        Self::from_contract(&H3InferenceContract::sol_h3()).unwrap_or_else(|e| unreachable!("{e}"))
     }
 
     pub fn num_steps(&self) -> usize {
@@ -505,6 +517,14 @@ mod tests {
         assert_eq!(j.num_steps(), 4);
         assert_eq!(j.video.sigmas, v.sigmas);
         assert_eq!(j.audio.sigmas, a.sigmas);
+        let sol = H3JointSchedule::sol_h3();
+        assert_eq!(sol.num_steps(), 4);
+        // Uniform linspace(1, 0, 5) shifted by 12 starts at exactly 1, not 0.999.
+        assert_eq!(sol.video.sigmas[0], 1.0);
+        assert_eq!(sol.audio.sigmas[0], 1.0);
+        assert_eq!(sol.video.timesteps[0], 0.0);
+        assert!((f64::from(sol.video.sigmas[2]) - 12.0 / 13.0).abs() < 1e-6);
+        assert_ne!(sol.video.sigmas, v.sigmas);
         assert_eq!(
             H3JointSchedule::fasth3_4step_dense().video.sigmas,
             j.video.sigmas

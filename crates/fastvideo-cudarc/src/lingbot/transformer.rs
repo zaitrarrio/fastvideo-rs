@@ -31,7 +31,13 @@ impl Attn {
         })
     }
 
-    fn load(map: &WeightMap, prefix: &str, dim: usize, heads: usize, qkv_bias: bool) -> Result<Self> {
+    fn load(
+        map: &WeightMap,
+        prefix: &str,
+        dim: usize,
+        heads: usize,
+        qkv_bias: bool,
+    ) -> Result<Self> {
         let key = |n: &str| weights::join_key(prefix, n);
         Ok(Self {
             to_q: Linear::load(map, &key("to_q"), dim, dim, qkv_bias)?,
@@ -383,7 +389,13 @@ impl LingBotTransformer {
             patch: Linear::load(map, "patch_embedding", patch_in, dim, true)?,
             time_1: Linear::load(map, "condition_embedder.time_proj", cfg.freq_dim, dim, true)?,
             time_2: Linear::load(map, "condition_embedder.time_embedder", dim, dim, true)?,
-            text_proj: Linear::load(map, "condition_embedder.text_embedder", cfg.text_dim, dim, true)?,
+            text_proj: Linear::load(
+                map,
+                "condition_embedder.text_embedder",
+                cfg.text_dim,
+                dim,
+                true,
+            )?,
             blocks,
             norm_out: true,
             proj_out: Linear::load(map, "proj_out", dim, pt * ph * pw * cfg.out_channels, true)?,
@@ -490,9 +502,8 @@ impl LingBotTransformer {
                                             * w
                                             + xi * pw
                                             + pwi);
-                                        pixels[dst] = oh[((bi * seq + tok)
-                                            * (pt * ph * pw * oc))
-                                            + o];
+                                        pixels[dst] =
+                                            oh[((bi * seq + tok) * (pt * ph * pw * oc)) + o];
                                         o += 1;
                                     }
                                 }

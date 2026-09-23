@@ -182,7 +182,9 @@ fn view_to_f32(view: &TensorView<'_>) -> Result<(Vec<usize>, Vec<f32>), LoaderEr
     let f32s = match view.dtype() {
         Dtype::F32 => {
             if raw.len() % 4 != 0 {
-                return Err(LoaderError::Message("invalid F32 safetensors payload".into()));
+                return Err(LoaderError::Message(
+                    "invalid F32 safetensors payload".into(),
+                ));
             }
             let mut vals = Vec::with_capacity(raw.len() / 4);
             for chunk in raw.chunks_exact(4) {
@@ -192,7 +194,9 @@ fn view_to_f32(view: &TensorView<'_>) -> Result<(Vec<usize>, Vec<f32>), LoaderEr
         }
         Dtype::F16 => {
             if raw.len() % 2 != 0 {
-                return Err(LoaderError::Message("invalid F16 safetensors payload".into()));
+                return Err(LoaderError::Message(
+                    "invalid F16 safetensors payload".into(),
+                ));
             }
             let mut vals = Vec::with_capacity(raw.len() / 2);
             for chunk in raw.chunks_exact(2) {
@@ -202,7 +206,9 @@ fn view_to_f32(view: &TensorView<'_>) -> Result<(Vec<usize>, Vec<f32>), LoaderEr
         }
         Dtype::BF16 => {
             if raw.len() % 2 != 0 {
-                return Err(LoaderError::Message("invalid BF16 safetensors payload".into()));
+                return Err(LoaderError::Message(
+                    "invalid BF16 safetensors payload".into(),
+                ));
             }
             let mut vals = Vec::with_capacity(raw.len() / 2);
             for chunk in raw.chunks_exact(2) {
@@ -292,10 +298,8 @@ fn load_raw_tensors_with(
     // and parsing the safetensors header above is comparatively cheap
     // (header-only; tensor bytes are only touched on first access, whether
     // that's here or in the sequential fallback).
-    let entries: Vec<(String, TensorView<'_>)> = parsed
-        .iter()
-        .flat_map(|(_, st)| st.tensors())
-        .collect();
+    let entries: Vec<(String, TensorView<'_>)> =
+        parsed.iter().flat_map(|(_, st)| st.tensors()).collect();
 
     entries
         .into_par_iter()
@@ -394,25 +398,31 @@ mod tests {
     /// convert); the unit tests above only cover the dtype math in isolation.
     #[test]
     fn load_raw_tensors_mmap_roundtrip_multi_file() {
-        let dir = std::env::temp_dir().join(format!(
-            "fastvideo-loader-mmap-test-{}",
-            std::process::id()
-        ));
+        let dir =
+            std::env::temp_dir().join(format!("fastvideo-loader-mmap-test-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
 
         // File 1: one F32 tensor.
         let f32_vals: Vec<f32> = (0..8).map(|i| i as f32 * 0.5 - 1.0).collect();
         let f32_bytes = f32_bytes_le(&f32_vals);
         let view_a = TensorView::new(Dtype::F32, vec![2, 4], &f32_bytes).unwrap();
-        safetensors::serialize_to_file([("a.weight", &view_a)], None, &dir.join("part-1.safetensors"))
-            .unwrap();
+        safetensors::serialize_to_file(
+            [("a.weight", &view_a)],
+            None,
+            &dir.join("part-1.safetensors"),
+        )
+        .unwrap();
 
         // File 2: one BF16 tensor (1.0, 2.0, -1.5, 0.0 as bf16 bit patterns).
         let bf16_bits: [u16; 4] = [0x3f80, 0x4000, 0xbfc0, 0x0000];
         let bf16_bytes: Vec<u8> = bf16_bits.iter().flat_map(|b| b.to_le_bytes()).collect();
         let view_b = TensorView::new(Dtype::BF16, vec![4], &bf16_bytes).unwrap();
-        safetensors::serialize_to_file([("b.weight", &view_b)], None, &dir.join("part-2.safetensors"))
-            .unwrap();
+        safetensors::serialize_to_file(
+            [("b.weight", &view_b)],
+            None,
+            &dir.join("part-2.safetensors"),
+        )
+        .unwrap();
 
         // Native path: dtypes preserved as on disk.
         let native = load_raw_tensors_native(&dir).unwrap();
@@ -431,7 +441,10 @@ mod tests {
         let f32_only = load_raw_tensors(&dir).unwrap();
         assert_eq!(f32_only.len(), 2);
         assert_eq!(f32_only["a.weight"].dtype, RawDType::F32);
-        assert_eq!(f32_only["a.weight"].as_f32_slice().unwrap(), f32_vals.as_slice());
+        assert_eq!(
+            f32_only["a.weight"].as_f32_slice().unwrap(),
+            f32_vals.as_slice()
+        );
         assert_eq!(f32_only["b.weight"].dtype, RawDType::F32);
         for (a, e) in f32_only["b.weight"]
             .as_f32_slice()

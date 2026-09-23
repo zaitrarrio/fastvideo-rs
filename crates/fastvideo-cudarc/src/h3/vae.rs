@@ -64,7 +64,9 @@ impl Block {
     fn load(map: &WeightMap, prefix: &str, cfg: &H3VideoVaeConfig) -> Result<Self> {
         let dim = cfg.decoder_dim();
         let hidden = dim * cfg.decoder_ffn_mult;
-        let lin = |name: &str, i: usize, o: usize| Linear::load(map, &format!("{prefix}.{name}"), i, o, true);
+        let lin = |name: &str, i: usize, o: usize| {
+            Linear::load(map, &format!("{prefix}.{name}"), i, o, true)
+        };
         let vec = |name: &str| pinned_weight(map, &format!("{prefix}.{name}"), &[dim]);
         Ok(Self {
             norm1: vec("norm1.weight")?,
@@ -96,7 +98,11 @@ fn rope_tables(grid: [usize; 3], extra: usize, rotary: usize, theta: f64) -> (Ve
         })
         .collect();
     let two_pi = (2.0 * std::f64::consts::PI) as f32;
-    let axis = |size: usize| -> Vec<f32> { (0..size).map(|i| 2.0f32 * ((i as f32 + 0.5) / size as f32) - 1.0).collect() };
+    let axis = |size: usize| -> Vec<f32> {
+        (0..size)
+            .map(|i| 2.0f32 * ((i as f32 + 0.5) / size as f32) - 1.0)
+            .collect()
+    };
     let (pt, ph, pw) = (axis(grid[0]), axis(grid[1]), axis(grid[2]));
     let tokens = grid[0] * grid[1] * grid[2] + extra;
     let (mut cos, mut sin) = (vec![1.0f32; tokens * rotary], vec![0.0f32; tokens * rotary]);
@@ -139,7 +145,10 @@ fn blend(a: &CudaTensor, b: &CudaTensor, extent: usize, dim: usize) -> Result<Cu
     if extent == b.shape[dim] {
         return Ok(blended);
     }
-    CudaTensor::cat(&[&blended, &b.narrow(dim, extent, b.shape[dim] - extent)?], dim)
+    CudaTensor::cat(
+        &[&blended, &b.narrow(dim, extent, b.shape[dim] - extent)?],
+        dim,
+    )
 }
 
 /// Tile starts, tile length and overlaps along one axis, in **latent** units.
@@ -174,18 +183,31 @@ impl H3VideoDecoder {
     /// Reads `decoder.*` and `post_quant_conv.*`; the convolutional encoder is
     /// never touched.
     pub fn load(cfg: H3VideoVaeConfig, map: &WeightMap) -> Result<Self> {
-        let (dim, lc, head_dim) = (cfg.decoder_dim(), cfg.latent_channels, cfg.decoder_attention_head_dim);
+        let (dim, lc, head_dim) = (
+            cfg.decoder_dim(),
+            cfg.latent_channels,
+            cfg.decoder_attention_head_dim,
+        );
         let rotary = cfg.decoder_rotary_dim();
         if rotary == 0 || rotary % 6 != 0 || rotary > head_dim {
-            return Err(msg(format!("h3 vae: {rotary} rotary channels of a {head_dim}-wide head is not 3 axes of pairs")));
+            return Err(msg(format!(
+                "h3 vae: {rotary} rotary channels of a {head_dim}-wide head is not 3 axes of pairs"
+            )));
         }
         if cfg.token_drop == 0 || cfg.token_drop >= cfg.tokens_chunk_size() {
-            return Err(msg(format!("h3 vae: token_drop {} outside (0, {})", cfg.token_drop, cfg.tokens_chunk_size())));
+            return Err(msg(format!(
+                "h3 vae: token_drop {} outside (0, {})",
+                cfg.token_drop,
+                cfg.tokens_chunk_size()
+            )));
         }
-        let pq = cuda_tensor_shaped(map, "post_quant_conv.weight", &[lc, lc, 1, 1, 1])?.reshape(vec![lc, lc])?;
+        let pq = cuda_tensor_shaped(map, "post_quant_conv.weight", &[lc, lc, 1, 1, 1])?
+            .reshape(vec![lc, lc])?;
         let pq_bias = cuda_tensor_shaped(map, "post_quant_conv.bias", &[lc])?;
         let registers = cfg.decoder_num_register_tokens;
-        let mut suffix = cuda_tensor_shaped(map, "decoder.register_tokens", &[1, registers, dim])?.host_cow()?.into_owned();
+        let mut suffix = cuda_tensor_shaped(map, "decoder.register_tokens", &[1, registers, dim])?
+            .host_cow()?
+            .into_owned();
         suffix.extend(std::iter::repeat_n(0.0f32, dim));
         let blocks = (0..cfg.decoder_num_layers)
             .map(|i| Block::load(map, &format!("decoder.transformer_blocks.{i}"), &cfg))
@@ -229,12 +251,24 @@ impl H3VideoDecoder {
 
     /// [`Self::decode_tiles`], showing `observe(block, x)` each ViT block's
     /// `[B, tokens + 5, dim]` output (the diffusers reference tests hook the same point).
-    pub(crate) fn decode_tiles_observed(&self, tiles: &CudaTensor, grid: [usize; 3], observe: &mut dyn FnMut(usize, &CudaTensor) -> Result<()>) -> Result<Vec<CudaTensor>> {
+    pub(crate) fn decode_tiles_observed(
+        &self,
+        tiles: &CudaTensor,
+        grid: [usize; 3],
+        observe: &mut dyn FnMut(usize, &CudaTensor) -> Result<()>,
+    ) -> Result<Vec<CudaTensor>> {
         let cfg = &self.cfg;
-        let (dim, heads, head_dim) = (cfg.decoder_dim(), cfg.decoder_num_attention_heads, cfg.decoder_attention_head_dim);
+        let (dim, heads, head_dim) = (
+            cfg.decoder_dim(),
+            cfg.decoder_num_attention_heads,
+            cfg.decoder_attention_head_dim,
+        );
         let eps = cfg.decoder_norm_eps as f32;
         let [batch, patches, _] = tiles.shape[..] else {
-            return Err(msg(format!("h3 vae tiles must be [B, tokens, C], got {:?}", tiles.shape)));
+            return Err(msg(format!(
+                "h3 vae tiles must be [B, tokens, C], got {:?}",
+                tiles.shape
+            )));
         };
         if patches != grid.iter().product::<usize>() {
             return Err(msg(format!("h3 vae: {patches} tokens for grid {grid:?}")));
@@ -243,7 +277,10 @@ impl H3VideoDecoder {
         let tokens = patches + extra;
         let rotary = cfg.decoder_rotary_dim();
         let (cos, sin) = rope_tables(grid, extra, rotary, cfg.decoder_rope_theta);
-        let (cos, sin) = (pinned(cos, vec![tokens, rotary])?, pinned(sin, vec![tokens, rotary])?);
+        let (cos, sin) = (
+            pinned(cos, vec![tokens, rotary])?,
+            pinned(sin, vec![tokens, rotary])?,
+        );
 
         let x = self.proj_in.forward(&self.post_quant.forward(tiles)?)?;
         let suffixes: Vec<&CudaTensor> = (0..batch).map(|_| &self.suffix).collect();
@@ -253,7 +290,11 @@ impl H3VideoDecoder {
         let split = |t: CudaTensor, norm: bool| -> Result<CudaTensor> {
             let t = t.reshape(vec![batch, tokens, heads, head_dim])?;
             // Per-head RMSNorm without a learned weight, then [B, H, S, D].
-            let t = if norm { t.rms_norm(&self.qk_unit, eps)? } else { t };
+            let t = if norm {
+                t.rms_norm(&self.qk_unit, eps)?
+            } else {
+                t
+            };
             t.transpose(1, 2)
         };
         for (index, block) in self.blocks.iter().enumerate() {
@@ -262,7 +303,9 @@ impl H3VideoDecoder {
             let k = split(block.to_k.forward(&n)?, true)?.rope_half(&cos, &sin)?;
             let v = split(block.to_v.forward(&n)?, false)?;
             let a = scaled_dot_product_attention(&q, &k, &v, None)?;
-            let a = block.to_out.forward(&a.transpose(1, 2)?.reshape(vec![batch, tokens, dim])?)?;
+            let a = block
+                .to_out
+                .forward(&a.transpose(1, 2)?.reshape(vec![batch, tokens, dim])?)?;
             x = x.add(&a.mul(&block.scale1)?)?;
 
             let n = x.rms_norm(&block.norm2, eps)?;
@@ -281,7 +324,11 @@ impl H3VideoDecoder {
         // [t, h, w, C, pt, ph, pw] -> [C, t*pt, h*ph, w*pw]. The device permute
         // stops at rank 6, so move (C, pt) first with the pixel patch folded,
         // then interleave the spatial axes.
-        let (pt, ps, oc) = (cfg.temporal_compression_ratio(), cfg.spatial_compression_ratio(), cfg.out_channels);
+        let (pt, ps, oc) = (
+            cfg.temporal_compression_ratio(),
+            cfg.spatial_compression_ratio(),
+            cfg.out_channels,
+        );
         let [t, h, w] = grid;
         (0..batch)
             .map(|b| {
@@ -298,18 +345,31 @@ impl H3VideoDecoder {
     fn axis_tiles(&self, latent_len: usize) -> Result<AxisTiles> {
         let ratio = self.cfg.spatial_compression_ratio();
         let (starts, overlaps) = self.cfg.split_tiles(latent_len * ratio);
-        if starts.iter().chain(&overlaps).any(|v| v % ratio != 0) || self.cfg.tile_sample_min_size % ratio != 0 {
+        if starts.iter().chain(&overlaps).any(|v| v % ratio != 0)
+            || self.cfg.tile_sample_min_size % ratio != 0
+        {
             return Err(msg(format!("h3 vae: tile plan {starts:?}/{overlaps:?} is not aligned to the {ratio}px latent grid")));
         }
-        let len = if starts.len() == 1 { latent_len } else { self.cfg.tile_sample_min_size / ratio };
-        Ok(AxisTiles { starts: starts.iter().map(|s| s / ratio).collect(), len, overlaps })
+        let len = if starts.len() == 1 {
+            latent_len
+        } else {
+            self.cfg.tile_sample_min_size / ratio
+        };
+        Ok(AxisTiles {
+            starts: starts.iter().map(|s| s / ratio).collect(),
+            len,
+            overlaps,
+        })
     }
 
     /// One temporal clip: `z` is `[t, H, W, C]` denormalized, channel-last.
     /// Returns `[3, 4t, 16H, 16W]`, tiles decoded independently and cross-faded.
     fn decode_clip(&self, z: &CudaTensor) -> Result<CudaTensor> {
         let [t, h, w, c] = z.shape[..] else {
-            return Err(msg(format!("h3 vae clip must be [t, H, W, C], got {:?}", z.shape)));
+            return Err(msg(format!(
+                "h3 vae clip must be [t, H, W, C], got {:?}",
+                z.shape
+            )));
         };
         let (ys, xs) = (self.axis_tiles(h)?, self.axis_tiles(w)?);
         let grid = [t, ys.len, xs.len];
@@ -318,7 +378,11 @@ impl H3VideoDecoder {
         let total = ys.starts.len() * xs.starts.len();
         for &y0 in &ys.starts {
             for &x0 in &xs.starts {
-                pending.push(z.narrow(1, y0, ys.len)?.narrow(2, x0, xs.len)?.reshape(vec![1, t * ys.len * xs.len, c])?);
+                pending.push(
+                    z.narrow(1, y0, ys.len)?
+                        .narrow(2, x0, xs.len)?
+                        .reshape(vec![1, t * ys.len * xs.len, c])?,
+                );
                 if pending.len() == self.tile_batch || decoded.len() + pending.len() == total {
                     let refs: Vec<&CudaTensor> = pending.iter().collect();
                     decoded.extend(self.decode_tiles(&CudaTensor::cat(&refs, 0)?, grid)?);
@@ -360,17 +424,31 @@ impl H3VideoDecoder {
     /// as each temporal chunk finishes. Returns the number of frames emitted.
     /// This is the tensor the reference's `decode` returns, before the pixel
     /// de-normalization and clamp (see [`Self::to_display`]).
-    pub fn decode_raw_streaming(&self, latents: &CudaTensor, sink: &mut dyn FnMut(usize, &CudaTensor) -> Result<()>) -> Result<usize> {
+    pub fn decode_raw_streaming(
+        &self,
+        latents: &CudaTensor,
+        sink: &mut dyn FnMut(usize, &CudaTensor) -> Result<()>,
+    ) -> Result<usize> {
         let [n, c, frames, _, _] = latents.shape[..] else {
-            return Err(msg(format!("h3 vae expects [1, C, T, H, W] latents, got {:?}", latents.shape)));
+            return Err(msg(format!(
+                "h3 vae expects [1, C, T, H, W] latents, got {:?}",
+                latents.shape
+            )));
         };
         if n != 1 || c != self.cfg.latent_channels || frames == 0 {
-            return Err(msg(format!("h3 vae: latents {:?} for {} latent channels", latents.shape, self.cfg.latent_channels)));
+            return Err(msg(format!(
+                "h3 vae: latents {:?} for {} latent channels",
+                latents.shape, self.cfg.latent_channels
+            )));
         }
         let cfg = &self.cfg;
         // Channel-last once, so tiles and chunks are plain narrows and the
         // per-channel denormalization broadcasts over the last axis.
-        let mut z = latents.reshape(latents.shape[1..].to_vec())?.permute(&[1, 2, 3, 0])?.mul(&self.std)?.add(&self.mean)?;
+        let mut z = latents
+            .reshape(latents.shape[1..].to_vec())?
+            .permute(&[1, 2, 3, 0])?
+            .mul(&self.std)?
+            .add(&self.mean)?;
         let (pad_tokens, num_chunks, total_frames) = cfg.temporal_decode_plan(frames);
         if pad_tokens > 0 {
             // A length that is not `5n + 2` is completed by repeating the last latent frame.
@@ -379,7 +457,11 @@ impl H3VideoDecoder {
             parts.extend(std::iter::repeat_n(&last, pad_tokens));
             z = CudaTensor::cat(&parts, 0)?;
         }
-        let (chunk, ratio, pre) = (cfg.tokens_chunk_size(), cfg.temporal_compression_ratio(), cfg.frame_pre_padding());
+        let (chunk, ratio, pre) = (
+            cfg.tokens_chunk_size(),
+            cfg.temporal_compression_ratio(),
+            cfg.frame_pre_padding(),
+        );
         let chunk_frames = chunk * ratio;
         let window = chunk + cfg.token_overlap();
 
@@ -404,14 +486,20 @@ impl H3VideoDecoder {
             emit(body, &mut emitted)?;
             // The second window of the clip, minus its own pre-padding frames.
             let tail_start = chunk_frames + pre;
-            overlap = Some(clip.narrow(1, tail_start, clip_frames.min(2 * chunk_frames) - tail_start)?);
+            overlap = Some(clip.narrow(
+                1,
+                tail_start,
+                clip_frames.min(2 * chunk_frames) - tail_start,
+            )?);
             crate::wan::log::info(format_args!("h3 vae chunk {}/{num_chunks}", i + 1));
         }
         if let Some(tail) = overlap {
             emit(tail, &mut emitted)?;
         }
         if emitted != total_frames {
-            return Err(msg(format!("h3 vae emitted {emitted} frames, planned {total_frames}")));
+            return Err(msg(format!(
+                "h3 vae emitted {emitted} frames, planned {total_frames}"
+            )));
         }
         Ok(emitted)
     }
@@ -421,17 +509,38 @@ impl H3VideoDecoder {
     /// then `2 rgb01 - 1`, folded into one affine and one clamp.
     pub fn to_display(raw: &CudaTensor) -> Result<CudaTensor> {
         if raw.rank() != 4 || raw.shape[0] != 3 {
-            return Err(msg(format!("h3 vae frames must be [3, f, H, W], got {:?}", raw.shape)));
+            return Err(msg(format!(
+                "h3 vae frames must be [3, f, H, W], got {:?}",
+                raw.shape
+            )));
         }
-        let scale = CudaTensor::from_vec(H3_PIXEL_STD.iter().map(|&s| (2.0 * s) as f32).collect(), vec![3, 1, 1, 1])?;
-        let shift = CudaTensor::from_vec(H3_PIXEL_MEAN.iter().map(|&m| (2.0 * m - 1.0) as f32).collect(), vec![3, 1, 1, 1])?;
-        raw.mul(&scale)?.add(&shift)?.clamp(-1.0, 1.0).permute(&[1, 0, 2, 3])
+        let scale = CudaTensor::from_vec(
+            H3_PIXEL_STD.iter().map(|&s| (2.0 * s) as f32).collect(),
+            vec![3, 1, 1, 1],
+        )?;
+        let shift = CudaTensor::from_vec(
+            H3_PIXEL_MEAN
+                .iter()
+                .map(|&m| (2.0 * m - 1.0) as f32)
+                .collect(),
+            vec![3, 1, 1, 1],
+        )?;
+        raw.mul(&scale)?
+            .add(&shift)?
+            .clamp(-1.0, 1.0)
+            .permute(&[1, 0, 2, 3])
     }
 
     /// [`Self::decode_raw_streaming`] with each chunk converted by
     /// [`Self::to_display`], the form `VideoWriter` / `frames_to_rgb8` consume.
-    pub fn decode_streaming(&self, latents: &CudaTensor, sink: &mut dyn FnMut(usize, &CudaTensor) -> Result<()>) -> Result<usize> {
-        self.decode_raw_streaming(latents, &mut |offset, raw| sink(offset, &Self::to_display(raw)?))
+    pub fn decode_streaming(
+        &self,
+        latents: &CudaTensor,
+        sink: &mut dyn FnMut(usize, &CudaTensor) -> Result<()>,
+    ) -> Result<usize> {
+        self.decode_raw_streaming(latents, &mut |offset, raw| {
+            sink(offset, &Self::to_display(raw)?)
+        })
     }
 }
 
@@ -454,34 +563,63 @@ mod tests {
 
     fn weights() -> WeightMap {
         WeightMap::generated(|key, shape| {
-            let seed = key.bytes().fold(5u32, |a, b| a.wrapping_mul(31).wrapping_add(u32::from(b)));
+            let seed = key
+                .bytes()
+                .fold(5u32, |a, b| a.wrapping_mul(31).wrapping_add(u32::from(b)));
             let n: usize = shape.iter().product();
             (0..n)
                 .map(|i| {
-                    let u = (seed.wrapping_add(i as u32).wrapping_mul(2_654_435_761) >> 8) as f32 / (1u32 << 24) as f32;
-                    if key.contains("norm") || key.contains("scale") { 0.5 + u } else { u - 0.5 }
+                    let u = (seed.wrapping_add(i as u32).wrapping_mul(2_654_435_761) >> 8) as f32
+                        / (1u32 << 24) as f32;
+                    if key.contains("norm") || key.contains("scale") {
+                        0.5 + u
+                    } else {
+                        u - 0.5
+                    }
                 })
                 .collect()
         })
     }
 
     fn get(map: &WeightMap, key: &str, shape: &[usize]) -> Vec<f32> {
-        cuda_tensor_shaped(map, key, shape).unwrap().host_cow().unwrap().into_owned()
+        cuda_tensor_shaped(map, key, shape)
+            .unwrap()
+            .host_cow()
+            .unwrap()
+            .into_owned()
     }
 
     fn lin(map: &WeightMap, prefix: &str, x: &[f32], i: usize, o: usize) -> Vec<f32> {
-        let (w, b) = (get(map, &format!("{prefix}.weight"), &[o, i]), get(map, &format!("{prefix}.bias"), &[o]));
-        (0..o).map(|r| b[r] + (0..i).map(|c| x[c] * w[r * i + c]).sum::<f32>()).collect()
+        let (w, b) = (
+            get(map, &format!("{prefix}.weight"), &[o, i]),
+            get(map, &format!("{prefix}.bias"), &[o]),
+        );
+        (0..o)
+            .map(|r| b[r] + (0..i).map(|c| x[c] * w[r * i + c]).sum::<f32>())
+            .collect()
     }
 
     fn rms(v: &[f32], w: Option<&[f32]>, eps: f32) -> Vec<f32> {
         let ms = v.iter().map(|a| a * a).sum::<f32>() / v.len() as f32;
-        v.iter().enumerate().map(|(i, a)| a / (ms + eps).sqrt() * w.map_or(1.0, |w| w[i])).collect()
+        v.iter()
+            .enumerate()
+            .map(|(i, a)| a / (ms + eps).sqrt() * w.map_or(1.0, |w| w[i]))
+            .collect()
     }
 
     /// The ViT on one tile, token by token, returning `[3][4t][ps h][ps w]` flattened.
-    fn reference_tile(cfg: &H3VideoVaeConfig, map: &WeightMap, z: &[f32], grid: [usize; 3]) -> Vec<f32> {
-        let (dim, heads, hd, lc) = (cfg.decoder_dim(), cfg.decoder_num_attention_heads, cfg.decoder_attention_head_dim, cfg.latent_channels);
+    fn reference_tile(
+        cfg: &H3VideoVaeConfig,
+        map: &WeightMap,
+        z: &[f32],
+        grid: [usize; 3],
+    ) -> Vec<f32> {
+        let (dim, heads, hd, lc) = (
+            cfg.decoder_dim(),
+            cfg.decoder_num_attention_heads,
+            cfg.decoder_attention_head_dim,
+            cfg.latent_channels,
+        );
         let eps = 1e-5f32;
         let patches = grid[0] * grid[1] * grid[2];
         let pq_w = get(map, "post_quant_conv.weight", &[lc, lc, 1, 1, 1]);
@@ -489,7 +627,9 @@ mod tests {
         let mut x: Vec<Vec<f32>> = (0..patches)
             .map(|p| {
                 let v = &z[p * lc..(p + 1) * lc];
-                let q: Vec<f32> = (0..lc).map(|o| pq_b[o] + (0..lc).map(|c| v[c] * pq_w[o * lc + c]).sum::<f32>()).collect();
+                let q: Vec<f32> = (0..lc)
+                    .map(|o| pq_b[o] + (0..lc).map(|c| v[c] * pq_w[o * lc + c]).sum::<f32>())
+                    .collect();
                 lin(map, "decoder.proj_in", &q, lc, dim)
             })
             .collect();
@@ -510,7 +650,11 @@ mod tests {
                 }
                 let (ti, rem) = (p / (grid[1] * grid[2]), p % (grid[1] * grid[2]));
                 let tau = 2.0 * std::f32::consts::PI;
-                [tau * pos(ti, grid[0]), tau * pos(rem / grid[2], grid[1]), tau * pos(rem % grid[2], grid[2])]
+                [
+                    tau * pos(ti, grid[0]),
+                    tau * pos(rem / grid[2], grid[1]),
+                    tau * pos(rem % grid[2], grid[2]),
+                ]
             })
             .collect();
         let rope = |v: &[f32], p: usize| -> Vec<f32> {
@@ -524,8 +668,14 @@ mod tests {
         };
         for b in 0..cfg.decoder_num_layers {
             let p = format!("decoder.transformer_blocks.{b}");
-            let (n1, n2) = (get(map, &format!("{p}.norm1.weight"), &[dim]), get(map, &format!("{p}.norm2.weight"), &[dim]));
-            let (s1, s2) = (get(map, &format!("{p}.scale1"), &[dim]), get(map, &format!("{p}.scale2"), &[dim]));
+            let (n1, n2) = (
+                get(map, &format!("{p}.norm1.weight"), &[dim]),
+                get(map, &format!("{p}.norm2.weight"), &[dim]),
+            );
+            let (s1, s2) = (
+                get(map, &format!("{p}.scale1"), &[dim]),
+                get(map, &format!("{p}.scale2"), &[dim]),
+            );
             let normed: Vec<Vec<f32>> = x.iter().map(|v| rms(v, Some(&n1), eps)).collect();
             let qkv = |name: &str, norm: bool| -> Vec<Vec<Vec<f32>>> {
                 normed
@@ -536,7 +686,11 @@ mod tests {
                         (0..heads)
                             .map(|h| {
                                 let head = &full[h * hd..(h + 1) * hd];
-                                if norm { rope(&rms(head, None, eps), pi) } else { head.to_vec() }
+                                if norm {
+                                    rope(&rms(head, None, eps), pi)
+                                } else {
+                                    head.to_vec()
+                                }
                             })
                             .collect()
                     })
@@ -547,7 +701,16 @@ mod tests {
             for i in 0..tokens {
                 let mut attn = vec![0f32; dim];
                 for h in 0..heads {
-                    let scores: Vec<f32> = (0..tokens).map(|j| q[i][h].iter().zip(&k[j][h]).map(|(a, b)| a * b).sum::<f32>() / (hd as f32).sqrt()).collect();
+                    let scores: Vec<f32> = (0..tokens)
+                        .map(|j| {
+                            q[i][h]
+                                .iter()
+                                .zip(&k[j][h])
+                                .map(|(a, b)| a * b)
+                                .sum::<f32>()
+                                / (hd as f32).sqrt()
+                        })
+                        .collect();
                     let mx = scores.iter().cloned().fold(f32::MIN, f32::max);
                     let zsum: f32 = scores.iter().map(|s| (s - mx).exp()).sum();
                     for (j, s) in scores.iter().enumerate() {
@@ -562,20 +725,31 @@ mod tests {
                 let m = rms(&after, Some(&n2), eps);
                 let hidden = dim * cfg.decoder_ffn_mult;
                 let f = lin(map, &format!("{p}.ff.net.0.proj"), &m, dim, 2 * hidden);
-                let act: Vec<f32> = (0..hidden).map(|c| f[c] * (f[hidden + c] / (1.0 + (-f[hidden + c]).exp()))).collect();
+                let act: Vec<f32> = (0..hidden)
+                    .map(|c| f[c] * (f[hidden + c] / (1.0 + (-f[hidden + c]).exp())))
+                    .collect();
                 let o = lin(map, &format!("{p}.ff.net.2"), &act, hidden, dim);
-                next.push((0..dim).map(|c| after[c] + o[c] * s2[c]).collect::<Vec<f32>>());
+                next.push(
+                    (0..dim)
+                        .map(|c| after[c] + o[c] * s2[c])
+                        .collect::<Vec<f32>>(),
+                );
             }
             x = next;
         }
-        let (nw, nb) = (get(map, "decoder.norm_out.weight", &[dim]), get(map, "decoder.norm_out.bias", &[dim]));
+        let (nw, nb) = (
+            get(map, "decoder.norm_out.weight", &[dim]),
+            get(map, "decoder.norm_out.bias", &[dim]),
+        );
         let (pt, ps) = (4usize, cfg.spatial_compression_ratio());
         let (fh, fw) = (grid[1] * ps, grid[2] * ps);
         let mut out = vec![0f32; 3 * grid[0] * pt * fh * fw];
         for p in 0..patches {
             let mean = x[p].iter().sum::<f32>() / dim as f32;
             let var = x[p].iter().map(|a| (a - mean) * (a - mean)).sum::<f32>() / dim as f32;
-            let ln: Vec<f32> = (0..dim).map(|c| (x[p][c] - mean) / (var + eps).sqrt() * nw[c] + nb[c]).collect();
+            let ln: Vec<f32> = (0..dim)
+                .map(|c| (x[p][c] - mean) / (var + eps).sqrt() * nw[c] + nb[c])
+                .collect();
             let patch = lin(map, "decoder.proj_out", &ln, dim, cfg.decoder_patch_dim());
             let (ti, rem) = (p / (grid[1] * grid[2]), p % (grid[1] * grid[2]));
             let (hi, wi) = (rem / grid[2], rem % grid[2]);
@@ -584,7 +758,9 @@ mod tests {
                     for dy in 0..ps {
                         for dx in 0..ps {
                             let src = ((c * pt + dt) * ps + dy) * ps + dx;
-                            let dst = ((c * grid[0] * pt + ti * pt + dt) * fh + hi * ps + dy) * fw + wi * ps + dx;
+                            let dst = ((c * grid[0] * pt + ti * pt + dt) * fh + hi * ps + dy) * fw
+                                + wi * ps
+                                + dx;
                             out[dst] = patch[src];
                         }
                     }
@@ -612,7 +788,10 @@ mod tests {
         let scale = want.iter().fold(0f32, |m, v| m.max(v.abs()));
         assert!(scale > 0.1);
         for (i, (g, w)) in got.iter().zip(&want).enumerate() {
-            assert!((g - w).abs() < 2e-4 * scale.max(1.0), "value {i}: {g} vs {w}");
+            assert!(
+                (g - w).abs() < 2e-4 * scale.max(1.0),
+                "value {i}: {g} vs {w}"
+            );
         }
     }
 
@@ -637,18 +816,29 @@ mod tests {
     #[test]
     fn tiles_and_chunks_are_cross_faded_as_the_reference_does() {
         let (cfg, map) = (tiny_cfg(), weights());
-        let dec = H3VideoDecoder::load(cfg.clone(), &map).unwrap().with_tile_batch(3);
+        let dec = H3VideoDecoder::load(cfg.clone(), &map)
+            .unwrap()
+            .with_tile_batch(3);
         let (c, t, h, w) = (cfg.latent_channels, 12usize, 3usize, 3usize);
         let lat = seeded(c * t * h * w, 0.11);
         let mut chunks: Vec<(usize, Vec<usize>, Vec<f32>)> = Vec::new();
         let frames = dec
-            .decode_raw_streaming(&CudaTensor::from_vec(lat.clone(), vec![1, c, t, h, w]).unwrap(), &mut |off, fr| {
-                chunks.push((off, fr.shape.clone(), fr.host_cow()?.into_owned()));
-                Ok(())
-            })
+            .decode_raw_streaming(
+                &CudaTensor::from_vec(lat.clone(), vec![1, c, t, h, w]).unwrap(),
+                &mut |off, fr| {
+                    chunks.push((off, fr.shape.clone(), fr.host_cow()?.into_owned()));
+                    Ok(())
+                },
+            )
             .unwrap();
         assert_eq!(frames, 39, "12 latents = 2 chunks = 2 * 17 + 5 frames");
-        assert_eq!(chunks.iter().map(|(o, s, _)| (*o, s[1])).collect::<Vec<_>>(), vec![(0, 17), (17, 17), (34, 5)]);
+        assert_eq!(
+            chunks
+                .iter()
+                .map(|(o, s, _)| (*o, s[1]))
+                .collect::<Vec<_>>(),
+            vec![(0, 17), (17, 17), (34, 5)]
+        );
         let (fh, fw) = (12usize, 12usize);
         let mut got = vec![0f32; 3 * 39 * fh * fw];
         for (off, shape, data) in &chunks {
@@ -662,7 +852,10 @@ mod tests {
         }
 
         // Reference. Tiles: starts (0, 1) latents, 2 latents wide, overlap 1 latent = 4 px.
-        let z = |ch: usize, ti: usize, y: usize, x: usize| lat[((ch * t + ti) * h + y) * w + x] * cfg.latents_std[ch] as f32 + cfg.latents_mean[ch] as f32;
+        let z = |ch: usize, ti: usize, y: usize, x: usize| {
+            lat[((ch * t + ti) * h + y) * w + x] * cfg.latents_std[ch] as f32
+                + cfg.latents_mean[ch] as f32
+        };
         let tile = |t0: usize, y0: usize, x0: usize| -> Vec<f32> {
             let mut rows = Vec::new();
             for ti in 0..7 {
@@ -673,11 +866,20 @@ mod tests {
                 }
             }
             let tiles = CudaTensor::from_vec(rows, vec![1, 28, c]).unwrap();
-            dec.decode_tiles(&tiles, [7, 2, 2]).unwrap().remove(0).host_cow().unwrap().into_owned() // [3, 28, 8, 8]
+            dec.decode_tiles(&tiles, [7, 2, 2])
+                .unwrap()
+                .remove(0)
+                .host_cow()
+                .unwrap()
+                .into_owned() // [3, 28, 8, 8]
         };
-        let at = |v: &[f32], ch: usize, f: usize, y: usize, x: usize| v[((ch * 28 + f) * 8 + y) * 8 + x];
+        let at =
+            |v: &[f32], ch: usize, f: usize, y: usize, x: usize| v[((ch * 28 + f) * 8 + y) * 8 + x];
         let clip = |t0: usize| -> Vec<f32> {
-            let raw = [[tile(t0, 0, 0), tile(t0, 0, 1)], [tile(t0, 1, 0), tile(t0, 1, 1)]];
+            let raw = [
+                [tile(t0, 0, 0), tile(t0, 0, 1)],
+                [tile(t0, 1, 0), tile(t0, 1, 1)],
+            ];
             let mut out = vec![0f32; 3 * 28 * fh * fw];
             for ch in 0..3 {
                 for f in 0..28 {
@@ -718,13 +920,17 @@ mod tests {
                         0..=16 => px(&clip0, ch, 3 + f, p),
                         17..=21 => {
                             let wgt = (f - 17) as f32 / 5.0;
-                            px(&clip0, ch, 23 + (f - 17), p) * (1.0 - wgt) + px(&clip1, ch, 3 + (f - 17), p) * wgt
+                            px(&clip0, ch, 23 + (f - 17), p) * (1.0 - wgt)
+                                + px(&clip1, ch, 3 + (f - 17), p) * wgt
                         }
                         22..=33 => px(&clip1, ch, 3 + (f - 17), p),
                         _ => px(&clip1, ch, 23 + (f - 34), p),
                     };
                     let g = got[(ch * 39 + f) * fh * fw + p];
-                    assert!((g - want).abs() < 1e-4 * want.abs().max(1.0), "ch {ch} frame {f} px {p}: {g} vs {want}");
+                    assert!(
+                        (g - want).abs() < 1e-4 * want.abs().max(1.0),
+                        "ch {ch} frame {f} px {p}: {g} vs {want}"
+                    );
                 }
             }
         }
@@ -732,7 +938,8 @@ mod tests {
 
     #[test]
     fn display_frames_are_frame_major_and_in_the_pipeline_range() {
-        let raw = CudaTensor::from_vec(vec![0.0, 100.0, -100.0, 1.0, 0.5, -0.5], vec![3, 2, 1, 1]).unwrap();
+        let raw = CudaTensor::from_vec(vec![0.0, 100.0, -100.0, 1.0, 0.5, -0.5], vec![3, 2, 1, 1])
+            .unwrap();
         let out = H3VideoDecoder::to_display(&raw).unwrap();
         assert_eq!(out.shape, vec![2, 3, 1, 1]);
         let v = out.host_cow().unwrap();

@@ -47,13 +47,27 @@ fn manifest(json: &str) -> Requests {
         .as_object()
         .expect("manifest has tensors")
         .iter()
-        .map(|(k, v)| (k.clone(), v[1].as_array().expect("shape").iter().map(|d| d.as_u64().expect("dim") as usize).collect()))
+        .map(|(k, v)| {
+            (
+                k.clone(),
+                v[1].as_array()
+                    .expect("shape")
+                    .iter()
+                    .map(|d| d.as_u64().expect("dim") as usize)
+                    .collect(),
+            )
+        })
         .collect()
 }
 
 fn dtypes(json: &str) -> BTreeMap<String, String> {
     let doc: serde_json::Value = serde_json::from_str(json).expect("manifest is JSON");
-    doc["tensors"].as_object().expect("tensors").iter().map(|(k, v)| (k.clone(), v[0].as_str().expect("dtype").to_string())).collect()
+    doc["tensors"]
+        .as_object()
+        .expect("tensors")
+        .iter()
+        .map(|(k, v)| (k.clone(), v[0].as_str().expect("dtype").to_string()))
+        .collect()
 }
 
 /// A map that invents zeros for any key and remembers what was asked.
@@ -61,7 +75,9 @@ fn recording() -> (WeightMap, Arc<Mutex<Requests>>) {
     let seen = Arc::new(Mutex::new(Requests::new()));
     let sink = seen.clone();
     let map = WeightMap::generated(move |key, shape| {
-        sink.lock().expect("recorder lock").insert(key.to_string(), shape.to_vec());
+        sink.lock()
+            .expect("recorder lock")
+            .insert(key.to_string(), shape.to_vec());
         vec![0.0; shape.iter().product()]
     });
     (map, seen)
@@ -74,12 +90,20 @@ fn heavy() -> std::sync::MutexGuard<'static, ()> {
 }
 
 /// Requests for `<stem>.<from>.…` repeated for every index in `all`.
-fn for_every_index(requested: &Requests, stem: &str, from: usize, all: std::ops::Range<usize>) -> Requests {
+fn for_every_index(
+    requested: &Requests,
+    stem: &str,
+    from: usize,
+    all: std::ops::Range<usize>,
+) -> Requests {
     let needle = format!("{stem}.{from}.");
     let mut out = Requests::new();
     for (key, shape) in requested {
         match key.strip_prefix(&needle) {
-            Some(rest) => out.extend(all.clone().map(|i| (format!("{stem}.{i}.{rest}"), shape.clone()))),
+            Some(rest) => out.extend(
+                all.clone()
+                    .map(|i| (format!("{stem}.{i}.{rest}"), shape.clone())),
+            ),
             None => {
                 out.insert(key.clone(), shape.clone());
             }
@@ -92,19 +116,36 @@ fn mismatches(requested: &Requests, published: &Requests) -> Vec<String> {
     requested
         .iter()
         .filter_map(|(key, want)| match published.get(key) {
-            None => Some(format!("loader asks for `{key}` {want:?}: not in the checkpoint")),
-            Some(have) if have != want => Some(format!("`{key}`: loader expects {want:?}, checkpoint has {have:?}")),
+            None => Some(format!(
+                "loader asks for `{key}` {want:?}: not in the checkpoint"
+            )),
+            Some(have) if have != want => Some(format!(
+                "`{key}`: loader expects {want:?}, checkpoint has {have:?}"
+            )),
             Some(_) => None,
         })
         .collect()
 }
 
-fn unrequested(requested: &Requests, published: &Requests, owned: impl Fn(&str) -> bool) -> Vec<String> {
-    published.keys().filter(|k| owned(k) && !requested.contains_key(*k)).map(|k| format!("checkpoint key `{k}` is never loaded")).collect()
+fn unrequested(
+    requested: &Requests,
+    published: &Requests,
+    owned: impl Fn(&str) -> bool,
+) -> Vec<String> {
+    published
+        .keys()
+        .filter(|k| owned(k) && !requested.contains_key(*k))
+        .map(|k| format!("checkpoint key `{k}` is never loaded"))
+        .collect()
 }
 
 fn assert_clean(what: &str, problems: Vec<String>) {
-    assert!(problems.is_empty(), "{what}: {} problem(s)\n  {}", problems.len(), problems.join("\n  "));
+    assert!(
+        problems.is_empty(),
+        "{what}: {} problem(s)\n  {}",
+        problems.len(),
+        problems.join("\n  ")
+    );
 }
 
 #[test]
@@ -116,11 +157,28 @@ fn audio_decoder_asks_for_exactly_the_published_decoder() {
     let mut problems = mismatches(&seen, &published);
     // One of the 254 identical filter buffers is read (the `h3 audio-vae` stage
     // checks they are the same bytes); everything else of the decoder is consumed.
-    problems.extend(unrequested(&seen, &published, |k| (k.starts_with("decoder.") || k.starts_with("dec_in_proj.")) && !k.ends_with("filter")));
+    problems.extend(unrequested(&seen, &published, |k| {
+        (k.starts_with("decoder.") || k.starts_with("dec_in_proj.")) && !k.ends_with("filter")
+    }));
     assert_clean("audio_vae", problems);
-    assert_eq!(published.keys().filter(|k| k.ends_with("filter") && k.starts_with("decoder.")).count(), 254);
-    assert!(seen.keys().all(|k| !k.starts_with("encoder.") && !k.starts_with("pre_block.")), "T2AV never reads the audio encoder");
-    assert!(dtypes(include_str!("manifests/audio_vae.json")).values().all(|d| d == "F32"), "the audio VAE must stay float32");
+    assert_eq!(
+        published
+            .keys()
+            .filter(|k| k.ends_with("filter") && k.starts_with("decoder."))
+            .count(),
+        254
+    );
+    assert!(
+        seen.keys()
+            .all(|k| !k.starts_with("encoder.") && !k.starts_with("pre_block.")),
+        "T2AV never reads the audio encoder"
+    );
+    assert!(
+        dtypes(include_str!("manifests/audio_vae.json"))
+            .values()
+            .all(|d| d == "F32"),
+        "the audio VAE must stay float32"
+    );
 }
 
 #[test]
@@ -132,12 +190,28 @@ fn video_decoder_asks_for_exactly_the_published_decoder() {
     let layers = cfg.decoder_num_layers;
     cfg.decoder_num_layers = 1;
     H3VideoDecoder::load(cfg, &map).expect("load");
-    let seen = for_every_index(&seen.lock().expect("lock"), "decoder.transformer_blocks", 0, 0..layers);
+    let seen = for_every_index(
+        &seen.lock().expect("lock"),
+        "decoder.transformer_blocks",
+        0,
+        0..layers,
+    );
     let mut problems = mismatches(&seen, &published);
-    problems.extend(unrequested(&seen, &published, |k| k.starts_with("decoder.") || k.starts_with("post_quant_conv.")));
+    problems.extend(unrequested(&seen, &published, |k| {
+        k.starts_with("decoder.") || k.starts_with("post_quant_conv.")
+    }));
     assert_clean("vae", problems);
-    assert!(seen.keys().all(|k| !k.starts_with("encoder.") && !k.starts_with("quant_conv.")), "T2AV never reads the video encoder");
-    assert!(!published.keys().any(|k| k.contains("norm_q") || k.contains("norm_k")), "the decoder's QK norm has no parameters");
+    assert!(
+        seen.keys()
+            .all(|k| !k.starts_with("encoder.") && !k.starts_with("quant_conv.")),
+        "T2AV never reads the video encoder"
+    );
+    assert!(
+        !published
+            .keys()
+            .any(|k| k.contains("norm_q") || k.contains("norm_k")),
+        "the decoder's QK norm has no parameters"
+    );
 }
 
 #[test]
@@ -148,16 +222,31 @@ fn dit_loaders_cover_the_published_transformer_and_nothing_else() {
     let layers = cfg.num_layers;
     // A one-rung ladder keeps the host-side AdaLN GEMM small; the keys do not depend on it.
     let rung = |shift| H3Schedule::from_dmd_rungs(&[500], shift).expect("schedule");
-    let schedule = H3JointSchedule { video: rung(10.0), audio: rung(3.0) };
+    let schedule = H3JointSchedule {
+        video: rung(10.0),
+        audio: rung(3.0),
+    };
 
     // Resident stack with the VSA gates, block 0 only; then block 49 for real.
     let (map, seen) = recording();
     let mut one = cfg.clone();
     one.num_layers = 1;
     H3Transformer::load(one, &map, &schedule, true).expect("load");
-    let mut requested = for_every_index(&seen.lock().expect("lock"), "transformer_blocks", 0, 0..layers);
+    let mut requested = for_every_index(
+        &seen.lock().expect("lock"),
+        "transformer_blocks",
+        0,
+        0..layers,
+    );
     let (map, seen) = recording();
-    Block::load(&map, &format!("transformer_blocks.{}", layers - 1), &cfg, true).expect("last block");
+    Block::load(
+        &map,
+        &format!("transformer_blocks.{}", layers - 1),
+        &cfg,
+        true,
+        &mut None,
+    )
+    .expect("last block");
     requested.extend(seen.lock().expect("lock").clone());
     // The text refiner, loaded on its own and dropped after one use.
     let (map, seen) = recording();
@@ -168,14 +257,22 @@ fn dit_loaders_cover_the_published_transformer_and_nothing_else() {
     problems.extend(unrequested(&requested, &published, |_| true));
     assert_clean("transformer", problems);
     assert_eq!(published.len(), 688);
-    assert!(dtypes(include_str!("manifests/transformer.json")).values().all(|d| d == "BF16"));
+    assert!(dtypes(include_str!("manifests/transformer.json"))
+        .values()
+        .all(|d| d == "BF16"));
 
     // Dense mode must not pay for the gates, and the resident loaders must not
     // touch the AdaLN projections: only the table precompute streams them.
     let (map, seen) = recording();
-    Block::load(&map, "transformer_blocks.7", &cfg, false).expect("dense block");
+    Block::load(&map, "transformer_blocks.7", &cfg, false, &mut None).expect("dense block");
     let dense = seen.lock().expect("lock").clone();
-    assert!(dense.keys().all(|k| !k.contains("to_gate_compress") && !k.contains("adaln_proj")), "{:?}", dense.keys().collect::<Vec<_>>());
+    assert!(
+        dense
+            .keys()
+            .all(|k| !k.contains("to_gate_compress") && !k.contains("adaln_proj")),
+        "{:?}",
+        dense.keys().collect::<Vec<_>>()
+    );
     let (map, seen) = recording();
     let mut one = cfg.clone();
     one.num_layers = 1;
@@ -210,10 +307,20 @@ fn text_encoder_reads_only_layers_present_in_shards_1_to_11() {
     let seen = for_every_index(&seen.lock().expect("lock"), &cfg.layer_prefix, 0, 0..taps);
     // Every key tap 50 needs lives in shards 1..11: shards 12..14 need not be on disk.
     assert_clean("text_encoder", mismatches(&seen, &published));
-    assert!(seen.keys().all(|k| !k.ends_with("language_model.norm.weight")), "tap 50 is un-normed");
+    assert!(
+        seen.keys()
+            .all(|k| !k.ends_with("language_model.norm.weight")),
+        "tap 50 is un-normed"
+    );
     let problems = unrequested(&seen, &published, |k| {
-        k == cfg.embed_key || k.strip_prefix("model.language_model.layers.").and_then(|r| r.split('.').next()).and_then(|n| n.parse::<usize>().ok()).is_some_and(|n| n < taps)
+        k == cfg.embed_key
+            || k.strip_prefix("model.language_model.layers.")
+                .and_then(|r| r.split('.').next())
+                .and_then(|n| n.parse::<usize>().ok())
+                .is_some_and(|n| n < taps)
     });
     assert_clean("text_encoder layers 0..49", problems);
-    assert!(dtypes(include_str!("manifests/text_encoder.json")).values().all(|d| d == "BF16"));
+    assert!(dtypes(include_str!("manifests/text_encoder.json"))
+        .values()
+        .all(|d| d == "BF16"));
 }

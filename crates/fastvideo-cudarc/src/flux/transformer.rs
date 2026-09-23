@@ -31,7 +31,9 @@ impl FluxTransformer {
         let hit = hub_keys::first_present(map, fkeys::PROBES);
         let tiny = cfg.num_layers <= 2;
         if hit.is_none() && !tiny {
-            return Err(msg(hub_keys::require_any(map, "flux", fkeys::PROBES).unwrap_err()));
+            return Err(msg(
+                hub_keys::require_any(map, "flux", fkeys::PROBES).unwrap_err()
+            ));
         }
         let mut s = Self::zeros(cfg.clone())?;
         s.loaded_key = hit;
@@ -59,7 +61,10 @@ impl FluxTransformer {
         }
         let (b, c, h, w) = (shape[0], shape[1], shape[2], shape[3]);
         if c != self.cfg.in_channels {
-            return Err(msg(format!("flux in_channels {} vs {}", c, self.cfg.in_channels)));
+            return Err(msg(format!(
+                "flux in_channels {} vs {}",
+                c, self.cfg.in_channels
+            )));
         }
         let scale = (timestep / 1000.0).clamp(0.0, 1.0);
         let g = if self.cfg.guidance_embeds {

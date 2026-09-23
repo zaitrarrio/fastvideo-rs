@@ -11,7 +11,8 @@ pub const QWEN_CROP_START: usize = 108;
 pub const QWEN_LAYERS_TO_SKIP: usize = 2;
 
 /// System message Diffusers prepends via the Qwen chat template.
-pub const QWEN_SYSTEM_MESSAGE: &str = "You are a helpful assistant. Describe the video by detailing the following aspects: \
+pub const QWEN_SYSTEM_MESSAGE: &str =
+    "You are a helpful assistant. Describe the video by detailing the following aspects: \
 1. The main content and theme of the video. \
 2. The color, shape, size, texture, quantity, text, and spatial relationships of the objects. \
 3. Actions, events, behaviors temporal relationships, physical movement changes of the objects. \
@@ -93,8 +94,8 @@ pub fn format_user_prompt(prompt: &str) -> String {
 /// `apply_chat_template` path is wired.
 pub fn tokenize_qwen(root: &Path, prompt: &str, max_length: usize) -> Result<Vec<u32>, String> {
     let path = root.join("tokenizer").join("tokenizer.json");
-    let tokenizer = tokenizers::Tokenizer::from_file(&path)
-        .map_err(|e| format!("{}: {e}", path.display()))?;
+    let tokenizer =
+        tokenizers::Tokenizer::from_file(&path).map_err(|e| format!("{}: {e}", path.display()))?;
     let body = format_user_prompt(prompt);
     let encoding = tokenizer
         .encode(body.as_str(), true)

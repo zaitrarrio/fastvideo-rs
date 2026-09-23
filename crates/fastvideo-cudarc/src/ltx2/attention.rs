@@ -94,11 +94,21 @@ pub struct Attention {
 impl Attention {
     /// `prefix` is the diffusers module path (`transformer_blocks.3.attn1`);
     /// `keys` spells it for the checkpoint at hand.
-    pub fn load(map: &WeightMap, keys: &Keys, prefix: &str, dims: AttentionDims, eps: f32, gated: bool) -> Result<Self> {
+    pub fn load(
+        map: &WeightMap,
+        keys: &Keys,
+        prefix: &str,
+        dims: AttentionDims,
+        eps: f32,
+        gated: bool,
+    ) -> Result<Self> {
         let inner = dims.inner();
-        let lin = |name: &str, i: usize, o: usize| Linear::load(map, &keys.key(&format!("{prefix}.{name}")), i, o, true);
+        let lin = |name: &str, i: usize, o: usize| {
+            Linear::load(map, &keys.key(&format!("{prefix}.{name}")), i, o, true)
+        };
         let norm = |name: &str| -> Result<CudaTensor> {
-            let mut w = cuda_tensor_shaped(map, &keys.key(&format!("{prefix}.{name}.weight")), &[inner])?;
+            let mut w =
+                cuda_tensor_shaped(map, &keys.key(&format!("{prefix}.{name}.weight")), &[inner])?;
             w.pin_device()?;
             Ok(w)
         };
@@ -124,7 +134,9 @@ impl Attention {
     fn apply_head_gates(&self, out: &CudaTensor, gate_logits: &CudaTensor) -> Result<CudaTensor> {
         let heads = self.dims.heads;
         let gates = gate_logits.try_sigmoid()?.try_mul_scalar(2.0)?;
-        let gates = gates.permute(&[0, 2, 1])?.reshape(vec![1, heads, gates.shape[1], 1])?;
+        let gates = gates
+            .permute(&[0, 2, 1])?
+            .reshape(vec![1, heads, gates.shape[1], 1])?;
         out.mul(&gates)
     }
 
@@ -146,8 +158,16 @@ impl Attention {
             None => None,
         };
         let ctx = context.unwrap_or(x);
-        let q = self.to_q.forward(x)?.rms_norm(&self.norm_q, self.eps)?.split_heads_bhsd(0, heads, d)?;
-        let k = self.to_k.forward(ctx)?.rms_norm(&self.norm_k, self.eps)?.split_heads_bhsd(0, heads, d)?;
+        let q = self
+            .to_q
+            .forward(x)?
+            .rms_norm(&self.norm_q, self.eps)?
+            .split_heads_bhsd(0, heads, d)?;
+        let k = self
+            .to_k
+            .forward(ctx)?
+            .rms_norm(&self.norm_k, self.eps)?
+            .split_heads_bhsd(0, heads, d)?;
         let v = self.to_v.forward(ctx)?.split_heads_bhsd(0, heads, d)?;
         let (q, k) = match q_rope {
             Some(rope) => (rope.apply(&q)?, k_rope.unwrap_or(rope).apply(&k)?),
@@ -170,10 +190,29 @@ pub struct FeedForward {
 }
 
 impl FeedForward {
-    pub fn load(map: &WeightMap, keys: &Keys, prefix: &str, dim: usize, inner: usize, has_bias: bool) -> Result<Self> {
+    pub fn load(
+        map: &WeightMap,
+        keys: &Keys,
+        prefix: &str,
+        dim: usize,
+        inner: usize,
+        has_bias: bool,
+    ) -> Result<Self> {
         Ok(Self {
-            up: Linear::load(map, &keys.key(&format!("{prefix}.net.0.proj")), dim, inner, has_bias)?,
-            down: Linear::load(map, &keys.key(&format!("{prefix}.net.2")), inner, dim, has_bias)?,
+            up: Linear::load(
+                map,
+                &keys.key(&format!("{prefix}.net.0.proj")),
+                dim,
+                inner,
+                has_bias,
+            )?,
+            down: Linear::load(
+                map,
+                &keys.key(&format!("{prefix}.net.2")),
+                inner,
+                dim,
+                has_bias,
+            )?,
         })
     }
 
@@ -191,29 +230,52 @@ pub(crate) mod tests {
     /// signed so activations stay tame through several layers.
     pub(crate) fn weights() -> WeightMap {
         WeightMap::generated(|key, shape| {
-            let seed = key.bytes().fold(11u32, |a, b| a.wrapping_mul(31).wrapping_add(u32::from(b)));
+            let seed = key
+                .bytes()
+                .fold(11u32, |a, b| a.wrapping_mul(31).wrapping_add(u32::from(b)));
             let n: usize = shape.iter().product();
             (0..n)
                 .map(|i| {
-                    let v = (seed.wrapping_add(i as u32).wrapping_mul(2_654_435_761) >> 8) as f32 / (1u32 << 24) as f32;
-                    if key.contains("norm") { 0.5 + v } else { (v - 0.5) * 0.6 }
+                    let v = (seed.wrapping_add(i as u32).wrapping_mul(2_654_435_761) >> 8) as f32
+                        / (1u32 << 24) as f32;
+                    if key.contains("norm") {
+                        0.5 + v
+                    } else {
+                        (v - 0.5) * 0.6
+                    }
                 })
                 .collect()
         })
     }
 
     pub(crate) fn get(map: &WeightMap, key: &str, shape: &[usize]) -> Vec<f32> {
-        cuda_tensor_shaped(map, key, shape).unwrap().host_cow().unwrap().into_owned()
+        cuda_tensor_shaped(map, key, shape)
+            .unwrap()
+            .host_cow()
+            .unwrap()
+            .into_owned()
     }
 
     /// `y = W x + b`, `W` row-major `[o, i]`.
     pub(crate) fn linear(x: &[f32], w: &[f32], b: &[f32]) -> Vec<f32> {
-        b.iter().enumerate().map(|(r, b)| b + x.iter().enumerate().map(|(c, a)| a * w[r * x.len() + c]).sum::<f32>()).collect()
+        b.iter()
+            .enumerate()
+            .map(|(r, b)| {
+                b + x
+                    .iter()
+                    .enumerate()
+                    .map(|(c, a)| a * w[r * x.len() + c])
+                    .sum::<f32>()
+            })
+            .collect()
     }
 
     pub(crate) fn rms(x: &[f32], w: Option<&[f32]>, eps: f32) -> Vec<f32> {
         let ms = x.iter().map(|a| a * a).sum::<f32>() / x.len() as f32;
-        x.iter().enumerate().map(|(i, a)| a / (ms + eps).sqrt() * w.map_or(1.0, |w| w[i])).collect()
+        x.iter()
+            .enumerate()
+            .map(|(i, a)| a / (ms + eps).sqrt() * w.map_or(1.0, |w| w[i]))
+            .collect()
     }
 
     /// The reference attention written as loops over tokens, heads and pairs:
@@ -230,10 +292,23 @@ pub(crate) mod tests {
         gated: bool,
     ) -> Vec<Vec<f32>> {
         let (inner, h, d) = (dims.inner(), dims.heads, dims.head_dim);
-        let w = |n: &str, o: usize, i: usize| (get(map, &format!("{prefix}.{n}.weight"), &[o, i]), get(map, &format!("{prefix}.{n}.bias"), &[o]));
-        let (wq, wk, wv, wo) = (w("to_q", inner, dims.query_dim), w("to_k", inner, dims.context_dim), w("to_v", inner, dims.context_dim), w("to_out.0", dims.query_dim, inner));
+        let w = |n: &str, o: usize, i: usize| {
+            (
+                get(map, &format!("{prefix}.{n}.weight"), &[o, i]),
+                get(map, &format!("{prefix}.{n}.bias"), &[o]),
+            )
+        };
+        let (wq, wk, wv, wo) = (
+            w("to_q", inner, dims.query_dim),
+            w("to_k", inner, dims.context_dim),
+            w("to_v", inner, dims.context_dim),
+            w("to_out.0", dims.query_dim, inner),
+        );
         let gate_w = gated.then(|| w("to_gate_logits", dims.heads, dims.query_dim));
-        let (nq, nk) = (get(map, &format!("{prefix}.norm_q.weight"), &[inner]), get(map, &format!("{prefix}.norm_k.weight"), &[inner]));
+        let (nq, nk) = (
+            get(map, &format!("{prefix}.norm_q.weight"), &[inner]),
+            get(map, &format!("{prefix}.norm_k.weight"), &[inner]),
+        );
         let sigmoid = |v: f32| 1.0 / (1.0 + (-v).exp());
         let rotate = |v: &[f32], rope: Option<&SplitRope>, tok: usize| -> Vec<f32> {
             let Some(r) = rope else { return v.to_vec() };
@@ -249,11 +324,25 @@ pub(crate) mod tests {
             }
             out
         };
-        let q: Vec<Vec<f32>> = x.iter().enumerate().map(|(t, v)| rotate(&rms(&linear(v, &wq.0, &wq.1), Some(&nq), 1e-6), q_rope, t)).collect();
+        let q: Vec<Vec<f32>> = x
+            .iter()
+            .enumerate()
+            .map(|(t, v)| rotate(&rms(&linear(v, &wq.0, &wq.1), Some(&nq), 1e-6), q_rope, t))
+            .collect();
         let k: Vec<Vec<f32>> = ctx
             .iter()
             .enumerate()
-            .map(|(t, v)| rotate(&rms(&linear(v, &wk.0, &wk.1), Some(&nk), 1e-6), if q_rope.is_some() { k_rope.or(q_rope) } else { None }, t))
+            .map(|(t, v)| {
+                rotate(
+                    &rms(&linear(v, &wk.0, &wk.1), Some(&nk), 1e-6),
+                    if q_rope.is_some() {
+                        k_rope.or(q_rope)
+                    } else {
+                        None
+                    },
+                    t,
+                )
+            })
             .collect();
         let v: Vec<Vec<f32>> = ctx.iter().map(|c| linear(c, &wv.0, &wv.1)).collect();
         q.iter()
@@ -269,7 +358,17 @@ pub(crate) mod tests {
                     .unwrap_or_else(|| vec![1.0; h]);
                 for head in 0..h {
                     let span = head * d..(head + 1) * d;
-                    let scores: Vec<f32> = k.iter().map(|kj| qi[span.clone()].iter().zip(&kj[span.clone()]).map(|(a, b)| a * b).sum::<f32>() / (d as f32).sqrt()).collect();
+                    let scores: Vec<f32> = k
+                        .iter()
+                        .map(|kj| {
+                            qi[span.clone()]
+                                .iter()
+                                .zip(&kj[span.clone()])
+                                .map(|(a, b)| a * b)
+                                .sum::<f32>()
+                                / (d as f32).sqrt()
+                        })
+                        .collect();
                     let mx = scores.iter().copied().fold(f32::MIN, f32::max);
                     let z: f32 = scores.iter().map(|s| (s - mx).exp()).sum();
                     let g = gates[head];
@@ -286,11 +385,21 @@ pub(crate) mod tests {
     }
 
     pub(crate) fn rows(t: &CudaTensor, width: usize) -> Vec<Vec<f32>> {
-        t.host_cow().unwrap().chunks_exact(width).map(<[f32]>::to_vec).collect()
+        t.host_cow()
+            .unwrap()
+            .chunks_exact(width)
+            .map(<[f32]>::to_vec)
+            .collect()
     }
 
     pub(crate) fn tokens(n: usize, width: usize, k: f32) -> Vec<Vec<f32>> {
-        (0..n).map(|t| (0..width).map(|c| ((t * width + c) as f32 * k).sin()).collect()).collect()
+        (0..n)
+            .map(|t| {
+                (0..width)
+                    .map(|c| ((t * width + c) as f32 * k).sin())
+                    .collect()
+            })
+            .collect()
     }
 
     pub(crate) fn tensor(rows: &[Vec<f32>]) -> CudaTensor {
@@ -309,9 +418,22 @@ pub(crate) mod tests {
 
     #[test]
     fn self_attention_with_a_per_head_table_matches_a_loop_reference() {
-        let dims = AttentionDims { query_dim: 12, context_dim: 12, heads: 3, head_dim: 4 };
+        let dims = AttentionDims {
+            query_dim: 12,
+            context_dim: 12,
+            heads: 3,
+            head_dim: 4,
+        };
         let map = weights();
-        let attn = Attention::load(&map, &Keys::transformer(Layout::Diffusers), "blk.attn1", dims, 1e-6, false).unwrap();
+        let attn = Attention::load(
+            &map,
+            &Keys::transformer(Layout::Diffusers),
+            "blk.attn1",
+            dims,
+            1e-6,
+            false,
+        )
+        .unwrap();
         let x = tokens(5, 12, 0.37);
         // Three axes over a 12-wide table: 2 freqs per axis, no pad; the three
         // heads get different slices of it.
@@ -330,35 +452,80 @@ pub(crate) mod tests {
             let (head0, rest) = same.sin.split_at_mut(h * 5 * 2);
             rest[..10].copy_from_slice(&head0[..10]);
         }
-        let other = attn.forward(&tensor(&x), None, Some(&DeviceRope::upload(&same).unwrap()), None).unwrap();
-        assert!(rows(&other, 12).concat().iter().zip(want.concat()).any(|(a, b)| (a - b).abs() > 1e-3));
+        let other = attn
+            .forward(
+                &tensor(&x),
+                None,
+                Some(&DeviceRope::upload(&same).unwrap()),
+                None,
+            )
+            .unwrap();
+        assert!(rows(&other, 12)
+            .concat()
+            .iter()
+            .zip(want.concat())
+            .any(|(a, b)| (a - b).abs() > 1e-3));
     }
 
     #[test]
     fn cross_attention_rotates_each_side_with_its_own_table_and_lengths_may_differ() {
         // Query stream 16 wide, context 8 wide, attention in the context's
         // head layout — the audio→video shape in miniature.
-        let dims = AttentionDims { query_dim: 16, context_dim: 8, heads: 2, head_dim: 4 };
+        let dims = AttentionDims {
+            query_dim: 16,
+            context_dim: 8,
+            heads: 2,
+            head_dim: 4,
+        };
         let map = weights();
-        let attn = Attention::load(&map, &Keys::transformer(Layout::Diffusers), "blk.a2v", dims, 1e-6, false).unwrap();
+        let attn = Attention::load(
+            &map,
+            &Keys::transformer(Layout::Diffusers),
+            "blk.a2v",
+            dims,
+            1e-6,
+            false,
+        )
+        .unwrap();
         let (x, ctx) = (tokens(6, 16, 0.21), tokens(3, 8, 0.53));
         let qt = SplitRope::from_fractions(&[0.0, 0.1, 0.2, 0.3, 0.4, 0.5], 1, 8, 2, 10_000.0);
         let kt = SplitRope::from_fractions(&[0.05, 0.25, 0.45], 1, 8, 2, 10_000.0);
         let got = attn
-            .forward(&tensor(&x), Some(&tensor(&ctx)), Some(&DeviceRope::upload(&qt).unwrap()), Some(&DeviceRope::upload(&kt).unwrap()))
+            .forward(
+                &tensor(&x),
+                Some(&tensor(&ctx)),
+                Some(&DeviceRope::upload(&qt).unwrap()),
+                Some(&DeviceRope::upload(&kt).unwrap()),
+            )
             .unwrap();
         assert_eq!(got.shape, vec![1, 6, 16]);
-        let want = attention_reference(&map, "blk.a2v", dims, &x, &ctx, Some(&qt), Some(&kt), false);
+        let want =
+            attention_reference(&map, "blk.a2v", dims, &x, &ctx, Some(&qt), Some(&kt), false);
         assert_close(&rows(&got, 16), &want, 2e-5, "a2v attention");
     }
 
     #[test]
     fn text_cross_attention_is_not_rotated() {
-        let dims = AttentionDims { query_dim: 8, context_dim: 8, heads: 2, head_dim: 4 };
+        let dims = AttentionDims {
+            query_dim: 8,
+            context_dim: 8,
+            heads: 2,
+            head_dim: 4,
+        };
         let map = weights();
-        let attn = Attention::load(&map, &Keys::transformer(Layout::Diffusers), "blk.attn2", dims, 1e-6, false).unwrap();
+        let attn = Attention::load(
+            &map,
+            &Keys::transformer(Layout::Diffusers),
+            "blk.attn2",
+            dims,
+            1e-6,
+            false,
+        )
+        .unwrap();
         let (x, ctx) = (tokens(4, 8, 0.4), tokens(7, 8, 0.9));
-        let got = attn.forward(&tensor(&x), Some(&tensor(&ctx)), None, None).unwrap();
+        let got = attn
+            .forward(&tensor(&x), Some(&tensor(&ctx)), None, None)
+            .unwrap();
         let want = attention_reference(&map, "blk.attn2", dims, &x, &ctx, None, None, false);
         assert_close(&rows(&got, 8), &want, 2e-5, "text cross attention");
     }
@@ -373,9 +540,22 @@ pub(crate) mod tests {
 
     #[test]
     fn gated_attention_matches_two_sigmoid_per_head_reference() {
-        let dims = AttentionDims { query_dim: 12, context_dim: 12, heads: 3, head_dim: 4 };
+        let dims = AttentionDims {
+            query_dim: 12,
+            context_dim: 12,
+            heads: 3,
+            head_dim: 4,
+        };
         let map = weights();
-        let attn = Attention::load(&map, &Keys::transformer(Layout::Diffusers), "blk.gattn", dims, 1e-6, true).unwrap();
+        let attn = Attention::load(
+            &map,
+            &Keys::transformer(Layout::Diffusers),
+            "blk.gattn",
+            dims,
+            1e-6,
+            true,
+        )
+        .unwrap();
         let x = tokens(4, 12, 0.31);
         let got = attn.forward(&tensor(&x), None, None, None).unwrap();
         let want = attention_reference(&map, "blk.gattn", dims, &x, &x, None, None, true);
@@ -385,20 +565,56 @@ pub(crate) mod tests {
     #[test]
     fn feed_forward_loads_without_bias_when_requested() {
         let map = weights();
-        let err = FeedForward::load(&map, &Keys::transformer(Layout::Diffusers), "blk.nobias_ff", 6, 24, false);
+        let err = FeedForward::load(
+            &map,
+            &Keys::transformer(Layout::Diffusers),
+            "blk.nobias_ff",
+            6,
+            24,
+            false,
+        );
         assert!(err.is_ok());
     }
 
     #[test]
     fn feed_forward_is_linear_tanh_gelu_linear() {
         let map = weights();
-        let ff = FeedForward::load(&map, &Keys::transformer(Layout::Diffusers), "blk.ff", 6, 24, true).unwrap();
+        let ff = FeedForward::load(
+            &map,
+            &Keys::transformer(Layout::Diffusers),
+            "blk.ff",
+            6,
+            24,
+            true,
+        )
+        .unwrap();
         let x = tokens(3, 6, 0.77);
         let got = ff.forward(&tensor(&x)).unwrap();
-        let (w0, b0) = (get(&map, "blk.ff.net.0.proj.weight", &[24, 6]), get(&map, "blk.ff.net.0.proj.bias", &[24]));
-        let (w2, b2) = (get(&map, "blk.ff.net.2.weight", &[6, 24]), get(&map, "blk.ff.net.2.bias", &[6]));
-        let gelu = |v: f32| 0.5 * v * (1.0 + ((2.0 / std::f32::consts::PI).sqrt() * (v + 0.044_715 * v * v * v)).tanh());
-        let want: Vec<Vec<f32>> = x.iter().map(|v| linear(&linear(v, &w0, &b0).iter().map(|a| gelu(*a)).collect::<Vec<_>>(), &w2, &b2)).collect();
+        let (w0, b0) = (
+            get(&map, "blk.ff.net.0.proj.weight", &[24, 6]),
+            get(&map, "blk.ff.net.0.proj.bias", &[24]),
+        );
+        let (w2, b2) = (
+            get(&map, "blk.ff.net.2.weight", &[6, 24]),
+            get(&map, "blk.ff.net.2.bias", &[6]),
+        );
+        let gelu = |v: f32| {
+            0.5 * v
+                * (1.0 + ((2.0 / std::f32::consts::PI).sqrt() * (v + 0.044_715 * v * v * v)).tanh())
+        };
+        let want: Vec<Vec<f32>> = x
+            .iter()
+            .map(|v| {
+                linear(
+                    &linear(v, &w0, &b0)
+                        .iter()
+                        .map(|a| gelu(*a))
+                        .collect::<Vec<_>>(),
+                    &w2,
+                    &b2,
+                )
+            })
+            .collect();
         assert_close(&rows(&got, 6), &want, 1e-5, "feed forward");
     }
 }

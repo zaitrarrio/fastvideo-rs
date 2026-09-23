@@ -36,12 +36,15 @@ impl AutoencoderKl {
         let tiny = cfg.block_out_channels.len() <= 2 && cfg.latent_channels <= 16;
         if hit.is_none() && !tiny {
             // Still accept packs that only ship decoder half.
-            let decoder_only = map.contains("decoder.conv_in.weight")
-                || map.contains("decoder.conv_out.weight");
+            let decoder_only =
+                map.contains("decoder.conv_in.weight") || map.contains("decoder.conv_out.weight");
             if !decoder_only {
-                return Err(msg(
-                    hub_keys::require_any(map, "autoencoder_kl", vakeys::PROBES).unwrap_err(),
-                ));
+                return Err(msg(hub_keys::require_any(
+                    map,
+                    "autoencoder_kl",
+                    vakeys::PROBES,
+                )
+                .unwrap_err()));
             }
         }
         Ok(Self {

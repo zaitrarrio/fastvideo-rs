@@ -173,7 +173,10 @@ impl WanVideoArchConfig {
 
     pub fn from_preset(preset: &str) -> Self {
         match preset {
-            "wan_t2v_1_3b" | "fast_wan_t2v_480p" | "wan_fun_1_3b_inp" | "wan_fun_1_3b_control"
+            "wan_t2v_1_3b"
+            | "fast_wan_t2v_480p"
+            | "wan_fun_1_3b_inp"
+            | "wan_fun_1_3b_control"
             | "turbo_t2v_1_3b" => Self::wan_t2v_1_3b(),
             "wan_t2v_14b" | "turbo_t2v_14b" => Self::wan_t2v_14b(),
             "wan_i2v_14b_480p" | "wan_i2v_14b_720p" => Self::wan_i2v_14b(),

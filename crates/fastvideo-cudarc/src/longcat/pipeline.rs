@@ -66,7 +66,8 @@ impl LongCatPipeline {
     }
 
     pub fn load_dit(&mut self) -> Result<()> {
-        let map = WeightMap::open(&self.root.join("transformer")).map_err(|e| msg(e.to_string()))?;
+        let map =
+            WeightMap::open(&self.root.join("transformer")).map_err(|e| msg(e.to_string()))?;
         self.dit = Some(LongCatTransformer::load(self.dit_cfg.clone(), &map)?);
         Ok(())
     }
@@ -74,7 +75,8 @@ impl LongCatPipeline {
     pub fn load_vae(&mut self) -> Result<()> {
         let map = WeightMap::open(&self.root.join("vae")).map_err(|e| msg(e.to_string()))?;
         self.vae = Some(
-            AutoencoderKlWan::load(WanVaeConfig::wan_2_1(), &map).map_err(|e| msg(e.to_string()))?,
+            AutoencoderKlWan::load(WanVaeConfig::wan_2_1(), &map)
+                .map_err(|e| msg(e.to_string()))?,
         );
         Ok(())
     }
@@ -83,12 +85,9 @@ impl LongCatPipeline {
         let te = self.root.join("text_encoder");
         let tok = self.root.join("tokenizer").join("tokenizer.json");
         if te.is_dir() && tok.is_file() {
-            let (ids, len) = fastvideo_models::tokenize_prompt(
-                tok.to_str().unwrap_or(""),
-                prompt,
-                512,
-            )
-            .map_err(msg)?;
+            let (ids, len) =
+                fastvideo_models::tokenize_prompt(tok.to_str().unwrap_or(""), prompt, 512)
+                    .map_err(msg)?;
             let mut padded = ids;
             padded.resize(512, 0);
             let map = WeightMap::open(&te).map_err(|e| msg(e.to_string()))?;
@@ -140,10 +139,7 @@ impl LongCatPipeline {
             let lat = CudaTensor::from_vec(sample.clone(), vec![1, c, lt, lh, lw])?;
             let velocity = dit.forward_with_bsa(&lat, &text, t as f32, enable_bsa)?;
             let vel = velocity.host_cow()?;
-            sample = sched
-                .inner
-                .step_euler(&sample, &vel[..n])
-                .map_err(msg)?;
+            sample = sched.inner.step_euler(&sample, &vel[..n]).map_err(msg)?;
             let _ = i;
         }
 
@@ -151,7 +147,9 @@ impl LongCatPipeline {
             msg("LongCat: call load_vae() after placing Diffusers `vae/` under --weights")
         })?;
         let latents = CudaTensor::from_vec(sample, vec![1, c, lt, lh, lw])?;
-        let scaled = vae.scale_latents(&latents).map_err(|e| msg(e.to_string()))?;
+        let scaled = vae
+            .scale_latents(&latents)
+            .map_err(|e| msg(e.to_string()))?;
         let pixels = vae.decode(&scaled).map_err(|e| msg(e.to_string()))?;
         let [_, _, tf, hf, wf] = match pixels.shape[..] {
             [1, 3, tf, hf, wf] => [1, 3, tf, hf, wf],

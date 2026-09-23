@@ -206,7 +206,7 @@ pub enum Stage {
         #[arg(long)]
         taeh3_weights: Option<PathBuf>,
         /// DMD recipe: `8step` / `v2`, `4step-vsa` / `preview-vsa`, `4step-dense`
-        /// / `preview-dense`. Default: read `fastvideo_inference.json` or 8-step.
+        /// / `preview-dense`, `sol-h3`. Default: read `fastvideo_inference.json` or 8-step.
         #[arg(long)]
         h3_recipe: Option<String>,
         #[arg(long, default_value = "cuda")]
@@ -234,43 +234,140 @@ pub fn run(report: &mut Report, stage: &Stage) -> StageResult<()> {
             report.set("contract", format!("{c:?}"));
             Ok(())
         }
-        Stage::Text { weights, oracle, meta, prompt, device, max_rel, max_rel_layer0, precision } => {
+        Stage::Text {
+            weights,
+            oracle,
+            meta,
+            prompt,
+            device,
+            max_rel,
+            max_rel_layer0,
+            precision,
+        } => {
             let precision = match precision.as_deref() {
                 None => None,
                 Some("native") => Some(fastvideo_cudarc::llm::WeightPrecision::Native),
                 Some("fp8") => Some(fastvideo_cudarc::llm::WeightPrecision::Fp8Rows),
-                Some(other) => return Err(anyhow::anyhow!("unknown --precision '{other}' (native|fp8)").into()),
+                Some(other) => {
+                    return Err(
+                        anyhow::anyhow!("unknown --precision '{other}' (native|fp8)").into(),
+                    )
+                }
             };
             let fp8 = precision == Some(fastvideo_cudarc::llm::WeightPrecision::Fp8Rows);
             let max_rel = max_rel.unwrap_or(if fp8 { 5e-2 } else { 2e-2 });
             // One quantized layer has no 50-layer average to hide in; its own gate scales with the tap's.
-            let layer0 = if fp8 { max_rel_layer0.max(max_rel) } else { *max_rel_layer0 };
-            text(report, weights, oracle, meta.as_deref(), prompt.as_deref(), device, max_rel, layer0, precision)
+            let layer0 = if fp8 {
+                max_rel_layer0.max(max_rel)
+            } else {
+                *max_rel_layer0
+            };
+            text(
+                report,
+                weights,
+                oracle,
+                meta.as_deref(),
+                prompt.as_deref(),
+                device,
+                max_rel,
+                layer0,
+                precision,
+            )
         }
-        Stage::AudioVae { weights, oracle, device, max_abs } => audio_vae(report, weights, oracle, device, *max_abs),
-        Stage::Vae { weights, oracle, device, max_abs, max_rel } => vae(report, weights, oracle, device, *max_abs, *max_rel),
-        Stage::Dit { weights, oracle, device, max_rel } => dit(report, weights, oracle, device, *max_rel),
-        Stage::Loop { weights, oracle, device, max_rel, gated_steps } => ladder(report, weights, oracle, device, *max_rel, *gated_steps),
-        Stage::Vsa { device, seed, max_rel } => vsa(report, device, *seed, *max_rel),
-        Stage::Gen { weights, prompt, seconds, seed, dense, no_mp4, clip_dir, adaln_cache, text_cache, no_text_cache, text_weights, text_encoder, compare_text_encoders, warm, taeh3_weights, h3_recipe, device } => {
+        Stage::AudioVae {
+            weights,
+            oracle,
+            device,
+            max_abs,
+        } => audio_vae(report, weights, oracle, device, *max_abs),
+        Stage::Vae {
+            weights,
+            oracle,
+            device,
+            max_abs,
+            max_rel,
+        } => vae(report, weights, oracle, device, *max_abs, *max_rel),
+        Stage::Dit {
+            weights,
+            oracle,
+            device,
+            max_rel,
+        } => dit(report, weights, oracle, device, *max_rel),
+        Stage::Loop {
+            weights,
+            oracle,
+            device,
+            max_rel,
+            gated_steps,
+        } => ladder(report, weights, oracle, device, *max_rel, *gated_steps),
+        Stage::Vsa {
+            device,
+            seed,
+            max_rel,
+        } => vsa(report, device, *seed, *max_rel),
+        Stage::Gen {
+            weights,
+            prompt,
+            seconds,
+            seed,
+            dense,
+            no_mp4,
+            clip_dir,
+            adaln_cache,
+            text_cache,
+            no_text_cache,
+            text_weights,
+            text_encoder,
+            compare_text_encoders,
+            warm,
+            taeh3_weights,
+            h3_recipe,
+            device,
+        } => {
             let text_cache = if *no_text_cache {
                 None
             } else {
-                Some(text_cache.clone().unwrap_or_else(|| clip_dir.parent().unwrap_or(Path::new(".")).join("text-cache")))
+                Some(text_cache.clone().unwrap_or_else(|| {
+                    clip_dir
+                        .parent()
+                        .unwrap_or(Path::new("."))
+                        .join("text-cache")
+                }))
             };
             let options = fastvideo_cudarc::h3::pipeline::H3PipelineOptions {
                 dense: *dense,
                 adaln_cache: adaln_cache.clone(),
                 text_root: text_weights.clone(),
                 text_cache,
-                text_encoder: fastvideo_cudarc::h3::pipeline::TextEncoderChoice::parse(text_encoder).map_err(|e| anyhow::anyhow!(e))?,
+                text_encoder: fastvideo_cudarc::h3::pipeline::TextEncoderChoice::parse(
+                    text_encoder,
+                )
+                .map_err(|e| anyhow::anyhow!(e))?,
                 taeh3: taeh3_weights.clone(),
                 recipe: h3_recipe.clone(),
                 ref2va: false,
+                adapter: None,
+                reference_image_resize: Default::default(),
             };
-            gen(report, weights, prompt, *seconds, *seed, !*no_mp4, clip_dir, options, *warm, *compare_text_encoders, device)
+            gen(
+                report,
+                weights,
+                prompt,
+                *seconds,
+                *seed,
+                !*no_mp4,
+                clip_dir,
+                options,
+                *warm,
+                *compare_text_encoders,
+                device,
+            )
         }
-        Stage::SlimText { weights, out, shard_gib } => slim_text(report, weights, out, *shard_gib),
+        Stage::SlimText {
+            weights,
+            out,
+            shard_gib,
+        } => slim_text(report, weights, out, *shard_gib),
     }
 }
 
@@ -295,8 +392,11 @@ fn read_meta(oracle: &Path, meta: Option<&Path>) -> anyhow::Result<Option<serde_
         }
         return Ok(None);
     }
-    let text = std::fs::read_to_string(&path).with_context(|| format!("read {}", path.display()))?;
-    Ok(Some(serde_json::from_str(&text).with_context(|| format!("parse {}", path.display()))?))
+    let text =
+        std::fs::read_to_string(&path).with_context(|| format!("read {}", path.display()))?;
+    Ok(Some(
+        serde_json::from_str(&text).with_context(|| format!("parse {}", path.display()))?,
+    ))
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -315,23 +415,49 @@ fn text(
     let mut orc = st::load(oracle)?;
     let want_ids = ints(&st::take(&mut orc, "text_ids", oracle)?, "text_ids")?;
     let meta = read_meta(oracle, meta)?;
-    if meta.as_ref().is_some_and(|m| m.get("text_is_synthetic").is_some()) {
-        return Err(anyhow::anyhow!("{}: `text` is a synthetic stand-in; rerun h3_oracle.py with the text stage", oracle.display()).into());
+    if meta
+        .as_ref()
+        .is_some_and(|m| m.get("text_is_synthetic").is_some())
+    {
+        return Err(anyhow::anyhow!(
+            "{}: `text` is a synthetic stand-in; rerun h3_oracle.py with the text stage",
+            oracle.display()
+        )
+        .into());
     }
 
     // --- tokenizer parity: ours on the prompt vs the reference's ids ---------
-    let prompt = match (prompt, meta.as_ref().and_then(|m| m.get("prompt")).and_then(|p| p.as_str())) {
+    let prompt = match (
+        prompt,
+        meta.as_ref()
+            .and_then(|m| m.get("prompt"))
+            .and_then(|p| p.as_str()),
+    ) {
         (Some(p), _) => p.to_string(),
         (None, Some(p)) => p.to_string(),
-        (None, None) => return Err(anyhow::anyhow!("no prompt: pass --meta <h3_oracle meta json> or --prompt").into()),
+        (None, None) => {
+            return Err(
+                anyhow::anyhow!("no prompt: pass --meta <h3_oracle meta json> or --prompt").into(),
+            )
+        }
     };
-    let tokenizer = fastvideo_models::h3::tokenizer::H3Tokenizer::from_file(&weights.join("tokenizer").join("tokenizer.json"))
-        .map_err(|e| anyhow::anyhow!(e))?;
-    let ours: serde_json::Map<String, serde_json::Value> =
-        tokenizer.added_special_token_ids().iter().map(|(t, id)| (t.clone(), json!(id))).collect();
-    let reference = meta.as_ref().and_then(|m| m.get("added_special_token_ids")).cloned();
+    let tokenizer = fastvideo_models::h3::tokenizer::H3Tokenizer::from_file(
+        &weights.join("tokenizer").join("tokenizer.json"),
+    )
+    .map_err(|e| anyhow::anyhow!(e))?;
+    let ours: serde_json::Map<String, serde_json::Value> = tokenizer
+        .added_special_token_ids()
+        .iter()
+        .map(|(t, id)| (t.clone(), json!(id)))
+        .collect();
+    let reference = meta
+        .as_ref()
+        .and_then(|m| m.get("added_special_token_ids"))
+        .cloned();
     let added_ok = match &reference {
-        Some(serde_json::Value::Object(r)) => !r.is_empty() && r.iter().all(|(t, id)| ours.get(t) == Some(id)),
+        Some(serde_json::Value::Object(r)) => {
+            !r.is_empty() && r.iter().all(|(t, id)| ours.get(t) == Some(id))
+        }
         _ => tokenizer.added_ids_match_reference(),
     };
     report.check(
@@ -352,11 +478,16 @@ fn text(
     // --- the decoder, on the reference's ids so arithmetic is judged alone ----
     let map = WeightMap::open(&weights.join("text_encoder"))?;
     let cfg = DecoderConfig::qwen3_vl_32b_text().for_bf16_reference();
-    let tap = fastvideo_models::h3::config::H3TextEncoderConfig::fasth3_8step().output_hidden_state_index;
-    let named: Vec<(usize, &str, f64)> = [(0, "text_h0", 0.0), (1, "text_h1", max_rel_layer0), (tap, "text", max_rel)]
-        .into_iter()
-        .filter(|(_, name, _)| orc.contains_key(*name))
-        .collect();
+    let tap =
+        fastvideo_models::h3::config::H3TextEncoderConfig::fasth3_8step().output_hidden_state_index;
+    let named: Vec<(usize, &str, f64)> = [
+        (0, "text_h0", 0.0),
+        (1, "text_h1", max_rel_layer0),
+        (tap, "text", max_rel),
+    ]
+    .into_iter()
+    .filter(|(_, name, _)| orc.contains_key(*name))
+    .collect();
     let taps: Vec<usize> = named.iter().map(|(k, _, _)| *k).collect();
     let positions: Vec<u32> = (0..want_ids.len() as u32).collect();
     let attend = vec![true; want_ids.len()];
@@ -372,21 +503,32 @@ fn text(
     let (states, seconds) = measure(report, "text_forward", || {
         let out = match &resident {
             Some(decoder) => decoder.hidden_states(&want_ids, &positions, &attend, &taps)?,
-            None => fastvideo_cudarc::llm::hidden_states(&map, &cfg, &want_ids, &positions, &attend, &taps)?,
+            None => fastvideo_cudarc::llm::hidden_states(
+                &map, &cfg, &want_ids, &positions, &attend, &taps,
+            )?,
         };
-        out.iter().map(|t| Ok(t.host_cow()?.into_owned())).collect::<anyhow::Result<Vec<_>>>()
+        out.iter()
+            .map(|t| Ok(t.host_cow()?.into_owned()))
+            .collect::<anyhow::Result<Vec<_>>>()
     })?;
     report.note("text_forward", json!({"seconds": seconds, "tokens": want_ids.len(), "layers_run": tap, "encoder": if resident.is_some() { "resident" } else { "streamed" }}));
     // Against OUR native path: for fp8 this is the quantization error alone;
     // for native it must be zero (one layer loop, weights merely left in place).
     if let Some(decoder) = resident {
         drop(decoder);
-        let ours = fastvideo_cudarc::llm::hidden_states(&map, &cfg, &want_ids, &positions, &attend, &taps)?;
+        let ours = fastvideo_cudarc::llm::hidden_states(
+            &map, &cfg, &want_ids, &positions, &attend, &taps,
+        )?;
         for (((_, name, _), got), native) in named.iter().zip(&states).zip(&ours) {
             let d = diff(got, &native.host_cow()?);
             report.note(format!("{name}/vs_our_native"), d.to_json());
             if precision == Some(fastvideo_cudarc::llm::WeightPrecision::Native) {
-                report.check(format!("{name}/resident_equals_streamed"), d.max_abs == 0.0 && d.non_finite == 0, d.to_json(), json!({"max_abs": 0.0}))?;
+                report.check(
+                    format!("{name}/resident_equals_streamed"),
+                    d.max_abs == 0.0 && d.non_finite == 0,
+                    d.to_json(),
+                    json!({"max_abs": 0.0}),
+                )?;
             }
         }
     }
@@ -394,17 +536,38 @@ fn text(
     let diffs: Vec<_> = named
         .iter()
         .zip(&states)
-        .map(|((_, name, limit), got)| Ok((*name, *limit, diff(got, &st::take(&mut orc, name, oracle)?.data))))
+        .map(|((_, name, limit), got)| {
+            Ok((
+                *name,
+                *limit,
+                diff(got, &st::take(&mut orc, name, oracle)?.data),
+            ))
+        })
         .collect::<anyhow::Result<_>>()?;
     for (name, limit, d) in &diffs {
         // The embedding gather has nothing to round: bf16 rows read as f32.
-        let ok = if *limit == 0.0 { d.max_abs == 0.0 && d.non_finite == 0 } else { d.within(*limit) && d.cosine >= 0.999 };
-        report.check(*name, ok, d.to_json(), json!({"rel_l2": limit, "cosine_min": 0.999}))?;
+        let ok = if *limit == 0.0 {
+            d.max_abs == 0.0 && d.non_finite == 0
+        } else {
+            d.within(*limit) && d.cosine >= 0.999
+        };
+        report.check(
+            *name,
+            ok,
+            d.to_json(),
+            json!({"rel_l2": limit, "cosine_min": 0.999}),
+        )?;
     }
     Ok(())
 }
 
-fn audio_vae(report: &mut Report, weights: &Path, oracle: &Path, device: &str, max_abs: f64) -> StageResult<()> {
+fn audio_vae(
+    report: &mut Report,
+    weights: &Path,
+    oracle: &Path,
+    device: &str,
+    max_abs: f64,
+) -> StageResult<()> {
     use fastvideo_cudarc::h3::audio_vae::H3AudioDecoder;
     use fastvideo_models::h3::config::H3AudioVaeConfig;
 
@@ -418,18 +581,34 @@ fn audio_vae(report: &mut Report, weights: &Path, oracle: &Path, device: &str, m
     // The port loads ONE anti-aliasing filter and uses it everywhere; that is
     // only right if the checkpoint's 254 copies are the same bytes.
     if let Some(lazy) = map.lazy() {
-        let keys: Vec<String> = lazy.keys_with_prefix("decoder.").into_iter().filter(|k| k.ends_with("filter")).map(|k| k.to_string()).collect();
-        let first = keys.first().map(|k| lazy.view(k).map(|v| v.bytes.to_vec())).transpose()?;
+        let keys: Vec<String> = lazy
+            .keys_with_prefix("decoder.")
+            .into_iter()
+            .filter(|k| k.ends_with("filter"))
+            .map(|k| k.to_string())
+            .collect();
+        let first = keys
+            .first()
+            .map(|k| lazy.view(k).map(|v| v.bytes.to_vec()))
+            .transpose()?;
         let mut odd = Vec::new();
         for k in &keys {
             if Some(lazy.view(k)?.bytes) != first.as_deref() {
                 odd.push(k.clone());
             }
         }
-        report.check("filters_identical", !keys.is_empty() && odd.is_empty(), json!({"filters": keys.len(), "differing": odd.iter().take(8).collect::<Vec<_>>()}), json!({"differing": 0}))?;
+        report.check(
+            "filters_identical",
+            !keys.is_empty() && odd.is_empty(),
+            json!({"filters": keys.len(), "differing": odd.iter().take(8).collect::<Vec<_>>()}),
+            json!({"differing": 0}),
+        )?;
     }
     let decoder = H3AudioDecoder::load(H3AudioVaeConfig::fasth3_8step(), &map)?;
-    report.note("load_audio_vae", json!({"seconds": timer.elapsed().as_secs_f64()}));
+    report.note(
+        "load_audio_vae",
+        json!({"seconds": timer.elapsed().as_secs_f64()}),
+    );
 
     let input = CudaTensor::from_vec(latent.data, latent.shape.clone())?;
     // Intermediates the oracle dumped (`audio_<name>`), diffed as they are
@@ -444,20 +623,44 @@ fn audio_vae(report: &mut Report, weights: &Path, oracle: &Path, device: &str, m
         })?;
         Ok((out.shape.clone(), out.host_cow()?.into_owned()))
     })?;
-    report.note("audio_decode", json!({"seconds": seconds, "latent": latent.shape, "wave": wave.0}));
+    report.note(
+        "audio_decode",
+        json!({"seconds": seconds, "latent": latent.shape, "wave": wave.0}),
+    );
     for (name, d) in &stages {
         report.note(format!("audio_stage/{name}"), d.to_json());
     }
-    report.check("audio_wave_shape", wave.0 == want.shape, json!({"ours": wave.0}), json!({"reference": want.shape}))?;
+    report.check(
+        "audio_wave_shape",
+        wave.0 == want.shape,
+        json!({"ours": wave.0}),
+        json!({"reference": want.shape}),
+    )?;
     let d = diff(&wave.1, &want.data);
     // A clamp to [-1, 1] on both sides can hide an overdriven decode; say how much of it is railed.
-    let railed = want.data.iter().filter(|v| v.abs() >= 1.0).count() as f64 / want.data.len().max(1) as f64;
-    report.note("audio_wave_railed", json!({"fraction_of_reference_at_full_scale": railed}));
-    report.check("audio_wave", d.non_finite == 0 && d.max_abs <= max_abs, d.to_json(), json!({"max_abs": max_abs}))?;
+    let railed =
+        want.data.iter().filter(|v| v.abs() >= 1.0).count() as f64 / want.data.len().max(1) as f64;
+    report.note(
+        "audio_wave_railed",
+        json!({"fraction_of_reference_at_full_scale": railed}),
+    );
+    report.check(
+        "audio_wave",
+        d.non_finite == 0 && d.max_abs <= max_abs,
+        d.to_json(),
+        json!({"max_abs": max_abs}),
+    )?;
     Ok(())
 }
 
-fn vae(report: &mut Report, weights: &Path, oracle: &Path, device: &str, max_abs: f64, max_rel: f64) -> StageResult<()> {
+fn vae(
+    report: &mut Report,
+    weights: &Path,
+    oracle: &Path,
+    device: &str,
+    max_abs: f64,
+    max_rel: f64,
+) -> StageResult<()> {
     use fastvideo_cudarc::h3::vae::H3VideoDecoder;
     use fastvideo_models::h3::config::H3VideoVaeConfig;
 
@@ -468,13 +671,23 @@ fn vae(report: &mut Report, weights: &Path, oracle: &Path, device: &str, max_abs
     drop(orc);
 
     let timer = std::time::Instant::now();
-    let decoder = H3VideoDecoder::load(H3VideoVaeConfig::fasth3_8step(), &WeightMap::open(&weights.join("vae"))?)?;
-    report.note("load_vae", json!({"seconds": timer.elapsed().as_secs_f64()}));
+    let decoder = H3VideoDecoder::load(
+        H3VideoVaeConfig::fasth3_8step(),
+        &WeightMap::open(&weights.join("vae"))?,
+    )?;
+    report.note(
+        "load_vae",
+        json!({"seconds": timer.elapsed().as_secs_f64()}),
+    );
 
     // The reference is [1, 3, F, H, W]; chunks arrive as [3, f, H, W] and are
     // placed by their frame offset.
     let [_, channels, frames, height, width] = want.shape[..] else {
-        return Err(anyhow::anyhow!("vae_video_raw has shape {:?}, expected [1, 3, F, H, W]", want.shape).into());
+        return Err(anyhow::anyhow!(
+            "vae_video_raw has shape {:?}, expected [1, 3, F, H, W]",
+            want.shape
+        )
+        .into());
     };
     let plane = height * width;
     let mut video = vec![f32::NAN; channels * frames * plane];
@@ -483,24 +696,34 @@ fn vae(report: &mut Report, weights: &Path, oracle: &Path, device: &str, max_abs
     let (emitted, seconds) = measure(report, "vae_decode", || {
         Ok(decoder.decode_raw_streaming(&input, &mut |offset, chunk| {
             let [c, f, h, w] = chunk.shape[..] else {
-                return Err(fastvideo_cudarc::wan::tensor::TensorError::Message(format!("chunk shape {:?}", chunk.shape)));
+                return Err(fastvideo_cudarc::wan::tensor::TensorError::Message(
+                    format!("chunk shape {:?}", chunk.shape),
+                ));
             };
             if c != channels || h != height || w != width || offset + f > frames {
-                return Err(fastvideo_cudarc::wan::tensor::TensorError::Message(format!(
-                    "chunk {:?} at frame {offset} does not fit the reference {:?}",
-                    chunk.shape, want.shape
-                )));
+                return Err(fastvideo_cudarc::wan::tensor::TensorError::Message(
+                    format!(
+                        "chunk {:?} at frame {offset} does not fit the reference {:?}",
+                        chunk.shape, want.shape
+                    ),
+                ));
             }
             let host = chunk.host_cow()?;
             for ch in 0..c {
                 let dst = (ch * frames + offset) * plane;
-                video[dst..dst + f * plane].copy_from_slice(&host[ch * f * plane..(ch + 1) * f * plane]);
+                video[dst..dst + f * plane]
+                    .copy_from_slice(&host[ch * f * plane..(ch + 1) * f * plane]);
             }
             Ok(())
         })?)
     })?;
     report.note("vae_decode", json!({"seconds": seconds, "frames": emitted, "latent": latent.shape, "peak_mib": mem.stop()}));
-    report.check("vae_frames", emitted == frames, json!({"ours": emitted}), json!({"reference": frames}))?;
+    report.check(
+        "vae_frames",
+        emitted == frames,
+        json!({"ours": emitted}),
+        json!({"reference": frames}),
+    )?;
     let d = diff(&video, &want.data);
     // Where along time the error sits separates a chunk cross-fade bug from a ViT bug.
     let per_frame: Vec<f64> = (0..frames)
@@ -508,13 +731,20 @@ fn vae(report: &mut Report, weights: &Path, oracle: &Path, device: &str, max_abs
             (0..channels)
                 .flat_map(|ch| {
                     let base = (ch * frames + f) * plane;
-                    video[base..base + plane].iter().zip(&want.data[base..base + plane])
+                    video[base..base + plane]
+                        .iter()
+                        .zip(&want.data[base..base + plane])
                 })
                 .fold(0.0f64, |m, (a, b)| m.max(f64::from((a - b).abs())))
         })
         .collect();
     report.note("vae_max_abs_per_frame", json!({"values": per_frame}));
-    report.check("vae_video_raw", d.max_abs <= max_abs && d.within(max_rel), d.to_json(), json!({"max_abs": max_abs, "rel_l2": max_rel}))?;
+    report.check(
+        "vae_video_raw",
+        d.max_abs <= max_abs && d.within(max_rel),
+        d.to_json(),
+        json!({"max_abs": max_abs, "rel_l2": max_rel}),
+    )?;
     Ok(())
 }
 
@@ -542,16 +772,36 @@ fn oracle_request(
     let video = st::take(orc, "video_noise", oracle)?;
     let audio = st::take(orc, "audio_noise", oracle)?;
     let [1, c, t, h, w] = video.shape[..] else {
-        return Err(anyhow::anyhow!("video_noise has shape {:?}, expected [1, C, T, H, W]", video.shape).into());
+        return Err(anyhow::anyhow!(
+            "video_noise has shape {:?}, expected [1, C, T, H, W]",
+            video.shape
+        )
+        .into());
     };
-    if audio.shape.len() != 2 || audio.shape[0] % 2 != 0 || audio.shape[1] != cfg.audio_in_channels {
-        return Err(anyhow::anyhow!("audio_noise has shape {:?}, expected [2 Na, {}]", audio.shape, cfg.audio_in_channels).into());
+    if audio.shape.len() != 2 || audio.shape[0] % 2 != 0 || audio.shape[1] != cfg.audio_in_channels
+    {
+        return Err(anyhow::anyhow!(
+            "audio_noise has shape {:?}, expected [2 Na, {}]",
+            audio.shape,
+            cfg.audio_in_channels
+        )
+        .into());
     }
-    let layout = H3PackedLayout::new(text_tokens, (t, h, w), audio.shape[0] / 2, cfg.patch_size).map_err(|e| anyhow::anyhow!(e))?;
+    let layout = H3PackedLayout::new(text_tokens, (t, h, w), audio.shape[0] / 2, cfg.patch_size)
+        .map_err(|e| anyhow::anyhow!(e))?;
 
     let want_pos = st::take(orc, "position_ids", oracle)?;
-    let ours: Vec<f32> = layout.position_ids.iter().flatten().map(|&p| p as f32).collect();
-    let worst = ours.iter().zip(&want_pos.data).map(|(a, b)| f64::from((a - b).abs())).fold(0.0, f64::max);
+    let ours: Vec<f32> = layout
+        .position_ids
+        .iter()
+        .flatten()
+        .map(|&p| p as f32)
+        .collect();
+    let worst = ours
+        .iter()
+        .zip(&want_pos.data)
+        .map(|(a, b)| f64::from((a - b).abs()))
+        .fold(0.0, f64::max);
     report.check(
         "position_ids",
         ours.len() == want_pos.data.len() && worst == 0.0,
@@ -559,8 +809,17 @@ fn oracle_request(
         json!({"rows": want_pos.shape.first(), "exact_as_f32": true}),
     )?;
     let want_tags = ints(&st::take(orc, "token_tags", oracle)?, "token_tags")?;
-    let tags_ok = want_tags.len() == layout.token_tags.len() && want_tags.iter().zip(&layout.token_tags).all(|(a, b)| *a == u32::from(*b));
-    report.check("token_tags", tags_ok, json!({"rows": layout.token_tags.len()}), json!({"exact": true}))?;
+    let tags_ok = want_tags.len() == layout.token_tags.len()
+        && want_tags
+            .iter()
+            .zip(&layout.token_tags)
+            .all(|(a, b)| *a == u32::from(*b));
+    report.check(
+        "token_tags",
+        tags_ok,
+        json!({"rows": layout.token_tags.len()}),
+        json!({"exact": true}),
+    )?;
 
     let schedule = H3JointSchedule::fasth3_8step();
     for (name, ours) in [
@@ -570,18 +829,35 @@ fn oracle_request(
         ("audio_timesteps", &schedule.audio.timesteps),
     ] {
         let want = st::take(orc, name, oracle)?;
-        let same = want.data.len() == ours.len() && want.data.iter().zip(ours.iter()).all(|(a, b)| a.to_bits() == b.to_bits());
-        report.check(name, same, json!({"ours": ours}), json!({"reference": want.data, "bitwise": true}))?;
+        let same = want.data.len() == ours.len()
+            && want
+                .data
+                .iter()
+                .zip(ours.iter())
+                .all(|(a, b)| a.to_bits() == b.to_bits());
+        report.check(
+            name,
+            same,
+            json!({"ours": ours}),
+            json!({"reference": want.data, "bitwise": true}),
+        )?;
     }
     Ok(OracleRequest {
-        video_rows: patchify(&video.data, [c, t, h, w], cfg.patch_size).map_err(|e| anyhow::anyhow!(e))?,
+        video_rows: patchify(&video.data, [c, t, h, w], cfg.patch_size)
+            .map_err(|e| anyhow::anyhow!(e))?,
         audio_rows: audio.data,
         latent_shape: [c, t, h, w],
         layout,
     })
 }
 
-fn dit(report: &mut Report, weights: &Path, oracle: &Path, device: &str, max_rel: f64) -> StageResult<()> {
+fn dit(
+    report: &mut Report,
+    weights: &Path,
+    oracle: &Path,
+    device: &str,
+    max_rel: f64,
+) -> StageResult<()> {
     use fastvideo_cudarc::h3::transformer::{AttnMode, DeviceLayout, H3TextRefiner, H3Transformer};
     use fastvideo_models::h3::config::{H3TransformerConfig, TAG_AUDIO, TAG_TEXT, TAG_VIDEO};
     use fastvideo_models::h3::schedule::H3JointSchedule;
@@ -599,13 +875,37 @@ fn dit(report: &mut Report, weights: &Path, oracle: &Path, device: &str, max_rel
     let schedule = H3JointSchedule::fasth3_8step();
     let want_ts = st::take(&mut orc, "dit_timesteps", oracle)?;
     let step = (0..schedule.num_steps())
-        .find(|&i| schedule.row_timesteps(i).is_ok_and(|r| r.timesteps.len() == want_ts.data.len() && r.timesteps.iter().zip(&want_ts.data).all(|(a, b)| a.to_bits() == b.to_bits())))
-        .ok_or_else(|| anyhow::anyhow!("dit_timesteps {:?} match no rung of the FastH3 ladder", want_ts.data))?;
-    let want_index = ints(&st::take(&mut orc, "dit_timestep_indices", oracle)?, "dit_timestep_indices")?;
-    let ours_index = layout.timestep_indices(&schedule.row_timesteps(step).map_err(|e| anyhow::anyhow!(e))?);
+        .find(|&i| {
+            schedule.row_timesteps(i).is_ok_and(|r| {
+                r.timesteps.len() == want_ts.data.len()
+                    && r.timesteps
+                        .iter()
+                        .zip(&want_ts.data)
+                        .all(|(a, b)| a.to_bits() == b.to_bits())
+            })
+        })
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "dit_timesteps {:?} match no rung of the FastH3 ladder",
+                want_ts.data
+            )
+        })?;
+    let want_index = ints(
+        &st::take(&mut orc, "dit_timestep_indices", oracle)?,
+        "dit_timestep_indices",
+    )?;
+    let ours_index = layout.timestep_indices(
+        &schedule
+            .row_timesteps(step)
+            .map_err(|e| anyhow::anyhow!(e))?,
+    );
     report.check(
         "timestep_indices",
-        want_index.len() == ours_index.len() && want_index.iter().zip(&ours_index).all(|(a, b)| *a as usize == *b),
+        want_index.len() == ours_index.len()
+            && want_index
+                .iter()
+                .zip(&ours_index)
+                .all(|(a, b)| *a as usize == *b),
         json!({"step": step}),
         json!({"exact": true}),
     )?;
@@ -630,16 +930,30 @@ fn dit(report: &mut Report, weights: &Path, oracle: &Path, device: &str, max_rel
     // is a Qwen residual stream with outlier channels, the worst case for an
     // 8-bit mantissa. An f32 path on our side would move us toward the true
     // value, not toward this reference, so the gate is set above the floor.
-    let mut results = vec![("text_refined".to_string(), 2e-2, diff(&refined.host_cow()?, &st::take(&mut orc, "text_refined", oracle)?.data))];
+    let mut results = vec![(
+        "text_refined".to_string(),
+        2e-2,
+        diff(
+            &refined.host_cow()?,
+            &st::take(&mut orc, "text_refined", oracle)?.data,
+        ),
+    )];
 
     // --- load: AdaLN table, then the resident stack (dense: no gates) ---------
     let timer = std::time::Instant::now();
     let model = H3Transformer::load(cfg.clone(), &map, &schedule, false)?;
-    report.note("load_dit", json!({"seconds": timer.elapsed().as_secs_f64()}));
+    report.note(
+        "load_dit",
+        json!({"seconds": timer.elapsed().as_secs_f64()}),
+    );
     let table = model.adaln_table();
     // `temb` rows are the sorted-unique timesteps: video (smaller t) then audio.
     let want_temb = st::take(&mut orc, "temb", oracle)?;
-    let ours_temb: Vec<f32> = table.temb[2 * step].iter().chain(&table.temb[2 * step + 1]).copied().collect();
+    let ours_temb: Vec<f32> = table.temb[2 * step]
+        .iter()
+        .chain(&table.temb[2 * step + 1])
+        .copied()
+        .collect();
     results.push(("temb".into(), 1e-5, diff(&ours_temb, &want_temb.data)));
     // adaln_block0 is [6 params, n_t * 3 rows, hidden]; a T2AV forward reads
     // rows 0 (t_video, video), 1 (t_video, text) and 5 (t_audio, audio).
@@ -652,7 +966,9 @@ fn dit(report: &mut Report, weights: &Path, oracle: &Path, device: &str, max_rel
             // The table stores 1 + scale for the two scale parameters (1 and 4).
             let plus = if p == 1 || p == 4 { 1.0 } else { 0.0 };
             ours_adaln.extend(slot[p * hidden..(p + 1) * hidden].iter().map(|v| v - plus));
-            ref_adaln.extend_from_slice(&want_adaln.data[(p * rows + row) * hidden..(p * rows + row + 1) * hidden]);
+            ref_adaln.extend_from_slice(
+                &want_adaln.data[(p * rows + row) * hidden..(p * rows + row + 1) * hidden],
+            );
         }
     }
     results.push(("adaln_block0".into(), 2e-3, diff(&ours_adaln, &ref_adaln)));
@@ -662,11 +978,23 @@ fn dit(report: &mut Report, weights: &Path, oracle: &Path, device: &str, max_rel
         .get("block_0")
         .map(|t| layout.sequence_length().div_ceil(t.shape[1].max(1)))
         .unwrap_or(16);
-    let strided: Vec<usize> = (0..layout.sequence_length()).step_by(stride.max(1)).collect();
+    let strided: Vec<usize> = (0..layout.sequence_length())
+        .step_by(stride.max(1))
+        .collect();
     let device_layout = DeviceLayout::new(&cfg, layout.clone())?;
-    let video_rows = CudaTensor::from_vec(request.video_rows, vec![layout.video.len, cfg.video_patch_dim()])?;
-    let audio_rows = CudaTensor::from_vec(request.audio_rows, vec![layout.audio.len, cfg.audio_in_channels])?;
-    let wanted: Vec<String> = orc.keys().filter(|k| k.starts_with("block_")).cloned().collect();
+    let video_rows = CudaTensor::from_vec(
+        request.video_rows,
+        vec![layout.video.len, cfg.video_patch_dim()],
+    )?;
+    let audio_rows = CudaTensor::from_vec(
+        request.audio_rows,
+        vec![layout.audio.len, cfg.audio_in_channels],
+    )?;
+    let wanted: Vec<String> = orc
+        .keys()
+        .filter(|k| k.starts_with("block_"))
+        .cloned()
+        .collect();
     let mut dumps: Vec<(String, Vec<f32>)> = Vec::new();
     let ((video_v, audio_v), seconds) = measure(report, "dit_forward", || {
         let out = model.forward(
@@ -678,7 +1006,9 @@ fn dit(report: &mut Report, weights: &Path, oracle: &Path, device: &str, max_rel
             AttnMode::Dense,
             Some(&mut |name, x| {
                 if wanted.iter().any(|w| w == name) {
-                    let rows = x.reshape(vec![x.shape[1], x.shape[2]])?.index_select_rows(&strided)?;
+                    let rows = x
+                        .reshape(vec![x.shape[1], x.shape[2]])?
+                        .index_select_rows(&strided)?;
                     dumps.push((name.to_string(), rows.host_cow()?.into_owned()));
                 }
                 Ok(())
@@ -686,30 +1016,70 @@ fn dit(report: &mut Report, weights: &Path, oracle: &Path, device: &str, max_rel
             None,
             None,
         )?;
-        Ok((out.0.host_cow()?.into_owned(), out.1.host_cow()?.into_owned()))
+        Ok((
+            out.0.host_cow()?.into_owned(),
+            out.1.host_cow()?.into_owned(),
+        ))
     })?;
-    report.note("dit_forward", json!({"seconds": seconds, "peak_mib": mem.stop(), "block_row_stride": stride}));
+    report.note(
+        "dit_forward",
+        json!({"seconds": seconds, "peak_mib": mem.stop(), "block_row_stride": stride}),
+    );
 
     for (name, got) in &dumps {
         let index: usize = name.trim_start_matches("block_").parse().unwrap_or(0);
         // Divergence is allowed to grow with depth: bf16 on both sides.
-        let limit = if index < cfg.num_layers / 2 { 2e-2 } else { 5e-2 };
-        results.push((name.clone(), limit, diff(got, &st::take(&mut orc, name, oracle)?.data)));
+        let limit = if index < cfg.num_layers / 2 {
+            2e-2
+        } else {
+            5e-2
+        };
+        results.push((
+            name.clone(),
+            limit,
+            diff(got, &st::take(&mut orc, name, oracle)?.data),
+        ));
     }
-    results.push(("dit_video".into(), max_rel, diff(&video_v, &st::take(&mut orc, "dit_video", oracle)?.data)));
-    results.push(("dit_audio".into(), max_rel, diff(&audio_v, &st::take(&mut orc, "dit_audio", oracle)?.data)));
+    results.push((
+        "dit_video".into(),
+        max_rel,
+        diff(&video_v, &st::take(&mut orc, "dit_video", oracle)?.data),
+    ));
+    results.push((
+        "dit_audio".into(),
+        max_rel,
+        diff(&audio_v, &st::take(&mut orc, "dit_audio", oracle)?.data),
+    ));
 
     // Every metric lands before the first gate can stop the stage: where the
     // error starts to grow is the diagnosis.
-    report.set("metrics", results.iter().map(|(n, _, d)| (n.clone(), d.to_json())).collect::<serde_json::Map<_, _>>());
+    report.set(
+        "metrics",
+        results
+            .iter()
+            .map(|(n, _, d)| (n.clone(), d.to_json()))
+            .collect::<serde_json::Map<_, _>>(),
+    );
     for (name, limit, d) in &results {
         let cosine_min = if name.starts_with("dit_") { 0.999 } else { 0.0 };
-        report.check(name.as_str(), d.within(*limit) && d.cosine >= cosine_min, d.to_json(), json!({"rel_l2": limit, "cosine_min": cosine_min}))?;
+        report.check(
+            name.as_str(),
+            d.within(*limit) && d.cosine >= cosine_min,
+            d.to_json(),
+            json!({"rel_l2": limit, "cosine_min": cosine_min}),
+        )?;
     }
     Ok(())
 }
 
-fn ladder(report: &mut Report, weights: &Path, oracle: &Path, device: &str, max_rel: f64, gated_steps: usize) -> StageResult<()> {
+fn ladder(
+    report: &mut Report,
+    weights: &Path,
+    oracle: &Path,
+    device: &str,
+    max_rel: f64,
+    gated_steps: usize,
+) -> StageResult<()> {
     use fastvideo_cudarc::h3::pipeline::denoise;
     use fastvideo_cudarc::h3::transformer::{AttnMode, DeviceLayout, H3TextRefiner, H3Transformer};
     use fastvideo_models::h3::config::H3TransformerConfig;
@@ -727,43 +1097,105 @@ fn ladder(report: &mut Report, weights: &Path, oracle: &Path, device: &str, max_
     let layout = request.layout.clone();
 
     let map = WeightMap::open(&weights.join("transformer"))?;
-    let refined = H3TextRefiner::load(&cfg, &map)?.forward(&CudaTensor::from_vec(text.data, text.shape.clone())?)?;
+    let refined = H3TextRefiner::load(&cfg, &map)?
+        .forward(&CudaTensor::from_vec(text.data, text.shape.clone())?)?;
     let timer = std::time::Instant::now();
     let model = H3Transformer::load(cfg.clone(), &map, &schedule, false)?;
-    report.note("load_dit", json!({"seconds": timer.elapsed().as_secs_f64()}));
+    report.note(
+        "load_dit",
+        json!({"seconds": timer.elapsed().as_secs_f64()}),
+    );
 
     let device_layout = DeviceLayout::new(&cfg, layout.clone())?;
-    let video_rows = CudaTensor::from_vec(request.video_rows, vec![layout.video.len, cfg.video_patch_dim()])?.to_device()?;
-    let audio_rows = CudaTensor::from_vec(request.audio_rows, vec![layout.audio.len, cfg.audio_in_channels])?.to_device()?;
-    let (nv, na) = (layout.video.len * cfg.video_patch_dim(), layout.audio.len * cfg.audio_in_channels);
+    let video_rows = CudaTensor::from_vec(
+        request.video_rows,
+        vec![layout.video.len, cfg.video_patch_dim()],
+    )?
+    .to_device()?;
+    let audio_rows = CudaTensor::from_vec(
+        request.audio_rows,
+        vec![layout.audio.len, cfg.audio_in_channels],
+    )?
+    .to_device()?;
+    let (nv, na) = (
+        layout.video.len * cfg.video_patch_dim(),
+        layout.audio.len * cfg.audio_in_channels,
+    );
     let mut steps = Vec::new();
     let mem = crate::gpu::PeakMem::start();
     let (_, seconds) = measure(report, "loop", || {
         let mut last = std::time::Instant::now();
-        denoise(&model, &device_layout, &refined, video_rows, audio_rows, &schedule, AttnMode::Dense, None, None, &mut |step, video, audio| {
-            let (dv, da) = (
-                diff(&video.host_cow()?, &want_video.data[step * nv..(step + 1) * nv]),
-                diff(&audio.host_cow()?, &want_audio.data[step * na..(step + 1) * na]),
-            );
-            eprintln!("[INFO] h3 loop step {step}: {:.1}s video rel {:.3e} audio rel {:.3e}", last.elapsed().as_secs_f64(), dv.rel_l2, da.rel_l2);
-            last = std::time::Instant::now();
-            steps.push((dv, da));
-            Ok(())
-        })?;
+        denoise(
+            &model,
+            &device_layout,
+            &refined,
+            video_rows,
+            audio_rows,
+            &schedule,
+            AttnMode::Dense,
+            None,
+            None,
+            &mut |step, video, audio| {
+                let (dv, da) = (
+                    diff(
+                        &video.host_cow()?,
+                        &want_video.data[step * nv..(step + 1) * nv],
+                    ),
+                    diff(
+                        &audio.host_cow()?,
+                        &want_audio.data[step * na..(step + 1) * na],
+                    ),
+                );
+                eprintln!(
+                    "[INFO] h3 loop step {step}: {:.1}s video rel {:.3e} audio rel {:.3e}",
+                    last.elapsed().as_secs_f64(),
+                    dv.rel_l2,
+                    da.rel_l2
+                );
+                last = std::time::Instant::now();
+                steps.push((dv, da));
+                Ok(())
+            },
+        )?;
         Ok(())
     })?;
     report.note("loop", json!({"seconds": seconds, "peak_mib": mem.stop()}));
-    report.set("per_step", steps.iter().map(|(v, a)| json!({"video": v.to_json(), "audio": a.to_json()})).collect::<Vec<_>>());
+    report.set(
+        "per_step",
+        steps
+            .iter()
+            .map(|(v, a)| json!({"video": v.to_json(), "audio": a.to_json()}))
+            .collect::<Vec<_>>(),
+    );
     if steps.len() < gated_steps.max(1) {
-        return Err(anyhow::anyhow!("the loop produced {} steps, fewer than the {gated_steps} gated", steps.len()).into());
+        return Err(anyhow::anyhow!(
+            "the loop produced {} steps, fewer than the {gated_steps} gated",
+            steps.len()
+        )
+        .into());
     }
     for (index, (v, a)) in steps.iter().enumerate() {
         if index < gated_steps {
-            report.check(format!("loop_video_step{index}"), v.within(max_rel), v.to_json(), json!({"rel_l2": max_rel}))?;
-            report.check(format!("loop_audio_step{index}"), a.within(max_rel), a.to_json(), json!({"rel_l2": max_rel}))?;
+            report.check(
+                format!("loop_video_step{index}"),
+                v.within(max_rel),
+                v.to_json(),
+                json!({"rel_l2": max_rel}),
+            )?;
+            report.check(
+                format!("loop_audio_step{index}"),
+                a.within(max_rel),
+                a.to_json(),
+                json!({"rel_l2": max_rel}),
+            )?;
         } else {
             // Finite is still required: a NaN late in the ladder is a defect at any tolerance.
-            report.check(format!("loop_step{index}_finite"), v.non_finite == 0 && a.non_finite == 0, json!({"video_rel_l2": v.rel_l2, "audio_rel_l2": a.rel_l2}), json!({"non_finite": 0}))?;
+            report.check(
+                format!("loop_step{index}_finite"),
+                v.non_finite == 0 && a.non_finite == 0,
+                json!({"video_rel_l2": v.rel_l2, "audio_rel_l2": a.rel_l2}),
+                json!({"non_finite": 0}),
+            )?;
         }
     }
     Ok(())
@@ -777,40 +1209,96 @@ fn vsa(report: &mut Report, device: &str, seed: u64, max_rel: f64) -> StageResul
     report.set("device", crate::gpu::init(device)?);
     // Partial tiles on every axis, a short text tile, a short audio tile and an
     // odd tile count: 3 + 2 prefix tiles, 3 x 2 x 3 = 18 video tiles, n = 23.
-    let layout = H3PackedLayout::new(150, (9, 12, 20), 50, [1, 2, 2]).map_err(|e| anyhow::anyhow!(e))?;
+    let layout =
+        H3PackedLayout::new(150, (9, 12, 20), 50, [1, 2, 2]).map_err(|e| anyhow::anyhow!(e))?;
     // The tensor-core fine kernel is written for head dim 128.
     let (heads, dim, seq) = (4usize, 128usize, layout.sequence_length());
     let shape = vec![1, heads, seq, dim];
-    let draw = |salt: u64, std: f32| crate::rand_weights::randn(seed ^ salt, heads * seq * dim, std);
+    let draw =
+        |salt: u64, std: f32| crate::rand_weights::randn(seed ^ salt, heads * seq * dim, std);
     // Post-norm Q/K have unit RMS; that scale also keeps the top-k decisive.
-    let (q, k, v, gate) = (draw(0x51, 1.0), draw(0x4b, 1.0), draw(0x56, 1.0), draw(0x47, 0.5));
+    let (q, k, v, gate) = (
+        draw(0x51, 1.0),
+        draw(0x4b, 1.0),
+        draw(0x56, 1.0),
+        draw(0x47, 0.5),
+    );
     let tensor = |x: &[f32]| CudaTensor::from_vec(x.to_vec(), shape.clone());
 
-    for (name, sparsity, gated) in [("sparse_gated", 0.8, true), ("sparse_ungated", 0.5, false), ("all_tiles_gated", 0.0, true)] {
+    for (name, sparsity, gated) in [
+        ("sparse_gated", 0.8, true),
+        ("sparse_ungated", 0.5, false),
+        ("all_tiles_gated", 0.0, true),
+    ] {
         let vsa = H3Vsa::new(&layout, heads, dim, H3VsaConfig { sparsity, group: 4 })?;
         let plan = vsa.plan().clone();
         report.note(format!("{name}/plan"), json!({"prefix_tiles": plan.prefix_tiles, "video_tiles": plan.video_tiles, "k_vid": vsa.k_vid(), "rows": seq}));
-        let want = attention_host(&q, &k, &v, gated.then_some(&gate[..]), &plan, vsa.k_vid(), heads, dim)?;
+        let want = attention_host(
+            &q,
+            &k,
+            &v,
+            gated.then_some(&gate[..]),
+            &plan,
+            vsa.k_vid(),
+            heads,
+            dim,
+        )?;
         let g = if gated { Some(tensor(&gate)?) } else { None };
-        let (got, seconds) = measure(report, name, || Ok(vsa.attend(tensor(&q)?, tensor(&k)?, tensor(&v)?, g)?.host_cow()?.into_owned()))?;
+        let (got, seconds) = measure(report, name, || {
+            Ok(vsa
+                .attend(tensor(&q)?, tensor(&k)?, tensor(&v)?, g)?
+                .host_cow()?
+                .into_owned())
+        })?;
         let d = diff(&got, &want);
         // Prefix rows take the dense splice, video rows the fine kernel: report them apart.
         let split = plan.prefix_rows * dim;
-        let part = |lo: usize, hi: usize| -> Vec<f32> { (0..heads).flat_map(|h| got[h * seq * dim + lo..h * seq * dim + hi].to_vec()).collect() };
-        let want_part = |lo: usize, hi: usize| -> Vec<f32> { (0..heads).flat_map(|h| want[h * seq * dim + lo..h * seq * dim + hi].to_vec()).collect() };
+        let part = |lo: usize, hi: usize| -> Vec<f32> {
+            (0..heads)
+                .flat_map(|h| got[h * seq * dim + lo..h * seq * dim + hi].to_vec())
+                .collect()
+        };
+        let want_part = |lo: usize, hi: usize| -> Vec<f32> {
+            (0..heads)
+                .flat_map(|h| want[h * seq * dim + lo..h * seq * dim + hi].to_vec())
+                .collect()
+        };
         report.note(
             format!("{name}/by_segment"),
             json!({"seconds": seconds, "prefix_rows": diff(&part(0, split), &want_part(0, split)).to_json(), "video_rows": diff(&part(split, seq * dim), &want_part(split, seq * dim)).to_json()}),
         );
-        report.check(name, d.within(max_rel), d.to_json(), json!({"rel_l2": max_rel}))?;
+        report.check(
+            name,
+            d.within(max_rel),
+            d.to_json(),
+            json!({"rel_l2": max_rel}),
+        )?;
     }
 
     // The load-bearing identity: every tile selected and no gate is dense attention.
-    let vsa = H3Vsa::new(&layout, heads, dim, H3VsaConfig { sparsity: 0.0, group: 4 })?;
-    let got = vsa.attend(tensor(&q)?, tensor(&k)?, tensor(&v)?, None)?.host_cow()?.into_owned();
-    let dense = scaled_dot_product_attention(&tensor(&q)?, &tensor(&k)?, &tensor(&v)?, None)?.host_cow()?.into_owned();
+    let vsa = H3Vsa::new(
+        &layout,
+        heads,
+        dim,
+        H3VsaConfig {
+            sparsity: 0.0,
+            group: 4,
+        },
+    )?;
+    let got = vsa
+        .attend(tensor(&q)?, tensor(&k)?, tensor(&v)?, None)?
+        .host_cow()?
+        .into_owned();
+    let dense = scaled_dot_product_attention(&tensor(&q)?, &tensor(&k)?, &tensor(&v)?, None)?
+        .host_cow()?
+        .into_owned();
     let d = diff(&got, &dense);
-    report.check("all_tiles_ungated_is_dense", d.within(max_rel), d.to_json(), json!({"rel_l2": max_rel}))?;
+    report.check(
+        "all_tiles_ungated_is_dense",
+        d.within(max_rel),
+        d.to_json(),
+        json!({"rel_l2": max_rel}),
+    )?;
     Ok(())
 }
 
@@ -832,7 +1320,12 @@ fn slim_text(report: &mut Report, weights: &Path, out: &Path, shard_gib: u64) ->
         }),
     );
     // embed_tokens + 50 layers x 11 tensors, all bf16: the figure docs/ports/h3.md derives from the headers.
-    report.check("slim_is_tap_50", r.tensors == 551 && r.bytes == 50_315_658_240, json!({"tensors": r.tensors, "bytes": r.bytes}), json!({"tensors": 551, "bytes": 50_315_658_240u64}))?;
+    report.check(
+        "slim_is_tap_50",
+        r.tensors == 551 && r.bytes == 50_315_658_240,
+        json!({"tensors": r.tensors, "bytes": r.bytes}),
+        json!({"tensors": 551, "bytes": 50_315_658_240u64}),
+    )?;
     Ok(())
 }
 
@@ -884,7 +1377,10 @@ fn gen(
                 // Same scale as the fp8 gate of `h3 text`: past this the conditioning is a different prompt.
                 report.check("text_encoder_drift", rel_l2.is_finite() && rel_l2 <= 5e-2, json!({"rel_l2": rel_l2, "cosine": cosine, "resident": encoder_kind, "against": "streamed"}), json!({"rel_l2": 5e-2}))?;
             }
-            None => report.note("text_encoder_drift", json!({"skipped": "the encoder is streamed; there is nothing to compare"})),
+            None => report.note(
+                "text_encoder_drift",
+                json!({"skipped": "the encoder is streamed; there is nothing to compare"}),
+            ),
         }
     }
     report.note("load", json!({"seconds": load_s, "text_encoder_s": l.text_encoder_s, "refiner_s": l.refiner_s, "dit_s": l.dit_s, "video_vae_s": l.video_vae_s, "audio_vae_s": l.audio_vae_s}));
@@ -910,7 +1406,10 @@ fn gen(
         // because cold-vs-warm is itself what the user asked about.
         let timer = std::time::Instant::now();
         let cold = pipeline.generate(&request, &clip_dir.join("cold"))?;
-        report.note("cold_generation", timings(&cold, timer.elapsed().as_secs_f64()));
+        report.note(
+            "cold_generation",
+            timings(&cold, timer.elapsed().as_secs_f64()),
+        );
         // The cold pass would otherwise sit in the same counters as the
         // measured one; dit_phases should describe the timed generate only.
         fastvideo_cudarc::wan::stats::phase_reset();
@@ -929,9 +1428,7 @@ fn gen(
     // each group's pct is of that group, not of a grand sum.
     let phases = fastvideo_cudarc::wan::stats::phase_report();
     if !phases.is_empty() {
-        let row = |n: &str, c: u64, s: f64, total: f64| {
-            json!({"phase": n, "calls": c, "seconds": s, "pct": if total > 0.0 { 100.0 * s / total } else { 0.0 }})
-        };
+        let row = |n: &str, c: u64, s: f64, total: f64| json!({"phase": n, "calls": c, "seconds": s, "pct": if total > 0.0 { 100.0 * s / total } else { 0.0 }});
         let group = |pred: &dyn Fn(&str) -> bool| {
             let rows: Vec<_> = phases.iter().copied().filter(|(n, _, _)| pred(n)).collect();
             let total: f64 = rows.iter().map(|(_, _, s)| s).sum();
@@ -952,17 +1449,42 @@ fn gen(
     }
     report.set("output", json!({"frames": out.frames, "text_tokens": out.text_tokens, "sequence_length": out.sequence_length, "mp4": out.mp4, "wav": out.wav, "audio_samples_per_channel": out.geometry.audio_samples()}));
     if warm {
-        report.check("warm_text_is_a_cache_hit", out.text_cache.as_str() != "miss", json!({"text_cache": out.text_cache.as_str(), "text_s": out.timings.text_s}), json!({"expected": "hit (or disabled)"}))?;
+        report.check(
+            "warm_text_is_a_cache_hit",
+            out.text_cache.as_str() != "miss",
+            json!({"text_cache": out.text_cache.as_str(), "text_s": out.timings.text_s}),
+            json!({"expected": "hit (or disabled)"}),
+        )?;
     }
-    report.check("frames", out.frames == out.geometry.num_frames, json!({"decoded": out.frames}), json!({"expected": out.geometry.num_frames}))?;
+    report.check(
+        "frames",
+        out.frames == out.geometry.num_frames,
+        json!({"decoded": out.frames}),
+        json!({"expected": out.geometry.num_frames}),
+    )?;
     // A finite, non-constant picture: the cheapest statement that the clip is not garbage.
-    let probe = out.frame_paths.get(out.frame_paths.len() / 2).ok_or_else(|| anyhow::anyhow!("no frames were written"))?;
-    let img = image::open(probe).with_context(|| format!("open {probe}"))?.to_rgb8();
+    let probe = out
+        .frame_paths
+        .get(out.frame_paths.len() / 2)
+        .ok_or_else(|| anyhow::anyhow!("no frames were written"))?;
+    let img = image::open(probe)
+        .with_context(|| format!("open {probe}"))?
+        .to_rgb8();
     let values: Vec<f32> = img.as_raw().iter().map(|&b| f32::from(b) / 255.0).collect();
     let (mean, std) = crate::metrics::mean_std(&values);
-    report.check("middle_frame_not_flat", std > 0.02 && mean > 0.02 && mean < 0.98, json!({"mean": mean, "std": std, "frame": probe}), json!({"std_min": 0.02}))?;
+    report.check(
+        "middle_frame_not_flat",
+        std > 0.02 && mean > 0.02 && mean < 0.98,
+        json!({"mean": mean, "std": std, "frame": probe}),
+        json!({"std_min": 0.02}),
+    )?;
     if mp4 {
-        report.check("mp4_written", out.mp4.is_some(), json!({"mp4": out.mp4}), json!({"expected": "output.mp4 with an audio track"}))?;
+        report.check(
+            "mp4_written",
+            out.mp4.is_some(),
+            json!({"mp4": out.mp4}),
+            json!({"expected": "output.mp4 with an audio track"}),
+        )?;
     }
     Ok(())
 }

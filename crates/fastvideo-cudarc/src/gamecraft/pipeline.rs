@@ -2,9 +2,7 @@
 
 use std::path::{Path, PathBuf};
 
-use fastvideo_models::gamecraft::{
-    create_camera_trajectory, GameCraftConfig, GameCraftPreset,
-};
+use fastvideo_models::gamecraft::{create_camera_trajectory, GameCraftConfig, GameCraftPreset};
 use fastvideo_models::hunyuan15::Hunyuan15Schedule;
 use rand::SeedableRng;
 use rand_distr::{Distribution, StandardNormal};
@@ -73,7 +71,8 @@ impl GameCraftPipeline {
     }
 
     pub fn load_dit(&mut self) -> Result<()> {
-        let map = WeightMap::open(&self.root.join("transformer")).map_err(|e| msg(e.to_string()))?;
+        let map =
+            WeightMap::open(&self.root.join("transformer")).map_err(|e| msg(e.to_string()))?;
         self.dit = Some(Hunyuan15Transformer::load(self.cfg.hy.clone(), &map)?);
         Ok(())
     }
@@ -124,7 +123,8 @@ impl GameCraftPipeline {
         let n = c_out * spatial;
         let pad_c = c_in.saturating_sub(c_out);
 
-        let mut sched = Hunyuan15Schedule::with_shift(request.num_steps, request.preset.flow_shift());
+        let mut sched =
+            Hunyuan15Schedule::with_shift(request.num_steps, request.preset.flow_shift());
         let timesteps = sched.timesteps().to_vec();
         let sigmas = sched.sigmas().to_vec();
 

@@ -76,7 +76,8 @@ impl MatrixGamePipeline {
     }
 
     pub fn load_dit(&mut self) -> Result<()> {
-        let map = WeightMap::open(&self.root.join("transformer")).map_err(|e| msg(e.to_string()))?;
+        let map =
+            WeightMap::open(&self.root.join("transformer")).map_err(|e| msg(e.to_string()))?;
         self.dit = Some(WanTransformer3D::load(self.cfg.wan.clone(), &map)?);
         Ok(())
     }
@@ -108,8 +109,7 @@ impl MatrixGamePipeline {
                     pack.keyboard[t * kb_dim..(t + 1) * kb_dim]
                         .copy_from_slice(&kb[src..src + kb_dim]);
                 } else if kb.len() >= kb_dim {
-                    pack.keyboard[t * kb_dim..(t + 1) * kb_dim]
-                        .copy_from_slice(&kb[..kb_dim]);
+                    pack.keyboard[t * kb_dim..(t + 1) * kb_dim].copy_from_slice(&kb[..kb_dim]);
                 }
                 let ms = if mouse.len() >= (t + 1) * 2 {
                     [mouse[t * 2], mouse[t * 2 + 1]]
@@ -245,9 +245,8 @@ mod tests {
 
     #[test]
     fn resolves_auto_actions() {
-        let pipe =
-            MatrixGamePipeline::open("/tmp/mg-missing", MatrixGamePreset::Mg2BaseDistilled)
-                .unwrap();
+        let pipe = MatrixGamePipeline::open("/tmp/mg-missing", MatrixGamePreset::Mg2BaseDistilled)
+            .unwrap();
         let r = MatrixGameRequest::for_preset(MatrixGamePreset::Mg2BaseDistilled, "", 7);
         let a = pipe.resolve_actions(&r);
         assert_eq!(a.num_frames, r.num_frames);

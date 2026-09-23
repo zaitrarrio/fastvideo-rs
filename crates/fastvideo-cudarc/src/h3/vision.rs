@@ -24,7 +24,9 @@ fn pinned(data: Vec<f32>, shape: Vec<usize>) -> Result<CudaTensor> {
 }
 
 fn host_values(map: &WeightMap, key: &str, shape: &[usize]) -> Result<Vec<f32>> {
-    Ok(cuda_tensor_shaped(map, key, shape)?.host_cow()?.into_owned())
+    Ok(cuda_tensor_shaped(map, key, shape)?
+        .host_cow()?
+        .into_owned())
 }
 
 fn rotate_half_host(x: &[f32], dim: usize) -> Vec<f32> {
@@ -50,7 +52,12 @@ struct PatchMerger {
 }
 
 impl PatchMerger {
-    fn load(map: &WeightMap, prefix: &str, cfg: &H3VisionConfig, use_postshuffle_norm: bool) -> Result<Self> {
+    fn load(
+        map: &WeightMap,
+        prefix: &str,
+        cfg: &H3VisionConfig,
+        use_postshuffle_norm: bool,
+    ) -> Result<Self> {
         let hidden = cfg.hidden_size * cfg.spatial_merge_size * cfg.spatial_merge_size;
         let norm_size = if use_postshuffle_norm {
             hidden
@@ -58,10 +65,22 @@ impl PatchMerger {
             cfg.hidden_size
         };
         Ok(Self {
-            norm_w: pinned(host_values(map, &format!("{prefix}.norm.weight"), &[norm_size])?, vec![norm_size])?,
-            norm_b: pinned(host_values(map, &format!("{prefix}.norm.bias"), &[norm_size])?, vec![norm_size])?,
+            norm_w: pinned(
+                host_values(map, &format!("{prefix}.norm.weight"), &[norm_size])?,
+                vec![norm_size],
+            )?,
+            norm_b: pinned(
+                host_values(map, &format!("{prefix}.norm.bias"), &[norm_size])?,
+                vec![norm_size],
+            )?,
             fc1: Linear::load(map, &format!("{prefix}.linear_fc1"), hidden, hidden, true)?,
-            fc2: Linear::load(map, &format!("{prefix}.linear_fc2"), hidden, cfg.out_hidden_size, true)?,
+            fc2: Linear::load(
+                map,
+                &format!("{prefix}.linear_fc2"),
+                hidden,
+                cfg.out_hidden_size,
+                true,
+            )?,
             use_postshuffle_norm,
             hidden,
         })
@@ -74,12 +93,17 @@ impl PatchMerger {
         };
         let area = merge * merge;
         if n % area != 0 {
-            return Err(msg(format!("merger: {n} tokens not divisible by merge²={area}")));
+            return Err(msg(format!(
+                "merger: {n} tokens not divisible by merge²={area}"
+            )));
         }
         let groups = n / area;
         let x = if self.use_postshuffle_norm {
-            x.reshape(vec![groups, self.hidden])?
-                .layer_norm(1e-6, Some(&self.norm_w), Some(&self.norm_b))?
+            x.reshape(vec![groups, self.hidden])?.layer_norm(
+                1e-6,
+                Some(&self.norm_w),
+                Some(&self.norm_b),
+            )?
         } else {
             let nrm = x.layer_norm(1e-6, Some(&self.norm_w), Some(&self.norm_b))?;
             nrm.reshape(vec![groups, self.hidden])?
@@ -107,14 +131,38 @@ impl VisionBlock {
     fn load(map: &WeightMap, prefix: &str, cfg: &H3VisionConfig) -> Result<Self> {
         let h = cfg.hidden_size;
         Ok(Self {
-            norm1_w: pinned(host_values(map, &format!("{prefix}.norm1.weight"), &[h])?, vec![h])?,
-            norm1_b: pinned(host_values(map, &format!("{prefix}.norm1.bias"), &[h])?, vec![h])?,
-            norm2_w: pinned(host_values(map, &format!("{prefix}.norm2.weight"), &[h])?, vec![h])?,
-            norm2_b: pinned(host_values(map, &format!("{prefix}.norm2.bias"), &[h])?, vec![h])?,
+            norm1_w: pinned(
+                host_values(map, &format!("{prefix}.norm1.weight"), &[h])?,
+                vec![h],
+            )?,
+            norm1_b: pinned(
+                host_values(map, &format!("{prefix}.norm1.bias"), &[h])?,
+                vec![h],
+            )?,
+            norm2_w: pinned(
+                host_values(map, &format!("{prefix}.norm2.weight"), &[h])?,
+                vec![h],
+            )?,
+            norm2_b: pinned(
+                host_values(map, &format!("{prefix}.norm2.bias"), &[h])?,
+                vec![h],
+            )?,
             qkv: Linear::load(map, &format!("{prefix}.attn.qkv"), h, 3 * h, true)?,
             proj: Linear::load(map, &format!("{prefix}.attn.proj"), h, h, true)?,
-            fc1: Linear::load(map, &format!("{prefix}.mlp.linear_fc1"), h, cfg.intermediate_size, true)?,
-            fc2: Linear::load(map, &format!("{prefix}.mlp.linear_fc2"), cfg.intermediate_size, h, true)?,
+            fc1: Linear::load(
+                map,
+                &format!("{prefix}.mlp.linear_fc1"),
+                h,
+                cfg.intermediate_size,
+                true,
+            )?,
+            fc2: Linear::load(
+                map,
+                &format!("{prefix}.mlp.linear_fc2"),
+                cfg.intermediate_size,
+                h,
+                true,
+            )?,
             num_heads: cfg.num_heads,
             head_dim: cfg.head_dim(),
         })
@@ -230,10 +278,19 @@ pub struct H3VisionTower {
 impl H3VisionTower {
     pub fn load(cfg: H3VisionConfig, map: &WeightMap) -> Result<Self> {
         let prefix = "model.visual";
-        let (cin, hs, pt, tt) = (cfg.in_channels, cfg.hidden_size, cfg.patch_size, cfg.temporal_patch_size);
+        let (cin, hs, pt, tt) = (
+            cfg.in_channels,
+            cfg.hidden_size,
+            cfg.patch_size,
+            cfg.temporal_patch_size,
+        );
         // Conv3d weight [out, in, Tt, P, P].
         let patch_weight = pinned(
-            host_values(map, &format!("{prefix}.patch_embed.proj.weight"), &[hs, cin, tt, pt, pt])?,
+            host_values(
+                map,
+                &format!("{prefix}.patch_embed.proj.weight"),
+                &[hs, cin, tt, pt, pt],
+            )?,
             vec![hs, cin, tt, pt, pt],
         )?;
         let patch_bias = pinned(
@@ -256,7 +313,14 @@ impl H3VisionTower {
             .deepstack_visual_indexes
             .iter()
             .enumerate()
-            .map(|(i, _)| PatchMerger::load(map, &format!("{prefix}.deepstack_merger_list.{i}"), &cfg, true))
+            .map(|(i, _)| {
+                PatchMerger::load(
+                    map,
+                    &format!("{prefix}.deepstack_merger_list.{i}"),
+                    &cfg,
+                    true,
+                )
+            })
             .collect::<Result<Vec<_>>>()?;
         let half = cfg.head_dim() / 2;
         let inv_freq: Vec<f32> = (0..half)
@@ -280,11 +344,12 @@ impl H3VisionTower {
     }
 
     /// Encode prepared patches → `(merged [tokens, 5120], deepstack×3)`.
-    pub fn forward(
-        &self,
-        prepared: &PreparedVisionImage,
-    ) -> Result<(CudaTensor, Vec<CudaTensor>)> {
-        self.forward_grids(&prepared.pixels, prepared.patch_dim, &[prepared.grid.clone()])
+    pub fn forward(&self, prepared: &PreparedVisionImage) -> Result<(CudaTensor, Vec<CudaTensor>)> {
+        self.forward_grids(
+            &prepared.pixels,
+            prepared.patch_dim,
+            &[prepared.grid.clone()],
+        )
     }
 
     pub fn forward_grids(
@@ -309,7 +374,12 @@ impl H3VisionTower {
         // [N, C, T, P, P]
         let x = CudaTensor::from_vec(pixels.to_vec(), vec![total, cin, tt, pt, pt])?.to_device()?;
         let mut h = x
-            .conv3d(&self.patch_weight, Some(&self.patch_bias), [0, 0, 0], [tt, pt, pt])?
+            .conv3d(
+                &self.patch_weight,
+                Some(&self.patch_bias),
+                [0, 0, 0],
+                [tt, pt, pt],
+            )?
             .reshape(vec![total, hs])?;
         h = h.add(&self.interpolate_pos(grids)?)?;
 
@@ -378,7 +448,8 @@ impl H3VisionTower {
                 }
             }
         }
-        CudaTensor::from_vec(out, vec![grids.iter().map(|g| g.num_patches()).sum(), hs])?.to_device()
+        CudaTensor::from_vec(out, vec![grids.iter().map(|g| g.num_patches()).sum(), hs])?
+            .to_device()
     }
 
     fn rope_tables(&self, grids: &[VisionGrid]) -> Result<(CudaTensor, CudaTensor)> {
@@ -447,7 +518,9 @@ mod tests {
 
     fn weights(_cfg: &H3VisionConfig) -> WeightMap {
         WeightMap::generated(|key, shape| {
-            let seed = key.bytes().fold(3u32, |a, b| a.wrapping_mul(31).wrapping_add(u32::from(b)));
+            let seed = key
+                .bytes()
+                .fold(3u32, |a, b| a.wrapping_mul(31).wrapping_add(u32::from(b)));
             let n: usize = shape.iter().product();
             (0..n)
                 .map(|i| {

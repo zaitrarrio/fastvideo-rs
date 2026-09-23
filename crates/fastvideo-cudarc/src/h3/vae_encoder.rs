@@ -60,7 +60,9 @@ impl CausalConv3d {
         let mut x = x.clone();
         if self.spatial_pad > 0 {
             let p = self.spatial_pad;
-            x = x.pad(3, p, p, PadMode::Reflect)?.pad(4, p, p, PadMode::Reflect)?;
+            x = x
+                .pad(3, p, p, PadMode::Reflect)?
+                .pad(4, p, p, PadMode::Reflect)?;
         }
         if self.temporal_pad > 0 {
             x = x.pad(2, self.temporal_pad, 0, PadMode::Zeros)?;
@@ -78,10 +80,24 @@ struct FrameGroupNorm {
 }
 
 impl FrameGroupNorm {
-    fn load(map: &WeightMap, prefix: &str, channels: usize, groups: usize, eps: f64) -> Result<Self> {
+    fn load(
+        map: &WeightMap,
+        prefix: &str,
+        channels: usize,
+        groups: usize,
+        eps: f64,
+    ) -> Result<Self> {
         Ok(Self {
-            weight: pinned(cuda_tensor_shaped(map, &format!("{prefix}.weight"), &[channels])?)?,
-            bias: pinned(cuda_tensor_shaped(map, &format!("{prefix}.bias"), &[channels])?)?,
+            weight: pinned(cuda_tensor_shaped(
+                map,
+                &format!("{prefix}.weight"),
+                &[channels],
+            )?)?,
+            bias: pinned(cuda_tensor_shaped(
+                map,
+                &format!("{prefix}.bias"),
+                &[channels],
+            )?)?,
             groups,
             eps: eps as f32,
         })
@@ -200,7 +216,8 @@ impl Downsample {
     fn forward(&self, x: &CudaTensor) -> Result<CudaTensor> {
         let x = if self.spatial_stride == 2 {
             // Asymmetric bottom/right reflect pad of 1 → ceil(size/2).
-            x.pad(3, 0, 1, PadMode::Reflect)?.pad(4, 0, 1, PadMode::Reflect)?
+            x.pad(3, 0, 1, PadMode::Reflect)?
+                .pad(4, 0, 1, PadMode::Reflect)?
         } else {
             x.clone()
         };
@@ -248,7 +265,10 @@ impl DownBlock {
         } else {
             None
         };
-        Ok(Self { resnets, downsamplers })
+        Ok(Self {
+            resnets,
+            downsamplers,
+        })
     }
 
     fn forward(&self, mut x: CudaTensor) -> Result<CudaTensor> {
@@ -341,7 +361,11 @@ impl H3VideoEncoder {
     pub fn load(cfg: H3VideoVaeConfig, map: &WeightMap) -> Result<Self> {
         let lc = cfg.latent_channels;
         let mean = pinned(CudaTensor::from_vec(
-            cfg.latents_mean.iter().take(lc).map(|&x| x as f32).collect(),
+            cfg.latents_mean
+                .iter()
+                .take(lc)
+                .map(|&x| x as f32)
+                .collect(),
             vec![1, lc, 1, 1, 1],
         )?)?;
         let std = pinned(CudaTensor::from_vec(
@@ -381,7 +405,10 @@ impl H3VideoEncoder {
     /// diffusers `_encode`.
     pub fn encode(&self, x: &CudaTensor) -> Result<CudaTensor> {
         if x.rank() != 5 || x.shape[1] != 3 {
-            return Err(msg(format!("h3 encode expects [1,3,T,H,W], got {:?}", x.shape)));
+            return Err(msg(format!(
+                "h3 encode expects [1,3,T,H,W], got {:?}",
+                x.shape
+            )));
         }
         let moments = self.encode_temporal(x)?;
         // DiagonalGaussian: first half = mean (mode).
@@ -433,8 +460,10 @@ impl H3VideoEncoder {
             let hiddens = self.encoder.forward(x)?;
             return self.quant_conv.forward(&hiddens);
         }
-        let (y_idx, y_len, y_ov) = split_tiles(h, tile, overlap, self.cfg.spatial_compression_ratio());
-        let (x_idx, x_len, x_ov) = split_tiles(w, tile, overlap, self.cfg.spatial_compression_ratio());
+        let (y_idx, y_len, y_ov) =
+            split_tiles(h, tile, overlap, self.cfg.spatial_compression_ratio());
+        let (x_idx, x_len, x_ov) =
+            split_tiles(w, tile, overlap, self.cfg.spatial_compression_ratio());
         let ratio = self.cfg.spatial_compression_ratio();
         let mut rows: Vec<Vec<CudaTensor>> = Vec::with_capacity(y_idx.len());
         for (&yi, &ylen) in y_idx.iter().zip(&y_len) {
@@ -527,21 +556,29 @@ fn scale_noise_latent(clean: &CudaTensor, t: f32, seed: u64) -> Result<CudaTenso
     use rand_distr::StandardNormal;
     let n = clean.shape.iter().product::<usize>();
     let mut rng = rand::rngs::StdRng::seed_from_u64(seed);
-    let noise: Vec<f32> = (0..n).map(|_| rng.sample::<f32, _>(StandardNormal)).collect();
+    let noise: Vec<f32> = (0..n)
+        .map(|_| rng.sample::<f32, _>(StandardNormal))
+        .collect();
     let noise = CudaTensor::from_vec(noise, clean.shape.clone())?.to_device()?;
     let a = clean.mul_scalar(t);
     let b = noise.mul_scalar(1.0 - t);
     a.add(&b)
 }
 
-fn load_rgb_imagenet(path: &std::path::Path, width: usize, height: usize, stretch: bool) -> Result<Vec<f32>> {
+fn load_rgb_imagenet(
+    path: &std::path::Path,
+    width: usize,
+    height: usize,
+    stretch: bool,
+) -> Result<Vec<f32>> {
     let img = image::open(path)
         .map_err(|e| msg(format!("open {}: {e}", path.display())))?
         .into_rgb8();
     let (sw, sh) = (img.width() as usize, img.height() as usize);
     let raw: Vec<u8> = img.into_raw();
-    let fitted = fastvideo_models::h3::packing::prepare_keyframe_rgb(&raw, sw, sh, width, height, stretch)
-        .map_err(msg)?;
+    let fitted =
+        fastvideo_models::h3::packing::prepare_keyframe_rgb(&raw, sw, sh, width, height, stretch)
+            .map_err(msg)?;
     // prepare_keyframe_rgb is in [-1,1]; convert to [0,1] then ImageNet.
     let mut out = vec![0f32; fitted.len()];
     for c in 0..3 {
@@ -555,7 +592,12 @@ fn load_rgb_imagenet(path: &std::path::Path, width: usize, height: usize, stretc
     Ok(out)
 }
 
-fn split_tiles(length: usize, tile_size: usize, min_overlap: usize, align: usize) -> (Vec<usize>, Vec<usize>, Vec<usize>) {
+fn split_tiles(
+    length: usize,
+    tile_size: usize,
+    min_overlap: usize,
+    align: usize,
+) -> (Vec<usize>, Vec<usize>, Vec<usize>) {
     if tile_size >= length {
         return (vec![0], vec![length], vec![]);
     }
@@ -585,7 +627,11 @@ fn split_tiles(length: usize, tile_size: usize, min_overlap: usize, align: usize
     (starts, lens, overlaps)
 }
 
-fn stitch_tiles(mut rows: Vec<Vec<CudaTensor>>, y_ov: &[usize], x_ov: &[usize]) -> Result<CudaTensor> {
+fn stitch_tiles(
+    mut rows: Vec<Vec<CudaTensor>>,
+    y_ov: &[usize],
+    x_ov: &[usize],
+) -> Result<CudaTensor> {
     // Linear blend on overlaps (same as decoder `_stitch_tiles`).
     for i in 0..rows.len() {
         for j in 0..rows[i].len() {

@@ -190,7 +190,9 @@ impl Ltx2TransformerConfig {
 
     /// 16000 / 160 / 4 = 25 audio latent frames per second.
     pub fn audio_latents_per_second(&self) -> f64 {
-        self.audio_sampling_rate as f64 / self.audio_hop_length as f64 / self.audio_scale_factor as f64
+        self.audio_sampling_rate as f64
+            / self.audio_hop_length as f64
+            / self.audio_scale_factor as f64
     }
 
     /// Audio tokens for a clip: `round(num_frames / fps * 25)` with Python's
@@ -736,7 +738,11 @@ impl Ltx2SchedulerConfig {
     /// the dynamic shift and the terminal stretch are off
     /// (`rootonchair/LTX-2-19b-distilled` `scheduler_config.json`; model card).
     pub fn ltx2_19b_distilled() -> Self {
-        Self { use_dynamic_shifting: false, shift_terminal: None, ..Self::ltx2_19b() }
+        Self {
+            use_dynamic_shifting: false,
+            shift_terminal: None,
+            ..Self::ltx2_19b()
+        }
     }
 }
 
@@ -1066,7 +1072,14 @@ pub struct Ltx2PipelineDefaults {
 
 impl Ltx2PipelineDefaults {
     pub fn ltx2_19b() -> Self {
-        Self { height: 512, width: 768, num_frames: 121, frame_rate: 24.0, max_sequence_length: 1024, pad_left: true }
+        Self {
+            height: 512,
+            width: 768,
+            num_frames: 121,
+            frame_rate: 24.0,
+            max_sequence_length: 1024,
+            pad_left: true,
+        }
     }
 }
 
@@ -1108,7 +1121,10 @@ pub fn ltx2_19b() -> Ltx2Config {
 /// The distilled checkpoint: identical architecture, different transformer and
 /// connector weights, and a scheduler that leaves the sigma list alone.
 pub fn ltx2_19b_distilled() -> Ltx2Config {
-    Ltx2Config { scheduler: Ltx2SchedulerConfig::ltx2_19b_distilled(), ..ltx2_19b() }
+    Ltx2Config {
+        scheduler: Ltx2SchedulerConfig::ltx2_19b_distilled(),
+        ..ltx2_19b()
+    }
 }
 
 /// LTX-2.5 distilled T2AV (Gemma 4 + 2.5 DiT/VAE/vocoder/connectors + spatial upsampler + DiffVAE).
@@ -1226,7 +1242,11 @@ mod tests {
         assert_eq!(
             c.decoder_stages(),
             vec![
-                Ltx2VaeDecoderStage { channels: 1024, resnet_layers: 5, upsampler: None },
+                Ltx2VaeDecoderStage {
+                    channels: 1024,
+                    resnet_layers: 5,
+                    upsampler: None
+                },
                 Ltx2VaeDecoderStage {
                     channels: 512,
                     resnet_layers: 5,
@@ -1272,19 +1292,31 @@ mod tests {
         let a = Ltx2AudioVaeConfig::ltx2_19b();
         assert_eq!(a.latent_mel_bins(), 16);
         assert_eq!(a.token_channels(), 128);
-        assert_eq!(a.token_channels(), Ltx2TransformerConfig::ltx2_19b().audio_in_channels);
+        assert_eq!(
+            a.token_channels(),
+            Ltx2TransformerConfig::ltx2_19b().audio_in_channels
+        );
         assert_eq!(a.mel_frames(126), 501);
         assert_eq!(a.mel_frames(1), 1);
 
         let v = Ltx2VocoderConfig::ltx2_19b();
         assert_eq!(v.in_channels, a.output_channels * a.mel_bins);
         assert_eq!(v.total_upsample_factor(), 240);
-        assert_eq!((0..5).map(|i| v.upsample_padding(i)).collect::<Vec<_>>(), vec![5, 5, 3, 1, 1]);
+        assert_eq!(
+            (0..5).map(|i| v.upsample_padding(i)).collect::<Vec<_>>(),
+            vec![5, 5, 3, 1, 1]
+        );
         assert!(!v.with_bwe);
-        assert_eq!((0..5).map(|i| v.stage_channels(i)).collect::<Vec<_>>(), vec![512, 256, 128, 64, 32]);
+        assert_eq!(
+            (0..5).map(|i| v.stage_channels(i)).collect::<Vec<_>>(),
+            vec![512, 256, 128, 64, 32]
+        );
         assert_eq!(v.waveform_samples(501), 501 * 240);
         // One mel frame is 10 ms at either rate: 160 samples @ 16 kHz in, 240 @ 24 kHz out.
-        assert_eq!(v.total_upsample_factor() * a.sample_rate, a.mel_hop_length * v.output_sampling_rate);
+        assert_eq!(
+            v.total_upsample_factor() * a.sample_rate,
+            a.mel_hop_length * v.output_sampling_rate
+        );
     }
 
     #[test]
@@ -1292,7 +1324,10 @@ mod tests {
         let c = Ltx2ConnectorsConfig::ltx2_19b();
         assert_eq!(c.text_proj_in_features(), 188_160);
         assert_eq!(c.inner_dim(), 3840);
-        assert_eq!(c.text_proj_in_factor, Gemma3TextConfig::ltx2_19b().num_hidden_states());
+        assert_eq!(
+            c.text_proj_in_factor,
+            Gemma3TextConfig::ltx2_19b().num_hidden_states()
+        );
         assert_eq!(1024 % c.video_connector_num_learnable_registers, 0);
     }
 
@@ -1302,7 +1337,9 @@ mod tests {
         assert_eq!(g.q_dim(), 4096);
         assert_eq!(g.kv_dim(), 2048);
         assert_eq!(g.attention_scale(), 0.0625);
-        let globals: Vec<usize> = (0..g.num_hidden_layers).filter(|&i| g.is_global_layer(i)).collect();
+        let globals: Vec<usize> = (0..g.num_hidden_layers)
+            .filter(|&i| g.is_global_layer(i))
+            .collect();
         assert_eq!(globals, vec![5, 11, 17, 23, 29, 35, 41, 47]);
         assert!((g.embed_scale(false) - 61.967_735).abs() < 1e-5);
         assert_eq!(g.embed_scale(true), 62.0);
@@ -1348,7 +1385,10 @@ mod tests {
         assert_eq!(c.video_hidden_dim, 4096);
         assert_eq!(c.audio_hidden_dim, 2048);
         assert_eq!(c.video_connector_num_layers, 8);
-        assert_eq!(c.text_proj_in_factor, Gemma4TextConfig::ltx2_5_22b().num_hidden_states());
+        assert_eq!(
+            c.text_proj_in_factor,
+            Gemma4TextConfig::ltx2_5_22b().num_hidden_states()
+        );
     }
 
     #[test]
@@ -1356,11 +1396,25 @@ mod tests {
         let stages = Ltx2VideoVaeConfig::ltx2_5_22b().decoder_stages();
         assert_eq!(stages.len(), 5);
         assert_eq!(stages[0].channels, 1024);
-        assert_eq!(stages[1].upsampler.as_ref().map(|u| u.conv_out_channels), Some(4096));
-        assert_eq!(stages[2].upsampler.as_ref().map(|u| u.stride), Some((2, 2, 2)));
-        assert_eq!(stages[3].upsampler.as_ref().map(|u| u.stride), Some((2, 1, 1)));
-        assert!(stages.iter().all(|s| s.upsampler.as_ref().map(|u| u.residual) != Some(true)));
-        assert_eq!(stages[4].upsampler.as_ref().map(|u| u.stride), Some((1, 2, 2)));
+        assert_eq!(
+            stages[1].upsampler.as_ref().map(|u| u.conv_out_channels),
+            Some(4096)
+        );
+        assert_eq!(
+            stages[2].upsampler.as_ref().map(|u| u.stride),
+            Some((2, 2, 2))
+        );
+        assert_eq!(
+            stages[3].upsampler.as_ref().map(|u| u.stride),
+            Some((2, 1, 1))
+        );
+        assert!(stages
+            .iter()
+            .all(|s| s.upsampler.as_ref().map(|u| u.residual) != Some(true)));
+        assert_eq!(
+            stages[4].upsampler.as_ref().map(|u| u.stride),
+            Some((1, 2, 2))
+        );
     }
 
     #[test]
@@ -1379,7 +1433,10 @@ mod tests {
         assert_eq!(bwe.stage_channels(4), 16);
         let a = Ltx2AudioVaeConfig::ltx2_19b();
         // Main stack is 16 kHz; BWE rate lift brings the product to 48 kHz.
-        assert_eq!(v.total_upsample_factor() * a.sample_rate * v.rate_upsample(), a.mel_hop_length * v.output_sampling_rate);
+        assert_eq!(
+            v.total_upsample_factor() * a.sample_rate * v.rate_upsample(),
+            a.mel_hop_length * v.output_sampling_rate
+        );
     }
 
     #[test]
@@ -1390,12 +1447,18 @@ mod tests {
         assert!(!cfg.scheduler.use_dynamic_shifting);
         assert!(cfg.vocoder.with_bwe);
         assert_eq!(cfg.vocoder.output_sampling_rate, 48000);
-        let up = cfg.latent_upsampler.as_ref().expect("2.5 ships spatial upsampler config");
+        let up = cfg
+            .latent_upsampler
+            .as_ref()
+            .expect("2.5 ships spatial upsampler config");
         assert_eq!(up.mid_channels, 1024);
         assert!(!up.use_rational_resampler);
         assert_eq!(up.spatial_factor(), 2);
         assert!(ltx2_19b().latent_upsampler.is_none());
-        let dd = cfg.diffusion_decoder.as_ref().expect("2.5 ships DiffVAE config");
+        let dd = cfg
+            .diffusion_decoder
+            .as_ref()
+            .expect("2.5 ships DiffVAE config");
         assert_eq!(dd.patch_size, 4);
         assert_eq!(dd.num_inference_steps, 1);
         assert_eq!(dd.model_output_type, "x0");

@@ -118,18 +118,33 @@ struct Conv {
 }
 
 impl Conv {
-    fn load(map: &WeightMap, prefix: &str, out_c: usize, in_c: usize, k: usize, bias: bool) -> Result<Self> {
+    fn load(
+        map: &WeightMap,
+        prefix: &str,
+        out_c: usize,
+        in_c: usize,
+        k: usize,
+        bias: bool,
+    ) -> Result<Self> {
         let weight = super::weights::cuda_tensor_shaped(
             map,
             &format!("{prefix}.weight"),
             &[out_c, in_c, k, k],
         )?;
         let bias = if bias {
-            Some(super::weights::cuda_tensor_shaped(map, &format!("{prefix}.bias"), &[out_c])?)
+            Some(super::weights::cuda_tensor_shaped(
+                map,
+                &format!("{prefix}.bias"),
+                &[out_c],
+            )?)
         } else {
             None
         };
-        Ok(Self { weight, bias, pad: k / 2 })
+        Ok(Self {
+            weight,
+            bias,
+            pad: k / 2,
+        })
     }
 
     fn forward(&self, x: &CudaTensor) -> Result<CudaTensor> {
@@ -176,7 +191,10 @@ enum Block {
     Mem(MemBlock),
     Upsample2,
     /// 1x1 convolution to `c * stride` channels, then split into `stride` frames.
-    TGrow { conv: Conv, stride: usize },
+    TGrow {
+        conv: Conv,
+        stride: usize,
+    },
 }
 
 pub struct TaeHv {
@@ -200,7 +218,14 @@ impl TaeHv {
             Ok(Mem(MemBlock::load(map, &format!("decoder.{i}"), n)?))
         };
         let conv = |i: usize, o: usize, ic: usize, bias: bool| -> Result<Block> {
-            Ok(Conv(self::Conv::load(map, &format!("decoder.{i}"), o, ic, 3, bias)?))
+            Ok(Conv(self::Conv::load(
+                map,
+                &format!("decoder.{i}"),
+                o,
+                ic,
+                3,
+                bias,
+            )?))
         };
         let tgrow = |i: usize, c: usize, stride: usize| -> Result<Block> {
             Ok(TGrow {
@@ -276,11 +301,17 @@ impl TaeHv {
         sink: &mut dyn FnMut(usize, &CudaTensor) -> Result<()>,
     ) -> Result<CudaTensor> {
         let [n, c, t, h, w] = z.shape[..] else {
-            return Err(msg(format!("taehv expects [N, C, T, H, W] latents, got {:?}", z.shape)));
+            return Err(msg(format!(
+                "taehv expects [N, C, T, H, W] latents, got {:?}",
+                z.shape
+            )));
         };
         let want_c = self.arch.latent_channels();
         if n != 1 || c != want_c {
-            return Err(msg(format!("taehv ({:?}) expects [1, {want_c}, T, H, W], got {:?}", self.arch, z.shape)));
+            return Err(msg(format!(
+                "taehv ({:?}) expects [1, {want_c}, T, H, W], got {:?}",
+                self.arch, z.shape
+            )));
         }
         if self.arch == TaeArch::H3 {
             return self.decode_streaming_h3(z, c, t, h, w, sink);
@@ -333,7 +364,8 @@ impl TaeHv {
         let refs: Vec<&CudaTensor> = out_chunks.iter().collect();
         let x = CudaTensor::cat(&refs, 0)?;
         let (frames, oc, oh, ow) = (x.shape[0], x.shape[1], x.shape[2], x.shape[3]);
-        x.reshape(vec![1, frames, oc, oh, ow])?.permute(&[0, 2, 1, 3, 4])
+        x.reshape(vec![1, frames, oc, oh, ow])?
+            .permute(&[0, 2, 1, 3, 4])
     }
 
     /// One chunk of latent frames through every block, updating the per-block
@@ -426,8 +458,15 @@ impl TaeHv {
             sink(emitted, &batch)?;
             emitted += n;
         }
-        let (f, oc, oh, ow) = (frames.shape[0], frames.shape[1], frames.shape[2], frames.shape[3]);
-        frames.reshape(vec![1, f, oc, oh, ow])?.permute(&[0, 2, 1, 3, 4])
+        let (f, oc, oh, ow) = (
+            frames.shape[0],
+            frames.shape[1],
+            frames.shape[2],
+            frames.shape[3],
+        );
+        frames
+            .reshape(vec![1, f, oc, oh, ow])?
+            .permute(&[0, 2, 1, 3, 4])
     }
 }
 
@@ -448,20 +487,30 @@ fn h3_wrap_frame_count(raw_frames: usize) -> usize {
 /// `F.pixel_shuffle(x, 2)` on `[F, C*4, H, W]` → `[F, C, 2H, 2W]`.
 fn pixel_shuffle2(x: &CudaTensor) -> Result<CudaTensor> {
     let [f, c4, h, w] = x.shape[..] else {
-        return Err(msg(format!("pixel_shuffle2 expects [F, C, H, W], got {:?}", x.shape)));
+        return Err(msg(format!(
+            "pixel_shuffle2 expects [F, C, H, W], got {:?}",
+            x.shape
+        )));
     };
     if c4 % 4 != 0 {
-        return Err(msg(format!("pixel_shuffle2: {c4} channels is not 4× a channel count")));
+        return Err(msg(format!(
+            "pixel_shuffle2: {c4} channels is not 4× a channel count"
+        )));
     }
     let c = c4 / 4;
-    x.reshape(vec![f, c, 2, 2, h, w])?.permute(&[0, 1, 4, 2, 5, 3])?.reshape(vec![f, c, h * 2, w * 2])
+    x.reshape(vec![f, c, 2, 2, h, w])?
+        .permute(&[0, 1, 4, 2, 5, 3])?
+        .reshape(vec![f, c, h * 2, w * 2])
 }
 
 /// `taehv.py` `_decode_h3_video` after the sequential decoder, before
 /// `postprocess_output_frames`. `x` is `[F, C, H, W]`.
 fn apply_h3_wrap(x: &CudaTensor) -> Result<CudaTensor> {
     let [frames, c, h, w] = x.shape[..] else {
-        return Err(msg(format!("h3 wrap expects [F, C, H, W], got {:?}", x.shape)));
+        return Err(msg(format!(
+            "h3 wrap expects [F, C, H, W], got {:?}",
+            x.shape
+        )));
     };
     let pad = (H3_CHUNK_FRAMES - frames % H3_CHUNK_FRAMES) % H3_CHUNK_FRAMES;
     let x = if pad == 0 {
@@ -471,13 +520,17 @@ fn apply_h3_wrap(x: &CudaTensor) -> Result<CudaTensor> {
         CudaTensor::cat(&[x, &zeros], 0)?
     };
     let groups = x.shape[0] / H3_CHUNK_FRAMES;
-    let body = x
-        .reshape(vec![groups, H3_CHUNK_FRAMES, c, h, w])?
-        .narrow(1, FRAMES_TO_TRIM, H3_CHUNK_FRAMES - FRAMES_TO_TRIM)?;
+    let body = x.reshape(vec![groups, H3_CHUNK_FRAMES, c, h, w])?.narrow(
+        1,
+        FRAMES_TO_TRIM,
+        H3_CHUNK_FRAMES - FRAMES_TO_TRIM,
+    )?;
     let kept = groups * (H3_CHUNK_FRAMES - FRAMES_TO_TRIM);
     let x = body.reshape(vec![kept, c, h, w])?;
     if kept <= H3_TOKEN_DROP_FRAMES {
-        return Err(msg(format!("h3 wrap: {frames} grown frames keep {kept}, cannot drop {H3_TOKEN_DROP_FRAMES}")));
+        return Err(msg(format!(
+            "h3 wrap: {frames} grown frames keep {kept}, cannot drop {H3_TOKEN_DROP_FRAMES}"
+        )));
     }
     x.narrow(0, 0, kept - H3_TOKEN_DROP_FRAMES)
 }
@@ -495,7 +548,10 @@ fn shift_one_frame(x: &CudaTensor, frames: usize) -> Result<CudaTensor> {
 fn tanh_scaled(x: &CudaTensor, s: f32) -> Result<CudaTensor> {
     #[cfg(feature = "cuda")]
     if let Some(d) = x.dev()? {
-        return CudaTensor::from_dev_result(super::ops::tanh_scaled_device(&d, s)?, x.shape.clone());
+        return CudaTensor::from_dev_result(
+            super::ops::tanh_scaled_device(&d, s)?,
+            x.shape.clone(),
+        );
     }
     let host = x.host_cow()?;
     let data: Vec<f32> = host.iter().map(|v| (v / s).tanh() * s).collect();
@@ -511,10 +567,15 @@ mod tests {
     fn tiny_map() -> WeightMap {
         WeightMap::generated(|key, shape| {
             let n: usize = shape.iter().product();
-            let seed = key.bytes().fold(17u64, |a, b| a.wrapping_mul(31).wrapping_add(u64::from(b)));
+            let seed = key
+                .bytes()
+                .fold(17u64, |a, b| a.wrapping_mul(31).wrapping_add(u64::from(b)));
             (0..n)
                 .map(|i| {
-                    let x = seed.wrapping_add(i as u64).wrapping_mul(6364136223846793005) >> 33;
+                    let x = seed
+                        .wrapping_add(i as u64)
+                        .wrapping_mul(6364136223846793005)
+                        >> 33;
                     ((x % 2000) as f32 / 1000.0 - 1.0) * 0.05
                 })
                 .collect()
@@ -543,7 +604,9 @@ mod tests {
     #[test]
     fn one_latent_frame_survives_the_trim() {
         let tae = TaeHv::load(&tiny_map()).expect("load");
-        let out = tae.decode(&CudaTensor::zeros(&[1, 16, 1, 2, 2])).expect("decode");
+        let out = tae
+            .decode(&CudaTensor::zeros(&[1, 16, 1, 2, 2]))
+            .expect("decode");
         assert_eq!(out.shape, vec![1, 3, 1, 16, 16]);
     }
 
@@ -553,7 +616,10 @@ mod tests {
     fn shift_one_frame_zero_pads_the_front() {
         let x = CudaTensor::from_vec((0..6).map(|v| v as f32).collect(), vec![3, 2, 1, 1]).unwrap();
         let s = shift_one_frame(&x, 3).unwrap();
-        assert_eq!(s.host_cow().unwrap().as_ref(), &[0.0, 0.0, 0.0, 1.0, 2.0, 3.0]);
+        assert_eq!(
+            s.host_cow().unwrap().as_ref(),
+            &[0.0, 0.0, 0.0, 1.0, 2.0, 3.0]
+        );
     }
 
     /// The whole point of the boundary carry: chunking must be invisible.
@@ -564,7 +630,9 @@ mod tests {
     fn chunking_does_not_change_the_result() {
         let tae = TaeHv::load(&tiny_map()).expect("load");
         let z = CudaTensor::from_vec(
-            (0..(16 * 6 * 2 * 2)).map(|i| ((i % 37) as f32 / 37.0) - 0.5).collect(),
+            (0..(16 * 6 * 2 * 2))
+                .map(|i| ((i % 37) as f32 / 37.0) - 0.5)
+                .collect(),
             vec![1, 16, 6, 2, 2],
         )
         .unwrap();
@@ -579,7 +647,10 @@ mod tests {
         };
         std::env::remove_var("FASTVIDEO_TAEHV_CHUNK");
 
-        assert_eq!(whole.shape, chunked.shape, "chunking changed the frame count");
+        assert_eq!(
+            whole.shape, chunked.shape,
+            "chunking changed the frame count"
+        );
         let (a, b) = (whole.host_cow().unwrap(), chunked.host_cow().unwrap());
         let worst = a
             .iter()
@@ -596,7 +667,9 @@ mod tests {
     fn streaming_sink_sees_every_frame_in_order() {
         let tae = TaeHv::load(&tiny_map()).expect("load");
         let z = CudaTensor::from_vec(
-            (0..(16 * 5 * 2 * 2)).map(|i| ((i % 41) as f32 / 41.0) - 0.5).collect(),
+            (0..(16 * 5 * 2 * 2))
+                .map(|i| ((i % 41) as f32 / 41.0) - 0.5)
+                .collect(),
             vec![1, 16, 5, 2, 2],
         )
         .unwrap();
@@ -610,7 +683,10 @@ mod tests {
             .expect("streamed");
         std::env::remove_var("FASTVIDEO_TAEHV_CHUNK");
 
-        assert!(seen.len() > 1, "a 5-frame latent in chunks of 2 must stream more than one batch");
+        assert!(
+            seen.len() > 1,
+            "a 5-frame latent in chunks of 2 must stream more than one batch"
+        );
         let mut next = 0;
         let refs: Vec<CudaTensor> = seen
             .iter()
@@ -620,7 +696,10 @@ mod tests {
                 t.clone()
             })
             .collect();
-        assert_eq!(next, out.shape[2], "streamed frame count != decoded frame count");
+        assert_eq!(
+            next, out.shape[2],
+            "streamed frame count != decoded frame count"
+        );
         let refs: Vec<&CudaTensor> = refs.iter().collect();
         let streamed = CudaTensor::cat(&refs, 0).unwrap();
         // [F, 3, H, W] vs the video's [1, 3, F, H, W].
@@ -631,7 +710,10 @@ mod tests {
             .unwrap();
         let (a, b) = (streamed.host_cow().unwrap(), video.host_cow().unwrap());
         assert_eq!(a.len(), b.len());
-        assert!(a.iter().zip(b.iter()).all(|(x, y)| x == y), "streamed frames differ from the video");
+        assert!(
+            a.iter().zip(b.iter()).all(|(x, y)| x == y),
+            "streamed frames differ from the video"
+        );
     }
 
     /// A chunk size that does not divide the latent frame count leaves a short
@@ -642,7 +724,9 @@ mod tests {
     fn a_ragged_final_chunk_still_decodes() {
         let tae = TaeHv::load(&tiny_map()).expect("load");
         let z = CudaTensor::from_vec(
-            (0..(16 * 5 * 2 * 2)).map(|i| ((i % 13) as f32 / 13.0) - 0.5).collect(),
+            (0..(16 * 5 * 2 * 2))
+                .map(|i| ((i % 13) as f32 / 13.0) - 0.5)
+                .collect(),
             vec![1, 16, 5, 2, 2],
         )
         .unwrap();
@@ -653,16 +737,25 @@ mod tests {
         std::env::remove_var("FASTVIDEO_TAEHV_CHUNK");
         assert_eq!(ragged.shape, whole.shape);
         let (a, b) = (ragged.host_cow().unwrap(), whole.host_cow().unwrap());
-        let worst = a.iter().zip(b.iter()).map(|(x, y)| (x - y).abs()).fold(0.0f32, f32::max);
+        let worst = a
+            .iter()
+            .zip(b.iter())
+            .map(|(x, y)| (x - y).abs())
+            .fold(0.0f32, f32::max);
         assert!(worst < 1e-5, "ragged tail changed the output by {worst}");
     }
 
     #[test]
     fn output_is_in_minus_one_to_one() {
         let tae = TaeHv::load(&tiny_map()).expect("load");
-        let out = tae.decode(&CudaTensor::zeros(&[1, 16, 2, 2, 2])).expect("decode");
+        let out = tae
+            .decode(&CudaTensor::zeros(&[1, 16, 2, 2, 2]))
+            .expect("decode");
         let host = out.host_cow().unwrap();
-        assert!(host.iter().all(|v| (-1.0..=1.0).contains(v)), "output escaped [-1, 1]");
+        assert!(
+            host.iter().all(|v| (-1.0..=1.0).contains(v)),
+            "output escaped [-1, 1]"
+        );
     }
 
     #[test]
@@ -698,17 +791,27 @@ mod tests {
     fn pixel_shuffle2_is_channel_to_spatial() {
         // Channel-major 2×2 tiles: values 0..11 in [1, 12, 1, 1] become
         // [1, 3, 2, 2] with each RGB channel a 2×2 of consecutive numbers.
-        let x = CudaTensor::from_vec((0..12).map(|v| v as f32).collect(), vec![1, 12, 1, 1]).unwrap();
+        let x =
+            CudaTensor::from_vec((0..12).map(|v| v as f32).collect(), vec![1, 12, 1, 1]).unwrap();
         let y = pixel_shuffle2(&x).unwrap();
         assert_eq!(y.shape, vec![1, 3, 2, 2]);
-        assert_eq!(y.host_cow().unwrap().as_ref(), &[0.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0]);
+        assert_eq!(
+            y.host_cow().unwrap().as_ref(),
+            &[0.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0]
+        );
     }
 
     #[test]
     fn h3_two_latents_decode_to_five_frames_at_16x() {
         let tae = TaeHv::load_arch(&tiny_map(), TaeArch::H3).expect("load");
-        let out = tae.decode(&CudaTensor::zeros(&[1, 24, 2, 2, 2])).expect("decode");
-        assert_eq!(out.shape, vec![1, 3, 5, 32, 32], "2 latents, 2×2, patch 2 → 5 frames at 16×");
+        let out = tae
+            .decode(&CudaTensor::zeros(&[1, 24, 2, 2, 2]))
+            .expect("decode");
+        assert_eq!(
+            out.shape,
+            vec![1, 3, 5, 32, 32],
+            "2 latents, 2×2, patch 2 → 5 frames at 16×"
+        );
         let host = out.host_cow().unwrap();
         assert!(host.iter().all(|v| (-1.0..=1.0).contains(v)));
     }
