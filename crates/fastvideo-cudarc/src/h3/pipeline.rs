@@ -53,7 +53,7 @@ use rand_distr::StandardNormal;
 
 use super::audio_vae::H3AudioDecoder;
 use super::text::{CacheStatus, HiddenStateEncoder};
-use super::transformer::{AttnMode, DeviceLayout, H3TextRefiner, H3Transformer};
+use super::transformer::{AttnMode, DeviceLayout, H3SolPolicy, H3TextRefiner, H3Transformer};
 use super::vae::H3VideoDecoder;
 use super::vae_encoder::H3VideoEncoder;
 use super::vsa::H3Vsa;
@@ -554,12 +554,25 @@ impl H3Pipeline {
             contract.vsa_sparsity,
             options.dense
         ));
-        if fastvideo_models::h3::sol::sol_attn_requested(
+        match fastvideo_models::h3::sol::sol_attn_policy(
             std::env::var("FASTVIDEO_H3_SOL_ATTN").ok().as_deref(),
         ) {
-            crate::wan::log::info(format_args!(
-                "h3 sol-attn: stage-1 update 0 dense, later updates layer 0 dense and layers 1-49 tau 1/1.25/1.5 (dense SDPA until the kernel is linked)"
-            ));
+            fastvideo_models::h3::sol::H3SolAttnPolicy::Spark => {
+                crate::wan::log::info(format_args!(
+                    "h3 sol-attn: stage-1 update 0 dense, later updates layer 0 dense and layers 1-49 sol-attn kernel tau 1/1.25/1.5 (thresh_type=diag)"
+                ));
+            }
+            fastvideo_models::h3::sol::H3SolAttnPolicy::Rtx => {
+                crate::wan::log::info(format_args!(
+                    "h3 sol-attn: rtx first 10 steps dense, later steps layers 0-1 dense and layers 2-49 sol-attn kernel tau 1.0 (thresh_type=diag)"
+                ));
+            }
+            fastvideo_models::h3::sol::H3SolAttnPolicy::Off => {}
+        }
+        if fastvideo_models::h3::sol::teacache_requested(
+            std::env::var("FASTVIDEO_H3_SOL_CACHE").ok().as_deref(),
+        ) {
+            crate::wan::log::info(format_args!("{}", fastvideo_models::h3::sol::TEACACHE_GAP));
         }
         let mut lora = if options.recipe.as_deref().is_some_and(is_sol_h3_recipe) {
             let spec = if options.ref2va {
@@ -829,8 +842,14 @@ impl H3Pipeline {
         let sequence_length = layout.sequence_length();
         // Interleaved Ref2VA condition audio breaks VSA's contiguous-prefix tiles.
         let force_dense = layout.num_condition_audio_rows > 0;
-        let vsa = if self.options.dense || force_dense {
-            if force_dense && !self.options.dense {
+        let sol_policy = match fastvideo_models::h3::sol::sol_attn_policy(
+            std::env::var("FASTVIDEO_H3_SOL_ATTN").ok().as_deref(),
+        ) {
+            fastvideo_models::h3::sol::H3SolAttnPolicy::Off => None,
+            kind => Some(H3SolPolicy::from_layout(kind, &layout)),
+        };
+        let vsa = if sol_policy.is_some() || self.options.dense || force_dense {
+            if force_dense && !self.options.dense && sol_policy.is_none() {
                 crate::wan::log::info(format_args!(
                     "h3 ref2va: dense attention (interleaved condition audio)"
                 ));
@@ -848,7 +867,11 @@ impl H3Pipeline {
                 vsa_cfg,
             )?)
         };
-        let mode = vsa.as_ref().map_or(AttnMode::Dense, AttnMode::Vsa);
+        let mode = if let Some(ref policy) = sol_policy {
+            AttnMode::Sol(policy)
+        } else {
+            vsa.as_ref().map_or(AttnMode::Dense, AttnMode::Vsa)
+        };
         let layout = DeviceLayout::new(cfg, layout)?;
         let (video_noise, audio_noise) = seeded_noise(cfg, &geometry, request.seed).map_err(msg)?;
         let video_rows = CudaTensor::from_vec(
@@ -890,7 +913,14 @@ impl H3Pipeline {
         )?;
         timings.denoise_s = timer.elapsed().as_secs_f64();
         timings.step_s = step_s;
-        drop((vsa, layout, text_refined, cond_rows, cond_audio_rows));
+        drop((
+            vsa,
+            sol_policy,
+            layout,
+            text_refined,
+            cond_rows,
+            cond_audio_rows,
+        ));
 
         // --- audio first: the WAV must exist before the muxer starts -------------------
         let timer = Instant::now();

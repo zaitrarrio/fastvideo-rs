@@ -29,7 +29,7 @@ use crate::wan::nn::{sinusoidal_timesteps, Linear};
 use crate::wan::tensor::{CudaTensor, Result};
 use crate::wan::weights::{cuda_tensor_shaped, WeightMap};
 
-use super::attention::{Attention, AttentionDims, DeviceRope, FeedForward};
+use super::attention::{Attention, AttentionDims, DeviceRope, FeedForward, VideoAttnKernel};
 use super::keys::Keys;
 use super::{msg, ones};
 
@@ -156,8 +156,8 @@ impl Ltx2Stage2Attn {
     }
 }
 
-/// Video self-attention. Sol and PISA routes still run dense SDPA: those
-/// kernels are not linked. The route is the published selection for this layer.
+/// Video self-attention. Sol / PISA layers call the published kernels; the
+/// dense prefix and `--sol-stage2`/`--pisa-stage2` off stay on today's SDPA.
 fn video_self_attn(
     attn: &Attention,
     h: &CudaTensor,
@@ -165,16 +165,24 @@ fn video_self_attn(
     route: Ltx2VideoAttn,
     layer: usize,
 ) -> Result<CudaTensor> {
-    match route {
+    let kernel = match route {
         Ltx2VideoAttn::Sol { step } => {
-            let _ = fastvideo_models::ltx2::route(step, layer).map_err(msg)?;
+            match fastvideo_models::ltx2::route(step, layer).map_err(msg)? {
+                fastvideo_models::ltx2::Ltx25SolRoute::Dense => VideoAttnKernel::Dense,
+                fastvideo_models::ltx2::Ltx25SolRoute::Sol { tau } => VideoAttnKernel::Sol { tau },
+            }
         }
         Ltx2VideoAttn::Pisa { step } => {
-            let _ = fastvideo_models::ltx2::pisa_route(step, layer).map_err(msg)?;
+            match fastvideo_models::ltx2::pisa_route(step, layer).map_err(msg)? {
+                fastvideo_models::ltx2::Ltx23PisaRoute::Dense => VideoAttnKernel::Dense,
+                fastvideo_models::ltx2::Ltx23PisaRoute::Pisa { sparsity, .. } => {
+                    VideoAttnKernel::Pisa { sparsity }
+                }
+            }
         }
-        Ltx2VideoAttn::Off => {}
-    }
-    attn.forward(h, None, Some(rope), None)
+        Ltx2VideoAttn::Off => VideoAttnKernel::Dense,
+    };
+    attn.forward_kernel(h, None, Some(rope), None, kernel)
 }
 
 /// One stream's half of a block.

@@ -105,11 +105,11 @@ pub struct Ltx2Request {
     pub refine_steps: Option<usize>,
     /// Stage-2 Sol route: layer 0 dense, layers 1..=47 at tau 1.0 / 1.25 / 1.5.
     /// Requires two-stage with 3 refine steps. Video self-attention on Sol
-    /// layers still runs dense SDPA until the Sol kernel is linked.
+    /// layers runs the Sol-Attn kernel (`thresh_type=diag`).
     pub sol_stage2: bool,
     /// Stage-2 PISA route: layers 0..=1 dense, later video layers piecewise
-    /// sparse at 0.9 / block 64. Same refine length. Sparse layers still run
-    /// dense SDPA, and the midpoint token prune is not applied.
+    /// sparse at 0.9 / block 64. Same refine length. Sparse layers run the
+    /// PISA score-route kernel; the midpoint token prune is not applied.
     pub pisa_stage2: bool,
     /// First-frame image for I2V (`None` = T2AV). Uses VAE encode stub until
     /// the full encoder lands.
@@ -1094,6 +1094,26 @@ impl Ltx2Pipeline {
         observer: Option<StepObserver<'_>>,
     ) -> Result<Ltx2Output> {
         req.validate()?;
+        if fastvideo_models::ltx2::fbcache::requested(
+            std::env::var("FASTVIDEO_LTX2_FBCACHE").ok().as_deref(),
+        ) {
+            crate::wan::log::info(format_args!("{}", fastvideo_models::ltx2::fbcache::GAP));
+        }
+        if fastvideo_models::ltx2::pisa::stage1_cache_requested(
+            std::env::var("FASTVIDEO_LTX2_STAGE1_CACHE").ok().as_deref(),
+        ) {
+            crate::wan::log::info(format_args!(
+                "{}",
+                fastvideo_models::ltx2::pisa::STAGE1_CACHE_GAP
+            ));
+        }
+        if fastvideo_models::ltx2::pisa::midpoint_prune_requested(
+            std::env::var("FASTVIDEO_LTX2_MIDPOINT_PRUNE")
+                .ok()
+                .as_deref(),
+        ) {
+            crate::wan::log::info(format_args!("{}", fastvideo_models::ltx2::pisa::PRUNE_GAP));
+        }
         let cfg = self.cfg.clone();
         if req.two_stage {
             if !matches!(cfg.version, Ltx2ModelVersion::V23 | Ltx2ModelVersion::V25) {
@@ -1267,12 +1287,12 @@ impl Ltx2Pipeline {
 
             if req.sol_stage2 {
                 crate::wan::log::info(format_args!(
-                    "ltx2 sol stage-2: taus 1/1.25/1.5, layer 0 dense, layers 1-47 sol (dense SDPA until the kernel is linked), lora strength 0.8 not fused"
+                    "ltx2 sol stage-2: taus 1/1.25/1.5, layer 0 dense, layers 1-47 sol-attn kernel (thresh_type=diag), lora strength 0.8 not fused"
                 ));
             }
             if req.pisa_stage2 {
                 crate::wan::log::info(format_args!(
-                    "ltx2 pisa stage-2: layers 0-1 dense, layers 2-47 sparsity 0.9 block 64 (dense SDPA until the kernel is linked), prune steps 1,2 ratio 0.5 not applied, lora 0.25/0.5 not fused, stage-1 cache preset 8of15_last_29calls not applied"
+                    "ltx2 pisa stage-2: layers 0-1 dense, layers 2-47 pisa kernel sparsity 0.9 block 64 score-route, prune steps 1,2 ratio 0.5 not applied, lora 0.25/0.5 not fused, stage-1 cache preset 8of15_last_29calls not applied"
                 ));
             }
             let schedule2 =

@@ -152,6 +152,19 @@ impl Attention {
         q_rope: Option<&DeviceRope>,
         k_rope: Option<&DeviceRope>,
     ) -> Result<CudaTensor> {
+        self.forward_kernel(x, context, q_rope, k_rope, VideoAttnKernel::Dense)
+    }
+
+    /// Same as [`Self::forward`], but video self-attention can take the Sol or
+    /// PISA kernel. Off / dense layers keep the SDPA path byte-identical.
+    pub fn forward_kernel(
+        &self,
+        x: &CudaTensor,
+        context: Option<&CudaTensor>,
+        q_rope: Option<&DeviceRope>,
+        k_rope: Option<&DeviceRope>,
+        kernel: VideoAttnKernel,
+    ) -> Result<CudaTensor> {
         let (heads, d) = (self.dims.heads, self.dims.head_dim);
         let gate_logits = match &self.to_gate_logits {
             Some(l) => Some(l.forward(x)?),
@@ -173,13 +186,35 @@ impl Attention {
             Some(rope) => (rope.apply(&q)?, k_rope.unwrap_or(rope).apply(&k)?),
             None => (q, k),
         };
-        let out = scaled_dot_product_attention(&q, &k, &v, Some((d as f32).powf(-0.5)))?;
+        let scale = Some((d as f32).powf(-0.5));
+        let kernel = if context.is_some() {
+            VideoAttnKernel::Dense
+        } else {
+            kernel
+        };
+        let out = match kernel {
+            VideoAttnKernel::Dense => scaled_dot_product_attention(&q, &k, &v, scale)?,
+            VideoAttnKernel::Sol { tau } => {
+                crate::sol_attn::sol_attn(&q, &k, &v, tau, scale, None, 0)?
+            }
+            VideoAttnKernel::Pisa { sparsity } => {
+                crate::pisa_attn::pisa_attn(&q, &k, &v, sparsity, scale)?
+            }
+        };
         let merged = match gate_logits {
             Some(logits) => self.apply_head_gates(&out, &logits)?.merge_heads()?,
             None => out.merge_heads()?,
         };
         self.to_out.forward(&merged)
     }
+}
+
+/// Video self-attention kernel after QKV + RoPE.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum VideoAttnKernel {
+    Dense,
+    Sol { tau: f64 },
+    Pisa { sparsity: f64 },
 }
 
 /// diffusers `FeedForward(dim, activation_fn="gelu-approximate")`:

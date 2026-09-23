@@ -4,6 +4,7 @@
 //! and `pipelines/ltx2`. See docs/ports/ltx2.md.
 
 pub mod config;
+pub mod fbcache;
 pub mod pisa;
 pub mod rope;
 pub mod schedule;
@@ -17,7 +18,14 @@ pub use config::{
     Ltx2VaeDecoderStage, Ltx2VaeDecoderUpsampler, Ltx2VaeUpsampleKind, Ltx2VideoVaeConfig,
     Ltx2VocoderConfig,
 };
-pub use pisa::{prunes_step, route as pisa_route, Ltx23PisaRoute, STAGE1_CACHE_PRESET};
+pub use fbcache::{
+    requested as fbcache_requested, GAP as FBCACHE_GAP, THRESHOLD as FBCACHE_THRESHOLD,
+};
+pub use pisa::{
+    midpoint_prune_requested, prunes_step, route as pisa_route, stage1_cache_requested,
+    Ltx23PisaRoute, BLOCK_SIZE as PISA_BLOCK_SIZE, PRUNE_GAP, SPARSITY as PISA_SPARSITY,
+    STAGE1_CACHE_GAP, STAGE1_CACHE_PRESET,
+};
 pub use rope::{Ltx2RopeTables, ScalarDivision, SplitRope};
 pub use schedule::{AncestralOpts, Ltx2Schedule};
 pub use sol::{route, route_for_call, Ltx25SolRoute, LORA_STRENGTH, STAGE2_SIGMAS, STAGE2_TAUS};

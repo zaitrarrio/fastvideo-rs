@@ -1,8 +1,8 @@
 //! LTX-2.3 stage-2 PISA contract (`models/ltx23/optimized/env.sh` on
 //! NVlabs/Sana `sol-engine`).
 //!
-//! Video self-attention only. Layers 0 and 1 stay dense. Later layers are
-//! piecewise sparse attention at sparsity 0.9 and block size 64. Stage-2
+//! Video self-attention only. Layers 0 and 1 stay dense. Later layers use
+//! the PISA score-route kernel at sparsity 0.9 and block size 64. Stage-2
 //! steps 1 and 2 are the midpoint token-prune steps (keep half, by feature
 //! norm). The stage-1 SCSP preset name is recorded here; its skip mask is
 //! not applied. LoRA strengths are recorded and not fused.
@@ -31,10 +31,35 @@ pub const PRUNE_STEPS: [usize; 2] = [1, 2];
 /// Named stage-1 cache preset. The skip schedule itself is not in this repo.
 pub const STAGE1_CACHE_PRESET: &str = "8of15_last_29calls";
 
+/// `FASTVIDEO_LTX2_STAGE1_CACHE=1` (or the preset name) logs [`STAGE1_CACHE_GAP`].
+pub fn stage1_cache_requested(value: Option<&str>) -> bool {
+    match value.map(str::trim) {
+        Some("1") => true,
+        Some(v) => v.eq_ignore_ascii_case(STAGE1_CACHE_PRESET) || v.eq_ignore_ascii_case("scsp"),
+        None => false,
+    }
+}
+
+pub const STAGE1_CACHE_GAP: &str =
+    "ltx2 pisa: stage-1 SCSP preset 8of15_last_29calls stays unported \
+(the step or call mask is not in the sol-engine snapshots)";
+
+/// `FASTVIDEO_LTX2_MIDPOINT_PRUNE=1` (or `feat_norm`) logs [`PRUNE_GAP`].
+pub fn midpoint_prune_requested(value: Option<&str>) -> bool {
+    match value.map(str::trim) {
+        Some("1") => true,
+        Some(v) => v.eq_ignore_ascii_case("feat_norm") || v.eq_ignore_ascii_case("prune"),
+        None => false,
+    }
+}
+
+pub const PRUNE_GAP: &str = "ltx2 pisa: midpoint token prune stays unported \
+(feat_norm keep/scatter is unpublished: which tokens, which layers, how dropped tokens write back)";
+
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Ltx23PisaRoute {
     Dense,
-    /// Piecewise sparse video self-attention. Still dense SDPA until that kernel is linked.
+    /// Piecewise sparse video self-attention (score-route top-k + approx remainder).
     Pisa {
         sparsity: f64,
         block_size: usize,
@@ -102,5 +127,24 @@ mod tests {
         assert_eq!(STAGE1_CACHE_PRESET, "8of15_last_29calls");
         assert_eq!(STAGE1_LORA_STRENGTH, 0.25);
         assert_eq!(STAGE2_LORA_STRENGTH, 0.5);
+    }
+
+    #[test]
+    fn stage1_cache_env_is_off_until_the_preset() {
+        assert!(!stage1_cache_requested(None));
+        assert!(!stage1_cache_requested(Some("off")));
+        assert!(stage1_cache_requested(Some("1")));
+        assert!(stage1_cache_requested(Some(STAGE1_CACHE_PRESET)));
+        assert!(stage1_cache_requested(Some("scsp")));
+        assert!(STAGE1_CACHE_GAP.contains("mask"));
+    }
+
+    #[test]
+    fn midpoint_prune_env_is_off_until_feat_norm() {
+        assert!(!midpoint_prune_requested(None));
+        assert!(!midpoint_prune_requested(Some("off")));
+        assert!(midpoint_prune_requested(Some("1")));
+        assert!(midpoint_prune_requested(Some("feat_norm")));
+        assert!(PRUNE_GAP.contains("keep/scatter"));
     }
 }

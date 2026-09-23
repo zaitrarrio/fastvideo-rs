@@ -23,9 +23,9 @@
 //! `[q; k; v; gate]`), split into BHSD immediately, and dropped; the FFN runs
 //! in row chunks.
 //!
-//! Attention here is dense, which is what the diffusers oracle judges. The
-//! trained recipe (VSA-H3 with the `to_gate_compress` branch) plugs in through
-//! [`AttnMode`].
+//! Attention defaults to dense, which is what the diffusers oracle judges. The
+//! trained recipe (VSA-H3 with the `to_gate_compress` branch) and the Spark/RTX
+//! Sol-Attn route plug in through [`AttnMode`].
 
 use fastvideo_models::h3::config::{
     H3TransformerConfig, MODALITY_NUM, TAG_AUDIO, TAG_TEXT, TAG_VIDEO,
@@ -135,6 +135,36 @@ const CACHE_MAGIC: u64 = u64::from_le_bytes(*b"H3ADALN3");
 /// (`block_<i>`: that block's `[1, S, hidden]` output).
 pub type Observer<'a> = &'a mut dyn FnMut(&str, &CudaTensor) -> Result<()>;
 
+/// Published H3 Sol-Attn host policy: per-layer route plus text/audio sinks.
+#[derive(Clone)]
+pub struct H3SolPolicy {
+    pub kind: fastvideo_models::h3::sol::H3SolAttnPolicy,
+    pub sinks: Vec<(usize, usize)>,
+    pub dense_query: Vec<(usize, usize)>,
+}
+
+impl H3SolPolicy {
+    pub fn from_layout(
+        kind: fastvideo_models::h3::sol::H3SolAttnPolicy,
+        layout: &H3PackedLayout,
+    ) -> Self {
+        let (sinks, dense_query) = fastvideo_models::h3::sol::attn_spans(layout);
+        Self {
+            kind,
+            sinks,
+            dense_query,
+        }
+    }
+
+    pub fn route(
+        &self,
+        step: usize,
+        layer: usize,
+    ) -> std::result::Result<fastvideo_models::h3::sol::H3SolRoute, String> {
+        fastvideo_models::h3::sol::policy_route(self.kind, step, layer)
+    }
+}
+
 /// How the blocks attend. The refiner is always dense.
 #[derive(Clone, Copy)]
 pub enum AttnMode<'a> {
@@ -143,6 +173,10 @@ pub enum AttnMode<'a> {
     Dense,
     /// VSA-H3 with `to_gate_compress`: the function the checkpoint was trained as.
     Vsa(&'a super::vsa::H3Vsa),
+    /// Spark / RTX Sol-Attn policy. The block loop resolves the per-layer tau.
+    Sol(&'a H3SolPolicy),
+    /// One Sol-Attn layer at this tau.
+    SolLayer { tau: f64, policy: &'a H3SolPolicy },
 }
 
 // ---------------------------------------------------------------------------
@@ -729,6 +763,15 @@ impl Attention {
                 };
                 vsa.attend(q, k, v, gate)?
             }
+            AttnMode::Sol(_) => {
+                return Err(msg(
+                    "h3 attn: Sol policy must be resolved to a per-layer tau before Attention::forward",
+                ));
+            }
+            AttnMode::SolLayer { tau, policy } => {
+                let out = crate::sol_attn::sol_attn_sunk(&q, &k, &v, tau, None, &policy.sinks)?;
+                crate::sol_attn::splice_dense_ranges(&out, &q, &k, &v, &policy.dense_query, None)?
+            }
         };
         drop(packed);
         phase("h3_attn_out", || self.to_out.forward(&out.merge_heads()?))
@@ -1221,7 +1264,16 @@ impl H3Transformer {
             let n = phase("h3_1_norm_msa", || {
                 mods.modulate(&x.rms_norm(&block.norm1, eps)?, SCALE_MSA, SHIFT_MSA)
             })?;
-            let a = phase("h3_2_attn", || block.attn.forward(&n, rope, mode))?;
+            let layer_mode = match mode {
+                AttnMode::Sol(policy) => match policy.route(step, index).map_err(msg)? {
+                    fastvideo_models::h3::sol::H3SolRoute::Dense => AttnMode::Dense,
+                    fastvideo_models::h3::sol::H3SolRoute::Sol { tau } => {
+                        AttnMode::SolLayer { tau, policy }
+                    }
+                },
+                other => other,
+            };
+            let a = phase("h3_2_attn", || block.attn.forward(&n, rope, layer_mode))?;
             x = phase("h3_3_residual_msa", || mods.gated_add(&x, &a, GATE_MSA))?;
             drop(a);
             let n = phase("h3_4_norm_ffn", || {
