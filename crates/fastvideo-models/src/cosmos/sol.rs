@@ -14,6 +14,28 @@ pub const TEACACHE_MAX_CONSECUTIVE: usize = 3;
 pub const FP4_SKIP_FIRST: usize = 3;
 pub const FP4_SKIP_LAST: usize = 3;
 
+/// Official Cosmos3-Super sampling from `models/cosmos3.toml`.
+/// Flow-shift 10 is recorded only: this crate's Cosmos path is EDM, not
+/// FlowMatch, so the shift is not applied to the schedule.
+pub const OFFICIAL_WIDTH: usize = 1280;
+pub const OFFICIAL_HEIGHT: usize = 720;
+pub const OFFICIAL_FRAMES: usize = 189;
+pub const OFFICIAL_STEPS: usize = 35;
+pub const OFFICIAL_GUIDANCE: f32 = 6.0;
+pub const OFFICIAL_FLOW_SHIFT: f64 = 10.0;
+pub const OFFICIAL_FPS: u32 = 24;
+
+/// `FASTVIDEO_COSMOS3_OFFICIAL=1` (or `official`) applies the published
+/// 1280×720 / 189f / 35-step / guidance-6 canvas. Unset leaves Predict2
+/// Video2World defaults (704×1280 / 93f / guidance 7).
+pub fn official_requested(value: Option<&str>) -> bool {
+    match value.map(str::trim) {
+        Some("1") => true,
+        Some(v) => v.eq_ignore_ascii_case("official"),
+        None => false,
+    }
+}
+
 /// `FASTVIDEO_COSMOS_SOL=teacache` (or `1`) turns the step cache on.
 pub fn teacache_requested(value: Option<&str>) -> bool {
     match value.map(str::trim) {
@@ -150,6 +172,22 @@ mod tests {
         assert!(teacache_requested(Some("1")));
         assert!(teacache_requested(Some("teacache")));
         assert!(teacache_requested(Some("TeaCache")));
+    }
+
+    #[test]
+    fn official_env_is_off_until_named() {
+        assert!(!official_requested(None));
+        assert!(!official_requested(Some("teacache")));
+        assert!(official_requested(Some("1")));
+        assert!(official_requested(Some("official")));
+        assert_eq!(
+            (OFFICIAL_WIDTH, OFFICIAL_HEIGHT, OFFICIAL_FRAMES),
+            (1280, 720, 189)
+        );
+        assert_eq!(
+            (OFFICIAL_STEPS, OFFICIAL_GUIDANCE, OFFICIAL_FLOW_SHIFT),
+            (35, 6.0, 10.0)
+        );
     }
 
     #[test]

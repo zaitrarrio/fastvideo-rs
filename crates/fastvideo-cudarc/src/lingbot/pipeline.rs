@@ -29,6 +29,7 @@ pub struct LingBotRequest {
     pub width: usize,
     pub num_frames: usize,
     pub num_steps: usize,
+    pub guidance_scale: f32,
     pub preset: LingBotPreset,
 }
 
@@ -41,6 +42,7 @@ impl LingBotRequest {
             width: 832,
             num_frames: 81,
             num_steps: 40,
+            guidance_scale: 1.0,
             preset: LingBotPreset::Dense13b,
         }
     }
@@ -128,11 +130,44 @@ impl LingBotPipeline {
         ) {
             crate::wan::log::info(format_args!("{}", fastvideo_models::lingbot::sol::GAP));
         }
+        if fastvideo_models::lingbot::sol::official_requested(
+            std::env::var("FASTVIDEO_LINGBOT_OFFICIAL").ok().as_deref(),
+        ) {
+            crate::wan::log::info(format_args!(
+                "lingbot official: {}x{} {}f {} steps guidance {} shift {}; refiner {}x{} {} steps t_thresh {} sigma_tail {} (no upsampler, refine not run)",
+                fastvideo_models::lingbot::sol::OFFICIAL_WIDTH,
+                fastvideo_models::lingbot::sol::OFFICIAL_HEIGHT,
+                fastvideo_models::lingbot::sol::OFFICIAL_FRAMES,
+                fastvideo_models::lingbot::sol::OFFICIAL_STEPS,
+                request.guidance_scale,
+                fastvideo_models::lingbot::sol::OFFICIAL_SHIFT,
+                fastvideo_models::lingbot::sol::REFINER_WIDTH,
+                fastvideo_models::lingbot::sol::REFINER_HEIGHT,
+                fastvideo_models::lingbot::sol::REFINER_STEPS,
+                fastvideo_models::lingbot::sol::REFINER_T_THRESH,
+                fastvideo_models::lingbot::sol::REFINER_SIGMA_TAIL_STEPS,
+            ));
+        }
+
+        let do_cfg = request.guidance_scale != 1.0;
+        let uncond = if do_cfg {
+            Some(CudaTensor::zeros(&text.shape))
+        } else {
+            None
+        };
 
         for &t in &timesteps {
             let lat = CudaTensor::from_vec(sample.clone(), vec![1, c, lt, lh, lw])?;
             let velocity = dit.forward(&lat, &text, t as f32)?;
-            let vel = velocity.host_cow()?;
+            let mut vel = velocity.host_cow()?.to_vec();
+            if let Some(ref neg) = uncond {
+                let uncond_v = dit.forward(&lat, neg, t as f32)?;
+                let uv = uncond_v.host_cow()?;
+                let g = request.guidance_scale;
+                for (cnd, unc) in vel.iter_mut().zip(uv.iter()) {
+                    *cnd = unc + g * (*cnd - unc);
+                }
+            }
             sample = sched.inner.step_euler(&sample, &vel[..n]).map_err(msg)?;
         }
 
@@ -180,6 +215,7 @@ mod tests {
     fn request_defaults() {
         let r = LingBotRequest::dense_1_3b("hi", 0);
         assert_eq!(r.height, 480);
+        assert_eq!(r.guidance_scale, 1.0);
         assert_eq!(PROMPT_CROP_START, 140);
     }
 }

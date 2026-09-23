@@ -150,6 +150,20 @@ impl Hunyuan15Pipeline {
         ) {
             crate::wan::log::info(format_args!("{}", fastvideo_models::hunyuan15::sol::GAP));
         }
+        if fastvideo_models::hunyuan15::sol::official_requested(
+            std::env::var("FASTVIDEO_HUNYUAN15_OFFICIAL")
+                .ok()
+                .as_deref(),
+        ) {
+            crate::wan::log::info(format_args!(
+                "hunyuan15 official: {}x{} {}f {} steps (guidance {} recorded, no CFG; 13B TeaCache not applied)",
+                request.width,
+                request.height,
+                request.num_frames,
+                request.num_steps,
+                fastvideo_models::hunyuan15::sol::OFFICIAL_GUIDANCE,
+            ));
+        }
 
         for (step, &t) in timesteps.iter().enumerate() {
             let lat = pack_latents(&sample, c_out, lt, lh, lw, pad_c)?;

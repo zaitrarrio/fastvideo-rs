@@ -315,6 +315,20 @@ impl CosmosPipeline {
                 fastvideo_models::cosmos::sol::TEACACHE_MAX_CONSECUTIVE,
             ));
         }
+        if fastvideo_models::cosmos::sol::official_requested(
+            std::env::var("FASTVIDEO_COSMOS3_OFFICIAL").ok().as_deref(),
+        ) {
+            crate::wan::log::info(format_args!(
+                "cosmos3 official: {}x{} {}f {} steps guidance {} fps {} (flow_shift {} recorded, EDM schedule unchanged, nvfp4 not applied)",
+                request.width,
+                request.height,
+                request.num_frames,
+                request.num_steps,
+                request.guidance_scale,
+                request.fps,
+                fastvideo_models::cosmos::sol::OFFICIAL_FLOW_SHIFT,
+            ));
+        }
 
         for (i, &sigma) in sigmas.iter().enumerate() {
             let (c_in, c_skip, c_out) = CosmosSchedule::edm_coeffs(sigma);

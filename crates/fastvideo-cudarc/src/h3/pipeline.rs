@@ -593,6 +593,18 @@ impl H3Pipeline {
                 fuse.diffs_total,
                 path.display()
             ));
+            if options
+                .recipe
+                .as_deref()
+                .is_some_and(fastvideo_models::h3::lora::is_sol_h3_spark_recipe)
+            {
+                crate::wan::log::info(format_args!(
+                    "h3 sol-h3-spark: draft {}x{} {}f 4-step; stage-2 LTX is a separate --two-stage --sol-stage2 invoke (H3×2 upscaler / H3-to-LTX adapter not in this crate)",
+                    fastvideo_models::h3::sol::SPARK_DRAFT_WIDTH,
+                    fastvideo_models::h3::sol::SPARK_DRAFT_HEIGHT,
+                    fastvideo_models::h3::sol::SPARK_DRAFT_FRAMES,
+                ));
+            }
             Some(fuse)
         } else {
             None

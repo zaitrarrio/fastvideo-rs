@@ -16,6 +16,16 @@ pub const LAYERS_PER_FORWARD: usize = 50;
 /// Sol-H3 / Spark Stage-1 transformer updates.
 pub const STAGE1_FORWARDS: usize = 4;
 
+/// Sol-H3-Spark draft canvas (`models/minimax_h3/Sol-H3-Spark` README).
+/// Stage-2 LTX refine is a separate existing LTX invoke; this crate has no
+/// H3×2 upscaler or H3-to-LTX latent adapter.
+pub const SPARK_DRAFT_WIDTH: usize = 672;
+pub const SPARK_DRAFT_HEIGHT: usize = 384;
+pub const SPARK_DRAFT_FRAMES: usize = 124;
+pub const SPARK_OUTPUT_WIDTH: usize = 1344;
+pub const SPARK_OUTPUT_HEIGHT: usize = 768;
+pub const SPARK_OUTPUT_FRAMES: usize = 121;
+
 /// Taus on the three Sol updates after the dense first update.
 pub const STAGE1_TAUS: [f64; 3] = [1.0, 1.25, 1.5];
 
@@ -196,6 +206,20 @@ mod tests {
         assert!(teacache_requested(Some("teacache")));
         assert!(TEACACHE_GAP.contains("unpublished"));
         assert!(TEACACHE_GAP.contains("no CFG pair"));
+    }
+
+    #[test]
+    fn spark_draft_is_half_the_official_h3_canvas() {
+        assert_eq!(
+            (SPARK_DRAFT_WIDTH, SPARK_DRAFT_HEIGHT, SPARK_DRAFT_FRAMES),
+            (672, 384, 124)
+        );
+        assert_eq!(
+            (SPARK_OUTPUT_WIDTH, SPARK_OUTPUT_HEIGHT, SPARK_OUTPUT_FRAMES),
+            (1344, 768, 121)
+        );
+        assert_eq!(SPARK_DRAFT_WIDTH * 2, SPARK_OUTPUT_WIDTH);
+        assert_eq!(SPARK_DRAFT_HEIGHT * 2, SPARK_OUTPUT_HEIGHT);
     }
 
     #[test]

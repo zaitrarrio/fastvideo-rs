@@ -123,7 +123,11 @@ struct GenerateArgs {
     /// Requires `--two-stage` and 3 refine steps. Sparse layers still use dense SDPA.
     #[arg(long, default_value_t = false)]
     pisa_stage2: bool,
-    /// FastH3 / Sol-H3 recipe (`8step`, `4step-vsa`, `4step-dense`, `sol-h3`, `sol-h3-ref2va`).
+    /// LTX-2.3 official HQ: 15-step stage-1 + 3-sigma refine, guidance 3, 1920×1088 / 241f.
+    /// Requires the 2.3 base line (`Lightricks/LTX-2.3`). Also `FASTVIDEO_LTX2_HQ=1`.
+    #[arg(long, default_value_t = false)]
+    ltx23_hq: bool,
+    /// FastH3 / Sol-H3 recipe (`8step`, `4step-vsa`, `4step-dense`, `sol-h3`, `sol-h3-ref2va`, `sol-h3-spark`).
     #[arg(long)]
     h3_recipe: Option<String>,
     /// Sol-H3 LoRA adapter. Default: searched next to the MiniMax-H3 snapshot.
@@ -171,6 +175,7 @@ struct GenerateToml {
     two_stage: Option<bool>,
     sol_stage2: Option<bool>,
     pisa_stage2: Option<bool>,
+    ltx23_hq: Option<bool>,
     diff_vae: Option<bool>,
 }
 
@@ -339,6 +344,7 @@ fn main() -> Result<()> {
                         refine_steps: args.refine_steps.or(file.refine_steps),
                         sol_stage2: args.sol_stage2 || file.sol_stage2.unwrap_or(false),
                         pisa_stage2: args.pisa_stage2 || file.pisa_stage2.unwrap_or(false),
+                        ltx23_hq: args.ltx23_hq || file.ltx23_hq.unwrap_or(false),
                         image_path: args.image.or(file.image).map(PathBuf::from),
                         last_image_path: args.last_image.or(file.last_image).map(PathBuf::from),
                         reference_images: {

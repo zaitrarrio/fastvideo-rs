@@ -2,7 +2,8 @@
 //!
 //! Selection is `techniques/sparse_attention_policies.py` `route_mode=score`
 //! (top-k of pooled QK). Unselected blocks use the published zeroth-order
-//! remainder. See [`fastvideo_models::pisa_attn`].
+//! remainder plus the paper Phase-3 first-order term. See
+//! [`fastvideo_models::pisa_attn`].
 
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -23,7 +24,7 @@ fn log_once(sparsity: f64, tokens: usize) {
         return;
     }
     log::info(format_args!(
-        "pisa kernel: route=score sparsity={sparsity} block={BLOCK_SIZE} tokens={tokens} approx_remainder"
+        "pisa kernel: route=score sparsity={sparsity} block={BLOCK_SIZE} tokens={tokens} approx_remainder first-order"
     ));
 }
 

@@ -1115,6 +1115,21 @@ impl Ltx2Pipeline {
             crate::wan::log::info(format_args!("{}", fastvideo_models::ltx2::pisa::PRUNE_GAP));
         }
         let cfg = self.cfg.clone();
+        if fastvideo_models::ltx2::hq::requested(std::env::var("FASTVIDEO_LTX2_HQ").ok().as_deref())
+            || (req.two_stage
+                && req.stage1_steps() == fastvideo_models::ltx2::hq::STAGE1_STEPS
+                && (req.guidance_scale - fastvideo_models::ltx2::hq::GUIDANCE_SCALE).abs() < 1e-6)
+        {
+            crate::wan::log::info(format_args!(
+                "ltx2 hq: stage-1 {} steps, stage-2 sigmas {:?}, guidance {}, {}x{} {}f (lora 0.25/0.5 not fused)",
+                req.stage1_steps(),
+                fastvideo_models::ltx2::hq::STAGE2_SIGMAS,
+                req.guidance_scale,
+                req.width,
+                req.height,
+                req.num_frames,
+            ));
+        }
         if req.two_stage {
             if !matches!(cfg.version, Ltx2ModelVersion::V23 | Ltx2ModelVersion::V25) {
                 return Err(err("ltx2: --two-stage requires model version 2.3 or 2.5"));
@@ -1292,7 +1307,7 @@ impl Ltx2Pipeline {
             }
             if req.pisa_stage2 {
                 crate::wan::log::info(format_args!(
-                    "ltx2 pisa stage-2: layers 0-1 dense, layers 2-47 pisa kernel sparsity 0.9 block 64 score-route, prune steps 1,2 ratio 0.5 not applied, lora 0.25/0.5 not fused, stage-1 cache preset 8of15_last_29calls not applied"
+                    "ltx2 pisa stage-2: layers 0-1 dense, layers 2-47 pisa kernel sparsity 0.9 block 64 score-route first-order remainder, prune steps 1,2 ratio 0.5 not applied, lora 0.25/0.5 not fused, stage-1 cache preset 8of15_last_29calls not applied"
                 ));
             }
             let schedule2 =

@@ -35,6 +35,9 @@ pub struct AvGenerateOptions {
     pub sol_stage2: bool,
     /// LTX-2.3 stage-2 PISA route (3 refine forwards, layers 0..=1 dense).
     pub pisa_stage2: bool,
+    /// LTX-2.3 official HQ: 15-step stage-1 + 3-sigma refine, guidance 3,
+    /// 1920×1088 / 241f. Requires the 2.3 base (dev) line.
+    pub ltx23_hq: bool,
     /// First-frame image for LTX I2V / H3 FL2VA (H3 encodes on GPU via cudarc).
     pub image_path: Option<PathBuf>,
     /// H3 FL2VA last-frame image.
@@ -154,28 +157,61 @@ fn generate_ltx2(
         };
         let d = &cfg.defaults;
         let is_base = matches!(line, Ltx2Line::Base20 | Ltx2Line::Base23);
+        let hq = opts.ltx23_hq
+            || fastvideo_models::ltx2::hq::requested(
+                std::env::var("FASTVIDEO_LTX2_HQ").ok().as_deref(),
+            );
+        if hq && !matches!(line, Ltx2Line::Base23) {
+            return Err(FastVideoError::Message(
+                "ltx2 official HQ is the 2.3 base 15-step two-stage contract (Lightricks/LTX-2.3)"
+                    .into(),
+            ));
+        }
         let request = Ltx2Request {
             prompt: opts.prompt,
-            height: opts.height.map(|h| h as usize).unwrap_or(d.height),
-            width: opts.width.map(|w| w as usize).unwrap_or(d.width),
-            num_frames: opts.num_frames.map(|f| f as usize).unwrap_or(d.num_frames),
+            height: opts.height.map(|h| h as usize).unwrap_or(if hq {
+                fastvideo_models::ltx2::hq::HEIGHT
+            } else {
+                d.height
+            }),
+            width: opts.width.map(|w| w as usize).unwrap_or(if hq {
+                fastvideo_models::ltx2::hq::WIDTH
+            } else {
+                d.width
+            }),
+            num_frames: opts.num_frames.map(|f| f as usize).unwrap_or(if hq {
+                fastvideo_models::ltx2::hq::FRAMES
+            } else {
+                d.num_frames
+            }),
             frame_rate: d.frame_rate,
             seed: opts.seed,
             output_dir: opts.output,
             mp4: opts.save_mp4,
-            two_stage: opts.two_stage,
+            two_stage: opts.two_stage || hq,
             diff_vae: opts.diff_vae,
             negative_prompt: opts.negative_prompt,
-            guidance_scale: opts
-                .guidance_scale
-                .unwrap_or(if is_base { 4.0 } else { 1.0 }),
+            guidance_scale: opts.guidance_scale.unwrap_or(if hq {
+                fastvideo_models::ltx2::hq::GUIDANCE_SCALE
+            } else if is_base {
+                4.0
+            } else {
+                1.0
+            }),
             audio_guidance_scale: opts.audio_guidance_scale.unwrap_or(if is_base {
                 7.0
             } else {
                 1.0
             }),
-            num_inference_steps: opts.num_inference_steps.map(|n| n as usize),
-            refine_steps: opts.refine_steps.map(|n| n as usize),
+            num_inference_steps: opts.num_inference_steps.map(|n| n as usize).or(if hq {
+                Some(fastvideo_models::ltx2::hq::STAGE1_STEPS)
+            } else {
+                None
+            }),
+            refine_steps: opts
+                .refine_steps
+                .map(|n| n as usize)
+                .or(if hq { Some(3) } else { None }),
             sol_stage2: opts.sol_stage2,
             pisa_stage2: opts.pisa_stage2,
             image_path: opts.image_path,
@@ -261,6 +297,20 @@ fn generate_h3(
             "sol_h3_ref2va" => Some("sol-h3-ref2va".into()),
             _ => None,
         });
+        if recipe
+            .as_deref()
+            .is_some_and(fastvideo_models::h3::lora::is_sol_h3_spark_recipe)
+        {
+            if opts.height.is_none() {
+                request.height = fastvideo_models::h3::sol::SPARK_DRAFT_HEIGHT;
+            }
+            if opts.width.is_none() {
+                request.width = fastvideo_models::h3::sol::SPARK_DRAFT_WIDTH;
+            }
+            if opts.num_frames.is_none() {
+                request.num_frames = fastvideo_models::h3::sol::SPARK_DRAFT_FRAMES;
+            }
+        }
         let options = H3PipelineOptions {
             recipe,
             text_root: opts.text_weights,
@@ -325,6 +375,25 @@ fn generate_hunyuan15(
         }
         let mut request = Hunyuan15Request::t2v_480p(opts.prompt, opts.seed);
         request.preset = preset;
+        let official = fastvideo_models::hunyuan15::sol::official_requested(
+            std::env::var("FASTVIDEO_HUNYUAN15_OFFICIAL")
+                .ok()
+                .as_deref(),
+        );
+        if official {
+            if opts.height.is_none() {
+                request.height = fastvideo_models::hunyuan15::sol::OFFICIAL_HEIGHT;
+            }
+            if opts.width.is_none() {
+                request.width = fastvideo_models::hunyuan15::sol::OFFICIAL_WIDTH;
+            }
+            if opts.num_frames.is_none() {
+                request.num_frames = fastvideo_models::hunyuan15::sol::OFFICIAL_FRAMES;
+            }
+            if opts.num_inference_steps.is_none() {
+                request.num_steps = fastvideo_models::hunyuan15::sol::OFFICIAL_STEPS;
+            }
+        }
         if let Some(h) = opts.height {
             request.height = h as usize;
         }
@@ -458,6 +527,27 @@ fn generate_cosmos(
         request.preset = preset;
         request.image_path = opts.image_path.clone();
         request.negative_prompt = opts.negative_prompt.clone();
+        let official = fastvideo_models::cosmos::sol::official_requested(
+            std::env::var("FASTVIDEO_COSMOS3_OFFICIAL").ok().as_deref(),
+        );
+        if official {
+            if opts.height.is_none() {
+                request.height = fastvideo_models::cosmos::sol::OFFICIAL_HEIGHT;
+            }
+            if opts.width.is_none() {
+                request.width = fastvideo_models::cosmos::sol::OFFICIAL_WIDTH;
+            }
+            if opts.num_frames.is_none() {
+                request.num_frames = fastvideo_models::cosmos::sol::OFFICIAL_FRAMES;
+            }
+            if opts.num_inference_steps.is_none() {
+                request.num_steps = fastvideo_models::cosmos::sol::OFFICIAL_STEPS;
+            }
+            if opts.guidance_scale.is_none() {
+                request.guidance_scale = fastvideo_models::cosmos::sol::OFFICIAL_GUIDANCE;
+            }
+            request.fps = fastvideo_models::cosmos::sol::OFFICIAL_FPS;
+        }
         if let Some(g) = opts.guidance_scale {
             request.guidance_scale = g;
         }
@@ -1512,6 +1602,26 @@ fn generate_lingbot(
         }
         let mut request = LingBotRequest::dense_1_3b(opts.prompt, opts.seed);
         request.preset = preset;
+        let official = fastvideo_models::lingbot::sol::official_requested(
+            std::env::var("FASTVIDEO_LINGBOT_OFFICIAL").ok().as_deref(),
+        );
+        if official {
+            if opts.height.is_none() {
+                request.height = fastvideo_models::lingbot::sol::OFFICIAL_HEIGHT;
+            }
+            if opts.width.is_none() {
+                request.width = fastvideo_models::lingbot::sol::OFFICIAL_WIDTH;
+            }
+            if opts.num_frames.is_none() {
+                request.num_frames = fastvideo_models::lingbot::sol::OFFICIAL_FRAMES;
+            }
+            if opts.num_inference_steps.is_none() {
+                request.num_steps = fastvideo_models::lingbot::sol::OFFICIAL_STEPS;
+            }
+            if opts.guidance_scale.is_none() {
+                request.guidance_scale = fastvideo_models::lingbot::sol::OFFICIAL_GUIDANCE;
+            }
+        }
         if let Some(h) = opts.height {
             request.height = h as usize;
         }
@@ -1523,6 +1633,9 @@ fn generate_lingbot(
         }
         if let Some(s) = opts.num_inference_steps {
             request.num_steps = s as usize;
+        }
+        if let Some(g) = opts.guidance_scale {
+            request.guidance_scale = g;
         }
         pipe.generate(&request, &opts.output)
             .map_err(|e| FastVideoError::Message(e.to_string()))?;

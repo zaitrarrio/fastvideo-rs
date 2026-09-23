@@ -5,6 +5,7 @@
 
 pub mod config;
 pub mod fbcache;
+pub mod hq;
 pub mod pisa;
 pub mod rope;
 pub mod schedule;
@@ -21,6 +22,7 @@ pub use config::{
 pub use fbcache::{
     requested as fbcache_requested, GAP as FBCACHE_GAP, THRESHOLD as FBCACHE_THRESHOLD,
 };
+pub use hq::{requested as hq_requested, STAGE1_STEPS as HQ_STAGE1_STEPS};
 pub use pisa::{
     midpoint_prune_requested, prunes_step, route as pisa_route, stage1_cache_requested,
     Ltx23PisaRoute, BLOCK_SIZE as PISA_BLOCK_SIZE, PRUNE_GAP, SPARSITY as PISA_SPARSITY,

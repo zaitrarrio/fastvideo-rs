@@ -346,7 +346,14 @@ impl SolH3AdapterSpec {
 pub fn is_sol_h3_recipe(name: &str) -> bool {
     matches!(
         name,
-        "sol-h3" | "sol_h3" | "sol-h3-t2v" | "sol-h3-i2v" | "sol-h3-ref2va" | "sol_h3_ref2va"
+        "sol-h3"
+            | "sol_h3"
+            | "sol-h3-t2v"
+            | "sol-h3-i2v"
+            | "sol-h3-ref2va"
+            | "sol_h3_ref2va"
+            | "sol-h3-spark"
+            | "sol_h3_spark"
     )
 }
 
@@ -355,9 +362,22 @@ pub fn sol_h3_forces_ref2va(name: &str) -> bool {
     matches!(name, "sol-h3-ref2va" | "sol_h3_ref2va")
 }
 
+/// Spark draft geometry (`672×384×124`) on the existing Sol-H3 recipe.
+pub fn is_sol_h3_spark_recipe(name: &str) -> bool {
+    matches!(name, "sol-h3-spark" | "sol_h3_spark")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn spark_is_a_sol_h3_recipe() {
+        assert!(is_sol_h3_recipe("sol-h3-spark"));
+        assert!(is_sol_h3_spark_recipe("sol-h3-spark"));
+        assert!(!is_sol_h3_spark_recipe("sol-h3"));
+        assert!(!sol_h3_forces_ref2va("sol-h3-spark"));
+    }
 
     #[test]
     fn peft_multiplier_uses_alpha() {

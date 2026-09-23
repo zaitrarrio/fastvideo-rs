@@ -632,9 +632,9 @@ impl H3InferenceContract {
                 Ok(Self::fasth3_4step_dense())
             }
             "sol-h3" | "sol_h3" | "sol-h3-t2v" | "sol-h3-i2v" | "sol-h3-ref2va"
-            | "sol_h3_ref2va" => Ok(Self::sol_h3()),
+            | "sol_h3_ref2va" | "sol-h3-spark" | "sol_h3_spark" => Ok(Self::sol_h3()),
             other => Err(format!(
-                "unknown H3 recipe '{other}' (8step|4step-vsa|4step-dense|sol-h3)"
+                "unknown H3 recipe '{other}' (8step|4step-vsa|4step-dense|sol-h3|sol-h3-spark)"
             )),
         }
     }
@@ -930,6 +930,7 @@ mod tests {
             4
         );
         assert_eq!(H3InferenceContract::named("sol-h3-ref2va").unwrap(), sol);
+        assert_eq!(H3InferenceContract::named("sol-h3-spark").unwrap(), sol);
         assert!(!H3InferenceContract::fasth3_4step_vsa().dense);
         assert!(H3InferenceContract::fasth3_4step_dense().dense);
         assert_eq!(H3InferenceContract::fasth3_4step_vsa().vsa_sparsity, 0.9);
