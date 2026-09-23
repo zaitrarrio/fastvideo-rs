@@ -115,6 +115,14 @@ struct GenerateArgs {
     /// LTX two-stage refine steps (2 or 3). Default: 2 when `--steps 5`, else 3.
     #[arg(long)]
     refine_steps: Option<u32>,
+    /// LTX-2.5 stage-2 Sol route: layer 0 dense, later layers at tau 1 / 1.25 / 1.5.
+    /// Requires `--two-stage` and 3 refine steps. Sol layers still use dense SDPA.
+    #[arg(long, default_value_t = false)]
+    sol_stage2: bool,
+    /// LTX-2.3 stage-2 PISA route: layers 0-1 dense, later video layers at sparsity 0.9.
+    /// Requires `--two-stage` and 3 refine steps. Sparse layers still use dense SDPA.
+    #[arg(long, default_value_t = false)]
+    pisa_stage2: bool,
     /// FastH3 / Sol-H3 recipe (`8step`, `4step-vsa`, `4step-dense`, `sol-h3`, `sol-h3-ref2va`).
     #[arg(long)]
     h3_recipe: Option<String>,
@@ -161,6 +169,8 @@ struct GenerateToml {
     device: Option<String>,
     refine_steps: Option<u32>,
     two_stage: Option<bool>,
+    sol_stage2: Option<bool>,
+    pisa_stage2: Option<bool>,
     diff_vae: Option<bool>,
 }
 
@@ -327,6 +337,8 @@ fn main() -> Result<()> {
                             .or(file.guidance_scale_2),
                         num_inference_steps: args.steps.or(file.steps).or(file.num_inference_steps),
                         refine_steps: args.refine_steps.or(file.refine_steps),
+                        sol_stage2: args.sol_stage2 || file.sol_stage2.unwrap_or(false),
+                        pisa_stage2: args.pisa_stage2 || file.pisa_stage2.unwrap_or(false),
                         image_path: args.image.or(file.image).map(PathBuf::from),
                         last_image_path: args.last_image.or(file.last_image).map(PathBuf::from),
                         reference_images: {

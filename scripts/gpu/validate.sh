@@ -874,8 +874,10 @@ cmd_run() {
       remote_run fetch-h3 120 "${fetch_h3[@]}"
       local adapter_dir=""
       if [[ "$recipe" == sol-h3* ]]; then
-        # Resolver finds this next to the snapshot: FastH3-4-step-Preview-v1-LoRA/dense-datafree/.
-        adapter_dir="$wdir/FastH3-4-step-Preview-v1-LoRA"
+        # Beside the snapshot, not inside it. wait-weights promotes the first
+        # snapshots/<hash> it finds under the weight dir; a LoRA cache nested
+        # in that tree gets promoted instead of MiniMax-H3.
+        adapter_dir="$WORK/weights/FastH3-4-step-Preview-v1-LoRA"
         remote_run fetch-sol-adapter 120 fetch "FastVideo/FastVideo-FastH3-4-step-Preview-v1-LoRA" "$adapter_dir" \
           "dense-datafree/adapter_model.safetensors"
       fi

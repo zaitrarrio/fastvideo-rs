@@ -547,6 +547,27 @@ impl WanPipeline {
                 cfg.guidance_scale_2.unwrap_or(cfg.guidance_scale),
             )
         };
+        let n_steps = if cfg.is_rcm {
+            RcmSchedule::new(
+                cfg.num_inference_steps.max(1),
+                cfg.rcm_sigma_max.unwrap_or(RCM_SIGMA_MAX_T2V),
+            )
+            .num_steps()
+        } else if cfg.is_dmd {
+            cfg.dmd_steps
+                .as_ref()
+                .map(|s| s.len())
+                .unwrap_or(FAST_WAN_1_3B_DMD_STEPS.len())
+        } else {
+            cfg.num_inference_steps.max(1)
+        };
+        let tea_cache = TeaCache::from_env();
+        let easy_cache = EasyCacheRuntime::from_env(n_steps)?;
+        if tea_cache.enabled && easy_cache.is_some() {
+            return Err(PipelineError::Message(
+                "FASTVIDEO_TEACACHE and FASTVIDEO_WAN_SOL_CACHE=easycache both set".into(),
+            ));
+        }
         let mut ctx = DenoiseCtx {
             high: &self.dit,
             low: self.dit_2.as_ref(),
@@ -555,7 +576,8 @@ impl WanPipeline {
             i2v,
             guidance,
             guidance_2,
-            tea_cache: TeaCache::from_env(),
+            tea_cache,
+            easy_cache,
         };
         if cfg.is_rcm {
             let sigma = cfg.rcm_sigma_max.unwrap_or(RCM_SIGMA_MAX_T2V);
@@ -660,6 +682,7 @@ struct DenoiseCtx<'a> {
     guidance: f32,
     guidance_2: f32,
     tea_cache: TeaCache,
+    easy_cache: Option<EasyCacheRuntime>,
 }
 
 /// Simple residual TeaCache with Wan2.1-1.3B poly rescale (upstream TeaCache4Wan2.1).
@@ -777,6 +800,78 @@ impl TeaCache {
     }
 }
 
+/// Sol-engine EasyCache (`WAN22_CACHE_FAMILY=easycache`). Off unless
+/// `FASTVIDEO_WAN_SOL_CACHE=easycache`. Cond decides; uncond follows.
+struct EasyCacheRuntime {
+    state: fastvideo_models::wan::sol_cache::EasyCache,
+    step: usize,
+    previous_step_input: Option<CudaTensor>,
+    last_full_input: Option<CudaTensor>,
+    last_full_output: Option<CudaTensor>,
+    cond_residual: Option<CudaTensor>,
+    uncond_residual: Option<CudaTensor>,
+}
+
+fn mean_abs(t: &CudaTensor) -> TensorResult<f64> {
+    let host = t.host_cow()?;
+    let n = host.len().max(1) as f64;
+    Ok(host.iter().map(|v| f64::from(*v).abs()).sum::<f64>() / n)
+}
+
+fn mean_abs_delta(a: &CudaTensor, b: &CudaTensor) -> TensorResult<f64> {
+    let left = a.host_cow()?;
+    let right = b.host_cow()?;
+    let n = left.len().max(1) as f64;
+    let mut sum = 0.0;
+    for (x, y) in left.iter().zip(right.iter()) {
+        sum += (f64::from(*x) - f64::from(*y)).abs();
+    }
+    Ok(sum / n)
+}
+
+impl EasyCacheRuntime {
+    fn from_env(num_steps: usize) -> Result<Option<Self>> {
+        let family = std::env::var("FASTVIDEO_WAN_SOL_CACHE").unwrap_or_default();
+        let family = family.trim().to_ascii_lowercase();
+        if family.is_empty() || matches!(family.as_str(), "0" | "off" | "none" | "false") {
+            return Ok(None);
+        }
+        if family != "easycache" {
+            return Err(PipelineError::Message(format!(
+                "FASTVIDEO_WAN_SOL_CACHE={family} is not supported (easycache)"
+            )));
+        }
+        let threshold = std::env::var("FASTVIDEO_WAN_EASYCACHE_THRESH")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(0.05);
+        let retain = std::env::var("FASTVIDEO_WAN_EASYCACHE_RETAIN")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(7);
+        let cooldown = std::env::var("FASTVIDEO_WAN_EASYCACHE_COOLDOWN")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(1);
+        let state = fastvideo_models::wan::sol_cache::EasyCache::new(
+            num_steps, threshold, retain, cooldown,
+        )
+        .map_err(PipelineError::Message)?;
+        super::log::info(format_args!(
+            "wan sol easycache: threshold {threshold} retain {retain} cooldown {cooldown} steps {num_steps} (cond decides, uncond follows)"
+        ));
+        Ok(Some(Self {
+            state,
+            step: 0,
+            previous_step_input: None,
+            last_full_input: None,
+            last_full_output: None,
+            cond_residual: None,
+            uncond_residual: None,
+        }))
+    }
+}
+
 fn pick_expert<'a>(ctx: &'a DenoiseCtx<'_>, t: f32) -> (&'a WanTransformer3D, f32) {
     if let (Some(ratio), Some(low)) = (ctx.boundary_ratio, ctx.low) {
         match moe_expert(f64::from(t), ratio, 1000) {
@@ -799,12 +894,110 @@ fn pack_dit_input(
     }
 }
 
+fn dit_cfg_easy(
+    ctx: &mut DenoiseCtx<'_>,
+    latents: &CudaTensor,
+    encoder_hs: &CudaTensor,
+    t: f32,
+) -> TensorResult<CudaTensor> {
+    let latent_in = pack_dit_input(latents, ctx.i2v)?;
+    let decision = {
+        let easy = ctx.easy_cache.as_mut().expect("easycache");
+        let step = easy.step;
+        easy.step += 1;
+        let (change, norm) = if easy.state.needs_cond_signal(step) {
+            (
+                mean_abs_delta(&latent_in, easy.previous_step_input.as_ref().expect("prev"))?,
+                mean_abs(easy.last_full_output.as_ref().expect("last out"))?,
+            )
+        } else {
+            (0.0, 1.0)
+        };
+        easy.previous_step_input = Some(latent_in.clone());
+        easy.state.decide_cond(step, change, norm)
+    };
+    let rows = encoder_hs.shape[0];
+    let cond_hs = if rows > 1 {
+        encoder_hs.narrow(0, 1, 1)?
+    } else {
+        encoder_hs.clone()
+    };
+    let t1 = CudaTensor::from_vec(vec![t], vec![1])?;
+    let (scale, cond) = {
+        let (dit, scale) = pick_expert(ctx, t);
+        if decision.compute {
+            let out = dit.forward_ctx(&latent_in, &t1, &cond_hs, ctx.image)?;
+            (scale, Some(out))
+        } else {
+            (scale, None)
+        }
+    };
+    let cond = if let Some(out) = cond {
+        let easy = ctx.easy_cache.as_mut().expect("easycache");
+        let (full_in, out_change) = match (&easy.last_full_input, &easy.last_full_output) {
+            (Some(prev_in), Some(prev_out)) => (
+                mean_abs_delta(&latent_in, prev_in)?,
+                mean_abs_delta(&out, prev_out)?,
+            ),
+            _ => (0.0, 0.0),
+        };
+        let _ = easy.state.note_cond_computed(full_in, out_change);
+        easy.last_full_input = Some(latent_in.clone());
+        easy.last_full_output = Some(out.clone());
+        easy.cond_residual = Some(out.sub(&latent_in)?);
+        out
+    } else {
+        super::log::debug(format_args!(
+            "wan easycache reuse step reason {}",
+            decision.reason
+        ));
+        let res = ctx
+            .easy_cache
+            .as_ref()
+            .expect("easycache")
+            .cond_residual
+            .as_ref()
+            .expect("cond residual");
+        latent_in.add(res)?
+    };
+    if (scale - 1.0).abs() < 1e-6 || rows < 2 {
+        return Ok(cond);
+    }
+    let follow = {
+        let easy = ctx.easy_cache.as_ref().expect("easycache");
+        easy.state.uncond_compute(easy.uncond_residual.is_some())
+    };
+    let uncond_hs = encoder_hs.narrow(0, 0, 1)?;
+    let uncond = if follow {
+        let out = {
+            let (dit, _) = pick_expert(ctx, t);
+            dit.forward_ctx(&latent_in, &t1, &uncond_hs, ctx.image)?
+        };
+        let easy = ctx.easy_cache.as_mut().expect("easycache");
+        easy.uncond_residual = Some(out.sub(&latent_in)?);
+        out
+    } else {
+        let res = ctx
+            .easy_cache
+            .as_ref()
+            .expect("easycache")
+            .uncond_residual
+            .as_ref()
+            .expect("uncond residual");
+        latent_in.add(res)?
+    };
+    CudaTensor::lincomb(&[(1.0 - scale, &uncond), (scale, &cond)])
+}
+
 fn dit_cfg(
     ctx: &mut DenoiseCtx<'_>,
     latents: &CudaTensor,
     encoder_hs: &CudaTensor,
     t: f32,
 ) -> TensorResult<CudaTensor> {
+    if ctx.easy_cache.is_some() {
+        return dit_cfg_easy(ctx, latents, encoder_hs, t);
+    }
     if let Some(cached) = ctx.tea_cache.maybe_reuse(latents) {
         static TEA: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
         let n = TEA.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;

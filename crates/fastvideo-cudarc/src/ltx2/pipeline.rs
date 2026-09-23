@@ -40,7 +40,9 @@ use super::keys::Keys;
 use super::latent_upsampler::LatentUpsampler;
 use super::text::{HiddenStack, PaddedPrompt, TextConnectors};
 use super::text_cache::{cache_key, weights_identity, CachedContexts, TextCache};
-use super::transformer::{pack_video, unpack_video, Ltx2Transformer, Ropes, TextConditioning};
+use super::transformer::{
+    pack_video, unpack_video, Ltx2Stage2Attn, Ltx2Transformer, Ropes, TextConditioning,
+};
 use super::vae::VideoDecoder;
 use super::vocoder::Vocoder;
 
@@ -101,6 +103,14 @@ pub struct Ltx2Request {
     pub num_inference_steps: Option<usize>,
     /// Two-stage refine steps (`None` → 3, or 2 when stage-1 is 5). Only 2 or 3.
     pub refine_steps: Option<usize>,
+    /// Stage-2 Sol route: layer 0 dense, layers 1..=47 at tau 1.0 / 1.25 / 1.5.
+    /// Requires two-stage with 3 refine steps. Video self-attention on Sol
+    /// layers still runs dense SDPA until the Sol kernel is linked.
+    pub sol_stage2: bool,
+    /// Stage-2 PISA route: layers 0..=1 dense, later video layers piecewise
+    /// sparse at 0.9 / block 64. Same refine length. Sparse layers still run
+    /// dense SDPA, and the midpoint token prune is not applied.
+    pub pisa_stage2: bool,
     /// First-frame image for I2V (`None` = T2AV). Uses VAE encode stub until
     /// the full encoder lands.
     pub image_path: Option<PathBuf>,
@@ -130,6 +140,8 @@ impl Ltx2Request {
             audio_guidance_scale: if base { 7.0 } else { 1.0 },
             num_inference_steps: None,
             refine_steps: None,
+            sol_stage2: false,
+            pisa_stage2: false,
             image_path: None,
         }
     }
@@ -166,7 +178,28 @@ impl Ltx2Request {
                 return Err(err(format!("ltx2: refine_steps must be 2 or 3, got {n}")));
             }
         }
+        if self.sol_stage2 && self.pisa_stage2 {
+            return Err(err("ltx2 stage-2 Sol and PISA are separate routes"));
+        }
+        if self.sol_stage2 || self.pisa_stage2 {
+            if !self.two_stage {
+                return Err(err("ltx2 sol/pisa stage-2 requires --two-stage"));
+            }
+            if self.stage2_steps() != 3 {
+                return Err(err("ltx2 sol/pisa stage-2 is the 3-forward refine"));
+            }
+        }
         Ok(())
+    }
+
+    pub fn stage2_attn(&self) -> Ltx2Stage2Attn {
+        if self.sol_stage2 {
+            Ltx2Stage2Attn::Sol
+        } else if self.pisa_stage2 {
+            Ltx2Stage2Attn::Pisa
+        } else {
+            Ltx2Stage2Attn::Off
+        }
     }
 
     /// Stage-1 distilled step count (defaults to 8).
@@ -258,11 +291,19 @@ pub fn denoise(
     mut video: CudaTensor,
     mut audio: CudaTensor,
     mut observer: Option<StepObserver<'_>>,
+    stage2: Ltx2Stage2Attn,
 ) -> Result<(CudaTensor, CudaTensor)> {
     for i in 0..schedule.num_steps() {
         let timer = Instant::now();
-        let (v_video, v_audio) =
-            model.forward(&video, &audio, text, schedule.timestep_f32(i), ropes, None)?;
+        let (v_video, v_audio) = model.forward_sol(
+            &video,
+            &audio,
+            text,
+            schedule.timestep_f32(i),
+            ropes,
+            None,
+            stage2.at(i),
+        )?;
         let dt = schedule.dt(i) as f32;
         video = CudaTensor::lincomb(&[(1.0, &video), (dt, &v_video)])?;
         audio = CudaTensor::lincomb(&[(1.0, &audio), (dt, &v_audio)])?;
@@ -294,12 +335,14 @@ pub fn denoise_cfg(
     mut video: CudaTensor,
     mut audio: CudaTensor,
     mut observer: Option<StepObserver<'_>>,
+    stage2: Ltx2Stage2Attn,
 ) -> Result<(CudaTensor, CudaTensor)> {
     for i in 0..schedule.num_steps() {
         let timer = Instant::now();
         let t = schedule.timestep_f32(i);
-        let (vc, ac) = model.forward(&video, &audio, text_cond, t, ropes, None)?;
-        let (vu, au) = model.forward(&video, &audio, text_uncond, t, ropes, None)?;
+        let route = stage2.at(i);
+        let (vc, ac) = model.forward_sol(&video, &audio, text_cond, t, ropes, None, route)?;
+        let (vu, au) = model.forward_sol(&video, &audio, text_uncond, t, ropes, None, route)?;
         // scale * cond + (1 - scale) * uncond
         let v_video = CudaTensor::lincomb(&[(video_scale, &vc), (1.0 - video_scale, &vu)])?;
         let v_audio = CudaTensor::lincomb(&[(audio_scale, &ac), (1.0 - audio_scale, &au)])?;
@@ -380,14 +423,22 @@ pub fn denoise_ancestral(
     mut audio: CudaTensor,
     opts: AncestralOpts,
     mut observer: Option<StepObserver<'_>>,
+    stage2: Ltx2Stage2Attn,
 ) -> Result<(CudaTensor, CudaTensor)> {
     let mut rng = rand::rngs::StdRng::seed_from_u64(opts.noise_seed);
     for i in 0..schedule.num_steps() {
         let timer = Instant::now();
         let sigma = schedule.sigmas[i];
         let sigma_next = schedule.sigmas[i + 1];
-        let (v_video, v_audio) =
-            model.forward(&video, &audio, text, schedule.timestep_f32(i), ropes, None)?;
+        let (v_video, v_audio) = model.forward_sol(
+            &video,
+            &audio,
+            text,
+            schedule.timestep_f32(i),
+            ropes,
+            None,
+            stage2.at(i),
+        )?;
         video = apply_ancestral(&video, &v_video, sigma, sigma_next, opts, &mut rng)?;
         audio = apply_ancestral(&audio, &v_audio, sigma, sigma_next, opts, &mut rng)?;
         sync()?;
@@ -1167,6 +1218,7 @@ impl Ltx2Pipeline {
                         noise_seed: req.seed + 10_000,
                     },
                     Some(&mut record),
+                    Ltx2Stage2Attn::Off,
                 )?
             } else if let Some(ref uncond) = text_uncond {
                 denoise_cfg(
@@ -1180,6 +1232,7 @@ impl Ltx2Pipeline {
                     video,
                     audio,
                     Some(&mut record),
+                    Ltx2Stage2Attn::Off,
                 )?
             } else {
                 denoise(
@@ -1190,6 +1243,7 @@ impl Ltx2Pipeline {
                     video,
                     audio,
                     Some(&mut record),
+                    Ltx2Stage2Attn::Off,
                 )?
             }
         };
@@ -1211,6 +1265,16 @@ impl Ltx2Pipeline {
                 timings.upsample_s, grid_full
             ));
 
+            if req.sol_stage2 {
+                crate::wan::log::info(format_args!(
+                    "ltx2 sol stage-2: taus 1/1.25/1.5, layer 0 dense, layers 1-47 sol (dense SDPA until the kernel is linked), lora strength 0.8 not fused"
+                ));
+            }
+            if req.pisa_stage2 {
+                crate::wan::log::info(format_args!(
+                    "ltx2 pisa stage-2: layers 0-1 dense, layers 2-47 sparsity 0.9 block 64 (dense SDPA until the kernel is linked), prune steps 1,2 ratio 0.5 not applied, lora 0.25/0.5 not fused, stage-1 cache preset 8of15_last_29calls not applied"
+                ));
+            }
             let schedule2 =
                 Ltx2Schedule::distilled_stage_2_steps(req.stage2_steps()).map_err(err)?;
             let sigma = schedule2.sigmas[0] as f32;
@@ -1250,6 +1314,7 @@ impl Ltx2Pipeline {
                             noise_seed: req.seed + 30_000,
                         },
                         Some(&mut record2),
+                        req.stage2_attn(),
                     )?
                 } else if let Some(ref uncond) = text_uncond {
                     denoise_cfg(
@@ -1263,6 +1328,7 @@ impl Ltx2Pipeline {
                         video,
                         audio,
                         Some(&mut record2),
+                        req.stage2_attn(),
                     )?
                 } else {
                     denoise(
@@ -1273,6 +1339,7 @@ impl Ltx2Pipeline {
                         video,
                         audio,
                         Some(&mut record2),
+                        req.stage2_attn(),
                     )?
                 }
             };
@@ -1550,6 +1617,7 @@ mod tests {
             video.clone(),
             audio.clone(),
             Some(&mut obs),
+            Ltx2Stage2Attn::Off,
         )
         .unwrap();
         assert_eq!(

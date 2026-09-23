@@ -1,5 +1,6 @@
 pub mod config;
 pub mod family;
+pub mod sol_cache;
 pub mod tokenize;
 pub mod umt5_config;
 pub mod vae_config;

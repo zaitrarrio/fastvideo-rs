@@ -4,8 +4,10 @@
 //! and `pipelines/ltx2`. See docs/ports/ltx2.md.
 
 pub mod config;
+pub mod pisa;
 pub mod rope;
 pub mod schedule;
+pub mod sol;
 
 pub use config::{
     ltx2_19b, ltx2_19b_distilled, ltx2_23_22b, ltx2_23_22b_distilled, ltx2_5_22b_distilled,
@@ -15,5 +17,7 @@ pub use config::{
     Ltx2VaeDecoderStage, Ltx2VaeDecoderUpsampler, Ltx2VaeUpsampleKind, Ltx2VideoVaeConfig,
     Ltx2VocoderConfig,
 };
+pub use pisa::{prunes_step, route as pisa_route, Ltx23PisaRoute, STAGE1_CACHE_PRESET};
 pub use rope::{Ltx2RopeTables, ScalarDivision, SplitRope};
 pub use schedule::{AncestralOpts, Ltx2Schedule};
+pub use sol::{route, route_for_call, Ltx25SolRoute, LORA_STRENGTH, STAGE2_SIGMAS, STAGE2_TAUS};

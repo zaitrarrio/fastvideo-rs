@@ -25,7 +25,7 @@ use crate::wan::weights::WeightMap;
 use super::audio_vae::AudioDecoder;
 use super::keys::{Keys, Layout};
 use super::text::{HiddenStack, TextConnectors};
-use super::transformer::{Ltx2Transformer, Ropes};
+use super::transformer::{Ltx2Transformer, Ltx2VideoAttn, Ropes};
 use super::vae::VideoDecoder;
 use super::vocoder::Vocoder;
 
@@ -129,6 +129,7 @@ fn dit_matches_diffusers_on_a_tiny_config() {
             &ropes,
             Some(&mut observe),
             Some(&mut probe),
+            Ltx2VideoAttn::Off,
         )
         .expect("forward");
     // 2 blocks x 2 streams x (4 sub-layers x in/out + 3 "after") + 2 heads x 2.

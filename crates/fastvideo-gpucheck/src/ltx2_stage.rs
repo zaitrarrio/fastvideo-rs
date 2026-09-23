@@ -291,6 +291,12 @@ pub enum Stage {
         /// First-frame PNG/JPEG for I2V encode (`docs/ports/ltx2.md`).
         #[arg(long)]
         image: Option<PathBuf>,
+        /// Stage-2 Sol route (3 refine steps). Video layers 1-47 still use dense SDPA.
+        #[arg(long, default_value_t = false)]
+        sol_stage2: bool,
+        /// Stage-2 PISA route (3 refine steps). Video layers 2-47 still use dense SDPA.
+        #[arg(long, default_value_t = false)]
+        pisa_stage2: bool,
     },
     /// CPU only: rewrite the text encoder as the language model alone, its
     /// projections narrowed float32 → bf16 once, in load order (47 GB → 25.5 GB,
@@ -448,6 +454,8 @@ pub fn run(report: &mut Report, stage: &Stage) -> StageResult<()> {
             two_stage,
             diff_vae,
             image,
+            sol_stage2,
+            pisa_stage2,
         } => {
             let text_cache = if *no_text_cache {
                 None
@@ -489,6 +497,8 @@ pub fn run(report: &mut Report, stage: &Stage) -> StageResult<()> {
                 *warm,
                 *two_stage,
                 *diff_vae,
+                *sol_stage2,
+                *pisa_stage2,
                 image.as_deref(),
             )
         }
@@ -1249,6 +1259,7 @@ fn dit(
             &ropes,
             Some(&mut observe),
             Some(&mut probe),
+            fastvideo_cudarc::ltx2::transformer::Ltx2VideoAttn::Off,
         )?;
         ours.extend(block_taps);
         Ok((host(&v)?, host(&a)?))
@@ -1405,6 +1416,7 @@ fn sample_loop(
             cuda(&noise_v)?,
             cuda(&noise_a)?,
             Some(&mut observe),
+            fastvideo_cudarc::ltx2::transformer::Ltx2Stage2Attn::Off,
         )?)
     })?;
     report.note("denoise", json!({"seconds": seconds, "step_seconds": steps.iter().map(|s| s.2).collect::<Vec<_>>(), "peak_vram_mib": peak.stop()}));
@@ -1552,6 +1564,8 @@ fn gen(
     warm: bool,
     two_stage: bool,
     diff_vae: bool,
+    sol_stage2: bool,
+    pisa_stage2: bool,
     image: Option<&Path>,
 ) -> StageResult<()> {
     report.set("device", crate::gpu::init(device)?);
@@ -1582,6 +1596,8 @@ fn gen(
         audio_guidance_scale: 1.0,
         num_inference_steps: None,
         refine_steps: None,
+        sol_stage2,
+        pisa_stage2,
         image_path: image.map(Path::to_path_buf),
     };
     report.set(
@@ -1589,6 +1605,8 @@ fn gen(
         json!({
             "prompt": prompt, "height": g.height, "width": g.width, "num_frames": g.num_frames,
             "frame_rate": g.frame_rate, "seed": seed, "two_stage": two_stage, "diff_vae": diff_vae,
+            "sol_stage2": sol_stage2,
+            "pisa_stage2": pisa_stage2,
             "image": image.map(|p| p.display().to_string()),
         }),
     );

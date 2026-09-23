@@ -31,6 +31,10 @@ pub struct AvGenerateOptions {
     pub num_inference_steps: Option<u32>,
     /// LTX two-stage refine steps (2 or 3).
     pub refine_steps: Option<u32>,
+    /// LTX-2.5 stage-2 Sol route (3 refine forwards, layer 0 dense).
+    pub sol_stage2: bool,
+    /// LTX-2.3 stage-2 PISA route (3 refine forwards, layers 0..=1 dense).
+    pub pisa_stage2: bool,
     /// First-frame image for LTX I2V / H3 FL2VA (H3 encodes on GPU via cudarc).
     pub image_path: Option<PathBuf>,
     /// H3 FL2VA last-frame image.
@@ -172,6 +176,8 @@ fn generate_ltx2(
             }),
             num_inference_steps: opts.num_inference_steps.map(|n| n as usize),
             refine_steps: opts.refine_steps.map(|n| n as usize),
+            sol_stage2: opts.sol_stage2,
+            pisa_stage2: opts.pisa_stage2,
             image_path: opts.image_path,
         };
         request

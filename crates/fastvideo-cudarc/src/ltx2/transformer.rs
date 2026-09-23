@@ -127,6 +127,56 @@ fn scale_shift(x: &CudaTensor, scale: &CudaTensor, shift: &CudaTensor) -> Result
     x.mul(&scale.try_add_scalar(1.0)?)?.add(shift)
 }
 
+/// Stage-2 video self-attention for one denoise loop. The step index is applied
+/// inside the loop.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Ltx2Stage2Attn {
+    Off,
+    /// LTX-2.5 Sol: layer 0 dense, layers 1..=47 at that forward's tau.
+    Sol,
+    /// LTX-2.3 PISA: layers 0..=1 dense, later layers piecewise-sparse.
+    Pisa,
+}
+
+/// One transformer forward's video self-attention plan.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Ltx2VideoAttn {
+    Off,
+    Sol { step: usize },
+    Pisa { step: usize },
+}
+
+impl Ltx2Stage2Attn {
+    pub fn at(self, step: usize) -> Ltx2VideoAttn {
+        match self {
+            Self::Off => Ltx2VideoAttn::Off,
+            Self::Sol => Ltx2VideoAttn::Sol { step },
+            Self::Pisa => Ltx2VideoAttn::Pisa { step },
+        }
+    }
+}
+
+/// Video self-attention. Sol and PISA routes still run dense SDPA: those
+/// kernels are not linked. The route is the published selection for this layer.
+fn video_self_attn(
+    attn: &Attention,
+    h: &CudaTensor,
+    rope: &DeviceRope,
+    route: Ltx2VideoAttn,
+    layer: usize,
+) -> Result<CudaTensor> {
+    match route {
+        Ltx2VideoAttn::Sol { step } => {
+            let _ = fastvideo_models::ltx2::route(step, layer).map_err(msg)?;
+        }
+        Ltx2VideoAttn::Pisa { step } => {
+            let _ = fastvideo_models::ltx2::pisa_route(step, layer).map_err(msg)?;
+        }
+        Ltx2VideoAttn::Off => {}
+    }
+    attn.forward(h, None, Some(rope), None)
+}
+
 /// One stream's half of a block.
 struct StreamBlock {
     attn1: Attention,
@@ -512,7 +562,29 @@ impl Ltx2Transformer {
         ropes: &Ropes,
         observer: Option<BlockObserver<'_>>,
     ) -> Result<(CudaTensor, CudaTensor)> {
-        self.forward_probed(video, audio, text, timestep, ropes, observer, None)
+        self.forward_sol(
+            video,
+            audio,
+            text,
+            timestep,
+            ropes,
+            observer,
+            Ltx2VideoAttn::Off,
+        )
+    }
+
+    /// [`Self::forward`] with a stage-2 video self-attention plan.
+    pub fn forward_sol(
+        &self,
+        video: &CudaTensor,
+        audio: &CudaTensor,
+        text: &TextConditioning,
+        timestep: f32,
+        ropes: &Ropes,
+        observer: Option<BlockObserver<'_>>,
+        route: Ltx2VideoAttn,
+    ) -> Result<(CudaTensor, CudaTensor)> {
+        self.forward_probed(video, audio, text, timestep, ropes, observer, None, route)
     }
 
     /// [`Self::forward`] with sub-layer taps handed to `probe`.
@@ -526,6 +598,7 @@ impl Ltx2Transformer {
         ropes: &Ropes,
         mut observer: Option<BlockObserver<'_>>,
         mut probe: Option<Probe<'_>>,
+        route: Ltx2VideoAttn,
     ) -> Result<(CudaTensor, CudaTensor)> {
         if video.rank() != 3 || audio.rank() != 3 || video.shape[0] != 1 || audio.shape[0] != 1 {
             return Err(msg(format!(
@@ -575,6 +648,7 @@ impl Ltx2Transformer {
                 ropes,
                 eps,
                 tap,
+                route,
             )?;
             if let Some(obs) = observer.as_mut() {
                 obs(i, &xv, &xa)?;
@@ -631,6 +705,7 @@ impl Ltx2Transformer {
         ropes: &Ropes,
         eps: f32,
         mut tap: Tap<'_, '_>,
+        route: Ltx2VideoAttn,
     ) -> Result<(CudaTensor, CudaTensor)> {
         let (dv, da) = (xv.shape[2], xa.shape[2]);
         // table + per-step modulation, kept as [1, rows, D] for the gated adds.
@@ -645,7 +720,7 @@ impl Ltx2Transformer {
 
         // 1. self-attention.
         let h = rms_adaln(&xv, &row(&v_tab, 1)?, &row(&v_tab, 0)?, eps)?;
-        let u = b.video.attn1.forward(&h, None, Some(&ropes.video), None)?;
+        let u = video_self_attn(&b.video.attn1, &h, &ropes.video, route, tap.block)?;
         let xv = xv.residual_gate_add_e(&u, &v_gates, 2)?;
         tap.emit("video", "attn1_in", &h)?;
         tap.emit("video", "attn1_out", &u)?;
