@@ -18,7 +18,7 @@
 //! The Rust-to-PTX toolchain is vendored as git submodules:
 //! `third_party/cuda-oxide` (v0.2.1, `nightly-2026-04-03`) and
 //! `third_party/cutile-rs` (v0.3.1). `scripts/oxide.sh` builds both in Docker
-//! (`docker/oxide.Dockerfile`); it does not run cargo on the host.
+//! (`docker/oxide.Dockerfile`: base, build, and runtime on CUDA 13.4).
 //! CUTLASS SM100/SM120 GEMM, Blackwell `to_blocked` scale layout, RHT, 2D
 //! block scales, and stochastic rounding stay out — those are hardware layouts,
 //! not this host recipe. The portable cudarc kernels implement the published
@@ -54,7 +54,8 @@ fused ln_adaln_e + rope_half is one launch when both ops share a tensor; \
 Wan / LTX / H3 apply them on different layouts (AdaLN on [B,S,C], RoPE on \
 Q/K after the projection). \
 cuda-oxide v0.2.1 and cutile-rs v0.3.1 are vendored under third_party. \
-scripts/oxide.sh builds them in Docker (docker/oxide.Dockerfile, nightly-2026-04-03). \
+scripts/oxide.sh builds them in Docker (docker/oxide.Dockerfile base, build, \
+and runtime stages, CUDA 13.4, nightly-2026-04-03). \
 TorchAO PerRow FP8 PTQ (utils/fp8.py) is not this flag; FASTVIDEO_FP8 is \
 the existing per-tensor E4M3 path.";
 

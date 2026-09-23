@@ -1,17 +1,19 @@
 #!/usr/bin/env bash
-# Build the vendored Rust-to-PTX packages in Docker. No NVIDIA GPU required.
-# Docker Desktop on macOS cross-builds linux/amd64.
+# Build the vendored Rust-to-PTX packages as three Docker layers.
+# No NVIDIA GPU required. Docker Desktop on macOS cross-builds linux/amd64.
 #
-#   third_party/cuda-oxide  v0.2.1  → librustc_codegen_cuda.so
-#   third_party/cutile-rs   v0.3.1  → default workspace members (not cuda-tile-rs)
+#   fastvideo-oxide-base:cu134     CUDA 13.4 runtime
+#   fastvideo-oxide-build:cu134    base + toolchain, compiles the packages
+#   fastvideo-oxide-runtime:cu134  base + nightly rustc + llc-21 + artifacts
 #
-# Image: docker/oxide.Dockerfile (Ubuntu 22.04, CUDA 13.0, LLVM 21,
-# nightly-2026-04-03). Backend lands in artifacts/oxide/.
+# Artifacts are also copied to artifacts/oxide/.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-IMAGE="${OXIDE_BUILDER_IMAGE:-fastvideo-oxide-builder:cu130}"
 PLATFORM="${DOCKER_PLATFORM:-linux/amd64}"
+BASE_IMAGE="${OXIDE_BASE_IMAGE:-fastvideo-oxide-base:cu134}"
+BUILD_IMAGE="${OXIDE_BUILD_IMAGE:-fastvideo-oxide-build:cu134}"
+RUNTIME_IMAGE="${OXIDE_RUNTIME_IMAGE:-fastvideo-oxide-runtime:cu134}"
 OXIDE="$ROOT/third_party/cuda-oxide"
 CUTILE="$ROOT/third_party/cutile-rs"
 
@@ -23,32 +25,29 @@ fi
 command -v docker >/dev/null 2>&1 || { echo "oxide: docker is required" >&2; exit 1; }
 docker info >/dev/null 2>&1 || { echo "oxide: Docker daemon is not running" >&2; exit 1; }
 
-docker build \
-  --platform "$PLATFORM" \
-  -f "$ROOT/docker/oxide.Dockerfile" \
-  -t "$IMAGE" \
-  "$ROOT/docker"
+build_target() {
+  local target="$1" tag="$2"
+  docker build \
+    --platform "$PLATFORM" \
+    -f "$ROOT/docker/oxide.Dockerfile" \
+    --target "$target" \
+    -t "$tag" \
+    "$ROOT"
+}
 
+# Runtime depends on build, which depends on base. One pass fills the cache;
+# the two retags then only name the earlier stages.
+build_target runtime "$RUNTIME_IMAGE"
+build_target base "$BASE_IMAGE"
+build_target build "$BUILD_IMAGE"
+
+rm -rf "$ROOT/artifacts/oxide"
 mkdir -p "$ROOT/artifacts/oxide"
+cid="$(docker create --platform "$PLATFORM" "$RUNTIME_IMAGE")"
+docker cp "$cid":/opt/oxide/. "$ROOT/artifacts/oxide/"
+docker rm "$cid" >/dev/null
 
-docker run --rm \
-  --platform "$PLATFORM" \
-  -v "$ROOT":/src \
-  -v fastvideo-rs-cargo-registry:/usr/local/cargo/registry \
-  -v fastvideo-rs-cargo-git:/usr/local/cargo/git \
-  -v fastvideo-rs-oxide-target:/oxide-target \
-  -e CARGO_HOME=/usr/local/cargo \
-  -w /src \
-  "$IMAGE" \
-  bash -euo pipefail -c '
-    export CARGO_TARGET_DIR=/oxide-target/cuda-oxide
-    cd /src/third_party/cuda-oxide
-    cargo oxide setup
-    install -D "$CARGO_TARGET_DIR/debug/librustc_codegen_cuda.so" /src/artifacts/oxide/librustc_codegen_cuda.so
-    export CARGO_TARGET_DIR=/oxide-target/cutile
-    cd /src/third_party/cutile-rs
-    cargo build --locked --release
-  '
-
-echo "oxide: backend $ROOT/artifacts/oxide/librustc_codegen_cuda.so"
-echo "oxide: cutile release libs are in the fastvideo-rs-oxide-target volume (/oxide-target/cutile)"
+echo "oxide: base    $BASE_IMAGE"
+echo "oxide: build   $BUILD_IMAGE"
+echo "oxide: runtime $RUNTIME_IMAGE"
+echo "oxide: artifacts $ROOT/artifacts/oxide"
