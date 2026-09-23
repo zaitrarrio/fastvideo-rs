@@ -567,10 +567,16 @@ impl WanPipeline {
         let tea_cache = TeaCache::from_env();
         let easy_cache = EasyCacheRuntime::from_env(n_steps)?;
         self.dit.configure_sol_teacache(n_steps)?;
+        self.dit.configure_sol_taylor(n_steps)?;
         if let Some(low) = &self.dit_2 {
             low.configure_sol_teacache(n_steps)?;
+            low.configure_sol_taylor(n_steps)?;
         }
-        if tea_cache.enabled && (easy_cache.is_some() || self.dit.sol_teacache_enabled()) {
+        if tea_cache.enabled
+            && (easy_cache.is_some()
+                || self.dit.sol_teacache_enabled()
+                || self.dit.sol_taylor_enabled())
+        {
             return Err(PipelineError::Message(
                 "FASTVIDEO_TEACACHE and FASTVIDEO_WAN_SOL_CACHE both set".into(),
             ));
@@ -845,18 +851,13 @@ impl EasyCacheRuntime {
         if family.is_empty() || matches!(family.as_str(), "0" | "off" | "none" | "false") {
             return Ok(None);
         }
-        if family == "taylorseer" {
-            return Err(PipelineError::Message(
-                fastvideo_models::wan::sol_cache::taylorseer_unported_reason().into(),
-            ));
-        }
-        if family != "easycache" && family != "teacache" {
-            return Err(PipelineError::Message(format!(
-                "FASTVIDEO_WAN_SOL_CACHE={family} is not supported (easycache or teacache)"
-            )));
-        }
-        if family == "teacache" {
+        if family == "taylorseer" || family == "teacache" {
             return Ok(None);
+        }
+        if family != "easycache" {
+            return Err(PipelineError::Message(format!(
+                "FASTVIDEO_WAN_SOL_CACHE={family} is not supported (easycache, teacache, or taylorseer)"
+            )));
         }
         let threshold = std::env::var("FASTVIDEO_WAN_EASYCACHE_THRESH")
             .ok()
@@ -1043,10 +1044,13 @@ fn dit_cfg(
             dit.arm_sol_teacache(true, tea_step);
         }
         dit.forward_ctx(&latent_in, &t1, &cond_hs, ctx.image)?
-    } else if !tea_on && ctx.i2v.is_none() && ctx.image.is_none() && rows == 2 {
+    } else if ctx.i2v.is_none() && ctx.image.is_none() && rows == 2 {
         // One batch-2 forward for [uncond, cond]: the embeddings are already
-        // in that order, so only the latents are duplicated. Sol TeaCache
-        // needs one branch per forward, so it takes the split path below.
+        // in that order, so only the latents are duplicated. TeaCache decides
+        // each row and skips the blocks only when both rows reuse.
+        if tea_on {
+            dit.arm_sol_teacache_batch(tea_step);
+        }
         let latent_batch = CudaTensor::cat(&[&latent_in, &latent_in], 0)?;
         let t_batch = CudaTensor::from_vec(vec![t, t], vec![2])?;
         let out_batch = dit.forward_ctx(&latent_batch, &t_batch, encoder_hs, None)?;

@@ -71,7 +71,14 @@ log "syncing source (git-tracked files only)"
 # rsync creates the last path component only; a bare ubuntu image has no
 # /workspace, and rsync reports that as a receiver file-IO error (code 11).
 fv_ssh "$HOST" "$PORT" "mkdir -p $REMOTE"
-(cd "$FV_ROOT" && git ls-files -z | rsync -az --files-from=- --from0 -e "ssh -p $PORT -o StrictHostKeyChecking=no" . "root@$HOST:$REMOTE/") >/dev/null
+# Submodule gitlinks are not file contents. Sync the repo, then the vendored
+# Rust-to-PTX trees (cuda-oxide, cutile-rs) without their .git directories.
+(cd "$FV_ROOT" && git ls-files -z -- . ':!third_party' | rsync -az --files-from=- --from0 -e "ssh -p $PORT -o StrictHostKeyChecking=no" . "root@$HOST:$REMOTE/") >/dev/null
+if [[ -d "$FV_ROOT/third_party/cuda-oxide" ]]; then
+  log "syncing vendored Rust-to-PTX toolchain"
+  rsync -az --exclude '.git' -e "ssh -p $PORT -o StrictHostKeyChecking=no" \
+    "$FV_ROOT/third_party/" "root@$HOST:$REMOTE/third_party/" >/dev/null
+fi
 
 log "building release with ahead-of-time cubins + hf-fm"
 fv_ssh "$HOST" "$PORT" "set -euo pipefail; cd $REMOTE

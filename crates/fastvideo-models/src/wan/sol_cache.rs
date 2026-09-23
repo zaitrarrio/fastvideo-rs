@@ -5,14 +5,144 @@
 //! TeaCache decides from the timestep projection and reuses the residual
 //! across the transformer blocks. Defaults match the published env.
 //!
-//! TaylorSeer stays unported: `wan_cache.py` `TaylorSeerRuntime` installs
-//! diffusers `TaylorSeerCacheHook` and forecasts `proj_out`. This repo has
-//! neither the hook nor that extrapolation.
+//! TaylorSeer lite forecasts `proj_out` and skips the block stack on the
+//! forecast steps. The schedule is `wan_cache.py` `TaylorSeerRuntime`
+//! (`WAN22_TAYLOR_*`). The factors are diffusers `TaylorSeerState`: divided
+//! differences on compute steps, then `offset^k / k!` on a forecast.
 
-/// Why `FASTVIDEO_WAN_SOL_CACHE=taylorseer` is rejected.
-pub fn taylorseer_unported_reason() -> &'static str {
-    "wan sol: TaylorSeer stays unported (wan_cache.py forecasts proj_out through \
-     diffusers TaylorSeerCacheHook, which this repo does not contain)"
+/// Published Wan2.2 TaylorSeer lite defaults (`cache_runtime.py`).
+pub const TAYLOR_INTERVAL: usize = 3;
+pub const TAYLOR_WARMUP: usize = 3;
+pub const TAYLOR_ORDER: usize = 1;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TaylorDecision {
+    pub compute: bool,
+    pub reason: &'static str,
+    pub step: usize,
+}
+
+/// Diffusers `TaylorSeerCacheHook._measure_should_compute`.
+///
+/// `current_step` starts at -1. Each forward increments it, then warmup,
+/// `(step - warmup - 1) % interval == 0`, or cooldown forces a full proj_out.
+#[derive(Debug, Clone)]
+pub struct TaylorSchedule {
+    pub interval: usize,
+    pub warmup: usize,
+    pub cooldown_start: usize,
+    pub max_order: usize,
+    current_step: isize,
+}
+
+impl TaylorSchedule {
+    pub fn official(num_steps: usize) -> Result<Self, String> {
+        Self::new(
+            TAYLOR_INTERVAL,
+            TAYLOR_WARMUP,
+            num_steps.saturating_sub(2),
+            TAYLOR_ORDER,
+        )
+    }
+
+    pub fn new(
+        interval: usize,
+        warmup: usize,
+        cooldown_start: usize,
+        max_order: usize,
+    ) -> Result<Self, String> {
+        if interval == 0 {
+            return Err("wan taylorseer requires a positive interval".into());
+        }
+        Ok(Self {
+            interval,
+            warmup,
+            cooldown_start,
+            max_order,
+            current_step: -1,
+        })
+    }
+
+    pub fn current_step(&self) -> isize {
+        self.current_step
+    }
+
+    pub fn begin_forward(&mut self) -> TaylorDecision {
+        self.current_step += 1;
+        let step = self.current_step as usize;
+        let refresh =
+            (self.current_step - self.warmup as isize - 1).rem_euclid(self.interval as isize) == 0;
+        let (compute, reason) = if step < self.warmup {
+            (true, "warmup")
+        } else if step >= self.cooldown_start {
+            (true, "cooldown")
+        } else if refresh {
+            (true, "interval_refresh")
+        } else {
+            (false, "taylor_forecast")
+        };
+        TaylorDecision {
+            compute,
+            reason,
+            step,
+        }
+    }
+}
+
+/// Order-0 value plus divided differences. `delta_step` is the forward gap
+/// since the previous compute (`TaylorSeerState.update`).
+pub fn taylor_update(
+    previous: &[Vec<f32>],
+    features: &[f32],
+    delta_step: isize,
+    max_order: usize,
+) -> Result<Vec<Vec<f32>>, String> {
+    if delta_step == 0 && !previous.is_empty() {
+        return Err("wan taylorseer delta step cannot be zero".into());
+    }
+    let mut factors = vec![features.to_vec()];
+    if previous.is_empty() {
+        return Ok(factors);
+    }
+    let inv = 1.0 / delta_step as f32;
+    for j in 0..max_order {
+        let Some(prev) = previous.get(j) else {
+            break;
+        };
+        if prev.len() != factors[j].len() {
+            return Err("wan taylorseer factor length changed".into());
+        }
+        factors.push(
+            factors[j]
+                .iter()
+                .zip(prev)
+                .map(|(next, old)| (next - old) * inv)
+                .collect(),
+        );
+    }
+    Ok(factors)
+}
+
+/// `sum_k factor_k * offset^k / k!` (`TaylorSeerState.predict`).
+pub fn taylor_predict(factors: &[Vec<f32>], step_offset: isize) -> Result<Vec<f32>, String> {
+    let base = factors.first().ok_or("wan taylorseer has no factors")?;
+    let mut output = vec![0.0f32; base.len()];
+    let mut pow = 1.0f64;
+    let mut fact = 1.0f64;
+    for (order, factor) in factors.iter().enumerate() {
+        if factor.len() != base.len() {
+            return Err("wan taylorseer factor length changed".into());
+        }
+        if order > 0 {
+            pow *= step_offset as f64;
+            fact *= order as f64;
+        }
+        let coeff = (pow / fact) as f32;
+        for (dst, value) in output.iter_mut().zip(factor) {
+            *dst += value * coeff;
+        }
+    }
+    Ok(output)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -193,10 +323,29 @@ mod tests {
     }
 
     #[test]
-    fn taylorseer_names_the_missing_hook() {
-        let reason = taylorseer_unported_reason();
-        assert!(reason.contains("TaylorSeer"));
-        assert!(reason.contains("diffusers"));
+    fn taylor_lite_matches_the_diffusers_step_counter() {
+        let mut schedule = TaylorSchedule::official(10).unwrap();
+        let mut saw = Vec::new();
+        for _ in 0..10 {
+            saw.push(schedule.begin_forward().compute);
+        }
+        // warmup 0..2, then (step - 3 - 1) % 3 == 0 refreshes, cooldown at 8.
+        assert_eq!(
+            saw,
+            vec![true, true, true, false, true, false, false, true, true, true]
+        );
+        assert_eq!(schedule.begin_forward().reason, "cooldown");
+    }
+
+    #[test]
+    fn order_one_forecast_is_value_plus_difference() {
+        let first = taylor_update(&[], &[2.0, 4.0], 1, 1).unwrap();
+        assert_eq!(first, vec![vec![2.0, 4.0]]);
+        let second = taylor_update(&first, &[6.0, 8.0], 2, 1).unwrap();
+        assert_eq!(second[0], vec![6.0, 8.0]);
+        assert_eq!(second[1], vec![2.0, 2.0]);
+        assert_eq!(taylor_predict(&second, 1).unwrap(), vec![8.0, 10.0]);
+        assert!(taylor_update(&second, &[1.0, 1.0], 0, 1).is_err());
     }
 }
 
