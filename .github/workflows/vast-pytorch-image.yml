@@ -1,5 +1,7 @@
-# Builds the optional Vast pytorch images (FROM vastai/pytorch) for tiers that
+# Builds the optional Vast pytorch image (FROM vastai/pytorch) for tiers that
 # need Python+torch. Default rentals still use the slim gpucheck-runtime image.
+# The oracle flavor (transformers/diffusers) is not published; build it locally
+# with `scripts/gpu/docker.sh vast-oracle` if a parity tier needs it.
 # See scripts/gpu/README.md and docker/vast-pytorch.Dockerfile.
 name: vast-pytorch-image
 
@@ -29,7 +31,7 @@ concurrency:
 jobs:
   image:
     runs-on: ubuntu-22.04
-    timeout-minutes: 120
+    timeout-minutes: 90
     strategy:
       fail-fast: false
       matrix:
@@ -37,9 +39,6 @@ jobs:
           - target: runtime
             suffix: vast
             flavor: pytorch
-          - target: oracle
-            suffix: vast-oracle
-            flavor: oracle
     steps:
       - uses: actions/checkout@v4
 
@@ -89,9 +88,6 @@ jobs:
             test -x /opt/fastvideo-rs/target/release/fv-gpucheck
             test -x /venv/main/bin/python
             /venv/main/bin/python -c "import torch; print(torch.__version__)"
-            if [[ "${{ matrix.target }}" == "oracle" ]]; then
-              /venv/main/bin/python -c "import transformers, diffusers; print(transformers.__version__, diffusers.__version__)"
-            fi
             ldconfig -p | grep -E "libnvrtc|libcublas|libcudnn" >/dev/null
           '
           docker image inspect "$img" --format 'size={{.Size}}'
