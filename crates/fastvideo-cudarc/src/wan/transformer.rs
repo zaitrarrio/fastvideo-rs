@@ -167,6 +167,7 @@ impl WanAttention {
         mask: Option<&CudaTensor>,
         gate: Option<&Linear>,
         vsa: Option<&VsaCtx>,
+        ar: Option<&super::ar_cache::ArFrame>,
     ) -> Result<CudaTensor> {
         let dim = self.heads * self.dim_head;
         let qkv = self.q_or_qkv.forward(hidden)?;
@@ -179,11 +180,13 @@ impl WanAttention {
         let q = qkv.qk_norm_rope_bhsd(0, self.heads, &self.norm_q, rope(), self.eps)?;
         let k = qkv.qk_norm_rope_bhsd(dim, self.heads, &self.norm_k, rope(), self.eps)?;
         let v = qkv.split_heads_bhsd(2 * dim, self.heads, self.dim_head)?;
-        // LongLive KV dequant runs beforehand on the K/V this block already
-        // materializes, then attention reads those dense tensors. No AR cache.
-        // AdaLN stays `ln_adaln_e`
-        // and RoPE stays `qk_norm_rope_bhsd` — those tensors do not share a
-        // layout with `ln_adaln_e_rope_half` (hidden [B,S,C] vs Q/K [B,H,S,D]).
+        // Causal + NVFP4 writes each frame into the rolling cache and attends
+        // the dequantized span. RoPE is already on Q/K. AdaLN stays on the
+        // hidden `[B,S,C]` tensor, which does not share that layout.
+        if let Some(spec) = ar {
+            let out = super::ar_cache::attend_cached(&q, &k, &v, spec)?;
+            return self.to_out.forward(&out.merge_heads()?);
+        }
         let (k, v) = super::nvfp4::maybe_kv(k, v)?;
         // TurboWan SLA: block top-k sparse + linear attention (self-attn only).
         if super::sla::sla_enabled() && mask.is_none() {
@@ -545,6 +548,7 @@ impl WanBlock {
         image: Option<&CudaTensor>,
         mask: Option<&CudaTensor>,
         vsa: Option<&VsaCtx>,
+        ar: Option<&super::ar_cache::ArFrame>,
     ) -> Result<CudaTensor> {
         use super::stats::phase;
         let e = timestep_proj.add(&self.scale_shift_table)?;
@@ -553,7 +557,7 @@ impl WanBlock {
         })?;
         let attn = phase("2_self_attn", || {
             self.attn1
-                .forward_self(&normed, rope, mask, self.gate.as_ref(), vsa)
+                .forward_self(&normed, rope, mask, self.gate.as_ref(), vsa, ar)
         })?;
         let hidden = phase("3_residual_msa", || {
             hidden.residual_gate_add_e(&attn, &e, GATE_MSA)
@@ -899,6 +903,54 @@ impl WanTransformer3D {
         Ok(())
     }
 
+    /// Causal self-attention cache for `FASTVIDEO_NVFP4`. `None` keeps the
+    /// dense causal mask.
+    fn causal_ar_frame(&self, t: usize, h: usize, w: usize) -> Option<super::ar_cache::ArFrame> {
+        let rule = fastvideo_models::nvfp4::from_env()?;
+        if !self.cfg.causal {
+            return None;
+        }
+        let p = self.cfg.patch_size;
+        if p[0] == 0 || p[1] == 0 || p[2] == 0 {
+            return None;
+        }
+        let frames = t / p[0];
+        let spatial = (h / p[1]) * (w / p[2]);
+        if frames == 0
+            || spatial == 0
+            || !self
+                .cfg
+                .attention_head_dim
+                .is_multiple_of(fastvideo_models::nvfp4::BLOCK)
+        {
+            return None;
+        }
+        let sink = self.cfg.sink_size.saturating_mul(spatial);
+        let seq = frames * spatial;
+        let (capacity, max_attention) = if self.cfg.local_attn_size > 0 {
+            let window = self.cfg.local_attn_size as usize * spatial;
+            (sink + window.max(spatial), window)
+        } else {
+            (seq, 0)
+        };
+        static SAID: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+        super::log::info_once(
+            &SAID,
+            format_args!(
+                "wan ar kv cache: frames {frames} spatial {spatial} capacity {capacity} sink {sink} window {max_attention}"
+            ),
+        );
+        Some(super::ar_cache::ArFrame {
+            heads: self.cfg.num_attention_heads,
+            dim: self.cfg.attention_head_dim,
+            capacity,
+            sink_tokens: sink,
+            max_attention,
+            frame_seqlen: spatial,
+            rule,
+        })
+    }
+
     pub fn forward(
         &self,
         latents: &CudaTensor,
@@ -979,7 +1031,8 @@ impl WanTransformer3D {
         };
         let dim = self.cfg.hidden_size();
         let rope = self.rotary_for(t, h, w)?;
-        let mask = if self.cfg.causal {
+        let ar = self.causal_ar_frame(t, h, w);
+        let mask = if self.cfg.causal && ar.is_none() {
             let mask = fastvideo_models::wan::causal_temporal_mask(&self.cfg, t, h, w);
             let seq = (mask.len() as f64).sqrt() as usize;
             Some(CudaTensor::from_vec(mask, vec![1, 1, seq, seq])?.to_device()?)
@@ -1021,6 +1074,7 @@ impl WanTransformer3D {
                     image.as_ref(),
                     mask.as_ref(),
                     vsa.as_deref(),
+                    ar.as_ref(),
                 )?;
             }
             if let Some(before) = block_in.as_ref() {

@@ -2,6 +2,7 @@
 //! on CUDA (see [`tensor`]) with plain-Rust reference ops on CPU runs.
 
 pub mod affine;
+pub mod ar_cache;
 pub mod attn;
 pub mod bf16_gemm;
 pub mod clip;

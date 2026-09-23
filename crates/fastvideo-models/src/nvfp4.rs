@@ -44,7 +44,8 @@ const FOUR_OVER_SIX_EXPANSION: f32 = 1.5;
 /// Why oxide / CUTLASS-only layouts stay out of this crate.
 pub const GAP: &str = "\
 longlive nvfp4: W4A4 dequants beforehand (weights once at load, activations \
-and K/V each forward) and then the existing GEMM and attention run. \
+each forward). Causal Wan keeps K/V in the rolling autoregressive cache \
+and dequants the attended span. Then the existing GEMM and attention run. \
 CUTLASS SM100/SM120 GEMM, TransformerEngine NVFP4BlockScaling, Blackwell \
 to_blocked scale layout, RHT, 2d block scales, and stochastic rounding \
 are unpublished as host math. \
