@@ -22,7 +22,10 @@
 //! Perturbed/STG attention is not wired in the forward path (distilled CFG=1).
 //! See docs/ports/ltx2.md §e and docs/ports/ltx25.md.
 
+use std::sync::{Arc, Mutex};
+
 use fastvideo_models::ltx2::config::Ltx2TransformerConfig;
+use fastvideo_models::ltx2::fbcache::FbCache;
 use fastvideo_models::ltx2::Ltx2RopeTables;
 
 use crate::wan::nn::{sinusoidal_timesteps, Linear};
@@ -302,6 +305,31 @@ pub struct Ltx2Transformer {
     blocks: Vec<Block>,
     ones_video: CudaTensor,
     ones_audio: CudaTensor,
+    fbcache: Arc<Mutex<Option<LtxFbRuntime>>>,
+    prune: Arc<Mutex<Option<LtxPruneRuntime>>>,
+    stage1: Arc<Mutex<Option<LtxStage1Runtime>>>,
+}
+
+struct LtxFbRuntime {
+    state: FbCache,
+    armed: bool,
+    signals: Vec<Option<CudaTensor>>,
+    res_v: Vec<Option<CudaTensor>>,
+    res_a: Vec<Option<CudaTensor>>,
+    pending_v: Option<CudaTensor>,
+    pending_a: Option<CudaTensor>,
+    active_pass: Option<usize>,
+}
+
+struct LtxPruneRuntime {
+    active: bool,
+    step: Option<usize>,
+    prev: Option<CudaTensor>,
+}
+
+struct LtxStage1Runtime {
+    last_v: Option<CudaTensor>,
+    last_a: Option<CudaTensor>,
 }
 
 fn table(map: &WeightMap, key: &str, rows: usize, dim: usize) -> Result<CudaTensor> {
@@ -535,8 +563,239 @@ impl Ltx2Transformer {
             blocks,
             ones_video: ones(dv)?,
             ones_audio: ones(da)?,
+            fbcache: Default::default(),
+            prune: Default::default(),
+            stage1: Default::default(),
             cfg: cfg.clone(),
         })
+    }
+
+    pub fn enable_fbcache(&self) {
+        *self.fbcache.lock().expect("ltx2 fbcache") = Some(LtxFbRuntime {
+            state: FbCache::official(),
+            armed: false,
+            signals: Vec::new(),
+            res_v: Vec::new(),
+            res_a: Vec::new(),
+            pending_v: None,
+            pending_a: None,
+            active_pass: None,
+        });
+        crate::wan::log::info(format_args!("{}", fastvideo_models::ltx2::fbcache::APPLIED));
+    }
+
+    pub fn begin_fbcache_step(&self, step: usize) {
+        let mut slot = self.fbcache.lock().expect("ltx2 fbcache");
+        if let Some(runtime) = slot.as_mut() {
+            runtime.state.begin_step(step);
+            runtime.armed = true;
+        }
+    }
+
+    pub fn disarm_fbcache(&self) {
+        let mut slot = self.fbcache.lock().expect("ltx2 fbcache");
+        if let Some(runtime) = slot.as_mut() {
+            runtime.armed = false;
+        }
+    }
+
+    pub fn enable_midpoint_prune(&self) {
+        *self.prune.lock().expect("ltx2 prune") = Some(LtxPruneRuntime {
+            active: false,
+            step: None,
+            prev: None,
+        });
+        crate::wan::log::info(format_args!(
+            "{}",
+            fastvideo_models::ltx2::pisa::PRUNE_APPLIED
+        ));
+    }
+
+    pub fn arm_prune_step(&self, step: usize) {
+        let mut slot = self.prune.lock().expect("ltx2 prune");
+        if let Some(runtime) = slot.as_mut() {
+            runtime.step = Some(step);
+        }
+    }
+
+    pub fn set_prune_active(&self, active: bool) {
+        let mut slot = self.prune.lock().expect("ltx2 prune");
+        if let Some(runtime) = slot.as_mut() {
+            runtime.active = active;
+        }
+    }
+
+    pub fn enable_stage1_cache(&self) {
+        *self.stage1.lock().expect("ltx2 stage1") = Some(LtxStage1Runtime {
+            last_v: None,
+            last_a: None,
+        });
+        crate::wan::log::info(format_args!(
+            "{}",
+            fastvideo_models::ltx2::pisa::STAGE1_CACHE_APPLIED
+        ));
+    }
+
+    pub fn stage1_reuse(&self, step: usize) -> Option<(CudaTensor, CudaTensor)> {
+        if !fastvideo_models::ltx2::stage1_skips_step(step) {
+            return None;
+        }
+        let slot = self.stage1.lock().expect("ltx2 stage1");
+        let runtime = slot.as_ref()?;
+        Some((runtime.last_v.clone()?, runtime.last_a.clone()?))
+    }
+
+    pub fn stage1_store(&self, video: &CudaTensor, audio: &CudaTensor) {
+        let mut slot = self.stage1.lock().expect("ltx2 stage1");
+        if let Some(runtime) = slot.as_mut() {
+            runtime.last_v = Some(video.clone());
+            runtime.last_a = Some(audio.clone());
+        }
+    }
+
+    fn index_video_ropes(&self, ropes: &Ropes, tokens: &[usize]) -> Result<Ropes> {
+        Ok(Ropes {
+            video: ropes.video.index_tokens(tokens)?,
+            audio: ropes.audio.clone(),
+            cross_video: ropes.cross_video.index_tokens(tokens)?,
+            cross_audio: ropes.cross_audio.clone(),
+        })
+    }
+
+    fn gather_prune(&self, xv: &CudaTensor) -> Result<Option<(Vec<usize>, CudaTensor)>> {
+        let mut slot = self.prune.lock().expect("ltx2 prune");
+        let Some(runtime) = slot.as_mut() else {
+            return Ok(None);
+        };
+        if !runtime.active {
+            return Ok(None);
+        }
+        let Some(step) = runtime.step.take() else {
+            return Ok(None);
+        };
+        if !fastvideo_models::ltx2::prunes_step(step) || runtime.prev.is_none() {
+            return Ok(None);
+        }
+        let seq = xv.shape[1];
+        let dim = xv.shape[2];
+        let flat = xv.reshape(vec![seq, dim])?;
+        let host = flat.host_cow()?.into_owned();
+        let idx = fastvideo_models::ltx2::feat_norm_keep_indices(
+            &host,
+            seq,
+            dim,
+            fastvideo_models::ltx2::pisa::PRUNE_RATIO,
+        );
+        if idx.len() >= seq {
+            return Ok(None);
+        }
+        let kept = xv
+            .reshape(vec![seq, dim])?
+            .index_select_rows(&idx)?
+            .reshape(vec![1, idx.len(), dim])?;
+        Ok(Some((idx, kept)))
+    }
+
+    fn scatter_prune(&self, kept: CudaTensor, idx: &[usize]) -> Result<CudaTensor> {
+        let mut slot = self.prune.lock().expect("ltx2 prune");
+        let runtime = slot.as_mut().expect("ltx2 prune");
+        let prev = runtime.prev.as_ref().expect("ltx2 prune prev");
+        let (seq, dim) = (prev.shape[1], prev.shape[2]);
+        let prev_flat = prev.reshape(vec![seq, dim])?;
+        let kept_flat = kept.reshape(vec![idx.len(), dim])?;
+        let prev_host = prev_flat.host_cow()?.into_owned();
+        let kept_host = kept_flat.host_cow()?.into_owned();
+        let full = fastvideo_models::ltx2::scatter_prev(&prev_host, seq, dim, idx, &kept_host);
+        let out = CudaTensor::from_vec(full, vec![1, seq, dim])?;
+        runtime.prev = Some(out.clone());
+        Ok(out)
+    }
+
+    fn store_prune_full(&self, xv: &CudaTensor) -> Result<()> {
+        let mut slot = self.prune.lock().expect("ltx2 prune");
+        if let Some(runtime) = slot.as_mut() {
+            if runtime.active {
+                runtime.prev = Some(xv.clone());
+            }
+        }
+        Ok(())
+    }
+
+    fn begin_fb_pass(&self, xv: &CudaTensor, xa: &CudaTensor) -> Result<bool> {
+        let mut slot = self.fbcache.lock().expect("ltx2 fbcache");
+        let Some(runtime) = slot.as_mut() else {
+            return Ok(false);
+        };
+        if !runtime.armed {
+            return Ok(false);
+        }
+        runtime.pending_v = Some(xv.clone());
+        runtime.pending_a = Some(xa.clone());
+        Ok(true)
+    }
+
+    fn decide_fb_after_block0(&self, xv: &CudaTensor, xa: &CudaTensor) -> Result<bool> {
+        let mut slot = self.fbcache.lock().expect("ltx2 fbcache");
+        let runtime = slot.as_mut().expect("ltx2 fbcache");
+        let v_in = runtime.pending_v.as_ref().expect("ltx2 fb v_in");
+        let signal = xv.sub(v_in)?;
+        let distance = if runtime.state.needs_signal() {
+            let prev = runtime.signals[runtime.state.current_pass()]
+                .as_ref()
+                .expect("ltx2 fb signal");
+            let cur = signal.host_cow()?;
+            let prev = prev.host_cow()?;
+            fastvideo_models::ltx2::fbcache::relative_l1(&cur, &prev)
+        } else {
+            0.0
+        };
+        let decision = runtime.state.decide(distance);
+        let pass = runtime.state.last_pass();
+        while runtime.signals.len() <= pass {
+            runtime.signals.push(None);
+            runtime.res_v.push(None);
+            runtime.res_a.push(None);
+        }
+        runtime.signals[pass] = Some(signal);
+        runtime.active_pass = Some(pass);
+        if decision.skip {
+            runtime.state.note_reused(pass);
+            crate::wan::log::debug(format_args!(
+                "ltx2 fbcache reuse step pass {pass} reason {}",
+                decision.reason
+            ));
+            Ok(true)
+        } else {
+            let _ = xa;
+            Ok(false)
+        }
+    }
+
+    fn reuse_fb_residual(&self) -> Result<(CudaTensor, CudaTensor)> {
+        let slot = self.fbcache.lock().expect("ltx2 fbcache");
+        let runtime = slot.as_ref().expect("ltx2 fbcache");
+        let pass = runtime.active_pass.expect("ltx2 fb pass");
+        let v_in = runtime.pending_v.as_ref().expect("ltx2 fb v_in");
+        let a_in = runtime.pending_a.as_ref().expect("ltx2 fb a_in");
+        let xv = v_in.add(runtime.res_v[pass].as_ref().expect("ltx2 fb res_v"))?;
+        let xa = a_in.add(runtime.res_a[pass].as_ref().expect("ltx2 fb res_a"))?;
+        Ok((xv, xa))
+    }
+
+    fn finish_fb(&self, xv: &CudaTensor, xa: &CudaTensor) -> Result<()> {
+        let mut slot = self.fbcache.lock().expect("ltx2 fbcache");
+        let runtime = slot.as_mut().expect("ltx2 fbcache");
+        let pass = runtime.active_pass.take().expect("ltx2 fb pass");
+        let v_in = runtime.pending_v.take().expect("ltx2 fb v_in");
+        let a_in = runtime.pending_a.take().expect("ltx2 fb a_in");
+        while runtime.res_v.len() <= pass {
+            runtime.res_v.push(None);
+            runtime.res_a.push(None);
+        }
+        runtime.res_v[pass] = Some(xv.sub(&v_in)?);
+        runtime.res_a[pass] = Some(xa.sub(&a_in)?);
+        runtime.state.note_computed(pass);
+        Ok(())
     }
 
     pub fn config(&self) -> &Ltx2TransformerConfig {
@@ -639,6 +898,16 @@ impl Ltx2Transformer {
 
         let mut xv = self.proj_in.forward(video)?;
         let mut xa = self.audio_proj_in.forward(audio)?;
+        let pruned = self.gather_prune(&xv)?;
+        let pruned_ropes = if let Some((idx, kept)) = &pruned {
+            xv = kept.clone();
+            Some(self.index_video_ropes(ropes, idx)?)
+        } else {
+            None
+        };
+        let ropes = pruned_ropes.as_ref().unwrap_or(ropes);
+        let fb = self.begin_fb_pass(&xv, &xa)?;
+        let mut skipped = false;
         for (i, block) in self.blocks.iter().enumerate() {
             let tap = Tap {
                 probe: probe.as_mut(),
@@ -661,6 +930,19 @@ impl Ltx2Transformer {
             if let Some(obs) = observer.as_mut() {
                 obs(i, &xv, &xa)?;
             }
+            if fb && i == 0 && self.decide_fb_after_block0(&xv, &xa)? {
+                skipped = true;
+                (xv, xa) = self.reuse_fb_residual()?;
+                break;
+            }
+        }
+        if fb && !skipped {
+            self.finish_fb(&xv, &xa)?;
+        }
+        if let Some((idx, _)) = pruned {
+            xv = self.scatter_prune(xv, &idx)?;
+        } else {
+            self.store_prune_full(&xv)?;
         }
         let mut head = |stream: &str,
                         x: &CudaTensor,

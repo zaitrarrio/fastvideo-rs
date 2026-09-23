@@ -4,8 +4,9 @@
 //! Video self-attention only. Layers 0 and 1 stay dense. Later layers use
 //! the PISA score-route kernel at sparsity 0.9 and block size 64. Stage-2
 //! steps 1 and 2 are the midpoint token-prune steps (keep half, by feature
-//! norm). The stage-1 SCSP preset name is recorded here; its skip mask is
-//! not applied. LoRA strengths are recorded and not fused.
+//! norm). The stage-1 SCSP preset `8of15_last_29calls` skips steps 16-28
+//! (`techniques/presets.py` `_SCSP_SKIP_STEPS`). LoRA strengths are
+//! recorded and not fused.
 
 /// Video blocks that stay dense on every stage-2 forward.
 pub const DENSE_LAYERS: [usize; 2] = [0, 1];
@@ -28,10 +29,14 @@ pub const PRUNE_RATIO: f64 = 0.5;
 /// Refine steps that prune. Step 0 does not.
 pub const PRUNE_STEPS: [usize; 2] = [1, 2];
 
-/// Named stage-1 cache preset. The skip schedule itself is not in this repo.
+/// Named stage-1 cache preset. Skip mask is `_SCSP_SKIP_STEPS = "16-28"`.
 pub const STAGE1_CACHE_PRESET: &str = "8of15_last_29calls";
 
-/// `FASTVIDEO_LTX2_STAGE1_CACHE=1` (or the preset name) logs [`STAGE1_CACHE_GAP`].
+/// Inclusive skip range from `techniques/presets.py` for this preset.
+pub const STAGE1_CACHE_SKIP_START: usize = 16;
+pub const STAGE1_CACHE_SKIP_END: usize = 28;
+
+/// `FASTVIDEO_LTX2_STAGE1_CACHE=1` (or the preset name) applies [`stage1_skips_step`].
 pub fn stage1_cache_requested(value: Option<&str>) -> bool {
     match value.map(str::trim) {
         Some("1") => true,
@@ -40,11 +45,15 @@ pub fn stage1_cache_requested(value: Option<&str>) -> bool {
     }
 }
 
-pub const STAGE1_CACHE_GAP: &str =
-    "ltx2 pisa: stage-1 SCSP preset 8of15_last_29calls stays unported \
-(the step or call mask is not in the sol-engine snapshots)";
+pub const STAGE1_CACHE_APPLIED: &str =
+    "ltx2 pisa: stage-1 SCSP preset 8of15_last_29calls skips steps 16-28 \
+(techniques/presets.py _SCSP_SKIP_STEPS; whole-step velocity reuse, delta_scale 0)";
 
-/// `FASTVIDEO_LTX2_MIDPOINT_PRUNE=1` (or `feat_norm`) logs [`PRUNE_GAP`].
+pub fn stage1_skips_step(step: usize) -> bool {
+    (STAGE1_CACHE_SKIP_START..=STAGE1_CACHE_SKIP_END).contains(&step)
+}
+
+/// `FASTVIDEO_LTX2_MIDPOINT_PRUNE=1` (or `feat_norm`) prunes stage-2 video tokens.
 pub fn midpoint_prune_requested(value: Option<&str>) -> bool {
     match value.map(str::trim) {
         Some("1") => true,
@@ -53,8 +62,55 @@ pub fn midpoint_prune_requested(value: Option<&str>) -> bool {
     }
 }
 
-pub const PRUNE_GAP: &str = "ltx2 pisa: midpoint token prune stays unported \
-(feat_norm keep/scatter is unpublished: which tokens, which layers, how dropped tokens write back)";
+pub const PRUNE_APPLIED: &str = "ltx2 pisa: midpoint feat_norm prune ratio 0.5 steps 1,2 \
+(video tokens only, all 48 blocks, prev-hidden write-back)";
+
+/// Compensation for dropped tokens: previous step's full video hidden.
+pub const PRUNE_COMPENSATION: &str = "prev";
+
+/// Ascending kept-token indices. `tokens` is row-major `[seq, dim]`.
+///
+/// Score is batch-mean L2² (`hidden.pow(2).sum(-1).mean(0)`). Keep
+/// `round(seq * keep_ratio)` top rows, then sort the indices.
+pub fn feat_norm_keep_indices(
+    tokens: &[f32],
+    seq: usize,
+    dim: usize,
+    keep_ratio: f64,
+) -> Vec<usize> {
+    if seq == 0 || dim == 0 || tokens.len() < seq * dim {
+        return Vec::new();
+    }
+    let keep = ((seq as f64 * keep_ratio).round() as usize).clamp(1, seq);
+    if keep >= seq {
+        return (0..seq).collect();
+    }
+    let mut scored: Vec<(f32, usize)> = (0..seq)
+        .map(|i| {
+            let row = &tokens[i * dim..(i + 1) * dim];
+            let score: f32 = row.iter().map(|x| x * x).sum();
+            (score, i)
+        })
+        .collect();
+    scored.sort_by(|a, b| match b.0.partial_cmp(&a.0) {
+        Some(std::cmp::Ordering::Equal) | None => a.1.cmp(&b.1),
+        Some(order) => order,
+    });
+    let mut idx: Vec<usize> = scored[..keep].iter().map(|(_, i)| *i).collect();
+    idx.sort_unstable();
+    idx
+}
+
+/// Write `kept` rows into a clone of `prev` at `idx`. All slices are `[seq, dim]`.
+pub fn scatter_prev(prev: &[f32], seq: usize, dim: usize, idx: &[usize], kept: &[f32]) -> Vec<f32> {
+    let mut full = prev[..seq * dim].to_vec();
+    for (j, &i) in idx.iter().enumerate() {
+        let src = j * dim;
+        let dst = i * dim;
+        full[dst..dst + dim].copy_from_slice(&kept[src..src + dim]);
+    }
+    full
+}
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Ltx23PisaRoute {
@@ -136,7 +192,12 @@ mod tests {
         assert!(stage1_cache_requested(Some("1")));
         assert!(stage1_cache_requested(Some(STAGE1_CACHE_PRESET)));
         assert!(stage1_cache_requested(Some("scsp")));
-        assert!(STAGE1_CACHE_GAP.contains("mask"));
+        assert!(STAGE1_CACHE_APPLIED.contains("16-28"));
+        assert!(!stage1_skips_step(0));
+        assert!(!stage1_skips_step(15));
+        assert!(stage1_skips_step(16));
+        assert!(stage1_skips_step(28));
+        assert!(!stage1_skips_step(29));
     }
 
     #[test]
@@ -145,6 +206,20 @@ mod tests {
         assert!(!midpoint_prune_requested(Some("off")));
         assert!(midpoint_prune_requested(Some("1")));
         assert!(midpoint_prune_requested(Some("feat_norm")));
-        assert!(PRUNE_GAP.contains("keep/scatter"));
+        assert!(PRUNE_APPLIED.contains("prev-hidden"));
+        assert_eq!(PRUNE_COMPENSATION, "prev");
+    }
+
+    #[test]
+    fn feat_norm_keeps_the_largest_l2_rows() {
+        // 4 tokens × 2 dim. Scores: 1, 25, 4, 0. Keep half → 2 tokens (1 and 2).
+        let tokens = [1.0f32, 0.0, 3.0, 4.0, 2.0, 0.0, 0.0, 0.0];
+        assert_eq!(feat_norm_keep_indices(&tokens, 4, 2, 0.5), vec![1, 2]);
+        let prev = [10.0f32, 10.0, 20.0, 20.0, 30.0, 30.0, 40.0, 40.0];
+        let kept = [3.0f32, 4.0, 2.0, 0.0];
+        assert_eq!(
+            scatter_prev(&prev, 4, 2, &[1, 2], &kept),
+            vec![10.0, 10.0, 3.0, 4.0, 2.0, 0.0, 40.0, 40.0]
+        );
     }
 }

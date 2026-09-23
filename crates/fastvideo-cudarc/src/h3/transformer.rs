@@ -27,11 +27,14 @@
 //! trained recipe (VSA-H3 with the `to_gate_compress` branch) and the Spark/RTX
 //! Sol-Attn route plug in through [`AttnMode`].
 
+use std::sync::{Arc, Mutex};
+
 use fastvideo_models::h3::config::{
     H3TransformerConfig, MODALITY_NUM, TAG_AUDIO, TAG_TEXT, TAG_VIDEO,
 };
 use fastvideo_models::h3::packing::{H3PackedLayout, RowRange, KEYFRAME_NOISE_AUG};
 use fastvideo_models::h3::schedule::H3JointSchedule;
+use fastvideo_models::h3::sol::H3TeaCache;
 
 use crate::wan::nn::{scaled_dot_product_attention, Linear};
 use crate::wan::stats::phase;
@@ -1036,6 +1039,15 @@ pub struct H3Transformer {
     audio_proj_out: Linear,
     table: AdaLnTable,
     has_gate: bool,
+    /// Empty unless `FASTVIDEO_H3_SOL_CACHE=teacache`.
+    sol_tea: Arc<Mutex<Option<H3TeaRuntime>>>,
+}
+
+struct H3TeaRuntime {
+    state: H3TeaCache,
+    signal: Option<CudaTensor>,
+    residual: Option<CudaTensor>,
+    pending: Option<CudaTensor>,
 }
 
 impl H3Transformer {
@@ -1133,8 +1145,88 @@ impl H3Transformer {
             )?,
             table,
             has_gate: with_gate,
+            sol_tea: Default::default(),
             cfg,
         })
+    }
+
+    /// Install RTX TeaCache. The default path leaves this empty.
+    pub fn enable_sol_teacache(&self, num_forwards: usize) -> Result<()> {
+        let state = H3TeaCache::official(num_forwards).map_err(msg)?;
+        crate::wan::log::info(format_args!(
+            "{}",
+            fastvideo_models::h3::sol::TEACACHE_APPLIED
+        ));
+        *self.sol_tea.lock().expect("h3 sol tea") = Some(H3TeaRuntime {
+            state,
+            signal: None,
+            residual: None,
+            pending: None,
+        });
+        Ok(())
+    }
+
+    pub fn sol_teacache_enabled(&self) -> bool {
+        self.sol_tea.lock().expect("h3 sol tea").is_some()
+    }
+
+    /// `Some(true)` reuses the block residual. `Some(false)` runs the blocks.
+    /// `None` leaves the forward dense.
+    fn begin_sol_tea(
+        &self,
+        step: usize,
+        hidden: &CudaTensor,
+        layout: &H3PackedLayout,
+        eps: f32,
+    ) -> Result<Option<bool>> {
+        let mut slot = self.sol_tea.lock().expect("h3 sol tea");
+        let Some(runtime) = slot.as_mut() else {
+            return Ok(None);
+        };
+        let mods = BlockMods::upload(&self.table, step, 0, layout)?;
+        let probe = mods.modulate(
+            &hidden.rms_norm(&self.blocks[0].norm1, eps)?,
+            SCALE_MSA,
+            SHIFT_MSA,
+        )?;
+        let rel = if runtime.state.needs_signal(step) {
+            let previous = runtime.signal.as_ref().expect("h3 teacache signal");
+            let cur = probe.host_cow()?;
+            let prev = previous.host_cow()?;
+            fastvideo_models::h3::sol::relative_l1(&cur, &prev)
+        } else {
+            0.0
+        };
+        let decision = runtime.state.decide(step, rel);
+        runtime.signal = Some(probe);
+        if decision.compute {
+            runtime.pending = Some(hidden.clone());
+            Ok(Some(false))
+        } else {
+            crate::wan::log::debug(format_args!(
+                "h3 sol teacache reuse step {step} reason {}",
+                decision.reason
+            ));
+            Ok(Some(true))
+        }
+    }
+
+    fn add_sol_tea_residual(&self, hidden: CudaTensor) -> Result<CudaTensor> {
+        let residual = {
+            let slot = self.sol_tea.lock().expect("h3 sol tea");
+            let runtime = slot.as_ref().expect("h3 sol tea");
+            runtime.residual.clone().expect("h3 sol tea residual")
+        };
+        hidden.add(&residual)
+    }
+
+    fn finish_sol_tea(&self, after: &CudaTensor) -> Result<()> {
+        let mut slot = self.sol_tea.lock().expect("h3 sol tea");
+        let runtime = slot.as_mut().expect("h3 sol tea");
+        let before = runtime.pending.take().expect("h3 sol tea pending");
+        runtime.state.note_computed();
+        runtime.residual = Some(after.sub(&before)?);
+        Ok(())
     }
 
     pub fn config(&self) -> &H3TransformerConfig {
@@ -1259,37 +1351,45 @@ impl H3Transformer {
         let eps = cfg.norm_eps as f32;
 
         let mut x = x;
-        for (index, block) in self.blocks.iter().enumerate() {
-            let mods = BlockMods::upload(&self.table, step, index, l)?;
-            let n = phase("h3_1_norm_msa", || {
-                mods.modulate(&x.rms_norm(&block.norm1, eps)?, SCALE_MSA, SHIFT_MSA)
-            })?;
-            let layer_mode = match mode {
-                AttnMode::Sol(policy) => match policy.route(step, index).map_err(msg)? {
-                    fastvideo_models::h3::sol::H3SolRoute::Dense => AttnMode::Dense,
-                    fastvideo_models::h3::sol::H3SolRoute::Sol { tau } => {
-                        AttnMode::SolLayer { tau, policy }
-                    }
-                },
-                other => other,
-            };
-            let a = phase("h3_2_attn", || block.attn.forward(&n, rope, layer_mode))?;
-            x = phase("h3_3_residual_msa", || mods.gated_add(&x, &a, GATE_MSA))?;
-            drop(a);
-            let n = phase("h3_4_norm_ffn", || {
-                mods.modulate(&x.rms_norm(&block.norm2, eps)?, SCALE_MLP, SHIFT_MLP)
-            })?;
-            let f = phase("h3_5_ffn", || block.ff.forward(&n))?;
-            x = phase("h3_6_residual_ffn", || mods.gated_add(&x, &f, GATE_MLP))?;
-            drop(f);
-            if let Some(observe) = observer.as_mut() {
-                observe(&format!("block_{index}"), &x)?;
+        let tea = self.begin_sol_tea(step, &x, l, eps)?;
+        if tea == Some(true) {
+            x = self.add_sol_tea_residual(x)?;
+        } else {
+            for (index, block) in self.blocks.iter().enumerate() {
+                let mods = BlockMods::upload(&self.table, step, index, l)?;
+                let n = phase("h3_1_norm_msa", || {
+                    mods.modulate(&x.rms_norm(&block.norm1, eps)?, SCALE_MSA, SHIFT_MSA)
+                })?;
+                let layer_mode = match mode {
+                    AttnMode::Sol(policy) => match policy.route(step, index).map_err(msg)? {
+                        fastvideo_models::h3::sol::H3SolRoute::Dense => AttnMode::Dense,
+                        fastvideo_models::h3::sol::H3SolRoute::Sol { tau } => {
+                            AttnMode::SolLayer { tau, policy }
+                        }
+                    },
+                    other => other,
+                };
+                let a = phase("h3_2_attn", || block.attn.forward(&n, rope, layer_mode))?;
+                x = phase("h3_3_residual_msa", || mods.gated_add(&x, &a, GATE_MSA))?;
+                drop(a);
+                let n = phase("h3_4_norm_ffn", || {
+                    mods.modulate(&x.rms_norm(&block.norm2, eps)?, SCALE_MLP, SHIFT_MLP)
+                })?;
+                let f = phase("h3_5_ffn", || block.ff.forward(&n))?;
+                x = phase("h3_6_residual_ffn", || mods.gated_add(&x, &f, GATE_MLP))?;
+                drop(f);
+                if let Some(observe) = observer.as_mut() {
+                    observe(&format!("block_{index}"), &x)?;
+                }
+                crate::wan::log::info(format_args!(
+                    "h3 dit step {step}: block {}/{}",
+                    index + 1,
+                    self.blocks.len()
+                ));
             }
-            crate::wan::log::info(format_args!(
-                "h3 dit step {step}: block {}/{}",
-                index + 1,
-                self.blocks.len()
-            ));
+            if tea == Some(false) {
+                self.finish_sol_tea(&x)?;
+            }
         }
 
         // Both heads are defined on every row; only each modality's own rows are read.

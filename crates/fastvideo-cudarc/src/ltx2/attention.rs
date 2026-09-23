@@ -48,6 +48,29 @@ impl DeviceRope {
         })
     }
 
+    /// Keep `tokens` (ascending video-token indices) in the head-major table.
+    pub fn index_tokens(&self, tokens: &[usize]) -> Result<Self> {
+        let mut rows = Vec::with_capacity(self.heads * tokens.len());
+        for h in 0..self.heads {
+            for &t in tokens {
+                if t >= self.tokens {
+                    return Err(super::msg(format!(
+                        "ltx2 rope: token {t} is past {} video tokens",
+                        self.tokens
+                    )));
+                }
+                rows.push(h * self.tokens + t);
+            }
+        }
+        Ok(Self {
+            cos: self.cos.index_select_rows(&rows)?,
+            sin: self.sin.index_select_rows(&rows)?,
+            heads: self.heads,
+            tokens: tokens.len(),
+            head_dim: self.head_dim,
+        })
+    }
+
     /// Rotate `[1, H, S, D]`. Batch 1 only: with the head axis folded into the
     /// rows, a second batch element would need the table repeated.
     pub fn apply(&self, x: &CudaTensor) -> Result<CudaTensor> {

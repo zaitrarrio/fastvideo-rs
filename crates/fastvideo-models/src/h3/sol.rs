@@ -1,12 +1,13 @@
 //! MiniMax-H3 Sol-Attn and cache contracts from NVlabs/Sana `sol-engine`
-//! (`models/minimax_h3/Sol-H3` and `models/minimax_h3.toml`).
+//! (`models/minimax_h3/Sol-H3`, `models/minimax_h3.toml`, and
+//! `models/minimax_h3/RTX4090/teacache.py`).
 //!
 //! The one-GPU Sol-H3 recipe stays dense. This module records the Spark
 //! Stage-1 Sol-Attn route (`--ref-stage1-attn sol`), the RTX 4090/5090
-//! 50-step Sol-Attn route, and the RTX TeaCache knobs. Body layers on the
-//! Sol route use the shared Sol-Attn kernel (`thresh_type=diag`). The RTX
-//! TeaCache signal and reuse payload are unpublished, so those knobs stay
-//! a record.
+//! 50-step Sol-Attn route, and the RTX TeaCache controller. Body layers on
+//! the Sol route use the shared Sol-Attn kernel (`thresh_type=diag`).
+//! `FASTVIDEO_H3_SOL_CACHE=teacache` skips the block stack when the
+//! published residual controller says so.
 
 use super::packing::H3PackedLayout;
 
@@ -37,11 +38,16 @@ pub const RTX_FIRST_DENSE_STEPS: usize = 10;
 pub const RTX_FIRST_DENSE_LAYERS: usize = 2;
 pub const RTX_TAU: f64 = 1.0;
 
-/// `FASTVIDEO_H3_SOL_CACHE=teacache` (or `1`) logs [`TEACACHE_GAP`] and stays dense.
-pub const TEACACHE_GAP: &str = "h3 sol: RTX TeaCache stays unported \
-(threshold 0.10 retain 5 cooldown 1 are recorded; the similarity signal and \
-reuse payload are unpublished in the Spark README, sol-engine snapshots, and \
-this crate). H3 is guidance-distilled: one forward per step, no CFG pair";
+/// Identity Horner polynomial from `H3_TEACACHE_COEFFICIENTS` default `1.0,0.0`.
+pub const RTX_TEACACHE_COEFFICIENTS: [f64; 2] = [1.0, 0.0];
+
+/// Official MiniMax-H3 eval count: 50 sigma points drive 49 forwards.
+pub const RTX_TEACACHE_NUM_FORWARDS: usize = 49;
+
+/// `FASTVIDEO_H3_SOL_CACHE=teacache` (or `1`) runs the RTX residual TeaCache.
+pub const TEACACHE_APPLIED: &str = "h3 sol teacache: threshold 0.10 retain 5 \
+cooldown 1 (block-0 AdaLN-modulated RMS-norm probe, whole-stack residual, \
+one forward per step, no CFG pair)";
 
 /// Which Stage-1 Sol-Attn host route an env value selects.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -71,7 +77,7 @@ pub fn sol_attn_requested(value: Option<&str>) -> bool {
     !matches!(sol_attn_policy(value), H3SolAttnPolicy::Off)
 }
 
-/// `FASTVIDEO_H3_SOL_CACHE=teacache` (or `1`) asks for the unpublished RTX skips.
+/// `FASTVIDEO_H3_SOL_CACHE=teacache` (or `1`) turns the RTX residual skips on.
 pub fn teacache_requested(value: Option<&str>) -> bool {
     match value.map(str::trim) {
         Some("1") => true,
@@ -153,6 +159,147 @@ pub fn attn_spans(layout: &H3PackedLayout) -> (Vec<(usize, usize)>, Vec<(usize, 
     (spans.clone(), spans)
 }
 
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct H3TeaDecision {
+    pub compute: bool,
+    pub reason: &'static str,
+    pub relative_l1: Option<f64>,
+    pub indicator: Option<f64>,
+    pub accumulator: f64,
+}
+
+/// RTX TeaCache from `models/minimax_h3/RTX4090/teacache.py`.
+///
+/// The signal is block 0's AdaLN-modulated RMS-norm hidden. The reuse
+/// payload is the residual across the 50-block stack (`hidden - input`).
+/// H3 is guidance-distilled: one accumulator, no CFG pair, no Wan
+/// timestep-projection.
+#[derive(Debug, Clone)]
+pub struct H3TeaCache {
+    pub threshold: f64,
+    pub retain_steps: usize,
+    pub cooldown_steps: usize,
+    pub num_forwards: usize,
+    pub coefficients: Vec<f64>,
+    has_signal: bool,
+    has_residual: bool,
+    acc: f64,
+}
+
+impl H3TeaCache {
+    pub fn official(num_forwards: usize) -> Result<Self, String> {
+        Self::new(
+            RTX_TEACACHE_THRESHOLD,
+            RTX_TEACACHE_RETAIN_STEPS,
+            RTX_TEACACHE_COOLDOWN_STEPS,
+            num_forwards,
+            RTX_TEACACHE_COEFFICIENTS.to_vec(),
+        )
+    }
+
+    pub fn new(
+        threshold: f64,
+        retain_steps: usize,
+        cooldown_steps: usize,
+        num_forwards: usize,
+        coefficients: Vec<f64>,
+    ) -> Result<Self, String> {
+        if threshold <= 0.0 {
+            return Err("h3 teacache requires a positive threshold".into());
+        }
+        if coefficients.is_empty() {
+            return Err("h3 teacache requires at least one coefficient".into());
+        }
+        Ok(Self {
+            threshold,
+            retain_steps,
+            cooldown_steps,
+            num_forwards,
+            coefficients,
+            has_signal: false,
+            has_residual: false,
+            acc: 0.0,
+        })
+    }
+
+    pub fn needs_signal(&self, step: usize) -> bool {
+        self.force_reason(step).is_none()
+    }
+
+    /// `relative_l1` is sum |signal − previous| / sum |previous|.
+    /// Ignored on a forced step.
+    pub fn decide(&mut self, step: usize, relative_l1: f64) -> H3TeaDecision {
+        let (compute, reason, relative_l1, indicator) =
+            if let Some(reason) = self.force_reason(step) {
+                if reason == "warmup" || reason == "cooldown" {
+                    self.acc = 0.0;
+                }
+                (true, reason, None, None)
+            } else {
+                let indicator = poly(&self.coefficients, relative_l1);
+                self.acc += indicator;
+                let compute = self.acc >= self.threshold;
+                if compute {
+                    self.acc = 0.0;
+                }
+                (
+                    compute,
+                    if compute {
+                        "threshold"
+                    } else {
+                        "below_threshold"
+                    },
+                    Some(relative_l1),
+                    Some(indicator),
+                )
+            };
+        self.has_signal = true;
+        H3TeaDecision {
+            compute,
+            reason,
+            relative_l1,
+            indicator,
+            accumulator: self.acc,
+        }
+    }
+
+    pub fn note_computed(&mut self) {
+        self.acc = 0.0;
+        self.has_residual = true;
+    }
+
+    fn force_reason(&self, step: usize) -> Option<&'static str> {
+        if step < self.retain_steps {
+            Some("warmup")
+        } else if step >= self.num_forwards.saturating_sub(self.cooldown_steps) {
+            Some("cooldown")
+        } else if !self.has_signal || !self.has_residual {
+            Some("initialize")
+        } else {
+            None
+        }
+    }
+}
+
+/// Sum |current − previous| / sum |previous|. Matches RTX `teacache.py`.
+pub fn relative_l1(current: &[f32], previous: &[f32]) -> f64 {
+    let mut num = 0.0;
+    let mut den = 0.0;
+    for (a, b) in current.iter().zip(previous.iter()) {
+        num += (f64::from(*a) - f64::from(*b)).abs();
+        den += f64::from(*b).abs();
+    }
+    num / den.max(1.0e-8)
+}
+
+fn poly(coefficients: &[f64], x: f64) -> f64 {
+    let mut value = 0.0;
+    for coefficient in coefficients {
+        value = value * x + coefficient;
+    }
+    value
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -204,8 +351,37 @@ mod tests {
         assert!(!teacache_requested(Some("off")));
         assert!(teacache_requested(Some("1")));
         assert!(teacache_requested(Some("teacache")));
-        assert!(TEACACHE_GAP.contains("unpublished"));
-        assert!(TEACACHE_GAP.contains("no CFG pair"));
+        assert!(TEACACHE_APPLIED.contains("block-0 AdaLN"));
+        assert!(TEACACHE_APPLIED.contains("no CFG pair"));
+    }
+
+    #[test]
+    fn teacache_warms_then_skips_then_cools() {
+        let mut cache = H3TeaCache::official(10).unwrap();
+        for step in 0..5 {
+            let d = cache.decide(step, 9.0);
+            assert!(d.compute, "{step}");
+            assert_eq!(d.reason, "warmup");
+            cache.note_computed();
+        }
+        let skip = cache.decide(5, 0.01);
+        assert!(!skip.compute);
+        assert_eq!(skip.reason, "below_threshold");
+        let hit = cache.decide(6, 0.10);
+        assert!(hit.compute);
+        assert_eq!(hit.reason, "threshold");
+        cache.note_computed();
+        let tail = cache.decide(9, 0.0);
+        assert!(tail.compute);
+        assert_eq!(tail.reason, "cooldown");
+    }
+
+    #[test]
+    fn teacache_relative_l1_is_sum_over_sum() {
+        let prev = [2.0f32, 0.0];
+        let cur = [4.0f32, 2.0];
+        // sum |d| = 4, sum |prev| = 2
+        assert!((relative_l1(&cur, &prev) - 2.0).abs() < 1e-12);
     }
 
     #[test]

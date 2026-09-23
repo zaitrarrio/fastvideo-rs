@@ -569,11 +569,9 @@ impl H3Pipeline {
             }
             fastvideo_models::h3::sol::H3SolAttnPolicy::Off => {}
         }
-        if fastvideo_models::h3::sol::teacache_requested(
+        let teacache = fastvideo_models::h3::sol::teacache_requested(
             std::env::var("FASTVIDEO_H3_SOL_CACHE").ok().as_deref(),
-        ) {
-            crate::wan::log::info(format_args!("{}", fastvideo_models::h3::sol::TEACACHE_GAP));
-        }
+        );
         let mut lora = if options.recipe.as_deref().is_some_and(is_sol_h3_recipe) {
             let spec = if options.ref2va {
                 SolH3AdapterSpec::ref2va()
@@ -621,6 +619,9 @@ impl H3Pipeline {
             options.adaln_cache.as_deref(),
             &mut lora,
         )?;
+        if teacache {
+            model.enable_sol_teacache(schedule.num_steps())?;
+        }
         if let Some(fuse) = lora.as_ref() {
             fuse.finish()?;
         }

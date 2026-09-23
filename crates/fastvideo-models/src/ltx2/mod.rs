@@ -20,13 +20,15 @@ pub use config::{
     Ltx2VocoderConfig,
 };
 pub use fbcache::{
-    requested as fbcache_requested, GAP as FBCACHE_GAP, THRESHOLD as FBCACHE_THRESHOLD,
+    requested as fbcache_requested, FbCache, FbDecision, APPLIED as FBCACHE_APPLIED,
+    THRESHOLD as FBCACHE_THRESHOLD,
 };
 pub use hq::{requested as hq_requested, STAGE1_STEPS as HQ_STAGE1_STEPS};
 pub use pisa::{
-    midpoint_prune_requested, prunes_step, route as pisa_route, stage1_cache_requested,
-    Ltx23PisaRoute, BLOCK_SIZE as PISA_BLOCK_SIZE, PRUNE_GAP, SPARSITY as PISA_SPARSITY,
-    STAGE1_CACHE_GAP, STAGE1_CACHE_PRESET,
+    feat_norm_keep_indices, midpoint_prune_requested, prunes_step, route as pisa_route,
+    scatter_prev, stage1_cache_requested, stage1_skips_step, Ltx23PisaRoute,
+    BLOCK_SIZE as PISA_BLOCK_SIZE, PRUNE_APPLIED, SPARSITY as PISA_SPARSITY, STAGE1_CACHE_APPLIED,
+    STAGE1_CACHE_PRESET,
 };
 pub use rope::{Ltx2RopeTables, ScalarDivision, SplitRope};
 pub use schedule::{AncestralOpts, Ltx2Schedule};

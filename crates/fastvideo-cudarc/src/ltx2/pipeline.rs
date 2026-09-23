@@ -295,15 +295,23 @@ pub fn denoise(
 ) -> Result<(CudaTensor, CudaTensor)> {
     for i in 0..schedule.num_steps() {
         let timer = Instant::now();
-        let (v_video, v_audio) = model.forward_sol(
-            &video,
-            &audio,
-            text,
-            schedule.timestep_f32(i),
-            ropes,
-            None,
-            stage2.at(i),
-        )?;
+        model.begin_fbcache_step(i);
+        model.arm_prune_step(i);
+        let (v_video, v_audio) = if let Some(cached) = model.stage1_reuse(i) {
+            cached
+        } else {
+            let out = model.forward_sol(
+                &video,
+                &audio,
+                text,
+                schedule.timestep_f32(i),
+                ropes,
+                None,
+                stage2.at(i),
+            )?;
+            model.stage1_store(&out.0, &out.1);
+            out
+        };
         let dt = schedule.dt(i) as f32;
         video = CudaTensor::lincomb(&[(1.0, &video), (dt, &v_video)])?;
         audio = CudaTensor::lincomb(&[(1.0, &audio), (dt, &v_audio)])?;
@@ -341,11 +349,18 @@ pub fn denoise_cfg(
         let timer = Instant::now();
         let t = schedule.timestep_f32(i);
         let route = stage2.at(i);
-        let (vc, ac) = model.forward_sol(&video, &audio, text_cond, t, ropes, None, route)?;
-        let (vu, au) = model.forward_sol(&video, &audio, text_uncond, t, ropes, None, route)?;
-        // scale * cond + (1 - scale) * uncond
-        let v_video = CudaTensor::lincomb(&[(video_scale, &vc), (1.0 - video_scale, &vu)])?;
-        let v_audio = CudaTensor::lincomb(&[(audio_scale, &ac), (1.0 - audio_scale, &au)])?;
+        model.begin_fbcache_step(i);
+        model.arm_prune_step(i);
+        let (v_video, v_audio) = if let Some(cached) = model.stage1_reuse(i) {
+            cached
+        } else {
+            let (vc, ac) = model.forward_sol(&video, &audio, text_cond, t, ropes, None, route)?;
+            let (vu, au) = model.forward_sol(&video, &audio, text_uncond, t, ropes, None, route)?;
+            let v_video = CudaTensor::lincomb(&[(video_scale, &vc), (1.0 - video_scale, &vu)])?;
+            let v_audio = CudaTensor::lincomb(&[(audio_scale, &ac), (1.0 - audio_scale, &au)])?;
+            model.stage1_store(&v_video, &v_audio);
+            (v_video, v_audio)
+        };
         let dt = schedule.dt(i) as f32;
         video = CudaTensor::lincomb(&[(1.0, &video), (dt, &v_video)])?;
         audio = CudaTensor::lincomb(&[(1.0, &audio), (dt, &v_audio)])?;
@@ -430,15 +445,23 @@ pub fn denoise_ancestral(
         let timer = Instant::now();
         let sigma = schedule.sigmas[i];
         let sigma_next = schedule.sigmas[i + 1];
-        let (v_video, v_audio) = model.forward_sol(
-            &video,
-            &audio,
-            text,
-            schedule.timestep_f32(i),
-            ropes,
-            None,
-            stage2.at(i),
-        )?;
+        model.begin_fbcache_step(i);
+        model.arm_prune_step(i);
+        let (v_video, v_audio) = if let Some(cached) = model.stage1_reuse(i) {
+            cached
+        } else {
+            let out = model.forward_sol(
+                &video,
+                &audio,
+                text,
+                schedule.timestep_f32(i),
+                ropes,
+                None,
+                stage2.at(i),
+            )?;
+            model.stage1_store(&out.0, &out.1);
+            out
+        };
         video = apply_ancestral(&video, &v_video, sigma, sigma_next, opts, &mut rng)?;
         audio = apply_ancestral(&audio, &v_audio, sigma, sigma_next, opts, &mut rng)?;
         sync()?;
@@ -1094,26 +1117,6 @@ impl Ltx2Pipeline {
         observer: Option<StepObserver<'_>>,
     ) -> Result<Ltx2Output> {
         req.validate()?;
-        if fastvideo_models::ltx2::fbcache::requested(
-            std::env::var("FASTVIDEO_LTX2_FBCACHE").ok().as_deref(),
-        ) {
-            crate::wan::log::info(format_args!("{}", fastvideo_models::ltx2::fbcache::GAP));
-        }
-        if fastvideo_models::ltx2::pisa::stage1_cache_requested(
-            std::env::var("FASTVIDEO_LTX2_STAGE1_CACHE").ok().as_deref(),
-        ) {
-            crate::wan::log::info(format_args!(
-                "{}",
-                fastvideo_models::ltx2::pisa::STAGE1_CACHE_GAP
-            ));
-        }
-        if fastvideo_models::ltx2::pisa::midpoint_prune_requested(
-            std::env::var("FASTVIDEO_LTX2_MIDPOINT_PRUNE")
-                .ok()
-                .as_deref(),
-        ) {
-            crate::wan::log::info(format_args!("{}", fastvideo_models::ltx2::pisa::PRUNE_GAP));
-        }
         let cfg = self.cfg.clone();
         if fastvideo_models::ltx2::hq::requested(std::env::var("FASTVIDEO_LTX2_HQ").ok().as_deref())
             || (req.two_stage
@@ -1183,6 +1186,25 @@ impl Ltx2Pipeline {
 
         let timer = Instant::now();
         self.ensure_dit()?;
+        if let Some(model) = self.model.as_ref() {
+            if fastvideo_models::ltx2::fbcache::requested(
+                std::env::var("FASTVIDEO_LTX2_FBCACHE").ok().as_deref(),
+            ) {
+                model.enable_fbcache();
+            }
+            if fastvideo_models::ltx2::pisa::stage1_cache_requested(
+                std::env::var("FASTVIDEO_LTX2_STAGE1_CACHE").ok().as_deref(),
+            ) {
+                model.enable_stage1_cache();
+            }
+            if fastvideo_models::ltx2::pisa::midpoint_prune_requested(
+                std::env::var("FASTVIDEO_LTX2_MIDPOINT_PRUNE")
+                    .ok()
+                    .as_deref(),
+            ) {
+                model.enable_midpoint_prune();
+            }
+        }
         let text = {
             let model = self.model.as_ref().expect("ensure_dit");
             model.project_text(&contexts.video, &contexts.audio)?
@@ -1283,6 +1305,9 @@ impl Ltx2Pipeline {
             }
         };
         timings.stage1_s = timer.elapsed().as_secs_f64();
+        if let Some(model) = self.model.as_ref() {
+            model.disarm_fbcache();
+        }
         drop(ropes);
 
         let decode_grid = if req.two_stage {
@@ -1307,8 +1332,11 @@ impl Ltx2Pipeline {
             }
             if req.pisa_stage2 {
                 crate::wan::log::info(format_args!(
-                    "ltx2 pisa stage-2: layers 0-1 dense, layers 2-47 pisa kernel sparsity 0.9 block 64 score-route first-order remainder, prune steps 1,2 ratio 0.5 not applied, lora 0.25/0.5 not fused, stage-1 cache preset 8of15_last_29calls not applied"
+                    "ltx2 pisa stage-2: layers 0-1 dense, layers 2-47 pisa kernel sparsity 0.9 block 64 score-route first-order remainder, feat_norm prune steps 1,2 ratio 0.5 when FASTVIDEO_LTX2_MIDPOINT_PRUNE, lora 0.25/0.5 not fused, stage-1 SCSP 16-28 when FASTVIDEO_LTX2_STAGE1_CACHE"
                 ));
+            }
+            if let Some(model) = self.model.as_ref() {
+                model.set_prune_active(true);
             }
             let schedule2 =
                 Ltx2Schedule::distilled_stage_2_steps(req.stage2_steps()).map_err(err)?;

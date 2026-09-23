@@ -14,7 +14,9 @@ pub const OFFICIAL_GUIDANCE: f32 = 3.0;
 pub const OFFICIAL_SHIFT: f64 = 3.0;
 pub const OFFICIAL_FPS: u32 = 24;
 
-/// Official 1080p refiner. Recorded; this crate has no LingBot upsampler.
+/// Official 1080p refiner. Recorded; `crates/fastvideo-cudarc/src/lingbot`
+/// has no upsampler or resize path (`pipeline.rs`, `transformer.rs`,
+/// `text.rs`, `mod.rs`).
 pub const REFINER_WIDTH: usize = 1920;
 pub const REFINER_HEIGHT: usize = 1088;
 pub const REFINER_FRAMES: usize = 121;
