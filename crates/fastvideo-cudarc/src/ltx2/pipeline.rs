@@ -1065,6 +1065,10 @@ pub struct Ltx2Pipeline {
     dit: PathBuf,
     weights: PathBuf,
     model: Option<Ltx2Transformer>,
+    /// Distilled LoRA file, when one is next to the weights or `FASTVIDEO_LTX2_LORA` points at it.
+    lora: Option<PathBuf>,
+    /// Strength the resident DiT was fused at. `Some(0.0)` is the unfused base.
+    loaded_strength: Option<f32>,
     decoders: Decoders,
     text: TextEncoder,
     /// Seconds [`Self::load`] took.
@@ -1074,38 +1078,106 @@ pub struct Ltx2Pipeline {
 impl Ltx2Pipeline {
     pub fn load(paths: &Ltx2Paths, cfg: &Ltx2Config, options: &PipelineOptions) -> Result<Self> {
         let timer = Instant::now();
-        let map = open_distilled(&paths.dit, "transformer")?;
-        let model = Ltx2Transformer::load(
-            &map,
-            &Keys::transformer(Keys::detect(&map)),
-            &cfg.transformer,
-        )?;
+        let lora = super::lora::resolve(&paths.weights, &paths.dit, cfg.version)?;
+        let model = if lora.is_none() {
+            let map = open_distilled(&paths.dit, "transformer")?;
+            Some(Ltx2Transformer::load(
+                &map,
+                &Keys::transformer(Keys::detect(&map)),
+                &cfg.transformer,
+            )?)
+        } else {
+            None
+        };
         let decoders = Decoders::load(&paths.weights, cfg)?;
         sync()?;
+        let loaded_strength = model.as_ref().map(|_| 0.0);
         Ok(Self {
             cfg: cfg.clone(),
             dit: paths.dit.clone(),
             weights: paths.weights.clone(),
-            model: Some(model),
+            model,
+            lora,
+            loaded_strength,
             decoders,
             text: TextEncoder::new(paths, cfg, options),
             load_s: timer.elapsed().as_secs_f64(),
         })
     }
 
-    fn ensure_dit(&mut self) -> Result<&Ltx2Transformer> {
-        if self.model.is_none() {
-            crate::wan::log::info(format_args!("ltx2: reloading DiT after DiffVAE decode"));
-            let map = open_distilled(&self.dit, "transformer")?;
-            let model = Ltx2Transformer::load(
-                &map,
-                &Keys::transformer(Keys::detect(&map)),
-                &self.cfg.transformer,
-            )?;
-            sync()?;
-            self.model = Some(model);
+    /// Resident DiT fused at `strength`. `0` is the base checkpoint.
+    fn dit_for(&mut self, strength: f32) -> Result<&Ltx2Transformer> {
+        let strength = if self.lora.is_some() { strength } else { 0.0 };
+        if self.model.is_some() && self.loaded_strength == Some(strength) {
+            return Ok(self.model.as_ref().expect("resident dit"));
         }
+        if self.model.is_some() {
+            crate::wan::log::info(format_args!(
+                "ltx2: reloading DiT at lora strength {strength}"
+            ));
+        }
+        let map = open_distilled(&self.dit, "transformer")?;
+        let keys = Keys::transformer(Keys::detect(&map));
+        let model = if let (Some(path), true) = (self.lora.clone(), strength != 0.0) {
+            let guard = super::lora::install(&path, strength)?;
+            let model = Ltx2Transformer::load(&map, &keys, &self.cfg.transformer)?;
+            let hits = super::lora::hits();
+            drop(guard);
+            if hits == 0 {
+                return Err(err(format!(
+                    "ltx2 lora: no base weight matched {}",
+                    path.display()
+                )));
+            }
+            crate::wan::log::info(format_args!(
+                "ltx2 lora: fused {hits} weights at strength {strength} ({})",
+                path.display()
+            ));
+            model
+        } else {
+            Ltx2Transformer::load(&map, &keys, &self.cfg.transformer)?
+        };
+        sync()?;
+        self.loaded_strength = Some(strength);
+        self.model = Some(model);
         Ok(self.model.as_ref().expect("just loaded"))
+    }
+
+    fn lora_note(&self, two_stage: bool) -> String {
+        let Some(path) = &self.lora else {
+            return "distilled lora not beside weights".into();
+        };
+        let Some((s1, s2)) = fastvideo_models::ltx2::lora::stage_strengths(self.cfg.version) else {
+            return format!("lora {}", path.display());
+        };
+        if two_stage {
+            format!("lora {s1}/{s2} {}", path.display())
+        } else {
+            format!("lora off for single stage {}", path.display())
+        }
+    }
+
+    fn arm_requested(&self) {
+        let Some(model) = self.model.as_ref() else {
+            return;
+        };
+        if fastvideo_models::ltx2::fbcache::requested(
+            std::env::var("FASTVIDEO_LTX2_FBCACHE").ok().as_deref(),
+        ) {
+            model.enable_fbcache();
+        }
+        if fastvideo_models::ltx2::pisa::stage1_cache_requested(
+            std::env::var("FASTVIDEO_LTX2_STAGE1_CACHE").ok().as_deref(),
+        ) {
+            model.enable_stage1_cache();
+        }
+        if fastvideo_models::ltx2::pisa::midpoint_prune_requested(
+            std::env::var("FASTVIDEO_LTX2_MIDPOINT_PRUNE")
+                .ok()
+                .as_deref(),
+        ) {
+            model.enable_midpoint_prune();
+        }
     }
 
     /// One clip. `use_text_cache = false` bypasses the conditioning cache for
@@ -1124,13 +1196,14 @@ impl Ltx2Pipeline {
                 && (req.guidance_scale - fastvideo_models::ltx2::hq::GUIDANCE_SCALE).abs() < 1e-6)
         {
             crate::wan::log::info(format_args!(
-                "ltx2 hq: stage-1 {} steps, stage-2 sigmas {:?}, guidance {}, {}x{} {}f (lora 0.25/0.5 not fused)",
+                "ltx2 hq: stage-1 {} steps, stage-2 sigmas {:?}, guidance {}, {}x{} {}f ({})",
                 req.stage1_steps(),
                 fastvideo_models::ltx2::hq::STAGE2_SIGMAS,
                 req.guidance_scale,
                 req.width,
                 req.height,
                 req.num_frames,
+                self.lora_note(req.two_stage),
             ));
         }
         if req.two_stage {
@@ -1184,40 +1257,27 @@ impl Ltx2Pipeline {
             None
         };
 
+        let strengths =
+            fastvideo_models::ltx2::lora::stage_strengths(cfg.version).unwrap_or((0.0, 0.0));
+        let s1 = if req.two_stage { strengths.0 } else { 0.0 };
+        let s2 = if req.two_stage { strengths.1 } else { 0.0 };
         let timer = Instant::now();
-        self.ensure_dit()?;
-        if let Some(model) = self.model.as_ref() {
-            if fastvideo_models::ltx2::fbcache::requested(
-                std::env::var("FASTVIDEO_LTX2_FBCACHE").ok().as_deref(),
-            ) {
-                model.enable_fbcache();
-            }
-            if fastvideo_models::ltx2::pisa::stage1_cache_requested(
-                std::env::var("FASTVIDEO_LTX2_STAGE1_CACHE").ok().as_deref(),
-            ) {
-                model.enable_stage1_cache();
-            }
-            if fastvideo_models::ltx2::pisa::midpoint_prune_requested(
-                std::env::var("FASTVIDEO_LTX2_MIDPOINT_PRUNE")
-                    .ok()
-                    .as_deref(),
-            ) {
-                model.enable_midpoint_prune();
-            }
-        }
-        let text = {
-            let model = self.model.as_ref().expect("ensure_dit");
+        self.dit_for(s1)?;
+        self.arm_requested();
+        let mut text = {
+            let model = self.model.as_ref().expect("dit");
             model.project_text(&contexts.video, &contexts.audio)?
         };
-        let text_uncond = match &uncond_contexts {
+        let mut text_uncond = match &uncond_contexts {
             Some(c) => {
-                let model = self.model.as_ref().expect("ensure_dit");
+                let model = self.model.as_ref().expect("dit");
                 Some(model.project_text(&c.video, &c.audio)?)
             }
             None => None,
         };
-        drop(contexts);
-        drop(uncond_contexts);
+        let reproject = req.two_stage && s1 != s2;
+        let mut kept_contexts = reproject.then_some(contexts);
+        let mut kept_uncond = reproject.then_some(uncond_contexts);
         let ropes = Ropes::new(&cfg.transformer, grid1, audio_tokens, req.frame_rate as f32)?;
         let (mut video, audio) = initial_noise(&cfg, grid1, audio_tokens, req.seed)?;
         if let Some(ref image_path) = req.image_path {
@@ -1327,13 +1387,32 @@ impl Ltx2Pipeline {
 
             if req.sol_stage2 {
                 crate::wan::log::info(format_args!(
-                    "ltx2 sol stage-2: taus 1/1.25/1.5, layer 0 dense, layers 1-47 sol-attn kernel (thresh_type=diag), lora strength 0.8 not fused"
+                    "ltx2 sol stage-2: taus 1/1.25/1.5, layer 0 dense, layers 1-47 sol-attn kernel (thresh_type=diag), {}",
+                    self.lora_note(true)
                 ));
             }
             if req.pisa_stage2 {
                 crate::wan::log::info(format_args!(
-                    "ltx2 pisa stage-2: layers 0-1 dense, layers 2-47 pisa kernel sparsity 0.9 block 64 score-route first-order remainder, feat_norm prune steps 1,2 ratio 0.5 when FASTVIDEO_LTX2_MIDPOINT_PRUNE, lora 0.25/0.5 not fused, stage-1 SCSP 16-28 when FASTVIDEO_LTX2_STAGE1_CACHE"
+                    "ltx2 pisa stage-2: layers 0-1 dense, layers 2-47 pisa kernel sparsity 0.9 block 64 score-route first-order remainder, feat_norm prune steps 1,2 ratio 0.5 when FASTVIDEO_LTX2_MIDPOINT_PRUNE, {}, stage-1 SCSP 16-28 when FASTVIDEO_LTX2_STAGE1_CACHE",
+                    self.lora_note(true)
                 ));
+            }
+            self.dit_for(s2)?;
+            self.arm_requested();
+            if reproject {
+                let contexts = kept_contexts.take().expect("stage-2 text context");
+                let uncond_contexts = kept_uncond.take().expect("stage-2 uncond context");
+                text = {
+                    let model = self.model.as_ref().expect("dit");
+                    model.project_text(&contexts.video, &contexts.audio)?
+                };
+                text_uncond = match &uncond_contexts {
+                    Some(c) => {
+                        let model = self.model.as_ref().expect("dit");
+                        Some(model.project_text(&c.video, &c.audio)?)
+                    }
+                    None => None,
+                };
             }
             if let Some(model) = self.model.as_ref() {
                 model.set_prune_active(true);

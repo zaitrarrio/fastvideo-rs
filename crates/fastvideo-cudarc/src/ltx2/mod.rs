@@ -14,6 +14,7 @@ pub mod diffusion_decoder;
 pub mod i2v_encode;
 pub mod keys;
 pub mod latent_upsampler;
+pub mod lora;
 pub mod pipeline;
 pub mod slim;
 pub mod text;

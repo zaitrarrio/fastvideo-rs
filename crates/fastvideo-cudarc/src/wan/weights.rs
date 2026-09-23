@@ -274,8 +274,9 @@ pub fn cuda_tensor_shaped(map: &WeightMap, key: &str, expected: &[usize]) -> Res
         let values = generate(key, expected);
         return CudaTensor::from_vec(values, expected.to_vec());
     }
-    let (shape, values) = map.get_f32(key)?;
+    let (shape, mut values) = map.get_f32(key)?;
     expect_shape(key, &shape, expected)?;
+    crate::ltx2::lora::apply_f32(key, &mut values, &shape)?;
     CudaTensor::from_vec(values, shape)
 }
 

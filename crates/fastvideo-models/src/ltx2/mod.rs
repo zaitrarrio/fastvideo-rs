@@ -6,6 +6,7 @@
 pub mod config;
 pub mod fbcache;
 pub mod hq;
+pub mod lora;
 pub mod pisa;
 pub mod rope;
 pub mod schedule;

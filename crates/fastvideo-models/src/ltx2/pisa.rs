@@ -5,8 +5,8 @@
 //! the PISA score-route kernel at sparsity 0.9 and block size 64. Stage-2
 //! steps 1 and 2 are the midpoint token-prune steps (keep half, by feature
 //! norm). The stage-1 SCSP preset `8of15_last_29calls` skips steps 16-28
-//! (`techniques/presets.py` `_SCSP_SKIP_STEPS`). LoRA strengths are
-//! recorded and not fused.
+//! (`techniques/presets.py` `_SCSP_SKIP_STEPS`). LoRA strengths are fused
+//! by `ltx2::lora` when the distilled file is present.
 
 /// Video blocks that stay dense on every stage-2 forward.
 pub const DENSE_LAYERS: [usize; 2] = [0, 1];

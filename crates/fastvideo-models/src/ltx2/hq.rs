@@ -2,8 +2,8 @@
 //! on NVlabs/Sana `sol-engine`.
 //!
 //! Stage-1 is 15 dev-schedule steps. Stage-2 is the published 3-sigma refine.
-//! Guidance is 3.0. LoRA strengths stay recorded in [`super::pisa`] and are
-//! not fused (this crate has no LTX LoRA loader). Default-off: unset env /
+//! Guidance is 3.0. LoRA strengths stay in [`super::pisa`] and are fused by
+//! `ltx2::lora` when the distilled file is present. Default-off: unset env /
 //! false flags leave the existing 2.3 base and distilled paths alone.
 
 /// Stage-1 HQ step count (`official_config.steps`).

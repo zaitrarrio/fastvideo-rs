@@ -18,8 +18,8 @@ pub const LAYERS_PER_FORWARD: usize = 50;
 pub const STAGE1_FORWARDS: usize = 4;
 
 /// Sol-H3-Spark draft canvas (`models/minimax_h3/Sol-H3-Spark` README).
-/// Stage-2 LTX refine is a separate existing LTX invoke; this crate has no
-/// H3×2 upscaler or H3-to-LTX latent adapter.
+/// The H3×2 upscaler and H3-to-LTX adapter run when their checkpoints are
+/// configured. The joint 3-step LTX refiner still needs an audio VAE encode.
 pub const SPARK_DRAFT_WIDTH: usize = 672;
 pub const SPARK_DRAFT_HEIGHT: usize = 384;
 pub const SPARK_DRAFT_FRAMES: usize = 124;

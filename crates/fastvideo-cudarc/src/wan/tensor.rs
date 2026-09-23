@@ -1449,6 +1449,68 @@ impl CudaTensor {
         self.conv_nd(weight, bias, &pad, &stride)
     }
 
+    /// [`Self::conv3d`] with groups. Depthwise filters use `groups == channels`
+    /// and a weight of `[C, 1, k, 1, 1]`.
+    pub fn conv3d_groups(
+        &self,
+        weight: &CudaTensor,
+        bias: Option<&CudaTensor>,
+        pad: [usize; 3],
+        stride: [usize; 3],
+        groups: usize,
+    ) -> Result<CudaTensor> {
+        if groups == 1 {
+            return self.conv3d(weight, bias, pad, stride);
+        }
+        if groups == 0 || self.rank() != 5 || weight.rank() != 5 {
+            return Err(msg(format!(
+                "conv3d groups {groups}: x={:?} w={:?}",
+                self.shape, weight.shape
+            )));
+        }
+        let cin = self.shape[1];
+        let cout = weight.shape[0];
+        if cin % groups != 0 || cout % groups != 0 || weight.shape[1] != cin / groups {
+            return Err(msg(format!(
+                "conv3d groups {groups}: x={:?} w={:?}",
+                self.shape, weight.shape
+            )));
+        }
+        #[cfg(feature = "cuda")]
+        if let (Some(x), Some(w)) = (self.dev()?, weight.dev()?) {
+            let (y, y_shape) = super::conv::cudnn_conv_ext(
+                &x,
+                &self.shape,
+                &w,
+                &weight.shape,
+                &pad,
+                &stride,
+                &[1, 1, 1],
+                groups,
+            )
+            .map_err(|e| msg(e.to_string()))?;
+            let y = Self::from_dev_result(y, y_shape)?;
+            return match bias {
+                Some(b) => y.add_bias(b, 1),
+                None => Ok(y),
+            };
+        }
+        let cin_g = cin / groups;
+        let cout_g = cout / groups;
+        let mut parts = Vec::with_capacity(groups);
+        for g in 0..groups {
+            let xg = self.narrow(1, g * cin_g, cin_g)?;
+            let wg = weight.narrow(0, g * cout_g, cout_g)?;
+            parts.push(xg.conv3d(&wg, None, pad, stride)?);
+        }
+        let refs: Vec<&CudaTensor> = parts.iter().collect();
+        let y = Self::cat(&refs, 1)?;
+        match bias {
+            Some(b) => y.add_bias(b, 1),
+            None => Ok(y),
+        }
+    }
+
     fn conv_nd(
         &self,
         weight: &CudaTensor,

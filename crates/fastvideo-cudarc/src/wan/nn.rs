@@ -333,6 +333,8 @@ impl Linear {
                     [out_dim, in_dim]
                 )));
             }
+            let mut values = values;
+            crate::ltx2::lora::apply_bf16(&key, &mut values, &shape)?;
             if prefixes.len() == 1 {
                 host = values;
             } else {

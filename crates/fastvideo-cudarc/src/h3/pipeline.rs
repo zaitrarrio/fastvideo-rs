@@ -597,7 +597,7 @@ impl H3Pipeline {
                 .is_some_and(fastvideo_models::h3::lora::is_sol_h3_spark_recipe)
             {
                 crate::wan::log::info(format_args!(
-                    "h3 sol-h3-spark: draft {}x{} {}f 4-step; stage-2 LTX is a separate --two-stage --sol-stage2 invoke (H3×2 upscaler / H3-to-LTX adapter not in this crate)",
+                    "h3 sol-h3-spark: draft {}x{} {}f 4-step; H3×2 upscaler and H3-to-LTX adapter run when their checkpoints are set. Joint 3-step LTX refine needs an audio VAE encode",
                     fastvideo_models::h3::sol::SPARK_DRAFT_WIDTH,
                     fastvideo_models::h3::sol::SPARK_DRAFT_HEIGHT,
                     fastvideo_models::h3::sol::SPARK_DRAFT_FRAMES,
@@ -717,6 +717,35 @@ impl H3Pipeline {
 
     /// Generate one clip into `out_dir`: `frame-NNN.png`, `audio.wav`, and
     /// `output.mp4` with the audio muxed in.
+    fn spark_bridge(&self, latents: &CudaTensor) -> Result<()> {
+        if !self
+            .options
+            .recipe
+            .as_deref()
+            .is_some_and(fastvideo_models::h3::lora::is_sol_h3_spark_recipe)
+        {
+            return Ok(());
+        }
+        match super::spark::SparkBridge::resolve(&self.root).map_err(|e| msg(e.to_string()))? {
+            None => {
+                crate::wan::log::info(format_args!(
+                    "h3 sol-h3-spark: no {} or H3-to-LTX adapter beside {}; H3 decode continues",
+                    fastvideo_models::h3::spark::UPSCALER_FILE,
+                    self.root.display()
+                ));
+                Ok(())
+            }
+            Some(bridge) => {
+                let refined = bridge.forward(latents).map_err(|e| msg(e.to_string()))?;
+                crate::wan::log::info(format_args!(
+                    "h3 sol-h3-spark: refiner video latent {:?}. Joint 3-step LTX refine needs encode_audio, which this crate does not have. H3 decode continues.",
+                    refined.shape
+                ));
+                Ok(())
+            }
+        }
+    }
+
     pub fn generate(&self, request: &H3Request, out_dir: &Path) -> Result<H3Output> {
         let cfg = &self.cfg;
         let geometry =
@@ -959,6 +988,7 @@ impl H3Pipeline {
             geometry.token_grid,
             cfg.patch_size,
         )?;
+        self.spark_bridge(&latents)?;
         let timer = Instant::now();
         let mut writer =
             VideoWriter::spawn_with_audio(out_dir, H3_FPS as u32, request.mp4, Some(&wav))?;

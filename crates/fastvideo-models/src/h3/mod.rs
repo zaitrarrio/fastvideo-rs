@@ -11,5 +11,6 @@ pub mod presentation;
 pub mod reference;
 pub mod schedule;
 pub mod sol;
+pub mod spark;
 pub mod tokenizer;
 pub mod vision_preprocess;
