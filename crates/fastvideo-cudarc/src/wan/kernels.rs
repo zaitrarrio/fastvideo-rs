@@ -108,6 +108,17 @@ kernel_fns!(
     vsa_fused_attn,
     vsa_mask_pad,
     vsa_combine,
+    sol_tile_sum,
+    sol_diag_threshold,
+    sol_exact_lists,
+    sol_fine_partials,
+    sol_coarse_partials,
+    sol_lse_combine,
+    sol_lse_merge,
+    sol_normalize_partials,
+    sol_global_h_bar,
+    sol_pisa_first_order,
+    sol_mma_attn_partials,
 );
 
 /// NVRTC-compile the kernel module for `sm_major.sm_minor` without touching a

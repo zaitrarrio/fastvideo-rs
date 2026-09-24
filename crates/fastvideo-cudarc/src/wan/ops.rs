@@ -2633,3 +2633,498 @@ mod swiglu {
         }
     }
 }
+
+// ==== region: sol ====
+#[cfg(feature = "cuda")]
+fn sol_reduce_threads(dim: usize) -> u32 {
+    dim.max(1).next_power_of_two().clamp(32, 256) as u32
+}
+
+#[cfg(feature = "cuda")]
+fn sol_partials_cfg(tokens: usize, bh: usize, dim: usize) -> LaunchConfig {
+    let threads = sol_reduce_threads(dim);
+    LaunchConfig {
+        grid_dim: (tokens.max(1) as u32, bh.max(1) as u32, 1),
+        block_dim: (threads, 1, 1),
+        shared_mem_bytes: threads * std::mem::size_of::<f32>() as u32,
+    }
+}
+
+/// Sum-pool per sequential 64-token block. Pair with [`vsa_tile_mean_device`].
+#[cfg(feature = "cuda")]
+pub fn sol_tile_sum_device(
+    x: &CudaSlice<f32>,
+    plan: &VsaPlanDev,
+    bh: usize,
+    seq: usize,
+    dim: usize,
+) -> Result<CudaSlice<f32>> {
+    check("sol_tile_sum", x.len() == bh * seq * dim && dim > 0)?;
+    let dev = ctx()?;
+    let mut out = alloc(bh * plan.num_tiles * dim)?;
+    let cfg = LaunchConfig {
+        grid_dim: (plan.num_tiles as u32, bh as u32, 1),
+        block_dim: (dim.min(256) as u32, 1, 1),
+        shared_mem_bytes: 0,
+    };
+    let (seq_i, dim_i) = (seq as i64, dim as i32);
+    let (nt, te) = (plan.num_tiles as i32, plan.tile_elems as i32);
+    launch!(dev.stream, &dev.kernels.sol_tile_sum, cfg;
+        x, &plan.slot_src, &plan.block_sizes, &mut out, &seq_i, &dim_i, &nt, &te)
+    .map_err(err)?;
+    Ok(out)
+}
+
+#[cfg(feature = "cuda")]
+#[allow(clippy::too_many_arguments)]
+fn sol_alloc_partials(bh: usize, tokens: usize, dim: usize) -> Result<(
+    CudaSlice<f32>,
+    CudaSlice<f32>,
+    CudaSlice<f32>,
+)> {
+    Ok((
+        fill_device(bh * tokens, f32::NEG_INFINITY)?,
+        fill_device(bh * tokens, 0.0)?,
+        fill_device(bh * tokens * dim, 0.0)?,
+    ))
+}
+
+/// Full Sol-Attn on device: pool → coarse GEMM → threshold lists →
+/// fine/coarse partials → LSE merge.
+#[cfg(feature = "cuda")]
+#[allow(clippy::too_many_arguments)]
+pub fn sol_attn_device(
+    q: &CudaSlice<f32>,
+    k: &CudaSlice<f32>,
+    v: &CudaSlice<f32>,
+    batch: usize,
+    heads: usize,
+    tokens: usize,
+    dim: usize,
+    tau: f32,
+    scale: f32,
+    sinks: &[(Option<usize>, usize)],
+) -> Result<CudaSlice<f32>> {
+    use fastvideo_models::sol_attn::{sink_block_flags, LOG2_E};
+    let bh = batch * heads;
+    let n = tokens.div_ceil(fastvideo_models::sol_attn::BLOCK_SIZE);
+    let (slot_src, block_sizes) = super::sol_ops::sequential_plan(tokens);
+    let plan = vsa_plan_upload(&slot_src, &block_sizes, fastvideo_models::sol_attn::BLOCK_SIZE)?;
+    let kc = vsa_tile_mean_device(k, &plan, bh, tokens, dim)?;
+    let vc = sol_tile_sum_device(v, &plan, bh, tokens, dim)?;
+    let q_bar = vsa_tile_mean_device(q, &plan, bh, tokens, dim)?;
+    let log2_scale = scale * LOG2_E;
+    let mut scores = alloc(bh * tokens * n)?;
+    super::device::matmul_linear_wt_strided_batched_f32(
+        q, &kc, &mut scores, bh, tokens, dim, n, log2_scale,
+    )
+    .map_err(err)?;
+    let thresh = sol_diag_threshold_device(&q_bar, &kc, bh, n, dim, tau, scale)?;
+    let flags = sink_block_flags(tokens, sinks);
+    let lists = sol_exact_lists_device(&scores, &thresh, &flags, &plan, bh, tokens, n)?;
+    let (fine_m, fine_l, fine_acc) =
+        sol_fine_or_mma(q, k, v, &lists, &plan, bh, tokens, dim, n, n, log2_scale, 1)?;
+    let (coarse_m, coarse_l, coarse_acc) = sol_coarse_partials_device(
+        q, &kc, &vc, &lists, &plan, bh, tokens, dim, n, n, log2_scale, 1,
+    )?;
+    sol_lse_merge_device(
+        &coarse_m, &coarse_l, &coarse_acc, &fine_m, &fine_l, &fine_acc, bh * tokens, dim, 1,
+    )
+}
+
+/// PISA on device: top-k of pooled scores, remainder + first-order term.
+#[cfg(feature = "cuda")]
+#[allow(clippy::too_many_arguments)]
+pub fn pisa_attn_device(
+    q: &CudaSlice<f32>,
+    k: &CudaSlice<f32>,
+    v: &CudaSlice<f32>,
+    batch: usize,
+    heads: usize,
+    tokens: usize,
+    dim: usize,
+    sparsity: f64,
+    scale: f32,
+) -> Result<CudaSlice<f32>> {
+    use fastvideo_models::pisa_attn::keep_for_sparsity;
+    let bh = batch * heads;
+    let n = tokens.div_ceil(fastvideo_models::sol_attn::BLOCK_SIZE);
+    let keep = keep_for_sparsity(n, sparsity).max(1);
+    let (slot_src, block_sizes) = super::sol_ops::sequential_plan(tokens);
+    let plan = vsa_plan_upload(&slot_src, &block_sizes, fastvideo_models::sol_attn::BLOCK_SIZE)?;
+    let q_bar = vsa_tile_mean_device(q, &plan, bh, tokens, dim)?;
+    let kc = vsa_tile_mean_device(k, &plan, bh, tokens, dim)?;
+    let vc = sol_tile_sum_device(v, &plan, bh, tokens, dim)?;
+    let mut scores = alloc(bh * n * n)?;
+    super::device::matmul_linear_wt_strided_batched_f32(&q_bar, &kc, &mut scores, bh, n, dim, n, scale)
+        .map_err(err)?;
+    let lists = vsa_topk_device(&scores, bh * n, n, keep)?;
+    let (fine_m, fine_l, fine_acc) =
+        sol_fine_partials_device(q, k, v, &lists, bh, tokens, dim, n, keep, 64, 64, scale, 0)?;
+    let (coarse_m, coarse_l, coarse_acc) = sol_coarse_partials_device(
+        q, &kc, &vc, &lists, &plan, bh, tokens, dim, n, keep, scale, 0,
+    )?;
+    let (m, l, mut acc) = sol_lse_combine_device(
+        &coarse_m, &coarse_l, &coarse_acc, &fine_m, &fine_l, &fine_acc, bh * tokens, dim, 0,
+    )?;
+    let h = sol_global_h_bar_device(k, v, &kc, bh, tokens, dim, n, 64)?;
+    sol_pisa_first_order_device(q, &h, &coarse_m, &coarse_l, &m, &mut acc, bh, tokens, dim)?;
+    sol_normalize_partials_device(&l, &acc, bh * tokens, dim)
+}
+
+/// SLA sparse branch (top-k exact blocks, `blk_k == 64`).
+#[cfg(feature = "cuda")]
+#[allow(clippy::too_many_arguments)]
+pub fn sla_sparse_device(
+    q: &CudaSlice<f32>,
+    k_score: &CudaSlice<f32>,
+    k: &CudaSlice<f32>,
+    v: &CudaSlice<f32>,
+    batch: usize,
+    heads: usize,
+    tokens: usize,
+    dim: usize,
+    cfg: &super::sla::SlaConfig,
+) -> Result<CudaSlice<f32>> {
+    let bh = batch * heads;
+    let nq = tokens.div_ceil(cfg.blk_q);
+    let nk = tokens.div_ceil(cfg.blk_k);
+    let topk = ((cfg.topk_ratio * nk as f32).round() as usize).clamp(1, nk.max(1));
+    let scale = (dim as f32).sqrt().recip();
+    let (q_src, q_sz) = block_plan(tokens, cfg.blk_q);
+    let (k_src, k_sz) = block_plan(tokens, cfg.blk_k);
+    let q_plan = vsa_plan_upload(&q_src, &q_sz, cfg.blk_q)?;
+    let k_plan = vsa_plan_upload(&k_src, &k_sz, cfg.blk_k)?;
+    let qc = vsa_tile_mean_device(q, &q_plan, bh, tokens, dim)?;
+    let kc = vsa_tile_mean_device(k_score, &k_plan, bh, tokens, dim)?;
+    let mut scores = alloc(bh * nq * nk)?;
+    super::device::matmul_linear_wt_strided_batched_f32(&qc, &kc, &mut scores, bh, nq, dim, nk, 1.0)
+        .map_err(err)?;
+    let lists = vsa_topk_device(&scores, bh * nq, nk, topk)?;
+    let (m, l, acc) = sol_fine_partials_device(
+        q, k, v, &lists, bh, tokens, dim, nq, topk, cfg.blk_q as i32, cfg.blk_k as i32, scale, 0,
+    )?;
+    let _ = m;
+    sol_normalize_partials_device(&l, &acc, bh * tokens, dim)
+}
+
+#[cfg(feature = "cuda")]
+fn block_plan(tokens: usize, blk: usize) -> (Vec<i32>, Vec<u32>) {
+    let n = tokens.div_ceil(blk);
+    let mut slot_src = vec![-1i32; n * blk];
+    let mut sizes = vec![0u32; n];
+    for b in 0..n {
+        let start = b * blk;
+        let len = tokens.saturating_sub(start).min(blk);
+        sizes[b] = len as u32;
+        for j in 0..len {
+            slot_src[b * blk + j] = (start + j) as i32;
+        }
+    }
+    (slot_src, sizes)
+}
+
+#[cfg(feature = "cuda")]
+fn sol_diag_threshold_device(
+    q_bar: &CudaSlice<f32>,
+    kc: &CudaSlice<f32>,
+    bh: usize,
+    n: usize,
+    dim: usize,
+    tau: f32,
+    scale: f32,
+) -> Result<CudaSlice<f32>> {
+    let dev = ctx()?;
+    let mut out = alloc(bh * n)?;
+    let threads = 256u32;
+    let cfg = LaunchConfig {
+        grid_dim: (bh.max(1) as u32, 1, 1),
+        block_dim: (threads, 1, 1),
+        shared_mem_bytes: (2 * dim.max(1) * std::mem::size_of::<f32>()) as u32,
+    };
+    let (n_i, dim_i) = (n as i32, dim as i32);
+    launch!(dev.stream, &dev.kernels.sol_diag_threshold, cfg;
+        q_bar, kc, &mut out, &n_i, &dim_i, &tau, &scale)
+    .map_err(err)?;
+    Ok(out)
+}
+
+#[cfg(feature = "cuda")]
+fn sol_exact_lists_device(
+    scores: &CudaSlice<f32>,
+    thresh: &CudaSlice<f32>,
+    sink_flags: &[bool],
+    plan: &VsaPlanDev,
+    bh: usize,
+    tokens: usize,
+    n: usize,
+) -> Result<CudaSlice<u32>> {
+    let dev = ctx()?;
+    let flags: Vec<i32> = sink_flags.iter().map(|&b| i32::from(b)).collect();
+    let flags_d = dev.stream.memcpy_stod(&flags).map_err(err)?;
+    super::stats::record_h2d(flags.len());
+    let mut lists = unsafe { dev.stream.alloc::<u32>((bh * n * n).max(1)) }.map_err(err)?;
+    let cfg = LaunchConfig {
+        grid_dim: (n.max(1) as u32, bh.max(1) as u32, 1),
+        block_dim: (1, 1, 1),
+        shared_mem_bytes: 0,
+    };
+    let (tok_i, n_i) = (tokens as i32, n as i32);
+    launch!(dev.stream, &dev.kernels.sol_exact_lists, cfg;
+        scores, thresh, &flags_d, &plan.block_sizes, &mut lists, &tok_i, &n_i)
+    .map_err(err)?;
+    Ok(lists)
+}
+
+#[cfg(feature = "cuda")]
+#[allow(clippy::too_many_arguments)]
+fn sol_fine_or_mma(
+    q: &CudaSlice<f32>,
+    k: &CudaSlice<f32>,
+    v: &CudaSlice<f32>,
+    lists: &CudaSlice<u32>,
+    plan: &VsaPlanDev,
+    bh: usize,
+    tokens: usize,
+    dim: usize,
+    nq: usize,
+    max_keep: usize,
+    scale: f32,
+    log2_space: i32,
+) -> Result<(CudaSlice<f32>, CudaSlice<f32>, CudaSlice<f32>)> {
+    let dev = ctx()?;
+    if dim == 128 && plan.tile_elems == 64 && dev.sm_major >= 8 && log2_space == 1 {
+        if let Ok(p) = sol_mma_partials_device(q, k, v, lists, plan, bh, tokens, dim, max_keep, scale)
+        {
+            return Ok(p);
+        }
+    }
+    sol_fine_partials_device(
+        q, k, v, lists, bh, tokens, dim, nq, max_keep, 64, 64, scale, log2_space,
+    )
+}
+
+#[cfg(feature = "cuda")]
+#[allow(clippy::too_many_arguments)]
+fn sol_fine_partials_device(
+    q: &CudaSlice<f32>,
+    k: &CudaSlice<f32>,
+    v: &CudaSlice<f32>,
+    lists: &CudaSlice<u32>,
+    bh: usize,
+    tokens: usize,
+    dim: usize,
+    nq: usize,
+    max_keep: usize,
+    blk_q: i32,
+    blk_k: i32,
+    scale: f32,
+    log2_space: i32,
+) -> Result<(CudaSlice<f32>, CudaSlice<f32>, CudaSlice<f32>)> {
+    let dev = ctx()?;
+    let (mut m, mut l, mut acc) = sol_alloc_partials(bh, tokens, dim)?;
+    let cfg = sol_partials_cfg(tokens, bh, dim);
+    let (seq_i, dim_i, nq_i, mk_i) = (tokens as i64, dim as i32, nq as i32, max_keep as i32);
+    launch!(dev.stream, &dev.kernels.sol_fine_partials, cfg;
+        q, k, v, lists, &mut m, &mut l, &mut acc,
+        &seq_i, &dim_i, &nq_i, &mk_i, &blk_q, &blk_k, &scale, &log2_space)
+    .map_err(err)?;
+    Ok((m, l, acc))
+}
+
+#[cfg(feature = "cuda")]
+#[allow(clippy::too_many_arguments)]
+fn sol_coarse_partials_device(
+    q: &CudaSlice<f32>,
+    kc: &CudaSlice<f32>,
+    vc: &CudaSlice<f32>,
+    lists: &CudaSlice<u32>,
+    plan: &VsaPlanDev,
+    bh: usize,
+    tokens: usize,
+    dim: usize,
+    n: usize,
+    max_keep: usize,
+    scale: f32,
+    log2_space: i32,
+) -> Result<(CudaSlice<f32>, CudaSlice<f32>, CudaSlice<f32>)> {
+    let dev = ctx()?;
+    let (mut m, mut l, mut acc) = sol_alloc_partials(bh, tokens, dim)?;
+    let cfg = sol_partials_cfg(tokens, bh, dim);
+    let (seq_i, dim_i, n_i, mk_i) = (tokens as i64, dim as i32, n as i32, max_keep as i32);
+    launch!(dev.stream, &dev.kernels.sol_coarse_partials, cfg;
+        q, kc, vc, lists, &plan.block_sizes, &mut m, &mut l, &mut acc,
+        &seq_i, &dim_i, &n_i, &mk_i, &scale, &log2_space)
+    .map_err(err)?;
+    Ok((m, l, acc))
+}
+
+#[cfg(feature = "cuda")]
+#[allow(clippy::too_many_arguments)]
+fn sol_lse_merge_device(
+    m1: &CudaSlice<f32>,
+    l1: &CudaSlice<f32>,
+    acc1: &CudaSlice<f32>,
+    m2: &CudaSlice<f32>,
+    l2: &CudaSlice<f32>,
+    acc2: &CudaSlice<f32>,
+    rows: usize,
+    dim: usize,
+    log2_space: i32,
+) -> Result<CudaSlice<f32>> {
+    let dev = ctx()?;
+    let mut out = alloc(rows * dim)?;
+    let cfg = LaunchConfig {
+        grid_dim: (rows.max(1) as u32, 1, 1),
+        block_dim: (dim.max(1) as u32, 1, 1),
+        shared_mem_bytes: 0,
+    };
+    let (rows_i, dim_i) = (rows as i64, dim as i32);
+    launch!(dev.stream, &dev.kernels.sol_lse_merge, cfg;
+        m1, l1, acc1, m2, l2, acc2, &mut out, &rows_i, &dim_i, &log2_space)
+    .map_err(err)?;
+    Ok(out)
+}
+
+#[cfg(feature = "cuda")]
+#[allow(clippy::too_many_arguments)]
+fn sol_lse_combine_device(
+    m1: &CudaSlice<f32>,
+    l1: &CudaSlice<f32>,
+    acc1: &CudaSlice<f32>,
+    m2: &CudaSlice<f32>,
+    l2: &CudaSlice<f32>,
+    acc2: &CudaSlice<f32>,
+    rows: usize,
+    dim: usize,
+    log2_space: i32,
+) -> Result<(CudaSlice<f32>, CudaSlice<f32>, CudaSlice<f32>)> {
+    let dev = ctx()?;
+    let mut m = alloc(rows)?;
+    let mut l = alloc(rows)?;
+    let mut acc = alloc(rows * dim)?;
+    let cfg = LaunchConfig {
+        grid_dim: (rows.max(1) as u32, 1, 1),
+        block_dim: (dim.max(1) as u32, 1, 1),
+        shared_mem_bytes: 0,
+    };
+    let (rows_i, dim_i) = (rows as i64, dim as i32);
+    launch!(dev.stream, &dev.kernels.sol_lse_combine, cfg;
+        m1, l1, acc1, m2, l2, acc2, &mut m, &mut l, &mut acc, &rows_i, &dim_i, &log2_space)
+    .map_err(err)?;
+    Ok((m, l, acc))
+}
+
+#[cfg(feature = "cuda")]
+fn sol_normalize_partials_device(
+    l: &CudaSlice<f32>,
+    acc: &CudaSlice<f32>,
+    rows: usize,
+    dim: usize,
+) -> Result<CudaSlice<f32>> {
+    let dev = ctx()?;
+    let mut out = alloc(rows * dim)?;
+    let cfg = LaunchConfig {
+        grid_dim: (rows.max(1) as u32, 1, 1),
+        block_dim: (dim.max(1) as u32, 1, 1),
+        shared_mem_bytes: 0,
+    };
+    let (rows_i, dim_i) = (rows as i64, dim as i32);
+    launch!(dev.stream, &dev.kernels.sol_normalize_partials, cfg;
+        l, acc, &mut out, &rows_i, &dim_i)
+    .map_err(err)?;
+    Ok(out)
+}
+
+#[cfg(feature = "cuda")]
+fn sol_global_h_bar_device(
+    k: &CudaSlice<f32>,
+    v: &CudaSlice<f32>,
+    kc: &CudaSlice<f32>,
+    bh: usize,
+    tokens: usize,
+    dim: usize,
+    n: usize,
+    tile: i32,
+) -> Result<CudaSlice<f32>> {
+    let dev = ctx()?;
+    let cells = dim * dim;
+    let mut h = alloc(bh * cells)?;
+    const THREADS: u32 = 128;
+    let cfg = LaunchConfig {
+        grid_dim: (bh.max(1) as u32, cells.div_ceil(THREADS as usize) as u32, 1),
+        block_dim: (THREADS, 1, 1),
+        shared_mem_bytes: 0,
+    };
+    let (seq_i, dim_i, n_i) = (tokens as i64, dim as i32, n as i32);
+    launch!(dev.stream, &dev.kernels.sol_global_h_bar, cfg;
+        k, v, kc, &mut h, &seq_i, &dim_i, &n_i, &tile)
+    .map_err(err)?;
+    Ok(h)
+}
+
+#[cfg(feature = "cuda")]
+#[allow(clippy::too_many_arguments)]
+fn sol_pisa_first_order_device(
+    q: &CudaSlice<f32>,
+    h: &CudaSlice<f32>,
+    coarse_m: &CudaSlice<f32>,
+    coarse_l: &CudaSlice<f32>,
+    merged_m: &CudaSlice<f32>,
+    acc: &mut CudaSlice<f32>,
+    bh: usize,
+    tokens: usize,
+    dim: usize,
+) -> Result<()> {
+    let dev = ctx()?;
+    let cfg = LaunchConfig {
+        grid_dim: (tokens.max(1) as u32, bh.max(1) as u32, 1),
+        block_dim: (dim.max(1) as u32, 1, 1),
+        shared_mem_bytes: 0,
+    };
+    let (seq_i, dim_i) = (tokens as i64, dim as i32);
+    launch!(dev.stream, &dev.kernels.sol_pisa_first_order, cfg;
+        q, h, coarse_m, coarse_l, merged_m, acc, &seq_i, &dim_i)
+    .map_err(err)?;
+    Ok(())
+}
+
+#[cfg(feature = "cuda")]
+#[allow(clippy::too_many_arguments)]
+fn sol_mma_partials_device(
+    q: &CudaSlice<f32>,
+    k: &CudaSlice<f32>,
+    v: &CudaSlice<f32>,
+    lists: &CudaSlice<u32>,
+    plan: &VsaPlanDev,
+    bh: usize,
+    tokens: usize,
+    dim: usize,
+    topk: usize,
+    scale_log2: f32,
+) -> Result<(CudaSlice<f32>, CudaSlice<f32>, CudaSlice<f32>)> {
+    const THREADS: u32 = 128;
+    const TILE: usize = 64;
+    const DIM: usize = 128;
+    check("sol_mma geometry", dim == DIM && plan.tile_elems == TILE)?;
+    let dev = ctx()?;
+    check("sol_mma needs sm80+", dev.sm_major >= 8)?;
+    let qt = vsa_tile_qkv_device(q, plan, bh, tokens, dim)?;
+    let kt = vsa_tile_qkv_device(k, plan, bh, tokens, dim)?;
+    let vt = vsa_tile_qkv_device(v, plan, bh, tokens, dim)?;
+    let shared = (4 * TILE * DIM * 2) as u32;
+    opt_in_dynamic_shared(&dev.kernels.sol_mma_attn_partials, shared)?;
+    let (mut m, mut l, mut acc) = sol_alloc_partials(bh, tokens, dim)?;
+    let cfg = LaunchConfig {
+        grid_dim: (plan.num_tiles as u32, bh as u32, 1),
+        block_dim: (THREADS, 1, 1),
+        shared_mem_bytes: shared,
+    };
+    let (nt, tk, qb, seq_i) = (plan.num_tiles as i32, topk as i32, 0i32, tokens as i64);
+    launch!(dev.stream, &dev.kernels.sol_mma_attn_partials, cfg;
+        &qt, &kt, &vt, lists, &plan.block_sizes, &plan.slot_src,
+        &mut m, &mut l, &mut acc, &nt, &tk, &scale_log2, &qb, &seq_i)
+    .map_err(err)?;
+    Ok((m, l, acc))
+}
+// ==== end region: sol ====

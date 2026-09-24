@@ -49,7 +49,18 @@ pub fn sol_attn(
     }
     let scale = scale.unwrap_or((dim as f32).sqrt().recip());
     log_once(tau, tokens, sink_tokens);
-    crate::wan::stats::host_algorithm("sol_attn", format_args!("BHSD {batch}x{heads}x{tokens}x{dim}"))?;
+    let sinks = match sink_start {
+        Some(s) => vec![(s, sink_tokens)],
+        None if sink_tokens > 0 => vec![(tokens.saturating_sub(sink_tokens), sink_tokens)],
+        None => vec![],
+    };
+    if let Some(out) = crate::wan::sol_ops::try_sol_device(q, k, v, tau as f32, scale, &sinks)? {
+        return Ok(out);
+    }
+    crate::wan::stats::host_algorithm(
+        "sol_attn",
+        format_args!("BHSD {batch}x{heads}x{tokens}x{dim}"),
+    )?;
     sol_from_host(
         q,
         k,
@@ -87,7 +98,13 @@ pub fn sol_attn_sunk(
     let scale = scale.unwrap_or((dim as f32).sqrt().recip());
     let sink_tokens: usize = sinks.iter().map(|(_, len)| *len).sum();
     log_once(tau, tokens, sink_tokens);
-    crate::wan::stats::host_algorithm("sol_attn", format_args!("BHSD sunk {batch}x{heads}x{tokens}x{dim}"))?;
+    if let Some(out) = crate::wan::sol_ops::try_sol_device(q, k, v, tau as f32, scale, sinks)? {
+        return Ok(out);
+    }
+    crate::wan::stats::host_algorithm(
+        "sol_attn",
+        format_args!("BHSD sunk {batch}x{heads}x{tokens}x{dim}"),
+    )?;
     if sinks.is_empty() {
         return sol_from_host(q, k, v, batch, heads, tokens, dim, tau, scale, None, 0);
     }
@@ -273,6 +290,27 @@ mod tests {
         let dense = scaled_dot_product_attention(&q, &k, &v, scale).unwrap();
         let (a, b) = (sol.host_cow().unwrap(), dense.host_cow().unwrap());
         for (x, y) in a.iter().zip(b.iter()) {
+            assert!((x - y).abs() < 3e-5, "{x} vs {y}");
+        }
+    }
+
+    #[test]
+    fn device_alg_matches_models_oracle() {
+        let (b, h, t, d) = (1usize, 2usize, 40usize, 8usize);
+        let q = seeded(b * h * t * d, 0.11);
+        let k = seeded(b * h * t * d, 0.17);
+        let v = seeded(b * h * t * d, 0.23);
+        let scale = (d as f32).sqrt().recip();
+        let qt = CudaTensor::from_vec(q.clone(), vec![b, h, t, d]).unwrap();
+        let kt = CudaTensor::from_vec(k.clone(), vec![b, h, t, d]).unwrap();
+        let vt = CudaTensor::from_vec(v.clone(), vec![b, h, t, d]).unwrap();
+        let got = sol_attn(&qt, &kt, &vt, 1.25, Some(scale), Some(0), 8).unwrap();
+        let want = fastvideo_models::sol_attn::sol_attn_bhsd(
+            &q, &k, &v, b, h, t, d, 1.25, scale, Some(0), 8,
+        )
+        .unwrap();
+        let a = got.host_cow().unwrap();
+        for (x, y) in a.iter().zip(&want) {
             assert!((x - y).abs() < 3e-5, "{x} vs {y}");
         }
     }

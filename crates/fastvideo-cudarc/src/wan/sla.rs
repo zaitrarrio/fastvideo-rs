@@ -60,6 +60,11 @@ pub fn sla_attention(
             q.shape, k.shape, v.shape
         )));
     }
+    if let Some(out) =
+        super::sol_ops::try_sla_device(q, k, v, proj_l, cfg.topk_ratio, cfg.blk_q, cfg.blk_k)?
+    {
+        return Ok(out);
+    }
     crate::wan::stats::host_algorithm("sla", format_args!("BHSD {b}x{h}x{s}x{d}"))?;
     let qh = q.host_cow()?.into_owned();
     let kh = k.host_cow()?.into_owned();
