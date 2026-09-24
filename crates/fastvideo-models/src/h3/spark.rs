@@ -22,6 +22,7 @@ pub const FIXED_PROMPT: &str =
 
 /// Volume dest from Phase 0, then local aliases, then dense-datafree fallback.
 pub const SPARK_LORA_PATHS: &[&str] = &[
+    "FastH3-4-step-Preview-v1-LoRA/vsa-datafree/adapter_model.safetensors",
     "FastH3-4-step-Preview-v1-VSA-DataFree/adapter_model.safetensors",
     "vsa-datafree/adapter_model.safetensors",
     "adapter/vsa-datafree/adapter_model.safetensors",
@@ -577,7 +578,7 @@ mod tests {
         assert_eq!(spec.scale, 1.0);
         assert_eq!(
             spec.relative_paths[0],
-            "FastH3-4-step-Preview-v1-VSA-DataFree/adapter_model.safetensors"
+            "FastH3-4-step-Preview-v1-LoRA/vsa-datafree/adapter_model.safetensors"
         );
         let vsa = spec
             .relative_paths

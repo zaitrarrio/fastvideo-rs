@@ -219,8 +219,7 @@ rp_weight_rows() {
   cat <<'EOF'
 h3-8step	FastVideo/FastVideo-FastH3-8-Step-V2	tokenizer/* text_encoder/*.json text_encoder/model-0000[1-9]-of-00014.safetensors text_encoder/model-0001[01]-of-00014.safetensors text_encoder/model-0001[2-4]-of-00014.safetensors transformer/* audio_vae/* vae/*
 h3-base	MiniMaxAI/MiniMax-H3	tokenizer/* text_encoder/*.json text_encoder/model-0000[1-9]-of-00014.safetensors text_encoder/model-0001[01]-of-00014.safetensors text_encoder/model-0001[2-4]-of-00014.safetensors transformer/* audio_vae/* vae/*
-FastH3-4-step-Preview-v1-LoRA	FastVideo/FastVideo-FastH3-4-step-Preview-v1-LoRA	dense-datafree/adapter_model.safetensors
-FastH3-4-step-Preview-v1-VSA-DataFree	FastVideo/FastVideo-FastH3-4-step-Preview-v1-VSA-DataFree	adapter_model.safetensors
+FastH3-4-step-Preview-v1-LoRA	FastVideo/FastVideo-FastH3-4-step-Preview-v1-LoRA	dense-datafree/adapter_model.safetensors vsa-datafree/adapter_model.safetensors
 upscaler	LBH-123-AI/Minimax_h3_latent_Upscaler	minimax_h3_latent_upscaler_3d_bf16.safetensors
 h3-to-ltx	Efficient-Large-Model/H3-to-LTX-Latent-Adapter	config.json model.safetensors
 ltx2	Lightricks/LTX-2	tokenizer/* text_encoder/model-* text_encoder/*.json vae/* audio_vae/* vocoder/* ltx-2-19b-distilled.safetensors
@@ -357,8 +356,7 @@ check() {
 }
 check h3-8step tokenizer text_encoder transformer audio_vae vae .complete
 check h3-base tokenizer text_encoder transformer audio_vae vae .complete
-check FastH3-4-step-Preview-v1-LoRA dense-datafree/adapter_model.safetensors .complete
-check FastH3-4-step-Preview-v1-VSA-DataFree .complete
+check FastH3-4-step-Preview-v1-LoRA dense-datafree/adapter_model.safetensors vsa-datafree/adapter_model.safetensors .complete
 check upscaler minimax_h3_latent_upscaler_3d_bf16.safetensors .complete
 check h3-to-ltx config.json model.safetensors .complete
 check ltx2 tokenizer text_encoder vae audio_vae vocoder ltx-2-19b-distilled.safetensors .complete
