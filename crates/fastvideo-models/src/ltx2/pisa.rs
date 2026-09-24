@@ -4,9 +4,10 @@
 //! Video self-attention only. Layers 0 and 1 stay dense. Later layers use
 //! the PISA score-route kernel at sparsity 0.9 and block size 64. Stage-2
 //! steps 1 and 2 are the midpoint token-prune steps (keep half, by feature
-//! norm). The stage-1 SCSP preset `8of15_last_29calls` skips steps 16-28
-//! (`techniques/presets.py` `_SCSP_SKIP_STEPS`). LoRA strengths are fused
-//! by `ltx2::lora` when the distilled file is present.
+//! norm). The stage-1 SCSP preset `8of15_last_29calls` skips **res2s calls**
+//! 16–28 of 29 (`techniques/presets.py` `_SCSP_SKIP_STEPS`), not Euler steps.
+//! A 15-step Euler run never reaches index 16; 15-step res2s is `2·15−1`
+//! evaluations. Distilled LoRA is fused only on the dev BF16 DiT.
 
 /// Video blocks that stay dense on every stage-2 forward.
 pub const DENSE_LAYERS: [usize; 2] = [0, 1];
@@ -29,14 +30,15 @@ pub const PRUNE_RATIO: f64 = 0.5;
 /// Refine steps that prune. Step 0 does not.
 pub const PRUNE_STEPS: [usize; 2] = [1, 2];
 
-/// Named stage-1 cache preset. Skip mask is `_SCSP_SKIP_STEPS = "16-28"`.
+/// Named stage-1 cache preset. Skip mask is `_SCSP_SKIP_STEPS = "16-28"`
+/// on the **res2s call** index, not the Euler step index.
 pub const STAGE1_CACHE_PRESET: &str = "8of15_last_29calls";
 
 /// Inclusive skip range from `techniques/presets.py` for this preset.
 pub const STAGE1_CACHE_SKIP_START: usize = 16;
 pub const STAGE1_CACHE_SKIP_END: usize = 28;
 
-/// `FASTVIDEO_LTX2_STAGE1_CACHE=1` (or the preset name) applies [`stage1_skips_step`].
+/// `FASTVIDEO_LTX2_STAGE1_CACHE=1` (or the preset name) applies [`stage1_skips_call`].
 pub fn stage1_cache_requested(value: Option<&str>) -> bool {
     match value.map(str::trim) {
         Some("1") => true,
@@ -46,11 +48,17 @@ pub fn stage1_cache_requested(value: Option<&str>) -> bool {
 }
 
 pub const STAGE1_CACHE_APPLIED: &str =
-    "ltx2 pisa: stage-1 SCSP preset 8of15_last_29calls skips steps 16-28 \
-(techniques/presets.py _SCSP_SKIP_STEPS; whole-step velocity reuse, delta_scale 0)";
+    "ltx2 pisa: stage-1 SCSP preset 8of15_last_29calls skips res2s calls 16-28 of 29 \
+(techniques/presets.py _SCSP_SKIP_STEPS; 15-step res2s is 2*15-1 evals, velocity reuse, delta_scale 0)";
 
+/// `call` is the res2s model-evaluation index (CFG pair = one call).
+pub fn stage1_skips_call(call: usize) -> bool {
+    (STAGE1_CACHE_SKIP_START..=STAGE1_CACHE_SKIP_END).contains(&call)
+}
+
+/// Same as [`stage1_skips_call`]. The argument is a call index, not an Euler step.
 pub fn stage1_skips_step(step: usize) -> bool {
-    (STAGE1_CACHE_SKIP_START..=STAGE1_CACHE_SKIP_END).contains(&step)
+    stage1_skips_call(step)
 }
 
 /// `FASTVIDEO_LTX2_MIDPOINT_PRUNE=1` (or `feat_norm`) prunes stage-2 video tokens.
@@ -192,12 +200,16 @@ mod tests {
         assert!(stage1_cache_requested(Some("1")));
         assert!(stage1_cache_requested(Some(STAGE1_CACHE_PRESET)));
         assert!(stage1_cache_requested(Some("scsp")));
-        assert!(STAGE1_CACHE_APPLIED.contains("16-28"));
-        assert!(!stage1_skips_step(0));
-        assert!(!stage1_skips_step(15));
-        assert!(stage1_skips_step(16));
-        assert!(stage1_skips_step(28));
-        assert!(!stage1_skips_step(29));
+        assert!(STAGE1_CACHE_APPLIED.contains("calls 16-28"));
+        assert!(!stage1_skips_call(0));
+        assert!(!stage1_skips_call(15));
+        assert!(stage1_skips_call(16));
+        assert!(stage1_skips_call(28));
+        assert!(!stage1_skips_call(29));
+        assert_eq!(
+            crate::ltx2::hq::res2s_num_calls(crate::ltx2::hq::STAGE1_STEPS),
+            29
+        );
     }
 
     #[test]

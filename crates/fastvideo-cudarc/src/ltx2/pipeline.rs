@@ -41,7 +41,8 @@ use super::latent_upsampler::LatentUpsampler;
 use super::text::{HiddenStack, PaddedPrompt, TextConnectors};
 use super::text_cache::{cache_key, weights_identity, CachedContexts, TextCache};
 use super::transformer::{
-    pack_video, unpack_video, Ltx2Stage2Attn, Ltx2Transformer, Ropes, TextConditioning,
+    pack_video, unpack_video, Ltx2Stage2Attn, Ltx2Transformer, Ltx2VideoAttn, Ropes,
+    TextConditioning,
 };
 use super::vae::VideoDecoder;
 use super::vocoder::Vocoder;
@@ -379,6 +380,161 @@ pub fn denoise_cfg(
     Ok((video, audio))
 }
 
+fn velocity_call(
+    model: &Ltx2Transformer,
+    text: &TextConditioning,
+    text_uncond: Option<&TextConditioning>,
+    ropes: &Ropes,
+    video: &CudaTensor,
+    audio: &CudaTensor,
+    t: f32,
+    video_scale: f32,
+    audio_scale: f32,
+    route: Ltx2VideoAttn,
+    call: usize,
+) -> Result<(CudaTensor, CudaTensor)> {
+    if let Some(cached) = model.stage1_reuse(call) {
+        return Ok(cached);
+    }
+    let out = if let Some(uncond) = text_uncond {
+        let (vc, ac) = model.forward_sol(video, audio, text, t, ropes, None, route)?;
+        let (vu, au) = model.forward_sol(video, audio, uncond, t, ropes, None, route)?;
+        (
+            CudaTensor::lincomb(&[(video_scale, &vc), (1.0 - video_scale, &vu)])?,
+            CudaTensor::lincomb(&[(audio_scale, &ac), (1.0 - audio_scale, &au)])?,
+        )
+    } else {
+        model.forward_sol(video, audio, text, t, ropes, None, route)?
+    };
+    model.stage1_store(&out.0, &out.1);
+    Ok(out)
+}
+
+fn denoised_from_velocity(
+    sample: &CudaTensor,
+    velocity: &CudaTensor,
+    sigma: f64,
+) -> Result<CudaTensor> {
+    Ok(CudaTensor::lincomb(&[
+        (1.0, sample),
+        (-(sigma as f32), velocity),
+    ])?)
+}
+
+fn res2s_midpoint(
+    anchor: &CudaTensor,
+    denoised: &CudaTensor,
+    h: f64,
+    a21: f64,
+) -> Result<CudaTensor> {
+    let w = (h * a21) as f32;
+    Ok(CudaTensor::lincomb(&[(1.0 - w, anchor), (w, denoised)])?)
+}
+
+fn res2s_combine(
+    anchor: &CudaTensor,
+    d1: &CudaTensor,
+    d2: &CudaTensor,
+    h: f64,
+    b1: f64,
+    b2: f64,
+) -> Result<CudaTensor> {
+    let w1 = (h * b1) as f32;
+    let w2 = (h * b2) as f32;
+    Ok(CudaTensor::lincomb(&[
+        (1.0 - w1 - w2, anchor),
+        (w1, d1),
+        (w2, d2),
+    ])?)
+}
+
+/// LTX-2.3 ODE res2s (no SDE, no bongmath). Two model calls per step except
+/// the last, which snaps to x0 — 15 steps → 29 calls so SCSP 16–28 is live.
+pub fn denoise_res2s(
+    model: &Ltx2Transformer,
+    text: &TextConditioning,
+    text_uncond: Option<&TextConditioning>,
+    ropes: &Ropes,
+    schedule: &Ltx2Schedule,
+    video_scale: f32,
+    audio_scale: f32,
+    mut video: CudaTensor,
+    mut audio: CudaTensor,
+    mut observer: Option<StepObserver<'_>>,
+    stage2: Ltx2Stage2Attn,
+) -> Result<(CudaTensor, CudaTensor)> {
+    let mut call = 0usize;
+    for i in 0..schedule.num_steps() {
+        let timer = Instant::now();
+        let sigma = schedule.sigmas[i];
+        let sigma_next = schedule.sigmas[i + 1];
+        let route = stage2.at(i);
+        model.begin_fbcache_step(i);
+        model.arm_prune_step(i);
+        let t = schedule.timestep_f32(i);
+        let (v_video, v_audio) = velocity_call(
+            model,
+            text,
+            text_uncond,
+            ropes,
+            &video,
+            &audio,
+            t,
+            video_scale,
+            audio_scale,
+            route,
+            call,
+        )?;
+        call += 1;
+        let d_video = denoised_from_velocity(&video, &v_video, sigma)?;
+        let d_audio = denoised_from_velocity(&audio, &v_audio, sigma)?;
+        if sigma_next == 0.0 || i + 1 == schedule.num_steps() {
+            video = d_video;
+            audio = d_audio;
+        } else {
+            let h = -(sigma_next / sigma).ln();
+            let (a21, b1, b2) = fastvideo_models::ltx2::hq::res2s_coefficients(
+                h,
+                fastvideo_models::ltx2::hq::RES2S_C2,
+            );
+            let sub_sigma = (sigma * sigma_next).sqrt();
+            let mid_v = res2s_midpoint(&video, &d_video, h, a21)?;
+            let mid_a = res2s_midpoint(&audio, &d_audio, h, a21)?;
+            let t_mid = (sub_sigma as f32) * (schedule.num_train_timesteps as f32);
+            let (v2_v, v2_a) = velocity_call(
+                model,
+                text,
+                text_uncond,
+                ropes,
+                &mid_v,
+                &mid_a,
+                t_mid,
+                video_scale,
+                audio_scale,
+                route,
+                call,
+            )?;
+            call += 1;
+            let d2_v = denoised_from_velocity(&mid_v, &v2_v, sub_sigma)?;
+            let d2_a = denoised_from_velocity(&mid_a, &v2_a, sub_sigma)?;
+            video = res2s_combine(&video, &d_video, &d2_v, h, b1, b2)?;
+            audio = res2s_combine(&audio, &d_audio, &d2_a, h, b1, b2)?;
+        }
+        sync()?;
+        let secs = timer.elapsed().as_secs_f64();
+        crate::wan::log::info(format_args!(
+            "ltx2 res2s step {}/{} sigma {:.6} calls {call} ({secs:.2}s)",
+            i + 1,
+            schedule.num_steps(),
+            sigma
+        ));
+        if let Some(obs) = observer.as_mut() {
+            obs(i, &video, &audio, secs)?;
+        }
+    }
+    Ok((video, audio))
+}
+
 fn apply_ancestral(
     sample: &CudaTensor,
     velocity: &CudaTensor,
@@ -387,32 +543,33 @@ fn apply_ancestral(
     opts: AncestralOpts,
     rng: &mut rand::rngs::StdRng,
 ) -> Result<CudaTensor> {
-    let mut x = sample.host_cow()?.into_owned();
-    let v = velocity.host_cow()?;
-    let denoised: Vec<f32> = x
-        .iter()
-        .zip(v.iter())
-        .map(|(s, vel)| Ltx2Schedule::denoised_from_velocity(*s, *vel, sigma))
-        .collect();
-    let noise = if opts.eta > 0.0 {
-        Some(
-            (0..x.len())
+    let denoised = CudaTensor::lincomb(&[(1.0, sample), (-(sigma as f32), velocity)])?;
+    if sigma_next == 0.0 {
+        return Ok(denoised);
+    }
+    let downstep_ratio = 1.0 + (sigma_next / sigma - 1.0) * opts.eta;
+    let sigma_down = sigma_next * downstep_ratio;
+    let scale = (sigma_down / sigma) as f32;
+    let blend = 1.0 - scale;
+    let mut x = CudaTensor::lincomb(&[(scale, sample), (blend, &denoised)])?;
+    if opts.eta > 0.0 {
+        let noise = CudaTensor::from_vec(
+            (0..sample.numel())
                 .map(|_| rng.sample::<f32, _>(StandardNormal))
-                .collect::<Vec<f32>>(),
-        )
-    } else {
-        None
-    };
-    Ltx2Schedule::ancestral_step(
-        &mut x,
-        &denoised,
-        sigma,
-        sigma_next,
-        opts.eta,
-        opts.s_noise,
-        noise.as_deref(),
-    );
-    Ok(CudaTensor::from_vec(x, sample.shape.clone())?)
+                .collect(),
+            sample.shape.clone(),
+        )?;
+        let alpha_next = 1.0 - sigma_next;
+        let alpha_down = 1.0 - sigma_down;
+        let renoise_coeff = (sigma_next * sigma_next
+            - sigma_down * sigma_down * alpha_next * alpha_next / (alpha_down * alpha_down))
+            .max(0.0)
+            .sqrt();
+        let factor = (alpha_next / alpha_down) as f32;
+        let noise_scale = (opts.s_noise * renoise_coeff) as f32;
+        x = CudaTensor::lincomb(&[(factor, &x), (noise_scale, &noise)])?;
+    }
+    Ok(x)
 }
 
 /// `x ← σ·ε + (1−σ)·x` — stage-2 entry renoise (video and audio).
@@ -1144,6 +1301,8 @@ impl Ltx2Pipeline {
             crate::wan::log::info(format_args!(
                 "ltx2: reloading DiT at lora strength {strength}"
             ));
+            // TODO(WS-C): set_lora_strength — swap fused strength in place
+            // instead of dropping and reloading the DiT.
             // Drop the old fused DiT before the next full load. Holding both
             // plus resident Gemma is what OOMed a 96 GB PRO 6000 (~95 GiB).
             self.model = None;
@@ -1177,10 +1336,25 @@ impl Ltx2Pipeline {
         Ok(self.model.as_ref().expect("just loaded"))
     }
 
+    fn stage_lora_strengths(&self, two_stage: bool) -> (f32, f32) {
+        if !two_stage {
+            return (0.0, 0.0);
+        }
+        // Distilled checkpoints already bake the adapter in. LoRA 0.8 (and
+        // the 2.3 0.25/0.5 pair) apply to the dev BF16 DiT only.
+        if !self.cfg.scheduler.use_dynamic_shifting {
+            return (0.0, 0.0);
+        }
+        fastvideo_models::ltx2::lora::stage_strengths(self.cfg.version).unwrap_or((0.0, 0.0))
+    }
+
     fn lora_note(&self, two_stage: bool) -> String {
         let Some(path) = &self.lora else {
             return "distilled lora not beside weights".into();
         };
+        if !self.cfg.scheduler.use_dynamic_shifting {
+            return format!("distilled: no lora fuse {}", path.display());
+        }
         let Some((s1, s2)) = fastvideo_models::ltx2::lora::stage_strengths(self.cfg.version) else {
             return format!("lora {}", path.display());
         };
@@ -1295,10 +1469,7 @@ impl Ltx2Pipeline {
             self.text.unload_resident();
         }
 
-        let strengths =
-            fastvideo_models::ltx2::lora::stage_strengths(cfg.version).unwrap_or((0.0, 0.0));
-        let s1 = if req.two_stage { strengths.0 } else { 0.0 };
-        let s2 = if req.two_stage { strengths.1 } else { 0.0 };
+        let (s1, s2) = self.stage_lora_strengths(req.two_stage);
         let timer = Instant::now();
         self.dit_for(s1)?;
         self.arm_requested();
@@ -1350,6 +1521,7 @@ impl Ltx2Pipeline {
             Ltx2Schedule::distilled_subset(req.stage1_steps()).map_err(err)?
         };
         let ancestral = cfg.version == Ltx2ModelVersion::V25;
+        let res2s = cfg.version == Ltx2ModelVersion::V23;
         let (mut video, mut audio) = {
             let model = self.model.as_ref().expect("ensure_dit");
             let mut record = |i: usize, v: &CudaTensor, a: &CudaTensor, s: f64| -> Result<()> {
@@ -1372,6 +1544,20 @@ impl Ltx2Pipeline {
                         s_noise: 1.0,
                         noise_seed: req.seed + 10_000,
                     },
+                    Some(&mut record),
+                    Ltx2Stage2Attn::Off,
+                )?
+            } else if res2s {
+                denoise_res2s(
+                    model,
+                    &text,
+                    text_uncond.as_ref(),
+                    &ropes,
+                    &schedule,
+                    req.guidance_scale,
+                    req.audio_guidance_scale,
+                    video,
+                    audio,
                     Some(&mut record),
                     Ltx2Stage2Attn::Off,
                 )?
@@ -1431,12 +1617,11 @@ impl Ltx2Pipeline {
             }
             if req.pisa_stage2 {
                 crate::wan::log::info(format_args!(
-                    "ltx2 pisa stage-2: layers 0-1 dense, layers 2-47 pisa kernel sparsity 0.9 block 64 score-route first-order remainder, feat_norm prune steps 1,2 ratio 0.5 when FASTVIDEO_LTX2_MIDPOINT_PRUNE, {}, stage-1 SCSP 16-28 when FASTVIDEO_LTX2_STAGE1_CACHE",
+                    "ltx2 pisa stage-2: layers 0-1 dense, layers 2-47 pisa kernel sparsity 0.9 block 64 score-route first-order remainder, feat_norm prune steps 1,2 ratio 0.5 when FASTVIDEO_LTX2_MIDPOINT_PRUNE, {}, stage-1 SCSP res2s calls 16-28 of 29 when FASTVIDEO_LTX2_STAGE1_CACHE",
                     self.lora_note(true)
                 ));
             }
             self.dit_for(s2)?;
-            self.arm_requested();
             if reproject {
                 let contexts = kept_contexts.take().expect("stage-2 text context");
                 let uncond_contexts = kept_uncond.take().expect("stage-2 uncond context");
@@ -1480,23 +1665,7 @@ impl Ltx2Pipeline {
                             None => Ok(()),
                         }
                     };
-                if ancestral {
-                    denoise_ancestral(
-                        model,
-                        &text,
-                        &ropes2,
-                        &schedule2,
-                        video,
-                        audio,
-                        AncestralOpts {
-                            eta: 1.0,
-                            s_noise: 1.0,
-                            noise_seed: req.seed + 30_000,
-                        },
-                        Some(&mut record2),
-                        req.stage2_attn(),
-                    )?
-                } else if let Some(ref uncond) = text_uncond {
+                if let Some(ref uncond) = text_uncond {
                     denoise_cfg(
                         model,
                         &text,
@@ -1656,19 +1825,16 @@ impl Ltx2Pipeline {
         let mut timings = Ltx2Timings::default();
         let (contexts, text_report) = self.text.encode(prompt, true)?;
         timings.text_s = text_report.seconds;
-        let strength = fastvideo_models::ltx2::lora::stage_strengths(cfg.version)
-            .map(|(_, stage2)| stage2)
-            .unwrap_or(0.0);
+        let (_, strength) = self.stage_lora_strengths(true);
         let schedule = Ltx2Schedule::distilled_stage_2_steps(3).map_err(err)?;
         crate::wan::log::info(format_args!(
-            "ltx2 refine: 3 steps {:?}, sol stage-2, {}, grid {:?}, {} audio tokens",
+            "ltx2 refine: 3 deterministic steps {:?}, sol stage-2, {}, grid {:?}, {} audio tokens",
             &schedule.sigmas,
             self.lora_note(true),
             grid,
             audio_tokens
         ));
         self.dit_for(strength)?;
-        self.arm_requested();
         let text = {
             let model = self.model.as_ref().expect("dit");
             model.project_text(&contexts.video, &contexts.audio)?
@@ -1679,37 +1845,18 @@ impl Ltx2Pipeline {
         let audio = renoise(&audio, sigma, &mut rng)?;
         let ropes = Ropes::new(&cfg.transformer, grid, audio_tokens, frame_rate as f32)?;
         let timer = Instant::now();
-        let ancestral = cfg.version == Ltx2ModelVersion::V25;
         let (video, _audio) = {
             let model = self.model.as_ref().expect("dit");
-            if ancestral {
-                denoise_ancestral(
-                    model,
-                    &text,
-                    &ropes,
-                    &schedule,
-                    video,
-                    audio,
-                    AncestralOpts {
-                        eta: 1.0,
-                        s_noise: 1.0,
-                        noise_seed: seed + 30_000,
-                    },
-                    None,
-                    Ltx2Stage2Attn::Sol,
-                )?
-            } else {
-                denoise(
-                    model,
-                    &text,
-                    &ropes,
-                    &schedule,
-                    video,
-                    audio,
-                    None,
-                    Ltx2Stage2Attn::Sol,
-                )?
-            }
+            denoise(
+                model,
+                &text,
+                &ropes,
+                &schedule,
+                video,
+                audio,
+                None,
+                Ltx2Stage2Attn::Sol,
+            )?
         };
         timings.stage2_s = timer.elapsed().as_secs_f64();
         timings.denoise_s = timings.stage2_s;
@@ -2002,6 +2149,34 @@ mod tests {
         for (a, b) in got_a.host_cow().unwrap().iter().zip(&want_a) {
             assert!((a - b).abs() < 1e-5, "audio: {a} vs {b}");
         }
+    }
+
+    #[test]
+    fn res2s_two_steps_stays_finite() {
+        let cfg = tiny();
+        let (model, text, ropes, grid, audio_tokens) = model_and_inputs(&cfg);
+        let (video, audio) = initial_noise(&cfg, grid, audio_tokens, 3).unwrap();
+        let schedule = Ltx2Schedule::from_sigmas(&[1.0, 0.5], 1000);
+        let (got_v, got_a) = denoise_res2s(
+            &model,
+            &text,
+            None,
+            &ropes,
+            &schedule,
+            1.0,
+            1.0,
+            video,
+            audio,
+            None,
+            Ltx2Stage2Attn::Off,
+        )
+        .unwrap();
+        assert!(got_v.host_cow().unwrap().iter().all(|v| v.is_finite()));
+        assert!(got_a.host_cow().unwrap().iter().all(|v| v.is_finite()));
+        assert_eq!(
+            fastvideo_models::ltx2::hq::res2s_num_calls(schedule.num_steps()),
+            3
+        );
     }
 
     #[test]
