@@ -2,6 +2,24 @@
 
 Project code: FVID
 
+### FVID · 2026-09-24 · FVID-2026-09-24-phase3-pro6000-sweep
+- Trigger: Phase 3 — rebuild the CUDA 13.4 runtime image and run the H3 / LTX / Hunyuan / Wan matrix (5-min cell cap) against Phase 0 numbers
+- Options: wait for three PRO 6000s in EUR-IS-1; fall back to A100 80GB on the ready volume; sequential families on one Blackwell
+- Decision: **one RTX PRO 6000 96 GB** (`r009p7bcmwfu8k`, EUR-IS-1, $2.09/hr, driver 595.91.07) on volume `jg48s6o1w0`. Image `build-af5edf649671bfb7` (CUDA 13.4 libs, `CUDARC_CUDA_VERSION=13000` — cudarc 0.17.8 rejects 13040). A100 570.195 panicked on `cuCtxGetDevice_v2` and was destroyed. Wan skipped (no 1.3B tree). Families ran sequentially.
+- Measured vs Phase 0 same-volume PRO 6000 (`sol-h3-4step` 01:33Z: **75.4 s/step**, peak 60181 MiB, 615 s wall):
+  - **fasth3-8step-warm**: steps 1–7 at **10.7 s** (~7×). Load 130.5 s. Wall-cap 301 s / exit 124 during step 8 / decode. Peak ~63.8 GiB mid-run.
+  - **sol-h3-4step**: load refused `to_gate_compress` on MiniMax-H3 (recipe now `dense=false` / Sol-Attn). `--dense` fused 362-pair dense-datafree and loaded (dit 176.6 s, total load 217 s) then hit the 300 s cap during streamed text (no step times). Gate load now keys off `vsa_sparsity > 0`.
+  - **sol-h3-spark**: refuse. FastH3_VSA_DataFree is 50 `.set_weight` replacements; `plan_from_keys` still requires dense-datafree LoRA.
+  - **ltx25-two-stage**: stage-1 ancestral **0.42 s/step**, stage-2 Euler **1.67 s/step**, then VAE **OOM**. 246 s.
+  - **ltx23-two-stage**: missing `keyframes_abs_pos_embedding` (2.5 key on 2.3 weights). 109 s.
+  - **ltx20-distilled-8step**: **ok 236 s**, **1.47 s/step**, mp4 356 KiB.
+  - **hy15-480-t2v**: Diffusers tree; loader wants remapped `Hunyuan15.double_blocks.*`.
+- Reason: 5-minute cells measure denoise when load is short; cold H3+streamed Gemma does not finish. FastH3 step time is the speedup the kernels were for. Remaining fails are loader contracts, not kernel panics.
+- Reversibility: cheap — image `:latest` smokes after `-INFINITY` → `-1e30f`; volume kept; pod destroyed after the sweep
+- Executed by: Executor
+- ADR: none
+- Verification: `artifacts/runpod/phase3/runs/`. Smoke `gpucheck-runtime-image` 36034088206 success. Cost ≈ $1.1.
+
 ### FVID · 2026-09-24 · FVID-2026-09-24-bf16-activations
 - Trigger: WS-I — DiT block activations still live as f32; H3 denoise is ~80% of a warm clip and the reference stores the stream as bf16
 - Options: keep residual + activations f32; bf16 activations with residual f32; bf16 activations and residual

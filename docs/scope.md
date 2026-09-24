@@ -212,9 +212,17 @@ SANA image and video family and is not implemented here.
 | Sana-Video 5B | Not in this tree. The sol-engine profile wraps a private bundle |
 
 One-GPU Sol-H3 uses the RTX 5090 Sol-Attn policy (first 10 steps and first 2
-layers dense, tau 1.0). SOL/BSA is not a multi-GPU-only profile.
+layers dense, tau 1.0). SOL/BSA is not a multi-GPU-only profile. `to_gate_compress`
+loads only when `vsa_sparsity > 0` (MiniMax-H3 has no gate).
 `sol-h3-spark` Stage-1 is VSA 0.9 + FastH3_VSA_DataFree at strength 1.0, BF16
-(upstream W8A8 FP8 after the LoRA merge is off: measured 16–20 dB).
+(upstream W8A8 FP8 after the LoRA merge is off: measured 16–20 dB). The
+VSA-DataFree file is 50 `.set_weight` replacements; fuse still expects
+dense-datafree LoRA A/B.
+
+Phase 3 on one RTX PRO 6000 96 GB (5-min cell cap, image `af5edf649671bfb7`):
+FastH3 8-step **10.7 s/step** (Phase 0 same card **75.4 s**); LTX-2.5 two-stage
+0.42 s then 1.67 s/step, VAE OOM; LTX-2.0 distilled **1.47 s/step** ok;
+Hunyuan Diffusers keys do not match `Hunyuan15.*`; Wan 1.3B not on the volume.
 
 NVFP4 (`FASTVIDEO_NVFP4=1` → TE `static_6`; `mse` / `4o6` stay FourOverSix)
 dequantizes W4A4 on device when a CUDA context is live (`nvfp4_reconstruct`).

@@ -545,7 +545,10 @@ impl H3Pipeline {
                 (WeightMap::open(&dit)?, None)
             }
         };
-        let with_gate = !options.dense && mlx.as_ref().is_none_or(|s| s.vsa_capable);
+        // Gate lives on VSA checkpoints and VSA-DataFree replacements. Sol-H3
+        // + MiniMax-H3 is Sol-Attn on a dense backbone (`vsa_sparsity == 0`).
+        let with_gate =
+            contract.vsa_sparsity > 0.0 && mlx.as_ref().is_none_or(|s| s.vsa_capable);
         crate::wan::log::info(format_args!(
             "h3 recipe={} steps={} video_shift={} vsa={} dense={}",
             options.recipe.as_deref().unwrap_or("auto"),
