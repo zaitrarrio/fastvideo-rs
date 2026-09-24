@@ -89,12 +89,12 @@ RUN apt-get update \
  && echo /usr/local/cuda-13.4/lib64 > /etc/ld.so.conf.d/fastvideo-nvidia.conf \
  && ldconfig \
  && . /etc/fastvideo/cuda-13.pins \
- && for soname in "$CUDA_NVRTC_SONAME" "$CUDA_CUBLAS_SONAME" "$CUDA_CUBLASLT_SONAME" "$CUDA_CUDNN_SONAME"; do
-      src=$(ldconfig -p | awk -v n="$soname" '$1 == n { print $NF; exit }')
-      test -n "$src" && test -e "$src"
-      dir=$(dirname "$src")
-      unversioned="${soname%.so.*}.so"
-      if [ ! -e "$dir/$unversioned" ]; then ln -s "$soname" "$dir/$unversioned"; fi
+ && for soname in "$CUDA_NVRTC_SONAME" "$CUDA_CUBLAS_SONAME" "$CUDA_CUBLASLT_SONAME" "$CUDA_CUDNN_SONAME"; do \
+      src=$(ldconfig -p | awk -v n="$soname" '$1 == n { print $NF; exit }'); \
+      test -n "$src" && test -e "$src"; \
+      dir=$(dirname "$src"); \
+      unversioned="${soname%.so.*}.so"; \
+      if [ ! -e "$dir/$unversioned" ]; then ln -s "$soname" "$dir/$unversioned"; fi; \
     done \
  && ldconfig \
  && ldconfig -p | grep -E 'libnvrtc\.so|libcublasLt\.so|libcublas\.so|libcudnn\.so' \
