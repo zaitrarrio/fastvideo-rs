@@ -528,20 +528,19 @@ impl BlockMods {
         block: usize,
         layout: &H3PackedLayout,
     ) -> Result<Self> {
-        let up_ladder = |tag: u8| {
-            CudaTensor::from_vec(
-                table.block_slot(step, block, tag).to_vec(),
-                vec![1, ADALN_PARAMS, table.hidden],
-            )?
-            .to_device()
-        };
-        let up_keyframe = |tag: u8| {
-            CudaTensor::from_vec(
-                table.keyframe_slot(block, tag).to_vec(),
-                vec![1, ADALN_PARAMS, table.hidden],
-            )?
-            .to_device()
-        };
+        // Whole ladder + keyframe tables once per host table; later blocks
+        // (and later steps) only `narrow`.
+        let (ladder, keyframe) = adaln_device_tables(table)?;
+        let ladder = ladder.reshape(vec![
+            table.steps * table.blocks * MODALITY_NUM,
+            ADALN_PARAMS,
+            table.hidden,
+        ])?;
+        let keyframe = keyframe.reshape(vec![
+            table.blocks * MODALITY_NUM,
+            ADALN_PARAMS,
+            table.hidden,
+        ])?;
         let mut segments = Vec::new();
         for (range, tag) in tag_runs(&layout.token_tags) {
             if range.len == 0 {
@@ -551,11 +550,14 @@ impl BlockMods {
             // KEYFRAME_NOISE_AUG AdaLN (FL2VA + Ref2VA). Target audio/video and
             // text use the ladder timestep for this step.
             let e = if range.start >= layout.audio.start {
-                up_ladder(tag)?
+                let row = (step * table.blocks + block) * MODALITY_NUM + usize::from(tag);
+                ladder.narrow(0, row, 1)?
             } else if tag == TAG_TEXT {
-                up_ladder(TAG_TEXT)?
+                let row = (step * table.blocks + block) * MODALITY_NUM + usize::from(TAG_TEXT);
+                ladder.narrow(0, row, 1)?
             } else {
-                up_keyframe(tag)?
+                let row = block * MODALITY_NUM + usize::from(tag);
+                keyframe.narrow(0, row, 1)?
             };
             segments.push((range, e));
         }
@@ -593,6 +595,40 @@ impl BlockMods {
             .collect::<Result<Vec<_>>>()?;
         CudaTensor::cat(&parts.iter().collect::<Vec<_>>(), 1)
     }
+}
+
+/// Upload `[steps, blocks, 3, 6, hidden]` + keyframe once; reuse via `narrow`.
+fn adaln_device_tables(table: &AdaLnTable) -> Result<(CudaTensor, CudaTensor)> {
+    thread_local! {
+        static CACHE: std::cell::RefCell<Option<(usize, CudaTensor, CudaTensor)>> =
+            const { std::cell::RefCell::new(None) };
+    }
+    let key = table.block_mods.as_ptr() as usize;
+    CACHE.with(|c| {
+        if let Some((k, ladder, kf)) = c.borrow().as_ref() {
+            if *k == key {
+                return Ok((ladder.clone(), kf.clone()));
+            }
+        }
+        let ladder = CudaTensor::from_vec(
+            table.block_mods.clone(),
+            vec![
+                table.steps,
+                table.blocks,
+                MODALITY_NUM,
+                ADALN_PARAMS,
+                table.hidden,
+            ],
+        )?
+        .to_device()?;
+        let kf = CudaTensor::from_vec(
+            table.keyframe_mods.clone(),
+            vec![table.blocks, MODALITY_NUM, ADALN_PARAMS, table.hidden],
+        )?
+        .to_device()?;
+        *c.borrow_mut() = Some((key, ladder.clone(), kf.clone()));
+        Ok((ladder, kf))
+    })
 }
 
 /// Contiguous same-tag runs over the packed sequence.
@@ -1976,5 +2012,31 @@ pub(crate) mod tests {
             .iter()
             .zip(&want)
             .all(|(a, b)| (a - b).abs() < 1e-6));
+    }
+
+    #[test]
+    fn block_mods_narrows_the_uploaded_table() {
+        let (cfg, map) = (tiny_cfg(), weights());
+        let schedule = H3JointSchedule::fasth3_8step();
+        let table = AdaLnTable::precompute(&cfg, &map, &schedule).unwrap();
+        let layout = H3PackedLayout::new(2, (1, 2, 2), 1, cfg.patch_size).unwrap();
+        let step = 3usize;
+        let mods = BlockMods::upload(&table, step, 1, &layout).unwrap();
+        assert!(!mods.segments.is_empty());
+        for (range, e) in &mods.segments {
+            let tag = layout.token_tags[range.start];
+            let want = if range.start >= layout.audio.start {
+                table.block_slot(step, 1, tag)
+            } else if tag == TAG_TEXT {
+                table.block_slot(step, 1, TAG_TEXT)
+            } else {
+                table.keyframe_slot(1, tag)
+            };
+            let got = e.host_cow().unwrap();
+            assert_eq!(e.shape, vec![1, ADALN_PARAMS, table.hidden]);
+            assert_eq!(got.as_ref(), want);
+        }
+        let again = BlockMods::upload(&table, step, 0, &layout).unwrap();
+        assert_eq!(again.segments.len(), mods.segments.len());
     }
 }

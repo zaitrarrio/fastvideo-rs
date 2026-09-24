@@ -212,54 +212,94 @@ impl MoeFfn {
         let n_tok = b * s;
         let flat = x.reshape(vec![n_tok, d])?;
         let logits = self.router.forward(&flat)?; // [N, E]
-        let mut scores = logits.host_cow()?.to_vec();
-        let e = self.experts.len();
-        if self.sigmoid {
-            for v in &mut scores {
-                *v = 1.0 / (1.0 + (-*v).exp());
-            }
-        } else {
-            // Softmax per token.
+        let scores = self.router_scores(&logits)?;
+        let (idx, val) = topk_router(&scores, self.top_k, self.norm_topk)?;
+        let mut out = CudaTensor::zeros(&[n_tok, d]).to_device()?;
+        for e in 0..self.experts.len() {
+            let mut rows = Vec::new();
+            let mut weights = Vec::new();
             for ti in 0..n_tok {
-                let row = &mut scores[ti * e..][..e];
-                let m = row.iter().copied().fold(f32::NEG_INFINITY, f32::max);
-                let mut z = 0f32;
-                for v in row.iter_mut() {
-                    *v = (*v - m).exp();
-                    z += *v;
-                }
-                for v in row.iter_mut() {
-                    *v /= z.max(1e-20);
+                for slot in 0..self.top_k {
+                    if idx[ti * self.top_k + slot] as usize == e {
+                        rows.push(ti);
+                        weights.push(val[ti * self.top_k + slot] * self.routed_scale);
+                    }
                 }
             }
+            if rows.is_empty() {
+                continue;
+            }
+            let gathered = flat.index_select_rows(&rows)?;
+            let y = self.experts[e].forward(&gathered)?;
+            out = scatter_add_rows(&out, &y, &rows, &weights)?;
         }
-
-        let mut out = vec![0f32; n_tok * d];
-        let xh = flat.host_cow()?;
-        for ti in 0..n_tok {
-            let row = &scores[ti * e..][..e];
-            let mut idxs: Vec<(usize, f32)> = row.iter().copied().enumerate().collect();
-            idxs.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
-            idxs.truncate(self.top_k);
-            let mut weights: Vec<f32> = idxs.iter().map(|x| x.1).collect();
-            if self.norm_topk {
-                let z: f32 = weights.iter().sum::<f32>().max(1e-20);
-                for w in &mut weights {
-                    *w /= z;
-                }
-            }
-            let tok = CudaTensor::from_vec(xh[ti * d..][..d].to_vec(), vec![1, d])?;
-            for ((ei, _), w) in idxs.iter().zip(&weights) {
-                let y = self.experts[*ei].forward(&tok)?;
-                let yh = y.host_cow()?;
-                let scale = w * self.routed_scale;
-                for di in 0..d {
-                    out[ti * d + di] += yh[di] * scale;
-                }
-            }
-        }
-        Ok(CudaTensor::from_vec(out, vec![b, s, d])?)
+        out.reshape(vec![b, s, d])
     }
+
+    fn router_scores(&self, logits: &CudaTensor) -> Result<CudaTensor> {
+        if self.sigmoid {
+            #[cfg(feature = "cuda")]
+            if let Some(a) = logits.dev()? {
+                return CudaTensor::from_device_slice(
+                    crate::wan::ops::sigmoid_device(&a)?,
+                    logits.shape.clone(),
+                );
+            }
+            crate::wan::stats::host_fallback("moe_sigmoid", format_args!("{:?}", logits.shape))?;
+            logits.try_sigmoid()
+        } else {
+            logits.softmax(-1)
+        }
+    }
+}
+
+fn topk_router(scores: &CudaTensor, k: usize, norm: bool) -> Result<(Vec<u32>, Vec<f32>)> {
+    let width = *scores
+        .shape
+        .last()
+        .ok_or_else(|| msg("moe topk: empty scores"))?;
+    #[cfg(feature = "cuda")]
+    if let Some(a) = scores.dev()? {
+        return crate::wan::ops::topk_last_device(&a, width, k, norm);
+    }
+    crate::wan::stats::host_fallback("moe_topk", format_args!("{:?} k={k}", scores.shape))?;
+    Ok(crate::wan::ops::topk_last_host(
+        &scores.host_cow()?,
+        width,
+        k,
+        norm,
+    ))
+}
+
+fn scatter_add_rows(
+    base: &CudaTensor,
+    src: &CudaTensor,
+    rows: &[usize],
+    weights: &[f32],
+) -> Result<CudaTensor> {
+    let d = *base
+        .shape
+        .last()
+        .ok_or_else(|| msg("scatter_add_rows: empty"))?;
+    let idx: Vec<u32> = rows.iter().map(|&i| i as u32).collect();
+    #[cfg(feature = "cuda")]
+    if let (Some(b), Some(s)) = (base.dev()?, src.dev()?) {
+        return CudaTensor::from_device_slice(
+            crate::wan::ops::scatter_add_rows_device(&b, &s, &idx, weights, d)?,
+            base.shape.clone(),
+        );
+    }
+    crate::wan::stats::host_fallback("scatter_add_rows", format_args!("{:?}", base.shape))?;
+    CudaTensor::from_vec(
+        crate::wan::ops::scatter_add_rows_host(
+            &base.host_cow()?,
+            &src.host_cow()?,
+            &idx,
+            weights,
+            d,
+        ),
+        base.shape.clone(),
+    )
 }
 
 enum Ffn {
@@ -540,5 +580,20 @@ mod tests {
         let enc = CudaTensor::zeros(&[1, 4, cfg.text_dim]);
         let out = dit.forward(&x, &enc, 500.0).unwrap();
         assert_eq!(out.shape, vec![1, cfg.out_channels, 2, 4, 4]);
+    }
+
+    #[test]
+    fn moe_routed_matches_per_token_reference() {
+        let cfg = LingBotTransformerConfig::tiny_moe();
+        let ffn = MoeFfn::zeros(&cfg).unwrap();
+        let n = 3usize;
+        let d = cfg.hidden_size;
+        let x: Vec<f32> = (0..n * d).map(|i| (i as f32 * 0.17 - 0.4).sin()).collect();
+        let hidden = CudaTensor::from_vec(x, vec![1, n, d]).unwrap();
+        let out = ffn.forward(&hidden).unwrap();
+        let got = out.host_cow().unwrap();
+        // zeros experts → routed output is zero, but gather/scatter still run.
+        assert!(got.iter().all(|v| v.abs() < 1e-7));
+        assert_eq!(got.len(), n * d);
     }
 }

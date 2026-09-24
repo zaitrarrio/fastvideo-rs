@@ -2375,3 +2375,95 @@ extern "C" __global__ void __launch_bounds__(128, 2) sol_mma_attn_partials(
 #endif
 }
 // ==== end region: sol ====
+
+// ==== region: moe ====
+#ifndef IDX
+#define IDX() ((long)blockIdx.x * (long)blockDim.x + (long)threadIdx.x)
+#endif
+
+// Real-interleaved RoPE (Diffusers apply_rotary_emb use_real=True, unbind -2):
+// pair (x0, x1) at even/odd channels with cos/sin at the even table index.
+// x: [B, H, S, D] BHSD; cs/sn: [S, D].
+extern "C" __global__ void rope_real(
+    const float* x, const float* cs, const float* sn, float* out, long s, long d, long n
+) {
+    long i = IDX();
+    if (i >= n) return;
+    long j = i % d;
+    if ((j & 1) && j + 1 > d) {
+        out[i] = x[i];
+        return;
+    }
+    long p = (i / d) % s;
+    long pair = j & ~1L;
+    if (pair + 1 >= d) {
+        out[i] = x[i];
+        return;
+    }
+    float x0 = x[i - (j - pair)];
+    float x1 = x[i - (j - pair) + 1];
+    float c = cs[p * d + pair];
+    float si = sn[p * d + pair];
+    out[i] = (j & 1) ? (x0 * si + x1 * c) : (x0 * c - x1 * si);
+}
+
+extern "C" __global__ void sigmoid_f(const float* a, float* out, long n) {
+    long i = IDX();
+    if (i < n) out[i] = 1.0f / (1.0f + expf(-a[i]));
+}
+
+extern "C" __global__ void copy_f(const float* a, float* out, long n) {
+    long i = IDX();
+    if (i < n) out[i] = a[i];
+}
+
+// One block per row. `width` is the expert count (small); thread 0 walks it.
+// Writes descending top-k into idx/val. `norm != 0` L1-normalizes the k values.
+extern "C" __global__ void topk_last(
+    const float* scores, unsigned int* idx, float* val, int rows, int width, int k, int norm
+) {
+    int row = blockIdx.x;
+    if (row >= rows || threadIdx.x != 0) return;
+    const float* src = scores + (long)row * width;
+    unsigned int* oi = idx + (long)row * k;
+    float* ov = val + (long)row * k;
+    for (int t = 0; t < k; t++) {
+        oi[t] = 0;
+        ov[t] = -INFINITY;
+    }
+    for (int e = 0; e < width; e++) {
+        float v = src[e];
+        int slot = k;
+        for (int t = 0; t < k; t++) {
+            if (v > ov[t]) {
+                slot = t;
+                break;
+            }
+        }
+        if (slot == k) continue;
+        for (int t = k - 1; t > slot; t--) {
+            ov[t] = ov[t - 1];
+            oi[t] = oi[t - 1];
+        }
+        ov[slot] = v;
+        oi[slot] = (unsigned int)e;
+    }
+    if (norm) {
+        float z = 0.0f;
+        for (int t = 0; t < k; t++) z += ov[t];
+        z = fmaxf(z, 1e-20f);
+        for (int t = 0; t < k; t++) ov[t] /= z;
+    }
+}
+
+// out[idx[r], j] += src[r, j] * weight[r]. Caller copies `base` into `out` first.
+// Rows of one expert are unique, so no atomics.
+extern "C" __global__ void scatter_add_rows(
+    const float* src, const unsigned int* idx, const float* weight, float* out, long n, long d
+) {
+    long i = IDX();
+    if (i >= n * d) return;
+    long r = i / d;
+    out[(long)idx[r] * d + (i % d)] += src[i] * weight[r];
+}
+// ==== end region: moe ====

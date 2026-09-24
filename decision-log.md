@@ -2,6 +2,16 @@
 
 Project code: FVID
 
+### FVID · 2026-09-24 · FVID-2026-09-24-host-loops-off-device
+- Trigger: Cosmos RoPE, LingBot MoE, and H3 AdaLN still bounced every attention / token / block through pageable H2D; FVID-2026-09-18 noted 911 H2D / 3.4 GiB on a 3-step Wan clip and asked whether uploads repeat per step.
+- Decision: **device kernels + one upload, then slice.** Cosmos self-attn RoPE is `rope_real` (real-interleaved twin of `rope_half`) with host `apply_rope_real` behind `host_fallback`. LingBot MoE is `softmax_last` / `sigmoid_f` + `topk_last`, then `index_select_rows` + one expert GEMM + `scatter_add_rows` (no per-token `[1,d]` GEMM). H3 `BlockMods::upload` puts the whole AdaLN ladder + keyframe table on device once and `narrow`s `[1,6,hidden]` per segment.
+- Reason: the host loops were correctness-shaped leftovers; the math already existed (`softmax_last`, cuBLAS, `narrow`). Keeping the CPU twins means unit tests still run without a GPU.
+- **Wan 911 H2D finding (do not edit `wan/pipeline.rs`):** RoPE (`rotary_for`) and VSA plans are already pinned/cached. The remaining per-step uploads are (1) `dit_cfg` / `dit_cfg_easy` rebuilding `CudaTensor::from_vec(vec![t], [1])` every CFG call, (2) `nn::sinusoidal_timesteps` host-building `[B, freq_dim]` every `forward_ctx` so the first Linear re-uploads it, (3) causal `forward_ctx` rebuilding and `to_device()`ing a fresh `[1,1,S,S]` mask when `cfg.causal`. `CudaTensor::dev()` also re-uploads any still-host tensor on every use (`Owned` temporary), so an unpinned table inside a 30–40 layer loop multiplies. Average 3.4 GiB / 911 ≈ 3.9 MiB/transfer matches a mid-size table (sinusoid is tiny; a causal mask or a repeated activation upload is the plausible bulk).
+- Reversibility: cheap — device path is opt-in on a live CUDA context; host fallbacks stay for CPU tests.
+- Executed by: WS-D
+- ADR: none
+- Verification: `cargo test -p fastvideo-cudarc --lib cosmos lingbot`; H3 `block_mods_narrows_the_uploaded_table`. No GPU rented.
+
 ### FVID · 2026-09-24 · FVID-2026-09-24-sol-device-partials
 - Trigger: WS-A — replace Sol/PISA/SLA `host_cow` CPU paths with a device implementation (unselected blocks keep a coarse term, not block-skip)
 - Options: extend `vsa_mma_attn` in place; host-only staging; **pool + cuBLAS coarse + sentinel lists + fine/coarse flash partials + LSE merge**

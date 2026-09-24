@@ -3128,3 +3128,86 @@ fn sol_mma_partials_device(
     Ok((m, l, acc))
 }
 // ==== end region: sol ====
+
+// ==== region: moe ====
+
+/// Real-interleaved RoPE matching `fastvideo_models::cosmos::apply_rope_real`.
+pub fn rope_real_host(
+    x: &[f32],
+    cos: &[f32],
+    sin: &[f32],
+    batch: usize,
+    heads: usize,
+    seq: usize,
+    dim: usize,
+) -> Vec<f32> {
+    fastvideo_models::cosmos::apply_rope_real(x, cos, sin, batch, heads, seq, dim)
+}
+
+/// Per-row top-k. Ties keep the earlier expert. `norm` L1-normalizes the k values.
+pub fn topk_last_host(scores: &[f32], width: usize, k: usize, norm: bool) -> (Vec<u32>, Vec<f32>) {
+    assert!(width > 0 && k > 0 && k <= width && scores.len() % width == 0);
+    let rows = scores.len() / width;
+    let mut idx = vec![0u32; rows * k];
+    let mut val = vec![0f32; rows * k];
+    for row in 0..rows {
+        let src = &scores[row * width..][..width];
+        let oi = &mut idx[row * k..][..k];
+        let ov = &mut val[row * k..][..k];
+        ov.fill(f32::NEG_INFINITY);
+        oi.fill(0);
+        for (e, &v) in src.iter().enumerate() {
+            let mut slot = k;
+            for t in 0..k {
+                if v > ov[t] {
+                    slot = t;
+                    break;
+                }
+            }
+            if slot == k {
+                continue;
+            }
+            for t in (slot + 1..k).rev() {
+                ov[t] = ov[t - 1];
+                oi[t] = oi[t - 1];
+            }
+            ov[slot] = v;
+            oi[slot] = e as u32;
+        }
+        if norm {
+            let z = ov.iter().sum::<f32>().max(1e-20);
+            for w in ov.iter_mut() {
+                *w /= z;
+            }
+        }
+    }
+    (idx, val)
+}
+
+/// `out[idx[r], :] += src[r, :] * weight[r]`.
+pub fn scatter_add_rows_host(
+    base: &[f32],
+    src: &[f32],
+    idx: &[u32],
+    weights: &[f32],
+    d: usize,
+) -> Vec<f32> {
+    let mut out = base.to_vec();
+    for (r, (&i, &w)) in idx.iter().zip(weights).enumerate() {
+        let dst = (i as usize) * d;
+        let s = r * d;
+        for j in 0..d {
+            out[dst + j] += src[s + j] * w;
+        }
+    }
+    out
+}
+
+#[cfg(feature = "cuda")]
+fn moe_kernel_src() -> String {
+    const ALL: &str = include_str!("kernels.cu");
+    let start = ALL
+        .find("// ==== region: moe ====")
+        .expect("kernels.cu moe region");
+    let end = ALL
+        .find("// ==== end region: moe ====
