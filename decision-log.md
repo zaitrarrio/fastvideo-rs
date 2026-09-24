@@ -2,6 +2,16 @@
 
 Project code: FVID
 
+### FVID · 2026-09-24 · FVID-2026-09-24-llm-resident-compute
+- Trigger: resident encoder compute still paid GQA `repeat_kv`, a full composed `[1,H,S,S]` score matrix, per-GEMM FP8 dequant, and a host DeepStack add
+- Options: rewrite `wan/attn.rs` / `Linear`; keep streamed host fallbacks; cache dequant in the decoder layer
+- Decision: **GQA via strided batched GEMM over KV-head groups** (host still `repeat_kv`). **Chunked dense SDPA** in `llm/attn.rs` reusing Wan GEMMs + mask add (no `wan/attn.rs` rewrite). **Resident FP8 dequants once** via `host::fp8_rows_*` + `Linear::from_tensors`. **DeepStack `index_select` + `add`** so `x` stays on device.
+- Reason: resident prompt-after-prompt path; streamed/disk loaders unchanged; `Linear` / Wan attention stay owned elsewhere
+- Reversibility: cheap — host fallbacks remain; precision enum still reports Fp8Rows
+- Executed by: Executor
+- ADR: none
+- Verification: **gates green**. `cargo test -p fastvideo-cudarc --lib llm` — 11 passed (host).
+
 ### FVID · 2026-09-24 · FVID-2026-09-24-solh3-spark-vsa-bf16
 - Trigger: sol-h3-spark Stage-1 still mapped to the dense 4-step Sol-H3 contract; one-GPU Sol-H3 was documented as dense-only / SOL-BSA multi-GPU; Spark LoRA preferred dense-datafree; refiner used the user prompt
 - Options: copy upstream W8A8 FP8 after the VSA-DataFree merge; keep dense 4-step; ship Spark as VSA 0.9 / tile 64 / BF16

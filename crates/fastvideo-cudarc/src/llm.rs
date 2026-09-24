@@ -16,9 +16,12 @@
 //! differences (norm offset, sandwich norms, activation, per-layer rope and
 //! window, embedding scale, key prefix).
 
-use crate::wan::nn::{scaled_dot_product_attention_masked, Linear};
+use crate::wan::nn::Linear;
 use crate::wan::tensor::{CudaTensor, Result, TensorError};
 use crate::wan::weights::{cuda_tensor_shaped, WeightMap};
+
+mod attn;
+pub use attn::scaled_dot_product_attention_gqa;
 
 fn msg(s: impl Into<String>) -> TensorError {
     TensorError::Message(s.into())
@@ -150,9 +153,10 @@ pub enum WeightPrecision {
     /// Whatever `Linear::load` gives: bf16 under bf16 GEMM math, f32 otherwise.
     #[default]
     Native,
-    /// Weight-only FP8 (E4M3 codes, one scale per output row): one byte per
-    /// parameter, dequantized to bf16 per GEMM. For an encoder that has to stay
-    /// resident beside a DiT and does not fit at bf16 (Qwen3-VL-32B: 50 GB).
+    /// Weight-only FP8 (E4M3 codes, one scale per output row). Streamed
+    /// loaders dequantize per GEMM; a [`ResidentDecoder`] dequantizes once and
+    /// keeps the bf16/f32 weight. For an encoder that has to stay resident
+    /// beside a DiT and does not fit at bf16 while loading (Qwen3-VL-32B: 50 GB).
     Fp8Rows,
 }
 
@@ -564,6 +568,28 @@ pub(crate) struct Layer {
     norm_mlp_out: Option<CudaTensor>,
 }
 
+/// Resident FP8: quantize then dequant once and keep the reconstructed weight
+/// so each GEMM is a plain matmul. Streamed `Layer::load` stays Native.
+fn load_linear(
+    map: &WeightMap,
+    prefix: &str,
+    in_dim: usize,
+    out_dim: usize,
+    precision: WeightPrecision,
+) -> Result<Linear> {
+    match precision {
+        WeightPrecision::Native => Linear::load(map, prefix, in_dim, out_dim, false),
+        WeightPrecision::Fp8Rows => {
+            let key = crate::wan::weights::join_key(prefix, "weight");
+            let w = cuda_tensor_shaped(map, &key, &[out_dim, in_dim])?;
+            let (q, scales) =
+                crate::wan::ops::host::fp8_rows_quantize(&w.host_cow()?, out_dim, in_dim);
+            let wd = crate::wan::ops::host::fp8_rows_dequant(&q, &scales, in_dim);
+            Linear::from_tensors(CudaTensor::from_vec(wd, vec![out_dim, in_dim])?, None)
+        }
+    }
+}
+
 impl Layer {
     fn load(
         map: &WeightMap,
@@ -575,12 +601,7 @@ impl Layer {
         Self::assemble(
             cfg,
             index,
-            &mut |name, i, o| match precision {
-                WeightPrecision::Native => Linear::load(map, &format!("{p}.{name}"), i, o, false),
-                WeightPrecision::Fp8Rows => {
-                    Linear::load_fp8_rows(map, &format!("{p}.{name}"), i, o, false)
-                }
-            },
+            &mut |name, i, o| load_linear(map, &format!("{p}.{name}"), i, o, precision),
             &mut |name, width| {
                 norm_weight(map, &format!("{p}.{name}.weight"), width, cfg.norm_offset)
             },
@@ -686,8 +707,7 @@ impl Layer {
         };
         let k = split(k_h, hkv, dkv, &self.k_norm)?.rope_half(cos, sin)?;
         let v = split(v_h, hkv, dkv, &None)?;
-        let (k, v) = (k.repeat_kv(hq / hkv)?, v.repeat_kv(hq / hkv)?);
-        let a = scaled_dot_product_attention_masked(&q, &k, &v, Some(cfg.attn_scale), Some(mask))?;
+        let a = scaled_dot_product_attention_gqa(&q, &k, &v, Some(cfg.attn_scale), Some(mask))?;
         let a = self
             .o
             .forward(&a.transpose(1, 2)?.reshape(vec![1, s, hq * dq])?)?;
@@ -830,21 +850,22 @@ fn inject_deepstack(x: &CudaTensor, visual_mask: &[bool], deep: &CudaTensor) -> 
     if n_vis == 0 {
         return Ok(x.clone());
     }
-    let mut host = x.host_cow()?.into_owned();
-    let deep_h = deep.host_cow()?;
+    // Pad a zero row so non-visual tokens select a no-op addend. `index_select`
+    // + `add` stay on the device when `x` and `deep` already live there.
+    let pad = CudaTensor::zeros(&[1, h]).to_device()?;
+    let table = CudaTensor::cat(&[deep, &pad], 0)?;
+    let mut indices = Vec::with_capacity(s);
     let mut vi = 0usize;
-    for (si, &is_vis) in visual_mask.iter().enumerate() {
-        if !is_vis {
-            continue;
+    for &is_vis in visual_mask {
+        if is_vis {
+            indices.push(vi);
+            vi += 1;
+        } else {
+            indices.push(n_vis);
         }
-        let base = si * h;
-        let db = vi * h;
-        for d in 0..h {
-            host[base + d] += deep_h[db + d];
-        }
-        vi += 1;
     }
-    CudaTensor::from_vec(host, vec![1, s, h])?.to_device()
+    let addend = table.index_select_rows(&indices)?.reshape(vec![1, s, h])?;
+    x.add(&addend)
 }
 
 /// Additive `[1, 1, S, S]` mask: causal, keys limited to `attend`, and to the
@@ -2134,5 +2155,32 @@ mod tests {
         assert_eq!(g.layers[5].rotary_width(512), 128);
         assert_eq!(g.layer_head_dim(0), 256);
         assert_eq!(g.for_bf16_reference().embed_scale, 62.0);
+    }
+
+    /// DeepStack adds features only at visual pads and leaves text tokens
+    /// unchanged — including through the device `index_select` + `add` path.
+    #[test]
+    fn deepstack_adds_only_visual_tokens() {
+        let (s, h) = (4usize, 3);
+        let x =
+            CudaTensor::from_vec((0..s * h).map(|i| i as f32).collect(), vec![1, s, h]).unwrap();
+        let deep =
+            CudaTensor::from_vec(vec![10.0, 20.0, 30.0, 40.0, 50.0, 60.0], vec![2, h]).unwrap();
+        let out = inject_deepstack(&x, &[false, true, false, true], &deep).unwrap();
+        let got = out.host_cow().unwrap();
+        let want = [
+            0.0, 1.0, 2.0, 13.0, 24.0, 35.0, 6.0, 7.0, 8.0, 49.0, 60.0, 71.0,
+        ];
+        for (a, b) in got.iter().zip(&want) {
+            assert!((a - b).abs() < 1e-6, "{a} vs {b}");
+        }
+        assert!(inject_deepstack(&x, &[false, true, false, false], &deep).is_err());
+        let same = inject_deepstack(
+            &x,
+            &[false; 4],
+            &CudaTensor::from_vec(vec![], vec![0, h]).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(&*same.host_cow().unwrap(), &*x.host_cow().unwrap());
     }
 }
