@@ -48,6 +48,9 @@ pub fn pisa_attn(
     }
     let scale = scale.unwrap_or((dim as f32).sqrt().recip());
     log_once(sparsity, tokens);
+    if let Some(out) = crate::wan::sol_ops::try_pisa_device(q, k, v, sparsity, scale)? {
+        return Ok(out);
+    }
     crate::wan::stats::host_algorithm(
         "pisa_attn",
         format_args!("BHSD {batch}x{heads}x{tokens}x{dim}"),
@@ -100,6 +103,24 @@ mod tests {
         let dense = scaled_dot_product_attention(&q, &k, &v, scale).unwrap();
         let (a, b) = (pisa.host_cow().unwrap(), dense.host_cow().unwrap());
         for (x, y) in a.iter().zip(b.iter()) {
+            assert!((x - y).abs() < 3e-5, "{x} vs {y}");
+        }
+    }
+
+    #[test]
+    fn device_alg_matches_models_oracle() {
+        let (b, h, t, d) = (1usize, 2usize, 40usize, 8usize);
+        let qv = seeded(b * h * t * d, 0.11);
+        let kv = seeded(b * h * t * d, 0.17);
+        let vv = seeded(b * h * t * d, 0.23);
+        let scale = (d as f32).sqrt().recip();
+        let q = CudaTensor::from_vec(qv.clone(), vec![b, h, t, d]).unwrap();
+        let k = CudaTensor::from_vec(kv.clone(), vec![b, h, t, d]).unwrap();
+        let v = CudaTensor::from_vec(vv.clone(), vec![b, h, t, d]).unwrap();
+        let got = pisa_attn(&q, &k, &v, 0.9, Some(scale)).unwrap();
+        let want = pisa_attn_bhsd(&qv, &kv, &vv, b, h, t, d, 0.9, scale).unwrap();
+        let a = got.host_cow().unwrap();
+        for (x, y) in a.iter().zip(&want) {
             assert!((x - y).abs() < 3e-5, "{x} vs {y}");
         }
     }

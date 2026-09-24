@@ -1932,3 +1932,446 @@ extern "C" __global__ void ln_adaln_e_rope_half(
         dst[j] = y;
     }
 }
+
+// ==== region: sol ====
+// Sol-Attn / PISA / SLA device stages. Sequential 64-token blocks reuse
+// `vsa_tile_mean` for means; this region adds the sum-pool, threshold
+// routing, sentinel-masked exact lists, flash partials, coarse remainder,
+// and LSE merge. Unselected blocks contribute a coarse term (pooled-K
+// score, summed-V, multiplicity block_len) merged into the same softmax.
+#define SOL_SENTINEL 0xFFFFFFFFu
+#define SOL_THRESHOLD_EPS 1.0e-6f
+#define SOL_LOG2_E 1.4426950408889634f
+#define SOL_NEG __int_as_float(0xff800000)
+
+extern "C" __global__ void sol_tile_sum(
+    const float* x, const int* slot_src, const int* block_sizes, float* out,
+    long seq, int dim, int num_tiles, int tile_elems
+) {
+    int tile = blockIdx.x;
+    long bh = blockIdx.y;
+    if (tile >= num_tiles) return;
+    int n = block_sizes[tile];
+    const float* xb = x + bh * seq * (long)dim;
+    float* ob = out + (bh * (long)num_tiles + tile) * (long)dim;
+    for (int d = threadIdx.x; d < dim; d += blockDim.x) {
+        float acc = 0.0f;
+        for (int j = 0; j < n; j++) {
+            int tok = slot_src[(long)tile * tile_elems + j];
+            if (tok >= 0) acc += xb[(long)tok * dim + d];
+        }
+        ob[d] = acc;
+    }
+}
+
+extern "C" __global__ void sol_diag_threshold(
+    const float* q_bar, const float* kc, float* thresh,
+    int n, int dim, float tau, float scale
+) {
+    int bh = blockIdx.x;
+    int tid = threadIdx.x;
+    extern __shared__ float sol_th_sm[];
+    float* mu = sol_th_sm;
+    float* var = sol_th_sm + dim;
+    float inv = 1.0f / (float)(n > 0 ? n : 1);
+    for (int d = tid; d < dim; d += blockDim.x) {
+        float s = 0.0f, s2 = 0.0f;
+        const float* row0 = kc + (long)bh * n * dim;
+        for (int j = 0; j < n; j++) {
+            float x = row0[(long)j * dim + d];
+            s += x;
+            s2 += x * x;
+        }
+        mu[d] = s * inv;
+        float v = s2 * inv - mu[d] * mu[d];
+        var[d] = v > 0.0f ? v : 0.0f;
+    }
+    __syncthreads();
+    float log2_scale = scale * SOL_LOG2_E;
+    for (int i = tid; i < n; i += blockDim.x) {
+        const float* q = q_bar + ((long)bh * n + i) * dim;
+        float mean = 0.0f, vr = 0.0f;
+        for (int d = 0; d < dim; d++) {
+            mean += q[d] * mu[d];
+            vr += q[d] * q[d] * var[d];
+        }
+        mean *= log2_scale;
+        vr *= log2_scale * log2_scale;
+        float stdv = sqrtf((vr > 0.0f ? vr : 0.0f) + SOL_THRESHOLD_EPS);
+        thresh[(long)bh * n + i] = mean + tau * stdv;
+    }
+}
+
+extern "C" __global__ void sol_exact_lists(
+    const float* scores, const float* thresh, const int* sink_flags,
+    const int* block_sizes, unsigned int* lists,
+    int tokens, int n
+) {
+    int i = blockIdx.x;
+    int bh = blockIdx.y;
+    if (i >= n) return;
+    int q_len = block_sizes[i];
+    int q_start = i * 64;
+    float th = thresh[(long)bh * n + i];
+    unsigned int* row = lists + ((long)bh * n + i) * n;
+    const float* sc = scores + bh * (long)tokens * n;
+    int w = 0;
+    for (int j = 0; j < n; j++) {
+        float sum = 0.0f;
+        for (int t = 0; t < q_len; t++) sum += sc[(long)(q_start + t) * n + j];
+        float cm = q_len > 0 ? sum / (float)q_len : SOL_NEG;
+        int local = (i > j ? i - j : j - i) <= 1;
+        int sink = sink_flags[j];
+        if (cm > th || local || sink) row[w++] = (unsigned int)j;
+    }
+    for (; w < n; w++) row[w] = SOL_SENTINEL;
+}
+
+extern "C" __global__ void sol_fine_partials(
+    const float* q, const float* k, const float* v, const unsigned int* lists,
+    float* m_out, float* l_out, float* acc_out,
+    long seq, int dim, int nq, int max_keep, int blk_q, int blk_k,
+    float scale, int log2_space
+) {
+    int t = blockIdx.x;
+    long bh = blockIdx.y;
+    if (t >= seq) return;
+    int tid = threadIdx.x;
+    extern __shared__ float sol_sm[];
+    const float* qb = q + (bh * seq + t) * (long)dim;
+    float qv = tid < dim ? qb[tid] : 0.0f;
+    int qi = t / blk_q;
+    const unsigned int* list = lists + (bh * (long)nq + qi) * max_keep;
+    float m = SOL_NEG, l = 0.0f, acc = 0.0f;
+    for (int s = 0; s < max_keep; s++) {
+        unsigned int jb = list[s];
+        if (jb == SOL_SENTINEL) break;
+        int k0 = (int)jb * blk_k;
+        int k1 = k0 + blk_k;
+        if (k1 > (int)seq) k1 = (int)seq;
+        for (int u = k0; u < k1; u++) {
+            const float* kr = k + (bh * seq + u) * (long)dim;
+            const float* vr = v + (bh * seq + u) * (long)dim;
+            float kv = tid < dim ? kr[tid] : 0.0f;
+            sol_sm[tid] = (tid < dim) ? qv * kv : 0.0f;
+            __syncthreads();
+            for (int off = blockDim.x >> 1; off > 0; off >>= 1) {
+                if (tid < off) sol_sm[tid] += sol_sm[tid + off];
+                __syncthreads();
+            }
+            float score = sol_sm[0] * scale;
+            float nm = fmaxf(m, score);
+            float alpha = (m == SOL_NEG) ? 0.0f : (log2_space ? exp2f(m - nm) : expf(m - nm));
+            float p = log2_space ? exp2f(score - nm) : expf(score - nm);
+            float vv = tid < dim ? vr[tid] : 0.0f;
+            acc = acc * alpha + p * vv;
+            l = l * alpha + p;
+            m = nm;
+            __syncthreads();
+        }
+    }
+    if (tid == 0) {
+        m_out[bh * seq + t] = m;
+        l_out[bh * seq + t] = l;
+    }
+    if (tid < dim) acc_out[(bh * seq + t) * (long)dim + tid] = acc;
+}
+
+extern "C" __global__ void sol_coarse_partials(
+    const float* q, const float* kc, const float* vc, const unsigned int* lists,
+    const int* block_sizes, float* m_out, float* l_out, float* acc_out,
+    long seq, int dim, int n, int max_keep, float scale, int log2_space
+) {
+    int t = blockIdx.x;
+    long bh = blockIdx.y;
+    if (t >= seq) return;
+    int tid = threadIdx.x;
+    extern __shared__ float sol_csm[];
+    const float* qb = q + (bh * seq + t) * (long)dim;
+    float qv = tid < dim ? qb[tid] : 0.0f;
+    int nq = n;
+    int qi = t / 64;
+    if (qi >= nq) return;
+    const unsigned int* list = lists + (bh * (long)nq + qi) * max_keep;
+    float m = SOL_NEG, l = 0.0f, acc = 0.0f;
+    for (int j = 0; j < n; j++) {
+        int exact = 0;
+        for (int s = 0; s < max_keep; s++) {
+            unsigned int e = list[s];
+            if (e == SOL_SENTINEL) break;
+            if (e == (unsigned int)j) { exact = 1; break; }
+        }
+        if (exact) continue;
+        const float* kcj = kc + (bh * (long)n + j) * (long)dim;
+        const float* vcj = vc + (bh * (long)n + j) * (long)dim;
+        float kv = tid < dim ? kcj[tid] : 0.0f;
+        sol_csm[tid] = (tid < dim) ? qv * kv : 0.0f;
+        __syncthreads();
+        for (int off = blockDim.x >> 1; off > 0; off >>= 1) {
+            if (tid < off) sol_csm[tid] += sol_csm[tid + off];
+            __syncthreads();
+        }
+        float score = sol_csm[0] * scale;
+        float wgt = (float)block_sizes[j];
+        float nm = fmaxf(m, score);
+        float alpha = (m == SOL_NEG) ? 0.0f : (log2_space ? exp2f(m - nm) : expf(m - nm));
+        float p = log2_space ? exp2f(score - nm) : expf(score - nm);
+        float vv = tid < dim ? vcj[tid] : 0.0f;
+        acc = acc * alpha + p * vv;
+        l = l * alpha + p * wgt;
+        m = nm;
+        __syncthreads();
+    }
+    if (tid == 0) {
+        m_out[bh * seq + t] = m;
+        l_out[bh * seq + t] = l;
+    }
+    if (tid < dim) acc_out[(bh * seq + t) * (long)dim + tid] = acc;
+}
+
+extern "C" __global__ void sol_lse_combine(
+    const float* m1, const float* l1, const float* acc1,
+    const float* m2, const float* l2, const float* acc2,
+    float* m_out, float* l_out, float* acc_out,
+    long rows, int dim, int log2_space
+) {
+    long row = blockIdx.x;
+    int d = threadIdx.x;
+    if (row >= rows || d >= dim) return;
+    float a = m1[row], b = m2[row];
+    float m = fmaxf(a, b);
+    float s1 = (a == SOL_NEG) ? 0.0f : (log2_space ? exp2f(a - m) : expf(a - m));
+    float s2 = (b == SOL_NEG) ? 0.0f : (log2_space ? exp2f(b - m) : expf(b - m));
+    if (d == 0) {
+        m_out[row] = m;
+        l_out[row] = l1[row] * s1 + l2[row] * s2;
+    }
+    acc_out[row * dim + d] = acc1[row * dim + d] * s1 + acc2[row * dim + d] * s2;
+}
+
+extern "C" __global__ void sol_lse_merge(
+    const float* m1, const float* l1, const float* acc1,
+    const float* m2, const float* l2, const float* acc2,
+    float* out, long rows, int dim, int log2_space
+) {
+    long row = blockIdx.x;
+    int d = threadIdx.x;
+    if (row >= rows || d >= dim) return;
+    float a = m1[row], b = m2[row];
+    float m = fmaxf(a, b);
+    float s1 = (a == SOL_NEG) ? 0.0f : (log2_space ? exp2f(a - m) : expf(a - m));
+    float s2 = (b == SOL_NEG) ? 0.0f : (log2_space ? exp2f(b - m) : expf(b - m));
+    float l = l1[row] * s1 + l2[row] * s2;
+    float acc = acc1[row * dim + d] * s1 + acc2[row * dim + d] * s2;
+    out[row * dim + d] = l > 0.0f ? acc / l : 0.0f;
+}
+
+extern "C" __global__ void sol_normalize_partials(
+    const float* l, const float* acc, float* out, long rows, int dim
+) {
+    long row = blockIdx.x;
+    int d = threadIdx.x;
+    if (row >= rows || d >= dim) return;
+    float z = l[row];
+    out[row * dim + d] = z > 0.0f ? acc[row * dim + d] / z : 0.0f;
+}
+
+extern "C" __global__ void sol_global_h_bar(
+    const float* k, const float* v, const float* kc, float* h,
+    long seq, int dim, int n, int tile
+) {
+    int bh = blockIdx.x;
+    int ed = blockIdx.y * blockDim.x + threadIdx.x;
+    int cells = dim * dim;
+    if (ed >= cells) return;
+    int e = ed / dim, d = ed - e * dim;
+    float acc = 0.0f;
+    for (int t = 0; t < (int)seq; t++) {
+        int j = t / tile;
+        float dk = k[(bh * seq + t) * (long)dim + e] - kc[(bh * (long)n + j) * (long)dim + e];
+        acc += dk * v[(bh * seq + t) * (long)dim + d];
+    }
+    float inv = n > 0 ? 1.0f / (float)n : 0.0f;
+    h[(bh * (long)cells) + ed] = acc * inv;
+}
+
+extern "C" __global__ void sol_pisa_first_order(
+    const float* q, const float* h_bar, const float* coarse_m, const float* coarse_l,
+    const float* merged_m, float* acc, long seq, int dim
+) {
+    int t = blockIdx.x;
+    long bh = blockIdx.y;
+    if (t >= seq) return;
+    int d = threadIdx.x;
+    if (d >= dim) return;
+    float cm = coarse_m[bh * seq + t];
+    float tail = (cm == SOL_NEG) ? 0.0f : coarse_l[bh * seq + t] * expf(cm - merged_m[bh * seq + t]);
+    if (tail <= 0.0f) return;
+    const float* qi = q + (bh * seq + t) * (long)dim;
+    const float* hb = h_bar + bh * (long)dim * dim;
+    float qh = 0.0f;
+    for (int e = 0; e < dim; e++) qh += qi[e] * hb[e * dim + d];
+    acc[(bh * seq + t) * (long)dim + d] += tail * qh;
+}
+
+// Tensor-core fine partials: `vsa_mma_attn` body, sentinel-truncated list,
+// emits (m, l, acc) in token order instead of a normalised output.
+extern "C" __global__ void __launch_bounds__(128, 2) sol_mma_attn_partials(
+    const unsigned short* __restrict__ qt, const unsigned short* __restrict__ kt,
+    const unsigned short* __restrict__ vt, const unsigned int* __restrict__ selected,
+    const int* __restrict__ block_sizes, const int* __restrict__ slot_src,
+    float* __restrict__ m_out, float* __restrict__ l_out, float* __restrict__ acc_out,
+    int num_tiles, int topk, float scale_log2, int q_base, long seq
+) {
+#if defined(__CUDA_ARCH__) && __CUDA_ARCH__ >= 800
+    extern __shared__ __align__(128) unsigned char mma_smem[];
+    const int tid = threadIdx.x, lane = tid & 31, warp = tid >> 5;
+    const int g = lane >> 2, t = lane & 3;
+    const int qtile = q_base + (int)blockIdx.x, bh = blockIdx.y;
+    if (qtile >= num_tiles) return;
+    const long padded = (long)num_tiles * MMA_TILE;
+    const unsigned short* qb = qt + (bh * padded + (long)qtile * MMA_TILE) * MMA_DIM;
+    const unsigned short* kb = kt + bh * padded * MMA_DIM;
+    const unsigned short* vb = vt + bh * padded * MMA_DIM;
+    const unsigned int* sel = selected + ((long)bh * num_tiles + qtile) * topk;
+
+    int nsel = 0;
+    while (nsel < topk && sel[nsel] != SOL_SENTINEL) nsel++;
+
+    const unsigned int s_base = mma_smem_u32(mma_smem);
+    const unsigned int sK[2] = { s_base, s_base + MMA_TILEB };
+    const unsigned int sV[2] = { s_base + 2 * MMA_TILEB, s_base + 3 * MMA_TILEB };
+
+    mma_load_tile(sK[0], qb, tid);
+    mma_cp_commit();
+    mma_cp_wait<0>();
+    __syncthreads();
+    unsigned int qf[8][4];
+    #pragma unroll
+    for (int kc = 0; kc < 8; kc++) {
+        int row = warp * 16 + (lane & 15), col = kc * 16 + (lane >> 4) * 8;
+        mma_ldm_x4(sK[0] + mma_swz(row, col), qf[kc][0], qf[kc][1], qf[kc][2], qf[kc][3]);
+    }
+    __syncthreads();
+
+    float o[16][4];
+    #pragma unroll
+    for (int n = 0; n < 16; n++) { o[n][0] = o[n][1] = o[n][2] = o[n][3] = 0.f; }
+    const float NEG = SOL_NEG;
+    float m0 = NEG, m1 = NEG, l0 = 0.f, l1 = 0.f;
+
+    if (nsel > 0) {
+        unsigned int kt0 = sel[0];
+        mma_load_tile(sK[0], kb + (long)kt0 * MMA_TILE * MMA_DIM, tid);
+        mma_load_tile(sV[0], vb + (long)kt0 * MMA_TILE * MMA_DIM, tid);
+        mma_cp_commit();
+    }
+
+    for (int i = 0; i < nsel; i++) {
+        const int buf = i & 1;
+        if (i + 1 < nsel) {
+            unsigned int kn = sel[i + 1];
+            mma_load_tile(sK[buf ^ 1], kb + (long)kn * MMA_TILE * MMA_DIM, tid);
+            mma_load_tile(sV[buf ^ 1], vb + (long)kn * MMA_TILE * MMA_DIM, tid);
+            mma_cp_commit();
+            mma_cp_wait<1>();
+        } else {
+            mma_cp_wait<0>();
+        }
+        __syncthreads();
+
+        float s[8][4];
+        #pragma unroll
+        for (int n = 0; n < 8; n++) { s[n][0] = s[n][1] = s[n][2] = s[n][3] = 0.f; }
+        #pragma unroll
+        for (int kc = 0; kc < 8; kc++) {
+            #pragma unroll
+            for (int n = 0; n < 8; n++) {
+                unsigned int b[2];
+                mma_ldm_x2(sK[buf] + mma_swz(n * 8 + (lane & 7), kc * 16 + ((lane >> 3) & 1) * 8), b[0], b[1]);
+                mma_bf16(s[n], qf[kc], b);
+            }
+        }
+
+        const int valid = block_sizes[sel[i]];
+        float rmax0 = NEG, rmax1 = NEG;
+        #pragma unroll
+        for (int n = 0; n < 8; n++) {
+            int c0 = n * 8 + t * 2;
+            if (c0 >= valid)     { s[n][0] = NEG; s[n][2] = NEG; }
+            if (c0 + 1 >= valid) { s[n][1] = NEG; s[n][3] = NEG; }
+            rmax0 = fmaxf(rmax0, fmaxf(s[n][0], s[n][1]));
+            rmax1 = fmaxf(rmax1, fmaxf(s[n][2], s[n][3]));
+        }
+        rmax0 = fmaxf(rmax0, __shfl_xor_sync(0xffffffffu, rmax0, 1));
+        rmax0 = fmaxf(rmax0, __shfl_xor_sync(0xffffffffu, rmax0, 2));
+        rmax1 = fmaxf(rmax1, __shfl_xor_sync(0xffffffffu, rmax1, 1));
+        rmax1 = fmaxf(rmax1, __shfl_xor_sync(0xffffffffu, rmax1, 2));
+        const float mn0 = fmaxf(m0, rmax0), mn1 = fmaxf(m1, rmax1);
+        const float ms0 = (mn0 == NEG) ? 0.f : mn0 * scale_log2;
+        const float ms1 = (mn1 == NEG) ? 0.f : mn1 * scale_log2;
+        const float a0 = exp2f(m0 * scale_log2 - ms0), a1 = exp2f(m1 * scale_log2 - ms1);
+        m0 = mn0; m1 = mn1;
+        float rs0 = 0.f, rs1 = 0.f;
+        #pragma unroll
+        for (int n = 0; n < 8; n++) {
+            s[n][0] = exp2f(s[n][0] * scale_log2 - ms0);
+            s[n][1] = exp2f(s[n][1] * scale_log2 - ms0);
+            s[n][2] = exp2f(s[n][2] * scale_log2 - ms1);
+            s[n][3] = exp2f(s[n][3] * scale_log2 - ms1);
+            rs0 += s[n][0] + s[n][1];
+            rs1 += s[n][2] + s[n][3];
+        }
+        rs0 += __shfl_xor_sync(0xffffffffu, rs0, 1);
+        rs0 += __shfl_xor_sync(0xffffffffu, rs0, 2);
+        rs1 += __shfl_xor_sync(0xffffffffu, rs1, 1);
+        rs1 += __shfl_xor_sync(0xffffffffu, rs1, 2);
+        l0 = l0 * a0 + rs0;
+        l1 = l1 * a1 + rs1;
+        #pragma unroll
+        for (int n = 0; n < 16; n++) { o[n][0] *= a0; o[n][1] *= a0; o[n][2] *= a1; o[n][3] *= a1; }
+
+        #pragma unroll
+        for (int kc = 0; kc < 4; kc++) {
+            unsigned int pa[4];
+            pa[0] = mma_pack_bf16(s[2 * kc][0], s[2 * kc][1]);
+            pa[1] = mma_pack_bf16(s[2 * kc][2], s[2 * kc][3]);
+            pa[2] = mma_pack_bf16(s[2 * kc + 1][0], s[2 * kc + 1][1]);
+            pa[3] = mma_pack_bf16(s[2 * kc + 1][2], s[2 * kc + 1][3]);
+            #pragma unroll
+            for (int n = 0; n < 16; n++) {
+                unsigned int b[2];
+                mma_ldm_x2_trans(sV[buf] + mma_swz(kc * 16 + (lane & 15), n * 8), b[0], b[1]);
+                mma_bf16(o[n], pa, b);
+            }
+        }
+        __syncthreads();
+    }
+
+    // Token-order (m, l, acc); padding slots are skipped.
+    int r0 = slot_src[(long)qtile * MMA_TILE + warp * 16 + g];
+    int r1 = slot_src[(long)qtile * MMA_TILE + warp * 16 + g + 8];
+    if (lane < 8) {
+        if (r0 >= 0) { m_out[bh * seq + r0] = m0; l_out[bh * seq + r0] = l0; }
+        if (r1 >= 0) { m_out[bh * seq + r1] = m1; l_out[bh * seq + r1] = l1; }
+    }
+    #pragma unroll
+    for (int n = 0; n < 16; n++) {
+        int col = n * 8 + t * 2;
+        if (r0 >= 0) {
+            float* ob = acc_out + (bh * seq + r0) * (long)MMA_DIM + col;
+            *reinterpret_cast<float2*>(ob) = make_float2(o[n][0], o[n][1]);
+        }
+        if (r1 >= 0) {
+            float* ob = acc_out + (bh * seq + r1) * (long)MMA_DIM + col;
+            *reinterpret_cast<float2*>(ob) = make_float2(o[n][2], o[n][3]);
+        }
+    }
+#else
+    (void)qt; (void)kt; (void)vt; (void)selected; (void)block_sizes; (void)slot_src;
+    (void)m_out; (void)l_out; (void)acc_out;
+    (void)num_tiles; (void)topk; (void)scale_log2; (void)q_base; (void)seq;
+    __trap();
+#endif
+}
+// ==== end region: sol ====

@@ -2,6 +2,17 @@
 
 Project code: FVID
 
+### FVID · 2026-09-24 · FVID-2026-09-24-sol-device-partials
+- Trigger: WS-A — replace Sol/PISA/SLA `host_cow` CPU paths with a device implementation (unselected blocks keep a coarse term, not block-skip)
+- Options: extend `vsa_mma_attn` in place; host-only staging; **pool + cuBLAS coarse + sentinel lists + fine/coarse flash partials + LSE merge**
+- Decision: device-shaped stages in `wan/sol_ops.rs` (host twins + CUDA launchers). Means reuse `vsa_tile_mean`; new `sol_tile_sum`, diag-threshold exact lists (`0xFFFFFFFF` pad), `sol_fine_partials` / `sol_mma_attn_partials` (m,l,acc), coarse remainder with `block_len` multiplicity, LSE merge. PISA reuses 1–3 with `vsa_topk` + first-order remainder kernel. SLA sparse maps when `blk_k=64` (K-smooth + top-k exact); otherwise `host_algorithm`. `host_algorithm` stays only on the no-device fallback. Multiple sink spans kept.
+- Reason: Sol is training-free threshold routing plus zeroth-order reuse; VSA top-k+gate is the wrong contract
+- Reversibility: cheap — host oracles unchanged; device is opt-in on a live resident CUDA context
+- Executed by: Executor
+- ADR: none
+- Verification: **host pass**. `cargo test -p fastvideo-cudarc --lib sol_attn pisa_attn sla sol_ops`. GPU kernels unrun here (no nvcc). Experiment: dense SDPA via the mma fine stage with all tiles selected is **unlikely to beat `wan/attn.rs` at this crate's typical seq lengths** (H3/LTX hundreds–few thousand tokens) — flash/mma comments already record tiled online-softmax losing to cuBLAS GEMM+softmax there. At 8s Wan (~48k) not materialising S×S scores would win on memory and maybe time; WS-K not implemented.
+- Remaining host fallbacks: Sol/PISA/SLA when no live resident CUDA device; SLA when `blk_k != 64`; mma fine partials only at dim=128 / sm80+ (scalar partials otherwise)
+
 ### FVID · 2026-09-24 · FVID-2026-09-24-ltx2-sampler-correctness
 - Trigger: LTX-2.5 stage 2 / Spark used ancestral Euler; distilled two-stage fused LoRA 0.8; FBCache re-armed on stage 2; SCSP claimed “steps 16–28” on a 15-step Euler loop that never reaches step 16
 - Options: keep ancestral stage 2; fuse 0.8 on distilled; leave SCSP as a no-op and document Euler; implement ODE res2s (no SDE / bongmath) and index **calls**
