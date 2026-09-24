@@ -1244,8 +1244,13 @@ pub struct PipelineOptions {
 /// The models of a stage-1 run, loaded once and kept: the DiT (37.8 GB) and the
 /// three decoders (~3 GB). A second generation pays for text, denoise and
 /// decode only — and for text not even that when the prompt was seen before.
-/// `model` is `None` after a DiffVAE decode (DiT dropped for VRAM); the next
+/// `model` is `None` after generate-decode (DiT dropped for VRAM); the next
 /// generate reloads it from `dit`.
+
+fn release_dit_for_decode(model: &mut Option<Ltx2Transformer>, loaded_strength: &mut Option<f32>) {
+    *model = None;
+    *loaded_strength = None;
+}
 pub struct Ltx2Pipeline {
     cfg: Ltx2Config,
     dit: PathBuf,
@@ -1717,11 +1722,11 @@ impl Ltx2Pipeline {
         timings.step_s = step_s;
         drop(text);
 
+        // Free the resident DiT (~38 GiB) before VAE activations, conv or DiffVAE.
+        release_dit_for_decode(&mut self.model, &mut self.loaded_strength);
+        sync()?;
+
         let written = if req.diff_vae {
-            // Free DiT before loading DiffVAE (~0.8 GB + large activations).
-            self.model = None;
-            self.loaded_strength = None;
-            sync()?;
             crate::wan::log::info(format_args!("ltx2: DiffVAE decode (DiT dropped)"));
             let dd_cfg = cfg.diffusion_decoder.as_ref().expect("checked above");
             let diffvae = DiffusionDecoder::load(
@@ -2095,6 +2100,17 @@ mod tests {
         assert_eq!((ah[0], ah[1], ah[2]), (all[48], all[49], all[48 + 10]));
         let mean = all.iter().sum::<f32>() / all.len() as f32;
         assert!(mean.abs() < 0.5);
+    }
+
+    #[test]
+    fn generate_decode_helper_drops_dit() {
+        let cfg = tiny();
+        let (model, _, _, _, _) = model_and_inputs(&cfg);
+        let mut resident = Some(model);
+        let mut loaded = Some(0.0f32);
+        release_dit_for_decode(&mut resident, &mut loaded);
+        assert!(resident.is_none());
+        assert!(loaded.is_none());
     }
 
     /// The loop against the update written out on the host, step by step, with

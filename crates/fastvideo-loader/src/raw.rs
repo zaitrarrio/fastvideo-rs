@@ -41,7 +41,7 @@ pub struct RawTensor {
 }
 
 impl RawTensor {
-    fn from_f32(shape: Vec<usize>, values: Vec<f32>) -> Self {
+    pub fn from_f32(shape: Vec<usize>, values: Vec<f32>) -> Self {
         let data = f32_bytes_le(&values);
         Self {
             shape,

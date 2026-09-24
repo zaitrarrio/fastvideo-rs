@@ -98,6 +98,22 @@ impl WeightMap {
         self.tensors.contains_key(key) || self.lazy.as_ref().is_some_and(|l| l.contains(key))
     }
 
+    /// Eager map of host f32 tensors (unit tests and generated fixtures).
+    pub fn from_f32_tensors(
+        items: impl IntoIterator<Item = (String, Vec<usize>, Vec<f32>)>,
+    ) -> Self {
+        let mut tensors = HashMap::new();
+        for (key, shape, values) in items {
+            tensors.insert(key, RawTensor::from_f32(shape, values));
+        }
+        Self {
+            tensors,
+            lazy: None,
+            generator: None,
+            mlx_h3: false,
+        }
+    }
+
     fn mlx_h3_alias(key: &str) -> Option<String> {
         if let Some(rest) = key.strip_prefix("transformer_blocks.") {
             return Some(format!("blocks.{rest}"));
@@ -108,11 +124,33 @@ impl WeightMap {
         None
     }
 
+    fn hunyuan15_aliases(key: &str) -> Vec<String> {
+        let mut out = Vec::new();
+        let stripped = key.strip_prefix("Hunyuan15.").unwrap_or(key);
+        if stripped != key {
+            out.push(stripped.to_string());
+        }
+        if let Some(rest) = stripped.strip_prefix("double_blocks.") {
+            out.push(format!("transformer_blocks.{rest}"));
+        }
+        if let Some(rest) = stripped.strip_prefix("transformer_blocks.") {
+            out.push(format!("double_blocks.{rest}"));
+        }
+        out
+    }
+
     fn resolved(&self, key: &str) -> String {
-        if !self.mlx_h3 || self.has_direct(key) {
+        if self.has_direct(key) {
             return key.to_string();
         }
-        if let Some(alias) = Self::mlx_h3_alias(key) {
+        if self.mlx_h3 {
+            if let Some(alias) = Self::mlx_h3_alias(key) {
+                if self.has_direct(&alias) {
+                    return alias;
+                }
+            }
+        }
+        for alias in Self::hunyuan15_aliases(key) {
             if self.has_direct(&alias) {
                 return alias;
             }
@@ -468,5 +506,43 @@ mod tests {
         assert!(!shape.is_empty());
         let (_shape, bf16) = map.get_bf16_bytes("patch_embedding.weight").unwrap();
         assert_eq!(bf16.len() % 2, 0);
+    }
+
+    #[test]
+    fn hunyuan15_aliases_strip_prefix_and_map_blocks() {
+        let map = WeightMap::from_f32_tensors([
+            (
+                "transformer_blocks.0.img_mod.1.weight".into(),
+                vec![2, 2],
+                vec![1.0, 2.0, 3.0, 4.0],
+            ),
+            ("img_in.proj.weight".into(), vec![2, 3], vec![0.5; 6]),
+        ]);
+        assert!(map.has_tensor("Hunyuan15.double_blocks.0.img_mod.1.weight"));
+        assert!(map.has_tensor("Hunyuan15.img_in.proj.weight"));
+        assert_eq!(
+            map.shape("Hunyuan15.double_blocks.0.img_mod.1.weight"),
+            Some(vec![2, 2])
+        );
+        let v = map
+            .require("Hunyuan15.double_blocks.0.img_mod.1.weight")
+            .unwrap()
+            .to_f32_vec()
+            .unwrap();
+        assert_eq!(v, vec![1.0, 2.0, 3.0, 4.0]);
+        map.require("Hunyuan15.img_in.proj.weight").unwrap();
+    }
+
+    #[test]
+    fn weights_manifest_lists_fastwan21() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../scripts/gpu/weights-manifest.tsv");
+        let text = std::fs::read_to_string(&path)
+            .unwrap_or_else(|e| panic!("weights-manifest.tsv missing at {}: {e}", path.display()));
+        assert!(
+            text.contains("fastwan21-1.3b"),
+            "manifest must list fastwan21-1.3b"
+        );
+        assert!(text.contains("FastVideo/FastWan2.1-T2V-1.3B-Diffusers"));
     }
 }

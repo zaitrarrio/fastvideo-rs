@@ -366,6 +366,20 @@ impl Block {
     }
 }
 
+fn load_keyframes_abs_pos(
+    map: &WeightMap,
+    keys: &Keys,
+    cfg: &Ltx2TransformerConfig,
+    dv: usize,
+) -> Result<Option<CudaTensor>> {
+    if !cfg.use_keyframes_abs_pos_embedding {
+        return Ok(None);
+    }
+    let mut t = cuda_tensor_shaped(map, &keys.key("keyframes_abs_pos_embedding"), &[1, dv])?;
+    t.pin_device()?;
+    Ok(Some(t))
+}
+
 impl Ltx2Transformer {
     /// Re-fuse attached LoRA linears at `s`. No disk, no DiT reload.
     pub fn set_lora_strength(&mut self, s: f32) -> Result<()> {
@@ -585,14 +599,7 @@ impl Ltx2Transformer {
                 Ok(None)
             }
         };
-        let keyframes = if cfg.use_keyframes_abs_pos_embedding {
-            let mut t =
-                cuda_tensor_shaped(map, &keys.key("keyframes_abs_pos_embedding"), &[1, dv])?;
-            t.pin_device()?;
-            Some(t)
-        } else {
-            None
-        };
+        let keyframes = load_keyframes_abs_pos(map, keys, cfg, dv)?;
         Ok(Self {
             proj_in: Linear::load(map, &keys.key("proj_in"), cfg.in_channels, dv, true)?,
             audio_proj_in: Linear::load(
@@ -1233,6 +1240,7 @@ mod tests {
     };
     use super::super::keys::Layout;
     use super::*;
+    use crate::wan::weights::WeightMap;
 
     fn tiny() -> Ltx2TransformerConfig {
         Ltx2TransformerConfig {
@@ -1675,5 +1683,24 @@ mod tests {
         assert!(model.caption_projection.is_none());
         assert!(model.blocks[0].video.prompt_table.is_some());
         assert_eq!(model.blocks[0].video.scale_shift_table.shape, [9, 16]);
+    }
+
+    #[test]
+    fn keyframes_abs_pos_missing_ok_when_flag_false() {
+        let empty = WeightMap::from_f32_tensors([]);
+        let keys = Keys::transformer(Layout::Diffusers);
+        let off = Ltx2TransformerConfig::ltx2_23_22b();
+        assert!(!off.use_keyframes_abs_pos_embedding);
+        assert!(super::load_keyframes_abs_pos(&empty, &keys, &off, 16)
+            .unwrap()
+            .is_none());
+        let on = Ltx2TransformerConfig::ltx2_5_22b();
+        assert!(on.use_keyframes_abs_pos_embedding);
+        let err = super::load_keyframes_abs_pos(&empty, &keys, &on, 16).unwrap_err();
+        let s = err.to_string();
+        assert!(
+            s.contains("keyframes") || s.contains("missing") || s.contains("not found"),
+            "{s}"
+        );
     }
 }

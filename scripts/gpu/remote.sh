@@ -252,8 +252,9 @@ cmd_fetch() {
   local repo="$1" dest="$2"; shift 2
   mkdir -p "$dest"
   command -v hf-fm >/dev/null || die "hf-fm not on PATH"
-  # Already fetched (and promoted) on a reused box.
-  if [[ -f "$dest/.complete" ]] && { [[ -d "$dest/text_encoder" ]] || [[ -d "$dest/transformer" ]] || [[ -d "$dest/vae" ]]; }; then
+  # Already fetched (and promoted) on a reused box. Dest-level .complete is the
+  # verify contract — LoRA / upscaler trees have no text_encoder/.
+  if [[ -f "$dest/.complete" ]]; then
     log "weights already in $dest (skipping fetch)"
     return 0
   fi

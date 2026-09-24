@@ -5,6 +5,7 @@
 #
 #   runpod.sh fetch     volume + CPU download + verify
 #   runpod.sh verify    re-check shards on a live fetch pod or via SSH
+#   runpod.sh manifest  print dests from weights-manifest.tsv
 #   runpod.sh gpu       three PRO 6000 96 GB pods (refuses if volume incomplete)
 #   runpod.sh status    volume / pods / cost
 #   runpod.sh reap      destroy fv-* GPU and fetch pods (keeps the volume)
@@ -216,20 +217,14 @@ rp_ensure_registry_auth() {
 # dest<TAB>hub<TAB>space-separated hf-fm globs (same families as validate.sh)
 
 rp_weight_rows() {
-  cat <<'EOF'
-h3-8step	FastVideo/FastVideo-FastH3-8-Step-V2	tokenizer/* text_encoder/*.json text_encoder/model-0000[1-9]-of-00014.safetensors text_encoder/model-0001[01]-of-00014.safetensors text_encoder/model-0001[2-4]-of-00014.safetensors transformer/* audio_vae/* vae/*
-h3-base	MiniMaxAI/MiniMax-H3	tokenizer/* text_encoder/*.json text_encoder/model-0000[1-9]-of-00014.safetensors text_encoder/model-0001[01]-of-00014.safetensors text_encoder/model-0001[2-4]-of-00014.safetensors transformer/* audio_vae/* vae/*
-FastH3-4-step-Preview-v1-LoRA	FastVideo/FastVideo-FastH3-4-step-Preview-v1-LoRA	dense-datafree/adapter_model.safetensors vsa-datafree/adapter_model.safetensors
-upscaler	LBH-123-AI/Minimax_h3_latent_Upscaler	minimax_h3_latent_upscaler_3d_bf16.safetensors
-h3-to-ltx	Efficient-Large-Model/H3-to-LTX-Latent-Adapter	config.json model.safetensors
-ltx2	Lightricks/LTX-2	tokenizer/* text_encoder/model-* text_encoder/*.json vae/* audio_vae/* vocoder/* ltx-2-19b-distilled.safetensors
-ltx25	Lightricks/LTX-2.5-Diffusers	tokenizer/* text_encoder/model-* text_encoder/*.json connectors/* transformer/* vae/* audio_vae/* vocoder/* latent_upsampler/* ltx-2.5-22b-distilled-lora-450-bf16.safetensors
-ltx23	FastVideo/LTX-2.3-Distilled-Diffusers	tokenizer/* text_encoder/model-* text_encoder/*.json text_embedding_projection/* transformer/* vae/* audio_vae/* vocoder/* spatial_upscaler/* latent_upsampler/* ltx-2.3-22b-distilled-lora-384-1.1.safetensors ltx-2.3-22b-distilled-lora-384.safetensors
-hy15-480-t2v	hunyuanvideo-community/HunyuanVideo-1.5-Diffusers-480p_t2v	tokenizer/* tokenizer_2/* text_encoder/* text_encoder_2/* transformer/* vae/* scheduler/*
-hy15-480-i2v	hunyuanvideo-community/HunyuanVideo-1.5-Diffusers-480p_i2v_step_distilled	tokenizer/* tokenizer_2/* text_encoder/* text_encoder_2/* transformer/* vae/* scheduler/*
-hy15-720-t2v	hunyuanvideo-community/HunyuanVideo-1.5-Diffusers-720p_t2v	tokenizer/* tokenizer_2/* text_encoder/* text_encoder_2/* transformer/* vae/* scheduler/*
-hy15-720-i2v	hunyuanvideo-community/HunyuanVideo-1.5-Diffusers-720p_i2v_distilled	tokenizer/* tokenizer_2/* text_encoder/* text_encoder_2/* transformer/* vae/* scheduler/*
-EOF
+  local f
+  f="$(dirname "${BASH_SOURCE[0]}")/weights-manifest.tsv"
+  [[ -f "$f" ]] || die "weights-manifest.tsv missing at $f"
+  grep -vE '^[[:space:]]*(#|$)' "$f"
+}
+
+cmd_manifest() {
+  rp_weight_rows | awk -F'\t' '{print $1}'
 }
 
 rp_volume_ready_file() { echo "$RP_STATE/volume-ready.json"; }
@@ -339,49 +334,30 @@ rp_remote_fetch_all() {
 rp_verify_remote() {
   local host="$1" port="$2"
   rp_log "verify volume shards"
-  # Slim runtime has no Python — bash existence + du only.
-  rp_ssh "$host" "$port" 'bash -s' <<'EOS' | tee -a "$RP_LIVE" >&2
+  # ssh -n: no stdin. Dest-level .complete from the committed manifest.
+  local dests
+  dests="$(rp_weight_rows | awk -F'\t' '{print $1}' | tr '\n' ' ')"
+  rp_ssh "$host" "$port" "DESTS='$dests' bash -lc '
 set -euo pipefail
 root=/workspace/weights
-fail=0
-check() {
-  local name="$1"; shift
-  local d="$root/$name" miss="" p
-  for p in "$@"; do
-    if [[ ! -e "$d/$p" ]]; then
-      miss="$miss $p"
-    fi
-  done
-  local sz
-  sz="$(du -sh "$d" 2>/dev/null | cut -f1 || echo 0)"
-  if [[ -n "$miss" ]]; then
-    echo "FAIL $name $sz missing:$miss"
-    fail=1
+missing=\"\"
+for name in \$DESTS; do
+  [[ -n \"\$name\" ]] || continue
+  d=\"\$root/\$name\"
+  sz=\"\$(du -sh \"\$d\" 2>/dev/null | cut -f1 || echo 0)\"
+  if [[ ! -f \"\$d/.complete\" ]]; then
+    echo \"MISSING \$name \$sz\"
+    missing=\"\$missing \$name\"
   else
-    echo "PASS $name $sz"
+    echo \"PASS \$name \$sz\"
   fi
-}
-check h3-8step tokenizer text_encoder transformer audio_vae vae .complete
-check h3-base tokenizer text_encoder transformer audio_vae vae .complete
-check FastH3-4-step-Preview-v1-LoRA dense-datafree/adapter_model.safetensors vsa-datafree/adapter_model.safetensors .complete
-check upscaler minimax_h3_latent_upscaler_3d_bf16.safetensors .complete
-check h3-to-ltx config.json model.safetensors .complete
-check ltx2 tokenizer text_encoder vae audio_vae vocoder ltx-2-19b-distilled.safetensors .complete
-check ltx25 tokenizer text_encoder connectors transformer vae audio_vae vocoder latent_upsampler .complete
-check ltx23 tokenizer text_encoder transformer vae audio_vae vocoder .complete
-if [[ ! -d $root/ltx23/spatial_upscaler && ! -d $root/ltx23/latent_upsampler ]]; then
-  echo "FAIL ltx23 missing spatial_upscaler|latent_upsampler"
-  fail=1
-else
-  echo "PASS ltx23-upscaler"
+done
+echo \"TOTAL \$(du -sh \$root 2>/dev/null | cut -f1 || echo 0)\"
+if [[ -n \"\$missing\" ]]; then
+  echo \"missing dests:\$missing\"
+  exit 2
 fi
-check hy15-480-t2v tokenizer text_encoder transformer vae .complete
-check hy15-480-i2v tokenizer text_encoder transformer vae .complete
-check hy15-720-t2v tokenizer text_encoder transformer vae .complete
-check hy15-720-i2v tokenizer text_encoder transformer vae .complete
-echo "TOTAL $(du -sh $root | cut -f1)"
-exit $fail
-EOS
+'" | tee -a "$RP_LIVE" >&2
 }
 
 cmd_fetch() {
@@ -625,6 +601,7 @@ case "${1:-}" in
   fetch) shift; cmd_fetch "$@" ;;
   fetch-continue) cmd_fetch_continue ;;
   verify) cmd_verify ;;
+  manifest) cmd_manifest ;;
   gpu) cmd_gpu ;;
   status) cmd_status ;;
   reap) cmd_reap ;;

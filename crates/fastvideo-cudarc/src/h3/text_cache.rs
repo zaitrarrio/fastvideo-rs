@@ -309,6 +309,20 @@ mod tests {
     }
 
     #[test]
+    fn cache_key_ignores_recipe_and_follows_encoder_identity() {
+        let tok = [9u8; 32];
+        let enc_a = [1u8; 32];
+        let enc_b = [2u8; 32];
+        let k_sol = cache_key("same prompt", &tok, 50, &enc_a);
+        let k_spark = cache_key("same prompt", &tok, 50, &enc_a);
+        assert_eq!(
+            k_sol, k_spark,
+            "recipe is not part of the cache key; only encoder identity is"
+        );
+        assert_ne!(cache_key("same prompt", &tok, 50, &enc_b), k_sol);
+    }
+
+    #[test]
     fn a_second_request_is_a_hit_and_never_recomputes() {
         let dir = temp_dir("hit");
         let key = cache_key("p", &[0; 32], 50, &[0; 32]);

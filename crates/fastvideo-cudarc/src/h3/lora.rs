@@ -33,6 +33,8 @@ pub struct H3LoraFuse {
     /// Copy of [`Self::pairs`] that survives host `fuse` consume, for device re-fuse.
     factors: HashMap<String, Pair>,
     diffs: HashMap<String, Vec<f32>>,
+    /// Hybrid `.set_weight` overwrite / inject, consumed by [`Self::fuse`].
+    replacements: HashMap<String, (Vec<usize>, Vec<f32>)>,
     format: LoraFormat,
     multiplier: f32,
     diff_scale: f32,
@@ -40,6 +42,7 @@ pub struct H3LoraFuse {
     pub alpha: u32,
     pub pairs_total: usize,
     pub diffs_total: usize,
+    pub replacements_total: usize,
     pub path: String,
 }
 
@@ -99,17 +102,6 @@ impl H3LoraFuse {
                 },
             );
         }
-        if ranks.iter().any(|r| *r != ranks[0]) {
-            return Err(msg(format!("Mixed LoRA ranks are unsupported: {ranks:?}")));
-        }
-        let rank = ranks[0];
-        if let Some(meta) = plan.metadata_rank {
-            if meta != rank {
-                return Err(msg(format!(
-                    "FastVideo metadata rank {meta} does not match tensor rank {rank}"
-                )));
-            }
-        }
         let mut diffs = HashMap::new();
         for (param, key) in &plan.diffs {
             let base_shape = base
@@ -123,13 +115,38 @@ impl H3LoraFuse {
             }
             diffs.insert(param.clone(), data);
         }
+        let mut replacements = HashMap::new();
+        for (param, key) in &plan.replacements {
+            let (shape, data) = adapter_map.get_f32(key)?;
+            if let Some(base_shape) = base.shape(param) {
+                if shape != base_shape {
+                    return Err(msg(format!(
+                        "Adapter set_weight/base mismatch for {param}: base{base_shape:?}, set{shape:?}"
+                    )));
+                }
+            }
+            replacements.insert(param.clone(), (shape, data));
+        }
+        let rank = ranks.first().copied().unwrap_or(1);
+        if !ranks.is_empty() && ranks.iter().any(|r| *r != rank) {
+            return Err(msg(format!("Mixed LoRA ranks are unsupported: {ranks:?}")));
+        }
+        if let Some(meta) = plan.metadata_rank {
+            if !ranks.is_empty() && meta != rank {
+                return Err(msg(format!(
+                    "FastVideo metadata rank {meta} does not match tensor rank {rank}"
+                )));
+            }
+        }
         let multiplier = lora_multiplier(plan.format, rank, alpha, scale).map_err(msg)?;
         let pairs_total = pairs.len();
         let diffs_total = diffs.len();
+        let replacements_total = replacements.len();
         Ok(Self {
             factors: pairs.clone(),
             pairs,
             diffs,
+            replacements,
             format: plan.format,
             multiplier,
             diff_scale: scale,
@@ -140,6 +157,7 @@ impl H3LoraFuse {
             },
             pairs_total,
             diffs_total,
+            replacements_total,
             path: adapter.display().to_string(),
         })
     }
@@ -174,6 +192,13 @@ impl H3LoraFuse {
         linear.set_lora_strength(self.multiplier)
     }
 
+    /// Host copy of a `.set_weight` row when the base checkpoint has no key.
+    pub fn replacement(&self, param: &str) -> Option<(Vec<usize>, Vec<f32>)> {
+        self.replacements
+            .get(param)
+            .map(|(shape, data)| (shape.clone(), data.clone()))
+    }
+
     /// [`Self::set_lora_strength`] then re-fuse each attached linear.
     pub fn set_strength_on<'a>(
         &mut self,
@@ -189,6 +214,14 @@ impl H3LoraFuse {
 
     /// Apply a pair (if `param` is `{module}.weight`) and then a `.diff`.
     pub fn fuse(&mut self, param: &str, data: &mut [f32], shape: &[usize]) -> Result<()> {
+        if let Some((rshape, rdata)) = self.replacements.remove(param) {
+            if rshape != shape || rdata.len() != data.len() {
+                return Err(msg(format!(
+                    "set_weight fuse {param}: host {shape:?} != {rshape:?}"
+                )));
+            }
+            data.copy_from_slice(&rdata);
+        }
         if let Some(module) = param.strip_suffix(".weight") {
             if let Some(pair) = self.pairs.remove(module) {
                 if shape != [pair.out, pair.inn] || data.len() != pair.out * pair.inn {
@@ -208,12 +241,13 @@ impl H3LoraFuse {
     }
 
     pub fn finish(&self) -> Result<()> {
-        if self.pairs.is_empty() && self.diffs.is_empty() {
+        if self.pairs.is_empty() && self.diffs.is_empty() && self.replacements.is_empty() {
             return Ok(());
         }
-        let extra = self.pairs.len() + self.diffs.len();
+        let extra = self.pairs.len() + self.diffs.len() + self.replacements.len();
         let mut left: Vec<_> = self.pairs.keys().cloned().collect();
         left.extend(self.diffs.keys().cloned());
+        left.extend(self.replacements.keys().cloned());
         left.sort();
         left.truncate(3);
         Err(msg(format!(
@@ -244,6 +278,10 @@ pub fn set_strength<'a>(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::wan::weights::WeightMap;
+    use fastvideo_models::h3::lora::plan_from_keys;
+    use std::collections::HashMap;
+    use std::path::Path;
 
     #[test]
     fn set_lora_strength_updates_multiplier_and_linear() {
@@ -266,6 +304,7 @@ mod tests {
             pairs: HashMap::new(),
             factors: HashMap::new(),
             diffs: HashMap::new(),
+            replacements: HashMap::new(),
             format: LoraFormat::FastvideoV2,
             multiplier: 1.0,
             diff_scale: 1.0,
@@ -273,6 +312,7 @@ mod tests {
             alpha: rank as u32,
             pairs_total: 0,
             diffs_total: 0,
+            replacements_total: 0,
             path: "test".into(),
         };
         set_strength(&mut fuse, 0.8, std::iter::once(&mut lin)).unwrap();
@@ -281,5 +321,74 @@ mod tests {
         for (g, w) in got.iter().zip(&want) {
             assert!((g - w).abs() <= 1e-5, "{g} vs {w}");
         }
+    }
+
+    #[test]
+    fn fuse_overwrites_from_set_weight() {
+        let mut fuse = H3LoraFuse {
+            pairs: HashMap::new(),
+            factors: HashMap::new(),
+            diffs: HashMap::new(),
+            replacements: HashMap::from([(
+                "blocks.0.attn.to_q.weight".into(),
+                (vec![2, 2], vec![9.0, 8.0, 7.0, 6.0]),
+            )]),
+            format: LoraFormat::FastvideoV2,
+            multiplier: 1.0,
+            diff_scale: 1.0,
+            rank: 1,
+            alpha: 1,
+            pairs_total: 0,
+            diffs_total: 0,
+            replacements_total: 1,
+            path: "test".into(),
+        };
+        let mut data = vec![1.0f32, 1.0, 1.0, 1.0];
+        fuse.fuse("blocks.0.attn.to_q.weight", &mut data, &[2, 2])
+            .unwrap();
+        assert_eq!(data, vec![9.0, 8.0, 7.0, 6.0]);
+        fuse.finish().unwrap();
+    }
+
+    #[test]
+    fn fifty_gates_inject_when_base_has_no_key() {
+        let keys: Vec<String> = (0..50)
+            .map(|i| format!("transformer_blocks.{i}.attn.to_gate_compress.weight.set_weight"))
+            .collect();
+        let mut meta = HashMap::new();
+        meta.insert("format".into(), "fastvideo-lora-v2".into());
+        meta.insert("set_weight_tensors".into(), "50".into());
+        meta.insert("low_rank_tensors".into(), "0".into());
+        let plan = plan_from_keys(&keys, &meta, "vsa-datafree/adapter_model.safetensors").unwrap();
+        let adapter = WeightMap::from_f32_tensors(keys.iter().map(|k| {
+            (
+                k.clone(),
+                vec![2usize, 3],
+                vec![0.25f32, 0.5, 0.75, 1.0, 1.25, 1.5],
+            )
+        }));
+        let base = WeightMap::from_f32_tensors([]);
+        let mut fuse = H3LoraFuse::from_plan(
+            &base,
+            &adapter,
+            Path::new("vsa-datafree/adapter_model.safetensors"),
+            plan,
+            1,
+            1.0,
+        )
+        .unwrap();
+        assert_eq!(fuse.replacements_total, 50);
+        assert!(base
+            .shape("transformer_blocks.0.attn.to_gate_compress.weight")
+            .is_none());
+        for i in 0..50 {
+            let key = format!("transformer_blocks.{i}.attn.to_gate_compress.weight");
+            let (shape, row) = fuse.replacement(&key).expect("injected gate");
+            assert_eq!(shape, vec![2, 3]);
+            let mut data = vec![0.0f32; 6];
+            fuse.fuse(&key, &mut data, &shape).unwrap();
+            assert_eq!(data, row);
+        }
+        fuse.finish().unwrap();
     }
 }

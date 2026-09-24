@@ -2,9 +2,9 @@
 //!
 //! FastVideo `fastvideo-lora-v2` checkpoints are hybrid: `W += B @ A`, plus
 //! tiny `.diff` / `.diff_b` corrections that must accumulate in float32.
-//! PEFT adapters use `W += scale * alpha / rank * B @ A`. Replacement
-//! (`.set_weight`) checkpoints are rejected; Sol-H3 accepts the dense-datafree
-//! adapter and the Ref2VA turbo adapter only.
+//! PEFT adapters use `W += scale * alpha / rank * B @ A`. Hybrid adapters
+//! may also carry `.set_weight` replacements (Spark VSA-DataFree
+//! `to_gate_compress`); PEFT replacements stay rejected.
 //!
 //! `A` is `[rank, in]`, `B` is `[out, rank]`.
 
@@ -52,6 +52,9 @@ pub struct LoraPlan {
     pub pairs: Vec<(String, String, String)>,
     /// `(parameter name, diff key)`, sorted. Parameter names end in `.weight` or `.bias`.
     pub diffs: Vec<(String, String)>,
+    /// `(parameter name, adapter key)` for hybrid `.set_weight` overwrites.
+    /// Parameter names end in `.weight` or `.bias`.
+    pub replacements: Vec<(String, String)>,
     /// `rank` from hybrid metadata, when the file declared one.
     pub metadata_rank: Option<usize>,
 }
@@ -145,7 +148,7 @@ pub fn plan_from_keys(
     let mut a_keys: HashMap<String, String> = HashMap::new();
     let mut b_keys: HashMap<String, String> = HashMap::new();
     let mut diffs: HashMap<String, String> = HashMap::new();
-    let mut replacements = 0usize;
+    let mut replacements: HashMap<String, String> = HashMap::new();
     let mut unsupported = Vec::new();
 
     for key in keys {
@@ -177,15 +180,25 @@ pub fn plan_from_keys(
             }
         }
         if key.ends_with(".set_weight") {
-            replacements += 1;
+            if !hybrid {
+                return Err(format!(
+                    "{path} contains replacement tensors; PEFT adapters cannot use .set_weight"
+                ));
+            }
+            let stem = key
+                .strip_suffix(".set_weight")
+                .expect("suffix")
+                .strip_prefix("diffusion_model.")
+                .unwrap_or(key.strip_suffix(".set_weight").expect("suffix"));
+            let param = if stem.ends_with(".weight") || stem.ends_with(".bias") {
+                stem.to_string()
+            } else {
+                format!("{stem}.weight")
+            };
+            replacements.insert(param, key.clone());
         } else {
             unsupported.push(key.clone());
         }
-    }
-    if replacements > 0 {
-        return Err(format!(
-            "{path} contains {replacements} replacement tensors; this runtime requires the dense-datafree adapter"
-        ));
     }
     if !unsupported.is_empty() {
         return Err(format!(
@@ -193,7 +206,7 @@ pub fn plan_from_keys(
             &unsupported[..unsupported.len().min(3)]
         ));
     }
-    if a_keys.is_empty() {
+    if a_keys.is_empty() && replacements.is_empty() {
         return Err(format!("No LoRA A tensors found in {path}"));
     }
     let missing_a: Vec<_> = b_keys
@@ -227,17 +240,16 @@ pub fn plan_from_keys(
         let pairs = a_keys.len();
         let expect_low = meta_usize(metadata, "low_rank_tensors").unwrap_or(pairs * 2);
         let expect_diffs = meta_usize(metadata, "diff_tensors").unwrap_or(diffs.len());
-        let expect_repl = meta_usize(metadata, "set_weight_tensors").unwrap_or(0);
-        if expect_low != pairs * 2 || expect_diffs != diffs.len() {
+        let expect_repl = meta_usize(metadata, "set_weight_tensors").unwrap_or(replacements.len());
+        if expect_low != pairs * 2
+            || expect_diffs != diffs.len()
+            || expect_repl != replacements.len()
+        {
             return Err(format!(
-                "FastVideo adapter metadata/payload mismatch: low_rank={expect_low}/{}, diffs={expect_diffs}/{}",
+                "FastVideo adapter metadata/payload mismatch: low_rank={expect_low}/{}, diffs={expect_diffs}/{}, set_weight={expect_repl}/{}",
                 pairs * 2,
-                diffs.len()
-            ));
-        }
-        if expect_repl != 0 {
-            return Err(format!(
-                "FastVideo metadata declares {expect_repl} replacement tensors"
+                diffs.len(),
+                replacements.len()
             ));
         }
     }
@@ -260,10 +272,20 @@ pub fn plan_from_keys(
             (name, key)
         })
         .collect();
+    let mut repl_names: Vec<_> = replacements.keys().cloned().collect();
+    repl_names.sort();
+    let replacements = repl_names
+        .into_iter()
+        .map(|name| {
+            let key = replacements.remove(&name).expect("replacement key");
+            (name, key)
+        })
+        .collect();
     Ok(LoraPlan {
         format,
         pairs,
         diffs,
+        replacements,
         metadata_rank: if hybrid {
             meta_usize(metadata, "rank")
         } else {
@@ -399,7 +421,7 @@ mod tests {
     }
 
     #[test]
-    fn hybrid_plan_rejects_replacements_and_checks_counts() {
+    fn hybrid_plan_accepts_replacements_and_counts() {
         let keys = vec![
             "blocks.0.attn.to_q.lora_A.weight".into(),
             "blocks.0.attn.to_q.lora_B.weight".into(),
@@ -408,8 +430,43 @@ mod tests {
         ];
         let mut meta = HashMap::new();
         meta.insert("format".into(), "fastvideo-lora-v2".into());
-        let err = plan_from_keys(&keys, &meta, "adapter.safetensors").unwrap_err();
-        assert!(err.contains("replacement"), "{err}");
+        let plan = plan_from_keys(&keys, &meta, "adapter.safetensors").unwrap();
+        assert_eq!(plan.pairs.len(), 1);
+        assert_eq!(plan.diffs.len(), 1);
+        assert_eq!(plan.replacements.len(), 1);
+        assert_eq!(plan.replacements[0].0, "blocks.0.attn.to_q.weight");
+    }
+
+    #[test]
+    fn hybrid_plan_fifty_gates_without_lora_pairs() {
+        let keys: Vec<String> = (0..50)
+            .map(|i| format!("transformer_blocks.{i}.attn.to_gate_compress.weight.set_weight"))
+            .collect();
+        let mut meta = HashMap::new();
+        meta.insert("format".into(), "fastvideo-lora-v2".into());
+        meta.insert("set_weight_tensors".into(), "50".into());
+        meta.insert("low_rank_tensors".into(), "0".into());
+        let plan = plan_from_keys(&keys, &meta, "vsa-datafree/adapter_model.safetensors").unwrap();
+        assert_eq!(plan.pairs.len(), 0);
+        assert_eq!(plan.replacements.len(), 50);
+        assert!(plan
+            .replacements
+            .iter()
+            .all(|(p, _)| p.ends_with("to_gate_compress.weight")));
+    }
+
+    #[test]
+    fn peft_plan_rejects_set_weight() {
+        let keys = vec![
+            "transformer_blocks.0.attn.to_q.lora_A.default.weight".into(),
+            "transformer_blocks.0.attn.to_q.lora_B.default.weight".into(),
+            "transformer_blocks.0.attn.to_q.set_weight".into(),
+        ];
+        let err = plan_from_keys(&keys, &HashMap::new(), "peft.safetensors").unwrap_err();
+        assert!(
+            err.contains("set_weight") || err.contains("replacement"),
+            "{err}"
+        );
     }
 
     #[test]
@@ -438,5 +495,13 @@ mod tests {
         let mut w = vec![1.0, 2.0];
         add_diff(&mut w, &[0.5, -0.25], 2.0).unwrap();
         assert_eq!(w, vec![2.0, 1.5]);
+    }
+
+    #[test]
+    fn weights_manifest_lists_fastwan21() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../scripts/gpu/weights-manifest.tsv");
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert!(text.contains("fastwan21-1.3b\tFastVideo/FastWan2.1-T2V-1.3B-Diffusers"));
     }
 }

@@ -151,6 +151,14 @@ impl Ltx2TransformerConfig {
         }
     }
 
+    /// LTX-2.3 distilled DiT: 2.5 widths, no keyframe abs-pos table.
+    pub fn ltx2_23_22b() -> Self {
+        Self {
+            use_keyframes_abs_pos_embedding: false,
+            ..Self::ltx2_5_22b()
+        }
+    }
+
     /// Video stream width: 32 × 128 = 4096.
     pub fn inner_dim(&self) -> usize {
         self.num_attention_heads * self.attention_head_dim
@@ -1148,7 +1156,7 @@ pub fn ltx2_5_22b_distilled() -> Ltx2Config {
 pub fn ltx2_23_22b_distilled() -> Ltx2Config {
     Ltx2Config {
         version: Ltx2ModelVersion::V23,
-        transformer: Ltx2TransformerConfig::ltx2_5_22b(),
+        transformer: Ltx2TransformerConfig::ltx2_23_22b(),
         vae: Ltx2VideoVaeConfig::ltx2_5_22b(),
         connectors: Ltx2ConnectorsConfig::ltx2_5_22b(),
         vocoder: Ltx2VocoderConfig::ltx2_5_22b_bwe(),
@@ -1164,7 +1172,7 @@ pub fn ltx2_23_22b_distilled() -> Ltx2Config {
 pub fn ltx2_23_22b() -> Ltx2Config {
     Ltx2Config {
         version: Ltx2ModelVersion::V23,
-        transformer: Ltx2TransformerConfig::ltx2_5_22b(),
+        transformer: Ltx2TransformerConfig::ltx2_23_22b(),
         vae: Ltx2VideoVaeConfig::ltx2_5_22b(),
         connectors: Ltx2ConnectorsConfig::ltx2_5_22b(),
         vocoder: Ltx2VocoderConfig::ltx2_5_22b_bwe(),
@@ -1375,6 +1383,18 @@ mod tests {
         assert!(!c.use_prompt_embeddings && c.use_prompt_adaln_single);
         assert_eq!(c.inner_dim(), 4096);
         assert_eq!(c.num_layers, 48);
+    }
+
+    #[test]
+    fn ltx23_keyframes_abs_pos_is_off() {
+        assert!(!Ltx2TransformerConfig::ltx2_23_22b().use_keyframes_abs_pos_embedding);
+        assert!(!ltx2_23_22b().transformer.use_keyframes_abs_pos_embedding);
+        assert!(
+            !ltx2_23_22b_distilled()
+                .transformer
+                .use_keyframes_abs_pos_embedding
+        );
+        assert!(Ltx2TransformerConfig::ltx2_5_22b().use_keyframes_abs_pos_embedding);
     }
 
     #[test]

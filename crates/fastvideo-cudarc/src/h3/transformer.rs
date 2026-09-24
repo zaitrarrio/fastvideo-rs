@@ -694,7 +694,13 @@ impl Attention {
             let mut stacked = Vec::with_capacity(names.len() * inner * hidden);
             for name in &names {
                 let key = format!("{name}.weight");
-                let (shape, mut row) = map.get_f32(&key)?;
+                let (shape, mut row) = match map.get_f32(&key) {
+                    Ok(v) => v,
+                    Err(e) => match lora.as_ref().and_then(|f| f.replacement(&key)) {
+                        Some(v) => v,
+                        None => return Err(e),
+                    },
+                };
                 if shape != [inner, hidden] {
                     return Err(msg(format!(
                         "key {key}: shape {shape:?} != [{inner}, {hidden}]"

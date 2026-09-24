@@ -441,6 +441,12 @@ enum VideoDecoder {
     Taeh3(TaeHv),
 }
 
+/// VSA gate tensors load only when the contract is sparse (Spark) or an MLX
+/// snapshot actually ships them. Dense Sol-H3 / MiniMax-H3 stay ungated.
+fn dit_loads_vsa_gate(contract: &H3InferenceContract, mlx_vsa_capable: Option<bool>) -> bool {
+    contract.vsa_sparsity > 0.0 && mlx_vsa_capable.unwrap_or(true)
+}
+
 fn resolve_taeh3(explicit: Option<&Path>) -> Option<PathBuf> {
     if let Some(p) = explicit {
         return Some(p.to_path_buf());
@@ -547,8 +553,7 @@ impl H3Pipeline {
         };
         // Gate lives on VSA checkpoints and VSA-DataFree replacements. Sol-H3
         // + MiniMax-H3 is Sol-Attn on a dense backbone (`vsa_sparsity == 0`).
-        let with_gate =
-            contract.vsa_sparsity > 0.0 && mlx.as_ref().is_none_or(|s| s.vsa_capable);
+        let with_gate = dit_loads_vsa_gate(&contract, mlx.as_ref().map(|s| s.vsa_capable));
         crate::wan::log::info(format_args!(
             "h3 recipe={} steps={} video_shift={} vsa={} dense={}",
             options.recipe.as_deref().unwrap_or("auto"),
@@ -1621,5 +1626,15 @@ mod tests {
             fastvideo_models::h3::spark::FIXED_PROMPT,
             "4K, refined, high quality, cinematic detail, clean textures, natural motion."
         );
+    }
+
+    #[test]
+    fn sol_h3_with_gate_follows_sparsity() {
+        let sol = fastvideo_models::h3::config::H3InferenceContract::sol_h3();
+        let spark = fastvideo_models::h3::config::H3InferenceContract::sol_h3_spark();
+        assert!(!dit_loads_vsa_gate(&sol, None));
+        assert!(dit_loads_vsa_gate(&spark, None));
+        assert!(!dit_loads_vsa_gate(&spark, Some(false)));
+        assert!(!sol.dense && !spark.dense);
     }
 }

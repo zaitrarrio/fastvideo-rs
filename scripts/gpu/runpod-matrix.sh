@@ -99,8 +99,8 @@ case "$FAMILY" in
         --seconds 5 \
         --seed "$SEED" \
         --text-encoder streamed \
-        --warm \
-        --no-text-cache \
+        --text-cache "$WORK/h3-text-cache" \
+        --text-weights "$W/h3-base" \
         --adaln-cache "$RUNS/h3-adaln.cache" \
         --clip-dir "$RUNS/fasth3-8step-warm/frames"
     run_cell sol-h3-4step \
@@ -110,6 +110,8 @@ case "$FAMILY" in
         --seconds 5 \
         --seed "$SEED" \
         --text-encoder streamed \
+        --text-cache "$WORK/h3-text-cache" \
+        --text-weights "$W/h3-base" \
         --h3-recipe sol-h3 \
         --adaln-cache "$RUNS/sol-h3-adaln.cache" \
         --clip-dir "$RUNS/sol-h3-4step/frames"
@@ -146,6 +148,8 @@ case "$FAMILY" in
           --seconds 5 \
           --seed "$SEED" \
           --text-encoder streamed \
+          --text-cache "$WORK/h3-text-cache" \
+          --text-weights "$W/h3-base" \
           --h3-recipe sol-h3-spark \
           --adaln-cache "$RUNS/sol-h3-spark-adaln.cache" \
           --clip-dir "$RUNS/sol-h3-spark/frames"

@@ -1,0 +1,14 @@
+# dest	hub_id	globs
+h3-8step	FastVideo/FastVideo-FastH3-8-Step-V2	tokenizer/* text_encoder/*.json text_encoder/model-0000[1-9]-of-00014.safetensors text_encoder/model-0001[01]-of-00014.safetensors text_encoder/model-0001[2-4]-of-00014.safetensors transformer/* audio_vae/* vae/*
+h3-base	MiniMaxAI/MiniMax-H3	tokenizer/* text_encoder/*.json text_encoder/model-0000[1-9]-of-00014.safetensors text_encoder/model-0001[01]-of-00014.safetensors text_encoder/model-0001[2-4]-of-00014.safetensors transformer/* audio_vae/* vae/*
+FastH3-4-step-Preview-v1-LoRA	FastVideo/FastVideo-FastH3-4-step-Preview-v1-LoRA	dense-datafree/adapter_model.safetensors vsa-datafree/adapter_model.safetensors
+upscaler	LBH-123-AI/Minimax_h3_latent_Upscaler	minimax_h3_latent_upscaler_3d_bf16.safetensors
+h3-to-ltx	Efficient-Large-Model/H3-to-LTX-Latent-Adapter	config.json model.safetensors
+ltx2	Lightricks/LTX-2	tokenizer/* text_encoder/model-* text_encoder/*.json vae/* audio_vae/* vocoder/* ltx-2-19b-distilled.safetensors
+ltx25	Lightricks/LTX-2.5-Diffusers	tokenizer/* text_encoder/model-* text_encoder/*.json connectors/* transformer/* vae/* audio_vae/* vocoder/* latent_upsampler/* ltx-2.5-22b-distilled-lora-450-bf16.safetensors
+ltx23	FastVideo/LTX-2.3-Distilled-Diffusers	tokenizer/* text_encoder/model-* text_encoder/*.json text_embedding_projection/* transformer/* vae/* audio_vae/* vocoder/* spatial_upscaler/* latent_upsampler/* ltx-2.3-22b-distilled-lora-384-1.1.safetensors ltx-2.3-22b-distilled-lora-384.safetensors
+hy15-480-t2v	hunyuanvideo-community/HunyuanVideo-1.5-Diffusers-480p_t2v	tokenizer/* tokenizer_2/* text_encoder/* text_encoder_2/* transformer/* vae/* scheduler/*
+hy15-480-i2v	hunyuanvideo-community/HunyuanVideo-1.5-Diffusers-480p_i2v_step_distilled	tokenizer/* tokenizer_2/* text_encoder/* text_encoder_2/* transformer/* vae/* scheduler/*
+hy15-720-t2v	hunyuanvideo-community/HunyuanVideo-1.5-Diffusers-720p_t2v	tokenizer/* tokenizer_2/* text_encoder/* text_encoder_2/* transformer/* vae/* scheduler/*
+hy15-720-i2v	hunyuanvideo-community/HunyuanVideo-1.5-Diffusers-720p_i2v_distilled	tokenizer/* tokenizer_2/* text_encoder/* text_encoder_2/* transformer/* vae/* scheduler/*
+fastwan21-1.3b	FastVideo/FastWan2.1-T2V-1.3B-Diffusers	transformer/* tokenizer/* text_encoder/* vae/*
