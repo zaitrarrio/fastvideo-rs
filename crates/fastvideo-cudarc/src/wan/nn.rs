@@ -88,6 +88,19 @@ fn nvfp4_rule_for(prefixes: &[&str], in_dim: usize) -> Option<fastvideo_models::
     Some(rule)
 }
 
+/// Snapshot `W0` plus `(A, B)` when an LTX-2 LoRA install is live. Single-prefix
+/// linears only — fused QKV stacks are not in the distilled adapter.
+fn maybe_attach_ltx2_lora(prefixes: &[&str], lin: &mut Linear) -> Result<()> {
+    if prefixes.len() != 1 {
+        return Ok(());
+    }
+    let key = super::weights::join_key(prefixes[0], "weight");
+    if crate::ltx2::lora::factors(&key)?.is_none() {
+        return Ok(());
+    }
+    crate::ltx2::lora::attach_linear(&key, lin)
+}
+
 /// FP8 linears are opt-in and never a default.
 ///
 /// Per-tensor E4M3 is coarse — one scalar across a 1536x8960 weight — and a
@@ -314,7 +327,7 @@ impl Linear {
             }
         }
         let rows = prefixes.len() * out_dim;
-        Self::from_tensors_with(
+        let mut lin = Self::from_tensors_with(
             CudaTensor::from_vec(w, vec![rows, in_dim])?,
             if has_bias {
                 Some(CudaTensor::from_vec(b, vec![rows])?)
@@ -322,7 +335,9 @@ impl Linear {
                 None
             },
             None,
-        )
+        )?;
+        maybe_attach_ltx2_lora(prefixes, &mut lin)?;
+        Ok(lin)
     }
 
     /// A lazily mapped checkpoint straight to a device bf16 weight: no f32
@@ -384,7 +399,7 @@ impl Linear {
         } else {
             None
         };
-        Ok(Some(Self {
+        let mut lin = Self {
             weight: CudaTensor::from_vec(Vec::new(), vec![0, in_dim])?,
             bias,
             in_dim,
@@ -395,7 +410,9 @@ impl Linear {
             weight_affine: None,
             nvfp4_act: None,
             lora: None,
-        }))
+        };
+        maybe_attach_ltx2_lora(prefixes, &mut lin)?;
+        Ok(Some(lin))
     }
 
     /// A bias-free linear around a bf16 weight that is already on the device
@@ -1393,7 +1410,7 @@ mod fp8_rows_tests {
                 &w,
                 o,
                 i,
-                fastvideo_models::nvfp4::ScaleRule::Mse,
+                fastvideo_models::nvfp4::ScaleRule::Static6,
             )
             .unwrap();
             let stored = lin.weight.host_cow().unwrap();
@@ -1405,7 +1422,7 @@ mod fp8_rows_tests {
                 &x,
                 2,
                 i,
-                fastvideo_models::nvfp4::ScaleRule::Mse,
+                fastvideo_models::nvfp4::ScaleRule::Static6,
             )
             .unwrap();
             let y = lin

@@ -33,21 +33,21 @@ jobs:
         run: cargo test -p fastvideo-gpucheck -p fastvideo-cudarc --lib --bins
       - name: CUDA feature type-check
         env:
-          CUDARC_CUDA_VERSION: "13000"
+          CUDARC_CUDA_VERSION: "13040"
         run: cargo check -p fastvideo-gpucheck --features cuda
 
   nvrtc-compile:
     runs-on: ubuntu-22.04
     timeout-minutes: 30
     env:
-      CUDARC_CUDA_VERSION: "13000"
-      LD_LIBRARY_PATH: /usr/local/cuda-13.0/lib64
-      NVCC: /usr/local/cuda-13.0/bin/nvcc
+      CUDARC_CUDA_VERSION: "13040"
+      LD_LIBRARY_PATH: /usr/local/cuda-13.4/lib64
+      NVCC: /usr/local/cuda-13.4/bin/nvcc
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
-      - name: Install CUDA 13.0 nvcc + NVRTC (no driver, no GPU)
+      - name: Install CUDA 13.4 nvcc + NVRTC + tileiras (no driver, no GPU)
         run: |
           wget -q https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2204/x86_64/cuda-keyring_1.1-1_all.deb
           sudo dpkg -i cuda-keyring_1.1-1_all.deb
@@ -55,7 +55,8 @@ jobs:
           # shellcheck source=scripts/gpu/cuda-13.pins
           . scripts/gpu/cuda-13.pins
           sudo apt-get install -y -qq --allow-downgrades \
-            "$CUDA_NVCC_PKG" "$CUDA_NVRTC_PKG" "$CUDA_NVRTC_DEV_PKG"
+            "$CUDA_NVCC_PKG" "$CUDA_NVRTC_PKG" "$CUDA_NVRTC_DEV_PKG" \
+            "$CUDA_TILEIRAS_PKG"
       - name: Build with ahead-of-time cubins, then run both compile gates
         run: |
           cargo build --release -p fastvideo-gpucheck --features cuda 2>&1 | tee build.log

@@ -2,6 +2,16 @@
 
 Project code: FVID
 
+### FVID · 2026-09-24 · FVID-2026-09-24-nvfp4-te-static6-oxide
+- Trigger: default NVFP4 rule was FourOverSix MSE; host fake-quant in `dequant_beforehand`; no Tile-IR GEMM crate; runtime image still on CUDA 13.0
+- Options: keep MSE as `FASTVIDEO_NVFP4=1`; switch the on-switch to TransformerEngine `NVFP4BlockScaling` (`static_6`) and leave MSE as an explicit opt-in; ship an ungated oxide GEMM
+- Decision: **`FASTVIDEO_NVFP4=1` → `static_6`**. `mse` / `4o6` / `fouroversix` stay FourOverSix. Device `nvfp4_reconstruct` replaces host fake-quant when a CUDA context is live; `host_algorithm` remains on the CPU path. Models-side [`scope_rule`] + `FASTVIDEO_NVFP4_LTX_VIDEO_FFN` / `FASTVIDEO_NVFP4_COSMOS_STEPS` for LTX-2.3 video FFN and Cosmos middle steps (transformers not edited). New excluded crate `fastvideo-oxide-kernels` (nightly-2026-04-03 / cutile nvfp4 pattern). `scripts/oxide.sh` runs `cargo oxide build --arch sm_100,sm_120`. `build.rs` embeds cubins if present. Runtime image + `cuda-13.pins` → CUDA 13.4 + tileiras. Tile-IR GEMM **off** (`FASTVIDEO_NVFP4_OXIDE_GEMM`) until it beats cuBLAS bf16 on the H3 FFN shape (K=5376, N=14336) and PSNR ≥ 30 dB vs bf16.
+- Reason: TE static `amax/6` is the published NVFP4BlockScaling rule; MSE is a LongLive training heuristic. Oxide GEMM is unmeasured on this Mac.
+- Reversibility: cheap — env still selects MSE; oxide cubins are optional; GEMM flag defaults off
+- Executed by: WS-H
+- ADR: none
+- Verification: **host pass**. `cargo test -p fastvideo-models --lib nvfp4`; `cargo test -p fastvideo-cudarc --lib nvfp4`. Oxide cubins not emitted on this Mac (no cargo-oxide / tileiras). GPU reconstruct untested here (no nvcc).
+
 ### FVID · 2026-09-24 · FVID-2026-09-24-llm-resident-compute
 - Trigger: resident encoder compute still paid GQA `repeat_kv`, a full composed `[1,H,S,S]` score matrix, per-GEMM FP8 dequant, and a host DeepStack add
 - Options: rewrite `wan/attn.rs` / `Linear`; keep streamed host fallbacks; cache dequant in the decoder layer

@@ -27,6 +27,10 @@ macro_rules! kernel_fns {
     ($($name:ident),+ $(,)?) => {
         pub struct KernelFns {
             $(pub $name: CudaFunction,)+
+            /// Tile-IR W4A4 GEMM from `scripts/oxide.sh`. None unless a cubin
+            /// was embedded for this SM. Launch is still gated off by
+            /// `FASTVIDEO_NVFP4_OXIDE_GEMM`.
+            pub nvfp4_oxide_w4a4_gemm: Option<CudaFunction>,
         }
 
         /// Every `__global__` entry point in [`KERNEL_SRC`], in load order.
@@ -36,6 +40,7 @@ macro_rules! kernel_fns {
             fn load(module: &Arc<cudarc::driver::CudaModule>) -> Result<Self> {
                 Ok(Self {
                     $($name: module.load_function(stringify!($name))?,)+
+                    nvfp4_oxide_w4a4_gemm: None,
                 })
             }
         }
@@ -51,6 +56,7 @@ kernel_fns!(
     affine_w16_gemm,
     nvfp4_w4a4_gemm,
     nvfp4_kv_dequant,
+    nvfp4_reconstruct,
     ln_adaln_e_rope_half,
     pad_axis,
     group_norm_stats,
@@ -160,9 +166,28 @@ pub struct AotKernel {
     pub ptx: &'static str,
 }
 
+/// Tile-IR cubin from `scripts/oxide.sh` (`cargo oxide build --arch sm_100,sm_120`).
+pub struct OxideCubin {
+    pub sm: u32,
+    pub cubin: &'static [u8],
+}
+
 mod aot {
-    use super::AotKernel;
+    use super::{AotKernel, OxideCubin};
     include!(concat!(env!("OUT_DIR"), "/aot.rs"));
+}
+
+fn load_oxide_gemm(ctx: &Arc<cudarc::driver::CudaContext>, want: u32) -> Option<CudaFunction> {
+    let k = aot::OXIDE_AOT.iter().find(|k| k.sm == want)?;
+    let path = std::env::temp_dir().join(format!("fv-oxide-{}-sm{want}.cubin", std::process::id()));
+    std::fs::write(&path, k.cubin).ok()?;
+    let loaded = ctx.load_module(cudarc::nvrtc::Ptx::from_file(&path));
+    let _ = std::fs::remove_file(&path);
+    let module = loaded.ok()?;
+    module
+        .load_function("nvfp4_oxide_w4a4_gemm")
+        .or_else(|_| module.load_function("linear_tile"))
+        .ok()
 }
 
 /// Where the loaded kernels came from — reported in the device banner so a
@@ -205,7 +230,9 @@ impl KernelFns {
                 let loaded = ctx.load_module(cudarc::nvrtc::Ptx::from_file(&path));
                 let _ = std::fs::remove_file(&path);
                 let module = loaded?;
-                return Ok((Self::load(&module)?, KernelOrigin::Cubin(want)));
+                let mut fns = Self::load(&module)?;
+                fns.nvfp4_oxide_w4a4_gemm = load_oxide_gemm(ctx, want);
+                return Ok((fns, KernelOrigin::Cubin(want)));
             }
             if let Some(k) = aot::AOT
                 .iter()
@@ -213,12 +240,16 @@ impl KernelFns {
                 .max_by_key(|k| k.sm)
             {
                 let module = ctx.load_module(cudarc::nvrtc::Ptx::from_src(k.ptx))?;
-                return Ok((Self::load(&module)?, KernelOrigin::Ptx(k.sm)));
+                let mut fns = Self::load(&module)?;
+                fns.nvfp4_oxide_w4a4_gemm = load_oxide_gemm(ctx, want);
+                return Ok((fns, KernelOrigin::Ptx(k.sm)));
             }
         }
         let (ptx, arch) = compile_ptx(sm_major, sm_minor)?;
         let module = ctx.load_module(ptx)?;
-        Ok((Self::load(&module)?, KernelOrigin::Nvrtc(arch)))
+        let mut fns = Self::load(&module)?;
+        fns.nvfp4_oxide_w4a4_gemm = load_oxide_gemm(ctx, want);
+        Ok((fns, KernelOrigin::Nvrtc(arch)))
     }
 
     /// NVRTC only — what the compile gate exercises for each named arch.

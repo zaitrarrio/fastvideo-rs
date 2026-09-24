@@ -1,5 +1,7 @@
 [workspace]
 resolver = "2"
+# Nightly Tile-IR crate; built only inside docker/oxide.Dockerfile.
+exclude = ["crates/fastvideo-oxide-kernels"]
 members = [
     "crates/fastvideo-ops",
     "crates/fastvideo-core",

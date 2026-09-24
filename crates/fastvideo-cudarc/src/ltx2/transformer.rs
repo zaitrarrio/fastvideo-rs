@@ -83,6 +83,12 @@ impl AdaLnSingle {
             .reshape(vec![self.rows, self.dim])?;
         Ok((m, e))
     }
+
+    fn for_each_linear_mut(&mut self, f: &mut dyn FnMut(&mut Linear) -> Result<()>) -> Result<()> {
+        f(&mut self.linear_1)?;
+        f(&mut self.linear_2)?;
+        f(&mut self.linear)
+    }
 }
 
 /// `PixArtAlphaTextProjection`: `Linear → tanh-GELU → Linear`.
@@ -107,6 +113,11 @@ impl CaptionProjection {
 
     fn forward(&self, x: &CudaTensor) -> Result<CudaTensor> {
         self.linear_2.forward(&self.linear_1.forward_gelu(x)?)
+    }
+
+    fn for_each_linear_mut(&mut self, f: &mut dyn FnMut(&mut Linear) -> Result<()>) -> Result<()> {
+        f(&mut self.linear_1)?;
+        f(&mut self.linear_2)
     }
 }
 
@@ -338,7 +349,63 @@ fn table(map: &WeightMap, key: &str, rows: usize, dim: usize) -> Result<CudaTens
     Ok(t)
 }
 
+impl StreamBlock {
+    fn for_each_linear_mut(&mut self, f: &mut dyn FnMut(&mut Linear) -> Result<()>) -> Result<()> {
+        self.attn1.for_each_linear_mut(f)?;
+        self.attn2.for_each_linear_mut(f)?;
+        self.ff.for_each_linear_mut(f)
+    }
+}
+
+impl Block {
+    fn for_each_linear_mut(&mut self, f: &mut dyn FnMut(&mut Linear) -> Result<()>) -> Result<()> {
+        self.video.for_each_linear_mut(f)?;
+        self.audio.for_each_linear_mut(f)?;
+        self.audio_to_video.for_each_linear_mut(f)?;
+        self.video_to_audio.for_each_linear_mut(f)
+    }
+}
+
 impl Ltx2Transformer {
+    /// Re-fuse attached LoRA linears at `s`. No disk, no DiT reload.
+    pub fn set_lora_strength(&mut self, s: f32) -> Result<()> {
+        self.for_each_linear_mut(&mut |lin| {
+            if lin.has_lora() {
+                lin.set_lora_strength(s)?;
+            }
+            Ok(())
+        })
+    }
+
+    fn for_each_linear_mut(&mut self, f: &mut dyn FnMut(&mut Linear) -> Result<()>) -> Result<()> {
+        f(&mut self.proj_in)?;
+        f(&mut self.audio_proj_in)?;
+        if let Some(c) = self.caption_projection.as_mut() {
+            c.for_each_linear_mut(f)?;
+        }
+        if let Some(c) = self.audio_caption_projection.as_mut() {
+            c.for_each_linear_mut(f)?;
+        }
+        self.time_embed.for_each_linear_mut(f)?;
+        self.audio_time_embed.for_each_linear_mut(f)?;
+        if let Some(p) = self.prompt_adaln.as_mut() {
+            p.for_each_linear_mut(f)?;
+        }
+        if let Some(p) = self.audio_prompt_adaln.as_mut() {
+            p.for_each_linear_mut(f)?;
+        }
+        self.cross_video_scale_shift.for_each_linear_mut(f)?;
+        self.cross_audio_scale_shift.for_each_linear_mut(f)?;
+        self.cross_video_gate.for_each_linear_mut(f)?;
+        self.cross_audio_gate.for_each_linear_mut(f)?;
+        f(&mut self.proj_out)?;
+        f(&mut self.audio_proj_out)?;
+        for block in &mut self.blocks {
+            block.for_each_linear_mut(f)?;
+        }
+        Ok(())
+    }
+
     /// Load every block onto the device (37.8 GB as bf16). `keys` names the
     /// checkpoint's layout: the diffusers `transformer/` folder or the single
     /// `ltx-2-19b-*.safetensors`.

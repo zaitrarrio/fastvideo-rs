@@ -231,6 +231,20 @@ impl Attention {
         };
         self.to_out.forward(&merged)
     }
+
+    pub(crate) fn for_each_linear_mut(
+        &mut self,
+        f: &mut dyn FnMut(&mut Linear) -> Result<()>,
+    ) -> Result<()> {
+        f(&mut self.to_q)?;
+        f(&mut self.to_k)?;
+        f(&mut self.to_v)?;
+        f(&mut self.to_out)?;
+        if let Some(g) = self.to_gate_logits.as_mut() {
+            f(g)?;
+        }
+        Ok(())
+    }
 }
 
 /// Video self-attention kernel after QKV + RoPE.
@@ -277,6 +291,14 @@ impl FeedForward {
 
     pub fn forward(&self, x: &CudaTensor) -> Result<CudaTensor> {
         self.down.forward(&self.up.forward_gelu(x)?)
+    }
+
+    pub(crate) fn for_each_linear_mut(
+        &mut self,
+        f: &mut dyn FnMut(&mut Linear) -> Result<()>,
+    ) -> Result<()> {
+        f(&mut self.up)?;
+        f(&mut self.down)
     }
 }
 

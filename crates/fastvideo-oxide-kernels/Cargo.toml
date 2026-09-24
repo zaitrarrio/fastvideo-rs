@@ -1,0 +1,17 @@
+[package]
+name = "fastvideo-oxide-kernels"
+version = "0.1.0"
+edition = "2021"
+license = "Apache-2.0"
+publish = false
+description = "Tile-IR NVFP4 W4A4 GEMM (cuda-oxide / cutile). Not a workspace member."
+# MSRV: nightly-2026-04-03 (cuda-oxide v0.2.1 / cutile-rs v0.3.1).
+# Excluded from the workspace so `cargo test` on stable/mac does not build this.
+
+[dependencies]
+cutile = { path = "../../third_party/cutile-rs/cutile" }
+cutile-compiler = { path = "../../third_party/cutile-rs/cutile-compiler" }
+
+[package.metadata.cuda-oxide]
+# cargo oxide build --arch sm_100,sm_120  (or one SM at a time on v0.2.1)
+archs = ["sm_100", "sm_120"]

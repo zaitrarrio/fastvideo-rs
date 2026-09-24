@@ -1,10 +1,11 @@
 //! LongLive 2.0 NVFP4 (NVlabs/LongLive `utils/quant.py`,
-//! `fouroversix/quantize/pytorch/reference.py`).
+//! TransformerEngine `NVFP4BlockScaling`, FourOverSix reference).
 //!
 //! Shared, default-off W4A4 primitive for DiT linears. Unset / `off` / `none` /
-//! `false` / `0` keeps today's dense path. `FASTVIDEO_NVFP4=1` (or `mse` /
-//! `nvfp4`) applies the published FourOverSix MSE scale rule; `static_6` is
-//! plain NVFP4 (`amax / 6` with E4M3 block scales).
+//! `false` / `0` keeps today's dense path. `FASTVIDEO_NVFP4=1` (or `nvfp4` /
+//! `te` / `static_6`) is TransformerEngine NVFP4BlockScaling: static `amax / 6`
+//! with E4M3 block scales. FourOverSix MSE is an explicit opt-in (`mse` /
+//! `4o6` / `fouroversix`).
 //!
 //! Format (inference yaml + FourOverSix reference):
 //! - E2M1 codes packed two-per-byte, low nibble first
@@ -15,19 +16,45 @@
 //!   numeric recipe). Weights expand once at load. Activations and K/V
 //!   expand on each forward. The existing GEMM and attention then run.
 //!
-//! The Rust-to-PTX toolchain is vendored as git submodules:
-//! `third_party/cuda-oxide` (v0.2.1, `nightly-2026-04-03`) and
-//! `third_party/cutile-rs` (v0.3.1). `scripts/oxide.sh` builds both in Docker
-//! (`docker/oxide.Dockerfile`: base, build, and runtime on CUDA 13.4).
-//! CUTLASS SM100/SM120 GEMM, Blackwell `to_blocked` scale layout, RHT, 2D
-//! block scales, and stochastic rounding stay out — those are hardware layouts,
-//! not this host recipe. The portable cudarc kernels implement the published
-//! dequant GEMM and KV dequant on the existing NVRTC stack.
+//! Family scopes (hooks only — LTX / Cosmos transformers are not edited here):
+//! - LTX-2.3 optimized `env.sh`: video-stream FFN (`transformer_blocks.*.ff.net.*`).
+//!   Audio FFN and attention stay dense. [`scope_rule`] + [`ENV_LTX_VIDEO_FFN`].
+//! - Cosmos3 optimized `env.sh`: middle denoising steps (skip first 3 + last 3).
+//!   [`scope_rule`] + [`ENV_COSMOS_STEPS`] (same window as [`crate::cosmos::sol::fp4_linear`]).
+//!
+//! Tile-IR W4A4 GEMM (`crates/fastvideo-oxide-kernels`, cuda-oxide v0.2.1 /
+//! cutile-rs v0.3.1) stays **off** until it beats cuBLAS bf16 on the H3 FFN
+//! shape (`K=5376`, `N=14336`) **and** PSNR ≥ 30 dB vs bf16. Opt-in:
+//! [`ENV_OXIDE_GEMM`]. `scripts/oxide.sh` runs `cargo oxide build --arch sm_100,sm_120`.
 
 use fastvideo_ops::fp8::{e4m3_to_f32, f32_to_e4m3, E4M3_MAX};
 
 /// Env var LongLive's `model_quant` maps onto in this repo.
 pub const ENV: &str = "FASTVIDEO_NVFP4";
+
+/// LTX-2.3 optimized arm (`models/ltx23/optimized/env.sh`): restrict NVFP4 to
+/// video-stream FFN. LTX transformers call [`scope_rule`] later (WS-B).
+pub const ENV_LTX_VIDEO_FFN: &str = "FASTVIDEO_NVFP4_LTX_VIDEO_FFN";
+
+/// Cosmos3 optimized arm (`models/cosmos3/optimized/env.sh`): restrict NVFP4
+/// to middle denoising steps. Cosmos transformers call [`scope_rule`] later
+/// (WS-D). Same window as [`crate::cosmos::sol::FP4_SKIP_FIRST`] /
+/// [`crate::cosmos::sol::FP4_SKIP_LAST`].
+pub const ENV_COSMOS_STEPS: &str = "FASTVIDEO_NVFP4_COSMOS_STEPS";
+
+/// Tile-IR W4A4 GEMM. Default **off**. Do not turn on until the cubin beats
+/// cuBLAS bf16 on [`H3_FFN_HIDDEN`]×[`H3_FFN_INNER`] and PSNR ≥
+/// [`OXIDE_GEMM_PSNR_GATE_DB`] vs bf16.
+pub const ENV_OXIDE_GEMM: &str = "FASTVIDEO_NVFP4_OXIDE_GEMM";
+
+/// H3 DiT hidden width (`H3TransformerConfig::fasth3_8step`).
+pub const H3_FFN_HIDDEN: usize = 5376;
+
+/// H3 DiT SwiGLU inner width. `fc_in` is `hidden → 2 * ffn_dim`.
+pub const H3_FFN_INNER: usize = 14336;
+
+/// Minimum PSNR vs bf16 before the Tile-IR GEMM may ship on.
+pub const OXIDE_GEMM_PSNR_GATE_DB: f32 = 30.0;
 
 /// NVFP4 block width (`DataType.nvfp4.block_size()`).
 pub const BLOCK: usize = 16;
@@ -42,20 +69,27 @@ pub const E4M3_MAX_FOUROVERSIX: f32 = 256.0;
 /// (`6 / 4 = 1.5` in `quantize_to_nvfp4(..., scale_expansion_factor=1.5)`).
 const FOUR_OVER_SIX_EXPANSION: f32 = 1.5;
 
-/// Why oxide / CUTLASS-only layouts stay out of this crate.
+/// Why oxide / CUTLASS-only layouts stay out of the default path.
 pub const GAP: &str = "\
-longlive nvfp4: W4A4 dequants beforehand (weights once at load, activations \
-each forward). Causal Wan keeps K/V in the rolling autoregressive cache \
-and dequants the attended span. Then the existing GEMM and attention run. \
-CUTLASS SM100/SM120 GEMM, TransformerEngine NVFP4BlockScaling, Blackwell \
-to_blocked scale layout, RHT, 2d block scales, and stochastic rounding \
-are unpublished as host math. \
+longlive nvfp4: default rule is TransformerEngine NVFP4BlockScaling \
+(static amax/6). FourOverSix MSE is FASTVIDEO_NVFP4=mse. W4A4 dequants \
+beforehand (weights once at load, activations each forward; device \
+reconstruct when a CUDA context is live). Causal Wan keeps K/V in the \
+rolling autoregressive cache and dequants the attended span. Then the \
+existing GEMM and attention run. \
+CUTLASS SM100/SM120 GEMM, Blackwell to_blocked scale layout, RHT, 2d \
+block scales, and stochastic rounding stay unpublished as host math. \
+Tile-IR W4A4 GEMM (crates/fastvideo-oxide-kernels) is off until it beats \
+cuBLAS bf16 on the H3 FFN shape (K=5376 N=14336) and PSNR >= 30 dB vs \
+bf16; FASTVIDEO_NVFP4_OXIDE_GEMM opt-in. \
+LTX-2.3 video FFN and Cosmos step-selective scopes are hooks \
+(scope_rule); those transformers are not edited here. \
 fused ln_adaln_e + rope_half is one launch when both ops share a tensor; \
 Wan / LTX / H3 apply them on different layouts (AdaLN on [B,S,C], RoPE on \
 Q/K after the projection). \
 cuda-oxide v0.2.1 and cutile-rs v0.3.1 are vendored under third_party. \
-scripts/oxide.sh builds them in Docker (docker/oxide.Dockerfile base, build, \
-and runtime stages, CUDA 13.4, nightly-2026-04-03). \
+scripts/oxide.sh runs cargo oxide build --arch sm_100,sm_120 in Docker \
+(docker/oxide.Dockerfile, CUDA 13.4, nightly-2026-04-03). \
 TorchAO PerRow FP8 PTQ (utils/fp8.py) is not this flag; FASTVIDEO_FP8 is \
 the existing per-tensor E4M3 path.";
 
@@ -94,8 +128,8 @@ pub enum ScaleRule {
     Static6,
     /// `amax / 4`, E4M3 peak 448.
     Static4,
-    /// LongLive inference default (`model_quant_scale_rule: mse`): try 6 and
-    /// 4-equivalent scales, keep the lower per-block MSE.
+    /// FourOverSix MSE opt-in (`FASTVIDEO_NVFP4=mse`): try 6 and 4-equivalent
+    /// scales, keep the lower per-block MSE.
     Mse,
 }
 
@@ -133,11 +167,11 @@ pub fn requested(value: Option<&str>) -> Option<ScaleRule> {
     }
     match v.to_ascii_lowercase().as_str() {
         "0" | "off" | "false" | "none" | "no" => None,
-        "static_6" | "static6" | "te" => Some(ScaleRule::Static6),
-        "static_4" | "static4" => Some(ScaleRule::Static4),
-        "1" | "true" | "on" | "nvfp4" | "mse" | "4o6" | "fouroversix" | "w4a4" => {
-            Some(ScaleRule::Mse)
+        "static_6" | "static6" | "te" | "1" | "true" | "on" | "nvfp4" | "w4a4" => {
+            Some(ScaleRule::Static6)
         }
+        "static_4" | "static4" => Some(ScaleRule::Static4),
+        "mse" | "4o6" | "fouroversix" => Some(ScaleRule::Mse),
         _ => None,
     }
 }
@@ -190,6 +224,80 @@ pub fn linear_stays_dense(name: &str) -> bool {
 /// Core DiT linear: flag on, not a filtered module, K divisible by 16.
 pub fn linear_eligible(name: &str, in_dim: usize) -> bool {
     from_env().is_some() && !linear_stays_dense(name) && in_dim.is_multiple_of(BLOCK) && in_dim > 0
+}
+
+/// Family-specific NVFP4 window. LTX-2 / Cosmos transformers call
+/// [`scope_rule`] later; this crate does not edit those graphs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Scope {
+    /// Every eligible DiT linear (Wan / H3 / default).
+    All,
+    /// LTX-2.3 optimized env: video-stream FFN only.
+    Ltx23VideoFfn,
+    /// Cosmos3 optimized env: middle denoising steps.
+    CosmosStep { step: usize, num_steps: usize },
+}
+
+fn on_flag(value: Option<&str>) -> bool {
+    match value.map(str::trim) {
+        Some("1") => true,
+        Some(v) => {
+            let v = v.to_ascii_lowercase();
+            v == "true" || v == "on" || v == "yes"
+        }
+        None => false,
+    }
+}
+
+/// `FASTVIDEO_NVFP4_LTX_VIDEO_FFN`.
+pub fn ltx_video_ffn_flag(value: Option<&str>) -> bool {
+    on_flag(value)
+}
+
+/// `FASTVIDEO_NVFP4_COSMOS_STEPS`.
+pub fn cosmos_steps_flag(value: Option<&str>) -> bool {
+    on_flag(value)
+}
+
+/// `FASTVIDEO_NVFP4_OXIDE_GEMM`. Default off — unmeasured vs cuBLAS bf16.
+pub fn oxide_gemm_flag(value: Option<&str>) -> bool {
+    on_flag(value)
+}
+
+/// Process env for [`ENV_OXIDE_GEMM`].
+pub fn oxide_gemm_enabled() -> bool {
+    oxide_gemm_flag(std::env::var(ENV_OXIDE_GEMM).ok().as_deref())
+}
+
+/// LTX-2.3 video FFN key (`transformer_blocks.N.ff.net.*`). Audio FFN
+/// (`audio_ff`) and attention stay dense.
+pub fn ltx_video_ffn_linear(name: &str) -> bool {
+    let n = name.trim().trim_matches('.');
+    if n.is_empty() || linear_stays_dense(n) {
+        return false;
+    }
+    if n.contains("audio_ff") || n.contains("audio.ff") {
+        return false;
+    }
+    n.contains(".ff.net.") || n.contains(".video.ff.")
+}
+
+/// Hook LTX-2 / Cosmos transformers call later. `None` = stay dense.
+pub fn scope_rule(scope: Scope, name: &str, in_dim: usize) -> Option<ScaleRule> {
+    if !linear_eligible(name, in_dim) {
+        return None;
+    }
+    let rule = from_env()?;
+    match scope {
+        Scope::All => Some(rule),
+        Scope::Ltx23VideoFfn if ltx_video_ffn_linear(name) => Some(rule),
+        Scope::CosmosStep { step, num_steps }
+            if crate::cosmos::sol::fp4_linear(step, num_steps) =>
+        {
+            Some(rule)
+        }
+        _ => None,
+    }
 }
 
 /// Packed NVFP4 tensor. Scales are E4M3 codes, `[rows, cols/BLOCK]`.
@@ -517,12 +625,69 @@ mod tests {
         assert_eq!(requested(Some("none")), None);
         assert_eq!(requested(Some("false")), None);
         assert_eq!(requested(Some("0")), None);
-        assert_eq!(requested(Some("1")), Some(ScaleRule::Mse));
-        assert_eq!(requested(Some("NVFP4")), Some(ScaleRule::Mse));
+        assert_eq!(requested(Some("1")), Some(ScaleRule::Static6));
+        assert_eq!(requested(Some("NVFP4")), Some(ScaleRule::Static6));
+        assert_eq!(requested(Some("te")), Some(ScaleRule::Static6));
         assert_eq!(requested(Some("mse")), Some(ScaleRule::Mse));
+        assert_eq!(requested(Some("4o6")), Some(ScaleRule::Mse));
         assert_eq!(requested(Some("static_6")), Some(ScaleRule::Static6));
         assert_eq!(requested(Some("static_4")), Some(ScaleRule::Static4));
-        assert_eq!(requested(Some("w4a4")), Some(ScaleRule::Mse));
+        assert_eq!(requested(Some("w4a4")), Some(ScaleRule::Static6));
+        assert!(!oxide_gemm_flag(None));
+        assert!(!oxide_gemm_flag(Some("0")));
+        assert!(oxide_gemm_flag(Some("1")));
+    }
+
+    #[test]
+    fn ltx_video_ffn_and_cosmos_step_hooks() {
+        assert!(ltx_video_ffn_linear("transformer_blocks.0.ff.net.0.proj"));
+        assert!(ltx_video_ffn_linear("transformer_blocks.7.ff.net.2"));
+        assert!(ltx_video_ffn_linear("blocks.0.video.ff.net.0.proj"));
+        assert!(!ltx_video_ffn_linear(
+            "transformer_blocks.0.audio_ff.net.0.proj"
+        ));
+        assert!(!ltx_video_ffn_linear("transformer_blocks.0.attn1.to_q"));
+        assert!(!ltx_video_ffn_linear("head.head"));
+        assert!(ltx_video_ffn_flag(Some("1")));
+        assert!(!ltx_video_ffn_flag(None));
+        assert!(cosmos_steps_flag(Some("on")));
+        assert!(!cosmos_steps_flag(None));
+        with_env(Some("1"), || {
+            assert_eq!(
+                scope_rule(
+                    Scope::Ltx23VideoFfn,
+                    "transformer_blocks.3.ff.net.0.proj",
+                    16
+                ),
+                Some(ScaleRule::Static6)
+            );
+            assert_eq!(
+                scope_rule(Scope::Ltx23VideoFfn, "transformer_blocks.3.attn1.to_q", 16),
+                None
+            );
+            assert_eq!(
+                scope_rule(
+                    Scope::CosmosStep {
+                        step: 10,
+                        num_steps: 35
+                    },
+                    "blocks.0.ffn.net.0.proj",
+                    16
+                ),
+                Some(ScaleRule::Static6)
+            );
+            assert_eq!(
+                scope_rule(
+                    Scope::CosmosStep {
+                        step: 0,
+                        num_steps: 35
+                    },
+                    "blocks.0.ffn.net.0.proj",
+                    16
+                ),
+                None
+            );
+        });
     }
 
     #[test]
@@ -653,6 +818,9 @@ mod tests {
         assert!(GAP.contains("cuda-oxide"));
         assert!(GAP.contains("cutile-rs"));
         assert!(GAP.contains("to_blocked"));
+        assert!(GAP.contains("NVFP4BlockScaling"));
+        assert!(GAP.contains("30 dB"));
+        assert!(GAP.contains("scope_rule"));
     }
 
     #[test]

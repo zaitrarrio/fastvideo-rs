@@ -1297,33 +1297,46 @@ impl Ltx2Pipeline {
         if self.model.is_some() && self.loaded_strength == Some(strength) {
             return Ok(self.model.as_ref().expect("resident dit"));
         }
+        if self.model.is_some() && self.lora.is_some() {
+            crate::wan::log::info(format_args!(
+                "ltx2: set_lora_strength {strength} (resident DiT)"
+            ));
+            self.model
+                .as_mut()
+                .expect("resident dit")
+                .set_lora_strength(strength)?;
+            self.loaded_strength = Some(strength);
+            return Ok(self.model.as_ref().expect("resident dit"));
+        }
         if self.model.is_some() {
             crate::wan::log::info(format_args!(
-                "ltx2: reloading DiT at lora strength {strength}"
+                "ltx2: loading DiT at lora strength {strength}"
             ));
-            // TODO(WS-C): set_lora_strength — swap fused strength in place
-            // instead of dropping and reloading the DiT.
-            // Drop the old fused DiT before the next full load. Holding both
-            // plus resident Gemma is what OOMed a 96 GB PRO 6000 (~95 GiB).
+            // Drop the old DiT before the next full load. Holding both plus
+            // resident Gemma is what OOMed a 96 GB PRO 6000 (~95 GiB).
             self.model = None;
             self.loaded_strength = None;
             sync()?;
         }
         let map = open_distilled(&self.dit, "transformer")?;
         let keys = Keys::transformer(Keys::detect(&map));
-        let model = if let (Some(path), true) = (self.lora.clone(), strength != 0.0) {
-            let guard = super::lora::install(&path, strength)?;
-            let model = Ltx2Transformer::load(&map, &keys, &self.cfg.transformer)?;
+        let mut model = if let Some(path) = self.lora.clone() {
+            // Strength 0 so `apply_bf16` is a no-op and `attach_linear` snapshots
+            // unfused `W0`. Device re-fuse walks the resident linears.
+            let guard = super::lora::install(&path, 0.0)?;
+            let mut model = Ltx2Transformer::load(&map, &keys, &self.cfg.transformer)?;
             let hits = super::lora::hits();
-            drop(guard);
             if hits == 0 {
+                drop(guard);
                 return Err(err(format!(
                     "ltx2 lora: no base weight matched {}",
                     path.display()
                 )));
             }
+            model.set_lora_strength(strength)?;
+            drop(guard);
             crate::wan::log::info(format_args!(
-                "ltx2 lora: fused {hits} weights at strength {strength} ({})",
+                "ltx2 lora: attached {hits} weights, fused at strength {strength} ({})",
                 path.display()
             ));
             model
@@ -1707,6 +1720,7 @@ impl Ltx2Pipeline {
         let written = if req.diff_vae {
             // Free DiT before loading DiffVAE (~0.8 GB + large activations).
             self.model = None;
+            self.loaded_strength = None;
             sync()?;
             crate::wan::log::info(format_args!("ltx2: DiffVAE decode (DiT dropped)"));
             let dd_cfg = cfg.diffusion_decoder.as_ref().expect("checked above");

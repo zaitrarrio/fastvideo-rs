@@ -228,6 +228,7 @@ pub fn attach_linear(key: &str, linear: &mut Linear) -> Result<()> {
     FUSE.with(|slot| {
         if let Some(inst) = slot.borrow_mut().as_mut() {
             inst.attached.push(std::ptr::from_mut(linear));
+            inst.hits += 1;
         }
     });
     Ok(())
