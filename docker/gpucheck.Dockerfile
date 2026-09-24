@@ -39,7 +39,7 @@ ENV RUSTUP_HOME=/usr/local/rustup \
 RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
       | sh -s -- -y --profile minimal --default-toolchain stable --component rustfmt,clippy \
  && rustc --version
-ENV CUDARC_CUDA_VERSION=13040 \
+ENV CUDARC_CUDA_VERSION=13000 \
     LD_LIBRARY_PATH=/usr/local/cuda-13.4/lib64 \
     PATH=/usr/local/cuda-13.4/bin:/usr/local/cargo/bin:$PATH \
     NVCC=/usr/local/cuda-13.4/bin/nvcc \

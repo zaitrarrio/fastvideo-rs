@@ -16,7 +16,7 @@ ENV DEBIAN_FRONTEND=noninteractive \
     CUDA_HOME=/usr/local/cuda-13.4 \
     CUDA_PATH=/usr/local/cuda-13.4 \
     CUDA_TOOLKIT_PATH=/usr/local/cuda-13.4 \
-    CUDARC_CUDA_VERSION=13040 \
+    CUDARC_CUDA_VERSION=13000 \
     NVIDIA_VISIBLE_DEVICES=all \
     NVIDIA_DRIVER_CAPABILITIES=compute,utility
 

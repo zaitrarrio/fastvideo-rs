@@ -33,14 +33,14 @@ jobs:
         run: cargo test -p fastvideo-gpucheck -p fastvideo-cudarc --lib --bins
       - name: CUDA feature type-check
         env:
-          CUDARC_CUDA_VERSION: "13040"
+          CUDARC_CUDA_VERSION: "13000"
         run: cargo check -p fastvideo-gpucheck --features cuda
 
   nvrtc-compile:
     runs-on: ubuntu-22.04
     timeout-minutes: 30
     env:
-      CUDARC_CUDA_VERSION: "13040"
+      CUDARC_CUDA_VERSION: "13000"
       LD_LIBRARY_PATH: /usr/local/cuda-13.4/lib64
       NVCC: /usr/local/cuda-13.4/bin/nvcc
     steps:
