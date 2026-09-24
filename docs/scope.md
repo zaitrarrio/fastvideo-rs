@@ -211,14 +211,19 @@ SANA image and video family and is not implemented here.
 | LingBot | Official base canvas only. Cache, PISA, and topology stay dense: the profile names them and does not specify the algorithms |
 | Sana-Video 5B | Not in this tree. The sol-engine profile wraps a private bundle |
 
-One-GPU Sol-H3 stays dense. SOL/BSA is the multi-GPU profile.
+One-GPU Sol-H3 uses the RTX 5090 Sol-Attn policy (first 10 steps and first 2
+layers dense, tau 1.0). SOL/BSA is not a multi-GPU-only profile.
+`sol-h3-spark` Stage-1 is VSA 0.9 + FastH3_VSA_DataFree at strength 1.0, BF16
+(upstream W8A8 FP8 after the LoRA merge is off: measured 16–20 dB).
 
-NVFP4 (`FASTVIDEO_NVFP4=1`, `mse`, or `static_6`) dequantizes W4A4 on the
-host recipe and then uses the existing GEMM. CUTLASS SM100/SM120, Blackwell
-`to_blocked`, RHT, 2D block scales, and stochastic rounding are not
-implemented. KWL operator fusion from the LTX-2.3 optimized arm is not
-implemented. The upstream env turns several of those fusions off because they
-change frames.
+NVFP4 (`FASTVIDEO_NVFP4=1` → TE `static_6`; `mse` / `4o6` stay FourOverSix)
+dequantizes W4A4 on device when a CUDA context is live (`nvfp4_reconstruct`).
+The Tile-IR W4A4 GEMM stays off (`FASTVIDEO_NVFP4_OXIDE_GEMM`) until it beats
+cuBLAS bf16 on the H3 FFN shape and PSNR ≥ 30 dB vs bf16. CUTLASS
+SM100/SM120, Blackwell `to_blocked`, RHT, 2D block scales, and stochastic
+rounding are not implemented. KWL operator fusion from the LTX-2.3 optimized
+arm is not implemented. The upstream env turns several of those fusions off
+because they change frames.
 
 ## Configurations
 
@@ -245,7 +250,7 @@ Weights: `--weights`, `FASTVIDEO_WEIGHTS`, or the Hugging Face snapshot.
 | `FASTVIDEO_HUNYUAN15_SOL` | Logs the 13B TeaCache gap and stays dense |
 | `FASTVIDEO_LINGBOT_OFFICIAL` | 832×480 / 121f / 40-step canvas |
 | `FASTVIDEO_LINGBOT_SOL` | Logs the unspecified cache/PISA/topology gap and stays dense |
-| `FASTVIDEO_NVFP4` | Host W4A4 dequant |
+| `FASTVIDEO_NVFP4` | W4A4 dequant (`1` → `static_6`; `mse` for FourOverSix) |
 | `FASTVIDEO_BF16` | cuBLAS tf32/bf16 compute. On unless set to `0` |
 | `FASTVIDEO_VSA` | Wan block-sparse video attention |
 | `FASTVIDEO_SP_WORLD` | Sequence-parallel world size |
