@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
-# Runs ON a Runpod GPU box. Family: h3 | ltx | hunyuan
+# Runs ON a Runpod GPU box. Family: h3 | ltx | hunyuan | wan
 # One process per family. Continues to the next cell on failure.
 # Spark joint LTX refine stays off (FASTVIDEO_LTX2_WEIGHTS unset).
 set -euo pipefail
-FAMILY="${1:?usage: runpod-matrix.sh h3|ltx|hunyuan}"
+FAMILY="${1:?usage: runpod-matrix.sh h3|ltx|hunyuan|wan}"
 WORK="${FV_WORK:-/workspace}"
 BIN="${FV_GPUCHECK:-/opt/fastvideo-rs/target/release/fv-gpucheck}"
 W="$WORK/weights"
@@ -197,6 +197,28 @@ case "$FAMILY" in
         --prompt "$PROMPT" \
         --seed "$SEED" \
         --clip "$RUNS/hy15-480-t2v/frames"
+    ;;
+  wan)
+    wan_w=""
+    for p in "$W/fastwan21-1.3b" "$W/wan21-1.3b" "$W/Wan2.1-T2V-1.3B-Diffusers"; do
+      [[ -d "$p/transformer" || -d "$p" ]] && wan_w="$p" && break
+    done
+    if [[ -z "$wan_w" ]]; then
+      log "skip wan: no 1.3B tree under $W (fastwan21-1.3b / wan21-1.3b)"
+      write_json "$RUNS/skipped.json" '{"status":"skipped","reason":"wan 1.3B weights not on this volume"}'
+      exit 0
+    fi
+    # Short 5-min cell: 17 frames / 3 DMD steps. Embeds from this prompt if cached.
+    run_cell wan13-dmd-3step \
+      "$BIN" --mode fast clip \
+        --weights "$wan_w" \
+        --embeds "$RUNS/wan13-embeds" \
+        --dmd \
+        --frames 17 \
+        --steps 3 \
+        --seed "$SEED" \
+        --name wan13-dmd-3step \
+        --warm
     ;;
   *)
     log "FATAL: unknown family $FAMILY"
