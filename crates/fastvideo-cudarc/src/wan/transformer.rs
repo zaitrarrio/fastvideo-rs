@@ -5,6 +5,10 @@
 //! residuals read from the `[b, 6, dim]` modulation table without chunk
 //! copies, and a bias+GELU fused FFN.
 
+use fastvideo_models::wan::sol::{
+    morton3d_on_route, pisa_requested, route, sol_attn_requested, WanAttnProfile, WanAttnRoute,
+};
+use fastvideo_models::wan::sol_cache::{A14bCacheController, A14bExpert};
 use fastvideo_models::wan::WanVideoArchConfig;
 
 use super::fused::Rope;
@@ -160,6 +164,49 @@ impl WanAttention {
         self.to_out.forward(&attn.merge_heads()?)
     }
 
+    fn attend_routed(
+        &self,
+        q: &CudaTensor,
+        k: &CudaTensor,
+        v: &CudaTensor,
+        plan: AttnPlan,
+    ) -> Result<Option<CudaTensor>> {
+        let scale = Some((self.dim_head as f32).sqrt().recip());
+        match route(plan.profile, plan.step, plan.layer) {
+            WanAttnRoute::Dense => Ok(None),
+            WanAttnRoute::Sol { tau } => {
+                let (q, k, v, inverse) = if morton3d_on_route(plan.profile, plan.step, plan.layer) {
+                    if let Some((frames, height, width)) = plan.morton_grid {
+                        if frames.saturating_mul(height).saturating_mul(width) == q.shape[2] {
+                            let (perm, inverse) =
+                                super::sol_cache::morton3d_pair(frames, height, width);
+                            (
+                                super::sol_cache::gather_bhsd_seq(q, &perm)?,
+                                super::sol_cache::gather_bhsd_seq(k, &perm)?,
+                                super::sol_cache::gather_bhsd_seq(v, &perm)?,
+                                Some(inverse),
+                            )
+                        } else {
+                            (q.clone(), k.clone(), v.clone(), None)
+                        }
+                    } else {
+                        (q.clone(), k.clone(), v.clone(), None)
+                    }
+                } else {
+                    (q.clone(), k.clone(), v.clone(), None)
+                };
+                let mut out = crate::sol_attn::sol_attn(&q, &k, &v, tau, scale, None, 0)?;
+                if let Some(inverse) = inverse {
+                    out = super::sol_cache::gather_bhsd_seq(&out, &inverse)?;
+                }
+                Ok(Some(out))
+            }
+            WanAttnRoute::Pisa { sparsity } => {
+                Ok(Some(crate::pisa_attn::pisa_attn(q, k, v, sparsity, scale)?))
+            }
+        }
+    }
+
     fn forward_self(
         &self,
         hidden: &CudaTensor,
@@ -168,6 +215,7 @@ impl WanAttention {
         gate: Option<&Linear>,
         vsa: Option<&VsaCtx>,
         ar: Option<&super::ar_cache::ArFrame>,
+        plan: AttnPlan,
     ) -> Result<CudaTensor> {
         let dim = self.heads * self.dim_head;
         let qkv = self.q_or_qkv.forward(hidden)?;
@@ -188,6 +236,11 @@ impl WanAttention {
             return self.to_out.forward(&out.merge_heads()?);
         }
         let (k, v) = super::nvfp4::maybe_kv(k, v)?;
+        if mask.is_none() {
+            if let Some(out) = self.attend_routed(&q, &k, &v, plan)? {
+                return self.to_out.forward(&out.merge_heads()?);
+            }
+        }
         // TurboWan SLA: block top-k sparse + linear attention (self-attn only).
         if super::sla::sla_enabled() && mask.is_none() {
             let cfg = super::sla::SlaConfig::from_env();
@@ -455,6 +508,25 @@ impl ImageEmbedder {
     }
 }
 
+#[derive(Debug, Clone, Copy)]
+struct AttnPlan {
+    step: usize,
+    layer: usize,
+    profile: WanAttnProfile,
+    morton_grid: Option<(usize, usize, usize)>,
+}
+
+impl Default for AttnPlan {
+    fn default() -> Self {
+        Self {
+            step: 0,
+            layer: 0,
+            profile: WanAttnProfile::Off,
+            morton_grid: None,
+        }
+    }
+}
+
 /// Modulation table slots of [`WanBlock::scale_shift_table`] + time projection.
 const SHIFT_MSA: usize = 0;
 const SCALE_MSA: usize = 1;
@@ -549,6 +621,7 @@ impl WanBlock {
         mask: Option<&CudaTensor>,
         vsa: Option<&VsaCtx>,
         ar: Option<&super::ar_cache::ArFrame>,
+        plan: AttnPlan,
     ) -> Result<CudaTensor> {
         use super::stats::phase;
         let e = timestep_proj.add(&self.scale_shift_table)?;
@@ -557,7 +630,7 @@ impl WanBlock {
         })?;
         let attn = phase("2_self_attn", || {
             self.attn1
-                .forward_self(&normed, rope, mask, self.gate.as_ref(), vsa, ar)
+                .forward_self(&normed, rope, mask, self.gate.as_ref(), vsa, ar, plan)
         })?;
         let hidden = phase("3_residual_msa", || {
             hidden.residual_gate_add_e(&attn, &e, GATE_MSA)
@@ -606,6 +679,10 @@ pub struct WanTransformer3D {
     sol_tea: std::sync::Arc<std::sync::Mutex<Option<SolTeaRuntime>>>,
     /// Sol TaylorSeer lite. Empty unless `FASTVIDEO_WAN_SOL_CACHE=taylorseer`.
     sol_taylor: std::sync::Arc<std::sync::Mutex<Option<SolTaylorRuntime>>>,
+    /// A14B EasyCache: block-0 fresh + blocks 1..=39 residual.
+    sol_a14b: std::sync::Arc<std::sync::Mutex<Option<A14bRuntime>>>,
+    attn_step: std::sync::Arc<std::sync::Mutex<Option<usize>>>,
+    attn_profile: std::sync::Arc<std::sync::Mutex<WanAttnProfile>>,
 }
 
 use fastvideo_models::wan::sol_cache::{SolTeaCache, TaylorSchedule, TeaBranch};
@@ -644,6 +721,37 @@ struct SolTaylorRuntime {
     compute: bool,
     last_update: Option<isize>,
     factors: Vec<CudaTensor>,
+}
+
+/// A14B EasyCache runtime: block 0 always runs; tail residual is per CFG branch.
+#[derive(Debug)]
+struct A14bRuntime {
+    state: A14bCacheController,
+    pending: Option<(bool, usize)>,
+    active_cond: bool,
+    reuse: bool,
+    previous_input: Option<CudaTensor>,
+    last_compute_input: Option<CudaTensor>,
+    last_compute_output: Option<CudaTensor>,
+    cond_residual: Option<CudaTensor>,
+    uncond_residual: Option<CudaTensor>,
+}
+
+fn mean_abs(t: &CudaTensor) -> Result<f64> {
+    let host = t.host_cow()?;
+    let n = host.len().max(1) as f64;
+    Ok(host.iter().map(|v| f64::from(*v).abs()).sum::<f64>() / n)
+}
+
+fn mean_abs_delta(a: &CudaTensor, b: &CudaTensor) -> Result<f64> {
+    let left = a.host_cow()?;
+    let right = b.host_cow()?;
+    let n = left.len().max(1) as f64;
+    let mut sum = 0.0;
+    for (x, y) in left.iter().zip(right.iter()) {
+        sum += (f64::from(*x) - f64::from(*y)).abs();
+    }
+    Ok(sum / n)
 }
 
 fn relative_l1(current: &CudaTensor, previous: &CudaTensor) -> Result<f64> {
@@ -832,6 +940,9 @@ impl WanTransformer3D {
             vsa_cache: Default::default(),
             sol_tea: Default::default(),
             sol_taylor: Default::default(),
+            sol_a14b: Default::default(),
+            attn_step: Default::default(),
+            attn_profile: Default::default(),
             cfg,
         })
     }
@@ -899,6 +1010,9 @@ impl WanTransformer3D {
             vsa_cache: Default::default(),
             sol_tea: Default::default(),
             sol_taylor: Default::default(),
+            sol_a14b: Default::default(),
+            attn_step: Default::default(),
+            attn_profile: Default::default(),
             cfg,
         })
     }
@@ -1092,6 +1206,177 @@ impl WanTransformer3D {
 
     pub fn sol_taylor_enabled(&self) -> bool {
         self.sol_taylor.lock().expect("sol taylor").is_some()
+    }
+
+    /// A14B EasyCache only. 5B / 14B keep the whole-stack controller.
+    pub fn configure_a14b_cache(&self, num_steps: usize) -> Result<()> {
+        let family = std::env::var("FASTVIDEO_WAN_SOL_CACHE").unwrap_or_default();
+        let family = family.trim().to_ascii_lowercase();
+        let mut slot = self.sol_a14b.lock().expect("sol a14b");
+        if family != "easycache" || !self.cfg.is_moe() {
+            *slot = None;
+            return Ok(());
+        }
+        if self.blocks.len() < 2 {
+            return Err(TensorError::Message(
+                "wan a14b cache needs at least two transformer blocks".into(),
+            ));
+        }
+        let state = A14bCacheController::official(num_steps).map_err(TensorError::Message)?;
+        super::log::info(format_args!(
+            "wan a14b easycache: threshold {} start {} tail {} max_reuse {} (block-0 fresh, blocks 1-{} residual)",
+            state.threshold, state.start_step, state.tail_steps, state.max_reuse,
+            self.blocks.len().saturating_sub(1)
+        ));
+        *slot = Some(A14bRuntime {
+            state,
+            pending: None,
+            active_cond: true,
+            reuse: false,
+            previous_input: None,
+            last_compute_input: None,
+            last_compute_output: None,
+            cond_residual: None,
+            uncond_residual: None,
+        });
+        Ok(())
+    }
+
+    pub fn sol_a14b_enabled(&self) -> bool {
+        self.sol_a14b.lock().expect("sol a14b").is_some()
+    }
+
+    pub fn arm_a14b_cache(&self, cond: bool, step: usize) {
+        let mut slot = self.sol_a14b.lock().expect("sol a14b");
+        if let Some(runtime) = slot.as_mut() {
+            runtime.pending = Some((cond, step));
+        }
+    }
+
+    pub fn configure_attn_route(&self) {
+        let sol = sol_attn_requested(
+            std::env::var("FASTVIDEO_WAN_SOL_ATTN")
+                .ok()
+                .or_else(|| std::env::var("WAN22_SOL_ATTN").ok())
+                .as_deref(),
+        );
+        let pisa = pisa_requested(
+            std::env::var("FASTVIDEO_WAN_PISA")
+                .ok()
+                .or_else(|| std::env::var("WAN22_PISA").ok())
+                .as_deref(),
+        );
+        let profile = if self.cfg.is_moe() && (pisa || sol) {
+            WanAttnProfile::PisaA14b
+        } else if self.cfg.num_layers == 30 && self.cfg.in_channels == 48 && pisa {
+            WanAttnProfile::Pisa5b
+        } else if self.cfg.num_layers >= 40 && !self.cfg.is_moe() && sol {
+            WanAttnProfile::Sol14b
+        } else {
+            WanAttnProfile::Off
+        };
+        if profile != WanAttnProfile::Off {
+            super::log::info(format_args!("wan attn route: {profile:?}"));
+        }
+        *self.attn_profile.lock().expect("attn profile") = profile;
+    }
+
+    pub fn sol_attn_enabled(&self) -> bool {
+        *self.attn_profile.lock().expect("attn profile") != WanAttnProfile::Off
+    }
+
+    pub fn arm_attn_step(&self, step: usize) {
+        *self.attn_step.lock().expect("attn step") = Some(step);
+    }
+
+    fn attn_plan(&self, layer: usize, morton_grid: Option<(usize, usize, usize)>) -> AttnPlan {
+        AttnPlan {
+            step: self.attn_step.lock().expect("attn step").unwrap_or(0),
+            layer,
+            profile: *self.attn_profile.lock().expect("attn profile"),
+            morton_grid,
+        }
+    }
+
+    fn begin_a14b_tail(&self, prefix: &CudaTensor) -> Result<Option<bool>> {
+        let mut slot = self.sol_a14b.lock().expect("sol a14b");
+        let Some(runtime) = slot.as_mut() else {
+            return Ok(None);
+        };
+        let Some((cond, step)) = runtime.pending.take() else {
+            return Ok(None);
+        };
+        if cond {
+            let change = if runtime
+                .state
+                .needs_input_signal(A14bExpert::HighNoise, step)
+            {
+                mean_abs_delta(prefix, runtime.previous_input.as_ref().expect("a14b prev"))?
+            } else {
+                0.0
+            };
+            runtime.previous_input = Some(prefix.clone());
+            let decision = runtime.state.decide(A14bExpert::HighNoise, step, change);
+            runtime.reuse = !decision.compute;
+        }
+        runtime.active_cond = cond;
+        let residual = if cond {
+            runtime.cond_residual.as_ref()
+        } else {
+            runtime.uncond_residual.as_ref()
+        };
+        if runtime.reuse {
+            if residual.is_none() {
+                runtime.reuse = false;
+                return Ok(Some(false));
+            }
+            if cond {
+                runtime.state.note_reused(A14bExpert::HighNoise);
+            }
+            Ok(Some(true))
+        } else {
+            Ok(Some(false))
+        }
+    }
+
+    fn add_a14b_residual(&self, prefix: CudaTensor) -> Result<CudaTensor> {
+        let residual = {
+            let slot = self.sol_a14b.lock().expect("sol a14b");
+            let runtime = slot.as_ref().expect("sol a14b");
+            if runtime.active_cond {
+                runtime.cond_residual.clone()
+            } else {
+                runtime.uncond_residual.clone()
+            }
+            .expect("a14b residual")
+        };
+        prefix.add(&residual)
+    }
+
+    fn finish_a14b_tail(&self, prefix: &CudaTensor, hidden: &CudaTensor) -> Result<()> {
+        let mut slot = self.sol_a14b.lock().expect("sol a14b");
+        let runtime = slot.as_mut().expect("sol a14b");
+        let residual = hidden.sub(prefix)?;
+        if runtime.active_cond {
+            let (full_in, out_change) =
+                match (&runtime.last_compute_input, &runtime.last_compute_output) {
+                    (Some(prev_in), Some(prev_out)) => (
+                        mean_abs_delta(prefix, prev_in)?,
+                        mean_abs_delta(&residual, prev_out)?,
+                    ),
+                    _ => (0.0, 0.0),
+                };
+            let norm = mean_abs(&residual)?;
+            runtime
+                .state
+                .note_computed(A14bExpert::HighNoise, full_in, out_change, norm);
+            runtime.last_compute_input = Some(prefix.clone());
+            runtime.last_compute_output = Some(residual.clone());
+            runtime.cond_residual = Some(residual);
+        } else {
+            runtime.uncond_residual = Some(residual);
+        }
+        Ok(())
     }
 
     /// `Forecast` skips the blocks and the head. `Compute` runs them and
@@ -1306,6 +1591,8 @@ impl WanTransformer3D {
         // VSA applies to the self-attention grid only, and only when the
         // checkpoint carries the gates it was trained with.
         let vsa = self.vsa_for(t, h, w)?;
+        let p = self.cfg.patch_size;
+        let morton_grid = Some((t / p[0], h / p[1], w / p[2]));
         let tea = self.begin_sol_tea(&timestep_proj)?;
         let block_in = if tea == Some(false) {
             Some(hidden.clone())
@@ -1314,8 +1601,42 @@ impl WanTransformer3D {
         };
         if tea == Some(true) {
             hidden = self.add_sol_tea_residual(hidden)?;
+        } else if self.sol_a14b_enabled() {
+            hidden = self.blocks[0].forward(
+                &hidden,
+                &encoder,
+                &timestep_proj,
+                &rope,
+                image.as_ref(),
+                mask.as_ref(),
+                vsa.as_deref(),
+                ar.as_ref(),
+                self.attn_plan(0, morton_grid),
+            )?;
+            match self.begin_a14b_tail(&hidden)? {
+                Some(true) => hidden = self.add_a14b_residual(hidden)?,
+                reuse => {
+                    let prefix = hidden.clone();
+                    for (layer, block) in self.blocks.iter().enumerate().skip(1) {
+                        hidden = block.forward(
+                            &hidden,
+                            &encoder,
+                            &timestep_proj,
+                            &rope,
+                            image.as_ref(),
+                            mask.as_ref(),
+                            vsa.as_deref(),
+                            ar.as_ref(),
+                            self.attn_plan(layer, morton_grid),
+                        )?;
+                    }
+                    if reuse == Some(false) {
+                        self.finish_a14b_tail(&prefix, &hidden)?;
+                    }
+                }
+            }
         } else {
-            for block in &self.blocks {
+            for (layer, block) in self.blocks.iter().enumerate() {
                 hidden = block.forward(
                     &hidden,
                     &encoder,
@@ -1325,6 +1646,7 @@ impl WanTransformer3D {
                     mask.as_ref(),
                     vsa.as_deref(),
                     ar.as_ref(),
+                    self.attn_plan(layer, morton_grid),
                 )?;
             }
             if let Some(before) = block_in.as_ref() {

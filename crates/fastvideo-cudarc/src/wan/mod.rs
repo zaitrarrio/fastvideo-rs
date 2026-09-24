@@ -23,6 +23,7 @@ pub mod ops;
 pub mod pipeline;
 pub mod resident;
 pub mod sla;
+pub mod sol_cache;
 pub mod sp;
 pub mod stats;
 pub mod taehv;

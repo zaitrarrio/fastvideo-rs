@@ -2,6 +2,16 @@
 
 Project code: FVID
 
+### FVID · 2026-09-24 · FVID-2026-09-24-wan-sol-pisa-a14b-cache
+- Trigger: WS-E — A14B reused the 5B whole-stack EasyCache; EasyCache knobs ignored delivered manifests; Wan Sol/PISA routes were not wired
+- Options: keep one EasyCache for every Wan SKU; split A14B to the published block-0 / tail-39 controller; silently change `official()` from 0.05/7/1 to 0.036
+- Decision: **A14B cache controller** (block-0 fresh, blocks 1–39 residual, per-expert accumulators, thr 0.30 / start 5 / tail 3 / max_reuse 1). EasyCache profiles: fullstack 0.036/7/1, 14B-tuned 0.10 retain 5, **code-default 0.05/7/1** so old tests stay. Wan 14B Sol: tau 1.0, 10 dense steps, layer 0 dense, Morton3D reorder → `crate::sol_attn::sol_attn`. 5B/A14B PISA density 0.10 with the published dense layer/step sets → `crate::pisa_attn::pisa_attn`.
+- Reason: match sol-engine `cache_controller.py` and the delivered tomls without silently changing existing EasyCache tests
+- Reversibility: cheap — env-gated (`FASTVIDEO_WAN_SOL_CACHE`, `FASTVIDEO_WAN_EASYCACHE_PROFILE`, `FASTVIDEO_WAN_SOL_ATTN`, `FASTVIDEO_WAN_PISA`)
+- Executed by: Executor
+- ADR: none
+- Verification: **host pass**. `cargo test -p fastvideo-cudarc --lib sol_cache` (3 passed); `cargo test -p fastvideo-models --lib wan` (35 passed). GPU kernels untested here (WS-A owns the device path).
+
 ### FVID · 2026-09-24 · FVID-2026-09-24-phase0-strict-host-hunyuan-gen
 - Trigger: review gaps — Sol/PISA/SLA/NVFP4 host paths were outside `host_fallback`; `fv-gpucheck hunyuan gen` missing from the published image; Spark VSA-DataFree LoRA not on the volume fetch list
 - Options: leave host algorithms silent until WS-A; gate only under `FASTVIDEO_STRICT_DEVICE`; always refuse on a live device
