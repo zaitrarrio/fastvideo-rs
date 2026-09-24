@@ -1,6 +1,7 @@
 //! Host-side model math and configs consumed by `fastvideo-cudarc`.
 
 pub mod cosmos;
+pub mod cosmos3;
 pub mod dreamx;
 pub mod flux;
 pub mod flux2;

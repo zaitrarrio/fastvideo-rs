@@ -10,6 +10,7 @@
 #![allow(unsafe_code)]
 
 pub mod cosmos;
+pub mod cosmos3;
 pub mod dreamx;
 pub mod flux;
 pub mod flux2;

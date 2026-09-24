@@ -2,6 +2,16 @@
 
 Project code: FVID
 
+### FVID · 2026-09-24 · FVID-2026-09-24-cosmos3-super-scaffold
+- Trigger: WS-J — 64B T2V Cosmos3-Super has no crate; Predict2 is EDM Video2World; Super needs FlowMatch + single-GPU NVFP4/FP8; upstream serves 4-GPU sequence parallel
+- Options: extend the Predict2 `cosmos` crate; new `cosmos3` scaffold with published canvas/TeaCache and `TODO(upstream)` DiT dims; invent Super widths from unpublished Predict2.5 notes
+- Decision: **new `cosmos3` host + cudarc scaffold**. Reuse Predict2 TeaCache 1.15 / start 10 / max 3 (`cosmos::sol`). Official canvas 1280×720 / 189f / 35 / guidance 6 / fps 24. FlowMatch applies recorded shift 10 (Predict2 EDM still does not). Super DiT / Hub / text / VAE marked `TODO(upstream)`. Multi-GPU SP out of scope. Registry/CLI/gpucheck skipped (no published Hub id). Single-GPU plan is `FASTVIDEO_NVFP4=1` → TE `static_6` plus `FASTVIDEO_NVFP4_COSMOS_STEPS`.
+- Reason: do not invent unpublished 64B widths; one 96 GB PRO 6000 is a quantized-weight path, not 4-way SP
+- Reversibility: cheap — new modules only; Predict2 files untouched
+- Executed by: WS-J
+- ADR: none
+- Verification: **host pass**. `cargo test -p fastvideo-models --lib --offline cosmos3`; `cargo test -p fastvideo-cudarc --lib --offline cosmos3`. No GPU rented.
+
 ### FVID · 2026-09-24 · FVID-2026-09-24-nvfp4-te-static6-oxide
 - Trigger: default NVFP4 rule was FourOverSix MSE; host fake-quant in `dequant_beforehand`; no Tile-IR GEMM crate; runtime image still on CUDA 13.0
 - Options: keep MSE as `FASTVIDEO_NVFP4=1`; switch the on-switch to TransformerEngine `NVFP4BlockScaling` (`static_6`) and leave MSE as an explicit opt-in; ship an ungated oxide GEMM
