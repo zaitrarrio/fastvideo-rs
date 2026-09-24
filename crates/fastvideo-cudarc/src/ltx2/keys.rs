@@ -20,6 +20,10 @@ pub enum Layout {
     Diffusers,
     /// `ltx-2-19b-*.safetensors`: everything under `model.diffusion_model.`.
     SingleFile,
+    /// FastVideo LTX-2.3 distilled folders: original ltx-core segment names
+    /// (`q_norm`, `patchify_proj`, `video_embeddings_connector`) with no
+    /// `model.diffusion_model.` prefix. Same rename table as [`Layout::SingleFile`].
+    LtxCore,
 }
 
 /// Which diffusers component a name belongs to; the single file keeps the DiT
@@ -58,19 +62,24 @@ impl Keys {
     pub fn detect(map: &WeightMap) -> Layout {
         if map.has_tensor(&format!("{SINGLE_FILE_ROOT}.patchify_proj.weight")) {
             Layout::SingleFile
+        } else if map.has_tensor("transformer_blocks.0.attn1.q_norm.weight")
+            || map.has_tensor("patchify_proj.weight")
+            || map.has_tensor(
+                "video_embeddings_connector.transformer_1d_blocks.0.attn1.q_norm.weight",
+            )
+            || map.has_tensor(
+                "audio_embeddings_connector.transformer_1d_blocks.0.attn1.q_norm.weight",
+            )
+            || map.has_tensor("video_aggregate_embed.weight")
+        {
+            Layout::LtxCore
         } else {
             Layout::Diffusers
         }
     }
 
-    /// The on-disk spelling of a diffusers name. Works on whole keys
-    /// (`….to_q.weight`) and on module prefixes (`….to_q`) alike, because every
-    /// rename replaces whole dot-separated segments.
-    pub fn key(&self, diffusers: &str) -> String {
-        if self.layout == Layout::Diffusers {
-            return diffusers.to_string();
-        }
-        let renamed: Vec<&str> = diffusers
+    fn rename_segments(&self, diffusers: &str) -> String {
+        diffusers
             .split('.')
             .map(|seg| match (self.component, seg) {
                 (_, "norm_q") => "q_norm",
@@ -100,10 +109,23 @@ impl Keys {
                 (Component::Connectors, "video_connector") => "video_embeddings_connector",
                 (Component::Connectors, "audio_connector") => "audio_embeddings_connector",
                 (Component::Connectors, "transformer_blocks") => "transformer_1d_blocks",
+                (Component::Connectors, "video_text_proj_in") => "video_aggregate_embed",
+                (Component::Connectors, "audio_text_proj_in") => "audio_aggregate_embed",
                 (_, other) => other,
             })
-            .collect();
-        format!("{SINGLE_FILE_ROOT}.{}", renamed.join("."))
+            .collect::<Vec<_>>()
+            .join(".")
+    }
+
+    /// The on-disk spelling of a diffusers name. Works on whole keys
+    /// (`….to_q.weight`) and on module prefixes (`….to_q`) alike, because every
+    /// rename replaces whole dot-separated segments.
+    pub fn key(&self, diffusers: &str) -> String {
+        match self.layout {
+            Layout::Diffusers => diffusers.to_string(),
+            Layout::LtxCore => self.rename_segments(diffusers),
+            Layout::SingleFile => format!("{SINGLE_FILE_ROOT}.{}", self.rename_segments(diffusers)),
+        }
     }
 
     /// Where a single file may keep the text projection. The published
@@ -120,24 +142,40 @@ impl Keys {
     /// single file it is `text_embedding_projection.aggregate_embed`, and the
     /// releases disagree on whether that sits under the DiT root, so probe.
     pub fn text_proj_in(&self, map: &WeightMap) -> Result<String> {
-        if self.layout == Layout::Diffusers {
-            for name in ["video_text_proj_in", "text_proj_in"] {
-                if map.has_tensor(&format!("{name}.weight")) {
-                    return Ok(name.to_string());
+        match self.layout {
+            Layout::Diffusers => {
+                for name in ["video_text_proj_in", "text_proj_in"] {
+                    if map.has_tensor(&format!("{name}.weight")) {
+                        return Ok(name.to_string());
+                    }
                 }
+                Ok("text_proj_in".to_string())
             }
-            return Ok("text_proj_in".to_string());
+            Layout::LtxCore => {
+                for name in [
+                    "video_aggregate_embed",
+                    "video_text_proj_in",
+                    "text_proj_in",
+                ] {
+                    if map.has_tensor(&format!("{name}.weight")) {
+                        return Ok(name.to_string());
+                    }
+                }
+                Ok("video_aggregate_embed".to_string())
+            }
+            Layout::SingleFile => {
+                let candidates = Self::text_proj_in_candidates();
+                candidates
+                    .iter()
+                    .find(|c| map.has_tensor(&format!("{c}.weight")))
+                    .cloned()
+                    .ok_or_else(|| {
+                        msg(format!(
+                            "no text projection in the checkpoint; looked for {candidates:?} (+ `.weight`)"
+                        ))
+                    })
+            }
         }
-        let candidates = Self::text_proj_in_candidates();
-        candidates
-            .iter()
-            .find(|c| map.has_tensor(&format!("{c}.weight")))
-            .cloned()
-            .ok_or_else(|| {
-                msg(format!(
-                    "no text projection in the checkpoint; looked for {candidates:?} (+ `.weight`)"
-                ))
-            })
     }
 }
 
@@ -244,5 +282,75 @@ mod tests {
         assert!(Keys::connectors(Layout::SingleFile)
             .text_proj_in(&map)
             .is_err());
+    }
+
+    /// FastVideo LTX-2.3 distilled folders keep ltx-core names without the
+    /// single-file `model.diffusion_model.` prefix.
+    #[test]
+    fn ltx_core_folder_names_follow_the_converter_table_without_the_dit_root() {
+        let k = Keys::transformer(Layout::LtxCore);
+        assert_eq!(
+            k.key("transformer_blocks.0.attn1.norm_q.weight"),
+            "transformer_blocks.0.attn1.q_norm.weight"
+        );
+        assert_eq!(k.key("proj_in"), "patchify_proj");
+        assert_eq!(k.key("time_embed.linear"), "adaln_single.linear");
+        assert_eq!(
+            k.key("av_cross_attn_video_scale_shift.linear"),
+            "av_ca_video_scale_shift_adaln_single.linear"
+        );
+        let c = Keys::connectors(Layout::LtxCore);
+        assert_eq!(
+            c.key("video_connector.transformer_blocks.1.attn1.norm_q.weight"),
+            "video_embeddings_connector.transformer_1d_blocks.1.attn1.q_norm.weight"
+        );
+        assert_eq!(c.key("video_text_proj_in"), "video_aggregate_embed");
+        assert_eq!(c.key("audio_text_proj_in"), "audio_aggregate_embed");
+    }
+
+    fn map_with(name: &str, keys: &[&str]) -> (WeightMap, std::path::PathBuf) {
+        use std::io::Write;
+        let dir = std::env::temp_dir().join(format!("fv-ltx-keys-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut header = serde_json::Map::new();
+        let mut data = Vec::new();
+        for key in keys {
+            let start = data.len();
+            data.extend_from_slice(&0.0f32.to_le_bytes());
+            header.insert(
+                (*key).to_string(),
+                serde_json::json!({"dtype": "F32", "shape": [1], "data_offsets": [start, data.len()]}),
+            );
+        }
+        header.insert("__metadata__".into(), serde_json::json!({"format": "pt"}));
+        let h = serde_json::to_vec(&header).unwrap();
+        let path = dir.join("model.safetensors");
+        let mut f = std::fs::File::create(&path).unwrap();
+        f.write_all(&(h.len() as u64).to_le_bytes()).unwrap();
+        f.write_all(&h).unwrap();
+        f.write_all(&data).unwrap();
+        (WeightMap::open(&dir).unwrap(), dir)
+    }
+
+    #[test]
+    fn detect_reads_the_published_2_3_folder_as_ltx_core() {
+        let (map, dir) = map_with("23-dit", &["transformer_blocks.0.attn1.q_norm.weight"]);
+        assert_eq!(Keys::detect(&map), Layout::LtxCore);
+        let _ = std::fs::remove_dir_all(&dir);
+
+        let (map, dir) = map_with("23-conn", &["video_aggregate_embed.weight"]);
+        assert_eq!(Keys::detect(&map), Layout::LtxCore);
+        assert_eq!(
+            Keys::connectors(Layout::LtxCore)
+                .text_proj_in(&map)
+                .unwrap(),
+            "video_aggregate_embed"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+
+        let (map, dir) = map_with("19b", &["model.diffusion_model.patchify_proj.weight"]);
+        assert_eq!(Keys::detect(&map), Layout::SingleFile);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

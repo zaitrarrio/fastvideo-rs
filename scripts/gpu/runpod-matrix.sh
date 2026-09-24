@@ -1,0 +1,206 @@
+#!/usr/bin/env bash
+# Runs ON a Runpod GPU box. Family: h3 | ltx | hunyuan
+# One process per family. Continues to the next cell on failure.
+# Spark joint LTX refine stays off (FASTVIDEO_LTX2_WEIGHTS unset).
+set -euo pipefail
+FAMILY="${1:?usage: runpod-matrix.sh h3|ltx|hunyuan}"
+WORK="${FV_WORK:-/workspace}"
+BIN="${FV_GPUCHECK:-/opt/fastvideo-rs/target/release/fv-gpucheck}"
+W="$WORK/weights"
+RUNS="$WORK/runs/${FAMILY}"
+LOG="$RUNS/live.log"
+PROMPT="${FV_PROMPT:-A man in his thirties talking to the camera in a bright living room, medium close-up, natural expressions and hand gestures, soft window light. He says: <d>Hello, this was generated entirely in Rust.</d>}"
+SEED="${FV_SEED:-1024}"
+export PATH="/opt/fastvideo-rs/target/release:/usr/local/bin:/usr/local/cuda/bin:${PATH:-}"
+unset FASTVIDEO_LTX2_WEIGHTS
+mkdir -p "$RUNS" "$WORK/gpucheck-out/logs" "$WORK/fv-libs"
+# cudarc looks for libcudnn.so (unversioned). The image ships libcudnn.so.9.
+if [[ ! -e $WORK/fv-libs/libcudnn.so ]]; then
+  bash /opt/fastvideo-rs/scripts/gpu/remote.sh env >/tmp/fv-env.json 2>/tmp/fv-env.err || true
+fi
+if [[ ! -e $WORK/fv-libs/libcudnn.so ]]; then
+  for spec in \
+    "cudnn:/lib/x86_64-linux-gnu/libcudnn.so.9" \
+    "cublas:/usr/local/cuda/targets/x86_64-linux/lib/libcublas.so.13" \
+    "cublasLt:/usr/local/cuda/targets/x86_64-linux/lib/libcublasLt.so.13" \
+    "nvrtc:/usr/local/cuda/targets/x86_64-linux/lib/libnvrtc.so.13"; do
+    name="${spec%%:*}"
+    src="${spec#*:}"
+    [[ -e "$src" ]] && ln -sf "$(readlink -f "$src")" "$WORK/fv-libs/lib${name}.so"
+  done
+fi
+export LD_LIBRARY_PATH="$WORK/fv-libs:/lib/x86_64-linux-gnu:/usr/local/cuda-13.0/lib64:/usr/local/cuda/lib64:/usr/local/cuda/targets/x86_64-linux/lib:${LD_LIBRARY_PATH:-}"
+[[ -e $WORK/fv-libs/libcudnn.so ]] || { echo "FATAL: libcudnn.so not linked" | tee -a "$LOG"; exit 2; }
+
+log() {
+  local line
+  line="$(printf '[%s] [%s] %s' "$(date -u +%H:%M:%S)" "$FAMILY" "$*")"
+  printf '%s\n' "$line" | tee -a "$LOG"
+}
+
+write_json() {
+  local dest="$1"
+  shift
+  printf '%s\n' "$*" >"$dest"
+}
+
+smi_snap() {
+  local dest="$1"
+  nvidia-smi --query-gpu=name,memory.total,memory.used,memory.free,utilization.gpu --format=csv,noheader >"$dest" 2>/dev/null || true
+}
+
+run_cell() {
+  local name="$1"
+  shift
+  local cell="$RUNS/$name"
+  mkdir -p "$cell"
+  local t0 rc secs
+  t0=$(date +%s)
+  log "▶ $name  $*  (wall cap ${FV_GEN_TIMEOUT_S:-300}s)"
+  smi_snap "$cell/nvidia-smi-start.txt"
+  set +e
+  # Hard 5-minute wall for every gen cell.
+  timeout --signal=TERM --kill-after=15 "${FV_GEN_TIMEOUT_S:-300}" "$@" >"$cell/stdout.log" 2>"$cell/stderr.log"
+  rc=$?
+  set -e
+  secs=$(( $(date +%s) - t0 ))
+  smi_snap "$cell/nvidia-smi-end.txt"
+  # last useful lines (skip percent spam)
+  if [[ $rc -ne 0 ]]; then
+    log "FAIL $name  ${secs}s  exit=$rc"
+    tail -20 "$cell/stderr.log" 2>/dev/null | grep -Ev 'MiB/|%\]|block [0-9]+/' | tail -12 | tee -a "$LOG" || true
+  else
+    local peak=""
+    peak="$(grep -E -i 'peak.*(mib|vram)|peak_mib' "$cell/stdout.log" "$cell/stderr.log" 2>/dev/null | tail -1 || true)"
+    log "ok $name  ${secs}s  ${peak}"
+  fi
+  write_json "$cell/summary.json" "$(printf '{"cell":"%s","family":"%s","exit":%s,"seconds":%s,"ended":"%s"}' \
+    "$name" "$FAMILY" "$rc" "$secs" "$(date -u +%Y-%m-%dT%H:%M:%SZ)")"
+  return 0
+}
+
+log "matrix start image=$(cat /opt/fastvideo-rs/target/release/fv-gpucheck.build-id 2>/dev/null || echo unknown)"
+if [[ ! -x "$BIN" ]]; then
+  log "FATAL: fv-gpucheck missing at $BIN"
+  exit 2
+fi
+command -v nvidia-smi >/dev/null || { log "FATAL: nvidia-smi missing"; exit 2; }
+nvidia-smi -L | tee -a "$LOG"
+nvidia-smi --query-gpu=name,memory.total,driver_version --format=csv,noheader | tee -a "$LOG"
+
+case "$FAMILY" in
+  h3)
+    run_cell fasth3-8step-warm \
+      "$BIN" --mode fast h3 gen \
+        --weights "$W/h3-8step" \
+        --prompt "$PROMPT" \
+        --seconds 5 \
+        --seed "$SEED" \
+        --text-encoder streamed \
+        --warm \
+        --no-text-cache \
+        --adaln-cache "$RUNS/h3-adaln.cache" \
+        --clip-dir "$RUNS/fasth3-8step-warm/frames"
+    run_cell sol-h3-4step \
+      "$BIN" --mode fast h3 gen \
+        --weights "$W/h3-base" \
+        --prompt "$PROMPT" \
+        --seconds 5 \
+        --seed "$SEED" \
+        --text-encoder streamed \
+        --h3-recipe sol-h3 \
+        --adaln-cache "$RUNS/sol-h3-adaln.cache" \
+        --clip-dir "$RUNS/sol-h3-4step/frames"
+    spark_up=""
+    spark_ad=""
+    for p in \
+      "$W/upscaler/minimax_h3_latent_upscaler_3d_bf16.safetensors" \
+      "$W/h3-spark-upscaler/minimax_h3_latent_upscaler_3d_bf16.safetensors" \
+      "$W/h3-spark/minimax_h3_latent_upscaler_3d_bf16.safetensors" \
+      "$W/h3-base/minimax_h3_latent_upscaler_3d_bf16.safetensors" \
+      "$W/minimax_h3_latent_upscaler_3d_bf16.safetensors"; do
+      [[ -f "$p" ]] && spark_up="$p" && break
+    done
+    for p in \
+      "$W/h3-to-ltx" \
+      "$W/h3_ltx_adapter" \
+      "$W/H3-to-LTX-Latent-Adapter" \
+      "$W/h3-base/h3-to-ltx" \
+      "$W/h3-base/h3_ltx_adapter"; do
+      if [[ -f "$p/model.safetensors" && -f "$p/config.json" ]]; then
+        spark_ad="$p"
+        break
+      fi
+    done
+    if [[ -n "$spark_up" && -n "$spark_ad" ]]; then
+      log "spark files present ($spark_up + $spark_ad) — sol-h3-spark, no joint LTX refine"
+      run_cell sol-h3-spark \
+        env -u FASTVIDEO_LTX2_WEIGHTS \
+        FASTVIDEO_H3_UPSCALER="$spark_up" \
+        FASTVIDEO_H3_LTX_ADAPTER="$spark_ad" \
+        "$BIN" --mode fast h3 gen \
+          --weights "$W/h3-base" \
+          --prompt "$PROMPT" \
+          --seconds 5 \
+          --seed "$SEED" \
+          --text-encoder streamed \
+          --h3-recipe sol-h3-spark \
+          --adaln-cache "$RUNS/sol-h3-spark-adaln.cache" \
+          --clip-dir "$RUNS/sol-h3-spark/frames"
+    else
+      log "skip sol-h3-spark: upscaler=${spark_up:-missing} adapter=${spark_ad:-missing}"
+    fi
+    ;;
+  ltx)
+    run_cell ltx25-two-stage \
+      "$BIN" --mode fast ltx2 gen \
+        --model-version 2.5 \
+        --weights "$W/ltx25" \
+        --dit "$W/ltx25" \
+        --prompt "$PROMPT" \
+        --seed "$SEED" \
+        --two-stage \
+        --text streamed \
+        --warm \
+        --clip "$RUNS/ltx25-two-stage/frames"
+    run_cell ltx23-two-stage \
+      "$BIN" --mode fast ltx2 gen \
+        --model-version 2.3 \
+        --weights "$W/ltx23" \
+        --dit "$W/ltx23" \
+        --prompt "$PROMPT" \
+        --seed "$SEED" \
+        --two-stage \
+        --text streamed \
+        --clip "$RUNS/ltx23-two-stage/frames"
+    run_cell ltx20-distilled-8step \
+      "$BIN" --mode fast ltx2 gen \
+        --model-version 2.0 \
+        --weights "$W/ltx2" \
+        --dit "$W/ltx2/ltx-2-19b-distilled.safetensors" \
+        --prompt "$PROMPT" \
+        --seed "$SEED" \
+        --clip "$RUNS/ltx20-distilled-8step/frames"
+    ;;
+  hunyuan)
+    if ! "$BIN" hunyuan --help >/dev/null 2>&1; then
+      log "skip hunyuan: fv-gpucheck in this image has no hunyuan gen tier"
+      write_json "$RUNS/skipped.json" '{"status":"skipped","reason":"fv-gpucheck hunyuan gen not in published image"}'
+      exit 0
+    fi
+    run_cell hy15-480-t2v \
+      "$BIN" --mode fast hunyuan gen \
+        --preset hy15_480p_t2v \
+        --weights "$W/hy15-480-t2v" \
+        --prompt "$PROMPT" \
+        --seed "$SEED" \
+        --clip "$RUNS/hy15-480-t2v/frames"
+    ;;
+  *)
+    log "FATAL: unknown family $FAMILY"
+    exit 2
+    ;;
+esac
+
+log "matrix done"
+write_json "$RUNS/done.json" "$(printf '{"family":"%s","ended":"%s"}' "$FAMILY" "$(date -u +%Y-%m-%dT%H:%M:%SZ)")"

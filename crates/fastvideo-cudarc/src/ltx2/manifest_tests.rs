@@ -183,6 +183,7 @@ fn connectors_against(layout: Layout, published: &Requests) -> Vec<String> {
         Layout::Diffusers => {
             TextConnectors::load(&map, &keys, &cfg).expect("load");
         }
+        Layout::LtxCore => unreachable!("2.0 connector manifest is not the 2.3 folder layout"),
         Layout::SingleFile => {
             let candidates = Keys::text_proj_in_candidates();
             let found: Vec<_> = candidates
@@ -204,7 +205,7 @@ fn connectors_against(layout: Layout, published: &Requests) -> Vec<String> {
     let seen = seen.lock().expect("lock").clone();
     problems.extend(mismatches(&seen, published));
     problems.extend(unrequested(&seen, published, |k| match layout {
-        Layout::Diffusers => true,
+        Layout::Diffusers | Layout::LtxCore => true,
         Layout::SingleFile => {
             k.contains("_embeddings_connector.") || k.starts_with("text_embedding_projection.")
         }
@@ -275,7 +276,7 @@ fn transformer_against(layout: Layout, published: &Requests) -> Vec<String> {
     }
     problems.extend(mismatches(&all, published));
     problems.extend(unrequested(&all, published, |k| match layout {
-        Layout::Diffusers => true,
+        Layout::Diffusers | Layout::LtxCore => true,
         // Everything under the DiT root that is not a connector.
         Layout::SingleFile => {
             k.starts_with("model.diffusion_model.") && !k.contains("_embeddings_connector.")

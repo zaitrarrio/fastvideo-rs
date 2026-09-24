@@ -378,14 +378,14 @@ impl TextConnectors {
             (
                 Linear::load(
                     map,
-                    "video_text_proj_in",
+                    &keys.key("video_text_proj_in"),
                     cfg.text_proj_in_features(),
                     video_dim,
                     bias,
                 )?,
                 Linear::load(
                     map,
-                    "audio_text_proj_in",
+                    &keys.key("audio_text_proj_in"),
                     cfg.text_proj_in_features(),
                     audio_dim,
                     bias,

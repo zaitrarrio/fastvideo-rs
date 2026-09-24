@@ -117,10 +117,43 @@ fn err(path: &Path, what: impl std::fmt::Display) -> LoaderError {
     LoaderError::Message(format!("{}: {what}", path.display()))
 }
 
+fn index_preference(path: &Path) -> u8 {
+    let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+    if name == "model.safetensors.index.json" {
+        2
+    } else if name.starts_with("model.") && name.ends_with(".safetensors.index.json") {
+        1
+    } else {
+        0
+    }
+}
+
+fn shards_listed_in_index(dir: &Path, index: &Path) -> Result<Vec<PathBuf>, LoaderError> {
+    let raw = std::fs::read_to_string(index).map_err(|e| err(index, e))?;
+    let v: serde_json::Value =
+        serde_json::from_str(&raw).map_err(|e| err(index, format!("weight index json: {e}")))?;
+    let map = v
+        .get("weight_map")
+        .and_then(|m| m.as_object())
+        .ok_or_else(|| err(index, "missing weight_map"))?;
+    let mut shards = std::collections::BTreeSet::new();
+    for file in map.values() {
+        let name = file
+            .as_str()
+            .ok_or_else(|| err(index, "weight_map value is not a string"))?;
+        shards.insert(dir.join(name));
+    }
+    Ok(shards.into_iter().collect())
+}
+
 /// Diffusers packs sometimes ship both a consolidated `.safetensors` and the
 /// numbered shards it was split into (same keys, double the bytes). Prefer the
 /// `*.safetensors.index.json` weight_map when present; otherwise, if numbered
 /// shards exist, drop the unnumbered sibling that shares their stem prefix.
+///
+/// `Lightricks/LTX-2` also ships a stale `diffusion_pytorch_model.safetensors.index.json`
+/// next to the live `model-*-of-00011` set. Unioning every index then fails
+/// when the 12-shard files are absent. Use one complete index; prefer `model.*`.
 fn resolve_shard_files(dir: &Path) -> Result<Vec<PathBuf>, LoaderError> {
     let mut indices = Vec::new();
     for entry in std::fs::read_dir(dir).map_err(|e| err(dir, e))? {
@@ -132,32 +165,28 @@ fn resolve_shard_files(dir: &Path) -> Result<Vec<PathBuf>, LoaderError> {
     }
     indices.sort();
     if !indices.is_empty() {
-        let mut shards = std::collections::BTreeSet::new();
+        let mut listed: Vec<(u8, bool, PathBuf, Vec<PathBuf>)> = Vec::new();
         for index in &indices {
-            let raw = std::fs::read_to_string(index).map_err(|e| err(index, e))?;
-            let v: serde_json::Value = serde_json::from_str(&raw)
-                .map_err(|e| err(index, format!("weight index json: {e}")))?;
-            let map = v
-                .get("weight_map")
-                .and_then(|m| m.as_object())
-                .ok_or_else(|| err(index, "missing weight_map"))?;
-            for file in map.values() {
-                let name = file
-                    .as_str()
-                    .ok_or_else(|| err(index, "weight_map value is not a string"))?;
-                shards.insert(dir.join(name));
+            let shards = shards_listed_in_index(dir, index)?;
+            if shards.is_empty() {
+                return Err(err(index, "weight_map listed no shard files"));
             }
+            let complete = shards.iter().all(|f| f.is_file());
+            listed.push((index_preference(index), complete, index.clone(), shards));
         }
-        let files: Vec<PathBuf> = shards.into_iter().collect();
-        if files.is_empty() {
-            return Err(err(dir, "weight_map listed no shard files"));
+        if let Some((_, _, _, shards)) = listed.iter().filter(|row| row.1).max_by_key(|row| row.0) {
+            return Ok(shards.clone());
         }
-        for f in &files {
+        let (_, _, index, shards) = listed
+            .into_iter()
+            .max_by_key(|row| row.0)
+            .expect("indices non-empty");
+        for f in &shards {
             if !f.is_file() {
                 return Err(err(f, "listed in weight_map but missing on disk"));
             }
         }
-        return Ok(files);
+        return Err(err(&index, "weight_map listed no shard files"));
     }
 
     let mut files = collect_safetensors(dir)?;
@@ -656,6 +685,36 @@ mod tests {
         assert_eq!(s.to_f32("b").unwrap().1, vec![3.0]);
         let _ = std::fs::remove_dir_all(&d);
         let _ = std::fs::remove_dir_all(&d2);
+    }
+
+    #[test]
+    fn a_complete_model_index_wins_over_a_stale_incomplete_twin() {
+        let d = tmp("stale-index");
+        write_st(
+            &d.join("model-00001-of-00001.safetensors"),
+            &[("w", "F32", vec![1], 5.0f32.to_le_bytes().to_vec())],
+        );
+        std::fs::write(
+            d.join("model.safetensors.index.json"),
+            serde_json::to_vec_pretty(&serde_json::json!({
+                "weight_map": { "w": "model-00001-of-00001.safetensors" }
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        std::fs::write(
+            d.join("diffusion_pytorch_model.safetensors.index.json"),
+            serde_json::to_vec_pretty(&serde_json::json!({
+                "weight_map": {
+                    "w": "diffusion_pytorch_model-00001-of-00012.safetensors"
+                }
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        let s = LazyStore::open(&d).unwrap();
+        assert_eq!(s.to_f32("w").unwrap().1, vec![5.0]);
+        let _ = std::fs::remove_dir_all(&d);
     }
 
     #[test]

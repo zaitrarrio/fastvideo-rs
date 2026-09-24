@@ -78,6 +78,16 @@ RUN apt-get update \
  && rm -rf /var/lib/apt/lists/* \
  && echo /usr/local/cuda-13.0/lib64 > /etc/ld.so.conf.d/fastvideo-nvidia.conf \
  && ldconfig \
+ && bash -lc 'for lib in libcudnn libcublas libcublasLt libnvrtc; do
+      src=$(ls /lib/x86_64-linux-gnu/${lib}.so.* /usr/lib/x86_64-linux-gnu/${lib}.so.* \
+               /usr/local/cuda-13.0/lib64/${lib}.so.* \
+               /usr/local/cuda/targets/x86_64-linux/lib/${lib}.so.* 2>/dev/null | head -1 || true)
+      if [ -n "$src" ]; then
+        dir=$(dirname "$src")
+        if [ ! -e "$dir/${lib}.so" ]; then ln -s "$(basename "$src")" "$dir/${lib}.so"; fi
+      fi
+    done' \
+ && ldconfig \
  && ldconfig -p | grep -E 'libnvrtc\.so|libcublasLt\.so|libcublas\.so|libcudnn\.so' \
  && mkdir -p /run/sshd
 # The NVIDIA container runtime injects the driver (libcuda) when these are set.

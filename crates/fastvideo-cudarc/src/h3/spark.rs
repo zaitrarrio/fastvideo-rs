@@ -628,14 +628,22 @@ fn find_file(root: &Path, name: &str) -> Option<PathBuf> {
     if let Some(parent) = root.parent() {
         roots.push(parent.to_path_buf());
     }
+    let nested = [
+        "upscaler",
+        "h3-spark-upscaler",
+        "h3-spark",
+        "h3_ltx_adapter",
+    ];
     for dir in roots {
         let direct = dir.join(name);
         if direct.is_file() {
             return Some(direct);
         }
-        let nested = dir.join("upscaler").join(name);
-        if nested.is_file() {
-            return Some(nested);
+        for sub in nested {
+            let candidate = dir.join(sub).join(name);
+            if candidate.is_file() {
+                return Some(candidate);
+            }
         }
     }
     None
@@ -644,10 +652,15 @@ fn find_file(root: &Path, name: &str) -> Option<PathBuf> {
 fn find_adapter(root: &Path) -> Option<(PathBuf, PathBuf)> {
     // The H3 snapshot itself has a config and weights. Only a dedicated
     // directory is the adapter.
-    let mut dirs = vec![root.join("h3_ltx_adapter"), root.join("h3-to-ltx")];
+    let mut dirs = vec![
+        root.join("h3_ltx_adapter"),
+        root.join("h3-to-ltx"),
+        root.join("H3-to-LTX-Latent-Adapter"),
+    ];
     if let Some(parent) = root.parent() {
         dirs.push(parent.join("h3_ltx_adapter"));
         dirs.push(parent.join("h3-to-ltx"));
+        dirs.push(parent.join("H3-to-LTX-Latent-Adapter"));
     }
     for dir in dirs {
         let weights = dir.join(ADAPTER_WEIGHTS);
@@ -688,4 +701,50 @@ fn adapter_paths(path: &Path) -> Result<(PathBuf, PathBuf)> {
         "FASTVIDEO_H3_LTX_ADAPTER {} is not a file or directory",
         path.display()
     )))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn tmp(name: &str) -> PathBuf {
+        let d = std::env::temp_dir().join(format!("fv-spark-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        d
+    }
+
+    #[test]
+    fn find_adapter_ignores_the_h3_snapshot_and_uses_a_sibling_dir() {
+        let root = tmp("weights");
+        let h3 = root.join("h3-base");
+        std::fs::create_dir_all(&h3).unwrap();
+        std::fs::write(h3.join("config.json"), b"{}").unwrap();
+        std::fs::write(h3.join("model.safetensors"), b"not-the-adapter").unwrap();
+        assert!(find_adapter(&h3).is_none());
+
+        let adapter = root.join("h3-to-ltx");
+        std::fs::create_dir_all(&adapter).unwrap();
+        std::fs::write(adapter.join(ADAPTER_CONFIG), b"{}").unwrap();
+        std::fs::write(adapter.join(ADAPTER_WEIGHTS), b"weights").unwrap();
+        let found = find_adapter(&h3).expect("sibling adapter");
+        assert_eq!(found.0, adapter.join(ADAPTER_WEIGHTS));
+        assert_eq!(found.1, adapter.join(ADAPTER_CONFIG));
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn find_file_looks_beside_h3_and_under_upscaler() {
+        let root = tmp("up");
+        let h3 = root.join("h3-base");
+        std::fs::create_dir_all(root.join("upscaler")).unwrap();
+        std::fs::create_dir_all(&h3).unwrap();
+        let file = root.join("upscaler").join(UPSCALER_FILE);
+        std::fs::write(&file, b"up").unwrap();
+        assert_eq!(
+            find_file(&h3, UPSCALER_FILE).as_deref(),
+            Some(file.as_path())
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
 }

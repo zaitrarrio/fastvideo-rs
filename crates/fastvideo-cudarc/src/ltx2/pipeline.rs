@@ -981,6 +981,35 @@ impl TextEncoder {
         }
     }
 
+    /// Two-stage reloads a second fused DiT. Auto would otherwise keep Gemma
+    /// resident beside that swap and OOM a 96 GB card. `FASTVIDEO_LTX2_TEXT`
+    /// / an explicit residency still win.
+    pub fn prefer_streamed_for_two_stage(&mut self) {
+        if self.residency != TextResidency::Auto {
+            return;
+        }
+        let env = std::env::var("FASTVIDEO_LTX2_TEXT").ok();
+        if env
+            .as_deref()
+            .is_some_and(|v| v.trim().eq_ignore_ascii_case("resident"))
+        {
+            return;
+        }
+        crate::wan::log::info(format_args!(
+            "ltx2 text: streamed for two-stage (Gemma is not kept beside DiT reload)"
+        ));
+        self.residency = TextResidency::Streamed;
+    }
+
+    /// Drop a resident Gemma + connectors after contexts are already in hand.
+    pub fn unload_resident(&mut self) {
+        if self.resident.take().is_some() {
+            crate::wan::log::info(format_args!(
+                "ltx2 text: dropped resident Gemma (contexts already encoded)"
+            ));
+        }
+    }
+
     /// `use_cache = false` neither reads nor writes the cache (a warm-up run
     /// must not turn the run it warms up for into a hit).
     pub fn encode(
@@ -1115,6 +1144,11 @@ impl Ltx2Pipeline {
             crate::wan::log::info(format_args!(
                 "ltx2: reloading DiT at lora strength {strength}"
             ));
+            // Drop the old fused DiT before the next full load. Holding both
+            // plus resident Gemma is what OOMed a 96 GB PRO 6000 (~95 GiB).
+            self.model = None;
+            self.loaded_strength = None;
+            sync()?;
         }
         let map = open_distilled(&self.dit, "transformer")?;
         let keys = Keys::transformer(Keys::detect(&map));
@@ -1215,6 +1249,7 @@ impl Ltx2Pipeline {
                     "ltx2: two-stage needs weights/latent_upsampler|spatial_upscaler (missing beside --weights)",
                 ));
             }
+            self.text.prefer_streamed_for_two_stage();
         }
         if req.diff_vae {
             if cfg.version != Ltx2ModelVersion::V25 {
@@ -1256,6 +1291,9 @@ impl Ltx2Pipeline {
         } else {
             None
         };
+        if req.two_stage {
+            self.text.unload_resident();
+        }
 
         let strengths =
             fastvideo_models::ltx2::lora::stage_strengths(cfg.version).unwrap_or((0.0, 0.0));
@@ -2212,6 +2250,12 @@ mod tests {
             48 * 224_133_120 + (4 * 12 * 3840 * 3840 + 188_160 * 3840)
         );
         assert_eq!(enc.mode(), "undecided");
+        let mut streamed =
+            TextEncoder::new(&paths, &ltx2_19b_distilled(), &PipelineOptions::default());
+        streamed.prefer_streamed_for_two_stage();
+        assert_eq!(streamed.mode(), "streamed");
+        streamed.unload_resident();
+        assert_eq!(streamed.mode(), "streamed");
         assert_eq!(paths.text_root(), Path::new("/nonexistent"));
         let slim = Ltx2Paths {
             text: Some("/slim".into()),
