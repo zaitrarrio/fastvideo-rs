@@ -673,7 +673,7 @@ fn sla_linear_device(q: &CudaTensor, k: &CudaTensor, v: &CudaTensor) -> Result<C
     let q_r = q_lin.reshape(vec![b * h, s, d])?;
     let num = q_r.matmul(&kv)?;
     let den = q_r.matmul(&ksum.reshape(vec![b * h, d, 1])?)?;
-    let den = den.add_scalar(1e-5)?;
+    let den = den.try_add_scalar(1e-5)?;
     num.div(&den)?.reshape(vec![b, h, s, d])
 }
 
