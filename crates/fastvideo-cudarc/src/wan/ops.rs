@@ -2444,6 +2444,108 @@ pub fn nvfp4_gemm_device(
     Ok(c)
 }
 
+/// Device reconstruct (quantize + dequant) for [`super::nvfp4::dequant_beforehand`].
+/// `rule`: TransformerEngine static_6 / static_4 / FourOverSix MSE.
+#[cfg(feature = "cuda")]
+pub fn nvfp4_reconstruct_device(
+    x: &CudaSlice<f32>,
+    rows: usize,
+    cols: usize,
+    rule: fastvideo_models::nvfp4::ScaleRule,
+) -> Result<CudaSlice<f32>> {
+    let dev = ctx()?;
+    if cols == 0 || !cols.is_multiple_of(16) {
+        return Err(err(format!(
+            "nvfp4 reconstruct: cols {cols} is not a multiple of 16"
+        )));
+    }
+    if x.len() != rows * cols {
+        return Err(err(format!(
+            "nvfp4 reconstruct: {} elements for [{rows}, {cols}]",
+            x.len()
+        )));
+    }
+    let n = x.len() as i64;
+    let mut amax = dev.stream.alloc_zeros::<f32>(1).map_err(err)?;
+    let blocks = x.len().div_ceil(256).clamp(1, 1024) as u32;
+    let cfg_amax = LaunchConfig {
+        grid_dim: (blocks, 1, 1),
+        block_dim: (256, 1, 1),
+        shared_mem_bytes: 256 * 4,
+    };
+    launch!(dev.stream, &dev.kernels.amax_abs, cfg_amax; x, &mut amax, &n).map_err(err)?;
+    let n_blocks = rows * (cols / 16);
+    let mut out = alloc((rows * cols).max(1))?;
+    let rule_i = match rule {
+        fastvideo_models::nvfp4::ScaleRule::Static6 => 0i32,
+        fastvideo_models::nvfp4::ScaleRule::Static4 => 1,
+        fastvideo_models::nvfp4::ScaleRule::Mse => 2,
+    };
+    let (rr, cc) = (rows as i64, cols as i64);
+    launch!(
+        dev.stream, &dev.kernels.nvfp4_reconstruct, cfg_n(n_blocks.max(1));
+        x, &mut out, &amax, &rr, &cc, &rule_i
+    )
+    .map_err(err)?;
+    Ok(out)
+}
+
+/// Tile-IR W4A4 GEMM. Default **off** ([`fastvideo_models::nvfp4::ENV_OXIDE_GEMM`]).
+/// Gate: must beat cuBLAS bf16 on the H3 FFN shape (K=5376, N=14336) and
+/// PSNR ≥ 30 dB vs bf16 — unmeasured here, so the flag stays off.
+#[cfg(feature = "cuda")]
+pub fn nvfp4_oxide_gemm_device(
+    a_packed: &[u8],
+    a_scales: &[u8],
+    a_decode: f32,
+    w_packed: &CudaSlice<u8>,
+    w_scales: &CudaSlice<u8>,
+    w_decode: &CudaSlice<f32>,
+    m: usize,
+    n: usize,
+    k: usize,
+) -> Result<CudaSlice<f32>> {
+    if !fastvideo_models::nvfp4::oxide_gemm_enabled() {
+        return Err(err(
+            "nvfp4 oxide gemm: FASTVIDEO_NVFP4_OXIDE_GEMM is off (unmeasured vs cuBLAS bf16)",
+        ));
+    }
+    let dev = ctx()?;
+    let Some(f) = dev.kernels.nvfp4_oxide_w4a4_gemm.as_ref() else {
+        return Err(err(format!(
+            "nvfp4 oxide gemm: no Tile-IR cubin for sm_{}{}",
+            dev.sm_major, dev.sm_minor
+        )));
+    };
+    if k == 0 || !k.is_multiple_of(16) {
+        return Err(err(format!(
+            "nvfp4 oxide gemm: k={k} is not a multiple of 16"
+        )));
+    }
+    if a_packed.len() != m * (k / 2) || a_scales.len() != m * (k / 16) {
+        return Err(err(format!(
+            "nvfp4 oxide gemm: A pack {} / scales {} for [{m}, {k}]",
+            a_packed.len(),
+            a_scales.len()
+        )));
+    }
+    let ap = dev.stream.memcpy_stod(a_packed).map_err(err)?;
+    let ascales = dev.stream.memcpy_stod(a_scales).map_err(err)?;
+    let mut c = alloc((m * n).max(1))?;
+    let cfg = LaunchConfig {
+        grid_dim: (n.div_ceil(16) as u32, m.div_ceil(16) as u32, 1),
+        block_dim: (256, 1, 1),
+        shared_mem_bytes: 0,
+    };
+    let (mm, nn, kk) = (m as i64, n as i64, k as i64);
+    launch!(
+        dev.stream, f, cfg;
+        &ap, &ascales, w_packed, w_scales, w_decode, &mut c, &mm, &nn, &kk, &a_decode
+    )
+    .map_err(err)?;
+    Ok(c)
+}
+
 /// Packed NVFP4 rows → FP32. `decode[row] = amax / (e2m1_max * e4m3_max)`.
 #[cfg(feature = "cuda")]
 pub fn nvfp4_kv_dequant_device(

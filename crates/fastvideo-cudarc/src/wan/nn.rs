@@ -1207,7 +1207,7 @@ mod fp8_rows_tests {
                 &w,
                 o,
                 i,
-                fastvideo_models::nvfp4::ScaleRule::Mse,
+                fastvideo_models::nvfp4::ScaleRule::Static6,
             )
             .unwrap();
             let stored = lin.weight.host_cow().unwrap();
@@ -1219,7 +1219,7 @@ mod fp8_rows_tests {
                 &x,
                 2,
                 i,
-                fastvideo_models::nvfp4::ScaleRule::Mse,
+                fastvideo_models::nvfp4::ScaleRule::Static6,
             )
             .unwrap();
             let y = lin

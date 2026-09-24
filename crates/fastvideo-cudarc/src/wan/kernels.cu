@@ -1932,3 +1932,99 @@ extern "C" __global__ void ln_adaln_e_rope_half(
         dst[j] = y;
     }
 }
+
+// ==== region: nvfp4 ====
+// Device reconstruct (quantize + dequant) replacing host fake-quant in
+// dequant_beforehand. Same numeric recipe as fastvideo_models::nvfp4::reconstruct.
+// rule: 0 = static_6 (TE NVFP4BlockScaling), 1 = static_4, 2 = FourOverSix MSE.
+// One thread per 16-wide block. Tensor amax is a device scalar from amax_abs.
+__device__ __forceinline__ float fv_nvfp4_round_even(float x) {
+    float f = floorf(x);
+    float frac = x - f;
+    if (frac < 0.5f) return f;
+    if (frac > 0.5f) return f + 1.0f;
+    return (((long long)f) % 2 == 0) ? f : (f + 1.0f);
+}
+
+__device__ __forceinline__ float fv_nvfp4_fake_e2m1(float v) {
+    if (!isfinite(v)) return 0.0f;
+    float a = fabsf(v);
+    float mag;
+    if (a < 2.0f) mag = fv_nvfp4_round_even(2.0f * a) * 0.5f;
+    else if (a < 4.0f) mag = fv_nvfp4_round_even(a);
+    else mag = 2.0f * fv_nvfp4_round_even(a * 0.5f);
+    return signbit(v) ? -mag : mag;
+}
+
+__device__ __forceinline__ void fv_nvfp4_scale_block(
+    const float* src, float* fake, unsigned char* scale_out,
+    float amax, float e2, float e4, float expansion
+) {
+    if (!(amax > 0.0f) || !isfinite(amax)) {
+        for (int i = 0; i < 16; i++) fake[i] = 0.0f;
+        *scale_out = 0;
+        return;
+    }
+    float encode = (e2 * e4) / amax;
+    float decode = amax / (e2 * e4);
+    float block_amax = 0.0f;
+    for (int i = 0; i < 16; i++) {
+        float v = fabsf(src[i]);
+        if (v > block_amax) block_amax = v;
+    }
+    unsigned char code = fv_to_e4m3((block_amax / e2) * encode * expansion);
+    *scale_out = code;
+    float s = fv_e4m3_to_f32(code);
+    if (s == 0.0f) {
+        for (int i = 0; i < 16; i++) fake[i] = 0.0f;
+        return;
+    }
+    float inv = 1.0f / (decode * s);
+    for (int i = 0; i < 16; i++) fake[i] = fv_nvfp4_fake_e2m1(src[i] * inv);
+}
+
+__device__ __forceinline__ float fv_nvfp4_block_mse(
+    const float* orig, const float* fake, unsigned char scale, float decode
+) {
+    float s = fv_e4m3_to_f32(scale) * decode;
+    float mse = 0.0f;
+    for (int i = 0; i < 16; i++) {
+        float d = fake[i] * s - orig[i];
+        mse += d * d;
+    }
+    return mse;
+}
+
+extern "C" __global__ void nvfp4_reconstruct(
+    const float* x, float* out, const float* amax_ptr,
+    long rows, long cols, int rule
+) {
+    long n_blocks = rows * (cols / 16);
+    long b = IDX();
+    if (b >= n_blocks) return;
+    long row = b / (cols / 16);
+    long blk = b % (cols / 16);
+    const float* src = x + row * cols + blk * 16;
+    float* dst = out + row * cols + blk * 16;
+    float amax = *amax_ptr;
+    float e2 = (rule == 1) ? 4.0f : 6.0f;
+    float e4 = (rule == 2) ? 256.0f : 448.0f;
+    float fake[16];
+    unsigned char scale;
+    fv_nvfp4_scale_block(src, fake, &scale, amax, e2, e4, 1.0f);
+    if (rule == 2) {
+        float fake4[16];
+        unsigned char s4;
+        fv_nvfp4_scale_block(src, fake4, &s4, amax, e2, e4, 1.5f);
+        float mse_decode = (amax > 0.0f) ? amax / (6.0f * 256.0f) : 0.0f;
+        if (fv_nvfp4_block_mse(src, fake4, s4, mse_decode)
+            < fv_nvfp4_block_mse(src, fake, scale, mse_decode)) {
+            for (int i = 0; i < 16; i++) fake[i] = fake4[i];
+            scale = s4;
+        }
+    }
+    float decode = (amax > 0.0f && isfinite(amax)) ? amax / (e2 * e4) : 0.0f;
+    float s = fv_e4m3_to_f32(scale) * decode;
+    for (int i = 0; i < 16; i++) dst[i] = fake[i] * s;
+}
+// ==== endregion: nvfp4 ====

@@ -1,7 +1,10 @@
 //! LongLive NVFP4 seam. `FASTVIDEO_NVFP4` dequants beforehand: weights once
-//! at load inside `Linear`, activations and K/V on each forward here. The
-//! existing GEMM and attention then consume those dense tensors. Host math
-//! lives in [`fastvideo_models::nvfp4`].
+//! at load inside `Linear`, activations and K/V on each forward here. Default
+//! rule is TransformerEngine `NVFP4BlockScaling` (`static_6`). Device
+//! reconstruct replaces host fake-quant when a CUDA context is live;
+//! [`super::stats::host_algorithm`] still guards the remaining host path.
+//! Tile-IR W4A4 GEMM stays off ([`fastvideo_models::nvfp4::ENV_OXIDE_GEMM`]).
+//! Host math lives in [`fastvideo_models::nvfp4`].
 
 use fastvideo_models::nvfp4::{self, Nvfp4Tensor, ScaleRule, BLOCK};
 
@@ -196,6 +199,14 @@ impl Nvfp4Weight {
         };
         let a = nvfp4::quantize(&host, m, self.cols, self.rule).map_err(msg)?;
         let a_decode = nvfp4::dequant_factor(a.amax, a.rule);
+        if nvfp4::oxide_gemm_enabled() {
+            if let Ok(c) = super::ops::nvfp4_oxide_gemm_device(
+                &a.packed, &a.scales, a_decode, &d.packed, &d.scales, &d.decode, m, self.rows,
+                self.cols,
+            ) {
+                return Ok(c);
+            }
+        }
         super::ops::nvfp4_gemm_device(
             &a.packed, &a.scales, a_decode, &d.packed, &d.scales, &d.decode, m, self.rows,
             self.cols,
@@ -252,6 +263,11 @@ pub fn dequant_beforehand(xs: &CudaTensor, rule: ScaleRule) -> Result<CudaTensor
         )));
     }
     let rows = xs.numel() / k;
+    #[cfg(feature = "cuda")]
+    if let Some(src) = xs.dev()? {
+        let rec = super::ops::nvfp4_reconstruct_device(&src, rows, k, rule)?;
+        return CudaTensor::from_device_slice(rec, xs.shape.clone());
+    }
     super::stats::host_algorithm("nvfp4", format_args!("dequant {rows}x{k}"))?;
     let rec = nvfp4::reconstruct(&xs.host_cow()?, rows, k, rule).map_err(msg)?;
     let mut out = CudaTensor::from_vec(rec, xs.shape.clone())?;
@@ -353,8 +369,8 @@ mod tests {
         });
         let mut sk = raw_k;
         nvfp4::k_smooth(&mut sk, 2, 16);
-        let want_k = nvfp4::reconstruct(&sk, 2, 16, ScaleRule::Mse).unwrap();
-        let want_v = nvfp4::reconstruct(&raw_v, 2, 16, ScaleRule::Mse).unwrap();
+        let want_k = nvfp4::reconstruct(&sk, 2, 16, ScaleRule::Static6).unwrap();
+        let want_v = nvfp4::reconstruct(&raw_v, 2, 16, ScaleRule::Static6).unwrap();
         let got_k = gk.host_cow().unwrap();
         let got_v = gv.host_cow().unwrap();
         for (a, b) in want_k.iter().zip(got_k.iter()) {

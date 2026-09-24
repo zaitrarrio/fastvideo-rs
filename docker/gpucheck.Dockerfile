@@ -2,7 +2,7 @@
 # fv-gpucheck images. Built locally by scripts/gpu/docker.sh and in CI by
 # .github/workflows/gpucheck-runtime-image.yml; see scripts/gpu/README.md.
 #
-# builder  Ubuntu 22.04 + Rust + CUDA 13.0 nvcc/NVRTC. Builds `fv-gpucheck
+# builder  Ubuntu 22.04 + Rust + CUDA 13.4 nvcc/NVRTC/tileiras. Builds `fv-gpucheck
 #          --features cuda` with per-SM cubins compiled ahead of time by
 #          build.rs (cudarc still loads the CUDA *libraries* at run time), and
 #          runs everything that needs no GPU: unit tests, the compile gates,
@@ -12,9 +12,9 @@
 # binary   The binary + build id. Locally overridden with
 #          `--build-context binary=artifacts/gpucheck/dist` to reuse `docker.sh dist`.
 # runtime  What a GPU box runs (ghcr.io/zaitrarrio/fastvideo-rs-runtime): Ubuntu
-#          22.04 + pinned CUDA 13.0 libraries (scripts/gpu/cuda-13.pins) +
-#          rsync/ffmpeg/hf-fm + the binary and scripts. No Python, no PyTorch,
-#          no toolkit: hosts boot quickly.
+#          22.04 + pinned CUDA 13.4 libraries (scripts/gpu/cuda-13.pins) +
+#          tileiras + rsync/ffmpeg/hf-fm + the binary and scripts. No Python,
+#          no PyTorch, no toolkit: hosts boot quickly.
 
 FROM ubuntu:22.04 AS builder
 ARG DEBIAN_FRONTEND=noninteractive
@@ -28,7 +28,8 @@ RUN apt-get update \
  && . /etc/fastvideo/cuda-13.pins \
  && apt-get install -y --no-install-recommends --allow-downgrades \
       "$CUDA_NVCC_PKG" "$CUDA_NVRTC_PKG" "$CUDA_NVRTC_DEV_PKG" \
- && apt-mark hold cuda-nvcc-13-0 cuda-nvrtc-13-0 cuda-nvrtc-dev-13-0 \
+      "$CUDA_TILEIRAS_PKG" \
+ && apt-mark hold cuda-nvcc-13-4 cuda-nvrtc-13-4 cuda-nvrtc-dev-13-4 cuda-tileiras-13-4 \
  && rm -rf /var/lib/apt/lists/*
 ENV RUSTUP_HOME=/usr/local/rustup \
     CARGO_HOME=/usr/local/cargo \
@@ -38,10 +39,10 @@ ENV RUSTUP_HOME=/usr/local/rustup \
 RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
       | sh -s -- -y --profile minimal --default-toolchain stable --component rustfmt,clippy \
  && rustc --version
-ENV CUDARC_CUDA_VERSION=13000 \
-    LD_LIBRARY_PATH=/usr/local/cuda-13.0/lib64 \
-    PATH=/usr/local/cuda-13.0/bin:/usr/local/cargo/bin:$PATH \
-    NVCC=/usr/local/cuda-13.0/bin/nvcc \
+ENV CUDARC_CUDA_VERSION=13040 \
+    LD_LIBRARY_PATH=/usr/local/cuda-13.4/lib64 \
+    PATH=/usr/local/cuda-13.4/bin:/usr/local/cargo/bin:$PATH \
+    NVCC=/usr/local/cuda-13.4/bin/nvcc \
     CARGO_TARGET_DIR=/target \
     CARGO_PROFILE_RELEASE_LTO=off \
     CARGO_PROFILE_RELEASE_CODEGEN_UNITS=16 \
@@ -69,8 +70,8 @@ COPY --from=build /out/ /
 
 FROM ubuntu:22.04 AS runtime
 ARG DEBIAN_FRONTEND=noninteractive
-# CUDA 13.0 runtime libraries from NVIDIA's apt repo, versions pinned in
-# scripts/gpu/cuda-13.pins. 13.0 needs a >= 580 driver; validate.sh's offer
+# CUDA 13.4 runtime libraries from NVIDIA's apt repo, versions pinned in
+# scripts/gpu/cuda-13.pins. 13.4 needs a >= 580 driver; validate.sh's offer
 # filter asks Vast for cuda_vers>=13.0. No Python: weights come through hf-fm.
 COPY scripts/gpu/cuda-13.pins /etc/fastvideo/cuda-13.pins
 RUN apt-get update \
@@ -82,9 +83,10 @@ RUN apt-get update \
  && . /etc/fastvideo/cuda-13.pins \
  && apt-get install -y --no-install-recommends --allow-downgrades \
       "$CUDA_NVRTC_PKG" "$CUDA_CUBLAS_PKG" "$CUDA_CUDNN_PKG" \
- && apt-mark hold cuda-nvrtc-13-0 libcublas-13-0 libcudnn9-cuda-13 \
+      "$CUDA_TILEIRAS_PKG" \
+ && apt-mark hold cuda-nvrtc-13-4 libcublas-13-4 libcudnn9-cuda-13 cuda-tileiras-13-4 \
  && rm -rf /var/lib/apt/lists/* \
- && echo /usr/local/cuda-13.0/lib64 > /etc/ld.so.conf.d/fastvideo-nvidia.conf \
+ && echo /usr/local/cuda-13.4/lib64 > /etc/ld.so.conf.d/fastvideo-nvidia.conf \
  && ldconfig \
  && . /etc/fastvideo/cuda-13.pins \
  && for soname in "$CUDA_NVRTC_SONAME" "$CUDA_CUBLAS_SONAME" "$CUDA_CUBLASLT_SONAME" "$CUDA_CUDNN_SONAME"; do
