@@ -4,6 +4,8 @@
 //!
 //! The joint 3-step LTX refiner is `Ltx2Pipeline::refine_joint`. It runs when
 //! `FASTVIDEO_LTX2_WEIGHTS` is set, on this cropped video latent plus the H3 PCM.
+//! The pipeline passes the upstream fixed prompt and the Gemma text cache;
+//! the sampler stays on the LTX refine path.
 
 use std::path::{Path, PathBuf};
 

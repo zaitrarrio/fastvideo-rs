@@ -10,6 +10,34 @@
 //! Official canvas: H3 `(1, 24, 37, 24, 42)` → upscaled `(1, 24, 37, 48, 84)`
 //! → adapter `(1, 128, 17, 24, 42)` → refiner `(1, 128, 16, 24, 42)`, with
 //! `pixel_frames=124`, `pixel_height=768`, `pixel_width=1344`.
+//!
+//! Stage-1 stays BF16 with FastH3_VSA_DataFree at strength 1.0. Upstream
+//! W8A8 FP8 after the LoRA merge is not enabled.
+
+use super::lora::SolH3AdapterSpec;
+
+/// Stage-2 generic prompt from `Sol-H3-Spark/runtime/prompt_cache.py`.
+pub const FIXED_PROMPT: &str =
+    "4K, refined, high quality, cinematic detail, clean textures, natural motion.";
+
+/// Volume dest from Phase 0, then local aliases, then dense-datafree fallback.
+pub const SPARK_LORA_PATHS: &[&str] = &[
+    "FastH3-4-step-Preview-v1-VSA-DataFree/adapter_model.safetensors",
+    "vsa-datafree/adapter_model.safetensors",
+    "adapter/vsa-datafree/adapter_model.safetensors",
+    "adapter/dense-datafree/adapter_model.safetensors",
+    "dense-datafree/adapter_model.safetensors",
+    "FastH3-4-step-Preview-v1-LoRA/dense-datafree/adapter_model.safetensors",
+];
+
+/// Spark Stage-1 adapter: FastH3_VSA_DataFree preferred, strength 1.0.
+pub fn spark_adapter_spec() -> SolH3AdapterSpec {
+    SolH3AdapterSpec {
+        alpha: 64,
+        scale: 1.0,
+        relative_paths: SPARK_LORA_PATHS,
+    }
+}
 
 /// Pinned author-node statistics (`LATENTS_MEAN` / `LATENTS_STD` in
 /// `minimax_h3_latent_upscaler_3d.py` at `d7c01b9011f2e8439493f6c02c29995a27df276f`).
@@ -541,5 +569,27 @@ mod tests {
     fn align_rejects_a_spatial_size_that_is_not_2x() {
         let err = align_h3_to_ltx(&[0.0, 0.0], [1, 1, 2, 1, 1], 1, 1, 1, 3).unwrap_err();
         assert!(err.contains("2x"), "{err}");
+    }
+
+    #[test]
+    fn spark_lora_prefers_vsa_datafree_over_dense() {
+        let spec = spark_adapter_spec();
+        assert_eq!(spec.scale, 1.0);
+        assert_eq!(
+            spec.relative_paths[0],
+            "FastH3-4-step-Preview-v1-VSA-DataFree/adapter_model.safetensors"
+        );
+        let vsa = spec
+            .relative_paths
+            .iter()
+            .position(|p| p.contains("VSA-DataFree") || p.contains("vsa-datafree"))
+            .unwrap();
+        let dense = spec
+            .relative_paths
+            .iter()
+            .position(|p| p.contains("dense-datafree"))
+            .unwrap();
+        assert!(vsa < dense);
+        assert!(FIXED_PROMPT.starts_with("4K, refined,"));
     }
 }

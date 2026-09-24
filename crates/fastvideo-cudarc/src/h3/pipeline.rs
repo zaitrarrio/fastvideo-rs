@@ -554,7 +554,8 @@ impl H3Pipeline {
             contract.vsa_sparsity,
             options.dense
         ));
-        match fastvideo_models::h3::sol::sol_attn_policy(
+        match fastvideo_models::h3::sol::recipe_sol_attn_policy(
+            options.recipe.as_deref(),
             std::env::var("FASTVIDEO_H3_SOL_ATTN").ok().as_deref(),
         ) {
             fastvideo_models::h3::sol::H3SolAttnPolicy::Spark => {
@@ -573,8 +574,14 @@ impl H3Pipeline {
             std::env::var("FASTVIDEO_H3_SOL_CACHE").ok().as_deref(),
         );
         let mut lora = if options.recipe.as_deref().is_some_and(is_sol_h3_recipe) {
+            let spark = options
+                .recipe
+                .as_deref()
+                .is_some_and(fastvideo_models::h3::lora::is_sol_h3_spark_recipe);
             let spec = if options.ref2va {
                 SolH3AdapterSpec::ref2va()
+            } else if spark {
+                fastvideo_models::h3::spark::spark_adapter_spec()
             } else {
                 SolH3AdapterSpec::t2v_i2v()
             };
@@ -591,13 +598,12 @@ impl H3Pipeline {
                 fuse.diffs_total,
                 path.display()
             ));
-            if options
-                .recipe
-                .as_deref()
-                .is_some_and(fastvideo_models::h3::lora::is_sol_h3_spark_recipe)
-            {
+            if spark {
                 crate::wan::log::info(format_args!(
-                    "h3 sol-h3-spark: draft {}x{} {}f 4-step; H3×2 upscaler and H3-to-LTX adapter run when their checkpoints are set. Joint 3-step LTX refine needs an audio VAE encode",
+                    "h3 sol-h3-spark: stage-1 VSA {} tile {} BF16 FastH3_VSA_DataFree strength {}; W8A8 FP8 stays off (measured 16–20 dB). Draft {}x{} {}f. H3×2 upscaler and H3-to-LTX adapter run when their checkpoints are set. Joint 3-step LTX refine uses the fixed prompt and cached Gemma",
+                    contract.vsa_sparsity,
+                    contract.vsa_tile_size,
+                    spec.scale,
                     fastvideo_models::h3::sol::SPARK_DRAFT_WIDTH,
                     fastvideo_models::h3::sol::SPARK_DRAFT_HEIGHT,
                     fastvideo_models::h3::sol::SPARK_DRAFT_FRAMES,
@@ -891,12 +897,29 @@ impl H3Pipeline {
         let sequence_length = layout.sequence_length();
         // Interleaved Ref2VA condition audio breaks VSA's contiguous-prefix tiles.
         let force_dense = layout.num_condition_audio_rows > 0;
-        let sol_policy = match fastvideo_models::h3::sol::sol_attn_policy(
+        let sol_policy = match fastvideo_models::h3::sol::recipe_sol_attn_policy(
+            self.options.recipe.as_deref(),
             std::env::var("FASTVIDEO_H3_SOL_ATTN").ok().as_deref(),
         ) {
             fastvideo_models::h3::sol::H3SolAttnPolicy::Off => None,
             kind => Some(H3SolPolicy::from_layout(kind, &layout)),
         };
+        match fastvideo_models::h3::sol::sink_layout(
+            std::env::var("FASTVIDEO_H3_SOL_SINK").ok().as_deref(),
+        ) {
+            fastvideo_models::h3::sol::H3SolSinkLayout::Native => {
+                crate::wan::log::info(format_args!(
+                    "h3 sol sink: native multi-span (FASTVIDEO_H3_SOL_SINK=native)"
+                ));
+            }
+            fastvideo_models::h3::sol::H3SolSinkLayout::Suffix => {
+                if sol_policy.is_some() {
+                    crate::wan::log::info(format_args!(
+                        "h3 sol sink: permute [visual | sinks], single suffix sink"
+                    ));
+                }
+            }
+        }
         let vsa = if sol_policy.is_some() || self.options.dense || force_dense {
             if force_dense && !self.options.dense && sol_policy.is_none() {
                 crate::wan::log::info(format_args!(
@@ -1084,8 +1107,9 @@ fn refine_spark(
         .map(PathBuf::from)
         .unwrap_or_else(|| weights.join("transformer"));
     let cfg = fastvideo_models::ltx2::ltx2_5_22b_distilled();
+    let prompt = fastvideo_models::h3::spark::FIXED_PROMPT;
     crate::wan::log::info(format_args!(
-        "h3 sol-h3-spark: loading LTX-2.5 from {} (DiT {}) beside the resident H3 model",
+        "h3 sol-h3-spark: loading LTX-2.5 from {} (DiT {}) beside the resident H3 model; fixed prompt {prompt:?}; Gemma cache on",
         weights.display(),
         dit.display()
     ));
@@ -1096,14 +1120,17 @@ fn refine_spark(
             text: None,
         },
         &cfg,
-        &PipelineOptions::default(),
+        &PipelineOptions {
+            text_cache: crate::ltx2::text_cache::default_dir(),
+            ..PipelineOptions::default()
+        },
     )?;
     pipeline.refine_joint(
         video,
         wave,
         H3_AUDIO_CHANNELS,
         sample_rate,
-        &request.prompt,
+        prompt,
         request.seed,
         f64::from(H3_FPS as u32),
         &out_dir.join("refined"),
@@ -1565,6 +1592,31 @@ mod tests {
         assert!(
             mean.abs() < 5e-3 && (var - 1.0).abs() < 5e-3,
             "N(0, 1): mean {mean} var {var}"
+        );
+    }
+
+    #[test]
+    fn spark_recipe_is_vsa_and_sol_h3_defaults_to_rtx_attn() {
+        let spark = resolve_contract(Path::new("/"), Some("sol-h3-spark")).unwrap();
+        assert_eq!(spark.vsa_sparsity, 0.9);
+        assert_eq!(spark.vsa_tile_size, 64);
+        assert!(!spark.dense);
+        let sol = resolve_contract(Path::new("/"), Some("sol-h3")).unwrap();
+        assert!(!sol.dense);
+        assert_eq!(sol.transformer_forwards, 4);
+        let rtx = resolve_contract(Path::new("/"), Some("sol-h3-rtx")).unwrap();
+        assert_eq!(rtx.transformer_forwards, 49);
+        assert_eq!(
+            fastvideo_models::h3::sol::recipe_sol_attn_policy(Some("sol-h3"), None),
+            fastvideo_models::h3::sol::H3SolAttnPolicy::Rtx
+        );
+        assert_eq!(
+            fastvideo_models::h3::sol::recipe_sol_attn_policy(Some("sol-h3-spark"), None),
+            fastvideo_models::h3::sol::H3SolAttnPolicy::Off
+        );
+        assert_eq!(
+            fastvideo_models::h3::spark::FIXED_PROMPT,
+            "4K, refined, high quality, cinematic detail, clean textures, natural motion."
         );
     }
 }

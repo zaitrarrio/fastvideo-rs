@@ -2,6 +2,16 @@
 
 Project code: FVID
 
+### FVID · 2026-09-24 · FVID-2026-09-24-solh3-spark-vsa-bf16
+- Trigger: sol-h3-spark Stage-1 still mapped to the dense 4-step Sol-H3 contract; one-GPU Sol-H3 was documented as dense-only / SOL-BSA multi-GPU; Spark LoRA preferred dense-datafree; refiner used the user prompt
+- Options: copy upstream W8A8 FP8 after the VSA-DataFree merge; keep dense 4-step; ship Spark as VSA 0.9 / tile 64 / BF16
+- Decision: **Spark Stage-1 is VSA 0.9 tile 64 + FastH3_VSA_DataFree strength 1.0 in BF16.** W8A8 FP8 stays off — the same quant measured 16–20 dB here, so it is a different picture, not a free encode. Sink tokens permute to `[visual | sinks]` with one suffix sink; `FASTVIDEO_H3_SOL_SINK=native` keeps the old multi-span. One-GPU sol-h3 is no longer dense-locked: RTX 5090 policy (10 dense steps, 2 dense layers, tau 1.0, 49 forwards on `sol-h3-rtx`). Refiner uses the upstream fixed prompt with cached Gemma; sampler is unchanged.
+- Reason: match Sol-H3-Spark `configs/default.json` Stage-1 / `prompt_cache.py` without taking the quality hit we already measured on W8A8
+- Reversibility: cheap — recipe names and `FASTVIDEO_H3_SOL_SINK` / `FASTVIDEO_H3_SOL_ATTN` select the old spans or the 4-step distilled path
+- Executed by: WS-F
+- ADR: none
+- Verification: **host pass**. `cargo test -p fastvideo-models --lib h3`; `cargo test -p fastvideo-cudarc --lib h3::sol h3::spark`
+
 ### FVID · 2026-09-24 · FVID-2026-09-24-phase0-strict-host-hunyuan-gen
 - Trigger: review gaps — Sol/PISA/SLA/NVFP4 host paths were outside `host_fallback`; `fv-gpucheck hunyuan gen` missing from the published image; Spark VSA-DataFree LoRA not on the volume fetch list
 - Options: leave host algorithms silent until WS-A; gate only under `FASTVIDEO_STRICT_DEVICE`; always refuse on a live device

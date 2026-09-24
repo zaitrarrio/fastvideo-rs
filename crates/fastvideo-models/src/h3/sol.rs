@@ -2,13 +2,19 @@
 //! (`models/minimax_h3/Sol-H3`, `models/minimax_h3.toml`, and
 //! `models/minimax_h3/RTX4090/teacache.py`).
 //!
-//! The one-GPU Sol-H3 recipe stays dense. This module records the Spark
-//! Stage-1 Sol-Attn route (`--ref-stage1-attn sol`), the RTX 4090/5090
-//! 50-step Sol-Attn route, and the RTX TeaCache controller. Body layers on
+//! One-GPU Sol-H3 uses the RTX 5090 policy (`[rtx5090.policy]`: first 10
+//! steps dense, first 2 layers dense, tau 1.0, 49 forwards). Spark Stage-1
+//! Sol-Attn (`--ref-stage1-attn sol`) is the 4-update route. Body layers on
 //! the Sol route use the shared Sol-Attn kernel (`thresh_type=diag`).
 //! `FASTVIDEO_H3_SOL_CACHE=teacache` skips the block stack when the
 //! published residual controller says so.
+//!
+//! Default sink layout permutes tokens to `[visual | sinks]` with one suffix
+//! sink, matching upstream `stage1_ops/sol.py` `sink_plan`.
+//! `FASTVIDEO_H3_SOL_SINK=native` keeps separate text/audio spans in packed
+//! order.
 
+use super::config::{TAG_AUDIO, TAG_TEXT, TAG_VIDEO};
 use super::packing::H3PackedLayout;
 
 /// Body layers in MiniMax-H3.
@@ -69,6 +75,22 @@ pub fn sol_attn_policy(value: Option<&str>) -> H3SolAttnPolicy {
             H3SolAttnPolicy::Spark
         }
         Some(v) if v.eq_ignore_ascii_case("rtx") => H3SolAttnPolicy::Rtx,
+        _ => H3SolAttnPolicy::Off,
+    }
+}
+
+/// Env wins. Unset `FASTVIDEO_H3_SOL_ATTN` on a non-Spark sol-h3 recipe
+/// selects the one-GPU RTX 5090 policy.
+pub fn recipe_sol_attn_policy(recipe: Option<&str>, env: Option<&str>) -> H3SolAttnPolicy {
+    if env.is_some() {
+        return sol_attn_policy(env);
+    }
+    match recipe {
+        Some(name)
+            if super::lora::is_sol_h3_recipe(name) && !super::lora::is_sol_h3_spark_recipe(name) =>
+        {
+            H3SolAttnPolicy::Rtx
+        }
         _ => H3SolAttnPolicy::Off,
     }
 }
@@ -144,12 +166,68 @@ pub fn policy_route(
     }
 }
 
+/// How Sol-Attn names the forced-sink rows.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum H3SolSinkLayout {
+    /// Permute to `[visual | text+audio]` and expose one suffix sink.
+    Suffix,
+    /// Packed order: separate text and audio spans, cond/ref video skipped.
+    Native,
+}
+
+/// `FASTVIDEO_H3_SOL_SINK=native` keeps multi-span packed order. Anything
+/// else, including unset, is the upstream suffix sink.
+pub fn sink_layout(value: Option<&str>) -> H3SolSinkLayout {
+    match value.map(str::trim) {
+        Some(v) if v.eq_ignore_ascii_case("native") => H3SolSinkLayout::Native,
+        _ => H3SolSinkLayout::Suffix,
+    }
+}
+
+/// Permutation that groups visual rows, then a single text+audio suffix.
+///
+/// Matches `models/minimax_h3/Sol-H3-Spark/runtime/stage1_ops/sol.py`
+/// `sink_plan`: cond/ref video stays visual (not a sink); native relative
+/// order inside each part is preserved.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct H3SolSinkPlan {
+    pub permutation: Vec<usize>,
+    pub inverse: Vec<usize>,
+    pub sink_start: usize,
+    pub sink_tokens: usize,
+    pub text_sink_tokens: usize,
+    pub audio_sink_tokens: usize,
+}
+
 /// Official `sol_attn` sink spans and the query rows recomputed with dense FA.
 ///
-/// Spark README: only text and audio are forced sinks; cond/ref video is not.
-/// Each span is one `interface.py` `_sink_block_range`. `text_query_rows=dense`
-/// plus the Spark audio-query subset use the same spans.
+/// Default is the upstream suffix sink in permuted `[visual | sinks]`
+/// coordinates. `FASTVIDEO_H3_SOL_SINK=native` keeps separate text/audio
+/// spans in packed order.
 pub fn attn_spans(layout: &H3PackedLayout) -> (Vec<(usize, usize)>, Vec<(usize, usize)>) {
+    attn_spans_for(
+        layout,
+        sink_layout(std::env::var("FASTVIDEO_H3_SOL_SINK").ok().as_deref()),
+    )
+}
+
+pub fn attn_spans_for(
+    layout: &H3PackedLayout,
+    mode: H3SolSinkLayout,
+) -> (Vec<(usize, usize)>, Vec<(usize, usize)>) {
+    match mode {
+        H3SolSinkLayout::Suffix => match sink_plan(layout) {
+            Ok(plan) => {
+                let span = vec![(plan.sink_start, plan.sink_tokens)];
+                (span.clone(), span)
+            }
+            Err(_) => native_attn_spans(layout),
+        },
+        H3SolSinkLayout::Native => native_attn_spans(layout),
+    }
+}
+
+fn native_attn_spans(layout: &H3PackedLayout) -> (Vec<(usize, usize)>, Vec<(usize, usize)>) {
     let mut spans = Vec::new();
     if layout.text.len > 0 {
         spans.push((layout.text.start, layout.text.len));
@@ -158,6 +236,54 @@ pub fn attn_spans(layout: &H3PackedLayout) -> (Vec<(usize, usize)>, Vec<(usize, 
         spans.push((layout.audio.start, layout.audio.len));
     }
     (spans.clone(), spans)
+}
+
+pub fn sink_plan(layout: &H3PackedLayout) -> Result<H3SolSinkPlan, String> {
+    let tags = &layout.token_tags;
+    if tags.is_empty() || tags.iter().any(|&tag| tag > TAG_AUDIO) {
+        return Err("h3 sol: native joint token tags must be visual0/text1/audio2".into());
+    }
+    let visual: Vec<usize> = tags
+        .iter()
+        .enumerate()
+        .filter(|(_, tag)| **tag == TAG_VIDEO)
+        .map(|(i, _)| i)
+        .collect();
+    let sinks: Vec<usize> = tags
+        .iter()
+        .enumerate()
+        .filter(|(_, tag)| **tag == TAG_TEXT || **tag == TAG_AUDIO)
+        .map(|(i, _)| i)
+        .collect();
+    if visual.is_empty() || sinks.is_empty() {
+        return Err("h3 sol: suffix sink requires both visual and text/audio rows".into());
+    }
+    let start = visual.len();
+    if start >= 64 {
+        let spill = &visual[start / 64 * 64..];
+        let generated: std::collections::HashSet<usize> = visual
+            .iter()
+            .copied()
+            .skip(layout.num_condition_video_rows)
+            .collect();
+        if !spill.iter().all(|index| generated.contains(index)) {
+            return Err("h3 sol: sink KV boundary spill must contain generated video only".into());
+        }
+    }
+    let mut permutation = visual;
+    permutation.extend(&sinks);
+    let mut inverse = vec![0; tags.len()];
+    for (destination, source) in permutation.iter().enumerate() {
+        inverse[*source] = destination;
+    }
+    Ok(H3SolSinkPlan {
+        permutation,
+        inverse,
+        sink_start: start,
+        sink_tokens: sinks.len(),
+        text_sink_tokens: tags.iter().filter(|&&tag| tag == TAG_TEXT).count(),
+        audio_sink_tokens: tags.iter().filter(|&&tag| tag == TAG_AUDIO).count(),
+    })
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -426,15 +552,36 @@ mod tests {
     }
 
     #[test]
-    fn t2va_spans_are_the_text_audio_prefix() {
+    fn t2va_default_is_a_single_suffix_sink() {
         let l = super::super::packing::H3PackedLayout::new(3, (2, 4, 4), 2, [1, 2, 2]).unwrap();
-        let (sinks, queries) = attn_spans(&l);
-        assert_eq!(sinks, vec![(0, 3), (3, 4)]);
+        let plan = sink_plan(&l).unwrap();
+        assert_eq!(plan.sink_start, l.video.len);
+        assert_eq!(plan.sink_tokens, 3 + 4);
+        assert_eq!(plan.permutation[..plan.sink_start], {
+            let video: Vec<usize> = (l.video.start..l.video.end()).collect();
+            video
+        });
+        assert_eq!(
+            &plan.permutation[plan.sink_start..],
+            &[0, 1, 2, 3, 4, 5, 6]
+        );
+        let (sinks, queries) = attn_spans_for(&l, H3SolSinkLayout::Suffix);
+        assert_eq!(sinks, vec![(plan.sink_start, plan.sink_tokens)]);
         assert_eq!(queries, sinks);
     }
 
     #[test]
-    fn fl2va_spans_skip_the_cond_rows() {
+    fn native_spans_keep_separate_text_and_audio() {
+        let l = super::super::packing::H3PackedLayout::new(3, (2, 4, 4), 2, [1, 2, 2]).unwrap();
+        let (sinks, queries) = attn_spans_for(&l, H3SolSinkLayout::Native);
+        assert_eq!(sinks, vec![(0, 3), (3, 4)]);
+        assert_eq!(queries, sinks);
+        assert_eq!(sink_layout(Some("native")), H3SolSinkLayout::Native);
+        assert_eq!(sink_layout(None), H3SolSinkLayout::Suffix);
+    }
+
+    #[test]
+    fn fl2va_suffix_keeps_cond_visual() {
         let l = super::super::packing::H3PackedLayout::with_keyframes(
             3,
             (2, 4, 4),
@@ -443,8 +590,34 @@ mod tests {
             &[super::super::packing::KeyframeAnchor::First],
         )
         .unwrap();
-        let (sinks, _) = attn_spans(&l);
-        assert_eq!(sinks, vec![(0, 3), (7, 4)]);
+        let plan = sink_plan(&l).unwrap();
         assert_eq!(l.cond, super::super::packing::RowRange { start: 3, len: 4 });
+        assert_eq!(plan.sink_start, l.cond.len + l.video.len);
+        assert_eq!(plan.sink_tokens, 3 + 4);
+        assert!(plan.permutation[..plan.sink_start]
+            .iter()
+            .all(|&i| l.token_tags[i] == 0));
+        let (native, _) = attn_spans_for(&l, H3SolSinkLayout::Native);
+        assert_eq!(native, vec![(0, 3), (7, 4)]);
+    }
+
+    #[test]
+    fn unset_sol_h3_recipe_defaults_to_rtx() {
+        assert_eq!(
+            recipe_sol_attn_policy(Some("sol-h3"), None),
+            H3SolAttnPolicy::Rtx
+        );
+        assert_eq!(
+            recipe_sol_attn_policy(Some("sol-h3-spark"), None),
+            H3SolAttnPolicy::Off
+        );
+        assert_eq!(
+            recipe_sol_attn_policy(Some("sol-h3"), Some("spark")),
+            H3SolAttnPolicy::Spark
+        );
+        assert_eq!(
+            recipe_sol_attn_policy(Some("sol-h3"), Some("off")),
+            H3SolAttnPolicy::Off
+        );
     }
 }
