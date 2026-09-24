@@ -40,6 +40,35 @@ impl Hunyuan15Preset {
     pub fn is_i2v(self) -> bool {
         matches!(self, Self::I2v480pDistilled | Self::I2v720pDistilled)
     }
+
+    /// `(height, width, num_frames)` for the preset's published canvas.
+    pub fn canvas(self) -> (usize, usize, usize) {
+        match self {
+            Self::T2v480p | Self::I2v480pDistilled => (480, 854, 121),
+            Self::T2v720p | Self::I2v720pDistilled => (720, 1280, 129),
+            Self::Sr1080p => (1080, 1920, 129),
+        }
+    }
+
+    /// Distilled I2V packs ship an 8-step schedule; T2V stays at 50.
+    pub fn default_steps(self) -> usize {
+        if self.is_i2v() {
+            8
+        } else {
+            50
+        }
+    }
+
+    pub fn from_cli(s: &str) -> Option<Self> {
+        match s.trim() {
+            "hy15_480p_t2v" => Some(Self::T2v480p),
+            "hy15_480p_i2v_distilled" => Some(Self::I2v480pDistilled),
+            "hy15_720p_t2v" => Some(Self::T2v720p),
+            "hy15_720p_i2v_distilled" => Some(Self::I2v720pDistilled),
+            "hy15_1080p_sr" => Some(Self::Sr1080p),
+            _ => None,
+        }
+    }
 }
 
 /// DiT sizes shared across 480p/720p/1080p packs.
@@ -192,5 +221,17 @@ mod tests {
         assert_eq!(Hunyuan15Preset::T2v480p.flow_shift(), 5.0);
         assert_eq!(Hunyuan15Preset::T2v720p.flow_shift(), 9.0);
         assert_eq!(Hunyuan15Preset::Sr1080p.flow_shift_sr(), Some(2.0));
+    }
+
+    #[test]
+    fn canvas_and_cli() {
+        assert_eq!(Hunyuan15Preset::T2v480p.canvas(), (480, 854, 121));
+        assert_eq!(Hunyuan15Preset::T2v480p.default_steps(), 50);
+        assert_eq!(Hunyuan15Preset::I2v480pDistilled.default_steps(), 8);
+        assert_eq!(
+            Hunyuan15Preset::from_cli("hy15_480p_t2v"),
+            Some(Hunyuan15Preset::T2v480p)
+        );
+        assert_eq!(Hunyuan15Preset::from_cli("nope"), None);
     }
 }

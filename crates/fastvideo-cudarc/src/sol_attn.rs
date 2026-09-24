@@ -49,6 +49,7 @@ pub fn sol_attn(
     }
     let scale = scale.unwrap_or((dim as f32).sqrt().recip());
     log_once(tau, tokens, sink_tokens);
+    crate::wan::stats::host_algorithm("sol_attn", format_args!("BHSD {batch}x{heads}x{tokens}x{dim}"))?;
     sol_from_host(
         q,
         k,
@@ -86,6 +87,7 @@ pub fn sol_attn_sunk(
     let scale = scale.unwrap_or((dim as f32).sqrt().recip());
     let sink_tokens: usize = sinks.iter().map(|(_, len)| *len).sum();
     log_once(tau, tokens, sink_tokens);
+    crate::wan::stats::host_algorithm("sol_attn", format_args!("BHSD sunk {batch}x{heads}x{tokens}x{dim}"))?;
     if sinks.is_empty() {
         return sol_from_host(q, k, v, batch, heads, tokens, dim, tau, scale, None, 0);
     }

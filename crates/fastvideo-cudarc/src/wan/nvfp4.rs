@@ -252,6 +252,7 @@ pub fn dequant_beforehand(xs: &CudaTensor, rule: ScaleRule) -> Result<CudaTensor
         )));
     }
     let rows = xs.numel() / k;
+    super::stats::host_algorithm("nvfp4", format_args!("dequant {rows}x{k}"))?;
     let rec = nvfp4::reconstruct(&xs.host_cow()?, rows, k, rule).map_err(msg)?;
     let mut out = CudaTensor::from_vec(rec, xs.shape.clone())?;
     out.pin_device()?;

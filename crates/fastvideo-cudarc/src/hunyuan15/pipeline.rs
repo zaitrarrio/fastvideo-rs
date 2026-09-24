@@ -39,17 +39,38 @@ pub struct Hunyuan15Request {
 
 impl Hunyuan15Request {
     pub fn t2v_480p(prompt: impl Into<String>, seed: u64) -> Self {
+        Self::from_preset(Hunyuan15Preset::T2v480p, prompt, seed)
+    }
+
+    pub fn from_preset(preset: Hunyuan15Preset, prompt: impl Into<String>, seed: u64) -> Self {
+        let (height, width, num_frames) = preset.canvas();
         Self {
             prompt: prompt.into(),
             seed,
-            height: 480,
-            width: 854,
-            num_frames: 121,
-            num_steps: 50,
-            preset: Hunyuan15Preset::T2v480p,
+            height,
+            width,
+            num_frames,
+            num_steps: preset.default_steps(),
+            preset,
             image_path: None,
         }
     }
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct Hunyuan15Timings {
+    pub text_s: f64,
+    pub denoise_s: f64,
+    pub step_s: Vec<f64>,
+    pub decode_s: f64,
+    pub write_s: f64,
+}
+
+#[derive(Debug, Clone)]
+pub struct Hunyuan15Output {
+    pub frames: usize,
+    pub frame_paths: Vec<String>,
+    pub timings: Hunyuan15Timings,
 }
 
 pub struct Hunyuan15Pipeline {
@@ -91,6 +112,14 @@ impl Hunyuan15Pipeline {
         Ok(())
     }
 
+    /// Open the Diffusers root and load DiT + VAE.
+    pub fn load(root: impl Into<PathBuf>, preset: Hunyuan15Preset) -> Result<Self> {
+        let mut p = Self::open(root, preset)?;
+        p.load_dit()?;
+        p.load_vae()?;
+        Ok(p)
+    }
+
     pub fn schedule(&self, steps: usize) -> Hunyuan15Schedule {
         Hunyuan15Schedule::new(steps, self.defaults.preset)
     }
@@ -101,9 +130,8 @@ impl Hunyuan15Pipeline {
     }
 
     /// End-to-end generate. Completes denoise when DiT+text are present; VAE
-    /// decode still errors with a clear path message.
-    pub fn generate(&self, request: &Hunyuan15Request, out_dir: &Path) -> Result<()> {
-        let _ = out_dir;
+    /// decode writes PNG frames under `out_dir`.
+    pub fn generate(&self, request: &Hunyuan15Request, out_dir: &Path) -> Result<Hunyuan15Output> {
         if request.image_path.is_some() {
             return Err(msg(
                 "HunyuanVideo 1.5 I2V: image conditioning not wired yet (needs channel-0 pack + SigLIP)",
@@ -115,6 +143,7 @@ impl Hunyuan15Pipeline {
 
         let text_ok = self.root.join("text_encoder").is_dir()
             && self.root.join("tokenizer").join("tokenizer.json").is_file();
+        let text_t = std::time::Instant::now();
         let cond = if text_ok {
             self.encode_text(&request.prompt)?
         } else {
@@ -122,6 +151,7 @@ impl Hunyuan15Pipeline {
                 "HunyuanVideo 1.5: need `tokenizer/tokenizer.json` + `text_encoder/` (Qwen2.5-VL-7B) under --weights",
             ));
         };
+        let text_s = text_t.elapsed().as_secs_f64();
 
         let lt = vae::latent_frames(request.num_frames, self.vae_cfg.temporal_compression_ratio);
         let lh = vae::latent_hw(request.height, self.vae_cfg.spatial_compression_ratio);
@@ -165,22 +195,28 @@ impl Hunyuan15Pipeline {
             ));
         }
 
-        for (step, &t) in timesteps.iter().enumerate() {
+        let mut step_s = Vec::with_capacity(timesteps.len());
+        let denoise_t = std::time::Instant::now();
+        for (_step, &t) in timesteps.iter().enumerate() {
+            let step_t = std::time::Instant::now();
             let lat = pack_latents(&sample, c_out, lt, lh, lw, pad_c)?;
             let text2 = Some(&cond.byt5);
             let velocity = dit.forward(&lat, &cond.qwen, text2, t as f32)?;
             // DiT returns `[B, T*H*W, out_channels]` — flatten to CTHW host.
             let vel = tokens_to_cthw(&velocity, c_out, lt, lh, lw)?;
             sample = sched.inner.step_euler(&sample, &vel).map_err(|e| msg(e))?;
-            let _ = step;
+            step_s.push(step_t.elapsed().as_secs_f64());
         }
+        let denoise_s = denoise_t.elapsed().as_secs_f64();
 
         let latents = CudaTensor::from_vec(sample, vec![1, c_out, lt, lh, lw])?;
         let vae = self.vae.as_ref().ok_or_else(|| {
             msg("HunyuanVideo 1.5: call load_vae() after placing Diffusers `vae/` under --weights")
         })?;
+        let decode_t = std::time::Instant::now();
         let scaled = latents.try_mul_scalar(1.0 / vae.scaling_factor())?;
         let pixels = vae.decode(&scaled)?;
+        let decode_s = decode_t.elapsed().as_secs_f64();
         // [B,3,T,H,W] → [T,3,H,W] for PNG dump
         let [_, _, tf, hf, wf] = match pixels.shape[..] {
             [1, 3, tf, hf, wf] => [1, 3, tf, hf, wf],
@@ -193,7 +229,9 @@ impl Hunyuan15Pipeline {
         };
         let by_frame = pixels.reshape(vec![tf, 3, hf, wf])?;
         let rgb = crate::wan::pipeline::frames_to_rgb8(&by_frame)?;
+        let write_t = std::time::Instant::now();
         std::fs::create_dir_all(out_dir).map_err(|e| msg(e.to_string()))?;
+        let mut frame_paths = Vec::with_capacity(tf);
         for i in 0..tf {
             let path = out_dir.join(format!("frame_{i:05}.png"));
             let off = i * 3 * hf * wf;
@@ -205,8 +243,20 @@ impl Hunyuan15Pipeline {
                 image::ColorType::Rgb8,
             )
             .map_err(|e| msg(e.to_string()))?;
+            frame_paths.push(path.display().to_string());
         }
-        Ok(())
+        let write_s = write_t.elapsed().as_secs_f64();
+        Ok(Hunyuan15Output {
+            frames: tf,
+            frame_paths,
+            timings: Hunyuan15Timings {
+                text_s,
+                denoise_s,
+                step_s,
+                decode_s,
+                write_s,
+            },
+        })
     }
 }
 

@@ -2,6 +2,16 @@
 
 Project code: FVID
 
+### FVID · 2026-09-24 · FVID-2026-09-24-phase0-strict-host-hunyuan-gen
+- Trigger: review gaps — Sol/PISA/SLA/NVFP4 host paths were outside `host_fallback`; `fv-gpucheck hunyuan gen` missing from the published image; Spark VSA-DataFree LoRA not on the volume fetch list
+- Options: leave host algorithms silent until WS-A; gate only under `FASTVIDEO_STRICT_DEVICE`; always refuse on a live device
+- Decision: **`stats::host_algorithm`** — same refuse-on-device as `host_fallback`, plus `FASTVIDEO_STRICT_DEVICE=1` when a CUDA context is live. Wired at `sol_attn`, `pisa_attn`, `sla`, `nvfp4::dequant_beforehand`. **`fv-gpucheck hunyuan {info,gen}`** reports load/text/denoise/step/decode/write + peak MiB. Fetch row `FastH3-4-step-Preview-v1-VSA-DataFree`.
+- Reason: a GPU sweep cannot log “sol-attn kernel” while running scalar CPU math; Hunyuan cells were skipping
+- Reversibility: cheap — host oracles still run without a device; WS-A replaces the host call sites
+- Executed by: Executor
+- ADR: none
+- Verification: **host pass**. `cargo test -p fastvideo-models --lib hunyuan15`; `cargo test -p fastvideo-cudarc --lib` host_fallback / sol_attn / pisa_attn / nvfp4. GPU refuse path untested here (no nvcc).
+
 ### FVID · 2026-09-22 · FVID-2026-09-22-ltx25-diffvae
 - Trigger: after distilled two-stage green — ship opt-in **DiffVAE** video decode on the validated 2.5 stack (conv VAE stays default; audio unchanged)
 - Options: DiffVAE 1-step x0 untiled @ 768×512; defer tiling / NATTEN / multi-step stage-5 / two-stage+DiffVAE

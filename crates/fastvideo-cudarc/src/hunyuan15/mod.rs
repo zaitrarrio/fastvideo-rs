@@ -5,7 +5,7 @@ pub mod text;
 pub mod transformer;
 pub mod vae;
 
-pub use pipeline::{Hunyuan15Pipeline, Hunyuan15Request};
+pub use pipeline::{Hunyuan15Output, Hunyuan15Pipeline, Hunyuan15Request, Hunyuan15Timings};
 pub use text::{encode_prompt, Hunyuan15TextConditioning};
 pub use transformer::Hunyuan15Transformer;
 pub use vae::Hunyuan15Vae;

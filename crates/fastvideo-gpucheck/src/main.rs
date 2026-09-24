@@ -18,6 +18,7 @@
 mod embed;
 mod gpu;
 mod h3_stage;
+mod hunyuan15_stage;
 #[cfg(feature = "cuda")]
 mod kernels;
 mod llm_oracle;
@@ -252,6 +253,11 @@ enum Cmd {
         #[command(subcommand)]
         stage: ltx2_stage::Stage,
     },
+    /// HunyuanVideo 1.5 stages (see `hunyuan15_stage.rs`).
+    Hunyuan {
+        #[command(subcommand)]
+        stage: hunyuan15_stage::Stage,
+    },
     /// A decoder-only text encoder (Qwen3-VL for MiniMax-H3, Gemma-3 for
     /// LTX-2) against transformers' hidden states, on the oracle's own tokens.
     Llm {
@@ -368,6 +374,7 @@ fn stage_name(cmd: &Cmd) -> &'static str {
         Cmd::Clip { .. } => "clip",
         Cmd::H3 { .. } => "h3",
         Cmd::Ltx2 { .. } => "ltx2",
+        Cmd::Hunyuan { .. } => "hunyuan",
         Cmd::Llm { .. } => "llm",
         Cmd::Compare { .. } => "compare",
         Cmd::Oracle { .. } => "oracle",
@@ -481,6 +488,7 @@ fn run(cli: &Cli, report: &mut Report) -> StageResult<()> {
         ),
         Cmd::H3 { stage } => h3_stage::run(report, stage),
         Cmd::Ltx2 { stage } => ltx2_stage::run(report, stage),
+        Cmd::Hunyuan { stage } => hunyuan15_stage::run(report, stage),
         Cmd::Llm {
             weights,
             family,

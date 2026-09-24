@@ -48,6 +48,10 @@ pub fn pisa_attn(
     }
     let scale = scale.unwrap_or((dim as f32).sqrt().recip());
     log_once(sparsity, tokens);
+    crate::wan::stats::host_algorithm(
+        "pisa_attn",
+        format_args!("BHSD {batch}x{heads}x{tokens}x{dim}"),
+    )?;
     let out = pisa_attn_bhsd(
         q.host_cow()?.as_ref(),
         k.host_cow()?.as_ref(),
