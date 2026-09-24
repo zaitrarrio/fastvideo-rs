@@ -286,7 +286,14 @@ rp_seed_token() {
   local host="$1" port="$2"
   [[ -n "${HF_TOKEN:-}" ]] || return 0
   rp_ssh "$host" "$port" "mkdir -p /root/.cache/huggingface $MOUNT/hf && chmod 700 /root/.cache/huggingface $MOUNT/hf"
-  printf '%s\n' "$HF_TOKEN" | rp_ssh "$host" "$port" "cat > /root/.cache/huggingface/token && cp -f /root/.cache/huggingface/token $MOUNT/hf/token && chmod 600 /root/.cache/huggingface/token $MOUNT/hf/token"
+  # rp_ssh uses ssh -n (stdin is /dev/null). Pipe the token via a temp file.
+  local tmp
+  tmp="$(mktemp)"
+  printf '%s\n' "$HF_TOKEN" >"$tmp"
+  chmod 600 "$tmp"
+  rp_rsync "$host" "$port" "$tmp" "/root/.cache/huggingface/token"
+  rm -f "$tmp"
+  rp_ssh "$host" "$port" "cp -f /root/.cache/huggingface/token $MOUNT/hf/token && chmod 600 /root/.cache/huggingface/token $MOUNT/hf/token"
   rp_log "seeded HF token on fetch pod"
 }
 
