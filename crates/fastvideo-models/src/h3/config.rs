@@ -600,13 +600,16 @@ impl H3InferenceContract {
         }
     }
 
-    /// Sol-H3 1-GPU profile ([NVlabs Sol-H3](https://github.com/NVlabs/Sana/tree/sol-engine/models/minimax_h3/Sol-H3)).
+    /// Distilled Sol-H3 4-step adapter ([NVlabs Sol-H3](https://github.com/NVlabs/Sana/tree/sol-engine/models/minimax_h3/Sol-H3)).
     ///
     /// MiniMax-H3 base plus a fused four-step adapter (FastH3 dense-datafree
     /// for T2V/I2V, lightx2v turbo for Ref2VA). Diffusers
     /// `set_timesteps(5)` after video shift 12 and audio shift 3: four
-    /// forwards on the uniform grid, dense attention. SOL/BSA is Sol-H3's
-    /// multi-GPU profile and is not this path.
+    /// forwards on the uniform grid. Attention is not locked to dense —
+    /// one-GPU Sol-Attn uses the RTX 5090 policy in [`super::sol`] (first 10
+    /// steps and first 2 layers dense, tau 1.0; the official RTX cell is 49
+    /// forwards). SOL/BSA is available on one GPU; it is not a multi-GPU-only
+    /// profile. See [`Self::sol_h3_rtx`].
     pub fn sol_h3() -> Self {
         Self {
             dmd_denoising_steps: Vec::new(),
@@ -617,13 +620,51 @@ impl H3InferenceContract {
             guidance_scale: 1.0,
             vsa_sparsity: 0.0,
             vsa_tile_size: 64,
-            dense: true,
+            dense: false,
+            sigma_source: H3SigmaSource::Uniform,
+        }
+    }
+
+    /// Sol-H3-Spark Stage-1: same 4-step uniform grid as [`Self::sol_h3`],
+    /// VSA 0.9 / tile 64, BF16. FastH3_VSA_DataFree LoRA at strength 1.0.
+    /// Upstream W8A8 FP8 after the LoRA merge is not this path.
+    pub fn sol_h3_spark() -> Self {
+        Self {
+            dmd_denoising_steps: Vec::new(),
+            num_inference_steps: 5,
+            transformer_forwards: 4,
+            video_scheduler_shift: 12.0,
+            audio_scheduler_shift: 3.0,
+            guidance_scale: 1.0,
+            vsa_sparsity: 0.9,
+            vsa_tile_size: 64,
+            dense: false,
+            sigma_source: H3SigmaSource::Uniform,
+        }
+    }
+
+    /// One-GPU official MiniMax-H3 cell from `models/minimax_h3.toml`
+    /// `[rtx5090.policy]`: 50 sigma points, 49 forwards, video shift 12,
+    /// audio shift 3. Sol-Attn (not VSA): first 10 steps dense, first 2
+    /// layers dense, tau 1.0.
+    pub fn sol_h3_rtx() -> Self {
+        Self {
+            dmd_denoising_steps: Vec::new(),
+            num_inference_steps: 50,
+            transformer_forwards: 49,
+            video_scheduler_shift: 12.0,
+            audio_scheduler_shift: 3.0,
+            guidance_scale: 1.0,
+            vsa_sparsity: 0.0,
+            vsa_tile_size: 64,
+            dense: false,
             sigma_source: H3SigmaSource::Uniform,
         }
     }
 
     /// Named recipe: `8step` / `v2`, `4step-vsa` / `preview-vsa`,
-    /// `4step-dense` / `preview-dense`, `sol-h3` (and `sol-h3-ref2va`).
+    /// `4step-dense` / `preview-dense`, `sol-h3` (and `sol-h3-ref2va`),
+    /// `sol-h3-spark`, `sol-h3-rtx`.
     pub fn named(name: &str) -> Result<Self, String> {
         match name {
             "8step" | "v2" | "fasth3-8step" => Ok(Self::fasth3_8step()),
@@ -631,10 +672,12 @@ impl H3InferenceContract {
             "4step-dense" | "preview-dense" | "fasth3-4step-dense" => {
                 Ok(Self::fasth3_4step_dense())
             }
+            "sol-h3-spark" | "sol_h3_spark" => Ok(Self::sol_h3_spark()),
+            "sol-h3-rtx" | "sol_h3_rtx" => Ok(Self::sol_h3_rtx()),
             "sol-h3" | "sol_h3" | "sol-h3-t2v" | "sol-h3-i2v" | "sol-h3-ref2va"
-            | "sol_h3_ref2va" | "sol-h3-spark" | "sol_h3_spark" => Ok(Self::sol_h3()),
+            | "sol_h3_ref2va" => Ok(Self::sol_h3()),
             other => Err(format!(
-                "unknown H3 recipe '{other}' (8step|4step-vsa|4step-dense|sol-h3|sol-h3-spark)"
+                "unknown H3 recipe '{other}' (8step|4step-vsa|4step-dense|sol-h3|sol-h3-spark|sol-h3-rtx)"
             )),
         }
     }
@@ -921,7 +964,7 @@ mod tests {
         }
         let sol = H3InferenceContract::sol_h3();
         assert_eq!(sol.sigma_source, H3SigmaSource::Uniform);
-        assert!(sol.dense);
+        assert!(!sol.dense);
         assert!(sol.dmd_denoising_steps.is_empty());
         assert_eq!(
             super::super::schedule::H3JointSchedule::from_contract(&sol)
@@ -930,7 +973,16 @@ mod tests {
             4
         );
         assert_eq!(H3InferenceContract::named("sol-h3-ref2va").unwrap(), sol);
-        assert_eq!(H3InferenceContract::named("sol-h3-spark").unwrap(), sol);
+        let spark = H3InferenceContract::named("sol-h3-spark").unwrap();
+        assert_eq!(spark, H3InferenceContract::sol_h3_spark());
+        assert_eq!(spark.vsa_sparsity, 0.9);
+        assert_eq!(spark.vsa_tile_size, 64);
+        assert!(!spark.dense);
+        let rtx = H3InferenceContract::sol_h3_rtx();
+        assert_eq!(rtx.transformer_forwards, 49);
+        assert_eq!(rtx.num_inference_steps, 50);
+        assert!(!rtx.dense);
+        assert_eq!(H3InferenceContract::named("sol-h3-rtx").unwrap(), rtx);
         assert!(!H3InferenceContract::fasth3_4step_vsa().dense);
         assert!(H3InferenceContract::fasth3_4step_dense().dense);
         assert_eq!(H3InferenceContract::fasth3_4step_vsa().vsa_sparsity, 0.9);
