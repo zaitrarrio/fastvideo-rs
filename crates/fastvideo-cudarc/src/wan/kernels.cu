@@ -2429,7 +2429,7 @@ extern "C" __global__ void topk_last(
     float* ov = val + (long)row * k;
     for (int t = 0; t < k; t++) {
         oi[t] = 0;
-        ov[t] = -INFINITY;
+        ov[t] = -1e30f;
     }
     for (int e = 0; e < width; e++) {
         float v = src[e];
