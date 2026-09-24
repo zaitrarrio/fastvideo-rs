@@ -2,6 +2,16 @@
 
 Project code: FVID
 
+### FVID · 2026-09-24 · FVID-2026-09-24-lora-device-refuse
+- Trigger: LTX-2 / H3 strength change reloaded the DiT from disk (host `apply_bf16` / `H3LoraFuse::fuse` only)
+- Options: keep host fuse + reload; keep unfused `W0` plus `(A, B)` and re-fuse on device
+- Decision: **`Linear::{attach_lora,set_lora_strength}`** — snapshot `W0` on first attach; `W = W0 + s·B·A` via one GEMM + add. Host **`apply_bf16` / `fuse` stay the load-time default**. `ltx2::lora::set_strength(s)` and `H3LoraFuse::set_lora_strength` call through to attached linears. No disk, no DiT reload.
+- Reason: a strength change must finish in seconds on a resident DiT
+- Reversibility: cheap — loaders that never attach keep today's host fuse
+- Executed by: Executor
+- ADR: none
+- Verification: **host pass**. `cargo test -p fastvideo-cudarc --lib nn lora`. Device GEMM path untested here (no nvcc).
+
 ### FVID · 2026-09-24 · FVID-2026-09-24-phase0-strict-host-hunyuan-gen
 - Trigger: review gaps — Sol/PISA/SLA/NVFP4 host paths were outside `host_fallback`; `fv-gpucheck hunyuan gen` missing from the published image; Spark VSA-DataFree LoRA not on the volume fetch list
 - Options: leave host algorithms silent until WS-A; gate only under `FASTVIDEO_STRICT_DEVICE`; always refuse on a live device

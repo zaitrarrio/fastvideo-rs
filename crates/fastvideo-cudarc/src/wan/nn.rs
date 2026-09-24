@@ -53,6 +53,23 @@ pub struct Linear {
     /// at load. Each forward reconstructs the activation, then the existing
     /// GEMM runs. `None` is today's dense path.
     nvfp4_act: Option<fastvideo_models::nvfp4::ScaleRule>,
+    /// Resident LoRA: unfused base `W0` plus `A [rank, in]` / `B [out, rank]`.
+    /// The live weight is `W0 + strength · B @ A`.
+    lora: Option<LinearLora>,
+}
+
+/// Factors kept on the device (or host) so [`Linear::set_lora_strength`] can
+/// re-fuse without touching disk. `W0` is snapshotted on the first
+/// [`Linear::attach_lora`].
+#[derive(Debug, Clone)]
+struct LinearLora {
+    /// Unfused base, same residency as [`Linear::weight`].
+    w0: CudaTensor,
+    #[cfg(feature = "cuda")]
+    w0_bf16: Option<std::sync::Arc<cudarc::driver::CudaSlice<half::bf16>>>,
+    a: CudaTensor,
+    b: CudaTensor,
+    strength: f32,
 }
 
 /// LongLive NVFP4 on every prefix of a fused linear. Conservative: one
@@ -149,6 +166,7 @@ impl Linear {
                         weight_fp8_rows: None,
                         weight_affine: None,
                         nvfp4_act: None,
+                        lora: None,
                     });
                 }
                 Err(why) => {
@@ -181,6 +199,7 @@ impl Linear {
                 weight_fp8_rows: None,
                 weight_affine: None,
                 nvfp4_act,
+                lora: None,
             });
         }
         weight.pin_device()?;
@@ -196,6 +215,7 @@ impl Linear {
             weight_fp8_rows: None,
             weight_affine: None,
             nvfp4_act,
+            lora: None,
         })
     }
 
@@ -374,6 +394,7 @@ impl Linear {
             weight_fp8_rows: None,
             weight_affine: None,
             nvfp4_act: None,
+            lora: None,
         }))
     }
 
@@ -402,6 +423,7 @@ impl Linear {
             weight_fp8_rows: None,
             weight_affine: None,
             nvfp4_act: None,
+            lora: None,
         })
     }
 
@@ -487,6 +509,7 @@ impl Linear {
             weight_fp8_rows: Some(std::sync::Arc::new(rows)),
             weight_affine: None,
             nvfp4_act: None,
+            lora: None,
         })
     }
 
@@ -563,6 +586,7 @@ impl Linear {
             weight_fp8_rows: None,
             weight_affine: Some(std::sync::Arc::new(aff)),
             nvfp4_act: None,
+            lora: None,
         })
     }
 
@@ -649,6 +673,7 @@ impl Linear {
             weight_fp8_rows: None,
             weight_affine: None,
             nvfp4_act: None,
+            lora: None,
         }))
     }
 
@@ -658,6 +683,106 @@ impl Linear {
 
     pub fn in_dim(&self) -> usize {
         self.in_dim
+    }
+
+    /// Whether [`Self::attach_lora`] has snapshotted `W0` and `(A, B)`.
+    pub fn has_lora(&self) -> bool {
+        self.lora.is_some()
+    }
+
+    /// Strength last written by [`Self::set_lora_strength`], if any.
+    pub fn lora_strength(&self) -> Option<f32> {
+        self.lora.as_ref().map(|l| l.strength)
+    }
+
+    /// Keep `(A, B)` on device (or host) and snapshot the live weight as `W0`
+    /// the first time this is called. `A` is `[rank, in]`, `B` is `[out, rank]`.
+    /// The live buffer is left unchanged (strength 0) until
+    /// [`Self::set_lora_strength`].
+    pub fn attach_lora(&mut self, mut a: CudaTensor, mut b: CudaTensor) -> Result<()> {
+        if self.weight_fp8_rows.is_some() || self.weight_affine.is_some() || self.is_fp8_gemm() {
+            return Err(msg(
+                "attach_lora: only dense bf16/f32 weights (not FP8/affine/NVFP4)",
+            ));
+        }
+        if a.rank() != 2 || b.rank() != 2 {
+            return Err(msg(format!(
+                "attach_lora: A {:?} B {:?} must be rank-2",
+                a.shape, b.shape
+            )));
+        }
+        let rank = a.shape[0];
+        if a.shape[1] != self.in_dim || b.shape[0] != self.out_dim || b.shape[1] != rank {
+            return Err(msg(format!(
+                "attach_lora: A {:?} B {:?} for weight [{}, {}]",
+                a.shape, b.shape, self.out_dim, self.in_dim
+            )));
+        }
+        a.pin_device()?;
+        b.pin_device()?;
+        if let Some(slot) = self.lora.as_mut() {
+            slot.a = a;
+            slot.b = b;
+            return self.refuse_from_w0();
+        }
+        let mut snap = self.snapshot_w0()?;
+        snap.a = a;
+        snap.b = b;
+        self.lora = Some(snap);
+        Ok(())
+    }
+
+    /// Re-fuse the live weight: `W = W0 + s · B @ A`. One GEMM plus add; does
+    /// not touch disk. No-op when `s` matches the last applied strength.
+    pub fn set_lora_strength(&mut self, s: f32) -> Result<()> {
+        if !s.is_finite() {
+            return Err(msg("set_lora_strength: strength must be finite"));
+        }
+        let Some(slot) = self.lora.as_mut() else {
+            return Err(msg("set_lora_strength without attach_lora"));
+        };
+        if slot.strength == s {
+            return Ok(());
+        }
+        slot.strength = s;
+        self.refuse_from_w0()
+    }
+
+    fn snapshot_w0(&self) -> Result<LinearLora> {
+        #[cfg(feature = "cuda")]
+        if let Some(w16) = &self.weight_bf16 {
+            return Ok(LinearLora {
+                w0: CudaTensor::from_vec(Vec::new(), vec![0, self.in_dim])?,
+                w0_bf16: Some(std::sync::Arc::new(clone_bf16_slice(w16)?)),
+                a: CudaTensor::from_vec(Vec::new(), vec![0, 0])?,
+                b: CudaTensor::from_vec(Vec::new(), vec![0, 0])?,
+                strength: 0.0,
+            });
+        }
+        Ok(LinearLora {
+            w0: self.weight.clone(),
+            #[cfg(feature = "cuda")]
+            w0_bf16: None,
+            a: CudaTensor::from_vec(Vec::new(), vec![0, 0])?,
+            b: CudaTensor::from_vec(Vec::new(), vec![0, 0])?,
+            strength: 0.0,
+        })
+    }
+
+    fn refuse_from_w0(&mut self) -> Result<()> {
+        let Some(lora) = self.lora.as_ref() else {
+            return Err(msg("set_lora_strength without attach_lora"));
+        };
+        let s = lora.strength;
+        let (out, inn) = (self.out_dim, self.in_dim);
+        #[cfg(feature = "cuda")]
+        if let Some(w0_16) = lora.w0_bf16.clone() {
+            let fused = fuse_w0_plus_sba_bf16(&w0_16, &lora.a, &lora.b, s, out, inn)?;
+            self.weight_bf16 = Some(std::sync::Arc::new(fused));
+            return Ok(());
+        }
+        self.weight = fuse_w0_plus_sba(&lora.w0, &lora.a, &lora.b, s, out, inn)?;
+        Ok(())
     }
 
     fn out_shape(&self, xs: &CudaTensor) -> Result<(usize, usize, Vec<usize>)> {
@@ -857,6 +982,67 @@ impl Linear {
             });
         CudaTensor::from_vec(out, out_shape)
     }
+}
+
+/// `W = W0 + s · B @ A` with `A: [rank, in]`, `B: [out, rank]`. Device path
+/// is one GEMM plus add; host path is the same product [`fastvideo_models::ltx2::lora::fuse_into`]
+/// uses for load-time [`crate::ltx2::lora::apply_bf16`].
+fn fuse_w0_plus_sba(
+    w0: &CudaTensor,
+    a: &CudaTensor,
+    b: &CudaTensor,
+    s: f32,
+    out: usize,
+    inn: usize,
+) -> Result<CudaTensor> {
+    #[cfg(feature = "cuda")]
+    if stats::device_expected() {
+        if s == 0.0 {
+            return Ok(w0.clone());
+        }
+        let delta = b.matmul(a)?;
+        return CudaTensor::lincomb(&[(1.0, w0), (s, &delta)]);
+    }
+    let mut w = w0.host_cow()?.into_owned();
+    fastvideo_models::ltx2::lora::fuse_into(&mut w, out, inn, &b.host_cow()?, &a.host_cow()?, s)
+        .map_err(msg)?;
+    CudaTensor::from_vec(w, vec![out, inn])
+}
+
+#[cfg(feature = "cuda")]
+fn clone_bf16_slice(
+    src: &cudarc::driver::CudaSlice<half::bf16>,
+) -> Result<cudarc::driver::CudaSlice<half::bf16>> {
+    let dev = super::device::global_device().ok_or_else(|| msg("no device"))?;
+    let host = dev
+        .stream
+        .memcpy_dtov(src)
+        .map_err(|e| msg(e.to_string()))?;
+    stats::record_d2h(host.len());
+    let out = dev
+        .stream
+        .memcpy_stod(&host)
+        .map_err(|e| msg(e.to_string()))?;
+    stats::record_h2d(host.len() / 2);
+    Ok(out)
+}
+
+#[cfg(feature = "cuda")]
+fn fuse_w0_plus_sba_bf16(
+    w0: &cudarc::driver::CudaSlice<half::bf16>,
+    a: &CudaTensor,
+    b: &CudaTensor,
+    s: f32,
+    out: usize,
+    inn: usize,
+) -> Result<cudarc::driver::CudaSlice<half::bf16>> {
+    let w0_f32 = super::ops::cast_bf16_f32_bias_act_device(w0, None, false)?;
+    let w0_t = CudaTensor::from_dev_result(w0_f32, vec![out, inn])?;
+    let fused = fuse_w0_plus_sba(&w0_t, a, b, s, out, inn)?;
+    let dev = fused
+        .dev()?
+        .ok_or_else(|| msg("lora fuse: fused weight left the device"))?;
+    super::ops::cast_f32_bf16_device(&dev)
 }
 
 pub fn silu(xs: &CudaTensor) -> CudaTensor {
@@ -1239,5 +1425,65 @@ mod fp8_rows_tests {
                 }
             }
         });
+    }
+}
+
+#[cfg(test)]
+mod lora_runtime_tests {
+    use super::*;
+
+    /// `W0 + 0.8·B@A` from [`Linear::set_lora_strength`] matches the host
+    /// [`crate::ltx2::lora::apply_bf16`] product (bf16 round-trip + `fuse_into`).
+    #[test]
+    fn set_lora_strength_matches_host_apply_bf16() {
+        let (out, inn, rank) = (4usize, 3usize, 2usize);
+        let w0: Vec<f32> = (0..out * inn).map(|i| (i as f32) * 0.1 + 0.25).collect();
+        let a: Vec<f32> = (0..rank * inn).map(|i| (i as f32 + 1.0) * 0.2).collect();
+        let b: Vec<f32> = (0..out * rank).map(|i| (i as f32 + 2.0) * 0.3).collect();
+
+        // Same input `apply_bf16` sees after a bf16 checkpoint load.
+        let w0_bf: Vec<half::bf16> = w0.iter().copied().map(half::bf16::from_f32).collect();
+        let w0_host: Vec<f32> = w0_bf.iter().map(|v| v.to_f32()).collect();
+        let mut apply = w0_bf.clone();
+        crate::ltx2::lora::apply_bf16_values(&mut apply, &[out, inn], &b, &a, 0.8).unwrap();
+
+        let mut lin = Linear::from_tensors(
+            CudaTensor::from_vec(w0_host.clone(), vec![out, inn]).unwrap(),
+            None,
+        )
+        .unwrap();
+        lin.attach_lora(
+            CudaTensor::from_vec(a, vec![rank, inn]).unwrap(),
+            CudaTensor::from_vec(b, vec![out, rank]).unwrap(),
+        )
+        .unwrap();
+        assert!(lin.has_lora());
+        assert_eq!(lin.lora_strength(), Some(0.0));
+        lin.set_lora_strength(0.8).unwrap();
+        assert_eq!(lin.lora_strength(), Some(0.8));
+        let got_bf: Vec<half::bf16> = lin
+            .weight
+            .host_cow()
+            .unwrap()
+            .iter()
+            .map(|&v| half::bf16::from_f32(v))
+            .collect();
+        assert_eq!(got_bf, apply);
+
+        lin.set_lora_strength(0.0).unwrap();
+        let back = lin.weight.host_cow().unwrap();
+        for (g, w) in back.iter().zip(&w0_host) {
+            assert!((g - w).abs() <= 1e-6, "strength 0 must restore W0");
+        }
+        lin.set_lora_strength(0.4).unwrap();
+        lin.set_lora_strength(0.8).unwrap();
+        let again: Vec<half::bf16> = lin
+            .weight
+            .host_cow()
+            .unwrap()
+            .iter()
+            .map(|&v| half::bf16::from_f32(v))
+            .collect();
+        assert_eq!(again, apply);
     }
 }

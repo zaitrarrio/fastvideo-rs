@@ -11,13 +11,15 @@ use fastvideo_models::h3::lora::{
     add_diff, add_low_rank, lora_multiplier, plan_from_keys, LoraFormat, LoraPlan,
 };
 
-use crate::wan::tensor::{Result, TensorError};
+use crate::wan::nn::Linear;
+use crate::wan::tensor::{CudaTensor, Result, TensorError};
 use crate::wan::weights::WeightMap;
 
 fn msg(s: impl Into<String>) -> TensorError {
     TensorError::Message(s.into())
 }
 
+#[derive(Clone)]
 struct Pair {
     b: Vec<f32>,
     a: Vec<f32>,
@@ -28,7 +30,10 @@ struct Pair {
 /// One adapter, consumed as the transformer loader touches each parameter.
 pub struct H3LoraFuse {
     pairs: HashMap<String, Pair>,
+    /// Copy of [`Self::pairs`] that survives host `fuse` consume, for device re-fuse.
+    factors: HashMap<String, Pair>,
     diffs: HashMap<String, Vec<f32>>,
+    format: LoraFormat,
     multiplier: f32,
     diff_scale: f32,
     pub rank: usize,
@@ -122,8 +127,10 @@ impl H3LoraFuse {
         let pairs_total = pairs.len();
         let diffs_total = diffs.len();
         Ok(Self {
+            factors: pairs.clone(),
             pairs,
             diffs,
+            format: plan.format,
             multiplier,
             diff_scale: scale,
             rank,
@@ -139,6 +146,45 @@ impl H3LoraFuse {
 
     pub fn effective_scale(&self) -> f32 {
         self.multiplier
+    }
+
+    /// Recompute the host/device multiplier from a new adapter scale. Does not
+    /// touch disk. Call [`Self::set_strength_on`] to write attached linears.
+    pub fn set_lora_strength(&mut self, s: f32) -> Result<()> {
+        self.multiplier = lora_multiplier(self.format, self.rank, self.alpha, s).map_err(msg)?;
+        self.diff_scale = s;
+        Ok(())
+    }
+
+    /// `A [rank, in]` / `B [out, rank]` for a transformer module, if this
+    /// adapter has a pair for it.
+    pub fn factors(&self, module: &str) -> Result<Option<(CudaTensor, CudaTensor)>> {
+        let Some(pair) = self.factors.get(module) else {
+            return Ok(None);
+        };
+        Ok(Some(pair_tensors(pair)?))
+    }
+
+    /// Snapshot `W0` on `linear` and attach this adapter's `(A, B)` for `module`.
+    pub fn attach_linear(&self, module: &str, linear: &mut Linear) -> Result<()> {
+        let Some((a, b)) = self.factors(module)? else {
+            return Err(msg(format!("h3 lora: no factors for {module}")));
+        };
+        linear.attach_lora(a, b)?;
+        linear.set_lora_strength(self.multiplier)
+    }
+
+    /// [`Self::set_lora_strength`] then re-fuse each attached linear.
+    pub fn set_strength_on<'a>(
+        &mut self,
+        s: f32,
+        linears: impl IntoIterator<Item = &'a mut Linear>,
+    ) -> Result<()> {
+        self.set_lora_strength(s)?;
+        for lin in linears {
+            lin.set_lora_strength(self.multiplier)?;
+        }
+        Ok(())
     }
 
     /// Apply a pair (if `param` is `{module}.weight`) and then a `.diff`.
@@ -174,5 +220,66 @@ impl H3LoraFuse {
             "adapter targets were not applied: {left:?} (and {} more)",
             extra - left.len()
         )))
+    }
+}
+
+fn pair_tensors(pair: &Pair) -> Result<(CudaTensor, CudaTensor)> {
+    let rank = pair.a.len() / pair.inn;
+    Ok((
+        CudaTensor::from_vec(pair.a.clone(), vec![rank, pair.inn])?,
+        CudaTensor::from_vec(pair.b.clone(), vec![pair.out, rank])?,
+    ))
+}
+
+/// Re-fuse `linears` at scale `s` (WS-B / later callers). Host `fuse` stays
+/// the load-time default.
+pub fn set_strength<'a>(
+    fuse: &mut H3LoraFuse,
+    s: f32,
+    linears: impl IntoIterator<Item = &'a mut Linear>,
+) -> Result<()> {
+    fuse.set_strength_on(s, linears)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn set_lora_strength_updates_multiplier_and_linear() {
+        let (out, inn, rank) = (2usize, 3usize, 1usize);
+        let w0 = vec![1.0f32, 0.0, 0.0, 0.0, 1.0, 0.0];
+        let a = vec![1.0f32, 0.0, 0.5];
+        let b = vec![2.0f32, -1.0];
+        let mut want = w0.clone();
+        add_low_rank(&mut want, out, inn, &b, &a, 0.8).unwrap();
+
+        let mut lin =
+            Linear::from_tensors(CudaTensor::from_vec(w0, vec![out, inn]).unwrap(), None).unwrap();
+        lin.attach_lora(
+            CudaTensor::from_vec(a, vec![rank, inn]).unwrap(),
+            CudaTensor::from_vec(b, vec![out, rank]).unwrap(),
+        )
+        .unwrap();
+
+        let mut fuse = H3LoraFuse {
+            pairs: HashMap::new(),
+            factors: HashMap::new(),
+            diffs: HashMap::new(),
+            format: LoraFormat::FastvideoV2,
+            multiplier: 1.0,
+            diff_scale: 1.0,
+            rank,
+            alpha: rank as u32,
+            pairs_total: 0,
+            diffs_total: 0,
+            path: "test".into(),
+        };
+        set_strength(&mut fuse, 0.8, std::iter::once(&mut lin)).unwrap();
+        assert!((fuse.effective_scale() - 0.8).abs() < 1e-6);
+        let got = lin.weight.host_cow().unwrap();
+        for (g, w) in got.iter().zip(&want) {
+            assert!((g - w).abs() <= 1e-5, "{g} vs {w}");
+        }
     }
 }
