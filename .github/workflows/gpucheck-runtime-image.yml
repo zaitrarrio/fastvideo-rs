@@ -77,7 +77,9 @@ jobs:
           docker pull "$img"
           docker run --rm "$img" bash -euo pipefail -c '
             test "$(cat target/release/fv-gpucheck.build-id)" = "${{ steps.meta.outputs.build_id }}"
-            python3 -c "import ctypes; [ctypes.CDLL(l) for l in (\"libnvrtc.so.13\", \"libcublasLt.so.13\", \"libcublas.so.13\", \"libcudnn.so.9\")]"
+            for lib in libnvrtc.so.13 libcublasLt.so.13 libcublas.so.13 libcudnn.so.9; do
+              ldconfig -p | grep -F "$lib" >/dev/null
+            done
             ./target/release/fv-gpucheck --out /tmp/out nvrtc
             grep -q aot_sms /tmp/out/nvrtc.json && echo "embedded cubins present"'
           docker image inspect "$img" --format 'size={{.Size}}'
