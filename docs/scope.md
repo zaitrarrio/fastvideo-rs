@@ -252,6 +252,7 @@ Weights: `--weights`, `FASTVIDEO_WEIGHTS`, or the Hugging Face snapshot.
 | `FASTVIDEO_LINGBOT_SOL` | Logs the unspecified cache/PISA/topology gap and stays dense |
 | `FASTVIDEO_NVFP4` | W4A4 dequant (`1` → `static_6`; `mse` for FourOverSix) |
 | `FASTVIDEO_BF16` | cuBLAS tf32/bf16 compute. On unless set to `0` |
+| `FASTVIDEO_BF16_ACT` | DiT activations (and residual) as bf16. Default off. Host PSNR ≥ 35 dB |
 | `FASTVIDEO_VSA` | Wan block-sparse video attention |
 | `FASTVIDEO_SP_WORLD` | Sequence-parallel world size |
 | `FASTVIDEO_SAVE_MP4` | Mux frames with ffmpeg |
