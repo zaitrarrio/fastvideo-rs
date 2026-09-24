@@ -565,17 +565,27 @@ impl WanPipeline {
             cfg.num_inference_steps.max(1)
         };
         let tea_cache = TeaCache::from_env();
-        let easy_cache = EasyCacheRuntime::from_env(n_steps)?;
+        let a14b = super::sol_cache::uses_a14b_cache(self.dit.cfg.is_moe());
+        self.dit.configure_attn_route();
         self.dit.configure_sol_teacache(n_steps)?;
         self.dit.configure_sol_taylor(n_steps)?;
+        self.dit.configure_a14b_cache(n_steps)?;
         if let Some(low) = &self.dit_2 {
+            low.configure_attn_route();
             low.configure_sol_teacache(n_steps)?;
             low.configure_sol_taylor(n_steps)?;
+            low.configure_a14b_cache(n_steps)?;
         }
+        let easy_cache = if a14b {
+            None
+        } else {
+            EasyCacheRuntime::from_env(n_steps)?
+        };
         if tea_cache.enabled
             && (easy_cache.is_some()
                 || self.dit.sol_teacache_enabled()
-                || self.dit.sol_taylor_enabled())
+                || self.dit.sol_taylor_enabled()
+                || self.dit.sol_a14b_enabled())
         {
             return Err(PipelineError::Message(
                 "FASTVIDEO_TEACACHE and FASTVIDEO_WAN_SOL_CACHE both set".into(),
@@ -859,18 +869,7 @@ impl EasyCacheRuntime {
                 "FASTVIDEO_WAN_SOL_CACHE={family} is not supported (easycache, teacache, or taylorseer)"
             )));
         }
-        let threshold = std::env::var("FASTVIDEO_WAN_EASYCACHE_THRESH")
-            .ok()
-            .and_then(|s| s.parse().ok())
-            .unwrap_or(0.05);
-        let retain = std::env::var("FASTVIDEO_WAN_EASYCACHE_RETAIN")
-            .ok()
-            .and_then(|s| s.parse().ok())
-            .unwrap_or(7);
-        let cooldown = std::env::var("FASTVIDEO_WAN_EASYCACHE_COOLDOWN")
-            .ok()
-            .and_then(|s| s.parse().ok())
-            .unwrap_or(1);
+        let (threshold, retain, cooldown) = super::sol_cache::easy_cache_params()?;
         let state = fastvideo_models::wan::sol_cache::EasyCache::new(
             num_steps, threshold, retain, cooldown,
         )
@@ -923,6 +922,10 @@ fn dit_cfg_easy(
         let easy = ctx.easy_cache.as_mut().expect("easycache");
         let step = easy.step;
         easy.step += 1;
+        ctx.high.arm_attn_step(step);
+        if let Some(low) = ctx.low {
+            low.arm_attn_step(step);
+        }
         let (change, norm) = if easy.state.needs_cond_signal(step) {
             (
                 mean_abs_delta(&latent_in, easy.previous_step_input.as_ref().expect("prev"))?,
@@ -1019,8 +1022,14 @@ fn dit_cfg(
     let tea_step = ctx.sol_tea_step;
     let tea_on =
         ctx.high.sol_teacache_enabled() || ctx.low.is_some_and(|dit| dit.sol_teacache_enabled());
-    if tea_on {
+    let a14b_on = ctx.high.sol_a14b_enabled() || ctx.low.is_some_and(|dit| dit.sol_a14b_enabled());
+    let attn_on = ctx.high.sol_attn_enabled() || ctx.low.is_some_and(|dit| dit.sol_attn_enabled());
+    if tea_on || a14b_on || attn_on {
         ctx.sol_tea_step += 1;
+    }
+    ctx.high.arm_attn_step(tea_step);
+    if let Some(low) = ctx.low {
+        low.arm_attn_step(tea_step);
     }
     if let Some(cached) = ctx.tea_cache.maybe_reuse(latents) {
         static TEA: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
@@ -1043,8 +1052,11 @@ fn dit_cfg(
         if tea_on {
             dit.arm_sol_teacache(true, tea_step);
         }
+        if a14b_on {
+            dit.arm_a14b_cache(true, tea_step);
+        }
         dit.forward_ctx(&latent_in, &t1, &cond_hs, ctx.image)?
-    } else if ctx.i2v.is_none() && ctx.image.is_none() && rows == 2 {
+    } else if ctx.i2v.is_none() && ctx.image.is_none() && rows == 2 && !a14b_on {
         // One batch-2 forward for [uncond, cond]: the embeddings are already
         // in that order, so only the latents are duplicated. TeaCache decides
         // each row and skips the blocks only when both rows reuse.
@@ -1063,9 +1075,15 @@ fn dit_cfg(
         if tea_on {
             dit.arm_sol_teacache(true, tea_step);
         }
+        if a14b_on {
+            dit.arm_a14b_cache(true, tea_step);
+        }
         let cond = dit.forward_ctx(&latent_in, &t1, &cond_hs, ctx.image)?;
         if tea_on {
             dit.arm_sol_teacache(false, tea_step);
+        }
+        if a14b_on {
+            dit.arm_a14b_cache(false, tea_step);
         }
         let uncond = dit.forward_ctx(&latent_in, &t1, &uncond_hs, ctx.image)?;
         CudaTensor::lincomb(&[(1.0 - scale, &uncond), (scale, &cond)])?

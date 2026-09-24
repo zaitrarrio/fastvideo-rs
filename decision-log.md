@@ -2,6 +2,16 @@
 
 Project code: FVID
 
+### FVID · 2026-09-24 · FVID-2026-09-24-wan-sol-pisa-a14b-cache
+- Trigger: WS-E — A14B reused the 5B whole-stack EasyCache; EasyCache knobs ignored delivered manifests; Wan Sol/PISA routes were not wired
+- Options: keep one EasyCache for every Wan SKU; split A14B to the published block-0 / tail-39 controller; silently change `official()` from 0.05/7/1 to 0.036
+- Decision: **A14B cache controller** (block-0 fresh, blocks 1–39 residual, per-expert accumulators, thr 0.30 / start 5 / tail 3 / max_reuse 1). EasyCache profiles: fullstack 0.036/7/1, 14B-tuned 0.10 retain 5, **code-default 0.05/7/1** so old tests stay. Wan 14B Sol: tau 1.0, 10 dense steps, layer 0 dense, Morton3D reorder → `crate::sol_attn::sol_attn`. 5B/A14B PISA density 0.10 with the published dense layer/step sets → `crate::pisa_attn::pisa_attn`.
+- Reason: match sol-engine `cache_controller.py` and the delivered tomls without silently changing existing EasyCache tests
+- Reversibility: cheap — env-gated (`FASTVIDEO_WAN_SOL_CACHE`, `FASTVIDEO_WAN_EASYCACHE_PROFILE`, `FASTVIDEO_WAN_SOL_ATTN`, `FASTVIDEO_WAN_PISA`)
+- Executed by: Executor
+- ADR: none
+- Verification: **host pass**. `cargo test -p fastvideo-cudarc --lib sol_cache` (3 passed); `cargo test -p fastvideo-models --lib wan` (35 passed). GPU kernels untested here (WS-A owns the device path).
+
 ### FVID · 2026-09-24 · FVID-2026-09-24-host-loops-off-device
 - Trigger: Cosmos RoPE, LingBot MoE, and H3 AdaLN still bounced every attention / token / block through pageable H2D; FVID-2026-09-18 noted 911 H2D / 3.4 GiB on a 3-step Wan clip and asked whether uploads repeat per step.
 - Decision: **device kernels + one upload, then slice.** Cosmos self-attn RoPE is `rope_real` (real-interleaved twin of `rope_half`) with host `apply_rope_real` behind `host_fallback`. LingBot MoE is `softmax_last` / `sigmoid_f` + `topk_last`, then `index_select_rows` + one expert GEMM + `scatter_add_rows` (no per-token `[1,d]` GEMM). H3 `BlockMods::upload` puts the whole AdaLN ladder + keyframe table on device once and `narrow`s `[1,6,hidden]` per segment.
