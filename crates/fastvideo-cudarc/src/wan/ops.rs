@@ -305,6 +305,12 @@ pub fn cast_bf16_f32_bias_act_device(
     Ok(out)
 }
 
+/// bfloat16 → f32 with no bias or activation (device twin of [`host::quantize_bf16`] inverse).
+#[cfg(feature = "cuda")]
+pub fn cast_bf16_f32_device(a: &CudaSlice<half::bf16>) -> Result<CudaSlice<f32>> {
+    cast_bf16_f32_bias_act_device(a, None, false)
+}
+
 #[cfg(feature = "cuda")]
 #[allow(clippy::too_many_arguments)]
 pub fn residual_gate_add_e_device(
@@ -1304,6 +1310,11 @@ pub mod host {
         } else {
             a.iter().map(|&x| f(x)).collect()
         }
+    }
+
+    /// Host oracle for bf16 storage: each f32 is rounded with `half::bf16` and widened back.
+    pub fn quantize_bf16(x: &[f32]) -> Vec<f32> {
+        map1(x, |v| half::bf16::from_f32(v).to_f32())
     }
 
     pub fn silu(x: f32) -> f32 {

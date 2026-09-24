@@ -824,11 +824,23 @@ impl Linear {
         self.forward_act(xs, true)
     }
 
+    fn maybe_act_out(out: CudaTensor) -> Result<CudaTensor> {
+        if super::tensor::bf16_activations() {
+            out.quantize_bf16()
+        } else {
+            Ok(out)
+        }
+    }
+
     fn forward_act(&self, xs: &CudaTensor, gelu: bool) -> Result<CudaTensor> {
         let owned;
+        let act_owned;
         let xs = if let Some(rule) = self.nvfp4_act {
             owned = super::nvfp4::dequant_beforehand(xs, rule)?;
             &owned
+        } else if super::tensor::bf16_activations() {
+            act_owned = xs.quantize_bf16()?;
+            &act_owned
         } else {
             xs
         };
@@ -856,7 +868,8 @@ impl Linear {
                 let dim = c.rank() - 1;
                 c = c.add_bias(b, dim)?;
             }
-            return Ok(if gelu { c.gelu_tanh() } else { c });
+            let c = if gelu { c.gelu_tanh() } else { c };
+            return Self::maybe_act_out(c);
         }
         #[cfg(feature = "cuda")]
         if let Some(wq) = &self.weight_fp8 {
@@ -909,7 +922,7 @@ impl Linear {
                 (None, true) => c = super::ops::unary_device(&c, super::ops::ElemUnary::GeluTanh)?,
                 (None, false) => {}
             }
-            return CudaTensor::from_dev_result(c, out_shape);
+            return Self::maybe_act_out(CudaTensor::from_dev_result(c, out_shape)?);
         }
         #[cfg(feature = "cuda")]
         let dequantized = match self.weight_fp8_rows.as_deref() {
@@ -943,7 +956,7 @@ impl Linear {
                 None => None,
             };
             let c = super::ops::cast_bf16_f32_bias_act_device(&c16, bias.as_deref(), gelu)?;
-            return CudaTensor::from_dev_result(c, out_shape);
+            return Self::maybe_act_out(CudaTensor::from_dev_result(c, out_shape)?);
         }
         #[cfg(feature = "cuda")]
         if let (Some(x), Some(w)) = (xs.dev()?, self.weight.dev()?) {
@@ -962,7 +975,7 @@ impl Linear {
                 (None, true) => c = super::ops::unary_device(&c, super::ops::ElemUnary::GeluTanh)?,
                 (None, false) => {}
             }
-            return CudaTensor::from_dev_result(c, out_shape);
+            return Self::maybe_act_out(CudaTensor::from_dev_result(c, out_shape)?);
         }
         let x = xs.host_cow()?;
         let w: std::borrow::Cow<'_, [f32]> = match self.weight_fp8_rows.as_deref() {
@@ -997,7 +1010,7 @@ impl Linear {
                     *o = if gelu { host::gelu_tanh(acc) } else { acc };
                 }
             });
-        CudaTensor::from_vec(out, out_shape)
+        Self::maybe_act_out(CudaTensor::from_vec(out, out_shape)?)
     }
 }
 
@@ -1208,6 +1221,17 @@ pub fn scaled_dot_product_attention_masked(
     if q.rank() != 4 || k.rank() != 4 || v.rank() != 4 {
         return Err(msg("sdpa expects BHSD"));
     }
+    let q_act;
+    let k_act;
+    let v_act;
+    let (q, k, v) = if super::tensor::bf16_activations() {
+        q_act = q.quantize_bf16()?;
+        k_act = k.quantize_bf16()?;
+        v_act = v.quantize_bf16()?;
+        (&q_act, &k_act, &v_act)
+    } else {
+        (q, k, v)
+    };
     let run = |q: &CudaTensor| -> Result<CudaTensor> {
         if mask.is_none() {
             // FASTVIDEO_VSA now selects the real video sparse attention in
@@ -1233,10 +1257,16 @@ pub fn scaled_dot_product_attention_masked(
         sdpa_composed(q, k, v, scale, mask)
     };
     let world = sp_world();
-    if world > 1 {
-        return dispatch_sharded(q, world, run);
+    let out = if world > 1 {
+        dispatch_sharded(q, world, run)?
+    } else {
+        run(q)?
+    };
+    if super::tensor::bf16_activations() {
+        out.quantize_bf16()
+    } else {
+        Ok(out)
     }
-    run(q)
 }
 
 /// SDPA from tensor ops (masked attention, CPU runs). Every op here has a
@@ -1502,5 +1532,128 @@ mod lora_runtime_tests {
             .map(|&v| half::bf16::from_f32(v))
             .collect();
         assert_eq!(again, apply);
+    }
+}
+
+#[cfg(test)]
+mod bf16_act_tests {
+    use super::*;
+    use crate::wan::tensor::{with_bf16_act, TensorDType};
+
+    fn psnr_db(actual: &[f32], reference: &[f32]) -> f64 {
+        let peak = reference.iter().fold(0.0f32, |a, &v| a.max(v.abs()));
+        // Same convention as gpucheck: range 2.0 for a [-1, 1] signal; scale with peak.
+        let range = f64::from(2.0 * peak.max(1.0));
+        let mut mse = 0.0f64;
+        for (&a, &r) in actual.iter().zip(reference) {
+            let (a, r) = (f64::from(a), f64::from(r));
+            mse += (a - r) * (a - r);
+        }
+        mse /= actual.len() as f64;
+        if mse == 0.0 {
+            return f64::INFINITY;
+        }
+        10.0 * ((range * range) / mse).log10()
+    }
+
+    fn seeded(n: usize, k: f32) -> Vec<f32> {
+        (0..n).map(|i| (i as f32 * k + 0.3).sin()).collect()
+    }
+
+    fn lin(out: usize, inn: usize, k: f32, bias: bool) -> Linear {
+        Linear::from_tensors(
+            CudaTensor::from_vec(seeded(out * inn, k), vec![out, inn]).unwrap(),
+            bias.then(|| CudaTensor::from_vec(seeded(out, k + 0.7), vec![out]).unwrap()),
+        )
+        .unwrap()
+    }
+
+    /// Pre-norm residual block: rms → qkv → SDPA → proj → residual → rms → ff → residual.
+    fn tiny_dit_block(
+        x: &CudaTensor,
+        heads: usize,
+        w_norm: &CudaTensor,
+        qkv: &Linear,
+        proj: &Linear,
+        ff: &Linear,
+    ) -> CudaTensor {
+        let dim = *x.shape.last().unwrap();
+        let s = x.shape[1];
+        let d = dim / heads;
+        let n = x.rms_norm(w_norm, 1e-6).unwrap();
+        let packed = qkv.forward(&n).unwrap();
+        let bhsd = packed
+            .reshape(vec![1, s, 3, heads, d])
+            .unwrap()
+            .permute(&[2, 0, 3, 1, 4])
+            .unwrap();
+        let q = bhsd.narrow(0, 0, 1).unwrap().squeeze(0).unwrap();
+        let k = bhsd.narrow(0, 1, 1).unwrap().squeeze(0).unwrap();
+        let v = bhsd.narrow(0, 2, 1).unwrap().squeeze(0).unwrap();
+        let a = scaled_dot_product_attention(&q, &k, &v, None).unwrap();
+        let a = a
+            .permute(&[0, 2, 1, 3])
+            .unwrap()
+            .reshape(vec![1, s, dim])
+            .unwrap();
+        let a = proj.forward(&a).unwrap();
+        let y = x.add(&a).unwrap();
+        let n = y.rms_norm(w_norm, 1e-6).unwrap();
+        let f = ff.forward(&n).unwrap();
+        y.add(&f).unwrap()
+    }
+
+    fn block_weights(dim: usize, _heads: usize) -> (CudaTensor, Linear, Linear, Linear) {
+        (
+            CudaTensor::from_vec(seeded(dim, 0.11), vec![dim]).unwrap(),
+            lin(3 * dim, dim, 0.19, true),
+            lin(dim, dim, 0.23, true),
+            lin(dim, dim, 0.29, true),
+        )
+    }
+
+    fn run_family(name: &str, dim: usize, heads: usize, seq: usize) -> f64 {
+        let x = CudaTensor::from_vec(seeded(seq * dim, 0.41), vec![1, seq, dim]).unwrap();
+        let (wn, qkv, proj, ff) = block_weights(dim, heads);
+        let f32_y = with_bf16_act(false, || tiny_dit_block(&x, heads, &wn, &qkv, &proj, &ff));
+        assert_eq!(f32_y.dtype(), TensorDType::F32);
+        let act_y = with_bf16_act(true, || tiny_dit_block(&x, heads, &wn, &qkv, &proj, &ff));
+        assert_eq!(act_y.dtype(), TensorDType::Bf16);
+        let p = psnr_db(&act_y.host_cow().unwrap(), &f32_y.host_cow().unwrap());
+        eprintln!("bf16-act {name}: residual-bf16 PSNR {p:.2} dB (host)");
+        assert!(p >= 35.0, "{name} bf16-act PSNR {p:.2} dB < 35");
+        p
+    }
+
+    #[test]
+    fn linear_flag_off_is_bit_identical() {
+        let lin = lin(8, 6, 0.17, true);
+        let x = CudaTensor::from_vec(seeded(2 * 6, 0.5), vec![2, 6]).unwrap();
+        let a = with_bf16_act(false, || lin.forward(&x).unwrap());
+        let b = lin.forward(&x).unwrap();
+        assert_eq!(a.dtype(), TensorDType::F32);
+        assert_eq!(&*a.host_cow().unwrap(), &*b.host_cow().unwrap());
+    }
+
+    #[test]
+    fn linear_bf16_act_psnr_and_dtype() {
+        let lin = lin(8, 6, 0.17, true);
+        let x = CudaTensor::from_vec(seeded(4 * 6, 0.37), vec![4, 6]).unwrap();
+        let f32_y = with_bf16_act(false, || lin.forward(&x).unwrap());
+        let bf_y = with_bf16_act(true, || lin.forward(&x).unwrap());
+        assert_eq!(bf_y.dtype(), TensorDType::Bf16);
+        let p = psnr_db(&bf_y.host_cow().unwrap(), &f32_y.host_cow().unwrap());
+        assert!(p >= 35.0, "linear bf16-act PSNR {p:.2} dB < 35");
+    }
+
+    #[test]
+    fn tiny_h3_ltx_wan_one_block_psnr() {
+        let h3 = run_family("h3", 12, 3, 8);
+        let ltx = run_family("ltx25", 16, 2, 6);
+        let wan = run_family("wan", 16, 2, 5);
+        assert!(
+            crate::wan::tensor::with_bf16_act(true, crate::wan::tensor::bf16_residual),
+            "residual-as-bf16 adopted after ≥ 35 dB (h3 {h3:.2}, ltx {ltx:.2}, wan {wan:.2})"
+        );
     }
 }

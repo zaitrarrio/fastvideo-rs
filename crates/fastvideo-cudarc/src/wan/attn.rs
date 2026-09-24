@@ -342,4 +342,37 @@ mod tests {
             assert!((a - b).abs() < 1e-5, "{a} vs {b}");
         }
     }
+
+    fn psnr_db(actual: &[f32], reference: &[f32]) -> f64 {
+        let peak = reference.iter().fold(0.0f32, |a, &v| a.max(v.abs()));
+        let range = f64::from(2.0 * peak.max(1.0));
+        let mut mse = 0.0f64;
+        for (&a, &r) in actual.iter().zip(reference) {
+            let (a, r) = (f64::from(a), f64::from(r));
+            mse += (a - r) * (a - r);
+        }
+        mse /= actual.len() as f64;
+        if mse == 0.0 {
+            return f64::INFINITY;
+        }
+        10.0 * ((range * range) / mse).log10()
+    }
+
+    #[test]
+    fn host_flash_bf16_act_psnr_vs_f32() {
+        let q = CudaTensor::from_vec(
+            (0..24).map(|x| (x as f32) * 0.13 - 0.8).collect(),
+            vec![1, 2, 3, 4],
+        )
+        .unwrap();
+        let f32_out = crate::wan::tensor::with_bf16_act(false, || {
+            scaled_dot_product_attention(&q, &q, &q, None).unwrap()
+        });
+        let bf16_out = crate::wan::tensor::with_bf16_act(true, || {
+            scaled_dot_product_attention(&q, &q, &q, None).unwrap()
+        });
+        assert_eq!(bf16_out.dtype(), crate::wan::tensor::TensorDType::Bf16);
+        let p = psnr_db(&bf16_out.host_cow().unwrap(), &f32_out.host_cow().unwrap());
+        assert!(p >= 35.0, "sdpa bf16-act PSNR {p:.2} dB < 35");
+    }
 }

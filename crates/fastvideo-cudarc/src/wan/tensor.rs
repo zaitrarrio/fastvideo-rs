@@ -1,4 +1,4 @@
-//! Owned f32 N-D tensors for the cudarc CUDA Wan backend.
+//! Owned N-D tensors for the cudarc CUDA Wan backend (`f32` or `bf16` storage).
 //!
 //! **Storage.** A tensor holds a host buffer, a device buffer, or both:
 //! - `data` is valid only while `host_valid`; device results leave it empty, so
@@ -15,11 +15,51 @@
 //! A host computation with a device live is a recorded fallback.
 
 use std::borrow::Cow;
+use std::cell::Cell;
 
 use thiserror::Error;
 
 use super::ops::{host, BcastOp};
 use super::stats;
+
+/// Logical storage dtype. Host buffers stay `f32` (the oracle); `Bf16` means
+/// values have been rounded through [`half::bf16`] and, on device, may live
+/// as a `CudaSlice<bf16>`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TensorDType {
+    F32,
+    Bf16,
+}
+
+thread_local! {
+    static BF16_ACT_OVERRIDE: Cell<Option<bool>> = const { Cell::new(None) };
+}
+
+static BF16_ACT: super::envflag::CachedBool = super::envflag::CachedBool::new();
+
+/// Opt-in bf16 activation path (`FASTVIDEO_BF16_ACT=1`). Default off so today's
+/// f32 residual / host path is unchanged. Independent of [`super::bf16_gemm::bf16_enabled`]
+/// (`FASTVIDEO_BF16` still selects cuBLAS compute type).
+pub fn bf16_activations() -> bool {
+    if let Some(v) = BF16_ACT_OVERRIDE.with(|c| c.get()) {
+        return v;
+    }
+    BF16_ACT.get_or_init(|| super::envflag::bool_flag("FASTVIDEO_BF16_ACT", false))
+}
+
+/// Residual stream follows activations: host one-block PSNR vs f32 was
+/// H3 57.46 / LTX-2.5 51.64 / Wan 51.12 dB (≥ 35 dB gate).
+pub fn bf16_residual() -> bool {
+    bf16_activations()
+}
+
+/// Run `f` with [`bf16_activations`] forced on or off (test / host-oracle).
+pub fn with_bf16_act<R>(on: bool, f: impl FnOnce() -> R) -> R {
+    let prev = BF16_ACT_OVERRIDE.with(|c| c.replace(Some(on)));
+    let out = f();
+    BF16_ACT_OVERRIDE.with(|c| c.set(prev));
+    out
+}
 
 #[derive(Debug, Error)]
 pub enum TensorError {
@@ -40,10 +80,26 @@ pub struct DeviceBuffer {
     pub(crate) slice: std::sync::Arc<cudarc::driver::CudaSlice<f32>>,
 }
 
+/// Shareable device buffer for bf16 activations.
+#[cfg(feature = "cuda")]
+#[derive(Clone)]
+pub struct DeviceBufferBf16 {
+    pub(crate) slice: std::sync::Arc<cudarc::driver::CudaSlice<half::bf16>>,
+}
+
 #[cfg(feature = "cuda")]
 impl std::fmt::Debug for DeviceBuffer {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("DeviceBuffer")
+            .field("len", &self.slice.len())
+            .finish()
+    }
+}
+
+#[cfg(feature = "cuda")]
+impl std::fmt::Debug for DeviceBufferBf16 {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("DeviceBufferBf16")
             .field("len", &self.slice.len())
             .finish()
     }
@@ -71,10 +127,15 @@ impl std::ops::Deref for DevRef<'_> {
 #[derive(Debug)]
 pub struct CudaTensor {
     /// Host copy; valid only while `host_valid` (empty for device results).
+    /// Always f32: the oracle. `dtype == Bf16` means these values have been
+    /// rounded through [`half::bf16`].
     pub data: Vec<f32>,
     pub shape: Vec<usize>,
+    pub dtype: TensorDType,
     #[cfg(feature = "cuda")]
     device: Option<DeviceBuffer>,
+    #[cfg(feature = "cuda")]
+    device_bf16: Option<DeviceBufferBf16>,
     #[cfg(feature = "cuda")]
     host_valid: bool,
 }
@@ -83,11 +144,16 @@ impl Clone for CudaTensor {
     fn clone(&self) -> Self {
         #[cfg(feature = "cuda")]
         {
+            if let Some(dev) = &self.device_bf16 {
+                return Self::device_only_bf16(dev.clone(), self.shape.clone());
+            }
             if let Some(dev) = &self.device {
-                return Self::device_only(dev.clone(), self.shape.clone());
+                let mut t = Self::device_only(dev.clone(), self.shape.clone());
+                t.dtype = self.dtype;
+                return t;
             }
         }
-        Self::host_only(self.data.clone(), self.shape.clone())
+        Self::host_only_dtype(self.data.clone(), self.shape.clone(), self.dtype)
     }
 }
 
@@ -173,11 +239,18 @@ impl CudaTensor {
     }
 
     pub(crate) fn host_only(data: Vec<f32>, shape: Vec<usize>) -> Self {
+        Self::host_only_dtype(data, shape, TensorDType::F32)
+    }
+
+    pub(crate) fn host_only_dtype(data: Vec<f32>, shape: Vec<usize>, dtype: TensorDType) -> Self {
         Self {
             data,
             shape,
+            dtype,
             #[cfg(feature = "cuda")]
             device: None,
+            #[cfg(feature = "cuda")]
+            device_bf16: None,
             #[cfg(feature = "cuda")]
             host_valid: true,
         }
@@ -188,7 +261,21 @@ impl CudaTensor {
         Self {
             data: Vec::new(),
             shape,
+            dtype: TensorDType::F32,
             device: Some(device),
+            device_bf16: None,
+            host_valid: false,
+        }
+    }
+
+    #[cfg(feature = "cuda")]
+    fn device_only_bf16(device: DeviceBufferBf16, shape: Vec<usize>) -> Self {
+        Self {
+            data: Vec::new(),
+            shape,
+            dtype: TensorDType::Bf16,
+            device: None,
+            device_bf16: Some(device),
             host_valid: false,
         }
     }
@@ -214,14 +301,86 @@ impl CudaTensor {
         ))
     }
 
+    /// Wrap a bf16 device buffer (no host copy).
+    #[cfg(feature = "cuda")]
+    pub fn from_device_slice_bf16(
+        slice: cudarc::driver::CudaSlice<half::bf16>,
+        shape: Vec<usize>,
+    ) -> Result<Self> {
+        if slice.len() != numel(&shape) {
+            return Err(msg(format!(
+                "device bf16 len {} != shape {:?}",
+                slice.len(),
+                shape
+            )));
+        }
+        Ok(Self::device_only_bf16(
+            DeviceBufferBf16 {
+                slice: std::sync::Arc::new(slice),
+            },
+            shape,
+        ))
+    }
+
     #[cfg(feature = "cuda")]
     pub fn device_slice(&self) -> Option<&cudarc::driver::CudaSlice<f32>> {
         self.device.as_ref().map(|b| b.slice.as_ref())
     }
 
     #[cfg(feature = "cuda")]
+    pub fn device_slice_bf16(&self) -> Option<&cudarc::driver::CudaSlice<half::bf16>> {
+        self.device_bf16.as_ref().map(|b| b.slice.as_ref())
+    }
+
+    #[cfg(feature = "cuda")]
     pub fn is_device_fresh(&self) -> bool {
-        self.device.is_some()
+        self.device.is_some() || self.device_bf16.is_some()
+    }
+
+    /// Round each host value through [`half::bf16`] and tag the tensor `Bf16`.
+    /// Device path stores a real `CudaSlice<bf16>`.
+    pub fn quantize_bf16(&self) -> Result<Self> {
+        #[cfg(feature = "cuda")]
+        if self.device_bf16.is_some() && self.dtype == TensorDType::Bf16 {
+            return Ok(self.clone());
+        }
+        #[cfg(feature = "cuda")]
+        if let Some(src) = self.dev()? {
+            let y16 = super::ops::cast_f32_bf16_device(&src)?;
+            return Self::from_device_slice_bf16(y16, self.shape.clone());
+        }
+        Ok(Self::host_only_dtype(
+            host::quantize_bf16(&self.host_cow()?),
+            self.shape.clone(),
+            TensorDType::Bf16,
+        ))
+    }
+
+    /// Widen to an `F32` tensor (host oracle already stores f32).
+    pub fn to_f32_act(&self) -> Result<Self> {
+        if self.dtype == TensorDType::F32 {
+            #[cfg(feature = "cuda")]
+            if self.device_bf16.is_none() {
+                return Ok(self.clone());
+            }
+            #[cfg(not(feature = "cuda"))]
+            {
+                return Ok(self.clone());
+            }
+        }
+        #[cfg(feature = "cuda")]
+        if let Some(b) = &self.device_bf16 {
+            let y = super::ops::cast_bf16_f32_device(b.slice.as_ref())?;
+            return Self::from_dev_result(y, self.shape.clone());
+        }
+        Ok(Self::host_only(
+            self.host_cow()?.into_owned(),
+            self.shape.clone(),
+        ))
+    }
+
+    pub fn dtype(&self) -> TensorDType {
+        self.dtype
     }
 
     fn has_host(&self) -> bool {
@@ -236,15 +395,25 @@ impl CudaTensor {
     }
 
     /// Host values, downloading (without caching) when the tensor lives on device.
+    /// Always f32: a bf16 device buffer is widened (the host oracle).
     pub fn host_cow(&self) -> Result<Cow<'_, [f32]>> {
         #[cfg(feature = "cuda")]
         if !self.host_valid {
+            let dev = super::device::global_device()
+                .ok_or_else(|| msg("host_cow: device tensor but no global CUDA device"))?;
+            if let Some(buf) = &self.device_bf16 {
+                let v16 = dev
+                    .stream
+                    .memcpy_dtov(buf.slice.as_ref())
+                    .map_err(|e| msg(e.to_string()))?;
+                stats::record_d2h(v16.len());
+                let v: Vec<f32> = v16.iter().map(|x| x.to_f32()).collect();
+                return Ok(Cow::Owned(v));
+            }
             let buf = self
                 .device
                 .as_ref()
                 .ok_or_else(|| msg("tensor has neither host nor device data"))?;
-            let dev = super::device::global_device()
-                .ok_or_else(|| msg("host_cow: device tensor but no global CUDA device"))?;
             let v = dev
                 .stream
                 .memcpy_dtov(buf.slice.as_ref())
@@ -277,6 +446,7 @@ impl CudaTensor {
         #[cfg(feature = "cuda")]
         {
             self.device = None;
+            self.device_bf16 = None;
         }
         Ok(&mut self.data)
     }
@@ -284,16 +454,29 @@ impl CudaTensor {
     /// Upload when a device is expected and the tensor is host-only.
     pub fn ensure_device(&mut self) -> Result<()> {
         #[cfg(feature = "cuda")]
-        if self.device.is_none() && stats::device_expected() {
+        if self.device.is_none() && self.device_bf16.is_none() && stats::device_expected() {
             let dev = super::device::global_device().ok_or_else(|| msg("no global CUDA device"))?;
-            let slice = dev
-                .stream
-                .memcpy_stod(&self.data)
-                .map_err(|e| msg(e.to_string()))?;
-            stats::record_h2d(self.data.len());
-            self.device = Some(DeviceBuffer {
-                slice: std::sync::Arc::new(slice),
-            });
+            if self.dtype == TensorDType::Bf16 {
+                let host: Vec<half::bf16> =
+                    self.data.iter().map(|&v| half::bf16::from_f32(v)).collect();
+                let slice = dev
+                    .stream
+                    .memcpy_stod(&host)
+                    .map_err(|e| msg(e.to_string()))?;
+                stats::record_h2d(host.len() / 2);
+                self.device_bf16 = Some(DeviceBufferBf16 {
+                    slice: std::sync::Arc::new(slice),
+                });
+            } else {
+                let slice = dev
+                    .stream
+                    .memcpy_stod(&self.data)
+                    .map_err(|e| msg(e.to_string()))?;
+                stats::record_h2d(self.data.len());
+                self.device = Some(DeviceBuffer {
+                    slice: std::sync::Arc::new(slice),
+                });
+            }
         }
         Ok(())
     }
@@ -309,7 +492,7 @@ impl CudaTensor {
     pub fn pin_device(&mut self) -> Result<()> {
         self.ensure_device()?;
         #[cfg(feature = "cuda")]
-        if self.device.is_some() {
+        if self.device.is_some() || self.device_bf16.is_some() {
             self.data = Vec::new();
             self.host_valid = false;
         }
@@ -323,6 +506,10 @@ impl CudaTensor {
         if let Some(buf) = &self.device {
             return Ok(Some(DevRef::Borrowed(buf.slice.as_ref())));
         }
+        if let Some(buf) = &self.device_bf16 {
+            let y = super::ops::cast_bf16_f32_device(buf.slice.as_ref())?;
+            return Ok(Some(DevRef::Owned(y)));
+        }
         if !stats::device_expected() {
             return Ok(None);
         }
@@ -333,6 +520,22 @@ impl CudaTensor {
             .map_err(|e| msg(e.to_string()))?;
         stats::record_h2d(self.data.len());
         Ok(Some(DevRef::Owned(slice)))
+    }
+
+    /// Device bf16 view: borrowed when stored as bf16, else a temporary cast.
+    #[cfg(feature = "cuda")]
+    pub(crate) fn dev_bf16(
+        &self,
+    ) -> Result<Option<std::sync::Arc<cudarc::driver::CudaSlice<half::bf16>>>> {
+        if let Some(buf) = &self.device_bf16 {
+            return Ok(Some(buf.slice.clone()));
+        }
+        if let Some(src) = self.dev()? {
+            return Ok(Some(std::sync::Arc::new(super::ops::cast_f32_bf16_device(
+                &src,
+            )?)));
+        }
+        Ok(None)
     }
 
     /// Wrap an op result: device buffer, or host data.
@@ -782,7 +985,12 @@ impl CudaTensor {
     }
 
     pub fn add(&self, other: &CudaTensor) -> Result<CudaTensor> {
-        self.binary(other, BcastOp::Add)
+        let out = self.binary(other, BcastOp::Add)?;
+        if bf16_residual() {
+            out.quantize_bf16()
+        } else {
+            Ok(out)
+        }
     }
 
     pub fn sub(&self, other: &CudaTensor) -> Result<CudaTensor> {
@@ -1183,23 +1391,39 @@ impl CudaTensor {
         ))
     }
 
-    /// RMS norm over the last dim.
+    /// RMS norm over the last dim. With `FASTVIDEO_BF16_ACT`, activations are
+    /// rounded to bf16 and the mean-square accumulates in f32.
     pub fn rms_norm(&self, weight: &CudaTensor, eps: f32) -> Result<CudaTensor> {
-        let width = *self.shape.last().ok_or_else(|| msg("rms_norm on scalar"))?;
+        let x = if bf16_activations() {
+            self.quantize_bf16()?
+        } else {
+            self.clone()
+        };
+        let width = *x.shape.last().ok_or_else(|| msg("rms_norm on scalar"))?;
         if weight.numel() != width {
             return Err(msg("rms_norm weight size"));
         }
         #[cfg(feature = "cuda")]
-        if let (Some(a), Some(w)) = (self.dev()?, weight.dev()?) {
-            return Self::from_dev_result(
+        if let (Some(a), Some(w)) = (x.dev()?, weight.dev()?) {
+            let out = Self::from_dev_result(
                 super::ops::rms_norm_last_device(&a, &w, eps)?,
-                self.shape.clone(),
-            );
+                x.shape.clone(),
+            )?;
+            return if bf16_activations() {
+                out.quantize_bf16()
+            } else {
+                Ok(out)
+            };
         }
-        Ok(Self::host_only(
-            host::rms_norm_last(&self.host_cow()?, &weight.host_cow()?, eps),
-            self.shape.clone(),
-        ))
+        let out = Self::host_only(
+            host::rms_norm_last(&x.host_cow()?, &weight.host_cow()?, eps),
+            x.shape.clone(),
+        );
+        if bf16_activations() {
+            out.quantize_bf16()
+        } else {
+            Ok(out)
+        }
     }
 
     pub fn layer_norm(
@@ -1208,7 +1432,12 @@ impl CudaTensor {
         weight: Option<&CudaTensor>,
         bias: Option<&CudaTensor>,
     ) -> Result<CudaTensor> {
-        let width = *self
+        let src = if bf16_activations() {
+            self.quantize_bf16()?
+        } else {
+            self.clone()
+        };
+        let width = *src
             .shape
             .last()
             .ok_or_else(|| msg("layer_norm on scalar"))?;
@@ -1218,7 +1447,7 @@ impl CudaTensor {
             _ => return Err(msg("layer_norm needs both weight and bias, or neither")),
         };
         #[cfg(feature = "cuda")]
-        if let Some(a) = self.dev()? {
+        if let Some(a) = src.dev()? {
             let out = match affine {
                 Some((w, b)) => {
                     let (w, b) = (
@@ -1229,16 +1458,26 @@ impl CudaTensor {
                 }
                 None => super::ops::layer_norm_last_device(&a, None, width, eps)?,
             };
-            return Self::from_dev_result(out, self.shape.clone());
+            let out = Self::from_dev_result(out, src.shape.clone())?;
+            return if bf16_activations() {
+                out.quantize_bf16()
+            } else {
+                Ok(out)
+            };
         }
-        let x = self.host_cow()?;
+        let x = src.host_cow()?;
         let out = match affine {
             Some((w, b)) => {
                 host::layer_norm_last(&x, width, Some((&w.host_cow()?, &b.host_cow()?)), eps)
             }
             None => host::layer_norm_last(&x, width, None, eps),
         };
-        Ok(Self::host_only(out, self.shape.clone()))
+        let out = Self::host_only(out, src.shape.clone());
+        if bf16_activations() {
+            out.quantize_bf16()
+        } else {
+            Ok(out)
+        }
     }
 
     /// Add `bias` along `dim` (channel bias for NC… tensors, last dim for linears).
@@ -1838,6 +2077,21 @@ mod tests {
         x.pin_device().unwrap();
         x.host_mut().unwrap()[0] = 5.0;
         assert_eq!(x.host_cow().unwrap().as_ref(), &[5.0, 2.0]);
+    }
+
+    #[test]
+    fn dtype_defaults_to_f32_and_quantize_matches_half() {
+        let x = t(vec![0.1, -3.5, 1e-4, 12.25], &[4]);
+        assert_eq!(x.dtype(), TensorDType::F32);
+        let y = x.quantize_bf16().unwrap();
+        assert_eq!(y.dtype(), TensorDType::Bf16);
+        let got = y.host_cow().unwrap();
+        for (g, &v) in got.iter().zip(&x.data) {
+            assert_eq!(*g, half::bf16::from_f32(v).to_f32());
+        }
+        let back = y.to_f32_act().unwrap();
+        assert_eq!(back.dtype(), TensorDType::F32);
+        assert_eq!(&*back.host_cow().unwrap(), &*got);
     }
 
     #[test]
