@@ -2,6 +2,16 @@
 
 Project code: FVID
 
+### FVID · 2026-09-24 · FVID-2026-09-24-bf16-activations
+- Trigger: WS-I — DiT block activations still live as f32; H3 denoise is ~80% of a warm clip and the reference stores the stream as bf16
+- Options: keep residual + activations f32; bf16 activations with residual f32; bf16 activations and residual
+- Decision: **opt-in `FASTVIDEO_BF16_ACT=1`** (default off). `CudaTensor` is `f32 | bf16` (host oracle stays `Vec<f32>` rounded through `half::bf16`). Linears take/return bf16; rms/layer-norm and SDPA run on bf16 values with f32 accumulation. **Residual is bf16** — host one-block PSNR vs the f32 path: H3 **57.46 dB**, LTX-2.5 **51.64 dB**, Wan **51.12 dB** (gate ≥ 35 dB). `FASTVIDEO_BF16` (cuBLAS compute type) is unchanged.
+- Reason: residual-as-bf16 cleared the 35 dB host gate on all three tiny blocks, so the stream can stay in the activation dtype
+- Reversibility: cheap — flag defaults off; today's f32 path is bit-identical
+- Executed by: WS-I
+- ADR: none
+- Verification: **host pass**. `cargo test -p fastvideo-cudarc --lib --offline` — 342 passed. GPU H3 step time **unmeasured** (no GPU / no nvcc on this Mac).
+
 ### FVID · 2026-09-24 · FVID-2026-09-24-cosmos3-super-scaffold
 - Trigger: WS-J — 64B T2V Cosmos3-Super has no crate; Predict2 is EDM Video2World; Super needs FlowMatch + single-GPU NVFP4/FP8; upstream serves 4-GPU sequence parallel
 - Options: extend the Predict2 `cosmos` crate; new `cosmos3` scaffold with published canvas/TeaCache and `TODO(upstream)` DiT dims; invent Super widths from unpublished Predict2.5 notes
