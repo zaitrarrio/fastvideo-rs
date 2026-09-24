@@ -23,6 +23,7 @@ FV_LIBDIR="$WORK/fv-libs"
 # cudarc 0.17's cuDNN bindings require symbols newer than the cuDNN 9.1 that
 # PyTorch images ship (e.g. cudnnBackendPopulateCudaGraph); bootstrap installs
 # this pinned cuDNN into its own directory without touching the image's Python env.
+# Apt pins live in cuda-13.pins (nvrtc 13.0.88 / cublas 13.1.1.3 / cudnn 9.26.0.51).
 FV_CUDNN_VERSION="${FV_CUDNN_VERSION:-9.26.0.51}"
 FV_CUDNN_DIR="$WORK/fv-cudnn"
 FV_CUDNN_REQUIRED_SYMBOL="cudnnBackendPopulateCudaGraph"
@@ -193,7 +194,11 @@ fv_ensure_cuda13_libs() {
     dpkg -i /tmp/cuda-keyring.deb >/dev/null
     apt-get update -qq >/dev/null
   fi
-  apt-get install -y -qq --no-install-recommends cuda-nvrtc-13-0 libcublas-13-0 libcudnn9-cuda-13 >/dev/null
+  # shellcheck source=scripts/gpu/cuda-13.pins
+  . "$(dirname "${BASH_SOURCE[0]}")/cuda-13.pins"
+  apt-get install -y -qq --no-install-recommends --allow-downgrades --allow-change-held-packages \
+    "$CUDA_NVRTC_PKG" "$CUDA_CUBLAS_PKG" "$CUDA_CUDNN_PKG" >/dev/null
+  apt-mark hold cuda-nvrtc-13-0 libcublas-13-0 libcudnn9-cuda-13 >/dev/null
   ldconfig >/dev/null 2>&1 || true
   fv_setup_libs
 }

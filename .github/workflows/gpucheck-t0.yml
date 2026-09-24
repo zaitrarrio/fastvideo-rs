@@ -9,6 +9,7 @@ on:
       - "crates/fastvideo-cudarc/**"
       - "crates/fastvideo-gpucheck/**"
       - "scripts/gpu/**"
+      - "scripts/gpu/cuda-13.pins"
       - ".github/workflows/gpucheck-t0.yml"
 
 concurrency:
@@ -51,7 +52,10 @@ jobs:
           wget -q https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2204/x86_64/cuda-keyring_1.1-1_all.deb
           sudo dpkg -i cuda-keyring_1.1-1_all.deb
           sudo apt-get update -qq
-          sudo apt-get install -y -qq cuda-nvcc-13-0 cuda-nvrtc-13-0 cuda-nvrtc-dev-13-0
+          # shellcheck source=scripts/gpu/cuda-13.pins
+          . scripts/gpu/cuda-13.pins
+          sudo apt-get install -y -qq --allow-downgrades \
+            "$CUDA_NVCC_PKG" "$CUDA_NVRTC_PKG" "$CUDA_NVRTC_DEV_PKG"
       - name: Build with ahead-of-time cubins, then run both compile gates
         run: |
           cargo build --release -p fastvideo-gpucheck --features cuda 2>&1 | tee build.log

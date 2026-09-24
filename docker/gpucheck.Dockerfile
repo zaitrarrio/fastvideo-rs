@@ -12,19 +12,23 @@
 # binary   The binary + build id. Locally overridden with
 #          `--build-context binary=artifacts/gpucheck/dist` to reuse `docker.sh dist`.
 # runtime  What a GPU box runs (ghcr.io/zaitrarrio/fastvideo-rs-runtime): Ubuntu
-#          22.04 + only the CUDA 13.0 libraries cudarc loads (NVIDIA apt) +
+#          22.04 + pinned CUDA 13.0 libraries (scripts/gpu/cuda-13.pins) +
 #          rsync/ffmpeg/hf-fm + the binary and scripts. No Python, no PyTorch,
 #          no toolkit: hosts boot quickly.
 
 FROM ubuntu:22.04 AS builder
 ARG DEBIAN_FRONTEND=noninteractive
+COPY scripts/gpu/cuda-13.pins /etc/fastvideo/cuda-13.pins
 RUN apt-get update \
  && apt-get install -y --no-install-recommends \
       build-essential pkg-config libssl-dev clang curl wget ca-certificates git \
  && wget -q https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2204/x86_64/cuda-keyring_1.1-1_all.deb \
  && dpkg -i cuda-keyring_1.1-1_all.deb && rm cuda-keyring_1.1-1_all.deb \
  && apt-get update \
- && apt-get install -y --no-install-recommends cuda-nvcc-13-0 cuda-nvrtc-13-0 cuda-nvrtc-dev-13-0 \
+ && . /etc/fastvideo/cuda-13.pins \
+ && apt-get install -y --no-install-recommends --allow-downgrades \
+      "$CUDA_NVCC_PKG" "$CUDA_NVRTC_PKG" "$CUDA_NVRTC_DEV_PKG" \
+ && apt-mark hold cuda-nvcc-13-0 cuda-nvrtc-13-0 cuda-nvrtc-dev-13-0 \
  && rm -rf /var/lib/apt/lists/*
 ENV RUSTUP_HOME=/usr/local/rustup \
     CARGO_HOME=/usr/local/cargo \
@@ -65,28 +69,31 @@ COPY --from=build /out/ /
 
 FROM ubuntu:22.04 AS runtime
 ARG DEBIAN_FRONTEND=noninteractive
-# CUDA 13.0 runtime libraries from NVIDIA's apt repo. 13.0 needs a >= 580
-# driver; validate.sh's offer filter asks Vast for cuda_vers>=13.0. No Python:
-# weights come through hf-fm (baked below).
+# CUDA 13.0 runtime libraries from NVIDIA's apt repo, versions pinned in
+# scripts/gpu/cuda-13.pins. 13.0 needs a >= 580 driver; validate.sh's offer
+# filter asks Vast for cuda_vers>=13.0. No Python: weights come through hf-fm.
+COPY scripts/gpu/cuda-13.pins /etc/fastvideo/cuda-13.pins
 RUN apt-get update \
  && apt-get install -y --no-install-recommends \
       rsync ffmpeg openssh-server ca-certificates curl wget binutils \
  && wget -q https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2204/x86_64/cuda-keyring_1.1-1_all.deb \
  && dpkg -i cuda-keyring_1.1-1_all.deb && rm cuda-keyring_1.1-1_all.deb \
  && apt-get update \
- && apt-get install -y --no-install-recommends cuda-nvrtc-13-0 libcublas-13-0 libcudnn9-cuda-13 \
+ && . /etc/fastvideo/cuda-13.pins \
+ && apt-get install -y --no-install-recommends --allow-downgrades \
+      "$CUDA_NVRTC_PKG" "$CUDA_CUBLAS_PKG" "$CUDA_CUDNN_PKG" \
+ && apt-mark hold cuda-nvrtc-13-0 libcublas-13-0 libcudnn9-cuda-13 \
  && rm -rf /var/lib/apt/lists/* \
  && echo /usr/local/cuda-13.0/lib64 > /etc/ld.so.conf.d/fastvideo-nvidia.conf \
  && ldconfig \
- && bash -lc 'for lib in libcudnn libcublas libcublasLt libnvrtc; do
-      src=$(ls /lib/x86_64-linux-gnu/${lib}.so.* /usr/lib/x86_64-linux-gnu/${lib}.so.* \
-               /usr/local/cuda-13.0/lib64/${lib}.so.* \
-               /usr/local/cuda/targets/x86_64-linux/lib/${lib}.so.* 2>/dev/null | head -1 || true)
-      if [ -n "$src" ]; then
-        dir=$(dirname "$src")
-        if [ ! -e "$dir/${lib}.so" ]; then ln -s "$(basename "$src")" "$dir/${lib}.so"; fi
-      fi
-    done' \
+ && . /etc/fastvideo/cuda-13.pins \
+ && for soname in "$CUDA_NVRTC_SONAME" "$CUDA_CUBLAS_SONAME" "$CUDA_CUBLASLT_SONAME" "$CUDA_CUDNN_SONAME"; do
+      src=$(ldconfig -p | awk -v n="$soname" '$1 == n { print $NF; exit }')
+      test -n "$src" && test -e "$src"
+      dir=$(dirname "$src")
+      unversioned="${soname%.so.*}.so"
+      if [ ! -e "$dir/$unversioned" ]; then ln -s "$soname" "$dir/$unversioned"; fi
+    done \
  && ldconfig \
  && ldconfig -p | grep -E 'libnvrtc\.so|libcublasLt\.so|libcublas\.so|libcudnn\.so' \
  && mkdir -p /run/sshd

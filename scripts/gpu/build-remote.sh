@@ -17,6 +17,8 @@
 set -euo pipefail
 # shellcheck source=scripts/gpu/lib.sh
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
+# shellcheck source=scripts/gpu/cuda-13.pins
+source "$(dirname "${BASH_SOURCE[0]}")/cuda-13.pins"
 # Rental helpers (offers, create_instance, wait_ready, cleanup) without dispatch.
 FV_SOURCE_ONLY=1 source "$(dirname "${BASH_SOURCE[0]}")/validate.sh"
 # validate.sh pulls a validation output dir after stages and on exit; a build
@@ -58,14 +60,16 @@ done
 [[ -n "$INSTANCE" && -n "$HOST" ]] || die "no build box came up"
 
 log "installing CUDA 13.0 nvcc + Rust (same recipe as docker/cuda-builder.Dockerfile)"
-fv_ssh "$HOST" "$PORT" 'set -euo pipefail; export DEBIAN_FRONTEND=noninteractive
-  apt-get update -qq && apt-get install -y -qq --no-install-recommends \
+fv_ssh "$HOST" "$PORT" "set -euo pipefail; export DEBIAN_FRONTEND=noninteractive
+  apt-get update -qq && apt-get install -y -qq --no-install-recommends \\
     build-essential pkg-config libssl-dev clang curl wget ca-certificates git rsync >/dev/null
   wget -q https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2204/x86_64/cuda-keyring_1.1-1_all.deb
   dpkg -i cuda-keyring_1.1-1_all.deb >/dev/null && rm cuda-keyring_1.1-1_all.deb
-  apt-get update -qq && apt-get install -y -qq --no-install-recommends cuda-nvcc-13-0 cuda-nvrtc-13-0 cuda-nvrtc-dev-13-0 >/dev/null
-  curl --proto "=https" --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain stable >/dev/null
-  /usr/local/cuda-13.0/bin/nvcc --version | tail -1; ~/.cargo/bin/rustc --version'
+  apt-get update -qq && apt-get install -y -qq --no-install-recommends --allow-downgrades \\
+    $CUDA_NVCC_PKG $CUDA_NVRTC_PKG $CUDA_NVRTC_DEV_PKG >/dev/null
+  apt-mark hold cuda-nvcc-13-0 cuda-nvrtc-13-0 cuda-nvrtc-dev-13-0 >/dev/null
+  curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain stable >/dev/null
+  /usr/local/cuda-13.0/bin/nvcc --version | tail -1; ~/.cargo/bin/rustc --version"
 
 log "syncing source (git-tracked files only)"
 # rsync creates the last path component only; a bare ubuntu image has no

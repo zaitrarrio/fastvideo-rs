@@ -20,13 +20,17 @@ ARG VAST_PYTORCH_IMAGE=vastai/pytorch:cuda-13.0.3-auto
 # ---- compile stages (same shape as docker/gpucheck.Dockerfile) -------------------
 FROM ubuntu:22.04 AS builder
 ARG DEBIAN_FRONTEND=noninteractive
+COPY scripts/gpu/cuda-13.pins /etc/fastvideo/cuda-13.pins
 RUN apt-get update \
  && apt-get install -y --no-install-recommends \
       build-essential pkg-config libssl-dev clang curl wget ca-certificates git \
  && wget -q https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2204/x86_64/cuda-keyring_1.1-1_all.deb \
  && dpkg -i cuda-keyring_1.1-1_all.deb && rm cuda-keyring_1.1-1_all.deb \
  && apt-get update \
- && apt-get install -y --no-install-recommends cuda-nvcc-13-0 cuda-nvrtc-13-0 cuda-nvrtc-dev-13-0 \
+ && . /etc/fastvideo/cuda-13.pins \
+ && apt-get install -y --no-install-recommends --allow-downgrades \
+      "$CUDA_NVCC_PKG" "$CUDA_NVRTC_PKG" "$CUDA_NVRTC_DEV_PKG" \
+ && apt-mark hold cuda-nvcc-13-0 cuda-nvrtc-13-0 cuda-nvrtc-dev-13-0 \
  && rm -rf /var/lib/apt/lists/*
 ENV RUSTUP_HOME=/usr/local/rustup \
     CARGO_HOME=/usr/local/cargo \
@@ -71,6 +75,7 @@ ARG BUILD_ID=unknown
 # /venv/main; remote.sh clears LD_LIBRARY_PATH for python oracles so the two
 # never mix. gcc is for Triton's first-import driver shim.
 USER root
+COPY scripts/gpu/cuda-13.pins /etc/fastvideo/cuda-13.pins
 RUN apt-get update \
  && apt-get install -y --no-install-recommends \
       rsync ffmpeg openssh-server ca-certificates curl wget binutils \
@@ -81,8 +86,10 @@ RUN apt-get update \
       && dpkg -i /tmp/cuda-keyring.deb && rm /tmp/cuda-keyring.deb \
       && apt-get update; \
     fi \
- && apt-get install -y --no-install-recommends \
-      cuda-nvrtc-13-0 libcublas-13-0 libcudnn9-cuda-13 \
+ && . /etc/fastvideo/cuda-13.pins \
+ && apt-get install -y --no-install-recommends --allow-downgrades --allow-change-held-packages \
+      "$CUDA_NVRTC_PKG" "$CUDA_CUBLAS_PKG" "$CUDA_CUDNN_PKG" \
+ && apt-mark hold cuda-nvrtc-13-0 libcublas-13-0 libcudnn9-cuda-13 \
  && rm -rf /var/lib/apt/lists/* \
  && echo /usr/local/cuda-13.0/lib64 > /etc/ld.so.conf.d/fastvideo-nvidia.conf \
  && ldconfig \

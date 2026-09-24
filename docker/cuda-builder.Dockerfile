@@ -4,13 +4,17 @@
 FROM ubuntu:22.04
 
 ENV DEBIAN_FRONTEND=noninteractive
+COPY scripts/gpu/cuda-13.pins /etc/fastvideo/cuda-13.pins
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential cmake pkg-config git curl wget ca-certificates \
     libssl-dev clang libclang-dev \
     && wget -q https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2204/x86_64/cuda-keyring_1.1-1_all.deb \
     && dpkg -i cuda-keyring_1.1-1_all.deb && rm cuda-keyring_1.1-1_all.deb \
     && apt-get update \
-    && apt-get install -y --no-install-recommends cuda-nvcc-13-0 cuda-nvrtc-13-0 cuda-nvrtc-dev-13-0 \
+    && . /etc/fastvideo/cuda-13.pins \
+    && apt-get install -y --no-install-recommends --allow-downgrades \
+         "$CUDA_NVCC_PKG" "$CUDA_NVRTC_PKG" "$CUDA_NVRTC_DEV_PKG" \
+    && apt-mark hold cuda-nvcc-13-0 cuda-nvrtc-13-0 cuda-nvrtc-dev-13-0 \
     && rm -rf /var/lib/apt/lists/*
 
 ENV RUSTUP_HOME=/usr/local/rustup \

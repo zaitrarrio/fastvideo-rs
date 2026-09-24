@@ -14,16 +14,18 @@ SEED="${FV_SEED:-1024}"
 export PATH="/opt/fastvideo-rs/target/release:/usr/local/bin:/usr/local/cuda/bin:${PATH:-}"
 unset FASTVIDEO_LTX2_WEIGHTS
 mkdir -p "$RUNS" "$WORK/gpucheck-out/logs" "$WORK/fv-libs"
-# cudarc looks for libcudnn.so (unversioned). The image ships libcudnn.so.9.
+# shellcheck source=scripts/gpu/cuda-13.pins
+. "$(dirname "${BASH_SOURCE[0]}")/cuda-13.pins"
+# cudarc looks for libcudnn.so (unversioned). The image ships the pinned SONAME.
 if [[ ! -e $WORK/fv-libs/libcudnn.so ]]; then
   bash /opt/fastvideo-rs/scripts/gpu/remote.sh env >/tmp/fv-env.json 2>/tmp/fv-env.err || true
 fi
 if [[ ! -e $WORK/fv-libs/libcudnn.so ]]; then
   for spec in \
-    "cudnn:/lib/x86_64-linux-gnu/libcudnn.so.9" \
-    "cublas:/usr/local/cuda/targets/x86_64-linux/lib/libcublas.so.13" \
-    "cublasLt:/usr/local/cuda/targets/x86_64-linux/lib/libcublasLt.so.13" \
-    "nvrtc:/usr/local/cuda/targets/x86_64-linux/lib/libnvrtc.so.13"; do
+    "cudnn:/lib/x86_64-linux-gnu/${CUDA_CUDNN_SONAME}" \
+    "cublas:/usr/local/cuda/targets/x86_64-linux/lib/${CUDA_CUBLAS_SONAME}" \
+    "cublasLt:/usr/local/cuda/targets/x86_64-linux/lib/${CUDA_CUBLASLT_SONAME}" \
+    "nvrtc:/usr/local/cuda/targets/x86_64-linux/lib/${CUDA_NVRTC_SONAME}"; do
     name="${spec%%:*}"
     src="${spec#*:}"
     [[ -e "$src" ]] && ln -sf "$(readlink -f "$src")" "$WORK/fv-libs/lib${name}.so"

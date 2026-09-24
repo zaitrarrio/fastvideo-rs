@@ -38,14 +38,14 @@ require_docker() {
 
 # Hash of everything that affects the binary (sources + builder image/profile).
 fv_build_id() {
-  (cd "$FV_ROOT" && git ls-files -z -co --exclude-standard -- crates Cargo.toml Cargo.lock rust-toolchain.toml docker/gpucheck.Dockerfile docker/vast-pytorch.Dockerfile \
+  (cd "$FV_ROOT" && git ls-files -z -co --exclude-standard -- crates Cargo.toml Cargo.lock rust-toolchain.toml docker/gpucheck.Dockerfile docker/vast-pytorch.Dockerfile scripts/gpu/cuda-13.pins \
     | LC_ALL=C sort -z | xargs -0 shasum -a 256 | shasum -a 256 | cut -c1-16)
 }
 
 cmd_builder() {
   require_docker
   log "building $BUILDER_IMAGE"
-  docker build --platform "$PLATFORM" -f "$DOCKERFILE" --target builder -t "$BUILDER_IMAGE" "$FV_ROOT/docker" >&2
+  docker build --platform "$PLATFORM" -f "$DOCKERFILE" --target builder -t "$BUILDER_IMAGE" "$FV_ROOT" >&2
 }
 
 # in_builder <bash command>: repo bind-mounted at /src (with .env masked),

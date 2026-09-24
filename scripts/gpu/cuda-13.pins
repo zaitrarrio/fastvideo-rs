@@ -1,0 +1,13 @@
+# NVIDIA Ubuntu 22.04 apt pins for CUDA 13.0 + cuDNN 9.
+# Verified 2026-09-19 (kernels on RTX 3060): nvrtc 13.0.88 / cuBLAS 13.1.1 / cuDNN 9.26.
+# cudarc (CUDARC_CUDA_VERSION=13000) dlopens libnvrtc.so[.13], libcublas.so[.13],
+# libcublasLt.so[.13], and libcudnn.so[.9].
+CUDA_NVCC_PKG=cuda-nvcc-13-0=13.0.88-1
+CUDA_NVRTC_PKG=cuda-nvrtc-13-0=13.0.88-1
+CUDA_NVRTC_DEV_PKG=cuda-nvrtc-dev-13-0=13.0.88-1
+CUDA_CUBLAS_PKG=libcublas-13-0=13.1.1.3-1
+CUDA_CUDNN_PKG=libcudnn9-cuda-13=9.26.0.51-1
+CUDA_NVRTC_SONAME=libnvrtc.so.13
+CUDA_CUBLAS_SONAME=libcublas.so.13
+CUDA_CUBLASLT_SONAME=libcublasLt.so.13
+CUDA_CUDNN_SONAME=libcudnn.so.9

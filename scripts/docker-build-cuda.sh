@@ -14,7 +14,7 @@ docker build \
   --platform "$PLATFORM" \
   -f docker/cuda-builder.Dockerfile \
   -t "$IMAGE" \
-  docker/
+  .
 
 docker run --rm \
   --platform "$PLATFORM" \
