@@ -131,7 +131,7 @@ fv_ref_key() {
 
 fv_ssh() {
   local host="$1" port="$2"; shift 2
-  ssh -i "$FV_SSH_KEY" -p "$port" "${FV_SSH_OPTS[@]}" "root@$host" "$@"
+  ssh -n -i "$FV_SSH_KEY" -p "$port" "${FV_SSH_OPTS[@]}" "root@$host" "$@"
 }
 
 fv_rsync_to() {

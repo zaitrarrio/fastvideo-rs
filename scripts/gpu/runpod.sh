@@ -83,7 +83,7 @@ rp_pubkey() {
 
 rp_ssh() {
   local host="$1" port="$2"; shift 2
-  ssh -i "$RP_SSH_KEY" -p "$port" -o IdentitiesOnly=yes "${FV_SSH_OPTS[@]}" "root@$host" "$@"
+  ssh -n -i "$RP_SSH_KEY" -p "$port" -o IdentitiesOnly=yes "${FV_SSH_OPTS[@]}" "root@$host" "$@"
 }
 
 rp_rsync() {
@@ -95,7 +95,12 @@ rp_pod_ssh_target() {
   local id="$1" raw host port
   raw="$(rp_rest GET "/pods/${id}" 2>/dev/null || true)"
   host="$(jq -r '.publicIp // empty' <<<"${raw:-}" 2>/dev/null || true)"
-  port="$(jq -r '[.runtime.ports[]? | select(.privatePort==22)][0].publicPort // empty' <<<"${raw:-}" 2>/dev/null || true)"
+  port="$(jq -r '
+    (.portMappings["22"] // .portMappings."22" // empty) as $pm
+    | if $pm != "" then $pm
+      else [.runtime.ports[]? | select(.privatePort==22)][0].publicPort // empty
+      end
+  ' <<<"${raw:-}" 2>/dev/null || true)"
   if [[ -z "$host" || -z "$port" || "$host" == "null" ]]; then
     raw="$(rp_gql 'query { myself { pods { id runtime { ports { ip isIpPublic privatePort publicPort type } } } } }')"
     host="$(jq -r --arg id "$id" '.data.myself.pods[] | select(.id==$id) | [.runtime.ports[]? | select(.privatePort==22 and .isIpPublic==true)][0].ip // empty' <<<"$raw")"
@@ -258,7 +263,7 @@ rp_create_cpu_pod() {
       networkVolumeId: $vol,
       volumeMountPath: "/workspace",
       ports: ["22/tcp"],
-      dockerStartCmd: ["/bin/bash","-lc","mkdir -p /root/.ssh /run/sshd; printf '%s\\n' \"$PUBLIC_KEY\" >> /root/.ssh/authorized_keys; chmod 700 /root/.ssh; chmod 600 /root/.ssh/authorized_keys; /usr/sbin/sshd; exec sleep infinity"],
+      dockerStartCmd: ["/bin/bash","-lc","mkdir -p /root/.ssh /run/sshd; printf \"%s\\n\" \"$PUBLIC_KEY\" >> /root/.ssh/authorized_keys; chmod 700 /root/.ssh; chmod 600 /root/.ssh/authorized_keys; /usr/sbin/sshd; exec sleep infinity"],
       env: {
         PUBLIC_KEY: $pubkey,
         HF_TOKEN: $hf,
@@ -290,7 +295,7 @@ rp_remote_fetch_all() {
   local host="$1" port="$2"
   # Upload current remote.sh so fetch/wait-weights match this tree.
   rp_ssh "$host" "$port" "mkdir -p /opt/fastvideo-rs/scripts/gpu $WEIGHTS $MOUNT/runs $MOUNT/gpucheck-out/logs"
-  fv_rsync_to "$host" "$port" "$FV_ROOT/scripts/gpu/" "/opt/fastvideo-rs/scripts/gpu/" --exclude '.env*'
+  rp_rsync "$host" "$port" "$FV_ROOT/scripts/gpu/" "/opt/fastvideo-rs/scripts/gpu/" --exclude '.env*'
   rp_ssh "$host" "$port" "command -v hf-fm || command -v hf-fetch-model" >/dev/null \
     || die "hf-fm missing on fetch pod — image pull may have failed"
   rp_log "cpu fetch start (hf-fm) mount=$WEIGHTS"
@@ -399,6 +404,34 @@ cmd_fetch() {
   fi
   rp_remote_fetch_all "$host" "$port"
   rp_verify_remote "$host" "$port"
+  jq -n --arg vol "$vol" --arg dc "$dc" --arg at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+    '{volume:$vol, datacenter:$dc, ready_at:$at, status:"ready"}' >"$(rp_volume_ready_file)"
+  rp_log "volume ready  id=$vol  dc=$dc"
+  rp_log "destroying CPU fetch pod $pod"
+  rp_destroy_pod "$pod"
+  rp_log "fetch PASS — GPU pods may start"
+}
+
+cmd_fetch_continue() {
+  require_tools curl jq ssh rsync python3
+  rp_load_key
+  local pod host port
+  pod="$(cat "$RP_STATE/fetch-pod.id" 2>/dev/null || true)"
+  [[ -n "$pod" ]] || die "no fetch pod id; run fetch"
+  if [[ -f "$RP_STATE/fetch-ssh" ]]; then
+    read -r host port <"$RP_STATE/fetch-ssh"
+  else
+    read -r host port < <(rp_wait_ssh "$pod" 900)
+    echo "$host $port" >"$RP_STATE/fetch-ssh"
+  fi
+  rp_log "▶ fetch-continue: pod $pod root@$host:$port"
+  rp_seed_token "$host" "$port"
+  rp_remote_fetch_all "$host" "$port"
+  rp_verify_remote "$host" "$port"
+  local vol dc
+  vol="$(jq -r '.id // empty' "$RP_STATE/volume.json" 2>/dev/null || true)"
+  [[ -n "$vol" ]] || vol="$(rp_find_or_create_volume)"
+  dc="$(rp_volume_dc "$vol")"
   jq -n --arg vol "$vol" --arg dc "$dc" --arg at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
     '{volume:$vol, datacenter:$dc, ready_at:$at, status:"ready"}' >"$(rp_volume_ready_file)"
   rp_log "volume ready  id=$vol  dc=$dc"
@@ -585,6 +618,7 @@ usage() { sed -n '2,12p' "$0" | sed 's/^# \{0,1\}//'; exit 2; }
 
 case "${1:-}" in
   fetch) shift; cmd_fetch "$@" ;;
+  fetch-continue) cmd_fetch_continue ;;
   verify) cmd_verify ;;
   gpu) cmd_gpu ;;
   status) cmd_status ;;
