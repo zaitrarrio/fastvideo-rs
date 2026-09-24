@@ -2633,3 +2633,285 @@ mod swiglu {
         }
     }
 }
+
+// ==== region: moe ====
+
+/// Real-interleaved RoPE matching `fastvideo_models::cosmos::apply_rope_real`.
+pub fn rope_real_host(
+    x: &[f32],
+    cos: &[f32],
+    sin: &[f32],
+    batch: usize,
+    heads: usize,
+    seq: usize,
+    dim: usize,
+) -> Vec<f32> {
+    fastvideo_models::cosmos::apply_rope_real(x, cos, sin, batch, heads, seq, dim)
+}
+
+/// Per-row top-k. Ties keep the earlier expert. `norm` L1-normalizes the k values.
+pub fn topk_last_host(scores: &[f32], width: usize, k: usize, norm: bool) -> (Vec<u32>, Vec<f32>) {
+    assert!(width > 0 && k > 0 && k <= width && scores.len() % width == 0);
+    let rows = scores.len() / width;
+    let mut idx = vec![0u32; rows * k];
+    let mut val = vec![0f32; rows * k];
+    for row in 0..rows {
+        let src = &scores[row * width..][..width];
+        let oi = &mut idx[row * k..][..k];
+        let ov = &mut val[row * k..][..k];
+        ov.fill(f32::NEG_INFINITY);
+        oi.fill(0);
+        for (e, &v) in src.iter().enumerate() {
+            let mut slot = k;
+            for t in 0..k {
+                if v > ov[t] {
+                    slot = t;
+                    break;
+                }
+            }
+            if slot == k {
+                continue;
+            }
+            for t in (slot + 1..k).rev() {
+                ov[t] = ov[t - 1];
+                oi[t] = oi[t - 1];
+            }
+            ov[slot] = v;
+            oi[slot] = e as u32;
+        }
+        if norm {
+            let z = ov.iter().sum::<f32>().max(1e-20);
+            for w in ov.iter_mut() {
+                *w /= z;
+            }
+        }
+    }
+    (idx, val)
+}
+
+/// `out[idx[r], :] += src[r, :] * weight[r]`.
+pub fn scatter_add_rows_host(
+    base: &[f32],
+    src: &[f32],
+    idx: &[u32],
+    weights: &[f32],
+    d: usize,
+) -> Vec<f32> {
+    let mut out = base.to_vec();
+    for (r, (&i, &w)) in idx.iter().zip(weights).enumerate() {
+        let dst = (i as usize) * d;
+        let s = r * d;
+        for j in 0..d {
+            out[dst + j] += src[s + j] * w;
+        }
+    }
+    out
+}
+
+#[cfg(feature = "cuda")]
+fn moe_kernel_src() -> String {
+    const ALL: &str = include_str!("kernels.cu");
+    let start = ALL
+        .find("// ==== region: moe ====")
+        .expect("kernels.cu moe region");
+    let end = ALL
+        .find("// ==== end region: moe ====")
+        .expect("kernels.cu moe end");
+    format!(
+        "#ifndef IDX\n#define IDX() ((long)blockIdx.x * (long)blockDim.x + (long)threadIdx.x)\n#endif\n{}",
+        &ALL[start..end]
+    )
+}
+
+#[cfg(feature = "cuda")]
+struct MoeKernels {
+    _module: std::sync::Arc<cudarc::driver::CudaModule>,
+    rope_real: cudarc::driver::CudaFunction,
+    sigmoid_f: cudarc::driver::CudaFunction,
+    copy_f: cudarc::driver::CudaFunction,
+    topk_last: cudarc::driver::CudaFunction,
+    scatter_add_rows: cudarc::driver::CudaFunction,
+}
+
+#[cfg(feature = "cuda")]
+fn moe_kernels() -> Result<std::rc::Rc<MoeKernels>> {
+    thread_local! {
+        static CELL: std::cell::RefCell<Option<std::rc::Rc<MoeKernels>>> =
+            const { std::cell::RefCell::new(None) };
+    }
+    CELL.with(|c| {
+        if let Some(k) = c.borrow().as_ref() {
+            return Ok(k.clone());
+        }
+        let loaded = load_moe_kernels()?;
+        *c.borrow_mut() = Some(loaded.clone());
+        Ok(loaded)
+    })
+}
+
+#[cfg(feature = "cuda")]
+fn load_moe_kernels() -> Result<std::rc::Rc<MoeKernels>> {
+    use cudarc::nvrtc::{compile_ptx_with_opts, CompileOptions};
+    let dev = ctx()?;
+    let src = moe_kernel_src();
+    let mut last = None;
+    let mut ptx = None;
+    for arch in super::hopper::nvrtc_arches(dev.sm_major, dev.sm_minor) {
+        let opts = CompileOptions {
+            arch: Some(arch),
+            use_fast_math: Some(true),
+            ftz: Some(true),
+            ..Default::default()
+        };
+        match compile_ptx_with_opts(&src, opts) {
+            Ok(p) => {
+                ptx = Some(p);
+                break;
+            }
+            Err(e) => last = Some(format!("arch={arch}: {e}")),
+        }
+    }
+    let ptx = ptx.ok_or_else(|| {
+        err(format!(
+            "moe nvrtc: {}",
+            last.unwrap_or_else(|| "no candidate arch".into())
+        ))
+    })?;
+    let module = dev.ctx.load_module(ptx).map_err(err)?;
+    Ok(std::rc::Rc::new(MoeKernels {
+        rope_real: module.load_function("rope_real").map_err(err)?,
+        sigmoid_f: module.load_function("sigmoid_f").map_err(err)?,
+        copy_f: module.load_function("copy_f").map_err(err)?,
+        topk_last: module.load_function("topk_last").map_err(err)?,
+        scatter_add_rows: module.load_function("scatter_add_rows").map_err(err)?,
+        _module: module,
+    }))
+}
+
+/// Real-interleaved RoPE over `[B, H, S, D]` with `[S, D]` tables.
+#[cfg(feature = "cuda")]
+pub fn rope_real_device(
+    x: &CudaSlice<f32>,
+    cos: &CudaSlice<f32>,
+    sin: &CudaSlice<f32>,
+    s: usize,
+    d: usize,
+) -> Result<CudaSlice<f32>> {
+    let dev = ctx()?;
+    if d == 0 || d % 2 != 0 || cos.len() != s * d || sin.len() != s * d || x.len() % (s * d) != 0 {
+        return Err(err(format!(
+            "rope_real: x {} for S={s} D={d}, tables {}",
+            x.len(),
+            cos.len()
+        )));
+    }
+    let fns = moe_kernels()?;
+    let (n, s_i, d_i) = (x.len() as i64, s as i64, d as i64);
+    let mut out = alloc(x.len())?;
+    launch!(dev.stream, &fns.rope_real, cfg_n(x.len()); x, cos, sin, &mut out, &s_i, &d_i, &n)
+        .map_err(err)?;
+    Ok(out)
+}
+
+#[cfg(feature = "cuda")]
+pub fn sigmoid_device(a: &CudaSlice<f32>) -> Result<CudaSlice<f32>> {
+    let dev = ctx()?;
+    let fns = moe_kernels()?;
+    let n = a.len() as i64;
+    let mut out = alloc(a.len().max(1))?;
+    launch!(dev.stream, &fns.sigmoid_f, cfg_n(a.len()); a, &mut out, &n).map_err(err)?;
+    Ok(out)
+}
+
+/// Device top-k; copies the small index/value tables back for host grouping.
+#[cfg(feature = "cuda")]
+pub fn topk_last_device(
+    scores: &CudaSlice<f32>,
+    width: usize,
+    k: usize,
+    norm: bool,
+) -> Result<(Vec<u32>, Vec<f32>)> {
+    check(
+        "topk_last",
+        width > 0 && k > 0 && k <= width && scores.len() % width == 0,
+    )?;
+    let dev = ctx()?;
+    let fns = moe_kernels()?;
+    let rows = scores.len() / width;
+    let (rows_i, width_i, k_i, norm_i) = (rows as i32, width as i32, k as i32, i32::from(norm));
+    let mut idx = unsafe { dev.stream.alloc::<u32>(rows * k) }.map_err(err)?;
+    let mut val = alloc(rows * k)?;
+    let cfg = LaunchConfig {
+        grid_dim: (rows.max(1) as u32, 1, 1),
+        block_dim: (1, 1, 1),
+        shared_mem_bytes: 0,
+    };
+    launch!(dev.stream, &fns.topk_last, cfg; scores, &mut idx, &mut val, &rows_i, &width_i, &k_i, &norm_i)
+        .map_err(err)?;
+    let idx_h = dev.stream.memcpy_dtov(&idx).map_err(err)?;
+    let val_h = dev.stream.memcpy_dtov(&val).map_err(err)?;
+    super::stats::record_d2h(idx_h.len() + val_h.len());
+    Ok((idx_h, val_h))
+}
+
+/// Copy `base` then `out[idx[r], :] += src[r, :] * weight[r]`.
+#[cfg(feature = "cuda")]
+pub fn scatter_add_rows_device(
+    base: &CudaSlice<f32>,
+    src: &CudaSlice<f32>,
+    idx: &[u32],
+    weights: &[f32],
+    d: usize,
+) -> Result<CudaSlice<f32>> {
+    check(
+        "scatter_add_rows",
+        d > 0 && base.len() % d == 0 && src.len() == idx.len() * d && idx.len() == weights.len(),
+    )?;
+    let dev = ctx()?;
+    let fns = moe_kernels()?;
+    let mut out = alloc(base.len())?;
+    let n_base = base.len() as i64;
+    launch!(dev.stream, &fns.copy_f, cfg_n(base.len()); base, &mut out, &n_base).map_err(err)?;
+    if !idx.is_empty() {
+        let idx_d = dev.stream.memcpy_stod(idx).map_err(err)?;
+        let w_d = dev.stream.memcpy_stod(weights).map_err(err)?;
+        super::stats::record_h2d(idx.len() + weights.len());
+        let (n, d_i) = (idx.len() as i64, d as i64);
+        launch!(dev.stream, &fns.scatter_add_rows, cfg_n(src.len()); src, &idx_d, &w_d, &mut out, &n, &d_i)
+            .map_err(err)?;
+    }
+    Ok(out)
+}
+
+#[cfg(test)]
+mod moe {
+    #[test]
+    fn topk_last_keeps_earlier_ties_and_norms() {
+        let scores = vec![0.2, 0.5, 0.5, 0.1];
+        let (idx, val) = super::topk_last_host(&scores, 4, 2, true);
+        assert_eq!(idx, vec![1, 2]);
+        let z = 0.5 + 0.5;
+        assert!((val[0] - 0.5 / z).abs() < 1e-6);
+        assert!((val[1] - 0.5 / z).abs() < 1e-6);
+    }
+
+    #[test]
+    fn scatter_add_rows_accumulates_weighted_rows() {
+        let base = vec![1.0, 0.0, 0.0, 0.0];
+        let src = vec![2.0, 3.0];
+        let got = super::scatter_add_rows_host(&base, &src, &[1], &[0.5], 2);
+        assert_eq!(got, vec![1.0, 0.0, 1.0, 1.5]);
+    }
+
+    #[test]
+    fn rope_real_host_matches_cosmos() {
+        let (b, h, s, d) = (1usize, 2, 3, 4);
+        let x: Vec<f32> = (0..b * h * s * d).map(|i| i as f32 * 0.1).collect();
+        let cos: Vec<f32> = (0..s * d).map(|i| (i as f32 * 0.2).cos()).collect();
+        let sin: Vec<f32> = (0..s * d).map(|i| (i as f32 * 0.2).sin()).collect();
+        let got = super::rope_real_host(&x, &cos, &sin, b, h, s, d);
+        let want = fastvideo_models::cosmos::apply_rope_real(&x, &cos, &sin, b, h, s, d);
+        assert_eq!(got, want);
+    }
+}
+// ==== end region: moe ====

@@ -94,7 +94,7 @@ impl Attn {
         &self,
         hidden: &CudaTensor,
         encoder: Option<&CudaTensor>,
-        rope: Option<(&Vec<f32>, &Vec<f32>)>,
+        rope: Option<(&CudaTensor, &CudaTensor)>,
     ) -> Result<CudaTensor> {
         let [b, s, _] = match hidden.shape[..] {
             [b, s, d] => [b, s, d],
@@ -118,12 +118,8 @@ impl Attn {
         q = rms_heads(&q, &self.q_norm, self.eps)?;
         k = rms_heads(&k, &self.k_norm, self.eps)?;
         if let Some((cos, sin)) = rope {
-            let qh = q.host_cow()?;
-            let kh = k.host_cow()?;
-            let qr = apply_rope_real(&qh, cos, sin, b, self.heads, s, self.head_dim);
-            let kr = apply_rope_real(&kh, cos, sin, b, self.heads, ks, self.head_dim);
-            q = CudaTensor::from_vec(qr, q.shape.clone())?.to_device()?;
-            k = CudaTensor::from_vec(kr, k.shape.clone())?.to_device()?;
+            q = rope_real(&q, cos, sin, b, self.heads, s, self.head_dim)?;
+            k = rope_real(&k, cos, sin, b, self.heads, ks, self.head_dim)?;
         }
         let attn = nn::scaled_dot_product_attention(&q, &k, &v, None)?;
         let out = attn
@@ -131,6 +127,36 @@ impl Attn {
             .reshape(vec![b, s, self.heads * self.head_dim])?;
         self.to_out.forward(&out)
     }
+}
+
+/// Real-interleaved RoPE on `[B, H, S, D]` with `[S, D]` tables.
+fn rope_real(
+    x: &CudaTensor,
+    cos: &CudaTensor,
+    sin: &CudaTensor,
+    batch: usize,
+    heads: usize,
+    seq: usize,
+    dim: usize,
+) -> Result<CudaTensor> {
+    #[cfg(feature = "cuda")]
+    if let (Some(xv), Some(c), Some(sn)) = (x.dev()?, cos.dev()?, sin.dev()?) {
+        return CudaTensor::from_device_slice(
+            crate::wan::ops::rope_real_device(&xv, &c, &sn, seq, dim)?,
+            x.shape.clone(),
+        );
+    }
+    crate::wan::stats::host_fallback("rope_real", format_args!("{:?}", x.shape))?;
+    let out = apply_rope_real(
+        &x.host_cow()?,
+        &cos.host_cow()?,
+        &sin.host_cow()?,
+        batch,
+        heads,
+        seq,
+        dim,
+    );
+    CudaTensor::from_vec(out, x.shape.clone())
 }
 
 fn rms_heads(x: &CudaTensor, gamma: &CudaTensor, eps: f32) -> Result<CudaTensor> {
@@ -272,7 +298,7 @@ impl Block {
         encoder: &CudaTensor,
         embedded: &CudaTensor,
         temb: &CudaTensor,
-        rope: (&Vec<f32>, &Vec<f32>),
+        rope: (&CudaTensor, &CudaTensor),
         extra_pos: Option<&CudaTensor>,
     ) -> Result<CudaTensor> {
         let mut h = if let Some(pe) = extra_pos {
@@ -609,6 +635,10 @@ impl CosmosTransformer {
         let pe_w = w / p_w;
         let seq = pe_t * pe_h * pe_w;
         let (cos, sin) = rope_cos_sin(&self.cfg, t, h, w, fps);
+        let rope_cos =
+            CudaTensor::from_vec(cos, vec![seq, self.cfg.attention_head_dim])?.to_device()?;
+        let rope_sin =
+            CudaTensor::from_vec(sin, vec![seq, self.cfg.attention_head_dim])?.to_device()?;
 
         // Patchify on host for clarity (tiny graphs).
         let host = x.host_cow()?;
@@ -674,7 +704,14 @@ impl CosmosTransformer {
                 None
             };
             for block in &self.blocks {
-                hs = block.forward(&hs, encoder, &emb_s, &temb_s, (&cos, &sin), extra.as_ref())?;
+                hs = block.forward(
+                    &hs,
+                    encoder,
+                    &emb_s,
+                    &temb_s,
+                    (&rope_cos, &rope_sin),
+                    extra.as_ref(),
+                )?;
             }
             if let Some(before) = before.as_ref() {
                 self.finish_sol_tea(before, &hs)?;
@@ -812,6 +849,20 @@ fn expand_frame_tokens(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn rope_real_host_path_matches_apply_rope_real() {
+        let (b, h, s, d) = (1usize, 2, 4, 8);
+        let x: Vec<f32> = (0..b * h * s * d).map(|i| i as f32 * 0.05 - 0.3).collect();
+        let cos: Vec<f32> = (0..s * d).map(|i| (i as f32 * 0.11).cos()).collect();
+        let sin: Vec<f32> = (0..s * d).map(|i| (i as f32 * 0.11).sin()).collect();
+        let xt = CudaTensor::from_vec(x.clone(), vec![b, h, s, d]).unwrap();
+        let ct = CudaTensor::from_vec(cos.clone(), vec![s, d]).unwrap();
+        let st = CudaTensor::from_vec(sin.clone(), vec![s, d]).unwrap();
+        let got = rope_real(&xt, &ct, &st, b, h, s, d).unwrap();
+        let want = apply_rope_real(&x, &cos, &sin, b, h, s, d);
+        assert_eq!(got.host_cow().unwrap().as_ref(), want.as_slice());
+    }
 
     #[test]
     fn tiny_forward_shapes() {
