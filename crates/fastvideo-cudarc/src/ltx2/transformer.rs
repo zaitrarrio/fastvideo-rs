@@ -573,7 +573,7 @@ impl Ltx2Transformer {
     pub fn enable_fbcache(&self) {
         *self.fbcache.lock().expect("ltx2 fbcache") = Some(LtxFbRuntime {
             state: FbCache::official(),
-            armed: false,
+            armed: true,
             signals: Vec::new(),
             res_v: Vec::new(),
             res_a: Vec::new(),
@@ -587,8 +587,11 @@ impl Ltx2Transformer {
     pub fn begin_fbcache_step(&self, step: usize) {
         let mut slot = self.fbcache.lock().expect("ltx2 fbcache");
         if let Some(runtime) = slot.as_mut() {
-            runtime.state.begin_step(step);
-            runtime.armed = true;
+            if runtime.armed {
+                runtime.state.begin_step(step);
+            }
+            // Do not set armed=true. After [`Self::disarm_fbcache`] the
+            // runtime stays off for stage 2 and the Spark refiner.
         }
     }
 

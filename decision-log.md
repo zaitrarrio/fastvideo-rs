@@ -2,6 +2,16 @@
 
 Project code: FVID
 
+### FVID · 2026-09-24 · FVID-2026-09-24-ltx2-sampler-correctness
+- Trigger: LTX-2.5 stage 2 / Spark used ancestral Euler; distilled two-stage fused LoRA 0.8; FBCache re-armed on stage 2; SCSP claimed “steps 16–28” on a 15-step Euler loop that never reaches step 16
+- Options: keep ancestral stage 2; fuse 0.8 on distilled; leave SCSP as a no-op and document Euler; implement ODE res2s (no SDE / bongmath) and index **calls**
+- Decision: **stage 2 + Spark refiner = deterministic Euler** (`denoise_cfg` / `denoise`). **LoRA 0.8 (and 2.3 0.25/0.5) only on the dev BF16 DiT** — distilled two-stage does not fuse. **FBCache stage-1 only**: drop `arm_requested` on stage 2 / refiner; `begin_fbcache_step` does not re-arm after `disarm_fbcache`. **ODE res2s** on LTX-2.3 stage 1 (`lincomb3`); 15 steps → 29 calls so SCSP skips calls 16–28. Stage 2 stays 3-forward Euler for the Sol/PISA contract. Ancestral step is device `lincomb3`.
+- Reason: matches upstream `distilled.py` (“Stage 2 is always deterministic”), `techniques/presets.py` call indexing, and the GB200 “stage 1 only” FBCache row
+- Reversibility: cheap — sampler choice is version-gated; LoRA fuse is `use_dynamic_shifting`; SCSP still default-off
+- Executed by: WS-B
+- ADR: none
+- Verification: **host pass**. `cargo test -p fastvideo-models --lib ltx2`; `cargo test -p fastvideo-cudarc --lib ltx2`. GPU untested here.
+
 ### FVID · 2026-09-24 · FVID-2026-09-24-lora-device-refuse
 - Trigger: LTX-2 / H3 strength change reloaded the DiT from disk (host `apply_bf16` / `H3LoraFuse::fuse` only)
 - Options: keep host fuse + reload; keep unfused `W0` plus `(A, B)` and re-fuse on device

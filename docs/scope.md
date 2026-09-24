@@ -68,9 +68,9 @@ Gemma 3 and the same DiT geometry as 2.5.
 |---|---|---|---|
 | `ltx2_distilled_20` | 2.0 distilled, 8-step, CFG 1 | t2av | `FastVideo/LTX2-Distilled-Diffusers`, `rootonchair/LTX-2-19b-distilled` |
 | `ltx2_base_20` | 2.0 base, 40-step CFG | t2av | `Lightricks/LTX-2`, `FastVideo/LTX2-base`, `FastVideo/LTX2-Diffusers` |
-| `ltx2_distilled_23` | 2.3 distilled, two-stage Euler, LoRA 0.25 / 0.5 | t2av, i2v | `FastVideo/LTX-2.3-Distilled-Diffusers`, `diffusers/LTX-2.3-Distilled-Diffusers` |
-| `ltx2_base_23` | 2.3 base, 30-step CFG. STG masks stay unset | t2av, i2v | `Lightricks/LTX-2.3`, `FastVideo/LTX2.3-Diffusers`, `diffusers/LTX-2.3-Diffusers` |
-| `ltx2_distilled_25` | 2.5 distilled, ancestral, stage-2 LoRA 0.8 | t2av | `Lightricks/LTX-2.5-Diffusers` |
+| `ltx2_distilled_23` | 2.3 distilled, stage-1 res2s, stage-2 Euler, no LoRA | t2av, i2v | `FastVideo/LTX-2.3-Distilled-Diffusers`, `diffusers/LTX-2.3-Distilled-Diffusers` |
+| `ltx2_base_23` | 2.3 base, 30-step CFG res2s. STG masks stay unset. Dev DiT LoRA 0.25 / 0.5 | t2av, i2v | `Lightricks/LTX-2.3`, `FastVideo/LTX2.3-Diffusers`, `diffusers/LTX-2.3-Diffusers` |
+| `ltx2_distilled_25` | 2.5 distilled, ancestral stage 1, deterministic Euler stage 2, no LoRA | t2av | `Lightricks/LTX-2.5-Diffusers` |
 
 Two-stage: half-resolution stage 1, spatial latent upsampler, then a 2- or
 3-step stage-2 refine. Stage-2 sigmas are `0.909375`, `0.725`, `0.421875`, `0`.
@@ -202,9 +202,9 @@ SANA image and video family and is not implemented here.
 | Profile | What runs |
 |---|---|
 | Wan 2.1 1.3B / 14B, Wan 2.2 A14B and TI2V-5B | The matching presets above. `FASTVIDEO_WAN_SOL_CACHE=taylorseer` forecasts `proj_out` (interval 3, warmup 3, cooldown 2, order 1). Batched CFG TeaCache is on for the Wan CFG path |
-| LTX-2.3 | Two-stage Euler. Distilled LoRA fused at 0.25 then 0.5. Stage-1 SCSP skips steps 16–28 when `FASTVIDEO_LTX2_STAGE1_CACHE=1`. Stage-2 PISA at sparsity 0.9, block 64. Midpoint token prune when `FASTVIDEO_LTX2_MIDPOINT_PRUNE=1` |
-| LTX-2.5 | Ancestral stage 1. Stage-2 Sol-Attn: layer 0 dense, layers 1–47 at tau 1 / 1.25 / 1.5. LoRA 0.8 on stage 2 only. GB200 first-block cache when `FASTVIDEO_LTX2_FBCACHE=1` (threshold 0.08, warmup 1, max 10 skips, stage 1 only) |
-| LTX-2.5 refiner / Spark | H3×2 upscaler, H3-to-LTX adapter, `encode_audio`, 3-step joint refine, original PCM muxed |
+| LTX-2.3 | Stage-1 ODE res2s (2 evals/step except last; 15-step HQ = 29 calls). Stage-2 Euler (3-forward Sol/PISA contract). Distilled checkpoints run without LoRA; the 0.25/0.5 pair fuses on the **dev** BF16 DiT only. Stage-1 SCSP skips **res2s calls** 16–28 of 29 when `FASTVIDEO_LTX2_STAGE1_CACHE=1` (an Euler 15-step run never reaches call 16). Stage-2 PISA at sparsity 0.9, block 64. Midpoint token prune when `FASTVIDEO_LTX2_MIDPOINT_PRUNE=1` |
+| LTX-2.5 | Ancestral stage 1. Stage-2 and Spark refiner are deterministic Euler (`denoise_cfg` / `denoise`), not ancestral. Stage-2 Sol-Attn: layer 0 dense, layers 1–47 at tau 1 / 1.25 / 1.5. LoRA 0.8 on the **dev** BF16 DiT only — distilled two-stage does not fuse. GB200 first-block cache when `FASTVIDEO_LTX2_FBCACHE=1` (threshold 0.08, warmup 1, max 10 skips, **stage 1 only**; stage 2 / refiner stay disarmed) |
+| LTX-2.5 refiner / Spark | H3×2 upscaler, H3-to-LTX adapter, `encode_audio`, 3-step deterministic joint refine, original PCM muxed |
 | MiniMax-H3 Spark and RTX | Spark Sol-Attn route (`FASTVIDEO_H3_SOL_ATTN=spark`). RTX route (`rtx`): first 10 steps and first 2 layers dense, tau 1.0, 49 forwards. `FASTVIDEO_H3_SOL_CACHE=teacache` is the RTX residual controller (threshold 0.10, retain 5, cooldown 1) |
 | Cosmos3-Super | Canvas and TeaCache (threshold 1.15, start step 10, max 3). `fp4_linear` names the middle steps. Those linears are not quantized |
 | HunyuanVideo | Official canvas only. The profile's TeaCache is HunyuanVideo-13B and is not applied |
@@ -233,7 +233,7 @@ Weights: `--weights`, `FASTVIDEO_WEIGHTS`, or the Hugging Face snapshot.
 | `FASTVIDEO_LTX2_TEXT` | `resident`, `streamed`, or `auto` |
 | `FASTVIDEO_LTX2_HQ` | 2.3-base 15+3 HQ contract |
 | `FASTVIDEO_LTX2_FBCACHE` | LTX-2.5 stage-1 first-block cache |
-| `FASTVIDEO_LTX2_STAGE1_CACHE` | LTX-2.3 stage-1 SCSP |
+| `FASTVIDEO_LTX2_STAGE1_CACHE` | LTX-2.3 stage-1 SCSP (res2s calls 16–28 of 29) |
 | `FASTVIDEO_LTX2_MIDPOINT_PRUNE` | LTX-2.3 stage-2 feature-norm prune |
 | `FASTVIDEO_H3_SOL_ATTN` | `spark` or `rtx` |
 | `FASTVIDEO_H3_SOL_CACHE` | RTX TeaCache |
