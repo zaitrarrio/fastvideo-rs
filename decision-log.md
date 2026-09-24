@@ -2,6 +2,26 @@
 
 Project code: FVID
 
+### FVID · 2026-09-24 · FVID-2026-09-24-phase3-failure-gate
+- Trigger: Phase 3 cells that failed on `build-af5edf649671bfb7` (Spark `.set_weight`, H3 gate, LTX-2.5 decode OOM, LTX-2.3 keyframes, Hunyuan `Hunyuan15.*`, Wan 1.3B absent) plus host contracts and a weights manifest
+- Options: skip failing cells / delete tests to go green; one image then one cheap smoke then one PRO 6000 with family restarts; invent SANA-Video / Super-64B / enable oxide GEMM
+- Decision: **host tests first, then image `build-44a9e9db1321e7dc`, then fetch/verify on `jg48s6o1w0` (incl. `fastwan21-1.3b`), then Blackwell smoke, then PRO 6000 matrix with destroy/recreate between H3 → LTX → Hunyuan → Wan.** Oxide GEMM stays off (no H3 FFN bench + PSNR ≥ 30 dB this pass). pliron stays out. Shared H3 `--text-cache` / `--text-weights`; no `--warm` / `--no-text-cache` on H3.
+- Measured vs Phase 0 **75.4 s/step** and Phase 3 **10.7 s** (H3) / **1.47 s** (LTX-2.0) on the same-volume PRO 6000 (driver 595.91.07, $2.09/hr):
+  - **fasth3-8step**: load 142 s (Gemma streamed 89 s), steps 1–6 at **10.8 s** (matches 10.7 s). Wall 300 s / exit 124 before decode.
+  - **sol-h3-4step**: `vsa=0 dense=false` (gate off — load contract fixed). Load 243 s. Wall 301 s / exit 124 (no step times; streamed Gemma + DiT still exceed 5 min).
+  - **sol-h3-spark**: **loads**. Recipe `vsa=0.9` + FastH3_VSA_DataFree (no more 50-replacement reject). Load 265 s, steps 1–3 at **9.8 s**. Wall 300 s / exit 124.
+  - **ltx25-two-stage**: ancestral **0.39 s**, stage-2 **1.67 s** (was 1.67 s then OOM). This pass: denoise finished, **no OOM** in the cell log; `--warm` + 300 s wall (exit 124) before decode proof.
+  - **ltx23-two-stage**: keyframes miss **gone** (DiT 48/48). New miss: `prompt_adaln` vs LtxCore `prompt_adaln_single`. Rename landed in tree; not in this image.
+  - **ltx20-distilled-8step**: **ok 256 s**, **1.47 s/step** (matches Phase 3).
+  - **hy15-480-t2v**: still `Hunyuan15.double_blocks.0.img_mod.linear.weight`. Volume is Diffusers MMDiT (`transformer_blocks.0.attn.to_q`, no `img_mod`). Prefix/block aliases are not enough.
+  - **wan13-dmd-3step**: **ok**. Embed 65 s; clip 17 s; denoise **1.20 s** (510/322/321 ms); decode 1.12 s; 17 frames 480×832; quality gates pass. First matrix attempt used a directory as `--embeds` (fixed in `runpod-matrix.sh`).
+- Smoke (same image, PRO 6000): NVRTC all SMs PASS; kernels `Cubin(120)`.
+- Reason: measure the loader fixes on GPU without skipping cells; keep the 5-min cap; do not enable unpublished kernels
+- Reversibility: cheap — volume kept; GPU pods destroyed; oxide flag still off
+- Executed by: Executor
+- ADR: none
+- Verification: `artifacts/runpod/phase3-gate/runs/`. Image CI 36042414508. Host `cargo test -p fastvideo-models --lib` 299 / `fastvideo-cudarc --lib` 352, 0 ignored. Cost ≈ $2.5 matrix + smoke. Volume `jg48s6o1w0` stays.
+
 ### FVID · 2026-09-24 · FVID-2026-09-24-phase3-pro6000-sweep
 - Trigger: Phase 3 — rebuild the CUDA 13.4 runtime image and run the H3 / LTX / Hunyuan / Wan matrix (5-min cell cap) against Phase 0 numbers
 - Options: wait for three PRO 6000s in EUR-IS-1; fall back to A100 80GB on the ready volume; sequential families on one Blackwell

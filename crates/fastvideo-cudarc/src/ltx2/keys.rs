@@ -88,6 +88,8 @@ impl Keys {
                 (Component::Transformer, "audio_proj_in") => "audio_patchify_proj",
                 (Component::Transformer, "time_embed") => "adaln_single",
                 (Component::Transformer, "audio_time_embed") => "audio_adaln_single",
+                (Component::Transformer, "prompt_adaln") => "prompt_adaln_single",
+                (Component::Transformer, "audio_prompt_adaln") => "audio_prompt_adaln_single",
                 (Component::Transformer, "av_cross_attn_video_scale_shift") => {
                     "av_ca_video_scale_shift_adaln_single"
                 }
@@ -189,6 +191,10 @@ mod tests {
         assert_eq!(
             k.key("transformer_blocks.3.attn1.norm_q.weight"),
             "transformer_blocks.3.attn1.norm_q.weight"
+        );
+        assert_eq!(
+            k.key("prompt_adaln.emb.timestep_embedder.linear_1.weight"),
+            "prompt_adaln.emb.timestep_embedder.linear_1.weight"
         );
     }
 
@@ -295,6 +301,14 @@ mod tests {
         );
         assert_eq!(k.key("proj_in"), "patchify_proj");
         assert_eq!(k.key("time_embed.linear"), "adaln_single.linear");
+        assert_eq!(
+            k.key("prompt_adaln.emb.timestep_embedder.linear_1.weight"),
+            "prompt_adaln_single.emb.timestep_embedder.linear_1.weight"
+        );
+        assert_eq!(
+            k.key("audio_prompt_adaln.linear"),
+            "audio_prompt_adaln_single.linear"
+        );
         assert_eq!(
             k.key("av_cross_attn_video_scale_shift.linear"),
             "av_ca_video_scale_shift_adaln_single.linear"

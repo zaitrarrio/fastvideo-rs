@@ -212,17 +212,27 @@ case "$FAMILY" in
       write_json "$RUNS/skipped.json" '{"status":"skipped","reason":"wan 1.3B weights not on this volume"}'
       exit 0
     fi
-    # Short 5-min cell: 17 frames / 3 DMD steps. Embeds from this prompt if cached.
+    # UMT5 first (own process), then 17-frame / 3-step DMD. `--embeds` is a file.
+    mkdir -p "$RUNS/wan13-embeds"
+    neg='Bright tones, overexposed, static, blurred details, subtitles, style, works, paintings, images, static, overall gray, worst quality, low quality, JPEG compression residue, ugly, incomplete, extra fingers, poorly drawn hands, poorly drawn faces, deformed, disfigured, misshapen limbs, fused fingers, still picture, messy background, three legs, many people in the background, walking backwards'
+    printf '{"negative":%s,"prompts":[{"name":"wan13-dmd-3step","prompt":%s}]}\n' \
+      "$(printf '%s' "$neg" | sed 's/\\/\\\\/g;s/"/\\"/g;s/.*/"&"/')" \
+      "$(printf '%s' "$PROMPT" | sed 's/\\/\\\\/g;s/"/\\"/g;s/.*/"&"/')" \
+      >"$RUNS/prompt.json"
+    run_cell wan13-embed \
+      "$BIN" --mode fast embed \
+        --weights "$wan_w" \
+        --prompts "$RUNS/prompt.json" \
+        --embeds "$RUNS/wan13-embeds"
     run_cell wan13-dmd-3step \
       "$BIN" --mode fast clip \
         --weights "$wan_w" \
-        --embeds "$RUNS/wan13-embeds" \
+        --embeds "$RUNS/wan13-embeds/wan13-dmd-3step.safetensors" \
         --dmd \
         --frames 17 \
         --steps 3 \
         --seed "$SEED" \
-        --name wan13-dmd-3step \
-        --warm
+        --name wan13-dmd-3step
     ;;
   *)
     log "FATAL: unknown family $FAMILY"

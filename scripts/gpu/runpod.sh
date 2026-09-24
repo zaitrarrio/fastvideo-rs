@@ -7,6 +7,8 @@
 #   runpod.sh verify    re-check shards on a live fetch pod or via SSH
 #   runpod.sh manifest  print dests from weights-manifest.tsv
 #   runpod.sh gpu       three PRO 6000 96 GB pods (refuses if volume incomplete)
+#   runpod.sh smoke     cheap Blackwell nvrtc+kernels, then destroy
+#   runpod.sh matrix    one PRO 6000; restart between H3/LTX/Hunyuan/Wan
 #   runpod.sh status    volume / pods / cost
 #   runpod.sh reap      destroy fv-* GPU and fetch pods (keeps the volume)
 set -euo pipefail
@@ -18,6 +20,9 @@ RUNPOD_GQL="${RUNPOD_GQL:-https://api.runpod.io/graphql}"
 RP_STATE="$FV_ROOT/artifacts/runpod"
 RP_LIVE="$RP_STATE/live.log"
 RP_SSH_KEY="${RUNPOD_SSH_KEY:-$HOME/.runpod/ssh/runpodctl-ssh-key}"
+if [[ -z "${RUNPOD_IMAGE:-}" && -f "$RP_STATE/runtime-image.txt" ]]; then
+  RUNPOD_IMAGE="$(tr -d '[:space:]' <"$RP_STATE/runtime-image.txt")"
+fi
 RP_IMAGE="${RUNPOD_IMAGE:-ghcr.io/zaitrarrio/fastvideo-rs-runtime:latest}"
 RP_FETCH_IMAGE="${RUNPOD_FETCH_IMAGE:-$RP_IMAGE}"
 RP_GPU_TYPE="${RUNPOD_GPU_TYPE:-NVIDIA RTX PRO 6000 Blackwell Server Edition}"
@@ -468,7 +473,7 @@ rp_gpu_offer() {
 }
 
 rp_create_gpu_pod() {
-  local name="$1" vol="$2" dc="$3" auth="${4:-}"
+  local name="$1" vol="$2" dc="$3" auth="${4:-}" gpu="${5:-$RP_GPU_TYPE}" pin_dc="${6:-0}"
   local pubkey payload resp id dph
   pubkey="$(rp_pubkey)"
   payload="$(jq -n \
@@ -476,9 +481,10 @@ rp_create_gpu_pod() {
     --arg image "$RP_IMAGE" \
     --arg vol "$vol" \
     --arg dc "$dc" \
-    --arg gpu "$RP_GPU_TYPE" \
+    --arg gpu "$gpu" \
     --arg pubkey "$pubkey" \
     --arg auth "$auth" \
+    --argjson pin "$pin_dc" \
     '{
       name: $name,
       imageName: $image,
@@ -486,7 +492,6 @@ rp_create_gpu_pod() {
       computeType: "GPU",
       gpuTypeIds: [$gpu],
       gpuCount: 1,
-      dataCenterIds: [$dc],
       containerDiskInGb: 20,
       volumeInGb: 0,
       networkVolumeId: $vol,
@@ -494,11 +499,15 @@ rp_create_gpu_pod() {
       ports: ["22/tcp"],
       dockerStartCmd: ["/bin/bash","-lc","mkdir -p /root/.ssh /run/sshd; printf \"%s\\n\" \"$PUBLIC_KEY\" >> /root/.ssh/authorized_keys; chmod 700 /root/.ssh; chmod 600 /root/.ssh/authorized_keys; /usr/sbin/sshd; exec sleep infinity"],
       env: { PUBLIC_KEY: $pubkey }
-    } + (if $auth != "" then {containerRegistryAuthId:$auth} else {} end)')"
-  rp_log "create GPU pod name=$name image=$RP_IMAGE dc=$dc vol=$vol type=$RP_GPU_TYPE"
-  resp="$(rp_rest POST /pods "$payload")"
+    } + (if $pin == 1 then {dataCenterIds:[$dc]} else {} end)
+      + (if $auth != "" then {containerRegistryAuthId:$auth} else {} end)')"
+  rp_log "create GPU pod name=$name image=$RP_IMAGE dc=$dc pin_dc=$pin_dc vol=$vol type=$gpu"
+  if ! resp="$(rp_rest POST /pods "$payload")"; then
+    rp_log "GPU create failed for $gpu"
+    return 1
+  fi
   id="$(jq -r '.id // empty' <<<"$resp")"
-  [[ -n "$id" ]] || die "GPU pod create failed: $resp"
+  [[ -n "$id" ]] || { rp_log "GPU create returned no id for $gpu: $resp"; return 1; }
   dph="$(jq -r '.costPerHr // 0' <<<"$resp")"
   rp_log "gpu pod $id  name=$name  \$${dph}/hr  image=$RP_IMAGE  dc=$dc"
   if awk -v p="$dph" -v cap="$RP_GPU_MAX_DPH" 'BEGIN{exit !(p+0 > cap+0)}'; then
@@ -573,9 +582,9 @@ cmd_gpu() {
   hy_name="${GPU_NAME_PREFIX}-hy-$(date -u +%Y%m%d%H%M%S)"
 
   local h3_id ltx_id hy_id
-  h3_id="$(rp_create_gpu_pod "$h3_name" "$vol" "$dc" "$auth")"
-  ltx_id="$(rp_create_gpu_pod "$ltx_name" "$vol" "$dc" "$auth")"
-  hy_id="$(rp_create_gpu_pod "$hy_name" "$vol" "$dc" "$auth")"
+  h3_id="$(rp_create_gpu_pod "$h3_name" "$vol" "$dc" "$auth")" || die "h3 GPU create failed"
+  ltx_id="$(rp_create_gpu_pod "$ltx_name" "$vol" "$dc" "$auth")" || die "ltx GPU create failed"
+  hy_id="$(rp_create_gpu_pod "$hy_name" "$vol" "$dc" "$auth")" || die "hy GPU create failed"
 
   local h3_hp ltx_hp hy_hp
   read -r h3_hp < <(echo "$(rp_wait_ssh "$h3_id" 900)")
@@ -595,6 +604,129 @@ cmd_gpu() {
   rp_log "CPU fetch pod left up for ltx23 extra/logs — destroy after Hunyuan skip or extra fetch ends"
 }
 
+cmd_smoke() {
+  require_tools curl jq ssh rsync python3
+  rp_load_key
+  [[ -f "$RP_SSH_KEY" ]] || die "ssh key $RP_SSH_KEY missing"
+  local vol dc auth name id host port gpu
+  vol="$(jq -r '.id // empty' "$RP_STATE/volume.json" 2>/dev/null || cat "$RP_STATE/volume.id" 2>/dev/null || true)"
+  [[ -n "$vol" ]] || die "no volume id — run fetch first"
+  [[ -f "$(rp_volume_ready_file)" ]] || die "volume not verified"
+  dc="$(rp_volume_dc "$vol")"
+  auth="$(rp_ensure_registry_auth)"
+  gpu="${RUNPOD_SMOKE_GPU:-}"
+  name="fv-gpu-smoke-$(date -u +%Y%m%d%H%M%S)"
+  rp_log "▶ smoke: vol=$vol image=$RP_IMAGE (no DC pin; volume colocates)"
+  local g
+  id=""
+  if [[ -n "$gpu" ]]; then
+    id="$(rp_create_gpu_pod "$name" "$vol" "$dc" "$auth" "$gpu" 0)" || true
+  else
+    for g in \
+      "NVIDIA RTX PRO 4000 Blackwell" \
+      "NVIDIA RTX PRO 4500 Blackwell" \
+      "NVIDIA RTX PRO 4500 Blackwell Server Edition" \
+      "NVIDIA GeForce RTX 5090" \
+      "NVIDIA RTX PRO 6000 Blackwell Server Edition"; do
+      rp_log "smoke try $g"
+      if id="$(rp_create_gpu_pod "$name" "$vol" "$dc" "$auth" "$g" 0)"; then
+        gpu="$g"
+        break
+      fi
+    done
+  fi
+  [[ -n "$id" ]] || die "no cheap Blackwell stock for smoke"
+  echo "$id" >"$RP_STATE/gpu-smoke.id"
+  read -r host port < <(rp_wait_ssh "$id" 900)
+  echo "$host $port" >"$RP_STATE/gpu-smoke-ssh"
+  rp_log "smoke ssh root@$host:$port"
+  rp_ssh "$host" "$port" "nvidia-smi -L; nvidia-smi --query-gpu=name,memory.total,driver_version --format=csv,noheader"
+  rp_ssh "$host" "$port" "mkdir -p /workspace/gpucheck-out /workspace/fv-libs"
+  rp_rsync "$host" "$port" "$FV_ROOT/scripts/gpu/" "/opt/fastvideo-rs/scripts/gpu/" --exclude '.env*'
+  local rc=0
+  if ! rp_ssh "$host" "$port" "set -euo pipefail
+    . /opt/fastvideo-rs/scripts/gpu/cuda-13.pins
+    export PATH=/opt/fastvideo-rs/target/release:/usr/local/bin:/usr/local/cuda/bin:\$PATH
+    export LD_LIBRARY_PATH=/workspace/fv-libs:/lib/x86_64-linux-gnu:/usr/local/cuda-13.0/lib64:/usr/local/cuda/lib64:/usr/local/cuda/targets/x86_64-linux/lib:\${LD_LIBRARY_PATH:-}
+    bash /opt/fastvideo-rs/scripts/gpu/remote.sh env >/tmp/fv-env.json || true
+    BIN=/opt/fastvideo-rs/target/release/fv-gpucheck
+    echo \"▶ nvrtc\"
+    timeout --signal=TERM --kill-after=15 180 \$BIN --out /workspace/gpucheck-out nvrtc
+    echo \"▶ kernels\"
+    timeout --signal=TERM --kill-after=15 300 \$BIN --mode fast --out /workspace/gpucheck-out kernels
+  "; then
+    rc=1
+    rp_log "FATAL: smoke nvrtc/kernels failed"
+    rp_ssh "$host" "$port" "tail -40 /workspace/gpucheck-out/logs/*.log 2>/dev/null || true" || true
+  fi
+  rp_log "destroying smoke pod $id"
+  rp_destroy_pod "$id"
+  [[ "$rc" -eq 0 ]] || die "smoke failed"
+  rp_log "smoke PASS"
+}
+
+rp_recreate_matrix_pod() {
+  local old="$1" vol dc auth name id host port
+  vol="$(jq -r '.id // empty' "$RP_STATE/volume.json")"
+  dc="$(rp_volume_dc "$vol")"
+  auth="$(rp_ensure_registry_auth)"
+  name="fv-gpu-matrix-$(date -u +%Y%m%d%H%M%S)"
+  rp_log "recreate GPU between families (destroy $old)"
+  rp_destroy_pod "$old" || true
+  id="$(rp_create_gpu_pod "$name" "$vol" "$dc" "$auth" "$RP_GPU_TYPE" 0)" || die "recreate failed"
+  echo "$id" >"$RP_STATE/gpu-matrix.id"
+  nohup bash -c "sleep 10800; curl -sS -X DELETE -H 'Authorization: Bearer ${RUNPOD_API_KEY}' '${RUNPOD_API_BASE}/pods/${id}' >/dev/null" >/dev/null 2>&1 &
+  read -r host port < <(rp_wait_ssh "$id" 900)
+  printf '%s %s %s\n' "$id" "$host" "$port"
+}
+
+cmd_matrix() {
+  require_tools curl jq ssh rsync python3
+  rp_load_key
+  [[ -f "$RP_SSH_KEY" ]] || die "ssh key $RP_SSH_KEY missing"
+  local vol dc auth name id host port family
+  vol="$(jq -r '.id // empty' "$RP_STATE/volume.json" 2>/dev/null || cat "$RP_STATE/volume.id" 2>/dev/null || true)"
+  [[ -n "$vol" ]] || die "no volume id"
+  [[ -f "$(rp_volume_ready_file)" ]] || die "volume not verified"
+  dc="$(rp_volume_dc "$vol")"
+  auth="$(rp_ensure_registry_auth)"
+  name="fv-gpu-matrix-$(date -u +%Y%m%d%H%M%S)"
+  rp_log "▶ matrix: one PRO 6000, restart between H3/LTX/Hunyuan/Wan  image=$RP_IMAGE"
+  id="$(rp_create_gpu_pod "$name" "$vol" "$dc" "$auth" "$RP_GPU_TYPE" 0)" || die "matrix GPU create failed"
+  echo "$id" >"$RP_STATE/gpu-matrix.id"
+  nohup bash -c "sleep 10800; curl -sS -X DELETE -H 'Authorization: Bearer ${RUNPOD_API_KEY}' '${RUNPOD_API_BASE}/pods/${id}' >/dev/null" >/dev/null 2>&1 &
+  read -r host port < <(rp_wait_ssh "$id" 900)
+  echo "$host $port" >"$RP_STATE/gpu-matrix-ssh"
+  mkdir -p "$RP_STATE/phase3-gate"
+  local first=1
+  for family in h3 ltx hunyuan wan; do
+    if [[ "$first" -eq 0 ]]; then
+      read -r id host port < <(rp_recreate_matrix_pod "$id")
+      echo "$host $port" >"$RP_STATE/gpu-matrix-ssh"
+    fi
+    first=0
+    rp_log "▶ family $family on $id root@$host:$port"
+    rp_ssh "$host" "$port" "nvidia-smi --query-gpu=name,memory.used,driver_version --format=csv,noheader; mkdir -p /workspace/runs/$family /workspace/gpucheck-out/logs"
+    rp_rsync "$host" "$port" "$FV_ROOT/scripts/gpu/" "/opt/fastvideo-rs/scripts/gpu/" --exclude '.env*'
+    if [[ "$family" == h3 ]]; then
+      rp_ssh "$host" "$port" "python3 -c 'import json; print(json.load(open(\"/workspace/gpucheck-out/nvrtc.json\")).get(\"context\",{}).get(\"aot_sms\"))' 2>/dev/null || true" || true
+    fi
+    # 4 cells × 300s + load slack
+    if ! rp_ssh "$host" "$port" "export FV_WORK=/workspace FV_GEN_TIMEOUT_S=300 PATH=/opt/fastvideo-rs/target/release:/usr/local/bin:/usr/local/cuda/bin:\$PATH
+      bash /opt/fastvideo-rs/scripts/gpu/runpod-matrix.sh $family"; then
+      rp_log "family $family returned non-zero (cells continue-on-fail inside the script)"
+    fi
+    rp_ssh "$host" "$port" "tail -30 /workspace/runs/$family/live.log" | tee -a "$RP_LIVE" >&2 || true
+    mkdir -p "$RP_STATE/phase3-gate/runs/$family"
+    rsync -az -e "ssh -i $RP_SSH_KEY -p $port -o IdentitiesOnly=yes ${FV_SSH_OPTS[*]}" \
+      "root@$host:/workspace/runs/$family/" "$RP_STATE/phase3-gate/runs/$family/" || true
+    rp_log "ok family $family logs → $RP_STATE/phase3-gate/runs/$family"
+  done
+  rp_log "destroying matrix pod $id"
+  rp_destroy_pod "$id"
+  rp_log "matrix PASS (see phase3-gate/runs)"
+}
+
 usage() { sed -n '2,12p' "$0" | sed 's/^# \{0,1\}//'; exit 2; }
 
 case "${1:-}" in
@@ -603,6 +735,8 @@ case "${1:-}" in
   verify) cmd_verify ;;
   manifest) cmd_manifest ;;
   gpu) cmd_gpu ;;
+  smoke) cmd_smoke ;;
+  matrix) cmd_matrix ;;
   status) cmd_status ;;
   reap) cmd_reap ;;
   *) usage ;;
