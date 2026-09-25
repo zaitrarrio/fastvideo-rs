@@ -199,6 +199,13 @@ impl H3LoraFuse {
             .map(|(shape, data)| (shape.clone(), data.clone()))
     }
 
+    /// Parameter names this adapter supplies whole (`.set_weight`), sorted.
+    pub fn replacement_params(&self) -> Vec<String> {
+        let mut names: Vec<String> = self.replacements.keys().cloned().collect();
+        names.sort();
+        names
+    }
+
     /// [`Self::set_lora_strength`] then re-fuse each attached linear.
     pub fn set_strength_on<'a>(
         &mut self,
@@ -220,7 +227,10 @@ impl H3LoraFuse {
                     "set_weight fuse {param}: host {shape:?} != {rshape:?}"
                 )));
             }
-            data.copy_from_slice(&rdata);
+            // FastVideo `DenseLoRAPatch.replacement_for`: value * strength.
+            for (d, r) in data.iter_mut().zip(&rdata) {
+                *d = r * self.diff_scale;
+            }
         }
         if let Some(module) = param.strip_suffix(".weight") {
             if let Some(pair) = self.pairs.remove(module) {

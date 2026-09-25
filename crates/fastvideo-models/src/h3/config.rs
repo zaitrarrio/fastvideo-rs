@@ -568,7 +568,9 @@ impl H3InferenceContract {
         }
     }
 
-    /// FastH3 Preview VSA: 4 forwards, video shift 12, 90% sparsity.
+    /// FastH3 Preview VSA full checkpoint (`fastvideo_inference.json`):
+    /// 4 forwards on the DMD ladder, video shift 12, 90% sparsity, tile 64.
+    /// The `4step-vsa` recipe is [`Self::fasth3_preview_lora_vsa`].
     pub fn fasth3_4step_vsa() -> Self {
         Self {
             dmd_denoising_steps: vec![999, 749, 500, 250],
@@ -584,7 +586,8 @@ impl H3InferenceContract {
         }
     }
 
-    /// FastH3 Preview Dense: same 4-rung ladder as VSA Preview, no VSA / gate.
+    /// FastH3 Preview Dense full checkpoint: same 4-rung ladder, no VSA / gate.
+    /// The `4step-dense` recipe is [`Self::fasth3_preview_lora_dense`].
     pub fn fasth3_4step_dense() -> Self {
         Self {
             dmd_denoising_steps: vec![999, 749, 500, 250],
@@ -597,6 +600,31 @@ impl H3InferenceContract {
             vsa_tile_size: 64,
             dense: true,
             sigma_source: H3SigmaSource::Dmd,
+        }
+    }
+
+    /// `4step-vsa`: base MiniMax-H3 + the Preview v1 `vsa-datafree` LoRA
+    /// ([`super::lora::FastH3PreviewVariant`]), as FastVideo's
+    /// `run_fasth3_lora_preview_vsa_datafree.sh` runs it: VSA-H3 0.9 / tile 64,
+    /// `--steps 5`. The base snapshot has no `fastvideo_inference.json`, so
+    /// FastVideo sets no DMD rungs and the schedulers take the uniform 5-point
+    /// grid with the base shifts 12 / 3 (sigmas 1, .75, .5, .25 before the
+    /// shift, where the full checkpoint's ladder is .999, .749, .5, .25).
+    pub fn fasth3_preview_lora_vsa() -> Self {
+        Self {
+            dmd_denoising_steps: Vec::new(),
+            sigma_source: H3SigmaSource::Uniform,
+            ..Self::fasth3_4step_vsa()
+        }
+    }
+
+    /// `4step-dense`: base MiniMax-H3 + the Preview v1 `dense-datafree` LoRA
+    /// (`run_fasth3_lora_preview_dense_datafree.sh`, `--no-vsa`), same grid.
+    pub fn fasth3_preview_lora_dense() -> Self {
+        Self {
+            dmd_denoising_steps: Vec::new(),
+            sigma_source: H3SigmaSource::Uniform,
+            ..Self::fasth3_4step_dense()
         }
     }
 
@@ -671,9 +699,11 @@ impl H3InferenceContract {
     pub fn named(name: &str) -> Result<Self, String> {
         match name {
             "8step" | "v2" | "fasth3-8step" => Ok(Self::fasth3_8step()),
-            "4step-vsa" | "preview-vsa" | "fasth3-4step-vsa" => Ok(Self::fasth3_4step_vsa()),
+            "4step-vsa" | "preview-vsa" | "fasth3-4step-vsa" => {
+                Ok(Self::fasth3_preview_lora_vsa())
+            }
             "4step-dense" | "preview-dense" | "fasth3-4step-dense" => {
-                Ok(Self::fasth3_4step_dense())
+                Ok(Self::fasth3_preview_lora_dense())
             }
             "sol-h3-spark" | "sol_h3_spark" => Ok(Self::sol_h3_spark()),
             "sol-h3-rtx" | "sol_h3_rtx" => Ok(Self::sol_h3_rtx()),
@@ -1074,10 +1104,33 @@ mod tests {
         assert!(!H3InferenceContract::fasth3_4step_vsa().dense);
         assert!(H3InferenceContract::fasth3_4step_dense().dense);
         assert_eq!(H3InferenceContract::fasth3_4step_vsa().vsa_sparsity, 0.9);
-        assert_eq!(
-            H3InferenceContract::named("preview-vsa").unwrap(),
-            H3InferenceContract::fasth3_4step_vsa()
-        );
+        // The named Preview recipes are the LoRA-on-base launcher contract.
+        let lora_vsa = H3InferenceContract::named("preview-vsa").unwrap();
+        assert_eq!(lora_vsa, H3InferenceContract::fasth3_preview_lora_vsa());
+        assert_eq!(H3InferenceContract::named("4step-vsa").unwrap(), lora_vsa);
+        assert_eq!(lora_vsa.sigma_source, H3SigmaSource::Uniform);
+        assert!(!lora_vsa.dense);
+        assert_eq!((lora_vsa.vsa_sparsity, lora_vsa.vsa_tile_size), (0.9, 64));
+        let lora_dense = H3InferenceContract::named("4step-dense").unwrap();
+        assert_eq!(lora_dense, H3InferenceContract::fasth3_preview_lora_dense());
+        assert!(lora_dense.dense);
+        assert_eq!(lora_dense.vsa_sparsity, 0.0);
+        for c in [&lora_vsa, &lora_dense] {
+            assert_eq!((c.num_inference_steps, c.transformer_forwards), (5, 4));
+            assert_eq!(
+                (c.video_scheduler_shift, c.audio_scheduler_shift),
+                (12.0, 3.0)
+            );
+            let j = super::super::schedule::H3JointSchedule::from_contract(c).unwrap();
+            // Same grid as Sol-H3 (uniform 5 points, shifts 12 / 3).
+            assert_eq!(
+                j.video.sigmas,
+                super::super::schedule::H3JointSchedule::from_contract(&sol)
+                    .unwrap()
+                    .video
+                    .sigmas
+            );
+        }
         assert!(H3InferenceContract::named("nope").is_err());
     }
 

@@ -47,7 +47,10 @@ use fastvideo_models::h3::config::{
     H3AudioVaeConfig, H3Geometry, H3InferenceContract, H3SigmaSource, H3TransformerConfig,
     H3VideoVaeConfig, H3_AUDIO_CHANNELS, H3_FPS,
 };
-use fastvideo_models::h3::lora::{is_sol_h3_recipe, sol_h3_forces_ref2va, SolH3AdapterSpec};
+use fastvideo_models::h3::lora::{
+    check_preview_base, is_sol_h3_recipe, preview_lora_strength, sol_h3_forces_ref2va,
+    FastH3PreviewVariant, SolH3AdapterSpec, FASTH3_LORA_STRENGTH_ENV,
+};
 use fastvideo_models::h3::packing::{patchify, H3PackedLayout, KeyframeAnchor};
 use fastvideo_models::h3::reference::{
     plan_reference_video_canvas, resample_reference_frames, resolve_reference_image_size_with,
@@ -239,7 +242,8 @@ pub struct H3PipelineOptions {
     pub recipe: Option<String>,
     /// Load `transformer_ref/` (Ref2VA) instead of `transformer/` (T2AV/FL2VA).
     pub ref2va: bool,
-    /// Sol-H3 adapter file. When unset, `sol-h3` searches beside the weight root.
+    /// Sol-H3 / FastH3 Preview adapter file. When unset, the recipe's adapter is
+    /// searched under and beside the weight root.
     pub adapter: Option<PathBuf>,
     /// Ref2VA reference-image fit. `Auto` is 2048 short-edge, and `match` for Sol-H3.
     pub reference_image_resize: ReferenceImageResize,
@@ -688,7 +692,48 @@ impl H3Pipeline {
         let teacache = fastvideo_models::h3::sol::teacache_requested(
             std::env::var("FASTVIDEO_H3_SOL_CACHE").ok().as_deref(),
         );
-        let mut lora = if options.recipe.as_deref().is_some_and(is_sol_h3_recipe) {
+        let preview = options
+            .recipe
+            .as_deref()
+            .and_then(FastH3PreviewVariant::from_recipe);
+        let mut lora = if let Some(variant) = preview {
+            // FastH3 Preview v1 = base MiniMax-H3 + one Preview LoRA
+            // (`run_fasth3_lora_preview_*_datafree.sh`).
+            let has_gate = map.has_tensor("transformer_blocks.0.attn.to_gate_compress.weight");
+            let has_json = [
+                "fastvideo_inference.json",
+                "transformer/fastvideo_inference.json",
+            ]
+            .iter()
+            .any(|rel| root.join(rel).is_file());
+            check_preview_base(has_gate, has_json).map_err(msg)?;
+            let strength =
+                preview_lora_strength(std::env::var(FASTH3_LORA_STRENGTH_ENV).ok().as_deref())
+                    .map_err(msg)?;
+            let spec = variant.adapter_spec(strength);
+            let recipe = options.recipe.as_deref().unwrap_or_default();
+            let path = spec.resolve(root, options.adapter.as_deref()).map_err(|e| {
+                msg(format!(
+                    "recipe {recipe} needs the FastH3 Preview v1 {} adapter (FastVideo/FastVideo-FastH3-4-step-Preview-v1-LoRA): {e}",
+                    variant.subdir()
+                ))
+            })?;
+            let fuse = super::lora::H3LoraFuse::open(&map, &path, spec.alpha, spec.scale)?;
+            variant
+                .check_adapter(&fuse.replacement_params())
+                .map_err(|e| msg(format!("{}: {e}", path.display())))?;
+            crate::wan::log::info(format_args!(
+                "h3 fasth3-preview {}: fuse {} pairs rank={} strength={} diffs={} set_weight={} ({})",
+                variant.subdir(),
+                fuse.pairs_total,
+                fuse.rank,
+                fuse.effective_scale(),
+                fuse.diffs_total,
+                fuse.replacements_total,
+                path.display()
+            ));
+            Some(fuse)
+        } else if options.recipe.as_deref().is_some_and(is_sol_h3_recipe) {
             let spark = options
                 .recipe
                 .as_deref()

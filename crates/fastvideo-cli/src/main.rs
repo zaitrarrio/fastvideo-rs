@@ -143,7 +143,8 @@ struct GenerateArgs {
     /// FastH3 / Sol-H3 recipe (`8step`, `4step-vsa`, `4step-dense`, `sol-h3`, `sol-h3-ref2va`, `sol-h3-spark`, `sol-h3-rtx`).
     #[arg(long)]
     h3_recipe: Option<String>,
-    /// Sol-H3 LoRA adapter. Default: searched next to the MiniMax-H3 snapshot.
+    /// Sol-H3 / FastH3 Preview (`4step-vsa`, `4step-dense`) LoRA adapter. Default: searched
+    /// under and next to the MiniMax-H3 snapshot.
     #[arg(long)]
     h3_adapter: Option<String>,
     /// FastH3 duration in whole seconds (5..=15).

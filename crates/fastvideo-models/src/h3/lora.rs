@@ -364,6 +364,128 @@ impl SolH3AdapterSpec {
     }
 }
 
+/// FastH3 Preview v1 LoRA variant behind the `4step-vsa` / `4step-dense`
+/// recipes. FastVideo's `run_fasth3_lora_preview_{vsa,dense}_datafree.sh`
+/// load `MiniMaxAI/MiniMax-H3` plus one adapter from
+/// `FastVideo/FastVideo-FastH3-4-step-Preview-v1-LoRA` at
+/// `FASTH3_LORA_STRENGTH` (default 1.0). Both adapters are
+/// `fastvideo-lora-v2` (rank 64, `W += strength * B @ A`, `.diff` and
+/// `.set_weight` scaled by the same strength). Only the VSA adapter carries
+/// the 50 `to_gate_compress` replacements, and it must run VSA-H3.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FastH3PreviewVariant {
+    /// `vsa-datafree`: VSA-H3, sparsity 0.9, tile 64.
+    Vsa,
+    /// `dense-datafree`: dense attention, no gate.
+    Dense,
+}
+
+/// Environment override of the adapter strength, as in FastVideo's launchers.
+pub const FASTH3_LORA_STRENGTH_ENV: &str = "FASTH3_LORA_STRENGTH";
+
+impl FastH3PreviewVariant {
+    /// The variant a recipe name selects, if it is a FastH3 Preview recipe.
+    pub fn from_recipe(name: &str) -> Option<Self> {
+        match name {
+            "4step-vsa" | "preview-vsa" | "fasth3-4step-vsa" => Some(Self::Vsa),
+            "4step-dense" | "preview-dense" | "fasth3-4step-dense" => Some(Self::Dense),
+            _ => None,
+        }
+    }
+
+    /// Adapter directory inside the LoRA repository.
+    pub fn subdir(self) -> &'static str {
+        match self {
+            Self::Vsa => "vsa-datafree",
+            Self::Dense => "dense-datafree",
+        }
+    }
+
+    /// Where the adapter is searched: under the base root and beside it
+    /// (`$W/h3-base` + `$W/FastH3-4-step-Preview-v1-LoRA/<variant>/`). Never
+    /// falls back to the other variant. `alpha` is unused (hybrid format).
+    pub fn adapter_spec(self, scale: f32) -> SolH3AdapterSpec {
+        let relative_paths: &'static [&'static str] = match self {
+            Self::Vsa => &[
+                "FastH3-4-step-Preview-v1-LoRA/vsa-datafree/adapter_model.safetensors",
+                "vsa-datafree/adapter_model.safetensors",
+                "adapter/vsa-datafree/adapter_model.safetensors",
+            ],
+            Self::Dense => &[
+                "FastH3-4-step-Preview-v1-LoRA/dense-datafree/adapter_model.safetensors",
+                "dense-datafree/adapter_model.safetensors",
+                "adapter/dense-datafree/adapter_model.safetensors",
+            ],
+        };
+        SolH3AdapterSpec {
+            alpha: 64,
+            scale,
+            relative_paths,
+        }
+    }
+
+    /// FastVideo refuses a gate-carrying adapter without VSA; a VSA recipe
+    /// without the gate would run VSA with a zero-initialized gate.
+    /// `replacements` are the adapter's `.set_weight` parameter names.
+    pub fn check_adapter(self, replacements: &[String]) -> Result<(), String> {
+        let gates = replacements
+            .iter()
+            .filter(|p| p.contains("to_gate_compress"))
+            .count();
+        match self {
+            Self::Vsa if gates == 0 => Err(format!(
+                "recipe 4step-vsa needs the {} adapter (it supplies to_gate_compress); this adapter has no gate",
+                self.subdir()
+            )),
+            Self::Dense if gates > 0 => Err(format!(
+                "recipe 4step-dense needs the {} adapter; this adapter supplies {gates} to_gate_compress tensors and must run VSA (use 4step-vsa)",
+                self.subdir()
+            )),
+            _ => Ok(()),
+        }
+    }
+}
+
+/// `FASTH3_LORA_STRENGTH` (unset or empty: 1.0). Must be finite and non-negative.
+pub fn preview_lora_strength(env: Option<&str>) -> Result<f32, String> {
+    let Some(raw) = env.map(str::trim).filter(|s| !s.is_empty()) else {
+        return Ok(1.0);
+    };
+    let s: f32 = raw
+        .parse()
+        .map_err(|_| format!("{FASTH3_LORA_STRENGTH_ENV}={raw:?} is not a number"))?;
+    if !s.is_finite() || s < 0.0 {
+        return Err(format!(
+            "{FASTH3_LORA_STRENGTH_ENV}={raw:?} must be finite and non-negative"
+        ));
+    }
+    Ok(s)
+}
+
+/// The Preview adapters are deltas against the undistilled MiniMax-H3
+/// transformer. A distilled export (FastH3 8-Step-V2 or a full Preview
+/// checkpoint) carries `to_gate_compress` in its transformer and/or a
+/// `fastvideo_inference.json`; fusing an adapter onto it double-applies
+/// the distillation.
+pub fn check_preview_base(
+    transformer_has_gate: bool,
+    has_inference_json: bool,
+) -> Result<(), String> {
+    if transformer_has_gate || has_inference_json {
+        let why = match (transformer_has_gate, has_inference_json) {
+            (true, true) => {
+                "its transformer has to_gate_compress and it ships fastvideo_inference.json"
+            }
+            (true, false) => "its transformer has to_gate_compress",
+            _ => "it ships fastvideo_inference.json",
+        };
+        return Err(format!(
+            "FastH3 Preview recipes (4step-vsa / 4step-dense) fuse a LoRA onto the base MiniMax-H3 transformer; these weights are a distilled FastH3 export ({why}). Pass --weights <MiniMax-H3 base> (e.g. $W/h3-base)"
+        ));
+    }
+    Ok(())
+}
+
 /// Recipe names that select the Sol-H3 contract.
 pub fn is_sol_h3_recipe(name: &str) -> bool {
     matches!(
@@ -407,6 +529,95 @@ mod tests {
         assert!(is_sol_h3_rtx_recipe("sol-h3-rtx"));
         assert!(!is_sol_h3_rtx_recipe("sol-h3"));
         assert!(!is_sol_h3_recipe("sol-h3-rtx"));
+    }
+
+    #[test]
+    fn preview_recipes_select_their_own_adapter() {
+        use FastH3PreviewVariant::*;
+        for (name, v) in [
+            ("4step-vsa", Vsa),
+            ("preview-vsa", Vsa),
+            ("fasth3-4step-vsa", Vsa),
+            ("4step-dense", Dense),
+            ("preview-dense", Dense),
+            ("fasth3-4step-dense", Dense),
+        ] {
+            assert_eq!(FastH3PreviewVariant::from_recipe(name), Some(v), "{name}");
+        }
+        for name in ["8step", "sol-h3", "sol-h3-spark", "sol-h3-rtx"] {
+            assert_eq!(FastH3PreviewVariant::from_recipe(name), None, "{name}");
+        }
+        let vsa = Vsa.adapter_spec(1.0);
+        assert!(vsa
+            .relative_paths
+            .iter()
+            .all(|p| p.contains("vsa-datafree")));
+        assert_eq!(
+            vsa.relative_paths[0],
+            "FastH3-4-step-Preview-v1-LoRA/vsa-datafree/adapter_model.safetensors"
+        );
+        let dense = Dense.adapter_spec(1.0);
+        assert!(dense
+            .relative_paths
+            .iter()
+            .all(|p| p.contains("dense-datafree")));
+        assert_eq!(vsa.scale, 1.0);
+    }
+
+    #[test]
+    fn preview_adapter_is_found_beside_base_and_never_swapped() {
+        let tmp = std::env::temp_dir().join(format!("fv-preview-{}", std::process::id()));
+        let base = tmp.join("h3-base");
+        std::fs::create_dir_all(&base).unwrap();
+        let dense = tmp.join("FastH3-4-step-Preview-v1-LoRA/dense-datafree");
+        std::fs::create_dir_all(&dense).unwrap();
+        std::fs::write(dense.join("adapter_model.safetensors"), b"x").unwrap();
+        let found = FastH3PreviewVariant::Dense
+            .adapter_spec(1.0)
+            .resolve(&base, None)
+            .unwrap();
+        assert_eq!(found, dense.join("adapter_model.safetensors"));
+        // Only dense present: the VSA recipe refuses instead of falling back.
+        let err = FastH3PreviewVariant::Vsa
+            .adapter_spec(1.0)
+            .resolve(&base, None)
+            .unwrap_err();
+        assert!(err.contains("vsa-datafree"), "{err}");
+        std::fs::remove_dir_all(&tmp).unwrap();
+    }
+
+    #[test]
+    fn preview_adapter_gate_must_match_attention() {
+        let gates: Vec<String> = (0..50)
+            .map(|i| format!("transformer_blocks.{i}.attn.to_gate_compress.weight"))
+            .collect();
+        assert!(FastH3PreviewVariant::Vsa.check_adapter(&gates).is_ok());
+        assert!(FastH3PreviewVariant::Dense.check_adapter(&[]).is_ok());
+        assert!(FastH3PreviewVariant::Vsa.check_adapter(&[]).is_err());
+        let err = FastH3PreviewVariant::Dense
+            .check_adapter(&gates)
+            .unwrap_err();
+        assert!(err.contains("must run VSA"), "{err}");
+    }
+
+    #[test]
+    fn preview_refuses_distilled_transformer() {
+        assert!(check_preview_base(false, false).is_ok());
+        // FastH3 8-Step-V2: 50 gate tensors in transformer/.
+        assert!(check_preview_base(true, false)
+            .unwrap_err()
+            .contains("h3-base"));
+        assert!(check_preview_base(false, true).is_err());
+    }
+
+    #[test]
+    fn preview_strength_env() {
+        assert_eq!(preview_lora_strength(None).unwrap(), 1.0);
+        assert_eq!(preview_lora_strength(Some("")).unwrap(), 1.0);
+        assert_eq!(preview_lora_strength(Some("0.5")).unwrap(), 0.5);
+        assert!(preview_lora_strength(Some("nan")).is_err());
+        assert!(preview_lora_strength(Some("-1")).is_err());
+        assert!(preview_lora_strength(Some("x")).is_err());
     }
 
     #[test]

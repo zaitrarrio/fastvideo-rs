@@ -373,9 +373,11 @@ case "$FAMILY" in
     if [[ -n "$taeh3" ]]; then
       h3_common+=(--taeh3-weights "$taeh3")
     fi
+    # FastH3 Preview recipes: base transformer + the Preview LoRA found at
+    # $W/FastH3-4-step-Preview-v1-LoRA/<vsa|dense>-datafree (refused on h3-8step).
     run_cell fasth3-4step-vsa \
       "$BIN" --mode fast h3 gen \
-        --weights "$W/h3-8step" \
+        --weights "$W/h3-base" \
         --h3-recipe 4step-vsa \
         --adaln-cache "$RUNS/fasth3-4step-vsa-adaln.cache" \
         --clip-dir "$RUNS/fasth3-4step-vsa/frames" \
@@ -488,7 +490,7 @@ case "$FAMILY" in
         --adaln-cache "$RUNS/fasth3-8step-adaln.cache" \
         --clip-dir "$RUNS/fasth3-8step/frames" "${h3_common[@]}"
     gated_cell fasth3-4step-vsa fasth3-4step-vsa \
-      "$BIN" --mode fast h3 gen --weights "$W/h3-8step" --h3-recipe 4step-vsa \
+      "$BIN" --mode fast h3 gen --weights "$W/h3-base" --h3-recipe 4step-vsa \
         --adaln-cache "$RUNS/fasth3-4step-vsa-adaln.cache" \
         --clip-dir "$RUNS/fasth3-4step-vsa/frames" "${h3_common[@]}"
     # Sol-H3 4-step on one GPU is dense upstream (engine.py refuses Sol at world_size 1).
@@ -497,12 +499,12 @@ case "$FAMILY" in
         --adaln-cache "$RUNS/sol-h3-adaln.cache" \
         --clip-dir "$RUNS/sol-h3/frames" "${h3_common[@]}"
     # The upstream single-GPU Sol-Attn + TeaCache route (RTX4090/5090 profile).
-    gated_cell sol-h3-rtx fasth3-4step-dense \
+    gated_cell sol-h3-rtx h3-base \
       "$BIN" --mode fast h3 gen --weights "$W/h3-base" --h3-recipe sol-h3-rtx \
         --adaln-cache "$RUNS/sol-h3-rtx-adaln.cache" \
         --clip-dir "$RUNS/sol-h3-rtx/frames" "${h3_common[@]}"
     # The RTX 5090 `fullopt` arm: the same Sol route plus TeaCache 0.10 / 5 / 1.
-    gated_cell sol-h3-rtx-teacache fasth3-4step-dense \
+    gated_cell sol-h3-rtx-teacache h3-base \
       env FASTVIDEO_H3_SOL_CACHE=teacache \
       "$BIN" --mode fast h3 gen --weights "$W/h3-base" --h3-recipe sol-h3-rtx \
         --adaln-cache "$RUNS/sol-h3-rtx-adaln.cache" \
@@ -538,23 +540,23 @@ case "$FAMILY" in
       geo=()
       [[ "$res" == 480p ]] && geo=(--height 480 --width 832)
       # dense: rtx5090_dense.toml; sol: rtx5090_sol.toml; fullopt: + TeaCache.
-      gated_cell "h3-$res-dense" fasth3-4step-dense \
+      gated_cell "h3-$res-dense" h3-base \
         env FASTVIDEO_H3_SOL_ATTN=off \
         "$BIN" --mode fast h3 gen --weights "$W/h3-base" --h3-recipe sol-h3-rtx "${geo[@]}" \
           --adaln-cache "$RUNS/h3-$res-adaln.cache" \
           --clip-dir "$RUNS/h3-$res-dense/frames" "${h3_common[@]}"
-      gated_cell "h3-$res-sol" fasth3-4step-dense \
+      gated_cell "h3-$res-sol" h3-base \
         "$BIN" --mode fast h3 gen --weights "$W/h3-base" --h3-recipe sol-h3-rtx "${geo[@]}" \
           --adaln-cache "$RUNS/h3-$res-adaln.cache" \
           --clip-dir "$RUNS/h3-$res-sol/frames" "${h3_common[@]}"
-      gated_cell "h3-$res-fullopt" fasth3-4step-dense \
+      gated_cell "h3-$res-fullopt" h3-base \
         env FASTVIDEO_H3_SOL_CACHE=teacache \
         "$BIN" --mode fast h3 gen --weights "$W/h3-base" --h3-recipe sol-h3-rtx "${geo[@]}" \
           --adaln-cache "$RUNS/h3-$res-adaln.cache" \
           --clip-dir "$RUNS/h3-$res-fullopt/frames" "${h3_common[@]}"
       # fullopt with the TAEH3 video decoder (sol-engine super_acceleration
       # stage 1 decodes with TAEH3 instead of the official video VAE).
-      tae_gated_cell "h3-$res-fullopt-taeh3" "$TAEH3" fasth3-4step-dense \
+      tae_gated_cell "h3-$res-fullopt-taeh3" "$TAEH3" h3-base \
         env FASTVIDEO_H3_SOL_CACHE=teacache \
         "$BIN" --mode fast h3 gen --weights "$W/h3-base" --h3-recipe sol-h3-rtx "${geo[@]}" \
           --taeh3-weights "$TAEH3" \
@@ -608,7 +610,7 @@ case "$FAMILY" in
     for res in 768p 480p; do
       geo=()
       [[ "$res" == 480p ]] && geo=(--height 480 --width 832)
-      gated_cell "h3-base-$res" fasth3-4step-dense \
+      gated_cell "h3-base-$res" h3-base \
         env FASTVIDEO_H3_SOL_ATTN=off \
         "$BIN" --mode fast h3 gen --weights "$W/h3-base" --h3-recipe sol-h3-rtx "${geo[@]}" \
           --adaln-cache "$RUNS/h3-base-$res-adaln.cache" \
@@ -618,7 +620,7 @@ case "$FAMILY" in
           --adaln-cache "$RUNS/fasth3-8step-$res-adaln.cache" \
           --clip-dir "$RUNS/fasth3-8step-$res/frames" "${h3_common[@]}"
       gated_cell "fasth3-4step-vsa-$res" fasth3-4step-vsa \
-        "$BIN" --mode fast h3 gen --weights "$W/h3-8step" --h3-recipe 4step-vsa "${geo[@]}" \
+        "$BIN" --mode fast h3 gen --weights "$W/h3-base" --h3-recipe 4step-vsa "${geo[@]}" \
           --adaln-cache "$RUNS/fasth3-4step-vsa-$res-adaln.cache" \
           --clip-dir "$RUNS/fasth3-4step-vsa-$res/frames" "${h3_common[@]}"
       # The same FastH3 recipes decoded by TAEH3 instead of the official VAE.
@@ -628,7 +630,7 @@ case "$FAMILY" in
           --adaln-cache "$RUNS/fasth3-8step-$res-adaln.cache" \
           --clip-dir "$RUNS/fasth3-8step-$res-taeh3/frames" "${h3_common[@]}"
       tae_gated_cell "fasth3-4step-vsa-$res-taeh3" "$TAEH3" fasth3-4step-vsa \
-        "$BIN" --mode fast h3 gen --weights "$W/h3-8step" --h3-recipe 4step-vsa "${geo[@]}" \
+        "$BIN" --mode fast h3 gen --weights "$W/h3-base" --h3-recipe 4step-vsa "${geo[@]}" \
           --taeh3-weights "$TAEH3" \
           --adaln-cache "$RUNS/fasth3-4step-vsa-$res-adaln.cache" \
           --clip-dir "$RUNS/fasth3-4step-vsa-$res-taeh3/frames" "${h3_common[@]}"
