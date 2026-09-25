@@ -75,6 +75,7 @@ kernel_fns!(
     quantize_e4m3,
     dequantize_e4m3,
     amax_abs,
+    abs_diff_sum,
     e4m3_scale_from_amax,
     elem_add,
     elem_mul,

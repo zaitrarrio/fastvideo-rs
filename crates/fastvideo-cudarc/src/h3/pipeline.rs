@@ -48,6 +48,7 @@ use fastvideo_models::h3::reference::{
     PreparedReference, ReferenceImageResize, ReferenceKind,
 };
 use fastvideo_models::h3::schedule::{H3JointSchedule, H3Schedule};
+use fastvideo_models::h3::sol::H3SolAttnPolicy;
 use rand::{Rng, SeedableRng};
 use rand_distr::StandardNormal;
 
@@ -443,6 +444,28 @@ enum VideoDecoder {
 
 /// VSA gate tensors load only when the contract is sparse (Spark) or an MLX
 /// snapshot actually ships them. Dense Sol-H3 / MiniMax-H3 stay ungated.
+/// The Sol-Attn route for `recipe` with the `FASTVIDEO_H3_SOL_ATTN` override.
+fn sol_attn_policy(recipe: Option<&str>, ref2va: bool) -> Result<H3SolAttnPolicy> {
+    fastvideo_models::h3::sol::recipe_sol_attn_policy(
+        recipe,
+        std::env::var("FASTVIDEO_H3_SOL_ATTN").ok().as_deref(),
+        ref2va,
+    )
+    .map_err(msg)
+}
+
+/// VSA runs only with Sol off, a non-dense run, no interleaved condition
+/// audio, and a VSA recipe. A zero-sparsity recipe never builds VSA (its DiT
+/// is loaded without `to_gate_compress`).
+fn uses_vsa(
+    sol: H3SolAttnPolicy,
+    dense: bool,
+    force_dense: bool,
+    contract: &H3InferenceContract,
+) -> bool {
+    sol == H3SolAttnPolicy::Off && !dense && !force_dense && contract.vsa_sparsity > 0.0
+}
+
 fn dit_loads_vsa_gate(contract: &H3InferenceContract, mlx_vsa_capable: Option<bool>) -> bool {
     contract.vsa_sparsity > 0.0 && mlx_vsa_capable.unwrap_or(true)
 }
@@ -562,21 +585,23 @@ impl H3Pipeline {
             contract.vsa_sparsity,
             options.dense
         ));
-        match fastvideo_models::h3::sol::recipe_sol_attn_policy(
-            options.recipe.as_deref(),
-            std::env::var("FASTVIDEO_H3_SOL_ATTN").ok().as_deref(),
-        ) {
-            fastvideo_models::h3::sol::H3SolAttnPolicy::Spark => {
+        match sol_attn_policy(options.recipe.as_deref(), options.ref2va)? {
+            H3SolAttnPolicy::Engine => {
                 crate::wan::log::info(format_args!(
-                    "h3 sol-attn: stage-1 update 0 dense, later updates layer 0 dense and layers 1-49 sol-attn kernel tau 1/1.25/1.5 (thresh_type=diag)"
+                    "h3 sol-attn: sol-h3 engine policy (opt-in): forward 0 dense, blocks 0-1 dense, blocks 2-49 sol-attn tau 1.0 (thresh_type=diag), prefix sink"
                 ));
             }
-            fastvideo_models::h3::sol::H3SolAttnPolicy::Rtx => {
+            H3SolAttnPolicy::Spark => {
                 crate::wan::log::info(format_args!(
-                    "h3 sol-attn: rtx first 10 steps dense, later steps layers 0-1 dense and layers 2-49 sol-attn kernel tau 1.0 (thresh_type=diag)"
+                    "h3 sol-attn: spark draft ladder (opt-in): update 0 dense, later updates block 0 dense and blocks 1-49 sol-attn tau 1/1.25/1.5 (thresh_type=diag), [visual | text+audio] suffix sink"
                 ));
             }
-            fastvideo_models::h3::sol::H3SolAttnPolicy::Off => {}
+            H3SolAttnPolicy::Rtx => {
+                crate::wan::log::info(format_args!(
+                    "h3 sol-attn: rtx forwards 0-9 dense, later forwards blocks 0-1 dense and blocks 2-49 sol-attn tau 1.0 (thresh_type=diag), text sink"
+                ));
+            }
+            H3SolAttnPolicy::Off => {}
         }
         let teacache = fastvideo_models::h3::sol::teacache_requested(
             std::env::var("FASTVIDEO_H3_SOL_CACHE").ok().as_deref(),
@@ -743,8 +768,8 @@ impl H3Pipeline {
         match super::spark::SparkBridge::resolve(&self.root).map_err(|e| msg(e.to_string()))? {
             None => {
                 crate::wan::log::info(format_args!(
-                    "h3 sol-h3-spark: no {} or H3-to-LTX adapter beside {}; H3 decode continues",
-                    fastvideo_models::h3::spark::UPSCALER_FILE,
+                    "h3 sol-h3-spark: no upscaler ({}) or H3-to-LTX adapter beside {}; H3 decode continues",
+                    fastvideo_models::h3::spark::UPSCALER_FILES.join(" | "),
                     self.root.display()
                 ));
                 Ok(None)
@@ -905,31 +930,9 @@ impl H3Pipeline {
         let sequence_length = layout.sequence_length();
         // Interleaved Ref2VA condition audio breaks VSA's contiguous-prefix tiles.
         let force_dense = layout.num_condition_audio_rows > 0;
-        let sol_policy = match fastvideo_models::h3::sol::recipe_sol_attn_policy(
-            self.options.recipe.as_deref(),
-            std::env::var("FASTVIDEO_H3_SOL_ATTN").ok().as_deref(),
-        ) {
-            fastvideo_models::h3::sol::H3SolAttnPolicy::Off => None,
-            kind => Some(H3SolPolicy::from_layout(kind, &layout)),
-        };
-        match fastvideo_models::h3::sol::sink_layout(
-            std::env::var("FASTVIDEO_H3_SOL_SINK").ok().as_deref(),
-        ) {
-            fastvideo_models::h3::sol::H3SolSinkLayout::Native => {
-                crate::wan::log::info(format_args!(
-                    "h3 sol sink: native multi-span (FASTVIDEO_H3_SOL_SINK=native)"
-                ));
-            }
-            fastvideo_models::h3::sol::H3SolSinkLayout::Suffix => {
-                if sol_policy.is_some() {
-                    crate::wan::log::info(format_args!(
-                        "h3 sol sink: permute [visual | sinks], single suffix sink"
-                    ));
-                }
-            }
-        }
-        let vsa = if sol_policy.is_some() || self.options.dense || force_dense {
-            if force_dense && !self.options.dense && sol_policy.is_none() {
+        let sol_kind = sol_attn_policy(self.options.recipe.as_deref(), self.options.ref2va)?;
+        let vsa = if !uses_vsa(sol_kind, self.options.dense, force_dense, &self.contract) {
+            if force_dense && !self.options.dense && sol_kind == H3SolAttnPolicy::Off {
                 crate::wan::log::info(format_args!(
                     "h3 ref2va: dense attention (interleaved condition audio)"
                 ));
@@ -947,12 +950,29 @@ impl H3Pipeline {
                 vsa_cfg,
             )?)
         };
+        let layout = DeviceLayout::new(cfg, layout)?;
+        let sol_policy = match sol_kind {
+            H3SolAttnPolicy::Off => None,
+            kind => {
+                let policy = H3SolPolicy::from_layout(kind, &layout)?;
+                crate::wan::log::info(format_args!(
+                    "{}",
+                    fastvideo_models::h3::sol::describe_sink(
+                        kind,
+                        &fastvideo_models::h3::sol::H3SolSinkSpec {
+                            sink: policy.sink,
+                            plan: None,
+                        }
+                    )
+                ));
+                Some(policy)
+            }
+        };
         let mode = if let Some(ref policy) = sol_policy {
             AttnMode::Sol(policy)
         } else {
             vsa.as_ref().map_or(AttnMode::Dense, AttnMode::Vsa)
         };
-        let layout = DeviceLayout::new(cfg, layout)?;
         let (video_noise, audio_noise) = seeded_noise(cfg, &geometry, request.seed).map_err(msg)?;
         let video_rows = CudaTensor::from_vec(
             video_noise,
@@ -1604,13 +1624,14 @@ mod tests {
     }
 
     #[test]
-    fn spark_recipe_is_vsa_and_sol_h3_defaults_to_spark_attn() {
+    fn spark_recipe_is_vsa_and_one_gpu_sol_h3_is_dense() {
+        use fastvideo_models::h3::sol::recipe_sol_attn_policy;
         let spark = resolve_contract(Path::new("/"), Some("sol-h3-spark")).unwrap();
         assert_eq!(spark.vsa_sparsity, 0.9);
         assert_eq!(spark.vsa_tile_size, 64);
         assert!(!spark.dense);
         let sol = resolve_contract(Path::new("/"), Some("sol-h3")).unwrap();
-        assert!(!sol.dense);
+        assert!(sol.dense);
         assert_eq!(sol.transformer_forwards, 4);
         assert_eq!(sol.vsa_sparsity, 0.0);
         let rtx = resolve_contract(Path::new("/"), Some("sol-h3-rtx")).unwrap();
@@ -1619,17 +1640,28 @@ mod tests {
         assert_eq!(vsa.transformer_forwards, 4);
         assert_eq!(vsa.vsa_sparsity, 0.9);
         assert_eq!(
-            fastvideo_models::h3::sol::recipe_sol_attn_policy(Some("sol-h3"), None),
-            fastvideo_models::h3::sol::H3SolAttnPolicy::Spark
+            recipe_sol_attn_policy(Some("sol-h3"), None, false).unwrap(),
+            H3SolAttnPolicy::Off
         );
         assert_eq!(
-            fastvideo_models::h3::sol::recipe_sol_attn_policy(Some("sol-h3-rtx"), None),
-            fastvideo_models::h3::sol::H3SolAttnPolicy::Rtx
+            recipe_sol_attn_policy(Some("sol-h3-rtx"), None, false).unwrap(),
+            H3SolAttnPolicy::Rtx
         );
         assert_eq!(
-            fastvideo_models::h3::sol::recipe_sol_attn_policy(Some("sol-h3-spark"), None),
-            fastvideo_models::h3::sol::H3SolAttnPolicy::Off
+            recipe_sol_attn_policy(Some("sol-h3-spark"), None, false).unwrap(),
+            H3SolAttnPolicy::Off
         );
+        // Dense sol-h3 (FASTVIDEO_H3_SOL_ATTN unset or `off`) never builds
+        // VSA, whose gate the zero-sparsity DiT does not load.
+        for recipe in ["sol-h3", "sol-h3-rtx"] {
+            let c = resolve_contract(Path::new("/"), Some(recipe)).unwrap();
+            assert!(!dit_loads_vsa_gate(&c, None));
+            assert!(!uses_vsa(H3SolAttnPolicy::Off, false, false, &c), "{recipe}");
+            assert!(!uses_vsa(H3SolAttnPolicy::Off, c.dense, false, &c), "{recipe}");
+        }
+        assert!(uses_vsa(H3SolAttnPolicy::Off, false, false, &spark));
+        assert!(!uses_vsa(H3SolAttnPolicy::Spark, false, false, &spark));
+        assert!(!uses_vsa(H3SolAttnPolicy::Off, false, true, &spark));
         assert_eq!(
             fastvideo_models::h3::spark::FIXED_PROMPT,
             "4K, refined, high quality, cinematic detail, clean textures, natural motion."
@@ -1643,6 +1675,6 @@ mod tests {
         assert!(!dit_loads_vsa_gate(&sol, None));
         assert!(dit_loads_vsa_gate(&spark, None));
         assert!(!dit_loads_vsa_gate(&spark, Some(false)));
-        assert!(!sol.dense && !spark.dense);
+        assert!(sol.dense && !spark.dense);
     }
 }

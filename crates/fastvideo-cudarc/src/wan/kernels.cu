@@ -1429,6 +1429,33 @@ extern "C" __global__ void amax_abs(const float* a, float* out, long n) {
     if (tid == 0) atomicMax((int*)out, __float_as_int(sm[0]));
 }
 
+// (sum |a - b|, sum |b|) in double: the TeaCache relative-L1 numerator and
+// denominator, so only two scalars leave the device. `out[2]` must be zeroed.
+extern "C" __global__ void abs_diff_sum(const float* a, const float* b, double* out, long n) {
+    extern __shared__ double ads_sm[];
+    int tid = threadIdx.x;
+    double d = 0.0, p = 0.0;
+    for (long i = blockIdx.x * (long)blockDim.x + tid; i < n; i += (long)gridDim.x * blockDim.x) {
+        double bv = (double)b[i];
+        d += fabs((double)a[i] - bv);
+        p += fabs(bv);
+    }
+    ads_sm[2 * tid] = d;
+    ads_sm[2 * tid + 1] = p;
+    __syncthreads();
+    for (int s = blockDim.x >> 1; s > 0; s >>= 1) {
+        if (tid < s) {
+            ads_sm[2 * tid] += ads_sm[2 * (tid + s)];
+            ads_sm[2 * tid + 1] += ads_sm[2 * (tid + s) + 1];
+        }
+        __syncthreads();
+    }
+    if (tid == 0) {
+        atomicAdd(&out[0], ads_sm[0]);
+        atomicAdd(&out[1], ads_sm[1]);
+    }
+}
+
 // amax -> (scale, inv_scale) on the device, so the GEMM's scale pointers can be
 // filled without stalling on a download.
 extern "C" __global__ void e4m3_scale_from_amax(const float* amax, float* scale, float* inv_scale) {

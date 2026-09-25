@@ -24,8 +24,9 @@
 //! in row chunks.
 //!
 //! Attention defaults to dense, which is what the diffusers oracle judges. The
-//! trained recipe (VSA-H3 with the `to_gate_compress` branch) and the Spark/RTX
-//! Sol-Attn route plug in through [`AttnMode`].
+//! trained recipe (VSA-H3 with the `to_gate_compress` branch) and the opt-in
+//! Sol-Attn policies (engine / RTX / Spark, [`fastvideo_models::h3::sol`])
+//! plug in through [`AttnMode`].
 
 use std::sync::{Arc, Mutex};
 
@@ -138,25 +139,133 @@ const CACHE_MAGIC: u64 = u64::from_le_bytes(*b"H3ADALN3");
 /// (`block_<i>`: that block's `[1, S, hidden]` output).
 pub type Observer<'a> = &'a mut dyn FnMut(&str, &CudaTensor) -> Result<()>;
 
-/// Published H3 Sol-Attn host policy: per-layer route plus text/audio sinks.
-#[derive(Clone)]
+/// TeaCache `sum|current - previous| / sum|previous|` (`teacache.py`
+/// `_relative_l1`). On the device only the two sums come back.
+fn tea_relative_l1(current: &CudaTensor, previous: &CudaTensor) -> Result<f64> {
+    if current.shape != previous.shape {
+        return Err(msg(format!(
+            "h3 teacache probe shape changed: {:?} != {:?}",
+            current.shape, previous.shape
+        )));
+    }
+    #[cfg(feature = "cuda")]
+    if let (Some(a), Some(b)) = (current.dev()?, previous.dev()?) {
+        let (diff, prev) = crate::wan::ops::abs_diff_sums_device(&a, &b)?;
+        return Ok(fastvideo_models::h3::sol::relative_l1_from_sums(diff, prev));
+    }
+    crate::wan::stats::host_fallback(
+        "h3_teacache_relative_l1",
+        format_args!("{:?}", current.shape),
+    )?;
+    Ok(fastvideo_models::h3::sol::relative_l1(
+        &current.host_cow()?,
+        &previous.host_cow()?,
+    ))
+}
+
+/// Row indices for a sequence gather, uploaded to the device on first use.
+pub struct RowGather {
+    host: Vec<usize>,
+    #[cfg(feature = "cuda")]
+    dev: std::sync::OnceLock<cudarc::driver::CudaSlice<u32>>,
+}
+
+impl RowGather {
+    pub fn new(indices: Vec<usize>) -> Self {
+        Self {
+            host: indices,
+            #[cfg(feature = "cuda")]
+            dev: std::sync::OnceLock::new(),
+        }
+    }
+
+    pub fn indices(&self) -> &[usize] {
+        &self.host
+    }
+
+    /// `out[:, r] = t[:, idx[r]]` for `t: [1, S, D]`: one gather kernel over a
+    /// resident index buffer; the host gather runs only off-device.
+    pub fn apply(&self, t: &CudaTensor) -> Result<CudaTensor> {
+        if t.rank() != 3 || t.shape[0] != 1 || t.shape[1] != self.host.len() {
+            return Err(msg(format!(
+                "h3 sol gather: expected [1, {}, D], got {:?}",
+                self.host.len(),
+                t.shape
+            )));
+        }
+        let (s, d) = (t.shape[1], t.shape[2]);
+        #[cfg(feature = "cuda")]
+        if let Some(table) = t.dev()? {
+            let idx = match self.dev.get() {
+                Some(idx) => idx,
+                None => {
+                    let host: Vec<u32> = self.host.iter().map(|&i| i as u32).collect();
+                    let up = crate::wan::ops::upload_row_indices(&host)?;
+                    let _ = self.dev.set(up);
+                    self.dev.get().expect("h3 sol gather indices")
+                }
+            };
+            let out = crate::wan::ops::index_select_rows_idx_device(&table, d, idx)?;
+            return CudaTensor::from_device_slice(out, vec![1, s, d]);
+        }
+        t.reshape(vec![s, d])?
+            .index_select_rows(&self.host)?
+            .reshape_owned(vec![1, s, d])
+    }
+}
+
+/// Spark `[visual | text+audio]` permutation: the input-row gather, its
+/// inverse on the attention output, and the RoPE tables re-ordered once.
+pub struct H3SolPermutation {
+    pub forward: RowGather,
+    pub inverse: RowGather,
+    pub cos: CudaTensor,
+    pub sin: CudaTensor,
+}
+
+/// H3 Sol-Attn policy for one request: the per-layer route plus ONE
+/// contiguous sink range in the coordinates of the Q/K/V the kernel sees
+/// (packed `[text | cond | audio | video]` order, or the permuted order when
+/// [`Self::permutation`] is set). The sink rows are also the dense query rows.
 pub struct H3SolPolicy {
     pub kind: fastvideo_models::h3::sol::H3SolAttnPolicy,
-    pub sinks: Vec<(usize, usize)>,
-    pub dense_query: Vec<(usize, usize)>,
+    pub sink: Option<(usize, usize)>,
+    pub permutation: Option<H3SolPermutation>,
 }
 
 impl H3SolPolicy {
     pub fn from_layout(
         kind: fastvideo_models::h3::sol::H3SolAttnPolicy,
-        layout: &H3PackedLayout,
-    ) -> Self {
-        let (sinks, dense_query) = fastvideo_models::h3::sol::attn_spans(layout);
-        Self {
+        layout: &DeviceLayout,
+    ) -> Result<Self> {
+        let spec = fastvideo_models::h3::sol::sink_spec(kind, &layout.layout).map_err(msg)?;
+        let permutation = match spec.plan {
+            None => None,
+            Some(plan) => {
+                let forward = RowGather::new(plan.permutation);
+                let inverse = RowGather::new(plan.inverse);
+                let s = layout.layout.sequence_length();
+                let gather_table = |t: &CudaTensor| -> Result<CudaTensor> {
+                    let r = t.numel() / s.max(1);
+                    forward
+                        .apply(&t.reshape(vec![1, s, r])?)?
+                        .reshape_owned(t.shape.clone())
+                };
+                let cos = gather_table(&layout.cos)?;
+                let sin = gather_table(&layout.sin)?;
+                Some(H3SolPermutation {
+                    forward,
+                    inverse,
+                    cos,
+                    sin,
+                })
+            }
+        };
+        Ok(Self {
             kind,
-            sinks,
-            dense_query,
-        }
+            sink: spec.sink,
+            permutation,
+        })
     }
 
     pub fn route(
@@ -165,6 +274,26 @@ impl H3SolPolicy {
         layer: usize,
     ) -> std::result::Result<fastvideo_models::h3::sol::H3SolRoute, String> {
         fastvideo_models::h3::sol::policy_route(self.kind, step, layer)
+    }
+
+    /// One Sol layer on BHSD q/k/v already in kernel order: Sol-Attn with the
+    /// exact KV sink, then the sink's query rows replaced by dense attention.
+    fn attend(
+        &self,
+        q: &CudaTensor,
+        k: &CudaTensor,
+        v: &CudaTensor,
+        tau: f64,
+    ) -> Result<CudaTensor> {
+        let (start, len) = match self.sink {
+            Some((start, len)) => (Some(start), len),
+            None => (None, 0),
+        };
+        let out = crate::sol_attn::sol_attn(q, k, v, tau, None, start, len)?;
+        match self.sink {
+            Some(range) => crate::sol_attn::splice_dense_ranges(&out, q, k, v, &[range], None),
+            None => Ok(out),
+        }
     }
 }
 
@@ -176,7 +305,7 @@ pub enum AttnMode<'a> {
     Dense,
     /// VSA-H3 with `to_gate_compress`: the function the checkpoint was trained as.
     Vsa(&'a super::vsa::H3Vsa),
-    /// Spark / RTX Sol-Attn policy. The block loop resolves the per-layer tau.
+    /// Engine / RTX / Spark Sol-Attn policy. The block loop resolves the per-layer tau.
     Sol(&'a H3SolPolicy),
     /// One Sol-Attn layer at this tau.
     SolLayer { tau: f64, policy: &'a H3SolPolicy },
@@ -542,18 +671,12 @@ impl BlockMods {
             table.hidden,
         ])?;
         let mut segments = Vec::new();
-        for (range, tag) in tag_runs(&layout.token_tags) {
+        for (range, tag) in tag_runs(layout) {
             if range.len == 0 {
                 continue;
             }
-            // Condition rows sit before the target-audio segment; they read the
-            // KEYFRAME_NOISE_AUG AdaLN (FL2VA + Ref2VA). Target audio/video and
-            // text use the ladder timestep for this step.
-            let e = if range.start >= layout.audio.start {
+            let e = if row_uses_ladder(layout, range) {
                 let row = (step * table.blocks + block) * MODALITY_NUM + usize::from(tag);
-                ladder.narrow(0, row, 1)?
-            } else if tag == TAG_TEXT {
-                let row = (step * table.blocks + block) * MODALITY_NUM + usize::from(TAG_TEXT);
                 ladder.narrow(0, row, 1)?
             } else {
                 let row = block * MODALITY_NUM + usize::from(tag);
@@ -631,14 +754,28 @@ fn adaln_device_tables(table: &AdaLnTable) -> Result<(CudaTensor, CudaTensor)> {
     })
 }
 
-/// Contiguous same-tag runs over the packed sequence.
-fn tag_runs(tags: &[u8]) -> Vec<(RowRange, u8)> {
+/// Which AdaLN timestep a run reads (`build_row_timesteps`, mirrored by
+/// [`H3PackedLayout::timestep_indices`]): every row of the text span, including
+/// the Qwen vision-pad rows that carry the video tag in FL2VA/I2V prompts, and
+/// the target audio/video take this step's ladder timestep. Only the condition
+/// rows between text and target audio (FL2VA keyframes, Ref2VA references)
+/// read the KEYFRAME_NOISE_AUG table.
+fn row_uses_ladder(layout: &H3PackedLayout, range: RowRange) -> bool {
+    range.end() <= layout.text.end() || range.start >= layout.audio.start
+}
+
+/// Contiguous same-tag runs over the packed sequence, also split where the
+/// text span ends and where target audio starts so each run reads one
+/// AdaLN timestep.
+fn tag_runs(layout: &H3PackedLayout) -> Vec<(RowRange, u8)> {
+    let tags = &layout.token_tags;
+    let breaks = [layout.text.end(), layout.audio.start];
     let mut out = Vec::new();
     let mut i = 0usize;
     while i < tags.len() {
         let tag = tags[i];
         let mut j = i + 1;
-        while j < tags.len() && tags[j] == tag {
+        while j < tags.len() && tags[j] == tag && !breaks.contains(&j) {
             j += 1;
         }
         out.push((
@@ -770,6 +907,21 @@ impl Attention {
         rope: Option<(&CudaTensor, &CudaTensor)>,
         mode: AttnMode<'_>,
     ) -> Result<CudaTensor> {
+        // Spark Sol layers attend in `[visual | text+audio]` order. Every op
+        // before attention is row-wise, so gather the input rows (and the RoPE
+        // rows) rather than Q/K/V; the inverse gather follows `to_out`.
+        let permutation = match mode {
+            AttnMode::SolLayer { policy, .. } => policy.permutation.as_ref(),
+            _ => None,
+        };
+        let permuted;
+        let (n, rope) = match permutation {
+            Some(p) => {
+                permuted = phase("h3_attn_sol_gather", || p.forward.apply(n))?;
+                (&permuted, rope.map(|_| (&p.cos, &p.sin)))
+            }
+            None => (n, rope),
+        };
         let packed = phase("h3_attn_qkvg", || self.qkvg.forward(n))?;
         let inner = self.heads * self.head_dim;
         // Per-head RMSNorm over D (one [D] weight for all heads), then RoPE.
@@ -814,13 +966,14 @@ impl Attention {
                     "h3 attn: Sol policy must be resolved to a per-layer tau before Attention::forward",
                 ));
             }
-            AttnMode::SolLayer { tau, policy } => {
-                let out = crate::sol_attn::sol_attn_sunk(&q, &k, &v, tau, None, &policy.sinks)?;
-                crate::sol_attn::splice_dense_ranges(&out, &q, &k, &v, &policy.dense_query, None)?
-            }
+            AttnMode::SolLayer { tau, policy } => policy.attend(&q, &k, &v, tau)?,
         };
         drop(packed);
-        phase("h3_attn_out", || self.to_out.forward(&out.merge_heads()?))
+        let out = phase("h3_attn_out", || self.to_out.forward(&out.merge_heads()?))?;
+        match permutation {
+            Some(p) => phase("h3_attn_sol_gather", || p.inverse.apply(&out)),
+            None => Ok(out),
+        }
     }
 }
 
@@ -1081,6 +1234,9 @@ pub struct H3Transformer {
     proj_out: Linear,
     audio_proj_out: Linear,
     table: AdaLnTable,
+    /// `norm_out` modulation `[steps * 2 * 2, hidden]` resident on the device:
+    /// row `(2 * step + audio) * 2` is the shift, the next row `1 + scale`.
+    out_mods: CudaTensor,
     has_gate: bool,
     /// Empty unless `FASTVIDEO_H3_SOL_CACHE=teacache`.
     sol_tea: Arc<Mutex<Option<H3TeaRuntime>>>,
@@ -1186,6 +1342,10 @@ impl H3Transformer {
                 true,
                 lora,
             )?,
+            out_mods: pinned(
+                table.out_mods.clone(),
+                vec![table.out_mods.len() / cfg.hidden_size, cfg.hidden_size],
+            )?,
             table,
             has_gate: with_gate,
             sol_tea: Default::default(),
@@ -1234,9 +1394,7 @@ impl H3Transformer {
         )?;
         let rel = if runtime.state.needs_signal(step) {
             let previous = runtime.signal.as_ref().expect("h3 teacache signal");
-            let cur = probe.host_cow()?;
-            let prev = previous.host_cow()?;
-            fastvideo_models::h3::sol::relative_l1(&cur, &prev)
+            tea_relative_l1(&probe, previous)?
         } else {
             0.0
         };
@@ -1437,9 +1595,9 @@ impl H3Transformer {
 
         // Both heads are defined on every row; only each modality's own rows are read.
         let head = |range: RowRange, audio: bool, proj: &Linear| -> Result<CudaTensor> {
-            let (shift, scale) = self.table.out_slot(step, audio);
-            let scale = CudaTensor::from_vec(scale.to_vec(), vec![hidden])?;
-            let shift = CudaTensor::from_vec(shift.to_vec(), vec![hidden])?;
+            let row = (2 * step + usize::from(audio)) * 2;
+            let shift = self.out_mods.narrow(0, row, 1)?.reshape(vec![hidden])?;
+            let scale = self.out_mods.narrow(0, row + 1, 1)?.reshape(vec![hidden])?;
             let n = x
                 .narrow(1, range.start, range.len)?
                 .rms_norm(&self.norm_out, cfg.final_norm_eps as f32)?;
@@ -2031,18 +2189,133 @@ pub(crate) mod tests {
         assert!(!mods.segments.is_empty());
         for (range, e) in &mods.segments {
             let tag = layout.token_tags[range.start];
-            let want = if range.start >= layout.audio.start {
-                table.block_slot(step, 1, tag)
-            } else if tag == TAG_TEXT {
-                table.block_slot(step, 1, TAG_TEXT)
-            } else {
-                table.keyframe_slot(1, tag)
-            };
+            let want = table.block_slot(step, 1, tag);
             let got = e.host_cow().unwrap();
             assert_eq!(e.shape, vec![1, ADALN_PARAMS, table.hidden]);
             assert_eq!(got.as_ref(), want);
         }
         let again = BlockMods::upload(&table, step, 0, &layout).unwrap();
         assert_eq!(again.segments.len(), mods.segments.len());
+    }
+
+    #[test]
+    fn sol_layers_with_every_block_exact_are_dense_in_every_sink_order() {
+        use fastvideo_models::h3::sol::H3SolAttnPolicy;
+        let (cfg, map) = (tiny_cfg(), weights());
+        let schedule = H3JointSchedule::fasth3_8step();
+        let model = H3Transformer::load(cfg.clone(), &map, &schedule, false).unwrap();
+        let layout = H3PackedLayout::new(2, (2, 2, 4), 1, cfg.patch_size).unwrap();
+        let s = layout.sequence_length();
+        let dl = DeviceLayout::new(&cfg, layout).unwrap();
+        let n = CudaTensor::from_vec(seeded(s * cfg.hidden_size, 0.37), vec![1, s, cfg.hidden_size])
+            .unwrap();
+        let attn = &model.blocks[0].attn;
+        let rope = Some((&dl.cos, &dl.sin));
+        let dense = attn.forward(&n, rope, AttnMode::Dense).unwrap();
+        let dense = dense.host_cow().unwrap().into_owned();
+        for kind in [
+            H3SolAttnPolicy::Engine,
+            H3SolAttnPolicy::Rtx,
+            H3SolAttnPolicy::Spark,
+        ] {
+            let policy = H3SolPolicy::from_layout(kind, &dl).unwrap();
+            assert_eq!(policy.permutation.is_some(), kind == H3SolAttnPolicy::Spark);
+            // tau -1000 routes every block exactly (the upstream correctness
+            // gate), so any sink placement and permutation must give dense.
+            let got = attn
+                .forward(&n, rope, AttnMode::SolLayer { tau: -1000.0, policy: &policy })
+                .unwrap();
+            let got = got.host_cow().unwrap();
+            let err = got
+                .iter()
+                .zip(&dense)
+                .map(|(a, b)| (a - b).abs())
+                .fold(0.0f32, f32::max);
+            assert!(err < 1e-4, "{kind:?}: max err {err}");
+        }
+    }
+
+    #[test]
+    fn spark_policy_gathers_rope_rows_and_round_trips() {
+        use fastvideo_models::h3::sol::H3SolAttnPolicy;
+        let cfg = tiny_cfg();
+        let layout = H3PackedLayout::new(2, (2, 2, 4), 1, cfg.patch_size).unwrap();
+        let s = layout.sequence_length();
+        let dl = DeviceLayout::new(&cfg, layout).unwrap();
+        let policy = H3SolPolicy::from_layout(H3SolAttnPolicy::Spark, &dl).unwrap();
+        let p = policy.permutation.as_ref().unwrap();
+        // [video 4 | text 2 + audio 2] with the sink as the 4-row suffix.
+        assert_eq!(policy.sink, Some((4, 4)));
+        assert_eq!(p.forward.indices(), &[4, 5, 6, 7, 0, 1, 2, 3]);
+        let r = dl.cos.shape[1];
+        let cos = dl.cos.host_cow().unwrap();
+        let got = p.cos.host_cow().unwrap();
+        for (dst, &src) in p.forward.indices().iter().enumerate() {
+            assert_eq!(&got[dst * r..(dst + 1) * r], &cos[src * r..(src + 1) * r]);
+        }
+        let x = CudaTensor::from_vec(seeded(s * 3, 0.2), vec![1, s, 3]).unwrap();
+        let back = p.inverse.apply(&p.forward.apply(&x).unwrap()).unwrap();
+        assert_eq!(back.host_cow().unwrap(), x.host_cow().unwrap());
+        // Engine and RTX sinks stay in packed order.
+        let engine = H3SolPolicy::from_layout(H3SolAttnPolicy::Engine, &dl).unwrap();
+        assert_eq!(engine.sink, Some((0, dl.layout.video.start)));
+        let rtx = H3SolPolicy::from_layout(H3SolAttnPolicy::Rtx, &dl).unwrap();
+        assert_eq!(rtx.sink, Some((0, dl.layout.text.len)));
+    }
+
+    #[test]
+    fn i2v_vision_pads_read_the_ladder_and_keyframes_the_noise_aug_table() {
+        // FL2VA text: "<Picture 1>: " + <vision_start> pads <vision_end> +
+        // prompt. The vision rows carry the video tag but sit in the text span,
+        // so `timestep_indices` gives them the video timestep, not the
+        // condition one. Only the keyframe latent rows read KEYFRAME_NOISE_AUG.
+        let (cfg, map) = (tiny_cfg(), weights());
+        let schedule = H3JointSchedule::fasth3_8step();
+        let table = AdaLnTable::precompute(&cfg, &map, &schedule).unwrap();
+        let mut layout = H3PackedLayout::with_keyframes(
+            6,
+            (2, 2, 2),
+            1,
+            cfg.patch_size,
+            &[fastvideo_models::h3::packing::KeyframeAnchor::First],
+        )
+        .unwrap();
+        let text_tags = [TAG_TEXT, TAG_VIDEO, TAG_VIDEO, TAG_VIDEO, TAG_TEXT, TAG_VIDEO];
+        layout.set_text_token_tags(&text_tags).unwrap();
+        assert!(layout.cond.len > 0);
+        // The trailing text-span video row must not merge with the cond run.
+        assert_eq!(layout.token_tags[layout.cond.start], TAG_VIDEO);
+        let ts = schedule.row_timesteps(2).unwrap();
+        let indices = layout.timestep_indices(&ts);
+        let (step, block) = (2usize, 0usize);
+        let mods = BlockMods::upload(&table, step, block, &layout).unwrap();
+        let mut covered = 0usize;
+        for (range, e) in &mods.segments {
+            let tag = layout.token_tags[range.start];
+            let in_cond = range.start >= layout.cond.start && range.end() <= layout.cond.end();
+            for row in range.start..range.end() {
+                assert_eq!(layout.token_tags[row], tag);
+                let want_index = if in_cond {
+                    ts.condition_index
+                } else if row >= layout.audio.start && row < layout.audio.end() {
+                    ts.audio_index
+                } else {
+                    ts.video_index
+                };
+                assert_eq!(indices[row], want_index, "row {row}");
+            }
+            let want = if in_cond {
+                table.keyframe_slot(block, tag)
+            } else {
+                assert!(row_uses_ladder(&layout, *range));
+                table.block_slot(step, block, tag)
+            };
+            assert_eq!(e.host_cow().unwrap().as_ref(), want, "run {range:?}");
+            covered += range.len;
+        }
+        assert_eq!(covered, layout.sequence_length());
+        let pads = RowRange { start: 1, len: 3 };
+        assert!(row_uses_ladder(&layout, pads));
+        assert!(!row_uses_ladder(&layout, layout.cond));
     }
 }
