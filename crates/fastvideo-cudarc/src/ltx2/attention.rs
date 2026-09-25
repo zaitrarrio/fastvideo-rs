@@ -71,6 +71,34 @@ impl DeviceRope {
         })
     }
 
+    /// [`Self::index_tokens`] with the kept tokens already on the device: the
+    /// head-major rows are built and gathered there (no host row list).
+    /// `None` when the table is not on the device.
+    #[cfg(feature = "cuda")]
+    pub(crate) fn index_tokens_device(
+        &self,
+        idx: &cudarc::driver::CudaSlice<u32>,
+    ) -> Result<Option<Self>> {
+        let (Some(cos), Some(sin)) = (self.cos.dev()?, self.sin.dev()?) else {
+            return Ok(None);
+        };
+        let rows = crate::wan::ops::ltx_rope_rows_device(idx, self.heads, self.tokens)?;
+        let shape = vec![self.heads * idx.len(), self.head_dim];
+        Ok(Some(Self {
+            cos: CudaTensor::from_device_slice(
+                crate::wan::ops::index_select_rows_dev_idx(&cos, self.head_dim, &rows)?,
+                shape.clone(),
+            )?,
+            sin: CudaTensor::from_device_slice(
+                crate::wan::ops::index_select_rows_dev_idx(&sin, self.head_dim, &rows)?,
+                shape,
+            )?,
+            heads: self.heads,
+            tokens: idx.len(),
+            head_dim: self.head_dim,
+        }))
+    }
+
     /// Rotate `[1, H, S, D]`. Batch 1 only: with the head axis folded into the
     /// rows, a second batch element would need the table repeated.
     pub fn apply(&self, x: &CudaTensor) -> Result<CudaTensor> {

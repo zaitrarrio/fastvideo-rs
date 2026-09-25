@@ -3586,3 +3586,103 @@ mod moe {
     }
 }
 // ==== end region: moe ====
+
+// ==== region: ltx2 (FBCache distance, midpoint prune) ====
+// Wrappers for the kernels at the end of kernels.cu. Appended as one block.
+
+/// `(Σ|a − b|, Σ|b|)` over two equal-length buffers, accumulated in f64 on the
+/// device; 16 bytes come back.
+#[cfg(feature = "cuda")]
+pub fn ltx_abs_diff_sums_device(a: &CudaSlice<f32>, b: &CudaSlice<f32>) -> Result<(f64, f64)> {
+    check("ltx_abs_diff_sums", a.len() == b.len())?;
+    let dev = ctx()?;
+    let mut out = dev.stream.alloc_zeros::<f64>(2).map_err(err)?;
+    if !a.is_empty() {
+        let n = a.len() as i64;
+        let blocks = a.len().div_ceil(256).clamp(1, 4096) as u32;
+        let cfg = LaunchConfig {
+            grid_dim: (blocks, 1, 1),
+            block_dim: (256, 1, 1),
+            shared_mem_bytes: 0,
+        };
+        launch!(dev.stream, &dev.kernels.ltx_abs_diff_sums, cfg; a, b, &mut out, &n)
+            .map_err(err)?;
+    }
+    let host = dev.stream.memcpy_dtov(&out).map_err(err)?;
+    super::stats::record_d2h(4);
+    Ok((host[0], host[1]))
+}
+
+/// Per-row `Σ x²` of a `[rows, d]` buffer.
+#[cfg(feature = "cuda")]
+pub fn ltx_row_sumsq_device(x: &CudaSlice<f32>, rows: usize, d: usize) -> Result<CudaSlice<f32>> {
+    check("ltx_row_sumsq", d > 0 && x.len() == rows * d)?;
+    let dev = ctx()?;
+    let mut out = alloc(rows.max(1))?;
+    let (rows_i, d_i) = (rows as i64, d as i64);
+    let cfg = LaunchConfig {
+        grid_dim: (rows.max(1) as u32, 1, 1),
+        block_dim: (256, 1, 1),
+        shared_mem_bytes: 0,
+    };
+    launch!(dev.stream, &dev.kernels.ltx_row_sumsq, cfg; x, &mut out, &rows_i, &d_i)
+        .map_err(err)?;
+    Ok(out)
+}
+
+/// [`index_select_rows_device`] with the indices already on the device.
+#[cfg(feature = "cuda")]
+pub fn index_select_rows_dev_idx(
+    table: &CudaSlice<f32>,
+    d: usize,
+    idx: &CudaSlice<u32>,
+) -> Result<CudaSlice<f32>> {
+    check("index_select_rows", d > 0 && table.len().is_multiple_of(d))?;
+    let dev = ctx()?;
+    let n = idx.len() * d;
+    let (n_i, d_i) = (n as i64, d as i64);
+    let mut out = alloc(n.max(1))?;
+    launch!(dev.stream, &dev.kernels.index_select_rows, cfg_n(n); table, idx, &mut out, &n_i, &d_i)
+        .map_err(err)?;
+    Ok(out)
+}
+
+/// A copy of `base` with rows `idx[j]` replaced by `src[j]`.
+#[cfg(feature = "cuda")]
+pub fn ltx_index_copy_rows_device(
+    base: &CudaSlice<f32>,
+    src: &CudaSlice<f32>,
+    idx: &CudaSlice<u32>,
+    d: usize,
+) -> Result<CudaSlice<f32>> {
+    check(
+        "ltx_index_copy_rows",
+        d > 0 && base.len().is_multiple_of(d) && src.len() == idx.len() * d,
+    )?;
+    let dev = ctx()?;
+    let mut out = dev.stream.clone_dtod(base).map_err(err)?;
+    if !src.is_empty() {
+        let (n, d_i) = (src.len() as i64, d as i64);
+        launch!(dev.stream, &dev.kernels.ltx_index_copy_rows, cfg_n(src.len()); src, idx, &mut out, &n, &d_i)
+            .map_err(err)?;
+    }
+    Ok(out)
+}
+
+/// Rows of a head-major `[heads · tokens, D]` rotary table for kept tokens
+/// `idx`: `h · tokens + idx[j]`, head by head.
+#[cfg(feature = "cuda")]
+pub fn ltx_rope_rows_device(
+    idx: &CudaSlice<u32>,
+    heads: usize,
+    tokens: usize,
+) -> Result<CudaSlice<u32>> {
+    let dev = ctx()?;
+    let n = idx.len() * heads;
+    let mut rows = unsafe { dev.stream.alloc::<u32>(n.max(1)) }.map_err(err)?;
+    let (k, h, t) = (idx.len() as i64, heads as i64, tokens as i64);
+    launch!(dev.stream, &dev.kernels.ltx_rope_rows, cfg_n(n); idx, &mut rows, &k, &h, &t)
+        .map_err(err)?;
+    Ok(rows)
+}
+// ==== endregion: ltx2 ====
