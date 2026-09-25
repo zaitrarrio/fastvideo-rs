@@ -7,6 +7,7 @@ pub mod config;
 pub mod fbcache;
 pub mod hq;
 pub mod lora;
+pub mod memory;
 pub mod pisa;
 pub mod rope;
 pub mod schedule;
@@ -26,6 +27,7 @@ pub use fbcache::{
     THRESHOLD as FBCACHE_THRESHOLD,
 };
 pub use hq::{requested as hq_requested, STAGE1_STEPS as HQ_STAGE1_STEPS};
+pub use memory::{FeedForwardChunking, MemoryPlan, Rtx5090Workload};
 pub use pisa::{
     feat_norm_keep_indices, keep_indices_from_scores, midpoint_prune_requested, prunes_step,
     route as pisa_route, scatter_prev, stage1_cache_requested, stage1_skips_step, Ltx23PisaRoute,

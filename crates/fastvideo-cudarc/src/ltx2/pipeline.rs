@@ -250,6 +250,8 @@ pub struct Ltx2Output {
     pub audio_tokens: usize,
     pub text: TextReport,
     pub timings: Ltx2Timings,
+    /// Device-memory peaks per phase, in order (empty without a device).
+    pub memory: Vec<PhaseMemory>,
 }
 
 /// One seeded Gaussian stream, standing in for one `torch.Generator`.
@@ -899,27 +901,96 @@ pub struct Decoders {
 
 impl Decoders {
     pub fn load(weights: &Path, cfg: &Ltx2Config) -> Result<Self> {
+        let mut decoders = Self::load_without_upsampler(weights, cfg)?;
+        decoders.upsampler = load_upsampler(weights, cfg)?;
+        Ok(decoders)
+    }
+
+    /// The video VAE, audio VAE and vocoder; `upsampler` is left `None` for a
+    /// caller that loads it only around its one call ([`load_upsampler`]).
+    pub fn load_without_upsampler(weights: &Path, cfg: &Ltx2Config) -> Result<Self> {
         let open = |sub: &str| WeightMap::open(&weights.join(sub));
-        let upsampler = match &cfg.latent_upsampler {
-            Some(ucfg) => {
-                let dir = ["latent_upsampler", "spatial_upscaler", "spatial_upsampler"]
-                    .iter()
-                    .map(|name| weights.join(name))
-                    .find(|p| p.is_dir());
-                match dir {
-                    Some(dir) => Some(LatentUpsampler::load(&WeightMap::open(&dir)?, ucfg)?),
-                    None => None,
-                }
-            }
-            None => None,
-        };
         Ok(Self {
             video: VideoDecoder::load(&open("vae")?, &cfg.vae)?,
             audio: AudioDecoder::load(&open("audio_vae")?, &cfg.audio_vae)?,
             vocoder: Vocoder::load(&open("vocoder")?, &cfg.vocoder)?,
-            upsampler,
+            upsampler: None,
         })
     }
+}
+
+/// The spatial upsampler's folder under `weights`, when the pack has one.
+pub fn upsampler_dir(weights: &Path) -> Option<PathBuf> {
+    ["latent_upsampler", "spatial_upscaler", "spatial_upsampler"]
+        .iter()
+        .map(|name| weights.join(name))
+        .find(|p| p.is_dir())
+}
+
+/// The spatial x2 upsampler, or `None` when the config or the pack has none.
+pub fn load_upsampler(weights: &Path, cfg: &Ltx2Config) -> Result<Option<LatentUpsampler>> {
+    match (&cfg.latent_upsampler, upsampler_dir(weights)) {
+        (Some(ucfg), Some(dir)) => Ok(Some(LatentUpsampler::load(&WeightMap::open(&dir)?, ucfg)?)),
+        _ => Ok(None),
+    }
+}
+
+/// Device memory of one pipeline phase, from the allocator pool's
+/// high-water marks (`torch.cuda.max_memory_allocated` / `_reserved` in the
+/// reference's `benchmark.json`).
+#[derive(Debug, Clone, PartialEq)]
+pub struct PhaseMemory {
+    pub phase: &'static str,
+    /// Highest bytes in live allocations during the phase.
+    pub peak_used: u64,
+    /// Highest bytes the pool held from the driver during the phase.
+    pub peak_reserved: u64,
+    /// Live bytes when the phase ended (after its frees).
+    pub end_used: u64,
+}
+
+/// Per-phase peaks: [`Self::mark`] closes the current phase and opens the
+/// next. Without a device (CPU runs) every call records nothing.
+#[derive(Debug, Default)]
+pub struct MemoryLog {
+    pub phases: Vec<PhaseMemory>,
+}
+
+impl MemoryLog {
+    pub fn start() -> Self {
+        crate::wan::device::reset_pool_peaks();
+        Self::default()
+    }
+
+    /// Close `phase`: wait for its kernels, record the pool's peaks, log
+    /// them, and restart the marks for the next phase.
+    pub fn mark(&mut self, phase: &'static str) -> Result<()> {
+        sync()?;
+        let Some(u) = crate::wan::device::pool_usage() else {
+            return Ok(());
+        };
+        let gib = |b: u64| b as f64 / f64::from(1u32 << 30);
+        crate::wan::log::info(format_args!(
+            "ltx2 memory {phase}: peak {:.2} GiB used, {:.2} GiB reserved; {:.2} GiB live after",
+            gib(u.used_high),
+            gib(u.reserved_high),
+            gib(u.used)
+        ));
+        self.phases.push(PhaseMemory {
+            phase,
+            peak_used: u.used_high,
+            peak_reserved: u.reserved_high,
+            end_used: u.used,
+        });
+        crate::wan::device::reset_pool_peaks();
+        Ok(())
+    }
+}
+
+/// Hand what the last phase freed back to the driver, as the reference's
+/// blocks do on exit (`AllocatorTrimStrategy.TRIM`: sync + `empty_cache`).
+fn trim() -> Result<()> {
+    crate::wan::device::trim_pool().map_err(|e| err(format!("device pool trim: {e}")))
 }
 
 /// What [`decode_and_write`] left on disk, and how long each part took.
@@ -1547,7 +1618,7 @@ fn release_dit_for_decode(model: &mut Option<Ltx2Transformer>, loaded_strength: 
 }
 
 /// The models of a stage-1 run, loaded once and kept: the DiT (37.8 GB) and the
-/// three decoders (~3 GB). A second generation pays for text, denoise and
+/// video/audio decoders (~2 GB). A second generation pays for text, denoise and
 /// decode only — and for text not even that when the prompt was seen before.
 /// `model` is `None` after generate-decode (DiT dropped for VRAM); the next
 /// generate reloads it from `dit`.
@@ -1561,7 +1632,10 @@ pub struct Ltx2Pipeline {
     lora: Option<PathBuf>,
     /// Strength the resident DiT was fused at. `Some(0.0)` is the unfused base.
     loaded_strength: Option<f32>,
+    /// Video VAE, audio VAE and vocoder; the spatial upsampler is loaded
+    /// only around its call in a two-stage run.
     decoders: Decoders,
+    has_upsampler: bool,
     text: TextEncoder,
     /// Seconds [`Self::load`] took.
     pub load_s: f64,
@@ -1588,7 +1662,9 @@ impl Ltx2Pipeline {
         } else {
             None
         };
-        let decoders = Decoders::load(&paths.weights, cfg)?;
+        let decoders = Decoders::load_without_upsampler(&paths.weights, cfg)?;
+        let has_upsampler =
+            cfg.latent_upsampler.is_some() && upsampler_dir(&paths.weights).is_some();
         sync()?;
         let loaded_strength = model.as_ref().map(|_| 0.0);
         Ok(Self {
@@ -1599,6 +1675,7 @@ impl Ltx2Pipeline {
             lora,
             loaded_strength,
             decoders,
+            has_upsampler,
             text: TextEncoder::new(paths, cfg, options),
             load_s: timer.elapsed().as_secs_f64(),
         })
@@ -1754,7 +1831,7 @@ impl Ltx2Pipeline {
             if !matches!(cfg.version, Ltx2ModelVersion::V23 | Ltx2ModelVersion::V25) {
                 return Err(err("ltx2: --two-stage requires model version 2.3 or 2.5"));
             }
-            if self.decoders.upsampler.is_none() {
+            if !self.has_upsampler {
                 return Err(err(
                     "ltx2: two-stage needs weights/latent_upsampler|spatial_upscaler (missing beside --weights)",
                 ));
@@ -1775,6 +1852,7 @@ impl Ltx2Pipeline {
             }
         }
         let mut timings = Ltx2Timings::default();
+        let mut memory = MemoryLog::start();
         let (stage1_h, stage1_w) = if req.two_stage {
             (req.height / 2, req.width / 2)
         } else {
@@ -1803,6 +1881,10 @@ impl Ltx2Pipeline {
         if req.two_stage {
             self.text.unload_resident();
         }
+        // The streamed Gemma and the connectors are gone; hand their pool
+        // blocks back before the DiT (re)loads and stage 1 allocates.
+        trim()?;
+        memory.mark("text")?;
 
         let (s1, s2) = self.stage_lora_strengths(req.two_stage);
         let timer = Instant::now();
@@ -1936,19 +2018,34 @@ impl Ltx2Pipeline {
         timings.stage1_s = timer.elapsed().as_secs_f64();
         if let Some(model) = self.model.as_ref() {
             model.disarm_fbcache();
+            // Stage-1 buffers (cache residuals, the stored velocity) go now,
+            // not when stage 2 overwrites them.
+            model.clear_step_caches();
         }
         drop(ropes);
+        trim()?;
+        memory.mark("stage1")?;
 
         let decode_grid = if req.two_stage {
-            let up = self.decoders.upsampler.as_ref().expect("checked above");
             let up_timer = Instant::now();
-            let unpacked = unpack_video(&video, grid1)?;
-            let denorm = self.decoders.video.denormalize(&unpacked)?;
-            let upsampled = up.forward(&denorm)?;
-            let renorm = self.decoders.video.normalize(&upsampled)?;
-            video = state.store(pack_video(&renorm)?)?;
-            sync()?;
+            // Loaded for this call only, like the reference's `VideoUpsampler`
+            // block. The DiT stays: stage 2 runs the same weights, and the
+            // upsampler's working set is small beside stage 2's.
+            {
+                let up = load_upsampler(&self.weights, &cfg)?.ok_or_else(|| {
+                    err("ltx2: two-stage needs weights/latent_upsampler|spatial_upscaler")
+                })?;
+                let upsampled = up.forward(
+                    &self
+                        .decoders
+                        .video
+                        .denormalize(&unpack_video(&video, grid1)?)?,
+                )?;
+                video = state.store(pack_video(&self.decoders.video.normalize(&upsampled)?)?)?;
+            }
+            trim()?;
             timings.upsample_s = up_timer.elapsed().as_secs_f64();
+            memory.mark("upsample")?;
             crate::wan::log::info(format_args!(
                 "ltx2 upsample {:.2}s → latent grid {:?}",
                 timings.upsample_s, grid_full
@@ -1978,6 +2075,7 @@ impl Ltx2Pipeline {
             if let Some(model) = self.model.as_ref() {
                 // FBCache is a stage-1 cache only (GB200 `fullopt.toml`).
                 model.disarm_fbcache();
+                model.clear_step_caches();
                 model.set_prune_active(true);
             }
             let schedule2 =
@@ -2028,6 +2126,7 @@ impl Ltx2Pipeline {
             audio = a2;
             timings.stage2_s = s2_timer.elapsed().as_secs_f64();
             drop(ropes2);
+            memory.mark("stage2")?;
             grid_full
         } else {
             grid1
@@ -2035,10 +2134,13 @@ impl Ltx2Pipeline {
         timings.denoise_s = timings.stage1_s + timings.upsample_s + timings.stage2_s;
         timings.step_s = step_s;
         drop(text);
+        drop(text_uncond);
 
-        // Free the resident DiT (~38 GiB) before VAE activations, conv or DiffVAE.
+        // Free the resident DiT (~37 GiB) before VAE activations, conv or
+        // DiffVAE, and return its blocks to the driver (the reference's
+        // `DiffusionStage` frees its transformer on exit).
         release_dit_for_decode(&mut self.model, &mut self.loaded_strength);
-        sync()?;
+        trim()?;
 
         let written = if req.diff_vae {
             crate::wan::log::info(format_args!("ltx2: DiffVAE decode (DiT dropped)"));
@@ -2080,6 +2182,9 @@ impl Ltx2Pipeline {
         timings.decode_audio_s = written.decode_audio_s;
         timings.decode_video_s = written.decode_video_s;
         timings.write_s = written.write_s;
+        drop((video, audio));
+        trim()?;
+        memory.mark("decode")?;
         Ok(Ltx2Output {
             frames: written.frames,
             mp4: written.mp4,
@@ -2089,6 +2194,7 @@ impl Ltx2Pipeline {
             audio_tokens,
             text: text_report,
             timings,
+            memory: memory.phases,
         })
     }
 
@@ -2192,8 +2298,11 @@ impl Ltx2Pipeline {
         let strength = fastvideo_models::ltx2::lora::REFINER_STRENGTH;
 
         let mut timings = Ltx2Timings::default();
+        let mut memory = MemoryLog::start();
         let (contexts, text_report) = self.text.encode(prompt, true)?;
         timings.text_s = text_report.seconds;
+        trim()?;
+        memory.mark("text")?;
         let schedule = Ltx2Schedule::distilled_stage_2_steps(3).map_err(err)?;
         crate::wan::log::info(format_args!(
             "ltx2 refine: 3 deterministic steps {:?}, sol stage-2, lora {strength} {}, grid {:?}, {} audio tokens",
@@ -2239,6 +2348,7 @@ impl Ltx2Pipeline {
         timings.denoise_s = timings.stage2_s;
         drop(ropes);
         drop(text);
+        memory.mark("stage2")?;
 
         std::fs::create_dir_all(out_dir).map_err(|e| err(format!("{}: {e}", out_dir.display())))?;
         let timer = Instant::now();
@@ -2285,6 +2395,7 @@ impl Ltx2Pipeline {
         let timer = Instant::now();
         let (frames, mp4_path) = writer.finish()?;
         timings.write_s = timer.elapsed().as_secs_f64();
+        memory.mark("decode")?;
         Ok(Ltx2Output {
             frames,
             mp4: mp4_path,
@@ -2294,6 +2405,7 @@ impl Ltx2Pipeline {
             audio_tokens,
             text: text_report,
             timings,
+            memory: memory.phases,
         })
     }
 }

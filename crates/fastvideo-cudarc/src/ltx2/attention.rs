@@ -15,6 +15,7 @@
 //!   of `rope_half`'s `[rows, D]` table — `[B, H, S, D]` viewed as
 //!   `[B, 1, H·S, D]` is the same memory — so no kernel is needed for it.
 
+use fastvideo_models::ltx2::memory::FeedForwardChunking;
 use fastvideo_models::ltx2::SplitRope;
 
 use crate::wan::nn::{scaled_dot_product_attention, Linear};
@@ -233,8 +234,13 @@ impl Attention {
             .rms_norm(&self.norm_k, self.eps)?
             .split_heads_bhsd(0, heads, d)?;
         let v = self.to_v.forward(ctx)?.split_heads_bhsd(0, heads, d)?;
+        // Rotate by value: the unrotated q/k are freed here, not at the end
+        // of the function (at 130k tokens each is 2 GiB).
         let (q, k) = match q_rope {
-            Some(rope) => (rope.apply(&q)?, k_rope.unwrap_or(rope).apply(&k)?),
+            Some(rope) => {
+                let q = rope.apply(&q)?;
+                (q, k_rope.unwrap_or(rope).apply(&k)?)
+            }
             None => (q, k),
         };
         let (k, v) = crate::wan::nvfp4::maybe_kv(k, v)?;
@@ -253,6 +259,9 @@ impl Attention {
                 crate::pisa_attn::pisa_attn(&q, &k, &v, sparsity, scale)?
             }
         };
+        // q/k/v are dead once the scores are consumed; free them before the
+        // gate, head merge and output projection allocate theirs.
+        drop((q, k, v));
         let merged = match gate_logits {
             Some(logits) => self.apply_head_gates(&out, &logits)?.merge_heads()?,
             None => out.merge_heads()?,
@@ -317,7 +326,39 @@ impl FeedForward {
         })
     }
 
+    /// `Linear → tanh-GELU → Linear` on `[.., tokens, dim]`. From
+    /// [`FeedForwardChunking::RTX5090`]'s threshold on (65 536 tokens: the
+    /// stage-2 video stream at 4K) the token axis runs in 16 384-row pieces,
+    /// concatenated back — `memory.py`'s `torch.split` / `torch.cat`. Rows are
+    /// independent, so the values are the same; the float32 `[tokens, 4·dim]`
+    /// intermediate (8 GiB at 130k tokens) is not.
     pub fn forward(&self, x: &CudaTensor) -> Result<CudaTensor> {
+        self.forward_chunked(x, FeedForwardChunking::RTX5090)
+    }
+
+    pub fn forward_chunked(
+        &self,
+        x: &CudaTensor,
+        chunking: FeedForwardChunking,
+    ) -> Result<CudaTensor> {
+        let axis = x.rank().checked_sub(2).ok_or_else(|| {
+            msg(format!(
+                "ltx2 feed-forward expects [.., tokens, dim], got {:?}",
+                x.shape
+            ))
+        })?;
+        let spans = chunking.spans(x.shape[axis]);
+        if spans.len() <= 1 {
+            return self.forward_whole(x);
+        }
+        let parts = spans
+            .iter()
+            .map(|&(start, len)| self.forward_whole(&x.narrow(axis, start, len)?))
+            .collect::<Result<Vec<_>>>()?;
+        CudaTensor::cat(&parts.iter().collect::<Vec<_>>(), axis)
+    }
+
+    fn forward_whole(&self, x: &CudaTensor) -> Result<CudaTensor> {
         self.down.forward(&self.up.forward_gelu(x)?)
     }
 
@@ -725,5 +766,53 @@ pub(crate) mod tests {
             })
             .collect();
         assert_close(&rows(&got, 6), &want, 1e-5, "feed forward");
+    }
+
+    /// The host memory plan prices dense attention with the same score chunk
+    /// the device path allocates.
+    #[test]
+    fn score_budget_matches_the_memory_plan() {
+        assert_eq!(
+            crate::wan::attn::DENSE_SCORE_BUDGET,
+            fastvideo_models::ltx2::memory::DENSE_SCORE_BUDGET_ELEMS
+        );
+    }
+
+    /// `memory.py`'s split: pieces of `chunk_tokens` rows from `min_tokens` on,
+    /// concatenated back, give the whole forward's values.
+    #[test]
+    fn chunked_feed_forward_equals_the_whole_forward() {
+        let map = weights();
+        let ff = FeedForward::load(
+            &map,
+            &Keys::transformer(Layout::Diffusers),
+            "blk.ff",
+            6,
+            24,
+            false,
+        )
+        .unwrap();
+        let x = tensor(&tokens(11, 6, 0.31));
+        let whole = ff.forward_chunked(&x, FeedForwardChunking::OFF).unwrap();
+        let chunking = FeedForwardChunking {
+            chunk_tokens: 4,
+            min_tokens: 8,
+        };
+        assert_eq!(chunking.spans(11), vec![(0, 4), (4, 4), (8, 3)]);
+        let split = ff.forward_chunked(&x, chunking).unwrap();
+        assert_eq!(split.shape, whole.shape);
+        assert_eq!(split.host_cow().unwrap(), whole.host_cow().unwrap());
+        // Below the threshold the module's own forward runs.
+        let short = tensor(&tokens(7, 6, 0.31));
+        assert_eq!(
+            ff.forward_chunked(&short, chunking)
+                .unwrap()
+                .host_cow()
+                .unwrap(),
+            ff.forward_chunked(&short, FeedForwardChunking::OFF)
+                .unwrap()
+                .host_cow()
+                .unwrap()
+        );
     }
 }

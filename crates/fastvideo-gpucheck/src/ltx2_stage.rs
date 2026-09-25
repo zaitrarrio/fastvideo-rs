@@ -34,7 +34,8 @@ use fastvideo_cudarc::CudaTensor;
 use fastvideo_models::ltx2::config::{
     ltx2_19b_distilled, ltx2_23_22b_distilled, ltx2_5_22b_distilled, Ltx2Config,
 };
-use fastvideo_models::ltx2::{Ltx2RopeTables, Ltx2Schedule, SplitRope};
+use fastvideo_models::ltx2::memory::{plan_distilled_two_stage, PlanOptions};
+use fastvideo_models::ltx2::{Ltx2RopeTables, Ltx2Schedule, Rtx5090Workload, SplitRope};
 use serde_json::json;
 
 use crate::metrics::diff;
@@ -256,7 +257,7 @@ pub enum Stage {
         #[arg(long, default_value = "cuda")]
         device: String,
         #[command(flatten)]
-        geometry: Geometry,
+        geometry: GenGeometry,
         /// Frames and WAV only (no ffmpeg needed).
         #[arg(long)]
         no_mp4: bool,
@@ -334,6 +335,39 @@ pub struct Geometry {
     num_frames: usize,
     #[arg(long, default_value_t = 24.0)]
     frame_rate: f64,
+}
+
+/// `gen`'s geometry: the sol-engine single-GPU workload (`run_ltx25_gpu.sh`,
+/// `LTX25_WORKLOAD`), each field overridable.
+#[derive(clap::Args, Debug, Clone)]
+pub struct GenGeometry {
+    /// `4k5s` (3840x2176, 121 frames) or `1080p20s` (1920x1088, 481 frames),
+    /// both at 24 fps. `--height`/`--width`/`--num-frames`/`--frame-rate`
+    /// override single fields.
+    #[arg(long, default_value = "4k5s")]
+    workload: String,
+    #[arg(long)]
+    height: Option<usize>,
+    #[arg(long)]
+    width: Option<usize>,
+    #[arg(long)]
+    num_frames: Option<usize>,
+    #[arg(long)]
+    frame_rate: Option<f64>,
+}
+
+impl GenGeometry {
+    fn resolve(&self) -> anyhow::Result<Geometry> {
+        let w = Rtx5090Workload::from_name(&self.workload).ok_or_else(|| {
+            anyhow::anyhow!("--workload {}: expected 4k5s or 1080p20s", self.workload)
+        })?;
+        Ok(Geometry {
+            height: self.height.unwrap_or(w.height()),
+            width: self.width.unwrap_or(w.width()),
+            num_frames: self.num_frames.unwrap_or(w.num_frames()),
+            frame_rate: self.frame_rate.unwrap_or(w.frame_rate()),
+        })
+    }
 }
 
 pub fn run(report: &mut Report, stage: &Stage) -> StageResult<()> {
@@ -498,7 +532,7 @@ pub fn run(report: &mut Report, stage: &Stage) -> StageResult<()> {
                 clip,
                 *seed,
                 device,
-                *geometry,
+                geometry.resolve()?,
                 !*no_mp4,
                 *warm,
                 *two_stage,
@@ -1616,9 +1650,37 @@ fn gen(
             "image": image.map(|p| p.display().to_string()),
         }),
     );
+    if two_stage {
+        let plan = plan_distilled_two_stage(
+            &cfg,
+            g.height,
+            g.width,
+            g.num_frames,
+            g.frame_rate,
+            PlanOptions::default(),
+        );
+        let phases: Vec<serde_json::Value> = plan
+            .phases
+            .iter()
+            .map(|p| json!({"phase": p.phase, "gib": gib_of(p.total())}))
+            .collect();
+        eprintln!(
+            "ltx2 gen {}x{}x{}: planned peak {:.2} GiB",
+            g.width,
+            g.height,
+            g.num_frames,
+            gib_of(plan.peak())
+        );
+        report.set(
+            "memory_plan",
+            json!({"peak_gib": gib_of(plan.peak()), "phases": phases}),
+        );
+    }
     let peak = crate::gpu::PeakMem::start();
     let wall = std::time::Instant::now();
     let mut pipeline = Ltx2Pipeline::load(paths, &cfg, options)?;
+    fastvideo_cudarc::wan::device::trim_pool()?;
+    let load_used = fastvideo_cudarc::wan::device::pool_usage();
     if warm {
         // Untimed: first-use costs (cuDNN plan search, allocator growth, page
         // cache) land here. The cache is bypassed so this run cannot turn the
@@ -1668,6 +1730,36 @@ fn gen(
         }),
     );
     report.set("peak_vram_mib", peak_mib);
+    // Per-phase peaks from the allocator pool's high-water marks.
+    if let Some(u) = load_used {
+        eprintln!(
+            "ltx2 memory load: {:.2} GiB live after load",
+            gib_of(u.used)
+        );
+    }
+    let phases: Vec<serde_json::Value> = out
+        .memory
+        .iter()
+        .map(|p| {
+            eprintln!(
+                "ltx2 memory {:>8}: peak {:6.2} GiB used, {:6.2} GiB reserved, {:6.2} GiB live after",
+                p.phase,
+                gib_of(p.peak_used),
+                gib_of(p.peak_reserved),
+                gib_of(p.end_used)
+            );
+            json!({
+                "phase": p.phase,
+                "peak_used_gib": gib_of(p.peak_used),
+                "peak_reserved_gib": gib_of(p.peak_reserved),
+                "end_used_gib": gib_of(p.end_used),
+            })
+        })
+        .collect();
+    report.set(
+        "phase_memory",
+        json!({"load_used_gib": load_used.map(|u| gib_of(u.used)), "phases": phases}),
+    );
     report.set("steps", &stats);
     report.set("outputs", json!({"mp4": out.mp4, "wav": out.wav, "frames": out.frames.len(), "first_frame": out.frames.first()}));
     report.set(
@@ -1715,6 +1807,10 @@ fn gen(
         )?;
     }
     Ok(())
+}
+
+fn gib_of(bytes: u64) -> f64 {
+    bytes as f64 / f64::from(1u32 << 30)
 }
 
 // ---- slim text encoder ------------------------------------------------------

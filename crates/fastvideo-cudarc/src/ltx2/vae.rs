@@ -34,10 +34,12 @@
 //! replicate-pads only at the true ends of the clip. Skip paths buffer their
 //! frames until the delayed main path catches up. The result is the same sum
 //! of the same products as the one-shot decode, in a different order of
-//! arrival. The low-resolution stages are cheap and run whole; the last
-//! up-block and the output head — where a full-clip activation is 1.4 GB and
-//! there are a dozen of them — run in chunks of `FASTVIDEO_LTX2_VAE_CHUNK`
-//! frames (default 8, giving 16 output frames per chunk), and finished frames
+//! arrival. Every stage streams: latent frames enter `conv_in`
+//! `FASTVIDEO_LTX2_VAE_LATENT_CHUNK` at a time (default 1), each block passes
+//! on the frames that became computable, and the last up-block and the output
+//! head take those in runs of `FASTVIDEO_LTX2_VAE_CHUNK` frames (default 8).
+//! At 4K a whole-clip activation of the middle stages is 16 GB; streamed, a
+//! stage holds its chunk and two carried frames per conv. Finished frames
 //! reach the sink while later ones are still being computed.
 //! See docs/ports/ltx2.md §c.
 
@@ -363,12 +365,6 @@ impl Block {
         }
         Ok(x)
     }
-
-    /// The whole clip in one go: a stream of one chunk.
-    fn forward(&self, x: CudaTensor, eps: f32) -> Result<CudaTensor> {
-        self.push(&mut BlockState::default(), Some(x), true, eps)?
-            .ok_or_else(|| msg("ltx2 vae: a block produced no frames"))
-    }
 }
 
 pub struct VideoDecoder {
@@ -522,8 +518,9 @@ impl VideoDecoder {
     }
 
     /// [`Self::decode_streaming`] with the chunk size — frames of the last
-    /// up-block's input per step — given explicitly. Any value gives the same
-    /// video; it trades peak memory against launch overhead.
+    /// up-block's input per step — given explicitly (the latent frames fed per
+    /// step are `FASTVIDEO_LTX2_VAE_LATENT_CHUNK`, default 1). Any value gives
+    /// the same video; it trades peak memory against launch overhead.
     pub fn decode_streaming_chunked(
         &self,
         latents: &CudaTensor,
@@ -549,42 +546,61 @@ impl VideoDecoder {
         }
         let eps = self.cfg.pixel_norm_eps as f32;
         let z = self.denormalize(latents)?;
-        let mut x = self
-            .conv_in
-            .push(&mut ConvState::default(), Some(z), true)?
-            .ok_or_else(|| msg("ltx2 vae: conv_in produced no frames"))?;
         let (last_block, early) = self
             .blocks
             .split_last()
             .ok_or_else(|| msg("ltx2 vae: no blocks"))?;
-        for block in early {
-            x = block.forward(x, eps)?;
-        }
-
+        // Every stage streams: `latent_chunk` latent frames enter `conv_in`
+        // per step, each early block passes on whatever frames became
+        // computable, and the last block takes those in runs of `chunk`. A 4K
+        // clip's early stages hold 16 GB per whole-clip activation; streamed,
+        // a stage holds its chunk plus two carried frames per conv.
+        let latent_chunk =
+            crate::wan::envflag::usize_flag("FASTVIDEO_LTX2_VAE_LATENT_CHUNK", 1).max(1);
         let chunk = chunk.max(1);
-        let total = frames(&x);
+        let mut conv_in = ConvState::default();
+        let mut states: Vec<BlockState> = early.iter().map(|_| BlockState::default()).collect();
         let (mut state, mut head) = (BlockState::default(), ConvState::default());
-        let (mut start, mut emitted) = (0usize, 0usize);
-        while start < total {
-            let len = chunk.min(total - start);
-            let last = start + len == total;
-            let piece = x.narrow(2, start, len)?;
-            start += len;
-            let h = last_block.push(&mut state, Some(piece), last, eps)?;
-            let h = h
-                .map(|h| h.rms_norm_channels_act(&self.ones_out, eps, true))
-                .transpose()?;
-            let Some(y) = self.conv_out.push(&mut head, h, last)? else {
-                continue;
-            };
-            let video = self.unpatchify(&y)?;
-            let (n, hh, ww) = (frames(&video), video.shape[3], video.shape[4]);
-            // [1, 3, n, H, W] → [n, 3, H, W].
-            let by_frame = video
-                .reshape(vec![self.cfg.out_channels, n, hh, ww])?
-                .permute(&[1, 0, 2, 3])?;
-            sink(emitted, &by_frame)?;
-            emitted += n;
+        let (mut fed, mut emitted) = (0usize, 0usize);
+        while fed < f {
+            let len = latent_chunk.min(f - fed);
+            let last_in = fed + len == f;
+            let piece = z.narrow(2, fed, len)?;
+            fed += len;
+            let mut x = self.conv_in.push(&mut conv_in, Some(piece), last_in)?;
+            for (block, st) in early.iter().zip(&mut states) {
+                x = block.push(st, x, last_in, eps)?;
+            }
+            let total = x.as_ref().map_or(0, frames);
+            let mut start = 0usize;
+            loop {
+                let run = chunk.min(total - start);
+                let piece = match &x {
+                    Some(x) if run > 0 => Some(x.narrow(2, start, run)?),
+                    _ => None,
+                };
+                start += run;
+                let last = last_in && start == total;
+                if piece.is_some() || last {
+                    let h = last_block.push(&mut state, piece, last, eps)?;
+                    let h = h
+                        .map(|h| h.rms_norm_channels_act(&self.ones_out, eps, true))
+                        .transpose()?;
+                    if let Some(y) = self.conv_out.push(&mut head, h, last)? {
+                        let video = self.unpatchify(&y)?;
+                        let (n, hh, ww) = (frames(&video), video.shape[3], video.shape[4]);
+                        // [1, 3, n, H, W] → [n, 3, H, W].
+                        let by_frame = video
+                            .reshape(vec![self.cfg.out_channels, n, hh, ww])?
+                            .permute(&[1, 0, 2, 3])?;
+                        sink(emitted, &by_frame)?;
+                        emitted += n;
+                    }
+                }
+                if start >= total {
+                    break;
+                }
+            }
         }
         let want = self.cfg.decoded_frames(f);
         if emitted != want {

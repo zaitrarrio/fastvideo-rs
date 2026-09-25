@@ -735,6 +735,28 @@ impl Ltx2Transformer {
         }
     }
 
+    /// Drop what the step caches hold from the stage that just ran — FBCache
+    /// residuals and signals, the stage-1 velocity, the prune reference — so
+    /// stage-1-sized buffers do not ride along into stage 2. Which caches are
+    /// switched on is left as it is.
+    pub fn clear_step_caches(&self) {
+        if let Some(rt) = self.fbcache.lock().expect("ltx2 fbcache").as_mut() {
+            rt.signals.clear();
+            rt.res_v.clear();
+            rt.res_a.clear();
+            rt.pending_v = None;
+            rt.pending_a = None;
+            rt.active_pass = None;
+        }
+        if let Some(rt) = self.stage1.lock().expect("ltx2 stage1").as_mut() {
+            rt.last_v = None;
+            rt.last_a = None;
+        }
+        if let Some(rt) = self.prune.lock().expect("ltx2 prune").as_mut() {
+            rt.prev.clear();
+        }
+    }
+
     pub fn enable_midpoint_prune(&self) {
         *self.prune.lock().expect("ltx2 prune") = Some(LtxPruneRuntime {
             active: false,

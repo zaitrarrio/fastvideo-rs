@@ -271,6 +271,93 @@ pub fn synchronize() -> Result<()> {
     Ok(())
 }
 
+/// Bytes of the global device's default memory pool, which every
+/// `malloc_async` allocation of this crate comes from. `used_high` /
+/// `reserved_high` are high-water marks since the last [`reset_pool_peaks`]
+/// (the equivalent of `torch.cuda.max_memory_allocated` / `_reserved`).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct PoolUsage {
+    pub used: u64,
+    pub used_high: u64,
+    pub reserved: u64,
+    pub reserved_high: u64,
+}
+
+#[cfg(feature = "cuda")]
+fn default_pool() -> Option<cudarc::driver::sys::CUmemoryPool> {
+    use cudarc::driver::sys;
+    let dev = global_device()?;
+    dev.ctx.bind_to_thread().ok()?;
+    let mut pool: sys::CUmemoryPool = std::ptr::null_mut();
+    unsafe { sys::cuDeviceGetDefaultMemPool(&mut pool, dev.ctx.cu_device()) }
+        .result()
+        .ok()?;
+    (!pool.is_null()).then_some(pool)
+}
+
+/// The default pool's counters, or `None` without a live device.
+pub fn pool_usage() -> Option<PoolUsage> {
+    #[cfg(feature = "cuda")]
+    {
+        use cudarc::driver::sys::CUmemPool_attribute as A;
+        let pool = default_pool()?;
+        let get = |attr: A| -> Option<u64> {
+            let mut v: u64 = 0;
+            unsafe {
+                cudarc::driver::sys::cuMemPoolGetAttribute(pool, attr, (&mut v as *mut u64).cast())
+            }
+            .result()
+            .ok()?;
+            Some(v)
+        };
+        Some(PoolUsage {
+            used: get(A::CU_MEMPOOL_ATTR_USED_MEM_CURRENT)?,
+            used_high: get(A::CU_MEMPOOL_ATTR_USED_MEM_HIGH)?,
+            reserved: get(A::CU_MEMPOOL_ATTR_RESERVED_MEM_CURRENT)?,
+            reserved_high: get(A::CU_MEMPOOL_ATTR_RESERVED_MEM_HIGH)?,
+        })
+    }
+    #[cfg(not(feature = "cuda"))]
+    {
+        None
+    }
+}
+
+/// Restart both high-water marks from the current usage.
+pub fn reset_pool_peaks() {
+    #[cfg(feature = "cuda")]
+    if let Some(pool) = default_pool() {
+        use cudarc::driver::sys::CUmemPool_attribute as A;
+        for attr in [
+            A::CU_MEMPOOL_ATTR_USED_MEM_HIGH,
+            A::CU_MEMPOOL_ATTR_RESERVED_MEM_HIGH,
+        ] {
+            // Only 0 is accepted: "reset to the current value".
+            let mut zero: u64 = 0;
+            let _ = unsafe {
+                cudarc::driver::sys::cuMemPoolSetAttribute(
+                    pool,
+                    attr,
+                    (&mut zero as *mut u64).cast(),
+                )
+            };
+        }
+    }
+}
+
+/// Wait for queued work, then hand every freed-but-cached pool byte back to
+/// the driver (`torch.cuda.empty_cache()` after a pipeline block). The pool
+/// keeps freed memory otherwise (see `keep_memory_pool`), and a model freed
+/// in many pieces leaves fragments the next large allocation cannot use.
+pub fn trim_pool() -> Result<()> {
+    synchronize()?;
+    #[cfg(feature = "cuda")]
+    if let Some(pool) = default_pool() {
+        unsafe { cudarc::driver::sys::cuMemPoolTrimTo(pool, 0) }.result()?;
+    }
+    Ok(())
+}
+
 /// Registry of lazily-created `DeviceContext`s keyed by CUDA device index,
 /// for multi-GPU dispatch (as opposed to the single process-wide device).
 #[cfg(feature = "cuda")]
