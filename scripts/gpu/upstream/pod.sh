@@ -45,6 +45,7 @@ run_step() {
     weights:h3-fl2va) weights_h3_fl2va ;;
     weights:h3-diffusers) weights_h3_diffusers ;;
     weights:fasth3-8step) weights_fasth3_8step ;;
+    weights:ltx25) weights_ltx25 ;;
     info:ltx25) info_ltx25 ;;
     info:box) info_box ;;
     cells) run_cells ;;
@@ -100,6 +101,30 @@ weights_fasth3_8step() {
   pyn "$HERE/overlay.py" --repo FastVideo/FastVideo-FastH3-8-Step-V2 --rev "$F8_REV" \
     --out "$UW/FastVideo-FastH3-8-Step-V2" --local "$W/h3-8step" --max-download-mb 50 \
     >"$OUT/overlay-fasth3-8step.json"
+}
+
+# Lightricks/LTX-2.5 single-file packs the sol-engine RTX5090 driver loads,
+# rebuilt byte-exactly from the Diffusers copy (needs an HF token with access to
+# the gated repo, for headers and the few remote tensors only).
+LTX_REV=5e6e71018ee1756ed329b697a7b4aedc934dfce9
+weights_ltx25() {
+  local L="$W/ltx25" o="$UW/LTX-2.5" rc=0
+  pyn "$HERE/reconstruct.py" --plan ltx25_upsampler --src "$L/latent_upsampler" --repo Lightricks/LTX-2.5 \
+    --revision "$LTX_REV" --files latent_upscale_models/ltx-2.5-latent-spatial-upscaler-x2-bf16-1.0.safetensors \
+    --out-root "$o" --report "$OUT/reconstruct-ltx-up.json" || rc=1
+  pyn "$HERE/reconstruct.py" --plan ltx25_video_vae --src "$L/vae" --repo Lightricks/LTX-2.5 \
+    --revision "$LTX_REV" --files vae/ltx-2.5-video-vae-conv-bf16.safetensors \
+    --out-root "$o" --report "$OUT/reconstruct-ltx-vae.json" || rc=1
+  pyn "$HERE/reconstruct.py" --plan ltx25_audio_vae --src "A=$L/audio_vae" --src "V=$L/vocoder" \
+    --repo Lightricks/LTX-2.5 --revision "$LTX_REV" --files vae/ltx-2.5-audio-vae-bf16.safetensors \
+    --out-root "$o" --report "$OUT/reconstruct-ltx-avae.json" || rc=1
+  pyn "$HERE/reconstruct.py" --plan ltx25_text_encoder --src "G=$L/text_encoder" --src "C=$L/connectors" \
+    --repo Lightricks/LTX-2.5 --revision "$LTX_REV" --files text_encoders/gemma4-12b-with-proj-ltx-2.5-bf16.safetensors \
+    --out-root "$o" --report "$OUT/reconstruct-ltx-te.json" || rc=1
+  pyn "$HERE/reconstruct.py" --plan ltx25_transformer --src "T=$L/transformer" --src "C=$L/connectors" \
+    --repo Lightricks/LTX-2.5 --revision "$LTX_REV" --files diffusion_models/ltx-2.5-22b-distilled-transformer-bf16.safetensors \
+    --out-root "$o" --report "$OUT/reconstruct-ltx-dit.json" || rc=1
+  return $rc
 }
 
 # Headers only (keys, dtypes, shapes, metadata) — to plan the LTX-2.5

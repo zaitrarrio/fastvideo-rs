@@ -109,10 +109,17 @@ class Sources:
     def __init__(self, roots: list[Path], prefer: list[str] | None = None) -> None:
         self.meta: dict[str, tuple[Path, int, dict]] = {}
         self._maps: dict[Path, mmap.mmap] = {}
+        self._ns: dict[Path, str] = {}
         files: list[Path] = []
+        spec: list[tuple[str, Path]] = []
         for root in roots:
+            ns, _, path = str(root).rpartition("=")
+            spec.append((ns, Path(path)))
+        for ns, root in spec:
+            before = len(files)
             if root.is_file():
                 files.append(root)
+                self._ns.update({root: ns})
                 continue
             # Prefer the file set an index.json names (dirs may hold stale shard sets).
             idx = sorted(root.glob("*.safetensors.index.json"))
@@ -121,12 +128,16 @@ class Sources:
                 files += [root / n for n in names]
             else:
                 files += sorted(root.glob("*.safetensors"))
+            for f in files[before:]:
+                self._ns[f] = ns
         for f in files:
             with open(f, "rb") as fh:
                 n = struct.unpack("<Q", fh.read(8))[0]
                 h = json.loads(fh.read(n))
             h.pop("__metadata__", None)
+            ns = self._ns.get(f, "")
             for k, v in h.items():
+                k = f"{ns}:{k}" if ns else k
                 if k in self.meta:
                     continue
                 self.meta[k] = (f, 8 + n, v)
@@ -204,7 +215,91 @@ def plan_h3_fl2va_video_vae(key: str) -> tuple:
     return ("copy", key)
 
 
+# ---- LTX-2.5 single-file packs (Lightricks/LTX-2.5) from LTX-2.5-Diffusers.
+# Renames are the inverse of diffusers' scripts/convert_ltx2_to_diffusers.py
+# (LTX 2.3/2.5 dicts); every tensor keeps its dtype and layout.
+_LTX_TR = [("patchify_proj", "proj_in"), ("audio_patchify_proj", "audio_proj_in"),
+           ("av_ca_video_scale_shift_adaln_single", "av_cross_attn_video_scale_shift"),
+           ("av_ca_a2v_gate_adaln_single", "av_cross_attn_video_a2v_gate"),
+           ("av_ca_audio_scale_shift_adaln_single", "av_cross_attn_audio_scale_shift"),
+           ("av_ca_v2a_gate_adaln_single", "av_cross_attn_audio_v2a_gate"),
+           ("scale_shift_table_a2v_ca_video", "video_a2v_cross_attn_scale_shift_table"),
+           ("scale_shift_table_a2v_ca_audio", "audio_a2v_cross_attn_scale_shift_table"),
+           ("q_norm", "norm_q"), ("k_norm", "norm_k"),
+           ("audio_prompt_adaln_single", "audio_prompt_adaln"), ("prompt_adaln_single", "prompt_adaln")]
+_LTX_CONN = [("connectors.", ""), ("video_embeddings_connector", "video_connector"),
+             ("audio_embeddings_connector", "audio_connector"), ("transformer_1d_blocks", "transformer_blocks"),
+             ("text_embedding_projection.audio_aggregate_embed", "audio_text_proj_in"),
+             ("text_embedding_projection.video_aggregate_embed", "video_text_proj_in"),
+             ("q_norm", "norm_q"), ("k_norm", "norm_k")]
+_LTX_VAE_BLOCKS = {"down_blocks.0": "down_blocks.0", "down_blocks.1": "down_blocks.0.downsamplers.0",
+                   "down_blocks.2": "down_blocks.1", "down_blocks.3": "down_blocks.1.downsamplers.0",
+                   "down_blocks.4": "down_blocks.2", "down_blocks.5": "down_blocks.2.downsamplers.0",
+                   "down_blocks.6": "down_blocks.3", "down_blocks.7": "down_blocks.3.downsamplers.0",
+                   "down_blocks.8": "mid_block", "up_blocks.0": "mid_block", "up_blocks.1": "up_blocks.0.upsamplers.0",
+                   "up_blocks.2": "up_blocks.0", "up_blocks.3": "up_blocks.1.upsamplers.0", "up_blocks.4": "up_blocks.1",
+                   "up_blocks.5": "up_blocks.2.upsamplers.0", "up_blocks.6": "up_blocks.2",
+                   "up_blocks.7": "up_blocks.3.upsamplers.0", "up_blocks.8": "up_blocks.3"}
+_LTX_STATS = [("per_channel_statistics.mean-of-means", "latents_mean"),
+              ("per_channel_statistics.std-of-means", "latents_std")]
+
+
+def _ren(k: str, rules) -> str:
+    for a, b in rules:
+        k = k.replace(a, b)
+    return k
+
+
+def plan_ltx25_transformer(key: str) -> tuple:
+    k = key[len("model.diffusion_model."):]
+    if k == "keyframes_abs_pos_embedding":
+        return ("remote",)  # 8 KB; not carried by the Diffusers transformer
+    if k.startswith(("video_embeddings_connector", "audio_embeddings_connector")):
+        return ("copy", "C:" + _ren(k, _LTX_CONN))
+    k = _ren(k, _LTX_TR)
+    if k.startswith("adaln_single."):
+        k = "time_embed." + k[len("adaln_single."):]
+    elif k.startswith("audio_adaln_single."):
+        k = "audio_time_embed." + k[len("audio_adaln_single."):]
+    return ("copy", "T:" + k)
+
+
+def plan_ltx25_text_encoder(key: str) -> tuple:
+    if key.startswith("hf_asset__") or key == "tokenizer_json":
+        return ("remote",)  # packed tokenizer / processor sidecars (U8, <= 32 MB)
+    if key.startswith("text_embedding_projection."):
+        return ("copy", "C:" + _ren(key, _LTX_CONN))
+    for a, b in (("model.layers.", "model.language_model.layers."),
+                 ("model.embed_tokens.", "model.language_model.embed_tokens."),
+                 ("model.norm.", "model.language_model.norm."), ("vision_model.", "model.vision_embedder."),
+                 ("multi_modal_projector.", "model.embed_vision."), ("audio_projector.", "model.embed_audio.")):
+        if key.startswith(a):
+            return ("copy", "G:" + b + key[len(a):])
+    return ("copy", "G:" + key)
+
+
+def plan_ltx25_video_vae(key: str) -> tuple:
+    m = re.match(r"(encoder|decoder)\.((?:down|up)_blocks\.\d+)\.(.*)$", key)
+    k = f"{m.group(1)}.{_LTX_VAE_BLOCKS[m.group(2)]}.{m.group(3)}" if m else key
+    k = _ren(k, [("last_time_embedder", "time_embedder"), ("last_scale_shift_table", "scale_shift_table"),
+                 ("res_blocks", "resnets"), *_LTX_STATS])
+    return ("copy", k)
+
+
+def plan_ltx25_audio_vae(key: str) -> tuple:
+    if key.startswith("audio_vae."):
+        return ("copy", "A:" + _ren(key[len("audio_vae."):], _LTX_STATS))
+    k = _ren(key[len("vocoder."):], [("resblocks", "resnets"), ("conv_pre", "conv_in"), ("conv_post", "conv_out"),
+                                      ("act_post", "act_out"), ("downsample.lowpass", "downsample")])
+    return ("copy", "V:" + k.replace(".ups.", ".upsamplers."))
+
+
 PLANS = {
+    "ltx25_transformer": plan_ltx25_transformer,
+    "ltx25_text_encoder": plan_ltx25_text_encoder,
+    "ltx25_video_vae": plan_ltx25_video_vae,
+    "ltx25_audio_vae": plan_ltx25_audio_vae,
+    "ltx25_upsampler": lambda k: ("copy", k),
     "h3_fl2va_dit": plan_h3_fl2va_dit,
     "h3_fl2va_video_vae": plan_h3_fl2va_video_vae,
 }
