@@ -197,6 +197,8 @@ pub struct BlockWeights<B> {
     residency: Residency,
     lookahead: usize,
     label: &'static str,
+    /// Ledger category of the device ring ([`super::ledger::DIT_RING`]).
+    ledger: &'static str,
     #[cfg(feature = "cuda")]
     ring: Mutex<Option<ring::DeviceRing>>,
     stats: Mutex<OffloadStats>,
@@ -210,6 +212,7 @@ impl<B: OffloadBlock> BlockWeights<B> {
             residency,
             lookahead: lookahead(),
             label,
+            ledger: super::ledger::DIT_RING,
             #[cfg(feature = "cuda")]
             ring: Mutex::new(None),
             stats: Mutex::new(OffloadStats::default()),
@@ -220,6 +223,13 @@ impl<B: OffloadBlock> BlockWeights<B> {
         let mut w = Self::new(label, Residency::Resident);
         w.blocks = blocks;
         w
+    }
+
+    /// Book the device ring under `category` (default
+    /// [`super::ledger::DIT_RING`]).
+    pub fn with_ledger(mut self, category: &'static str) -> Self {
+        self.ledger = category;
+        self
     }
 
     /// Copies kept ahead of the computing block (streamed runs).
@@ -324,7 +334,7 @@ impl<B: OffloadBlock> BlockWeights<B> {
         let (block, slot) = {
             let mut guard = self.ring.lock().expect("offload ring");
             if guard.is_none() {
-                *guard = Some(ring::DeviceRing::new(self.slots())?);
+                *guard = Some(ring::DeviceRing::new(self.slots(), self.ledger)?);
             }
             let ring = guard.as_mut().expect("ring");
             let window: Vec<usize> = (0..self.slots().min(n)).map(|k| (index + k) % n).collect();
@@ -542,6 +552,9 @@ mod ring {
         /// Per slot: the timing of its latest copy.
         pending: Vec<Option<Pending>>,
         done: Vec<Pending>,
+        /// Ledger category and the bytes of slot buffers booked under it.
+        ledger: &'static str,
+        booked: u64,
     }
 
     fn timed(stream: &CudaStream) -> Result<CudaEvent> {
@@ -551,7 +564,7 @@ mod ring {
     }
 
     impl DeviceRing {
-        pub(super) fn new(slots: usize) -> Result<Self> {
+        pub(super) fn new(slots: usize, ledger: &'static str) -> Result<Self> {
             let dev =
                 crate::wan::device::global_device().ok_or_else(|| msg("offload: no device"))?;
             let copy = dev
@@ -574,6 +587,8 @@ mod ring {
                 tick: 0,
                 pending: (0..slots).map(|_| None).collect(),
                 done: Vec::new(),
+                ledger,
+                booked: 0,
             })
         }
 
@@ -624,11 +639,16 @@ mod ring {
                     .zip(&lens)
                     .all(|(p, (_, l))| p.len() == *l);
             if !fits {
+                let freed: u64 = slot.parts.iter().map(|p| p.len() as u64 * 2).sum();
                 slot.parts.clear();
+                crate::wan::ledger::add(self.ledger, -(freed as i64));
+                self.booked -= freed;
                 for (_, len) in &lens {
                     // Written by the copy below before any kernel reads it.
                     let buf = unsafe { self.copy.alloc::<bf16>(*len) }.map_err(err)?;
                     slot.parts.push(Arc::new(buf));
+                    crate::wan::ledger::add(self.ledger, *len as i64 * 2);
+                    self.booked += *len as u64 * 2;
                 }
             }
             let start = timed(&self.copy)?;
@@ -741,6 +761,7 @@ mod ring {
             // Slot buffers are freed on the copy stream; nothing may still read them.
             let _ = self.compute.synchronize();
             let _ = self.copy.synchronize();
+            crate::wan::ledger::add(self.ledger, -(self.booked as i64));
         }
     }
 }
@@ -769,6 +790,7 @@ pub struct MemoryLog {
 impl MemoryLog {
     pub fn start(model: &'static str) -> Self {
         super::device::reset_pool_peaks();
+        super::ledger::reset_phase();
         Self {
             model,
             phases: Vec::new(),
@@ -776,19 +798,44 @@ impl MemoryLog {
     }
 
     /// Close `phase`: wait for its kernels, record the pool's peaks, log
-    /// them, and restart the marks for the next phase.
+    /// them with the ledger of what held them, and restart the marks for the
+    /// next phase. Under a device budget ([`super::device::device_budget`])
+    /// a phase whose peak (pool plus what lives outside it) exceeds the
+    /// budget fails the run here, naming every term.
     pub fn mark(&mut self, phase: &'static str) -> Result<()> {
         super::device::synchronize().map_err(|e| msg(e.to_string()))?;
         let Some(u) = super::device::pool_usage() else {
+            super::ledger::reset_phase();
             return Ok(());
         };
+        let non_pool = super::device::non_pool_bytes().unwrap_or(0);
+        let budget = super::device::device_budget();
+        let ledger = super::ledger::PhaseLedger::new(
+            super::ledger::entries(),
+            u.used_high,
+            u.reserved_high,
+            non_pool,
+            budget,
+        );
         super::log::info(format_args!(
-            "{} memory {phase}: peak {:.2} GiB used, {:.2} GiB reserved; {:.2} GiB live after",
+            "{} memory {phase}: peak {:.2} GiB used, {:.2} GiB reserved; {:.2} GiB live after; ledger: {}",
             self.model,
             u.used_high as f64 / GIB,
             u.reserved_high as f64 / GIB,
-            u.used as f64 / GIB
+            u.used as f64 / GIB,
+            ledger.describe()
         ));
+        if let Some(b) = budget {
+            if u.reserved_high + non_pool > b && u.used_high + non_pool <= b {
+                super::log::info(format_args!(
+                    "{} memory {phase}: the pool reserved {:.2} GiB (+{:.2} GiB outside it) against a {:.2} GiB budget; the used peak fits, the cached blocks would have to be reused on that card",
+                    self.model,
+                    u.reserved_high as f64 / GIB,
+                    non_pool as f64 / GIB,
+                    b as f64 / GIB
+                ));
+            }
+        }
         self.phases.push(PhaseMemory {
             phase,
             peak_used: u.used_high,
@@ -796,7 +843,9 @@ impl MemoryLog {
             end_used: u.used,
         });
         super::device::reset_pool_peaks();
-        Ok(())
+        super::ledger::reset_phase();
+        super::device::check_budget(phase, u.used_high, non_pool, budget)
+            .map_err(|e| msg(format!("{} {e}; ledger: {}", self.model, ledger.describe())))
     }
 
     pub fn peak_used(&self) -> u64 {

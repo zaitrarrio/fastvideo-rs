@@ -287,55 +287,96 @@ pub fn latent_upsampler_bytes(u: &Ltx2LatentUpsamplerConfig) -> u64 {
 /// Their shapes are small next to everything else here; this is a bound.
 pub const RUNTIME_ALLOWANCE: u64 = 2 * GIB;
 
-/// Peak transient bytes of one DiT forward's video sub-layers on top of
-/// what the forward keeps for its whole length, float32 activations, as the
-/// Rust forward allocates them (bf16 linears stage `x`/`y` in bf16 beside the
-/// float32 result).
+/// Peak live `[S, dv]` float32 buffers of one block's video stream, in
+/// units of `x = S·dv·4` bytes, as `Ltx2Transformer::block` allocates them
+/// on the fast path:
+///
+/// * activations are float32 (the residual stream, Q/K/V, every sub-layer
+///   output); a bf16 linear stages its input and output in bf16 beside the
+///   float32 result (`0.5 in + 0.5 out + 1 out` per GEMM);
+/// * SDPA is the fused MMA kernel: bf16 casts of Q/K/V plus a float32 output,
+///   no score buffer (a dense fallback's score chunk is priced separately);
+/// * every intermediate is freed as soon as its consumer ran (the block and
+///   the attention consume their inputs), so the live set of each sub-layer
+///   is the residual `xv`, the sub-layer's own tensors, and nothing of the
+///   sub-layers before it.
+///
+/// Before this ordering a block kept every shadowed intermediate to its end:
+/// eleven `[S, dv]` buffers by the feed-forward, 22 GiB at 4K stage 2, which
+/// is what a resident 4k5s run measured above its plan (74.4 vs 59.6 GiB).
+///
+/// `c` = cross-attention width / dv, `f` = FFN width / dv.
+pub fn video_block_peak_units(
+    t: &Ltx2TransformerConfig,
+    video_tokens: usize,
+    ffn: FeedForwardChunking,
+) -> f64 {
+    let dv = t.inner_dim() as f64;
+    let c = t.av_cross_inner_dim() as f64 / dv;
+    let f = t.ff_inner_dim() as f64 / dv;
+    // A bf16 GEMM from width `i` to width `o` (units of dv): bf16 input,
+    // bf16 output and the float32 result, all at once.
+    let gemm = |i: f64, o: f64| 0.5 * i + 0.5 * o + o;
+    // `rms_adaln`: the norm's output and the modulated copy beside `xv`.
+    let adaln = 3.0;
+    // Self-attention: xv + h while q, k, v are projected (the widest moment
+    // is v's GEMM beside q and k), then h is freed; SDPA over xv, q, k, v
+    // with their bf16 casts and its float32 output; then the merge and the
+    // output projection.
+    let qkv = 2.0 + 2.0 + gemm(1.0, 1.0);
+    let sdpa = 4.0 + 1.5 + 1.0;
+    let out = 2.0 + gemm(1.0, 1.0);
+    let self_attn = qkv.max(sdpa).max(out).max(adaln);
+    // Text cross-attention: q only is video-sized (K/V are text rows).
+    let text_q = 2.0 + gemm(1.0, 1.0);
+    let text = text_q.max(2.0 + 0.5 + 1.0).max(out).max(adaln + 1.0);
+    // Audio-to-video: q and output projection at width c; video-to-audio:
+    // K and V of the video stream at width c, from a modulated copy of xv.
+    let a2v = (2.0 + gemm(1.0, c))
+        .max(1.0 + 2.5 * c)
+        .max(2.0 + c + gemm(c, 1.0) - 1.0);
+    let v2a = (3.0 + c + gemm(1.0, c)).max(3.0 + 3.0 * c).max(adaln + 1.0);
+    let av = a2v.max(v2a);
+    // Feed-forward: whole, or in spans with the finished pieces beside the
+    // next span's narrow copy, up- and down-projection, then the input is
+    // freed before the concatenation.
+    let spans = ffn.spans(video_tokens);
+    let ffn_peak = if spans.len() <= 1 {
+        (2.0 + gemm(1.0, f)).max(1.0 + f + gemm(f, 1.0))
+    } else {
+        let s = video_tokens as f64;
+        let mut done = 0.0;
+        let mut peak: f64 = 3.0;
+        for &(_, len) in &spans {
+            let r = len as f64 / s;
+            let up = r * gemm(1.0, f);
+            let down = r * (f + gemm(f, 1.0));
+            peak = peak.max(2.0 + done + r + up.max(down));
+            done += r;
+        }
+        peak
+    };
+    self_attn.max(text).max(av).max(ffn_peak).max(adaln)
+}
+
+/// Peak transient bytes of one DiT forward on top of what the forward keeps
+/// for its whole length: [`video_block_peak_units`] of the video residual,
+/// plus a dense fallback's score chunk (the fused kernel needs none; kept as
+/// the allowance for Sol/PISA metadata and the cuBLAS path).
 pub fn dit_forward_transient_bytes(
     t: &Ltx2TransformerConfig,
     video_tokens: usize,
-    text_tokens: usize,
+    _text_tokens: usize,
     ffn: FeedForwardChunking,
     score_budget_elems: usize,
 ) -> u64 {
     let s = video_tokens as u64;
-    let dv = t.inner_dim() as u64;
-    let x = s * dv * 4; // one [S, dv] float32 activation
-    let ff = t.ff_inner_dim() as u64;
-    // Dense SDPA holds one query chunk of float32 scores plus its bf16
-    // probabilities; the chunk is at least one query row.
-    let scores = |keys: u64, heads: u64| {
-        let row = heads * keys;
-        let rows = (score_budget_elems as u64 / row.max(1)).clamp(1, s.max(1));
-        rows * row * 4 + rows * row * 2
-    };
+    let x = s * t.inner_dim() as u64 * 4;
     let hv = t.num_attention_heads as u64;
-    // Self-attention: xv, h, q, k, v, out, and V cast to bf16 (x/2) during SDPA.
-    let self_attn = x * 13 / 2 + scores(s, hv);
-    // Text cross-attention: xv, h (+ modulated copy), q, out, gated u, sum.
-    let text_attn = 6 * x + scores(text_tokens as u64, hv);
-    // FFN: xv, h, then per span the input copy, up (bf16 in/out + f32 act),
-    // down (bf16 in/out + f32 out), beside the outputs of earlier spans and,
-    // once there is more than one, the concatenation.
-    let spans = ffn.spans(video_tokens);
-    let span_peak = |len: u64| {
-        let copy = if spans.len() > 1 { len * dv * 4 } else { 0 };
-        let up = len * ff * 4 + len * ff * 2 + len * dv * 2;
-        let down = len * ff * 4 + len * ff * 2 + len * dv * 2 + len * dv * 4;
-        copy + up.max(down)
-    };
-    let mut done = 0u64;
-    let mut ffn_peak = 0u64;
-    for &(_, len) in &spans {
-        let len = len as u64;
-        ffn_peak = ffn_peak.max(done * dv * 4 + span_peak(len));
-        done += len;
-    }
-    if spans.len() > 1 {
-        ffn_peak = ffn_peak.max(2 * x);
-    }
-    let ffn_total = 2 * x + ffn_peak;
-    self_attn.max(text_attn).max(ffn_total)
+    let row = hv * s;
+    let rows = (score_budget_elems as u64 / row.max(1)).clamp(1, s.max(1));
+    let scores = rows * row * 4 + rows * row * 2;
+    (video_block_peak_units(t, video_tokens, ffn) * x as f64).ceil() as u64 + scores
 }
 
 /// What one DiT forward keeps for its whole length: the rotary tables of the
@@ -692,22 +733,19 @@ mod tests {
     #[test]
     fn streamed_two_stage_fits_a_32_gib_card() {
         let cfg = ltx2_5_22b_distilled();
-        for w in [Rtx5090Workload::Uhd5s, Rtx5090Workload::Fhd20s] {
-            let plan = |opts| {
-                plan_distilled_two_stage(
-                    &cfg,
-                    w.height(),
-                    w.width(),
-                    w.num_frames(),
-                    w.frame_rate(),
-                    opts,
-                )
-            };
+        // The two reference workloads and the 768x512 5 s default.
+        let cells = [
+            ("4k5s", 2176, 3840, 121),
+            ("1080p20s", 1088, 1920, 481),
+            ("768x512", 512, 768, 121),
+        ];
+        for (name, height, width, frames) in cells {
+            let plan = |opts| plan_distilled_two_stage(&cfg, height, width, frames, 24.0, opts);
             let streamed = plan(PlanOptions::streamed());
             for p in &streamed.phases {
                 eprintln!(
                     "{} streamed {:>8}: weights {:6.2} GiB, working {:6.2} GiB, total {:6.2} GiB",
-                    w.name(),
+                    name,
                     p.phase,
                     gib(p.weights),
                     gib(p.working),
@@ -717,12 +755,11 @@ mod tests {
             let peak = streamed.peak();
             assert!(
                 peak < 30 * GIB,
-                "{}: streamed peak {:.2} GiB",
-                w.name(),
+                "{name}: streamed peak {:.2} GiB",
                 gib(peak)
             );
             let resident = plan(PlanOptions::default());
-            assert!(resident.peak() > 32 * GIB, "{}", w.name());
+            assert!(resident.peak() > 32 * GIB, "{name}");
             // Two block slots instead of 48 blocks.
             let t = &cfg.transformer;
             assert!(
@@ -744,7 +781,7 @@ mod tests {
         let whole = dit_forward_transient_bytes(t, s, 1024, FeedForwardChunking::OFF, b);
         // Unchunked, the [S, 16384] float32 up-projection (4x) and its bf16
         // copy dominate the forward; chunked, attention does.
-        assert!(whole >= 9 * x, "{:.2} GiB", gib(whole));
+        assert!(whole >= 8 * x, "{:.2} GiB", gib(whole));
         assert!(chunked < whole);
     }
 

@@ -17,9 +17,32 @@ pub fn on_gpu(spec: &str) -> bool {
 
 /// Initialize the cudarc global device (compiles all NVRTC kernels on CUDA).
 pub fn init(spec: &str) -> anyhow::Result<DeviceInfo> {
+    init_with_budget(spec, None)
+}
+
+/// [`init`] with a device budget in GiB (`--device-budget-gib`): every auto
+/// policy then decides as if the card had only that much memory, the rest is
+/// held back so allocations fail where they would on that card, and a phase
+/// whose peak exceeds the budget fails the run. `None` leaves
+/// `FASTVIDEO_DEVICE_BUDGET_GIB` in charge.
+pub fn init_with_budget(spec: &str, budget_gib: Option<f64>) -> anyhow::Result<DeviceInfo> {
+    if let Some(gib) = budget_gib {
+        set_budget_gib(gib)?;
+    }
     fastvideo_cudarc::resolve_device(spec)
         .map_err(|e| anyhow::anyhow!("resolve_device({spec}): {e}"))?;
     Ok(info(spec))
+}
+
+/// Set the process's device budget (`--device-budget-gib`), overriding
+/// `FASTVIDEO_DEVICE_BUDGET_GIB`; applied to the device when it comes up (or
+/// at once when it is up already). `0` turns it off.
+pub fn set_budget_gib(gib: f64) -> anyhow::Result<()> {
+    let bytes = fastvideo_cudarc::wan::device::parse_budget_gib(&gib.to_string())
+        .map_err(|e| anyhow::anyhow!(e))?;
+    fastvideo_cudarc::wan::device::set_device_budget(bytes)
+        .map_err(|e| anyhow::anyhow!("device budget: {e}"))?;
+    Ok(())
 }
 
 #[cfg(feature = "cuda")]
@@ -52,13 +75,13 @@ fn cpu_info(spec: &str) -> DeviceInfo {
     }
 }
 
-/// `(free_bytes, total_bytes)` for the global device, if one is live.
+/// `(free_bytes, total_bytes)` for the global device, if one is live. Under
+/// a device budget (`--device-budget-gib` / `FASTVIDEO_DEVICE_BUDGET_GIB`)
+/// these are the emulated card's: `total` is the budget and the ballast
+/// holding the rest back does not count as used.
 #[cfg(feature = "cuda")]
 pub fn mem_info() -> Option<(u64, u64)> {
-    let dev = fastvideo_cudarc::wan::device::global_device()?;
-    dev.ctx.bind_to_thread().ok()?;
-    let (free, total) = cudarc::driver::result::mem_get_info().ok()?;
-    Some((free as u64, total as u64))
+    fastvideo_cudarc::wan::device::free_memory()
 }
 
 #[cfg(not(feature = "cuda"))]

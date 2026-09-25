@@ -1242,6 +1242,8 @@ pub struct TextEncoder {
     residency: TextResidency,
     /// Built on the first cache miss: a run of hits never loads Gemma at all.
     resident: Option<ResidentText>,
+    /// The resident Gemma + connectors in the device ledger.
+    booking: crate::wan::ledger::Booking,
     /// `(sha256-able tokenizer bytes, gemma identity, connector identity)`.
     identity: Option<(Vec<u8>, [u8; 32], [u8; 32])>,
 }
@@ -1254,6 +1256,7 @@ impl TextEncoder {
             cache: options.text_cache.clone().map(TextCache::new),
             residency: options.text_residency,
             resident: None,
+            booking: crate::wan::ledger::Booking::default(),
             identity: None,
         }
     }
@@ -1400,9 +1403,19 @@ impl TextEncoder {
         let timer = Instant::now();
         let cfg = Self::decoder_config(&self.cfg);
         let map = WeightMap::open(&self.paths.text_root().join("text_encoder"))?;
-        let gemma = ResidentDecoder::load(&map, &cfg, cfg.num_layers())?;
-        let connectors = self.load_connectors()?;
-        sync()?;
+        let mut booking = std::mem::take(&mut self.booking);
+        let loaded = booking.track(
+            crate::wan::ledger::TEXT_ENCODER,
+            || -> Result<(ResidentDecoder, TextConnectors)> {
+                let gemma = ResidentDecoder::load(&map, &cfg, cfg.num_layers())?;
+                let connectors = self.load_connectors()?;
+                sync()?;
+                Ok((gemma, connectors))
+            },
+            |r| r.as_ref().ok().map(|(g, _)| g.device_bytes()),
+        );
+        self.booking = booking;
+        let (gemma, connectors) = loaded?;
         crate::wan::log::info(format_args!(
             "ltx2 text: resident, {:.1} GiB on device, loaded in {:.1}s",
             gemma.device_bytes() as f64 / f64::from(1u32 << 30),
@@ -1468,6 +1481,7 @@ impl TextEncoder {
     /// Drop a resident Gemma + connectors after contexts are already in hand.
     pub fn unload_resident(&mut self) {
         if self.resident.take().is_some() {
+            self.booking.release(crate::wan::ledger::TEXT_ENCODER);
             crate::wan::log::info(format_args!(
                 "ltx2 text: dropped resident Gemma (contexts already encoded)"
             ));
@@ -1642,6 +1656,8 @@ pub struct Ltx2Pipeline {
     text: TextEncoder,
     /// Seconds [`Self::load`] took.
     pub load_s: f64,
+    /// The DiT and the decoders in the device ledger.
+    booking: crate::wan::ledger::Booking,
 }
 
 impl Ltx2Pipeline {
@@ -1682,13 +1698,20 @@ impl Ltx2Pipeline {
             ));
             residency
         };
+        let mut booking = crate::wan::ledger::Booking::default();
         let model = if lora.is_none() {
             let map = open_distilled(&paths.dit, "transformer")?;
-            Some(Ltx2Transformer::load_with_residency(
-                &map,
-                &Keys::transformer(Keys::detect(&map)),
-                &cfg.transformer,
-                residency,
+            Some(booking.track(
+                crate::wan::ledger::DIT_NONLINEAR,
+                || {
+                    Ltx2Transformer::load_with_residency(
+                        &map,
+                        &Keys::transformer(Keys::detect(&map)),
+                        &cfg.transformer,
+                        residency,
+                    )
+                },
+                |_| None,
             )?)
         } else {
             None
@@ -1696,7 +1719,11 @@ impl Ltx2Pipeline {
         let decoders = if residency.is_streamed() {
             None
         } else {
-            Some(Decoders::load_without_upsampler(&paths.weights, cfg)?)
+            Some(booking.track(
+                crate::wan::ledger::VAE,
+                || Decoders::load_without_upsampler(&paths.weights, cfg),
+                |_| None,
+            )?)
         };
         let has_upsampler =
             cfg.latent_upsampler.is_some() && upsampler_dir(&paths.weights).is_some();
@@ -1714,6 +1741,7 @@ impl Ltx2Pipeline {
             has_upsampler,
             text: TextEncoder::new(paths, cfg, options),
             load_s: timer.elapsed().as_secs_f64(),
+            booking,
         })
     }
 
@@ -1742,11 +1770,27 @@ impl Ltx2Pipeline {
             // resident Gemma is what OOMed a 96 GB PRO 6000 (~95 GiB).
             self.model = None;
             self.loaded_strength = None;
+            self.booking.release(crate::wan::ledger::DIT_NONLINEAR);
             sync()?;
         }
+        let mut booking = std::mem::take(&mut self.booking);
+        let loaded = booking.track(
+            crate::wan::ledger::DIT_NONLINEAR,
+            || self.load_dit(strength),
+            |_| None,
+        );
+        self.booking = booking;
+        let model = loaded?;
+        self.loaded_strength = Some(strength);
+        self.model = Some(model);
+        Ok(self.model.as_ref().expect("just loaded"))
+    }
+
+    /// Load the DiT (fused at `strength` when a LoRA is configured).
+    fn load_dit(&self, strength: f32) -> Result<Ltx2Transformer> {
         let map = open_distilled(&self.dit, "transformer")?;
         let keys = Keys::transformer(Keys::detect(&map));
-        let mut model = if let Some(path) = self.lora.clone() {
+        let model = if let Some(path) = self.lora.clone() {
             // Strength 0 so `apply_bf16` is a no-op and `attach_linear` snapshots
             // unfused `W0`. Device re-fuse walks the resident linears.
             let guard = super::lora::install(&path, 0.0)?;
@@ -1780,9 +1824,7 @@ impl Ltx2Pipeline {
             )?
         };
         sync()?;
-        self.loaded_strength = Some(strength);
-        self.model = Some(model);
-        Ok(self.model.as_ref().expect("just loaded"))
+        Ok(model)
     }
 
     /// Where the DiT blocks live for this pipeline.
@@ -1794,7 +1836,12 @@ impl Ltx2Pipeline {
     fn ensure_decoders(&mut self) -> Result<&Decoders> {
         if self.decoders.is_none() {
             let timer = Instant::now();
-            self.decoders = Some(Decoders::load_without_upsampler(&self.weights, &self.cfg)?);
+            let decoders = self.booking.track(
+                crate::wan::ledger::VAE,
+                || Decoders::load_without_upsampler(&self.weights, &self.cfg),
+                |_| None,
+            )?;
+            self.decoders = Some(decoders);
             crate::wan::log::info(format_args!(
                 "ltx2 decoders: loaded for this call ({:.1}s)",
                 timer.elapsed().as_secs_f64()
@@ -1806,9 +1853,19 @@ impl Ltx2Pipeline {
     /// Streamed runs: drop the decoders until the next call that reads them.
     fn release_transient_decoders(&mut self) -> Result<()> {
         if self.residency.is_streamed() && self.decoders.take().is_some() {
+            self.booking.release(crate::wan::ledger::VAE);
             trim()?;
         }
         Ok(())
+    }
+
+    /// End of a denoise stage: the streamed ring's slots and the step
+    /// caches' buffers go back before the next phase allocates.
+    fn end_stage(&self) {
+        if let Some(model) = self.model.as_ref() {
+            model.release_offload_device();
+            model.clear_step_caches();
+        }
     }
 
     /// Log the block streaming counters of the stage that just ran.
@@ -2104,10 +2161,10 @@ impl Ltx2Pipeline {
         self.report_offload("stage1");
         if let Some(model) = self.model.as_ref() {
             model.disarm_fbcache();
-            // Stage-1 buffers (cache residuals, the stored velocity) go now,
-            // not when stage 2 overwrites them.
-            model.clear_step_caches();
         }
+        // Stage-1 buffers (cache residuals, the stored velocity, the ring)
+        // go now, not when stage 2 overwrites them.
+        self.end_stage();
         drop(ropes);
         trim()?;
         memory.mark("stage1")?;
@@ -2123,9 +2180,16 @@ impl Ltx2Pipeline {
                 if let Some(model) = self.model.as_ref() {
                     model.release_offload_device();
                 }
-                let up = load_upsampler(&self.weights, &cfg)?.ok_or_else(|| {
-                    err("ltx2: two-stage needs weights/latent_upsampler|spatial_upscaler")
-                })?;
+                let mut up_booking = crate::wan::ledger::Booking::default();
+                let up = up_booking
+                    .track(
+                        crate::wan::ledger::UPSAMPLER,
+                        || load_upsampler(&self.weights, &cfg),
+                        |_| None,
+                    )?
+                    .ok_or_else(|| {
+                        err("ltx2: two-stage needs weights/latent_upsampler|spatial_upscaler")
+                    })?;
                 let decoders = self.ensure_decoders()?;
                 let upsampled =
                     up.forward(&decoders.video.denormalize(&unpack_video(&video, grid1)?)?)?;
@@ -2215,7 +2279,9 @@ impl Ltx2Pipeline {
             audio = a2;
             timings.stage2_s = s2_timer.elapsed().as_secs_f64();
             self.report_offload("stage2");
+            self.end_stage();
             drop(ropes2);
+            trim()?;
             memory.mark("stage2")?;
             grid_full
         } else {
@@ -2231,8 +2297,11 @@ impl Ltx2Pipeline {
         // `DiffusionStage` frees its transformer on exit to fit 32 GB). On a
         // card with room it stays, so a warm second generation does not
         // reload 48 blocks from disk.
+        // Single-stage runs end their only stage here.
+        self.end_stage();
         if !keep_dit_through_decode(self.residency, &self.cfg, req) {
             release_dit_for_decode(&mut self.model, &mut self.loaded_strength);
+            self.booking.release(crate::wan::ledger::DIT_NONLINEAR);
             trim()?;
         }
         self.ensure_decoders()?;

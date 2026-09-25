@@ -17,6 +17,7 @@
 
 use fastvideo_models::ltx2::memory::FeedForwardChunking;
 use fastvideo_models::ltx2::SplitRope;
+use std::borrow::Cow;
 
 use crate::wan::nn::{scaled_dot_product_attention, Linear};
 use crate::wan::tensor::{CudaTensor, Result};
@@ -218,29 +219,66 @@ impl Attention {
         k_rope: Option<&DeviceRope>,
         kernel: VideoAttnKernel,
     ) -> Result<CudaTensor> {
+        self.attend(Cow::Borrowed(x), context, q_rope, k_rope, kernel)
+    }
+
+    /// [`Self::forward_kernel`] that consumes its input: `x` is freed as
+    /// soon as the projections have read it, before the attention runs.
+    pub fn forward_kernel_owned(
+        &self,
+        x: CudaTensor,
+        context: Option<&CudaTensor>,
+        q_rope: Option<&DeviceRope>,
+        k_rope: Option<&DeviceRope>,
+        kernel: VideoAttnKernel,
+    ) -> Result<CudaTensor> {
+        self.attend(Cow::Owned(x), context, q_rope, k_rope, kernel)
+    }
+
+    /// [`Self::forward`] that consumes its input.
+    pub fn forward_owned(
+        &self,
+        x: CudaTensor,
+        context: Option<&CudaTensor>,
+        q_rope: Option<&DeviceRope>,
+        k_rope: Option<&DeviceRope>,
+    ) -> Result<CudaTensor> {
+        self.forward_kernel_owned(x, context, q_rope, k_rope, VideoAttnKernel::Dense)
+    }
+
+    fn attend(
+        &self,
+        x: Cow<'_, CudaTensor>,
+        context: Option<&CudaTensor>,
+        q_rope: Option<&DeviceRope>,
+        k_rope: Option<&DeviceRope>,
+        kernel: VideoAttnKernel,
+    ) -> Result<CudaTensor> {
         let (heads, d) = (self.dims.heads, self.dims.head_dim);
         let gate_logits = match &self.to_gate_logits {
-            Some(l) => Some(l.forward(x)?),
+            Some(l) => Some(l.forward(&x)?),
             None => None,
         };
-        let ctx = context.unwrap_or(x);
-        let q = self
-            .to_q
-            .forward(x)?
-            .rms_norm(&self.norm_q, self.eps)?
-            .split_heads_bhsd(0, heads, d)?;
-        let k = self
-            .to_k
-            .forward(ctx)?
-            .rms_norm(&self.norm_k, self.eps)?
-            .split_heads_bhsd(0, heads, d)?;
-        let v = self.to_v.forward(ctx)?.split_heads_bhsd(0, heads, d)?;
-        // Rotate by value: the unrotated q/k are freed here, not at the end
-        // of the function (at 130k tokens each is 2 GiB).
+        // Each step consumes its input (`then`), so at most one stage of
+        // q / k / v exists at a time. A method chain would keep every
+        // temporary to the end of its statement, and a shadowed binding to
+        // the end of the function: at 130k tokens each is 2 GiB.
+        let q = then(self.to_q.forward(&x)?, |t| {
+            t.rms_norm(&self.norm_q, self.eps)
+        })?;
+        let q = then(q, |t| t.split_heads_bhsd(0, heads, d))?;
+        let ctx = context.unwrap_or(&x);
+        let k = then(self.to_k.forward(ctx)?, |t| {
+            t.rms_norm(&self.norm_k, self.eps)
+        })?;
+        let k = then(k, |t| t.split_heads_bhsd(0, heads, d))?;
+        let v = then(self.to_v.forward(ctx)?, |t| t.split_heads_bhsd(0, heads, d))?;
+        // An owned input is done with: free it before the attention runs.
+        drop(x);
         let (q, k) = match q_rope {
             Some(rope) => {
-                let q = rope.apply(&q)?;
-                (q, k_rope.unwrap_or(rope).apply(&k)?)
+                let q = then(q, |t| rope.apply(t))?;
+                (q, then(k, |t| k_rope.unwrap_or(rope).apply(t))?)
             }
             None => (q, k),
         };
@@ -264,10 +302,13 @@ impl Attention {
         // gate, head merge and output projection allocate theirs.
         drop((q, k, v));
         let merged = match gate_logits {
-            Some(logits) => self.apply_head_gates(&out, &logits)?.merge_heads()?,
-            None => out.merge_heads()?,
+            Some(logits) => {
+                let gated = then(out, |o| self.apply_head_gates(o, &logits))?;
+                then(gated, |g| g.merge_heads())?
+            }
+            None => then(out, |o| o.merge_heads())?,
         };
-        self.to_out.forward(&merged)
+        then(merged, |m| self.to_out.forward(m))
     }
 
     pub(crate) fn for_each_linear_mut(
@@ -283,6 +324,12 @@ impl Attention {
         }
         Ok(())
     }
+}
+
+/// `f(&t)`, then `t` is freed: the value-consuming step of a pipeline of
+/// tensor ops, so an input does not outlive the op that read it.
+fn then<R>(t: CudaTensor, f: impl FnOnce(&CudaTensor) -> Result<R>) -> Result<R> {
+    f(&t)
 }
 
 /// Video self-attention kernel after QKV + RoPE.
@@ -357,6 +404,29 @@ impl FeedForward {
             .iter()
             .map(|&(start, len)| self.forward_whole(&x.narrow(axis, start, len)?))
             .collect::<Result<Vec<_>>>()?;
+        CudaTensor::cat(&parts.iter().collect::<Vec<_>>(), axis)
+    }
+
+    /// [`Self::forward`] that consumes its input: when the token axis is
+    /// chunked, `x` is freed before the pieces are concatenated, so the peak
+    /// holds the pieces and their concatenation but not the input as well.
+    pub fn forward_owned(&self, x: CudaTensor) -> Result<CudaTensor> {
+        let axis = x.rank().checked_sub(2).ok_or_else(|| {
+            msg(format!(
+                "ltx2 feed-forward expects [.., tokens, dim], got {:?}",
+                x.shape
+            ))
+        })?;
+        let spans = FeedForwardChunking::RTX5090.spans(x.shape[axis]);
+        if spans.len() <= 1 {
+            let up = then(x, |x| self.up.forward_gelu(x))?;
+            return self.down.forward(&up);
+        }
+        let parts = spans
+            .iter()
+            .map(|&(start, len)| self.forward_whole(&x.narrow(axis, start, len)?))
+            .collect::<Result<Vec<_>>>()?;
+        drop(x);
         CudaTensor::cat(&parts.iter().collect::<Vec<_>>(), axis)
     }
 

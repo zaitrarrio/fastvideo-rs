@@ -568,8 +568,12 @@ pub(crate) struct Layer {
     norm_mlp_out: Option<CudaTensor>,
 }
 
-/// Resident FP8: quantize then dequant once and keep the reconstructed weight
-/// so each GEMM is a plain matmul. Streamed `Layer::load` stays Native.
+/// Resident FP8 keeps the E4M3 codes and row scales on the device (one byte
+/// per parameter) and dequantizes to bf16 per GEMM. Dequantizing once at load
+/// and keeping the bf16 result made "resident-fp8" as large as bf16 (45 GiB
+/// for Qwen3-VL-32B's 50 layers instead of 22.7) while every report still
+/// said 22.7; the per-GEMM dequant costs a transient of the widest matrix and
+/// milliseconds per prompt. Streamed `Layer::load` stays Native.
 fn load_linear(
     map: &WeightMap,
     prefix: &str,
@@ -579,14 +583,7 @@ fn load_linear(
 ) -> Result<Linear> {
     match precision {
         WeightPrecision::Native => Linear::load(map, prefix, in_dim, out_dim, false),
-        WeightPrecision::Fp8Rows => {
-            let key = crate::wan::weights::join_key(prefix, "weight");
-            let w = cuda_tensor_shaped(map, &key, &[out_dim, in_dim])?;
-            let (q, scales) =
-                crate::wan::ops::host::fp8_rows_quantize(&w.host_cow()?, out_dim, in_dim);
-            let wd = crate::wan::ops::host::fp8_rows_dequant(&q, &scales, in_dim);
-            Linear::from_tensors(CudaTensor::from_vec(wd, vec![out_dim, in_dim])?, None)
-        }
+        WeightPrecision::Fp8Rows => Linear::load_fp8_rows(map, prefix, in_dim, out_dim, false),
     }
 }
 
@@ -1646,31 +1643,31 @@ impl ResidentDecoder {
         )
     }
 
-    /// Device bytes the layers occupy, from the shapes: linears at the width
-    /// they were loaded (bf16 under bf16 GEMM math, f32 otherwise), norms in f32.
+    /// Bytes the layers hold (on the device on GPU runs), from the loaded
+    /// buffers themselves: each linear as it is stored (FP8 codes + row
+    /// scales, bf16, or f32) plus the f32 norms. Never from the shapes: a
+    /// shape-based figure is what hid a bf16 copy behind a "22.7 GiB FP8"
+    /// report.
     pub fn device_bytes(&self) -> u64 {
-        let c = &self.cfg;
-        let linear = c.hidden * (c.heads + 2 * c.kv_heads) * c.head_dim
-            + c.heads * c.head_dim * c.hidden
-            + 3 * c.hidden * c.intermediate;
-        let norms = c.hidden * if c.sandwich_norms { 4 } else { 2 }
-            + if c.qk_norm { 2 * c.head_dim } else { 0 };
-        // Per-row FP8: a byte per parameter plus one f32 scale per output row.
-        let scale_rows =
-            (c.heads + 2 * c.kv_heads) * c.head_dim + c.hidden + 2 * c.intermediate + c.hidden;
-        let per_layer = match self.precision {
-            WeightPrecision::Fp8Rows => linear + scale_rows * 4,
-            WeightPrecision::Native => {
-                linear
-                    * if crate::wan::nn::bf16_linears_active() {
-                        2
-                    } else {
-                        4
-                    }
-            }
-        };
-        (self.layers.len() * (per_layer + norms * 4)
-            + self.final_norm.as_ref().map_or(0, |_| c.hidden * 4)) as u64
+        let norm = |t: &Option<CudaTensor>| t.as_ref().map_or(0, CudaTensor::stored_bytes);
+        let layers: u64 = self
+            .layers
+            .iter()
+            .map(|l| {
+                [&l.q, &l.k, &l.o, &l.gate, &l.up, &l.down]
+                    .iter()
+                    .map(|lin| lin.held_bytes())
+                    .sum::<u64>()
+                    + l.v.as_ref().map_or(0, Linear::held_bytes)
+                    + norm(&l.q_norm)
+                    + norm(&l.k_norm)
+                    + l.norm_attn_in.stored_bytes()
+                    + norm(&l.norm_attn_out)
+                    + l.norm_mlp_in.stored_bytes()
+                    + norm(&l.norm_mlp_out)
+            })
+            .sum();
+        layers + norm(&self.final_norm)
     }
 
     /// Host bytes held by the embedding table.
@@ -2042,12 +2039,20 @@ mod tests {
         // A byte per parameter plus a scale per row: under half of f32 even at
         // this toy width, where the scales are a large share of a tiny layer
         // (at Qwen3-VL-32B's width they are 0.03% and 50 layers come to 24.4 GB).
+        // `device_bytes` sums the loaded buffers, so a load that dequantizes
+        // once and keeps the wide weight reports the native size and fails.
         assert!(
             fp8.device_bytes() * 2 < native.device_bytes(),
             "{} vs {}",
             fp8.device_bytes(),
             native.device_bytes()
         );
+        assert!(fp8
+            .layers
+            .iter()
+            .all(|l| [&l.q, &l.k, &l.o, &l.gate, &l.up, &l.down]
+                .iter()
+                .all(|lin| lin.is_fp8_rows())));
     }
 
     #[test]

@@ -136,6 +136,75 @@ impl TensorBackend for CudarcBackend {
     }
 }
 
+/// Host-side accounting for tests: counts the bytes of live heap blocks whose
+/// size falls in a window, on the calling thread only, while armed. The
+/// device path allocates one buffer where the host path allocates one `Vec`,
+/// so the live count of activation-sized blocks during a host forward is the
+/// live set the device pool would hold (score buffers, which the device
+/// chunks, fall outside the window by construction of the test geometry).
+#[cfg(test)]
+pub(crate) mod alloc_track {
+    use std::alloc::{GlobalAlloc, Layout, System};
+    use std::cell::Cell;
+
+    thread_local! {
+        static WINDOW: Cell<(usize, usize)> = const { Cell::new((0, 0)) };
+        static LIVE: Cell<i64> = const { Cell::new(0) };
+        static PEAK: Cell<i64> = const { Cell::new(0) };
+    }
+
+    pub struct Tracking;
+
+    fn note(size: usize, add: bool) {
+        let _ = WINDOW.try_with(|w| {
+            let (lo, hi) = w.get();
+            if hi == 0 || size < lo || size > hi {
+                return;
+            }
+            let _ = LIVE.try_with(|l| {
+                let v = l.get() + if add { size as i64 } else { -(size as i64) };
+                l.set(v);
+                let _ = PEAK.try_with(|p| p.set(p.get().max(v)));
+            });
+        });
+    }
+
+    unsafe impl GlobalAlloc for Tracking {
+        unsafe fn alloc(&self, l: Layout) -> *mut u8 {
+            note(l.size(), true);
+            System.alloc(l)
+        }
+        unsafe fn alloc_zeroed(&self, l: Layout) -> *mut u8 {
+            note(l.size(), true);
+            System.alloc_zeroed(l)
+        }
+        unsafe fn dealloc(&self, p: *mut u8, l: Layout) {
+            note(l.size(), false);
+            System.dealloc(p, l)
+        }
+        unsafe fn realloc(&self, p: *mut u8, l: Layout, new: usize) -> *mut u8 {
+            note(l.size(), false);
+            note(new, true);
+            System.realloc(p, l, new)
+        }
+    }
+
+    #[global_allocator]
+    static GLOBAL: Tracking = Tracking;
+
+    /// Run `f` and return its result with the highest net growth of live
+    /// blocks of `lo..=hi` bytes during it (freeing a block that was alive
+    /// before `f` counts as negative growth).
+    pub fn peak_live<R>(lo: usize, hi: usize, f: impl FnOnce() -> R) -> (R, i64) {
+        LIVE.with(|l| l.set(0));
+        PEAK.with(|p| p.set(0));
+        WINDOW.with(|w| w.set((lo, hi)));
+        let out = f();
+        WINDOW.with(|w| w.set((0, 0)));
+        (out, PEAK.with(Cell::get))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

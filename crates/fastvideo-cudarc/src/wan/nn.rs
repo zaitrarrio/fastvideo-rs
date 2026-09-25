@@ -589,6 +589,38 @@ impl Linear {
         })
     }
 
+    /// Bytes this linear holds for its weight(s) and bias, wherever they live
+    /// (the device on GPU runs): what a memory ledger books, from the buffers
+    /// themselves rather than from the shapes it was asked to load.
+    pub fn held_bytes(&self) -> u64 {
+        let mut b =
+            self.weight.stored_bytes() + self.bias.as_ref().map_or(0, CudaTensor::stored_bytes);
+        #[cfg(feature = "cuda")]
+        {
+            b += self.weight_bf16.as_ref().map_or(0, |w| w.len() as u64 * 2);
+            b += self
+                .weight_fp8
+                .as_ref()
+                .map_or(0, |w| w.data.len() as u64 + 4);
+        }
+        if let Some(r) = self.weight_fp8_rows.as_deref() {
+            b += (r.rows * r.cols + r.rows * 4) as u64;
+        }
+        if let Some(a) = self.weight_affine.as_deref() {
+            let groups = a.cols.div_ceil(a.group.max(1));
+            b += (a.rows * a.cols * a.bits as usize).div_ceil(8) as u64
+                + 2 * (a.rows * groups * 4) as u64;
+        }
+        if let Some(l) = self.lora.as_ref() {
+            b += l.w0.stored_bytes() + l.a.stored_bytes() + l.b.stored_bytes();
+            #[cfg(feature = "cuda")]
+            {
+                b += l.w0_bf16.as_ref().map_or(0, |w| w.len() as u64 * 2);
+            }
+        }
+        b
+    }
+
     /// Whether this linear holds its weight as per-row FP8.
     pub fn is_fp8_rows(&self) -> bool {
         self.weight_fp8_rows.is_some()

@@ -11,13 +11,24 @@
 //! * the text encoder streams one layer at a time (its prefetcher keeps up to
 //!   three on the device) and is gone before the DiT runs;
 //! * the refiner's and the DiT's blocks stream through a ring of `slots`
-//!   device buffers; the AdaLN table stays on the host;
+//!   device buffers; the AdaLN table stays on the host except the running
+//!   step's rows ([`adaln_step_bytes`]); the TeaCache rows and those AdaLN
+//!   rows are freed when the denoise ends;
 //! * the video and audio decoders are loaded for the decode and dropped.
 //!
 //! [`plan`] prices each stage with either placement. The activation terms
-//! follow the allocations of `H3Transformer::forward` (float32 residual,
-//! one fused QKV(G) GEMM with bf16 staging, per-head Q/K/V, a chunked score
-//! buffer, and the SwiGLU FFN whole or in 8192-row chunks).
+//! follow the allocations of `H3Transformer::forward`: **float32
+//! activations** (residual, QKV(G), per-head Q/K/V, the SwiGLU hidden), bf16
+//! only as GEMM staging, a chunked score buffer, and the SwiGLU FFN whole or
+//! in 8192-row chunks. A resident FP8 text encoder is not part of the
+//! streamed plan: `Auto` loads it only with 85 GB free (see
+//! [`text_encoder_fp8_bytes`] for what it would add).
+//!
+//! Against the RTX PRO 6000 run of 1344x768x124 (sol-h3-rtx, TeaCache, DiT
+//! streamed, FP8 encoder resident): the denoise grew the pool by 15.2 GiB
+//! over the text phase (ring 1.4, the whole AdaLN ladder 0.9, TeaCache 1.5,
+//! activations ~11.4); this plan prices the same stage at 17.3 GiB without
+//! the whole ladder, so it errs on the safe side by ~2.5 GiB.
 
 use super::config::{
     H3AudioVaeConfig, H3Geometry, H3TextEncoderConfig, H3TransformerConfig, H3VideoVaeConfig,
@@ -190,7 +201,28 @@ pub fn denoise_resident_bytes(cfg: &H3TransformerConfig, rows: usize, text: usiz
     let latents = 4 * s * cfg.video_patch_dim() as u64 * 4;
     let teacache = 3 * s * d * 4;
     let policy = 2 * s * d * 4;
-    rope + text + latents + teacache + policy
+    rope + text + latents + teacache + policy + adaln_step_bytes(cfg)
+}
+
+/// The AdaLN rows on the device during one step: that step's
+/// `[blocks, 3, 6, hidden]` ladder rows and the keyframe table of the same
+/// shape (float32). The whole `[steps, ...]` ladder used to be uploaded and
+/// kept for the life of the process (0.9 GiB at 50 forwards).
+pub fn adaln_step_bytes(cfg: &H3TransformerConfig) -> u64 {
+    2 * (cfg.num_layers * 3 * 6 * cfg.hidden_size) as u64 * 4
+}
+
+/// Device bytes of the resident FP8 text encoder (layers 0..=tap as E4M3
+/// codes plus one float32 scale per output row, float32 norms): what `Auto`
+/// adds on a card with 85 GB free. A bf16 copy of it would be twice this.
+pub fn text_encoder_fp8_bytes(t: &H3TextEncoderConfig) -> u64 {
+    let (h, i) = (t.hidden_size as u64, t.intermediate_size as u64);
+    let q = (t.num_attention_heads * t.head_dim) as u64;
+    let kv = (t.num_key_value_heads * t.head_dim) as u64;
+    let params = h * q + 2 * h * kv + q * h + 3 * h * i;
+    let rows = q + 2 * kv + h + 2 * i + h;
+    let norms = 2 * h + 2 * t.head_dim as u64;
+    (t.output_hidden_state_index as u64) * (params + rows * 4 + norms * 4)
 }
 
 /// The ViT decode of one temporal chunk: `tile_batch` tiles of
@@ -387,6 +419,20 @@ mod tests {
         let vae = video_vae_bytes(&H3VideoVaeConfig::fasth3_8step());
         assert!((4.0..5.5).contains(&gib(vae)), "{:.2}", gib(vae));
         assert!(audio_vae_bytes(&H3AudioVaeConfig::fasth3_8step()) < GIB);
+    }
+
+    /// The resident FP8 encoder is 22.7 GiB, what the PRO 6000 run's
+    /// `device_gib` reported; the ~45.5 GiB live after its text phase was that
+    /// encoder dequantized once and kept as bf16 (twice the size).
+    #[test]
+    fn the_fp8_text_encoder_is_half_the_live_bytes_the_run_measured() {
+        let t = H3TextEncoderConfig::fasth3_8step();
+        let fp8 = gib(text_encoder_fp8_bytes(&t));
+        assert!((22.5..23.0).contains(&fp8), "{fp8:.2}");
+        let measured_live_after_text = 45.47;
+        assert!((2.0 * fp8 - measured_live_after_text).abs() < 0.3);
+        // Only one step of the AdaLN ladder is on the device.
+        assert!(adaln_step_bytes(&H3TransformerConfig::fasth3_8step()) < 64 << 20);
     }
 
     /// The RTX 5090 workloads (768p 5 s, the reference 1344x768 cell, and the

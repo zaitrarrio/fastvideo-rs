@@ -658,11 +658,11 @@ impl BlockMods {
         block: usize,
         layout: &H3PackedLayout,
     ) -> Result<Self> {
-        // Whole ladder + keyframe tables once per host table; later blocks
-        // (and later steps) only `narrow`.
-        let (ladder, keyframe) = adaln_device_tables(table)?;
+        // This step's ladder rows + the keyframe table once per step; later
+        // blocks only `narrow`.
+        let (ladder, keyframe) = adaln_device_tables(table, step)?;
         let ladder = ladder.reshape(vec![
-            table.steps * table.blocks * MODALITY_NUM,
+            table.blocks * MODALITY_NUM,
             ADALN_PARAMS,
             table.hidden,
         ])?;
@@ -677,7 +677,7 @@ impl BlockMods {
                 continue;
             }
             let e = if row_uses_ladder(layout, range) {
-                let row = (step * table.blocks + block) * MODALITY_NUM + usize::from(tag);
+                let row = block * MODALITY_NUM + usize::from(tag);
                 ladder.narrow(0, row, 1)?
             } else {
                 let row = block * MODALITY_NUM + usize::from(tag);
@@ -721,28 +721,38 @@ impl BlockMods {
     }
 }
 
-/// Upload `[steps, blocks, 3, 6, hidden]` + keyframe once; reuse via `narrow`.
-fn adaln_device_tables(table: &AdaLnTable) -> Result<(CudaTensor, CudaTensor)> {
-    thread_local! {
-        static CACHE: std::cell::RefCell<Option<(usize, CudaTensor, CudaTensor)>> =
-            const { std::cell::RefCell::new(None) };
-    }
-    let key = table.block_mods.as_ptr() as usize;
-    CACHE.with(|c| {
+/// `(table, step)` of the uploaded rows, then the step's ladder rows and the
+/// keyframe table.
+type AdaLnDeviceRows = Option<((usize, usize), CudaTensor, CudaTensor)>;
+
+thread_local! {
+    static ADALN_DEVICE: std::cell::RefCell<AdaLnDeviceRows> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// Upload step `step`'s `[blocks, 3, 6, hidden]` ladder rows + the keyframe
+/// table once per step; every block of the step reuses them via `narrow`.
+/// Only one step lives on the device (18 MB at 50 blocks), not the whole
+/// `[steps, ...]` ladder (0.9 GiB for a 50-forward recipe), and
+/// [`release_adaln_device_tables`] frees it after the denoise.
+fn adaln_device_tables(table: &AdaLnTable, step: usize) -> Result<(CudaTensor, CudaTensor)> {
+    let key = (table.block_mods.as_ptr() as usize, step);
+    ADALN_DEVICE.with(|c| {
         if let Some((k, ladder, kf)) = c.borrow().as_ref() {
             if *k == key {
                 return Ok((ladder.clone(), kf.clone()));
             }
         }
+        let per_step = table.blocks * MODALITY_NUM * ADALN_PARAMS * table.hidden;
+        let rows = table
+            .block_mods
+            .get(step * per_step..(step + 1) * per_step)
+            .ok_or_else(|| msg(format!("h3 adaln: step {step} of {}", table.steps)))?;
+        // Drop the previous step's rows before the next upload.
+        *c.borrow_mut() = None;
         let ladder = CudaTensor::from_vec(
-            table.block_mods.clone(),
-            vec![
-                table.steps,
-                table.blocks,
-                MODALITY_NUM,
-                ADALN_PARAMS,
-                table.hidden,
-            ],
+            rows.to_vec(),
+            vec![table.blocks, MODALITY_NUM, ADALN_PARAMS, table.hidden],
         )?
         .to_device()?;
         let kf = CudaTensor::from_vec(
@@ -750,9 +760,19 @@ fn adaln_device_tables(table: &AdaLnTable) -> Result<(CudaTensor, CudaTensor)> {
             vec![table.blocks, MODALITY_NUM, ADALN_PARAMS, table.hidden],
         )?
         .to_device()?;
+        crate::wan::ledger::set(
+            crate::wan::ledger::ADALN_TABLE,
+            (ladder.numel() + kf.numel()) as u64 * 4,
+        );
         *c.borrow_mut() = Some((key, ladder.clone(), kf.clone()));
         Ok((ladder, kf))
     })
+}
+
+/// Free the AdaLN rows [`adaln_device_tables`] keeps on this thread.
+pub fn release_adaln_device_tables() {
+    ADALN_DEVICE.with(|c| *c.borrow_mut() = None);
+    crate::wan::ledger::clear(crate::wan::ledger::ADALN_TABLE);
 }
 
 /// Which AdaLN timestep a run reads (`build_row_timesteps`, mirrored by
@@ -1180,7 +1200,8 @@ impl H3TextRefiner {
         lora: &mut Option<super::lora::H3LoraFuse>,
         residency: Residency,
     ) -> Result<Self> {
-        let mut blocks = BlockWeights::new("h3 refiner", residency);
+        let mut blocks = BlockWeights::new("h3 refiner", residency)
+            .with_ledger(crate::wan::ledger::REFINER_RING);
         for i in 0..cfg.num_refiner_layers {
             blocks.push(Block::load(
                 map,
@@ -1276,6 +1297,18 @@ struct H3TeaRuntime {
     signal: Option<CudaTensor>,
     residual: Option<CudaTensor>,
     pending: Option<CudaTensor>,
+}
+
+impl H3TeaRuntime {
+    /// Book the buffers kept between forwards in the device ledger.
+    fn book(&self) {
+        let bytes = [&self.signal, &self.residual, &self.pending]
+            .iter()
+            .filter_map(|t| t.as_ref())
+            .map(CudaTensor::stored_bytes)
+            .sum();
+        crate::wan::ledger::set(crate::wan::ledger::STEP_CACHE, bytes);
+    }
 }
 
 impl H3Transformer {
@@ -1421,6 +1454,21 @@ impl H3Transformer {
         Ok(())
     }
 
+    /// End of a denoise: free the TeaCache signal / residual / pending rows
+    /// (three `[S, hidden]` float32 buffers, 2.2 GiB at 768p 5 s) and restart
+    /// its state, so nothing of this request rides into the decode or the
+    /// next request. Also frees this step's AdaLN rows.
+    pub fn end_denoise(&self) {
+        if let Some(rt) = self.sol_tea.lock().expect("h3 sol tea").as_mut() {
+            rt.signal = None;
+            rt.residual = None;
+            rt.pending = None;
+            rt.state.reset();
+        }
+        crate::wan::ledger::clear(crate::wan::ledger::STEP_CACHE);
+        release_adaln_device_tables();
+    }
+
     pub fn sol_teacache_enabled(&self) -> bool {
         self.sol_tea.lock().expect("h3 sol tea").is_some()
     }
@@ -1454,6 +1502,7 @@ impl H3Transformer {
         runtime.signal = Some(probe);
         if decision.compute {
             runtime.pending = Some(hidden.clone());
+            runtime.book();
             Ok(Some(false))
         } else {
             crate::wan::log::debug(format_args!(
@@ -1479,6 +1528,7 @@ impl H3Transformer {
         let before = runtime.pending.take().expect("h3 sol tea pending");
         runtime.state.note_computed();
         runtime.residual = Some(after.sub(&before)?);
+        runtime.book();
         Ok(())
     }
 

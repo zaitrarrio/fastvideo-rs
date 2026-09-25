@@ -16,6 +16,7 @@ pub mod fused;
 pub mod hopper;
 #[cfg(feature = "cuda")]
 pub mod kernels;
+pub mod ledger;
 pub mod log;
 pub mod nn;
 pub mod nvfp4;

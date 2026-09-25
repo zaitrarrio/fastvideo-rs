@@ -541,6 +541,8 @@ pub struct H3Pipeline {
     /// The encoder choice was `Auto` (resolved at load), so it may be released.
     auto_text_encoder: bool,
     pub load_timings: H3LoadTimings,
+    /// What this pipeline keeps on the device, by ledger category.
+    booking: std::sync::Mutex<crate::wan::ledger::Booking>,
 }
 
 /// Device bytes a denoise needs beside the resident weights for `rows` packed
@@ -588,27 +590,43 @@ impl H3Pipeline {
         let free = crate::wan::device::free_memory().map(|(free, _)| free);
         let auto_text_encoder = options.text_encoder == TextEncoderChoice::Auto;
         options.text_encoder = options.text_encoder.resolve(free);
+        let mut booking = crate::wan::ledger::Booking::default();
         let timer = Instant::now();
-        let text_encoder: Option<Box<dyn HiddenStateEncoder>> = match options.text_encoder {
-            TextEncoderChoice::Recovered8b => {
-                let text_root = options.text_root.as_deref().unwrap_or(root);
-                Some(Box::new(super::recovered_8b::Recovered8bEncoder::load(
-                    text_root,
-                )?))
-            }
-            other => match other.precision() {
-                Some(precision) => {
-                    let text_root = options.text_root.as_deref().unwrap_or(root);
-                    Some(Box::new(super::text::load_resident_encoder(
-                        text_root, precision,
-                    )?))
-                }
-                None => None,
+        let text_encoder = booking.track(
+            crate::wan::ledger::TEXT_ENCODER,
+            || -> Result<Option<Box<dyn HiddenStateEncoder>>> {
+                Ok(match options.text_encoder {
+                    TextEncoderChoice::Recovered8b => {
+                        let text_root = options.text_root.as_deref().unwrap_or(root);
+                        Some(Box::new(super::recovered_8b::Recovered8bEncoder::load(
+                            text_root,
+                        )?))
+                    }
+                    other => match other.precision() {
+                        Some(precision) => {
+                            let text_root = options.text_root.as_deref().unwrap_or(root);
+                            Some(Box::new(super::text::load_resident_encoder(
+                                text_root, precision,
+                            )?))
+                        }
+                        None => None,
+                    },
+                })
             },
-        };
+            |r| match r {
+                Ok(Some(e)) => Some(e.resident_bytes()),
+                _ => None,
+            },
+        )?;
         if text_encoder.is_some() {
             timed(&mut load_timings.text_encoder_s, timer);
         }
+        // What the DiT placement decides on: the card as the encoder left it.
+        let free = if text_encoder.is_some() {
+            crate::wan::device::free_memory().map(|(free, _)| free)
+        } else {
+            free
+        };
 
         let (map, mlx) = match super::mlx::find(root) {
             Some(dir) if !options.ref2va => {
@@ -739,17 +757,27 @@ impl H3Pipeline {
             residency
         };
         let timer = Instant::now();
-        let refiner = H3TextRefiner::load_with_residency(&cfg, &map, &mut lora, residency)?;
+        let refiner = booking.track(
+            crate::wan::ledger::TEXT_REFINER,
+            || H3TextRefiner::load_with_residency(&cfg, &map, &mut lora, residency),
+            |_| None,
+        )?;
         timed(&mut load_timings.refiner_s, timer);
         let timer = Instant::now();
-        let model = H3Transformer::load_with_residency(
-            cfg.clone(),
-            &map,
-            &schedule,
-            with_gate,
-            options.adaln_cache.as_deref(),
-            &mut lora,
-            residency,
+        let model = booking.track(
+            crate::wan::ledger::DIT_NONLINEAR,
+            || {
+                H3Transformer::load_with_residency(
+                    cfg.clone(),
+                    &map,
+                    &schedule,
+                    with_gate,
+                    options.adaln_cache.as_deref(),
+                    &mut lora,
+                    residency,
+                )
+            },
+            |_| None,
         )?;
         if teacache {
             model.enable_sol_teacache(schedule.num_steps())?;
@@ -764,10 +792,18 @@ impl H3Pipeline {
             (None, None)
         } else {
             let timer = Instant::now();
-            let video_vae = load_video_decoder(root, options.taeh3.as_deref())?;
+            let video_vae = booking.track(
+                crate::wan::ledger::VAE,
+                || load_video_decoder(root, options.taeh3.as_deref()),
+                |_| None,
+            )?;
             timed(&mut load_timings.video_vae_s, timer);
             let timer = Instant::now();
-            let audio_vae = load_audio_decoder(root)?;
+            let audio_vae = booking.track(
+                crate::wan::ledger::AUDIO_VAE,
+                || load_audio_decoder(root),
+                |_| None,
+            )?;
             timed(&mut load_timings.audio_vae_s, timer);
             (Some(video_vae), Some(audio_vae))
         };
@@ -785,6 +821,7 @@ impl H3Pipeline {
             text_encoder: std::sync::Mutex::new(text_encoder),
             auto_text_encoder,
             load_timings,
+            booking: std::sync::Mutex::new(booking),
         })
     }
 
@@ -961,6 +998,10 @@ impl H3Pipeline {
             let free = crate::wan::device::free_memory().map(|(free, _)| free);
             if !keep_auto_encoder(free, rows) {
                 let released = encoder_slot.take().map_or(0, |e| e.resident_bytes());
+                self.booking
+                    .lock()
+                    .expect("h3 booking")
+                    .release(crate::wan::ledger::TEXT_ENCODER);
                 crate::wan::log::info(format_args!(
                     "h3 text encoder: auto released the resident encoder ({:.1} GiB) before the denoise ({rows} rows need {:.1} GiB, {:.1} GiB free); later prompts stream",
                     released as f64 / f64::from(1u32 << 30),
@@ -1121,6 +1162,8 @@ impl H3Pipeline {
         )?;
         timings.denoise_s = timer.elapsed().as_secs_f64();
         timings.step_s = step_s;
+        // TeaCache rows and the step's AdaLN rows go with the denoise.
+        self.model.end_denoise();
         drop((
             vsa,
             sol_policy,
@@ -1140,9 +1183,14 @@ impl H3Pipeline {
 
         // --- audio first: the WAV must exist before the muxer starts -------------------
         let timer = Instant::now();
+        let mut transient_booking = crate::wan::ledger::Booking::default();
         let transient_audio = match self.audio_vae {
             Some(_) => None,
-            None => Some(load_audio_decoder(&self.root)?),
+            None => Some(transient_booking.track(
+                crate::wan::ledger::AUDIO_VAE,
+                || load_audio_decoder(&self.root),
+                |_| None,
+            )?),
         };
         let audio_vae = self
             .audio_vae
@@ -1155,6 +1203,7 @@ impl H3Pipeline {
             .host_cow()?
             .into_owned();
         drop(transient_audio);
+        transient_booking.release(crate::wan::ledger::AUDIO_VAE);
         let wav = out_dir.join("audio.wav");
         write_wav(
             &wav,
@@ -1179,7 +1228,11 @@ impl H3Pipeline {
             Some(_) => None,
             None => {
                 let timer = Instant::now();
-                let vae = load_video_decoder(&self.root, self.options.taeh3.as_deref())?;
+                let vae = transient_booking.track(
+                    crate::wan::ledger::VAE,
+                    || load_video_decoder(&self.root, self.options.taeh3.as_deref()),
+                    |_| None,
+                )?;
                 crate::wan::log::info(format_args!(
                     "h3 video vae: resident for the decode ({:.1}s load)",
                     timer.elapsed().as_secs_f64()
@@ -1223,6 +1276,7 @@ impl H3Pipeline {
         }
         timings.video_decode_s = timer.elapsed().as_secs_f64();
         drop(transient_video);
+        drop(transient_booking);
         crate::wan::device::trim_pool().map_err(|e| msg(e.to_string()))?;
         memory.mark("video_decode")?;
         let timer = Instant::now();
