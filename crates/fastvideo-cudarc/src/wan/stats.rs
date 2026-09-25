@@ -102,14 +102,6 @@ pub(crate) fn device_expected() -> bool {
     super::device::has_live_device() && super::resident::residency_enabled()
 }
 
-/// `FASTVIDEO_STRICT_DEVICE=1` (or `true`/`yes`). Host algorithms that used
-/// to be excluded from [`host_fallback`] (Sol-Attn, PISA, SLA, NVFP4 fake-quant)
-/// error under this flag whenever a CUDA device is live.
-pub fn strict_device() -> bool {
-    static ON: super::envflag::CachedBool = super::envflag::CachedBool::new();
-    ON.get_or_init(|| super::envflag::bool_flag("FASTVIDEO_STRICT_DEVICE", false))
-}
-
 /// Call immediately before an op computes on host. On a CPU run this is a
 /// no-op (the host path is the reference implementation). With a device
 /// expected it is always an error: GPU code never silently runs on the CPU.
@@ -124,21 +116,12 @@ pub(crate) fn host_fallback(op: &'static str, detail: impl std::fmt::Display) ->
     )))
 }
 
-/// Host-only algorithm (Sol-Attn / PISA / SLA / NVFP4 reconstruct). Same
-/// contract as [`host_fallback`] when a device is expected; also fires when
-/// `FASTVIDEO_STRICT_DEVICE=1` and a CUDA context is live, so a GPU sweep
-/// cannot log "sol-attn kernel" while running scalar CPU math.
+/// Host-only algorithm (Sol-Attn / PISA / SLA / NVFP4 reconstruct oracles).
+/// Same contract as [`host_fallback`]: with a live device (residency is always
+/// on then) it is an error, so a GPU run cannot log "sol-attn kernel" while
+/// running scalar CPU math.
 pub(crate) fn host_algorithm(op: &'static str, detail: impl std::fmt::Display) -> Result<()> {
-    if device_expected() {
-        return host_fallback(op, detail);
-    }
-    if strict_device() && super::device::has_live_device() {
-        *FALLBACKS.lock().expect("stats lock").entry(op).or_insert(0) += 1;
-        return Err(TensorError::Message(format!(
-            "`{op}` is a host algorithm ({detail}); FASTVIDEO_STRICT_DEVICE=1 refuses the CPU path"
-        )));
-    }
-    Ok(())
+    host_fallback(op, detail)
 }
 
 #[cfg(test)]
@@ -152,7 +135,6 @@ mod tests {
         assert_eq!(snapshot().total_fallbacks(), 0);
         host_algorithm("sol_attn", "cpu oracle").unwrap();
         assert_eq!(snapshot().total_fallbacks(), 0);
-        assert!(!strict_device());
     }
 
     #[test]

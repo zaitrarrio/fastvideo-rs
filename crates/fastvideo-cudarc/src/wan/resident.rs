@@ -1,9 +1,10 @@
 //! Device residency policy for the cudarc Wan graph.
 //!
-//! Residency is **on by default** when a global CUDA device is live: every op
+//! Residency is **always on** when a global CUDA device is live: every op
 //! runs on the device and weights are uploaded once at load. `FASTVIDEO_RESIDENT=0`
-//! (or `false`) turns the device path off entirely, so ops run the host
-//! reference implementations even with a context present.
+//! (or `false`) is refused when a device context is created
+//! (`DeviceContext::new`), so a GPU run can never quietly execute the host
+//! reference implementations.
 
 use super::envflag::CachedBool;
 

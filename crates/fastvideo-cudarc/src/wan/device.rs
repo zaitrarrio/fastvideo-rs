@@ -73,6 +73,16 @@ unsafe impl Sync for DeviceContext {}
 #[cfg(feature = "cuda")]
 impl DeviceContext {
     pub fn new(device_index: usize) -> Result<Self> {
+        // A live GPU always runs the device path. `FASTVIDEO_RESIDENT=0` used to
+        // route every op to the host reference with a context present; that is
+        // a CPU run wearing a GPU banner, so it is refused here instead.
+        if !super::resident::residency_enabled() {
+            return Err(DeviceError::Message(
+                "FASTVIDEO_RESIDENT=0 would run every op on the CPU with a CUDA device live; \
+                 unset it (or pass --device cpu for a CPU run)"
+                    .into(),
+            ));
+        }
         let ctx = cudarc::driver::CudaContext::new(device_index)?;
         // One stream, synchronized explicitly: per-buffer CudaEvents would add
         // two event objects to every allocation and a record to every launch.

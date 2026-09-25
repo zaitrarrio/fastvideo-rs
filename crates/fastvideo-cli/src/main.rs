@@ -21,6 +21,13 @@ fn write_sidecar(dir: Option<&str>, name: &str, value: &serde_json::Value) {
     }
 }
 
+
+/// GPU builds run on the GPU unless told otherwise.
+#[cfg(feature = "cuda-cudarc")]
+const DEFAULT_DEVICE: &str = "cuda";
+#[cfg(not(feature = "cuda-cudarc"))]
+const DEFAULT_DEVICE: &str = "cpu";
+
 #[derive(Parser)]
 #[command(
     name = "fastvideo",
@@ -66,8 +73,9 @@ struct GenerateArgs {
     /// Directory for decoded PNG frames.
     #[arg(long)]
     output: Option<String>,
-    /// `cpu`, `cuda`, or `cuda:0`. GPU builds: `--features cuda-cudarc` (lean) or `cuda` (full).
-    #[arg(long, default_value = "cpu")]
+    /// `cpu`, `cuda`, or `cuda:0`. GPU builds (`--features cuda-cudarc` or `cuda`)
+    /// default to `cuda`; CPU builds default to `cpu`.
+    #[arg(long, default_value = DEFAULT_DEVICE)]
     device: String,
     /// `f32`, `f16`, or `bf16`. Defaults to bf16 on CUDA, f32 on CPU.
     #[arg(long)]
@@ -266,7 +274,7 @@ fn main() -> Result<()> {
                             tiny: args.tiny,
                             weights_path: args.weights,
                             output_path: args.output.or(file.output),
-                            device: if args.device != "cpu" {
+                            device: if args.device != DEFAULT_DEVICE {
                                 args.device
                             } else {
                                 file.device.unwrap_or(args.device)
@@ -326,7 +334,7 @@ fn main() -> Result<()> {
                         height: args.height.or(file.height),
                         width: args.width.or(file.width),
                         num_frames: args.frames.or(file.frames).or(file.num_frames),
-                        device: if args.device != "cpu" {
+                        device: if args.device != DEFAULT_DEVICE {
                             args.device
                         } else {
                             file.device.unwrap_or_else(|| "cuda".into())
