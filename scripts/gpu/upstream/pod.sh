@@ -16,7 +16,10 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 OUT="${1:?usage: pod.sh <run-dir>}"
 mkdir -p "$OUT"
 export LIVE="$OUT/live.log"
-UP="${UP:-/workspace/upstream}"
+# UP_LOCAL=1 (default via runpod-http.sh): everything we write stays on the
+# container disk; the shared volume is only read (weights, HF token).
+if [[ "${UP_LOCAL:-0}" == 1 ]]; then UP="${UP:-/root/upstream}"; else UP="${UP:-/workspace/upstream}"; fi
+export UP
 W="${W:-/workspace/weights}"
 UW="$UP/weights"
 # shellcheck source=scripts/gpu/upstream/setup.sh
@@ -25,7 +28,8 @@ PROMPT_OURS="${FV_PROMPT:-A man in his thirties talking to the camera in a brigh
 SEED_OURS="${FV_SEED:-1024}"
 H3_REV=bfc8ed0353f5a9733be73e6b2c98ec0948195b86        # sol-engine H3 configs' H3_MODEL_REVISION
 F8_REV=3da2ddfe1954d9cda4c05b643dc0f26007a655c5        # FastVideo/FastVideo-FastH3-8-Step-V2
-export HF_HOME="${HF_HOME:-/workspace/hf}"
+export HF_HOME="${HF_HOME:-$UP/hf}"
+[[ -z "${HF_TOKEN:-}" && -f /workspace/hf/token ]] && HF_TOKEN="$(tr -d '[:space:]' </workspace/hf/token)" && export HF_TOKEN
 export HF_HUB_DISABLE_TELEMETRY=1
 
 log() { printf '[%s] %s\n' "$(date -u +%H:%M:%S)" "$*" | tee -a "$LIVE" >&2; }

@@ -339,7 +339,7 @@ def build_tensor(recipe: tuple, meta: dict, src: Sources, remote) -> bytes | np.
 
 
 # The volume is shared with other pods: cap our read+write rate.
-_THR = {"t0": None, "bytes": 0, "mbps": float(os.environ.get("RECON_MAX_MBPS", "250"))}
+_THR = {"t0": None, "bytes": 0, "mbps": float(os.environ.get("RECON_MAX_MBPS", "250" if os.environ.get("UP_LOCAL") != "1" else "500"))}
 
 
 def throttle(nbytes: int) -> None:
@@ -378,8 +378,8 @@ def reconstruct(repo: str, rev: str, path: str, out: Path, plan, src: Sources, v
 
     quota = float(os.environ.get("VOLUME_QUOTA_GB", "1000")) * 1e9
     reserve = float(os.environ.get("VOLUME_RESERVE_GB", "60")) * 1e9
-    vroot = os.environ.get("VOLUME_ROOT", "/workspace")
-    if os.path.isdir(vroot) and size:
+    vroot = os.environ.get("VOLUME_ROOT", "/workspace" if str(out).startswith("/workspace") else "")
+    if vroot and os.path.isdir(vroot) and size:
         used = volume_used_bytes(vroot)
         if used + size > quota - reserve:
             raise RuntimeError(f"not enough volume space: used {used / 1e9:.0f} GB + {size / 1e9:.0f} GB "

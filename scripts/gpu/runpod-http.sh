@@ -129,21 +129,24 @@ EOF
 # Upstream mode: no fv-gpucheck in the image. Serve /workspace/runs with the
 # image's Python, clone this repo at $UP_SHA, and hand over to pod.sh.
 upstream_start_cmd() {
-  local tag="$1"
+  local tag="$1" runs=/workspace/runs
+  # UP_LOCAL=1: nothing is written to the volume (it is read for weights only);
+  # venvs, derived weights and results live on the container disk.
+  [[ "${UP_LOCAL:-1}" == 1 ]] && runs=/root/runs
   cat <<EOF
 set -u
-OUT=/workspace/runs/$FAMILY/$tag
+OUT=$runs/$FAMILY/$tag
 mkdir -p "\$OUT"
-( cd /workspace/runs && exec python3 -m http.server 8000 ) >"\$OUT/http.log" 2>&1 &
+( cd $runs && while true; do python3 -m http.server 8000; sleep 2; done ) >/tmp/http.log 2>&1 &
 {
   command -v git >/dev/null || { apt-get update -qq && apt-get install -y -qq git; }
   git init -q /opt/fvrs && git -C /opt/fvrs remote add origin https://github.com/zaitrarrio/fastvideo-rs.git \
     && git -C /opt/fvrs fetch -q --depth 1 origin $UP_SHA && git -C /opt/fvrs checkout -q FETCH_HEAD
 } >"\$OUT/clone.log" 2>&1
 env ${FV_EXTRA_ENV:-} UP_STEPS="${UP_STEPS:-info:box}" UP_STEPS_BG="${UP_STEPS_BG:-}" UP_CELLS="${UP_CELLS:-}" \
-  UP_CELL_TIMEOUT_S=${UP_CELL_TIMEOUT_S:-5400} \
+  UP_CELL_TIMEOUT_S=${UP_CELL_TIMEOUT_S:-5400} UP_LOCAL=${UP_LOCAL:-1} \
   bash /opt/fvrs/scripts/gpu/upstream/pod.sh "\$OUT" >"\$OUT/pod.out" 2>&1
-echo "done $tag" >"\$OUT/DONE"
+touch "\$OUT/DONE"
 exec sleep infinity
 EOF
 }
