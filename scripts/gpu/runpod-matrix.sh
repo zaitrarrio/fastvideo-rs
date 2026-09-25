@@ -8,20 +8,24 @@ FAMILY="${1:?usage: runpod-matrix.sh h3|ltx|hunyuan|wan|b200|rtx6000|rtx5090|fas
 WORK="${FV_WORK:-/workspace}"
 BIN="${FV_GPUCHECK:-/opt/fastvideo-rs/target/release/fv-gpucheck}"
 W="$WORK/weights"
-RUNS="$WORK/runs/${FAMILY}${FV_RUN_TAG:+/$FV_RUN_TAG}"
+# Everything this script writes (runs, caches, library links) goes under
+# SCRATCH: the pod's container disk when FV_SCRATCH is set. The weight volume
+# is only read (some hosts have silently dropped data writes to it).
+SCRATCH="${FV_SCRATCH:-$WORK}"
+RUNS="$SCRATCH/runs/${FAMILY}${FV_RUN_TAG:+/$FV_RUN_TAG}"
 LOG="$RUNS/live.log"
 PROMPT="${FV_PROMPT:-A man in his thirties talking to the camera in a bright living room, medium close-up, natural expressions and hand gestures, soft window light. He says: <d>Hello, this was generated entirely in Rust.</d>}"
 SEED="${FV_SEED:-1024}"
 export PATH="/opt/fastvideo-rs/target/release:/usr/local/bin:/usr/local/cuda/bin:${PATH:-}"
 unset FASTVIDEO_LTX2_WEIGHTS
-mkdir -p "$RUNS" "$WORK/gpucheck-out/logs" "$WORK/fv-libs"
+mkdir -p "$RUNS" "$SCRATCH/gpucheck-out/logs" "$SCRATCH/fv-libs"
 # shellcheck source=scripts/gpu/cuda-13.pins
 . "$(dirname "${BASH_SOURCE[0]}")/cuda-13.pins"
 # cudarc looks for libcudnn.so (unversioned). The image ships the pinned SONAME.
-if [[ ! -e $WORK/fv-libs/libcudnn.so ]]; then
+if [[ ! -e $SCRATCH/fv-libs/libcudnn.so ]]; then
   bash /opt/fastvideo-rs/scripts/gpu/remote.sh env >/tmp/fv-env.json 2>/tmp/fv-env.err || true
 fi
-if [[ ! -e $WORK/fv-libs/libcudnn.so ]]; then
+if [[ ! -e $SCRATCH/fv-libs/libcudnn.so ]]; then
   for spec in \
     "cudnn:/lib/x86_64-linux-gnu/${CUDA_CUDNN_SONAME}" \
     "cublas:/usr/local/cuda/targets/x86_64-linux/lib/${CUDA_CUBLAS_SONAME}" \
@@ -29,11 +33,11 @@ if [[ ! -e $WORK/fv-libs/libcudnn.so ]]; then
     "nvrtc:/usr/local/cuda/targets/x86_64-linux/lib/${CUDA_NVRTC_SONAME}"; do
     name="${spec%%:*}"
     src="${spec#*:}"
-    [[ -e "$src" ]] && ln -sf "$(readlink -f "$src")" "$WORK/fv-libs/lib${name}.so"
+    [[ -e "$src" ]] && ln -sf "$(readlink -f "$src")" "$SCRATCH/fv-libs/lib${name}.so"
   done
 fi
-export LD_LIBRARY_PATH="$WORK/fv-libs:/lib/x86_64-linux-gnu:/usr/local/cuda-13.0/lib64:/usr/local/cuda/lib64:/usr/local/cuda/targets/x86_64-linux/lib:${LD_LIBRARY_PATH:-}"
-[[ -e $WORK/fv-libs/libcudnn.so ]] || { echo "FATAL: libcudnn.so not linked" | tee -a "$LOG"; exit 2; }
+export LD_LIBRARY_PATH="$SCRATCH/fv-libs:/lib/x86_64-linux-gnu:/usr/local/cuda-13.0/lib64:/usr/local/cuda/lib64:/usr/local/cuda/targets/x86_64-linux/lib:${LD_LIBRARY_PATH:-}"
+[[ -e $SCRATCH/fv-libs/libcudnn.so ]] || { echo "FATAL: libcudnn.so not linked" | tee -a "$LOG"; exit 2; }
 
 log() {
   local line
@@ -152,7 +156,7 @@ case "$FAMILY" in
         --seconds 5 \
         --seed "$SEED" \
         --text-encoder streamed \
-        --text-cache "$WORK/h3-text-cache" \
+        --text-cache "$SCRATCH/h3-text-cache" \
         --text-weights "$W/h3-base" \
         --adaln-cache "$RUNS/h3-adaln.cache" \
         --clip-dir "$RUNS/fasth3-8step-warm/frames"
@@ -163,7 +167,7 @@ case "$FAMILY" in
         --seconds 5 \
         --seed "$SEED" \
         --text-encoder streamed \
-        --text-cache "$WORK/h3-text-cache" \
+        --text-cache "$SCRATCH/h3-text-cache" \
         --text-weights "$W/h3-base" \
         --h3-recipe sol-h3 \
         --adaln-cache "$RUNS/sol-h3-adaln.cache" \
@@ -202,7 +206,7 @@ case "$FAMILY" in
           --seconds 5 \
           --seed "$SEED" \
           --text-encoder streamed \
-          --text-cache "$WORK/h3-text-cache" \
+          --text-cache "$SCRATCH/h3-text-cache" \
           --text-weights "$W/h3-base" \
           --h3-recipe sol-h3-spark \
           --adaln-cache "$RUNS/sol-h3-spark-adaln.cache" \
@@ -309,7 +313,7 @@ case "$FAMILY" in
       --seconds 5
       --seed "$SEED"
       --text-encoder auto
-      --text-cache "$WORK/h3-text-cache"
+      --text-cache "$SCRATCH/h3-text-cache"
       --text-weights "$W/h3-base"
       --warm
     )
@@ -422,7 +426,7 @@ case "$FAMILY" in
       --seconds 5
       --seed "$SEED"
       --text-encoder auto
-      --text-cache "$WORK/h3-text-cache"
+      --text-cache "$SCRATCH/h3-text-cache"
       --text-weights "$W/h3-base"
       --warm
     )
@@ -473,7 +477,7 @@ case "$FAMILY" in
       --seconds 5
       --seed "$SEED"
       --text-encoder auto
-      --text-cache "$WORK/h3-text-cache"
+      --text-cache "$SCRATCH/h3-text-cache"
       --text-weights "$W/h3-base"
       --warm
     )
@@ -521,7 +525,7 @@ case "$FAMILY" in
       --seconds 5
       --seed "$SEED"
       --text-encoder auto
-      --text-cache "$WORK/h3-text-cache"
+      --text-cache "$SCRATCH/h3-text-cache"
       --text-weights "$W/h3-base"
       --warm
     )

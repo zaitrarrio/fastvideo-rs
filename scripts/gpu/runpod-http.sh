@@ -93,15 +93,18 @@ start_cmd() {
   local cells="fasth3-8step fasth3-4step-vsa fasth3-4step-dense sol-h3 sol-h3-spark ltx25-two-stage"
   cat <<EOF
 set -u
-OUT=/workspace/runs/$FAMILY/$tag
+# All writes on the container disk: the weight volume is read-only for us
+# (some hosts have silently dropped data writes to it).
+SCRATCH=/fvscratch
+OUT=\$SCRATCH/runs/$FAMILY/$tag
 mkdir -p "\$OUT"
 FV=/opt/fastvideo-rs/target/release/fv-gpucheck
 if "\$FV" serve --help >/dev/null 2>&1; then
-  "\$FV" serve --dir /workspace/runs --port 8000 >"\$OUT/http.log" 2>&1 &
+  "\$FV" serve --dir \$SCRATCH/runs --port 8000 >"\$OUT/http.log" 2>&1 &
 else
   # Images before fv-gpucheck serve: Python's server (needs apt on the box).
   ( apt-get update -qq >/dev/null 2>&1; apt-get install -y -qq python3-minimal >/dev/null 2>&1
-    cd /workspace/runs && exec python3 -m http.server 8000 ) >"\$OUT/http.log" 2>&1 &
+    cd \$SCRATCH/runs && exec python3 -m http.server 8000 ) >"\$OUT/http.log" 2>&1 &
 fi
 {
   echo "image_build_id=\$(cat /opt/fastvideo-rs/target/release/fv-gpucheck.build-id 2>/dev/null)"
@@ -116,7 +119,7 @@ if [ "$mode" = kernels ] || [ "$mode" = all ]; then
   cp "\$OUT"/gpucheck/*.json "\$OUT"/ 2>/dev/null
 fi
 if [ "$mode" = run ] || [ "$mode" = all ]; then
-  env ${FV_EXTRA_ENV:-} FV_WORK=/workspace FV_RUN_TAG=$tag FV_CELLS="${FV_CELLS:-}" \
+  env ${FV_EXTRA_ENV:-} FV_WORK=/workspace FV_SCRATCH=\$SCRATCH FV_RUN_TAG=$tag FV_CELLS="${FV_CELLS:-}" \
     FV_GEN_TIMEOUT_S=${FV_GEN_TIMEOUT_S:-3600} \
     bash /opt/fastvideo-rs/scripts/gpu/runpod-matrix.sh $FAMILY >"\$OUT/matrix.out" 2>&1
   echo "matrix_exit=\$?" >>"\$OUT/matrix.out"
@@ -156,7 +159,7 @@ create_pod() {
   read -r vol dc < <(volume) || true
   [[ -n "${vol:-}" ]] || die "no network volume ($VOL_NAME)"
   payload="$(jq -n --arg name "fv-$FAMILY-$tag" --arg image "$image" --arg vol "$vol" \
-    --arg dc "$dc" --arg gpu "$GPU" --arg disk "${FV_CONTAINER_DISK_GB:-40}" --arg cmd "$(start_cmd "$image" "$tag" "$mode")" '{
+    --arg dc "$dc" --arg gpu "$GPU" --arg disk "${FV_CONTAINER_DISK_GB:-120}" --arg cmd "$(start_cmd "$image" "$tag" "$mode")" '{
       name: $name, imageName: $image, cloudType: "SECURE", computeType: "GPU",
       gpuTypeIds: [$gpu], gpuCount: 1, containerDiskInGb: ($disk|tonumber), volumeInGb: 0,
       networkVolumeId: $vol, volumeMountPath: "/workspace", dataCenterIds: [$dc],
