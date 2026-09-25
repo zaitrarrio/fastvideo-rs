@@ -605,10 +605,12 @@ impl H3InferenceContract {
     /// MiniMax-H3 base plus a fused four-step adapter (FastH3 dense-datafree
     /// for T2V/I2V, lightx2v turbo for Ref2VA). Diffusers
     /// `set_timesteps(5)` after video shift 12 and audio shift 3: four
-    /// forwards on the uniform grid. Attention is Spark Sol-Attn (update 0
-    /// dense; later updates layer 0 dense + Sol tau 1 / 1.25 / 1.5), not the
-    /// 49-step RTX window. `vsa_sparsity=0` so MiniMax-H3 does not load
-    /// `to_gate_compress`. The official RTX cell is [`Self::sol_h3_rtx`].
+    /// forwards on the uniform grid. Attention is dense, as the Sol-H3 engine
+    /// runs on one GPU (`engine.py` refuses Sol-Attn at world size 1); the
+    /// engine's multi-GPU Sol policy is an explicit opt-in
+    /// (`FASTVIDEO_H3_SOL_ATTN=1`, see [`super::sol`]). `vsa_sparsity=0` so
+    /// MiniMax-H3 does not load `to_gate_compress`. The official RTX cell is
+    /// [`Self::sol_h3_rtx`].
     pub fn sol_h3() -> Self {
         Self {
             dmd_denoising_steps: Vec::new(),
@@ -619,7 +621,7 @@ impl H3InferenceContract {
             guidance_scale: 1.0,
             vsa_sparsity: 0.0,
             vsa_tile_size: 64,
-            dense: false,
+            dense: true,
             sigma_source: H3SigmaSource::Uniform,
         }
     }
@@ -644,8 +646,10 @@ impl H3InferenceContract {
 
     /// One-GPU official MiniMax-H3 cell from `models/minimax_h3.toml`
     /// `[rtx5090.policy]`: 50 sigma points, 49 forwards, video shift 12,
-    /// audio shift 3. Sol-Attn (not VSA): first 10 steps dense, first 2
-    /// layers dense, tau 1.0.
+    /// audio shift 3. Sol-Attn (not VSA): first 10 forwards dense, first 2
+    /// layers dense, tau 1.0, text-only sink. `dense` means "no VSA": the Sol
+    /// route is chosen by [`super::sol::recipe_sol_attn_policy`], and
+    /// `FASTVIDEO_H3_SOL_ATTN=off` falls back to plain dense attention.
     pub fn sol_h3_rtx() -> Self {
         Self {
             dmd_denoising_steps: Vec::new(),
@@ -656,7 +660,7 @@ impl H3InferenceContract {
             guidance_scale: 1.0,
             vsa_sparsity: 0.0,
             vsa_tile_size: 64,
-            dense: false,
+            dense: true,
             sigma_source: H3SigmaSource::Uniform,
         }
     }
@@ -963,7 +967,9 @@ mod tests {
         }
         let sol = H3InferenceContract::sol_h3();
         assert_eq!(sol.sigma_source, H3SigmaSource::Uniform);
-        assert!(!sol.dense);
+        // One GPU: dense, and no VSA gate even with FASTVIDEO_H3_SOL_ATTN=off.
+        assert!(sol.dense);
+        assert_eq!(sol.vsa_sparsity, 0.0);
         assert!(sol.dmd_denoising_steps.is_empty());
         assert_eq!(
             super::super::schedule::H3JointSchedule::from_contract(&sol)
@@ -980,7 +986,8 @@ mod tests {
         let rtx = H3InferenceContract::sol_h3_rtx();
         assert_eq!(rtx.transformer_forwards, 49);
         assert_eq!(rtx.num_inference_steps, 50);
-        assert!(!rtx.dense);
+        assert!(rtx.dense);
+        assert_eq!(rtx.vsa_sparsity, 0.0);
         assert_eq!(H3InferenceContract::named("sol-h3-rtx").unwrap(), rtx);
         assert!(!H3InferenceContract::fasth3_4step_vsa().dense);
         assert!(H3InferenceContract::fasth3_4step_dense().dense);

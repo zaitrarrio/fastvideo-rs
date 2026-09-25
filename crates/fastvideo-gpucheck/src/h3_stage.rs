@@ -206,7 +206,8 @@ pub enum Stage {
         #[arg(long)]
         taeh3_weights: Option<PathBuf>,
         /// DMD recipe: `8step` / `v2`, `4step-vsa` / `preview-vsa`, `4step-dense`
-        /// / `preview-dense`, `sol-h3`, `sol-h3-spark`, `sol-h3-rtx`. Default:
+        /// / `preview-dense`, `sol-h3` (dense on one GPU; `FASTVIDEO_H3_SOL_ATTN=1`
+        /// for the engine Sol policy), `sol-h3-spark`, `sol-h3-rtx`. Default:
         /// read `fastvideo_inference.json` or 8-step.
         #[arg(long)]
         h3_recipe: Option<String>,
@@ -1349,11 +1350,32 @@ fn gen(
     report.set("device", crate::gpu::init(device)?);
     let mut request = H3Request::seconds(prompt, seconds, seed).map_err(|e| anyhow::anyhow!(e))?;
     request.mp4 = mp4;
+    let attention = {
+        use fastvideo_models::h3::lora::{
+            is_sol_h3_recipe, is_sol_h3_rtx_recipe, is_sol_h3_spark_recipe,
+        };
+        use fastvideo_models::h3::sol::{recipe_sol_attn_policy, H3SolAttnPolicy};
+        let recipe = options.recipe.as_deref();
+        let dense_recipe = recipe.is_some_and(|r| {
+            (is_sol_h3_recipe(r) && !is_sol_h3_spark_recipe(r)) || is_sol_h3_rtx_recipe(r)
+        });
+        match recipe_sol_attn_policy(
+            recipe,
+            std::env::var("FASTVIDEO_H3_SOL_ATTN").ok().as_deref(),
+            options.ref2va,
+        )
+        .map_err(|e| anyhow::anyhow!(e))?
+        {
+            H3SolAttnPolicy::Off if options.dense || dense_recipe => "dense, no gate".to_string(),
+            H3SolAttnPolicy::Off => "vsa-h3 + to_gate_compress".to_string(),
+            policy => format!("sol-attn {policy:?}"),
+        }
+    };
     report.set(
         "request",
         json!({
             "prompt": prompt, "seconds": seconds, "seed": seed, "warm": warm,
-            "attention": if options.dense { "dense, no gate" } else { "vsa-h3 0.8 + to_gate_compress" },
+            "attention": attention,
             "height": request.height, "width": request.width, "num_frames": request.num_frames,
             "text_cache": options.text_cache, "text_weights": options.text_root,
             "video_vae": if options.taeh3.is_some() { "taeh3" } else { "official" },

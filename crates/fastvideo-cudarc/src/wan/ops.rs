@@ -710,14 +710,54 @@ pub fn index_select_rows_device(
     indices: &[u32],
 ) -> Result<CudaSlice<f32>> {
     check("index_select_rows", d > 0 && table.len() % d == 0)?;
+    let idx = upload_row_indices(indices)?;
+    index_select_rows_idx_device(table, d, &idx)
+}
+
+/// Upload row indices once for [`index_select_rows_idx_device`].
+#[cfg(feature = "cuda")]
+pub fn upload_row_indices(indices: &[u32]) -> Result<CudaSlice<u32>> {
     let dev = ctx()?;
     let idx = dev.stream.memcpy_stod(indices).map_err(err)?;
     super::stats::record_h2d(indices.len());
-    let n = indices.len() * d;
+    Ok(idx)
+}
+
+/// `out[r, :] = table[idx[r], :]` with a resident index buffer (no upload).
+#[cfg(feature = "cuda")]
+pub fn index_select_rows_idx_device(
+    table: &CudaSlice<f32>,
+    d: usize,
+    idx: &CudaSlice<u32>,
+) -> Result<CudaSlice<f32>> {
+    check("index_select_rows", d > 0 && table.len().is_multiple_of(d))?;
+    let dev = ctx()?;
+    let n = idx.len() * d;
     let (n_i, d_i) = (n as i64, d as i64);
     let mut out = alloc(n)?;
-    launch!(dev.stream, &dev.kernels.index_select_rows, cfg_n(n); table, &idx, &mut out, &n_i, &d_i).map_err(err)?;
+    launch!(dev.stream, &dev.kernels.index_select_rows, cfg_n(n); table, idx, &mut out, &n_i, &d_i).map_err(err)?;
     Ok(out)
+}
+
+/// `(sum |a - b|, sum |b|)` accumulated in f64 on the device; only the two
+/// scalars come back (TeaCache relative L1).
+#[cfg(feature = "cuda")]
+pub fn abs_diff_sums_device(a: &CudaSlice<f32>, b: &CudaSlice<f32>) -> Result<(f64, f64)> {
+    check("abs_diff_sum", a.len() == b.len())?;
+    let dev = ctx()?;
+    let n = a.len() as i64;
+    let mut out = dev.stream.alloc_zeros::<f64>(2).map_err(err)?;
+    let threads = 256u32;
+    let blocks = a.len().div_ceil(threads as usize).clamp(1, 1024) as u32;
+    let cfg = LaunchConfig {
+        grid_dim: (blocks, 1, 1),
+        block_dim: (threads, 1, 1),
+        shared_mem_bytes: 2 * threads * 8,
+    };
+    launch!(dev.stream, &dev.kernels.abs_diff_sum, cfg; a, b, &mut out, &n).map_err(err)?;
+    let host = dev.stream.memcpy_dtov(&out).map_err(err)?;
+    super::stats::record_d2h(2);
+    Ok((host[0], host[1]))
 }
 
 // ---- Video Sparse Attention -------------------------------------------------

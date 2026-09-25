@@ -241,6 +241,14 @@ fn generate_ltx2(
     }
 }
 
+/// Base `minimax_h3` T2AV has no default recipe; only the RTX cell
+/// (`--h3-recipe sol-h3-rtx`, 49 forwards on the base checkpoint) wires it.
+fn h3_t2v_unwired(preset: &str, recipe: Option<&str>, conditioned: bool) -> bool {
+    preset == "minimax_h3"
+        && !conditioned
+        && !recipe.is_some_and(fastvideo_models::h3::lora::is_sol_h3_rtx_recipe)
+}
+
 fn generate_h3(
     def: &'static FamilyModelDefinition,
     opts: AvGenerateOptions,
@@ -248,10 +256,10 @@ fn generate_h3(
     require_cuda(&opts.device)?;
     let has_refs = !opts.reference_images.is_empty();
     let has_fl2va = opts.image_path.is_some() || opts.last_image_path.is_some();
-    if def.preset == "minimax_h3" && !has_refs && !has_fl2va {
+    if h3_t2v_unwired(def.preset, opts.h3_recipe.as_deref(), has_refs || has_fl2va) {
         return Err(FastVideoError::NotImplemented {
             component: "minimax_h3".into(),
-            detail: "base MiniMax-H3 T2AV schedule/AdaLN not wired; use FastH3 for T2AV, or pass --image/--last-image (FL2VA) / --ref (Ref2VA image/video)".into(),
+            detail: "base MiniMax-H3 T2AV needs --h3-recipe sol-h3-rtx; or use FastH3 for T2AV, or pass --image/--last-image (FL2VA) / --ref (Ref2VA image/video)".into(),
         });
     }
     if has_refs && has_fl2va {
@@ -1662,5 +1670,21 @@ fn generate_lingbot(
         Err(FastVideoError::Message(
             "rebuild with --features cuda-cudarc to generate LingBot".into(),
         ))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::h3_t2v_unwired;
+
+    #[test]
+    fn base_h3_t2v_runs_with_the_rtx_recipe() {
+        assert!(h3_t2v_unwired("minimax_h3", None, false));
+        assert!(h3_t2v_unwired("minimax_h3", Some("sol-h3"), false));
+        assert!(!h3_t2v_unwired("minimax_h3", Some("sol-h3-rtx"), false));
+        assert!(!h3_t2v_unwired("minimax_h3", Some("sol_h3_rtx"), false));
+        assert!(!h3_t2v_unwired("minimax_h3", None, true));
+        assert!(!h3_t2v_unwired("sol_h3", None, false));
+        assert!(!h3_t2v_unwired("fasth3_8step", None, false));
     }
 }
