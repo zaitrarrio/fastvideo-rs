@@ -2,6 +2,8 @@
 //! on CUDA (see [`tensor`]) with plain-Rust reference ops on CPU runs.
 
 pub mod affine;
+#[cfg(feature = "cuda")]
+pub(crate) mod act16;
 pub mod ar_cache;
 pub mod attn;
 pub mod bf16_gemm;
@@ -23,6 +25,7 @@ pub mod nvfp4;
 pub mod offload;
 pub mod ops;
 pub mod pipeline;
+pub mod quant;
 pub mod resident;
 pub mod sla;
 pub mod sol_cache;

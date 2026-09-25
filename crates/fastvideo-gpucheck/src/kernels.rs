@@ -1176,111 +1176,6 @@ pub fn run(report: &mut Report, lim: Limits, seed: u64) -> StageResult<()> {
                 serde_json::json!({"equal": true}),
             )?;
         }
-        {
-            // FP8 E4M3: the device quantizer must agree with the host reference
-            // *exactly*, not approximately. The reference is checked over all
-            // 256 codes by a unit test, so an exact match here transfers that
-            // guarantee to the kernel; any tolerance would hide a rounding-mode
-            // divergence, which is precisely the bug worth catching.
-            use fastvideo_ops::fp8;
-            let x = c.rand(65_536, 4.0);
-            let amax = x.iter().fold(0.0f32, |a, b| a.max(b.abs()));
-            let (scale, inv) = fp8::scale_for_amax(amax);
-            let (q, scale_dev) = ops::quantize_e4m3_device(&up(&x)?)?;
-            let got_bits = dev()?.stream.memcpy_dtov(&q)?;
-            let want_bits: Vec<u8> = x.iter().map(|&v| fp8::f32_to_e4m3(v * inv)).collect();
-            let mism = got_bits
-                .iter()
-                .zip(&want_bits)
-                .filter(|(a, b)| a != b)
-                .count();
-            c.report.check(
-                "fp8_quantize_matches_reference",
-                mism == 0,
-                serde_json::json!({"mismatched_codes": mism, "n": got_bits.len()}),
-                serde_json::json!({"mismatched_codes": 0}),
-            )?;
-            // The device-computed scale must match the host amax reduction too:
-            // a wrong scale is invisible in the codes but wrecks the GEMM.
-            let got_scale = dev()?.stream.memcpy_dtov(&scale_dev)?[0];
-            c.cmp("fp8_scale_from_amax", &[got_scale], &[scale], 1e-6)?;
-            // Round-trip lands within E4M3's 3-bit mantissa.
-            let deq = down(&ops::dequantize_e4m3_device(&q, &scale_dev)?)?;
-            let want: Vec<f32> = want_bits
-                .iter()
-                .map(|&b| fp8::e4m3_to_f32(b) * scale)
-                .collect();
-            c.cmp("fp8_dequantize", &deq, &want, 1e-6)?;
-        }
-        {
-            // The cuBLASLt FP8 GEMM itself, at a real DiT linear shape. This is
-            // the part that can only be answered on hardware: whether cuBLASLt
-            // has an FP8 algorithm for our shapes at all, and what per-tensor
-            // E4M3 actually costs against an f64-accumulated reference.
-            use cudarc::driver::{DevicePtr, DevicePtrMut};
-            use fastvideo_ops::fp8;
-            let d = dev()?;
-            let (tokens, kk, out_dim) = (256usize, 1536usize, 1536usize);
-            match fastvideo_cudarc::wan::fp8::fp8_gemm_supported(&d, out_dim, tokens, kk) {
-                Err(why) => c
-                    .report
-                    .note("fp8_gemm_skipped", serde_json::json!({"reason": why})),
-                Ok(()) => {
-                    let w = c.rand(out_dim * kk, 0.05); // weight-like magnitudes
-                    let x = c.rand(tokens * kk, 1.0);
-                    let ltc = fastvideo_cudarc::wan::fp8::lt_context(&d)?;
-                    let wq = fastvideo_cudarc::wan::fp8::Fp8Weight::quantize(&d, &w, out_dim, kk)?;
-                    let (xq, xs_scale) =
-                        fastvideo_cudarc::wan::ops::quantize_e4m3_device(&up(&x)?)?;
-                    let mut got = up(&vec![0.0; tokens * out_dim])?;
-                    {
-                        let (wp, _a) = wq.data.device_ptr(&d.stream);
-                        let (wsp, _b) = wq.scale.device_ptr(&d.stream);
-                        let (xp, _e) = xq.device_ptr(&d.stream);
-                        let (xsp, _f) = xs_scale.device_ptr(&d.stream);
-                        let (cp, _g) = got.device_ptr_mut(&d.stream);
-                        unsafe {
-                            fastvideo_cudarc::wan::fp8::gemm_e4m3(
-                                &d, &ltc, out_dim, tokens, kk, wp, wsp, xp, xsp, cp,
-                            )?
-                        };
-                    }
-                    // Reference: quantize both operands with the *host* routine
-                    // and accumulate in f64, so the only error measured is E4M3
-                    // resolution, not the reference's own rounding.
-                    let wamax = w.iter().fold(0.0f32, |a, b| a.max(b.abs()));
-                    let xamax = x.iter().fold(0.0f32, |a, b| a.max(b.abs()));
-                    let (ws, winv) = fp8::scale_for_amax(wamax);
-                    let (xsc, xinv) = fp8::scale_for_amax(xamax);
-                    let wdq: Vec<f32> = w
-                        .iter()
-                        .map(|&v| fp8::e4m3_to_f32(fp8::f32_to_e4m3(v * winv)) * ws)
-                        .collect();
-                    let xdq: Vec<f32> = x
-                        .iter()
-                        .map(|&v| fp8::e4m3_to_f32(fp8::f32_to_e4m3(v * xinv)) * xsc)
-                        .collect();
-                    let mut want = vec![0.0f32; tokens * out_dim];
-                    for i in 0..tokens {
-                        for j in 0..out_dim {
-                            let acc: f64 = (0..kk)
-                                .map(|t| f64::from(xdq[i * kk + t]) * f64::from(wdq[j * kk + t]))
-                                .sum();
-                            want[i * out_dim + j] = acc as f32;
-                        }
-                    }
-                    // Tolerance covers cuBLASLt's accumulation order only: both
-                    // sides see the same quantized operands, so a larger error
-                    // means the GEMM is wrong, not that FP8 is imprecise.
-                    c.cmp(
-                        "fp8_gemm_matches_quantized_reference",
-                        &down(&got)?,
-                        &want,
-                        2e-2,
-                    )?;
-                }
-            }
-        }
         for (rows, kk, n, gelu) in [
             (97usize, 1536usize, 8960usize, true),
             (300, 1536, 1536, false),
@@ -2152,6 +2047,17 @@ pub fn run(report: &mut Report, lim: Limits, seed: u64) -> StageResult<()> {
             );
         }
         Ok(())
+    })?;
+
+    // Reference FP8 recipes (W8A8 / MXFP8) and bf16 activations.
+    group(&mut c, "fp8_recipes", |c| {
+        crate::kernels_fp8::fp8_recipes(c.report, &mut c.seed)
+    })?;
+    group(&mut c, "bf16_act", |c| {
+        crate::kernels_fp8::bf16_act(c.report, &mut c.seed)
+    })?;
+    group(&mut c, "bf16_attention_routes", |c| {
+        crate::kernels_fp8::bf16_attention_routes(c.report, &mut c.seed)
     })?;
 
     group(&mut c, "no_host_fallback", |c| {

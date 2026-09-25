@@ -510,11 +510,20 @@ fn sol_attn_cuda(
     p: &SolParams,
 ) -> Result<CudaTensor> {
     let (batch, heads, tokens, dim) = (q.shape[0], q.shape[1], q.shape[2], q.shape[3]);
+    // bf16 activations: read the bf16 buffers directly and store bf16.
+    if let (Some(q16), Some(k16), Some(v16)) =
+        (q.device_slice_bf16(), k.device_slice_bf16(), v.device_slice_bf16())
+    {
+        let out = super::ops::sol_fused_device_bf16(q16, k16, v16, batch * heads, tokens, dim, p)?;
+        return CudaTensor::from_device_slice_bf16(out, q.shape.clone());
+    }
     let qd = ensure_dev(q)?;
     let kd = ensure_dev(k)?;
     let vd = ensure_dev(v)?;
     let out = super::ops::sol_fused_device(&qd, &kd, &vd, batch * heads, tokens, dim, p)?;
-    CudaTensor::from_dev_result(out, q.shape.clone())
+    // bf16-stored q/k/v were widened on the device by `dev()`; the result
+    // goes back to the activation dtype.
+    q.keep_dtype(CudaTensor::from_dev_result(out, q.shape.clone())?)
 }
 
 #[cfg(feature = "cuda")]
@@ -531,7 +540,7 @@ fn pisa_attn_cuda(
     let vd = ensure_dev(v)?;
     let out =
         super::ops::pisa_attn_device(&qd, &kd, &vd, batch, heads, tokens, dim, sparsity, scale)?;
-    CudaTensor::from_dev_result(out, q.shape.clone())
+    q.keep_dtype(CudaTensor::from_dev_result(out, q.shape.clone())?)
 }
 
 #[cfg(feature = "cuda")]
@@ -564,7 +573,7 @@ fn sla_attn_cuda(
     } else {
         o_l
     };
-    o_s_t.add(&o_l)
+    q.keep_dtype(o_s_t.add(&o_l)?)
 }
 
 #[cfg(feature = "cuda")]

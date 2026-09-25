@@ -36,12 +36,14 @@ pub struct Linear {
     /// and cast back with the bias and activation fused.
     #[cfg(feature = "cuda")]
     weight_bf16: Option<std::sync::Arc<cudarc::driver::CudaSlice<half::bf16>>>,
-    /// `FASTVIDEO_FP8=1`: the weight quantized once to E4M3 with a per-tensor
-    /// scale. Activations are quantized per call and the product runs on FP8
-    /// tensor cores. Only sound on a checkpoint trained to tolerate it — see
-    /// [`fp8_linears`].
-    #[cfg(feature = "cuda")]
-    weight_fp8: Option<std::sync::Arc<super::fp8::Fp8Weight>>,
+    /// A reference FP8 recipe weight ([`super::quant`]): W8A8 tensorwise
+    /// (`FASTVIDEO_FP8`, and the H3 recipe tables under `FASTVIDEO_H3_QUANT`)
+    /// or MXFP8 block-scaled. The GEMM runs on FP8 tensor cores with f32
+    /// accumulation and a bf16 output.
+    quant: Option<super::quant::QuantWeight>,
+    /// A module the reference keeps in f32 (`_keep_in_fp32_modules`): under
+    /// `FASTVIDEO_BF16_ACT` its input is widened and its output not rounded.
+    f32_island: bool,
     /// Weight-only FP8 ([`Linear::load_fp8_rows`]): a per-instance choice for
     /// models that must be resident and do not fit at bf16. Dequantized to bf16
     /// before each GEMM, so activations and the GEMM itself are untouched.
@@ -160,12 +162,16 @@ impl Linear {
         }
         #[cfg(feature = "cuda")]
         {
-            if self.weight_fp8.is_some() {
-                return false;
+            if let Some(q) = &self.quant {
+                // The quantized blob streams like a bf16 weight.
+                return q.has_blob();
             }
             if self.weight_bf16.is_some() {
                 return true;
             }
+        }
+        if self.quant.is_some() {
+            return false;
         }
         !super::device::has_live_device() && self.weight.numel() == self.in_dim * self.out_dim
     }
@@ -175,6 +181,10 @@ impl Linear {
     pub(crate) fn take_streamed_weight(&mut self) -> Option<StreamedWeight> {
         if !self.is_streamable() {
             return None;
+        }
+        #[cfg(feature = "cuda")]
+        if let Some(q) = self.quant.as_mut() {
+            return q.take_blob().map(StreamedWeight::Bf16);
         }
         #[cfg(feature = "cuda")]
         if let Some(w) = self.weight_bf16.take() {
@@ -191,7 +201,10 @@ impl Linear {
     pub(crate) fn put_streamed_weight(&mut self, w: StreamedWeight) {
         match w {
             #[cfg(feature = "cuda")]
-            StreamedWeight::Bf16(w) => self.weight_bf16 = Some(w),
+            StreamedWeight::Bf16(w) => match self.quant.as_mut() {
+                Some(q) => q.put_blob(w),
+                None => self.weight_bf16 = Some(w),
+            },
             StreamedWeight::Tensor(t) => self.weight = t,
         }
     }
@@ -220,21 +233,48 @@ impl Linear {
         #[cfg(feature = "cuda")]
         if nvfp4_act.is_none() && fp8_linears() {
             let dev = super::device::global_device().ok_or_else(|| msg("no device"))?;
-            // A shape cuBLASLt cannot serve falls back to bf16/F32 rather than
-            // failing the run, but says so once: a silent fallback would let an
-            // FP8 benchmark quietly measure something else.
-            match super::fp8::fp8_gemm_supported(&dev, out_dim, 16, in_dim) {
-                Ok(()) => {
-                    let host = weight.host_cow()?;
-                    let q = super::fp8::Fp8Weight::quantize(&dev, &host, out_dim, in_dim)?;
-                    stats::record_h2d(host.len() / 4);
+            // FastVideo's W8A8 recipe (`fp8_config.py`, tensorwise) on every
+            // linear. A shape cuBLASLt cannot serve falls back to bf16/F32 and
+            // says so once: a silent fallback would let an FP8 benchmark
+            // quietly measure something else.
+            let layout = super::fp8::fp8_gemm_supported(&dev, out_dim, 16, in_dim).and_then(|()| {
+                super::quant::QuantLayout::new(
+                    super::quant::QuantKind::W8A8,
+                    in_dim,
+                    vec![super::quant::Section {
+                        rows: out_dim,
+                        quantized: true,
+                    }],
+                )
+                .map_err(|e| e.to_string())
+            });
+            match layout {
+                Ok(layout) => {
+                    let host: Vec<half::bf16> = weight
+                        .host_cow()?
+                        .iter()
+                        .map(|&v| half::bf16::from_f32(v))
+                        .collect();
+                    let w16 = dev
+                        .stream
+                        .memcpy_stod(&host)
+                        .map_err(|e| msg(e.to_string()))?;
+                    stats::record_h2d(host.len() / 2);
+                    let q = super::quant::QuantWeight::from_device_bf16(layout, &w16)?;
+                    static SAID: std::sync::atomic::AtomicBool =
+                        std::sync::atomic::AtomicBool::new(false);
+                    super::log::info_once(
+                        &SAID,
+                        format_args!("FASTVIDEO_FP8: FastVideo W8A8 tensorwise recipe on every linear"),
+                    );
                     return Ok(Self {
                         weight: CudaTensor::from_vec(Vec::new(), vec![0, in_dim])?,
                         bias,
                         in_dim,
                         out_dim,
                         weight_bf16: None,
-                        weight_fp8: Some(std::sync::Arc::new(q)),
+                        quant: Some(q),
+                        f32_island: false,
                         weight_fp8_rows: None,
                         weight_affine: None,
                         nvfp4_act: None,
@@ -267,7 +307,8 @@ impl Linear {
                 in_dim,
                 out_dim,
                 weight_bf16: Some(std::sync::Arc::new(slice)),
-                weight_fp8: None,
+                quant: None,
+            f32_island: false,
                 weight_fp8_rows: None,
                 weight_affine: None,
                 nvfp4_act,
@@ -282,8 +323,8 @@ impl Linear {
             out_dim,
             #[cfg(feature = "cuda")]
             weight_bf16: None,
-            #[cfg(feature = "cuda")]
-            weight_fp8: None,
+            quant: None,
+            f32_island: false,
             weight_fp8_rows: None,
             weight_affine: None,
             nvfp4_act,
@@ -464,7 +505,8 @@ impl Linear {
             in_dim,
             out_dim: rows,
             weight_bf16: Some(std::sync::Arc::new(slice)),
-            weight_fp8: None,
+            quant: None,
+            f32_island: false,
             weight_fp8_rows: None,
             weight_affine: None,
             nvfp4_act: None,
@@ -495,7 +537,8 @@ impl Linear {
             in_dim,
             out_dim,
             weight_bf16: Some(std::sync::Arc::new(weight)),
-            weight_fp8: None,
+            quant: None,
+            f32_island: false,
             weight_fp8_rows: None,
             weight_affine: None,
             nvfp4_act: None,
@@ -580,8 +623,8 @@ impl Linear {
             out_dim,
             #[cfg(feature = "cuda")]
             weight_bf16: None,
-            #[cfg(feature = "cuda")]
-            weight_fp8: None,
+            quant: None,
+            f32_island: false,
             weight_fp8_rows: Some(std::sync::Arc::new(rows)),
             weight_affine: None,
             nvfp4_act: None,
@@ -598,11 +641,11 @@ impl Linear {
         #[cfg(feature = "cuda")]
         {
             b += self.weight_bf16.as_ref().map_or(0, |w| w.len() as u64 * 2);
-            b += self
-                .weight_fp8
-                .as_ref()
-                .map_or(0, |w| w.data.len() as u64 + 4);
         }
+        b += self
+            .quant
+            .as_ref()
+            .map_or(0, super::quant::QuantWeight::held_bytes);
         if let Some(r) = self.weight_fp8_rows.as_deref() {
             b += (r.rows * r.cols + r.rows * 4) as u64;
         }
@@ -689,8 +732,8 @@ impl Linear {
             out_dim: rows,
             #[cfg(feature = "cuda")]
             weight_bf16: None,
-            #[cfg(feature = "cuda")]
-            weight_fp8: None,
+            quant: None,
+            f32_island: false,
             weight_fp8_rows: None,
             weight_affine: Some(std::sync::Arc::new(aff)),
             nvfp4_act: None,
@@ -698,91 +741,120 @@ impl Linear {
         })
     }
 
-    /// Per-tensor E4M3 GEMM weight (the `FASTVIDEO_FP8` path), not weight-only rows.
+    /// Whether this linear runs a reference FP8 recipe GEMM (W8A8 / MXFP8).
     pub fn is_fp8_gemm(&self) -> bool {
-        #[cfg(feature = "cuda")]
-        {
-            self.weight_fp8.is_some()
-        }
-        #[cfg(not(feature = "cuda"))]
-        {
-            false
-        }
+        self.quant.is_some()
     }
 
-    /// Load one linear onto the per-tensor E4M3 GEMM path without setting
-    /// process-wide `FASTVIDEO_FP8`. Falls back to [`Self::load`] when there is
-    /// no device or the shape is not 16-aligned (token count is padded later).
-    pub fn load_fp8_gemm(
-        map: &super::weights::WeightMap,
-        prefix: &str,
-        in_dim: usize,
-        out_dim: usize,
-        has_bias: bool,
-    ) -> Result<Self> {
-        #[cfg(feature = "cuda")]
-        if let Some(lin) = Self::try_load_fp8_gemm(map, prefix, in_dim, out_dim, has_bias)? {
-            return Ok(lin);
-        }
-        Self::load(map, prefix, in_dim, out_dim, has_bias)
+    /// The recipe this linear's weight is quantized with, if any.
+    pub fn quant_kind(&self) -> Option<super::quant::QuantKind> {
+        self.quant.as_ref().map(super::quant::QuantWeight::kind)
     }
 
-    #[cfg(feature = "cuda")]
-    fn try_load_fp8_gemm(
-        map: &super::weights::WeightMap,
-        prefix: &str,
-        in_dim: usize,
-        out_dim: usize,
-        has_bias: bool,
-    ) -> Result<Option<Self>> {
-        let Some(dev) = super::device::global_device() else {
-            return Ok(None);
-        };
-        if !stats::device_expected() {
-            return Ok(None);
+    /// Mark a module the reference keeps in f32 (`_keep_in_fp32_modules`).
+    pub fn set_f32_island(&mut self) {
+        self.f32_island = true;
+    }
+
+    /// Quantize this (loaded, possibly LoRA-merged) weight with a reference
+    /// recipe. `sections` split the output rows (a fused QKV keeps one W8A8
+    /// scale per original tensor; `quantized: false` rows stay bf16). The
+    /// weight is rounded to bf16 first, as the reference quantizes after its
+    /// bf16 LoRA merge; on a device the quantizer is the activation kernel.
+    pub fn quantize(
+        &mut self,
+        kind: super::quant::QuantKind,
+        sections: Vec<super::quant::Section>,
+    ) -> Result<()> {
+        if self.lora.is_some()
+            || self.weight_affine.is_some()
+            || self.weight_fp8_rows.is_some()
+            || self.nvfp4_act.is_some()
+            || self.quant.is_some()
+        {
+            return Err(msg("quantize: only a plain bf16/f32 linear can take an FP8 recipe"));
         }
-        match super::fp8::fp8_gemm_supported(&dev, out_dim, 16, in_dim) {
-            Ok(()) => {}
-            Err(why) => {
-                static WARNED: std::sync::atomic::AtomicBool =
-                    std::sync::atomic::AtomicBool::new(false);
-                super::log::info_once(&WARNED, format_args!("h3 ffn fp8 disabled: {why}"));
-                return Ok(None);
+        let layout = super::quant::QuantLayout::new(kind, self.in_dim, sections)?;
+        if layout.out_dim != self.out_dim {
+            return Err(msg(format!(
+                "quantize: sections cover {} of {} rows",
+                layout.out_dim, self.out_dim
+            )));
+        }
+        let empty = CudaTensor::from_vec(Vec::new(), vec![0, self.in_dim])?;
+        #[cfg(feature = "cuda")]
+        if let Some(w16) = self.weight_bf16.take() {
+            self.quant = Some(super::quant::QuantWeight::from_device_bf16(layout, &w16)?);
+            return Ok(());
+        }
+        #[cfg(feature = "cuda")]
+        if stats::device_expected() && self.weight.numel() == self.in_dim * self.out_dim {
+            if let Some(w16) = self.weight.dev_bf16()? {
+                self.quant = Some(super::quant::QuantWeight::from_device_bf16(layout, &w16)?);
+                self.weight = empty;
+                return Ok(());
             }
         }
-        let wt = super::weights::cuda_tensor_shaped(
-            map,
-            &super::weights::join_key(prefix, "weight"),
-            &[out_dim, in_dim],
-        )?;
-        let host = wt.host_cow()?;
-        static SAID: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
-        super::log::info_once(&SAID, format_args!("h3 ffn fp8: per-tensor E4M3 GEMM"));
-        let q = super::fp8::Fp8Weight::quantize(&dev, &host, out_dim, in_dim)?;
-        stats::record_h2d(host.len());
-        let bias = if has_bias {
-            let mut b = super::weights::cuda_tensor_shaped(
-                map,
-                &super::weights::join_key(prefix, "bias"),
-                &[out_dim],
-            )?;
-            b.pin_device()?;
-            Some(b)
+        let w = self.weight.host_cow()?.into_owned();
+        self.quant = Some(super::quant::QuantWeight::from_host(layout, &w)?);
+        self.weight = empty;
+        Ok(())
+    }
+
+    /// The quantized linear on an MXFP8 activation a fused producer already
+    /// wrote (RMSNorm+modulate, residual+norm+modulate, SwiGLU). bf16 output.
+    #[cfg(feature = "cuda")]
+    pub fn forward_mx(&self, act: &super::quant::MxAct, out_shape: Vec<usize>) -> Result<CudaTensor> {
+        let q = self
+            .quant
+            .as_ref()
+            .filter(|q| q.kind() == super::quant::QuantKind::Mxfp8)
+            .ok_or_else(|| msg("forward_mx on a linear without an MXFP8 weight"))?;
+        if act.k != self.in_dim || out_shape.last() != Some(&self.out_dim) {
+            return Err(msg("forward_mx: activation / output shape mismatch"));
+        }
+        let y = q.forward_device(None, Some(act), act.rows)?;
+        let out = CudaTensor::from_device_slice_bf16(y, out_shape)?;
+        self.quant_epilogue(out, false)
+    }
+
+    /// bias and GELU on a quantized GEMM's bf16 output, each rounding once
+    /// (`_scaled_mm(...) + bias` in bf16), then the caller's activation dtype.
+    fn quant_epilogue(&self, mut out: CudaTensor, gelu: bool) -> Result<CudaTensor> {
+        if let Some(b) = &self.bias {
+            let dim = out.rank() - 1;
+            out = out.add_bias(b, dim)?.quantize_bf16()?;
+        }
+        if gelu {
+            out = out.gelu_tanh().quantize_bf16()?;
+        }
+        if super::tensor::bf16_activations() && !self.f32_island {
+            Ok(out)
         } else {
-            None
-        };
-        Ok(Some(Self {
-            weight: CudaTensor::from_vec(Vec::new(), vec![0, in_dim])?,
-            bias,
-            in_dim,
-            out_dim,
-            weight_bf16: None,
-            weight_fp8: Some(std::sync::Arc::new(q)),
-            weight_fp8_rows: None,
-            weight_affine: None,
-            nvfp4_act: None,
-            lora: None,
-        }))
+            out.to_f32_act()
+        }
+    }
+
+    fn forward_quant(&self, xs: &CudaTensor, gelu: bool) -> Result<CudaTensor> {
+        let q = self.quant.as_ref().ok_or_else(|| msg("forward_quant without a quant weight"))?;
+        let (m, _, out_shape) = self.out_shape(xs)?;
+        #[cfg(feature = "cuda")]
+        if q.is_device() {
+            let x16 = xs
+                .dev_bf16()?
+                .ok_or_else(|| msg("quantized linear without a device tensor"))?;
+            let y = q.forward_device(Some(super::quant::ptr(x16.as_ref())), None, m)?;
+            let out = CudaTensor::from_device_slice_bf16(y, out_shape)?;
+            return self.quant_epilogue(out, gelu);
+        }
+        let x: Vec<f32> = xs
+            .host_cow()?
+            .iter()
+            .map(|&v| super::quant::bf16_round(v))
+            .collect();
+        let y = q.forward_host(&x, m)?;
+        let out = CudaTensor::host_only_dtype(y, out_shape, super::tensor::TensorDType::Bf16);
+        self.quant_epilogue(out, gelu)
     }
 
     pub fn out_dim(&self) -> usize {
@@ -915,8 +987,14 @@ impl Linear {
         self.forward_act(xs, true)
     }
 
-    fn maybe_act_out(out: CudaTensor) -> Result<CudaTensor> {
-        if super::tensor::bf16_activations() {
+    /// Whether this call produces a bf16 activation (`FASTVIDEO_BF16_ACT`,
+    /// except in f32 islands).
+    fn act16(&self) -> bool {
+        super::tensor::bf16_activations() && !self.f32_island
+    }
+
+    fn maybe_act_out(&self, out: CudaTensor) -> Result<CudaTensor> {
+        if self.act16() {
             out.quantize_bf16()
         } else {
             Ok(out)
@@ -924,13 +1002,20 @@ impl Linear {
     }
 
     fn forward_act(&self, xs: &CudaTensor, gelu: bool) -> Result<CudaTensor> {
+        if self.quant.is_some() {
+            return self.forward_quant(xs, gelu);
+        }
         let owned;
         let act_owned;
         let xs = if let Some(rule) = self.nvfp4_act {
             owned = super::nvfp4::dequant_beforehand(xs, rule)?;
             &owned
-        } else if super::tensor::bf16_activations() {
+        } else if self.act16() {
+            // A bf16 activation passes through untouched (no copy).
             act_owned = xs.quantize_bf16()?;
+            &act_owned
+        } else if self.f32_island && xs.is_bf16() {
+            act_owned = xs.to_f32_act()?;
             &act_owned
         } else {
             xs
@@ -960,60 +1045,7 @@ impl Linear {
                 c = c.add_bias(b, dim)?;
             }
             let c = if gelu { c.gelu_tanh() } else { c };
-            return Self::maybe_act_out(c);
-        }
-        #[cfg(feature = "cuda")]
-        if let Some(wq) = &self.weight_fp8 {
-            use cudarc::driver::{DevicePtr, DevicePtrMut};
-            let dev = super::device::global_device().ok_or_else(|| msg("no device"))?;
-            let ltc = super::fp8::lt_context(&dev)?;
-            let x = xs
-                .dev()?
-                .ok_or_else(|| msg("fp8 linear without a device"))?;
-            // Token count is not always a multiple of 16 (5s H3 is 37756). Pad
-            // so cuBLASLt will take the shape; drop the extra rows after.
-            let m_gemm = m.next_multiple_of(16);
-            let (xq, x_scale) = if m_gemm == m {
-                super::ops::quantize_e4m3_device(&x)?
-            } else {
-                let mut xp = dev
-                    .stream
-                    .alloc_zeros::<f32>((m_gemm * k).max(1))
-                    .map_err(|e| msg(e.to_string()))?;
-                super::ops::block_copy_device(&x, &mut xp, 1, m * k, m * k, m_gemm * k, 0, 0)?;
-                super::ops::quantize_e4m3_device(&xp)?
-            };
-            let mut c = super::ops::alloc((m_gemm * n).max(1))?;
-            {
-                let (wp, _gw) = wq.data.device_ptr(&dev.stream);
-                let (wsp, _gws) = wq.scale.device_ptr(&dev.stream);
-                let (xp, _gx) = xq.device_ptr(&dev.stream);
-                let (xsp, _gxs) = x_scale.device_ptr(&dev.stream);
-                let (cp, _gc) = c.device_ptr_mut(&dev.stream);
-                // cuBLASLt is column-major: a row-major [m, n] result with
-                // leading dimension n is a column-major [n, m] with the same
-                // leading dimension, so the weight goes in as A and the
-                // activations as B, and (m, n, k) becomes (out, tokens, in).
-                unsafe { super::fp8::gemm_e4m3(&dev, &ltc, n, m_gemm, k, wp, wsp, xp, xsp, cp)? };
-            }
-            if m_gemm != m {
-                let mut keep = super::ops::alloc((m * n).max(1))?;
-                super::ops::block_copy_device(&c, &mut keep, 1, m * n, m_gemm * n, m * n, 0, 0)?;
-                c = keep;
-            }
-            match (&self.bias, gelu) {
-                (Some(b), true) => {
-                    let b = b.dev()?.ok_or_else(|| msg("bias"))?;
-                    super::ops::bias_gelu_inplace_device(&mut c, &b)?
-                }
-                (Some(b), false) => {
-                    let b = b.dev()?.ok_or_else(|| msg("bias"))?;
-                    super::ops::add_bias_inplace_device(&mut c, &b, 1)?
-                }
-                (None, true) => c = super::ops::unary_device(&c, super::ops::ElemUnary::GeluTanh)?,
-                (None, false) => {}
-            }
-            return Self::maybe_act_out(CudaTensor::from_dev_result(c, out_shape)?);
+            return self.maybe_act_out(c);
         }
         #[cfg(feature = "cuda")]
         let dequantized = match self.weight_fp8_rows.as_deref() {
@@ -1028,10 +1060,14 @@ impl Linear {
         };
         #[cfg(feature = "cuda")]
         if let Some(w16) = dequantized.as_ref().or(self.weight_bf16.as_ref()) {
-            let x = xs
-                .dev()?
+            // Borrowed when the activation is already bf16: the GEMM consumes
+            // it directly, no f32 -> bf16 cast in front.
+            let x16 = xs
+                .dev_bf16()?
                 .ok_or_else(|| msg("bf16 linear without a device"))?;
-            let x16 = super::ops::cast_f32_bf16_device(&x)?;
+            if self.act16() {
+                return self.forward_bf16_native(&x16, w16, m, k, n, gelu, out_shape);
+            }
             let mut c16 = unsafe {
                 super::device::global_device()
                     .ok_or_else(|| msg("no device"))?
@@ -1047,7 +1083,7 @@ impl Linear {
                 None => None,
             };
             let c = super::ops::cast_bf16_f32_bias_act_device(&c16, bias.as_deref(), gelu)?;
-            return Self::maybe_act_out(CudaTensor::from_dev_result(c, out_shape)?);
+            return self.maybe_act_out(CudaTensor::from_dev_result(c, out_shape)?);
         }
         #[cfg(feature = "cuda")]
         if let (Some(x), Some(w)) = (xs.dev()?, self.weight.dev()?) {
@@ -1066,7 +1102,7 @@ impl Linear {
                 (None, true) => c = super::ops::unary_device(&c, super::ops::ElemUnary::GeluTanh)?,
                 (None, false) => {}
             }
-            return Self::maybe_act_out(CudaTensor::from_dev_result(c, out_shape)?);
+            return self.maybe_act_out(CudaTensor::from_dev_result(c, out_shape)?);
         }
         let x = xs.host_cow()?;
         let w: std::borrow::Cow<'_, [f32]> = match self.weight_fp8_rows.as_deref() {
@@ -1101,7 +1137,55 @@ impl Linear {
                     *o = if gelu { host::gelu_tanh(acc) } else { acc };
                 }
             });
-        Self::maybe_act_out(CudaTensor::from_vec(out, out_shape)?)
+        self.maybe_act_out(CudaTensor::from_vec(out, out_shape)?)
+    }
+
+    /// bf16 in, bf16 out: the GEMM writes bf16, the bias rides the cuBLASLt
+    /// epilogue (one rounding, as torch's addmm), GELU is its own bf16 op.
+    #[cfg(feature = "cuda")]
+    #[allow(clippy::too_many_arguments)]
+    fn forward_bf16_native(
+        &self,
+        x16: &cudarc::driver::CudaSlice<half::bf16>,
+        w16: &cudarc::driver::CudaSlice<half::bf16>,
+        m: usize,
+        k: usize,
+        n: usize,
+        gelu: bool,
+        out_shape: Vec<usize>,
+    ) -> Result<CudaTensor> {
+        let dev = super::device::global_device().ok_or_else(|| msg("no device"))?;
+        let mut fused_bias = false;
+        let mut c16 = None;
+        if let Some(b) = &self.bias {
+            let b16 = b
+                .dev_bf16()?
+                .ok_or_else(|| msg("bias without a device"))?;
+            if let Some(c) = super::quant::linear_bf16_bias(x16, w16, &b16, m, k, n)? {
+                c16 = Some(c);
+                fused_bias = true;
+            }
+        }
+        let c16 = match c16 {
+            Some(c) => c,
+            None => {
+                let mut c = unsafe { dev.stream.alloc::<half::bf16>((m * n).max(1)) }
+                    .map_err(|e| msg(e.to_string()))?;
+                super::device::matmul_linear_wt_bf16(x16, w16, &mut c, m, k, n)
+                    .map_err(|e| msg(e.to_string()))?;
+                c
+            }
+        };
+        let mut out = CudaTensor::from_device_slice_bf16(c16, out_shape)?;
+        if let (Some(b), false) = (&self.bias, fused_bias) {
+            // Fallback: bias after the bf16 GEMM output (a second rounding).
+            let b16 = b.quantize_bf16()?;
+            out = out.add(&b16)?;
+        }
+        if gelu {
+            out = out.gelu_tanh();
+        }
+        Ok(out)
     }
 }
 
@@ -1716,7 +1800,10 @@ mod bf16_act_tests {
         let (wn, qkv, proj, ff) = block_weights(dim, heads);
         let f32_y = with_bf16_act(false, || tiny_dit_block(&x, heads, &wn, &qkv, &proj, &ff));
         assert_eq!(f32_y.dtype(), TensorDType::F32);
-        let act_y = with_bf16_act(true, || tiny_dit_block(&x, heads, &wn, &qkv, &proj, &ff));
+        // The model's residual stream enters bf16 (torch promotion keeps an
+        // f32 + bf16 sum f32).
+        let x16 = x.quantize_bf16().unwrap();
+        let act_y = with_bf16_act(true, || tiny_dit_block(&x16, heads, &wn, &qkv, &proj, &ff));
         assert_eq!(act_y.dtype(), TensorDType::Bf16);
         let p = psnr_db(&act_y.host_cow().unwrap(), &f32_y.host_cow().unwrap());
         eprintln!("bf16-act {name}: residual-bf16 PSNR {p:.2} dB (host)");

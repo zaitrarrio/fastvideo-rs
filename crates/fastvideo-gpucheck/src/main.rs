@@ -21,6 +21,8 @@ mod h3_stage;
 mod hunyuan15_stage;
 #[cfg(feature = "cuda")]
 mod kernels;
+#[cfg(feature = "cuda")]
+mod kernels_fp8;
 mod serve;
 mod llm_oracle;
 mod ltx2_stage;
@@ -70,15 +72,19 @@ struct Cli {
     /// compare against dense references and must not use it.
     #[arg(long, global = true)]
     vsa: bool,
-    /// Run the DiT linears in FP8 E4M3. Per-tensor scales are coarse enough
-    /// that only a checkpoint distilled against them (FastWan-QAD) should use
-    /// this, so it is opt-in per stage and never inferred from the device.
+    /// Run every DiT linear with FastVideo's W8A8 tensorwise FP8 recipe
+    /// (`FASTVIDEO_FP8`). Only a checkpoint distilled against FP8
+    /// (FastWan-QAD) should use it, so it is opt-in per stage.
     #[arg(long, global = true)]
     fp8: bool,
-    /// Per-tensor E4M3 GEMM on H3 `ff_in`/`ff_out` only. Does not set
-    /// process-wide `FASTVIDEO_FP8`. Quality is a clip A/B, not a default.
+    /// H3 reference FP8 recipe (`FASTVIDEO_H3_QUANT`): `w8a8` (Sol-H3-Spark
+    /// stage 1: all blocks + refiner) or `mxfp8` (Sol-H3: blocks 2..=46).
+    /// Implies bf16 activations for the DiT. Quality is a clip A/B.
+    #[arg(long, global = true, value_name = "RECIPE")]
+    h3_quant: Option<String>,
+    /// bf16 activations end to end (`FASTVIDEO_BF16_ACT`), as the reference.
     #[arg(long, global = true)]
-    h3_ffn_fp8: bool,
+    bf16_act: bool,
     /// MLX affine weight-only INT8/6/4 (group 64) on H3 attn/FFN. Own fused
     /// dequant-in-tile GEMM. Does not set process-wide `FASTVIDEO_FP8`.
     #[arg(long, global = true, value_name = "BITS")]
@@ -578,8 +584,11 @@ fn main() {
     if cli.fp8 {
         std::env::set_var("FASTVIDEO_FP8", "1");
     }
-    if cli.h3_ffn_fp8 {
-        std::env::set_var("FASTVIDEO_H3_FFN_FP8", "1");
+    if let Some(recipe) = &cli.h3_quant {
+        std::env::set_var("FASTVIDEO_H3_QUANT", recipe);
+    }
+    if cli.bf16_act {
+        std::env::set_var("FASTVIDEO_BF16_ACT", "1");
     }
     if let Some(bits) = &cli.h3_affine {
         std::env::set_var("FASTVIDEO_H3_AFFINE", bits);

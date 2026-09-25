@@ -526,9 +526,10 @@ extern "C" __global__ void index_select_rows(
 // Tiles are 64 padded slots; slot_src maps a slot to its token, or -1 for
 // padding. Coarse means divide by the tile's REAL token count, so a partial
 // tile is not diluted toward zero.
+// `round16`: pool the bf16 values (H3's upstream pools bf16 q/k/v in f32).
 extern "C" __global__ void vsa_tile_mean(
     const float* x, const int* slot_src, const int* block_sizes, float* out,
-    long seq, int dim, int num_tiles, int tile_elems
+    long seq, int dim, int num_tiles, int tile_elems, int round16
 ) {
     int tile = blockIdx.x;
     long bh = blockIdx.y;
@@ -540,7 +541,9 @@ extern "C" __global__ void vsa_tile_mean(
         float acc = 0.0f;
         for (int j = 0; j < n; j++) {
             int tok = slot_src[(long)tile * tile_elems + j];
-            acc += xb[(long)tok * dim + d];
+            float v = xb[(long)tok * dim + d];
+            if (round16) v = __uint_as_float(((unsigned int)fv_bf16_rne(v)) << 16);
+            acc += v;
         }
         ob[d] = n > 0 ? acc / (float)n : 0.0f;
     }
@@ -779,9 +782,12 @@ extern "C" __global__ void vsa_mask_pad(
 }
 // out[token] = coarse[tile] * gate[token] + sparse[slot], scattering the
 // padded tile layout back to token order. gate == null means a gate of one.
+// `round16`: upstream H3's bf16 combine, bf16(sparse) + bf16(bf16(coarse) * gate)
+// rounded again (video_sparse_attn_h3.py: `out_c.to(bf16)`, bf16 mul/add).
 extern "C" __global__ void vsa_combine(
     const float* sparse, const float* coarse, const float* gate, const int* slot_src,
-    float* out, long seq, int dim, int tile_elems, int q_base, int num_tiles, int has_gate
+    float* out, long seq, int dim, int tile_elems, int q_base, int num_tiles, int has_gate,
+    int round16
 ) {
     long slot_in_group = (long)blockIdx.x * blockDim.y + threadIdx.y;
     long g = blockIdx.y;
@@ -796,7 +802,15 @@ extern "C" __global__ void vsa_combine(
     float* ob = out + bh * seq * (long)dim + (long)src * dim;
     const float* ga = has_gate ? gate + bh * seq * (long)dim + (long)src * dim : nullptr;
     for (int d = threadIdx.x; d < dim; d += blockDim.x) {
-        ob[d] = co[d] * (ga ? ga[d] : 1.0f) + sp[d];
+        if (round16) {
+#define FV_R16(x) __uint_as_float(((unsigned int)fv_bf16_rne(x)) << 16)
+            float c = FV_R16(co[d]);
+            float p = ga ? FV_R16(c * FV_R16(ga[d])) : c;
+            ob[d] = FV_R16(FV_R16(sp[d]) + p);
+#undef FV_R16
+        } else {
+            ob[d] = co[d] * (ga ? ga[d] : 1.0f) + sp[d];
+        }
     }
 }
 // Tiled flash attention (online softmax, O(d) memory per block). Opt-in via
@@ -2742,11 +2756,15 @@ __device__ __forceinline__ unsigned short sol_bf16_rn(float x) {
 // writes the bf16 copies, and pools the ROUNDED values (Python pools bf16
 // inputs): Kc = bf16(sum / len), Vc = bf16(sum). f32 sequential sums and an
 // IEEE divide, so the host oracle reproduces Kc/Vc bit for bit.
+// `in16`: k/v hold bf16 bits (bf16 activations); rounding them is the identity.
+__device__ __forceinline__ float sol_ld(const void* p, long i, int in16) {
+    return in16 ? fv_bf16_to_f32(((const unsigned short*)p)[i]) : ((const float*)p)[i];
+}
 extern "C" __global__ void sol_prep_kv(
-    const float* __restrict__ k, const float* __restrict__ v,
+    const void* __restrict__ k, const void* __restrict__ v,
     unsigned short* __restrict__ kb, unsigned short* __restrict__ vb,
     unsigned short* __restrict__ kc, unsigned short* __restrict__ vc,
-    int T, int NT
+    int T, int NT, int in16
 ) {
     const int b = blockIdx.x, d = threadIdx.x;
     const long bh = blockIdx.y;
@@ -2756,7 +2774,7 @@ extern "C" __global__ void sol_prep_kv(
     float sk = 0.f, sv = 0.f;
     for (int r = 0; r < L; r++) {
         const long i = base + (long)r * 128;
-        const unsigned short kh = sol_bf16_rn(k[i]), vh = sol_bf16_rn(v[i]);
+        const unsigned short kh = sol_bf16_rn(sol_ld(k, i, in16)), vh = sol_bf16_rn(sol_ld(v, i, in16));
         kb[i] = kh;
         vb[i] = vh;
         sk = __fadd_rn(sk, fv_bf16_to_f32(kh));
@@ -2846,9 +2864,9 @@ __device__ __forceinline__ void sol_block_sum2(float& a, float& c, float* red) {
 // exact: qbar rounded to bf16, var = max(qbar^T M qbar - mean_raw^2, 0) * sl2^2.
 // thr = mean + tau * sqrt(max(var, 0) + 1e-6).
 extern "C" __global__ void sol_prep_q(
-    const float* __restrict__ q, unsigned short* __restrict__ qb,
+    const void* __restrict__ q, unsigned short* __restrict__ qb,
     const float* __restrict__ kstat, const unsigned short* __restrict__ km,
-    float* __restrict__ thr, int T, int NT, float tau, float sl2, int exact_mode
+    float* __restrict__ thr, int T, int NT, float tau, float sl2, int exact_mode, int in16
 ) {
     __shared__ float red[8];
     __shared__ float sq_bar[128];
@@ -2860,7 +2878,7 @@ extern "C" __global__ void sol_prep_q(
     float sq = 0.f;
     for (int r = 0; r < L; r++) {
         const long i = base + (long)r * 128;
-        const unsigned short qh = sol_bf16_rn(q[i]);
+        const unsigned short qh = sol_bf16_rn(sol_ld(q, i, in16));
         qb[i] = qh;
         sq = __fadd_rn(sq, fv_bf16_to_f32(qh));
     }
@@ -3469,3 +3487,515 @@ extern "C" __global__ void ltx_rope_rows(
     rows[i] = (unsigned int)((i / k) * tokens + (long)idx[i % k]);
 }
 // ==== endregion: ltx2 ====
+
+// ==== region: bf16 activations + reference FP8 recipes ====
+// Every kernel below reads each operand as f32 or bf16 (`*16` flags: 1 means
+// the pointer holds bfloat16 bits), computes in f32, and rounds once when it
+// stores a bf16 result — torch's per-op bf16 semantics. Where the reference
+// fuses several ops into one Triton kernel (Sol-H3 `fusions.py`, `mxfp8.py`),
+// the fused kernel here keeps exactly its rounding points instead.
+
+__device__ __forceinline__ float fv_ld(const void* p, long i, int is16) {
+    return is16 ? fv_bf16_to_f32(((const unsigned short*)p)[i]) : ((const float*)p)[i];
+}
+__device__ __forceinline__ void fv_st(void* p, long i, int is16, float v) {
+    if (is16) ((unsigned short*)p)[i] = fv_bf16_rne(v);
+    else ((float*)p)[i] = v;
+}
+__device__ __forceinline__ float fv_r16(float v) { return fv_bf16_to_f32(fv_bf16_rne(v)); }
+
+// f32 -> E4M3 the way `cvt.rn.satfinite.e4m3x2.f32` (Triton's fp32 ->
+// float8e4nv) and torch's clamp-then-cast both land: round to nearest even,
+// finite values past 448 saturate to 448, NaN stays NaN (0x7F). Mirrors
+// `quant::e4m3_satfinite` on the host bit for bit.
+__device__ __forceinline__ unsigned char fv_e4m3_sat(float x) {
+    unsigned int u = __float_as_uint(x);
+    unsigned int sign = (u >> 24) & 0x80u;
+    unsigned int a = u & 0x7FFFFFFFu;
+    if (a > 0x7F800000u) return (unsigned char)(sign | 0x7Fu);
+    if (a >= 0x43E00000u) return (unsigned char)(sign | 0x7Eu);
+    if (a < 0x3C800000u) {
+        // Below 2^-6: subnormal codes, quantum 2^-9. The product is exact.
+        unsigned int m = (unsigned int)rintf(__uint_as_float(a) * 512.0f);
+        return (unsigned char)(sign | m);
+    }
+    int e = (int)(a >> 23) - 127;
+    unsigned int m = (a >> 20) & 7u;
+    unsigned int rem = a & 0xFFFFFu;
+    if (rem > 0x80000u || (rem == 0x80000u && (m & 1u))) {
+        m += 1u;
+        if (m == 8u) { m = 0u; e += 1; }
+    }
+    return (unsigned char)(sign | ((unsigned int)(e + 7) << 3) | m);
+}
+
+// MX (OCP microscaling) E8M0 exponent for a 32-value block, exactly as
+// Sol-H3 `mxfp8.py::_mx_e8m0_from_amax`: the smallest power of two that keeps
+// the block maximum within E4M3's 448 after scaling. Returns the biased byte;
+// `inv` receives 2^-exponent.
+__device__ __forceinline__ unsigned int fv_mx_e8m0(float amax, float* inv) {
+    int bits = __float_as_int(amax);
+    int e0 = ((bits >> 23) & 0xFF) - 135;
+    float threshold = __int_as_float(((e0 + 135) << 23) | 0x600000);
+    int e = e0 + (amax > threshold ? 1 : 0);
+    if (e < -127) e = -127;
+    *inv = __int_as_float((127 - e) << 23);
+    return (unsigned int)(e + 127);
+}
+// cuBLASLt VEC32_UE8M0 (torch SWIZZLE_32_4_4) scale position of (row, group).
+__device__ __forceinline__ long fv_mx_scale_offset(long row, long group, long column_blocks) {
+    long tile = (row / 128) * column_blocks + (group / 4);
+    return tile * 512 + (row % 32) * 16 + ((row % 128) / 32) * 4 + (group % 4);
+}
+// Quantize one warp's 32 consecutive columns (lane = column % 32) of `row`.
+// All 32 lanes must be active.
+__device__ __forceinline__ void fv_mx_store_group(
+    float v, long row, long col, long k, unsigned char* q, unsigned char* qs, long column_blocks
+) {
+    float amax = fabsf(v);
+    for (int o = 16; o > 0; o >>= 1) amax = fmaxf(amax, __shfl_xor_sync(0xffffffffu, amax, o));
+    float inv;
+    unsigned int byte = fv_mx_e8m0(amax, &inv);
+    q[row * k + col] = fv_e4m3_sat(v * inv);
+    if ((threadIdx.x & 31) == 0) qs[fv_mx_scale_offset(row, col / 32, column_blocks)] = (unsigned char)byte;
+}
+
+// Block-wide sum over blockDim.x (a power of two) using dynamic shared memory.
+__device__ __forceinline__ float fv_block_sum(float v, float* sm) {
+    int tid = threadIdx.x;
+    sm[tid] = v;
+    __syncthreads();
+    for (int s = blockDim.x >> 1; s > 0; s >>= 1) {
+        if (tid < s) sm[tid] += sm[tid + s];
+        __syncthreads();
+    }
+    float r = sm[0];
+    __syncthreads();
+    return r;
+}
+
+// out = op(a[i], b[(i / inner) % period]); op as bcast_binary.
+extern "C" __global__ void mx_binary(
+    const void* a, int a16, const void* b, int b16, void* out, int o16,
+    long n, long inner, long period, int op
+) {
+    long i = IDX();
+    if (i >= n) return;
+    float x = fv_ld(a, i, a16);
+    float y = fv_ld(b, (i / inner) % period, b16);
+    float r;
+    if (op == 0) r = x + y;
+    else if (op == 1) r = x - y;
+    else if (op == 2) r = x * y;
+    else if (op == 3) r = x / y;
+    else if (op == 4) r = y - x;
+    else r = y / x;
+    fv_st(out, i, o16, r);
+}
+// kind: 0 silu, 1 gelu_tanh, 2 gelu_erf, 3 x + p0, 4 x * p0, 5 clamp(p0, p1),
+// 6 cast/copy, 7 sigmoid.
+extern "C" __global__ void mx_unary(
+    const void* a, int a16, void* out, int o16, long n, int kind, float p0, float p1
+) {
+    long i = IDX();
+    if (i >= n) return;
+    float x = fv_ld(a, i, a16);
+    float r;
+    if (kind == 0) r = x / (1.0f + expf(-x));
+    else if (kind == 1) {
+        const float k = 0.7978845608028654f;
+        r = 0.5f * x * (1.0f + tanhf(k * (x + 0.044715f * x * x * x)));
+    } else if (kind == 2) r = 0.5f * x * (1.0f + erff(x * 0.70710678118654752f));
+    else if (kind == 3) r = x + p0;
+    else if (kind == 4) r = x * p0;
+    else if (kind == 5) r = fminf(p1, fmaxf(p0, x));
+    else if (kind == 6) r = x;
+    else r = 1.0f / (1.0f + expf(-x));
+    fv_st(out, i, o16, r);
+}
+// Value-first SwiGLU as Sol-H3 `fusions.py::_swiglu_kernel`:
+// value * (gate * sigmoid(gate)) in f32, one rounding.
+extern "C" __global__ void mx_swiglu(const void* x, int x16, void* out, int o16, long half, long n) {
+    long i = IDX();
+    if (i >= n) return;
+    long col = i % half;
+    long row = i / half;
+    float v = fv_ld(x, row * (2 * half) + col, x16);
+    float g = fv_ld(x, row * (2 * half) + half + col, x16);
+    float sg = 1.0f / (1.0f + expf(-g));
+    fv_st(out, i, o16, v * (g * sg));
+}
+// RMSNorm over the last dim: statistics in f32, x * rsqrt(mean(x^2) + eps) * w
+// in f32, one rounding (fused semantics). `has_w` = 0 for an unweighted norm.
+extern "C" __global__ void mx_rms_norm(
+    const void* x, int x16, const void* w, int w16, int has_w, void* out, int o16,
+    int rows, int width, float eps
+) {
+    extern __shared__ float sdata[];
+    int row = blockIdx.x;
+    if (row >= rows) return;
+    long base = (long)row * width;
+    float local = 0.0f;
+    for (int j = threadIdx.x; j < width; j += blockDim.x) {
+        float v = fv_ld(x, base + j, x16);
+        local += v * v;
+    }
+    float r = rsqrtf(fv_block_sum(local, sdata) / (float)width + eps);
+    for (int j = threadIdx.x; j < width; j += blockDim.x) {
+        float v = fv_ld(x, base + j, x16) * r;
+        if (has_w) v *= fv_ld(w, j, w16);
+        fv_st(out, base + j, o16, v);
+    }
+}
+// LayerNorm over the last dim (f32 statistics, one rounding).
+extern "C" __global__ void mx_layer_norm(
+    const void* x, int x16, const void* w, const void* b, int p16, int has_affine,
+    void* out, int o16, int rows, int width, float eps
+) {
+    extern __shared__ float sdata[];
+    int row = blockIdx.x;
+    if (row >= rows) return;
+    long base = (long)row * width;
+    float local = 0.0f;
+    for (int j = threadIdx.x; j < width; j += blockDim.x) local += fv_ld(x, base + j, x16);
+    float mean = fv_block_sum(local, sdata) / (float)width;
+    local = 0.0f;
+    for (int j = threadIdx.x; j < width; j += blockDim.x) {
+        float d = fv_ld(x, base + j, x16) - mean;
+        local += d * d;
+    }
+    float inv = rsqrtf(fv_block_sum(local, sdata) / (float)width + eps);
+    for (int j = threadIdx.x; j < width; j += blockDim.x) {
+        float v = (fv_ld(x, base + j, x16) - mean) * inv;
+        if (has_affine) v = v * fv_ld(w, j, p16) + fv_ld(b, j, p16);
+        fv_st(out, base + j, o16, v);
+    }
+}
+// Unaffine LayerNorm + AdaLN table (`ln_adaln_e`), one rounding.
+extern "C" __global__ void mx_ln_adaln_e(
+    const void* x, int x16, const void* e, int e16, void* out, int o16,
+    int batch, int seq, int dim, int e_rows, int scale_slot, int shift_slot, float eps
+) {
+    extern __shared__ float sdata[];
+    int row = blockIdx.x;
+    if (row >= batch * seq) return;
+    int bi = row / seq;
+    long base = (long)row * dim;
+    long sc = ((long)bi * e_rows + scale_slot) * dim;
+    long sh = ((long)bi * e_rows + shift_slot) * dim;
+    float local = 0.0f;
+    for (int j = threadIdx.x; j < dim; j += blockDim.x) local += fv_ld(x, base + j, x16);
+    float mean = fv_block_sum(local, sdata) / (float)dim;
+    local = 0.0f;
+    for (int j = threadIdx.x; j < dim; j += blockDim.x) {
+        float d = fv_ld(x, base + j, x16) - mean;
+        local += d * d;
+    }
+    float inv = rsqrtf(fv_block_sum(local, sdata) / (float)dim + eps);
+    for (int j = threadIdx.x; j < dim; j += blockDim.x) {
+        float v = (fv_ld(x, base + j, x16) - mean) * inv;
+        fv_st(out, base + j, o16, v * (1.0f + fv_ld(e, sc + j, e16)) + fv_ld(e, sh + j, e16));
+    }
+}
+// out = h + a * e[b, slot] with eager bf16 rounding when `round_product`:
+// torch materializes gate * branch in bf16 before the residual add.
+extern "C" __global__ void mx_residual_gate(
+    const void* h, int h16, const void* a, int a16, const void* e, int e16, void* out, int o16,
+    long n, long dim, long seq, long e_rows, long slot, int round_product
+) {
+    long i = IDX();
+    if (i >= n) return;
+    long d = i % dim;
+    long b = (i / dim) / seq;
+    float p = fv_ld(a, i, a16) * fv_ld(e, (b * e_rows + slot) * dim + d, e16);
+    if (round_product) p = fv_r16(p);
+    fv_st(out, i, o16, fv_ld(h, i, h16) + p);
+}
+extern "C" __global__ void mx_split_heads(
+    const void* src, int s16, void* out, int o16,
+    long n, long seq, long heads, long d, long src_width, long col_off
+) {
+    long i = IDX();
+    if (i >= n) return;
+    long p = i % d;
+    long t = i / d;
+    long s = t % seq;
+    t /= seq;
+    long h = t % heads;
+    long b = t / heads;
+    fv_st(out, i, o16, fv_ld(src, (b * seq + s) * src_width + col_off + h * d + p, s16));
+}
+extern "C" __global__ void mx_merge_heads(
+    const void* src, int s16, void* out, int o16, long n, long seq, long heads, long d
+) {
+    long i = IDX();
+    if (i >= n) return;
+    long hd = heads * d;
+    long j = i % hd;
+    long row = i / hd;
+    long s = row % seq;
+    long b = row / seq;
+    fv_st(out, i, o16, fv_ld(src, ((b * heads + j / d) * seq + s) * d + j % d, s16));
+}
+extern "C" __global__ void mx_gather_nd(
+    const void* in, int i16, void* out, int o16, long n, int rank,
+    long s0, long s1, long s2, long s3, long s4, long s5,
+    long t0, long t1, long t2, long t3, long t4, long t5
+) {
+    long i = IDX();
+    if (i >= n) return;
+    long shape[6] = {s0, s1, s2, s3, s4, s5};
+    long str[6] = {t0, t1, t2, t3, t4, t5};
+    long rem = i;
+    long src = 0;
+    for (int k = rank - 1; k >= 0; --k) {
+        long c = rem % shape[k];
+        rem /= shape[k];
+        src += c * str[k];
+    }
+    fv_st(out, i, o16, fv_ld(in, src, i16));
+}
+extern "C" __global__ void mx_block_copy(
+    const void* in, int i16, void* out, int o16,
+    long outer, long len, long in_stride, long out_stride, long in_offset, long out_offset
+) {
+    long idx = IDX();
+    if (idx >= outer * len) return;
+    long o = idx / len;
+    long j = idx - o * len;
+    fv_st(out, o * out_stride + out_offset + j, o16, fv_ld(in, o * in_stride + in_offset + j, i16));
+}
+// rotate_half RoPE over [B, H, S, D] with f32 [S, R] tables, one rounding.
+extern "C" __global__ void mx_rope_half(
+    const void* x, int x16, const float* cs, const float* sn, void* out, int o16,
+    long s, long d, long r, long n
+) {
+    long i = IDX();
+    if (i >= n) return;
+    long j = i % d;
+    float v = fv_ld(x, i, x16);
+    if (j >= r) { fv_st(out, i, o16, v); return; }
+    long p = (i / d) % s;
+    long half = r / 2;
+    float other = j < half ? -fv_ld(x, i + half, x16) : fv_ld(x, i - half, x16);
+    fv_st(out, i, o16, v * cs[p * r + j] + other * sn[p * r + j]);
+}
+
+// ---- H3 fused block ops (Sol-H3 fusions.py / mxfp8.py rounding points) ----
+// The AdaLN table is f32 `[T, 6, dim]` whose SCALE entries already hold
+// `1 + scale` (f32 addition of the bf16 projection output — the same f32 the
+// reference forms in-kernel). Row `r` reads table row `idx[r] + base`.
+// One block per sequence row. `mx` = 1 writes MXFP8 (codes + swizzled E8M0
+// scales, `dim % 32 == 0`) instead of bf16 `out`.
+
+// normed = RMSNorm(x) * w * (1 + scale) + shift, f32 throughout, one bf16
+// rounding (`_rmsnorm_modulate_kernel`); the MX variant quantizes that bf16
+// value (`_rmsnorm_modulate_mxfp8_kernel`).
+extern "C" __global__ void h3_norm_mod(
+    const void* x, int x16, const float* w, const float* tab, const unsigned int* idx, long base,
+    int scale_slot, int shift_slot, unsigned short* out, unsigned char* q, unsigned char* qs,
+    int rows, int dim, float eps, int mx
+) {
+    extern __shared__ float sdata[];
+    int row = blockIdx.x;
+    if (row >= rows) return;
+    long xb = (long)row * dim;
+    long tb = ((long)idx[row] + base) * 6;
+    const float* sc = tab + (tb + scale_slot) * dim;
+    const float* sh = tab + (tb + shift_slot) * dim;
+    float local = 0.0f;
+    for (int j = threadIdx.x; j < dim; j += blockDim.x) {
+        float v = fv_ld(x, xb + j, x16);
+        local += v * v;
+    }
+    float r = rsqrtf(fv_block_sum(local, sdata) / (float)dim + eps);
+    long column_blocks = ((long)dim / 32 + 3) / 4;
+    for (int j0 = 0; j0 < dim; j0 += blockDim.x) {
+        int j = j0 + threadIdx.x;
+        if (mx && (j0 + (int)(threadIdx.x & ~31u)) >= dim) continue;
+        float v = 0.0f;
+        if (j < dim) v = fv_r16(fmaf(fv_ld(x, xb + j, x16) * r * w[j], sc[j], sh[j]));
+        if (mx) fv_mx_store_group(v, row, j, dim, q, qs, column_blocks);
+        else if (j < dim) out[xb + j] = fv_bf16_rne(v);
+    }
+}
+// hidden = residual + gate * branch (one f32 FMA, stored bf16), then the
+// norm+modulate above on the *unrounded* f32 hidden
+// (`_residual_gate_rmsnorm_modulate_kernel` and its MXFP8 twin).
+extern "C" __global__ void h3_res_gate_norm_mod(
+    const void* res, int r16, const void* br, int b16, const float* w, const float* tab,
+    const unsigned int* idx, long base, int gate_slot, int scale_slot, int shift_slot,
+    unsigned short* hidden, unsigned short* out, unsigned char* q, unsigned char* qs,
+    int rows, int dim, float eps, int mx
+) {
+    extern __shared__ float sdata[];
+    int row = blockIdx.x;
+    if (row >= rows) return;
+    long xb = (long)row * dim;
+    long tb = ((long)idx[row] + base) * 6;
+    const float* g = tab + (tb + gate_slot) * dim;
+    const float* sc = tab + (tb + scale_slot) * dim;
+    const float* sh = tab + (tb + shift_slot) * dim;
+    float local = 0.0f;
+    for (int j = threadIdx.x; j < dim; j += blockDim.x) {
+        float h = fmaf(g[j], fv_ld(br, xb + j, b16), fv_ld(res, xb + j, r16));
+        local += h * h;
+    }
+    float r = rsqrtf(fv_block_sum(local, sdata) / (float)dim + eps);
+    long column_blocks = ((long)dim / 32 + 3) / 4;
+    // `hidden` may alias `res` (in-place residual): every read of row `row`
+    // happens above or in the same thread before its write below.
+    for (int j0 = 0; j0 < dim; j0 += blockDim.x) {
+        int j = j0 + threadIdx.x;
+        if (mx && (j0 + (int)(threadIdx.x & ~31u)) >= dim) continue;
+        float v = 0.0f;
+        if (j < dim) {
+            float h = fmaf(g[j], fv_ld(br, xb + j, b16), fv_ld(res, xb + j, r16));
+            hidden[xb + j] = fv_bf16_rne(h);
+            v = fv_r16(fmaf(h * r * w[j], sc[j], sh[j]));
+        }
+        if (mx) fv_mx_store_group(v, row, j, dim, q, qs, column_blocks);
+        else if (j < dim) out[xb + j] = fv_bf16_rne(v);
+    }
+}
+// The block's last residual as eager torch runs it (fusion_install.py):
+// residual + bf16(gate[idx] * branch), rounded again.
+extern "C" __global__ void h3_gate_residual(
+    const void* res, int r16, const void* br, int b16, const float* tab, const unsigned int* idx,
+    long base, int gate_slot, void* out, int o16, long n, long dim, int round_product
+) {
+    long i = IDX();
+    if (i >= n) return;
+    long row = i / dim;
+    long j = i - row * dim;
+    float p = tab[(((long)idx[row] + base) * 6 + gate_slot) * dim + j] * fv_ld(br, i, b16);
+    if (round_product) p = fv_r16(p);
+    fv_st(out, i, o16, fv_ld(res, i, r16) + p);
+}
+// Per-head RMSNorm over head_dim then partial rotate_half RoPE, gathered from
+// the fused QKV projection straight into BHSD (`_qknorm_partial_rope_kernel`):
+// f32 normalizer shared by a channel and its rotary partner, f32 cos/sin,
+// one rounding. One block of `blockDim.x >= d` threads (a multiple of 32,
+// <= 1024) per (batch, seq, head); shared memory holds one float per warp.
+extern "C" __global__ void h3_qk_norm_rope(
+    const void* src, int s16, const float* w, const float* cs, const float* sn, int use_rope,
+    void* out, int o16, int batch, int seq, int heads, int d, int r, int src_width, int col_off,
+    float eps
+) {
+    extern __shared__ float sdata[];
+    long row = blockIdx.x;
+    if (row >= (long)batch * seq * heads) return;
+    int h = (int)(row % heads);
+    long bs = row / heads;
+    int s = (int)(bs % seq);
+    int b = (int)(bs / seq);
+    int p = threadIdx.x;
+    const long xb = bs * src_width + col_off + (long)h * d;
+    float v = p < d ? fv_ld(src, xb + p, s16) : 0.0f;
+    float sq = v * v;
+    for (int o = 16; o > 0; o >>= 1) sq += __shfl_xor_sync(0xffffffffu, sq, o);
+    if ((p & 31) == 0) sdata[p >> 5] = sq;
+    __syncthreads();
+    float tot = 0.0f;
+    for (int k = 0; k < (int)(blockDim.x >> 5); ++k) tot += sdata[k];
+    float rr = rsqrtf(tot / (float)d + eps);
+    if (p >= d) return;
+    float normed = v * rr * w[p];
+    float o = normed;
+    if (use_rope && p < r) {
+        int half = r / 2;
+        int partner = p < half ? p + half : p - half;
+        float pn = fv_ld(src, xb + partner, s16) * rr * w[partner];
+        float rot = p < half ? -pn : pn;
+        o = normed * cs[(long)s * r + p] + rot * sn[(long)s * r + p];
+    }
+    fv_st(out, (((long)b * heads + h) * seq + s) * d + p, o16, o);
+}
+// SwiGLU straight to MXFP8 (`_swiglu_mxfp8_kernel`): value * silu(gate) in f32,
+// rounded to bf16, then block-quantized. One block per row; `half % 32 == 0`.
+extern "C" __global__ void h3_swiglu_mx(
+    const void* x, int x16, unsigned char* q, unsigned char* qs, int rows, int half
+) {
+    int row = blockIdx.x;
+    if (row >= rows) return;
+    long xb = (long)row * 2 * half;
+    long column_blocks = ((long)half / 32 + 3) / 4;
+    for (int j0 = 0; j0 < half; j0 += blockDim.x) {
+        if ((j0 + (int)(threadIdx.x & ~31u)) >= half) continue;
+        int j = j0 + threadIdx.x;
+        float v = fv_ld(x, xb + j, x16);
+        float g = fv_ld(x, xb + half + j, x16);
+        float sg = 1.0f / (1.0f + expf(-g));
+        fv_mx_store_group(fv_r16(v * (g * sg)), row, j, half, q, qs, column_blocks);
+    }
+}
+// Row-major [rows, k] activation (f32 or bf16) to MXFP8 (`_mxfp8_quant_kernel`):
+// values are read as stored (bf16 in the reference). Also quantizes weights.
+extern "C" __global__ void mxfp8_quantize(
+    const void* x, int x16, unsigned char* q, unsigned char* qs, int rows, int k
+) {
+    int row = blockIdx.x;
+    if (row >= rows) return;
+    long column_blocks = ((long)k / 32 + 3) / 4;
+    for (int j0 = 0; j0 < k; j0 += blockDim.x) {
+        if ((j0 + (int)(threadIdx.x & ~31u)) >= k) continue;
+        int j = j0 + threadIdx.x;
+        fv_mx_store_group(fv_ld(x, (long)row * k + j, x16), row, j, k, q, qs, column_blocks);
+    }
+}
+// Inverse for checks: q * 2^(byte - 127).
+extern "C" __global__ void mxfp8_dequantize(
+    const unsigned char* q, const unsigned char* qs, float* out, long rows, long k
+) {
+    long i = IDX();
+    if (i >= rows * k) return;
+    long row = i / k;
+    long col = i - row * k;
+    unsigned char byte = qs[fv_mx_scale_offset(row, col / 32, (k / 32 + 3) / 4)];
+    out[i] = fv_e4m3_to_f32(q[i]) * ldexpf(1.0f, (int)byte - 127);
+}
+// max |x| over a (possibly bf16) tensor; `out` zeroed by the caller. NaN wins.
+extern "C" __global__ void amax_abs_mixed(const void* a, int a16, float* out, long n) {
+    extern __shared__ float sm[];
+    int tid = threadIdx.x;
+    float acc = 0.0f;
+    for (long i = blockIdx.x * (long)blockDim.x + tid; i < n; i += (long)gridDim.x * blockDim.x) {
+        float v = fabsf(fv_ld(a, i, a16));
+        if (!(v <= acc)) acc = v;
+    }
+    sm[tid] = acc;
+    __syncthreads();
+    for (int s = blockDim.x >> 1; s > 0; s >>= 1) {
+        if (tid < s) { float o = sm[tid + s]; if (!(o <= sm[tid])) sm[tid] = o; }
+        __syncthreads();
+    }
+    if (tid == 0) atomicMax((int*)out, __float_as_int(sm[0]));
+}
+// FastVideo `fp8_config._quantize_tensorwise` (the W8A8 recipe), for
+// activations and weights alike: scale = max(amax / 448, 1 / (448 * 512)) in
+// f32; codes = e4m3(clamp(bf16(x / bf16(scale)), +-448)). The GEMM dequantizes
+// with the f32 scale, as `torch._scaled_mm` does. Element `i >= n_valid` (row
+// padding) is written as zero. `scale_out` receives the f32 scale.
+extern "C" __global__ void w8a8_quantize(
+    const void* x, int x16, const float* amax, unsigned char* q, float* scale_out,
+    long n_valid, long n_total
+) {
+    long i = IDX();
+    float s = fmaxf(*amax / 448.0f, (float)(1.0 / 229376.0));
+    if (i == 0) *scale_out = s;
+    if (i >= n_total) return;
+    if (i >= n_valid) { q[i] = 0; return; }
+    float s16 = fv_r16(s);
+    float v = fv_r16(fv_ld(x, i, x16) / s16);
+    v = fminf(448.0f, fmaxf(-448.0f, v));
+    q[i] = fv_e4m3_sat(v);
+}
+// E4M3 codes * per-tensor scale -> f32 (checks and host-less inspection).
+extern "C" __global__ void w8a8_dequantize(
+    const unsigned char* q, const float* scale, float* out, long n
+) {
+    long i = IDX();
+    if (i >= n) return;
+    out[i] = fv_e4m3_to_f32(q[i]) * *scale;
+}
+// ==== endregion: bf16 activations + reference FP8 recipes ====

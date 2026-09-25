@@ -1274,7 +1274,7 @@ fn vsa(report: &mut Report, device: &str, seed: u64, max_rel: f64) -> StageResul
         ("sparse_ungated", 0.5, false),
         ("all_tiles_gated", 0.0, true),
     ] {
-        let vsa = H3Vsa::new(&layout, heads, dim, H3VsaConfig { sparsity, group: 4 })?;
+        let vsa = H3Vsa::new(&layout, heads, dim, H3VsaConfig { sparsity, group: 4, tile_size: 64 })?;
         let plan = vsa.plan().clone();
         report.note(format!("{name}/plan"), json!({"prefix_tiles": plan.prefix_tiles, "video_tiles": plan.video_tiles, "k_vid": vsa.k_vid(), "rows": seq}));
         let want = attention_host(
@@ -1327,6 +1327,7 @@ fn vsa(report: &mut Report, device: &str, seed: u64, max_rel: f64) -> StageResul
         H3VsaConfig {
             sparsity: 0.0,
             group: 4,
+            tile_size: 64,
         },
     )?;
     let got = vsa

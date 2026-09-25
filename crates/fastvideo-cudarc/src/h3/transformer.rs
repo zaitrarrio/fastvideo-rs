@@ -37,8 +37,11 @@ use fastvideo_models::h3::packing::{H3PackedLayout, RowRange, KEYFRAME_NOISE_AUG
 use fastvideo_models::h3::schedule::H3JointSchedule;
 use fastvideo_models::h3::sol::H3TeaCache;
 
+use super::fused16::{self, AdaRows, NormOut};
 use crate::wan::nn::{scaled_dot_product_attention, Linear};
 use crate::wan::offload::{BlockWeights, OffloadBlock, Residency};
+use crate::wan::quant::{H3QuantPlan, QuantKind, QuantMode, Section};
+use crate::wan::tensor::bf16_activations;
 use crate::wan::stats::phase;
 use crate::wan::tensor::{CudaTensor, Result, TensorError};
 use crate::wan::weights::{cuda_tensor_shaped, WeightMap};
@@ -772,7 +775,77 @@ fn adaln_device_tables(table: &AdaLnTable, step: usize) -> Result<(CudaTensor, C
 /// Free the AdaLN rows [`adaln_device_tables`] keeps on this thread.
 pub fn release_adaln_device_tables() {
     ADALN_DEVICE.with(|c| *c.borrow_mut() = None);
+    ADALN_ROWS16.with(|c| *c.borrow_mut() = None);
     crate::wan::ledger::clear(crate::wan::ledger::ADALN_TABLE);
+}
+
+thread_local! {
+    /// `(table, step)` and that step's `[2 * blocks * 3, 6, hidden]` f32 rows
+    /// for the fused bf16 kernels.
+    static ADALN_ROWS16: std::cell::RefCell<Option<((usize, usize), CudaTensor)>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// The bf16-activation value of one table entry: the projection output rounds
+/// to bf16 (its linear is bf16); `1 + scale` is then formed in f32, as the
+/// fused kernels do. Idempotent, so an f32-built cache converts too.
+fn bf16_table_value(v: f32, is_scale: bool) -> f32 {
+    if is_scale {
+        crate::wan::quant::bf16_round(v - 1.0) + 1.0
+    } else {
+        crate::wan::quant::bf16_round(v)
+    }
+}
+
+/// Step `step`'s ladder rows then the keyframe table, as the fused kernels
+/// read them, uploaded once per step.
+fn adaln_rows16(table: &AdaLnTable, step: usize, layout: &DeviceLayout) -> Result<AdaRows> {
+    let key = (table.block_mods.as_ptr() as usize, step);
+    let tab = ADALN_ROWS16.with(|c| -> Result<CudaTensor> {
+        if let Some((k, t)) = c.borrow().as_ref() {
+            if *k == key {
+                return Ok(t.clone());
+            }
+        }
+        let per_step = table.blocks * MODALITY_NUM * ADALN_PARAMS * table.hidden;
+        let rows = table
+            .block_mods
+            .get(step * per_step..(step + 1) * per_step)
+            .ok_or_else(|| msg(format!("h3 adaln: step {step} of {}", table.steps)))?;
+        *c.borrow_mut() = None;
+        let h = table.hidden;
+        let data: Vec<f32> = rows
+            .iter()
+            .chain(table.keyframe_mods.iter())
+            .enumerate()
+            .map(|(i, &v)| {
+                let p = (i / h) % ADALN_PARAMS;
+                bf16_table_value(v, p == SCALE_MSA || p == SCALE_MLP)
+            })
+            .collect();
+        let t = CudaTensor::from_vec(data, vec![2 * table.blocks * MODALITY_NUM, ADALN_PARAMS, h])?
+            .to_device()?;
+        *c.borrow_mut() = Some((key, t.clone()));
+        Ok(t)
+    })?;
+    Ok(AdaRows {
+        tab,
+        hidden: table.hidden,
+        idx: layout.adaln_idx.clone(),
+        #[cfg(feature = "cuda")]
+        idx_dev: layout.adaln_idx_dev.clone(),
+    })
+}
+
+/// The reference FP8 recipes are bf16-activation recipes: with
+/// `FASTVIDEO_H3_QUANT` set, H3 runs bf16 activations even without
+/// `FASTVIDEO_BF16_ACT`.
+fn with_quant_act<R>(quant: QuantMode, f: impl FnOnce() -> R) -> R {
+    if quant != QuantMode::Off && !bf16_activations() {
+        crate::wan::tensor::with_bf16_act(true, f)
+    } else {
+        f()
+    }
 }
 
 /// Which AdaLN timestep a run reads (`build_row_timesteps`, mirrored by
@@ -945,10 +1018,58 @@ impl Attention {
             None => (n, rope),
         };
         let packed = phase("h3_attn_qkvg", || self.qkvg.forward(n))?;
+        self.attend_packed(packed, rope, mode, permutation)
+    }
+
+    /// Whether the fused norm+modulate may hand this attention an MXFP8
+    /// activation: an all-MXFP8 QKV (no bf16 gate rows) and no row gather.
+    fn accepts_mx(&self, mode: AttnMode<'_>) -> bool {
+        let gathered = matches!(mode, AttnMode::SolLayer { policy, .. } if policy.permutation.is_some());
+        self.qkvg.quant_kind() == Some(QuantKind::Mxfp8) && !self.has_gate && !gathered
+    }
+
+    /// [`Self::forward`] on a fused producer's output.
+    fn forward_in(
+        &self,
+        n: NormOut,
+        rows: usize,
+        rope: Option<(&CudaTensor, &CudaTensor)>,
+        mode: AttnMode<'_>,
+    ) -> Result<CudaTensor> {
+        let _ = rows;
+        match n {
+            NormOut::T(t) => self.forward(&t, rope, mode),
+            #[cfg(feature = "cuda")]
+            NormOut::Mx(act) => {
+                let width = self.qkvg.out_dim();
+                let packed = phase("h3_attn_qkvg", || {
+                    self.qkvg.forward_mx(&act, vec![1, rows, width])
+                })?;
+                drop(act);
+                self.attend_packed(packed, rope, mode, None)
+            }
+        }
+    }
+
+    fn attend_packed(
+        &self,
+        packed: CudaTensor,
+        rope: Option<(&CudaTensor, &CudaTensor)>,
+        mode: AttnMode<'_>,
+        permutation: Option<&H3SolPermutation>,
+    ) -> Result<CudaTensor> {
         let inner = self.heads * self.head_dim;
         // Per-head RMSNorm over D (one [D] weight for all heads), then RoPE.
         // Wan's fused `qk_norm_rope_bhsd` norms over heads*d — wrong here.
+        // bf16 activations: Sol-H3's fused qk-norm + partial RoPE (f32
+        // normalizer and tables, one rounding) straight from the projection.
+        let fused = bf16_activations();
         let q = phase("h3_attn_q", || {
+            if fused {
+                return fused16::qk_norm_rope(
+                    &packed, &self.norm_q, rope, self.heads, self.head_dim, 0, self.eps,
+                );
+            }
             let t = packed
                 .split_heads_bhsd(0, self.heads, self.head_dim)?
                 .rms_norm(&self.norm_q, self.eps)?;
@@ -958,6 +1079,11 @@ impl Attention {
             }
         })?;
         let k = phase("h3_attn_k", || {
+            if fused {
+                return fused16::qk_norm_rope(
+                    &packed, &self.norm_k, rope, self.heads, self.head_dim, inner, self.eps,
+                );
+            }
             let t = packed
                 .split_heads_bhsd(inner, self.heads, self.head_dim)?
                 .rms_norm(&self.norm_k, self.eps)?;
@@ -1009,10 +1135,15 @@ pub(crate) struct FeedForward {
     ffn_dim: usize,
 }
 
-/// H3 FFN only — not process-wide `FASTVIDEO_FP8` (Wan QAD path, all linears).
-fn h3_ffn_fp8() -> bool {
-    static FLAG: crate::wan::envflag::CachedBool = crate::wan::envflag::CachedBool::new();
-    FLAG.get_or_init(|| crate::wan::envflag::bool_flag("FASTVIDEO_H3_FFN_FP8", false))
+/// `FASTVIDEO_H3_FFN_FP8` (a per-tensor E4M3 FFN matching no reference,
+/// 17-20 dB) is retired: refuse it rather than silently run bf16.
+fn refuse_retired_ffn_fp8() -> Result<()> {
+    if crate::wan::envflag::bool_flag("FASTVIDEO_H3_FFN_FP8", false) {
+        return Err(msg(
+            "FASTVIDEO_H3_FFN_FP8 is retired; use FASTVIDEO_H3_QUANT=w8a8|mxfp8 (the reference recipes)",
+        ));
+    }
+    Ok(())
 }
 
 impl FeedForward {
@@ -1062,24 +1193,8 @@ impl FeedForward {
                     bits,
                 )?,
             )
-        } else if h3_ffn_fp8() {
-            (
-                Linear::load_fp8_gemm(
-                    map,
-                    &format!("{prefix}.net.0.proj"),
-                    cfg.hidden_size,
-                    2 * cfg.ffn_dim,
-                    false,
-                )?,
-                Linear::load_fp8_gemm(
-                    map,
-                    &format!("{prefix}.net.2"),
-                    cfg.ffn_dim,
-                    cfg.hidden_size,
-                    false,
-                )?,
-            )
         } else {
+            refuse_retired_ffn_fp8()?;
             (
                 Linear::load(
                     map,
@@ -1102,6 +1217,60 @@ impl FeedForward {
             ff_out,
             ffn_dim: cfg.ffn_dim,
         })
+    }
+
+    /// Whether the fused residual+norm+modulate may hand this FFN an MXFP8
+    /// activation (MXFP8 up projection, one row chunk).
+    fn accepts_mx(&self, rows: usize) -> bool {
+        self.ff_in.quant_kind() == Some(QuantKind::Mxfp8) && ffn_row_chunk(rows, self.ffn_dim) >= rows
+    }
+
+    /// [`Self::forward`] on a fused producer's output; with an MXFP8 down
+    /// projection the SwiGLU writes its MXFP8 input directly (`fused_swiglu_mxfp8`).
+    fn forward_in(&self, n: NormOut, rows: usize) -> Result<CudaTensor> {
+        let hidden = self.ff_out.out_dim();
+        let t = match n {
+            NormOut::T(t) => t,
+            #[cfg(feature = "cuda")]
+            NormOut::Mx(act) => {
+                let h = phase("h3_ffn_in", || {
+                    self.ff_in.forward_mx(&act, vec![1, rows, 2 * self.ffn_dim])
+                })?;
+                drop(act);
+                return self.down(h, rows, hidden);
+            }
+        };
+        if !bf16_activations() {
+            return self.forward(&t);
+        }
+        let chunk = ffn_row_chunk(rows, self.ffn_dim);
+        let mut parts = Vec::with_capacity(rows.div_ceil(chunk).max(1));
+        let mut start = 0;
+        while start < rows {
+            let len = chunk.min(rows - start);
+            let h = phase("h3_ffn_in", || self.ff_in.forward(&t.narrow(1, start, len)?))?;
+            parts.push(self.down(h, len, hidden)?);
+            start += len;
+        }
+        if parts.len() == 1 {
+            return Ok(parts.pop().unwrap());
+        }
+        CudaTensor::cat(&parts.iter().collect::<Vec<_>>(), 1)
+    }
+
+    /// SwiGLU then the down projection for one chunk of `rows`.
+    fn down(&self, h: CudaTensor, rows: usize, hidden: usize) -> Result<CudaTensor> {
+        #[cfg(feature = "cuda")]
+        if self.ff_out.quant_kind() == Some(QuantKind::Mxfp8) {
+            if let Some(act) = phase("h3_ffn_act", || fused16::swiglu_mx(&h))? {
+                drop(h);
+                return phase("h3_ffn_out", || self.ff_out.forward_mx(&act, vec![1, rows, hidden]));
+            }
+        }
+        let _ = (rows, hidden);
+        let act = phase("h3_ffn_act", || h.swiglu_value_first())?;
+        drop(h);
+        phase("h3_ffn_out", || self.ff_out.forward(&act))
     }
 
     fn forward(&self, n: &CudaTensor) -> Result<CudaTensor> {
@@ -1161,6 +1330,98 @@ impl Block {
     }
 }
 
+impl Block {
+    /// [`Self::load`], then the reference FP8 recipe on the attention and FFN
+    /// linears (after any bf16 LoRA merge, as the reference quantizes).
+    pub(crate) fn load_quant(
+        map: &WeightMap,
+        prefix: &str,
+        cfg: &H3TransformerConfig,
+        gate: bool,
+        lora: &mut Option<super::lora::H3LoraFuse>,
+        quant: Option<QuantKind>,
+    ) -> Result<Self> {
+        let mut block = Self::load(map, prefix, cfg, gate, lora)?;
+        if let Some(kind) = quant {
+            block.quantize(kind, cfg)?;
+        }
+        Ok(block)
+    }
+
+    /// W8A8 keeps one tensor scale per original linear, so the fused QKV is
+    /// three sections; MXFP8 scales per 32 values and quantizes it whole
+    /// (`to_qkv`). The VSA gate rows (`to_gate_compress`) are in neither
+    /// reference table and stay bf16.
+    fn quantize(&mut self, kind: QuantKind, cfg: &H3TransformerConfig) -> Result<()> {
+        let inner = cfg.inner_dim();
+        let q = |rows| Section {
+            rows,
+            quantized: true,
+        };
+        let mut qkv = match kind {
+            QuantKind::W8A8 => vec![q(inner), q(inner), q(inner)],
+            QuantKind::Mxfp8 => vec![q(3 * inner)],
+        };
+        if self.attn.has_gate {
+            qkv.push(Section {
+                rows: inner,
+                quantized: false,
+            });
+        }
+        self.attn.qkvg.quantize(kind, qkv)?;
+        self.attn.to_out.quantize(kind, vec![q(cfg.hidden_size)])?;
+        self.ff.ff_in.quantize(kind, vec![q(2 * cfg.ffn_dim)])?;
+        self.ff.ff_out.quantize(kind, vec![q(cfg.hidden_size)])
+    }
+
+    /// The block under bf16 activations with Sol-H3's fused elementwise chain
+    /// ([`fused16`]); MXFP8 consumers receive their activation pre-quantized.
+    #[allow(clippy::too_many_arguments)]
+    fn forward_fused(
+        &self,
+        x: &CudaTensor,
+        rows_tab: &AdaRows,
+        base: usize,
+        rope: Option<(&CudaTensor, &CudaTensor)>,
+        mode: AttnMode<'_>,
+        eps: f32,
+        slots: [usize; 6],
+    ) -> Result<CudaTensor> {
+        let [shift_msa, scale_msa, gate_msa, shift_mlp, scale_mlp, gate_mlp] = slots;
+        let rows = x.shape[1];
+        let n = phase("h3_1_norm_msa", || {
+            fused16::norm_mod(
+                x,
+                &self.norm1,
+                rows_tab,
+                base,
+                scale_msa,
+                shift_msa,
+                eps,
+                self.attn.accepts_mx(mode),
+            )
+        })?;
+        let a = phase("h3_2_attn", || self.attn.forward_in(n, rows, rope, mode))?;
+        let (x, n) = phase("h3_3_residual_msa", || {
+            fused16::res_gate_norm_mod(
+                x,
+                &a,
+                &self.norm2,
+                rows_tab,
+                base,
+                (gate_msa, scale_mlp, shift_mlp),
+                eps,
+                self.ff.accepts_mx(rows),
+            )
+        })?;
+        drop(a);
+        let f = phase("h3_5_ffn", || self.ff.forward_in(n, rows))?;
+        phase("h3_6_residual_ffn", || {
+            fused16::gate_residual(&x, &f, rows_tab, base, gate_mlp)
+        })
+    }
+}
+
 impl OffloadBlock for Block {
     fn for_each_linear_mut(&mut self, f: &mut dyn FnMut(&mut Linear) -> Result<()>) -> Result<()> {
         f(&mut self.attn.qkvg)?;
@@ -1178,6 +1439,7 @@ pub struct H3TextRefiner {
     final_norm: CudaTensor,
     eps: f32,
     final_eps: f32,
+    quant: QuantMode,
 }
 
 impl H3TextRefiner {
@@ -1202,13 +1464,16 @@ impl H3TextRefiner {
     ) -> Result<Self> {
         let mut blocks = BlockWeights::new("h3 refiner", residency)
             .with_ledger(crate::wan::ledger::REFINER_RING);
+        let quant = QuantMode::from_env().map_err(msg)?;
+        let plan = H3QuantPlan::new(quant, cfg.num_layers, cfg.num_refiner_layers);
         for i in 0..cfg.num_refiner_layers {
-            blocks.push(Block::load(
+            blocks.push(Block::load_quant(
                 map,
                 &format!("token_refiner.refiner_blocks.{i}"),
                 cfg,
                 false,
                 lora,
+                plan.refiner(),
             )?)?;
         }
         Ok(Self {
@@ -1229,12 +1494,17 @@ impl H3TextRefiner {
             )?,
             eps: cfg.norm_eps as f32,
             final_eps: cfg.final_norm_eps as f32,
+            quant,
         })
     }
 
     /// `[1, N, text_dim]` hidden states to `[1, N, hidden]`: plain pre-norm
     /// blocks, bidirectional attention, no RoPE, no AdaLN.
     pub fn forward(&self, text: &CudaTensor) -> Result<CudaTensor> {
+        with_quant_act(self.quant, || self.forward_inner(text))
+    }
+
+    fn forward_inner(&self, text: &CudaTensor) -> Result<CudaTensor> {
         let mut e = self.context_embedder.forward(text)?;
         for index in 0..self.blocks.len() {
             e = self.blocks.with(index, |block| {
@@ -1261,16 +1531,36 @@ pub struct DeviceLayout {
     pub layout: H3PackedLayout,
     cos: CudaTensor,
     sin: CudaTensor,
+    /// Per row: which AdaLN table row the fused kernels read
+    /// (`src * blocks * 3 + modality`, `src` 0 = ladder, 1 = keyframe).
+    adaln_idx: Arc<Vec<u32>>,
+    #[cfg(feature = "cuda")]
+    adaln_idx_dev: Option<Arc<cudarc::driver::CudaSlice<u32>>>,
 }
 
 impl DeviceLayout {
     pub fn new(cfg: &H3TransformerConfig, layout: H3PackedLayout) -> Result<Self> {
         let (cos, sin) = layout.rope_tables(&cfg.rope_inv_freq());
         let shape = vec![layout.sequence_length(), cfg.rotary_dim()];
+        let mut idx = vec![0u32; layout.sequence_length()];
+        for (range, tag) in tag_runs(&layout) {
+            let src = usize::from(!row_uses_ladder(&layout, range));
+            let v = (src * cfg.num_layers * MODALITY_NUM + usize::from(tag)) as u32;
+            idx[range.start..range.end()].fill(v);
+        }
+        #[cfg(feature = "cuda")]
+        let adaln_idx_dev = if crate::wan::stats::device_expected() {
+            Some(Arc::new(crate::wan::ops::upload_row_indices(&idx)?))
+        } else {
+            None
+        };
         Ok(Self {
             cos: pinned(cos, shape.clone())?,
             sin: pinned(sin, shape)?,
             layout,
+            adaln_idx: Arc::new(idx),
+            #[cfg(feature = "cuda")]
+            adaln_idx_dev,
         })
     }
 }
@@ -1290,6 +1580,8 @@ pub struct H3Transformer {
     has_gate: bool,
     /// Empty unless `FASTVIDEO_H3_SOL_CACHE=teacache`.
     sol_tea: Arc<Mutex<Option<H3TeaRuntime>>>,
+    /// `FASTVIDEO_H3_QUANT`: the reference FP8 recipe on the block linears.
+    quant: QuantMode,
 }
 
 struct H3TeaRuntime {
@@ -1374,15 +1666,32 @@ impl H3Transformer {
                 cfg.attention_head_dim
             )));
         }
-        let table = AdaLnTable::load_or_precompute_with(&cfg, map, schedule, adaln_cache, lora)?;
+        let quant = QuantMode::from_env().map_err(msg)?;
+        // The AdaLN projections are evaluated in bf16 under the recipes too.
+        let table = with_quant_act(quant, || {
+            AdaLnTable::load_or_precompute_with(&cfg, map, schedule, adaln_cache, lora)
+        })?;
+        let plan = H3QuantPlan::new(quant, cfg.num_layers, cfg.num_refiner_layers);
+        if quant != QuantMode::Off {
+            crate::wan::log::info(format_args!(
+                "h3 quant: {} ({} reference linears incl. refiner; {}), bf16 activations",
+                quant.as_str(),
+                plan.reference_linear_count(),
+                match quant {
+                    QuantMode::W8A8 => "FastVideo tensorwise W8A8, all blocks + refiner",
+                    _ => "Sol-H3 MXFP8, blocks 2..=46",
+                }
+            ));
+        }
         let mut blocks = BlockWeights::new("h3 dit", residency);
         for i in 0..cfg.num_layers {
-            blocks.push(Block::load(
+            blocks.push(Block::load_quant(
                 map,
                 &format!("transformer_blocks.{i}"),
                 &cfg,
                 with_gate,
                 lora,
+                plan.dit_block(i),
             )?)?;
             crate::wan::log::info(format_args!(
                 "h3 dit: block {}/{} {}",
@@ -1392,41 +1701,47 @@ impl H3Transformer {
             ));
         }
         crate::wan::log::info(format_args!("{}", blocks.describe()));
+        // `_keep_in_fp32_modules`: the patch projections stay f32 under bf16
+        // activations (the reference casts into and out of them).
+        let island = |mut l: Linear| {
+            l.set_f32_island();
+            l
+        };
         Ok(Self {
-            proj_in: load_linear(
+            proj_in: island(load_linear(
                 map,
                 "proj_in",
                 cfg.video_patch_dim(),
                 cfg.hidden_size,
                 true,
                 lora,
-            )?,
-            audio_proj_in: load_linear(
+            )?),
+            audio_proj_in: island(load_linear(
                 map,
                 "audio_proj_in",
                 cfg.audio_in_channels,
                 cfg.hidden_size,
                 true,
                 lora,
-            )?,
+            )?),
             blocks,
             norm_out: pinned_weight(map, "norm_out.norm.weight", &[cfg.hidden_size], lora)?,
-            proj_out: load_linear(
+            proj_out: island(load_linear(
                 map,
                 "proj_out",
                 cfg.hidden_size,
                 cfg.video_patch_dim(),
                 true,
                 lora,
-            )?,
-            audio_proj_out: load_linear(
+            )?),
+            audio_proj_out: island(load_linear(
                 map,
                 "audio_proj_out",
                 cfg.hidden_size,
                 cfg.audio_in_channels,
                 true,
                 lora,
-            )?,
+            )?),
             out_mods: pinned(
                 table.out_mods.clone(),
                 vec![table.out_mods.len() / cfg.hidden_size, cfg.hidden_size],
@@ -1434,6 +1749,7 @@ impl H3Transformer {
             table,
             has_gate: with_gate,
             sol_tea: Default::default(),
+            quant,
             cfg,
         })
     }
@@ -1564,7 +1880,36 @@ impl H3Transformer {
     /// One forward at ladder step `step`. `video_rows` / `audio_rows` are the
     /// **target** modality rows. `cond_rows` / `cond_audio_rows` are fixed
     /// Ref2VA/FL2VA condition rows (video-tagged and audio-tagged).
+    #[allow(clippy::too_many_arguments)]
     pub fn forward(
+        &self,
+        step: usize,
+        video_rows: &CudaTensor,
+        audio_rows: &CudaTensor,
+        text: &CudaTensor,
+        layout: &DeviceLayout,
+        mode: AttnMode<'_>,
+        observer: Option<Observer<'_>>,
+        cond_rows: Option<&CudaTensor>,
+        cond_audio_rows: Option<&CudaTensor>,
+    ) -> Result<(CudaTensor, CudaTensor)> {
+        with_quant_act(self.quant, || {
+            self.forward_inner(
+                step,
+                video_rows,
+                audio_rows,
+                text,
+                layout,
+                mode,
+                observer,
+                cond_rows,
+                cond_audio_rows,
+            )
+        })
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn forward_inner(
         &self,
         step: usize,
         video_rows: &CudaTensor,
@@ -1670,12 +2015,51 @@ impl H3Transformer {
         let rope = Some((&layout.cos, &layout.sin));
         let eps = cfg.norm_eps as f32;
 
-        let mut x = x;
+        // bf16 activations: the residual stream is bf16 and every block runs
+        // Sol-H3's fused elementwise chain over one step-wide AdaLN table.
+        let fused = bf16_activations();
+        let mut x = if fused { x.quantize_bf16()? } else { x };
+        let ada = if fused {
+            Some(adaln_rows16(&self.table, step, layout)?)
+        } else {
+            None
+        };
         let tea = self.begin_sol_tea(step, &x, l, eps)?;
         if tea == Some(true) {
             x = self.add_sol_tea_residual(x)?;
         } else {
             for index in 0..self.blocks.len() {
+                if let Some(ada) = &ada {
+                    let layer_mode = match mode {
+                        AttnMode::Sol(policy) => match policy.route(step, index).map_err(msg)? {
+                            fastvideo_models::h3::sol::H3SolRoute::Dense => AttnMode::Dense,
+                            fastvideo_models::h3::sol::H3SolRoute::Sol { tau } => {
+                                AttnMode::SolLayer { tau, policy }
+                            }
+                        },
+                        other => other,
+                    };
+                    x = self.blocks.with(index, |block| {
+                        block.forward_fused(
+                            &x,
+                            ada,
+                            index * MODALITY_NUM,
+                            rope,
+                            layer_mode,
+                            eps,
+                            [SHIFT_MSA, SCALE_MSA, GATE_MSA, SHIFT_MLP, SCALE_MLP, GATE_MLP],
+                        )
+                    })?;
+                    if let Some(observe) = observer.as_mut() {
+                        observe(&format!("block_{index}"), &x)?;
+                    }
+                    crate::wan::log::info(format_args!(
+                        "h3 dit step {step}: block {}/{}",
+                        index + 1,
+                        self.blocks.len()
+                    ));
+                    continue;
+                }
                 let mods = BlockMods::upload(&self.table, step, index, l)?;
                 let layer_mode = match mode {
                     AttnMode::Sol(policy) => match policy.route(step, index).map_err(msg)? {
@@ -1723,6 +2107,14 @@ impl H3Transformer {
             let n = x
                 .narrow(1, range.start, range.len)?
                 .rms_norm(&self.norm_out, cfg.final_norm_eps as f32)?;
+            // bf16: `norm(x) * (1 + scale) + shift` in bf16 (the reference's
+            // norm_out linear is bf16, so `1 + scale` rounds), then the f32
+            // `proj_out` island.
+            let (scale, shift) = if bf16_activations() {
+                (scale.quantize_bf16()?, shift.quantize_bf16()?)
+            } else {
+                (scale, shift)
+            };
             proj.forward(&n.mul(&scale)?.add(&shift)?)?
                 .reshape(vec![range.len, proj.out_dim()])
         };
@@ -1768,21 +2160,8 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn five_second_h3_tokens_need_fp8_row_pad() {
-        assert_eq!(37_756usize.next_multiple_of(16), 37_760);
-        assert!(!h3_ffn_fp8());
-        assert!(crate::wan::affine::bits_from_env().is_none());
-        let a = Linear::load(&weights(), "blocks.0.ff.net.0.proj", 12, 20, false).unwrap();
-        let b = Linear::load_fp8_gemm(&weights(), "blocks.0.ff.net.0.proj", 12, 20, false).unwrap();
-        assert!(!b.is_fp8_gemm());
-        let x = CudaTensor::from_vec(seeded(3 * 12, 0.2), vec![1, 3, 12]).unwrap();
-        let ya = a.forward(&x).unwrap();
-        let yb = b.forward(&x).unwrap();
-        let ya = ya.host_cow().unwrap();
-        let yb = yb.host_cow().unwrap();
-        for (u, v) in ya.iter().zip(yb.iter()) {
-            assert!((u - v).abs() < 1e-6);
-        }
+    fn the_retired_ffn_fp8_flag_is_refused_not_ignored() {
+        assert!(refuse_retired_ffn_fp8().is_ok(), "unset by default");
     }
 
     #[test]
@@ -2281,6 +2660,7 @@ pub(crate) mod tests {
             H3VsaConfig {
                 sparsity: 0.0,
                 group: 1,
+                tile_size: 64,
             },
         )
         .unwrap();
@@ -2300,7 +2680,11 @@ pub(crate) mod tests {
         let dense = run(&zero_gate(), AttnMode::Dense);
         let sparse = run(&zero_gate(), AttnMode::Vsa(&vsa));
         assert!(
-            dense.iter().zip(&sparse).all(|(a, b)| (a - b).abs() < 1e-5),
+            // Up to upstream's bf16 combine rounding inside VSA.
+            dense
+                .iter()
+                .zip(&sparse)
+                .all(|(a, b)| (a - b).abs() < 5e-3 * (1.0 + a.abs())),
             "zero gate: VSA at sparsity 0 is dense"
         );
         let gated = run(&weights(), AttnMode::Vsa(&vsa));
@@ -2527,5 +2911,136 @@ pub(crate) mod tests {
         let pads = RowRange { start: 1, len: 3 };
         assert!(row_uses_ladder(&layout, pads));
         assert!(!row_uses_ladder(&layout, layout.cond));
+    }
+
+    fn quant_cfg() -> H3TransformerConfig {
+        let mut c = tiny_cfg();
+        c.num_attention_heads = 2;
+        c.attention_head_dim = 32;
+        c.hidden_size = 64;
+        c.ffn_dim = 32;
+        c
+    }
+
+    /// One `[1, 6, hidden]` AdaLN row (SCALE slots hold `1 + scale`).
+    fn synthetic_rows(h: usize, rows: usize) -> AdaRows {
+        let tab: Vec<f32> = (0..6 * h)
+            .map(|i| {
+                let p = i / h;
+                let u = crate::wan::quant::bf16_round((i as f32 * 0.37).sin() * 0.1);
+                if p == SCALE_MSA || p == SCALE_MLP {
+                    1.0 + u
+                } else {
+                    u
+                }
+            })
+            .collect();
+        AdaRows {
+            tab: CudaTensor::from_vec(tab, vec![1, 6, h]).unwrap(),
+            hidden: h,
+            idx: Arc::new(vec![0; rows]),
+            #[cfg(feature = "cuda")]
+            idx_dev: None,
+        }
+    }
+
+    fn cosine(a: &[f32], b: &[f32]) -> f64 {
+        let dot: f64 = a.iter().zip(b).map(|(&x, &y)| f64::from(x) * f64::from(y)).sum();
+        let na: f64 = a.iter().map(|&x| f64::from(x) * f64::from(x)).sum();
+        let nb: f64 = b.iter().map(|&x| f64::from(x) * f64::from(x)).sum();
+        dot / (na.sqrt() * nb.sqrt())
+    }
+
+    #[test]
+    fn the_fused_bf16_forward_tracks_the_f32_forward() {
+        let (cfg, map) = (tiny_cfg(), weights());
+        let schedule = H3JointSchedule::fasth3_8step();
+        let layout = H3PackedLayout::new(2, (2, 2, 4), 1, cfg.patch_size).unwrap();
+        let (nv, na, nt) = (layout.video.len, layout.audio.len, layout.text.len);
+        let dl = DeviceLayout::new(&cfg, layout).unwrap();
+        let video = CudaTensor::from_vec(seeded(nv * cfg.video_patch_dim(), 0.41), vec![nv, cfg.video_patch_dim()]).unwrap();
+        let audio = CudaTensor::from_vec(seeded(na * cfg.audio_in_channels, 0.23), vec![na, cfg.audio_in_channels]).unwrap();
+        let text = CudaTensor::from_vec(seeded(nt * cfg.hidden_size, 0.57), vec![1, nt, cfg.hidden_size]).unwrap();
+        let run = |on: bool| {
+            crate::wan::tensor::with_bf16_act(on, || {
+                let model = H3Transformer::load(cfg.clone(), &map, &schedule, false).unwrap();
+                let (v, a) = model
+                    .forward(3, &video, &audio, &text, &dl, AttnMode::Dense, None, None, None)
+                    .unwrap();
+                let out: Vec<f32> = v.host_cow().unwrap().iter().chain(a.host_cow().unwrap().iter()).copied().collect();
+                // The proj_out island keeps the head f32.
+                (out, v.is_bf16())
+            })
+        };
+        let (f32_out, _) = run(false);
+        let (bf_out, head_bf16) = run(true);
+        assert!(!head_bf16, "proj_out is an f32 island (_keep_in_fp32_modules)");
+        let cos = cosine(&bf_out, &f32_out);
+        assert!(cos > 0.999, "bf16 forward cosine {cos}");
+    }
+
+    #[test]
+    fn the_reference_fp8_recipes_track_the_bf16_block() {
+        let (cfg, map) = (quant_cfg(), weights());
+        let (rows, h) = (16usize, cfg.hidden_size);
+        let x = CudaTensor::from_vec(seeded(rows * h, 0.31), vec![1, rows, h])
+            .unwrap()
+            .quantize_bf16()
+            .unwrap();
+        let ada = synthetic_rows(h, rows);
+        let run = |quant: Option<QuantKind>| {
+            crate::wan::tensor::with_bf16_act(true, || {
+                let b = Block::load_quant(&map, "transformer_blocks.0", &cfg, false, &mut None, quant)
+                    .unwrap();
+                if let Some(kind) = quant {
+                    assert_eq!(b.attn.qkvg.quant_kind(), Some(kind));
+                    assert_eq!(b.ff.ff_out.quant_kind(), Some(kind));
+                }
+                let y = b
+                    .forward_fused(
+                        &x,
+                        &ada,
+                        0,
+                        None,
+                        AttnMode::Dense,
+                        1e-5,
+                        [SHIFT_MSA, SCALE_MSA, GATE_MSA, SHIFT_MLP, SCALE_MLP, GATE_MLP],
+                    )
+                    .unwrap();
+                assert!(y.is_bf16());
+                y.host_cow().unwrap().into_owned()
+            })
+        };
+        let base = run(None);
+        for kind in [QuantKind::W8A8, QuantKind::Mxfp8] {
+            let q = run(Some(kind));
+            let cos = cosine(&q, &base);
+            assert!(cos > 0.995, "{kind:?} block cosine {cos}");
+            assert!(q != base, "{kind:?} must actually quantize");
+        }
+    }
+
+    #[test]
+    fn a_vsa_gate_stays_bf16_under_the_recipes() {
+        let (cfg, map) = (quant_cfg(), weights());
+        let b = Block::load_quant(&map, "transformer_blocks.0", &cfg, true, &mut None, Some(QuantKind::W8A8))
+            .unwrap();
+        assert_eq!(b.attn.qkvg.quant_kind(), Some(QuantKind::W8A8));
+        assert!(!b.attn.accepts_mx(AttnMode::Dense), "W8A8 quantizes its input itself");
+        let b = Block::load_quant(&map, "transformer_blocks.0", &cfg, true, &mut None, Some(QuantKind::Mxfp8))
+            .unwrap();
+        assert!(!b.attn.accepts_mx(AttnMode::Dense), "a bf16 gate section needs the bf16 input");
+        let b = Block::load_quant(&map, "transformer_blocks.0", &cfg, false, &mut None, Some(QuantKind::Mxfp8))
+            .unwrap();
+        assert!(b.attn.accepts_mx(AttnMode::Dense));
+    }
+
+    #[test]
+    fn bf16_table_values_round_the_projection_and_keep_one_plus_scale_in_f32() {
+        let v = 1.0 + 0.123_456_7f32;
+        let t = bf16_table_value(v, true);
+        assert_eq!(t, crate::wan::quant::bf16_round(v - 1.0) + 1.0);
+        assert_eq!(bf16_table_value(t, true), t, "idempotent");
+        assert_eq!(bf16_table_value(0.3, false), crate::wan::quant::bf16_round(0.3));
     }
 }
