@@ -9,9 +9,11 @@
 #   runpod-http.sh kernels [sha] fv-gpucheck kernels (every kernel vs host math)
 #   runpod-http.sh all [sha]     kernels, then the $FV_FAMILY cells, on one pod
 #                                (pod creation retries for FV_CREATE_WAIT_S)
-#   runpod-http.sh upstream [sha] upstream Python references (scripts/gpu/upstream/pod.sh)
-#                                on a public PyTorch image; the pod clones this repo
-#                                at <sha> from GitHub. UP_STEPS / UP_CELLS select work.
+#   runpod-http.sh upstream [sha] upstream Python references (scripts/gpu/upstream/pod.sh):
+#                                UP_IMAGE_TARGET picks the baked image
+#                                ghcr.io/…/fastvideo-rs-upstream-<target>:sha-<sha>;
+#                                UP_STEPS / UP_CELLS select work. All writes stay on
+#                                the container disk (UP_LOCAL=1).
 #   runpod-http.sh attach <pod> <tag>  re-attach to a running pod (wait, collect, delete)
 #   runpod-http.sh status <pod>  print live.log from a running pod
 #   runpod-http.sh down <pod>    destroy a pod
@@ -140,12 +142,17 @@ upstream_start_cmd() {
 set -u
 OUT=$runs/$FAMILY/$tag
 mkdir -p "\$OUT"
-( cd $runs && while true; do python3 -m http.server 8000; sleep 2; done ) >/tmp/http.log 2>&1 &
-{
+if fv-gpucheck serve --help >/dev/null 2>&1; then
+  ( while true; do fv-gpucheck serve --dir $runs --port 8000; sleep 2; done ) >/tmp/http.log 2>&1 &
+else
+  ( cd $runs && while true; do python3 -m http.server 8000; sleep 2; done ) >/tmp/http.log 2>&1 &
+fi
+# Baked images (upstream-<target>) carry the runner in /opt/fvrs; otherwise clone it.
+if [ ! -f /opt/fvrs/scripts/gpu/upstream/pod.sh ]; then
   command -v git >/dev/null || { apt-get update -qq && apt-get install -y -qq git; }
   git init -q /opt/fvrs && git -C /opt/fvrs remote add origin https://github.com/zaitrarrio/fastvideo-rs.git \
     && git -C /opt/fvrs fetch -q --depth 1 origin $UP_SHA && git -C /opt/fvrs checkout -q FETCH_HEAD
-} >"\$OUT/clone.log" 2>&1
+fi >"\$OUT/clone.log" 2>&1
 env ${FV_EXTRA_ENV:-} UP_STEPS="${UP_STEPS:-info:box}" UP_STEPS_BG="${UP_STEPS_BG:-}" UP_CELLS="${UP_CELLS:-}" \
   UP_CELL_TIMEOUT_S=${UP_CELL_TIMEOUT_S:-5400} UP_LOCAL=${UP_LOCAL:-1} \
   bash /opt/fvrs/scripts/gpu/upstream/pod.sh "\$OUT" >"\$OUT/pod.out" 2>&1
@@ -267,7 +274,14 @@ cmd_run() {
   sha="${sha:-$(git -C "$ROOT" rev-parse --short=7 origin/main)}"
   image="${RUNPOD_IMAGE:-ghcr.io/zaitrarrio/fastvideo-rs-runtime:sha-$sha}"
   if [[ "$mode" == upstream ]]; then
-    image="${RUNPOD_IMAGE:-runpod/pytorch:1.3.3-cu1300-torch2130-ubuntu2404}"
+    # UP_IMAGE_TARGET=fastvideo|sol-h3|sol-h3-4step|sol-ltx25 boots the baked
+    # image (docker/upstream.Dockerfile, built by CI); unset = plain PyTorch image
+    # and pod-side installs.
+    if [[ -n "${UP_IMAGE_TARGET:-}" ]]; then
+      image="${RUNPOD_IMAGE:-ghcr.io/zaitrarrio/fastvideo-rs-upstream-$UP_IMAGE_TARGET:sha-$sha}"
+    else
+      image="${RUNPOD_IMAGE:-runpod/pytorch:1.3.3-cu1300-torch2130-ubuntu2404}"
+    fi
     UP_SHA="$(git -C "$ROOT" rev-parse "$sha")"
   fi
   for attempt in 1 2 3; do

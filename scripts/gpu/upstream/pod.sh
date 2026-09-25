@@ -19,7 +19,9 @@ export LIVE="$OUT/live.log"
 # UP_LOCAL=1 (default via runpod-http.sh): everything we write stays on the
 # container disk; the shared volume is only read (weights, HF token).
 if [[ "${UP_LOCAL:-0}" == 1 ]]; then
-  UP="${UP:-/root/upstream}"
+  # Baked images (docker/upstream.Dockerfile) carry the venvs in /opt/upstream.
+  if [[ -x /opt/upstream/bin/uv ]]; then UP="${UP:-/opt/upstream}"; else UP="${UP:-/root/upstream}"; fi
+  UW="${UW:-/root/upstream-weights}"
   # The image sets HOME=/workspace: move every tool cache off the volume.
   export HOME=/root XDG_CACHE_HOME=/root/.cache UV_CACHE_DIR=/root/.cache/uv PIP_CACHE_DIR=/root/.cache/pip \
     TRITON_CACHE_DIR=/root/.cache/triton TORCHINDUCTOR_CACHE_DIR=/root/.cache/inductor
@@ -28,7 +30,7 @@ else
 fi
 export UP
 W="${W:-/workspace/weights}"
-UW="$UP/weights"
+UW="${UW:-$UP/weights}"
 # shellcheck source=scripts/gpu/upstream/setup.sh
 . "$HERE/setup.sh"
 PROMPT_OURS="${FV_PROMPT:-A man in his thirties talking to the camera in a bright living room, medium close-up, natural expressions and hand gestures, soft window light. He says: <d>Hello, this was generated entirely in Rust.</d>}"
@@ -40,7 +42,10 @@ export HF_HOME="$UP/hf"   # the image presets HF_HOME under /workspace
 export HF_HUB_DISABLE_TELEMETRY=1
 
 log() { printf '[%s] %s\n' "$(date -u +%H:%M:%S)" "$*" | tee -a "$LIVE" >&2; }
-pyn() { uv run -q --no-project --python 3.12 --with numpy python "$@"; }
+pyn() {
+  if [[ -x "$UP/tools/bin/python" ]]; then "$UP/tools/bin/python" "$@"
+  else uv run -q --no-project --python 3.12 --with numpy python "$@"; fi
+}
 
 step_status() { printf '%s\t%s\t%s\n' "$1" "$2" "$(date -u +%FT%TZ)" >>"$OUT/steps.tsv"; }
 
