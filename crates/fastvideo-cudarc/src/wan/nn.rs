@@ -982,6 +982,47 @@ impl Linear {
         self.forward_act(xs, false)
     }
 
+    /// Whether [`Self::gemm_bf16`] can run: the weight is a plain device
+    /// bfloat16 matrix (fast mode), not FP8, affine, NVFP4 or row-FP8.
+    #[cfg(feature = "cuda")]
+    pub fn has_bf16_gemm(&self) -> bool {
+        self.weight_bf16.is_some()
+            && self.quant.is_none()
+            && self.weight_fp8_rows.is_none()
+            && self.weight_affine.is_none()
+            && self.nvfp4_act.is_none()
+    }
+
+    /// The fast path's GEMM alone, for a caller that keeps activations in
+    /// bfloat16 between linears: `x16` `[m, in]` bf16 to `[m, out]` bf16 with
+    /// the **bias not applied** (the caller fuses it into its next kernel,
+    /// reading [`Self::bias`]). The product is the one [`Self::forward`]
+    /// computes before its cast back to f32. `None` without
+    /// [`Self::has_bf16_gemm`].
+    #[cfg(feature = "cuda")]
+    pub fn gemm_bf16(
+        &self,
+        x16: &cudarc::driver::CudaSlice<half::bf16>,
+        m: usize,
+    ) -> Result<Option<cudarc::driver::CudaSlice<half::bf16>>> {
+        let Some(w16) = self.weight_bf16.as_ref().filter(|_| self.has_bf16_gemm()) else {
+            return Ok(None);
+        };
+        let (k, n) = (self.in_dim, self.out_dim());
+        if x16.len() != m * k {
+            return Err(msg(format!(
+                "bf16 gemm input of {} elements for [{m}, {k}]",
+                x16.len()
+            )));
+        }
+        let dev = super::device::global_device().ok_or_else(|| msg("no device"))?;
+        let mut c16 = unsafe { dev.stream.alloc::<half::bf16>((m * n).max(1)) }
+            .map_err(|e| msg(e.to_string()))?;
+        super::device::matmul_linear_wt_bf16(x16, w16, &mut c16, m, k, n)
+            .map_err(|e| msg(e.to_string()))?;
+        Ok(Some(c16))
+    }
+
     /// `gelu_tanh(W x + b)` with the bias add and activation in one launch.
     pub fn forward_gelu(&self, xs: &CudaTensor) -> Result<CudaTensor> {
         self.forward_act(xs, true)

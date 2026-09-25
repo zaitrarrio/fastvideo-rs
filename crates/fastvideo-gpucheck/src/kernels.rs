@@ -789,6 +789,121 @@ pub fn run(report: &mut Report, lim: Limits, seed: u64) -> StageResult<()> {
             c.cmp("cast_bf16_f32_plain", &got, &bits, 0.0)?;
         }
         {
+            // H3 video VAE glue (`h3v_*`): bf16 in, bf16 out, against the host
+            // twins. Outputs are rounded to bf16 on both sides; only a
+            // reduction-order difference may flip a rounding, so the limit is
+            // bf16 round-off. Odd seq and a partial last warp-block included.
+            use fastvideo_cudarc::wan::ops::h3v_host;
+            let bf = |v: &[f32]| {
+                v.iter()
+                    .map(|&x| half::bf16::from_f32(x))
+                    .collect::<Vec<_>>()
+            };
+            let upb = |v: &[half::bf16]| -> anyhow::Result<CudaSlice<half::bf16>> {
+                Ok(dev()?.stream.memcpy_stod(v)?)
+            };
+            let downb = |s: &CudaSlice<half::bf16>| -> anyhow::Result<Vec<f32>> {
+                Ok(dev()?
+                    .stream
+                    .memcpy_dtov(s)?
+                    .iter()
+                    .map(|v| v.to_f32())
+                    .collect())
+            };
+            let tof = |v: &[half::bf16]| v.iter().map(|x| x.to_f32()).collect::<Vec<_>>();
+            let bf16_lim = 5e-3;
+            let (batch, seq, heads, d, r) = (2usize, 37usize, 3usize, 64usize, 48usize);
+            let (rows, width) = (batch * seq, heads * d);
+            let x = c.rand(rows * width, 1.0);
+            let upd = bf(&c.rand(rows * width, 2.0));
+            let (bias, scale, w) = (c.rand(width, 0.3), c.rand(width, 0.1), c.rand(width, 1.0));
+            let (want_x, want_n) =
+                h3v_host::residual_norm(&x, width, Some((&upd, &bias, &scale)), Some(&w), 1e-5);
+            let (got_x, got_n) = ops::h3v_residual_norm_bf16_device(
+                &up(&x)?,
+                width,
+                Some((&upb(&upd)?, &up(&bias)?, &up(&scale)?)),
+                Some(&up(&w)?),
+                1e-5,
+            )?;
+            let got_x = got_x.ok_or_else(|| anyhow::anyhow!("no residual"))?;
+            let got_n = got_n.ok_or_else(|| anyhow::anyhow!("no norm"))?;
+            c.cmp("h3v_residual", &down(&got_x)?, &want_x, op)?;
+            c.cmp(
+                "h3v_residual_norm_bf16",
+                &downb(&got_n)?,
+                &tof(&want_n.unwrap_or_default()),
+                bf16_lim,
+            )?;
+            let (_, want_n) = h3v_host::residual_norm(&x, width, None, Some(&w), 1e-5);
+            let (none, got_n) =
+                ops::h3v_residual_norm_bf16_device(&up(&x)?, width, None, Some(&up(&w)?), 1e-5)?;
+            c.report.check(
+                "h3v_norm_only_writes_no_residual",
+                none.is_none(),
+                json!({"residual": none.is_some()}),
+                json!({"residual": false}),
+            )?;
+            c.cmp(
+                "h3v_norm_bf16",
+                &downb(&got_n.ok_or_else(|| anyhow::anyhow!("no norm"))?)?,
+                &tof(&want_n.unwrap_or_default()),
+                bf16_lim,
+            )?;
+
+            let qkv = bf(&c.rand(rows * 3 * width, 1.5));
+            let qkv_bias = c.rand(3 * width, 0.2);
+            let (cos, sin) = (c.rand(seq * r, 0.7), c.rand(seq * r, 0.7));
+            let want =
+                h3v_host::qkv_heads(&qkv, &qkv_bias, &cos, &sin, batch, seq, heads, d, r, 1e-5);
+            let got = ops::h3v_qkv_heads_bf16_device(
+                &upb(&qkv)?,
+                &up(&qkv_bias)?,
+                &up(&cos)?,
+                &up(&sin)?,
+                batch,
+                seq,
+                heads,
+                d,
+                r,
+                1e-5,
+            )?;
+            for (name, (g, w)) in ["q", "k", "v"].iter().zip(got.iter().zip(&want)) {
+                c.cmp(
+                    &format!("h3v_qkv_heads_{name}"),
+                    &downb(g)?,
+                    &tof(w),
+                    bf16_lim,
+                )?;
+            }
+            let bhsd = bf(&c.rand(rows * width, 1.0));
+            c.cmp(
+                "h3v_merge_heads_bf16",
+                &downb(&ops::h3v_merge_heads_bf16_device(
+                    &upb(&bhsd)?,
+                    batch,
+                    heads,
+                    seq,
+                    d,
+                )?)?,
+                &tof(&h3v_host::merge_heads(&bhsd, batch, heads, seq, d)),
+                0.0,
+            )?;
+            let half = 300usize;
+            let packed = bf(&c.rand(rows * 2 * half, 2.0));
+            let ff_bias = c.rand(2 * half, 0.3);
+            c.cmp(
+                "h3v_swiglu_bf16",
+                &downb(&ops::h3v_swiglu_bf16_device(
+                    &upb(&packed)?,
+                    &up(&ff_bias)?,
+                    half,
+                )?)?,
+                &tof(&h3v_host::swiglu(&packed, &ff_bias, half)),
+                bf16_lim,
+            )?;
+        }
+        {
             // Ops the decoder-only text encoders and the audio decoders add.
             // Each is held to its host twin, which the unit tests hold to an
             // independent formula, so the chain reaches the kernel.

@@ -63,15 +63,14 @@ use rand::{Rng, SeedableRng};
 use rand_distr::StandardNormal;
 
 use super::audio_vae::H3AudioDecoder;
+use super::drain::FrameDrain;
 use super::text::{CacheStatus, HiddenStateEncoder};
 use super::transformer::{AttnMode, DeviceLayout, H3SolPolicy, H3TextRefiner, H3Transformer};
 use super::vae::H3VideoDecoder;
 use super::vae_encoder::H3VideoEncoder;
 use super::vsa::H3Vsa;
 use crate::wan::offload::{DitOffload, MemoryLog, OffloadStats, PhaseMemory, Residency};
-use crate::wan::pipeline::{
-    frames_to_rgb8, interleave_audio, write_wav, PipelineError, Result, VideoWriter,
-};
+use crate::wan::pipeline::{interleave_audio, write_wav, PipelineError, Result, VideoWriter};
 use crate::wan::taehv::{TaeArch, TaeHv};
 use crate::wan::tensor::{CudaTensor, TensorError};
 use crate::wan::weights::WeightMap;
@@ -338,7 +337,18 @@ pub struct H3Timings {
     pub denoise_s: f64,
     pub step_s: Vec<f64>,
     pub audio_decode_s: f64,
+    /// The whole video decode: VAE, RGB8 conversion, copy down and hand-off
+    /// to the writer (see the split below).
     pub video_decode_s: f64,
+    /// VAE compute alone (GPU time), the part comparable with FastVideo's
+    /// `video_decoding_stage`.
+    pub video_vae_s: f64,
+    /// RGB8 packing and the device-to-host copy (off the decode thread).
+    pub video_rgb_s: f64,
+    /// Writer backpressure: time the drain thread waited in `VideoWriter::push`.
+    pub video_push_s: f64,
+    /// Time the decode thread waited on the frame hand-off or the final drain.
+    pub video_wait_s: f64,
     /// The tail of encoding that outlives the decode, not the whole encode.
     pub write_s: f64,
 }
@@ -1294,14 +1304,15 @@ impl H3Pipeline {
             .as_ref()
             .or(transient_video.as_ref())
             .expect("video decoder");
-        let mut writer =
+        let writer =
             VideoWriter::spawn_with_audio(out_dir, H3_FPS as u32, request.mp4, Some(&wav))?;
+        // Chunks go to the writer through a drain thread, so the decode
+        // never waits on a copy down or on PNG / mp4 encoding.
+        let mut drain = FrameDrain::new(writer)?;
         // The sink speaks TensorError; carry the writer's own error out beside it.
         let mut writer_error: Option<PipelineError> = None;
         let mut sink = |offset: usize, frames: &CudaTensor| {
-            let (h, w) = (frames.shape[2], frames.shape[3]);
-            let pushed = frames_to_rgb8(frames).and_then(|rgb| writer.push(offset, h, w, rgb));
-            pushed.map_err(|e| {
+            drain.push(offset, frames).map_err(|e| {
                 let text = e.to_string();
                 writer_error = Some(e);
                 TensorError::Message(text)
@@ -1323,7 +1334,16 @@ impl H3Pipeline {
                 geometry.num_frames
             )));
         }
+        let (mut writer, split) = drain.finish()?;
         timings.video_decode_s = timer.elapsed().as_secs_f64();
+        timings.video_vae_s = split.vae_s;
+        timings.video_rgb_s = split.rgb_s;
+        timings.video_push_s = split.push_s;
+        timings.video_wait_s = split.wait_s;
+        crate::wan::log::info(format_args!(
+            "h3 video decode {:.2}s: vae {:.2}s, rgb+copy {:.2}s, writer push {:.2}s, decode waited {:.2}s",
+            timings.video_decode_s, split.vae_s, split.rgb_s, split.push_s, split.wait_s
+        ));
         drop(transient_video);
         drop(transient_booking);
         crate::wan::device::trim_pool().map_err(|e| msg(e.to_string()))?;

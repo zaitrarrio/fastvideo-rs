@@ -18,11 +18,20 @@
 //!   `_stitch_tiles`), not the neighbour's already-blended result.
 //!
 //! Every tile of a chunk has the same shape and therefore the same rotary
-//! tables, so tiles are batched through the ViT. Frames are handed to a sink
-//! chunk by chunk (17 frames at a time), which keeps the working set at about
-//! one chunk regardless of clip length.
+//! tables, so tiles are batched through the ViT (evenly: 28 tiles as 4 x 7).
+//! Frames are handed to a sink chunk by chunk (17 frames at a time), which
+//! keeps the working set at about one chunk regardless of clip length.
+//!
+//! With bf16 GEMMs (the default on tensor-core GPUs) the ViT keeps its
+//! activations in bf16 between GEMMs, which is where the unfused path rounds
+//! them anyway, and one kernel carries each GEMM's output to the next GEMM's
+//! input ([`H3VideoDecoder::vit_fused`]); the residual stream stays f32.
+//! FastVideo runs this decoder under fp16 autocast (fp16 GEMM operands and
+//! outputs, fp32 residual), so neither side is the fp32 checkpoint's math.
 //!
 //! See docs/ports/h3.md, section c.
+
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use fastvideo_models::h3::config::{H3VideoVaeConfig, H3_PIXEL_MEAN, H3_PIXEL_STD};
 
@@ -32,6 +41,70 @@ use crate::wan::weights::{cuda_tensor_shaped, WeightMap};
 
 fn msg(s: impl Into<String>) -> TensorError {
     TensorError::Message(s.into())
+}
+
+/// `FASTVIDEO_H3_VAE_FUSED=0` keeps the ViT on the f32-activation path.
+#[cfg(feature = "cuda")]
+fn fused_enabled() -> bool {
+    static FLAG: crate::wan::envflag::CachedBool = crate::wan::envflag::CachedBool::new();
+    FLAG.get_or_init(|| crate::wan::envflag::bool_flag("FASTVIDEO_H3_VAE_FUSED", true))
+}
+
+/// `FASTVIDEO_H3_VAE_CHECK=1`: see [`H3VideoDecoder::check_paths`].
+fn check_requested() -> bool {
+    static FLAG: crate::wan::envflag::CachedBool = crate::wan::envflag::CachedBool::new();
+    FLAG.get_or_init(|| crate::wan::envflag::bool_flag("FASTVIDEO_H3_VAE_CHECK", false))
+}
+
+/// The check has run (it runs once per process).
+static CHECKED: AtomicBool = AtomicBool::new(false);
+/// The check found the fused ViT disagreeing with the unfused one.
+static FUSED_BROKEN: AtomicBool = AtomicBool::new(false);
+/// Both paths round the same values to bf16 at the same points; what differs
+/// is reduction order, so decoded pixels agree to bf16 noise, far below this.
+const FUSED_CHECK_REL_L2: f64 = 1e-2;
+
+/// Per-op wall time of one ViT forward, each op synchronized: only for
+/// [`H3VideoDecoder::check_paths`]; off, it is a plain call.
+#[derive(Default)]
+struct Prof {
+    on: bool,
+    acc: Vec<(&'static str, f64)>,
+}
+
+impl Prof {
+    fn on() -> Self {
+        Self {
+            on: true,
+            acc: Vec::new(),
+        }
+    }
+
+    fn time<T>(&mut self, name: &'static str, f: impl FnOnce() -> Result<T>) -> Result<T> {
+        if !self.on {
+            return f();
+        }
+        let sync = || crate::wan::device::synchronize().map_err(|e| msg(e.to_string()));
+        sync()?;
+        let timer = std::time::Instant::now();
+        let out = f()?;
+        sync()?;
+        let secs = timer.elapsed().as_secs_f64();
+        match self.acc.iter_mut().find(|(n, _)| *n == name) {
+            Some((_, s)) => *s += secs,
+            None => self.acc.push((name, secs)),
+        }
+        Ok(out)
+    }
+
+    fn summary(&self) -> String {
+        let mut acc = self.acc.clone();
+        acc.sort_by(|a, b| b.1.total_cmp(&a.1));
+        acc.iter()
+            .map(|(n, s)| format!("{n} {s:.3}"))
+            .collect::<Vec<_>>()
+            .join(", ")
+    }
 }
 
 fn pinned(data: Vec<f32>, shape: Vec<usize>) -> Result<CudaTensor> {
@@ -52,9 +125,8 @@ struct Block {
     /// LayerScale on the attention and FFN branches, `[dim]`.
     scale1: CudaTensor,
     scale2: CudaTensor,
-    to_q: Linear,
-    to_k: Linear,
-    to_v: Linear,
+    /// `to_q`, `to_k`, `to_v` stacked in that order: one GEMM, `[3 dim, dim]`.
+    qkv: Linear,
     to_out: Linear,
     ff_in: Linear,
     ff_out: Linear,
@@ -68,14 +140,17 @@ impl Block {
             Linear::load(map, &format!("{prefix}.{name}"), i, o, true)
         };
         let vec = |name: &str| pinned_weight(map, &format!("{prefix}.{name}"), &[dim]);
+        let qkv: Vec<String> = ["to_q", "to_k", "to_v"]
+            .iter()
+            .map(|p| format!("{prefix}.attn.{p}"))
+            .collect();
+        let qkv: Vec<&str> = qkv.iter().map(String::as_str).collect();
         Ok(Self {
             norm1: vec("norm1.weight")?,
             norm2: vec("norm2.weight")?,
             scale1: vec("scale1")?,
             scale2: vec("scale2")?,
-            to_q: lin("attn.to_q", dim, dim)?,
-            to_k: lin("attn.to_k", dim, dim)?,
-            to_v: lin("attn.to_v", dim, dim)?,
+            qkv: Linear::load_fused(map, &qkv, dim, dim, true)?,
             to_out: lin("attn.to_out.0", dim, dim)?,
             // SwiGLU: one projection to (value, gate), value half first.
             ff_in: lin("ff.net.0.proj", dim, 2 * hidden)?,
@@ -149,6 +224,13 @@ fn blend(a: &CudaTensor, b: &CudaTensor, extent: usize, dim: usize) -> Result<Cu
         &[&blended, &b.narrow(dim, extent, b.shape[dim] - extent)?],
         dim,
     )
+}
+
+/// Tiles per ViT forward: as few forwards as `max` allows, split evenly (28
+/// tiles at a cap of 8 run as 4 x 7, not 8 + 8 + 8 + 4).
+fn balanced_batch(total: usize, max: usize) -> usize {
+    let max = max.max(1);
+    total.div_ceil(total.div_ceil(max).max(1)).max(1)
 }
 
 /// Tile starts, tile length and overlaps along one axis, in **latent** units.
@@ -246,6 +328,9 @@ impl H3VideoDecoder {
     /// The ViT on `tiles`: `[B, t*h*w, C]` channel-last **denormalized**
     /// latents of one `(t, h, w)` geometry, to `B` clips of `[3, 4t, 16h, 16w]`.
     fn decode_tiles(&self, tiles: &CudaTensor, grid: [usize; 3]) -> Result<Vec<CudaTensor>> {
+        if check_requested() && !CHECKED.swap(true, Ordering::Relaxed) {
+            return self.check_paths(tiles, grid);
+        }
         self.decode_tiles_observed(tiles, grid, &mut |_, _| Ok(()))
     }
 
@@ -257,12 +342,64 @@ impl H3VideoDecoder {
         grid: [usize; 3],
         observe: &mut dyn FnMut(usize, &CudaTensor) -> Result<()>,
     ) -> Result<Vec<CudaTensor>> {
+        let fused = self.fused_ready(tiles.shape.first().copied().unwrap_or(0), grid);
+        self.decode_tiles_with(tiles, grid, observe, fused, &mut Prof::default())
+    }
+
+    /// Whether the ViT can run with bf16 activations between its GEMMs
+    /// ([`Self::vit_fused`]): a device with the fast bf16 path, every block
+    /// linear a plain device bf16 weight, the fused SDPA kernel for this
+    /// shape, and `FASTVIDEO_H3_VAE_FUSED` not set to 0.
+    fn fused_ready(&self, batch: usize, grid: [usize; 3]) -> bool {
+        #[cfg(feature = "cuda")]
+        {
+            let cfg = &self.cfg;
+            let (heads, head_dim) = (
+                cfg.decoder_num_attention_heads,
+                cfg.decoder_attention_head_dim,
+            );
+            let tokens = grid.iter().product::<usize>() + self.suffix.shape[1];
+            let Some(dev) = crate::wan::device::global_device() else {
+                return false;
+            };
+            !FUSED_BROKEN.load(Ordering::Relaxed)
+                && fused_enabled()
+                && crate::wan::stats::device_expected()
+                && !crate::wan::tensor::bf16_activations()
+                && crate::wan::attn::mma_sdpa_default()
+                && crate::wan::attn::mma_sdpa_supported(
+                    batch,
+                    heads,
+                    tokens,
+                    tokens,
+                    head_dim,
+                    dev.sm_major,
+                )
+                && head_dim % 32 == 0
+                && head_dim <= 128
+                && cfg.decoder_rotary_dim().is_multiple_of(2)
+                && self.blocks.iter().all(|b| {
+                    [&b.qkv, &b.to_out, &b.ff_in, &b.ff_out]
+                        .iter()
+                        .all(|l| l.has_bf16_gemm() && l.bias.is_some())
+                })
+        }
+        #[cfg(not(feature = "cuda"))]
+        {
+            let _ = (batch, grid);
+            false
+        }
+    }
+
+    fn decode_tiles_with(
+        &self,
+        tiles: &CudaTensor,
+        grid: [usize; 3],
+        observe: &mut dyn FnMut(usize, &CudaTensor) -> Result<()>,
+        fused: bool,
+        prof: &mut Prof,
+    ) -> Result<Vec<CudaTensor>> {
         let cfg = &self.cfg;
-        let (dim, heads, head_dim) = (
-            cfg.decoder_dim(),
-            cfg.decoder_num_attention_heads,
-            cfg.decoder_attention_head_dim,
-        );
         let eps = cfg.decoder_norm_eps as f32;
         let [batch, patches, _] = tiles.shape[..] else {
             return Err(msg(format!(
@@ -282,11 +419,70 @@ impl H3VideoDecoder {
             pinned(sin, vec![tokens, rotary])?,
         );
 
-        let x = self.proj_in.forward(&self.post_quant.forward(tiles)?)?;
-        let suffixes: Vec<&CudaTensor> = (0..batch).map(|_| &self.suffix).collect();
-        let suffix = CudaTensor::cat(&suffixes, 0)?;
-        let mut x = CudaTensor::cat(&[&x, &suffix], 1)?;
+        let x = prof.time("vae_proj_in", || {
+            let x = self.proj_in.forward(&self.post_quant.forward(tiles)?)?;
+            let suffixes: Vec<&CudaTensor> = (0..batch).map(|_| &self.suffix).collect();
+            let suffix = CudaTensor::cat(&suffixes, 0)?;
+            CudaTensor::cat(&[&x, &suffix], 1)
+        })?;
+        let x = if fused {
+            #[cfg(feature = "cuda")]
+            {
+                self.vit_fused(x, batch, tokens, (&cos, &sin), observe, prof)?
+            }
+            #[cfg(not(feature = "cuda"))]
+            {
+                return Err(msg("h3 vae: the fused ViT needs the cuda feature"));
+            }
+        } else {
+            self.vit_unfused(x, batch, tokens, (&cos, &sin), observe, prof)?
+        };
+        let x = prof.time("vae_proj_out", || {
+            let x = x.layer_norm(eps, Some(&self.norm_out_weight), Some(&self.norm_out_bias))?;
+            self.proj_out.forward(&x.narrow(1, 0, patches)?)
+        })?;
 
+        // [t, h, w, C, pt, ph, pw] -> [C, t*pt, h*ph, w*pw]. The device permute
+        // stops at rank 6, so move (C, pt) first with the pixel patch folded,
+        // then interleave the spatial axes.
+        let (pt, ps, oc) = (
+            cfg.temporal_compression_ratio(),
+            cfg.spatial_compression_ratio(),
+            cfg.out_channels,
+        );
+        let [t, h, w] = grid;
+        prof.time("vae_unpatchify", || {
+            (0..batch)
+                .map(|b| {
+                    x.narrow(0, b, 1)?
+                        .reshape(vec![t, h, w, oc, pt, ps * ps])?
+                        .permute(&[3, 0, 4, 1, 2, 5])?
+                        .reshape(vec![oc * t * pt, h, w, ps, ps])?
+                        .permute(&[0, 1, 3, 2, 4])?
+                        .reshape(vec![oc, t * pt, h * ps, w * ps])
+                })
+                .collect()
+        })
+    }
+
+    /// The 36 blocks with f32 activations around every op: the reference
+    /// formulation, and the path for CPU runs and exact (non-bf16) modes.
+    fn vit_unfused(
+        &self,
+        mut x: CudaTensor,
+        batch: usize,
+        tokens: usize,
+        (cos, sin): (&CudaTensor, &CudaTensor),
+        observe: &mut dyn FnMut(usize, &CudaTensor) -> Result<()>,
+        prof: &mut Prof,
+    ) -> Result<CudaTensor> {
+        let cfg = &self.cfg;
+        let (dim, heads, head_dim) = (
+            cfg.decoder_dim(),
+            cfg.decoder_num_attention_heads,
+            cfg.decoder_attention_head_dim,
+        );
+        let eps = cfg.decoder_norm_eps as f32;
         let split = |t: CudaTensor, norm: bool| -> Result<CudaTensor> {
             let t = t.reshape(vec![batch, tokens, heads, head_dim])?;
             // Per-head RMSNorm without a learned weight, then [B, H, S, D].
@@ -298,50 +494,220 @@ impl H3VideoDecoder {
             t.transpose(1, 2)
         };
         for (index, block) in self.blocks.iter().enumerate() {
-            let n = x.rms_norm(&block.norm1, eps)?;
-            let q = split(block.to_q.forward(&n)?, true)?.rope_half(&cos, &sin)?;
-            let k = split(block.to_k.forward(&n)?, true)?.rope_half(&cos, &sin)?;
-            let v = split(block.to_v.forward(&n)?, false)?;
-            let a = scaled_dot_product_attention(&q, &k, &v, None)?;
-            let a = block
-                .to_out
-                .forward(&a.transpose(1, 2)?.reshape(vec![batch, tokens, dim])?)?;
-            x = x.add(&a.mul(&block.scale1)?)?;
+            let n = prof.time("vae_norm", || x.rms_norm(&block.norm1, eps))?;
+            let qkv = prof.time("vae_qkv_linear", || block.qkv.forward(&n))?;
+            let (q, k, v) = prof.time("vae_qkv_heads", || {
+                Ok((
+                    split(qkv.narrow(2, 0, dim)?, true)?.rope_half(cos, sin)?,
+                    split(qkv.narrow(2, dim, dim)?, true)?.rope_half(cos, sin)?,
+                    split(qkv.narrow(2, 2 * dim, dim)?, false)?,
+                ))
+            })?;
+            drop(qkv);
+            let a = prof.time("vae_sdpa", || {
+                scaled_dot_product_attention(&q, &k, &v, None)
+            })?;
+            let a = prof.time("vae_out_linear", || {
+                block
+                    .to_out
+                    .forward(&a.transpose(1, 2)?.reshape(vec![batch, tokens, dim])?)
+            })?;
+            x = prof.time("vae_residual", || x.add(&a.mul(&block.scale1)?))?;
 
-            let n = x.rms_norm(&block.norm2, eps)?;
-            let h = block.ff_in.forward(&n)?;
-            let hidden = h.shape[2] / 2;
-            let value = h.narrow(2, 0, hidden)?;
-            let gate = h.narrow(2, hidden, hidden)?;
+            let n = prof.time("vae_norm", || x.rms_norm(&block.norm2, eps))?;
+            let h = prof.time("vae_ff_in_linear", || block.ff_in.forward(&n))?;
+            let act = prof.time("vae_swiglu", || {
+                let hidden = h.shape[2] / 2;
+                let value = h.narrow(2, 0, hidden)?;
+                let gate = h.narrow(2, hidden, hidden)?;
+                value.mul(&gate.silu())
+            })?;
             drop(h);
-            let f = block.ff_out.forward(&value.mul(&gate.silu())?)?;
-            x = x.add(&f.mul(&block.scale2)?)?;
+            let f = prof.time("vae_ff_out_linear", || block.ff_out.forward(&act))?;
+            x = prof.time("vae_residual", || x.add(&f.mul(&block.scale2)?))?;
             observe(index, &x)?;
         }
-        let x = x.layer_norm(eps, Some(&self.norm_out_weight), Some(&self.norm_out_bias))?;
-        let x = self.proj_out.forward(&x.narrow(1, 0, patches)?)?;
-
-        // [t, h, w, C, pt, ph, pw] -> [C, t*pt, h*ph, w*pw]. The device permute
-        // stops at rank 6, so move (C, pt) first with the pixel patch folded,
-        // then interleave the spatial axes.
-        let (pt, ps, oc) = (
-            cfg.temporal_compression_ratio(),
-            cfg.spatial_compression_ratio(),
-            cfg.out_channels,
-        );
-        let [t, h, w] = grid;
-        (0..batch)
-            .map(|b| {
-                x.narrow(0, b, 1)?
-                    .reshape(vec![t, h, w, oc, pt, ps * ps])?
-                    .permute(&[3, 0, 4, 1, 2, 5])?
-                    .reshape(vec![oc * t * pt, h, w, ps, ps])?
-                    .permute(&[0, 1, 3, 2, 4])?
-                    .reshape(vec![oc, t * pt, h * ps, w * ps])
-            })
-            .collect()
+        Ok(x)
     }
 
+    /// The blocks with bf16 activations between the GEMMs, as the unfused
+    /// path already feeds them (every bf16 linear rounds its input to bf16):
+    /// each GEMM writes bf16, and one kernel takes it from there to the next
+    /// GEMM's bf16 input (bias, residual with LayerScale, RMSNorm; per-head
+    /// QK-norm, RoPE and the BHSD layout; SwiGLU). The residual stream stays
+    /// f32. Same arithmetic as [`Self::vit_unfused`] up to reduction order.
+    #[cfg(feature = "cuda")]
+    fn vit_fused(
+        &self,
+        x: CudaTensor,
+        batch: usize,
+        tokens: usize,
+        (cos, sin): (&CudaTensor, &CudaTensor),
+        observe: &mut dyn FnMut(usize, &CudaTensor) -> Result<()>,
+        prof: &mut Prof,
+    ) -> Result<CudaTensor> {
+        use crate::wan::ops;
+        let cfg = &self.cfg;
+        let (dim, heads, head_dim) = (
+            cfg.decoder_dim(),
+            cfg.decoder_num_attention_heads,
+            cfg.decoder_attention_head_dim,
+        );
+        let hidden = dim * cfg.decoder_ffn_mult;
+        let rotary = cfg.decoder_rotary_dim();
+        let eps = cfg.decoder_norm_eps as f32;
+        let rows = batch * tokens;
+        fn dev(t: &CudaTensor) -> Result<crate::wan::tensor::DevRef<'_>> {
+            t.dev()?
+                .ok_or_else(|| msg("h3 vae: tensor not on the device"))
+        }
+        fn bias(l: &Linear) -> Result<crate::wan::tensor::DevRef<'_>> {
+            dev(l
+                .bias
+                .as_ref()
+                .ok_or_else(|| msg("h3 vae: linear without a bias"))?)
+        }
+        let gemm = |l: &Linear, x16: &cudarc::driver::CudaSlice<half::bf16>| {
+            l.gemm_bf16(x16, rows)?
+                .ok_or_else(|| msg("h3 vae: linear has no bf16 GEMM"))
+        };
+        let (cos, sin) = (dev(cos)?, dev(sin)?);
+
+        let mut x = x;
+        let mut n16 = prof
+            .time("vae_residual_norm", || {
+                ops::h3v_residual_norm_bf16_device(
+                    &*dev(&x)?,
+                    dim,
+                    None,
+                    Some(&*dev(&self.blocks[0].norm1)?),
+                    eps,
+                )
+            })?
+            .1
+            .ok_or_else(|| msg("h3 vae: no normed rows"))?;
+        for (index, block) in self.blocks.iter().enumerate() {
+            let qkv = prof.time("vae_qkv_gemm", || gemm(&block.qkv, &n16))?;
+            let [q, k, v] = prof.time("vae_qkv_heads", || {
+                ops::h3v_qkv_heads_bf16_device(
+                    &qkv,
+                    &*bias(&block.qkv)?,
+                    &cos,
+                    &sin,
+                    batch,
+                    tokens,
+                    heads,
+                    head_dim,
+                    rotary,
+                    eps,
+                )
+            })?;
+            drop(qkv);
+            let bhsd = vec![batch, heads, tokens, head_dim];
+            let [q, k, v] = [q, k, v].map(|t| CudaTensor::from_device_slice_bf16(t, bhsd.clone()));
+            let a = prof.time("vae_sdpa", || {
+                crate::wan::attn::device_mma_sdpa(&q?, &k?, &v?, None, true)?
+                    .ok_or_else(|| msg("h3 vae: fused SDPA refused the shape"))
+            })?;
+            let a = prof.time("vae_merge_heads", || {
+                let a16 = a
+                    .device_slice_bf16()
+                    .ok_or_else(|| msg("h3 vae: SDPA output is not bf16"))?;
+                ops::h3v_merge_heads_bf16_device(a16, batch, heads, tokens, head_dim)
+            })?;
+            let o = prof.time("vae_out_gemm", || gemm(&block.to_out, &a))?;
+            drop(a);
+            let (x1, n2) = prof.time("vae_residual_norm", || {
+                ops::h3v_residual_norm_bf16_device(
+                    &*dev(&x)?,
+                    dim,
+                    Some((&o, &*bias(&block.to_out)?, &*dev(&block.scale1)?)),
+                    Some(&*dev(&block.norm2)?),
+                    eps,
+                )
+            })?;
+            drop(o);
+            let x1 = x1.ok_or_else(|| msg("h3 vae: no residual rows"))?;
+            let n2 = n2.ok_or_else(|| msg("h3 vae: no normed rows"))?;
+            let h = prof.time("vae_ff_in_gemm", || gemm(&block.ff_in, &n2))?;
+            drop(n2);
+            let act = prof.time("vae_swiglu", || {
+                ops::h3v_swiglu_bf16_device(&h, &*bias(&block.ff_in)?, hidden)
+            })?;
+            drop(h);
+            let f = prof.time("vae_ff_out_gemm", || gemm(&block.ff_out, &act))?;
+            drop(act);
+            let next = self.blocks.get(index + 1);
+            let (x2, n1) = prof.time("vae_residual_norm", || {
+                let norm = next.map(|b| dev(&b.norm1)).transpose()?;
+                ops::h3v_residual_norm_bf16_device(
+                    &x1,
+                    dim,
+                    Some((&f, &*bias(&block.ff_out)?, &*dev(&block.scale2)?)),
+                    norm.as_deref(),
+                    eps,
+                )
+            })?;
+            x = CudaTensor::from_device_slice(
+                x2.ok_or_else(|| msg("h3 vae: no residual rows"))?,
+                vec![batch, tokens, dim],
+            )?;
+            observe(index, &x)?;
+            if let Some(n) = n1 {
+                n16 = n;
+            }
+        }
+        Ok(x)
+    }
+
+    /// `FASTVIDEO_H3_VAE_CHECK=1`, once per process on the first tile batch:
+    /// decode it through both ViT paths, each op synchronized and timed, log
+    /// the two breakdowns and the relative L2 between them, and keep the
+    /// fused path only if they agree.
+    fn check_paths(&self, tiles: &CudaTensor, grid: [usize; 3]) -> Result<Vec<CudaTensor>> {
+        let batch = tiles.shape.first().copied().unwrap_or(0);
+        let run = |fused: bool| -> Result<(Vec<CudaTensor>, f64, Prof)> {
+            let mut prof = Prof::on();
+            crate::wan::device::synchronize().map_err(|e| msg(e.to_string()))?;
+            let timer = std::time::Instant::now();
+            let out = self.decode_tiles_with(tiles, grid, &mut |_, _| Ok(()), fused, &mut prof)?;
+            crate::wan::device::synchronize().map_err(|e| msg(e.to_string()))?;
+            Ok((out, timer.elapsed().as_secs_f64(), prof))
+        };
+        if !self.fused_ready(batch, grid) {
+            let (out, secs, prof) = run(false)?;
+            crate::wan::log::info(format_args!(
+                "h3 vae check: fused ViT unavailable; unfused batch of {batch} in {secs:.3}s [{}]",
+                prof.summary()
+            ));
+            return Ok(out);
+        }
+        // Warm the fused path's allocations so neither timing pays first use.
+        drop(run(true)?);
+        let (reference, ref_secs, ref_prof) = run(false)?;
+        let (fused, fused_secs, fused_prof) = run(true)?;
+        let (mut num, mut den) = (0f64, 0f64);
+        for (a, b) in fused.iter().zip(&reference) {
+            for (x, y) in a.host_cow()?.iter().zip(b.host_cow()?.iter()) {
+                num += f64::from(x - y).powi(2);
+                den += f64::from(*y).powi(2);
+            }
+        }
+        let rel_l2 = (num / den.max(f64::MIN_POSITIVE)).sqrt();
+        let agree = rel_l2.is_finite() && rel_l2 < FUSED_CHECK_REL_L2;
+        crate::wan::log::info(format_args!(
+            "h3 vae check: batch {batch} grid {grid:?}: unfused {ref_secs:.3}s [{}]; fused {fused_secs:.3}s [{}]; rel_l2 {rel_l2:.3e} ({})",
+            ref_prof.summary(),
+            fused_prof.summary(),
+            if agree { "fused kept" } else { "FUSED DISAGREES, disabled" }
+        ));
+        if agree {
+            Ok(fused)
+        } else {
+            FUSED_BROKEN.store(true, Ordering::Relaxed);
+            Ok(reference)
+        }
+    }
     fn axis_tiles(&self, latent_len: usize) -> Result<AxisTiles> {
         let ratio = self.cfg.spatial_compression_ratio();
         let (starts, overlaps) = self.cfg.split_tiles(latent_len * ratio);
@@ -376,6 +742,7 @@ impl H3VideoDecoder {
         let mut pending: Vec<CudaTensor> = Vec::new();
         let mut decoded: Vec<CudaTensor> = Vec::with_capacity(ys.starts.len() * xs.starts.len());
         let total = ys.starts.len() * xs.starts.len();
+        let batch = balanced_batch(total, self.tile_batch);
         for &y0 in &ys.starts {
             for &x0 in &xs.starts {
                 pending.push(
@@ -383,7 +750,7 @@ impl H3VideoDecoder {
                         .narrow(2, x0, xs.len)?
                         .reshape(vec![1, t * ys.len * xs.len, c])?,
                 );
-                if pending.len() == self.tile_batch || decoded.len() + pending.len() == total {
+                if pending.len() == batch || decoded.len() + pending.len() == total {
                     let refs: Vec<&CudaTensor> = pending.iter().collect();
                     decoded.extend(self.decode_tiles(&CudaTensor::cat(&refs, 0)?, grid)?);
                     pending.clear();
@@ -793,6 +1160,33 @@ mod tests {
                 "value {i}: {g} vs {w}"
             );
         }
+    }
+
+    /// The 5 s benchmark geometries tile exactly as FastVideo's
+    /// `AutoencoderKLMiniMaxH3._split_tiles` / `_temporal_decode_plan` do:
+    /// 7 chunks of 4 x 7 tiles at 1344x768, of 3 x 4 tiles at 832x480.
+    #[test]
+    fn benchmark_tile_plans_match_the_reference() {
+        let cfg = H3VideoVaeConfig::fasth3_8step();
+        assert_eq!(
+            cfg.split_tiles(1344),
+            (
+                vec![0, 176, 352, 528, 704, 896, 1088],
+                vec![80, 80, 80, 80, 64, 64]
+            )
+        );
+        assert_eq!(
+            cfg.split_tiles(768),
+            (vec![0, 160, 336, 512], vec![96, 80, 80])
+        );
+        assert_eq!(
+            cfg.split_tiles(832),
+            (vec![0, 192, 384, 576], vec![64, 64, 64])
+        );
+        assert_eq!(cfg.split_tiles(480), (vec![0, 112, 224], vec![144, 144]));
+        assert_eq!(cfg.temporal_decode_plan(37), (0, 7, 124));
+        assert_eq!((balanced_batch(28, 8), balanced_batch(12, 8)), (7, 6));
+        assert_eq!((balanced_batch(3, 8), balanced_batch(9, 1)), (3, 1));
     }
 
     #[test]

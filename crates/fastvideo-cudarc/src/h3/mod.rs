@@ -5,6 +5,7 @@
 
 pub mod audio_vae;
 pub mod fused16;
+pub mod drain;
 pub mod lora;
 pub mod media;
 pub mod mlx;

@@ -735,7 +735,8 @@ pub fn index_select_rows_idx_device(
     let n = idx.len() * d;
     let (n_i, d_i) = (n as i64, d as i64);
     let mut out = alloc(n)?;
-    launch!(dev.stream, &dev.kernels.index_select_rows, cfg_n(n); table, idx, &mut out, &n_i, &d_i).map_err(err)?;
+    launch!(dev.stream, &dev.kernels.index_select_rows, cfg_n(n); table, idx, &mut out, &n_i, &d_i)
+        .map_err(err)?;
     Ok(out)
 }
 
@@ -2775,6 +2776,26 @@ pub fn pack_rgb_u8_device(
 ) -> Result<Vec<u8>> {
     let dev = ctx()?;
     let pixels = frames * h * w;
+    let out = pack_rgb_u8_launch_device(x, frames, h, w, a, b)?;
+    let host = dev.stream.memcpy_dtov(&out).map_err(err)?;
+    super::stats::record_d2h(pixels * 3 / 4);
+    Ok(host)
+}
+
+/// [`pack_rgb_u8_device`] without the copy down: the packed bytes stay on the
+/// device (queued on the compute stream) for a caller that moves them off the
+/// decode thread's critical path.
+#[cfg(feature = "cuda")]
+pub fn pack_rgb_u8_launch_device(
+    x: &CudaSlice<f32>,
+    frames: usize,
+    h: usize,
+    w: usize,
+    a: f32,
+    b: f32,
+) -> Result<CudaSlice<u8>> {
+    let dev = ctx()?;
+    let pixels = frames * h * w;
     if x.len() != pixels * 3 {
         return Err(err(format!(
             "pack_rgb_u8: {} elements is not [{frames}, 3, {h}, {w}]",
@@ -2785,9 +2806,7 @@ pub fn pack_rgb_u8_device(
     let (fr, hh, ww) = (frames as i32, h as i32, w as i32);
     launch!(dev.stream, &dev.kernels.pack_rgb_u8, cfg_n(pixels); x, &mut out, &fr, &hh, &ww, &a, &b)
         .map_err(err)?;
-    let host = dev.stream.memcpy_dtov(&out).map_err(err)?;
-    super::stats::record_d2h(pixels * 3 / 4);
-    Ok(host)
+    Ok(out)
 }
 
 // ---- FP8 E4M3 ------------------------------------------------------------
@@ -4169,3 +4188,457 @@ pub fn ltx_rope_rows_device(
     Ok(rows)
 }
 // ==== endregion: ltx2 ====
+
+// ==== region: h3 video vae (ViT decoder glue around bf16 GEMMs) ====
+// Wrappers for the `h3v_*` kernels at the end of kernels.cu; their plain-Rust
+// twins are in [`h3v_host`].
+
+#[cfg(feature = "cuda")]
+fn alloc_bf16(n: usize) -> Result<CudaSlice<half::bf16>> {
+    let dev = ctx()?;
+    unsafe { dev.stream.alloc::<half::bf16>(n.max(1)) }.map_err(err)
+}
+
+/// Grid for the `h3v_*` kernels that cover a row with `grid.x` and stride over
+/// `rows` with `grid.y`.
+#[cfg(feature = "cuda")]
+fn cfg_cols_rows(cols: usize, rows: usize) -> LaunchConfig {
+    LaunchConfig {
+        grid_dim: (
+            cols.div_ceil(256).max(1) as u32,
+            rows.clamp(1, 65_535) as u32,
+            1,
+        ),
+        block_dim: (256, 1, 1),
+        shared_mem_bytes: 0,
+    }
+}
+
+/// The updated f32 rows (with an update) and their bf16 RMSNorm (with a norm).
+#[cfg(feature = "cuda")]
+pub type H3vResidualNorm = (Option<CudaSlice<f32>>, Option<CudaSlice<half::bf16>>);
+
+/// A ViT residual row step on `x` `[rows, width]`: with `update = (upd, bias,
+/// scale)`, `x + (upd + bias) * scale` (returned as the new f32 rows); with
+/// `norm = w`, `bf16(RMSNorm(x') * w)` of the resulting rows.
+#[cfg(feature = "cuda")]
+pub fn h3v_residual_norm_bf16_device(
+    x: &CudaSlice<f32>,
+    width: usize,
+    update: Option<(&CudaSlice<half::bf16>, &CudaSlice<f32>, &CudaSlice<f32>)>,
+    norm: Option<&CudaSlice<f32>>,
+    eps: f32,
+) -> Result<H3vResidualNorm> {
+    check(
+        "h3v_residual_norm",
+        width > 0 && x.len().is_multiple_of(width),
+    )?;
+    if let Some((upd, bias, scale)) = update {
+        check(
+            "h3v_residual_norm update",
+            upd.len() == x.len() && bias.len() == width && scale.len() == width,
+        )?;
+    }
+    if let Some(w) = norm {
+        check("h3v_residual_norm weight", w.len() == width)?;
+    }
+    let dev = ctx()?;
+    let rows = x.len() / width;
+    let f32_dummy = alloc(1)?;
+    let bf16_dummy = alloc_bf16(1)?;
+    let (upd, bias, scale) = match update {
+        Some(u) => u,
+        None => (&bf16_dummy, &f32_dummy, &f32_dummy),
+    };
+    let w = norm.unwrap_or(&f32_dummy);
+    let mut x_out = if update.is_some() {
+        alloc(x.len())?
+    } else {
+        alloc(1)?
+    };
+    let mut n_out = if norm.is_some() {
+        alloc_bf16(x.len())?
+    } else {
+        alloc_bf16(1)?
+    };
+    let (rows_i, width_i) = (rows as i32, width as i32);
+    let (has_upd, has_norm) = (i32::from(update.is_some()), i32::from(norm.is_some()));
+    launch!(dev.stream, &dev.kernels.h3v_residual_norm_bf16, cfg_rows(rows);
+        x, upd, bias, scale, w, &mut x_out, &mut n_out, &rows_i, &width_i, &eps, &has_upd, &has_norm)
+    .map_err(err)?;
+    Ok((
+        update.is_some().then_some(x_out),
+        norm.is_some().then_some(n_out),
+    ))
+}
+
+/// Fused-QKV GEMM output `[batch*seq, 3*heads*d]` (bf16, bias not yet added)
+/// to BHSD bf16 `[q, k, v]`: q and k per-head RMSNorm (no weight) then
+/// rotate_half RoPE on `[0, r)` with `cos`/`sin` `[seq, r]`.
+#[cfg(feature = "cuda")]
+#[allow(clippy::too_many_arguments)]
+pub fn h3v_qkv_heads_bf16_device(
+    qkv: &CudaSlice<half::bf16>,
+    bias: &CudaSlice<f32>,
+    cos: &CudaSlice<f32>,
+    sin: &CudaSlice<f32>,
+    batch: usize,
+    seq: usize,
+    heads: usize,
+    d: usize,
+    r: usize,
+    eps: f32,
+) -> Result<[CudaSlice<half::bf16>; 3]> {
+    let rows = batch * seq;
+    let inner = heads * d;
+    check(
+        "h3v_qkv_heads",
+        d > 0
+            && d.is_multiple_of(32)
+            && d <= 128
+            && r <= d
+            && r.is_multiple_of(2)
+            && qkv.len() == rows * 3 * inner
+            && bias.len() == 3 * inner
+            && cos.len() == seq * r
+            && sin.len() == seq * r
+            && rows <= i32::MAX as usize,
+    )?;
+    let dev = ctx()?;
+    let [mut q, mut k, mut v] = [
+        alloc_bf16(rows * inner)?,
+        alloc_bf16(rows * inner)?,
+        alloc_bf16(rows * inner)?,
+    ];
+    let items = rows * heads * 3;
+    let cfg = LaunchConfig {
+        grid_dim: (items.div_ceil(8).max(1) as u32, 1, 1),
+        block_dim: (256, 1, 1),
+        shared_mem_bytes: 0,
+    };
+    let a = [rows, seq, heads, d, r].map(|v| v as i32);
+    launch!(dev.stream, &dev.kernels.h3v_qkv_heads_bf16, cfg;
+        qkv, bias, cos, sin, &mut q, &mut k, &mut v, &a[0], &a[1], &a[2], &a[3], &a[4], &eps)
+    .map_err(err)?;
+    Ok([q, k, v])
+}
+
+/// BHSD bf16 `[batch, heads, seq, d]` → `[batch, seq, heads*d]` bf16.
+#[cfg(feature = "cuda")]
+pub fn h3v_merge_heads_bf16_device(
+    src: &CudaSlice<half::bf16>,
+    batch: usize,
+    heads: usize,
+    seq: usize,
+    d: usize,
+) -> Result<CudaSlice<half::bf16>> {
+    let rows = batch * seq;
+    check(
+        "h3v_merge_heads",
+        src.len() == rows * heads * d && rows <= i32::MAX as usize,
+    )?;
+    let dev = ctx()?;
+    let mut out = alloc_bf16(src.len())?;
+    let a = [rows, seq, heads, d].map(|v| v as i32);
+    launch!(dev.stream, &dev.kernels.h3v_merge_heads_bf16, cfg_cols_rows(heads * d, rows);
+        src, &mut out, &a[0], &a[1], &a[2], &a[3])
+    .map_err(err)?;
+    Ok(out)
+}
+
+/// Value-first SwiGLU on a bf16 GEMM output `[rows, 2*half]` plus its bias
+/// `[2*half]`: bf16 `[rows, half]`.
+#[cfg(feature = "cuda")]
+pub fn h3v_swiglu_bf16_device(
+    x: &CudaSlice<half::bf16>,
+    bias: &CudaSlice<f32>,
+    half: usize,
+) -> Result<CudaSlice<half::bf16>> {
+    check(
+        "h3v_swiglu",
+        half > 0 && x.len().is_multiple_of(2 * half) && bias.len() == 2 * half,
+    )?;
+    let rows = x.len() / (2 * half);
+    check("h3v_swiglu rows", rows <= i32::MAX as usize)?;
+    let dev = ctx()?;
+    let mut out = alloc_bf16(rows * half)?;
+    let (rows_i, half_i) = (rows as i32, half as i32);
+    launch!(dev.stream, &dev.kernels.h3v_swiglu_bf16, cfg_cols_rows(half, rows);
+        x, bias, &mut out, &rows_i, &half_i)
+    .map_err(err)?;
+    Ok(out)
+}
+
+/// Plain-Rust twins of the `h3v_*` kernels (what `fv-gpucheck kernels`
+/// compares them with). bf16 values travel as [`half::bf16`].
+pub mod h3v_host {
+    use half::bf16;
+
+    /// See [`super::h3v_residual_norm_bf16_device`].
+    pub fn residual_norm(
+        x: &[f32],
+        width: usize,
+        update: Option<(&[bf16], &[f32], &[f32])>,
+        norm: Option<&[f32]>,
+        eps: f32,
+    ) -> (Vec<f32>, Option<Vec<bf16>>) {
+        let x: Vec<f32> = match update {
+            Some((upd, bias, scale)) => x
+                .iter()
+                .enumerate()
+                .map(|(i, &v)| {
+                    let j = i % width;
+                    v + (upd[i].to_f32() + bias[j]) * scale[j]
+                })
+                .collect(),
+            None => x.to_vec(),
+        };
+        let normed = norm.map(|w| {
+            let mut out = Vec::with_capacity(x.len());
+            for row in x.chunks(width) {
+                let ms = row.iter().map(|v| v * v).sum::<f32>() / width as f32;
+                let inv = 1.0 / (ms + eps).sqrt();
+                out.extend(
+                    row.iter()
+                        .zip(w)
+                        .map(|(&v, &wj)| bf16::from_f32(v * inv * wj)),
+                );
+            }
+            out
+        });
+        (x, normed)
+    }
+
+    /// See [`super::h3v_qkv_heads_bf16_device`]; returns `[q, k, v]`, BHSD.
+    #[allow(clippy::too_many_arguments)]
+    pub fn qkv_heads(
+        qkv: &[bf16],
+        bias: &[f32],
+        cos: &[f32],
+        sin: &[f32],
+        batch: usize,
+        seq: usize,
+        heads: usize,
+        d: usize,
+        r: usize,
+        eps: f32,
+    ) -> [Vec<bf16>; 3] {
+        let inner = heads * d;
+        let mut out: [Vec<bf16>; 3] =
+            std::array::from_fn(|_| vec![bf16::ZERO; batch * seq * inner]);
+        let half = r / 2;
+        for (which, dst) in out.iter_mut().enumerate() {
+            for b in 0..batch {
+                for s in 0..seq {
+                    let row = b * seq + s;
+                    for h in 0..heads {
+                        let col0 = which * inner + h * d;
+                        let vals: Vec<f32> = (0..d)
+                            .map(|c| qkv[row * 3 * inner + col0 + c].to_f32() + bias[col0 + c])
+                            .collect();
+                        let o = ((b * heads + h) * seq + s) * d;
+                        if which == 2 {
+                            for c in 0..d {
+                                dst[o + c] = bf16::from_f32(vals[c]);
+                            }
+                            continue;
+                        }
+                        let ms = vals.iter().map(|v| v * v).sum::<f32>() / d as f32;
+                        let inv = 1.0 / (ms + eps).sqrt();
+                        let n: Vec<f32> = vals.iter().map(|v| v * inv).collect();
+                        for c in 0..d {
+                            let y = if c < r {
+                                let other = if c < half { -n[c + half] } else { n[c - half] };
+                                n[c] * cos[s * r + c] + other * sin[s * r + c]
+                            } else {
+                                n[c]
+                            };
+                            dst[o + c] = bf16::from_f32(y);
+                        }
+                    }
+                }
+            }
+        }
+        out
+    }
+
+    /// See [`super::h3v_merge_heads_bf16_device`].
+    pub fn merge_heads(
+        src: &[bf16],
+        batch: usize,
+        heads: usize,
+        seq: usize,
+        d: usize,
+    ) -> Vec<bf16> {
+        let mut out = vec![bf16::ZERO; src.len()];
+        for b in 0..batch {
+            for s in 0..seq {
+                for h in 0..heads {
+                    for p in 0..d {
+                        out[((b * seq + s) * heads + h) * d + p] =
+                            src[((b * heads + h) * seq + s) * d + p];
+                    }
+                }
+            }
+        }
+        out
+    }
+
+    /// See [`super::h3v_swiglu_bf16_device`].
+    pub fn swiglu(x: &[bf16], bias: &[f32], half: usize) -> Vec<bf16> {
+        x.chunks(2 * half)
+            .flat_map(|row| {
+                (0..half).map(move |c| {
+                    let v = row[c].to_f32() + bias[c];
+                    let g = row[half + c].to_f32() + bias[half + c];
+                    bf16::from_f32(v * (g / (1.0 + (-g).exp())))
+                })
+            })
+            .collect()
+    }
+}
+
+#[cfg(test)]
+mod h3v_tests {
+    use super::h3v_host;
+    use crate::wan::tensor::CudaTensor;
+    use half::bf16;
+
+    fn seeded(n: usize, k: f32) -> Vec<f32> {
+        (0..n).map(|i| (i as f32 * k).sin() * 1.3).collect()
+    }
+
+    fn bf16_round(v: &[f32]) -> Vec<f32> {
+        v.iter().map(|&x| bf16::from_f32(x).to_f32()).collect()
+    }
+
+    fn close(got: &[f32], want: &[f32], what: &str) {
+        assert_eq!(got.len(), want.len(), "{what}");
+        for (i, (g, w)) in got.iter().zip(want).enumerate() {
+            // One bf16 ulp: reduction order may flip a rounding.
+            assert!(
+                (g - w).abs() <= 1e-2 * w.abs().max(1e-2),
+                "{what}[{i}]: {g} vs {w}"
+            );
+        }
+    }
+
+    /// The twins compute what the unfused tensor ops of the H3 ViT compute
+    /// (bias, per-head RMSNorm, rope_half, BHSD, SwiGLU, residual + RMSNorm),
+    /// rounded to bf16 where the next GEMM would round it.
+    #[test]
+    fn host_twins_match_the_unfused_ops() {
+        let (batch, seq, heads, d, r) = (2usize, 5usize, 2usize, 32usize, 12usize);
+        let (rows, inner) = (batch * seq, heads * d);
+        let qkv: Vec<bf16> = seeded(rows * 3 * inner, 0.37)
+            .iter()
+            .map(|&x| bf16::from_f32(x))
+            .collect();
+        let bias = seeded(3 * inner, 0.11);
+        let (cos, sin) = (seeded(seq * r, 0.23), seeded(seq * r, 0.29));
+        let got = h3v_host::qkv_heads(&qkv, &bias, &cos, &sin, batch, seq, heads, d, r, 1e-5);
+        let packed = CudaTensor::from_vec(
+            qkv.iter()
+                .enumerate()
+                .map(|(i, v)| v.to_f32() + bias[i % (3 * inner)])
+                .collect(),
+            vec![batch, seq, 3 * inner],
+        )
+        .unwrap();
+        let (ct, st) = (
+            CudaTensor::from_vec(cos, vec![seq, r]).unwrap(),
+            CudaTensor::from_vec(sin, vec![seq, r]).unwrap(),
+        );
+        let unit = CudaTensor::from_vec(vec![1.0; d], vec![d]).unwrap();
+        for (which, want) in got.iter().enumerate() {
+            let t = packed
+                .narrow(2, which * inner, inner)
+                .unwrap()
+                .reshape(vec![batch, seq, heads, d])
+                .unwrap();
+            let t = if which < 2 {
+                t.rms_norm(&unit, 1e-5)
+                    .unwrap()
+                    .transpose(1, 2)
+                    .unwrap()
+                    .rope_half(&ct, &st)
+                    .unwrap()
+            } else {
+                t.transpose(1, 2).unwrap()
+            };
+            let want_f: Vec<f32> = want.iter().map(|v| v.to_f32()).collect();
+            close(
+                &want_f,
+                &bf16_round(&t.host_cow().unwrap()),
+                &format!("qkv {which}"),
+            );
+        }
+
+        let half = 7usize;
+        let ff: Vec<bf16> = seeded(rows * 2 * half, 0.53)
+            .iter()
+            .map(|&x| bf16::from_f32(x))
+            .collect();
+        let ff_bias = seeded(2 * half, 0.17);
+        let h = CudaTensor::from_vec(
+            ff.iter()
+                .enumerate()
+                .map(|(i, v)| v.to_f32() + ff_bias[i % (2 * half)])
+                .collect(),
+            vec![rows, 2 * half],
+        )
+        .unwrap();
+        let want = h
+            .narrow(1, 0, half)
+            .unwrap()
+            .mul(&h.narrow(1, half, half).unwrap().silu())
+            .unwrap();
+        let got: Vec<f32> = h3v_host::swiglu(&ff, &ff_bias, half)
+            .iter()
+            .map(|v| v.to_f32())
+            .collect();
+        close(&got, &bf16_round(&want.host_cow().unwrap()), "swiglu");
+
+        let width = 16usize;
+        let x = seeded(rows * width, 0.07);
+        let upd: Vec<bf16> = seeded(rows * width, 0.41)
+            .iter()
+            .map(|&x| bf16::from_f32(x))
+            .collect();
+        let (b, s, w) = (seeded(width, 0.3), seeded(width, 0.5), seeded(width, 0.7));
+        let (got_x, got_n) =
+            h3v_host::residual_norm(&x, width, Some((&upd, &b, &s)), Some(&w), 1e-5);
+        let xt = CudaTensor::from_vec(x, vec![rows, width]).unwrap();
+        let a = CudaTensor::from_vec(
+            upd.iter()
+                .enumerate()
+                .map(|(i, v)| v.to_f32() + b[i % width])
+                .collect(),
+            vec![rows, width],
+        )
+        .unwrap();
+        let st = CudaTensor::from_vec(s, vec![width]).unwrap();
+        let want_x = xt.add(&a.mul(&st).unwrap()).unwrap();
+        close(&got_x, &want_x.host_cow().unwrap(), "residual");
+        let wt = CudaTensor::from_vec(w, vec![width]).unwrap();
+        let want_n = want_x.rms_norm(&wt, 1e-5).unwrap();
+        let got_n: Vec<f32> = got_n.unwrap().iter().map(|v| v.to_f32()).collect();
+        close(&got_n, &bf16_round(&want_n.host_cow().unwrap()), "norm");
+
+        let bhsd: Vec<bf16> = seeded(rows * inner, 0.19)
+            .iter()
+            .map(|&x| bf16::from_f32(x))
+            .collect();
+        let merged = h3v_host::merge_heads(&bhsd, batch, heads, seq, d);
+        let t = CudaTensor::from_vec(
+            bhsd.iter().map(|v| v.to_f32()).collect(),
+            vec![batch, heads, seq, d],
+        )
+        .unwrap()
+        .transpose(1, 2)
+        .unwrap();
+        let merged: Vec<f32> = merged.iter().map(|v| v.to_f32()).collect();
+        assert_eq!(merged, t.host_cow().unwrap().into_owned());
+    }
+}
+// ==== endregion: h3 video vae ====
