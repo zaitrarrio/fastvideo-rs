@@ -109,6 +109,8 @@ kernel_fns!(
     temporal_unfold,
     index_select_rows,
     flash_attn_f32,
+    flash_mma_fwd_d64,
+    flash_mma_fwd_d128,
     vsa_tile_mean,
     vsa_topk,
     vsa_gather_kv,

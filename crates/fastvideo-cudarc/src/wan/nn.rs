@@ -1131,8 +1131,10 @@ fn sp_world() -> usize {
     *SP_WORLD_CACHE.get_or_init(|| super::envflag::usize_flag("FASTVIDEO_SP_WORLD", 1).max(1))
 }
 
-/// `FASTVIDEO_SDPA`: `dense` (default: cuBLAS QKᵀ + softmax + PV, query-chunked
-/// to bound memory), `flash` (tiled NVRTC kernel), `host` (CPU runs only).
+/// `FASTVIDEO_SDPA`: `dense` (default: the fused tensor-core kernel on bf16-GEMM
+/// sm80+ contexts for d=64/128, else cuBLAS QKᵀ + softmax + PV, query-chunked
+/// to bound memory), `cublas` (always the cuBLAS path), `flash` (tiled f32
+/// kernel), `host` (CPU runs only).
 pub fn sdpa_backend() -> String {
     SDPA_BACKEND_CACHE.get_or_init(|| super::envflag::string_flag("FASTVIDEO_SDPA", "dense"))
 }
@@ -1247,6 +1249,12 @@ pub fn scaled_dot_product_attention_masked(
             }
             if sdpa_backend() == "flash" {
                 if let Some(out) = super::attn::device_flash_sdpa(q, k, v, scale)? {
+                    return Ok(out);
+                }
+            }
+            if sdpa_backend() != "cublas" && super::attn::mma_sdpa_default() {
+                let out_bf16 = super::tensor::bf16_activations();
+                if let Some(out) = super::attn::device_mma_sdpa(q, k, v, scale, out_bf16)? {
                     return Ok(out);
                 }
             }

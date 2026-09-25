@@ -1853,6 +1853,163 @@ pub fn run(report: &mut Report, lim: Limits, seed: u64) -> StageResult<()> {
         Ok(())
     })?;
 
+    group(&mut c, "flash_mma", |c| {
+        // Fused tensor-core dense SDPA (flash_mma_fwd_d{64,128}), the default
+        // dense path on bf16 sm80+ contexts. Its numerics are bf16 Q/K/V and
+        // bf16 P with f32 softmax/accumulation, so it is held to 1e-2 vs the
+        // f32 reference and to 2e-3 vs the same reference on bf16-rounded
+        // inputs (what is left is only P's rounding). Shapes cover query and
+        // key tails, sq != sk, B*H > 1, one-key / one-query edges and scores
+        // large enough to exercise the online-softmax rescale.
+        let dev = dev()?;
+        if !attn::mma_sdpa_supported(1, 1, 1, 1, 128, dev.sm_major) {
+            c.report.note(
+                "flash_mma_skipped",
+                json!({"sm_major": dev.sm_major, "needs": "sm80+ (bf16 mma.sync)"}),
+            );
+            return Ok(());
+        }
+        let round = |x: &[f32]| -> Vec<f32> {
+            x.iter()
+                .map(|&v| half::bf16::from_f32(v).to_f32())
+                .collect()
+        };
+        for (b, h, sq, sk, d, std) in [
+            (1usize, 1usize, 1usize, 1usize, 128usize, 1.0f32),
+            (1, 2, 64, 64, 128, 1.0),
+            (1, 2, 70, 70, 64, 1.0),
+            (2, 3, 257, 257, 128, 1.0),
+            (1, 4, 300, 512, 128, 1.0),
+            (2, 2, 1000, 333, 64, 1.0),
+            (1, 3, 130, 1, 128, 1.0),
+            (1, 2, 63, 4097, 128, 1.0),
+            (2, 2, 1024, 1024, 128, 2.0),
+            (1, 2, 2048, 2048, 128, 1.0),
+        ] {
+            let bh = b * h;
+            let q = c.rand(bh * sq * d, std);
+            let kk = c.rand(bh * sk * d, std);
+            let v = c.rand(bh * sk * d, 1.0);
+            let scale = 1.0 / (d as f32).sqrt();
+            let want = ref_sdpa(&q, &kk, &v, bh, sq, sk, d, scale);
+            let want_bf16_in = ref_sdpa(&round(&q), &round(&kk), &round(&v), bh, sq, sk, d, scale);
+            let (qt, kt, vt) = (
+                t(q, &[b, h, sq, d])?,
+                t(kk, &[b, h, sk, d])?,
+                t(v, &[b, h, sk, d])?,
+            );
+            let tag = format!("{b}x{h}x{sq}x{sk}x{d}_s{std}");
+            let got = attn::device_mma_sdpa(&qt, &kt, &vt, Some(scale), false)?
+                .ok_or_else(|| anyhow::anyhow!("fused mma sdpa declined {tag}"))?;
+            let got = host_of(&got)?;
+            c.cmp(&format!("mma_sdpa_{tag}_vs_f32"), &got, &want, 1e-2)?;
+            c.cmp(
+                &format!("mma_sdpa_{tag}_vs_bf16_in"),
+                &got,
+                &want_bf16_in,
+                2e-3,
+            )?;
+            let got16 = attn::device_mma_sdpa(&qt, &kt, &vt, Some(scale), true)?
+                .ok_or_else(|| anyhow::anyhow!("fused mma sdpa (bf16 out) declined {tag}"))?;
+            c.cmp(
+                &format!("mma_sdpa_{tag}_bf16_out_vs_f32"),
+                &host_of(&got16)?,
+                &want,
+                1e-2,
+            )?;
+        }
+        // Default dispatch: an unmasked SDPA must reach the fused kernel (its
+        // output matches the direct call bit for bit) unless the context is
+        // not bf16 math, where it must still match the f32 reference.
+        {
+            let (b, h, sq, sk, d) = (1usize, 2usize, 200usize, 300usize, 128usize);
+            let q = c.rand(b * h * sq * d, 1.0);
+            let kk = c.rand(b * h * sk * d, 1.0);
+            let v = c.rand(b * h * sk * d, 1.0);
+            let (qt, kt, vt) = (
+                t(q, &[b, h, sq, d])?,
+                t(kk, &[b, h, sk, d])?,
+                t(v, &[b, h, sk, d])?,
+            );
+            let routed =
+                fastvideo_cudarc::wan::nn::scaled_dot_product_attention(&qt, &kt, &vt, None)?;
+            let direct = attn::device_mma_sdpa(&qt, &kt, &vt, None, false)?
+                .ok_or_else(|| anyhow::anyhow!("fused mma sdpa declined"))?;
+            let (routed, direct) = (host_of(&routed)?, host_of(&direct)?);
+            let identical = routed == direct;
+            let expect_fused = attn::mma_sdpa_default()
+                && fastvideo_cudarc::wan::nn::sdpa_backend() == "dense"
+                && !fastvideo_cudarc::wan::tensor::bf16_activations();
+            c.report.check(
+                "mma_sdpa_default_dispatch",
+                !expect_fused || identical,
+                json!({"fused_default": expect_fused, "identical": identical}),
+                json!({"identical_when_default": true}),
+            )?;
+        }
+        // Speed at the H3 video shape (38k tokens, d=128), 8 heads: fused
+        // kernel vs the cuBLAS score-materialising path it replaces.
+        {
+            let (b, h, s, d) = (1usize, 8usize, 38_016usize, 128usize);
+            let q = c.rand(b * h * s * d, 1.0);
+            let kk = c.rand(b * h * s * d, 1.0);
+            let v = c.rand(b * h * s * d, 1.0);
+            let (qt, kt, vt) = (
+                t(q, &[b, h, s, d])?,
+                t(kk, &[b, h, s, d])?,
+                t(v, &[b, h, s, d])?,
+            );
+            // Pre-cast so neither side pays a per-call f32->bf16 cast the
+            // model would already have done in bf16-activation runs; the
+            // cuBLAS path takes f32 operands as models hand them over.
+            let (q16, k16, v16) = (
+                qt.quantize_bf16()?,
+                kt.quantize_bf16()?,
+                vt.quantize_bf16()?,
+            );
+            let time = |f: &dyn Fn() -> anyhow::Result<()>| -> anyhow::Result<f64> {
+                f()?;
+                dev.synchronize()?;
+                let mut times = Vec::new();
+                for _ in 0..3 {
+                    let t0 = std::time::Instant::now();
+                    f()?;
+                    dev.synchronize()?;
+                    times.push(t0.elapsed().as_secs_f64());
+                }
+                times.sort_by(|a, b| a.total_cmp(b));
+                Ok(times[1])
+            };
+            let fused_s = time(&|| {
+                attn::device_mma_sdpa(&q16, &k16, &v16, None, false)?
+                    .ok_or_else(|| anyhow::anyhow!("fused declined"))?;
+                Ok(())
+            })?;
+            let fused_f32_in_s = time(&|| {
+                attn::device_mma_sdpa(&qt, &kt, &vt, None, false)?
+                    .ok_or_else(|| anyhow::anyhow!("fused declined"))?;
+                Ok(())
+            })?;
+            let cublas_s = time(&|| {
+                attn::device_dense_sdpa_with_budget(&qt, &kt, &vt, None, attn::DENSE_SCORE_BUDGET)?
+                    .ok_or_else(|| anyhow::anyhow!("dense declined"))?;
+                Ok(())
+            })?;
+            let flops = 4.0 * (h * s * s * d) as f64;
+            c.report.note(
+                format!("mma_sdpa_time_h{h}_t{s}_d{d}"),
+                json!({
+                    "fused_s": fused_s,
+                    "fused_f32_inputs_s": fused_f32_in_s,
+                    "cublas_dense_s": cublas_s,
+                    "speedup": cublas_s / fused_s,
+                    "fused_tflops": flops / fused_s / 1e12,
+                }),
+            );
+        }
+        Ok(())
+    })?;
+
     group(&mut c, "conv", |c| {
         // cuDNN conv2d (patch embed, VAE resample): pad/stride variants + bias.
         let (n, ci, h, w, co) = (2usize, 3usize, 17usize, 20usize, 6usize);

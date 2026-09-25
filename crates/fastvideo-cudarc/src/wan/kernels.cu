@@ -1144,6 +1144,261 @@ extern "C" __global__ void __launch_bounds__(128, 2) vsa_mma_attn(
 #endif
 }
 
+// ---- Dense fused attention forward (tensor cores, sm80+) ---------------------
+//
+// flash_mma_fwd_d{64,128}: FA2-style dense SDPA on bf16 BHSD operands, q
+// `[bh, sq, D]`, k/v `[bh, sk, D]` (sq != sk for cross-attention). One CTA
+// per (64-query tile, batch*head); 4 warps, warp w owns query rows
+// [16w, 16w+16). Q lives in registers; K and V have one swizzled shared
+// buffer each, pipelined like sol_mma_fwd's exact loop: V_j lands during
+// S_j = Q K_j^T and K_{j+1} during softmax + P V_j. Online softmax in f32
+// with scale*log2(e) folded into one FMA ahead of exp2; P is rounded to bf16
+// (RNE) for the PV mma while the row sum uses the f32 P, as flash-attn does.
+// Tail query rows and tail keys are zero-filled on load and tail key columns
+// are -inf. Output f32 or bf16 (RNE), BHSD like q. Static shared memory:
+// 32 KB at D=128, 16 KB at D=64 -- no opt-in attribute needed.
+#define FA_TILE 64
+#define FA_SMEM(D) (2 * FA_TILE * (D) * 2)
+
+// Byte offset of (row, col) in a swizzled 64 x D bf16 tile (rows of 2D
+// bytes); the 16-byte chunk index is XORed with row & 7, so the eight rows an
+// ldmatrix phase reads hit eight different bank groups. `col` in elements.
+template <int D> __device__ __forceinline__ unsigned int fa_swz(int row, int col) {
+    return (unsigned int)row * (D * 2) + ((((unsigned int)col >> 3) ^ ((unsigned int)row & 7u)) << 4) + (((unsigned int)col & 7u) << 1);
+}
+
+#if defined(__CUDA_ARCH__) && __CUDA_ARCH__ >= 800
+__device__ __forceinline__ void fa_ldm_x4_trans(unsigned int addr, unsigned int& r0, unsigned int& r1, unsigned int& r2, unsigned int& r3) {
+    asm volatile("ldmatrix.sync.aligned.m8n8.x4.trans.shared.b16 {%0,%1,%2,%3}, [%4];\n"
+                 : "=r"(r0), "=r"(r1), "=r"(r2), "=r"(r3) : "r"(addr));
+}
+// 2^x. Inputs are max-subtracted scores (<= 0) or -inf; flushing a subnormal
+// P to zero is below bf16 P's resolution, so the ftz form is used.
+__device__ __forceinline__ float fa_exp2(float x) {
+    float y;
+    asm("ex2.approx.ftz.f32 %0, %1;\n" : "=f"(y) : "f"(x));
+    return y;
+}
+// cp.async a 64 x D tile whose first row is `g`; rows >= rows_valid are
+// written as zeros and never read from global.
+template <int D> __device__ __forceinline__ void fa_load_rows(unsigned int smem, const unsigned short* g, int rows_valid, int tid) {
+    constexpr int CPR = D / 8;   // 16-byte chunks per row
+    #pragma unroll
+    for (int i = 0; i < FA_TILE * CPR / 128; i++) {
+        const int chunk = tid + i * 128;
+        const int row = chunk / CPR, c = chunk % CPR;
+        const int ok = row < rows_valid;
+        mma_cp_async16_zfill(smem + fa_swz<D>(row, c * 8),
+                             ok ? (const void*)(g + (long)row * D + c * 8) : (const void*)g, ok);
+    }
+}
+// S[16 x 64] = Q[16 x D] K[64 x D]^T for one warp. One ldmatrix.x4 feeds two
+// n-tiles: lanes 0-15 address keys 8n..8n+7 (dims +0 / +8), lanes 16-31 keys
+// 8(n+1).., so b[0..1] is n-tile n and b[2..3] n-tile n+1.
+template <int D> __device__ __forceinline__ void fa_qk(unsigned int sK, const unsigned int (&qf)[D / 16][4], float (&s)[8][4], int lane) {
+    #pragma unroll
+    for (int n = 0; n < 8; n++) { s[n][0] = s[n][1] = s[n][2] = s[n][3] = 0.f; }
+    #pragma unroll
+    for (int kc = 0; kc < D / 16; kc++) {
+        #pragma unroll
+        for (int n = 0; n < 8; n += 2) {
+            unsigned int b[4];
+            mma_ldm_x4(sK + fa_swz<D>(n * 8 + (lane & 7) + ((lane >> 4) << 3), kc * 16 + ((lane >> 3) & 1) * 8),
+                       b[0], b[1], b[2], b[3]);
+            mma_bf16(s[n], qf[kc], b);
+            mma_bf16(s[n + 1], qf[kc], b + 2);
+        }
+    }
+}
+// O[16 x D] += P[16 x 64] V[64 x D]; V through ldmatrix.x4.trans, lanes 0-15
+// address keys 16kc.. at dims 8n.., lanes 16-31 the same keys at 8(n+1)...
+template <int D> __device__ __forceinline__ void fa_pv(unsigned int sV, const unsigned int (&pa)[4][4], float (&o)[D / 8][4], int lane) {
+    #pragma unroll
+    for (int kc = 0; kc < 4; kc++) {
+        #pragma unroll
+        for (int n = 0; n < D / 8; n += 2) {
+            unsigned int b[4];
+            fa_ldm_x4_trans(sV + fa_swz<D>(kc * 16 + (lane & 15), n * 8 + ((lane >> 4) << 3)), b[0], b[1], b[2], b[3]);
+            mma_bf16(o[n], pa[kc], b);
+            mma_bf16(o[n + 1], pa[kc], b + 2);
+        }
+    }
+}
+
+template <int D>
+__device__ __forceinline__ void flash_mma_fwd_body(
+    const unsigned short* __restrict__ q, const unsigned short* __restrict__ k,
+    const unsigned short* __restrict__ v, float* __restrict__ out,
+    unsigned short* __restrict__ out_bf16, int out_is_bf16, int sq, int sk, float sl2,
+    unsigned char* smem
+) {
+    constexpr int TILEB = FA_TILE * D * 2;
+    const unsigned int sK = mma_smem_u32(smem), sV = sK + TILEB;
+    const int tid = threadIdx.x, lane = tid & 31, warp = tid >> 5;
+    const int g = lane >> 2, t = lane & 3;
+    const int q0 = (int)blockIdx.x * FA_TILE;
+    const long bh = blockIdx.y;
+    if (q0 >= sq || sk <= 0) return;
+    const int qlen = min(FA_TILE, sq - q0);
+    const unsigned short* Qh = q + (bh * sq + q0) * D;
+    const unsigned short* Kh = k + bh * (long)sk * D;
+    const unsigned short* Vh = v + bh * (long)sk * D;
+    const int nkt = (sk + FA_TILE - 1) / FA_TILE;
+    const float NEG = __int_as_float(0xff800000);
+
+    // Q -> registers through sK (rows >= qlen are zeros: finite, never stored).
+    fa_load_rows<D>(sK, Qh, qlen, tid);
+    mma_cp_commit();
+    mma_cp_wait<0>();
+    __syncthreads();
+    unsigned int qf[D / 16][4];
+    #pragma unroll
+    for (int kc = 0; kc < D / 16; kc++) {
+        const int row = warp * 16 + (lane & 15), col = kc * 16 + (lane >> 4) * 8;
+        mma_ldm_x4(sK + fa_swz<D>(row, col), qf[kc][0], qf[kc][1], qf[kc][2], qf[kc][3]);
+    }
+    __syncthreads();
+
+    // cp.async groups, one per tile, committed in consumption order:
+    // [K0, V0], then per step +K_{j+1} after S_j and +V_{j+1} after P V_j.
+    fa_load_rows<D>(sK, Kh, min(FA_TILE, sk), tid);
+    mma_cp_commit();
+    fa_load_rows<D>(sV, Vh, min(FA_TILE, sk), tid);
+    mma_cp_commit();
+
+    float o[D / 8][4];
+    #pragma unroll
+    for (int n = 0; n < D / 8; n++) { o[n][0] = o[n][1] = o[n][2] = o[n][3] = 0.f; }
+    float m0 = NEG, m1 = NEG, l0 = 0.f, l1 = 0.f;   // m raw scores (rows g, g+8); l per-thread partials
+    float s[8][4];
+    unsigned int pa[4][4];
+
+    #pragma unroll 1
+    for (int j = 0; j < nkt; j++) {
+        const int kv0 = j * FA_TILE, len = min(FA_TILE, sk - kv0);
+        const bool more = j + 1 < nkt;
+        mma_cp_wait<1>();
+        __syncthreads();   // K_j landed
+        fa_qk<D>(sK, qf, s, lane);
+        __syncthreads();   // every warp is done reading sK
+        if (more) {
+            fa_load_rows<D>(sK, Kh + (long)(kv0 + FA_TILE) * D, min(FA_TILE, sk - kv0 - FA_TILE), tid);
+            mma_cp_commit();
+        }
+        if (len < FA_TILE) {
+            #pragma unroll
+            for (int n = 0; n < 8; n++) {
+                const int c0 = n * 8 + 2 * t;
+                if (c0 >= len)     { s[n][0] = NEG; s[n][2] = NEG; }
+                if (c0 + 1 >= len) { s[n][1] = NEG; s[n][3] = NEG; }
+            }
+        }
+        float rmax0 = NEG, rmax1 = NEG;
+        #pragma unroll
+        for (int n = 0; n < 8; n++) {
+            rmax0 = fmaxf(rmax0, fmaxf(s[n][0], s[n][1]));
+            rmax1 = fmaxf(rmax1, fmaxf(s[n][2], s[n][3]));
+        }
+        rmax0 = fmaxf(rmax0, __shfl_xor_sync(0xffffffffu, rmax0, 1));
+        rmax0 = fmaxf(rmax0, __shfl_xor_sync(0xffffffffu, rmax0, 2));
+        rmax1 = fmaxf(rmax1, __shfl_xor_sync(0xffffffffu, rmax1, 1));
+        rmax1 = fmaxf(rmax1, __shfl_xor_sync(0xffffffffu, rmax1, 2));
+        const float mn0 = fmaxf(m0, rmax0), mn1 = fmaxf(m1, rmax1);
+        // A row with no finite score yet keeps its offset at 0 (no inf - inf).
+        const float ms0 = (mn0 == NEG) ? 0.f : mn0 * sl2;
+        const float ms1 = (mn1 == NEG) ? 0.f : mn1 * sl2;
+        const float a0 = fa_exp2(fmaf(m0, sl2, -ms0)), a1 = fa_exp2(fmaf(m1, sl2, -ms1));
+        m0 = mn0; m1 = mn1;
+        float ls0 = 0.f, ls1 = 0.f;
+        #pragma unroll
+        for (int n = 0; n < 8; n++) {
+            s[n][0] = fa_exp2(fmaf(s[n][0], sl2, -ms0));
+            s[n][1] = fa_exp2(fmaf(s[n][1], sl2, -ms0));
+            s[n][2] = fa_exp2(fmaf(s[n][2], sl2, -ms1));
+            s[n][3] = fa_exp2(fmaf(s[n][3], sl2, -ms1));
+            ls0 += s[n][0] + s[n][1];
+            ls1 += s[n][2] + s[n][3];
+        }
+        l0 = fmaf(l0, a0, ls0);
+        l1 = fmaf(l1, a1, ls1);
+        #pragma unroll
+        for (int n = 0; n < D / 8; n++) { o[n][0] *= a0; o[n][1] *= a0; o[n][2] *= a1; o[n][3] *= a1; }
+        // S's C layout is P's A layout: n-tiles (2kc, 2kc+1) are k-chunk kc.
+        #pragma unroll
+        for (int kc = 0; kc < 4; kc++) {
+            pa[kc][0] = mma_pack_bf16_rn(s[2 * kc][0], s[2 * kc][1]);
+            pa[kc][1] = mma_pack_bf16_rn(s[2 * kc][2], s[2 * kc][3]);
+            pa[kc][2] = mma_pack_bf16_rn(s[2 * kc + 1][0], s[2 * kc + 1][1]);
+            pa[kc][3] = mma_pack_bf16_rn(s[2 * kc + 1][2], s[2 * kc + 1][3]);
+        }
+        if (more) mma_cp_wait<1>(); else mma_cp_wait<0>();
+        __syncthreads();   // V_j landed
+        fa_pv<D>(sV, pa, o, lane);
+        __syncthreads();   // every warp is done reading sV
+        if (more) {
+            fa_load_rows<D>(sV, Vh + (long)(kv0 + FA_TILE) * D, min(FA_TILE, sk - kv0 - FA_TILE), tid);
+            mma_cp_commit();
+        }
+    }
+
+    // Quad-reduce l (the four lanes of a row hold disjoint columns), then
+    // normalise and store this warp's live rows.
+    l0 += __shfl_xor_sync(0xffffffffu, l0, 1);
+    l0 += __shfl_xor_sync(0xffffffffu, l0, 2);
+    l1 += __shfl_xor_sync(0xffffffffu, l1, 1);
+    l1 += __shfl_xor_sync(0xffffffffu, l1, 2);
+    const float inv0 = l0 > 0.f ? 1.f / l0 : 0.f, inv1 = l1 > 0.f ? 1.f / l1 : 0.f;
+    const int row0 = warp * 16 + g, row1 = row0 + 8;
+    const bool ok0 = row0 < qlen, ok1 = row1 < qlen;
+    const long r0 = (bh * sq + q0 + row0) * D, r1 = r0 + 8L * D;
+    if (out_is_bf16) {
+        #pragma unroll
+        for (int n = 0; n < D / 8; n++) {
+            const int col = n * 8 + 2 * t;
+            if (ok0) *reinterpret_cast<unsigned int*>(out_bf16 + r0 + col) = mma_pack_bf16_rn(o[n][0] * inv0, o[n][1] * inv0);
+            if (ok1) *reinterpret_cast<unsigned int*>(out_bf16 + r1 + col) = mma_pack_bf16_rn(o[n][2] * inv1, o[n][3] * inv1);
+        }
+    } else {
+        #pragma unroll
+        for (int n = 0; n < D / 8; n++) {
+            const int col = n * 8 + 2 * t;
+            if (ok0) *reinterpret_cast<float2*>(out + r0 + col) = make_float2(o[n][0] * inv0, o[n][1] * inv0);
+            if (ok1) *reinterpret_cast<float2*>(out + r1 + col) = make_float2(o[n][2] * inv1, o[n][3] * inv1);
+        }
+    }
+}
+#endif
+
+#if defined(__CUDA_ARCH__) && __CUDA_ARCH__ >= 800
+#define FA_ENTRY_BODY(D)                                                                \
+    __shared__ __align__(128) unsigned char smem[FA_SMEM(D)];                           \
+    flash_mma_fwd_body<D>(q, k, v, out, out_bf16, out_is_bf16, sq, sk, sl2, smem);
+#else
+// sm75 has no bf16 mma.sync and the dispatcher requires sm80+. If this runs
+// anyway the build targeted the wrong arch: trap instead of leaving `out`
+// uninitialised.
+#define FA_ENTRY_BODY(D)                                                                \
+    (void)q; (void)k; (void)v; (void)out; (void)out_bf16; (void)out_is_bf16;            \
+    (void)sq; (void)sk; (void)sl2;                                                      \
+    __trap();
+#endif
+
+extern "C" __global__ void __launch_bounds__(128, 2) flash_mma_fwd_d128(
+    const unsigned short* __restrict__ q, const unsigned short* __restrict__ k,
+    const unsigned short* __restrict__ v, float* __restrict__ out,
+    unsigned short* __restrict__ out_bf16, int out_is_bf16, int sq, int sk, float sl2
+) {
+    FA_ENTRY_BODY(128)
+}
+
+extern "C" __global__ void __launch_bounds__(128, 4) flash_mma_fwd_d64(
+    const unsigned short* __restrict__ q, const unsigned short* __restrict__ k,
+    const unsigned short* __restrict__ v, float* __restrict__ out,
+    unsigned short* __restrict__ out_bf16, int out_is_bf16, int sq, int sk, float sl2
+) {
+    FA_ENTRY_BODY(64)
+}
+
 // ---- VSA fine stage, TMA loads (sm90+ / SM12x) --------------------------------
 //
 // Same mma.sync math as `vsa_mma_attn`. K/V (and Q) arrive through

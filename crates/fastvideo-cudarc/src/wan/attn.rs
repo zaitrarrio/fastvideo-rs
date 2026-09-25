@@ -1,5 +1,6 @@
-//! Attention kernels for Wan: device dense (default), device flash (opt-in),
-//! and host implementations for CPU runs.
+//! Attention kernels for Wan: fused tensor-core dense SDPA (default on bf16
+//! sm80+ contexts), cuBLAS dense (fallback / `FASTVIDEO_SDPA=cublas`), device
+//! flash (opt-in), and host implementations for CPU runs.
 
 #[cfg(feature = "cuda")]
 use std::sync::atomic::AtomicBool;
@@ -87,6 +88,133 @@ pub fn device_flash_sdpa(
     _k: &CudaTensor,
     _v: &CudaTensor,
     _scale: Option<f32>,
+) -> Result<Option<CudaTensor>> {
+    Ok(None)
+}
+
+/// Head dims the fused tensor-core kernel (`flash_mma_fwd_d{64,128}`) exists for.
+pub const MMA_HEAD_DIMS: [usize; 2] = [64, 128];
+
+/// Query/key tile of the fused kernel (one CTA per 64 queries).
+pub const MMA_TILE: usize = 64;
+
+/// Whether the fused kernel can run a `[b, h, sq, d] x [b, h, sk, d]` SDPA on
+/// an `sm_major` device: bf16 `mma.sync` needs sm80+, the head dim must be
+/// one it is built for, both sequences non-empty, and `b*h` / query tiles
+/// must fit the launch grid (and the kernel's `int` lengths). Everything else
+/// takes the cuBLAS path.
+pub fn mma_sdpa_supported(
+    b: usize,
+    h: usize,
+    sq: usize,
+    sk: usize,
+    d: usize,
+    sm_major: i32,
+) -> bool {
+    let bh = b * h;
+    sm_major >= 8
+        && MMA_HEAD_DIMS.contains(&d)
+        && sq > 0
+        && sk > 0
+        && (1..=65_535).contains(&bh)
+        && sq <= i32::MAX as usize
+        && sk <= i32::MAX as usize
+}
+
+/// The fused kernel is the default dense SDPA wherever the context already
+/// runs bf16 GEMM math (tensor-core GPUs, `FASTVIDEO_BF16` on): there Q/K/V
+/// and P are rounded to bf16 by cuBLAS anyway. `FASTVIDEO_SDPA=cublas` (or an
+/// exact `FASTVIDEO_BF16=0` context) keeps the materialised cuBLAS path.
+#[cfg(feature = "cuda")]
+pub fn mma_sdpa_default() -> bool {
+    super::stats::device_expected()
+        && super::device::global_device()
+            .is_some_and(|d| d.gemm_math == super::device::GemmMath::Bf16 && d.sm_major >= 8)
+}
+
+#[cfg(not(feature = "cuda"))]
+pub fn mma_sdpa_default() -> bool {
+    false
+}
+
+/// Fused dense SDPA on tensor cores (`flash_mma_fwd_d{64,128}`): bf16 Q/K/V
+/// (cast once, RNE, when they are f32), f32 online softmax, bf16 P, f32
+/// accumulation; one launch, no score buffer. Output is f32, or bf16 when
+/// `out_bf16`. `None` when [`mma_sdpa_supported`] says no or no device is
+/// expected, so the caller falls back to [`device_dense_sdpa`].
+#[cfg(feature = "cuda")]
+pub fn device_mma_sdpa(
+    q: &CudaTensor,
+    k: &CudaTensor,
+    v: &CudaTensor,
+    scale: Option<f32>,
+    out_bf16: bool,
+) -> Result<Option<CudaTensor>> {
+    let Some((b, h, sq, sk, d)) = bhsd(q, k, v) else {
+        return Ok(None);
+    };
+    let Some(dev) = super::device::global_device() else {
+        return Ok(None);
+    };
+    if !mma_sdpa_supported(b, h, sq, sk, d, dev.sm_major) {
+        return Ok(None);
+    }
+    let (Some(qb), Some(kb), Some(vb)) = (q.dev_bf16()?, k.dev_bf16()?, v.dev_bf16()?) else {
+        return Ok(None);
+    };
+    let scale = scale.unwrap_or(1.0 / (d as f32).sqrt());
+    let sl2 = scale * std::f32::consts::LOG2_E;
+    let bh = b * h;
+    static ONCE: AtomicBool = AtomicBool::new(false);
+    super::log::info_once(
+        &ONCE,
+        format_args!("sdpa: fused mma B={b} H={h} Sq={sq} Sk={sk} D={d}"),
+    );
+    let n = bh * sq * d;
+    let func = if d == 64 {
+        &dev.kernels.flash_mma_fwd_d64
+    } else {
+        &dev.kernels.flash_mma_fwd_d128
+    };
+    let cfg = cudarc::driver::LaunchConfig {
+        grid_dim: (sq.div_ceil(MMA_TILE) as u32, bh as u32, 1),
+        block_dim: (128, 1, 1),
+        // Static shared memory (32 KB at d=128): two CTAs per SM, no opt-in.
+        shared_mem_bytes: 0,
+    };
+    let (sq_i, sk_i) = (sq as i32, sk as i32);
+    let err = |e: cudarc::driver::DriverError| msg(e.to_string());
+    let launch_err = |e: super::device::DeviceError| msg(e.to_string());
+    // cudarc cannot pass a null pointer: the unused output is a 1-element dummy.
+    if out_bf16 {
+        let mut out = unsafe { dev.stream.alloc::<half::bf16>(n) }.map_err(err)?;
+        let mut dummy = super::ops::alloc(1)?;
+        let is_bf16 = 1i32;
+        super::kernels::launch!(dev.stream, func, cfg;
+            &*qb, &*kb, &*vb, &mut dummy, &mut out, &is_bf16, &sq_i, &sk_i, &sl2)
+        .map_err(launch_err)?;
+        Ok(Some(CudaTensor::from_device_slice_bf16(
+            out,
+            vec![b, h, sq, d],
+        )?))
+    } else {
+        let mut out = super::ops::alloc(n)?;
+        let mut dummy = unsafe { dev.stream.alloc::<half::bf16>(1) }.map_err(err)?;
+        let is_bf16 = 0i32;
+        super::kernels::launch!(dev.stream, func, cfg;
+            &*qb, &*kb, &*vb, &mut out, &mut dummy, &is_bf16, &sq_i, &sk_i, &sl2)
+        .map_err(launch_err)?;
+        Ok(Some(CudaTensor::from_device_slice(out, vec![b, h, sq, d])?))
+    }
+}
+
+#[cfg(not(feature = "cuda"))]
+pub fn device_mma_sdpa(
+    _q: &CudaTensor,
+    _k: &CudaTensor,
+    _v: &CudaTensor,
+    _scale: Option<f32>,
+    _out_bf16: bool,
 ) -> Result<Option<CudaTensor>> {
     Ok(None)
 }
@@ -328,6 +456,45 @@ pub fn block_sparse_sdpa(
 mod tests {
     use super::super::nn::scaled_dot_product_attention;
     use super::*;
+
+    #[test]
+    fn mma_sdpa_supports_video_self_and_cross_attention_shapes() {
+        // Self-attention with a tail, cross-attention (sq != sk), d=64 audio.
+        assert!(mma_sdpa_supported(1, 40, 38_001, 38_001, 128, 12));
+        assert!(mma_sdpa_supported(2, 32, 4_097, 1_024, 128, 8));
+        assert!(mma_sdpa_supported(1, 32, 125, 1, 64, 9));
+        assert!(mma_sdpa_supported(1, 1, 1, 1, 128, 8));
+    }
+
+    #[test]
+    fn mma_sdpa_declines_what_the_kernel_cannot_run() {
+        assert!(
+            !mma_sdpa_supported(1, 8, 1024, 1024, 128, 7),
+            "sm75: no bf16 mma"
+        );
+        for d in [32, 80, 96, 256, 384] {
+            assert!(!mma_sdpa_supported(1, 8, 1024, 1024, d, 12), "d={d}");
+        }
+        assert!(!mma_sdpa_supported(1, 8, 0, 1024, 128, 12), "empty query");
+        assert!(!mma_sdpa_supported(1, 8, 1024, 0, 128, 12), "empty keys");
+        assert!(
+            !mma_sdpa_supported(0, 8, 1024, 1024, 128, 12),
+            "empty batch"
+        );
+        assert!(
+            !mma_sdpa_supported(2, 40_000, 64, 64, 128, 12),
+            "grid.y > 65535"
+        );
+    }
+
+    /// Off-device the fused path never claims a call, so CPU runs keep the
+    /// host oracle.
+    #[test]
+    fn mma_sdpa_is_not_default_without_a_device() {
+        assert!(!mma_sdpa_default());
+        let q = CudaTensor::from_vec(vec![0.5; 2 * 64], vec![1, 1, 2, 64]).unwrap();
+        assert!(device_mma_sdpa(&q, &q, &q, None, false).unwrap().is_none());
+    }
 
     #[test]
     fn host_flash_matches_composed() {
