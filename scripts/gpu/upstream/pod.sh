@@ -49,6 +49,7 @@ run_step() {
     info:ltx25) info_ltx25 ;;
     info:box) info_box ;;
     cells) run_cells ;;
+    cells:*) ( UP_CELLS="${s#cells:}"; UP_CELLS="${UP_CELLS//,/ }"; run_cells ) ;;
     *) log "unknown step $s"; false ;;
   esac >>"$OUT/steps.log" 2>&1
   rc=$?
