@@ -52,9 +52,33 @@ smi_snap() {
   nvidia-smi --query-gpu=name,memory.total,memory.used,memory.free,utilization.gpu --format=csv,noheader >"$dest" 2>/dev/null || true
 }
 
+# Every cell starts on an empty GPU: wait for the previous process's memory
+# to drain, kill any leftover compute process, and refuse to start otherwise.
+gpu_clean() {
+  local used i pid
+  for i in $(seq 1 30); do
+    used="$(nvidia-smi --query-gpu=memory.used --format=csv,noheader,nounits 2>/dev/null | head -1 | tr -d ' ')"
+    [[ -n "$used" && "$used" -lt 1024 ]] && return 0
+    if (( i == 10 )); then
+      for pid in $(nvidia-smi --query-compute-apps=pid --format=csv,noheader 2>/dev/null); do
+        log "killing leftover GPU process $pid (${used} MiB in use)"
+        kill -9 "$pid" 2>/dev/null || true
+      done
+    fi
+    sleep 2
+  done
+  log "GPU not clean before next cell: ${used:-?} MiB in use"
+  return 1
+}
+
 run_cell() {
   local name="$1"
   shift
+  if ! gpu_clean; then
+    mkdir -p "$RUNS/$name"
+    write_json "$RUNS/$name/summary.json" "$(printf '{"cell":"%s","family":"%s","exit":null,"skipped":"gpu not clean"}' "$name" "$FAMILY")"
+    return 0
+  fi
   local cell="$RUNS/$name"
   mkdir -p "$cell"
   local t0 rc secs

@@ -6,6 +6,7 @@
 #   runpod-http.sh run [sha]     create pod, run the rtx6000 family, pull
 #                                summaries + logs, destroy the pod
 #   runpod-http.sh weights       weight gate only (verify-weights.sh), no cells
+#   runpod-http.sh kernels [sha] fv-gpucheck kernels (every kernel vs host math)
 #   runpod-http.sh status <pod>  print live.log from a running pod
 #   runpod-http.sh down <pod>    destroy a pod
 #
@@ -62,6 +63,11 @@ mkdir -p "\$OUT"
 ( cd /workspace/weights && for d in *; do echo "== \$d"; find -L "\$d" -maxdepth 3 \( -name '*.safetensors' -o -name '*.json' \) -printf '%s %p\n' 2>/dev/null | head -60; done ) >"\$OUT/tree.txt" 2>&1
 FV_WEIGHTS=/workspace/weights bash /opt/fastvideo-rs/scripts/gpu/verify-weights.sh $cells >"\$OUT/weights.log" 2>&1
 echo "exit=\$?" >>"\$OUT/weights.log"
+if [ "$mode" = kernels ]; then
+  cd "\$OUT" && /opt/fastvideo-rs/target/release/fv-gpucheck --keep-going --out "\$OUT/gpucheck" kernels >"\$OUT/kernels.out" 2>&1
+  echo "exit=\$?" >>"\$OUT/kernels.out"
+  cp "\$OUT"/gpucheck/*.json "\$OUT"/ 2>/dev/null
+fi
 if [ "$mode" = run ]; then
   env ${FV_EXTRA_ENV:-} FV_WORK=/workspace FV_RUN_TAG=$tag FV_CELLS="${FV_CELLS:-}" \
     FV_GEN_TIMEOUT_S=${FV_GEN_TIMEOUT_S:-3600} \
@@ -101,7 +107,7 @@ create_pod() {
 fetch_results() {
   local id="$1" tag="$2" out="$OUT_ROOT/$tag" f cell
   mkdir -p "$out"
-  for f in box.txt tree.txt weights.log matrix.out live.log; do
+  for f in box.txt tree.txt weights.log matrix.out live.log kernels.out kernels.json; do
     proxy "$id" "rtx6000/$tag/$f" >"$out/$f" 2>/dev/null || true
   done
   for cell in $(proxy "$id" "rtx6000/$tag/" 2>/dev/null | grep -oE 'href="[^"/]+/"' | sed 's/href="//;s/\/"//'); do
@@ -144,6 +150,7 @@ cmd_run() {
 case "${1:-}" in
   run) shift; cmd_run run "$@" ;;
   weights) shift; cmd_run weights "$@" ;;
+  kernels) shift; cmd_run kernels "$@" ;;
   status) proxy "${2:?pod}" "rtx6000/" ;;
   down) rest DELETE "/pods/${2:?pod}" >/dev/null && echo "deleted ${2}" ;;
   *) sed -n '2,20p' "$0" | sed 's/^# \{0,1\}//'; exit 2 ;;
