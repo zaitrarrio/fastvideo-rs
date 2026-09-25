@@ -739,6 +739,55 @@ pub fn resolve_canvas_size(
     Ok((snap(height), snap(width)))
 }
 
+/// A requested canvas snapped the way [`resolve_canvas_size`] snaps: each side
+/// to the nearest multiple of 32 (ties to even), then scaled down, keeping the
+/// aspect, until it is within [`H3_MAX_PIXELS`].
+pub fn snap_canvas(height: usize, width: usize) -> (usize, usize) {
+    let m = H3_CANVAS_MULTIPLE;
+    let snap = |v: f64| (py_round(v / m as f64) * m).max(m);
+    let (mut h, mut w) = (snap(height as f64), snap(width as f64));
+    while h * w > H3_MAX_PIXELS {
+        let scale = (H3_MAX_PIXELS as f64 / (h * w) as f64).sqrt();
+        let (nh, nw) = (
+            (((h as f64 * scale) / m as f64).floor() as usize * m).max(m),
+            (((w as f64 * scale) / m as f64).floor() as usize * m).max(m),
+        );
+        if (nh, nw) == (h, w) {
+            break;
+        }
+        (h, w) = (nh, nw);
+    }
+    (h, w)
+}
+
+/// What an explicit `height x width` must satisfy (`packing.py`
+/// `resolve_canvas_size`, whose outputs are exactly such canvases): both sides
+/// positive multiples of 32, at most [`H3_MAX_PIXELS`] (768 x 1344), aspect
+/// between 1:4 and 4:1. The error names the snapped canvas to ask for instead.
+pub fn check_canvas(height: usize, width: usize) -> Result<(), String> {
+    let (sh, sw) = snap_canvas(height.max(1), width.max(1));
+    let hint = format!("nearest valid canvas: {sh}x{sw} (height x width)");
+    let m = H3_CANVAS_MULTIPLE;
+    if height == 0 || width == 0 || height % m != 0 || width % m != 0 {
+        return Err(format!(
+            "H3 height and width must be positive multiples of {m}, got {height}x{width}; {hint}"
+        ));
+    }
+    if height * width > H3_MAX_PIXELS {
+        return Err(format!(
+            "H3 canvas {height}x{width} is {} pixels, above the {H3_MAX_PIXELS} ({H3_SHORT_EDGE}x1344) the model was trained to; {hint}",
+            height * width
+        ));
+    }
+    let ratio = width as f64 / height as f64;
+    if !(0.25..=4.0).contains(&ratio) {
+        return Err(format!(
+            "H3 supports aspect ratios 1:4 to 4:1, got {height}x{width}"
+        ));
+    }
+    Ok(())
+}
+
 /// `align_num_frames`: round up to the next `17 n + 5`.
 pub fn align_num_frames(num_frames: usize) -> usize {
     let mut n = num_frames.max(1);
@@ -823,6 +872,12 @@ impl H3Geometry {
         })
     }
 
+    /// [`Self::new`] for an explicit canvas, validated by [`check_canvas`].
+    pub fn checked(height: usize, width: usize, requested_frames: usize) -> Result<Self, String> {
+        check_canvas(height, width)?;
+        Self::new(height, width, requested_frames)
+    }
+
     /// The default 16:9 canvas for a duration in whole seconds.
     pub fn default_16x9(seconds: usize) -> Result<Self, String> {
         let (height, width) = resolve_canvas_size(16.0, 9.0)?;
@@ -853,6 +908,33 @@ impl H3Geometry {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn explicit_canvases_are_checked_and_snapped() {
+        // The default and the GB10 480p cell are valid as given.
+        assert!(check_canvas(768, 1344).is_ok());
+        assert!(check_canvas(480, 832).is_ok());
+        assert!(check_canvas(1344, 768).is_ok());
+        let g = H3Geometry::checked(480, 832, 124).unwrap();
+        assert_eq!(g.num_frames, 124);
+        assert_eq!(g.token_grid, (37, 15, 26));
+        // Not a multiple of 32: refused, with the snapped canvas named.
+        let e = check_canvas(720, 1280).unwrap_err();
+        assert!(e.contains("704x1280"), "{e}");
+        // 720 / 32 = 22.5 rounds half to even, as `packing.py` does.
+        assert_eq!(snap_canvas(720, 1280), (704, 1280));
+        // Above 768 x 1344: refused, and the hint fits the budget.
+        let e = check_canvas(1088, 1920).unwrap_err();
+        assert!(e.contains("above"), "{e}");
+        let (h, w) = snap_canvas(1088, 1920);
+        assert!(h * w <= H3_MAX_PIXELS && h % 32 == 0 && w % 32 == 0);
+        assert!(check_canvas(h, w).is_ok());
+        // Aspect outside 1:4..4:1.
+        assert!(check_canvas(128, 640).is_err());
+        assert!(check_canvas(0, 640).is_err());
+        // Frame counts outside 5..15 s stay refused by the geometry.
+        assert!(H3Geometry::checked(480, 832, 24).is_err());
+    }
 
     #[test]
     fn transformer_numbers() {

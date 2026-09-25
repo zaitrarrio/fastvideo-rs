@@ -5,6 +5,7 @@
 
 pub mod config;
 pub mod lora;
+pub mod memory;
 pub mod mrope;
 pub mod packing;
 pub mod presentation;
