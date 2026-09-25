@@ -38,11 +38,19 @@ impl CudaTensor {
             )));
         }
         #[cfg(feature = "cuda")]
+        if self.act16_device() && self.is_bf16() {
+            if let Some(t) = super::act16::ln_adaln_e(
+                self, e, batch, seq, dim, e_rows, scale_slot, shift_slot, eps,
+            )? {
+                return Ok(t);
+            }
+        }
+        #[cfg(feature = "cuda")]
         if let (Some(x), Some(ed)) = (self.dev()?, e.dev()?) {
             let out = super::ops::ln_adaln_e_device(
                 &x, &ed, batch, seq, dim, e_rows, scale_slot, shift_slot, eps,
             )?;
-            return Self::from_dev_result(out, self.shape.clone());
+            return self.keep_dtype(Self::from_dev_result(out, self.shape.clone())?);
         }
         let out = host::ln_adaln_e(
             &self.host_cow()?,
@@ -54,7 +62,7 @@ impl CudaTensor {
             shift_slot,
             eps,
         );
-        Ok(Self::host_only(out, self.shape.clone()))
+        self.keep_dtype(Self::host_only(out, self.shape.clone()))
     }
 
     /// `rope_half(ln_adaln_e(x))` in one launch when `FASTVIDEO_NVFP4` is on
@@ -98,7 +106,7 @@ impl CudaTensor {
                 let out = super::ops::ln_adaln_e_rope_half_device(
                     &x, &ed, &c, &s, batch, heads, seq, dim, e_rows, scale_slot, shift_slot, r, eps,
                 )?;
-                return Self::from_dev_result(out, self.shape.clone());
+                return self.keep_dtype(Self::from_dev_result(out, self.shape.clone())?);
             }
         }
         let out = host::ln_adaln_e_rope_half(
@@ -115,10 +123,12 @@ impl CudaTensor {
             r,
             eps,
         );
-        Ok(Self::host_only(out, self.shape.clone()))
+        self.keep_dtype(Self::host_only(out, self.shape.clone()))
     }
 
     /// `self + update * e[:, slot]` (gated residual) for `[batch, seq, dim]`.
+    /// With `FASTVIDEO_BF16_ACT` and a bf16 residual the result is bf16 with
+    /// the eager rounding points: `bf16(h + bf16(update * gate))`.
     pub fn residual_gate_add_e(
         &self,
         update: &CudaTensor,
@@ -137,6 +147,30 @@ impl CudaTensor {
                 "residual_gate_add_e shapes {:?} {:?} {:?}",
                 self.shape, update.shape, e.shape
             )));
+        }
+        let act16 = super::tensor::bf16_activations() && self.is_bf16();
+        #[cfg(feature = "cuda")]
+        if act16 && (self.act16_device() || update.act16_device()) {
+            if let Some(t) =
+                super::act16::residual_gate(self, update, e, (batch, seq, dim), e_rows, slot)?
+            {
+                return Ok(t);
+            }
+        }
+        if act16 {
+            let (h, a, g) = (self.host_cow()?, update.host_cow()?, e.host_cow()?);
+            let out: Vec<f32> = (0..h.len())
+                .map(|i| {
+                    let (row, d) = (i / dim, i % dim);
+                    let gate = g[((row / seq) * e_rows + slot) * dim + d];
+                    super::quant::gate_residual_eager(h[i], gate, a[i])
+                })
+                .collect();
+            return Ok(Self::host_only_dtype(
+                out,
+                self.shape.clone(),
+                super::tensor::TensorDType::Bf16,
+            ));
         }
         #[cfg(feature = "cuda")]
         if let (Some(h), Some(a), Some(ed)) = (self.dev()?, update.dev()?, e.dev()?) {
@@ -211,7 +245,7 @@ impl CudaTensor {
                 col_off,
                 eps,
             )?;
-            return Self::from_dev_result(out, out_shape);
+            return self.keep_dtype(Self::from_dev_result(out, out_shape)?);
         }
         let x = self.host_cow()?;
         let w = weight.host_cow()?;
@@ -231,7 +265,7 @@ impl CudaTensor {
             col_off,
             eps,
         );
-        Ok(Self::host_only(out, out_shape))
+        self.keep_dtype(Self::host_only(out, out_shape))
     }
 
     /// Columns `[col_off, col_off + heads*d)` of `[b, seq, width]` as BHSD.
@@ -248,14 +282,23 @@ impl CudaTensor {
             )));
         }
         let out_shape = vec![batch, heads, seq, d];
+        // A bf16 projection is split as bf16 (a copy, never widened).
+        #[cfg(feature = "cuda")]
+        if self.device_slice_bf16().is_some() {
+            if let Some(t) =
+                super::act16::split_heads(self, batch, seq, heads, d, width, col_off)?
+            {
+                return Ok(t);
+            }
+        }
         #[cfg(feature = "cuda")]
         if let Some(x) = self.dev()? {
             let out =
                 super::ops::split_heads_bhsd_device(&x, batch, seq, heads, d, width, col_off)?;
-            return Self::from_dev_result(out, out_shape);
+            return self.keep_dtype(Self::from_dev_result(out, out_shape)?);
         }
         let out = host::split_heads_bhsd(&self.host_cow()?, batch, seq, heads, d, width, col_off);
-        Ok(Self::host_only(out, out_shape))
+        Ok(Self::host_only_dtype(out, out_shape, self.dtype()))
     }
 
     /// BHSD → `[b, seq, heads*d]`.
@@ -268,15 +311,22 @@ impl CudaTensor {
         };
         let out_shape = vec![batch, seq, heads * d];
         #[cfg(feature = "cuda")]
+        if self.device_slice_bf16().is_some() {
+            if let Some(t) = super::act16::merge_heads(self, batch, heads, seq, d)? {
+                return Ok(t);
+            }
+        }
+        #[cfg(feature = "cuda")]
         if let Some(x) = self.dev()? {
-            return Self::from_dev_result(
+            return self.keep_dtype(Self::from_dev_result(
                 super::ops::merge_heads_device(&x, batch, heads, seq, d)?,
                 out_shape,
-            );
+            )?);
         }
-        Ok(Self::host_only(
+        Ok(Self::host_only_dtype(
             host::merge_heads(&self.host_cow()?, batch, heads, seq, d),
             out_shape,
+            self.dtype(),
         ))
     }
 

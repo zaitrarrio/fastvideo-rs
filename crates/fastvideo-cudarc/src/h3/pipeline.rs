@@ -760,10 +760,13 @@ impl H3Pipeline {
             ));
             if spark {
                 crate::wan::log::info(format_args!(
-                    "h3 sol-h3-spark: stage-1 VSA {} tile {} BF16 FastH3_VSA_DataFree strength {}; W8A8 FP8 stays off (measured 16–20 dB). Draft {}x{} {}f. H3×2 upscaler and H3-to-LTX adapter run when their checkpoints are set. Joint 3-step LTX refine uses the fixed prompt and cached Gemma",
+                    "h3 sol-h3-spark: stage-1 VSA {} tile {} BF16 FastH3_VSA_DataFree strength {}; DiT {} (upstream: W8A8 after the bf16 LoRA merge; FASTVIDEO_H3_QUANT=w8a8). Draft {}x{} {}f. H3×2 upscaler and H3-to-LTX adapter run when their checkpoints are set. Joint 3-step LTX refine uses the fixed prompt and cached Gemma",
                     contract.vsa_sparsity,
                     contract.vsa_tile_size,
                     spec.scale,
+                    crate::wan::quant::QuantMode::from_env()
+                        .map(|m| m.as_str())
+                        .unwrap_or("invalid FASTVIDEO_H3_QUANT"),
                     fastvideo_models::h3::sol::SPARK_DRAFT_WIDTH,
                     fastvideo_models::h3::sol::SPARK_DRAFT_HEIGHT,
                     fastvideo_models::h3::sol::SPARK_DRAFT_FRAMES,
@@ -1136,6 +1139,7 @@ impl H3Pipeline {
             let vsa_cfg = super::vsa::H3VsaConfig {
                 sparsity: self.contract.vsa_sparsity,
                 group: crate::wan::envflag::usize_flag("FASTVIDEO_VSA_GROUP", 8).max(1),
+                tile_size: self.contract.vsa_tile_size,
             };
             Some(H3Vsa::new(
                 &layout,

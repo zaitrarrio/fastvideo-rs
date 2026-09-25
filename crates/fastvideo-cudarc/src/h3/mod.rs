@@ -4,6 +4,7 @@
 //! See docs/ports/h3.md.
 
 pub mod audio_vae;
+pub mod fused16;
 pub mod lora;
 pub mod media;
 pub mod mlx;

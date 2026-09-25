@@ -73,6 +73,17 @@ fn msg(s: impl Into<String>) -> TensorError {
     TensorError::Message(s.into())
 }
 
+/// `(big, small, op, inner, period, out_shape)` of a broadcast binary op.
+#[cfg(feature = "cuda")]
+type BcastPlan<'a> = (&'a CudaTensor, &'a CudaTensor, BcastOp, usize, usize, Vec<usize>);
+
+/// A tensor's device storage in its own dtype (see [`CudaTensor::dev_any`]).
+#[cfg(feature = "cuda")]
+pub(crate) enum DevAny<'a> {
+    F32(DevRef<'a>),
+    Bf16(std::sync::Arc<cudarc::driver::CudaSlice<half::bf16>>),
+}
+
 /// Shareable device buffer (cudarc `CudaSlice<f32>`).
 #[cfg(feature = "cuda")]
 #[derive(Clone)]
@@ -522,6 +533,39 @@ impl CudaTensor {
         Ok(Some(DevRef::Owned(slice)))
     }
 
+    /// Device storage as it is: a bf16 buffer stays bf16 (no widening copy),
+    /// an f32 buffer (or a temporary upload of a host tensor) stays f32.
+    #[cfg(feature = "cuda")]
+    pub(crate) fn dev_any(&self) -> Result<Option<DevAny<'_>>> {
+        if let Some(buf) = &self.device_bf16 {
+            return Ok(Some(DevAny::Bf16(buf.slice.clone())));
+        }
+        Ok(self.dev()?.map(DevAny::F32))
+    }
+
+    /// Whether this tensor's values are bf16 (device bf16 storage or a
+    /// bf16-tagged host copy).
+    pub fn is_bf16(&self) -> bool {
+        self.dtype == TensorDType::Bf16
+    }
+
+    /// With `FASTVIDEO_BF16_ACT`, an op on a bf16 activation yields bf16:
+    /// round a result that came back f32 (host path or f32 kernel).
+    pub(crate) fn keep_dtype(&self, out: CudaTensor) -> Result<CudaTensor> {
+        if bf16_activations() && self.is_bf16() && !out.is_bf16() {
+            out.quantize_bf16()
+        } else {
+            Ok(out)
+        }
+    }
+
+    /// Whether ops on this tensor take the bf16-native device kernels.
+    #[cfg(feature = "cuda")]
+    pub(crate) fn act16_device(&self) -> bool {
+        bf16_activations()
+            && (self.device_bf16.is_some() || (self.is_bf16() && stats::device_expected()))
+    }
+
     /// Device bf16 view: borrowed when stored as bf16, else a temporary cast.
     #[cfg(feature = "cuda")]
     pub(crate) fn dev_bf16(
@@ -661,16 +705,23 @@ impl CudaTensor {
             return Ok(self.with_shape(out_shape));
         }
         #[cfg(feature = "cuda")]
+        if rank <= 6 && self.device_bf16.is_some() {
+            if let Some(t) = super::act16::permute(self, dims, out_shape.clone())? {
+                return Ok(t);
+            }
+        }
+        #[cfg(feature = "cuda")]
         if rank <= 6 {
             if let Some(src) = self.dev()? {
                 let out = super::ops::gather_nd_device(&src, &self.shape, dims)?;
-                return Self::from_dev_result(out, out_shape);
+                return self.keep_dtype(Self::from_dev_result(out, out_shape)?);
             }
         }
         stats::host_fallback("permute", format_args!("{:?} {dims:?}", self.shape))?;
-        Ok(Self::host_only(
+        Ok(Self::host_only_dtype(
             host::permute(&self.host_cow()?, &self.shape, dims),
             out_shape,
+            self.dtype,
         ))
     }
 
@@ -699,6 +750,24 @@ impl CudaTensor {
         let mut out_shape = self.shape.clone();
         out_shape[dim] = len;
         let (outer, inner) = self.blocks(dim);
+        // A bf16 buffer is copied as bf16: never widened through f32.
+        #[cfg(feature = "cuda")]
+        if self.device_bf16.is_some() {
+            if let Some(x) = super::act16::operand(self)? {
+                let mut out = super::act16::OutBuf::new(numel(&out_shape), true)?;
+                super::act16::block_copy_into(
+                    &x,
+                    &mut out,
+                    outer,
+                    len * inner,
+                    d * inner,
+                    len * inner,
+                    start * inner,
+                    0,
+                )?;
+                return out.into_tensor(out_shape);
+            }
+        }
         #[cfg(feature = "cuda")]
         if let Some(src) = self.dev()? {
             let mut out = super::ops::alloc(numel(&out_shape).max(1))?;
@@ -721,7 +790,7 @@ impl CudaTensor {
             let base = o * d * inner + start * inner;
             out.extend_from_slice(&src[base..base + len * inner]);
         }
-        Ok(Self::host_only(out, out_shape))
+        Ok(Self::host_only_dtype(out, out_shape, self.dtype))
     }
 
     pub fn chunk(&self, chunks: usize, dim: usize) -> Result<Vec<CudaTensor>> {
@@ -760,6 +829,33 @@ impl CudaTensor {
             return Ok((*first).clone());
         }
         let (outer, inner) = first.blocks(dim);
+        // With bf16 activations a cat that includes a bf16 part is bf16 (the
+        // reference casts every part to the activation dtype); a bf16-only
+        // cat is bf16 regardless of the flag, since that is what is stored.
+        let any16 = tensors.iter().any(|t| t.is_bf16());
+        let out16 = (any16 && bf16_activations()) || tensors.iter().all(|t| t.is_bf16());
+        #[cfg(feature = "cuda")]
+        if stats::device_expected() && out16 {
+            let mut out = super::act16::OutBuf::new(numel(&out_shape), true)?;
+            let mut offset = 0usize;
+            for t in tensors {
+                let len = t.shape[dim] * inner;
+                let x = super::act16::operand(t)?
+                    .ok_or_else(|| msg("cat: part has no device storage"))?;
+                super::act16::block_copy_into(
+                    &x,
+                    &mut out,
+                    outer,
+                    len,
+                    len,
+                    cat_len * inner,
+                    0,
+                    offset,
+                )?;
+                offset += len;
+            }
+            return out.into_tensor(out_shape);
+        }
         #[cfg(feature = "cuda")]
         if stats::device_expected() {
             let mut out = super::ops::alloc(numel(&out_shape).max(1))?;
@@ -793,7 +889,12 @@ impl CudaTensor {
                 out.extend_from_slice(&h[o * len..(o + 1) * len]);
             }
         }
-        Ok(Self::host_only(out, out_shape))
+        let out = Self::host_only(out, out_shape);
+        if out16 {
+            out.quantize_bf16()
+        } else {
+            Ok(out)
+        }
     }
 
     /// Pad one axis with zeros, a reflection, or the edge sample — `torch`'s
@@ -916,7 +1017,57 @@ impl CudaTensor {
         Ok(Self::host_only(out, out_shape))
     }
 
+    #[cfg(feature = "cuda")]
+    /// `(big, small, op, inner, period, out_shape)`: `small[(i / inner) %
+    /// period]` pairs with `big[i]` (ops swapped when `big` is `other`).
+    fn bcast_plan<'a>(
+        &'a self,
+        other: &'a CudaTensor,
+        op: BcastOp,
+    ) -> Result<Option<BcastPlan<'a>>> {
+        if self.shape == other.shape {
+            return Ok(Some((self, other, op, 1, self.numel().max(1), self.shape.clone())));
+        }
+        let out_shape = broadcast_shapes(&self.shape, &other.shape)?;
+        Ok(if self.shape == out_shape {
+            repeat_plan(&self.shape, &other.shape).map(|(i, p)| (self, other, op, i, p, out_shape))
+        } else if other.shape == out_shape {
+            let swapped = match op {
+                BcastOp::Sub => BcastOp::RSub,
+                BcastOp::Div => BcastOp::RDiv,
+                o => o,
+            };
+            repeat_plan(&other.shape, &self.shape).map(|(i, p)| (other, self, swapped, i, p, out_shape))
+        } else {
+            None
+        })
+    }
+
+    /// Elementwise binary op. With `FASTVIDEO_BF16_ACT` and a bf16 operand the
+    /// device kernel reads both operands as stored and the result is bf16 iff
+    /// both are (torch type promotion), rounded once.
     fn binary(&self, other: &CudaTensor, op: BcastOp) -> Result<CudaTensor> {
+        if !(bf16_activations() && (self.is_bf16() || other.is_bf16())) {
+            return self.binary_f32(other, op);
+        }
+        let out16 = self.is_bf16() && other.is_bf16();
+        #[cfg(feature = "cuda")]
+        if self.act16_device() || other.act16_device() {
+            if let Some((big, small, op, inner, period, shape)) = self.bcast_plan(other, op)? {
+                if let Some(t) = super::act16::binary(big, small, op, inner, period, out16, shape)? {
+                    return Ok(t);
+                }
+            }
+        }
+        let out = self.binary_f32(other, op)?;
+        if out16 {
+            out.quantize_bf16()
+        } else {
+            Ok(out)
+        }
+    }
+
+    fn binary_f32(&self, other: &CudaTensor, op: BcastOp) -> Result<CudaTensor> {
         if self.shape == other.shape && matches!(op, BcastOp::Add | BcastOp::Sub | BcastOp::Mul) {
             #[cfg(feature = "cuda")]
             if let (Some(a), Some(b)) = (self.dev()?, other.dev()?) {
@@ -995,12 +1146,7 @@ impl CudaTensor {
     }
 
     pub fn add(&self, other: &CudaTensor) -> Result<CudaTensor> {
-        let out = self.binary(other, BcastOp::Add)?;
-        if bf16_residual() {
-            out.quantize_bf16()
-        } else {
-            Ok(out)
-        }
+        self.binary(other, BcastOp::Add)
     }
 
     pub fn sub(&self, other: &CudaTensor) -> Result<CudaTensor> {
@@ -1061,9 +1207,9 @@ impl CudaTensor {
     ) -> Result<CudaTensor> {
         #[cfg(feature = "cuda")]
         if let Some(a) = self.dev()? {
-            return Self::from_dev_result(device(&a)?, self.shape.clone());
+            return self.keep_dtype(Self::from_dev_result(device(&a)?, self.shape.clone())?);
         }
-        Ok(Self::host_only(
+        self.keep_dtype(Self::host_only(
             host::map1(&self.host_cow()?, host_fn),
             self.shape.clone(),
         ))
@@ -1073,7 +1219,20 @@ impl CudaTensor {
         self.try_add_scalar(s).expect("add_scalar")
     }
 
+    /// The bf16-native unary kernel for a bf16 activation (`None` otherwise).
+    #[cfg(feature = "cuda")]
+    fn act16_unary(&self, kind: super::act16::Unary, p0: f32, p1: f32) -> Result<Option<CudaTensor>> {
+        if !(self.act16_device() && self.is_bf16()) {
+            return Ok(None);
+        }
+        super::act16::unary(self, kind, p0, p1, true)
+    }
+
     pub fn try_add_scalar(&self, s: f32) -> Result<CudaTensor> {
+        #[cfg(feature = "cuda")]
+        if let Some(t) = self.act16_unary(super::act16::Unary::AddScalar, s, 0.0)? {
+            return Ok(t);
+        }
         self.unary_op(
             #[cfg(feature = "cuda")]
             |a| super::ops::add_scalar_device(a, s),
@@ -1088,6 +1247,10 @@ impl CudaTensor {
     }
 
     pub fn try_mul_scalar(&self, s: f32) -> Result<CudaTensor> {
+        #[cfg(feature = "cuda")]
+        if let Some(t) = self.act16_unary(super::act16::Unary::MulScalar, s, 0.0)? {
+            return Ok(t);
+        }
         self.unary_op(
             #[cfg(feature = "cuda")]
             |a| super::ops::mul_scalar_device(a, s),
@@ -1098,6 +1261,13 @@ impl CudaTensor {
     }
 
     pub fn clamp(&self, lo: f32, hi: f32) -> CudaTensor {
+        #[cfg(feature = "cuda")]
+        if let Some(t) = self
+            .act16_unary(super::act16::Unary::Clamp, lo, hi)
+            .expect("clamp")
+        {
+            return t;
+        }
         self.unary_op(
             #[cfg(feature = "cuda")]
             |a| super::ops::clamp_device(a, lo, hi),
@@ -1109,6 +1279,13 @@ impl CudaTensor {
     }
 
     pub fn silu(&self) -> CudaTensor {
+        #[cfg(feature = "cuda")]
+        if let Some(t) = self
+            .act16_unary(super::act16::Unary::Silu, 0.0, 0.0)
+            .expect("silu")
+        {
+            return t;
+        }
         self.unary_op(
             #[cfg(feature = "cuda")]
             |a| super::ops::unary_device(a, super::ops::ElemUnary::Silu),
@@ -1121,6 +1298,15 @@ impl CudaTensor {
 
     /// Element-wise σ(x). Small tensors (e.g. per-head gate logits) only.
     pub fn try_sigmoid(&self) -> Result<CudaTensor> {
+        // On the device (LTX-2.3's per-head gates are [S, heads]: no host trip).
+        #[cfg(feature = "cuda")]
+        if self.is_device_fresh() {
+            if let Some(t) =
+                super::act16::unary(self, super::act16::Unary::Sigmoid, 0.0, 0.0, self.is_bf16())?
+            {
+                return Ok(t);
+            }
+        }
         let out = super::ops::host::map1(&self.host_cow()?, |x| 1.0 / (1.0 + (-x).exp()));
         let mut t = Self::host_only(out, self.shape.clone());
         t.pin_device()?;
@@ -1142,6 +1328,22 @@ impl CudaTensor {
         let half = last / 2;
         let mut out_shape = self.shape.clone();
         *out_shape.last_mut().unwrap() = half;
+        // bf16 activations: Sol-H3's fused SwiGLU, value * (gate * sigmoid(gate))
+        // in f32 with one rounding, reading the bf16 GEMM output as stored.
+        #[cfg(feature = "cuda")]
+        if self.act16_device() && self.is_bf16() {
+            if let Some(t) = super::act16::swiglu(self, half, out_shape.clone())? {
+                return Ok(t);
+            }
+        }
+        if bf16_activations() && self.is_bf16() {
+            let x = self.host_cow()?;
+            let out: Vec<f32> = x
+                .chunks_exact(2 * half)
+                .flat_map(super::quant::swiglu_row)
+                .collect();
+            return Ok(Self::host_only_dtype(out, out_shape, TensorDType::Bf16));
+        }
         #[cfg(feature = "cuda")]
         if let Some(x) = self.dev()? {
             return Self::from_dev_result(
@@ -1158,6 +1360,13 @@ impl CudaTensor {
     /// Exact GELU (erf). `gelu_tanh` is the approximation; a checkpoint means
     /// one or the other and they differ by ~1e-3.
     pub fn gelu_erf(&self) -> CudaTensor {
+        #[cfg(feature = "cuda")]
+        if let Some(t) = self
+            .act16_unary(super::act16::Unary::GeluErf, 0.0, 0.0)
+            .expect("gelu_erf")
+        {
+            return t;
+        }
         self.unary_op(
             #[cfg(feature = "cuda")]
             |a| super::ops::unary_device(a, super::ops::ElemUnary::GeluErf),
@@ -1234,13 +1443,19 @@ impl CudaTensor {
             }
         };
         #[cfg(feature = "cuda")]
+        if self.act16_device() && self.is_bf16() {
+            if let Some(t) = super::act16::rope_half(self, cos, sin, s, d, r)? {
+                return Ok(t);
+            }
+        }
+        #[cfg(feature = "cuda")]
         if let (Some(x), Some(c), Some(sn)) = (self.dev()?, cos.dev()?, sin.dev()?) {
-            return Self::from_dev_result(
+            return self.keep_dtype(Self::from_dev_result(
                 super::ops::rope_half_device(&x, &c, &sn, s, d, r)?,
                 self.shape.clone(),
-            );
+            )?);
         }
-        Ok(Self::host_only(
+        self.keep_dtype(Self::host_only(
             host::rope_half(
                 &self.host_cow()?,
                 &cos.host_cow()?,
@@ -1283,6 +1498,13 @@ impl CudaTensor {
     }
 
     pub fn gelu_tanh(&self) -> CudaTensor {
+        #[cfg(feature = "cuda")]
+        if let Some(t) = self
+            .act16_unary(super::act16::Unary::GeluTanh, 0.0, 0.0)
+            .expect("gelu_tanh")
+        {
+            return t;
+        }
         self.unary_op(
             #[cfg(feature = "cuda")]
             |a| super::ops::unary_device(a, super::ops::ElemUnary::GeluTanh),
@@ -1401,17 +1623,20 @@ impl CudaTensor {
         ))
     }
 
-    /// RMS norm over the last dim. With `FASTVIDEO_BF16_ACT`, activations are
-    /// rounded to bf16 and the mean-square accumulates in f32.
+    /// RMS norm over the last dim. With `FASTVIDEO_BF16_ACT` a bf16 input is
+    /// read as bf16, the mean-square accumulates in f32 and `x * r * w` rounds
+    /// once to a bf16 result.
     pub fn rms_norm(&self, weight: &CudaTensor, eps: f32) -> Result<CudaTensor> {
-        let x = if bf16_activations() {
-            self.quantize_bf16()?
-        } else {
-            self.clone()
-        };
+        let x = self;
         let width = *x.shape.last().ok_or_else(|| msg("rms_norm on scalar"))?;
         if weight.numel() != width {
             return Err(msg("rms_norm weight size"));
+        }
+        #[cfg(feature = "cuda")]
+        if x.act16_device() && x.is_bf16() {
+            if let Some(t) = super::act16::rms_norm(x, Some(weight), eps)? {
+                return Ok(t);
+            }
         }
         #[cfg(feature = "cuda")]
         if let (Some(a), Some(w)) = (x.dev()?, weight.dev()?) {
@@ -1419,21 +1644,13 @@ impl CudaTensor {
                 super::ops::rms_norm_last_device(&a, &w, eps)?,
                 x.shape.clone(),
             )?;
-            return if bf16_activations() {
-                out.quantize_bf16()
-            } else {
-                Ok(out)
-            };
+            return x.keep_dtype(out);
         }
         let out = Self::host_only(
             host::rms_norm_last(&x.host_cow()?, &weight.host_cow()?, eps),
             x.shape.clone(),
         );
-        if bf16_activations() {
-            out.quantize_bf16()
-        } else {
-            Ok(out)
-        }
+        x.keep_dtype(out)
     }
 
     pub fn layer_norm(
@@ -1442,11 +1659,7 @@ impl CudaTensor {
         weight: Option<&CudaTensor>,
         bias: Option<&CudaTensor>,
     ) -> Result<CudaTensor> {
-        let src = if bf16_activations() {
-            self.quantize_bf16()?
-        } else {
-            self.clone()
-        };
+        let src = self.clone();
         let width = *src
             .shape
             .last()
@@ -1456,6 +1669,12 @@ impl CudaTensor {
             (None, None) => None,
             _ => return Err(msg("layer_norm needs both weight and bias, or neither")),
         };
+        #[cfg(feature = "cuda")]
+        if src.act16_device() && src.is_bf16() {
+            if let Some(t) = super::act16::layer_norm(&src, affine, eps)? {
+                return Ok(t);
+            }
+        }
         #[cfg(feature = "cuda")]
         if let Some(a) = src.dev()? {
             let out = match affine {
@@ -1469,11 +1688,7 @@ impl CudaTensor {
                 None => super::ops::layer_norm_last_device(&a, None, width, eps)?,
             };
             let out = Self::from_dev_result(out, src.shape.clone())?;
-            return if bf16_activations() {
-                out.quantize_bf16()
-            } else {
-                Ok(out)
-            };
+            return src.keep_dtype(out);
         }
         let x = src.host_cow()?;
         let out = match affine {
@@ -1482,12 +1697,7 @@ impl CudaTensor {
             }
             None => host::layer_norm_last(&x, width, None, eps),
         };
-        let out = Self::host_only(out, src.shape.clone());
-        if bf16_activations() {
-            out.quantize_bf16()
-        } else {
-            Ok(out)
-        }
+        src.keep_dtype(Self::host_only(out, src.shape.clone()))
     }
 
     /// Add `bias` along `dim` (channel bias for NC… tensors, last dim for linears).

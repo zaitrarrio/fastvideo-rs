@@ -800,6 +800,20 @@ pub fn vsa_tile_mean_device(
     seq: usize,
     dim: usize,
 ) -> Result<CudaSlice<f32>> {
+    vsa_tile_mean_round_device(x, plan, bh, seq, dim, false)
+}
+
+/// [`vsa_tile_mean_device`]; `round16` pools each value rounded to bf16
+/// first, as H3's upstream pools its bf16 q/k/v.
+#[cfg(feature = "cuda")]
+pub fn vsa_tile_mean_round_device(
+    x: &CudaSlice<f32>,
+    plan: &VsaPlanDev,
+    bh: usize,
+    seq: usize,
+    dim: usize,
+    round16: bool,
+) -> Result<CudaSlice<f32>> {
     check("vsa_tile_mean", x.len() == bh * seq * dim && dim > 0)?;
     let dev = ctx()?;
     let mut out = alloc(bh * plan.num_tiles * dim)?;
@@ -809,9 +823,9 @@ pub fn vsa_tile_mean_device(
         shared_mem_bytes: 0,
     };
     let (seq_i, dim_i) = (seq as i64, dim as i32);
-    let (nt, te) = (plan.num_tiles as i32, plan.tile_elems as i32);
+    let (nt, te, r16) = (plan.num_tiles as i32, plan.tile_elems as i32, i32::from(round16));
     launch!(dev.stream, &dev.kernels.vsa_tile_mean, cfg;
-        x, &plan.slot_src, &plan.block_sizes, &mut out, &seq_i, &dim_i, &nt, &te)
+        x, &plan.slot_src, &plan.block_sizes, &mut out, &seq_i, &dim_i, &nt, &te, &r16)
     .map_err(err)?;
     Ok(out)
 }
@@ -1290,6 +1304,26 @@ pub fn vsa_combine_device(
     seq: usize,
     dim: usize,
 ) -> Result<()> {
+    vsa_combine_round_device(sparse, coarse, gate, plan, out, bh, group, q_base, seq, dim, false)
+}
+
+/// [`vsa_combine_device`]; `round16` combines with H3 upstream's bf16
+/// rounding points.
+#[cfg(feature = "cuda")]
+#[allow(clippy::too_many_arguments)]
+pub fn vsa_combine_round_device(
+    sparse: &CudaSlice<f32>,
+    coarse: &CudaSlice<f32>,
+    gate: Option<&CudaSlice<f32>>,
+    plan: &VsaPlanDev,
+    out: &mut CudaSlice<f32>,
+    bh: usize,
+    group: usize,
+    q_base: usize,
+    seq: usize,
+    dim: usize,
+    round16: bool,
+) -> Result<()> {
     let dev = ctx()?;
     let rows_per_block = (256 / dim.min(128)).max(1);
     let cfg = LaunchConfig {
@@ -1313,9 +1347,9 @@ pub fn vsa_combine_device(
             &placeholder
         }
     };
-    let has_gate = i32::from(gate.is_some());
+    let (has_gate, r16) = (i32::from(gate.is_some()), i32::from(round16));
     launch!(dev.stream, &dev.kernels.vsa_combine, cfg;
-        sparse, coarse, gate_ref, &plan.slot_src, out, &seq_i, &dim_i, &te, &qb, &nt, &has_gate)
+        sparse, coarse, gate_ref, &plan.slot_src, out, &seq_i, &dim_i, &te, &qb, &nt, &has_gate, &r16)
     .map_err(err)?;
     Ok(())
 }
@@ -2979,10 +3013,52 @@ pub fn sol_prep_device(
     scale: f32,
     thresh: fastvideo_models::sol_attn::SolThresh,
 ) -> Result<SolPrepDev> {
-    use fastvideo_models::sol_attn::{num_blocks, SolThresh, LOG2_E};
     for (name, x) in [("sol_prep q", q), ("sol_prep k", k), ("sol_prep v", v)] {
         sol_geometry(name, x.len(), bh, tokens, dim)?;
     }
+    let p = super::quant::ptr;
+    sol_prep_raw(p(q), p(k), p(v), false, bh, tokens, dim, tau, scale, thresh)
+}
+
+/// [`sol_prep_device`] on bf16 q/k/v (bf16 activations): the prep kernels
+/// read the bf16 bits directly — rounding a bf16 value is the identity, so
+/// the result is the f32 path's bit for bit, without widening copies.
+#[cfg(feature = "cuda")]
+#[allow(clippy::too_many_arguments)]
+pub fn sol_prep_device_bf16(
+    q: &CudaSlice<half::bf16>,
+    k: &CudaSlice<half::bf16>,
+    v: &CudaSlice<half::bf16>,
+    bh: usize,
+    tokens: usize,
+    dim: usize,
+    tau: f32,
+    scale: f32,
+    thresh: fastvideo_models::sol_attn::SolThresh,
+) -> Result<SolPrepDev> {
+    for (name, n) in [("sol_prep q", q.len()), ("sol_prep k", k.len()), ("sol_prep v", v.len())] {
+        sol_geometry(name, n, bh, tokens, dim)?;
+    }
+    let p = super::quant::ptr;
+    sol_prep_raw(p(q), p(k), p(v), true, bh, tokens, dim, tau, scale, thresh)
+}
+
+#[cfg(feature = "cuda")]
+#[allow(clippy::too_many_arguments)]
+fn sol_prep_raw(
+    q: u64,
+    k: u64,
+    v: u64,
+    in16: bool,
+    bh: usize,
+    tokens: usize,
+    dim: usize,
+    tau: f32,
+    scale: f32,
+    thresh: fastvideo_models::sol_attn::SolThresh,
+) -> Result<SolPrepDev> {
+    use fastvideo_models::sol_attn::{num_blocks, SolThresh, LOG2_E};
+    let in16_i = i32::from(in16);
     let dev = ctx()?;
     let nt = num_blocks(tokens);
     let n_tok = bh * tokens * dim;
@@ -2999,7 +3075,7 @@ pub fn sol_prep_device(
         shared_mem_bytes: 0,
     };
     launch!(dev.stream, &dev.kernels.sol_prep_kv, per_block;
-        k, v, &mut kb, &mut vb, &mut kc, &mut vc, &t_i, &nt_i)
+        &k, &v, &mut kb, &mut vb, &mut kc, &mut vc, &t_i, &nt_i, &in16_i)
     .map_err(err)?;
     let per_head = LaunchConfig {
         grid_dim: (bh as u32, 1, 1),
@@ -3033,7 +3109,7 @@ pub fn sol_prep_device(
     let sl2 = scale * LOG2_E;
     let exact_i = i32::from(exact);
     launch!(dev.stream, &dev.kernels.sol_prep_q, per_block;
-        q, &mut qb, &kstat, km_arg, &mut thr, &t_i, &nt_i, &tau, &sl2, &exact_i)
+        &q, &mut qb, &kstat, km_arg, &mut thr, &t_i, &nt_i, &tau, &sl2, &exact_i, &in16_i)
     .map_err(err)?;
     Ok(SolPrepDev {
         qb,
@@ -3122,6 +3198,54 @@ pub fn sol_fused_device(
     let prep = sol_prep_device(q, k, v, bh, tokens, dim, p.tau, p.scale, p.thresh)?;
     let sinks = sink_blocks(tokens, p.sink_start, p.sink_tokens);
     Ok(sol_fwd_device(&prep, p.scale, sinks, false, false)?.out)
+}
+
+/// Fused Sol-Attn on bf16 BHSD q/k/v with a bf16 output (the kernel's
+/// `out_is_bf16` store): no widening before, no cast after.
+#[cfg(feature = "cuda")]
+#[allow(clippy::too_many_arguments)]
+pub fn sol_fused_device_bf16(
+    q: &CudaSlice<half::bf16>,
+    k: &CudaSlice<half::bf16>,
+    v: &CudaSlice<half::bf16>,
+    bh: usize,
+    tokens: usize,
+    dim: usize,
+    p: &fastvideo_models::sol_attn::SolParams,
+) -> Result<CudaSlice<half::bf16>> {
+    use fastvideo_models::sol_attn::{sink_blocks, LOG2_E};
+    let dev = ctx()?;
+    check(
+        "sol-attn device path needs sm80+ (bf16 mma.sync)",
+        dev.sm_major >= 8,
+    )?;
+    let prep = sol_prep_device_bf16(q, k, v, bh, tokens, dim, p.tau, p.scale, p.thresh)?;
+    let sinks = sink_blocks(tokens, p.sink_start, p.sink_tokens);
+    let nt = prep.nt;
+    let mut out = alloc(1)?;
+    let mut out_bf16 = unsafe { dev.stream.alloc::<half::bf16>((bh * tokens * SOL_HEAD_DIM).max(1)) }
+        .map_err(err)?;
+    let mut lse = alloc(1)?;
+    let mut route = unsafe { dev.stream.alloc::<u32>(1) }.map_err(err)?;
+    let (lo, hi) = if sinks.0 < sinks.1 {
+        (sinks.0.min(nt), sinks.1.min(nt))
+    } else {
+        (nt, nt)
+    };
+    let cfg = LaunchConfig {
+        grid_dim: (nt as u32, bh as u32, 1),
+        block_dim: (128, 1, 1),
+        shared_mem_bytes: 0,
+    };
+    let (out_is_bf16, has_lse, has_dbg) = (1i32, 0i32, 0i32);
+    let (t_i, nt_i, lo_i, hi_i) = (tokens as i32, nt as i32, lo as i32, hi as i32);
+    let sl2 = p.scale * LOG2_E;
+    launch!(dev.stream, &dev.kernels.sol_mma_fwd, cfg;
+        &prep.qb, &prep.kb, &prep.vb, &prep.kc, &prep.vc, &prep.thr,
+        &mut out, &mut out_bf16, &out_is_bf16, &mut lse, &has_lse, &mut route, &has_dbg,
+        &t_i, &nt_i, &lo_i, &hi_i, &sl2)
+    .map_err(err)?;
+    Ok(out_bf16)
 }
 
 /// Sol-Attn on device through the fused kernel (diag thresholds).

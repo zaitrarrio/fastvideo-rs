@@ -9,16 +9,22 @@
 //!    that never mix the two ("segment-pure"); the video token grid is then cut
 //!    into `(4, 4, 4)` cubes as usual. Partial tiles fill their first slots.
 //! 2. **Selection ("exempt" mode).** Only video-to-video attention is
-//!    sparsified. Per head, a query tile keeps the top `k_vid = ceil(0.2 *
-//!    video_tiles)` *video* key tiles, and every text / audio key tile is
-//!    always kept: they do not compete for the budget. Text and audio *query*
-//!    tiles are dense: they see every tile.
+//!    sparsified. Per head, a query tile keeps the top `k_vid = ceil((1 -
+//!    sparsity) * video_tiles)` *video* key tiles (132 of 660 at the 8-step
+//!    recipe's 0.8, 66 at the 4-step preview's 0.9), and every text / audio key
+//!    tile is always kept: they do not compete for the budget. Text and audio
+//!    *query* tiles are dense: they see every tile.
 //! 3. **The compression branch is trained.** `out = sparse + softmax(pooled
 //!    scores over ALL tiles) @ pooled_v * to_gate_compress(x)`, on every row,
 //!    prefix rows included. The base model zero-initialises that gate; this
 //!    checkpoint ships 50 nonzero ones.
 //!
-//! On the device this reuses Wan's kernels unchanged. The forced prefix
+//! **Numerics follow upstream's bf16 tensors** (`video_sparse_attn_h3.py`):
+//! the tile means pool q/k/v rounded to bf16 (f32 accumulation), and the
+//! combine is `bf16(bf16(sparse) + bf16(bf16(coarse) * gate))` — in f32 runs
+//! too, since it is free in-kernel and decides near-tied tiles.
+//!
+//! On the device this reuses Wan's kernels (with those rounding flags). The forced prefix
 //! columns are expressed by adding a huge bias to the prefix columns of a copy
 //! of the coarse scores before the ordinary top-`(P + k_vid)`: every biased
 //! column beats every video column, so the result is exactly "all prefix tiles
@@ -48,13 +54,18 @@ pub struct H3VsaConfig {
     /// Query tiles per pass of the gather fine stage (memory bound; unused by
     /// the tensor-core kernel).
     pub group: usize,
+    /// The recipe's `vsa_tile_size`: only 64 (`(4, 4, 4)` cubes) is
+    /// implemented; anything else is refused rather than silently run as 64.
+    pub tile_size: usize,
 }
 
 impl H3VsaConfig {
     pub fn fasth3_8step() -> Self {
+        let contract = H3InferenceContract::fasth3_8step();
         Self {
-            sparsity: H3InferenceContract::fasth3_8step().vsa_sparsity,
+            sparsity: contract.vsa_sparsity,
             group: crate::wan::envflag::usize_flag("FASTVIDEO_VSA_GROUP", 8).max(1),
+            tile_size: contract.vsa_tile_size,
         }
     }
 }
@@ -167,8 +178,13 @@ pub fn block_mask(scores: &[f32], prefix_tiles: usize, k_vid: usize) -> Vec<bool
     mask
 }
 
+fn bf16r(v: f32) -> f32 {
+    half::bf16::from_f32(v).to_f32()
+}
+
 /// VSA-H3 in plain loops: `[heads, seq, dim]` row-major inputs in packed
-/// order. The statement of the algorithm the device path is judged against.
+/// order. The statement of the algorithm the device path is judged against,
+/// with upstream's bf16 rounding points (pooling inputs, combine).
 pub fn attention_host(
     q: &[f32],
     k: &[f32],
@@ -205,7 +221,7 @@ pub fn attention_host(
                 for t in 0..n {
                     for r in tile_rows(t) {
                         for d in 0..dim {
-                            p[t * dim + d] += f64::from(x[base + r * dim + d]);
+                            p[t * dim + d] += f64::from(bf16r(x[base + r * dim + d]));
                         }
                     }
                     p[t * dim..(t + 1) * dim]
@@ -264,9 +280,11 @@ pub fn attention_host(
                             .zip(&logits)
                             .map(|(&kr, l)| (l - mx).exp() / z * f64::from(v[base + kr * dim + d]))
                             .sum();
-                        let branch =
-                            gate.map_or(0.0, |g| compressed[d] * f64::from(g[base + r * dim + d]));
-                        out[r * dim + d] = (sparse + branch) as f32;
+                        // Upstream's bf16 combine.
+                        let branch = gate.map_or(0.0, |g| {
+                            bf16r(bf16r(compressed[d] as f32) * bf16r(g[base + r * dim + d]))
+                        });
+                        out[r * dim + d] = bf16r(bf16r(sparse as f32) + branch);
                     }
                 }
             }
@@ -311,6 +329,12 @@ impl H3Vsa {
             return Err(msg(format!(
                 "vsa-h3: sparsity {} with {heads} heads of {head_dim}",
                 cfg.sparsity
+            )));
+        }
+        if cfg.tile_size != TILE_ELEMS {
+            return Err(msg(format!(
+                "vsa-h3: tile size {} is not implemented (only {TILE_ELEMS}: (4, 4, 4) cubes)",
+                cfg.tile_size
             )));
         }
         let plan = H3TilePlan::new(layout)?;
@@ -398,7 +422,12 @@ impl H3Vsa {
         }
         #[cfg(feature = "cuda")]
         if let Some(device) = &self.device {
-            return self.attend_device(device, q, k, v, gate);
+            // The VSA kernels read f32. bf16-stored activations
+            // (`FASTVIDEO_BF16_ACT`) are widened on the device — never a host
+            // round trip — and the result is stored bf16 again.
+            let like = q.clone();
+            let out = self.attend_device(device, q, k, v, gate)?;
+            return like.keep_dtype(out);
         }
         // CPU runs and tests only; with a device live this is an error, not a fallback.
         crate::wan::stats::host_fallback("vsa_h3", format_args!("{shape:?}"))?;
@@ -439,7 +468,11 @@ impl H3Vsa {
         let scale = 1.0 / (dim as f32).sqrt();
         let err = |e: device::DeviceError| msg(e.to_string());
         let on_device = |t: &CudaTensor| -> Result<CudaTensor> {
-            let mut t = t.clone();
+            let mut t = if t.is_bf16() {
+                t.to_f32_act()?
+            } else {
+                t.clone()
+            };
             t.ensure_device()?;
             Ok(t)
         };
@@ -453,8 +486,8 @@ impl H3Vsa {
 
         // 1. Pooled scores in pinned float32: they decide the selection.
         let (scores, coarse) = phase("vsa_h3_1_coarse", || {
-            let qc = ops::vsa_tile_mean_device(qd, &dp.plan, bh, seq, dim)?;
-            let kc = ops::vsa_tile_mean_device(kd, &dp.plan, bh, seq, dim)?;
+            let qc = ops::vsa_tile_mean_round_device(qd, &dp.plan, bh, seq, dim, true)?;
+            let kc = ops::vsa_tile_mean_round_device(kd, &dp.plan, bh, seq, dim, true)?;
             let mut scores = ops::alloc(bh * n * n)?;
             device::matmul_linear_wt_strided_batched_f32(
                 &qc,
@@ -470,7 +503,7 @@ impl H3Vsa {
             // 2. Compression branch: softmax over all tiles, unmasked.
             let coarse = match &gate {
                 Some(_) => {
-                    let vc = ops::vsa_tile_mean_device(vd, &dp.plan, bh, seq, dim)?;
+                    let vc = ops::vsa_tile_mean_round_device(vd, &dp.plan, bh, seq, dim, true)?;
                     let probs = ops::softmax_last_device(&scores, n)?;
                     let mut coarse = ops::alloc(bh * n * dim)?;
                     device::matmul_2d_strided_batched_f32(&probs, &vc, &mut coarse, bh, n, n, dim)
@@ -517,8 +550,8 @@ impl H3Vsa {
                     qd, kd, vd, &selected, &dp.plan, bh, seq, dim, topk, scale, q_base, q_tiles,
                 )
             })?;
-            ops::vsa_combine_device(
-                &sparse, &coarse, gate_slice, &dp.plan, &mut out, bh, n, 0, seq, dim,
+            ops::vsa_combine_round_device(
+                &sparse, &coarse, gate_slice, &dp.plan, &mut out, bh, n, 0, seq, dim, true,
             )?;
         } else {
             let (rows, len) = (TILE_ELEMS, topk * TILE_ELEMS);
@@ -555,8 +588,9 @@ impl H3Vsa {
                     dim,
                 )
                 .map_err(err)?;
-                ops::vsa_combine_device(
+                ops::vsa_combine_round_device(
                     &sparse, &coarse, gate_slice, &dp.plan, &mut out, bh, g, q_base, seq, dim,
+                    true,
                 )?;
                 q_base += g;
             }
@@ -579,11 +613,13 @@ impl H3Vsa {
             if let Some(g) = &gate {
                 let branch = CudaTensor::from_device_slice(coarse, vec![bh * n, dim])?
                     .index_select_rows(&dp.prefix_branch_rows)?;
-                dense = dense.add(
-                    &branch
-                        .reshape(vec![1, bh, prefix, dim])?
-                        .mul(&g.narrow(2, 0, prefix)?)?,
-                )?;
+                // bf16(bf16(dense) + bf16(bf16(coarse) * gate)), as the combine kernel.
+                let term = branch
+                    .reshape(vec![1, bh, prefix, dim])?
+                    .quantize_bf16()?
+                    .mul(&g.narrow(2, 0, prefix)?.quantize_bf16()?)?
+                    .quantize_bf16()?;
+                dense = dense.quantize_bf16()?.add(&term)?.quantize_bf16()?.to_f32_act()?;
             }
             CudaTensor::cat(&[&dense, &out.narrow(2, prefix, seq - prefix)?], 2)
         })
@@ -715,6 +751,7 @@ mod tests {
             H3VsaConfig {
                 sparsity: 0.0,
                 group: 2,
+                tile_size: 64,
             },
         )
         .unwrap();
@@ -726,7 +763,8 @@ mod tests {
             .zip(dense.host_cow().unwrap().iter())
             .enumerate()
         {
-            assert!((g - w).abs() < 2e-5, "value {i}: {g} vs {w}");
+            // Dense up to the bf16 combine rounding.
+            assert!((g - w).abs() <= w.abs() / 256.0 + 2e-5, "value {i}: {g} vs {w}");
         }
     }
 
@@ -744,6 +782,7 @@ mod tests {
             H3VsaConfig {
                 sparsity: 0.0,
                 group: 2,
+                tile_size: 64,
             },
         )
         .unwrap();
@@ -766,10 +805,11 @@ mod tests {
                 .map(|&s| s as usize)
                 .collect::<Vec<_>>()
         };
+        // Upstream pools the bf16 values.
         let pool = |x: &[f32], t: usize| -> Vec<f32> {
             (0..dim)
                 .map(|d| {
-                    rows(t).iter().map(|&r| x[r * dim + d]).sum::<f32>()
+                    rows(t).iter().map(|&r| bf16r(x[r * dim + d])).sum::<f32>()
                         / plan.block_sizes[t] as f32
                 })
                 .collect()
@@ -786,14 +826,15 @@ mod tests {
             let z: f32 = logits.iter().map(|s| s.exp()).sum();
             for &r in &rows(i) {
                 for d in 0..dim {
-                    let term: f32 = (0..n)
+                    let comp: f32 = (0..n)
                         .map(|j| logits[j].exp() / z * pool(&vh, j)[d])
-                        .sum::<f32>()
-                        * gh[r * dim + d];
-                    let delta = got[r * dim + d] - dense[r * dim + d];
+                        .sum::<f32>();
+                    let term = bf16r(bf16r(comp) * bf16r(gh[r * dim + d]));
+                    let want = bf16r(bf16r(dense[r * dim + d]) + term);
+                    let g = got[r * dim + d];
                     assert!(
-                        (delta - term).abs() < 5e-5,
-                        "tile {i} row {r} ch {d}: {delta} vs {term}"
+                        (g - want).abs() <= want.abs() / 128.0 + 1e-4,
+                        "tile {i} row {r} ch {d}: {g} vs {want}"
                     );
                     differs |= term.abs() > 1e-3;
                 }
@@ -844,6 +885,7 @@ mod tests {
             H3VsaConfig {
                 sparsity: 0.5,
                 group: 2,
+                tile_size: 64,
             },
         )
         .unwrap();

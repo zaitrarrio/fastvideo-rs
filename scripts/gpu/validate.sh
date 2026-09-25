@@ -922,10 +922,11 @@ cmd_run() {
           local a="$clip/$name-bf16/frames/output.mp4" b="$clip/$name-affine/frames/output.mp4"
           log "affine A/B PSNR ($bits) $a vs $b"
           fv_ssh "$HOST" "$PORT" "ffmpeg -hide_banner -i '$a' -i '$b' -lavfi '[0:v][1:v]psnr' -f null - 2>&1 | tail -8" || true
-        elif [[ "${FV_H3_FFN_FP8:-0}" == 1 ]]; then
-          # Same prompt/seed/cache, two gens: bf16 FFN vs H3-only E4M3 FFN.
-          gpucheck_stage "gen-$name-bf16" 7200 "${h3gen[@]}" --clip-dir "$clip/$name-bf16/frames"
-          gpucheck_stage "gen-$name-fp8" 7200 --h3-ffn-fp8 "${h3gen[@]}" --clip-dir "$clip/$name-fp8/frames"
+        elif [[ -n "${FV_H3_QUANT:-}" && "${FV_H3_QUANT}" != "off" ]]; then
+          # Same prompt/seed/cache, two gens: bf16 activations vs the reference
+          # FP8 recipe (w8a8 = Spark stage 1, mxfp8 = Sol-H3 blocks 2..=46).
+          gpucheck_stage "gen-$name-bf16" 7200 --bf16-act "${h3gen[@]}" --clip-dir "$clip/$name-bf16/frames"
+          gpucheck_stage "gen-$name-$FV_H3_QUANT" 7200 --h3-quant "$FV_H3_QUANT" "${h3gen[@]}" --clip-dir "$clip/$name-$FV_H3_QUANT/frames"
         else
           gpucheck_stage "gen-$name" 7200 "${h3gen[@]}" --clip-dir "$clip/$name/frames"
         fi

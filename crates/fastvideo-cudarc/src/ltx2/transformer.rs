@@ -403,7 +403,14 @@ struct LtxStage1Runtime {
 }
 
 fn table(map: &WeightMap, key: &str, rows: usize, dim: usize) -> Result<CudaTensor> {
-    let mut t = cuda_tensor_shaped(map, key, &[rows, dim])?;
+    let t = cuda_tensor_shaped(map, key, &[rows, dim])?;
+    // bf16 activations: the reference's tables are bf16 parameters, so
+    // `table + modulation` (and `1 + scale`) round to bf16 as there.
+    let mut t = if crate::wan::tensor::bf16_activations() {
+        t.quantize_bf16()?
+    } else {
+        t
+    };
     t.pin_device()?;
     Ok(t)
 }
@@ -918,7 +925,7 @@ impl Ltx2Transformer {
                 .map_err(|e| msg(e.to_string()))?;
             crate::wan::stats::record_h2d(idx32.len());
             let rows = crate::wan::ops::index_select_rows_dev_idx(&x, dim, &idx_dev)?;
-            let kept = CudaTensor::from_device_slice(rows, vec![1, idx.len(), dim])?;
+            let kept = xv.keep_dtype(CudaTensor::from_device_slice(rows, vec![1, idx.len(), dim])?)?;
             return Ok((
                 Some(pass),
                 Some((
@@ -963,7 +970,7 @@ impl Ltx2Transformer {
         if let (Some(idx_dev), Some(base), Some(src)) = (idx.dev.as_ref(), prev.dev()?, kept.dev()?)
         {
             let full = crate::wan::ops::ltx_index_copy_rows_device(&base, &src, idx_dev, dim)?;
-            let out = CudaTensor::from_device_slice(full, vec![1, seq, dim])?;
+            let out = prev.keep_dtype(CudaTensor::from_device_slice(full, vec![1, seq, dim])?)?;
             runtime.prev[pass] = Some(out.clone());
             return Ok(out);
         }

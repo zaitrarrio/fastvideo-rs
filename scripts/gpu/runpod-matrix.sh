@@ -251,6 +251,7 @@ case "$FAMILY" in
       log "spark files present ($spark_up + $spark_ad) — sol-h3-spark, no joint LTX refine"
       run_cell sol-h3-spark \
         env -u FASTVIDEO_LTX2_WEIGHTS \
+        FASTVIDEO_H3_QUANT=w8a8 FASTVIDEO_BF16_ACT=1 \
         FASTVIDEO_H3_UPSCALER="$spark_up" \
         FASTVIDEO_H3_LTX_ADAPTER="$spark_ad" \
         "$BIN" --mode fast h3 gen \
@@ -429,6 +430,7 @@ case "$FAMILY" in
       log "spark files present ($spark_up + $spark_ad) — sol-h3-spark, no joint LTX refine"
       run_cell sol-h3-spark \
         env -u FASTVIDEO_LTX2_WEIGHTS \
+        FASTVIDEO_H3_QUANT=w8a8 FASTVIDEO_BF16_ACT=1 \
         FASTVIDEO_H3_UPSCALER="$spark_up" \
         FASTVIDEO_H3_LTX_ADAPTER="$spark_ad" \
         "$BIN" --mode fast h3 gen \
@@ -509,8 +511,10 @@ case "$FAMILY" in
       "$BIN" --mode fast h3 gen --weights "$W/h3-base" --h3-recipe sol-h3-rtx \
         --adaln-cache "$RUNS/sol-h3-rtx-adaln.cache" \
         --clip-dir "$RUNS/sol-h3-rtx-teacache/frames" "${h3_common[@]}"
+    # Upstream Spark stage 1 is W8A8 FP8 (stage1.py `W8A8_FP8_after_BF16_LoRA_merge`).
     gated_cell sol-h3-spark sol-h3-spark \
       env FASTVIDEO_LTX2_WEIGHTS="$W/ltx25" \
+        FASTVIDEO_H3_QUANT=w8a8 FASTVIDEO_BF16_ACT=1 \
         FASTVIDEO_H3_UPSCALER="$W/upscaler/minimax_h3_latent_upscaler_3d_conv_v1/minimax_h3_latent_upscaler_3d_conv_v1_bf16.safetensors" \
         FASTVIDEO_H3_LTX_ADAPTER="$W/h3-to-ltx" \
       "$BIN" --mode fast h3 gen --weights "$W/h3-base" --h3-recipe sol-h3-spark \
@@ -670,12 +674,15 @@ case "$FAMILY" in
       --text-weights "$W/h3-base"
       --warm
     )
-    for v in base bf16act ffnfp8 fp8; do
+    # The reference recipes replace the retired per-tensor switches
+    # (FASTVIDEO_H3_FFN_FP8 / FASTVIDEO_FP8 on H3): w8a8 = Spark stage 1,
+    # mxfp8 = Sol-H3 blocks 2..=46; both run bf16 activations.
+    for v in base bf16act w8a8 mxfp8; do
       envs=()
       case "$v" in
         bf16act) envs=(FASTVIDEO_BF16_ACT=1) ;;
-        ffnfp8) envs=(FASTVIDEO_H3_FFN_FP8=1) ;;
-        fp8) envs=(FASTVIDEO_FP8=1) ;;
+        w8a8) envs=(FASTVIDEO_BF16_ACT=1 FASTVIDEO_H3_QUANT=w8a8) ;;
+        mxfp8) envs=(FASTVIDEO_BF16_ACT=1 FASTVIDEO_H3_QUANT=mxfp8) ;;
       esac
       gated_cell "fasth3-8step-768p-$v" fasth3-8step \
         env "${envs[@]}" \
