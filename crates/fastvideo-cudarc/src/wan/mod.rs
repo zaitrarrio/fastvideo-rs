@@ -20,6 +20,8 @@ pub mod ledger;
 pub mod log;
 pub mod nn;
 pub mod nvfp4;
+#[cfg(feature = "cuda")]
+pub mod nvfp4_gemm;
 pub mod offload;
 pub mod ops;
 pub mod pipeline;

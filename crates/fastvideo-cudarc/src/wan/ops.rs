@@ -2604,10 +2604,12 @@ pub fn nvfp4_reconstruct_device(
     Ok(out)
 }
 
-/// Tile-IR W4A4 GEMM. Default **off** ([`fastvideo_models::nvfp4::ENV_OXIDE_GEMM`]).
-/// Gate: must beat cuBLAS bf16 on the H3 FFN shape (K=5376, N=14336) and
-/// PSNR ≥ 30 dB vs bf16 — unmeasured here, so the flag stays off.
+/// Tile-IR W4A4 GEMM (oxide f32-out cubin). Default **off**
+/// ([`fastvideo_models::nvfp4::ENV_OXIDE_GEMM`]). The kernel takes one
+/// scalar `alpha`, so a weight whose rows carry different decode factors
+/// (fused prefixes) is refused and the caller falls back.
 #[cfg(feature = "cuda")]
+#[allow(clippy::too_many_arguments)]
 pub fn nvfp4_oxide_gemm_device(
     a_packed: &[u8],
     a_scales: &[u8],
@@ -2619,23 +2621,21 @@ pub fn nvfp4_oxide_gemm_device(
     n: usize,
     k: usize,
 ) -> Result<CudaSlice<f32>> {
+    use cudarc::driver::{DevicePtr, DevicePtrMut};
     if !fastvideo_models::nvfp4::oxide_gemm_enabled() {
-        return Err(err(
-            "nvfp4 oxide gemm: FASTVIDEO_NVFP4_OXIDE_GEMM is off (unmeasured vs cuBLAS bf16)",
-        ));
+        return Err(err("nvfp4 oxide gemm: FASTVIDEO_NVFP4_OXIDE_GEMM is off"));
     }
     let dev = ctx()?;
-    let Some(f) = dev.kernels.nvfp4_oxide_w4a4_gemm.as_ref() else {
-        return Err(err(format!(
-            "nvfp4 oxide gemm: no Tile-IR cubin for sm_{}{}",
-            dev.sm_major, dev.sm_minor
-        )));
-    };
-    if k == 0 || !k.is_multiple_of(16) {
-        return Err(err(format!(
-            "nvfp4 oxide gemm: k={k} is not a multiple of 16"
-        )));
-    }
+    let variants = super::nvfp4_gemm::oxide_variants("f32")?;
+    let g = variants
+        .iter()
+        .find(|g| super::nvfp4_gemm::oxide_fits(g, m, n, k).is_ok())
+        .ok_or_else(|| {
+            err(format!(
+                "nvfp4 oxide gemm: no f32 Tile-IR cubin for sm_{}{} fits m={m} n={n} k={k}",
+                dev.sm_major, dev.sm_minor
+            ))
+        })?;
     if a_packed.len() != m * (k / 2) || a_scales.len() != m * (k / 16) {
         return Err(err(format!(
             "nvfp4 oxide gemm: A pack {} / scales {} for [{m}, {k}]",
@@ -2643,20 +2643,26 @@ pub fn nvfp4_oxide_gemm_device(
             a_scales.len()
         )));
     }
+    let decode = dev.stream.memcpy_dtov(w_decode).map_err(err)?;
+    let w_dec = decode.first().copied().unwrap_or(0.0);
+    if decode.len() != n || decode.iter().any(|&v| v != w_dec) {
+        return Err(err(
+            "nvfp4 oxide gemm: per-row weight decode factors differ",
+        ));
+    }
     let ap = dev.stream.memcpy_stod(a_packed).map_err(err)?;
     let ascales = dev.stream.memcpy_stod(a_scales).map_err(err)?;
     let mut c = alloc((m * n).max(1))?;
-    let cfg = LaunchConfig {
-        grid_dim: (n.div_ceil(16) as u32, m.div_ceil(16) as u32, 1),
-        block_dim: (256, 1, 1),
-        shared_mem_bytes: 0,
-    };
-    let (mm, nn, kk) = (m as i64, n as i64, k as i64);
-    launch!(
-        dev.stream, f, cfg;
-        &ap, &ascales, w_packed, w_scales, w_decode, &mut c, &mm, &nn, &kk, &a_decode
-    )
-    .map_err(err)?;
+    {
+        let (zp, _z) = c.device_ptr_mut(&dev.stream);
+        let (xp, _x) = ap.device_ptr(&dev.stream);
+        let (yp, _y) = w_packed.device_ptr(&dev.stream);
+        let (xs, _xs) = ascales.device_ptr(&dev.stream);
+        let (ys, _ys) = w_scales.device_ptr(&dev.stream);
+        unsafe {
+            super::nvfp4_gemm::oxide_gemm(g, zp, xp, yp, xs, ys, m, n, k, a_decode * w_dec)?;
+        }
+    }
     Ok(c)
 }
 
@@ -3996,8 +4002,7 @@ pub fn index_select_rows_dev_idx(
     let n = idx.len() * d;
     let (n_i, d_i) = (n as i64, d as i64);
     let mut out = alloc(n.max(1))?;
-    launch!(dev.stream, &dev.kernels.index_select_rows, cfg_n(n); table, idx, &mut out, &n_i, &d_i)
-        .map_err(err)?;
+    launch!(dev.stream, &dev.kernels.index_select_rows, cfg_n(n); table, idx, &mut out, &n_i, &d_i).map_err(err)?;
     Ok(out)
 }
 

@@ -56,9 +56,9 @@ pub fn fp8_gemm_supported(
 
 /// Owns the cuBLASLt handle and its workspace for one device.
 pub struct LtContext {
-    handle: lt::cublasLtHandle_t,
-    workspace: cudarc::driver::CudaSlice<u8>,
-    workspace_bytes: usize,
+    pub(crate) handle: lt::cublasLtHandle_t,
+    pub(crate) workspace: cudarc::driver::CudaSlice<u8>,
+    pub(crate) workspace_bytes: usize,
 }
 
 // Same reasoning as `DeviceContext`: a raw handle used from one thread at a time.
@@ -90,7 +90,7 @@ impl Drop for LtContext {
     }
 }
 
-fn check(status: lt::cublasStatus_t, what: &str) -> Result<()> {
+pub(crate) fn check(status: lt::cublasStatus_t, what: &str) -> Result<()> {
     if status == lt::cublasStatus_t::CUBLAS_STATUS_SUCCESS {
         Ok(())
     } else {
@@ -99,26 +99,26 @@ fn check(status: lt::cublasStatus_t, what: &str) -> Result<()> {
 }
 
 /// RAII for the descriptors, so an early return cannot leak them.
-struct Desc(lt::cublasLtMatmulDesc_t);
+pub(crate) struct Desc(pub(crate) lt::cublasLtMatmulDesc_t);
 impl Drop for Desc {
     fn drop(&mut self) {
         unsafe { lt::cublasLtMatmulDescDestroy(self.0) };
     }
 }
-struct Layout(lt::cublasLtMatrixLayout_t);
+pub(crate) struct Layout(pub(crate) lt::cublasLtMatrixLayout_t);
 impl Drop for Layout {
     fn drop(&mut self) {
         unsafe { lt::cublasLtMatrixLayoutDestroy(self.0) };
     }
 }
-struct Pref(lt::cublasLtMatmulPreference_t);
+pub(crate) struct Pref(pub(crate) lt::cublasLtMatmulPreference_t);
 impl Drop for Pref {
     fn drop(&mut self) {
         unsafe { lt::cublasLtMatmulPreferenceDestroy(self.0) };
     }
 }
 
-unsafe fn set_attr<T>(
+pub(crate) unsafe fn set_attr<T>(
     desc: lt::cublasLtMatmulDesc_t,
     attr: lt::cublasLtMatmulDescAttributes_t,
     v: &T,

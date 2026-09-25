@@ -9,6 +9,10 @@
 #   docker build --target base    -t fastvideo-oxide-base:cu134    .
 #   docker build --target build   -t fastvideo-oxide-build:cu134   .
 #   docker build --target runtime -t fastvideo-oxide-runtime:cu134 .
+#
+# The cuda-oxide rustc backend (SIMT kernels in Rust) only. The Tile-IR NVFP4
+# GEMM cubins come from docker/gpucheck.Dockerfile stage `oxide` (stable Rust,
+# cutile-rs + tileiras) and are embedded by CI; see scripts/oxide.sh.
 
 FROM ubuntu:22.04 AS base
 
@@ -86,7 +90,6 @@ RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y \
 WORKDIR /src
 COPY third_party/cuda-oxide /src/third_party/cuda-oxide
 COPY third_party/cutile-rs /src/third_party/cutile-rs
-COPY crates/fastvideo-oxide-kernels /src/crates/fastvideo-oxide-kernels
 
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/usr/local/cargo/git \
@@ -99,20 +102,11 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
       export CARGO_TARGET_DIR=/oxide-target/cutile; \
       cd /src/third_party/cutile-rs; \
       cargo build --locked --release; \
-      mkdir -p /opt/oxide/cutile /opt/oxide/cubins; \
+      mkdir -p /opt/oxide/cutile; \
       find "$CARGO_TARGET_DIR/release" -maxdepth 1 -type f \
         ! -name "*.d" ! -name "*.rmeta" \
         -exec cp -a {} /opt/oxide/cutile/ \;; \
-      export CARGO_TARGET_DIR=/oxide-target/fastvideo-oxide-kernels; \
-      export CUDA_OXIDE_BACKEND=/opt/oxide/lib/librustc_codegen_cuda.so; \
-      cd /src/crates/fastvideo-oxide-kernels; \
-      echo "oxide: cargo oxide build --arch sm_100,sm_120"; \
-      if cargo oxide build --arch sm_100,sm_120; then :; \
-      else cargo oxide build --arch sm_100; cargo oxide build --arch sm_120; fi \
-        || echo "oxide: Tile-IR cubin build skipped"; \
-      find /oxide-target /src/crates/fastvideo-oxide-kernels -name "*.cubin" \
-        -exec cp -a {} /opt/oxide/cubins/ \; || true; \
-      ls -lh /opt/oxide/lib /opt/oxide/cutile /opt/oxide/cubins \
+      ls -lh /opt/oxide/lib /opt/oxide/cutile \
     '
 
 FROM base AS runtime

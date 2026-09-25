@@ -22,10 +22,12 @@
 //! - Cosmos3 optimized `env.sh`: middle denoising steps (skip first 3 + last 3).
 //!   [`scope_rule`] + [`ENV_COSMOS_STEPS`] (same window as [`crate::cosmos::sol::fp4_linear`]).
 //!
-//! Tile-IR W4A4 GEMM (`crates/fastvideo-oxide-kernels`, cuda-oxide v0.2.1 /
-//! cutile-rs v0.3.1) stays **off** until it beats cuBLAS bf16 on the H3 FFN
+//! Tile-IR W4A4 GEMM (`crates/fastvideo-oxide-kernels`, cutile-rs v0.3.1)
+//! stays **off** in model paths until it beats cuBLAS bf16 on the H3 FFN
 //! shape (`K=5376`, `N=14336`) **and** PSNR ≥ 30 dB vs bf16. Opt-in:
-//! [`ENV_OXIDE_GEMM`]. `scripts/oxide.sh` runs `cargo oxide build --arch sm_100,sm_120`.
+//! [`ENV_OXIDE_GEMM`]. CI compiles it ahead of time (`fv-oxide-aot`, cutile's
+//! compile-only API + `tileiras`) to sm_100/sm_120 cubins that
+//! fastvideo-cudarc embeds; `fv-gpucheck kernels` checks and times it.
 
 use fastvideo_ops::fp8::{e4m3_to_f32, f32_to_e4m3, E4M3_MAX};
 
@@ -88,8 +90,9 @@ fused ln_adaln_e + rope_half is one launch when both ops share a tensor; \
 Wan / LTX / H3 apply them on different layouts (AdaLN on [B,S,C], RoPE on \
 Q/K after the projection). \
 cuda-oxide v0.2.1 and cutile-rs v0.3.1 are vendored under third_party. \
-scripts/oxide.sh runs cargo oxide build --arch sm_100,sm_120 in Docker \
-(docker/oxide.Dockerfile, CUDA 13.4, nightly-2026-04-03). \
+The GEMM is cutile-rs, compiled ahead of time by fv-oxide-aot (compile-only \
+API + tileiras, no GPU) to sm_100/sm_120 cubins embedded in the CI image \
+(docker/gpucheck.Dockerfile stage oxide; scripts/oxide.sh locally). \
 TorchAO PerRow FP8 PTQ (utils/fp8.py) is not this flag; FASTVIDEO_FP8 is \
 the existing per-tensor E4M3 path.";
 

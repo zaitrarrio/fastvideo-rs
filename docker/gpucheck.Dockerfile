@@ -8,7 +8,8 @@
 #          runs everything that needs no GPU: unit tests, the compile gates,
 #          CPU-path reference dumps.
 # hf-fm    Builds the Rust HuggingFace downloader (hf-fetch-model --features cli).
-# build    Compiles the release binary from the repo (CI path).
+# oxide    Tile-IR NVFP4 GEMM cubins (cutile-rs + tileiras, no GPU) for sm_100/120.
+# build    Compiles the release binary from the repo (CI path), embedding them.
 # binary   The binary + build id. Locally overridden with
 #          `--build-context binary=artifacts/gpucheck/dist` to reuse `docker.sh dist`.
 # runtime  What a GPU box runs (ghcr.io/zaitrarrio/fastvideo-rs-runtime): Ubuntu
@@ -55,9 +56,39 @@ RUN mkdir -p /out \
  && cp "$(command -v hf-fm)" /out/hf-fm \
  && cp "$(command -v hf-fetch-model)" /out/hf-fetch-model
 
+# Tile-IR NVFP4 GEMM cubins for sm_100 and sm_120, compiled ahead of time
+# with no GPU: fv-oxide-aot (crates/fastvideo-oxide-kernels) runs cutile-rs's
+# compile-only KernelCompiler, then tileiras. Only the kernel crate and the
+# vendored cutile-rs are copied in, so the registry cache keeps this layer
+# until one of them changes. cutile's bindgen needs cuda.h and curand.h.
+# Any failure fails the image build (build.rs also checks FV_REQUIRE_OXIDE).
+FROM builder AS oxide
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends libclang-dev \
+      cuda-driver-dev-13-4 cuda-cudart-dev-13-4 libcurand-dev-13-4 \
+ && rm -rf /var/lib/apt/lists/*
+ENV CUDA_TOOLKIT_PATH=/usr/local/cuda-13.4
+COPY third_party/cutile-rs /oxide/third_party/cutile-rs
+COPY crates/fastvideo-oxide-kernels /oxide/crates/fastvideo-oxide-kernels
+RUN --mount=type=cache,target=/usr/local/cargo/registry \
+    --mount=type=cache,target=/oxide-target \
+    test -f /oxide/third_party/cutile-rs/Cargo.toml \
+ && cd /oxide/crates/fastvideo-oxide-kernels \
+ && CARGO_TARGET_DIR=/oxide-target cargo build --release --locked \
+ && /oxide-target/release/fv-oxide-aot /out/oxide --sm 100,120 \
+ && test -s /out/oxide/manifest.tsv \
+ && cat /out/oxide/manifest.tsv
+
+# `docker buildx build --target oxide-out --output type=local,dest=artifacts/oxide`
+FROM scratch AS oxide-out
+COPY --from=oxide /out/oxide/ /
+
 FROM builder AS build
 ARG BUILD_ID=unknown
 COPY . /src
+COPY --from=oxide /out/oxide /oxide-cubins
+ENV FV_OXIDE_CUBIN_DIR=/oxide-cubins \
+    FV_REQUIRE_OXIDE=100,120
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/target \
     cargo build --release -p fastvideo-gpucheck --features cuda \
@@ -104,6 +135,10 @@ ENV NVIDIA_VISIBLE_DEVICES=all \
     NVIDIA_DRIVER_CAPABILITIES=compute,utility
 COPY --from=hf-fm /out/hf-fm /out/hf-fetch-model /usr/local/bin/
 COPY scripts/gpu /opt/fastvideo-rs/scripts/gpu
+# Provenance only: the cubins are already embedded in fv-gpucheck, so the
+# runtime needs no tileiras for them (cuda-tileiras stays pinned above for
+# any cutile JIT use).
+COPY --from=oxide /out/oxide /opt/fastvideo-rs/oxide
 COPY --from=binary /fv-gpucheck /fv-gpucheck.build-id /opt/fastvideo-rs/target/release/
 LABEL org.opencontainers.image.source="https://github.com/zaitrarrio/fastvideo-rs" \
       org.opencontainers.image.description="fastvideo-rs cudarc GPU validation runtime (fv-gpucheck + CUDA runtime + hf-fm)" \

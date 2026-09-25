@@ -1,4 +1,0 @@
-# Matches third_party/cuda-oxide v0.2.1. Not inherited by the workspace.
-[toolchain]
-channel = "nightly-2026-04-03"
-components = ["rust-src", "rustc-dev", "llvm-tools"]

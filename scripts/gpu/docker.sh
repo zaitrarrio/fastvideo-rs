@@ -36,10 +36,14 @@ require_docker() {
   docker info >/dev/null 2>&1 || die "Docker daemon not running (start Docker Desktop)"
 }
 
-# Hash of everything that affects the binary (sources + builder image/profile).
+# Hash of everything that affects the binary (sources + builder image/profile),
+# plus the vendored cutile-rs commit that compiles the embedded oxide cubins.
 fv_build_id() {
-  (cd "$FV_ROOT" && git ls-files -z -co --exclude-standard -- crates Cargo.toml Cargo.lock rust-toolchain.toml docker/gpucheck.Dockerfile docker/vast-pytorch.Dockerfile scripts/gpu/cuda-13.pins \
-    | LC_ALL=C sort -z | xargs -0 shasum -a 256 | shasum -a 256 | cut -c1-16)
+  (cd "$FV_ROOT" && {
+    git ls-files -z -co --exclude-standard -- crates Cargo.toml Cargo.lock rust-toolchain.toml docker/gpucheck.Dockerfile docker/vast-pytorch.Dockerfile scripts/gpu/cuda-13.pins \
+      | LC_ALL=C sort -z | xargs -0 shasum -a 256
+    git ls-tree HEAD third_party/cutile-rs
+  } | shasum -a 256 | cut -c1-16)
 }
 
 cmd_builder() {

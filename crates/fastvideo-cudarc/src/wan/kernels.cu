@@ -3393,6 +3393,82 @@ extern "C" __global__ void nvfp4_reconstruct(
     float s = fv_e4m3_to_f32(scale) * decode;
     for (int i = 0; i < 16; i++) dst[i] = fake[i] * s;
 }
+
+// E2M1 nibble for an already-rounded value (fastvideo_models::nvfp4::e2m1_from_f32).
+__device__ __forceinline__ unsigned char fv_nvfp4_code(float x) {
+    unsigned char sign = signbit(x) ? 0x8 : 0x0;
+    float a = fabsf(x);
+    unsigned char mag = a < 0.25f ? 0 : a < 0.75f ? 1 : a < 1.25f ? 2 : a < 1.75f ? 3
+                      : a < 2.5f ? 4 : a < 3.5f ? 5 : a < 5.0f ? 6 : 7;
+    return sign | mag;
+}
+
+// Quantize to the packed form (fastvideo_models::nvfp4::quantize): E2M1 codes
+// two per byte, low nibble first, [rows, cols/2]; E4M3 block scales
+// [rows, cols/16] row-major. Bit-identical to the host for every rule.
+extern "C" __global__ void nvfp4_quantize_pack(
+    const float* x, unsigned char* packed, unsigned char* scales,
+    const float* amax_ptr, long rows, long cols, int rule
+) {
+    long n_blocks = rows * (cols / 16);
+    long b = IDX();
+    if (b >= n_blocks) return;
+    long row = b / (cols / 16);
+    long blk = b % (cols / 16);
+    const float* src = x + row * cols + blk * 16;
+    float amax = *amax_ptr;
+    float e2 = (rule == 1) ? 4.0f : 6.0f;
+    float e4 = (rule == 2) ? 256.0f : 448.0f;
+    float fake[16];
+    unsigned char scale;
+    fv_nvfp4_scale_block(src, fake, &scale, amax, e2, e4, 1.0f);
+    if (rule == 2) {
+        float fake4[16];
+        unsigned char s4;
+        fv_nvfp4_scale_block(src, fake4, &s4, amax, e2, e4, 1.5f);
+        float mse_decode = (amax > 0.0f) ? amax / (6.0f * 256.0f) : 0.0f;
+        if (fv_nvfp4_block_mse(src, fake4, s4, mse_decode)
+            < fv_nvfp4_block_mse(src, fake, scale, mse_decode)) {
+            for (int i = 0; i < 16; i++) fake[i] = fake4[i];
+            scale = s4;
+        }
+    }
+    scales[b] = scale;
+    unsigned char* dst = packed + row * (cols / 2) + blk * 8;
+    for (int i = 0; i < 8; i++) {
+        dst[i] = fv_nvfp4_code(fake[2 * i]) | (fv_nvfp4_code(fake[2 * i + 1]) << 4);
+    }
+}
+
+// Row-major [rows, sc] E4M3 block scales -> cuBLASLt VEC16_UE4M3 layout:
+// 128x4 tiles (row-tile major, scale-column tile minor), 512 bytes each,
+// element (r, c) of a tile at (r % 32) * 16 + (r / 32) * 4 + c. Rows pad to
+// 128 and columns to 4 with zero scales. One thread per padded element.
+extern "C" __global__ void nvfp4_scales_swizzle(
+    const unsigned char* s, unsigned char* out, long rows, long sc, long rows_pad, long sc_pad
+) {
+    long i = IDX();
+    if (i >= rows_pad * sc_pad) return;
+    long r = i / sc_pad;
+    long c = i % sc_pad;
+    unsigned char v = (r < rows && c < sc) ? s[r * sc + c] : (unsigned char)0;
+    long tile = (r / 128) * (sc_pad / 4) + (c / 4);
+    long rr = r % 128;
+    out[tile * 512 + (rr % 32) * 16 + (rr / 32) * 4 + (c % 4)] = v;
+}
+
+// Deterministic uniform fill in [-scale, scale): benchmark operands too large
+// to generate on the host. splitmix64 of (seed, index).
+extern "C" __global__ void fill_hash_uniform(float* out, long n, unsigned long long seed, float scale) {
+    long i = IDX();
+    if (i >= n) return;
+    unsigned long long z = seed + 0x9E3779B97F4A7C15ULL * (unsigned long long)(i + 1);
+    z = (z ^ (z >> 30)) * 0xBF58476D1CE4E5B9ULL;
+    z = (z ^ (z >> 27)) * 0x94D049BB133111EBULL;
+    z ^= z >> 31;
+    float u = (float)(z >> 40) * (1.0f / 16777216.0f);
+    out[i] = (2.0f * u - 1.0f) * scale;
+}
 // ==== endregion: nvfp4 ====
 
 

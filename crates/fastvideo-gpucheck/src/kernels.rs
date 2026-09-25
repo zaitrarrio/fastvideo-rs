@@ -2154,6 +2154,10 @@ pub fn run(report: &mut Report, lim: Limits, seed: u64) -> StageResult<()> {
         Ok(())
     })?;
 
+    group(&mut c, "nvfp4_gemm", |c| {
+        crate::nvfp4_bench::run(c.report, c.seed)
+    })?;
+
     group(&mut c, "no_host_fallback", |c| {
         // With a device live, an op without a device path must error, not
         // silently compute on the CPU.

@@ -8,10 +8,12 @@
 //! decided here where CI can check it, not at runtime where a missing mapping
 //! once compiled every guarded kernel body out on Blackwell.
 //!
-//! Tile-IR W4A4 cubins from `scripts/oxide.sh` (`cargo oxide build --arch
-//! sm_100,sm_120`) are embedded beside the nvcc cubins when present under
-//! `artifacts/oxide/` (or `FV_OXIDE_CUBIN_DIR`). Missing artifacts are skipped
-//! so `cargo test` on a Mac without oxide still works.
+//! Tile-IR NVFP4 GEMM cubins from `fv-oxide-aot` (crates/fastvideo-oxide-kernels,
+//! cutile-rs compiled ahead of time through `tileiras`) are embedded beside the
+//! nvcc cubins when `manifest.tsv` exists under `artifacts/oxide/` (or
+//! `FV_OXIDE_CUBIN_DIR`). Missing artifacts are skipped so `cargo test` on a
+//! Mac still works; `FV_REQUIRE_OXIDE=100,120` (the image build) makes a
+//! missing SM a hard error instead.
 //!
 //! Without `nvcc` the nvcc table is empty and the runtime falls back to NVRTC
 //! from the identical source string. That keeps `cargo check`/`cargo test`
@@ -52,36 +54,89 @@ fn oxide_cubin_dir() -> PathBuf {
         .join("../../artifacts/oxide")
 }
 
-fn find_oxide_cubins() -> Vec<(u32, PathBuf)> {
-    let dir = oxide_cubin_dir();
-    println!("cargo:rerun-if-changed={}", dir.display());
-    let mut out = Vec::new();
-    for sm in [100u32, 120] {
-        for name in [
-            format!("nvfp4_w4a4_sm{sm}.cubin"),
-            format!("nvfp4_w4a4_sm_{sm}.cubin"),
-            format!("nvfp4_oxide_sm{sm}.cubin"),
-        ] {
-            let p = dir.join(&name);
-            println!("cargo:rerun-if-changed={}", p.display());
-            if p.is_file() {
-                out.push((sm, p));
-                break;
-            }
-        }
-    }
-    out
+/// One row of `manifest.tsv` written by `fv-oxide-aot`
+/// (`sm  out  bm  bn  bk  entry  file`).
+struct OxideRow {
+    sm: u32,
+    out: String,
+    bm: u32,
+    bn: u32,
+    bk: u32,
+    entry: String,
+    path: PathBuf,
 }
 
-fn oxide_table(cubins: &[(u32, PathBuf)]) -> String {
-    if cubins.is_empty() {
-        return "pub static OXIDE_AOT: &[OxideCubin] = &[];\n".into();
-    }
-    let mut entries = String::new();
-    for (sm, path) in cubins {
-        entries.push_str(&format!(
-            "    OxideCubin {{ sm: {sm}, cubin: include_bytes!({:?}) }},\n",
+fn find_oxide_cubins() -> Vec<OxideRow> {
+    let dir = oxide_cubin_dir();
+    let manifest = dir.join("manifest.tsv");
+    println!("cargo:rerun-if-changed={}", dir.display());
+    println!("cargo:rerun-if-changed={}", manifest.display());
+    let Ok(text) = fs::read_to_string(&manifest) else {
+        return Vec::new();
+    };
+    let mut rows = Vec::new();
+    for line in text
+        .lines()
+        .filter(|l| !l.trim().is_empty() && !l.starts_with('#'))
+    {
+        let f: Vec<&str> = line.split('\t').collect();
+        assert!(f.len() == 7, "{}: bad row {line:?}", manifest.display());
+        let num = |s: &str| -> u32 {
+            s.parse()
+                .unwrap_or_else(|_| panic!("{}: bad number {s:?}", manifest.display()))
+        };
+        let path = dir.join(f[6]);
+        println!("cargo:rerun-if-changed={}", path.display());
+        assert!(
+            path.is_file(),
+            "{} lists {} but it is missing",
+            manifest.display(),
             path.display()
+        );
+        rows.push(OxideRow {
+            sm: num(f[0]),
+            out: f[1].to_string(),
+            bm: num(f[2]),
+            bn: num(f[3]),
+            bk: num(f[4]),
+            entry: f[5].to_string(),
+            path,
+        });
+    }
+    rows
+}
+
+/// `FV_REQUIRE_OXIDE=100,120`: fail the build unless a Tile-IR cubin is
+/// embedded for every listed SM. Set by the image build, so an image can
+/// never ship without the oxide kernels because a stage silently skipped.
+fn require_oxide(rows: &[OxideRow]) {
+    let Ok(req) = env::var("FV_REQUIRE_OXIDE") else {
+        return;
+    };
+    for sm in req.split(',').map(str::trim).filter(|s| !s.is_empty()) {
+        let sm: u32 = sm
+            .parse()
+            .expect("FV_REQUIRE_OXIDE entries are integers like 120");
+        assert!(
+            rows.iter().any(|r| r.sm == sm),
+            "FV_REQUIRE_OXIDE: no oxide Tile-IR cubin for sm_{sm} in {} (run fv-oxide-aot)",
+            oxide_cubin_dir().display()
+        );
+    }
+}
+
+fn oxide_table(rows: &[OxideRow]) -> String {
+    let mut entries = String::new();
+    for r in rows {
+        entries.push_str(&format!(
+            "    OxideCubin {{ sm: {}, out: {:?}, bm: {}, bn: {}, bk: {}, entry: {:?}, cubin: include_bytes!({:?}) }},\n",
+            r.sm,
+            r.out,
+            r.bm,
+            r.bn,
+            r.bk,
+            r.entry,
+            r.path.display()
         ));
     }
     format!("pub static OXIDE_AOT: &[OxideCubin] = &[\n{entries}];\n")
@@ -102,12 +157,26 @@ fn main() {
     println!("cargo:rerun-if-env-changed=FV_CUBIN_SMS");
     println!("cargo:rerun-if-env-changed=CARGO_FEATURE_CUDA");
     println!("cargo:rerun-if-env-changed=FV_OXIDE_CUBIN_DIR");
+    println!("cargo:rerun-if-env-changed=FV_REQUIRE_OXIDE");
 
     let out = PathBuf::from(env::var("OUT_DIR").expect("OUT_DIR"));
     let table = out.join("aot.rs");
     let cuda_on = env::var_os("CARGO_FEATURE_CUDA").is_some();
     let nvcc = if cuda_on { find_nvcc() } else { None };
-    let oxide = oxide_table(&find_oxide_cubins());
+    let oxide_rows = find_oxide_cubins();
+    require_oxide(&oxide_rows);
+    if !oxide_rows.is_empty() {
+        println!(
+            "cargo:warning=fastvideo-cudarc: embedded {} oxide Tile-IR cubins for sm {:?}",
+            oxide_rows.len(),
+            {
+                let mut sms: Vec<u32> = oxide_rows.iter().map(|r| r.sm).collect();
+                sms.dedup();
+                sms
+            }
+        );
+    }
+    let oxide = oxide_table(&oxide_rows);
 
     let Some(nvcc) = nvcc else {
         if cuda_on {
@@ -172,9 +241,4 @@ fn main() {
         sms,
         nvcc.display()
     );
-    if oxide.contains("OxideCubin {{") {
-        println!(
-            "cargo:warning=fastvideo-cudarc: embedded oxide Tile-IR cubins beside nvcc cubins"
-        );
-    }
 }

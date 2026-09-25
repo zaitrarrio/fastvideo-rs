@@ -27,10 +27,12 @@ macro_rules! kernel_fns {
     ($($name:ident),+ $(,)?) => {
         pub struct KernelFns {
             $(pub $name: CudaFunction,)+
-            /// Tile-IR W4A4 GEMM from `scripts/oxide.sh`. None unless a cubin
-            /// was embedded for this SM. Launch is still gated off by
-            /// `FASTVIDEO_NVFP4_OXIDE_GEMM`.
-            pub nvfp4_oxide_w4a4_gemm: Option<CudaFunction>,
+            /// Tile-IR NVFP4 GEMMs (fv-oxide-aot) embedded for this SM, one
+            /// per compiled tile shape / output type. Empty when none was
+            /// embedded or the driver refused them (`oxide_error`).
+            pub oxide_gemms: Vec<OxideGemm>,
+            /// Why embedded oxide cubins for this SM failed to load, if they did.
+            pub oxide_error: Option<String>,
         }
 
         /// Every `__global__` entry point in [`KERNEL_SRC`], in load order.
@@ -40,7 +42,8 @@ macro_rules! kernel_fns {
             fn load(module: &Arc<cudarc::driver::CudaModule>) -> Result<Self> {
                 Ok(Self {
                     $($name: module.load_function(stringify!($name))?,)+
-                    nvfp4_oxide_w4a4_gemm: None,
+                    oxide_gemms: Vec::new(),
+                    oxide_error: None,
                 })
             }
         }
@@ -57,6 +60,9 @@ kernel_fns!(
     nvfp4_w4a4_gemm,
     nvfp4_kv_dequant,
     nvfp4_reconstruct,
+    nvfp4_quantize_pack,
+    nvfp4_scales_swizzle,
+    fill_hash_uniform,
     ln_adaln_e_rope_half,
     pad_axis,
     group_norm_stats,
@@ -184,10 +190,34 @@ pub struct AotKernel {
     pub ptx: &'static str,
 }
 
-/// Tile-IR cubin from `scripts/oxide.sh` (`cargo oxide build --arch sm_100,sm_120`).
+/// Tile-IR NVFP4 GEMM cubin from `fv-oxide-aot` (see
+/// `fastvideo_oxide_kernels::Variant` for the launch ABI).
 pub struct OxideCubin {
     pub sm: u32,
+    /// Output element type: `"bf16"` or `"f32"`.
+    pub out: &'static str,
+    pub bm: u32,
+    pub bn: u32,
+    pub bk: u32,
+    /// Entry symbol in the cubin.
+    pub entry: &'static str,
     pub cubin: &'static [u8],
+}
+
+/// A loaded [`OxideCubin`].
+#[derive(Debug, Clone)]
+pub struct OxideGemm {
+    pub out: &'static str,
+    pub bm: u32,
+    pub bn: u32,
+    pub bk: u32,
+    pub func: CudaFunction,
+}
+
+impl OxideGemm {
+    pub fn label(&self) -> String {
+        format!("{}_{}x{}x{}", self.out, self.bm, self.bn, self.bk)
+    }
 }
 
 mod aot {
@@ -195,17 +225,56 @@ mod aot {
     include!(concat!(env!("OUT_DIR"), "/aot.rs"));
 }
 
-fn load_oxide_gemm(ctx: &Arc<cudarc::driver::CudaContext>, want: u32) -> Option<CudaFunction> {
-    let k = aot::OXIDE_AOT.iter().find(|k| k.sm == want)?;
-    let path = std::env::temp_dir().join(format!("fv-oxide-{}-sm{want}.cubin", std::process::id()));
-    std::fs::write(&path, k.cubin).ok()?;
-    let loaded = ctx.load_module(cudarc::nvrtc::Ptx::from_file(&path));
-    let _ = std::fs::remove_file(&path);
-    let module = loaded.ok()?;
-    module
-        .load_function("nvfp4_oxide_w4a4_gemm")
-        .or_else(|_| module.load_function("linear_tile"))
-        .ok()
+/// Every embedded oxide cubin, e.g. `sm120 bf16 128x128x128`, for reports.
+pub fn oxide_cubins() -> Vec<String> {
+    aot::OXIDE_AOT
+        .iter()
+        .map(|k| format!("sm{} {} {}x{}x{}", k.sm, k.out, k.bm, k.bn, k.bk))
+        .collect()
+}
+
+fn load_oxide_gemms(
+    ctx: &Arc<cudarc::driver::CudaContext>,
+    want: u32,
+) -> (Vec<OxideGemm>, Option<String>) {
+    let mut out = Vec::new();
+    for (i, k) in aot::OXIDE_AOT.iter().filter(|k| k.sm == want).enumerate() {
+        let path = std::env::temp_dir().join(format!(
+            "fv-oxide-{}-sm{want}-{i}.cubin",
+            std::process::id()
+        ));
+        if let Err(e) = std::fs::write(&path, k.cubin) {
+            return (out, Some(format!("write {}: {e}", path.display())));
+        }
+        let loaded = ctx.load_module(cudarc::nvrtc::Ptx::from_file(&path));
+        let _ = std::fs::remove_file(&path);
+        let func = loaded
+            .map_err(|e| e.to_string())
+            .and_then(|m| m.load_function(k.entry).map_err(|e| e.to_string()));
+        match func {
+            Ok(func) => out.push(OxideGemm {
+                out: k.out,
+                bm: k.bm,
+                bn: k.bn,
+                bk: k.bk,
+                func,
+            }),
+            Err(e) => {
+                let why = format!("sm{want} {} {}x{}x{}: {e}", k.out, k.bm, k.bn, k.bk);
+                return (out, Some(why));
+            }
+        }
+    }
+    (out, None)
+}
+
+impl KernelFns {
+    fn attach_oxide(mut self, ctx: &Arc<cudarc::driver::CudaContext>, want: u32) -> Self {
+        let (gemms, error) = load_oxide_gemms(ctx, want);
+        self.oxide_gemms = gemms;
+        self.oxide_error = error;
+        self
+    }
 }
 
 /// Where the loaded kernels came from — reported in the device banner so a
@@ -248,8 +317,7 @@ impl KernelFns {
                 let loaded = ctx.load_module(cudarc::nvrtc::Ptx::from_file(&path));
                 let _ = std::fs::remove_file(&path);
                 let module = loaded?;
-                let mut fns = Self::load(&module)?;
-                fns.nvfp4_oxide_w4a4_gemm = load_oxide_gemm(ctx, want);
+                let fns = Self::load(&module)?.attach_oxide(ctx, want);
                 return Ok((fns, KernelOrigin::Cubin(want)));
             }
             if let Some(k) = aot::AOT
@@ -258,15 +326,13 @@ impl KernelFns {
                 .max_by_key(|k| k.sm)
             {
                 let module = ctx.load_module(cudarc::nvrtc::Ptx::from_src(k.ptx))?;
-                let mut fns = Self::load(&module)?;
-                fns.nvfp4_oxide_w4a4_gemm = load_oxide_gemm(ctx, want);
+                let fns = Self::load(&module)?.attach_oxide(ctx, want);
                 return Ok((fns, KernelOrigin::Ptx(k.sm)));
             }
         }
         let (ptx, arch) = compile_ptx(sm_major, sm_minor)?;
         let module = ctx.load_module(ptx)?;
-        let mut fns = Self::load(&module)?;
-        fns.nvfp4_oxide_w4a4_gemm = load_oxide_gemm(ctx, want);
+        let fns = Self::load(&module)?.attach_oxide(ctx, want);
         Ok((fns, KernelOrigin::Nvrtc(arch)))
     }
 
