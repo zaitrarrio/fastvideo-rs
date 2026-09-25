@@ -271,6 +271,103 @@ pub fn renoise(latent: &mut [f32], noise: &[f32], noise_scale: f32) {
     }
 }
 
+/// Round to the nearest bfloat16 (ties to even), as `tensor.to(torch.bfloat16)`
+/// does. Non-finite values pass through.
+pub fn bf16_round(x: f32) -> f32 {
+    if !x.is_finite() {
+        return x;
+    }
+    let bits = x.to_bits();
+    let rem = bits & 0xffff;
+    let mut kept = bits & !0xffff;
+    if rem > 0x8000 || (rem == 0x8000 && (kept >> 16) & 1 == 1) {
+        kept = kept.wrapping_add(0x1_0000);
+    }
+    f32::from_bits(kept)
+}
+
+/// `EulerAncestralDiffusionStep.step` coefficients
+/// (`ltx_core/components/diffusion_steps.py:67-106`), evaluated the way torch
+/// evaluates them: `sigmas` is a float32 tensor, so every intermediate is an
+/// f32 op in the order written there.
+/// `x_next = sample·x + denoised·x0`, then `x_next = factor·x_next + noise·ε`.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct AncestralCoeffs {
+    pub sample: f32,
+    pub denoised: f32,
+    pub factor: f32,
+    pub noise: f32,
+}
+
+/// `None` when `sigma_next == 0`: the step returns the denoised sample.
+pub fn ancestral_coeffs_f32(
+    sigma: f32,
+    sigma_next: f32,
+    eta: f32,
+    s_noise: f32,
+) -> Option<AncestralCoeffs> {
+    if sigma_next == 0.0 {
+        return None;
+    }
+    let downstep_ratio = 1.0f32 + (sigma_next / sigma - 1.0f32) * eta;
+    let sigma_down = sigma_next * downstep_ratio;
+    let ratio = sigma_down / sigma;
+    let (mut factor, mut noise) = (1.0f32, 0.0f32);
+    if eta > 0.0 {
+        let alpha_next = 1.0f32 - sigma_next;
+        let alpha_down = 1.0f32 - sigma_down;
+        let sq = |v: f32| v * v;
+        let renoise = (sq(sigma_next) - sq(sigma_down) * sq(alpha_next) / sq(alpha_down))
+            .max(0.0)
+            .sqrt();
+        factor = alpha_next / alpha_down;
+        noise = s_noise * renoise;
+    }
+    Some(AncestralCoeffs {
+        sample: ratio,
+        denoised: 1.0f32 - ratio,
+        factor,
+        noise,
+    })
+}
+
+/// Host reference of one `ltx_core` deterministic Euler update on a bf16
+/// latent state, element-wise: the velocity is turned into `x0` by `X0Model`
+/// (`to_denoised`, `ltx_core/utils.py:39-52`, f32 math then bf16), back into a
+/// velocity by `EulerDiffusionStep` (`to_velocity`, `utils.py:21-36`, bf16) and
+/// applied (`diffusion_steps.py:31-39`: f32 math, stored as bf16).
+pub fn ltx_core_euler_step(sample: f32, velocity: f32, sigma: f32, sigma_next: f32) -> f32 {
+    let x = bf16_round(sample);
+    let v_model = bf16_round(velocity);
+    let denoised = bf16_round(x - v_model * sigma);
+    let v = bf16_round((x - denoised) / sigma);
+    let dt = sigma_next - sigma;
+    bf16_round(x + v * dt)
+}
+
+/// Host reference of one `ltx_core` ancestral update on a bf16 latent state
+/// (`samplers.py:488-563` with `EulerAncestralDiffusionStep`): `x0` as in
+/// [`ltx_core_euler_step`], the step in f32 with bf16 noise, stored as bf16.
+pub fn ltx_core_ancestral_step(
+    sample: f32,
+    velocity: f32,
+    noise: f32,
+    sigma: f32,
+    sigma_next: f32,
+    eta: f32,
+    s_noise: f32,
+) -> f32 {
+    let x = bf16_round(sample);
+    let denoised = bf16_round(x - bf16_round(velocity) * sigma);
+    match ancestral_coeffs_f32(sigma, sigma_next, eta, s_noise) {
+        None => denoised,
+        Some(c) => {
+            let x_next = c.sample * x + c.denoised * denoised;
+            bf16_round(c.factor * x_next + bf16_round(noise) * c.noise)
+        }
+    }
+}
+
 /// Lexicographic combinations of `items` taken `k` at a time (no itertools).
 fn combinations(items: &[usize], k: usize) -> Vec<Vec<usize>> {
     if k == 0 {
@@ -496,5 +593,55 @@ mod tests {
         let mut terminal = [x0];
         Ltx2Schedule::ancestral_step(&mut terminal, &[denoised], sigma, 0.0, eta, 1.0, None);
         assert!((terminal[0] - denoised).abs() < 1e-6);
+    }
+
+    #[test]
+    fn bf16_round_is_nearest_even() {
+        assert_eq!(bf16_round(1.0), 1.0);
+        assert_eq!(bf16_round(61.9), 62.0);
+        assert_eq!(bf16_round(61.875), 62.0);
+        assert_eq!(bf16_round(1.0 + 1.0 / 256.0), 1.0);
+        assert_eq!(bf16_round(1.0 + 3.0 / 256.0), 1.0 + 4.0 / 256.0);
+        assert!(bf16_round(f32::NAN).is_nan());
+        assert_eq!(bf16_round(-0.0).to_bits(), (-0.0f32).to_bits());
+    }
+
+    #[test]
+    fn ancestral_coeffs_match_the_f64_step_and_end_on_x0() {
+        let sig = DISTILLED_SIGMA_WITH_TERMINAL;
+        for i in 0..sig.len() - 2 {
+            let (s, n) = (sig[i], sig[i + 1]);
+            let c = ancestral_coeffs_f32(s as f32, n as f32, 1.0, 1.0).unwrap();
+            // eta = 1: sigma_down = sigma_next²/sigma.
+            let down = n * n / s;
+            assert!((f64::from(c.sample) - down / s).abs() < 1e-6);
+            assert!((f64::from(c.sample + c.denoised) - 1.0).abs() < 1e-6);
+            let (an, ad) = (1.0 - n, 1.0 - down);
+            // alpha_down is small near sigma = 1: compare relatively.
+            assert!((f64::from(c.factor) / (an / ad) - 1.0).abs() < 1e-4);
+            let want = (n * n - down * down * an * an / (ad * ad)).max(0.0).sqrt();
+            assert!((f64::from(c.noise) - want).abs() < 1e-3 * want.max(1e-3));
+        }
+        assert!(ancestral_coeffs_f32(0.421875, 0.0, 1.0, 1.0).is_none());
+        // eta = 0 is a plain Euler interpolation with no noise.
+        let c = ancestral_coeffs_f32(0.9, 0.7, 0.0, 1.0).unwrap();
+        assert_eq!((c.factor, c.noise), (1.0, 0.0));
+        assert!((c.sample - 0.7 / 0.9).abs() < 1e-7);
+    }
+
+    #[test]
+    fn ltx_core_steps_store_bf16_states() {
+        let (x, v) = (0.3141_f32, -1.2345_f32);
+        let y = ltx_core_euler_step(x, v, 0.909375, 0.725);
+        assert_eq!(y, bf16_round(y));
+        // Close to the plain f32 Euler update, within bf16 resolution.
+        assert!((y - (x + (0.725 - 0.909375) * v)).abs() < 1e-2);
+        let z = ltx_core_ancestral_step(x, v, 0.5, 0.909375, 0.725, 1.0, 1.0);
+        assert_eq!(z, bf16_round(z));
+        // Terminal: the bf16 x0.
+        assert_eq!(
+            ltx_core_ancestral_step(x, v, 0.5, 0.421875, 0.0, 1.0, 1.0),
+            bf16_round(bf16_round(x) - bf16_round(v) * 0.421875)
+        );
     }
 }

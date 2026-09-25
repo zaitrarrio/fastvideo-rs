@@ -562,6 +562,42 @@ impl Ltx2ConnectorsConfig {
     pub fn audio_inner_dim(&self) -> usize {
         self.audio_hidden_dim
     }
+
+    /// Which Gemma feature extractor feeds the text projections.
+    ///
+    /// `ltx_core/text_encoders/gemma/encoders/encoder_configurator.py:171-209`
+    /// (`_create_feature_extractor`) picks `FeatureExtractorV2` exactly when the
+    /// checkpoint carries the 22B keys, whose projections are the biased dual
+    /// `video/audio_aggregate_embed` linears — here `per_modality_projections`.
+    /// Everything else (19B) is `FeatureExtractorV1`.
+    pub fn text_norm(&self) -> Ltx2TextNorm {
+        if self.per_modality_projections {
+            Ltx2TextNorm::PerTokenRms
+        } else {
+            Ltx2TextNorm::MaskedMinMax
+        }
+    }
+
+    /// `_rescale_norm(normed, out_dim, embedding_dim)` =
+    /// `sqrt(out_dim / embedding_dim)` (`feature_extractor.py:67-69,123-128`),
+    /// with `embedding_dim` the Gemma hidden size (`encoder_configurator.py:181`).
+    pub fn per_token_rms_rescale(&self, out_dim: usize) -> f64 {
+        (out_dim as f64 / self.caption_channels as f64).sqrt()
+    }
+}
+
+/// How the stacked Gemma hidden states are normalised before the aggregate
+/// embed (`ltx_core/text_encoders/gemma/feature_extractor.py`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Ltx2TextNorm {
+    /// V1 (`_norm_and_concat_padded_batch`, `feature_extractor.py:12-45`):
+    /// per layer, `8·(x − mean) / (max − min + 1e-6)` over every real token and
+    /// channel.
+    MaskedMinMax,
+    /// V2 (`norm_and_concat_per_token_rms`, `feature_extractor.py:48-64`):
+    /// per token and layer, `x · rsqrt(mean_D(x²) + 1e-6)`, then
+    /// `sqrt(out_dim / 3840)` per stream before the biased linear.
+    PerTokenRms,
 }
 
 /// `bwe_generator` + MelSTFT geometry inside `LTX2VocoderWithBWE`
@@ -1151,6 +1187,18 @@ pub fn ltx2_5_22b_distilled() -> Ltx2Config {
     }
 }
 
+/// LTX-2.5 dev transformer (`ltx-2.5-22b-dev-transformer-bf16`): the 2.5
+/// bundle with the dev (dynamic-shift) scheduler. The Spark refiner
+/// (`Sol-H3-Spark/configs/checkpoints.json:78`, `stage2_ops/models.py:76-80`) and
+/// the GB200 refiner (`ltx2.5-refiner/GB200/refiner_head_cp.py:336-358`) run
+/// this checkpoint with the distilled LoRA fused at 0.8.
+pub fn ltx2_5_22b_dev() -> Ltx2Config {
+    Ltx2Config {
+        scheduler: Ltx2SchedulerConfig::ltx2_19b(),
+        ..ltx2_5_22b_distilled()
+    }
+}
+
 /// LTX-2.3 distilled (`FastVideo/LTX-2.3-Distilled-Diffusers`): same DiT/VAE/BWE/
 /// connector geometry as 2.5, Gemma-3 text (no Gemma-4), spatial upscaler, no DiffVAE.
 pub fn ltx2_23_22b_distilled() -> Ltx2Config {
@@ -1500,5 +1548,38 @@ mod tests {
         let base = ltx2_23_22b();
         assert_eq!(base.version, Ltx2ModelVersion::V23);
         assert!(base.scheduler.use_dynamic_shifting);
+    }
+
+    #[test]
+    fn feature_extractor_follows_the_22b_projection_keys() {
+        // encoder_configurator.py:185-209: V2 exactly when the dual biased
+        // aggregate embeds are present (2.3 and 2.5 share the 22B connectors).
+        assert_eq!(
+            ltx2_19b().connectors.text_norm(),
+            Ltx2TextNorm::MaskedMinMax
+        );
+        assert_eq!(
+            ltx2_5_22b_distilled().connectors.text_norm(),
+            Ltx2TextNorm::PerTokenRms
+        );
+        assert_eq!(
+            ltx2_23_22b_distilled().connectors.text_norm(),
+            Ltx2TextNorm::PerTokenRms
+        );
+        let c = ltx2_5_22b_distilled().connectors;
+        assert!((c.per_token_rms_rescale(c.inner_dim()) - (4096f64 / 3840.0).sqrt()).abs() < 1e-15);
+        assert!(
+            (c.per_token_rms_rescale(c.audio_inner_dim()) - (2048f64 / 3840.0).sqrt()).abs()
+                < 1e-15
+        );
+    }
+
+    #[test]
+    fn ltx25_dev_is_the_distilled_bundle_with_the_dev_scheduler() {
+        let (dev, dist) = (ltx2_5_22b_dev(), ltx2_5_22b_distilled());
+        assert_eq!(dev.version, Ltx2ModelVersion::V25);
+        assert_eq!(dev.transformer, dist.transformer);
+        assert_eq!(dev.connectors, dist.connectors);
+        assert!(dev.scheduler.use_dynamic_shifting && !dist.scheduler.use_dynamic_shifting);
     }
 }

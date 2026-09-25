@@ -89,17 +89,25 @@ pub fn feat_norm_keep_indices(
     if seq == 0 || dim == 0 || tokens.len() < seq * dim {
         return Vec::new();
     }
+    let scores: Vec<f32> = (0..seq)
+        .map(|i| tokens[i * dim..(i + 1) * dim].iter().map(|x| x * x).sum())
+        .collect();
+    keep_indices_from_scores(&scores, keep_ratio)
+}
+
+/// [`feat_norm_keep_indices`] from per-row L2² scores already reduced (on the
+/// device): the `round(seq · keep_ratio)` largest, ties to the lower index,
+/// returned ascending.
+pub fn keep_indices_from_scores(scores: &[f32], keep_ratio: f64) -> Vec<usize> {
+    let seq = scores.len();
+    if seq == 0 {
+        return Vec::new();
+    }
     let keep = ((seq as f64 * keep_ratio).round() as usize).clamp(1, seq);
     if keep >= seq {
         return (0..seq).collect();
     }
-    let mut scored: Vec<(f32, usize)> = (0..seq)
-        .map(|i| {
-            let row = &tokens[i * dim..(i + 1) * dim];
-            let score: f32 = row.iter().map(|x| x * x).sum();
-            (score, i)
-        })
-        .collect();
+    let mut scored: Vec<(f32, usize)> = scores.iter().copied().zip(0..seq).collect();
     scored.sort_by(|a, b| match b.0.partial_cmp(&a.0) {
         Some(std::cmp::Ordering::Equal) | None => a.1.cmp(&b.1),
         Some(order) => order,
@@ -107,6 +115,31 @@ pub fn feat_norm_keep_indices(
     let mut idx: Vec<usize> = scored[..keep].iter().map(|(_, i)| *i).collect();
     idx.sort_unstable();
     idx
+}
+
+/// The midpoint prune is the LTX-2.3 stage-2 contract
+/// (`models/ltx23/optimized/env.sh`). No LTX-2.5 profile prunes (RTX5090
+/// `run_ltx25_gpu.sh`, GB200 `fullopt.toml`, the refiners), so a request on
+/// any other version is refused rather than silently changing the output.
+pub fn midpoint_prune_scope(version: super::config::Ltx2ModelVersion) -> Result<(), String> {
+    if version == super::config::Ltx2ModelVersion::V23 {
+        Ok(())
+    } else {
+        Err(format!(
+            "ltx2: the midpoint token prune is the LTX-2.3 stage-2 contract; no {version:?} profile prunes"
+        ))
+    }
+}
+
+/// The SCSP stage-1 skip preset is LTX-2.3 res2s only (`techniques/presets.py`).
+pub fn stage1_cache_scope(version: super::config::Ltx2ModelVersion) -> Result<(), String> {
+    if version == super::config::Ltx2ModelVersion::V23 {
+        Ok(())
+    } else {
+        Err(format!(
+            "ltx2: the SCSP stage-1 cache is the LTX-2.3 res2s preset; no {version:?} profile uses it"
+        ))
+    }
 }
 
 /// Write `kept` rows into a clone of `prev` at `idx`. All slices are `[seq, dim]`.
@@ -233,5 +266,30 @@ mod tests {
             scatter_prev(&prev, 4, 2, &[1, 2], &kept),
             vec![10.0, 10.0, 3.0, 4.0, 2.0, 0.0, 40.0, 40.0]
         );
+    }
+
+    #[test]
+    fn keep_from_scores_matches_the_row_scan_and_breaks_ties_low() {
+        let tokens = [1.0f32, 0.0, 3.0, 4.0, 2.0, 0.0, 0.0, 0.0];
+        assert_eq!(
+            keep_indices_from_scores(&[1.0, 25.0, 4.0, 0.0], 0.5),
+            feat_norm_keep_indices(&tokens, 4, 2, 0.5)
+        );
+        assert_eq!(
+            keep_indices_from_scores(&[2.0, 2.0, 2.0, 1.0], 0.5),
+            vec![0, 1]
+        );
+        assert_eq!(keep_indices_from_scores(&[5.0], 0.5), vec![0]);
+        assert!(keep_indices_from_scores(&[], 0.5).is_empty());
+    }
+
+    #[test]
+    fn prune_and_scsp_are_ltx23_only() {
+        use crate::ltx2::config::Ltx2ModelVersion as V;
+        assert!(midpoint_prune_scope(V::V23).is_ok());
+        assert!(midpoint_prune_scope(V::V25).is_err());
+        assert!(midpoint_prune_scope(V::V20).is_err());
+        assert!(stage1_cache_scope(V::V23).is_ok());
+        assert!(stage1_cache_scope(V::V25).is_err());
     }
 }

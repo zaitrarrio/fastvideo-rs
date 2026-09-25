@@ -6,13 +6,27 @@
 //! product is `(B * strength) @ A`, added onto the base weight. This loader
 //! accumulates that product in f32, which is the dtype the DiT loader
 //! materializes. LTX-2.3 uses one file at 0.25 on stage 1 and 0.5 on stage 2
-//! (`models/ltx23.toml`, `run_ltx23_common.sh`). LTX-2.5's refiner uses
-//! `ltx-2.5-22b-distilled-lora-450-bf16.safetensors` at 0.8 on stage 2 only
-//! (`models/ltx2.5-refiner/GB200/refiner.toml`).
+//! (`models/ltx23.toml`, `run_ltx23_common.sh`). LTX-2.5:
+//! * the distilled two-stage (`ltx_pipelines/distilled.py`, RTX5090
+//!   `run_ltx25_gpu.sh` passes no `--lora`) fuses nothing on either stage;
+//! * the dev two-stage (`ti2vid_two_stages.py:147-151`) fuses
+//!   `ltx-2.5-22b-distilled-lora-450-bf16.safetensors` on stage 2 only, at
+//!   `DEFAULT_LORA_STRENGTH = 1.0` (`utils/args.py:166`,
+//!   `ti2vid_two_stages_mgpu.py:77`);
+//! * the refiners (`ltx2.5-refiner/GB200/refiner_head_cp.py:336-358`,
+//!   `Sol-H3-Spark/runtime/stage2_ops/models.py:76`) fuse it at 0.8 onto the
+//!   dev transformer — [`REFINER_STRENGTH`].
 
 use super::config::Ltx2ModelVersion;
 use super::pisa::{STAGE1_LORA_STRENGTH, STAGE2_LORA_STRENGTH};
 use super::sol::LORA_STRENGTH;
+
+/// Distilled LoRA strength of the stage-2 refiners (GB200 refiner, Spark).
+pub const REFINER_STRENGTH: f32 = LORA_STRENGTH as f32;
+
+/// Stage-2 distilled LoRA strength of the LTX-2.5 dev two-stage
+/// (`DEFAULT_LORA_STRENGTH`, `ltx_pipelines/utils/args.py:166`).
+pub const LTX25_DEV_STAGE2_STRENGTH: f32 = 1.0;
 
 /// `ltx-2.3-22b-distilled-lora-384-1.1.safetensors`, then the unsuffixed name.
 pub const LTX23_LORA_NAMES: &[&str] = &[
@@ -23,12 +37,14 @@ pub const LTX23_LORA_NAMES: &[&str] = &[
 /// Stage-2 refiner adapter. Stage 1 of a 2.5 two-stage run stays unfused.
 pub const LTX25_LORA_NAMES: &[&str] = &["ltx-2.5-22b-distilled-lora-450-bf16.safetensors"];
 
-/// `(stage1, stage2)` strengths. `None` for 2.0, which has no distilled LoRA
-/// in the sol-engine profiles.
+/// `(stage1, stage2)` strengths of a *dev* two-stage generate. `None` for 2.0,
+/// which has no distilled LoRA in the sol-engine profiles. Distilled
+/// checkpoints never fuse (the adapter is baked in), and the refiners use
+/// [`REFINER_STRENGTH`] instead.
 pub fn stage_strengths(version: Ltx2ModelVersion) -> Option<(f32, f32)> {
     match version {
         Ltx2ModelVersion::V23 => Some((STAGE1_LORA_STRENGTH as f32, STAGE2_LORA_STRENGTH as f32)),
-        Ltx2ModelVersion::V25 => Some((0.0, LORA_STRENGTH as f32)),
+        Ltx2ModelVersion::V25 => Some((0.0, LTX25_DEV_STAGE2_STRENGTH)),
         Ltx2ModelVersion::V20 => None,
     }
 }
@@ -147,7 +163,8 @@ mod tests {
     #[test]
     fn strengths_match_the_profiles() {
         assert_eq!(stage_strengths(Ltx2ModelVersion::V23), Some((0.25, 0.5)));
-        assert_eq!(stage_strengths(Ltx2ModelVersion::V25), Some((0.0, 0.8)));
+        assert_eq!(stage_strengths(Ltx2ModelVersion::V25), Some((0.0, 1.0)));
+        assert_eq!(REFINER_STRENGTH, 0.8);
         assert_eq!(stage_strengths(Ltx2ModelVersion::V20), None);
         assert_eq!(file_names(Ltx2ModelVersion::V23)[0], LTX23_LORA_NAMES[0]);
     }
