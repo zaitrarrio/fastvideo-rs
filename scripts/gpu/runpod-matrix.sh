@@ -4,7 +4,7 @@
 # Spark joint LTX refine stays off (FASTVIDEO_LTX2_WEIGHTS unset) except in
 # the rtx6000 parity family, which runs the full Spark bridge.
 set -euo pipefail
-FAMILY="${1:?usage: runpod-matrix.sh h3|ltx|hunyuan|wan|b200|rtx6000|rtx5090|fastvideo}"
+FAMILY="${1:?usage: runpod-matrix.sh h3|ltx|hunyuan|wan|b200|rtx6000|rtx5090|fastvideo|precision}"
 WORK="${FV_WORK:-/workspace}"
 BIN="${FV_GPUCHECK:-/opt/fastvideo-rs/target/release/fv-gpucheck}"
 W="$WORK/weights"
@@ -558,6 +558,45 @@ case "$FAMILY" in
           --weights "$W/ltx25" --dit "$W/ltx25" "${geo[@]}" --dense-stage2 \
           --prompt "$PROMPT" --seed "$SEED" --two-stage --text streamed --warm \
           --clip "$RUNS/ltx25-$wl/frames"
+    done
+    ;;
+  precision)
+    # Re-measure the precision switches on the current build against the
+    # baselines of the fastvideo / rtx5090 families (same prompt, seed, warm).
+    h3_common=(
+      --prompt "$PROMPT"
+      --seconds 5
+      --seed "$SEED"
+      --text-encoder auto
+      --text-cache "$SCRATCH/h3-text-cache"
+      --text-weights "$W/h3-base"
+      --warm
+    )
+    for v in base bf16act ffnfp8 fp8; do
+      envs=()
+      case "$v" in
+        bf16act) envs=(FASTVIDEO_BF16_ACT=1) ;;
+        ffnfp8) envs=(FASTVIDEO_H3_FFN_FP8=1) ;;
+        fp8) envs=(FASTVIDEO_FP8=1) ;;
+      esac
+      gated_cell "fasth3-8step-768p-$v" fasth3-8step \
+        env "${envs[@]}" \
+        "$BIN" --mode fast h3 gen --weights "$W/h3-8step" --h3-recipe 8step \
+          --adaln-cache "$RUNS/fasth3-8step-768p-$v-adaln.cache" \
+          --clip-dir "$RUNS/fasth3-8step-768p-$v/frames" "${h3_common[@]}"
+    done
+    for v in base bf16act fp8; do
+      envs=()
+      case "$v" in
+        bf16act) envs=(FASTVIDEO_BF16_ACT=1) ;;
+        fp8) envs=(FASTVIDEO_FP8=1) ;;
+      esac
+      gated_cell "ltx25-4k5s-sol-$v" ltx25-two-stage \
+        env "${envs[@]}" \
+        "$BIN" --mode fast ltx2 gen --model-version 2.5 \
+          --weights "$W/ltx25" --dit "$W/ltx25" --workload 4k5s \
+          --prompt "$PROMPT" --seed "$SEED" --two-stage --text streamed --warm \
+          --clip "$RUNS/ltx25-4k5s-sol-$v/frames"
     done
     ;;
   *)
