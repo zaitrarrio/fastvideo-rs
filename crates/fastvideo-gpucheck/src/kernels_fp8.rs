@@ -612,7 +612,8 @@ fn bf16_act_inner(report: &mut Report, seed: &mut u64) -> StageResult<()> {
             NormOut::Mx(_) => Err(anyhow::anyhow!("host MX").into()),
         }
     })?;
-    check_ulps(report, "h3_norm_mod", &host(&got)?, &want, false)?;
+    // Bit-reproducible normalizer (quant::row_rsqrt): exact, not 1 ulp.
+    check_ulps(report, "h3_norm_mod", &host(&got)?, &want, true)?;
     let (hid, n2) = fused16::res_gate_norm_mod(&at, &bt, &wt, &ada, 0, (2, 4, 3), 1e-6, false)?;
     let NormOut::T(n2) = n2 else {
         return Err(anyhow::anyhow!("res_gate_norm_mod returned MXFP8").into());
@@ -634,7 +635,7 @@ fn bf16_act_inner(report: &mut Report, seed: &mut u64) -> StageResult<()> {
         (host(&h)?, host(&n)?)
     };
     check_ulps(report, "h3_res_gate_hidden", &host(&hid)?, &want_h, true)?;
-    check_ulps(report, "h3_res_gate_norm_mod", &host(&n2)?, &want_n, false)?;
+    check_ulps(report, "h3_res_gate_norm_mod", &host(&n2)?, &want_n, true)?;
     let got = fused16::gate_residual(&at, &bt, &ada, 0, 5)?;
     let want = host(&fused16::gate_residual(&host_a, &host_b, &host_ada, 0, 5)?)?;
     check_ulps(report, "h3_gate_residual", &host(&got)?, &want, true)?;
