@@ -42,3 +42,7 @@ Latents packed: VAE 16-ch → DiT **64**-ch (2×2 pack).
 | cudarc DiT (tiny zeros + load hook) | landed |
 | Generate scaffold | landed |
 | CLIP+T5 encode / full weight parity | T5-XXL via `text_encoder_2` when present; Hub key probes |
+| Pack / RoPE ids / shift | landed (`flux::family`) |
+| Weight-key maps + `transformer/config.json` | landed (`flux::weights`, `FLUX1_*_REQUIRED_KEYS`) |
+| `flux1_schnell` registry | landed |
+| Full DiT (device RoPE / fused SDPA) | still the generate scaffold; see `docs/flux2-generate-gap.md` |

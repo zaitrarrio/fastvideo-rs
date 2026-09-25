@@ -10,6 +10,7 @@ fastvideo-ops.workspace = true
 rand.workspace = true
 rand_distr.workspace = true
 rayon.workspace = true
+serde_json.workspace = true
 thiserror = { workspace = true }
 tokenizers.workspace = true
 

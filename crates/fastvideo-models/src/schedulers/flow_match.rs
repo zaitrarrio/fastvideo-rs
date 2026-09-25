@@ -78,6 +78,37 @@ impl FlowMatchEulerDiscreteScheduler {
         self.step_index = None;
     }
 
+    /// Flux2 inference schedule: linspace(1, 1/n, n) then empirical μ time-shift.
+    pub fn set_timesteps_flux2(&mut self, num_inference_steps: usize, mu: Option<f64>) {
+        let n = num_inference_steps.max(1);
+        let mut sigmas = Vec::with_capacity(n + 1);
+        if n == 1 {
+            sigmas.push(1.0);
+        } else {
+            let last = 1.0 / n as f64;
+            for i in 0..n {
+                sigmas.push(1.0 + (last - 1.0) * (i as f64) / ((n - 1) as f64));
+            }
+        }
+        if let Some(mu) = mu {
+            for s in &mut sigmas {
+                *s = crate::flux2::flux2_time_shift(*s, mu);
+            }
+        } else {
+            for s in &mut sigmas {
+                *s = apply_shift(*s, self.shift);
+            }
+        }
+        let timesteps: Vec<f64> = sigmas
+            .iter()
+            .map(|s| s * f64::from(self.num_train_timesteps))
+            .collect();
+        sigmas.push(0.0);
+        self.timesteps = timesteps;
+        self.sigmas = sigmas;
+        self.step_index = None;
+    }
+
     pub fn inference_timesteps(&self) -> &[f64] {
         &self.timesteps
     }

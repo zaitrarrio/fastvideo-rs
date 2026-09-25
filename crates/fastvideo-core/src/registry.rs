@@ -793,13 +793,22 @@ pub static SD35_MODEL_DEFINITIONS: &[FamilyModelDefinition] = &[family_defn!(
 )];
 
 /// FLUX.1 T2I Hub ids.
-pub static FLUX_MODEL_DEFINITIONS: &[FamilyModelDefinition] = &[family_defn!(
-    ModelFamily::Flux,
-    "flux1_dev",
-    &["black-forest-labs/FLUX.1-dev"],
-    &[WorkloadType::T2I],
-    match_any = &["flux.1-dev", "flux1-dev", "flux-1-dev"]
-)];
+pub static FLUX_MODEL_DEFINITIONS: &[FamilyModelDefinition] = &[
+    family_defn!(
+        ModelFamily::Flux,
+        "flux1_dev",
+        &["black-forest-labs/FLUX.1-dev"],
+        &[WorkloadType::T2I],
+        match_any = &["flux.1-dev", "flux1-dev", "flux-1-dev"]
+    ),
+    family_defn!(
+        ModelFamily::Flux,
+        "flux1_schnell",
+        &["black-forest-labs/FLUX.1-schnell"],
+        &[WorkloadType::T2I],
+        match_any = &["flux.1-schnell", "flux1-schnell", "flux-schnell"]
+    ),
+];
 
 /// FLUX.2 T2I Hub ids.
 pub static FLUX2_MODEL_DEFINITIONS: &[FamilyModelDefinition] = &[
@@ -1255,6 +1264,8 @@ mod tests {
 
         let flux = resolve("black-forest-labs/FLUX.1-dev").unwrap();
         assert_eq!(flux.family(), ModelFamily::Flux);
+        let schnell = resolve("black-forest-labs/FLUX.1-schnell").unwrap();
+        assert_eq!(schnell.preset(), "flux1_schnell");
 
         let flux2 = resolve("black-forest-labs/FLUX.2-klein-4B").unwrap();
         assert_eq!(flux2.preset(), "flux2_klein_4b");

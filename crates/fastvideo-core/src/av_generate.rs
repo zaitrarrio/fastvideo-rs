@@ -1184,6 +1184,7 @@ fn generate_flux(
         let weights = weights_root(&opts)?;
         let preset = match def.preset {
             "flux1_dev" => FluxPreset::Dev,
+            "flux1_schnell" => FluxPreset::Schnell,
             other => {
                 return Err(FastVideoError::Message(format!(
                     "unknown FLUX.1 preset {other}"
@@ -1205,7 +1206,7 @@ fn generate_flux(
         } else {
             pipe.load_vae_stub();
         }
-        let mut request = FluxRequest::dev(opts.prompt, opts.seed);
+        let mut request = FluxRequest::for_preset(preset, opts.prompt, opts.seed);
         if let Some(h) = opts.height {
             request.height = h as usize;
         }
