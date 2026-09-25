@@ -231,7 +231,9 @@ pub enum Stage {
         #[arg(long)]
         taeh3_weights: Option<PathBuf>,
         /// DMD recipe: `8step` / `v2`, `4step-vsa` / `preview-vsa`, `4step-dense`
-        /// / `preview-dense`, `sol-h3` (dense on one GPU; `FASTVIDEO_H3_SOL_ATTN=1`
+        /// / `preview-dense` (base MiniMax-H3 weights + the Preview v1
+        /// `vsa-datafree` / `dense-datafree` LoRA found beside them;
+        /// `FASTH3_LORA_STRENGTH`, default 1.0), `sol-h3` (dense on one GPU; `FASTVIDEO_H3_SOL_ATTN=1`
         /// for the engine Sol policy), `sol-h3-spark`, `sol-h3-rtx`. Default:
         /// read `fastvideo_inference.json` or 8-step.
         #[arg(long)]

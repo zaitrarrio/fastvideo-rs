@@ -2,7 +2,7 @@
 # Verify that a weight tree is complete for a model cell before any GPU time is
 # spent on it. Runs on the box (no Python needed).
 #
-#   verify-weights.sh <cell>...        cells: fasth3-8step fasth3-4step-vsa
+#   verify-weights.sh <cell>...        cells: fasth3-8step h3-base fasth3-4step-vsa
 #                                      fasth3-4step-dense sol-h3 sol-h3-spark
 #                                      ltx25-two-stage
 #   verify-weights.sh --list           print the cells and what each needs
@@ -23,10 +23,16 @@ UPSCALER_REL="upscaler/minimax_h3_latent_upscaler_3d_conv_v1/minimax_h3_latent_u
 # .safetensors is a single file; anything else is a directory.
 needs() {
   case "$1" in
-    fasth3-8step | fasth3-4step-vsa)
+    fasth3-8step)
       echo "h3-8step:transformer h3-8step:vae h3-8step:audio_vae h3-base:tokenizer h3-base:text_encoder" ;;
-    fasth3-4step-dense)
+    h3-base)
       echo "h3-base:transformer h3-base:vae h3-base:audio_vae h3-base:tokenizer h3-base:text_encoder" ;;
+    # FastH3 Preview v1 = the base transformer + one Preview LoRA (FastVideo's
+    # run_fasth3_lora_preview_*_datafree.sh); the 8-step export is refused.
+    fasth3-4step-vsa)
+      echo "$(needs h3-base) FastH3-4-step-Preview-v1-LoRA:vsa-datafree/adapter_model.safetensors" ;;
+    fasth3-4step-dense)
+      echo "$(needs h3-base) FastH3-4-step-Preview-v1-LoRA:dense-datafree/adapter_model.safetensors" ;;
     sol-h3)
       echo "h3-base:transformer h3-base:vae h3-base:audio_vae h3-base:tokenizer h3-base:text_encoder FastH3-4-step-Preview-v1-LoRA:dense-datafree/adapter_model.safetensors" ;;
     sol-h3-spark)
@@ -37,7 +43,7 @@ needs() {
   esac
 }
 
-CELLS=(fasth3-8step fasth3-4step-vsa fasth3-4step-dense sol-h3 sol-h3-spark ltx25-two-stage)
+CELLS=(fasth3-8step h3-base fasth3-4step-vsa fasth3-4step-dense sol-h3 sol-h3-spark ltx25-two-stage)
 
 if [[ "${1:-}" == "--list" ]]; then
   for c in "${CELLS[@]}"; do printf '%-20s %s\n' "$c" "$(needs "$c")"; done
