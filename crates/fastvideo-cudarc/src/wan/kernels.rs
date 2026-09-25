@@ -151,9 +151,13 @@ pub fn compile_ptx(sm_major: i32, sm_minor: i32) -> Result<(cudarc::nvrtc::Ptx, 
     for arch in super::hopper::nvrtc_arches(sm_major, sm_minor) {
         let opts = CompileOptions {
             arch: Some(arch),
-            use_fast_math: Some(true),
-            ftz: Some(true),
-            // Do not also set `fmad`: use_fast_math already injects --fmad=true.
+            // Parity with PyTorch's CUDA build: IEEE div/sqrt, denormals kept,
+            // FMA contraction on. Must match build.rs's nvcc flags.
+            use_fast_math: Some(false),
+            ftz: Some(false),
+            prec_div: Some(true),
+            prec_sqrt: Some(true),
+            fmad: Some(true),
             ..Default::default()
         };
         match compile_ptx_with_opts(KERNEL_SRC, opts) {

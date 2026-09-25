@@ -1,4 +1,18 @@
 #define IDX() ((long)blockIdx.x * (long)blockDim.x + (long)threadIdx.x)
+// f32 -> bfloat16 bits, round-to-nearest-even: the rounding torch's
+// `.to(torch.bfloat16)` and __float2bfloat16_rn use, so every bf16 tensor the
+// device produces matches the reference bit for bit. NaN stays a quiet NaN;
+// values past the largest finite bf16 round to inf, as in torch.
+__device__ __forceinline__ unsigned short fv_bf16_rne(float x) {
+    unsigned int u = __float_as_uint(x);
+    if ((u & 0x7F800000u) == 0x7F800000u) {
+        unsigned int h = u >> 16;
+        if (u & 0x007FFFFFu) h |= 0x0040u;
+        return (unsigned short)h;
+    }
+    u += 0x7FFFu + ((u >> 16) & 1u);
+    return (unsigned short)(u >> 16);
+}
 
 extern "C" __global__ void elem_add(const float* a, const float* b, float* out, long n) {
     long i = IDX();
@@ -103,17 +117,11 @@ extern "C" __global__ void bias_gelu_inplace(float* x, const float* bias, long n
     float u = k * (v + 0.044715f * v * v * v);
     x[i] = 0.5f * v * (1.0f + tanhf(u));
 }
-// f32 -> bfloat16 bits (stored as ushort): sign + 8-bit exponent + top 7
-// mantissa bits, rounded to nearest on the dropped bits. Carry into the
-// exponent is the correct round-up; inf/NaN and the largest finite value are
-// left unrounded.
+// f32 -> bfloat16 bits (stored as ushort), round-to-nearest-even.
 extern "C" __global__ void cast_f32_bf16(const float* a, unsigned short* out, long n) {
     long i = IDX();
     if (i >= n) return;
-    unsigned int u = __float_as_uint(a[i]);
-    unsigned int hi = u >> 16;
-    if ((u & 0x8000u) != 0u && (hi & 0x7F80u) != 0x7F80u && (hi & 0x7FFFu) != 0x7F7Fu) hi += 1u;
-    out[i] = (unsigned short)hi;
+    out[i] = fv_bf16_rne(a[i]);
 }
 // bfloat16 bits -> f32, then optional bias[i % width] and GELU-tanh (act=1):
 // the output side of a bf16 linear in one launch.
@@ -219,10 +227,7 @@ extern "C" __global__ void softmax_last_bf16(const float* a, unsigned short* out
     float inv = 1.0f / sdata[0];
     __syncthreads();
     for (int j = tid; j < width; j += nthreads) {
-        unsigned int u = __float_as_uint(expf(src[j] - m) * inv);
-        unsigned int hi = u >> 16;
-        if ((u & 0x8000u) != 0u && (hi & 0x7F80u) != 0x7F80u && (hi & 0x7FFFu) != 0x7F7Fu) hi += 1u;
-        dst[j] = (unsigned short)hi;
+        dst[j] = fv_bf16_rne(expf(src[j] - m) * inv);
     }
 }
 // RMS norm over last dim `width` (rows = n / width). weight length = width.
@@ -540,12 +545,9 @@ extern "C" __global__ void vsa_tile_mean(
         ob[d] = n > 0 ? acc / (float)n : 0.0f;
     }
 }
-// Round-to-nearest f32 -> bf16 bits, as cast_f32_bf16 does.
+// f32 -> bf16 bits, as cast_f32_bf16 does (round-to-nearest-even).
 __device__ __forceinline__ unsigned short fv_to_bf16(float x) {
-    unsigned int u = __float_as_uint(x);
-    unsigned int hi = u >> 16;
-    if ((u & 0x8000u) != 0u && (hi & 0x7F80u) != 0x7F80u && (hi & 0x7FFFu) != 0x7F7Fu) hi += 1u;
-    return (unsigned short)hi;
+    return fv_bf16_rne(x);
 }
 // Order-preserving map from float to unsigned so integer compares sort floats.
 __device__ __forceinline__ unsigned int fv_sortable(float x) {
@@ -1721,11 +1723,7 @@ extern "C" __global__ void fp8_rows_quantize(const float* w, const float* scales
 extern "C" __global__ void fp8_rows_dequant_bf16(const unsigned char* q, const float* scales, unsigned short* out, long cols, long n) {
     long i = IDX();
     if (i >= n) return;
-    float v = fv_e4m3_to_f32(q[i]) * scales[i / cols];
-    unsigned int u = __float_as_uint(v);
-    unsigned int hi = u >> 16;
-    if ((u & 0x8000u) != 0u && (hi & 0x7F80u) != 0x7F80u && (hi & 0x7FFFu) != 0x7F7Fu) hi += 1u;
-    out[i] = (unsigned short)hi;
+    out[i] = fv_bf16_rne(fv_e4m3_to_f32(q[i]) * scales[i / cols]);
 }
 
 // FastVideo MLX affine (group 64, bits 4/6/8). Groups along the last dim of
@@ -2480,16 +2478,8 @@ extern "C" __global__ void __launch_bounds__(128, 2) sol_mma_attn_partials(
 #define SOL_LN2 0.6931471805599453f
 
 // f32 -> bf16 bits, round-to-nearest-even (torch `.to(torch.bfloat16)`).
-// `fv_to_bf16` rounds ties away from zero; Sol matches torch instead.
 __device__ __forceinline__ unsigned short sol_bf16_rn(float x) {
-    unsigned int u = __float_as_uint(x);
-    if ((u & 0x7F800000u) == 0x7F800000u) {
-        unsigned int h = u >> 16;
-        if (u & 0x007FFFFFu) h |= 0x0040u;  // keep NaN a (quiet) NaN
-        return (unsigned short)h;
-    }
-    u += 0x7FFFu + ((u >> 16) & 1u);
-    return (unsigned short)(u >> 16);
+    return fv_bf16_rne(x);
 }
 
 // P1: one CTA per (block b, head bh), thread d = channel. Reads K/V f32 once,

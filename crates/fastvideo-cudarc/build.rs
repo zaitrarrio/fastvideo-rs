@@ -132,13 +132,25 @@ fn main() {
     for sm in &sms {
         let cubin = out.join(format!("kernels_sm{sm}.cubin"));
         let ptx = out.join(format!("kernels_compute{sm}.ptx"));
-        // Same options NVRTC gets: fast math (which implies ftz and fmad).
+        // Same options NVRTC gets: IEEE division/sqrt, no denormal flush, FMA
+        // contraction on — how PyTorch's own CUDA kernels are compiled, so
+        // elementwise ops round like the reference (no --use_fast_math).
         for (kind, arch, dest) in [
             ("-cubin", format!("sm_{sm}"), &cubin),
             ("-ptx", format!("compute_{sm}"), &ptx),
         ] {
             let status = Command::new(&nvcc)
-                .args([kind, "-arch", &arch, "-O3", "--use_fast_math", "-o"])
+                .args([
+                    kind,
+                    "-arch",
+                    &arch,
+                    "-O3",
+                    "--fmad=true",
+                    "--prec-div=true",
+                    "--prec-sqrt=true",
+                    "--ftz=false",
+                    "-o",
+                ])
                 .arg(dest)
                 .arg(SRC)
                 .status()
