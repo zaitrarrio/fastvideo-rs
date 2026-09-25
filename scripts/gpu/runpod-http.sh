@@ -17,6 +17,8 @@
 # https://<pod>-8000.proxy.runpod.net. The pod is always deleted at the end,
 # and a wall-clock cap (FV_POD_CAP_S, default 4h) deletes it regardless.
 #
+# RUNPOD_VOLUME_NAME may name several weight volumes; the one whose DC has
+# stock for the GPU is used.
 # Env: FV_FAMILY (runpod-matrix.sh family, default rtx6000; rtx5090 is the
 # sol-engine RTX 5090 suite), RUNPOD_GPU_TYPE (default RTX PRO 6000), RUNPOD_API_KEY, RUNPOD_VOLUME_ID (default: volume named
 # fv-weights-h3-ltx-hy), FV_CELLS (subset of cells), FV_GEN_TIMEOUT_S
@@ -34,7 +36,7 @@ HERE="${FV_HTTP_HERE:-$HERE}"
 ROOT="$(cd "$HERE/../.." && pwd)"
 API="${RUNPOD_API_BASE:-https://rest.runpod.io/v1}"
 GPU="${RUNPOD_GPU_TYPE:-NVIDIA RTX PRO 6000 Blackwell Server Edition}"
-VOL_NAME="${RUNPOD_VOLUME_NAME:-fv-weights-h3-ltx-hy}"
+VOL_NAME="${RUNPOD_VOLUME_NAME:-fv-weights-h3-ltx-hy fv-weights-b200-us}"
 MAX_DPH="${RUNPOD_GPU_MAX_DPH:-5}"
 CAP_S="${FV_POD_CAP_S:-14400}"
 FAMILY="${FV_FAMILY:-rtx6000}"
@@ -50,12 +52,30 @@ rest() {
 }
 proxy() { curl -sS --max-time 30 --fail "https://$1-8000.proxy.runpod.net/$2"; }
 
+# The weight volume to mount. RUNPOD_VOLUME_NAME may list several volumes
+# (space-separated, e.g. "fv-weights-h3-ltx-hy fv-weights-b200-us"); the first
+# whose datacenter currently reports stock for $GPU wins, else the first.
 volume() {
   if [[ -n "${RUNPOD_VOLUME_ID:-}" ]]; then
     rest GET "/networkvolumes/$RUNPOD_VOLUME_ID" | jq -r '"\(.id) \(.dataCenterId)"'
-  else
-    rest GET /networkvolumes | jq -r --arg n "$VOL_NAME" '.[] | select(.name==$n) | "\(.id) \(.dataCenterId)"' | head -1
+    return
   fi
+  local vols name line first="" dc stock
+  vols="$(rest GET /networkvolumes)"
+  for name in $VOL_NAME; do
+    line="$(jq -r --arg n "$name" '.[] | select(.name==$n) | "\(.id) \(.dataCenterId)"' <<<"$vols" | head -1)"
+    [[ -n "$line" ]] || continue
+    first="${first:-$line}"
+    dc="${line#* }"
+    stock="$(curl -sS -H "Authorization: Bearer $RUNPOD_API_KEY" -H 'content-type: application/json' \
+      https://api.runpod.io/graphql -d "{\"query\":\"{ dataCenters { id gpuAvailability { gpuTypeId stockStatus } } }\"}" \
+      | jq -r --arg dc "$dc" --arg g "$GPU" '.data.dataCenters[] | select(.id==$dc) | .gpuAvailability[]? | select(.gpuTypeId==$g) | .stockStatus // empty' 2>/dev/null || true)"
+    if [[ -n "$stock" ]]; then
+      echo "$line"
+      return
+    fi
+  done
+  echo "$first"
 }
 
 # $1 = image, $2 = run tag, $3 = mode (run|weights)
