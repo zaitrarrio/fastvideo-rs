@@ -14,7 +14,9 @@
 //! | probe   | GPU, 1.3B weights    | time/VRAM fit → projected clip cost within budget |
 //! | clip    | GPU, 1.3B weights    | full clip, per-step NaN/time guards, quality gates |
 //! | compare | two clip dirs        | fast path output stays close to exact path |
+//! | compare-clips | two frame dirs (CPU) | paired-clip quality gate: OFF identity + pixel metrics vs a baseline |
 
+mod clipcmp;
 mod embed;
 mod gpu;
 mod h3_stage;
@@ -304,6 +306,18 @@ enum Cmd {
         #[arg(long, default_value_t = 20.0)]
         min_psnr: f64,
     },
+    /// Paired-clip quality gate (CPU): a candidate clip's frames against a
+    /// baseline clip's (sol-engine collect_run.py metrics). Each dir holds
+    /// `frame-NNN.png` (+ `output.mp4`) directly or under `frames/`.
+    CompareClips {
+        #[arg(long)]
+        baseline: PathBuf,
+        #[arg(long)]
+        candidate: PathBuf,
+        /// Hard gate: every paired frame byte-identical (max_abs_diff_uint8 == 0).
+        #[arg(long)]
+        off_identity: bool,
+    },
     /// Diff our TAEHV decoder against madebyollin's own implementation.
     Taehv {
         /// Directory holding taew2_1.safetensors (the oracle fetches it there).
@@ -403,6 +417,7 @@ fn stage_name(cmd: &Cmd) -> &'static str {
         Cmd::Hunyuan { .. } => "hunyuan",
         Cmd::Llm { .. } => "llm",
         Cmd::Compare { .. } => "compare",
+        Cmd::CompareClips { .. } => "compare-clips",
         Cmd::Oracle { .. } => "oracle",
         Cmd::Taehv { .. } => "taehv",
         Cmd::TaehvDevice { .. } => "taehv-device",
@@ -549,6 +564,11 @@ fn run(cli: &Cli, report: &mut Report) -> StageResult<()> {
                 min_psnr: *min_psnr,
             },
         ),
+        Cmd::CompareClips {
+            baseline,
+            candidate,
+            off_identity,
+        } => clipcmp::run(report, baseline, candidate, *off_identity),
         Cmd::Taehv {
             weights,
             oracle,
