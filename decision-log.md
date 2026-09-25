@@ -10,7 +10,7 @@ Project code: FVID
 - Reversibility: cheap
 - Executed by: Executor
 - ADR: none
-- Verification: pending
+- Verification: host gates green (`fastvideo-models` 299 / `fastvideo-cudarc` 352, 0 ignored). Runtime image `build-ec5a6cc0988aca26` (`sha256:428e3c779f81be2e29aebcfc17dbfccd5911a81e9d7bc2aa2e849f718f93abbf`, CI 36077955888). US volume `s2k01690bi` fetched. B200 warm numbers pending — Runpod stock none under $20 after US DC probe.
 
 ### FVID · 2026-09-24 · FVID-2026-09-24-phase3-failure-gate
 - Trigger: Phase 3 cells that failed on `build-af5edf649671bfb7` (Spark `.set_weight`, H3 gate, LTX-2.5 decode OOM, LTX-2.3 keyframes, Hunyuan `Hunyuan15.*`, Wan 1.3B absent) plus host contracts and a weights manifest
