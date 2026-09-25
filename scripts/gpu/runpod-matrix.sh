@@ -38,13 +38,16 @@ export LD_LIBRARY_PATH="$WORK/fv-libs:/lib/x86_64-linux-gnu:/usr/local/cuda-13.0
 log() {
   local line
   line="$(printf '[%s] [%s] %s' "$(date -u +%H:%M:%S)" "$FAMILY" "$*")"
-  printf '%s\n' "$line" | tee -a "$LOG"
+  # The log lives on the network volume; a transient write error there must
+  # not end the whole matrix under set -e (it once did, mid-suite).
+  printf '%s\n' "$line"
+  printf '%s\n' "$line" >>"$LOG" 2>/dev/null || true
 }
 
 write_json() {
   local dest="$1"
   shift
-  printf '%s\n' "$*" >"$dest"
+  printf '%s\n' "$*" >"$dest" 2>/dev/null || true
 }
 
 smi_snap() {

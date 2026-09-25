@@ -118,6 +118,7 @@ if [ "$mode" = run ] || [ "$mode" = all ]; then
   env ${FV_EXTRA_ENV:-} FV_WORK=/workspace FV_RUN_TAG=$tag FV_CELLS="${FV_CELLS:-}" \
     FV_GEN_TIMEOUT_S=${FV_GEN_TIMEOUT_S:-3600} \
     bash /opt/fastvideo-rs/scripts/gpu/runpod-matrix.sh $FAMILY >"\$OUT/matrix.out" 2>&1
+  echo "matrix_exit=\$?" >>"\$OUT/matrix.out"
 fi
 echo "done $tag" >"\$OUT/DONE"
 exec sleep infinity
@@ -271,9 +272,13 @@ cmd_run() {
     id=""
   done
   [[ -n "$id" ]] || die "no pod came up after 3 attempts"
-  echo "$id" >"${TMPDIR:-/tmp}/fv-rtx6000.pod"
+  echo "$id" >"${TMPDIR:-/tmp}/fv-$FAMILY.pod"
   wait_done "$id" "$tag" || rc=1
   fetch_results "$id" "$tag"
+  if grep -q "matrix_exit=[1-9]" "$OUT_ROOT/$tag/matrix.out" 2>/dev/null; then
+    log "matrix exited abnormally: $(grep matrix_exit "$OUT_ROOT/$tag/matrix.out")"
+    rc=1
+  fi
   log "destroy pod $id"
   rest DELETE "/pods/$id" >/dev/null || log "WARN: delete failed for $id"
   cat "$OUT_ROOT/$tag/weights.log" >&2 || true
