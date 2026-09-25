@@ -8,7 +8,7 @@ FAMILY="${1:?usage: runpod-matrix.sh h3|ltx|hunyuan|wan|b200|rtx6000}"
 WORK="${FV_WORK:-/workspace}"
 BIN="${FV_GPUCHECK:-/opt/fastvideo-rs/target/release/fv-gpucheck}"
 W="$WORK/weights"
-RUNS="$WORK/runs/${FAMILY}"
+RUNS="$WORK/runs/${FAMILY}${FV_RUN_TAG:+/$FV_RUN_TAG}"
 LOG="$RUNS/live.log"
 PROMPT="${FV_PROMPT:-A man in his thirties talking to the camera in a bright living room, medium close-up, natural expressions and hand gestures, soft window light. He says: <d>Hello, this was generated entirely in Rust.</d>}"
 SEED="${FV_SEED:-1024}"
@@ -373,6 +373,10 @@ case "$FAMILY" in
     gated_cell() {
       local name="$1" wcell="$2"
       shift 2
+      if [[ -n "${FV_CELLS:-}" && " $FV_CELLS " != *" $name "* ]]; then
+        log "skip $name (not in FV_CELLS)"
+        return 0
+      fi
       if ! FV_WEIGHTS="$W" bash "$VERIFY" "$wcell" >"$RUNS/$name.weights.log" 2>&1; then
         mkdir -p "$RUNS/$name"
         log "SKIP $name: weights incomplete"
