@@ -276,6 +276,11 @@ fn drain(
                 let copy = copy
                     .as_ref()
                     .ok_or_else(|| msg("frame drain: device chunk without a copy stream"))?;
+                // Wait for the chunk's compute outside the timer: that time is
+                // the VAE's (already in `vae_s`), not the copy's.
+                ready
+                    .synchronize()
+                    .map_err(|e| msg(format!("frame drain wait: {e}")))?;
                 let timer = Instant::now();
                 copy.wait(&ready)
                     .map_err(|e| msg(format!("frame drain wait: {e}")))?;
