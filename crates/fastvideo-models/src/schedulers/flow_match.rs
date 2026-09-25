@@ -117,6 +117,17 @@ impl FlowMatchEulerDiscreteScheduler {
         &self.sigmas
     }
 
+    /// `dt = sigma_next - sigma` for the current step, then advance.
+    pub fn take_euler_dt(&mut self) -> Result<f32, String> {
+        let idx = self.step_index.unwrap_or(0);
+        if idx + 1 >= self.sigmas.len() {
+            return Err("step past end of schedule".into());
+        }
+        let dt = (self.sigmas[idx + 1] - self.sigmas[idx]) as f32;
+        self.step_index = Some(idx + 1);
+        Ok(dt)
+    }
+
     /// `prev = sample + (sigma_next - sigma) * model_output`
     pub fn step_euler(&mut self, sample: &[f32], model_output: &[f32]) -> Result<Vec<f32>, String> {
         if sample.len() != model_output.len() {

@@ -1515,6 +1515,30 @@ extern "C" __global__ void rope_half(
     float other = j < half ? -x[i + half] : x[i - half];
     out[i] = x[i] * cs[p * r + j] + other * sn[p * r + j];
 }
+// Flux2 DiT RoPE: pair-rotate BSHD Q/K. Cos/sin use the even slot
+// (Diffusers repeat_interleave tables). xs [B,S,H,D], cos/sin [S,D].
+extern "C" __global__ void apply_rotary_bshd(
+    const float* xs, const float* cos_t, const float* sin_t, float* out,
+    long n_pairs, long seq, long heads, long d
+) {
+    long i = IDX();
+    if (i >= n_pairs) return;
+    long half = d >> 1;
+    long p = i % half;
+    long t = i / half;
+    long h = t % heads;
+    t /= heads;
+    long s = t % seq;
+    long b = t / seq;
+    long even = p * 2;
+    long base = ((((b * seq + s) * heads + h) * d) + even);
+    float x1 = xs[base];
+    float x2 = xs[base + 1];
+    float c = cos_t[s * d + even];
+    float sn = sin_t[s * d + even];
+    out[base] = x1 * c - x2 * sn;
+    out[base + 1] = x1 * sn + x2 * c;
+}
 // Grouped-query attention: [B, Hkv, S, D] -> [B, Hkv * rep, S, D], each kv
 // head repeated `rep` times in place (torch repeat_interleave on dim 1).
 extern "C" __global__ void repeat_kv(const float* x, float* out, long hkv, long rep, long inner, long n) {

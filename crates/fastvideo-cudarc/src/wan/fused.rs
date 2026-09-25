@@ -321,6 +321,38 @@ impl CudaTensor {
         );
         Ok(Self::host_only(out, self.shape.clone()))
     }
+
+    /// Pair-rotate last dim of BSHD `[B,S,H,D]` with Flux2 tables `[S,D]`.
+    /// Cos/sin use the even slot (Diffusers `repeat_interleave(2)`).
+    pub fn apply_rotary_bshd(&self, cos: &CudaTensor, sin: &CudaTensor) -> Result<CudaTensor> {
+        let [batch, seq, heads, d] = self.shape[..] else {
+            return Err(msg(format!(
+                "apply_rotary_bshd expects BSHD, got {:?}",
+                self.shape
+            )));
+        };
+        if d % 2 != 0 || cos.shape != [seq, d] || sin.shape != [seq, d] {
+            return Err(msg(format!(
+                "apply_rotary_bshd tables {:?} {:?} for {:?}",
+                cos.shape, sin.shape, self.shape
+            )));
+        }
+        #[cfg(feature = "cuda")]
+        if let (Some(x), Some(c), Some(s)) = (self.dev()?, cos.dev()?, sin.dev()?) {
+            let out = super::ops::apply_rotary_bshd_device(&x, &c, &s, batch, seq, heads, d)?;
+            return Self::from_dev_result(out, self.shape.clone());
+        }
+        let out = host::apply_rotary_bshd(
+            &self.host_cow()?,
+            &cos.host_cow()?,
+            &sin.host_cow()?,
+            batch,
+            seq,
+            heads,
+            d,
+        );
+        Ok(Self::host_only(out, self.shape.clone()))
+    }
 }
 
 #[cfg(test)]
@@ -427,5 +459,22 @@ mod tests {
                 want.data[i]
             );
         }
+    }
+
+    #[test]
+    fn apply_rotary_bshd_matches_pair_rotate() {
+        let (b, s, h, d) = (1usize, 2usize, 2usize, 4usize);
+        let xs = t((0..b * s * h * d).map(|i| i as f32 * 0.1).collect(), &[b, s, h, d]);
+        let cs: Vec<f32> = (0..s * d).map(|i| (i as f32 * 0.2).cos()).collect();
+        let sn: Vec<f32> = (0..s * d).map(|i| (i as f32 * 0.2).sin()).collect();
+        let ct = t(cs.clone(), &[s, d]);
+        let st = t(sn.clone(), &[s, d]);
+        let got = xs.apply_rotary_bshd(&ct, &st).unwrap();
+        let ones = t(vec![1.0; s * d], &[s, d]);
+        let zeros = t(vec![0.0; s * d], &[s, d]);
+        let id = xs.apply_rotary_bshd(&ones, &zeros).unwrap();
+        assert_eq!(id.data, xs.data);
+        assert_eq!(got.shape, xs.shape);
+        assert_ne!(got.data, xs.data);
     }
 }

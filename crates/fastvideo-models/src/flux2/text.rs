@@ -198,6 +198,14 @@ impl Qwen3Config {
         }
     }
 
+    pub fn mistral3_tiny() -> Self {
+        Self {
+            qk_norm: false,
+            pad_token_id: 0,
+            ..Self::tiny()
+        }
+    }
+
     pub fn from_hf_json(kind: Flux2TextKind, raw: &str) -> Result<Self, String> {
         let v: serde_json::Value =
             serde_json::from_str(raw).map_err(|e| format!("text_encoder/config.json: {e}"))?;

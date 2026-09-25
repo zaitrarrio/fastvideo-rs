@@ -15,7 +15,7 @@ pub use config::{
 };
 pub use family::{
     compute_empirical_mu, flux2_time_shift, image_ids, pack_latents_2x2, packed_hw,
-    stack_hidden_layers, text_ids, unpatchify_2x2,
+    stack_hidden_layers as stack_layers_host, stack_hidden_layers, text_ids, unpatchify_2x2,
 };
 pub use parity::{klein_1024_mu, mse, psnr};
 pub use text::{

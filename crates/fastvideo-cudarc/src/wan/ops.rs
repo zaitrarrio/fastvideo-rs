@@ -1481,6 +1481,40 @@ pub mod host {
             .collect()
     }
 
+    /// Flux2 pair-rotate: `xs` BSHD `[B,S,H,D]`, `cos`/`sin` `[S,D]`.
+    /// Both tables use the even slot (Diffusers `repeat_interleave(2)`).
+    pub fn apply_rotary_bshd(
+        xs: &[f32],
+        cos: &[f32],
+        sin: &[f32],
+        batch: usize,
+        seq: usize,
+        heads: usize,
+        d: usize,
+    ) -> Vec<f32> {
+        let row = seq * heads * d;
+        let mut out = vec![0.0f32; batch * row];
+        out.par_chunks_mut(row.max(1))
+            .enumerate()
+            .for_each(|(b, plane)| {
+                let src = &xs[b * row..];
+                for t in 0..seq {
+                    for h in 0..heads {
+                        for i in 0..(d / 2) {
+                            let base = ((t * heads + h) * d) + 2 * i;
+                            let x1 = src[base];
+                            let x2 = src[base + 1];
+                            let cs = cos[t * d + 2 * i];
+                            let sn = sin[t * d + 2 * i];
+                            plane[base] = x1 * cs - x2 * sn;
+                            plane[base + 1] = x1 * sn + x2 * cs;
+                        }
+                    }
+                }
+            });
+        out
+    }
+
     /// `[rows, cols]` weight → E4M3 codes and one scale per row (`amax / 448`,
     /// 1 for a dead row). Same arithmetic, in the same order, as the kernels.
     pub fn fp8_rows_quantize(w: &[f32], rows: usize, cols: usize) -> (Vec<u8>, Vec<f32>) {
@@ -2166,6 +2200,35 @@ pub fn rope_half_device(
     let (n, s, d, r) = (x.len() as i64, s as i64, d as i64, r as i64);
     let mut out = alloc(x.len())?;
     launch!(dev.stream, &dev.kernels.rope_half, cfg_n(x.len()); x, cos, sin, &mut out, &s, &d, &r, &n).map_err(err)?;
+    Ok(out)
+}
+
+/// Flux2 pair-rotate: `xs` BSHD `[B,S,H,D]`, `cos`/`sin` `[S,D]`, even-slot tables.
+#[cfg(feature = "cuda")]
+pub fn apply_rotary_bshd_device(
+    xs: &CudaSlice<f32>,
+    cos: &CudaSlice<f32>,
+    sin: &CudaSlice<f32>,
+    batch: usize,
+    seq: usize,
+    heads: usize,
+    d: usize,
+) -> Result<CudaSlice<f32>> {
+    check(
+        "apply_rotary_bshd",
+        xs.len() == batch * seq * heads * d
+            && cos.len() == seq * d
+            && sin.len() == seq * d
+            && d % 2 == 0
+            && heads > 0,
+    )?;
+    let n_pairs = batch * seq * heads * (d / 2);
+    let a = [n_pairs as i64, seq as i64, heads as i64, d as i64];
+    let mut out = alloc(xs.len())?;
+    let dev = ctx()?;
+    launch!(dev.stream, &dev.kernels.apply_rotary_bshd, cfg_n(n_pairs.max(1));
+        xs, cos, sin, &mut out, &a[0], &a[1], &a[2], &a[3])
+    .map_err(err)?;
     Ok(out)
 }
 

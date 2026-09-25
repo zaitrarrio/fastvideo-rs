@@ -42,8 +42,9 @@ Default canvas **1024×1024**. Packed latents: VAE 16-ch → DiT **128**-ch.
 | Registry + CLI T2I path | landed |
 | cudarc DiT (tiny zeros + load hook) | landed |
 | Generate scaffold | landed |
-| Text encode / full weight parity | chat wrap + tokenize + Qwen3/Mistral3 configs landed; encoders still cudarc-side |
+| Text encode / full weight parity | Qwen3/Mistral3 `CudaTensor` encoders + chat wrap/tokenize |
 | Pack / empirical μ / 4-axis ids | landed (`flux2::family`) |
 | Weight-key maps + VAE config | landed (`flux2::weights`, `Flux2VaeConfig`, 32-ch FastVideo VAE) |
+| 2D VAE decode | landed (`fastvideo-cudarc::flux2::vae`) |
+| DiT + device RoPE | landed (`Flux2Transformer2D`, `apply_rotary_bshd`) |
 | Generate-gap ranking | `docs/flux2-generate-gap.md` |
-| Full DiT (device RoPE / fused SDPA) | still the generate scaffold |

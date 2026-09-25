@@ -65,6 +65,7 @@ kernel_fns!(
     leaky_relu,
     snake_beta,
     rope_half,
+    apply_rotary_bshd,
     repeat_kv,
     pack_rgb_u8,
     vsa_mma_attn,
