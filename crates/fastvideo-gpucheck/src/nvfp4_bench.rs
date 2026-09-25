@@ -117,7 +117,18 @@ pub fn run(report: &mut Report, seed: u64) -> StageResult<()> {
     x[5000] = -1e-6;
     for rule in [ScaleRule::Static6, ScaleRule::Static4, ScaleRule::Mse] {
         let host = nvfp4::quantize(&x, rows, cols, rule).map_err(anyhow::Error::msg)?;
-        let q = g::quantize_device(&d.stream.memcpy_stod(&x)?, rows, cols, rule)?;
+        let q = match g::quantize_device(&d.stream.memcpy_stod(&x)?, rows, cols, rule) {
+            Ok(q) => q,
+            Err(e) => {
+                report.check(
+                    format!("nvfp4_quantize_{}_matches_te_reference", rule.as_str()),
+                    false,
+                    json!({"error": format!("{e:#}")}),
+                    json!({}),
+                )?;
+                continue;
+            }
+        };
         let packed = d.stream.memcpy_dtov(&q.packed)?;
         let scales = d.stream.memcpy_dtov(&q.scales)?;
         let amax = d.stream.memcpy_dtov(&q.amax)?[0];
@@ -194,7 +205,18 @@ pub fn run(report: &mut Report, seed: u64) -> StageResult<()> {
         } else {
             BF16_OUT_LIMIT
         };
-        let got = run_oxide(v, &a, &wp, &ws, m, n, k, alpha)?;
+        let got = match run_oxide(v, &a, &wp, &ws, m, n, k, alpha) {
+            Ok(got) => got,
+            Err(e) => {
+                report.check(
+                    format!("nvfp4_oxide_{}_matches_te_gemm", v.label()),
+                    false,
+                    json!({"error": format!("{e:#}")}),
+                    json!({}),
+                )?;
+                continue;
+            }
+        };
         let dv = diff(&got, &want);
         report.check(
             format!("nvfp4_oxide_{}_matches_te_gemm", v.label()),

@@ -1766,6 +1766,7 @@ fn gen(
         stats.push(json!({"step": i, "seconds": s, "video_mean": vm, "video_std": vs, "audio_mean": am, "audio_std": as_, "non_finite": bad}));
         Ok(())
     };
+    fastvideo_cudarc::wan::gpu_trace::reset_report();
     let timed = std::time::Instant::now();
     let out = pipeline.generate(&request, true, Some(&mut observe))?;
     let generate_s = timed.elapsed().as_secs_f64();
@@ -1789,6 +1790,10 @@ fn gen(
         }),
     );
     report.set("peak_vram_mib", peak_mib);
+    // FASTVIDEO_GPU_TRACE: the timed generate's traced step.
+    if let Some(trace) = fastvideo_cudarc::wan::gpu_trace::last_report() {
+        report.set("gpu_trace", trace);
+    }
     // Per-phase peaks from the allocator pool's high-water marks.
     if let Some(u) = load_used {
         eprintln!(

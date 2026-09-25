@@ -13,7 +13,8 @@
 # binary   The binary + build id. Locally overridden with
 #          `--build-context binary=artifacts/gpucheck/dist` to reuse `docker.sh dist`.
 # runtime  What a GPU box runs (ghcr.io/zaitrarrio/fastvideo-rs-runtime): Ubuntu
-#          22.04 + pinned CUDA 13.4 libraries (scripts/gpu/cuda-13.pins) +
+#          22.04 + pinned CUDA 13.4 libraries (scripts/gpu/cuda-13.pins, CUPTI
+#          included for FASTVIDEO_GPU_TRACE) +
 #          tileiras + rsync/ffmpeg/hf-fm + the binary and scripts. No Python,
 #          no PyTorch, no toolkit: hosts boot quickly.
 
@@ -114,13 +115,15 @@ RUN apt-get update \
  && . /etc/fastvideo/cuda-13.pins \
  && apt-get install -y --no-install-recommends --allow-downgrades \
       "$CUDA_NVRTC_PKG" "$CUDA_CUBLAS_PKG" "$CUDA_CUDNN_PKG" \
-      "$CUDA_TILEIRAS_PKG" \
- && apt-mark hold cuda-nvrtc-13-4 libcublas-13-4 libcudnn9-cuda-13 cuda-tileiras-13-4 \
+      "$CUDA_TILEIRAS_PKG" "$CUDA_CUPTI_PKG" \
+ && apt-mark hold cuda-nvrtc-13-4 libcublas-13-4 libcudnn9-cuda-13 cuda-tileiras-13-4 cuda-cupti-13-4 \
  && rm -rf /var/lib/apt/lists/* \
+ && rm -f /usr/local/cuda-13.4/targets/x86_64-linux/lib/libcupti_static.a \
+          /usr/local/cuda-13.4/targets/x86_64-linux/lib/libnvperf_host_static.a \
  && echo /usr/local/cuda-13.4/lib64 > /etc/ld.so.conf.d/fastvideo-nvidia.conf \
  && ldconfig \
  && . /etc/fastvideo/cuda-13.pins \
- && for soname in "$CUDA_NVRTC_SONAME" "$CUDA_CUBLAS_SONAME" "$CUDA_CUBLASLT_SONAME" "$CUDA_CUDNN_SONAME"; do \
+ && for soname in "$CUDA_NVRTC_SONAME" "$CUDA_CUBLAS_SONAME" "$CUDA_CUBLASLT_SONAME" "$CUDA_CUDNN_SONAME" "$CUDA_CUPTI_SONAME"; do \
       src=$(ldconfig -p | awk -v n="$soname" '$1 == n { print $NF; exit }'); \
       test -n "$src" && test -e "$src"; \
       dir=$(dirname "$src"); \
@@ -128,7 +131,7 @@ RUN apt-get update \
       if [ ! -e "$dir/$unversioned" ]; then ln -s "$soname" "$dir/$unversioned"; fi; \
     done \
  && ldconfig \
- && ldconfig -p | grep -E 'libnvrtc\.so|libcublasLt\.so|libcublas\.so|libcudnn\.so' \
+ && ldconfig -p | grep -E 'libnvrtc\.so|libcublasLt\.so|libcublas\.so|libcudnn\.so|libcupti\.so' \
  && mkdir -p /run/sshd
 # The NVIDIA container runtime injects the driver (libcuda) when these are set.
 ENV NVIDIA_VISIBLE_DEVICES=all \

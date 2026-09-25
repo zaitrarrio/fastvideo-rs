@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
-# Runs ON a Runpod GPU box. Family: h3 | ltx | hunyuan | wan | b200
+# Runs ON a Runpod GPU box. Family: h3 | ltx | hunyuan | wan | b200 | ... | trace
 # One process per family. Continues to the next cell on failure.
 # Spark joint LTX refine stays off (FASTVIDEO_LTX2_WEIGHTS unset) except in
 # the rtx6000 parity family, which runs the full Spark bridge.
 set -euo pipefail
-FAMILY="${1:?usage: runpod-matrix.sh h3|ltx|hunyuan|wan|b200|rtx6000|rtx5090|fastvideo|precision}"
+FAMILY="${1:?usage: runpod-matrix.sh h3|ltx|hunyuan|wan|b200|rtx6000|rtx5090|fastvideo|precision|trace}"
 WORK="${FV_WORK:-/workspace}"
 BIN="${FV_GPUCHECK:-/opt/fastvideo-rs/target/release/fv-gpucheck}"
 W="$WORK/weights"
@@ -35,6 +35,14 @@ if [[ ! -e $SCRATCH/fv-libs/libcudnn.so ]]; then
     src="${spec#*:}"
     [[ -e "$src" ]] && ln -sf "$(readlink -f "$src")" "$SCRATCH/fv-libs/lib${name}.so"
   done
+fi
+# CUPTI (FASTVIDEO_GPU_TRACE) is linked on its own: the block above is skipped
+# once libcudnn.so exists, and an older image may not ship it at all (the
+# tracer then reports "libcupti not found" and the run continues untraced).
+if [[ ! -e $SCRATCH/fv-libs/libcupti.so ]]; then
+  cupti_src="$(ldconfig -p 2>/dev/null | awk -v n="${CUDA_CUPTI_SONAME:-libcupti.so.13}" '$1 == n { print $NF; exit }' || true)"
+  [[ -z "$cupti_src" ]] && cupti_src="/usr/local/cuda/targets/x86_64-linux/lib/${CUDA_CUPTI_SONAME:-libcupti.so.13}"
+  [[ -e "$cupti_src" ]] && ln -sf "$(readlink -f "$cupti_src")" "$SCRATCH/fv-libs/libcupti.so"
 fi
 export LD_LIBRARY_PATH="$SCRATCH/fv-libs:/lib/x86_64-linux-gnu:/usr/local/cuda-13.0/lib64:/usr/local/cuda/lib64:/usr/local/cuda/targets/x86_64-linux/lib:${LD_LIBRARY_PATH:-}"
 [[ -e $SCRATCH/fv-libs/libcudnn.so ]] || { echo "FATAL: libcudnn.so not linked" | tee -a "$LOG"; exit 2; }
@@ -708,6 +716,48 @@ case "$FAMILY" in
     done
     for v in bf16act fp8; do
       compare_cells ltx25-4k5s-sol-base "ltx25-4k5s-sol-$v"
+    done
+    ;;
+  trace)
+    # FASTVIDEO_GPU_TRACE=1: a CUPTI activity trace of one warm denoise step
+    # (the timed pass's second step; the `[INFO] h3/gpu_trace` line in
+    # stderr.log and `gpu_trace` in gpucheck-out/*.json). Does the GPU go
+    # idle inside a step (CUDA-graph replay worth building), and which
+    # kernels hold the time? Command lines are the fastvideo family's.
+    h3_common=(
+      --prompt "$PROMPT"
+      --seconds 5
+      --seed "$SEED"
+      --text-encoder auto
+      --text-cache "$SCRATCH/h3-text-cache"
+      --text-weights "$W/h3-base"
+      --warm
+    )
+    gated_cell fasth3-4step-vsa-768p fasth3-4step-vsa \
+      env FASTVIDEO_GPU_TRACE=1 \
+      "$BIN" --mode fast h3 gen --weights "$W/h3-base" --h3-recipe 4step-vsa \
+        --adaln-cache "$RUNS/fasth3-4step-vsa-768p-adaln.cache" \
+        --clip-dir "$RUNS/fasth3-4step-vsa-768p/frames" "${h3_common[@]}"
+    gated_cell fasth3-8step-768p fasth3-8step \
+      env FASTVIDEO_GPU_TRACE=1 \
+      "$BIN" --mode fast h3 gen --weights "$W/h3-8step" --h3-recipe 8step \
+        --adaln-cache "$RUNS/fasth3-8step-768p-adaln.cache" \
+        --clip-dir "$RUNS/fasth3-8step-768p/frames" "${h3_common[@]}"
+    gated_cell fasth3-4step-dense-768p fasth3-4step-dense \
+      env FASTVIDEO_GPU_TRACE=1 \
+      "$BIN" --mode fast h3 gen --weights "$W/h3-base" --h3-recipe 4step-dense \
+        --adaln-cache "$RUNS/fasth3-4step-dense-768p-adaln.cache" \
+        --clip-dir "$RUNS/fasth3-4step-dense-768p/frames" "${h3_common[@]}"
+    # LTX-2.5 Sol two-stage: steps count across both stages (8 stage-1, then
+    # 3 stage-2), so step 9 is the second full-resolution stage-2 step.
+    gated_cell ltx25-4k5s-sol ltx25-two-stage \
+      env FASTVIDEO_GPU_TRACE=1 FASTVIDEO_GPU_TRACE_STEP=9 \
+      "$BIN" --mode fast ltx2 gen --model-version 2.5 \
+        --weights "$W/ltx25" --dit "$W/ltx25" --workload 4k5s \
+        --prompt "$PROMPT" --seed "$SEED" --two-stage --text streamed --warm \
+        --clip "$RUNS/ltx25-4k5s-sol/frames"
+    for cell in fasth3-4step-vsa-768p fasth3-8step-768p fasth3-4step-dense-768p ltx25-4k5s-sol; do
+      grep -h '/gpu_trace ' "$RUNS/$cell/stderr.log" 2>/dev/null | tail -1 | cut -c1-400 | sed "s/^/[$cell] /" | tee -a "$LOG" || true
     done
     ;;
   *)

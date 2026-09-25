@@ -12,6 +12,7 @@ pub mod clip;
 pub mod conv;
 pub mod device;
 pub mod envflag;
+pub mod gpu_trace;
 #[cfg(feature = "cuda")]
 pub mod fp8;
 pub mod fused;

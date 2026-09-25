@@ -1193,10 +1193,13 @@ impl H3Pipeline {
         )?
         .to_device()?;
 
-        let timer = Instant::now();
-        let mut last = Instant::now();
         let steps = self.schedule.num_steps();
         let mut step_s = Vec::with_capacity(steps);
+        // FASTVIDEO_GPU_TRACE: one step's device activity (a no-op when off).
+        crate::wan::gpu_trace::pass_begin("h3");
+        crate::wan::gpu_trace::step_begin();
+        let timer = Instant::now();
+        let mut last = Instant::now();
         let (video_rows, audio_rows) = denoise(
             &self.model,
             &layout,
@@ -1208,13 +1211,19 @@ impl H3Pipeline {
             cond_rows.as_ref(),
             cond_audio_rows.as_ref(),
             &mut |step, _, _| {
+                // The trace window closes before the step-timing sync.
+                crate::wan::gpu_trace::step_before_sync();
                 crate::wan::device::synchronize().map_err(|e| msg(e.to_string()))?;
                 step_s.push(last.elapsed().as_secs_f64());
+                crate::wan::gpu_trace::step_end(step_s[step]);
                 crate::wan::log::info(format_args!(
                     "h3 step {}/{steps}: {:.1}s",
                     step + 1,
                     step_s[step]
                 ));
+                if step + 1 < steps {
+                    crate::wan::gpu_trace::step_begin();
+                }
                 last = Instant::now();
                 Ok(())
             },

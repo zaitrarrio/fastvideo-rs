@@ -153,15 +153,18 @@ if fv-gpucheck serve --help >/dev/null 2>&1; then
 else
   ( cd $runs && while true; do python3 -m http.server 8000; sleep 2; done ) >/tmp/http.log 2>&1 &
 fi
-# Baked images (upstream-<target>) carry the runner in /opt/fvrs; otherwise clone it.
-if [ ! -f /opt/fvrs/scripts/gpu/upstream/pod.sh ]; then
+# The runner scripts come from this repo at \$UP_SHA (so a script fix needs no
+# image rebuild); baked images keep a copy in /opt/fvrs as the fallback.
+RUNNER=/opt/fvrs
+{
   command -v git >/dev/null || { apt-get update -qq && apt-get install -y -qq git; }
-  git init -q /opt/fvrs && git -C /opt/fvrs remote add origin https://github.com/zaitrarrio/fastvideo-rs.git \
-    && git -C /opt/fvrs fetch -q --depth 1 origin $UP_SHA && git -C /opt/fvrs checkout -q FETCH_HEAD
-fi >"\$OUT/clone.log" 2>&1
+  git init -q /opt/fvrs-live && git -C /opt/fvrs-live remote add origin https://github.com/zaitrarrio/fastvideo-rs.git \
+    && git -C /opt/fvrs-live fetch -q --depth 1 origin $UP_SHA && git -C /opt/fvrs-live checkout -q FETCH_HEAD \
+    && echo live
+} >"\$OUT/clone.log" 2>&1 && RUNNER=/opt/fvrs-live
 env ${FV_EXTRA_ENV:-} UP_STEPS="${UP_STEPS:-info:box}" UP_STEPS_BG="${UP_STEPS_BG:-}" UP_CELLS="${UP_CELLS:-}" \
   UP_CELL_TIMEOUT_S=${UP_CELL_TIMEOUT_S:-5400} UP_LOCAL=${UP_LOCAL:-1} \
-  bash /opt/fvrs/scripts/gpu/upstream/pod.sh "\$OUT" >"\$OUT/pod.out" 2>&1
+  bash \$RUNNER/scripts/gpu/upstream/pod.sh "\$OUT" >"\$OUT/pod.out" 2>&1
 echo "done $tag" >"\$OUT/DONE"
 exec sleep infinity
 EOF
@@ -291,7 +294,7 @@ cmd_run() {
     # image (docker/upstream.Dockerfile, built by CI); unset = plain PyTorch image
     # and pod-side installs.
     if [[ -n "${UP_IMAGE_TARGET:-}" ]]; then
-      image="${RUNPOD_IMAGE:-ghcr.io/zaitrarrio/fastvideo-rs-upstream-$UP_IMAGE_TARGET:sha-$sha}"
+      image="${RUNPOD_IMAGE:-ghcr.io/zaitrarrio/fastvideo-rs-upstream-$UP_IMAGE_TARGET:${UP_IMAGE_TAG:-sha-$sha}}"
     else
       image="${RUNPOD_IMAGE:-runpod/pytorch:1.3.3-cu1300-torch2130-ubuntu2404}"
     fi

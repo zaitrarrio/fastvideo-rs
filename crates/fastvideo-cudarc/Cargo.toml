@@ -20,7 +20,8 @@ rayon.workspace = true
 
 [features]
 default = []
-cuda = ["dep:cudarc"]
+# `cudarc/cupti` backs FASTVIDEO_GPU_TRACE (wan::gpu_trace); libcupti loads lazily.
+cuda = ["dep:cudarc", "cudarc/cupti"]
 
 [dependencies.cudarc]
 workspace = true

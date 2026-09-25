@@ -65,6 +65,16 @@ fn sync() -> Result<()> {
     crate::wan::device::synchronize().map_err(|e| err(format!("device synchronize: {e}")))
 }
 
+/// A denoise step's closing sync and its wall time, with the
+/// `FASTVIDEO_GPU_TRACE` window closed before the sync (no-op when off).
+fn step_sync(timer: &Instant) -> Result<f64> {
+    crate::wan::gpu_trace::step_before_sync();
+    sync()?;
+    let secs = timer.elapsed().as_secs_f64();
+    crate::wan::gpu_trace::step_end(secs);
+    Ok(secs)
+}
+
 /// Where the weights are.
 #[derive(Debug, Clone)]
 pub struct Ltx2Paths {
@@ -595,6 +605,7 @@ pub fn denoise_with(
     state: LatentState,
 ) -> Result<(CudaTensor, CudaTensor)> {
     for i in 0..schedule.num_steps() {
+        crate::wan::gpu_trace::step_begin();
         let timer = Instant::now();
         model.begin_fbcache_step(i);
         model.arm_prune_step(i);
@@ -615,8 +626,7 @@ pub fn denoise_with(
         };
         video = euler_update(&video, &v_video, schedule, i, state)?;
         audio = euler_update(&audio, &v_audio, schedule, i, state)?;
-        sync()?;
-        let secs = timer.elapsed().as_secs_f64();
+        let secs = step_sync(&timer)?;
         crate::wan::log::info(format_args!(
             "ltx2 step {}/{} sigma {:.6} ({secs:.2}s)",
             i + 1,
@@ -646,6 +656,7 @@ pub fn denoise_cfg(
     stage2: Ltx2Stage2Attn,
 ) -> Result<(CudaTensor, CudaTensor)> {
     for i in 0..schedule.num_steps() {
+        crate::wan::gpu_trace::step_begin();
         let timer = Instant::now();
         let t = schedule.timestep_f32(i);
         let route = stage2.at(i);
@@ -664,8 +675,7 @@ pub fn denoise_cfg(
         let dt = schedule.dt(i) as f32;
         video = CudaTensor::lincomb(&[(1.0, &video), (dt, &v_video)])?;
         audio = CudaTensor::lincomb(&[(1.0, &audio), (dt, &v_audio)])?;
-        sync()?;
-        let secs = timer.elapsed().as_secs_f64();
+        let secs = step_sync(&timer)?;
         crate::wan::log::info(format_args!(
             "ltx2 cfg step {}/{} sigma {:.6} v_gs={video_scale} a_gs={audio_scale} ({secs:.2}s)",
             i + 1,
@@ -764,6 +774,7 @@ pub fn denoise_res2s(
 ) -> Result<(CudaTensor, CudaTensor)> {
     let mut call = 0usize;
     for i in 0..schedule.num_steps() {
+        crate::wan::gpu_trace::step_begin();
         let timer = Instant::now();
         let sigma = schedule.sigmas[i];
         let sigma_next = schedule.sigmas[i + 1];
@@ -819,8 +830,7 @@ pub fn denoise_res2s(
             video = res2s_combine(&video, &d_video, &d2_v, h, b1, b2)?;
             audio = res2s_combine(&audio, &d_audio, &d2_a, h, b1, b2)?;
         }
-        sync()?;
-        let secs = timer.elapsed().as_secs_f64();
+        let secs = step_sync(&timer)?;
         crate::wan::log::info(format_args!(
             "ltx2 res2s step {}/{} sigma {:.6} calls {call} ({secs:.2}s)",
             i + 1,
@@ -855,6 +865,7 @@ pub fn denoise_ancestral(
 ) -> Result<(CudaTensor, CudaTensor)> {
     let mut noise = NoiseStream::new(opts.noise_seed, state == LatentState::Bf16);
     for i in 0..schedule.num_steps() {
+        crate::wan::gpu_trace::step_begin();
         let timer = Instant::now();
         let sigma = schedule.sigmas[i];
         let sigma_next = schedule.sigmas[i + 1];
@@ -899,8 +910,7 @@ pub fn denoise_ancestral(
             draws.get(1),
             state,
         )?;
-        sync()?;
-        let secs = timer.elapsed().as_secs_f64();
+        let secs = step_sync(&timer)?;
         crate::wan::log::info(format_args!(
             "ltx2 ancestral step {}/{} sigma {:.6} ({secs:.2}s)",
             i + 1,
@@ -2047,6 +2057,9 @@ impl Ltx2Pipeline {
         observer: Option<StepObserver<'_>>,
     ) -> Result<Ltx2Output> {
         req.validate()?;
+        // FASTVIDEO_GPU_TRACE: one step of this generate (stage 1 and 2
+        // count as one sequence; FASTVIDEO_GPU_TRACE_STEP picks it).
+        crate::wan::gpu_trace::pass_begin("ltx2");
         let cfg = self.cfg.clone();
         let use_cfg = req.guidance_scale != 1.0 || req.audio_guidance_scale != 1.0;
         check_generate_contract(&cfg, use_cfg)?;
