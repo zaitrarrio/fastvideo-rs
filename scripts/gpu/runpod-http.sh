@@ -12,6 +12,7 @@
 #   runpod-http.sh upstream [sha] upstream Python references (scripts/gpu/upstream/pod.sh)
 #                                on a public PyTorch image; the pod clones this repo
 #                                at <sha> from GitHub. UP_STEPS / UP_CELLS select work.
+#   runpod-http.sh attach <pod> <tag>  re-attach to a running pod (wait, collect, delete)
 #   runpod-http.sh status <pod>  print live.log from a running pod
 #   runpod-http.sh down <pod>    destroy a pod
 #
@@ -291,6 +292,14 @@ case "${1:-}" in
   kernels) shift; cmd_run kernels "$@" ;;
   all) shift; cmd_run all "$@" ;;
   upstream) shift; cmd_run upstream "$@" ;;
+  attach)
+    # Re-attach to a running pod whose driver died: wait, collect, delete.
+    id="${2:?pod}"; tag="${3:?tag (e.g. 33a2eac-09251907)}"; rc=0
+    wait_done "$id" "$tag" || rc=1
+    fetch_results "$id" "$tag"
+    log "destroy pod $id"
+    rest DELETE "/pods/$id" >/dev/null || log "WARN: delete failed for $id"
+    exit $rc ;;
   status) proxy "${2:?pod}" "$FAMILY/" ;;
   down) rest DELETE "/pods/${2:?pod}" >/dev/null && echo "deleted ${2}" ;;
   *) sed -n '2,20p' "$0" | sed 's/^# \{0,1\}//'; exit 2 ;;
