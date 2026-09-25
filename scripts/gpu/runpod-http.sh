@@ -126,6 +126,10 @@ fetch_results() {
     for f in summary.json stderr.log stdout.log; do
       proxy "$id" "rtx6000/$tag/$cell/$f" >"$out/$cell/$f" 2>/dev/null || rm -f "$out/$cell/$f"
     done
+    for f in $(proxy "$id" "rtx6000/$tag/$cell/gpucheck-out/" 2>/dev/null | grep -oE 'href="[^"/]+\.json"' | sed 's/href="//;s/"//'); do
+      mkdir -p "$out/$cell/gpucheck-out"
+      proxy "$id" "rtx6000/$tag/$cell/gpucheck-out/$f" >"$out/$cell/gpucheck-out/$f" 2>/dev/null || true
+    done
   done
   log "results → $out"
 }

@@ -87,10 +87,12 @@ run_cell() {
   log "▶ $name  $*  (wall cap ${cap}s; 0=none)"
   smi_snap "$cell/nvidia-smi-start.txt"
   set +e
+  # Run inside the cell dir so fv-gpucheck's relative report dir
+  # (gpucheck-out/<stage>.json) lands next to the logs.
   if [[ "$cap" == "0" ]]; then
-    "$@" >"$cell/stdout.log" 2>"$cell/stderr.log"
+    (cd "$cell" && "$@") >"$cell/stdout.log" 2>"$cell/stderr.log"
   else
-    timeout --signal=TERM --kill-after=15 "$cap" "$@" >"$cell/stdout.log" 2>"$cell/stderr.log"
+    (cd "$cell" && timeout --signal=TERM --kill-after=15 "$cap" "$@") >"$cell/stdout.log" 2>"$cell/stderr.log"
   fi
   rc=$?
   set -e
