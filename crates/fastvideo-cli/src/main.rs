@@ -123,12 +123,14 @@ struct GenerateArgs {
     /// LTX two-stage refine steps (2 or 3). Default: 2 when `--steps 5`, else 3.
     #[arg(long)]
     refine_steps: Option<u32>,
-    /// LTX-2.5 stage-2 Sol route: layer 0 dense, later layers at tau 1 / 1.25 / 1.5.
-    /// Requires `--two-stage` and 3 refine steps. Sol layers still use dense SDPA.
+    /// LTX-2.5 stage-2 Sol route: video self-attention on layer 0 dense, layers
+    /// 1-47 on the Sol-Attn kernel at tau 1 / 1.25 / 1.5 (`thresh_type=diag`).
+    /// Requires `--two-stage` and 3 refine steps.
     #[arg(long, default_value_t = false)]
     sol_stage2: bool,
-    /// LTX-2.3 stage-2 PISA route: layers 0-1 dense, later video layers at sparsity 0.9.
-    /// Requires `--two-stage` and 3 refine steps. Sparse layers still use dense SDPA.
+    /// LTX-2.3 stage-2 PISA route: video self-attention on layers 0-1 dense,
+    /// layers 2-47 on the PISA score-route kernel at sparsity 0.9, block 64.
+    /// Requires `--two-stage` and 3 refine steps.
     #[arg(long, default_value_t = false)]
     pisa_stage2: bool,
     /// LTX-2.3 official HQ: 15-step stage-1 + 3-sigma refine, guidance 3, 1920×1088 / 241f.

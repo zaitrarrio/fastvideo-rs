@@ -280,8 +280,9 @@ pub enum Stage {
         /// `resident` or `streamed`. `FASTVIDEO_LTX2_TEXT` overrides.
         #[arg(long, default_value = "auto")]
         text: String,
-        /// Distilled two-stage: half-res stage-1 → spatial ×2 → 3-step stage-2.
-        /// Requires `--model-version 2.5` and `latent_upsampler/` under `--weights`.
+        /// Distilled two-stage: half-res stage-1 → spatial ×2 → 3-step stage-2
+        /// (one unguided forward per step). Requires `--model-version 2.3` or
+        /// `2.5` and `latent_upsampler/` under `--weights`.
         #[arg(long, default_value_t = false)]
         two_stage: bool,
         /// DiffVAE diffusion video decoder instead of the conv VAE.
@@ -291,10 +292,15 @@ pub enum Stage {
         /// First-frame PNG/JPEG for I2V encode (`docs/ports/ltx2.md`).
         #[arg(long)]
         image: Option<PathBuf>,
-        /// Stage-2 Sol route (3 refine steps). Video layers 1-47 still use dense SDPA.
+        /// LTX-2.5 stage-2 Sol route (needs `--two-stage`, 3 refine steps):
+        /// video self-attention on layer 0 dense, layers 1-47 on the Sol-Attn
+        /// kernel at tau 1.0 / 1.25 / 1.5 (one per forward, `thresh_type=diag`,
+        /// no sinks). Cross- and audio attention stay dense.
         #[arg(long, default_value_t = false)]
         sol_stage2: bool,
-        /// Stage-2 PISA route (3 refine steps). Video layers 2-47 still use dense SDPA.
+        /// LTX-2.3 stage-2 PISA route (needs `--two-stage`, 3 refine steps):
+        /// video self-attention on layers 0-1 dense, layers 2-47 on the PISA
+        /// score-route kernel at sparsity 0.9, block 64.
         #[arg(long, default_value_t = false)]
         pisa_stage2: bool,
     },

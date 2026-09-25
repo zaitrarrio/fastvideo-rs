@@ -56,6 +56,11 @@ impl Conv2d {
     }
 }
 
+/// `torch.nn.GroupNorm(32, C)` with its default `eps=1e-5`:
+/// `ltx_core/model/upsampler/model.py:50` (`initial_norm`) and
+/// `res_block.py:24,26` (`norm1`, `norm2`) pass no `eps`.
+pub(crate) const GROUP_NORM_EPS: f32 = 1e-5;
+
 struct GroupNorm {
     weight: CudaTensor,
     bias: CudaTensor,
@@ -76,7 +81,7 @@ impl GroupNorm {
     }
 
     fn forward(&self, x: &CudaTensor) -> Result<CudaTensor> {
-        x.group_norm(self.groups, &self.weight, &self.bias, 1e-6, false)
+        x.group_norm(self.groups, &self.weight, &self.bias, GROUP_NORM_EPS, false)
     }
 }
 
@@ -249,5 +254,26 @@ mod tests {
             ..Ltx2LatentUpsamplerConfig::ltx2_5_22b()
         };
         assert!(LatentUpsampler::load(&weights(), &cfg).is_err());
+    }
+
+    /// The eps is torch's GroupNorm default. A near-constant group makes it
+    /// dominate the variance, so 1e-6 and 1e-5 give visibly different outputs.
+    #[test]
+    fn group_norm_uses_the_torch_default_eps() {
+        assert_eq!(GROUP_NORM_EPS, 1e-5);
+        let c = 32usize;
+        let norm = GroupNorm {
+            weight: CudaTensor::ones(&[c]),
+            bias: CudaTensor::zeros(&[c]),
+            groups: 32,
+        };
+        // One channel per group, 4 spatial values with variance 1e-6.
+        let vals = [1e-3f32, -1e-3, 1e-3, -1e-3];
+        let data: Vec<f32> = (0..c).flat_map(|_| vals).collect();
+        let x = CudaTensor::from_vec(data, vec![1, c, 1, 2, 2]).unwrap();
+        let y = norm.forward(&x).unwrap().host_cow().unwrap().into_owned();
+        let want = 1e-3f32 / (1e-6f32 + 1e-5).sqrt();
+        assert!((y[0] - want).abs() < 1e-4, "{} vs {want}", y[0]);
+        assert!((y[0] - 1e-3 / (2e-6f32).sqrt()).abs() > 0.1);
     }
 }

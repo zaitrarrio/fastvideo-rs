@@ -69,14 +69,16 @@ impl AdaLnSingle {
         })
     }
 
-    /// `(modulation [rows, dim], embedded [1, dim])` for one timestep
-    /// (`1000·sigma`).
-    fn forward(&self, timestep: f32) -> Result<(CudaTensor, CudaTensor)> {
-        let s = sinusoidal_timesteps(
-            &CudaTensor::from_vec(vec![timestep], vec![1])?,
-            self.sinusoid,
-        )?;
-        let e = self.linear_2.forward(&self.linear_1.forward(&s)?.silu())?;
+    /// `(modulation [rows, dim], embedded [1, dim])` from the sinusoidal
+    /// embedding of one timestep (`1000·sigma`), [`timestep_sinusoid`].
+    fn forward(&self, s: &CudaTensor) -> Result<(CudaTensor, CudaTensor)> {
+        if s.shape != [1, self.sinusoid] {
+            return Err(msg(format!(
+                "ltx2 adaln: sinusoid {:?}, expected [1, {}]",
+                s.shape, self.sinusoid
+            )));
+        }
+        let e = self.linear_2.forward(&self.linear_1.forward(s)?.silu())?;
         let m = self
             .linear
             .forward(&e.silu())?
@@ -89,6 +91,12 @@ impl AdaLnSingle {
         f(&mut self.linear_2)?;
         f(&mut self.linear)
     }
+}
+
+/// The `[1, dim]` sinusoid of one timestep, uploaded once and shared by every
+/// AdaLN of the forward (they all use `timestep_proj_dim`).
+fn timestep_sinusoid(timestep: f32, dim: usize) -> Result<CudaTensor> {
+    sinusoidal_timesteps(&CudaTensor::from_vec(vec![timestep], vec![1])?, dim)?.to_device()
 }
 
 /// `PixArtAlphaTextProjection`: `Linear → tanh-GELU → Linear`.
@@ -221,6 +229,7 @@ struct Block {
 }
 
 /// The per-step modulation every block adds its own tables to.
+#[derive(Clone)]
 struct StepModulation {
     /// `[6 or 9, dim]` from `time_embed` / `audio_time_embed`.
     main: CudaTensor,
@@ -228,6 +237,47 @@ struct StepModulation {
     cross: CudaTensor,
     /// `[1, dim]` from the stream's a↔v gate embedder.
     gate: CudaTensor,
+}
+
+/// Everything of one forward that depends on the timestep only: computed
+/// once per timestep and reused by a second forward at the same timestep.
+#[derive(Clone)]
+struct ForwardMods {
+    video: StepModulation,
+    audio: StepModulation,
+    v_prompt: Option<CudaTensor>,
+    a_prompt: Option<CudaTensor>,
+    v_embedded: CudaTensor,
+    a_embedded: CudaTensor,
+}
+
+/// Kept video tokens of a pruned forward: ascending indices on the host and,
+/// with a device, the same indices uploaded once for every gather/scatter.
+struct KeptTokens {
+    host: Vec<usize>,
+    #[cfg(feature = "cuda")]
+    dev: Option<cudarc::driver::CudaSlice<u32>>,
+}
+
+/// `Σ|cur − prev| / Σ|prev|` (both over the same count): the FBCache signal
+/// distance of [`fastvideo_models::ltx2::fbcache::relative_l1`], reduced on the
+/// device when both live there (two f64 sums come back, not the tensors).
+fn relative_l1(cur: &CudaTensor, prev: &CudaTensor) -> Result<f64> {
+    if cur.shape != prev.shape {
+        return Err(msg(format!(
+            "ltx2 fbcache: signal {:?} vs previous {:?}",
+            cur.shape, prev.shape
+        )));
+    }
+    #[cfg(feature = "cuda")]
+    if let (Some(a), Some(b)) = (cur.dev()?, prev.dev()?) {
+        let (num, den) = crate::wan::ops::ltx_abs_diff_sums_device(&a, &b)?;
+        return Ok(if den == 0.0 { f64::INFINITY } else { num / den });
+    }
+    Ok(fastvideo_models::ltx2::fbcache::relative_l1(
+        &cur.host_cow()?,
+        &prev.host_cow()?,
+    ))
 }
 
 /// The four rotary tables of one request geometry, on the device.
@@ -319,6 +369,8 @@ pub struct Ltx2Transformer {
     fbcache: Arc<Mutex<Option<LtxFbRuntime>>>,
     prune: Arc<Mutex<Option<LtxPruneRuntime>>>,
     stage1: Arc<Mutex<Option<LtxStage1Runtime>>>,
+    /// The last timestep's [`ForwardMods`], keyed by the timestep's bits.
+    mods: Mutex<Option<(u32, ForwardMods)>>,
 }
 
 struct LtxFbRuntime {
@@ -335,7 +387,11 @@ struct LtxFbRuntime {
 struct LtxPruneRuntime {
     active: bool,
     step: Option<usize>,
-    prev: Option<CudaTensor>,
+    /// Forward ordinal within the armed step (0 cond, 1 uncond, …).
+    pass: usize,
+    /// Last full video hidden per pass: the compensation of one branch never
+    /// comes from another (`token_prune.py:819-915` keys it by `cache_key`).
+    prev: Vec<Option<CudaTensor>>,
 }
 
 struct LtxStage1Runtime {
@@ -383,6 +439,8 @@ fn load_keyframes_abs_pos(
 impl Ltx2Transformer {
     /// Re-fuse attached LoRA linears at `s`. No disk, no DiT reload.
     pub fn set_lora_strength(&mut self, s: f32) -> Result<()> {
+        // The AdaLN linears may carry the adapter: drop the cached modulations.
+        *self.mods.get_mut().expect("ltx2 mods") = None;
         self.for_each_linear_mut(&mut |lin| {
             if lin.has_lora() {
                 lin.set_lora_strength(s)?;
@@ -640,6 +698,7 @@ impl Ltx2Transformer {
             fbcache: Default::default(),
             prune: Default::default(),
             stage1: Default::default(),
+            mods: Mutex::new(None),
             cfg: cfg.clone(),
         })
     }
@@ -680,7 +739,8 @@ impl Ltx2Transformer {
         *self.prune.lock().expect("ltx2 prune") = Some(LtxPruneRuntime {
             active: false,
             step: None,
-            prev: None,
+            pass: 0,
+            prev: Vec::new(),
         });
         crate::wan::log::info(format_args!(
             "{}",
@@ -688,10 +748,12 @@ impl Ltx2Transformer {
         ));
     }
 
+    /// Start a denoise step: the next forward is pass 0 of `step`.
     pub fn arm_prune_step(&self, step: usize) {
         let mut slot = self.prune.lock().expect("ltx2 prune");
         if let Some(runtime) = slot.as_mut() {
             runtime.step = Some(step);
+            runtime.pass = 0;
         }
     }
 
@@ -730,69 +792,147 @@ impl Ltx2Transformer {
         }
     }
 
-    fn index_video_ropes(&self, ropes: &Ropes, tokens: &[usize]) -> Result<Ropes> {
+    fn index_video_ropes(&self, ropes: &Ropes, kept: &KeptTokens) -> Result<Ropes> {
+        #[cfg(feature = "cuda")]
+        if let Some(idx) = kept.dev.as_ref() {
+            if let (Some(video), Some(cross_video)) = (
+                ropes.video.index_tokens_device(idx)?,
+                ropes.cross_video.index_tokens_device(idx)?,
+            ) {
+                return Ok(Ropes {
+                    video,
+                    audio: ropes.audio.clone(),
+                    cross_video,
+                    cross_audio: ropes.cross_audio.clone(),
+                });
+            }
+        }
         Ok(Ropes {
-            video: ropes.video.index_tokens(tokens)?,
+            video: ropes.video.index_tokens(&kept.host)?,
             audio: ropes.audio.clone(),
-            cross_video: ropes.cross_video.index_tokens(tokens)?,
+            cross_video: ropes.cross_video.index_tokens(&kept.host)?,
             cross_audio: ropes.cross_audio.clone(),
         })
     }
 
-    fn gather_prune(&self, xv: &CudaTensor) -> Result<Option<(Vec<usize>, CudaTensor)>> {
+    /// This forward's prune pass, and — on a prune step with that pass's
+    /// previous hidden in hand — the kept tokens and their rows. The feature
+    /// norm is reduced on the device; only the `[S]` scores come back for the
+    /// top-k, and the kept indices go up once.
+    #[allow(clippy::type_complexity)]
+    fn gather_prune(
+        &self,
+        xv: &CudaTensor,
+    ) -> Result<(Option<usize>, Option<(KeptTokens, CudaTensor)>)> {
         let mut slot = self.prune.lock().expect("ltx2 prune");
         let Some(runtime) = slot.as_mut() else {
-            return Ok(None);
+            return Ok((None, None));
         };
         if !runtime.active {
-            return Ok(None);
+            return Ok((None, None));
         }
-        let Some(step) = runtime.step.take() else {
-            return Ok(None);
+        let Some(step) = runtime.step else {
+            return Ok((None, None));
         };
-        if !fastvideo_models::ltx2::prunes_step(step) || runtime.prev.is_none() {
-            return Ok(None);
+        let pass = runtime.pass;
+        runtime.pass += 1;
+        let has_prev = runtime.prev.get(pass).is_some_and(Option::is_some);
+        if !fastvideo_models::ltx2::prunes_step(step) || !has_prev {
+            return Ok((Some(pass), None));
         }
-        let seq = xv.shape[1];
-        let dim = xv.shape[2];
-        let flat = xv.reshape(vec![seq, dim])?;
-        let host = flat.host_cow()?.into_owned();
-        let idx = fastvideo_models::ltx2::feat_norm_keep_indices(
-            &host,
-            seq,
-            dim,
-            fastvideo_models::ltx2::pisa::PRUNE_RATIO,
-        );
+        let (seq, dim) = (xv.shape[1], xv.shape[2]);
+        let ratio = fastvideo_models::ltx2::pisa::PRUNE_RATIO;
+        #[cfg(feature = "cuda")]
+        if let Some(x) = xv.dev()? {
+            let scores = crate::wan::ops::ltx_row_sumsq_device(&x, seq, dim)?;
+            let scores = CudaTensor::from_device_slice(scores, vec![seq])?
+                .host_cow()?
+                .into_owned();
+            let idx = fastvideo_models::ltx2::keep_indices_from_scores(&scores, ratio);
+            if idx.len() >= seq {
+                return Ok((Some(pass), None));
+            }
+            let dev = crate::wan::device::global_device()
+                .ok_or_else(|| msg("ltx2 prune: no global CUDA device"))?;
+            let idx32: Vec<u32> = idx.iter().map(|&i| i as u32).collect();
+            let idx_dev = dev
+                .stream
+                .memcpy_stod(&idx32)
+                .map_err(|e| msg(e.to_string()))?;
+            crate::wan::stats::record_h2d(idx32.len());
+            let rows = crate::wan::ops::index_select_rows_dev_idx(&x, dim, &idx_dev)?;
+            let kept = CudaTensor::from_device_slice(rows, vec![1, idx.len(), dim])?;
+            return Ok((
+                Some(pass),
+                Some((
+                    KeptTokens {
+                        host: idx,
+                        dev: Some(idx_dev),
+                    },
+                    kept,
+                )),
+            ));
+        }
+        let host = xv.reshape(vec![seq, dim])?.host_cow()?.into_owned();
+        let idx = fastvideo_models::ltx2::feat_norm_keep_indices(&host, seq, dim, ratio);
         if idx.len() >= seq {
-            return Ok(None);
+            return Ok((Some(pass), None));
         }
         let kept = xv
             .reshape(vec![seq, dim])?
             .index_select_rows(&idx)?
             .reshape(vec![1, idx.len(), dim])?;
-        Ok(Some((idx, kept)))
+        Ok((
+            Some(pass),
+            Some((
+                KeptTokens {
+                    host: idx,
+                    #[cfg(feature = "cuda")]
+                    dev: None,
+                },
+                kept,
+            )),
+        ))
     }
 
-    fn scatter_prune(&self, kept: CudaTensor, idx: &[usize]) -> Result<CudaTensor> {
+    /// Kept rows back into this pass's previous full hidden; that becomes the
+    /// pass's new previous hidden.
+    fn scatter_prune(&self, kept: CudaTensor, idx: &KeptTokens, pass: usize) -> Result<CudaTensor> {
         let mut slot = self.prune.lock().expect("ltx2 prune");
         let runtime = slot.as_mut().expect("ltx2 prune");
-        let prev = runtime.prev.as_ref().expect("ltx2 prune prev");
+        let prev = runtime.prev[pass].as_ref().expect("ltx2 prune prev");
         let (seq, dim) = (prev.shape[1], prev.shape[2]);
-        let prev_flat = prev.reshape(vec![seq, dim])?;
-        let kept_flat = kept.reshape(vec![idx.len(), dim])?;
-        let prev_host = prev_flat.host_cow()?.into_owned();
-        let kept_host = kept_flat.host_cow()?.into_owned();
-        let full = fastvideo_models::ltx2::scatter_prev(&prev_host, seq, dim, idx, &kept_host);
+        #[cfg(feature = "cuda")]
+        if let (Some(idx_dev), Some(base), Some(src)) = (idx.dev.as_ref(), prev.dev()?, kept.dev()?)
+        {
+            let full = crate::wan::ops::ltx_index_copy_rows_device(&base, &src, idx_dev, dim)?;
+            let out = CudaTensor::from_device_slice(full, vec![1, seq, dim])?;
+            runtime.prev[pass] = Some(out.clone());
+            return Ok(out);
+        }
+        let prev_host = prev.reshape(vec![seq, dim])?.host_cow()?.into_owned();
+        let kept_host = kept
+            .reshape(vec![idx.host.len(), dim])?
+            .host_cow()?
+            .into_owned();
+        let full =
+            fastvideo_models::ltx2::scatter_prev(&prev_host, seq, dim, &idx.host, &kept_host);
         let out = CudaTensor::from_vec(full, vec![1, seq, dim])?;
-        runtime.prev = Some(out.clone());
+        runtime.prev[pass] = Some(out.clone());
         Ok(out)
     }
 
-    fn store_prune_full(&self, xv: &CudaTensor) -> Result<()> {
+    fn store_prune_full(&self, xv: &CudaTensor, pass: Option<usize>) -> Result<()> {
+        let Some(pass) = pass else {
+            return Ok(());
+        };
         let mut slot = self.prune.lock().expect("ltx2 prune");
         if let Some(runtime) = slot.as_mut() {
             if runtime.active {
-                runtime.prev = Some(xv.clone());
+                if runtime.prev.len() <= pass {
+                    runtime.prev.resize(pass + 1, None);
+                }
+                runtime.prev[pass] = Some(xv.clone());
             }
         }
         Ok(())
@@ -820,9 +960,7 @@ impl Ltx2Transformer {
             let prev = runtime.signals[runtime.state.current_pass()]
                 .as_ref()
                 .expect("ltx2 fb signal");
-            let cur = signal.host_cow()?;
-            let prev = prev.host_cow()?;
-            fastvideo_models::ltx2::fbcache::relative_l1(&cur, &prev)
+            relative_l1(&signal, prev)?
         } else {
             0.0
         };
@@ -873,6 +1011,53 @@ impl Ltx2Transformer {
         runtime.res_a[pass] = Some(xa.sub(&a_in)?);
         runtime.state.note_computed(pass);
         Ok(())
+    }
+
+    /// [`ForwardMods`] at `timestep`: the eight AdaLN MLPs share one uploaded
+    /// sinusoid (two when the a↔v gate timestep differs), and a second forward
+    /// at the same timestep (the uncond pass of CFG) reuses the result.
+    fn modulations(&self, timestep: f32) -> Result<ForwardMods> {
+        let key = timestep.to_bits();
+        if let Some((k, m)) = self.mods.lock().expect("ltx2 mods").as_ref() {
+            if *k == key {
+                return Ok(m.clone());
+            }
+        }
+        // The a↔v gate embedders see the timestep rescaled by
+        // cross_attn_timestep_scale_multiplier / timestep_scale_multiplier (= 1).
+        let gate_t = timestep
+            * (self.cfg.cross_attn_timestep_scale_multiplier / self.cfg.timestep_scale_multiplier)
+                as f32;
+        let s = timestep_sinusoid(timestep, self.cfg.timestep_proj_dim)?;
+        let s_gate = if gate_t.to_bits() == key {
+            s.clone()
+        } else {
+            timestep_sinusoid(gate_t, self.cfg.timestep_proj_dim)?
+        };
+        let (v_main, v_embedded) = self.time_embed.forward(&s)?;
+        let (a_main, a_embedded) = self.audio_time_embed.forward(&s)?;
+        let (v_prompt, a_prompt) = match (&self.prompt_adaln, &self.audio_prompt_adaln) {
+            (Some(p), Some(a)) => (Some(p.forward(&s)?.0), Some(a.forward(&s)?.0)),
+            _ => (None, None),
+        };
+        let mods = ForwardMods {
+            video: StepModulation {
+                main: v_main,
+                cross: self.cross_video_scale_shift.forward(&s)?.0,
+                gate: self.cross_video_gate.forward(&s_gate)?.0,
+            },
+            audio: StepModulation {
+                main: a_main,
+                cross: self.cross_audio_scale_shift.forward(&s)?.0,
+                gate: self.cross_audio_gate.forward(&s_gate)?.0,
+            },
+            v_prompt,
+            a_prompt,
+            v_embedded,
+            a_embedded,
+        };
+        *self.mods.lock().expect("ltx2 mods") = Some((key, mods.clone()));
+        Ok(mods)
     }
 
     pub fn config(&self) -> &Ltx2TransformerConfig {
@@ -951,31 +1136,18 @@ impl Ltx2Transformer {
             )));
         }
         let eps = self.cfg.norm_eps as f32;
-        // The a↔v gate embedders see the timestep rescaled by
-        // cross_attn_timestep_scale_multiplier / timestep_scale_multiplier (= 1).
-        let gate_t = timestep
-            * (self.cfg.cross_attn_timestep_scale_multiplier / self.cfg.timestep_scale_multiplier)
-                as f32;
-        let (v_main, v_embedded) = self.time_embed.forward(timestep)?;
-        let (a_main, a_embedded) = self.audio_time_embed.forward(timestep)?;
-        let v_mod = StepModulation {
-            main: v_main,
-            cross: self.cross_video_scale_shift.forward(timestep)?.0,
-            gate: self.cross_video_gate.forward(gate_t)?.0,
-        };
-        let a_mod = StepModulation {
-            main: a_main,
-            cross: self.cross_audio_scale_shift.forward(timestep)?.0,
-            gate: self.cross_audio_gate.forward(gate_t)?.0,
-        };
-        let (v_prompt, a_prompt) = match (&self.prompt_adaln, &self.audio_prompt_adaln) {
-            (Some(p), Some(a)) => (Some(p.forward(timestep)?.0), Some(a.forward(timestep)?.0)),
-            _ => (None, None),
-        };
+        let ForwardMods {
+            video: v_mod,
+            audio: a_mod,
+            v_prompt,
+            a_prompt,
+            v_embedded,
+            a_embedded,
+        } = self.modulations(timestep)?;
 
         let mut xv = self.proj_in.forward(video)?;
         let mut xa = self.audio_proj_in.forward(audio)?;
-        let pruned = self.gather_prune(&xv)?;
+        let (prune_pass, pruned) = self.gather_prune(&xv)?;
         let pruned_ropes = if let Some((idx, kept)) = &pruned {
             xv = kept.clone();
             Some(self.index_video_ropes(ropes, idx)?)
@@ -1016,10 +1188,10 @@ impl Ltx2Transformer {
         if fb && !skipped {
             self.finish_fb(&xv, &xa)?;
         }
-        if let Some((idx, _)) = pruned {
-            xv = self.scatter_prune(xv, &idx)?;
+        if let (Some((idx, _)), Some(pass)) = (pruned, prune_pass) {
+            xv = self.scatter_prune(xv, &idx, pass)?;
         } else {
-            self.store_prune_full(&xv)?;
+            self.store_prune_full(&xv, prune_pass)?;
         }
         let mut head = |stream: &str,
                         x: &CudaTensor,

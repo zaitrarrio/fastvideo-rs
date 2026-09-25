@@ -25,6 +25,30 @@ pub fn requested(value: Option<&str>) -> bool {
     }
 }
 
+/// Where the cache may run. The only reference profile with FBCache is the
+/// GB200 dev two-stage (`models/ltx25/GB200/fullopt.toml`): stage 1 of
+/// `TI2VidTwoStages` on the dev checkpoint under the multimodal guider. The
+/// RTX5090 distilled profile (`RTX5090/run_ltx25_gpu.sh`) and both refiners run
+/// without it, and no other version has a cached profile. Anything else is
+/// refused: a skip changes the output.
+pub fn scope(
+    version: super::config::Ltx2ModelVersion,
+    distilled: bool,
+    guided: bool,
+    stage: usize,
+) -> Result<(), String> {
+    if version == super::config::Ltx2ModelVersion::V25 && !distilled && guided && stage == 1 {
+        Ok(())
+    } else {
+        Err(format!(
+            "ltx2 fbcache: only the GB200 LTX-2.5 dev guided stage 1 uses FBCache \
+(fullopt.toml); refused for {version:?} {} {} stage {stage}",
+            if distilled { "distilled" } else { "dev" },
+            if guided { "guided" } else { "unguided" },
+        ))
+    }
+}
+
 pub const APPLIED: &str = "ltx2 sol: GB200 FBCache 0.08 warmup 1 max_consecutive 10 \
 (block-0 residual signal, whole-stack residual reuse, stage-1 only)";
 
@@ -253,5 +277,19 @@ mod tests {
         let cur = [4.0f32, 2.0];
         assert!((relative_l1(&cur, &prev) - 2.0).abs() < 1e-12);
         assert!(relative_l1(&[1.0], &[0.0]).is_infinite());
+    }
+
+    #[test]
+    fn fbcache_is_only_the_gb200_dev_guided_stage_one() {
+        use crate::ltx2::config::Ltx2ModelVersion as V;
+        assert!(scope(V::V25, false, true, 1).is_ok());
+        // RTX5090 distilled two-stage: none on either stage.
+        assert!(scope(V::V25, true, false, 1).is_err());
+        assert!(scope(V::V25, true, false, 2).is_err());
+        // Stage 2 and the refiners: none.
+        assert!(scope(V::V25, false, false, 2).is_err());
+        assert!(scope(V::V25, false, true, 2).is_err());
+        assert!(scope(V::V23, false, true, 1).is_err());
+        assert!(scope(V::V20, false, true, 1).is_err());
     }
 }

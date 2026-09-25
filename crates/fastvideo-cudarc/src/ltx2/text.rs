@@ -4,7 +4,9 @@
 //! LTX-2 does not condition on a text encoder's output. It stacks **all 49**
 //! hidden states of a decoder-only LLM (the scaled embeddings, 47 raw layer
 //! outputs and the normed last one), normalises each state separately, mixes
-//! the 188 160-wide stack down to 3840 with one bias-free Linear, and runs the
+//! the 188 160-wide stack down to 3840 with one bias-free Linear (19B; the
+//! 22B models normalise per token instead and use two biased per-stream
+//! linears, [`HiddenStack::normalized_rms`]), and runs the
 //! result through two small transformers — one for the video stream, one for
 //! the audio stream — whose padding slots are filled with learned *register*
 //! tokens. After that there is no padding left, which is why nothing
@@ -27,7 +29,7 @@
 
 use std::path::Path;
 
-use fastvideo_models::ltx2::config::Ltx2ConnectorsConfig;
+use fastvideo_models::ltx2::config::{Ltx2ConnectorsConfig, Ltx2TextNorm};
 use fastvideo_models::ltx2::rope::connector_fractions;
 use fastvideo_models::ltx2::SplitRope;
 
@@ -210,6 +212,37 @@ impl HiddenStack {
         }
         out
     }
+
+    /// `norm_and_concat_per_token_rms` (`ltx_core/text_encoders/gemma/
+    /// feature_extractor.py:48-64`, `FeatureExtractorV2`, the 22B models), over
+    /// the real tokens, packed like [`Self::normalized`]:
+    /// `variance = mean(x², dim=D)` per token and per state, then
+    /// `x · rsqrt(variance + 1e-6)`. The reference computes this in bf16; here
+    /// the statistic is accumulated in f64, as for V1. Pad rows (zero in the
+    /// reference, then the aggregate embed's bias) are overwritten by the
+    /// connector registers (`embeddings_connector.py:139-152`) after the
+    /// right-pad reorder (`embeddings_processor.py:23-45`), so they are left out.
+    pub fn normalized_rms(&self) -> Vec<f32> {
+        const EPS: f64 = 1e-6;
+        let (n, d) = (self.states.len(), self.hidden);
+        let width = d * n;
+        let mut out = vec![0f32; self.tokens * width];
+        for (l, state) in self.states.iter().enumerate() {
+            for t in 0..self.tokens {
+                let row = &state[t * d..(t + 1) * d];
+                let var = row
+                    .iter()
+                    .map(|&v| f64::from(v) * f64::from(v))
+                    .sum::<f64>()
+                    / d as f64;
+                let r = (var + EPS).sqrt().recip();
+                for (c, &v) in row.iter().enumerate() {
+                    out[t * width + c * n + l] = (f64::from(v) * r) as f32;
+                }
+            }
+        }
+        out
+    }
 }
 
 /// One connector's hyper-parameters, out of the flat `connectors/config.json`.
@@ -325,6 +358,8 @@ pub struct TextContexts {
     /// `text_proj_in` output for the real tokens, `[tokens, 3840]` — kept
     /// because it is the first thing worth diffing against the reference.
     pub proj: CudaTensor,
+    /// The audio stream's projection of the same tokens (the shared one on 19B).
+    pub audio_proj: CudaTensor,
     pub video: CudaTensor,
     pub audio: CudaTensor,
 }
@@ -448,12 +483,31 @@ impl TextConnectors {
                 stack.hidden
             )));
         }
-        let packed = stack.normalized(self.cfg.norm_scale_factor, self.cfg.norm_eps);
-        let packed =
-            CudaTensor::from_vec(packed, vec![stack.tokens, self.cfg.text_proj_in_features()])?;
-        let video_proj = self.video_proj.forward(&packed)?;
-        let audio_proj = self.audio_proj.forward(&packed)?;
-        drop(packed);
+        let features = vec![stack.tokens, self.cfg.text_proj_in_features()];
+        let (video_proj, audio_proj) = match self.cfg.text_norm() {
+            Ltx2TextNorm::MaskedMinMax => {
+                let packed = CudaTensor::from_vec(
+                    stack.normalized(self.cfg.norm_scale_factor, self.cfg.norm_eps),
+                    features,
+                )?;
+                (
+                    self.video_proj.forward(&packed)?,
+                    self.audio_proj.forward(&packed)?,
+                )
+            }
+            // `FeatureExtractorV2.forward` (`feature_extractor.py:114-129`): one
+            // normalised stack, rescaled per stream by
+            // `sqrt(aggregate_embed.out_features / embedding_dim)` before each
+            // stream's biased aggregate embed.
+            Ltx2TextNorm::PerTokenRms => {
+                let packed = CudaTensor::from_vec(stack.normalized_rms(), features)?;
+                let sv = self.cfg.per_token_rms_rescale(self.cfg.inner_dim()) as f32;
+                let sa = self.cfg.per_token_rms_rescale(self.cfg.audio_inner_dim()) as f32;
+                let video = self.video_proj.forward(&packed.try_mul_scalar(sv)?)?;
+                let audio = self.audio_proj.forward(&packed.try_mul_scalar(sa)?)?;
+                (video, audio)
+            }
+        };
         let table = SplitRope::from_fractions(
             &connector_fractions(total, self.cfg.connector_rope_base_seq_len),
             1,
@@ -463,6 +517,7 @@ impl TextConnectors {
         );
         let rope = DeviceRope::upload(&table)?;
         let video = self.video.forward(&video_proj, &rope, total)?;
+        let audio_proj_out = audio_proj.clone();
         let audio = if (self.audio.heads, self.audio.dim) == (self.video.heads, self.video.dim) {
             self.audio.forward(&audio_proj, &rope, total)?
         } else {
@@ -478,6 +533,7 @@ impl TextConnectors {
         };
         Ok(TextContexts {
             proj: video_proj,
+            audio_proj: audio_proj_out,
             video,
             audio,
         })
@@ -703,5 +759,83 @@ mod tests {
             (4, 8, 3)
         );
         assert_eq!(streamed.states, resident.states);
+    }
+
+    #[test]
+    fn per_token_rms_normalises_each_token_of_each_state() {
+        // 2 tokens × 3 channels × 2 states, interleaved [t, c, l].
+        let data: Vec<f32> = vec![
+            1.0, 10.0, 2.0, 20.0, 3.0, 30.0, 4.0, 40.0, 5.0, 50.0, 6.0, -60.0,
+        ];
+        let stack = HiddenStack::from_interleaved(&data, 2, 3, 2).unwrap();
+        let got = stack.normalized_rms();
+        for t in 0..2 {
+            for l in 0..2 {
+                let row: Vec<f32> = (0..3).map(|c| data[(t * 3 + c) * 2 + l]).collect();
+                let var = row.iter().map(|v| v * v).sum::<f32>() / 3.0;
+                for (c, x) in row.iter().enumerate() {
+                    let want = x / (var + 1e-6).sqrt();
+                    let at = t * 6 + c * 2 + l;
+                    assert!((got[at] - want).abs() < 1e-5, "t{t} c{c} l{l}");
+                }
+            }
+        }
+    }
+
+    /// The 22B path: per-token RMS, `sqrt(out/in)` rescale per stream, biased
+    /// per-stream projections (`FeatureExtractorV2`).
+    #[test]
+    fn per_modality_connectors_rescale_the_rms_stack_per_stream() {
+        let cfg = Ltx2ConnectorsConfig {
+            caption_channels: 8,
+            text_proj_in_factor: 3,
+            video_connector_num_attention_heads: 2,
+            video_connector_attention_head_dim: 4,
+            video_connector_num_layers: 1,
+            video_connector_num_learnable_registers: 4,
+            audio_connector_num_attention_heads: 2,
+            audio_connector_attention_head_dim: 2,
+            audio_connector_num_layers: 1,
+            audio_connector_num_learnable_registers: 4,
+            connector_rope_base_seq_len: 16,
+            video_hidden_dim: 8,
+            audio_hidden_dim: 4,
+            video_gated_attn: false,
+            audio_gated_attn: false,
+            ..Ltx2ConnectorsConfig::ltx2_5_22b()
+        };
+        assert_eq!(cfg.text_norm(), Ltx2TextNorm::PerTokenRms);
+        let map = weights();
+        let model = TextConnectors::load(&map, &Keys::connectors(Layout::Diffusers), &cfg).unwrap();
+        let (tokens, dim) = (3usize, 8usize);
+        let data: Vec<f32> = (0..tokens * dim * 3)
+            .map(|i| (i as f32 * 0.29).sin() * 3.0 + 0.1)
+            .collect();
+        let stack = HiddenStack::from_interleaved(&data, tokens, dim, 3).unwrap();
+        let got = model.forward(&stack, 8).unwrap();
+        let packed = stack.normalized_rms();
+        let w = get(&map, "video_text_proj_in.weight", &[8, dim * 3]);
+        let b = get(&map, "video_text_proj_in.bias", &[8]);
+        let scale = (8f32 / 8.0).sqrt();
+        let want: Vec<Vec<f32>> = packed
+            .chunks_exact(dim * 3)
+            .map(|r| linear(&r.iter().map(|v| v * scale).collect::<Vec<_>>(), &w, &b))
+            .collect();
+        assert_close(&rows(&got.proj, 8), &want, 1e-5, "video_text_proj_in");
+        // Audio stream: 4 wide, rescaled by sqrt(4 / 8).
+        assert_eq!(got.audio.shape, vec![1, 8, 4]);
+        let wa = get(&map, "audio_text_proj_in.weight", &[4, dim * 3]);
+        let ba = get(&map, "audio_text_proj_in.bias", &[4]);
+        let sa = (4f32 / 8.0).sqrt();
+        let want_a: Vec<Vec<f32>> = packed
+            .chunks_exact(dim * 3)
+            .map(|r| linear(&r.iter().map(|v| v * sa).collect::<Vec<_>>(), &wa, &ba))
+            .collect();
+        assert_close(
+            &rows(&got.audio_proj, 4),
+            &want_a,
+            1e-5,
+            "audio_text_proj_in",
+        );
     }
 }

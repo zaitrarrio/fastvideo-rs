@@ -132,6 +132,11 @@ kernel_fns!(
     sol_prep_kgram,
     sol_prep_q,
     sol_mma_fwd,
+    // ---- ltx2 region (appended; see the end of kernels.cu) ----
+    ltx_abs_diff_sums,
+    ltx_row_sumsq,
+    ltx_index_copy_rows,
+    ltx_rope_rows,
 );
 
 /// NVRTC-compile the kernel module for `sm_major.sm_minor` without touching a

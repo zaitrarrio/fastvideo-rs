@@ -42,6 +42,7 @@
 //! See docs/ports/ltx2.md §c.
 
 use fastvideo_models::ltx2::config::Ltx2VideoVaeConfig;
+use fastvideo_models::ltx2::tiling::{axis_weight_sum, AxisTile, DecodePlan, TileSizeConfig};
 
 use crate::wan::ops::PadMode;
 use crate::wan::tensor::{CudaTensor, Result};
@@ -605,6 +606,246 @@ impl VideoDecoder {
         let (n, c, h, w) = (all.shape[0], all.shape[1], all.shape[2], all.shape[3]);
         all.permute(&[1, 0, 2, 3])?.reshape(vec![1, c, n, h, w])
     }
+
+    /// `(time, height, width)` pixels per latent cell: the temporal and spatial
+    /// strides of the up-blocks, times the output patch on H and W.
+    pub fn scale(&self) -> [usize; 3] {
+        let (mut t, mut s) = (1usize, self.cfg.patch_size);
+        for stage in self.cfg.decoder_stages() {
+            if let Some(up) = stage.upsampler {
+                t *= up.stride.0;
+                s *= up.stride.1;
+            }
+        }
+        [t, s, s]
+    }
+
+    /// One tile's decode as `[frames, 3, H, W]`, rounded to bf16 — the dtype the
+    /// reference decoder returns it in.
+    fn decode_tile(&self, latents: &CudaTensor) -> Result<CudaTensor> {
+        let mut pieces: Vec<CudaTensor> = Vec::new();
+        self.decode_streaming(latents, &mut |_, frames| {
+            pieces.push(frames.clone());
+            Ok(())
+        })?;
+        CudaTensor::cat(&pieces.iter().collect::<Vec<_>>(), 0)?.quantize_bf16()
+    }
+
+    /// `ConvVideoDecoder.tiled_decode` (`ltx_core/model/video_vae/
+    /// conv_video_decoder.py:383-484`, `_accumulate_temporal_group_into_buffer`
+    /// `:508-557`): the latent is cut into the overlapping tiles of `tiles`
+    /// ([`DecodePlan`]); every tile is decoded on its own; each decode is
+    /// weighted by its separable trapezoid masks (time, height, width, in that
+    /// order) and the overlaps are summed; a temporal group's overlap with the
+    /// next group is carried and summed into it. When the masks do not
+    /// partition unity the sum is divided by the (separable) summed weights.
+    ///
+    /// Everything runs on the device. The reference accumulates in its bf16
+    /// latent dtype; here a tile decode and every blended frame are rounded to
+    /// bf16 at the same points (the sum of one chunk is formed in f32). Frames
+    /// reach `sink` as `[frames, 3, H, W]` in order, a few at a time, so only
+    /// one temporal group's tiles are held (bf16) plus its overlap tail.
+    pub fn decode_tiled(
+        &self,
+        latents: &CudaTensor,
+        tiles: &TileSizeConfig,
+        sink: &mut dyn FnMut(usize, &CudaTensor) -> Result<()>,
+    ) -> Result<usize> {
+        let [b, c, f, h, w] = latents.shape[..] else {
+            return Err(msg(format!(
+                "ltx2 vae expects [1, C, F, H, W] latents, got {:?}",
+                latents.shape
+            )));
+        };
+        if b != 1 || c != self.cfg.latent_channels {
+            return Err(msg(format!(
+                "ltx2 vae expects [1, {}, F, H, W] latents, got {:?}",
+                self.cfg.latent_channels, latents.shape
+            )));
+        }
+        let plan = DecodePlan::new([f, h, w], tiles, self.scale()).map_err(msg)?;
+        let [out_f, out_h, out_w] = plan.out;
+        // Blend masks go up once: `[1, 1, H, 1]` / `[1, 1, 1, W]` per spatial
+        // tile, `[T, 1, 1, 1]` per temporal group (narrowed per chunk).
+        let upload = |m: &Option<Vec<f32>>, shape: Vec<usize>| -> Result<Option<CudaTensor>> {
+            m.as_ref()
+                .map(|m| CudaTensor::from_vec(m.clone(), shape)?.to_device())
+                .transpose()
+        };
+        let mh = plan
+            .height
+            .iter()
+            .map(|t| upload(&t.mask, vec![1, 1, t.out.len(), 1]))
+            .collect::<Result<Vec<_>>>()?;
+        let mw = plan
+            .width
+            .iter()
+            .map(|t| upload(&t.mask, vec![1, 1, 1, t.out.len()]))
+            .collect::<Result<Vec<_>>>()?;
+        // Separable 1 / Σweights for the non-complementary case.
+        let inv = |tiles: &[AxisTile], len: usize| -> Vec<f32> {
+            axis_weight_sum(tiles, len)
+                .iter()
+                .map(|&s| 1.0 / s.max(1e-8))
+                .collect()
+        };
+        let divisors = if plan.complementary {
+            None
+        } else {
+            let t = inv(&plan.time, out_f);
+            Some((
+                CudaTensor::from_vec(t, vec![out_f, 1, 1, 1])?.to_device()?,
+                CudaTensor::from_vec(inv(&plan.height, out_h), vec![1, 1, out_h, 1])?
+                    .to_device()?,
+                CudaTensor::from_vec(inv(&plan.width, out_w), vec![1, 1, 1, out_w])?.to_device()?,
+            ))
+        };
+        let finish = |chunk: CudaTensor, start: usize| -> Result<CudaTensor> {
+            let Some((t, hh, ww)) = divisors.as_ref() else {
+                return Ok(chunk);
+            };
+            chunk
+                .mul(&t.narrow(0, start, chunk.shape[0])?)?
+                .mul(hh)?
+                .mul(ww)
+        };
+        const CHUNK: usize = 8;
+        let mut emitted = 0usize;
+        // Blended frames of the previous group that the current one overlaps.
+        let mut carry: Option<(CudaTensor, usize)> = None;
+        for (ti, tt) in plan.time.iter().enumerate() {
+            let group = tt.out.clone();
+            let lat_t = latents.narrow(2, tt.latent.start, tt.latent.len())?;
+            let mt = upload(&tt.mask, vec![group.len(), 1, 1, 1])?;
+            let mut decoded: Vec<Vec<CudaTensor>> = Vec::with_capacity(plan.height.len());
+            for ht in &plan.height {
+                let lat_h = lat_t.narrow(3, ht.latent.start, ht.latent.len())?;
+                let mut row = Vec::with_capacity(plan.width.len());
+                for wt in &plan.width {
+                    let tile =
+                        self.decode_tile(&lat_h.narrow(4, wt.latent.start, wt.latent.len())?)?;
+                    let want = [group.len(), 3, ht.out.len(), wt.out.len()];
+                    if tile.shape[..] != want {
+                        return Err(msg(format!(
+                            "ltx2 vae tile decoded to {:?}, planned {want:?}",
+                            tile.shape
+                        )));
+                    }
+                    row.push(tile);
+                }
+                decoded.push(row);
+            }
+            let next_start = plan
+                .time
+                .get(ti + 1)
+                .map_or(group.end, |n| n.out.start)
+                .max(group.start);
+            let mut tail: Vec<CudaTensor> = Vec::new();
+            let mut a = group.start;
+            while a < group.end {
+                // Chunks never straddle the carried head or the tail boundary.
+                let carried_end = carry.as_ref().map_or(group.start, |(t, s)| s + t.shape[0]);
+                let limit = if a < carried_end {
+                    carried_end
+                } else if a < next_start {
+                    next_start
+                } else {
+                    group.end
+                };
+                let e = (a + CHUNK).min(limit);
+                let (lo, n) = (a - group.start, e - a);
+                let mut rows = Vec::with_capacity(plan.height.len());
+                let mt_chunk = mt.as_ref().map(|m| m.narrow(0, lo, n)).transpose()?;
+                for ((ht, row), mh) in plan.height.iter().zip(&decoded).zip(&mh) {
+                    let mut parts = Vec::with_capacity(plan.width.len());
+                    for ((wt, tile), mw) in plan.width.iter().zip(row).zip(&mw) {
+                        let mut x = tile.narrow(0, lo, n)?;
+                        for m in [&mt_chunk, mh, mw].into_iter().flatten() {
+                            x = x.mul(m)?;
+                        }
+                        parts.push((x, wt.out.clone()));
+                    }
+                    rows.push((overlap_add(&parts, 3, out_w)?, ht.out.clone()));
+                }
+                let mut chunk = overlap_add(&rows, 2, out_h)?
+                    .quantize_bf16()?
+                    .to_f32_act()?;
+                if let Some((prev, start)) = carry.as_ref().filter(|_| a < carried_end) {
+                    chunk = prev
+                        .narrow(0, a - start, n)?
+                        .add(&chunk)?
+                        .quantize_bf16()?
+                        .to_f32_act()?;
+                }
+                if a >= next_start && ti + 1 < plan.time.len() {
+                    tail.push(chunk);
+                } else {
+                    if a != emitted {
+                        return Err(msg(format!(
+                            "ltx2 vae tiled decode: frame {a} after {emitted}"
+                        )));
+                    }
+                    sink(a, &finish(chunk, a)?)?;
+                    emitted += n;
+                }
+                a = e;
+            }
+            carry = if tail.is_empty() {
+                None
+            } else {
+                Some((
+                    CudaTensor::cat(&tail.iter().collect::<Vec<_>>(), 0)?,
+                    next_start,
+                ))
+            };
+        }
+        if emitted != out_f {
+            return Err(msg(format!(
+                "ltx2 vae tiled decode: {emitted} frames, planned {out_f}"
+            )));
+        }
+        Ok(emitted)
+    }
+}
+
+/// Sum `parts`, each placed at its range along `axis`, into a `total`-long
+/// axis: every run between two tile edges is the sum of the tiles covering it,
+/// in tile order.
+fn overlap_add(
+    parts: &[(CudaTensor, std::ops::Range<usize>)],
+    axis: usize,
+    total: usize,
+) -> Result<CudaTensor> {
+    let mut cuts = vec![0, total];
+    for (_, r) in parts {
+        cuts.push(r.start);
+        cuts.push(r.end);
+    }
+    cuts.sort_unstable();
+    cuts.dedup();
+    let mut segments = Vec::with_capacity(cuts.len());
+    for pair in cuts.windows(2) {
+        let (a, b) = (pair[0], pair[1]);
+        let mut covering = parts
+            .iter()
+            .filter(|(_, r)| r.start <= a && r.end >= b)
+            .map(|(t, r)| t.narrow(axis, a - r.start, b - a))
+            .collect::<Result<Vec<_>>>()?;
+        let sum = match covering.len() {
+            0 => {
+                return Err(msg(format!(
+                    "ltx2 vae tiles leave {a}..{b} of axis {axis} empty"
+                )))
+            }
+            1 => covering.pop().expect("one tile"),
+            _ => CudaTensor::lincomb(&covering.iter().map(|t| (1.0, t)).collect::<Vec<_>>())?,
+        };
+        segments.push(sum);
+    }
+    if segments.len() == 1 {
+        return Ok(segments.pop().expect("one segment"));
+    }
+    CudaTensor::cat(&segments.iter().collect::<Vec<_>>(), axis)
 }
 
 #[cfg(test)]
@@ -913,6 +1154,95 @@ mod tests {
                     "chunk {chunk} value {i}: {a} vs {b}"
                 );
             }
+        }
+    }
+
+    /// Tiled decode against a loop over the same plan: each tile decoded on
+    /// its own, weighted by its time·height·width masks and summed into place.
+    #[test]
+    fn tiled_decode_blends_independent_tile_decodes() {
+        use fastvideo_models::ltx2::tiling::{DimSize, TileSizeConfig};
+        let cfg = tiny();
+        let dec = VideoDecoder::load(&weights(), &cfg).unwrap();
+        assert_eq!(dec.scale(), [8, 16, 16]);
+        let (f, h, w) = (3usize, 4usize, 4usize);
+        let data: Vec<f32> = (0..4 * f * h * w)
+            .map(|i| (i as f32 * 0.37).sin())
+            .collect();
+        let z = CudaTensor::from_vec(data, vec![1, 4, f, h, w]).unwrap();
+        // 2-latent tiles overlapping by one on every axis.
+        let tiles = TileSizeConfig {
+            frames: DimSize::new(16, 8),
+            height: DimSize::new(32, 16),
+            width: DimSize::new(32, 16),
+        };
+        let plan = DecodePlan::new([f, h, w], &tiles, dec.scale()).unwrap();
+        assert!(plan.time.len() > 1 && plan.height.len() > 1 && plan.width.len() > 1);
+        let [of, oh, ow] = plan.out;
+        let mut want = vec![0f64; of * 3 * oh * ow];
+        for tt in &plan.time {
+            for ht in &plan.height {
+                for wt in &plan.width {
+                    let sub = z
+                        .narrow(2, tt.latent.start, tt.latent.len())
+                        .unwrap()
+                        .narrow(3, ht.latent.start, ht.latent.len())
+                        .unwrap()
+                        .narrow(4, wt.latent.start, wt.latent.len())
+                        .unwrap();
+                    let y = dec.decode(&sub).unwrap();
+                    let y = y.host_cow().unwrap();
+                    let (tf, th, tw) = (tt.out.len(), ht.out.len(), wt.out.len());
+                    let m = |m: &Option<Vec<f32>>, i: usize| m.as_ref().map_or(1.0, |m| m[i]);
+                    for c in 0..3 {
+                        for a in 0..tf {
+                            for b in 0..th {
+                                for d in 0..tw {
+                                    let v = f64::from(y[((c * tf + a) * th + b) * tw + d])
+                                        * f64::from(m(&tt.mask, a))
+                                        * f64::from(m(&ht.mask, b))
+                                        * f64::from(m(&wt.mask, d));
+                                    let (fa, hb, wd) =
+                                        (tt.out.start + a, ht.out.start + b, wt.out.start + d);
+                                    want[((fa * 3 + c) * oh + hb) * ow + wd] += v;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        let mut got = vec![0f32; want.len()];
+        let mut next = 0usize;
+        let n = dec
+            .decode_tiled(&z, &tiles, &mut |offset, frames| {
+                assert_eq!(offset, next, "frames arrive in order");
+                assert_eq!(frames.shape[1..], [3, oh, ow]);
+                let host = frames.host_cow()?;
+                got[offset * 3 * oh * ow..offset * 3 * oh * ow + host.len()].copy_from_slice(&host);
+                next += frames.shape[0];
+                Ok(())
+            })
+            .unwrap();
+        assert_eq!(n, of);
+        // Tiles and blended frames are bf16 in the reference: compare at that grain.
+        for (i, (a, b)) in got.iter().zip(&want).enumerate() {
+            assert!(
+                (f64::from(*a) - b).abs() < 2e-2 * (1.0 + b.abs()),
+                "tiled[{i}]: {a} vs {b}"
+            );
+        }
+        // One tile covering everything is the plain decode (rounded to bf16).
+        let whole = TileSizeConfig::default();
+        let mut one = Vec::new();
+        dec.decode_tiled(&z, &whole, &mut |_, frames| {
+            one.extend_from_slice(&frames.host_cow()?);
+            Ok(())
+        })
+        .unwrap();
+        let plain = dec.decode(&z).unwrap().permute(&[0, 2, 1, 3, 4]).unwrap();
+        for (a, b) in one.iter().zip(plain.host_cow().unwrap().iter()) {
+            assert_eq!(*a, half::bf16::from_f32(*b).to_f32());
         }
     }
 

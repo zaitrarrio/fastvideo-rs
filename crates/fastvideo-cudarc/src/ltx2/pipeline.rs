@@ -1,28 +1,35 @@
-//! LTX-2 distilled text → audio + video, stage 1: eight Euler steps on a fixed
-//! sigma list, one joint DiT forward per step, no guidance of any kind.
+//! LTX-2 text → audio + video: one or two denoise stages, then the decoders.
 //!
 //! The order of work is dictated by memory and by what the muxer needs:
 //!
-//! 1. **Text.** Gemma-3-12B streams through the device one layer at a time and
-//!    is gone before anything else loads; the connectors (2.9 GB) are loaded,
-//!    used once and dropped. What remains is two `[1, 1024, 3840]` contexts.
-//! 2. **Denoise.** The DiT (37.8 GB bf16) loads, lifts the contexts to the
-//!    stream widths once, and runs the eight steps. Latents and the Euler
-//!    update are float32, as in the reference.
+//! 1. **Text.** Gemma (Gemma-3-12B on 2.0 / 2.3, Gemma-4-12B on 2.5) streams
+//!    through the device one layer at a time and is gone before anything else
+//!    loads; the connectors are loaded, used once and dropped. What remains is
+//!    one context per stream.
+//! 2. **Denoise.** The DiT loads, lifts the contexts to the stream widths once,
+//!    and runs the sampler. On the diffusers-based lines (2.0 / 2.3) latents and
+//!    updates are float32. On LTX-2.5 (`ltx_core`) the latent state is bf16
+//!    between updates, as the reference stores it ([`LatentState::Bf16`]):
+//!    stage 1 is the ancestral sampler (`DistilledPipeline`), stage 2 three
+//!    deterministic Euler updates, both one forward per step and unguided.
 //! 3. **Decode, audio first.** The audio VAE and vocoder take milliseconds, so
 //!    the WAV exists before the first video frame does — which is what lets
 //!    ffmpeg be started with the track as an input and then be fed frames as
-//!    the video VAE streams them, instead of muxing in a second pass.
+//!    the video VAE streams them, instead of muxing in a second pass. LTX-2.5
+//!    decodes the video in the reference's blended tiles
+//!    ([`VideoDecoder::decode_tiled`]).
 //!
-//! The reference round-trips each velocity through `x0` and back before the
-//! Euler update even with guidance off (`pipeline_ltx2.py:1466-1467`); that is
-//! the identity up to one float32 rounding and is not reproduced.
+//! The diffusers reference round-trips each velocity through `x0` and back
+//! before the Euler update even with guidance off (`pipeline_ltx2.py:1466-1467`);
+//! in float32 that is the identity up to one rounding and is not reproduced. In
+//! bf16 (`ltx_core`) it is not the identity, and [`euler_update`] does it.
 //! See docs/ports/ltx2.md §a, §f.
 
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
-use fastvideo_models::ltx2::config::{Ltx2Config, Ltx2ModelVersion};
+use fastvideo_models::ltx2::config::{Ltx2Config, Ltx2ModelVersion, Ltx2TextNorm};
+use fastvideo_models::ltx2::tiling::TileSizeConfig;
 use fastvideo_models::ltx2::{AncestralOpts, Ltx2Schedule};
 use rand::{Rng, SeedableRng};
 use rand_distr::StandardNormal;
@@ -245,34 +252,271 @@ pub struct Ltx2Output {
     pub timings: Ltx2Timings,
 }
 
-/// Seeded float32 `N(0, 1)` latents, already packed for the DiT: video
-/// `[1, F·H·W, 128]` drawn first, then audio `[1, L, 128]`, from one generator
-/// — the order the reference pipeline draws them in. (Its draws come from
-/// torch's generator; ours cannot reproduce those bits, only the contract.)
+/// One seeded Gaussian stream, standing in for one `torch.Generator`.
+///
+/// **Choice.** The references draw with torch's CUDA Philox generator
+/// (`torch.randn(..., generator=g)`), whose bits depend on the launch geometry
+/// torch picks for the device; no stream here can reproduce them, host or
+/// device. What *can* be reproduced is the contract: which generator each
+/// draw comes from, its seed, the order of draws, their shapes and their
+/// dtype. So the draws stay on a seeded host generator (`StdRng`, portable and
+/// testable without a GPU), are rounded to bf16 when the reference draws in
+/// bf16, and each call — one per sampler step, video and audio together — is
+/// written into one pinned buffer and uploaded with a single copy.
+pub struct NoiseStream {
+    rng: rand::rngs::StdRng,
+    bf16: bool,
+    #[cfg(feature = "cuda")]
+    pinned: Option<cudarc::driver::PinnedHostSlice<f32>>,
+}
+
+impl NoiseStream {
+    /// `torch.Generator().manual_seed(seed)`; `bf16` rounds every draw the way
+    /// `torch.randn(..., dtype=torch.bfloat16)` stores it.
+    pub fn new(seed: u64, bf16: bool) -> Self {
+        Self {
+            rng: rand::rngs::StdRng::seed_from_u64(seed),
+            bf16,
+            #[cfg(feature = "cuda")]
+            pinned: None,
+        }
+    }
+
+    fn fill(rng: &mut rand::rngs::StdRng, bf16: bool, out: &mut [f32]) {
+        for v in out {
+            let x = rng.sample::<f32, _>(StandardNormal);
+            *v = if bf16 {
+                fastvideo_models::ltx2::schedule::bf16_round(x)
+            } else {
+                x
+            };
+        }
+    }
+
+    /// One `N(0, 1)` tensor per shape, drawn in order from the stream.
+    pub fn draw(&mut self, shapes: &[&[usize]]) -> Result<Vec<CudaTensor>> {
+        let sizes: Vec<usize> = shapes.iter().map(|s| s.iter().product()).collect();
+        let total: usize = sizes.iter().sum();
+        let split = |flat: CudaTensor| -> Result<Vec<CudaTensor>> {
+            let mut at = 0usize;
+            shapes
+                .iter()
+                .zip(&sizes)
+                .map(|(shape, &n)| {
+                    let t = flat.narrow(0, at, n)?.reshape(shape.to_vec())?;
+                    at += n;
+                    Ok(t)
+                })
+                .collect()
+        };
+        #[cfg(feature = "cuda")]
+        if total > 0 && crate::wan::stats::device_expected() {
+            if let Some(dev) = crate::wan::device::global_device() {
+                if self.ensure_pinned(&dev, total) {
+                    let flat = self
+                        .upload_pinned(&dev, total)
+                        .map_err(|e| err(format!("ltx2 noise: upload of {total} draws: {e}")))?;
+                    return split(CudaTensor::from_device_slice(flat, vec![total])?);
+                }
+            }
+        }
+        let mut host = vec![0f32; total];
+        Self::fill(&mut self.rng, self.bf16, &mut host);
+        split(CudaTensor::from_vec(host, vec![total])?)
+    }
+
+    /// A pinned host buffer of `total` floats; `false` (pageable fallback,
+    /// logged) when the driver will not pin one. Draws nothing.
+    #[cfg(feature = "cuda")]
+    fn ensure_pinned(
+        &mut self,
+        dev: &std::sync::Arc<crate::wan::device::DeviceContext>,
+        total: usize,
+    ) -> bool {
+        if self.pinned.as_ref().map(|p| p.len()) == Some(total) {
+            return true;
+        }
+        self.pinned = None;
+        // Every element is written before the copy reads it.
+        match unsafe { dev.ctx.alloc_pinned::<f32>(total) } {
+            Ok(p) => {
+                self.pinned = Some(p);
+                true
+            }
+            Err(e) => {
+                crate::wan::log::info(format_args!(
+                    "ltx2 noise: no pinned buffer of {total} floats ({e}); pageable upload"
+                ));
+                false
+            }
+        }
+    }
+
+    #[cfg(feature = "cuda")]
+    fn upload_pinned(
+        &mut self,
+        dev: &std::sync::Arc<crate::wan::device::DeviceContext>,
+        total: usize,
+    ) -> std::result::Result<cudarc::driver::CudaSlice<f32>, cudarc::driver::DriverError> {
+        let pinned = self.pinned.as_mut().expect("pinned noise buffer");
+        // Waits for the previous upload from this buffer before overwriting it.
+        Self::fill(&mut self.rng, self.bf16, pinned.as_mut_slice()?);
+        let mut flat = unsafe { dev.stream.alloc::<f32>(total) }?;
+        dev.stream.memcpy_htod(&*pinned, &mut flat)?;
+        crate::wan::stats::record_h2d(total);
+        Ok(flat)
+    }
+}
+
+/// How the sampler stores its latent state between updates.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LatentState {
+    /// float32 throughout (the diffusers-based LTX-2.0 / 2.3 lines).
+    F32,
+    /// `ltx_core` (LTX-2.5): the state is a bf16 tensor; each update is
+    /// computed in float32 and stored back as bf16
+    /// (`diffusion_steps.py:39,106`, `samplers.py:546,558`), the model's
+    /// velocity and `x0` are bf16 (`utils.py:36,52`), and noise is drawn in bf16
+    /// (`noisers.py:21-27`, `samplers.py:155-157`).
+    Bf16,
+}
+
+impl LatentState {
+    pub fn for_version(version: Ltx2ModelVersion) -> Self {
+        if version == Ltx2ModelVersion::V25 {
+            Self::Bf16
+        } else {
+            Self::F32
+        }
+    }
+
+    /// Round to the state's dtype (a no-op for f32).
+    pub fn store(self, t: CudaTensor) -> Result<CudaTensor> {
+        match self {
+            Self::F32 => Ok(t),
+            Self::Bf16 => Ok(t.quantize_bf16()?.to_f32_act()?),
+        }
+    }
+}
+
+/// One deterministic Euler update from `σ_i` to `σ_{i+1}`.
+///
+/// `F32`: `x + (σ_{i+1} − σ_i)·v`. `Bf16`: the `ltx_core` round trip —
+/// `X0Model` turns the (bf16) velocity into `x0 = bf16(x − σ·v)`
+/// (`to_denoised`, `ltx_core/utils.py:39-52`), `EulerDiffusionStep` turns it
+/// back into `v' = bf16((x − x0)/σ)` (`to_velocity`, `utils.py:21-36`) and
+/// stores `bf16(x + v'·dt)` with `dt` the float32 sigma difference
+/// (`diffusion_steps.py:31-39`). [`fastvideo_models::ltx2::schedule::ltx_core_euler_step`]
+/// is the element-wise host reference.
+pub fn euler_update(
+    x: &CudaTensor,
+    v: &CudaTensor,
+    schedule: &Ltx2Schedule,
+    i: usize,
+    state: LatentState,
+) -> Result<CudaTensor> {
+    match state {
+        LatentState::F32 => Ok(CudaTensor::lincomb(&[
+            (1.0, x),
+            (schedule.dt(i) as f32, v),
+        ])?),
+        LatentState::Bf16 => {
+            let (sigma, next) = (schedule.sigmas[i] as f32, schedule.sigmas[i + 1] as f32);
+            let v = state.store(v.clone())?;
+            let x0 = state.store(CudaTensor::lincomb(&[(1.0, x), (-sigma, &v)])?)?;
+            let v = state.store(
+                CudaTensor::lincomb(&[(1.0, x), (-1.0, &x0)])?.try_mul_scalar(1.0 / sigma)?,
+            )?;
+            state.store(CudaTensor::lincomb(&[(1.0, x), (next - sigma, &v)])?)
+        }
+    }
+}
+
+/// One `EulerAncestralDiffusionStep` (`diffusion_steps.py:67-106`) with float32
+/// coefficients ([`fastvideo_models::ltx2::schedule::ancestral_coeffs_f32`]):
+/// `x0 = x − σ·v`, then `r·x + (1−r)·x0`, then `(α'/α_down)·x + s·c·ε`; the
+/// terminal step returns `x0`. `noise` must be given when `eta > 0` and
+/// `σ_{i+1} > 0`.
+pub fn ancestral_update(
+    x: &CudaTensor,
+    v: &CudaTensor,
+    sigma: f64,
+    sigma_next: f64,
+    opts: AncestralOpts,
+    noise: Option<&CudaTensor>,
+    state: LatentState,
+) -> Result<CudaTensor> {
+    let v = state.store(v.clone())?;
+    let x0 = state.store(CudaTensor::lincomb(&[(1.0, x), (-(sigma as f32), &v)])?)?;
+    let Some(c) = fastvideo_models::ltx2::schedule::ancestral_coeffs_f32(
+        sigma as f32,
+        sigma_next as f32,
+        opts.eta as f32,
+        opts.s_noise as f32,
+    ) else {
+        return Ok(x0);
+    };
+    let stepped = CudaTensor::lincomb(&[(c.sample, x), (c.denoised, &x0)])?;
+    if opts.eta <= 0.0 {
+        return state.store(stepped);
+    }
+    let noise = noise.ok_or_else(|| err("ltx2 ancestral: eta > 0 needs a noise draw"))?;
+    state.store(CudaTensor::lincomb(&[
+        (c.factor, &stepped),
+        (c.noise, noise),
+    ])?)
+}
+
+/// `GaussianNoiser` at `noise_scale = σ` (`ltx_core/components/noisers.py:29-37`):
+/// `torch.lerp(x, ε, σ)` in float32 — for `σ ≥ 0.5` ATen evaluates
+/// `ε − (ε − x)·(1 − σ)` — then the full-denoise mask (a no-op) and the store.
+pub fn renoise(
+    x: &CudaTensor,
+    noise: &CudaTensor,
+    sigma: f32,
+    state: LatentState,
+) -> Result<CudaTensor> {
+    let out = if sigma >= 0.5 {
+        let diff = CudaTensor::lincomb(&[(1.0, noise), (-1.0, x)])?;
+        CudaTensor::lincomb(&[(1.0, noise), (-(1.0 - sigma), &diff)])?
+    } else {
+        let diff = CudaTensor::lincomb(&[(1.0, noise), (-1.0, x)])?;
+        CudaTensor::lincomb(&[(1.0, x), (sigma, &diff)])?
+    };
+    state.store(out)
+}
+
+/// Seeded `N(0, 1)` latents, already packed for the DiT: video
+/// `[1, F·H·W, 128]` drawn first, then audio `[1, L, 128]`, from one stream —
+/// the order every reference pipeline draws them in.
+///
+/// `ltx_core` (LTX-2.5, [`LatentState::Bf16`]) draws in the *patchified*
+/// shapes (`GaussianNoiser` on the patchified state, `blocks.py:214-230`), so
+/// token-major. The diffusers pipelines (2.0 / 2.3) draw `[1, C, F, H, W]` and
+/// `[1, C, L, M]` and pack. The stream keeps going: LTX-2.5 draws its stage-2
+/// renoise from the same generator (`distilled.py:217-218,294-313`).
 pub fn initial_noise(
     cfg: &Ltx2Config,
     grid: [usize; 3],
     audio_tokens: usize,
-    seed: u64,
+    noise: &mut NoiseStream,
 ) -> Result<(CudaTensor, CudaTensor)> {
-    let mut rng = rand::rngs::StdRng::seed_from_u64(seed);
-    let mut draw = |n: usize| -> Vec<f32> {
-        (0..n)
-            .map(|_| rng.sample::<f32, _>(StandardNormal))
-            .collect()
-    };
     let c = cfg.transformer.in_channels;
     let [f, h, w] = grid;
-    let video = CudaTensor::from_vec(draw(c * f * h * w), vec![1, c, f, h, w])?;
     let (ac, bins) = (
         cfg.audio_vae.latent_channels,
         cfg.audio_vae.latent_mel_bins(),
     );
+    if LatentState::for_version(cfg.version) == LatentState::Bf16 {
+        let mut draws = noise.draw(&[&[1, f * h * w, c], &[1, audio_tokens, ac * bins]])?;
+        let audio = draws.pop().expect("audio noise");
+        let video = draws.pop().expect("video noise");
+        return Ok((video, audio));
+    }
+    let mut draws = noise.draw(&[&[1, c, f, h, w], &[1, ac, audio_tokens, bins]])?;
+    let audio = draws.pop().expect("audio noise");
+    let video = draws.pop().expect("video noise");
     // [1, C, L, M] → [1, L, C·M]: feature index = channel · bins + bin.
-    let audio = CudaTensor::from_vec(
-        draw(ac * audio_tokens * bins),
-        vec![1, ac, audio_tokens, bins],
-    )?;
     let audio = audio
         .permute(&[0, 2, 1, 3])?
         .reshape(vec![1, audio_tokens, ac * bins])?;
@@ -283,8 +527,38 @@ pub fn initial_noise(
 pub type StepObserver<'a> = &'a mut dyn FnMut(usize, &CudaTensor, &CudaTensor, f64) -> Result<()>;
 
 /// The distilled Euler loop: `x ← x + (σ_{i+1} - σ_i) · v(x, 1000·σ_i)` for both
-/// streams with one forward per step. Inputs are packed latents at `σ_0`.
+/// streams with one forward per step, float32 state. Inputs are packed latents
+/// at `σ_0`.
+#[allow(clippy::too_many_arguments)]
 pub fn denoise(
+    model: &Ltx2Transformer,
+    text: &TextConditioning,
+    ropes: &Ropes,
+    schedule: &Ltx2Schedule,
+    video: CudaTensor,
+    audio: CudaTensor,
+    observer: Option<StepObserver<'_>>,
+    stage2: Ltx2Stage2Attn,
+) -> Result<(CudaTensor, CudaTensor)> {
+    denoise_with(
+        model,
+        text,
+        ropes,
+        schedule,
+        video,
+        audio,
+        observer,
+        stage2,
+        LatentState::F32,
+    )
+}
+
+/// [`denoise`] with the state's dtype: one unguided forward per step
+/// (`SimpleDenoiser`, `ltx_pipelines/utils/denoisers.py`) and [`euler_update`]
+/// (`euler_denoising_loop`, `samplers.py:39-81`). This is LTX-2.5's stage 2
+/// and the refiners' loop.
+#[allow(clippy::too_many_arguments)]
+pub fn denoise_with(
     model: &Ltx2Transformer,
     text: &TextConditioning,
     ropes: &Ropes,
@@ -293,6 +567,7 @@ pub fn denoise(
     mut audio: CudaTensor,
     mut observer: Option<StepObserver<'_>>,
     stage2: Ltx2Stage2Attn,
+    state: LatentState,
 ) -> Result<(CudaTensor, CudaTensor)> {
     for i in 0..schedule.num_steps() {
         let timer = Instant::now();
@@ -313,9 +588,8 @@ pub fn denoise(
             model.stage1_store(&out.0, &out.1);
             out
         };
-        let dt = schedule.dt(i) as f32;
-        video = CudaTensor::lincomb(&[(1.0, &video), (dt, &v_video)])?;
-        audio = CudaTensor::lincomb(&[(1.0, &audio), (dt, &v_audio)])?;
+        video = euler_update(&video, &v_video, schedule, i, state)?;
+        audio = euler_update(&audio, &v_audio, schedule, i, state)?;
         sync()?;
         let secs = timer.elapsed().as_secs_f64();
         crate::wan::log::info(format_args!(
@@ -535,57 +809,13 @@ pub fn denoise_res2s(
     Ok((video, audio))
 }
 
-fn apply_ancestral(
-    sample: &CudaTensor,
-    velocity: &CudaTensor,
-    sigma: f64,
-    sigma_next: f64,
-    opts: AncestralOpts,
-    rng: &mut rand::rngs::StdRng,
-) -> Result<CudaTensor> {
-    let denoised = CudaTensor::lincomb(&[(1.0, sample), (-(sigma as f32), velocity)])?;
-    if sigma_next == 0.0 {
-        return Ok(denoised);
-    }
-    let downstep_ratio = 1.0 + (sigma_next / sigma - 1.0) * opts.eta;
-    let sigma_down = sigma_next * downstep_ratio;
-    let scale = (sigma_down / sigma) as f32;
-    let blend = 1.0 - scale;
-    let mut x = CudaTensor::lincomb(&[(scale, sample), (blend, &denoised)])?;
-    if opts.eta > 0.0 {
-        let noise = CudaTensor::from_vec(
-            (0..sample.numel())
-                .map(|_| rng.sample::<f32, _>(StandardNormal))
-                .collect(),
-            sample.shape.clone(),
-        )?;
-        let alpha_next = 1.0 - sigma_next;
-        let alpha_down = 1.0 - sigma_down;
-        let renoise_coeff = (sigma_next * sigma_next
-            - sigma_down * sigma_down * alpha_next * alpha_next / (alpha_down * alpha_down))
-            .max(0.0)
-            .sqrt();
-        let factor = (alpha_next / alpha_down) as f32;
-        let noise_scale = (opts.s_noise * renoise_coeff) as f32;
-        x = CudaTensor::lincomb(&[(factor, &x), (noise_scale, &noise)])?;
-    }
-    Ok(x)
-}
-
-/// `x ← σ·ε + (1−σ)·x` — stage-2 entry renoise (video and audio).
-fn renoise(x: &CudaTensor, sigma: f32, rng: &mut rand::rngs::StdRng) -> Result<CudaTensor> {
-    let n = x.numel();
-    let noise = CudaTensor::from_vec(
-        (0..n)
-            .map(|_| rng.sample::<f32, _>(StandardNormal))
-            .collect(),
-        x.shape.clone(),
-    )?;
-    Ok(CudaTensor::lincomb(&[(sigma, &noise), (1.0 - sigma, x)])?)
-}
-
-/// Distilled ancestral loop (LTX-2.5): velocity → `x0`, then
-/// `EulerAncestralDiffusionStep` at each sigma.
+/// Distilled ancestral loop (LTX-2.5 stage 1: `euler_ancestral_denoising_loop`,
+/// `ltx_pipelines/utils/samplers.py:488-563`): one unguided forward per step,
+/// then [`ancestral_update`] on each stream. The loop's noise has a generator of
+/// its own, seeded `opts.noise_seed` (`seed + 10000`, `distilled.py:62-85,
+/// 168-185`), drawn video then audio on every non-terminal step, in the
+/// state's dtype.
+#[allow(clippy::too_many_arguments)]
 pub fn denoise_ancestral(
     model: &Ltx2Transformer,
     text: &TextConditioning,
@@ -596,8 +826,9 @@ pub fn denoise_ancestral(
     opts: AncestralOpts,
     mut observer: Option<StepObserver<'_>>,
     stage2: Ltx2Stage2Attn,
+    state: LatentState,
 ) -> Result<(CudaTensor, CudaTensor)> {
-    let mut rng = rand::rngs::StdRng::seed_from_u64(opts.noise_seed);
+    let mut noise = NoiseStream::new(opts.noise_seed, state == LatentState::Bf16);
     for i in 0..schedule.num_steps() {
         let timer = Instant::now();
         let sigma = schedule.sigmas[i];
@@ -619,8 +850,30 @@ pub fn denoise_ancestral(
             model.stage1_store(&out.0, &out.1);
             out
         };
-        video = apply_ancestral(&video, &v_video, sigma, sigma_next, opts, &mut rng)?;
-        audio = apply_ancestral(&audio, &v_audio, sigma, sigma_next, opts, &mut rng)?;
+        // One draw (one upload) per step: video, then audio.
+        let draws = if opts.eta > 0.0 && sigma_next != 0.0 {
+            noise.draw(&[&video.shape, &audio.shape])?
+        } else {
+            Vec::new()
+        };
+        video = ancestral_update(
+            &video,
+            &v_video,
+            sigma,
+            sigma_next,
+            opts,
+            draws.first(),
+            state,
+        )?;
+        audio = ancestral_update(
+            &audio,
+            &v_audio,
+            sigma,
+            sigma_next,
+            opts,
+            draws.get(1),
+            state,
+        )?;
         sync()?;
         let secs = timer.elapsed().as_secs_f64();
         crate::wan::log::info(format_args!(
@@ -682,7 +935,10 @@ pub struct Written {
 
 /// Final packed latents → `audio.wav`, `frame-NNN.png` and (when `mp4`)
 /// `output.mp4` in `dir`. Audio is decoded and written first so the muxer can
-/// take it as an input while frames are still arriving.
+/// take it as an input while frames are still arriving. `tiling`: the
+/// reference's blended tile decode ([`VideoDecoder::decode_tiled`]); `None`
+/// decodes the whole clip exactly, streamed in time.
+#[allow(clippy::too_many_arguments)]
 pub fn decode_and_write(
     dec: &Decoders,
     video: &CudaTensor,
@@ -691,6 +947,7 @@ pub fn decode_and_write(
     dir: &Path,
     frame_rate: f64,
     mp4: bool,
+    tiling: Option<&TileSizeConfig>,
 ) -> Result<Written> {
     std::fs::create_dir_all(dir).map_err(|e| err(format!("{}: {e}", dir.display())))?;
     let timer = Instant::now();
@@ -725,9 +982,11 @@ pub fn decode_and_write(
             }
         }
     };
-    let decoded = dec
-        .video
-        .decode_streaming(&unpack_video(video, grid)?, &mut sink);
+    let latents = unpack_video(video, grid)?;
+    let decoded = match tiling {
+        Some(tiles) => dec.video.decode_tiled(&latents, tiles, &mut sink),
+        None => dec.video.decode_streaming(&latents, &mut sink),
+    };
     match (decoded, sink_err) {
         (_, Some(e)) => return Err(e),
         (Err(e), None) => return Err(e.into()),
@@ -972,11 +1231,15 @@ impl TextEncoder {
         dc.for_bf16_reference()
     }
 
+    /// Part of the cache key: the encoder *and* the feature normalisation, so a
+    /// context normalised one way is never served for the other.
     fn text_encoder_kind(cfg: &Ltx2Config) -> &'static [u8] {
-        if cfg.gemma4.is_some() || cfg.version == Ltx2ModelVersion::V25 {
-            b"gemma4-12b"
-        } else {
-            b"gemma3-12b"
+        let gemma4 = cfg.gemma4.is_some() || cfg.version == Ltx2ModelVersion::V25;
+        match (gemma4, cfg.connectors.text_norm()) {
+            (true, Ltx2TextNorm::PerTokenRms) => b"gemma4-12b/per-token-rms",
+            (true, Ltx2TextNorm::MaskedMinMax) => b"gemma4-12b",
+            (false, Ltx2TextNorm::PerTokenRms) => b"gemma3-12b/per-token-rms",
+            (false, Ltx2TextNorm::MaskedMinMax) => b"gemma3-12b",
         }
     }
 
@@ -1241,22 +1504,60 @@ pub struct PipelineOptions {
     pub text_residency: TextResidency,
 }
 
-/// The models of a stage-1 run, loaded once and kept: the DiT (37.8 GB) and the
-/// three decoders (~3 GB). A second generation pays for text, denoise and
-/// decode only — and for text not even that when the prompt was seen before.
-/// `model` is `None` after generate-decode (DiT dropped for VRAM); the next
-/// generate reloads it from `dit`.
+/// What [`Ltx2Pipeline::generate`] can reproduce. LTX-2.5 generates only
+/// through `DistilledPipeline`, which has no guidance at all (`SimpleDenoiser`
+/// on both stages, `distilled.py:245-313`); the dev two-stage
+/// (`TI2VidTwoStages`) needs the multimodal CFG/STG/modality/rescale guider,
+/// which is not ported — plain CFG would silently be a different sampler.
+pub fn check_generate_contract(cfg: &Ltx2Config, guided: bool) -> Result<()> {
+    if cfg.version != Ltx2ModelVersion::V25 {
+        return Ok(());
+    }
+    if cfg.scheduler.use_dynamic_shifting {
+        return Err(err(
+            "ltx2: LTX-2.5 dev generation (TI2VidTwoStages, multimodal guider) is not ported; \
+the dev transformer runs only as the refiner",
+        ));
+    }
+    if guided {
+        return Err(err(
+            "ltx2: LTX-2.5 distilled is unguided (DistilledPipeline / SimpleDenoiser); \
+set --guidance-scale and --audio-guidance-scale to 1",
+        ));
+    }
+    Ok(())
+}
+
+/// A DiT path that names a distilled checkpoint (file, or the directory
+/// holding it). The refiners fuse their LoRA onto the *dev* transformer.
+fn names_distilled(path: &Path) -> bool {
+    let named = |p: Option<&Path>| {
+        p.and_then(Path::file_name).is_some_and(|n| {
+            n.to_string_lossy()
+                .to_ascii_lowercase()
+                .contains("distilled")
+        })
+    };
+    named(Some(path)) || named(path.parent())
+}
 
 fn release_dit_for_decode(model: &mut Option<Ltx2Transformer>, loaded_strength: &mut Option<f32>) {
     *model = None;
     *loaded_strength = None;
 }
+
+/// The models of a stage-1 run, loaded once and kept: the DiT (37.8 GB) and the
+/// three decoders (~3 GB). A second generation pays for text, denoise and
+/// decode only — and for text not even that when the prompt was seen before.
+/// `model` is `None` after generate-decode (DiT dropped for VRAM); the next
+/// generate reloads it from `dit`.
 pub struct Ltx2Pipeline {
     cfg: Ltx2Config,
     dit: PathBuf,
     weights: PathBuf,
     model: Option<Ltx2Transformer>,
     /// Distilled LoRA file, when one is next to the weights or `FASTVIDEO_LTX2_LORA` points at it.
+    /// Only resolved for a dev (dynamic-shift) checkpoint; distilled ones never fuse.
     lora: Option<PathBuf>,
     /// Strength the resident DiT was fused at. `Some(0.0)` is the unfused base.
     loaded_strength: Option<f32>,
@@ -1269,7 +1570,14 @@ pub struct Ltx2Pipeline {
 impl Ltx2Pipeline {
     pub fn load(paths: &Ltx2Paths, cfg: &Ltx2Config, options: &PipelineOptions) -> Result<Self> {
         let timer = Instant::now();
-        let lora = super::lora::resolve(&paths.weights, &paths.dit, cfg.version)?;
+        // A distilled checkpoint already carries the adapter: the RTX5090
+        // distilled two-stage (`run_ltx25_gpu.sh`) passes no LoRA. Only a dev
+        // transformer fuses one (two-stage stage 2, the refiners).
+        let lora = if cfg.scheduler.use_dynamic_shifting {
+            super::lora::resolve(&paths.weights, &paths.dit, cfg.version)?
+        } else {
+            None
+        };
         let model = if lora.is_none() {
             let map = open_distilled(&paths.dit, "transformer")?;
             Some(Ltx2Transformer::load(
@@ -1383,18 +1691,24 @@ impl Ltx2Pipeline {
         }
     }
 
-    fn arm_requested(&self) {
+    /// Turn on the opt-in stage-1 cache / prune the environment asks for, only
+    /// where a reference profile runs them; anywhere else they would change the
+    /// output of a profile that has none, so the request is refused.
+    fn arm_requested(&self, distilled: bool, guided: bool) -> Result<()> {
         let Some(model) = self.model.as_ref() else {
-            return;
+            return Ok(());
         };
+        let version = self.cfg.version;
         if fastvideo_models::ltx2::fbcache::requested(
             std::env::var("FASTVIDEO_LTX2_FBCACHE").ok().as_deref(),
         ) {
+            fastvideo_models::ltx2::fbcache::scope(version, distilled, guided, 1).map_err(err)?;
             model.enable_fbcache();
         }
         if fastvideo_models::ltx2::pisa::stage1_cache_requested(
             std::env::var("FASTVIDEO_LTX2_STAGE1_CACHE").ok().as_deref(),
         ) {
+            fastvideo_models::ltx2::pisa::stage1_cache_scope(version).map_err(err)?;
             model.enable_stage1_cache();
         }
         if fastvideo_models::ltx2::pisa::midpoint_prune_requested(
@@ -1402,8 +1716,10 @@ impl Ltx2Pipeline {
                 .ok()
                 .as_deref(),
         ) {
+            fastvideo_models::ltx2::pisa::midpoint_prune_scope(version).map_err(err)?;
             model.enable_midpoint_prune();
         }
+        Ok(())
     }
 
     /// One clip. `use_text_cache = false` bypasses the conditioning cache for
@@ -1416,6 +1732,8 @@ impl Ltx2Pipeline {
     ) -> Result<Ltx2Output> {
         req.validate()?;
         let cfg = self.cfg.clone();
+        let use_cfg = req.guidance_scale != 1.0 || req.audio_guidance_scale != 1.0;
+        check_generate_contract(&cfg, use_cfg)?;
         if fastvideo_models::ltx2::hq::requested(std::env::var("FASTVIDEO_LTX2_HQ").ok().as_deref())
             || (req.two_stage
                 && req.stage1_steps() == fastvideo_models::ltx2::hq::STAGE1_STEPS
@@ -1475,7 +1793,6 @@ impl Ltx2Pipeline {
 
         let (contexts, text_report) = self.text.encode(&req.prompt, use_text_cache)?;
         timings.text_s = text_report.seconds;
-        let use_cfg = req.guidance_scale != 1.0 || req.audio_guidance_scale != 1.0;
         let uncond_contexts = if use_cfg {
             let (c, rep) = self.text.encode(&req.negative_prompt, use_text_cache)?;
             timings.text_s += rep.seconds;
@@ -1490,7 +1807,9 @@ impl Ltx2Pipeline {
         let (s1, s2) = self.stage_lora_strengths(req.two_stage);
         let timer = Instant::now();
         self.dit_for(s1)?;
-        self.arm_requested();
+        let distilled = !cfg.scheduler.use_dynamic_shifting;
+        self.arm_requested(distilled, use_cfg)?;
+        let state = LatentState::for_version(cfg.version);
         let mut text = {
             let model = self.model.as_ref().expect("dit");
             model.project_text(&contexts.video, &contexts.audio)?
@@ -1502,11 +1821,16 @@ impl Ltx2Pipeline {
             }
             None => None,
         };
+        // Stage 2 is one unguided forward per step on every line
+        // (`distilled.py:294-313`, `ti2vid_two_stages.py:289-307`): only the
+        // conditional context is ever re-projected.
         let reproject = req.two_stage && s1 != s2;
         let mut kept_contexts = reproject.then_some(contexts);
-        let mut kept_uncond = reproject.then_some(uncond_contexts);
         let ropes = Ropes::new(&cfg.transformer, grid1, audio_tokens, req.frame_rate as f32)?;
-        let (mut video, audio) = initial_noise(&cfg, grid1, audio_tokens, req.seed)?;
+        // `generator = torch.Generator().manual_seed(seed)` (`distilled.py:217`):
+        // the stage-1 initial noise and, later, the stage-2 renoise.
+        let mut noise = NoiseStream::new(req.seed, state == LatentState::Bf16);
+        let (mut video, audio) = initial_noise(&cfg, grid1, audio_tokens, &mut noise)?;
         if let Some(ref image_path) = req.image_path {
             let spat = cfg.transformer.vae_scale_factors[1];
             let vae_dir = self.weights.join("vae");
@@ -1538,7 +1862,9 @@ impl Ltx2Pipeline {
         } else {
             Ltx2Schedule::distilled_subset(req.stage1_steps()).map_err(err)?
         };
-        let ancestral = cfg.version == Ltx2ModelVersion::V25;
+        // `DistilledPipeline` samples stage 1 ancestrally from 2.5 on
+        // (`distilled.py:62-85`); the dev line never does.
+        let ancestral = cfg.version == Ltx2ModelVersion::V25 && distilled;
         let res2s = cfg.version == Ltx2ModelVersion::V23;
         let (mut video, mut audio) = {
             let model = self.model.as_ref().expect("ensure_dit");
@@ -1564,6 +1890,7 @@ impl Ltx2Pipeline {
                     },
                     Some(&mut record),
                     Ltx2Stage2Attn::Off,
+                    state,
                 )?
             } else if res2s {
                 denoise_res2s(
@@ -1619,7 +1946,7 @@ impl Ltx2Pipeline {
             let denorm = self.decoders.video.denormalize(&unpacked)?;
             let upsampled = up.forward(&denorm)?;
             let renorm = self.decoders.video.normalize(&upsampled)?;
-            video = pack_video(&renorm)?;
+            video = state.store(pack_video(&renorm)?)?;
             sync()?;
             timings.upsample_s = up_timer.elapsed().as_secs_f64();
             crate::wan::log::info(format_args!(
@@ -1642,28 +1969,27 @@ impl Ltx2Pipeline {
             self.dit_for(s2)?;
             if reproject {
                 let contexts = kept_contexts.take().expect("stage-2 text context");
-                let uncond_contexts = kept_uncond.take().expect("stage-2 uncond context");
                 text = {
                     let model = self.model.as_ref().expect("dit");
                     model.project_text(&contexts.video, &contexts.audio)?
                 };
-                text_uncond = match &uncond_contexts {
-                    Some(c) => {
-                        let model = self.model.as_ref().expect("dit");
-                        Some(model.project_text(&c.video, &c.audio)?)
-                    }
-                    None => None,
-                };
             }
+            drop(text_uncond.take());
             if let Some(model) = self.model.as_ref() {
+                // FBCache is a stage-1 cache only (GB200 `fullopt.toml`).
+                model.disarm_fbcache();
                 model.set_prune_active(true);
             }
             let schedule2 =
                 Ltx2Schedule::distilled_stage_2_steps(req.stage2_steps()).map_err(err)?;
             let sigma = schedule2.sigmas[0] as f32;
-            let mut rng = rand::rngs::StdRng::seed_from_u64(req.seed + 20_000);
-            video = renoise(&video, sigma, &mut rng)?;
-            audio = renoise(&audio, sigma, &mut rng)?;
+            // Stage-2 entry: video then audio re-noised to `σ_0` from the same
+            // generator as the initial noise (`distilled.py:294-313`).
+            let mut draws = noise.draw(&[&video.shape, &audio.shape])?;
+            let (noise_a, noise_v) = (draws.pop().expect("audio"), draws.pop().expect("video"));
+            video = renoise(&video, &noise_v, sigma, state)?;
+            audio = renoise(&audio, &noise_a, sigma, state)?;
+            drop((noise_v, noise_a));
 
             let s2_timer = Instant::now();
             let ropes2 = Ropes::new(
@@ -1683,33 +2009,21 @@ impl Ltx2Pipeline {
                             None => Ok(()),
                         }
                     };
-                if let Some(ref uncond) = text_uncond {
-                    denoise_cfg(
-                        model,
-                        &text,
-                        uncond,
-                        &ropes2,
-                        &schedule2,
-                        req.guidance_scale,
-                        req.audio_guidance_scale,
-                        video,
-                        audio,
-                        Some(&mut record2),
-                        req.stage2_attn(),
-                    )?
-                } else {
-                    denoise(
-                        model,
-                        &text,
-                        &ropes2,
-                        &schedule2,
-                        video,
-                        audio,
-                        Some(&mut record2),
-                        req.stage2_attn(),
-                    )?
-                }
+                denoise_with(
+                    model,
+                    &text,
+                    &ropes2,
+                    &schedule2,
+                    video,
+                    audio,
+                    Some(&mut record2),
+                    req.stage2_attn(),
+                    state,
+                )?
             };
+            if let Some(model) = self.model.as_ref() {
+                model.set_prune_active(false);
+            }
             video = v2;
             audio = a2;
             timings.stage2_s = s2_timer.elapsed().as_secs_f64();
@@ -1745,6 +2059,13 @@ impl Ltx2Pipeline {
                 req.seed + 40_000,
             )?
         } else {
+            // LTX-2.5 decodes with `AUTO_TILING` (Conv VAE: 768/64 long side,
+            // 80/24 frames; `helpers.py:60-97`); the diffusers lines decode whole.
+            let tiling = if cfg.version == Ltx2ModelVersion::V25 {
+                Some(TileSizeConfig::conv_auto(req.height, req.width).map_err(err)?)
+            } else {
+                None
+            };
             decode_and_write(
                 &self.decoders,
                 &video,
@@ -1753,6 +2074,7 @@ impl Ltx2Pipeline {
                 &req.output_dir,
                 req.frame_rate,
                 req.mp4,
+                tiling.as_ref(),
             )?
         };
         timings.decode_audio_s = written.decode_audio_s;
@@ -1832,24 +2154,51 @@ impl Ltx2Pipeline {
                 cfg.audio_vae.latent_mel_bins()
             )));
         }
-        let audio = pack_audio_latent(&conform_audio_time(&encoded, audio_tokens)?)?;
+        let state = LatentState::for_version(cfg.version);
+        // `encode_source_audio` conforms the AudioVAE latent in bf16
+        // (`Sol-H3-Spark/runtime/stage2.py:79-91`).
+        let audio = state.store(pack_audio_latent(&conform_audio_time(
+            &encoded,
+            audio_tokens,
+        )?)?)?;
         if audio.shape[2] != cfg.transformer.audio_in_channels {
             return Err(err(format!(
                 "ltx2 refine: packed audio {:?}, DiT wants {} features",
                 audio.shape, cfg.transformer.audio_in_channels
             )));
         }
-        let video = pack_video(video)?;
+        // The adapter's latent reaches the refiner as bf16 (`stage2.py:57-72`).
+        let video = state.store(pack_video(video)?)?;
+
+        // The refiners run the *dev* transformer with the distilled LoRA fused
+        // at 0.8 (`Sol-H3-Spark/runtime/stage2_ops/models.py:76-80`,
+        // `ltx2.5-refiner/GB200/refiner_head_cp.py:336-358`).
+        if !cfg.scheduler.use_dynamic_shifting {
+            return Err(err(
+                "ltx2 refine: the refiner runs the dev transformer config (ltx2_5_22b_dev), not the distilled one",
+            ));
+        }
+        if names_distilled(&self.dit) {
+            return Err(err(format!(
+                "ltx2 refine: {} names a distilled checkpoint; the refiner fuses the distilled LoRA onto ltx-2.5-22b-dev-transformer",
+                self.dit.display()
+            )));
+        }
+        if self.lora.is_none() {
+            return Err(err(
+                "ltx2 refine: the distilled LoRA (0.8) is required: set FASTVIDEO_LTX2_LORA or put ltx-2.5-22b-distilled-lora-450-bf16.safetensors beside the weights",
+            ));
+        }
+        let strength = fastvideo_models::ltx2::lora::REFINER_STRENGTH;
 
         let mut timings = Ltx2Timings::default();
         let (contexts, text_report) = self.text.encode(prompt, true)?;
         timings.text_s = text_report.seconds;
-        let (_, strength) = self.stage_lora_strengths(true);
         let schedule = Ltx2Schedule::distilled_stage_2_steps(3).map_err(err)?;
         crate::wan::log::info(format_args!(
-            "ltx2 refine: 3 deterministic steps {:?}, sol stage-2, {}, grid {:?}, {} audio tokens",
+            "ltx2 refine: 3 deterministic steps {:?}, sol stage-2, lora {strength} {}, grid {:?}, {} audio tokens",
             &schedule.sigmas,
-            self.lora_note(true),
+            self.lora.as_deref().map(Path::display).map(|d| d.to_string()).unwrap_or_default(),
             grid,
             audio_tokens
         ));
@@ -1859,14 +2208,22 @@ impl Ltx2Pipeline {
             model.project_text(&contexts.video, &contexts.audio)?
         };
         let sigma = schedule.sigmas[0] as f32;
-        let mut rng = rand::rngs::StdRng::seed_from_u64(seed + 20_000);
-        let video = renoise(&video, sigma, &mut rng)?;
-        let audio = renoise(&audio, sigma, &mut rng)?;
+        // One generator seeded with the request seed, video then audio
+        // (`official_compat_h3_refiner_diagnostic.py:313-342`).
+        let mut noise = NoiseStream::new(seed, state == LatentState::Bf16);
+        let mut draws = noise.draw(&[&video.shape, &audio.shape])?;
+        let (noise_a, noise_v) = (draws.pop().expect("audio"), draws.pop().expect("video"));
+        let video = renoise(&video, &noise_v, sigma, state)?;
+        let audio = renoise(&audio, &noise_a, sigma, state)?;
+        drop((noise_v, noise_a));
         let ropes = Ropes::new(&cfg.transformer, grid, audio_tokens, frame_rate as f32)?;
         let timer = Instant::now();
         let (video, _audio) = {
             let model = self.model.as_ref().expect("dit");
-            denoise(
+            // No stage-1 cache and no prune on the refiner.
+            model.disarm_fbcache();
+            model.set_prune_active(false);
+            denoise_with(
                 model,
                 &text,
                 &ropes,
@@ -1875,6 +2232,7 @@ impl Ltx2Pipeline {
                 audio,
                 None,
                 Ltx2Stage2Attn::Sol,
+                state,
             )?
         };
         timings.stage2_s = timer.elapsed().as_secs_f64();
@@ -1911,10 +2269,13 @@ impl Ltx2Pipeline {
                     }
                 }
             };
-        let decoded = self
-            .decoders
-            .video
-            .decode_streaming(&unpack_video(&video, grid)?, &mut sink);
+        // Spark's explicit Conv tiles: 128/24 frames, 448/64 H, 768/64 W
+        // (`stage2_ops/models.py:20-22,119-122`).
+        let decoded = self.decoders.video.decode_tiled(
+            &unpack_video(&video, grid)?,
+            &TileSizeConfig::spark(),
+            &mut sink,
+        );
         match (decoded, sink_err) {
             (_, Some(e)) => return Err(e),
             (Err(e), None) => return Err(e.into()),
@@ -2070,17 +2431,17 @@ mod tests {
     #[test]
     fn noise_is_seeded_packed_and_video_is_drawn_first() {
         let cfg = tiny();
-        let (v, a) = initial_noise(&cfg, [2, 2, 3], 5, 7).unwrap();
+        let (v, a) = initial_noise(&cfg, [2, 2, 3], 5, &mut NoiseStream::new(7, false)).unwrap();
         assert_eq!(
             (v.shape.clone(), a.shape.clone()),
             (vec![1, 12, 4], vec![1, 5, 4])
         );
-        let (v2, a2) = initial_noise(&cfg, [2, 2, 3], 5, 7).unwrap();
+        let (v2, a2) = initial_noise(&cfg, [2, 2, 3], 5, &mut NoiseStream::new(7, false)).unwrap();
         assert_eq!(&*v.host_cow().unwrap(), &*v2.host_cow().unwrap());
         assert_eq!(&*a.host_cow().unwrap(), &*a2.host_cow().unwrap());
         assert_ne!(
             &*v.host_cow().unwrap(),
-            &*initial_noise(&cfg, [2, 2, 3], 5, 8)
+            &*initial_noise(&cfg, [2, 2, 3], 5, &mut NoiseStream::new(8, false))
                 .unwrap()
                 .0
                 .host_cow()
@@ -2113,79 +2474,278 @@ mod tests {
         assert!(loaded.is_none());
     }
 
-    /// The loop against the update written out on the host, step by step, with
-    /// the model evaluated at `1000·σ_i`.
+    /// The ancestral update against the step written out on the host, with the
+    /// model evaluated at `1000·σ_i`: float32 against the f64 reference step,
+    /// bf16 against the element-wise `ltx_core` reference.
     #[test]
     fn ancestral_one_step_matches_host_reference() {
+        use fastvideo_models::ltx2::schedule::{bf16_round, ltx_core_ancestral_step};
         let cfg = tiny();
         let (model, text, ropes, grid, audio_tokens) = model_and_inputs(&cfg);
-        let (video, audio) = initial_noise(&cfg, grid, audio_tokens, 11).unwrap();
+        let (video, audio) =
+            initial_noise(&cfg, grid, audio_tokens, &mut NoiseStream::new(11, false)).unwrap();
         let schedule = Ltx2Schedule::distilled();
         let opts = AncestralOpts {
             eta: 1.0,
             s_noise: 1.0,
             noise_seed: 99,
         };
-        let mut rng = rand::rngs::StdRng::seed_from_u64(opts.noise_seed);
         let i = 4usize;
-        let sigma = schedule.sigmas[i];
-        let sigma_next = schedule.sigmas[i + 1];
-        let t = schedule.timestep_f32(i);
-        let (vv, va) = model
-            .forward(&video, &audio, &text, t, &ropes, None)
+        let (sigma, sigma_next) = (schedule.sigmas[i], schedule.sigmas[i + 1]);
+        let (vv, _) = model
+            .forward(
+                &video,
+                &audio,
+                &text,
+                schedule.timestep_f32(i),
+                &ropes,
+                None,
+            )
             .unwrap();
-        let mut want_v = video.host_cow().unwrap().into_owned();
-        let mut want_a = audio.host_cow().unwrap().into_owned();
-        let den_v: Vec<f32> = want_v
+        let x = video.host_cow().unwrap().into_owned();
+        let v = vv.host_cow().unwrap().into_owned();
+        let draws = NoiseStream::new(99, false).draw(&[&video.shape]).unwrap();
+        let eps = draws[0].host_cow().unwrap().into_owned();
+
+        let mut want = x.clone();
+        let den: Vec<f32> = x
             .iter()
-            .zip(vv.host_cow().unwrap().iter())
+            .zip(&v)
             .map(|(x, v)| Ltx2Schedule::denoised_from_velocity(*x, *v, sigma))
             .collect();
-        let den_a: Vec<f32> = want_a
+        Ltx2Schedule::ancestral_step(&mut want, &den, sigma, sigma_next, 1.0, 1.0, Some(&eps));
+        let got = ancestral_update(
+            &video,
+            &vv,
+            sigma,
+            sigma_next,
+            opts,
+            Some(&draws[0]),
+            LatentState::F32,
+        )
+        .unwrap();
+        for (a, b) in got.host_cow().unwrap().iter().zip(&want) {
+            assert!((a - b).abs() < 1e-4 * (1.0 + b.abs()), "f32: {a} vs {b}");
+        }
+
+        let xb = LatentState::Bf16.store(video.clone()).unwrap();
+        let eb = LatentState::Bf16.store(draws[0].clone()).unwrap();
+        let got = ancestral_update(
+            &xb,
+            &vv,
+            sigma,
+            sigma_next,
+            opts,
+            Some(&eb),
+            LatentState::Bf16,
+        )
+        .unwrap();
+        let got = got.host_cow().unwrap();
+        for (k, g) in got.iter().enumerate() {
+            let w = ltx_core_ancestral_step(
+                x[k],
+                v[k],
+                eps[k],
+                sigma as f32,
+                sigma_next as f32,
+                1.0,
+                1.0,
+            );
+            assert_eq!(*g, bf16_round(*g), "stored as bf16");
+            // One bf16 ulp: the device sums may fuse differently from the host's.
+            assert!(
+                (g - w).abs() <= 1e-2 * (1.0 + w.abs()),
+                "bf16[{k}]: {g} vs {w}"
+            );
+        }
+        // The terminal step is x0 itself.
+        let last =
+            ancestral_update(&xb, &vv, 0.421875, 0.0, opts, None, LatentState::Bf16).unwrap();
+        for ((g, x), v) in last.host_cow().unwrap().iter().zip(&x).zip(&v) {
+            let w = bf16_round(bf16_round(*x) - bf16_round(*v) * 0.421875);
+            assert!((g - w).abs() <= 1e-2 * (1.0 + w.abs()));
+        }
+    }
+
+    #[test]
+    fn bf16_euler_update_is_the_ltx_core_round_trip() {
+        use fastvideo_models::ltx2::schedule::{bf16_round, ltx_core_euler_step};
+        let schedule = Ltx2Schedule::distilled_stage_2();
+        let x: Vec<f32> = (0..64)
+            .map(|i| bf16_round((i as f32 * 0.37).sin() * 2.0))
+            .collect();
+        let v: Vec<f32> = (0..64).map(|i| (i as f32 * 0.91).cos() * 1.5).collect();
+        let xt = CudaTensor::from_vec(x.clone(), vec![1, 64]).unwrap();
+        let vt = CudaTensor::from_vec(v.clone(), vec![1, 64]).unwrap();
+        for i in 0..schedule.num_steps() {
+            let got = euler_update(&xt, &vt, &schedule, i, LatentState::Bf16).unwrap();
+            let (s, n) = (schedule.sigmas[i] as f32, schedule.sigmas[i + 1] as f32);
+            for (k, g) in got.host_cow().unwrap().iter().enumerate() {
+                let w = ltx_core_euler_step(x[k], v[k], s, n);
+                assert_eq!(*g, bf16_round(*g));
+                assert!(
+                    (g - w).abs() <= 1e-2 * (1.0 + w.abs()),
+                    "step {i}[{k}]: {g} vs {w}"
+                );
+            }
+            // Float32 state is the plain Euler update.
+            let f = euler_update(&xt, &vt, &schedule, i, LatentState::F32).unwrap();
+            let dt = schedule.dt(i) as f32;
+            for (k, g) in f.host_cow().unwrap().iter().enumerate() {
+                assert!((g - (x[k] + dt * v[k])).abs() < 1e-6);
+            }
+        }
+    }
+
+    /// `GaussianNoiser`: `lerp(x, ε, σ)` evaluated from the ε end, then bf16.
+    #[test]
+    fn renoise_is_torch_lerp_then_the_state_dtype() {
+        let x = CudaTensor::from_vec(vec![0.5, -1.25, 2.0], vec![1, 3]).unwrap();
+        let e = CudaTensor::from_vec(vec![1.0, 0.25, -0.75], vec![1, 3]).unwrap();
+        let sigma = 0.909375f32;
+        let got = renoise(&x, &e, sigma, LatentState::F32).unwrap();
+        for ((g, x), e) in got
+            .host_cow()
+            .unwrap()
             .iter()
-            .zip(va.host_cow().unwrap().iter())
-            .map(|(x, v)| Ltx2Schedule::denoised_from_velocity(*x, *v, sigma))
-            .collect();
-        let noise_v: Vec<f32> = (0..want_v.len())
-            .map(|_| rng.sample::<f32, _>(StandardNormal))
-            .collect();
-        let noise_a: Vec<f32> = (0..want_a.len())
-            .map(|_| rng.sample::<f32, _>(StandardNormal))
-            .collect();
-        Ltx2Schedule::ancestral_step(
-            &mut want_v,
-            &den_v,
-            sigma,
-            sigma_next,
-            opts.eta,
-            opts.s_noise,
-            Some(&noise_v),
-        );
-        Ltx2Schedule::ancestral_step(
-            &mut want_a,
-            &den_a,
-            sigma,
-            sigma_next,
-            opts.eta,
-            opts.s_noise,
-            Some(&noise_a),
-        );
-        let mut rng2 = rand::rngs::StdRng::seed_from_u64(opts.noise_seed);
-        let got_v = apply_ancestral(&video, &vv, sigma, sigma_next, opts, &mut rng2).unwrap();
-        let got_a = apply_ancestral(&audio, &va, sigma, sigma_next, opts, &mut rng2).unwrap();
-        for (a, b) in got_v.host_cow().unwrap().iter().zip(&want_v) {
-            assert!((a - b).abs() < 1e-5, "video: {a} vs {b}");
+            .zip([0.5f32, -1.25, 2.0])
+            .zip([1.0f32, 0.25, -0.75])
+        {
+            assert!((g - (e - (e - x) * (1.0 - sigma))).abs() < 1e-6);
         }
-        for (a, b) in got_a.host_cow().unwrap().iter().zip(&want_a) {
-            assert!((a - b).abs() < 1e-5, "audio: {a} vs {b}");
+        let b = renoise(&x, &e, sigma, LatentState::Bf16).unwrap();
+        for v in b.host_cow().unwrap().iter() {
+            assert_eq!(*v, fastvideo_models::ltx2::schedule::bf16_round(*v));
         }
+    }
+
+    /// LTX-2.5 draws in the patchified shapes, in bf16, from one generator that
+    /// the stage-2 renoise continues (`distilled.py:217-218,294-313`).
+    #[test]
+    fn ltx25_noise_is_token_major_bf16_and_one_stream_across_stages() {
+        use fastvideo_models::ltx2::schedule::bf16_round;
+        let cfg = Ltx2Config {
+            version: Ltx2ModelVersion::V25,
+            ..tiny()
+        };
+        let mut stream = NoiseStream::new(7, true);
+        let (v, a) = initial_noise(&cfg, [2, 2, 3], 5, &mut stream).unwrap();
+        assert_eq!(
+            (v.shape.clone(), a.shape.clone()),
+            (vec![1, 12, 4], vec![1, 5, 4])
+        );
+        let mut rng = rand::rngs::StdRng::seed_from_u64(7);
+        let all: Vec<f32> = (0..48 + 20 + 48 + 20)
+            .map(|_| bf16_round(rng.sample::<f32, _>(StandardNormal)))
+            .collect();
+        // Token-major: the first four draws are token 0's four channels.
+        assert_eq!(&v.host_cow().unwrap()[..], &all[..48]);
+        assert_eq!(&a.host_cow().unwrap()[..], &all[48..68]);
+        // Stage 2 keeps drawing from the same generator: video, then audio.
+        let d = stream.draw(&[&v.shape, &a.shape]).unwrap();
+        assert_eq!(&d[0].host_cow().unwrap()[..], &all[68..116]);
+        assert_eq!(&d[1].host_cow().unwrap()[..], &all[116..]);
+    }
+
+    #[test]
+    fn ltx25_generation_is_the_unguided_distilled_pipeline() {
+        let distilled = fastvideo_models::ltx2::ltx2_5_22b_distilled();
+        assert!(check_generate_contract(&distilled, false).is_ok());
+        assert!(check_generate_contract(&distilled, true).is_err());
+        assert!(check_generate_contract(&fastvideo_models::ltx2::ltx2_5_22b_dev(), false).is_err());
+        // Other lines keep their own (guided) samplers.
+        assert!(check_generate_contract(&fastvideo_models::ltx2::ltx2_19b(), true).is_ok());
+        assert!(check_generate_contract(&fastvideo_models::ltx2::ltx2_23_22b(), true).is_ok());
+        assert_eq!(
+            LatentState::for_version(Ltx2ModelVersion::V25),
+            LatentState::Bf16
+        );
+        assert_eq!(
+            LatentState::for_version(Ltx2ModelVersion::V23),
+            LatentState::F32
+        );
+    }
+
+    #[test]
+    fn the_refiner_refuses_a_distilled_dit_path() {
+        assert!(names_distilled(Path::new(
+            "/m/diffusion_models/ltx-2.5-22b-distilled-transformer-bf16.safetensors"
+        )));
+        assert!(names_distilled(Path::new(
+            "/m/LTX-2.5-Distilled/transformer"
+        )));
+        assert!(!names_distilled(Path::new(
+            "/m/diffusion_models/ltx-2.5-22b-dev-transformer-bf16.safetensors"
+        )));
+        assert!(!names_distilled(Path::new("/m/LTX-2.5/transformer")));
+    }
+
+    #[test]
+    fn the_text_cache_key_names_the_feature_normalisation() {
+        let v25 = fastvideo_models::ltx2::ltx2_5_22b_distilled();
+        let v20 = fastvideo_models::ltx2::ltx2_19b();
+        assert_eq!(
+            TextEncoder::text_encoder_kind(&v25),
+            b"gemma4-12b/per-token-rms"
+        );
+        assert_eq!(TextEncoder::text_encoder_kind(&v20), b"gemma3-12b");
+        assert_eq!(
+            TextEncoder::text_encoder_kind(&fastvideo_models::ltx2::ltx2_23_22b()),
+            b"gemma3-12b/per-token-rms"
+        );
+    }
+
+    /// The prune's compensation is per pass: under CFG, the conditional pass of
+    /// a prune step is compensated from the conditional pass before it, never
+    /// from the unconditional one (`token_prune.py`, keyed by `cache_key`).
+    #[test]
+    fn prune_compensation_is_kept_per_pass() {
+        let cfg = tiny();
+        let (model, text, ropes, _, _) = model_and_inputs(&cfg);
+        let ctx = |k: f32| {
+            CudaTensor::from_vec(
+                (0..3 * 12).map(|i| (i as f32 * k).cos()).collect(),
+                vec![1, 3, 12],
+            )
+            .unwrap()
+        };
+        let uncond = model.project_text(&ctx(0.5), &ctx(0.9)).unwrap();
+        let x = |k: f32, n: usize| {
+            CudaTensor::from_vec(
+                (0..n * 4).map(|i| (i as f32 * k).sin()).collect(),
+                vec![1, n, 4],
+            )
+            .unwrap()
+        };
+        let (v, a) = (x(0.21, 8), x(0.43, 3));
+        let run = |with_uncond: bool| {
+            model.enable_midpoint_prune();
+            model.set_prune_active(true);
+            let mut out = None;
+            for step in 0..2 {
+                model.arm_prune_step(step);
+                let t = 900.0 - 100.0 * step as f32;
+                let cond = model.forward(&v, &a, &text, t, &ropes, None).unwrap();
+                if with_uncond {
+                    model.forward(&v, &a, &uncond, t, &ropes, None).unwrap();
+                }
+                out = Some(cond.0.host_cow().unwrap().into_owned());
+            }
+            out.unwrap()
+        };
+        // Step 1 prunes (`PRUNE_STEPS`); its cond pass must not see the uncond hidden.
+        assert!(fastvideo_models::ltx2::prunes_step(1));
+        let single = run(false);
+        let paired = run(true);
+        assert_eq!(single, paired);
     }
 
     #[test]
     fn res2s_two_steps_stays_finite() {
         let cfg = tiny();
         let (model, text, ropes, grid, audio_tokens) = model_and_inputs(&cfg);
-        let (video, audio) = initial_noise(&cfg, grid, audio_tokens, 3).unwrap();
+        let (video, audio) =
+            initial_noise(&cfg, grid, audio_tokens, &mut NoiseStream::new(3, false)).unwrap();
         let schedule = Ltx2Schedule::from_sigmas(&[1.0, 0.5], 1000);
         let (got_v, got_a) = denoise_res2s(
             &model,
@@ -2213,7 +2773,8 @@ mod tests {
     fn denoise_is_eight_euler_steps_on_the_distilled_sigmas() {
         let cfg = tiny();
         let (model, text, ropes, grid, audio_tokens) = model_and_inputs(&cfg);
-        let (video, audio) = initial_noise(&cfg, grid, audio_tokens, 3).unwrap();
+        let (video, audio) =
+            initial_noise(&cfg, grid, audio_tokens, &mut NoiseStream::new(3, false)).unwrap();
         let schedule = Ltx2Schedule::distilled();
         let mut seen = Vec::new();
         let mut obs = |i: usize, v: &CudaTensor, _: &CudaTensor, _: f64| -> Result<()> {
@@ -2282,10 +2843,12 @@ mod tests {
             vocoder: Vocoder::load(&map, &cfg.vocoder).unwrap(),
             upsampler: None,
         };
-        let (video, audio) = initial_noise(&cfg, [2, 2, 2], 3, 1).unwrap();
+        let (video, audio) =
+            initial_noise(&cfg, [2, 2, 2], 3, &mut NoiseStream::new(1, false)).unwrap();
         let dir = std::env::temp_dir().join(format!("fv-ltx2-pipeline-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
-        let out = decode_and_write(&dec, &video, &audio, [2, 2, 2], &dir, 24.0, false).unwrap();
+        let out =
+            decode_and_write(&dec, &video, &audio, [2, 2, 2], &dir, 24.0, false, None).unwrap();
         // 2 latent frames → 9 frames of 32x32 (×8 by the VAE, ×2 by its patch… in this tiny config ×16).
         assert_eq!(out.frames.len(), 9);
         assert!(out.frames.iter().all(|p| Path::new(p).is_file()));
