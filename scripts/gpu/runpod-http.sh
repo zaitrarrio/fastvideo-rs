@@ -9,6 +9,9 @@
 #   runpod-http.sh kernels [sha] fv-gpucheck kernels (every kernel vs host math)
 #   runpod-http.sh all [sha]     kernels, then the $FV_FAMILY cells, on one pod
 #                                (pod creation retries for FV_CREATE_WAIT_S)
+#   runpod-http.sh upstream [sha] upstream Python references (scripts/gpu/upstream/pod.sh)
+#                                on a public PyTorch image; the pod clones this repo
+#                                at <sha> from GitHub. UP_STEPS / UP_CELLS select work.
 #   runpod-http.sh status <pod>  print live.log from a running pod
 #   runpod-http.sh down <pod>    destroy a pod
 #
@@ -40,6 +43,7 @@ VOL_NAME="${RUNPOD_VOLUME_NAME:-fv-weights-h3-ltx-hy fv-weights-b200-us}"
 MAX_DPH="${RUNPOD_GPU_MAX_DPH:-5}"
 CAP_S="${FV_POD_CAP_S:-14400}"
 FAMILY="${FV_FAMILY:-rtx6000}"
+[[ "${1:-}" == upstream ]] && FAMILY="${FV_FAMILY:-upstream}"
 OUT_ROOT="$ROOT/artifacts/runpod/$FAMILY"
 : "${RUNPOD_API_KEY:?RUNPOD_API_KEY missing}"
 
@@ -81,6 +85,10 @@ volume() {
 # $1 = image, $2 = run tag, $3 = mode (run|weights)
 start_cmd() {
   local tag="$2" mode="$3"
+  if [[ "$mode" == upstream ]]; then
+    upstream_start_cmd "$tag"
+    return
+  fi
   local cells="fasth3-8step fasth3-4step-vsa fasth3-4step-dense sol-h3 sol-h3-spark ltx25-two-stage"
   cat <<EOF
 set -u
@@ -111,6 +119,28 @@ if [ "$mode" = run ] || [ "$mode" = all ]; then
     FV_GEN_TIMEOUT_S=${FV_GEN_TIMEOUT_S:-3600} \
     bash /opt/fastvideo-rs/scripts/gpu/runpod-matrix.sh $FAMILY >"\$OUT/matrix.out" 2>&1
 fi
+touch "\$OUT/DONE"
+exec sleep infinity
+EOF
+}
+
+# Upstream mode: no fv-gpucheck in the image. Serve /workspace/runs with the
+# image's Python, clone this repo at $UP_SHA, and hand over to pod.sh.
+upstream_start_cmd() {
+  local tag="$1"
+  cat <<EOF
+set -u
+OUT=/workspace/runs/$FAMILY/$tag
+mkdir -p "\$OUT"
+( cd /workspace/runs && exec python3 -m http.server 8000 ) >"\$OUT/http.log" 2>&1 &
+{
+  command -v git >/dev/null || { apt-get update -qq && apt-get install -y -qq git; }
+  git init -q /opt/fvrs && git -C /opt/fvrs remote add origin https://github.com/zaitrarrio/fastvideo-rs.git \
+    && git -C /opt/fvrs fetch -q --depth 1 origin $UP_SHA && git -C /opt/fvrs checkout -q FETCH_HEAD
+} >"\$OUT/clone.log" 2>&1
+env ${FV_EXTRA_ENV:-} UP_STEPS="${UP_STEPS:-info:box}" UP_STEPS_BG="${UP_STEPS_BG:-}" UP_CELLS="${UP_CELLS:-}" \
+  UP_CELL_TIMEOUT_S=${UP_CELL_TIMEOUT_S:-5400} \
+  bash /opt/fvrs/scripts/gpu/upstream/pod.sh "\$OUT" >"\$OUT/pod.out" 2>&1
 touch "\$OUT/DONE"
 exec sleep infinity
 EOF
@@ -151,9 +181,31 @@ create_pod() {
   echo "$id"
 }
 
+# Mirror a python http.server directory listing recursively; files larger than
+# FV_FETCH_MAX_MB (default 400) are skipped.
+fetch_tree() {
+  local id="$1" rel="$2" dest="$3" e name
+  mkdir -p "$dest"
+  for e in $(proxy "$id" "$rel" 2>/dev/null | grep -oE 'href="[^"]+"' | sed 's/href="//;s/"$//'); do
+    case "$e" in
+      ../ | /* | \?*) continue ;;
+      */) fetch_tree "$id" "$rel$e" "$dest/${e%/}" ;;
+      *)
+        name="$(printf '%b' "${e//%/\\x}")"
+        curl -sS --max-time 900 --fail --max-filesize $(( ${FV_FETCH_MAX_MB:-400} << 20 )) \
+          "https://$id-8000.proxy.runpod.net/$rel$e" -o "$dest/$name" 2>/dev/null || rm -f "$dest/$name" ;;
+    esac
+  done
+}
+
 fetch_results() {
   local id="$1" tag="$2" out="$OUT_ROOT/$tag" f cell
   mkdir -p "$out"
+  if [[ "$FAMILY" == upstream ]]; then
+    fetch_tree "$id" "$FAMILY/$tag/" "$out"
+    log "results → $out"
+    return
+  fi
   for f in box.txt tree.txt weights.log matrix.out live.log kernels.out kernels.json; do
     proxy "$id" "$FAMILY/$tag/$f" >"$out/$f" 2>/dev/null || true
   done
@@ -198,6 +250,10 @@ cmd_run() {
   local mode="$1" sha="${2:-}" image tag id rc=0 attempt
   sha="${sha:-$(git -C "$ROOT" rev-parse --short=7 origin/main)}"
   image="${RUNPOD_IMAGE:-ghcr.io/zaitrarrio/fastvideo-rs-runtime:sha-$sha}"
+  if [[ "$mode" == upstream ]]; then
+    image="${RUNPOD_IMAGE:-runpod/pytorch:1.3.3-cu1300-torch2130-ubuntu2404}"
+    UP_SHA="$(git -C "$ROOT" rev-parse "$sha")"
+  fi
   for attempt in 1 2 3; do
     tag="$sha-$(date -u +%m%d%H%M)"
     id="$(create_pod "$image" "$tag" "$mode")"
@@ -221,6 +277,7 @@ case "${1:-}" in
   weights) shift; cmd_run weights "$@" ;;
   kernels) shift; cmd_run kernels "$@" ;;
   all) shift; cmd_run all "$@" ;;
+  upstream) shift; cmd_run upstream "$@" ;;
   status) proxy "${2:?pod}" "$FAMILY/" ;;
   down) rest DELETE "/pods/${2:?pod}" >/dev/null && echo "deleted ${2}" ;;
   *) sed -n '2,20p' "$0" | sed 's/^# \{0,1\}//'; exit 2 ;;
