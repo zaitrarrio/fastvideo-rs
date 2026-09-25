@@ -1114,7 +1114,12 @@ fn refine_spark(
         .ok()
         .map(PathBuf::from)
         .unwrap_or_else(|| weights.join("transformer"));
-    let cfg = fastvideo_models::ltx2::ltx2_5_22b_distilled();
+    // Spark's refiner is the *dev* transformer with the distilled LoRA fused at
+    // 0.8 (`Sol-H3-Spark/configs/checkpoints.json:78`, `stage2_ops/models.py:76`):
+    // point FASTVIDEO_LTX2_DIT at ltx-2.5-22b-dev-transformer-bf16 and
+    // FASTVIDEO_LTX2_LORA at ltx-2.5-22b-distilled-lora-450-bf16 (or keep it
+    // beside the weights); `refine_joint` refuses anything else.
+    let cfg = fastvideo_models::ltx2::ltx2_5_22b_dev();
     let prompt = fastvideo_models::h3::spark::FIXED_PROMPT;
     crate::wan::log::info(format_args!(
         "h3 sol-h3-spark: loading LTX-2.5 from {} (DiT {}) beside the resident H3 model; fixed prompt {prompt:?}; Gemma cache on",
