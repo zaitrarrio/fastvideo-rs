@@ -462,6 +462,14 @@ impl H3TeaCache {
         self.has_residual = true;
     }
 
+    /// Forget the signal, the residual and the accumulator: the next
+    /// request starts as the first one did (its buffers were freed).
+    pub fn reset(&mut self) {
+        self.acc = 0.0;
+        self.has_signal = false;
+        self.has_residual = false;
+    }
+
     fn force_reason(&self, step: usize) -> Option<&'static str> {
         if step < self.retain_steps {
             Some("warmup")

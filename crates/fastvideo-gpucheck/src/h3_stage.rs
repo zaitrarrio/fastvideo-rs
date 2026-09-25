@@ -180,6 +180,12 @@ pub enum Stage {
         /// `FASTVIDEO_DIT_OFFLOAD`, else `auto`.
         #[arg(long)]
         dit_offload: Option<String>,
+        /// Run as if the card had only this many GiB (e.g. 32 on a 96 GB card
+        /// to emulate an RTX 5090): every auto policy decides for that card,
+        /// the rest is held back, and a phase peaking above it fails the run.
+        /// Default: `FASTVIDEO_DEVICE_BUDGET_GIB`.
+        #[arg(long)]
+        device_budget_gib: Option<f64>,
         #[arg(long, default_value_t = 1024)]
         seed: u64,
         /// Dense attention without the compression gate (the parity mode).
@@ -334,6 +340,7 @@ pub fn run(report: &mut Report, stage: &Stage) -> StageResult<()> {
             height,
             width,
             dit_offload,
+            device_budget_gib,
             seed,
             dense,
             no_mp4,
@@ -397,6 +404,7 @@ pub fn run(report: &mut Report, stage: &Stage) -> StageResult<()> {
                 *warm,
                 *compare_text_encoders,
                 device,
+                *device_budget_gib,
             )
         }
         Stage::SlimText {
@@ -1416,10 +1424,19 @@ fn gen(
     warm: bool,
     compare_text_encoders: bool,
     device: &str,
+    device_budget_gib: Option<f64>,
 ) -> StageResult<()> {
     use fastvideo_cudarc::h3::pipeline::{H3Output, H3Pipeline};
 
-    report.set("device", crate::gpu::init(device)?);
+    report.set(
+        "device",
+        crate::gpu::init_with_budget(device, device_budget_gib)?,
+    );
+    report.set(
+        "device_budget_gib",
+        json!(fastvideo_cudarc::wan::device::device_budget()
+            .map(|b| b as f64 / f64::from(1u32 << 30))),
+    );
     let seconds = canvas.seconds;
     let mut request = canvas.request(prompt, seed)?;
     request.mp4 = mp4;

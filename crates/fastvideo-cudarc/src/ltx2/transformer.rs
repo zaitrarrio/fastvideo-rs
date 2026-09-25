@@ -183,7 +183,7 @@ impl Ltx2Stage2Attn {
 /// dense prefix and `--sol-stage2`/`--pisa-stage2` off stay on today's SDPA.
 fn video_self_attn(
     attn: &Attention,
-    h: &CudaTensor,
+    h: CudaTensor,
     rope: &DeviceRope,
     route: Ltx2VideoAttn,
     layer: usize,
@@ -205,7 +205,7 @@ fn video_self_attn(
         }
         Ltx2VideoAttn::Off => VideoAttnKernel::Dense,
     };
-    attn.forward_kernel(h, None, Some(rope), None, kernel)
+    attn.forward_kernel_owned(h, None, Some(rope), None, kernel)
 }
 
 /// One stream's half of a block.
@@ -1333,29 +1333,50 @@ impl Ltx2Transformer {
             a_tab.reshape(vec![1, a_rows, da])?,
         );
 
+        // Every intermediate is dropped as soon as the next one exists: at
+        // 130k stage-2 tokens each `[S, dv]` float32 is 2 GiB, and a shadowed
+        // binding would live to the end of the block. Taps fire in the same
+        // order with the same values; they just fire as soon as a value exists.
+
         // 1. self-attention.
-        let h = rms_adaln(&xv, &row(&v_tab, 1)?, &row(&v_tab, 0)?, eps)?;
-        let u = video_self_attn(&b.video.attn1, &h, &ropes.video, route, tap.block)?;
-        let xv = xv.residual_gate_add_e(&u, &v_gates, 2)?;
-        tap.emit("video", "attn1_in", &h)?;
-        tap.emit("video", "attn1_out", &u)?;
-        tap.emit("video", "attn1_after", &xv)?;
-        let h = rms_adaln(&xa, &row(&a_tab, 1)?, &row(&a_tab, 0)?, eps)?;
-        let u = b.audio.attn1.forward(&h, None, Some(&ropes.audio), None)?;
-        let xa = xa.residual_gate_add_e(&u, &a_gates, 2)?;
-        tap.emit("audio", "attn1_in", &h)?;
-        tap.emit("audio", "attn1_out", &u)?;
-        tap.emit("audio", "attn1_after", &xa)?;
+        let xv = {
+            let h = rms_adaln(&xv, &row(&v_tab, 1)?, &row(&v_tab, 0)?, eps)?;
+            tap.emit("video", "attn1_in", &h)?;
+            let u = video_self_attn(&b.video.attn1, h, &ropes.video, route, tap.block)?;
+            tap.emit("video", "attn1_out", &u)?;
+            let out = xv.residual_gate_add_e(&u, &v_gates, 2)?;
+            drop((xv, u));
+            tap.emit("video", "attn1_after", &out)?;
+            out
+        };
+        let xa = {
+            let h = rms_adaln(&xa, &row(&a_tab, 1)?, &row(&a_tab, 0)?, eps)?;
+            tap.emit("audio", "attn1_in", &h)?;
+            let u = b
+                .audio
+                .attn1
+                .forward_owned(h, None, Some(&ropes.audio), None)?;
+            tap.emit("audio", "attn1_out", &u)?;
+            let out = xa.residual_gate_add_e(&u, &a_gates, 2)?;
+            drop((xa, u));
+            tap.emit("audio", "attn1_after", &out)?;
+            out
+        };
 
         // 2. text cross-attention (optional Q/KV AdaLN + output gate, LTX-2.5).
-        let text_cross = |stream: &StreamBlock,
-                          x: &CudaTensor,
-                          ctx: &CudaTensor,
-                          tab: &CudaTensor,
-                          ones: &CudaTensor,
-                          prompt: Option<&CudaTensor>,
-                          dim: usize|
-         -> Result<(CudaTensor, CudaTensor, CudaTensor)> {
+        #[allow(clippy::too_many_arguments)]
+        fn text_cross(
+            stream: &StreamBlock,
+            name: &str,
+            x: CudaTensor,
+            ctx: &CudaTensor,
+            tab: &CudaTensor,
+            ones: &CudaTensor,
+            prompt: Option<&CudaTensor>,
+            dim: usize,
+            eps: f32,
+            tap: &mut Tap<'_, '_>,
+        ) -> Result<CudaTensor> {
             let mut h = x.rms_norm(ones, eps)?;
             if stream.cross_attn_mod {
                 h = scale_shift(&h, &row(tab, 7)?, &row(tab, 6)?)?;
@@ -1368,39 +1389,46 @@ impl Ltx2Transformer {
                 };
                 enc = scale_shift(&enc, &row(&tab_p, 1)?, &row(&tab_p, 0)?)?;
             }
-            let u = stream.attn2.forward(&h, Some(&enc), None, None)?;
+            tap.emit(name, "attn2_in", &h)?;
+            let u = stream.attn2.forward_owned(h, Some(&enc), None, None)?;
+            drop(enc);
             let u = if stream.cross_attn_mod {
-                u.mul(&row(tab, 8)?.reshape(vec![1, 1, dim])?)?
+                let gated = u.mul(&row(tab, 8)?.reshape(vec![1, 1, dim])?)?;
+                drop(u);
+                gated
             } else {
                 u
             };
+            tap.emit(name, "attn2_out", &u)?;
             let out = x.add(&u)?;
-            Ok((h, u, out))
-        };
-        let (h, u, xv) = text_cross(
+            drop((x, u));
+            tap.emit(name, "attn2_after", &out)?;
+            Ok(out)
+        }
+        let xv = text_cross(
             &b.video,
-            &xv,
+            "video",
+            xv,
             &text.video,
             &v_tab,
             &self.ones_video,
             v_prompt,
             dv,
+            eps,
+            &mut tap,
         )?;
-        tap.emit("video", "attn2_in", &h)?;
-        tap.emit("video", "attn2_out", &u)?;
-        tap.emit("video", "attn2_after", &xv)?;
-        let (h, u, xa) = text_cross(
+        let xa = text_cross(
             &b.audio,
-            &xa,
+            "audio",
+            xa,
             &text.audio,
             &a_tab,
             &self.ones_audio,
             a_prompt,
             da,
+            eps,
+            &mut tap,
         )?;
-        tap.emit("audio", "attn2_in", &h)?;
-        tap.emit("audio", "attn2_out", &u)?;
-        tap.emit("audio", "attn2_after", &xa)?;
 
         // 3. audio↔video, both directions from the same pre-update states.
         // Rows 0..3 of each side's table: a2v_scale, a2v_shift, v2a_scale, v2a_shift
@@ -1416,39 +1444,59 @@ impl Ltx2Transformer {
         let side = |x: &CudaTensor, cross: &CudaTensor, first: usize| {
             rms_adaln(x, &row(cross, first)?, &row(cross, first + 1)?, eps)
         };
-        let (a2v_q, v2a_q) = (side(&xv, &v_cross, 0)?, side(&xa, &a_cross, 2)?);
-        let a2v = b.audio_to_video.forward(
-            &a2v_q,
-            Some(&side(&xa, &a_cross, 0)?),
-            Some(&ropes.cross_video),
-            Some(&ropes.cross_audio),
-        )?;
+        let a2v = {
+            let a2v_q = side(&xv, &v_cross, 0)?;
+            tap.emit("video", "av_in", &a2v_q)?;
+            b.audio_to_video.forward_owned(
+                a2v_q,
+                Some(&side(&xa, &a_cross, 0)?),
+                Some(&ropes.cross_video),
+                Some(&ropes.cross_audio),
+            )?
+        };
+        let v2a_q = side(&xa, &a_cross, 2)?;
         let v2a = b.video_to_audio.forward(
             &v2a_q,
             Some(&side(&xv, &v_cross, 2)?),
             Some(&ropes.cross_audio),
             Some(&ropes.cross_video),
         )?;
-        let xv = xv.residual_gate_add_e(&a2v, &a2v_gate, 0)?;
-        let xa = xa.residual_gate_add_e(&v2a, &v2a_gate, 0)?;
-        tap.emit("video", "av_in", &a2v_q)?;
-        tap.emit("video", "av_out", &a2v)?;
-        tap.emit("video", "av_after", &xv)?;
-        tap.emit("audio", "av_in", &v2a_q)?;
-        tap.emit("audio", "av_out", &v2a)?;
-        tap.emit("audio", "av_after", &xa)?;
+        let xv = {
+            tap.emit("video", "av_out", &a2v)?;
+            let out = xv.residual_gate_add_e(&a2v, &a2v_gate, 0)?;
+            drop((xv, a2v));
+            tap.emit("video", "av_after", &out)?;
+            out
+        };
+        let xa = {
+            tap.emit("audio", "av_in", &v2a_q)?;
+            tap.emit("audio", "av_out", &v2a)?;
+            let out = xa.residual_gate_add_e(&v2a, &v2a_gate, 0)?;
+            drop((xa, v2a, v2a_q));
+            tap.emit("audio", "av_after", &out)?;
+            out
+        };
 
-        // 4. feed-forward.
-        let h = rms_adaln(&xv, &row(&v_tab, 4)?, &row(&v_tab, 3)?, eps)?;
-        let u = b.video.ff.forward(&h)?;
-        let xv = xv.residual_gate_add_e(&u, &v_gates, 5)?;
-        tap.emit("video", "ff_in", &h)?;
-        tap.emit("video", "ff_out", &u)?;
-        let h = rms_adaln(&xa, &row(&a_tab, 4)?, &row(&a_tab, 3)?, eps)?;
-        let u = b.audio.ff.forward(&h)?;
-        let xa = xa.residual_gate_add_e(&u, &a_gates, 5)?;
-        tap.emit("audio", "ff_in", &h)?;
-        tap.emit("audio", "ff_out", &u)?;
+        // 4. feed-forward. The FFN takes its input by value: once its
+        // chunks are computed the input goes before they are concatenated.
+        let xv = {
+            let h = rms_adaln(&xv, &row(&v_tab, 4)?, &row(&v_tab, 3)?, eps)?;
+            tap.emit("video", "ff_in", &h)?;
+            let u = b.video.ff.forward_owned(h)?;
+            let out = xv.residual_gate_add_e(&u, &v_gates, 5)?;
+            tap.emit("video", "ff_out", &u)?;
+            drop((xv, u));
+            out
+        };
+        let xa = {
+            let h = rms_adaln(&xa, &row(&a_tab, 4)?, &row(&a_tab, 3)?, eps)?;
+            tap.emit("audio", "ff_in", &h)?;
+            let u = b.audio.ff.forward_owned(h)?;
+            let out = xa.residual_gate_add_e(&u, &a_gates, 5)?;
+            tap.emit("audio", "ff_out", &u)?;
+            drop((xa, u));
+            out
+        };
         Ok((xv, xa))
     }
 }
@@ -1663,6 +1711,46 @@ mod tests {
             out
         };
         assert_eq!(run(&resident), run(&streamed));
+    }
+
+    /// Host-side accounting of the video stream's live set: the peak of
+    /// activation-sized blocks one forward holds, in units of one `[S, dv]`
+    /// float32 residual. The geometry puts the dense score matrix (which the
+    /// device chunks) outside the counted window.
+    #[test]
+    fn a_block_holds_the_planned_number_of_residual_sized_buffers() {
+        let cfg = tiny();
+        let map = weights();
+        let model =
+            Ltx2Transformer::load(&map, &Keys::transformer(Layout::Diffusers), &cfg).unwrap();
+        let (grid, l, t_len) = ([4usize, 8, 8], 4usize, 5usize);
+        let s = grid.iter().product::<usize>();
+        let ropes = Ropes::upload(&Ltx2RopeTables::new(&cfg, grid, l, 24.0)).unwrap();
+        let (video, audio) = (tokens(s, 6, 0.41), tokens(l, 5, 0.83));
+        let (ctx_v, ctx_a) = (tokens(t_len, 12, 0.29), tokens(t_len, 12, 0.57));
+        let text = model
+            .project_text(&tensor(&ctx_v), &tensor(&ctx_a))
+            .unwrap();
+        let (video, audio) = (tensor(&video), tensor(&audio));
+        let x = s * cfg.inner_dim() * 4;
+        let scores = cfg.num_attention_heads * s * s * 4;
+        assert!(scores > 6 * x);
+        let (out, peak) = crate::alloc_track::peak_live(x / 4, 6 * x, || {
+            model.forward(&video, &audio, &text, 725.0, &ropes, None)
+        });
+        out.unwrap();
+        let units = peak as f64 / x as f64;
+        eprintln!("ltx2 forward live peak: {units:.2} x [S, dv] f32");
+        // The device plan of the same geometry (bf16 GEMM staging, fused
+        // SDPA) bounds the host forward, which has no staging but copies Kᵀ.
+        // Before intermediates were freed as they were consumed this was 16.
+        let planned = fastvideo_models::ltx2::memory::video_block_peak_units(
+            &cfg,
+            s,
+            fastvideo_models::ltx2::memory::FeedForwardChunking::RTX5090,
+        );
+        assert!(units <= planned, "{units:.2} live vs {planned:.2} planned");
+        assert!(units <= 7.0, "{units:.2}");
     }
 
     #[test]

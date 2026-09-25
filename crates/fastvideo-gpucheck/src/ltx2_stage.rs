@@ -288,6 +288,12 @@ pub enum Stage {
         /// `--offload cpu` profile). Default: `FASTVIDEO_DIT_OFFLOAD`, else `auto`.
         #[arg(long)]
         dit_offload: Option<String>,
+        /// Run as if the card had only this many GiB (e.g. 32 on a 96 GB card
+        /// to emulate an RTX 5090): every auto policy decides for that card,
+        /// the rest is held back, and a phase peaking above it fails the run.
+        /// Default: `FASTVIDEO_DEVICE_BUDGET_GIB`.
+        #[arg(long)]
+        device_budget_gib: Option<f64>,
         /// Distilled two-stage: half-res stage-1 → spatial ×2 → 3-step stage-2
         /// (one unguided forward per step). Requires `--model-version 2.3` or
         /// `2.5` and `latent_upsampler/` under `--weights`.
@@ -503,6 +509,7 @@ pub fn run(report: &mut Report, stage: &Stage) -> StageResult<()> {
             text_weights,
             text,
             dit_offload,
+            device_budget_gib,
             two_stage,
             diff_vae,
             image,
@@ -510,6 +517,9 @@ pub fn run(report: &mut Report, stage: &Stage) -> StageResult<()> {
             dense_stage2,
             pisa_stage2,
         } => {
+            if let Some(gib) = device_budget_gib {
+                crate::gpu::set_budget_gib(*gib)?;
+            }
             if *sol_stage2 && *dense_stage2 {
                 return Err(anyhow::anyhow!("--sol-stage2 and --dense-stage2 conflict").into());
             }

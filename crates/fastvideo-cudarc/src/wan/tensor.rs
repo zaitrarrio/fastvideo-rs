@@ -555,6 +555,16 @@ impl CudaTensor {
         numel(&self.shape)
     }
 
+    /// Bytes of the storage this tensor holds: 2 per element as a bf16
+    /// device buffer, 4 otherwise (host f32 or device f32).
+    pub fn stored_bytes(&self) -> u64 {
+        #[cfg(feature = "cuda")]
+        if self.device_bf16.is_some() {
+            return self.numel() as u64 * 2;
+        }
+        self.numel() as u64 * 4
+    }
+
     pub fn dim(&self, axis: usize) -> Result<usize> {
         self.shape
             .get(axis)

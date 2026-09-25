@@ -180,6 +180,9 @@ fn set_global(dev: Option<Arc<DeviceContext>>) {
 #[cfg(feature = "cuda")]
 pub fn set_global_device(ctx: DeviceContext) {
     set_global(Some(Arc::new(ctx)));
+    if let Err(e) = apply_device_budget() {
+        super::log::info(format_args!("device budget: {e}"));
+    }
 }
 
 #[cfg(feature = "cuda")]
@@ -207,7 +210,19 @@ pub fn set_thread_device(ctx: Option<Arc<DeviceContext>>) {
 /// `(free, total)` bytes of the global device, or `None` without one. What a
 /// pipeline asks before deciding whether a text encoder can stay resident
 /// beside the DiT or has to be streamed.
+///
+/// Under a device budget ([`device_budget`]) this is the card being emulated:
+/// `total` is the budget and `free` is the budget minus what this process
+/// (and anything else on the card) already uses, never more than the driver
+/// reports. Every auto policy asks here, so each decides as it would on that
+/// card.
 pub fn free_memory() -> Option<(u64, u64)> {
+    let (free, total) = raw_free_memory()?;
+    Some(budgeted_free(free, total, ballast_bytes(), device_budget()))
+}
+
+/// `(free, total)` as the driver reports them, ballast included.
+pub fn raw_free_memory() -> Option<(u64, u64)> {
     #[cfg(feature = "cuda")]
     {
         let dev = global_device()?;
@@ -219,6 +234,198 @@ pub fn free_memory() -> Option<(u64, u64)> {
     {
         None
     }
+}
+
+/// `FASTVIDEO_DEVICE_BUDGET_GIB`: decide and run as if the device had only
+/// this many GiB (a 96 GB card emulating a 32 GB one).
+pub const BUDGET_ENV: &str = "FASTVIDEO_DEVICE_BUDGET_GIB";
+
+/// `None`: not set yet (read the environment). `Some(None)`: explicitly off.
+static BUDGET_OVERRIDE: std::sync::Mutex<Option<Option<u64>>> = std::sync::Mutex::new(None);
+
+/// Parse a budget in GiB (fractions allowed): `None` for empty / `0` / `off`.
+pub fn parse_budget_gib(v: &str) -> std::result::Result<Option<u64>, String> {
+    let v = v.trim();
+    if v.is_empty() || v == "0" || v.eq_ignore_ascii_case("off") {
+        return Ok(None);
+    }
+    let gib: f64 = v
+        .parse()
+        .map_err(|_| format!("{BUDGET_ENV}={v}: expected GiB, e.g. 32 or 31.5"))?;
+    if !(gib.is_finite() && gib > 0.0) {
+        return Err(format!(
+            "{BUDGET_ENV}={v}: expected a positive number of GiB"
+        ));
+    }
+    Ok(Some((gib * (1u64 << 30) as f64) as u64))
+}
+
+/// The device budget in bytes: [`set_device_budget`] if called, else
+/// [`BUDGET_ENV`]. An unparsable variable is reported once and ignored.
+pub fn device_budget() -> Option<u64> {
+    if let Some(v) = *BUDGET_OVERRIDE.lock().expect("budget lock") {
+        return v;
+    }
+    static ENV: std::sync::OnceLock<Option<u64>> = std::sync::OnceLock::new();
+    *ENV.get_or_init(|| match std::env::var(BUDGET_ENV) {
+        Ok(v) => parse_budget_gib(&v).unwrap_or_else(|e| {
+            super::log::info(format_args!("{e}; no budget"));
+            None
+        }),
+        Err(_) => None,
+    })
+}
+
+/// Set (or clear) the budget for this process, overriding the environment
+/// (`--device-budget-gib`). Applied to a live device at once.
+pub fn set_device_budget(bytes: Option<u64>) -> Result<u64> {
+    *BUDGET_OVERRIDE.lock().expect("budget lock") = Some(bytes);
+    apply_device_budget()
+}
+
+/// `(free, total)` of the emulated card: `total = budget`, `free` = the budget
+/// minus what is in use outside the ballast, clamped to what the driver has.
+pub fn budgeted_free(free: u64, total: u64, ballast: u64, budget: Option<u64>) -> (u64, u64) {
+    let Some(budget) = budget.filter(|&b| b < total) else {
+        return (free, total);
+    };
+    let used = total.saturating_sub(free).saturating_sub(ballast);
+    (budget.saturating_sub(used).min(free), budget)
+}
+
+/// Device bytes held by the ballast of a budget (not in the pool).
+pub fn ballast_bytes() -> u64 {
+    BALLAST
+        .lock()
+        .expect("ballast lock")
+        .as_ref()
+        .map_or(0, |b| b.bytes)
+}
+
+/// Memory taken from the driver so the rest of the process sees only the
+/// budget: allocations then fail where they would on the smaller card.
+struct Ballast {
+    bytes: u64,
+    #[cfg(feature = "cuda")]
+    ptr: cudarc::driver::sys::CUdeviceptr,
+    #[cfg(feature = "cuda")]
+    ctx: Arc<cudarc::driver::CudaContext>,
+}
+
+impl Drop for Ballast {
+    fn drop(&mut self) {
+        #[cfg(feature = "cuda")]
+        if self.ctx.bind_to_thread().is_ok() {
+            let _ = unsafe { cudarc::driver::result::free_sync(self.ptr) };
+        }
+    }
+}
+
+// The pointer is a device address owned by this value alone.
+unsafe impl Send for Ballast {}
+
+static BALLAST: std::sync::Mutex<Option<Ballast>> = std::sync::Mutex::new(None);
+
+/// Size the ballast of the global device to the current budget: `total -
+/// budget` bytes (as much as is free when less is), outside the allocator
+/// pool. No budget, or no device: none. Returns the ballast size.
+pub fn apply_device_budget() -> Result<u64> {
+    let mut slot = BALLAST.lock().expect("ballast lock");
+    // Measure without the old ballast.
+    drop(slot.take());
+    #[cfg(feature = "cuda")]
+    {
+        let (Some(budget), Some(dev)) = (device_budget(), global_device()) else {
+            return Ok(0);
+        };
+        let Some((free, total)) = raw_free_memory() else {
+            return Ok(0);
+        };
+        alloc_ballast(&mut slot, dev, budget, free, total)
+    }
+    #[cfg(not(feature = "cuda"))]
+    {
+        Ok(0)
+    }
+}
+
+#[cfg(feature = "cuda")]
+fn alloc_ballast(
+    slot: &mut Option<Ballast>,
+    dev: Arc<DeviceContext>,
+    budget: u64,
+    free: u64,
+    total: u64,
+) -> Result<u64> {
+    const GIB: f64 = (1u64 << 30) as f64;
+    if budget >= total {
+        super::log::info(format_args!(
+            "device budget {:.2} GiB >= the card's {:.2} GiB: nothing to hold back",
+            budget as f64 / GIB,
+            total as f64 / GIB
+        ));
+        return Ok(0);
+    }
+    // Leave 256 MiB the driver may need for the context's own growth.
+    let want = total - budget;
+    let bytes = want.min(free.saturating_sub(256 << 20));
+    dev.ctx.bind_to_thread()?;
+    let ptr = unsafe { cudarc::driver::result::malloc_sync(bytes as usize) }?;
+    *slot = Some(Ballast {
+        bytes,
+        ptr,
+        ctx: dev.ctx.clone(),
+    });
+    super::log::info(format_args!(
+        "device budget {:.2} GiB of {:.2} GiB ({BUDGET_ENV}): {:.2} GiB held back{}",
+        budget as f64 / GIB,
+        total as f64 / GIB,
+        bytes as f64 / GIB,
+        if bytes < want {
+            " (less than asked: the card was not empty; free_memory() still reports the budget)"
+        } else {
+            ""
+        }
+    ));
+    Ok(bytes)
+}
+
+/// Device bytes in use outside the allocator pool (context, cuBLAS/cuDNN
+/// workspaces, other processes), the ballast excluded.
+pub fn non_pool_bytes() -> Option<u64> {
+    let (free, total) = raw_free_memory()?;
+    let reserved = pool_usage().map_or(0, |u| u.reserved);
+    Some(
+        total
+            .saturating_sub(free)
+            .saturating_sub(ballast_bytes())
+            .saturating_sub(reserved),
+    )
+}
+
+/// The budget check a phase ends with: `Err` names the phase and every term
+/// when the pool's peak plus what lives outside the pool exceeds the budget.
+pub fn check_budget(
+    phase: &str,
+    peak_used: u64,
+    non_pool: u64,
+    budget: Option<u64>,
+) -> std::result::Result<(), String> {
+    let Some(budget) = budget else {
+        return Ok(());
+    };
+    let peak = peak_used + non_pool;
+    if peak <= budget {
+        return Ok(());
+    }
+    const GIB: f64 = (1u64 << 30) as f64;
+    Err(format!(
+        "device budget exceeded in phase '{phase}': peak {:.2} GiB (allocator peak {:.2} GiB + {:.2} GiB outside the pool) > budget {:.2} GiB ({BUDGET_ENV} / --device-budget-gib); this run would not fit that card",
+        peak as f64 / GIB,
+        peak_used as f64 / GIB,
+        non_pool as f64 / GIB,
+        budget as f64 / GIB
+    ))
 }
 
 #[cfg(feature = "cuda")]
