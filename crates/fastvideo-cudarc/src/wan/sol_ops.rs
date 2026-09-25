@@ -1,13 +1,16 @@
 //! Device-shaped Sol-Attn / PISA / SLA stages.
 //!
-//! Host twins of the `// ==== region: sol ====` kernels. A live resident
-//! CUDA device runs the launchers in [`super::ops`]; otherwise the caller
-//! keeps the `host_algorithm`-guarded models-crate oracle.
+//! Sol-Attn runs the fused kernels (`sol_prep_*` + `sol_mma_fwd`, see
+//! [`super::ops::sol_fused_device`]) whenever a live resident CUDA device
+//! exists; their host reference is
+//! [`fastvideo_models::sol_attn::sol_attn_head_faithful`]. The PISA / SLA
+//! helpers below are host twins of the multi-launch partial kernels in
+//! `// ==== region: sol ====`. Without a device the caller keeps the
+//! `host_algorithm`-guarded models-crate oracle.
 
 use fastvideo_models::pisa_attn::{keep_for_sparsity, score_blocks, topk_mask};
 use fastvideo_models::sol_attn::{
-    block_len, diag_threshold, num_blocks, pool_means, pool_sums, route_is_exact,
-    sink_block_flags, BLOCK_SIZE, LOG2_E,
+    block_len, num_blocks, pool_means, pool_sums, SolParams, BLOCK_SIZE,
 };
 
 use super::tensor::{CudaTensor, Result, TensorError};
@@ -123,73 +126,12 @@ fn pool_head_sums(x: &[f32], tokens: usize, dim: usize) -> Vec<f32> {
     pool_sums(x, tokens, dim)
 }
 
-/// Token-to-block scores `Q @ Kc^T * scale` for one head: `[tokens, n]`.
-fn token_block_scores(q: &[f32], kc: &[f32], tokens: usize, n: usize, dim: usize, scale: f32) -> Vec<f32> {
-    let mut out = vec![0.0f32; tokens * n];
-    for t in 0..tokens {
-        let qt = &q[t * dim..(t + 1) * dim];
-        for j in 0..n {
-            let mut s = 0.0f32;
-            let kj = &kc[j * dim..(j + 1) * dim];
-            for d in 0..dim {
-                s += qt[d] * kj[d];
-            }
-            out[t * n + j] = s * scale;
-        }
-    }
-    out
-}
-
-/// Per-(qblock) exact KV-block list, padded with [`SENTINEL`].
-pub fn exact_lists_sol(
-    q: &[f32],
-    kc: &[f32],
-    tokens: usize,
-    dim: usize,
-    tau: f32,
-    scale: f32,
-    sinks: &[(Option<usize>, usize)],
-) -> Vec<u32> {
-    let n = num_blocks(tokens);
-    let q_bar = pool_head_means(q, tokens, dim);
-    let thresh = diag_threshold(&q_bar, kc, n, dim, tau, scale);
-    let sink_flags = sink_block_flags(tokens, sinks);
-    let log2_scale = scale * LOG2_E;
-    let scores = token_block_scores(q, kc, tokens, n, dim, log2_scale);
-    let mut lists = vec![SENTINEL; n * n];
-    for i in 0..n {
-        let q_len = block_len(tokens, i);
-        let q_start = i * BLOCK_SIZE;
-        let mut w = 0usize;
-        for j in 0..n {
-            let mut sum = 0.0f32;
-            for t in 0..q_len {
-                sum += scores[(q_start + t) * n + j];
-            }
-            let column_mean = if q_len > 0 {
-                sum / q_len as f32
-            } else {
-                f32::NEG_INFINITY
-            };
-            let (sink_lo, sink_hi) = if sink_flags.get(j).copied().unwrap_or(false) {
-                (j, j + 1)
-            } else {
-                (n, n)
-            };
-            if route_is_exact(i, j, column_mean, thresh[i], sink_lo, sink_hi, true) {
-                lists[i * n + w] = j as u32;
-                w += 1;
-            }
-        }
-    }
-    lists
-}
-
 fn is_exact(list: &[u32], n: usize, qblock: usize, kv: u32) -> bool {
     let row = &list[qblock * n..(qblock + 1) * n];
-    row.iter().any(|&x| x == kv)
+    row.contains(&kv)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn fine_partials(
     q: &[f32],
     k: &[f32],
@@ -239,6 +181,7 @@ fn fine_partials(
     p
 }
 
+#[allow(clippy::too_many_arguments)]
 fn coarse_partials(
     q: &[f32],
     kc: &[f32],
@@ -325,49 +268,6 @@ fn apply_first_order(
             acc[d] += tail * qh;
         }
     }
-}
-
-/// Device-shaped Sol-Attn for one BHSD batch. Matches
-/// [`fastvideo_models::sol_attn::sol_attn_bhsd_sunk`] within tight rel-error.
-#[allow(clippy::too_many_arguments)]
-pub fn sol_attn_bhsd_device_alg(
-    q: &[f32],
-    k: &[f32],
-    v: &[f32],
-    batch: usize,
-    heads: usize,
-    tokens: usize,
-    dim: usize,
-    tau: f32,
-    scale: f32,
-    sinks: &[(Option<usize>, usize)],
-) -> Result<Vec<f32>> {
-    let want = batch * heads * tokens * dim;
-    if q.len() != want || k.len() != want || v.len() != want {
-        return Err(msg(format!(
-            "sol device-alg: q/k/v want {want}, got {}/{}/{}",
-            q.len(),
-            k.len(),
-            v.len()
-        )));
-    }
-    let log2_scale = scale * LOG2_E;
-    let stride = tokens * dim;
-    let mut out = vec![0.0f32; want];
-    for bh in 0..batch * heads {
-        let base = bh * stride;
-        let qh = &q[base..base + stride];
-        let kh = &k[base..base + stride];
-        let vh = &v[base..base + stride];
-        let kc = pool_head_means(kh, tokens, dim);
-        let vc = pool_head_sums(vh, tokens, dim);
-        let lists = exact_lists_sol(qh, &kc, tokens, dim, tau, scale, sinks);
-        let coarse = coarse_partials(qh, &kc, &vc, &lists, tokens, dim, log2_scale, true);
-        let fine = fine_partials(qh, kh, vh, &lists, tokens, dim, log2_scale, true);
-        let (_, y) = lse_merge(&coarse, &fine, dim, true);
-        out[base..base + stride].copy_from_slice(&y);
-    }
-    Ok(out)
 }
 
 /// Device-shaped PISA: VSA-style top-k selection, zeroth-order remainder,
@@ -508,15 +408,10 @@ pub fn sla_sparse_bhsd(
     Ok(out)
 }
 
-#[cfg(feature = "cuda")]
-fn sinks_from_pairs(sinks: &[(usize, usize)]) -> Vec<(Option<usize>, usize)> {
-    if sinks.is_empty() {
-        return vec![(None, 0)];
-    }
-    sinks.iter().map(|&(s, l)| (Some(s), l)).collect()
-}
-
-/// Run Sol on device when a live resident CUDA context exists.
+/// Run Sol (diag thresholds) on device when a live resident CUDA context
+/// exists. `sinks` are `(start, len)` token spans; the fused kernel takes one
+/// contiguous sink range, so several spans must merge into one
+/// ([`fastvideo_models::sol_attn::merge_sink_spans`]) or this errors.
 pub fn try_sol_device(
     q: &CudaTensor,
     k: &CudaTensor,
@@ -528,10 +423,36 @@ pub fn try_sol_device(
     #[cfg(feature = "cuda")]
     {
         if super::stats::device_expected() {
-            return Ok(Some(sol_attn_cuda(q, k, v, tau, scale, sinks)?));
+            let tokens = q.shape.get(2).copied().unwrap_or(0);
+            let (sink_start, sink_tokens) =
+                fastvideo_models::sol_attn::merge_sink_spans(tokens, sinks).map_err(msg)?;
+            let p = SolParams {
+                sink_start,
+                sink_tokens,
+                ..SolParams::diag(tau, scale)
+            };
+            return Ok(Some(sol_attn_cuda(q, k, v, &p)?));
         }
     }
     let _ = (q, k, v, tau, scale, sinks);
+    Ok(None)
+}
+
+/// [`try_sol_device`] with explicit [`SolParams`] (threshold type, single
+/// Python-style sink span).
+pub fn try_sol_device_params(
+    q: &CudaTensor,
+    k: &CudaTensor,
+    v: &CudaTensor,
+    p: &SolParams,
+) -> Result<Option<CudaTensor>> {
+    #[cfg(feature = "cuda")]
+    {
+        if super::stats::device_expected() {
+            return Ok(Some(sol_attn_cuda(q, k, v, p)?));
+        }
+    }
+    let _ = (q, k, v, p);
     Ok(None)
 }
 
@@ -577,27 +498,22 @@ pub fn try_sla_device(
 
 #[cfg(feature = "cuda")]
 fn ensure_dev(t: &CudaTensor) -> Result<super::tensor::DevRef<'_>> {
-    t.dev()?.ok_or_else(|| msg("sol device path: tensor is host-only"))
+    t.dev()?
+        .ok_or_else(|| msg("sol device path: tensor is host-only"))
 }
 
 #[cfg(feature = "cuda")]
-#[allow(clippy::too_many_arguments)]
 fn sol_attn_cuda(
     q: &CudaTensor,
     k: &CudaTensor,
     v: &CudaTensor,
-    tau: f32,
-    scale: f32,
-    sinks: &[(usize, usize)],
+    p: &SolParams,
 ) -> Result<CudaTensor> {
     let (batch, heads, tokens, dim) = (q.shape[0], q.shape[1], q.shape[2], q.shape[3]);
-    let official = sinks_from_pairs(sinks);
     let qd = ensure_dev(q)?;
     let kd = ensure_dev(k)?;
     let vd = ensure_dev(v)?;
-    let out = super::ops::sol_attn_device(
-        &qd, &kd, &vd, batch, heads, tokens, dim, tau, scale, &official,
-    )?;
+    let out = super::ops::sol_fused_device(&qd, &kd, &vd, batch * heads, tokens, dim, p)?;
     CudaTensor::from_dev_result(out, q.shape.clone())
 }
 
@@ -613,7 +529,8 @@ fn pisa_attn_cuda(
     let qd = ensure_dev(q)?;
     let kd = ensure_dev(k)?;
     let vd = ensure_dev(v)?;
-    let out = super::ops::pisa_attn_device(&qd, &kd, &vd, batch, heads, tokens, dim, sparsity, scale)?;
+    let out =
+        super::ops::pisa_attn_device(&qd, &kd, &vd, batch, heads, tokens, dim, sparsity, scale)?;
     CudaTensor::from_dev_result(out, q.shape.clone())
 }
 
@@ -681,7 +598,6 @@ fn sla_linear_device(q: &CudaTensor, k: &CudaTensor, v: &CudaTensor) -> Result<C
 mod tests {
     use super::*;
     use fastvideo_models::pisa_attn::pisa_attn_bhsd;
-    use fastvideo_models::sol_attn::sol_attn_bhsd_sunk;
 
     fn seeded(n: usize, k: f32) -> Vec<f32> {
         (0..n).map(|i| (i as f32 * k + 0.3).sin()).collect()
@@ -703,33 +619,6 @@ mod tests {
         assert_eq!(slots[64], 64);
         assert_eq!(slots[69], 69);
         assert_eq!(slots[70], -1);
-    }
-
-    #[test]
-    fn sol_device_alg_matches_models_oracle() {
-        let (b, h, t, d) = (1usize, 2usize, 40usize, 8usize);
-        let q = seeded(b * h * t * d, 0.11);
-        let k = seeded(b * h * t * d, 0.17);
-        let v = seeded(b * h * t * d, 0.23);
-        let scale = (d as f32).sqrt().recip();
-        let sinks = [(Some(0), 8)];
-        let got = sol_attn_bhsd_device_alg(&q, &k, &v, b, h, t, d, 1.25, scale, &sinks).unwrap();
-        let want = sol_attn_bhsd_sunk(&q, &k, &v, b, h, t, d, 1.25, scale, &sinks).unwrap();
-        let err = max_abs(&got, &want);
-        assert!(err < 3e-5, "max abs {err}");
-    }
-
-    #[test]
-    fn sol_full_sink_matches_models_dense() {
-        let (t, d) = (24usize, 8usize);
-        let q = seeded(t * d, 0.13);
-        let k = seeded(t * d, 0.19);
-        let v = seeded(t * d, 0.23);
-        let scale = (d as f32).sqrt().recip();
-        let got = sol_attn_bhsd_device_alg(&q, &k, &v, 1, 1, t, d, 1.0, scale, &[(Some(0), t)])
-            .unwrap();
-        let want = sol_attn_bhsd_sunk(&q, &k, &v, 1, 1, t, d, 1.0, scale, &[(Some(0), t)]).unwrap();
-        assert!(max_abs(&got, &want) < 2e-5);
     }
 
     #[test]

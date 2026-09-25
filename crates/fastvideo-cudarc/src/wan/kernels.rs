@@ -126,6 +126,11 @@ kernel_fns!(
     sol_global_h_bar,
     sol_pisa_first_order,
     sol_mma_attn_partials,
+    sol_prep_kv,
+    sol_prep_kstats,
+    sol_prep_kgram,
+    sol_prep_q,
+    sol_mma_fwd,
 );
 
 /// NVRTC-compile the kernel module for `sm_major.sm_minor` without touching a

@@ -2853,11 +2853,11 @@ pub fn sol_tile_sum_device(
 
 #[cfg(feature = "cuda")]
 #[allow(clippy::too_many_arguments)]
-fn sol_alloc_partials(bh: usize, tokens: usize, dim: usize) -> Result<(
-    CudaSlice<f32>,
-    CudaSlice<f32>,
-    CudaSlice<f32>,
-)> {
+fn sol_alloc_partials(
+    bh: usize,
+    tokens: usize,
+    dim: usize,
+) -> Result<(CudaSlice<f32>, CudaSlice<f32>, CudaSlice<f32>)> {
     Ok((
         fill_device(bh * tokens, f32::NEG_INFINITY)?,
         fill_device(bh * tokens, 0.0)?,
@@ -2865,11 +2865,263 @@ fn sol_alloc_partials(bh: usize, tokens: usize, dim: usize) -> Result<(
     ))
 }
 
-/// Full Sol-Attn on device: pool → coarse GEMM → threshold lists →
-/// fine/coarse partials → LSE merge.
+/// Head dim the fused Sol kernels are built for (`MMA_DIM`).
+pub const SOL_HEAD_DIM: usize = 128;
+
+/// bf16 operands and routing inputs written by the three Sol prep launches.
+/// All buffers are per call and stay on the device.
+#[cfg(feature = "cuda")]
+pub struct SolPrepDev {
+    /// `[bh, T, 128]` bf16 (RNE) copies of Q/K/V.
+    pub qb: CudaSlice<half::bf16>,
+    pub kb: CudaSlice<half::bf16>,
+    pub vb: CudaSlice<half::bf16>,
+    /// `[bh, NT, 128]` bf16 pooled keys (mean over live rows) / values (sum).
+    pub kc: CudaSlice<half::bf16>,
+    pub vc: CudaSlice<half::bf16>,
+    /// `[bh, 2, 128]` f32 `(mu, var)` of the Kc rows.
+    pub kstat: CudaSlice<f32>,
+    /// `[bh, 128, 128]` bf16 `bf16(KcᵀKc)/NT`, `thresh_type=exact` only.
+    pub km: Option<CudaSlice<half::bf16>>,
+    /// `[bh, NT]` f32 routing thresholds (log2-score units).
+    pub thr: CudaSlice<f32>,
+    pub bh: usize,
+    pub tokens: usize,
+    pub nt: usize,
+}
+
+/// Fused forward outputs. `out` is f32 BHSD `[bh, T, 128]`.
+#[cfg(feature = "cuda")]
+pub struct SolFwdDev {
+    pub out: CudaSlice<f32>,
+    /// `[bh, T]` natural-log LSE when requested.
+    pub lse: Option<CudaSlice<f32>>,
+    /// `[bh, NT, 2 * G]` route ballots (bit `b` of word `2g + w` = KV block
+    /// `64g + 32w + b` exact) when requested.
+    pub route: Option<CudaSlice<u32>>,
+}
+
+#[cfg(feature = "cuda")]
+fn sol_geometry(what: &str, len: usize, bh: usize, tokens: usize, dim: usize) -> Result<()> {
+    check(what, len == bh * tokens * dim && tokens > 0 && bh > 0)?;
+    if dim != SOL_HEAD_DIM {
+        return Err(TensorError::Message(format!(
+            "{what}: the fused Sol kernel needs head_dim {SOL_HEAD_DIM}, got {dim}"
+        )));
+    }
+    if bh > 65_535 {
+        return Err(TensorError::Message(format!(
+            "{what}: batch*heads {bh} exceeds the grid-y limit"
+        )));
+    }
+    Ok(())
+}
+
+/// Sol prep: `sol_prep_kv` (K/V → bf16 + Kc/Vc), `sol_prep_kstats`
+/// (+ `sol_prep_kgram` for exact thresholds) and `sol_prep_q` (Q → bf16 +
+/// thresholds). Three or four launches, each reading its f32 source once.
+#[cfg(feature = "cuda")]
+#[allow(clippy::too_many_arguments)]
+pub fn sol_prep_device(
+    q: &CudaSlice<f32>,
+    k: &CudaSlice<f32>,
+    v: &CudaSlice<f32>,
+    bh: usize,
+    tokens: usize,
+    dim: usize,
+    tau: f32,
+    scale: f32,
+    thresh: fastvideo_models::sol_attn::SolThresh,
+) -> Result<SolPrepDev> {
+    use fastvideo_models::sol_attn::{num_blocks, SolThresh, LOG2_E};
+    for (name, x) in [("sol_prep q", q), ("sol_prep k", k), ("sol_prep v", v)] {
+        sol_geometry(name, x.len(), bh, tokens, dim)?;
+    }
+    let dev = ctx()?;
+    let nt = num_blocks(tokens);
+    let n_tok = bh * tokens * dim;
+    let n_blk = bh * nt * dim;
+    let bf = |n: usize| unsafe { dev.stream.alloc::<half::bf16>(n.max(1)) }.map_err(err);
+    let (mut qb, mut kb, mut vb) = (bf(n_tok)?, bf(n_tok)?, bf(n_tok)?);
+    let (mut kc, mut vc) = (bf(n_blk)?, bf(n_blk)?);
+    let mut kstat = alloc(bh * 2 * dim)?;
+    let mut thr = alloc(bh * nt)?;
+    let (t_i, nt_i) = (tokens as i32, nt as i32);
+    let per_block = LaunchConfig {
+        grid_dim: (nt as u32, bh as u32, 1),
+        block_dim: (SOL_HEAD_DIM as u32, 1, 1),
+        shared_mem_bytes: 0,
+    };
+    launch!(dev.stream, &dev.kernels.sol_prep_kv, per_block;
+        k, v, &mut kb, &mut vb, &mut kc, &mut vc, &t_i, &nt_i)
+    .map_err(err)?;
+    let per_head = LaunchConfig {
+        grid_dim: (bh as u32, 1, 1),
+        block_dim: (SOL_HEAD_DIM as u32, 1, 1),
+        shared_mem_bytes: 0,
+    };
+    launch!(dev.stream, &dev.kernels.sol_prep_kstats, per_head; &kc, &mut kstat, &nt_i)
+        .map_err(err)?;
+    let exact = thresh == SolThresh::Exact;
+    let km = if exact {
+        let mut km = bf(bh * dim * dim)?;
+        let cfg = LaunchConfig {
+            grid_dim: (bh as u32, (SOL_HEAD_DIM / 16) as u32, 1),
+            block_dim: (256, 1, 1),
+            shared_mem_bytes: 0,
+        };
+        launch!(dev.stream, &dev.kernels.sol_prep_kgram, cfg; &kc, &mut km, &nt_i).map_err(err)?;
+        Some(km)
+    } else {
+        None
+    };
+    // cudarc cannot pass a null pointer: diag mode hands P3 a 1-element dummy.
+    let km_dummy;
+    let km_arg = match &km {
+        Some(m) => m,
+        None => {
+            km_dummy = bf(1)?;
+            &km_dummy
+        }
+    };
+    let sl2 = scale * LOG2_E;
+    let exact_i = i32::from(exact);
+    launch!(dev.stream, &dev.kernels.sol_prep_q, per_block;
+        q, &mut qb, &kstat, km_arg, &mut thr, &t_i, &nt_i, &tau, &sl2, &exact_i)
+    .map_err(err)?;
+    Ok(SolPrepDev {
+        qb,
+        kb,
+        vb,
+        kc,
+        vc,
+        kstat,
+        km,
+        thr,
+        bh,
+        tokens,
+        nt,
+    })
+}
+
+/// Fused Sol forward (`sol_mma_fwd`): one CTA per (64-query tile, head).
+/// `sink_blocks` is the single sink KV-block range `[lo, hi)` (empty when
+/// `lo >= hi`), see [`fastvideo_models::sol_attn::sink_blocks`].
+#[cfg(feature = "cuda")]
+pub fn sol_fwd_device(
+    prep: &SolPrepDev,
+    scale: f32,
+    sink_blocks: (usize, usize),
+    want_lse: bool,
+    want_route: bool,
+) -> Result<SolFwdDev> {
+    use fastvideo_models::sol_attn::{LOG2_E, ROUTE_GROUP};
+    let dev = ctx()?;
+    check("sol_mma_fwd needs sm80+ (bf16 mma.sync)", dev.sm_major >= 8)?;
+    let (bh, tokens, nt) = (prep.bh, prep.tokens, prep.nt);
+    let groups = nt.div_ceil(ROUTE_GROUP);
+    let mut out = alloc(bh * tokens * SOL_HEAD_DIM)?;
+    let mut out_bf16 = unsafe { dev.stream.alloc::<half::bf16>(1) }.map_err(err)?;
+    let mut lse = alloc(if want_lse { bh * tokens } else { 1 })?;
+    let mut route = unsafe {
+        dev.stream
+            .alloc::<u32>(if want_route { bh * nt * 2 * groups } else { 1 })
+    }
+    .map_err(err)?;
+    let (lo, hi) = if sink_blocks.0 < sink_blocks.1 {
+        (sink_blocks.0.min(nt), sink_blocks.1.min(nt))
+    } else {
+        (nt, nt)
+    };
+    let cfg = LaunchConfig {
+        grid_dim: (nt as u32, bh as u32, 1),
+        block_dim: (128, 1, 1),
+        // Static shared memory (34.4 KB): two CTAs per SM, no opt-in.
+        shared_mem_bytes: 0,
+    };
+    let (out_is_bf16, has_lse, has_dbg) = (0i32, i32::from(want_lse), i32::from(want_route));
+    let (t_i, nt_i, lo_i, hi_i) = (tokens as i32, nt as i32, lo as i32, hi as i32);
+    let sl2 = scale * LOG2_E;
+    launch!(dev.stream, &dev.kernels.sol_mma_fwd, cfg;
+        &prep.qb, &prep.kb, &prep.vb, &prep.kc, &prep.vc, &prep.thr,
+        &mut out, &mut out_bf16, &out_is_bf16, &mut lse, &has_lse, &mut route, &has_dbg,
+        &t_i, &nt_i, &lo_i, &hi_i, &sl2)
+    .map_err(err)?;
+    Ok(SolFwdDev {
+        out,
+        lse: want_lse.then_some(lse),
+        route: want_route.then_some(route),
+    })
+}
+
+/// Fused Sol-Attn on f32 BHSD `[bh, T, 128]` q/k/v: prep + `sol_mma_fwd`,
+/// four (five for exact thresholds) launches, no host traffic.
+#[cfg(feature = "cuda")]
+#[allow(clippy::too_many_arguments)]
+pub fn sol_fused_device(
+    q: &CudaSlice<f32>,
+    k: &CudaSlice<f32>,
+    v: &CudaSlice<f32>,
+    bh: usize,
+    tokens: usize,
+    dim: usize,
+    p: &fastvideo_models::sol_attn::SolParams,
+) -> Result<CudaSlice<f32>> {
+    use fastvideo_models::sol_attn::sink_blocks;
+    let dev = ctx()?;
+    check(
+        "sol-attn device path needs sm80+ (bf16 mma.sync)",
+        dev.sm_major >= 8,
+    )?;
+    let prep = sol_prep_device(q, k, v, bh, tokens, dim, p.tau, p.scale, p.thresh)?;
+    let sinks = sink_blocks(tokens, p.sink_start, p.sink_tokens);
+    Ok(sol_fwd_device(&prep, p.scale, sinks, false, false)?.out)
+}
+
+/// Sol-Attn on device through the fused kernel (diag thresholds).
+///
+/// `sinks` are Python-style `(sink_start, sink_tokens)` spans (`None` start
+/// = suffix). The kernel, like the reference, takes ONE contiguous sink
+/// range: several spans are accepted only when their KV-block ranges merge
+/// into one ([`fastvideo_models::sol_attn::merge_sink_spans`]); otherwise
+/// this returns an error rather than change which blocks are exact.
 #[cfg(feature = "cuda")]
 #[allow(clippy::too_many_arguments)]
 pub fn sol_attn_device(
+    q: &CudaSlice<f32>,
+    k: &CudaSlice<f32>,
+    v: &CudaSlice<f32>,
+    batch: usize,
+    heads: usize,
+    tokens: usize,
+    dim: usize,
+    tau: f32,
+    scale: f32,
+    sinks: &[(Option<usize>, usize)],
+) -> Result<CudaSlice<f32>> {
+    use fastvideo_models::sol_attn::{merge_sink_spans, SolParams};
+    let spans: Vec<(usize, usize)> = sinks
+        .iter()
+        .map(|&(start, len)| (start.unwrap_or(tokens.saturating_sub(len)), len))
+        .collect();
+    let (sink_start, sink_tokens) =
+        merge_sink_spans(tokens, &spans).map_err(TensorError::Message)?;
+    let p = SolParams {
+        sink_start,
+        sink_tokens,
+        ..SolParams::diag(tau, scale)
+    };
+    sol_fused_device(q, k, v, batch * heads, tokens, dim, &p)
+}
+
+/// The previous multi-launch Sol pipeline (pool → f32 route GEMM → exact
+/// lists → fine/coarse partials → LSE merge). Not used by any model: kept
+/// only so a GPU regression test can exercise `sol_mma_attn_partials` /
+/// `sol_lse_merge` after the m-units and m/l-store fixes. Needs a host-built
+/// plan upload per call; use [`sol_attn_device`].
+#[cfg(feature = "cuda")]
+#[allow(clippy::too_many_arguments)]
+pub fn sol_attn_multipass_device(
     q: &CudaSlice<f32>,
     k: &CudaSlice<f32>,
     v: &CudaSlice<f32>,
@@ -2885,14 +3137,25 @@ pub fn sol_attn_device(
     let bh = batch * heads;
     let n = tokens.div_ceil(fastvideo_models::sol_attn::BLOCK_SIZE);
     let (slot_src, block_sizes) = super::sol_ops::sequential_plan(tokens);
-    let plan = vsa_plan_upload(&slot_src, &block_sizes, fastvideo_models::sol_attn::BLOCK_SIZE)?;
+    let plan = vsa_plan_upload(
+        &slot_src,
+        &block_sizes,
+        fastvideo_models::sol_attn::BLOCK_SIZE,
+    )?;
     let kc = vsa_tile_mean_device(k, &plan, bh, tokens, dim)?;
     let vc = sol_tile_sum_device(v, &plan, bh, tokens, dim)?;
     let q_bar = vsa_tile_mean_device(q, &plan, bh, tokens, dim)?;
     let log2_scale = scale * LOG2_E;
     let mut scores = alloc(bh * tokens * n)?;
     super::device::matmul_linear_wt_strided_batched_f32(
-        q, &kc, &mut scores, bh, tokens, dim, n, log2_scale,
+        q,
+        &kc,
+        &mut scores,
+        bh,
+        tokens,
+        dim,
+        n,
+        log2_scale,
     )
     .map_err(err)?;
     let thresh = sol_diag_threshold_device(&q_bar, &kc, bh, n, dim, tau, scale)?;
@@ -2904,7 +3167,15 @@ pub fn sol_attn_device(
         q, &kc, &vc, &lists, &plan, bh, tokens, dim, n, n, log2_scale, 1,
     )?;
     sol_lse_merge_device(
-        &coarse_m, &coarse_l, &coarse_acc, &fine_m, &fine_l, &fine_acc, bh * tokens, dim, 1,
+        &coarse_m,
+        &coarse_l,
+        &coarse_acc,
+        &fine_m,
+        &fine_l,
+        &fine_acc,
+        bh * tokens,
+        dim,
+        1,
     )
 }
 
@@ -2927,13 +3198,26 @@ pub fn pisa_attn_device(
     let n = tokens.div_ceil(fastvideo_models::sol_attn::BLOCK_SIZE);
     let keep = keep_for_sparsity(n, sparsity).max(1);
     let (slot_src, block_sizes) = super::sol_ops::sequential_plan(tokens);
-    let plan = vsa_plan_upload(&slot_src, &block_sizes, fastvideo_models::sol_attn::BLOCK_SIZE)?;
+    let plan = vsa_plan_upload(
+        &slot_src,
+        &block_sizes,
+        fastvideo_models::sol_attn::BLOCK_SIZE,
+    )?;
     let q_bar = vsa_tile_mean_device(q, &plan, bh, tokens, dim)?;
     let kc = vsa_tile_mean_device(k, &plan, bh, tokens, dim)?;
     let vc = sol_tile_sum_device(v, &plan, bh, tokens, dim)?;
     let mut scores = alloc(bh * n * n)?;
-    super::device::matmul_linear_wt_strided_batched_f32(&q_bar, &kc, &mut scores, bh, n, dim, n, scale)
-        .map_err(err)?;
+    super::device::matmul_linear_wt_strided_batched_f32(
+        &q_bar,
+        &kc,
+        &mut scores,
+        bh,
+        n,
+        dim,
+        n,
+        scale,
+    )
+    .map_err(err)?;
     let lists = vsa_topk_device(&scores, bh * n, n, keep)?;
     let (fine_m, fine_l, fine_acc) =
         sol_fine_partials_device(q, k, v, &lists, bh, tokens, dim, n, keep, 64, 64, scale, 0)?;
@@ -2941,7 +3225,15 @@ pub fn pisa_attn_device(
         q, &kc, &vc, &lists, &plan, bh, tokens, dim, n, keep, scale, 0,
     )?;
     let (m, l, mut acc) = sol_lse_combine_device(
-        &coarse_m, &coarse_l, &coarse_acc, &fine_m, &fine_l, &fine_acc, bh * tokens, dim, 0,
+        &coarse_m,
+        &coarse_l,
+        &coarse_acc,
+        &fine_m,
+        &fine_l,
+        &fine_acc,
+        bh * tokens,
+        dim,
+        0,
     )?;
     let h = sol_global_h_bar_device(k, v, &kc, bh, tokens, dim, n, 64)?;
     sol_pisa_first_order_device(q, &h, &coarse_m, &coarse_l, &m, &mut acc, bh, tokens, dim)?;
@@ -2974,11 +3266,32 @@ pub fn sla_sparse_device(
     let qc = vsa_tile_mean_device(q, &q_plan, bh, tokens, dim)?;
     let kc = vsa_tile_mean_device(k_score, &k_plan, bh, tokens, dim)?;
     let mut scores = alloc(bh * nq * nk)?;
-    super::device::matmul_linear_wt_strided_batched_f32(&qc, &kc, &mut scores, bh, nq, dim, nk, 1.0)
-        .map_err(err)?;
+    super::device::matmul_linear_wt_strided_batched_f32(
+        &qc,
+        &kc,
+        &mut scores,
+        bh,
+        nq,
+        dim,
+        nk,
+        1.0,
+    )
+    .map_err(err)?;
     let lists = vsa_topk_device(&scores, bh * nq, nk, topk)?;
     let (m, l, acc) = sol_fine_partials_device(
-        q, k, v, &lists, bh, tokens, dim, nq, topk, cfg.blk_q as i32, cfg.blk_k as i32, scale, 0,
+        q,
+        k,
+        v,
+        &lists,
+        bh,
+        tokens,
+        dim,
+        nq,
+        topk,
+        cfg.blk_q as i32,
+        cfg.blk_k as i32,
+        scale,
+        0,
     )?;
     let _ = m;
     sol_normalize_partials_device(&l, &acc, bh * tokens, dim)
@@ -3070,7 +3383,8 @@ fn sol_fine_or_mma(
 ) -> Result<(CudaSlice<f32>, CudaSlice<f32>, CudaSlice<f32>)> {
     let dev = ctx()?;
     if dim == 128 && plan.tile_elems == 64 && dev.sm_major >= 8 && log2_space == 1 {
-        if let Ok(p) = sol_mma_partials_device(q, k, v, lists, plan, bh, tokens, dim, max_keep, scale)
+        if let Ok(p) =
+            sol_mma_partials_device(q, k, v, lists, plan, bh, tokens, dim, max_keep, scale)
         {
             return Ok(p);
         }
