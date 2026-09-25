@@ -21,6 +21,7 @@ mod h3_stage;
 mod hunyuan15_stage;
 #[cfg(feature = "cuda")]
 mod kernels;
+mod serve;
 mod llm_oracle;
 mod ltx2_stage;
 #[cfg(feature = "cuda")]
@@ -152,6 +153,13 @@ struct RefArgs {
 
 #[derive(Subcommand)]
 enum Cmd {
+    /// Serve a directory read-only over HTTP (run logs for SSH-free drivers).
+    Serve {
+        #[arg(long)]
+        dir: PathBuf,
+        #[arg(long, default_value_t = 8000)]
+        port: u16,
+    },
     /// NVRTC-compile the kernel module for each compute capability (no GPU).
     #[cfg(feature = "cuda")]
     Nvrtc {
@@ -359,6 +367,7 @@ fn check_dump_mode(io: &reference::RefIo, device: &str, mode: Mode) -> StageResu
 
 fn stage_name(cmd: &Cmd) -> &'static str {
     match cmd {
+        Cmd::Serve { .. } => "serve",
         #[cfg(feature = "cuda")]
         Cmd::Nvrtc { .. } => "nvrtc",
         #[cfg(feature = "cuda")]
@@ -386,6 +395,7 @@ fn run(cli: &Cli, report: &mut Report) -> StageResult<()> {
     report.set("mode", cli.mode);
     report.set("cuda_feature", cfg!(feature = "cuda"));
     match &cli.cmd {
+        Cmd::Serve { dir, port } => Ok(serve::run(dir, *port)?),
         #[cfg(feature = "cuda")]
         Cmd::Nvrtc { sm } => {
             // Which SMs this binary carries real SASS for. Empty means it was
@@ -552,6 +562,14 @@ fn run(cli: &Cli, report: &mut Report) -> StageResult<()> {
 
 fn main() {
     let cli = Cli::parse();
+    // The file server writes no report and touches no GPU.
+    if let Cmd::Serve { dir, port } = &cli.cmd {
+        if let Err(e) = serve::run(dir, *port) {
+            eprintln!("serve: {e}");
+            std::process::exit(1);
+        }
+        return;
+    }
     // Must precede every cudarc call: its FASTVIDEO_* flags are cached on first read.
     cli.mode.apply_env();
     if cli.vsa {

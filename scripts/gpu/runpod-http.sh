@@ -66,8 +66,14 @@ start_cmd() {
 set -u
 OUT=/workspace/runs/$FAMILY/$tag
 mkdir -p "\$OUT"
-( apt-get update -qq >/dev/null 2>&1; apt-get install -y -qq python3-minimal >/dev/null 2>&1
-  cd /workspace/runs && exec python3 -m http.server 8000 ) >"\$OUT/http.log" 2>&1 &
+FV=/opt/fastvideo-rs/target/release/fv-gpucheck
+if "\$FV" serve --help >/dev/null 2>&1; then
+  "\$FV" serve --dir /workspace/runs --port 8000 >"\$OUT/http.log" 2>&1 &
+else
+  # Images before fv-gpucheck serve: Python's server (needs apt on the box).
+  ( apt-get update -qq >/dev/null 2>&1; apt-get install -y -qq python3-minimal >/dev/null 2>&1
+    cd /workspace/runs && exec python3 -m http.server 8000 ) >"\$OUT/http.log" 2>&1 &
+fi
 {
   echo "image_build_id=\$(cat /opt/fastvideo-rs/target/release/fv-gpucheck.build-id 2>/dev/null)"
   nvidia-smi --query-gpu=name,memory.total,driver_version --format=csv,noheader
