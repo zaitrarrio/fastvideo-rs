@@ -1,7 +1,28 @@
 //! FLUX.2 host configs. Spec: docs/ports/flux2.md.
 
+pub mod config;
+pub mod family;
+pub mod parity;
+pub mod text;
+pub mod weights;
+
 use crate::schedulers::FlowMatchEulerDiscreteScheduler;
 use crate::vae::AutoencoderKlConfig;
+
+pub use config::{
+    Flux2ArchConfig, Flux2VaeConfig, FLUX2_TRANSFORMER_REQUIRED_KEYS, FLUX2_VAE_REQUIRED_KEYS,
+    PARAM_NAMES_MAPPING,
+};
+pub use family::{
+    compute_empirical_mu, flux2_time_shift, image_ids, pack_latents_2x2, packed_hw,
+    stack_hidden_layers, text_ids, unpatchify_2x2,
+};
+pub use parity::{klein_1024_mu, mse, psnr};
+pub use text::{
+    flux2_dummy_text, flux2_text_len, format_flux2_prompt, format_mistral3_chat, format_qwen3_chat,
+    pad_token_ids, tokenize_flux2, Flux2TextKind, Qwen3Config, FLUX2_SYSTEM_MESSAGE,
+};
+pub use weights::arch_from_transformer_config;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Flux2Preset {
@@ -60,6 +81,7 @@ pub struct Flux2TransformerConfig {
     pub rope_theta: f32,
     pub guidance_embeds: bool,
     pub patch_size: usize,
+    pub eps: f32,
 }
 
 impl Flux2TransformerConfig {
@@ -78,6 +100,7 @@ impl Flux2TransformerConfig {
             rope_theta: 2000.0,
             guidance_embeds: false,
             patch_size: 1,
+            eps: 1e-6,
         }
     }
 
@@ -96,6 +119,7 @@ impl Flux2TransformerConfig {
             rope_theta: 2000.0,
             guidance_embeds: false,
             patch_size: 1,
+            eps: 1e-6,
         }
     }
 
@@ -114,6 +138,7 @@ impl Flux2TransformerConfig {
             rope_theta: 2000.0,
             guidance_embeds: true,
             patch_size: 1,
+            eps: 1e-6,
         }
     }
 
@@ -140,6 +165,7 @@ impl Flux2TransformerConfig {
             rope_theta: 2000.0,
             guidance_embeds: false,
             patch_size: 1,
+            eps: 1e-6,
         }
     }
 

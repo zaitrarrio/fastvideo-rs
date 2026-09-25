@@ -1,0 +1,13 @@
+{
+  "negative": "",
+  "prompts": [
+    {
+      "name": "banana_table",
+      "prompt": "a photo of a banana on a wooden table, studio lighting"
+    },
+    {
+      "name": "raccoon_sunflowers",
+      "prompt": "A curious raccoon in a field of sunflowers, photorealistic, golden hour"
+    }
+  ]
+}

@@ -31,7 +31,10 @@ pub struct FluxRequest {
 
 impl FluxRequest {
     pub fn dev(prompt: impl Into<String>, seed: u64) -> Self {
-        let preset = FluxPreset::Dev;
+        Self::for_preset(FluxPreset::Dev, prompt, seed)
+    }
+
+    pub fn for_preset(preset: FluxPreset, prompt: impl Into<String>, seed: u64) -> Self {
         Self {
             prompt: prompt.into(),
             negative_prompt: String::new(),
