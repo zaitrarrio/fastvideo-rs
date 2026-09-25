@@ -85,8 +85,16 @@ pub fn quantize_device(
         ScaleRule::Mse => 2,
     };
     let (rr, cc) = (rows as i64, cols as i64);
+    // Two 16-float blocks per thread (the MSE rule): 1024-thread blocks run
+    // out of registers on sm_120, so 256.
+    let blocks = rows * cols / 16;
+    let cfg = LaunchConfig {
+        grid_dim: (blocks.div_ceil(256).max(1) as u32, 1, 1),
+        block_dim: (256, 1, 1),
+        shared_mem_bytes: 0,
+    };
     launch!(
-        d.stream, &d.kernels.nvfp4_quantize_pack, cfg_n(rows * cols / 16);
+        d.stream, &d.kernels.nvfp4_quantize_pack, cfg;
         x, &mut packed, &mut scales, &amax, &rr, &cc, &rule_i
     )
     .map_err(err)?;
