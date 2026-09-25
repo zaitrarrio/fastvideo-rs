@@ -124,6 +124,26 @@ pub struct Ltx2Request {
     pub image_path: Option<PathBuf>,
 }
 
+/// Whether stage 2 runs the Sol route when the caller did not choose. The
+/// reference's single-GPU LTX-2.5 distilled profile (`RTX5090/gpu_infer.py`,
+/// "Sol-Attn is enabled for Stage 2 video self-attention") always installs
+/// `LTX25Stage2SolAttention` for the 3-forward refine, so that is the default
+/// here too; `dense` is the control run.
+pub fn default_sol_stage2(
+    cfg: &Ltx2Config,
+    two_stage: bool,
+    refine_steps: Option<usize>,
+    pisa_stage2: bool,
+    dense: bool,
+) -> bool {
+    !dense
+        && !pisa_stage2
+        && two_stage
+        && cfg.version == Ltx2ModelVersion::V25
+        && !cfg.scheduler.use_dynamic_shifting
+        && refine_steps.unwrap_or(3) == 3
+}
+
 impl Ltx2Request {
     pub fn new(
         cfg: &Ltx2Config,
@@ -2472,6 +2492,20 @@ mod tests {
         ltx2_19b_distilled, Ltx2AudioVaeConfig, Ltx2TransformerConfig, Ltx2VideoVaeConfig,
         Ltx2VocoderConfig,
     };
+
+    #[test]
+    fn sol_stage2_is_the_25_distilled_two_stage_default() {
+        use fastvideo_models::ltx2::config::{ltx2_5_22b_dev, ltx2_5_22b_distilled};
+        let d = ltx2_5_22b_distilled();
+        assert!(default_sol_stage2(&d, true, None, false, false));
+        assert!(default_sol_stage2(&d, true, Some(3), false, false));
+        assert!(!default_sol_stage2(&d, true, Some(2), false, false), "2-step refine");
+        assert!(!default_sol_stage2(&d, false, None, false, false), "one stage");
+        assert!(!default_sol_stage2(&d, true, None, true, false), "PISA chosen");
+        assert!(!default_sol_stage2(&d, true, None, false, true), "dense control");
+        assert!(!default_sol_stage2(&ltx2_5_22b_dev(), true, None, false, false));
+        assert!(!default_sol_stage2(&ltx2_19b_distilled(), true, None, false, false));
+    }
 
     /// A whole LTX-2 in miniature: the latent widths are tied together the way
     /// the real ones are (4 VAE channels = DiT in/out; 2 × 2 audio features).

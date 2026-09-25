@@ -296,9 +296,13 @@ pub enum Stage {
         /// LTX-2.5 stage-2 Sol route (needs `--two-stage`, 3 refine steps):
         /// video self-attention on layer 0 dense, layers 1-47 on the Sol-Attn
         /// kernel at tau 1.0 / 1.25 / 1.5 (one per forward, `thresh_type=diag`,
-        /// no sinks). Cross- and audio attention stay dense.
+        /// no sinks). Cross- and audio attention stay dense. On by default for
+        /// the 2.5 distilled two-stage, as in the reference profile.
         #[arg(long, default_value_t = false)]
         sol_stage2: bool,
+        /// Dense stage 2 (the reference's "Dense Stage 2" control column).
+        #[arg(long, default_value_t = false)]
+        dense_stage2: bool,
         /// LTX-2.3 stage-2 PISA route (needs `--two-stage`, 3 refine steps):
         /// video self-attention on layers 0-1 dense, layers 2-47 on the PISA
         /// score-route kernel at sparsity 0.9, block 64.
@@ -495,8 +499,20 @@ pub fn run(report: &mut Report, stage: &Stage) -> StageResult<()> {
             diff_vae,
             image,
             sol_stage2,
+            dense_stage2,
             pisa_stage2,
         } => {
+            if *sol_stage2 && *dense_stage2 {
+                return Err(anyhow::anyhow!("--sol-stage2 and --dense-stage2 conflict").into());
+            }
+            let sol_stage2 = *sol_stage2
+                || fastvideo_cudarc::ltx2::pipeline::default_sol_stage2(
+                    &model_version.config(),
+                    *two_stage,
+                    None,
+                    *pisa_stage2,
+                    *dense_stage2,
+                );
             let text_cache = if *no_text_cache {
                 None
             } else {
@@ -537,7 +553,7 @@ pub fn run(report: &mut Report, stage: &Stage) -> StageResult<()> {
                 *warm,
                 *two_stage,
                 *diff_vae,
-                *sol_stage2,
+                sol_stage2,
                 *pisa_stage2,
                 image.as_deref(),
             )

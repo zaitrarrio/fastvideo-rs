@@ -33,6 +33,8 @@ pub struct AvGenerateOptions {
     pub refine_steps: Option<u32>,
     /// LTX-2.5 stage-2 Sol route (3 refine forwards, layer 0 dense).
     pub sol_stage2: bool,
+    /// Force a dense stage 2 (overrides the 2.5 distilled Sol default).
+    pub dense_stage2: bool,
     /// LTX-2.3 stage-2 PISA route (3 refine forwards, layers 0..=1 dense).
     pub pisa_stage2: bool,
     /// LTX-2.3 official HQ: 15-step stage-1 + 3-sigma refine, guidance 3,
@@ -212,7 +214,14 @@ fn generate_ltx2(
                 .refine_steps
                 .map(|n| n as usize)
                 .or(if hq { Some(3) } else { None }),
-            sol_stage2: opts.sol_stage2,
+            sol_stage2: opts.sol_stage2
+                || fastvideo_cudarc::ltx2::pipeline::default_sol_stage2(
+                    &cfg,
+                    opts.two_stage,
+                    opts.refine_steps.map(|n| n as usize).or(if hq { Some(3) } else { None }),
+                    opts.pisa_stage2,
+                    opts.dense_stage2,
+                ),
             pisa_stage2: opts.pisa_stage2,
             image_path: opts.image_path,
         };

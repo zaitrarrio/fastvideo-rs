@@ -125,9 +125,13 @@ struct GenerateArgs {
     refine_steps: Option<u32>,
     /// LTX-2.5 stage-2 Sol route: video self-attention on layer 0 dense, layers
     /// 1-47 on the Sol-Attn kernel at tau 1 / 1.25 / 1.5 (`thresh_type=diag`).
-    /// Requires `--two-stage` and 3 refine steps.
+    /// Requires `--two-stage` and 3 refine steps. On by default for the 2.5
+    /// distilled two-stage, as in the reference single-GPU profile.
     #[arg(long, default_value_t = false)]
     sol_stage2: bool,
+    /// Dense stage 2 (the reference's dense control run).
+    #[arg(long, default_value_t = false)]
+    dense_stage2: bool,
     /// LTX-2.3 stage-2 PISA route: video self-attention on layers 0-1 dense,
     /// layers 2-47 on the PISA score-route kernel at sparsity 0.9, block 64.
     /// Requires `--two-stage` and 3 refine steps.
@@ -184,6 +188,7 @@ struct GenerateToml {
     refine_steps: Option<u32>,
     two_stage: Option<bool>,
     sol_stage2: Option<bool>,
+    dense_stage2: Option<bool>,
     pisa_stage2: Option<bool>,
     ltx23_hq: Option<bool>,
     diff_vae: Option<bool>,
@@ -353,6 +358,7 @@ fn main() -> Result<()> {
                         num_inference_steps: args.steps.or(file.steps).or(file.num_inference_steps),
                         refine_steps: args.refine_steps.or(file.refine_steps),
                         sol_stage2: args.sol_stage2 || file.sol_stage2.unwrap_or(false),
+                        dense_stage2: args.dense_stage2 || file.dense_stage2.unwrap_or(false),
                         pisa_stage2: args.pisa_stage2 || file.pisa_stage2.unwrap_or(false),
                         ltx23_hq: args.ltx23_hq || file.ltx23_hq.unwrap_or(false),
                         image_path: args.image.or(file.image).map(PathBuf::from),
