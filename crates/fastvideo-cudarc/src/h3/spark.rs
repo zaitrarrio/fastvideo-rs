@@ -10,9 +10,10 @@
 use std::path::{Path, PathBuf};
 
 use fastvideo_models::h3::spark::{
-    align_h3_to_ltx, author_node_input, author_node_output, trilinear_ncdhw, ADAPTER_CONFIG,
+    align_h3_to_ltx, author_node_input, author_node_output, trilinear_ncdhw, upscaler_block_cadence,
+    upscaler_key_is_known, ADAPTER_CONFIG,
     ADAPTER_OUTPUT, ADAPTER_WEIGHTS, H3_INPUT, H3_UPSCALED, PIXEL_FRAMES, PIXEL_HEIGHT,
-    PIXEL_WIDTH, REFINER_INPUT, UPSCALER_FILE,
+    PIXEL_WIDTH, REFINER_INPUT, UPSCALER_FILES,
 };
 
 use crate::wan::nn::Linear;
@@ -267,6 +268,48 @@ impl Upscaler {
                 path.display()
             )));
         }
+        // `_detect_arch` + `load_state_dict(strict=True)`: the block order must
+        // be the author's cadence and every tensor must belong to the module.
+        let temporal = temporal_kernel > 0;
+        for (which, blocks) in [("in_blocks", &in_blocks), ("out_blocks", &out_blocks)] {
+            let kinds: Vec<bool> = blocks
+                .iter()
+                .map(|b| matches!(b, Block::Temporal(_)))
+                .collect();
+            let res = kinds.iter().filter(|t| !**t).count();
+            if kinds != upscaler_block_cadence(res, temporal) {
+                return Err(msg(format!(
+                    "h3 upscaler: {which} order {kinds:?} is not LatentResizer3D's ({res} res blocks, temporal_every {}) in {}",
+                    if temporal { 2 } else { 0 },
+                    path.display()
+                )));
+            }
+        }
+        if let Some(lazy) = map.lazy() {
+            let unknown: Vec<String> = lazy
+                .keys()
+                .filter_map(|k| {
+                    let local = k.strip_prefix(root).unwrap_or(k);
+                    (!upscaler_key_is_known(local, in_blocks.len(), out_blocks.len()))
+                        .then(|| k.to_string())
+                })
+                .take(4)
+                .collect();
+            if !unknown.is_empty() {
+                return Err(msg(format!(
+                    "h3 upscaler: {} has tensors LatentResizer3D does not define: {unknown:?}",
+                    path.display()
+                )));
+            }
+        }
+        crate::wan::log::info(format_args!(
+            "h3 upscaler: {} channels {} in/out res blocks {}/{} temporal kernel {}",
+            path.display(),
+            conv_in.weight.shape[0],
+            in_blocks.iter().filter(|b| matches!(b, Block::Res(_))).count(),
+            out_blocks.iter().filter(|b| matches!(b, Block::Res(_))).count(),
+            temporal_kernel
+        ));
         Ok(Self {
             conv_in,
             embed_in: Linear::load(&map, &key("embed.0"), 1, 64, true)?,
@@ -516,7 +559,7 @@ impl SparkBridge {
                 }
                 Some(path)
             }
-            Err(_) => find_file(root, UPSCALER_FILE),
+            Err(_) => find_upscaler(root),
         };
         let adapter = match std::env::var("FASTVIDEO_H3_LTX_ADAPTER") {
             Ok(raw) => Some(adapter_paths(Path::new(&raw))?),
@@ -623,6 +666,12 @@ impl SparkBridge {
         }
         Ok(cropped)
     }
+}
+
+/// First of [`UPSCALER_FILES`] (conv_v1 as downloaded, then the legacy
+/// name) beside `root` or under its known upscaler dirs.
+fn find_upscaler(root: &Path) -> Option<PathBuf> {
+    UPSCALER_FILES.iter().find_map(|name| find_file(root, name))
 }
 
 fn find_file(root: &Path, name: &str) -> Option<PathBuf> {
@@ -741,12 +790,18 @@ mod tests {
         let h3 = root.join("h3-base");
         std::fs::create_dir_all(root.join("upscaler")).unwrap();
         std::fs::create_dir_all(&h3).unwrap();
-        let file = root.join("upscaler").join(UPSCALER_FILE);
-        std::fs::write(&file, b"up").unwrap();
+        let legacy = root.join("upscaler").join(UPSCALER_FILES[2]);
+        std::fs::write(&legacy, b"up").unwrap();
         assert_eq!(
-            find_file(&h3, UPSCALER_FILE).as_deref(),
-            Some(file.as_path())
+            find_file(&h3, UPSCALER_FILES[2]).as_deref(),
+            Some(legacy.as_path())
         );
+        assert_eq!(find_upscaler(&h3).as_deref(), Some(legacy.as_path()));
+        // The manifest's nested conv_v1 download wins over the legacy name.
+        let conv_v1 = root.join("upscaler").join(UPSCALER_FILES[0]);
+        std::fs::create_dir_all(conv_v1.parent().unwrap()).unwrap();
+        std::fs::write(&conv_v1, b"up").unwrap();
+        assert_eq!(find_upscaler(&h3).as_deref(), Some(conv_v1.as_path()));
         let _ = std::fs::remove_dir_all(&root);
     }
 }

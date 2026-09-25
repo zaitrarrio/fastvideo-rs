@@ -105,7 +105,19 @@ pub const PIXEL_FRAMES: usize = 124;
 pub const PIXEL_HEIGHT: usize = 768;
 pub const PIXEL_WIDTH: usize = 1344;
 
+/// Current Hub release of the 3D latent upscaler (the dest
+/// `scripts/gpu/weights-manifest.tsv` downloads), relative to an upscaler dir.
+pub const UPSCALER_CONV_V1_FILE: &str =
+    "minimax_h3_latent_upscaler_3d_conv_v1/minimax_h3_latent_upscaler_3d_conv_v1_bf16.safetensors";
+/// Pre-rename file (the Spark README pin, revision 13ccf95d). Fallback only.
 pub const UPSCALER_FILE: &str = "minimax_h3_latent_upscaler_3d_bf16.safetensors";
+/// Search order for the upscaler checkpoint: conv_v1 (nested as downloaded,
+/// then flat), then the legacy name.
+pub const UPSCALER_FILES: [&str; 3] = [
+    UPSCALER_CONV_V1_FILE,
+    "minimax_h3_latent_upscaler_3d_conv_v1_bf16.safetensors",
+    UPSCALER_FILE,
+];
 pub const ADAPTER_WEIGHTS: &str = "model.safetensors";
 pub const ADAPTER_CONFIG: &str = "config.json";
 
@@ -113,6 +125,73 @@ const H3_TEMPORAL_COMPRESSION: usize = 4;
 const H3_CLIP_LENGTH: usize = 17;
 const H3_TOKEN_DROP: usize = 3;
 const LTX_TEMPORAL_COMPRESSION: usize = 8;
+
+/// `LatentResizer3D.__init__` block order for `attn=False`: each of the
+/// `res_blocks` `ResBlockEmb3D` is followed by a `TemporalConv` when
+/// `temporal_every=2` and its index is even (`_detect_arch` sets 2 whenever
+/// any `dwconv` exists, else 0). `true` marks a temporal entry.
+pub fn upscaler_block_cadence(res_blocks: usize, temporal: bool) -> Vec<bool> {
+    let mut out = Vec::new();
+    for b in 0..res_blocks {
+        out.push(false);
+        if temporal && b % 2 == 0 {
+            out.push(true);
+        }
+    }
+    out
+}
+
+/// Whether `key` (upscaler prefix stripped) is a parameter of the
+/// `LatentResizer3D` the loader builds, so an unknown key fails the load the
+/// way `load_state_dict(strict=True)` does.
+pub fn upscaler_key_is_known(key: &str, in_entries: usize, out_entries: usize) -> bool {
+    const FIXED: [&str; 7] = [
+        "conv_in.weight",
+        "conv_in.bias",
+        "embed.0.weight",
+        "embed.0.bias",
+        "embed.2.weight",
+        "embed.2.bias",
+        "conv_out.weight",
+    ];
+    if FIXED.contains(&key)
+        || matches!(key, "conv_out.bias" | "norm_out.weight" | "norm_out.bias")
+    {
+        return true;
+    }
+    for (list, entries) in [("in_blocks.", in_entries), ("out_blocks.", out_entries)] {
+        let Some(rest) = key.strip_prefix(list) else {
+            continue;
+        };
+        let Some((index, param)) = rest.split_once('.') else {
+            return false;
+        };
+        let Ok(index) = index.parse::<usize>() else {
+            return false;
+        };
+        return index < entries
+            && matches!(
+                param,
+                "in_layers.0.weight"
+                    | "in_layers.0.bias"
+                    | "in_layers.2.weight"
+                    | "in_layers.2.bias"
+                    | "emb_layers.1.weight"
+                    | "emb_layers.1.bias"
+                    | "out_norm.weight"
+                    | "out_norm.bias"
+                    | "out_layers.2.weight"
+                    | "out_layers.2.bias"
+                    | "norm.weight"
+                    | "norm.bias"
+                    | "dwconv.weight"
+                    | "dwconv.bias"
+                    | "pwconv.weight"
+                    | "pwconv.bias"
+            );
+    }
+    false
+}
 
 /// `N` then, after the network, `D`. Layout is `[B, C, T, H, W]`. The incoming
 /// latent is already normalized; the author node still applies both transforms.
@@ -493,6 +572,33 @@ fn axis_sample(coord: f32, size: usize) -> (usize, usize, f32) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn upscaler_files_prefer_conv_v1_then_the_legacy_name() {
+        assert_eq!(
+            UPSCALER_FILES[0],
+            "minimax_h3_latent_upscaler_3d_conv_v1/minimax_h3_latent_upscaler_3d_conv_v1_bf16.safetensors"
+        );
+        assert_eq!(UPSCALER_FILES[2], UPSCALER_FILE);
+        assert!(UPSCALER_FILES[1].ends_with("conv_v1_bf16.safetensors"));
+    }
+
+    #[test]
+    fn upscaler_cadence_and_keys_follow_the_author_module() {
+        // Default arch: 12 res blocks, temporal after 0, 2, ..., 10.
+        let c = upscaler_block_cadence(12, true);
+        assert_eq!(c.len(), 18);
+        assert_eq!(&c[..4], &[false, true, false, false]);
+        assert_eq!(upscaler_block_cadence(3, false), vec![false; 3]);
+        assert!(upscaler_key_is_known("conv_in.weight", 18, 18));
+        assert!(upscaler_key_is_known("embed.2.bias", 18, 18));
+        assert!(upscaler_key_is_known("in_blocks.17.in_layers.2.weight", 18, 18));
+        assert!(upscaler_key_is_known("out_blocks.1.dwconv.weight", 18, 18));
+        assert!(!upscaler_key_is_known("in_blocks.18.norm.weight", 18, 18));
+        assert!(!upscaler_key_is_known("in_blocks.1.q.weight", 18, 18));
+        assert!(!upscaler_key_is_known("embed.1.weight", 18, 18));
+        assert!(!upscaler_key_is_known("upsampler.weight", 18, 18));
+    }
 
     #[test]
     fn official_canvas_frame_counts() {
