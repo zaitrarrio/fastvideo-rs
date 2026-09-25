@@ -7,6 +7,8 @@
 #                                summaries + logs, destroy the pod
 #   runpod-http.sh weights       weight gate only (verify-weights.sh), no cells
 #   runpod-http.sh kernels [sha] fv-gpucheck kernels (every kernel vs host math)
+#   runpod-http.sh all [sha]     kernels, then the rtx6000 cells, on one pod
+#                                (pod creation retries for FV_CREATE_WAIT_S)
 #   runpod-http.sh status <pod>  print live.log from a running pod
 #   runpod-http.sh down <pod>    destroy a pod
 #
@@ -63,12 +65,12 @@ mkdir -p "\$OUT"
 ( cd /workspace/weights && for d in *; do echo "== \$d"; find -L "\$d" -maxdepth 3 \( -name '*.safetensors' -o -name '*.json' \) -printf '%s %p\n' 2>/dev/null | head -60; done ) >"\$OUT/tree.txt" 2>&1
 FV_WEIGHTS=/workspace/weights bash /opt/fastvideo-rs/scripts/gpu/verify-weights.sh $cells >"\$OUT/weights.log" 2>&1
 echo "exit=\$?" >>"\$OUT/weights.log"
-if [ "$mode" = kernels ]; then
+if [ "$mode" = kernels ] || [ "$mode" = all ]; then
   cd "\$OUT" && /opt/fastvideo-rs/target/release/fv-gpucheck --keep-going --out "\$OUT/gpucheck" kernels >"\$OUT/kernels.out" 2>&1
   echo "exit=\$?" >>"\$OUT/kernels.out"
   cp "\$OUT"/gpucheck/*.json "\$OUT"/ 2>/dev/null
 fi
-if [ "$mode" = run ]; then
+if [ "$mode" = run ] || [ "$mode" = all ]; then
   env ${FV_EXTRA_ENV:-} FV_WORK=/workspace FV_RUN_TAG=$tag FV_CELLS="${FV_CELLS:-}" \
     FV_GEN_TIMEOUT_S=${FV_GEN_TIMEOUT_S:-3600} \
     bash /opt/fastvideo-rs/scripts/gpu/runpod-matrix.sh rtx6000 >"\$OUT/matrix.out" 2>&1
@@ -90,7 +92,16 @@ create_pod() {
       ports: ["8000/http"], dockerStartCmd: ["/bin/bash", "-c", $cmd]
     }')"
   log "create pod gpu=\"$GPU\" image=$image volume=$vol dc=$dc"
-  resp="$(rest POST /pods "$payload")" || die "pod create failed: $resp"
+  # Capacity in the volume's datacenter comes and goes; retry instead of failing.
+  local t0 wait="${FV_CREATE_WAIT_S:-3600}"
+  t0=$(date +%s)
+  until resp="$(rest POST /pods "$payload" 2>&1)"; do
+    if [[ "$resp" != *"no instances currently available"* ]] || (( $(date +%s) - t0 >= wait )); then
+      die "pod create failed: $resp"
+    fi
+    log "no $GPU free in $dc; retrying in 60s"
+    sleep 60
+  done
   id="$(jq -r '.id // empty' <<<"$resp")"
   [[ -n "$id" ]] || die "pod create returned no id: $resp"
   dph="$(jq -r '.costPerHr // 0' <<<"$resp")"
@@ -151,6 +162,7 @@ case "${1:-}" in
   run) shift; cmd_run run "$@" ;;
   weights) shift; cmd_run weights "$@" ;;
   kernels) shift; cmd_run kernels "$@" ;;
+  all) shift; cmd_run all "$@" ;;
   status) proxy "${2:?pod}" "rtx6000/" ;;
   down) rest DELETE "/pods/${2:?pod}" >/dev/null && echo "deleted ${2}" ;;
   *) sed -n '2,20p' "$0" | sed 's/^# \{0,1\}//'; exit 2 ;;
