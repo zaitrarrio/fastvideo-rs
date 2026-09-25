@@ -39,10 +39,11 @@ Latents packed: VAE 16-ch → DiT **64**-ch (2×2 pack).
 | Spec (this file) | landed |
 | `fastvideo-models::flux` | landed |
 | Registry + CLI T2I path | landed |
-| cudarc DiT (tiny zeros + load hook) | landed |
-| Generate scaffold | landed |
-| CLIP+T5 encode / full weight parity | T5-XXL via `text_encoder_2` when present; Hub key probes |
+| cudarc DiT (tiny zeros + load) | landed (`Flux1Transformer2D`) |
+| Generate path | landed (`Flux1Pipeline` + `av_generate`) |
+| CLIP+T5 encode / full weight parity | CLIP-L + T5-XXL `CudaTensor` encoders + tokenize helpers |
 | Pack / RoPE ids / shift | landed (`flux::family`) |
 | Weight-key maps + `transformer/config.json` | landed (`flux::weights`, `FLUX1_*_REQUIRED_KEYS`) |
 | `flux1_schnell` registry | landed |
-| Full DiT (device RoPE / fused SDPA) | still the generate scaffold; see `docs/flux2-generate-gap.md` |
+| DiT + device RoPE | landed (`Flux1Transformer2D`, `apply_rotary_bshd`) |
+| SD3-style VAE decode | landed (shared `AutoencoderKlFlux2` with `Flux2VaeConfig::flux1`) |

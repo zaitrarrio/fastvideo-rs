@@ -2,6 +2,7 @@
 
 pub mod config;
 pub mod family;
+pub mod text;
 pub mod weights;
 
 use crate::schedulers::FlowMatchEulerDiscreteScheduler;
@@ -13,6 +14,9 @@ pub use config::{
 pub use family::{
     calculate_shift, calculate_shift_flux1, image_ids, pack_latents_flux1, packed_hw, text_ids,
     unpack_latents_flux1,
+};
+pub use text::{
+    flux1_dummy_text, flux1_t5_len, pad_token_ids, tokenize_flux1, ClipTextConfig, T5Config,
 };
 pub use weights::{arch_from_transformer_config, local_flux1, looks_like_flux1};
 
@@ -102,7 +106,7 @@ impl FluxTransformerConfig {
             attention_head_dim: 8,
             joint_attention_dim: 32,
             pooled_projection_dim: 16,
-            axes_dims_rope: [4, 4, 4],
+            axes_dims_rope: [2, 2, 4],
             guidance_embeds: true,
             patch_size: 1,
             timestep_guidance_channels: 16,

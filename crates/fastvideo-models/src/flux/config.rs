@@ -123,4 +123,11 @@ mod tests {
         let t = FluxTransformerConfig::flux1_dev();
         assert_eq!(t.axes_dims_rope.iter().sum::<usize>(), t.attention_head_dim);
     }
+
+    #[test]
+    fn tiny_rope_dims_sum_to_head() {
+        let t = FluxTransformerConfig::tiny();
+        assert_eq!(t.axes_dims_rope, [2, 2, 4]);
+        assert_eq!(t.axes_dims_rope.iter().sum::<usize>(), t.attention_head_dim);
+    }
 }

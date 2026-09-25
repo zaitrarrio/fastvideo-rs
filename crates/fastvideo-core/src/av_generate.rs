@@ -1176,7 +1176,7 @@ fn generate_flux(
     require_cuda(&opts.device)?;
     #[cfg(feature = "cuda-cudarc")]
     {
-        use fastvideo_cudarc::flux::pipeline::{FluxPipeline, FluxRequest};
+        use fastvideo_cudarc::flux::pipeline::{Flux1Pipeline, GenerateConfig};
         use fastvideo_cudarc::wan::device::resolve_device;
         use fastvideo_models::flux::FluxPreset;
 
@@ -1191,43 +1191,52 @@ fn generate_flux(
                 )));
             }
         };
-        let mut pipe = FluxPipeline::open(&weights, preset)
-            .map_err(|e| FastVideoError::Message(e.to_string()))?;
-        if weights.join("transformer").is_dir() {
-            pipe.load_dit()
-                .map_err(|e| FastVideoError::Message(e.to_string()))?;
+        let mut pipe = if weights.join("transformer").is_dir() {
+            Flux1Pipeline::load(&weights, preset.as_str())
+                .map_err(|e| FastVideoError::Message(e.to_string()))?
         } else {
-            pipe.load_dit_zeros_tiny()
-                .map_err(|e| FastVideoError::Message(e.to_string()))?;
-        }
-        if weights.join("vae").is_dir() {
-            pipe.load_vae()
-                .map_err(|e| FastVideoError::Message(e.to_string()))?;
-        } else {
-            pipe.load_vae_stub();
-        }
-        let mut request = FluxRequest::for_preset(preset, opts.prompt, opts.seed);
+            Flux1Pipeline::tiny()
+        };
+        let mut cfg = GenerateConfig {
+            prompt: opts.prompt,
+            seed: opts.seed,
+            output_dir: opts.output.display().to_string(),
+            preset: preset.as_str().into(),
+            tiny: !weights.join("transformer").is_dir(),
+            height: preset.default_height(),
+            width: preset.default_width(),
+            num_inference_steps: preset.default_steps(),
+            guidance_scale: preset.guidance_scale(),
+            embedded_cfg_scale: Some(preset.guidance_scale()),
+            t5_max_len: if matches!(preset, FluxPreset::Schnell) {
+                256
+            } else {
+                512
+            },
+            ..GenerateConfig::default()
+        };
         if let Some(h) = opts.height {
-            request.height = h as usize;
+            cfg.height = h as usize;
         }
         if let Some(w) = opts.width {
-            request.width = w as usize;
+            cfg.width = w as usize;
         }
         if let Some(s) = opts.num_inference_steps {
-            request.num_steps = s as usize;
+            cfg.num_inference_steps = s as usize;
         }
         if let Some(g) = opts.guidance_scale {
-            request.guidance_scale = g;
+            cfg.guidance_scale = g;
+            cfg.embedded_cfg_scale = Some(g);
         }
         std::fs::create_dir_all(&opts.output)
             .map_err(|e| FastVideoError::Message(e.to_string()))?;
-        let out_png = opts.output.join("flux.png");
-        pipe.generate(&request, &out_png)
+        let paths = pipe
+            .generate(&cfg)
             .map_err(|e| FastVideoError::Message(e.to_string()))?;
         Ok(AvGenerateOutput {
             family: ModelFamily::Flux,
             preset: def.preset,
-            frame_paths: vec![out_png.display().to_string()],
+            frame_paths: paths,
             mp4: None,
             wav: None,
         })
