@@ -321,6 +321,12 @@ pub enum Stage {
         /// score-route kernel at sparsity 0.9, block 64.
         #[arg(long, default_value_t = false)]
         pisa_stage2: bool,
+        /// `taeltx2_3_wide.safetensors` (or its directory): decode video with
+        /// madebyollin's wide LTX tiny autoencoder instead of the conv VAE,
+        /// as sol-engine's LTX-2.5 refiner does. Audio is unchanged.
+        /// Default: `FASTVIDEO_LTX2_TAE_WEIGHTS`.
+        #[arg(long)]
+        ltx_tae_weights: Option<PathBuf>,
     },
     /// CPU only: rewrite the text encoder as the language model alone, its
     /// projections narrowed float32 → bf16 once, in load order (47 GB → 25.5 GB,
@@ -516,6 +522,7 @@ pub fn run(report: &mut Report, stage: &Stage) -> StageResult<()> {
             sol_stage2,
             dense_stage2,
             pisa_stage2,
+            ltx_tae_weights,
         } => {
             if let Some(gib) = device_budget_gib {
                 crate::gpu::set_budget_gib(*gib)?;
@@ -566,6 +573,7 @@ pub fn run(report: &mut Report, stage: &Stage) -> StageResult<()> {
                         .map(fastvideo_cudarc::wan::offload::DitOffload::parse)
                         .transpose()
                         .map_err(|e| anyhow::anyhow!(e))?,
+                    tae: ltx_tae_weights.clone(),
                 },
                 prompt,
                 clip,
@@ -1658,6 +1666,14 @@ fn gen(
     );
     report.set("two_stage", two_stage);
     report.set("diff_vae", diff_vae);
+    report.set(
+        "video_vae",
+        match &options.tae {
+            Some(p) => json!({ "decoder": "taeltx2_3_wide", "weights": p.display().to_string() }),
+            None if diff_vae => json!({ "decoder": "diffvae" }),
+            None => json!({ "decoder": "conv_vae" }),
+        },
+    );
     let cfg = model_version.config();
     let request = Ltx2Request {
         prompt: prompt.to_string(),

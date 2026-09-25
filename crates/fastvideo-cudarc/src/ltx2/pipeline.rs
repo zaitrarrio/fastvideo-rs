@@ -1049,6 +1049,72 @@ pub fn decode_and_write(
     })
 }
 
+/// Like [`decode_and_write`], but video goes through the tiny autoencoder
+/// (`taeltx2_3_wide`), which takes the DiT-normalised latents directly and
+/// streams finished frames to the writer one latent frame at a time.
+#[allow(clippy::too_many_arguments)]
+pub fn decode_tae_and_write(
+    dec: &Decoders,
+    tae: &crate::wan::taehv::TaeHv,
+    video: &CudaTensor,
+    audio: &CudaTensor,
+    grid: [usize; 3],
+    dir: &Path,
+    frame_rate: f64,
+    mp4: bool,
+) -> Result<Written> {
+    std::fs::create_dir_all(dir).map_err(|e| err(format!("{}: {e}", dir.display())))?;
+    let timer = Instant::now();
+    let wave = dec.vocoder.forward(&dec.audio.decode_packed(audio)?)?;
+    let channels = wave.shape[1];
+    let wav = dir.join("audio.wav");
+    let rate = u32::try_from(dec.vocoder.sample_rate())
+        .map_err(|_| err("ltx2: vocoder sample rate out of range"))?;
+    let channel_count =
+        u16::try_from(channels).map_err(|_| err("ltx2: too many audio channels"))?;
+    write_wav(
+        &wav,
+        &interleave_audio(&wave.host_cow()?, channels)?,
+        channel_count,
+        rate,
+    )?;
+    let decode_audio_s = timer.elapsed().as_secs_f64();
+
+    let timer = Instant::now();
+    let fps = frame_rate.round().max(1.0) as u32;
+    let mut writer = VideoWriter::spawn_with_audio(dir, fps, mp4, Some(&wav))?;
+    let mut sink_err: Option<PipelineError> = None;
+    let mut sink = |offset: usize, frames: &CudaTensor| -> std::result::Result<(), TensorError> {
+        let (h, w) = (frames.shape[2], frames.shape[3]);
+        match frames_to_rgb8(frames).and_then(|rgb| writer.push(offset, h, w, rgb)) {
+            Ok(()) => Ok(()),
+            Err(e) => {
+                let text = e.to_string();
+                sink_err = Some(e);
+                Err(TensorError::Message(text))
+            }
+        }
+    };
+    let latents = unpack_video(video, grid)?;
+    let decoded = tae.decode_streaming(&latents, &mut sink);
+    match (decoded, sink_err) {
+        (_, Some(e)) => return Err(e),
+        (Err(e), None) => return Err(e.into()),
+        (Ok(_), None) => {}
+    }
+    let decode_video_s = timer.elapsed().as_secs_f64();
+    let timer = Instant::now();
+    let (frames, mp4_path) = writer.finish()?;
+    Ok(Written {
+        frames,
+        mp4: mp4_path,
+        wav: wav.to_string_lossy().into_owned(),
+        decode_audio_s,
+        decode_video_s,
+        write_s: timer.elapsed().as_secs_f64(),
+    })
+}
+
 /// Like [`decode_and_write`], but video goes through DiffVAE (de-norm → 1-step x0).
 pub fn decode_diffvae_and_write(
     dec: &Decoders,
@@ -1565,6 +1631,21 @@ pub struct PipelineOptions {
     /// 4k5s workload). Streamed also keeps the video/audio decoders off the
     /// device except around the calls that read them (`--offload cpu`).
     pub dit_offload: Option<DitOffload>,
+    /// `taeltx2_3_wide.safetensors` (or its directory): decode video with the
+    /// tiny autoencoder instead of the conv VAE, as sol-engine's LTX-2.5
+    /// refiner does (`models/ltx2.5-refiner/GB200/refiner_head_cp.py:567-578`).
+    /// Audio still goes through the audio VAE and vocoder. `None`:
+    /// `FASTVIDEO_LTX2_TAE_WEIGHTS`, else the conv VAE.
+    pub tae: Option<PathBuf>,
+}
+
+/// [`PipelineOptions::tae`], else `FASTVIDEO_LTX2_TAE_WEIGHTS`.
+fn resolve_tae(explicit: Option<&Path>) -> Option<PathBuf> {
+    explicit.map(Path::to_path_buf).or_else(|| {
+        std::env::var_os("FASTVIDEO_LTX2_TAE_WEIGHTS")
+            .filter(|v| !v.is_empty())
+            .map(PathBuf::from)
+    })
 }
 
 /// What [`Ltx2Pipeline::generate`] can reproduce. LTX-2.5 generates only
@@ -1658,6 +1739,8 @@ pub struct Ltx2Pipeline {
     pub load_s: f64,
     /// The DiT and the decoders in the device ledger.
     booking: crate::wan::ledger::Booking,
+    /// Resident `taeltx2_3_wide` video decoder ([`PipelineOptions::tae`]).
+    tae: Option<crate::wan::taehv::TaeHv>,
 }
 
 impl Ltx2Pipeline {
@@ -1727,6 +1810,23 @@ impl Ltx2Pipeline {
         };
         let has_upsampler =
             cfg.latent_upsampler.is_some() && upsampler_dir(&paths.weights).is_some();
+        let tae = match resolve_tae(options.tae.as_deref()) {
+            Some(path) => {
+                use crate::wan::taehv::{TaeArch, TaeHv};
+                if cfg.transformer.in_channels != TaeArch::LtxWide.latent_channels() {
+                    return Err(err(format!(
+                        "ltx2: the LTX tiny autoencoder decodes {}-channel latents, this line has {}",
+                        TaeArch::LtxWide.latent_channels(),
+                        cfg.transformer.in_channels
+                    )));
+                }
+                let tae = TaeHv::load_from_path(&path, TaeArch::LtxWide)
+                    .map_err(|e| err(format!("ltx2 tae {}: {e}", path.display())))?;
+                crate::wan::log::info(format_args!("ltx2 vae=taehv ({})", path.display()));
+                Some(tae)
+            }
+            None => None,
+        };
         sync()?;
         let loaded_strength = model.as_ref().map(|_| 0.0);
         Ok(Self {
@@ -1742,6 +1842,7 @@ impl Ltx2Pipeline {
             text: TextEncoder::new(paths, cfg, options),
             load_s: timer.elapsed().as_secs_f64(),
             booking,
+            tae,
         })
     }
 
@@ -2307,7 +2408,23 @@ impl Ltx2Pipeline {
         self.ensure_decoders()?;
         let decoders = self.decoders.as_ref().expect("decoders");
 
-        let written = if req.diff_vae {
+        let written = if let Some(tae) = self.tae.as_ref() {
+            if req.diff_vae {
+                return Err(err(
+                    "ltx2: the tiny autoencoder and DiffVAE are both video decoders; pick one",
+                ));
+            }
+            decode_tae_and_write(
+                decoders,
+                tae,
+                &video,
+                &audio,
+                decode_grid,
+                &req.output_dir,
+                req.frame_rate,
+                req.mp4,
+            )?
+        } else if req.diff_vae {
             crate::wan::log::info(format_args!("ltx2: DiffVAE decode (DiT dropped)"));
             let dd_cfg = cfg.diffusion_decoder.as_ref().expect("checked above");
             let diffvae = DiffusionDecoder::load(

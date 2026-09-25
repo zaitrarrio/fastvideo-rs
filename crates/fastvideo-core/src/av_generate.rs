@@ -55,6 +55,11 @@ pub struct AvGenerateOptions {
     /// LTX / H3 DiT block residency: `auto`, `resident` or `streamed`
     /// (`None`: `FASTVIDEO_DIT_OFFLOAD`, else `auto`).
     pub dit_offload: Option<String>,
+    /// madebyollin tiny autoencoder video decoder: `taeltx2_3_wide.safetensors`
+    /// for LTX-2.3/2.5, `taeh3.safetensors` for H3 (file or directory).
+    /// `None`: the full video VAE (or `FASTVIDEO_LTX2_TAE_WEIGHTS` /
+    /// `FASTVIDEO_TAEH3_WEIGHTS`).
+    pub tae_weights: Option<PathBuf>,
 }
 
 #[derive(Debug, Clone)]
@@ -235,6 +240,7 @@ fn generate_ltx2(
             .map_err(|e| FastVideoError::Message(e.to_string()))?;
         let options = PipelineOptions {
             dit_offload: dit_offload(opts.dit_offload.as_deref())?,
+            tae: opts.tae_weights.clone(),
             ..PipelineOptions::default()
         };
         let mut pipeline = Ltx2Pipeline::load(&paths, &cfg, &options)
@@ -351,6 +357,7 @@ fn generate_h3(
             ref2va: has_refs || def.preset == "sol_h3_ref2va",
             adapter: opts.h3_adapter,
             dit_offload: dit_offload(opts.dit_offload.as_deref())?,
+            taeh3: opts.tae_weights,
             ..H3PipelineOptions::default()
         };
         let out = generate(&weights, options, &request, &opts.output)
