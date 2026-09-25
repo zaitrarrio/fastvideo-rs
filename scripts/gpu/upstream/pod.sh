@@ -214,6 +214,7 @@ run_cell() {
 # then the reference's own run_minimax_h3_gpu.sh (which writes benchmark.json).
 cell_sol_h3_rtx() {
   local arm="$1" prompt="$2" name="sol-h3r5090-$1-$2" envs
+  if [[ -n "${UP_CELLS:-}" && " $UP_CELLS " != *" $name "* ]]; then return 0; fi
   envs="$(python3 - "$SRC/sol-engine/config/minimax_h3/rtx5090_${arm}.toml" <<'EOF'
 import sys, tomllib, shlex
 env = tomllib.load(open(sys.argv[1], "rb"))["env"]

@@ -99,7 +99,7 @@ install_sol_h3_rtx5090() {
   checkout https://github.com/sgl-project/sglang.git "$SGLANG_REV" "$SRC/sglang" || return 1
   venv_new "$v" 3.12 || return 1
   slog "installing SGLang[diffusion] @ $SGLANG_REV (torch 2.11 cu130)"
-  (cd "$SRC/sglang/python" && SETUPTOOLS_SCM_PRETEND_VERSION=0.5.99 uv pip install -q --python "$v/bin/python" \
+  (cd "$SRC/sglang/python" && SGLANG_BUILD_RUST_EXTS=none SETUPTOOLS_SCM_PRETEND_VERSION=0.5.99 uv pip install -q --python "$v/bin/python" \
       --torch-backend cu130 --prerelease allow -e ".[diffusion]") || return 1
   uv pip install -q --python "$v/bin/python" -e "$SRC/sol-engine/techniques/sparse_backends" || return 1
   "$v/bin/python" -c '
