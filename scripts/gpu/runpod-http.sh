@@ -143,12 +143,30 @@ wait_done() {
   done
 }
 
+# A pod that never gets a runtime (bad host, stalled image pull) is replaced.
+wait_up() {
+  local id="$1" t0
+  t0=$(date +%s)
+  while (( $(date +%s) - t0 < ${FV_BOOT_WAIT_S:-1200} )); do
+    proxy "$id" "rtx6000/" >/dev/null 2>&1 && return 0
+    sleep 30
+  done
+  return 1
+}
+
 cmd_run() {
-  local mode="$1" sha="${2:-}" image tag id rc=0
+  local mode="$1" sha="${2:-}" image tag id rc=0 attempt
   sha="${sha:-$(git -C "$ROOT" rev-parse --short=7 origin/main)}"
   image="${RUNPOD_IMAGE:-ghcr.io/zaitrarrio/fastvideo-rs-runtime:sha-$sha}"
-  tag="$sha-$(date -u +%m%d%H%M)"
-  id="$(create_pod "$image" "$tag" "$mode")"
+  for attempt in 1 2 3; do
+    tag="$sha-$(date -u +%m%d%H%M)"
+    id="$(create_pod "$image" "$tag" "$mode")"
+    wait_up "$id" && break
+    log "pod $id never came up; replacing (attempt $attempt)"
+    rest DELETE "/pods/$id" >/dev/null || true
+    id=""
+  done
+  [[ -n "$id" ]] || die "no pod came up after 3 attempts"
   echo "$id" >"${TMPDIR:-/tmp}/fv-rtx6000.pod"
   wait_done "$id" "$tag" || rc=1
   fetch_results "$id" "$tag"
