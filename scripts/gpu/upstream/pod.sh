@@ -113,7 +113,10 @@ weights_h3_diffusers() {
   for p in model_index.json modular_model_index.json scheduler/ audio_scheduler/ processor/ tokenizer/ \
     text_encoder/ transformer/ vae/ audio_vae/; do inc+=(--include "$p"); done
   pyn "$HERE/overlay.py" --repo MiniMaxAI/MiniMax-H3 --rev "$H3_REV" --out "$UW/MiniMax-H3" \
-    --local "$W/h3-base" "${inc[@]}" --max-download-mb 50 >"$OUT/overlay-h3-diffusers.json"
+    --local "$W/h3-base" "${inc[@]}" --max-download-mb 50 >"$OUT/overlay-h3-diffusers.json" || return 1
+  # The modular index names components by Hub id; point them at this local
+  # mirror so Sol-H3's ModularPipeline.load_components never goes to the Hub.
+  sed -i "s#\"MiniMaxAI/MiniMax-H3\"#\"$UW/MiniMax-H3\"#g" "$UW/MiniMax-H3/modular_model_index.json"
 }
 
 weights_fasth3_8step() {

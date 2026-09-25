@@ -72,6 +72,17 @@ venv_new() {
   uv venv -q --python "$py" --seed "$v"
 }
 
+# Import smoke test: full imports with a GPU; without one (image builds) Triton
+# cannot pick a driver at import, so only resolve the modules.
+smoke() {
+  local py="$1"; shift
+  if nvidia-smi -L >/dev/null 2>&1; then
+    "$py" -c "import torch; print('torch', torch.__version__, torch.version.cuda); import $*" || return 1
+  else
+    "$py" -c "import importlib.util as u, torch; print('torch', torch.__version__, torch.version.cuda); m=[x for x in '$*'.replace(',', ' ').split() if u.find_spec(x) is None]; assert not m, m" || return 1
+  fi
+}
+
 stamp_ok() { [[ -f "$1/.stamp" && "$(cat "$1/.stamp")" == "$2" ]]; }
 
 sources() {
@@ -88,7 +99,7 @@ install_fastvideo() {
   # checkout for sm_100a; on sm_120 the PyPI wheel (Triton VSA) is the route.
   (cd "$SRC/FastVideo" && uv pip install -q --python "$v/bin/python" --torch-backend cu130 \
       --prerelease allow --no-sources -e ".[fasth3]") || return 1
-  "$v/bin/python" -c 'import torch, fastvideo; print("torch", torch.__version__, torch.version.cuda)' || return 1
+  smoke "$v/bin/python" fastvideo || return 1
   echo "$stamp" >"$v/.stamp"
 }
 
@@ -102,12 +113,10 @@ install_sol_h3_rtx5090() {
   (cd "$SRC/sglang/python" && SGLANG_BUILD_RUST_EXTS=none SETUPTOOLS_SCM_PRETEND_VERSION=0.5.99 uv pip install -q --python "$v/bin/python" \
       --torch-backend cu130 --prerelease allow -e ".[diffusion]") || return 1
   uv pip install -q --python "$v/bin/python" -e "$SRC/sol-engine/techniques/sparse_backends" || return 1
-  "$v/bin/python" -c '
-import torch, hashlib, importlib.util, pathlib
-print("torch", torch.__version__, torch.version.cuda)
-import sglang.multimodal_gen.runtime.models.dits.minimax_h3 as m
-print("sglang minimax_h3", hashlib.sha256(pathlib.Path(m.__file__).read_bytes()).hexdigest())
-import sol_attn; print("sol_attn ok")' || return 1
+  # registration.py pins these source hashes; check the file without importing it.
+  sha256sum "$SRC/sglang/python/sglang/multimodal_gen/runtime/models/dits/minimax_h3.py" \
+    | grep -q 5f87319969c446685ee93d422fc34a7c040defb238eff2274d664f2f8310e997 || { slog "sglang minimax_h3.py hash mismatch"; return 1; }
+  smoke "$v/bin/python" sglang, sol_attn || return 1
   echo "$stamp" >"$v/.stamp"
 }
 
@@ -121,7 +130,7 @@ install_sol_h3_4step() {
     torch==2.10.0 torchvision==0.25.0 torchaudio==2.10.0 || return 1
   uv pip install -q --python "$v/bin/python" --torch-backend cu130 \
     -r "$SRC/sol-engine/models/minimax_h3/Sol-H3/requirements.txt" || return 1
-  "$v/bin/python" -c 'import torch, diffusers, transformers; print(torch.__version__, diffusers.__version__, transformers.__version__)' || return 1
+  smoke "$v/bin/python" diffusers, transformers || return 1
   echo "$stamp" >"$v/.stamp"
 }
 
@@ -136,6 +145,6 @@ install_sol_ltx25() {
   local py="$d/LTX-2/.venv/bin/python"
   uv pip install -q --python "$py" "nvidia-cutlass-dsl>=4.5" cuda-python || return 1
   uv pip install -q --python "$py" -e "$SRC/sol-engine/techniques/sparse_backends" || return 1
-  "$py" -c 'import torch, ltx_pipelines, sol_attn; print("torch", torch.__version__, torch.version.cuda)' || return 1
+  smoke "$py" ltx_pipelines, sol_attn || return 1
   echo "$stamp" >"$d/.stamp"
 }

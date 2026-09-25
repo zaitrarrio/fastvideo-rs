@@ -315,6 +315,10 @@ def build_tensor(recipe: tuple, meta: dict, src: Sources, remote) -> bytes | np.
         return remote(meta)
     if kind == "copy":
         a, v = src.get(recipe[1])
+        if v["dtype"] != meta["dtype"] and list(v["shape"]) == list(meta["shape"]) and nbytes <= REMOTE_CAP:
+            # The Diffusers copy was saved in another dtype (e.g. BF16 for an F32
+            # modulation table): the original bytes are not derivable, fetch them.
+            return remote(meta)
         if v["dtype"] != meta["dtype"] or list(v["shape"]) != list(meta["shape"]):
             raise RuntimeError(f"copy {recipe[1]}: {v['dtype']}{v['shape']} != {meta['dtype']}{meta['shape']}")
         return a
@@ -357,6 +361,40 @@ def volume_used_bytes(root: str) -> int:
     """Bytes stored on the volume (du; df reports the whole shared filesystem)."""
     out = subprocess.run(["du", "-s", "--block-size=1", root], capture_output=True, text=True).stdout
     return int(out.split()[0]) if out.strip() else 0
+
+
+def repair(tmp: Path, header: dict, hlen: int, remote) -> list:
+    """Compare the head and tail of every tensor with the Hub; refetch small ones that differ."""
+    def check(item):
+        key, m = item
+        a, b = m["data_offsets"]
+        n = min(4096, b - a)
+        with open(tmp, "rb") as fh:
+            fh.seek(hlen + a)
+            head = fh.read(n)
+            fh.seek(hlen + b - n)
+            tail = fh.read(n)
+        want_h = remote({"data_offsets": [a, a + n]})
+        want_t = remote({"data_offsets": [b - n, b]})
+        return key, (head != want_h or tail != want_t)
+
+    bad = []
+    with cf.ThreadPoolExecutor(16) as ex:
+        for key, differs in ex.map(check, header.items()):
+            if differs:
+                bad.append(key)
+    out = []
+    with open(tmp, "r+b") as fh:
+        for key in bad:
+            m = header[key]
+            a, b = m["data_offsets"]
+            if b - a <= REMOTE_CAP:
+                fh.seek(hlen + a)
+                fh.write(remote(m))
+                out.append([key, b - a, "refetched"])
+            else:
+                out.append([key, b - a, "too large to refetch"])
+    return out
 
 
 def reconstruct(repo: str, rev: str, path: str, out: Path, plan, src: Sources, verify: bool = True) -> dict:
@@ -417,8 +455,21 @@ def reconstruct(repo: str, rev: str, path: str, out: Path, plan, src: Sources, v
         res["sha256"] = h.hexdigest()
         res["ok"] = res["sha256"] == oid
         if not res["ok"]:
-            log(f"{path}: SHA MISMATCH {res['sha256']} != {oid}")
-            return res
+            log(f"{path}: SHA MISMATCH {res['sha256']} != {oid}; sampling every tensor against the Hub")
+            res["diff"] = repair(tmp, header, hlen, remote)
+            h = hashlib.sha256()
+            with open(tmp, "rb") as fh:
+                while True:
+                    b = fh.read(64 << 20)
+                    if not b:
+                        break
+                    h.update(b)
+            res["sha256"] = h.hexdigest()
+            res["ok"] = res["sha256"] == oid
+            if not res["ok"]:
+                log(f"{path}: still mismatched after repair: {res['diff'][:20]}")
+                return res
+            log(f"{path}: repaired {len(res['diff'])} tensors from the Hub")
     os.replace(tmp, out)
     if verify:
         out.with_suffix(out.suffix + ".sha256").write_text(res["sha256"] + "\n")
