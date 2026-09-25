@@ -113,6 +113,12 @@ fi
 ( cd /workspace/weights && for d in *; do echo "== \$d"; find -L "\$d" -maxdepth 3 \( -name '*.safetensors' -o -name '*.json' \) -printf '%s %p\n' 2>/dev/null | head -60; done ) >"\$OUT/tree.txt" 2>&1
 FV_WEIGHTS=/workspace/weights bash /opt/fastvideo-rs/scripts/gpu/verify-weights.sh $cells >"\$OUT/weights.log" 2>&1
 echo "exit=\$?" >>"\$OUT/weights.log"
+# Tiny-autoencoder weights (taeh3, taeltx2_3_wide) onto the container disk;
+# the matrix's *-taeh3 / *-taehv cells read them from \$SCRATCH/tae.
+if [ -f /opt/fastvideo-rs/scripts/gpu/fetch-tae.sh ]; then
+  bash /opt/fastvideo-rs/scripts/gpu/fetch-tae.sh \$SCRATCH/tae >"\$OUT/tae.log" 2>&1
+  echo "exit=\$?" >>"\$OUT/tae.log"
+fi
 if [ "$mode" = kernels ] || [ "$mode" = all ]; then
   cd "\$OUT" && /opt/fastvideo-rs/target/release/fv-gpucheck --keep-going --out "\$OUT/gpucheck" kernels >"\$OUT/kernels.out" 2>&1
   echo "exit=\$?" >>"\$OUT/kernels.out"

@@ -21,7 +21,6 @@ mod h3_stage;
 mod hunyuan15_stage;
 #[cfg(feature = "cuda")]
 mod kernels;
-mod serve;
 mod llm_oracle;
 mod ltx2_stage;
 #[cfg(feature = "cuda")]
@@ -36,6 +35,7 @@ mod quality;
 mod rand_weights;
 mod reference;
 mod report;
+mod serve;
 mod st;
 mod taehv;
 
@@ -317,6 +317,23 @@ enum Cmd {
         #[arg(long, default_value_t = 0.02)]
         max_rel: f64,
     },
+    /// TAEHV device path (cuDNN convs, device kernels) against a plain-Rust
+    /// transcription of `taehv.py` at the real channel widths: decode for
+    /// every arch, encode too for the LTX wide checkpoint, plus the chunk
+    /// seam. Generated weights unless `--weights` names the real file.
+    TaehvDevice {
+        /// `wan` (taew2_1), `h3` (taeh3) or `ltx` (taeltx2_3_wide).
+        #[arg(long, default_value = "ltx")]
+        arch: String,
+        /// Weight file, or a directory holding it. Default: generated.
+        #[arg(long)]
+        weights: Option<PathBuf>,
+        #[arg(long, default_value = "cuda")]
+        device: String,
+        /// TF32 convolutions under `--mode fast` sit around 1e-3.
+        #[arg(long, default_value_t = 5e-3)]
+        max_rel: f64,
+    },
     /// Diff our text encoder and one DiT step against an external reference.
     Oracle {
         #[arg(long)]
@@ -388,6 +405,7 @@ fn stage_name(cmd: &Cmd) -> &'static str {
         Cmd::Compare { .. } => "compare",
         Cmd::Oracle { .. } => "oracle",
         Cmd::Taehv { .. } => "taehv",
+        Cmd::TaehvDevice { .. } => "taehv-device",
     }
 }
 
@@ -537,6 +555,12 @@ fn run(cli: &Cli, report: &mut Report) -> StageResult<()> {
             device,
             max_rel,
         } => taehv::run(report, weights, oracle, device, *max_rel),
+        Cmd::TaehvDevice {
+            arch,
+            weights,
+            device,
+            max_rel,
+        } => taehv::run_device(report, arch, weights.as_deref(), device, *max_rel),
         Cmd::Oracle {
             weights,
             oracle,

@@ -138,6 +138,34 @@ gated_cell() {
   run_cell "$name" "$@"
 }
 
+# Tiny-autoencoder weights (madebyollin/taehv) live on the container disk:
+# runpod-http's start command fetches them, and this fetches again only when a
+# file is missing. They are not part of the weight tree, so verify-weights.sh
+# never gates on them; a TAE cell whose file is absent is recorded as skipped.
+TAE="${FV_TAE_DIR:-$SCRATCH/tae}"
+TAEH3="$TAE/taeh3.safetensors"
+TAELTX="$TAE/taeltx2_3_wide.safetensors"
+tae_fetched=""
+tae_gated_cell() {
+  local name="$1" file="$2"
+  shift 2
+  if [[ -n "${FV_CELLS:-}" && " $FV_CELLS " != *" $name "* ]]; then
+    log "skip $name (not in FV_CELLS)"
+    return 0
+  fi
+  if [[ ! -f "$file" && -z "$tae_fetched" ]]; then
+    tae_fetched=1
+    bash "$(dirname "${BASH_SOURCE[0]}")/fetch-tae.sh" "$TAE" >>"$RUNS/tae-fetch.log" 2>&1 || true
+  fi
+  if [[ ! -f "$file" ]]; then
+    mkdir -p "$RUNS/$name"
+    log "SKIP $name: $file missing (see tae-fetch.log)"
+    write_json "$RUNS/$name/summary.json" "$(printf '{"cell":"%s","family":"%s","exit":null,"skipped":"tae weights missing"}' "$name" "$FAMILY")"
+    return 0
+  fi
+  gated_cell "$name" "$@"
+}
+
 log "matrix start image=$(cat /opt/fastvideo-rs/target/release/fv-gpucheck.build-id 2>/dev/null || echo unknown)"
 if [[ ! -x "$BIN" ]]; then
   log "FATAL: fv-gpucheck missing at $BIN"
@@ -499,6 +527,14 @@ case "$FAMILY" in
         "$BIN" --mode fast h3 gen --weights "$W/h3-base" --h3-recipe sol-h3-rtx "${geo[@]}" \
           --adaln-cache "$RUNS/h3-$res-adaln.cache" \
           --clip-dir "$RUNS/h3-$res-fullopt/frames" "${h3_common[@]}"
+      # fullopt with the TAEH3 video decoder (sol-engine super_acceleration
+      # stage 1 decodes with TAEH3 instead of the official video VAE).
+      tae_gated_cell "h3-$res-fullopt-taeh3" "$TAEH3" fasth3-4step-dense \
+        env FASTVIDEO_H3_SOL_CACHE=teacache \
+        "$BIN" --mode fast h3 gen --weights "$W/h3-base" --h3-recipe sol-h3-rtx "${geo[@]}" \
+          --taeh3-weights "$TAEH3" \
+          --adaln-cache "$RUNS/h3-$res-adaln.cache" \
+          --clip-dir "$RUNS/h3-$res-fullopt-taeh3/frames" "${h3_common[@]}"
     done
     # LTX-2.5 distilled two-stage: the reference's 4k5s and 1080p20s workloads,
     # dense vs Sol stage 2, plus 480p-class (768x512, two-stage needs /64).
@@ -514,6 +550,14 @@ case "$FAMILY" in
             --prompt "$PROMPT" --seed "$SEED" --two-stage --text streamed --warm \
             --clip "$RUNS/ltx25-$wl-$arm/frames"
       done
+      # Sol stage 2, decoded by the wide LTX tiny autoencoder (sol-engine
+      # models/ltx2.5-refiner: taeltx2_3_wide replaces the conv VAE decode).
+      tae_gated_cell "ltx25-$wl-sol-taehv" "$TAELTX" ltx25-two-stage \
+        "$BIN" --mode fast ltx2 gen --model-version 2.5 \
+          --weights "$W/ltx25" --dit "$W/ltx25" "${geo[@]}" \
+          --ltx-tae-weights "$TAELTX" \
+          --prompt "$PROMPT" --seed "$SEED" --two-stage --text streamed --warm \
+          --clip "$RUNS/ltx25-$wl-sol-taehv/frames"
     done
     ;;
   fastvideo)
@@ -545,6 +589,17 @@ case "$FAMILY" in
         "$BIN" --mode fast h3 gen --weights "$W/h3-8step" --h3-recipe 4step-vsa "${geo[@]}" \
           --adaln-cache "$RUNS/fasth3-4step-vsa-$res-adaln.cache" \
           --clip-dir "$RUNS/fasth3-4step-vsa-$res/frames" "${h3_common[@]}"
+      # The same FastH3 recipes decoded by TAEH3 instead of the official VAE.
+      tae_gated_cell "fasth3-8step-$res-taeh3" "$TAEH3" fasth3-8step \
+        "$BIN" --mode fast h3 gen --weights "$W/h3-8step" --h3-recipe 8step "${geo[@]}" \
+          --taeh3-weights "$TAEH3" \
+          --adaln-cache "$RUNS/fasth3-8step-$res-adaln.cache" \
+          --clip-dir "$RUNS/fasth3-8step-$res-taeh3/frames" "${h3_common[@]}"
+      tae_gated_cell "fasth3-4step-vsa-$res-taeh3" "$TAEH3" fasth3-4step-vsa \
+        "$BIN" --mode fast h3 gen --weights "$W/h3-8step" --h3-recipe 4step-vsa "${geo[@]}" \
+          --taeh3-weights "$TAEH3" \
+          --adaln-cache "$RUNS/fasth3-4step-vsa-$res-adaln.cache" \
+          --clip-dir "$RUNS/fasth3-4step-vsa-$res-taeh3/frames" "${h3_common[@]}"
     done
     gated_cell fasth3-4step-dense-768p fasth3-4step-dense \
       "$BIN" --mode fast h3 gen --weights "$W/h3-base" --h3-recipe 4step-dense \
@@ -558,6 +613,12 @@ case "$FAMILY" in
           --weights "$W/ltx25" --dit "$W/ltx25" "${geo[@]}" --dense-stage2 \
           --prompt "$PROMPT" --seed "$SEED" --two-stage --text streamed --warm \
           --clip "$RUNS/ltx25-$wl/frames"
+      tae_gated_cell "ltx25-$wl-taehv" "$TAELTX" ltx25-two-stage \
+        "$BIN" --mode fast ltx2 gen --model-version 2.5 \
+          --weights "$W/ltx25" --dit "$W/ltx25" "${geo[@]}" --dense-stage2 \
+          --ltx-tae-weights "$TAELTX" \
+          --prompt "$PROMPT" --seed "$SEED" --two-stage --text streamed --warm \
+          --clip "$RUNS/ltx25-$wl-taehv/frames"
     done
     ;;
   *)

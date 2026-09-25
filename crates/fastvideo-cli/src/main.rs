@@ -21,7 +21,6 @@ fn write_sidecar(dir: Option<&str>, name: &str, value: &serde_json::Value) {
     }
 }
 
-
 /// GPU builds run on the GPU unless told otherwise.
 #[cfg(feature = "cuda-cudarc")]
 const DEFAULT_DEVICE: &str = "cuda";
@@ -163,6 +162,11 @@ struct GenerateArgs {
     /// Default: `FASTVIDEO_DIT_OFFLOAD`, else `auto`.
     #[arg(long)]
     dit_offload: Option<String>,
+    /// Tiny autoencoder video decoder (madebyollin/taehv): LTX-2.3/2.5 takes
+    /// `taeltx2_3_wide.safetensors`, H3 takes `taeh3.safetensors` (file or
+    /// directory). Default: the full video VAE.
+    #[arg(long)]
+    tae_weights: Option<String>,
 }
 
 /// Minimal TOML overlay for `generate` (not full upstream YAML).
@@ -199,6 +203,7 @@ struct GenerateToml {
     pisa_stage2: Option<bool>,
     ltx23_hq: Option<bool>,
     diff_vae: Option<bool>,
+    tae_weights: Option<String>,
 }
 
 fn load_generate_toml(path: &str) -> Result<GenerateToml> {
@@ -387,6 +392,7 @@ fn main() -> Result<()> {
                         h3_adapter: args.h3_adapter.map(PathBuf::from),
                         h3_seconds: args.seconds,
                         dit_offload: args.dit_offload,
+                        tae_weights: args.tae_weights.or(file.tae_weights).map(PathBuf::from),
                     };
                     println!(
                         "family={} preset={} device={}",

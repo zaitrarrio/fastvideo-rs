@@ -30,6 +30,7 @@ pub mod sol_ops;
 pub mod sp;
 pub mod stats;
 pub mod taehv;
+pub mod taehv_ref;
 pub mod tensor;
 pub mod transformer;
 pub mod umt5;
