@@ -127,7 +127,7 @@ struct GenerateArgs {
     /// Requires the 2.3 base line (`Lightricks/LTX-2.3`). Also `FASTVIDEO_LTX2_HQ=1`.
     #[arg(long, default_value_t = false)]
     ltx23_hq: bool,
-    /// FastH3 / Sol-H3 recipe (`8step`, `4step-vsa`, `4step-dense`, `sol-h3`, `sol-h3-ref2va`, `sol-h3-spark`).
+    /// FastH3 / Sol-H3 recipe (`8step`, `4step-vsa`, `4step-dense`, `sol-h3`, `sol-h3-ref2va`, `sol-h3-spark`, `sol-h3-rtx`).
     #[arg(long)]
     h3_recipe: Option<String>,
     /// Sol-H3 LoRA adapter. Default: searched next to the MiniMax-H3 snapshot.

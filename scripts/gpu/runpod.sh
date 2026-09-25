@@ -9,6 +9,8 @@
 #   runpod.sh gpu       three PRO 6000 96 GB pods (refuses if volume incomplete)
 #   runpod.sh smoke     cheap Blackwell nvrtc+kernels, then destroy
 #   runpod.sh matrix    one PRO 6000; restart between H3/LTX/Hunyuan/Wan
+#   runpod.sh b200      US volume + H3/FastH3/LTX fetch + 1× B200 warm E2E
+#   runpod.sh offers    probe B200 / PRO 6000 stock (US DCs)
 #   runpod.sh status    volume / pods / cost
 #   runpod.sh reap      destroy fv-* GPU and fetch pods (keeps the volume)
 set -euo pipefail
@@ -29,7 +31,12 @@ RP_GPU_TYPE="${RUNPOD_GPU_TYPE:-NVIDIA RTX PRO 6000 Blackwell Server Edition}"
 RP_VOL_NAME="${RUNPOD_VOLUME_NAME:-fv-weights-h3-ltx-hy}"
 RP_VOL_GB="${RUNPOD_VOLUME_GB:-1000}"
 RP_MAX_GPU_PODS=3
-RP_GPU_MAX_DPH="${RUNPOD_GPU_MAX_DPH:-2.50}"
+RP_GPU_MAX_DPH="${RUNPOD_GPU_MAX_DPH:-20}"
+RP_B200_TYPE="${RUNPOD_B200_TYPE:-NVIDIA B200}"
+RP_B200_VOL_NAME="${RUNPOD_B200_VOLUME_NAME:-fv-weights-b200-us}"
+RP_EUR_VOLUME_KEEP="jg48s6o1w0"
+RP_B200_DESTS="${RUNPOD_FETCH_DESTS:-h3-8step h3-base FastH3-4-step-Preview-v1-LoRA upscaler h3-to-ltx ltx2 ltx25 ltx23}"
+RP_US_DCS="${RUNPOD_US_DCS:-US-CA-2 US-CA-1 US-GA-1 US-GA-2 US-TX-3 US-IL-1 US-KS-2 US-WA-1 US-NC-1 US-OR-1 US-DE-1 US-NE-1 US-MD-1 US-MO-2 US-NC-2 US-TX-1 US-TX-4}"
 MOUNT="/workspace"
 WEIGHTS="$MOUNT/weights"
 FETCH_NAME_PREFIX="fv-fetch"
@@ -183,9 +190,95 @@ rp_find_or_create_volume() {
   resp="$(rp_rest POST /networkvolumes "$payload")"
   id="$(jq -r '.id // empty' <<<"$resp")"
   [[ -n "$id" ]] || die "volume create returned no id: $resp"
+  if [[ "$id" == "$RP_EUR_VOLUME_KEEP" ]]; then
+    die "refusing to reuse EUR volume $RP_EUR_VOLUME_KEEP"
+  fi
   rp_log "volume id=$id name=$RP_VOL_NAME ${RP_VOL_GB}GB dc=$dc"
   printf '%s\n' "$resp" >"$RP_STATE/volume.json"
   printf '%s\n' "$id"
+}
+
+rp_probe_gpu_dc() {
+  local gpu="$1" dc="$2"
+  local query resp stock price
+  query="query { gpuTypes(input: {id: \"${gpu}\"}) { id displayName lowestPrice(input: {gpuCount: 1, dataCenterId: \"${dc}\"}) { stockStatus uninterruptablePrice } } }"
+  resp="$(rp_gql "$query")"
+  stock="$(jq -r '.data.gpuTypes[0].lowestPrice.stockStatus // empty' <<<"$resp")"
+  price="$(jq -r '.data.gpuTypes[0].lowestPrice.uninterruptablePrice // empty' <<<"$resp")"
+  rp_log "offer $gpu dc=$dc stock=${stock:-none} \$${price:-?}/hr"
+  printf '%s\t%s\t%s\t%s\n' "$gpu" "$dc" "${stock:-none}" "${price:-}"
+}
+
+rp_pick_us_b200_dc() {
+  if [[ -n "${RUNPOD_DATACENTER:-}" ]]; then
+    echo "$RUNPOD_DATACENTER"
+    return 0
+  fi
+  local dc stock price best_dc="" best_price=""
+  local line
+  for dc in $RP_US_DCS; do
+    line="$(rp_probe_gpu_dc "$RP_B200_TYPE" "$dc")"
+    stock="$(cut -f3 <<<"$line")"
+    price="$(cut -f4 <<<"$line")"
+    if [[ -z "$stock" || "$stock" == "none" || "$stock" == "null" ]]; then
+      continue
+    fi
+    if [[ -z "$price" || "$price" == "null" ]]; then
+      continue
+    fi
+    if awk -v p="$price" -v cap="$RP_GPU_MAX_DPH" 'BEGIN{exit !(p+0 > cap+0)}'; then
+      rp_log "skip $dc \$${price}/hr above ceiling \$${RP_GPU_MAX_DPH}"
+      continue
+    fi
+    if [[ -z "$best_dc" ]] || awk -v p="$price" -v b="$best_price" 'BEGIN{exit !(p+0 < b+0)}'; then
+      best_dc="$dc"
+      best_price="$price"
+    fi
+  done
+  [[ -n "$best_dc" ]] || return 1
+  rp_log "pick B200 dc=$best_dc \$${best_price}/hr (cap \$${RP_GPU_MAX_DPH})"
+  echo "$best_dc"
+}
+
+rp_create_us_volume() {
+  local name="$1" dc="$2"
+  local vols existing id
+  vols="$(rp_rest GET /networkvolumes)"
+  existing="$(jq -r --arg n "$name" --arg dc "$dc" --arg keep "$RP_EUR_VOLUME_KEEP" \
+    '.[] | select(.name==$n and .dataCenterId==$dc and .id!=$keep) | "\(.id)\t\(.dataCenterId)\t\(.size)"' <<<"$vols" | head -1)"
+  if [[ -n "$existing" ]]; then
+    id="${existing%%$'\t'*}"
+    [[ "$id" != "$RP_EUR_VOLUME_KEEP" ]] || die "refusing to reuse EUR volume $RP_EUR_VOLUME_KEEP"
+    rp_log "reuse US volume $existing"
+    printf '%s\n' "$id"
+    jq -n --arg id "$id" --arg raw "$existing" '{id:$id, reuse:true, us:true}' >"$RP_STATE/volume-b200.json"
+    return 0
+  fi
+  rp_log "create US volume name=$name size=${RP_VOL_GB}GB dc=$dc"
+  local payload resp
+  payload="$(jq -n --arg name "$name" --argjson size "$RP_VOL_GB" --arg dc "$dc" \
+    '{name:$name, size:$size, dataCenterId:$dc}')"
+  resp="$(rp_rest POST /networkvolumes "$payload")"
+  id="$(jq -r '.id // empty' <<<"$resp")"
+  [[ -n "$id" ]] || die "volume create returned no id: $resp"
+  [[ "$id" != "$RP_EUR_VOLUME_KEEP" ]] || die "refusing to reuse EUR volume $RP_EUR_VOLUME_KEEP"
+  rp_log "volume id=$id name=$name ${RP_VOL_GB}GB dc=$dc"
+  printf '%s\n' "$resp" >"$RP_STATE/volume-b200.json"
+  printf '%s\n' "$id"
+}
+
+rp_log_box_image() {
+  local host="$1" port="$2" role="$3"
+  local box
+  box="$(rp_ssh "$host" "$port" "cat /opt/fastvideo-rs/target/release/fv-gpucheck.build-id 2>/dev/null || echo missing")"
+  rp_log "$role pin=$RP_IMAGE box_build_id=$box"
+  if [[ "$RP_IMAGE" == *":build-"* ]]; then
+    local want="${RP_IMAGE##*:build-}"
+    if [[ "$box" != "$want" ]]; then
+      rp_log "FATAL: $role build-id $box != pinned $want ($RP_IMAGE)"
+      return 1
+    fi
+  fi
 }
 
 rp_volume_dc() {
@@ -225,7 +318,19 @@ rp_weight_rows() {
   local f
   f="$(dirname "${BASH_SOURCE[0]}")/weights-manifest.tsv"
   [[ -f "$f" ]] || die "weights-manifest.tsv missing at $f"
-  grep -vE '^[[:space:]]*(#|$)' "$f"
+  local rows
+  rows="$(grep -vE '^[[:space:]]*(#|$)' "$f")"
+  if [[ -n "${RUNPOD_FETCH_DESTS:-}" ]]; then
+    echo "$rows" | awk -F'\t' -v allow="$RUNPOD_FETCH_DESTS" '
+      BEGIN {
+        n = split(allow, a, /[ ,]+/)
+        for (i = 1; i <= n; i++) if (a[i] != "") ok[a[i]] = 1
+      }
+      $1 in ok
+    '
+  else
+    printf '%s\n' "$rows"
+  fi
 }
 
 cmd_manifest() {
@@ -334,6 +439,27 @@ rp_remote_fetch_all() {
     size="$(rp_ssh "$host" "$port" "du -sh '$dest_path' | cut -f1")"
     rp_log "ok $dest  ${size}  ${secs}s  $repo"
   done < <(rp_weight_rows)
+  rp_remote_fetch_taeh3 "$host" "$port"
+}
+
+rp_remote_fetch_taeh3() {
+  local host="$1" port="$2"
+  local dest="$WEIGHTS/taeh3"
+  rp_log "fetch taeh3 → $dest"
+  rp_ssh "$host" "$port" "export FV_WORK=$MOUNT PATH=/usr/local/bin:\$PATH
+    cd /opt/fastvideo-rs
+    bash scripts/gpu/remote.sh fetch-taeh3 '$dest'"
+  local t0 secs
+  t0=$(date +%s)
+  if ! rp_ssh "$host" "$port" "export FV_WORK=$MOUNT PATH=/usr/local/bin:\$PATH
+    cd /opt/fastvideo-rs
+    bash scripts/gpu/remote.sh wait-taeh3 '$dest' 600"; then
+    rp_log "FATAL: wait-taeh3 failed"
+    rp_ssh "$host" "$port" "tail -40 $MOUNT/gpucheck-out/logs/fetch-taeh3.log" | tee -a "$RP_LIVE" >&2 || true
+    return 1
+  fi
+  secs=$(( $(date +%s) - t0 ))
+  rp_log "ok taeh3  $(rp_ssh "$host" "$port" "du -sh '$dest' | cut -f1")  ${secs}s"
 }
 
 rp_verify_remote() {
@@ -727,7 +853,151 @@ cmd_matrix() {
   rp_log "matrix PASS (see phase3-gate/runs)"
 }
 
-usage() { sed -n '2,12p' "$0" | sed 's/^# \{0,1\}//'; exit 2; }
+rp_rsync_and_build() {
+  local host="$1" port="$2"
+  local remote="/opt/fastvideo-rs"
+  rp_log "rsync source → $host:$port:$remote"
+  rp_ssh "$host" "$port" "mkdir -p $remote /workspace/src /workspace/cargo-target"
+  (cd "$FV_ROOT" && git ls-files -z -- . ':!third_party' | rsync -az --files-from=- --from0 \
+    -e "ssh -i $RP_SSH_KEY -p $port -o IdentitiesOnly=yes ${FV_SSH_OPTS[*]}" \
+    . "root@$host:$remote/")
+  if [[ -d "$FV_ROOT/third_party" ]]; then
+    rsync -az --exclude '.git' -e "ssh -i $RP_SSH_KEY -p $port -o IdentitiesOnly=yes ${FV_SSH_OPTS[*]}" \
+      "$FV_ROOT/third_party/" "root@$host:$remote/third_party/" || true
+  fi
+  rp_log "install rustc + nvcc if missing, then cargo build --release -p fastvideo-gpucheck"
+  rp_ssh "$host" "$port" "set -euo pipefail
+    . /opt/fastvideo-rs/scripts/gpu/cuda-13.pins
+    export DEBIAN_FRONTEND=noninteractive
+    if ! command -v rustc >/dev/null; then
+      echo '▶ rustup'
+      curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain stable
+    fi
+    export PATH=\"\$HOME/.cargo/bin:/usr/local/cargo/bin:/usr/local/cuda-13.4/bin:/usr/local/cuda/bin:\$PATH\"
+    if ! command -v nvcc >/dev/null; then
+      echo '▶ apt cuda-nvcc + build-essential'
+      apt-get update -qq
+      apt-get install -y -qq --no-install-recommends build-essential pkg-config libssl-dev clang \
+        \"\${CUDA_NVCC_PKG:-cuda-nvcc-13-4}\" \"\${CUDA_NVRTC_DEV_PKG:-cuda-nvrtc-dev-13-4}\" || true
+    fi
+    export NVCC=\"\$(command -v nvcc || echo /usr/local/cuda-13.4/bin/nvcc)\"
+    export CUDARC_CUDA_VERSION=13000
+    export CARGO_TARGET_DIR=/workspace/cargo-target
+    export CARGO_PROFILE_RELEASE_LTO=off
+    export CARGO_PROFILE_RELEASE_CODEGEN_UNITS=16
+    rustc --version
+    nvcc --version | tail -1 || echo 'nvcc missing — build will fail if cubins are required'
+    cd $remote
+    echo '▶ cargo build --release -p fastvideo-gpucheck --features cuda'
+    cargo build --release -p fastvideo-gpucheck --features cuda
+    install -D /workspace/cargo-target/release/fv-gpucheck /opt/fastvideo-rs/target/release/fv-gpucheck
+    echo remote-rsync-\$(date -u +%Y%m%dT%H%M%SZ) > /opt/fastvideo-rs/target/release/fv-gpucheck.build-id
+    /opt/fastvideo-rs/target/release/fv-gpucheck --help >/dev/null
+    echo BUILD_OK
+  "
+}
+
+cmd_offers() {
+  require_tools curl jq
+  rp_load_key
+  rp_log "▶ offers  cap=\$${RP_GPU_MAX_DPH}/hr"
+  local dc
+  for dc in $RP_US_DCS; do
+    rp_probe_gpu_dc "$RP_B200_TYPE" "$dc" >/dev/null || true
+  done
+  local g
+  for g in "NVIDIA B200 SXM" "NVIDIA B200 NVL"; do
+    rp_probe_gpu_dc "$g" "US-CA-2" >/dev/null || true
+  done
+}
+
+cmd_b200() {
+  require_tools curl jq ssh rsync python3 git
+  rp_load_key
+  [[ -f "$RP_SSH_KEY" ]] || die "ssh key $RP_SSH_KEY missing"
+  export RUNPOD_GPU_MAX_DPH="${RUNPOD_GPU_MAX_DPH:-$RP_GPU_MAX_DPH}"
+  export RUNPOD_FETCH_DESTS="${RUNPOD_FETCH_DESTS:-$RP_B200_DESTS}"
+  export RUNPOD_VOLUME_NAME="${RUNPOD_VOLUME_NAME:-$RP_B200_VOL_NAME}"
+  RP_VOL_NAME="$RUNPOD_VOLUME_NAME"
+  RP_GPU_TYPE="$RP_B200_TYPE"
+  rp_log "▶ b200: vol_name=$RP_VOL_NAME dests=$RUNPOD_FETCH_DESTS cap=\$${RP_GPU_MAX_DPH} image=$RP_IMAGE"
+  rp_log "keep EUR volume $RP_EUR_VOLUME_KEEP (never detach/delete)"
+
+  local dc vol auth pod host port have_b200=0
+  if dc="$(rp_pick_us_b200_dc)"; then
+    have_b200=1
+  else
+    rp_log "no US B200 under \$${RP_GPU_MAX_DPH} — still creating US volume + fetch"
+    cmd_offers
+    dc="${RUNPOD_DATACENTER:-US-CA-2}"
+  fi
+  export RUNPOD_DATACENTER="$dc"
+  vol="$(rp_create_us_volume "$RP_VOL_NAME" "$dc")"
+  echo "$vol" >"$RP_STATE/volume-b200.id"
+  rp_log "US volume $vol dc=$dc name=$RP_VOL_NAME"
+
+  auth="$(rp_ensure_registry_auth)"
+  pod="$(rp_create_cpu_pod "$vol" "$dc" "$auth")"
+  echo "$pod" >"$RP_STATE/fetch-pod.id"
+  nohup bash -c "sleep 25200; curl -sS -X DELETE -H 'Authorization: Bearer ${RUNPOD_API_KEY}' '${RUNPOD_API_BASE}/pods/${pod}' >/dev/null" >/dev/null 2>&1 &
+  read -r host port < <(rp_wait_ssh "$pod" 900)
+  echo "$host $port" >"$RP_STATE/fetch-ssh"
+  rp_log_box_image "$host" "$port" "fetch-cpu" || die "fetch pod image is not the pinned runtime"
+  rp_seed_token "$host" "$port"
+  rp_ssh "$host" "$port" "df -h $MOUNT; echo CPU_ONLY"
+  if rp_ssh "$host" "$port" "command -v nvidia-smi >/dev/null && nvidia-smi -L >/dev/null 2>&1"; then
+    rp_log "FATAL: fetch pod has a GPU — destroying $pod"
+    rp_destroy_pod "$pod"
+    die "CPU fetch pod was a GPU"
+  fi
+  rp_remote_fetch_all "$host" "$port"
+  rp_verify_remote "$host" "$port"
+  if ! rp_ssh "$host" "$port" "test -f $WEIGHTS/taeh3/.complete -o -f $WEIGHTS/taeh3/taeh3.safetensors"; then
+    rp_log "FATAL: taeh3 missing after fetch"
+    return 1
+  fi
+  jq -n --arg vol "$vol" --arg dc "$dc" --arg at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+    '{volume:$vol, datacenter:$dc, ready_at:$at, status:"ready", us:true}' >"$RP_STATE/volume-b200-ready.json"
+  rp_log "volume ready  id=$vol  dc=$dc"
+  rp_log "destroying CPU fetch pod $pod"
+  rp_destroy_pod "$pod"
+
+  if [[ "$have_b200" -eq 0 ]]; then
+    rp_log "stop: US volume $vol dc=$dc fetched; no B200 under \$${RP_GPU_MAX_DPH}"
+    return 0
+  fi
+
+  local name id gpu_host gpu_port
+  name="fv-gpu-b200-$(date -u +%Y%m%d%H%M%S)"
+  if ! rp_gpu_offer "$dc" >/dev/null; then
+    rp_log "stop: stock gone after fetch. US volume $vol dc=$dc kept."
+    return 0
+  fi
+  id="$(rp_create_gpu_pod "$name" "$vol" "$dc" "$auth" "$RP_B200_TYPE" 1)" || die "B200 GPU create failed"
+  echo "$id" >"$RP_STATE/gpu-b200.id"
+  nohup bash -c "sleep 21600; curl -sS -X DELETE -H 'Authorization: Bearer ${RUNPOD_API_KEY}' '${RUNPOD_API_BASE}/pods/${id}' >/dev/null" >/dev/null 2>&1 &
+  read -r gpu_host gpu_port < <(rp_wait_ssh "$id" 900)
+  echo "$gpu_host $gpu_port" >"$RP_STATE/gpu-b200-ssh"
+  rp_log "b200 ssh root@$gpu_host:$gpu_port pod=$id"
+  rp_log_box_image "$gpu_host" "$gpu_port" "b200-gpu" || die "B200 pod image is not the pinned runtime"
+  rp_ssh "$gpu_host" "$gpu_port" "nvidia-smi -L; nvidia-smi --query-gpu=name,memory.total,driver_version --format=csv,noheader"
+  rp_log "stage start b200-warm pod=$id"
+  rp_ssh "$gpu_host" "$gpu_port" "mkdir -p /workspace/runs/b200 /workspace/gpucheck-out/logs"
+  rp_rsync "$gpu_host" "$gpu_port" "$FV_ROOT/scripts/gpu/" "/opt/fastvideo-rs/scripts/gpu/" --exclude '.env*'
+  if ! rp_ssh "$gpu_host" "$gpu_port" "export FV_WORK=/workspace FV_GEN_TIMEOUT_S=3600 PATH=/opt/fastvideo-rs/target/release:/usr/local/bin:/usr/local/cuda/bin:\$PATH
+    bash /opt/fastvideo-rs/scripts/gpu/runpod-matrix.sh b200"; then
+    rp_log "b200 matrix returned non-zero (cells continue-on-fail inside the script)"
+  fi
+  rp_ssh "$gpu_host" "$gpu_port" "tail -80 /workspace/runs/b200/live.log" | tee -a "$RP_LIVE" >&2 || true
+  mkdir -p "$RP_STATE/b200/runs"
+  rsync -az -e "ssh -i $RP_SSH_KEY -p $gpu_port -o IdentitiesOnly=yes ${FV_SSH_OPTS[*]}" \
+    "root@$gpu_host:/workspace/runs/b200/" "$RP_STATE/b200/runs/" || true
+  rp_log "destroying B200 pod $id"
+  rp_destroy_pod "$id"
+  rp_log "b200 PASS (see $RP_STATE/b200/runs) — volumes kept ($vol and $RP_EUR_VOLUME_KEEP)"
+}
+
+usage() { sed -n '2,14p' "$0" | sed 's/^# \{0,1\}//'; exit 2; }
 
 case "${1:-}" in
   fetch) shift; cmd_fetch "$@" ;;
@@ -737,6 +1007,8 @@ case "${1:-}" in
   gpu) cmd_gpu ;;
   smoke) cmd_smoke ;;
   matrix) cmd_matrix ;;
+  b200) cmd_b200 ;;
+  offers) cmd_offers ;;
   status) cmd_status ;;
   reap) cmd_reap ;;
   *) usage ;;

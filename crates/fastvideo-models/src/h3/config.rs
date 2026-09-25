@@ -605,11 +605,10 @@ impl H3InferenceContract {
     /// MiniMax-H3 base plus a fused four-step adapter (FastH3 dense-datafree
     /// for T2V/I2V, lightx2v turbo for Ref2VA). Diffusers
     /// `set_timesteps(5)` after video shift 12 and audio shift 3: four
-    /// forwards on the uniform grid. Attention is not locked to dense —
-    /// one-GPU Sol-Attn uses the RTX 5090 policy in [`super::sol`] (first 10
-    /// steps and first 2 layers dense, tau 1.0; the official RTX cell is 49
-    /// forwards). SOL/BSA is available on one GPU; it is not a multi-GPU-only
-    /// profile. See [`Self::sol_h3_rtx`].
+    /// forwards on the uniform grid. Attention is Spark Sol-Attn (update 0
+    /// dense; later updates layer 0 dense + Sol tau 1 / 1.25 / 1.5), not the
+    /// 49-step RTX window. `vsa_sparsity=0` so MiniMax-H3 does not load
+    /// `to_gate_compress`. The official RTX cell is [`Self::sol_h3_rtx`].
     pub fn sol_h3() -> Self {
         Self {
             dmd_denoising_steps: Vec::new(),

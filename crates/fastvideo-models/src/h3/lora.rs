@@ -389,6 +389,11 @@ pub fn is_sol_h3_spark_recipe(name: &str) -> bool {
     matches!(name, "sol-h3-spark" | "sol_h3_spark")
 }
 
+/// Official 49-forward RTX 5090 cell. Does not fuse the 4-step adapter.
+pub fn is_sol_h3_rtx_recipe(name: &str) -> bool {
+    matches!(name, "sol-h3-rtx" | "sol_h3_rtx")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -399,6 +404,9 @@ mod tests {
         assert!(is_sol_h3_spark_recipe("sol-h3-spark"));
         assert!(!is_sol_h3_spark_recipe("sol-h3"));
         assert!(!sol_h3_forces_ref2va("sol-h3-spark"));
+        assert!(is_sol_h3_rtx_recipe("sol-h3-rtx"));
+        assert!(!is_sol_h3_rtx_recipe("sol-h3"));
+        assert!(!is_sol_h3_recipe("sol-h3-rtx"));
     }
 
     #[test]

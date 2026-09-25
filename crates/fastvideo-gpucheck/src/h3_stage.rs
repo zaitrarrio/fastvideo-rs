@@ -206,7 +206,8 @@ pub enum Stage {
         #[arg(long)]
         taeh3_weights: Option<PathBuf>,
         /// DMD recipe: `8step` / `v2`, `4step-vsa` / `preview-vsa`, `4step-dense`
-        /// / `preview-dense`, `sol-h3`. Default: read `fastvideo_inference.json` or 8-step.
+        /// / `preview-dense`, `sol-h3`, `sol-h3-spark`, `sol-h3-rtx`. Default:
+        /// read `fastvideo_inference.json` or 8-step.
         #[arg(long)]
         h3_recipe: Option<String>,
         #[arg(long, default_value = "cuda")]

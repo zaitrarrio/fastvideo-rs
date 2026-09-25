@@ -2,6 +2,16 @@
 
 Project code: FVID
 
+### FVID · 2026-09-24 · FVID-2026-09-24-b200-arch-parity
+- Trigger: user wants architectural parity on B200 for H3 / FastH3 / LTX, then later fine-tune RTX 6000
+- Options: raise `RUNPOD_GPU_MAX_DPH` to $20 and create a new US volume for B200; reuse EUR-IS-1 `jg48s6o1w0` (cannot attach to US B200); discard prior PRO 6000 / 8-step / official-VAE work
+- Decision: raise `RUNPOD_GPU_MAX_DPH` to $20; create a NEW US network volume (do NOT reuse EUR-IS-1 `jg48s6o1w0`; keep that volume); implement B200-aligned recipes/architecture; run warm B200 gens; do not discard prior PRO 6000 / 8-step / official-VAE work
+- Reason: published FastH3 16.2 s is 1× B200 warm Preview v1 4-step 90%; EUR volume cannot attach to US B200
+- Reversibility: cheap
+- Executed by: Executor
+- ADR: none
+- Verification: pending
+
 ### FVID · 2026-09-24 · FVID-2026-09-24-phase3-failure-gate
 - Trigger: Phase 3 cells that failed on `build-af5edf649671bfb7` (Spark `.set_weight`, H3 gate, LTX-2.5 decode OOM, LTX-2.3 keyframes, Hunyuan `Hunyuan15.*`, Wan 1.3B absent) plus host contracts and a weights manifest
 - Options: skip failing cells / delete tests to go green; one image then one cheap smoke then one PRO 6000 with family restarts; invent SANA-Video / Super-64B / enable oxide GEMM

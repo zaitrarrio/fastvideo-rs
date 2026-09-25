@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
-# Runs ON a Runpod GPU box. Family: h3 | ltx | hunyuan | wan
+# Runs ON a Runpod GPU box. Family: h3 | ltx | hunyuan | wan | b200
 # One process per family. Continues to the next cell on failure.
 # Spark joint LTX refine stays off (FASTVIDEO_LTX2_WEIGHTS unset).
 set -euo pipefail
-FAMILY="${1:?usage: runpod-matrix.sh h3|ltx|hunyuan|wan}"
+FAMILY="${1:?usage: runpod-matrix.sh h3|ltx|hunyuan|wan|b200}"
 WORK="${FV_WORK:-/workspace}"
 BIN="${FV_GPUCHECK:-/opt/fastvideo-rs/target/release/fv-gpucheck}"
 W="$WORK/weights"
@@ -58,11 +58,15 @@ run_cell() {
   mkdir -p "$cell"
   local t0 rc secs
   t0=$(date +%s)
-  log "▶ $name  $*  (wall cap ${FV_GEN_TIMEOUT_S:-300}s)"
+  local cap="${FV_GEN_TIMEOUT_S:-300}"
+  log "▶ $name  $*  (wall cap ${cap}s; 0=none)"
   smi_snap "$cell/nvidia-smi-start.txt"
   set +e
-  # Hard 5-minute wall for every gen cell.
-  timeout --signal=TERM --kill-after=15 "${FV_GEN_TIMEOUT_S:-300}" "$@" >"$cell/stdout.log" 2>"$cell/stderr.log"
+  if [[ "$cap" == "0" ]]; then
+    "$@" >"$cell/stdout.log" 2>"$cell/stderr.log"
+  else
+    timeout --signal=TERM --kill-after=15 "$cap" "$@" >"$cell/stdout.log" 2>"$cell/stderr.log"
+  fi
   rc=$?
   set -e
   secs=$(( $(date +%s) - t0 ))
@@ -233,6 +237,130 @@ case "$FAMILY" in
         --steps 3 \
         --seed "$SEED" \
         --name wan13-dmd-3step
+    ;;
+  b200)
+    # Warm B200 parity: H3 / FastH3 / LTX only. Official VAE stays the
+    # default elsewhere; this family opts into TAEH3. Oxide GEMM stays off.
+    unset FASTVIDEO_NVFP4_OXIDE_GEMM
+    taeh3=""
+    for p in "$W/taeh3/taeh3.safetensors" "$W/taeh3" "$WORK/taeh3/taeh3.safetensors"; do
+      if [[ -f "$p" || ( -d "$p" && -f "$p/taeh3.safetensors" ) ]]; then
+        taeh3="$p"
+        break
+      fi
+    done
+    if [[ -z "$taeh3" ]]; then
+      log "WARN: TAEH3 missing — H3 cells will use official VAE"
+    else
+      log "taeh3=$taeh3"
+    fi
+    h3_common=(
+      --prompt "$PROMPT"
+      --seconds 5
+      --seed "$SEED"
+      --text-encoder auto
+      --text-cache "$WORK/h3-text-cache"
+      --text-weights "$W/h3-base"
+      --warm
+    )
+    if [[ -n "$taeh3" ]]; then
+      h3_common+=(--taeh3-weights "$taeh3")
+    fi
+    run_cell fasth3-4step-vsa \
+      "$BIN" --mode fast h3 gen \
+        --weights "$W/h3-8step" \
+        --h3-recipe 4step-vsa \
+        --adaln-cache "$RUNS/fasth3-4step-vsa-adaln.cache" \
+        --clip-dir "$RUNS/fasth3-4step-vsa/frames" \
+        "${h3_common[@]}"
+    run_cell fasth3-8step \
+      "$BIN" --mode fast h3 gen \
+        --weights "$W/h3-8step" \
+        --h3-recipe 8step \
+        --adaln-cache "$RUNS/fasth3-8step-adaln.cache" \
+        --clip-dir "$RUNS/fasth3-8step/frames" \
+        "${h3_common[@]}"
+    run_cell fasth3-4step-dense \
+      "$BIN" --mode fast h3 gen \
+        --weights "$W/h3-base" \
+        --h3-recipe 4step-dense \
+        --adaln-cache "$RUNS/fasth3-4step-dense-adaln.cache" \
+        --clip-dir "$RUNS/fasth3-4step-dense/frames" \
+        "${h3_common[@]}"
+    run_cell sol-h3 \
+      "$BIN" --mode fast h3 gen \
+        --weights "$W/h3-base" \
+        --h3-recipe sol-h3 \
+        --adaln-cache "$RUNS/sol-h3-adaln.cache" \
+        --clip-dir "$RUNS/sol-h3/frames" \
+        "${h3_common[@]}"
+    spark_up=""
+    spark_ad=""
+    for p in \
+      "$W/upscaler/minimax_h3_latent_upscaler_3d_bf16.safetensors" \
+      "$W/h3-spark-upscaler/minimax_h3_latent_upscaler_3d_bf16.safetensors" \
+      "$W/h3-spark/minimax_h3_latent_upscaler_3d_bf16.safetensors" \
+      "$W/h3-base/minimax_h3_latent_upscaler_3d_bf16.safetensors" \
+      "$W/minimax_h3_latent_upscaler_3d_bf16.safetensors"; do
+      [[ -f "$p" ]] && spark_up="$p" && break
+    done
+    for p in \
+      "$W/h3-to-ltx" \
+      "$W/h3_ltx_adapter" \
+      "$W/H3-to-LTX-Latent-Adapter" \
+      "$W/h3-base/h3-to-ltx" \
+      "$W/h3-base/h3_ltx_adapter"; do
+      if [[ -f "$p/model.safetensors" && -f "$p/config.json" ]]; then
+        spark_ad="$p"
+        break
+      fi
+    done
+    if [[ -n "$spark_up" && -n "$spark_ad" ]]; then
+      log "spark files present ($spark_up + $spark_ad) — sol-h3-spark, no joint LTX refine"
+      run_cell sol-h3-spark \
+        env -u FASTVIDEO_LTX2_WEIGHTS \
+        FASTVIDEO_H3_UPSCALER="$spark_up" \
+        FASTVIDEO_H3_LTX_ADAPTER="$spark_ad" \
+        "$BIN" --mode fast h3 gen \
+          --weights "$W/h3-base" \
+          --h3-recipe sol-h3-spark \
+          --adaln-cache "$RUNS/sol-h3-spark-adaln.cache" \
+          --clip-dir "$RUNS/sol-h3-spark/frames" \
+          "${h3_common[@]}"
+    else
+      log "skip sol-h3-spark: upscaler=${spark_up:-missing} adapter=${spark_ad:-missing}"
+    fi
+    run_cell ltx25-two-stage \
+      "$BIN" --mode fast ltx2 gen \
+        --model-version 2.5 \
+        --weights "$W/ltx25" \
+        --dit "$W/ltx25" \
+        --prompt "$PROMPT" \
+        --seed "$SEED" \
+        --two-stage \
+        --text streamed \
+        --warm \
+        --clip "$RUNS/ltx25-two-stage/frames"
+    run_cell ltx23-two-stage \
+      "$BIN" --mode fast ltx2 gen \
+        --model-version 2.3 \
+        --weights "$W/ltx23" \
+        --dit "$W/ltx23" \
+        --prompt "$PROMPT" \
+        --seed "$SEED" \
+        --two-stage \
+        --text streamed \
+        --warm \
+        --clip "$RUNS/ltx23-two-stage/frames"
+    run_cell ltx20-distilled-8step \
+      "$BIN" --mode fast ltx2 gen \
+        --model-version 2.0 \
+        --weights "$W/ltx2" \
+        --dit "$W/ltx2/ltx-2-19b-distilled.safetensors" \
+        --prompt "$PROMPT" \
+        --seed "$SEED" \
+        --warm \
+        --clip "$RUNS/ltx20-distilled-8step/frames"
     ;;
   *)
     log "FATAL: unknown family $FAMILY"

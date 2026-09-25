@@ -92,7 +92,7 @@ Joint audio and video. Recipes share the `sol_h3` registry row unless noted.
 | `sol_h3` | t2av, i2v, fl2va, ref2va | `FastVideo/FastH3-4-step-Preview-v1-LoRA` |
 | `sol_h3_ref2va` | ref2va | `lightx2v/Minimax-h3-Turbo` |
 | `4step-dense` / `4step-vsa` | named recipes on the H3 contract | same weights as the selected preset |
-| `sol-h3` | 4 forwards, video shift 12, audio shift 3, dense attention | one-GPU Sol-H3 profile |
+| `sol-h3` | 4 forwards, video shift 12, audio shift 3, Spark Sol-Attn | one-GPU Sol-H3 profile |
 | `sol-h3-spark` | same draft, then the Spark bridge | draft canvas 672×384×124. Output target 1344×768×121 |
 
 Spark, when `minimax_h3_latent_upscaler_3d_bf16.safetensors` and the
@@ -205,14 +205,15 @@ SANA image and video family and is not implemented here.
 | LTX-2.3 | Stage-1 ODE res2s (2 evals/step except last; 15-step HQ = 29 calls). Stage-2 Euler (3-forward Sol/PISA contract). Distilled checkpoints run without LoRA; the 0.25/0.5 pair fuses on the **dev** BF16 DiT only. Stage-1 SCSP skips **res2s calls** 16–28 of 29 when `FASTVIDEO_LTX2_STAGE1_CACHE=1` (an Euler 15-step run never reaches call 16). Stage-2 PISA at sparsity 0.9, block 64. Midpoint token prune when `FASTVIDEO_LTX2_MIDPOINT_PRUNE=1` |
 | LTX-2.5 | Ancestral stage 1. Stage-2 and Spark refiner are deterministic Euler (`denoise_cfg` / `denoise`), not ancestral. Stage-2 Sol-Attn: layer 0 dense, layers 1–47 at tau 1 / 1.25 / 1.5. LoRA 0.8 on the **dev** BF16 DiT only — distilled two-stage does not fuse. GB200 first-block cache when `FASTVIDEO_LTX2_FBCACHE=1` (threshold 0.08, warmup 1, max 10 skips, **stage 1 only**; stage 2 / refiner stay disarmed) |
 | LTX-2.5 refiner / Spark | H3×2 upscaler, H3-to-LTX adapter, `encode_audio`, 3-step deterministic joint refine, original PCM muxed |
-| MiniMax-H3 Spark and RTX | Spark Sol-Attn route (`FASTVIDEO_H3_SOL_ATTN=spark`). RTX route (`rtx`): first 10 steps and first 2 layers dense, tau 1.0, 49 forwards. `FASTVIDEO_H3_SOL_CACHE=teacache` is the RTX residual controller (threshold 0.10, retain 5, cooldown 1) |
+| MiniMax-H3 Spark and RTX | 4-step `sol-h3` is Spark Sol-Attn (update 0 dense; later updates layer 0 dense + tau 1 / 1.25 / 1.5). `sol-h3-spark` is VSA 0.9 + Sol-Attn Off. RTX route (`sol-h3-rtx` / `FASTVIDEO_H3_SOL_ATTN=rtx`): first 10 steps and first 2 layers dense, tau 1.0, 49 forwards. `FASTVIDEO_H3_SOL_CACHE=teacache` is the RTX residual controller (threshold 0.10, retain 5, cooldown 1) |
 | Cosmos3-Super | Canvas and TeaCache (threshold 1.15, start step 10, max 3). `fp4_linear` names the middle steps. Those linears are not quantized |
 | HunyuanVideo | Official canvas only. The profile's TeaCache is HunyuanVideo-13B and is not applied |
 | LingBot | Official base canvas only. Cache, PISA, and topology stay dense: the profile names them and does not specify the algorithms |
 | Sana-Video 5B | Not in this tree. The sol-engine profile wraps a private bundle |
 
-One-GPU Sol-H3 uses the RTX 5090 Sol-Attn policy (first 10 steps and first 2
-layers dense, tau 1.0). SOL/BSA is not a multi-GPU-only profile. `to_gate_compress`
+4-step `sol-h3` uses Spark Sol-Attn, not the RTX first-10-dense window (that
+window would make every 4-step forward dense). `sol-h3-rtx` is the 49-forward
+RTX 5090 cell. SOL/BSA is not a multi-GPU-only profile. `to_gate_compress`
 loads only when `vsa_sparsity > 0` (MiniMax-H3 has no gate).
 `sol-h3-spark` Stage-1 is VSA 0.9 + FastH3_VSA_DataFree at strength 1.0, BF16
 (upstream W8A8 FP8 after the LoRA merge is off: measured 16–20 dB). The

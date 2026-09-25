@@ -2,9 +2,11 @@
 //! (`models/minimax_h3/Sol-H3`, `models/minimax_h3.toml`, and
 //! `models/minimax_h3/RTX4090/teacache.py`).
 //!
-//! One-GPU Sol-H3 uses the RTX 5090 policy (`[rtx5090.policy]`: first 10
-//! steps dense, first 2 layers dense, tau 1.0, 49 forwards). Spark Stage-1
-//! Sol-Attn (`--ref-stage1-attn sol`) is the 4-update route. Body layers on
+//! 4-step `sol-h3` uses the Spark Sol-Attn route (update 0 dense; later
+//! updates keep layer 0 dense and send the rest to Sol at tau 1 / 1.25 /
+//! 1.5). `sol-h3-rtx` is the official RTX 5090 cell (`[rtx5090.policy]`:
+//! first 10 steps dense, first 2 layers dense, tau 1.0, 49 forwards).
+//! `sol-h3-spark` is VSA 0.9 + Sol-Attn Off (device VSA). Body layers on
 //! the Sol route use the shared Sol-Attn kernel (`thresh_type=diag`).
 //! `FASTVIDEO_H3_SOL_CACHE=teacache` skips the block stack when the
 //! published residual controller says so.
@@ -79,18 +81,17 @@ pub fn sol_attn_policy(value: Option<&str>) -> H3SolAttnPolicy {
     }
 }
 
-/// Env wins. Unset `FASTVIDEO_H3_SOL_ATTN` on a non-Spark sol-h3 recipe
-/// selects the one-GPU RTX 5090 policy.
+/// Env wins. Unset `FASTVIDEO_H3_SOL_ATTN`: 4-step `sol-h3` is Spark
+/// Sol-Attn; `sol-h3-rtx` is the 49-forward RTX window; `sol-h3-spark`
+/// stays Off (device VSA).
 pub fn recipe_sol_attn_policy(recipe: Option<&str>, env: Option<&str>) -> H3SolAttnPolicy {
     if env.is_some() {
         return sol_attn_policy(env);
     }
     match recipe {
-        Some(name)
-            if super::lora::is_sol_h3_recipe(name) && !super::lora::is_sol_h3_spark_recipe(name) =>
-        {
-            H3SolAttnPolicy::Rtx
-        }
+        Some(name) if super::lora::is_sol_h3_rtx_recipe(name) => H3SolAttnPolicy::Rtx,
+        Some(name) if super::lora::is_sol_h3_spark_recipe(name) => H3SolAttnPolicy::Off,
+        Some(name) if super::lora::is_sol_h3_recipe(name) => H3SolAttnPolicy::Spark,
         _ => H3SolAttnPolicy::Off,
     }
 }
@@ -602,9 +603,35 @@ mod tests {
     }
 
     #[test]
-    fn unset_sol_h3_recipe_defaults_to_rtx() {
+    fn four_step_sol_h3_uses_spark_not_rtx_window() {
+        // RTX first-10-dense on a 4-forward recipe makes every step dense.
+        // 4-step sol-h3 must take the Spark Sol-Attn route instead.
+        let policy = recipe_sol_attn_policy(Some("sol-h3"), None);
+        assert_eq!(policy, H3SolAttnPolicy::Spark);
+        assert_eq!(policy_route(policy, 0, 49).unwrap(), H3SolRoute::Dense);
+        assert_eq!(policy_route(policy, 1, 0).unwrap(), H3SolRoute::Dense);
         assert_eq!(
-            recipe_sol_attn_policy(Some("sol-h3"), None),
+            policy_route(policy, 1, 1).unwrap(),
+            H3SolRoute::Sol { tau: 1.0 }
+        );
+        assert_eq!(
+            policy_route(policy, 2, 10).unwrap(),
+            H3SolRoute::Sol { tau: 1.25 }
+        );
+        assert_eq!(
+            policy_route(policy, 3, 49).unwrap(),
+            H3SolRoute::Sol { tau: 1.5 }
+        );
+        assert_eq!(
+            policy_route(H3SolAttnPolicy::Rtx, 3, 49).unwrap(),
+            H3SolRoute::Dense
+        );
+        assert_eq!(
+            recipe_sol_attn_policy(Some("sol-h3-t2v"), None),
+            H3SolAttnPolicy::Spark
+        );
+        assert_eq!(
+            recipe_sol_attn_policy(Some("sol-h3-rtx"), None),
             H3SolAttnPolicy::Rtx
         );
         assert_eq!(
@@ -612,11 +639,15 @@ mod tests {
             H3SolAttnPolicy::Off
         );
         assert_eq!(
-            recipe_sol_attn_policy(Some("sol-h3"), Some("spark")),
-            H3SolAttnPolicy::Spark
+            recipe_sol_attn_policy(Some("sol-h3"), Some("rtx")),
+            H3SolAttnPolicy::Rtx
         );
         assert_eq!(
             recipe_sol_attn_policy(Some("sol-h3"), Some("off")),
+            H3SolAttnPolicy::Off
+        );
+        assert_eq!(
+            recipe_sol_attn_policy(Some("4step-vsa"), None),
             H3SolAttnPolicy::Off
         );
     }

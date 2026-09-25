@@ -202,7 +202,7 @@ pub struct H3PipelineOptions {
     /// decoder is not loaded. `FASTVIDEO_TAEH3_WEIGHTS` is the same switch
     /// when this is `None`.
     pub taeh3: Option<PathBuf>,
-    /// Named DMD recipe (`8step`, `4step-vsa`, `4step-dense`, `sol-h3`). When unset,
+    /// Named DMD recipe (`8step`, `4step-vsa`, `4step-dense`, `sol-h3`, `sol-h3-spark`, `sol-h3-rtx`). When unset,
     /// `fastvideo_inference.json` under the weight root (or `transformer/`) is
     /// read if present; otherwise the 8-step V2 contract.
     pub recipe: Option<String>,
@@ -1604,7 +1604,7 @@ mod tests {
     }
 
     #[test]
-    fn spark_recipe_is_vsa_and_sol_h3_defaults_to_rtx_attn() {
+    fn spark_recipe_is_vsa_and_sol_h3_defaults_to_spark_attn() {
         let spark = resolve_contract(Path::new("/"), Some("sol-h3-spark")).unwrap();
         assert_eq!(spark.vsa_sparsity, 0.9);
         assert_eq!(spark.vsa_tile_size, 64);
@@ -1612,10 +1612,18 @@ mod tests {
         let sol = resolve_contract(Path::new("/"), Some("sol-h3")).unwrap();
         assert!(!sol.dense);
         assert_eq!(sol.transformer_forwards, 4);
+        assert_eq!(sol.vsa_sparsity, 0.0);
         let rtx = resolve_contract(Path::new("/"), Some("sol-h3-rtx")).unwrap();
         assert_eq!(rtx.transformer_forwards, 49);
+        let vsa = resolve_contract(Path::new("/"), Some("4step-vsa")).unwrap();
+        assert_eq!(vsa.transformer_forwards, 4);
+        assert_eq!(vsa.vsa_sparsity, 0.9);
         assert_eq!(
             fastvideo_models::h3::sol::recipe_sol_attn_policy(Some("sol-h3"), None),
+            fastvideo_models::h3::sol::H3SolAttnPolicy::Spark
+        );
+        assert_eq!(
+            fastvideo_models::h3::sol::recipe_sol_attn_policy(Some("sol-h3-rtx"), None),
             fastvideo_models::h3::sol::H3SolAttnPolicy::Rtx
         );
         assert_eq!(
