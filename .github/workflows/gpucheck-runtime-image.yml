@@ -96,12 +96,13 @@ jobs:
           docker run --rm "$img" bash -euo pipefail -c '
             test "$(cat target/release/fv-gpucheck.build-id)" = "${{ steps.meta.outputs.build_id }}"
             . /etc/fastvideo/cuda-13.pins
-            dpkg-query -W cuda-nvrtc-13-4 libcublas-13-4 libcudnn9-cuda-13 cuda-tileiras-13-4
+            dpkg-query -W cuda-nvrtc-13-4 libcublas-13-4 libcudnn9-cuda-13 cuda-tileiras-13-4 cuda-cupti-13-4
+            dpkg-query -W cuda-cupti-13-4 | grep -F "${CUDA_CUPTI_PKG#*=}"
             dpkg-query -W cuda-nvrtc-13-4 | grep -F "${CUDA_NVRTC_PKG#*=}"
             dpkg-query -W libcublas-13-4 | grep -F "${CUDA_CUBLAS_PKG#*=}"
             dpkg-query -W libcudnn9-cuda-13 | grep -F "${CUDA_CUDNN_PKG#*=}"
             dpkg-query -W cuda-tileiras-13-4 | grep -F "${CUDA_TILEIRAS_PKG#*=}"
-            for lib in "$CUDA_NVRTC_SONAME" "$CUDA_CUBLAS_SONAME" "$CUDA_CUBLASLT_SONAME" "$CUDA_CUDNN_SONAME"; do
+            for lib in "$CUDA_NVRTC_SONAME" "$CUDA_CUBLAS_SONAME" "$CUDA_CUBLASLT_SONAME" "$CUDA_CUDNN_SONAME" "$CUDA_CUPTI_SONAME"; do
               ldconfig -p | grep -F "$lib" >/dev/null
             done
             ./target/release/fv-gpucheck --out /tmp/out nvrtc

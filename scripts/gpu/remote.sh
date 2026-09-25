@@ -78,7 +78,8 @@ fv_find_lib() {
 fv_setup_libs() {
   mkdir -p "$FV_LIBDIR"
   local dirs="" lib real
-  for lib in nvrtc cublas cublasLt cudnn; do
+  # cupti is optional (FASTVIDEO_GPU_TRACE only), so `env` does not require it.
+  for lib in nvrtc cublas cublasLt cudnn cupti; do
     real="$(fv_find_lib "$lib")" || true
     [[ -n "$real" ]] || continue
     ln -sf "$real" "$FV_LIBDIR/lib$lib.so"

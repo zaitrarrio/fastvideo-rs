@@ -1569,6 +1569,8 @@ fn gen(
         // measured one; dit_phases should describe the timed generate only.
         fastvideo_cudarc::wan::stats::phase_reset();
     }
+    // FASTVIDEO_GPU_TRACE: the cold pass traces too; only the timed one is kept.
+    fastvideo_cudarc::wan::gpu_trace::reset_report();
     let timer = std::time::Instant::now();
     let out = pipeline.generate(&request, clip_dir)?;
     let total = timer.elapsed().as_secs_f64();
@@ -1576,7 +1578,14 @@ fn gen(
     values["warm"] = json!(warm);
     values["load_s"] = json!(load_s);
     values["peak_mib"] = json!(mem.stop());
+    let gpu_trace = fastvideo_cudarc::wan::gpu_trace::last_report();
+    if let Some(trace) = &gpu_trace {
+        values["gpu_trace"] = trace.clone();
+    }
     report.note("timings", values);
+    if let Some(trace) = gpu_trace {
+        report.set("gpu_trace", trace);
+    }
     let gib = |b: u64| b as f64 / f64::from(1u32 << 30);
     report.set(
         "stage_memory",

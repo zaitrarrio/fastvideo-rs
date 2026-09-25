@@ -1,6 +1,6 @@
 # NVIDIA Ubuntu 22.04 apt pins for CUDA 13.4 + cuDNN 9 + tileiras.
 # Verified against ubuntu2204/x86_64 (2026-09-24): nvcc/nvrtc/tileiras 13.4.92,
-# cuBLAS 13.8.0.4, cuDNN 9.26.0.51. Matches docker/oxide.Dockerfile.
+# cuBLAS 13.8.0.4, cuDNN 9.26.0.51, CUPTI 13.4.92. Matches docker/oxide.Dockerfile.
 # cudarc 0.17.8 bindgen tops out at 13000 ("Unsupported cuda toolkit version:
 # 13040"). Ship CUDA 13.4 libraries; tell cudarc it is the 13.0 ABI.
 CUDA_NVCC_PKG=cuda-nvcc-13-4=13.4.92-1
@@ -9,9 +9,12 @@ CUDA_NVRTC_DEV_PKG=cuda-nvrtc-dev-13-4=13.4.92-1
 CUDA_TILEIRAS_PKG=cuda-tileiras-13-4=13.4.92-1
 CUDA_CUBLAS_PKG=libcublas-13-4=13.8.0.4-1
 CUDA_CUDNN_PKG=libcudnn9-cuda-13=9.26.0.51-1
+# CUPTI for FASTVIDEO_GPU_TRACE (cudarc `cupti`, loaded lazily; optional at run time).
+CUDA_CUPTI_PKG=cuda-cupti-13-4=13.4.92-1
 CUDA_NVRTC_SONAME=libnvrtc.so.13
 CUDA_CUBLAS_SONAME=libcublas.so.13
 CUDA_CUBLASLT_SONAME=libcublasLt.so.13
 CUDA_CUDNN_SONAME=libcudnn.so.9
+CUDA_CUPTI_SONAME=libcupti.so.13
 CUDA_HOME=/usr/local/cuda-13.4
 CUDARC_CUDA_VERSION=13000
