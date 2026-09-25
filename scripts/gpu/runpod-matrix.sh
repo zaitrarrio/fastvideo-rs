@@ -439,6 +439,12 @@ case "$FAMILY" in
       "$BIN" --mode fast h3 gen --weights "$W/h3-base" --h3-recipe sol-h3-rtx \
         --adaln-cache "$RUNS/sol-h3-rtx-adaln.cache" \
         --clip-dir "$RUNS/sol-h3-rtx/frames" "${h3_common[@]}"
+    # The RTX 5090 `fullopt` arm: the same Sol route plus TeaCache 0.10 / 5 / 1.
+    gated_cell sol-h3-rtx-teacache fasth3-4step-dense \
+      env FASTVIDEO_H3_SOL_CACHE=teacache \
+      "$BIN" --mode fast h3 gen --weights "$W/h3-base" --h3-recipe sol-h3-rtx \
+        --adaln-cache "$RUNS/sol-h3-rtx-adaln.cache" \
+        --clip-dir "$RUNS/sol-h3-rtx-teacache/frames" "${h3_common[@]}"
     gated_cell sol-h3-spark sol-h3-spark \
       env FASTVIDEO_LTX2_WEIGHTS="$W/ltx25" \
         FASTVIDEO_H3_UPSCALER="$W/upscaler/minimax_h3_latent_upscaler_3d_conv_v1/minimax_h3_latent_upscaler_3d_conv_v1_bf16.safetensors" \
