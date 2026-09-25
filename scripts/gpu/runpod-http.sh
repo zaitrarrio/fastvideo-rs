@@ -153,9 +153,9 @@ create_pod() {
   read -r vol dc < <(volume) || true
   [[ -n "${vol:-}" ]] || die "no network volume ($VOL_NAME)"
   payload="$(jq -n --arg name "fv-$FAMILY-$tag" --arg image "$image" --arg vol "$vol" \
-    --arg dc "$dc" --arg gpu "$GPU" --arg cmd "$(start_cmd "$image" "$tag" "$mode")" '{
+    --arg dc "$dc" --arg gpu "$GPU" --arg disk "${FV_CONTAINER_DISK_GB:-40}" --arg cmd "$(start_cmd "$image" "$tag" "$mode")" '{
       name: $name, imageName: $image, cloudType: "SECURE", computeType: "GPU",
-      gpuTypeIds: [$gpu], gpuCount: 1, containerDiskInGb: 40, volumeInGb: 0,
+      gpuTypeIds: [$gpu], gpuCount: 1, containerDiskInGb: ($disk|tonumber), volumeInGb: 0,
       networkVolumeId: $vol, volumeMountPath: "/workspace", dataCenterIds: [$dc],
       ports: ["8000/http"], dockerStartCmd: ["/bin/bash", "-c", $cmd]
     }')"

@@ -338,6 +338,27 @@ def build_tensor(recipe: tuple, meta: dict, src: Sources, remote) -> bytes | np.
     raise RuntimeError(f"unknown recipe {recipe}")
 
 
+# The volume is shared with other pods: cap our read+write rate.
+_THR = {"t0": None, "bytes": 0, "mbps": float(os.environ.get("RECON_MAX_MBPS", "250"))}
+
+
+def throttle(nbytes: int) -> None:
+    if _THR["mbps"] <= 0:
+        return
+    if _THR["t0"] is None:
+        _THR["t0"] = time.time()
+    _THR["bytes"] += 2 * nbytes  # read + write
+    ahead = _THR["bytes"] / (_THR["mbps"] * 1e6) - (time.time() - _THR["t0"])
+    if ahead > 0:
+        time.sleep(ahead)
+
+
+def volume_used_bytes(root: str) -> int:
+    """Bytes stored on the volume (du; df reports the whole shared filesystem)."""
+    out = subprocess.run(["du", "-s", "--block-size=1", root], capture_output=True, text=True).stdout
+    return int(out.split()[0]) if out.strip() else 0
+
+
 def reconstruct(repo: str, rev: str, path: str, out: Path, plan, src: Sources, verify: bool = True) -> dict:
     t0 = time.time()
     raw, header = remote_header(repo, rev, path)
@@ -355,6 +376,15 @@ def reconstruct(repo: str, rev: str, path: str, out: Path, plan, src: Sources, v
         a, b = m["data_offsets"]
         return range_read(repo, rev, path, hlen + a, hlen + b)
 
+    quota = float(os.environ.get("VOLUME_QUOTA_GB", "1000")) * 1e9
+    reserve = float(os.environ.get("VOLUME_RESERVE_GB", "60")) * 1e9
+    vroot = os.environ.get("VOLUME_ROOT", "/workspace")
+    if os.path.isdir(vroot) and size:
+        used = volume_used_bytes(vroot)
+        if used + size > quota - reserve:
+            raise RuntimeError(f"not enough volume space: used {used / 1e9:.0f} GB + {size / 1e9:.0f} GB "
+                               f"> {quota / 1e9:.0f} GB quota - {reserve / 1e9:.0f} GB reserve")
+        log(f"{path}: volume used {used / 1e9:.0f} GB, writing {size / 1e9:.1f} GB")
     tmp = out.with_suffix(out.suffix + ".partial")
     total = hlen + max(v["data_offsets"][1] for v in header.values())
     missing = []
@@ -371,6 +401,7 @@ def reconstruct(repo: str, rev: str, path: str, out: Path, plan, src: Sources, v
                 continue
             fh.seek(hlen + m["data_offsets"][0])
             fh.write(data.tobytes() if isinstance(data, np.ndarray) else data)
+            throttle(m["data_offsets"][1] - m["data_offsets"][0])
     if missing:
         raise RuntimeError(f"{path}: {len(missing)} tensors without a source, e.g. {missing[:5]}")
     res = {"path": path, "bytes": total, "expected_size": size, "expected_oid": oid, "metadata": meta,
@@ -405,7 +436,7 @@ def main() -> int:
     ap.add_argument("--files", nargs="+", required=True, help="target paths inside the repo")
     ap.add_argument("--out-root", required=True, help="written as <out-root>/<file path minus --strip>")
     ap.add_argument("--strip", default="")
-    ap.add_argument("--jobs", type=int, default=3)
+    ap.add_argument("--jobs", type=int, default=1)
     ap.add_argument("--report", default=None)
     args = ap.parse_args()
     src = Sources([Path(s) for s in args.src])

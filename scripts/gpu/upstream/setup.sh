@@ -24,7 +24,7 @@ FV_REPO="${FV_REPO:-https://github.com/hao-ai-lab/FastVideo.git}"
 FV_REV="${FV_REV:-e90be598e56138af5c82590f0d72f6fa2dfce400}"            # FastVideo main, 2026-09-24
 
 export UV_PYTHON_INSTALL_DIR="$UP/python"   # interpreters on the volume: venvs survive the pod
-export UV_CACHE_DIR="${UV_CACHE_DIR:-$UP/uv-cache}"
+export UV_CACHE_DIR="${UV_CACHE_DIR:-/root/.cache/uv}"   # container disk: keep small-file churn off the shared volume
 export UV_LINK_MODE=copy
 export UV_HTTP_TIMEOUT=300
 export PATH="$UP/bin:$HOME/.local/bin:$PATH"

@@ -78,7 +78,7 @@ weights_h3_fl2va() {
   for i in $(seq -w 1 13); do files+=("FL2VA/transformer/model-000$i-of-00013.safetensors"); done
   pyn "$HERE/reconstruct.py" --plan h3_fl2va_dit --src "$W/h3-base/transformer" \
     --repo MiniMaxAI/MiniMax-H3 --revision "$H3_REV" --files "${files[@]}" \
-    --out-root "$root" --jobs 4 --report "$OUT/reconstruct-h3-dit.json" || return 1
+    --out-root "$root" --jobs 1 --report "$OUT/reconstruct-h3-dit.json" || return 1
   pyn "$HERE/reconstruct.py" --plan h3_fl2va_video_vae --src "$W/h3-base/vae" \
     --repo MiniMaxAI/MiniMax-H3 --revision "$H3_REV" --files FL2VA/video_vae/source/model.safetensors \
     --out-root "$root" --jobs 1 --report "$OUT/reconstruct-h3-vae.json" || return 1
