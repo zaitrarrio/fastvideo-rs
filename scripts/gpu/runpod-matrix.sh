@@ -138,6 +138,31 @@ gated_cell() {
   run_cell "$name" "$@"
 }
 
+# Paired-clip quality gate (CPU, `fv-gpucheck compare-clips`): the candidate
+# cell's frames against the baseline cell's, sol-engine collect_run.py metrics.
+# Extra args (e.g. --off-identity for a switch that must not change a byte)
+# pass through. Report: $RUNS/compare/compare-clips-<baseline>--<candidate>.json.
+compare_cells() {
+  local base="$1" cand="$2"
+  shift 2
+  local tag="$base--$cand" dir="$RUNS/compare"
+  local bf="$RUNS/$base/frames" cf="$RUNS/$cand/frames"
+  mkdir -p "$dir"
+  if ! compgen -G "$bf/*.png" >/dev/null || ! compgen -G "$cf/*.png" >/dev/null; then
+    log "skip compare $tag (frames missing)"
+    write_json "$dir/compare-clips-$tag.json" "$(printf '{"stage":"compare-clips-%s","status":"skipped","baseline":"%s","candidate":"%s","reason":"frames missing"}' "$tag" "$base" "$cand")"
+    return 0
+  fi
+  local rc
+  set +e
+  "$BIN" --out "$dir" --tag "$tag" compare-clips --baseline "$bf" --candidate "$cf" "$@" \
+    >"$dir/$tag.stdout.log" 2>"$dir/$tag.stderr.log"
+  rc=$?
+  set -e
+  log "compare $tag exit=$rc $(grep -o '"psnr_mean":[^,]*' "$dir/$tag.stderr.log" 2>/dev/null | tail -1)"
+  return 0
+}
+
 log "matrix start image=$(cat /opt/fastvideo-rs/target/release/fv-gpucheck.build-id 2>/dev/null || echo unknown)"
 if [[ ! -x "$BIN" ]]; then
   log "FATAL: fv-gpucheck missing at $BIN"
@@ -499,6 +524,10 @@ case "$FAMILY" in
         "$BIN" --mode fast h3 gen --weights "$W/h3-base" --h3-recipe sol-h3-rtx "${geo[@]}" \
           --adaln-cache "$RUNS/h3-$res-adaln.cache" \
           --clip-dir "$RUNS/h3-$res-fullopt/frames" "${h3_common[@]}"
+      # Each technique against the step before it, and fullopt against dense.
+      compare_cells "h3-$res-dense" "h3-$res-sol"
+      compare_cells "h3-$res-sol" "h3-$res-fullopt"
+      compare_cells "h3-$res-dense" "h3-$res-fullopt"
     done
     # LTX-2.5 distilled two-stage: the reference's 4k5s and 1080p20s workloads,
     # dense vs Sol stage 2, plus 480p-class (768x512, two-stage needs /64).
@@ -514,6 +543,7 @@ case "$FAMILY" in
             --prompt "$PROMPT" --seed "$SEED" --two-stage --text streamed --warm \
             --clip "$RUNS/ltx25-$wl-$arm/frames"
       done
+      compare_cells "ltx25-$wl-dense" "ltx25-$wl-sol"
     done
     ;;
   fastvideo)
@@ -585,6 +615,9 @@ case "$FAMILY" in
           --adaln-cache "$RUNS/fasth3-8step-768p-$v-adaln.cache" \
           --clip-dir "$RUNS/fasth3-8step-768p-$v/frames" "${h3_common[@]}"
     done
+    for v in bf16act ffnfp8 fp8; do
+      compare_cells fasth3-8step-768p-base "fasth3-8step-768p-$v"
+    done
     for v in base bf16act fp8; do
       envs=()
       case "$v" in
@@ -597,6 +630,9 @@ case "$FAMILY" in
           --weights "$W/ltx25" --dit "$W/ltx25" --workload 4k5s \
           --prompt "$PROMPT" --seed "$SEED" --two-stage --text streamed --warm \
           --clip "$RUNS/ltx25-4k5s-sol-$v/frames"
+    done
+    for v in bf16act fp8; do
+      compare_cells ltx25-4k5s-sol-base "ltx25-4k5s-sol-$v"
     done
     ;;
   *)

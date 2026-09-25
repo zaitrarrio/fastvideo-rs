@@ -233,6 +233,10 @@ fetch_results() {
       mkdir -p "$out/$cell/gpucheck-out"
       proxy "$id" "$FAMILY/$tag/$cell/gpucheck-out/$f" >"$out/$cell/gpucheck-out/$f" 2>/dev/null || true
     done
+    # Paired-clip reports (compare_cells writes them under compare/).
+    for f in $(proxy "$id" "$FAMILY/$tag/$cell/" 2>/dev/null | grep -oE 'href="[^"/]*compare[^"/]*\.json"' | sed 's/href="//;s/"//'); do
+      proxy "$id" "$FAMILY/$tag/$cell/$f" >"$out/$cell/$f" 2>/dev/null || rm -f "$out/$cell/$f"
+    done
   done
   log "results → $out"
 }
