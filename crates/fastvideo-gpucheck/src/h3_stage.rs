@@ -158,9 +158,28 @@ pub enum Stage {
         weights: PathBuf,
         #[arg(long)]
         prompt: String,
-        /// 5 to 15.
+        /// 5 to 15. Ignored when `--num-frames` is given.
         #[arg(long, default_value_t = 5)]
         seconds: usize,
+        /// Pixel frames, aligned up to `17 n + 5` and held to 5..15 s at 24
+        /// fps (124 is the shortest clip; the GB10 480p cell runs 124).
+        #[arg(long)]
+        num_frames: Option<usize>,
+        /// Canvas height in pixels (default 768). With `--width`: multiples of
+        /// 32, at most 768 x 1344 pixels, aspect 1:4 to 4:1 (832x480 is the
+        /// 480p cell).
+        #[arg(long)]
+        height: Option<usize>,
+        /// Canvas width in pixels (default 1344).
+        #[arg(long)]
+        width: Option<usize>,
+        /// Refiner and DiT block residency: `auto` (resident when the free
+        /// memory covers the planned need, else streamed), `resident`, or
+        /// `streamed` (blocks copied from pinned host memory one ahead of the
+        /// computing block; decoders loaded for the decode only). Default:
+        /// `FASTVIDEO_DIT_OFFLOAD`, else `auto`.
+        #[arg(long)]
+        dit_offload: Option<String>,
         #[arg(long, default_value_t = 1024)]
         seed: u64,
         /// Dense attention without the compression gate (the parity mode).
@@ -311,6 +330,10 @@ pub fn run(report: &mut Report, stage: &Stage) -> StageResult<()> {
             weights,
             prompt,
             seconds,
+            num_frames,
+            height,
+            width,
+            dit_offload,
             seed,
             dense,
             no_mp4,
@@ -350,12 +373,23 @@ pub fn run(report: &mut Report, stage: &Stage) -> StageResult<()> {
                 ref2va: false,
                 adapter: None,
                 reference_image_resize: Default::default(),
+                dit_offload: dit_offload
+                    .as_deref()
+                    .map(fastvideo_cudarc::wan::offload::DitOffload::parse)
+                    .transpose()
+                    .map_err(|e| anyhow::anyhow!(e))?,
+            };
+            let canvas = GenCanvas {
+                seconds: *seconds,
+                num_frames: *num_frames,
+                height: *height,
+                width: *width,
             };
             gen(
                 report,
                 weights,
                 prompt,
-                *seconds,
+                canvas,
                 *seed,
                 !*no_mp4,
                 clip_dir,
@@ -1331,12 +1365,50 @@ fn slim_text(report: &mut Report, weights: &Path, out: &Path, shard_gib: u64) ->
     Ok(())
 }
 
+/// The requested H3 geometry: `seconds` at the default 16:9 canvas unless
+/// `num_frames` / `height` / `width` say otherwise.
+#[derive(Debug, Clone, Copy)]
+pub struct GenCanvas {
+    pub seconds: usize,
+    pub num_frames: Option<usize>,
+    pub height: Option<usize>,
+    pub width: Option<usize>,
+}
+
+impl GenCanvas {
+    /// The request, validated against the model's canvas and duration rules
+    /// (`H3Geometry::checked`).
+    pub fn request(
+        self,
+        prompt: &str,
+        seed: u64,
+    ) -> anyhow::Result<fastvideo_cudarc::h3::pipeline::H3Request> {
+        use fastvideo_cudarc::h3::pipeline::H3Request;
+        let default =
+            H3Request::seconds(prompt, self.seconds, seed).map_err(|e| anyhow::anyhow!(e))?;
+        if self.num_frames.is_none() && self.height.is_none() && self.width.is_none() {
+            return Ok(default);
+        }
+        if self.height.is_some() != self.width.is_some() {
+            anyhow::bail!("h3 gen: pass --height and --width together");
+        }
+        H3Request::sized(
+            prompt,
+            self.height.unwrap_or(default.height),
+            self.width.unwrap_or(default.width),
+            self.num_frames.unwrap_or(default.num_frames),
+            seed,
+        )
+        .map_err(|e| anyhow::anyhow!(e))
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 fn gen(
     report: &mut Report,
     weights: &Path,
     prompt: &str,
-    seconds: usize,
+    canvas: GenCanvas,
     seed: u64,
     mp4: bool,
     clip_dir: &Path,
@@ -1345,11 +1417,47 @@ fn gen(
     compare_text_encoders: bool,
     device: &str,
 ) -> StageResult<()> {
-    use fastvideo_cudarc::h3::pipeline::{H3Output, H3Pipeline, H3Request};
+    use fastvideo_cudarc::h3::pipeline::{H3Output, H3Pipeline};
 
     report.set("device", crate::gpu::init(device)?);
-    let mut request = H3Request::seconds(prompt, seconds, seed).map_err(|e| anyhow::anyhow!(e))?;
+    let seconds = canvas.seconds;
+    let mut request = canvas.request(prompt, seed)?;
     request.mp4 = mp4;
+    {
+        use fastvideo_models::h3::memory::{plan, H3PlanOptions};
+        let g = fastvideo_models::h3::config::H3Geometry::new(
+            request.height,
+            request.width,
+            request.num_frames,
+        )
+        .map_err(|e| anyhow::anyhow!(e))?;
+        let gib = |b: u64| b as f64 / f64::from(1u32 << 30);
+        let phases = |p: &fastvideo_models::h3::memory::H3MemoryPlan| -> Vec<serde_json::Value> {
+            p.stages
+                .iter()
+                .map(|s| json!({"stage": s.stage, "gib": gib(s.total())}))
+                .collect()
+        };
+        let (resident, streamed) = (
+            plan(&g, H3PlanOptions::default()),
+            plan(&g, H3PlanOptions::streamed()),
+        );
+        eprintln!(
+            "h3 gen {}x{}x{}: planned peak {:.2} GiB resident, {:.2} GiB streamed",
+            g.width,
+            g.height,
+            g.num_frames,
+            gib(resident.peak()),
+            gib(streamed.peak())
+        );
+        report.set(
+            "memory_plan",
+            json!({
+                "resident": {"peak_gib": gib(resident.peak()), "stages": phases(&resident)},
+                "streamed": {"peak_gib": gib(streamed.peak()), "stages": phases(&streamed)},
+            }),
+        );
+    }
     let attention = {
         use fastvideo_models::h3::lora::{
             is_sol_h3_recipe, is_sol_h3_rtx_recipe, is_sol_h3_spark_recipe,
@@ -1406,7 +1514,7 @@ fn gen(
             ),
         }
     }
-    report.note("load", json!({"seconds": load_s, "text_encoder_s": l.text_encoder_s, "refiner_s": l.refiner_s, "dit_s": l.dit_s, "video_vae_s": l.video_vae_s, "audio_vae_s": l.audio_vae_s}));
+    report.note("load", json!({"seconds": load_s, "text_encoder_s": l.text_encoder_s, "refiner_s": l.refiner_s, "dit_s": l.dit_s, "video_vae_s": l.video_vae_s, "audio_vae_s": l.audio_vae_s, "dit_residency": pipeline.residency().as_str()}));
 
     let timings = |out: &H3Output, total: f64| {
         let t = &out.timings;
@@ -1445,6 +1553,33 @@ fn gen(
     values["load_s"] = json!(load_s);
     values["peak_mib"] = json!(mem.stop());
     report.note("timings", values);
+    let gib = |b: u64| b as f64 / f64::from(1u32 << 30);
+    report.set(
+        "stage_memory",
+        json!({
+            "dit_residency": out.dit_residency,
+            "stages": out.memory.iter().map(|p| json!({
+                "stage": p.phase,
+                "peak_used_gib": gib(p.peak_used),
+                "peak_reserved_gib": gib(p.peak_reserved),
+                "end_used_gib": gib(p.end_used),
+            })).collect::<Vec<_>>(),
+        }),
+    );
+    if let Some(o) = &out.offload {
+        report.set(
+            "dit_offload",
+            json!({
+                "block_copies": o.copies,
+                "h2d_gib": gib(o.bytes),
+                "h2d_gbs": o.throughput_gbs(),
+                "copy_s": o.copy_ms * 1e-3,
+                "exposed_s": o.exposed_ms * 1e-3,
+                "hidden_fraction": o.hidden_fraction(),
+                "worst_stall_ms": o.worst_exposed_ms,
+            }),
+        );
+    }
     // Empty unless FASTVIDEO_PROFILE=1: each phase synchronizes, so this is
     // where time goes, not a number to quote against an unprofiled clip.
     // Nested names overlap (h3_2_attn contains h3_attn_* and vsa_h3_*), so

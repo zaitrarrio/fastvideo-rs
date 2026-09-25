@@ -281,6 +281,13 @@ pub enum Stage {
         /// `resident` or `streamed`. `FASTVIDEO_LTX2_TEXT` overrides.
         #[arg(long, default_value = "auto")]
         text: String,
+        /// DiT block residency: `auto` (resident when the free memory covers
+        /// the resident plan, else streamed), `resident`, or `streamed`
+        /// (blocks copied from pinned host memory one ahead of the computing
+        /// block, decoders loaded only around their calls: the RTX 5090
+        /// `--offload cpu` profile). Default: `FASTVIDEO_DIT_OFFLOAD`, else `auto`.
+        #[arg(long)]
+        dit_offload: Option<String>,
         /// Distilled two-stage: half-res stage-1 → spatial ×2 → 3-step stage-2
         /// (one unguided forward per step). Requires `--model-version 2.3` or
         /// `2.5` and `latent_upsampler/` under `--weights`.
@@ -495,6 +502,7 @@ pub fn run(report: &mut Report, stage: &Stage) -> StageResult<()> {
             warm,
             text_weights,
             text,
+            dit_offload,
             two_stage,
             diff_vae,
             image,
@@ -543,6 +551,11 @@ pub fn run(report: &mut Report, stage: &Stage) -> StageResult<()> {
                 &PipelineOptions {
                     text_cache,
                     text_residency,
+                    dit_offload: dit_offload
+                        .as_deref()
+                        .map(fastvideo_cudarc::wan::offload::DitOffload::parse)
+                        .transpose()
+                        .map_err(|e| anyhow::anyhow!(e))?,
                 },
                 prompt,
                 clip,
@@ -1667,29 +1680,33 @@ fn gen(
         }),
     );
     if two_stage {
-        let plan = plan_distilled_two_stage(
-            &cfg,
-            g.height,
-            g.width,
-            g.num_frames,
-            g.frame_rate,
-            PlanOptions::default(),
+        let plan_with = |opts| {
+            plan_distilled_two_stage(&cfg, g.height, g.width, g.num_frames, g.frame_rate, opts)
+        };
+        let (plan, streamed) = (
+            plan_with(PlanOptions::default()),
+            plan_with(PlanOptions::streamed()),
         );
-        let phases: Vec<serde_json::Value> = plan
-            .phases
-            .iter()
-            .map(|p| json!({"phase": p.phase, "gib": gib_of(p.total())}))
-            .collect();
+        let phases = |plan: &fastvideo_models::ltx2::MemoryPlan| -> Vec<serde_json::Value> {
+            plan.phases
+                .iter()
+                .map(|p| json!({"phase": p.phase, "gib": gib_of(p.total())}))
+                .collect()
+        };
         eprintln!(
-            "ltx2 gen {}x{}x{}: planned peak {:.2} GiB",
+            "ltx2 gen {}x{}x{}: planned peak {:.2} GiB resident, {:.2} GiB streamed",
             g.width,
             g.height,
             g.num_frames,
-            gib_of(plan.peak())
+            gib_of(plan.peak()),
+            gib_of(streamed.peak())
         );
         report.set(
             "memory_plan",
-            json!({"peak_gib": gib_of(plan.peak()), "phases": phases}),
+            json!({
+                "peak_gib": gib_of(plan.peak()), "phases": phases(&plan),
+                "streamed": {"peak_gib": gib_of(streamed.peak()), "phases": phases(&streamed)},
+            }),
         );
     }
     let peak = crate::gpu::PeakMem::start();
@@ -1774,7 +1791,7 @@ fn gen(
         .collect();
     report.set(
         "phase_memory",
-        json!({"load_used_gib": load_used.map(|u| gib_of(u.used)), "phases": phases}),
+        json!({"load_used_gib": load_used.map(|u| gib_of(u.used)), "phases": phases, "dit_residency": out.dit_residency}),
     );
     report.set("steps", &stats);
     report.set("outputs", json!({"mp4": out.mp4, "wav": out.wav, "frames": out.frames.len(), "first_frame": out.frames.first()}));

@@ -52,6 +52,9 @@ pub struct AvGenerateOptions {
     pub h3_adapter: Option<PathBuf>,
     /// H3 clip length in whole seconds (5..=15); overrides default geometry.
     pub h3_seconds: Option<u32>,
+    /// LTX / H3 DiT block residency: `auto`, `resident` or `streamed`
+    /// (`None`: `FASTVIDEO_DIT_OFFLOAD`, else `auto`).
+    pub dit_offload: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -218,7 +221,9 @@ fn generate_ltx2(
                 || fastvideo_cudarc::ltx2::pipeline::default_sol_stage2(
                     &cfg,
                     opts.two_stage,
-                    opts.refine_steps.map(|n| n as usize).or(if hq { Some(3) } else { None }),
+                    opts.refine_steps
+                        .map(|n| n as usize)
+                        .or(if hq { Some(3) } else { None }),
                     opts.pisa_stage2,
                     opts.dense_stage2,
                 ),
@@ -228,7 +233,11 @@ fn generate_ltx2(
         request
             .validate()
             .map_err(|e| FastVideoError::Message(e.to_string()))?;
-        let mut pipeline = Ltx2Pipeline::load(&paths, &cfg, &PipelineOptions::default())
+        let options = PipelineOptions {
+            dit_offload: dit_offload(opts.dit_offload.as_deref())?,
+            ..PipelineOptions::default()
+        };
+        let mut pipeline = Ltx2Pipeline::load(&paths, &cfg, &options)
             .map_err(|e| FastVideoError::Message(e.to_string()))?;
         let out = pipeline
             .generate(&request, true, None)
@@ -297,6 +306,14 @@ fn generate_h3(
         if let Some(f) = opts.num_frames {
             request.num_frames = f as usize;
         }
+        if opts.height.is_some() || opts.width.is_some() || opts.num_frames.is_some() {
+            fastvideo_models::h3::config::H3Geometry::checked(
+                request.height,
+                request.width,
+                request.num_frames,
+            )
+            .map_err(FastVideoError::Message)?;
+        }
         request.mp4 = opts.save_mp4;
         request.first_image = opts.image_path;
         request.last_image = opts.last_image_path;
@@ -333,6 +350,7 @@ fn generate_h3(
             text_root: opts.text_weights,
             ref2va: has_refs || def.preset == "sol_h3_ref2va",
             adapter: opts.h3_adapter,
+            dit_offload: dit_offload(opts.dit_offload.as_deref())?,
             ..H3PipelineOptions::default()
         };
         let out = generate(&weights, options, &request, &opts.output)
@@ -352,6 +370,14 @@ fn generate_h3(
             "rebuild with --features cuda-cudarc to generate LTX/H3".into(),
         ))
     }
+}
+
+/// `--dit-offload`, parsed (`None` leaves the choice to the environment).
+#[cfg(feature = "cuda-cudarc")]
+fn dit_offload(name: Option<&str>) -> Result<Option<fastvideo_cudarc::wan::offload::DitOffload>> {
+    name.map(fastvideo_cudarc::wan::offload::DitOffload::parse)
+        .transpose()
+        .map_err(FastVideoError::Message)
 }
 
 fn generate_hunyuan15(

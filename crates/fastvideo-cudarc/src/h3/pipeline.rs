@@ -15,6 +15,13 @@
 //! stay on the device, about 48 GB. A 5 s clip adds ~12 GB of activations
 //! (measured peak 53.6 GB with the decoders loaded late), a 15 s clip ~25 GB.
 //!
+//! On a smaller card ([`H3PipelineOptions::dit_offload`], `auto` when the
+//! free memory does not cover [`fastvideo_models::h3::memory::plan`]) the
+//! refiner and DiT blocks are **streamed** from pinned host memory through a
+//! ring of device slots ([`crate::wan::offload`]) and the video and audio
+//! decoders are loaded for the decode only, as the reference's RTX 5090
+//! profile runs: only the active component is on the GPU.
+//!
 //! **The text encoder is the one component with a choice**
 //! ([`TextEncoderChoice`]), because it is 50 GB of weights for milliseconds of
 //! compute:
@@ -58,6 +65,7 @@ use super::transformer::{AttnMode, DeviceLayout, H3SolPolicy, H3TextRefiner, H3T
 use super::vae::H3VideoDecoder;
 use super::vae_encoder::H3VideoEncoder;
 use super::vsa::H3Vsa;
+use crate::wan::offload::{DitOffload, MemoryLog, OffloadStats, PhaseMemory, Residency};
 use crate::wan::pipeline::{
     frames_to_rgb8, interleave_audio, write_wav, PipelineError, Result, VideoWriter,
 };
@@ -106,6 +114,22 @@ impl H3Request {
             last_image: None,
             references: Vec::new(),
         })
+    }
+
+    /// An explicit canvas and frame count, checked against the model
+    /// ([`H3Geometry::checked`]: multiples of 32, at most 768 x 1344 pixels,
+    /// 1:4 to 4:1, 5 to 15 s once aligned to `17 n + 5` frames).
+    pub fn sized(
+        prompt: impl Into<String>,
+        height: usize,
+        width: usize,
+        num_frames: usize,
+        seed: u64,
+    ) -> std::result::Result<Self, String> {
+        let g = H3Geometry::checked(height, width, num_frames)?;
+        let mut r = Self::seconds(prompt, 5, seed)?;
+        (r.height, r.width, r.num_frames) = (g.height, g.width, g.num_frames);
+        Ok(r)
     }
 
     /// Ordered FL2VA anchors implied by the request images.
@@ -219,6 +243,10 @@ pub struct H3PipelineOptions {
     pub adapter: Option<PathBuf>,
     /// Ref2VA reference-image fit. `Auto` is 2048 short-edge, and `match` for Sol-H3.
     pub reference_image_resize: ReferenceImageResize,
+    /// Where the refiner and DiT blocks live. `None`: `FASTVIDEO_DIT_OFFLOAD`,
+    /// else `Auto` (resident when the free memory covers the planned need).
+    /// Streamed also loads the decoders for the decode only.
+    pub dit_offload: Option<DitOffload>,
 }
 
 /// Resolve the inference contract: explicit recipe name, then
@@ -324,6 +352,12 @@ pub struct H3Output {
     pub mp4: Option<String>,
     pub wav: PathBuf,
     pub timings: H3Timings,
+    /// Peak device memory of each stage (empty without a device).
+    pub memory: Vec<PhaseMemory>,
+    /// `"resident"` or `"streamed"`.
+    pub dit_residency: &'static str,
+    /// Block streaming over the denoise (streamed runs).
+    pub offload: Option<OffloadStats>,
 }
 
 /// The request's starting noise, from one generator in the reference's order:
@@ -497,8 +531,10 @@ pub struct H3Pipeline {
     schedule: H3JointSchedule,
     refiner: H3TextRefiner,
     model: H3Transformer,
-    video_vae: VideoDecoder,
-    audio_vae: H3AudioDecoder,
+    /// `None` when streamed: loaded for each decode and dropped after it.
+    video_vae: Option<VideoDecoder>,
+    audio_vae: Option<H3AudioDecoder>,
+    residency: Residency,
     /// Resident encoder, if any. `Auto` may release it before a denoise that
     /// needs its memory (see [`keep_auto_encoder`]); later prompts then stream.
     text_encoder: std::sync::Mutex<Option<Box<dyn HiddenStateEncoder>>>,
@@ -674,17 +710,46 @@ impl H3Pipeline {
         } else {
             None
         };
+        let residency = {
+            let policy = DitOffload::from_env_or(options.dit_offload).map_err(msg)?;
+            // What the default request (768p, 5 s) needs with everything resident.
+            let need = H3Geometry::default_16x9(5)
+                .map(|g| {
+                    fastvideo_models::h3::memory::plan(
+                        &g,
+                        fastvideo_models::h3::memory::H3PlanOptions {
+                            gate: with_gate,
+                            ..Default::default()
+                        },
+                    )
+                    .peak()
+                })
+                .map_err(msg)?;
+            let residency = policy.resolve(need, free);
+            crate::wan::log::info(format_args!(
+                "h3 dit offload: {} -> {} (resident plan {:.1} GiB, {} free before load)",
+                policy.as_str(),
+                residency.as_str(),
+                need as f64 / f64::from(1u32 << 30),
+                free.map_or("unknown".into(), |f| format!(
+                    "{:.1} GiB",
+                    f as f64 / f64::from(1u32 << 30)
+                )),
+            ));
+            residency
+        };
         let timer = Instant::now();
-        let refiner = H3TextRefiner::load_with(&cfg, &map, &mut lora)?;
+        let refiner = H3TextRefiner::load_with_residency(&cfg, &map, &mut lora, residency)?;
         timed(&mut load_timings.refiner_s, timer);
         let timer = Instant::now();
-        let model = H3Transformer::load_with(
+        let model = H3Transformer::load_with_residency(
             cfg.clone(),
             &map,
             &schedule,
             with_gate,
             options.adaln_cache.as_deref(),
             &mut lora,
+            residency,
         )?;
         if teacache {
             model.enable_sol_teacache(schedule.num_steps())?;
@@ -693,26 +758,19 @@ impl H3Pipeline {
             fuse.finish()?;
         }
         timed(&mut load_timings.dit_s, timer);
-        let timer = Instant::now();
-        let video_vae = match resolve_taeh3(options.taeh3.as_deref()) {
-            Some(path) => {
-                let tae = TaeHv::load_from_path(&path, TaeArch::H3)
-                    .map_err(|e| msg(format!("FASTVIDEO_TAEH3_WEIGHTS={}: {e}", path.display())))?;
-                crate::wan::log::info(format_args!("h3 vae=taeh3 ({})", path.display()));
-                VideoDecoder::Taeh3(tae)
-            }
-            None => VideoDecoder::Official(H3VideoDecoder::load(
-                H3VideoVaeConfig::fasth3_8step(),
-                &WeightMap::open(&root.join("vae"))?,
-            )?),
+        // Streamed: the decoders are loaded by each decode (the reference makes
+        // the full VAE resident only for decoding).
+        let (video_vae, audio_vae) = if residency.is_streamed() {
+            (None, None)
+        } else {
+            let timer = Instant::now();
+            let video_vae = load_video_decoder(root, options.taeh3.as_deref())?;
+            timed(&mut load_timings.video_vae_s, timer);
+            let timer = Instant::now();
+            let audio_vae = load_audio_decoder(root)?;
+            timed(&mut load_timings.audio_vae_s, timer);
+            (Some(video_vae), Some(audio_vae))
         };
-        timed(&mut load_timings.video_vae_s, timer);
-        let timer = Instant::now();
-        let audio_vae = H3AudioDecoder::load(
-            H3AudioVaeConfig::fasth3_8step(),
-            &WeightMap::open(&root.join("audio_vae"))?,
-        )?;
-        timed(&mut load_timings.audio_vae_s, timer);
         Ok(Self {
             root: root.to_path_buf(),
             options,
@@ -723,6 +781,7 @@ impl H3Pipeline {
             model,
             video_vae,
             audio_vae,
+            residency,
             text_encoder: std::sync::Mutex::new(text_encoder),
             auto_text_encoder,
             load_timings,
@@ -787,6 +846,11 @@ impl H3Pipeline {
         &self.options
     }
 
+    /// Where the refiner and DiT blocks live for this pipeline.
+    pub fn residency(&self) -> Residency {
+        self.residency
+    }
+
     /// Generate one clip into `out_dir`: `frame-NNN.png`, `audio.wav`, and
     /// `output.mp4` with the audio muxed in.
     fn spark_bridge(&self, latents: &CudaTensor) -> Result<Option<CudaTensor>> {
@@ -830,6 +894,7 @@ impl H3Pipeline {
         let geometry =
             H3Geometry::new(request.height, request.width, request.num_frames).map_err(msg)?;
         let mut timings = H3Timings::default();
+        let mut memory = MemoryLog::start("h3");
 
         // --- text: cache, else resident, else ~50 GB streamed one layer at a time ---
         let timer = Instant::now();
@@ -905,9 +970,11 @@ impl H3Pipeline {
             }
         }
         drop(encoder_slot);
+        memory.mark("text")?;
         let timer = Instant::now();
         let text_refined = self.refiner.forward(&text.hidden)?;
         timings.refine_s = timer.elapsed().as_secs_f64();
+        memory.mark("refine")?;
 
         // --- DiT --------------------------------------------------------------------
         if request.is_ref2va() && !self.options.ref2va {
@@ -1062,15 +1129,32 @@ impl H3Pipeline {
             cond_rows,
             cond_audio_rows,
         ));
+        let offload = self
+            .residency
+            .is_streamed()
+            .then(|| self.model.report_offload("denoise"));
+        // Streamed: the ring's slots go back before the decoders load.
+        self.model.release_offload_device();
+        crate::wan::device::trim_pool().map_err(|e| msg(e.to_string()))?;
+        memory.mark("denoise")?;
 
         // --- audio first: the WAV must exist before the muxer starts -------------------
         let timer = Instant::now();
-        let sample_rate = self.audio_vae.config().sampling_rate as u32;
-        let wave = self
+        let transient_audio = match self.audio_vae {
+            Some(_) => None,
+            None => Some(load_audio_decoder(&self.root)?),
+        };
+        let audio_vae = self
             .audio_vae
+            .as_ref()
+            .or(transient_audio.as_ref())
+            .expect("audio decoder");
+        let sample_rate = audio_vae.config().sampling_rate as u32;
+        let wave = audio_vae
             .decode_rows(&audio_rows, H3_AUDIO_CHANNELS)?
             .host_cow()?
             .into_owned();
+        drop(transient_audio);
         let wav = out_dir.join("audio.wav");
         write_wav(
             &wav,
@@ -1079,6 +1163,8 @@ impl H3Pipeline {
             sample_rate,
         )?;
         timings.audio_decode_s = timer.elapsed().as_secs_f64();
+        crate::wan::device::trim_pool().map_err(|e| msg(e.to_string()))?;
+        memory.mark("audio_decode")?;
 
         // --- video: chunks go to the writer as they decode -------------------------------
         let latents = unpatchify_rows(
@@ -1089,6 +1175,23 @@ impl H3Pipeline {
         )?;
         let refined_video = self.spark_bridge(&latents)?;
         let timer = Instant::now();
+        let transient_video = match self.video_vae {
+            Some(_) => None,
+            None => {
+                let timer = Instant::now();
+                let vae = load_video_decoder(&self.root, self.options.taeh3.as_deref())?;
+                crate::wan::log::info(format_args!(
+                    "h3 video vae: resident for the decode ({:.1}s load)",
+                    timer.elapsed().as_secs_f64()
+                ));
+                Some(vae)
+            }
+        };
+        let video_vae = self
+            .video_vae
+            .as_ref()
+            .or(transient_video.as_ref())
+            .expect("video decoder");
         let mut writer =
             VideoWriter::spawn_with_audio(out_dir, H3_FPS as u32, request.mp4, Some(&wav))?;
         // The sink speaks TensorError; carry the writer's own error out beside it.
@@ -1102,7 +1205,7 @@ impl H3Pipeline {
                 TensorError::Message(text)
             })
         };
-        let decoded = match &self.video_vae {
+        let decoded = match video_vae {
             VideoDecoder::Official(vae) => vae.decode_streaming(&latents, &mut sink),
             VideoDecoder::Taeh3(tae) => tae
                 .decode_streaming(&latents, &mut sink)
@@ -1119,6 +1222,9 @@ impl H3Pipeline {
             )));
         }
         timings.video_decode_s = timer.elapsed().as_secs_f64();
+        drop(transient_video);
+        crate::wan::device::trim_pool().map_err(|e| msg(e.to_string()))?;
+        memory.mark("video_decode")?;
         let timer = Instant::now();
         let (frame_paths, mp4) = writer.finish()?;
         timings.write_s = timer.elapsed().as_secs_f64();
@@ -1142,8 +1248,34 @@ impl H3Pipeline {
             mp4,
             wav,
             timings,
+            memory: memory.phases,
+            dit_residency: self.residency.as_str(),
+            offload,
         })
     }
+}
+
+/// The official ViT video decoder, or TAEH3 when one is configured.
+fn load_video_decoder(root: &Path, taeh3: Option<&Path>) -> Result<VideoDecoder> {
+    Ok(match resolve_taeh3(taeh3) {
+        Some(path) => {
+            let tae = TaeHv::load_from_path(&path, TaeArch::H3)
+                .map_err(|e| msg(format!("FASTVIDEO_TAEH3_WEIGHTS={}: {e}", path.display())))?;
+            crate::wan::log::info(format_args!("h3 vae=taeh3 ({})", path.display()));
+            VideoDecoder::Taeh3(tae)
+        }
+        None => VideoDecoder::Official(H3VideoDecoder::load(
+            H3VideoVaeConfig::fasth3_8step(),
+            &WeightMap::open(&root.join("vae"))?,
+        )?),
+    })
+}
+
+fn load_audio_decoder(root: &Path) -> Result<H3AudioDecoder> {
+    Ok(H3AudioDecoder::load(
+        H3AudioVaeConfig::fasth3_8step(),
+        &WeightMap::open(&root.join("audio_vae"))?,
+    )?)
 }
 
 /// Load LTX-2.5 and run the 3-step joint refiner into `out_dir/refined`.
@@ -1717,8 +1849,14 @@ mod tests {
         for recipe in ["sol-h3", "sol-h3-rtx"] {
             let c = resolve_contract(Path::new("/"), Some(recipe)).unwrap();
             assert!(!dit_loads_vsa_gate(&c, None));
-            assert!(!uses_vsa(H3SolAttnPolicy::Off, false, false, &c), "{recipe}");
-            assert!(!uses_vsa(H3SolAttnPolicy::Off, c.dense, false, &c), "{recipe}");
+            assert!(
+                !uses_vsa(H3SolAttnPolicy::Off, false, false, &c),
+                "{recipe}"
+            );
+            assert!(
+                !uses_vsa(H3SolAttnPolicy::Off, c.dense, false, &c),
+                "{recipe}"
+            );
         }
         assert!(uses_vsa(H3SolAttnPolicy::Off, false, false, &spark));
         assert!(!uses_vsa(H3SolAttnPolicy::Spark, false, false, &spark));

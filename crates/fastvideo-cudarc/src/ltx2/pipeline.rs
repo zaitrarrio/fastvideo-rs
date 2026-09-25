@@ -35,6 +35,7 @@ use rand::{Rng, SeedableRng};
 use rand_distr::StandardNormal;
 
 use crate::llm::{DecoderConfig, ResidentDecoder};
+use crate::wan::offload::{DitOffload, Residency};
 use crate::wan::pipeline::{
     frames_to_rgb8, interleave_audio, write_wav, PipelineError, Result, VideoWriter,
 };
@@ -272,6 +273,8 @@ pub struct Ltx2Output {
     pub timings: Ltx2Timings,
     /// Device-memory peaks per phase, in order (empty without a device).
     pub memory: Vec<PhaseMemory>,
+    /// `"resident"` or `"streamed"` DiT blocks.
+    pub dit_residency: &'static str,
 }
 
 /// One seeded Gaussian stream, standing in for one `torch.Generator`.
@@ -955,57 +958,7 @@ pub fn load_upsampler(weights: &Path, cfg: &Ltx2Config) -> Result<Option<LatentU
     }
 }
 
-/// Device memory of one pipeline phase, from the allocator pool's
-/// high-water marks (`torch.cuda.max_memory_allocated` / `_reserved` in the
-/// reference's `benchmark.json`).
-#[derive(Debug, Clone, PartialEq)]
-pub struct PhaseMemory {
-    pub phase: &'static str,
-    /// Highest bytes in live allocations during the phase.
-    pub peak_used: u64,
-    /// Highest bytes the pool held from the driver during the phase.
-    pub peak_reserved: u64,
-    /// Live bytes when the phase ended (after its frees).
-    pub end_used: u64,
-}
-
-/// Per-phase peaks: [`Self::mark`] closes the current phase and opens the
-/// next. Without a device (CPU runs) every call records nothing.
-#[derive(Debug, Default)]
-pub struct MemoryLog {
-    pub phases: Vec<PhaseMemory>,
-}
-
-impl MemoryLog {
-    pub fn start() -> Self {
-        crate::wan::device::reset_pool_peaks();
-        Self::default()
-    }
-
-    /// Close `phase`: wait for its kernels, record the pool's peaks, log
-    /// them, and restart the marks for the next phase.
-    pub fn mark(&mut self, phase: &'static str) -> Result<()> {
-        sync()?;
-        let Some(u) = crate::wan::device::pool_usage() else {
-            return Ok(());
-        };
-        let gib = |b: u64| b as f64 / f64::from(1u32 << 30);
-        crate::wan::log::info(format_args!(
-            "ltx2 memory {phase}: peak {:.2} GiB used, {:.2} GiB reserved; {:.2} GiB live after",
-            gib(u.used_high),
-            gib(u.reserved_high),
-            gib(u.used)
-        ));
-        self.phases.push(PhaseMemory {
-            phase,
-            peak_used: u.used_high,
-            peak_reserved: u.reserved_high,
-            end_used: u.used,
-        });
-        crate::wan::device::reset_pool_peaks();
-        Ok(())
-    }
-}
+pub use crate::wan::offload::{MemoryLog, PhaseMemory};
 
 /// Hand what the last phase freed back to the driver, as the reference's
 /// blocks do on exit (`AllocatorTrimStrategy.TRIM`: sync + `empty_cache`).
@@ -1593,6 +1546,11 @@ pub struct PipelineOptions {
     /// Directory of the conditioning cache; `None` turns it off.
     pub text_cache: Option<PathBuf>,
     pub text_residency: TextResidency,
+    /// Where the DiT blocks live. `None`: `FASTVIDEO_DIT_OFFLOAD`, else
+    /// `Auto` (resident when the free memory covers the resident plan of the
+    /// 4k5s workload). Streamed also keeps the video/audio decoders off the
+    /// device except around the calls that read them (`--offload cpu`).
+    pub dit_offload: Option<DitOffload>,
 }
 
 /// What [`Ltx2Pipeline::generate`] can reproduce. LTX-2.5 generates only
@@ -1653,8 +1611,10 @@ pub struct Ltx2Pipeline {
     /// Strength the resident DiT was fused at. `Some(0.0)` is the unfused base.
     loaded_strength: Option<f32>,
     /// Video VAE, audio VAE and vocoder; the spatial upsampler is loaded
-    /// only around its call in a two-stage run.
-    decoders: Decoders,
+    /// only around its call in a two-stage run. `None` between the calls
+    /// that read them when the DiT is streamed.
+    decoders: Option<Decoders>,
+    residency: Residency,
     has_upsampler: bool,
     text: TextEncoder,
     /// Seconds [`Self::load`] took.
@@ -1672,17 +1632,49 @@ impl Ltx2Pipeline {
         } else {
             None
         };
+        let residency = {
+            let policy = DitOffload::from_env_or(options.dit_offload).map_err(err)?;
+            let w = fastvideo_models::ltx2::Rtx5090Workload::DEFAULT;
+            let need = fastvideo_models::ltx2::memory::plan_distilled_two_stage(
+                cfg,
+                w.height(),
+                w.width(),
+                w.num_frames(),
+                w.frame_rate(),
+                fastvideo_models::ltx2::memory::PlanOptions::default(),
+            )
+            .peak();
+            let free = crate::wan::device::free_memory().map(|(f, _)| f);
+            let residency = policy.resolve(need, free);
+            crate::wan::log::info(format_args!(
+                "ltx2 dit offload: {} -> {} (resident {} plan {:.1} GiB, {} free before load)",
+                policy.as_str(),
+                residency.as_str(),
+                w.name(),
+                need as f64 / f64::from(1u32 << 30),
+                free.map_or("unknown".into(), |f| format!(
+                    "{:.1} GiB",
+                    f as f64 / f64::from(1u32 << 30)
+                )),
+            ));
+            residency
+        };
         let model = if lora.is_none() {
             let map = open_distilled(&paths.dit, "transformer")?;
-            Some(Ltx2Transformer::load(
+            Some(Ltx2Transformer::load_with_residency(
                 &map,
                 &Keys::transformer(Keys::detect(&map)),
                 &cfg.transformer,
+                residency,
             )?)
         } else {
             None
         };
-        let decoders = Decoders::load_without_upsampler(&paths.weights, cfg)?;
+        let decoders = if residency.is_streamed() {
+            None
+        } else {
+            Some(Decoders::load_without_upsampler(&paths.weights, cfg)?)
+        };
         let has_upsampler =
             cfg.latent_upsampler.is_some() && upsampler_dir(&paths.weights).is_some();
         sync()?;
@@ -1695,6 +1687,7 @@ impl Ltx2Pipeline {
             lora,
             loaded_strength,
             decoders,
+            residency,
             has_upsampler,
             text: TextEncoder::new(paths, cfg, options),
             load_s: timer.elapsed().as_secs_f64(),
@@ -1734,7 +1727,12 @@ impl Ltx2Pipeline {
             // Strength 0 so `apply_bf16` is a no-op and `attach_linear` snapshots
             // unfused `W0`. Device re-fuse walks the resident linears.
             let guard = super::lora::install(&path, 0.0)?;
-            let mut model = Ltx2Transformer::load(&map, &keys, &self.cfg.transformer)?;
+            let mut model = Ltx2Transformer::load_with_residency(
+                &map,
+                &keys,
+                &self.cfg.transformer,
+                self.residency,
+            )?;
             let hits = super::lora::hits();
             if hits == 0 {
                 drop(guard);
@@ -1751,12 +1749,52 @@ impl Ltx2Pipeline {
             ));
             model
         } else {
-            Ltx2Transformer::load(&map, &keys, &self.cfg.transformer)?
+            Ltx2Transformer::load_with_residency(
+                &map,
+                &keys,
+                &self.cfg.transformer,
+                self.residency,
+            )?
         };
         sync()?;
         self.loaded_strength = Some(strength);
         self.model = Some(model);
         Ok(self.model.as_ref().expect("just loaded"))
+    }
+
+    /// Where the DiT blocks live for this pipeline.
+    pub fn residency(&self) -> Residency {
+        self.residency
+    }
+
+    /// The decoders, loaded now if a streamed run keeps them off the device.
+    fn ensure_decoders(&mut self) -> Result<&Decoders> {
+        if self.decoders.is_none() {
+            let timer = Instant::now();
+            self.decoders = Some(Decoders::load_without_upsampler(&self.weights, &self.cfg)?);
+            crate::wan::log::info(format_args!(
+                "ltx2 decoders: loaded for this call ({:.1}s)",
+                timer.elapsed().as_secs_f64()
+            ));
+        }
+        Ok(self.decoders.as_ref().expect("just loaded"))
+    }
+
+    /// Streamed runs: drop the decoders until the next call that reads them.
+    fn release_transient_decoders(&mut self) -> Result<()> {
+        if self.residency.is_streamed() && self.decoders.take().is_some() {
+            trim()?;
+        }
+        Ok(())
+    }
+
+    /// Log the block streaming counters of the stage that just ran.
+    fn report_offload(&self, stage: &str) {
+        if let Some(model) = self.model.as_ref() {
+            if model.residency().is_streamed() {
+                model.report_offload(stage);
+            }
+        }
     }
 
     fn stage_lora_strengths(&self, two_stage: bool) -> (f32, f32) {
@@ -1871,8 +1909,12 @@ impl Ltx2Pipeline {
                 return Err(err("ltx2: --diff-vae needs weights/diffusion_decoder"));
             }
         }
+        if self.residency.is_streamed() {
+            // A streamed DiT is the small-card profile: Gemma streams too.
+            self.text.prefer_streamed_for_two_stage();
+        }
         let mut timings = Ltx2Timings::default();
-        let mut memory = MemoryLog::start();
+        let mut memory = MemoryLog::start("ltx2");
         let (stage1_h, stage1_w) = if req.two_stage {
             (req.height / 2, req.width / 2)
         } else {
@@ -2036,6 +2078,7 @@ impl Ltx2Pipeline {
             }
         };
         timings.stage1_s = timer.elapsed().as_secs_f64();
+        self.report_offload("stage1");
         if let Some(model) = self.model.as_ref() {
             model.disarm_fbcache();
             // Stage-1 buffers (cache residuals, the stored velocity) go now,
@@ -2052,17 +2095,20 @@ impl Ltx2Pipeline {
             // block. The DiT stays: stage 2 runs the same weights, and the
             // upsampler's working set is small beside stage 2's.
             {
+                // Streamed: the video VAE's latent statistics are what this
+                // reads; it is loaded for the call and dropped after it.
+                if let Some(model) = self.model.as_ref() {
+                    model.release_offload_device();
+                }
                 let up = load_upsampler(&self.weights, &cfg)?.ok_or_else(|| {
                     err("ltx2: two-stage needs weights/latent_upsampler|spatial_upscaler")
                 })?;
-                let upsampled = up.forward(
-                    &self
-                        .decoders
-                        .video
-                        .denormalize(&unpack_video(&video, grid1)?)?,
-                )?;
-                video = state.store(pack_video(&self.decoders.video.normalize(&upsampled)?)?)?;
+                let decoders = self.ensure_decoders()?;
+                let upsampled =
+                    up.forward(&decoders.video.denormalize(&unpack_video(&video, grid1)?)?)?;
+                video = state.store(pack_video(&decoders.video.normalize(&upsampled)?)?)?;
             }
+            self.release_transient_decoders()?;
             trim()?;
             timings.upsample_s = up_timer.elapsed().as_secs_f64();
             memory.mark("upsample")?;
@@ -2145,6 +2191,7 @@ impl Ltx2Pipeline {
             video = v2;
             audio = a2;
             timings.stage2_s = s2_timer.elapsed().as_secs_f64();
+            self.report_offload("stage2");
             drop(ropes2);
             memory.mark("stage2")?;
             grid_full
@@ -2161,6 +2208,8 @@ impl Ltx2Pipeline {
         // `DiffusionStage` frees its transformer on exit).
         release_dit_for_decode(&mut self.model, &mut self.loaded_strength);
         trim()?;
+        self.ensure_decoders()?;
+        let decoders = self.decoders.as_ref().expect("decoders");
 
         let written = if req.diff_vae {
             crate::wan::log::info(format_args!("ltx2: DiffVAE decode (DiT dropped)"));
@@ -2170,7 +2219,7 @@ impl Ltx2Pipeline {
                 dd_cfg,
             )?;
             decode_diffvae_and_write(
-                &self.decoders,
+                decoders,
                 &diffvae,
                 &video,
                 &audio,
@@ -2189,7 +2238,7 @@ impl Ltx2Pipeline {
                 None
             };
             decode_and_write(
-                &self.decoders,
+                decoders,
                 &video,
                 &audio,
                 decode_grid,
@@ -2203,6 +2252,7 @@ impl Ltx2Pipeline {
         timings.decode_video_s = written.decode_video_s;
         timings.write_s = written.write_s;
         drop((video, audio));
+        self.release_transient_decoders()?;
         trim()?;
         memory.mark("decode")?;
         Ok(Ltx2Output {
@@ -2215,6 +2265,7 @@ impl Ltx2Pipeline {
             text: text_report,
             timings,
             memory: memory.phases,
+            dit_residency: self.residency.as_str(),
         })
     }
 
@@ -2318,7 +2369,7 @@ impl Ltx2Pipeline {
         let strength = fastvideo_models::ltx2::lora::REFINER_STRENGTH;
 
         let mut timings = Ltx2Timings::default();
-        let mut memory = MemoryLog::start();
+        let mut memory = MemoryLog::start("ltx2");
         let (contexts, text_report) = self.text.encode(prompt, true)?;
         timings.text_s = text_report.seconds;
         trim()?;
@@ -2368,7 +2419,13 @@ impl Ltx2Pipeline {
         timings.denoise_s = timings.stage2_s;
         drop(ropes);
         drop(text);
+        self.report_offload("refine");
+        if let Some(model) = self.model.as_ref() {
+            model.release_offload_device();
+        }
+        trim()?;
         memory.mark("stage2")?;
+        self.ensure_decoders()?;
 
         std::fs::create_dir_all(out_dir).map_err(|e| err(format!("{}: {e}", out_dir.display())))?;
         let timer = Instant::now();
@@ -2401,11 +2458,16 @@ impl Ltx2Pipeline {
             };
         // Spark's explicit Conv tiles: 128/24 frames, 448/64 H, 768/64 W
         // (`stage2_ops/models.py:20-22,119-122`).
-        let decoded = self.decoders.video.decode_tiled(
-            &unpack_video(&video, grid)?,
-            &TileSizeConfig::spark(),
-            &mut sink,
-        );
+        let decoded = self
+            .decoders
+            .as_ref()
+            .expect("decoders")
+            .video
+            .decode_tiled(
+                &unpack_video(&video, grid)?,
+                &TileSizeConfig::spark(),
+                &mut sink,
+            );
         match (decoded, sink_err) {
             (_, Some(e)) => return Err(e),
             (Err(e), None) => return Err(e.into()),
@@ -2415,6 +2477,7 @@ impl Ltx2Pipeline {
         let timer = Instant::now();
         let (frames, mp4_path) = writer.finish()?;
         timings.write_s = timer.elapsed().as_secs_f64();
+        self.release_transient_decoders()?;
         memory.mark("decode")?;
         Ok(Ltx2Output {
             frames,
@@ -2426,6 +2489,7 @@ impl Ltx2Pipeline {
             text: text_report,
             timings,
             memory: memory.phases,
+            dit_residency: self.residency.as_str(),
         })
     }
 }
@@ -2499,12 +2563,36 @@ mod tests {
         let d = ltx2_5_22b_distilled();
         assert!(default_sol_stage2(&d, true, None, false, false));
         assert!(default_sol_stage2(&d, true, Some(3), false, false));
-        assert!(!default_sol_stage2(&d, true, Some(2), false, false), "2-step refine");
-        assert!(!default_sol_stage2(&d, false, None, false, false), "one stage");
-        assert!(!default_sol_stage2(&d, true, None, true, false), "PISA chosen");
-        assert!(!default_sol_stage2(&d, true, None, false, true), "dense control");
-        assert!(!default_sol_stage2(&ltx2_5_22b_dev(), true, None, false, false));
-        assert!(!default_sol_stage2(&ltx2_19b_distilled(), true, None, false, false));
+        assert!(
+            !default_sol_stage2(&d, true, Some(2), false, false),
+            "2-step refine"
+        );
+        assert!(
+            !default_sol_stage2(&d, false, None, false, false),
+            "one stage"
+        );
+        assert!(
+            !default_sol_stage2(&d, true, None, true, false),
+            "PISA chosen"
+        );
+        assert!(
+            !default_sol_stage2(&d, true, None, false, true),
+            "dense control"
+        );
+        assert!(!default_sol_stage2(
+            &ltx2_5_22b_dev(),
+            true,
+            None,
+            false,
+            false
+        ));
+        assert!(!default_sol_stage2(
+            &ltx2_19b_distilled(),
+            true,
+            None,
+            false,
+            false
+        ));
     }
 
     /// A whole LTX-2 in miniature: the latent widths are tied together the way

@@ -29,6 +29,7 @@ use fastvideo_models::ltx2::fbcache::FbCache;
 use fastvideo_models::ltx2::Ltx2RopeTables;
 
 use crate::wan::nn::{sinusoidal_timesteps, Linear};
+use crate::wan::offload::{BlockWeights, OffloadBlock, Residency};
 use crate::wan::tensor::{CudaTensor, Result};
 use crate::wan::weights::{cuda_tensor_shaped, WeightMap};
 
@@ -208,6 +209,7 @@ fn video_self_attn(
 }
 
 /// One stream's half of a block.
+#[derive(Clone)]
 struct StreamBlock {
     attn1: Attention,
     attn2: Attention,
@@ -221,6 +223,7 @@ struct StreamBlock {
     cross_attn_mod: bool,
 }
 
+#[derive(Clone)]
 struct Block {
     video: StreamBlock,
     audio: StreamBlock,
@@ -363,7 +366,7 @@ pub struct Ltx2Transformer {
     /// Loaded when `use_keyframes_abs_pos_embedding`; keyframe pipelines only.
     #[expect(dead_code, reason = "T2AV forward does not take a keyframe mask yet")]
     keyframes_abs_pos_embedding: Option<CudaTensor>,
-    blocks: Vec<Block>,
+    blocks: BlockWeights<Block>,
     ones_video: CudaTensor,
     ones_audio: CudaTensor,
     fbcache: Arc<Mutex<Option<LtxFbRuntime>>>,
@@ -413,7 +416,7 @@ impl StreamBlock {
     }
 }
 
-impl Block {
+impl OffloadBlock for Block {
     fn for_each_linear_mut(&mut self, f: &mut dyn FnMut(&mut Linear) -> Result<()>) -> Result<()> {
         self.video.for_each_linear_mut(f)?;
         self.audio.for_each_linear_mut(f)?;
@@ -472,7 +475,9 @@ impl Ltx2Transformer {
         self.cross_audio_gate.for_each_linear_mut(f)?;
         f(&mut self.proj_out)?;
         f(&mut self.audio_proj_out)?;
-        for block in &mut self.blocks {
+        // Streamed blocks: the skeletons keep every linear that does not
+        // stream, which includes each one carrying a LoRA.
+        for block in self.blocks.skeletons_mut() {
             block.for_each_linear_mut(f)?;
         }
         Ok(())
@@ -482,18 +487,47 @@ impl Ltx2Transformer {
     /// checkpoint's layout: the diffusers `transformer/` folder or the single
     /// `ltx-2-19b-*.safetensors`.
     pub fn load(map: &WeightMap, keys: &Keys, cfg: &Ltx2TransformerConfig) -> Result<Self> {
-        Self::load_blocks(map, keys, cfg, &(0..cfg.num_layers).collect::<Vec<_>>())
+        Self::load_with_residency(map, keys, cfg, Residency::Resident)
+    }
+
+    /// [`Self::load`] with the blocks resident or streamed
+    /// ([`crate::wan::offload`]): streamed, each block leaves the device as
+    /// soon as it is loaded and a forward holds `lookahead + 1` of them.
+    pub fn load_with_residency(
+        map: &WeightMap,
+        keys: &Keys,
+        cfg: &Ltx2TransformerConfig,
+        residency: Residency,
+    ) -> Result<Self> {
+        Self::load_blocks_with(
+            map,
+            keys,
+            cfg,
+            &(0..cfg.num_layers).collect::<Vec<_>>(),
+            residency,
+        )
     }
 
     /// [`Self::load`] with only the listed blocks (in that order) — the globals
     /// are always loaded. For the key-manifest tests, which check the loader at
     /// the production config without materialising 19B parameters; a model
     /// loaded this way is not the model.
+    #[cfg(test)]
     pub(crate) fn load_blocks(
         map: &WeightMap,
         keys: &Keys,
         cfg: &Ltx2TransformerConfig,
         which: &[usize],
+    ) -> Result<Self> {
+        Self::load_blocks_with(map, keys, cfg, which, Residency::Resident)
+    }
+
+    fn load_blocks_with(
+        map: &WeightMap,
+        keys: &Keys,
+        cfg: &Ltx2TransformerConfig,
+        which: &[usize],
+        residency: Residency,
     ) -> Result<Self> {
         if cfg.norm_elementwise_affine
             || cfg.patch_size != 1
@@ -539,7 +573,7 @@ impl Ltx2Transformer {
         let audio_mod_rows = if cfg.audio_cross_attn_mod { 9 } else { 6 };
         let prompt_mod = cfg.cross_attn_mod || cfg.audio_cross_attn_mod;
 
-        let mut blocks = Vec::with_capacity(which.len());
+        let mut blocks = BlockWeights::new("ltx2 dit", residency);
         for &i in which {
             if i >= cfg.num_layers {
                 return Err(msg(format!(
@@ -626,7 +660,7 @@ impl Ltx2Transformer {
                 },
                 audio_to_video: attn("audio_to_video_attn", a2v_dims, video_gated)?,
                 video_to_audio: attn("video_to_audio_attn", v2a_dims, audio_gated)?,
-            });
+            })?;
             if (i + 1) % 8 == 0 || i + 1 == cfg.num_layers {
                 let free = crate::wan::device::free_memory()
                     .map_or(-1.0, |(f, _)| f as f64 / f64::from(1u32 << 30));
@@ -658,6 +692,7 @@ impl Ltx2Transformer {
             }
         };
         let keyframes = load_keyframes_abs_pos(map, keys, cfg, dv)?;
+        crate::wan::log::info(format_args!("{}", blocks.describe()));
         Ok(Self {
             proj_in: Linear::load(map, &keys.key("proj_in"), cfg.in_channels, dv, true)?,
             audio_proj_in: Linear::load(
@@ -1082,6 +1117,23 @@ impl Ltx2Transformer {
         Ok(mods)
     }
 
+    /// Where the blocks live for this run.
+    pub fn residency(&self) -> Residency {
+        self.blocks.residency()
+    }
+
+    /// Log (and reset) the block streaming counters: H2D throughput and how
+    /// much of each copy the previous block's compute hid.
+    pub fn report_offload(&self, what: &str) -> crate::wan::offload::OffloadStats {
+        self.blocks.report(what)
+    }
+
+    /// Streamed: free the device slots until the next forward. Resident:
+    /// nothing.
+    pub fn release_offload_device(&self) {
+        self.blocks.release_device();
+    }
+
     pub fn config(&self) -> &Ltx2TransformerConfig {
         &self.cfg
     }
@@ -1179,25 +1231,27 @@ impl Ltx2Transformer {
         let ropes = pruned_ropes.as_ref().unwrap_or(ropes);
         let fb = self.begin_fb_pass(&xv, &xa)?;
         let mut skipped = false;
-        for (i, block) in self.blocks.iter().enumerate() {
+        for i in 0..self.blocks.len() {
             let tap = Tap {
                 probe: probe.as_mut(),
                 block: i,
             };
-            (xv, xa) = self.block(
-                block,
-                xv,
-                xa,
-                text,
-                &v_mod,
-                &a_mod,
-                v_prompt.as_ref(),
-                a_prompt.as_ref(),
-                ropes,
-                eps,
-                tap,
-                route,
-            )?;
+            (xv, xa) = self.blocks.with(i, |block| {
+                self.block(
+                    block,
+                    xv,
+                    xa,
+                    text,
+                    &v_mod,
+                    &a_mod,
+                    v_prompt.as_ref(),
+                    a_prompt.as_ref(),
+                    ropes,
+                    eps,
+                    tap,
+                    route,
+                )
+            })?;
             if let Some(obs) = observer.as_mut() {
                 obs(i, &xv, &xa)?;
             }
@@ -1572,6 +1626,45 @@ mod tests {
     /// The whole model against the block order of docs/ports/ltx2.md §e written
     /// as loops: every modulation row, both a↔v directions from pre-update
     /// states, the four rotary tables, the LayerNorm heads.
+    /// Streamed blocks run the same kernels on the same weights as resident
+    /// ones: two forwards (the ring wraps between them) agree bit for bit.
+    #[test]
+    fn streamed_blocks_match_resident_bit_for_bit() {
+        let cfg = tiny();
+        let map = weights();
+        let keys = Keys::transformer(Layout::Diffusers);
+        let resident = Ltx2Transformer::load(&map, &keys, &cfg).unwrap();
+        let streamed =
+            Ltx2Transformer::load_with_residency(&map, &keys, &cfg, Residency::Streamed).unwrap();
+        assert_eq!(streamed.residency(), Residency::Streamed);
+        let (grid, l, t_len) = ([2usize, 1, 3], 4usize, 5usize);
+        let ropes = Ropes::upload(&Ltx2RopeTables::new(&cfg, grid, l, 24.0)).unwrap();
+        let (video, audio) = (tokens(6, 6, 0.41), tokens(l, 5, 0.83));
+        let (ctx_v, ctx_a) = (tokens(t_len, 12, 0.29), tokens(t_len, 12, 0.57));
+        let bits = |t: &CudaTensor| -> Vec<u32> {
+            t.host_cow().unwrap().iter().map(|v| v.to_bits()).collect()
+        };
+        let run = |m: &Ltx2Transformer| {
+            let text = m.project_text(&tensor(&ctx_v), &tensor(&ctx_a)).unwrap();
+            let mut out = Vec::new();
+            for timestep in [725.0f32, 312.5] {
+                let (v, a) = m
+                    .forward(
+                        &tensor(&video),
+                        &tensor(&audio),
+                        &text,
+                        timestep,
+                        &ropes,
+                        None,
+                    )
+                    .unwrap();
+                out.push((bits(&v), bits(&a)));
+            }
+            out
+        };
+        assert_eq!(run(&resident), run(&streamed));
+    }
+
     #[test]
     fn forward_matches_a_loop_reference() {
         let cfg = tiny();
@@ -1875,8 +1968,11 @@ mod tests {
         .unwrap();
         assert_eq!(model.blocks.len(), 1);
         assert!(model.caption_projection.is_none());
-        assert!(model.blocks[0].video.prompt_table.is_some());
-        assert_eq!(model.blocks[0].video.scale_shift_table.shape, [9, 16]);
+        assert!(model.blocks.skeleton(0).video.prompt_table.is_some());
+        assert_eq!(
+            model.blocks.skeleton(0).video.scale_shift_table.shape,
+            [9, 16]
+        );
     }
 
     #[test]

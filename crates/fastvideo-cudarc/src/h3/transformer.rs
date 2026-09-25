@@ -38,6 +38,7 @@ use fastvideo_models::h3::schedule::H3JointSchedule;
 use fastvideo_models::h3::sol::H3TeaCache;
 
 use crate::wan::nn::{scaled_dot_product_attention, Linear};
+use crate::wan::offload::{BlockWeights, OffloadBlock, Residency};
 use crate::wan::stats::phase;
 use crate::wan::tensor::{CudaTensor, Result, TensorError};
 use crate::wan::weights::{cuda_tensor_shaped, WeightMap};
@@ -794,6 +795,7 @@ fn tag_runs(layout: &H3PackedLayout) -> Vec<(RowRange, u8)> {
 // Attention, FFN, blocks
 // ---------------------------------------------------------------------------
 
+#[derive(Clone)]
 pub(crate) struct Attention {
     /// `[q; k; v]` or `[q; k; v; gate]` stacked on the output dim. One GEMM
     /// so the 520 MB activation is read once; per-head RMSNorm+RoPE still
@@ -980,6 +982,7 @@ impl Attention {
 /// Bias-free SwiGLU with the **value half first**: `ff_out(v * silu(g))` for
 /// `(v, g) = chunk(ff_in(x), 2)`. The act is one `swiglu_value_first` pass.
 /// Row-chunked only when `[S, 2 * ffn]` f32 would exceed [`FFN_WHOLE_BYTES`].
+#[derive(Clone)]
 pub(crate) struct FeedForward {
     ff_in: Linear,
     ff_out: Linear,
@@ -1103,6 +1106,7 @@ impl FeedForward {
     }
 }
 
+#[derive(Clone)]
 pub(crate) struct Block {
     norm1: CudaTensor,
     norm2: CudaTensor,
@@ -1137,11 +1141,20 @@ impl Block {
     }
 }
 
+impl OffloadBlock for Block {
+    fn for_each_linear_mut(&mut self, f: &mut dyn FnMut(&mut Linear) -> Result<()>) -> Result<()> {
+        f(&mut self.attn.qkvg)?;
+        f(&mut self.attn.to_out)?;
+        f(&mut self.ff.ff_in)?;
+        f(&mut self.ff.ff_out)
+    }
+}
+
 /// `context_embedder` + the two timestep-free refiner blocks + `final_norm`.
 /// Runs once per prompt; drop it afterwards (1.6 GB).
 pub struct H3TextRefiner {
     context_embedder: Linear,
-    blocks: Vec<Block>,
+    blocks: BlockWeights<Block>,
     final_norm: CudaTensor,
     eps: f32,
     final_eps: f32,
@@ -1157,6 +1170,26 @@ impl H3TextRefiner {
         map: &WeightMap,
         lora: &mut Option<super::lora::H3LoraFuse>,
     ) -> Result<Self> {
+        Self::load_with_residency(cfg, map, lora, Residency::Resident)
+    }
+
+    /// [`Self::load_with`] with the refiner blocks resident or streamed.
+    pub fn load_with_residency(
+        cfg: &H3TransformerConfig,
+        map: &WeightMap,
+        lora: &mut Option<super::lora::H3LoraFuse>,
+        residency: Residency,
+    ) -> Result<Self> {
+        let mut blocks = BlockWeights::new("h3 refiner", residency);
+        for i in 0..cfg.num_refiner_layers {
+            blocks.push(Block::load(
+                map,
+                &format!("token_refiner.refiner_blocks.{i}"),
+                cfg,
+                false,
+                lora,
+            )?)?;
+        }
         Ok(Self {
             context_embedder: load_linear(
                 map,
@@ -1166,17 +1199,7 @@ impl H3TextRefiner {
                 true,
                 lora,
             )?,
-            blocks: (0..cfg.num_refiner_layers)
-                .map(|i| {
-                    Block::load(
-                        map,
-                        &format!("token_refiner.refiner_blocks.{i}"),
-                        cfg,
-                        false,
-                        lora,
-                    )
-                })
-                .collect::<Result<Vec<_>>>()?,
+            blocks,
             final_norm: pinned_weight(
                 map,
                 "token_refiner.final_norm.weight",
@@ -1192,15 +1215,21 @@ impl H3TextRefiner {
     /// blocks, bidirectional attention, no RoPE, no AdaLN.
     pub fn forward(&self, text: &CudaTensor) -> Result<CudaTensor> {
         let mut e = self.context_embedder.forward(text)?;
-        for block in &self.blocks {
-            let a =
-                block
-                    .attn
-                    .forward(&e.rms_norm(&block.norm1, self.eps)?, None, AttnMode::Dense)?;
-            e = e.add(&a)?;
-            let f = block.ff.forward(&e.rms_norm(&block.norm2, self.eps)?)?;
-            e = e.add(&f)?;
+        for index in 0..self.blocks.len() {
+            e = self.blocks.with(index, |block| {
+                let a = block.attn.forward(
+                    &e.rms_norm(&block.norm1, self.eps)?,
+                    None,
+                    AttnMode::Dense,
+                )?;
+                let e = e.add(&a)?;
+                let f = block.ff.forward(&e.rms_norm(&block.norm2, self.eps)?)?;
+                e.add(&f)
+            })?;
         }
+        self.blocks.report("text refine");
+        // Once per prompt: a streamed refiner's slots are not kept for the DiT.
+        self.blocks.release_device();
         e.rms_norm(&self.final_norm, self.final_eps)
     }
 }
@@ -1229,7 +1258,7 @@ pub struct H3Transformer {
     cfg: H3TransformerConfig,
     proj_in: Linear,
     audio_proj_in: Linear,
-    blocks: Vec<Block>,
+    blocks: BlockWeights<Block>,
     norm_out: CudaTensor,
     proj_out: Linear,
     audio_proj_out: Linear,
@@ -1282,6 +1311,29 @@ impl H3Transformer {
         adaln_cache: Option<&std::path::Path>,
         lora: &mut Option<super::lora::H3LoraFuse>,
     ) -> Result<Self> {
+        Self::load_with_residency(
+            cfg,
+            map,
+            schedule,
+            with_gate,
+            adaln_cache,
+            lora,
+            Residency::Resident,
+        )
+    }
+
+    /// [`Self::load_with`] with the 50 blocks resident or streamed
+    /// ([`crate::wan::offload`]): streamed, each block leaves the device as
+    /// soon as it is loaded and a forward holds `lookahead + 1` of them.
+    pub fn load_with_residency(
+        cfg: H3TransformerConfig,
+        map: &WeightMap,
+        schedule: &H3JointSchedule,
+        with_gate: bool,
+        adaln_cache: Option<&std::path::Path>,
+        lora: &mut Option<super::lora::H3LoraFuse>,
+        residency: Residency,
+    ) -> Result<Self> {
         if cfg.rotary_dim() > cfg.attention_head_dim || cfg.freq_dim % 2 != 0 {
             return Err(msg(format!(
                 "h3 dit: {} rotary channels of a {}-wide head",
@@ -1290,23 +1342,23 @@ impl H3Transformer {
             )));
         }
         let table = AdaLnTable::load_or_precompute_with(&cfg, map, schedule, adaln_cache, lora)?;
-        let blocks = (0..cfg.num_layers)
-            .map(|i| {
-                let block = Block::load(
-                    map,
-                    &format!("transformer_blocks.{i}"),
-                    &cfg,
-                    with_gate,
-                    lora,
-                );
-                crate::wan::log::info(format_args!(
-                    "h3 dit: block {}/{} resident",
-                    i + 1,
-                    cfg.num_layers
-                ));
-                block
-            })
-            .collect::<Result<Vec<_>>>()?;
+        let mut blocks = BlockWeights::new("h3 dit", residency);
+        for i in 0..cfg.num_layers {
+            blocks.push(Block::load(
+                map,
+                &format!("transformer_blocks.{i}"),
+                &cfg,
+                with_gate,
+                lora,
+            )?)?;
+            crate::wan::log::info(format_args!(
+                "h3 dit: block {}/{} {}",
+                i + 1,
+                cfg.num_layers,
+                residency.as_str()
+            ));
+        }
+        crate::wan::log::info(format_args!("{}", blocks.describe()));
         Ok(Self {
             proj_in: load_linear(
                 map,
@@ -1388,7 +1440,7 @@ impl H3Transformer {
         };
         let mods = BlockMods::upload(&self.table, step, 0, layout)?;
         let probe = mods.modulate(
-            &hidden.rms_norm(&self.blocks[0].norm1, eps)?,
+            &hidden.rms_norm(&self.blocks.skeleton(0).norm1, eps)?,
             SCALE_MSA,
             SHIFT_MSA,
         )?;
@@ -1440,6 +1492,23 @@ impl H3Transformer {
 
     pub fn has_gate(&self) -> bool {
         self.has_gate
+    }
+
+    /// Where the blocks live for this run.
+    pub fn residency(&self) -> Residency {
+        self.blocks.residency()
+    }
+
+    /// Log (and reset) the block streaming counters: H2D throughput and how
+    /// much of each copy the previous block's compute hid.
+    pub fn report_offload(&self, what: &str) -> crate::wan::offload::OffloadStats {
+        self.blocks.report(what)
+    }
+
+    /// Streamed: free the device slots until the next forward (before a
+    /// decode that needs the memory). Resident: nothing.
+    pub fn release_offload_device(&self) {
+        self.blocks.release_device();
     }
 
     /// One forward at ladder step `step`. `video_rows` / `audio_rows` are the
@@ -1556,11 +1625,8 @@ impl H3Transformer {
         if tea == Some(true) {
             x = self.add_sol_tea_residual(x)?;
         } else {
-            for (index, block) in self.blocks.iter().enumerate() {
+            for index in 0..self.blocks.len() {
                 let mods = BlockMods::upload(&self.table, step, index, l)?;
-                let n = phase("h3_1_norm_msa", || {
-                    mods.modulate(&x.rms_norm(&block.norm1, eps)?, SCALE_MSA, SHIFT_MSA)
-                })?;
                 let layer_mode = match mode {
                     AttnMode::Sol(policy) => match policy.route(step, index).map_err(msg)? {
                         fastvideo_models::h3::sol::H3SolRoute::Dense => AttnMode::Dense,
@@ -1570,15 +1636,21 @@ impl H3Transformer {
                     },
                     other => other,
                 };
-                let a = phase("h3_2_attn", || block.attn.forward(&n, rope, layer_mode))?;
-                x = phase("h3_3_residual_msa", || mods.gated_add(&x, &a, GATE_MSA))?;
-                drop(a);
-                let n = phase("h3_4_norm_ffn", || {
-                    mods.modulate(&x.rms_norm(&block.norm2, eps)?, SCALE_MLP, SHIFT_MLP)
+                x = self.blocks.with(index, |block| {
+                    let n = phase("h3_1_norm_msa", || {
+                        mods.modulate(&x.rms_norm(&block.norm1, eps)?, SCALE_MSA, SHIFT_MSA)
+                    })?;
+                    let a = phase("h3_2_attn", || block.attn.forward(&n, rope, layer_mode))?;
+                    drop(n);
+                    let x = phase("h3_3_residual_msa", || mods.gated_add(&x, &a, GATE_MSA))?;
+                    drop(a);
+                    let n = phase("h3_4_norm_ffn", || {
+                        mods.modulate(&x.rms_norm(&block.norm2, eps)?, SCALE_MLP, SHIFT_MLP)
+                    })?;
+                    let f = phase("h3_5_ffn", || block.ff.forward(&n))?;
+                    drop(n);
+                    phase("h3_6_residual_ffn", || mods.gated_add(&x, &f, GATE_MLP))
                 })?;
-                let f = phase("h3_5_ffn", || block.ff.forward(&n))?;
-                x = phase("h3_6_residual_ffn", || mods.gated_add(&x, &f, GATE_MLP))?;
-                drop(f);
                 if let Some(observe) = observer.as_mut() {
                     observe(&format!("block_{index}"), &x)?;
                 }
@@ -1903,6 +1975,82 @@ pub(crate) mod tests {
         }
     }
 
+    /// Streamed blocks (weights off the device between forwards, installed per
+    /// block) run the same kernels on the same weights: the outputs are equal
+    /// bit for bit, over two steps (a full wrap of the ring) and the refiner.
+    #[test]
+    fn streamed_blocks_match_resident_bit_for_bit() {
+        let (cfg, map) = (tiny_cfg(), weights());
+        let schedule = H3JointSchedule::fasth3_8step();
+        let load = |residency| {
+            H3Transformer::load_with_residency(
+                cfg.clone(),
+                &map,
+                &schedule,
+                false,
+                None,
+                &mut None,
+                residency,
+            )
+            .unwrap()
+        };
+        let (resident, streamed) = (load(Residency::Resident), load(Residency::Streamed));
+        assert_eq!(streamed.residency(), Residency::Streamed);
+        let layout = H3PackedLayout::new(2, (2, 2, 4), 1, cfg.patch_size).unwrap();
+        let (nv, na, nt) = (layout.video.len, layout.audio.len, layout.text.len);
+        let dl = DeviceLayout::new(&cfg, layout).unwrap();
+        let video = CudaTensor::from_vec(
+            seeded(nv * cfg.video_patch_dim(), 0.41),
+            vec![nv, cfg.video_patch_dim()],
+        )
+        .unwrap();
+        let audio = CudaTensor::from_vec(
+            seeded(na * cfg.audio_in_channels, 0.23),
+            vec![na, cfg.audio_in_channels],
+        )
+        .unwrap();
+        let text = CudaTensor::from_vec(
+            seeded(nt * cfg.hidden_size, 0.57),
+            vec![1, nt, cfg.hidden_size],
+        )
+        .unwrap();
+        let bits = |t: &CudaTensor| -> Vec<u32> {
+            t.host_cow().unwrap().iter().map(|v| v.to_bits()).collect()
+        };
+        for step in [0, 3] {
+            let run = |m: &H3Transformer| {
+                let mut blocks = Vec::new();
+                let (v, a) = m
+                    .forward(
+                        step,
+                        &video,
+                        &audio,
+                        &text,
+                        &dl,
+                        AttnMode::Dense,
+                        Some(&mut |_, t| {
+                            blocks.push(bits(t));
+                            Ok(())
+                        }),
+                        None,
+                        None,
+                    )
+                    .unwrap();
+                (bits(&v), bits(&a), blocks)
+            };
+            let (want, got) = (run(&resident), run(&streamed));
+            assert_eq!(want.2.len(), cfg.num_layers);
+            assert_eq!(want, got, "step {step}");
+        }
+        let prompt =
+            CudaTensor::from_vec(seeded(3 * cfg.text_dim, 0.7), vec![1, 3, cfg.text_dim]).unwrap();
+        let refine = |r| {
+            let refiner = H3TextRefiner::load_with_residency(&cfg, &map, &mut None, r).unwrap();
+            bits(&refiner.forward(&prompt).unwrap())
+        };
+        assert_eq!(refine(Residency::Resident), refine(Residency::Streamed));
+    }
+
     /// The whole forward against loops that evaluate every `adaln_proj` from
     /// its raw weights per row (`timestep_index * 3 + tag`), so the precomputed
     /// table's slicing is judged by code that does not share it.
@@ -2207,9 +2355,12 @@ pub(crate) mod tests {
         let layout = H3PackedLayout::new(2, (2, 2, 4), 1, cfg.patch_size).unwrap();
         let s = layout.sequence_length();
         let dl = DeviceLayout::new(&cfg, layout).unwrap();
-        let n = CudaTensor::from_vec(seeded(s * cfg.hidden_size, 0.37), vec![1, s, cfg.hidden_size])
-            .unwrap();
-        let attn = &model.blocks[0].attn;
+        let n = CudaTensor::from_vec(
+            seeded(s * cfg.hidden_size, 0.37),
+            vec![1, s, cfg.hidden_size],
+        )
+        .unwrap();
+        let attn = &model.blocks.skeleton(0).attn;
         let rope = Some((&dl.cos, &dl.sin));
         let dense = attn.forward(&n, rope, AttnMode::Dense).unwrap();
         let dense = dense.host_cow().unwrap().into_owned();
@@ -2223,7 +2374,14 @@ pub(crate) mod tests {
             // tau -1000 routes every block exactly (the upstream correctness
             // gate), so any sink placement and permutation must give dense.
             let got = attn
-                .forward(&n, rope, AttnMode::SolLayer { tau: -1000.0, policy: &policy })
+                .forward(
+                    &n,
+                    rope,
+                    AttnMode::SolLayer {
+                        tau: -1000.0,
+                        policy: &policy,
+                    },
+                )
                 .unwrap();
             let got = got.host_cow().unwrap();
             let err = got
@@ -2280,7 +2438,9 @@ pub(crate) mod tests {
             &[fastvideo_models::h3::packing::KeyframeAnchor::First],
         )
         .unwrap();
-        let text_tags = [TAG_TEXT, TAG_VIDEO, TAG_VIDEO, TAG_VIDEO, TAG_TEXT, TAG_VIDEO];
+        let text_tags = [
+            TAG_TEXT, TAG_VIDEO, TAG_VIDEO, TAG_VIDEO, TAG_TEXT, TAG_VIDEO,
+        ];
         layout.set_text_token_tags(&text_tags).unwrap();
         assert!(layout.cond.len > 0);
         // The trailing text-span video row must not merge with the cond run.

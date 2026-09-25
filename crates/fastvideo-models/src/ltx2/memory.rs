@@ -150,10 +150,9 @@ fn adaln(sinusoid: usize, d: usize, rows: usize, wb: u64) -> u64 {
     linear(sinusoid, d, true, wb) + linear(d, d, true, wb) + linear(d, rows * d, true, wb)
 }
 
-/// DiT bytes on the device: every linear at `weight_bytes` (2 for the bf16
-/// fast path), tables and norms in float32. Walks the same modules as
-/// `Ltx2Transformer::load`.
-pub fn dit_weight_bytes(t: &Ltx2TransformerConfig, weight_bytes: u64) -> u64 {
+/// Bytes of one transformer block: every linear at `weight_bytes` (2 for
+/// the bf16 fast path), tables and norms in float32.
+pub fn dit_block_bytes(t: &Ltx2TransformerConfig, weight_bytes: u64) -> u64 {
     let wb = weight_bytes;
     let (dv, da) = (t.inner_dim(), t.audio_inner_dim());
     let (hv, ha) = (t.num_attention_heads, t.audio_num_attention_heads);
@@ -173,8 +172,17 @@ pub fn dit_weight_bytes(t: &Ltx2TransformerConfig, weight_bytes: u64) -> u64 {
         + f32s(a_rows * da + 5 * da + if prompt_mod { 2 * da } else { 0 });
     let av = attention(dv, da, cross, ha, t.gated_attn, wb)
         + attention(da, dv, cross, ha, t.audio_gated_attn, wb);
-    let blocks = t.num_layers as u64 * (video + audio + av);
+    video + audio + av
+}
 
+/// Bytes of the modules outside the blocks (projections, AdaLN, heads).
+pub fn dit_global_bytes(t: &Ltx2TransformerConfig, weight_bytes: u64) -> u64 {
+    let wb = weight_bytes;
+    let (dv, da) = (t.inner_dim(), t.audio_inner_dim());
+    let v_rows = if t.cross_attn_mod { 9 } else { 6 };
+    let a_rows = if t.audio_cross_attn_mod { 9 } else { 6 };
+    let prompt_mod = t.cross_attn_mod || t.audio_cross_attn_mod;
+    let f32s = |n: usize| n as u64 * 4;
     let s = t.timestep_proj_dim;
     let mut globals = linear(t.in_channels, dv, true, wb)
         + linear(t.audio_in_channels, da, true, wb)
@@ -199,7 +207,47 @@ pub fn dit_weight_bytes(t: &Ltx2TransformerConfig, weight_bytes: u64) -> u64 {
     if t.use_keyframes_abs_pos_embedding {
         globals += f32s(dv);
     }
-    blocks + globals
+    globals
+}
+
+/// DiT bytes on the device with every block resident. Walks the same
+/// modules as `Ltx2Transformer::load`.
+pub fn dit_weight_bytes(t: &Ltx2TransformerConfig, weight_bytes: u64) -> u64 {
+    t.num_layers as u64 * dit_block_bytes(t, weight_bytes) + dit_global_bytes(t, weight_bytes)
+}
+
+/// Where the DiT's blocks live (`fastvideo_cudarc::wan::offload`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DitPlacement {
+    /// Every block on the device for the whole run.
+    Resident,
+    /// Blocks in pinned host memory, `slots` of them on the device at once
+    /// (the ring: `lookahead + 1`); the globals and block tables stay.
+    Streamed { slots: usize },
+}
+
+impl DitPlacement {
+    /// The default streamed ring: one block computing, one arriving.
+    pub const STREAMED: Self = Self::Streamed { slots: 2 };
+
+    /// Device bytes of the DiT under this placement.
+    pub fn dit_bytes(self, t: &Ltx2TransformerConfig, weight_bytes: u64) -> u64 {
+        match self {
+            Self::Resident => dit_weight_bytes(t, weight_bytes),
+            Self::Streamed { slots } => {
+                // The skeletons keep their float32 tables and biases.
+                // `weight_bytes = 0` prices the biases and tables alone.
+                let tables = t.num_layers as u64 * dit_block_bytes(t, 0);
+                dit_global_bytes(t, weight_bytes)
+                    + tables
+                    + slots as u64 * dit_block_bytes(t, weight_bytes)
+            }
+        }
+    }
+
+    pub fn is_streamed(self) -> bool {
+        matches!(self, Self::Streamed { .. })
+    }
 }
 
 /// 3×3×3 conv, float32 weight and bias.
@@ -454,6 +502,20 @@ pub struct PlanOptions {
     pub score_budget_elems: usize,
     /// 2 for bf16 linears (`--mode fast`).
     pub weight_bytes: u64,
+    /// Resident blocks, or streamed ones with the video VAE loaded only
+    /// around the calls that read it (the upsample's latent statistics and
+    /// the decode), as the RTX 5090 profile runs (`--offload cpu`).
+    pub dit: DitPlacement,
+}
+
+impl PlanOptions {
+    /// The 32 GiB profile: streamed blocks, decoders only while decoding.
+    pub fn streamed() -> Self {
+        Self {
+            dit: DitPlacement::STREAMED,
+            ..Self::default()
+        }
+    }
 }
 
 impl Default for PlanOptions {
@@ -462,6 +524,7 @@ impl Default for PlanOptions {
             ffn: FeedForwardChunking::RTX5090,
             score_budget_elems: DENSE_SCORE_BUDGET_ELEMS,
             weight_bytes: 2,
+            dit: DitPlacement::Resident,
         }
     }
 }
@@ -479,8 +542,10 @@ pub fn plan_distilled_two_stage(
     opts: PlanOptions,
 ) -> MemoryPlan {
     let t = &cfg.transformer;
-    let dit = dit_weight_bytes(t, opts.weight_bytes);
+    let dit = opts.dit.dit_bytes(t, opts.weight_bytes);
     let vae = vae_decoder_bytes(&cfg.vae);
+    // Streamed: the video VAE is loaded for the upsample and the decode only.
+    let vae_held = if opts.dit.is_streamed() { 0 } else { vae };
     let upsampler = cfg.latent_upsampler.as_ref();
     let text_tokens = cfg.defaults.max_sequence_length;
     let audio = t.audio_tokens(num_frames, frame_rate);
@@ -493,12 +558,12 @@ pub fn plan_distilled_two_stage(
     };
     let mut phases = vec![PhaseBytes {
         phase: "text",
-        weights: dit + vae,
+        weights: dit + vae_held,
         working: text_transient_bytes(cfg),
     }];
     phases.push(PhaseBytes {
         phase: "stage1",
-        weights: dit + vae,
+        weights: dit + vae_held,
         working: forward(tokens(grid1)),
     });
     if let Some(u) = upsampler {
@@ -510,7 +575,7 @@ pub fn plan_distilled_two_stage(
     }
     phases.push(PhaseBytes {
         phase: "stage2",
-        weights: dit + vae,
+        weights: dit + vae_held,
         working: forward(tokens(grid2)),
     });
     phases.push(PhaseBytes {
@@ -619,6 +684,53 @@ mod tests {
         let stage2 = plan.phase("stage2").unwrap().total();
         assert_eq!(peak, stage2);
         assert!(plan.phase("decode").unwrap().total() < stage2 / 2);
+    }
+
+    /// The RTX 5090 (32 GiB) profile: streamed blocks keep every phase of
+    /// both reference workloads under 30 GiB, while the resident DiT alone
+    /// would not fit.
+    #[test]
+    fn streamed_two_stage_fits_a_32_gib_card() {
+        let cfg = ltx2_5_22b_distilled();
+        for w in [Rtx5090Workload::Uhd5s, Rtx5090Workload::Fhd20s] {
+            let plan = |opts| {
+                plan_distilled_two_stage(
+                    &cfg,
+                    w.height(),
+                    w.width(),
+                    w.num_frames(),
+                    w.frame_rate(),
+                    opts,
+                )
+            };
+            let streamed = plan(PlanOptions::streamed());
+            for p in &streamed.phases {
+                eprintln!(
+                    "{} streamed {:>8}: weights {:6.2} GiB, working {:6.2} GiB, total {:6.2} GiB",
+                    w.name(),
+                    p.phase,
+                    gib(p.weights),
+                    gib(p.working),
+                    gib(p.total())
+                );
+            }
+            let peak = streamed.peak();
+            assert!(
+                peak < 30 * GIB,
+                "{}: streamed peak {:.2} GiB",
+                w.name(),
+                gib(peak)
+            );
+            let resident = plan(PlanOptions::default());
+            assert!(resident.peak() > 32 * GIB, "{}", w.name());
+            // Two block slots instead of 48 blocks.
+            let t = &cfg.transformer;
+            assert!(
+                DitPlacement::STREAMED.dit_bytes(t, 2) < 3 * GIB,
+                "{:.2} GiB",
+                gib(DitPlacement::STREAMED.dit_bytes(t, 2))
+            );
+        }
     }
 
     #[test]

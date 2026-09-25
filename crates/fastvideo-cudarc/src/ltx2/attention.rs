@@ -131,6 +131,7 @@ impl AttentionDims {
     }
 }
 
+#[derive(Clone)]
 pub struct Attention {
     to_q: Linear,
     to_k: Linear,
@@ -294,6 +295,7 @@ pub enum VideoAttnKernel {
 
 /// diffusers `FeedForward(dim, activation_fn="gelu-approximate")`:
 /// `Linear(d, 4d)` → tanh-GELU → `Linear(4d, d)`, keys `net.0.proj` / `net.2`.
+#[derive(Clone)]
 pub struct FeedForward {
     up: Linear,
     down: Linear,

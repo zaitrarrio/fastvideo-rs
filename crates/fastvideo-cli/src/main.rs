@@ -156,6 +156,13 @@ struct GenerateArgs {
     /// Alternate DiT root for LTX (default: `<weights>/transformer`).
     #[arg(long)]
     dit: Option<String>,
+    /// LTX / H3 DiT block residency: `auto` (resident when the free device
+    /// memory covers the planned need, else streamed), `resident`, or
+    /// `streamed` (blocks copied from pinned host memory one ahead of the
+    /// computing block; decoders on the device only while decoding).
+    /// Default: `FASTVIDEO_DIT_OFFLOAD`, else `auto`.
+    #[arg(long)]
+    dit_offload: Option<String>,
 }
 
 /// Minimal TOML overlay for `generate` (not full upstream YAML).
@@ -379,6 +386,7 @@ fn main() -> Result<()> {
                         h3_recipe: args.h3_recipe,
                         h3_adapter: args.h3_adapter.map(PathBuf::from),
                         h3_seconds: args.seconds,
+                        dit_offload: args.dit_offload,
                     };
                     println!(
                         "family={} preset={} device={}",

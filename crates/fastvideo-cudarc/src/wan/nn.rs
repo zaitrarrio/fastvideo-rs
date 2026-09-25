@@ -136,7 +136,66 @@ pub fn bf16_linears_active() -> bool {
     }
 }
 
+/// A linear's weight while [`super::offload`] streams it: taken out of the
+/// linear at load, handed back (shared) for one forward.
+pub(crate) enum StreamedWeight {
+    /// The bf16 device weight of the fast path.
+    #[cfg(feature = "cuda")]
+    Bf16(std::sync::Arc<cudarc::driver::CudaSlice<half::bf16>>),
+    /// Host runs: the f32 weight tensor.
+    Tensor(CudaTensor),
+}
+
 impl Linear {
+    /// Whether the weight may leave the linear between forwards: a plain bf16
+    /// device weight, or on a host run a plain f32 one. Quantized, LoRA and
+    /// nvfp4 linears keep their weight where it is.
+    pub(crate) fn is_streamable(&self) -> bool {
+        if self.lora.is_some()
+            || self.weight_fp8_rows.is_some()
+            || self.weight_affine.is_some()
+            || self.nvfp4_act.is_some()
+        {
+            return false;
+        }
+        #[cfg(feature = "cuda")]
+        {
+            if self.weight_fp8.is_some() {
+                return false;
+            }
+            if self.weight_bf16.is_some() {
+                return true;
+            }
+        }
+        !super::device::has_live_device() && self.weight.numel() == self.in_dim * self.out_dim
+    }
+
+    /// Take the weight out for streaming; `None` when [`Self::is_streamable`]
+    /// says no. The linear cannot run until [`Self::put_streamed_weight`].
+    pub(crate) fn take_streamed_weight(&mut self) -> Option<StreamedWeight> {
+        if !self.is_streamable() {
+            return None;
+        }
+        #[cfg(feature = "cuda")]
+        if let Some(w) = self.weight_bf16.take() {
+            return Some(StreamedWeight::Bf16(w));
+        }
+        let empty = CudaTensor::from_vec(Vec::new(), vec![0, self.in_dim]).ok()?;
+        Some(StreamedWeight::Tensor(std::mem::replace(
+            &mut self.weight,
+            empty,
+        )))
+    }
+
+    /// Install a streamed weight for one forward.
+    pub(crate) fn put_streamed_weight(&mut self, w: StreamedWeight) {
+        match w {
+            #[cfg(feature = "cuda")]
+            StreamedWeight::Bf16(w) => self.weight_bf16 = Some(w),
+            StreamedWeight::Tensor(t) => self.weight = t,
+        }
+    }
+
     /// Wrap weight/bias and keep them on the device (a no-op on CPU runs).
     pub fn from_tensors(weight: CudaTensor, bias: Option<CudaTensor>) -> Result<Self> {
         Self::from_tensors_with(weight, bias, None)
