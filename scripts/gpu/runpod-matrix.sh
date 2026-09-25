@@ -4,7 +4,7 @@
 # Spark joint LTX refine stays off (FASTVIDEO_LTX2_WEIGHTS unset) except in
 # the rtx6000 parity family, which runs the full Spark bridge.
 set -euo pipefail
-FAMILY="${1:?usage: runpod-matrix.sh h3|ltx|hunyuan|wan|b200|rtx6000|rtx5090}"
+FAMILY="${1:?usage: runpod-matrix.sh h3|ltx|hunyuan|wan|b200|rtx6000|rtx5090|fastvideo}"
 WORK="${FV_WORK:-/workspace}"
 BIN="${FV_GPUCHECK:-/opt/fastvideo-rs/target/release/fv-gpucheck}"
 W="$WORK/weights"
@@ -507,6 +507,50 @@ case "$FAMILY" in
             --prompt "$PROMPT" --seed "$SEED" --two-stage --text streamed --warm \
             --clip "$RUNS/ltx25-$wl-$arm/frames"
       done
+    done
+    ;;
+  fastvideo)
+    # Our optimized stack with no sol-engine technique (no Sol-Attn, no
+    # TeaCache): base H3 on the dense flash kernel, the FastH3 distilled VSA
+    # recipes, and LTX-2.5 distilled two-stage with a dense stage 2.
+    h3_common=(
+      --prompt "$PROMPT"
+      --seconds 5
+      --seed "$SEED"
+      --text-encoder auto
+      --text-cache "$WORK/h3-text-cache"
+      --text-weights "$W/h3-base"
+      --warm
+    )
+    for res in 768p 480p; do
+      geo=()
+      [[ "$res" == 480p ]] && geo=(--height 480 --width 832)
+      gated_cell "h3-base-$res" fasth3-4step-dense \
+        env FASTVIDEO_H3_SOL_ATTN=off \
+        "$BIN" --mode fast h3 gen --weights "$W/h3-base" --h3-recipe sol-h3-rtx "${geo[@]}" \
+          --adaln-cache "$RUNS/h3-base-$res-adaln.cache" \
+          --clip-dir "$RUNS/h3-base-$res/frames" "${h3_common[@]}"
+      gated_cell "fasth3-8step-$res" fasth3-8step \
+        "$BIN" --mode fast h3 gen --weights "$W/h3-8step" --h3-recipe 8step "${geo[@]}" \
+          --adaln-cache "$RUNS/fasth3-8step-$res-adaln.cache" \
+          --clip-dir "$RUNS/fasth3-8step-$res/frames" "${h3_common[@]}"
+      gated_cell "fasth3-4step-vsa-$res" fasth3-4step-vsa \
+        "$BIN" --mode fast h3 gen --weights "$W/h3-8step" --h3-recipe 4step-vsa "${geo[@]}" \
+          --adaln-cache "$RUNS/fasth3-4step-vsa-$res-adaln.cache" \
+          --clip-dir "$RUNS/fasth3-4step-vsa-$res/frames" "${h3_common[@]}"
+    done
+    gated_cell fasth3-4step-dense-768p fasth3-4step-dense \
+      "$BIN" --mode fast h3 gen --weights "$W/h3-base" --h3-recipe 4step-dense \
+        --adaln-cache "$RUNS/fasth3-4step-dense-768p-adaln.cache" \
+        --clip-dir "$RUNS/fasth3-4step-dense-768p/frames" "${h3_common[@]}"
+    for wl in 4k5s 1080p20s 512p; do
+      geo=(--workload "$wl")
+      [[ "$wl" == 512p ]] && geo=(--height 512 --width 768 --num-frames 121)
+      gated_cell "ltx25-$wl" ltx25-two-stage \
+        "$BIN" --mode fast ltx2 gen --model-version 2.5 \
+          --weights "$W/ltx25" --dit "$W/ltx25" "${geo[@]}" --dense-stage2 \
+          --prompt "$PROMPT" --seed "$SEED" --two-stage --text streamed --warm \
+          --clip "$RUNS/ltx25-$wl/frames"
     done
     ;;
   *)
