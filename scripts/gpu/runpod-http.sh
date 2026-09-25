@@ -59,6 +59,7 @@ mkdir -p "\$OUT"
   echo "image_build_id=\$(cat /opt/fastvideo-rs/target/release/fv-gpucheck.build-id 2>/dev/null)"
   nvidia-smi --query-gpu=name,memory.total,driver_version --format=csv,noheader
 } >"\$OUT/box.txt" 2>&1
+( cd /workspace/weights && for d in *; do echo "== \$d"; find -L "\$d" -maxdepth 3 \( -name '*.safetensors' -o -name '*.json' \) -printf '%s %p\n' 2>/dev/null | head -60; done ) >"\$OUT/tree.txt" 2>&1
 FV_WEIGHTS=/workspace/weights bash /opt/fastvideo-rs/scripts/gpu/verify-weights.sh $cells >"\$OUT/weights.log" 2>&1
 echo "exit=\$?" >>"\$OUT/weights.log"
 if [ "$mode" = run ]; then
@@ -100,7 +101,7 @@ create_pod() {
 fetch_results() {
   local id="$1" tag="$2" out="$OUT_ROOT/$tag" f cell
   mkdir -p "$out"
-  for f in box.txt weights.log matrix.out live.log; do
+  for f in box.txt tree.txt weights.log matrix.out live.log; do
     proxy "$id" "rtx6000/$tag/$f" >"$out/$f" 2>/dev/null || true
   done
   for cell in $(proxy "$id" "rtx6000/$tag/" 2>/dev/null | grep -oE 'href="[^"/]+/"' | sed 's/href="//;s/\/"//'); do
