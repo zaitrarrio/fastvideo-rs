@@ -935,6 +935,59 @@ __device__ __forceinline__ void mma_load_tile(unsigned int smem, const unsigned 
         mma_cp_async16(smem + mma_swz(row, c * 8), g + row * MMA_DIM + c * 8);
     }
 }
+// cp.async with zero-fill: `valid == 0` writes 16 zero bytes and reads nothing.
+__device__ __forceinline__ void mma_cp_async16_zfill(unsigned int smem, const void* gmem, int valid) {
+    asm volatile("cp.async.cg.shared.global [%0], [%1], 16, %2;\n"
+                 :: "r"(smem), "l"(gmem), "r"(valid ? 16 : 0));
+}
+// `mma_load_tile` for unpadded BHSD rows: rows >= rows_valid become zeros
+// (so masked P columns multiply 0, never stale shared memory). `g` is the
+// first row of the tile and is only dereferenced for live rows.
+__device__ __forceinline__ void mma_load_tile_rows(unsigned int smem, const unsigned short* g, int rows_valid, int tid) {
+    #pragma unroll
+    for (int i = 0; i < 8; i++) {
+        int chunk = tid + i * 128;
+        int row = chunk >> 4, c = chunk & 15;
+        int ok = row < rows_valid;
+        mma_cp_async16_zfill(smem + mma_swz(row, c * 8),
+                             ok ? (const void*)(g + row * MMA_DIM + c * 8) : (const void*)g, ok);
+    }
+}
+// S[16 x 64] = Q[16 x 128] K[64 x 128]^T for one warp: 8 n-tiles x 8
+// k-chunks. `qf` are this warp's A fragments; B comes from the swizzled K
+// tile via ldmatrix.x2 (8 keys x 16 dims, no transpose).
+__device__ __forceinline__ void mma_qk_64x64(unsigned int sK, const unsigned int (&qf)[8][4], float (&s)[8][4], int lane) {
+    #pragma unroll
+    for (int n = 0; n < 8; n++) { s[n][0] = s[n][1] = s[n][2] = s[n][3] = 0.f; }
+    #pragma unroll
+    for (int kc = 0; kc < 8; kc++) {
+        #pragma unroll
+        for (int n = 0; n < 8; n++) {
+            unsigned int b[2];
+            mma_ldm_x2(sK + mma_swz(n * 8 + (lane & 7), kc * 16 + ((lane >> 3) & 1) * 8), b[0], b[1]);
+            mma_bf16(s[n], qf[kc], b);
+        }
+    }
+}
+// O[16 x 128] += P[16 x 64] V[64 x 128]. `pa[kc]` is k-chunk kc of P in the
+// A layout (n-tiles 2kc, 2kc+1 of the S accumulator); V via ldmatrix.trans.
+__device__ __forceinline__ void mma_pv_64x128(unsigned int sV, const unsigned int (&pa)[4][4], float (&o)[16][4], int lane) {
+    #pragma unroll
+    for (int kc = 0; kc < 4; kc++) {
+        #pragma unroll
+        for (int n = 0; n < 16; n++) {
+            unsigned int b[2];
+            mma_ldm_x2_trans(sV + mma_swz(kc * 16 + (lane & 15), n * 8), b[0], b[1]);
+            mma_bf16(o[n], pa[kc], b);
+        }
+    }
+}
+// Two f32 -> packed bf16x2, round-to-nearest-even (torch / CuTe `.to(bf16)`).
+__device__ __forceinline__ unsigned int mma_pack_bf16_rn(float lo, float hi) {
+    unsigned int r;
+    asm("cvt.rn.bf16x2.f32 %0, %1, %2;\n" : "=r"(r) : "f"(hi), "f"(lo));
+    return r;
+}
 #endif
 
 // One CUDA block per (query tile, batch*head); 4 warps, warp w owns query rows
@@ -1012,18 +1065,7 @@ extern "C" __global__ void __launch_bounds__(128, 2) vsa_mma_attn(
 
         // S = Q K^T for this warp's 16 rows x 64 keys: 8 n-tiles x 8 k-chunks.
         float s[8][4];
-        #pragma unroll
-        for (int n = 0; n < 8; n++) { s[n][0] = s[n][1] = s[n][2] = s[n][3] = 0.f; }
-        #pragma unroll
-        for (int kc = 0; kc < 8; kc++) {
-            #pragma unroll
-            for (int n = 0; n < 8; n++) {
-                unsigned int b[2];
-                // 8 keys (rows n*8..) x 16 dims (cols kc*16..), no transpose.
-                mma_ldm_x2(sK[buf] + mma_swz(n * 8 + (lane & 7), kc * 16 + ((lane >> 3) & 1) * 8), b[0], b[1]);
-                mma_bf16(s[n], qf[kc], b);
-            }
-        }
+        mma_qk_64x64(sK[buf], qf, s, lane);
 
         // Mask padding columns of this key tile, then the online softmax in
         // the reference's order: new max, rescale old, exp2, accumulate.
@@ -1067,21 +1109,15 @@ extern "C" __global__ void __launch_bounds__(128, 2) vsa_mma_attn(
         for (int n = 0; n < 16; n++) { o[n][0] *= a0; o[n][1] *= a0; o[n][2] *= a1; o[n][3] *= a1; }
 
         // O += P V: P re-packed from C layout into A layout, V via ldmatrix.trans.
+        unsigned int pa[4][4];
         #pragma unroll
         for (int kc = 0; kc < 4; kc++) {
-            unsigned int pa[4];
-            pa[0] = mma_pack_bf16(s[2 * kc][0], s[2 * kc][1]);
-            pa[1] = mma_pack_bf16(s[2 * kc][2], s[2 * kc][3]);
-            pa[2] = mma_pack_bf16(s[2 * kc + 1][0], s[2 * kc + 1][1]);
-            pa[3] = mma_pack_bf16(s[2 * kc + 1][2], s[2 * kc + 1][3]);
-            #pragma unroll
-            for (int n = 0; n < 16; n++) {
-                unsigned int b[2];
-                // 16 keys (rows kc*16..) x 8 dims (cols n*8..), transposed.
-                mma_ldm_x2_trans(sV[buf] + mma_swz(kc * 16 + (lane & 15), n * 8), b[0], b[1]);
-                mma_bf16(o[n], pa, b);
-            }
+            pa[kc][0] = mma_pack_bf16(s[2 * kc][0], s[2 * kc][1]);
+            pa[kc][1] = mma_pack_bf16(s[2 * kc][2], s[2 * kc][3]);
+            pa[kc][2] = mma_pack_bf16(s[2 * kc + 1][0], s[2 * kc + 1][1]);
+            pa[kc][3] = mma_pack_bf16(s[2 * kc + 1][2], s[2 * kc + 1][3]);
         }
+        mma_pv_64x128(sV[buf], pa, o, lane);
         __syncthreads();
     }
 
@@ -2372,12 +2408,18 @@ extern "C" __global__ void __launch_bounds__(128, 2) sol_mma_attn_partials(
         __syncthreads();
     }
 
-    // Token-order (m, l, acc); padding slots are skipped.
+    // Token-order (m, l, acc); padding slots are skipped. `m` is stored in
+    // the scaled-log2 units `sol_coarse_partials` uses (score * scale_log2),
+    // since `sol_lse_merge` combines the two with exp2(m_a - m_b); `l` is
+    // already relative to exp2(m * scale_log2). One lane per quad (t == 0)
+    // owns rows g and g+8, so every one of the warp's 16 rows is written.
     int r0 = slot_src[(long)qtile * MMA_TILE + warp * 16 + g];
     int r1 = slot_src[(long)qtile * MMA_TILE + warp * 16 + g + 8];
-    if (lane < 8) {
-        if (r0 >= 0) { m_out[bh * seq + r0] = m0; l_out[bh * seq + r0] = l0; }
-        if (r1 >= 0) { m_out[bh * seq + r1] = m1; l_out[bh * seq + r1] = l1; }
+    if (t == 0) {
+        const float ms0 = (m0 == NEG) ? NEG : m0 * scale_log2;
+        const float ms1 = (m1 == NEG) ? NEG : m1 * scale_log2;
+        if (r0 >= 0) { m_out[bh * seq + r0] = ms0; l_out[bh * seq + r0] = l0; }
+        if (r1 >= 0) { m_out[bh * seq + r1] = ms1; l_out[bh * seq + r1] = l1; }
     }
     #pragma unroll
     for (int n = 0; n < 16; n++) {
@@ -2395,6 +2437,498 @@ extern "C" __global__ void __launch_bounds__(128, 2) sol_mma_attn_partials(
     (void)qt; (void)kt; (void)vt; (void)selected; (void)block_sizes; (void)slot_src;
     (void)m_out; (void)l_out; (void)acc_out;
     (void)num_tiles; (void)topk; (void)scale_log2; (void)q_base; (void)seq;
+    __trap();
+#endif
+}
+// ---- Fused Sol-Attn (port of the CuTe sm120 mainloop) ---------------------
+//
+// Four launches per call: sol_prep_kv (K/V f32 -> bf16 + pooled Kc mean /
+// Vc sum), sol_prep_kstats (+ sol_prep_kgram for thresh_type=exact),
+// sol_prep_q (Q f32 -> bf16 + per-q-block routing threshold) and
+// sol_mma_fwd (route GEMM, ballot compaction, approximate PV and exact flash
+// in one CTA per (64-query tile, batch*head)). Operands are bf16 BHSD
+// `[bh, T, 128]`; block j of a head is the contiguous slab [64j, 64j+len(j)).
+// Rounding points follow the Python reference: Q/K/V, Kc, Vc and P are bf16
+// (round-to-nearest-even), every accumulation is f32.
+#define SOL_LN2 0.6931471805599453f
+
+// f32 -> bf16 bits, round-to-nearest-even (torch `.to(torch.bfloat16)`).
+// `fv_to_bf16` rounds ties away from zero; Sol matches torch instead.
+__device__ __forceinline__ unsigned short sol_bf16_rn(float x) {
+    unsigned int u = __float_as_uint(x);
+    if ((u & 0x7F800000u) == 0x7F800000u) {
+        unsigned int h = u >> 16;
+        if (u & 0x007FFFFFu) h |= 0x0040u;  // keep NaN a (quiet) NaN
+        return (unsigned short)h;
+    }
+    u += 0x7FFFu + ((u >> 16) & 1u);
+    return (unsigned short)(u >> 16);
+}
+
+// P1: one CTA per (block b, head bh), thread d = channel. Reads K/V f32 once,
+// writes the bf16 copies, and pools the ROUNDED values (Python pools bf16
+// inputs): Kc = bf16(sum / len), Vc = bf16(sum). f32 sequential sums and an
+// IEEE divide, so the host oracle reproduces Kc/Vc bit for bit.
+extern "C" __global__ void sol_prep_kv(
+    const float* __restrict__ k, const float* __restrict__ v,
+    unsigned short* __restrict__ kb, unsigned short* __restrict__ vb,
+    unsigned short* __restrict__ kc, unsigned short* __restrict__ vc,
+    int T, int NT
+) {
+    const int b = blockIdx.x, d = threadIdx.x;
+    const long bh = blockIdx.y;
+    if (b >= NT || d >= 128) return;
+    const int L = min(64, T - 64 * b);
+    const long base = (bh * T + 64L * b) * 128 + d;
+    float sk = 0.f, sv = 0.f;
+    for (int r = 0; r < L; r++) {
+        const long i = base + (long)r * 128;
+        const unsigned short kh = sol_bf16_rn(k[i]), vh = sol_bf16_rn(v[i]);
+        kb[i] = kh;
+        vb[i] = vh;
+        sk = __fadd_rn(sk, fv_bf16_to_f32(kh));
+        sv = __fadd_rn(sv, fv_bf16_to_f32(vh));
+    }
+    const long o = (bh * NT + b) * 128 + d;
+    kc[o] = sol_bf16_rn(__fdiv_rn(sk, (float)L));
+    vc[o] = sol_bf16_rn(sv);
+}
+
+// P2: per-head diag statistics of the bf16 Kc rows over all NT blocks:
+// kstat[bh] = [mu[128], var[128]], var = max(E[x^2] - mu^2, 0).
+extern "C" __global__ void sol_prep_kstats(
+    const unsigned short* __restrict__ kc, float* __restrict__ kstat, int NT
+) {
+    const long bh = blockIdx.x;
+    const int d = threadIdx.x;
+    if (d >= 128) return;
+    float s = 0.f, s2 = 0.f;
+    for (int j = 0; j < NT; j++) {
+        const float x = fv_bf16_to_f32(kc[(bh * NT + j) * 128 + d]);
+        s = __fadd_rn(s, x);
+        s2 = __fmaf_rn(x, x, s2);
+    }
+    const float n = (float)NT;
+    const float mu = __fdiv_rn(s, n);
+    const float var = fmaxf(__fsub_rn(__fdiv_rn(s2, n), __fmul_rn(mu, mu)), 0.f);
+    kstat[bh * 256 + d] = mu;
+    kstat[bh * 256 + 128 + d] = var;
+}
+
+// P2' (thresh_type=exact only): kM[bh] = bf16(bf16(Kc^T Kc) / NT), the bf16
+// matmul then in-place bf16 `div_` of `_compute_exact_threshold`. Grid
+// (bh, 8), 256 threads: CTA y owns rows d in [16y, 16y+16); thread = (column
+// e, 8 rows). Kc is staged 64 blocks at a time.
+extern "C" __global__ void sol_prep_kgram(
+    const unsigned short* __restrict__ kc, unsigned short* __restrict__ km, int NT
+) {
+    __shared__ float tile[64][129];
+    const long bh = blockIdx.x;
+    const int tid = threadIdx.x, e = tid & 127, half = tid >> 7;
+    const int d0 = blockIdx.y * 16 + half * 8;
+    float acc[8];
+    #pragma unroll
+    for (int i = 0; i < 8; i++) acc[i] = 0.f;
+    for (int j0 = 0; j0 < NT; j0 += 64) {
+        const int cnt = min(64, NT - j0);
+        __syncthreads();
+        for (int i = tid; i < cnt * 128; i += blockDim.x) {
+            const int r = i >> 7, c = i & 127;
+            tile[r][c] = fv_bf16_to_f32(kc[(bh * NT + j0 + r) * 128 + c]);
+        }
+        __syncthreads();
+        for (int r = 0; r < cnt; r++) {
+            const float xe = tile[r][e];
+            #pragma unroll
+            for (int i = 0; i < 8; i++) acc[i] = __fmaf_rn(tile[r][d0 + i], xe, acc[i]);
+        }
+    }
+    const float n = (float)NT;
+    #pragma unroll
+    for (int i = 0; i < 8; i++) {
+        const float m = fv_bf16_to_f32(sol_bf16_rn(acc[i]));
+        km[bh * 16384 + (long)(d0 + i) * 128 + e] = sol_bf16_rn(__fdiv_rn(m, n));
+    }
+}
+
+// Sum of (a, c) over the 128 threads of the CTA; the total is valid in
+// thread 0.
+__device__ __forceinline__ void sol_block_sum2(float& a, float& c, float* red) {
+    #pragma unroll
+    for (int off = 16; off > 0; off >>= 1) {
+        a += __shfl_xor_sync(0xffffffffu, a, off);
+        c += __shfl_xor_sync(0xffffffffu, c, off);
+    }
+    const int lane = threadIdx.x & 31, warp = threadIdx.x >> 5;
+    if (lane == 0) { red[warp] = a; red[4 + warp] = c; }
+    __syncthreads();
+    if (threadIdx.x == 0) {
+        a = (red[0] + red[1]) + (red[2] + red[3]);
+        c = (red[4] + red[5]) + (red[6] + red[7]);
+    }
+}
+
+// P3: Q f32 -> bf16 plus the routing threshold of query block b, in
+// log2-score units. diag: mean = qbar.mu * sl2, var = (qbar^2).var * sl2^2.
+// exact: qbar rounded to bf16, var = max(qbar^T M qbar - mean_raw^2, 0) * sl2^2.
+// thr = mean + tau * sqrt(max(var, 0) + 1e-6).
+extern "C" __global__ void sol_prep_q(
+    const float* __restrict__ q, unsigned short* __restrict__ qb,
+    const float* __restrict__ kstat, const unsigned short* __restrict__ km,
+    float* __restrict__ thr, int T, int NT, float tau, float sl2, int exact_mode
+) {
+    __shared__ float red[8];
+    __shared__ float sq_bar[128];
+    const int b = blockIdx.x, d = threadIdx.x;
+    const long bh = blockIdx.y;
+    if (b >= NT || d >= 128) return;
+    const int L = min(64, T - 64 * b);
+    const long base = (bh * T + 64L * b) * 128 + d;
+    float sq = 0.f;
+    for (int r = 0; r < L; r++) {
+        const long i = base + (long)r * 128;
+        const unsigned short qh = sol_bf16_rn(q[i]);
+        qb[i] = qh;
+        sq = __fadd_rn(sq, fv_bf16_to_f32(qh));
+    }
+    float qbar = __fdiv_rn(sq, (float)L);
+    const float mu = kstat[bh * 256 + d];
+    float a, c;
+    if (!exact_mode) {
+        a = __fmul_rn(qbar, mu);
+        c = __fmul_rn(__fmul_rn(qbar, qbar), kstat[bh * 256 + 128 + d]);
+    } else {
+        qbar = fv_bf16_to_f32(sol_bf16_rn(qbar));
+        sq_bar[d] = qbar;
+        __syncthreads();
+        a = __fmul_rn(qbar, mu);
+        // proj[d] = sum_e qbar[e] * M[e][d]: column d of `q_bar @ M`.
+        const unsigned short* M = km + bh * 16384;
+        float proj = 0.f;
+        for (int e = 0; e < 128; e++) proj = __fmaf_rn(sq_bar[e], fv_bf16_to_f32(M[e * 128 + d]), proj);
+        c = __fmul_rn(proj, qbar);
+    }
+    sol_block_sum2(a, c, red);
+    if (d == 0) {
+        const float mean = __fmul_rn(a, sl2);
+        const float s2 = __fmul_rn(sl2, sl2);
+        const float var = exact_mode ? __fmul_rn(fmaxf(__fsub_rn(c, __fmul_rn(a, a)), 0.f), s2)
+                                     : __fmul_rn(c, s2);
+        const float sd = __fsqrt_rn(__fadd_rn(fmaxf(var, 0.f), 1.0e-6f));
+        thr[bh * NT + b] = __fadd_rn(mean, __fmul_rn(tau, sd));
+    }
+}
+
+#define SOL_FWD_SMEM (2 * MMA_TILEB + (4 * 64 + 64) * 4 + 64 * 4 + 16)
+
+// F: one CTA per (64-query tile, batch*head); 4 warps, warp w owns query
+// rows [16w, 16w+16). Per 64-block route group: S = Q Kc^T on tensor cores,
+// column means over live rows vs the threshold, local window and sink
+// (ballot-compacted exact list, ascending), then the approximate term
+// (pooled columns, row sum weighted by len(j), P bf16 @ Vc) and one flash
+// step per exact block — the order of `sm120/mainloop.py`. Output f32 (or
+// bf16) BHSD, optional natural-log LSE `[bh, T]`, optional route ballots
+// `[bh, NT, 2*G]` (CuTe `debug_route_trace`). Sinks are one contiguous KV
+// block range [sink_lo, sink_hi) (empty when lo == hi).
+extern "C" __global__ void __launch_bounds__(128, 2) sol_mma_fwd(
+    const unsigned short* __restrict__ qb, const unsigned short* __restrict__ kb,
+    const unsigned short* __restrict__ vb,
+    const unsigned short* __restrict__ kc, const unsigned short* __restrict__ vc,
+    const float* __restrict__ thr,
+    float* __restrict__ out, unsigned short* __restrict__ out_bf16, int out_is_bf16,
+    float* __restrict__ lse, int has_lse,
+    unsigned int* __restrict__ route_dbg, int has_dbg,
+    int T, int NT, int sink_lo, int sink_hi, float sl2
+) {
+#if defined(__CUDA_ARCH__) && __CUDA_ARCH__ >= 800
+    __shared__ __align__(128) unsigned char smem[SOL_FWD_SMEM];
+    float* colsum = reinterpret_cast<float*>(smem + 2 * MMA_TILEB);   // [4][64]
+    float* colmask = colsum + 4 * 64;                                // [64]
+    int* eidx = reinterpret_cast<int*>(colmask + 64);                // [64]
+    int* meta = eidx + 64;                                           // [1]
+    const unsigned int sK = mma_smem_u32(smem), sV = sK + MMA_TILEB;
+
+    const int tid = threadIdx.x, lane = tid & 31, warp = tid >> 5;
+    const int g = lane >> 2, t = lane & 3;
+    const int qt = blockIdx.x;
+    const long bh = blockIdx.y;
+    if (qt >= NT) return;
+    const int q0 = qt * 64, qlen = min(64, T - q0);
+    const unsigned short* Qh = qb + bh * (long)T * MMA_DIM;
+    const unsigned short* Kh = kb + bh * (long)T * MMA_DIM;
+    const unsigned short* Vh = vb + bh * (long)T * MMA_DIM;
+    const unsigned short* KCh = kc + bh * (long)NT * MMA_DIM;
+    const unsigned short* VCh = vc + bh * (long)NT * MMA_DIM;
+    const float th = thr[bh * NT + qt];
+    const int G = (NT + 63) >> 6;
+    const float NEG = __int_as_float(0xff800000);
+
+    // Q -> registers through sK (rows >= qlen are zeros).
+    mma_load_tile_rows(sK, Qh + (long)q0 * MMA_DIM, qlen, tid);
+    mma_cp_commit();
+    mma_cp_wait<0>();
+    __syncthreads();
+    unsigned int qf[8][4];
+    #pragma unroll
+    for (int k8 = 0; k8 < 8; k8++) {
+        int row = warp * 16 + (lane & 15), col = k8 * 16 + (lane >> 4) * 8;
+        mma_ldm_x4(sK + mma_swz(row, col), qf[k8][0], qf[k8][1], qf[k8][2], qf[k8][3]);
+    }
+    __syncthreads();
+
+    const int row0 = warp * 16 + g, row1 = row0 + 8;
+    const bool ok0 = row0 < qlen, ok1 = row1 < qlen;
+    float o[16][4];
+    #pragma unroll
+    for (int n = 0; n < 16; n++) { o[n][0] = o[n][1] = o[n][2] = o[n][3] = 0.f; }
+    float m0 = NEG, m1 = NEG, l0 = 0.f, l1 = 0.f;   // m raw units; l per-thread partials
+    float s[8][4];
+    unsigned int pa[4][4];
+
+    // cp.async groups: every tile load is its own group, committed in the
+    // order it is consumed, so wait<1> = "all but the newest have landed".
+    bool kc_pending = false;
+    #pragma unroll 1
+    for (int gi = 0; gi < G; gi++) {
+        const int gs = gi * 64, vb_cnt = min(64, NT - gs);
+        // (a) route tiles: Kc (unless prefetched) then Vc.
+        if (!kc_pending) {
+            mma_load_tile_rows(sK, KCh + (long)gs * MMA_DIM, vb_cnt, tid);
+            mma_cp_commit();
+        }
+        mma_load_tile_rows(sV, VCh + (long)gs * MMA_DIM, vb_cnt, tid);
+        mma_cp_commit();
+        kc_pending = false;
+        mma_cp_wait<1>();
+        __syncthreads();
+
+        // (b) raw route scores S = Q Kc^T.
+        mma_qk_64x64(sK, qf, s, lane);
+
+        // (c) column sums over live rows (reduce_route_columns).
+        #pragma unroll
+        for (int n = 0; n < 8; n++) {
+            float p0 = (ok0 ? s[n][0] : 0.f) + (ok1 ? s[n][2] : 0.f);
+            float p1 = (ok0 ? s[n][1] : 0.f) + (ok1 ? s[n][3] : 0.f);
+            #pragma unroll
+            for (int off = 4; off <= 16; off <<= 1) {
+                p0 += __shfl_xor_sync(0xffffffffu, p0, off);
+                p1 += __shfl_xor_sync(0xffffffffu, p1, off);
+            }
+            if (g == 0) {
+                colsum[warp * 64 + n * 8 + 2 * t] = p0;
+                colsum[warp * 64 + n * 8 + 2 * t + 1] = p1;
+            }
+        }
+        __syncthreads();
+
+        // (d) route decision + ascending ballot compaction (warp 0).
+        if (warp == 0) {
+            int base = 0;
+            #pragma unroll
+            for (int word = 0; word < 2; word++) {
+                const int off = word * 32 + lane, kbk = gs + off;
+                const bool valid = off < vb_cnt;
+                bool ex = false;
+                if (valid) {
+                    const float cs = ((colsum[off] + colsum[64 + off]) + colsum[128 + off]) + colsum[192 + off];
+                    const float cm = __fdiv_rn(__fmul_rn(cs, sl2), (float)qlen);
+                    const int dist = qt > kbk ? qt - kbk : kbk - qt;
+                    ex = (cm > th) || (dist <= 1) || (kbk >= sink_lo && kbk < sink_hi);
+                }
+                const unsigned int bal = __ballot_sync(0xffffffffu, ex);
+                colmask[off] = (ex || !valid) ? NEG : 0.f;
+                if (ex) eidx[base + __popc(bal & ((1u << lane) - 1u))] = kbk;
+                base += __popc(bal);
+                if (has_dbg && lane == 0) route_dbg[(bh * NT + qt) * 2L * G + 2 * gi + word] = bal;
+            }
+            if (lane == 0) meta[0] = base;
+        }
+        __syncthreads();
+        const int ne = meta[0];
+        const bool has_approx = ne < vb_cnt;
+
+        // (e) sK is free (S lives in registers): prefetch the first exact K
+        // tile, or the next group's Kc when this group has no exact block.
+        bool issued = false;
+        if (ne > 0) {
+            const int j0 = eidx[0];
+            mma_load_tile_rows(sK, Kh + (long)j0 * 64 * MMA_DIM, min(64, T - 64 * j0), tid);
+            mma_cp_commit();
+            issued = true;
+        } else if (gi + 1 < G) {
+            mma_load_tile_rows(sK, KCh + (long)(gs + 64) * MMA_DIM, min(64, NT - gs - 64), tid);
+            mma_cp_commit();
+            kc_pending = true;
+            issued = true;
+        }
+        if (issued) mma_cp_wait<1>(); else mma_cp_wait<0>();   // Vc landed
+        __syncthreads();
+
+        // (f) approximate term: pooled columns, len(j)-weighted row sum.
+        if (has_approx) {
+            float rmax0 = NEG, rmax1 = NEG;
+            #pragma unroll
+            for (int n = 0; n < 8; n++) {
+                const int c0 = n * 8 + 2 * t;
+                const float mk0 = colmask[c0], mk1 = colmask[c0 + 1];
+                s[n][0] = ok0 ? s[n][0] + mk0 : NEG;
+                s[n][1] = ok0 ? s[n][1] + mk1 : NEG;
+                s[n][2] = ok1 ? s[n][2] + mk0 : NEG;
+                s[n][3] = ok1 ? s[n][3] + mk1 : NEG;
+                rmax0 = fmaxf(rmax0, fmaxf(s[n][0], s[n][1]));
+                rmax1 = fmaxf(rmax1, fmaxf(s[n][2], s[n][3]));
+            }
+            rmax0 = fmaxf(rmax0, __shfl_xor_sync(0xffffffffu, rmax0, 1));
+            rmax0 = fmaxf(rmax0, __shfl_xor_sync(0xffffffffu, rmax0, 2));
+            rmax1 = fmaxf(rmax1, __shfl_xor_sync(0xffffffffu, rmax1, 1));
+            rmax1 = fmaxf(rmax1, __shfl_xor_sync(0xffffffffu, rmax1, 2));
+            const float mn0 = fmaxf(m0, rmax0), mn1 = fmaxf(m1, rmax1);
+            const float sf0 = (mn0 == NEG) ? 0.f : mn0, sf1 = (mn1 == NEG) ? 0.f : mn1;
+            const float a0 = exp2f((m0 - sf0) * sl2), a1 = exp2f((m1 - sf1) * sl2);
+            const float ms0 = sf0 * sl2, ms1 = sf1 * sl2;
+            m0 = mn0; m1 = mn1;
+            float ls0 = 0.f, ls1 = 0.f;
+            #pragma unroll
+            for (int n = 0; n < 8; n++) {
+                const int c0 = n * 8 + 2 * t;
+                const float w0 = (float)max(0, min(64, T - 64 * (gs + c0)));
+                const float w1 = (float)max(0, min(64, T - 64 * (gs + c0 + 1)));
+                s[n][0] = exp2f(s[n][0] * sl2 - ms0);
+                s[n][1] = exp2f(s[n][1] * sl2 - ms0);
+                s[n][2] = exp2f(s[n][2] * sl2 - ms1);
+                s[n][3] = exp2f(s[n][3] * sl2 - ms1);
+                ls0 += s[n][0] * w0 + s[n][1] * w1;
+                ls1 += s[n][2] * w0 + s[n][3] * w1;
+            }
+            l0 = l0 * a0 + ls0;
+            l1 = l1 * a1 + ls1;
+            #pragma unroll
+            for (int n = 0; n < 16; n++) { o[n][0] *= a0; o[n][1] *= a0; o[n][2] *= a1; o[n][3] *= a1; }
+            #pragma unroll
+            for (int k4 = 0; k4 < 4; k4++) {
+                pa[k4][0] = mma_pack_bf16_rn(s[2 * k4][0], s[2 * k4][1]);
+                pa[k4][1] = mma_pack_bf16_rn(s[2 * k4][2], s[2 * k4][3]);
+                pa[k4][2] = mma_pack_bf16_rn(s[2 * k4 + 1][0], s[2 * k4 + 1][1]);
+                pa[k4][3] = mma_pack_bf16_rn(s[2 * k4 + 1][2], s[2 * k4 + 1][3]);
+            }
+            mma_pv_64x128(sV, pa, o, lane);
+        }
+        __syncthreads();   // every warp is done with sV (Vc)
+
+        // (g) exact blocks, ascending. Pending groups at the two waits are
+        // [K_e, V_e] and then [V_e, next K or next Kc].
+        if (ne > 0) {
+            const int j0 = eidx[0];
+            mma_load_tile_rows(sV, Vh + (long)j0 * 64 * MMA_DIM, min(64, T - 64 * j0), tid);
+            mma_cp_commit();
+        }
+        #pragma unroll 1
+        for (int e = 0; e < ne; e++) {
+            const int j = eidx[e];
+            const int Lj = min(64, T - 64 * j);
+            mma_cp_wait<1>();
+            __syncthreads();   // K_e landed
+            mma_qk_64x64(sK, qf, s, lane);
+            __syncthreads();   // every warp is done reading sK
+            bool next = false;
+            if (e + 1 < ne) {
+                const int jn = eidx[e + 1];
+                mma_load_tile_rows(sK, Kh + (long)jn * 64 * MMA_DIM, min(64, T - 64 * jn), tid);
+                mma_cp_commit();
+                next = true;
+            } else if (gi + 1 < G) {
+                mma_load_tile_rows(sK, KCh + (long)(gs + 64) * MMA_DIM, min(64, NT - gs - 64), tid);
+                mma_cp_commit();
+                kc_pending = true;
+                next = true;
+            }
+            float rmax0 = NEG, rmax1 = NEG;
+            #pragma unroll
+            for (int n = 0; n < 8; n++) {
+                const int c0 = n * 8 + 2 * t;
+                if (!ok0 || c0 >= Lj)     s[n][0] = NEG;
+                if (!ok0 || c0 + 1 >= Lj) s[n][1] = NEG;
+                if (!ok1 || c0 >= Lj)     s[n][2] = NEG;
+                if (!ok1 || c0 + 1 >= Lj) s[n][3] = NEG;
+                rmax0 = fmaxf(rmax0, fmaxf(s[n][0], s[n][1]));
+                rmax1 = fmaxf(rmax1, fmaxf(s[n][2], s[n][3]));
+            }
+            rmax0 = fmaxf(rmax0, __shfl_xor_sync(0xffffffffu, rmax0, 1));
+            rmax0 = fmaxf(rmax0, __shfl_xor_sync(0xffffffffu, rmax0, 2));
+            rmax1 = fmaxf(rmax1, __shfl_xor_sync(0xffffffffu, rmax1, 1));
+            rmax1 = fmaxf(rmax1, __shfl_xor_sync(0xffffffffu, rmax1, 2));
+            const float mn0 = fmaxf(m0, rmax0), mn1 = fmaxf(m1, rmax1);
+            const float sf0 = (mn0 == NEG) ? 0.f : mn0, sf1 = (mn1 == NEG) ? 0.f : mn1;
+            const float a0 = exp2f((m0 - sf0) * sl2), a1 = exp2f((m1 - sf1) * sl2);
+            const float ms0 = sf0 * sl2, ms1 = sf1 * sl2;
+            m0 = mn0; m1 = mn1;
+            float ls0 = 0.f, ls1 = 0.f;
+            #pragma unroll
+            for (int n = 0; n < 8; n++) {
+                s[n][0] = exp2f(s[n][0] * sl2 - ms0);
+                s[n][1] = exp2f(s[n][1] * sl2 - ms0);
+                s[n][2] = exp2f(s[n][2] * sl2 - ms1);
+                s[n][3] = exp2f(s[n][3] * sl2 - ms1);
+                ls0 += s[n][0] + s[n][1];
+                ls1 += s[n][2] + s[n][3];
+            }
+            l0 = l0 * a0 + ls0;
+            l1 = l1 * a1 + ls1;
+            #pragma unroll
+            for (int n = 0; n < 16; n++) { o[n][0] *= a0; o[n][1] *= a0; o[n][2] *= a1; o[n][3] *= a1; }
+            #pragma unroll
+            for (int k4 = 0; k4 < 4; k4++) {
+                pa[k4][0] = mma_pack_bf16_rn(s[2 * k4][0], s[2 * k4][1]);
+                pa[k4][1] = mma_pack_bf16_rn(s[2 * k4][2], s[2 * k4][3]);
+                pa[k4][2] = mma_pack_bf16_rn(s[2 * k4 + 1][0], s[2 * k4 + 1][1]);
+                pa[k4][3] = mma_pack_bf16_rn(s[2 * k4 + 1][2], s[2 * k4 + 1][3]);
+            }
+            if (next) mma_cp_wait<1>(); else mma_cp_wait<0>();
+            __syncthreads();   // V_e landed
+            mma_pv_64x128(sV, pa, o, lane);
+            __syncthreads();   // every warp is done reading sV
+            if (e + 1 < ne) {
+                const int jn = eidx[e + 1];
+                mma_load_tile_rows(sV, Vh + (long)jn * 64 * MMA_DIM, min(64, T - 64 * jn), tid);
+                mma_cp_commit();
+            }
+        }
+    }
+
+    // (h) finalize: quad-reduce l, normalise, natural-log LSE.
+    l0 += __shfl_xor_sync(0xffffffffu, l0, 1);
+    l0 += __shfl_xor_sync(0xffffffffu, l0, 2);
+    l1 += __shfl_xor_sync(0xffffffffu, l1, 1);
+    l1 += __shfl_xor_sync(0xffffffffu, l1, 2);
+    const bool bad0 = (l0 == 0.f) || ((__float_as_uint(l0) & 0x7fffffffu) > 0x7f800000u);
+    const bool bad1 = (l1 == 0.f) || ((__float_as_uint(l1) & 0x7fffffffu) > 0x7f800000u);
+    const float inv0 = bad0 ? 1.f : 1.f / l0, inv1 = bad1 ? 1.f : 1.f / l1;
+    const long r0 = bh * (long)T + q0 + row0, r1 = r0 + 8;
+    if (has_lse && t == 0) {
+        if (ok0) lse[r0] = bad0 ? NEG : (m0 * sl2 + log2f(l0)) * SOL_LN2;
+        if (ok1) lse[r1] = bad1 ? NEG : (m1 * sl2 + log2f(l1)) * SOL_LN2;
+    }
+    if (out_is_bf16) {
+        #pragma unroll
+        for (int n = 0; n < 16; n++) {
+            const int col = n * 8 + 2 * t;
+            if (ok0) *reinterpret_cast<unsigned int*>(out_bf16 + r0 * MMA_DIM + col) = mma_pack_bf16_rn(o[n][0] * inv0, o[n][1] * inv0);
+            if (ok1) *reinterpret_cast<unsigned int*>(out_bf16 + r1 * MMA_DIM + col) = mma_pack_bf16_rn(o[n][2] * inv1, o[n][3] * inv1);
+        }
+    } else {
+        #pragma unroll
+        for (int n = 0; n < 16; n++) {
+            const int col = n * 8 + 2 * t;
+            if (ok0) *reinterpret_cast<float2*>(out + r0 * MMA_DIM + col) = make_float2(o[n][0] * inv0, o[n][1] * inv0);
+            if (ok1) *reinterpret_cast<float2*>(out + r1 * MMA_DIM + col) = make_float2(o[n][2] * inv1, o[n][3] * inv1);
+        }
+    }
+#else
+    // sm75 has no bf16 mma; the Rust dispatcher requires sm80+.
+    (void)qb; (void)kb; (void)vb; (void)kc; (void)vc; (void)thr; (void)out; (void)out_bf16;
+    (void)out_is_bf16; (void)lse; (void)has_lse; (void)route_dbg; (void)has_dbg;
+    (void)T; (void)NT; (void)sink_lo; (void)sink_hi; (void)sl2;
     __trap();
 #endif
 }

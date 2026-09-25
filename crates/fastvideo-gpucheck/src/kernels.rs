@@ -1566,6 +1566,249 @@ pub fn run(report: &mut Report, lim: Limits, seed: u64) -> StageResult<()> {
         Ok(())
     })?;
 
+    group(&mut c, "sol", |c| {
+        // Fused Sol-Attn (sol_prep_* + sol_mma_fwd) against the
+        // reference-faithful host oracle, stage by stage: pooled Kc/Vc,
+        // thresholds from the device Kc, route ballots (flips only in the
+        // near-tie band), output and natural-log LSE. Data is "structured"
+        // (per-block bases + noise) so routing is non-trivial.
+        use fastvideo_models::sol_attn::{
+            num_blocks, pool_kv_faithful, round_all, sink_blocks, sol_attn_bhsd,
+            sol_attn_head_faithful, threshold_faithful, SolNumerics, SolParams, SolThresh,
+            ROUTE_GROUP,
+        };
+        const D: usize = 128;
+        let dev = dev()?;
+        if dev.sm_major < 8 {
+            c.report.note(
+                "sol_skipped",
+                json!({"sm_major": dev.sm_major, "needs": "sm80+ (bf16 mma.sync)"}),
+            );
+            return Ok(());
+        }
+        let faithful = SolNumerics {
+            bf16_faithful: true,
+        };
+        let sc = 1.0 / (D as f32).sqrt();
+        let diag = |tau: f32| SolParams::diag(tau, sc);
+        let sunk = |tau: f32, start: Option<usize>, len: usize| SolParams {
+            sink_start: start,
+            sink_tokens: len,
+            ..SolParams::diag(tau, sc)
+        };
+        let exact = SolParams {
+            thresh: SolThresh::Exact,
+            ..SolParams::diag(1.0, sc)
+        };
+        let cases: Vec<(String, usize, usize, SolParams)> = vec![
+            ("t4096_tau1".into(), 2, 4096, diag(1.0)),
+            ("t4096_tau1.25".into(), 2, 4096, diag(1.25)),
+            ("t4096_tau1.5".into(), 2, 4096, diag(1.5)),
+            ("t4000_tail32".into(), 2, 4000, diag(1.0)),
+            ("t4033_tail1".into(), 2, 4033, diag(1.0)),
+            ("t8256_g3".into(), 2, 8256, diag(1.25)),
+            ("sink_suffix100".into(), 2, 4096, sunk(1.0, None, 100)),
+            ("sink_1000_300".into(), 2, 4096, sunk(1.0, Some(1000), 300)),
+            ("sink_all".into(), 1, 2048, sunk(1.0, Some(0), 2048)),
+            ("tau_neg_1e4".into(), 1, 2048, diag(-1.0e4)),
+            ("tau_1e4_local".into(), 2, 4096, diag(1.0e4)),
+            ("tiny_1".into(), 1, 1, diag(1.0)),
+            ("tiny_63".into(), 1, 63, diag(1.0)),
+            ("tiny_64".into(), 1, 64, diag(1.0)),
+            ("tiny_65".into(), 1, 65, diag(1.0)),
+            ("tiny_130".into(), 1, 130, diag(1.0)),
+            ("exact_t4096".into(), 2, 4096, exact),
+            ("batch2x3_t1000".into(), 6, 1000, diag(1.25)),
+        ];
+        let structured = |c: &mut Ctx<'_>, bh: usize, tokens: usize| -> Vec<f32> {
+            let n = num_blocks(tokens);
+            let base = c.rand(bh * n * D, 1.5);
+            let common = c.rand(bh * n * D, 1.5);
+            let noise = c.rand(bh * tokens * D, 0.3);
+            (0..bh * tokens * D)
+                .map(|i| {
+                    let (h, t, d) = (i / (tokens * D), (i / D) % tokens, i % D);
+                    let b = t / 64;
+                    let src = if b % 4 < 2 { &common } else { &base };
+                    src[(h * n + b) * D + d] + noise[i]
+                })
+                .collect()
+        };
+        let bf16_down = |x: &CudaSlice<half::bf16>| -> anyhow::Result<Vec<f32>> {
+            Ok(dev
+                .stream
+                .memcpy_dtov(x)?
+                .iter()
+                .map(|b| b.to_f32())
+                .collect())
+        };
+        for (tag, bh, tokens, p) in cases {
+            let q = structured(c, bh, tokens);
+            let k = structured(c, bh, tokens);
+            let v = c.rand(bh * tokens * D, 1.0);
+            let (qd, kd, vd) = (up(&q)?, up(&k)?, up(&v)?);
+            let prep =
+                ops::sol_prep_device(&qd, &kd, &vd, bh, tokens, D, p.tau, p.scale, p.thresh)?;
+            let sinks = sink_blocks(tokens, p.sink_start, p.sink_tokens);
+            let fwd = ops::sol_fwd_device(&prep, p.scale, sinks, true, true)?;
+            let out = down(&fwd.out)?;
+            let lse = down(fwd.lse.as_ref().expect("lse requested"))?;
+            let route = dev
+                .stream
+                .memcpy_dtov(fwd.route.as_ref().expect("route requested"))?;
+            let kc_dev = bf16_down(&prep.kc)?;
+            let vc_dev = bf16_down(&prep.vc)?;
+            let thr_dev = down(&prep.thr)?;
+
+            let n = num_blocks(tokens);
+            let groups = n.div_ceil(ROUTE_GROUP);
+            let stride = tokens * D;
+            let (mut want_out, mut want_lse) = (Vec::new(), Vec::new());
+            let (mut kv_ulp, mut thr_err) = (0.0f32, 0.0f32);
+            let (mut flips, mut band_violations, mut forced_flips, mut exact_bits) =
+                (0, 0, 0, 0usize);
+            for h in 0..bh {
+                let s = h * stride..(h + 1) * stride;
+                let head = sol_attn_head_faithful(
+                    &q[s.clone()],
+                    &k[s.clone()],
+                    &v[s.clone()],
+                    tokens,
+                    D,
+                    &p,
+                    faithful,
+                );
+                let kr = round_all(&k[s.clone()], faithful);
+                let vr = round_all(&v[s.clone()], faithful);
+                let (kc, vc) = pool_kv_faithful(&kr, &vr, tokens, D, faithful);
+                let blk = h * n * D..(h + 1) * n * D;
+                for (a, b) in kc_dev[blk.clone()]
+                    .iter()
+                    .zip(&kc)
+                    .chain(vc_dev[blk.clone()].iter().zip(&vc))
+                {
+                    // In units of one bf16 ulp of the reference value.
+                    kv_ulp = kv_ulp.max((a - b).abs() / (b.abs() / 128.0).max(1e-30));
+                }
+                let qr = round_all(&q[s], faithful);
+                let thr = threshold_faithful(&qr, &kc_dev[blk], tokens, D, &p, faithful);
+                for (a, b) in thr_dev[h * n..(h + 1) * n].iter().zip(&thr) {
+                    thr_err = thr_err.max((a - b).abs() / b.abs().max(1.0));
+                }
+                for i in 0..n {
+                    for j in 0..n {
+                        let word = route[(h * n + i) * 2 * groups + j / 32];
+                        let got = (word >> (j % 32)) & 1 == 1;
+                        exact_bits += usize::from(got);
+                        if got != head.mask[i * n + j] {
+                            flips += 1;
+                            if i.abs_diff(j) <= 1 || (sinks.0..sinks.1).contains(&j) {
+                                forced_flips += 1;
+                            }
+                            let th = head.threshold[i];
+                            if (head.col_mean[i * n + j] - th).abs() > 1e-3 * th.abs().max(1.0) {
+                                band_violations += 1;
+                            }
+                        }
+                    }
+                }
+                want_out.extend(head.out);
+                want_lse.extend(head.lse);
+            }
+            let pairs = bh * n * n;
+            c.report.check(
+                format!("sol_prep_kv_{tag}"),
+                kv_ulp <= 1.0,
+                json!({"max_bf16_ulp": kv_ulp}),
+                json!({"max_bf16_ulp": 1.0}),
+            )?;
+            c.report.check(
+                format!("sol_prep_thr_{tag}"),
+                thr_err <= 1e-4,
+                json!({"max_rel": thr_err}),
+                json!({"max_rel": 1e-4}),
+            )?;
+            c.report.check(
+                format!("sol_route_{tag}"),
+                forced_flips == 0 && band_violations == 0 && flips * 1000 <= pairs,
+                json!({"flips": flips, "pairs": pairs, "forced_flips": forced_flips,
+                       "outside_band": band_violations,
+                       "exact_fraction": exact_bits as f64 / pairs as f64}),
+                json!({"max_flip_fraction": 1e-3, "forced_flips": 0, "outside_band": 0}),
+            )?;
+            let d = diff(&out, &want_out);
+            let mx = out
+                .iter()
+                .zip(&want_out)
+                .map(|(a, b)| (a - b).abs())
+                .fold(0.0f32, f32::max);
+            c.report.check(
+                format!("sol_out_{tag}"),
+                d.within(1e-2) && mx <= 3e-2,
+                json!({"diff": d.to_json(), "max_abs": mx}),
+                json!({"rel_l2": 1e-2, "max_abs": 3e-2}),
+            )?;
+            let lerr = lse
+                .iter()
+                .zip(&want_lse)
+                .map(|(a, b)| (a - b).abs())
+                .fold(0.0f32, f32::max);
+            c.report.check(
+                format!("sol_lse_{tag}"),
+                lerr <= 2e-3,
+                json!({"max_abs": lerr}),
+                json!({"max_abs": 2e-3}),
+            )?;
+            // The f32 "ideal" oracle (per-row fold order, no bf16) — only
+            // for diag without sinks, which it shares the API of.
+            if p.thresh == SolThresh::Diag && p.sink_tokens == 0 {
+                let ideal = sol_attn_bhsd(&q, &k, &v, 1, bh, tokens, D, p.tau, sc, None, 0)
+                    .map_err(|e| anyhow::anyhow!(e))?;
+                c.cmp(&format!("sol_out_vs_ideal_{tag}"), &out, &ideal, 2e-2)?;
+            }
+        }
+        // All-exact through the public entry must equal dense SDPA.
+        let (b, h, seq) = (1usize, 2usize, 1100usize);
+        let n = b * h * seq * D;
+        let (q, k, v) = (c.rand(n, 1.0), c.rand(n, 1.0), c.rand(n, 1.0));
+        let want = ref_sdpa(&q, &k, &v, b * h, seq, seq, D, sc);
+        let shape = [b, h, seq, D];
+        let (qt, kt, vt) = (t(q, &shape)?, t(k, &shape)?, t(v, &shape)?);
+        let got = fastvideo_cudarc::sol_attn::sol_attn(&qt, &kt, &vt, 1.0, Some(sc), Some(0), seq)?;
+        c.cmp("sol_entry_all_exact_vs_sdpa", &host_of(&got)?, &want, 5e-3)?;
+
+        // Speed of the four launches at a typical video shape.
+        let (bh, tokens) = (16usize, 8192usize);
+        let q = structured(c, bh, tokens);
+        let k = structured(c, bh, tokens);
+        let v = c.rand(bh * tokens * D, 1.0);
+        let (qd, kd, vd) = (up(&q)?, up(&k)?, up(&v)?);
+        let p = diag(1.25);
+        let run = || -> anyhow::Result<()> {
+            let _ = ops::sol_fused_device(&qd, &kd, &vd, bh, tokens, D, &p)?;
+            dev.synchronize()?;
+            Ok(())
+        };
+        run()?;
+        let mut times = Vec::new();
+        for _ in 0..3 {
+            let t0 = std::time::Instant::now();
+            run()?;
+            times.push(t0.elapsed().as_secs_f64());
+        }
+        times.sort_by(|a, b| a.total_cmp(b));
+        let prep = ops::sol_prep_device(&qd, &kd, &vd, bh, tokens, D, p.tau, p.scale, p.thresh)?;
+        let fwd = ops::sol_fwd_device(&prep, p.scale, (0, 0), false, true)?;
+        let route = dev.stream.memcpy_dtov(fwd.route.as_ref().expect("route"))?;
+        let nt = num_blocks(tokens);
+        let exact: u32 = route.iter().map(|w| w.count_ones()).sum();
+        c.report.note(
+            format!("sol_time_bh{bh}_t{tokens}"),
+            json!({"median_s": times[1], "exact_fraction": exact as f64 / (bh * nt * nt) as f64}),
+        );
+        Ok(())
+    })?;
+
     group(&mut c, "attention", |c| {
         // Includes the Wan VAE mid-block shape (one 384-wide head) and a small
         // score budget that forces the chunked in-place path.
