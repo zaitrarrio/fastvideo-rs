@@ -76,8 +76,9 @@ chunk=2; chunk=4 OOMs on 24 GB) the same day, and later to TAEHV.
 - VSA output is a different sample with visibly more saturated colour
   (`clipped_fraction` 0.0218 vs 0.008 dense); never verified against
   upstream's own VSA frames.
-- A fused block-sparse kernel would remove the gather. (Measured 2026-09-19:
-  the scalar fused kernel was 5.5-8.6x slower than the gather; the gather
-  path stayed.)
+- A fused block-sparse kernel would remove the gather. (Measured the same
+  day, `FVID-2026-09-18-fused-block-sparse-rejected`: the scalar fused kernel
+  was 5.5-8.6x slower than the gather; the gather path stayed, and the fine
+  stage moved to `mma.sync` tensor cores on 2026-09-19.)
 - Exact-mode parity OOM on plain 24 GB cards; suspects are the mempool release
   threshold (`u64::MAX`) and cuDNN conv3d workspace.

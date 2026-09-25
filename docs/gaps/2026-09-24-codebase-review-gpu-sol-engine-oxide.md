@@ -211,9 +211,18 @@ exists.
 
 ## What happened after
 
-Same day (2026-09-24, WS-A..WS-J): device Sol-Attn / PISA stages landed in
-`wan/sol_ops.rs`, Wan 14B Sol and 5B/A14B PISA routes were added, the A14B
-controller was ported, Spark stage 1 moved to VSA 0.9 + VSA-DataFree LoRA,
-bf16 activations became an opt-in (`FASTVIDEO_BF16_ACT`), and
-`stats::host_algorithm` began refusing CPU math under a live device. The
-2026-09-25 code-level gap analysis re-audited the result.
+Same day (2026-09-24, workstreams WS-A..WS-J, one decision-log entry each):
+device Sol-Attn / PISA stages landed in `wan/sol_ops.rs`
+(`FVID-2026-09-24-sol-device-partials`); Wan 14B Sol, 5B/A14B PISA routes and
+the A14B controller were ported (`FVID-2026-09-24-wan-sol-pisa-a14b-cache`);
+Spark stage 1 moved to VSA 0.9 + VSA-DataFree LoRA
+(`FVID-2026-09-24-solh3-spark-vsa-bf16`); LTX-2 sampler fixes
+(`FVID-2026-09-24-ltx2-sampler-correctness`); host loops moved off device
+(`FVID-2026-09-24-host-loops-off-device`); bf16 activations became an opt-in
+(`FVID-2026-09-24-bf16-activations`); NVFP4 moved to TE `static_6` with a
+device reconstruct and an excluded `fastvideo-oxide-kernels` crate
+(`FVID-2026-09-24-nvfp4-te-static6-oxide`); and `stats::host_algorithm` began
+refusing CPU math under a live device
+(`FVID-2026-09-24-phase0-strict-host-hunyuan-gen`). Most entries close with
+"GPU untested here". The 2026-09-25 code-level gap analysis re-audited the
+result.
