@@ -9,6 +9,8 @@
 #   runpod.sh gpu       three PRO 6000 96 GB pods (refuses if volume incomplete)
 #   runpod.sh smoke     cheap Blackwell nvrtc+kernels, then destroy
 #   runpod.sh matrix    one PRO 6000; restart between H3/LTX/Hunyuan/Wan
+#   runpod.sh rtx6000   one PRO 6000 on the CI image for HEAD: weight gate,
+#                       then H3 / FastH3 / LTX-2.5 parity cells
 #   runpod.sh b200      US volume + H3/FastH3/LTX fetch + 1× B200 warm E2E
 #   runpod.sh offers    probe B200 / PRO 6000 stock (US DCs)
 #   runpod.sh status    volume / pods / cost
@@ -997,6 +999,42 @@ cmd_b200() {
   rp_log "b200 PASS (see $RP_STATE/b200/runs) — volumes kept ($vol and $RP_EUR_VOLUME_KEEP)"
 }
 
+# RTX PRO 6000 parity baseline. The image is the CI build of the current
+# commit (sha-<7>), never a locally built binary, so every result maps to a
+# pushed main commit. Weight completeness is checked per cell on the box.
+cmd_rtx6000() {
+  require_tools curl jq ssh rsync git
+  rp_load_key
+  [[ -f "$RP_SSH_KEY" ]] || die "ssh key $RP_SSH_KEY missing"
+  local sha img vol dc auth name id host port out
+  sha="$(git -C "$FV_ROOT" rev-parse --short=7 HEAD)"
+  git -C "$FV_ROOT" diff --quiet HEAD -- crates scripts || die "uncommitted changes: the CI image would not match"
+  img="${RUNPOD_IMAGE_PIN:-ghcr.io/zaitrarrio/fastvideo-rs-runtime:sha-$sha}"
+  RP_IMAGE="$img"
+  vol="$(jq -r '.id // empty' "$RP_STATE/volume.json" 2>/dev/null || cat "$RP_STATE/volume.id" 2>/dev/null || true)"
+  [[ -n "$vol" ]] || die "no volume id (run: runpod.sh fetch)"
+  dc="$(rp_volume_dc "$vol")"
+  auth="$(rp_ensure_registry_auth)"
+  name="${GPU_NAME_PREFIX}-rtx6000-$(date -u +%Y%m%d%H%M%S)"
+  rp_log "▶ rtx6000 parity: $RP_GPU_TYPE image=$img volume=$vol dc=$dc"
+  id="$(rp_create_gpu_pod "$name" "$vol" "$dc" "$auth" "$RP_GPU_TYPE" 0)" || die "rtx6000 GPU create failed"
+  echo "$id" >"$RP_STATE/gpu-rtx6000.id"
+  nohup bash -c "sleep 14400; curl -sS -X DELETE -H 'Authorization: Bearer ${RUNPOD_API_KEY}' '${RUNPOD_API_BASE}/pods/${id}' >/dev/null" >/dev/null 2>&1 &
+  read -r host port < <(rp_wait_ssh "$id" 900)
+  rp_ssh "$host" "$port" "cat /opt/fastvideo-rs/target/release/fv-gpucheck.build-id; nvidia-smi -L"
+  rp_ssh "$host" "$port" "FV_WEIGHTS=/workspace/weights bash /opt/fastvideo-rs/scripts/gpu/verify-weights.sh fasth3-8step fasth3-4step-vsa fasth3-4step-dense sol-h3 sol-h3-spark ltx25-two-stage" \
+    || rp_log "WARN: some weight trees are incomplete; those cells will be skipped"
+  rp_ssh "$host" "$port" "export FV_WORK=/workspace FV_GEN_TIMEOUT_S=${FV_GEN_TIMEOUT_S:-3600}
+    bash /opt/fastvideo-rs/scripts/gpu/runpod-matrix.sh rtx6000" || rp_log "rtx6000 family returned non-zero"
+  out="$RP_STATE/rtx6000/$sha"
+  mkdir -p "$out"
+  rsync -az --exclude 'frames/' -e "ssh -i $RP_SSH_KEY -p $port -o IdentitiesOnly=yes ${FV_SSH_OPTS[*]}" \
+    "root@$host:/workspace/runs/rtx6000/" "$out/" || true
+  rp_log "destroying rtx6000 pod $id"
+  rp_destroy_pod "$id"
+  rp_log "rtx6000 done → $out"
+}
+
 usage() { sed -n '2,14p' "$0" | sed 's/^# \{0,1\}//'; exit 2; }
 
 case "${1:-}" in
@@ -1007,6 +1045,7 @@ case "${1:-}" in
   gpu) cmd_gpu ;;
   smoke) cmd_smoke ;;
   matrix) cmd_matrix ;;
+  rtx6000) cmd_rtx6000 ;;
   b200) cmd_b200 ;;
   offers) cmd_offers ;;
   status) cmd_status ;;

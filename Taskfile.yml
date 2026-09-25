@@ -168,6 +168,14 @@ tasks:
     desc: Clip tier — full validation plus two 8s clips (~$0.12)
     cmds: [{ task: run, vars: { TIER: clip } }]
 
+  rtx6000:
+    desc: 'Rent one RTX PRO 6000 on Runpod (CI image for HEAD): weight gate, then H3 / FastH3 / LTX-2.5 parity cells (~$2/hr)'
+    cmds: ['bash scripts/gpu/runpod.sh rtx6000']
+
+  weights:verify:
+    desc: 'On a box: prove the H3 / FastH3 / LTX-2.5 weight trees complete (no GPU needed)'
+    cmds: ['bash scripts/gpu/verify-weights.sh fasth3-8step fasth3-4step-vsa fasth3-4step-dense sol-h3 sol-h3-spark ltx25-two-stage']
+
   compare:
     desc: Compare tier — our stack against upstream FastVideo on one box (~$0.30)
     cmds: [{ task: run, vars: { TIER: compare } }]

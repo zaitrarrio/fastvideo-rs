@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
 # Runs ON a Runpod GPU box. Family: h3 | ltx | hunyuan | wan | b200
 # One process per family. Continues to the next cell on failure.
-# Spark joint LTX refine stays off (FASTVIDEO_LTX2_WEIGHTS unset).
+# Spark joint LTX refine stays off (FASTVIDEO_LTX2_WEIGHTS unset) except in
+# the rtx6000 parity family, which runs the full Spark bridge.
 set -euo pipefail
-FAMILY="${1:?usage: runpod-matrix.sh h3|ltx|hunyuan|wan|b200}"
+FAMILY="${1:?usage: runpod-matrix.sh h3|ltx|hunyuan|wan|b200|rtx6000}"
 WORK="${FV_WORK:-/workspace}"
 BIN="${FV_GPUCHECK:-/opt/fastvideo-rs/target/release/fv-gpucheck}"
 W="$WORK/weights"
@@ -122,6 +123,7 @@ case "$FAMILY" in
     spark_up=""
     spark_ad=""
     for p in \
+      "$W/upscaler/minimax_h3_latent_upscaler_3d_conv_v1/minimax_h3_latent_upscaler_3d_conv_v1_bf16.safetensors" \
       "$W/upscaler/minimax_h3_latent_upscaler_3d_bf16.safetensors" \
       "$W/h3-spark-upscaler/minimax_h3_latent_upscaler_3d_bf16.safetensors" \
       "$W/h3-spark/minimax_h3_latent_upscaler_3d_bf16.safetensors" \
@@ -297,6 +299,7 @@ case "$FAMILY" in
     spark_up=""
     spark_ad=""
     for p in \
+      "$W/upscaler/minimax_h3_latent_upscaler_3d_conv_v1/minimax_h3_latent_upscaler_3d_conv_v1_bf16.safetensors" \
       "$W/upscaler/minimax_h3_latent_upscaler_3d_bf16.safetensors" \
       "$W/h3-spark-upscaler/minimax_h3_latent_upscaler_3d_bf16.safetensors" \
       "$W/h3-spark/minimax_h3_latent_upscaler_3d_bf16.safetensors" \
@@ -361,6 +364,63 @@ case "$FAMILY" in
         --seed "$SEED" \
         --warm \
         --clip "$RUNS/ltx20-distilled-8step/frames"
+    ;;
+  rtx6000)
+    # RTX PRO 6000 parity baseline: H3, FastH3 and LTX-2.5 on the sol-engine
+    # single-GPU contracts. Every cell first proves its weight tree complete
+    # (verify-weights.sh); an incomplete tree is recorded, not run.
+    VERIFY="$(dirname "${BASH_SOURCE[0]}")/verify-weights.sh"
+    gated_cell() {
+      local name="$1" wcell="$2"
+      shift 2
+      if ! FV_WEIGHTS="$W" bash "$VERIFY" "$wcell" >"$RUNS/$name.weights.log" 2>&1; then
+        mkdir -p "$RUNS/$name"
+        log "SKIP $name: weights incomplete"
+        tee -a "$LOG" <"$RUNS/$name.weights.log"
+        write_json "$RUNS/$name/summary.json" "$(printf '{"cell":"%s","family":"%s","exit":null,"skipped":"weights incomplete"}' "$name" "$FAMILY")"
+        return 0
+      fi
+      run_cell "$name" "$@"
+    }
+    h3_common=(
+      --prompt "$PROMPT"
+      --seconds 5
+      --seed "$SEED"
+      --text-encoder auto
+      --text-cache "$WORK/h3-text-cache"
+      --text-weights "$W/h3-base"
+      --warm
+    )
+    gated_cell fasth3-8step fasth3-8step \
+      "$BIN" --mode fast h3 gen --weights "$W/h3-8step" --h3-recipe 8step \
+        --adaln-cache "$RUNS/fasth3-8step-adaln.cache" \
+        --clip-dir "$RUNS/fasth3-8step/frames" "${h3_common[@]}"
+    gated_cell fasth3-4step-vsa fasth3-4step-vsa \
+      "$BIN" --mode fast h3 gen --weights "$W/h3-8step" --h3-recipe 4step-vsa \
+        --adaln-cache "$RUNS/fasth3-4step-vsa-adaln.cache" \
+        --clip-dir "$RUNS/fasth3-4step-vsa/frames" "${h3_common[@]}"
+    # Sol-H3 4-step on one GPU is dense upstream (engine.py refuses Sol at world_size 1).
+    gated_cell sol-h3 sol-h3 \
+      "$BIN" --mode fast h3 gen --weights "$W/h3-base" --h3-recipe sol-h3 \
+        --adaln-cache "$RUNS/sol-h3-adaln.cache" \
+        --clip-dir "$RUNS/sol-h3/frames" "${h3_common[@]}"
+    # The upstream single-GPU Sol-Attn + TeaCache route (RTX4090/5090 profile).
+    gated_cell sol-h3-rtx fasth3-4step-dense \
+      "$BIN" --mode fast h3 gen --weights "$W/h3-base" --h3-recipe sol-h3-rtx \
+        --adaln-cache "$RUNS/sol-h3-rtx-adaln.cache" \
+        --clip-dir "$RUNS/sol-h3-rtx/frames" "${h3_common[@]}"
+    gated_cell sol-h3-spark sol-h3-spark \
+      env FASTVIDEO_LTX2_WEIGHTS="$W/ltx25" \
+        FASTVIDEO_H3_UPSCALER="$W/upscaler/minimax_h3_latent_upscaler_3d_conv_v1/minimax_h3_latent_upscaler_3d_conv_v1_bf16.safetensors" \
+        FASTVIDEO_H3_LTX_ADAPTER="$W/h3-to-ltx" \
+      "$BIN" --mode fast h3 gen --weights "$W/h3-base" --h3-recipe sol-h3-spark \
+        --adaln-cache "$RUNS/sol-h3-spark-adaln.cache" \
+        --clip-dir "$RUNS/sol-h3-spark/frames" "${h3_common[@]}"
+    gated_cell ltx25-two-stage ltx25-two-stage \
+      "$BIN" --mode fast ltx2 gen --model-version 2.5 \
+        --weights "$W/ltx25" --dit "$W/ltx25" \
+        --prompt "$PROMPT" --seed "$SEED" --two-stage --text streamed --warm \
+        --clip "$RUNS/ltx25-two-stage/frames"
     ;;
   *)
     log "FATAL: unknown family $FAMILY"

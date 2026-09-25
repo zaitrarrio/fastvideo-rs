@@ -11,12 +11,16 @@ verify_one() {
   size=$(wc -c <"$p" | tr -d ' ')
   # header length: first 8 bytes LE
   hlen=$(od -An -t u8 -N 8 -j 0 "$p" | tr -d ' ')
+  if [[ -z "$hlen" ]] || (( size < 8 || hlen > size - 8 )); then
+    echo "truncated header $p: size=$size header_len=${hlen:-none}" >&2
+    return 1
+  fi
   # Parse max data_offsets[1] from the JSON header with a tiny awk/python-free path:
   # read header bytes and find the largest "data_offsets":[a,b] second value.
   local header
   header=$(dd if="$p" bs=1 skip=8 count="$hlen" 2>/dev/null)
   end=$(printf '%s' "$header" | grep -oE '"data_offsets"[[:space:]]*:[[:space:]]*\[[[:space:]]*[0-9]+[[:space:]]*,[[:space:]]*[0-9]+' \
-    | grep -oE '[0-9]+$' | sort -n | tail -1)
+    | grep -oE '[0-9]+$' | sort -n | tail -1 || true)
   [[ -n "$end" ]] || { echo "no data_offsets in $p" >&2; return 1; }
   local want=$((8 + hlen + end))
   if [[ "$size" -ne "$want" ]]; then
