@@ -70,7 +70,7 @@ def _curl(args: list[str]) -> bytes:
         if r.returncode == 0:
             return r.stdout
         last = r.stderr.decode(errors="replace")
-        time.sleep(2 * (attempt + 1))
+        time.sleep((30 if "429" in (last or "") else 2) * (attempt + 1))
     raise RuntimeError(f"curl failed: {args[-1]}: {last}")
 
 
@@ -455,6 +455,13 @@ def reconstruct(repo: str, rev: str, path: str, out: Path, plan, src: Sources, v
         res["sha256"] = h.hexdigest()
         res["ok"] = res["sha256"] == oid
         if not res["ok"]:
+            if os.environ.get("RECON_ACCEPT_MISMATCH") == "1":
+                # Known, accepted difference (see pod.sh weights_ltx25): skip the
+                # per-tensor Hub sampling, which trips the Hub's rate limit.
+                os.replace(tmp, out)
+                res["accepted_mismatch"] = True
+                log(f"{path}: SHA MISMATCH {res['sha256']} != {oid}; accepted without repair")
+                return res
             log(f"{path}: SHA MISMATCH {res['sha256']} != {oid}; sampling every tensor against the Hub")
             res["diff"] = repair(tmp, header, hlen, remote)
             h = hashlib.sha256()

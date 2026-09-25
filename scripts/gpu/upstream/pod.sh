@@ -128,6 +128,10 @@ weights_fasth3_8step() {
 # Lightricks/LTX-2.5 single-file packs the sol-engine RTX5090 driver loads,
 # rebuilt byte-exactly from the Diffusers copy (needs an HF token with access to
 # the gated repo, for headers and the few remote tensors only).
+# Measured: upsampler, video VAE and audio VAE rebuild byte-exactly. The text
+# encoder (Gemma layers 12-47) and the DiT's embeddings connectors differ from
+# the Diffusers copy, so with RECON_ACCEPT_MISMATCH=1 those two packs carry the
+# Diffusers numbers (the ones our Rust port loads) in the original layout.
 LTX_REV=5e6e71018ee1756ed329b697a7b4aedc934dfce9
 weights_ltx25() {
   local L="$W/ltx25" o="$UW/LTX-2.5" rc=0
