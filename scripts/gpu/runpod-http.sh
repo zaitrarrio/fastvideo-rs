@@ -23,6 +23,14 @@
 # (per-cell cap, default 3600), FV_EXTRA_ENV (space-separated K=V for cells).
 set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# Bash reads a script as it runs; a runs lasts hours, so run from a private
+# copy and let the repo copy be edited meanwhile.
+if [[ -z "${FV_HTTP_COPY:-}" ]]; then
+  copy="$(mktemp "${TMPDIR:-/tmp}/runpod-http.XXXXXX")"
+  cp "${BASH_SOURCE[0]}" "$copy"
+  FV_HTTP_COPY=1 FV_HTTP_HERE="$HERE" exec bash "$copy" "$@"
+fi
+HERE="${FV_HTTP_HERE:-$HERE}"
 ROOT="$(cd "$HERE/../.." && pwd)"
 API="${RUNPOD_API_BASE:-https://rest.runpod.io/v1}"
 GPU="${RUNPOD_GPU_TYPE:-NVIDIA RTX PRO 6000 Blackwell Server Edition}"
