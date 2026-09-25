@@ -2,6 +2,46 @@
 
 Project code: FVID
 
+### FVID · 2026-09-25 · FVID-2026-09-25-b200-warm-suite
+- Trigger: warm H3 / FastH3 / LTX architectural-parity suite on 1× B200 NOW; existing US-CA-2 volume only; pinned image `build-ec5a6cc0988aca26`
+- Options: US-CA-2 B200 + volume `s2k01690bi` (528G TAEH3 + Preview LoRA); fall back to H200 / PRO 6000 if stock gone; wait / invent numbers
+- Decision: **rent 1× NVIDIA B200** in **US-CA-2 only**, attach existing `s2k01690bi`. Pin DC. Do not create or delete volumes (`jg48s6o1w0` unused/kept). Run `runpod-matrix.sh b200` (`--warm`, TAEH3, 3600s cell cap). Oxide GEMM unset. Reap GPU after pull. No H200/PRO 6000 fallback.
+- Reason: stock just probed US-CA-2 B200 Low $5.98/hr under $20; published FastH3 Preview v1 is **16.2s warm E2E on 1× B200**; H200 same-volume 4step-vsa was **35.0s / 7.0 s/step**
+- Reversibility: cheap — GPU destroyed; both volumes kept; no script commit (rsync `runpod-matrix.sh` only)
+- Executed by: Executor
+- ADR: none
+- Verification: driver **595.91.07**, `box_build_id=ec5a6cc0988aca26`, **Cubin(100)** / sm_100 / compute_cap 10.0. Image stayed `ghcr.io/zaitrarrio/fastvideo-rs-runtime:build-ec5a6cc0988aca26` (newer main CI 36080171264 rebuilt the same build-id). Artifacts `artifacts/runpod/b200/runs/`. GPU reaped; volumes `s2k01690bi` + `jg48s6o1w0` still present.
+  - Offer: `NVIDIA B200` US-CA-2 Low **$5.98/hr**; billed **$6.79/hr**. First pod `l5h1a35e4bdala` (05:42:16Z) was destroyed by a local cost-watchdog using a 2025 epoch; re-probe still Low $5.98; recreated `sd0nc9o8atcwdy` (`fv-gpu-b200-20260925054906`, same host 38.80.152.146:30236). Cost ≈ **$10.2** (first ~6.4 min + second 05:49:07–07:13:20Z × $6.79/hr). EUR volume unused.
+  - **fasth3-4step-vsa** (headline): ok 462s. load 404.6s. denoise **21.4s**. generate **26.5s**. steps **5.33 / 5.34 / 5.33 / 5.41**. decode 2.76s. peak 108173 MiB. TAEH3. vs published FastH3 **16.2s B200 E2E**: 26.5s is **1.64×**. vs H200 same-volume **35.0s / 7.0 s/step**: **0.76×** (1.32× faster).
+  - **fasth3-8step**: ok 356s. load 243s. denoise 49.1s. generate **54.3s**. steps **~6.14s ×8**. peak 107661 MiB. vs H200 70.0s / 8.02 s/step.
+  - **fasth3-4step-dense**: ok 534s. load 289s. denoise 116.2s. generate **120.8s**. steps **~29.1s ×4**. peak 104941 MiB. vs H200 164.4s / 39.6 s/step.
+  - **sol-h3**: ok 2080s. load 415s. denoise 824.4s. generate **830.0s**. steps **28.9 / 324.4 / 261.7 / 209.4** (sol-attn kernel). peak 107615 MiB. vs H200 1364s (39.6 / 543 / 433 / 341).
+  - **sol-h3-spark**: FAIL 433s exit=2. VSA denoise **5.5 / 5.4 / 5.3 / 5.3 s/step** then `h3 adapter: only model_type "tiny" is published, got null`.
+  - **ltx25-two-stage**: ok 522s. warmup 423s. measured ancestral **~0.66–0.69s**, refine **1.20 / 1.20 / 1.16s**. 121 frames + wav + mp4.
+  - **ltx23-two-stage**: FAIL 200s exit=2. `missing weight key: decoder.mid_block.resnets.0.conv1.conv.weight`.
+  - **ltx20-distilled-8step**: ok 369s. warmup 129s. warm steps **0.67s ×8**. vs H200 0.96 / 0.87×7; vs Phase 3 PRO 6000 **1.47 s/step**.
+  - Skipped: none of TAEH3 / Preview LoRA (both on US volume). Oxide GEMM off (`gemm=Bf16`). No family restart (b200 driver is one process).
+
+### FVID · 2026-09-24 · FVID-2026-09-24-h200-warm-suite
+- Trigger: warm H3 / FastH3 / LTX architectural-parity suite on 1× H200; existing volume only; pinned image `build-ec5a6cc0988aca26`
+- Options: US-CA-2 H200 SXM + volume `s2k01690bi` (TAEH3 + Preview LoRA); EUR-IS-1 H200 + `jg48s6o1w0` (no H200 stock); wait / invent numbers / rent B200 or PRO 6000
+- Decision: **rent 1× NVIDIA H200** (`hr6x1l507yzk1x`, US-CA-2, offer $3.59 / billed **$4.59/hr**) on existing volume `s2k01690bi`. Pin DC. Do not create or delete volumes (`jg48s6o1w0` kept). Run `runpod-matrix.sh b200` (`--warm`, TAEH3, 3600s cell cap). Oxide GEMM unset. Reap GPU after pull.
+- Reason: first in-stock H200 under $20 was US-CA-2 Low; that DC already has the preferred 528G tree
+- Reversibility: cheap — GPU destroyed; both volumes kept; no script commit (rsync only)
+- Executed by: Executor
+- ADR: none
+- Verification: driver **580.126.20** (CUDA 13.0), `box_build_id=ec5a6cc0988aca26`, **Cubin(90)** / sm_90. Artifacts `artifacts/runpod/h200/runs/`. Cost ≈ **$9.10** (02:57:28–04:56Z × $4.59/hr). GPU reaped; volumes `s2k01690bi` + `jg48s6o1w0` still present.
+  - Offers: `NVIDIA H200` US-CA-2 Low $3.59; EUR-IS-1 none; H200 NVL both DCs none. Did not rent B200 / PRO 6000.
+  - **fasth3-4step-vsa**: ok 675s. load 601.8s. denoise **28.0s**. generate **35.0s**. steps **7.01 / 7.00 / 7.00 / 7.02**. peak 106654 MiB. TAEH3. vs published FastH3 **16.2s B200 E2E**: 35.0s is **2.16×**. vs prior H200 Preview **7.7 s/step**: **7.0 s/step** (~0.91×).
+  - **fasth3-8step**: ok 394s. load 251s. denoise 64.2s. generate 70.0s. steps **~8.02s ×8**. peak 107742 MiB.
+  - **fasth3-4step-dense**: ok 683s. load 352s. denoise 158.4s. generate 164.4s. steps **~39.6s ×4**. peak 100080 MiB.
+  - **sol-h3**: ok 3128s. load 373s. denoise 1356.9s. generate 1363.9s. steps **39.6 / 543.3 / 433.0 / 341.0** (sol-attn kernel). peak 106814 MiB. Fused Preview LoRA dense-datafree 362 pairs.
+  - **sol-h3-spark**: FAIL 426s exit=2. VSA 0.9 denoise **7.0–7.1 s/step** then `h3 adapter: only model_type "tiny" is published, got null`.
+  - **ltx25-two-stage**: ok 527s. warmup 417s. measured ancestral **~0.67–0.83s**, refine **~1.39–1.44s**. 121 frames + wav + mp4.
+  - **ltx23-two-stage**: FAIL 174s exit=2. `missing weight key: decoder.mid_block.resnets.0.conv1.conv.weight`.
+  - **ltx20-distilled-8step**: ok 357s. warmup 127s. steps **0.96 / 0.87×7**. vs Phase 3 PRO 6000 **1.47 s/step**.
+  - Skipped: none of TAEH3 / Preview LoRA (both on US volume). No family restart (b200 driver is one process).
+
 ### FVID · 2026-09-24 · FVID-2026-09-24-b200-arch-parity
 - Trigger: user wants architectural parity on B200 for H3 / FastH3 / LTX, then later fine-tune RTX 6000
 - Options: raise `RUNPOD_GPU_MAX_DPH` to $20 and create a new US volume for B200; reuse EUR-IS-1 `jg48s6o1w0` (cannot attach to US B200); discard prior PRO 6000 / 8-step / official-VAE work
