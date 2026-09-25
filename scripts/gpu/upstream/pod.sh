@@ -18,7 +18,14 @@ mkdir -p "$OUT"
 export LIVE="$OUT/live.log"
 # UP_LOCAL=1 (default via runpod-http.sh): everything we write stays on the
 # container disk; the shared volume is only read (weights, HF token).
-if [[ "${UP_LOCAL:-0}" == 1 ]]; then UP="${UP:-/root/upstream}"; else UP="${UP:-/workspace/upstream}"; fi
+if [[ "${UP_LOCAL:-0}" == 1 ]]; then
+  UP="${UP:-/root/upstream}"
+  # The image sets HOME=/workspace: move every tool cache off the volume.
+  export HOME=/root XDG_CACHE_HOME=/root/.cache UV_CACHE_DIR=/root/.cache/uv PIP_CACHE_DIR=/root/.cache/pip \
+    TRITON_CACHE_DIR=/root/.cache/triton TORCHINDUCTOR_CACHE_DIR=/root/.cache/inductor
+else
+  UP="${UP:-/workspace/upstream}"
+fi
 export UP
 W="${W:-/workspace/weights}"
 UW="$UP/weights"
@@ -74,7 +81,9 @@ info_box() {
       [[ -x "$UP/$v/bin/python" ]] && echo "$v: $(cat "$UP/$v/.stamp" 2>/dev/null)"
     done
     [[ -f "$UP/sol-ltx25/.stamp" ]] && echo "sol-ltx25: $(cat "$UP/sol-ltx25/.stamp")"
+    env | grep -E '^(HOME|UV_|XDG_|HF_HOME)=' | sort
   } >"$OUT/box.txt" 2>&1
+  return 0
 }
 
 # ---------------------------------------------------------------- weights
