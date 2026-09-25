@@ -1548,6 +1548,10 @@ fn gen(
             "step_s": t.step_s,
             "audio_decode_s": t.audio_decode_s,
             "video_decode_s": t.video_decode_s,
+            "video_vae_s": t.video_vae_s,
+            "video_rgb_s": t.video_rgb_s,
+            "video_push_s": t.video_push_s,
+            "video_wait_s": t.video_wait_s,
             "write_s": t.write_s,
             "decode_s": t.audio_decode_s + t.video_decode_s,
         })

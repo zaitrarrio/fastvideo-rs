@@ -168,6 +168,11 @@ kernel_fns!(
     amax_abs_mixed,
     w8a8_quantize,
     w8a8_dequantize,
+    // ---- h3 video vae region (appended; see the end of kernels.cu) ----
+    h3v_residual_norm_bf16,
+    h3v_qkv_heads_bf16,
+    h3v_merge_heads_bf16,
+    h3v_swiglu_bf16,
 );
 
 /// NVRTC-compile the kernel module for `sm_major.sm_minor` without touching a
