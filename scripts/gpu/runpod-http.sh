@@ -3,11 +3,11 @@
 # commit, driven entirely through the REST API and the pod's HTTPS proxy.
 # For hosts (sandboxes, CI) that can reach https://*.runpod.io but not TCP 22.
 #
-#   runpod-http.sh run [sha]     create pod, run the rtx6000 family, pull
+#   runpod-http.sh run [sha]     create pod, run $FV_FAMILY (default rtx6000), pull
 #                                summaries + logs, destroy the pod
 #   runpod-http.sh weights       weight gate only (verify-weights.sh), no cells
 #   runpod-http.sh kernels [sha] fv-gpucheck kernels (every kernel vs host math)
-#   runpod-http.sh all [sha]     kernels, then the rtx6000 cells, on one pod
+#   runpod-http.sh all [sha]     kernels, then the $FV_FAMILY cells, on one pod
 #                                (pod creation retries for FV_CREATE_WAIT_S)
 #   runpod-http.sh status <pod>  print live.log from a running pod
 #   runpod-http.sh down <pod>    destroy a pod
@@ -17,7 +17,8 @@
 # https://<pod>-8000.proxy.runpod.net. The pod is always deleted at the end,
 # and a wall-clock cap (FV_POD_CAP_S, default 4h) deletes it regardless.
 #
-# Env: RUNPOD_API_KEY, RUNPOD_VOLUME_ID (default: volume named
+# Env: FV_FAMILY (runpod-matrix.sh family, default rtx6000; rtx5090 is the
+# sol-engine RTX 5090 suite), RUNPOD_GPU_TYPE (default RTX PRO 6000), RUNPOD_API_KEY, RUNPOD_VOLUME_ID (default: volume named
 # fv-weights-h3-ltx-hy), FV_CELLS (subset of cells), FV_GEN_TIMEOUT_S
 # (per-cell cap, default 3600), FV_EXTRA_ENV (space-separated K=V for cells).
 set -euo pipefail
@@ -28,7 +29,8 @@ GPU="${RUNPOD_GPU_TYPE:-NVIDIA RTX PRO 6000 Blackwell Server Edition}"
 VOL_NAME="${RUNPOD_VOLUME_NAME:-fv-weights-h3-ltx-hy}"
 MAX_DPH="${RUNPOD_GPU_MAX_DPH:-5}"
 CAP_S="${FV_POD_CAP_S:-14400}"
-OUT_ROOT="$ROOT/artifacts/runpod/rtx6000"
+FAMILY="${FV_FAMILY:-rtx6000}"
+OUT_ROOT="$ROOT/artifacts/runpod/$FAMILY"
 : "${RUNPOD_API_KEY:?RUNPOD_API_KEY missing}"
 
 die() { echo "runpod-http: $*" >&2; exit 1; }
@@ -54,7 +56,7 @@ start_cmd() {
   local cells="fasth3-8step fasth3-4step-vsa fasth3-4step-dense sol-h3 sol-h3-spark ltx25-two-stage"
   cat <<EOF
 set -u
-OUT=/workspace/runs/rtx6000/$tag
+OUT=/workspace/runs/$FAMILY/$tag
 mkdir -p "\$OUT"
 ( apt-get update -qq >/dev/null 2>&1; apt-get install -y -qq python3-minimal >/dev/null 2>&1
   cd /workspace/runs && exec python3 -m http.server 8000 ) >"\$OUT/http.log" 2>&1 &
@@ -73,7 +75,7 @@ fi
 if [ "$mode" = run ] || [ "$mode" = all ]; then
   env ${FV_EXTRA_ENV:-} FV_WORK=/workspace FV_RUN_TAG=$tag FV_CELLS="${FV_CELLS:-}" \
     FV_GEN_TIMEOUT_S=${FV_GEN_TIMEOUT_S:-3600} \
-    bash /opt/fastvideo-rs/scripts/gpu/runpod-matrix.sh rtx6000 >"\$OUT/matrix.out" 2>&1
+    bash /opt/fastvideo-rs/scripts/gpu/runpod-matrix.sh $FAMILY >"\$OUT/matrix.out" 2>&1
 fi
 touch "\$OUT/DONE"
 exec sleep infinity
@@ -84,7 +86,7 @@ create_pod() {
   local image="$1" tag="$2" mode="$3" vol dc payload resp id dph
   read -r vol dc < <(volume) || true
   [[ -n "${vol:-}" ]] || die "no network volume ($VOL_NAME)"
-  payload="$(jq -n --arg name "fv-rtx6000-$tag" --arg image "$image" --arg vol "$vol" \
+  payload="$(jq -n --arg name "fv-$FAMILY-$tag" --arg image "$image" --arg vol "$vol" \
     --arg dc "$dc" --arg gpu "$GPU" --arg cmd "$(start_cmd "$image" "$tag" "$mode")" '{
       name: $name, imageName: $image, cloudType: "SECURE", computeType: "GPU",
       gpuTypeIds: [$gpu], gpuCount: 1, containerDiskInGb: 40, volumeInGb: 0,
@@ -119,16 +121,16 @@ fetch_results() {
   local id="$1" tag="$2" out="$OUT_ROOT/$tag" f cell
   mkdir -p "$out"
   for f in box.txt tree.txt weights.log matrix.out live.log kernels.out kernels.json; do
-    proxy "$id" "rtx6000/$tag/$f" >"$out/$f" 2>/dev/null || true
+    proxy "$id" "$FAMILY/$tag/$f" >"$out/$f" 2>/dev/null || true
   done
-  for cell in $(proxy "$id" "rtx6000/$tag/" 2>/dev/null | grep -oE 'href="[^"/]+/"' | sed 's/href="//;s/\/"//'); do
+  for cell in $(proxy "$id" "$FAMILY/$tag/" 2>/dev/null | grep -oE 'href="[^"/]+/"' | sed 's/href="//;s/\/"//'); do
     mkdir -p "$out/$cell"
     for f in summary.json stderr.log stdout.log; do
-      proxy "$id" "rtx6000/$tag/$cell/$f" >"$out/$cell/$f" 2>/dev/null || rm -f "$out/$cell/$f"
+      proxy "$id" "$FAMILY/$tag/$cell/$f" >"$out/$cell/$f" 2>/dev/null || rm -f "$out/$cell/$f"
     done
-    for f in $(proxy "$id" "rtx6000/$tag/$cell/gpucheck-out/" 2>/dev/null | grep -oE 'href="[^"/]+\.json"' | sed 's/href="//;s/"//'); do
+    for f in $(proxy "$id" "$FAMILY/$tag/$cell/gpucheck-out/" 2>/dev/null | grep -oE 'href="[^"/]+\.json"' | sed 's/href="//;s/"//'); do
       mkdir -p "$out/$cell/gpucheck-out"
-      proxy "$id" "rtx6000/$tag/$cell/gpucheck-out/$f" >"$out/$cell/gpucheck-out/$f" 2>/dev/null || true
+      proxy "$id" "$FAMILY/$tag/$cell/gpucheck-out/$f" >"$out/$cell/gpucheck-out/$f" 2>/dev/null || true
     done
   done
   log "results → $out"
@@ -138,9 +140,9 @@ wait_done() {
   local id="$1" tag="$2" t0 last=""
   t0=$(date +%s)
   while :; do
-    if proxy "$id" "rtx6000/$tag/DONE" >/dev/null 2>&1; then return 0; fi
+    if proxy "$id" "$FAMILY/$tag/DONE" >/dev/null 2>&1; then return 0; fi
     local cur
-    cur="$(proxy "$id" "rtx6000/$tag/live.log" 2>/dev/null | tail -1 || true)"
+    cur="$(proxy "$id" "$FAMILY/$tag/live.log" 2>/dev/null | tail -1 || true)"
     [[ -n "$cur" && "$cur" != "$last" ]] && { log "pod: $cur"; last="$cur"; }
     (( $(date +%s) - t0 < CAP_S )) || { log "cap reached"; return 1; }
     sleep 30
@@ -152,7 +154,7 @@ wait_up() {
   local id="$1" t0
   t0=$(date +%s)
   while (( $(date +%s) - t0 < ${FV_BOOT_WAIT_S:-1200} )); do
-    proxy "$id" "rtx6000/" >/dev/null 2>&1 && return 0
+    proxy "$id" "$FAMILY/" >/dev/null 2>&1 && return 0
     sleep 30
   done
   return 1
@@ -185,7 +187,7 @@ case "${1:-}" in
   weights) shift; cmd_run weights "$@" ;;
   kernels) shift; cmd_run kernels "$@" ;;
   all) shift; cmd_run all "$@" ;;
-  status) proxy "${2:?pod}" "rtx6000/" ;;
+  status) proxy "${2:?pod}" "$FAMILY/" ;;
   down) rest DELETE "/pods/${2:?pod}" >/dev/null && echo "deleted ${2}" ;;
   *) sed -n '2,20p' "$0" | sed 's/^# \{0,1\}//'; exit 2 ;;
 esac

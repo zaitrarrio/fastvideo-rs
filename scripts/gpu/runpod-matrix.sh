@@ -4,7 +4,7 @@
 # Spark joint LTX refine stays off (FASTVIDEO_LTX2_WEIGHTS unset) except in
 # the rtx6000 parity family, which runs the full Spark bridge.
 set -euo pipefail
-FAMILY="${1:?usage: runpod-matrix.sh h3|ltx|hunyuan|wan|b200|rtx6000}"
+FAMILY="${1:?usage: runpod-matrix.sh h3|ltx|hunyuan|wan|b200|rtx6000|rtx5090}"
 WORK="${FV_WORK:-/workspace}"
 BIN="${FV_GPUCHECK:-/opt/fastvideo-rs/target/release/fv-gpucheck}"
 W="$WORK/weights"
@@ -110,6 +110,25 @@ run_cell() {
   write_json "$cell/summary.json" "$(printf '{"cell":"%s","family":"%s","exit":%s,"seconds":%s,"ended":"%s"}' \
     "$name" "$FAMILY" "$rc" "$secs" "$(date -u +%Y-%m-%dT%H:%M:%SZ)")"
   return 0
+}
+
+# Cells gated on a complete weight tree (verify-weights.sh) and FV_CELLS.
+VERIFY="$(dirname "${BASH_SOURCE[0]}")/verify-weights.sh"
+gated_cell() {
+  local name="$1" wcell="$2"
+  shift 2
+  if [[ -n "${FV_CELLS:-}" && " $FV_CELLS " != *" $name "* ]]; then
+    log "skip $name (not in FV_CELLS)"
+    return 0
+  fi
+  if ! FV_WEIGHTS="$W" bash "$VERIFY" "$wcell" >"$RUNS/$name.weights.log" 2>&1; then
+    mkdir -p "$RUNS/$name"
+    log "SKIP $name: weights incomplete"
+    tee -a "$LOG" <"$RUNS/$name.weights.log"
+    write_json "$RUNS/$name/summary.json" "$(printf '{"cell":"%s","family":"%s","exit":null,"skipped":"weights incomplete"}' "$name" "$FAMILY")"
+    return 0
+  fi
+  run_cell "$name" "$@"
 }
 
 log "matrix start image=$(cat /opt/fastvideo-rs/target/release/fv-gpucheck.build-id 2>/dev/null || echo unknown)"
@@ -395,23 +414,6 @@ case "$FAMILY" in
     # RTX PRO 6000 parity baseline: H3, FastH3 and LTX-2.5 on the sol-engine
     # single-GPU contracts. Every cell first proves its weight tree complete
     # (verify-weights.sh); an incomplete tree is recorded, not run.
-    VERIFY="$(dirname "${BASH_SOURCE[0]}")/verify-weights.sh"
-    gated_cell() {
-      local name="$1" wcell="$2"
-      shift 2
-      if [[ -n "${FV_CELLS:-}" && " $FV_CELLS " != *" $name "* ]]; then
-        log "skip $name (not in FV_CELLS)"
-        return 0
-      fi
-      if ! FV_WEIGHTS="$W" bash "$VERIFY" "$wcell" >"$RUNS/$name.weights.log" 2>&1; then
-        mkdir -p "$RUNS/$name"
-        log "SKIP $name: weights incomplete"
-        tee -a "$LOG" <"$RUNS/$name.weights.log"
-        write_json "$RUNS/$name/summary.json" "$(printf '{"cell":"%s","family":"%s","exit":null,"skipped":"weights incomplete"}' "$name" "$FAMILY")"
-        return 0
-      fi
-      run_cell "$name" "$@"
-    }
     h3_common=(
       --prompt "$PROMPT"
       --seconds 5
@@ -457,6 +459,55 @@ case "$FAMILY" in
         --weights "$W/ltx25" --dit "$W/ltx25" \
         --prompt "$PROMPT" --seed "$SEED" --two-stage --text streamed --warm \
         --clip "$RUNS/ltx25-two-stage/frames"
+    ;;
+  rtx5090)
+    # The sol-engine RTX 5090 single-GPU suite (config/minimax_h3/rtx5090_*.toml,
+    # models/ltx25/RTX5090) plus 480p. On a 32 GB card the DiT streams from
+    # pinned host memory (FASTVIDEO_DIT_OFFLOAD=auto picks it); the same cells
+    # run resident on larger cards for a like-for-like comparison.
+    h3_common=(
+      --prompt "$PROMPT"
+      --seconds 5
+      --seed "$SEED"
+      --text-encoder auto
+      --text-cache "$WORK/h3-text-cache"
+      --text-weights "$W/h3-base"
+      --warm
+    )
+    for res in 768p 480p; do
+      geo=()
+      [[ "$res" == 480p ]] && geo=(--height 480 --width 832)
+      # dense: rtx5090_dense.toml; sol: rtx5090_sol.toml; fullopt: + TeaCache.
+      gated_cell "h3-$res-dense" fasth3-4step-dense \
+        env FASTVIDEO_H3_SOL_ATTN=off \
+        "$BIN" --mode fast h3 gen --weights "$W/h3-base" --h3-recipe sol-h3-rtx "${geo[@]}" \
+          --adaln-cache "$RUNS/h3-$res-adaln.cache" \
+          --clip-dir "$RUNS/h3-$res-dense/frames" "${h3_common[@]}"
+      gated_cell "h3-$res-sol" fasth3-4step-dense \
+        "$BIN" --mode fast h3 gen --weights "$W/h3-base" --h3-recipe sol-h3-rtx "${geo[@]}" \
+          --adaln-cache "$RUNS/h3-$res-adaln.cache" \
+          --clip-dir "$RUNS/h3-$res-sol/frames" "${h3_common[@]}"
+      gated_cell "h3-$res-fullopt" fasth3-4step-dense \
+        env FASTVIDEO_H3_SOL_CACHE=teacache \
+        "$BIN" --mode fast h3 gen --weights "$W/h3-base" --h3-recipe sol-h3-rtx "${geo[@]}" \
+          --adaln-cache "$RUNS/h3-$res-adaln.cache" \
+          --clip-dir "$RUNS/h3-$res-fullopt/frames" "${h3_common[@]}"
+    done
+    # LTX-2.5 distilled two-stage: the reference's 4k5s and 1080p20s workloads,
+    # dense vs Sol stage 2, plus 480p-class (768x512, two-stage needs /64).
+    for wl in 4k5s 1080p20s 512p; do
+      geo=(--workload "$wl")
+      [[ "$wl" == 512p ]] && geo=(--height 512 --width 768 --num-frames 121)
+      for arm in sol dense; do
+        flag=()
+        [[ "$arm" == dense ]] && flag=(--dense-stage2)
+        gated_cell "ltx25-$wl-$arm" ltx25-two-stage \
+          "$BIN" --mode fast ltx2 gen --model-version 2.5 \
+            --weights "$W/ltx25" --dit "$W/ltx25" "${geo[@]}" "${flag[@]}" \
+            --prompt "$PROMPT" --seed "$SEED" --two-stage --text streamed --warm \
+            --clip "$RUNS/ltx25-$wl-$arm/frames"
+      done
+    done
     ;;
   *)
     log "FATAL: unknown family $FAMILY"
