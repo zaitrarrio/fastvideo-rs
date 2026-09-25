@@ -130,6 +130,8 @@ impl H3Request {
 pub enum TextEncoderChoice {
     /// [`Self::ResidentFp8`] when the card is large and empty enough
     /// ([`AUTO_RESIDENT_FREE_BYTES`] free before anything loads), else streamed.
+    /// A resident `Auto` encoder is released after encoding when the denoise
+    /// needs its memory ([`keep_auto_encoder`]); later prompts then stream.
     #[default]
     Auto,
     /// One decoder layer on the device at a time, per prompt. Nothing resident.
@@ -143,8 +145,12 @@ pub enum TextEncoderChoice {
     Recovered8b,
 }
 
-/// Free device memory at which `Auto` keeps the encoder resident: DiT 41 +
-/// decoders 7 + FP8 Qwen 24.4 + ~12 GB of 5 s activations = 85 GB.
+/// Free device memory at which `Auto` loads the encoder resident: DiT 41 +
+/// decoders 7 + FP8 Qwen 24.4 = 72 GB of weights plus headroom. That covers
+/// the load and the first encode, not a denoise: the VSA path at 5 s needs
+/// well over the ~12 GB of dense activations (a 96 GB card OOMed with ~27 GiB
+/// free), so after encoding `Auto` releases the encoder unless
+/// [`keep_auto_encoder`] says the denoise still fits beside it.
 pub const AUTO_RESIDENT_FREE_BYTES: u64 = 85_000_000_000;
 
 impl TextEncoderChoice {
@@ -493,8 +499,29 @@ pub struct H3Pipeline {
     model: H3Transformer,
     video_vae: VideoDecoder,
     audio_vae: H3AudioDecoder,
-    text_encoder: Option<Box<dyn HiddenStateEncoder>>,
+    /// Resident encoder, if any. `Auto` may release it before a denoise that
+    /// needs its memory (see [`keep_auto_encoder`]); later prompts then stream.
+    text_encoder: std::sync::Mutex<Option<Box<dyn HiddenStateEncoder>>>,
+    /// The encoder choice was `Auto` (resolved at load), so it may be released.
+    auto_text_encoder: bool,
     pub load_timings: H3LoadTimings,
+}
+
+/// Device bytes a denoise needs beside the resident weights for `rows` packed
+/// rows: 1 MiB per row (f32 QKVG `[S, 4 x 7168]`, BHSD Q/K/V, the SwiGLU
+/// hidden and the VSA gathers are all live around one block) plus 4 GiB of
+/// workspace. Conservative on purpose: a 96 GB card with the FP8 encoder,
+/// DiT and decoders resident ran out at the first 5 s VSA step with ~27 GiB
+/// free.
+pub fn denoise_reserve_bytes(rows: usize) -> u64 {
+    (rows as u64) * (1 << 20) + (4u64 << 30)
+}
+
+/// Whether an `Auto`-resident encoder may stay on the device through a
+/// denoise of `rows` packed rows, given the free bytes measured after the
+/// prompt was encoded. Unknown free memory releases it.
+pub fn keep_auto_encoder(free_bytes: Option<u64>, rows: usize) -> bool {
+    free_bytes.is_some_and(|free| free >= denoise_reserve_bytes(rows))
 }
 
 impl H3Pipeline {
@@ -523,6 +550,7 @@ impl H3Pipeline {
         // device with f32 transients (524 MB for the widest matrix), which
         // should happen while the card is otherwise empty.
         let free = crate::wan::device::free_memory().map(|(free, _)| free);
+        let auto_text_encoder = options.text_encoder == TextEncoderChoice::Auto;
         options.text_encoder = options.text_encoder.resolve(free);
         let timer = Instant::now();
         let text_encoder: Option<Box<dyn HiddenStateEncoder>> = match options.text_encoder {
@@ -695,7 +723,8 @@ impl H3Pipeline {
             model,
             video_vae,
             audio_vae,
-            text_encoder,
+            text_encoder: std::sync::Mutex::new(text_encoder),
+            auto_text_encoder,
             load_timings,
         })
     }
@@ -711,13 +740,16 @@ impl H3Pipeline {
         ) {
             self.options.text_encoder = TextEncoderChoice::ResidentFp8;
         }
-        self.text_encoder = Some(encoder);
+        *self.text_encoder.get_mut().expect("h3 text encoder") = Some(encoder);
+        self.auto_text_encoder = false;
         self
     }
 
     /// `(kind, device bytes)` of the encoder a cache miss will use.
     pub fn text_encoder(&self) -> (&'static str, u64) {
         self.text_encoder
+            .lock()
+            .expect("h3 text encoder")
             .as_ref()
             .map_or(("streamed", 0), |e| (e.kind(), e.resident_bytes()))
     }
@@ -728,7 +760,8 @@ impl H3Pipeline {
     /// conditioning; this is that number for the prompt at hand. `None` when
     /// the encoder is streamed anyway. Costs one streamed encode (~10 s).
     pub fn text_encoder_drift(&self, prompt: &str) -> Result<Option<(f64, f64)>> {
-        let Some(resident) = &self.text_encoder else {
+        let guard = self.text_encoder.lock().expect("h3 text encoder");
+        let Some(resident) = guard.as_ref() else {
             return Ok(None);
         };
         let text_root = self.options.text_root.as_deref().unwrap_or(&self.root);
@@ -800,26 +833,17 @@ impl H3Pipeline {
 
         // --- text: cache, else resident, else ~50 GB streamed one layer at a time ---
         let timer = Instant::now();
-        let resident = match (&self.options.text_encoder, &self.text_encoder) {
-            (_, Some(encoder))
-                if matches!(
-                    self.options.text_encoder,
-                    TextEncoderChoice::ResidentBf16
-                        | TextEncoderChoice::ResidentFp8
-                        | TextEncoderChoice::Recovered8b
-                ) =>
-            {
-                Some(encoder.as_ref())
-            }
-            (TextEncoderChoice::Streamed | TextEncoderChoice::Auto, _) => None,
-            (_, None)
-                if matches!(
-                    self.options.text_encoder,
-                    TextEncoderChoice::ResidentBf16
-                        | TextEncoderChoice::ResidentFp8
-                        | TextEncoderChoice::Recovered8b
-                ) =>
-            {
+        let mut encoder_slot = self.text_encoder.lock().expect("h3 text encoder");
+        let resident_choice = matches!(
+            self.options.text_encoder,
+            TextEncoderChoice::ResidentBf16
+                | TextEncoderChoice::ResidentFp8
+                | TextEncoderChoice::Recovered8b
+        );
+        let resident = match encoder_slot.as_deref() {
+            Some(encoder) if resident_choice => Some(encoder),
+            // An `Auto` encoder released before an earlier denoise: stream.
+            None if resident_choice && !self.auto_text_encoder => {
                 return Err(msg(format!(
                     "text encoder {:?} was requested but is not loaded",
                     self.options.text_encoder
@@ -864,6 +888,23 @@ impl H3Pipeline {
             )?
         };
         timings.text_s = timer.elapsed().as_secs_f64();
+        // Auto kept the encoder resident only because the card was empty at
+        // load. The conditioning is encoded (and cached) now; release the
+        // encoder when the denoise needs its memory.
+        let rows = text.ids.len() + geometry.video_rows() + geometry.audio_rows();
+        if self.auto_text_encoder && encoder_slot.is_some() {
+            let free = crate::wan::device::free_memory().map(|(free, _)| free);
+            if !keep_auto_encoder(free, rows) {
+                let released = encoder_slot.take().map_or(0, |e| e.resident_bytes());
+                crate::wan::log::info(format_args!(
+                    "h3 text encoder: auto released the resident encoder ({:.1} GiB) before the denoise ({rows} rows need {:.1} GiB, {:.1} GiB free); later prompts stream",
+                    released as f64 / f64::from(1u32 << 30),
+                    denoise_reserve_bytes(rows) as f64 / f64::from(1u32 << 30),
+                    free.unwrap_or(0) as f64 / f64::from(1u32 << 30),
+                ));
+            }
+        }
+        drop(encoder_slot);
         let timer = Instant::now();
         let text_refined = self.refiner.forward(&text.hidden)?;
         timings.refine_s = timer.elapsed().as_secs_f64();
@@ -1601,6 +1642,21 @@ mod tests {
             assert!(TextEncoderChoice::parse(name).is_ok());
         }
         assert!(TextEncoderChoice::parse("fp8").is_err());
+    }
+
+    #[test]
+    fn auto_releases_the_encoder_when_the_denoise_needs_the_memory() {
+        const GIB: u64 = 1 << 30;
+        // 5 s at 1344x768: 37296 video + 414 audio + ~540 text rows.
+        let rows = 37_296 + 414 + 540;
+        let reserve = denoise_reserve_bytes(rows);
+        assert!(reserve > 40 * GIB && reserve < 42 * GIB);
+        // The 96 GB card that OOMed: ~27 GiB free with encoder + DiT + VAEs resident.
+        assert!(!keep_auto_encoder(Some(27 * GIB), rows));
+        // A 141 GB card keeps it (~70 GiB free after the same loads).
+        assert!(keep_auto_encoder(Some(70 * GIB), rows));
+        assert!(!keep_auto_encoder(None, rows));
+        assert!(denoise_reserve_bytes(2 * rows) > reserve);
     }
 
     #[test]
