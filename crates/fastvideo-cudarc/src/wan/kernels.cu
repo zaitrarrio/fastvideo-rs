@@ -1814,7 +1814,8 @@ extern "C" __global__ void affine_dequant(
     float s = scales[row * ng + col / group];
     float b = biases[row * ng + col / group];
     float code = (float)fv_affine_code(q + row * pb, col, bits);
-    out[i] = s * code + b;
+    // Two roundings, like the host twin (no FMA contraction).
+    out[i] = __fadd_rn(__fmul_rn(s, code), b);
 }
 // Fused W8/W6/W4 A16 GEMM: C[m,n] = X[m,k] @ W[n,k]^T without materializing W.
 // 16x16 output tiles, one group (64) of K per iteration, dequant into shared.
@@ -1850,7 +1851,7 @@ extern "C" __global__ void affine_w16_gemm(
             if (row < n && col < k) {
                 float s = scales[row * ng + g];
                 float b = biases[row * ng + g];
-                Ws[rr][cc] = s * (float)fv_affine_code(q + row * pb, col, bits) + b;
+                Ws[rr][cc] = __fadd_rn(__fmul_rn(s, (float)fv_affine_code(q + row * pb, col, bits)), b);
             } else {
                 Ws[rr][cc] = 0.0f;
             }
