@@ -119,7 +119,7 @@ if [ "$mode" = run ] || [ "$mode" = all ]; then
     FV_GEN_TIMEOUT_S=${FV_GEN_TIMEOUT_S:-3600} \
     bash /opt/fastvideo-rs/scripts/gpu/runpod-matrix.sh $FAMILY >"\$OUT/matrix.out" 2>&1
 fi
-touch "\$OUT/DONE"
+echo "done $tag" >"\$OUT/DONE"
 exec sleep infinity
 EOF
 }
@@ -141,7 +141,7 @@ mkdir -p "\$OUT"
 env ${FV_EXTRA_ENV:-} UP_STEPS="${UP_STEPS:-info:box}" UP_STEPS_BG="${UP_STEPS_BG:-}" UP_CELLS="${UP_CELLS:-}" \
   UP_CELL_TIMEOUT_S=${UP_CELL_TIMEOUT_S:-5400} \
   bash /opt/fvrs/scripts/gpu/upstream/pod.sh "\$OUT" >"\$OUT/pod.out" 2>&1
-touch "\$OUT/DONE"
+echo "done $tag" >"\$OUT/DONE"
 exec sleep infinity
 EOF
 }
@@ -226,7 +226,15 @@ wait_done() {
   local id="$1" tag="$2" t0 last=""
   t0=$(date +%s)
   while :; do
-    if proxy "$id" "$FAMILY/$tag/DONE" >/dev/null 2>&1; then return 0; fi
+    # The marker carries the tag: a proxy error page for a vanished pod must
+    # never read as "finished".
+    if [[ "$(proxy "$id" "$FAMILY/$tag/DONE" 2>/dev/null | head -1)" == "done $tag" ]]; then return 0; fi
+    local status
+    status="$(rest GET "/pods/$id" 2>/dev/null | jq -r '.desiredStatus // "GONE"' 2>/dev/null || echo UNKNOWN)"
+    if [[ "$status" == "GONE" || "$status" == "EXITED" || "$status" == "TERMINATED" ]]; then
+      log "pod $id is $status before finishing (deleted outside this driver?)"
+      return 1
+    fi
     local cur
     cur="$(proxy "$id" "$FAMILY/$tag/live.log" 2>/dev/null | tail -1 || true)"
     [[ -n "$cur" && "$cur" != "$last" ]] && { log "pod: $cur"; last="$cur"; }
