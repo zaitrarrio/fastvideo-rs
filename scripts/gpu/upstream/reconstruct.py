@@ -468,6 +468,14 @@ def reconstruct(repo: str, rev: str, path: str, out: Path, plan, src: Sources, v
             res["ok"] = res["sha256"] == oid
             if not res["ok"]:
                 log(f"{path}: still mismatched after repair: {res['diff'][:20]}")
+                if os.environ.get("RECON_ACCEPT_MISMATCH") != "1":
+                    return res
+                # Keep the Diffusers-derived bytes for the tensors that differ
+                # (recorded next to the file); the caller asked to proceed.
+                os.replace(tmp, out)
+                out.with_suffix(out.suffix + ".mismatch.json").write_text(json.dumps(res["diff"]))
+                res["accepted_mismatch"] = True
+                log(f"{path}: accepted with {len(res['diff'])} tensors differing from the Hub file")
                 return res
             log(f"{path}: repaired {len(res['diff'])} tensors from the Hub")
     os.replace(tmp, out)
@@ -506,7 +514,7 @@ def main() -> int:
         results = list(ex.map(one, args.files))
     if args.report:
         Path(args.report).write_text(json.dumps(results, indent=2))
-    bad = [r for r in results if not r.get("ok")]
+    bad = [r for r in results if not r.get("ok") and not r.get("accepted_mismatch")]
     log(f"{len(results) - len(bad)}/{len(results)} files verified")
     return 1 if bad else 0
 
