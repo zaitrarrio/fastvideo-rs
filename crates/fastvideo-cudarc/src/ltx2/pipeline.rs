@@ -1590,6 +1590,29 @@ fn names_distilled(path: &Path) -> bool {
     named(Some(path)) || named(path.parent())
 }
 
+/// Whether the DiT can stay loaded while the VAE decodes. A streamed DiT
+/// holds only its block ring on the device (its host copy is what a reload
+/// would rebuild), so it always stays. A resident one stays when free device
+/// memory covers the planned decode phase plus a 2 GiB margin.
+fn keep_dit_through_decode(residency: Residency, cfg: &Ltx2Config, req: &Ltx2Request) -> bool {
+    if residency.is_streamed() {
+        return true;
+    }
+    let plan = fastvideo_models::ltx2::memory::plan_distilled_two_stage(
+        cfg,
+        req.height,
+        req.width,
+        req.num_frames,
+        req.frame_rate,
+        fastvideo_models::ltx2::memory::PlanOptions::default(),
+    );
+    let Some(decode) = plan.phase("decode") else {
+        return false;
+    };
+    let free = crate::wan::device::free_memory().map_or(0, |(f, _)| f);
+    free >= decode.total() + (2u64 << 30)
+}
+
 fn release_dit_for_decode(model: &mut Option<Ltx2Transformer>, loaded_strength: &mut Option<f32>) {
     *model = None;
     *loaded_strength = None;
@@ -2204,10 +2227,14 @@ impl Ltx2Pipeline {
         drop(text_uncond);
 
         // Free the resident DiT (~37 GiB) before VAE activations, conv or
-        // DiffVAE, and return its blocks to the driver (the reference's
-        // `DiffusionStage` frees its transformer on exit).
-        release_dit_for_decode(&mut self.model, &mut self.loaded_strength);
-        trim()?;
+        // DiffVAE, when the decode would not fit beside it (the reference's
+        // `DiffusionStage` frees its transformer on exit to fit 32 GB). On a
+        // card with room it stays, so a warm second generation does not
+        // reload 48 blocks from disk.
+        if !keep_dit_through_decode(self.residency, &self.cfg, req) {
+            release_dit_for_decode(&mut self.model, &mut self.loaded_strength);
+            trim()?;
+        }
         self.ensure_decoders()?;
         let decoders = self.decoders.as_ref().expect("decoders");
 
