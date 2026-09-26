@@ -24,6 +24,36 @@ import traceback
 from pathlib import Path
 
 
+def gemm_probe(torch) -> dict:
+    """Small GPU GEMMs (BF16 and FP32, default BLAS and cuBLASLt) plus library versions."""
+    from importlib import metadata
+
+    out: dict = {"torch": torch.__version__, "cuda": torch.version.cuda,
+                 "packages": {d.metadata["Name"]: d.version for d in metadata.distributions()
+                              if (d.metadata["Name"] or "").lower().startswith(("nvidia-cublas", "nvidia-cuda-runtime",
+                                                                                "nvidia-cudnn", "nvidia-nvjitlink"))}}
+    shapes = [(64, 64, 64), (5120, 64, 5120)]
+    for lib in ("default", "cublaslt"):
+        ok = True
+        if lib == "cublaslt":
+            torch.backends.cuda.preferred_blas_library("cublaslt")
+        for dt in (torch.bfloat16, torch.float32):
+            for m, k, n in shapes:
+                key = f"{lib}:{str(dt).split('.')[-1]}:{m}x{k}x{n}"
+                try:
+                    a = torch.randn(m, k, device="cuda", dtype=dt)
+                    b = torch.randn(k, n, device="cuda", dtype=dt)
+                    (a @ b).sum().item()
+                    out[key] = "ok"
+                except RuntimeError as e:
+                    out[key] = str(e)[:160]
+                    ok = False
+        out[f"{lib}_ok"] = ok
+    torch.backends.cuda.preferred_blas_library("default")
+    print("gemm_probe", out, flush=True)
+    return out
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--sol-h3", required=True, help="models/minimax_h3/Sol-H3 directory")
@@ -67,8 +97,17 @@ def main() -> int:
         from h3_runtime import MiniMaxH3Inference
 
         # On this sm_120 box the adapter fuse (weight.addmm_(B, A) in BF16) fails
-        # with CUBLAS_STATUS_INVALID_VALUE. Fall back per call to an FP32 product
-        # added in BF16 (same math, one rounding) and record how often.
+        # with CUBLAS_STATUS_INVALID_VALUE, and so did an FP32 GPU product
+        # (cublasSgemm). Probe GEMMs before loading (library versions, BF16/FP32,
+        # default vs cuBLASLt) so the failure is characterised; prefer cuBLASLt
+        # when the default path fails and it does not.
+        res["gemm_probe"] = gemm_probe(torch)
+        probe = res["gemm_probe"]
+        if not probe.get("default_ok") and probe.get("cublaslt_ok"):
+            torch.backends.cuda.preferred_blas_library("cublaslt")
+            res["blas_library"] = "cublaslt"
+        # Adapter fuse fallback: the low-rank product on the host in FP32 (one
+        # rounding when added to the BF16 weight), recorded per call.
         orig_addmm_ = torch.Tensor.addmm_
         res["addmm_fallbacks"] = 0
 
@@ -78,11 +117,15 @@ def main() -> int:
             except RuntimeError as e:
                 if "CUBLAS" not in str(e) or args:
                     raise
+                if res["addmm_fallbacks"] == 0:
+                    res["addmm_first_failure"] = {
+                        "error": str(e)[:200], "self": [list(self.shape), list(self.stride()), str(self.dtype)],
+                        "m1": [list(m1.shape), list(m1.stride())], "m2": [list(m2.shape), list(m2.stride())]}
                 res["addmm_fallbacks"] += 1
-                prod = torch.matmul(m1.float(), m2.float()).mul_(alpha)
+                prod = torch.matmul(m1.float().cpu(), m2.float().cpu()).mul_(alpha)
                 if beta != 1:
                     self.mul_(beta)
-                return self.add_(prod.to(self.dtype))
+                return self.add_(prod.to(device=self.device, dtype=self.dtype))
 
         torch.Tensor.addmm_ = addmm_
 
