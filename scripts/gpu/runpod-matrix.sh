@@ -939,6 +939,16 @@ case "$FAMILY" in
             "$BIN" --mode fast h3 gen --weights "$W/h3-8step" --h3-recipe 8step \
               --adaln-cache "$RUNS/oracle-$target-adaln.cache" \
               --clip-dir "$RUNS/oracle-$target/frames" "${h3_oracle[@]}" ;;
+        fasth3-8step-dense)
+          gated_cell "oracle-$target" fasth3-8step env "${envs[@]}" \
+            "$BIN" --mode fast h3 gen --weights "$W/h3-8step" --h3-recipe 8step --dense \
+              --adaln-cache "$RUNS/oracle-$target-adaln.cache" \
+              --clip-dir "$RUNS/oracle-$target/frames" "${h3_oracle[@]}" ;;
+        fasth3-4step-dense)
+          gated_cell "oracle-$target" fasth3-4step-dense env "${envs[@]}" \
+            "$BIN" --mode fast h3 gen --weights "$W/h3-base" --h3-recipe 4step-dense \
+              --adaln-cache "$RUNS/oracle-$target-adaln.cache" \
+              --clip-dir "$RUNS/oracle-$target/frames" "${h3_oracle[@]}" ;;
         fasth3-4step-vsa)
           gated_cell "oracle-$target" fasth3-4step-vsa env "${envs[@]}" \
             "$BIN" --mode fast h3 gen --weights "$W/h3-base" --h3-recipe 4step-vsa \

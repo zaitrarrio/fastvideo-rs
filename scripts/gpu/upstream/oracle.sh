@@ -9,7 +9,9 @@
 #   UP_STEPS="... oracle:fasth3-8step,ltx25-512p"   a subset
 #
 # Targets: fasth3-8step (FastVideo FastH3 8-step V2, 768x1344x124),
-# fasth3-4step-vsa (MiniMax-H3 + Preview v1 vsa-datafree LoRA), and the
+# fasth3-4step-vsa (MiniMax-H3 + Preview v1 vsa-datafree LoRA), the dense
+# controls fasth3-8step-dense (the 8-step checkpoint on FLASH_ATTN, no gate)
+# and fasth3-4step-dense (dense-datafree LoRA), and the
 # sol-engine LTX-2.5 distilled two-stage: ltx25-512p / ltx25-4k with Sol
 # stage 2, ltx25-512p-dense / ltx25-4k-dense with dense stage 2.
 # FastVideo runs its strict eager route (--profile strict
@@ -40,10 +42,13 @@ oracle_cell() {
   echo "done" >"$c/ORACLE_DONE"
 }
 
+# oracle_fv <name> <recipe> [--dense] -- <example args>: bench_fastvideo.py
+# through oracle_fastvideo.py (--dense: FLASH_ATTN, no VSA, no gate).
 oracle_fv() {
-  local name="$1" recipe="$2"; shift 2
-  oracle_cell "$name" env PYTHONUNBUFFERED=1 "$UP/fastvideo/bin/python" "$HERE/bench_fastvideo.py" \
-    --fastvideo-src "$SRC/FastVideo" --recipe "$recipe" --out "$OUT/oracle-$name" --repeats 1 -- \
+  local name="$1" recipe="$2" dense=(); shift 2
+  [[ "${1:-}" == --dense ]] && { dense=(--dense); shift; }
+  oracle_cell "$name" env PYTHONUNBUFFERED=1 "$UP/fastvideo/bin/python" "$HERE/oracle_fastvideo.py" \
+    "${dense[@]}" --fastvideo-src "$SRC/FastVideo" --recipe "$recipe" --out "$OUT/oracle-$name" --repeats 1 -- \
     --prompt "$PROMPT_OURS" --seed "$SEED_OURS" --num-gpus 1 --vsa-kernel triton --no-fa4 \
     --no-warmup --profile strict --no-inference-torch-compile --no-compile-vae "$@"
 }
@@ -75,6 +80,10 @@ run_oracle() {
   oracle_fv fasth3-8step 8step --model-path "$f8" "${g768[@]}"
   oracle_fv fasth3-4step-vsa lora --model-path "$UW/MiniMax-H3" \
     --lora-path "$lora/vsa-datafree/adapter_model.safetensors" "${g768[@]}"
+  # Dense controls: the same denoisers without VSA's top-k tile selection.
+  oracle_fv fasth3-8step-dense 8step --dense --model-path "$f8" "${g768[@]}"
+  oracle_fv fasth3-4step-dense lora --model-path "$UW/MiniMax-H3" \
+    --lora-path "$lora/dense-datafree/adapter_model.safetensors" "${g768[@]}"
   oracle_ltx ltx25-512p sol 512p
   oracle_ltx ltx25-512p-dense dense 512p
   oracle_ltx ltx25-4k sol 4k

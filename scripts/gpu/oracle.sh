@@ -41,7 +41,7 @@ for t in $targets; do
   esac
 done
 
-declare -A bg=()
+declare -A bg=() tg=()
 pods=()
 cleanup() {
   local p
@@ -52,36 +52,51 @@ cleanup() {
 }
 trap cleanup EXIT
 
-# start_up <image target> <oracle targets csv> <weight steps>
+# start_up <image target> <oracle targets> <weight steps> <container disk GB>: the
+# upstream driver in the background; a pod create that fails outright (the API
+# answers 500 now and then) is retried twice.
 start_up() {
-  local image="$1" csv="$2" wsteps="$3" disk="$4"
+  local image="$1" list="$2" wsteps="$3" disk="$4" csv
+  csv="${list// /,}"
+  tg[$image]="$list"
   log "upstream pod ($image): $wsteps oracle:$csv"
-  FV_KEEP_POD=1 FV_POD_FILE="$work/$image.pod" UP_IMAGE_TARGET="$image" \
-    UP_STEPS="info:box $wsteps oracle:$csv" UP_CELL_TIMEOUT_S="${UP_CELL_TIMEOUT_S:-7200}" \
-    FV_EXTRA_ENV="FASTVIDEO_DUMP_OPS=$ops" FV_FETCH_SKIP='oracle-dump\.tar|/dump/|\.mp4$' FV_CONTAINER_DISK_GB="$disk" \
-    bash "$HERE/runpod-http.sh" upstream "$sha" >"$logs/oracle-up-$image.log" 2>&1 &
+  (
+    for attempt in 1 2 3; do
+      FV_KEEP_POD=1 FV_POD_FILE="$work/$image.pod" UP_IMAGE_TARGET="$image" \
+        UP_STEPS="info:box $wsteps oracle:$csv" UP_CELL_TIMEOUT_S="${UP_CELL_TIMEOUT_S:-7200}" \
+        FV_EXTRA_ENV="FASTVIDEO_DUMP_OPS=$ops" FV_FETCH_SKIP='oracle-dump\.tar|/dump/|\.mp4$' FV_CONTAINER_DISK_GB="$disk" \
+        bash "$HERE/runpod-http.sh" upstream "$sha" >>"$logs/oracle-up-$image.log" 2>&1 && exit 0
+      [[ -s "$work/$image.pod" ]] && exit 1   # the pod came up; its run failed
+      log "upstream $image: no pod (attempt $attempt)"
+      sleep 60
+    done
+    exit 1
+  ) &
   bg[$image]=$!
 }
 
-(( ${#fv[@]} )) && start_up fastvideo "$(IFS=,; echo "${fv[*]}")" "weights:fasth3-8step weights:h3-diffusers" 150
-(( ${#ltx[@]} )) && start_up sol-ltx25 "$(IFS=,; echo "${ltx[*]}")" "weights:ltx25" 250
+(( ${#fv[@]} )) && start_up fastvideo "${fv[*]}" "weights:fasth3-8step weights:h3-diffusers" 150
+(( ${#ltx[@]} )) && start_up sol-ltx25 "${ltx[*]}" "weights:ltx25" 250
 
-# Wait for each upstream pod to be up (runpod-http writes "<id> <tag>").
-urls=""
+# Wait for each upstream pod to be up (runpod-http writes "<id> <tag>"); a
+# stack whose pod never comes up drops its targets.
+urls="" targets=""
 for image in "${!bg[@]}"; do
   f="$work/$image.pod"
   until [[ -s "$f" ]]; do
     if ! kill -0 "${bg[$image]}" 2>/dev/null; then
-      log "upstream driver for $image exited before its pod came up (see $logs/oracle-up-$image.log)"
-      exit 1
+      log "upstream $image never came up (see $logs/oracle-up-$image.log); dropping ${tg[$image]}"
+      continue 2
     fi
     sleep 20
   done
   read -r id tag <"$f"
   pods+=("$id")
   urls+="${urls:+ }https://$id-8000.proxy.runpod.net/upstream/$tag"
+  targets+="${targets:+ }${tg[$image]}"
   log "upstream $image pod $id tag $tag"
 done
+[[ -n "$targets" ]] || { log "no upstream pod came up"; exit 1; }
 
 log "runtime pod: targets $targets"
 rc=0
