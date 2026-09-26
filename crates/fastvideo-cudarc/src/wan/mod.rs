@@ -15,6 +15,7 @@ pub mod dump;
 pub mod envflag;
 pub mod evalstats;
 pub mod gpu_trace;
+pub mod inject;
 #[cfg(feature = "cuda")]
 pub mod fp8;
 pub mod fused;

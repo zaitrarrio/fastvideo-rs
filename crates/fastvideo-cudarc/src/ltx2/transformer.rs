@@ -1247,6 +1247,14 @@ impl Ltx2Transformer {
         let ropes = pruned_ropes.as_ref().unwrap_or(ropes);
         let fb = self.begin_fb_pass(&xv, &xa)?;
         let mut skipped = false;
+        // FASTVIDEO_DUMP_DIR, first step of a stage: the packed inputs and each
+        // block's output (video every 64th row, audio whole).
+        let dump_blocks = crate::wan::dump::blocks();
+        if dump_blocks {
+            use crate::wan::dump::{named, rows_strided, BLOCK_ROW_STRIDE};
+            rows_strided(&named("step00_video_in"), &xv, BLOCK_ROW_STRIDE)?;
+            rows_strided(&named("step00_audio_in"), &xa, 1)?;
+        }
         for i in 0..self.blocks.len() {
             let tap = Tap {
                 probe: probe.as_mut(),
@@ -1270,6 +1278,11 @@ impl Ltx2Transformer {
             })?;
             if let Some(obs) = observer.as_mut() {
                 obs(i, &xv, &xa)?;
+            }
+            if dump_blocks {
+                use crate::wan::dump::{named, rows_strided, BLOCK_ROW_STRIDE};
+                rows_strided(&named(&format!("step00_video_block_{i}")), &xv, BLOCK_ROW_STRIDE)?;
+                rows_strided(&named(&format!("step00_audio_block_{i}")), &xa, 1)?;
             }
             if fb && i == 0 && self.decide_fb_after_block0(&xv, &xa)? {
                 skipped = true;

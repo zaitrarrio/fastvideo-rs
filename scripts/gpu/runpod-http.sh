@@ -213,6 +213,10 @@ fetch_tree() {
   for e in $(proxy "$id" "$rel" 2>/dev/null | grep -oE 'href="[^"]+"' | sed 's/href="//;s/"$//'); do
     case "$e" in
       ../ | /* | \?*) continue ;;
+    esac
+    # FV_FETCH_SKIP: an extended regex of relative paths not to fetch.
+    if [[ -n "${FV_FETCH_SKIP:-}" ]] && grep -qE "$FV_FETCH_SKIP" <<<"$rel$e"; then continue; fi
+    case "$e" in
       */) fetch_tree "$id" "$rel$e" "$dest/${e%/}" ;;
       *)
         name="$(printf '%b' "${e//%/\\x}")"
@@ -311,11 +315,19 @@ cmd_run() {
   done
   [[ -n "$id" ]] || die "no pod came up after 3 attempts"
   echo "$id" >"${TMPDIR:-/tmp}/fv-$FAMILY.pod"
+  # FV_POD_FILE: "<pod id> <run tag>" for a caller driving several pods (oracle.sh).
+  [[ -n "${FV_POD_FILE:-}" ]] && echo "$id $tag" >"$FV_POD_FILE"
   wait_done "$id" "$tag" || rc=1
   fetch_results "$id" "$tag"
   if grep -q "matrix_exit=[1-9]" "$OUT_ROOT/$tag/matrix.out" 2>/dev/null; then
     log "matrix exited abnormally: $(grep matrix_exit "$OUT_ROOT/$tag/matrix.out")"
     rc=1
+  fi
+  # FV_KEEP_POD=1: the caller deletes the pod (it still serves results to
+  # another pod); the FV_POD_CAP_S backstop deletes it regardless.
+  if [[ "${FV_KEEP_POD:-0}" == 1 ]]; then
+    log "keeping pod $id (FV_KEEP_POD=1)"
+    return $rc
   fi
   log "destroy pod $id"
   rest DELETE "/pods/$id" >/dev/null || log "WARN: delete failed for $id"

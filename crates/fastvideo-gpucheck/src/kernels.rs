@@ -921,6 +921,195 @@ pub fn run(report: &mut Report, lim: Limits, seed: u64) -> StageResult<()> {
             )?;
         }
         {
+            // LTX video VAE channels-last glue (`ltxv_*`) against the host
+            // twins, which round at the same points. Rearrangements and bias
+            // adds are exact; PixelNorm's channel sum may add in another
+            // order, so the normalized outputs get a bf16 round-off limit.
+            use cudarc::driver::DevicePtr;
+            use fastvideo_cudarc::ltx2::vae::fast::{self as lv, flags as lf, host as lh};
+            let d = dev()?;
+            let bf = |v: &[f32]| {
+                v.iter()
+                    .map(|&x| half::bf16::from_f32(x))
+                    .collect::<Vec<_>>()
+            };
+            let upb = |v: &[half::bf16]| -> anyhow::Result<CudaSlice<half::bf16>> {
+                Ok(dev()?.stream.memcpy_stod(v)?)
+            };
+            let downb = |s: &CudaSlice<half::bf16>| -> anyhow::Result<Vec<f32>> {
+                Ok(dev()?
+                    .stream
+                    .memcpy_dtov(s)?
+                    .iter()
+                    .map(|v| v.to_f32())
+                    .collect())
+            };
+            let tof = |v: &[half::bf16]| v.iter().map(|x| x.to_f32()).collect::<Vec<_>>();
+            let a16 = |s: &CudaSlice<half::bf16>| s.device_ptr(&d.stream).0;
+            let a32 = |s: &CudaSlice<f32>| s.device_ptr(&d.stream).0;
+            let bf16_lim = 5e-3;
+
+            // latent_in: f32 [c, f, p] -> padded bf16 [f + 2, p, c].
+            let (lc, lf_, lp) = (8usize, 3usize, 35usize);
+            let z = c.rand(lc * lf_ * lp, 1.0);
+            let (std_, mean) = (tof(&bf(&c.rand(lc, 1.0))), tof(&bf(&c.rand(lc, 0.5))));
+            let want = lh::latent_in(&z, &std_, &mean, lp, lc, lf_);
+            let out = upb(&vec![half::bf16::ZERO; want.len()])?;
+            let (zd, sd, md) = (up(&z)?, up(&std_)?, up(&mean)?);
+            lv::launch_latent_in(a32(&zd), a32(&sd), a32(&md), a16(&out), lp, lc, lf_)?;
+            c.cmp("ltxv_latent_in", &downb(&out)?, &tof(&want), 0.0)?;
+
+            // norm_silu, every flag combination the decoder uses.
+            let eps = 1e-8f32;
+            for &(ch, p, tt, t0, nt, fl, name) in &[
+                (
+                    256usize,
+                    37usize,
+                    5usize,
+                    0usize,
+                    5usize,
+                    lf::Y | lf::BIAS | lf::READ_X | lf::WRITE_X | lf::WRITE_P,
+                    "ltxv_norm_silu_residual",
+                ),
+                (
+                    128,
+                    29,
+                    6,
+                    2,
+                    3,
+                    lf::Y | lf::BIAS | lf::WRITE_P,
+                    "ltxv_norm_silu_bias_chunk",
+                ),
+                (
+                    1024,
+                    9,
+                    3,
+                    0,
+                    3,
+                    lf::READ_X | lf::WRITE_P,
+                    "ltxv_norm_silu_norm_only",
+                ),
+                (
+                    512,
+                    11,
+                    4,
+                    1,
+                    3,
+                    lf::Y | lf::BIAS | lf::WRITE_X,
+                    "ltxv_norm_silu_bias_only",
+                ),
+            ] {
+                let y = bf(&c.rand(nt * p * ch, 1.5));
+                let bias = tof(&bf(&c.rand(ch, 0.3)));
+                let x0 = bf(&c.rand(tt * p * ch, 1.0));
+                let (mut hx, mut hp) = (x0.clone(), vec![half::bf16::ZERO; (tt + 2) * p * ch]);
+                lh::norm_silu(
+                    Some(&y),
+                    Some(&bias),
+                    &mut hx,
+                    &mut hp,
+                    p,
+                    ch,
+                    t0,
+                    nt,
+                    tt,
+                    eps,
+                    fl,
+                );
+                let (yd, bd, xd, pd) = (
+                    upb(&y)?,
+                    up(&bias)?,
+                    upb(&x0)?,
+                    upb(&hp.iter().map(|_| half::bf16::ZERO).collect::<Vec<_>>())?,
+                );
+                lv::launch_norm_silu(
+                    a16(&yd),
+                    a32(&bd),
+                    a16(&xd),
+                    a16(&pd),
+                    p,
+                    ch,
+                    t0,
+                    nt,
+                    tt,
+                    eps,
+                    fl,
+                )?;
+                c.cmp(&format!("{name}_x"), &downb(&xd)?, &tof(&hx), 0.0)?;
+                c.cmp(&format!("{name}_pad"), &downb(&pd)?, &tof(&hp), bf16_lim)?;
+            }
+            // X_EDGES: the interior's first / last frame repeated around it.
+            {
+                let (ch, p, tt) = (128usize, 13usize, 4usize);
+                let y = bf(&c.rand(tt * p * ch, 1.0));
+                let bias = c.rand(ch, 0.2);
+                let (yd, bd) = (upb(&y)?, up(&bias)?);
+                let xd = upb(&vec![half::bf16::ZERO; (tt + 2) * p * ch])?;
+                let interior = a16(&xd) + (p * ch * 2) as u64;
+                lv::launch_norm_silu(
+                    a16(&yd),
+                    a32(&bd),
+                    interior,
+                    0,
+                    p,
+                    ch,
+                    0,
+                    tt,
+                    tt,
+                    eps,
+                    lf::Y | lf::BIAS | lf::WRITE_X | lf::X_EDGES,
+                )?;
+                let got = downb(&xd)?;
+                let fr = |i: usize| got[i * p * ch..(i + 1) * p * ch].to_vec();
+                let ok = fr(0) == fr(1) && fr(tt + 1) == fr(tt) && fr(1) != fr(2);
+                c.report.check(
+                    "ltxv_norm_silu_x_edges",
+                    ok,
+                    json!({"replicated": ok}),
+                    json!({"replicated": true}),
+                )?;
+            }
+
+            // d2s_bias: the three upsampler strides.
+            for &(stride, drop, name) in &[
+                ((2usize, 2usize, 2usize), 1usize, "ltxv_d2s_bias_st222"),
+                ((1, 2, 2), 0, "ltxv_d2s_bias_s122"),
+                ((2, 1, 1), 1, "ltxv_d2s_bias_t211"),
+            ] {
+                let (h, w, ch, tt, t0, nt) = (3usize, 5usize, 4usize, 3usize, 1usize, 2usize);
+                let prod = stride.0 * stride.1 * stride.2;
+                let y = bf(&c.rand(nt * h * w * ch * prod, 1.0));
+                let bias = tof(&bf(&c.rand(ch * prod, 0.3)));
+                let t_out = stride.0 * tt - drop;
+                let mut ho = vec![half::bf16::ZERO; t_out * stride.1 * h * stride.2 * w * ch];
+                lh::d2s_bias(&y, &bias, &mut ho, h, w, ch, stride, t0, nt, drop);
+                let (yd, bd) = (upb(&y)?, up(&bias)?);
+                let od = upb(&vec![half::bf16::ZERO; ho.len()])?;
+                lv::launch_d2s_bias(a16(&yd), a32(&bd), a16(&od), h, w, ch, stride, t0, nt, drop)?;
+                c.cmp(name, &downb(&od)?, &tof(&ho), 0.0)?;
+            }
+
+            // out_unpatch.
+            {
+                let (h, w, co, pz, tt, t0, nt) =
+                    (3usize, 4usize, 3usize, 4usize, 4usize, 1usize, 2usize);
+                let y = bf(&c.rand(nt * h * w * co * pz * pz, 1.0));
+                let bias = tof(&bf(&c.rand(co * pz * pz, 0.3)));
+                let mut ho = vec![half::bf16::ZERO; tt * co * pz * h * pz * w];
+                lh::out_unpatch(&y, &bias, &mut ho, h, w, co, pz, t0, nt);
+                let (yd, bd) = (upb(&y)?, up(&bias)?);
+                let od = upb(&vec![half::bf16::ZERO; ho.len()])?;
+                lv::launch_out_unpatch(a16(&yd), a32(&bd), a16(&od), h, w, co, pz, t0, nt)?;
+                c.cmp("ltxv_out_unpatch", &downb(&od)?, &tof(&ho), 0.0)?;
+            }
+            c.report.check(
+                "ltxv_balanced_chunks",
+                lv::balanced(73, 16) == vec![(0, 15), (15, 15), (30, 15), (45, 14), (59, 14)],
+                json!(lv::balanced(73, 16)),
+                json!("5 chunks of 15/14 frames"),
+            )?;
+        }
+        {
             // Ops the decoder-only text encoders and the audio decoders add.
             // Each is held to its host twin, which the unit tests hold to an
             // independent formula, so the chain reaches the kernel.

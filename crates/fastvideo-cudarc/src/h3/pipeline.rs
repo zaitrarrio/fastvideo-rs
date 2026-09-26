@@ -439,6 +439,15 @@ pub fn denoise(
     if dumping {
         crate::wan::dump::tensor("text_refined", text_refined)?;
         crate::wan::dump::tensor("video_step00_in", &video)?;
+        crate::wan::dump::tensor("audio_step00_in", &audio)?;
+        for (tag, s) in [("video", &schedule.video), ("audio", &schedule.audio)] {
+            crate::wan::dump::host(&format!("{tag}_sigmas"), &[s.sigmas.len()], &s.sigmas)?;
+            crate::wan::dump::host(
+                &format!("{tag}_timesteps"),
+                &[s.timesteps.len()],
+                &s.timesteps,
+            )?;
+        }
     }
     for step in 0..schedule.num_steps() {
         let mut dump_blocks = |name: &str, x: &CudaTensor| {
@@ -466,6 +475,7 @@ pub fn denoise(
         if dumping {
             crate::wan::dump::tensor(&format!("video_vel_step{:02}", step + 1), &v_video)?;
             crate::wan::dump::tensor(&format!("video_step{:02}", step + 1), &video)?;
+            crate::wan::dump::tensor(&format!("audio_vel_step{:02}", step + 1), &v_audio)?;
             crate::wan::dump::tensor(&format!("audio_step{:02}", step + 1), &audio)?;
         }
         observe(step, &video, &audio)?;
@@ -1091,6 +1101,25 @@ impl H3Pipeline {
             }
         }
         drop(encoder_slot);
+        let mut text = text;
+        // FASTVIDEO_DUMP_DIR: ours before any injection (the text-encoder
+        // parity); FASTVIDEO_INJECT_DIR: then the reference's Qwen hidden
+        // states in place of ours (same tokenizer, so the same row count), so
+        // a parity run measures the DiT and not the text-encoder precision.
+        crate::wan::dump::tensor("text_hidden", &text.hidden)?;
+        if crate::wan::inject::text_enabled() {
+            match crate::wan::inject::load("text_hidden")? {
+                Some((_, v)) if v.len() == text.hidden.numel() => {
+                    let shape = text.hidden.shape.clone();
+                    text.hidden = CudaTensor::from_vec(v, shape)?.to_device()?;
+                }
+                Some((shape, _)) => crate::wan::log::info(format_args!(
+                    "inject: text_hidden {shape:?} does not fit ours {:?} (a different token count); ours kept",
+                    text.hidden.shape
+                )),
+                None => {}
+            }
+        }
         memory.mark("text")?;
         let timer = Instant::now();
         let text_refined = self.refiner.forward(&text.hidden)?;
@@ -1203,7 +1232,16 @@ impl H3Pipeline {
         } else {
             vsa.as_ref().map_or(AttnMode::Dense, AttnMode::Vsa)
         };
-        let (video_noise, audio_noise) = seeded_noise(cfg, &geometry, request.seed).map_err(msg)?;
+        let (mut video_noise, mut audio_noise) =
+            seeded_noise(cfg, &geometry, request.seed).map_err(msg)?;
+        // FASTVIDEO_INJECT_DIR: the reference's packed starting rows (torch's
+        // draws, patchified by the reference), in place of our seeded noise.
+        if let Some(v) = crate::wan::inject::load_numel("video_step00_in", video_noise.len())? {
+            video_noise = v;
+        }
+        if let Some(v) = crate::wan::inject::load_numel("audio_step00_in", audio_noise.len())? {
+            audio_noise = v;
+        }
         let video_rows = CudaTensor::from_vec(
             video_noise,
             vec![geometry.video_rows(), cfg.video_patch_dim()],

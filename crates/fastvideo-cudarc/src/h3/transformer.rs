@@ -810,6 +810,45 @@ fn bf16_table_value(v: f32, is_scale: bool) -> f32 {
 
 /// Step `step`'s ladder rows then the keyframe table, as the fused kernels
 /// read them, uploaded once per step.
+/// FASTVIDEO_DUMP_OPS: block `block`'s six AdaLN vectors at `step`, gathered
+/// per sequence row (every [`crate::wan::dump::BLOCK_ROW_STRIDE`]-th row) as
+/// `[rows, 6 * hidden]` in (shift, scale, gate) msa then mlp order: the
+/// reference's `adaln_proj(temb)` chunks `index_select`ed by its row indices.
+/// Raw f32 table values (before any bf16 rounding of ours).
+fn dump_adaln_rows(
+    table: &AdaLnTable,
+    step: usize,
+    block: usize,
+    layout: &DeviceLayout,
+) -> Result<()> {
+    let h = table.hidden;
+    let slice = ADALN_PARAMS * h;
+    let per_step = table.blocks * MODALITY_NUM * slice;
+    let ladder = table
+        .block_mods
+        .get(step * per_step..(step + 1) * per_step)
+        .ok_or_else(|| msg(format!("h3 adaln dump: step {step} of {}", table.steps)))?;
+    let stride = crate::wan::dump::BLOCK_ROW_STRIDE;
+    let mut out = Vec::new();
+    for r in (0..layout.adaln_idx.len()).step_by(stride) {
+        // `src * blocks * 3 + tag`, src 0 = ladder, 1 = keyframe table.
+        let v = layout.adaln_idx[r] as usize;
+        let (src, tag) = (v / (table.blocks * MODALITY_NUM), v % MODALITY_NUM);
+        let t = block * MODALITY_NUM + tag;
+        let tab = if src == 0 {
+            ladder
+        } else {
+            &table.keyframe_mods[..]
+        };
+        out.extend_from_slice(&tab[t * slice..(t + 1) * slice]);
+    }
+    crate::wan::dump::host(
+        &format!("step00_b{block}_adaln"),
+        &[out.len() / slice, slice],
+        &out,
+    )
+}
+
 fn adaln_rows16(table: &AdaLnTable, step: usize, layout: &DeviceLayout) -> Result<AdaRows> {
     let key = (table.block_mods.as_ptr() as usize, step);
     let tab = ADALN_ROWS16.with(|c| -> Result<CudaTensor> {
@@ -1415,7 +1454,11 @@ impl Block {
                 self.attn.accepts_mx(mode),
             )
         })?;
+        if let NormOut::T(t) = &n {
+            crate::wan::dump::op("attn_in", t)?;
+        }
         let a = phase("h3_2_attn", || self.attn.forward_in(n, rows, rope, mode))?;
+        crate::wan::dump::op("attn_out", &a)?;
         let (x, n) = phase("h3_3_residual_msa", || {
             fused16::res_gate_norm_mod(
                 x,
@@ -1429,7 +1472,12 @@ impl Block {
             )
         })?;
         drop(a);
+        crate::wan::dump::op("resid_msa", &x)?;
+        if let NormOut::T(t) = &n {
+            crate::wan::dump::op("ffn_in", t)?;
+        }
         let f = phase("h3_5_ffn", || self.ff.forward_in(n, rows))?;
+        crate::wan::dump::op("ffn_out", &f)?;
         phase("h3_6_residual_ffn", || {
             fused16::gate_residual(&x, &f, rows_tab, base, gate_mlp)
         })
@@ -2047,10 +2095,24 @@ impl H3Transformer {
             None
         };
         let tea = self.begin_sol_tea(step, &x, l, eps)?;
+        // FASTVIDEO_DUMP_DIR at the first step (the observer is set): the
+        // packed input, the RoPE tables, and the inside of FASTVIDEO_DUMP_OPS blocks.
+        let dump_ops = observer.is_some() && crate::wan::dump::enabled();
+        if dump_ops {
+            let stride = crate::wan::dump::BLOCK_ROW_STRIDE;
+            crate::wan::dump::rows_strided("step00_packed_in", &x, stride)?;
+            crate::wan::dump::rows_strided("rope_cos", &layout.cos, stride)?;
+            crate::wan::dump::rows_strided("rope_sin", &layout.sin, stride)?;
+        }
         if tea == Some(true) {
             x = self.add_sol_tea_residual(x)?;
         } else {
             for index in 0..self.blocks.len() {
+                let ops_here = dump_ops && crate::wan::dump::op_blocks().contains(&index);
+                crate::wan::dump::set_op_block(ops_here.then_some(index));
+                if ops_here {
+                    dump_adaln_rows(&self.table, step, index, layout)?;
+                }
                 if let Some(ada) = &ada {
                     let layer_mode = match mode {
                         AttnMode::Sol(policy) => match policy.route(step, index).map_err(msg)? {
@@ -2073,6 +2135,7 @@ impl H3Transformer {
                             [SHIFT_MSA, SCALE_MSA, GATE_MSA, SHIFT_MLP, SCALE_MLP, GATE_MLP],
                         )
                     })?;
+                    crate::wan::dump::set_op_block(None);
                     if let Some(observe) = observer.as_mut() {
                         observe(&format!("block_{index}"), &x)?;
                     }
@@ -2098,17 +2161,23 @@ impl H3Transformer {
                     let n = phase("h3_1_norm_msa", || {
                         mods.modulate(&x.rms_norm(&block.norm1, eps)?, SCALE_MSA, SHIFT_MSA)
                     })?;
+                    crate::wan::dump::op("attn_in", &n)?;
                     let a = phase("h3_2_attn", || block.attn.forward(&n, rope, layer_mode))?;
                     drop(n);
+                    crate::wan::dump::op("attn_out", &a)?;
                     let x = phase("h3_3_residual_msa", || mods.gated_add(&x, &a, GATE_MSA))?;
                     drop(a);
+                    crate::wan::dump::op("resid_msa", &x)?;
                     let n = phase("h3_4_norm_ffn", || {
                         mods.modulate(&x.rms_norm(&block.norm2, eps)?, SCALE_MLP, SHIFT_MLP)
                     })?;
+                    crate::wan::dump::op("ffn_in", &n)?;
                     let f = phase("h3_5_ffn", || block.ff.forward(&n))?;
                     drop(n);
+                    crate::wan::dump::op("ffn_out", &f)?;
                     phase("h3_6_residual_ffn", || mods.gated_add(&x, &f, GATE_MLP))
                 })?;
+                crate::wan::dump::set_op_block(None);
                 if let Some(observe) = observer.as_mut() {
                     observe(&format!("block_{index}"), &x)?;
                 }

@@ -67,6 +67,8 @@ run_step() {
     lpips:ref) lpips_ref ;;
     cells) run_cells ;;
     cells:*) ( UP_CELLS="${s#cells:}"; UP_CELLS="${UP_CELLS//,/ }"; run_cells ) ;;
+    oracle) run_oracle ;;   # oracle.sh: dump hooks for the GPU oracle diff
+    oracle:*) ( UP_ORACLE="${s#oracle:}"; UP_ORACLE="${UP_ORACLE//,/ }"; run_oracle ) ;;
     *) log "unknown step $s"; false ;;
   esac >>"$OUT/steps.log" 2>&1
   rc=$?
@@ -317,6 +319,9 @@ run_cells() {
   for arm in fullopt sol dense; do cell_sol_h3_rtx "$arm" demo; done
   for wl in 4k5s 1080p20s; do for arm in sol dense; do cell_ltx25 "$wl" "$arm" ours; done; done
 }
+
+# shellcheck source=scripts/gpu/upstream/oracle.sh
+. "$HERE/oracle.sh"
 
 log "pod.sh start steps: ${UP_STEPS:-}"
 info_box

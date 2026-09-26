@@ -17,7 +17,7 @@
 #   gate_cells: fv-gpucheck gate with scripts/gpu/gate-policy.toml
 #     (FV_GATE_POLICY overrides) into $RUNS/gate/.
 set -euo pipefail
-FAMILY="${1:?usage: runpod-matrix.sh h3|ltx|hunyuan|wan|b200|rtx6000|rtx5090|fastvideo|precision|precision-debug|trace|eval}"
+FAMILY="${1:?usage: runpod-matrix.sh h3|ltx|hunyuan|wan|b200|rtx6000|rtx5090|fastvideo|precision|precision-debug|trace|oracle|ltxvae|eval}"
 WORK="${FV_WORK:-/workspace}"
 BIN="${FV_GPUCHECK:-/opt/fastvideo-rs/target/release/fv-gpucheck}"
 W="$WORK/weights"
@@ -288,6 +288,45 @@ if [[ "${FV_LPIPS:-0}" == 1 ]]; then
     log "WARN: LPIPS weights unavailable (lpips-fetch.log); compare-clips runs without LPIPS"
   fi
 fi
+
+# oracle_fetch <target> <dir>: wait (FV_ORACLE_WAIT_S, default 3 h) until an
+# upstream pod under one of FV_ORACLE_URL's space-separated base URLs has
+# finished oracle-<target> (scripts/gpu/upstream/oracle.sh), then download its
+# oracle-dump.tar and unpack it to <dir>/dump. Fails when the reference wrote
+# no dump or never finished.
+oracle_fetch() {
+  local target="$1" dest="$2" t0 base="" u attempt
+  [[ -n "${FV_ORACLE_URL:-}" ]] || { log "oracle: FV_ORACLE_URL unset"; return 1; }
+  t0=$(date +%s)
+  while [[ -z "$base" ]]; do
+    for u in $FV_ORACLE_URL; do
+      if curl -sS --max-time 30 --fail -o /dev/null "$u/oracle-$target/ORACLE_DONE" 2>/dev/null; then
+        base="$u/oracle-$target"
+        break
+      fi
+    done
+    [[ -n "$base" ]] && break
+    if (( $(date +%s) - t0 >= ${FV_ORACLE_WAIT_S:-10800} )); then
+      log "oracle: $target not finished upstream after ${FV_ORACLE_WAIT_S:-10800}s"
+      return 1
+    fi
+    sleep 30
+  done
+  log "oracle: fetching $base/oracle-dump.tar"
+  rm -rf "$dest"
+  mkdir -p "$dest"
+  for attempt in 1 2 3; do
+    if curl -sS --fail --retry 3 --max-time 3600 -o "$dest/dump.tar" "$base/oracle-dump.tar" \
+      && tar -xf "$dest/dump.tar" -C "$dest" && [[ -d "$dest/dump" ]]; then
+      rm -f "$dest/dump.tar"
+      log "oracle: $target reference $(du -sh "$dest/dump" | cut -f1)"
+      return 0
+    fi
+    log "oracle: fetch of $target failed (attempt $attempt)"
+    sleep 10
+  done
+  return 1
+}
 
 log "matrix start image=$(cat /opt/fastvideo-rs/target/release/fv-gpucheck.build-id 2>/dev/null || echo unknown)"
 if [[ ! -x "$BIN" ]]; then
@@ -978,6 +1017,101 @@ case "$FAMILY" in
     gate_cells ltx25-512p-f32act ltx25-512p-bf16act lossy
     for f in "$RUNS"/gate/gate-*.json; do
       [[ -f "$f" ]] && log "$(basename "$f"): $(grep -o '"verdict": "[a-z]*"' "$f" | head -1)"
+    done
+    ;;
+  ltxvae)
+    # LTX-2.5 conv VAE decode alone (`ltx2 vae-bench`), at the sol-engine
+    # 4k5s and 1080p20s geometries on synthetic latents, tiled as gen tiles:
+    # the channels-last bf16 decoder against the f32 streaming one, each
+    # warm, CUPTI-traced (FASTVIDEO_GPU_TRACE_DECODE, set FV_VAE_TRACE=0 to
+    # time untraced) and with frames for compare-clips. The fast cell also
+    # checks its first tile against the streaming decoder
+    # (FASTVIDEO_LTX_VAE_CHECK). FV_VAE_GEN=1 adds one cold (no --warm) gen
+    # per workload that saves its latents, then decodes those with the
+    # streaming decoder, for a real-content PSNR.
+    trace="${FV_VAE_TRACE:-1}"
+    for wl in ${FV_VAE_WORKLOADS:-4k5s 1080p20s}; do
+      for dec in fast streaming; do
+        gated_cell "ltxvae-$wl-$dec" ltx25-two-stage \
+          env FASTVIDEO_GPU_TRACE_DECODE="$trace" FASTVIDEO_LTX_VAE_CHECK=1 \
+          "$BIN" --mode fast ltx2 vae-bench --weights "$W/ltx25" --workload "$wl" \
+            --decoder "$dec" --warm --clip "$RUNS/ltxvae-$wl-$dec/frames"
+      done
+      compare_cells "ltxvae-$wl-streaming" "ltxvae-$wl-fast"
+      if [[ "${FV_VAE_GEN:-0}" == 1 ]]; then
+        gated_cell "ltx25-$wl-gen" ltx25-two-stage \
+          env FASTVIDEO_LTX2_SAVE_LATENTS="$RUNS/latents-$wl" FASTVIDEO_GPU_TRACE_DECODE="$trace" \
+          "$BIN" --mode fast ltx2 gen --model-version 2.5 \
+            --weights "$W/ltx25" --dit "$W/ltx25" --workload "$wl" --dense-stage2 \
+            --prompt "$PROMPT" --seed "$SEED" --two-stage --text streamed \
+            --clip "$RUNS/ltx25-$wl-gen/frames"
+        gated_cell "ltx25-$wl-gen-streaming" ltx25-two-stage \
+          "$BIN" --mode fast ltx2 vae-bench --weights "$W/ltx25" --workload "$wl" \
+            --latents "$RUNS/latents-$wl" --decoder streaming --warm \
+            --clip "$RUNS/ltx25-$wl-gen-streaming/frames"
+        compare_cells "ltx25-$wl-gen-streaming" "ltx25-$wl-gen"
+      fi
+    done
+    for cell in $(ls "$RUNS" 2>/dev/null | grep -E '^(ltxvae|ltx25-.*-gen)'); do
+      grep -h 'vae-bench\|vae_check\|video decode' "$RUNS/$cell/stderr.log" 2>/dev/null | tail -3 | cut -c1-400 | sed "s/^/[$cell] /" | tee -a "$LOG" || true
+    done
+    ;;
+  oracle)
+    # GPU oracle diff (docs/oracle.md): the Python references' dumps
+    # (scripts/gpu/upstream/oracle.sh on an upstream pod, served under
+    # FV_ORACLE_URL) are downloaded, their noise and text conditioning
+    # injected into our run (FASTVIDEO_INJECT_DIR), our run dumped the same
+    # way (FASTVIDEO_DUMP_DIR), and the two compared tensor by tensor
+    # (compare-dumps; report under oracle-<target>-diff/gpucheck-out).
+    # FV_ORACLE_TARGETS picks targets; the default is every H3 and LTX one.
+    ops="${FASTVIDEO_DUMP_OPS:-0,1,24,47}"
+    h3_oracle=(
+      --prompt "$PROMPT"
+      --seconds 5
+      --seed "$SEED"
+      --text-encoder streamed
+      --text-cache "$SCRATCH/h3-text-cache"
+      --text-weights "$W/h3-base"
+    )
+    ltx_oracle=(--prompt "$PROMPT" --seed "$SEED" --two-stage --text streamed)
+    for target in ${FV_ORACLE_TARGETS:-fasth3-8step fasth3-4step-vsa ltx25-512p ltx25-512p-dense ltx25-4k ltx25-4k-dense}; do
+      ref="$SCRATCH/oracle-ref/$target"
+      if ! oracle_fetch "$target" "$ref"; then
+        mkdir -p "$RUNS/oracle-$target"
+        write_json "$RUNS/oracle-$target/summary.json" "$(printf '{"cell":"oracle-%s","family":"%s","exit":null,"skipped":"reference dump unavailable"}' "$target" "$FAMILY")"
+        continue
+      fi
+      ours="$RUNS/oracle-$target-dump"
+      rm -rf "$ours"
+      envs=(FASTVIDEO_INJECT_DIR="$ref/dump" FASTVIDEO_DUMP_DIR="$ours" FASTVIDEO_DUMP_OPS="$ops")
+      case "$target" in
+        fasth3-8step)
+          gated_cell "oracle-$target" fasth3-8step env "${envs[@]}" \
+            "$BIN" --mode fast h3 gen --weights "$W/h3-8step" --h3-recipe 8step \
+              --adaln-cache "$RUNS/oracle-$target-adaln.cache" \
+              --clip-dir "$RUNS/oracle-$target/frames" "${h3_oracle[@]}" ;;
+        fasth3-4step-vsa)
+          gated_cell "oracle-$target" fasth3-4step-vsa env "${envs[@]}" \
+            "$BIN" --mode fast h3 gen --weights "$W/h3-base" --h3-recipe 4step-vsa \
+              --adaln-cache "$RUNS/oracle-$target-adaln.cache" \
+              --clip-dir "$RUNS/oracle-$target/frames" "${h3_oracle[@]}" ;;
+        ltx25-*)
+          geo=(--height 512 --width 768 --num-frames 121)
+          [[ "$target" == ltx25-4k* ]] && geo=(--workload 4k5s)
+          arm=()
+          [[ "$target" == *-dense ]] && arm=(--dense-stage2)
+          gated_cell "oracle-$target" ltx25-two-stage env "${envs[@]}" \
+            "$BIN" --mode fast ltx2 gen --model-version 2.5 \
+              --weights "$W/ltx25" --dit "$W/ltx25" "${geo[@]}" "${arm[@]}" "${ltx_oracle[@]}" \
+              --clip "$RUNS/oracle-$target/frames" ;;
+        *) log "unknown oracle target $target"; continue ;;
+      esac
+      if [[ -d "$ours" ]]; then
+        run_cell "oracle-$target-diff" "$BIN" compare-dumps --baseline "$ref/dump" --candidate "$ours"
+        grep -h 'compare-dumps' "$RUNS/oracle-$target-diff/stderr.log" | sed "s/^/[oracle-$target] /" | tee -a "$LOG" || true
+      fi
+      # The dumps are hundreds of MB each; the report keeps the numbers.
+      rm -rf "$ours" "$ref"
     done
     ;;
   *)
