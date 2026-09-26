@@ -273,6 +273,61 @@ pub fn fp8_recipes(report: &mut Report, seed: &mut u64) -> StageResult<()> {
             json!({"cosine_min": 0.995, "rel_l2_max": 0.10, "source": "FastVideo tests/ops/quantization/test_mxfp8.py"}),
         )?;
     }
+    // 3b. The generic (LTX) quantized linear: bias and GELU epilogue on f32
+    //     and bf16 activations against the host emulation, and a second
+    //     forward on the same input (the shared, cached activation
+    //     quantization Q/K/V use) bit-identical to the first.
+    {
+        let (m, k, n) = (200usize, 1024usize, 512usize);
+        let w = bf16v(rand(seed, n * k, 0.02));
+        let b = bf16v(rand(seed, n, 0.5));
+        let x = bf16v(rand(seed, m * k, 1.0));
+        let sections = vec![Section {
+            rows: n,
+            quantized: true,
+        }];
+        let mut lin = Linear::from_tensors(
+            CudaTensor::from_vec(w.clone(), vec![n, k])?,
+            Some(CudaTensor::from_vec(b.clone(), vec![n])?),
+        )?;
+        lin.quantize(QuantKind::W8A8, sections.clone())?;
+        let layout = QuantLayout::new(QuantKind::W8A8, k, sections)?;
+        let (blob, scales) = layout.quantize_host(&w)?;
+        let emu = layout.forward_host(&blob, &scales, &x, m);
+        for (act16, gelu) in [(false, false), (false, true), (true, false), (true, true)] {
+            let want = fastvideo_cudarc::wan::ops::host::quant_linear_epilogue(&emu, Some(&b), gelu);
+            let xt = if act16 {
+                t16(&x, &[1, m, k])?
+            } else {
+                t32(&x, &[1, m, k])?
+            };
+            let run = || {
+                with_bf16_act(act16, || {
+                    if gelu {
+                        lin.forward_gelu(&xt)
+                    } else {
+                        lin.forward(&xt)
+                    }
+                    .map_err(anyhow::Error::from)
+                })
+            };
+            let first = run()?;
+            let second = run()?;
+            let dtype_ok = first.is_bf16() == act16;
+            let (a, a2) = (host(&first)?, host(&second)?);
+            let dq = diff(&a, &want);
+            report.check(
+                format!(
+                    "w8a8_linear_bias{}_{}_matches_emulation",
+                    if gelu { "_gelu" } else { "" },
+                    if act16 { "bf16" } else { "f32" }
+                ),
+                dq.within(1e-2) && a == a2 && dtype_ok,
+                json!({"diff": dq.to_json(), "cached_rerun_identical": a == a2, "dtype_ok": dtype_ok}),
+                json!({"rel_l2": 1e-2}),
+            )?;
+        }
+    }
     // 4. Fused MXFP8 producers vs host bf16 value + host quantizer: compare
     //    the dequantized activations (the bf16 value may differ by one ulp
     //    where rsqrt / exp differ, which can move a code).

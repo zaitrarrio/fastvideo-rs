@@ -73,6 +73,29 @@ fn msg(s: impl Into<String>) -> TensorError {
     TensorError::Message(s.into())
 }
 
+/// Identity of a tensor's device buffer, for caches of values derived from
+/// it (a quantized activation). Weak: it keeps no memory alive, and while it
+/// exists the buffer cannot be mutated in place (`Arc::get_mut` fails) nor
+/// its allocation identity be reused, so a live match means the same values.
+#[cfg(feature = "cuda")]
+#[derive(Clone)]
+pub(crate) enum ActKey {
+    F32(std::sync::Weak<cudarc::driver::CudaSlice<f32>>),
+    Bf16(std::sync::Weak<cudarc::driver::CudaSlice<half::bf16>>),
+}
+
+#[cfg(feature = "cuda")]
+impl ActKey {
+    /// Same, still-live buffer.
+    pub(crate) fn matches(&self, other: &ActKey) -> bool {
+        match (self, other) {
+            (Self::F32(a), Self::F32(b)) => a.ptr_eq(b) && a.strong_count() > 0,
+            (Self::Bf16(a), Self::Bf16(b)) => a.ptr_eq(b) && a.strong_count() > 0,
+            _ => false,
+        }
+    }
+}
+
 /// `(big, small, op, inner, period, out_shape)` of a broadcast binary op.
 #[cfg(feature = "cuda")]
 type BcastPlan<'a> = (&'a CudaTensor, &'a CudaTensor, BcastOp, usize, usize, Vec<usize>);
@@ -564,6 +587,17 @@ impl CudaTensor {
     pub(crate) fn act16_device(&self) -> bool {
         bf16_activations()
             && (self.device_bf16.is_some() || (self.is_bf16() && stats::device_expected()))
+    }
+
+    /// [`ActKey`] of the buffer [`Self::dev_bf16`] reads (`None` host-only).
+    #[cfg(feature = "cuda")]
+    pub(crate) fn act_key(&self) -> Option<ActKey> {
+        if let Some(b) = &self.device_bf16 {
+            return Some(ActKey::Bf16(std::sync::Arc::downgrade(&b.slice)));
+        }
+        self.device
+            .as_ref()
+            .map(|b| ActKey::F32(std::sync::Arc::downgrade(&b.slice)))
     }
 
     /// Device bf16 view: borrowed when stored as bf16, else a temporary cast.

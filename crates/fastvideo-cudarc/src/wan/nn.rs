@@ -861,10 +861,27 @@ impl Linear {
         let (m, _, out_shape) = self.out_shape(xs)?;
         #[cfg(feature = "cuda")]
         if q.is_device() {
-            let x16 = xs
-                .dev_bf16()?
-                .ok_or_else(|| msg("quantized linear without a device tensor"))?;
-            let y = q.forward_device(Some(super::quant::ptr(x16.as_ref())), None, m)?;
+            let pre = if q.kind() == super::quant::QuantKind::W8A8 {
+                super::quant::w8_cached_act(xs, m, self.in_dim)?
+            } else {
+                None
+            };
+            let y = match &pre {
+                // Q/K/V (and cross-attention K/V) read one activation: its
+                // tensorwise quantization is shared, no bf16 view needed.
+                Some(a) if q.layout_all_quantized() => q.forward_device_with(None, None, Some(a), m)?,
+                _ => {
+                    let x16 = xs
+                        .dev_bf16()?
+                        .ok_or_else(|| msg("quantized linear without a device tensor"))?;
+                    q.forward_device_with(
+                        Some(super::quant::ptr(x16.as_ref())),
+                        None,
+                        pre.as_deref(),
+                        m,
+                    )?
+                }
+            };
             let out = CudaTensor::from_device_slice_bf16(y, out_shape)?;
             return self.quant_epilogue(out, gelu);
         }

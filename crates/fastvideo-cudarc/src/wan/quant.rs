@@ -663,6 +663,11 @@ impl QuantWeight {
         self.layout.blob_bytes as u64
     }
 
+    /// Every output row is quantized (no bf16 section needing the raw input).
+    pub fn layout_all_quantized(&self) -> bool {
+        self.layout.sections.iter().all(|s| s.quantized)
+    }
+
     pub fn is_device(&self) -> bool {
         #[cfg(feature = "cuda")]
         {
@@ -733,6 +738,73 @@ mod device_impl {
         pub s: CudaSlice<u8>,
         pub rows: usize,
         pub k: usize,
+    }
+
+    /// A W8A8 (tensorwise) activation: `[m_pad, k]` E4M3 codes (pad rows
+    /// zero) and its f32 scale.
+    pub struct W8Act {
+        pub q: CudaSlice<u8>,
+        pub scale: CudaSlice<f32>,
+        pub m: usize,
+        pub k: usize,
+    }
+
+    /// The last W8A8 activation quantized, keyed by its source buffer.
+    struct W8Cached {
+        key: super::super::tensor::ActKey,
+        act: Arc<W8Act>,
+    }
+    static W8_CACHE: std::sync::Mutex<Option<W8Cached>> = std::sync::Mutex::new(None);
+
+    /// The W8A8 quantization of `x` (`m x k`), shared by consecutive linears
+    /// that read the same buffer (Q/K/V, cross-attention K/V): the
+    /// tensorwise activation quantization depends on the activation alone.
+    /// `None` for a host tensor.
+    pub fn w8_cached_act(
+        x: &super::super::tensor::CudaTensor,
+        m: usize,
+        k: usize,
+    ) -> Result<Option<Arc<W8Act>>> {
+        let Some(key) = x.act_key() else { return Ok(None) };
+        let mut slot = W8_CACHE.lock().expect("w8a8 activation cache");
+        if let Some(c) = slot.as_ref() {
+            if c.key.matches(&key) && c.act.m == m && c.act.k == k {
+                return Ok(Some(c.act.clone()));
+            }
+        }
+        // Drop the previous entry before quantizing: its codes are dead weight.
+        *slot = None;
+        let x16 = x
+            .dev_bf16()?
+            .ok_or_else(|| msg("quantized linear without a device tensor"))?;
+        let act = Arc::new(W8Act::quantize(ptr(x16.as_ref()), m, k)?);
+        *slot = Some(W8Cached {
+            key,
+            act: act.clone(),
+        });
+        Ok(Some(act))
+    }
+
+    /// Forget the cached activation (its memory goes back to the pool);
+    /// [`super::device::trim_pool`] calls this between phases.
+    pub fn clear_w8_act_cache() {
+        if let Ok(mut slot) = W8_CACHE.lock() {
+            *slot = None;
+        }
+    }
+
+    impl W8Act {
+        /// Quantize bf16 `x` (`m x k`, device pointer) with the recipe's
+        /// activation quantizer.
+        pub fn quantize(x_bf16: u64, m: usize, k: usize) -> Result<Self> {
+            let dev = ctx()?;
+            let m_pad = m.next_multiple_of(16).max(16);
+            let mut q = unsafe { dev.stream.alloc::<u8>(m_pad * k) }.map_err(err)?;
+            let mut scale = dev.stream.alloc_zeros::<f32>(1).map_err(err)?;
+            let (qp, sp) = (ptr_mut(&mut q), ptr_mut(&mut scale));
+            w8a8_quantize_raw(x_bf16, true, m * k, qp, m_pad * k, sp)?;
+            Ok(Self { q, scale, m, k })
+        }
     }
 
     impl MxAct {
@@ -880,6 +952,20 @@ mod device_impl {
             pre: Option<&MxAct>,
             m: usize,
         ) -> Result<CudaSlice<half::bf16>> {
+            self.forward_device_with(x_bf16, pre, None, m)
+        }
+
+        /// [`Self::forward_device`] with an already-quantized W8A8 activation
+        /// (`pre_w8`, from [`W8Act::quantize`] of the same `x_bf16`): the
+        /// tensorwise activation quantization depends only on the activation,
+        /// so linears sharing an input (Q/K/V) quantize it once.
+        pub fn forward_device_with(
+            &self,
+            x_bf16: Option<u64>,
+            pre: Option<&MxAct>,
+            pre_w8: Option<&W8Act>,
+            m: usize,
+        ) -> Result<CudaSlice<half::bf16>> {
             let dev = ctx()?;
             let lay = &*self.layout;
             let (k, n_out) = (lay.in_dim, lay.out_dim);
@@ -892,8 +978,10 @@ mod device_impl {
             let m_pad = m.next_multiple_of(16).max(16);
             // Activation operand for the FP8 sections.
             let mut own_mx = None;
-            let mut xq_w8 = None;
-            let mut x_scale = None;
+            // Owns this call's quantized activation until the GEMMs are enqueued.
+            let mut _own_w8 = None;
+            let mut xq_w8: Option<u64> = None;
+            let mut x_scale: Option<u64> = None;
             if any_quant {
                 match lay.kind {
                     QuantKind::Mxfp8 => {
@@ -904,15 +992,20 @@ mod device_impl {
                             own_mx = Some(a);
                         }
                     }
-                    QuantKind::W8A8 => {
-                        let xp = x_bf16.ok_or_else(|| msg("w8a8 linear without input"))?;
-                        let mut q = unsafe { dev.stream.alloc::<u8>(m_pad * k) }.map_err(err)?;
-                        let mut s = dev.stream.alloc_zeros::<f32>(1).map_err(err)?;
-                        let (qp, sp) = (ptr_mut(&mut q), ptr_mut(&mut s));
-                        w8a8_quantize_raw(xp, true, m * k, qp, m_pad * k, sp)?;
-                        xq_w8 = Some(q);
-                        x_scale = Some(s);
-                    }
+                    QuantKind::W8A8 => match pre_w8 {
+                        Some(a) if a.m == m && a.k == k => {
+                            xq_w8 = Some(ptr(&a.q));
+                            x_scale = Some(ptr(&a.scale));
+                        }
+                        Some(_) => return Err(msg("w8a8 linear: pre-quantized activation shape")),
+                        None => {
+                            let xp = x_bf16.ok_or_else(|| msg("w8a8 linear without input"))?;
+                            let a = W8Act::quantize(xp, m, k)?;
+                            xq_w8 = Some(ptr(&a.q));
+                            x_scale = Some(ptr(&a.scale));
+                            _own_w8 = Some(a);
+                        }
+                    },
                 }
             }
             let mx = pre.or(own_mx.as_ref());
@@ -941,14 +1034,14 @@ mod device_impl {
                                 n: n_tok,
                                 k,
                                 a,
-                                b: ptr(xq_w8.as_ref().unwrap()),
+                                b: xq_w8.ok_or_else(|| msg("w8a8 activation missing"))?,
                                 ab_type: lt::cudaDataType_t::CUDA_R_8F_E4M3,
                                 d,
                                 ldd: n_out,
                                 scale: LtScale::Tensor {
                                     a: ptr(self.scales_dev.as_ref().unwrap().as_ref())
                                         + 4 * i as u64,
-                                    b: ptr(x_scale.as_ref().unwrap()),
+                                    b: x_scale.ok_or_else(|| msg("w8a8 scale missing"))?,
                                 },
                                 bias: None,
                             },

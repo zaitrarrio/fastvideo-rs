@@ -567,6 +567,8 @@ pub fn reset_pool_peaks() {
 /// keeps freed memory otherwise (see `keep_memory_pool`), and a model freed
 /// in many pieces leaves fragments the next large allocation cannot use.
 pub fn trim_pool() -> Result<()> {
+    #[cfg(feature = "cuda")]
+    super::quant::clear_w8_act_cache();
     synchronize()?;
     #[cfg(feature = "cuda")]
     if let Some(pool) = default_pool() {
