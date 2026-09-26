@@ -887,6 +887,19 @@ case "$FAMILY" in
             --decoder "$dec" --warm --clip "$RUNS/ltxvae-$wl-$dec/frames"
       done
       compare_cells "ltxvae-$wl-streaming" "ltxvae-$wl-fast"
+      # Untraced timings (CUPTI adds per-launch cost), and the fast decoder
+      # with every cuDNN algorithm timed per shape during the warm-up.
+      if [[ "${FV_VAE_UNTRACED:-1}" == 1 ]]; then
+        for dec in fast streaming; do
+          gated_cell "ltxvae-$wl-$dec-untraced" ltx25-two-stage \
+            "$BIN" --mode fast ltx2 vae-bench --weights "$W/ltx25" --workload "$wl" \
+              --decoder "$dec" --warm
+        done
+        gated_cell "ltxvae-$wl-fast-tune" ltx25-two-stage \
+          env FASTVIDEO_LTX_VAE_CONV_ALGO=tune \
+          "$BIN" --mode fast ltx2 vae-bench --weights "$W/ltx25" --workload "$wl" \
+            --decoder fast --warm
+      fi
       if [[ "${FV_VAE_GEN:-0}" == 1 ]]; then
         gated_cell "ltx25-$wl-gen" ltx25-two-stage \
           env FASTVIDEO_LTX2_SAVE_LATENTS="$RUNS/latents-$wl" FASTVIDEO_GPU_TRACE_DECODE="$trace" \
