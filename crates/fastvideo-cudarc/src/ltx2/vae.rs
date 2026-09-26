@@ -52,6 +52,11 @@ use crate::wan::weights::{cuda_tensor_shaped, WeightMap};
 
 use super::{msg, ones};
 
+/// The channels-last bf16 tile decoder (the reference's memory-efficient
+/// decode); see its module docs.
+#[path = "vae_fast.rs"]
+pub mod fast;
+
 /// A 3×3×3 conv: reflect- or zero-padded in space, streamed in time.
 struct TemporalConv {
     weight: CudaTensor,
@@ -377,6 +382,9 @@ pub struct VideoDecoder {
     blocks: Vec<Block>,
     ones_out: CudaTensor,
     conv_out: TemporalConv,
+    /// [`fast::FastDecoder`], built on the first tiled decode that uses it.
+    #[cfg(feature = "cuda")]
+    fast: std::sync::OnceLock<std::result::Result<fast::FastDecoder, String>>,
 }
 
 impl VideoDecoder {
@@ -471,6 +479,8 @@ impl VideoDecoder {
                 spatial_pad,
             )?,
             cfg: cfg.clone(),
+            #[cfg(feature = "cuda")]
+            fast: std::sync::OnceLock::new(),
         })
     }
 
@@ -637,7 +647,7 @@ impl VideoDecoder {
     }
 
     /// One tile's decode as `[frames, 3, H, W]`, rounded to bf16 — the dtype the
-    /// reference decoder returns it in.
+    /// reference decoder returns it in. The f32 streaming decoder.
     fn decode_tile(&self, latents: &CudaTensor) -> Result<CudaTensor> {
         let mut pieces: Vec<CudaTensor> = Vec::new();
         self.decode_streaming(latents, &mut |_, frames| {
@@ -645,6 +655,81 @@ impl VideoDecoder {
             Ok(())
         })?;
         CudaTensor::cat(&pieces.iter().collect::<Vec<_>>(), 0)?.quantize_bf16()
+    }
+
+    /// The channels-last decoder when it is on and supports this model,
+    /// `None` otherwise (the reason is logged once).
+    #[cfg(feature = "cuda")]
+    fn fast_decoder(&self) -> Option<&fast::FastDecoder> {
+        if !fast::enabled() || crate::wan::device::global_device().is_none() {
+            return None;
+        }
+        let built = self.fast.get_or_init(|| {
+            let timer = std::time::Instant::now();
+            let r = fast::FastDecoder::build(self).map_err(|e| e.to_string());
+            match &r {
+                Ok(_) => crate::wan::log::info(format_args!(
+                    "ltx vae: channels-last bf16 decoder ({:.2}s to convert weights)",
+                    timer.elapsed().as_secs_f64()
+                )),
+                Err(e) => {
+                    crate::wan::log::info(format_args!("ltx vae: f32 streaming decoder ({e})"))
+                }
+            }
+            r
+        });
+        built.as_ref().ok()
+    }
+
+    /// One tile through whichever decoder is active. With
+    /// `FASTVIDEO_LTX_VAE_CHECK`, the first tile (`check` still set) is decoded
+    /// both ways and the difference and both times are logged.
+    #[cfg(feature = "cuda")]
+    fn tile(
+        &self,
+        latents: &CudaTensor,
+        convs: &mut fast::Convs,
+        check: &mut bool,
+    ) -> Result<CudaTensor> {
+        let Some(fd) = self.fast_decoder() else {
+            return self.decode_tile(latents);
+        };
+        if !std::mem::take(check) || !fast::check_enabled() {
+            return fd.decode_tile(latents, convs);
+        }
+        let dev = crate::wan::device::global_device().ok_or_else(|| msg("no device"))?;
+        let time = |f: &mut dyn FnMut() -> Result<CudaTensor>| -> Result<(CudaTensor, f64)> {
+            dev.synchronize().map_err(|e| msg(e.to_string()))?;
+            let t = std::time::Instant::now();
+            let y = f()?;
+            dev.synchronize().map_err(|e| msg(e.to_string()))?;
+            Ok((y, t.elapsed().as_secs_f64()))
+        };
+        let (old, old_s) = time(&mut || self.decode_tile(latents))?;
+        let (new, new_s) = time(&mut || fd.decode_tile(latents, convs))?;
+        let (a, b) = (new.host_cow()?, old.host_cow()?);
+        let (mut num, mut den, mut max) = (0f64, 0f64, 0f64);
+        for (x, y) in a.iter().zip(b.iter()) {
+            let d = f64::from(x - y);
+            num += d * d;
+            den += f64::from(*y) * f64::from(*y);
+            max = max.max(d.abs());
+        }
+        let rel = (num / den.max(1e-30)).sqrt();
+        // Printed regardless of FASTVIDEO_LOG: the check is the measurement.
+        eprintln!(
+            "[INFO] ltx2/vae_check {}",
+            serde_json::json!({
+                "tile": latents.shape, "same_shape": new.shape == old.shape,
+                "fast_s": new_s, "streaming_s": old_s, "rel_l2": rel, "max_abs": max,
+            })
+        );
+        Ok(new)
+    }
+
+    #[cfg(not(feature = "cuda"))]
+    fn tile(&self, latents: &CudaTensor, _: &mut (), _: &mut bool) -> Result<CudaTensor> {
+        self.decode_tile(latents)
     }
 
     /// `ConvVideoDecoder.tiled_decode` (`ltx_core/model/video_vae/
@@ -726,6 +811,11 @@ impl VideoDecoder {
                 .mul(ww)
         };
         const CHUNK: usize = 8;
+        #[cfg(feature = "cuda")]
+        let mut convs = fast::Convs::default();
+        #[cfg(not(feature = "cuda"))]
+        let mut convs = ();
+        let mut check = true;
         let mut emitted = 0usize;
         // Blended frames of the previous group that the current one overlaps.
         let mut carry: Option<(CudaTensor, usize)> = None;
@@ -738,8 +828,11 @@ impl VideoDecoder {
                 let lat_h = lat_t.narrow(3, ht.latent.start, ht.latent.len())?;
                 let mut row = Vec::with_capacity(plan.width.len());
                 for wt in &plan.width {
-                    let tile =
-                        self.decode_tile(&lat_h.narrow(4, wt.latent.start, wt.latent.len())?)?;
+                    let tile = self.tile(
+                        &lat_h.narrow(4, wt.latent.start, wt.latent.len())?,
+                        &mut convs,
+                        &mut check,
+                    )?;
                     let want = [group.len(), 3, ht.out.len(), wt.out.len()];
                     if tile.shape[..] != want {
                         return Err(msg(format!(

@@ -4,7 +4,7 @@
 # Spark joint LTX refine stays off (FASTVIDEO_LTX2_WEIGHTS unset) except in
 # the rtx6000 parity family, which runs the full Spark bridge.
 set -euo pipefail
-FAMILY="${1:?usage: runpod-matrix.sh h3|ltx|hunyuan|wan|b200|rtx6000|rtx5090|fastvideo|precision|precision-debug|trace|oracle}"
+FAMILY="${1:?usage: runpod-matrix.sh h3|ltx|hunyuan|wan|b200|rtx6000|rtx5090|fastvideo|precision|precision-debug|trace|oracle|ltxvae}"
 WORK="${FV_WORK:-/workspace}"
 BIN="${FV_GPUCHECK:-/opt/fastvideo-rs/target/release/fv-gpucheck}"
 W="$WORK/weights"
@@ -866,6 +866,43 @@ case "$FAMILY" in
         --clip "$RUNS/ltx25-4k5s-sol/frames"
     for cell in fasth3-4step-vsa-768p fasth3-8step-768p fasth3-4step-dense-768p ltx25-4k5s-sol; do
       grep -h '/gpu_trace ' "$RUNS/$cell/stderr.log" 2>/dev/null | tail -1 | cut -c1-400 | sed "s/^/[$cell] /" | tee -a "$LOG" || true
+    done
+    ;;
+  ltxvae)
+    # LTX-2.5 conv VAE decode alone (`ltx2 vae-bench`), at the sol-engine
+    # 4k5s and 1080p20s geometries on synthetic latents, tiled as gen tiles:
+    # the channels-last bf16 decoder against the f32 streaming one, each
+    # warm, CUPTI-traced (FASTVIDEO_GPU_TRACE_DECODE, set FV_VAE_TRACE=0 to
+    # time untraced) and with frames for compare-clips. The fast cell also
+    # checks its first tile against the streaming decoder
+    # (FASTVIDEO_LTX_VAE_CHECK). FV_VAE_GEN=1 adds one cold (no --warm) gen
+    # per workload that saves its latents, then decodes those with the
+    # streaming decoder, for a real-content PSNR.
+    trace="${FV_VAE_TRACE:-1}"
+    for wl in ${FV_VAE_WORKLOADS:-4k5s 1080p20s}; do
+      for dec in fast streaming; do
+        gated_cell "ltxvae-$wl-$dec" ltx25-two-stage \
+          env FASTVIDEO_GPU_TRACE_DECODE="$trace" FASTVIDEO_LTX_VAE_CHECK=1 \
+          "$BIN" --mode fast ltx2 vae-bench --weights "$W/ltx25" --workload "$wl" \
+            --decoder "$dec" --warm --clip "$RUNS/ltxvae-$wl-$dec/frames"
+      done
+      compare_cells "ltxvae-$wl-streaming" "ltxvae-$wl-fast"
+      if [[ "${FV_VAE_GEN:-0}" == 1 ]]; then
+        gated_cell "ltx25-$wl-gen" ltx25-two-stage \
+          env FASTVIDEO_LTX2_SAVE_LATENTS="$RUNS/latents-$wl" FASTVIDEO_GPU_TRACE_DECODE="$trace" \
+          "$BIN" --mode fast ltx2 gen --model-version 2.5 \
+            --weights "$W/ltx25" --dit "$W/ltx25" --workload "$wl" --dense-stage2 \
+            --prompt "$PROMPT" --seed "$SEED" --two-stage --text streamed \
+            --clip "$RUNS/ltx25-$wl-gen/frames"
+        gated_cell "ltx25-$wl-gen-streaming" ltx25-two-stage \
+          "$BIN" --mode fast ltx2 vae-bench --weights "$W/ltx25" --workload "$wl" \
+            --latents "$RUNS/latents-$wl" --decoder streaming --warm \
+            --clip "$RUNS/ltx25-$wl-gen-streaming/frames"
+        compare_cells "ltx25-$wl-gen-streaming" "ltx25-$wl-gen"
+      fi
+    done
+    for cell in $(ls "$RUNS" 2>/dev/null | grep -E '^(ltxvae|ltx25-.*-gen)'); do
+      grep -h 'vae-bench\|vae_check\|video decode' "$RUNS/$cell/stderr.log" 2>/dev/null | tail -3 | cut -c1-400 | sed "s/^/[$cell] /" | tee -a "$LOG" || true
     done
     ;;
   oracle)

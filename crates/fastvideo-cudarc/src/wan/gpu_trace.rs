@@ -136,6 +136,12 @@ pub fn category(name: &str) -> &'static str {
     ]) {
         "attention"
     } else if any(&[
+        // cuDNN convolution engines (before `gemm`: `implicit_gemm` fprop
+        // kernels are convolutions).
+        "fprop", "convolve", "winograd", "dgrad", "conv2d", "conv3d", "fft2d", "fft3d",
+    ]) {
+        "conv"
+    } else if any(&[
         "gemm", "gemv", "cutlass", "xmma", "nvjet", "cublas", "matmul", "splitk", "wgmma",
         "tensorop", "s16816", "sm80_", "sm90_", "sm100_", "sm120_", "ampere_", "hopper",
     ]) {
@@ -574,6 +580,88 @@ pub fn last_report() -> Option<Value> {
 
 pub fn reset_report() {
     *LAST.lock().expect("gpu_trace lock") = None;
+    *LAST_WINDOW.lock().expect("gpu_trace lock") = None;
+}
+
+// ---- whole-phase windows ----------------------------------------------------
+
+/// `FASTVIDEO_GPU_TRACE_DECODE=1`: trace a whole video decode (every kernel,
+/// copy and gap from the first launch to the last) instead of a denoise
+/// step. Independent of `FASTVIDEO_GPU_TRACE`; the two should not both be on
+/// for the same process (they share CUPTI's activity buffers).
+pub fn decode_enabled() -> bool {
+    static ON: super::envflag::CachedBool = super::envflag::CachedBool::new();
+    ON.get_or_init(|| super::envflag::bool_flag("FASTVIDEO_GPU_TRACE_DECODE", false))
+}
+
+struct WindowState {
+    label: &'static str,
+    host_begin_ns: Option<u64>,
+    launches_before: u64,
+}
+
+static WINDOW: Mutex<Option<WindowState>> = Mutex::new(None);
+static LAST_WINDOW: Mutex<Option<Value>> = Mutex::new(None);
+
+/// Start tracing a phase (`label`, e.g. `ltx2/decode`). A no-op unless
+/// [`decode_enabled`]; a second begin before the end is ignored.
+pub fn window_begin(label: &'static str) {
+    if !decode_enabled() {
+        return;
+    }
+    let mut g = WINDOW.lock().expect("gpu_trace lock");
+    if g.is_some() {
+        return;
+    }
+    if let Err(e) = backend::init().and_then(|()| backend::start()) {
+        eprintln!("[INFO] {label}/gpu_trace disabled: {e}");
+        return;
+    }
+    *g = Some(WindowState {
+        label,
+        host_begin_ns: backend::now(),
+        launches_before: super::stats::snapshot().launches,
+    });
+}
+
+/// End the phase begun by [`window_begin`], after the caller synchronized
+/// (`wall_s` is its host time). Analyzes, logs (`[INFO] <label>/gpu_trace`)
+/// and keeps the report for [`last_window_report`].
+pub fn window_end(wall_s: f64) {
+    if !decode_enabled() {
+        return;
+    }
+    let Some(w) = WINDOW.lock().expect("gpu_trace lock").take() else {
+        return;
+    };
+    let enqueued = backend::now();
+    backend::stop_syncs();
+    let launches = super::stats::snapshot()
+        .launches
+        .saturating_sub(w.launches_before);
+    let value = match backend::finish() {
+        Ok((activities, syncs, dropped)) => analyze(
+            w.label,
+            0,
+            &TraceInput {
+                activities,
+                syncs,
+                dropped,
+                wall_s,
+                host_begin_ns: w.host_begin_ns,
+                host_enqueued_ns: enqueued,
+                host_launches: launches,
+            },
+        ),
+        Err(e) => json!({"pass": w.label, "wall_s": wall_s, "error": e}),
+    };
+    eprintln!("[INFO] {}/gpu_trace {value}", w.label);
+    *LAST_WINDOW.lock().expect("gpu_trace lock") = Some(value);
+}
+
+/// The most recent phase report ([`window_end`]).
+pub fn last_window_report() -> Option<Value> {
+    LAST_WINDOW.lock().expect("gpu_trace lock").clone()
 }
 
 #[cfg(not(feature = "cuda"))]
@@ -1035,5 +1123,11 @@ mod tests {
         assert_eq!(category("h3v_swiglu_bf16"), "norm_modulate_elementwise");
         assert_eq!(category("split_heads_bhsd"), "layout");
         assert_eq!(category("pack_rgb_u8"), "other");
+        assert_eq!(
+            category("sm90_xmma_fprop_implicit_gemm_bf16bf16_bf16f32_f32_ndhwc"),
+            "conv"
+        );
+        assert_eq!(category("implicit_convolveNd_sgemm"), "conv");
+        assert_eq!(category("ltxv_norm_silu"), "norm_modulate_elementwise");
     }
 }

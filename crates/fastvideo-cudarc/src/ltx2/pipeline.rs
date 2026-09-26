@@ -34,6 +34,7 @@ use fastvideo_models::ltx2::{AncestralOpts, Ltx2Schedule};
 use rand::{Rng, SeedableRng};
 use rand_distr::StandardNormal;
 
+use crate::h3::drain::{DecodeSplit, FrameDrain};
 use crate::llm::{DecoderConfig, ResidentDecoder};
 use crate::wan::offload::{DitOffload, Residency};
 use crate::wan::pipeline::{
@@ -292,6 +293,14 @@ pub struct Ltx2Timings {
     pub step_s: Vec<f64>,
     pub decode_audio_s: f64,
     pub decode_video_s: f64,
+    /// The conv-VAE decode split as H3 splits it: GPU time of the VAE alone
+    /// (comparable with sol-engine's `video_vae_seconds`, which also covers its
+    /// YUV conversion and copy down), RGB8 packing + copy down, time the drain
+    /// thread was blocked on the writer, and time the decode waited on the drain.
+    pub video_vae_s: f64,
+    pub video_rgb_s: f64,
+    pub video_push_s: f64,
+    pub video_wait_s: f64,
     /// Waiting for the frame writer / ffmpeg after the last frame was decoded.
     pub write_s: f64,
 }
@@ -1123,6 +1132,8 @@ pub struct Written {
     pub decode_audio_s: f64,
     pub decode_video_s: f64,
     pub write_s: f64,
+    /// Where the conv-VAE decode's time went (`None` for the other decoders).
+    pub split: Option<DecodeSplit>,
 }
 
 /// Final packed latents → `audio.wav`, `frame-NNN.png` and (when `mp4`)
@@ -1158,34 +1169,14 @@ pub fn decode_and_write(
     )?;
     let decode_audio_s = timer.elapsed().as_secs_f64();
 
-    let timer = Instant::now();
-    let fps = frame_rate.round().max(1.0) as u32;
-    let mut writer = VideoWriter::spawn_with_audio(dir, fps, mp4, Some(&wav))?;
-    // The decoder's sink speaks tensor errors; carry the writer's own across.
-    let mut sink_err: Option<PipelineError> = None;
-    let mut sink = |offset: usize, frames: &CudaTensor| -> std::result::Result<(), TensorError> {
-        let (h, w) = (frames.shape[2], frames.shape[3]);
-        match frames_to_rgb8(frames).and_then(|rgb| writer.push(offset, h, w, rgb)) {
-            Ok(()) => Ok(()),
-            Err(e) => {
-                let text = e.to_string();
-                sink_err = Some(e);
-                Err(TensorError::Message(text))
-            }
-        }
-    };
     let latents = unpack_video(video, grid)?;
-    let decoded = match tiling {
-        Some(tiles) => dec.video.decode_tiled(&latents, tiles, &mut sink),
-        None => dec.video.decode_streaming(&latents, &mut sink),
-    };
-    match (decoded, sink_err) {
-        (_, Some(e)) => return Err(e),
-        (Err(e), None) => return Err(e.into()),
-        (Ok(_), None) => {}
-    }
-    let decode_video_s = timer.elapsed().as_secs_f64();
+    save_latents(&latents)?;
+    let fps = frame_rate.round().max(1.0) as u32;
+    let writer = VideoWriter::spawn_with_audio(dir, fps, mp4, Some(&wav))?;
+    let (writer, decode_video_s, split) =
+        decode_video_drained(&dec.video, &latents, tiling, writer)?;
     let timer = Instant::now();
+    let mut writer = writer;
     let (frames, mp4_path) = writer.finish()?;
     Ok(Written {
         frames,
@@ -1194,7 +1185,73 @@ pub fn decode_and_write(
         decode_audio_s,
         decode_video_s,
         write_s: timer.elapsed().as_secs_f64(),
+        split: Some(split),
     })
+}
+
+/// `FASTVIDEO_LTX2_SAVE_LATENTS=<prefix>`: the final video latents
+/// `[1, C, F, H, W]` (DiT-normalised, what the VAE decodes) as
+/// `<prefix>.f32` (raw little-endian) and `<prefix>.shape`, for decode-only
+/// runs (`fv-gpucheck ltx2 vae-bench --latents <prefix>`). Downloads, so it
+/// synchronizes once before the decode.
+pub fn save_latents(latents: &CudaTensor) -> Result<()> {
+    let Some(prefix) = std::env::var_os("FASTVIDEO_LTX2_SAVE_LATENTS").filter(|v| !v.is_empty())
+    else {
+        return Ok(());
+    };
+    let prefix = PathBuf::from(prefix);
+    crate::wan::dump::write_raw(&prefix, &latents.shape, &latents.host_cow()?)?;
+    crate::wan::log::info(format_args!(
+        "ltx2: video latents {:?} saved to {}.f32",
+        latents.shape,
+        prefix.display()
+    ));
+    Ok(())
+}
+
+/// Decode `latents` (`[1, C, F, H, W]`) into `writer` through an off-thread
+/// frame drain: tiled with `tiling`, else the whole clip streamed. Returns
+/// the writer (every frame pushed to it), the decode's wall time, and its
+/// split ([`DecodeSplit`]: VAE compute, RGB packing + copy down, writer
+/// backpressure). `FASTVIDEO_GPU_TRACE_DECODE=1` traces the decode.
+pub fn decode_video_drained(
+    video: &VideoDecoder,
+    latents: &CudaTensor,
+    tiling: Option<&TileSizeConfig>,
+    writer: VideoWriter,
+) -> Result<(VideoWriter, f64, DecodeSplit)> {
+    let timer = Instant::now();
+    crate::wan::gpu_trace::window_begin("ltx2/decode");
+    let mut drain = FrameDrain::new(writer)?;
+    // The decoder's sink speaks tensor errors; carry the drain's own across.
+    let mut sink_err: Option<PipelineError> = None;
+    let mut sink = |offset: usize, frames: &CudaTensor| -> std::result::Result<(), TensorError> {
+        match drain.push(offset, frames) {
+            Ok(()) => Ok(()),
+            Err(e) => {
+                let text = e.to_string();
+                sink_err = Some(e);
+                Err(TensorError::Message(text))
+            }
+        }
+    };
+    let decoded = match tiling {
+        Some(tiles) => video.decode_tiled(latents, tiles, &mut sink),
+        None => video.decode_streaming(latents, &mut sink),
+    };
+    match (decoded, sink_err) {
+        (_, Some(e)) => return Err(e),
+        (Err(e), None) => return Err(e.into()),
+        (Ok(_), None) => {}
+    }
+    let (writer, split) = drain.finish()?;
+    let decode_video_s = timer.elapsed().as_secs_f64();
+    crate::wan::gpu_trace::window_end(decode_video_s);
+    crate::wan::log::info(format_args!(
+        "ltx2 video decode {decode_video_s:.2}s: vae {:.2}s, rgb {:.2}s, push {:.2}s, wait {:.2}s",
+        split.vae_s, split.rgb_s, split.push_s, split.wait_s
+    ));
+    Ok((writer, decode_video_s, split))
 }
 
 /// Like [`decode_and_write`], but video goes through the tiny autoencoder
@@ -1260,6 +1317,7 @@ pub fn decode_tae_and_write(
         decode_audio_s,
         decode_video_s,
         write_s: timer.elapsed().as_secs_f64(),
+        split: None,
     })
 }
 
@@ -1329,6 +1387,7 @@ pub fn decode_diffvae_and_write(
         decode_audio_s,
         decode_video_s,
         write_s: timer.elapsed().as_secs_f64(),
+        split: None,
     })
 }
 
@@ -2662,6 +2721,12 @@ impl Ltx2Pipeline {
         };
         timings.decode_audio_s = written.decode_audio_s;
         timings.decode_video_s = written.decode_video_s;
+        if let Some(s) = written.split {
+            timings.video_vae_s = s.vae_s;
+            timings.video_rgb_s = s.rgb_s;
+            timings.video_push_s = s.push_s;
+            timings.video_wait_s = s.wait_s;
+        }
         timings.write_s = written.write_s;
         drop((video, audio));
         self.release_transient_decoders()?;

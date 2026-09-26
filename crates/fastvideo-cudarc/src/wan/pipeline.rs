@@ -1419,6 +1419,24 @@ impl VideoWriter {
         })
     }
 
+    /// A writer that accepts frames and drops them (decode benchmarks).
+    pub fn spawn_discard() -> Result<Self> {
+        let (tx, rx) = std::sync::mpsc::sync_channel::<FrameBatch>(2);
+        let worker = std::thread::Builder::new()
+            .name("fv-video-discard".into())
+            .spawn(move || {
+                for batch in rx {
+                    drop(batch);
+                }
+                Ok((Vec::new(), None))
+            })
+            .map_err(|e| PipelineError::Message(e.to_string()))?;
+        Ok(Self {
+            tx: Some(tx),
+            worker: Some(worker),
+        })
+    }
+
     /// Queue `[frames, h, w, 3]` bytes starting at frame `offset`. Batches must
     /// arrive in frame order; the mp4 is written in the order pushed.
     pub fn push(&mut self, offset: usize, h: usize, w: usize, rgb: Vec<u8>) -> Result<()> {

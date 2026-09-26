@@ -47,15 +47,55 @@ fn err(e: impl std::fmt::Display) -> TensorError {
 
 fn write(name: &str, shape: &[usize], data: &[f32]) -> Result<()> {
     let Some(dir) = dir() else { return Ok(()) };
-    std::fs::create_dir_all(dir).map_err(err)?;
+    write_raw(&dir.join(name), shape, data)
+}
+
+/// `<prefix>.f32` (raw little-endian f32) and `<prefix>.shape` (the dims,
+/// space-separated): the dump format, at any path.
+pub fn write_raw(prefix: &std::path::Path, shape: &[usize], data: &[f32]) -> Result<()> {
+    if let Some(parent) = prefix.parent().filter(|p| !p.as_os_str().is_empty()) {
+        std::fs::create_dir_all(parent).map_err(err)?;
+    }
     let mut bytes = Vec::with_capacity(data.len() * 4);
     for v in data {
         bytes.extend_from_slice(&v.to_le_bytes());
     }
-    let mut f = std::fs::File::create(dir.join(format!("{name}.f32"))).map_err(err)?;
+    let with = |ext: &str| {
+        let mut p = prefix.as_os_str().to_owned();
+        p.push(ext);
+        PathBuf::from(p)
+    };
+    let mut f = std::fs::File::create(with(".f32")).map_err(err)?;
     f.write_all(&bytes).map_err(err)?;
     let dims: Vec<String> = shape.iter().map(ToString::to_string).collect();
-    std::fs::write(dir.join(format!("{name}.shape")), dims.join(" ")).map_err(err)
+    std::fs::write(with(".shape"), dims.join(" ")).map_err(err)
+}
+
+/// Read back what [`write_raw`] wrote: `(shape, data)`.
+pub fn read_raw(prefix: &std::path::Path) -> Result<(Vec<usize>, Vec<f32>)> {
+    let with = |ext: &str| {
+        let mut p = prefix.as_os_str().to_owned();
+        p.push(ext);
+        PathBuf::from(p)
+    };
+    let shape: Vec<usize> = std::fs::read_to_string(with(".shape"))
+        .map_err(err)?
+        .split_whitespace()
+        .map(|d| d.parse::<usize>().map_err(err))
+        .collect::<Result<_>>()?;
+    let bytes = std::fs::read(with(".f32")).map_err(err)?;
+    if bytes.len() != 4 * shape.iter().product::<usize>() {
+        return Err(err(format!(
+            "{}: {} bytes for shape {shape:?}",
+            prefix.display(),
+            bytes.len()
+        )));
+    }
+    let data = bytes
+        .chunks_exact(4)
+        .map(|b| f32::from_le_bytes([b[0], b[1], b[2], b[3]]))
+        .collect();
+    Ok((shape, data))
 }
 
 /// Host values under `name` (e.g. a schedule's sigmas).

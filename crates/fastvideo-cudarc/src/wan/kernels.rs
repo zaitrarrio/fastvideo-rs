@@ -174,6 +174,11 @@ kernel_fns!(
     h3v_qkv_heads_bf16,
     h3v_merge_heads_bf16,
     h3v_swiglu_bf16,
+    // ---- ltx video vae region (appended; see the end of kernels.cu) ----
+    ltxv_norm_silu,
+    ltxv_latent_in,
+    ltxv_d2s_bias,
+    ltxv_out_unpatch,
 );
 
 /// NVRTC-compile the kernel module for `sm_major.sm_minor` without touching a
