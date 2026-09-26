@@ -413,7 +413,35 @@ the upsampler's tiled residual) are FIFO-buffered until the delayed main path
 catches up, and the upsampler drops the first frame of the *stream*, not of a
 chunk. This is the same sum of the same products as the one-shot decode — the
 host test decodes with chunk sizes 1, 2, 3, 5 and compares to the whole-clip
-result. The low-resolution stages run whole; the last up-block and the head run
+result.
+
+**Tiled decode on the GPU: the channels-last bf16 decoder
+(`ltx2/vae_fast.rs`, default; `FASTVIDEO_LTX_VAE_FAST=0` restores the f32
+streaming decoder for tiles).** LTX-2.5 decodes with the reference's
+`AUTO_TILING` (`ltx_pipelines/utils/helpers.py:61-63`: conv VAE long side
+768/64 px, 80/24 frames), and sol-engine's profile decodes each tile with
+`ltx_core`'s memory-efficient path (`blocks.py:1086-1092` chains
+`CHANNELS_LAST_3D_WEIGHTS` + `MEMORY_EFFICIENT_DECODE`;
+`memory_efficient_decode.py`): bf16 weights and activations (`vae_dtype`
+bf16, `gpu_infer.py:268`), `channels_last_3d` workspaces, cuDNN conv3d, the
+whole tile at once with temporal conv splits of at most 16 frames
+(`:91-105`, `:122-204`), no `torch.compile`, `cudnn.benchmark` off. The
+channels-last decoder does the same: bf16 `[T, H·W, C]` activations with
+the replicate-padded edge frames stored beside them (a temporal chunk of
+conv input is one contiguous slice), cuDNN bf16 NDHWC convs with f32
+accumulate in chunks of ≤16 output frames, and four kernels for everything
+between convs (`kernels.cu` "ltx video vae": bias + residual + PixelNorm +
+SiLU in one pass, depth-to-space + bias, unpatchify + bias, latent
+un-normalize + pad), rounding to bf16 exactly where torch's bf16 ops do.
+RTX PRO 6000, `fv-gpucheck ltx2 vae-bench` (warm, untraced, gen's tiling):
+4k5s 28.6 s → 12.3 s, 1080p20s 31.7 s → 13.2 s (sol-engine's
+`video_vae_seconds`: 18.4 s / 20.3 s). Against the f32 streaming decoder:
+first-tile rel_l2 7e-3, compare-clips 53.2 / 53.3 dB (synthetic latents),
+55.0 / 53.9 dB (a generation's own latents). `FASTVIDEO_LTX_VAE_CHECK=1`
+repeats the first-tile comparison in any run; `FASTVIDEO_GPU_TRACE_DECODE=1`
+traces the decode (the streaming decoder spent 18 of its 30 s in pads,
+concatenations, casts and f32 norms around 9.6 s of convolution; the
+channels-last one spends 10 s in cuDNN and 1.4 s in its fused kernels). The low-resolution stages run whole; the last up-block and the head run
 in chunks of `FASTVIDEO_LTX2_VAE_CHUNK` frames (default 8 → 16 output frames)
 and hand finished frames to the sink. On the device a different chunk shape can
 make cuDNN pick a different algorithm, so GPU results agree to rounding, not to

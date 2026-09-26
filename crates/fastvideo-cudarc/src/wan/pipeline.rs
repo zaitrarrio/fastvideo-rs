@@ -1485,27 +1485,57 @@ fn write_batches(
     mp4: bool,
     audio: Option<&Path>,
 ) -> Result<(Vec<String>, Option<String>)> {
-    use rayon::prelude::*;
     use std::io::Write as _;
 
     let out = dir.join("output.mp4");
     let mut ffmpeg: Option<std::process::Child> = None;
-    let mut paths: Vec<String> = Vec::new();
-    for batch in rx {
-        let FrameBatch { offset, h, w, rgb } = batch;
-        let frame_bytes = h * w * 3;
-        if frame_bytes == 0 || rgb.len() % frame_bytes != 0 {
-            return Err(PipelineError::Message(format!(
-                "frame batch of {} bytes is not whole {w}x{h} RGB frames",
-                rgb.len()
-            )));
-        }
-        if mp4 && fps > 0 && ffmpeg.is_none() {
-            ffmpeg = Some(spawn_ffmpeg_rgb(&out, w, h, fps, audio)?);
-        }
-        // Feeding ffmpeg (which blocks while x264 catches up) and encoding
-        // the batch's PNGs run side by side.
-        let feed = || -> Result<()> {
+    // PNG encodes run on the rayon pool across batches (a 4K frame takes a
+    // few hundred ms; one batch's 8 frames at a time left the writer behind
+    // the decode), at most PNG_IN_FLIGHT frames at once; this thread feeds
+    // ffmpeg in order meanwhile.
+    const PNG_IN_FLIGHT: usize = 48;
+    let slots = std::sync::Arc::new((std::sync::Mutex::new(0usize), std::sync::Condvar::new()));
+    let written: std::sync::Mutex<Vec<(usize, Result<String>)>> = std::sync::Mutex::new(Vec::new());
+    let fed: Result<()> = rayon::in_place_scope(|s| {
+        for batch in rx {
+            let FrameBatch { offset, h, w, rgb } = batch;
+            let frame_bytes = h * w * 3;
+            if frame_bytes == 0 || rgb.len() % frame_bytes != 0 {
+                return Err(PipelineError::Message(format!(
+                    "frame batch of {} bytes is not whole {w}x{h} RGB frames",
+                    rgb.len()
+                )));
+            }
+            if mp4 && fps > 0 && ffmpeg.is_none() {
+                ffmpeg = Some(spawn_ffmpeg_rgb(&out, w, h, fps, audio)?);
+            }
+            let rgb = std::sync::Arc::new(rgb);
+            for i in 0..rgb.len() / frame_bytes {
+                {
+                    let (n, cv) = &*slots;
+                    let mut n = n.lock().expect("png slots");
+                    while *n >= PNG_IN_FLIGHT {
+                        n = cv.wait(n).expect("png slots");
+                    }
+                    *n += 1;
+                }
+                let (rgb, slots, written) = (rgb.clone(), slots.clone(), &written);
+                s.spawn(move |_| {
+                    let frame = &rgb[i * frame_bytes..(i + 1) * frame_bytes];
+                    let path = dir.join(format!("frame-{:03}.png", offset + i));
+                    let r = image::RgbImage::from_raw(w as u32, h as u32, frame.to_vec())
+                        .ok_or_else(|| PipelineError::Message("rgb buffer size mismatch".into()))
+                        .and_then(|img| {
+                            img.save(&path)
+                                .map_err(|e| PipelineError::Message(e.to_string()))
+                        })
+                        .map(|()| path.to_string_lossy().into_owned());
+                    written.lock().expect("png results").push((offset + i, r));
+                    let (n, cv) = &*slots;
+                    *n.lock().expect("png slots") -= 1;
+                    cv.notify_one();
+                });
+            }
             if let Some(child) = ffmpeg.as_mut() {
                 let stdin = child
                     .stdin
@@ -1515,28 +1545,15 @@ fn write_batches(
                     .write_all(&rgb)
                     .map_err(|e| PipelineError::Message(format!("ffmpeg stdin: {e}")))?;
             }
-            Ok(())
-        };
-        let pngs = || -> Vec<Result<String>> {
-            rgb.par_chunks_exact(frame_bytes)
-                .enumerate()
-                .map(|(i, frame)| {
-                    let img = image::RgbImage::from_raw(w as u32, h as u32, frame.to_vec())
-                        .ok_or_else(|| {
-                            PipelineError::Message("rgb buffer size mismatch".into())
-                        })?;
-                    let path = dir.join(format!("frame-{:03}.png", offset + i));
-                    img.save(&path)
-                        .map_err(|e| PipelineError::Message(e.to_string()))?;
-                    Ok(path.to_string_lossy().into_owned())
-                })
-                .collect()
-        };
-        let (fed, batch_paths) = rayon::join(feed, pngs);
-        fed?;
-        for p in batch_paths {
-            paths.push(p?);
         }
+        Ok(())
+    });
+    fed?;
+    let mut written = written.into_inner().expect("png results");
+    written.sort_by_key(|(i, _)| *i);
+    let mut paths: Vec<String> = Vec::with_capacity(written.len());
+    for (_, p) in written {
+        paths.push(p?);
     }
     let mp4_path = match ffmpeg {
         Some(mut child) => {
@@ -1599,10 +1616,10 @@ fn spawn_ffmpeg_rgb(
     cmd.args([
         "-c:v", "libx264", "-preset", "veryfast", "-crf", "19", "-pix_fmt", "yuv420p",
     ])
-        .arg(out)
-        .stdin(std::process::Stdio::piped())
-        .spawn()
-        .map_err(|e| PipelineError::Message(format!("ffmpeg not available: {e}")))
+    .arg(out)
+    .stdin(std::process::Stdio::piped())
+    .spawn()
+    .map_err(|e| PipelineError::Message(format!("ffmpeg not available: {e}")))
 }
 
 /// Interleaved `[-1, 1]` samples as a 16-bit PCM WAV. `samples.len()` must be
