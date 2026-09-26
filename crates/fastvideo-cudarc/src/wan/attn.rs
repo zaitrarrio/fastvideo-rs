@@ -137,6 +137,50 @@ pub fn mma_sdpa_default() -> bool {
     false
 }
 
+/// Which fused dense kernel runs.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FlashKernel {
+    /// `flash_mma_fwd_d*`: 64-query CTAs, 4 warps, one K and one V buffer.
+    V1,
+    /// `flash_mma_fwd2_d*`: 128-query CTAs (8 warps x 16 rows) and
+    /// double-buffered K/V; bit-identical to V1 (same per-row arithmetic).
+    V2,
+    /// cuDNN's fused attention engine (`cudnn_sdpa`), bf16 output only;
+    /// V2 whenever cuDNN offers no engine or the caller wants f32 out.
+    Cudnn,
+}
+
+/// `FASTVIDEO_FLASH_KERNEL=v1|v2|cudnn|auto`. `auto` takes V2 when its
+/// 128-query grid fills the GPU for many waves ([`flash_v2_default`] and
+/// [`flash_v2_fills`]), V1 otherwise (at LTX 768x512, 6 144 tokens x 32
+/// heads, V2's one-CTA-per-SM tail costs 2%).
+pub fn flash_kernel_choice() -> FlashKernel {
+    flash_kernel_for(usize::MAX, 1, 1)
+}
+
+/// [`flash_kernel_choice`] for a `bh` x `sq` grid on `sms` SMs.
+pub fn flash_kernel_for(sq: usize, bh: usize, sms: usize) -> FlashKernel {
+    match super::envflag::string_flag("FASTVIDEO_FLASH_KERNEL", "auto").as_str() {
+        "v1" => FlashKernel::V1,
+        "v2" => FlashKernel::V2,
+        "cudnn" => FlashKernel::Cudnn,
+        _ if flash_v2_default() && flash_v2_fills(sq, bh, sms) => FlashKernel::V2,
+        _ => FlashKernel::V1,
+    }
+}
+
+/// Whether V2's grid (one 256-thread CTA per SM) is at least 16 waves.
+pub fn flash_v2_fills(sq: usize, bh: usize, sms: usize) -> bool {
+    sq.div_ceil(2 * MMA_TILE).saturating_mul(bh) >= 16 * sms.max(1)
+}
+
+/// Whether `auto` picks the 128-query double-buffered kernel: yes. It is
+/// bit-identical to V1 and 4% faster on RTX PRO 6000 at the H3 / LTX shapes
+/// (`attn_bench`: 373 vs 358 TFLOPS). `FASTVIDEO_FLASH_KERNEL=v1` restores V1.
+pub fn flash_v2_default() -> bool {
+    true
+}
+
 /// Fused dense SDPA on tensor cores (`flash_mma_fwd_d{64,128}`): bf16 Q/K/V
 /// (cast once, RNE, when they are f32), f32 online softmax, bf16 P, f32
 /// accumulation; one launch, no score buffer. Output is f32, or bf16 when
@@ -149,6 +193,30 @@ pub fn device_mma_sdpa(
     v: &CudaTensor,
     scale: Option<f32>,
     out_bf16: bool,
+) -> Result<Option<CudaTensor>> {
+    let kernel = match (bhsd(q, k, v), super::device::global_device()) {
+        (Some((b, h, sq, _, _)), Some(dev)) => {
+            use cudarc::driver::sys::CUdevice_attribute::CU_DEVICE_ATTRIBUTE_MULTIPROCESSOR_COUNT;
+            let sms = dev
+                .ctx
+                .attribute(CU_DEVICE_ATTRIBUTE_MULTIPROCESSOR_COUNT)
+                .map_or(1, |n| n.max(1) as usize);
+            flash_kernel_for(sq, b * h, sms)
+        }
+        _ => flash_kernel_choice(),
+    };
+    device_mma_sdpa_with(q, k, v, scale, out_bf16, kernel)
+}
+
+/// [`device_mma_sdpa`] on an explicit kernel.
+#[cfg(feature = "cuda")]
+pub fn device_mma_sdpa_with(
+    q: &CudaTensor,
+    k: &CudaTensor,
+    v: &CudaTensor,
+    scale: Option<f32>,
+    out_bf16: bool,
+    kernel: FlashKernel,
 ) -> Result<Option<CudaTensor>> {
     let Some((b, h, sq, sk, d)) = bhsd(q, k, v) else {
         return Ok(None);
@@ -171,16 +239,53 @@ pub fn device_mma_sdpa(
         format_args!("sdpa: fused mma B={b} H={h} Sq={sq} Sk={sk} D={d}"),
     );
     let n = bh * sq * d;
-    let func = if d == 64 {
-        &dev.kernels.flash_mma_fwd_d64
+    if kernel == FlashKernel::Cudnn && out_bf16 {
+        let mut out = unsafe { dev.stream.alloc::<half::bf16>(n) }
+            .map_err(|e| msg(e.to_string()))?;
+        if super::cudnn_sdpa::sdpa_bf16(&qb, &kb, &vb, &mut out, bh, sq, sk, d, scale)? {
+            return Ok(Some(CudaTensor::from_device_slice_bf16(
+                out,
+                vec![b, h, sq, d],
+            )?));
+        }
+    }
+    let kernel = if kernel == FlashKernel::Cudnn {
+        FlashKernel::V2
     } else {
-        &dev.kernels.flash_mma_fwd_d128
+        kernel
     };
-    let cfg = cudarc::driver::LaunchConfig {
-        grid_dim: (sq.div_ceil(MMA_TILE) as u32, bh as u32, 1),
-        block_dim: (128, 1, 1),
-        // Static shared memory (32 KB at d=128): two CTAs per SM, no opt-in.
-        shared_mem_bytes: 0,
+    let (func, cfg) = match kernel {
+        FlashKernel::V1 => (
+            if d == 64 {
+                &dev.kernels.flash_mma_fwd_d64
+            } else {
+                &dev.kernels.flash_mma_fwd_d128
+            },
+            cudarc::driver::LaunchConfig {
+                grid_dim: (sq.div_ceil(MMA_TILE) as u32, bh as u32, 1),
+                block_dim: (128, 1, 1),
+                // Static shared memory (32 KB at d=128): two CTAs per SM, no opt-in.
+                shared_mem_bytes: 0,
+            },
+        ),
+        FlashKernel::V2 | FlashKernel::Cudnn => {
+            let func = if d == 64 {
+                &dev.kernels.flash_mma_fwd2_d64
+            } else {
+                &dev.kernels.flash_mma_fwd2_d128
+            };
+            // Two stages of (K, V) 64 x d bf16 tiles: 64 KB at d=128 (opt-in).
+            let shared = (4 * MMA_TILE * d * 2) as u32;
+            super::ops::opt_in_dynamic_shared(func, shared)?;
+            (
+                func,
+                cudarc::driver::LaunchConfig {
+                    grid_dim: (sq.div_ceil(2 * MMA_TILE) as u32, bh as u32, 1),
+                    block_dim: (256, 1, 1),
+                    shared_mem_bytes: shared,
+                },
+            )
+        }
     };
     let (sq_i, sk_i) = (sq as i32, sk as i32);
     let err = |e: cudarc::driver::DriverError| msg(e.to_string());
@@ -456,6 +561,16 @@ pub fn block_sparse_sdpa(
 mod tests {
     use super::super::nn::scaled_dot_product_attention;
     use super::*;
+
+    #[test]
+    fn flash_v2_only_where_its_grid_fills_the_gpu() {
+        // RTX PRO 6000: 188 SMs.
+        assert!(flash_v2_fills(37_710, 56, 188)); // H3 768p
+        assert!(flash_v2_fills(124_440, 32, 188)); // LTX 1080p 20 s stage 2
+        assert!(flash_v2_fills(130_560, 32, 188)); // LTX 4K 5 s stage 2
+        assert!(!flash_v2_fills(6_144, 32, 188)); // LTX 768x512: V1 wins by 2%
+        assert!(!flash_v2_fills(1, 1, 188));
+    }
 
     #[test]
     fn mma_sdpa_supports_video_self_and_cross_attention_shapes() {

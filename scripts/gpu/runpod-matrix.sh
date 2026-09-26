@@ -979,7 +979,14 @@ case "$FAMILY" in
         --weights "$W/ltx25" --dit "$W/ltx25" --workload 4k5s \
         --prompt "$PROMPT" --seed "$SEED" --two-stage --text streamed --warm \
         --clip "$RUNS/ltx25-4k5s-sol/frames"
-    for cell in fasth3-4step-vsa-768p fasth3-8step-768p fasth3-4step-dense-768p ltx25-4k5s-sol; do
+    # The long-sequence Sol workload (481 frames), same traced step.
+    gated_cell ltx25-1080p20s-sol ltx25-two-stage \
+      env FASTVIDEO_GPU_TRACE=1 FASTVIDEO_GPU_TRACE_STEP=9 \
+      "$BIN" --mode fast ltx2 gen --model-version 2.5 \
+        --weights "$W/ltx25" --dit "$W/ltx25" --workload 1080p20s \
+        --prompt "$PROMPT" --seed "$SEED" --two-stage --text streamed --warm \
+        --clip "$RUNS/ltx25-1080p20s-sol/frames"
+    for cell in fasth3-4step-vsa-768p fasth3-8step-768p fasth3-4step-dense-768p ltx25-4k5s-sol ltx25-1080p20s-sol; do
       grep -h '/gpu_trace ' "$RUNS/$cell/stderr.log" 2>/dev/null | tail -1 | cut -c1-400 | sed "s/^/[$cell] /" | tee -a "$LOG" || true
     done
     ;;
