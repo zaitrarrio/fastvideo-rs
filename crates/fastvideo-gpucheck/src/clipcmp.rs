@@ -15,12 +15,11 @@
 //! (`max_abs_diff_uint8 == 0`).
 //!
 //! LPIPS (sol-engine `tools/vision/lpips_judge.py`: `lpips.LPIPS(net="alex")`)
-//! is a follow-up, not computed here. A Rust port is feasible (AlexNet's five
-//! conv layers plus LPIPS's five 1x1 linear heads, ~2.5M parameters, run on
-//! the CPU or the existing cudarc conv path), but it needs the torchvision
-//! AlexNet feature weights and the LPIPS v0.1 heads converted to safetensors
-//! and an oracle comparison against the Python package before its numbers can
-//! be trusted; the report marks it `deferred`.
+//! is optional (`--lpips <weights dir>`, [`crate::lpips`]): scored on
+//! sol-engine's frame selection (`select_stratified_and_worst_pairs`, 32
+//! chronological pairs plus the 16 with the largest pixel difference, at most
+//! 48) and reported as the `lpips` judge plus top-level `lpips_mean` /
+//! `lpips_max`. Without the flag the report marks it `deferred`.
 
 use std::path::{Path, PathBuf};
 
@@ -187,6 +186,15 @@ pub fn temporal(bp: &Rgb, cp: &Rgb, b: &Rgb, c: &Rgb) -> (f64, f64) {
     let n = b.px.len().max(1) as f64;
     let (bm, cm) = (bm as f64 / n, cm as f64 / n);
     (err as f64 / n, cm / bm.max(1e-8))
+}
+
+/// `--lpips`: where the weights are, which pairs, which device.
+#[derive(Clone, Debug)]
+pub struct LpipsOpts {
+    pub weights: PathBuf,
+    /// sol-engine's 48-pair budget, or every pair.
+    pub all_pairs: bool,
+    pub device: bool,
 }
 
 /// Everything measured on one (baseline, candidate) pair that does not need
@@ -452,6 +460,8 @@ pub fn clip_status(dir: &Path) -> (String, Vec<String>, Option<PathBuf>) {
     let log = [fd.join("run.log"), dir.join("run.log")]
         .into_iter()
         .chain(fd.parent().map(|p| p.join("stderr.log")))
+        // A prompt set: <cell>/frames/<prompt>/, the log two levels up.
+        .chain(fd.parent().and_then(Path::parent).map(|p| p.join("stderr.log")))
         .find(|p| p.exists());
     let mut notes = Vec::new();
     let errors = log.as_deref().map(log_errors).unwrap_or_default();
@@ -544,20 +554,66 @@ fn clip_json(dir: &Path, frames: usize) -> Value {
     })
 }
 
+/// The `lpips` judge block (collect_run.py `run_lpips_judge` shape).
+fn lpips_judge(
+    cmp: &ClipComparison,
+    baseline: &Path,
+    candidate: &Path,
+    o: &LpipsOpts,
+) -> anyhow::Result<Value> {
+    use crate::lpips::{LPIPS_MAX_PAIRS, LPIPS_STRATIFIED_PAIRS, LPIPS_WORST_CASE_PAIRS};
+    let n = cmp.pairs.min(cmp.mae.len());
+    let pairs = if o.all_pairs {
+        (0..n).collect()
+    } else {
+        crate::lpips::select_pairs(
+            &cmp.mae[..n],
+            LPIPS_STRATIFIED_PAIRS,
+            LPIPS_WORST_CASE_PAIRS,
+            LPIPS_MAX_PAIRS,
+        )
+    };
+    let scorer = crate::lpips::Lpips::load(&o.weights, o.device)?;
+    let (fb, fc) = (list_frames(baseline)?, list_frames(candidate)?);
+    let result = crate::lpips::judge(&scorer, &fb, &fc, &pairs)?;
+    Ok(
+        json!({"status": "complete", "pairs_scored": pairs.len(), "selection": if o.all_pairs { "all" } else { "stratified_32_plus_worst_16_max_48" }, "result": result}),
+    )
+}
+
 pub fn run(
     report: &mut Report,
     baseline: &Path,
     candidate: &Path,
     off_identity: bool,
+    lpips: Option<&LpipsOpts>,
 ) -> StageResult<()> {
     let (cmp, nb, nc) = compare_dirs(baseline, candidate)?;
     report.set("baseline", clip_json(baseline, nb));
     report.set("candidate", clip_json(candidate, nc));
     report.set("thresholds", thresholds(off_identity));
-    report.set(
-        "lpips",
-        json!({"status": "deferred", "reason": "no Rust LPIPS (AlexNet) yet; see clipcmp.rs"}),
-    );
+    match lpips {
+        None => report.set(
+            "lpips",
+            json!({"status": "deferred", "reason": "disabled (pass --lpips <weights dir>)"}),
+        ),
+        Some(_) if cmp.shape_mismatch.is_some() || cmp.pairs == 0 => report.set(
+            "lpips",
+            json!({"status": "blocked", "reason": "no comparable frame pairs"}),
+        ),
+        Some(o) => {
+            let judge = lpips_judge(&cmp, baseline, candidate, o)?;
+            let r = &judge["result"];
+            report.set("lpips_mean", &r["mean"]);
+            report.set("lpips_max", &r["max"]);
+            report.set("lpips_median", &r["median"]);
+            report.note(
+                "lpips",
+                json!({"mean": r["mean"], "max": r["max"], "n": r["n"], "backend": r["backend"], "seconds": r["seconds"]}),
+            );
+            report.set("lpips", judge);
+        }
+    }
     let identity = cmp.off_identity();
     let pixels = cmp.pixel_metrics();
     report.set("off_identity", &identity);

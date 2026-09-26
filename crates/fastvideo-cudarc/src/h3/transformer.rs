@@ -315,6 +315,17 @@ pub enum AttnMode<'a> {
     SolLayer { tau: f64, policy: &'a H3SolPolicy },
 }
 
+/// `benchmark.json` attention route of one block (see [`crate::wan::evalstats`]).
+fn record_attn(step: usize, layer: usize, mode: &AttnMode<'_>) {
+    use crate::wan::evalstats::{attn, AttnKind};
+    let kind = match mode {
+        AttnMode::Dense | AttnMode::Sol(_) => AttnKind::Dense,
+        AttnMode::Vsa(_) => AttnKind::Vsa,
+        AttnMode::SolLayer { tau, .. } => AttnKind::Sol { tau: *tau },
+    };
+    attn(Some(step), layer, kind);
+}
+
 // ---------------------------------------------------------------------------
 // Time embedding and the precomputed AdaLN table
 // ---------------------------------------------------------------------------
@@ -1237,6 +1248,7 @@ impl FeedForward {
                     self.ff_in.forward_mx(&act, vec![1, rows, 2 * self.ffn_dim])
                 })?;
                 drop(act);
+                crate::wan::evalstats::ffn(1);
                 return self.down(h, rows, hidden);
             }
         };
@@ -1252,6 +1264,7 @@ impl FeedForward {
             parts.push(self.down(h, len, hidden)?);
             start += len;
         }
+        crate::wan::evalstats::ffn(parts.len());
         if parts.len() == 1 {
             return Ok(parts.pop().unwrap());
         }
@@ -1288,6 +1301,7 @@ impl FeedForward {
             parts.push(phase("h3_ffn_out", || self.ff_out.forward(&act))?);
             start += len;
         }
+        crate::wan::evalstats::ffn(parts.len());
         if parts.len() == 1 {
             return Ok(parts.pop().unwrap());
         }
@@ -1815,6 +1829,14 @@ impl H3Transformer {
             0.0
         };
         let decision = runtime.state.decide(step, rel);
+        crate::wan::evalstats::teacache_decision(
+            step,
+            decision.compute,
+            decision.reason,
+            decision.relative_l1,
+            decision.indicator,
+            decision.accumulator,
+        );
         runtime.signal = Some(probe);
         if decision.compute {
             runtime.pending = Some(hidden.clone());
@@ -2039,6 +2061,7 @@ impl H3Transformer {
                         },
                         other => other,
                     };
+                    record_attn(step, index, &layer_mode);
                     x = self.blocks.with(index, |block| {
                         block.forward_fused(
                             &x,
@@ -2070,6 +2093,7 @@ impl H3Transformer {
                     },
                     other => other,
                 };
+                record_attn(step, index, &layer_mode);
                 x = self.blocks.with(index, |block| {
                     let n = phase("h3_1_norm_msa", || {
                         mods.modulate(&x.rms_norm(&block.norm1, eps)?, SCALE_MSA, SHIFT_MSA)

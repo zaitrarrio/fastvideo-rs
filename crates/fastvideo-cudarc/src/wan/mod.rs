@@ -13,6 +13,7 @@ pub mod conv;
 pub mod device;
 pub mod dump;
 pub mod envflag;
+pub mod evalstats;
 pub mod gpu_trace;
 #[cfg(feature = "cuda")]
 pub mod fp8;

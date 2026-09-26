@@ -3,8 +3,21 @@
 # One process per family. Continues to the next cell on failure.
 # Spark joint LTX refine stays off (FASTVIDEO_LTX2_WEIGHTS unset) except in
 # the rtx6000 parity family, which runs the full Spark bridge.
+#
+# Evaluation layer (precision, fastvideo and eval families):
+#   every H3 / LTX-2 gen cell writes <cell>/benchmark.json (timings per stage
+#   and step, peak memory, TeaCache / Sol-Attn / VSA / FFN-chunk / quantized
+#   linear counters; see crates/fastvideo-gpucheck/src/benchmark.rs).
+#   FV_PROMPTS=5 (or a prompt-set JSON): each gen cell runs the five
+#     sol-engine prompts of scripts/gpu/prompts-eval.json in one warm process,
+#     clips under <cell>/frames/<name>/, per-prompt numbers and their medians
+#     in <cell>/benchmark.json; compare_cells compares prompt by prompt.
+#     Unset: one prompt ($FV_PROMPT), as before.
+#   FV_LPIPS=1: fetch-lpips.sh, then compare-clips adds LPIPS(alex).
+#   gate_cells: fv-gpucheck gate with scripts/gpu/gate-policy.toml
+#     (FV_GATE_POLICY overrides) into $RUNS/gate/.
 set -euo pipefail
-FAMILY="${1:?usage: runpod-matrix.sh h3|ltx|hunyuan|wan|b200|rtx6000|rtx5090|fastvideo|precision|precision-debug|trace}"
+FAMILY="${1:?usage: runpod-matrix.sh h3|ltx|hunyuan|wan|b200|rtx6000|rtx5090|fastvideo|precision|precision-debug|trace|eval}"
 WORK="${FV_WORK:-/workspace}"
 BIN="${FV_GPUCHECK:-/opt/fastvideo-rs/target/release/fv-gpucheck}"
 W="$WORK/weights"
@@ -55,6 +68,23 @@ log() {
   printf '%s\n' "$line"
   printf '%s\n' "$line" >>"$LOG" 2>/dev/null || true
 }
+
+# ---- evaluation layer (see the header) ----
+if [[ "$FAMILY" == eval ]]; then
+  : "${FV_PROMPTS:=5}" "${FV_LPIPS:=1}"
+fi
+PROMPT_ARGS=()
+case "${FV_PROMPTS:-}" in
+  "" | 0 | 1) PROMPTS_FILE="" ;;
+  5 | all) PROMPTS_FILE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/prompts-eval.json" ;;
+  *) PROMPTS_FILE="$FV_PROMPTS" ;;
+esac
+if [[ -n "$PROMPTS_FILE" ]]; then
+  PROMPT_ARGS=(--prompts "$PROMPTS_FILE")
+fi
+LPIPS_ARGS=()
+LPIPS_DIR="${FV_LPIPS_DIR:-$SCRATCH/lpips}"
+GATE_POLICY="${FV_GATE_POLICY:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/gate-policy.toml}"
 
 write_json() {
   local dest="$1"
@@ -174,30 +204,90 @@ tae_gated_cell() {
   gated_cell "$name" "$@"
 }
 
-# Paired-clip quality gate (CPU, `fv-gpucheck compare-clips`): the candidate
-# cell's frames against the baseline cell's, sol-engine collect_run.py metrics.
-# Extra args (e.g. --off-identity for a switch that must not change a byte)
-# pass through. Report: $RUNS/compare/compare-clips-<baseline>--<candidate>.json.
-compare_cells() {
-  local base="$1" cand="$2"
-  shift 2
-  local tag="$base--$cand" dir="$RUNS/compare"
-  local bf="$RUNS/$base/frames" cf="$RUNS/$cand/frames"
+# Paired-clip quality gate (`fv-gpucheck compare-clips`): the candidate
+# cell's frames against the baseline cell's, sol-engine collect_run.py
+# metrics (+ LPIPS with FV_LPIPS=1, on the GPU). Extra args (e.g.
+# --off-identity for a switch that must not change a byte) pass through.
+# Report: $RUNS/compare/compare-clips-<baseline>--<candidate>.json, or with a
+# prompt set one per prompt: ...--<candidate>-<prompt>.json.
+compare_one() {
+  local tag="$1" bf="$2" cf="$3" dir="$RUNS/compare"
+  shift 3
   mkdir -p "$dir"
   if ! compgen -G "$bf/*.png" >/dev/null || ! compgen -G "$cf/*.png" >/dev/null; then
     log "skip compare $tag (frames missing)"
-    write_json "$dir/compare-clips-$tag.json" "$(printf '{"stage":"compare-clips-%s","status":"skipped","baseline":"%s","candidate":"%s","reason":"frames missing"}' "$tag" "$base" "$cand")"
+    write_json "$dir/compare-clips-$tag.json" "$(printf '{"stage":"compare-clips-%s","status":"skipped","reason":"frames missing"}' "$tag")"
     return 0
   fi
   local rc
   set +e
-  "$BIN" --out "$dir" --tag "$tag" compare-clips --baseline "$bf" --candidate "$cf" "$@" \
+  "$BIN" --out "$dir" --tag "$tag" compare-clips --baseline "$bf" --candidate "$cf" "${LPIPS_ARGS[@]}" "$@" \
     >"$dir/$tag.stdout.log" 2>"$dir/$tag.stderr.log"
   rc=$?
   set -e
-  log "compare $tag exit=$rc $(grep -o '"psnr_mean":[^,]*' "$dir/$tag.stderr.log" 2>/dev/null | tail -1)"
+  log "compare $tag exit=$rc $(grep -o '"psnr_mean":[^,]*' "$dir/$tag.stderr.log" 2>/dev/null | tail -1) $(grep -oE 'lpips \{"backend[^}]*"max":[^,]*,"mean":[^,]*' "$dir/$tag.stderr.log" 2>/dev/null | grep -oE '"(max|mean)":[^,]*' | tr '\n' ' ')"
   return 0
 }
+
+compare_cells() {
+  local base="$1" cand="$2"
+  shift 2
+  local bf="$RUNS/$base/frames" cf="$RUNS/$cand/frames" p found=""
+  # Single prompt: frames directly under frames/. Prompt set: one directory
+  # per prompt (cold/ and warmup/ are the untimed passes).
+  if compgen -G "$bf/*.png" >/dev/null || [[ ! -d "$bf" ]]; then
+    compare_one "$base--$cand" "$bf" "$cf" "$@"
+    return 0
+  fi
+  for p in "$bf"/*/; do
+    p="$(basename "$p")"
+    [[ "$p" == cold || "$p" == warmup ]] && continue
+    compgen -G "$bf/$p/*.png" >/dev/null || continue
+    found=1
+    compare_one "$base--$cand-$p" "$bf/$p" "$cf/$p" "$@"
+  done
+  [[ -n "$found" ]] || compare_one "$base--$cand" "$bf" "$cf" "$@"
+  return 0
+}
+
+# Promotion gate (`fv-gpucheck gate`, $GATE_POLICY): the candidate cell's
+# benchmark.json and compare reports against the baseline's. $3 = kind
+# (lossy | exact); $4 = an OFF-arm cell whose compare with the baseline (made
+# with --off-identity) must be byte-identical. Report: $RUNS/gate/gate-<b>--<c>.json.
+gate_cells() {
+  local base="$1" cand="$2" kind="${3:-lossy}" off="${4:-}" tag="$1--$2" dir="$RUNS/gate" f
+  local cmp=() offs=()
+  mkdir -p "$dir"
+  for f in "$RUNS/compare/compare-clips-$tag.json" "$RUNS/compare/compare-clips-$tag"-*.json; do
+    [[ -f "$f" ]] && cmp+=(--compare "$f")
+  done
+  if [[ -n "$off" ]]; then
+    for f in "$RUNS/compare/compare-clips-$base--$off.json" "$RUNS/compare/compare-clips-$base--$off"-*.json; do
+      [[ -f "$f" ]] && offs+=(--off-compare "$f")
+    done
+  fi
+  local rc
+  set +e
+  "$BIN" --out "$dir" --tag "$tag" gate --baseline "$RUNS/$base" --candidate "$RUNS/$cand" \
+    --policy "$GATE_POLICY" --kind "$kind" "${cmp[@]}" "${offs[@]}" \
+    >"$dir/$tag.stdout.log" 2>"$dir/$tag.stderr.log"
+  rc=$?
+  set -e
+  log "gate $tag exit=$rc $(grep -o 'gate verdict: .*' "$dir/$tag.stderr.log" 2>/dev/null | tail -1)"
+  return 0
+}
+
+if [[ -n "$PROMPTS_FILE" ]]; then
+  log "prompt set: $PROMPTS_FILE"
+fi
+if [[ "${FV_LPIPS:-0}" == 1 ]]; then
+  if bash "$(dirname "${BASH_SOURCE[0]}")/fetch-lpips.sh" "$LPIPS_DIR" >>"$RUNS/lpips-fetch.log" 2>&1; then
+    LPIPS_ARGS=(--lpips "$LPIPS_DIR")
+    log "lpips weights: $LPIPS_DIR"
+  else
+    log "WARN: LPIPS weights unavailable (lpips-fetch.log); compare-clips runs without LPIPS"
+  fi
+fi
 
 log "matrix start image=$(cat /opt/fastvideo-rs/target/release/fv-gpucheck.build-id 2>/dev/null || echo unknown)"
 if [[ ! -x "$BIN" ]]; then
@@ -618,6 +708,7 @@ case "$FAMILY" in
       --text-cache "$SCRATCH/h3-text-cache"
       --text-weights "$W/h3-base"
       --warm
+      "${PROMPT_ARGS[@]}"
     )
     for res in 768p 480p; do
       geo=()
@@ -648,6 +739,8 @@ case "$FAMILY" in
           --clip-dir "$RUNS/fasth3-4step-vsa-$res-taeh3/frames" "${h3_common[@]}"
       compare_cells "fasth3-8step-$res" "fasth3-8step-$res-taeh3"
       compare_cells "fasth3-4step-vsa-$res" "fasth3-4step-vsa-$res-taeh3"
+      gate_cells "fasth3-8step-$res" "fasth3-8step-$res-taeh3" lossy
+      gate_cells "fasth3-4step-vsa-$res" "fasth3-4step-vsa-$res-taeh3" lossy
     done
     gated_cell fasth3-4step-dense-768p fasth3-4step-dense \
       "$BIN" --mode fast h3 gen --weights "$W/h3-base" --h3-recipe 4step-dense \
@@ -660,14 +753,15 @@ case "$FAMILY" in
         "$BIN" --mode fast ltx2 gen --model-version 2.5 \
           --weights "$W/ltx25" --dit "$W/ltx25" "${geo[@]}" --dense-stage2 \
           --prompt "$PROMPT" --seed "$SEED" --two-stage --text streamed --warm \
-          --clip "$RUNS/ltx25-$wl/frames"
+          --clip "$RUNS/ltx25-$wl/frames" "${PROMPT_ARGS[@]}"
       tae_gated_cell "ltx25-$wl-taehv" "$TAELTX" ltx25-two-stage \
         "$BIN" --mode fast ltx2 gen --model-version 2.5 \
           --weights "$W/ltx25" --dit "$W/ltx25" "${geo[@]}" --dense-stage2 \
           --ltx-tae-weights "$TAELTX" \
           --prompt "$PROMPT" --seed "$SEED" --two-stage --text streamed --warm \
-          --clip "$RUNS/ltx25-$wl-taehv/frames"
+          --clip "$RUNS/ltx25-$wl-taehv/frames" "${PROMPT_ARGS[@]}"
       compare_cells "ltx25-$wl" "ltx25-$wl-taehv"
+      gate_cells "ltx25-$wl" "ltx25-$wl-taehv" lossy
     done
     ;;
   precision)
@@ -697,10 +791,11 @@ case "$FAMILY" in
         env "${envs[@]}" \
         "$BIN" --mode fast h3 gen --weights "$W/h3-8step" --h3-recipe 8step \
           --adaln-cache "$RUNS/fasth3-8step-768p-$v-adaln.cache" \
-          --clip-dir "$RUNS/fasth3-8step-768p-$v/frames" "${h3_common[@]}"
+          --clip-dir "$RUNS/fasth3-8step-768p-$v/frames" "${h3_common[@]}" "${PROMPT_ARGS[@]}"
     done
     for v in bf16act w8a8 mxfp8; do
       compare_cells fasth3-8step-768p-f32act "fasth3-8step-768p-$v"
+      gate_cells fasth3-8step-768p-f32act "fasth3-8step-768p-$v" lossy
     done
     # Both FP8 recipes run bf16 activations: against bf16act alone, the
     # pairs isolate what the weight/activation quantization changes.
@@ -719,10 +814,11 @@ case "$FAMILY" in
         "$BIN" --mode fast ltx2 gen --model-version 2.5 \
           --weights "$W/ltx25" --dit "$W/ltx25" --workload 4k5s \
           --prompt "$PROMPT" --seed "$SEED" --two-stage --text streamed --warm \
-          --clip "$RUNS/ltx25-4k5s-sol-$v/frames"
+          --clip "$RUNS/ltx25-4k5s-sol-$v/frames" "${PROMPT_ARGS[@]}"
     done
     for v in bf16act fp8; do
       compare_cells ltx25-4k5s-sol-f32act "ltx25-4k5s-sol-$v"
+      gate_cells ltx25-4k5s-sol-f32act "ltx25-4k5s-sol-$v" lossy
     done
     ;;
   precision-debug)
@@ -827,6 +923,61 @@ case "$FAMILY" in
         --clip "$RUNS/ltx25-4k5s-sol/frames"
     for cell in fasth3-4step-vsa-768p fasth3-8step-768p fasth3-4step-dense-768p ltx25-4k5s-sol; do
       grep -h '/gpu_trace ' "$RUNS/$cell/stderr.log" 2>/dev/null | tail -1 | cut -c1-400 | sed "s/^/[$cell] /" | tee -a "$LOG" || true
+    done
+    ;;
+  eval)
+    # The evaluation layer end to end on one card: precision A/B pairs with
+    # benchmark.json, the prompt set (FV_PROMPTS, default 5 here), LPIPS
+    # (FV_LPIPS, default on) and the promotion gate.
+    #   H3 FastH3 8-step 480p: FASTVIDEO_BF16_ACT=0 (baseline) vs the bf16
+    #     default, plus a second f32 arm that must reproduce the baseline
+    #     byte for byte (the OFF arm of the switch).
+    #   LTX-2.5 two-stage 512p: FASTVIDEO_BF16_ACT=0 vs the bf16 default.
+    # FV_LPIPS_SELFTEST=1 (default) first checks the LPIPS port against the
+    # pinned official numbers (fv-gpucheck lpips, CPU and device).
+    if [[ "${FV_LPIPS_SELFTEST:-1}" == 1 && ${#LPIPS_ARGS[@]} -gt 0 ]]; then
+      run_cell lpips-selftest "$BIN" --out "$RUNS/lpips-selftest/gpucheck-out" lpips --weights "$LPIPS_DIR"
+      grep -hE '^\[(PASS|FAIL)\] lpips/' "$RUNS/lpips-selftest/stderr.log" 2>/dev/null | cut -c1-220 | tee -a "$LOG" || true
+    fi
+    h3_common=(
+      --prompt "$PROMPT"
+      --seconds 5
+      --seed "$SEED"
+      --text-encoder auto
+      --text-cache "$SCRATCH/h3-text-cache"
+      --text-weights "$W/h3-base"
+      --warm
+      --height 480 --width 832
+      "${PROMPT_ARGS[@]}"
+    )
+    for v in f32act bf16act f32act-off; do
+      envs=(FASTVIDEO_BF16_ACT=1)
+      [[ "$v" == f32act* ]] && envs=(FASTVIDEO_BF16_ACT=0)
+      gated_cell "fasth3-8step-480p-$v" fasth3-8step \
+        env "${envs[@]}" \
+        "$BIN" --mode fast h3 gen --weights "$W/h3-8step" --h3-recipe 8step \
+          --adaln-cache "$RUNS/fasth3-8step-480p-$v-adaln.cache" \
+          --clip-dir "$RUNS/fasth3-8step-480p-$v/frames" "${h3_common[@]}"
+    done
+    compare_cells fasth3-8step-480p-f32act fasth3-8step-480p-bf16act
+    compare_cells fasth3-8step-480p-f32act fasth3-8step-480p-f32act-off --off-identity
+    gate_cells fasth3-8step-480p-f32act fasth3-8step-480p-bf16act lossy fasth3-8step-480p-f32act-off
+    # The OFF arm judged as its own candidate: byte-identical, and no faster.
+    gate_cells fasth3-8step-480p-f32act fasth3-8step-480p-f32act-off exact fasth3-8step-480p-f32act-off
+    for v in f32act bf16act; do
+      envs=(FASTVIDEO_BF16_ACT=1)
+      [[ "$v" == f32act ]] && envs=(FASTVIDEO_BF16_ACT=0)
+      gated_cell "ltx25-512p-$v" ltx25-two-stage \
+        env "${envs[@]}" \
+        "$BIN" --mode fast ltx2 gen --model-version 2.5 \
+          --weights "$W/ltx25" --dit "$W/ltx25" --height 512 --width 768 --num-frames 121 \
+          --prompt "$PROMPT" --seed "$SEED" --two-stage --text streamed --warm \
+          --clip "$RUNS/ltx25-512p-$v/frames" "${PROMPT_ARGS[@]}"
+    done
+    compare_cells ltx25-512p-f32act ltx25-512p-bf16act
+    gate_cells ltx25-512p-f32act ltx25-512p-bf16act lossy
+    for f in "$RUNS"/gate/gate-*.json; do
+      [[ -f "$f" ]] && log "$(basename "$f"): $(grep -o '"verdict": "[a-z]*"' "$f" | head -1)"
     done
     ;;
   *)

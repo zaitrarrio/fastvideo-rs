@@ -205,6 +205,15 @@ fn video_self_attn(
         }
         Ltx2VideoAttn::Off => VideoAttnKernel::Dense,
     };
+    {
+        use crate::wan::evalstats::{attn as record, AttnKind};
+        let kind = match kernel {
+            VideoAttnKernel::Dense => AttnKind::Dense,
+            VideoAttnKernel::Sol { tau } => AttnKind::Sol { tau },
+            VideoAttnKernel::Pisa { sparsity } => AttnKind::Pisa { sparsity },
+        };
+        record(None, layer, kind);
+    }
     attn.forward_kernel_owned(h, None, Some(rope), None, kernel)
 }
 
