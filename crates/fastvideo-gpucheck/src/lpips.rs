@@ -24,7 +24,8 @@
 //!    spatial mean. The score is the sum over the five layers.
 //!
 //! Two backends: plain Rust on the CPU (the reference; tests) and the device
-//! (cuDNN convolutions, three small NVRTC kernels), which the matrix uses.
+//! (the convolutions on cuDNN, the cheap elementwise rest on the host), which
+//! the matrix uses.
 
 use std::collections::BTreeMap;
 use std::io::{Read, Seek, SeekFrom};
@@ -811,185 +812,75 @@ fn layer_distance_host(a: &[f32], b: &[f32], lin: &[f32], c: usize, hw: usize) -
 
 // ---------------------------------------------------------------- device
 
-#[cfg(feature = "cuda")]
-const DEVICE_SRC: &str = r#"
-extern "C" __global__ void lp_bias_relu(float* y, const float* b, long c, long hw) {
-    long i = (long)blockIdx.x * blockDim.x + threadIdx.x;
-    if (i >= c * hw) return;
-    float v = y[i] + b[i / hw];
-    y[i] = v > 0.0f ? v : 0.0f;
-}
-extern "C" __global__ void lp_maxpool(const float* x, float* y, long c, long h, long w, long oh, long ow) {
-    long i = (long)blockIdx.x * blockDim.x + threadIdx.x;
-    if (i >= c * oh * ow) return;
-    long ch = i / (oh * ow), r = i % (oh * ow), oy = r / ow, ox = r % ow;
-    const float* p = x + ch * h * w + (oy * 2) * w + ox * 2;
-    float m = p[0];
-    for (int dy = 0; dy < 3; ++dy)
-        for (int dx = 0; dx < 3; ++dx) m = fmaxf(m, p[dy * w + dx]);
-    y[i] = m;
-}
-extern "C" __global__ void lp_layer(const float* a, const float* b, const float* lin, float* out, long c, long hw) {
-    long p = (long)blockIdx.x * blockDim.x + threadIdx.x;
-    if (p >= hw) return;
-    float na = 0.0f, nb = 0.0f;
-    for (long ch = 0; ch < c; ++ch) {
-        float x = a[ch * hw + p], y = b[ch * hw + p];
-        na += x * x;
-        nb += y * y;
-    }
-    na = sqrtf(na) + 1e-10f;
-    nb = sqrtf(nb) + 1e-10f;
-    float s = 0.0f;
-    for (long ch = 0; ch < c; ++ch) {
-        float d = a[ch * hw + p] / na - b[ch * hw + p] / nb;
-        s += lin[ch] * d * d;
-    }
-    out[p] = s;
-}
-"#;
-
+/// The five convolutions on the GPU (cuDNN, f32); bias + ReLU, the max pools
+/// and the distance stay on the host, where they are a few MB of work. No
+/// runtime-compiled kernel: NVRTC PTX can be newer than the pod's driver
+/// accepts (CUDA_ERROR_UNSUPPORTED_PTX_VERSION), and the crate's embedded
+/// cubins carry no LPIPS kernel.
 #[cfg(feature = "cuda")]
 struct DeviceNet {
     dev: std::sync::Arc<fastvideo_cudarc::wan::device::DeviceContext>,
-    bias_relu: cudarc::driver::CudaFunction,
-    maxpool: cudarc::driver::CudaFunction,
-    layer: cudarc::driver::CudaFunction,
-    convs: Vec<(
-        cudarc::driver::CudaSlice<f32>,
-        cudarc::driver::CudaSlice<f32>,
-    )>,
-    lins: Vec<cudarc::driver::CudaSlice<f32>>,
-}
-
-#[cfg(feature = "cuda")]
-fn cfg1d(n: usize) -> cudarc::driver::LaunchConfig {
-    cudarc::driver::LaunchConfig {
-        grid_dim: ((n as u32).div_ceil(256).max(1), 1, 1),
-        block_dim: (256, 1, 1),
-        shared_mem_bytes: 0,
-    }
+    convs: Vec<cudarc::driver::CudaSlice<f32>>,
 }
 
 #[cfg(feature = "cuda")]
 impl DeviceNet {
     fn new(net: &LpipsWeights) -> anyhow::Result<Self> {
-        use cudarc::nvrtc::{compile_ptx_with_opts, CompileOptions};
         let dev = fastvideo_cudarc::wan::device::global_device()
             .ok_or_else(|| anyhow::anyhow!("lpips: no CUDA device"))?;
-        let mut ptx = None;
-        let mut errs = Vec::new();
-        for arch in fastvideo_cudarc::wan::hopper::nvrtc_arches(dev.sm_major, dev.sm_minor) {
-            let opts = CompileOptions {
-                arch: Some(arch),
-                use_fast_math: Some(false),
-                ftz: Some(false),
-                prec_div: Some(true),
-                prec_sqrt: Some(true),
-                fmad: Some(true),
-                ..Default::default()
-            };
-            match compile_ptx_with_opts(DEVICE_SRC, opts) {
-                Ok(p) => {
-                    ptx = Some(p);
-                    break;
-                }
-                Err(e) => errs.push(format!("{arch}: {e}")),
-            }
-        }
-        let ptx =
-            ptx.ok_or_else(|| anyhow::anyhow!("lpips: nvrtc failed ({})", errs.join("; ")))?;
-        let module = dev.ctx.load_module(ptx)?;
-        let s = &dev.stream;
         let convs = net
             .convs
             .iter()
-            .map(|c| Ok((s.memcpy_stod(&c.w)?, s.memcpy_stod(&c.b)?)))
+            .map(|c| Ok(dev.stream.memcpy_stod(&c.w)?))
             .collect::<anyhow::Result<Vec<_>>>()?;
-        let lins = net
-            .lins
-            .iter()
-            .map(|l| Ok(s.memcpy_stod(l)?))
-            .collect::<anyhow::Result<Vec<_>>>()?;
-        Ok(Self {
-            bias_relu: module.load_function("lp_bias_relu")?,
-            maxpool: module.load_function("lp_maxpool")?,
-            layer: module.load_function("lp_layer")?,
-            dev,
-            convs,
-            lins,
-        })
+        Ok(Self { dev, convs })
     }
 
     fn features(
         &self,
         net: &LpipsWeights,
         img: &Rgb,
-    ) -> anyhow::Result<Vec<(cudarc::driver::CudaSlice<f32>, usize, usize, usize)>> {
-        use cudarc::driver::PushKernelArg;
+    ) -> anyhow::Result<Vec<(Vec<f32>, usize, usize, usize)>> {
         let s = &self.dev.stream;
-        let (mut x, mut c, mut h, mut w) = (s.memcpy_stod(&input(img))?, 3usize, img.h, img.w);
+        let (mut x, mut c, mut h, mut w) = (input(img), 3usize, img.h, img.w);
         let mut out = Vec::with_capacity(5);
         for (j, conv) in net.convs.iter().enumerate() {
             if conv.pool_before {
-                let (oh, ow) = ((h - 3) / 2 + 1, (w - 3) / 2 + 1);
-                let n = c * oh * ow;
-                let mut y = s.alloc_zeros::<f32>(n)?;
-                let (cl, hl, wl, ohl, owl) = (c as i64, h as i64, w as i64, oh as i64, ow as i64);
-                let mut b = s.launch_builder(&self.maxpool);
-                b.arg(&x)
-                    .arg(&mut y)
-                    .arg(&cl)
-                    .arg(&hl)
-                    .arg(&wl)
-                    .arg(&ohl)
-                    .arg(&owl);
-                unsafe { b.launch(cfg1d(n)) }?;
-                (x, h, w) = (y, oh, ow);
+                let (p, ph, pw) = maxpool_host(&x, c, h, w);
+                (x, h, w) = (p, ph, pw);
             }
-            let (wt, bias) = &self.convs[j];
-            let (mut y, shape) = fastvideo_cudarc::wan::conv::cudnn_conv(
-                &x,
+            let xd = s.memcpy_stod(&x)?;
+            let (y, shape) = fastvideo_cudarc::wan::conv::cudnn_conv(
+                &xd,
                 &[1, c, h, w],
-                wt,
+                &self.convs[j],
                 &[conv.cout, conv.cin, conv.k, conv.k],
                 &[conv.pad, conv.pad],
                 &[conv.stride, conv.stride],
             )
             .map_err(|e| anyhow::anyhow!("lpips conv{}: {e}", j + 1))?;
+            let mut y = s.memcpy_dtov(&y)?;
             let (oh, ow) = (shape[2], shape[3]);
-            let (cl, hwl) = (conv.cout as i64, (oh * ow) as i64);
-            let mut b = s.launch_builder(&self.bias_relu);
-            b.arg(&mut y).arg(bias).arg(&cl).arg(&hwl);
-            unsafe { b.launch(cfg1d(conv.cout * oh * ow)) }?;
-            (c, h, w) = (conv.cout, oh, ow);
-            out.push((y.clone(), c, h, w));
-            x = y;
+            y.par_chunks_mut(oh * ow)
+                .enumerate()
+                .for_each(|(o, plane)| {
+                    for v in plane.iter_mut() {
+                        *v = (*v + conv.b[o]).max(0.0);
+                    }
+                });
+            (x, c, h, w) = (y, conv.cout, oh, ow);
+            out.push((x.clone(), c, h, w));
         }
         Ok(out)
     }
 
     fn distance(&self, net: &LpipsWeights, a: &Rgb, b: &Rgb) -> anyhow::Result<[f64; 5]> {
-        use cudarc::driver::PushKernelArg;
         let (fa, fb) = (self.features(net, a)?, self.features(net, b)?);
-        let s = &self.dev.stream;
-        let mut layers = [0f64; 5];
+        let mut l = [0f64; 5];
         for (j, ((xa, c, h, w), (xb, _, _, _))) in fa.iter().zip(&fb).enumerate() {
-            let hw = h * w;
-            let mut o = s.alloc_zeros::<f32>(hw)?;
-            let (cl, hwl) = (*c as i64, hw as i64);
-            let mut k = s.launch_builder(&self.layer);
-            k.arg(xa)
-                .arg(xb)
-                .arg(&self.lins[j])
-                .arg(&mut o)
-                .arg(&cl)
-                .arg(&hwl);
-            unsafe { k.launch(cfg1d(hw)) }?;
-            let host = s.memcpy_dtov(&o)?;
-            layers[j] = host.iter().map(|&v| f64::from(v)).sum::<f64>() / hw as f64;
+            l[j] = layer_distance_host(xa, xb, &net.lins[j], *c, h * w);
         }
-        Ok(layers)
+        Ok(l)
     }
 }
 
@@ -1003,7 +894,7 @@ pub struct Lpips {
 }
 
 impl Lpips {
-    /// `device`: run on the GPU (cuDNN + NVRTC); the CPU path otherwise.
+    /// `device`: the convolutions on the GPU (cuDNN); the CPU path otherwise.
     pub fn load(dir: &Path, device: bool) -> anyhow::Result<Self> {
         Self::from_weights(LpipsWeights::load(dir)?, device)
     }
@@ -1031,7 +922,7 @@ impl Lpips {
     pub fn backend(&self) -> &'static str {
         #[cfg(feature = "cuda")]
         if self.dev.is_some() {
-            return "cuda (cuDNN conv + NVRTC)";
+            return "cuda (cuDNN conv)";
         }
         "cpu"
     }
@@ -1187,6 +1078,7 @@ pub const PINNED_SOURCE: &str = "lpips 0.1.4, torch 2.13.0+cu130 / torchvision 0
 pub const PINNED_ABS_TOL: f64 = 2e-4;
 pub const PINNED_REL_TOL: f64 = 1e-3;
 
+#[cfg(test)]
 pub fn fixtures_dir() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("fixtures/lpips")
 }
