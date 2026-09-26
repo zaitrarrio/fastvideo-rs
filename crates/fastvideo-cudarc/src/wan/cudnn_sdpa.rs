@@ -265,72 +265,85 @@ fn build(
     graph.set(A::CUDNN_ATTR_OPERATIONGRAPH_HANDLE, T::CUDNN_TYPE_HANDLE, &[h])?;
     let graph = graph.finalize("operation graph")?;
 
-    let heur = Desc::new(DT::CUDNN_BACKEND_ENGINEHEUR_DESCRIPTOR)?;
-    heur.set_desc(A::CUDNN_ATTR_ENGINEHEUR_OPERATION_GRAPH, &[&graph])?;
-    heur.set(
-        A::CUDNN_ATTR_ENGINEHEUR_MODE,
-        T::CUDNN_TYPE_HEUR_MODE,
-        &[sys::cudnnBackendHeurMode_t::CUDNN_HEUR_MODE_A],
-    )?;
-    let heur = heur.finalize("engine heuristics")?;
-    const MAX_CFG: usize = 16;
-    let cfgs: Vec<Desc> = (0..MAX_CFG)
-        .map(|_| Desc::new(DT::CUDNN_BACKEND_ENGINECFG_DESCRIPTOR))
-        .collect::<Result<_>>()?;
-    let mut raw: Vec<cudnnBackendDescriptor_t> = cfgs.iter().map(|c| c.0).collect();
-    let mut count = 0i64;
-    ok(
-        unsafe {
-            sys::cudnnBackendGetAttribute(
-                heur.0,
-                A::CUDNN_ATTR_ENGINEHEUR_RESULTS,
-                T::CUDNN_TYPE_BACKEND_DESCRIPTOR,
-                MAX_CFG as i64,
-                &mut count,
-                raw.as_mut_ptr() as *mut c_void,
-            )
-        },
-        "heuristic results",
-    )?;
+    // Heuristic modes in cudnn-frontend's order: A, then B, then FALLBACK.
+    use sys::cudnnBackendHeurMode_t as HM;
     let mut last = String::from("no engine config");
-    for (i, cfg) in cfgs.iter().take(count.max(0) as usize).enumerate() {
-        let plan = Desc::new(DT::CUDNN_BACKEND_EXECUTION_PLAN_DESCRIPTOR)?;
-        plan.set(A::CUDNN_ATTR_EXECUTION_PLAN_HANDLE, T::CUDNN_TYPE_HANDLE, &[h])?;
-        plan.set_desc(A::CUDNN_ATTR_EXECUTION_PLAN_ENGINE_CONFIG, &[cfg])?;
-        match plan.finalize("execution plan") {
-            Ok(plan) => {
-                let mut ws = 0i64;
-                let mut n = 0i64;
-                ok(
-                    unsafe {
-                        sys::cudnnBackendGetAttribute(
-                            plan.0,
-                            A::CUDNN_ATTR_EXECUTION_PLAN_WORKSPACE_SIZE,
-                            T::CUDNN_TYPE_INT64,
-                            1,
-                            &mut n,
-                            &mut ws as *mut i64 as *mut c_void,
-                        )
-                    },
-                    "workspace size",
-                )?;
-                let keep = vec![
-                    q, kt, v, o, scale, s, s2, mx, sub, ex, sum, p, d1, bmm1, d2, mul, d3, rmax,
-                    d4, psub, d5, pexp, d6, rsum, d7, pdiv, d8, bmm2, graph, heur,
-                ];
-                return Ok(SdpaPlan {
-                    plan,
-                    workspace: ws.max(0) as usize,
-                    engine: format!("heuristic config {i} of {count}"),
-                    _keep: keep,
-                });
+    let mut keep = vec![
+        q, kt, v, o, scale, s, s2, mx, sub, ex, sum, p, d1, bmm1, d2, mul, d3, rmax, d4, psub, d5,
+        pexp, d6, rsum, d7, pdiv, d8, bmm2,
+    ];
+    for mode in [HM::CUDNN_HEUR_MODE_A, HM::CUDNN_HEUR_MODE_B, HM::CUDNN_HEUR_MODE_FALLBACK] {
+        let heur = Desc::new(DT::CUDNN_BACKEND_ENGINEHEUR_DESCRIPTOR)?;
+        heur.set_desc(A::CUDNN_ATTR_ENGINEHEUR_OPERATION_GRAPH, &[&graph])?;
+        heur.set(A::CUDNN_ATTR_ENGINEHEUR_MODE, T::CUDNN_TYPE_HEUR_MODE, &[mode])?;
+        let heur = match heur.finalize("engine heuristics") {
+            Ok(h) => h,
+            Err(e) => {
+                last = format!("{mode:?}: {e}");
+                continue;
             }
-            Err(e) => last = e.to_string(),
+        };
+        const MAX_CFG: usize = 16;
+        let cfgs: Vec<Desc> = (0..MAX_CFG)
+            .map(|_| Desc::new(DT::CUDNN_BACKEND_ENGINECFG_DESCRIPTOR))
+            .collect::<Result<_>>()?;
+        let mut raw: Vec<cudnnBackendDescriptor_t> = cfgs.iter().map(|c| c.0).collect();
+        let mut count = 0i64;
+        if let Err(e) = ok(
+            unsafe {
+                sys::cudnnBackendGetAttribute(
+                    heur.0,
+                    A::CUDNN_ATTR_ENGINEHEUR_RESULTS,
+                    T::CUDNN_TYPE_BACKEND_DESCRIPTOR,
+                    MAX_CFG as i64,
+                    &mut count,
+                    raw.as_mut_ptr() as *mut c_void,
+                )
+            },
+            "heuristic results",
+        ) {
+            last = format!("{mode:?}: {e}");
+            continue;
+        }
+        if count <= 0 {
+            last = format!("{mode:?}: 0 engine configs");
+            continue;
+        }
+        for (i, cfg) in cfgs.iter().take(count as usize).enumerate() {
+            let plan = Desc::new(DT::CUDNN_BACKEND_EXECUTION_PLAN_DESCRIPTOR)?;
+            plan.set(A::CUDNN_ATTR_EXECUTION_PLAN_HANDLE, T::CUDNN_TYPE_HANDLE, &[h])?;
+            plan.set_desc(A::CUDNN_ATTR_EXECUTION_PLAN_ENGINE_CONFIG, &[cfg])?;
+            match plan.finalize("execution plan") {
+                Ok(plan) => {
+                    let mut ws = 0i64;
+                    let mut n = 0i64;
+                    ok(
+                        unsafe {
+                            sys::cudnnBackendGetAttribute(
+                                plan.0,
+                                A::CUDNN_ATTR_EXECUTION_PLAN_WORKSPACE_SIZE,
+                                T::CUDNN_TYPE_INT64,
+                                1,
+                                &mut n,
+                                &mut ws as *mut i64 as *mut c_void,
+                            )
+                        },
+                        "workspace size",
+                    )?;
+                    keep.push(graph);
+                    keep.push(heur);
+                    return Ok(SdpaPlan {
+                        plan,
+                        workspace: ws.max(0) as usize,
+                        engine: format!("{mode:?} config {i} of {count}"),
+                        _keep: keep,
+                    });
+                }
+                Err(e) => last = format!("{mode:?}: {e}"),
+            }
         }
     }
-    Err(msg(format!(
-        "cudnn sdpa: no executable plan among {count} configs ({last})"
-    )))
+    Err(msg(format!("cudnn sdpa: no executable plan ({last})")))
 }
 
 type Key = (usize, usize, usize, usize);
