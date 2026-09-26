@@ -540,10 +540,11 @@ mod dev {
         let n = batch * heads * seq * d;
         let mut out = OutBuf::new(n, !widen)?;
         let (op, o16) = (out.ptr(), if widen { 2 } else { out.is16() });
-        // `dpad` threads per (batch, seq, head) row, as many rows per block
-        // as fit in 512 threads.
+        // `dpad` threads per (batch, seq, head) row, one row per block: four
+        // rows per 512-thread block measured slower on RTX PRO 6000 (FastH3
+        // 8-step: 0.213 s vs 0.178 s of this kernel per step).
         let dpad = d.next_multiple_of(32);
-        let per_block = (512 / dpad).max(1);
+        let per_block = 1;
         let threads = (dpad * per_block) as u32;
         let rows = (batch * seq * heads).max(1);
         let cfg = cudarc::driver::LaunchConfig {

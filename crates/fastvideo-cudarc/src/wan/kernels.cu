@@ -4838,10 +4838,9 @@ extern "C" __global__ void h3_gate_residual(
 // the fused QKV projection straight into BHSD (`_qknorm_partial_rope_kernel`):
 // f32 normalizer shared by a channel and its rotary partner, f32 cos/sin,
 // one rounding. `dpad` threads (a multiple of 32, >= d) per (batch, seq,
-// head) row, `blockDim.x / dpad` rows per block (several per block since
-// Phase 3c: one 128-thread block per row was scheduling-bound; the per-row
-// sum is the same warp butterfly, then the row's warps in order). Shared
-// memory holds one float per warp.
+// head) row, `blockDim.x / dpad` rows per block (the launcher uses one; the
+// per-row sum is the same warp butterfly, then the row's warps in order,
+// either way). Shared memory holds one float per warp.
 extern "C" __global__ void h3_qk_norm_rope(
     const void* src, int s16, const float* w, const float* cs, const float* sn, int use_rope,
     void* out, int o16, int batch, int seq, int heads, int d, int r, int src_width, int col_off,
