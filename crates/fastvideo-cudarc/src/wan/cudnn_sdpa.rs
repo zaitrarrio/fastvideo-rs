@@ -14,10 +14,21 @@
 //! O  = matmul(P, V)              bf16                ("bmm2")
 //! ```
 //!
-//! cuDNN's heuristics map that pattern onto its runtime-compiled flash
-//! attention kernel. Q/K/V/O are bf16 BHSD `[1, bh, s, d]`; the plan is built
-//! once per shape and cached. Everything returns `Ok(None)` when cuDNN does
-//! not offer an engine, so the caller falls back to `flash_mma_fwd2`.
+//! Q/K/V/O are bf16 BHSD `[1, bh, s, d]`; the plan is built once per shape
+//! and cached, and a shape cuDNN offers no engine for falls back to
+//! `flash_mma_fwd2`.
+//!
+//! Status (RTX PRO 6000, cuDNN 9.26.0, 2026-09-26): cuDNN rejects this
+//! composite softmax graph on every shape, per its own log
+//! (`CUDNN_LOGLEVEL_DBG=2`): "non-flash composite MHA fprop is no longer
+//! supported (removed with the xmma512 engine) at: !is_flash_fprop". From
+//! cuDNN 9.21 cudnn-frontend lowers softmax to the single unified
+//! `OPERATION_SOFTMAX` backend node (`node/softmax.h:386-390`), which the
+//! sm_120 flash engines match; cudarc 0.17.8's cuDNN bindings predate that
+//! descriptor. So `FASTVIDEO_FLASH_KERNEL=cudnn` currently always runs
+//! `flash_mma_fwd2`. Measured through torch 2.13 / cuDNN on the same GPU,
+//! cuDNN's fused SDPA is 5-6% faster than `flash_mma_fwd2` at the H3 / LTX
+//! shapes (392-397 vs 371-373 TFLOPS): the next step is the unified node.
 
 #![cfg(feature = "cuda")]
 
