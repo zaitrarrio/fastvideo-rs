@@ -308,8 +308,9 @@ pub fn with_fuse<R>(on: bool, f: impl FnOnce() -> R) -> R {
 
 /// `merge_heads(out)` as the MXFP8 activation of a linear over `heads * d`
 /// columns: the bytes `mxfp8_quantize` writes for the merged bf16 tensor.
-/// `out` is `[1, H, S, D]` device bf16; `None` when that does not hold or the
-/// fusion is off.
+/// `out` is `[1, H, S, D]` on the device, bf16 or f32 (rounded to bf16 first,
+/// as the quantized linear's bf16 view of it would be); `None` when that does
+/// not hold or the fusion is off.
 #[cfg(feature = "cuda")]
 pub fn merge_heads_mx(out: &CudaTensor) -> Result<Option<quant::MxAct>> {
     if !fuse_enabled() {
@@ -539,16 +540,21 @@ mod dev {
         let n = batch * heads * seq * d;
         let mut out = OutBuf::new(n, !widen)?;
         let (op, o16) = (out.ptr(), if widen { 2 } else { out.is16() });
-        let threads = d.next_multiple_of(32) as u32;
+        // `dpad` threads per (batch, seq, head) row, as many rows per block
+        // as fit in 512 threads.
+        let dpad = d.next_multiple_of(32);
+        let per_block = (512 / dpad).max(1);
+        let threads = (dpad * per_block) as u32;
+        let rows = (batch * seq * heads).max(1);
         let cfg = cudarc::driver::LaunchConfig {
-            grid_dim: ((batch * seq * heads).max(1) as u32, 1, 1),
+            grid_dim: (rows.div_ceil(per_block) as u32, 1, 1),
             block_dim: (threads, 1, 1),
             shared_mem_bytes: (threads / 32) * 4,
         };
-        let v = [batch, seq, heads, d, r, width, col_off].map(|u| u as i32);
+        let v = [batch, seq, heads, d, r, width, col_off, dpad].map(|u| u as i32);
         launch!(dev.stream, &dev.kernels.h3_qk_norm_rope, cfg;
             &xo.ptr, &xo.is16, &wo.ptr, &co.ptr, &so.ptr, &use_rope, &op, &o16,
-            &v[0], &v[1], &v[2], &v[3], &v[4], &v[5], &v[6], &eps)
+            &v[0], &v[1], &v[2], &v[3], &v[4], &v[5], &v[6], &eps, &v[7])
         .map_err(err)?;
         out.into_tensor(vec![batch, heads, seq, d])
     }
@@ -567,6 +573,10 @@ mod dev {
         let mut out = OutBuf::new(n, false)?;
         let (op, o16) = (out.ptr(), out.is16());
         let (sp, s16) = (ptr(src), 1i32);
+        if crate::wan::act16::split_rows_ok(d, width, col_off) {
+            crate::wan::act16::split_rows(&dev, sp, s16, op, o16, batch, seq, heads, d, width, col_off)?;
+            return out.into_tensor(vec![batch, heads, seq, d]);
+        }
         let v = [n, seq, heads, d, width, col_off].map(|u| u as i64);
         launch!(dev.stream, &dev.kernels.mx_split_heads, cfg_n(n);
             &sp, &s16, &op, &o16, &v[0], &v[1], &v[2], &v[3], &v[4], &v[5])
@@ -579,19 +589,26 @@ mod dev {
             return Ok(None);
         };
         let k = heads * d;
-        if k == 0 || !k.is_multiple_of(32) || !out.is_bf16() {
+        if k == 0 || !k.is_multiple_of(32) {
             return Ok(None);
         }
-        let Some(o) = out.device_slice_bf16() else {
-            return Ok(None);
+        let (op, o16) = if out.is_bf16() {
+            match out.device_slice_bf16() {
+                Some(o) => (ptr(o), 1i32),
+                None => return Ok(None),
+            }
+        } else {
+            match out.device_slice() {
+                Some(o) => (ptr(o), 0i32),
+                None => return Ok(None),
+            }
         };
         let dev = global_device().ok_or_else(|| msg("no device"))?;
         let mut act = MxAct::alloc(seq, k)?;
         let (qp, sp) = (ptr_mut(&mut act.q), ptr_mut(&mut act.s));
-        let op = ptr(o);
         let (seq_i, heads_i, d_i) = (seq as i32, heads as i32, d as i32);
         launch!(dev.stream, &dev.kernels.fvf_merge_heads_mx, cfg_rows(seq);
-            &op, &qp, &sp, &seq_i, &heads_i, &d_i)
+            &op, &o16, &qp, &sp, &seq_i, &heads_i, &d_i)
         .map_err(err)?;
         Ok(Some(act))
     }

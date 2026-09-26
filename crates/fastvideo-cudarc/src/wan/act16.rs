@@ -316,11 +316,49 @@ pub(crate) fn split_heads(
     let n = batch * heads * seq * d;
     let mut out = OutBuf::new(n, is16(x))?;
     let (op_p, o16) = (out.ptr(), out.is16());
+    if split_rows_ok(d, width, col_off) {
+        split_rows(&dev, a.ptr, a.is16, op_p, o16, batch, seq, heads, d, width, col_off)?;
+        return out.into_tensor(vec![batch, heads, seq, d]).map(Some);
+    }
     let v = [n, seq, heads, d, width, col_off].map(|u| u as i64);
     launch!(dev.stream, &dev.kernels.mx_split_heads, cfg_n(n);
         &a.ptr, &a.is16, &op_p, &o16, &v[0], &v[1], &v[2], &v[3], &v[4], &v[5])
     .map_err(err)?;
     out.into_tensor(vec![batch, heads, seq, d]).map(Some)
+}
+
+/// Whether [`split_rows`] handles this geometry (every column pair aligned).
+pub(crate) fn split_rows_ok(d: usize, width: usize, col_off: usize) -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| super::envflag::bool_flag("FASTVIDEO_SPLIT_ROWS", true))
+        && d > 0
+        && d % 2 == 0
+        && width % 2 == 0
+        && col_off % 2 == 0
+}
+
+/// `fvf_split_heads_rows`: the head split as one block per token row (the
+/// same bytes as `mx_split_heads`, without its per-element index divisions).
+/// `FASTVIDEO_SPLIT_ROWS=0` keeps `mx_split_heads`.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn split_rows(
+    dev: &DeviceContext,
+    src: u64,
+    s16: i32,
+    out: u64,
+    o16: i32,
+    batch: usize,
+    seq: usize,
+    heads: usize,
+    d: usize,
+    width: usize,
+    col_off: usize,
+) -> Result<()> {
+    let rows = batch * seq;
+    let v = [rows, seq, heads, d, width, col_off].map(|u| u as i32);
+    launch!(dev.stream, &dev.kernels.fvf_split_heads_rows, cfg_rows(rows);
+        &src, &s16, &out, &o16, &v[0], &v[1], &v[2], &v[3], &v[4], &v[5])
+    .map_err(err)
 }
 
 pub(crate) fn merge_heads(

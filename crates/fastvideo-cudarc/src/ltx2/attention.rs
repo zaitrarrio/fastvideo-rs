@@ -103,7 +103,9 @@ impl DeviceRope {
 
     /// The f32 `[H·S, r]` cos / sin tables and `r`, when this table rotates
     /// `[1, heads, seq, d]` (what [`Self::apply`] would accept), for the fused
-    /// q/k kernel ([`super::fuse::qk_norm_rope`]).
+    /// q/k kernel ([`super::fuse::qk_norm_rope`]). Every row holds each pair's
+    /// value in both halves ([`Self::upload`]; [`Self::index_tokens`] only
+    /// selects rows), which that kernel relies on to read half the table.
     pub(crate) fn fused_tables(
         &self,
         heads: usize,

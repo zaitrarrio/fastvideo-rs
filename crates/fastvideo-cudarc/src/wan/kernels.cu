@@ -3977,31 +3977,37 @@ extern "C" __global__ void h3_gate_residual(
 // Per-head RMSNorm over head_dim then partial rotate_half RoPE, gathered from
 // the fused QKV projection straight into BHSD (`_qknorm_partial_rope_kernel`):
 // f32 normalizer shared by a channel and its rotary partner, f32 cos/sin,
-// one rounding. One block of `blockDim.x >= d` threads (a multiple of 32,
-// <= 1024) per (batch, seq, head); shared memory holds one float per warp.
+// one rounding. `dpad` threads (a multiple of 32, >= d) per (batch, seq,
+// head) row, `blockDim.x / dpad` rows per block (several per block since
+// Phase 3c: one 128-thread block per row was scheduling-bound; the per-row
+// sum is the same warp butterfly, then the row's warps in order). Shared
+// memory holds one float per warp.
 extern "C" __global__ void h3_qk_norm_rope(
     const void* src, int s16, const float* w, const float* cs, const float* sn, int use_rope,
     void* out, int o16, int batch, int seq, int heads, int d, int r, int src_width, int col_off,
-    float eps
+    float eps, int dpad
 ) {
     extern __shared__ float sdata[];
-    long row = blockIdx.x;
-    if (row >= (long)batch * seq * heads) return;
+    int slot = threadIdx.x / dpad;
+    int wpr = dpad >> 5;
+    long row = (long)blockIdx.x * (blockDim.x / dpad) + slot;
+    bool live = row < (long)batch * seq * heads;
+    if (!live) row = 0;
     int h = (int)(row % heads);
     long bs = row / heads;
     int s = (int)(bs % seq);
     int b = (int)(bs / seq);
-    int p = threadIdx.x;
+    int p = threadIdx.x - slot * dpad;
     const long xb = bs * src_width + col_off + (long)h * d;
-    float v = p < d ? fv_ld(src, xb + p, s16) : 0.0f;
+    float v = (live && p < d) ? fv_ld(src, xb + p, s16) : 0.0f;
     float sq = v * v;
     for (int o = 16; o > 0; o >>= 1) sq += __shfl_xor_sync(0xffffffffu, sq, o);
-    if ((p & 31) == 0) sdata[p >> 5] = sq;
+    if ((p & 31) == 0) sdata[threadIdx.x >> 5] = sq;
     __syncthreads();
     float tot = 0.0f;
-    for (int k = 0; k < (int)(blockDim.x >> 5); ++k) tot += sdata[k];
+    for (int k = 0; k < wpr; ++k) tot += sdata[slot * wpr + k];
     float rr = rsqrtf(tot / (float)d + eps);
-    if (p >= d) return;
+    if (!live || p >= d) return;
     float normed = v * rr * w[p];
     float o = normed;
     if (use_rope && p < r) {
@@ -4483,10 +4489,13 @@ __device__ __forceinline__ float fvf_row_rms(const void* x, int x16, long base, 
 // weight), head split to BHSD, then the split rotary (`DeviceRope::apply`:
 // rotate_half inside each head, head-major [H*S, r] f32 tables). Unfused:
 // mx_rms_norm -> bf16, mx_split_heads, mx_rope_half -> bf16.
-// `use_rope` = 0 is the text cross-attention (norm + split only).
+// `use_rope` = 0 is the text cross-attention (norm + split only). `dup` = 1:
+// every table row holds its values twice (`SplitRope::rotate_half_tables`),
+// so channel p and p + r/2 read the same (first-half) entry: the same values,
+// half the table traffic, which dominates this kernel.
 extern "C" __global__ void fvf_ltx_qk_norm_rope(
     const void* x, int x16, const void* w, int w16, const float* cs, const float* sn,
-    int use_rope, unsigned short* out, int seq, int heads, int d, int r, float eps
+    int use_rope, unsigned short* out, int seq, int heads, int d, int r, float eps, int dup
 ) {
     extern __shared__ float sdata[];
     int s = blockIdx.x;
@@ -4505,7 +4514,7 @@ extern "C" __global__ void fvf_ltx_qk_norm_rope(
             int jq = h * d + q;
             float np = fv_r16(__fmul_rn(__fmul_rn(fv_ld(x, base + jq, x16), rr), fv_ld(w, jq, w16)));
             float other = p < half ? -np : np;
-            long t = ((long)h * seq + s) * r + p;
+            long t = ((long)h * seq + s) * r + (dup && p >= half ? p - half : p);
             o = fmaf(n, cs[t], __fmul_rn(other, sn[t]));
         }
         out[((long)h * seq + s) * d + p] = fv_bf16_rne(o);
@@ -4565,30 +4574,43 @@ extern "C" __global__ void fvf_ltx_res_norm_mod(
 // LTX-2.5 per-head output gates and the head merge (`apply_head_gates` +
 // `merge_heads`): o [H, S, D] bf16, logits [S, H] bf16;
 // out[s, h*D + p] = r16(o * r16(2 * r16(sigmoid(logit[s, h])))).
+// One block per token row: the row's `heads` gates once into shared memory,
+// then two channels per thread (`d` even).
 extern "C" __global__ void fvf_ltx_gate_merge(
     const unsigned short* o, const unsigned short* logits, unsigned short* out,
-    long n, int seq, int heads, int d
+    int seq, int heads, int d
 ) {
-    long i = IDX();
-    if (i >= n) return;
-    long hd = (long)heads * d;
-    long s = i / hd;
-    int j = (int)(i - s * hd);
-    int h = j / d;
-    int p = j - h * d;
-    float l = fv_bf16_to_f32(logits[s * heads + h]);
-    float g = fv_r16(1.0f / (1.0f + expf(-l)));
-    g = fv_r16(__fmul_rn(g, 2.0f));
-    float v = fv_bf16_to_f32(o[((long)h * seq + s) * d + p]);
-    out[i] = fv_bf16_rne(__fmul_rn(v, g));
+    extern __shared__ float gsm[];
+    int s = blockIdx.x;
+    if (s >= seq) return;
+    for (int h = threadIdx.x; h < heads; h += blockDim.x) {
+        float l = fv_bf16_to_f32(logits[(long)s * heads + h]);
+        float g = fv_r16(1.0f / (1.0f + expf(-l)));
+        gsm[h] = fv_r16(__fmul_rn(g, 2.0f));
+    }
+    __syncthreads();
+    int pairs = heads * d / 2;
+    const unsigned int* o2 = (const unsigned int*)o;
+    unsigned int* out2 = (unsigned int*)out;
+    for (int k = threadIdx.x; k < pairs; k += blockDim.x) {
+        int j = 2 * k;
+        int h = j / d;
+        int p = j - h * d;
+        unsigned int pair = o2[(((long)h * seq + s) * d + p) >> 1];
+        float g = gsm[h];
+        float a = __fmul_rn(fv_bf16_to_f32((unsigned short)(pair & 0xFFFFu)), g);
+        float b = __fmul_rn(fv_bf16_to_f32((unsigned short)(pair >> 16)), g);
+        out2[(long)s * pairs + k] = (unsigned int)fv_bf16_rne(a) | ((unsigned int)fv_bf16_rne(b) << 16);
+    }
 }
 
-// H3: `merge_heads` of the attention output [H, S, D] (bf16) straight into
-// the MXFP8 activation of an all-MXFP8 `to_out` — the bytes `mxfp8_quantize`
-// writes for the merged bf16 tensor (same groups, same lanes). One block per
-// row; `heads * d % 32 == 0`.
+// H3: `merge_heads` of the attention output [H, S, D] straight into the
+// MXFP8 activation of an all-MXFP8 `to_out` — the bytes `mxfp8_quantize`
+// writes for the merged bf16 tensor (same groups, same lanes). An f32 output
+// (`o16` = 0, VSA's) is rounded to the bf16 value its cast would store. One
+// block per row; `heads * d % 32 == 0`.
 extern "C" __global__ void fvf_merge_heads_mx(
-    const unsigned short* o, unsigned char* q, unsigned char* qs, int seq, int heads, int d
+    const void* o, int o16, unsigned char* q, unsigned char* qs, int seq, int heads, int d
 ) {
     int s = blockIdx.x;
     if (s >= seq) return;
@@ -4598,7 +4620,7 @@ extern "C" __global__ void fvf_merge_heads_mx(
         if ((j0 + (int)(threadIdx.x & ~31u)) >= k) continue;
         int j = j0 + threadIdx.x;
         int h = j / d;
-        float v = fv_bf16_to_f32(o[((long)h * seq + s) * d + (j - h * d)]);
+        float v = fv_r16(fv_ld(o, ((long)h * seq + s) * d + (j - h * d), o16));
         fv_mx_store_group(v, s, j, k, q, qs, column_blocks);
     }
 }
@@ -4639,6 +4661,45 @@ extern "C" __global__ void fvf_h3_gate_res_norm_mod(
         if (j < dim) v = fv_r16(fmaf(__fmul_rn(__fmul_rn(fv_bf16_to_f32(hidden[xb + j]), r), w[j]), sc[j], sh[j]));
         if (mx) fv_mx_store_group(v, row, j, dim, q, qs, column_blocks);
         else if (j < dim) out[xb + j] = fv_bf16_rne(v);
+    }
+}
+
+// Head split of columns [col_off, col_off + heads*d) of src [B, S, W] into
+// BHSD, one block per (batch, seq) row and two channels per thread (W,
+// col_off and d even): `mx_split_heads` without its per-element 64-bit
+// index divisions. A pure copy (or bf16 -> f32 widening): o16 = 1 stores
+// bf16 bits, 0 stores f32; a bf16 source into bf16 is copied bit for bit.
+extern "C" __global__ void fvf_split_heads_rows(
+    const void* src, int s16, void* out, int o16,
+    int rows, int seq, int heads, int d, int width, int col_off
+) {
+    int row = blockIdx.x;
+    if (row >= rows) return;
+    int b = row / seq;
+    int s = row - b * seq;
+    long in_base = (long)row * width + col_off;
+    int pairs = heads * d / 2;
+    for (int k = threadIdx.x; k < pairs; k += blockDim.x) {
+        int j = 2 * k;
+        int h = j / d;
+        int p = j - h * d;
+        long o = (((long)b * heads + h) * seq + s) * d + p;
+        if (s16 && o16) {
+            ((unsigned int*)out)[o >> 1] = ((const unsigned int*)src)[(in_base + j) >> 1];
+            continue;
+        }
+        float a, c;
+        if (s16) {
+            unsigned int w2 = ((const unsigned int*)src)[(in_base + j) >> 1];
+            a = fv_bf16_to_f32((unsigned short)(w2 & 0xFFFFu));
+            c = fv_bf16_to_f32((unsigned short)(w2 >> 16));
+        } else {
+            float2 f = ((const float2*)src)[(in_base + j) >> 1];
+            a = f.x;
+            c = f.y;
+        }
+        if (o16) ((unsigned int*)out)[o >> 1] = (unsigned int)fv_bf16_rne(a) | ((unsigned int)fv_bf16_rne(c) << 16);
+        else ((float2*)out)[o >> 1] = make_float2(a, c);
     }
 }
 // ==== endregion: DiT block fusions ====

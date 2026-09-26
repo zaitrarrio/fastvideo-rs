@@ -1006,7 +1006,7 @@ case "$FAMILY" in
       --text-weights "$W/h3-base"
       --warm
     )
-    off=(FASTVIDEO_H3_FUSE=0 FASTVIDEO_LTX_FUSE=0)
+    off=(FASTVIDEO_H3_FUSE=0 FASTVIDEO_LTX_FUSE=0 FASTVIDEO_SPLIT_ROWS=0)
     fuse_h3() {
       local name="$1" wcell="$2" weights="$3" recipe="$4"
       shift 4

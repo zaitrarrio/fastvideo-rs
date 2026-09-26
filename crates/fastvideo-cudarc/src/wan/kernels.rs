@@ -185,6 +185,7 @@ kernel_fns!(
     fvf_ltx_gate_merge,
     fvf_merge_heads_mx,
     fvf_h3_gate_res_norm_mod,
+    fvf_split_heads_rows,
 );
 
 /// NVRTC-compile the kernel module for `sm_major.sm_minor` without touching a

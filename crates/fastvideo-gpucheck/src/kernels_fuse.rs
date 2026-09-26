@@ -133,6 +133,17 @@ fn h3_parity(report: &mut Report, seed: &mut u64) -> StageResult<()> {
         .ok_or_else(|| anyhow::anyhow!("merged heads not device bf16"))?;
     quant::mxfp8_quantize_raw(quant::ptr(m16), true, &mut want)?;
     check_bytes(report, "h3_merge_heads_mx", &got, &want)?;
+    // An f32 attention output (VSA's) is rounded to bf16 inside the merge.
+    let o32 = t32(&rand(seed, heads * s * d, 1.5), &[1, heads, s, d])?;
+    let got = fused16::with_fuse(true, || fused16::merge_heads_mx(&o32))?
+        .ok_or_else(|| anyhow::anyhow!("merge_heads_mx f32: the fused path did not apply"))?;
+    let merged = o32.quantize_bf16()?.merge_heads()?;
+    let mut want = quant::MxAct::alloc(s, k)?;
+    let m16 = merged
+        .device_slice_bf16()
+        .ok_or_else(|| anyhow::anyhow!("merged heads not device bf16"))?;
+    quant::mxfp8_quantize_raw(quant::ptr(m16), true, &mut want)?;
+    check_bytes(report, "h3_merge_heads_mx_f32", &got, &want)?;
 
     // VSA feed: q/k (norm + partial RoPE) and head splits written as f32
     // holding exactly the bf16 path's values.
@@ -166,18 +177,56 @@ fn h3_parity(report: &mut Report, seed: &mut u64) -> StageResult<()> {
             true,
         )?;
     }
+    // Head splits (fvf_split_heads_rows) against a host gather of the
+    // packed values: bf16 -> bf16 and bf16 -> f32, batch 1 and 2.
+    let host_split = |x: &[f32], b: usize, s: usize, w: usize, col: usize| -> Vec<f32> {
+        let mut o = vec![0.0f32; b * h2 * s * d2];
+        for bi in 0..b {
+            for si in 0..s {
+                for h in 0..h2 {
+                    for p in 0..d2 {
+                        o[((bi * h2 + h) * s + si) * d2 + p] =
+                            x[(bi * s + si) * w + col + h * d2 + p];
+                    }
+                }
+            }
+        }
+        o
+    };
+    let packed_h = host(&packed)?;
     for col in [2 * inner, 3 * inner] {
+        let want = host_split(&packed_h, 1, s2, 4 * inner, col);
         let got = fused16::split_heads_f32(&packed, col, h2, d2)?
             .ok_or_else(|| anyhow::anyhow!("split_heads_f32 did not apply"))?;
-        let want = packed.split_heads_bhsd(col, h2, d2)?;
         check_ulps(
             report,
             &format!("h3_split_heads_f32_col{col}"),
             &host(&got)?,
-            &host(&want)?,
+            &want,
+            true,
+        )?;
+        let got16 = packed.split_heads_bhsd(col, h2, d2)?;
+        check_ulps(
+            report,
+            &format!("split_heads_rows_bf16_col{col}"),
+            &host(&got16)?,
+            &want,
             true,
         )?;
     }
+    let packed2 = t16(
+        &bf16v(rand(seed, 2 * s2 * 4 * inner, 1.0)),
+        &[2, s2, 4 * inner],
+    )?;
+    let want = host_split(&host(&packed2)?, 2, s2, 4 * inner, inner);
+    let got = packed2.split_heads_bhsd(inner, h2, d2)?;
+    check_ulps(
+        report,
+        "split_heads_rows_bf16_batch2",
+        &host(&got)?,
+        &want,
+        true,
+    )?;
 
     // Last residual + next block's norm vs gate_residual then norm_mod.
     let (s, dm) = (45usize, 640usize);

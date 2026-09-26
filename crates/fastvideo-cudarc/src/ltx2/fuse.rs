@@ -161,7 +161,7 @@ mod dev {
     use super::*;
     use crate::wan::act16::{operand, OutBuf};
     use crate::wan::device::global_device;
-    use crate::wan::kernels::{cfg_n, cfg_rows, launch};
+    use crate::wan::kernels::{cfg_rows, launch};
     use crate::wan::quant::ptr;
     use crate::wan::tensor::TensorError;
 
@@ -287,9 +287,11 @@ mod dev {
         let xp = ptr(xs);
         let x16 = 1i32;
         let v = [seq, heads, d, r_w].map(|u| u as i32);
+        // Every DeviceRope table row holds its values twice (see fused_tables).
+        let dup = 1i32;
         launch!(dev.stream, &dev.kernels.fvf_ltx_qk_norm_rope, cfg_rows(seq);
             &xp, &x16, &wo.ptr, &wo.is16, &cp, &sp, &use_rope, &op,
-            &v[0], &v[1], &v[2], &v[3], &eps)
+            &v[0], &v[1], &v[2], &v[3], &eps, &dup)
         .map_err(err)?;
         out.into_tensor(vec![1, heads, seq, d]).map(Some)
     }
@@ -298,20 +300,21 @@ mod dev {
         let [1, heads, seq, d] = out.shape[..] else {
             return Ok(None);
         };
-        if logits.shape != [1, seq, heads] {
+        if logits.shape != [1, seq, heads] || d % 2 != 0 || heads == 0 {
             return Ok(None);
         }
         let (Some(os), Some(ls)) = (b16(out), b16(logits)) else {
             return Ok(None);
         };
         let dev = global_device().ok_or_else(|| err("no device"))?;
-        let n = out.numel();
-        let mut merged = OutBuf::new(n, true)?;
+        let mut merged = OutBuf::new(out.numel(), true)?;
         let mp = merged.ptr();
         let (opp, lp) = (ptr(os), ptr(ls));
-        let (n_i, seq_i, heads_i, d_i) = (n as i64, seq as i32, heads as i32, d as i32);
-        launch!(dev.stream, &dev.kernels.fvf_ltx_gate_merge, cfg_n(n);
-            &opp, &lp, &mp, &n_i, &seq_i, &heads_i, &d_i)
+        let (seq_i, heads_i, d_i) = (seq as i32, heads as i32, d as i32);
+        let mut cfg = cfg_rows(seq);
+        cfg.shared_mem_bytes = (heads * std::mem::size_of::<f32>()) as u32;
+        launch!(dev.stream, &dev.kernels.fvf_ltx_gate_merge, cfg;
+            &opp, &lp, &mp, &seq_i, &heads_i, &d_i)
         .map_err(err)?;
         merged.into_tensor(vec![1, seq, heads * d]).map(Some)
     }

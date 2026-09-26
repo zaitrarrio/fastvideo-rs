@@ -1230,7 +1230,12 @@ impl Attention {
             None
         };
         let out = vsa.attend(q, k, v, gate)?;
-        Ok(Some(if out.is_bf16() { out } else { out.quantize_bf16()? }))
+        // An all-MXFP8 `to_out` rounds the f32 output inside the head merge
+        // (fused16::merge_heads_mx); otherwise it is rounded here.
+        if out.is_bf16() || self.to_out.mx_whole() {
+            return Ok(Some(out));
+        }
+        Ok(Some(out.quantize_bf16()?))
     }
 
     /// `to_out` on the `[1, H, S, D]` attention output, then the Spark
@@ -1252,6 +1257,13 @@ impl Attention {
                     return self.to_out.forward_mx(&act, shape);
                 }
             }
+            // Only the fused VSA path hands over an unrounded f32 output
+            // (for the merge above); round it as the bf16 path does.
+            let out = if bf16_activations() && !out.is_bf16() && fused16::fuse_enabled() {
+                out.quantize_bf16()?
+            } else {
+                out
+            };
             self.to_out.forward(&out.merge_heads()?)
         })?;
         match permutation {
