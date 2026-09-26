@@ -17,7 +17,9 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import statistics
+import subprocess
 import sys
 import time
 import traceback
@@ -50,11 +52,51 @@ def gemm_probe(torch) -> dict:
                     ok = False
         out[f"{lib}_ok"] = ok
     torch.backends.cuda.preferred_blas_library("default")
+    out["LD_LIBRARY_PATH"] = os.environ.get("LD_LIBRARY_PATH")
+    try:
+        with open("/proc/self/maps") as fh:
+            out["loaded"] = sorted({ln.split()[-1] for ln in fh if "libcublas" in ln})
+    except OSError:
+        pass
     print("gemm_probe", out, flush=True)
     return out
 
 
+_PROBE = "import torch; a = torch.ones(64, 64, device='cuda'); print((a @ a).sum().item())"
+
+
+def library_path_fix() -> None:
+    """Re-exec under a library path where a GEMM works, if the inherited one fails.
+
+    torch 2.10.0+cu130 pins nvidia-cublas 13.1.0.3. The base image's CUDA 13.0 on
+    LD_LIBRARY_PATH can supply a mismatched libcublasLt, and then every GEMM fails
+    (CUBLAS_STATUS_INVALID_VALUE / NOT_INITIALIZED). Each attempt is recorded."""
+    if os.environ.get("H3B_REEXEC"):
+        return
+    orig = os.environ.get("LD_LIBRARY_PATH", "")
+    venv = Path(sys.executable).parent.parent
+    wheel_libs = sorted(str(d) for d in venv.glob("lib/python3*/site-packages/nvidia/**/lib") if d.is_dir())
+    tried = []
+    for label, ldlp in (("inherited", orig), ("wheel-libs-first", ":".join([*wheel_libs, orig])), ("unset", None)):
+        env = dict(os.environ)
+        if ldlp is None:
+            env.pop("LD_LIBRARY_PATH", None)
+        else:
+            env["LD_LIBRARY_PATH"] = ldlp
+        r = subprocess.run([sys.executable, "-c", _PROBE], env=env, capture_output=True, text=True)
+        last = (r.stderr.strip().splitlines() or ["?"])[-1][:120]
+        tried.append(f"{label}: {'ok' if r.returncode == 0 else last}")
+        if r.returncode == 0:
+            if label == "inherited":
+                break
+            env["H3B_REEXEC"] = " | ".join(tried)
+            env["H3B_LDLP_ORIG"] = orig
+            os.execve(sys.executable, [sys.executable, *sys.argv], env)
+    os.environ["H3B_REEXEC"] = " | ".join(tried)
+
+
 def main() -> int:
+    library_path_fix()
     ap = argparse.ArgumentParser()
     ap.add_argument("--sol-h3", required=True, help="models/minimax_h3/Sol-H3 directory")
     ap.add_argument("--model", required=True)
@@ -70,7 +112,9 @@ def main() -> int:
     out.mkdir(parents=True, exist_ok=True)
     sys.path.insert(0, a.sol_h3)
     res: dict = {"impl": "sol-engine/Sol-H3", "attention_backend": "dense", "seed": a.seed,
-                 "duration": a.duration, "te_offload": a.te_offload, "runs": [], "ok": False}
+                 "duration": a.duration, "te_offload": a.te_offload, "runs": [], "ok": False,
+                 "library_path_probe": os.environ.get("H3B_REEXEC"),
+                 "ld_library_path_inherited": os.environ.get("H3B_LDLP_ORIG", os.environ.get("LD_LIBRARY_PATH"))}
     try:
         import torch
 
