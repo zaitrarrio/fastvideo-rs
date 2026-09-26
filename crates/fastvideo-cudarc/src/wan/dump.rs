@@ -102,6 +102,28 @@ fn parse_op_blocks(v: &str) -> Vec<usize> {
 
 thread_local! {
     static OP_BLOCK: std::cell::Cell<Option<usize>> = const { std::cell::Cell::new(None) };
+    static PREFIX: std::cell::RefCell<String> = const { std::cell::RefCell::new(String::new()) };
+    static BLOCKS: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// A name prefix for multi-stage pipelines (`s1_`, `s2_` for LTX-2's stages).
+pub fn set_prefix(p: &str) {
+    PREFIX.with(|c| *c.borrow_mut() = p.to_owned());
+}
+
+/// `name` under the current [`set_prefix`].
+pub fn named(name: &str) -> String {
+    PREFIX.with(|c| format!("{}{name}", c.borrow()))
+}
+
+/// Whether the model's next forward dumps its block outputs (a sampler sets
+/// it for its first step when dumping; the model reads it).
+pub fn set_blocks(on: bool) {
+    BLOCKS.with(|c| c.set(on && enabled()));
+}
+
+pub fn blocks() -> bool {
+    BLOCKS.with(std::cell::Cell::get)
 }
 
 /// Mark the block whose ops [`op`] dumps (`None` stops). The caller decides

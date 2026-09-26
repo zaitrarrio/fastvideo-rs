@@ -323,9 +323,17 @@ pub struct Ltx2Output {
 /// testable without a GPU), are rounded to bf16 when the reference draws in
 /// bf16, and each call — one per sampler step, video and audio together — is
 /// written into one pinned buffer and uploaded with a single copy.
+///
+/// With `FASTVIDEO_INJECT_DIR` holding a reference's draws
+/// (`noise_seed<seed>_<k>`: the k-th `torch.randn` on the generator seeded
+/// `seed`, recorded by `scripts/gpu/upstream/oracle_dump.py`), the stream
+/// replays those instead, so a parity run shares torch's noise exactly.
 pub struct NoiseStream {
     rng: rand::rngs::StdRng,
     bf16: bool,
+    seed: u64,
+    /// Draws taken so far (one per tensor), the index of the next injected one.
+    drawn: usize,
     #[cfg(feature = "cuda")]
     pinned: Option<cudarc::driver::PinnedHostSlice<f32>>,
 }
@@ -337,8 +345,37 @@ impl NoiseStream {
         Self {
             rng: rand::rngs::StdRng::seed_from_u64(seed),
             bf16,
+            seed,
+            drawn: 0,
             #[cfg(feature = "cuda")]
             pinned: None,
+        }
+    }
+
+    /// The reference's draws for `sizes` (all or none), advancing the count.
+    fn injected(&mut self, sizes: &[usize]) -> Result<Option<Vec<f32>>> {
+        let first = self.drawn;
+        self.drawn += sizes.len();
+        if !crate::wan::inject::enabled() {
+            return Ok(None);
+        }
+        let mut out = Vec::with_capacity(sizes.iter().sum());
+        let mut found = 0usize;
+        for (k, &n) in sizes.iter().enumerate() {
+            let name = format!("noise_seed{}_{:03}", self.seed, first + k);
+            if let Some(v) = crate::wan::inject::load_numel(&name, n)? {
+                out.extend_from_slice(&v);
+                found += 1;
+            }
+        }
+        match found {
+            0 => Ok(None),
+            f if f == sizes.len() => Ok(Some(out)),
+            f => Err(err(format!(
+                "ltx2 noise: the reference has {f} of draws {first}..{} on seed {}",
+                first + sizes.len(),
+                self.seed
+            ))),
         }
     }
 
@@ -369,6 +406,15 @@ impl NoiseStream {
                 })
                 .collect()
         };
+        if let Some(host) = self.injected(&sizes)? {
+            let t = CudaTensor::from_vec(host, vec![total])?;
+            let t = if crate::wan::stats::device_expected() {
+                t.to_device()?
+            } else {
+                t
+            };
+            return split(t);
+        }
         #[cfg(feature = "cuda")]
         if total > 0 && crate::wan::stats::device_expected() {
             if let Some(dev) = crate::wan::device::global_device() {
@@ -583,6 +629,67 @@ pub fn initial_noise(
     Ok((pack_video(&video)?, audio))
 }
 
+/// FASTVIDEO_DUMP_DIR, before step `i`'s forward, under the stage prefix
+/// ([`crate::wan::dump::set_prefix`]): the starting state and the sigmas at
+/// the first step, and the block dump armed for that step's forward.
+fn dump_step_begin(
+    i: usize,
+    video: &CudaTensor,
+    audio: &CudaTensor,
+    schedule: &Ltx2Schedule,
+) -> Result<()> {
+    use crate::wan::dump;
+    if !dump::enabled() {
+        return Ok(());
+    }
+    if i == 0 {
+        dump::tensor(&dump::named("video_step00_in"), video)?;
+        dump::tensor(&dump::named("audio_step00_in"), audio)?;
+        let s: Vec<f32> = schedule.sigmas.iter().map(|&s| s as f32).collect();
+        dump::host(&dump::named("sigmas"), &[s.len()], &s)?;
+    }
+    dump::set_blocks(i == 0);
+    Ok(())
+}
+
+/// FASTVIDEO_DUMP_DIR, after step `i`'s forward (before the update): the
+/// velocity and `x0 = x − σ·v` as the state stores them (`X0Model`'s
+/// `denoised`, what the reference's sampler receives).
+#[allow(clippy::too_many_arguments)]
+fn dump_step_velocity(
+    i: usize,
+    video: &CudaTensor,
+    audio: &CudaTensor,
+    v_video: &CudaTensor,
+    v_audio: &CudaTensor,
+    sigma: f64,
+    state: LatentState,
+) -> Result<()> {
+    use crate::wan::dump;
+    dump::set_blocks(false);
+    if !dump::enabled() {
+        return Ok(());
+    }
+    for (tag, x, v) in [("video", video, v_video), ("audio", audio, v_audio)] {
+        let v = state.store(v.clone())?;
+        dump::tensor(&dump::named(&format!("{tag}_vel_step{:02}", i + 1)), &v)?;
+        let x0 = state.store(CudaTensor::lincomb(&[(1.0, x), (-(sigma as f32), &v)])?)?;
+        dump::tensor(&dump::named(&format!("{tag}_x0_step{:02}", i + 1)), &x0)?;
+    }
+    Ok(())
+}
+
+/// FASTVIDEO_DUMP_DIR, after step `i`'s update: the new state.
+fn dump_step_end(i: usize, video: &CudaTensor, audio: &CudaTensor) -> Result<()> {
+    use crate::wan::dump;
+    if !dump::enabled() {
+        return Ok(());
+    }
+    dump::tensor(&dump::named(&format!("video_step{:02}", i + 1)), video)?;
+    dump::tensor(&dump::named(&format!("audio_step{:02}", i + 1)), audio)?;
+    Ok(())
+}
+
 /// Called after each step with `(step, video, audio, seconds)`.
 pub type StepObserver<'a> = &'a mut dyn FnMut(usize, &CudaTensor, &CudaTensor, f64) -> Result<()>;
 
@@ -634,6 +741,7 @@ pub fn denoise_with(
         let timer = Instant::now();
         model.begin_fbcache_step(i);
         model.arm_prune_step(i);
+        dump_step_begin(i, &video, &audio, schedule)?;
         let (v_video, v_audio) = if let Some(cached) = model.stage1_reuse(i) {
             cached
         } else {
@@ -649,8 +757,10 @@ pub fn denoise_with(
             model.stage1_store(&out.0, &out.1);
             out
         };
+        dump_step_velocity(i, &video, &audio, &v_video, &v_audio, schedule.sigmas[i], state)?;
         video = euler_update(&video, &v_video, schedule, i, state)?;
         audio = euler_update(&audio, &v_audio, schedule, i, state)?;
+        dump_step_end(i, &video, &audio)?;
         let secs = step_sync(&timer)?;
         crate::wan::log::info(format_args!(
             "ltx2 step {}/{} sigma {:.6} ({secs:.2}s)",
@@ -896,6 +1006,7 @@ pub fn denoise_ancestral(
         let sigma_next = schedule.sigmas[i + 1];
         model.begin_fbcache_step(i);
         model.arm_prune_step(i);
+        dump_step_begin(i, &video, &audio, schedule)?;
         let (v_video, v_audio) = if let Some(cached) = model.stage1_reuse(i) {
             cached
         } else {
@@ -911,6 +1022,7 @@ pub fn denoise_ancestral(
             model.stage1_store(&out.0, &out.1);
             out
         };
+        dump_step_velocity(i, &video, &audio, &v_video, &v_audio, sigma, state)?;
         // One draw (one upload) per step: video, then audio.
         let draws = if opts.eta > 0.0 && sigma_next != 0.0 {
             noise.draw(&[&video.shape, &audio.shape])?
@@ -935,6 +1047,7 @@ pub fn denoise_ancestral(
             draws.get(1),
             state,
         )?;
+        dump_step_end(i, &video, &audio)?;
         let secs = step_sync(&timer)?;
         crate::wan::log::info(format_args!(
             "ltx2 ancestral step {}/{} sigma {:.6} ({secs:.2}s)",
@@ -2151,8 +2264,30 @@ impl Ltx2Pipeline {
             return Err(err("ltx2: the clip is too short for a single audio latent"));
         }
 
-        let (contexts, text_report) = self.text.encode(&req.prompt, use_text_cache)?;
+        let (mut contexts, text_report) = self.text.encode(&req.prompt, use_text_cache)?;
         timings.text_s = text_report.seconds;
+        // FASTVIDEO_DUMP_DIR / FASTVIDEO_INJECT_DIR: ours first (so a diff
+        // shows the text path's own parity), then the reference's contexts.
+        crate::wan::dump::tensor("text_video_ctx", &contexts.video)?;
+        crate::wan::dump::tensor("text_audio_ctx", &contexts.audio)?;
+        if crate::wan::inject::text_enabled() {
+            for (name, slot) in [
+                ("text_video_ctx", &mut contexts.video),
+                ("text_audio_ctx", &mut contexts.audio),
+            ] {
+                match crate::wan::inject::load(name)? {
+                    Some((_, v)) if v.len() == slot.numel() => {
+                        let shape = slot.shape.clone();
+                        *slot = CudaTensor::from_vec(v, shape)?.to_device()?;
+                    }
+                    Some((shape, _)) => crate::wan::log::info(format_args!(
+                        "inject: {name} {shape:?} does not fit ours {:?}; ours kept",
+                        slot.shape
+                    )),
+                    None => {}
+                }
+            }
+        }
         let uncond_contexts = if use_cfg {
             let (c, rep) = self.text.encode(&req.negative_prompt, use_text_cache)?;
             timings.text_s += rep.seconds;
@@ -2230,6 +2365,7 @@ impl Ltx2Pipeline {
         // (`distilled.py:62-85`); the dev line never does.
         let ancestral = cfg.version == Ltx2ModelVersion::V25 && distilled;
         let res2s = cfg.version == Ltx2ModelVersion::V23;
+        crate::wan::dump::set_prefix(if req.two_stage { "s1_" } else { "" });
         let (mut video, mut audio) = {
             let model = self.model.as_ref().expect("ensure_dit");
             let mut record = |i: usize, v: &CudaTensor, a: &CudaTensor, s: f64| -> Result<()> {
@@ -2334,6 +2470,11 @@ impl Ltx2Pipeline {
                 let upsampled =
                     up.forward(&decoders.video.denormalize(&unpack_video(&video, grid1)?)?)?;
                 video = state.store(pack_video(&decoders.video.normalize(&upsampled)?)?)?;
+                crate::wan::dump::rows_strided(
+                    "s2_upsampled",
+                    &video,
+                    crate::wan::dump::BLOCK_ROW_STRIDE,
+                )?;
             }
             self.release_transient_decoders()?;
             trim()?;
@@ -2381,6 +2522,25 @@ impl Ltx2Pipeline {
             video = renoise(&video, &noise_v, sigma, state)?;
             audio = renoise(&audio, &noise_a, sigma, state)?;
             drop((noise_v, noise_a));
+            crate::wan::dump::set_prefix("s2_");
+            // FASTVIDEO_INJECT_DIR: stage 2 starts from the reference's own
+            // entry state, so its diff is stage 2's alone (our entry, from our
+            // stage 1 and upsampler, is dumped first as `s2_entry`).
+            if crate::wan::inject::enabled() {
+                crate::wan::dump::tensor("s2_entry_video", &video)?;
+                crate::wan::dump::tensor("s2_entry_audio", &audio)?;
+                if std::env::var("FASTVIDEO_INJECT_STAGE2").map_or(true, |v| v != "0") {
+                    for (name, slot) in [
+                        ("s2_video_step00_in", &mut video),
+                        ("s2_audio_step00_in", &mut audio),
+                    ] {
+                        if let Some(v) = crate::wan::inject::load_numel(name, slot.numel())? {
+                            let shape = slot.shape.clone();
+                            *slot = CudaTensor::from_vec(v, shape)?.to_device()?;
+                        }
+                    }
+                }
+            }
 
             let s2_timer = Instant::now();
             let ropes2 = Ropes::new(
