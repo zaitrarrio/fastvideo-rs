@@ -135,7 +135,7 @@ install_sol_h3_4step() {
 }
 
 install_sol_ltx25() {
-  local d="$UP/sol-ltx25" stamp="ltx2:$LTX2_REV:sol:$SOL_REV:v1"
+  local d="$UP/sol-ltx25" stamp="ltx2:$LTX2_REV:sol:$SOL_REV:v2"
   stamp_ok "$d" "$stamp" && { slog "sol-ltx25 venv ok"; return 0; }
   sources || return 1
   mkdir -p "$d"
@@ -143,7 +143,7 @@ install_sol_ltx25() {
   slog "uv sync LTX-2 @ $LTX2_REV"
   (cd "$d/LTX-2" && uv sync -q) || return 1
   local py="$d/LTX-2/.venv/bin/python"
-  uv pip install -q --python "$py" "nvidia-cutlass-dsl>=4.5" cuda-python || return 1
+  uv pip install -q --python "$py" "nvidia-cutlass-dsl>=4.5" cuda-python apache-tvm-ffi  # CuTe from_dlpack imports tvm_ffi || return 1
   uv pip install -q --python "$py" -e "$SRC/sol-engine/techniques/sparse_backends" || return 1
   smoke "$py" ltx_pipelines, sol_attn || return 1
   echo "$stamp" >"$d/.stamp"
