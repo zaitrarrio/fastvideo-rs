@@ -17,7 +17,7 @@
 #   gate_cells: fv-gpucheck gate with scripts/gpu/gate-policy.toml
 #     (FV_GATE_POLICY overrides) into $RUNS/gate/.
 set -euo pipefail
-FAMILY="${1:?usage: runpod-matrix.sh h3|ltx|hunyuan|wan|b200|rtx6000|rtx5090|fastvideo|precision|precision-debug|trace|oracle|ltxvae|writer|eval}"
+FAMILY="${1:?usage: runpod-matrix.sh h3|ltx|hunyuan|wan|b200|rtx6000|rtx5090|fastvideo|precision|precision-debug|trace|fuse|oracle|ltxvae|writer|eval}"
 WORK="${FV_WORK:-/workspace}"
 BIN="${FV_GPUCHECK:-/opt/fastvideo-rs/target/release/fv-gpucheck}"
 W="$WORK/weights"
@@ -988,6 +988,68 @@ case "$FAMILY" in
         --clip "$RUNS/ltx25-1080p20s-sol/frames"
     for cell in fasth3-4step-vsa-768p fasth3-8step-768p fasth3-4step-dense-768p ltx25-4k5s-sol ltx25-1080p20s-sol; do
       grep -h '/gpu_trace ' "$RUNS/$cell/stderr.log" 2>/dev/null | tail -1 | cut -c1-400 | sed "s/^/[$cell] /" | tee -a "$LOG" || true
+    done
+    ;;
+  fuse)
+    # Phase 3c DiT block fusions (FASTVIDEO_H3_FUSE, FASTVIDEO_LTX_FUSE).
+    # 1. kernels-fuse: `fv-gpucheck kernels --groups dit_fusion,bf16_act`,
+    #    every fused kernel bit for bit against its unfused op chain, plus
+    #    fused / unfused timings at production shapes.
+    # 2. trace-*: a CUPTI-traced warm step of each workload with the fusions
+    #    on (the trace family's command lines; compare with a trace run of
+    #    the previous build).
+    # 3. <workload>-off / -on: untraced warm generations with the fusions off
+    #    (the ops the previous build runs) and on. The fusions keep every
+    #    rounding point, so compare-clips must find the clips byte-identical
+    #    (--off-identity) and the gate runs as an `exact` switch.
+    run_cell kernels-fuse "$BIN" --out "$RUNS/kernels-fuse/gpucheck-out" kernels --groups dit_fusion,bf16_act
+    grep -hE '^\[(PASS|FAIL)\]' "$RUNS/kernels-fuse/stderr.log" 2>/dev/null | cut -c1-200 | tee -a "$LOG" || true
+    h3_common=(
+      --prompt "$PROMPT"
+      --seconds 5
+      --seed "$SEED"
+      --text-encoder auto
+      --text-cache "$SCRATCH/h3-text-cache"
+      --text-weights "$W/h3-base"
+      --warm
+    )
+    off=(FASTVIDEO_H3_FUSE=0 FASTVIDEO_LTX_FUSE=0)
+    fuse_h3() {
+      local name="$1" wcell="$2" weights="$3" recipe="$4"
+      shift 4
+      gated_cell "$name" "$wcell" \
+        env "$@" \
+        "$BIN" --mode fast h3 gen --weights "$W/$weights" --h3-recipe "$recipe" \
+          --adaln-cache "$RUNS/$name-adaln.cache" \
+          --clip-dir "$RUNS/$name/frames" "${h3_common[@]}"
+    }
+    fuse_ltx() {
+      local name="$1"
+      shift
+      gated_cell "$name" ltx25-two-stage \
+        env "$@" \
+        "$BIN" --mode fast ltx2 gen --model-version 2.5 \
+          --weights "$W/ltx25" --dit "$W/ltx25" --workload 4k5s \
+          --prompt "$PROMPT" --seed "$SEED" --two-stage --text streamed --warm \
+          --clip "$RUNS/$name/frames"
+    }
+    fuse_h3 trace-fasth3-8step-768p fasth3-8step h3-8step 8step FASTVIDEO_GPU_TRACE=1
+    fuse_h3 trace-fasth3-4step-vsa-768p fasth3-4step-vsa h3-base 4step-vsa FASTVIDEO_GPU_TRACE=1
+    fuse_ltx trace-ltx25-4k5s-sol FASTVIDEO_GPU_TRACE=1 FASTVIDEO_GPU_TRACE_STEP=9
+    for cell in trace-fasth3-8step-768p trace-fasth3-4step-vsa-768p trace-ltx25-4k5s-sol; do
+      grep -h '/gpu_trace ' "$RUNS/$cell/stderr.log" 2>/dev/null | tail -1 | cut -c1-400 | sed "s/^/[$cell] /" | tee -a "$LOG" || true
+    done
+    fuse_h3 fasth3-8step-768p-off fasth3-8step h3-8step 8step "${off[@]}"
+    fuse_h3 fasth3-8step-768p-on fasth3-8step h3-8step 8step FASTVIDEO_H3_FUSE=1
+    fuse_h3 fasth3-4step-vsa-768p-off fasth3-4step-vsa h3-base 4step-vsa "${off[@]}"
+    fuse_h3 fasth3-4step-vsa-768p-on fasth3-4step-vsa h3-base 4step-vsa FASTVIDEO_H3_FUSE=1
+    fuse_ltx ltx25-4k5s-sol-off "${off[@]}"
+    fuse_ltx ltx25-4k5s-sol-on FASTVIDEO_LTX_FUSE=1
+    for wl in fasth3-8step-768p fasth3-4step-vsa-768p ltx25-4k5s-sol; do
+      compare_cells "$wl-off" "$wl-on" --off-identity
+      # `exact`: the OFF-identity report is the on/off one itself (the
+      # fused path must equal the unfused one byte for byte).
+      gate_cells "$wl-off" "$wl-on" exact "$wl-on"
     done
     ;;
   eval)

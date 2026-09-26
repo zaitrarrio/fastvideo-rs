@@ -34,6 +34,7 @@ use crate::wan::tensor::{CudaTensor, Result};
 use crate::wan::weights::{cuda_tensor_shaped, WeightMap};
 
 use super::attention::{Attention, AttentionDims, DeviceRope, FeedForward, VideoAttnKernel};
+use super::fuse;
 use super::keys::Keys;
 use super::{msg, ones};
 
@@ -148,6 +149,45 @@ fn rms_adaln(
 /// `x · (1 + scale) + shift` with broadcast `[1, dim]` modulation rows.
 fn scale_shift(x: &CudaTensor, scale: &CudaTensor, shift: &CudaTensor) -> Result<CudaTensor> {
     x.mul(&scale.try_add_scalar(1.0)?)?.add(shift)
+}
+
+/// [`rms_adaln`] with rows `scale` / `shift` of a `[rows, dim]` table: one
+/// fused kernel with bf16 activations ([`fuse::norm_mod`]), else the ops.
+fn adaln_rows(
+    x: &CudaTensor,
+    tab: &CudaTensor,
+    scale: usize,
+    shift: usize,
+    eps: f32,
+) -> Result<CudaTensor> {
+    let m = fuse::Mod { tab, scale, shift };
+    if let Some(n) = fuse::norm_mod(x, fuse::Norm::AdaLn(m), eps)? {
+        return Ok(n);
+    }
+    rms_adaln(x, &row(tab, scale)?, &row(tab, shift)?, eps)
+}
+
+/// A stream's self-attention residual (`x + gate · u`, table row 2) and, on
+/// LTX-2.5 (`cross_attn_mod`), the text cross-attention's modulated norm of
+/// the result (rows 7 / 6) in the same kernel: `(residual, normed if fused)`.
+fn gated_then_text_norm(
+    stream: &StreamBlock,
+    x: CudaTensor,
+    u: CudaTensor,
+    gates: &CudaTensor,
+    tab: &CudaTensor,
+    ones: &CudaTensor,
+    eps: f32,
+) -> Result<(CudaTensor, Option<CudaTensor>)> {
+    if stream.cross_attn_mod {
+        let res = fuse::Residual::Gated { u: &u, gates, row: 2 };
+        let norm = fuse::Norm::ThenMod(ones, fuse::Mod { tab, scale: 7, shift: 6 });
+        if let Some((out, n)) = fuse::res_norm_mod(&x, res, norm, eps)? {
+            return Ok((out, Some(n)));
+        }
+    }
+    let out = x.residual_gate_add_e(&u, gates, 2)?;
+    Ok((out, None))
 }
 
 /// Stage-2 video self-attention for one denoise loop. The step index is applied
@@ -345,6 +385,10 @@ struct Tap<'p, 'a> {
 }
 
 impl Tap<'_, '_> {
+    fn on(&self) -> bool {
+        self.probe.is_some()
+    }
+
     fn emit(&mut self, stream: &str, what: &str, t: &CudaTensor) -> Result<()> {
         match self.probe.as_mut() {
             Some(p) => p(&format!("block{:02}.{stream}.{what}", self.block), t),
@@ -1367,37 +1411,53 @@ impl Ltx2Transformer {
         // binding would live to the end of the block. Taps fire in the same
         // order with the same values; they just fire as soon as a value exists.
 
-        // 1. self-attention.
-        let xv = {
-            let h = rms_adaln(&xv, &row(&v_tab, 1)?, &row(&v_tab, 0)?, eps)?;
+        // With bf16 activations each residual below is fused with the norm
+        // that reads its output, and each modulated norm is one kernel
+        // (super::fuse; bit-identical, FASTVIDEO_LTX_FUSE=0 runs the ops one
+        // by one). A probe wants the gated text-cross update, which the fused
+        // residual never stores, so a probed forward keeps that one unfused.
+        let probed = tap.on();
+
+        // 1. self-attention; its residual carries the text cross-attention's
+        // norm (LTX-2.5 modulates it).
+        let (xv, v_h2) = {
+            let h = adaln_rows(&xv, &v_tab, 1, 0, eps)?;
             tap.emit("video", "attn1_in", &h)?;
             let u = video_self_attn(&b.video.attn1, h, &ropes.video, route, tap.block)?;
             tap.emit("video", "attn1_out", &u)?;
-            let out = xv.residual_gate_add_e(&u, &v_gates, 2)?;
-            drop((xv, u));
+            let (out, h2) =
+                gated_then_text_norm(&b.video, xv, u, &v_gates, &v_tab, &self.ones_video, eps)?;
             tap.emit("video", "attn1_after", &out)?;
-            out
+            (out, h2)
         };
-        let xa = {
-            let h = rms_adaln(&xa, &row(&a_tab, 1)?, &row(&a_tab, 0)?, eps)?;
+        let (xa, a_h2) = {
+            let h = adaln_rows(&xa, &a_tab, 1, 0, eps)?;
             tap.emit("audio", "attn1_in", &h)?;
             let u = b
                 .audio
                 .attn1
                 .forward_owned(h, None, Some(&ropes.audio), None)?;
             tap.emit("audio", "attn1_out", &u)?;
-            let out = xa.residual_gate_add_e(&u, &a_gates, 2)?;
-            drop((xa, u));
+            let (out, h2) =
+                gated_then_text_norm(&b.audio, xa, u, &a_gates, &a_tab, &self.ones_audio, eps)?;
             tap.emit("audio", "attn1_after", &out)?;
-            out
+            (out, h2)
         };
 
+        // Rows 0..3 of each side's cross table: a2v_scale, a2v_shift,
+        // v2a_scale, v2a_shift (scale first here); row 4 is the gate,
+        // modulated by its own embedder.
+        let v_cross = b.video.cross_table.narrow(0, 0, 4)?.add(&v_mod.cross)?;
+        let a_cross = b.audio.cross_table.narrow(0, 0, 4)?.add(&a_mod.cross)?;
+
         // 2. text cross-attention (optional Q/KV AdaLN + output gate, LTX-2.5).
+        // Its residual carries the audio↔video query norm (`side(x, cross, 0)`).
         #[allow(clippy::too_many_arguments)]
         fn text_cross(
             stream: &StreamBlock,
             name: &str,
             x: CudaTensor,
+            h: Option<CudaTensor>,
             ctx: &CudaTensor,
             tab: &CudaTensor,
             ones: &CudaTensor,
@@ -1405,11 +1465,19 @@ impl Ltx2Transformer {
             dim: usize,
             eps: f32,
             tap: &mut Tap<'_, '_>,
-        ) -> Result<CudaTensor> {
-            let mut h = x.rms_norm(ones, eps)?;
-            if stream.cross_attn_mod {
-                h = scale_shift(&h, &row(tab, 7)?, &row(tab, 6)?)?;
-            }
+            next: fuse::Norm<'_>,
+            probed: bool,
+        ) -> Result<(CudaTensor, Option<CudaTensor>)> {
+            let h = match h {
+                Some(h) => h,
+                None => {
+                    let mut h = x.rms_norm(ones, eps)?;
+                    if stream.cross_attn_mod {
+                        h = scale_shift(&h, &row(tab, 7)?, &row(tab, 6)?)?;
+                    }
+                    h
+                }
+            };
             let mut enc = ctx.clone();
             if let Some(pt) = &stream.prompt_table {
                 let tab_p = match prompt {
@@ -1421,6 +1489,22 @@ impl Ltx2Transformer {
             tap.emit(name, "attn2_in", &h)?;
             let u = stream.attn2.forward_owned(h, Some(&enc), None, None)?;
             drop(enc);
+            if !probed {
+                let res = if stream.cross_attn_mod {
+                    fuse::Residual::Gated {
+                        u: &u,
+                        gates: tab,
+                        row: 8,
+                    }
+                } else {
+                    fuse::Residual::Plain(&u)
+                };
+                if let Some((out, n)) = fuse::res_norm_mod(&x, res, next, eps)? {
+                    drop((x, u));
+                    tap.emit(name, "attn2_after", &out)?;
+                    return Ok((out, Some(n)));
+                }
+            }
             let u = if stream.cross_attn_mod {
                 let gated = u.mul(&row(tab, 8)?.reshape(vec![1, 1, dim])?)?;
                 drop(u);
@@ -1432,12 +1516,20 @@ impl Ltx2Transformer {
             let out = x.add(&u)?;
             drop((x, u));
             tap.emit(name, "attn2_after", &out)?;
-            Ok(out)
+            Ok((out, None))
         }
-        let xv = text_cross(
+        let q_mod = |cross| {
+            fuse::Norm::AdaLn(fuse::Mod {
+                tab: cross,
+                scale: 0,
+                shift: 1,
+            })
+        };
+        let (xv, a2v_q) = text_cross(
             &b.video,
             "video",
             xv,
+            v_h2,
             &text.video,
             &v_tab,
             &self.ones_video,
@@ -1445,11 +1537,14 @@ impl Ltx2Transformer {
             dv,
             eps,
             &mut tap,
+            q_mod(&v_cross),
+            probed,
         )?;
-        let xa = text_cross(
+        let (xa, a2v_kv) = text_cross(
             &b.audio,
             "audio",
             xa,
+            a_h2,
             &text.audio,
             &a_tab,
             &self.ones_audio,
@@ -1457,13 +1552,11 @@ impl Ltx2Transformer {
             da,
             eps,
             &mut tap,
+            q_mod(&a_cross),
+            probed,
         )?;
 
         // 3. audio↔video, both directions from the same pre-update states.
-        // Rows 0..3 of each side's table: a2v_scale, a2v_shift, v2a_scale, v2a_shift
-        // (scale first here); row 4 is the gate, modulated by its own embedder.
-        let v_cross = b.video.cross_table.narrow(0, 0, 4)?.add(&v_mod.cross)?;
-        let a_cross = b.audio.cross_table.narrow(0, 0, 4)?.add(&a_mod.cross)?;
         let a2v_gate = row(&b.video.cross_table, 4)?
             .add(&v_mod.gate)?
             .reshape(vec![1, 1, dv])?;
@@ -1471,14 +1564,21 @@ impl Ltx2Transformer {
             .add(&a_mod.gate)?
             .reshape(vec![1, 1, da])?;
         let side = |x: &CudaTensor, cross: &CudaTensor, first: usize| {
-            rms_adaln(x, &row(cross, first)?, &row(cross, first + 1)?, eps)
+            adaln_rows(x, cross, first, first + 1, eps)
         };
         let a2v = {
-            let a2v_q = side(&xv, &v_cross, 0)?;
+            let a2v_q = match a2v_q {
+                Some(q) => q,
+                None => side(&xv, &v_cross, 0)?,
+            };
             tap.emit("video", "av_in", &a2v_q)?;
+            let kv = match a2v_kv {
+                Some(kv) => kv,
+                None => side(&xa, &a_cross, 0)?,
+            };
             b.audio_to_video.forward_owned(
                 a2v_q,
-                Some(&side(&xa, &a_cross, 0)?),
+                Some(&kv),
                 Some(&ropes.cross_video),
                 Some(&ropes.cross_audio),
             )?
@@ -1490,26 +1590,53 @@ impl Ltx2Transformer {
             Some(&ropes.cross_audio),
             Some(&ropes.cross_video),
         )?;
-        let xv = {
+        // The a↔v residuals carry the feed-forward norms.
+        let ff_norm = |tab| {
+            fuse::Norm::AdaLn(fuse::Mod {
+                tab,
+                scale: 4,
+                shift: 3,
+            })
+        };
+        let (xv, v_ff_in) = {
             tap.emit("video", "av_out", &a2v)?;
-            let out = xv.residual_gate_add_e(&a2v, &a2v_gate, 0)?;
+            let res = fuse::Residual::Gated {
+                u: &a2v,
+                gates: &a2v_gate,
+                row: 0,
+            };
+            let (out, h) = match fuse::res_norm_mod(&xv, res, ff_norm(&v_tab), eps)? {
+                Some((out, h)) => (out, Some(h)),
+                None => (xv.residual_gate_add_e(&a2v, &a2v_gate, 0)?, None),
+            };
             drop((xv, a2v));
             tap.emit("video", "av_after", &out)?;
-            out
+            (out, h)
         };
-        let xa = {
+        let (xa, a_ff_in) = {
             tap.emit("audio", "av_in", &v2a_q)?;
             tap.emit("audio", "av_out", &v2a)?;
-            let out = xa.residual_gate_add_e(&v2a, &v2a_gate, 0)?;
+            let res = fuse::Residual::Gated {
+                u: &v2a,
+                gates: &v2a_gate,
+                row: 0,
+            };
+            let (out, h) = match fuse::res_norm_mod(&xa, res, ff_norm(&a_tab), eps)? {
+                Some((out, h)) => (out, Some(h)),
+                None => (xa.residual_gate_add_e(&v2a, &v2a_gate, 0)?, None),
+            };
             drop((xa, v2a, v2a_q));
             tap.emit("audio", "av_after", &out)?;
-            out
+            (out, h)
         };
 
         // 4. feed-forward. The FFN takes its input by value: once its
         // chunks are computed the input goes before they are concatenated.
         let xv = {
-            let h = rms_adaln(&xv, &row(&v_tab, 4)?, &row(&v_tab, 3)?, eps)?;
+            let h = match v_ff_in {
+                Some(h) => h,
+                None => adaln_rows(&xv, &v_tab, 4, 3, eps)?,
+            };
             tap.emit("video", "ff_in", &h)?;
             let u = b.video.ff.forward_owned(h)?;
             let out = xv.residual_gate_add_e(&u, &v_gates, 5)?;
@@ -1518,7 +1645,10 @@ impl Ltx2Transformer {
             out
         };
         let xa = {
-            let h = rms_adaln(&xa, &row(&a_tab, 4)?, &row(&a_tab, 3)?, eps)?;
+            let h = match a_ff_in {
+                Some(h) => h,
+                None => adaln_rows(&xa, &a_tab, 4, 3, eps)?,
+            };
             tap.emit("audio", "ff_in", &h)?;
             let u = b.audio.ff.forward_owned(h)?;
             let out = xa.residual_gate_add_e(&u, &a_gates, 5)?;

@@ -46,6 +46,8 @@ fn host_of(x: &CudaTensor) -> anyhow::Result<Vec<f32>> {
 struct Ctx<'r> {
     report: &'r mut Report,
     seed: u64,
+    /// `--groups`: run only these (all when `None`).
+    only: Option<Vec<String>>,
 }
 
 impl Ctx<'_> {
@@ -254,16 +256,15 @@ fn ref_permute(x: &[f32], shape: &[usize], perm: &[usize]) -> Vec<f32> {
 /// Run one kernel group. An error inside a group becomes a failed check, so
 /// with `--keep-going` the remaining groups still run.
 ///
-/// `FV_KERNEL_GROUPS=a,b,...` runs only the named groups (default: all).
+/// `--groups a,b,...` (or, without it, `FV_KERNEL_GROUPS=a,b,...`, which
+/// runpod-http.sh forwards through FV_EXTRA_ENV) runs only the named groups.
 fn group(
     c: &mut Ctx<'_>,
     name: &str,
     f: impl FnOnce(&mut Ctx<'_>) -> StageResult<()>,
 ) -> StageResult<()> {
-    if let Ok(only) = std::env::var("FV_KERNEL_GROUPS") {
-        if !only.trim().is_empty() && !only.split(',').any(|g| g.trim() == name) {
-            return Ok(());
-        }
+    if c.only.as_ref().is_some_and(|o| !o.iter().any(|g| g == name)) {
+        return Ok(());
     }
     match f(c) {
         Err(StageError::Error(e)) => c.report.check(
@@ -276,13 +277,21 @@ fn group(
     }
 }
 
-pub fn run(report: &mut Report, lim: Limits, seed: u64) -> StageResult<()> {
+pub fn run(report: &mut Report, lim: Limits, seed: u64, groups: Option<&str>) -> StageResult<()> {
     let info = crate::gpu::init("cuda")?;
     report.set("device", &info);
     report.set("limits", lim);
     let math = dev()?.gemm_math;
     report.set("gemm_math", format!("{math:?}"));
-    let mut c = Ctx { report, seed };
+    let env_groups = std::env::var("FV_KERNEL_GROUPS").ok();
+    let groups = groups.or(env_groups.as_deref());
+    let only = groups.map(|g| {
+        g.split(',')
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .collect::<Vec<_>>()
+    });
+    let mut c = Ctx { report, seed, only };
     let op = lim.op;
     // cuBLAS math: TF32 perturbs F32 results; bf16 compute more so.
     let gemm = op.max(match math {
@@ -2396,6 +2405,12 @@ pub fn run(report: &mut Report, lim: Limits, seed: u64) -> StageResult<()> {
     })?;
     group(&mut c, "bf16_attention_routes", |c| {
         crate::kernels_fp8::bf16_attention_routes(c.report, &mut c.seed)
+    })?;
+
+    // Phase 3c DiT block fusions: each fused kernel against its unfused op
+    // chain, bit for bit, and timed at production shapes.
+    group(&mut c, "dit_fusion", |c| {
+        crate::kernels_fuse::dit_fusion(c.report, &mut c.seed)
     })?;
 
     group(&mut c, "no_host_fallback", |c| {

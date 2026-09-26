@@ -759,6 +759,14 @@ impl Linear {
         self.quant.as_ref().map(super::quant::QuantWeight::kind)
     }
 
+    /// Whether [`Self::forward_mx`] takes this linear's whole input: an
+    /// MXFP8 weight with every section quantized, on the device.
+    pub fn mx_whole(&self) -> bool {
+        self.quant.as_ref().is_some_and(|q| {
+            q.kind() == super::quant::QuantKind::Mxfp8 && q.layout_all_quantized() && q.is_device()
+        })
+    }
+
     /// Mark a module the reference keeps in f32 (`_keep_in_fp32_modules`).
     pub fn set_f32_island(&mut self) {
         self.f32_island = true;

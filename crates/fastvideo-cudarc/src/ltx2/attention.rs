@@ -101,6 +101,25 @@ impl DeviceRope {
         }))
     }
 
+    /// The f32 `[H·S, r]` cos / sin tables and `r`, when this table rotates
+    /// `[1, heads, seq, d]` (what [`Self::apply`] would accept), for the fused
+    /// q/k kernel ([`super::fuse::qk_norm_rope`]).
+    pub(crate) fn fused_tables(
+        &self,
+        heads: usize,
+        seq: usize,
+        d: usize,
+    ) -> Result<Option<(CudaTensor, CudaTensor, usize)>> {
+        if (self.heads, self.tokens, self.head_dim) != (heads, seq, d) {
+            return Ok(None);
+        }
+        let r = match self.cos.shape[..] {
+            [rows, r] if rows == heads * seq && self.sin.shape == self.cos.shape && r % 2 == 0 && r > 0 && r <= d => r,
+            _ => return Ok(None),
+        };
+        Ok(Some((self.cos.to_f32_act()?, self.sin.to_f32_act()?, r)))
+    }
+
     /// Rotate `[1, H, S, D]`. Batch 1 only: with the head axis folded into the
     /// rows, a second batch element would need the table repeated.
     pub fn apply(&self, x: &CudaTensor) -> Result<CudaTensor> {
@@ -263,25 +282,28 @@ impl Attention {
         // q / k / v exists at a time. A method chain would keep every
         // temporary to the end of its statement, and a shadowed binding to
         // the end of the function: at 130k tokens each is 2 GiB.
-        let q = then(self.to_q.forward(&x)?, |t| {
-            t.rms_norm(&self.norm_q, self.eps)
-        })?;
-        let q = then(q, |t| t.split_heads_bhsd(0, heads, d))?;
+        // q and k: norm across heads, head split and rotary. Fused into one
+        // kernel with bf16 activations (super::fuse, bit-identical), else the
+        // three ops in turn.
+        let k_table = q_rope.map(|r| k_rope.unwrap_or(r));
+        // Each stage consumes the previous one, as above.
+        let norm_split_rope = |t: CudaTensor, w: &CudaTensor, rope: Option<&DeviceRope>| {
+            if let Some(o) = super::fuse::qk_norm_rope(&t, w, self.eps, heads, d, rope)? {
+                return Ok(o);
+            }
+            let t = then(t, |t| t.rms_norm(w, self.eps))?;
+            let t = then(t, |t| t.split_heads_bhsd(0, heads, d))?;
+            match rope {
+                Some(r) => then(t, |t| r.apply(t)),
+                None => Ok(t),
+            }
+        };
+        let q = norm_split_rope(self.to_q.forward(&x)?, &self.norm_q, q_rope)?;
         let ctx = context.unwrap_or(&x);
-        let k = then(self.to_k.forward(ctx)?, |t| {
-            t.rms_norm(&self.norm_k, self.eps)
-        })?;
-        let k = then(k, |t| t.split_heads_bhsd(0, heads, d))?;
+        let k = norm_split_rope(self.to_k.forward(ctx)?, &self.norm_k, k_table)?;
         let v = then(self.to_v.forward(ctx)?, |t| t.split_heads_bhsd(0, heads, d))?;
         // An owned input is done with: free it before the attention runs.
         drop(x);
-        let (q, k) = match q_rope {
-            Some(rope) => {
-                let q = then(q, |t| rope.apply(t))?;
-                (q, then(k, |t| k_rope.unwrap_or(rope).apply(t))?)
-            }
-            None => (q, k),
-        };
         let (k, v) = crate::wan::nvfp4::maybe_kv(k, v)?;
         let scale = Some((d as f32).powf(-0.5));
         let kernel = if context.is_some() {
@@ -302,10 +324,13 @@ impl Attention {
         // gate, head merge and output projection allocate theirs.
         drop((q, k, v));
         let merged = match gate_logits {
-            Some(logits) => {
-                let gated = then(out, |o| self.apply_head_gates(o, &logits))?;
-                then(gated, |g| g.merge_heads())?
-            }
+            Some(logits) => match super::fuse::gate_merge(&out, &logits)? {
+                Some(m) => m,
+                None => {
+                    let gated = then(out, |o| self.apply_head_gates(o, &logits))?;
+                    then(gated, |g| g.merge_heads())?
+                }
+            },
             None => then(out, |o| o.merge_heads())?,
         };
         then(merged, |m| self.to_out.forward(m))

@@ -27,16 +27,16 @@ use crate::metrics::diff;
 use crate::rand_weights::randn;
 use crate::report::{Report, StageResult};
 
-fn dev() -> anyhow::Result<std::sync::Arc<device::DeviceContext>> {
+pub(crate) fn dev() -> anyhow::Result<std::sync::Arc<device::DeviceContext>> {
     device::global_device().ok_or_else(|| anyhow::anyhow!("no live CUDA device"))
 }
 
-fn rand(seed: &mut u64, n: usize, std: f32) -> Vec<f32> {
+pub(crate) fn rand(seed: &mut u64, n: usize, std: f32) -> Vec<f32> {
     *seed += 1;
     randn(*seed, n, std)
 }
 
-fn bf16v(v: Vec<f32>) -> Vec<f32> {
+pub(crate) fn bf16v(v: Vec<f32>) -> Vec<f32> {
     v.into_iter().map(quant::bf16_round).collect()
 }
 
@@ -45,16 +45,16 @@ fn to_bf16(v: &[f32]) -> Vec<half::bf16> {
 }
 
 /// A device bf16 tensor holding `v` (already bf16 values).
-fn t16(v: &[f32], shape: &[usize]) -> anyhow::Result<CudaTensor> {
+pub(crate) fn t16(v: &[f32], shape: &[usize]) -> anyhow::Result<CudaTensor> {
     let s = dev()?.stream.memcpy_stod(&to_bf16(v))?;
     Ok(CudaTensor::from_device_slice_bf16(s, shape.to_vec())?)
 }
 
-fn t32(v: &[f32], shape: &[usize]) -> anyhow::Result<CudaTensor> {
+pub(crate) fn t32(v: &[f32], shape: &[usize]) -> anyhow::Result<CudaTensor> {
     Ok(CudaTensor::from_vec(v.to_vec(), shape.to_vec())?.to_device()?)
 }
 
-fn host(t: &CudaTensor) -> anyhow::Result<Vec<f32>> {
+pub(crate) fn host(t: &CudaTensor) -> anyhow::Result<Vec<f32>> {
     Ok(t.host_cow()?.into_owned())
 }
 
@@ -65,7 +65,7 @@ fn ulp16(w: f32) -> f32 {
 }
 
 /// `(max |got - want| in bf16 ulps, count above one ulp)`.
-fn ulps(got: &[f32], want: &[f32]) -> (f32, usize) {
+pub(crate) fn ulps(got: &[f32], want: &[f32]) -> (f32, usize) {
     let mut worst = 0.0f32;
     let mut over = 0usize;
     for (&g, &w) in got.iter().zip(want) {
@@ -81,7 +81,7 @@ fn ulps(got: &[f32], want: &[f32]) -> (f32, usize) {
     (worst, over)
 }
 
-fn check_ulps(
+pub(crate) fn check_ulps(
     report: &mut Report,
     name: &str,
     got: &[f32],
@@ -128,7 +128,7 @@ fn sync() -> anyhow::Result<()> {
 }
 
 /// Median wall time of `f` over `iters` synchronized runs, in ms.
-fn time_ms(iters: usize, mut f: impl FnMut() -> anyhow::Result<()>) -> anyhow::Result<f64> {
+pub(crate) fn time_ms(iters: usize, mut f: impl FnMut() -> anyhow::Result<()>) -> anyhow::Result<f64> {
     f()?;
     sync()?;
     let mut t = Vec::with_capacity(iters);
