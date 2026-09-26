@@ -1,9 +1,9 @@
 //! Native Wan graph on cudarc: UMT5 → DiT → feat-cache VAE, device-resident
 //! on CUDA (see [`tensor`]) with plain-Rust reference ops on CPU runs.
 
-pub mod affine;
 #[cfg(feature = "cuda")]
 pub(crate) mod act16;
+pub mod affine;
 pub mod ar_cache;
 pub mod attn;
 pub mod bf16_gemm;
@@ -14,12 +14,12 @@ pub mod device;
 pub mod dump;
 pub mod envflag;
 pub mod evalstats;
-pub mod gpu_trace;
-pub mod inject;
 #[cfg(feature = "cuda")]
 pub mod fp8;
 pub mod fused;
+pub mod gpu_trace;
 pub mod hopper;
+pub mod inject;
 #[cfg(feature = "cuda")]
 pub mod kernels;
 pub mod ledger;
@@ -46,6 +46,7 @@ pub mod umt5;
 pub mod vae;
 pub mod vsa;
 pub mod weights;
+pub mod writer;
 
 pub use clip::{ClipVision, ClipVisionConfig};
 pub use pipeline::{DenoiseStep, GenerateConfig, LoadParts, StepObserver, WanPipeline};

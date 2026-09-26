@@ -337,9 +337,12 @@ pub struct H3Timings {
     pub denoise_s: f64,
     pub step_s: Vec<f64>,
     pub audio_decode_s: f64,
-    /// The whole video decode: VAE, RGB8 conversion, copy down and hand-off
-    /// to the writer (see the split below).
+    /// The whole video decode through a finished mp4: VAE, RGB8 conversion,
+    /// copy down, hand-off to the writer (see the split below) and ffmpeg's
+    /// exit. PNG frames are not in it (`write_s`).
     pub video_decode_s: f64,
+    /// Part of `video_decode_s`: last frame handed over → ffmpeg exited.
+    pub video_encode_s: f64,
     /// VAE compute alone (GPU time), the part comparable with FastVideo's
     /// `video_decoding_stage`.
     pub video_vae_s: f64,
@@ -349,7 +352,7 @@ pub struct H3Timings {
     pub video_push_s: f64,
     /// Time the decode thread waited on the frame hand-off or the final drain.
     pub video_wait_s: f64,
-    /// The tail of encoding that outlives the decode, not the whole encode.
+    /// `frame-NNN.png` written after the mp4 (see `wan::writer`).
     pub write_s: f64,
 }
 
@@ -1416,21 +1419,24 @@ impl H3Pipeline {
             )));
         }
         let (mut writer, split) = drain.finish()?;
+        let tail = Instant::now();
+        let mp4 = writer.finish_video()?;
+        timings.video_encode_s = tail.elapsed().as_secs_f64();
         timings.video_decode_s = timer.elapsed().as_secs_f64();
         timings.video_vae_s = split.vae_s;
         timings.video_rgb_s = split.rgb_s;
         timings.video_push_s = split.push_s;
         timings.video_wait_s = split.wait_s;
         crate::wan::log::info(format_args!(
-            "h3 video decode {:.2}s: vae {:.2}s, rgb+copy {:.2}s, writer push {:.2}s, decode waited {:.2}s",
-            timings.video_decode_s, split.vae_s, split.rgb_s, split.push_s, split.wait_s
+            "h3 video decode + mp4 {:.2}s: vae {:.2}s, rgb+copy {:.2}s, writer push {:.2}s, decode waited {:.2}s, mp4 tail {:.2}s",
+            timings.video_decode_s, split.vae_s, split.rgb_s, split.push_s, split.wait_s, timings.video_encode_s
         ));
         drop(transient_video);
         drop(transient_booking);
         crate::wan::device::trim_pool().map_err(|e| msg(e.to_string()))?;
         memory.mark("video_decode")?;
         let timer = Instant::now();
-        let (frame_paths, mp4) = writer.finish()?;
+        let (frame_paths, _) = writer.finish()?;
         timings.write_s = timer.elapsed().as_secs_f64();
         if let Some(video) = refined_video {
             let refined = refine_spark(request, &video, &wave, sample_rate, out_dir)?;

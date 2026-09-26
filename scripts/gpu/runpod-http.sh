@@ -236,7 +236,7 @@ fetch_results() {
     log "results → $out"
     return
   fi
-  for f in box.txt tree.txt weights.log matrix.out live.log kernels.out kernels.json lpips-fetch.log; do
+  for f in box.txt tree.txt weights.log matrix.out live.log kernels.out kernels.json lpips-fetch.log sysinfo.txt sampler.log; do
     proxy "$id" "$FAMILY/$tag/$f" >"$out/$f" 2>/dev/null || true
   done
   for cell in $(proxy "$id" "$FAMILY/$tag/" 2>/dev/null | grep -oE 'href="[^"/]+/"' | sed 's/href="//;s/\/"//'); do

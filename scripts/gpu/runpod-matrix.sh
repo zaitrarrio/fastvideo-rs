@@ -17,7 +17,7 @@
 #   gate_cells: fv-gpucheck gate with scripts/gpu/gate-policy.toml
 #     (FV_GATE_POLICY overrides) into $RUNS/gate/.
 set -euo pipefail
-FAMILY="${1:?usage: runpod-matrix.sh h3|ltx|hunyuan|wan|b200|rtx6000|rtx5090|fastvideo|precision|precision-debug|trace|oracle|ltxvae|eval}"
+FAMILY="${1:?usage: runpod-matrix.sh h3|ltx|hunyuan|wan|b200|rtx6000|rtx5090|fastvideo|precision|precision-debug|trace|oracle|ltxvae|writer|eval}"
 WORK="${FV_WORK:-/workspace}"
 BIN="${FV_GPUCHECK:-/opt/fastvideo-rs/target/release/fv-gpucheck}"
 W="$WORK/weights"
@@ -1151,6 +1151,82 @@ case "$FAMILY" in
       # The dumps are hundreds of MB each; the report keeps the numbers.
       rm -rf "$ours" "$ours-f32" "$ref"
     done
+    ;;
+  writer)
+    # The frame writer behind a timed decode (PNG frames + ffmpeg mp4), cheaply:
+    # the box (CPUs, memory, cgroup limits, dirty-page settings) and the
+    # container disk's write throughput; the writer alone on synthetic 4K
+    # frames paced as a 13 s decode, per PNG mode (`writer-bench`); the real
+    # 4K conv-VAE decode into the writer (`vae-bench --mp4`); LTX-2.5 512p
+    # warm gens; and one LTX-2.5 4K Sol warm gen (FV_WRITER_4K=0 skips it).
+    # FASTVIDEO_PNG=inline is the writer before deferral. A 1 Hz sampler logs
+    # load, CPU jiffies, dirty/writeback memory, ffmpeg processes and live
+    # fv-video-writer threads to $RUNS/sampler.log throughout.
+    {
+      echo "== nproc"; nproc
+      echo "== lscpu"; lscpu 2>/dev/null | grep -E 'Model name|^CPU\(s\)|Thread|Socket|NUMA node\(s\)' || head -30 /proc/cpuinfo
+      echo "== cgroup cpu.max"; cat /sys/fs/cgroup/cpu.max 2>/dev/null || echo n/a
+      echo "== meminfo"; grep -E 'MemTotal|MemAvailable|Dirty|Writeback:' /proc/meminfo
+      echo "== cgroup memory.max"; cat /sys/fs/cgroup/memory.max 2>/dev/null || echo n/a
+      echo "== vm dirty"; for f in dirty_ratio dirty_background_ratio dirty_bytes dirty_background_bytes dirty_expire_centisecs; do echo "$f=$(cat /proc/sys/vm/$f 2>/dev/null)"; done
+      echo "== df"; df -h "$SCRATCH" /workspace 2>/dev/null
+      echo "== mount"; grep -E " (/|$SCRATCH|/workspace) " /proc/mounts || true
+      echo "== ffmpeg"; ffmpeg -hide_banner -version 2>/dev/null | head -1
+    } >"$RUNS/sysinfo.txt" 2>&1
+    sed 's/^/[sysinfo] /' "$RUNS/sysinfo.txt" | tee -a "$LOG" >/dev/null
+    (
+      while :; do
+        ff=0; wt=0
+        for c in /proc/[0-9]*/comm; do n=""; read -r n <"$c" 2>/dev/null; [[ "$n" == ffmpeg ]] && ff=$((ff + 1)); done
+        for c in /proc/[0-9]*/task/*/comm; do n=""; read -r n <"$c" 2>/dev/null; [[ "$n" == fv-video-writer ]] && wt=$((wt + 1)); done
+        printf '%s load %s cpu %s dirty_kb %s writeback_kb %s ffmpeg %s writer_threads %s\n' \
+          "$(date -u +%H:%M:%S)" "$(cut -d' ' -f1-3 /proc/loadavg)" "$(head -1 /proc/stat | cut -d' ' -f3-9)" \
+          "$(awk '/^Dirty:/{print $2}' /proc/meminfo)" "$(awk '/^Writeback:/{print $2}' /proc/meminfo)" "$ff" "$wt"
+        sleep 1
+      done
+    ) >"$RUNS/sampler.log" 2>&1 &
+    SAMPLER_PID=$!
+    # Container disk: 3 GiB synced (about two 4K clips of PNG frames), then
+    # the same through the page cache alone.
+    for mode in fdatasync cache; do
+      flag="conv=fdatasync"; [[ "$mode" == cache ]] && flag=""
+      dd if=/dev/zero of="$SCRATCH/dd-test.bin" bs=16M count=192 $flag 2>&1 | tail -1 | sed "s/^/[dd $mode] /" | tee -a "$LOG"
+      rm -f "$SCRATCH/dd-test.bin"
+    done
+    run_cell writer-bench-4k-mp4 "$BIN" writer-bench --mp4 --png inline,deferred,off --produce-s 13 --dir "$SCRATCH/writer-bench"
+    run_cell writer-bench-4k-nomp4 "$BIN" writer-bench --png inline,deferred --produce-s 13 --dir "$SCRATCH/writer-bench"
+    for cell in writer-bench-4k-mp4 writer-bench-4k-nomp4; do
+      grep -h 'writer-bench \|video writer:' "$RUNS/$cell/stderr.log" 2>/dev/null | sed "s/^/[$cell] /" | tee -a "$LOG" || true
+    done
+    for png in inline deferred; do
+      gated_cell "ltxvae-4k5s-fast-mp4-$png" ltx25-two-stage \
+        env FASTVIDEO_PNG="$png" FASTVIDEO_WRITER_TRACE=1 \
+        "$BIN" --mode fast ltx2 vae-bench --weights "$W/ltx25" --workload 4k5s \
+          --decoder fast --warm --mp4 --clip "$RUNS/ltxvae-4k5s-fast-mp4-$png/frames"
+      grep -h 'vae-bench\|video writer:' "$RUNS/ltxvae-4k5s-fast-mp4-$png/stderr.log" 2>/dev/null | tail -3 | sed "s/^/[vae-$png] /" | tee -a "$LOG" || true
+    done
+    for png in inline deferred; do
+      gated_cell "ltx25-512p-$png" ltx25-two-stage \
+        env FASTVIDEO_PNG="$png" FASTVIDEO_WRITER_TRACE=1 \
+        "$BIN" --mode fast ltx2 gen --model-version 2.5 \
+          --weights "$W/ltx25" --dit "$W/ltx25" --height 512 --width 768 --num-frames 121 \
+          --prompt "$PROMPT" --seed "$SEED" --two-stage --text streamed --warm \
+          --clip "$RUNS/ltx25-512p-$png/frames"
+      grep -h 'video decode\|video writer:' "$RUNS/ltx25-512p-$png/stderr.log" 2>/dev/null | sed "s/^/[512p-$png] /" | tee -a "$LOG" || true
+    done
+    compare_cells ltx25-512p-inline ltx25-512p-deferred
+    if [[ "${FV_WRITER_4K:-1}" == 1 ]]; then
+      gated_cell ltx25-4k5s-sol-bf16act ltx25-two-stage \
+        env FASTVIDEO_BF16_ACT=1 FASTVIDEO_WRITER_TRACE=1 \
+        "$BIN" --mode fast ltx2 gen --model-version 2.5 \
+          --weights "$W/ltx25" --dit "$W/ltx25" --workload 4k5s \
+          --prompt "$PROMPT" --seed "$SEED" --two-stage --text streamed --warm \
+          --clip "$RUNS/ltx25-4k5s-sol-bf16act/frames"
+      grep -h 'video decode\|video writer:\|warmup' "$RUNS/ltx25-4k5s-sol-bf16act/stderr.log" 2>/dev/null | sed "s/^/[4k] /" | tee -a "$LOG" || true
+    fi
+    kill "$SAMPLER_PID" 2>/dev/null || true
+    # The frames are GBs; the reports keep the numbers.
+    rm -rf "$SCRATCH/writer-bench" "$RUNS"/ltxvae-4k5s-fast-mp4-*/frames
     ;;
   *)
     log "FATAL: unknown family $FAMILY"

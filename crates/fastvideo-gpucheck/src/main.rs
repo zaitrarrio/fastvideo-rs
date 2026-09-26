@@ -19,6 +19,7 @@
 mod benchmark;
 mod clipcmp;
 mod embed;
+mod gate;
 mod gpu;
 mod h3_stage;
 mod hunyuan15_stage;
@@ -26,7 +27,6 @@ mod hunyuan15_stage;
 mod kernels;
 #[cfg(feature = "cuda")]
 mod kernels_fp8;
-mod gate;
 mod llm_oracle;
 mod lpips;
 mod ltx2_stage;
@@ -47,6 +47,7 @@ mod report;
 mod serve;
 mod st;
 mod taehv;
+mod writer_bench;
 
 use std::path::PathBuf;
 
@@ -420,6 +421,33 @@ enum Cmd {
         #[arg(long, default_value_t = 5e-3)]
         max_rel: f64,
     },
+    /// The frame writer (PNG frames + ffmpeg mp4) under a decode-paced
+    /// producer of synthetic frames, per PNG mode (CPU only).
+    WriterBench {
+        #[arg(long, default_value_t = 3840)]
+        width: usize,
+        #[arg(long, default_value_t = 2176)]
+        height: usize,
+        #[arg(long, default_value_t = 121)]
+        frames: usize,
+        /// Frames per push (a decode chunk).
+        #[arg(long, default_value_t = 8)]
+        batch: usize,
+        #[arg(long, default_value_t = 24)]
+        fps: u32,
+        /// Also feed ffmpeg (x264 veryfast, as gen).
+        #[arg(long)]
+        mp4: bool,
+        /// Comma-separated PNG modes: inline, deferred, off.
+        #[arg(long, default_value = "inline,deferred,off")]
+        png: String,
+        /// The paced "decode" length: batches are due evenly over it.
+        #[arg(long, default_value_t = 13.0)]
+        produce_s: f64,
+        /// Scratch directory for the frames (removed after each mode).
+        #[arg(long)]
+        dir: PathBuf,
+    },
     /// Diff our text encoder and one DiT step against an external reference.
     Oracle {
         #[arg(long)]
@@ -495,6 +523,7 @@ fn stage_name(cmd: &Cmd) -> &'static str {
         Cmd::CompareDumps { .. } => "compare-dumps",
         Cmd::Oracle { .. } => "oracle",
         Cmd::Taehv { .. } => "taehv",
+        Cmd::WriterBench { .. } => "writer-bench",
         Cmd::TaehvDevice { .. } => "taehv-device",
     }
 }
@@ -658,7 +687,10 @@ fn run(cli: &Cli, report: &mut Report) -> StageResult<()> {
                         "sol" => false,
                         "all" => true,
                         other => {
-                            return Err(anyhow::anyhow!("--lpips-pairs {other}: expected sol or all").into())
+                            return Err(anyhow::anyhow!(
+                                "--lpips-pairs {other}: expected sol or all"
+                            )
+                            .into())
                         }
                     };
                     Some(clipcmp::LpipsOpts {
@@ -692,7 +724,15 @@ fn run(cli: &Cli, report: &mut Report) -> StageResult<()> {
             compare,
             off_compare,
             kind,
-        } => gate::run(report, baseline, candidate, policy, compare, off_compare, kind.as_deref()),
+        } => gate::run(
+            report,
+            baseline,
+            candidate,
+            policy,
+            compare,
+            off_compare,
+            kind.as_deref(),
+        ),
         Cmd::CompareDumps {
             baseline,
             candidate,
@@ -709,6 +749,30 @@ fn run(cli: &Cli, report: &mut Report) -> StageResult<()> {
             device,
             max_rel,
         } => taehv::run_device(report, arch, weights.as_deref(), device, *max_rel),
+        Cmd::WriterBench {
+            width,
+            height,
+            frames,
+            batch,
+            fps,
+            mp4,
+            png,
+            produce_s,
+            dir,
+        } => writer_bench::run(
+            report,
+            &writer_bench::Args {
+                out: dir,
+                width: *width,
+                height: *height,
+                frames: *frames,
+                batch: (*batch).max(1),
+                fps: *fps,
+                mp4: *mp4,
+                modes: png,
+                produce_s: *produce_s,
+            },
+        ),
         Cmd::Oracle {
             weights,
             oracle,
