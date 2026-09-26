@@ -157,9 +157,11 @@ pub fn flash_kernel_choice() -> FlashKernel {
     }
 }
 
-/// Whether `auto` picks the 128-query double-buffered kernel.
+/// Whether `auto` picks the 128-query double-buffered kernel: yes. It is
+/// bit-identical to V1 and 4% faster on RTX PRO 6000 at the H3 / LTX shapes
+/// (`attn_bench`: 373 vs 358 TFLOPS). `FASTVIDEO_FLASH_KERNEL=v1` restores V1.
 pub fn flash_v2_default() -> bool {
-    false
+    true
 }
 
 /// Fused dense SDPA on tensor cores (`flash_mma_fwd_d{64,128}`): bf16 Q/K/V

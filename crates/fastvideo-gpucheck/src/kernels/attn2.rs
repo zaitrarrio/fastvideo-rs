@@ -180,6 +180,36 @@ pub(super) fn parity(c: &mut Ctx<'_>) -> StageResult<()> {
             let v1 = ops::sol_fwd_device_pick(&prep, p.scale, sinks, true, true, pick(SolKernel::V1, 1))?;
             let (o1, l1) = (down(&v1.out)?, down(v1.lse.as_ref().expect("lse"))?);
             let r1 = dev.stream.memcpy_dtov(v1.route.as_ref().expect("route"))?;
+            // x4: bit-exact; x4f: exp2 within 2 ulp (bf16 P may round apart).
+            for (kname, kernel) in [("x4", SolKernel::X4), ("x4f", SolKernel::X4f)] {
+                let w = ops::sol_fwd_device_pick(&prep, p.scale, sinks, true, true, pick(kernel, 1))?;
+                let (o2, l2) = (down(&w.out)?, down(w.lse.as_ref().expect("lse"))?);
+                let r2 = dev.stream.memcpy_dtov(w.route.as_ref().expect("route"))?;
+                let route_bad = bit_mismatches(&r1, &r2);
+                let ob = bit_mismatches(
+                    &o1.iter().map(|x| x.to_bits()).collect::<Vec<_>>(),
+                    &o2.iter().map(|x| x.to_bits()).collect::<Vec<_>>(),
+                );
+                let d = diff(&o2, &o1);
+                let lerr = l1
+                    .iter()
+                    .zip(&l2)
+                    .map(|(a, b)| if a == b { 0.0 } else { (a - b).abs() })
+                    .fold(0.0f32, f32::max);
+                let pass = if kernel == SolKernel::X4 {
+                    ob == 0 && lerr == 0.0 && route_bad == 0
+                } else {
+                    d.within(2e-3) && d.max_abs <= 4e-3 && lerr <= 1e-5 && route_bad == 0
+                };
+                c.report.check(
+                    format!("sol_{kname}_{tag}_vs_v1"),
+                    pass,
+                    json!({"out_mismatched": ob, "diff": d.to_json(), "lse_max_abs": lerr,
+                           "route_mismatched": route_bad}),
+                    json!({"x4": "bit-exact", "x4f": {"rel_l2": 2e-3, "max_abs": 4e-3,
+                           "lse_max_abs": 1e-5, "route_mismatched": 0}}),
+                )?;
+            }
             let groups = num_blocks(tokens).div_ceil(fastvideo_models::sol_attn::ROUTE_GROUP);
             for splits in [1usize, 2, 4] {
                 if splits > groups {
@@ -217,11 +247,15 @@ pub(super) fn parity(c: &mut Ctx<'_>) -> StageResult<()> {
                             }
                         })
                         .fold(0.0f32, f32::max);
+                    // Each split rounds P = 2^(s - m_split) to bf16 against its
+                    // own running max, so P's bf16 rounding (2^-9) differs from
+                    // the unsplit pass: a bf16-level difference, as in the
+                    // reference's sm90 splits (which also store bf16 partials).
                     c.report.check(
                         format!("sol_ws_{tag}_splits{splits}_vs_v1"),
-                        d.within(1e-5) && d.max_abs <= 1e-4 && lerr <= 1e-5 && route_bad == 0,
+                        d.within(2e-3) && d.max_abs <= 4e-3 && lerr <= 1e-5 && route_bad == 0,
                         json!({"diff": d.to_json(), "lse_max_abs": lerr, "route_mismatched": route_bad}),
-                        json!({"rel_l2": 1e-5, "max_abs": 1e-4, "lse_max_abs": 1e-5, "route_mismatched": 0}),
+                        json!({"rel_l2": 2e-3, "max_abs": 4e-3, "lse_max_abs": 1e-5, "route_mismatched": 0}),
                     )?;
                 }
             }
@@ -392,6 +426,8 @@ pub(super) fn bench(c: &mut Ctx<'_>) -> StageResult<()> {
                 splits: Some(splits),
             };
             let s1 = sol(pk(SolKernel::V1, 1))?;
+            let sx4 = sol(pk(SolKernel::X4, 1))?;
+            let sx4f = sol(pk(SolKernel::X4f, 1))?;
             let s2 = sol(pk(SolKernel::Ws, 1))?;
             let s2x2 = if num_blocks(tokens) > 64 {
                 Some(sol(pk(SolKernel::Ws, 2))?)
@@ -431,7 +467,7 @@ pub(super) fn bench(c: &mut Ctx<'_>) -> StageResult<()> {
                 json!({
                     "bh": bh, "tokens": tokens, "tau": tau,
                     "exact_fraction": exact_fraction,
-                    "v1_ms": s1 * 1e3, "ws_ms": s2 * 1e3, "ws_splits2_ms": s2x2.map(|s| s * 1e3),
+                    "v1_ms": s1 * 1e3, "x4_ms": sx4 * 1e3, "x4f_ms": sx4f * 1e3, "ws_ms": s2 * 1e3, "ws_splits2_ms": s2x2.map(|s| s * 1e3),
                     "prep_ms": prep_s * 1e3, "speedup": s1 / s2,
                     "dense_v1_ms": d1 * 1e3,
                     "bit_mismatches_first_heads": sol_bad,

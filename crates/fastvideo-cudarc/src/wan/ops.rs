@@ -1248,9 +1248,11 @@ fn vsa_ring_requested() -> bool {
     }
 }
 
-/// Whether `auto` picks the three-slot ring VSA kernel.
+/// Whether `auto` picks the three-slot ring VSA kernel: yes. It is
+/// bit-identical to the two-stage kernel and 1.24x faster on RTX PRO 6000 at
+/// the H3 768p grid (`attn_bench`). `FASTVIDEO_VSA_KERNEL=tma` restores it.
 pub fn vsa_ring_default() -> bool {
-    false
+    true
 }
 
 #[cfg(feature = "cuda")]
@@ -2982,6 +2984,39 @@ mod tma_layout {
 }
 
 #[cfg(test)]
+mod sol_splits {
+    use super::sol_splits_for;
+
+    #[test]
+    fn auto_never_splits_a_grid_that_fills_the_gpu() {
+        // LTX 1080p 20 s / 4K / 512p and H3 768p on 188 SMs: many waves.
+        for (nt, bh) in [(1945, 32), (2040, 32), (96, 32), (590, 56)] {
+            assert_eq!(sol_splits_for(nt, bh, 188, "auto"), 1, "{nt}x{bh}");
+        }
+    }
+
+    #[test]
+    fn auto_splits_small_grids_within_route_groups() {
+        // 256 blocks (4 route groups), one head: 256 CTAs << 4 * 188.
+        assert_eq!(sol_splits_for(256, 1, 188, "auto"), 4);
+        // Only two route groups: at most two splits.
+        assert_eq!(sol_splits_for(100, 1, 188, "auto"), 2);
+        // One route group: never split.
+        assert_eq!(sol_splits_for(64, 1, 188, "auto"), 1);
+        // Between one and two waves: two.
+        assert_eq!(sol_splits_for(256, 2, 188, "auto"), 2);
+    }
+
+    #[test]
+    fn explicit_splits_are_clamped_to_route_groups() {
+        assert_eq!(sol_splits_for(1945, 32, 188, "4"), 4);
+        assert_eq!(sol_splits_for(129, 1, 188, "4"), 2); // 3 groups -> 2
+        assert_eq!(sol_splits_for(10, 1, 188, "2"), 1);
+        assert_eq!(sol_splits_for(10, 1, 188, "1"), 1);
+    }
+}
+
+#[cfg(test)]
 mod swiglu {
     #[test]
     fn swiglu_value_first_is_v_times_silu_g() {
@@ -3245,6 +3280,12 @@ pub enum SolKernel {
     /// `sol_mma_fwd`: four MMA warps that also issue every cp.async and
     /// meet at CTA barriers (the CuTe sm120 skeleton, sm80+).
     V1,
+    /// `sol_mma_fwd_x4`: V1 with ldmatrix.x4 feeding two mmas per load.
+    /// Bit-identical to V1.
+    X4,
+    /// `sol_mma_fwd_x4f`: X4 with `ex2.approx.ftz` for exp2, the CuTe
+    /// kernel's `cute.math.exp2(fastmath=True)`. Within exp2's 2 ulp of V1.
+    X4f,
     /// `sol_mma_fwd2`: one cp.async producer warp + four MMA warps over
     /// mbarriers, optional KV splits (sm90+). Bit-identical to V1 at one
     /// split.
@@ -3257,10 +3298,17 @@ pub enum SolKernel {
 pub fn sol_kernel_choice(sm_major: i32) -> SolKernel {
     match crate::wan::envflag::string_flag("FASTVIDEO_SOL_KERNEL", "auto").as_str() {
         "v1" => SolKernel::V1,
+        "x4" => SolKernel::X4,
+        "x4f" => SolKernel::X4f,
         "ws" if sm_major >= 9 => SolKernel::Ws,
         _ if sm_major >= 9 && sol_ws_default() => SolKernel::Ws,
-        _ => SolKernel::V1,
+        _ => sol_default_kernel(),
     }
+}
+
+/// The `auto` kernel below / without the warp-specialised default.
+pub fn sol_default_kernel() -> SolKernel {
+    SolKernel::V1
 }
 
 /// Whether `auto` picks the warp-specialised kernel.
@@ -3365,7 +3413,8 @@ pub fn sol_fwd_core(
     };
     let kernel = match pick.kernel {
         Some(SolKernel::Ws) if dev.sm_major >= 9 => SolKernel::Ws,
-        Some(_) => SolKernel::V1,
+        Some(SolKernel::Ws) => SolKernel::V1,
+        Some(k) => k,
         None => sol_kernel_choice(dev.sm_major),
     };
     let (is16, has_lse, has_dbg) = (
@@ -3376,14 +3425,19 @@ pub fn sol_fwd_core(
     let (t_i, nt_i, lo_i, hi_i) = (tokens as i32, nt as i32, lo as i32, hi as i32);
     let sl2 = scale * LOG2_E;
     match kernel {
-        SolKernel::V1 => {
+        SolKernel::V1 | SolKernel::X4 | SolKernel::X4f => {
+            let func = match kernel {
+                SolKernel::X4 => &dev.kernels.sol_mma_fwd_x4,
+                SolKernel::X4f => &dev.kernels.sol_mma_fwd_x4f,
+                _ => &dev.kernels.sol_mma_fwd,
+            };
             let cfg = LaunchConfig {
                 grid_dim: (nt as u32, bh as u32, 1),
                 block_dim: (128, 1, 1),
                 // Static shared memory (34.4 KB): two CTAs per SM, no opt-in.
                 shared_mem_bytes: 0,
             };
-            launch!(dev.stream, &dev.kernels.sol_mma_fwd, cfg;
+            launch!(dev.stream, func, cfg;
                 qb, kb, vb, &prep.kc, &prep.vc, &prep.thr,
                 &mut out, &mut out16, &is16, &mut lse, &has_lse, &mut route, &has_dbg,
                 &t_i, &nt_i, &lo_i, &hi_i, &sl2)

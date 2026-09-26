@@ -141,6 +141,8 @@ kernel_fns!(
     sol_prep_kgram,
     sol_prep_q,
     sol_mma_fwd,
+    sol_mma_fwd_x4,
+    sol_mma_fwd_x4f,
     // ---- attn2 region (Phase 3b attention kernels) ----
     flash_mma_fwd2_d64,
     flash_mma_fwd2_d128,

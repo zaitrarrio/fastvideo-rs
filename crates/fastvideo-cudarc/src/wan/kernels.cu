@@ -2943,7 +2943,25 @@ extern "C" __global__ void sol_prep_q(
 // bf16) BHSD, optional natural-log LSE `[bh, T]`, optional route ballots
 // `[bh, NT, 2*G]` (CuTe `debug_route_trace`). Sinks are one contiguous KV
 // block range [sink_lo, sink_hi) (empty when lo == hi).
-extern "C" __global__ void __launch_bounds__(128, 2) sol_mma_fwd(
+#if defined(__CUDA_ARCH__) && __CUDA_ARCH__ >= 800
+// Variants of the fused forward, all the same algorithm and schedule:
+//   V = 0  sol_mma_fwd      ldmatrix.x2 per mma, exp2f (the original)
+//   V = 1  sol_mma_fwd_x4   ldmatrix.x4 feeding two mmas (bit-identical to 0)
+//   V = 2  sol_mma_fwd_x4f  + ex2.approx.ftz, the CuTe kernel's
+//                           cute.math.exp2(fastmath=True) (sm120/mainloop.py
+//                           :1061-1066, :1104-1110)
+template <int V> __device__ __forceinline__ void sol_qk(unsigned int sK, const unsigned int (&qf)[8][4], float (&s)[8][4], int lane) {
+    if constexpr (V >= 1) fa_qk<128>(sK, qf, s, lane); else mma_qk_64x64(sK, qf, s, lane);
+}
+template <int V> __device__ __forceinline__ void sol_pv(unsigned int sV, const unsigned int (&pa)[4][4], float (&o)[16][4], int lane) {
+    if constexpr (V >= 1) fa_pv<128>(sV, pa, o, lane); else mma_pv_64x128(sV, pa, o, lane);
+}
+template <int V> __device__ __forceinline__ float sol_ex2(float x) {
+    if constexpr (V >= 2) return fa_exp2(x); else return exp2f(x);
+}
+
+template <int V>
+__device__ __forceinline__ void sol_mma_fwd_body(
     const unsigned short* __restrict__ qb, const unsigned short* __restrict__ kb,
     const unsigned short* __restrict__ vb,
     const unsigned short* __restrict__ kc, const unsigned short* __restrict__ vc,
@@ -2952,9 +2970,9 @@ extern "C" __global__ void __launch_bounds__(128, 2) sol_mma_fwd(
     float* __restrict__ lse, int has_lse,
     unsigned int* __restrict__ route_dbg, int has_dbg,
     int T, int NT, int sink_lo, int sink_hi, float sl2
+,
+    unsigned char* smem
 ) {
-#if defined(__CUDA_ARCH__) && __CUDA_ARCH__ >= 800
-    __shared__ __align__(128) unsigned char smem[SOL_FWD_SMEM];
     float* colsum = reinterpret_cast<float*>(smem + 2 * MMA_TILEB);   // [4][64]
     float* colmask = colsum + 4 * 64;                                // [64]
     int* eidx = reinterpret_cast<int*>(colmask + 64);                // [64]
@@ -3016,7 +3034,7 @@ extern "C" __global__ void __launch_bounds__(128, 2) sol_mma_fwd(
         __syncthreads();
 
         // (b) raw route scores S = Q Kc^T.
-        mma_qk_64x64(sK, qf, s, lane);
+        sol_qk<V>(sK, qf, s, lane);
 
         // (c) column sums over live rows (reduce_route_columns).
         #pragma unroll
@@ -3098,7 +3116,7 @@ extern "C" __global__ void __launch_bounds__(128, 2) sol_mma_fwd(
             rmax1 = fmaxf(rmax1, __shfl_xor_sync(0xffffffffu, rmax1, 2));
             const float mn0 = fmaxf(m0, rmax0), mn1 = fmaxf(m1, rmax1);
             const float sf0 = (mn0 == NEG) ? 0.f : mn0, sf1 = (mn1 == NEG) ? 0.f : mn1;
-            const float a0 = exp2f((m0 - sf0) * sl2), a1 = exp2f((m1 - sf1) * sl2);
+            const float a0 = sol_ex2<V>((m0 - sf0) * sl2), a1 = sol_ex2<V>((m1 - sf1) * sl2);
             const float ms0 = sf0 * sl2, ms1 = sf1 * sl2;
             m0 = mn0; m1 = mn1;
             float ls0 = 0.f, ls1 = 0.f;
@@ -3107,10 +3125,10 @@ extern "C" __global__ void __launch_bounds__(128, 2) sol_mma_fwd(
                 const int c0 = n * 8 + 2 * t;
                 const float w0 = (float)max(0, min(64, T - 64 * (gs + c0)));
                 const float w1 = (float)max(0, min(64, T - 64 * (gs + c0 + 1)));
-                s[n][0] = exp2f(s[n][0] * sl2 - ms0);
-                s[n][1] = exp2f(s[n][1] * sl2 - ms0);
-                s[n][2] = exp2f(s[n][2] * sl2 - ms1);
-                s[n][3] = exp2f(s[n][3] * sl2 - ms1);
+                s[n][0] = sol_ex2<V>(s[n][0] * sl2 - ms0);
+                s[n][1] = sol_ex2<V>(s[n][1] * sl2 - ms0);
+                s[n][2] = sol_ex2<V>(s[n][2] * sl2 - ms1);
+                s[n][3] = sol_ex2<V>(s[n][3] * sl2 - ms1);
                 ls0 += s[n][0] * w0 + s[n][1] * w1;
                 ls1 += s[n][2] * w0 + s[n][3] * w1;
             }
@@ -3125,7 +3143,7 @@ extern "C" __global__ void __launch_bounds__(128, 2) sol_mma_fwd(
                 pa[k4][2] = mma_pack_bf16_rn(s[2 * k4 + 1][0], s[2 * k4 + 1][1]);
                 pa[k4][3] = mma_pack_bf16_rn(s[2 * k4 + 1][2], s[2 * k4 + 1][3]);
             }
-            mma_pv_64x128(sV, pa, o, lane);
+            sol_pv<V>(sV, pa, o, lane);
         }
         __syncthreads();   // every warp is done with sV (Vc)
 
@@ -3142,7 +3160,7 @@ extern "C" __global__ void __launch_bounds__(128, 2) sol_mma_fwd(
             const int Lj = min(64, T - 64 * j);
             mma_cp_wait<1>();
             __syncthreads();   // K_e landed
-            mma_qk_64x64(sK, qf, s, lane);
+            sol_qk<V>(sK, qf, s, lane);
             __syncthreads();   // every warp is done reading sK
             bool next = false;
             if (e + 1 < ne) {
@@ -3173,16 +3191,16 @@ extern "C" __global__ void __launch_bounds__(128, 2) sol_mma_fwd(
             rmax1 = fmaxf(rmax1, __shfl_xor_sync(0xffffffffu, rmax1, 2));
             const float mn0 = fmaxf(m0, rmax0), mn1 = fmaxf(m1, rmax1);
             const float sf0 = (mn0 == NEG) ? 0.f : mn0, sf1 = (mn1 == NEG) ? 0.f : mn1;
-            const float a0 = exp2f((m0 - sf0) * sl2), a1 = exp2f((m1 - sf1) * sl2);
+            const float a0 = sol_ex2<V>((m0 - sf0) * sl2), a1 = sol_ex2<V>((m1 - sf1) * sl2);
             const float ms0 = sf0 * sl2, ms1 = sf1 * sl2;
             m0 = mn0; m1 = mn1;
             float ls0 = 0.f, ls1 = 0.f;
             #pragma unroll
             for (int n = 0; n < 8; n++) {
-                s[n][0] = exp2f(s[n][0] * sl2 - ms0);
-                s[n][1] = exp2f(s[n][1] * sl2 - ms0);
-                s[n][2] = exp2f(s[n][2] * sl2 - ms1);
-                s[n][3] = exp2f(s[n][3] * sl2 - ms1);
+                s[n][0] = sol_ex2<V>(s[n][0] * sl2 - ms0);
+                s[n][1] = sol_ex2<V>(s[n][1] * sl2 - ms0);
+                s[n][2] = sol_ex2<V>(s[n][2] * sl2 - ms1);
+                s[n][3] = sol_ex2<V>(s[n][3] * sl2 - ms1);
                 ls0 += s[n][0] + s[n][1];
                 ls1 += s[n][2] + s[n][3];
             }
@@ -3199,7 +3217,7 @@ extern "C" __global__ void __launch_bounds__(128, 2) sol_mma_fwd(
             }
             if (next) mma_cp_wait<1>(); else mma_cp_wait<0>();
             __syncthreads();   // V_e landed
-            mma_pv_64x128(sV, pa, o, lane);
+            sol_pv<V>(sV, pa, o, lane);
             __syncthreads();   // every warp is done reading sV
             if (e + 1 < ne) {
                 const int jn = eidx[e + 1];
@@ -3237,13 +3255,61 @@ extern "C" __global__ void __launch_bounds__(128, 2) sol_mma_fwd(
             if (ok1) *reinterpret_cast<float2*>(out + r1 * MMA_DIM + col) = make_float2(o[n][2] * inv1, o[n][3] * inv1);
         }
     }
+}
+#endif
+
+#if defined(__CUDA_ARCH__) && __CUDA_ARCH__ >= 800
+#define SOL_FWD_ENTRY(V)                                                                 \
+    __shared__ __align__(128) unsigned char smem[SOL_FWD_SMEM];                         \
+    sol_mma_fwd_body<V>(qb, kb, vb, kc, vc, thr, out, out_bf16, out_is_bf16, lse, has_lse, route_dbg, has_dbg, T, NT, sink_lo, sink_hi, sl2, smem);
 #else
-    // sm75 has no bf16 mma; the Rust dispatcher requires sm80+.
-    (void)qb; (void)kb; (void)vb; (void)kc; (void)vc; (void)thr; (void)out; (void)out_bf16;
-    (void)out_is_bf16; (void)lse; (void)has_lse; (void)route_dbg; (void)has_dbg;
-    (void)T; (void)NT; (void)sink_lo; (void)sink_hi; (void)sl2;
+#define SOL_FWD_ENTRY(V)                                                                 \
+    (void)qb; (void)kb; (void)vb; (void)kc; (void)vc; (void)thr; (void)out; (void)out_bf16; \
+    (void)out_is_bf16; (void)lse; (void)has_lse; (void)route_dbg; (void)has_dbg; \
+    (void)T; (void)NT; (void)sink_lo; (void)sink_hi; (void)sl2; \
     __trap();
 #endif
+
+extern "C" __global__ void __launch_bounds__(128, 2) sol_mma_fwd(
+    const unsigned short* __restrict__ qb, const unsigned short* __restrict__ kb,
+    const unsigned short* __restrict__ vb,
+    const unsigned short* __restrict__ kc, const unsigned short* __restrict__ vc,
+    const float* __restrict__ thr,
+    float* __restrict__ out, unsigned short* __restrict__ out_bf16, int out_is_bf16,
+    float* __restrict__ lse, int has_lse,
+    unsigned int* __restrict__ route_dbg, int has_dbg,
+    int T, int NT, int sink_lo, int sink_hi, float sl2
+
+) {
+    SOL_FWD_ENTRY(0)
+}
+
+extern "C" __global__ void __launch_bounds__(128, 2) sol_mma_fwd_x4(
+    const unsigned short* __restrict__ qb, const unsigned short* __restrict__ kb,
+    const unsigned short* __restrict__ vb,
+    const unsigned short* __restrict__ kc, const unsigned short* __restrict__ vc,
+    const float* __restrict__ thr,
+    float* __restrict__ out, unsigned short* __restrict__ out_bf16, int out_is_bf16,
+    float* __restrict__ lse, int has_lse,
+    unsigned int* __restrict__ route_dbg, int has_dbg,
+    int T, int NT, int sink_lo, int sink_hi, float sl2
+
+) {
+    SOL_FWD_ENTRY(1)
+}
+
+extern "C" __global__ void __launch_bounds__(128, 2) sol_mma_fwd_x4f(
+    const unsigned short* __restrict__ qb, const unsigned short* __restrict__ kb,
+    const unsigned short* __restrict__ vb,
+    const unsigned short* __restrict__ kc, const unsigned short* __restrict__ vc,
+    const float* __restrict__ thr,
+    float* __restrict__ out, unsigned short* __restrict__ out_bf16, int out_is_bf16,
+    float* __restrict__ lse, int has_lse,
+    unsigned int* __restrict__ route_dbg, int has_dbg,
+    int T, int NT, int sink_lo, int sink_hi, float sl2
+
+) {
+    SOL_FWD_ENTRY(2)
 }
 // ==== end region: sol ====
 
