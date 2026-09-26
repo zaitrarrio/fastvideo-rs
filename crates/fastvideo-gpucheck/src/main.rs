@@ -16,6 +16,7 @@
 //! | compare | two clip dirs        | fast path output stays close to exact path |
 //! | compare-clips | two frame dirs (CPU) | paired-clip quality gate: OFF identity + pixel metrics vs a baseline |
 
+mod benchmark;
 mod clipcmp;
 mod embed;
 mod gpu;
@@ -25,7 +26,9 @@ mod hunyuan15_stage;
 mod kernels;
 #[cfg(feature = "cuda")]
 mod kernels_fp8;
+mod gate;
 mod llm_oracle;
+mod lpips;
 mod ltx2_stage;
 #[cfg(feature = "cuda")]
 mod mathprobe;
@@ -334,6 +337,58 @@ enum Cmd {
         /// Hard gate: every paired frame byte-identical (max_abs_diff_uint8 == 0).
         #[arg(long)]
         off_identity: bool,
+        /// LPIPS(alex) on the frame pairs: the directory `fetch-lpips.sh`
+        /// filled (torchvision AlexNet + LPIPS v0.1 heads, hash-pinned).
+        #[arg(long)]
+        lpips: Option<PathBuf>,
+        /// `sol` (sol-engine's selection: 32 stratified + 16 worst, at most
+        /// 48 pairs) or `all`.
+        #[arg(long, default_value = "sol")]
+        lpips_pairs: String,
+        /// `cuda` (cuDNN convolutions) or `cpu`.
+        #[arg(long, default_value = "cuda")]
+        lpips_device: String,
+    },
+    /// LPIPS port check: the fixture pairs against the pinned official
+    /// `lpips` numbers (CPU and, on a GPU, the device path), or one `--a` /
+    /// `--b` pair scored.
+    Lpips {
+        #[arg(long)]
+        weights: PathBuf,
+        #[arg(long)]
+        fixtures: Option<PathBuf>,
+        #[arg(long)]
+        a: Option<PathBuf>,
+        #[arg(long)]
+        b: Option<PathBuf>,
+        #[arg(long, default_value = "cuda")]
+        device: String,
+    },
+    /// Promotion gate: a candidate cell against a baseline cell, from their
+    /// `benchmark.json` and the `compare-clips` report(s), under a policy
+    /// (`scripts/gpu/gate-policy.toml`). Exit 0 = pass, 1 = fail.
+    Gate {
+        /// Baseline cell directory (holds `benchmark.json`) or the file.
+        #[arg(long)]
+        baseline: PathBuf,
+        /// Candidate cell directory or its `benchmark.json`.
+        #[arg(long)]
+        candidate: PathBuf,
+        #[arg(long)]
+        policy: PathBuf,
+        /// compare-clips report(s) for this pair; several for a prompt set.
+        /// Default: `<baseline>/../compare/compare-clips-<b>--<c>*.json`.
+        #[arg(long)]
+        compare: Vec<PathBuf>,
+        /// compare-clips report(s), made with `--off-identity`, of the
+        /// baseline against the candidate build with the technique OFF.
+        #[arg(long)]
+        off_compare: Vec<PathBuf>,
+        /// Policy technique kind: `exact` (numeric / kernel switch: the OFF
+        /// arm must be byte-identical) or `lossy` (generative: telemetry +
+        /// limits). Default: the policy's `kind`.
+        #[arg(long)]
+        kind: Option<String>,
     },
     /// Diff our TAEHV decoder against madebyollin's own implementation.
     Taehv {
@@ -435,6 +490,8 @@ fn stage_name(cmd: &Cmd) -> &'static str {
         Cmd::Llm { .. } => "llm",
         Cmd::Compare { .. } => "compare",
         Cmd::CompareClips { .. } => "compare-clips",
+        Cmd::Lpips { .. } => "lpips",
+        Cmd::Gate { .. } => "gate",
         Cmd::CompareDumps { .. } => "compare-dumps",
         Cmd::Oracle { .. } => "oracle",
         Cmd::Taehv { .. } => "taehv",
@@ -591,7 +648,51 @@ fn run(cli: &Cli, report: &mut Report) -> StageResult<()> {
             baseline,
             candidate,
             off_identity,
-        } => clipcmp::run(report, baseline, candidate, *off_identity),
+            lpips,
+            lpips_pairs,
+            lpips_device,
+        } => {
+            let opts = match lpips {
+                Some(weights) => {
+                    let all_pairs = match lpips_pairs.as_str() {
+                        "sol" => false,
+                        "all" => true,
+                        other => {
+                            return Err(anyhow::anyhow!("--lpips-pairs {other}: expected sol or all").into())
+                        }
+                    };
+                    Some(clipcmp::LpipsOpts {
+                        weights: weights.clone(),
+                        all_pairs,
+                        device: gpu::on_gpu(lpips_device),
+                    })
+                }
+                None => None,
+            };
+            clipcmp::run(report, baseline, candidate, *off_identity, opts.as_ref())
+        }
+        Cmd::Lpips {
+            weights,
+            fixtures,
+            a,
+            b,
+            device,
+        } => {
+            let pair = match (a, b) {
+                (Some(a), Some(b)) => Some((a.as_path(), b.as_path())),
+                (None, None) => None,
+                _ => return Err(anyhow::anyhow!("--a and --b go together").into()),
+            };
+            lpips::run(report, weights, fixtures.as_deref(), pair, device)
+        }
+        Cmd::Gate {
+            baseline,
+            candidate,
+            policy,
+            compare,
+            off_compare,
+            kind,
+        } => gate::run(report, baseline, candidate, policy, compare, off_compare, kind.as_deref()),
         Cmd::CompareDumps {
             baseline,
             candidate,

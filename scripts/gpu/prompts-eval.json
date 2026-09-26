@@ -1,0 +1,36 @@
+{
+  "name": "sol-engine-eval-5",
+  "source": "NVlabs/Sana sol-engine @ 6c2f582ba9681dfe352ae4ca23b6f0030cf120cf: the benchmark prompts it ships, each with the seed its runner uses",
+  "prompts": [
+    {
+      "name": "h3-demo",
+      "seed": 0,
+      "source": "models/minimax_h3/demo_prompt.json (t2va_example_1, seed 0)",
+      "prompt": "integrated_multimodal_description: [Shot 1] Cinematic, medium wide shot, pushing in slowly. In the cavernous, dimly lit bridge of a starship, sleek metallic consoles with glowing amber displays flank a massive, curved observation window. A female captain, in her late 40s with an athletic build and short silver-streaked black hair, stands in the center midground. She wears a structured, high-collared dark navy military tunic with silver chest insignias. Her back is to the camera, silhouetted against the cool, ambient starlight pouring through the thick glass. She stands perfectly still with her hands clasped tightly behind her back. Outside the window, a massive armada of jagged, dark grey dreadnoughts hovers in tight formation against a deep purple space nebula. The fleet's massive rear thrusters begin to glow with an intense, escalating bright blue light. [Shot 2] At 00:04.500, the camera cuts to a close-up of the captain's face and shakes strongly. The brilliant blue-white light from the fleet's gathering energy reflects vividly in her dark eyes. Suddenly, a blinding white flash floods through the window, completely washing out the background as the fleet jumps to hyperspace. The sheer spatial force violently jolts the bridge, causing the captain from Shot 1 to stagger slightly forward, her shoulders tensing as she visibly braces herself against the physical tremors. As the intense white light fades abruptly, leaving only the dim, empty expanse of the purple nebula reflected on her starkly lit skin, her jaw clenches, and she slowly closes her eyes in the newly emptied space.\noverall_soundscape: A low, resonant hum of the ship's ambient life support systems serves as the baseline, soon drowned out by an audible, escalating, high-pitched electronic whine as the fleet outside charges its hyperdrives. A massive, deafening, bass-heavy boom and sharp crackle erupts during the blinding flash, accompanied by the loud metallic creaking, rattling, and deep thuds of the bridge's bulkheads vibrating under immense physical stress. The intense roaring impact then cuts abruptly back to a hollow, echoing room tone, leaving only the faint, steady hum of the isolated bridge.\nnon_diegetic_music: Cinematic space-opera orchestral score, slow tempo, featuring a solitary, mournful French horn melody over deep, sustained string dissonances that build rapidly in volume and intensity, swelling to a massive orchestral peak before snapping immediately into silence right after the jump."
+    },
+    {
+      "name": "ltx-multishot",
+      "seed": 42,
+      "source": "models/ltx25/prompts/p01_multishot.txt (run_ltx25_gpu.sh LTX25_SEED default 42)",
+      "prompt": "A wide shot frames a rainy city intersection at dusk, neon signs reflecting on wet asphalt. A young woman in a yellow raincoat walks toward camera, gripping a folded newspaper, while cars hiss past behind her. Soft synth music and distant traffic fill the air. A hard cut transitions to a medium close-up of her face under the hood, raindrops catching the neon as she looks off-screen left; the synth score continues across the cut, traffic muffled. She whispers, \"He's late.\" Another hard cut jumps to a low-angle shot of a man's scuffed boots stepping into a puddle at the curb; the music drops to a low drone. He lifts his head into frame — short dark hair, soaked jacket — and smiles toward her off-screen as a bus rumbles past."
+    },
+    {
+      "name": "ltx-newsbroadcast",
+      "seed": 42,
+      "source": "models/ltx25/prompts/p02_newsbroadcast.txt (seed 42)",
+      "prompt": "EXT. SMALL TOWN STREET – MORNING – LIVE NEWS BROADCAST\nThe shot opens on a news reporter standing in front of a row of cordoned-off cars, yellow caution tape fluttering behind him. The light is warm, early sun reflecting off the camera lens. The faint hum of chatter and distant drilling fills the air.\nThe reporter, composed but visibly excited, looks directly into the camera, microphone in hand.\nReporter (live):\n\"Thank you, Sylvia. And yes — this is a sentence I never thought I'd say on live television — but this morning, here in the quiet town of New Castle, Vermont… black gold has been found!\"\nHe gestures slightly toward the field behind him.\nReporter (grinning):\n\"If my cameraman can pan over, you'll see what all the excitement's about.\"\nThe camera pans right, slowly revealing a construction site surrounded by workers in hard hats. A beat of silence — then, with a sudden roar, a geyser of oil erupts from the ground, blasting upward in a violent plume.\nWorkers cheer and scramble, the black stream glistening in the morning light. The camera shakes slightly, trying to stay focused through the chaos.\nReporter (off-screen, shouting over the noise):\n\"There it is, folks — the moment New Castle will never forget!\"\nThe camera catches the sunlight gleaming off the oil mist before pulling back, revealing the entire scene — the small-town skyline silhouetted against the wild fountain of oil."
+    },
+    {
+      "name": "ltx-frogyoga",
+      "seed": 42,
+      "source": "models/ltx25/prompts/p03_frogyoga.txt (seed 42)",
+      "prompt": "The camera opens in a calm, sunlit frog yoga studio. Warm morning light washes over the wooden floor as incense smoke drifts lazily in the air. The senior frog instructor sits cross-legged at the center, eyes closed, voice deep and calm. \"We are one with the pond.\" All the frogs answer softly: \"Ommm…\" \"We are one with the mud.\" \"Ommm…\" He smiles faintly. \"We are one with the flies.\" A pause.\nThe camera pans to the side towards one frog who twitches, eyes darting. Suddenly its tongue snaps out, catching a fly mid-air and pulling it into its mouth.\nThe master exhales slowly, still serene. \"But we do not chase the flies…\" Beat. \"not during class.\"\nThe guilty frog lowers its head in shame, folding its hands back into a meditative pose. The other frogs resume their chant: \"Ommm…\" Camera holds for a moment on the embarrassed frog, eyes closed too tightly, pretending nothing happened."
+    },
+    {
+      "name": "spark-mountain-lake",
+      "seed": 42,
+      "source": "models/minimax_h3/Sol-H3-Spark/examples/prompts.jsonl case mountain-lake (seed 42)",
+      "prompt": "integrated_multimodal_description: A wide aerial shot follows an eagle gliding over a turquoise alpine lake, with pine forest, a narrow waterfall and snow-covered peaks visible in the background. Its wings flex gently as it banks through the warm afternoon light. The camera maintains its distance and reveals the landscape in one continuous five-second shot. Natural colors, realistic feathers, no cuts or text. overall_soundscape: Wind moving through the valley, a distant eagle call and soft waterfall noise. non_diegetic_music: None."
+    }
+  ]
+}

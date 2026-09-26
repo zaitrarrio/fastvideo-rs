@@ -60,6 +60,14 @@ pub struct Linear {
     lora: Option<LinearLora>,
 }
 
+/// `benchmark.json` recipe name of a reference FP8 weight.
+pub fn quant_label(kind: super::quant::QuantKind) -> &'static str {
+    match kind {
+        super::quant::QuantKind::W8A8 => "w8a8",
+        super::quant::QuantKind::Mxfp8 => "mxfp8",
+    }
+}
+
 /// Factors kept on the device (or host) so [`Linear::set_lora_strength`] can
 /// re-fuse without touching disk. `W0` is snapshotted on the first
 /// [`Linear::attach_lora`].
@@ -781,6 +789,7 @@ impl Linear {
                 layout.out_dim, self.out_dim
             )));
         }
+        super::evalstats::quant_module(quant_label(kind));
         let empty = CudaTensor::from_vec(Vec::new(), vec![0, self.in_dim])?;
         #[cfg(feature = "cuda")]
         if let Some(w16) = self.weight_bf16.take() {
@@ -810,6 +819,7 @@ impl Linear {
             .as_ref()
             .filter(|q| q.kind() == super::quant::QuantKind::Mxfp8)
             .ok_or_else(|| msg("forward_mx on a linear without an MXFP8 weight"))?;
+        super::evalstats::quant_call("mxfp8");
         if act.k != self.in_dim || out_shape.last() != Some(&self.out_dim) {
             return Err(msg("forward_mx: activation / output shape mismatch"));
         }
@@ -858,6 +868,7 @@ impl Linear {
 
     fn forward_quant(&self, xs: &CudaTensor, gelu: bool) -> Result<CudaTensor> {
         let q = self.quant.as_ref().ok_or_else(|| msg("forward_quant without a quant weight"))?;
+        super::evalstats::quant_call(quant_label(q.kind()));
         let (m, _, out_shape) = self.out_shape(xs)?;
         #[cfg(feature = "cuda")]
         if q.is_device() {
@@ -1084,6 +1095,13 @@ impl Linear {
     fn forward_act(&self, xs: &CudaTensor, gelu: bool) -> Result<CudaTensor> {
         if self.quant.is_some() {
             return self.forward_quant(xs, gelu);
+        }
+        if self.nvfp4_act.is_some() {
+            super::evalstats::quant_call("nvfp4_w4a4");
+        } else if self.weight_fp8_rows.is_some() {
+            super::evalstats::quant_call("fp8_rows_weight_only");
+        } else if self.weight_affine.is_some() {
+            super::evalstats::quant_call("affine_weight_only");
         }
         let owned;
         let act_owned;
