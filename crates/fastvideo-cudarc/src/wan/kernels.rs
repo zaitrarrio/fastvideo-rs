@@ -141,6 +141,12 @@ kernel_fns!(
     sol_prep_kgram,
     sol_prep_q,
     sol_mma_fwd,
+    // ---- attn2 region (Phase 3b attention kernels) ----
+    flash_mma_fwd2_d64,
+    flash_mma_fwd2_d128,
+    vsa_mma_attn_tma2,
+    sol_mma_fwd2,
+    sol_split_combine,
     // ---- ltx2 region (appended; see the end of kernels.cu) ----
     ltx_abs_diff_sums,
     ltx_row_sumsq,

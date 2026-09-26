@@ -137,6 +137,31 @@ pub fn mma_sdpa_default() -> bool {
     false
 }
 
+/// Which fused dense kernel runs.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FlashKernel {
+    /// `flash_mma_fwd_d*`: 64-query CTAs, 4 warps, one K and one V buffer.
+    V1,
+    /// `flash_mma_fwd2_d*`: 128-query CTAs (8 warps x 16 rows) and
+    /// double-buffered K/V; bit-identical to V1 (same per-row arithmetic).
+    V2,
+}
+
+/// `FASTVIDEO_FLASH_KERNEL=v1|v2|auto` (auto = [`flash_v2_default`]).
+pub fn flash_kernel_choice() -> FlashKernel {
+    match super::envflag::string_flag("FASTVIDEO_FLASH_KERNEL", "auto").as_str() {
+        "v1" => FlashKernel::V1,
+        "v2" => FlashKernel::V2,
+        _ if flash_v2_default() => FlashKernel::V2,
+        _ => FlashKernel::V1,
+    }
+}
+
+/// Whether `auto` picks the 128-query double-buffered kernel.
+pub fn flash_v2_default() -> bool {
+    false
+}
+
 /// Fused dense SDPA on tensor cores (`flash_mma_fwd_d{64,128}`): bf16 Q/K/V
 /// (cast once, RNE, when they are f32), f32 online softmax, bf16 P, f32
 /// accumulation; one launch, no score buffer. Output is f32, or bf16 when
@@ -149,6 +174,19 @@ pub fn device_mma_sdpa(
     v: &CudaTensor,
     scale: Option<f32>,
     out_bf16: bool,
+) -> Result<Option<CudaTensor>> {
+    device_mma_sdpa_with(q, k, v, scale, out_bf16, flash_kernel_choice())
+}
+
+/// [`device_mma_sdpa`] on an explicit kernel.
+#[cfg(feature = "cuda")]
+pub fn device_mma_sdpa_with(
+    q: &CudaTensor,
+    k: &CudaTensor,
+    v: &CudaTensor,
+    scale: Option<f32>,
+    out_bf16: bool,
+    kernel: FlashKernel,
 ) -> Result<Option<CudaTensor>> {
     let Some((b, h, sq, sk, d)) = bhsd(q, k, v) else {
         return Ok(None);
@@ -171,16 +209,38 @@ pub fn device_mma_sdpa(
         format_args!("sdpa: fused mma B={b} H={h} Sq={sq} Sk={sk} D={d}"),
     );
     let n = bh * sq * d;
-    let func = if d == 64 {
-        &dev.kernels.flash_mma_fwd_d64
-    } else {
-        &dev.kernels.flash_mma_fwd_d128
-    };
-    let cfg = cudarc::driver::LaunchConfig {
-        grid_dim: (sq.div_ceil(MMA_TILE) as u32, bh as u32, 1),
-        block_dim: (128, 1, 1),
-        // Static shared memory (32 KB at d=128): two CTAs per SM, no opt-in.
-        shared_mem_bytes: 0,
+    let (func, cfg) = match kernel {
+        FlashKernel::V1 => (
+            if d == 64 {
+                &dev.kernels.flash_mma_fwd_d64
+            } else {
+                &dev.kernels.flash_mma_fwd_d128
+            },
+            cudarc::driver::LaunchConfig {
+                grid_dim: (sq.div_ceil(MMA_TILE) as u32, bh as u32, 1),
+                block_dim: (128, 1, 1),
+                // Static shared memory (32 KB at d=128): two CTAs per SM, no opt-in.
+                shared_mem_bytes: 0,
+            },
+        ),
+        FlashKernel::V2 => {
+            let func = if d == 64 {
+                &dev.kernels.flash_mma_fwd2_d64
+            } else {
+                &dev.kernels.flash_mma_fwd2_d128
+            };
+            // Two stages of (K, V) 64 x d bf16 tiles: 64 KB at d=128 (opt-in).
+            let shared = (4 * MMA_TILE * d * 2) as u32;
+            super::ops::opt_in_dynamic_shared(func, shared)?;
+            (
+                func,
+                cudarc::driver::LaunchConfig {
+                    grid_dim: (sq.div_ceil(2 * MMA_TILE) as u32, bh as u32, 1),
+                    block_dim: (256, 1, 1),
+                    shared_mem_bytes: shared,
+                },
+            )
+        }
     };
     let (sq_i, sk_i) = (sq as i32, sk as i32);
     let err = |e: cudarc::driver::DriverError| msg(e.to_string());

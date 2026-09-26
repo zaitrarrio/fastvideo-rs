@@ -1169,19 +1169,31 @@ pub fn vsa_mma_attn_range_device(
     if want_tma {
         match encode_qkv_panels(&qt, &kt, &vt, bh, padded) {
             Ok(maps) => {
-                opt_in_dynamic_shared(&dev.kernels.vsa_mma_attn_tma, shared_tma)?;
+                // The ring kernel keeps three 16 KB slots (48 KB + three
+                // mbarriers): two CTAs per SM where the two-stage one fits one.
+                let ring = vsa_ring_requested();
+                let (func, shared) = if ring {
+                    (&dev.kernels.vsa_mma_attn_tma2, (3 * TILE * DIM * 2 + 32) as u32)
+                } else {
+                    (&dev.kernels.vsa_mma_attn_tma, shared_tma)
+                };
+                opt_in_dynamic_shared(func, shared)?;
                 static LOGGED: std::sync::atomic::AtomicBool =
                     std::sync::atomic::AtomicBool::new(false);
                 crate::wan::log::info_once(
                     &LOGGED,
-                    format_args!("vsa fine kernel: Tma (sm{}, 128B swizzle)", dev.sm_major),
+                    format_args!(
+                        "vsa fine kernel: {} (sm{}, 128B swizzle)",
+                        if ring { "Tma ring (3 slots)" } else { "Tma" },
+                        dev.sm_major
+                    ),
                 );
                 let cfg = LaunchConfig {
                     grid_dim: (q_tiles as u32, bh as u32, 1),
                     block_dim: (THREADS, 1, 1),
-                    shared_mem_bytes: shared_tma,
+                    shared_mem_bytes: shared,
                 };
-                launch!(dev.stream, &dev.kernels.vsa_mma_attn_tma, cfg;
+                launch!(dev.stream, func, cfg;
                     &maps.tq0, &maps.tq1, &maps.tk0, &maps.tk1, &maps.tv0, &maps.tv1,
                     selected, &plan.block_sizes, &mut out, &nt, &tk, &scale_log2, &qb)
                 .map_err(err)?;
@@ -1218,14 +1230,31 @@ fn tma_requested(sm_major: i32) -> bool {
     if pick == "mma" {
         return false; // explicit Ampere path for A/B
     }
-    if pick == "tma" {
+    if pick == "tma" || pick == "tma2" {
         return sm_major >= 9;
     }
     sm_major >= 9
 }
 
+/// On the TMA path: `FASTVIDEO_VSA_KERNEL=tma2` takes the three-slot ring
+/// kernel (`vsa_mma_attn_tma2`), `tma` the two-stage one; `auto` takes
+/// [`vsa_ring_default`].
 #[cfg(feature = "cuda")]
-fn opt_in_dynamic_shared(func: &cudarc::driver::CudaFunction, shared: u32) -> Result<()> {
+fn vsa_ring_requested() -> bool {
+    match crate::wan::envflag::string_flag("FASTVIDEO_VSA_KERNEL", "auto").as_str() {
+        "tma2" => true,
+        "tma" => false,
+        _ => vsa_ring_default(),
+    }
+}
+
+/// Whether `auto` picks the three-slot ring VSA kernel.
+pub fn vsa_ring_default() -> bool {
+    false
+}
+
+#[cfg(feature = "cuda")]
+pub(crate) fn opt_in_dynamic_shared(func: &cudarc::driver::CudaFunction, shared: u32) -> Result<()> {
     use cudarc::driver::sys::CUfunction_attribute_enum::CU_FUNC_ATTRIBUTE_MAX_DYNAMIC_SHARED_SIZE_BYTES;
     // Once per function per process. Two kernels, two Once locks.
     // set_attribute is idempotent; a failed first call is the one we surface.
@@ -3032,7 +3061,8 @@ pub const SOL_HEAD_DIM: usize = 128;
 /// All buffers are per call and stay on the device.
 #[cfg(feature = "cuda")]
 pub struct SolPrepDev {
-    /// `[bh, T, 128]` bf16 (RNE) copies of Q/K/V.
+    /// `[bh, T, 128]` bf16 (RNE) copies of Q/K/V (f32 inputs only; for
+    /// bf16 inputs these are 1-element dummies and the inputs are used).
     pub qb: CudaSlice<half::bf16>,
     pub kb: CudaSlice<half::bf16>,
     pub vb: CudaSlice<half::bf16>,
@@ -3144,7 +3174,10 @@ fn sol_prep_raw(
     let n_tok = bh * tokens * dim;
     let n_blk = bh * nt * dim;
     let bf = |n: usize| unsafe { dev.stream.alloc::<half::bf16>(n.max(1)) }.map_err(err);
-    let (mut qb, mut kb, mut vb) = (bf(n_tok)?, bf(n_tok)?, bf(n_tok)?);
+    // bf16 inputs are read in place by the forward: no copies (1-element
+    // dummies keep the kernel arguments valid; the kernels skip the writes).
+    let n_copy = if in16 { 1 } else { n_tok };
+    let (mut qb, mut kb, mut vb) = (bf(n_copy)?, bf(n_copy)?, bf(n_copy)?);
     let (mut kc, mut vc) = (bf(n_blk)?, bf(n_blk)?);
     let mut kstat = alloc(bh * 2 * dim)?;
     let mut thr = alloc(bh * nt)?;
@@ -3206,24 +3239,119 @@ fn sol_prep_raw(
     })
 }
 
-/// Fused Sol forward (`sol_mma_fwd`): one CTA per (64-query tile, head).
-/// `sink_blocks` is the single sink KV-block range `[lo, hi)` (empty when
-/// `lo >= hi`), see [`fastvideo_models::sol_attn::sink_blocks`].
+/// Which fused Sol forward kernel runs.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SolKernel {
+    /// `sol_mma_fwd`: four MMA warps that also issue every cp.async and
+    /// meet at CTA barriers (the CuTe sm120 skeleton, sm80+).
+    V1,
+    /// `sol_mma_fwd2`: one cp.async producer warp + four MMA warps over
+    /// mbarriers, optional KV splits (sm90+). Bit-identical to V1 at one
+    /// split.
+    Ws,
+}
+
+/// `FASTVIDEO_SOL_KERNEL=v1|ws|auto`. `auto` takes [`sol_ws_default`] on
+/// sm90+ and V1 below (the producer/consumer mbarriers need sm90).
 #[cfg(feature = "cuda")]
-pub fn sol_fwd_device(
+pub fn sol_kernel_choice(sm_major: i32) -> SolKernel {
+    match crate::wan::envflag::string_flag("FASTVIDEO_SOL_KERNEL", "auto").as_str() {
+        "v1" => SolKernel::V1,
+        "ws" if sm_major >= 9 => SolKernel::Ws,
+        _ if sm_major >= 9 && sol_ws_default() => SolKernel::Ws,
+        _ => SolKernel::V1,
+    }
+}
+
+/// Whether `auto` picks the warp-specialised kernel.
+pub fn sol_ws_default() -> bool {
+    false
+}
+
+/// KV splits for an `nt` x `bh` grid on `sms` SMs: `env` is
+/// `FASTVIDEO_SOL_SPLITS` (1, 2 or 4) or `auto`. Auto splits only when the
+/// unsplit grid is under two waves of two CTAs per SM, i.e. when the grid
+/// alone cannot fill the GPU (sol-engine's own `auto` splits only on sm90
+/// and only at >= 64k tokens, `sol_attn_backend.py:94-106`). Each split
+/// needs at least one 64-block route group; splits are 1, 2 or 4.
+pub fn sol_splits_for(nt: usize, bh: usize, sms: usize, env: &str) -> usize {
+    let groups = nt.div_ceil(fastvideo_models::sol_attn::ROUTE_GROUP).max(1);
+    let want = match env {
+        "1" => 1,
+        "2" => 2,
+        "4" => 4,
+        _ => {
+            let ctas = nt * bh;
+            let fill = 4 * sms.max(1);
+            if ctas >= fill {
+                1
+            } else if ctas * 2 >= fill {
+                2
+            } else {
+                4
+            }
+        }
+    };
+    match want.min(groups) {
+        0 | 1 => 1,
+        2 | 3 => 2,
+        _ => 4,
+    }
+}
+
+#[cfg(feature = "cuda")]
+fn sm_count(dev: &super::device::DeviceContext) -> usize {
+    use cudarc::driver::sys::CUdevice_attribute::CU_DEVICE_ATTRIBUTE_MULTIPROCESSOR_COUNT;
+    dev.ctx
+        .attribute(CU_DEVICE_ATTRIBUTE_MULTIPROCESSOR_COUNT)
+        .map(|n| n.max(1) as usize)
+        .unwrap_or(1)
+}
+
+/// Output of [`sol_fwd_core`]: f32 or bf16 BHSD `[bh, T, 128]`.
+#[cfg(feature = "cuda")]
+pub enum SolOut {
+    F32(CudaSlice<f32>),
+    Bf16(CudaSlice<half::bf16>),
+}
+
+/// Explicit kernel / split choice (`None` = the env / auto policy).
+#[derive(Clone, Copy, Debug, Default)]
+pub struct SolFwdPick {
+    pub kernel: Option<SolKernel>,
+    pub splits: Option<usize>,
+}
+
+/// Forward outputs of [`sol_fwd_core`]: output, optional LSE and route ballots.
+#[cfg(feature = "cuda")]
+pub type SolCoreOut = (SolOut, Option<CudaSlice<f32>>, Option<CudaSlice<u32>>);
+
+/// One fused Sol forward on bf16 operands `qb`/`kb`/`vb` (the prep's copies,
+/// or the caller's own bf16 buffers) and the prep's pooled blocks and
+/// thresholds. `sink_blocks` is the single sink KV-block range `[lo, hi)`.
+#[cfg(feature = "cuda")]
+#[allow(clippy::too_many_arguments)]
+pub fn sol_fwd_core(
+    qb: &CudaSlice<half::bf16>,
+    kb: &CudaSlice<half::bf16>,
+    vb: &CudaSlice<half::bf16>,
     prep: &SolPrepDev,
     scale: f32,
     sink_blocks: (usize, usize),
+    out_bf16: bool,
     want_lse: bool,
     want_route: bool,
-) -> Result<SolFwdDev> {
+    pick: SolFwdPick,
+) -> Result<SolCoreOut> {
     use fastvideo_models::sol_attn::{LOG2_E, ROUTE_GROUP};
     let dev = ctx()?;
     check("sol_mma_fwd needs sm80+ (bf16 mma.sync)", dev.sm_major >= 8)?;
     let (bh, tokens, nt) = (prep.bh, prep.tokens, prep.nt);
     let groups = nt.div_ceil(ROUTE_GROUP);
-    let mut out = alloc(bh * tokens * SOL_HEAD_DIM)?;
-    let mut out_bf16 = unsafe { dev.stream.alloc::<half::bf16>(1) }.map_err(err)?;
+    let n_out = bh * tokens * SOL_HEAD_DIM;
+    let mut out = alloc(if out_bf16 { 1 } else { n_out })?;
+    let mut out16 = unsafe { dev.stream.alloc::<half::bf16>(if out_bf16 { n_out } else { 1 }) }
+        .map_err(err)?;
     let mut lse = alloc(if want_lse { bh * tokens } else { 1 })?;
     let mut route = unsafe {
         dev.stream
@@ -3235,28 +3363,129 @@ pub fn sol_fwd_device(
     } else {
         (nt, nt)
     };
-    let cfg = LaunchConfig {
-        grid_dim: (nt as u32, bh as u32, 1),
-        block_dim: (128, 1, 1),
-        // Static shared memory (34.4 KB): two CTAs per SM, no opt-in.
-        shared_mem_bytes: 0,
+    let kernel = match pick.kernel {
+        Some(SolKernel::Ws) if dev.sm_major >= 9 => SolKernel::Ws,
+        Some(_) => SolKernel::V1,
+        None => sol_kernel_choice(dev.sm_major),
     };
-    let (out_is_bf16, has_lse, has_dbg) = (0i32, i32::from(want_lse), i32::from(want_route));
+    let (is16, has_lse, has_dbg) = (
+        i32::from(out_bf16),
+        i32::from(want_lse),
+        i32::from(want_route),
+    );
     let (t_i, nt_i, lo_i, hi_i) = (tokens as i32, nt as i32, lo as i32, hi as i32);
     let sl2 = scale * LOG2_E;
-    launch!(dev.stream, &dev.kernels.sol_mma_fwd, cfg;
-        &prep.qb, &prep.kb, &prep.vb, &prep.kc, &prep.vc, &prep.thr,
-        &mut out, &mut out_bf16, &out_is_bf16, &mut lse, &has_lse, &mut route, &has_dbg,
-        &t_i, &nt_i, &lo_i, &hi_i, &sl2)
-    .map_err(err)?;
-    Ok(SolFwdDev {
-        out,
-        lse: want_lse.then_some(lse),
-        route: want_route.then_some(route),
-    })
+    match kernel {
+        SolKernel::V1 => {
+            let cfg = LaunchConfig {
+                grid_dim: (nt as u32, bh as u32, 1),
+                block_dim: (128, 1, 1),
+                // Static shared memory (34.4 KB): two CTAs per SM, no opt-in.
+                shared_mem_bytes: 0,
+            };
+            launch!(dev.stream, &dev.kernels.sol_mma_fwd, cfg;
+                qb, kb, vb, &prep.kc, &prep.vc, &prep.thr,
+                &mut out, &mut out16, &is16, &mut lse, &has_lse, &mut route, &has_dbg,
+                &t_i, &nt_i, &lo_i, &hi_i, &sl2)
+            .map_err(err)?;
+        }
+        SolKernel::Ws => {
+            let env = crate::wan::envflag::string_flag("FASTVIDEO_SOL_SPLITS", "auto");
+            let splits = match pick.splits {
+                Some(s) => sol_splits_for(nt, bh, 1, &s.to_string()),
+                None => sol_splits_for(nt, bh, sm_count(&dev), &env),
+            };
+            let rows = bh * tokens;
+            let (mut part_o, mut part_lse) = if splits > 1 {
+                (alloc(splits * rows * SOL_HEAD_DIM)?, alloc(splits * rows)?)
+            } else {
+                (alloc(1)?, alloc(1)?)
+            };
+            let cfg = LaunchConfig {
+                grid_dim: (nt as u32, bh as u32, splits as u32),
+                // Four MMA warps + one cp.async producer warp; 34.4 KB static.
+                block_dim: (160, 1, 1),
+                shared_mem_bytes: 0,
+            };
+            let splits_i = splits as i32;
+            launch!(dev.stream, &dev.kernels.sol_mma_fwd2, cfg;
+                qb, kb, vb, &prep.kc, &prep.vc, &prep.thr,
+                &mut out, &mut out16, &is16, &mut lse, &has_lse, &mut route, &has_dbg,
+                &t_i, &nt_i, &lo_i, &hi_i, &sl2, &splits_i, &mut part_o, &mut part_lse)
+            .map_err(err)?;
+            if splits > 1 {
+                let cfg = LaunchConfig {
+                    grid_dim: (rows.div_ceil(4) as u32, 1, 1),
+                    block_dim: (128, 1, 1),
+                    shared_mem_bytes: 0,
+                };
+                let rows_i = rows as i64;
+                launch!(dev.stream, &dev.kernels.sol_split_combine, cfg;
+                    &part_o, &part_lse, &splits_i, &rows_i,
+                    &mut out, &mut out16, &is16, &mut lse, &has_lse)
+                .map_err(err)?;
+            }
+        }
+    }
+    let o = if out_bf16 {
+        SolOut::Bf16(out16)
+    } else {
+        SolOut::F32(out)
+    };
+    Ok((o, want_lse.then_some(lse), want_route.then_some(route)))
 }
 
-/// Fused Sol-Attn on f32 BHSD `[bh, T, 128]` q/k/v: prep + `sol_mma_fwd`,
+/// Fused Sol forward on the prep's bf16 copies (`sol_mma_fwd` or
+/// `sol_mma_fwd2`, see [`sol_kernel_choice`]): one CTA per (64-query tile,
+/// head). `sink_blocks` is the single sink KV-block range `[lo, hi)` (empty
+/// when `lo >= hi`), see [`fastvideo_models::sol_attn::sink_blocks`].
+#[cfg(feature = "cuda")]
+pub fn sol_fwd_device(
+    prep: &SolPrepDev,
+    scale: f32,
+    sink_blocks: (usize, usize),
+    want_lse: bool,
+    want_route: bool,
+) -> Result<SolFwdDev> {
+    sol_fwd_device_pick(
+        prep,
+        scale,
+        sink_blocks,
+        want_lse,
+        want_route,
+        SolFwdPick::default(),
+    )
+}
+
+/// [`sol_fwd_device`] with an explicit kernel / split choice.
+#[cfg(feature = "cuda")]
+pub fn sol_fwd_device_pick(
+    prep: &SolPrepDev,
+    scale: f32,
+    sink_blocks: (usize, usize),
+    want_lse: bool,
+    want_route: bool,
+    pick: SolFwdPick,
+) -> Result<SolFwdDev> {
+    let (o, lse, route) = sol_fwd_core(
+        &prep.qb,
+        &prep.kb,
+        &prep.vb,
+        prep,
+        scale,
+        sink_blocks,
+        false,
+        want_lse,
+        want_route,
+        pick,
+    )?;
+    let SolOut::F32(out) = o else {
+        return Err(TensorError::Message("sol_fwd: expected an f32 output".into()));
+    };
+    Ok(SolFwdDev { out, lse, route })
+}
+
+/// Fused Sol-Attn on f32 BHSD `[bh, T, 128]` q/k/v: prep + forward,
 /// four (five for exact thresholds) launches, no host traffic.
 #[cfg(feature = "cuda")]
 #[allow(clippy::too_many_arguments)]
@@ -3280,8 +3509,9 @@ pub fn sol_fused_device(
     Ok(sol_fwd_device(&prep, p.scale, sinks, false, false)?.out)
 }
 
-/// Fused Sol-Attn on bf16 BHSD q/k/v with a bf16 output (the kernel's
-/// `out_is_bf16` store): no widening before, no cast after.
+/// Fused Sol-Attn on bf16 BHSD q/k/v with a bf16 output: the prep reads the
+/// bf16 buffers without copying them (rounding bf16 is the identity), the
+/// forward reads q/k/v in place and stores bf16 (RNE).
 #[cfg(feature = "cuda")]
 #[allow(clippy::too_many_arguments)]
 pub fn sol_fused_device_bf16(
@@ -3293,7 +3523,23 @@ pub fn sol_fused_device_bf16(
     dim: usize,
     p: &fastvideo_models::sol_attn::SolParams,
 ) -> Result<CudaSlice<half::bf16>> {
-    use fastvideo_models::sol_attn::{sink_blocks, LOG2_E};
+    sol_fused_device_bf16_pick(q, k, v, bh, tokens, dim, p, SolFwdPick::default())
+}
+
+/// [`sol_fused_device_bf16`] with an explicit kernel / split choice.
+#[cfg(feature = "cuda")]
+#[allow(clippy::too_many_arguments)]
+pub fn sol_fused_device_bf16_pick(
+    q: &CudaSlice<half::bf16>,
+    k: &CudaSlice<half::bf16>,
+    v: &CudaSlice<half::bf16>,
+    bh: usize,
+    tokens: usize,
+    dim: usize,
+    p: &fastvideo_models::sol_attn::SolParams,
+    pick: SolFwdPick,
+) -> Result<CudaSlice<half::bf16>> {
+    use fastvideo_models::sol_attn::sink_blocks;
     let dev = ctx()?;
     check(
         "sol-attn device path needs sm80+ (bf16 mma.sync)",
@@ -3301,31 +3547,13 @@ pub fn sol_fused_device_bf16(
     )?;
     let prep = sol_prep_device_bf16(q, k, v, bh, tokens, dim, p.tau, p.scale, p.thresh)?;
     let sinks = sink_blocks(tokens, p.sink_start, p.sink_tokens);
-    let nt = prep.nt;
-    let mut out = alloc(1)?;
-    let mut out_bf16 = unsafe { dev.stream.alloc::<half::bf16>((bh * tokens * SOL_HEAD_DIM).max(1)) }
-        .map_err(err)?;
-    let mut lse = alloc(1)?;
-    let mut route = unsafe { dev.stream.alloc::<u32>(1) }.map_err(err)?;
-    let (lo, hi) = if sinks.0 < sinks.1 {
-        (sinks.0.min(nt), sinks.1.min(nt))
-    } else {
-        (nt, nt)
-    };
-    let cfg = LaunchConfig {
-        grid_dim: (nt as u32, bh as u32, 1),
-        block_dim: (128, 1, 1),
-        shared_mem_bytes: 0,
-    };
-    let (out_is_bf16, has_lse, has_dbg) = (1i32, 0i32, 0i32);
-    let (t_i, nt_i, lo_i, hi_i) = (tokens as i32, nt as i32, lo as i32, hi as i32);
-    let sl2 = p.scale * LOG2_E;
-    launch!(dev.stream, &dev.kernels.sol_mma_fwd, cfg;
-        &prep.qb, &prep.kb, &prep.vb, &prep.kc, &prep.vc, &prep.thr,
-        &mut out, &mut out_bf16, &out_is_bf16, &mut lse, &has_lse, &mut route, &has_dbg,
-        &t_i, &nt_i, &lo_i, &hi_i, &sl2)
-    .map_err(err)?;
-    Ok(out_bf16)
+    let (o, _, _) = sol_fwd_core(q, k, v, &prep, p.scale, sinks, true, false, false, pick)?;
+    match o {
+        SolOut::Bf16(out) => Ok(out),
+        SolOut::F32(_) => Err(TensorError::Message(
+            "sol_fwd: expected a bf16 output".into(),
+        )),
+    }
 }
 
 /// Sol-Attn on device through the fused kernel (diag thresholds).

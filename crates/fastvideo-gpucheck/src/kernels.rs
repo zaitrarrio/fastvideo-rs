@@ -21,6 +21,8 @@ use crate::mode::Limits;
 use crate::rand_weights::randn;
 use crate::report::{Report, StageError, StageResult};
 
+mod attn2;
+
 fn dev() -> anyhow::Result<std::sync::Arc<device::DeviceContext>> {
     device::global_device().ok_or_else(|| anyhow::anyhow!("no live CUDA device"))
 }
@@ -251,11 +253,18 @@ fn ref_permute(x: &[f32], shape: &[usize], perm: &[usize]) -> Vec<f32> {
 
 /// Run one kernel group. An error inside a group becomes a failed check, so
 /// with `--keep-going` the remaining groups still run.
+///
+/// `FV_KERNEL_GROUPS=a,b,...` runs only the named groups (default: all).
 fn group(
     c: &mut Ctx<'_>,
     name: &str,
     f: impl FnOnce(&mut Ctx<'_>) -> StageResult<()>,
 ) -> StageResult<()> {
+    if let Ok(only) = std::env::var("FV_KERNEL_GROUPS") {
+        if !only.trim().is_empty() && !only.split(',').any(|g| g.trim() == name) {
+            return Ok(());
+        }
+    }
     match f(c) {
         Err(StageError::Error(e)) => c.report.check(
             format!("{name}/completed"),
@@ -2225,6 +2234,10 @@ pub fn run(report: &mut Report, lim: Limits, seed: u64) -> StageResult<()> {
         }
         Ok(())
     })?;
+
+    // Phase 3b kernels vs the kernels they replace, then real-shape timings.
+    group(&mut c, "attn2_parity", attn2::parity)?;
+    group(&mut c, "attn_bench", attn2::bench)?;
 
     group(&mut c, "conv", |c| {
         // cuDNN conv2d (patch embed, VAE resample): pad/stride variants + bias.

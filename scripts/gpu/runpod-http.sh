@@ -123,7 +123,7 @@ if [ -f /opt/fastvideo-rs/scripts/gpu/fetch-tae.sh ]; then
   echo "exit=\$?" >>"\$OUT/tae.log"
 fi
 if [ "$mode" = kernels ] || [ "$mode" = all ]; then
-  cd "\$OUT" && /opt/fastvideo-rs/target/release/fv-gpucheck --keep-going --out "\$OUT/gpucheck" kernels >"\$OUT/kernels.out" 2>&1
+  cd "\$OUT" && env ${FV_EXTRA_ENV:-} /opt/fastvideo-rs/target/release/fv-gpucheck --keep-going --out "\$OUT/gpucheck" kernels >"\$OUT/kernels.out" 2>&1
   echo "exit=\$?" >>"\$OUT/kernels.out"
   cp "\$OUT"/gpucheck/*.json "\$OUT"/ 2>/dev/null
 fi
