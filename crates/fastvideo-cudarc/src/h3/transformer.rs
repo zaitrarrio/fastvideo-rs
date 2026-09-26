@@ -1122,6 +1122,22 @@ impl Attention {
         // bf16 activations: Sol-H3's fused qk-norm + partial RoPE (f32
         // normalizer and tables, one rounding) straight from the projection.
         let fused = bf16_activations();
+        // VSA computes on f32 (super::vsa::READS_F32): the fused q/k kernel
+        // and the head splits then write the bf16 values widened, instead of
+        // bf16 tensors VSA widens again (FASTVIDEO_H3_FUSE; bit-identical).
+        #[cfg(feature = "cuda")]
+        if let AttnMode::Vsa(vsa) = mode {
+            if fused
+                && super::vsa::READS_F32
+                && fused16::fuse_enabled()
+                && !crate::wan::nvfp4::kv_enabled()
+            {
+                if let Some(out) = self.attend_vsa_f32(&packed, rope, vsa)? {
+                    drop(packed);
+                    return self.project_out(out, permutation);
+                }
+            }
+        }
         let q = phase("h3_attn_q", || {
             if fused {
                 return fused16::qk_norm_rope(
@@ -1175,7 +1191,69 @@ impl Attention {
             AttnMode::SolLayer { tau, policy } => policy.attend(&q, &k, &v, tau)?,
         };
         drop(packed);
-        let out = phase("h3_attn_out", || self.to_out.forward(&out.merge_heads()?))?;
+        self.project_out(out, permutation)
+    }
+
+    /// q/k/v (and the VSA gate) as f32 BHSD holding the bf16 path's values,
+    /// then VSA, its output rounded to bf16 as the bf16 path's `keep_dtype`
+    /// does. `None` when a piece does not apply (the caller runs that path).
+    #[cfg(feature = "cuda")]
+    fn attend_vsa_f32(
+        &self,
+        packed: &CudaTensor,
+        rope: Option<(&CudaTensor, &CudaTensor)>,
+        vsa: &super::vsa::H3Vsa,
+    ) -> Result<Option<CudaTensor>> {
+        let (heads, d) = (self.heads, self.head_dim);
+        let inner = heads * d;
+        let Some(q) = phase("h3_attn_q", || {
+            fused16::qk_norm_rope_f32(packed, &self.norm_q, rope, heads, d, 0, self.eps)
+        })?
+        else {
+            return Ok(None);
+        };
+        let Some(k) = phase("h3_attn_k", || {
+            fused16::qk_norm_rope_f32(packed, &self.norm_k, rope, heads, d, inner, self.eps)
+        })?
+        else {
+            return Ok(None);
+        };
+        let Some(v) = phase("h3_attn_v", || fused16::split_heads_f32(packed, 2 * inner, heads, d))? else {
+            return Ok(None);
+        };
+        let gate = if self.has_gate {
+            match phase("h3_attn_gate", || fused16::split_heads_f32(packed, 3 * inner, heads, d))? {
+                Some(g) => Some(g),
+                None => return Ok(None),
+            }
+        } else {
+            None
+        };
+        let out = vsa.attend(q, k, v, gate)?;
+        Ok(Some(if out.is_bf16() { out } else { out.quantize_bf16()? }))
+    }
+
+    /// `to_out` on the `[1, H, S, D]` attention output, then the Spark
+    /// inverse row gather.
+    fn project_out(
+        &self,
+        out: CudaTensor,
+        permutation: Option<&H3SolPermutation>,
+    ) -> Result<CudaTensor> {
+        let out = phase("h3_attn_out", || {
+            // An all-MXFP8 `to_out` takes the merged heads as its MXFP8
+            // activation, written by the merge (fused16::merge_heads_mx;
+            // FASTVIDEO_H3_FUSE=0 merges to bf16 and quantizes in the linear).
+            #[cfg(feature = "cuda")]
+            if bf16_activations() && self.to_out.mx_whole() {
+                if let Some(act) = fused16::merge_heads_mx(&out)? {
+                    let shape = vec![1, act.rows, self.to_out.out_dim()];
+                    drop(out);
+                    return self.to_out.forward_mx(&act, shape);
+                }
+            }
+            self.to_out.forward(&out.merge_heads()?)
+        })?;
         match permutation {
             Some(p) => phase("h3_attn_sol_gather", || p.inverse.apply(&out)),
             None => Ok(out),
@@ -1438,30 +1516,50 @@ impl Block {
     /// The block under bf16 activations with Sol-H3's fused elementwise chain
     /// ([`fused16`]); MXFP8 consumers receive their activation pre-quantized.
     #[allow(clippy::too_many_arguments)]
+    #[allow(clippy::too_many_arguments)]
     fn forward_fused(
         &self,
-        x: &CudaTensor,
+        input: BlockIn,
         rows_tab: &AdaRows,
         base: usize,
         rope: Option<(&CudaTensor, &CudaTensor)>,
         mode: AttnMode<'_>,
         eps: f32,
         slots: [usize; 6],
-    ) -> Result<CudaTensor> {
+        defer: bool,
+    ) -> Result<BlockOut> {
         let [shift_msa, scale_msa, gate_msa, shift_mlp, scale_mlp, gate_mlp] = slots;
-        let rows = x.shape[1];
-        let n = phase("h3_1_norm_msa", || {
-            fused16::norm_mod(
-                x,
-                &self.norm1,
-                rows_tab,
-                base,
-                scale_msa,
-                shift_msa,
-                eps,
-                self.attn.accepts_mx(mode),
-            )
+        let mx = self.attn.accepts_mx(mode);
+        // The previous block's last residual, when it was deferred, runs in
+        // this block's first norm kernel (fused16::gate_res_norm_mod).
+        let (x, n) = phase("h3_1_norm_msa", || match input {
+            BlockIn::Hidden(x) => {
+                let n = fused16::norm_mod(&x, &self.norm1, rows_tab, base, scale_msa, shift_msa, eps, mx)?;
+                Ok((x, n))
+            }
+            BlockIn::Pending { res, f, base: base_g } => {
+                if let Some(out) = fused16::gate_res_norm_mod(
+                    &res,
+                    &f,
+                    &self.norm1,
+                    rows_tab,
+                    base_g,
+                    gate_mlp,
+                    base,
+                    (scale_msa, shift_msa),
+                    eps,
+                    mx,
+                )? {
+                    return Ok(out);
+                }
+                let x = fused16::gate_residual(&res, &f, rows_tab, base_g, gate_mlp)?;
+                drop((res, f));
+                let n = fused16::norm_mod(&x, &self.norm1, rows_tab, base, scale_msa, shift_msa, eps, mx)?;
+                Ok((x, n))
+            }
         })?;
+        let x = &x;
+        let rows = x.shape[1];
         if let NormOut::T(t) = &n {
             crate::wan::dump::op("attn_in", t)?;
         }
@@ -1486,10 +1584,37 @@ impl Block {
         }
         let f = phase("h3_5_ffn", || self.ff.forward_in(n, rows))?;
         crate::wan::dump::op("ffn_out", &f)?;
+        if defer {
+            return Ok(BlockOut::Pending { res: x, f, base });
+        }
         phase("h3_6_residual_ffn", || {
             fused16::gate_residual(&x, &f, rows_tab, base, gate_mlp)
         })
+        .map(BlockOut::Hidden)
     }
+}
+
+/// A fused-path block's input: the residual stream, or the previous block's
+/// last residual not applied yet (`x + gate_mlp · f`, table base `base`),
+/// which the block's first norm kernel applies ([`fused16::gate_res_norm_mod`]).
+enum BlockIn {
+    Hidden(CudaTensor),
+    Pending {
+        res: CudaTensor,
+        f: CudaTensor,
+        base: usize,
+    },
+}
+
+/// What [`Block::forward_fused`] returns: the residual stream, or (deferred)
+/// the pieces of its last residual for the next block.
+enum BlockOut {
+    Hidden(CudaTensor),
+    Pending {
+        res: CudaTensor,
+        f: CudaTensor,
+        base: usize,
+    },
 }
 
 impl OffloadBlock for Block {
@@ -2112,6 +2237,9 @@ impl H3Transformer {
             crate::wan::dump::rows_strided("rope_cos", &layout.cos, stride)?;
             crate::wan::dump::rows_strided("rope_sin", &layout.sin, stride)?;
         }
+        // FASTVIDEO_H3_FUSE: the deferred last residual (see BlockIn).
+        let defer_ok = fused16::fuse_enabled() && observer.is_none() && !dump_ops;
+        let mut pending: Option<(CudaTensor, CudaTensor, usize)> = None;
         if tea == Some(true) {
             x = self.add_sol_tea_residual(x)?;
         } else {
@@ -2132,17 +2260,30 @@ impl H3Transformer {
                         other => other,
                     };
                     record_attn(step, index, &layer_mode);
-                    x = self.blocks.with(index, |block| {
+                    // A block's last residual is deferred into the next
+                    // block's first norm (one kernel) unless something reads
+                    // the block output: the observer, op dumps, the last block.
+                    let defer = defer_ok && index + 1 < self.blocks.len();
+                    let input = match pending.take() {
+                        Some((res, f, base)) => BlockIn::Pending { res, f, base },
+                        None => BlockIn::Hidden(std::mem::replace(&mut x, CudaTensor::zeros(&[0]))),
+                    };
+                    let out = self.blocks.with(index, |block| {
                         block.forward_fused(
-                            &x,
+                            input,
                             ada,
                             index * MODALITY_NUM,
                             rope,
                             layer_mode,
                             eps,
                             [SHIFT_MSA, SCALE_MSA, GATE_MSA, SHIFT_MLP, SCALE_MLP, GATE_MLP],
+                            defer,
                         )
                     })?;
+                    match out {
+                        BlockOut::Hidden(h) => x = h,
+                        BlockOut::Pending { res, f, base } => pending = Some((res, f, base)),
+                    }
                     crate::wan::dump::set_op_block(None);
                     if let Some(observe) = observer.as_mut() {
                         observe(&format!("block_{index}"), &x)?;
@@ -3097,17 +3238,21 @@ pub(crate) mod tests {
                     assert_eq!(b.attn.qkvg.quant_kind(), Some(kind));
                     assert_eq!(b.ff.ff_out.quant_kind(), Some(kind));
                 }
-                let y = b
+                let BlockOut::Hidden(y) = b
                     .forward_fused(
-                        &x,
+                        BlockIn::Hidden(x.clone()),
                         &ada,
                         0,
                         None,
                         AttnMode::Dense,
                         1e-5,
                         [SHIFT_MSA, SCALE_MSA, GATE_MSA, SHIFT_MLP, SCALE_MLP, GATE_MLP],
+                        false,
                     )
-                    .unwrap();
+                    .unwrap()
+                else {
+                    panic!("an undeferred block returns its hidden state");
+                };
                 assert!(y.is_bf16());
                 y.host_cow().unwrap().into_owned()
             })

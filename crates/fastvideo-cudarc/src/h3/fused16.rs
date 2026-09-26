@@ -208,7 +208,7 @@ pub fn qk_norm_rope(
     };
     #[cfg(feature = "cuda")]
     if crate::wan::stats::device_expected() && packed.is_device_fresh() {
-        return dev::qk_norm_rope(packed, w, rope, batch, seq, heads, d, width, col_off, eps);
+        return dev::qk_norm_rope(packed, w, rope, batch, seq, heads, d, width, col_off, eps, false);
     }
     let x = host_bf16(packed)?;
     let wh = w.host_cow()?;
@@ -237,10 +237,112 @@ pub fn qk_norm_rope(
     ))
 }
 
+/// [`qk_norm_rope`] for an f32 consumer (the VSA kernels): the same bf16
+/// values, stored widened to f32 by the kernel (no bf16 tensor, no cast).
+/// Device only.
+#[cfg(feature = "cuda")]
+#[allow(clippy::too_many_arguments)]
+pub fn qk_norm_rope_f32(
+    packed: &CudaTensor,
+    w: &CudaTensor,
+    rope: Option<(&CudaTensor, &CudaTensor)>,
+    heads: usize,
+    d: usize,
+    col_off: usize,
+    eps: f32,
+) -> Result<Option<CudaTensor>> {
+    let [batch, seq, width] = packed.shape[..] else {
+        return Ok(None);
+    };
+    if !(packed.is_bf16() && packed.is_device_fresh()) {
+        return Ok(None);
+    }
+    dev::qk_norm_rope(packed, w, rope, batch, seq, heads, d, width, col_off, eps, true).map(Some)
+}
+
+/// `split_heads_bhsd` of a bf16 projection, stored widened to f32 (exact).
+#[cfg(feature = "cuda")]
+pub fn split_heads_f32(packed: &CudaTensor, col_off: usize, heads: usize, d: usize) -> Result<Option<CudaTensor>> {
+    let [batch, seq, width] = packed.shape[..] else {
+        return Ok(None);
+    };
+    if !packed.is_bf16() || col_off + heads * d > width {
+        return Ok(None);
+    }
+    let Some(src) = packed.device_slice_bf16() else {
+        return Ok(None);
+    };
+    dev::split_heads_f32(src, batch, seq, heads, d, width, col_off).map(Some)
+}
+
 /// Step 3 into MXFP8 for the down projection (device only).
 #[cfg(feature = "cuda")]
 pub fn swiglu_mx(h: &CudaTensor) -> Result<Option<quant::MxAct>> {
     dev::swiglu_mx(h)
+}
+
+thread_local! {
+    static FUSE_OVERRIDE: std::cell::Cell<Option<bool>> = const { std::cell::Cell::new(None) };
+}
+
+/// `FASTVIDEO_H3_FUSE` (default on): the Phase 3c fusions on top of the
+/// Sol-H3 chain above — the head merge written straight into `to_out`'s
+/// MXFP8 activation ([`merge_heads_mx`]) and a block's last residual fused
+/// with the next block's norm ([`gate_res_norm_mod`]). Both are
+/// bit-identical to the ops they replace; `=0` runs those ops.
+pub fn fuse_enabled() -> bool {
+    if let Some(v) = FUSE_OVERRIDE.with(|c| c.get()) {
+        return v;
+    }
+    static ENV: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ENV.get_or_init(|| crate::wan::envflag::bool_flag("FASTVIDEO_H3_FUSE", true))
+}
+
+/// Run `f` with [`fuse_enabled`] forced on or off (parity checks).
+pub fn with_fuse<R>(on: bool, f: impl FnOnce() -> R) -> R {
+    let prev = FUSE_OVERRIDE.with(|c| c.replace(Some(on)));
+    let out = f();
+    FUSE_OVERRIDE.with(|c| c.set(prev));
+    out
+}
+
+/// `merge_heads(out)` as the MXFP8 activation of a linear over `heads * d`
+/// columns: the bytes `mxfp8_quantize` writes for the merged bf16 tensor.
+/// `out` is `[1, H, S, D]` device bf16; `None` when that does not hold or the
+/// fusion is off.
+#[cfg(feature = "cuda")]
+pub fn merge_heads_mx(out: &CudaTensor) -> Result<Option<quant::MxAct>> {
+    if !fuse_enabled() {
+        return Ok(None);
+    }
+    dev::merge_heads_mx(out)
+}
+
+/// A block's last residual (step 5, `bf16(res + bf16(gate[idx + base_g] *
+/// branch))`) and the next block's step 1 on the stored result (table rows
+/// `idx + base_n`) in one kernel: `(hidden, normed)`. Device only; `None`
+/// when it does not apply (the caller runs [`gate_residual`] and
+/// [`norm_mod`]).
+#[allow(clippy::too_many_arguments)]
+pub fn gate_res_norm_mod(
+    res: &CudaTensor,
+    branch: &CudaTensor,
+    w: &CudaTensor,
+    rows: &AdaRows,
+    base_g: usize,
+    gate_slot: usize,
+    base_n: usize,
+    scale_shift: (usize, usize),
+    eps: f32,
+    mx: bool,
+) -> Result<Option<(CudaTensor, NormOut)>> {
+    #[cfg(feature = "cuda")]
+    if fuse_enabled() && device_ok(res, rows) && res.is_bf16() && res.device_slice_bf16().is_some() && branch.shape == res.shape {
+        return dev::gate_res_norm_mod(res, branch, w, rows, base_g, gate_slot, base_n, scale_shift, eps, mx)
+            .map(Some);
+    }
+    let _ = (res, branch, w, rows, base_g, gate_slot, base_n, scale_shift, eps, mx);
+    Ok(None)
 }
 
 // `launch!` names `super::stats` / `super::device` from its call site.
@@ -415,6 +517,7 @@ mod dev {
         width: usize,
         col_off: usize,
         eps: f32,
+        widen: bool,
     ) -> Result<CudaTensor> {
         if d == 0 || d > 1024 || col_off + heads * d > width {
             return Err(msg(format!(
@@ -434,8 +537,8 @@ mod dev {
             operand(&sin)?.ok_or_else(|| msg("rope sin"))?,
         );
         let n = batch * heads * seq * d;
-        let mut out = OutBuf::new(n, true)?;
-        let (op, o16) = (out.ptr(), out.is16());
+        let mut out = OutBuf::new(n, !widen)?;
+        let (op, o16) = (out.ptr(), if widen { 2 } else { out.is16() });
         let threads = d.next_multiple_of(32) as u32;
         let cfg = cudarc::driver::LaunchConfig {
             grid_dim: ((batch * seq * heads).max(1) as u32, 1, 1),
@@ -448,6 +551,101 @@ mod dev {
             &v[0], &v[1], &v[2], &v[3], &v[4], &v[5], &v[6], &eps)
         .map_err(err)?;
         out.into_tensor(vec![batch, heads, seq, d])
+    }
+
+    pub(super) fn split_heads_f32(
+        src: &cudarc::driver::CudaSlice<half::bf16>,
+        batch: usize,
+        seq: usize,
+        heads: usize,
+        d: usize,
+        width: usize,
+        col_off: usize,
+    ) -> Result<CudaTensor> {
+        let dev = global_device().ok_or_else(|| msg("no device"))?;
+        let n = batch * heads * seq * d;
+        let mut out = OutBuf::new(n, false)?;
+        let (op, o16) = (out.ptr(), out.is16());
+        let (sp, s16) = (ptr(src), 1i32);
+        let v = [n, seq, heads, d, width, col_off].map(|u| u as i64);
+        launch!(dev.stream, &dev.kernels.mx_split_heads, cfg_n(n);
+            &sp, &s16, &op, &o16, &v[0], &v[1], &v[2], &v[3], &v[4], &v[5])
+        .map_err(err)?;
+        out.into_tensor(vec![batch, heads, seq, d])
+    }
+
+    pub(super) fn merge_heads_mx(out: &CudaTensor) -> Result<Option<MxAct>> {
+        let [1, heads, seq, d] = out.shape[..] else {
+            return Ok(None);
+        };
+        let k = heads * d;
+        if k == 0 || !k.is_multiple_of(32) || !out.is_bf16() {
+            return Ok(None);
+        }
+        let Some(o) = out.device_slice_bf16() else {
+            return Ok(None);
+        };
+        let dev = global_device().ok_or_else(|| msg("no device"))?;
+        let mut act = MxAct::alloc(seq, k)?;
+        let (qp, sp) = (ptr_mut(&mut act.q), ptr_mut(&mut act.s));
+        let op = ptr(o);
+        let (seq_i, heads_i, d_i) = (seq as i32, heads as i32, d as i32);
+        launch!(dev.stream, &dev.kernels.fvf_merge_heads_mx, cfg_rows(seq);
+            &op, &qp, &sp, &seq_i, &heads_i, &d_i)
+        .map_err(err)?;
+        Ok(Some(act))
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn gate_res_norm_mod(
+        res: &CudaTensor,
+        branch: &CudaTensor,
+        w: &CudaTensor,
+        rows: &AdaRows,
+        base_g: usize,
+        gate_slot: usize,
+        base_n: usize,
+        (scale_slot, shift_slot): (usize, usize),
+        eps: f32,
+        mx: bool,
+    ) -> Result<(CudaTensor, NormOut)> {
+        let dim = rows.hidden;
+        let n = res.numel() / dim;
+        let dev = global_device().ok_or_else(|| msg("no device"))?;
+        let rp = ptr(res.device_slice_bf16().ok_or_else(|| msg("h3 fused: residual off device"))?);
+        let bo = operand(branch)?.ok_or_else(|| msg("h3 fused: branch off device"))?;
+        let w = weight_f32(w)?;
+        let wo = operand(&w)?.ok_or_else(|| msg("h3 fused: norm weight"))?;
+        let (to, ip) = table_ptr(rows)?;
+        let mx = mx && dim.is_multiple_of(32);
+        let mut hidden = OutBuf::new(n * dim, true)?;
+        let mut out16 = OutBuf::new(if mx { 1 } else { n * dim }, true)?;
+        let mut act = if mx { Some(MxAct::alloc(n, dim)?) } else { None };
+        let (hp, op) = (hidden.ptr(), out16.ptr());
+        let (qp, sp) = match act.as_mut() {
+            Some(a) => (ptr_mut(&mut a.q), ptr_mut(&mut a.s)),
+            None => (op, op),
+        };
+        let (bg, gs, bn, ss, sh) = (
+            base_g as i64,
+            gate_slot as i32,
+            base_n as i64,
+            scale_slot as i32,
+            shift_slot as i32,
+        );
+        let (rows_i, dim_i, mx_i) = (n as i32, dim as i32, i32::from(mx));
+        launch!(dev.stream, &dev.kernels.fvf_h3_gate_res_norm_mod, cfg_rows(n);
+            &rp, &bo.ptr, &bo.is16, &to.ptr, &ip, &bg, &gs, &bn, &ss, &sh, &wo.ptr,
+            &hp, &op, &qp, &sp, &rows_i, &dim_i, &eps, &mx_i)
+        .map_err(err)?;
+        let hidden = hidden.into_tensor(res.shape.clone())?;
+        Ok((
+            hidden,
+            match act {
+                Some(a) => NormOut::Mx(a),
+                None => NormOut::T(out16.into_tensor(res.shape.clone())?),
+            },
+        ))
     }
 
     pub(super) fn swiglu_mx(h: &CudaTensor) -> Result<Option<MxAct>> {

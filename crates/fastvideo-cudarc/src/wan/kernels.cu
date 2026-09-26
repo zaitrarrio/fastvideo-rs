@@ -4011,7 +4011,10 @@ extern "C" __global__ void h3_qk_norm_rope(
         float rot = p < half ? -pn : pn;
         o = normed * cs[(long)s * r + p] + rot * sn[(long)s * r + p];
     }
-    fv_st(out, (((long)b * heads + h) * seq + s) * d + p, o16, o);
+    long oi = (((long)b * heads + h) * seq + s) * d + p;
+    // o16 == 2: the bf16 value stored widened, for an f32 consumer (VSA).
+    if (o16 == 2) ((float*)out)[oi] = fv_r16(o);
+    else fv_st(out, oi, o16, o);
 }
 // SwiGLU straight to MXFP8 (`_swiglu_mxfp8_kernel`): value * silu(gate) in f32,
 // rounded to bf16, then block-quantized. One block per row; `half % 32 == 0`.
@@ -4452,3 +4455,190 @@ extern "C" __global__ void ltxv_out_unpatch(
     out[((((long)t0 + tl) * CO + c) * HO + ho) * WO + wo] = fv_bf16_rne(v);
 }
 // ==== endregion: ltx video vae ====
+
+// ==== region: DiT block fusions (Phase 3c; ltx2/fuse.rs, h3/transformer.rs) ====
+// Each kernel below replaces a chain of the bf16-activation kernels above
+// (`mx_rms_norm`, `mx_binary`, `mx_unary`, `mx_split_heads`, `mx_rope_half`,
+// `mx_merge_heads`, `mx_residual_gate`) and replays that chain's rounding
+// points exactly: the same f32 expressions (products and sums spelled with
+// explicit `__f*_rn` / `fmaf` where the unfused kernel's contraction was read
+// off its PTX), the same row statistic (per-thread FMA partial sums over a
+// `ROW_BLOCK_THREADS` stride, the fixed `fv_block_sum` tree, `rsqrtf`), a bf16
+// rounding wherever the unfused chain stored a bf16 tensor. So the fused
+// output is bit-identical to the unfused one (`fv-gpucheck kernels`,
+// group `dit_fusion`), and FASTVIDEO_LTX_FUSE=0 / FASTVIDEO_H3_FUSE=0 fall
+// back to the chain. One block of ROW_BLOCK_THREADS threads per token row.
+
+// `mx_rms_norm`'s normalizer for one row.
+__device__ __forceinline__ float fvf_row_rms(const void* x, int x16, long base, int width, float eps, float* sm) {
+    float local = 0.0f;
+    for (int j = threadIdx.x; j < width; j += blockDim.x) {
+        float v = fv_ld(x, base + j, x16);
+        local = fmaf(v, v, local);
+    }
+    return rsqrtf(fv_block_sum(local, sm) / (float)width + eps);
+}
+
+// LTX-2 q/k: RMSNorm across all heads (`rms_norm_across_heads`, [inner]
+// weight), head split to BHSD, then the split rotary (`DeviceRope::apply`:
+// rotate_half inside each head, head-major [H*S, r] f32 tables). Unfused:
+// mx_rms_norm -> bf16, mx_split_heads, mx_rope_half -> bf16.
+// `use_rope` = 0 is the text cross-attention (norm + split only).
+extern "C" __global__ void fvf_ltx_qk_norm_rope(
+    const void* x, int x16, const void* w, int w16, const float* cs, const float* sn,
+    int use_rope, unsigned short* out, int seq, int heads, int d, int r, float eps
+) {
+    extern __shared__ float sdata[];
+    int s = blockIdx.x;
+    if (s >= seq) return;
+    int inner = heads * d;
+    long base = (long)s * inner;
+    float rr = fvf_row_rms(x, x16, base, inner, eps, sdata);
+    int half = r / 2;
+    for (int j = threadIdx.x; j < inner; j += blockDim.x) {
+        int h = j / d;
+        int p = j - h * d;
+        float n = fv_r16(__fmul_rn(__fmul_rn(fv_ld(x, base + j, x16), rr), fv_ld(w, j, w16)));
+        float o = n;
+        if (use_rope && p < r) {
+            int q = p < half ? p + half : p - half;
+            int jq = h * d + q;
+            float np = fv_r16(__fmul_rn(__fmul_rn(fv_ld(x, base + jq, x16), rr), fv_ld(w, jq, w16)));
+            float other = p < half ? -np : np;
+            long t = ((long)h * seq + s) * r + p;
+            o = fmaf(n, cs[t], __fmul_rn(other, sn[t]));
+        }
+        out[((long)h * seq + s) * d + p] = fv_bf16_rne(o);
+    }
+}
+
+// LTX-2 modulated RMSNorm, optionally after a gated residual, all bf16:
+//   res_mode 0: h = x;  1: h = r16(x + r16(u * g[grow]));  2: h = r16(x + u)
+//     (residual_gate_add_e / text-cross gate + add / plain add); h -> hidden.
+//   mode 0 (`rms_adaln`):  r16(r16(h * rs * r16(1 + scale)) + shift)
+//   mode 1 (norm, then `scale_shift`): r16(r16(r16(h * rs * w) * r16(1 + scale)) + shift)
+// `tab` is a bf16 [rows, width] modulation table (scale / shift rows);
+// `gtab` a bf16 [rows, width] gate table.
+extern "C" __global__ void fvf_ltx_res_norm_mod(
+    const unsigned short* x, const unsigned short* u, const unsigned short* gtab, int grow, int res_mode,
+    const void* w, int w16, const unsigned short* tab, int scale_row, int shift_row, int mode,
+    unsigned short* hidden, unsigned short* out, int rows, int width, float eps
+) {
+    extern __shared__ float sdata[];
+    int row = blockIdx.x;
+    if (row >= rows) return;
+    long base = (long)row * width;
+    const unsigned short* sc = tab + (long)scale_row * width;
+    const unsigned short* sh = tab + (long)shift_row * width;
+    float rs;
+    if (res_mode == 0) {
+        rs = fvf_row_rms(x, 1, base, width, eps, sdata);
+    } else {
+        // mx_residual_gate / mx_binary, stored; the norm reads the stored value.
+        float local = 0.0f;
+        for (int j = threadIdx.x; j < width; j += blockDim.x) {
+            float a = fv_bf16_to_f32(x[base + j]);
+            float b = fv_bf16_to_f32(u[base + j]);
+            if (res_mode == 1) b = fv_r16(__fmul_rn(b, fv_bf16_to_f32(gtab[(long)grow * width + j])));
+            unsigned short hb = fv_bf16_rne(__fadd_rn(a, b));
+            hidden[base + j] = hb;
+            float v = fv_bf16_to_f32(hb);
+            local = fmaf(v, v, local);
+        }
+        rs = rsqrtf(fv_block_sum(local, sdata) / (float)width + eps);
+    }
+    const unsigned short* src = res_mode == 0 ? x : hidden;
+    for (int j = threadIdx.x; j < width; j += blockDim.x) {
+        float v = __fmul_rn(fv_bf16_to_f32(src[base + j]), rs);
+        float s1 = fv_r16(__fadd_rn(fv_bf16_to_f32(sc[j]), 1.0f));
+        float n;
+        if (mode == 0) {
+            n = fv_r16(__fmul_rn(v, s1));
+        } else {
+            n = fv_r16(__fmul_rn(v, fv_ld(w, j, w16)));
+            n = fv_r16(__fmul_rn(n, s1));
+        }
+        out[base + j] = fv_bf16_rne(__fadd_rn(n, fv_bf16_to_f32(sh[j])));
+    }
+}
+
+// LTX-2.5 per-head output gates and the head merge (`apply_head_gates` +
+// `merge_heads`): o [H, S, D] bf16, logits [S, H] bf16;
+// out[s, h*D + p] = r16(o * r16(2 * r16(sigmoid(logit[s, h])))).
+extern "C" __global__ void fvf_ltx_gate_merge(
+    const unsigned short* o, const unsigned short* logits, unsigned short* out,
+    long n, int seq, int heads, int d
+) {
+    long i = IDX();
+    if (i >= n) return;
+    long hd = (long)heads * d;
+    long s = i / hd;
+    int j = (int)(i - s * hd);
+    int h = j / d;
+    int p = j - h * d;
+    float l = fv_bf16_to_f32(logits[s * heads + h]);
+    float g = fv_r16(1.0f / (1.0f + expf(-l)));
+    g = fv_r16(__fmul_rn(g, 2.0f));
+    float v = fv_bf16_to_f32(o[((long)h * seq + s) * d + p]);
+    out[i] = fv_bf16_rne(__fmul_rn(v, g));
+}
+
+// H3: `merge_heads` of the attention output [H, S, D] (bf16) straight into
+// the MXFP8 activation of an all-MXFP8 `to_out` — the bytes `mxfp8_quantize`
+// writes for the merged bf16 tensor (same groups, same lanes). One block per
+// row; `heads * d % 32 == 0`.
+extern "C" __global__ void fvf_merge_heads_mx(
+    const unsigned short* o, unsigned char* q, unsigned char* qs, int seq, int heads, int d
+) {
+    int s = blockIdx.x;
+    if (s >= seq) return;
+    int k = heads * d;
+    long column_blocks = ((long)k / 32 + 3) / 4;
+    for (int j0 = 0; j0 < k; j0 += blockDim.x) {
+        if ((j0 + (int)(threadIdx.x & ~31u)) >= k) continue;
+        int j = j0 + threadIdx.x;
+        int h = j / d;
+        float v = fv_bf16_to_f32(o[((long)h * seq + s) * d + (j - h * d)]);
+        fv_mx_store_group(v, s, j, k, q, qs, column_blocks);
+    }
+}
+
+// H3: a block's last residual as eager torch runs it (`h3_gate_residual`:
+// res + bf16(gate[idx + base_g] * branch), stored bf16) and the NEXT block's
+// `h3_norm_mod` of that stored hidden (table rows idx + base_n), bf16 or
+// MXFP8. The normalizer and output expressions are h3_norm_mod's.
+extern "C" __global__ void fvf_h3_gate_res_norm_mod(
+    const unsigned short* res, const void* br, int b16, const float* tab, const unsigned int* idx,
+    long base_g, int gate_slot, long base_n, int scale_slot, int shift_slot, const float* w,
+    unsigned short* hidden, unsigned short* out, unsigned char* q, unsigned char* qs,
+    int rows, int dim, float eps, int mx
+) {
+    extern __shared__ float sdata[];
+    int row = blockIdx.x;
+    if (row >= rows) return;
+    long xb = (long)row * dim;
+    const float* g = tab + (((long)idx[row] + base_g) * 6 + gate_slot) * dim;
+    long tb = ((long)idx[row] + base_n) * 6;
+    const float* sc = tab + (tb + scale_slot) * dim;
+    const float* sh = tab + (tb + shift_slot) * dim;
+    float local = 0.0f;
+    for (int j = threadIdx.x; j < dim; j += blockDim.x) {
+        float p = fv_r16(__fmul_rn(g[j], fv_ld(br, xb + j, b16)));
+        unsigned short hb = fv_bf16_rne(__fadd_rn(fv_bf16_to_f32(res[xb + j]), p));
+        hidden[xb + j] = hb;
+        float v = fv_bf16_to_f32(hb);
+        local = fmaf(v, v, local);
+    }
+    float r = __frsqrt_rn(fv_block_sum(local, sdata) / (float)dim + eps);
+    long column_blocks = ((long)dim / 32 + 3) / 4;
+    // Each thread re-reads only the hidden entries it stored above.
+    for (int j0 = 0; j0 < dim; j0 += blockDim.x) {
+        int j = j0 + threadIdx.x;
+        if (mx && (j0 + (int)(threadIdx.x & ~31u)) >= dim) continue;
+        float v = 0.0f;
+        if (j < dim) v = fv_r16(fmaf(__fmul_rn(__fmul_rn(fv_bf16_to_f32(hidden[xb + j]), r), w[j]), sc[j], sh[j]));
+        if (mx) fv_mx_store_group(v, row, j, dim, q, qs, column_blocks);
+        else if (j < dim) out[xb + j] = fv_bf16_rne(v);
+    }
+}
+// ==== endregion: DiT block fusions ====

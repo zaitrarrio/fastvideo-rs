@@ -27,6 +27,8 @@ mod hunyuan15_stage;
 mod kernels;
 #[cfg(feature = "cuda")]
 mod kernels_fp8;
+#[cfg(feature = "cuda")]
+mod kernels_fuse;
 mod llm_oracle;
 mod lpips;
 mod ltx2_stage;
@@ -188,6 +190,10 @@ enum Cmd {
     Kernels {
         #[arg(long, default_value_t = 17)]
         seed: u64,
+        /// Comma-separated kernel groups to run (default: every group), e.g.
+        /// `--groups dit_fusion,bf16_act`.
+        #[arg(long)]
+        groups: Option<String>,
     },
     /// Time the DiT linears under each cuBLAS math option and report which
     /// ones this GPU + cuBLAS build actually honors.
@@ -564,7 +570,9 @@ fn run(cli: &Cli, report: &mut Report) -> StageResult<()> {
             )
         }
         #[cfg(feature = "cuda")]
-        Cmd::Kernels { seed } => kernels::run(report, mode::limits(cli.mode), *seed),
+        Cmd::Kernels { seed, groups } => {
+            kernels::run(report, mode::limits(cli.mode), *seed, groups.as_deref())
+        }
         #[cfg(feature = "cuda")]
         Cmd::GemmProbe => mathprobe::run(report),
         Cmd::Model { device, seed, refs } => {

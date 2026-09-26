@@ -310,6 +310,11 @@ fn dequant_bhsd(t: &CudaTensor, rule: ScaleRule, smooth: bool) -> Result<Option<
     dequant_beforehand(&smoothed, rule).map(Some)
 }
 
+/// Whether [`maybe_kv`] changes K/V (the NVFP4 KV flag is set).
+pub fn kv_enabled() -> bool {
+    nvfp4::from_env().is_some()
+}
+
 /// Apply [`kv_for_attention`] when the flag is on; otherwise the inputs.
 pub fn maybe_kv(k: CudaTensor, v: CudaTensor) -> Result<(CudaTensor, CudaTensor)> {
     Ok(match kv_for_attention(&k, &v)? {

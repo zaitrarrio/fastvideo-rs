@@ -154,6 +154,12 @@ impl H3TilePlan {
 /// The block mask of one head, "exempt" mode: `mask[i * n + j]` says whether
 /// query tile `i` attends key tile `j`. `scores` is that head's `[n, n]`
 /// pooled score matrix. Ties go to the lower tile index, as the device top-k.
+/// Whether the device VSA path computes on f32 q/k/v/gate (`attend_device`
+/// widens bf16 inputs). The H3 attention then writes them as f32 straight from
+/// its fused q/k kernel and head split (FASTVIDEO_H3_FUSE), which saves the
+/// widening casts; with kernels that read bf16 this must become `false`.
+pub const READS_F32: bool = true;
+
 pub fn block_mask(scores: &[f32], prefix_tiles: usize, k_vid: usize) -> Vec<bool> {
     let n = (scores.len() as f64).sqrt() as usize;
     let n_video = n - prefix_tiles;
@@ -433,7 +439,7 @@ impl H3Vsa {
         }
         #[cfg(feature = "cuda")]
         if let Some(device) = &self.device {
-            // The VSA kernels read f32. bf16-stored activations
+            // The VSA kernels read f32 ([`READS_F32`]). bf16-stored activations
             // (`FASTVIDEO_BF16_ACT`) are widened on the device — never a host
             // round trip — and the result is stored bf16 again.
             let like = q.clone();
@@ -606,10 +612,11 @@ impl H3Vsa {
                 q_base += g;
             }
         }
-        let out = CudaTensor::from_device_slice(out, vec![1, bh, seq, dim])?;
+        let mut out = out;
         let prefix = self.plan.prefix_rows;
         if topk == n || prefix == 0 {
-            return Ok(out); // every query already saw every tile
+            // every query already saw every tile
+            return CudaTensor::from_device_slice(out, vec![1, bh, seq, dim]);
         }
 
         // 5. Text / audio query rows are dense: recompute those few rows
@@ -632,6 +639,16 @@ impl H3Vsa {
                     .quantize_bf16()?;
                 dense = dense.quantize_bf16()?.add(&term)?.quantize_bf16()?.to_f32_act()?;
             }
+            // The dense rows go straight into the head of `out` (the fine
+            // stage left them for this), not through a narrow + cat of the
+            // whole output (FASTVIDEO_H3_FUSE; the same bytes either way).
+            if super::fused16::fuse_enabled() && !dense.is_bf16() {
+                if let Some(d) = dense.device_slice() {
+                    ops::block_copy_device(d, &mut out, bh, prefix * dim, prefix * dim, seq * dim, 0, 0)?;
+                    return CudaTensor::from_device_slice(out, vec![1, bh, seq, dim]);
+                }
+            }
+            let out = CudaTensor::from_device_slice(out, vec![1, bh, seq, dim])?;
             CudaTensor::cat(&[&dense, &out.narrow(2, prefix, seq - prefix)?], 2)
         })
     }

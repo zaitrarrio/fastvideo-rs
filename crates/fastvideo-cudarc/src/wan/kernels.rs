@@ -179,6 +179,12 @@ kernel_fns!(
     ltxv_latent_in,
     ltxv_d2s_bias,
     ltxv_out_unpatch,
+    // ---- DiT block fusions (appended; see the end of kernels.cu) ----
+    fvf_ltx_qk_norm_rope,
+    fvf_ltx_res_norm_mod,
+    fvf_ltx_gate_merge,
+    fvf_merge_heads_mx,
+    fvf_h3_gate_res_norm_mod,
 );
 
 /// NVRTC-compile the kernel module for `sm_major.sm_minor` without touching a
