@@ -127,7 +127,8 @@ pub fn top_k<T: Clone>(items: &[T], k: usize, key: impl Fn(&T) -> u64) -> Vec<T>
 
 /// Where a kernel's time goes, for aiming fusion / bf16 work.
 pub fn category(name: &str) -> &'static str {
-    let n = name.to_ascii_lowercase();
+    // `bcast` (broadcast elementwise) must not read as a dtype cast.
+    let n = name.to_ascii_lowercase().replace("bcast", "bcst");
     let any = |keys: &[&str]| keys.iter().any(|k| n.contains(k));
     // Attention first: cuDNN / flash kernels can carry an `sm90_`-style tag.
     if any(&[
@@ -172,9 +173,9 @@ pub fn category(name: &str) -> &'static str {
     ]) {
         "layout"
     } else if any(&[
-        "norm", "mod", "adaln", "rope", "rotary", "gate", "swiglu", "gelu", "silu", "elem",
-        "bcast", "binary", "unary", "add", "mul", "sub", "lincomb", "scalar", "residual", "bias",
-        "sigmoid", "tanh", "snake", "clamp", "abs", "act", "scale",
+        "norm", "mod", "adaln", "rope", "rotary", "gate", "swiglu", "gelu", "silu", "elem", "bcst",
+        "binary", "unary", "add", "mul", "sub", "lincomb", "scalar", "residual", "bias", "sigmoid",
+        "tanh", "snake", "clamp", "abs", "act", "scale",
     ]) {
         "norm_modulate_elementwise"
     } else {
@@ -1029,6 +1030,7 @@ mod tests {
         assert_eq!(category("vsa_fused_attn"), "attention");
         assert_eq!(category("flash_attn_f32"), "attention");
         assert_eq!(category("cast_f32_bf16"), "cast");
+        assert_eq!(category("bcast_binary"), "norm_modulate_elementwise");
         assert_eq!(category("h3_norm_mod"), "norm_modulate_elementwise");
         assert_eq!(category("h3v_swiglu_bf16"), "norm_modulate_elementwise");
         assert_eq!(category("split_heads_bhsd"), "layout");
