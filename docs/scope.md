@@ -249,6 +249,12 @@ Weights: `--weights`, `FASTVIDEO_WEIGHTS`, or the Hugging Face snapshot.
 | `FASTVIDEO_LTX2_FBCACHE` | LTX-2.5 stage-1 first-block cache |
 | `FASTVIDEO_LTX2_STAGE1_CACHE` | LTX-2.3 stage-1 SCSP (res2s calls 16–28 of 29) |
 | `FASTVIDEO_LTX2_MIDPOINT_PRUNE` | LTX-2.3 stage-2 feature-norm prune |
+| `FASTVIDEO_LTX_VAE_FAST` | LTX conv VAE tiled decode on the channels-last bf16 decoder (default on); `0` restores the f32 streaming decoder |
+| `FASTVIDEO_LTX_VAE_CHECK` | Decode the process's first LTX VAE tile both ways and log rel_l2 and both times |
+| `FASTVIDEO_LTX_VAE_CONV_ALGO` | `tune`: time every cuDNN forward algorithm per conv shape (default: cuDNN's heuristic) |
+| `FASTVIDEO_LTX_VAE_CHUNK_FRAMES` / `FASTVIDEO_LTX_VAE_CHUNK_MB` | Output frames (16) / MB (1024) per channels-last conv launch |
+| `FASTVIDEO_LTX2_SAVE_LATENTS` | Save the decoded video latents to `<prefix>.f32` / `.shape` (for `ltx2 vae-bench --latents`) |
+| `FASTVIDEO_GPU_TRACE_DECODE` | CUPTI trace of a whole video decode (kernel time by category, GPU idle) |
 | `FASTVIDEO_H3_SOL_ATTN` | `spark` or `rtx` |
 | `FASTVIDEO_H3_SOL_CACHE` | RTX TeaCache |
 | `FASTVIDEO_H3_UPSCALER` / `FASTVIDEO_H3_LTX_ADAPTER` | Spark bridge checkpoints, if not beside the H3 weights |

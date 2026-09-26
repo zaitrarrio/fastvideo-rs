@@ -1503,27 +1503,37 @@ fn write_batches(
         if mp4 && fps > 0 && ffmpeg.is_none() {
             ffmpeg = Some(spawn_ffmpeg_rgb(&out, w, h, fps, audio)?);
         }
-        if let Some(child) = ffmpeg.as_mut() {
-            let stdin = child
-                .stdin
-                .as_mut()
-                .ok_or_else(|| PipelineError::Message("ffmpeg stdin closed".into()))?;
-            stdin
-                .write_all(&rgb)
-                .map_err(|e| PipelineError::Message(format!("ffmpeg stdin: {e}")))?;
-        }
-        let batch_paths: Vec<Result<String>> = rgb
-            .par_chunks_exact(frame_bytes)
-            .enumerate()
-            .map(|(i, frame)| {
-                let img = image::RgbImage::from_raw(w as u32, h as u32, frame.to_vec())
-                    .ok_or_else(|| PipelineError::Message("rgb buffer size mismatch".into()))?;
-                let path = dir.join(format!("frame-{:03}.png", offset + i));
-                img.save(&path)
-                    .map_err(|e| PipelineError::Message(e.to_string()))?;
-                Ok(path.to_string_lossy().into_owned())
-            })
-            .collect();
+        // Feeding ffmpeg (which blocks while x264 catches up) and encoding
+        // the batch's PNGs run side by side.
+        let feed = || -> Result<()> {
+            if let Some(child) = ffmpeg.as_mut() {
+                let stdin = child
+                    .stdin
+                    .as_mut()
+                    .ok_or_else(|| PipelineError::Message("ffmpeg stdin closed".into()))?;
+                stdin
+                    .write_all(&rgb)
+                    .map_err(|e| PipelineError::Message(format!("ffmpeg stdin: {e}")))?;
+            }
+            Ok(())
+        };
+        let pngs = || -> Vec<Result<String>> {
+            rgb.par_chunks_exact(frame_bytes)
+                .enumerate()
+                .map(|(i, frame)| {
+                    let img = image::RgbImage::from_raw(w as u32, h as u32, frame.to_vec())
+                        .ok_or_else(|| {
+                            PipelineError::Message("rgb buffer size mismatch".into())
+                        })?;
+                    let path = dir.join(format!("frame-{:03}.png", offset + i));
+                    img.save(&path)
+                        .map_err(|e| PipelineError::Message(e.to_string()))?;
+                    Ok(path.to_string_lossy().into_owned())
+                })
+                .collect()
+        };
+        let (fed, batch_paths) = rayon::join(feed, pngs);
+        fed?;
         for p in batch_paths {
             paths.push(p?);
         }
@@ -1583,7 +1593,12 @@ fn spawn_ffmpeg_rgb(
             "-shortest",
         ]);
     }
-    cmd.args(["-c:v", "libx264", "-pix_fmt", "yuv420p"])
+    // The reference's H.264 settings (ltx_pipelines media_io/encode.py
+    // `encode_video`: libx264, crf 19, preset veryfast, yuv420p); x264's
+    // default preset keeps a 4K clip's encode far behind the decode.
+    cmd.args([
+        "-c:v", "libx264", "-preset", "veryfast", "-crf", "19", "-pix_fmt", "yuv420p",
+    ])
         .arg(out)
         .stdin(std::process::Stdio::piped())
         .spawn()
