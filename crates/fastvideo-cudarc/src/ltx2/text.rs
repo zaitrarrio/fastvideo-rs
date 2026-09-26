@@ -53,6 +53,8 @@ pub struct PaddedPrompt {
 
 /// Gemma's `<pad>`.
 pub const PAD_ID: u32 = 0;
+/// Gemma's `<bos>` (`text_config.bos_token_id`, Gemma 3 and 4).
+pub const BOS_ID: u32 = 2;
 
 impl PaddedPrompt {
     /// Left-pad already-tokenised ids (special tokens included) to `max_len`,
@@ -71,8 +73,11 @@ impl PaddedPrompt {
         Ok(Self { ids: padded, real })
     }
 
-    /// `pipeline_ltx2.py:327-341`: the stripped prompt, no chat template, no
-    /// system prompt, `<bos>` prepended by the tokenizer's own post-processor.
+    /// `LTXGemmaTokenizer.tokenize_with_weights` (`ltx_core/text_encoders/
+    /// gemma/tokenizer.py:31-56`): the stripped prompt, no chat template, no
+    /// system prompt, truncated to `max_len`, and always one leading `<bos>`:
+    /// Gemma 3's post-processor emits it, Gemma 4's does not, so it is
+    /// prepended when missing (`tokenizer.py:44-46`).
     pub fn tokenize(tokenizer_json: &Path, prompt: &str, max_len: usize) -> Result<Self> {
         let path = tokenizer_json.to_str().ok_or_else(|| {
             msg(format!(
@@ -82,7 +87,7 @@ impl PaddedPrompt {
         })?;
         let (ids, _) = fastvideo_models::tokenize_prompt(path, prompt.trim(), max_len)
             .map_err(|e| msg(format!("tokenize with {}: {e}", tokenizer_json.display())))?;
-        Self::from_ids(&ids, max_len)
+        Self::from_ids(&with_bos(ids), max_len)
     }
 
     pub fn max_len(&self) -> usize {
@@ -104,6 +109,60 @@ impl PaddedPrompt {
         (0..self.ids.len())
             .map(|i| u32::from(i >= self.ids.len() - self.real))
             .collect()
+    }
+}
+
+/// Gemma hidden states the oracle compares (`scripts/gpu/upstream/
+/// oracle_dump.py` `TEXT_TAPS`): the embeddings, the first sliding layers, the
+/// first full-attention layer (5) and its neighbours, a few deeper ones and the
+/// normed last one.
+pub const DUMP_TAPS: [usize; 11] = [0, 1, 2, 5, 6, 7, 12, 24, 36, 47, 48];
+
+/// `FASTVIDEO_DUMP_DIR`: the text path stage by stage, for the first prompt
+/// encoded (docs/oracle.md): `text_input_ids`, `text_attention_mask` (the
+/// padded 1024), `text_hidden_<k>` `[n, hidden]`, `text_{video,audio}_feats`
+/// (the aggregate embeds, `[n, D]`), `text_{video,audio}_ctx_real` (the
+/// connector rows of the real tokens, which lead the context).
+pub fn dump_stages(prompt: &PaddedPrompt, stack: &HiddenStack, out: &TextContexts) -> Result<()> {
+    use crate::wan::dump;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    static DONE: AtomicBool = AtomicBool::new(false);
+    if !dump::enabled() || DONE.swap(true, Ordering::SeqCst) {
+        return Ok(());
+    }
+    let ids: Vec<f32> = prompt.ids.iter().map(|&i| i as f32).collect();
+    let mask: Vec<f32> = prompt.attention_mask().iter().map(|&m| m as f32).collect();
+    dump::host("text_input_ids", &[ids.len()], &ids)?;
+    dump::host("text_attention_mask", &[mask.len()], &mask)?;
+    for k in DUMP_TAPS {
+        if let Some(state) = stack.states.get(k) {
+            dump::host(
+                &format!("text_hidden_{k}"),
+                &[stack.tokens, stack.hidden],
+                state,
+            )?;
+        }
+    }
+    dump::tensor("text_video_feats", &out.proj)?;
+    dump::tensor("text_audio_feats", &out.audio_proj)?;
+    let n = stack.tokens;
+    for (name, t) in [
+        ("text_video_ctx_real", &out.video),
+        ("text_audio_ctx_real", &out.audio),
+    ] {
+        let w = *t.shape.last().unwrap_or(&1);
+        let rows = t.reshape(vec![t.numel() / w, w])?.narrow(0, 0, n)?;
+        dump::tensor(name, &rows)?;
+    }
+    Ok(())
+}
+
+/// `[<bos>, ...ids]` unless `ids` already starts with `<bos>`.
+pub fn with_bos(ids: Vec<u32>) -> Vec<u32> {
+    if ids.first() == Some(&BOS_ID) {
+        ids
+    } else {
+        std::iter::once(BOS_ID).chain(ids).collect()
     }
 }
 
@@ -562,6 +621,15 @@ mod tests {
         assert!(PaddedPrompt::from_ids(&[], 4).is_err());
     }
 
+    /// `tokenizer.py:44-46`: one leading `<bos>`, whatever the tokenizer's
+    /// post-processor did (Gemma 4's adds none).
+    #[test]
+    fn a_missing_bos_is_prepended_once() {
+        assert_eq!(with_bos(vec![7, 9]), vec![BOS_ID, 7, 9]);
+        assert_eq!(with_bos(vec![BOS_ID, 7]), vec![BOS_ID, 7]);
+        assert_eq!(with_bos(vec![]), vec![BOS_ID]);
+    }
+
     #[test]
     fn each_state_is_normalised_by_its_own_mean_and_range() {
         // 2 tokens × 3 channels × 2 states, interleaved [t, c, l].
@@ -739,6 +807,7 @@ mod tests {
                     kv_heads: None,
                     kv_head_dim: None,
                     partial_rotary: None,
+                    proportional: false,
                 },
                 LayerAttn::global(1e6, 8.0),
             ],
@@ -746,6 +815,8 @@ mod tests {
             embed_key: "lm.embed.weight".into(),
             final_norm_key: "lm.norm.weight".into(),
             attention_k_eq_v: false,
+            v_norm: false,
+            layer_scalar: false,
         };
         let prompt = PaddedPrompt::from_ids(&[2, 7, 9, 4], 32).unwrap();
         let streamed = HiddenStack::encode(&weights(), &cfg, &prompt).unwrap();

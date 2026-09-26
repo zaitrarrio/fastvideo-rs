@@ -1148,8 +1148,17 @@ case "$FAMILY" in
         oracle_diff "oracle-$target-f32-diff" "$ref/dump" "$ours-f32"
         oracle_diff "oracle-$target-bf16-vs-f32" "$ours-f32" "$ours"
       fi
+      # FV_ORACLE_OWN_TEXT=1 (LTX): ours again on our own text contexts
+      # (FASTVIDEO_INJECT_TEXT=0, noise still injected) -- the end-to-end
+      # effect of the text path -- against the reference and against the
+      # text-injected run.
+      if [[ "${FV_ORACLE_OWN_TEXT:-0}" == 1 && "$target" == ltx25-* ]]; then
+        oracle_run "oracle-$target-owntext" "$ours-owntext" FASTVIDEO_INJECT_TEXT=0
+        oracle_diff "oracle-$target-owntext-diff" "$ref/dump" "$ours-owntext"
+        oracle_diff "oracle-$target-owntext-vs-injected" "$ours" "$ours-owntext"
+      fi
       # The dumps are hundreds of MB each; the report keeps the numbers.
-      rm -rf "$ours" "$ours-f32" "$ref"
+      rm -rf "$ours" "$ours-f32" "$ours-owntext" "$ref"
     done
     ;;
   writer)

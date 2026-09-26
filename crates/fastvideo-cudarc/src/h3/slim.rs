@@ -170,6 +170,8 @@ mod tests {
             embed_key: "model.language_model.embed_tokens.weight".into(),
             final_norm_key: "model.language_model.norm.weight".into(),
             attention_k_eq_v: false,
+            v_norm: false,
+            layer_scalar: false,
         }
     }
 

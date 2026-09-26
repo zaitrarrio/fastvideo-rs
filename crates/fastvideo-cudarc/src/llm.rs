@@ -184,8 +184,17 @@ pub struct LayerAttn {
     pub kv_heads: Option<usize>,
     pub kv_head_dim: Option<usize>,
     /// Fraction of each head width that gets RoPE (`rope_half` table width); the
-    /// tail passes through. Gemma-4 full layers use 0.25 on `global_head_dim`.
+    /// tail passes through (GLM-Image). With [`Self::proportional`] it is the
+    /// fraction of rotated *angles* instead.
     pub partial_rotary: Option<f64>,
+    /// transformers' `rope_type="proportional"` (`modeling_rope_utils.py`
+    /// `_compute_proportional_rope_parameters`, Gemma-4 full-attention
+    /// layers): the table spans the whole head, the first
+    /// `floor(partial_rotary · head_dim / 2)` angles use
+    /// `theta^(-2k / head_dim)` and the rest are 0, so `rotate_half` over the
+    /// full head rotates channel pairs `(k, k + head_dim/2)` for the rotated
+    /// angles and leaves every other channel alone.
+    pub proportional: bool,
 }
 
 impl LayerAttn {
@@ -199,6 +208,7 @@ impl LayerAttn {
             kv_heads: None,
             kv_head_dim: None,
             partial_rotary: None,
+            proportional: false,
         }
     }
 
@@ -212,17 +222,28 @@ impl LayerAttn {
             kv_heads: None,
             kv_head_dim: None,
             partial_rotary: None,
+            proportional: false,
         }
     }
 
     /// RoPE table width for a head of `head_dim` channels.
     pub fn rotary_width(&self, head_dim: usize) -> usize {
         match self.partial_rotary {
+            Some(_) if self.proportional => head_dim,
             Some(f) => {
                 let r = (head_dim as f64 * f).round() as usize;
                 r.max(2) & !1
             }
             None => head_dim,
+        }
+    }
+
+    /// Angles of the table that actually rotate: all of them, except under
+    /// [`Self::proportional`] (`int(partial_rotary * head_dim // 2)`).
+    pub fn rotated_angles(&self, head_dim: usize) -> usize {
+        match self.partial_rotary {
+            Some(f) if self.proportional => (f * head_dim as f64 / 2.0).floor() as usize,
+            _ => self.rotary_width(head_dim) / 2,
         }
     }
 }
@@ -257,8 +278,17 @@ pub struct DecoderConfig {
     pub layer_prefix: String,
     pub embed_key: String,
     pub final_norm_key: String,
-    /// Gemma-4: K and V share one projection; only `k_proj` is loaded.
+    /// Gemma-4: K and V share one projection in the full-attention layers
+    /// (`use_alternative_attention = attention_k_eq_v and not is_sliding`);
+    /// only their `k_proj` is loaded. Sliding layers keep `v_proj`.
     pub attention_k_eq_v: bool,
+    /// Gemma-4: V is RMS-normed per head with no weight (`v_norm`,
+    /// `Gemma4UnifiedRMSNorm(with_scale=False)`) before attention.
+    pub v_norm: bool,
+    /// Gemma-4: each layer's output is multiplied by its `layer_scalar`
+    /// buffer (`hidden_states *= self.layer_scalar`); 1 when the checkpoint
+    /// has none.
+    pub layer_scalar: bool,
 }
 
 impl DecoderConfig {
@@ -272,6 +302,11 @@ impl DecoderConfig {
 
     pub fn layer_kv_heads(&self, layer: usize) -> usize {
         self.layers[layer].kv_heads.unwrap_or(self.kv_heads)
+    }
+
+    /// Whether `layer` takes V from `k_proj` (see [`Self::attention_k_eq_v`]).
+    pub fn layer_k_eq_v(&self, layer: usize) -> bool {
+        self.attention_k_eq_v && self.layers[layer].window.is_none()
     }
 
     pub fn layer_kv_head_dim(&self, layer: usize) -> usize {
@@ -302,6 +337,8 @@ impl DecoderConfig {
             embed_key: "model.language_model.embed_tokens.weight".into(),
             final_norm_key: "model.language_model.norm.weight".into(),
             attention_k_eq_v: false,
+            v_norm: false,
+            layer_scalar: false,
         }
     }
 
@@ -330,6 +367,8 @@ impl DecoderConfig {
             embed_key: "model.language_model.embed_tokens.weight".into(),
             final_norm_key: "model.language_model.norm.weight".into(),
             attention_k_eq_v: false,
+            v_norm: false,
+            layer_scalar: false,
         }
     }
 
@@ -355,6 +394,8 @@ impl DecoderConfig {
             embed_key: "model.embed_tokens.weight".into(),
             final_norm_key: "model.norm.weight".into(),
             attention_k_eq_v: false,
+            v_norm: false,
+            layer_scalar: false,
         }
     }
 
@@ -384,6 +425,8 @@ impl DecoderConfig {
             embed_key: "model.embed_tokens.weight".into(),
             final_norm_key: "model.norm.weight".into(),
             attention_k_eq_v: false,
+            v_norm: false,
+            layer_scalar: false,
         }
     }
 
@@ -419,6 +462,8 @@ impl DecoderConfig {
             embed_key: "language_model.model.embed_tokens.weight".into(),
             final_norm_key: "language_model.model.norm.weight".into(),
             attention_k_eq_v: false,
+            v_norm: false,
+            layer_scalar: false,
         }
     }
 
@@ -428,19 +473,24 @@ impl DecoderConfig {
     /// one KV head, and partial rotary (0.25). Keys are `model.language_model.*`
     /// in the Diffusers pack (Gemma-3 LTX-2 uses `language_model.model.*`).
     ///
-    /// TODO: full-attention layers use `rope_type=proportional` in HF; this path
-    /// uses the same inverse-frequency layout as Gemma-3 global layers (θ=1e6,
-    /// positions ÷ 8) with partial rotary on the first 128 of 512 channels.
+    /// What differs from Gemma-3, per transformers' `Gemma4UnifiedText*`
+    /// (`models/gemma4_unified/modeling_gemma4_unified.py`, 5.10-5.14):
+    /// RMSNorms scale by `weight`, not `1 + weight`; the softmax scale is 1
+    /// (`self.scaling = 1.0`: q and k are RMS-normed); V is normed without a
+    /// weight; each layer ends with `*= layer_scalar`; and full-attention layers
+    /// use proportional RoPE (θ=1e6, no position scaling, 64 of 256 angles
+    /// over the whole 512-wide head).
     pub fn gemma4_12b_text() -> Self {
         let global = LayerAttn {
             rope_theta: 1_000_000.0,
-            rope_factor: 8.0,
+            rope_factor: 1.0,
             window: None,
             q_heads: None,
             q_head_dim: Some(512),
             kv_heads: Some(1),
             kv_head_dim: Some(512),
             partial_rotary: Some(0.25),
+            proportional: true,
         };
         let layers = (0..48)
             .map(|i| {
@@ -459,17 +509,19 @@ impl DecoderConfig {
             head_dim: 256,
             intermediate: 15360,
             rms_eps: 1e-6,
-            norm_offset: 1.0,
+            norm_offset: 0.0,
             act: Act::GeluTanh,
             qk_norm: true,
             sandwich_norms: true,
             embed_scale: (3840f32).sqrt(),
-            attn_scale: (256f32).powf(-0.5),
+            attn_scale: 1.0,
             layers,
             layer_prefix: "model.language_model.layers".into(),
             embed_key: "model.language_model.embed_tokens.weight".into(),
             final_norm_key: "model.language_model.norm.weight".into(),
             attention_k_eq_v: true,
+            v_norm: true,
+            layer_scalar: true,
         }
     }
 
@@ -487,6 +539,32 @@ impl DecoderConfig {
         self.embed_scale = half::bf16::from_f32(self.embed_scale).to_f32();
         self
     }
+}
+
+/// The per-layer parameter that is not a `.weight`: Gemma-4's `layer_scalar`.
+pub(crate) const LAYER_SCALAR: &str = "layer_scalar";
+
+/// Checkpoint key of a layer's norm-like parameter `name` under prefix `p`.
+pub(crate) fn layer_param_key(p: &str, name: &str) -> String {
+    if name == LAYER_SCALAR {
+        format!("{p}.{name}")
+    } else {
+        format!("{p}.{name}.weight")
+    }
+}
+
+/// A norm weight, or the `layer_scalar` (1 when the checkpoint has none).
+fn layer_param(
+    map: &WeightMap,
+    key: &str,
+    name: &str,
+    width: usize,
+    offset: f32,
+) -> Result<CudaTensor> {
+    if name == LAYER_SCALAR && !map.contains(key) {
+        return CudaTensor::from_vec(vec![1.0], vec![1]);
+    }
+    norm_weight(map, key, width, offset)
 }
 
 /// `weight + offset`, on the device. Gemma stores `w` and computes `1 + w`.
@@ -545,6 +623,9 @@ fn norm_specs(cfg: &DecoderConfig, layer: usize) -> Vec<(&'static str, usize)> {
         v.push(("self_attn.q_norm", dq));
         v.push(("self_attn.k_norm", dkv));
     }
+    if cfg.layer_scalar {
+        v.push((LAYER_SCALAR, 1));
+    }
     v
 }
 
@@ -566,6 +647,10 @@ pub(crate) struct Layer {
     norm_mlp_in: CudaTensor,
     /// After the MLP, before its residual add (sandwich norms only).
     norm_mlp_out: Option<CudaTensor>,
+    /// Ones `[kv_head_dim]`: the weightless per-head RMSNorm on V (Gemma-4).
+    v_norm: Option<CudaTensor>,
+    /// Multiplies the layer's output (Gemma-4 `layer_scalar`).
+    scalar: Option<f32>,
 }
 
 /// Resident FP8 keeps the E4M3 codes and row scales on the device (one byte
@@ -600,7 +685,13 @@ impl Layer {
             index,
             &mut |name, i, o| load_linear(map, &format!("{p}.{name}"), i, o, precision),
             &mut |name, width| {
-                norm_weight(map, &format!("{p}.{name}.weight"), width, cfg.norm_offset)
+                layer_param(
+                    map,
+                    &layer_param_key(&p, name),
+                    name,
+                    width,
+                    cfg.norm_offset,
+                )
             },
         )
     }
@@ -630,10 +721,27 @@ impl Layer {
         };
         let dq = cfg.layer_head_dim(layer);
         let dkv = cfg.layer_kv_head_dim(layer);
+        if cfg.layer_scalar && cfg.norm_offset != 0.0 {
+            return Err(msg(
+                "llm: layer_scalar is read through the norm loader and needs norm_offset 0",
+            ));
+        }
+        let scalar = if cfg.layer_scalar {
+            Some(norm(LAYER_SCALAR, 1)?.host_cow()?[0])
+        } else {
+            None
+        };
+        let v_norm = if cfg.v_norm {
+            let mut ones = CudaTensor::from_vec(vec![1.0; dkv], vec![dkv])?;
+            ones.pin_device()?;
+            Some(ones)
+        } else {
+            None
+        };
         Ok(Self {
             q: lin(q.0, q.1, q.2)?,
             k: lin(k.0, k.1, k.2)?,
-            v: if cfg.attention_k_eq_v {
+            v: if cfg.layer_k_eq_v(layer) {
                 None
             } else {
                 Some(lin(v.0, v.1, v.2)?)
@@ -656,6 +764,8 @@ impl Layer {
             norm_attn_out: attn_out,
             norm_mlp_in: mlp_in,
             norm_mlp_out: mlp_out,
+            v_norm,
+            scalar,
         })
     }
 
@@ -703,7 +813,7 @@ impl Layer {
             k_h.clone()
         };
         let k = split(k_h, hkv, dkv, &self.k_norm)?.rope_half(cos, sin)?;
-        let v = split(v_h, hkv, dkv, &None)?;
+        let v = split(v_h, hkv, dkv, &self.v_norm)?;
         let a = scaled_dot_product_attention_gqa(&q, &k, &v, Some(cfg.attn_scale), Some(mask))?;
         let a = self
             .o
@@ -725,7 +835,11 @@ impl Layer {
             Some(w) => m.rms_norm(w, cfg.rms_eps)?,
             None => m,
         };
-        x.add(&m)
+        let x = x.add(&m)?;
+        match self.scalar {
+            Some(k) if k != 1.0 => x.try_mul_scalar(k),
+            _ => Ok(x),
+        }
     }
 }
 
@@ -739,11 +853,17 @@ fn rope_tables(
 ) -> Result<(CudaTensor, CudaTensor)> {
     let r = la.rotary_width(head_dim);
     let half = r / 2;
+    let rotated = la.rotated_angles(head_dim);
     let s = positions.len();
     let (mut cos, mut sin) = (vec![0f32; s * r], vec![0f32; s * r]);
     for (p, &pos) in positions.iter().enumerate() {
         for k in 0..half {
-            let inv = la.rope_theta.powf(-((2 * k) as f64) / head_dim as f64);
+            // Proportional RoPE: the angles past `rotated` have frequency 0.
+            let inv = if k < rotated {
+                la.rope_theta.powf(-((2 * k) as f64) / head_dim as f64)
+            } else {
+                0.0
+            };
             let ang = f64::from(pos) / la.rope_factor * inv;
             for j in [k, k + half] {
                 cos[p * r + j] = ang.cos() as f32;
@@ -1526,7 +1646,13 @@ impl ResidentDecoder {
                     Linear::from_tensors(CudaTensor::from_vec(w, vec![out_dim, in_dim])?, None)
                 },
                 &mut |name, width| {
-                    norm_weight(map, &format!("{p}.{name}.weight"), width, cfg.norm_offset)
+                    layer_param(
+                        map,
+                        &layer_param_key(&p, name),
+                        name,
+                        width,
+                        cfg.norm_offset,
+                    )
                 },
             )?;
             loaded.push(layer);
@@ -1705,6 +1831,7 @@ mod tests {
                     kv_heads: None,
                     kv_head_dim: None,
                     partial_rotary: None,
+                    proportional: false,
                 },
                 LayerAttn::global(1_000_000.0, if sandwich { 8.0 } else { 1.0 }),
             ],
@@ -1712,6 +1839,8 @@ mod tests {
             embed_key: "m.embed.weight".into(),
             final_norm_key: "m.norm.weight".into(),
             attention_k_eq_v: false,
+            v_norm: false,
+            layer_scalar: false,
         }
     }
 
@@ -1957,6 +2086,249 @@ mod tests {
         }
     }
 
+    /// A tiny Gemma-4 (a sliding layer, then a full-attention one) against
+    /// transformers' `Gemma4UnifiedText*` written out with loops
+    /// (`modeling_gemma4_unified.py`, 5.10-5.14): norms scale by `weight`
+    /// (not `1 + weight`); softmax scale 1; the full layer takes V from
+    /// `k_proj` and every layer RMS-normalises V without a weight; each layer
+    /// ends with `*= layer_scalar`; the full layer's RoPE is `proportional`
+    /// (`modeling_rope_utils.py` `_compute_proportional_rope_parameters`: a
+    /// full-head table, the tail angles 0, `rotate_half` over the whole head).
+    /// Positions start past 0, as a left-padded prompt's do. Each of those was
+    /// a Gemma-3 carry-over in our port that moved LTX-2.5's text contexts by
+    /// 0.34 rel-L2 against the reference (docs/oracle.md).
+    #[test]
+    fn a_gemma4_model_matches_the_transformers_formulas() {
+        let (h, ff) = (8usize, 12usize);
+        let global = LayerAttn {
+            rope_theta: 100.0,
+            rope_factor: 1.0,
+            window: None,
+            q_heads: None,
+            q_head_dim: Some(8),
+            kv_heads: Some(1),
+            kv_head_dim: Some(8),
+            partial_rotary: Some(0.5),
+            proportional: true,
+        };
+        let cfg = DecoderConfig {
+            vocab: 16,
+            hidden: h,
+            heads: 2,
+            kv_heads: 2,
+            head_dim: 4,
+            intermediate: ff,
+            rms_eps: 1e-6,
+            norm_offset: 0.0,
+            act: Act::GeluTanh,
+            qk_norm: true,
+            sandwich_norms: true,
+            embed_scale: 2.0,
+            attn_scale: 1.0,
+            layers: vec![LayerAttn::sliding(10_000.0, 2), global],
+            layer_prefix: "m.layers".into(),
+            embed_key: "m.embed.weight".into(),
+            final_norm_key: "m.norm.weight".into(),
+            attention_k_eq_v: true,
+            v_norm: true,
+            layer_scalar: true,
+        };
+        let ids = [1u32, 3, 0, 2, 5];
+        let pos: Vec<u32> = (7..12).collect();
+        let got: Vec<Vec<f32>> = hidden_states(&weights(), &cfg, &ids, &pos, &[true; 5], &[1, 2])
+            .unwrap()
+            .iter()
+            .map(|t| t.host_cow().unwrap().into_owned())
+            .collect();
+
+        let map = weights();
+        let get = |key: &str, shape: &[usize]| {
+            cuda_tensor_shaped(&map, key, shape)
+                .unwrap()
+                .host_cow()
+                .unwrap()
+                .into_owned()
+        };
+        let rms = |v: &[f32], w: Option<&[f32]>| -> Vec<f32> {
+            let ms = v.iter().map(|a| a * a).sum::<f32>() / v.len() as f32;
+            let r = (ms + cfg.rms_eps).powf(-0.5);
+            v.iter()
+                .enumerate()
+                .map(|(i, a)| a * r * w.map_or(1.0, |w| w[i]))
+                .collect()
+        };
+        let lin = |v: &[f32], w: &[f32], o: usize| -> Vec<f32> {
+            (0..o)
+                .map(|r| {
+                    v.iter()
+                        .enumerate()
+                        .map(|(c, a)| a * w[r * v.len() + c])
+                        .sum()
+                })
+                .collect()
+        };
+        let gelu = |v: f32| {
+            0.5 * v
+                * (1.0 + ((2.0 / std::f32::consts::PI).sqrt() * (v + 0.044_715 * v * v * v)).tanh())
+        };
+        // HF: inv_freq over the head width, zeros past the rotated angles,
+        // emb = cat(freqs, freqs), x·cos + rotate_half(x)·sin.
+        let rope = |v: &[f32], p: u32, theta: f64, rotated: usize| -> Vec<f32> {
+            let d = v.len();
+            let half = d / 2;
+            (0..d)
+                .map(|j| {
+                    let k = j % half;
+                    let inv = if k < rotated {
+                        theta.powf(-((2 * k) as f64) / d as f64)
+                    } else {
+                        0.0
+                    };
+                    let ang = f64::from(p) * inv;
+                    let rot = if j < half { -v[j + half] } else { v[j - half] };
+                    v[j] * ang.cos() as f32 + rot * ang.sin() as f32
+                })
+                .collect()
+        };
+        let table = get(&cfg.embed_key, &[cfg.vocab, h]);
+        let mut x: Vec<Vec<f32>> = ids
+            .iter()
+            .map(|&i| {
+                table[i as usize * h..(i as usize + 1) * h]
+                    .iter()
+                    .map(|v| v * 2.0)
+                    .collect()
+            })
+            .collect();
+        let mut taps = Vec::new();
+        for (l, (hq, hkv, d, window, theta, rotated, k_eq_v)) in [
+            (
+                2usize,
+                2usize,
+                4usize,
+                Some(2usize),
+                10_000.0,
+                2usize,
+                false,
+            ),
+            (2, 1, 8, None, 100.0, 2, true),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let p = format!("m.layers.{l}");
+            let w = |n: &str, shape: &[usize]| get(&format!("{p}.{n}"), shape);
+            let wq = w("self_attn.q_proj.weight", &[hq * d, h]);
+            let wk = w("self_attn.k_proj.weight", &[hkv * d, h]);
+            let wv = if k_eq_v {
+                wk.clone()
+            } else {
+                w("self_attn.v_proj.weight", &[hkv * d, h])
+            };
+            let wo = w("self_attn.o_proj.weight", &[h, hq * d]);
+            let (qn, kn) = (
+                w("self_attn.q_norm.weight", &[d]),
+                w("self_attn.k_norm.weight", &[d]),
+            );
+            let n_in = w("input_layernorm.weight", &[h]);
+            let n_pa = w("post_attention_layernorm.weight", &[h]);
+            let n_pf = w("pre_feedforward_layernorm.weight", &[h]);
+            let n_po = w("post_feedforward_layernorm.weight", &[h]);
+            let (wg, wu, wd) = (
+                w("mlp.gate_proj.weight", &[ff, h]),
+                w("mlp.up_proj.weight", &[ff, h]),
+                w("mlp.down_proj.weight", &[h, ff]),
+            );
+            let scalar = w("layer_scalar", &[1])[0];
+            let normed: Vec<Vec<f32>> = x.iter().map(|v| rms(v, Some(&n_in))).collect();
+            let split =
+                |wt: &[f32], n: usize, norm: Option<&[f32]>, rot: bool| -> Vec<Vec<Vec<f32>>> {
+                    normed
+                        .iter()
+                        .zip(&pos)
+                        .map(|(v, &p)| {
+                            let full = lin(v, wt, n * d);
+                            (0..n)
+                                .map(|hd| {
+                                    let t = rms(&full[hd * d..(hd + 1) * d], norm);
+                                    if rot {
+                                        rope(&t, p, theta, rotated)
+                                    } else {
+                                        t
+                                    }
+                                })
+                                .collect()
+                        })
+                        .collect()
+                };
+            let (q, k, v) = (
+                split(&wq, hq, Some(&qn), true),
+                split(&wk, hkv, Some(&kn), true),
+                split(&wv, hkv, None, false),
+            );
+            for i in 0..ids.len() {
+                let mut attn = vec![0f32; hq * d];
+                for hd in 0..hq {
+                    let kv = hd / (hq / hkv);
+                    let keys: Vec<usize> = (0..=i)
+                        .filter(|&j| window.is_none_or(|w| i - j < w))
+                        .collect();
+                    let scores: Vec<f32> = keys
+                        .iter()
+                        .map(|&j| {
+                            q[i][hd]
+                                .iter()
+                                .zip(&k[j][kv])
+                                .map(|(a, b)| a * b)
+                                .sum::<f32>()
+                        })
+                        .collect();
+                    let mx = scores.iter().cloned().fold(f32::MIN, f32::max);
+                    let z: f32 = scores.iter().map(|sc| (sc - mx).exp()).sum();
+                    for (&j, sc) in keys.iter().zip(&scores) {
+                        let wgt = (sc - mx).exp() / z;
+                        for c in 0..d {
+                            attn[hd * d + c] += wgt * v[j][kv][c];
+                        }
+                    }
+                }
+                let a = rms(&lin(&attn, &wo, h), Some(&n_pa));
+                let after: Vec<f32> = x[i].iter().zip(&a).map(|(r, a)| r + a).collect();
+                let m = rms(&after, Some(&n_pf));
+                let (g, u) = (lin(&m, &wg, ff), lin(&m, &wu, ff));
+                let act: Vec<f32> = g.iter().zip(&u).map(|(a, b)| gelu(*a) * b).collect();
+                let mo = rms(&lin(&act, &wd, h), Some(&n_po));
+                x[i] = after
+                    .iter()
+                    .zip(&mo)
+                    .map(|(r, m)| (r + m) * scalar)
+                    .collect();
+            }
+            taps.push(x.clone());
+        }
+        let final_norm = get(&cfg.final_norm_key, &[h]);
+        let want = [
+            taps[0].clone(),
+            taps[1]
+                .iter()
+                .map(|v| rms(v, Some(&final_norm)))
+                .collect::<Vec<_>>(),
+        ];
+        for (t, (g, w)) in got.iter().zip(&want).enumerate() {
+            for (i, row) in w.iter().enumerate() {
+                for j in 0..h {
+                    assert!(
+                        (g[i * h + j] - row[j]).abs() < 5e-5 * (1.0 + row[j].abs()),
+                        "tap {} pos {i} ch {j}: {} vs {}",
+                        t + 1,
+                        g[i * h + j],
+                        row[j]
+                    );
+                }
+            }
+        }
+    }
+
     /// Resident and streamed share the layer loop, so they must agree to the
     /// bit — including a partial load that stops at the tap, and a second
     /// prompt through the same resident weights.
@@ -2079,35 +2451,38 @@ mod tests {
             DecoderConfig::gemma3_12b_text(),
             DecoderConfig::gemma4_12b_text(),
         ] {
-            let (mut lins, mut norms) = (Vec::new(), Vec::new());
-            Layer::assemble(
-                &cfg,
-                0,
-                &mut |name, i, o| {
-                    lins.push((name.to_string(), i, o));
-                    Ok(Linear::zeros(i, o, false))
-                },
-                &mut |name, width| {
-                    norms.push((name.to_string(), width));
-                    Ok(CudaTensor::zeros(&[width]))
-                },
-            )
-            .unwrap();
-            let mut want: Vec<_> = linear_specs(&cfg, 0)
-                .iter()
-                .map(|(n, i, o)| (n.to_string(), *i, *o))
-                .collect();
-            if cfg.attention_k_eq_v {
-                want.retain(|(n, _, _)| n != "self_attn.v_proj");
+            // The first layer is local, the last global (Gemma-4 k_eq_v only there).
+            for layer in [0, cfg.num_layers() - 1] {
+                let (mut lins, mut norms) = (Vec::new(), Vec::new());
+                Layer::assemble(
+                    &cfg,
+                    layer,
+                    &mut |name, i, o| {
+                        lins.push((name.to_string(), i, o));
+                        Ok(Linear::zeros(i, o, false))
+                    },
+                    &mut |name, width| {
+                        norms.push((name.to_string(), width));
+                        Ok(CudaTensor::zeros(&[width]))
+                    },
+                )
+                .unwrap();
+                let mut want: Vec<_> = linear_specs(&cfg, layer)
+                    .iter()
+                    .map(|(n, i, o)| (n.to_string(), *i, *o))
+                    .collect();
+                if cfg.layer_k_eq_v(layer) {
+                    want.retain(|(n, _, _)| n != "self_attn.v_proj");
+                }
+                assert_eq!(lins, want, "linears are served in spec order");
+                let mut staged: Vec<_> = norm_specs(&cfg, layer)
+                    .iter()
+                    .map(|(n, w)| (n.to_string(), *w))
+                    .collect();
+                staged.sort();
+                norms.sort();
+                assert_eq!(norms, staged);
             }
-            assert_eq!(lins, want, "linears are served in spec order");
-            let mut staged: Vec<_> = norm_specs(&cfg, 0)
-                .iter()
-                .map(|(n, w)| (n.to_string(), *w))
-                .collect();
-            staged.sort();
-            norms.sort();
-            assert_eq!(norms, staged);
         }
     }
 
@@ -2157,7 +2532,15 @@ mod tests {
         assert_eq!(g.layer_head_dim(5), 512);
         assert_eq!(g.layer_kv_heads(5), 1);
         assert_eq!(g.layers[5].partial_rotary, Some(0.25));
-        assert_eq!(g.layers[5].rotary_width(512), 128);
+        // Proportional RoPE: a 512-wide table, 64 of its 256 angles rotating,
+        // no position scaling.
+        assert_eq!(g.layers[5].rotary_width(512), 512);
+        assert_eq!(g.layers[5].rotated_angles(512), 64);
+        assert_eq!(g.layers[5].rope_factor, 1.0);
+        assert_eq!(g.layers[0].rotated_angles(256), 128);
+        assert!(!g.layer_k_eq_v(0) && g.layer_k_eq_v(5));
+        assert_eq!((g.norm_offset, g.attn_scale), (0.0, 1.0));
+        assert!(g.v_norm && g.layer_scalar);
         assert_eq!(g.layer_head_dim(0), 256);
         assert_eq!(g.for_bf16_reference().embed_scale, 62.0);
     }

@@ -435,6 +435,12 @@ def _patch_ltx_blocks(mod) -> None:
             _Ltx.text_done = True
             write("text_video_ctx", out[0].video_encoding)
             write("text_audio_ctx", out[0].audio_encoding)
+            try:
+                n = int(out[0].attention_mask[0].sum())
+                write("text_video_ctx_real", out[0].video_encoding[0, :n])
+                write("text_audio_ctx_real", out[0].audio_encoding[0, :n])
+            except Exception as e:  # noqa: BLE001
+                _note(f"text ctx rows: {type(e).__name__}: {e}")
         return out
 
     enc_cls.__call__ = enc
@@ -490,7 +496,93 @@ def _patch_ltx_model(mod) -> None:
     cls.forward = forward
 
 
+# The text path, stage by stage (the first prompt of the first encode only),
+# every tensor restricted to the real (mask == 1) tokens in order, as ours:
+#   text_input_ids, text_attention_mask   [1024] (the tokenizer's, left-padded)
+#   text_hidden_<k>                       [n, 3840] Gemma hidden state k (HF numbering:
+#                                         0 = scaled embeddings, 48 = normed last)
+#   text_{video,audio}_feats              [n, D] FeatureExtractor output (the aggregate
+#                                         embeds, before the connectors)
+#   text_{video,audio}_ctx_real           [n, D] connector output rows of the real
+#                                         tokens (front-aligned after the right-pad sort)
+# plus oracle_meta.json "gemma": layer_scalar values, norm-weight means, the
+# attention implementation, the full-attention RoPE frequencies.
+TEXT_TAPS = (0, 1, 2, 5, 6, 7, 12, 24, 36, 47, 48)
+
+
+def _patch_ltx_gemma_encoder(mod) -> None:
+    cls = mod.LTXGemmaTextEncoder
+    orig = cls.encode
+
+    def encode(self, prompts):
+        out = orig(self, prompts)
+        if getattr(_Ltx, "hidden_done", False) or not out:
+            return out
+        _Ltx.hidden_done = True
+        try:
+            toks = self.tokenizer.tokenize_with_weights(prompts[0])["gemma"]
+            write("text_input_ids", [int(t) for t, _ in toks])
+            write("text_attention_mask", [int(w) for _, w in toks])
+        except Exception as e:  # noqa: BLE001
+            _note(f"text ids: {type(e).__name__}: {e}")
+        hs, mask = out[0]
+        keep = mask[0].bool()
+        for k in TEXT_TAPS:
+            if k < len(hs):
+                write(f"text_hidden_{k}", hs[k][0][keep])
+        info: dict = {"num_hidden_states": len(hs), "real_tokens": int(keep.sum())}
+        try:
+            lm = self.model.model.language_model
+            info["attn_implementation"] = str(getattr(self.model.config, "_attn_implementation", None))
+            info["layer_scalar"] = [float(l.layer_scalar.float().reshape(-1)[0]) for l in lm.layers]
+            l0 = lm.layers[0]
+            info["norm_weight_mean"] = {
+                n: float(getattr(l0, n).weight.float().mean())
+                for n in ("input_layernorm", "post_attention_layernorm",
+                          "pre_feedforward_layernorm", "post_feedforward_layernorm")
+            }
+            info["q_norm_mean"] = float(l0.self_attn.q_norm.weight.float().mean())
+            info["final_norm_mean"] = float(lm.norm.weight.float().mean())
+            info["embed_scale"] = float(lm.embed_tokens.embed_scale.to(lm.embed_tokens.weight.dtype))
+            info["layer5_has_v_proj"] = lm.layers[5].self_attn.v_proj is not None
+            info["layer0_has_v_proj"] = lm.layers[0].self_attn.v_proj is not None
+            info["scaling"] = float(l0.self_attn.scaling)
+            re = lm.rotary_emb
+            info["full_inv_freq_head"] = [float(x) for x in re.full_attention_inv_freq[:4]]
+            info["full_inv_freq_len"] = int(re.full_attention_inv_freq.numel())
+            info["full_inv_freq_nonzero"] = int((re.full_attention_inv_freq != 0).sum())
+        except Exception as e:  # noqa: BLE001
+            info["error"] = f"{type(e).__name__}: {e}"
+        meta(gemma=info)
+        _note(f"gemma: {info}")
+        return out
+
+    cls.encode = encode
+
+
+def _patch_ltx_feature_extractor(mod) -> None:
+    for name in ("FeatureExtractorV1", "FeatureExtractorV2"):
+        cls = getattr(mod, name, None)
+        if cls is None:
+            continue
+        orig = cls.forward
+
+        def forward(self, hidden_states, attention_mask, *a, _orig=orig, **kw):
+            v, au = _orig(self, hidden_states, attention_mask, *a, **kw)
+            if not getattr(_Ltx, "feats_done", False):
+                _Ltx.feats_done = True
+                keep = attention_mask[0].bool()
+                write("text_video_feats", v[0][keep])
+                if au is not None:
+                    write("text_audio_feats", au[0][keep])
+            return v, au
+
+        cls.forward = forward
+
+
 _LTX_TARGETS: dict = {
     "ltx_pipelines.utils.blocks": _patch_ltx_blocks,
     "ltx_core.model.transformer.model": _patch_ltx_model,
+    "ltx_core.text_encoders.gemma.encoders.base_encoder": _patch_ltx_gemma_encoder,
+    "ltx_core.text_encoders.gemma.feature_extractor": _patch_ltx_feature_extractor,
 }

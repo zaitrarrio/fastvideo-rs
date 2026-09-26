@@ -1600,8 +1600,11 @@ impl TextEncoder {
     fn text_encoder_kind(cfg: &Ltx2Config) -> &'static [u8] {
         let gemma4 = cfg.gemma4.is_some() || cfg.version == Ltx2ModelVersion::V25;
         match (gemma4, cfg.connectors.text_norm()) {
-            (true, Ltx2TextNorm::PerTokenRms) => b"gemma4-12b/per-token-rms",
-            (true, Ltx2TextNorm::MaskedMinMax) => b"gemma4-12b",
+            // "-hf": the Gemma-4 layer as transformers defines it (weight
+            // norms, unit softmax scale, v_norm, layer_scalar, proportional
+            // RoPE, a leading <bos>); contexts cached before that are stale.
+            (true, Ltx2TextNorm::PerTokenRms) => b"gemma4-12b-hf/per-token-rms",
+            (true, Ltx2TextNorm::MaskedMinMax) => b"gemma4-12b-hf",
             (false, Ltx2TextNorm::PerTokenRms) => b"gemma3-12b/per-token-rms",
             (false, Ltx2TextNorm::MaskedMinMax) => b"gemma3-12b",
         }
@@ -1625,7 +1628,7 @@ impl TextEncoder {
                     g.layer_kv_head_dim(i),
                     g.hidden,
                 );
-                let v = if g.attention_k_eq_v { 0 } else { h * hkv * dkv };
+                let v = if g.layer_k_eq_v(i) { 0 } else { h * hkv * dkv };
                 (h * hq * dq + h * hkv * dkv + v + hq * dq * h + 3 * h * g.intermediate) as u64
             })
             .sum();
@@ -1747,18 +1750,21 @@ impl TextEncoder {
     /// loaded, used and dropped.
     fn compute(&mut self, padded: &PaddedPrompt) -> Result<CachedContexts> {
         self.ensure_backend()?;
-        let out = match &self.resident {
-            Some(r) => r.connectors.forward(
-                &HiddenStack::encode_resident(&r.gemma, padded)?,
-                padded.max_len(),
-            )?,
+        let (stack, out) = match &self.resident {
+            Some(r) => {
+                let stack = HiddenStack::encode_resident(&r.gemma, padded)?;
+                let out = r.connectors.forward(&stack, padded.max_len())?;
+                (stack, out)
+            }
             None => {
                 let gemma = WeightMap::open(&self.paths.text_root().join("text_encoder"))?;
                 let stack = HiddenStack::encode(&gemma, &Self::decoder_config(&self.cfg), padded)?;
                 drop(gemma);
-                self.load_connectors()?.forward(&stack, padded.max_len())?
+                let out = self.load_connectors()?.forward(&stack, padded.max_len())?;
+                (stack, out)
             }
         };
+        super::text::dump_stages(padded, &stack, &out)?;
         Ok(CachedContexts {
             video: out.video,
             audio: out.audio,
@@ -3445,7 +3451,7 @@ mod tests {
         let v20 = fastvideo_models::ltx2::ltx2_19b();
         assert_eq!(
             TextEncoder::text_encoder_kind(&v25),
-            b"gemma4-12b/per-token-rms"
+            b"gemma4-12b-hf/per-token-rms"
         );
         assert_eq!(TextEncoder::text_encoder_kind(&v20), b"gemma3-12b");
         assert_eq!(

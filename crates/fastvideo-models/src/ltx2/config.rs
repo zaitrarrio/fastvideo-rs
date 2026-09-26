@@ -929,7 +929,9 @@ impl Gemma4TextConfig {
             rms_norm_eps: 1e-6,
             rope_theta_full: 1_000_000.0,
             rope_theta_sliding: 10_000.0,
-            rope_scaling_factor: 8.0,
+            // `rope_parameters.full_attention` is `proportional` with no
+            // `factor`: positions are not scaled (Gemma 3's global layers are).
+            rope_scaling_factor: 1.0,
             partial_rotary_factor_full: 0.25,
             sliding_window: 1024,
             sliding_window_pattern: 6,
@@ -948,8 +950,10 @@ impl Gemma4TextConfig {
         (layer + 1).is_multiple_of(self.sliding_window_pattern)
     }
 
+    /// Softmax scale: 1 (`Gemma4UnifiedTextAttention.scaling = 1.0`; q and k
+    /// are RMS-normed), not `query_pre_attn_scalar ** -0.5` as on Gemma 3.
     pub fn attention_scale(&self) -> f64 {
-        self.query_pre_attn_scalar.powf(-0.5)
+        1.0
     }
 
     pub fn q_dim(&self, layer: usize) -> usize {

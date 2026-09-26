@@ -176,7 +176,7 @@ fn stage_layer(
     let mut linears = Vec::with_capacity(7);
     let mut at = 0;
     for (name, i, o) in linear_specs(cfg, index) {
-        if cfg.attention_k_eq_v && name == "self_attn.v_proj" {
+        if cfg.layer_k_eq_v(index) && name == "self_attn.v_proj" {
             continue;
         }
         let key = format!("{p}.{name}.weight");
@@ -205,7 +205,11 @@ fn stage_layer(
     let t = Instant::now();
     let mut norms = Vec::new();
     for (name, width) in norm_specs(cfg, index) {
-        let key = format!("{p}.{name}.weight");
+        let key = super::layer_param_key(&p, name);
+        if name == super::LAYER_SCALAR && lazy.shape(&key).is_none() {
+            norms.push(vec![1.0]);
+            continue;
+        }
         let (shape, values) = lazy.to_f32(&key).map_err(|e| msg(e.to_string()))?;
         if shape != [width] {
             return Err(msg(format!(

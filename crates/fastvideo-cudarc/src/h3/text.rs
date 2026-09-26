@@ -611,6 +611,8 @@ mod tests {
             embed_key: "m.embed.weight".into(),
             final_norm_key: "m.norm.weight".into(),
             attention_k_eq_v: false,
+            v_norm: false,
+            layer_scalar: false,
         }
     }
 

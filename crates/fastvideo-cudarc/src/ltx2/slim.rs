@@ -98,7 +98,7 @@ pub fn load_order(cfg: &DecoderConfig) -> Vec<String> {
             "mlp.up_proj",
             "mlp.down_proj",
         ] {
-            if cfg.attention_k_eq_v && lin == "self_attn.v_proj" {
+            if cfg.layer_k_eq_v(i) && lin == "self_attn.v_proj" {
                 continue;
             }
             keys.push(format!("{p}.{lin}.weight"));
@@ -111,6 +111,9 @@ pub fn load_order(cfg: &DecoderConfig) -> Vec<String> {
             );
         }
         keys.push(format!("{p}.input_layernorm.weight"));
+        if cfg.layer_scalar {
+            keys.push(format!("{p}.{}", crate::llm::LAYER_SCALAR));
+        }
     }
     keys.push(cfg.final_norm_key.clone());
     keys
@@ -313,6 +316,8 @@ mod tests {
             embed_key: "language_model.model.embed_tokens.weight".into(),
             final_norm_key: "language_model.model.norm.weight".into(),
             attention_k_eq_v: false,
+            v_norm: false,
+            layer_scalar: false,
         }
     }
 
