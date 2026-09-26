@@ -10,6 +10,7 @@ pub mod bf16_gemm;
 pub mod clip;
 #[cfg(feature = "cuda")]
 pub mod conv;
+pub mod cudnn_sdpa;
 pub mod device;
 pub mod dump;
 pub mod envflag;

@@ -134,6 +134,22 @@ pub(super) fn parity(c: &mut Ctx<'_>) -> StageResult<()> {
                 c.cmp(&format!("flash2_{tag}_vs_f32"), &bb, &want, 1e-2)?;
             }
         }
+        // cuDNN fused attention (bf16 out), called directly so a missing
+        // engine is reported rather than silently replaced by flash v2.
+        let (q16, k16, v16) = (qt.quantize_bf16()?, kt.quantize_bf16()?, vt.quantize_bf16()?);
+        let (qs, ks, vs) = (
+            q16.device_slice_bf16().ok_or_else(|| anyhow::anyhow!("bf16 q"))?,
+            k16.device_slice_bf16().ok_or_else(|| anyhow::anyhow!("bf16 k"))?,
+            v16.device_slice_bf16().ok_or_else(|| anyhow::anyhow!("bf16 v"))?,
+        );
+        let mut o16 = unsafe { dev.stream.alloc::<bf16>(bh * sq * d) }?;
+        let ran = fastvideo_cudarc::wan::cudnn_sdpa::sdpa_bf16(qs, ks, vs, &mut o16, bh, sq, sk, d, scale)?;
+        if ran {
+            let got: Vec<f32> = dev.stream.memcpy_dtov(&o16)?.iter().map(|x| x.to_f32()).collect();
+            c.cmp(&format!("cudnn_sdpa_{tag}_vs_f32"), &got, &want, 1e-2)?;
+        } else {
+            c.report.note(format!("cudnn_sdpa_{tag}_no_engine"), json!({"bh": bh, "sq": sq, "sk": sk, "d": d}));
+        }
     }
 
     // ---- Sol: sol_mma_fwd2 (ws) vs sol_mma_fwd ---------------------------
@@ -389,6 +405,7 @@ pub(super) fn bench(c: &mut Ctx<'_>) -> StageResult<()> {
         };
         let d1 = dense(FlashKernel::V1)?;
         let d2 = dense(FlashKernel::V2)?;
+        let dc = dense(FlashKernel::Cudnn)?;
         let bits = |kernel| -> anyhow::Result<Vec<u16>> {
             let o = attn::device_mma_sdpa_with(&qt, &kt, &vt, None, true, kernel)?
                 .ok_or_else(|| anyhow::anyhow!("flash declined"))?;
@@ -406,6 +423,7 @@ pub(super) fn bench(c: &mut Ctx<'_>) -> StageResult<()> {
                 "bh": bh, "tokens": tokens,
                 "v1_ms": d1 * 1e3, "v2_ms": d2 * 1e3, "speedup": d1 / d2,
                 "v1_tflops": flops / d1 / 1e12, "v2_tflops": flops / d2 / 1e12,
+                "cudnn_or_v2_fallback_ms": dc * 1e3, "cudnn_tflops": flops / dc / 1e12,
                 "bit_mismatches_first_heads": dense_bad,
             }),
             json!({"bit_mismatches_first_heads": 0}),

@@ -145,6 +145,9 @@ pub enum FlashKernel {
     /// `flash_mma_fwd2_d*`: 128-query CTAs (8 warps x 16 rows) and
     /// double-buffered K/V; bit-identical to V1 (same per-row arithmetic).
     V2,
+    /// cuDNN's fused attention engine (`cudnn_sdpa`), bf16 output only;
+    /// V2 whenever cuDNN offers no engine or the caller wants f32 out.
+    Cudnn,
 }
 
 /// `FASTVIDEO_FLASH_KERNEL=v1|v2|auto` (auto = [`flash_v2_default`]).
@@ -152,6 +155,7 @@ pub fn flash_kernel_choice() -> FlashKernel {
     match super::envflag::string_flag("FASTVIDEO_FLASH_KERNEL", "auto").as_str() {
         "v1" => FlashKernel::V1,
         "v2" => FlashKernel::V2,
+        "cudnn" => FlashKernel::Cudnn,
         _ if flash_v2_default() => FlashKernel::V2,
         _ => FlashKernel::V1,
     }
@@ -211,6 +215,21 @@ pub fn device_mma_sdpa_with(
         format_args!("sdpa: fused mma B={b} H={h} Sq={sq} Sk={sk} D={d}"),
     );
     let n = bh * sq * d;
+    if kernel == FlashKernel::Cudnn && out_bf16 {
+        let mut out = unsafe { dev.stream.alloc::<half::bf16>(n) }
+            .map_err(|e| msg(e.to_string()))?;
+        if super::cudnn_sdpa::sdpa_bf16(&qb, &kb, &vb, &mut out, bh, sq, sk, d, scale)? {
+            return Ok(Some(CudaTensor::from_device_slice_bf16(
+                out,
+                vec![b, h, sq, d],
+            )?));
+        }
+    }
+    let kernel = if kernel == FlashKernel::Cudnn {
+        FlashKernel::V2
+    } else {
+        kernel
+    };
     let (func, cfg) = match kernel {
         FlashKernel::V1 => (
             if d == 64 {
@@ -225,7 +244,7 @@ pub fn device_mma_sdpa_with(
                 shared_mem_bytes: 0,
             },
         ),
-        FlashKernel::V2 => {
+        FlashKernel::V2 | FlashKernel::Cudnn => {
             let func = if d == 64 {
                 &dev.kernels.flash_mma_fwd2_d64
             } else {
