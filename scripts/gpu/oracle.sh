@@ -20,7 +20,8 @@
 # Env: ORACLE_TARGETS (default: fasth3-8step fasth3-4step-vsa fasth3-8step-vsa0
 # fasth3-4step-dense ltx25-512p-dense
 # ltx25-512p), FASTVIDEO_DUMP_OPS (blocks whose inside is dumped, default
-# 0,1,24,47), plus runpod-http.sh's (RUNPOD_API_KEY, ...).
+# 0,1,24,47), FV_ORACLE_F32 (1: the f32-activation control for every target,
+# 0: none; default H3 only), plus runpod-http.sh's (RUNPOD_API_KEY, ...).
 # Logs: $ORACLE_LOG_DIR (default /tmp/claude-0) oracle-*.log.
 set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -113,7 +114,7 @@ done
 
 log "runtime pod: targets $targets"
 rc=0
-FV_FAMILY=oracle FV_EXTRA_ENV="FV_ORACLE_URL='$urls' FV_ORACLE_TARGETS='$targets' FASTVIDEO_DUMP_OPS=$ops" \
+FV_FAMILY=oracle FV_EXTRA_ENV="FV_ORACLE_URL='$urls' FV_ORACLE_TARGETS='$targets' FASTVIDEO_DUMP_OPS=$ops${FV_ORACLE_F32:+ FV_ORACLE_F32=$FV_ORACLE_F32}" \
   FV_GEN_TIMEOUT_S="${FV_GEN_TIMEOUT_S:-5400}" \
   bash "$HERE/runpod-http.sh" run "$sha" >"$logs/oracle-rust.log" 2>&1 || rc=$?
 log "runtime pod finished rc=$rc"

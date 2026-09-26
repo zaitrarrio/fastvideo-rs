@@ -68,7 +68,7 @@ with depth, no block where it jumps. A jump is bisected with the block's op
 dumps (`FASTVIDEO_DUMP_OPS=<i>`): the first op whose rel-L2 leaves the bf16
 floor is the divergent one.
 
-## Results (2026-09-26, RTX PRO 6000, runtime f49db62 / 5312e4b)
+## Results: H3 (2026-09-26, RTX PRO 6000, runtime f49db62 / 5312e4b / b1226e9)
 
 Reference: FastVideo e90be59, strict eager route, 768x1344x124, the matrix
 prompt, seed 1024. rel-L2 of ours against the reference.
@@ -111,17 +111,107 @@ Video latents after each step:
 | 7 | 2.67e-1 | | |
 | 8 | 5.26e-1 | | |
 
-Verdict: **not passed.** Blocks 0 to ~24 sit at 4-8e-3, but from about
-block 25 the difference grows ~15% per block to 0.15 (dense) to 0.45 (VSA),
-and the final latents differ by 0.4-0.5 rel-L2. It is not VSA's tile
-selection (the dense control grows the same way; the VSA recipes add a step
-at block 18 and roughly double the late-block level), and no single op
-diverges. The open question is whether this is bf16 rounding amplified by
-depth (the reference itself runs everything in bf16, including RoPE tables
-and `1 + scale`) or a systematic difference; the f32-activation control and
-the sparsity-0 control were queued when the Runpod account balance ran out,
-and are the next run.
+First reading: from about block 25 the difference grows ~15% per block to
+0.15 (dense) to 0.45 (VSA), and the final latents differ by 0.4-0.5. The
+dense control grows the same way, so VSA's tile selection is not the cause,
+and no single op diverges.
 
-Not compared yet: LTX-2.5 (the reference's single-file packs need
-`RECON_ACCEPT_MISMATCH=1`, now set by the driver; the rerun was cut by the
-balance), and 4K.
+### The controls (runtime b1226e9, upstream 78729d6)
+
+The same injected inputs, three runs of the 8-step checkpoint: ours bf16
+(the default), ours with f32 activations (`FASTVIDEO_BF16_ACT=0`), and the
+reference (bf16 throughout). Pairwise rel-L2, VSA 0.8:
+
+| | ours-bf16 vs ref | ours-f32 vs ref | **ours-bf16 vs ours-f32** |
+|---|---|---|---|
+| block 0 | 4.8e-3 | 5.2e-3 | 1.0e-3 |
+| block 12 | 5.3e-3 | 5.1e-3 | 5.0e-3 |
+| block 24 | 9.0e-3 | 1.75e-2 | 1.30e-2 |
+| block 30 | 3.9e-2 | 4.1e-2 | 2.5e-2 |
+| block 36 | 9.0e-2 | 9.3e-2 | 8.7e-2 |
+| block 42 | 1.73e-1 | 1.70e-1 | 1.58e-1 |
+| block 48 | 3.28e-1 | 3.02e-1 | 2.68e-1 |
+| velocity, step 1 | 1.73e-1 | 1.58e-1 | 1.34e-1 |
+| latents, step 4 | 3.5e-2 | 4.0e-2 | 3.4e-2 |
+| latents, step 8 | 5.26e-1 | 5.78e-1 | 4.83e-1 |
+
+At VSA sparsity 0 on both sides (every tile, gated compression kept):
+
+| | ours-bf16 vs ref | ours-f32 vs ref | ours-bf16 vs ours-f32 |
+|---|---|---|---|
+| block 24 | 8.6e-3 | 1.39e-2 | 1.22e-2 |
+| block 36 | 7.1e-2 | 7.2e-2 | 6.2e-2 |
+| block 48 | 2.80e-1 | 2.68e-1 | 2.46e-1 |
+| latents, step 8 | 3.74e-1 | 3.45e-1 | 3.60e-1 |
+
+**Root cause: bf16 rounding amplified by depth, not a systematic
+difference.** Our own pipeline, run in bf16 and in f32 from bit-identical
+inputs, parts by as much as ours parts from the reference, block for block
+(block 48: 0.27 vs 0.33; final latents 0.48 vs 0.53), and ours in f32 is no
+closer to the reference than ours in bf16. The three runs are roughly
+equidistant: three rounding paths of one chaotic function, with no
+systematic offset for a bisect to find. Sparsity 0 lowers all three pairs
+alike (final latents 0.35-0.37): part of the VSA level is top-k tile flips,
+which rounding noise triggers, and it is shared. Late H3 blocks amplify any
+perturbation ~15% per block (residual outliers reach 4e4 by block 34, and
+every block renormalizes them), so the ~2e-3 target cannot be met by any
+two implementations of this model that round differently. No fix on our side.
+
+Verdict: **H3 matches the reference to the model's own bf16/f32 noise floor**
+(the strict criterion of "~2e-3 flat" does not hold even for our pipeline
+against itself).
+
+## LTX-2.5 distilled two-stage, 512p (sol-engine gpu_infer.py, bf16 pipeline)
+
+Reference: Lightricks/LTX-2 fd4ded7 driven by sol-engine's RTX5090
+`gpu_infer.py`, 768x512x121, packs rebuilt from the Diffusers copy
+(`RECON_ACCEPT_MISMATCH=1`: the two mismatched packs keep the Diffusers
+bytes our port loads). Injected: all 18 seeded `torch.randn` draws (initial
+noise, 14 ancestral draws, stage-2 renoise), both text contexts, and the
+stage-2 entry state.
+
+| | dense stage 2 | Sol stage 2 |
+|---|---|---|
+| s1 block 0 / 12 / 24 (video) | 3.3e-3 / 4.2e-3 / 5.4e-3 | same run |
+| s1 block 36 / 42 / 44 / 47 | 1.7e-2 / 4.5e-2 / 8.7e-2 / 2.3e-2 | same |
+| s1 audio block 0 / 24 / 47 | 3.6e-3 / 6.1e-3 / 3.4e-2 | same |
+| s1 velocity step 1 | 4.1e-2 | same |
+| s1 latents steps 1-8 | 9e-4, 1.4e-3, 1.8e-3, 2.2e-3, 7.1e-3, 7.5e-2, 0.25, 0.34 | same |
+| s2 block 0 / 24 / 36 / 47 (video) | 2.9e-3 / 5.0e-3 / 1.7e-2 / 1.5e-2 | 2.9e-3 / 8.7e-3 / 2.9e-2 / 2.3e-2 |
+| s2 latents steps 1-3 | 1.3e-2, 4.8e-2, 8.0e-2 | 1.8e-2, 7.4e-2, 0.125 |
+
+Stage 1 is identical in both arms (the arms differ only in stage 2). The
+stage-1 "jump" at step 6 follows the schedule, not the model: steps 1-4 move
+sigma by 0.006 each (1.0 to 0.975), so the state barely changes whatever the
+velocity, and step 6 (0.909 to 0.725) is the first large step. The
+per-forward difference is the step-1 velocity, 4e-2, against 1.3-1.7e-1 for
+H3. Block profiles grow smoothly with no jump. Sol stage 2 runs upstream
+(141 Sol kernel calls; `tvm_ffi` is present in the sol-ltx25 image) and adds
+the expected top-k-selection spread on top of dense.
+
+The f32 noise floor (dense stage 2, `FV_ORACLE_F32=1`):
+
+| | ours-bf16 vs ref | ours-f32 vs ref | **ours-bf16 vs ours-f32** |
+|---|---|---|---|
+| s1 block 0 / 12 / 24 | 3.3e-3 / 4.2e-3 / 5.4e-3 | 4.0e-3 / 7.3e-3 / 1.1e-2 | 4.4e-3 / 7.1e-3 / 1.0e-2 |
+| s1 block 36 / 44 / 47 | 1.7e-2 / 8.7e-2 / 2.3e-2 | 4.5e-2 / 1.22e-1 / 3.4e-2 | 4.2e-2 / 1.23e-1 / 3.2e-2 |
+| s1 velocity step 1 | 4.1e-2 | 5.2e-2 | 4.7e-2 |
+| s1 latents step 5 / 6 / 8 | 7.1e-3 / 7.5e-2 / 0.34 | 7.6e-3 / 8.5e-2 / 0.37 | 8.8e-3 / 0.10 / 0.44 |
+| s2 block 24 / 36 / 47 | 5.0e-3 / 1.7e-2 / 1.5e-2 | 1.2e-2 / 3.5e-2 / 2.5e-2 | 1.2e-2 / 3.4e-2 / 2.4e-2 |
+| s2 latents step 1 / 3 | 1.3e-2 / 8.0e-2 | 1.8e-2 / 0.106 | 1.9e-2 / 0.117 |
+
+Verdict: **LTX-2.5 passes.** Our bf16 run is closer to the reference than to
+our own f32 run at every block and step (typically by 2x in the blocks):
+it reproduces the reference's bf16 rounding points, and what is left is
+below the model's bf16/f32 noise floor. No fix needed.
+
+Found, outside the denoiser: **our text contexts differ from the
+reference's by 0.34 (video) and 0.27 (audio) rel-L2**, with the same weights
+on both sides (the rebuilt packs keep the Diffusers bytes). Every one of the
+1024 rows is a normalized, distinct row on both sides (the registers fill
+the padding), so it is not padding layout. It is injected away here and needs its own bisect of
+the Gemma feature extraction and connectors (not done).
+
+Not compared: 4K (not run, to save budget; the 512p profiles show no
+resolution-specific hazard), and our upsampler in isolation (`s2_upsampled`,
+0.35, inherits stage 1's 0.34).
