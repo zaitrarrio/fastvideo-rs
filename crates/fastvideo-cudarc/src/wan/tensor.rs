@@ -35,16 +35,45 @@ thread_local! {
     static BF16_ACT_OVERRIDE: Cell<Option<bool>> = const { Cell::new(None) };
 }
 
-static BF16_ACT: super::envflag::CachedBool = super::envflag::CachedBool::new();
+/// `FASTVIDEO_BF16_ACT` as set in the environment; `None` when unset.
+static BF16_ACT_ENV: std::sync::OnceLock<Option<bool>> = std::sync::OnceLock::new();
 
-/// Opt-in bf16 activation path (`FASTVIDEO_BF16_ACT=1`). Default off so today's
-/// f32 residual / host path is unchanged. Independent of [`super::bf16_gemm::bf16_enabled`]
-/// (`FASTVIDEO_BF16` still selects cuBLAS compute type).
+/// Set by pipelines whose bf16 path is validated on a GPU (H3, LTX-2).
+static BF16_ACT_PIPELINE_DEFAULT: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+/// Make bf16 activations the default for this process when
+/// `FASTVIDEO_BF16_ACT` is unset. Called by the H3 and LTX-2 pipelines, the
+/// ones measured end to end with it; other models keep f32 until they are.
+pub fn default_bf16_activations() {
+    BF16_ACT_PIPELINE_DEFAULT.store(true, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// bf16 activations, as the reference runs them (`FASTVIDEO_BF16_ACT`).
+///
+/// Unset, this is on for the H3 and LTX-2 pipelines (see
+/// [`default_bf16_activations`]) whenever ops run on a live device, and off on
+/// CPU runs, so the host oracle and host tests keep the f32 path.
+/// `FASTVIDEO_BF16_ACT=0` restores f32 activations; `=1` forces bf16 for every
+/// model. The unset default is not cached: it depends on whether a device is
+/// live yet. Independent of [`super::bf16_gemm::bf16_enabled`]
+/// (`FASTVIDEO_BF16` still selects the cuBLAS compute type).
 pub fn bf16_activations() -> bool {
     if let Some(v) = BF16_ACT_OVERRIDE.with(|c| c.get()) {
         return v;
     }
-    BF16_ACT.get_or_init(|| super::envflag::bool_flag("FASTVIDEO_BF16_ACT", false))
+    let env = BF16_ACT_ENV.get_or_init(|| {
+        std::env::var("FASTVIDEO_BF16_ACT")
+            .ok()
+            .map(|_| super::envflag::bool_flag("FASTVIDEO_BF16_ACT", true))
+    });
+    match env {
+        Some(v) => *v,
+        None => {
+            BF16_ACT_PIPELINE_DEFAULT.load(std::sync::atomic::Ordering::Relaxed)
+                && stats::device_expected()
+        }
+    }
 }
 
 /// Residual stream follows activations: host one-block PSNR vs f32 was

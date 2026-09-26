@@ -601,6 +601,7 @@ impl H3Pipeline {
     /// `root` is the FastH3 snapshot (`transformer/`, `vae/`, `audio_vae/`, and
     /// `tokenizer/` + `text_encoder/` unless `options.text_root` says otherwise).
     pub fn load(root: &Path, options: H3PipelineOptions) -> Result<Self> {
+        crate::wan::tensor::default_bf16_activations();
         let mut options = options;
         if options.recipe.as_deref().is_some_and(sol_h3_forces_ref2va) {
             options.ref2va = true;

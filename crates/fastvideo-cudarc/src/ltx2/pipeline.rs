@@ -1780,6 +1780,7 @@ pub struct Ltx2Pipeline {
 
 impl Ltx2Pipeline {
     pub fn load(paths: &Ltx2Paths, cfg: &Ltx2Config, options: &PipelineOptions) -> Result<Self> {
+        crate::wan::tensor::default_bf16_activations();
         let timer = Instant::now();
         // A distilled checkpoint already carries the adapter: the RTX5090
         // distilled two-stage (`run_ltx25_gpu.sh`) passes no LoRA. Only a dev

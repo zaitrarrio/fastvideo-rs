@@ -685,9 +685,10 @@ case "$FAMILY" in
     # The reference recipes replace the retired per-tensor switches
     # (FASTVIDEO_H3_FFN_FP8 / FASTVIDEO_FP8 on H3): w8a8 = Spark stage 1,
     # mxfp8 = Sol-H3 blocks 2..=46; both run bf16 activations.
-    for v in base bf16act w8a8 mxfp8; do
+    for v in f32act bf16act w8a8 mxfp8; do
       envs=()
       case "$v" in
+        f32act) envs=(FASTVIDEO_BF16_ACT=0) ;;
         bf16act) envs=(FASTVIDEO_BF16_ACT=1) ;;
         w8a8) envs=(FASTVIDEO_BF16_ACT=1 FASTVIDEO_H3_QUANT=w8a8) ;;
         mxfp8) envs=(FASTVIDEO_BF16_ACT=1 FASTVIDEO_H3_QUANT=mxfp8) ;;
@@ -699,18 +700,19 @@ case "$FAMILY" in
           --clip-dir "$RUNS/fasth3-8step-768p-$v/frames" "${h3_common[@]}"
     done
     for v in bf16act w8a8 mxfp8; do
-      compare_cells fasth3-8step-768p-base "fasth3-8step-768p-$v"
+      compare_cells fasth3-8step-768p-f32act "fasth3-8step-768p-$v"
     done
     # Both FP8 recipes run bf16 activations: against bf16act alone, the
     # pairs isolate what the weight/activation quantization changes.
     for v in w8a8 mxfp8; do
       compare_cells fasth3-8step-768p-bf16act "fasth3-8step-768p-$v"
     done
-    for v in base bf16act fp8; do
+    for v in f32act bf16act fp8; do
       envs=()
       case "$v" in
+        f32act) envs=(FASTVIDEO_BF16_ACT=0) ;;
         bf16act) envs=(FASTVIDEO_BF16_ACT=1) ;;
-        fp8) envs=(FASTVIDEO_FP8=1) ;;
+        fp8) envs=(FASTVIDEO_BF16_ACT=0 FASTVIDEO_FP8=1) ;;
       esac
       gated_cell "ltx25-4k5s-sol-$v" ltx25-two-stage \
         env "${envs[@]}" \
@@ -720,7 +722,7 @@ case "$FAMILY" in
           --clip "$RUNS/ltx25-4k5s-sol-$v/frames"
     done
     for v in bf16act fp8; do
-      compare_cells ltx25-4k5s-sol-base "ltx25-4k5s-sol-$v"
+      compare_cells ltx25-4k5s-sol-f32act "ltx25-4k5s-sol-$v"
     done
     ;;
   precision-debug)
@@ -729,10 +731,11 @@ case "$FAMILY" in
     #     each step CUPTI-traced (FASTVIDEO_GPU_TRACE_STEP=1: the second
     #     stage-1 step): host enqueue vs GPU busy, memcpy directions, top
     #     kernels; `ltx2 step transfers` lines count PCIe traffic per step.
-    for v in base fp8 bf16act bf16act-fp8; do
+    for v in f32act fp8 bf16act bf16act-fp8; do
       envs=(FASTVIDEO_GPU_TRACE=1 FASTVIDEO_GPU_TRACE_STEP=1)
       case "$v" in
-        fp8) envs+=(FASTVIDEO_FP8=1) ;;
+        f32act) envs+=(FASTVIDEO_BF16_ACT=0) ;;
+        fp8) envs+=(FASTVIDEO_BF16_ACT=0 FASTVIDEO_FP8=1) ;;
         bf16act) envs+=(FASTVIDEO_BF16_ACT=1) ;;
         bf16act-fp8) envs+=(FASTVIDEO_BF16_ACT=1 FASTVIDEO_FP8=1) ;;
       esac
@@ -743,7 +746,7 @@ case "$FAMILY" in
           --prompt "$PROMPT" --seed "$SEED" --two-stage --text streamed \
           --clip "$RUNS/ltx25-512p-$v/frames"
     done
-    for cell in ltx25-512p-base ltx25-512p-fp8 ltx25-512p-bf16act ltx25-512p-bf16act-fp8; do
+    for cell in ltx25-512p-f32act ltx25-512p-fp8 ltx25-512p-bf16act ltx25-512p-bf16act-fp8; do
       grep -hE 'ancestral step|step transfers|fp8 linear|FASTVIDEO_FP8' "$RUNS/$cell/stderr.log" 2>/dev/null \
         | head -24 | sed "s/^/[$cell] /" | tee -a "$LOG" || true
     done
@@ -759,9 +762,10 @@ case "$FAMILY" in
       --text-cache "$SCRATCH/h3-text-cache"
       --text-weights "$W/h3-base"
     )
-    for v in base bf16act w8a8; do
+    for v in f32act bf16act w8a8; do
       envs=(FASTVIDEO_DUMP_DIR="$RUNS/h3dump-$v")
       case "$v" in
+        f32act) envs+=(FASTVIDEO_BF16_ACT=0) ;;
         bf16act) envs+=(FASTVIDEO_BF16_ACT=1) ;;
         w8a8) envs+=(FASTVIDEO_BF16_ACT=1 FASTVIDEO_H3_QUANT=w8a8) ;;
       esac
@@ -771,7 +775,7 @@ case "$FAMILY" in
           --adaln-cache "$RUNS/fasth3-8step-768p-$v-adaln.cache" \
           --clip-dir "$RUNS/fasth3-8step-768p-$v/frames" "${h3_common[@]}"
     done
-    for pair in base:bf16act bf16act:w8a8 base:w8a8; do
+    for pair in f32act:bf16act bf16act:w8a8 f32act:w8a8; do
       a="${pair%%:*}" b="${pair##*:}"
       if [[ -d "$RUNS/h3dump-$a" && -d "$RUNS/h3dump-$b" ]]; then
         run_cell "dumps-$a--$b" "$BIN" compare-dumps \
@@ -779,7 +783,7 @@ case "$FAMILY" in
         grep -h 'compare-dumps' "$RUNS/dumps-$a--$b/stderr.log" | sed "s/^/[$a--$b] /" | tee -a "$LOG" || true
       fi
     done
-    compare_cells fasth3-8step-768p-base fasth3-8step-768p-bf16act
+    compare_cells fasth3-8step-768p-f32act fasth3-8step-768p-bf16act
     compare_cells fasth3-8step-768p-bf16act fasth3-8step-768p-w8a8
     rm -rf "$RUNS"/h3dump-*
     ;;
