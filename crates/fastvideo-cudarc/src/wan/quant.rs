@@ -346,13 +346,25 @@ impl QuantMode {
         }
     }
 
-    /// `FASTVIDEO_H3_QUANT` (default off). An unknown value is an error, not
-    /// a silent bf16 run.
+    /// `FASTVIDEO_H3_QUANT`. An unknown value is an error, not a silent bf16
+    /// run. Unset, H3 defaults to MXFP8 (Sol-H3's recipe; gate pass at 1.52x
+    /// denoise on RTX PRO 6000) on a live device with block-scaled FP8
+    /// (sm_100+), and to off on older GPUs and CPU runs. `=off` restores bf16.
     pub fn from_env() -> std::result::Result<Self, String> {
         match std::env::var(ENV) {
             Ok(v) => Self::parse(&v),
-            Err(_) => Ok(Self::Off),
+            Err(_) => Ok(Self::default_for_device()),
         }
+    }
+
+    fn default_for_device() -> Self {
+        #[cfg(feature = "cuda")]
+        if crate::wan::stats::device_expected()
+            && crate::wan::device::global_device().is_some_and(|d| d.sm_major >= 10)
+        {
+            return Self::Mxfp8;
+        }
+        Self::Off
     }
 
     pub fn kind(self) -> Option<QuantKind> {

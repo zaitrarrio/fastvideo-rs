@@ -839,8 +839,8 @@ case "$FAMILY" in
     for v in f32act bf16act w8a8 mxfp8; do
       envs=()
       case "$v" in
-        f32act) envs=(FASTVIDEO_BF16_ACT=0) ;;
-        bf16act) envs=(FASTVIDEO_BF16_ACT=1) ;;
+        f32act) envs=(FASTVIDEO_BF16_ACT=0 FASTVIDEO_H3_QUANT=off) ;;
+        bf16act) envs=(FASTVIDEO_BF16_ACT=1 FASTVIDEO_H3_QUANT=off) ;;
         w8a8) envs=(FASTVIDEO_BF16_ACT=1 FASTVIDEO_H3_QUANT=w8a8) ;;
         mxfp8) envs=(FASTVIDEO_BF16_ACT=1 FASTVIDEO_H3_QUANT=mxfp8) ;;
       esac
@@ -862,10 +862,10 @@ case "$FAMILY" in
     for v in f32act bf16act fp8 bf16act-fp8; do
       envs=()
       case "$v" in
-        f32act) envs=(FASTVIDEO_BF16_ACT=0) ;;
-        bf16act) envs=(FASTVIDEO_BF16_ACT=1) ;;
-        fp8) envs=(FASTVIDEO_BF16_ACT=0 FASTVIDEO_FP8=1) ;;
-        bf16act-fp8) envs=(FASTVIDEO_BF16_ACT=1 FASTVIDEO_FP8=1) ;;
+        f32act) envs=(FASTVIDEO_BF16_ACT=0 FASTVIDEO_H3_QUANT=off) ;;
+        bf16act) envs=(FASTVIDEO_BF16_ACT=1 FASTVIDEO_H3_QUANT=off) ;;
+        fp8) envs=(FASTVIDEO_BF16_ACT=0 FASTVIDEO_FP8=1 FASTVIDEO_H3_QUANT=off) ;;
+        bf16act-fp8) envs=(FASTVIDEO_BF16_ACT=1 FASTVIDEO_FP8=1 FASTVIDEO_H3_QUANT=off) ;;
       esac
       gated_cell "ltx25-4k5s-sol-$v" ltx25-two-stage \
         env "${envs[@]}" \
@@ -888,10 +888,10 @@ case "$FAMILY" in
     for v in f32act fp8 bf16act bf16act-fp8; do
       envs=(FASTVIDEO_GPU_TRACE=1 FASTVIDEO_GPU_TRACE_STEP=1)
       case "$v" in
-        f32act) envs+=(FASTVIDEO_BF16_ACT=0) ;;
-        fp8) envs+=(FASTVIDEO_BF16_ACT=0 FASTVIDEO_FP8=1) ;;
-        bf16act) envs+=(FASTVIDEO_BF16_ACT=1) ;;
-        bf16act-fp8) envs+=(FASTVIDEO_BF16_ACT=1 FASTVIDEO_FP8=1) ;;
+        f32act) envs+=(FASTVIDEO_BF16_ACT=0 FASTVIDEO_H3_QUANT=off) ;;
+        fp8) envs+=(FASTVIDEO_BF16_ACT=0 FASTVIDEO_FP8=1 FASTVIDEO_H3_QUANT=off) ;;
+        bf16act) envs+=(FASTVIDEO_BF16_ACT=1 FASTVIDEO_H3_QUANT=off) ;;
+        bf16act-fp8) envs+=(FASTVIDEO_BF16_ACT=1 FASTVIDEO_FP8=1 FASTVIDEO_H3_QUANT=off) ;;
       esac
       gated_cell "ltx25-512p-$v" ltx25-two-stage \
         env "${envs[@]}" \
@@ -919,8 +919,8 @@ case "$FAMILY" in
     for v in f32act bf16act w8a8; do
       envs=(FASTVIDEO_DUMP_DIR="$RUNS/h3dump-$v")
       case "$v" in
-        f32act) envs+=(FASTVIDEO_BF16_ACT=0) ;;
-        bf16act) envs+=(FASTVIDEO_BF16_ACT=1) ;;
+        f32act) envs+=(FASTVIDEO_BF16_ACT=0 FASTVIDEO_H3_QUANT=off) ;;
+        bf16act) envs+=(FASTVIDEO_BF16_ACT=1 FASTVIDEO_H3_QUANT=off) ;;
         w8a8) envs+=(FASTVIDEO_BF16_ACT=1 FASTVIDEO_H3_QUANT=w8a8) ;;
       esac
       gated_cell "fasth3-8step-768p-$v" fasth3-8step \
@@ -1009,8 +1009,8 @@ case "$FAMILY" in
       "${PROMPT_ARGS[@]}"
     )
     for v in f32act bf16act f32act-off; do
-      envs=(FASTVIDEO_BF16_ACT=1)
-      [[ "$v" == f32act* ]] && envs=(FASTVIDEO_BF16_ACT=0)
+      envs=(FASTVIDEO_BF16_ACT=1 FASTVIDEO_H3_QUANT=off)
+      [[ "$v" == f32act* ]] && envs=(FASTVIDEO_BF16_ACT=0 FASTVIDEO_H3_QUANT=off)
       gated_cell "fasth3-8step-480p-$v" fasth3-8step \
         env "${envs[@]}" \
         "$BIN" --mode fast h3 gen --weights "$W/h3-8step" --h3-recipe 8step \
@@ -1023,8 +1023,8 @@ case "$FAMILY" in
     # The OFF arm judged as its own candidate: byte-identical, and no faster.
     gate_cells fasth3-8step-480p-f32act fasth3-8step-480p-f32act-off exact fasth3-8step-480p-f32act-off
     for v in f32act bf16act; do
-      envs=(FASTVIDEO_BF16_ACT=1)
-      [[ "$v" == f32act ]] && envs=(FASTVIDEO_BF16_ACT=0)
+      envs=(FASTVIDEO_BF16_ACT=1 FASTVIDEO_H3_QUANT=off)
+      [[ "$v" == f32act ]] && envs=(FASTVIDEO_BF16_ACT=0 FASTVIDEO_H3_QUANT=off)
       gated_cell "ltx25-512p-$v" ltx25-two-stage \
         env "${envs[@]}" \
         "$BIN" --mode fast ltx2 gen --model-version 2.5 \
@@ -1119,7 +1119,8 @@ case "$FAMILY" in
         continue
       fi
       ours="$RUNS/oracle-$target-dump"
-      envs=(FASTVIDEO_INJECT_DIR="$ref/dump" FASTVIDEO_DUMP_OPS="$ops")
+      # The references run bf16 without FP8: pin our H3 default (MXFP8) off.
+      envs=(FASTVIDEO_INJECT_DIR="$ref/dump" FASTVIDEO_DUMP_OPS="$ops" FASTVIDEO_H3_QUANT=off)
       case "$target" in
         fasth3-8step | fasth3-8step-vsa0)
           wcell=fasth3-8step
@@ -1144,7 +1145,7 @@ case "$FAMILY" in
       # activations against the reference, and our bf16 run against our f32
       # run -- how far bf16 rounding alone moves the same pipeline.
       if [[ "${FV_ORACLE_F32:-auto}" == 1 || ( "${FV_ORACLE_F32:-auto}" == auto && "$target" == fasth3-* ) ]]; then
-        oracle_run "oracle-$target-f32" "$ours-f32" FASTVIDEO_BF16_ACT=0
+        oracle_run "oracle-$target-f32" "$ours-f32" FASTVIDEO_BF16_ACT=0 FASTVIDEO_H3_QUANT=off
         oracle_diff "oracle-$target-f32-diff" "$ref/dump" "$ours-f32"
         oracle_diff "oracle-$target-bf16-vs-f32" "$ours-f32" "$ours"
       fi
