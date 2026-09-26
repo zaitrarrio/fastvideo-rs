@@ -305,6 +305,47 @@ pub fn cast_bf16_f32_bias_act_device(
     Ok(out)
 }
 
+/// A quantized linear's bf16 GEMM output → `bf16(bf16(y + bias))`, then
+/// `bf16(gelu_tanh(·))` when `gelu`: one launch. Written as f32 (`Ok(Err)`)
+/// or, with `out16`, as bf16 (`Ok(Ok)`). Host twin:
+/// [`host::quant_linear_epilogue`].
+#[cfg(feature = "cuda")]
+pub fn quant_linear_epilogue_device(
+    a: &CudaSlice<half::bf16>,
+    bias: Option<&CudaSlice<f32>>,
+    gelu: bool,
+    out16: bool,
+) -> Result<std::result::Result<CudaSlice<half::bf16>, CudaSlice<f32>>> {
+    if let Some(b) = bias {
+        check(
+            "quant_linear_epilogue bias",
+            !b.is_empty() && a.len() % b.len() == 0,
+        )?;
+    }
+    let dev = ctx()?;
+    let len = a.len().max(1);
+    let (n, width) = (a.len() as i64, bias.map_or(1, |b| b.len()) as i64);
+    let (has_bias, act, o16) = (i32::from(bias.is_some()), i32::from(gelu), i32::from(out16));
+    // The unused output (and an absent bias) still bind a pointer.
+    let placeholder = alloc(1)?;
+    let bias_arg = bias.unwrap_or(&placeholder);
+    if out16 {
+        let mut out = unsafe { dev.stream.alloc::<half::bf16>(len) }.map_err(err)?;
+        let mut dummy32 = alloc(1)?;
+        launch!(dev.stream, &dev.kernels.quant_linear_epilogue, cfg_n(a.len());
+            a, bias_arg, &mut dummy32, &mut out, &n, &width, &has_bias, &act, &o16)
+        .map_err(err)?;
+        Ok(Ok(out))
+    } else {
+        let mut out = alloc(len)?;
+        let mut dummy16 = unsafe { dev.stream.alloc::<half::bf16>(1) }.map_err(err)?;
+        launch!(dev.stream, &dev.kernels.quant_linear_epilogue, cfg_n(a.len());
+            a, bias_arg, &mut out, &mut dummy16, &n, &width, &has_bias, &act, &o16)
+        .map_err(err)?;
+        Ok(Err(out))
+    }
+}
+
 /// bfloat16 → f32 with no bias or activation (device twin of [`host::quantize_bf16`] inverse).
 #[cfg(feature = "cuda")]
 pub fn cast_bf16_f32_device(a: &CudaSlice<half::bf16>) -> Result<CudaSlice<f32>> {
@@ -1390,6 +1431,26 @@ pub mod host {
     /// Host oracle for bf16 storage: each f32 is rounded with `half::bf16` and widened back.
     pub fn quantize_bf16(x: &[f32]) -> Vec<f32> {
         map1(x, |v| half::bf16::from_f32(v).to_f32())
+    }
+
+    /// Twin of `quant_linear_epilogue`: `y` (bf16 values) `+ bias[i % width]`
+    /// rounded to bf16, then GELU-tanh rounded to bf16.
+    pub fn quant_linear_epilogue(y: &[f32], bias: Option<&[f32]>, gelu: bool) -> Vec<f32> {
+        let r = |v: f32| half::bf16::from_f32(v).to_f32();
+        y.iter()
+            .enumerate()
+            .map(|(i, &v)| {
+                let v = match bias {
+                    Some(b) => r(v + b[i % b.len()]),
+                    None => v,
+                };
+                if gelu {
+                    r(gelu_tanh(v))
+                } else {
+                    v
+                }
+            })
+            .collect()
     }
 
     pub fn silu(x: f32) -> f32 {

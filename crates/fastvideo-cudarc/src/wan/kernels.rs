@@ -99,6 +99,7 @@ kernel_fns!(
     bias_gelu_inplace,
     cast_f32_bf16,
     cast_bf16_f32_bias_act,
+    quant_linear_epilogue,
     residual_gate_add_e,
     softmax_last,
     softmax_last_bf16,

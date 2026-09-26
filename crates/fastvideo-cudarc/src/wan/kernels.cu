@@ -139,6 +139,26 @@ extern "C" __global__ void cast_bf16_f32_bias_act(
     }
     out[i] = v;
 }
+// The output side of a quantized linear (bf16 GEMM output) in one launch:
+// `+ bias[i % width]` then GELU-tanh (act=1), each rounded to bf16 as torch's
+// bf16 ops round (`_scaled_mm(...) + bias`, then `gelu`), written as f32
+// (out16 == 0, into out32) or as bf16 bits (into out16p).
+extern "C" __global__ void quant_linear_epilogue(
+    const unsigned short* a, const float* bias, float* out32, unsigned short* out16p,
+    long n, long width, int has_bias, int act, int out16
+) {
+    long i = IDX();
+    if (i >= n) return;
+    float v = __uint_as_float(((unsigned int)a[i]) << 16);
+    if (has_bias) v = __uint_as_float(((unsigned int)fv_bf16_rne(v + bias[i % width])) << 16);
+    if (act == 1) {
+        const float k = 0.7978845608028654f;
+        float u = k * (v + 0.044715f * v * v * v);
+        v = __uint_as_float(((unsigned int)fv_bf16_rne(0.5f * v * (1.0f + tanhf(u)))) << 16);
+    }
+    if (out16) out16p[i] = fv_bf16_rne(v);
+    else out32[i] = v;
+}
 // Gated residual with the AdaLN table: out = h + a * e[b, slot, d], with
 // h/a [batch, seq, dim] and e [batch, e_rows, dim].
 extern "C" __global__ void residual_gate_add_e(

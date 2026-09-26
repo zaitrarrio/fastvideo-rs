@@ -820,15 +820,36 @@ impl Linear {
 
     /// bias and GELU on a quantized GEMM's bf16 output, each rounding once
     /// (`_scaled_mm(...) + bias` in bf16), then the caller's activation dtype.
+    ///
+    /// On the device this is one launch from the GEMM's bf16 output (or none:
+    /// bf16 activations, no bias, no GELU). It used to be `add_bias` on the
+    /// bf16 output, which had no bf16 device branch: every biased quantized
+    /// linear downloaded its output, added the bias on one CPU thread and
+    /// uploaded it again (LTX-2.5 4K FASTVIDEO_FP8: 255 s per stage-1 step
+    /// against 7 s).
     fn quant_epilogue(&self, mut out: CudaTensor, gelu: bool) -> Result<CudaTensor> {
-        if let Some(b) = &self.bias {
-            let dim = out.rank() - 1;
-            out = out.add_bias(b, dim)?.quantize_bf16()?;
+        let act16 = super::tensor::bf16_activations() && !self.f32_island;
+        #[cfg(feature = "cuda")]
+        if let Some(y16) = out.device_slice_bf16() {
+            if act16 && self.bias.is_none() && !gelu {
+                return Ok(out);
+            }
+            let bias = match &self.bias {
+                Some(b) => Some(b.dev()?.ok_or_else(|| msg("quantized linear bias off the device"))?),
+                None => None,
+            };
+            let shape = out.shape.clone();
+            return match super::ops::quant_linear_epilogue_device(y16, bias.as_deref(), gelu, act16)? {
+                Ok(y16) => CudaTensor::from_device_slice_bf16(y16, shape),
+                Err(y32) => CudaTensor::from_dev_result(y32, shape),
+            };
         }
-        if gelu {
-            out = out.gelu_tanh().quantize_bf16()?;
-        }
-        if super::tensor::bf16_activations() && !self.f32_island {
+        // Guard: a device run never finishes a quantized linear on the host.
+        stats::host_fallback("quantized linear epilogue", format_args!("{:?}", out.shape))?;
+        let bias = self.bias.as_ref().map(CudaTensor::host_cow).transpose()?;
+        let y = host::quant_linear_epilogue(&out.host_cow()?, bias.as_deref(), gelu);
+        out = CudaTensor::host_only_dtype(y, out.shape.clone(), super::tensor::TensorDType::Bf16);
+        if act16 {
             Ok(out)
         } else {
             out.to_f32_act()
@@ -847,6 +868,7 @@ impl Linear {
             let out = CudaTensor::from_device_slice_bf16(y, out_shape)?;
             return self.quant_epilogue(out, gelu);
         }
+        stats::host_fallback("quantized linear", format_args!("host weight, input {:?}", xs.shape))?;
         let x: Vec<f32> = xs
             .host_cow()?
             .iter()

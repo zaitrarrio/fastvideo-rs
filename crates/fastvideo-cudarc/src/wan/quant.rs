@@ -983,8 +983,15 @@ mod device_impl {
                 Ok(()) => Ok(out),
                 Err(first) if m != m_pad => {
                     // No algorithm for an unaligned token count: run the
-                    // zero-padded rows and keep the first `m`.
-                    let _ = first;
+                    // zero-padded rows and keep the first `m`. Every such
+                    // call pays a failed heuristic query and a copy: said once.
+                    static SAID: std::sync::atomic::AtomicBool =
+                        std::sync::atomic::AtomicBool::new(false);
+                    if !SAID.swap(true, std::sync::atomic::Ordering::Relaxed) {
+                        eprintln!(
+                            "[fastvideo] quantized linear: {first}; running {m_pad} zero-padded rows instead (and copying back) on every such call"
+                        );
+                    }
                     let mut padded =
                         unsafe { dev.stream.alloc::<half::bf16>(m_pad * n_out) }.map_err(err)?;
                     let pp = ptr_mut(&mut padded);

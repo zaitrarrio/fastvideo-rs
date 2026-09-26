@@ -1719,8 +1719,12 @@ impl CudaTensor {
                 return Ok(self);
             }
         }
+        // A bf16 device tensor (or a host one on a device run) takes the
+        // broadcast add on the device too. It used to fall through to the
+        // host loop below: a download, a single-threaded add and an upload
+        // per call, silently (see `Linear::quant_epilogue`).
         #[cfg(feature = "cuda")]
-        if self.device.is_some() {
+        if self.device.is_some() || self.device_bf16.is_some() || stats::device_expected() {
             return self.add(&bias.reshape(bias_shape(self.rank(), dim, c))?);
         }
         let b = bias.host_cow()?.into_owned();

@@ -787,6 +787,23 @@ pub fn run(report: &mut Report, lim: Limits, seed: u64) -> StageResult<()> {
             c.cmp("cast_bf16_f32_bias_gelu", &got, &want, op)?;
             let got = down(&ops::cast_bf16_f32_bias_act_device(&x16, None, false)?)?;
             c.cmp("cast_bf16_f32_plain", &got, &bits, 0.0)?;
+            // Quantized-linear epilogue: bias and GELU each rounded to bf16,
+            // f32 or bf16 out. Bias alone is exact; GELU is within one bf16
+            // step of the host twin (tanhf vs f32::tanh may flip a rounding).
+            let bias_d = up(&bias)?;
+            let want = ops::host::quant_linear_epilogue(&bits, Some(&bias), false);
+            let got = match ops::quant_linear_epilogue_device(&x16, Some(&bias_d), false, false)? {
+                Err(y) => down(&y)?,
+                Ok(_) => unreachable!("f32 out requested"),
+            };
+            c.cmp("quant_linear_epilogue_bias_f32", &got, &want, 0.0)?;
+            let want = ops::host::quant_linear_epilogue(&bits, Some(&bias), true);
+            let got: Vec<f32> =
+                match ops::quant_linear_epilogue_device(&x16, Some(&bias_d), true, true)? {
+                    Ok(y) => dev()?.stream.memcpy_dtov(&y)?.iter().map(|v| v.to_f32()).collect(),
+                    Err(_) => unreachable!("bf16 out requested"),
+                };
+            c.cmp("quant_linear_epilogue_bias_gelu_bf16", &got, &want, 1e-3)?;
         }
         {
             // H3 video VAE glue (`h3v_*`): bf16 in, bf16 out, against the host
