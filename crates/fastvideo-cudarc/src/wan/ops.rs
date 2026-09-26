@@ -3306,9 +3306,12 @@ pub fn sol_kernel_choice(sm_major: i32) -> SolKernel {
     }
 }
 
-/// The `auto` kernel below / without the warp-specialised default.
+/// The `auto` kernel: X4f. Bit-identical to V1 on every `attn2_parity`
+/// case and 7-8% faster on RTX PRO 6000 (LTX-2.5 1080p 20 s stage 2, tau
+/// 1.0: 136.9 vs 147.8 ms; sol-engine's CuTe kernel 135.5 ms).
+/// `FASTVIDEO_SOL_KERNEL=v1` restores the original.
 pub fn sol_default_kernel() -> SolKernel {
-    SolKernel::V1
+    SolKernel::X4f
 }
 
 /// Whether `auto` picks the warp-specialised kernel.
