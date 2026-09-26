@@ -197,8 +197,8 @@ pub fn common(pipeline: &str, warm: bool) -> Value {
     json!({
         "schema_version": SCHEMA_VERSION,
         "pipeline": pipeline,
-        "timing_scope": "one warm generate() call: text + denoise + decode + write, model load excluded",
-        "timing_note": "total_s = inference_time_s = e2e_seconds; load_s is separate",
+        "timing_scope": "one warm generate() call: text + denoise + decode, the decode through a finished mp4 (x264 encode included, as sol-engine's video_vae_seconds); PNG frames and model load excluded",
+        "timing_note": "total_s = inference_time_s = e2e_seconds = generate_wall_s - png_frames_s (the PNG frames for compare-clips are written after the mp4, outside every timed number); load_s is separate",
         "warm_steady_state": warm,
         "warmup_requests": u32::from(warm),
         "includes_model_load": false,

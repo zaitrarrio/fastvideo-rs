@@ -1825,18 +1825,24 @@ fn vae_bench(
         let (mut writer, decode_s, split) =
             ltx2_pipeline::decode_video_drained(&vae, &z, tiling.as_ref(), writer).map_err(pe)?;
         let peak_mib = peak.stop();
+        // As gen times it: through ffmpeg's exit, PNG frames after.
+        let t = std::time::Instant::now();
+        writer.finish_video().map_err(pe)?;
+        let encode_s = t.elapsed().as_secs_f64();
+        let decode_s = decode_s + encode_s;
         let t = std::time::Instant::now();
         let (frames, _) = writer.finish().map_err(pe)?;
         let write_s = t.elapsed().as_secs_f64();
         eprintln!(
-            "ltx2 vae-bench {name}: decode {decode_s:.2}s (vae {:.2}s, rgb {:.2}s, push {:.2}s, wait {:.2}s), write {write_s:.2}s, peak {peak_mib:?} MiB",
+            "ltx2 vae-bench {name}: decode {decode_s:.2}s (vae {:.2}s, rgb {:.2}s, push {:.2}s, wait {:.2}s, mp4 tail {encode_s:.2}s), png frames after {write_s:.2}s, peak {peak_mib:?} MiB",
             split.vae_s, split.rgb_s, split.push_s, split.wait_s
         );
         let mut run = json!({
             "decoder": name, "warm_s": warm_s, "decode_video_s": decode_s,
             "video_vae_s": split.vae_s, "video_rgb_s": split.rgb_s,
             "video_push_s": split.push_s, "video_wait_s": split.wait_s,
-            "write_s": write_s, "frames_written": frames.len(), "peak_vram_mib": peak_mib,
+            "video_encode_s": encode_s, "write_s": write_s, "frames_written": frames.len(),
+            "writer": writer_json(writer.stats()), "peak_vram_mib": peak_mib,
         });
         if let Some(trace) = fastvideo_cudarc::wan::gpu_trace::last_window_report() {
             run["gpu_trace_decode"] = trace;
@@ -2019,7 +2025,8 @@ fn gen(
         json!({
             "warm": warm, "wall_s": wall_s, "generate_s": generate_s, "load_s": pipeline.load_s, "text_s": t.text_s,
             "denoise_s": t.denoise_s, "stage1_s": t.stage1_s, "upsample_s": t.upsample_s, "stage2_s": t.stage2_s,
-            "step_s": t.step_s, "decode_audio_s": t.decode_audio_s, "decode_video_s": t.decode_video_s, "write_s": t.write_s,
+            "step_s": t.step_s, "decode_audio_s": t.decode_audio_s, "decode_video_s": t.decode_video_s, "video_encode_s": t.video_encode_s, "write_s": t.write_s,
+            "writer": t.writer.as_ref().map(writer_json),
             "video_vae_s": t.video_vae_s, "video_rgb_s": t.video_rgb_s, "video_push_s": t.video_push_s, "video_wait_s": t.video_wait_s,
         }),
     );
@@ -2169,6 +2176,9 @@ struct Ltx2Bench<'a> {
 fn ltx2_benchmark(b: &Ltx2Bench<'_>) -> serde_json::Value {
     use crate::benchmark::gib;
     let t = &b.out.timings;
+    // The PNG frames are written after the mp4, inside generate() but outside
+    // every timed number (sol-engine writes no frames).
+    let e2e = b.generate_s - t.write_s;
     let peak_used = b.out.memory.iter().map(|p| p.peak_used).max();
     let peak_reserved = b.out.memory.iter().map(|p| p.peak_reserved).max();
     let version = match b.model_version {
@@ -2197,9 +2207,11 @@ fn ltx2_benchmark(b: &Ltx2Bench<'_>) -> serde_json::Value {
             "audio_tokens": b.out.audio_tokens,
             "prompt_tokens": b.out.prompt_tokens,
         },
-        "total_s": b.generate_s,
-        "e2e_seconds": b.generate_s,
-        "inference_time_s": b.generate_s,
+        "total_s": e2e,
+        "e2e_seconds": e2e,
+        "inference_time_s": e2e,
+        "generate_wall_s": b.generate_s,
+        "png_frames_s": t.write_s,
         "denoise_s": t.denoise_s,
         "decode_s": t.decode_audio_s + t.decode_video_s,
         "load_s": b.load_s,
@@ -2219,8 +2231,10 @@ fn ltx2_benchmark(b: &Ltx2Bench<'_>) -> serde_json::Value {
             "video_rgb": t.video_rgb_s,
             "video_push": t.video_push_s,
             "video_wait": t.video_wait_s,
-            "write": t.write_s,
+            "video_encode_tail": t.video_encode_s,
+            "png_frames": t.write_s,
         },
+        "writer": t.writer.as_ref().map(writer_json),
         "step_seconds": t.step_s,
         "peak_memory_mb": peak_reserved.map(|b| b as f64 / f64::from(1u32 << 20)),
         "peak_allocated_gib": peak_used.map(gib),
@@ -2238,6 +2252,18 @@ fn ltx2_benchmark(b: &Ltx2Bench<'_>) -> serde_json::Value {
         "gpu_trace": fastvideo_cudarc::wan::gpu_trace::last_report(),
     });
     crate::benchmark::merge(crate::benchmark::common("ltx2", b.warm), doc)
+}
+
+/// A frame writer's account ([`fastvideo_cudarc::wan::writer::WriterStats`]).
+pub(crate) fn writer_json(s: &fastvideo_cudarc::wan::writer::WriterStats) -> serde_json::Value {
+    json!({
+        "png_mode": s.png_mode, "frames": s.frames, "ffmpeg_feed_s": s.ffmpeg_feed_s,
+        "video_tail_s": s.video_tail_s, "png_inline": s.png_inline, "png_deferred": s.png_deferred,
+        "png_s": s.png_s, "png_gib": gib_of(s.png_bytes),
+        "buffered_peak_gib": gib_of(s.buffered_peak_bytes as u64),
+        "buffer_budget_gib": gib_of(s.buffer_budget_bytes as u64),
+        "active_at_spawn": s.active_at_spawn,
+    })
 }
 
 fn gib_of(bytes: u64) -> f64 {

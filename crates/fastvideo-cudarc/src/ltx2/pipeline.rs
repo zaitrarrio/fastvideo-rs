@@ -292,7 +292,14 @@ pub struct Ltx2Timings {
     pub stage2_s: f64,
     pub step_s: Vec<f64>,
     pub decode_audio_s: f64,
+    /// The video decode through a finished `output.mp4`: VAE, RGB8 packing
+    /// and copy down, the ffmpeg feed and ffmpeg's exit (sol-engine's
+    /// `video_vae_seconds` also covers its x264 encode). PNG frames are not
+    /// in it: see `write_s`.
     pub decode_video_s: f64,
+    /// Part of `decode_video_s`: from the last frame handed to the writer to
+    /// ffmpeg's exit (the mp4's tail).
+    pub video_encode_s: f64,
     /// The conv-VAE decode split as H3 splits it: GPU time of the VAE alone
     /// (comparable with sol-engine's `video_vae_seconds`, which also covers its
     /// YUV conversion and copy down), RGB8 packing + copy down, time the drain
@@ -301,8 +308,11 @@ pub struct Ltx2Timings {
     pub video_rgb_s: f64,
     pub video_push_s: f64,
     pub video_wait_s: f64,
-    /// Waiting for the frame writer / ffmpeg after the last frame was decoded.
+    /// `frame-NNN.png` written after the mp4 (deferred, synced; see
+    /// `wan::writer`), outside `decode_video_s`.
     pub write_s: f64,
+    /// The writer's own account (PNG mode, ffmpeg blocking, buffer use).
+    pub writer: Option<crate::wan::writer::WriterStats>,
 }
 
 #[derive(Debug, Clone)]
@@ -766,7 +776,15 @@ pub fn denoise_with(
             model.stage1_store(&out.0, &out.1);
             out
         };
-        dump_step_velocity(i, &video, &audio, &v_video, &v_audio, schedule.sigmas[i], state)?;
+        dump_step_velocity(
+            i,
+            &video,
+            &audio,
+            &v_video,
+            &v_audio,
+            schedule.sigmas[i],
+            state,
+        )?;
         video = euler_update(&video, &v_video, schedule, i, state)?;
         audio = euler_update(&audio, &v_audio, schedule, i, state)?;
         dump_step_end(i, &video, &audio)?;
@@ -1130,10 +1148,31 @@ pub struct Written {
     pub mp4: Option<String>,
     pub wav: String,
     pub decode_audio_s: f64,
+    /// Through a finished mp4 (see [`Ltx2Timings::decode_video_s`]).
     pub decode_video_s: f64,
+    /// The mp4's tail inside `decode_video_s`.
+    pub encode_s: f64,
+    /// PNG frames after the mp4.
     pub write_s: f64,
     /// Where the conv-VAE decode's time went (`None` for the other decoders).
     pub split: Option<DecodeSplit>,
+    pub writer: crate::wan::writer::WriterStats,
+}
+
+/// Close the video half of `writer` (ffmpeg fed and exited) and add that tail
+/// to `decode_video_s`; then write the PNG frames. Returns
+/// `(frames, mp4, decode_video_s, encode_s, write_s)`.
+fn finish_writer(
+    writer: &mut VideoWriter,
+    decode_video_s: f64,
+) -> Result<(Vec<String>, Option<String>, f64, f64, f64)> {
+    let timer = Instant::now();
+    let mp4 = writer.finish_video()?;
+    let encode_s = timer.elapsed().as_secs_f64();
+    let timer = Instant::now();
+    let (frames, _) = writer.finish()?;
+    let write_s = timer.elapsed().as_secs_f64();
+    Ok((frames, mp4, decode_video_s + encode_s, encode_s, write_s))
 }
 
 /// Final packed latents → `audio.wav`, `frame-NNN.png` and (when `mp4`)
@@ -1173,19 +1212,22 @@ pub fn decode_and_write(
     save_latents(&latents)?;
     let fps = frame_rate.round().max(1.0) as u32;
     let writer = VideoWriter::spawn_with_audio(dir, fps, mp4, Some(&wav))?;
-    let (writer, decode_video_s, split) =
-        decode_video_drained(&dec.video, &latents, tiling, writer)?;
-    let timer = Instant::now();
-    let mut writer = writer;
-    let (frames, mp4_path) = writer.finish()?;
+    let (mut writer, frames_s, split) = decode_video_drained(&dec.video, &latents, tiling, writer)?;
+    let (frames, mp4_path, decode_video_s, encode_s, write_s) =
+        finish_writer(&mut writer, frames_s)?;
+    crate::wan::log::info(format_args!(
+        "ltx2 video decode + mp4 {decode_video_s:.2}s (mp4 tail {encode_s:.2}s); png frames after it {write_s:.2}s"
+    ));
     Ok(Written {
         frames,
         mp4: mp4_path,
         wav: wav.to_string_lossy().into_owned(),
         decode_audio_s,
         decode_video_s,
-        write_s: timer.elapsed().as_secs_f64(),
+        encode_s,
+        write_s,
         split: Some(split),
+        writer: writer.stats().clone(),
     })
 }
 
@@ -1307,17 +1349,18 @@ pub fn decode_tae_and_write(
         (Err(e), None) => return Err(e.into()),
         (Ok(_), None) => {}
     }
-    let decode_video_s = timer.elapsed().as_secs_f64();
-    let timer = Instant::now();
-    let (frames, mp4_path) = writer.finish()?;
+    let (frames, mp4_path, decode_video_s, encode_s, write_s) =
+        finish_writer(&mut writer, timer.elapsed().as_secs_f64())?;
     Ok(Written {
         frames,
         mp4: mp4_path,
         wav: wav.to_string_lossy().into_owned(),
         decode_audio_s,
         decode_video_s,
-        write_s: timer.elapsed().as_secs_f64(),
+        encode_s,
+        write_s,
         split: None,
+        writer: writer.stats().clone(),
     })
 }
 
@@ -1377,17 +1420,18 @@ pub fn decode_diffvae_and_write(
         writer.push(offset, h, w, rgb8)?;
         offset += n;
     }
-    let decode_video_s = timer.elapsed().as_secs_f64();
-    let timer = Instant::now();
-    let (frames, mp4_path) = writer.finish()?;
+    let (frames, mp4_path, decode_video_s, encode_s, write_s) =
+        finish_writer(&mut writer, timer.elapsed().as_secs_f64())?;
     Ok(Written {
         frames,
         mp4: mp4_path,
         wav: wav.to_string_lossy().into_owned(),
         decode_audio_s,
         decode_video_s,
-        write_s: timer.elapsed().as_secs_f64(),
+        encode_s,
+        write_s,
         split: None,
+        writer: writer.stats().clone(),
     })
 }
 
@@ -2727,7 +2771,9 @@ impl Ltx2Pipeline {
             timings.video_push_s = s.push_s;
             timings.video_wait_s = s.wait_s;
         }
+        timings.video_encode_s = written.encode_s;
         timings.write_s = written.write_s;
+        timings.writer = Some(written.writer);
         drop((video, audio));
         self.release_transient_decoders()?;
         trim()?;
@@ -2950,10 +2996,12 @@ impl Ltx2Pipeline {
             (Err(e), None) => return Err(e.into()),
             (Ok(_), None) => {}
         };
-        timings.decode_video_s = timer.elapsed().as_secs_f64();
-        let timer = Instant::now();
-        let (frames, mp4_path) = writer.finish()?;
-        timings.write_s = timer.elapsed().as_secs_f64();
+        let (frames, mp4_path, decode_video_s, encode_s, write_s) =
+            finish_writer(&mut writer, timer.elapsed().as_secs_f64())?;
+        timings.decode_video_s = decode_video_s;
+        timings.video_encode_s = encode_s;
+        timings.write_s = write_s;
+        timings.writer = Some(writer.stats().clone());
         self.release_transient_decoders()?;
         memory.mark("decode")?;
         Ok(Ltx2Output {
