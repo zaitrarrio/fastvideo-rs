@@ -146,6 +146,6 @@ install_sol_ltx25() {
   # apache-tvm-ffi: the CuTe DSL from_dlpack path (Sol-Attn) imports tvm_ffi.
   uv pip install -q --python "$py" "nvidia-cutlass-dsl>=4.5" cuda-python apache-tvm-ffi || return 1
   uv pip install -q --python "$py" -e "$SRC/sol-engine/techniques/sparse_backends" || return 1
-  smoke "$py" ltx_pipelines, sol_attn || return 1
+  smoke "$py" ltx_pipelines, sol_attn, tvm_ffi || return 1
   echo "$stamp" >"$d/.stamp"
 }
