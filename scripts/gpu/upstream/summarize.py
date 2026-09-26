@@ -24,6 +24,30 @@ def f(x, nd=1):
     return "" if x is None else (f"{x:.{nd}f}" if isinstance(x, (int, float)) else str(x))
 
 
+def sglang_log(c: Path, started) -> dict:
+    """Stage times of the measured request, load time and TeaCache decisions from SGLang's log."""
+    import datetime
+    import re
+    out: dict = {}
+    try:
+        text = (c / "stdout.log").read_text(errors="replace")
+    except OSError:
+        return out
+    stages: dict = {}
+    for m in re.finditer(r"\[([A-Za-z0-9]+Stage)\] finished in ([0-9.]+) seconds", text):
+        stages[m.group(1).replace("RTX5090MiniMaxH3", "").replace("MiniMaxH3", "")] = float(m.group(2))
+    out["stage_times"] = stages  # last occurrence = measured request
+    m = re.search(r"\[(\d\d-\d\d \d\d:\d\d:\d\d)\] Pipeline instantiated", text)
+    if m and started:
+        t = datetime.datetime.strptime("2026-" + m.group(1), "%Y-%m-%d %H:%M:%S").replace(tzinfo=datetime.timezone.utc)
+        out["load"] = t.timestamp() - float(started)
+    comp = len(re.findall(r'"action": "compute"[^\n]*"request_epoch": "measured', text))
+    reuse = len(re.findall(r'"action": "reuse"[^\n]*"request_epoch": "measured', text))
+    if comp or reuse:
+        out["teacache"] = (comp, reuse)
+    return out
+
+
 def row(tag: str, c: Path) -> dict | None:
     cell = load(c / "cell.json")
     if not cell:
@@ -52,10 +76,11 @@ def row(tag: str, c: Path) -> dict | None:
         d["stages"] = f"warmup {f(w.get('inference_time_s'))}"
         if m.get("peak_memory_mb"):
             d["notes"] = f"sglang peak {m['peak_memory_mb'] / 1024:.1f} GiB"
-        met = m.get("metrics") or {}
-        stages = met.get("stages") or met.get("stage_durations") or {}
-        if isinstance(stages, dict) and stages:
-            d["stages"] += "; " + ", ".join(f"{k} {f(v)}" for k, v in list(stages.items())[:6])
+        d.update(sglang_log(c, cell.get("started")))
+        if d.get("stage_times"):
+            d["stages"] += "; " + ", ".join(f"{k} {v:.1f}" for k, v in d["stage_times"].items())
+        if d.get("teacache"):
+            d["notes"] += f"; measured DiT forwards computed/reused {d['teacache'][0]}/{d['teacache'][1]}"
     elif name.startswith("sol-h3-4step"):
         d["load"] = r.get("load_s")
         d["warm"] = r.get("warm_total_s")
