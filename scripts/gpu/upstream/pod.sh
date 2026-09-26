@@ -65,6 +65,7 @@ run_step() {
     info:ltx25) info_ltx25 ;;
     info:box) info_box ;;
     lpips:ref) lpips_ref ;;
+    bench:attn) bench_attn ;;   # attention microbenchmarks (bench_attn.py)
     cells) run_cells ;;
     cells:*) ( UP_CELLS="${s#cells:}"; UP_CELLS="${UP_CELLS//,/ }"; run_cells ) ;;
     oracle) run_oracle ;;   # oracle.sh: dump hooks for the GPU oracle diff
@@ -92,6 +93,14 @@ info_box() {
     env | grep -E '^(HOME|UV_|XDG_|HF_HOME)=' | sort
   } >"$OUT/box.txt" 2>&1
   return 0
+}
+
+# sol-engine Sol-Attn and torch SDPA backends at our real attention shapes.
+bench_attn() {
+  mkdir -p "$OUT/bench-attn"
+  PYTHONUNBUFFERED=1 "$UP/sol-ltx25/LTX-2/.venv/bin/python" "$HERE/bench_attn.py" \
+    --sol-engine "$SRC/sol-engine" --out "$OUT/bench-attn/result.json" ${UP_ATTN_SHAPES:+--shapes "$UP_ATTN_SHAPES"} \
+    >"$OUT/bench-attn/stdout.log" 2>"$OUT/bench-attn/stderr.log"
 }
 
 # ---------------------------------------------------------------- weights
