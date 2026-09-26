@@ -34,6 +34,7 @@ use fastvideo_models::ltx2::{AncestralOpts, Ltx2Schedule};
 use rand::{Rng, SeedableRng};
 use rand_distr::StandardNormal;
 
+use crate::h3::drain::{DecodeSplit, FrameDrain};
 use crate::llm::{DecoderConfig, ResidentDecoder};
 use crate::wan::offload::{DitOffload, Residency};
 use crate::wan::pipeline::{
@@ -292,6 +293,14 @@ pub struct Ltx2Timings {
     pub step_s: Vec<f64>,
     pub decode_audio_s: f64,
     pub decode_video_s: f64,
+    /// The conv-VAE decode split as H3 splits it: GPU time of the VAE alone
+    /// (comparable with sol-engine's `video_vae_seconds`, which also covers its
+    /// YUV conversion and copy down), RGB8 packing + copy down, time the drain
+    /// thread was blocked on the writer, and time the decode waited on the drain.
+    pub video_vae_s: f64,
+    pub video_rgb_s: f64,
+    pub video_push_s: f64,
+    pub video_wait_s: f64,
     /// Waiting for the frame writer / ffmpeg after the last frame was decoded.
     pub write_s: f64,
 }
@@ -323,9 +332,17 @@ pub struct Ltx2Output {
 /// testable without a GPU), are rounded to bf16 when the reference draws in
 /// bf16, and each call — one per sampler step, video and audio together — is
 /// written into one pinned buffer and uploaded with a single copy.
+///
+/// With `FASTVIDEO_INJECT_DIR` holding a reference's draws
+/// (`noise_seed<seed>_<k>`: the k-th `torch.randn` on the generator seeded
+/// `seed`, recorded by `scripts/gpu/upstream/oracle_dump.py`), the stream
+/// replays those instead, so a parity run shares torch's noise exactly.
 pub struct NoiseStream {
     rng: rand::rngs::StdRng,
     bf16: bool,
+    seed: u64,
+    /// Draws taken so far (one per tensor), the index of the next injected one.
+    drawn: usize,
     #[cfg(feature = "cuda")]
     pinned: Option<cudarc::driver::PinnedHostSlice<f32>>,
 }
@@ -337,8 +354,37 @@ impl NoiseStream {
         Self {
             rng: rand::rngs::StdRng::seed_from_u64(seed),
             bf16,
+            seed,
+            drawn: 0,
             #[cfg(feature = "cuda")]
             pinned: None,
+        }
+    }
+
+    /// The reference's draws for `sizes` (all or none), advancing the count.
+    fn injected(&mut self, sizes: &[usize]) -> Result<Option<Vec<f32>>> {
+        let first = self.drawn;
+        self.drawn += sizes.len();
+        if !crate::wan::inject::enabled() {
+            return Ok(None);
+        }
+        let mut out = Vec::with_capacity(sizes.iter().sum());
+        let mut found = 0usize;
+        for (k, &n) in sizes.iter().enumerate() {
+            let name = format!("noise_seed{}_{:03}", self.seed, first + k);
+            if let Some(v) = crate::wan::inject::load_numel(&name, n)? {
+                out.extend_from_slice(&v);
+                found += 1;
+            }
+        }
+        match found {
+            0 => Ok(None),
+            f if f == sizes.len() => Ok(Some(out)),
+            f => Err(err(format!(
+                "ltx2 noise: the reference has {f} of draws {first}..{} on seed {}",
+                first + sizes.len(),
+                self.seed
+            ))),
         }
     }
 
@@ -369,6 +415,15 @@ impl NoiseStream {
                 })
                 .collect()
         };
+        if let Some(host) = self.injected(&sizes)? {
+            let t = CudaTensor::from_vec(host, vec![total])?;
+            let t = if crate::wan::stats::device_expected() {
+                t.to_device()?
+            } else {
+                t
+            };
+            return split(t);
+        }
         #[cfg(feature = "cuda")]
         if total > 0 && crate::wan::stats::device_expected() {
             if let Some(dev) = crate::wan::device::global_device() {
@@ -583,6 +638,67 @@ pub fn initial_noise(
     Ok((pack_video(&video)?, audio))
 }
 
+/// FASTVIDEO_DUMP_DIR, before step `i`'s forward, under the stage prefix
+/// ([`crate::wan::dump::set_prefix`]): the starting state and the sigmas at
+/// the first step, and the block dump armed for that step's forward.
+fn dump_step_begin(
+    i: usize,
+    video: &CudaTensor,
+    audio: &CudaTensor,
+    schedule: &Ltx2Schedule,
+) -> Result<()> {
+    use crate::wan::dump;
+    if !dump::enabled() {
+        return Ok(());
+    }
+    if i == 0 {
+        dump::tensor(&dump::named("video_step00_in"), video)?;
+        dump::tensor(&dump::named("audio_step00_in"), audio)?;
+        let s: Vec<f32> = schedule.sigmas.iter().map(|&s| s as f32).collect();
+        dump::host(&dump::named("sigmas"), &[s.len()], &s)?;
+    }
+    dump::set_blocks(i == 0);
+    Ok(())
+}
+
+/// FASTVIDEO_DUMP_DIR, after step `i`'s forward (before the update): the
+/// velocity and `x0 = x − σ·v` as the state stores them (`X0Model`'s
+/// `denoised`, what the reference's sampler receives).
+#[allow(clippy::too_many_arguments)]
+fn dump_step_velocity(
+    i: usize,
+    video: &CudaTensor,
+    audio: &CudaTensor,
+    v_video: &CudaTensor,
+    v_audio: &CudaTensor,
+    sigma: f64,
+    state: LatentState,
+) -> Result<()> {
+    use crate::wan::dump;
+    dump::set_blocks(false);
+    if !dump::enabled() {
+        return Ok(());
+    }
+    for (tag, x, v) in [("video", video, v_video), ("audio", audio, v_audio)] {
+        let v = state.store(v.clone())?;
+        dump::tensor(&dump::named(&format!("{tag}_vel_step{:02}", i + 1)), &v)?;
+        let x0 = state.store(CudaTensor::lincomb(&[(1.0, x), (-(sigma as f32), &v)])?)?;
+        dump::tensor(&dump::named(&format!("{tag}_x0_step{:02}", i + 1)), &x0)?;
+    }
+    Ok(())
+}
+
+/// FASTVIDEO_DUMP_DIR, after step `i`'s update: the new state.
+fn dump_step_end(i: usize, video: &CudaTensor, audio: &CudaTensor) -> Result<()> {
+    use crate::wan::dump;
+    if !dump::enabled() {
+        return Ok(());
+    }
+    dump::tensor(&dump::named(&format!("video_step{:02}", i + 1)), video)?;
+    dump::tensor(&dump::named(&format!("audio_step{:02}", i + 1)), audio)?;
+    Ok(())
+}
+
 /// Called after each step with `(step, video, audio, seconds)`.
 pub type StepObserver<'a> = &'a mut dyn FnMut(usize, &CudaTensor, &CudaTensor, f64) -> Result<()>;
 
@@ -634,6 +750,7 @@ pub fn denoise_with(
         let timer = Instant::now();
         model.begin_fbcache_step(i);
         model.arm_prune_step(i);
+        dump_step_begin(i, &video, &audio, schedule)?;
         let (v_video, v_audio) = if let Some(cached) = model.stage1_reuse(i) {
             cached
         } else {
@@ -649,8 +766,10 @@ pub fn denoise_with(
             model.stage1_store(&out.0, &out.1);
             out
         };
+        dump_step_velocity(i, &video, &audio, &v_video, &v_audio, schedule.sigmas[i], state)?;
         video = euler_update(&video, &v_video, schedule, i, state)?;
         audio = euler_update(&audio, &v_audio, schedule, i, state)?;
+        dump_step_end(i, &video, &audio)?;
         let secs = step_sync(&timer)?;
         crate::wan::log::info(format_args!(
             "ltx2 step {}/{} sigma {:.6} ({secs:.2}s)",
@@ -896,6 +1015,7 @@ pub fn denoise_ancestral(
         let sigma_next = schedule.sigmas[i + 1];
         model.begin_fbcache_step(i);
         model.arm_prune_step(i);
+        dump_step_begin(i, &video, &audio, schedule)?;
         let (v_video, v_audio) = if let Some(cached) = model.stage1_reuse(i) {
             cached
         } else {
@@ -911,6 +1031,7 @@ pub fn denoise_ancestral(
             model.stage1_store(&out.0, &out.1);
             out
         };
+        dump_step_velocity(i, &video, &audio, &v_video, &v_audio, sigma, state)?;
         // One draw (one upload) per step: video, then audio.
         let draws = if opts.eta > 0.0 && sigma_next != 0.0 {
             noise.draw(&[&video.shape, &audio.shape])?
@@ -935,6 +1056,7 @@ pub fn denoise_ancestral(
             draws.get(1),
             state,
         )?;
+        dump_step_end(i, &video, &audio)?;
         let secs = step_sync(&timer)?;
         crate::wan::log::info(format_args!(
             "ltx2 ancestral step {}/{} sigma {:.6} ({secs:.2}s)",
@@ -1010,6 +1132,8 @@ pub struct Written {
     pub decode_audio_s: f64,
     pub decode_video_s: f64,
     pub write_s: f64,
+    /// Where the conv-VAE decode's time went (`None` for the other decoders).
+    pub split: Option<DecodeSplit>,
 }
 
 /// Final packed latents → `audio.wav`, `frame-NNN.png` and (when `mp4`)
@@ -1045,34 +1169,14 @@ pub fn decode_and_write(
     )?;
     let decode_audio_s = timer.elapsed().as_secs_f64();
 
-    let timer = Instant::now();
-    let fps = frame_rate.round().max(1.0) as u32;
-    let mut writer = VideoWriter::spawn_with_audio(dir, fps, mp4, Some(&wav))?;
-    // The decoder's sink speaks tensor errors; carry the writer's own across.
-    let mut sink_err: Option<PipelineError> = None;
-    let mut sink = |offset: usize, frames: &CudaTensor| -> std::result::Result<(), TensorError> {
-        let (h, w) = (frames.shape[2], frames.shape[3]);
-        match frames_to_rgb8(frames).and_then(|rgb| writer.push(offset, h, w, rgb)) {
-            Ok(()) => Ok(()),
-            Err(e) => {
-                let text = e.to_string();
-                sink_err = Some(e);
-                Err(TensorError::Message(text))
-            }
-        }
-    };
     let latents = unpack_video(video, grid)?;
-    let decoded = match tiling {
-        Some(tiles) => dec.video.decode_tiled(&latents, tiles, &mut sink),
-        None => dec.video.decode_streaming(&latents, &mut sink),
-    };
-    match (decoded, sink_err) {
-        (_, Some(e)) => return Err(e),
-        (Err(e), None) => return Err(e.into()),
-        (Ok(_), None) => {}
-    }
-    let decode_video_s = timer.elapsed().as_secs_f64();
+    save_latents(&latents)?;
+    let fps = frame_rate.round().max(1.0) as u32;
+    let writer = VideoWriter::spawn_with_audio(dir, fps, mp4, Some(&wav))?;
+    let (writer, decode_video_s, split) =
+        decode_video_drained(&dec.video, &latents, tiling, writer)?;
     let timer = Instant::now();
+    let mut writer = writer;
     let (frames, mp4_path) = writer.finish()?;
     Ok(Written {
         frames,
@@ -1081,7 +1185,73 @@ pub fn decode_and_write(
         decode_audio_s,
         decode_video_s,
         write_s: timer.elapsed().as_secs_f64(),
+        split: Some(split),
     })
+}
+
+/// `FASTVIDEO_LTX2_SAVE_LATENTS=<prefix>`: the final video latents
+/// `[1, C, F, H, W]` (DiT-normalised, what the VAE decodes) as
+/// `<prefix>.f32` (raw little-endian) and `<prefix>.shape`, for decode-only
+/// runs (`fv-gpucheck ltx2 vae-bench --latents <prefix>`). Downloads, so it
+/// synchronizes once before the decode.
+pub fn save_latents(latents: &CudaTensor) -> Result<()> {
+    let Some(prefix) = std::env::var_os("FASTVIDEO_LTX2_SAVE_LATENTS").filter(|v| !v.is_empty())
+    else {
+        return Ok(());
+    };
+    let prefix = PathBuf::from(prefix);
+    crate::wan::dump::write_raw(&prefix, &latents.shape, &latents.host_cow()?)?;
+    crate::wan::log::info(format_args!(
+        "ltx2: video latents {:?} saved to {}.f32",
+        latents.shape,
+        prefix.display()
+    ));
+    Ok(())
+}
+
+/// Decode `latents` (`[1, C, F, H, W]`) into `writer` through an off-thread
+/// frame drain: tiled with `tiling`, else the whole clip streamed. Returns
+/// the writer (every frame pushed to it), the decode's wall time, and its
+/// split ([`DecodeSplit`]: VAE compute, RGB packing + copy down, writer
+/// backpressure). `FASTVIDEO_GPU_TRACE_DECODE=1` traces the decode.
+pub fn decode_video_drained(
+    video: &VideoDecoder,
+    latents: &CudaTensor,
+    tiling: Option<&TileSizeConfig>,
+    writer: VideoWriter,
+) -> Result<(VideoWriter, f64, DecodeSplit)> {
+    let timer = Instant::now();
+    crate::wan::gpu_trace::window_begin("ltx2/decode");
+    let mut drain = FrameDrain::new(writer)?;
+    // The decoder's sink speaks tensor errors; carry the drain's own across.
+    let mut sink_err: Option<PipelineError> = None;
+    let mut sink = |offset: usize, frames: &CudaTensor| -> std::result::Result<(), TensorError> {
+        match drain.push(offset, frames) {
+            Ok(()) => Ok(()),
+            Err(e) => {
+                let text = e.to_string();
+                sink_err = Some(e);
+                Err(TensorError::Message(text))
+            }
+        }
+    };
+    let decoded = match tiling {
+        Some(tiles) => video.decode_tiled(latents, tiles, &mut sink),
+        None => video.decode_streaming(latents, &mut sink),
+    };
+    match (decoded, sink_err) {
+        (_, Some(e)) => return Err(e),
+        (Err(e), None) => return Err(e.into()),
+        (Ok(_), None) => {}
+    }
+    let (writer, split) = drain.finish()?;
+    let decode_video_s = timer.elapsed().as_secs_f64();
+    crate::wan::gpu_trace::window_end(decode_video_s);
+    crate::wan::log::info(format_args!(
+        "ltx2 video decode {decode_video_s:.2}s: vae {:.2}s, rgb {:.2}s, push {:.2}s, wait {:.2}s",
+        split.vae_s, split.rgb_s, split.push_s, split.wait_s
+    ));
+    Ok((writer, decode_video_s, split))
 }
 
 /// Like [`decode_and_write`], but video goes through the tiny autoencoder
@@ -1147,6 +1317,7 @@ pub fn decode_tae_and_write(
         decode_audio_s,
         decode_video_s,
         write_s: timer.elapsed().as_secs_f64(),
+        split: None,
     })
 }
 
@@ -1216,6 +1387,7 @@ pub fn decode_diffvae_and_write(
         decode_audio_s,
         decode_video_s,
         write_s: timer.elapsed().as_secs_f64(),
+        split: None,
     })
 }
 
@@ -2151,8 +2323,30 @@ impl Ltx2Pipeline {
             return Err(err("ltx2: the clip is too short for a single audio latent"));
         }
 
-        let (contexts, text_report) = self.text.encode(&req.prompt, use_text_cache)?;
+        let (mut contexts, text_report) = self.text.encode(&req.prompt, use_text_cache)?;
         timings.text_s = text_report.seconds;
+        // FASTVIDEO_DUMP_DIR / FASTVIDEO_INJECT_DIR: ours first (so a diff
+        // shows the text path's own parity), then the reference's contexts.
+        crate::wan::dump::tensor("text_video_ctx", &contexts.video)?;
+        crate::wan::dump::tensor("text_audio_ctx", &contexts.audio)?;
+        if crate::wan::inject::text_enabled() {
+            for (name, slot) in [
+                ("text_video_ctx", &mut contexts.video),
+                ("text_audio_ctx", &mut contexts.audio),
+            ] {
+                match crate::wan::inject::load(name)? {
+                    Some((_, v)) if v.len() == slot.numel() => {
+                        let shape = slot.shape.clone();
+                        *slot = CudaTensor::from_vec(v, shape)?.to_device()?;
+                    }
+                    Some((shape, _)) => crate::wan::log::info(format_args!(
+                        "inject: {name} {shape:?} does not fit ours {:?}; ours kept",
+                        slot.shape
+                    )),
+                    None => {}
+                }
+            }
+        }
         let uncond_contexts = if use_cfg {
             let (c, rep) = self.text.encode(&req.negative_prompt, use_text_cache)?;
             timings.text_s += rep.seconds;
@@ -2230,6 +2424,7 @@ impl Ltx2Pipeline {
         // (`distilled.py:62-85`); the dev line never does.
         let ancestral = cfg.version == Ltx2ModelVersion::V25 && distilled;
         let res2s = cfg.version == Ltx2ModelVersion::V23;
+        crate::wan::dump::set_prefix(if req.two_stage { "s1_" } else { "" });
         let (mut video, mut audio) = {
             let model = self.model.as_ref().expect("ensure_dit");
             let mut record = |i: usize, v: &CudaTensor, a: &CudaTensor, s: f64| -> Result<()> {
@@ -2334,6 +2529,11 @@ impl Ltx2Pipeline {
                 let upsampled =
                     up.forward(&decoders.video.denormalize(&unpack_video(&video, grid1)?)?)?;
                 video = state.store(pack_video(&decoders.video.normalize(&upsampled)?)?)?;
+                crate::wan::dump::rows_strided(
+                    "s2_upsampled",
+                    &video,
+                    crate::wan::dump::BLOCK_ROW_STRIDE,
+                )?;
             }
             self.release_transient_decoders()?;
             trim()?;
@@ -2381,6 +2581,25 @@ impl Ltx2Pipeline {
             video = renoise(&video, &noise_v, sigma, state)?;
             audio = renoise(&audio, &noise_a, sigma, state)?;
             drop((noise_v, noise_a));
+            crate::wan::dump::set_prefix("s2_");
+            // FASTVIDEO_INJECT_DIR: stage 2 starts from the reference's own
+            // entry state, so its diff is stage 2's alone (our entry, from our
+            // stage 1 and upsampler, is dumped first as `s2_entry`).
+            if crate::wan::inject::enabled() {
+                crate::wan::dump::tensor("s2_entry_video", &video)?;
+                crate::wan::dump::tensor("s2_entry_audio", &audio)?;
+                if std::env::var("FASTVIDEO_INJECT_STAGE2").map_or(true, |v| v != "0") {
+                    for (name, slot) in [
+                        ("s2_video_step00_in", &mut video),
+                        ("s2_audio_step00_in", &mut audio),
+                    ] {
+                        if let Some(v) = crate::wan::inject::load_numel(name, slot.numel())? {
+                            let shape = slot.shape.clone();
+                            *slot = CudaTensor::from_vec(v, shape)?.to_device()?;
+                        }
+                    }
+                }
+            }
 
             let s2_timer = Instant::now();
             let ropes2 = Ropes::new(
@@ -2502,6 +2721,12 @@ impl Ltx2Pipeline {
         };
         timings.decode_audio_s = written.decode_audio_s;
         timings.decode_video_s = written.decode_video_s;
+        if let Some(s) = written.split {
+            timings.video_vae_s = s.vae_s;
+            timings.video_rgb_s = s.rgb_s;
+            timings.video_push_s = s.push_s;
+            timings.video_wait_s = s.wait_s;
+        }
         timings.write_s = written.write_s;
         drop((video, audio));
         self.release_transient_decoders()?;
