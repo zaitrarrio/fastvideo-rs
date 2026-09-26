@@ -2,6 +2,16 @@
 
 Project code: FVID
 
+### FVID · 2026-09-26 · FVID-2026-09-26-attention-phase3b
+- Trigger: LTX-2.5 1080p 20 s Sol stage 2 1.15x slower than sol-engine; dense flash the largest H3 kernel; VSA 1.34x vs FastVideo's 1.49x
+- Options: warp-specialised Sol + KV splits (as asked); mirror sol-engine's sm120 kernel (`sol_attn/sm120/mainloop.py`: 4 MMA warps, warp 0 issues TMA, STAGES=1, kv_splits=1 — splits are sm90-only, `interface.py:114-116`); cuDNN fused SDPA for dense; FA2-style 128-query dense; smaller VSA smem
+- Decision: Sol default `sol_mma_fwd_x4f` (ldmatrix.x4 + `ex2.approx.ftz`, CuTe's fastmath exp2); warp-specialised `sol_mma_fwd2` with KV splits kept opt-in (`FASTVIDEO_SOL_KERNEL=ws`, `FASTVIDEO_SOL_SPLITS`); dense default `flash_mma_fwd2` where its 128-query grid fills >= 16 waves; VSA default `vsa_mma_attn_tma2` (3-slot ring, 48 KB); cuDNN SDPA opt-in (`FASTVIDEO_FLASH_KERNEL=cudnn`) but falls back
+- Reason: RTX PRO 6000 `attn_bench`: x4f bit-identical to v1 and 7-8% faster (1080p20s tau 1.0 136.9 vs 147.8 ms; sol-engine 135.5 ms); ws bit-identical but ~10% slower (fifth warp caps registers at 200), splits slower still (grid is already 165 waves); dense v2 bit-identical, 373 vs 358 TFLOPS (cuDNN via torch 392-397); VSA ring bit-identical, 1.25x; cuDNN 9.26 rejects the composite SDPA graph ("non-flash composite MHA fprop is no longer supported"), needs the unified softmax node cudarc does not bind
+- Reversibility: cheap (env flags; old kernels kept)
+- Executed by: Executor
+- ADR: none
+- Verification: `attn2_parity` bit-exact on GPU; generations (traced): LTX 1080p20s Sol stage 2 75.9 -> 66.3 s (sol-engine 73.7 s, incl. concurrent DiT fusions), FastH3 4-step dense denoise 34.6 -> 33.1 s; artifacts/runpod/{trace,rtx6000,upstream}
+
 ### FVID · 2026-09-25 · FVID-2026-09-25-b200-warm-suite
 - Trigger: warm H3 / FastH3 / LTX architectural-parity suite on 1× B200 NOW; existing US-CA-2 volume only; pinned image `build-ec5a6cc0988aca26`
 - Options: US-CA-2 B200 + volume `s2k01690bi` (528G TAEH3 + Preview LoRA); fall back to H200 / PRO 6000 if stock gone; wait / invent numbers
