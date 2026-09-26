@@ -328,6 +328,39 @@ pub enum Stage {
         #[arg(long)]
         ltx_tae_weights: Option<PathBuf>,
     },
+    /// Decode only: the conv video VAE on saved latents
+    /// (`FASTVIDEO_LTX2_SAVE_LATENTS` from a `gen`) or synthetic ones, at a
+    /// `gen` workload's geometry and tiled as `gen` tiles it. Times each
+    /// decoder asked for (split as `gen` reports it), optionally writes its
+    /// frames for `compare-clips`. Needs `--mode fast`.
+    VaeBench {
+        /// Root holding `vae/`.
+        #[arg(long)]
+        weights: PathBuf,
+        #[arg(long, value_enum, default_value_t = ModelVersion::V25)]
+        model_version: ModelVersion,
+        #[command(flatten)]
+        geometry: GenGeometry,
+        /// `<prefix>` of `<prefix>.f32` / `<prefix>.shape` latents `[1, C, F, H, W]`.
+        /// Default: deterministic N(0, 1) latents of the geometry's shape.
+        #[arg(long)]
+        latents: Option<PathBuf>,
+        /// `fast` (channels-last bf16), `streaming` (the f32 streaming
+        /// decoder), or `both` (fast first).
+        #[arg(long, default_value = "fast")]
+        decoder: String,
+        /// Write the timed decode's frames (`frame-NNN.png`) to `<clip>`, or to
+        /// `<clip>/<decoder>` with `--decoder both`.
+        #[arg(long)]
+        clip: Option<PathBuf>,
+        /// Decode once untimed first (plan search, allocator growth).
+        #[arg(long)]
+        warm: bool,
+        #[arg(long, default_value_t = 7)]
+        seed: u64,
+        #[arg(long, default_value = "cuda")]
+        device: String,
+    },
     /// CPU only: rewrite the text encoder as the language model alone, its
     /// projections narrowed float32 → bf16 once, in load order (47 GB → 25.5 GB,
     /// or 23.5 GB with `--embed bf16`), plus a copy of `tokenizer/`.
@@ -498,6 +531,28 @@ pub fn run(report: &mut Report, stage: &Stage) -> StageResult<()> {
                 *min_psnr_db_e2e,
                 *floor_factor,
             ],
+        ),
+        Stage::VaeBench {
+            weights,
+            model_version,
+            geometry,
+            latents,
+            decoder,
+            clip,
+            warm,
+            seed,
+            device,
+        } => vae_bench(
+            report,
+            weights,
+            *model_version,
+            geometry.resolve()?,
+            latents.as_deref(),
+            decoder,
+            clip.as_deref(),
+            *warm,
+            *seed,
+            device,
         ),
         Stage::Gen {
             model_version,
@@ -1637,6 +1692,141 @@ fn sample_loop(
 // ---- gen --------------------------------------------------------------------
 
 #[allow(clippy::too_many_arguments)]
+/// Deterministic N(0, 1) samples (splitmix64 + Box-Muller).
+fn normal_samples(n: usize, seed: u64) -> Vec<f32> {
+    let mut s = seed ^ 0x9E37_79B9_7F4A_7C15;
+    let mut next = || {
+        s = s.wrapping_add(0x9E37_79B9_7F4A_7C15);
+        let mut z = s;
+        z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+        z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+        z ^= z >> 31;
+        ((z >> 11) as f64 + 0.5) / (1u64 << 53) as f64
+    };
+    (0..n)
+        .map(|_| {
+            let (u, v) = (next(), next());
+            ((-2.0 * u.ln()).sqrt() * (std::f64::consts::TAU * v).cos()) as f32
+        })
+        .collect()
+}
+
+#[allow(clippy::too_many_arguments)]
+fn vae_bench(
+    report: &mut Report,
+    weights: &Path,
+    model_version: ModelVersion,
+    g: Geometry,
+    latents: Option<&Path>,
+    decoder: &str,
+    clip: Option<&Path>,
+    warm: bool,
+    seed: u64,
+    device: &str,
+) -> StageResult<()> {
+    use fastvideo_cudarc::wan::pipeline::VideoWriter;
+    use fastvideo_models::ltx2::tiling::TileSizeConfig;
+    let pe = |e: fastvideo_cudarc::wan::pipeline::PipelineError| anyhow::anyhow!("{e}");
+    report.set("device", crate::gpu::init(device)?);
+    // As the pipeline runs it (bf16 activations on the GPU).
+    fastvideo_cudarc::wan::tensor::default_bf16_activations();
+    let cfg = model_version.config();
+    let timer = std::time::Instant::now();
+    let map = WeightMap::open(&weights.join("vae"))?;
+    let vae = VideoDecoder::load(&map, &cfg.vae)?;
+    let load_s = timer.elapsed().as_secs_f64();
+    let z = match latents {
+        Some(prefix) => {
+            let (shape, data) = fastvideo_cudarc::wan::dump::read_raw(prefix)?;
+            CudaTensor::from_vec(data, shape)?.to_device()?
+        }
+        None => {
+            let [st, sh, sw] = vae.scale();
+            let (f, h, w) = ((g.num_frames - 1) / st + 1, g.height / sh, g.width / sw);
+            let shape = vec![1, cfg.vae.latent_channels, f, h, w];
+            let n = shape.iter().product();
+            CudaTensor::from_vec(normal_samples(n, seed), shape)?.to_device()?
+        }
+    };
+    let tiling = match model_version {
+        ModelVersion::V25 => {
+            Some(TileSizeConfig::conv_auto(g.height, g.width).map_err(|e| anyhow::anyhow!(e))?)
+        }
+        _ => None,
+    };
+    report.set(
+        "request",
+        json!({
+            "height": g.height, "width": g.width, "num_frames": g.num_frames,
+            "latents": latents.map(|p| p.display().to_string()), "latent_shape": z.shape,
+            "tiling": tiling.as_ref().map(|t| format!("{t:?}")), "load_s": load_s, "seed": seed,
+        }),
+    );
+    let names: Vec<&str> = match decoder {
+        "both" => vec!["fast", "streaming"],
+        "fast" | "streaming" => vec![decoder],
+        other => {
+            return Err(
+                anyhow::anyhow!("--decoder {other}: expected fast, streaming or both").into(),
+            )
+        }
+    };
+    let mut runs = Vec::new();
+    for name in names {
+        #[cfg(feature = "cuda")]
+        fastvideo_cudarc::ltx2::vae::fast::set_override(Some(name == "fast"));
+        #[cfg(not(feature = "cuda"))]
+        if name == "fast" {
+            return Err(anyhow::anyhow!("the channels-last decoder needs the cuda feature").into());
+        }
+        let mut warm_s = None;
+        if warm {
+            let t = std::time::Instant::now();
+            let mut sink = |_: usize, _: &CudaTensor| Ok(());
+            match &tiling {
+                Some(tiles) => vae.decode_tiled(&z, tiles, &mut sink)?,
+                None => vae.decode_streaming(&z, &mut sink)?,
+            };
+            fastvideo_cudarc::wan::device::synchronize()?;
+            warm_s = Some(t.elapsed().as_secs_f64());
+        }
+        fastvideo_cudarc::wan::device::trim_pool()?;
+        let writer = match clip {
+            Some(dir) if decoder == "both" => {
+                VideoWriter::spawn(&dir.join(name), 24, false).map_err(pe)?
+            }
+            Some(dir) => VideoWriter::spawn(dir, 24, false).map_err(pe)?,
+            None => VideoWriter::spawn_discard().map_err(pe)?,
+        };
+        let peak = crate::gpu::PeakMem::start();
+        let (mut writer, decode_s, split) =
+            ltx2_pipeline::decode_video_drained(&vae, &z, tiling.as_ref(), writer).map_err(pe)?;
+        let peak_mib = peak.stop();
+        let t = std::time::Instant::now();
+        let (frames, _) = writer.finish().map_err(pe)?;
+        let write_s = t.elapsed().as_secs_f64();
+        eprintln!(
+            "ltx2 vae-bench {name}: decode {decode_s:.2}s (vae {:.2}s, rgb {:.2}s, push {:.2}s, wait {:.2}s), write {write_s:.2}s, peak {peak_mib:?} MiB",
+            split.vae_s, split.rgb_s, split.push_s, split.wait_s
+        );
+        let mut run = json!({
+            "decoder": name, "warm_s": warm_s, "decode_video_s": decode_s,
+            "video_vae_s": split.vae_s, "video_rgb_s": split.rgb_s,
+            "video_push_s": split.push_s, "video_wait_s": split.wait_s,
+            "write_s": write_s, "frames_written": frames.len(), "peak_vram_mib": peak_mib,
+        });
+        if let Some(trace) = fastvideo_cudarc::wan::gpu_trace::last_window_report() {
+            run["gpu_trace_decode"] = trace;
+            fastvideo_cudarc::wan::gpu_trace::reset_report();
+        }
+        runs.push(run);
+    }
+    #[cfg(feature = "cuda")]
+    fastvideo_cudarc::ltx2::vae::fast::set_override(None);
+    report.set("runs", runs);
+    Ok(())
+}
+
 fn gen(
     report: &mut Report,
     model_version: ModelVersion,
@@ -1779,6 +1969,7 @@ fn gen(
             "warm": warm, "wall_s": wall_s, "generate_s": generate_s, "load_s": pipeline.load_s, "text_s": t.text_s,
             "denoise_s": t.denoise_s, "stage1_s": t.stage1_s, "upsample_s": t.upsample_s, "stage2_s": t.stage2_s,
             "step_s": t.step_s, "decode_audio_s": t.decode_audio_s, "decode_video_s": t.decode_video_s, "write_s": t.write_s,
+            "video_vae_s": t.video_vae_s, "video_rgb_s": t.video_rgb_s, "video_push_s": t.video_push_s, "video_wait_s": t.video_wait_s,
         }),
     );
     report.set(
@@ -1793,6 +1984,10 @@ fn gen(
     // FASTVIDEO_GPU_TRACE: the timed generate's traced step.
     if let Some(trace) = fastvideo_cudarc::wan::gpu_trace::last_report() {
         report.set("gpu_trace", trace);
+    }
+    // FASTVIDEO_GPU_TRACE_DECODE: the timed generate's video decode.
+    if let Some(trace) = fastvideo_cudarc::wan::gpu_trace::last_window_report() {
+        report.set("gpu_trace_decode", trace);
     }
     // Per-phase peaks from the allocator pool's high-water marks.
     if let Some(u) = load_used {
