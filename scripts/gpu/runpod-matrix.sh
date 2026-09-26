@@ -841,12 +841,13 @@ case "$FAMILY" in
     for v in w8a8 mxfp8; do
       compare_cells fasth3-8step-768p-bf16act "fasth3-8step-768p-$v"
     done
-    for v in f32act bf16act fp8; do
+    for v in f32act bf16act fp8 bf16act-fp8; do
       envs=()
       case "$v" in
         f32act) envs=(FASTVIDEO_BF16_ACT=0) ;;
         bf16act) envs=(FASTVIDEO_BF16_ACT=1) ;;
         fp8) envs=(FASTVIDEO_BF16_ACT=0 FASTVIDEO_FP8=1) ;;
+        bf16act-fp8) envs=(FASTVIDEO_BF16_ACT=1 FASTVIDEO_FP8=1) ;;
       esac
       gated_cell "ltx25-4k5s-sol-$v" ltx25-two-stage \
         env "${envs[@]}" \
@@ -855,7 +856,7 @@ case "$FAMILY" in
           --prompt "$PROMPT" --seed "$SEED" --two-stage --text streamed --warm \
           --clip "$RUNS/ltx25-4k5s-sol-$v/frames" "${PROMPT_ARGS[@]}"
     done
-    for v in bf16act fp8; do
+    for v in bf16act fp8 bf16act-fp8; do
       compare_cells ltx25-4k5s-sol-f32act "ltx25-4k5s-sol-$v"
       gate_cells ltx25-4k5s-sol-f32act "ltx25-4k5s-sol-$v" lossy
     done
