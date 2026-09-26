@@ -28,7 +28,8 @@
 # Env: FV_FAMILY (runpod-matrix.sh family, default rtx6000; rtx5090 is the
 # sol-engine RTX 5090 suite), RUNPOD_GPU_TYPE (default RTX PRO 6000), RUNPOD_API_KEY, RUNPOD_VOLUME_ID (default: volume named
 # fv-weights-h3-ltx-hy), FV_CELLS (subset of cells), FV_GEN_TIMEOUT_S
-# (per-cell cap, default 3600), FV_EXTRA_ENV (space-separated K=V for cells).
+# (per-cell cap, default 3600), FV_PROMPTS / FV_LPIPS (forwarded to
+# runpod-matrix.sh), FV_EXTRA_ENV (space-separated K=V for cells).
 set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # Bash reads a script as it runs; a runs lasts hours, so run from a private
@@ -128,6 +129,7 @@ if [ "$mode" = kernels ] || [ "$mode" = all ]; then
 fi
 if [ "$mode" = run ] || [ "$mode" = all ]; then
   env ${FV_EXTRA_ENV:-} FV_WORK=/workspace FV_SCRATCH=\$SCRATCH FV_RUN_TAG=$tag FV_CELLS="${FV_CELLS:-}" \
+    ${FV_PROMPTS:+FV_PROMPTS="$FV_PROMPTS"} ${FV_LPIPS:+FV_LPIPS=$FV_LPIPS} \
     FV_GEN_TIMEOUT_S=${FV_GEN_TIMEOUT_S:-3600} \
     bash /opt/fastvideo-rs/scripts/gpu/runpod-matrix.sh $FAMILY >"\$OUT/matrix.out" 2>&1
   echo "matrix_exit=\$?" >>"\$OUT/matrix.out"
