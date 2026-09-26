@@ -4,7 +4,7 @@
 # Spark joint LTX refine stays off (FASTVIDEO_LTX2_WEIGHTS unset) except in
 # the rtx6000 parity family, which runs the full Spark bridge.
 set -euo pipefail
-FAMILY="${1:?usage: runpod-matrix.sh h3|ltx|hunyuan|wan|b200|rtx6000|rtx5090|fastvideo|precision|precision-debug|trace|ltxvae}"
+FAMILY="${1:?usage: runpod-matrix.sh h3|ltx|hunyuan|wan|b200|rtx6000|rtx5090|fastvideo|precision|precision-debug|trace|oracle|ltxvae}"
 WORK="${FV_WORK:-/workspace}"
 BIN="${FV_GPUCHECK:-/opt/fastvideo-rs/target/release/fv-gpucheck}"
 W="$WORK/weights"
@@ -197,6 +197,45 @@ compare_cells() {
   set -e
   log "compare $tag exit=$rc $(grep -o '"psnr_mean":[^,]*' "$dir/$tag.stderr.log" 2>/dev/null | tail -1)"
   return 0
+}
+
+# oracle_fetch <target> <dir>: wait (FV_ORACLE_WAIT_S, default 3 h) until an
+# upstream pod under one of FV_ORACLE_URL's space-separated base URLs has
+# finished oracle-<target> (scripts/gpu/upstream/oracle.sh), then download its
+# oracle-dump.tar and unpack it to <dir>/dump. Fails when the reference wrote
+# no dump or never finished.
+oracle_fetch() {
+  local target="$1" dest="$2" t0 base="" u attempt
+  [[ -n "${FV_ORACLE_URL:-}" ]] || { log "oracle: FV_ORACLE_URL unset"; return 1; }
+  t0=$(date +%s)
+  while [[ -z "$base" ]]; do
+    for u in $FV_ORACLE_URL; do
+      if curl -sS --max-time 30 --fail -o /dev/null "$u/oracle-$target/ORACLE_DONE" 2>/dev/null; then
+        base="$u/oracle-$target"
+        break
+      fi
+    done
+    [[ -n "$base" ]] && break
+    if (( $(date +%s) - t0 >= ${FV_ORACLE_WAIT_S:-10800} )); then
+      log "oracle: $target not finished upstream after ${FV_ORACLE_WAIT_S:-10800}s"
+      return 1
+    fi
+    sleep 30
+  done
+  log "oracle: fetching $base/oracle-dump.tar"
+  rm -rf "$dest"
+  mkdir -p "$dest"
+  for attempt in 1 2 3; do
+    if curl -sS --fail --retry 3 --max-time 3600 -o "$dest/dump.tar" "$base/oracle-dump.tar" \
+      && tar -xf "$dest/dump.tar" -C "$dest" && [[ -d "$dest/dump" ]]; then
+      rm -f "$dest/dump.tar"
+      log "oracle: $target reference $(du -sh "$dest/dump" | cut -f1)"
+      return 0
+    fi
+    log "oracle: fetch of $target failed (attempt $attempt)"
+    sleep 10
+  done
+  return 1
 }
 
 log "matrix start image=$(cat /opt/fastvideo-rs/target/release/fv-gpucheck.build-id 2>/dev/null || echo unknown)"
@@ -864,6 +903,64 @@ case "$FAMILY" in
     done
     for cell in $(ls "$RUNS" 2>/dev/null | grep -E '^(ltxvae|ltx25-.*-gen)'); do
       grep -h 'vae-bench\|vae_check\|video decode' "$RUNS/$cell/stderr.log" 2>/dev/null | tail -3 | cut -c1-400 | sed "s/^/[$cell] /" | tee -a "$LOG" || true
+    done
+    ;;
+  oracle)
+    # GPU oracle diff (docs/oracle.md): the Python references' dumps
+    # (scripts/gpu/upstream/oracle.sh on an upstream pod, served under
+    # FV_ORACLE_URL) are downloaded, their noise and text conditioning
+    # injected into our run (FASTVIDEO_INJECT_DIR), our run dumped the same
+    # way (FASTVIDEO_DUMP_DIR), and the two compared tensor by tensor
+    # (compare-dumps; report under oracle-<target>-diff/gpucheck-out).
+    # FV_ORACLE_TARGETS picks targets; the default is every H3 and LTX one.
+    ops="${FASTVIDEO_DUMP_OPS:-0,1,24,47}"
+    h3_oracle=(
+      --prompt "$PROMPT"
+      --seconds 5
+      --seed "$SEED"
+      --text-encoder streamed
+      --text-cache "$SCRATCH/h3-text-cache"
+      --text-weights "$W/h3-base"
+    )
+    ltx_oracle=(--prompt "$PROMPT" --seed "$SEED" --two-stage --text streamed)
+    for target in ${FV_ORACLE_TARGETS:-fasth3-8step fasth3-4step-vsa ltx25-512p ltx25-512p-dense ltx25-4k ltx25-4k-dense}; do
+      ref="$SCRATCH/oracle-ref/$target"
+      if ! oracle_fetch "$target" "$ref"; then
+        mkdir -p "$RUNS/oracle-$target"
+        write_json "$RUNS/oracle-$target/summary.json" "$(printf '{"cell":"oracle-%s","family":"%s","exit":null,"skipped":"reference dump unavailable"}' "$target" "$FAMILY")"
+        continue
+      fi
+      ours="$RUNS/oracle-$target-dump"
+      rm -rf "$ours"
+      envs=(FASTVIDEO_INJECT_DIR="$ref/dump" FASTVIDEO_DUMP_DIR="$ours" FASTVIDEO_DUMP_OPS="$ops")
+      case "$target" in
+        fasth3-8step)
+          gated_cell "oracle-$target" fasth3-8step env "${envs[@]}" \
+            "$BIN" --mode fast h3 gen --weights "$W/h3-8step" --h3-recipe 8step \
+              --adaln-cache "$RUNS/oracle-$target-adaln.cache" \
+              --clip-dir "$RUNS/oracle-$target/frames" "${h3_oracle[@]}" ;;
+        fasth3-4step-vsa)
+          gated_cell "oracle-$target" fasth3-4step-vsa env "${envs[@]}" \
+            "$BIN" --mode fast h3 gen --weights "$W/h3-base" --h3-recipe 4step-vsa \
+              --adaln-cache "$RUNS/oracle-$target-adaln.cache" \
+              --clip-dir "$RUNS/oracle-$target/frames" "${h3_oracle[@]}" ;;
+        ltx25-*)
+          geo=(--height 512 --width 768 --num-frames 121)
+          [[ "$target" == ltx25-4k* ]] && geo=(--workload 4k5s)
+          arm=()
+          [[ "$target" == *-dense ]] && arm=(--dense-stage2)
+          gated_cell "oracle-$target" ltx25-two-stage env "${envs[@]}" \
+            "$BIN" --mode fast ltx2 gen --model-version 2.5 \
+              --weights "$W/ltx25" --dit "$W/ltx25" "${geo[@]}" "${arm[@]}" "${ltx_oracle[@]}" \
+              --clip "$RUNS/oracle-$target/frames" ;;
+        *) log "unknown oracle target $target"; continue ;;
+      esac
+      if [[ -d "$ours" ]]; then
+        run_cell "oracle-$target-diff" "$BIN" compare-dumps --baseline "$ref/dump" --candidate "$ours"
+        grep -h 'compare-dumps' "$RUNS/oracle-$target-diff/stderr.log" | sed "s/^/[oracle-$target] /" | tee -a "$LOG" || true
+      fi
+      # The dumps are hundreds of MB each; the report keeps the numbers.
+      rm -rf "$ours" "$ref"
     done
     ;;
   *)
