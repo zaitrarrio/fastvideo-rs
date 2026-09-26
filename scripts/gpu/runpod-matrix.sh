@@ -698,8 +698,13 @@ case "$FAMILY" in
           --adaln-cache "$RUNS/fasth3-8step-768p-$v-adaln.cache" \
           --clip-dir "$RUNS/fasth3-8step-768p-$v/frames" "${h3_common[@]}"
     done
-    for v in bf16act ffnfp8 fp8; do
+    for v in bf16act w8a8 mxfp8; do
       compare_cells fasth3-8step-768p-base "fasth3-8step-768p-$v"
+    done
+    # Both FP8 recipes run bf16 activations: against bf16act alone, the
+    # pairs isolate what the weight/activation quantization changes.
+    for v in w8a8 mxfp8; do
+      compare_cells fasth3-8step-768p-bf16act "fasth3-8step-768p-$v"
     done
     for v in base bf16act fp8; do
       envs=()
