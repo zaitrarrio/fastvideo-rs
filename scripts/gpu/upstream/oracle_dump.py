@@ -339,5 +339,158 @@ def _h3_op_hooks(block, i, torch):
 
 
 # ------------------------------------------------------------------ LTX-2
-# Filled in by the LTX section (sol-engine LTX-2.5 two-stage).
-_LTX_TARGETS: dict = {}
+# ltx_pipelines DistilledPipeline (LTX-2.5 distilled two-stage, as sol-engine's
+# RTX5090 gpu_infer.py drives it). Names carry the stage: s1_ (half-resolution
+# ancestral stage), s2_ (full-resolution Euler refine); see ltx2/pipeline.rs.
+#   text_{video,audio}_ctx                PromptEncoder output (the DiT's contexts)
+#   noise_seed<seed>_<k>                  k-th torch.randn on the generator seeded <seed>
+#                                         (initial noise, ancestral per-step noise,
+#                                         stage-2 renoise), replayed by our NoiseStream
+#   s{n}_sigmas, s{n}_{video,audio}_step00_in, s{n}_{video,audio}_{vel,x0}_stepNN,
+#   s{n}_{video,audio}_stepNN, s{n}_step00_{video,audio}_in,
+#   s{n}_step00_{video,audio}_block_<i>   (video every 64th row, audio whole)
+#   s2_upsampled (packed, every 64th row), s2_entry_{video,audio}
+class _Ltx:
+    stage = 0
+    step = -1
+    in_stage = False
+    draws: dict = {}
+
+
+def _ltx_pack5(t):
+    """[1, C, F, H, W] -> [F*H*W, C] (the patch-1 token order)."""
+    return t[0].permute(1, 2, 3, 0).reshape(-1, t.shape[1])
+
+
+def _patch_ltx_blocks(mod) -> None:
+    import torch
+
+    orig_randn = torch.randn
+
+    def randn(*a, **kw):
+        out = orig_randn(*a, **kw)
+        g = kw.get("generator")
+        if g is not None and _Ltx.in_stage:
+            seed = int(g.initial_seed())
+            k = _Ltx.draws.get(seed, 0)
+            _Ltx.draws[seed] = k + 1
+            write(f"noise_seed{seed}_{k:03d}", out)
+        return out
+
+    torch.randn = randn
+
+    stage_cls = mod.DiffusionStage
+    orig_call = stage_cls.__call__
+
+    def call(self, *args, **kwargs):
+        _Ltx.stage += 1
+        n = _Ltx.stage
+        p = f"s{n}_"
+        inner = kwargs.get("loop") or mod.euler_denoising_loop
+
+        def loop(*la, **lk):
+            den = lk["denoiser"]
+            sig = lk["sigmas"]
+
+            def denoiser(transformer, vs, as_, sigmas, step_idx):
+                _Ltx.step = step_idx
+                tag = "step00_in" if step_idx == 0 else f"step{step_idx:02d}"
+                if step_idx == 0:
+                    write(p + "sigmas", sigmas)
+                    if n == 2:
+                        write("s2_entry_video", vs.latent)
+                        write("s2_entry_audio", as_.latent)
+                write(f"{p}video_{tag}", vs.latent)
+                write(f"{p}audio_{tag}", as_.latent)
+                vr, ar = den(transformer, vs, as_, sigmas, step_idx)
+                if vr is not None:
+                    write(f"{p}video_x0_step{step_idx + 1:02d}", vr.denoised)
+                if ar is not None:
+                    write(f"{p}audio_x0_step{step_idx + 1:02d}", ar.denoised)
+                return vr, ar
+
+            lk["denoiser"] = denoiser
+            vs, as_ = inner(*la, **lk)
+            last = len(sig) - 1
+            write(f"{p}video_step{last:02d}", vs.latent)
+            write(f"{p}audio_step{last:02d}", as_.latent)
+            return vs, as_
+
+        kwargs["loop"] = loop
+        _Ltx.in_stage, _Ltx.step = True, -1
+        try:
+            return orig_call(self, *args, **kwargs)
+        finally:
+            _Ltx.in_stage = False
+            _note(f"ltx stage {n} done")
+
+    stage_cls.__call__ = call
+
+    enc_cls = mod.PromptEncoder
+    orig_enc = enc_cls.__call__
+
+    def enc(self, *args, **kwargs):
+        out = orig_enc(self, *args, **kwargs)
+        if not getattr(_Ltx, "text_done", False):
+            _Ltx.text_done = True
+            write("text_video_ctx", out[0].video_encoding)
+            write("text_audio_ctx", out[0].audio_encoding)
+        return out
+
+    enc_cls.__call__ = enc
+
+    up_cls = mod.VideoUpsampler
+    orig_up = up_cls.__call__
+
+    def up(self, latent):
+        out = orig_up(self, latent)
+        rows_strided("s2_upsampled", _ltx_pack5(out))
+        return out
+
+    up_cls.__call__ = up
+
+
+def _patch_ltx_model(mod) -> None:
+    cls = mod.LTXModel
+    orig_forward = cls.forward
+
+    def forward(self, video, audio, perturbations):
+        n, k = _Ltx.stage, _Ltx.step
+        p = f"s{n}_"
+        handles = []
+        if _Ltx.in_stage and k == 0:
+            for i, block in enumerate(self.transformer_blocks):
+                def hook(m, a, out, i=i):
+                    v, au = out
+                    if v is not None:
+                        rows_strided(f"{p}step00_video_block_{i}", v.x)
+                    if au is not None:
+                        rows_strided(f"{p}step00_audio_block_{i}", au.x, 1)
+                handles.append(block.register_forward_hook(hook))
+
+            def pre0(m, a, kw):
+                v, au = kw.get("video"), kw.get("audio")
+                if v is not None:
+                    rows_strided(f"{p}step00_video_in", v.x)
+                if au is not None:
+                    rows_strided(f"{p}step00_audio_in", au.x, 1)
+            handles.append(self.transformer_blocks[0].register_forward_pre_hook(pre0, with_kwargs=True))
+        try:
+            vx, ax = orig_forward(self, video, audio, perturbations)
+        finally:
+            for h in handles:
+                h.remove()
+        if _Ltx.in_stage and k >= 0:
+            if vx is not None:
+                write(f"{p}video_vel_step{k + 1:02d}", vx)
+            if ax is not None:
+                write(f"{p}audio_vel_step{k + 1:02d}", ax)
+        return vx, ax
+
+    cls.forward = forward
+
+
+_LTX_TARGETS: dict = {
+    "ltx_pipelines.utils.blocks": _patch_ltx_blocks,
+    "ltx_core.model.transformer.model": _patch_ltx_model,
+}
