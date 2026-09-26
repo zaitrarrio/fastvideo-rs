@@ -204,10 +204,42 @@ fn rms_factor(x: &[f32], eps: f32) -> f32 {
     1.0 / (ss / x.len() as f32 + eps).sqrt()
 }
 
+/// Threads per row of the fused H3 norm kernels (`cfg_rows`).
+pub const NORM_THREADS: usize = 256;
+
+/// The fused H3 norm kernels' normalizer, bit for bit: lane `t` accumulates
+/// `x[t], x[t + 256], ...` with FMA, the 256 partials reduce by the kernel's
+/// halving tree, then `rsqrt(sum / n + eps)` correctly rounded
+/// (`__frsqrt_rn`). Sol-H3's Triton kernel uses its own order and an
+/// approximate rsqrt, so no implementation reproduces it bitwise; fixing both
+/// here keeps the device and this twin identical. The rounding points (f32
+/// chain, one bf16 rounding) are the reference's.
+pub fn row_rsqrt(x: &[f32], eps: f32) -> f32 {
+    let mut part = [0.0f32; NORM_THREADS];
+    for (t, p) in part.iter_mut().enumerate() {
+        let mut j = t;
+        while j < x.len() {
+            *p = x[j].mul_add(x[j], *p);
+            j += NORM_THREADS;
+        }
+    }
+    let mut s = NORM_THREADS / 2;
+    while s > 0 {
+        for t in 0..s {
+            part[t] += part[t + s];
+        }
+        s >>= 1;
+    }
+    let v = part[0] / x.len() as f32 + eps;
+    // f64 then one rounding: the correctly rounded rsqrt except where the
+    // f64 value sits within 2^-53 of an f32 midpoint.
+    (1.0 / f64::from(v).sqrt()) as f32
+}
+
 /// One row of `_rmsnorm_modulate_kernel`: `bf16(rms(x) * w * scale1p + shift)`
 /// with `scale1p = 1 + scale` already formed in f32.
 pub fn norm_mod_row(x: &[f32], w: &[f32], scale1p: &[f32], shift: &[f32], eps: f32) -> Vec<f32> {
-    let r = rms_factor(x, eps);
+    let r = row_rsqrt(x, eps);
     x.iter()
         .enumerate()
         .map(|(j, &v)| bf16_round((v * r * w[j]).mul_add(scale1p[j], shift[j])))
@@ -1403,6 +1435,26 @@ mod tests {
     }
 
     #[test]
+    fn the_norm_twin_follows_the_kernel_reduction_tree() {
+        // 600 values: lanes 0..87 hold three, the rest two; the tree then halves.
+        let x: Vec<f32> = (0..600).map(|i| ((i as f32) * 0.731).sin() * 3.0).collect();
+        let mut part = vec![0.0f32; NORM_THREADS];
+        for (j, &v) in x.iter().enumerate() {
+            let p = &mut part[j % NORM_THREADS];
+            *p = v.mul_add(v, *p);
+        }
+        while part.len() > 1 {
+            let h = part.len() / 2;
+            let (a, b) = part.split_at(h);
+            part = a.iter().zip(b).map(|(p, q)| p + q).collect();
+        }
+        let want = (1.0 / f64::from(part[0] / 600.0 + 1e-6).sqrt()) as f32;
+        assert_eq!(row_rsqrt(&x, 1e-6).to_bits(), want.to_bits());
+        let naive = 1.0 / (x.iter().map(|v| v * v).sum::<f32>() / 600.0 + 1e-6).sqrt();
+        assert!((row_rsqrt(&x, 1e-6) - naive).abs() <= naive * 4e-7);
+    }
+
+    #[test]
     fn fused_references_pin_their_rounding_points() {
         let d = 64;
         let x: Vec<f32> = (0..d)
@@ -1415,7 +1467,7 @@ mod tests {
         // Every output is bf16, and it is the single rounding of the f32 chain.
         for (j, &o) in out.iter().enumerate() {
             assert_eq!(o, bf16_round(o));
-            let r = 1.0 / (x.iter().map(|v| v * v).sum::<f32>() / d as f32 + 1e-6).sqrt();
+            let r = row_rsqrt(&x, 1e-6);
             assert_eq!(o, bf16_round((x[j] * r * w[j]).mul_add(sc[j], sh[j])));
         }
         // Residual kernel normalizes the f32 hidden, not the stored bf16 one.

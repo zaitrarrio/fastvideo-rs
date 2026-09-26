@@ -248,6 +248,12 @@ pub fn swiglu_mx(h: &CudaTensor) -> Result<Option<quant::MxAct>> {
 use crate::wan::{device, stats};
 
 #[cfg(feature = "cuda")]
+const _: () = assert!(
+    quant::NORM_THREADS == crate::wan::kernels::ROW_BLOCK_THREADS as usize,
+    "the host norm twin mirrors the kernel's block size"
+);
+
+#[cfg(feature = "cuda")]
 mod dev {
     use super::*;
     use crate::wan::act16::{operand, OutBuf};

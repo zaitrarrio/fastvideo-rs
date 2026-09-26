@@ -3879,12 +3879,17 @@ extern "C" __global__ void h3_norm_mod(
     long tb = ((long)idx[row] + base) * 6;
     const float* sc = tab + (tb + scale_slot) * dim;
     const float* sh = tab + (tb + shift_slot) * dim;
+    // The normalizer is bit-reproducible on the host (`quant::row_rsqrt`):
+    // explicit FMA partial sums per lane, the fixed tree of fv_block_sum, a
+    // correctly rounded rsqrt. The output is `normed * scale + shift`, so where
+    // the two nearly cancel an f32-ulp change of `r` becomes many bf16 ulps of
+    // the result; an unspecified order or rsqrt.approx would make that noise.
     float local = 0.0f;
     for (int j = threadIdx.x; j < dim; j += blockDim.x) {
         float v = fv_ld(x, xb + j, x16);
-        local += v * v;
+        local = fmaf(v, v, local);
     }
-    float r = rsqrtf(fv_block_sum(local, sdata) / (float)dim + eps);
+    float r = __frsqrt_rn(fv_block_sum(local, sdata) / (float)dim + eps);
     long column_blocks = ((long)dim / 32 + 3) / 4;
     for (int j0 = 0; j0 < dim; j0 += blockDim.x) {
         int j = j0 + threadIdx.x;
@@ -3915,9 +3920,10 @@ extern "C" __global__ void h3_res_gate_norm_mod(
     float local = 0.0f;
     for (int j = threadIdx.x; j < dim; j += blockDim.x) {
         float h = fmaf(g[j], fv_ld(br, xb + j, b16), fv_ld(res, xb + j, r16));
-        local += h * h;
+        local = fmaf(h, h, local);
     }
-    float r = rsqrtf(fv_block_sum(local, sdata) / (float)dim + eps);
+    // Same reproducible normalizer as h3_norm_mod.
+    float r = __frsqrt_rn(fv_block_sum(local, sdata) / (float)dim + eps);
     long column_blocks = ((long)dim / 32 + 3) / 4;
     // `hidden` may alias `res` (in-place residual): every read of row `row`
     // happens above or in the same thread before its write below.
