@@ -814,7 +814,8 @@ fn bf16_table_value(v: f32, is_scale: bool) -> f32 {
 /// per sequence row (every [`crate::wan::dump::BLOCK_ROW_STRIDE`]-th row) as
 /// `[rows, 6 * hidden]` in (shift, scale, gate) msa then mlp order: the
 /// reference's `adaln_proj(temb)` chunks `index_select`ed by its row indices.
-/// Raw f32 table values (before any bf16 rounding of ours).
+/// Raw f32 table values (before any bf16 rounding of ours), scales as
+/// `scale` (the table stores `1 + scale`).
 fn dump_adaln_rows(
     table: &AdaLnTable,
     step: usize,
@@ -840,7 +841,14 @@ fn dump_adaln_rows(
         } else {
             &table.keyframe_mods[..]
         };
+        let at = out.len();
         out.extend_from_slice(&tab[t * slice..(t + 1) * slice]);
+        // The table keeps `1 + scale`; the reference's chunks are `scale`.
+        for p in [SCALE_MSA, SCALE_MLP] {
+            for v in &mut out[at + p * h..at + (p + 1) * h] {
+                *v -= 1.0;
+            }
+        }
     }
     crate::wan::dump::host(
         &format!("step00_b{block}_adaln"),

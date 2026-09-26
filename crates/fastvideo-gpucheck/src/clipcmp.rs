@@ -461,7 +461,11 @@ pub fn clip_status(dir: &Path) -> (String, Vec<String>, Option<PathBuf>) {
         .into_iter()
         .chain(fd.parent().map(|p| p.join("stderr.log")))
         // A prompt set: <cell>/frames/<prompt>/, the log two levels up.
-        .chain(fd.parent().and_then(Path::parent).map(|p| p.join("stderr.log")))
+        .chain(
+            fd.parent()
+                .and_then(Path::parent)
+                .map(|p| p.join("stderr.log")),
+        )
         .find(|p| p.exists());
     let mut notes = Vec::new();
     let errors = log.as_deref().map(log_errors).unwrap_or_default();
@@ -602,7 +606,12 @@ pub fn run(
             json!({"status": "blocked", "reason": "no comparable frame pairs"}),
         ),
         Some(o) => {
-            let judge = lpips_judge(&cmp, baseline, candidate, o)?;
+            // A scorer failure (weights, device) blocks the judge, as
+            // collect_run.py's `lpips_judge_failed`, not the pixel metrics.
+            let judge = lpips_judge(&cmp, baseline, candidate, o).unwrap_or_else(|e| {
+                eprintln!("lpips: {e:#}");
+                json!({"status": "blocked", "reason": "lpips_judge_failed", "error": format!("{e:#}")})
+            });
             let r = &judge["result"];
             report.set("lpips_mean", &r["mean"]);
             report.set("lpips_max", &r["max"]);
