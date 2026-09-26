@@ -58,7 +58,7 @@ start_up() {
   log "upstream pod ($image): $wsteps oracle:$csv"
   FV_KEEP_POD=1 FV_POD_FILE="$work/$image.pod" UP_IMAGE_TARGET="$image" \
     UP_STEPS="info:box $wsteps oracle:$csv" UP_CELL_TIMEOUT_S="${UP_CELL_TIMEOUT_S:-7200}" \
-    FV_EXTRA_ENV="FASTVIDEO_DUMP_OPS=$ops" FV_FETCH_SKIP='oracle-dump\.tar' FV_CONTAINER_DISK_GB="$disk" \
+    FV_EXTRA_ENV="FASTVIDEO_DUMP_OPS=$ops" FV_FETCH_SKIP='oracle-dump\.tar|/dump/|\.mp4$' FV_CONTAINER_DISK_GB="$disk" \
     bash "$HERE/runpod-http.sh" upstream "$sha" >"$logs/oracle-up-$image.log" 2>&1 &
   bg[$image]=$!
 }

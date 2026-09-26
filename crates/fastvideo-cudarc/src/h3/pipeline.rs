@@ -1102,16 +1102,24 @@ impl H3Pipeline {
         }
         drop(encoder_slot);
         let mut text = text;
-        // FASTVIDEO_INJECT_DIR: the reference's Qwen hidden states in place of
-        // ours (same tokenizer, so the same row count), so a parity run
-        // measures the DiT and not the text-encoder precision.
+        // FASTVIDEO_DUMP_DIR: ours before any injection (the text-encoder
+        // parity); FASTVIDEO_INJECT_DIR: then the reference's Qwen hidden
+        // states in place of ours (same tokenizer, so the same row count), so
+        // a parity run measures the DiT and not the text-encoder precision.
+        crate::wan::dump::tensor("text_hidden", &text.hidden)?;
         if crate::wan::inject::text_enabled() {
-            if let Some(v) = crate::wan::inject::load_numel("text_hidden", text.hidden.numel())? {
-                let shape = text.hidden.shape.clone();
-                text.hidden = CudaTensor::from_vec(v, shape)?.to_device()?;
+            match crate::wan::inject::load("text_hidden")? {
+                Some((_, v)) if v.len() == text.hidden.numel() => {
+                    let shape = text.hidden.shape.clone();
+                    text.hidden = CudaTensor::from_vec(v, shape)?.to_device()?;
+                }
+                Some((shape, _)) => crate::wan::log::info(format_args!(
+                    "inject: text_hidden {shape:?} does not fit ours {:?} (a different token count); ours kept",
+                    text.hidden.shape
+                )),
+                None => {}
             }
         }
-        crate::wan::dump::tensor("text_hidden", &text.hidden)?;
         memory.mark("text")?;
         let timer = Instant::now();
         let text_refined = self.refiner.forward(&text.hidden)?;
