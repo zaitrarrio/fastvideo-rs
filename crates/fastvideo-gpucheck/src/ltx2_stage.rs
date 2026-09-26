@@ -363,6 +363,9 @@ pub enum Stage {
         /// Decode once untimed first (plan search, allocator growth).
         #[arg(long)]
         warm: bool,
+        /// With `--clip`, also encode `output.mp4` (gen's writer and ffmpeg).
+        #[arg(long)]
+        mp4: bool,
         #[arg(long, default_value_t = 7)]
         seed: u64,
         #[arg(long, default_value = "cuda")]
@@ -547,6 +550,7 @@ pub fn run(report: &mut Report, stage: &Stage) -> StageResult<()> {
             decoder,
             clip,
             warm,
+            mp4,
             seed,
             device,
         } => vae_bench(
@@ -558,6 +562,7 @@ pub fn run(report: &mut Report, stage: &Stage) -> StageResult<()> {
             decoder,
             clip.as_deref(),
             *warm,
+            *mp4,
             *seed,
             device,
         ),
@@ -1738,6 +1743,7 @@ fn vae_bench(
     decoder: &str,
     clip: Option<&Path>,
     warm: bool,
+    mp4: bool,
     seed: u64,
     device: &str,
 ) -> StageResult<()> {
@@ -1810,9 +1816,9 @@ fn vae_bench(
         fastvideo_cudarc::wan::device::trim_pool()?;
         let writer = match clip {
             Some(dir) if decoder == "both" => {
-                VideoWriter::spawn(&dir.join(name), 24, false).map_err(pe)?
+                VideoWriter::spawn(&dir.join(name), 24, mp4).map_err(pe)?
             }
-            Some(dir) => VideoWriter::spawn(dir, 24, false).map_err(pe)?,
+            Some(dir) => VideoWriter::spawn(dir, 24, mp4).map_err(pe)?,
             None => VideoWriter::spawn_discard().map_err(pe)?,
         };
         let peak = crate::gpu::PeakMem::start();

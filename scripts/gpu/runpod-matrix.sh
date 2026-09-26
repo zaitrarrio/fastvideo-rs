@@ -1046,6 +1046,11 @@ case "$FAMILY" in
             "$BIN" --mode fast ltx2 vae-bench --weights "$W/ltx25" --workload "$wl" \
               --decoder "$dec" --warm
         done
+        # With gen's writer (PNG frames + ffmpeg mp4) behind the drain, as in
+        # a generation: decode_video_s then includes writer backpressure.
+        gated_cell "ltxvae-$wl-fast-mp4" ltx25-two-stage \
+          "$BIN" --mode fast ltx2 vae-bench --weights "$W/ltx25" --workload "$wl" \
+            --decoder fast --warm --mp4 --clip "$RUNS/ltxvae-$wl-fast-mp4/frames"
         gated_cell "ltxvae-$wl-fast-tune" ltx25-two-stage \
           env FASTVIDEO_LTX_VAE_CONV_ALGO=tune \
           "$BIN" --mode fast ltx2 vae-bench --weights "$W/ltx25" --workload "$wl" \
