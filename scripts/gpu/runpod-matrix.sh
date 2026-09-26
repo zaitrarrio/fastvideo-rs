@@ -4,7 +4,7 @@
 # Spark joint LTX refine stays off (FASTVIDEO_LTX2_WEIGHTS unset) except in
 # the rtx6000 parity family, which runs the full Spark bridge.
 set -euo pipefail
-FAMILY="${1:?usage: runpod-matrix.sh h3|ltx|hunyuan|wan|b200|rtx6000|rtx5090|fastvideo|precision|trace}"
+FAMILY="${1:?usage: runpod-matrix.sh h3|ltx|hunyuan|wan|b200|rtx6000|rtx5090|fastvideo|precision|precision-debug|trace}"
 WORK="${FV_WORK:-/workspace}"
 BIN="${FV_GPUCHECK:-/opt/fastvideo-rs/target/release/fv-gpucheck}"
 W="$WORK/weights"
@@ -722,6 +722,66 @@ case "$FAMILY" in
     for v in bf16act fp8; do
       compare_cells ltx25-4k5s-sol-base "ltx25-4k5s-sol-$v"
     done
+    ;;
+  precision-debug)
+    # Two precision-run findings, measured cheaply.
+    # (1) LTX-2.5 FASTVIDEO_FP8 at 512p, with and without bf16 activations,
+    #     each step CUPTI-traced (FASTVIDEO_GPU_TRACE_STEP=1: the second
+    #     stage-1 step): host enqueue vs GPU busy, memcpy directions, top
+    #     kernels; `ltx2 step transfers` lines count PCIe traffic per step.
+    for v in base fp8 bf16act bf16act-fp8; do
+      envs=(FASTVIDEO_GPU_TRACE=1 FASTVIDEO_GPU_TRACE_STEP=1)
+      case "$v" in
+        fp8) envs+=(FASTVIDEO_FP8=1) ;;
+        bf16act) envs+=(FASTVIDEO_BF16_ACT=1) ;;
+        bf16act-fp8) envs+=(FASTVIDEO_BF16_ACT=1 FASTVIDEO_FP8=1) ;;
+      esac
+      gated_cell "ltx25-512p-$v" ltx25-two-stage \
+        env "${envs[@]}" \
+        "$BIN" --mode fast ltx2 gen --model-version 2.5 \
+          --weights "$W/ltx25" --dit "$W/ltx25" --height 512 --width 768 --num-frames 121 \
+          --prompt "$PROMPT" --seed "$SEED" --two-stage --text streamed \
+          --clip "$RUNS/ltx25-512p-$v/frames"
+    done
+    for cell in ltx25-512p-base ltx25-512p-fp8 ltx25-512p-bf16act ltx25-512p-bf16act-fp8; do
+      grep -hE 'ancestral step|step transfers|fp8 linear|FASTVIDEO_FP8' "$RUNS/$cell/stderr.log" 2>/dev/null \
+        | head -24 | sed "s/^/[$cell] /" | tee -a "$LOG" || true
+    done
+    # (2) H3 8-step 768p: f32 vs bf16 activations (and W8A8 as a control
+    #     perturbation) from the same seed, every step's latents and velocity
+    #     and the first step's block outputs dumped (FASTVIDEO_DUMP_DIR), then
+    #     compared tensor by tensor. The dumps are deleted afterwards.
+    h3_common=(
+      --prompt "$PROMPT"
+      --seconds 5
+      --seed "$SEED"
+      --text-encoder auto
+      --text-cache "$SCRATCH/h3-text-cache"
+      --text-weights "$W/h3-base"
+    )
+    for v in base bf16act w8a8; do
+      envs=(FASTVIDEO_DUMP_DIR="$RUNS/h3dump-$v")
+      case "$v" in
+        bf16act) envs+=(FASTVIDEO_BF16_ACT=1) ;;
+        w8a8) envs+=(FASTVIDEO_BF16_ACT=1 FASTVIDEO_H3_QUANT=w8a8) ;;
+      esac
+      gated_cell "fasth3-8step-768p-$v" fasth3-8step \
+        env "${envs[@]}" \
+        "$BIN" --mode fast h3 gen --weights "$W/h3-8step" --h3-recipe 8step \
+          --adaln-cache "$RUNS/fasth3-8step-768p-$v-adaln.cache" \
+          --clip-dir "$RUNS/fasth3-8step-768p-$v/frames" "${h3_common[@]}"
+    done
+    for pair in base:bf16act bf16act:w8a8 base:w8a8; do
+      a="${pair%%:*}" b="${pair##*:}"
+      if [[ -d "$RUNS/h3dump-$a" && -d "$RUNS/h3dump-$b" ]]; then
+        run_cell "dumps-$a--$b" "$BIN" compare-dumps \
+          --baseline "$RUNS/h3dump-$a" --candidate "$RUNS/h3dump-$b"
+        grep -h 'compare-dumps' "$RUNS/dumps-$a--$b/stderr.log" | sed "s/^/[$a--$b] /" | tee -a "$LOG" || true
+      fi
+    done
+    compare_cells fasth3-8step-768p-base fasth3-8step-768p-bf16act
+    compare_cells fasth3-8step-768p-bf16act fasth3-8step-768p-w8a8
+    rm -rf "$RUNS"/h3dump-*
     ;;
   trace)
     # FASTVIDEO_GPU_TRACE=1: a CUPTI activity trace of one warm denoise step

@@ -651,6 +651,61 @@ pub fn compare(report: &mut Report, a: &Path, b: &Path, gates: CompareGates) -> 
     Ok(())
 }
 
+/// `compare-dumps`: two `FASTVIDEO_DUMP_DIR` directories of the same seed
+/// and prompt under different paths, tensor by tensor (`<name>.f32`, sorted
+/// by name with numeric suffixes in order, so `video_step01..` read as a
+/// trajectory and `step00_block_<i>` as a depth profile).
+/// `rel_l2 = |candidate - baseline| / |baseline|`. Telemetry only: where two
+/// paths part is the answer, not a gate.
+pub fn compare_dumps(report: &mut Report, baseline: &Path, candidate: &Path) -> StageResult<()> {
+    fn read(path: &Path) -> anyhow::Result<Vec<f32>> {
+        let bytes = std::fs::read(path).with_context(|| path.display().to_string())?;
+        Ok(bytes
+            .chunks_exact(4)
+            .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
+            .collect())
+    }
+    let mut names: Vec<String> = std::fs::read_dir(baseline)
+        .with_context(|| baseline.display().to_string())?
+        .filter_map(|e| e.ok())
+        .filter_map(|e| {
+            let name = e.file_name().to_string_lossy().into_owned();
+            name.strip_suffix(".f32").map(str::to_owned)
+        })
+        .collect();
+    names.sort_by_key(|n| dump_sort_key(n));
+    let mut rows = Vec::new();
+    for name in &names {
+        let c = candidate.join(format!("{name}.f32"));
+        if !c.exists() {
+            eprintln!("compare-dumps {name}: missing in candidate");
+            continue;
+        }
+        let (a, b) = (read(&baseline.join(format!("{name}.f32")))?, read(&c)?);
+        let d = crate::metrics::diff(&b, &a);
+        eprintln!(
+            "compare-dumps {name:<28} rel_l2 {:.3e}  cosine {:.6}  max_abs {:.3e}  n {}",
+            d.rel_l2,
+            d.cosine,
+            d.max_abs,
+            a.len()
+        );
+        let mut j = d.to_json();
+        j["name"] = json!(name);
+        j["numel"] = json!(a.len());
+        rows.push(j);
+    }
+    report.set("dumps", rows);
+    Ok(())
+}
+
+/// `(prefix, trailing number)`: `block_2` sorts before `block_10`.
+fn dump_sort_key(name: &str) -> (String, u64) {
+    let digits = name.chars().rev().take_while(char::is_ascii_digit).count();
+    let (prefix, n) = name.split_at(name.len() - digits);
+    (prefix.to_owned(), n.parse().unwrap_or(0))
+}
+
 #[derive(Clone, Copy, Debug)]
 pub struct CompareGates {
     pub max_step1_rel: f64,

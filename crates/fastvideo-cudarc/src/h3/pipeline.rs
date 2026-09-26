@@ -433,7 +433,23 @@ pub fn denoise(
     observe: &mut dyn FnMut(usize, &CudaTensor, &CudaTensor) -> Result<()>,
 ) -> Result<(CudaTensor, CudaTensor)> {
     let (mut video, mut audio) = (video_rows, audio_rows);
+    // FASTVIDEO_DUMP_DIR: the inputs, each step's velocity and latents, and the
+    // first step's block outputs, for a two-run comparison (compare-dumps).
+    let dumping = crate::wan::dump::enabled();
+    if dumping {
+        crate::wan::dump::tensor("text_refined", text_refined)?;
+        crate::wan::dump::tensor("video_step00_in", &video)?;
+    }
     for step in 0..schedule.num_steps() {
+        let mut dump_blocks = |name: &str, x: &CudaTensor| {
+            crate::wan::dump::rows_strided(
+                &format!("step00_{name}"),
+                x,
+                crate::wan::dump::BLOCK_ROW_STRIDE,
+            )
+        };
+        let observer: Option<crate::h3::transformer::Observer<'_>> =
+            (dumping && step == 0).then_some(&mut dump_blocks as _);
         let (v_video, v_audio) = model.forward(
             step,
             &video,
@@ -441,12 +457,17 @@ pub fn denoise(
             text_refined,
             layout,
             mode,
-            None,
+            observer,
             cond_rows,
             cond_audio_rows,
         )?;
         video = scheduler_step(&schedule.video, step, &video, &v_video)?;
         audio = scheduler_step(&schedule.audio, step, &audio, &v_audio)?;
+        if dumping {
+            crate::wan::dump::tensor(&format!("video_vel_step{:02}", step + 1), &v_video)?;
+            crate::wan::dump::tensor(&format!("video_step{:02}", step + 1), &video)?;
+            crate::wan::dump::tensor(&format!("audio_step{:02}", step + 1), &audio)?;
+        }
         observe(step, &video, &audio)?;
     }
     Ok((video, audio))

@@ -314,6 +314,15 @@ enum Cmd {
         #[arg(long, default_value_t = 20.0)]
         min_psnr: f64,
     },
+    /// Two FASTVIDEO_DUMP_DIR directories (same seed, different paths),
+    /// tensor by tensor: per-step latents / velocities and first-step block
+    /// outputs, as rel-L2 (telemetry, no gate).
+    CompareDumps {
+        #[arg(long)]
+        baseline: PathBuf,
+        #[arg(long)]
+        candidate: PathBuf,
+    },
     /// Paired-clip quality gate (CPU): a candidate clip's frames against a
     /// baseline clip's (sol-engine collect_run.py metrics). Each dir holds
     /// `frame-NNN.png` (+ `output.mp4`) directly or under `frames/`.
@@ -426,6 +435,7 @@ fn stage_name(cmd: &Cmd) -> &'static str {
         Cmd::Llm { .. } => "llm",
         Cmd::Compare { .. } => "compare",
         Cmd::CompareClips { .. } => "compare-clips",
+        Cmd::CompareDumps { .. } => "compare-dumps",
         Cmd::Oracle { .. } => "oracle",
         Cmd::Taehv { .. } => "taehv",
         Cmd::TaehvDevice { .. } => "taehv-device",
@@ -582,6 +592,10 @@ fn run(cli: &Cli, report: &mut Report) -> StageResult<()> {
             candidate,
             off_identity,
         } => clipcmp::run(report, baseline, candidate, *off_identity),
+        Cmd::CompareDumps {
+            baseline,
+            candidate,
+        } => perf::compare_dumps(report, baseline, candidate),
         Cmd::Taehv {
             weights,
             oracle,

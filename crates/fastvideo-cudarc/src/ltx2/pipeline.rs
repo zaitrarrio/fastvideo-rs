@@ -72,7 +72,32 @@ fn step_sync(timer: &Instant) -> Result<f64> {
     sync()?;
     let secs = timer.elapsed().as_secs_f64();
     crate::wan::gpu_trace::step_end(secs);
+    step_transfers();
     Ok(secs)
+}
+
+/// Host transfers since the previous step's sync. A denoise step uploads a
+/// few small tables at most; megabytes moving inside a step are a host
+/// round trip on the hot path, so they are logged. The first step of a stage
+/// also carries whatever ran between stages (text, upsampler).
+fn step_transfers() {
+    static LAST: std::sync::Mutex<Option<crate::wan::stats::Snapshot>> =
+        std::sync::Mutex::new(None);
+    let now = crate::wan::stats::snapshot();
+    let mut last = LAST.lock().expect("ltx2 step transfers");
+    if let Some(prev) = last.as_ref() {
+        let d = now.since(prev);
+        if d.d2h_bytes + d.h2d_bytes >= 64 << 20 {
+            eprintln!(
+                "[fastvideo] ltx2 step transfers: d2h {} MiB in {} copies, h2d {} MiB in {} copies",
+                d.d2h_bytes >> 20,
+                d.d2h_count,
+                d.h2d_bytes >> 20,
+                d.h2d_count
+            );
+        }
+    }
+    *last = Some(now);
 }
 
 /// Where the weights are.
