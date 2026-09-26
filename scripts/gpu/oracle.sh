@@ -17,15 +17,24 @@
 #    artifacts/runpod/{upstream,oracle}/<tag>/ (the dumps themselves are not
 #    fetched; oracle-<target>-diff/gpucheck-out/*.json holds the numbers).
 #
-# Env: ORACLE_TARGETS (default: fasth3-8step fasth3-4step-vsa ltx25-512p-dense
+# Env: ORACLE_TARGETS (default: fasth3-8step fasth3-4step-vsa fasth3-8step-vsa0
+# fasth3-4step-dense ltx25-512p-dense
 # ltx25-512p), FASTVIDEO_DUMP_OPS (blocks whose inside is dumped, default
 # 0,1,24,47), plus runpod-http.sh's (RUNPOD_API_KEY, ...).
 # Logs: $ORACLE_LOG_DIR (default /tmp/claude-0) oracle-*.log.
 set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# A run lasts hours and bash reads a script as it goes: run from a private
+# copy so the repo copy can be edited meanwhile.
+if [[ -z "${FV_ORACLE_COPY:-}" ]]; then
+  copy="$(mktemp "${TMPDIR:-/tmp}/oracle.XXXXXX")"
+  cp "${BASH_SOURCE[0]}" "$copy"
+  FV_ORACLE_COPY=1 FV_ORACLE_HERE="$HERE" exec bash "$copy" "$@"
+fi
+HERE="${FV_ORACLE_HERE:-$HERE}"
 ROOT="$(cd "$HERE/../.." && pwd)"
 sha="${1:-$(git -C "$ROOT" rev-parse --short=7 origin/main)}"
-targets="${ORACLE_TARGETS:-fasth3-8step fasth3-4step-vsa ltx25-512p-dense ltx25-512p}"
+targets="${ORACLE_TARGETS:-fasth3-8step fasth3-4step-vsa fasth3-8step-vsa0 fasth3-4step-dense ltx25-512p-dense ltx25-512p}"
 ops="${FASTVIDEO_DUMP_OPS:-0,1,24,47}"
 logs="${ORACLE_LOG_DIR:-/tmp/claude-0}"
 work="$(mktemp -d "${TMPDIR:-/tmp}/fv-oracle.XXXXXX")"
@@ -52,11 +61,11 @@ cleanup() {
 }
 trap cleanup EXIT
 
-# start_up <image target> <oracle targets> <weight steps> <container disk GB>: the
+# start_up <image target> <oracle targets> <weight steps> <container disk GB> [env]: the
 # upstream driver in the background; a pod create that fails outright (the API
 # answers 500 now and then) is retried twice.
 start_up() {
-  local image="$1" list="$2" wsteps="$3" disk="$4" csv
+  local image="$1" list="$2" wsteps="$3" disk="$4" extra="${5:-}" csv
   csv="${list// /,}"
   tg[$image]="$list"
   log "upstream pod ($image): $wsteps oracle:$csv"
@@ -64,7 +73,7 @@ start_up() {
     for attempt in 1 2 3; do
       FV_KEEP_POD=1 FV_POD_FILE="$work/$image.pod" UP_IMAGE_TARGET="$image" \
         UP_STEPS="info:box $wsteps oracle:$csv" UP_CELL_TIMEOUT_S="${UP_CELL_TIMEOUT_S:-7200}" \
-        FV_EXTRA_ENV="FASTVIDEO_DUMP_OPS=$ops" FV_FETCH_SKIP='oracle-dump\.tar|/dump/|\.mp4$' FV_CONTAINER_DISK_GB="$disk" \
+        FV_EXTRA_ENV="FASTVIDEO_DUMP_OPS=$ops${extra:+ $extra}" FV_FETCH_SKIP='oracle-dump\.tar|/dump/|\.mp4$' FV_CONTAINER_DISK_GB="$disk" \
         bash "$HERE/runpod-http.sh" upstream "$sha" >>"$logs/oracle-up-$image.log" 2>&1 && exit 0
       [[ -s "$work/$image.pod" ]] && exit 1   # the pod came up; its run failed
       log "upstream $image: no pod (attempt $attempt)"
@@ -76,7 +85,11 @@ start_up() {
 }
 
 (( ${#fv[@]} )) && start_up fastvideo "${fv[*]}" "weights:fasth3-8step weights:h3-diffusers" 150
-(( ${#ltx[@]} )) && start_up sol-ltx25 "${ltx[*]}" "weights:ltx25" 250
+# RECON_ACCEPT_MISMATCH=1: the LTX-2.5 single-file packs are rebuilt from the
+# Diffusers copy, and two of them (Gemma layers 12-47, the DiT's embedding
+# connectors) carry the Diffusers numbers -- the ones our port loads -- in the
+# original layout (upstream/pod.sh weights_ltx25); without it the rebuild stops.
+(( ${#ltx[@]} )) && start_up sol-ltx25 "${ltx[*]}" "weights:ltx25" 250 RECON_ACCEPT_MISMATCH=1
 
 # Wait for each upstream pod to be up (runpod-http writes "<id> <tag>"); a
 # stack whose pod never comes up drops its targets.
