@@ -420,6 +420,17 @@ impl H3Vsa {
                 q.shape, k.shape, v.shape
             )));
         }
+        {
+            // Density for benchmark.json: video query tiles keep every prefix
+            // tile plus k_vid video tiles; prefix query tiles are dense.
+            let (n, p, v) = (
+                self.plan.num_tiles() as u64,
+                self.plan.prefix_tiles as u64,
+                self.plan.video_tiles as u64,
+            );
+            let kv = (self.k_vid as u64).min(v);
+            crate::wan::evalstats::vsa(self.heads, v * (p + kv) + p * n, n * n, v * kv, v * v);
+        }
         #[cfg(feature = "cuda")]
         if let Some(device) = &self.device {
             // The VSA kernels read f32. bf16-stored activations

@@ -791,7 +791,24 @@ impl H3VideoDecoder {
     /// as each temporal chunk finishes. Returns the number of frames emitted.
     /// This is the tensor the reference's `decode` returns, before the pixel
     /// de-normalization and clamp (see [`Self::to_display`]).
+    ///
+    /// The decoder always runs with f32 activations: its fused ViT
+    /// ([`Self::fused_ready`]) keeps bf16 between GEMMs itself, with the
+    /// reference's rounding points, and is the path measured against
+    /// FastVideo. The DiT's bf16-activation default must not route the VAE
+    /// onto the slower unfused path, so bf16 latents are widened here.
     pub fn decode_raw_streaming(
+        &self,
+        latents: &CudaTensor,
+        sink: &mut dyn FnMut(usize, &CudaTensor) -> Result<()>,
+    ) -> Result<usize> {
+        crate::wan::tensor::with_bf16_act(false, || {
+            let latents = latents.to_f32_act()?;
+            self.decode_raw_streaming_f32(&latents, sink)
+        })
+    }
+
+    fn decode_raw_streaming_f32(
         &self,
         latents: &CudaTensor,
         sink: &mut dyn FnMut(usize, &CudaTensor) -> Result<()>,

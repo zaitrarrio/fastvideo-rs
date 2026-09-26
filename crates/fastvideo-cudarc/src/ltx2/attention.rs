@@ -397,6 +397,7 @@ impl FeedForward {
             ))
         })?;
         let spans = chunking.spans(x.shape[axis]);
+        crate::wan::evalstats::ffn(spans.len().max(1));
         if spans.len() <= 1 {
             return self.forward_whole(x);
         }
@@ -418,6 +419,7 @@ impl FeedForward {
             ))
         })?;
         let spans = FeedForwardChunking::RTX5090.spans(x.shape[axis]);
+        crate::wan::evalstats::ffn(spans.len().max(1));
         if spans.len() <= 1 {
             let up = then(x, |x| self.up.forward_gelu(x))?;
             return self.down.forward(&up);

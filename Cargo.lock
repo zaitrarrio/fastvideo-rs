@@ -541,6 +541,7 @@ dependencies = [
  "safetensors",
  "serde",
  "serde_json",
+ "toml",
 ]
 
 [[package]]

@@ -254,6 +254,13 @@ pub enum Stage {
         clip: PathBuf,
         #[arg(long, default_value_t = 10)]
         seed: u64,
+        /// A prompt set (`scripts/gpu/prompts-eval.json`): every prompt runs in
+        /// this one process (warm after the first), each clip under
+        /// `<clip>/<name>/`, and `benchmark.json` beside the clip dir holds
+        /// each prompt's numbers and their medians. `--prompt` / `--seed` are
+        /// then unused.
+        #[arg(long)]
+        prompts: Option<PathBuf>,
         #[arg(long, default_value = "cuda")]
         device: String,
         #[command(flatten)]
@@ -561,6 +568,7 @@ pub fn run(report: &mut Report, stage: &Stage) -> StageResult<()> {
             prompt,
             clip,
             seed,
+            prompts,
             device,
             geometry,
             no_mp4,
@@ -630,9 +638,18 @@ pub fn run(report: &mut Report, stage: &Stage) -> StageResult<()> {
                         .map_err(|e| anyhow::anyhow!(e))?,
                     tae: ltx_tae_weights.clone(),
                 },
-                prompt,
+                &match prompts {
+                    Some(file) => (crate::benchmark::load_prompts(file, *seed)?, true),
+                    None => (
+                        vec![crate::benchmark::PromptSpec {
+                            name: "default".into(),
+                            prompt: prompt.clone(),
+                            seed: *seed,
+                        }],
+                        false,
+                    ),
+                },
                 clip,
-                *seed,
                 device,
                 geometry.resolve()?,
                 !*no_mp4,
@@ -1832,9 +1849,8 @@ fn gen(
     model_version: ModelVersion,
     paths: &Ltx2Paths,
     options: &PipelineOptions,
-    prompt: &str,
+    (prompts, multi): &(Vec<crate::benchmark::PromptSpec>, bool),
     clip: &Path,
-    seed: u64,
     device: &str,
     g: Geometry,
     mp4: bool,
@@ -1864,6 +1880,8 @@ fn gen(
             None => json!({ "decoder": "conv_vae" }),
         },
     );
+    let multi = *multi;
+    let (prompt, seed) = (prompts[0].prompt.as_str(), prompts[0].seed);
     let cfg = model_version.config();
     let request = Ltx2Request {
         prompt: prompt.to_string(),
@@ -1893,6 +1911,7 @@ fn gen(
             "sol_stage2": sol_stage2,
             "pisa_stage2": pisa_stage2,
             "image": image.map(|p| p.display().to_string()),
+            "prompt_set": multi.then(|| prompts.iter().map(|p| json!({"name": p.name, "seed": p.seed})).collect::<Vec<_>>()),
         }),
     );
     if two_stage {
@@ -1943,28 +1962,54 @@ fn gen(
         pipeline.generate(&warmup, false, None)?;
         report.note("warmup", json!({"seconds": timer.elapsed().as_secs_f64()}));
     }
-    // Latent statistics per step: a run that diverges shows here, not in a grey video.
-    let mut stats: Vec<serde_json::Value> = Vec::new();
-    let mut observe = |i: usize,
-                       v: &CudaTensor,
-                       a: &CudaTensor,
-                       s: f64|
-     -> fastvideo_cudarc::wan::pipeline::Result<()> {
-        let (vh, ah) = (v.host_cow()?, a.host_cow()?);
-        let ((vm, vs), (am, as_)) = (crate::metrics::mean_std(&vh), crate::metrics::mean_std(&ah));
-        let bad = crate::metrics::non_finite(&vh) + crate::metrics::non_finite(&ah);
-        stats.push(json!({"step": i, "seconds": s, "video_mean": vm, "video_std": vs, "audio_mean": am, "audio_std": as_, "non_finite": bad}));
-        Ok(())
-    };
-    fastvideo_cudarc::wan::gpu_trace::reset_report();
-    let timed = std::time::Instant::now();
-    let out = pipeline.generate(&request, true, Some(&mut observe))?;
-    let generate_s = timed.elapsed().as_secs_f64();
-    let wall_s = wall.elapsed().as_secs_f64();
-    let peak_mib = peak.stop();
-    let t = &out.timings;
-    report.set(
-        "timings",
+    let mut docs: Vec<(crate::benchmark::PromptSpec, serde_json::Value)> = Vec::new();
+    let mut load_peak = Some(peak);
+    for spec in prompts.iter() {
+        let clip_owned = if multi {
+            clip.join(&spec.name)
+        } else {
+            clip.to_path_buf()
+        };
+        let request = Ltx2Request {
+            prompt: spec.prompt.clone(),
+            seed: spec.seed,
+            output_dir: clip_owned.clone(),
+            ..request.clone()
+        };
+        let ck = |name: &str| {
+            if multi {
+                format!("{name}/{}", spec.name)
+            } else {
+                name.to_string()
+            }
+        };
+        // The first prompt's peak includes the load, as before prompt sets.
+        let peak = load_peak.take().unwrap_or_else(crate::gpu::PeakMem::start);
+        fastvideo_cudarc::wan::evalstats::reset();
+        // Latent statistics per step: a run that diverges shows here, not in a grey video.
+        let mut stats: Vec<serde_json::Value> = Vec::new();
+        let mut observe = |i: usize,
+                           v: &CudaTensor,
+                           a: &CudaTensor,
+                           s: f64|
+         -> fastvideo_cudarc::wan::pipeline::Result<()> {
+            let (vh, ah) = (v.host_cow()?, a.host_cow()?);
+            let ((vm, vs), (am, as_)) =
+                (crate::metrics::mean_std(&vh), crate::metrics::mean_std(&ah));
+            let bad = crate::metrics::non_finite(&vh) + crate::metrics::non_finite(&ah);
+            stats.push(json!({"step": i, "seconds": s, "video_mean": vm, "video_std": vs, "audio_mean": am, "audio_std": as_, "non_finite": bad}));
+            Ok(())
+        };
+        fastvideo_cudarc::wan::gpu_trace::reset_report();
+        let timed = std::time::Instant::now();
+        let out = pipeline.generate(&request, true, Some(&mut observe))?;
+        let generate_s = timed.elapsed().as_secs_f64();
+        let counters = fastvideo_cudarc::wan::evalstats::snapshot();
+        let wall_s = wall.elapsed().as_secs_f64();
+        let peak_mib = peak.stop();
+        let t = &out.timings;
+        report.set(
+        &if multi { format!("timings/{}", spec.name) } else { "timings".to_string() },
         json!({
             "warm": warm, "wall_s": wall_s, "generate_s": generate_s, "load_s": pipeline.load_s, "text_s": t.text_s,
             "denoise_s": t.denoise_s, "stage1_s": t.stage1_s, "upsample_s": t.upsample_s, "stage2_s": t.stage2_s,
@@ -1972,7 +2017,7 @@ fn gen(
             "video_vae_s": t.video_vae_s, "video_rgb_s": t.video_rgb_s, "video_push_s": t.video_push_s, "video_wait_s": t.video_wait_s,
         }),
     );
-    report.set(
+        report.set(
         "text",
         json!({
             "cache": out.text.cache.as_str(), "mode": out.text.mode, "seconds": out.text.seconds, "tokens": out.text.tokens,
@@ -1980,23 +2025,23 @@ fn gen(
             "text_weights": paths.text.as_ref().map(|p| p.display().to_string()),
         }),
     );
-    report.set("peak_vram_mib", peak_mib);
-    // FASTVIDEO_GPU_TRACE: the timed generate's traced step.
-    if let Some(trace) = fastvideo_cudarc::wan::gpu_trace::last_report() {
-        report.set("gpu_trace", trace);
-    }
-    // FASTVIDEO_GPU_TRACE_DECODE: the timed generate's video decode.
-    if let Some(trace) = fastvideo_cudarc::wan::gpu_trace::last_window_report() {
-        report.set("gpu_trace_decode", trace);
-    }
-    // Per-phase peaks from the allocator pool's high-water marks.
-    if let Some(u) = load_used {
-        eprintln!(
-            "ltx2 memory load: {:.2} GiB live after load",
-            gib_of(u.used)
-        );
-    }
-    let phases: Vec<serde_json::Value> = out
+        report.set("peak_vram_mib", peak_mib);
+        // FASTVIDEO_GPU_TRACE: the timed generate's traced step.
+        if let Some(trace) = fastvideo_cudarc::wan::gpu_trace::last_report() {
+            report.set("gpu_trace", trace);
+        }
+        // FASTVIDEO_GPU_TRACE_DECODE: the timed generate's video decode.
+        if let Some(trace) = fastvideo_cudarc::wan::gpu_trace::last_window_report() {
+            report.set("gpu_trace_decode", trace);
+        }
+        // Per-phase peaks from the allocator pool's high-water marks.
+        if let Some(u) = load_used {
+            eprintln!(
+                "ltx2 memory load: {:.2} GiB live after load",
+                gib_of(u.used)
+            );
+        }
+        let phases: Vec<serde_json::Value> = out
         .memory
         .iter()
         .map(|p| {
@@ -2015,57 +2060,178 @@ fn gen(
             })
         })
         .collect();
-    report.set(
+        report.set(
         "phase_memory",
         json!({"load_used_gib": load_used.map(|u| gib_of(u.used)), "phases": phases, "dit_residency": out.dit_residency}),
     );
-    report.set("steps", &stats);
-    report.set("outputs", json!({"mp4": out.mp4, "wav": out.wav, "frames": out.frames.len(), "first_frame": out.frames.first()}));
-    report.set(
+        report.set(
+            &if multi {
+                format!("steps/{}", spec.name)
+            } else {
+                "steps".to_string()
+            },
+            &stats,
+        );
+        report.set("outputs", json!({"mp4": out.mp4, "wav": out.wav, "frames": out.frames.len(), "first_frame": out.frames.first()}));
+        report.set(
         "tokens",
         json!({"prompt": out.prompt_tokens, "video": out.video_tokens, "audio": out.audio_tokens}),
     );
 
-    let want_steps = if two_stage { 11 } else { 8 };
-    let finite = stats
-        .iter()
-        .all(|s| s["non_finite"] == json!(0) && s["video_std"].as_f64().is_some_and(|v| v > 1e-4));
-    report.check(
-        "gen.latents_finite",
-        finite && stats.len() == want_steps,
-        json!({"steps": stats.len()}),
-        json!({"steps": want_steps, "non_finite": 0}),
-    )?;
-    report.check(
-        "gen.frames",
-        out.frames.len() == g.num_frames,
-        json!({"frames": out.frames.len()}),
-        json!({"frames": g.num_frames}),
-    )?;
-    let wav_bytes = std::fs::metadata(&out.wav).map(|m| m.len()).unwrap_or(0);
-    let want_samples = cfg
-        .vocoder
-        .waveform_samples(cfg.audio_vae.mel_frames(out.audio_tokens));
-    report.check(
-        "gen.wav",
+        let want_steps = if two_stage { 11 } else { 8 };
+        let finite = stats.iter().all(|s| {
+            s["non_finite"] == json!(0) && s["video_std"].as_f64().is_some_and(|v| v > 1e-4)
+        });
+        let doc = ltx2_benchmark(&Ltx2Bench {
+            spec,
+            model_version,
+            g,
+            out: &out,
+            generate_s,
+            load_s: pipeline.load_s,
+            warm,
+            peak_mib,
+            two_stage,
+            sol_stage2,
+            pisa_stage2,
+            tae: options.tae.is_some(),
+        });
+        docs.push((spec.clone(), crate::benchmark::merge(doc, counters)));
+        report.check(
+            ck("gen.latents_finite"),
+            finite && stats.len() == want_steps,
+            json!({"steps": stats.len()}),
+            json!({"steps": want_steps, "non_finite": 0}),
+        )?;
+        report.check(
+            ck("gen.frames"),
+            out.frames.len() == g.num_frames,
+            json!({"frames": out.frames.len()}),
+            json!({"frames": g.num_frames}),
+        )?;
+        let wav_bytes = std::fs::metadata(&out.wav).map(|m| m.len()).unwrap_or(0);
+        let want_samples = cfg
+            .vocoder
+            .waveform_samples(cfg.audio_vae.mel_frames(out.audio_tokens));
+        report.check(
+        ck("gen.wav"),
         wav_bytes == 44 + (want_samples * cfg.vocoder.out_channels * 2) as u64,
         json!({"bytes": wav_bytes}),
         json!({"samples_per_channel": want_samples, "sample_rate": cfg.vocoder.output_sampling_rate, "channels": cfg.vocoder.out_channels}),
     )?;
-    if mp4 {
-        let size = out
-            .mp4
-            .as_ref()
-            .and_then(|p| std::fs::metadata(p).ok())
-            .map_or(0, |m| m.len());
-        report.check(
-            "gen.mp4",
-            size > 0,
-            json!({"path": out.mp4, "bytes": size}),
-            json!({"bytes_min": 1}),
-        )?;
+        if mp4 {
+            let size = out
+                .mp4
+                .as_ref()
+                .and_then(|p| std::fs::metadata(p).ok())
+                .map_or(0, |m| m.len());
+            report.check(
+                ck("gen.mp4"),
+                size > 0,
+                json!({"path": out.mp4, "bytes": size}),
+                json!({"bytes_min": 1}),
+            )?;
+        }
     }
+    let path = crate::benchmark::path_beside(clip);
+    let doc = if multi {
+        crate::benchmark::summarize(&docs)
+    } else {
+        docs.pop().map(|(_, d)| d).unwrap_or_default()
+    };
+    crate::benchmark::write(&path, &doc)?;
+    report.set("benchmark_json", path.display().to_string());
     Ok(())
+}
+
+struct Ltx2Bench<'a> {
+    spec: &'a crate::benchmark::PromptSpec,
+    model_version: ModelVersion,
+    g: Geometry,
+    out: &'a fastvideo_cudarc::ltx2::pipeline::Ltx2Output,
+    generate_s: f64,
+    load_s: f64,
+    warm: bool,
+    peak_mib: Option<u64>,
+    two_stage: bool,
+    sol_stage2: bool,
+    pisa_stage2: bool,
+    tae: bool,
+}
+
+/// One LTX-2 generation as `benchmark.json` (see [`crate::benchmark`]).
+fn ltx2_benchmark(b: &Ltx2Bench<'_>) -> serde_json::Value {
+    use crate::benchmark::gib;
+    let t = &b.out.timings;
+    let peak_used = b.out.memory.iter().map(|p| p.peak_used).max();
+    let peak_reserved = b.out.memory.iter().map(|p| p.peak_reserved).max();
+    let version = match b.model_version {
+        ModelVersion::V20 => "2.0",
+        ModelVersion::V23 => "2.3",
+        ModelVersion::V25 => "2.5",
+    };
+    let doc = json!({
+        "model": format!("Lightricks/LTX-{version}"),
+        "pipeline_variant": if b.two_stage { "distilled_two_stage" } else { "distilled" },
+        "dtype": "bfloat16",
+        "task": "t2va",
+        "stage2_attention": if b.sol_stage2 { "sol" } else if b.pisa_stage2 { "pisa" } else { "dense" },
+        "video_decoder": if b.tae { "taeltx2_3_wide" } else { "conv_vae" },
+        "workload": {
+            "task": "t2va",
+            "prompt_name": b.spec.name,
+            "prompt_sha256": crate::benchmark::sha256_hex(&b.spec.prompt),
+            "seed": b.spec.seed,
+            "height": b.g.height,
+            "width": b.g.width,
+            "num_frames": b.g.num_frames,
+            "frame_rate": b.g.frame_rate,
+            "measured_steps": t.step_s.len(),
+            "video_tokens": b.out.video_tokens,
+            "audio_tokens": b.out.audio_tokens,
+            "prompt_tokens": b.out.prompt_tokens,
+        },
+        "total_s": b.generate_s,
+        "e2e_seconds": b.generate_s,
+        "inference_time_s": b.generate_s,
+        "denoise_s": t.denoise_s,
+        "decode_s": t.decode_audio_s + t.decode_video_s,
+        "load_s": b.load_s,
+        "text_s": t.text_s,
+        "text_cache": b.out.text.cache.as_str(),
+        "stage_1_seconds": t.stage1_s,
+        "stage_2_seconds": t.upsample_s + t.stage2_s,
+        "video_vae_seconds": t.decode_video_s,
+        "stage_seconds": {
+            "text": t.text_s,
+            "stage_1": t.stage1_s,
+            "upsample": t.upsample_s,
+            "stage_2": t.stage2_s,
+            "audio_decode": t.decode_audio_s,
+            "video_decode": t.decode_video_s,
+            "video_vae": t.video_vae_s,
+            "video_rgb": t.video_rgb_s,
+            "video_push": t.video_push_s,
+            "video_wait": t.video_wait_s,
+            "write": t.write_s,
+        },
+        "step_seconds": t.step_s,
+        "peak_memory_mb": peak_reserved.map(|b| b as f64 / f64::from(1u32 << 20)),
+        "peak_allocated_gib": peak_used.map(gib),
+        "peak_reserved_gib": peak_reserved.map(gib),
+        "max_device_memory_used_mib": b.peak_mib,
+        "memory": {
+            "dit_residency": b.out.dit_residency,
+            "stages": b.out.memory.iter().map(|p| json!({
+                "stage": p.phase,
+                "peak_allocated_gib": gib(p.peak_used),
+                "peak_reserved_gib": gib(p.peak_reserved),
+                "end_allocated_gib": gib(p.end_used),
+            })).collect::<Vec<_>>(),
+        },
+        "gpu_trace": fastvideo_cudarc::wan::gpu_trace::last_report(),
+    });
+    crate::benchmark::merge(crate::benchmark::common("ltx2", b.warm), doc)
 }
 
 fn gib_of(bytes: u64) -> f64 {

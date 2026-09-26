@@ -64,6 +64,7 @@ run_step() {
     weights:ltx25) weights_ltx25 ;;
     info:ltx25) info_ltx25 ;;
     info:box) info_box ;;
+    lpips:ref) lpips_ref ;;
     cells) run_cells ;;
     cells:*) ( UP_CELLS="${s#cells:}"; UP_CELLS="${UP_CELLS//,/ }"; run_cells ) ;;
     oracle) run_oracle ;;   # oracle.sh: dump hooks for the GPU oracle diff
@@ -186,6 +187,21 @@ for p in sorted(local.rglob("*.json")):
     if p.stat().st_size < 2_000_000:
         (out / ("localcfg__" + str(p.relative_to(local)).replace("/", "__"))).write_text(p.read_text())
 EOF
+}
+
+# Official LPIPS (lpips.LPIPS(net="alex"), sol-engine tools/vision/lpips_judge.py)
+# on the fixture pairs the Rust port is pinned to (scripts/gpu/lpips_ref.py).
+# Needs an image whose python3 has torch + torchvision (the plain PyTorch image).
+lpips_ref() {
+  local root="$HERE/../../.."
+  python3 -c 'import torch, torchvision' || return 1
+  python3 -c 'import lpips, scipy, tqdm' 2>/dev/null \
+    || python3 -m pip install -q --no-deps lpips==0.1.4 2>/dev/null \
+    || python3 -m pip install -q --break-system-packages --no-deps lpips==0.1.4 || return 1
+  python3 -c 'import scipy, tqdm' 2>/dev/null \
+    || python3 -m pip install -q scipy tqdm 2>/dev/null \
+    || python3 -m pip install -q --break-system-packages scipy tqdm || return 1
+  python3 "$root/scripts/gpu/lpips_ref.py" "$root/crates/fastvideo-gpucheck/fixtures/lpips" "$OUT/lpips-ref.json"
 }
 
 # ------------------------------------------------------------------ cells

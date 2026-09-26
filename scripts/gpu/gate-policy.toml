@@ -1,0 +1,90 @@
+# Default promotion policy for `fv-gpucheck gate`.
+#
+# Mirrors sol-engine's promotion criteria (NVlabs/Sana, branch sol-engine,
+# 6c2f582ba9681dfe352ae4ca23b6f0030cf120cf):
+#   evals/README.md                        Core Gates + Minimal Promotion Rule
+#   evals/profiles/official_video_t2v.toml [performance] [off_identity] [quantitative_quality]
+#   evals/tiers.toml                       speed tiers, LPIPS as ranking telemetry
+#   scripts/collect_run.py                 STRICT_QUALITY_JUDGES = ("lpips", "nvidia_gemini")
+#
+# Promotion = artifact, official_config, performance pass; off_identity pass
+# or not applicable; quantitative_quality pass or explicitly deferred;
+# visual_artifact pass (deferred here, see below).
+
+id = "fastvideo-rs-default"
+source = "sol-engine@6c2f582 evals/README.md + evals/profiles/official_video_t2v.toml + evals/tiers.toml"
+# `lossy`: a generative switch (cache, sparsity, precision). `exact`: a
+# kernel / operator fusion or numeric transform, which sol-engine lets enforce
+# OFF identity as a hard gate (tiers.toml "Exceptions"). --kind overrides.
+kind = "lossy"
+
+[artifact]
+# benchmark.json on both cells, a compare-clips report that passed, and both
+# clips `completed` (collect_run.py determine_status: video + log present,
+# no error pattern in the log).
+require_clip_status = "completed"
+
+[official_config]
+# "Do not report speedups from a config whose official config differs from
+# baseline" (config/schema.md): the workload must match, prompt by prompt.
+same = [
+  "workload.height",
+  "workload.width",
+  "workload.num_frames",
+  "workload.seed",
+  "workload.prompt_sha256",
+  "workload.measured_steps",
+]
+
+[performance]
+# official_video_t2v.toml [performance]. With a prompt set the metrics are
+# the medians across prompts (benchmark.json top level).
+primary_metric = "denoise_s"
+secondary_metric = "total_s"
+min_speedup_for_experimental = 1.03
+min_speedup_for_promotion = 1.10
+warmup_required_for_promotion = true
+
+[off_identity]
+# official_video_t2v.toml: required_for_kinds = ["patch", "methodology"],
+# same seed / prompt / official config; "exact byte identity is preferred for
+# guarded code paths". Our code switches are env/CLI guarded, so the kind
+# that must prove OFF == baseline byte for byte is `exact`; a `lossy`
+# candidate is checked too when an --off-compare report is given.
+required_for_kinds = ["exact"]
+
+[quantitative_quality]
+# official_video_t2v.toml [quantitative_quality] ranges.
+enabled = true
+frame_count_equal = true
+sharpness_ratio_min = 0.95
+sharpness_ratio_max = 1.08
+temporal_jitter_ratio_min = 0.85
+temporal_jitter_ratio_max = 1.20
+# collect_run.py treats a missing LPIPS judge as a promotion blocker
+# (STRICT_QUALITY_JUDGES); the Rust port makes it available in-process.
+require_lpips = true
+# PSNR / LPIPS limits. sol-engine sets none for lossy generative dimensions
+# ("PSNR is recorded but not used as a hard gate because diffusion has a bf16
+# chaos floor"; tiers.toml lpips_absolute_threshold =
+# "disabled_for_lossy_generative_dimensions"), so they are evaluated and
+# recorded as telemetry only: they fail the gate only when listed in `hard`.
+psnr_mean_min_db = 20.0
+lpips_mean_max = 0.20
+lpips_max_max = 0.40
+hard = ["frame_count_equal", "sharpness_ratio", "temporal_jitter_ratio", "lpips_available"]
+
+[visual_artifact]
+# sol-engine requires a Gemini judge (tools/vision/nvidia_gemini_judge.py via
+# the NVIDIA inference API, evals/rubrics/gemini_visual_artifact_gate.md).
+# Our runtime has no vision judge, so this gate is reported `deferred`
+# instead of blocking every candidate; set required = true to restore
+# sol-engine's rule once a judge is wired in.
+required = false
+reason = "no multimodal judge in the fastvideo-rs runtime (sol-engine: gcp/google/gemini-3.5-flash via NVIDIA_API_KEY)"
+
+[tiers]
+# evals/tiers.toml [targets]: the delivery bucket a passing speedup lands in.
+low_speedup = 1.50
+medium_speedup = 2.00
+high_speedup = 3.00
