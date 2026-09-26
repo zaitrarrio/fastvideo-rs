@@ -143,7 +143,8 @@ install_sol_ltx25() {
   slog "uv sync LTX-2 @ $LTX2_REV"
   (cd "$d/LTX-2" && uv sync -q) || return 1
   local py="$d/LTX-2/.venv/bin/python"
-  uv pip install -q --python "$py" "nvidia-cutlass-dsl>=4.5" cuda-python apache-tvm-ffi  # CuTe from_dlpack imports tvm_ffi || return 1
+  # apache-tvm-ffi: the CuTe DSL from_dlpack path (Sol-Attn) imports tvm_ffi.
+  uv pip install -q --python "$py" "nvidia-cutlass-dsl>=4.5" cuda-python apache-tvm-ffi || return 1
   uv pip install -q --python "$py" -e "$SRC/sol-engine/techniques/sparse_backends" || return 1
   smoke "$py" ltx_pipelines, sol_attn || return 1
   echo "$stamp" >"$d/.stamp"
