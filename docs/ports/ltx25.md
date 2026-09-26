@@ -120,8 +120,12 @@ Text config highlights vs Gemma-3-12B:
 - Full-attention layers: `global_head_dim=512`, `rope_parameters.full_attention`
   `rope_type=proportional`, `partial_rotary_factor=0.25`,
   `num_global_key_value_heads=1`
-- `attention_k_eq_v=true`
+- `attention_k_eq_v=true` (full-attention layers only)
 - HF keys under `model.language_model.*` (or Comfy-flat `model.layers.*`)
+- The layer is not Gemma 3's. Norms use `x·w`, the softmax scale is 1,
+  V is normed without a weight, each layer ends with `*= layer_scalar`, and
+  full-attention RoPE is `proportional`. See docs/oracle.md, "LTX-2.5 text
+  path", for the parity numbers.
 
 Encode-only for unified; vision/audio embedders exist but T2AV text path does
 not need the towers.

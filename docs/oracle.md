@@ -28,7 +28,10 @@ Names:
   `step00_packed_in`, `rope_{cos,sin}`, `step00_block_<i>`, `step00_b<i>_<op>`,
   `{video,audio}_vel_stepNN`, `{video,audio}_stepNN`.
 * LTX-2.5 distilled two-stage (sol-engine `gpu_infer.py` on `ltx_pipelines`):
-  `text_{video,audio}_ctx` (ours before injection), `noise_seed<seed>_<k>`
+  `text_{video,audio}_ctx` (ours before injection), the text stages
+  `text_input_ids`, `text_attention_mask`, `text_hidden_<k>`,
+  `text_{video,audio}_feats`, `text_{video,audio}_ctx_real` (the first prompt
+  encoded; a text-cache hit writes none), `noise_seed<seed>_<k>`
   (every `torch.randn` on a seeded generator, replayed by our `NoiseStream`),
   per stage `s1_`/`s2_`: `sigmas`, `{video,audio}_step00_in`,
   `step00_{video,audio}_in`, `step00_{video,audio}_block_<i>`,
@@ -205,12 +208,63 @@ our own f32 run at every block and step (typically by 2x in the blocks):
 it reproduces the reference's bf16 rounding points, and what is left is
 below the model's bf16/f32 noise floor. No fix needed.
 
-Found, outside the denoiser: **our text contexts differ from the
+Found, outside the denoiser: **our text contexts differed from the
 reference's by 0.34 (video) and 0.27 (audio) rel-L2**, with the same weights
-on both sides (the rebuilt packs keep the Diffusers bytes). Every one of the
-1024 rows is a normalized, distinct row on both sides (the registers fill
-the padding), so it is not padding layout. It is injected away here and needs its own bisect of
-the Gemma feature extraction and connectors (not done).
+on both sides (the rebuilt packs keep the Diffusers bytes). That run injected
+them away. The text path is fixed now (next section).
+
+### LTX-2.5 text path (runtime 6925e27, upstream 78729d6)
+
+Cause: our Gemma-4-12B was Gemma 3's layer with Gemma 4's shapes. What the
+reference runs is transformers' `Gemma4UnifiedText*`
+(`models/gemma4_unified/modeling_gemma4_unified.py`, called from
+`ltx_core/text_encoders/gemma/encoders/base_encoder.py:59-71`), and it differs
+from Gemma 3 in six ways. The reference's own buffers confirm each one
+(`oracle_meta.json` `gemma`):
+
+| | Gemma 3 (what we ran) | Gemma 4 (reference) |
+|---|---|---|
+| RMSNorm | `x·(1+w)` | `x·w` (layer-0 norm weights average 19 / 0.86 / 7.8 / 1.7) |
+| softmax scale | 256^-0.5 | 1 (`self.scaling = 1.0`) |
+| V | raw | RMS-normed per head, no weight (`v_norm`) |
+| layer output | as is | `*= layer_scalar` (0.60 / 0.05 alternating) |
+| V projection | own `v_proj` | `k_proj` on full-attention layers only; sliding layers keep `v_proj` |
+| full-attention RoPE | θ=1e6, positions ÷ 8, rotating the first 128 channels | `proportional`: no factor, a 512-wide table with 64 of 256 angles non-zero, so `rotate_half` pairs `(k, k+256)` |
+
+Also: a `<bos>` is prepended when the tokenizer's post-processor adds none
+(`tokenizer.py:44-46`). Our ids were already identical here.
+The rest was already right: left padding to 1024, positions `0..1023` across
+the padding, all 49 states, per-token RMS, the `sqrt(out/3840)` rescale, the
+biased aggregate embeds (`feature_extractor.py:111-192`), the right-pad sort,
+the registers, and the 8-layer gated connectors (`embeddings_processor.py`,
+`embeddings_connector.py`).
+
+After the fix, rel-L2 of ours against the reference, by stage (the
+`text_*` dumps):
+
+| stage | rel-L2 |
+|---|---|
+| input ids, attention mask | 0 |
+| hidden 0 (embeddings) / 1 / 2 | 1.7e-3 / 5.5e-3 / 5.9e-3 |
+| hidden 5 / 6 (first full layer) / 7 | 8.9e-3 / 1.0e-2 / 1.1e-2 |
+| hidden 12 / 24 / 36 / 47 / 48 | 1.2e-2 / 1.1e-2 / 9.4e-3 / 4.0e-3 / 3.5e-3 |
+| aggregate embeds (video / audio) | 1.5e-2 / 1.0e-2 |
+| **contexts (video / audio)** | **5.9e-3 / 6.0e-3** (were 0.34 / 0.27) |
+
+End to end, with the noise injected and our own contexts
+(`FV_ORACLE_OWN_TEXT=1`, `FASTVIDEO_INJECT_TEXT=0`), dense stage 2:
+
+| | text injected | our text | ours: own text vs injected |
+|---|---|---|---|
+| s1 velocity step 1 | 4.1e-2 | 5.0e-2 | 4.5e-2 |
+| s1 latents step 1 / 8 | 8.9e-4 / 0.34 | 1.0e-3 / 0.36 | 9.4e-4 / 0.32 |
+| s2 latents step 3 | 8.0e-2 | 7.5e-2 | 7.6e-2 |
+
+The own-text arm lands where the text-injected one does, within the
+pipeline's bf16/f32 floor (s1 step 8: 0.44; s2 step 3: 0.117). The
+`a_gemma4_model_matches_the_transformers_formulas` host test (llm.rs) pins the
+layer. Reverting any one of proportional RoPE, `v_norm` or `layer_scalar` on
+its own fails it.
 
 Not compared: 4K (not run, to save budget; the 512p profiles show no
 resolution-specific hazard), and our upsampler in isolation (`s2_upsampled`,

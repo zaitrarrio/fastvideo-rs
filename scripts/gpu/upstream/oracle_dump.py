@@ -436,7 +436,9 @@ def _patch_ltx_blocks(mod) -> None:
             write("text_video_ctx", out[0].video_encoding)
             write("text_audio_ctx", out[0].audio_encoding)
             try:
-                n = int(out[0].attention_mask[0].sum())
+                # The connector output mask is all ones (registers fill the pads):
+                # the real rows are the tokenizer mask's count, front-aligned.
+                n = int(getattr(_Ltx, "text_real", 0)) or int(out[0].attention_mask[0].sum())
                 write("text_video_ctx_real", out[0].video_encoding[0, :n])
                 write("text_audio_ctx_real", out[0].audio_encoding[0, :n])
             except Exception as e:  # noqa: BLE001
@@ -530,7 +532,8 @@ def _patch_ltx_gemma_encoder(mod) -> None:
         for k in TEXT_TAPS:
             if k < len(hs):
                 write(f"text_hidden_{k}", hs[k][0][keep])
-        info: dict = {"num_hidden_states": len(hs), "real_tokens": int(keep.sum())}
+        _Ltx.text_real = int(keep.sum())
+        info: dict = {"num_hidden_states": len(hs), "real_tokens": _Ltx.text_real}
         try:
             lm = self.model.model.language_model
             info["attn_implementation"] = str(getattr(self.model.config, "_attn_implementation", None))
