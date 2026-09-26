@@ -1172,8 +1172,16 @@ pub fn judge(
 /// fixture pairs (`crates/fastvideo-gpucheck/fixtures/lpips`), computed by
 /// `scripts/gpu/lpips_ref.py` in the upstream PyTorch image. Filled from
 /// `lpips-ref.json`; see `PINNED_SOURCE`.
-pub const PINNED: &[(&str, &str, f64)] = &[];
-pub const PINNED_SOURCE: &str = "not yet pinned";
+pub const PINNED: &[(&str, &str, f64)] = &[
+    ("a", "a", 0.0),
+    ("a", "a_noise", 0.11691055446863174),
+    ("a", "a_blur", 0.17645150423049927),
+    ("a", "a_shift", 0.08166157454252243),
+    ("a", "a_tone", 0.007270511705428362),
+    ("a", "b", 0.5431303977966309),
+    ("c", "c_poster", 0.19080646336078644),
+];
+pub const PINNED_SOURCE: &str = "lpips 0.1.4, torch 2.13.0+cu130 / torchvision 0.28.0+cu130 CPU, runpod/pytorch:1.3.3-cu1300-torch2130-ubuntu2404, upstream run 26d5b13-09260351 (weights sha256 = ALEXNET_SHA256 / LIN_SHA256)";
 /// Our port against the pinned numbers: float32 with a different summation
 /// order (and cuDNN's algorithms on the device).
 pub const PINNED_ABS_TOL: f64 = 2e-4;
