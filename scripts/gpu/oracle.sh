@@ -17,7 +17,7 @@
 #    artifacts/runpod/{upstream,oracle}/<tag>/ (the dumps themselves are not
 #    fetched; oracle-<target>-diff/gpucheck-out/*.json holds the numbers).
 #
-# Env: ORACLE_TARGETS (default: fasth3-8step fasth3-4step-vsa fasth3-8step-dense
+# Env: ORACLE_TARGETS (default: fasth3-8step fasth3-4step-vsa fasth3-8step-vsa0
 # fasth3-4step-dense ltx25-512p-dense
 # ltx25-512p), FASTVIDEO_DUMP_OPS (blocks whose inside is dumped, default
 # 0,1,24,47), plus runpod-http.sh's (RUNPOD_API_KEY, ...).
@@ -34,7 +34,7 @@ fi
 HERE="${FV_ORACLE_HERE:-$HERE}"
 ROOT="$(cd "$HERE/../.." && pwd)"
 sha="${1:-$(git -C "$ROOT" rev-parse --short=7 origin/main)}"
-targets="${ORACLE_TARGETS:-fasth3-8step fasth3-4step-vsa fasth3-8step-dense fasth3-4step-dense ltx25-512p-dense ltx25-512p}"
+targets="${ORACLE_TARGETS:-fasth3-8step fasth3-4step-vsa fasth3-8step-vsa0 fasth3-4step-dense ltx25-512p-dense ltx25-512p}"
 ops="${FASTVIDEO_DUMP_OPS:-0,1,24,47}"
 logs="${ORACLE_LOG_DIR:-/tmp/claude-0}"
 work="$(mktemp -d "${TMPDIR:-/tmp}/fv-oracle.XXXXXX")"

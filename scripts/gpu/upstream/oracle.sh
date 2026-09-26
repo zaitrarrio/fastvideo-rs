@@ -10,8 +10,8 @@
 #
 # Targets: fasth3-8step (FastVideo FastH3 8-step V2, 768x1344x124),
 # fasth3-4step-vsa (MiniMax-H3 + Preview v1 vsa-datafree LoRA), the dense
-# controls fasth3-8step-dense (the 8-step checkpoint on FLASH_ATTN, no gate)
-# and fasth3-4step-dense (dense-datafree LoRA), and the
+# controls fasth3-8step-vsa0 (the 8-step checkpoint at VSA sparsity 0) and
+# fasth3-4step-dense (dense-datafree LoRA, FLASH_ATTN), and the
 # sol-engine LTX-2.5 distilled two-stage: ltx25-512p / ltx25-4k with Sol
 # stage 2, ltx25-512p-dense / ltx25-4k-dense with dense stage 2.
 # FastVideo runs its strict eager route (--profile strict
@@ -80,8 +80,10 @@ run_oracle() {
   oracle_fv fasth3-8step 8step --model-path "$f8" "${g768[@]}"
   oracle_fv fasth3-4step-vsa lora --model-path "$UW/MiniMax-H3" \
     --lora-path "$lora/vsa-datafree/adapter_model.safetensors" "${g768[@]}"
-  # Dense controls: the same denoisers without VSA's top-k tile selection.
-  oracle_fv fasth3-8step-dense 8step --dense --model-path "$f8" "${g768[@]}"
+  # Controls without VSA's top-k tile selection: the 8-step checkpoint at
+  # sparsity 0 (every tile, gated compression branch kept; FastVideo will not
+  # load its gates without VSA) and the dense-datafree LoRA (no gate at all).
+  oracle_fv fasth3-8step-vsa0 8step --model-path "$f8" "${g768[@]}" --vsa-sparsity 0.0
   oracle_fv fasth3-4step-dense lora --model-path "$UW/MiniMax-H3" \
     --lora-path "$lora/dense-datafree/adapter_model.safetensors" "${g768[@]}"
   oracle_ltx ltx25-512p sol 512p

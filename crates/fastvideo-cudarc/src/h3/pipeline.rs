@@ -1197,8 +1197,20 @@ impl H3Pipeline {
             }
             None
         } else {
+            // FASTVIDEO_VSA_SPARSITY overrides the recipe's (the oracle's
+            // control: 0 keeps every tile, removing the top-k selection while
+            // keeping the gated compression branch, as FastVideo's
+            // `--vsa-sparsity 0`).
+            let sparsity = match std::env::var("FASTVIDEO_VSA_SPARSITY") {
+                Ok(v) if !v.is_empty() => v
+                    .parse::<f64>()
+                    .ok()
+                    .filter(|s| (0.0..1.0).contains(s))
+                    .ok_or_else(|| msg(format!("FASTVIDEO_VSA_SPARSITY={v}: need [0, 1)")))?,
+                _ => self.contract.vsa_sparsity,
+            };
             let vsa_cfg = super::vsa::H3VsaConfig {
-                sparsity: self.contract.vsa_sparsity,
+                sparsity,
                 group: crate::wan::envflag::usize_flag("FASTVIDEO_VSA_GROUP", 8).max(1),
                 tile_size: self.contract.vsa_tile_size,
             };
