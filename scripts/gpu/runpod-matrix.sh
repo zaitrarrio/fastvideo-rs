@@ -328,6 +328,24 @@ oracle_fetch() {
   return 1
 }
 
+# oracle_run <cell> <dump dir> [env...]: our run of the current oracle target
+# ($wcell, $cmd, $envs set by the `oracle` family) on the reference's inputs.
+oracle_run() {
+  local cell="$1" dump="$2"
+  shift 2
+  local out=(--clip-dir "$RUNS/$cell/frames" --adaln-cache "$RUNS/oracle-$target-adaln.cache")
+  [[ "$target" == ltx25-* ]] && out=(--clip "$RUNS/$cell/frames")
+  rm -rf "$dump"
+  gated_cell "$cell" "$wcell" env "${envs[@]}" FASTVIDEO_DUMP_DIR="$dump" "$@" "${cmd[@]}" "${out[@]}"
+}
+
+# oracle_diff <cell> <baseline dump> <candidate dump>: compare-dumps, logged.
+oracle_diff() {
+  [[ -d "$2" && -d "$3" ]] || return 0
+  run_cell "$1" "$BIN" compare-dumps --baseline "$2" --candidate "$3"
+  grep -h 'compare-dumps' "$RUNS/$1/stderr.log" | sed "s/^/[$1] /" | tee -a "$LOG" || true
+}
+
 log "matrix start image=$(cat /opt/fastvideo-rs/target/release/fv-gpucheck.build-id 2>/dev/null || echo unknown)"
 if [[ ! -x "$BIN" ]]; then
   log "FATAL: fv-gpucheck missing at $BIN"
@@ -1101,46 +1119,37 @@ case "$FAMILY" in
         continue
       fi
       ours="$RUNS/oracle-$target-dump"
-      rm -rf "$ours"
-      envs=(FASTVIDEO_INJECT_DIR="$ref/dump" FASTVIDEO_DUMP_DIR="$ours" FASTVIDEO_DUMP_OPS="$ops")
+      envs=(FASTVIDEO_INJECT_DIR="$ref/dump" FASTVIDEO_DUMP_OPS="$ops")
       case "$target" in
-        fasth3-8step)
-          gated_cell "oracle-$target" fasth3-8step env "${envs[@]}" \
-            "$BIN" --mode fast h3 gen --weights "$W/h3-8step" --h3-recipe 8step \
-              --adaln-cache "$RUNS/oracle-$target-adaln.cache" \
-              --clip-dir "$RUNS/oracle-$target/frames" "${h3_oracle[@]}" ;;
-        fasth3-8step-vsa0)
-          gated_cell "oracle-$target" fasth3-8step env "${envs[@]}" FASTVIDEO_VSA_SPARSITY=0 \
-            "$BIN" --mode fast h3 gen --weights "$W/h3-8step" --h3-recipe 8step \
-              --adaln-cache "$RUNS/oracle-$target-adaln.cache" \
-              --clip-dir "$RUNS/oracle-$target/frames" "${h3_oracle[@]}" ;;
-        fasth3-4step-dense)
-          gated_cell "oracle-$target" fasth3-4step-dense env "${envs[@]}" \
-            "$BIN" --mode fast h3 gen --weights "$W/h3-base" --h3-recipe 4step-dense \
-              --adaln-cache "$RUNS/oracle-$target-adaln.cache" \
-              --clip-dir "$RUNS/oracle-$target/frames" "${h3_oracle[@]}" ;;
-        fasth3-4step-vsa)
-          gated_cell "oracle-$target" fasth3-4step-vsa env "${envs[@]}" \
-            "$BIN" --mode fast h3 gen --weights "$W/h3-base" --h3-recipe 4step-vsa \
-              --adaln-cache "$RUNS/oracle-$target-adaln.cache" \
-              --clip-dir "$RUNS/oracle-$target/frames" "${h3_oracle[@]}" ;;
+        fasth3-8step | fasth3-8step-vsa0)
+          wcell=fasth3-8step
+          cmd=("$BIN" --mode fast h3 gen --weights "$W/h3-8step" --h3-recipe 8step "${h3_oracle[@]}")
+          [[ "$target" == *-vsa0 ]] && envs+=(FASTVIDEO_VSA_SPARSITY=0) ;;
+        fasth3-4step-dense | fasth3-4step-vsa)
+          wcell="$target"
+          cmd=("$BIN" --mode fast h3 gen --weights "$W/h3-base" --h3-recipe "${target#fasth3-}" "${h3_oracle[@]}") ;;
         ltx25-*)
+          wcell=ltx25-two-stage
           geo=(--height 512 --width 768 --num-frames 121)
           [[ "$target" == ltx25-4k* ]] && geo=(--workload 4k5s)
           arm=()
           [[ "$target" == *-dense ]] && arm=(--dense-stage2)
-          gated_cell "oracle-$target" ltx25-two-stage env "${envs[@]}" \
-            "$BIN" --mode fast ltx2 gen --model-version 2.5 \
-              --weights "$W/ltx25" --dit "$W/ltx25" "${geo[@]}" "${arm[@]}" "${ltx_oracle[@]}" \
-              --clip "$RUNS/oracle-$target/frames" ;;
+          cmd=("$BIN" --mode fast ltx2 gen --model-version 2.5 --weights "$W/ltx25" --dit "$W/ltx25"
+            "${geo[@]}" "${arm[@]}" "${ltx_oracle[@]}") ;;
         *) log "unknown oracle target $target"; continue ;;
       esac
-      if [[ -d "$ours" ]]; then
-        run_cell "oracle-$target-diff" "$BIN" compare-dumps --baseline "$ref/dump" --candidate "$ours"
-        grep -h 'compare-dumps' "$RUNS/oracle-$target-diff/stderr.log" | sed "s/^/[oracle-$target] /" | tee -a "$LOG" || true
+      oracle_run "oracle-$target" "$ours"
+      oracle_diff "oracle-$target-diff" "$ref/dump" "$ours"
+      # The bf16 noise floor (FV_ORACLE_F32, default on for H3): ours with f32
+      # activations against the reference, and our bf16 run against our f32
+      # run -- how far bf16 rounding alone moves the same pipeline.
+      if [[ "${FV_ORACLE_F32:-auto}" == 1 || ( "${FV_ORACLE_F32:-auto}" == auto && "$target" == fasth3-* ) ]]; then
+        oracle_run "oracle-$target-f32" "$ours-f32" FASTVIDEO_BF16_ACT=0
+        oracle_diff "oracle-$target-f32-diff" "$ref/dump" "$ours-f32"
+        oracle_diff "oracle-$target-bf16-vs-f32" "$ours-f32" "$ours"
       fi
       # The dumps are hundreds of MB each; the report keeps the numbers.
-      rm -rf "$ours" "$ref"
+      rm -rf "$ours" "$ours-f32" "$ref"
     done
     ;;
   *)
