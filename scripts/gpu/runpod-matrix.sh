@@ -841,12 +841,13 @@ case "$FAMILY" in
     for v in w8a8 mxfp8; do
       compare_cells fasth3-8step-768p-bf16act "fasth3-8step-768p-$v"
     done
-    for v in f32act bf16act fp8; do
+    for v in f32act bf16act fp8 bf16act-fp8; do
       envs=()
       case "$v" in
         f32act) envs=(FASTVIDEO_BF16_ACT=0) ;;
         bf16act) envs=(FASTVIDEO_BF16_ACT=1) ;;
         fp8) envs=(FASTVIDEO_BF16_ACT=0 FASTVIDEO_FP8=1) ;;
+        bf16act-fp8) envs=(FASTVIDEO_BF16_ACT=1 FASTVIDEO_FP8=1) ;;
       esac
       gated_cell "ltx25-4k5s-sol-$v" ltx25-two-stage \
         env "${envs[@]}" \
@@ -855,7 +856,7 @@ case "$FAMILY" in
           --prompt "$PROMPT" --seed "$SEED" --two-stage --text streamed --warm \
           --clip "$RUNS/ltx25-4k5s-sol-$v/frames" "${PROMPT_ARGS[@]}"
     done
-    for v in bf16act fp8; do
+    for v in bf16act fp8 bf16act-fp8; do
       compare_cells ltx25-4k5s-sol-f32act "ltx25-4k5s-sol-$v"
       gate_cells ltx25-4k5s-sol-f32act "ltx25-4k5s-sol-$v" lossy
     done
@@ -1038,6 +1039,19 @@ case "$FAMILY" in
             --decoder "$dec" --warm --clip "$RUNS/ltxvae-$wl-$dec/frames"
       done
       compare_cells "ltxvae-$wl-streaming" "ltxvae-$wl-fast"
+      # Untraced timings (CUPTI adds per-launch cost), and the fast decoder
+      # with every cuDNN algorithm timed per shape during the warm-up.
+      if [[ "${FV_VAE_UNTRACED:-1}" == 1 ]]; then
+        for dec in fast streaming; do
+          gated_cell "ltxvae-$wl-$dec-untraced" ltx25-two-stage \
+            "$BIN" --mode fast ltx2 vae-bench --weights "$W/ltx25" --workload "$wl" \
+              --decoder "$dec" --warm
+        done
+        gated_cell "ltxvae-$wl-fast-tune" ltx25-two-stage \
+          env FASTVIDEO_LTX_VAE_CONV_ALGO=tune \
+          "$BIN" --mode fast ltx2 vae-bench --weights "$W/ltx25" --workload "$wl" \
+            --decoder fast --warm
+      fi
       if [[ "${FV_VAE_GEN:-0}" == 1 ]]; then
         gated_cell "ltx25-$wl-gen" ltx25-two-stage \
           env FASTVIDEO_LTX2_SAVE_LATENTS="$RUNS/latents-$wl" FASTVIDEO_GPU_TRACE_DECODE="$trace" \

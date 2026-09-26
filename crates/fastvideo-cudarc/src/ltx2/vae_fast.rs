@@ -255,7 +255,7 @@ mod device {
             _ => {}
         }
         static ON: crate::wan::envflag::CachedBool = crate::wan::envflag::CachedBool::new();
-        ON.get_or_init(|| crate::wan::envflag::bool_flag("FASTVIDEO_LTX_VAE_FAST", false))
+        ON.get_or_init(|| crate::wan::envflag::bool_flag("FASTVIDEO_LTX_VAE_FAST", true))
     }
 
     static OVERRIDE: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(0);
@@ -272,10 +272,14 @@ mod device {
         OVERRIDE.store(v, std::sync::atomic::Ordering::Relaxed);
     }
 
-    /// `FASTVIDEO_LTX_VAE_CHECK=1`: decode the first tile both ways.
+    /// `FASTVIDEO_LTX_VAE_CHECK=1`: decode the process's first tile both
+    /// ways (true once; later decodes, e.g. a timed one after a warm-up, run
+    /// unperturbed).
     pub fn check_enabled() -> bool {
         static ON: crate::wan::envflag::CachedBool = crate::wan::envflag::CachedBool::new();
+        static DONE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
         ON.get_or_init(|| crate::wan::envflag::bool_flag("FASTVIDEO_LTX_VAE_CHECK", false))
+            && !DONE.swap(true, std::sync::atomic::Ordering::Relaxed)
     }
 
     // ---- kernel launchers (raw device addresses; bf16 buffers) -------------
