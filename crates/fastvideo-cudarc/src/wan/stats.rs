@@ -88,6 +88,35 @@ pub fn reset() {
 pub(crate) fn record_h2d(elems: usize) {
     H2D_COUNT.fetch_add(1, Relaxed);
     H2D_BYTES.fetch_add((elems * 4) as u64, Relaxed);
+    h2d_trace(elems * 4);
+}
+
+/// `FASTVIDEO_H2D_TRACE_BYTES=<n>`: print where uploads of exactly `n`
+/// counted bytes come from (a backtrace, first four), to name the source of
+/// a recurring per-step upload seen in the `step transfers` / GPU trace lines
+/// (after `FASTVIDEO_H2D_TRACE_SKIP` matches).
+fn h2d_trace(bytes: usize) {
+    static WANT: std::sync::OnceLock<Option<usize>> = std::sync::OnceLock::new();
+    let Some(want) = *WANT.get_or_init(|| {
+        std::env::var("FASTVIDEO_H2D_TRACE_BYTES")
+            .ok()
+            .and_then(|v| v.parse::<usize>().ok())
+    }) else {
+        return;
+    };
+    if bytes != want {
+        return;
+    }
+    static SEEN: AtomicU64 = AtomicU64::new(0);
+    let n = SEEN.fetch_add(1, Relaxed);
+    // FASTVIDEO_H2D_TRACE_SKIP: matches to pass over first (load-time ones).
+    let skip = super::envflag::usize_flag("FASTVIDEO_H2D_TRACE_SKIP", 0) as u64;
+    if n >= skip && n < skip + 4 {
+        eprintln!(
+            "[fastvideo] h2d trace #{n}: {bytes} bytes\n{}",
+            std::backtrace::Backtrace::force_capture()
+        );
+    }
 }
 
 #[cfg_attr(not(feature = "cuda"), allow(dead_code))]
