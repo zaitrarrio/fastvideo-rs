@@ -66,10 +66,31 @@ def main() -> int:
             ModularPipeline.to = to
         from h3_runtime import MiniMaxH3Inference
 
+        # On this sm_120 box the adapter fuse (weight.addmm_(B, A) in BF16) fails
+        # with CUBLAS_STATUS_INVALID_VALUE. Fall back per call to an FP32 product
+        # added in BF16 (same math, one rounding) and record how often.
+        orig_addmm_ = torch.Tensor.addmm_
+        res["addmm_fallbacks"] = 0
+
+        def addmm_(self, m1, m2, *args, beta=1, alpha=1):
+            try:
+                return orig_addmm_(self, m1, m2, *args, beta=beta, alpha=alpha)
+            except RuntimeError as e:
+                if "CUBLAS" not in str(e) or args:
+                    raise
+                res["addmm_fallbacks"] += 1
+                prod = torch.matmul(m1.float(), m2.float()).mul_(alpha)
+                if beta != 1:
+                    self.mul_(beta)
+                return self.add_(prod.to(self.dtype))
+
+        torch.Tensor.addmm_ = addmm_
+
         torch.cuda.reset_peak_memory_stats()
         t0 = time.perf_counter()
         engine = MiniMaxH3Inference(a.model, a.adapter, attention_backend="dense", task="t2v")
         res["load_s"] = time.perf_counter() - t0
+        torch.Tensor.addmm_ = orig_addmm_
         with engine:
             t = time.perf_counter()
             engine.warmup(duration=a.duration, prompt=a.prompt)
