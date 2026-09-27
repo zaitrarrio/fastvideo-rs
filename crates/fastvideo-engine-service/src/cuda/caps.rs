@@ -762,6 +762,109 @@ pub fn find(catalog: &[CudaModel], name: &str) -> Option<CudaModel> {
         .cloned()
 }
 
+/// One `[[models]]` entry of the serve config.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct ModelEntryCfg {
+    /// The served model id (replaces the catalog id; tier tags are kept).
+    pub id: String,
+    /// `h3` | `ltx2` (`ltx`) | `wan`.
+    pub family: String,
+    /// A tier alias (`h3-turbo`), a catalog id (`fasth3-4step-vsa`) or an H3
+    /// contract name (`4step-vsa`, `8step`, `sol-h3`). Empty: the family's
+    /// turbo tier.
+    pub recipe: String,
+    /// The model's weight directory (replaces the catalog's).
+    pub weights: Option<PathBuf>,
+    pub resident: bool,
+    pub served_names: Vec<String>,
+    /// Optional per-model settings: `text_encoder` (H3), `text` (LTX),
+    /// `adaln_cache` (H3), `taeh3` / `tae` (tiny decoders).
+    pub extra: BTreeMap<String, String>,
+}
+
+/// Resolves a `[[models]]` entry against the catalog.
+pub fn model_from_config(layout: &WeightLayout, e: &ModelEntryCfg) -> Result<CudaModel, String> {
+    let cat = catalog(layout);
+    let family = match e.family.as_str() {
+        "h3" => Family::H3,
+        "ltx" | "ltx2" => Family::Ltx2,
+        "wan" => Family::Wan,
+        other => return Err(format!("model `{}`: unknown family `{other}` (h3, ltx2, wan)", e.id)),
+    };
+    let name = match (family, e.recipe.as_str()) {
+        (_, "") => crate::caps::tier_alias(family, Tier::Turbo).unwrap_or_default().to_owned(),
+        (Family::H3, "4step-vsa" | "preview-vsa" | "fasth3-4step-vsa") => "h3-turbo".to_owned(),
+        (Family::H3, "8step" | "v2" | "fasth3-8step") => "h3-max".to_owned(),
+        (Family::H3, "sol-h3" | "sol_h3") => "sol-h3".to_owned(),
+        (_, r) => r.to_owned(),
+    };
+    let mut m = find(&cat, &name).ok_or_else(|| {
+        format!(
+            "model `{}`: recipe `{}` is not in the CUDA catalog ({})",
+            e.id,
+            e.recipe,
+            cat.iter().map(|m| m.id.as_str()).collect::<Vec<_>>().join(", ")
+        )
+    })?;
+    if m.family() != family {
+        return Err(format!("model `{}`: recipe `{}` is not a {} recipe", e.id, e.recipe, e.family));
+    }
+    if !e.id.is_empty() {
+        m.id = ModelId::new(&e.id);
+        m.served_names.insert(0, e.id.clone());
+    }
+    for n in &e.served_names {
+        if !m.served_names.contains(n) {
+            m.served_names.push(n.clone());
+        }
+    }
+    m.served_names.dedup();
+    m.resident = e.resident;
+    let x = |k: &str| e.extra.get(k).cloned();
+    match &mut m.recipe {
+        CudaRecipe::H3(r) => {
+            if let Some(w) = &e.weights {
+                r.weights = w.clone();
+            }
+            if let Some(t) = x("text_encoder") {
+                r.text_encoder = t;
+            }
+            if let Some(a) = x("adaln_cache") {
+                r.adaln_cache = Some(a.into());
+            }
+            if let Some(t) = x("taeh3").filter(|_| r.taeh3.is_some()) {
+                r.taeh3 = Some(t.into());
+            }
+            if let Some(t) = x("text_weights") {
+                r.text_weights = Some(t.into());
+            }
+        }
+        CudaRecipe::Ltx2(r) => {
+            if let Some(w) = &e.weights {
+                r.weights = w.clone();
+                r.dit = w.clone();
+            }
+            if let Some(t) = x("text") {
+                r.text = t;
+            }
+            if let Some(t) = x("tae").filter(|_| r.tae.is_some()) {
+                r.tae = Some(t.into());
+            }
+        }
+        CudaRecipe::Wan(r) => {
+            if let Some(w) = &e.weights {
+                r.weights = w.clone();
+            }
+        }
+        CudaRecipe::SfWan(r) => {
+            if let Some(w) = &e.weights {
+                r.wan.weights = w.clone();
+            }
+        }
+    }
+    Ok(m)
+}
+
 /// Loads a technique profile by builtin name (or file path).
 pub fn load_profile(name: &str) -> Result<fastvideo_models::techniques::Profile, String> {
     fastvideo_models::techniques::Profile::load(Path::new(name))
@@ -1060,6 +1163,34 @@ mod tests {
         assert!(ProcessPlan::for_models(&pick(&["wan-turbo", "wan-max"])).is_err());
         let p = ProcessPlan::for_models(&pick(&["wan-max", "sfwan21-1.3b"])).unwrap();
         assert_eq!(p.env.get("FASTVIDEO_VSA").map(String::as_str), Some("0"));
+    }
+
+    #[test]
+    fn serve_config_entries() {
+        let l = WeightLayout::new("/w");
+        // configs/serve/runpod.toml's shape.
+        let e = ModelEntryCfg {
+            id: "fasth3".into(),
+            family: "h3".into(),
+            recipe: "4step-vsa".into(),
+            weights: Some("/w/FastH3".into()),
+            resident: true,
+            served_names: vec!["fasth3".into()],
+            extra: [("text_encoder".to_owned(), "streamed".to_owned())].into_iter().collect(),
+        };
+        let m = model_from_config(&l, &e).unwrap();
+        assert_eq!(m.id.as_str(), "fasth3");
+        assert_eq!(m.tier, Some(Tier::Turbo));
+        let CudaRecipe::H3(r) = &m.recipe else { panic!() };
+        assert_eq!((r.weights.as_path(), r.text_encoder.as_str()), (Path::new("/w/FastH3"), "streamed"));
+        let t = CapabilityTable::build(vec![vec![(m.caps(), m.describe())]], &BTreeMap::new()).unwrap();
+        assert_eq!(t.resolve("h3-turbo").unwrap().id.as_str(), "fasth3");
+        for (fam, rec, want) in [("ltx2", "ltx-turbo", "ltx25-distill-sol"), ("wan", "", "fastwan21-1.3b"), ("h3", "8step", "fasth3-8step-dense")] {
+            let e = ModelEntryCfg { family: fam.into(), recipe: rec.into(), resident: true, ..Default::default() };
+            assert_eq!(model_from_config(&l, &e).unwrap().id.as_str(), want);
+        }
+        let bad = ModelEntryCfg { family: "wan".into(), recipe: "h3-turbo".into(), ..Default::default() };
+        assert!(model_from_config(&l, &bad).is_err());
     }
 
     #[test]

@@ -86,22 +86,27 @@ pub fn build_engine(c: &Config) -> anyhow::Result<EngineService> {
             vec![Box::new(FakeBackend::new(fc))]
         }
         EngineBackendKind::Cuda => {
-            // WP-15 stopgap until the full CudaBackend (WP-11) lands: an
-            // SF-Wan-only causal streaming backend from `FV_SFWAN_WEIGHTS`.
+            // WP-11: the CudaBackend from `[[models]]` (one GPU).
             #[cfg(feature = "cuda")]
-            if let Some(b) = fastvideo_engine_service::cuda::causal::CausalCudaBackend::from_env() {
-                let cfg = EngineConfig {
-                    queue_max: c.limits.queue_max,
-                    output_dir: c.server.state_dir.join("engine-out"),
-                    ..EngineConfig::default()
-                };
-                return EngineService::start(cfg, vec![Box::new(b)]).map_err(|e| anyhow!("starting the engine: {e}"));
+            if !c.models.is_empty() {
+                vec![cuda_backend(c)?]
+            } else {
+                // Without `[[models]]`: the SF-Wan-only causal backend from
+                // `FV_SFWAN_WEIGHTS` (WP-15).
+                if let Some(b) = fastvideo_engine_service::cuda::causal::CausalCudaBackend::from_env() {
+                    let cfg = EngineConfig {
+                        queue_max: c.limits.queue_max,
+                        output_dir: c.server.state_dir.join("engine-out"),
+                        ..EngineConfig::default()
+                    };
+                    return EngineService::start(cfg, vec![Box::new(b)])
+                        .map_err(|e| anyhow!("starting the engine: {e}"));
+                }
+                return Err(anyhow!("engine.backend = cuda needs [[models]] (or FV_SFWAN_WEIGHTS)"));
             }
-            // Mount point for WP-11 (`fastvideo_engine_service::cuda::CudaBackend`
-            // built from `[[models]]`, one backend per GPU).
+            #[cfg(not(feature = "cuda"))]
             return Err(anyhow!(
-                "engine.backend = cuda: the CUDA backend (WP-11) is not available in this build{}",
-                if cfg!(feature = "cuda") { "" } else { " (built without `cuda`)" }
+                "engine.backend = cuda: this fv-serve was built without the `cuda` feature"
             ));
         }
     };
@@ -113,6 +118,55 @@ pub fn build_engine(c: &Config) -> anyhow::Result<EngineService> {
         ..EngineConfig::default()
     };
     EngineService::start(cfg, backends).map_err(|e| anyhow!("starting the engine: {e}"))
+}
+
+/// The WP-11 `CudaBackend` (GPU 0) for `[[models]]`: each entry resolves
+/// against the CUDA catalog (`recipe` = tier alias, catalog id or H3 recipe
+/// name); weights default under `FV_WEIGHTS` (`/workspace/weights`).
+#[cfg(feature = "cuda")]
+fn cuda_backend(c: &Config) -> anyhow::Result<Box<dyn EngineBackend>> {
+    use fastvideo_engine_service::cuda::{
+        model_from_config, CudaBackend, CudaBackendConfig, ModelEntryCfg, Mp4Encoder, WeightLayout,
+    };
+    let root = std::env::var("FV_WEIGHTS").unwrap_or_else(|_| "/workspace/weights".into());
+    let mut layout = WeightLayout::new(&root);
+    if let Ok(t) = std::env::var("FV_TAE_DIR") {
+        layout = layout.with_tae_dir(t);
+    }
+    let models = c
+        .models
+        .iter()
+        .map(|m| {
+            let extra = m
+                .extra
+                .iter()
+                .filter_map(|(k, v)| v.as_str().map(|s| (k.clone(), s.to_owned())))
+                .collect();
+            model_from_config(
+                &layout,
+                &ModelEntryCfg {
+                    id: m.id.clone(),
+                    family: m.family.clone(),
+                    recipe: m.recipe.clone().unwrap_or_default(),
+                    weights: m.weights.as_ref().map(Into::into),
+                    resident: m.resident,
+                    served_names: m.served_names.clone(),
+                    extra,
+                },
+            )
+            .map_err(|e| anyhow!(e))
+        })
+        .collect::<anyhow::Result<Vec<_>>>()?;
+    let mut cfg = CudaBackendConfig::new(0, models);
+    cfg.work_dir = c.server.state_dir.join("engine-work");
+    cfg.text_cache = Some(c.server.state_dir.join("text-cache"));
+    cfg.encoder = if c.engine.post_encoder == "nvenc" {
+        Mp4Encoder::Nvenc
+    } else {
+        Mp4Encoder::Libx264CpuTest
+    };
+    let b = CudaBackend::new(cfg).map_err(|e| anyhow!("cuda backend: {e}"))?;
+    Ok(Box::new(b))
 }
 
 fn public_base(c: &Config) -> anyhow::Result<Url> {

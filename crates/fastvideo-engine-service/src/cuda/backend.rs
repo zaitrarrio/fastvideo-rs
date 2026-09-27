@@ -271,7 +271,13 @@ impl EngineBackend for CudaBackend {
         self.device()?;
         obs(LoadEvent::Progress { done: 0, total: 1 });
         let t0 = std::time::Instant::now();
-        let cache = self.cfg.text_cache.clone();
+        // One conditioning-cache directory per family (each keys its own).
+        let fam = match m.family() {
+            fastvideo_protocol::Family::H3 => "h3",
+            fastvideo_protocol::Family::Ltx2 => "ltx2",
+            _ => "wan",
+        };
+        let cache = self.cfg.text_cache.as_ref().map(|c| c.join(fam));
         let cache = cache.as_deref();
         let mut stage = |s: &'static str| obs(LoadEvent::Stage(s));
         let loaded = match &m.recipe {
@@ -346,7 +352,7 @@ impl EngineBackend for CudaBackend {
             }
             Loaded::SfWan(m) => {
                 // The bounded SF-Wan clip (`wan gen --preset sf_wan_t2v_1_3b`).
-                let cfg = WanModel::config(&m.recipe.wan, text_cache.as_deref(), job)?;
+                let cfg = WanModel::config(&m.recipe.wan, text_cache.as_ref().map(|c| c.join("wan")).as_deref(), job)?;
                 let planned = super::wan::planned_steps(&m.recipe.wan, job);
                 let pipe = m.pipe;
                 deliver(job, ctl, out, &opts, Some(planned), |h| {
