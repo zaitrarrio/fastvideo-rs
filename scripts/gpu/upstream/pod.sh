@@ -66,6 +66,8 @@ run_step() {
     info:box) info_box ;;
     lpips:ref) lpips_ref ;;
     bench:attn) bench_attn ;;   # attention microbenchmarks (bench_attn.py)
+    bench:attn_dc) bench_attn_dc "$HERE" ;;   # attn_dc.cu kernels: parity + timings (attn_dc_bench.cu)
+    dev:attn_dc) dev_attn_dc ;;   # bench:attn_dc for each new commit of $UP_DEV_BRANCH
     cells) run_cells ;;
     cells:*) ( UP_CELLS="${s#cells:}"; UP_CELLS="${UP_CELLS//,/ }"; run_cells ) ;;
     oracle) run_oracle ;;   # oracle.sh: dump hooks for the GPU oracle diff
@@ -101,6 +103,64 @@ bench_attn() {
   PYTHONUNBUFFERED=1 "$UP/sol-ltx25/LTX-2/.venv/bin/python" "$HERE/bench_attn.py" \
     --sol-engine "$SRC/sol-engine" --out "$OUT/bench-attn/result.json" ${UP_ATTN_SHAPES:+--shapes "$UP_ATTN_SHAPES"} \
     >"$OUT/bench-attn/stdout.log" 2>"$OUT/bench-attn/stderr.log"
+}
+
+# Datacenter attention kernels (crates/fastvideo-cudarc/src/wan/attn_dc.cu)
+# against flash_mma_fwd2: attn_dc_bench.cu is built here with the image's
+# nvcc for the GPU's arch-specific target. Parity runs the debug build (a
+# stuck mbarrier wait traps instead of hanging), timings the release build.
+# $1 = directory holding attn_dc_bench.cu, $2 = result subdirectory.
+bench_attn_dc() {
+  local dir="$1" d="$OUT/attn-dc${2:+/$2}" nvcc cc arch
+  mkdir -p "$d"
+  nvcc="$(command -v nvcc || echo /usr/local/cuda/bin/nvcc)"
+  cc="$(nvidia-smi --query-gpu=compute_cap --format=csv,noheader | head -1 | tr -d .)"
+  case "$cc" in
+    90 | 100 | 103) arch="sm_${cc}a" ;;
+    *) echo "no attn_dc kernels for compute capability $cc" >"$d/skipped.txt"; return 0 ;;
+  esac
+  "$nvcc" --version >"$d/nvcc.txt" 2>&1
+  local flags=(-std=c++17 -O3 "-arch=$arch" --fmad=true --prec-div=true --prec-sqrt=true --ftz=false)
+  "$nvcc" "${flags[@]}" -DDC_DEBUG_HANG=20000000000LL -o "$d/dbg" "$dir/attn_dc_bench.cu" \
+    >"$d/build-dbg.log" 2>&1 || { tail -30 "$d/build-dbg.log"; return 1; }
+  "$nvcc" "${flags[@]}" -Xptxas -v -o "$d/rel" "$dir/attn_dc_bench.cu" \
+    >"$d/build-rel.log" 2>&1 || { tail -30 "$d/build-rel.log"; return 1; }
+  timeout 1800 "$d/dbg" parity >"$d/parity.jsonl" 2>"$d/parity.err"
+  timeout 1800 "$d/rel" bench "${UP_ATTN_DC_SHAPES:-}" >"$d/bench.jsonl" 2>"$d/bench.err"
+  rm -f "$d/dbg" "$d/rel"
+  echo "parity pass $(grep -c '"pass": true' "$d/parity.jsonl") fail $(grep -c '"pass": false' "$d/parity.jsonl")"
+  return 0
+}
+
+# Kernel development loop: fetch $UP_DEV_BRANCH every 15 s and run
+# bench:attn_dc on each new commit (results under attn-dc/<sha>/), plus the
+# steps listed in scripts/gpu/upstream/attn_dc.steps of that commit. Ends
+# after $UP_DEV_S seconds or at a commit carrying scripts/gpu/upstream/attn_dc.stop.
+dev_attn_dc() {
+  local repo=/opt/fvrs-dev last="" sha s deadline=$(( $(date +%s) + ${UP_DEV_S:-3600} ))
+  rm -rf "$repo" && git init -q "$repo" && git -C "$repo" remote add origin https://github.com/zaitrarrio/fastvideo-rs.git
+  while (( $(date +%s) < deadline )); do
+    if git -C "$repo" fetch -q --depth 1 origin "${UP_DEV_BRANCH:?UP_DEV_BRANCH}" 2>/dev/null; then
+      sha="$(git -C "$repo" rev-parse --short=10 FETCH_HEAD)"
+      if [[ "$sha" != "$last" ]]; then
+        last="$sha"
+        git -C "$repo" checkout -q -f FETCH_HEAD
+        if [[ -f "$repo/scripts/gpu/upstream/attn_dc.stop" ]]; then log "dev: stop at $sha"; break; fi
+        log "dev: $sha"
+        bench_attn_dc "$repo/scripts/gpu/upstream" "$sha" 2>&1 | tail -5 | tee -a "$LIVE"
+        for s in $(cat "$repo/scripts/gpu/upstream/attn_dc.steps" 2>/dev/null); do
+          log "dev: step $s"
+          case "$s" in
+            bench:attn) bench_attn ;;
+            *) log "dev: unknown step $s" ;;
+          esac
+        done
+        echo "$sha" >>"$OUT/attn-dc/done.txt"
+        log "dev: done $sha"
+      fi
+    fi
+    sleep 15
+  done
 }
 
 # ---------------------------------------------------------------- weights
