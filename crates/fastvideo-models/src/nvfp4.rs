@@ -84,8 +84,9 @@ block scales, and stochastic rounding stay unpublished as host math. \
 Tile-IR W4A4 GEMM (crates/fastvideo-oxide-kernels) is off until it beats \
 cuBLAS bf16 on the H3 FFN shape (K=5376 N=14336) and PSNR >= 30 dB vs \
 bf16; FASTVIDEO_NVFP4_OXIDE_GEMM opt-in. \
-LTX-2.3 video FFN and Cosmos step-selective scopes are hooks \
-(scope_rule); those transformers are not edited here. \
+On LTX-2 FASTVIDEO_NVFP4 is the video FFN only, a real W4A4 GEMM \
+(cuBLASLt VEC16_UE4M3, cudarc wan/nvfp4_linear.rs); the Cosmos \
+step-selective scope is a hook (scope_rule). \
 fused ln_adaln_e + rope_half is one launch when both ops share a tensor; \
 Wan / LTX / H3 apply them on different layouts (AdaLN on [B,S,C], RoPE on \
 Q/K after the projection). \

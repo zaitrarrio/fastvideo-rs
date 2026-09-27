@@ -1,0 +1,10 @@
+NVIDIA H100 80GB HBM3, 81559 MiB, 580.126.09
+cpus=208 mem=2015G
+overlay         120G  213M  120G   1% /
+49M	/opt/upstream/bin
+6.5G	/opt/upstream/sol-ltx25
+66M	/opt/upstream/src
+57M	/opt/upstream/tools
+sol-ltx25: ltx2:fd4ded7f2d88d3da713abcdd4ad41ecc4a9314ca:sol:6c2f582ba9681dfe352ae4ca23b6f0030cf120cf:v2
+HF_HOME=/opt/upstream/hf
+HOME=/root

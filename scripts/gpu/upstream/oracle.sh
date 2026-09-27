@@ -8,12 +8,14 @@
 #   UP_STEPS="... oracle"                    every target below
 #   UP_STEPS="... oracle:fasth3-8step,ltx25-512p"   a subset
 #
-# Targets: fasth3-8step (FastVideo FastH3 8-step V2, 768x1344x124),
+# Targets: wan22-ti2v (Wan 2.2 TI2V-5B modules through Diffusers, oracle_wan22.py),
+# fasth3-8step (FastVideo FastH3 8-step V2, 768x1344x124),
 # fasth3-4step-vsa (MiniMax-H3 + Preview v1 vsa-datafree LoRA), the dense
 # controls fasth3-8step-vsa0 (the 8-step checkpoint at VSA sparsity 0) and
 # fasth3-4step-dense (dense-datafree LoRA, FLASH_ATTN), and the
 # sol-engine LTX-2.5 distilled two-stage: ltx25-512p / ltx25-4k with Sol
-# stage 2, ltx25-512p-dense / ltx25-4k-dense with dense stage 2.
+# stage 2, ltx25-512p-dense / ltx25-4k-dense with dense stage 2; sfwan13
+# (FastVideo SF-Wan 1.3B causal DMD, 480x832x81, bench_fastwan.py).
 # FastVideo runs its strict eager route (--profile strict
 # --no-inference-torch-compile): no report-only fusions, no compiled blocks
 # for the hooks to break. FASTVIDEO_DUMP_OPS (default 0,1,24,47) picks the
@@ -31,6 +33,10 @@ oracle_cell() {
     FV_ORACLE_DUMP_DIR="$c/dump" FASTVIDEO_DUMP_OPS="$ORACLE_OPS" "$@"
   if [[ -d "$c/dump" ]]; then
     cp "$c/dump/oracle_meta.json" "$c/" 2>/dev/null
+    # The reference's own video, for the frame metrics (LPIPS / PSNR).
+    local mp4
+    mp4="$(find "$c" -name '*.mp4' -not -path '*/warmup/*' -not -path '*/dump/*' 2>/dev/null | head -1)"
+    [[ -n "$mp4" ]] && cp "$mp4" "$c/dump/ref.mp4"
     ls -la "$c/dump" >"$c/dump.ls" 2>&1
     du -sh "$c/dump" | tee -a "$LIVE" >&2
     # Written whole, then renamed: the Rust pod polls for this name.
@@ -74,8 +80,27 @@ oracle_ltx() {
     --output-path "$OUT/oracle-$name/out.mp4"
 }
 
+# Wan 2.2 TI2V-5B modules (Diffusers, oracle_wan22.py): VAE encode/decode
+# of a fixed 704x1280 clip and one DiT forward per timestep layout (t2v, and
+# i2v's frame-0-at-timestep-0), inputs dumped for `fv-gpucheck wan oracle`.
+# Weights: fv-weights-b200-us.
+oracle_wan22() {
+  oracle_cell wan22-ti2v env PYTHONUNBUFFERED=1 "$UP/fastvideo/bin/python" "$HERE/oracle_wan22.py" \
+    --model "$W/wan22-ti2v-5b" --image "$HERE/../fixtures/ti2v-beach-832x480.jpg"
+}
+
+# FastVideo SF-Wan 1.3B (WanCausalDMDPipeline at its defaults), one request,
+# no warm-up: the hooks dump the first denoise (oracle_dump.py _patch_sf_*).
+oracle_sfwan() {
+  oracle_cell sfwan13 env PYTHONUNBUFFERED=1 "$UP/fastvideo/bin/python" "$HERE/bench_fastwan.py" \
+    --model "$W/sfwan21-1.3b" --hf-name SFWan2.1-T2V-1.3B-Diffusers --out "$OUT/oracle-sfwan13" \
+    --repeats 1 --no-warmup --prompt "$PROMPT_OURS" --seed "$SEED_OURS" --attention FLASH_ATTN
+}
+
 run_oracle() {
+  oracle_sfwan
   local f8="$UW/FastVideo-FastH3-8-Step-V2" lora="$W/FastH3-4-step-Preview-v1-LoRA"
+  oracle_wan22
   local g768=(--height 768 --width 1344 --num-frames 124)
   oracle_fv fasth3-8step 8step --model-path "$f8" "${g768[@]}"
   oracle_fv fasth3-4step-vsa lora --model-path "$UW/MiniMax-H3" \

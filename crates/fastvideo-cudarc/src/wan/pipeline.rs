@@ -6,8 +6,8 @@ use std::path::Path;
 use std::process::Command;
 
 use fastvideo_models::schedulers::{
-    DmdSchedule, FlowUniPCMultistepScheduler, RcmSchedule, UniPcTerm, FAST_WAN_1_3B_DMD_STEPS,
-    RCM_SIGMA_MAX_T2V,
+    DmdSchedule, FlowUniPCMultistepScheduler, RcmSchedule, SelfForcingSchedule, UniPcTerm,
+    FAST_WAN_1_3B_DMD_STEPS, RCM_SIGMA_MAX_T2V, SF_WAN_1_3B_DMD_STEPS,
 };
 use fastvideo_models::wan::{
     i2v_first_frame_mask, moe_expert, MoeExpert, Umt5Config, WanVaeConfig, WanVideoArchConfig,
@@ -24,19 +24,20 @@ use super::vae::AutoencoderKlWan;
 use super::weights::WeightMap;
 
 /// TAEHV replaces the Wan VAE decode when `FASTVIDEO_TAEHV_WEIGHTS` names a
-/// directory holding `taew2_1.safetensors`.
+/// directory holding `taew2_1.safetensors` (`taew2_2.safetensors` for the
+/// 48-channel Wan 2.2 latent space).
 ///
 /// A path rather than a boolean, because the weights ship separately from the
 /// Wan checkpoint (they live in madebyollin/taehv, not the Diffusers repo) and
 /// there is no sensible place to guess. A set-but-unloadable path is an error
 /// rather than a silent fall back to the Wan VAE: asking for TAEHV and getting
 /// a 3.9s Wan decode would look exactly like TAEHV being slow.
-fn load_taehv() -> Result<Option<super::taehv::TaeHv>> {
+fn load_taehv(arch: TaeArch) -> Result<Option<super::taehv::TaeHv>> {
     let dir = std::env::var("FASTVIDEO_TAEHV_WEIGHTS").unwrap_or_default();
     if dir.is_empty() {
         return Ok(None);
     }
-    let tae = open_taehv(Path::new(&dir))
+    let tae = open_taehv(Path::new(&dir), arch)
         .map_err(|e| PipelineError::Message(format!("FASTVIDEO_TAEHV_WEIGHTS={dir}: {e}")))?;
     super::log::info(format_args!("vae=taehv ({dir})"));
     Ok(Some(tae))
@@ -44,12 +45,25 @@ fn load_taehv() -> Result<Option<super::taehv::TaeHv>> {
 
 /// The TAEHV file name the Wan 2.1 latent space (16 channels) decodes with.
 pub const TAEW2_1: &str = "taew2_1.safetensors";
+/// The TAEHV file for the Wan 2.2 TI2V-5B latent space (48 channels, 16×).
+pub const TAEW2_2: &str = "taew2_2.safetensors";
 
-/// `taew2_1` from a file, or a directory holding `taew2_1.safetensors` (only
-/// that file: a TAE directory may also hold taeh3 / taeltx weights).
-fn open_taehv(path: &Path) -> TensorResult<super::taehv::TaeHv> {
-    let file = if path.is_dir() && path.join(TAEW2_1).is_file() {
-        path.join(TAEW2_1)
+use super::taehv::TaeArch;
+
+/// The TAEHV checkpoint for a VAE latent width.
+pub fn taehv_arch(z_dim: usize) -> TaeArch {
+    if z_dim == 48 {
+        TaeArch::Wan22
+    } else {
+        TaeArch::Wan
+    }
+}
+
+/// `taew2_1` / `taew2_2` from a file, or a directory holding it (only that
+/// file: a TAE directory may also hold taeh3 / taeltx weights).
+fn open_taehv(path: &Path, arch: TaeArch) -> TensorResult<super::taehv::TaeHv> {
+    let file = if path.is_dir() && path.join(arch.file_name()).is_file() {
+        path.join(arch.file_name())
     } else {
         path.to_path_buf()
     };
@@ -58,7 +72,7 @@ fn open_taehv(path: &Path) -> TensorResult<super::taehv::TaeHv> {
     } else {
         WeightMap::from_dir(path)?
     };
-    super::taehv::TaeHv::load(&map)
+    super::taehv::TaeHv::load_arch(&map, arch)
 }
 
 /// Where the distilled presets look for `taew2_1.safetensors` when
@@ -364,16 +378,40 @@ impl WanPipeline {
         // `vae_precision` fp32), see umt5.rs / vae.rs. FASTVIDEO_BF16_ACT=0
         // restores f32 activations everywhere.
         crate::wan::tensor::default_bf16_activations();
-        let cfg = WanVideoArchConfig::from_preset(preset);
+        let mut cfg = WanVideoArchConfig::from_preset(preset);
+        if cfg.causal {
+            // Diagnostic: FASTVIDEO_WAN_CAUSAL_FPB=1 with FASTVIDEO_WAN_CAUSAL_AR=0
+            // is the per-frame whole-clip mask this port ran before it
+            // followed FastVideo's blocks.
+            cfg.num_frames_per_block =
+                super::envflag::usize_flag("FASTVIDEO_WAN_CAUSAL_FPB", cfg.num_frames_per_block)
+                    .max(1);
+        }
         let dit = WeightMap::from_dir(&root.join("transformer"))?;
-        let vae_cfg = if cfg.out_channels == 48 {
-            WanVaeConfig {
-                z_dim: 48,
-                ..WanVaeConfig::wan_2_1()
+        // The VAE's own config.json (Wan 2.2 TI2V-5B: 48 channels, 16×
+        // spatial, residual blocks, patchify 2); the preset's built-in
+        // config when the file is missing.
+        let vae_cfg = match WanVaeConfig::from_dir(&root.join("vae")) {
+            Ok(c) => c,
+            Err(e) => {
+                let c = if cfg.out_channels == 48 {
+                    WanVaeConfig::wan_2_2()
+                } else {
+                    WanVaeConfig::wan_2_1()
+                };
+                super::log::info(format_args!(
+                    "vae config: {e}; using the built-in {}-channel config",
+                    c.z_dim
+                ));
+                c
             }
-        } else {
-            WanVaeConfig::wan_2_1()
         };
+        if vae_cfg.z_dim != cfg.out_channels {
+            return Err(PipelineError::Message(format!(
+                "VAE z_dim {} does not match the DiT's {} output channels",
+                vae_cfg.z_dim, cfg.out_channels
+            )));
+        }
         let vae = WeightMap::from_dir(&root.join("vae"))?;
         let text_dir = if root.join("text_encoder").is_dir() {
             root.join("text_encoder")
@@ -404,15 +442,17 @@ impl WanPipeline {
 
         let boundary_ratio = cfg.boundary_ratio;
         let vae_choice = WanVaeChoice::from_env()?;
-        let mut taehv = load_taehv()?;
+        // taew2_1 decodes the 16-channel Wan 2.1 latent space, taew2_2 the
+        // 48-channel Wan 2.2 one.
+        let tae_arch = taehv_arch(vae_cfg.z_dim);
+        let mut taehv = load_taehv(tae_arch)?;
         let taehv_explicit = taehv.is_some();
-        // taew2_1 decodes the 16-channel Wan 2.1 latent space only.
-        if taehv.is_none() && vae_cfg.z_dim == 16 && vae_choice != WanVaeChoice::Full {
+        if taehv.is_none() && matches!(vae_cfg.z_dim, 16 | 48) && vae_choice != WanVaeChoice::Full {
             for dir in default_taehv_dirs(root) {
-                if !dir.join(TAEW2_1).is_file() {
+                if !dir.join(tae_arch.file_name()).is_file() {
                     continue;
                 }
-                match open_taehv(&dir) {
+                match open_taehv(&dir, tae_arch) {
                     Ok(t) => {
                         super::log::info(format_args!(
                             "taehv available for the distilled presets ({})",
@@ -421,16 +461,16 @@ impl WanPipeline {
                         taehv = Some(t);
                         break;
                     }
-                    Err(e) => super::log::info(format_args!(
-                        "taehv at {} not loaded: {e}",
-                        dir.display()
-                    )),
+                    Err(e) => {
+                        super::log::info(format_args!("taehv at {} not loaded: {e}", dir.display()))
+                    }
                 }
             }
         }
         if vae_choice == WanVaeChoice::Taehv && taehv.is_none() {
             return Err(PipelineError::Message(format!(
-                "FASTVIDEO_WAN_VAE=taehv but no {TAEW2_1} (FASTVIDEO_TAEHV_WEIGHTS, or one of {:?}; scripts/gpu/fetch_taehv.sh)",
+                "FASTVIDEO_WAN_VAE=taehv but no {} (FASTVIDEO_TAEHV_WEIGHTS, or one of {:?}; scripts/gpu/fetch_taehv.sh)",
+                tae_arch.file_name(),
                 default_taehv_dirs(root)
             )));
         }
@@ -662,6 +702,40 @@ impl WanPipeline {
         Ok((mask, cond))
     }
 
+    /// Wan 2.2 TI2V first-frame condition: the image (resized to the
+    /// request) through the VAE encoder, normalized to DiT space —
+    /// `[1, 48, 1, H/16, W/16]` (Diffusers `WanImageToVideoPipeline` with
+    /// `expand_timesteps`, FastVideo `WanFirstFrameEncodingStage`).
+    fn encode_first_frame(
+        &self,
+        image_path: &str,
+        height: usize,
+        width: usize,
+        z_h: usize,
+        z_w: usize,
+    ) -> Result<CudaTensor> {
+        let video = load_rgb_frame(image_path, height, width)?;
+        let encoded = self.vae.encode_video(&video)?;
+        let latent = self.vae.normalize_latents(&encoded)?.narrow(2, 0, 1)?;
+        if latent.shape[3] != z_h || latent.shape[4] != z_w {
+            return Err(PipelineError::Message(format!(
+                "TI2V first-frame latent {:?} does not match the {z_h}x{z_w} latent grid",
+                latent.shape
+            )));
+        }
+        Ok(latent.to_device()?)
+    }
+
+    /// Whether `cfg` runs Wan 2.2 TI2V image-to-video: a 48-channel
+    /// text-and-image DiT (same width in and out), the Wan 2.2 VAE, an image.
+    fn is_ti2v(&self, cfg: &GenerateConfig) -> bool {
+        !self.tiny
+            && cfg.image_path.is_some()
+            && self.vae.cfg.is_residual
+            && self.dit.cfg.in_channels == self.dit.cfg.out_channels
+            && self.preset != "lucy_edit_dev"
+    }
+
     /// Generate one clip into `cfg.output_dir`; returns the PNG frame paths.
     /// See [`Self::generate_to`].
     pub fn generate(&mut self, cfg: &GenerateConfig) -> Result<Vec<String>> {
@@ -675,7 +749,12 @@ impl WanPipeline {
     /// works on the next one. The mp4 (when `mp4`) is finished inside the
     /// decode time; the `frame-NNN.png` files are written after it
     /// (`timings.write_s`).
-    pub fn generate_to(&self, cfg: &GenerateConfig, out_dir: &Path, mp4: bool) -> Result<WanOutput> {
+    pub fn generate_to(
+        &self,
+        cfg: &GenerateConfig,
+        out_dir: &Path,
+        mp4: bool,
+    ) -> Result<WanOutput> {
         let _gen = super::log::StepTimer::start("generate");
         let needs_control = matches!(
             self.preset.as_str(),
@@ -721,6 +800,7 @@ impl WanPipeline {
             .map(|s| s.as_str());
 
         let i2v = !self.tiny && self.dit.cfg.in_channels > self.dit.cfg.out_channels;
+        let ti2v = self.is_ti2v(cfg);
         if i2v && cfg.image_path.is_none() && control_src.is_none() {
             return Err(PipelineError::Message(
                 "I2V generate needs --image <png|jpeg> for 36-channel latent packing".into(),
@@ -762,6 +842,15 @@ impl WanPipeline {
             None
         };
 
+        // TI2V: the image's latent replaces latent frame 0 (and its tokens
+        // run at timestep 0) for the whole denoise.
+        let first_frame = match (ti2v, cfg.image_path.as_deref()) {
+            (true, Some(image)) => {
+                Some(self.encode_first_frame(image, cfg.height, cfg.width, z_h, z_w)?)
+            }
+            _ => None,
+        };
+
         let clip_tokens = match (&self.clip, cfg.image_path.as_ref()) {
             (Some(clip), Some(path)) => Some(clip.encode_image_file(path)?),
             _ => None,
@@ -769,7 +858,15 @@ impl WanPipeline {
 
         let mut timings = WanTimings::default();
         let timer = std::time::Instant::now();
-        let (encoder_hs, text_cache) = self.encode_text(cfg, Self::needs_negative(cfg))?;
+        let (mut encoder_hs, text_cache) = self.encode_text(cfg, Self::needs_negative(cfg))?;
+        if self.dit.cfg.causal && super::dump::enabled() {
+            super::dump::tensor("text_hidden", &encoder_hs)?;
+        }
+        if self.dit.cfg.causal && super::inject::text_enabled() && encoder_hs.shape[0] == 1 {
+            if let Some(v) = super::inject::load_numel("text_hidden", encoder_hs.numel())? {
+                encoder_hs = CudaTensor::from_vec(v, encoder_hs.shape.clone())?.to_device()?;
+            }
+        }
         timings.text_s = timer.elapsed().as_secs_f64();
         let timer = std::time::Instant::now();
         let mut last = std::time::Instant::now();
@@ -785,11 +882,16 @@ impl WanPipeline {
             &encoder_hs,
             clip_tokens.as_ref(),
             i2v_pack.as_ref().map(|(m, c)| (m, c)),
+            first_frame.as_ref(),
             Some(&mut record),
         )?;
         timings.denoise_s = timer.elapsed().as_secs_f64();
         timings.step_s = step_s;
         drop(encoder_hs);
+        if self.dit.cfg.causal && !causal_ar_enabled() {
+            // The whole-clip path's result, under the causal sampler's name.
+            super::dump::tensor("sf_latents_out", &latents)?;
+        }
 
         let timer = std::time::Instant::now();
         // A missing ffmpeg costs the mp4, not the clip (as the PNG mux did).
@@ -842,11 +944,14 @@ impl WanPipeline {
         if self.tiny {
             (4, 2, 4, 4)
         } else {
+            // Wan 2.1: 8× spatial; Wan 2.2 TI2V-5B: 16× (the VAE's patchify).
+            let s = self.vae.spatial_compression();
+            let tc = self.vae.cfg.temporal_compression();
             (
                 self.dit.cfg.out_channels,
-                (cfg.num_frames.saturating_sub(1)) / 4 + 1,
-                cfg.height / 8,
-                cfg.width / 8,
+                (cfg.num_frames.saturating_sub(1)) / tc + 1,
+                cfg.height / s,
+                cfg.width / s,
             )
         }
     }
@@ -862,6 +967,12 @@ impl WanPipeline {
             .map(|_| rng.sample::<f32, _>(StandardNormal))
             .collect();
         let mut latents = CudaTensor::from_vec(noise, vec![1, z_c, z_t, z_h, z_w])?;
+        if self.dit.cfg.causal && !self.tiny {
+            // The oracle: FastVideo's initial latents (`sf_latents_in`).
+            if let Some(v) = super::inject::load_numel("sf_latents_in", n_el)? {
+                latents = CudaTensor::from_vec(v, vec![1, z_c, z_t, z_h, z_w])?;
+            }
+        }
         if cfg.is_rcm {
             let sigma = cfg.rcm_sigma_max.unwrap_or(RCM_SIGMA_MAX_T2V);
             let scale =
@@ -885,7 +996,7 @@ impl WanPipeline {
                 "denoise() is text-to-video only; use generate() for I2V".into(),
             ));
         }
-        self.denoise_inner(cfg, latents, encoder_hs, None, None, observer)
+        self.denoise_inner(cfg, latents, encoder_hs, None, None, None, observer)
     }
 
     fn denoise_inner(
@@ -895,10 +1006,14 @@ impl WanPipeline {
         encoder_hs: &CudaTensor,
         image: Option<&CudaTensor>,
         i2v: Option<(&CudaTensor, &CudaTensor)>,
+        first_frame: Option<&CudaTensor>,
         observer: Option<&mut StepObserver<'_>>,
     ) -> Result<CudaTensor> {
         // Inputs cross to the device once; every step then stays there.
         let latents = latents.to_device()?;
+        // TI2V: latent frame 0 is the image's from the start (FastVideo
+        // `WanDenoisingStage.prepare_denoising`).
+        let latents = pin_first_frame(first_frame, latents)?;
         let encoder_hs = encoder_hs.clone().to_device()?;
         let boundary = cfg.boundary_ratio.or(self.boundary_ratio);
         // DMD / rCM students are distilled for a single conditional pass.
@@ -969,6 +1084,7 @@ impl WanPipeline {
             boundary_ratio: boundary,
             image,
             i2v,
+            first_frame,
             guidance,
             guidance_2,
             tea_cache,
@@ -987,6 +1103,19 @@ impl WanPipeline {
             ));
             let _denoise = super::log::StepTimer::start(format!("rcm {} steps", sched.num_steps()));
             rcm_denoise(latents, &encoder_hs, &sched, cfg.seed, &mut ctx, observer)
+        } else if cfg.is_dmd && self.dit.cfg.causal && causal_ar_enabled() {
+            let steps = cfg
+                .dmd_steps
+                .clone()
+                .unwrap_or_else(|| SF_WAN_1_3B_DMD_STEPS.to_vec());
+            let sched = SelfForcingSchedule::new(&steps, cfg.flow_shift, 1000, true);
+            super::log::info(format_args!(
+                "denoise=causal-dmd blocks of {} frames, timesteps {:?}",
+                self.dit.cfg.num_frames_per_block, sched.timesteps
+            ));
+            let _denoise =
+                super::log::StepTimer::start(format!("causal dmd {} steps", steps.len()));
+            causal_dmd_denoise(&self.dit, latents, &ctx.cond_hs, &sched, cfg.seed, observer)
         } else if cfg.is_dmd {
             let steps = cfg
                 .dmd_steps
@@ -1046,8 +1175,9 @@ impl WanPipeline {
                     super::log::info_once(
                         &SAID,
                         format_args!(
-                            "distilled preset: no {TAEW2_1} found, decoding with the Wan VAE \
-                             (scripts/gpu/fetch_taehv.sh <dir>, then FASTVIDEO_TAE_DIR=<dir>)"
+                            "distilled preset: no {} found, decoding with the Wan VAE \
+                             (scripts/gpu/fetch_taehv.sh <dir>, then FASTVIDEO_TAE_DIR=<dir>)",
+                            taehv_arch(self.vae.cfg.z_dim).file_name()
                         ),
                     );
                 }
@@ -1122,6 +1252,9 @@ struct DenoiseCtx<'a> {
     boundary_ratio: Option<f32>,
     image: Option<&'a CudaTensor>,
     i2v: Option<(&'a CudaTensor, &'a CudaTensor)>,
+    /// Wan 2.2 TI2V: the image latent pinned to latent frame 0, whose
+    /// tokens run at timestep 0 (`expand_timesteps`).
+    first_frame: Option<&'a CudaTensor>,
     guidance: f32,
     guidance_2: f32,
     tea_cache: TeaCache,
@@ -1313,6 +1446,46 @@ impl EasyCacheRuntime {
     }
 }
 
+/// The DiT's timestep input for `rows` batch rows at `t`: `[t; rows]`, or
+/// under TI2V one value per (row, latent frame) with frame 0 at 0 — Diffusers'
+/// `(first_frame_mask[:, ::2, ::2] * t).flatten()` is constant over each
+/// frame's tokens, so per frame carries the same values.
+fn timestep_input(
+    ctx: &DenoiseCtx<'_>,
+    latents: &CudaTensor,
+    t: f32,
+    rows: usize,
+) -> TensorResult<CudaTensor> {
+    match ctx.first_frame {
+        Some(_) => {
+            let frames = latents.dim(2)?;
+            let mut v = Vec::with_capacity(rows * frames);
+            for _ in 0..rows {
+                v.push(0.0);
+                v.extend(std::iter::repeat_n(t, frames.saturating_sub(1)));
+            }
+            CudaTensor::from_vec(v, vec![rows * frames])
+        }
+        None => CudaTensor::from_vec(vec![t; rows], vec![rows]),
+    }
+}
+
+/// TI2V: put the image latent back into latent frame 0 (FastVideo
+/// `WanDenoisingStage.finish_step`: `(1 - mask) * first_frame + mask * latents`).
+fn pin_first_frame(
+    first_frame: Option<&CudaTensor>,
+    latents: CudaTensor,
+) -> TensorResult<CudaTensor> {
+    let Some(ff) = first_frame else {
+        return Ok(latents);
+    };
+    let t = latents.dim(2)?;
+    if t <= 1 {
+        return Ok(ff.clone());
+    }
+    CudaTensor::cat(&[ff, &latents.narrow(2, 1, t - 1)?], 2)
+}
+
 fn pick_expert<'a>(ctx: &'a DenoiseCtx<'_>, t: f32) -> (&'a WanTransformer3D, f32) {
     if let (Some(ratio), Some(low)) = (ctx.boundary_ratio, ctx.low) {
         match moe_expert(f64::from(t), ratio, 1000) {
@@ -1362,7 +1535,7 @@ fn dit_cfg_easy(
     };
     let rows = encoder_hs.shape[0];
     let cond_hs = ctx.cond_hs.clone();
-    let t1 = CudaTensor::from_vec(vec![t], vec![1])?;
+    let t1 = timestep_input(ctx, latents, t, 1)?;
     let (scale, cond) = {
         let (dit, scale) = pick_expert(ctx, t);
         if decision.compute {
@@ -1490,7 +1663,7 @@ fn dit_cfg(
     // `encoder_hs` is `[negative, prompt]`; a single row is the prompt alone.
     let rows = encoder_hs.shape[0];
     let cond_hs = ctx.cond_hs.clone();
-    let t1 = CudaTensor::from_vec(vec![t], vec![1])?;
+    let t1 = timestep_input(ctx, latents, t, 1)?;
 
     let out = if (scale - 1.0).abs() < 1e-6 {
         if tea_on {
@@ -1508,7 +1681,7 @@ fn dit_cfg(
             dit.arm_sol_teacache_batch(tea_step);
         }
         let latent_batch = CudaTensor::cat(&[&latent_in, &latent_in], 0)?;
-        let t_batch = CudaTensor::from_vec(vec![t, t], vec![2])?;
+        let t_batch = timestep_input(ctx, latents, t, 2)?;
         let out_batch = dit.forward_ctx(&latent_batch, &t_batch, encoder_hs, None)?;
         let uncond = out_batch.narrow(0, 0, 1)?;
         let cond = out_batch.narrow(0, 1, 1)?;
@@ -1582,6 +1755,13 @@ fn dmd_denoise(
         let t = t as f32;
         let _step = super::log::StepTimer::start(format!("dmd step {}/{total} t={t:.0}", i + 1));
         let velocity = dit_cfg(ctx, &latents, encoder_hs, t)?;
+        if i == 0 && ctx.high.cfg.causal && super::dump::enabled() {
+            // Causal Wan over the whole clip (FASTVIDEO_WAN_CAUSAL_AR=0): the
+            // first block's step-1 prediction, comparable with FastVideo's
+            // first causal forward (same t = 1000, same injected noise).
+            let n = 3.min(latents.shape[2]);
+            super::dump::tensor("sf_c0_s0_flow", &velocity.narrow(2, 0, n)?)?;
+        }
         let c = sched.step_coeffs(i);
         let x0 = CudaTensor::lincomb(&[(1.0, &latents), (-(c.sigma_t as f32), &velocity)])?;
         latents = match c.sigma_next {
@@ -1591,10 +1771,153 @@ fn dmd_denoise(
             }
             None => x0,
         };
+        let latents_pinned = pin_first_frame(ctx.first_frame, latents)?;
+        latents = latents_pinned;
         super::device::synchronize().map_err(|e| PipelineError::Message(e.to_string()))?;
         notify(&mut observer, i, total, t, &latents)?;
     }
     Ok(latents)
+}
+
+/// `FASTVIDEO_WAN_CAUSAL_AR` (default on): causal Wan DMD generates the clip
+/// block by block through the KV cache, as FastVideo does. `=0` denoises the
+/// whole clip at once under the block-causal mask (FastWan's DMD sampler).
+pub fn causal_ar_enabled() -> bool {
+    static FLAG: super::envflag::CachedBool = super::envflag::CachedBool::new();
+    FLAG.get_or_init(|| super::envflag::bool_flag("FASTVIDEO_WAN_CAUSAL_AR", true))
+}
+
+/// FastVideo `CausalDMDDenosingStage.forward` (T2V, one expert): for each
+/// block of `num_frames_per_block` latent frames, every Self-Forcing timestep
+/// through the KV cache (`x0 = x - sigma_t * v`, re-noised with fresh noise
+/// to the next timestep's sigma, the last step keeps `x0`), then one pass at
+/// `t = context_noise` (0) that rewrites the block's cache slots from the
+/// clean latents. With bf16 activations the latents take FastVideo's bf16
+/// rounding points (the DiT input, `x0`, the re-noised latents).
+///
+/// Oracle names (with `FASTVIDEO_DUMP_DIR`): `sf_c<c>_s<i>_{flow,x0}`,
+/// `sf_c<c>_out`, `sf_latents_out`; block outputs `sf_c<c>_s<i>_block_<l>`
+/// (and `sf_c0_ctx_block_<l>`) for block 0 step 0, block 1 step 0 and block
+/// 0's context pass. `FASTVIDEO_INJECT_DIR` supplies `sf_noise_<k>` (the k-th
+/// re-noise draw, FastVideo's `[B, F, C, H, W]` layout).
+fn causal_dmd_denoise(
+    dit: &WanTransformer3D,
+    latents: CudaTensor,
+    cond: &CudaTensor,
+    sched: &SelfForcingSchedule,
+    seed: u64,
+    mut observer: Option<&mut StepObserver<'_>>,
+) -> Result<CudaTensor> {
+    use super::dump;
+    let [b, c, t, h, w] = latents.shape[..] else {
+        return Err(PipelineError::Message(format!(
+            "latents {:?}",
+            latents.shape
+        )));
+    };
+    let fpb = dit.cfg.num_frames_per_block.max(1);
+    if t % fpb != 0 {
+        return Err(PipelineError::Message(format!(
+            "causal DMD: {t} latent frames is not a multiple of num_frames_per_block {fpb}"
+        )));
+    }
+    let p = dit.cfg.patch_size;
+    let frame_tokens = (h / p[1].max(1)) * (w / p[2].max(1));
+    let cache = super::causal::CausalKvCache::new(
+        super::causal::KvSpec::for_config(&dit.cfg, frame_tokens),
+        dit.cfg.num_layers,
+    );
+    let act16 = super::tensor::bf16_activations();
+    let round = |x: CudaTensor| -> TensorResult<CudaTensor> {
+        if act16 {
+            x.quantize_bf16()
+        } else {
+            Ok(x)
+        }
+    };
+    let context_noise = 0.0f32;
+    let steps = sched.num_steps();
+    let blocks = t / fpb;
+    let total = blocks * steps;
+    let mut chunks = Vec::with_capacity(blocks);
+    let mut draw = 0usize;
+    for blk in 0..blocks {
+        let start = blk * fpb;
+        let mut cur = latents.narrow(2, start, fpb)?;
+        for (i, &ts) in sched.timesteps.iter().enumerate() {
+            let _step = super::log::StepTimer::start(format!(
+                "causal block {}/{blocks} step {}/{steps} t={ts:.1}",
+                blk + 1,
+                i + 1
+            ));
+            dump::set_prefix(&format!("sf_c{blk}_s{i}_"));
+            dump::set_blocks(i == 0 && blk <= 1);
+            let t1 = CudaTensor::from_vec(vec![ts], vec![1])?;
+            let input = round(cur.clone())?;
+            let flow = dit.forward_kv(&input, &t1, cond, &cache, start);
+            dump::set_blocks(false);
+            let flow = flow?;
+            let sigma = sched.sigma(ts) as f32;
+            let x0 = round(CudaTensor::lincomb(&[(1.0, &cur), (-sigma, &flow)])?)?;
+            if dump::enabled() {
+                dump::tensor(&dump::named("flow"), &flow)?;
+                dump::tensor(&dump::named("x0"), &x0)?;
+            }
+            cur = if i + 1 < steps {
+                let next = sched.sigma(sched.timesteps[i + 1]) as f32;
+                let noise = causal_noise(seed, draw, [b, fpb, c, h, w])?;
+                draw += 1;
+                round(CudaTensor::lincomb(&[(1.0 - next, &x0), (next, &noise)])?)?
+            } else {
+                x0
+            };
+            super::device::synchronize().map_err(|e| PipelineError::Message(e.to_string()))?;
+            notify(&mut observer, blk * steps + i, total, ts, &cur)?;
+        }
+        // The clean context pass: the same block at t = context_noise.
+        dump::set_prefix(&format!("sf_c{blk}_ctx_"));
+        dump::set_blocks(blk == 0);
+        let t0 = CudaTensor::from_vec(vec![context_noise], vec![1])?;
+        let ctx_pass = dit.forward_kv(&cur, &t0, cond, &cache, start);
+        dump::set_blocks(false);
+        dump::set_prefix("");
+        ctx_pass?;
+        if dump::enabled() {
+            dump::tensor(&format!("sf_c{blk}_out"), &cur)?;
+        }
+        chunks.push(cur);
+    }
+    let out = CudaTensor::cat(&chunks.iter().collect::<Vec<_>>(), 2)?;
+    if dump::enabled() {
+        dump::tensor("sf_latents_out", &out)?;
+    }
+    Ok(out)
+}
+
+/// Re-noise draw `k` of a causal DMD run, `[B, C, F, H, W]`: FastVideo's
+/// (`sf_noise_<k>`, drawn `[B, F, C, H, W]`) when injected, else seeded
+/// standard normal in the same layout. bf16-valued with bf16 activations
+/// (FastVideo draws it in the DiT dtype).
+fn causal_noise(seed: u64, k: usize, btchw: [usize; 5]) -> Result<CudaTensor> {
+    let n: usize = btchw.iter().product();
+    let raw = match super::inject::load_numel(&format!("sf_noise_{k:03}"), n)? {
+        Some(v) => CudaTensor::from_vec(v, btchw.to_vec())?.to_device()?,
+        None => {
+            let mut rng = rand::rngs::StdRng::seed_from_u64(
+                seed ^ (0xD1B5_4A32_D192_ED03u64.wrapping_mul(k as u64 + 1)),
+            );
+            let v: Vec<f32> = (0..n)
+                .map(|_| rng.sample::<f32, _>(StandardNormal))
+                .collect();
+            CudaTensor::from_vec(v, btchw.to_vec())?.to_device()?
+        }
+    };
+    let raw = if super::tensor::bf16_activations() {
+        raw.quantize_bf16()?
+    } else {
+        raw
+    };
+    Ok(raw.permute(&[0, 2, 1, 3, 4])?)
 }
 
 /// TurboDiffusion rCM: same x0 / re-noise shape as DMD, TrigFlow→RF sigmas.
@@ -1706,7 +2029,7 @@ fn unipc_denoise(
         history.push_front(converted);
         history.truncate(plan.history_len);
         last_sample = Some(corrected);
-        latents = prev;
+        latents = pin_first_frame(ctx.first_frame, prev)?;
         super::device::synchronize().map_err(|e| PipelineError::Message(e.to_string()))?;
         notify(&mut observer, i, ts.len(), t, &latents)?;
     }

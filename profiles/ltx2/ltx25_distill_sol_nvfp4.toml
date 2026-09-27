@@ -1,0 +1,23 @@
+# LTX-2.5 distilled two-stage, Sol stage 2, NVFP4 video FFN: sol-engine
+# `transforms/nvfp4_ffn.py` (NVFP4FFN). The 48 video feed-forwards
+# (`transformer_blocks.*.ff.net.{0.proj,2}`) run on NVFP4 tensor cores
+# through cuBLASLt (`VEC16_UE4M3` block scales, bf16 out), weights quantized
+# at load and activations per call with TransformerEngine's
+# NVFP4BlockScaling rule (`static_6`); RHT and stochastic rounding off, rows
+# padded to 16. Audio FFN, attention and every other linear stay bf16. Needs
+# sm_100 / sm_120; other GPUs keep the bf16 FFN (a log line says so).
+
+[id]
+name = "ltx25_distill_sol_nvfp4"
+family = "ltx25"
+description = "LTX-2.5 distilled two-stage, Sol stage 2, NVFP4 video FFN."
+upstream = "sol-engine transforms/nvfp4_ffn.py (TE NVFP4 GEMM, video FFN only)"
+
+[pipeline]
+model = "ltx2"
+
+[techniques.sol_attn]
+preset = "ltx25_stage2"
+
+[techniques.nvfp4]
+rule = "static_6"

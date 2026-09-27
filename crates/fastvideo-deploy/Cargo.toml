@@ -1,0 +1,28 @@
+[package]
+name = "fastvideo-deploy"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "fv-serve deploy: Runpod queue worker, RUNPOD_*/VAST_* environment discovery, Vast forwarder assets."
+
+[dependencies]
+fastvideo-protocol.workspace = true
+fastvideo-serve-kit.workspace = true
+axum.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tokio = { workspace = true, features = ["sync", "time"] }
+tower = { workspace = true, features = ["util"] }
+tracing.workspace = true
+
+reqwest = { workspace = true, optional = true }
+
+[features]
+default = []
+# Runpod queue worker HTTP client (job-take, job-done, stream, ping, job-stop).
+runpod = ["dep:reqwest"]
+
+[lints]
+workspace = true

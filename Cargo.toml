@@ -11,6 +11,20 @@ members = [
     "crates/fastvideo-cli",
     "crates/fastvideo-gpucheck",
     "crates/fastvideo-mlx",
+    # fv-serve (docs/serve/design.md §2). CPU-only by default; only
+    # fastvideo-engine-service reaches CUDA, behind its `cuda` feature.
+    "crates/fastvideo-protocol",
+    "crates/fastvideo-engine-service",
+    "crates/fastvideo-media",
+    "crates/fastvideo-webrtc",
+    "crates/fastvideo-serve-kit",
+    "crates/fastvideo-openai-videos",
+    "crates/fastvideo-minimax",
+    "crates/fastvideo-ltxapi",
+    "crates/fastvideo-fal",
+    "crates/fastvideo-reactor",
+    "crates/fastvideo-deploy",
+    "crates/fastvideo-serve",
 ]
 
 [workspace.package]
@@ -43,6 +57,52 @@ fastvideo-core = { path = "crates/fastvideo-core" }
 fastvideo-models = { path = "crates/fastvideo-models" }
 fastvideo-loader = { path = "crates/fastvideo-loader" }
 fastvideo-cudarc = { path = "crates/fastvideo-cudarc" }
+
+# ---- fv-serve (docs/serve/design.md §8 WP-00) -------------------------------
+# Members pick their own feature sets; `tokio` has none here so
+# fastvideo-protocol can stay on `tokio/sync` only. The heavy ones (str0m,
+# openh264, audiopus, reqwest, prost-build/protox) are optional in every member
+# that uses them, so CPU-only CI never builds them by default.
+tokio = { version = "1.47", default-features = false }
+axum = "0.8"
+tower = "0.5"
+tower-http = { version = "0.7", features = ["cors", "trace"] }
+reqwest = { version = "0.13", default-features = false, features = ["rustls", "json", "stream"] }
+# Pure Rust crypto (no OpenSSL, no aws-lc) and no example deps.
+str0m = { version = "0.24", default-features = false, features = ["rust-crypto"] }
+openh264 = "0.9"
+audiopus = "0.3.0-rc.0"
+rubato = "0.16"
+prost = "0.14"
+prost-build = "0.14"
+protox = "0.9"
+uuid = { version = "1", features = ["v4", "serde"] }
+time = { version = "0.3", features = ["serde", "formatting", "parsing", "macros"] }
+url = { version = "2", features = ["serde"] }
+bytes = { version = "1", features = ["serde"] }
+async-trait = "0.1"
+futures = "0.3"
+base64 = "0.22"
+# hmac 0.12 matches the workspace sha2 0.10 (digest 0.10).
+hmac = "0.12"
+ed25519-dalek = { version = "2", features = ["pkcs8", "rand_core"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt", "json"] }
+metrics = "0.24"
+metrics-exporter-prometheus = { version = "0.18", default-features = false }
+
+fastvideo-protocol = { path = "crates/fastvideo-protocol" }
+fastvideo-engine-service = { path = "crates/fastvideo-engine-service" }
+fastvideo-media = { path = "crates/fastvideo-media" }
+fastvideo-webrtc = { path = "crates/fastvideo-webrtc" }
+fastvideo-serve-kit = { path = "crates/fastvideo-serve-kit" }
+fastvideo-openai-videos = { path = "crates/fastvideo-openai-videos" }
+fastvideo-minimax = { path = "crates/fastvideo-minimax" }
+fastvideo-ltxapi = { path = "crates/fastvideo-ltxapi" }
+fastvideo-fal = { path = "crates/fastvideo-fal" }
+fastvideo-reactor = { path = "crates/fastvideo-reactor" }
+fastvideo-deploy = { path = "crates/fastvideo-deploy" }
+
 cudarc = { version = "0.17", default-features = false, features = ["std", "driver", "cublas", "cublaslt", "cudnn", "nvrtc", "f16", "cuda-version-from-build-system", "dynamic-loading"] }
 
 [workspace.lints.rust]

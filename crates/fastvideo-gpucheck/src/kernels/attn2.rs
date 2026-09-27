@@ -406,6 +406,9 @@ pub(super) fn bench(c: &mut Ctx<'_>) -> StageResult<()> {
         let d1 = dense(FlashKernel::V1)?;
         let d2 = dense(FlashKernel::V2)?;
         let dc = dense(FlashKernel::Cudnn)?;
+        // attn_dc.cu (tcgen05 / wgmma) where this device has it, else V2 again.
+        let has_dc = fastvideo_cudarc::wan::attn_dc::dense().is_some();
+        let ddc = dense(FlashKernel::Dc)?;
         let bits = |kernel| -> anyhow::Result<Vec<u16>> {
             let o = attn::device_mma_sdpa_with(&qt, &kt, &vt, None, true, kernel)?
                 .ok_or_else(|| anyhow::anyhow!("flash declined"))?;
@@ -424,6 +427,7 @@ pub(super) fn bench(c: &mut Ctx<'_>) -> StageResult<()> {
                 "v1_ms": d1 * 1e3, "v2_ms": d2 * 1e3, "speedup": d1 / d2,
                 "v1_tflops": flops / d1 / 1e12, "v2_tflops": flops / d2 / 1e12,
                 "cudnn_or_v2_fallback_ms": dc * 1e3, "cudnn_tflops": flops / dc / 1e12,
+                "dc_kernel": has_dc, "dc_ms": ddc * 1e3, "dc_tflops": flops / ddc / 1e12,
                 "bit_mismatches_first_heads": dense_bad,
             }),
             json!({"bit_mismatches_first_heads": 0}),
@@ -554,5 +558,83 @@ fn vsa_bench(c: &mut Ctx<'_>, bh: usize) -> StageResult<()> {
             "tma_tflops": flops / a / 1e12, "tma2_tflops": flops / b / 1e12,
         }),
     );
+    Ok(())
+}
+
+/// `attn_dc`: the datacenter kernels (attn_dc.cu: tcgen05 + TMEM on 10.0,
+/// wgmma on 9.0) against `flash_mma_fwd2` at the same bf16 inputs and
+/// against the f32 reference. They advance the running max per 128 keys
+/// (not 64) and skip the unit rescale, so P's bf16 rounding differs from
+/// V2's: the bound is rel L2 4e-3 vs V2 (the attn2 Sol x4f / split bound is
+/// 2e-3 on structured data; random data at this scale sits near 1e-3) and
+/// the usual 1e-2 vs f32. The bf16 output must be RNE of the f32 output.
+pub(super) fn dc_parity(c: &mut Ctx<'_>) -> StageResult<()> {
+    let dev = dev()?;
+    let Some(k) = fastvideo_cudarc::wan::attn_dc::dense() else {
+        c.report.note(
+            "attn_dc_skipped",
+            json!({"sm": dev.sm_major * 10 + dev.sm_minor, "needs": "sm 9.0 or 10.0 with the attn_dc module"}),
+        );
+        return Ok(());
+    };
+    c.report.note("attn_dc_kernel", json!({"sm": k.sm, "origin": k.origin, "rows_per_cta": k.rows}));
+    for (b, h, sq, sk, amp) in [
+        (1usize, 1usize, 1usize, 1usize, 1.0f32),
+        (1, 2, 64, 64, 1.5),
+        (1, 2, 70, 70, 1.5),
+        (2, 3, 257, 257, 1.5),
+        (1, 4, 300, 512, 1.5),
+        (2, 2, 1000, 333, 1.5),
+        (1, 3, 130, 1, 1.0),
+        (1, 2, 63, 4097, 1.5),
+        (1, 2, 129, 200, 1.0),
+        (1, 2, 2048, 2048, 1.5),
+        (1, 1, 513, 1000, 4.0),
+    ] {
+        let (bh, d) = (b * h, 128usize);
+        let q = c.rand(bh * sq * d, amp);
+        let kk = c.rand(bh * sk * d, amp);
+        let v = c.rand(bh * sk * d, 1.0);
+        let scale = 1.0 / (d as f32).sqrt();
+        let want = ref_sdpa(&q, &kk, &v, bh, sq, sk, d, scale);
+        let (qt, kt, vt) = (t(q, &[b, h, sq, d])?, t(kk, &[b, h, sk, d])?, t(v, &[b, h, sk, d])?);
+        let tag = format!("{b}x{h}x{sq}x{sk}");
+        let run = |kernel, out16| -> anyhow::Result<Vec<f32>> {
+            let o = attn::device_mma_sdpa_with(&qt, &kt, &vt, Some(scale), out16, kernel)?
+                .ok_or_else(|| anyhow::anyhow!("sdpa declined {tag}"))?;
+            host_of(&o)
+        };
+        let v2 = run(FlashKernel::V2, false)?;
+        let dc = run(FlashKernel::Dc, false)?;
+        let dc16 = run(FlashKernel::Dc, true)?;
+        let dv = diff(&dc, &v2);
+        c.report.check(
+            format!("attn_dc_{tag}_vs_v2"),
+            dv.within(4e-3),
+            dv.to_json(),
+            json!({"rel_l2": 4e-3}),
+        )?;
+        // vs the f32 reference (unrounded Q/K/V): 1e-2, or no worse than V2
+        // (+5%) where bf16 input rounding alone exceeds that (the amp-4 case:
+        // V2 and dc both sit at ~1.05e-2 on B200).
+        let (df, dv2) = (diff(&dc, &want), diff(&v2, &want));
+        c.report.check(
+            format!("attn_dc_{tag}_vs_f32"),
+            df.within(1e-2) || df.within(1.05 * dv2.rel_l2),
+            json!({"dc": df.to_json(), "v2_rel_l2": dv2.rel_l2}),
+            json!({"rel_l2": 1e-2, "or_rel_l2_vs_v2_error": 1.05}),
+        )?;
+        let bad = dc
+            .iter()
+            .zip(&dc16)
+            .filter(|(a, b)| bf16::from_f32(**a).to_bits() != bf16::from_f32(**b).to_bits())
+            .count();
+        c.report.check(
+            format!("attn_dc_{tag}_bf16out_is_rne_of_f32out"),
+            bad == 0,
+            json!({"mismatched": bad, "of": dc.len()}),
+            json!({"mismatched": 0}),
+        )?;
+    }
     Ok(())
 }

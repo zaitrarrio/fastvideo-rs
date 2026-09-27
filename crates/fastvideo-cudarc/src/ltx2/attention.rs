@@ -373,6 +373,91 @@ pub enum VideoAttnKernel {
 pub struct FeedForward {
     up: Linear,
     down: Linear,
+    /// sol-engine `nvfp4_ffn.py`: both projections on NVFP4 tensor cores
+    /// ([`FeedForward::load_scoped`]); `up` / `down` then hold only their
+    /// biases.
+    #[cfg(feature = "cuda")]
+    nvfp4: Option<std::sync::Arc<Nvfp4Ffn>>,
+}
+
+/// The FFN's two NVFP4 linears. The GELU runs inside the down projection's
+/// activation quantizer, so its bf16 output is never written.
+#[cfg(feature = "cuda")]
+struct Nvfp4Ffn {
+    up: crate::wan::nvfp4_linear::Nvfp4Linear,
+    down: crate::wan::nvfp4_linear::Nvfp4Linear,
+}
+
+/// The video FFN's NVFP4 W4A4 (`FASTVIDEO_NVFP4`, the `nvfp4` technique):
+/// quantize the two loaded bf16 weights with the TE `NVFP4BlockScaling`
+/// rule and drop the bf16 copies. `None` (bf16 stays) without NVFP4 tensor
+/// cores, for a weight that is not a plain device bf16 matrix, or for a
+/// shape the GEMM cannot take: sol-engine's bf16 fallback.
+#[cfg(feature = "cuda")]
+fn quantize_ffn(
+    up: &mut Linear,
+    down: &mut Linear,
+    rule: fastvideo_models::nvfp4::ScaleRule,
+) -> Result<Option<Nvfp4Ffn>> {
+    use crate::wan::nvfp4_linear::{tensor_cores, Nvfp4Linear};
+    use crate::wan::quant::ptr;
+    static SAID: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+    let why = if rule == fastvideo_models::nvfp4::ScaleRule::Mse {
+        Some("the FourOverSix mse rule has no tensor-core form; use static_6".to_string())
+    } else if !tensor_cores() {
+        Some("no NVFP4 tensor cores (sm_100 / sm_120 needed)".to_string())
+    } else if !up.in_dim().is_multiple_of(64)
+        || !down.in_dim().is_multiple_of(64)
+        || !up.out_dim().is_multiple_of(16)
+        || !down.out_dim().is_multiple_of(16)
+    {
+        Some(format!(
+            "shape {}x{} / {}x{} (k % 64, n % 16)",
+            up.out_dim(),
+            up.in_dim(),
+            down.out_dim(),
+            down.in_dim()
+        ))
+    } else {
+        None
+    };
+    let (wu, wd) = match (why, up.weight_bf16_shared(), down.weight_bf16_shared()) {
+        (None, Some(wu), Some(wd)) => (wu, wd),
+        (why, _, _) => {
+            crate::wan::log::info_once(
+                &SAID,
+                format_args!(
+                    "ltx2 nvfp4: video FFN stays bf16 ({})",
+                    why.unwrap_or_else(|| "weights are not device bf16".into())
+                ),
+            );
+            return Ok(None);
+        }
+    };
+    type Bias = Option<std::sync::Arc<cudarc::driver::CudaSlice<half::bf16>>>;
+    let bias = |l: &Linear| -> Result<Bias> {
+        match &l.bias {
+            Some(b) => b.dev_bf16(),
+            None => Ok(None),
+        }
+    };
+    let q = Nvfp4Ffn {
+        up: Nvfp4Linear::from_bf16(ptr(&wu), up.out_dim(), up.in_dim(), bias(up)?, rule)?,
+        down: Nvfp4Linear::from_bf16(ptr(&wd), down.out_dim(), down.in_dim(), bias(down)?, rule)?,
+    };
+    drop((wu, wd));
+    up.release_weight_bf16();
+    down.release_weight_bf16();
+    crate::wan::log::info_once(
+        &SAID,
+        format_args!(
+            "ltx2 nvfp4: video FFN on NVFP4 tensor cores (cuBLASLt VEC16_UE4M3, TE {} rule, RHT / SR off; {:.1} MiB per block vs {:.1} MiB bf16)",
+            rule.as_str(),
+            (q.up.held_bytes() + q.down.held_bytes()) as f64 / 1048576.0,
+            ((up.out_dim() * up.in_dim() + down.out_dim() * down.in_dim()) * 2) as f64 / 1048576.0
+        ),
+    );
+    Ok(Some(q))
 }
 
 impl FeedForward {
@@ -384,22 +469,100 @@ impl FeedForward {
         inner: usize,
         has_bias: bool,
     ) -> Result<Self> {
+        Self::load_scoped(map, keys, prefix, dim, inner, has_bias, None)
+    }
+
+    /// [`Self::load`], with `nvfp4` the rule for NVFP4 W4A4 on both
+    /// projections (the LTX video FFN under `FASTVIDEO_NVFP4`).
+    pub fn load_scoped(
+        map: &WeightMap,
+        keys: &Keys,
+        prefix: &str,
+        dim: usize,
+        inner: usize,
+        has_bias: bool,
+        nvfp4: Option<fastvideo_models::nvfp4::ScaleRule>,
+    ) -> Result<Self> {
+        #[allow(unused_mut)]
+        let mut up = Linear::load(
+            map,
+            &keys.key(&format!("{prefix}.net.0.proj")),
+            dim,
+            inner,
+            has_bias,
+        )?;
+        #[allow(unused_mut)]
+        let mut down = Linear::load(
+            map,
+            &keys.key(&format!("{prefix}.net.2")),
+            inner,
+            dim,
+            has_bias,
+        )?;
+        #[cfg(feature = "cuda")]
+        let nvfp4 = match nvfp4 {
+            Some(rule) => quantize_ffn(&mut up, &mut down, rule)?.map(std::sync::Arc::new),
+            None => None,
+        };
+        #[cfg(not(feature = "cuda"))]
+        let _ = nvfp4;
         Ok(Self {
-            up: Linear::load(
-                map,
-                &keys.key(&format!("{prefix}.net.0.proj")),
-                dim,
-                inner,
-                has_bias,
-            )?,
-            down: Linear::load(
-                map,
-                &keys.key(&format!("{prefix}.net.2")),
-                inner,
-                dim,
-                has_bias,
-            )?,
+            up,
+            down,
+            #[cfg(feature = "cuda")]
+            nvfp4,
         })
+    }
+
+    /// Whether both projections run on NVFP4 tensor cores.
+    pub fn is_nvfp4(&self) -> bool {
+        #[cfg(feature = "cuda")]
+        {
+            self.nvfp4.is_some()
+        }
+        #[cfg(not(feature = "cuda"))]
+        {
+            false
+        }
+    }
+
+    /// NVFP4 forward of `x` (`[.., tokens, dim]`, device bf16): the up GEMM
+    /// (bias in the epilogue), then the down projection quantizes
+    /// `gelu_tanh` of its output. `None` when `x` is not a device tensor.
+    #[cfg(feature = "cuda")]
+    fn forward_nvfp4(&self, q: &Nvfp4Ffn, x: &CudaTensor) -> Result<Option<CudaTensor>> {
+        use crate::wan::quant::ptr;
+        let Some(&k) = x.shape.last() else {
+            return Ok(None);
+        };
+        let Some(x16) = x.dev_bf16()? else {
+            return Ok(None);
+        };
+        let m = x.numel() / k.max(1);
+        crate::wan::evalstats::quant_call("nvfp4_cublaslt");
+        let (h, bias_in) = q.up.forward_bf16(ptr(&x16), m, false)?;
+        drop(x16);
+        // A bias-free FFN (LTX-2.5 `ff_bias = false`) or one whose bias the
+        // GEMM epilogue already added uses the GEMM output as is.
+        let h = match (&self.up.bias, bias_in) {
+            (Some(b), false) => CudaTensor::from_device_slice_bf16(h, vec![m, q.up.n])?
+                .add(&b.quantize_bf16()?)?
+                .dev_bf16()?
+                .ok_or_else(|| msg("nvfp4 ffn: up output not on the device"))?,
+            _ => std::sync::Arc::new(h),
+        };
+        crate::wan::evalstats::quant_call("nvfp4_cublaslt");
+        let (y, bias_in) = q.down.forward_bf16(ptr(&h), m, true)?;
+        drop(h);
+        let mut shape = x.shape.clone();
+        *shape.last_mut().unwrap() = q.down.n;
+        let mut out = CudaTensor::from_device_slice_bf16(y, shape)?;
+        if !bias_in {
+            if let Some(b) = &self.down.bias {
+                out = out.add(&b.quantize_bf16()?)?;
+            }
+        }
+        Ok(Some(out))
     }
 
     /// `Linear → tanh-GELU → Linear` on `[.., tokens, dim]`. From
@@ -448,6 +611,9 @@ impl FeedForward {
         let spans = FeedForwardChunking::RTX5090.spans(x.shape[axis]);
         crate::wan::evalstats::ffn(spans.len().max(1));
         if spans.len() <= 1 {
+            if self.is_nvfp4() {
+                return self.forward_whole(&x);
+            }
             let up = then(x, |x| self.up.forward_gelu(x))?;
             return self.down.forward(&up);
         }
@@ -460,6 +626,15 @@ impl FeedForward {
     }
 
     fn forward_whole(&self, x: &CudaTensor) -> Result<CudaTensor> {
+        #[cfg(feature = "cuda")]
+        if let Some(q) = &self.nvfp4 {
+            return self.forward_nvfp4(q, x)?.ok_or_else(|| {
+                msg(format!(
+                    "ltx2 nvfp4 ffn: input {:?} is not a device tensor",
+                    x.shape
+                ))
+            });
+        }
         self.down.forward(&self.up.forward_gelu(x)?)
     }
 
@@ -467,6 +642,10 @@ impl FeedForward {
         &mut self,
         f: &mut dyn FnMut(&mut Linear) -> Result<()>,
     ) -> Result<()> {
+        // NVFP4 projections hold their weights themselves (resident).
+        if self.is_nvfp4() {
+            return Ok(());
+        }
         f(&mut self.up)?;
         f(&mut self.down)
     }

@@ -2,6 +2,38 @@
 
 Project code: FVID
 
+### FVID · 2026-09-27 · FVID-2026-09-27-attention-datacenter-sm90
+- Trigger: balance topped up; run the Rust-path `attn_dc` group on B200, the same plus `bench:attn_dc bench:attn` on H100, make the sm_90 kernel automatic if it passes and beats V2
+- Options: keep dc90 opt-in; make it `auto` on 9.0; flip B200 back to V2 if its group failed
+- Decision: `auto` takes the attn_dc kernel on 9.0 and 10.0 (d = 128); B200 default kept; the gpucheck f32 bound becomes "1e-2, or no worse than V2 +5%"
+- Reason: `fv-gpucheck kernels --groups attn_dc,attn_bench` (image sha-4bc3ec3, cubins loaded) passes every check but one on both GPUs: B200 and H100 fail only `attn_dc_1x1x513x1000_vs_f32` at rel L2 1.053e-2 (limit 1e-2), a case with 4x-scaled inputs whose error is bf16 input rounding against the unrounded f32 reference (dc vs V2 there 6.6e-5, identical on both GPUs), so the bound, not the kernel, was wrong. attn_bench dense (TFLOPS, V2 -> dc): B200 369 -> 1173 H3 768p, 372 -> 1148 1080p20s, 373 -> 1152 4K; H100 SXM 303 -> 616, 326 -> 565, 321 -> 570. H100 harness: dc90 26/26 parity (same numbers as dc100), 642 / 649 / 645 / 619 TFLOPS vs V2 336 / 315 / 322 / 323; torch cuDNN SDPA 598 / 675 / 587 / 632 (dc90 ahead at H3 768p and 1080p20s); sol-engine sm90 Sol tau 1.0 15.4 / 0.52 / 120.7 / 139.0 ms (kv_splits 4: 99.4 ms at 1080p20s, 106.9 at 4K). Our Sol x4f on B200 is 146 ms at 1080p20s tau 1.0 vs sol-engine 87.8: the next target
+- Reversibility: cheap (`FASTVIDEO_FLASH_KERNEL=v2`)
+- Executed by: Executor
+- ADR: none
+- Verification: pods havhdoj7e5cv4c (B200 kernels), la1etadov0yz8c (H100 harness + bench_attn), 18rfe79oxg4f4d (H100 kernels), all volume-less secure and deleted; artifacts/runpod/dc/, artifacts/runpod/upstream/attn-dc-h100/
+  - B200 generation check (pod feuynzq6ifdjb4, US-CA-2, fv-weights-b200-us, image sha-4bc3ec3 with dc as the B200 default, warm, TAEH3; stopped after four cells, ~19 min): fasth3-8step denoise 31.7 s (earlier B200 suite 49.1 s), fasth3-4step-vsa 12.3 s (21.4 s), fasth3-4step-dense 12.3 s / 3.08 s per step (116.2 s), sol-h3 12.3 s / 3.08 s per step (824 s). The sol-h3 recipe in this build logs `techniques: none ... dense=true`: it no longer routes through the Sol kernel, so it is not a Sol-H3 measurement, and the earlier suite ran an older image, so these ratios are not dc alone. `runpod-matrix.sh` b200 cells ignored FV_CELLS (run_cell now honours it). artifacts/runpod/b200-dc/
+
+### FVID · 2026-09-27 · FVID-2026-09-27-ltx-nvfp4-ffn-cublaslt
+- Trigger: `FASTVIDEO_NVFP4` dequantized to bf16 at load (no speedup); our scalar W4A4 kernel was 38x slower than bf16; sol-engine runs TE's NVFP4 GEMM on the LTX video FFN (`nvfp4_ffn.py`)
+- Options: oxide Tile-IR cubins (1.4-2.3x bf16 at the FFN shapes); cuBLASLt block-scaled FP4 (`VEC16_UE4M3`); a hand-written CUTLASS-style kernel; load sol-engine's pre-quantized RTX5090 checkpoint
+- Decision: **cuBLASLt block-scaled FP4 on the LTX-2 video FFN only** (`wan/nvfp4_linear.rs`): weights quantized at load and activations per call with the TE `static_6` rule straight into cuBLASLt's layout (scales pre-swizzled, rows padded to 16), GELU fused into the down projection's quantizer, alpha on the device (pointer mode device), bias epilogue, RHT / SR off, bf16 fallback below sm_100 or for `mse`. An LTX process takes `FASTVIDEO_NVFP4` as this scope only (LongLive dequant / K/V path off there). Profile `ltx2/ltx25_distill_sol_nvfp4`, default off. Pre-quantized checkpoint not loaded: it is not on `fv-weights-h3-ltx-hy`.
+- Reason: RTX PRO 6000 cuBLASLt NVFP4 GEMM 3.5-4.0x bf16 (1.48-1.66 PFLOPS) vs oxide 1.4-2.3x; whole linear incl. activation quantize 2.7-3.2x the bf16 linear; codes / scales bit-identical to the host TE reference, GEMM at bf16-rounding distance from the exact dequantized math
+- Reversibility: cheap — profile / env opt-in; bf16 path unchanged when off
+- Executed by: Executor
+- ADR: none
+- Verification: **kernels pass** (`fv-gpucheck kernels`, groups `nvfp4_gemm` / `nvfp4_linear`, runs `36ce5a2-09271149`, `600c38f-09271221`): operand quantizer 0 mismatches (plain, GELU), linear rel_l2 1.66e-3 vs exact, 37.8 dB vs bf16 at the FFN up shape. Generations (`runpod-matrix.sh precision`, `FV_PRECISION_ARM=ltx-nvfp4`, run `51adbb3-09271342`, RTX PRO 6000, warm, Sol stage 2): 4k5s denoise 125.7 -> 110.7 s (1.135x; stage 1 45.8 -> 40.1, stage 2 79.9 -> 70.6), total 209.9 -> 186.5 s, peak 55.2 -> 46.6 GiB, LPIPS 0.193, PSNR 19.1 dB, sharpness 1.098 -> gate **fail** (quantitative_quality, sharpness > 1.08); 1080p20s denoise 118.4 -> 105.5 s (1.122x; stage 1 43.2 -> 38.2, stage 2 75.2 -> 67.2), total 195.0 -> 183.3 s, peak 54.9 -> 46.3 GiB, LPIPS 0.254, PSNR 18.3 dB, sharpness 0.994 -> gate **pass**. Stays default off. Down-projection linear incl. GELU 2.24-2.34x bf16 (run `8f12d44-09271258`). Fix found by the first generation: the LTX-2.5 video FFN has no bias (562ec95).
+
+### FVID · 2026-09-27 · FVID-2026-09-27-attention-datacenter
+- Trigger: Sol-H3 on B200 gained only 1.30x over RTX PRO 6000 (cuBLAS / cuDNN parts ~2x): every attention kernel is mma.sync; asked for tcgen05 / TMEM / TMA (sm_100) and wgmma / TMA (sm_90) kernels, dense first, then Sol, VSA, block-causal
+- Options: hand-written tcgen05 + TMEM FA4-style kernel in a new file with arch-specific cubins; CUTLASS / CuTe C++ (new dependency, not NVRTC-able); cuDNN SDPA only (binding still rejects the graph, other agent's work); keep mma.sync on B200
+- Decision: new `attn_dc.cu` (separate module; build.rs compiles it for sm_90a and sm_100a only; loaded only on 9.0 / 10.0), `FlashKernel::Dc` / seam value `dc`; `auto` takes it on 10.0 only (sm_90 wgmma kernel built but unmeasured -> opt-in); `FASTVIDEO_FLASH_KERNEL=v2` restores mma.sync; sm_120 path unchanged. Sol / VSA / block-causal datacenter kernels not started
+- Reason: B200 `attn_dc_bench` (pod-built harness): dc100 passes all 13 parity cases (vs flash_mma_fwd2 rel L2 <= 7.7e-4, error vs f64 equal to V2's, bf16 out = RNE(f32 out), component probes exact) and runs 1092 / 964 / 1102 / 1109 TFLOPS at H3 768p / LTX 512p / 1080p20s / 4K (V2: 372 / 347 / 374 / 374; cuDNN SDPA 1490 / 1350 / 1401 / 1405; the N=64 P.V variant ~8% slower). Runpod balance fell to ~$10 (other agents' pods at $17-24/hr) and the coordinator froze pod creation, so the H100 run, the Rust-path `attn_dc` group, and the B200 generation check did not run
+- Reversibility: cheap (env / profile seam; old kernels kept; module isolated)
+- Executed by: Executor
+- ADR: none
+- Verification: B200 pod 3dxiud5gyc8hnr (secure $6.79/hr, 12:18-12:36Z, ~$2.0, deleted): harness parity + bench, `bench_attn.py` (torch 2.13 cuDNN, sol-engine 6c2f582 sm100 Sol: tau 1.0 15.3 ms H3 768p, 87.8 ms 1080p20s, 95.7 ms 4K). Host: `cargo check` cuda features, techniques / attn unit tests green. Pending on hardware: `fv-gpucheck kernels --groups attn_dc,attn_bench` on B200 and H100 (`RUNPOD_NO_VOLUME=1 FV_EXTRA_ENV=FV_KERNEL_GROUPS=attn_dc,attn_bench runpod-http.sh kernels <sha>`), dc90 parity / timing (`UP_STEPS=bench:attn_dc bench:attn`), FastH3 8-step + Sol-H3 on B200
+  - Results: artifacts/runpod/upstream/attn-dc-b200/
+
 ### FVID · 2026-09-26 · FVID-2026-09-26-attention-phase3b
 - Trigger: LTX-2.5 1080p 20 s Sol stage 2 1.15x slower than sol-engine; dense flash the largest H3 kernel; VSA 1.34x vs FastVideo's 1.49x
 - Options: warp-specialised Sol + KV splits (as asked); mirror sol-engine's sm120 kernel (`sol_attn/sm120/mainloop.py`: 4 MMA warps, warp 0 issues TMA, STAGES=1, kv_splits=1 — splits are sm90-only, `interface.py:114-116`); cuDNN fused SDPA for dense; FA2-style 128-query dense; smaller VSA smem

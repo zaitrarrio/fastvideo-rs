@@ -1,0 +1,29 @@
+[package]
+name = "fastvideo-webrtc"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "fv-serve WebRTC: str0m peer host (UDP mux, ICE-TCP), data channels, pre-encoded writers, WHIP client."
+
+[dependencies]
+fastvideo-protocol.workspace = true
+fastvideo-media.workspace = true
+bytes.workspace = true
+thiserror.workspace = true
+tokio = { workspace = true, features = ["sync", "net", "time"] }
+tracing.workspace = true
+url.workspace = true
+
+str0m = { workspace = true, optional = true }
+reqwest = { workspace = true, optional = true }
+
+[features]
+default = []
+# The str0m peer host (pure Rust, rust-crypto provider).
+str0m = ["dep:str0m"]
+# WHIP publisher client (HTTP via reqwest).
+whip = ["dep:reqwest"]
+
+[lints]
+workspace = true

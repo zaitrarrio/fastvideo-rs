@@ -140,7 +140,7 @@ pub struct OxideBackend;
 pub struct CudnnBackend;
 pub struct CublasBackend;
 
-static NVCC: [KernelImpl; 12] = [
+static NVCC: [KernelImpl; 13] = [
     k(
         KernelOp::DenseAttention,
         "v1",
@@ -154,6 +154,14 @@ static NVCC: [KernelImpl; 12] = [
         "v2",
         80,
         "flash_mma_fwd2: 128-query CTAs, double-buffered K/V (bit-identical to v1)",
+    ),
+    k(
+        KernelOp::DenseAttention,
+        "dc",
+        "dc",
+        90,
+        "attn_dc.cu: tcgen05 + TMEM (sm_100) / wgmma (sm_90), TMA, warp-specialised, d=128 \
+         (the auto kernel on 9.0 / 10.0)",
     ),
     k(KernelOp::SolAttention, "v1", "v1", 80, "sol_mma_fwd"),
     k(KernelOp::SolAttention, "x4", "x4", 80, "sol_mma_fwd_x4"),
@@ -249,6 +257,14 @@ impl KernelBackend for NvccBackend {
     }
     fn kernels(&self) -> &'static [KernelImpl] {
         &NVCC
+    }
+    /// The datacenter attention kernels are arch-specific cubins (sm_90a,
+    /// sm_100a): they run on exactly 9.0 and 10.0, not on later SMs.
+    fn available(&self, k: &KernelImpl, sm: u32) -> bool {
+        if k.id == "dc" {
+            return sm == 90 || sm == 100;
+        }
+        sm >= k.min_sm
     }
 }
 

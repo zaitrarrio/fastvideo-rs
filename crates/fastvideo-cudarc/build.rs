@@ -31,6 +31,10 @@ use std::process::Command;
 const SRC: &str = "src/wan/kernels.cu";
 /// The FP8 attention module (`wan::attn_fp8`): its own cubins, sm_89 and newer.
 const SRC_FP8: &str = "src/wan/attn_fp8.cu";
+/// Datacenter attention kernels (tcgen05 / wgmma): arch-specific targets only.
+const DC_SRC: &str = "src/wan/attn_dc.cu";
+/// (SM in FV_CUBIN_SMS, nvcc arch) pairs attn_dc.cu is built for.
+const DC_ARCHS: &[(u32, &str)] = &[(90, "sm_90a"), (100, "sm_100a")];
 const DEFAULT_SMS: &str = "75,80,86,89,90,100,120";
 
 fn find_nvcc() -> Option<PathBuf> {
@@ -144,10 +148,13 @@ fn oxide_table(rows: &[OxideRow]) -> String {
     format!("pub static OXIDE_AOT: &[OxideCubin] = &[\n{entries}];\n")
 }
 
-fn write_aot(table: &Path, nvcc_entries: &str, oxide: &str) {
+fn write_aot(table: &Path, nvcc_entries: &str, oxide: &str, dc_entries: &str) {
     fs::write(
         table,
-        format!("pub static AOT: &[AotKernel] = &[\n{nvcc_entries}];\n{oxide}"),
+        format!(
+            "pub static AOT: &[AotKernel] = &[\n{nvcc_entries}];\n{oxide}\
+             pub static DC_AOT: &[(u32, &[u8])] = &[\n{dc_entries}];\n"
+        ),
     )
     .expect("write aot.rs");
 }
@@ -155,6 +162,7 @@ fn write_aot(table: &Path, nvcc_entries: &str, oxide: &str) {
 fn main() {
     println!("cargo:rerun-if-changed={SRC}");
     println!("cargo:rerun-if-changed={SRC_FP8}");
+    println!("cargo:rerun-if-changed={DC_SRC}");
     println!("cargo:rerun-if-changed=build.rs");
     println!("cargo:rerun-if-env-changed=NVCC");
     println!("cargo:rerun-if-env-changed=FV_CUBIN_SMS");
@@ -187,7 +195,7 @@ fn main() {
             println!("cargo:warning=fastvideo-cudarc: no nvcc found; kernels will be NVRTC-compiled at run time (set NVCC=... for ahead-of-time cubins)");
         }
         write_fp8(&fp8_table, "");
-        write_aot(&table, "", &oxide);
+        write_aot(&table, "", &oxide, "");
         return;
     };
 
@@ -240,7 +248,38 @@ fn main() {
             ptx.display()
         ));
     }
-    write_aot(&table, &entries, &oxide);
+    // attn_dc.cu: one cubin per arch-specific target whose SM is listed. No
+    // PTX: sm_90a / sm_100a code runs on exactly that SM, so there is nothing
+    // to fall forward to.
+    let mut dc_entries = String::new();
+    for &(sm, arch) in DC_ARCHS.iter().filter(|(sm, _)| sms.contains(sm)) {
+        let cubin = out.join(format!("attn_dc_{arch}.cubin"));
+        let status = Command::new(&nvcc)
+            .args([
+                "-cubin",
+                "-arch",
+                arch,
+                "-O3",
+                "--fmad=true",
+                "--prec-div=true",
+                "--prec-sqrt=true",
+                "--ftz=false",
+                "-o",
+            ])
+            .arg(&cubin)
+            .arg(DC_SRC)
+            .status()
+            .unwrap_or_else(|e| panic!("running {}: {e}", nvcc.display()));
+        assert!(
+            status.success(),
+            "nvcc -cubin -arch={arch} failed for {DC_SRC}"
+        );
+        dc_entries.push_str(&format!(
+            "    ({sm}, include_bytes!({:?})),\n",
+            cubin.display()
+        ));
+    }
+    write_aot(&table, &entries, &oxide, &dc_entries);
     write_fp8(&fp8_table, &fp8_entries(&nvcc, &out, &sms));
     println!(
         "cargo:warning=fastvideo-cudarc: embedded cubins for sm {:?} via {}",

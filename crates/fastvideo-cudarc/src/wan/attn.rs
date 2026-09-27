@@ -148,9 +148,13 @@ pub enum FlashKernel {
     /// cuDNN's fused attention engine (`cudnn_sdpa`), bf16 output only;
     /// V2 whenever cuDNN offers no engine or the caller wants f32 out.
     Cudnn,
+    /// `attn_dc.cu` (d = 128 on 9.0 / 10.0): tcgen05 + TMEM on B200, wgmma
+    /// on H100 / H200, TMA-fed and warp-specialised; V2 anywhere else.
+    Dc,
 }
 
-/// `FASTVIDEO_FLASH_KERNEL=v1|v2|cudnn|auto`. `auto` takes V2 when its
+/// `FASTVIDEO_FLASH_KERNEL=v1|v2|cudnn|dc|auto`. `auto` takes Dc on a 9.0 / 10.0
+/// device (d = 128; other head dims fall to V2), else V2 when its
 /// 128-query grid fills the GPU for many waves ([`flash_v2_default`] and
 /// [`flash_v2_fills`]), V1 otherwise (at LTX 768x512, 6 144 tokens x 32
 /// heads, V2's one-CTA-per-SM tail costs 2%).
@@ -161,13 +165,34 @@ pub fn flash_kernel_choice() -> FlashKernel {
 /// [`flash_kernel_choice`] for a `bh` x `sq` grid on `sms` SMs.
 pub fn flash_kernel_for(sq: usize, bh: usize, sms: usize) -> FlashKernel {
     // The kernel seam (`[kernels] dense_attention`, else `FASTVIDEO_FLASH_KERNEL`).
-    match fastvideo_models::techniques::kernels::choice(fastvideo_models::techniques::kernels::KernelOp::DenseAttention).as_str() {
+    match fastvideo_models::techniques::kernels::choice(
+        fastvideo_models::techniques::kernels::KernelOp::DenseAttention,
+    )
+    .as_str()
+    {
         "v1" => FlashKernel::V1,
         "v2" => FlashKernel::V2,
         "cudnn" => FlashKernel::Cudnn,
+        "dc" => FlashKernel::Dc,
+        // auto on a 9.0 / 10.0 device: the datacenter kernel (sm_120 and
+        // older keep the choice below; `v2` / `v1` are the escape hatch).
+        _ if dc_default() => FlashKernel::Dc,
         _ if flash_v2_default() && flash_v2_fills(sq, bh, sms) => FlashKernel::V2,
         _ => FlashKernel::V1,
     }
+}
+
+/// Whether `auto` takes [`FlashKernel::Dc`]: the global device is 9.0 or 10.0
+/// and its attn_dc module loaded (d = 128; the caller falls to V2 otherwise).
+/// Measured: B200 1.15 PFLOPS vs V2's 0.37, H100 0.62-0.65 vs 0.32-0.34.
+#[cfg(feature = "cuda")]
+pub fn dc_default() -> bool {
+    super::attn_dc::dense().is_some()
+}
+
+#[cfg(not(feature = "cuda"))]
+pub fn dc_default() -> bool {
+    false
 }
 
 /// Whether V2's grid (one 256-thread CTA per SM) is at least 16 waves.
@@ -241,8 +266,8 @@ pub fn device_mma_sdpa_with(
     );
     let n = bh * sq * d;
     if kernel == FlashKernel::Cudnn && out_bf16 {
-        let mut out = unsafe { dev.stream.alloc::<half::bf16>(n) }
-            .map_err(|e| msg(e.to_string()))?;
+        let mut out =
+            unsafe { dev.stream.alloc::<half::bf16>(n) }.map_err(|e| msg(e.to_string()))?;
         if super::cudnn_sdpa::sdpa_bf16(&qb, &kb, &vb, &mut out, bh, sq, sk, d, scale)? {
             return Ok(Some(CudaTensor::from_device_slice_bf16(
                 out,
@@ -250,7 +275,26 @@ pub fn device_mma_sdpa_with(
             )?));
         }
     }
-    let kernel = if kernel == FlashKernel::Cudnn {
+    if kernel == FlashKernel::Dc {
+        if out_bf16 {
+            let mut out =
+                unsafe { dev.stream.alloc::<half::bf16>(n) }.map_err(|e| msg(e.to_string()))?;
+            let dout = super::attn_dc::DcOut::Bf16(&mut out);
+            if super::attn_dc::dense_fwd(&qb, &kb, &vb, dout, bh, sq, sk, d, sl2)? {
+                return Ok(Some(CudaTensor::from_device_slice_bf16(
+                    out,
+                    vec![b, h, sq, d],
+                )?));
+            }
+        } else {
+            let mut out = super::ops::alloc(n)?;
+            let dout = super::attn_dc::DcOut::F32(&mut out);
+            if super::attn_dc::dense_fwd(&qb, &kb, &vb, dout, bh, sq, sk, d, sl2)? {
+                return Ok(Some(CudaTensor::from_device_slice(out, vec![b, h, sq, d])?));
+            }
+        }
+    }
+    let kernel = if matches!(kernel, FlashKernel::Cudnn | FlashKernel::Dc) {
         FlashKernel::V2
     } else {
         kernel
@@ -269,7 +313,7 @@ pub fn device_mma_sdpa_with(
                 shared_mem_bytes: 0,
             },
         ),
-        FlashKernel::V2 | FlashKernel::Cudnn => {
+        FlashKernel::V2 | FlashKernel::Cudnn | FlashKernel::Dc => {
             let func = if d == 64 {
                 &dev.kernels.flash_mma_fwd2_d64
             } else {
@@ -326,26 +370,27 @@ pub fn device_mma_sdpa(
 }
 
 /// Wan's block-causal temporal mask as a kernel parameter rather than an
-/// `[S, S]` additive tensor: query `q` sees key `k` iff
-/// `frame(k) <= frame(q)` (`frame(i) = i / frame_tokens`), within `window`
-/// frames when `window > 0`, or `frame(k) < sink`. The same predicate as
-/// `fastvideo_models::wan::causal_temporal_mask`.
+/// `[S, S]` additive tensor (FastVideo `CausalWanTransformer3DModel.
+/// _prepare_blockwise_causal_attn_mask` when the window is whole blocks):
+/// query `q` sees key `k` iff `block(k) <= block(q)` (`block(i) = i /
+/// block_tokens`, `block_tokens = num_frames_per_block * frame tokens`),
+/// among the last `window` blocks counting `q`'s own when `window > 0`, or
+/// `block(k) < sink`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct BlockCausal {
-    pub frame_tokens: usize,
+    pub block_tokens: usize,
     pub window: usize,
     pub sink: usize,
 }
 
 impl BlockCausal {
     pub fn allows(&self, q: usize, k: usize) -> bool {
-        let ft = self.frame_tokens.max(1);
-        let (tq, tk) = (q / ft, k / ft);
-        (tk <= tq && (self.window == 0 || tq - tk <= self.window)) || tk < self.sink
+        let bt = self.block_tokens.max(1);
+        let (tq, tk) = (q / bt, k / bt);
+        (tk <= tq && (self.window == 0 || tq - tk < self.window)) || tk < self.sink
     }
 
-    /// The additive `[sq, sk]` mask (0 visible, `-1e9` masked), as
-    /// `causal_temporal_mask` builds it.
+    /// The additive `[sq, sk]` mask (0 visible, `-1e9` masked).
     pub fn dense_mask(&self, sq: usize, sk: usize) -> Vec<f32> {
         let mut m = vec![0.0f32; sq * sk];
         for q in 0..sq {
@@ -357,6 +402,29 @@ impl BlockCausal {
         }
         m
     }
+}
+
+/// The [`BlockCausal`] of a causal Wan config over `frame_tokens` tokens per
+/// latent frame, when FastVideo's token-granular window
+/// (`local_attn_size * frame_tokens` keys back from the end of the query's
+/// block) covers whole blocks; `None` otherwise (the caller builds the dense
+/// mask with `causal_temporal_mask`). FastVideo's full-sequence mask has no
+/// sink: `sink_size` only keeps frames when the inference KV cache rolls.
+pub fn block_causal_for(
+    cfg: &fastvideo_models::wan::WanVideoArchConfig,
+    frame_tokens: usize,
+) -> Option<BlockCausal> {
+    let fpb = cfg.num_frames_per_block.max(1);
+    let window = match usize::try_from(cfg.local_attn_size) {
+        Err(_) => 0,
+        Ok(l) if l > 0 && l % fpb == 0 => l / fpb,
+        Ok(_) => return None,
+    };
+    Some(BlockCausal {
+        block_tokens: fpb * frame_tokens,
+        window,
+        sink: 0,
+    })
 }
 
 /// [`device_mma_sdpa`] under a [`BlockCausal`] mask
@@ -380,10 +448,10 @@ pub fn device_mma_sdpa_causal(
     };
     let fits = |x: usize| x <= i32::MAX as usize;
     if !mma_sdpa_supported(b, h, sq, sk, d, dev.sm_major)
-        || mask.frame_tokens == 0
+        || mask.block_tokens == 0
         || !fits(mask.window)
         || !fits(mask.sink)
-        || !fits(sq.max(sk) + mask.frame_tokens)
+        || !fits(sq.max(sk) + mask.block_tokens)
     {
         return Ok(None);
     }
@@ -397,8 +465,8 @@ pub fn device_mma_sdpa_causal(
     super::log::info_once(
         &ONCE,
         format_args!(
-            "sdpa: block-causal mma B={b} H={h} Sq={sq} Sk={sk} D={d} frame={} window={} sink={}",
-            mask.frame_tokens, mask.window, mask.sink
+            "sdpa: block-causal mma B={b} H={h} Sq={sq} Sk={sk} D={d} block={} window={} sink={}",
+            mask.block_tokens, mask.window, mask.sink
         ),
     );
     let func = if d == 64 {
@@ -414,7 +482,11 @@ pub fn device_mma_sdpa_causal(
         shared_mem_bytes: shared,
     };
     let (sq_i, sk_i) = (sq as i32, sk as i32);
-    let (ft, win, sink) = (mask.frame_tokens as i32, mask.window as i32, mask.sink as i32);
+    let (ft, win, sink) = (
+        mask.block_tokens as i32,
+        mask.window as i32,
+        mask.sink as i32,
+    );
     let err = |e: cudarc::driver::DriverError| msg(e.to_string());
     let launch_err = |e: super::device::DeviceError| msg(e.to_string());
     let n = bh * sq * d;
@@ -425,7 +497,10 @@ pub fn device_mma_sdpa_causal(
         super::kernels::launch!(dev.stream, func, cfg;
             &*qb, &*kb, &*vb, &mut dummy, &mut out, &is_bf16, &sq_i, &sk_i, &sl2, &ft, &win, &sink)
         .map_err(launch_err)?;
-        Ok(Some(CudaTensor::from_device_slice_bf16(out, vec![b, h, sq, d])?))
+        Ok(Some(CudaTensor::from_device_slice_bf16(
+            out,
+            vec![b, h, sq, d],
+        )?))
     } else {
         let mut out = super::ops::alloc(n)?;
         let mut dummy = unsafe { dev.stream.alloc::<half::bf16>(1) }.map_err(err)?;
@@ -690,31 +765,39 @@ mod tests {
     #[test]
     fn block_causal_is_the_models_temporal_mask() {
         use fastvideo_models::wan::{causal_temporal_mask, WanVideoArchConfig};
-        for (window, sink) in [(-1i32, 0usize), (21, 0), (1, 1), (2, 0), (0, 2)] {
+        // Windows of whole blocks (and none): the kernel's predicate is
+        // FastVideo's blockwise mask.
+        for (window, fpb) in [(-1i32, 3usize), (3, 3), (6, 3), (-1, 1), (1, 1), (2, 1)] {
             let mut cfg = WanVideoArchConfig::sf_wan_t2v_1_3b();
             cfg.local_attn_size = window;
-            cfg.sink_size = sink;
-            let (frames, h, w) = (6, 6, 4);
+            cfg.num_frames_per_block = fpb;
+            let (frames, h, w) = (9, 6, 4);
             let want = causal_temporal_mask(&cfg, frames, h, w);
-            let spec = BlockCausal {
-                frame_tokens: (h / 2) * (w / 2),
-                window: usize::try_from(window).unwrap_or(0),
-                sink,
-            };
-            let seq = frames * spec.frame_tokens;
-            assert_eq!(spec.dense_mask(seq, seq), want, "window {window} sink {sink}");
+            let spec = block_causal_for(&cfg, (h / 2) * (w / 2)).expect("whole blocks");
+            let seq = frames * (h / 2) * (w / 2);
+            assert_eq!(spec.dense_mask(seq, seq), want, "window {window} fpb {fpb}");
         }
+        let mut cfg = WanVideoArchConfig::sf_wan_t2v_1_3b();
+        cfg.local_attn_size = 4;
+        assert!(
+            block_causal_for(&cfg, 6).is_none(),
+            "4 frames is not whole 3-frame blocks"
+        );
     }
 
     #[test]
     fn host_block_causal_matches_the_masked_composed_sdpa() {
         let (b, h, s, d) = (1usize, 2usize, 24usize, 8usize);
-        let v = |n: usize, k: f32| (0..n).map(|i| ((i as f32 * k).sin() * 0.9)).collect::<Vec<_>>();
+        let v = |n: usize, k: f32| {
+            (0..n)
+                .map(|i| ((i as f32 * k).sin() * 0.9))
+                .collect::<Vec<_>>()
+        };
         let q = CudaTensor::from_vec(v(b * h * s * d, 0.37), vec![b, h, s, d]).unwrap();
         let k = CudaTensor::from_vec(v(b * h * s * d, 0.71), vec![b, h, s, d]).unwrap();
         let vv = CudaTensor::from_vec(v(b * h * s * d, 1.13), vec![b, h, s, d]).unwrap();
         let spec = BlockCausal {
-            frame_tokens: 5,
+            block_tokens: 5,
             window: 2,
             sink: 1,
         };
@@ -724,7 +807,7 @@ mod tests {
             super::super::nn::scaled_dot_product_attention_masked(&q, &k, &vv, None, Some(&mask))
                 .unwrap();
         assert_eq!(got.host_cow().unwrap(), want.host_cow().unwrap());
-        // The first query (frame 0) sees only frame 0: its output is the
+        // The first query (block 0) sees only block 0: its output is the
         // softmax-weighted mean of the first five value rows alone.
         let masked_first = got.host_cow().unwrap()[..d].to_vec();
         let dense = scaled_dot_product_attention(&q, &k, &vv, None).unwrap();

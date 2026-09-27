@@ -42,6 +42,8 @@ mod mode;
 mod model;
 #[cfg(feature = "cuda")]
 mod nvfp4_bench;
+#[cfg(feature = "cuda")]
+mod nvfp4_linear_check;
 mod oracle;
 mod parity;
 mod perf;
@@ -52,6 +54,7 @@ mod report;
 mod serve;
 mod st;
 mod taehv;
+mod wan_oracle;
 mod wan_stage;
 mod writer_bench;
 

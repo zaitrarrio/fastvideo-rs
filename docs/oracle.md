@@ -38,6 +38,13 @@ Names:
   `{video,audio}_{vel,x0}_stepNN`, `{video,audio}_stepNN`; `s2_upsampled` and
   `s2_entry_{video,audio}` (our stage-2 entry before the reference's is
   injected; `FASTVIDEO_INJECT_STAGE2=0` keeps ours).
+* SF-Wan 1.3B (FastVideo `WanCausalDMDPipeline`, target `sfwan13`):
+  `sf_latents_in`, `text_hidden`, `sf_noise_<k>` (injected), per causal block
+  `c` and step `i` `sf_c<c>_s<i>_{flow,x0}`, `sf_c<c>_out`, `sf_latents_out`,
+  and for block 0 step 0, block 1 step 0 and block 0's context pass
+  (`sf_c0_ctx_`) the block outputs `..._block_<l>` plus, for
+  `FASTVIDEO_DUMP_OPS` layers, the K window `..._b<l>_kwin` and the attention
+  output `..._b<l>_attn_x`. Results: docs/ports/wan.md "SF-Wan".
 
 The FastVideo side runs its strict eager route (`--profile strict
 --no-inference-torch-compile`): hooks inside fullgraph-compiled blocks would
@@ -269,3 +276,17 @@ its own fails it.
 Not compared: 4K (not run, to save budget; the 512p profiles show no
 resolution-specific hazard), and our upsampler in isolation (`s2_upsampled`,
 0.35, inherits stage 1's 0.34).
+
+## Wan 2.2 TI2V-5B modules (Diffusers)
+
+`scripts/gpu/upstream/oracle_wan22.py` (upstream step `oracle:wan22-ti2v`,
+47 s on H100) dumps Diffusers' `AutoencoderKLWan` encode and decode of a
+9-frame 704x1280 clip (fp32) and one bf16 `WanTransformer3DModel` forward
+per timestep layout (`t2v_`: one timestep; `i2v_`: frame 0 at 0), with the
+patch embedding, time projection and every block output. `fv-gpucheck wan
+oracle` (matrix cells `wan5b-oracle`, `wan5b-oracle-exact`) injects the same
+inputs into ours and `compare-dumps` diffs them. H100, `wan/cfce899-09271307`:
+VAE decode PSNR 65.7 dB (rel-L2 1.8e-3; exact f32 mode 1.4e-4), encode
+rel-L2 1.8e-3, DiT output rel-L2 2.7e-2 (t2v) / 1.5e-2 (i2v per-frame
+timesteps), from 3e-3 at the patch embedding and block 0 with no jump.
+Details in [ports/wan.md](ports/wan.md).

@@ -62,6 +62,9 @@ kernel_fns!(
     nvfp4_reconstruct,
     nvfp4_quantize_pack,
     nvfp4_scales_swizzle,
+    nvfp4_amax_bf16,
+    nvfp4_quant_bf16_sw,
+    nvfp4_alpha,
     fill_hash_uniform,
     ln_adaln_e_rope_half,
     pad_axis,
@@ -343,6 +346,11 @@ pub enum KernelOrigin {
     Ptx(u32),
     /// NVRTC at run time, for the given NVRTC arch.
     Nvrtc(&'static str),
+}
+
+/// The embedded attn_dc.cu cubin (sm_90a / sm_100a) for SM `sm`, if built.
+pub fn dc_cubin(sm: u32) -> Option<&'static [u8]> {
+    aot::DC_AOT.iter().find(|(s, _)| *s == sm).map(|(_, c)| *c)
 }
 
 /// SMs with an embedded cubin, for the compile gate to report.
