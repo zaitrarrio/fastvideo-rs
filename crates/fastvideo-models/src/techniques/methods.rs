@@ -140,7 +140,27 @@ impl SolAttn {
             "rtx" => Some(Self::rtx()),
             "engine" | "sol" => Some(Self::engine()),
             "spark" => Some(Self::spark()),
+            "ltx25_stage2" => Some(Self::ltx25_stage2()),
             _ => None,
+        }
+    }
+
+    /// LTX-2.5 stage 2 (`models/ltx25/RTX5090/attention.py`): the three
+    /// refine forwards, video self-attention layer 0 dense, layers 1..=47 at
+    /// tau 1.0 / 1.25 / 1.5; no sink.
+    pub fn ltx25_stage2() -> Self {
+        Self {
+            route: SparseRoute {
+                dense_steps: StepSet::empty(),
+                dense_layers: StepSet::first(1),
+                tau: Schedule::PerStep {
+                    values: [(0, 1.0), (1, 1.25), (2, 1.5)].into(),
+                    default: 1.0,
+                },
+            },
+            sink: SinkMode::None,
+            preset: Some("ltx25_stage2".into()),
+            ..Self::rtx()
         }
     }
 }
@@ -252,9 +272,13 @@ pub struct TinyDecoder {
 #[derive(Clone, Debug, PartialEq)]
 pub struct Offload {
     pub enabled: Schedule<bool>,
-    /// `auto` | `resident` | `streamed` | ... (`FASTVIDEO_DIT_OFFLOAD`).
-    pub dit: String,
+    /// `auto` | `resident` | `streamed` (`FASTVIDEO_DIT_OFFLOAD`); `None`
+    /// leaves the DiT policy alone.
+    pub dit: Option<String>,
     pub lookahead: Option<usize>,
+    /// LTX-2's whole-pipeline placement, the reference's `--offload`
+    /// (`none` | `cpu`, `FASTVIDEO_LTX_OFFLOAD`).
+    pub placement: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -505,14 +529,25 @@ impl Technique for TinyDecoder {
     fn enabled(&self) -> &Schedule<bool> {
         &self.enabled
     }
-    fn settings(&self) -> Vec<(&'static str, String)> {
-        let name = match self.kind {
-            TinyDecoderKind::Taeh3 => "FASTVIDEO_TAEH3_WEIGHTS",
-            TinyDecoderKind::Taehv => "FASTVIDEO_TAEHV_WEIGHTS",
-        };
-        self.weights.iter().map(|w| (name, w.clone())).collect()
-    }
     any!();
+}
+
+impl TinyDecoder {
+    /// The weights setting each pipeline reads: H3 `FASTVIDEO_TAEH3_WEIGHTS`,
+    /// LTX-2 `FASTVIDEO_LTX2_TAE_WEIGHTS`.
+    pub fn settings_for(&self, model: &str) -> Result<Vec<(&'static str, String)>, String> {
+        let name = match (self.kind, model) {
+            (TinyDecoderKind::Taeh3, "h3") => "FASTVIDEO_TAEH3_WEIGHTS",
+            (TinyDecoderKind::Taehv, "ltx2") => "FASTVIDEO_LTX2_TAE_WEIGHTS",
+            (kind, model) => {
+                return Err(format!(
+                    "{}: not a decoder for {model} ({kind:?})",
+                    self.name()
+                ))
+            }
+        };
+        Ok(self.weights.iter().map(|w| (name, w.clone())).collect())
+    }
 }
 
 impl Technique for Offload {
@@ -531,14 +566,28 @@ impl Technique for Offload {
     fn enabled(&self) -> &Schedule<bool> {
         &self.enabled
     }
-    fn settings(&self) -> Vec<(&'static str, String)> {
-        let mut v = vec![("FASTVIDEO_DIT_OFFLOAD", self.dit.clone())];
+    any!();
+}
+
+impl Offload {
+    pub fn settings_for(&self, model: &str) -> Result<Vec<(&'static str, String)>, String> {
+        let mut v = Vec::new();
+        if let Some(d) = &self.dit {
+            v.push(("FASTVIDEO_DIT_OFFLOAD", d.clone()));
+        }
         if let Some(n) = self.lookahead {
             v.push(("FASTVIDEO_DIT_OFFLOAD_LOOKAHEAD", n.to_string()));
         }
-        v
+        if let Some(p) = &self.placement {
+            if model != "ltx2" {
+                return Err(format!(
+                    "offload.placement is LTX-2's --offload; {model} takes offload.dit"
+                ));
+            }
+            v.push(("FASTVIDEO_LTX_OFFLOAD", p.clone()));
+        }
+        Ok(v)
     }
-    any!();
 }
 
 impl Technique for KernelFusion {
@@ -574,6 +623,12 @@ pub fn settings_for(
 ) -> Result<Vec<(&'static str, String)>, String> {
     if let Some(p) = t.downcast_ref::<LinearPrecision>() {
         return p.settings_for(spec.name);
+    }
+    if let Some(d) = t.downcast_ref::<TinyDecoder>() {
+        return d.settings_for(spec.name);
+    }
+    if let Some(o) = t.downcast_ref::<Offload>() {
+        return o.settings_for(spec.name);
     }
     Ok(t.settings())
 }

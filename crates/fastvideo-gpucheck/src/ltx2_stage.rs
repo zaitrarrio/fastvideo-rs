@@ -605,14 +605,26 @@ pub fn run(report: &mut Report, stage: &Stage) -> StageResult<()> {
             if *sol_stage2 && *dense_stage2 {
                 return Err(anyhow::anyhow!("--sol-stage2 and --dense-stage2 conflict").into());
             }
-            let sol_stage2 = *sol_stage2
-                || fastvideo_cudarc::ltx2::pipeline::default_sol_stage2(
+            // The stage-2 route: command line, else the technique profile,
+            // else the recipe default (docs/techniques.md).
+            let techniques = fastvideo_models::ltx2::techniques::Ltx2Techniques::from_process(
+                fastvideo_models::ltx2::techniques::Stage2Flags {
+                    sol: *sol_stage2,
+                    dense: *dense_stage2,
+                    pisa: *pisa_stage2,
+                },
+                fastvideo_cudarc::ltx2::pipeline::default_sol_stage2(
                     &model_version.config(),
                     *two_stage,
                     None,
-                    *pisa_stage2,
-                    *dense_stage2,
-                );
+                    false,
+                    false,
+                ),
+            )
+            .map_err(|e| anyhow::anyhow!(e))?;
+            eprintln!("ltx2 {}", techniques.describe());
+            let sol_stage2 = techniques.sol_stage2();
+            let pisa_stage2 = &techniques.pisa_stage2();
             let text_cache = if *no_text_cache {
                 None
             } else {

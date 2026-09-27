@@ -12,6 +12,7 @@ pub mod pisa;
 pub mod rope;
 pub mod schedule;
 pub mod sol;
+pub mod techniques;
 pub mod tiling;
 
 pub use config::{

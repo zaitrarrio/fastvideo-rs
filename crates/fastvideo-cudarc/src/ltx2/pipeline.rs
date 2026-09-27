@@ -1907,8 +1907,9 @@ pub struct PipelineOptions {
 
 /// [`PipelineOptions::tae`], else `FASTVIDEO_LTX2_TAE_WEIGHTS`.
 fn resolve_tae(explicit: Option<&Path>) -> Option<PathBuf> {
+    // `FASTVIDEO_LTX2_TAE_WEIGHTS`, or a profile's `[techniques.taehv] weights`.
     explicit.map(Path::to_path_buf).or_else(|| {
-        std::env::var_os("FASTVIDEO_LTX2_TAE_WEIGHTS")
+        fastvideo_models::techniques::settings::var("FASTVIDEO_LTX2_TAE_WEIGHTS")
             .filter(|v| !v.is_empty())
             .map(PathBuf::from)
     })
@@ -2055,6 +2056,26 @@ impl Ltx2Pipeline {
         } else {
             None
         };
+        let active = fastvideo_models::techniques::settings::active();
+        if let Some(path) = active.path.as_ref() {
+            crate::wan::log::info(format_args!("ltx2 technique profile: {}", path.display()));
+            for (k, v, source) in active.settings.iter() {
+                crate::wan::log::info(format_args!(
+                    "ltx2 technique setting {k}={v} ({source}{})",
+                    if std::env::var_os(k).is_some() { "; overridden by env" } else { "" }
+                ));
+            }
+            let has_taehv = active
+                .profile
+                .iter()
+                .flat_map(|p| p.techniques.iter())
+                .any(|t| t.name() == "taehv" && t.active_somewhere(fastvideo_models::techniques::HORIZON));
+            if has_taehv && resolve_tae(options.tae.as_deref()).is_none() {
+                return Err(err(
+                    "techniques.taehv: no weights (pass --ltx-tae-weights, set FASTVIDEO_LTX2_TAE_WEIGHTS, or give techniques.taehv.weights)",
+                ));
+            }
+        }
         let offload = LtxOffload::from_env_or(options.offload).map_err(err)?;
         let text_residency = resolve_text_for_offload(
             offload,

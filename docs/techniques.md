@@ -11,10 +11,11 @@ branch `sol-engine` @ `6c2f582`, the checkout `scripts/gpu/upstream/setup.sh`
 pins and the `fastvideo-rs-upstream-*` images carry). Citations below are
 `file:line` in that checkout.
 
-Code: `crates/fastvideo-models/src/techniques/` (host-side, no GPU), the H3
-adapter `crates/fastvideo-models/src/h3/techniques.rs`, and the readers in
-`fastvideo-cudarc` (`wan::envflag`, the kernel dispatch sites, the H3
-pipeline). Profiles: `profiles/<model>/*.toml`, also compiled into the
+Code: `crates/fastvideo-models/src/techniques/` (host-side, no GPU), the
+model adapters `crates/fastvideo-models/src/h3/techniques.rs` and
+`crates/fastvideo-models/src/ltx2/techniques.rs`, and the readers in
+`fastvideo-cudarc` (`wan::envflag`, the kernel dispatch sites, the H3 and
+LTX-2 pipelines). Profiles: `profiles/<model>/*.toml`, also compiled into the
 binaries.
 
 ## Using it
@@ -114,16 +115,16 @@ involving a load/build transform always clashes. A technique with
 | name | kind | parameters | legacy flag it replaces |
 |---|---|---|---|
 | `dense_attention` | build | — | `FASTVIDEO_H3_SOL_ATTN=off` on a Sol recipe; `--dense` |
-| `sol_attn` | build | `preset` (`rtx` / `engine` / `spark`), `tau`, `dense_steps`, `dense_layers`, `sink` (`text` / `prefix` / `suffix`), `thresh_type` (`diag`), `correctness_gate`, `force_dense` | `FASTVIDEO_H3_SOL_ATTN=rtx|engine|spark` |
+| `sol_attn` | build | `preset` (`rtx` / `engine` / `spark` / `ltx25_stage2`), `tau`, `dense_steps`, `dense_layers`, `sink` (`text` / `prefix` / `suffix`), `thresh_type` (`diag`), `correctness_gate`, `force_dense` | `FASTVIDEO_H3_SOL_ATTN=rtx|engine|spark`; LTX `--sol-stage2` |
 | `vsa` | build | `sparsity`, `group` | `FASTVIDEO_VSA_SPARSITY`, `FASTVIDEO_VSA_GROUP` |
-| `pisa` | build | `sparsity`, `dense_layers` | (LTX-2 stage 2) |
+| `pisa` | build | `sparsity`, `dense_layers` | LTX `--pisa-stage2` |
 | `teacache` | on_step | `threshold`, `retain_steps`, `cooldown_steps`, `num_forwards`, `coefficients` | `FASTVIDEO_H3_SOL_CACHE=teacache` |
 | `bf16_linears` / `mxfp8` / `w8a8` | load | — | `FASTVIDEO_H3_QUANT=off|mxfp8|w8a8` (H3) |
-| `fp8` | load | — | `FASTVIDEO_FP8=1` |
+| `fp8` | load | — | `FASTVIDEO_FP8=1` (W8A8 on every linear; LTX-2, Wan) |
 | `nvfp4` | load | `rule` (`static_6`, `static_4`, `mse`) | `FASTVIDEO_NVFP4` |
 | `bf16_activations` / `f32_activations` | load | — | `FASTVIDEO_BF16_ACT=1|0` |
-| `taeh3` / `taehv` | load | `weights` | `FASTVIDEO_TAEH3_WEIGHTS`, `FASTVIDEO_TAEHV_WEIGHTS`, `--taeh3-weights` |
-| `offload` | load | `dit` (`auto` / `resident` / `streamed`), `lookahead` | `FASTVIDEO_DIT_OFFLOAD`, `_LOOKAHEAD`, `--dit-offload` |
+| `taeh3` (H3) / `taehv` (LTX-2) | load | `weights` | `FASTVIDEO_TAEH3_WEIGHTS` / `--taeh3-weights`; `FASTVIDEO_LTX2_TAE_WEIGHTS` / `--ltx-tae-weights` |
+| `offload` | load | `dit` (`auto` / `resident` / `streamed`), `lookahead`, `placement` (LTX-2: `none` / `cpu`) | `FASTVIDEO_DIT_OFFLOAD`, `_LOOKAHEAD`, `--dit-offload`; `FASTVIDEO_LTX_OFFLOAD`, `--offload` |
 | `kernel_fusion` | build | `h3`, `ltx`, `split_rows` (bools) | `FASTVIDEO_H3_FUSE`, `FASTVIDEO_LTX_FUSE`, `FASTVIDEO_SPLIT_ROWS` |
 
 Every technique also takes `enabled`: `true` / `false`, a step set string
@@ -152,6 +153,7 @@ code at every step below 64 and every block:
 | RTX 5090 cell (`RTX5090/adapter.py:452-461`) | `10` | `2` | `1.0` | `text` |
 | Sol-H3 engine (`engine.py` `sparse_attention.install`) | `1` | `2` | `1.0` | `prefix` |
 | Spark Ref2VA draft (`stage1_ops/sol.py`) | `"0,4-"` | `1` | `{1 = 1.0, 2 = 1.25, 3 = 1.5}` | `suffix` |
+| LTX-2.5 stage 2 (`models/ltx25/RTX5090/attention.py`) | none | `1` | `{0 = 1.0, 1 = 1.25, 2 = 1.5}` | none |
 
 ## Profile format
 
@@ -226,8 +228,21 @@ techniques, parameters and settings as the shipped profile of the same name.
 | `h3/fasth3_4step_dense` | `4step-dense` | `dense_attention`, `mxfp8`, `bf16_activations` |
 | `h3/sol_h3_4step` | `sol-h3` | `dense_attention`, `mxfp8`, `bf16_activations` |
 | `h3/sol_h3_4step_engine` | `sol-h3` | `sol_attn` (engine, prefix sink), `mxfp8`, `bf16_activations` |
+| `ltx2/ltx25_rtx5090_distill_bf16` | (two-stage) | `sol_attn` (`ltx25_stage2`), `bf16_linears`, `offload.placement = "cpu"` |
+| `ltx2/ltx25_distill_sol` | (two-stage) | `sol_attn` (`ltx25_stage2`) |
+| `ltx2/ltx25_distill_dense` | (two-stage) | `dense_attention` |
+| `ltx2/ltx25_distill_sol_taehv` | (two-stage) | `sol_attn`, `taehv` |
+| `ltx2/ltx25_distill_sol_fp8` | (two-stage) | `sol_attn`, `fp8` |
 
-The `rtx5090_*` profiles are sol-engine's configs, which run the transformer
+`ltx2/ltx25_rtx5090_distill_bf16` is sol-engine's
+`models/ltx25/RTX5090/ltx25_rtx5090_distill_bf16.toml` (`LTX25_PIPELINE=bf16`:
+Sol stage 2 from `gpu_infer.py`, `--offload cpu` from `run_ltx25_gpu.sh`).
+Its `nvfp4` sibling needs the pre-quantized NVFP4 LTX-2.5 checkpoint path,
+which is not ported, so it has no profile. LTX workloads (`--workload 4k5s`,
+`--two-stage`, the resolution) stay on the command line; `[pipeline] recipe`
+is H3-only.
+
+The H3 `rtx5090_*` profiles are sol-engine's configs, which run the transformer
 in BF16. The rtx5090 matrix family runs the same recipe with this runtime's
 default, MXFP8 on sm_100+; with a profile, `FASTVIDEO_H3_QUANT=mxfp8` gives
 that precision back (the env var overrides the profile's `bf16_linears`).
@@ -274,11 +289,33 @@ outside `sol-h3-spark`, a `prefix` (engine) sink on Ref2VA, `vsa` on a recipe
 whose DiT has no compression gate, `taehv` on H3, and `taeh3` without
 weights are errors.
 
+## The LTX-2 adapter
+
+`fastvideo_models::ltx2::techniques::Ltx2Techniques::resolve` decides the
+stage-2 video self-attention route; precision, the tiny decoder and the
+placement reach the pipeline through their settings.
+
+| seam | command line (wins) | profile | default |
+|---|---|---|---|
+| stage-2 attention | `--sol-stage2` / `--dense-stage2` / `--pisa-stage2` | `sol_attn` (`ltx25_stage2`) / `dense_attention` / `pisa` | Sol on the 2.5 distilled two-stage 3-forward refine (`default_sol_stage2`) |
+| ffn precision | `FASTVIDEO_FP8` | `fp8` / `bf16_linears` | bf16 |
+| video decoder | `--ltx-tae-weights`, `FASTVIDEO_LTX2_TAE_WEIGHTS` | `taehv` (+ `weights`) | conv VAE |
+| placement / residency | `--offload`, `--dit-offload`, `FASTVIDEO_LTX_OFFLOAD`, `FASTVIDEO_DIT_OFFLOAD` | `offload.placement` / `.dit` | `none` / `auto` |
+
+The stage-2 kernels implement exactly the published routes
+(`ltx2::sol::route`, `ltx2::pisa::route`), so a profile's `sol_attn` / `pisa`
+must describe that route: a different one is refused rather than silently
+run as the published one. LTX-2 declares no step-cache capability, so
+`teacache` on an `ltx2` profile is a capability error; `taeh3` there, or
+`offload.placement` on H3, is an error too.
+
 ## Invariants and their tests
 
 | invariant | test |
 |---|---|
 | no profile = the legacy resolution, for every recipe x `FASTVIDEO_H3_SOL_ATTN` x `FASTVIDEO_H3_SOL_CACHE` x Ref2VA, including the error cases | `h3::techniques::tests::no_profile_is_the_legacy_resolution` |
+| LTX-2: no profile = `sol = flag \|\| default_sol_stage2(.., pisa, dense)`, `pisa = flag`, for every flag combination | `ltx2::techniques::tests::no_profile_is_the_legacy_resolution` |
+| the `ltx25_stage2` preset is the published stage-2 route at every forward and layer | `ltx2::techniques::tests::the_stage2_preset_is_the_published_route` |
 | a technique listed with `enabled = false` resolves exactly like not listing it, and installs no setting | `h3::techniques::tests::disabled_profile_techniques_are_the_baseline`, `techniques::tests::a_disabled_technique_is_not_in_the_plan_and_conflicts_with_nothing` |
 | the DSL routes equal the three hand-written clocks at every step and block; the sinks are equal | `h3::techniques::tests::technique_routes_equal_the_policy_routes_everywhere`, `technique_sinks_equal_the_policy_sinks` |
 | an inactive Sol route and a never-reusing TeaCache leave every output bit of a 3-step block-stack run unchanged (CPU) | `cudarc h3::transformer::tests::inactive_technique_seams_are_the_dense_forward_bit_for_bit` |
@@ -306,7 +343,7 @@ FV_FAMILY=techniques FV_EXTRA_ENV="FV_BASELINE_SHA=<pre-refactor sha7>" \
 
 Cells: FastH3 8-step 768p (MXFP8 default), FastH3 4-step VSA 768p, the H3
 fullopt route (`sol-h3-rtx` + TeaCache, 480p) and LTX-2.5 two-stage 512p with
-Sol stage 2 (`-base` / `-env` only until LTX has profiles).
+Sol stage 2 (`-prof`: `ltx2/ltx25_distill_sol`).
 
 ## Adding a technique
 

@@ -177,6 +177,25 @@ fn generate_ltx2(
                     .into(),
             ));
         }
+        // The stage-2 route: the flags, else the technique profile, else the
+        // recipe default (the same default_sol_stage2 inputs as before).
+        let stage2 = fastvideo_models::ltx2::techniques::Ltx2Techniques::from_process(
+            fastvideo_models::ltx2::techniques::Stage2Flags {
+                sol: opts.sol_stage2,
+                dense: opts.dense_stage2,
+                pisa: opts.pisa_stage2,
+            },
+            fastvideo_cudarc::ltx2::pipeline::default_sol_stage2(
+                &cfg,
+                opts.two_stage,
+                opts.refine_steps
+                    .map(|n| n as usize)
+                    .or(if hq { Some(3) } else { None }),
+                false,
+                false,
+            ),
+        )
+        .map_err(FastVideoError::Message)?;
         let request = Ltx2Request {
             prompt: opts.prompt,
             height: opts.height.map(|h| h as usize).unwrap_or(if hq {
@@ -222,17 +241,8 @@ fn generate_ltx2(
                 .refine_steps
                 .map(|n| n as usize)
                 .or(if hq { Some(3) } else { None }),
-            sol_stage2: opts.sol_stage2
-                || fastvideo_cudarc::ltx2::pipeline::default_sol_stage2(
-                    &cfg,
-                    opts.two_stage,
-                    opts.refine_steps
-                        .map(|n| n as usize)
-                        .or(if hq { Some(3) } else { None }),
-                    opts.pisa_stage2,
-                    opts.dense_stage2,
-                ),
-            pisa_stage2: opts.pisa_stage2,
+            sol_stage2: stage2.sol_stage2(),
+            pisa_stage2: stage2.pisa_stage2(),
             image_path: opts.image_path,
         };
         request

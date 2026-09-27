@@ -84,7 +84,7 @@ fn sol_attn(name: &str, t: &toml::Table) -> Result<Box<dyn Technique>, String> {
     let preset = p.string("preset")?;
     let mut sol = match preset.as_deref() {
         Some(n) => SolAttn::preset(n).ok_or_else(|| {
-            format!("techniques.{name}.preset = {n:?}: expected rtx|engine|spark")
+            format!("techniques.{name}.preset = {n:?}: expected rtx|engine|spark|ltx25_stage2")
         })?,
         // No preset: sol-engine's adapter defaults (`adapter.py:457-460`:
         // 10 dense steps; tau 1.0) with the RTX text sink.
@@ -226,13 +226,18 @@ fn tiny(name: &str, t: &toml::Table, kind: TinyDecoderKind) -> Result<Box<dyn Te
 fn offload(name: &str, t: &toml::Table) -> Result<Box<dyn Technique>, String> {
     let mut p = Params::new(name, t);
     let enabled = p.enabled()?;
-    let dit = p.string("dit")?.unwrap_or_else(|| "auto".into());
+    let dit = p.string("dit")?;
     let lookahead = p.usize("lookahead")?;
+    let placement = p.string("placement")?;
     p.finish()?;
+    if dit.is_none() && placement.is_none() {
+        return Err(format!("techniques.{name}: set dit and/or placement"));
+    }
     Ok(Box::new(Offload {
         enabled,
         dit,
         lookahead,
+        placement,
     }))
 }
 

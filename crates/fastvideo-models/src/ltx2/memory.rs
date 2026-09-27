@@ -587,9 +587,9 @@ impl LtxOffload {
         if let Some(m) = explicit {
             return Ok(m);
         }
-        match std::env::var(Self::ENV) {
-            Ok(v) => Self::parse(&v).map_err(|e| format!("{}: {e}", Self::ENV)),
-            Err(_) => Ok(Self::None),
+        match crate::techniques::settings::var(Self::ENV) {
+            Some(v) => Self::parse(&v).map_err(|e| format!("{}: {e}", Self::ENV)),
+            None => Ok(Self::None),
         }
     }
 

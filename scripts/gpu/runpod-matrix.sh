@@ -1113,7 +1113,7 @@ case "$FAMILY" in
     #   <cell>-base: the baseline binary (FV_BASELINE_SHA's runtime image,
     #                scripts/gpu/fetch-baseline.sh) with the legacy flags;
     #   <cell>-env:  this build, the same command line;
-    #   <cell>-prof: this build, the matching --techniques profile (H3 only).
+    #   <cell>-prof: this build, the matching --techniques profile.
     # compare-clips --off-identity: base vs env and base vs prof must be
     # byte-identical; benchmark.json carries the timings of each arm.
     # FV_TECH_CELLS narrows the cells (default: all four).
@@ -1183,16 +1183,20 @@ case "$FAMILY" in
         --h3-recipe sol-h3-rtx --height 480 --width 832
     fi
     if want ltx25-512p-sol; then
-      for arm in base env; do
-        bin="$BIN"
+      # The rtx5090 family's 512p Sol cell; -prof runs it from the
+      # ltx2/ltx25_distill_sol profile (Sol stage 2 from the profile).
+      for arm in base env prof; do
+        bin="$BIN"; extra=()
         [[ "$arm" == base ]] && bin="$BASE"
+        [[ "$arm" == prof ]] && extra=(--techniques ltx2/ltx25_distill_sol)
         gated_cell "ltx25-512p-sol-$arm" ltx25-two-stage \
-          "$bin" --mode fast ltx2 gen --model-version 2.5 \
+          "$bin" ${extra[@]+"${extra[@]}"} --mode fast ltx2 gen --model-version 2.5 \
             --weights "$W/ltx25" --dit "$W/ltx25" --height 512 --width 768 --num-frames 121 \
             --prompt "$PROMPT" --seed "$SEED" --two-stage --text streamed --warm \
             --clip "$RUNS/ltx25-512p-sol-$arm/frames"
       done
       compare_cells ltx25-512p-sol-base ltx25-512p-sol-env --off-identity
+      compare_cells ltx25-512p-sol-base ltx25-512p-sol-prof --off-identity
     fi
     for f in "$RUNS"/compare/compare-clips-*.json; do
       [[ -f "$f" ]] && log "$(basename "$f"): $(grep -oE '"(status|off_identity|max_abs_diff_uint8)": *[^,}]*' "$f" | tr '\n' ' ')"

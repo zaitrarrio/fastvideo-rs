@@ -1,0 +1,12 @@
+# LTX-2.5 distilled two-stage with a dense stage 2: the control arm
+# (`--dense-stage2`).
+
+[id]
+name = "ltx25_distill_dense"
+family = "ltx25"
+description = "LTX-2.5 distilled two-stage, dense stage 2."
+
+[pipeline]
+model = "ltx2"
+
+[techniques.dense_attention]
