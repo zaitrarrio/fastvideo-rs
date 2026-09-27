@@ -586,7 +586,7 @@ pub struct H3Pipeline {
     residency: Residency,
     /// Resident encoder, if any. `Auto` may release it before a denoise that
     /// needs its memory (see [`keep_auto_encoder`]); later prompts then stream.
-    text_encoder: std::sync::Mutex<Option<Box<dyn HiddenStateEncoder>>>,
+    text_encoder: std::sync::Mutex<Option<Box<dyn HiddenStateEncoder + Send>>>,
     /// The encoder choice was `Auto` (resolved at load), so it may be released.
     auto_text_encoder: bool,
     pub load_timings: H3LoadTimings,
@@ -766,7 +766,7 @@ impl H3Pipeline {
         let timer = Instant::now();
         let text_encoder = booking.track(
             crate::wan::ledger::TEXT_ENCODER,
-            || -> Result<Option<Box<dyn HiddenStateEncoder>>> {
+            || -> Result<Option<Box<dyn HiddenStateEncoder + Send>>> {
                 Ok(match options.text_encoder {
                     TextEncoderChoice::Recovered8b => {
                         let text_root = options.text_root.as_deref().unwrap_or(root);
@@ -1059,7 +1059,7 @@ impl H3Pipeline {
 
     /// Replace the text encoder (tests, or an encoder built elsewhere). It is
     /// consulted only on a conditioning-cache miss.
-    pub fn with_text_encoder(mut self, encoder: Box<dyn HiddenStateEncoder>) -> Self {
+    pub fn with_text_encoder(mut self, encoder: Box<dyn HiddenStateEncoder + Send>) -> Self {
         if !matches!(
             self.options.text_encoder,
             TextEncoderChoice::ResidentBf16
@@ -1302,7 +1302,7 @@ impl H3Pipeline {
                 | TextEncoderChoice::Recovered8b
         );
         let resident = match encoder_slot.as_deref() {
-            Some(encoder) if resident_choice => Some(encoder),
+            Some(encoder) if resident_choice => Some(encoder as &dyn HiddenStateEncoder),
             // An `Auto` encoder released before an earlier denoise: stream.
             None if resident_choice && !self.auto_text_encoder => {
                 return Err(msg(format!(
