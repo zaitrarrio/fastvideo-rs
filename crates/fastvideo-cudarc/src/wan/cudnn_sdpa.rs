@@ -611,6 +611,12 @@ fn plan_for(bh: usize, sq: usize, sk: usize, d: usize) -> Option<Arc<SdpaPlan>> 
     None
 }
 
+/// Whether [`sdpa_bf16`] would run cuDNN for this shape (builds and caches
+/// the plan on first use).
+pub fn has_plan(bh: usize, sq: usize, sk: usize, d: usize) -> bool {
+    plan_for(bh, sq, sk, d).is_some()
+}
+
 static LOGGED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 static FAILED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 

@@ -218,18 +218,78 @@ pub fn flash_v2_default() -> bool {
     true
 }
 
-/// Whether `auto` hands a bf16-output dense SDPA that V2 would run to
-/// cuDNN's unified SDPA node instead (V2 still runs when cuDNN has no plan):
-/// on sm_12x only. RTX PRO 6000, cuDNN 9.26, `attn3_bench`: 105.0 vs 108.4 ms
-/// at H3 768p, 658.8 vs 682.2 ms at LTX 1080p 20 s, 769.0 vs 759.9 ms at 4K 5 s
-/// (engine 11, heuristic mode A config 0). `FASTVIDEO_FLASH_KERNEL=v2`
-/// restores flash_mma_fwd2.
+/// Whether `auto` lets a bf16-output dense SDPA that V2 would run go to
+/// cuDNN's unified SDPA node instead, per shape ([`auto_cudnn_or_v2`]): on
+/// sm_12x only. RTX PRO 6000, cuDNN 9.26, `attn3_bench` (two pods): 104.8-105.0
+/// vs 108.4-109.1 ms at H3 768p, 658.8-659.8 vs 682.2-682.7 ms at LTX 1080p
+/// 20 s, but 766.6-769.0 vs 757.2-759.9 ms at 4K 5 s (engine 11, heuristic
+/// mode A config 0), hence the per-shape pick. `FASTVIDEO_FLASH_KERNEL=v2`
+/// (or `=cudnn`) fixes the kernel.
 pub fn cudnn_default(sm_major: i32) -> bool {
     CUDNN_DEFAULT_ON && sm_major == 12
 }
 
 /// Flipped only once a generation run has verified the cuDNN default.
 const CUDNN_DEFAULT_ON: bool = false;
+
+/// `auto` on sm_12x, bf16 out: the first call of each `(bh, sq, sk, d)`
+/// times cuDNN's plan (after one warm-up execution) against flash_mma_fwd2 on
+/// these very inputs and caches the faster; later calls run the winner. A
+/// shape cuDNN has no plan for is V2. The pick is logged once per shape.
+#[cfg(feature = "cuda")]
+fn auto_cudnn_or_v2(
+    q: &CudaTensor,
+    k: &CudaTensor,
+    v: &CudaTensor,
+    scale: Option<f32>,
+) -> Result<Option<CudaTensor>> {
+    use std::collections::HashMap;
+    use std::sync::{Mutex, OnceLock};
+    static PICKS: OnceLock<Mutex<HashMap<(usize, usize, usize, usize), bool>>> = OnceLock::new();
+    let Some((b, h, sq, sk, d)) = bhsd(q, k, v) else {
+        return device_mma_sdpa_with(q, k, v, scale, true, FlashKernel::V2);
+    };
+    let key = (b * h, sq, sk, d);
+    let known = PICKS
+        .get_or_init(|| Mutex::new(HashMap::new()))
+        .lock()
+        .expect("sdpa picks")
+        .get(&key)
+        .copied();
+    if let Some(cudnn) = known {
+        let kernel = if cudnn { FlashKernel::Cudnn } else { FlashKernel::V2 };
+        return device_mma_sdpa_with(q, k, v, scale, true, kernel);
+    }
+    let timed = |kernel| -> Result<(Option<CudaTensor>, f64)> {
+        super::device::synchronize().map_err(|e| msg(e.to_string()))?;
+        let t = std::time::Instant::now();
+        let out = device_mma_sdpa_with(q, k, v, scale, true, kernel)?;
+        super::device::synchronize().map_err(|e| msg(e.to_string()))?;
+        Ok((out, t.elapsed().as_secs_f64()))
+    };
+    let has_plan = super::cudnn_sdpa::has_plan(b * h, sq, sk, d);
+    let (out, pick) = if has_plan {
+        timed(FlashKernel::Cudnn)?; // warm-up (plan build, lazy module load)
+        let (oc, tc) = timed(FlashKernel::Cudnn)?;
+        let (o2, t2) = timed(FlashKernel::V2)?;
+        super::log::info(format_args!(
+            "sdpa auto (sm_12x): bh={} sq={sq} sk={sk} d={d}: cuDNN {:.2} ms, flash_mma_fwd2 {:.2} ms -> {}",
+            b * h,
+            tc * 1e3,
+            t2 * 1e3,
+            if tc < t2 { "cuDNN" } else { "flash_mma_fwd2" }
+        ));
+        if tc < t2 { (oc, true) } else { (o2, false) }
+    } else {
+        (device_mma_sdpa_with(q, k, v, scale, true, FlashKernel::V2)?, false)
+    };
+    PICKS
+        .get_or_init(|| Mutex::new(HashMap::new()))
+        .lock()
+        .expect("sdpa picks")
+        .insert(key, pick);
+    Ok(out)
+}
 
 /// Fused dense SDPA on tensor cores (`flash_mma_fwd_d{64,128}`): bf16 Q/K/V
 /// (cast once, RNE, when they are f32), f32 online softmax, bf16 P, f32
@@ -260,7 +320,7 @@ pub fn device_mma_sdpa(
                             fastvideo_models::techniques::kernels::KernelOp::DenseAttention,
                         ) == "auto" =>
                 {
-                    FlashKernel::Cudnn
+                    return auto_cudnn_or_v2(q, k, v, scale);
                 }
                 k => k,
             }
