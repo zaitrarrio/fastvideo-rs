@@ -4,7 +4,13 @@
 // FV_ADMIN_TOKEN, reads the generated admin token from its WARN banner, and
 // drives Chromium through: mint an API key on /console/admin, run
 // text-to-video, upload an image and run image-to-video, see video results,
-// the API snippets, the history, and the director's "not available" state.
+// the API snippets, the history, and a live director session over WebRTC
+// (start, 1344x768 video with one video and one audio track playing, a
+// second prompt applied, stop).
+//
+// No config file: the director's encoder is `auto`, which resolves to
+// OpenH264 on a machine without NVENC, so the binary must be built with
+// `encoders` (tests/console/run.sh builds `--features fake,encoders`).
 //
 //   FV_SERVE_BIN=target/debug/fv-serve node tests/console/smoke.cjs
 //
@@ -110,7 +116,7 @@ async function main() {
       await new Promise((r) => setTimeout(r, 100));
     }
 
-    browser = await chromium.launch();
+    browser = await chromium.launch({ args: ['--autoplay-policy=no-user-gesture-required'] });
     const context = await browser.newContext({ viewport: { width: 1280, height: 900 } });
     const page = await context.newPage();
     page.setDefaultTimeout(TIMEOUT);
@@ -202,13 +208,40 @@ async function main() {
     await page.click('#run');
     await page.waitForSelector('#run-msg.bad');
 
-    // Director: unavailable until the director ships (WP-14).
+    // Director: a live WebRTC session against the fake engine. The page
+    // probes the signalling routes (POST /wma/ice) on load.
+    const probed = page.waitForResponse((r) => new URL(r.url()).pathname === '/wma/ice');
     await page.click('[data-task="director"]');
     await page.waitForURL(/director$/);
-    await page.waitForSelector('#director-unavailable:not([hidden]), #director-state');
-    const unavailable = await page.isVisible('#director-unavailable');
-    await shot(page, '06-director');
-    step('director page renders (' + (unavailable ? 'streaming not available on this server yet' : 'signalling reachable') + ')');
+    await page.waitForSelector('#director-start');
+    const probe = await probed;
+    if (probe.status() !== 200) throw new Error('director: POST /wma/ice answered ' + probe.status() + ' (built without webrtc?)');
+    if (await page.isVisible('#director-unavailable')) throw new Error('director: shown as unavailable');
+    await page.click('#director-start');
+    await page.waitForFunction(() => document.querySelector('#director-state').textContent === 'streaming', null, { timeout: TIMEOUT });
+    await page.waitForFunction(() => {
+      const v = document.querySelector('#director-video');
+      return v && v.videoWidth > 0 && v.currentTime > 1;
+    }, null, { timeout: TIMEOUT });
+    const vinfo = await page.evaluate(() => {
+      const v = document.querySelector('#director-video');
+      return { w: v.videoWidth, h: v.videoHeight, audio: v.srcObject.getAudioTracks().length, video: v.srcObject.getVideoTracks().length };
+    });
+    if (vinfo.w !== 1344 || vinfo.h !== 768) throw new Error('director: expected 1344x768 video, got ' + JSON.stringify(vinfo));
+    if (vinfo.video !== 1 || vinfo.audio !== 1) throw new Error('director: expected one video and one audio track, got ' + JSON.stringify(vinfo));
+    step('director streaming: ' + vinfo.w + 'x' + vinfo.h + ', ' + vinfo.video + ' video + ' + vinfo.audio + ' audio track, playing');
+    await page.fill('#director-next', 'The keeper reaches the lamp room and looks out to sea.');
+    await page.click('#director-send');
+    await page.waitForFunction(
+      () => [...document.querySelectorAll('#director-timeline li')].some((li) => li.textContent.startsWith('v2') && /applied/.test(li.lastChild.textContent)),
+      null,
+      { timeout: TIMEOUT },
+    );
+    step('director: second prompt (v2) applied');
+    await shot(page, '06-director-streaming');
+    await page.click('#director-stop');
+    await page.waitForFunction(() => document.querySelector('#director-state').textContent === 'closed', null, { timeout: 30_000 });
+    step('director: stopped (state closed)');
 
     // Phone width: no horizontal scrolling.
     await page.setViewportSize({ width: 390, height: 844 });
