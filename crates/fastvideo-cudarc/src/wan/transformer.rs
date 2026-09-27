@@ -11,6 +11,7 @@ use fastvideo_models::wan::sol::{
 use fastvideo_models::wan::sol_cache::{A14bCacheController, A14bExpert};
 use fastvideo_models::wan::WanVideoArchConfig;
 
+use super::attn::BlockCausal;
 use super::fused::Rope;
 #[cfg(feature = "cuda")]
 use super::vsa::VsaCtx;
@@ -153,14 +154,36 @@ impl WanAttention {
         })
     }
 
+    /// q/k RMSNorm (+ RoPE) into BHSD: FastVideo's bf16 rounding points on
+    /// the bf16 path ([`super::fuse::qk_norm_rope`]), the f32 op otherwise.
+    fn qk(
+        &self,
+        proj: &CudaTensor,
+        col_off: usize,
+        weight: &CudaTensor,
+        rope: Option<Rope<'_>>,
+    ) -> Result<CudaTensor> {
+        let again = rope.as_ref().map(|r| Rope {
+            cos: r.cos,
+            sin: r.sin,
+        });
+        match super::fuse::qk_norm_rope(proj, col_off, self.heads, weight, again, self.eps)? {
+            Some(t) => Ok(t),
+            None => proj.qk_norm_rope_bhsd(col_off, self.heads, weight, rope, self.eps),
+        }
+    }
+
     fn attend(
         &self,
         q: &CudaTensor,
         k: &CudaTensor,
         v: &CudaTensor,
-        mask: Option<&CudaTensor>,
+        mask: Option<&BlockCausal>,
     ) -> Result<CudaTensor> {
-        let attn = nn::scaled_dot_product_attention_masked(q, k, v, None, mask)?;
+        let attn = match mask {
+            Some(m) => nn::sdpa_block_causal(q, k, v, None, *m)?,
+            None => nn::scaled_dot_product_attention_masked(q, k, v, None, None)?,
+        };
         self.to_out.forward(&attn.merge_heads()?)
     }
 
@@ -211,7 +234,7 @@ impl WanAttention {
         &self,
         hidden: &CudaTensor,
         rope: &(CudaTensor, CudaTensor),
-        mask: Option<&CudaTensor>,
+        mask: Option<&BlockCausal>,
         gate: Option<&Linear>,
         vsa: Option<&VsaCtx>,
         ar: Option<&super::ar_cache::ArFrame>,
@@ -225,8 +248,8 @@ impl WanAttention {
                 sin: &rope.1,
             })
         };
-        let q = qkv.qk_norm_rope_bhsd(0, self.heads, &self.norm_q, rope(), self.eps)?;
-        let k = qkv.qk_norm_rope_bhsd(dim, self.heads, &self.norm_k, rope(), self.eps)?;
+        let q = self.qk(&qkv, 0, &self.norm_q, rope())?;
+        let k = self.qk(&qkv, dim, &self.norm_k, rope())?;
         let v = qkv.split_heads_bhsd(2 * dim, self.heads, self.dim_head)?;
         // Causal + NVFP4 writes each frame into the rolling cache and attends
         // the dequantized span. RoPE is already on Q/K. AdaLN stays on the
@@ -329,15 +352,9 @@ impl WanAttention {
             .kv
             .as_ref()
             .ok_or_else(|| TensorError::Message("cross attention without kv".into()))?;
-        let q = self.q_or_qkv.forward(hidden)?.qk_norm_rope_bhsd(
-            0,
-            self.heads,
-            &self.norm_q,
-            None,
-            self.eps,
-        )?;
+        let q = self.qk(&self.q_or_qkv.forward(hidden)?, 0, &self.norm_q, None)?;
         let kv = kv_proj.forward(encoder)?;
-        let mut k = kv.qk_norm_rope_bhsd(0, self.heads, &self.norm_k, None, self.eps)?;
+        let mut k = self.qk(&kv, 0, &self.norm_k, None)?;
         let mut v = kv.split_heads_bhsd(dim, self.heads, self.dim_head)?;
         if let (Some(add_k), Some(add_v), Some(img)) = (&self.add_k, &self.add_v, image) {
             let ik = add_k
@@ -611,6 +628,45 @@ impl WanBlock {
         })
     }
 
+    /// A reference FP8 recipe on the block's attention and FFN linears — the
+    /// ones FastVideo's `fp8_config._FP8_SUFFIXES` tag for Wan: `to_q`,
+    /// `to_k`, `to_v`, `to_out` of both attentions and `ffn.fc_in/fc_out`.
+    /// W8A8 keeps one tensor scale per original linear (the fused QKV / KV
+    /// stacks are sections); MXFP8 scales per 32 values and takes each stack
+    /// whole. The I2V image K/V and the VSA gate stay bf16. A linear that
+    /// already carries another recipe (`FASTVIDEO_FP8`, NVFP4, affine, LoRA)
+    /// is left as it is.
+    fn quantize(&mut self, kind: super::quant::QuantKind, cfg: &WanVideoArchConfig) -> Result<()> {
+        use super::quant::{QuantKind, Section};
+        let dim = cfg.hidden_size();
+        let q = |rows| Section {
+            rows,
+            quantized: true,
+        };
+        let stack = |n: usize| match kind {
+            QuantKind::W8A8 => (0..n).map(|_| q(dim)).collect(),
+            QuantKind::Mxfp8 => vec![q(n * dim)],
+        };
+        let plain = |l: &Linear| {
+            !(l.is_fp8_gemm() || l.is_nvfp4() || l.is_affine() || l.is_fp8_rows() || l.has_lora())
+        };
+        let apply = |l: &mut Linear, sections: Vec<Section>| -> Result<()> {
+            if plain(l) {
+                l.quantize(kind, sections)?;
+            }
+            Ok(())
+        };
+        apply(&mut self.attn1.q_or_qkv, stack(3))?;
+        apply(&mut self.attn1.to_out, vec![q(dim)])?;
+        apply(&mut self.attn2.q_or_qkv, vec![q(dim)])?;
+        if let Some(kv) = self.attn2.kv.as_mut() {
+            apply(kv, stack(2))?;
+        }
+        apply(&mut self.attn2.to_out, vec![q(dim)])?;
+        apply(&mut self.ffn.proj, vec![q(cfg.ffn_dim)])?;
+        apply(&mut self.ffn.out, vec![q(dim)])
+    }
+
     fn forward(
         &self,
         hidden: &CudaTensor,
@@ -618,7 +674,7 @@ impl WanBlock {
         timestep_proj: &CudaTensor,
         rope: &(CudaTensor, CudaTensor),
         image: Option<&CudaTensor>,
-        mask: Option<&CudaTensor>,
+        mask: Option<&BlockCausal>,
         vsa: Option<&VsaCtx>,
         ar: Option<&super::ar_cache::ArFrame>,
         plan: AttnPlan,
@@ -632,23 +688,38 @@ impl WanBlock {
             self.attn1
                 .forward_self(&normed, rope, mask, self.gate.as_ref(), vsa, ar, plan)
         })?;
-        let hidden = phase("3_residual_msa", || {
-            hidden.residual_gate_add_e(&attn, &e, GATE_MSA)
+        // bf16 activations: FastVideo's residual + norm rounding points
+        // (wan::fuse); f32 activations keep the op chain.
+        let (w2, b2) = (&self.norm2_weight, &self.norm2_bias);
+        let (hidden, normed) = phase("3_residual_norm_cross", || {
+            if let Some(p) =
+                super::fuse::self_residual_norm(hidden, &attn, &e, GATE_MSA, w2, b2, self.eps)?
+            {
+                return Ok(p);
+            }
+            let hidden = hidden.residual_gate_add_e(&attn, &e, GATE_MSA)?;
+            let normed = hidden.layer_norm(self.eps, Some(w2), Some(b2))?;
+            Ok::<_, TensorError>((hidden, normed))
         })?;
-
-        let normed = phase("4_norm_cross", || {
-            hidden.layer_norm(self.eps, Some(&self.norm2_weight), Some(&self.norm2_bias))
+        let cross = phase("5_cross_attn", || {
+            self.attn2.forward_cross(&normed, encoder, image)
         })?;
-        let hidden = phase("5_cross_attn", || {
-            Ok::<_, TensorError>(hidden.add(&self.attn2.forward_cross(&normed, encoder, image)?)?)
-        })?;
-
-        let normed = phase("6_norm_ffn", || {
-            hidden.ln_adaln_e(&e, SCALE_FFN, SHIFT_FFN, self.eps)
+        let (hidden, normed) = phase("6_residual_norm_ffn", || {
+            if let Some(p) = super::fuse::cross_residual_norm_mod(
+                &hidden, &cross, &e, SCALE_FFN, SHIFT_FFN, self.eps,
+            )? {
+                return Ok(p);
+            }
+            let hidden = hidden.add(&cross)?;
+            let normed = hidden.ln_adaln_e(&e, SCALE_FFN, SHIFT_FFN, self.eps)?;
+            Ok::<_, TensorError>((hidden, normed))
         })?;
         let ff = phase("7_ffn", || self.ffn.forward(&normed))?;
         phase("8_residual_ffn", || {
-            hidden.residual_gate_add_e(&ff, &e, GATE_FFN)
+            match super::fuse::gate_residual(&hidden, &ff, &e, GATE_FFN)? {
+                Some(h) => Ok(h),
+                None => hidden.residual_gate_add_e(&ff, &e, GATE_FFN),
+            }
         })
     }
 }
@@ -954,8 +1025,19 @@ impl WanTransformer3D {
     pub fn from_map(cfg: WanVideoArchConfig, map: &WeightMap) -> Result<Self> {
         let dim = cfg.hidden_size();
         let p = cfg.patch_size;
+        let plan = super::quant::WanQuantPlan::from_env(cfg.num_layers)
+            .map_err(TensorError::Message)?;
+        plan.announce();
+        // Each block is quantized as it loads, so its bf16 weights are freed
+        // before the next block's arrive.
         let blocks = (0..cfg.num_layers)
-            .map(|i| WanBlock::load(map, &format!("blocks.{i}"), &cfg))
+            .map(|i| {
+                let mut block = WanBlock::load(map, &format!("blocks.{i}"), &cfg)?;
+                if let Some(kind) = plan.block(i) {
+                    block.quantize(kind, &cfg)?;
+                }
+                Ok(block)
+            })
             .collect::<Result<Vec<_>>>()?;
         let image_embedder = match (cfg.image_dim, cfg.added_kv_proj_dim) {
             (Some(in_dim), Some(out_dim)) => Some(ImageEmbedder::load(
@@ -1567,14 +1649,23 @@ impl WanTransformer3D {
         let dim = self.cfg.hidden_size();
         let rope = self.rotary_for(t, h, w)?;
         let ar = self.causal_ar_frame(t, h, w);
-        let mask = if self.cfg.causal && ar.is_none() {
-            let mask = fastvideo_models::wan::causal_temporal_mask(&self.cfg, t, h, w);
-            let seq = (mask.len() as f64).sqrt() as usize;
-            Some(CudaTensor::from_vec(mask, vec![1, 1, seq, seq])?.to_device()?)
-        } else {
-            None
-        };
+        // Block-causal self-attention as a kernel parameter: the flash kernel
+        // skips invisible key tiles and never builds the [S, S] mask
+        // (`nn::sdpa_block_causal` materializes it only on its fallback).
+        let mask = (self.cfg.causal && ar.is_none()).then(|| {
+            let p = self.cfg.patch_size;
+            BlockCausal {
+                frame_tokens: (h / p[1].max(1)) * (w / p[2].max(1)),
+                window: usize::try_from(self.cfg.local_attn_size).unwrap_or(0),
+                sink: self.cfg.sink_size,
+            }
+        });
         let mut hidden = self.patch_embed(latents)?;
+        if super::tensor::bf16_residual() {
+            // The reference's patch embedding is a bf16 conv: the residual
+            // stream starts bf16 (FASTVIDEO_BF16_ACT).
+            hidden = hidden.quantize_bf16()?;
+        }
         let temb = self
             .time_embedder
             .forward_silu(&nn::sinusoidal_timesteps(timestep, self.freq_dim)?)?;

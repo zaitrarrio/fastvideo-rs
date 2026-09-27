@@ -3485,13 +3485,201 @@ __device__ __forceinline__ void flash_mma_fwd2_body(
 #endif
 
 #if defined(__CUDA_ARCH__) && __CUDA_ARCH__ >= 800
+// flash_mma_fwd2_body with Wan's block-causal temporal mask
+// (`causal_temporal_mask`), same per-row arithmetic: query q
+// sees key k iff frame(k) <= frame(q) (frame = index / ft), within `win`
+// frames when win > 0, or frame(k) < sink. Key tiles the CTA's 128 queries
+// cannot see are never loaded; the tiles it walks are the sink tiles, then
+// the contiguous causal band, in key order. Tiles straddling the boundary
+// get -inf scores where masked, which the online softmax treats exactly as a
+// skipped key (exp2(-inf) = 0, a row max of -inf leaves the state as is).
+template <int D, bool CAUSAL>
+__device__ __forceinline__ void flash_mma_fwd2_causal_body(
+    const unsigned short* __restrict__ q, const unsigned short* __restrict__ k,
+    const unsigned short* __restrict__ v, float* __restrict__ out,
+    unsigned short* __restrict__ out_bf16, int out_is_bf16, int sq, int sk, float sl2,
+    unsigned char* smem, int ft, int win, int sink
+) {
+    constexpr int TILEB = FA_TILE * D * 2;
+    constexpr int BR = 128;
+    const unsigned int base = mma_smem_u32(smem);
+    const int tid = threadIdx.x, lane = tid & 31, warp = tid >> 5;
+    const int g = lane >> 2, t = lane & 3;
+    const int q0 = (int)blockIdx.x * BR;
+    const long bh = blockIdx.y;
+    if (q0 >= sq || sk <= 0) return;
+    const int qlen = min(BR, sq - q0);
+    const unsigned short* Qh = q + (bh * sq + q0) * D;
+    const unsigned short* Kh = k + bh * (long)sk * D;
+    const unsigned short* Vh = v + bh * (long)sk * D;
+    const int nkt = (sk + FA_TILE - 1) / FA_TILE;
+    const float NEG = __int_as_float(0xff800000);
+    // Walk order: tiles [0, ns) then [mlo, mlo + ne - ns). Dense: 0..nkt.
+    int ns = 0, mlo = 0, ne = nkt;
+    int fq_lo = 0, fq_hi = 0, tq0 = 0, tq1 = 0;
+    if constexpr (CAUSAL) {
+        fq_lo = q0 / ft;
+        fq_hi = (q0 + qlen - 1) / ft;
+        const int hi_tok = min(sk, (fq_hi + 1) * ft);
+        const int lo_tok = min(hi_tok, win > 0 ? max(0, fq_lo - win) * ft : 0);
+        const int sink_tiles = (min(sk, sink * ft) + FA_TILE - 1) / FA_TILE;
+        mlo = lo_tok / FA_TILE;
+        const int mhi = (hi_tok + FA_TILE - 1) / FA_TILE;
+        ns = min(sink_tiles, mlo);
+        ne = ns + (mhi - mlo);
+        tq0 = (q0 + warp * 16 + g) / ft;
+        tq1 = (q0 + warp * 16 + g + 8) / ft;
+    }
+    auto tile_of = [&](int e) {
+        if constexpr (CAUSAL) return e < ns ? e : mlo + (e - ns);
+        else return e;
+    };
+    const int kt0 = tile_of(0);
+
+    // Q (128 rows) -> registers through stage 1 (2 * TILEB bytes = 128 rows).
+    fa2_load_rows<D, BR, 256>(base + 2 * TILEB, Qh, qlen, tid);
+    mma_cp_commit();
+    // (K_0, V_0) -> stage 0, in flight while Q is unpacked.
+    fa2_load_rows<D, FA_TILE, 256>(base, Kh + (long)kt0 * FA_TILE * D, min(FA_TILE, sk - kt0 * FA_TILE), tid);
+    fa2_load_rows<D, FA_TILE, 256>(base + TILEB, Vh + (long)kt0 * FA_TILE * D, min(FA_TILE, sk - kt0 * FA_TILE), tid);
+    mma_cp_commit();
+    mma_cp_wait<1>();
+    __syncthreads();
+    unsigned int qf[D / 16][4];
+    #pragma unroll
+    for (int kc = 0; kc < D / 16; kc++) {
+        const int row = warp * 16 + (lane & 15), col = kc * 16 + (lane >> 4) * 8;
+        mma_ldm_x4(base + 2 * TILEB + fa_swz<D>(row, col), qf[kc][0], qf[kc][1], qf[kc][2], qf[kc][3]);
+    }
+
+    float o[D / 8][4];
+    #pragma unroll
+    for (int n = 0; n < D / 8; n++) { o[n][0] = o[n][1] = o[n][2] = o[n][3] = 0.f; }
+    float m0 = NEG, m1 = NEG, l0 = 0.f, l1 = 0.f;
+    float s[8][4];
+    unsigned int pa[4][4];
+
+    #pragma unroll 1
+    for (int j = 0; j < ne; j++) {
+        const int kt = tile_of(j);
+        const int kv0 = kt * FA_TILE, len = min(FA_TILE, sk - kv0);
+        const unsigned int sK = base + (j & 1) * 2 * TILEB, sV = sK + TILEB;
+        mma_cp_wait<0>();
+        __syncthreads();   // (K_j, V_j) landed; every warp is past j-1 (and past Q)
+        if (j + 1 < ne) {
+            const unsigned int nK = base + ((j + 1) & 1) * 2 * TILEB;
+            const int nkv0 = tile_of(j + 1) * FA_TILE;
+            const int nlen = min(FA_TILE, sk - nkv0);
+            fa2_load_rows<D, FA_TILE, 256>(nK, Kh + (long)nkv0 * D, nlen, tid);
+            fa2_load_rows<D, FA_TILE, 256>(nK + TILEB, Vh + (long)nkv0 * D, nlen, tid);
+            mma_cp_commit();
+        }
+        fa_qk<D>(sK, qf, s, lane);
+        if (len < FA_TILE) {
+            #pragma unroll
+            for (int n = 0; n < 8; n++) {
+                const int c0 = n * 8 + 2 * t;
+                if (c0 >= len)     { s[n][0] = NEG; s[n][2] = NEG; }
+                if (c0 + 1 >= len) { s[n][1] = NEG; s[n][3] = NEG; }
+            }
+        }
+        if constexpr (CAUSAL) {
+            // Every (query, key) pair of the CTA visible: no per-score mask.
+            const int tk_lo = kv0 / ft, tk_hi = (kv0 + len - 1) / ft;
+            const bool all_ok = tk_hi < sink || (tk_hi <= fq_lo && (win <= 0 || fq_hi - tk_lo <= win));
+            if (!all_ok) {
+                #pragma unroll
+                for (int n = 0; n < 8; n++) {
+                    #pragma unroll
+                    for (int c = 0; c < 2; c++) {
+                        const int tk = (kv0 + n * 8 + 2 * t + c) / ft;
+                        const bool sink_ok = tk < sink;
+                        if (!(sink_ok || (tk <= tq0 && (win <= 0 || tq0 - tk <= win)))) s[n][c] = NEG;
+                        if (!(sink_ok || (tk <= tq1 && (win <= 0 || tq1 - tk <= win)))) s[n][2 + c] = NEG;
+                    }
+                }
+            }
+        }
+        float rmax0 = NEG, rmax1 = NEG;
+        #pragma unroll
+        for (int n = 0; n < 8; n++) {
+            rmax0 = fmaxf(rmax0, fmaxf(s[n][0], s[n][1]));
+            rmax1 = fmaxf(rmax1, fmaxf(s[n][2], s[n][3]));
+        }
+        rmax0 = fmaxf(rmax0, __shfl_xor_sync(0xffffffffu, rmax0, 1));
+        rmax0 = fmaxf(rmax0, __shfl_xor_sync(0xffffffffu, rmax0, 2));
+        rmax1 = fmaxf(rmax1, __shfl_xor_sync(0xffffffffu, rmax1, 1));
+        rmax1 = fmaxf(rmax1, __shfl_xor_sync(0xffffffffu, rmax1, 2));
+        const float mn0 = fmaxf(m0, rmax0), mn1 = fmaxf(m1, rmax1);
+        const float ms0 = (mn0 == NEG) ? 0.f : mn0 * sl2;
+        const float ms1 = (mn1 == NEG) ? 0.f : mn1 * sl2;
+        const float a0 = fa_exp2(fmaf(m0, sl2, -ms0)), a1 = fa_exp2(fmaf(m1, sl2, -ms1));
+        m0 = mn0; m1 = mn1;
+        float ls0 = 0.f, ls1 = 0.f;
+        #pragma unroll
+        for (int n = 0; n < 8; n++) {
+            s[n][0] = fa_exp2(fmaf(s[n][0], sl2, -ms0));
+            s[n][1] = fa_exp2(fmaf(s[n][1], sl2, -ms0));
+            s[n][2] = fa_exp2(fmaf(s[n][2], sl2, -ms1));
+            s[n][3] = fa_exp2(fmaf(s[n][3], sl2, -ms1));
+            ls0 += s[n][0] + s[n][1];
+            ls1 += s[n][2] + s[n][3];
+        }
+        l0 = fmaf(l0, a0, ls0);
+        l1 = fmaf(l1, a1, ls1);
+        #pragma unroll
+        for (int n = 0; n < D / 8; n++) { o[n][0] *= a0; o[n][1] *= a0; o[n][2] *= a1; o[n][3] *= a1; }
+        #pragma unroll
+        for (int kc = 0; kc < 4; kc++) {
+            pa[kc][0] = mma_pack_bf16_rn(s[2 * kc][0], s[2 * kc][1]);
+            pa[kc][1] = mma_pack_bf16_rn(s[2 * kc][2], s[2 * kc][3]);
+            pa[kc][2] = mma_pack_bf16_rn(s[2 * kc + 1][0], s[2 * kc + 1][1]);
+            pa[kc][3] = mma_pack_bf16_rn(s[2 * kc + 1][2], s[2 * kc + 1][3]);
+        }
+        fa_pv<D>(sV, pa, o, lane);
+    }
+
+    l0 += __shfl_xor_sync(0xffffffffu, l0, 1);
+    l0 += __shfl_xor_sync(0xffffffffu, l0, 2);
+    l1 += __shfl_xor_sync(0xffffffffu, l1, 1);
+    l1 += __shfl_xor_sync(0xffffffffu, l1, 2);
+    const float inv0 = l0 > 0.f ? 1.f / l0 : 0.f, inv1 = l1 > 0.f ? 1.f / l1 : 0.f;
+    const int row0 = warp * 16 + g, row1 = row0 + 8;
+    const bool ok0 = row0 < qlen, ok1 = row1 < qlen;
+    const long r0 = (bh * sq + q0 + row0) * D, r1 = r0 + 8L * D;
+    if (out_is_bf16) {
+        #pragma unroll
+        for (int n = 0; n < D / 8; n++) {
+            const int col = n * 8 + 2 * t;
+            if (ok0) *reinterpret_cast<unsigned int*>(out_bf16 + r0 + col) = mma_pack_bf16_rn(o[n][0] * inv0, o[n][1] * inv0);
+            if (ok1) *reinterpret_cast<unsigned int*>(out_bf16 + r1 + col) = mma_pack_bf16_rn(o[n][2] * inv1, o[n][3] * inv1);
+        }
+    } else {
+        #pragma unroll
+        for (int n = 0; n < D / 8; n++) {
+            const int col = n * 8 + 2 * t;
+            if (ok0) *reinterpret_cast<float2*>(out + r0 + col) = make_float2(o[n][0] * inv0, o[n][1] * inv0);
+            if (ok1) *reinterpret_cast<float2*>(out + r1 + col) = make_float2(o[n][2] * inv1, o[n][3] * inv1);
+        }
+    }
+}
+#endif
+
+#if defined(__CUDA_ARCH__) && __CUDA_ARCH__ >= 800
 #define FA2_ENTRY_BODY(D)                                                               \
     extern __shared__ __align__(128) unsigned char fa2_smem[];                          \
     flash_mma_fwd2_body<D>(q, k, v, out, out_bf16, out_is_bf16, sq, sk, sl2, fa2_smem);
+#define FA2C_ENTRY_BODY(D)                                                              \
+    extern __shared__ __align__(128) unsigned char fa2_smem[];                          \
+    flash_mma_fwd2_causal_body<D, true>(q, k, v, out, out_bf16, out_is_bf16, sq, sk, sl2, fa2_smem, ft, win, sink);
 #else
 #define FA2_ENTRY_BODY(D)                                                               \
     (void)q; (void)k; (void)v; (void)out; (void)out_bf16; (void)out_is_bf16;            \
     (void)sq; (void)sk; (void)sl2;                                                      \
+    __trap();
+#define FA2C_ENTRY_BODY(D)                                                              \
+    (void)q; (void)k; (void)v; (void)out; (void)out_bf16; (void)out_is_bf16;            \
+    (void)sq; (void)sk; (void)sl2; (void)ft; (void)win; (void)sink;                     \
     __trap();
 #endif
 
@@ -3510,6 +3698,27 @@ extern "C" __global__ void __launch_bounds__(256, 2) flash_mma_fwd2_d64(
     unsigned short* __restrict__ out_bf16, int out_is_bf16, int sq, int sk, float sl2
 ) {
     FA2_ENTRY_BODY(64)
+}
+
+// Block-causal (Wan self-forcing) variants: `ft` tokens per causal frame,
+// `win` frames of lookback (0 = unlimited), the first `sink` frames always
+// visible. Same launch geometry and shared memory as the dense kernels.
+extern "C" __global__ void __launch_bounds__(256, 1) flash_mma_fwd2_causal_d128(
+    const unsigned short* __restrict__ q, const unsigned short* __restrict__ k,
+    const unsigned short* __restrict__ v, float* __restrict__ out,
+    unsigned short* __restrict__ out_bf16, int out_is_bf16, int sq, int sk, float sl2,
+    int ft, int win, int sink
+) {
+    FA2C_ENTRY_BODY(128)
+}
+
+extern "C" __global__ void __launch_bounds__(256, 2) flash_mma_fwd2_causal_d64(
+    const unsigned short* __restrict__ q, const unsigned short* __restrict__ k,
+    const unsigned short* __restrict__ v, float* __restrict__ out,
+    unsigned short* __restrict__ out_bf16, int out_is_bf16, int sq, int sk, float sl2,
+    int ft, int win, int sink
+) {
+    FA2C_ENTRY_BODY(64)
 }
 
 // VSA fine stage, TMA ring. Tiles are consumed in the order K_0 V_0 K_1 V_1
@@ -5562,3 +5771,154 @@ extern "C" __global__ void fvf_split_heads_rows(
     }
 }
 // ==== endregion: DiT block fusions ====
+
+// ==== region: Wan block (bf16 activations) ====
+// The Wan DiT block under FASTVIDEO_BF16_ACT with FastVideo's rounding points
+// (fastvideo/models/wan/transformer.py WanTransformerBlock.forward and
+// layers/layernorm.py): every op below is spelled with explicit _rn
+// intrinsics, so no FMA contraction can make the fused kernels differ from
+// the unfused pair that stores the intermediate (FASTVIDEO_WAN_FUSE=0).
+//
+//   res_mode 0  self-attn residual: hidden = h + a * gate in f32 (bf16 x f32
+//               promotes), stored rounded; the norm reads the *unrounded* f32
+//               sum (ScaleResidualLayerNormScaleShift, compute_dtype f32).
+//   res_mode 1  cross-attn residual: hidden = bf16(h + a); the norm reads the
+//               stored bf16 value.
+//   ln_mode 0   LayerNorm with f32 affine (norm2), one rounding.
+//   ln_mode 1   bf16(bf16(LN(x)) * (1 + scale) + shift): FP32LayerNorm
+//               casts back to bf16 before the f32 modulation.
+
+__device__ __forceinline__ float wan_res_val(
+    const void* h, int h16, const void* a, int a16, const void* e, int e16,
+    long i, long gi, int res_mode
+) {
+    const float hv = fv_ld(h, i, h16), av = fv_ld(a, i, a16);
+    if (res_mode == 0) return __fadd_rn(hv, __fmul_rn(av, fv_ld(e, gi, e16)));
+    return fv_r16(__fadd_rn(hv, av));
+}
+
+// Two-pass LayerNorm statistics over a row whose values `val(j)` yields.
+template <typename F>
+__device__ __forceinline__ void wan_ln_stats(F val, int dim, float eps, float* sdata, float* mean, float* inv) {
+    float local = 0.0f;
+    for (int j = threadIdx.x; j < dim; j += blockDim.x) local = __fadd_rn(local, val(j));
+    const float m = __fdiv_rn(fv_block_sum(local, sdata), (float)dim);
+    local = 0.0f;
+    for (int j = threadIdx.x; j < dim; j += blockDim.x) {
+        const float dv = __fsub_rn(val(j), m);
+        local = __fadd_rn(local, __fmul_rn(dv, dv));
+    }
+    *mean = m;
+    *inv = rsqrtf(__fadd_rn(__fdiv_rn(fv_block_sum(local, sdata), (float)dim), eps));
+}
+
+__device__ __forceinline__ float wan_ln_out(
+    float v, float mean, float inv, int ln_mode, int j,
+    const void* w, const void* b, int p16, const void* e, int e16, long sc, long sh
+) {
+    float n = __fmul_rn(__fsub_rn(v, mean), inv);
+    if (ln_mode == 0) return __fadd_rn(__fmul_rn(n, fv_ld(w, j, p16)), fv_ld(b, j, p16));
+    n = fv_r16(n);
+    const float s1 = __fadd_rn(1.0f, fv_ld(e, sc + j, e16));
+    return __fadd_rn(__fmul_rn(n, s1), fv_ld(e, sh + j, e16));
+}
+
+// Fused: residual (res_mode) + LayerNorm (ln_mode) in one pass per row.
+// Rows are [batch * seq, dim]; the AdaLN table e is [batch, e_rows, dim].
+extern "C" __global__ void wan_res_ln(
+    const void* h, int h16, const void* a, int a16, const void* e, int e16, int gate_slot,
+    const void* w, const void* b, int p16, int scale_slot, int shift_slot,
+    int res_mode, int ln_mode, unsigned short* hid, unsigned short* normed,
+    int rows, int seq, int dim, int e_rows, float eps
+) {
+    extern __shared__ float sdata[];
+    const int row = blockIdx.x;
+    if (row >= rows) return;
+    const long base = (long)row * dim;
+    const long tb = (long)(row / seq) * e_rows;
+    const long gi = (tb + gate_slot) * dim, sc = (tb + scale_slot) * dim, sh = (tb + shift_slot) * dim;
+    auto val = [&](int j) { return wan_res_val(h, h16, a, a16, e, e16, base + j, gi + j, res_mode); };
+    float mean, inv;
+    wan_ln_stats(val, dim, eps, sdata, &mean, &inv);
+    for (int j = threadIdx.x; j < dim; j += blockDim.x) {
+        const float v = val(j);
+        hid[base + j] = fv_bf16_rne(v);
+        normed[base + j] = fv_bf16_rne(wan_ln_out(v, mean, inv, ln_mode, j, w, b, p16, e, e16, sc, sh));
+    }
+}
+
+// Unfused residual: hidden (bf16) and, with has_tmp, the unrounded f32 value
+// the norm of res_mode 0 reads. Also the block's last residual
+// (bf16(h + ff * gate), res_mode 0 without tmp).
+extern "C" __global__ void wan_res_gate(
+    const void* h, int h16, const void* a, int a16, const void* e, int e16, int gate_slot,
+    int res_mode, unsigned short* hid, float* tmp, int has_tmp,
+    long n, int seq, int dim, int e_rows
+) {
+    const long i = IDX();
+    if (i >= n) return;
+    const long row = i / dim, j = i % dim;
+    const long gi = ((row / seq) * e_rows + gate_slot) * dim + j;
+    const float v = wan_res_val(h, h16, a, a16, e, e16, i, gi, res_mode);
+    hid[i] = fv_bf16_rne(v);
+    if (has_tmp) tmp[i] = v;
+}
+
+// Unfused norm over a stored row (f32 or bf16), ln_mode as above.
+extern "C" __global__ void wan_ln(
+    const void* x, int x16, const void* w, const void* b, int p16,
+    const void* e, int e16, int scale_slot, int shift_slot, int ln_mode,
+    unsigned short* normed, int rows, int seq, int dim, int e_rows, float eps
+) {
+    extern __shared__ float sdata[];
+    const int row = blockIdx.x;
+    if (row >= rows) return;
+    const long base = (long)row * dim;
+    const long tb = (long)(row / seq) * e_rows;
+    const long sc = (tb + scale_slot) * dim, sh = (tb + shift_slot) * dim;
+    auto val = [&](int j) { return fv_ld(x, base + j, x16); };
+    float mean, inv;
+    wan_ln_stats(val, dim, eps, sdata, &mean, &inv);
+    for (int j = threadIdx.x; j < dim; j += blockDim.x)
+        normed[base + j] = fv_bf16_rne(wan_ln_out(val(j), mean, inv, ln_mode, j, w, b, p16, e, e16, sc, sh));
+}
+
+// q/k RMSNorm across all heads + interleaved RoPE, bf16 in (or f32) and bf16
+// BHSD out, with FastVideo's rounding points: RMSNorm.forward_native rounds
+// x * rsqrt(mean(x^2) + eps) to bf16, multiplies by the bf16 weight (another
+// rounding), and _apply_rotary_emb rotates in f32 and rounds once. Tables
+// are qk_norm_rope_bhsd's: cos at the even slot, sin at the odd one.
+extern "C" __global__ void wan_qk_norm_rope16(
+    const void* src, int s16, const void* w, int w16, const float* cos_t, const float* sin_t,
+    int use_rope, unsigned short* out,
+    int batch, int seq, int heads, int d, int src_width, int col_off, float eps
+) {
+    extern __shared__ float sdata[];
+    const int row = blockIdx.x;
+    if (row >= batch * seq) return;
+    const int b = row / seq, s = row % seq;
+    const int width = heads * d;
+    const long xb = (long)row * src_width + col_off;
+    float local = 0.0f;
+    for (int j = threadIdx.x; j < width; j += blockDim.x) {
+        const float v = fv_ld(src, xb + j, s16);
+        local = __fadd_rn(local, __fmul_rn(v, v));
+    }
+    const float inv = rsqrtf(__fadd_rn(__fdiv_rn(fv_block_sum(local, sdata), (float)width), eps));
+    for (int j = threadIdx.x; j < width; j += blockDim.x) {
+        const int hh = j / d, p = j - hh * d;
+        const long o = (((long)b * heads + hh) * seq + s) * d + p;
+        if (use_rope) {
+            const int even = p - (p & 1), j0 = hh * d + even;
+            const float x1 = fv_r16(__fmul_rn(fv_r16(__fmul_rn(fv_ld(src, xb + j0, s16), inv)), fv_ld(w, j0, w16)));
+            const float x2 = fv_r16(__fmul_rn(fv_r16(__fmul_rn(fv_ld(src, xb + j0 + 1, s16), inv)), fv_ld(w, j0 + 1, w16)));
+            const float c = cos_t[(long)s * d + even], sn = sin_t[(long)s * d + even + 1];
+            const float r = (p & 1) ? __fadd_rn(__fmul_rn(x2, c), __fmul_rn(x1, sn))
+                                    : __fsub_rn(__fmul_rn(x1, c), __fmul_rn(x2, sn));
+            out[o] = fv_bf16_rne(r);
+        } else {
+            out[o] = fv_bf16_rne(__fmul_rn(fv_r16(__fmul_rn(fv_ld(src, xb + j, s16), inv)), fv_ld(w, j, w16)));
+        }
+    }
+}
+// ==== endregion: Wan block ====

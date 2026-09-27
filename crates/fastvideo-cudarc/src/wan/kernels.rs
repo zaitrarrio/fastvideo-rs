@@ -146,6 +146,8 @@ kernel_fns!(
     // ---- attn2 region (Phase 3b attention kernels) ----
     flash_mma_fwd2_d64,
     flash_mma_fwd2_d128,
+    flash_mma_fwd2_causal_d64,
+    flash_mma_fwd2_causal_d128,
     vsa_mma_attn_tma2,
     sol_mma_fwd2,
     sol_split_combine,
@@ -194,6 +196,11 @@ kernel_fns!(
     fvf_merge_heads_mx,
     fvf_h3_gate_res_norm_mod,
     fvf_split_heads_rows,
+    // ---- Wan block, bf16 activations (appended) ----
+    wan_res_ln,
+    wan_res_gate,
+    wan_ln,
+    wan_qk_norm_rope16,
 );
 
 /// NVRTC-compile the kernel module for `sm_major.sm_minor` without touching a

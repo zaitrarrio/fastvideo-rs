@@ -1558,6 +1558,49 @@ pub fn scaled_dot_product_attention_masked(
     }
 }
 
+/// `FASTVIDEO_WAN_CAUSAL_FLASH` (default on): block-causal self-attention
+/// runs the masked flash kernel. `=0` materializes the `[S, S]` mask and runs
+/// [`sdpa_composed`] (the path it replaces).
+pub fn causal_flash_enabled() -> bool {
+    static FLAG: super::envflag::CachedBool = super::envflag::CachedBool::new();
+    FLAG.get_or_init(|| super::envflag::bool_flag("FASTVIDEO_WAN_CAUSAL_FLASH", true))
+}
+
+/// SDPA under Wan's block-causal temporal mask ([`super::attn::BlockCausal`]).
+/// On a tensor-core device this is one flash launch that never builds the
+/// `[S, S]` score or mask tensors; elsewhere (CPU runs, sequence-parallel
+/// shards, unsupported head dims, `FASTVIDEO_WAN_CAUSAL_FLASH=0`) the dense
+/// additive mask goes through [`scaled_dot_product_attention_masked`].
+pub fn sdpa_block_causal(
+    q: &CudaTensor,
+    k: &CudaTensor,
+    v: &CudaTensor,
+    scale: Option<f32>,
+    mask: super::attn::BlockCausal,
+) -> Result<CudaTensor> {
+    if q.rank() != 4 || k.rank() != 4 || v.rank() != 4 {
+        return Err(msg("sdpa expects BHSD"));
+    }
+    let (sq, sk) = (q.shape[2], k.shape[2]);
+    let act16 = super::tensor::bf16_activations();
+    if causal_flash_enabled() && sp_world() == 1 && super::attn::mma_sdpa_default() {
+        let (qa, ka, va);
+        let (q, k, v) = if act16 {
+            qa = q.quantize_bf16()?;
+            ka = k.quantize_bf16()?;
+            va = v.quantize_bf16()?;
+            (&qa, &ka, &va)
+        } else {
+            (q, k, v)
+        };
+        if let Some(out) = super::attn::device_mma_sdpa_causal(q, k, v, scale, act16, mask)? {
+            return Ok(out);
+        }
+    }
+    let dense = CudaTensor::from_vec(mask.dense_mask(sq, sk), vec![1, 1, sq, sk])?;
+    scaled_dot_product_attention_masked(q, k, v, scale, Some(&dense))
+}
+
 /// SDPA from tensor ops (masked attention, CPU runs). Every op here has a
 /// device kernel, so on GPU runs this stays on the device.
 fn sdpa_composed(
