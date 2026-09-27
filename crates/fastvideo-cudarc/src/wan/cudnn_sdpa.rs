@@ -1,34 +1,33 @@
-//! Dense SDPA through cuDNN's fused attention engine (backend API).
+//! Dense SDPA through cuDNN's fused attention engines (backend API).
 //!
-//! The operation graph is cudnn-frontend's SDPA forward for inference
-//! (`node/scaled_dot_product_flash_attention.h` + `node/softmax.h`), built
-//! by hand because cudarc exposes the backend API but not the frontend:
+//! cudarc 0.17.8 exposes cuDNN's backend API but predates the SDPA
+//! descriptors of cuDNN >= 9.13 / 9.21, so the ones this module needs are
+//! declared here ([`raw`]) with their cuDNN 9.26 header values
+//! (`cudnn_graph_v9.h`), and every backend call goes through cudarc's loaded
+//! library with the enum arguments widened to `u32` (the enums are
+//! `repr(u32)`, so the ABI is the same) and statuses read as plain `i32`
+//! (a newer cuDNN may return status codes cudarc's enum does not list).
 //!
-//! ```text
-//! S  = matmul(Q, K^T)            f32, virtual        ("bmm1")
-//! S' = S * scale                 by-value scalar     ("attn_scale")
-//! M  = reduce_max(S', axis=-1)   [.., sq, 1]         (softmax "Max")
-//! E  = exp(S' - M)                                   ("sub", "exp")
-//! Z  = reduce_add(E, axis=-1)                        ("sum")
-//! P  = E / Z                                         ("div")
-//! O  = matmul(P, V)              bf16                ("bmm2")
-//! ```
+//! Three operation graphs, in the order `auto` tries them:
 //!
-//! Q/K/V/O are bf16 BHSD `[1, bh, s, d]`; the plan is built once per shape
-//! and cached, and a shape cuDNN offers no engine for falls back to
-//! `flash_mma_fwd2`.
+//! * [`SdpaGraph::Unified`]: one `CUDNN_BACKEND_OPERATION_SDPA_FWD_DESCRIPTOR`
+//!   (Q, K, V, O and a by-value scale), which is what cudnn-frontend's
+//!   `UnifiedSDPANode` builds for a plain bf16 inference SDPA on cuDNN >= 9.13.1
+//!   (`node/scaled_dot_product_flash_attention.h`, `AttentionImplementation_t::AUTO`
+//!   picks UNIFIED first, `graph_properties.h` `_auto_select_implementation`).
+//!   K is the literal K (not K^T).
+//! * [`SdpaGraph::Softmax`]: the composite graph with cuDNN >= 9.21's single
+//!   `CUDNN_BACKEND_OPERATION_SOFTMAX_DESCRIPTOR` node, as cudnn-frontend's
+//!   `CompositeSDPANode` lowers it (`node/softmax.h`, `UnifiedSoftmaxNode`):
+//!   `S = Q K^T`, `S' = S * scale`, `P = softmax(S')`, `O = P V`.
+//! * [`SdpaGraph::Composite`]: the pre-9.21 composite softmax (reduce max,
+//!   sub, exp, reduce sum, div). cuDNN 9.26 rejects it on every shape: "non-flash
+//!   composite MHA fprop is no longer supported (removed with the xmma512
+//!   engine)". Kept for older runtimes.
 //!
-//! Status (RTX PRO 6000, cuDNN 9.26.0, 2026-09-26): cuDNN rejects this
-//! composite softmax graph on every shape, per its own log
-//! (`CUDNN_LOGLEVEL_DBG=2`): "non-flash composite MHA fprop is no longer
-//! supported (removed with the xmma512 engine) at: !is_flash_fprop". From
-//! cuDNN 9.21 cudnn-frontend lowers softmax to the single unified
-//! `OPERATION_SOFTMAX` backend node (`node/softmax.h:386-390`), which the
-//! sm_120 flash engines match; cudarc 0.17.8's cuDNN bindings predate that
-//! descriptor. So `FASTVIDEO_FLASH_KERNEL=cudnn` currently always runs
-//! `flash_mma_fwd2`. Measured through torch 2.13 / cuDNN on the same GPU,
-//! cuDNN's fused SDPA is 5-6% faster than `flash_mma_fwd2` at the H3 / LTX
-//! shapes (392-397 vs 371-373 TFLOPS): the next step is the unified node.
+//! Q/K/V/O are bf16 BHSD `[1, bh, s, d]`; the plan is built once per shape,
+//! graph and engine-config index and cached, and a shape cuDNN offers no
+//! engine for falls back to `flash_mma_fwd2` (in `attn.rs`).
 
 #![cfg(feature = "cuda")]
 
@@ -39,7 +38,6 @@ use std::sync::{Arc, Mutex, OnceLock};
 use cudarc::cudnn::sys::{
     self, cudnnBackendAttributeName_t as A, cudnnBackendAttributeType_t as T,
     cudnnBackendDescriptorType_t as DT, cudnnBackendDescriptor_t, cudnnDataType_t,
-    cudnnStatus_t,
 };
 use cudarc::driver::{CudaSlice, DevicePtr, DevicePtrMut};
 
@@ -49,11 +47,88 @@ fn msg(s: impl Into<String>) -> TensorError {
     TensorError::Message(s.into())
 }
 
-fn ok(st: cudnnStatus_t, what: &str) -> Result<()> {
-    if st == cudnnStatus_t::CUDNN_STATUS_SUCCESS {
+/// Raw backend FFI: the descriptor types and attribute names cudarc lacks,
+/// and the backend entry points with `u32` enums and `i32` statuses.
+pub mod raw {
+    use super::*;
+
+    /// `cudnnBackendDescriptorType_t` (cuDNN 9.26 `cudnn_graph_v9.h`).
+    pub const OPERATION_SDPA_FWD_DESCRIPTOR: u32 = 41; // @since 9.13.0
+    pub const OPERATION_SOFTMAX_DESCRIPTOR: u32 = 45; // @since 9.20.0
+
+    /// `cudnnBackendAttributeName_t`.
+    pub const ATTR_OPERATION_SDPA_FWD_QDESC: u32 = 2800;
+    pub const ATTR_OPERATION_SDPA_FWD_KDESC: u32 = 2801;
+    pub const ATTR_OPERATION_SDPA_FWD_VDESC: u32 = 2802;
+    pub const ATTR_OPERATION_SDPA_FWD_ODESC: u32 = 2803;
+    pub const ATTR_OPERATION_SDPA_FWD_STATSDESC: u32 = 2804;
+    pub const ATTR_OPERATION_SDPA_FWD_SCALEDESC: u32 = 2805;
+    pub const ATTR_OPERATION_SOFTMAX_XDESC: u32 = 3100;
+    pub const ATTR_OPERATION_SOFTMAX_YDESC: u32 = 3101;
+
+    pub const STATUS_SUCCESS: i32 = 0;
+
+    type CreateFn = unsafe extern "C" fn(u32, *mut cudnnBackendDescriptor_t) -> i32;
+    type DestroyFn = unsafe extern "C" fn(cudnnBackendDescriptor_t) -> i32;
+    type SetFn = unsafe extern "C" fn(cudnnBackendDescriptor_t, u32, u32, i64, *const c_void) -> i32;
+    type GetFn =
+        unsafe extern "C" fn(cudnnBackendDescriptor_t, u32, u32, i64, *mut i64, *mut c_void) -> i32;
+    type FinalizeFn = unsafe extern "C" fn(cudnnBackendDescriptor_t) -> i32;
+    type ExecuteFn =
+        unsafe extern "C" fn(sys::cudnnHandle_t, cudnnBackendDescriptor_t, cudnnBackendDescriptor_t) -> i32;
+
+    // The transmutes only change enum parameters to their `repr(u32)` integer
+    // and the `repr(u32)` status return to `i32`: same size, same ABI.
+    pub unsafe fn create(ty: u32, d: *mut cudnnBackendDescriptor_t) -> i32 {
+        let f: CreateFn = std::mem::transmute(sys::culib().cudnnBackendCreateDescriptor);
+        f(ty, d)
+    }
+    pub unsafe fn destroy(d: cudnnBackendDescriptor_t) -> i32 {
+        let f: DestroyFn = std::mem::transmute(sys::culib().cudnnBackendDestroyDescriptor);
+        f(d)
+    }
+    pub unsafe fn set(d: cudnnBackendDescriptor_t, name: u32, ty: u32, n: i64, v: *const c_void) -> i32 {
+        let f: SetFn = std::mem::transmute(sys::culib().cudnnBackendSetAttribute);
+        f(d, name, ty, n, v)
+    }
+    pub unsafe fn get(
+        d: cudnnBackendDescriptor_t,
+        name: u32,
+        ty: u32,
+        cap: i64,
+        n: *mut i64,
+        v: *mut c_void,
+    ) -> i32 {
+        let f: GetFn = std::mem::transmute(sys::culib().cudnnBackendGetAttribute);
+        f(d, name, ty, cap, n, v)
+    }
+    pub unsafe fn finalize(d: cudnnBackendDescriptor_t) -> i32 {
+        let f: FinalizeFn = std::mem::transmute(sys::culib().cudnnBackendFinalize);
+        f(d)
+    }
+    pub unsafe fn execute(
+        h: sys::cudnnHandle_t,
+        plan: cudnnBackendDescriptor_t,
+        pack: cudnnBackendDescriptor_t,
+    ) -> i32 {
+        let f: ExecuteFn = std::mem::transmute(sys::culib().cudnnBackendExecute);
+        f(h, plan, pack)
+    }
+    /// cuDNN's last error message (thread-local in the library).
+    pub fn last_error() -> String {
+        let mut buf = vec![0 as std::ffi::c_char; 1024];
+        unsafe { (sys::culib().cudnnGetLastErrorString)(buf.as_mut_ptr(), buf.len()) };
+        let s = unsafe { std::ffi::CStr::from_ptr(buf.as_ptr()) };
+        s.to_string_lossy().trim().to_string()
+    }
+}
+
+fn ok(st: i32, what: &str) -> Result<()> {
+    if st == raw::STATUS_SUCCESS {
         Ok(())
     } else {
-        Err(msg(format!("cudnn sdpa: {what}: {st:?}")))
+        let e = raw::last_error();
+        Err(msg(format!("cudnn sdpa: {what}: status {st}{}{e}", if e.is_empty() { "" } else { ": " })))
     }
 }
 
@@ -68,38 +143,51 @@ unsafe impl Sync for Desc {}
 impl Drop for Desc {
     fn drop(&mut self) {
         unsafe {
-            sys::cudnnBackendDestroyDescriptor(self.0);
+            raw::destroy(self.0);
         }
     }
 }
 
 impl Desc {
     fn new(ty: DT) -> Result<Self> {
+        Self::new_raw(ty as u32)
+    }
+    fn new_raw(ty: u32) -> Result<Self> {
         let mut d: cudnnBackendDescriptor_t = std::ptr::null_mut();
-        ok(unsafe { sys::cudnnBackendCreateDescriptor(ty, &mut d) }, "create")?;
+        ok(unsafe { raw::create(ty, &mut d) }, &format!("create descriptor type {ty}"))?;
         Ok(Self(d))
     }
-    fn set<V>(&self, name: A, ty: T, vals: &[V]) -> Result<()> {
+    fn set_raw<V>(&self, name: u32, ty: T, vals: &[V]) -> Result<()> {
         ok(
             unsafe {
-                sys::cudnnBackendSetAttribute(
-                    self.0,
-                    name,
-                    ty,
-                    vals.len() as i64,
-                    vals.as_ptr() as *const c_void,
-                )
+                raw::set(self.0, name, ty as u32, vals.len() as i64, vals.as_ptr() as *const c_void)
             },
-            &format!("set {name:?}"),
+            &format!("set attribute {name}"),
         )
     }
-    fn set_desc(&self, name: A, d: &[&Desc]) -> Result<()> {
+    fn set<V>(&self, name: A, ty: T, vals: &[V]) -> Result<()> {
+        self.set_raw(name as u32, ty, vals)
+    }
+    fn set_desc_raw(&self, name: u32, d: &[&Desc]) -> Result<()> {
         let ptrs: Vec<cudnnBackendDescriptor_t> = d.iter().map(|x| x.0).collect();
-        self.set(name, T::CUDNN_TYPE_BACKEND_DESCRIPTOR, &ptrs)
+        self.set_raw(name, T::CUDNN_TYPE_BACKEND_DESCRIPTOR, &ptrs)
+    }
+    fn set_desc(&self, name: A, d: &[&Desc]) -> Result<()> {
+        self.set_desc_raw(name as u32, d)
     }
     fn finalize(self, what: &str) -> Result<Self> {
-        ok(unsafe { sys::cudnnBackendFinalize(self.0) }, what)?;
+        ok(unsafe { raw::finalize(self.0) }, what)?;
         Ok(self)
+    }
+    fn get_i64(&self, name: A) -> Result<i64> {
+        let (mut v, mut n) = (0i64, 0i64);
+        ok(
+            unsafe {
+                raw::get(self.0, name as u32, T::CUDNN_TYPE_INT64 as u32, 1, &mut n, &mut v as *mut i64 as *mut c_void)
+            },
+            &format!("get {name:?}"),
+        )?;
+        Ok(v)
     }
 }
 
@@ -113,11 +201,11 @@ fn handle(dev: &super::device::DeviceContext) -> Result<sys::cudnnHandle_t> {
     let h = H.get_or_init(|| unsafe {
         let mut h: sys::cudnnHandle_t = std::ptr::null_mut();
         let st = sys::cudnnCreate(&mut h);
-        if st != cudnnStatus_t::CUDNN_STATUS_SUCCESS {
+        if st != sys::cudnnStatus_t::CUDNN_STATUS_SUCCESS {
             return Err(format!("cudnnCreate: {st:?}"));
         }
         let st = sys::cudnnSetStream(h, dev.stream.cu_stream() as sys::cudaStream_t);
-        if st != cudnnStatus_t::CUDNN_STATUS_SUCCESS {
+        if st != sys::cudnnStatus_t::CUDNN_STATUS_SUCCESS {
             return Err(format!("cudnnSetStream: {st:?}"));
         }
         Ok(Handle(h))
@@ -219,73 +307,175 @@ fn matmul_op(a: &Desc, b: &Desc, c: &Desc) -> Result<(Desc, Desc)> {
     Ok((m, op.finalize("matmul op")?))
 }
 
+/// Which operation graph describes the attention to cuDNN.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum SdpaGraph {
+    /// One `OPERATION_SDPA_FWD` node (cuDNN >= 9.13.1).
+    Unified,
+    /// bmm, scale, one `OPERATION_SOFTMAX` node, bmm (cuDNN >= 9.21).
+    Softmax,
+    /// bmm, scale, max / sub / exp / sum / div, bmm (pre-9.21 composite).
+    Composite,
+}
+
+impl SdpaGraph {
+    pub const ALL: [SdpaGraph; 3] = [SdpaGraph::Unified, SdpaGraph::Softmax, SdpaGraph::Composite];
+    pub fn name(self) -> &'static str {
+        match self {
+            SdpaGraph::Unified => "unified",
+            SdpaGraph::Softmax => "softmax",
+            SdpaGraph::Composite => "composite",
+        }
+    }
+}
+
+/// `FASTVIDEO_CUDNN_SDPA_GRAPH=auto|unified|softmax|composite`: the graphs to
+/// try, in order (`auto`: all three).
+fn graphs_requested() -> Vec<SdpaGraph> {
+    match super::envflag::string_flag("FASTVIDEO_CUDNN_SDPA_GRAPH", "auto").as_str() {
+        "unified" => vec![SdpaGraph::Unified],
+        "softmax" => vec![SdpaGraph::Softmax],
+        "composite" => vec![SdpaGraph::Composite],
+        _ => SdpaGraph::ALL.to_vec(),
+    }
+}
+
+/// The finalized operation graph and the descriptors it references.
+struct Graph {
+    graph: Desc,
+    _keep: Vec<Desc>,
+}
+
+fn build_graph(h: sys::cudnnHandle_t, kind: SdpaGraph, bh: i64, sq: i64, sk: i64, d: i64) -> Result<Graph> {
+    use cudnnDataType_t::{CUDNN_DATA_BFLOAT16 as BF16, CUDNN_DATA_FLOAT as F32};
+    use sys::cudnnPointwiseMode_t as PM;
+    use sys::cudnnReduceTensorOp_t as RO;
+    let q = tensor(UID_Q, BF16, [1, bh, sq, d], [bh * sq * d, sq * d, d, 1], false, false)?;
+    let v = tensor(UID_V, BF16, [1, bh, sk, d], [bh * sk * d, sk * d, d, 1], false, false)?;
+    let o = tensor(UID_O, BF16, [1, bh, sq, d], [bh * sq * d, sq * d, d, 1], false, false)?;
+    let scale = tensor(UID_SCALE, F32, [1, 1, 1, 1], [1, 1, 1, 1], false, true)?;
+    let full = |uid| tensor(uid, F32, [1, bh, sq, sk], [bh * sq * sk, sq * sk, sk, 1], true, false);
+    let row = |uid| tensor(uid, F32, [1, bh, sq, 1], [bh * sq, sq, 1, 1], true, false);
+    let (ops, mut keep): (Vec<Desc>, Vec<Desc>) = match kind {
+        SdpaGraph::Unified => {
+            // The literal K, [.., sk, d].
+            let k = tensor(UID_K, BF16, [1, bh, sk, d], [bh * sk * d, sk * d, d, 1], false, false)?;
+            let op = Desc::new_raw(raw::OPERATION_SDPA_FWD_DESCRIPTOR)?;
+            op.set_desc_raw(raw::ATTR_OPERATION_SDPA_FWD_QDESC, &[&q])?;
+            op.set_desc_raw(raw::ATTR_OPERATION_SDPA_FWD_KDESC, &[&k])?;
+            op.set_desc_raw(raw::ATTR_OPERATION_SDPA_FWD_VDESC, &[&v])?;
+            op.set_desc_raw(raw::ATTR_OPERATION_SDPA_FWD_ODESC, &[&o])?;
+            op.set_desc_raw(raw::ATTR_OPERATION_SDPA_FWD_SCALEDESC, &[&scale])?;
+            let op = op.finalize("sdpa_fwd op")?;
+            (vec![op], vec![k])
+        }
+        SdpaGraph::Softmax | SdpaGraph::Composite => {
+            // K^T as a [.., d, sk] view of row-major K.
+            let kt = tensor(UID_K, BF16, [1, bh, d, sk], [bh * sk * d, sk * d, 1, d], false, false)?;
+            let (s, s2, p) = (full(100)?, full(101)?, full(106)?);
+            let (d1, bmm1) = matmul_op(&q, &kt, &s)?;
+            let (d2, mul) = pointwise_op(PM::CUDNN_POINTWISE_MUL, &s, Some(&scale), &s2)?;
+            let (d8, bmm2) = matmul_op(&p, &v, &o)?;
+            if kind == SdpaGraph::Softmax {
+                let sm = Desc::new_raw(raw::OPERATION_SOFTMAX_DESCRIPTOR)?;
+                sm.set_desc_raw(raw::ATTR_OPERATION_SOFTMAX_XDESC, &[&s2])?;
+                sm.set_desc_raw(raw::ATTR_OPERATION_SOFTMAX_YDESC, &[&p])?;
+                let sm = sm.finalize("softmax op")?;
+                (vec![bmm1, mul, sm, bmm2], vec![kt, s, s2, p, d1, d2, d8])
+            } else {
+                let (mx, sub, ex, sum) = (row(102)?, full(103)?, full(104)?, row(105)?);
+                let (d3, rmax) = reduction_op(RO::CUDNN_REDUCE_TENSOR_MAX, &s2, &mx)?;
+                let (d4, psub) = pointwise_op(PM::CUDNN_POINTWISE_SUB, &s2, Some(&mx), &sub)?;
+                let (d5, pexp) = pointwise_op(PM::CUDNN_POINTWISE_EXP, &sub, None, &ex)?;
+                let (d6, rsum) = reduction_op(RO::CUDNN_REDUCE_TENSOR_ADD, &ex, &sum)?;
+                let (d7, pdiv) = pointwise_op(PM::CUDNN_POINTWISE_DIV, &ex, Some(&sum), &p)?;
+                (
+                    vec![bmm1, mul, rmax, psub, pexp, rsum, pdiv, bmm2],
+                    vec![kt, s, s2, p, mx, sub, ex, sum, d1, d2, d3, d4, d5, d6, d7, d8],
+                )
+            }
+        }
+    };
+    let graph = Desc::new(DT::CUDNN_BACKEND_OPERATIONGRAPH_DESCRIPTOR)?;
+    graph.set_desc(A::CUDNN_ATTR_OPERATIONGRAPH_OPS, &ops.iter().collect::<Vec<_>>())?;
+    graph.set(A::CUDNN_ATTR_OPERATIONGRAPH_HANDLE, T::CUDNN_TYPE_HANDLE, &[h])?;
+    let graph = graph.finalize("operation graph")?;
+    keep.extend([q, v, o, scale]);
+    keep.extend(ops);
+    Ok(Graph { graph, _keep: keep })
+}
+
 /// A finalized execution plan (the descriptors it was built from stay alive
 /// with it) and its workspace size.
 pub struct SdpaPlan {
     plan: Desc,
     workspace: usize,
-    engine: String,
+    /// Graph, heuristic mode, config index, engine global index, and the
+    /// plan's JSON (engine name and knobs), for logs and the bench.
+    pub info: String,
+    /// Engine configs the heuristic offered in the mode that produced the plan.
+    pub configs: usize,
     _keep: Vec<Desc>,
+}
+
+fn engine_index(cfg: &Desc) -> Option<i64> {
+    let eng = Desc::new(DT::CUDNN_BACKEND_ENGINE_DESCRIPTOR).ok()?;
+    let mut n = 0i64;
+    let mut p = eng.0;
+    let st = unsafe {
+        raw::get(
+            cfg.0,
+            A::CUDNN_ATTR_ENGINECFG_ENGINE as u32,
+            T::CUDNN_TYPE_BACKEND_DESCRIPTOR as u32,
+            1,
+            &mut n,
+            &mut p as *mut cudnnBackendDescriptor_t as *mut c_void,
+        )
+    };
+    if st != raw::STATUS_SUCCESS {
+        return None;
+    }
+    eng.get_i64(A::CUDNN_ATTR_ENGINE_GLOBAL_INDEX).ok()
+}
+
+fn plan_json(plan: &Desc) -> String {
+    let mut buf = vec![0u8; 4096];
+    let mut n = 0i64;
+    let st = unsafe {
+        raw::get(
+            plan.0,
+            A::CUDNN_ATTR_EXECUTION_PLAN_JSON_REPRESENTATION as u32,
+            T::CUDNN_TYPE_CHAR as u32,
+            buf.len() as i64,
+            &mut n,
+            buf.as_mut_ptr() as *mut c_void,
+        )
+    };
+    if st != raw::STATUS_SUCCESS {
+        return String::new();
+    }
+    let end = buf.iter().position(|&b| b == 0).unwrap_or(buf.len());
+    String::from_utf8_lossy(&buf[..end]).into_owned()
 }
 
 fn build(
     dev: &super::device::DeviceContext,
+    kind: SdpaGraph,
+    want_cfg: usize,
     bh: usize,
     sq: usize,
     sk: usize,
     d: usize,
 ) -> Result<SdpaPlan> {
-    use cudnnDataType_t::{CUDNN_DATA_BFLOAT16 as BF16, CUDNN_DATA_FLOAT as F32};
     let h = handle(dev)?;
-    let (bh, sq, sk, d) = (bh as i64, sq as i64, sk as i64, d as i64);
-    let q = tensor(UID_Q, BF16, [1, bh, sq, d], [bh * sq * d, sq * d, d, 1], false, false)?;
-    // K^T as a [.., d, sk] view of row-major K.
-    let kt = tensor(UID_K, BF16, [1, bh, d, sk], [bh * sk * d, sk * d, 1, d], false, false)?;
-    let v = tensor(UID_V, BF16, [1, bh, sk, d], [bh * sk * d, sk * d, d, 1], false, false)?;
-    let o = tensor(UID_O, BF16, [1, bh, sq, d], [bh * sq * d, sq * d, d, 1], false, false)?;
-    let scale = tensor(UID_SCALE, F32, [1, 1, 1, 1], [1, 1, 1, 1], false, true)?;
-    let full = |uid| {
-        tensor(uid, F32, [1, bh, sq, sk], [bh * sq * sk, sq * sk, sk, 1], true, false)
-    };
-    let row = |uid| tensor(uid, F32, [1, bh, sq, 1], [bh * sq, sq, 1, 1], true, false);
-    let (s, s2, mx, sub, ex, sum, p) = (
-        full(100)?,
-        full(101)?,
-        row(102)?,
-        full(103)?,
-        full(104)?,
-        row(105)?,
-        full(106)?,
-    );
-    use sys::cudnnPointwiseMode_t as PM;
-    use sys::cudnnReduceTensorOp_t as RO;
-    let (d1, bmm1) = matmul_op(&q, &kt, &s)?;
-    let (d2, mul) = pointwise_op(PM::CUDNN_POINTWISE_MUL, &s, Some(&scale), &s2)?;
-    let (d3, rmax) = reduction_op(RO::CUDNN_REDUCE_TENSOR_MAX, &s2, &mx)?;
-    let (d4, psub) = pointwise_op(PM::CUDNN_POINTWISE_SUB, &s2, Some(&mx), &sub)?;
-    let (d5, pexp) = pointwise_op(PM::CUDNN_POINTWISE_EXP, &sub, None, &ex)?;
-    let (d6, rsum) = reduction_op(RO::CUDNN_REDUCE_TENSOR_ADD, &ex, &sum)?;
-    let (d7, pdiv) = pointwise_op(PM::CUDNN_POINTWISE_DIV, &ex, Some(&sum), &p)?;
-    let (d8, bmm2) = matmul_op(&p, &v, &o)?;
-
-    let graph = Desc::new(DT::CUDNN_BACKEND_OPERATIONGRAPH_DESCRIPTOR)?;
-    graph.set_desc(
-        A::CUDNN_ATTR_OPERATIONGRAPH_OPS,
-        &[&bmm1, &mul, &rmax, &psub, &pexp, &rsum, &pdiv, &bmm2],
-    )?;
-    graph.set(A::CUDNN_ATTR_OPERATIONGRAPH_HANDLE, T::CUDNN_TYPE_HANDLE, &[h])?;
-    let graph = graph.finalize("operation graph")?;
+    let g = build_graph(h, kind, bh as i64, sq as i64, sk as i64, d as i64)?;
 
     // Heuristic modes in cudnn-frontend's order: A, then B, then FALLBACK.
     use sys::cudnnBackendHeurMode_t as HM;
     let mut last = String::from("no engine config");
-    let mut keep = vec![
-        q, kt, v, o, scale, s, s2, mx, sub, ex, sum, p, d1, bmm1, d2, mul, d3, rmax, d4, psub, d5,
-        pexp, d6, rsum, d7, pdiv, d8, bmm2,
-    ];
     for mode in [HM::CUDNN_HEUR_MODE_A, HM::CUDNN_HEUR_MODE_B, HM::CUDNN_HEUR_MODE_FALLBACK] {
         let heur = Desc::new(DT::CUDNN_BACKEND_ENGINEHEUR_DESCRIPTOR)?;
-        heur.set_desc(A::CUDNN_ATTR_ENGINEHEUR_OPERATION_GRAPH, &[&graph])?;
+        heur.set_desc(A::CUDNN_ATTR_ENGINEHEUR_OPERATION_GRAPH, &[&g.graph])?;
         heur.set(A::CUDNN_ATTR_ENGINEHEUR_MODE, T::CUDNN_TYPE_HEUR_MODE, &[mode])?;
         let heur = match heur.finalize("engine heuristics") {
             Ok(h) => h,
@@ -298,17 +488,17 @@ fn build(
         let cfgs: Vec<Desc> = (0..MAX_CFG)
             .map(|_| Desc::new(DT::CUDNN_BACKEND_ENGINECFG_DESCRIPTOR))
             .collect::<Result<_>>()?;
-        let mut raw: Vec<cudnnBackendDescriptor_t> = cfgs.iter().map(|c| c.0).collect();
+        let mut ptrs: Vec<cudnnBackendDescriptor_t> = cfgs.iter().map(|c| c.0).collect();
         let mut count = 0i64;
         if let Err(e) = ok(
             unsafe {
-                sys::cudnnBackendGetAttribute(
+                raw::get(
                     heur.0,
-                    A::CUDNN_ATTR_ENGINEHEUR_RESULTS,
-                    T::CUDNN_TYPE_BACKEND_DESCRIPTOR,
+                    A::CUDNN_ATTR_ENGINEHEUR_RESULTS as u32,
+                    T::CUDNN_TYPE_BACKEND_DESCRIPTOR as u32,
                     MAX_CFG as i64,
                     &mut count,
-                    raw.as_mut_ptr() as *mut c_void,
+                    ptrs.as_mut_ptr() as *mut c_void,
                 )
             },
             "heuristic results",
@@ -316,91 +506,109 @@ fn build(
             last = format!("{mode:?}: {e}");
             continue;
         }
-        if count <= 0 {
+        let count = (count.max(0) as usize).min(MAX_CFG);
+        if count == 0 {
             last = format!("{mode:?}: 0 engine configs");
             continue;
         }
-        for (i, cfg) in cfgs.iter().take(count as usize).enumerate() {
+        // Configs in heuristic order; `want_cfg` skips that many that finalize.
+        let mut skipped = 0usize;
+        for (i, cfg) in cfgs.iter().take(count).enumerate() {
             let plan = Desc::new(DT::CUDNN_BACKEND_EXECUTION_PLAN_DESCRIPTOR)?;
             plan.set(A::CUDNN_ATTR_EXECUTION_PLAN_HANDLE, T::CUDNN_TYPE_HANDLE, &[h])?;
             plan.set_desc(A::CUDNN_ATTR_EXECUTION_PLAN_ENGINE_CONFIG, &[cfg])?;
             match plan.finalize("execution plan") {
                 Ok(plan) => {
-                    let mut ws = 0i64;
-                    let mut n = 0i64;
-                    ok(
-                        unsafe {
-                            sys::cudnnBackendGetAttribute(
-                                plan.0,
-                                A::CUDNN_ATTR_EXECUTION_PLAN_WORKSPACE_SIZE,
-                                T::CUDNN_TYPE_INT64,
-                                1,
-                                &mut n,
-                                &mut ws as *mut i64 as *mut c_void,
-                            )
-                        },
-                        "workspace size",
-                    )?;
-                    keep.push(graph);
-                    keep.push(heur);
+                    if skipped < want_cfg {
+                        skipped += 1;
+                        continue;
+                    }
+                    let ws = plan.get_i64(A::CUDNN_ATTR_EXECUTION_PLAN_WORKSPACE_SIZE)?;
+                    let json = plan_json(&plan);
+                    let info = format!(
+                        "graph {} {mode:?} config {i} of {count}, engine {}, {}",
+                        kind.name(),
+                        engine_index(cfg).map_or("?".into(), |e| e.to_string()),
+                        json.chars().take(400).collect::<String>()
+                    );
+                    let mut keep = vec![g.graph, heur];
+                    keep.extend(g._keep);
+                    keep.extend(cfgs);
                     return Ok(SdpaPlan {
                         plan,
                         workspace: ws.max(0) as usize,
-                        engine: format!("{mode:?} config {i} of {count}"),
+                        info,
+                        configs: count,
                         _keep: keep,
                     });
                 }
-                Err(e) => last = format!("{mode:?}: {e}"),
+                Err(e) => last = format!("{mode:?} config {i}: {e}"),
             }
         }
+        if skipped > 0 {
+            last = format!("{mode:?}: only {skipped} executable configs (asked for index {want_cfg})");
+        }
     }
-    Err(msg(format!("cudnn sdpa: no executable plan ({last})")))
+    Err(msg(format!("cudnn sdpa ({}): no executable plan ({last})", kind.name())))
 }
 
-type Key = (usize, usize, usize, usize);
+type Key = (SdpaGraph, usize, usize, usize, usize, usize);
 
-fn plans() -> &'static Mutex<HashMap<Key, Option<Arc<SdpaPlan>>>> {
-    static P: OnceLock<Mutex<HashMap<Key, Option<Arc<SdpaPlan>>>>> = OnceLock::new();
+type PlanMap = HashMap<Key, std::result::Result<Arc<SdpaPlan>, String>>;
+
+fn plans() -> &'static Mutex<PlanMap> {
+    static P: OnceLock<Mutex<PlanMap>> = OnceLock::new();
     P.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
-/// The cached plan for a shape, built on first use; `None` (also cached)
-/// when cuDNN offers no engine for it.
-fn plan_for(
-    dev: &super::device::DeviceContext,
+/// The cached plan for a shape on one graph and config index, built on first
+/// use; the error (also cached) when cuDNN offers no engine for it.
+pub fn plan_for_graph(
+    kind: SdpaGraph,
+    cfg: usize,
     bh: usize,
     sq: usize,
     sk: usize,
     d: usize,
-) -> Option<Arc<SdpaPlan>> {
-    let key = (bh, sq, sk, d);
+) -> std::result::Result<Arc<SdpaPlan>, String> {
+    let dev = super::device::global_device().ok_or_else(|| "cudnn sdpa: no device".to_string())?;
+    let key = (kind, cfg, bh, sq, sk, d);
     let mut map = plans().lock().expect("cudnn sdpa plans");
     if let Some(p) = map.get(&key) {
         return p.clone();
     }
-    let p = match build(dev, bh, sq, sk, d) {
-        Ok(p) => {
-            super::log::info_once(
-                &LOGGED,
-                format_args!(
-                    "sdpa: cuDNN fused attention (cuDNN {}, {}, workspace {} B)",
-                    unsafe { sys::cudnnGetVersion() },
-                    p.engine,
-                    p.workspace
-                ),
-            );
-            Some(Arc::new(p))
-        }
-        Err(e) => {
-            super::log::info_once(
-                &FAILED,
-                format_args!("sdpa: cuDNN fused attention unavailable, using flash_mma: {e}"),
-            );
-            None
-        }
-    };
+    let p = build(&dev, kind, cfg, bh, sq, sk, d).map(Arc::new).map_err(|e| e.to_string());
     map.insert(key, p.clone());
     p
+}
+
+/// The plan `FASTVIDEO_CUDNN_SDPA_GRAPH` / `FASTVIDEO_CUDNN_SDPA_CFG` select:
+/// the first graph that yields one. `None` when no graph does.
+fn plan_for(bh: usize, sq: usize, sk: usize, d: usize) -> Option<Arc<SdpaPlan>> {
+    let cfg = super::envflag::usize_flag("FASTVIDEO_CUDNN_SDPA_CFG", 0);
+    let mut errs = Vec::new();
+    for kind in graphs_requested() {
+        match plan_for_graph(kind, cfg, bh, sq, sk, d) {
+            Ok(p) => {
+                super::log::info_once(
+                    &LOGGED,
+                    format_args!(
+                        "sdpa: cuDNN fused attention (cuDNN {}, {}, workspace {} B)",
+                        unsafe { sys::cudnnGetVersion() },
+                        p.info,
+                        p.workspace
+                    ),
+                );
+                return Some(p);
+            }
+            Err(e) => errs.push(e),
+        }
+    }
+    super::log::info_once(
+        &FAILED,
+        format_args!("sdpa: cuDNN fused attention unavailable, using flash_mma: {}", errs.join("; ")),
+    );
+    None
 }
 
 static LOGGED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
@@ -421,10 +629,24 @@ pub fn sdpa_bf16(
     d: usize,
     scale: f32,
 ) -> Result<bool> {
-    let dev = super::device::global_device().ok_or_else(|| msg("cudnn sdpa: no device"))?;
-    let Some(plan) = plan_for(&dev, bh, sq, sk, d) else {
+    let Some(plan) = plan_for(bh, sq, sk, d) else {
         return Ok(false);
     };
+    execute(&plan, q, k, v, out, scale)?;
+    Ok(true)
+}
+
+/// Run a plan from [`plan_for_graph`] (the bench and parity checks pick
+/// graph and config explicitly).
+pub fn execute(
+    plan: &SdpaPlan,
+    q: &CudaSlice<half::bf16>,
+    k: &CudaSlice<half::bf16>,
+    v: &CudaSlice<half::bf16>,
+    out: &mut CudaSlice<half::bf16>,
+    scale: f32,
+) -> Result<()> {
+    let dev = super::device::global_device().ok_or_else(|| msg("cudnn sdpa: no device"))?;
     let h = handle(&dev)?;
     let ws = if plan.workspace > 0 {
         Some(unsafe { dev.stream.alloc::<u8>(plan.workspace) }.map_err(|e| msg(e.to_string()))?)
@@ -454,9 +676,5 @@ pub fn sdpa_bf16(
         .map_or(std::ptr::null_mut(), |(p, _)| *p as *mut c_void);
     pack.set(A::CUDNN_ATTR_VARIANT_PACK_WORKSPACE, T::CUDNN_TYPE_VOID_PTR, &[wptr])?;
     let pack = pack.finalize("variant pack")?;
-    ok(
-        unsafe { sys::cudnnBackendExecute(h, plan.plan.0, pack.0) },
-        "execute",
-    )?;
-    Ok(true)
+    ok(unsafe { raw::execute(h, plan.plan.0, pack.0) }, "execute")
 }

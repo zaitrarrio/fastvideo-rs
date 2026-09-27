@@ -22,6 +22,7 @@ use crate::rand_weights::randn;
 use crate::report::{Report, StageError, StageResult};
 
 mod attn2;
+mod attn3;
 
 fn dev() -> anyhow::Result<std::sync::Arc<device::DeviceContext>> {
     device::global_device().ok_or_else(|| anyhow::anyhow!("no live CUDA device"))
@@ -2247,6 +2248,10 @@ pub fn run(report: &mut Report, lim: Limits, seed: u64, groups: Option<&str>) ->
     // Phase 3b kernels vs the kernels they replace, then real-shape timings.
     group(&mut c, "attn2_parity", attn2::parity)?;
     group(&mut c, "attn_bench", attn2::bench)?;
+    // sm_120 dense tuning (fwd3, cuDNN SDPA graphs) and the VSA stage breakdown.
+    group(&mut c, "attn3_parity", attn3::parity)?;
+    group(&mut c, "attn3_bench", attn3::bench)?;
+    group(&mut c, "vsa_stages", attn3::vsa_stages)?;
 
     group(&mut c, "conv", |c| {
         // cuDNN conv2d (patch embed, VAE resample): pad/stride variants + bias.

@@ -66,6 +66,7 @@ run_step() {
     info:box) info_box ;;
     lpips:ref) lpips_ref ;;
     bench:attn) bench_attn ;;   # attention microbenchmarks (bench_attn.py)
+    bench:vsa) bench_vsa ;;     # FastVideo VSA stage timings (bench_vsa.py)
     cells) run_cells ;;
     cells:*) ( UP_CELLS="${s#cells:}"; UP_CELLS="${UP_CELLS//,/ }"; run_cells ) ;;
     oracle) run_oracle ;;   # oracle.sh: dump hooks for the GPU oracle diff
@@ -101,6 +102,15 @@ bench_attn() {
   PYTHONUNBUFFERED=1 "$UP/sol-ltx25/LTX-2/.venv/bin/python" "$HERE/bench_attn.py" \
     --sol-engine "$SRC/sol-engine" --out "$OUT/bench-attn/result.json" ${UP_ATTN_SHAPES:+--shapes "$UP_ATTN_SHAPES"} \
     >"$OUT/bench-attn/stdout.log" 2>"$OUT/bench-attn/stderr.log"
+}
+
+# FastVideo's VSA op (fastvideo_kernel.video_sparse_attn) stage by stage at
+# the FastH3 768p / 480p and FastWan 1.3B grids (fv-gpucheck vsa_stages).
+bench_vsa() {
+  mkdir -p "$OUT/bench-vsa"
+  PYTHONUNBUFFERED=1 "$UP/fastvideo/bin/python" "$HERE/bench_vsa.py" \
+    --out "$OUT/bench-vsa/result.json" ${UP_VSA_WORKLOADS:+--workloads "$UP_VSA_WORKLOADS"} \
+    >"$OUT/bench-vsa/stdout.log" 2>"$OUT/bench-vsa/stderr.log"
 }
 
 # ---------------------------------------------------------------- weights

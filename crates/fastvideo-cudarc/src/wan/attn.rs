@@ -145,6 +145,13 @@ pub enum FlashKernel {
     /// `flash_mma_fwd2_d*`: 128-query CTAs (8 warps x 16 rows) and
     /// double-buffered K/V; bit-identical to V1 (same per-row arithmetic).
     V2,
+    /// `flash_mma_fwd3_d128`: V2's CTA and arithmetic with S_{j+1} issued
+    /// before softmax(S_j) and a three-stage K/V ring; bit-identical to V2.
+    /// d=128 only (V2 otherwise).
+    V3,
+    /// `flash_mma_fwd3s_d128`: V3 that skips the O rescale when no row max
+    /// rose (the factor V2 applies there is within a few ulp of 1).
+    V3s,
     /// cuDNN's fused attention engine (`cudnn_sdpa`), bf16 output only;
     /// V2 whenever cuDNN offers no engine or the caller wants f32 out.
     Cudnn,
@@ -164,6 +171,8 @@ pub fn flash_kernel_for(sq: usize, bh: usize, sms: usize) -> FlashKernel {
     match fastvideo_models::techniques::kernels::choice(fastvideo_models::techniques::kernels::KernelOp::DenseAttention).as_str() {
         "v1" => FlashKernel::V1,
         "v2" => FlashKernel::V2,
+        "v3" => FlashKernel::V3,
+        "v3s" => FlashKernel::V3s,
         "cudnn" => FlashKernel::Cudnn,
         _ if flash_v2_default() && flash_v2_fills(sq, bh, sms) => FlashKernel::V2,
         _ => FlashKernel::V1,
@@ -250,10 +259,10 @@ pub fn device_mma_sdpa_with(
             )?));
         }
     }
-    let kernel = if kernel == FlashKernel::Cudnn {
-        FlashKernel::V2
-    } else {
-        kernel
+    let kernel = match kernel {
+        FlashKernel::Cudnn => FlashKernel::V2,
+        FlashKernel::V3 | FlashKernel::V3s if d != 128 => FlashKernel::V2,
+        k => k,
     };
     let (func, cfg) = match kernel {
         FlashKernel::V1 => (
@@ -269,6 +278,24 @@ pub fn device_mma_sdpa_with(
                 shared_mem_bytes: 0,
             },
         ),
+        FlashKernel::V3 | FlashKernel::V3s => {
+            let func = if kernel == FlashKernel::V3 {
+                &dev.kernels.flash_mma_fwd3_d128
+            } else {
+                &dev.kernels.flash_mma_fwd3s_d128
+            };
+            // Three stages of (K, V) 64 x 128 bf16 tiles: 96 KB (opt-in).
+            let shared = (6 * MMA_TILE * d * 2) as u32;
+            super::ops::opt_in_dynamic_shared(func, shared)?;
+            (
+                func,
+                cudarc::driver::LaunchConfig {
+                    grid_dim: (sq.div_ceil(2 * MMA_TILE) as u32, bh as u32, 1),
+                    block_dim: (256, 1, 1),
+                    shared_mem_bytes: shared,
+                },
+            )
+        }
         FlashKernel::V2 | FlashKernel::Cudnn => {
             let func = if d == 64 {
                 &dev.kernels.flash_mma_fwd2_d64
