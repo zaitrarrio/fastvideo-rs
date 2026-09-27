@@ -97,6 +97,13 @@ text says **native**.
    next to the in-memory/file stores; running jobs stay authoritative in the
    worker's memory, D1 is the durable/shared copy so any worker can answer
    status/result after restarts or scale-to-zero.
+   Provisioned 2026-09-27: D1 `fv-jobs` (id 1796e295-a7f0-4402-bbed-ec94ccb27c15,
+   WNAM), R2 bucket `fv-media`. Runtime credentials are Runpod secrets
+   (reference as `{{ RUNPOD_SECRET_<name> }}` in templates): `fv_cf_account_id`,
+   `fv_cf_api_token` (D1 HTTP API), `fv_d1_database_id`, `fv_r2_bucket`,
+   `fv_r2_endpoint`, `fv_r2_access_key_id` / `fv_r2_secret_access_key` (R2 S3
+   keys derived from the API token: id / SHA-256 of the value). Vast: same
+   names as account env vars once a Vast API key is available.
 
 ## 1. Goals and non-goals
 
