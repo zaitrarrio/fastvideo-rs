@@ -1,0 +1,43 @@
+{
+  "image-to-video": {
+    "duration": 5,
+    "enable_safety_checker": true,
+    "end_image_url": null,
+    "endpoint": "image-to-video",
+    "image_url": null,
+    "prompt": "p",
+    "prompt_expansion_mode": "balanced",
+    "resolution": "768P",
+    "seed": null,
+    "sync_mode": false,
+    "target_audio_url": null
+  },
+  "reference-to-video": {
+    "aspect_ratio": "adaptive",
+    "duration": 5,
+    "enable_safety_checker": true,
+    "endpoint": "reference-to-video",
+    "prompt": "p",
+    "prompt_expansion_mode": "balanced",
+    "reference_audio_urls": [],
+    "reference_image_urls": [
+      "https://a.test/i.png"
+    ],
+    "reference_video_urls": [],
+    "resolution": "768P",
+    "seed": null,
+    "sync_mode": false
+  },
+  "text-to-video": {
+    "aspect_ratio": "16:9",
+    "duration": 5,
+    "enable_safety_checker": true,
+    "endpoint": "text-to-video",
+    "prompt": "p",
+    "prompt_expansion_mode": "balanced",
+    "resolution": "768P",
+    "seed": null,
+    "sync_mode": false,
+    "target_audio_url": null
+  }
+}
