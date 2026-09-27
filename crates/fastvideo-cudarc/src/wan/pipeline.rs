@@ -171,6 +171,44 @@ pub struct DenoiseStep<'a> {
 
 pub type StepObserver<'o> = dyn FnMut(&DenoiseStep<'_>) -> Result<()> + 'o;
 
+/// Where one [`WanPipeline::generate_to`] call spent its time (seconds).
+#[derive(Debug, Clone, Default)]
+pub struct WanTimings {
+    /// Prompt conditioning (UMT5, or a cache read).
+    pub text_s: f64,
+    pub denoise_s: f64,
+    /// Per denoise step (each step ends with a device sync).
+    pub step_s: Vec<f64>,
+    /// Decode through the finished mp4: decoder, RGB packing, writer
+    /// hand-off and the mp4 tail. PNG frames are not in it.
+    pub decode_s: f64,
+    /// Decoder compute alone (GPU time between chunk hand-offs).
+    pub vae_s: f64,
+    /// RGB8 packing plus the copy down.
+    pub rgb_s: f64,
+    /// Drain-thread time blocked in [`VideoWriter::push`].
+    pub push_s: f64,
+    /// Decode-thread time blocked on the hand-off queue.
+    pub wait_s: f64,
+    /// From the last frame handed over to ffmpeg's exit.
+    pub encode_s: f64,
+    /// PNG frames, written after the mp4.
+    pub write_s: f64,
+}
+
+/// What [`WanPipeline::generate_to`] produced.
+#[derive(Debug, Clone)]
+pub struct WanOutput {
+    pub frames: usize,
+    pub frame_paths: Vec<String>,
+    pub mp4: Option<String>,
+    /// `taehv` or `wan-vae`.
+    pub decoder: &'static str,
+    /// `hit`, `miss` or `off`.
+    pub text_cache: &'static str,
+    pub timings: WanTimings,
+}
+
 pub struct WanPipeline {
     text: Option<Umt5Encoder>,
     dit: WanTransformer3D,
@@ -359,7 +397,20 @@ impl WanPipeline {
         Ok((mask, cond))
     }
 
+    /// Generate one clip into `cfg.output_dir`; returns the PNG frame paths.
+    /// See [`Self::generate_to`].
     pub fn generate(&mut self, cfg: &GenerateConfig) -> Result<Vec<String>> {
+        let out = self.generate_to(cfg, Path::new(&cfg.output_dir), cfg.save_video)?;
+        Ok(out.frame_paths)
+    }
+
+    /// One request end to end: text, denoise, then a streamed decode. Each
+    /// decoded chunk is packed to RGB8 on the device and handed to a
+    /// [`VideoWriter`] (through the H3 / LTX frame drain) while the decoder
+    /// works on the next one. The mp4 (when `mp4`) is finished inside the
+    /// decode time; the `frame-NNN.png` files are written after it
+    /// (`timings.write_s`).
+    pub fn generate_to(&self, cfg: &GenerateConfig, out_dir: &Path, mp4: bool) -> Result<WanOutput> {
         let _gen = super::log::StepTimer::start("generate");
         let needs_control = matches!(
             self.preset.as_str(),
@@ -451,30 +502,77 @@ impl WanPipeline {
             _ => None,
         };
 
+        let mut timings = WanTimings::default();
+        let timer = std::time::Instant::now();
         let encoder_hs = self.encode_prompt_embeds(cfg)?;
+        timings.text_s = timer.elapsed().as_secs_f64();
+        let timer = std::time::Instant::now();
+        let mut last = std::time::Instant::now();
+        let mut step_s = Vec::new();
+        let mut record = |_: &DenoiseStep<'_>| -> Result<()> {
+            step_s.push(last.elapsed().as_secs_f64());
+            last = std::time::Instant::now();
+            Ok(())
+        };
         let latents = self.denoise_inner(
             cfg,
             latents,
             &encoder_hs,
             clip_tokens.as_ref(),
             i2v_pack.as_ref().map(|(m, c)| (m, c)),
-            None,
+            Some(&mut record),
         )?;
-        let video = self.decode_latents(&latents)?;
-        let paths = write_frames(&video, Path::new(&cfg.output_dir))?;
-        if cfg.save_video {
-            match mux_mp4(Path::new(&cfg.output_dir), cfg.fps) {
-                Ok(p) => super::log::info(format_args!("wrote mp4 {p}")),
-                Err(e) => super::log::info(format_args!("mp4 mux skipped: {e}")),
-            }
+        timings.denoise_s = timer.elapsed().as_secs_f64();
+        timings.step_s = step_s;
+        drop(encoder_hs);
+
+        let timer = std::time::Instant::now();
+        // A missing ffmpeg costs the mp4, not the clip (as the PNG mux did).
+        let mp4 = mp4 && cfg.fps > 0 && ffmpeg_available();
+        let writer = VideoWriter::spawn(out_dir, cfg.fps, mp4)?;
+        let mut drain = crate::h3::drain::FrameDrain::new(writer)?;
+        let video = self.decode_latents_streaming(&latents, &mut |offset, frames| {
+            drain.push(offset, frames)
+        })?;
+        let frames = video.shape[2];
+        drop(video);
+        let (mut writer, split) = drain.finish()?;
+        let tail = std::time::Instant::now();
+        let mp4_path = writer.finish_video()?;
+        timings.encode_s = tail.elapsed().as_secs_f64();
+        timings.decode_s = timer.elapsed().as_secs_f64();
+        timings.vae_s = split.vae_s;
+        timings.rgb_s = split.rgb_s;
+        timings.push_s = split.push_s;
+        timings.wait_s = split.wait_s;
+        let timer = std::time::Instant::now();
+        let (frame_paths, _) = writer.finish()?;
+        timings.write_s = timer.elapsed().as_secs_f64();
+        if let Some(p) = &mp4_path {
+            super::log::info(format_args!("wrote mp4 {p}"));
         }
         super::log::info(format_args!(
-            "wrote {} png frames → {}",
-            paths.len(),
-            cfg.output_dir
+            "wrote {} png frames → {} (text {:.2}s, denoise {:.2}s, decode+mp4 {:.2}s, png {:.2}s)",
+            frame_paths.len(),
+            out_dir.display(),
+            timings.text_s,
+            timings.denoise_s,
+            timings.decode_s,
+            timings.write_s
         ));
         log_device_stats_if_enabled();
-        Ok(paths)
+        Ok(WanOutput {
+            frames,
+            frame_paths,
+            mp4: mp4_path,
+            decoder: if self.taehv.is_some() {
+                "taehv"
+            } else {
+                "wan-vae"
+            },
+            text_cache: "off",
+            timings,
+        })
     }
 
     /// `(C, T, H, W)` of the latent for `cfg` (tiny graphs use a fixed shape).
@@ -1424,6 +1522,23 @@ pub fn interleave_audio(planar: &[f32], channels: usize) -> Result<Vec<f32>> {
         }
     }
     Ok(out)
+}
+
+/// Whether an `ffmpeg` binary runs here (checked once per process).
+fn ffmpeg_available() -> bool {
+    static FOUND: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *FOUND.get_or_init(|| {
+        let ok = Command::new("ffmpeg")
+            .arg("-version")
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .is_ok_and(|s| s.success());
+        if !ok {
+            super::log::info(format_args!("mp4 skipped: ffmpeg not available"));
+        }
+        ok
+    })
 }
 
 /// Mux `frame-%03d.png` in `dir` into `dir/output.mp4`.

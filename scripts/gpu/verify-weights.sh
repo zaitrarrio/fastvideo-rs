@@ -4,7 +4,7 @@
 #
 #   verify-weights.sh <cell>...        cells: fasth3-8step h3-base fasth3-4step-vsa
 #                                      fasth3-4step-dense sol-h3 sol-h3-spark
-#                                      ltx25-two-stage
+#                                      ltx25-two-stage fastwan21-1.3b
 #   verify-weights.sh --list           print the cells and what each needs
 #
 # For every weight root a cell needs, this checks:
@@ -39,11 +39,14 @@ needs() {
       echo "h3-base:transformer h3-base:vae h3-base:audio_vae h3-base:tokenizer h3-base:text_encoder FastH3-4-step-Preview-v1-LoRA:vsa-datafree/adapter_model.safetensors :$UPSCALER_REL h3-to-ltx:model.safetensors $(needs ltx25-two-stage)" ;;
     ltx25-two-stage)
       echo "ltx25:transformer ltx25:connectors ltx25:vae ltx25:audio_vae ltx25:vocoder ltx25:latent_upsampler ltx25:text_encoder ltx25:tokenizer" ;;
+    # FastVideo/FastWan2.1-T2V-1.3B-Diffusers (the wan family).
+    fastwan21-1.3b)
+      echo "fastwan21-1.3b:transformer fastwan21-1.3b:vae fastwan21-1.3b:text_encoder fastwan21-1.3b:tokenizer" ;;
     *) return 1 ;;
   esac
 }
 
-CELLS=(fasth3-8step h3-base fasth3-4step-vsa fasth3-4step-dense sol-h3 sol-h3-spark ltx25-two-stage)
+CELLS=(fasth3-8step h3-base fasth3-4step-vsa fasth3-4step-dense sol-h3 sol-h3-spark ltx25-two-stage fastwan21-1.3b)
 
 if [[ "${1:-}" == "--list" ]]; then
   for c in "${CELLS[@]}"; do printf '%-20s %s\n' "$c" "$(needs "$c")"; done
