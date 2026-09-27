@@ -5113,3 +5113,80 @@ mod h3v_tests {
     }
 }
 // ==== endregion: h3 video vae ====
+
+/// The base of a weight [`lora_fuse_bf16_device`] merges into.
+#[cfg(feature = "cuda")]
+pub enum LoraBase<'a> {
+    /// bf16 as on disk (widened exactly).
+    Bf16(&'a CudaSlice<half::bf16>),
+    /// f32 as on disk.
+    F32(&'a CudaSlice<f32>),
+    /// A `.set_weight` replacement: `w = values * scale`.
+    Replacement(&'a CudaSlice<f32>, f32),
+}
+
+/// `(A [rank, cols], B [rows, rank], multiplier)` of a low-rank pair.
+#[cfg(feature = "cuda")]
+pub struct LoraPairDev<'a> {
+    pub a: &'a CudaSlice<f32>,
+    pub b: &'a CudaSlice<f32>,
+    pub rank: usize,
+    pub multiplier: f32,
+}
+
+/// One adapter merge on the device into `out` (`rows x cols` bf16): the host
+/// merge's arithmetic element for element (see `lora_fuse_bf16` in
+/// kernels.cu), so the bits equal the host path's.
+#[cfg(feature = "cuda")]
+pub fn lora_fuse_bf16_device(
+    base: LoraBase<'_>,
+    pair: Option<LoraPairDev<'_>>,
+    diff: Option<(&CudaSlice<f32>, f32)>,
+    out: &mut cudarc::driver::CudaViewMut<'_, half::bf16>,
+    rows: usize,
+    cols: usize,
+) -> Result<()> {
+    let n = rows * cols;
+    check("lora_fuse out", out.len() == n)?;
+    let dev = ctx()?;
+    // Unused inputs still need a pointer to bind.
+    let dummy16 = unsafe { dev.stream.alloc::<half::bf16>(1) }.map_err(err)?;
+    let dummy32 = unsafe { dev.stream.alloc::<f32>(1) }.map_err(err)?;
+    let (base16, base32, mode, rscale) = match base {
+        LoraBase::Bf16(w) => {
+            check("lora_fuse base", w.len() == n)?;
+            (w, &dummy32, 0i32, 1.0f32)
+        }
+        LoraBase::F32(w) => {
+            check("lora_fuse base", w.len() == n)?;
+            (&dummy16, w, 1, 1.0)
+        }
+        LoraBase::Replacement(w, s) => {
+            check("lora_fuse replacement", w.len() == n)?;
+            (&dummy16, w, 2, s)
+        }
+    };
+    let (a, b, rank, mult, has_pair) = match &pair {
+        Some(p) => {
+            check(
+                "lora_fuse pair",
+                p.rank > 0 && p.a.len() == p.rank * cols && p.b.len() == rows * p.rank,
+            )?;
+            (p.a, p.b, p.rank as i32, p.multiplier, 1i32)
+        }
+        None => (&dummy32, &dummy32, 0, 0.0, 0),
+    };
+    let (d, dscale, has_diff) = match diff {
+        Some((d, s)) => {
+            check("lora_fuse diff", d.len() == n)?;
+            (d, s, 1i32)
+        }
+        None => (&dummy32, 0.0f32, 0),
+    };
+    let (rows_i, cols_i) = (rows as i64, cols as i64);
+    launch!(dev.stream, &dev.kernels.lora_fuse_bf16, cfg_n(n);
+        base16, base32, &mode, &rscale, a, b, &rank, &mult, &has_pair, d, &dscale, &has_diff,
+        out, &rows_i, &cols_i)
+    .map_err(err)?;
+    Ok(())
+}
