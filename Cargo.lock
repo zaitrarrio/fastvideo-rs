@@ -1403,10 +1403,13 @@ dependencies = [
 name = "fastvideo-webrtc"
 version = "0.1.0"
 dependencies = [
+ "axum",
  "bytes",
  "fastvideo-media",
  "fastvideo-protocol",
  "reqwest",
+ "serde",
+ "serde_json",
  "str0m",
  "thiserror",
  "tokio",
