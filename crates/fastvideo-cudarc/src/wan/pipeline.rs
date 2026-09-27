@@ -359,6 +359,11 @@ impl WanPipeline {
 
     /// [`Self::load`] with control over which components are materialized.
     pub fn load_with(root: &Path, preset: &str, parts: LoadParts) -> Result<Self> {
+        // The DiT runs bf16 activations as FastVideo does (`dit_precision`
+        // bf16); UMT5 and the VAE keep f32 (`text_encoder_precisions` /
+        // `vae_precision` fp32), see umt5.rs / vae.rs. FASTVIDEO_BF16_ACT=0
+        // restores f32 activations everywhere.
+        crate::wan::tensor::default_bf16_activations();
         let cfg = WanVideoArchConfig::from_preset(preset);
         let dit = WeightMap::from_dir(&root.join("transformer"))?;
         let vae_cfg = if cfg.out_channels == 48 {

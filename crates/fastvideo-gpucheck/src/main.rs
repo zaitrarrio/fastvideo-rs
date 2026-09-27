@@ -29,6 +29,8 @@ mod kernels;
 mod kernels_fp8;
 #[cfg(feature = "cuda")]
 mod kernels_fuse;
+#[cfg(feature = "cuda")]
+mod kernels_wan;
 mod llm_oracle;
 mod lpips;
 mod ltx2_stage;

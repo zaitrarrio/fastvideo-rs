@@ -593,9 +593,19 @@ pub struct H3Pipeline {
 /// hidden and the VSA gathers are all live around one block) plus 4 GiB of
 /// workspace. Conservative on purpose: a 96 GB card with the FP8 encoder,
 /// DiT and decoders resident ran out at the first 5 s VSA step with ~27 GiB
-/// free.
+/// free. Under bf16 activations (the GPU default) those tensors are half the
+/// size: 640 KiB per row, measured at 5 s 1344x768 as ~25 GiB over the live
+/// weights (the peak of a run that released the encoder), where the f32 rule
+/// asked for 40.9 GiB and released a 22.7 GiB encoder with 40.8 GiB free, so
+/// the warm request streamed it (~89 s of text encoding instead of ~0.5 s).
 pub fn denoise_reserve_bytes(rows: usize) -> u64 {
-    (rows as u64) * (1 << 20) + (4u64 << 30)
+    denoise_reserve_bytes_for(rows, crate::wan::tensor::bf16_activations())
+}
+
+/// [`denoise_reserve_bytes`] for an explicit activation width.
+pub fn denoise_reserve_bytes_for(rows: usize, bf16_act: bool) -> u64 {
+    let per_row: u64 = if bf16_act { 640 << 10 } else { 1 << 20 };
+    (rows as u64) * per_row + (4u64 << 30)
 }
 
 /// Whether an `Auto`-resident encoder may stay on the device through a
@@ -2059,6 +2069,20 @@ mod tests {
         assert!(keep_auto_encoder(Some(70 * GIB), rows));
         assert!(!keep_auto_encoder(None, rows));
         assert!(denoise_reserve_bytes(2 * rows) > reserve);
+    }
+
+    #[test]
+    fn bf16_activations_reserve_less_for_the_denoise() {
+        const GIB: u64 = 1 << 30;
+        let rows = 37_756; // 5 s 1344x768, as logged by the FastH3 768p run
+        let f32 = denoise_reserve_bytes_for(rows, false);
+        let bf16 = denoise_reserve_bytes_for(rows, true);
+        assert!(f32 > 40 * GIB && f32 < 42 * GIB);
+        assert!(bf16 > 26 * GIB && bf16 < 28 * GIB);
+        // That run had 40.8 GiB free with the FP8 encoder resident: the f32
+        // rule released it, the bf16 rule keeps it (~25 GiB measured need).
+        assert!(40 * GIB < f32);
+        assert!(40 * GIB > bf16);
     }
 
     #[test]

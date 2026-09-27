@@ -946,12 +946,14 @@ impl AutoencoderKlWan {
         latents.sub(&mean)?.div(&std)
     }
 
+    /// The VAE runs f32 activations (FastVideo's `vae_precision` is fp32),
+    /// whatever the DiT's `FASTVIDEO_BF16_ACT` default.
     pub fn encode_video(&self, video: &CudaTensor) -> Result<CudaTensor> {
         let enc = self
             .encoder
             .as_ref()
             .ok_or_else(|| TensorError::Message("VAE encoder not loaded".into()))?;
-        enc.forward(video)
+        super::tensor::with_bf16_act(false, || enc.forward(&video.to_f32_act()?))
     }
 
     pub fn decode(&self, latents: &CudaTensor) -> Result<CudaTensor> {
@@ -960,7 +962,20 @@ impl AutoencoderKlWan {
 
     /// `decode`, handing each chunk's finished frames to `sink(frame_offset,
     /// frames)` — `[frames, 3, H, W]`, in order — while the next chunk decodes.
+    ///
+    /// Always f32 activations (FastVideo's `vae_precision` is fp32): the
+    /// DiT's bf16-activation default must not reach the decoder.
     pub fn decode_streaming(
+        &self,
+        latents: &CudaTensor,
+        sink: &mut dyn FnMut(usize, &CudaTensor) -> Result<()>,
+    ) -> Result<CudaTensor> {
+        super::tensor::with_bf16_act(false, || {
+            self.decode_streaming_f32(&latents.to_f32_act()?, sink)
+        })
+    }
+
+    fn decode_streaming_f32(
         &self,
         latents: &CudaTensor,
         sink: &mut dyn FnMut(usize, &CudaTensor) -> Result<()>,

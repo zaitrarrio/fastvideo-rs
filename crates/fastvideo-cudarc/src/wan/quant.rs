@@ -434,6 +434,74 @@ impl H3QuantPlan {
     }
 }
 
+/// `FASTVIDEO_WAN_QUANT=off|w8a8|mxfp8`: the Wan DiT's FP8 recipe.
+pub const WAN_ENV: &str = "FASTVIDEO_WAN_QUANT";
+
+/// Which Wan DiT linears a mode quantizes: every block's attention (self and
+/// cross) and FFN linears (`WanBlock::quantize`); embedders, the output head
+/// and the I2V image K/V stay bf16.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct WanQuantPlan {
+    pub mode: QuantMode,
+    pub num_layers: usize,
+}
+
+impl WanQuantPlan {
+    /// `FASTVIDEO_WAN_QUANT`; an unknown value is an error. Unset, MXFP8 on a
+    /// live sm_100-class device (block-scaled FP8 tensor cores, where it is
+    /// the H3 default too) and off elsewhere: on RTX PRO 6000 (sm_120) the
+    /// FastWan 1.3B measurement in docs/ports/wan.md did not win both speed
+    /// and quality, and CPU runs never quantize by default.
+    pub fn from_env(num_layers: usize) -> std::result::Result<Self, String> {
+        let mode = match fastvideo_models::techniques::settings::var(WAN_ENV) {
+            Some(v) => QuantMode::parse(&v).map_err(|e| e.replace(ENV, WAN_ENV))?,
+            None => Self::default_mode(),
+        };
+        Ok(Self { mode, num_layers })
+    }
+
+    pub fn off(num_layers: usize) -> Self {
+        Self {
+            mode: QuantMode::Off,
+            num_layers,
+        }
+    }
+
+    fn default_mode() -> QuantMode {
+        #[cfg(feature = "cuda")]
+        if crate::wan::stats::device_expected()
+            && crate::wan::device::global_device().is_some_and(|d| d.sm_major == 10)
+        {
+            return QuantMode::Mxfp8;
+        }
+        QuantMode::Off
+    }
+
+    /// Block `i`'s recipe (all blocks, for either recipe).
+    pub fn block(&self, i: usize) -> Option<QuantKind> {
+        (i < self.num_layers).then_some(self.mode.kind()).flatten()
+    }
+
+    /// Say once per process which recipe the DiT runs.
+    pub fn announce(&self) {
+        static SAID: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+        if self.mode != QuantMode::Off {
+            crate::wan::log::info_once(
+                &SAID,
+                format_args!(
+                    "{WAN_ENV}={}: {} recipe on the attention + FFN linears of all {} blocks",
+                    self.mode.as_str(),
+                    match self.mode {
+                        QuantMode::W8A8 => "FastVideo tensorwise W8A8",
+                        _ => "MXFP8 (E4M3, one E8M0 scale per 32 values)",
+                    },
+                    self.num_layers
+                ),
+            );
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Quantized weights
 // ---------------------------------------------------------------------------

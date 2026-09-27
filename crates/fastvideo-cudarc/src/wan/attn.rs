@@ -325,6 +325,130 @@ pub fn device_mma_sdpa(
     Ok(None)
 }
 
+/// Wan's block-causal temporal mask as a kernel parameter rather than an
+/// `[S, S]` additive tensor: query `q` sees key `k` iff
+/// `frame(k) <= frame(q)` (`frame(i) = i / frame_tokens`), within `window`
+/// frames when `window > 0`, or `frame(k) < sink`. The same predicate as
+/// `fastvideo_models::wan::causal_temporal_mask`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct BlockCausal {
+    pub frame_tokens: usize,
+    pub window: usize,
+    pub sink: usize,
+}
+
+impl BlockCausal {
+    pub fn allows(&self, q: usize, k: usize) -> bool {
+        let ft = self.frame_tokens.max(1);
+        let (tq, tk) = (q / ft, k / ft);
+        (tk <= tq && (self.window == 0 || tq - tk <= self.window)) || tk < self.sink
+    }
+
+    /// The additive `[sq, sk]` mask (0 visible, `-1e9` masked), as
+    /// `causal_temporal_mask` builds it.
+    pub fn dense_mask(&self, sq: usize, sk: usize) -> Vec<f32> {
+        let mut m = vec![0.0f32; sq * sk];
+        for q in 0..sq {
+            for k in 0..sk {
+                if !self.allows(q, k) {
+                    m[q * sk + k] = -1e9;
+                }
+            }
+        }
+        m
+    }
+}
+
+/// [`device_mma_sdpa`] under a [`BlockCausal`] mask
+/// (`flash_mma_fwd2_causal_d*`): key tiles no query of a CTA can see are
+/// skipped, straddling tiles are masked per score, and the online softmax is
+/// the dense V2 kernel's. `None` when the kernel cannot run the shape.
+#[cfg(feature = "cuda")]
+pub fn device_mma_sdpa_causal(
+    q: &CudaTensor,
+    k: &CudaTensor,
+    v: &CudaTensor,
+    scale: Option<f32>,
+    out_bf16: bool,
+    mask: BlockCausal,
+) -> Result<Option<CudaTensor>> {
+    let Some((b, h, sq, sk, d)) = bhsd(q, k, v) else {
+        return Ok(None);
+    };
+    let Some(dev) = super::device::global_device() else {
+        return Ok(None);
+    };
+    let fits = |x: usize| x <= i32::MAX as usize;
+    if !mma_sdpa_supported(b, h, sq, sk, d, dev.sm_major)
+        || mask.frame_tokens == 0
+        || !fits(mask.window)
+        || !fits(mask.sink)
+        || !fits(sq.max(sk) + mask.frame_tokens)
+    {
+        return Ok(None);
+    }
+    let (Some(qb), Some(kb), Some(vb)) = (q.dev_bf16()?, k.dev_bf16()?, v.dev_bf16()?) else {
+        return Ok(None);
+    };
+    let scale = scale.unwrap_or(1.0 / (d as f32).sqrt());
+    let sl2 = scale * std::f32::consts::LOG2_E;
+    let bh = b * h;
+    static ONCE: AtomicBool = AtomicBool::new(false);
+    super::log::info_once(
+        &ONCE,
+        format_args!(
+            "sdpa: block-causal mma B={b} H={h} Sq={sq} Sk={sk} D={d} frame={} window={} sink={}",
+            mask.frame_tokens, mask.window, mask.sink
+        ),
+    );
+    let func = if d == 64 {
+        &dev.kernels.flash_mma_fwd2_causal_d64
+    } else {
+        &dev.kernels.flash_mma_fwd2_causal_d128
+    };
+    let shared = (4 * MMA_TILE * d * 2) as u32;
+    super::ops::opt_in_dynamic_shared(func, shared)?;
+    let cfg = cudarc::driver::LaunchConfig {
+        grid_dim: (sq.div_ceil(2 * MMA_TILE) as u32, bh as u32, 1),
+        block_dim: (256, 1, 1),
+        shared_mem_bytes: shared,
+    };
+    let (sq_i, sk_i) = (sq as i32, sk as i32);
+    let (ft, win, sink) = (mask.frame_tokens as i32, mask.window as i32, mask.sink as i32);
+    let err = |e: cudarc::driver::DriverError| msg(e.to_string());
+    let launch_err = |e: super::device::DeviceError| msg(e.to_string());
+    let n = bh * sq * d;
+    if out_bf16 {
+        let mut out = unsafe { dev.stream.alloc::<half::bf16>(n) }.map_err(err)?;
+        let mut dummy = super::ops::alloc(1)?;
+        let is_bf16 = 1i32;
+        super::kernels::launch!(dev.stream, func, cfg;
+            &*qb, &*kb, &*vb, &mut dummy, &mut out, &is_bf16, &sq_i, &sk_i, &sl2, &ft, &win, &sink)
+        .map_err(launch_err)?;
+        Ok(Some(CudaTensor::from_device_slice_bf16(out, vec![b, h, sq, d])?))
+    } else {
+        let mut out = super::ops::alloc(n)?;
+        let mut dummy = unsafe { dev.stream.alloc::<half::bf16>(1) }.map_err(err)?;
+        let is_bf16 = 0i32;
+        super::kernels::launch!(dev.stream, func, cfg;
+            &*qb, &*kb, &*vb, &mut out, &mut dummy, &is_bf16, &sq_i, &sk_i, &sl2, &ft, &win, &sink)
+        .map_err(launch_err)?;
+        Ok(Some(CudaTensor::from_device_slice(out, vec![b, h, sq, d])?))
+    }
+}
+
+#[cfg(not(feature = "cuda"))]
+pub fn device_mma_sdpa_causal(
+    _q: &CudaTensor,
+    _k: &CudaTensor,
+    _v: &CudaTensor,
+    _scale: Option<f32>,
+    _out_bf16: bool,
+    _mask: BlockCausal,
+) -> Result<Option<CudaTensor>> {
+    Ok(None)
+}
+
 /// Device dense SDPA: strided-batched cuBLAS `Q@Kᵀ` + softmax + `P@V`, with
 /// the query axis chunked so the score buffer stays under
 /// [`DENSE_SCORE_BUDGET`]. `None` when no device is expected.
@@ -562,6 +686,50 @@ pub fn block_sparse_sdpa(
 mod tests {
     use super::super::nn::scaled_dot_product_attention;
     use super::*;
+
+    #[test]
+    fn block_causal_is_the_models_temporal_mask() {
+        use fastvideo_models::wan::{causal_temporal_mask, WanVideoArchConfig};
+        for (window, sink) in [(-1i32, 0usize), (21, 0), (1, 1), (2, 0), (0, 2)] {
+            let mut cfg = WanVideoArchConfig::sf_wan_t2v_1_3b();
+            cfg.local_attn_size = window;
+            cfg.sink_size = sink;
+            let (frames, h, w) = (6, 6, 4);
+            let want = causal_temporal_mask(&cfg, frames, h, w);
+            let spec = BlockCausal {
+                frame_tokens: (h / 2) * (w / 2),
+                window: usize::try_from(window).unwrap_or(0),
+                sink,
+            };
+            let seq = frames * spec.frame_tokens;
+            assert_eq!(spec.dense_mask(seq, seq), want, "window {window} sink {sink}");
+        }
+    }
+
+    #[test]
+    fn host_block_causal_matches_the_masked_composed_sdpa() {
+        let (b, h, s, d) = (1usize, 2usize, 24usize, 8usize);
+        let v = |n: usize, k: f32| (0..n).map(|i| ((i as f32 * k).sin() * 0.9)).collect::<Vec<_>>();
+        let q = CudaTensor::from_vec(v(b * h * s * d, 0.37), vec![b, h, s, d]).unwrap();
+        let k = CudaTensor::from_vec(v(b * h * s * d, 0.71), vec![b, h, s, d]).unwrap();
+        let vv = CudaTensor::from_vec(v(b * h * s * d, 1.13), vec![b, h, s, d]).unwrap();
+        let spec = BlockCausal {
+            frame_tokens: 5,
+            window: 2,
+            sink: 1,
+        };
+        let got = super::super::nn::sdpa_block_causal(&q, &k, &vv, None, spec).unwrap();
+        let mask = CudaTensor::from_vec(spec.dense_mask(s, s), vec![1, 1, s, s]).unwrap();
+        let want =
+            super::super::nn::scaled_dot_product_attention_masked(&q, &k, &vv, None, Some(&mask))
+                .unwrap();
+        assert_eq!(got.host_cow().unwrap(), want.host_cow().unwrap());
+        // The first query (frame 0) sees only frame 0: its output is the
+        // softmax-weighted mean of the first five value rows alone.
+        let masked_first = got.host_cow().unwrap()[..d].to_vec();
+        let dense = scaled_dot_product_attention(&q, &k, &vv, None).unwrap();
+        assert_ne!(masked_first, dense.host_cow().unwrap()[..d].to_vec());
+    }
 
     #[test]
     fn flash_v2_only_where_its_grid_fills_the_gpu() {

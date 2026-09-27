@@ -305,7 +305,13 @@ impl Umt5Encoder {
         })
     }
 
+    /// f32 activations always (FastVideo's `text_encoder_precisions` is
+    /// fp32 for Wan), whatever the DiT's `FASTVIDEO_BF16_ACT` default.
     pub fn forward(&self, input_ids: &[u32], batch: usize, seq: usize) -> Result<CudaTensor> {
+        super::tensor::with_bf16_act(false, || self.forward_f32(input_ids, batch, seq))
+    }
+
+    fn forward_f32(&self, input_ids: &[u32], batch: usize, seq: usize) -> Result<CudaTensor> {
         if input_ids.len() != batch * seq {
             return Err(TensorError::Message("input_ids length mismatch".into()));
         }

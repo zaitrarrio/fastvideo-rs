@@ -270,8 +270,11 @@ Weights: `--weights`, `FASTVIDEO_WEIGHTS`, or the Hugging Face snapshot.
 | `FASTVIDEO_LINGBOT_SOL` | Logs the unspecified cache/PISA/topology gap and stays dense |
 | `FASTVIDEO_NVFP4` | W4A4 dequant (`1` → `static_6`; `mse` for FourOverSix) |
 | `FASTVIDEO_BF16` | cuBLAS tf32/bf16 compute. On unless set to `0` |
-| `FASTVIDEO_BF16_ACT` | DiT activations (and residual) as bf16, as the reference runs them. On by default for H3 and LTX-2 on a GPU; `0` restores f32, `1` forces bf16 for every model. CPU runs keep f32 |
+| `FASTVIDEO_BF16_ACT` | DiT activations (and residual) as bf16, as the reference runs them. On by default for H3, LTX-2 and Wan on a GPU (Wan's UMT5 and VAE stay f32, FastVideo's fp32 precisions); `0` restores f32, `1` forces bf16 for every model. CPU runs keep f32. FastWan 1.3B 480x832x81 on RTX PRO 6000: denoise 2.50 → 1.96 s, LPIPS 0.107 vs f32 (see [ports/wan.md](ports/wan.md)) |
 | `FASTVIDEO_H3_QUANT` | H3 FP8 linear recipe: `mxfp8` (Sol-H3, the default on sm_100+ GPUs), `w8a8` (FastVideo) or `off` (bf16) |
+| `FASTVIDEO_WAN_QUANT` | Wan DiT FP8 recipe on every block's attention + FFN linears: `mxfp8`, `w8a8` (FastVideo) or `off`. Default `mxfp8` on sm_100, `off` elsewhere (on sm_120 both were slower than bf16 and doubled LPIPS) |
+| `FASTVIDEO_WAN_FUSE` | Wan block residual + LayerNorm (+ AdaLN) as one kernel under bf16 activations (default on); `0` runs the byte-identical two-kernel form |
+| `FASTVIDEO_WAN_CAUSAL_FLASH` | SF-Wan block-causal self-attention on the masked flash kernel (default on); `0` materializes the `[S, S]` mask through `sdpa_composed` |
 | `FASTVIDEO_VSA` | Wan block-sparse video attention |
 | `FASTVIDEO_SP_WORLD` | Sequence-parallel world size |
 | `FASTVIDEO_SAVE_MP4` | Mux frames with ffmpeg |
