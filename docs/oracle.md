@@ -285,7 +285,8 @@ resolution-specific hazard), and our upsampler in isolation (`s2_upsampled`,
 per timestep layout (`t2v_`: one timestep; `i2v_`: frame 0 at 0), with the
 patch embedding, time projection and every block output. `fv-gpucheck wan
 oracle` (matrix cells `wan5b-oracle`, `wan5b-oracle-exact`) injects the same
-inputs into ours and `compare-dumps` diffs them. First run (H100,
-`wan/f5d6595-09271224`): VAE encode rel-L2 1.87e-3 (max-abs 8.4e-3); the
-decode hit cuDNN's 4 GB tensor limit (fixed since, frame split) and the DiT
-rows were not reached. Details in [ports/wan.md](ports/wan.md).
+inputs into ours and `compare-dumps` diffs them. H100, `wan/cfce899-09271307`:
+VAE decode PSNR 65.7 dB (rel-L2 1.8e-3; exact f32 mode 1.4e-4), encode
+rel-L2 1.8e-3, DiT output rel-L2 2.7e-2 (t2v) / 1.5e-2 (i2v per-frame
+timesteps), from 3e-3 at the patch embedding and block 0 with no jump.
+Details in [ports/wan.md](ports/wan.md).
