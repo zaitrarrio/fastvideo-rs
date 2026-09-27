@@ -51,6 +51,9 @@ volume. Both `fv-weights-b200-us` (US-CA-2) and `fv-weights-h3-ltx-hy`
 - `fv-gpucheck mmaudio v2a --weights <root> --video clip.mp4 --prompt ...
   [--runs N]` times N generations on a clip. The first is a warm-up when
   N > 1. It writes `mmaudio.wav`, `mmaudio.f32` and a muxed mp4.
+- `fv-gpucheck mmaudio t2a --weights <root> --prompt ... [--seeds 1,2,3]
+  [--duration 8]` is text-to-audio with no video. One loaded pipeline
+  writes `seed-<seed>.wav` per seed.
 - Wan sidecar: `--audio mmaudio` (CLI and `fv-gpucheck wan gen`), or
   `FASTVIDEO_WAN_AUDIO=mmaudio`. After the video it muxes an AAC soundtrack
   into the mp4. `benchmark.json` gains the video / audio / end-to-end split
@@ -151,3 +154,84 @@ measure. The RMS is about 10% lower (0.184 vs 0.204), which is within the
 latent drift. Our sampler draws noise from its own RNG, so with the same seed
 it makes a different (but similar-sounding) track to torch unless `mm_x0` is
 injected.
+
+## Speech
+
+The question is whether MMAudio can say a given line. `runpod-matrix.sh
+speechtest` measures it. It generates every clip on one pod and transcribes
+each one with Whisper large-v3 (`speech_transcribe.py`: English forced,
+temperature 0). WER is computed against the intended line, lowercased, with
+punctuation stripped and numbers spelled out. `no_speech_prob` is Whisper's
+value for the first segment, and 1.0 when it finds no segment at all.
+"p(en)" is the unforced language-ID probability of English. Seeds are 1000,
+1001 and 1002 throughout. The run is at `fc6053d` on an RTX PRO 6000
+(driver 595.91), on 2026-09-27. The wavs, `whisper/speech.json` and
+`transcripts.tsv` are in `artifacts/runpod/speechtest/fc6053d-09271842/`.
+
+Cases:
+
+- **T2A** runs 8 s from a text prompt only, in three styles. "fox" is
+  `A man says clearly: "The quick brown fox jumps over the lazy dog."`.
+  "station" is `A woman announces: "Welcome to the station, the next train
+  leaves at nine."`. "fox, tagged" is strobe's `<S>..<E>` form with an
+  `Audio: male speech, clear voice, quiet room` line. The upstream README has
+  no speech prompt style. Its "Known limitations" section says instead that
+  "the model sometimes generates unintelligible human speech-like sounds".
+- **V2A** runs 5 s on one FastWan 1.3B clip of a man speaking to camera
+  (seed 1024). It runs once without a text prompt and once with the "fox"
+  line as the text prompt.
+- **H3 baseline** is FastH3 4-step VSA at 480p, 5 s, with native joint audio.
+  The same lines are written in H3 dialogue markup,
+  `... He says clearly: <d>[English] The quick brown fox jumps over the lazy dog.</d>`.
+
+| Case | Seed | Whisper transcript | WER | no_speech_prob | p(en) |
+|---|---|---|---|---|---|
+| T2A fox | 1000 | (none) | 1.00 | 1.00 | 0.13 |
+| T2A fox | 1001 | (none) | 1.00 | 1.00 | 0.17 |
+| T2A fox | 1002 | (none) | 1.00 | 1.00 | 0.24 |
+| T2A station | 1000 | "And still, for the naive or young, this lift has 10-inch doors with a deep-fitting smile. 12 companions or a family tree." | 2.30 | 0.39 | 0.19 |
+| T2A station | 1001 | "The" | 0.90 | 0.57 | 0.32 |
+| T2A station | 1002 | "Thank you for watching. Please subscribe to our channel. Thank you." | 1.10 | 0.54 | 0.14 |
+| T2A fox, tagged | 1000 | "Lizzie Risset and Little Miss Lask." | 1.00 | 0.40 | 0.68 |
+| T2A fox, tagged | 1001 | "I don't like when I have to use my career as a sub-doub. And pointing down in the live, uh... What's up, pal? ..." | 3.11 | 0.22 | 0.84 |
+| T2A fox, tagged | 1002 | "Great. Hey, Matt. This is called true. Yay." | 1.00 | 0.21 | 0.80 |
+| V2A, no text | 1000 | "I'm breaking free g on the same this other effort that says we have gotten so cage at them some" | 2.11 | 0.33 | 0.11 |
+| V2A, no text | 1001 | "I'm William Bedeus, getting into Sydney PSD news. We're in Dark Isle League, Tariff Adventure." | 1.67 | 0.25 | 0.98 |
+| V2A, no text | 1002 | "I will be in prison on Sunday because I need to be in that condition." | 1.67 | 0.36 | 0.38 |
+| V2A + fox line | 1000 | "I'm playing for a G on the side because they said they have it. ..." | 2.89 | 0.26 | 0.12 |
+| V2A + fox line | 1001 | "I'm William Verdeers, getting in a sitting there. This day is where doctors will leave time for a time." | 2.11 | 0.27 | 0.91 |
+| V2A + fox line | 1002 | "online and previous thank you so much beyond sky you just beyond that can you get yourself now" | 2.00 | 0.35 | 0.65 |
+| H3 fox | 1000 | "The quick brown fox jumps over the lazy dog." | 0.00 | 0.03 | 1.00 |
+| H3 fox | 1001 | "The quick brown fox jumps over the lazy dog." | 0.00 | 0.02 | 0.99 |
+| H3 fox | 1002 | "The quick brown fox jumps over the lazy dog." | 0.00 | 0.07 | 0.98 |
+| H3 station | 1000 | "Welcome to the station. The next train leaves at nine." | 0.00 | 0.05 | 0.98 |
+| H3 station | 1001 | "Welcome to the station. The next train leaves at nine." | 0.00 | 0.06 | 0.96 |
+| H3 station | 1002 | "Welcome to the station. The next train leaves at nine." | 0.00 | 0.25 | 0.93 |
+
+Mean WER is 1.00 for T2A fox, 1.43 for T2A station, 1.70 for T2A fox
+tagged, 1.81 for V2A without text, 2.33 for V2A with the line, and 0.00
+(6/6 exact) for H3.
+
+What the numbers show:
+
+- **MMAudio never produced the requested words**: 0 of 15 clips, with no
+  intended word recovered beyond chance. With the plain quoted line in T2A,
+  "fox" gets no segment at all (no_speech_prob 1.0). "station" gets noise
+  that Whisper decodes into its known hallucinations ("Thank you for
+  watching..."). The clips are not silent (RMS 0.03 to 0.15).
+- **Babble looks like speech but carries no words.** The "Audio: male
+  speech" tag and the talking-face video both give voice-like audio.
+  no_speech_prob drops to 0.2 to 0.4, p(en) reaches 0.8 to 0.98 on some
+  seeds, and Whisper confidently transcribes invented sentences. This is the
+  upstream README's "unintelligible human speech-like sounds".
+- **The text line does not steer the words.** V2A with the fox line does no
+  better than V2A without it (WER 2.33 vs 1.81).
+- **H3's joint audio says the line verbatim** on all 6 clips, with
+  no_speech_prob of 0.02 to 0.25. That also confirms the Whisper setup reads
+  real speech correctly.
+
+The limit is in the model, not the port. MMAudio is trained on
+sound-effect captions (VGGSound and similar), with no text-to-phoneme path.
+Our port matches upstream spectrally (see Parity), so upstream would behave
+the same way. For dialogue, use a joint audio model (H3, LTX-2) or a TTS
+stage. The MMAudio soundtrack is for ambience and effects only.
