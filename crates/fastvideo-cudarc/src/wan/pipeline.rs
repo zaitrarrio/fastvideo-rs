@@ -22,6 +22,7 @@ use super::transformer::WanTransformer3D;
 use super::umt5::{pad_prompt_embeds, Umt5Encoder};
 use super::vae::AutoencoderKlWan;
 use super::weights::WeightMap;
+use crate::hooks::{Hooks, Stage};
 
 /// TAEHV replaces the Wan VAE decode when `FASTVIDEO_TAEHV_WEIGHTS` names a
 /// directory holding `taew2_1.safetensors` (`taew2_2.safetensors` for the
@@ -151,6 +152,16 @@ pub enum PipelineError {
     Tensor(#[from] TensorError),
     #[error("{0}")]
     Message(String),
+    /// A [`crate::hooks::CancelToken`] was tripped; the run stopped at the
+    /// next step or decode chunk.
+    #[error("cancelled")]
+    Cancelled,
+}
+
+impl PipelineError {
+    pub fn is_cancelled(&self) -> bool {
+        matches!(self, Self::Cancelled)
+    }
 }
 
 pub type Result<T> = std::result::Result<T, PipelineError>;
@@ -256,6 +267,9 @@ pub struct DenoiseStep<'a> {
     pub total: usize,
     pub timestep: f32,
     pub latents: &'a CudaTensor,
+    /// The causal block this step belongs to (SF-Wan block rollout), else
+    /// `None`. `index` / `total` still count every block's steps.
+    pub block: Option<usize>,
 }
 
 pub type StepObserver<'o> = dyn FnMut(&DenoiseStep<'_>) -> Result<()> + 'o;
@@ -755,6 +769,35 @@ impl WanPipeline {
         out_dir: &Path,
         mp4: bool,
     ) -> Result<WanOutput> {
+        self.generate_to_with_hooks(cfg, out_dir, mp4, Hooks::NONE)
+    }
+
+    /// [`Self::generate_to`] with cancellation and progress (serve E1): stage
+    /// events at text / denoise / video decode, one per denoise step (with
+    /// the causal block on the SF-Wan path), one per decoded chunk. A tripped
+    /// token stops at the next of those with [`PipelineError::Cancelled`] and
+    /// hands the pool back.
+    pub fn generate_to_with_hooks(
+        &self,
+        cfg: &GenerateConfig,
+        out_dir: &Path,
+        mp4: bool,
+        hooks: Hooks<'_>,
+    ) -> Result<WanOutput> {
+        let out = self.generate_to_hooked(cfg, out_dir, mp4, hooks);
+        if matches!(&out, Err(e) if e.is_cancelled()) {
+            super::device::trim_pool().map_err(|e| PipelineError::Message(e.to_string()))?;
+        }
+        out
+    }
+
+    fn generate_to_hooked(
+        &self,
+        cfg: &GenerateConfig,
+        out_dir: &Path,
+        mp4: bool,
+        hooks: Hooks<'_>,
+    ) -> Result<WanOutput> {
         let _gen = super::log::StepTimer::start("generate");
         let needs_control = matches!(
             self.preset.as_str(),
@@ -857,6 +900,7 @@ impl WanPipeline {
         };
 
         let mut timings = WanTimings::default();
+        hooks.stage(Stage::Text, 0)?;
         let timer = std::time::Instant::now();
         let (mut encoder_hs, text_cache) = self.encode_text(cfg, Self::needs_negative(cfg))?;
         if self.dit.cfg.causal && super::dump::enabled() {
@@ -868,13 +912,14 @@ impl WanPipeline {
             }
         }
         timings.text_s = timer.elapsed().as_secs_f64();
+        hooks.stage(Stage::Denoise, 0)?;
         let timer = std::time::Instant::now();
         let mut last = std::time::Instant::now();
         let mut step_s = Vec::new();
-        let mut record = |_: &DenoiseStep<'_>| -> Result<()> {
+        let mut record = |s: &DenoiseStep<'_>| -> Result<()> {
             step_s.push(last.elapsed().as_secs_f64());
             last = std::time::Instant::now();
-            Ok(())
+            hooks.step(Stage::Denoise, s.index + 1, s.total, s.block)
         };
         let latents = self.denoise_inner(
             cfg,
@@ -899,8 +944,10 @@ impl WanPipeline {
         let writer = VideoWriter::spawn(out_dir, cfg.fps, mp4)?;
         let mut drain = crate::h3::drain::FrameDrain::new(writer)?;
         let use_taehv = self.uses_taehv(cfg);
+        hooks.stage(Stage::VideoDecode, 0)?;
         let video = self.decode_streaming_with(&latents, use_taehv, &mut |offset, frames| {
-            drain.push(offset, frames)
+            drain.push(offset, frames)?;
+            hooks.frames(offset + frames.shape[0])
         })?;
         let frames = video.shape[2];
         drop(video);
@@ -1735,6 +1782,28 @@ fn notify(
             total,
             timestep,
             latents,
+            block: None,
+        }),
+        None => Ok(()),
+    }
+}
+
+/// [`notify`] for a step of causal block `block`.
+fn notify_block(
+    observer: &mut Option<&mut StepObserver<'_>>,
+    index: usize,
+    total: usize,
+    timestep: f32,
+    latents: &CudaTensor,
+    block: usize,
+) -> Result<()> {
+    match observer.as_deref_mut() {
+        Some(obs) => obs(&DenoiseStep {
+            index,
+            total,
+            timestep,
+            latents,
+            block: Some(block),
         }),
         None => Ok(()),
     }
@@ -1884,7 +1953,7 @@ fn causal_dmd_denoise(
                 x0
             };
             super::device::synchronize().map_err(|e| PipelineError::Message(e.to_string()))?;
-            notify(&mut observer, blk * steps + i, total, ts, &cur)?;
+            notify_block(&mut observer, blk * steps + i, total, ts, &cur, blk)?;
         }
         // The clean context pass: the same block at t = context_noise.
         dump::set_prefix(&format!("sf_c{blk}_ctx_"));
