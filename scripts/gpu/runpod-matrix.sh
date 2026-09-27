@@ -593,6 +593,50 @@ Audio: male speech, clear voice, quiet room"
     sub rtx5090 ${FV_HEADLINE_ROUTES:-h3-768p-fullopt ltx25-4k5s-sol}
     sub precision ${FV_HEADLINE_PRECISION:-ltx25-4k5s-sol-bf16act-fp8}
     ;;
+  identity)
+    # E12 identity bisect: the same generation under several environments in
+    # one pod, frames hashed (sorted PNG sha256s, hashed again: the serverless
+    # worker's frames_sha256), FASTVIDEO_DIGEST=1 stage digests in stderr.log.
+    # FV_ID_CASES: space-separated "<cell>|<model>|K=V,K=V" (model ltx25 or
+    # fasth3; "-" for no env). FV_ID_EVICT=1 drops the weights from the page
+    # cache before each cell (fv-gpucheck evict-cache).
+    id_hash() {
+      local dir="$1" out="$2" h f
+      h="$(find "$dir" -name '*.png' 2>/dev/null | sort | xargs -r sha256sum | awk '{print $1}' | sha256sum | awk '{print $1}')"
+      f="$(find "$dir" -name '*.png' 2>/dev/null | sort | head -1 | xargs -r sha256sum | awk '{print $1}')"
+      printf '{"frames":%s,"frames_sha256":"%s","first_frame_sha256":"%s"}\n' \
+        "$(find "$dir" -name '*.png' 2>/dev/null | wc -l)" "$h" "$f" >"$out"
+      log "frames $(basename "$(dirname "$out")") $h"
+    }
+    for spec in ${FV_ID_CASES:?FV_ID_CASES}; do
+      IFS='|' read -r name model envs <<<"$spec"
+      envs="${envs//,/ }"
+      [[ "$envs" == "-" ]] && envs=""
+      if [[ "${FV_ID_EVICT:-0}" == 1 ]]; then
+        "$BIN" --out "$RUNS/evict" evict-cache "$W/h3-base" "$W/ltx25" >/dev/null 2>&1 || true
+      fi
+      case "$model" in
+        ltx25)
+          # shellcheck disable=SC2086
+          gated_cell "$name" ltx25-two-stage env FASTVIDEO_DIGEST=1 $envs \
+            "$BIN" --mode fast ltx2 gen --model-version 2.5 --weights "$W/ltx25" --dit "$W/ltx25" \
+              --prompt "$PROMPT" --seed "$SEED" --two-stage --text streamed --no-text-cache \
+              --clip "$RUNS/$name/frames" ;;
+        fasth3)
+          # shellcheck disable=SC2086
+          gated_cell "$name" fasth3-4step-vsa env FASTVIDEO_DIGEST=1 $envs \
+            "$BIN" --mode fast h3 gen --weights "$W/h3-base" --h3-recipe 4step-vsa \
+              --adaln-cache "$RUNS/$name/adaln.cache" --clip-dir "$RUNS/$name/frames" \
+              --prompt "$PROMPT" --seconds 5 --seed "$SEED" --text-encoder auto --no-text-cache \
+              --text-weights "$W/h3-base" ;;
+        *) log "identity: unknown model $model"; continue ;;
+      esac
+      id_hash "$RUNS/$name/frames" "$RUNS/$name/frames.json"
+      grep -E '^\[fastvideo\] (digest|load/|ltx2 load|h3 load|llm prefetch)' "$RUNS/$name/stderr.log" \
+        | grep -v 'digest w:\|digest lin:' >"$RUNS/$name/digests.txt" 2>/dev/null || true
+      rm -rf "$RUNS/$name/frames"
+    done
+    ;;
   cold)
     # Timings measured the way the references measure them, where the warm
     # cells do not. LTX-2.5: sol-engine times one request end to end in a fresh

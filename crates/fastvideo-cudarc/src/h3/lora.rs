@@ -219,6 +219,16 @@ impl H3LoraFuse {
         Ok(())
     }
 
+    /// Whether [`Self::fuse`] would change `param` (a pair, a `.diff` or a
+    /// replacement targets it).
+    pub fn touches(&self, param: &str) -> bool {
+        self.replacements.contains_key(param)
+            || self.diffs.contains_key(param)
+            || param
+                .strip_suffix(".weight")
+                .is_some_and(|m| self.pairs.contains_key(m))
+    }
+
     /// Apply a pair (if `param` is `{module}.weight`) and then a `.diff`.
     pub fn fuse(&mut self, param: &str, data: &mut [f32], shape: &[usize]) -> Result<()> {
         if let Some((rshape, rdata)) = self.replacements.remove(param) {

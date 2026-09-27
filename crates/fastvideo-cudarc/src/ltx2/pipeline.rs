@@ -1119,7 +1119,11 @@ impl Decoders {
     /// The video VAE, audio VAE and vocoder; `upsampler` is left `None` for a
     /// caller that loads it only around its one call ([`load_upsampler`]).
     pub fn load_without_upsampler(weights: &Path, cfg: &Ltx2Config) -> Result<Self> {
-        let open = |sub: &str| WeightMap::open(&weights.join(sub));
+        let open = |sub: &str| {
+            let m = WeightMap::open(&weights.join(sub))?;
+            m.prefetch_groups(&[&|k: &str| !k.starts_with("encoder.")]);
+            Ok::<_, crate::wan::tensor::TensorError>(m)
+        };
         Ok(Self {
             video: VideoDecoder::load(&open("vae")?, &cfg.vae)?,
             audio: AudioDecoder::load(&open("audio_vae")?, &cfg.audio_vae)?,
@@ -1617,6 +1621,14 @@ pub struct TextEncoder {
     booking: crate::wan::ledger::Booking,
     /// `(sha256-able tokenizer bytes, gemma identity, connector identity)`.
     identity: Option<(Vec<u8>, [u8; 32], [u8; 32])>,
+    /// `FASTVIDEO_LTX2_TEXT_FP8=1` (E13): Gemma resident with weight-only FP8
+    /// rows, read from the pre-quantized `text_encoder_fp8/` tree when one is
+    /// valid (else quantized at load), instead of streamed at bf16. Opt-in:
+    /// it changes the conditioning numerics.
+    fp8: bool,
+    /// Gemma's shards, opened at pipeline load with their read-ahead queued
+    /// (E12), handed to the first encode that needs them.
+    warm: Option<WeightMap>,
 }
 
 impl TextEncoder {
@@ -1629,6 +1641,47 @@ impl TextEncoder {
             resident: None,
             booking: crate::wan::ledger::Booking::default(),
             identity: None,
+            fp8: std::env::var("FASTVIDEO_LTX2_TEXT_FP8").is_ok_and(|v| v.trim() == "1"),
+            warm: None,
+        }
+    }
+
+    /// The Gemma map the next encode reads: the FP8 tree when `fp8` and one
+    /// is valid, else `text_encoder/`. Its tensors are queued for read-ahead.
+    fn open_gemma(&self) -> Result<WeightMap> {
+        let cfg = Self::decoder_config(&self.cfg);
+        let source = self.paths.text_root().join("text_encoder");
+        let tree = if self.fp8 {
+            crate::llm::prequant::open_tree(&source, cfg.num_layers())?
+        } else {
+            None
+        };
+        let map = match tree {
+            Some(m) => m,
+            None => WeightMap::open(&source)?,
+        };
+        if let Some(lazy) = map.lazy() {
+            lazy.prefetch(&crate::llm::prequant::kept_keys(lazy, &cfg, cfg.num_layers()));
+        }
+        Ok(map)
+    }
+
+    /// Queue Gemma's read-ahead now (behind whatever the pipeline load
+    /// queued), so the first cache miss finds it in the page cache.
+    /// `FASTVIDEO_LTX2_TEXT_WARM=0` skips it.
+    pub fn warm(&mut self) -> Result<()> {
+        if self.warm.is_none()
+            && std::env::var("FASTVIDEO_LTX2_TEXT_WARM").map_or(true, |v| v.trim() != "0")
+        {
+            self.warm = Some(self.open_gemma()?);
+        }
+        Ok(())
+    }
+
+    fn take_gemma(&mut self) -> Result<WeightMap> {
+        match self.warm.take() {
+            Some(m) => Ok(m),
+            None => self.open_gemma(),
         }
     }
 
@@ -1766,7 +1819,8 @@ impl TextEncoder {
         let env = std::env::var("FASTVIDEO_LTX2_TEXT").ok();
         let free = crate::wan::device::free_memory().map(|(free, _)| free);
         let needed = self.resident_bytes() + RESIDENT_HEADROOM;
-        if !self.residency.resolve(env.as_deref(), free, needed)? {
+        let resident = self.fp8 || self.residency.resolve(env.as_deref(), free, needed)?;
+        if !resident {
             crate::wan::log::info(format_args!(
                 "ltx2 text: streamed (free {:?} bytes, resident needs {needed})",
                 free
@@ -1776,12 +1830,17 @@ impl TextEncoder {
         }
         let timer = Instant::now();
         let cfg = Self::decoder_config(&self.cfg);
-        let map = WeightMap::open(&self.paths.text_root().join("text_encoder"))?;
+        let map = self.take_gemma()?;
+        let precision = if self.fp8 {
+            crate::llm::WeightPrecision::Fp8Rows
+        } else {
+            crate::llm::WeightPrecision::Native
+        };
         let mut booking = std::mem::take(&mut self.booking);
         let loaded = booking.track(
             crate::wan::ledger::TEXT_ENCODER,
             || -> Result<(ResidentDecoder, TextConnectors)> {
-                let gemma = ResidentDecoder::load(&map, &cfg, cfg.num_layers())?;
+                let gemma = ResidentDecoder::load_with(&map, &cfg, cfg.num_layers(), precision)?;
                 let connectors = self.load_connectors()?;
                 sync()?;
                 Ok((gemma, connectors))
@@ -1811,7 +1870,7 @@ impl TextEncoder {
                 (stack, out)
             }
             None => {
-                let gemma = WeightMap::open(&self.paths.text_root().join("text_encoder"))?;
+                let gemma = self.take_gemma()?;
                 let stack = HiddenStack::encode(&gemma, &Self::decoder_config(&self.cfg), padded)?;
                 drop(gemma);
                 let out = self.load_connectors()?.forward(&stack, padded.max_len())?;
@@ -1819,6 +1878,15 @@ impl TextEncoder {
             }
         };
         super::text::dump_stages(padded, &stack, &out)?;
+        if crate::wan::dump::digest_enabled() {
+            for (k, state) in stack.states.iter().enumerate() {
+                crate::wan::dump::digest_host(
+                    &format!("text_hidden_{k}"),
+                    &[stack.tokens, stack.hidden],
+                    state,
+                );
+            }
+        }
         Ok(CachedContexts {
             video: out.video,
             audio: out.audio,
@@ -1839,7 +1907,8 @@ impl TextEncoder {
     /// resident beside that swap and OOM a 96 GB card. `FASTVIDEO_LTX2_TEXT`
     /// / an explicit residency still win.
     pub fn prefer_streamed_for_two_stage(&mut self) {
-        if self.residency != TextResidency::Auto {
+        // FP8 Gemma is half the size and two-stage drops it after encoding.
+        if self.residency != TextResidency::Auto || self.fp8 {
             return;
         }
         let env = std::env::var("FASTVIDEO_LTX2_TEXT").ok();
@@ -1890,6 +1959,10 @@ impl TextEncoder {
         });
         self.cache = cache;
         let (contexts, outcome) = result?;
+        if outcome == CacheOutcome::Hit {
+            // Gemma was not needed; release its read-ahead window.
+            self.warm = None;
+        }
         sync()?;
         let mode = if outcome == CacheOutcome::Hit {
             "cache"
@@ -2093,11 +2166,24 @@ pub struct Ltx2Pipeline {
     booking: crate::wan::ledger::Booking,
     /// Resident `taeltx2_3_wide` video decoder ([`PipelineOptions::tae`]).
     tae: Option<crate::wan::taehv::TaeHv>,
+    /// A DiT that loads on the first request (LoRA pipelines): its shards,
+    /// opened at pipeline load with read-ahead queued behind Gemma's (E12).
+    dit_warm: std::sync::Mutex<Option<WeightMap>>,
 }
 
 impl Ltx2Pipeline {
     pub fn load(paths: &Ltx2Paths, cfg: &Ltx2Config, options: &PipelineOptions) -> Result<Self> {
         crate::wan::tensor::default_bf16_activations();
+        // E12 (read-ahead, pinned staged uploads) stays off for LTX unless
+        // FASTVIDEO_PREFETCH / FASTVIDEO_STAGED_UPLOAD ask for it: with it on,
+        // the frames were not byte-identical to the plain load's.
+        let prefetch = fastvideo_loader::prefetch::default_off();
+        crate::wan::stage_upload::default_off();
+        crate::wan::log::info(format_args!(
+            "ltx2 load: read-ahead {}, staged upload {} (E12 defaults off for LTX)",
+            if prefetch { "on" } else { "off" },
+            if crate::wan::stage_upload::enabled() { "on" } else { "off" },
+        ));
         // FASTVIDEO_NVFP4 here is the video FFN only (sol-engine scope):
         // Gemma, the connectors and the other DiT linears stay dense.
         crate::wan::nvfp4::enter_ltx_video_ffn_scope();
@@ -2173,8 +2259,10 @@ impl Ltx2Pipeline {
             residency
         };
         let mut booking = crate::wan::ledger::Booking::default();
+        let io_base = fastvideo_loader::PrefetchStats::now();
         let model = if lora.is_none() {
             let map = open_distilled(&paths.dit, "transformer")?;
+            map.prefetch_all();
             Some(booking.track(
                 crate::wan::ledger::DIT_NONLINEAR,
                 || {
@@ -2219,8 +2307,28 @@ impl Ltx2Pipeline {
             None => None,
         };
         sync()?;
+        crate::wan::weights::log_load_io("ltx2 load", &io_base, timer.elapsed().as_secs_f64());
         let loaded_strength = model.as_ref().map(|_| 0.0);
+        let mut text = TextEncoder::new(
+            paths,
+            cfg,
+            &PipelineOptions {
+                text_residency,
+                ..options.clone()
+            },
+        );
+        // The first request encodes the prompt (Gemma), then a LoRA pipeline
+        // loads its DiT: queue both reads now, in that order.
+        text.warm()?;
+        let dit_warm = if model.is_none() {
+            let map = open_distilled(&paths.dit, "transformer")?;
+            map.prefetch_all();
+            Some(map)
+        } else {
+            None
+        };
         Ok(Self {
+            dit_warm: std::sync::Mutex::new(dit_warm),
             cfg: cfg.clone(),
             dit: paths.dit.clone(),
             weights: paths.weights.clone(),
@@ -2231,14 +2339,7 @@ impl Ltx2Pipeline {
             residency,
             offload,
             has_upsampler,
-            text: TextEncoder::new(
-                paths,
-                cfg,
-                &PipelineOptions {
-                    text_residency,
-                    ..options.clone()
-                },
-            ),
+            text,
             load_s: timer.elapsed().as_secs_f64(),
             booking,
             tae,
@@ -2288,7 +2389,17 @@ impl Ltx2Pipeline {
 
     /// Load the DiT (fused at `strength` when a LoRA is configured).
     fn load_dit(&self, strength: f32) -> Result<Ltx2Transformer> {
-        let map = open_distilled(&self.dit, "transformer")?;
+        let io_base = fastvideo_loader::PrefetchStats::now();
+        let timer = Instant::now();
+        let warm = self.dit_warm.lock().ok().and_then(|mut w| w.take());
+        let map = match warm {
+            Some(m) => m,
+            None => {
+                let m = open_distilled(&self.dit, "transformer")?;
+                m.prefetch_all();
+                m
+            }
+        };
         let keys = Keys::transformer(Keys::detect(&map));
         let model = if let Some(path) = self.lora.clone() {
             // Strength 0 so `apply_bf16` is a no-op and `attach_linear` snapshots
@@ -2324,6 +2435,7 @@ impl Ltx2Pipeline {
             )?
         };
         sync()?;
+        crate::wan::weights::log_load_io("ltx2 dit", &io_base, timer.elapsed().as_secs_f64());
         Ok(model)
     }
 
@@ -2558,6 +2670,8 @@ impl Ltx2Pipeline {
         // shows the text path's own parity), then the reference's contexts.
         crate::wan::dump::tensor("text_video_ctx", &contexts.video)?;
         crate::wan::dump::tensor("text_audio_ctx", &contexts.audio)?;
+        crate::wan::dump::digest("text_video_ctx", &contexts.video)?;
+        crate::wan::dump::digest("text_audio_ctx", &contexts.audio)?;
         if crate::wan::inject::text_enabled() {
             for (name, slot) in [
                 ("text_video_ctx", &mut contexts.video),
@@ -2618,6 +2732,10 @@ impl Ltx2Pipeline {
         // the stage-1 initial noise and, later, the stage-2 renoise.
         let mut noise = NoiseStream::new(req.seed, state == LatentState::Bf16);
         let (mut video, audio) = initial_noise(&cfg, grid1, audio_tokens, &mut noise)?;
+        crate::wan::dump::digest("noise_video", &video)?;
+        crate::wan::dump::digest("noise_audio", &audio)?;
+        crate::wan::dump::digest("text_proj_video", &text.video)?;
+        crate::wan::dump::digest("text_proj_audio", &text.audio)?;
         if let Some(ref image_path) = req.image_path {
             let spat = cfg.transformer.vae_scale_factors[1];
             let vae_dir = self.weights.join("vae");
@@ -2660,6 +2778,8 @@ impl Ltx2Pipeline {
             let model = self.model.as_ref().expect("ensure_dit");
             let mut record = |i: usize, v: &CudaTensor, a: &CudaTensor, s: f64| -> Result<()> {
                 step_s.push(s);
+                crate::wan::dump::digest(&format!("s1_step{i}_video"), v)?;
+                crate::wan::dump::digest(&format!("s1_step{i}_audio"), a)?;
                 match observer.as_mut() {
                     Some(obs) => obs(i, v, a, s),
                     None => Ok(()),
@@ -2725,6 +2845,8 @@ impl Ltx2Pipeline {
             }
         };
         timings.stage1_s = timer.elapsed().as_secs_f64();
+        crate::wan::dump::digest("stage1_video", &video)?;
+        crate::wan::dump::digest("stage1_audio", &audio)?;
         self.report_offload("stage1");
         if let Some(model) = self.model.as_ref() {
             model.disarm_fbcache();
@@ -2762,6 +2884,7 @@ impl Ltx2Pipeline {
                 let upsampled =
                     up.forward(&decoders.video.denormalize(&unpack_video(&video, grid1)?)?)?;
                 video = state.store(pack_video(&decoders.video.normalize(&upsampled)?)?)?;
+                crate::wan::dump::digest("upsampled_video", &video)?;
                 crate::wan::dump::rows_strided(
                     "s2_upsampled",
                     &video,
@@ -2849,6 +2972,8 @@ impl Ltx2Pipeline {
                 let mut record2 =
                     |i: usize, v: &CudaTensor, a: &CudaTensor, s: f64| -> Result<()> {
                         step_s.push(s);
+                        crate::wan::dump::digest(&format!("s2_step{i}_video"), v)?;
+                        crate::wan::dump::digest(&format!("s2_step{i}_audio"), a)?;
                         match observer.as_mut() {
                             Some(obs) => obs(step_offset + i, v, a, s),
                             None => Ok(()),
@@ -2872,6 +2997,8 @@ impl Ltx2Pipeline {
             }
             video = v2;
             audio = a2;
+            crate::wan::dump::digest("stage2_video", &video)?;
+            crate::wan::dump::digest("stage2_audio", &audio)?;
             timings.stage2_s = s2_timer.elapsed().as_secs_f64();
             self.report_offload("stage2");
             self.end_stage();
