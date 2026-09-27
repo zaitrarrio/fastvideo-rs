@@ -8,8 +8,8 @@
 //!   is for). The tolerance is stated relative to the bf16 kernel:
 //!   rel-L2 <= 5e-2 and cosine >= 0.998, and the f64 error of both kernels
 //!   is reported beside it. Then both are timed at the H3 768p shapes
-//!   (dense: 56 heads x 43 008 rows; VSA: 11 prefix + 660 video tiles at
-//!   top-k 11 + 132, the 8-step recipe's 0.8).
+//!   (dense: 56 heads x 37 966 rows; VSA: 660 video tiles at
+//!   top-k 132 and 66, the 8-step and 4-step recipes' 0.8 / 0.9).
 
 use fastvideo_cudarc::wan::attn::{self, FlashKernel};
 use fastvideo_cudarc::wan::attn_fp8;
@@ -265,8 +265,8 @@ pub fn attn_fp8_group(report: &mut Report, seed: &mut u64) -> StageResult<()> {
 
     // ---- timing at the H3 768p shapes
     {
-        // Dense: 56 heads x 43 008 rows (the 768p 5 s packed sequence, rounded).
-        let (h, s) = (56usize, 43008usize);
+        // Dense: 56 heads x 37 966 rows (the 768p 5 s packed sequence, docs/ports/h3.md).
+        let (h, s) = (56usize, 37966usize);
         let n = h * s * d;
         let mk = |seed: &mut u64| t16(&bf16v(rand(seed, n, 1.0)), &[1, h, s, d]);
         let (q16, k16, v16) = (mk(seed)?, mk(seed)?, mk(seed)?);
@@ -280,7 +280,7 @@ pub fn attn_fp8_group(report: &mut Report, seed: &mut u64) -> StageResult<()> {
         })?;
         let flops = 4.0 * (s as f64) * (s as f64) * (d as f64) * (h as f64);
         report.note(
-            "attn_fp8_dense_bench_h56_s43008",
+            "attn_fp8_dense_bench_h56_s37966",
             json!({"bf16_ms": bf, "fp8_ms": f8, "speedup": bf / f8, "bf16_tflops": flops / bf * 1e-9, "fp8_tflops": flops / f8 * 1e-9}),
         );
         drop((q16, k16, v16));
