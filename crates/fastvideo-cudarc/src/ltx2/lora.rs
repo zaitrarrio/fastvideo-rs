@@ -85,7 +85,7 @@ pub fn hits() -> u32 {
     FUSE.with(|slot| slot.borrow().as_ref().map(|g| g.hits).unwrap_or(0))
 }
 
-fn wants(key: &str) -> bool {
+pub(crate) fn wants(key: &str) -> bool {
     FUSE.with(|slot| {
         slot.borrow()
             .as_ref()
