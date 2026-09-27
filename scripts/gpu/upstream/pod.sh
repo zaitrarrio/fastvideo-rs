@@ -35,6 +35,8 @@ UW="${UW:-$UP/weights}"
 . "$HERE/setup.sh"
 PROMPT_OURS="${FV_PROMPT:-A man in his thirties talking to the camera in a bright living room, medium close-up, natural expressions and hand gestures, soft window light. He says: <d>Hello, this was generated entirely in Rust.</d>}"
 SEED_OURS="${FV_SEED:-1024}"
+# The Wan 2.2 TI2V image-to-video prompt (runpod-matrix.sh wan5b-i2v).
+TI2V_PROMPT="Aerial drone shot of a tropical beach: turquoise sea waves roll in and break into white foam on the sand, the camera glides slowly forward along the shoreline, bright sunny day."
 H3_REV=bfc8ed0353f5a9733be73e6b2c98ec0948195b86        # sol-engine H3 configs' H3_MODEL_REVISION
 F8_REV=3da2ddfe1954d9cda4c05b643dc0f26007a655c5        # FastVideo/FastVideo-FastH3-8-Step-V2
 export HF_HOME="$UP/hf"   # the image presets HF_HOME under /workspace
@@ -395,7 +397,14 @@ run_cells() {
   # flow_shift 3.0; the checkpoint's registry default is the 720p config, shift 5.0).
   cell_fv_wan fv-wan21-14b wan21-t2v-14b Wan2.1-T2V-14B-Diffusers --steps 50 --guidance-scale 5.0 \
     --height 480 --width 832 --num-frames 81 --flow-shift 3.0
-  cell_fv_wan fv-wan22-5b wan22-ti2v-5b Wan2.2-TI2V-5B-Diffusers --height 704 --width 1280 --num-frames 121
+  # Wan2.2 TI2V-5B at the checkpoint's defaults (50 steps, CFG 5, shift 5,
+  # 24 fps): text-to-video over the five prompts (as our wan5b cell), and
+  # image-to-video on the 832x480 fixture (FastVideo generates TI2V at the
+  # 480x832 area). UP_FV_REPEATS=1 for one run per prompt.
+  cell_fv_wan fv-wan22-5b wan22-ti2v-5b Wan2.2-TI2V-5B-Diffusers --height 704 --width 1280 --num-frames 121 \
+    --prompts "$HERE/../prompts-eval.json"
+  cell_fv_wan fv-wan22-5b-i2v wan22-ti2v-5b Wan2.2-TI2V-5B-Diffusers --height 480 --width 832 --num-frames 121 \
+    --image "$HERE/../fixtures/ti2v-beach-832x480.jpg" --prompt "$TI2V_PROMPT"
   # SF-Wan: the five prompts of prompts-eval.json, as the sfwan13 cells with FV_PROMPTS=5.
   cell_fv_wan fv-sfwan13 sfwan21-1.3b SFWan2.1-T2V-1.3B-Diffusers --prompts "$HERE/../prompts-eval.json"
   local g768=(--height 768 --width 1344 --num-frames 124) g480=(--height 480 --width 832 --num-frames 124)

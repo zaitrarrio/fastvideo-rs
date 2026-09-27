@@ -106,6 +106,7 @@ use fastvideo_cudarc::wan::taehv_ref as reference;
 fn parse_arch(arch: &str) -> anyhow::Result<TaeArch> {
     match arch {
         "wan" | "taew2_1" => Ok(TaeArch::Wan),
+        "wan22" | "taew2_2" => Ok(TaeArch::Wan22),
         "h3" | "taeh3" => Ok(TaeArch::H3),
         "ltx" | "ltx-wide" | "taeltx2_3_wide" => Ok(TaeArch::LtxWide),
         other => Err(anyhow::anyhow!("--arch {other}: expected wan, h3 or ltx")),
@@ -212,7 +213,7 @@ pub fn run_device(
     // reference stays within seconds.
     let c = arch.latent_channels();
     let [t, h, w] = match arch {
-        TaeArch::Wan => [5usize, 4, 4],
+        TaeArch::Wan | TaeArch::Wan22 => [5usize, 4, 4],
         TaeArch::H3 => [7, 2, 3],
         TaeArch::LtxWide => [3, 2, 2],
     };
