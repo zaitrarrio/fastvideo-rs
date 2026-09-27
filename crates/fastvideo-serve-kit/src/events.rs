@@ -67,13 +67,22 @@ pub async fn apply_event(ctx: &ServeCtx, id: JobId, ev: JobEvent) -> Result<Job,
             let accepted = Arc::new(Mutex::new(false));
             let acc = accepted.clone();
             let a2 = art.clone();
-            let j = ctx
+            let j = match ctx
                 .jobs()
                 .update(id, Box::new(move |j| {
                     *acc.lock().unwrap_or_else(|p| p.into_inner()) =
                         j.mark_succeeded(now, vec![a2], out.metrics).is_ok();
                 }))
-                .await?;
+                .await
+            {
+                Ok(j) => j,
+                Err(e) => {
+                    // The job went away (removed / expired) while the output
+                    // was being stored: do not leak the stored artifact.
+                    ctx.artifacts().delete(&art).await;
+                    return Err(e.into());
+                }
+            };
             if !*accepted.lock().unwrap_or_else(|p| p.into_inner()) {
                 ctx.artifacts().delete(&art).await;
             }

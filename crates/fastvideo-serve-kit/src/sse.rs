@@ -3,7 +3,8 @@
 //! The stream sends `spec.initial`, then follows `spec.follow`: for
 //! `JobStatus`, one event per job change whose `data` is the endpoint's
 //! `JobView::status_reply` JSON (compact), closing after the first terminal
-//! status when `close_on_terminal`. Idle streams get `: keepalive` comments.
+//! status when `close_on_terminal`, rendered with `ViewCtx::with_logs` when
+//! `with_logs`. Idle streams get `: keepalive` comments.
 
 use std::convert::Infallible;
 use std::sync::Arc;
@@ -34,7 +35,7 @@ pub fn sse_events(
 ) -> impl Stream<Item = SseEvent> + Send + 'static {
     let initial = stream::iter(spec.initial);
     let follow = match (spec.follow, view) {
-        (Some(SseFollow::JobStatus { job, close_on_terminal }), Some(view)) => {
+        (Some(SseFollow::JobStatus { job, close_on_terminal, with_logs }), Some(view)) => {
             let rx = ctx.jobs().watch(job);
             stream::unfold((ctx, view, rx, false), move |(ctx, view, rx, done)| async move {
                 if done {
@@ -44,7 +45,7 @@ pub fn sse_events(
                 rx.changed().await.ok()?;
                 rx.borrow_and_update();
                 let j = ctx.jobs().get(job).await?;
-                let reply = view.status_reply(&j, &ctx.view_ctx(false));
+                let reply = view.status_reply(&j, &ctx.view_ctx(with_logs));
                 let data = match reply.body {
                     ReplyBody::Json(v) => v.to_string(),
                     _ => return None,

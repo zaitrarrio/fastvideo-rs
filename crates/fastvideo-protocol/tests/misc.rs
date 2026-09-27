@@ -288,6 +288,7 @@ fn http_reply_builders() {
         follow: Some(SseFollow::JobStatus {
             job: JobId::new(),
             close_on_terminal: true,
+            with_logs: false,
         }),
         keepalive: Some(Duration::from_secs(15)),
     };

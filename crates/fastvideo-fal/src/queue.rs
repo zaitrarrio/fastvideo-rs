@@ -463,7 +463,7 @@ pub(crate) async fn request_handler(
             };
             let spec = SseSpec {
                 initial: vec![SseEvent::data(data)],
-                follow: (!job.is_terminal()).then_some(SseFollow::JobStatus { job: job.id, close_on_terminal: true }),
+                follow: (!job.is_terminal()).then_some(SseFollow::JobStatus { job: job.id, close_on_terminal: true, with_logs }),
                 keepalive: Some(Duration::from_secs(15)),
             };
             let reply = HttpReply::sse(spec).with_header("x-fal-request-id", job.external_id.clone());
