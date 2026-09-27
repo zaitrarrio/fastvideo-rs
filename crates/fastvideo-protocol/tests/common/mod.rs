@@ -51,6 +51,8 @@ pub fn ltx23() -> ModelCaps {
             ..KnobCaps::default()
         },
         resident: true,
+        tier: None,
+        recipe: None,
     }
 }
 
@@ -91,6 +93,8 @@ pub fn fastwan() -> ModelCaps {
         }),
         knobs: KnobCaps::all(),
         resident: true,
+        tier: None,
+        recipe: None,
     }
 }
 

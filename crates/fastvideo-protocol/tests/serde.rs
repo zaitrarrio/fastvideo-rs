@@ -240,6 +240,33 @@ fn caps_round_trip() {
     );
 }
 
+#[test]
+fn tier_and_recipe_shapes() {
+    // Untiered caps and jobs omit both fields, and old JSON without them loads.
+    let j = serde_json::to_value(h3()).unwrap();
+    assert!(j.get("tier").is_none() && j.get("recipe").is_none());
+    let back: ModelCaps = serde_json::from_value(j).unwrap();
+    assert_eq!((back.tier, back.recipe), (None, None));
+
+    let c = h3().with_tier(Tier::Turbo, "fasth3-4step-vsa");
+    let j = round_trip(&c);
+    assert_eq!(j["tier"], "turbo");
+    assert_eq!(j["recipe"], "fasth3-4step-vsa");
+    assert_eq!(serde_json::to_value(Tier::Max).unwrap(), "max");
+    assert_eq!(Tier::Max.to_string(), "max");
+
+    let mut r = t2v("fasth3", "a cat");
+    r.seed = Some(1);
+    let job = nego(&r, &c).unwrap();
+    let j = round_trip(&job);
+    assert_eq!(
+        (j["tier"].clone(), j["recipe"].clone()),
+        (json!("turbo"), json!("fasth3-4step-vsa"))
+    );
+    let j = serde_json::to_value(nego(&r, &h3()).unwrap()).unwrap();
+    assert!(j.get("tier").is_none() && j.get("recipe").is_none());
+}
+
 pub fn sample_job() -> Job {
     let req = full_request();
     let mut r = t2v("fasth3", "a cat");

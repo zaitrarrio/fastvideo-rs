@@ -992,3 +992,65 @@ fn resolve_model_through_aliases() {
         models.iter().map(|m| (m.id.clone(), m.clone())).collect();
     assert!(resolve_model("MiniMax-H3", look, table.values()).is_ok());
 }
+
+// ---- model tiers (design §0.3) ----------------------------------------------------
+
+/// A max H3, a turbo FastH3, a max LTX-2.5 and an untiered LTX-2.3.
+fn tiered() -> Vec<ModelCaps> {
+    let mut h3max = ModelCaps::h3("h3_base", true).with_tier(Tier::Max, "h3-full");
+    h3max.served_names = vec!["h3-max".into(), "MiniMax-H3-Max".into()];
+    let mut h3turbo = ModelCaps::h3("fasth3", false).with_tier(Tier::Turbo, "fasth3-4step-vsa");
+    h3turbo.served_names = vec!["h3-turbo".into(), "MiniMax-H3-Turbo".into()];
+    let mut ltxmax = ltx25().with_tier(Tier::Max, "ltx25-full");
+    ltxmax.served_names = vec!["ltx-2-5-pro".into()];
+    vec![h3max, h3turbo, ltxmax, ltx23()]
+}
+
+#[test]
+fn tiers_resolve_by_name_and_by_tier() {
+    let models = tiered();
+    let none = |_: &str| None;
+    for (name, id) in [
+        ("h3-max", "h3_base"),
+        ("MiniMax-H3-Max", "h3_base"),
+        ("h3-turbo", "fasth3"),
+        ("MiniMax-H3-Turbo", "fasth3"),
+        ("ltx-2-5-pro", "ltx2_distilled_25"),
+    ] {
+        assert_eq!(resolve_model(name, none, &models).unwrap().id.as_str(), id);
+    }
+    // A configured alias can route a public tier name to an engine id.
+    let alias = |n: &str| (n == "ltx-turbo").then(|| "ltx2_distilled_23".to_owned());
+    assert_eq!(
+        resolve_model("ltx-turbo", alias, &models)
+            .unwrap()
+            .id
+            .as_str(),
+        "ltx2_distilled_23"
+    );
+
+    for (family, tier, id) in [
+        (Family::H3, Tier::Max, "h3_base"),
+        (Family::H3, Tier::Turbo, "fasth3"),
+        (Family::Ltx2, Tier::Max, "ltx2_distilled_25"),
+    ] {
+        assert_eq!(resolve_tier(family, tier, &models).unwrap().id.as_str(), id);
+    }
+    // ltx23 is untiered, so no LTX turbo is served.
+    let e = resolve_tier(Family::Ltx2, Tier::Turbo, &models).unwrap_err();
+    assert_eq!(
+        (e.kind, e.param.as_deref()),
+        (ErrorKind::InvalidRequest, Some("model"))
+    );
+    assert!(e.message.contains("turbo"), "{}", e.message);
+}
+
+#[test]
+fn resolved_job_carries_tier_and_recipe() {
+    let models = tiered();
+    let j = nego(&t2v("h3-turbo", "a cat"), &models[1]).unwrap();
+    assert_eq!(j.tier, Some(Tier::Turbo));
+    assert_eq!(j.recipe.as_deref(), Some("fasth3-4step-vsa"));
+    let j = nego(&t2v("fasth3", "a cat"), &h3()).unwrap();
+    assert_eq!((j.tier, j.recipe), (None, None));
+}
