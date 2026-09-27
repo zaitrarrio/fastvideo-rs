@@ -160,8 +160,8 @@ static NVCC: [KernelImpl; 13] = [
         "dc",
         "dc",
         90,
-        "attn_dc.cu: tcgen05 + TMEM (sm_100, the auto kernel there) / wgmma (sm_90, opt-in), \
-         TMA, warp-specialised, d=128",
+        "attn_dc.cu: tcgen05 + TMEM (sm_100) / wgmma (sm_90), TMA, warp-specialised, d=128 \
+         (the auto kernel on 9.0 / 10.0)",
     ),
     k(KernelOp::SolAttention, "v1", "v1", 80, "sol_mma_fwd"),
     k(KernelOp::SolAttention, "x4", "x4", 80, "sol_mma_fwd_x4"),

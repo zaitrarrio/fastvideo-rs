@@ -1,0 +1,24 @@
+{"bench": "v2", "shape": "h3_768p", "bh": 56, "tokens": 37710, "ms": 121.231, "tflops": 336.3, "error": "", "checksum": -6.044581e+01}
+{"bench": "v2", "shape": "ltx_512p", "bh": 32, "tokens": 6144, "ms": 1.962, "tflops": 315.3, "error": "", "checksum": -7.216604e+00}
+{"bench": "v2", "shape": "ltx_1080p20s", "bh": 32, "tokens": 124440, "ms": 789.111, "tflops": 321.5, "error": "", "checksum": 5.705017e+01}
+{"bench": "v2", "shape": "ltx_4k5s", "bh": 32, "tokens": 130560, "ms": 865.130, "tflops": 322.8, "error": "", "checksum": 1.103397e+02}
+{"bench_done": "dc100", "rc": 0}
+{"bench_done": "dc100_nsplit", "rc": 0}
+{"bench": "dc90", "shape": "h3_768p", "bh": 56, "tokens": 37710, "ms": 63.533, "tflops": 641.8, "error": "", "checksum": -6.043085e+01}
+{"bench": "dc90", "shape": "ltx_512p", "bh": 32, "tokens": 6144, "ms": 0.953, "tflops": 649.1, "error": "", "checksum": -7.232925e+00}
+{"bench": "dc90", "shape": "ltx_1080p20s", "bh": 32, "tokens": 124440, "ms": 393.352, "tflops": 645.0, "error": "", "checksum": 5.707766e+01}
+{"bench": "dc90", "shape": "ltx_4k5s", "bh": 32, "tokens": 130560, "ms": 451.073, "tflops": 619.1, "error": "", "checksum": 1.103484e+02}
+{"bench_done": "dc90", "rc": 0}
+{"bench_check": "dc90", "shape": "h3_768p", "rel_l2_vs_v2": 4.708e-04, "max_abs": 3.906e-03}
+{"bench_check": "dc90", "shape": "ltx_512p", "rel_l2_vs_v2": 5.472e-04, "max_abs": 3.906e-03}
+{"bench_check": "dc90", "shape": "ltx_1080p20s", "rel_l2_vs_v2": 6.918e-04, "max_abs": 3.906e-03}
+{"bench_check": "dc90", "shape": "ltx_4k5s", "rel_l2_vs_v2": 7.050e-04, "max_abs": 7.812e-03}
+{"bench": "dc90_nsplit", "shape": "h3_768p", "bh": 56, "tokens": 37710, "ms": 67.268, "tflops": 606.1, "error": "", "checksum": -6.043085e+01}
+{"bench": "dc90_nsplit", "shape": "ltx_512p", "bh": 32, "tokens": 6144, "ms": 1.040, "tflops": 594.7, "error": "", "checksum": -7.232925e+00}
+{"bench": "dc90_nsplit", "shape": "ltx_1080p20s", "bh": 32, "tokens": 124440, "ms": 494.358, "tflops": 513.2, "error": "", "checksum": 5.707766e+01}
+{"bench": "dc90_nsplit", "shape": "ltx_4k5s", "bh": 32, "tokens": 130560, "ms": 553.997, "tflops": 504.1, "error": "", "checksum": 1.103484e+02}
+{"bench_done": "dc90_nsplit", "rc": 0}
+{"bench_check": "dc90_nsplit", "shape": "h3_768p", "rel_l2_vs_v2": 4.708e-04, "max_abs": 3.906e-03}
+{"bench_check": "dc90_nsplit", "shape": "ltx_512p", "rel_l2_vs_v2": 5.472e-04, "max_abs": 3.906e-03}
+{"bench_check": "dc90_nsplit", "shape": "ltx_1080p20s", "rel_l2_vs_v2": 6.918e-04, "max_abs": 3.906e-03}
+{"bench_check": "dc90_nsplit", "shape": "ltx_4k5s", "rel_l2_vs_v2": 7.050e-04, "max_abs": 7.812e-03}

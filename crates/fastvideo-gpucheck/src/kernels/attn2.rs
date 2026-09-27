@@ -614,7 +614,16 @@ pub(super) fn dc_parity(c: &mut Ctx<'_>) -> StageResult<()> {
             dv.to_json(),
             json!({"rel_l2": 4e-3}),
         )?;
-        c.cmp(&format!("attn_dc_{tag}_vs_f32"), &dc, &want, 1e-2)?;
+        // vs the f32 reference (unrounded Q/K/V): 1e-2, or no worse than V2
+        // (+5%) where bf16 input rounding alone exceeds that (the amp-4 case:
+        // V2 and dc both sit at ~1.05e-2 on B200).
+        let (df, dv2) = (diff(&dc, &want), diff(&v2, &want));
+        c.report.check(
+            format!("attn_dc_{tag}_vs_f32"),
+            df.within(1e-2) || df.within(1.05 * dv2.rel_l2),
+            json!({"dc": df.to_json(), "v2_rel_l2": dv2.rel_l2}),
+            json!({"rel_l2": 1e-2, "or_rel_l2_vs_v2_error": 1.05}),
+        )?;
         let bad = dc
             .iter()
             .zip(&dc16)

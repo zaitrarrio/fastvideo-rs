@@ -1,0 +1,6 @@
+[13:02:50] pod.sh start steps: bench:attn_dc bench:attn
+[13:02:50] ▶ step bench:attn_dc
+[13:05:05] ok step bench:attn_dc  135s
+[13:05:05] ▶ step bench:attn
+[13:06:48] ok step bench:attn  103s
+[13:06:48] pod.sh done
