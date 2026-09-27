@@ -105,6 +105,19 @@ What each change bought (same process state, same run unless noted):
   step to skip (it always computes the first step, and the accumulator
   crosses the threshold). The output is byte-identical to the baseline.
 
+The Wan2.1 T2V-14B cells (`wan14` with 50 UniPC steps at CFG 5, plus EasyCache
+0.036, Sol TeaCache, Sol-Attn, the sol-engine fullstack, and a 4-step identity
+pair), the TI2V-5B cells (`wan5b`, `wan5b-easycache`), `sfwan13-81f-fullvae`
+and the matching upstream cells (`fv-wan21-14b`, `fv-wan22-5b`, `fv-sfwan13`)
+have not been measured. Their weights are only on `fv-weights-b200-us`
+(US-CA-2), and that datacenter had no RTX PRO 6000 in stock from 04:00 to
+07:50 UTC on 2026-09-27. Pod creation retried the whole time, and no pod ever
+started. To run them: `RUNPOD_VOLUME_NAME=fv-weights-b200-us FV_FAMILY=wan
+FV_CELLS="wan14 ..." runpod-http.sh run <sha>`, then `runpod-http.sh upstream`
+with `UP_CELLS`. Before trusting the 5B cells, expect a load failure or wrong
+output: `WanPipeline` sizes latents at /8 and builds the Wan 2.1 VAE with
+`z_dim` 48. Wan 2.2's VAE downsamples 16x and has a different decoder.
+
 Against upstream FastVideo on the same card, the final is 2.32 s vs 7.63 s
 (3.3x). Denoise is 1.96 vs 3.48 s, decode + mp4 is 0.31 vs 3.9 s (their
 full VAE, then VideoSave), and text is 0.04 vs 0.09 s. Upstream's torch peak
