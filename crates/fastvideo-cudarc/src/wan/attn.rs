@@ -145,6 +145,13 @@ pub enum FlashKernel {
     /// `flash_mma_fwd2_d*`: 128-query CTAs (8 warps x 16 rows) and
     /// double-buffered K/V; bit-identical to V1 (same per-row arithmetic).
     V2,
+    /// `flash_mma_fwd3_d128`: V2's CTA and arithmetic with S_{j+1} issued
+    /// before softmax(S_j) and a three-stage K/V ring; bit-identical to V2.
+    /// d=128 only (V2 otherwise).
+    V3,
+    /// `flash_mma_fwd3s_d128`: V3 that skips the O rescale when no row max
+    /// rose (the factor V2 applies there is within a few ulp of 1).
+    V3s,
     /// cuDNN's fused attention engine (`cudnn_sdpa`), bf16 output only;
     /// V2 whenever cuDNN offers no engine or the caller wants f32 out.
     Cudnn,
@@ -172,6 +179,8 @@ pub fn flash_kernel_for(sq: usize, bh: usize, sms: usize) -> FlashKernel {
     {
         "v1" => FlashKernel::V1,
         "v2" => FlashKernel::V2,
+        "v3" => FlashKernel::V3,
+        "v3s" => FlashKernel::V3s,
         "cudnn" => FlashKernel::Cudnn,
         "dc" => FlashKernel::Dc,
         // auto on a 9.0 / 10.0 device: the datacenter kernel (sm_120 and
@@ -207,6 +216,80 @@ pub fn flash_v2_default() -> bool {
     true
 }
 
+/// Whether `auto` lets a bf16-output dense SDPA that V2 would run go to
+/// cuDNN's unified SDPA node instead, per shape ([`auto_cudnn_or_v2`]): on
+/// sm_12x only. RTX PRO 6000, cuDNN 9.26, `attn3_bench` (two pods): 104.8-105.0
+/// vs 108.4-109.1 ms at H3 768p, 658.8-659.8 vs 682.2-682.7 ms at LTX 1080p
+/// 20 s, but 766.6-769.0 vs 757.2-759.9 ms at 4K 5 s (engine 11, heuristic
+/// mode A config 0), hence the per-shape pick. `FASTVIDEO_FLASH_KERNEL=v2`
+/// (or `=cudnn`) fixes the kernel.
+pub fn cudnn_default(sm_major: i32) -> bool {
+    CUDNN_DEFAULT_ON && sm_major == 12
+}
+
+/// On since the attn3 generation A/B (FastH3 4-step dense 768p denoise 33.23 -> 32.28 s,
+/// LTX-2.5 1080p 20 s dense stage 2 44.0 -> 42.7 s/step).
+const CUDNN_DEFAULT_ON: bool = true;
+
+/// `auto` on sm_12x, bf16 out: the first call of each `(bh, sq, sk, d)`
+/// times cuDNN's plan (after one warm-up execution) against flash_mma_fwd2 on
+/// these very inputs and caches the faster; later calls run the winner. A
+/// shape cuDNN has no plan for is V2. The pick is logged once per shape.
+#[cfg(feature = "cuda")]
+fn auto_cudnn_or_v2(
+    q: &CudaTensor,
+    k: &CudaTensor,
+    v: &CudaTensor,
+    scale: Option<f32>,
+) -> Result<Option<CudaTensor>> {
+    use std::collections::HashMap;
+    use std::sync::{Mutex, OnceLock};
+    static PICKS: OnceLock<Mutex<HashMap<(usize, usize, usize, usize), bool>>> = OnceLock::new();
+    let Some((b, h, sq, sk, d)) = bhsd(q, k, v) else {
+        return device_mma_sdpa_with(q, k, v, scale, true, FlashKernel::V2);
+    };
+    let key = (b * h, sq, sk, d);
+    let known = PICKS
+        .get_or_init(|| Mutex::new(HashMap::new()))
+        .lock()
+        .expect("sdpa picks")
+        .get(&key)
+        .copied();
+    if let Some(cudnn) = known {
+        let kernel = if cudnn { FlashKernel::Cudnn } else { FlashKernel::V2 };
+        return device_mma_sdpa_with(q, k, v, scale, true, kernel);
+    }
+    let timed = |kernel| -> Result<(Option<CudaTensor>, f64)> {
+        super::device::synchronize().map_err(|e| msg(e.to_string()))?;
+        let t = std::time::Instant::now();
+        let out = device_mma_sdpa_with(q, k, v, scale, true, kernel)?;
+        super::device::synchronize().map_err(|e| msg(e.to_string()))?;
+        Ok((out, t.elapsed().as_secs_f64()))
+    };
+    let has_plan = super::cudnn_sdpa::has_plan(b * h, sq, sk, d);
+    let (out, pick) = if has_plan {
+        timed(FlashKernel::Cudnn)?; // warm-up (plan build, lazy module load)
+        let (oc, tc) = timed(FlashKernel::Cudnn)?;
+        let (o2, t2) = timed(FlashKernel::V2)?;
+        super::log::info(format_args!(
+            "sdpa auto (sm_12x): bh={} sq={sq} sk={sk} d={d}: cuDNN {:.2} ms, flash_mma_fwd2 {:.2} ms -> {}",
+            b * h,
+            tc * 1e3,
+            t2 * 1e3,
+            if tc < t2 { "cuDNN" } else { "flash_mma_fwd2" }
+        ));
+        if tc < t2 { (oc, true) } else { (o2, false) }
+    } else {
+        (device_mma_sdpa_with(q, k, v, scale, true, FlashKernel::V2)?, false)
+    };
+    PICKS
+        .get_or_init(|| Mutex::new(HashMap::new()))
+        .lock()
+        .expect("sdpa picks")
+        .insert(key, pick);
+    Ok(out)
+}
+
 /// Fused dense SDPA on tensor cores (`flash_mma_fwd_d{64,128}`): bf16 Q/K/V
 /// (cast once, RNE, when they are f32), f32 online softmax, bf16 P, f32
 /// accumulation; one launch, no score buffer. Output is f32, or bf16 when
@@ -227,7 +310,19 @@ pub fn device_mma_sdpa(
                 .ctx
                 .attribute(CU_DEVICE_ATTRIBUTE_MULTIPROCESSOR_COUNT)
                 .map_or(1, |n| n.max(1) as usize);
-            flash_kernel_for(sq, b * h, sms)
+            match flash_kernel_for(sq, b * h, sms) {
+                // `auto` only: an explicit `v2` stays V2.
+                FlashKernel::V2
+                    if out_bf16
+                        && cudnn_default(dev.sm_major)
+                        && fastvideo_models::techniques::kernels::choice(
+                            fastvideo_models::techniques::kernels::KernelOp::DenseAttention,
+                        ) == "auto" =>
+                {
+                    return auto_cudnn_or_v2(q, k, v, scale);
+                }
+                k => k,
+            }
         }
         _ => flash_kernel_choice(),
     };
@@ -294,10 +389,10 @@ pub fn device_mma_sdpa_with(
             }
         }
     }
-    let kernel = if matches!(kernel, FlashKernel::Cudnn | FlashKernel::Dc) {
-        FlashKernel::V2
-    } else {
-        kernel
+    let kernel = match kernel {
+        FlashKernel::Cudnn | FlashKernel::Dc => FlashKernel::V2,
+        FlashKernel::V3 | FlashKernel::V3s if d != 128 => FlashKernel::V2,
+        k => k,
     };
     let (func, cfg) = match kernel {
         FlashKernel::V1 => (
@@ -313,6 +408,24 @@ pub fn device_mma_sdpa_with(
                 shared_mem_bytes: 0,
             },
         ),
+        FlashKernel::V3 | FlashKernel::V3s => {
+            let func = if kernel == FlashKernel::V3 {
+                &dev.kernels.flash_mma_fwd3_d128
+            } else {
+                &dev.kernels.flash_mma_fwd3s_d128
+            };
+            // Three stages of (K, V) 64 x 128 bf16 tiles: 96 KB (opt-in).
+            let shared = (6 * MMA_TILE * d * 2) as u32;
+            super::ops::opt_in_dynamic_shared(func, shared)?;
+            (
+                func,
+                cudarc::driver::LaunchConfig {
+                    grid_dim: (sq.div_ceil(2 * MMA_TILE) as u32, bh as u32, 1),
+                    block_dim: (256, 1, 1),
+                    shared_mem_bytes: shared,
+                },
+            )
+        }
         FlashKernel::V2 | FlashKernel::Cudnn | FlashKernel::Dc => {
             let func = if d == 64 {
                 &dev.kernels.flash_mma_fwd2_d64

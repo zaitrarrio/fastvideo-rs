@@ -1237,6 +1237,18 @@ impl WanPipeline {
         &self.dit
     }
 
+    /// The tiny decoder, when its weights were found at load.
+    pub fn taehv(&self) -> Option<&super::taehv::TaeHv> {
+        self.taehv.as_ref()
+    }
+
+    /// The prompt row alone (`[1, text_len, 4096]`, padded), through the
+    /// disk cache when `cfg.text_cache` names one: what the causal sampler
+    /// conditions on (`wan::stream` re-encodes with it on a prompt switch).
+    pub fn encode_prompt(&self, cfg: &GenerateConfig) -> Result<CudaTensor> {
+        Ok(self.encode_text(cfg, false)?.0)
+    }
+
     pub fn vae(&self) -> &AutoencoderKlWan {
         &self.vae
     }
@@ -1898,7 +1910,7 @@ fn causal_dmd_denoise(
 /// (`sf_noise_<k>`, drawn `[B, F, C, H, W]`) when injected, else seeded
 /// standard normal in the same layout. bf16-valued with bf16 activations
 /// (FastVideo draws it in the DiT dtype).
-fn causal_noise(seed: u64, k: usize, btchw: [usize; 5]) -> Result<CudaTensor> {
+pub(crate) fn causal_noise(seed: u64, k: usize, btchw: [usize; 5]) -> Result<CudaTensor> {
     let n: usize = btchw.iter().product();
     let raw = match super::inject::load_numel(&format!("sf_noise_{k:03}"), n)? {
         Some(v) => CudaTensor::from_vec(v, btchw.to_vec())?.to_device()?,

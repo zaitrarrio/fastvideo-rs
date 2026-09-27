@@ -84,7 +84,17 @@ if [[ -n "$PROMPTS_FILE" ]]; then
   PROMPT_ARGS=(--prompts "$PROMPTS_FILE")
 fi
 LPIPS_ARGS=()
-LPIPS_DIR="${FV_LPIPS_DIR:-$SCRATCH/lpips}"
+# Small pinned non-Hub weights (TAE, LPIPS) live on the weight volume under
+# $W/auxiliary (weights-manifest.tsv auxiliary/ rows, verify-weights.sh aux).
+# They are read in place when complete; otherwise the fetch scripts fill the
+# container disk (volume copy per file first, then the pinned URLs).
+AUX="${FV_AUX_DIR:-$W/auxiliary}"
+export FV_AUX_DIR="$AUX"
+if [[ -z "${FV_LPIPS_DIR:-}" && -f "$AUX/lpips/.complete" ]]; then
+  LPIPS_DIR="$AUX/lpips"
+else
+  LPIPS_DIR="${FV_LPIPS_DIR:-$SCRATCH/lpips}"
+fi
 GATE_POLICY="${FV_GATE_POLICY:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/gate-policy.toml}"
 
 write_json() {
@@ -182,11 +192,18 @@ gated_cell() {
   run_cell "$name" "$@"
 }
 
-# Tiny-autoencoder weights (madebyollin/taehv) live on the container disk:
-# runpod-http's start command fetches them, and this fetches again only when a
-# file is missing. They are not part of the weight tree, so verify-weights.sh
-# never gates on them; a TAE cell whose file is absent is recorded as skipped.
-TAE="${FV_TAE_DIR:-$SCRATCH/tae}"
+# Tiny-autoencoder weights (madebyollin/taehv): the volume copy
+# ($W/auxiliary/tae, complete and hash-checked by verify-weights.sh aux) is
+# read in place. Without it they live on the container disk: runpod-http's
+# start command fetches them, and this fetches again only when a file is
+# missing (fetch-tae.sh copies from the volume first, then downloads). TAE
+# cells do not gate on verify-weights.sh; a TAE cell whose file is absent is
+# recorded as skipped.
+if [[ -z "${FV_TAE_DIR:-}" && -f "$AUX/tae/.complete" ]]; then
+  TAE="$AUX/tae"
+else
+  TAE="${FV_TAE_DIR:-$SCRATCH/tae}"
+fi
 TAEH3="$TAE/taeh3.safetensors"
 TAELTX="$TAE/taeltx2_3_wide.safetensors"
 tae_fetched=""
@@ -391,6 +408,27 @@ case "$FAMILY" in
     fi
     FV_RUNS_DIR="$RUNS" FV_CELLS="${FV_SFWAN_CELLS:-kernels-wan sfwan13-81f-flash sfwan13-81f-composed sfwan13-81f-wholeclip sfwan13-81f-fullvae}" \
       bash "${BASH_SOURCE[0]}" wan || true
+    ;;
+  sfstream)
+    # Open-ended causal SF-Wan (wan::stream, serve E6): parity with the
+    # bounded 81-frame path, long runs (drift, fps, TTFF), prompt switches,
+    # and a 10-minute memory-growth run. TAEHV decodes every block.
+    TAE_W="$TAE/taew2_1.safetensors"
+    [[ -f "$TAE_W" ]] || bash "$(dirname "${BASH_SOURCE[0]}")/fetch_taehv.sh" "$TAE" >>"$RUNS/tae-fetch.log" 2>&1 \
+      || log "WARN: taew2_1 fetch failed (tae-fetch.log)"
+    export FASTVIDEO_TAE_DIR="$TAE"
+    SF_PROMPT="${FV_SF_PROMPT:-A drone shot gliding over a winding river through an autumn forest, golden afternoon light, slow steady forward camera motion, highly detailed}"
+    SF_SWITCH="${FV_SF_SWITCH:-A drone shot gliding over snowy mountain peaks at dawn, pink sky, slow steady forward camera motion, highly detailed}"
+    sf_stream() {
+      local name="$1"; shift
+      gated_cell "$name" sfwan21-1.3b "$BIN" --mode fast wan stream --weights "$W/sfwan21-1.3b" \
+        --prompt "$SF_PROMPT" --switch-prompt "$SF_SWITCH" --seed "$SEED" "$@"
+    }
+    # shellcheck disable=SC2086
+    sf_stream sfstream-main --parity ${FV_SFSTREAM_RUNS:---run rel-sink3-120s,seconds=120,rope=rel,sink=3 \
+      --run rel-sink0-60s,seconds=60,rope=rel,sink=0 --run abs-sink0-60s,seconds=60,rope=abs,sink=0 \
+      --run switch-keep-30s,seconds=30,switch_at=15,switch=keep --run switch-reset-20s,seconds=20,switch_at=10,switch=reset}
+    sf_stream sfstream-10min --run rel-sink3-600s,seconds=600,rope=rel,sink=3,drop_rgb=1 --window-s 60
     ;;
   headline)
     # The headline configurations on one pod (a new GPU type, one run):
@@ -833,7 +871,7 @@ case "$FAMILY" in
     # default elsewhere; this family opts into TAEH3. Oxide GEMM stays off.
     unset FASTVIDEO_NVFP4_OXIDE_GEMM
     taeh3=""
-    for p in "$W/taeh3/taeh3.safetensors" "$W/taeh3" "$WORK/taeh3/taeh3.safetensors"; do
+    for p in "$AUX/tae/taeh3.safetensors" "$W/taeh3/taeh3.safetensors" "$W/taeh3" "$WORK/taeh3/taeh3.safetensors" "$TAE/taeh3.safetensors"; do
       if [[ -f "$p" || ( -d "$p" && -f "$p/taeh3.safetensors" ) ]]; then
         taeh3="$p"
         break
@@ -1340,6 +1378,47 @@ case "$FAMILY" in
     for cell in fasth3-4step-vsa-768p fasth3-8step-768p fasth3-4step-dense-768p ltx25-4k5s-sol ltx25-1080p20s-sol; do
       grep -h '/gpu_trace ' "$RUNS/$cell/stderr.log" 2>/dev/null | tail -1 | cut -c1-400 | sed "s/^/[$cell] /" | tee -a "$LOG" || true
     done
+    ;;
+  attn3)
+    # sm_120 dense attention A/B (FVID-2026-09-27-attention-sm120): flash_mma_fwd2
+    # vs cuDNN's unified SDPA node, FastH3 4-step dense 768p denoise and LTX-2.5
+    # 1080p 20 s dense stage 2, same prompt/seed, then the frame diff.
+    h3_common=(
+      --prompt "$PROMPT"
+      --seconds 5
+      --seed "$SEED"
+      --text-encoder auto
+      --text-cache "$SCRATCH/h3-text-cache"
+      --text-weights "$W/h3-base"
+      --warm
+    )
+    for arm in ${FV_ATTN3_ARMS:-v2 cudnn}; do
+      gated_cell "fasth3-4step-dense-768p-$arm" fasth3-4step-dense \
+        env FASTVIDEO_FLASH_KERNEL="$arm" \
+        "$BIN" --mode fast h3 gen --weights "$W/h3-base" --h3-recipe 4step-dense \
+          --adaln-cache "$RUNS/fasth3-4step-dense-768p-adaln.cache" \
+          --clip-dir "$RUNS/fasth3-4step-dense-768p-$arm/frames" "${h3_common[@]}"
+    done
+    for arm in ${FV_ATTN3_ARMS:-v2 cudnn}; do
+      gated_cell "ltx25-1080p20s-dense-$arm" ltx25-two-stage \
+        env FASTVIDEO_FLASH_KERNEL="$arm" \
+        "$BIN" --mode fast ltx2 gen --model-version 2.5 \
+          --weights "$W/ltx25" --dit "$W/ltx25" --workload 1080p20s --dense-stage2 \
+          --prompt "$PROMPT" --seed "$SEED" --two-stage --text streamed --warm \
+          --clip "$RUNS/ltx25-1080p20s-dense-$arm/frames"
+    done
+    # VSA on bf16 activations read in place (FASTVIDEO_VSA_BF16) vs the f32
+    # widening path: the frames must match bit for bit.
+    for vb in ${FV_ATTN3_VSA:-0 1}; do
+      gated_cell "fasth3-4step-vsa-768p-b16$vb" fasth3-4step-vsa \
+        env FASTVIDEO_VSA_BF16="$vb" \
+        "$BIN" --mode fast h3 gen --weights "$W/h3-base" --h3-recipe 4step-vsa \
+          --adaln-cache "$RUNS/fasth3-4step-vsa-768p-adaln.cache" \
+          --clip-dir "$RUNS/fasth3-4step-vsa-768p-b16$vb/frames" "${h3_common[@]}"
+    done
+    compare_cells fasth3-4step-dense-768p-v2 fasth3-4step-dense-768p-cudnn
+    compare_cells ltx25-1080p20s-dense-v2 ltx25-1080p20s-dense-cudnn
+    compare_cells fasth3-4step-vsa-768p-b160 fasth3-4step-vsa-768p-b161
     ;;
   fuse)
     # Phase 3c DiT block fusions (FASTVIDEO_H3_FUSE, FASTVIDEO_LTX_FUSE).

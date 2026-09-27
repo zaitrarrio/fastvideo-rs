@@ -1,10 +1,124 @@
-# Weight volume sync: EU vs US survey
+# Weight volume sync: EU vs US
 
 Date: 2026-09-27
-Compares: the two 1000 GB Runpod network volumes that hold the model weights.
+Compares: the two Runpod network volumes that hold the model weights (1000 GB
+at the survey, both resized to 2000 GB by the owner before the sync).
 
 - EU: `fv-weights-h3-ltx-hy`, id `jg48s6o1w0`, EUR-IS-1.
 - US: `fv-weights-b200-us`, id `s2k01690bi`, US-CA-2.
+
+## Sync result (done 2026-09-27)
+
+**Every tree in `weights-manifest.tsv` is now on both volumes with the same
+files and sizes, and `auxiliary/` (TAE + LPIPS) is on both.** Before the sync,
+the owner deleted the US `wan21-t2v-14b/.cache/**/*.incomplete` partials and
+the EU `wan22-ti2v-5b` stub.
+
+Method: CPU pods (`python:3.12-slim`, cpu3c 8 vCPU, $0.24/hr) in each volume's
+own data centre re-downloaded the missing trees from the Hub with
+`huggingface_hub` 2.0 + `hf_xet`, at the revision the source volume holds
+(each equals today's `main`), with the manifest's globs plus
+`model_index.json`. A second pass per volume removed this sync's own
+`*.incomplete` partials (from two runs that were OOM-killed; 7.35 GB on US,
+9.47 GB on EU, only files newer than the sync start and only in the trees it
+wrote), SHA-256'd every downloaded LFS file against the Hub's LFS `sha256` at
+the pinned revision, and ran `verify-weights.sh` for every tree.
+
+| Copied | To | Repo @ revision | Layout (as the source side) | Bytes (`du -sb`) | Source-side bytes (survey) | LFS SHA-256 vs Hub | `verify-weights.sh` |
+|---|---|---|---|---:|---:|---|---|
+| fastwan21-1.3b | US | FastVideo/FastWan2.1-T2V-1.3B-Diffusers @ `25e7ed7` | HF cache + top-level links | 29 212 131 136 | 29.21 GB | 9/9 ok | ok |
+| hy15-480-t2v | US | …HunyuanVideo-1.5-Diffusers-480p_t2v @ `286be7c` | HF cache + links | 53 384 330 435 | 53.38 GB | 14/14 ok | ok |
+| hy15-480-i2v | US | …480p_i2v_step_distilled @ `854c04a` | HF cache + links | 33 780 496 799 | 33.78 GB | 8/8 ok | ok |
+| hy15-720-t2v | US | …720p_t2v @ `f4dbc4a` | HF cache + links | 53 384 330 435 | 53.38 GB | 14/14 ok | ok |
+| hy15-720-i2v | US | …720p_i2v_distilled @ `a1d10cf` | HF cache + links | 53 384 305 661 | 53.38 GB | 10/10 ok | ok |
+| wan21-t2v-14b | EU | Wan-AI/Wan2.1-T2V-14B-Diffusers @ `38ec498` | `local_dir` (plain files) | 80 406 933 703 | 80.41 GB clean | 20/20 ok | ok |
+| wan22-ti2v-5b | EU | Wan-AI/Wan2.2-TI2V-5B-Diffusers @ `b8fff73` | `local_dir` | 34 201 427 557 | 34.20 GB | 11/11 ok | ok |
+| sfwan21-1.3b | EU | wlsaidhi/SFWan2.1-T2V-1.3B-Diffusers @ `4b44356` | `local_dir` | 28 928 823 445 | 28.93 GB | 9/9 ok | ok |
+| ltx23 `text_embedding_projection/` | EU (added into the existing tree) | FastVideo/LTX-2.3-Distilled-Diffusers @ `22b09fb` | HF cache + a `text_embedding_projection` link | +6 344 492 152 (tree now 47 184 305 471) | 47.18 GB | 1/1 ok (`f6ed4ecd…`, the US blob) | see ltx23 below |
+| taeh3 (`weights/taeh3/taeh3.safetensors`) | EU | copy of `auxiliary/tae/taeh3.safetensors` | plain file + empty `.complete` (as US) | 22 709 752 | 22 709 752 | `4fd022bf…` = US file = pinned | — |
+
+File lists and sizes: for every copied tree the relative paths and sizes
+equal the source volume's survey manifest (no missing, extra or different
+file), and every weight file of 1 MiB or less has the source's SHA-256.
+`.complete` holds the fetch seconds, as the existing trees do (the ltx23
+marker was left as it was). The new US trees and the ltx23 addition were
+written by `huggingface_hub` 2.0, whose cache adds a content-addressed
+`blobs/xx/<hash>` store (plus `CACHEDIR.TAG`) next to `models--*/`; the
+snapshot and top-level links resolve to the same files, so readers see the
+same tree. Nothing existing was deleted or rewritten.
+
+### auxiliary/ (both volumes)
+
+`/workspace/weights/auxiliary` (the name `aux` is refused by both volumes'
+filesystems: `mkdir` returns EINVAL, a reserved DOS device name). Rows in
+`weights-manifest.tsv` (`auxiliary/<file>`, pinned URL, `sha256:… size:…`);
+`verify-weights.sh aux` checks size and SHA-256 of each: **ok on EU and US**.
+Each directory carries a `.complete`.
+
+| File | Source (pinned) | Bytes | SHA-256 |
+|---|---|---:|---|
+| `tae/taeh3.safetensors` | madebyollin/taehv @ `e589fdd` (fetch-tae.sh, fetch-taeh3.sh) | 22 709 752 | `4fd022bf…3d4c13` |
+| `tae/taeltx2_3_wide.safetensors` | madebyollin/taehv @ `32ac014` (fetch-tae.sh) | 60 359 856 | `0a692914…52e082` |
+| `tae/taew2_1.safetensors` | madebyollin/taehv @ `e589fdd` (fetch-tae.sh, fetch_taehv.sh) | 22 642 902 | `04766eac…b1a93f` |
+| `tae/taew2_2.safetensors` | madebyollin/taehv @ `e589fdd` (fetch_taehv.sh) | 22 848 048 | `b84609b2…1f5325` |
+| `lpips/alexnet-owt-7be5be79.pth` | download.pytorch.org (fetch-lpips.sh) | 244 408 911 | `7be5be79…cdee02` |
+| `lpips/lpips_v0.1_alex.pth` | richzhang/PerceptualSimilarity @ `082bb24` (fetch-lpips.sh) | 6 009 | `df73285e…0835c0` |
+
+`fetch-taeh3.sh` used to take `main`; `main`'s taeh3 had the pinned bytes on
+2026-09-27 (as did the US `weights/taeh3` copy), so it is now pinned to
+`e589fdd` and that SHA-256. `fetch-tae.sh`, `fetch_taehv.sh`,
+`fetch-taeh3.sh` and `fetch-lpips.sh` copy from
+`$FV_AUX_DIR` (default `<weights>/auxiliary/{tae,lpips}`) first when the hash
+matches and download otherwise. `runpod-matrix.sh` reads
+`$W/auxiliary/tae` and `$W/auxiliary/lpips` in place when their `.complete`
+exists (else the container disk, as before), and the b200 family looks for
+`auxiliary/tae/taeh3.safetensors` first.
+
+### verify-weights.sh on both volumes after the sync
+
+New cells: `hy15-480-t2v`, `hy15-480-i2v`, `hy15-720-t2v`, `hy15-720-i2v`,
+`ltx23` (includes `text_embedding_projection`) and `aux`. On **both**
+volumes: aux, fastwan21-1.3b, the four hy15 trees, wan21-t2v-14b,
+wan22-ti2v-5b and sfwan21-1.3b are **ok**. `ltx23` was first **INCOMPLETE on both,
+identically**: `text_encoder/gemma/model.safetensors.index.json` names
+`text_encoder/gemma/model-0000{1..5}-of-00005.safetensors` (24.37 GB), and
+neither volume had them, because the manifest glob `text_encoder/model-*`
+does not match the `gemma/` subdirectory. With the owner's approval the
+manifest row now also takes `text_encoder/gemma/*`, the `ltx23` cell also
+requires `text_encoder/gemma`, and a CPU pod per volume (`ena0opqz49za8o` US,
+`c7cyktznj8g6wf` EU, cpu3c 8 vCPU, 4 download workers, no OOM, about 1.5
+minutes each, deleted) added `text_encoder/gemma/*` at `22b09fb` into the
+existing tree (add-only; nothing else touched). Each volume gained
+24 374 828 489 (US) / 24 374 819 368 (EU) bytes; `ltx23` is now
+71 559 124 637 (US) / 71 559 124 839 (EU) bytes. All five shards match the
+Hub's LFS SHA-256 on both volumes, and **`verify-weights.sh ltx23` is ok on
+both**. The manifest's `latent_upsampler/*` and
+`ltx-2.3-22b-distilled-lora-384*.safetensors` globs match nothing in the repo
+at `22b09fb`.
+
+### Remaining differences (left alone on purpose)
+
+| Where | What | GB | Why left |
+|---|---|---:|---|
+| EU only | `weights/FastH3-4-step-Preview-v1-VSA-DataFree` | 77.97 | unlisted, transformer incomplete despite its marker (see below) |
+| EU only | `weights/ltx2` 12 `text_encoder/diffusion_pytorch_model-000{01..12}-of-00012` shards | 51.61 | unlisted layout; the loader reads `model-*` |
+| EU only | `upstream/`, `runs/`, `.cache/` | 104.1 | not weights |
+| US only | `runs/` | 1.78 | not weights |
+| both | `weights/mmaudio-44k-v2` (US 21.46 complete, EU 10.73 in progress, no marker at the time) | — | being written by another agent |
+| both | pre-quantized FP8 text encoders | — | being written by another agent (not present at the time) |
+| layout | FastH3 LoRA `vsa-datafree` adapter and upscaler: plain file on EU, HF blob on US; new trees: HF-cache 2.0 on US / 1.x on EU | 0 | same bytes |
+
+Weight bytes now (`du -sb` of `weights/`, from the post-sync pass): the two
+volumes hold the same manifest trees plus `auxiliary/` (0.37 GB) and `taeh3`.
+The US volume reported 957.1 GB used of 2000 GB after the sync.
+
+Pods (all deleted; each had a local delete backstop, killed after the
+delete): `ktrxja4eloj1tv` (US, stopped: `aux` EINVAL), `273mwscpn7uuu1` (US,
+OOM-killed with `HF_XET_HIGH_PERFORMANCE`), `ul6ticbyj1y3ai` (EU, OOM-killed),
+`fkukcxrlu1b1nx` (US), `d0ut8xr2lvo98a` (EU), `1eqmqy2ozjw36e` (US check),
+`ane2ky628scnep` (EU check), then `ena0opqz49za8o` / `c7cyktznj8g6wf` (ltx23 Gemma). About 33 pod-minutes at $0.24/hr, about $0.14.
+
+## Survey (before the sync)
 
 Method: one CPU pod per volume (`python:3.12-slim`, cpu3c, $0.12/hr, ids
 `7icep1blfqhotg` EU and `3n9lj67tw3aa5o` US, about 2 minutes each, both
@@ -17,7 +131,7 @@ SHA-256 of every weight file of 1 MiB or less. The results were served on port
 resized.** The GB figures below are 10^9 bytes, the unit Runpod bills in. The
 US mount reports 1 000 000 716 800 bytes of capacity.
 
-## Headline
+### Headline
 
 | | EU | US |
 |---|---:|---:|
@@ -33,7 +147,7 @@ on each volume, **but only if EU drops 233.7 GB** of non-weight, unlisted
 and partial data. Keeping everything that is on EU today as well needs
 about 1170 GB on EU and about 1065 GB on US.
 
-## Top-level inventory
+### Top-level inventory
 
 `du -sb` bytes (GB). `/workspace/hf`, `fv-libs`, `gpucheck-out` and
 `h3-text-cache` are each under 1 MB on both volumes.
@@ -50,7 +164,7 @@ UP_LOCAL=1`) keeps its outputs on the container disk. With the default
 (`UP_LOCAL=1`), nothing reads `upstream/`, `runs/` or `.cache/` on the volume. `pod.sh` with
 `UP_LOCAL=0` would still use `/workspace/upstream`.
 
-## Weight trees
+### Weight trees
 
 Bytes are regular-file bytes. HF-cache trees are counted once: the
 `snapshots/` symlinks point into `blobs/`. "Marker" means a `.complete`
@@ -81,7 +195,7 @@ Small-file SHA-256s (≤ 1 MiB) match between the two copies of every shared
 tree. The only mismatches are the `.complete` and `.fetch.pid` bookkeeping
 files.
 
-## Diff
+### Diff
 
 **Only on EU** (weights): hy15-480-t2v, hy15-480-i2v, hy15-720-t2v,
 hy15-720-i2v, fastwan21-1.3b (all in the manifest, 223.14 GB together).
@@ -103,7 +217,7 @@ upscaler (same sizes).
 | US | hy15 x4 193.93, fastwan21-1.3b 29.21 | **223.14** |
 | US, optional | ltx2 extra text-encoder layout 51.61; VSA-DataFree (unique bytes are only the 18.80 GB partial transformer) | +51.61 / +18.80 |
 
-## Removal candidates (named; nothing done)
+### Removal candidates (named; nothing done)
 
 | Volume | Item | GB | Why |
 |---|---|---:|---|
@@ -118,7 +232,7 @@ upscaler (same sizes).
 | EU total | | **233.70** | |
 | US total | | **23.24** | |
 
-## Does the union fit in 1000 GB?
+### Does the union fit in 1000 GB?
 
 | Content | GB | Fits 1000? |
 |---|---:|---|
@@ -158,7 +272,7 @@ pull from the Hub directly with `runpod.sh`'s CPU fetch path (the manifest
 rows are Hub ids), which avoids inter-region copies. At ~$0.12/hr per CPU
 pod, the cost is a few pod-hours.
 
-## Raw data
+### Raw data
 
 The manifests (`manifest.tsv.gz`), `du.txt`, `df.txt` and the small-file
 SHA-256 lists were pulled to the session scratchpad. They are not
