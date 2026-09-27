@@ -1,0 +1,45 @@
+{
+  "accepted_noop": [],
+  "audio_in": null,
+  "audio_out": "model_default",
+  "callback": null,
+  "canvas": {
+    "follow_image": {
+      "short_edge": 1440
+    }
+  },
+  "keyframes": [
+    {
+      "at": "first",
+      "image": {
+        "http": "https://cdn.hailuoai.com/example/first-frame.png"
+      }
+    }
+  ],
+  "model": "MiniMax-H3",
+  "negative_prompt": null,
+  "output": {
+    "inline_data_uri": false
+  },
+  "prompt": "Pull focus to the people in the background.",
+  "protocol": "minimax_v2",
+  "references": [],
+  "sampling": {
+    "boundary_ratio": null,
+    "flow_shift": null,
+    "guidance": null,
+    "guidance_2": null,
+    "steps": null
+  },
+  "seed": null,
+  "task": "i2v",
+  "timing": {
+    "fps": null,
+    "length": {
+      "seconds": {
+        "snap": "align_up",
+        "value": 5.0
+      }
+    }
+  }
+}
