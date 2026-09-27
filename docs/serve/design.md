@@ -76,6 +76,17 @@ text says **native**.
    upstream comparison keep their reference; the dense route remains
    selectable as an explicit profile (`h3/sol_h3_4step`).
 
+6. **Draft tier (owner decision).** A third tier, **`draft`**, exposes our
+   faster configurations that do NOT pass the quality gate, for previews and
+   iteration: public ids `h3-draft` (fal `minimax/h3-draft/*`, MiniMax
+   `MiniMax-H3-Draft`) and `ltx-draft` (LTX API model id), plus openai-videos
+   model ids. Candidates (measured, gate FAIL, fastest first): H3 — FastH3
+   4-step VSA 480p + TAEH3 (8.1 s, RTX PRO 6000), FastH3 8-step Sol+TeaCache+
+   TAEH3; LTX — LTX-2.5 distilled + NVFP4 FFN (4K denoise 1.14x, -8.6 GiB,
+   fails sharpness at 4K) with TAEHV decode. Responses must mark the result as
+   draft quality (metadata where the wire allows). Tier order: draft < turbo <
+   max; `Tier` gains a `Draft` variant.
+
 ## 1. Goals and non-goals
 
 ### 1.1 Goals

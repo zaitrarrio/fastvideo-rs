@@ -84,7 +84,17 @@ if [[ -n "$PROMPTS_FILE" ]]; then
   PROMPT_ARGS=(--prompts "$PROMPTS_FILE")
 fi
 LPIPS_ARGS=()
-LPIPS_DIR="${FV_LPIPS_DIR:-$SCRATCH/lpips}"
+# Small pinned non-Hub weights (TAE, LPIPS) live on the weight volume under
+# $W/auxiliary (weights-manifest.tsv auxiliary/ rows, verify-weights.sh aux).
+# They are read in place when complete; otherwise the fetch scripts fill the
+# container disk (volume copy per file first, then the pinned URLs).
+AUX="${FV_AUX_DIR:-$W/auxiliary}"
+export FV_AUX_DIR="$AUX"
+if [[ -z "${FV_LPIPS_DIR:-}" && -f "$AUX/lpips/.complete" ]]; then
+  LPIPS_DIR="$AUX/lpips"
+else
+  LPIPS_DIR="${FV_LPIPS_DIR:-$SCRATCH/lpips}"
+fi
 GATE_POLICY="${FV_GATE_POLICY:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/gate-policy.toml}"
 
 write_json() {
@@ -182,11 +192,18 @@ gated_cell() {
   run_cell "$name" "$@"
 }
 
-# Tiny-autoencoder weights (madebyollin/taehv) live on the container disk:
-# runpod-http's start command fetches them, and this fetches again only when a
-# file is missing. They are not part of the weight tree, so verify-weights.sh
-# never gates on them; a TAE cell whose file is absent is recorded as skipped.
-TAE="${FV_TAE_DIR:-$SCRATCH/tae}"
+# Tiny-autoencoder weights (madebyollin/taehv): the volume copy
+# ($W/auxiliary/tae, complete and hash-checked by verify-weights.sh aux) is
+# read in place. Without it they live on the container disk: runpod-http's
+# start command fetches them, and this fetches again only when a file is
+# missing (fetch-tae.sh copies from the volume first, then downloads). TAE
+# cells do not gate on verify-weights.sh; a TAE cell whose file is absent is
+# recorded as skipped.
+if [[ -z "${FV_TAE_DIR:-}" && -f "$AUX/tae/.complete" ]]; then
+  TAE="$AUX/tae"
+else
+  TAE="${FV_TAE_DIR:-$SCRATCH/tae}"
+fi
 TAEH3="$TAE/taeh3.safetensors"
 TAELTX="$TAE/taeltx2_3_wide.safetensors"
 tae_fetched=""
@@ -854,7 +871,7 @@ case "$FAMILY" in
     # default elsewhere; this family opts into TAEH3. Oxide GEMM stays off.
     unset FASTVIDEO_NVFP4_OXIDE_GEMM
     taeh3=""
-    for p in "$W/taeh3/taeh3.safetensors" "$W/taeh3" "$WORK/taeh3/taeh3.safetensors"; do
+    for p in "$AUX/tae/taeh3.safetensors" "$W/taeh3/taeh3.safetensors" "$W/taeh3" "$WORK/taeh3/taeh3.safetensors" "$TAE/taeh3.safetensors"; do
       if [[ -f "$p" || ( -d "$p" && -f "$p/taeh3.safetensors" ) ]]; then
         taeh3="$p"
         break
