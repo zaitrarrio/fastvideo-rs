@@ -611,17 +611,24 @@ case "$FAMILY" in
     done
 
     # ---- Wan2.1 T2V-14B, Wan2.2 TI2V-5B, SF-Wan 1.3B (weights on the US
-    # volume, fv-weights-b200-us). One prompt ($PROMPT), warm, the upstream
-    # FastVideo sampling defaults of each checkpoint.
-    one=(--prompt "$PROMPT" --seed "$SEED" --warm)
-    w14=(--weights "$W/wan21-t2v-14b" --preset wan_t2v_14b --unipc --steps 50 --guidance 5.0
+    # volume, fv-weights-b200-us). One prompt ($PROMPT), the upstream
+    # FastVideo sampling defaults of each checkpoint. The 50-step cells run
+    # one generation (no --warm): first-request overhead is small next to
+    # 100 forwards, and each cell would otherwise cost twice the time.
+    one=(--prompt "$PROMPT" --seed "$SEED")
+    w14=(--weights "$W/wan21-t2v-14b" --preset wan_t2v_14b --unipc --guidance 5.0
       --flow-shift 3.0 "${one[@]}")
     gated_cell wan14 wan21-t2v-14b \
-      "$BIN" --mode fast wan gen "${w14[@]}" --clip-dir "$RUNS/wan14/frames"
-    gated_cell wan14-nocache wan21-t2v-14b \
+      "$BIN" --mode fast wan gen "${w14[@]}" --steps 50 --clip-dir "$RUNS/wan14/frames"
+    # Identity of the exact caches on 14B (CFG batch, 40 blocks): 4 steps each way.
+    gated_cell wan14-4step wan21-t2v-14b \
+      "$BIN" --mode fast wan gen "${w14[@]}" --steps 4 --clip-dir "$RUNS/wan14-4step/frames"
+    gated_cell wan14-4step-nocache wan21-t2v-14b \
       env FASTVIDEO_WAN_COND_CACHE=0 \
-      "$BIN" --mode fast wan gen "${w14[@]}" --no-text-cache --clip-dir "$RUNS/wan14-nocache/frames"
-    compare_cells wan14 wan14-nocache --off-identity
+      "$BIN" --mode fast wan gen "${w14[@]}" --steps 4 --no-text-cache \
+        --clip-dir "$RUNS/wan14-4step-nocache/frames"
+    compare_cells wan14-4step wan14-4step-nocache --off-identity
+    w14+=(--steps 50)
     # sol-engine config/wan21_t2v_14b/fullstack.toml: EasyCache 0.036 + Sol-Attn
     # (tau 1.0, 10 dense forwards, layer 0 dense, Morton3D); and each alone,
     # plus the Sol TeaCache preset.
@@ -653,10 +660,10 @@ case "$FAMILY" in
     compare_cells wan5b wan5b-easycache
     # SF-Wan: causal DMD; TAEHV by default (distilled), the full VAE opt-out.
     gated_cell sfwan13 sfwan21-1.3b \
-      "$BIN" --mode fast wan gen --weights "$W/sfwan21-1.3b" --preset sf_wan_t2v_1_3b "${one[@]}" \
+      "$BIN" --mode fast wan gen --weights "$W/sfwan21-1.3b" --preset sf_wan_t2v_1_3b "${one[@]}" --warm \
         --clip-dir "$RUNS/sfwan13/frames"
     gated_cell sfwan13-fullvae sfwan21-1.3b \
-      "$BIN" --mode fast wan gen --weights "$W/sfwan21-1.3b" --preset sf_wan_t2v_1_3b "${one[@]}" \
+      "$BIN" --mode fast wan gen --weights "$W/sfwan21-1.3b" --preset sf_wan_t2v_1_3b "${one[@]}" --warm \
         --full-vae --clip-dir "$RUNS/sfwan13-fullvae/frames"
     compare_cells sfwan13-fullvae sfwan13
     ;;
