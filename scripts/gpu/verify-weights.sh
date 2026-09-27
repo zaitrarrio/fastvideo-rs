@@ -8,7 +8,7 @@
 #                                      wan22-ti2v-5b wan21-t2v-14b sfwan21-1.3b
 #                                      mmaudio-44k-v2
 #                                      hy15-480-t2v hy15-480-i2v hy15-720-t2v
-#                                      hy15-720-i2v aux
+#                                      hy15-720-i2v aux text-fp8
 #   verify-weights.sh --list           print the cells and what each needs
 #
 # For every weight root a cell needs, this checks:
@@ -18,6 +18,11 @@
 #      verify-safetensors.sh), following HF-cache symlinks.
 # The `aux` cell instead checks every auxiliary/ row of weights-manifest.tsv (TAE and
 # LPIPS files): present, the listed size, the listed SHA-256.
+# The `text-fp8` cell checks the optional pre-quantized FP8 text encoders
+# (`fv-gpucheck quantize-text-encoder`, E13) in h3-base/ and ltx25/: the
+# manifest's SHA-256 and the model's size and full length, plus the model's
+# SHA-256 when FV_VERIFY_FP8_SHA=1 (about 40 GB read). A missing tree only
+# means the loader quantizes at load; the cell reports it as INCOMPLETE.
 # Exit status is non-zero on the first cell with a gap; the report names it.
 set -euo pipefail
 
@@ -63,12 +68,13 @@ needs() {
     ltx23)
       echo "ltx23:transformer ltx23:vae ltx23:audio_vae ltx23:vocoder ltx23:text_encoder ltx23:text_encoder/gemma ltx23:tokenizer ltx23:text_embedding_projection ltx23:spatial_upscaler" ;;
     aux) echo "aux" ;;
+    text-fp8) echo "text-fp8" ;;
     *) return 1 ;;
   esac
 }
 
 CELLS=(fasth3-8step h3-base fasth3-4step-vsa fasth3-4step-dense sol-h3 sol-h3-spark ltx25-two-stage ltx23 fastwan21-1.3b
-  wan22-ti2v-5b wan21-t2v-14b sfwan21-1.3b mmaudio-44k-v2 hy15-480-t2v hy15-480-i2v hy15-720-t2v hy15-720-i2v aux)
+  wan22-ti2v-5b wan21-t2v-14b sfwan21-1.3b mmaudio-44k-v2 hy15-480-t2v hy15-480-i2v hy15-720-t2v hy15-720-i2v aux text-fp8)
 
 if [[ "${1:-}" == "--list" ]]; then
   for c in "${CELLS[@]}"; do printf '%-20s %s\n' "$c" "$(needs "$c")"; done
@@ -140,7 +146,34 @@ check_aux() {
   return $rc
 }
 
+# text-fp8: the E13 trees as written on the US volume and copied to EU
+# (docs/gaps/2026-09-27-volume-sync.md). rel<TAB>bytes<TAB>sha256.
+FP8_TREES="h3-base/text_encoder_fp8/manifest.json	2965	e5504561d8fcf188c33d9ad9bb282e80bd45693dc087f9ad980034c9ee190a42
+h3-base/text_encoder_fp8/model.safetensors	25950724552	c13fab5c3d7225f9582fdc57a6aa6ba83ed8830114fa78340307cfd0b9072c2d
+ltx25/text_encoder_fp8/manifest.json	1408	bb5a30499c4e4e647b27a608b11384aa6aaba712534b1d737fcca164adba06db
+ltx25/text_encoder_fp8/model.safetensors	12923848536	0615832bb0a0e0b4eabd31a27eb1e674cb7b7dc59534d03889b50fa49eb4ae2f"
+check_text_fp8() {
+  local rc=0 rel size sha p got
+  while IFS=$'\t' read -r rel size sha; do
+    p="$W/$rel"
+    if [[ ! -f "$p" ]]; then echo "  MISSING $p" >&2; rc=1; continue; fi
+    got="$(wc -c <"$p" | tr -d ' ')"
+    if [[ "$got" != "$size" ]]; then echo "  SIZE $p: $got, expected $size" >&2; rc=1; continue; fi
+    if [[ "$p" == *.safetensors ]]; then
+      bash "$HERE/verify-safetensors.sh" "$p" >/dev/null || rc=1
+      [[ "${FV_VERIFY_FP8_SHA:-0}" == 1 ]] || continue
+    fi
+    got="$(sha256sum "$p" | awk '{print $1}')"
+    if [[ "$got" != "$sha" ]]; then echo "  SHA256 $p: $got, expected $sha" >&2; rc=1; fi
+  done <<<"$FP8_TREES"
+  return $rc
+}
+
 for cell in "$@"; do
+  if [[ "$cell" == text-fp8 ]]; then
+    if check_text_fp8; then echo "weights ok: text-fp8"; else echo "weights INCOMPLETE: text-fp8" >&2; fail=1; fi
+    continue
+  fi
   if [[ "$cell" == aux ]]; then
     if check_aux; then echo "weights ok: aux"; else echo "weights INCOMPLETE: aux" >&2; fail=1; fi
     continue

@@ -51,7 +51,8 @@ use crate::profile::{EncodeProfile, H264Level};
 use crate::sdp::{self, Direction, MediaKind, OfferRequirements, Sdp};
 use crate::stun;
 use crate::writer::{
-    AudioPacket, TrackKind, VideoFrame, WallclockMap, AUDIO_CLOCK_HZ, VIDEO_CLOCK_HZ,
+    AudioPacket, TrackKind, VideoCodec, VideoFrame, WallclockMap, AUDIO_CLOCK_HZ,
+    VIDEO_CLOCK_HZ,
 };
 use crate::WebrtcError;
 
@@ -129,8 +130,13 @@ pub enum AudioLayout {
 /// How to answer an offer.
 #[derive(Debug, Clone)]
 pub struct AnswerOptions {
-    /// Send video on the offered video m-line(s). Requires H.264 CB pm=1.
+    /// Send video on the offered video m-line(s). Requires one of
+    /// `video_codecs` in the offer.
     pub video: bool,
+    /// Video codecs we can send, in preference order (default: H.264 CB
+    /// pm=1 only). The first one the offer carries is used for that m-line
+    /// ([`MediaInfo::video_codec`], [`PeerHandle::video_codec`]).
+    pub video_codecs: Vec<VideoCodec>,
     /// Send audio. `None`: the session is video-only and every audio m-line
     /// is answered `a=inactive` (design §5.3, fal WMA row).
     pub audio: Option<AudioLayout>,
@@ -152,6 +158,7 @@ impl Default for AnswerOptions {
     fn default() -> Self {
         AnswerOptions {
             video: true,
+            video_codecs: vec![VideoCodec::H264],
             audio: Some(AudioLayout::Stereo),
             channels: ChannelPolicy::Any,
             start_paused: false,
@@ -177,6 +184,9 @@ pub struct OfferOptions {
     /// H.264 level we offer. WHIP takes it from the target's
     /// [`EncodeProfile`] (Cloudflare 3.1, MediaMTX 4.0).
     pub h264_level: H264Level,
+    /// Video codecs we offer (default: H.264 only). A loopback test client
+    /// can offer VP8 like the Reactor Python SDK does.
+    pub video_codecs: Vec<VideoCodec>,
 }
 
 impl Default for OfferOptions {
@@ -187,6 +197,7 @@ impl Default for OfferOptions {
             channels: Vec::new(),
             srflx: Vec::new(),
             h264_level: H264Level::L3_1,
+            video_codecs: vec![VideoCodec::H264],
         }
     }
 }
@@ -198,6 +209,9 @@ pub struct MediaInfo {
     pub kind: TrackKind,
     /// Our direction for this m-line after negotiation.
     pub direction: Direction,
+    /// The codec we send on a video m-line (`None` for audio, or when the
+    /// m-line does not send).
+    pub video_codec: Option<VideoCodec>,
 }
 
 impl MediaInfo {
@@ -593,6 +607,15 @@ impl PeerHandle {
     /// True when some m-line of `kind` sends.
     pub fn sends(&self, kind: TrackKind) -> bool {
         self.media.iter().any(|m| m.kind == kind && m.sends())
+    }
+
+    /// The codec of the first sending video m-line: what
+    /// [`send_video`](Self::send_video) must be given.
+    pub fn video_codec(&self) -> Option<VideoCodec> {
+        self.media
+            .iter()
+            .find(|m| m.kind == TrackKind::Video && m.sends())
+            .and_then(|m| m.video_codec)
     }
 
     pub fn stats(&self) -> PeerStats {
@@ -1288,21 +1311,32 @@ impl HostLoop {
         }
     }
 
-    fn new_rtc(&self, now: Instant, creds: Option<(String, String)>, level: H264Level) -> Rtc {
+    fn new_rtc(
+        &self,
+        now: Instant,
+        creds: Option<(String, String)>,
+        level: H264Level,
+        video: &[VideoCodec],
+    ) -> Rtc {
         let mut cfg = Rtc::builder()
             .clear_codecs()
             .enable_opus(true, false)
             .set_stats_interval(Some(self.cfg.stats_interval));
-        // Constrained Baseline first (what OpenH264 emits, §5.9), then
-        // Baseline as a fallback match; both FU-A (packetization-mode=1).
-        cfg.codec_config().add_h264(
-            108.into(),
-            Some(109.into()),
-            true,
-            level.constrained_baseline_plid(),
-        );
-        cfg.codec_config()
-            .add_h264(127.into(), Some(121.into()), true, level.baseline_plid());
+        if video.contains(&VideoCodec::H264) {
+            // Constrained Baseline first (what OpenH264 emits, §5.9), then
+            // Baseline as a fallback match; both FU-A (packetization-mode=1).
+            cfg.codec_config().add_h264(
+                108.into(),
+                Some(109.into()),
+                true,
+                level.constrained_baseline_plid(),
+            );
+            cfg.codec_config()
+                .add_h264(127.into(), Some(121.into()), true, level.baseline_plid());
+        }
+        if video.contains(&VideoCodec::Vp8) {
+            cfg.codec_config().enable_vp8(true);
+        }
         if let Some((ufrag, pass)) = creds {
             cfg = cfg.set_local_ice_credentials(IceCreds { ufrag, pass });
         }
@@ -1409,6 +1443,7 @@ impl HostLoop {
         }
         let mut sdp = Sdp::parse(offer)?;
         let summary = sdp::validate_offer(&sdp, OfferRequirements::default())?;
+        let vp8_ok = opts.video_codecs.contains(&VideoCodec::Vp8);
         let wants_video = opts.video
             && summary
                 .media
@@ -1419,12 +1454,13 @@ impl HostLoop {
                 .media
                 .iter()
                 .any(|m| m.kind == MediaKind::Audio && m.offerer_receives());
-        sdp::validate_offer(
+        sdp::validate_offer_with(
             &sdp,
             OfferRequirements {
                 video: wants_video,
                 audio: wants_audio,
             },
+            vp8_ok,
         )?;
         sdp.strip_unresolvable_candidates();
         if opts.audio.is_none() {
@@ -1436,7 +1472,12 @@ impl HostLoop {
         // We never mirror the Reactor RXMT trailer (reactor §4.2).
         sdp.remove_session_attr("x-reactor-frame-metadata");
 
-        let mut rtc = self.new_rtc(now, opts.ice_credentials.clone(), opts.h264_level);
+        let mut rtc = self.new_rtc(
+            now,
+            opts.ice_credentials.clone(),
+            opts.h264_level,
+            &opts.video_codecs,
+        );
         self.add_candidates(&mut rtc, &[]);
         let offer = SdpOffer::from_sdp_string(&sdp.to_string())
             .map_err(|e| WebrtcError::Rtc(e.to_string()))?;
@@ -1466,7 +1507,17 @@ impl HostLoop {
                     .media(mid)
                     .map(|x| from_rtc_dir(x.direction()))
                     .unwrap_or(Direction::Inactive);
-                Some(mid_state(mid, kind, dir, opts.start_paused))
+                let mut st = mid_state(mid, kind, dir, opts.start_paused);
+                if kind == TrackKind::Video && dir.is_sending() {
+                    if let Some((pt, codec)) = rtc
+                        .writer(mid)
+                        .and_then(|w| choose_video(&w, &opts.video_codecs))
+                    {
+                        st.pt = Some(pt);
+                        st.info.video_codec = Some(codec);
+                    }
+                }
+                Some(st)
             })
             .collect();
         let (id, handle, events) = self.new_slot(rtc, SlotState::Active, opts.channels, mids, now);
@@ -1482,7 +1533,7 @@ impl HostLoop {
         if self.peers.len() >= self.cfg.max_peers {
             return Err(WebrtcError::PeerLimit(self.cfg.max_peers));
         }
-        let mut rtc = self.new_rtc(now, None, opts.h264_level);
+        let mut rtc = self.new_rtc(now, None, opts.h264_level, &opts.video_codecs);
         self.add_candidates(&mut rtc, &opts.srflx);
         let mut api = rtc.sdp_api();
         let mut mids = Vec::new();
@@ -1530,6 +1581,8 @@ fn mid_state(mid: Mid, kind: TrackKind, direction: Direction, paused: bool) -> M
             mid: mid.to_string(),
             kind,
             direction,
+            video_codec: (kind == TrackKind::Video && direction.is_sending())
+                .then_some(VideoCodec::H264),
         },
         mid,
         pt: None,
@@ -1664,6 +1717,23 @@ fn write_media(
         // One mutation, one drain.
         drain(slot, io, now);
     }
+}
+
+/// The first codec of `prefs` the negotiated m-line carries, and its PT.
+fn choose_video(w: &str0m::media::Writer, prefs: &[VideoCodec]) -> Option<(Pt, VideoCodec)> {
+    for c in prefs {
+        let pt = match c {
+            VideoCodec::H264 => pick_pt(w, TrackKind::Video),
+            VideoCodec::Vp8 => w
+                .payload_params()
+                .find(|p| p.spec().codec == Codec::Vp8)
+                .map(|p| p.pt()),
+        };
+        if let Some(pt) = pt {
+            return Some((pt, *c));
+        }
+    }
+    None
 }
 
 fn pick_pt(w: &str0m::media::Writer, kind: TrackKind) -> Option<Pt> {

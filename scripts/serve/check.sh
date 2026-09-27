@@ -39,15 +39,29 @@ run cargo test "${PKGS[@]}"
 
 if [[ "${FV_SERVE_HEAVY:-0}" == "1" ]]; then
   run cargo check -p fastvideo-serve --features full,fake --all-targets
-  run cargo check -p fastvideo-reactor --features proto-codegen
+  run cargo test -p fastvideo-reactor --features proto-codegen --lib
   run cargo clippy -p fastvideo-serve -p fastvideo-webrtc -p fastvideo-media -p fastvideo-serve-kit -p fastvideo-deploy \
-    --features fastvideo-serve/full --all-targets --no-deps -- -D warnings
+    -p fastvideo-fal --features fastvideo-serve/full --all-targets --no-deps -- -D warnings
   # serve-kit's HTTP fetch / callback-receiver tests only exist with `fetch`.
   run cargo test -p fastvideo-serve-kit --features fetch
+  # fal WMA director (WP-14): protocol units, WebRTC end to end against the
+  # fake engine (A/V at 24 fps / 48 kHz; OpenH264 and libwebp optimized so a
+  # debug build keeps real time, or ffmpeg+libx264 via FV_FFMPEG), the
+  # fv-serve mount, and the Chromium `fal.realtime.open` compat test when
+  # FV_FAL_JS_DIR is set (see crates/fastvideo-fal/tests/director_browser.rs).
+  run cargo test -p fastvideo-fal --features director,openh264 \
+    --config 'profile.dev.package.openh264-sys2.opt-level=3' \
+    --config 'profile.dev.package.openh264.opt-level=3' \
+    --config 'profile.dev.package.audiopus_sys.opt-level=3' \
+    --config 'profile.dev.package.libwebp-sys.opt-level=3'
+  run cargo test -p fastvideo-serve --features webrtc,fake --test director
   # fv-serve with outbound HTTP: D1 over HTTP, S3/R2 read-back for LTX v1.
   # (serve-kit's d1_live smoke test runs above when CLOUDFLARE_API_KEY or
   # FV_CF_API_TOKEN is set, and skips otherwise.)
   run cargo test -p fastvideo-serve --features http-client
+  # Native /fv/v1/streams: fake engine → pacer → OpenH264/Opus → WHIP (in
+  # process endpoint); scripts/serve/whip-e2e.sh adds MediaMTX + WHEP.
+  run cargo test -p fastvideo-serve --features full --test streams_whip
   # The Runpod worker over reqwest against the queue simulator on TCP.
   run cargo test -p fastvideo-deploy --features runpod
 fi

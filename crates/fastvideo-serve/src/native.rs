@@ -9,7 +9,7 @@
 //! | `GET /fv/v1/jobs/{id}` | Job object |
 //! | `GET /fv/v1/jobs/{id}/content` | 302 to the signed output URL; 409 until done |
 //! | `DELETE /fv/v1/jobs/{id}` | Cancels an unfinished job, deletes a finished one |
-//! | `GET /fv/v1/streams`, `POST /fv/v1/streams` | Native WHIP streams: listed empty / 501 until the streaming packages land |
+//! | `/fv/v1/streams*` | Native WHIP streams: [`crate::streams`] (WP-15), mounted by `app::assemble` |
 //!
 //! Auth: `Authorization: Bearer <key>` (serve-kit `ProtocolId::Native`).
 
@@ -307,24 +307,6 @@ async fn delete(State(ctx): State<ServeCtx>, headers: HeaderMap, Path(id): Path<
     }
 }
 
-async fn streams_list(State(ctx): State<ServeCtx>, headers: HeaderMap) -> Response {
-    if let Err(e) = ctx.auth().authenticate(ProtocolId::Native, &headers) {
-        return reply_err(e);
-    }
-    Json(json!({"object": "list", "data": []})).into_response()
-}
-
-async fn streams_create(State(ctx): State<ServeCtx>, headers: HeaderMap) -> Response {
-    if let Err(e) = ctx.auth().authenticate(ProtocolId::Native, &headers) {
-        return reply_err(e);
-    }
-    (
-        StatusCode::NOT_IMPLEMENTED,
-        Json(json!({"error": {"kind": "not_implemented", "message": "native WHIP streams are not available in this build", "param": null}})),
-    )
-        .into_response()
-}
-
 fn capabilities(gate: &ServiceGate) -> Value {
     let caps = gate.engine().caps();
     let models: Vec<Value> = caps
@@ -368,5 +350,4 @@ pub fn routes(gate: Arc<ServiceGate>, body_max: usize, sync_timeout: Duration) -
         )
         .route("/fv/v1/jobs/{id}", handlers::status(proto.clone(), view.clone(), "id").delete(delete))
         .route("/fv/v1/jobs/{id}/content", handlers::result(proto, view, "id"))
-        .route("/fv/v1/streams", get(streams_list).post(streams_create))
 }

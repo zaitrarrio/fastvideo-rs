@@ -29,7 +29,7 @@
 # Env: RUNPOD_API_KEY; FV_SERVE_IMAGE; FV_SERVE_CONFIG (default
 # /etc/fv/runpod-fake.toml); RUNPOD_VOLUME_ID (default s2k01690bi,
 # fv-weights-b200-us) — its datacenter pins the endpoint; RUNPOD_GPU_TYPES
-# (comma list); RUNPOD_ALLOWED_CUDA (default 13.0); FV_SMOKE_MODEL (default
+# (comma list); RUNPOD_ALLOWED_CUDA (default 13.0; empty drops the filter); FV_SMOKE_MODEL (default
 # fake-wan).
 set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -44,7 +44,7 @@ IMAGE_DEFAULT="ghcr.io/zaitrarrio/fastvideo-rs-serve:latest"
 CONFIG="${FV_SERVE_CONFIG:-/etc/fv/runpod-fake.toml}"
 VOLUME="${RUNPOD_VOLUME_ID:-s2k01690bi}"
 GPUS="${RUNPOD_GPU_TYPES:-NVIDIA RTX 4000 Ada Generation,NVIDIA RTX A5000,NVIDIA GeForce RTX 4090,NVIDIA RTX 6000 Ada Generation}"
-CUDA="${RUNPOD_ALLOWED_CUDA:-13.0}"
+CUDA="${RUNPOD_ALLOWED_CUDA-13.0}"
 CAP_S="${FV_ENDPOINT_CAP_S:-1800}"
 MIN_BALANCE="${FV_MIN_BALANCE:-8}"
 EXEC_MS="${FV_EXECUTION_TIMEOUT_MS:-1800000}"
@@ -148,7 +148,7 @@ lb_payload() {
       FV_SERVE_MODE: "http", FV_AUTH_MODE: "trust-gateway", PORT: "8000", PORT_HEALTH: "8000",
       FV_STATE_DIR: "/fvstate", FV_WEIGHTS: "/runpod-volume/weights", RUST_LOG: "info"
     }),
-    gpu: {pools: $pools, count: 1, allowedCudaVersions: ($cuda | split(" "))},
+    gpu: ({pools: $pools, count: 1} + (if $cuda == "" then {} else {allowedCudaVersions: ($cuda | split(" "))} end)),
     workers: {min: 0, max: 1, idleTimeout: 5},
     scaling: {type: "REQUEST_COUNT", requestCount: 1},
     networkVolumes: [$vol], dataCenterIds: [$dc], flashboot: "OFF", timeout: 330000
@@ -266,7 +266,7 @@ cmd_smoke() {
     --arg host "$(sed -E 's#^(https://[^/?]+).*#\1#' <<<"$media_url")" '{
     target: "runpod-serverless-queue", endpoint: $ep, image: $image, volume: $vol,
     cold: ($cold | {status, delayTime, executionTime, client_wall_s, first_in_progress_s, workerId,
-                    info: (.output | {gpu, ready_after_s, uptime_s, ffmpeg_h264_nvenc, nvenc_encode_ok,
+                    info: (.output | {gpu, ready_after_s, uptime_s, ffmpeg_h264_nvenc, nvenc_encode_ok, nvenc_probe,
                                       nvidia_driver_capabilities, jobs_backend, artifacts_backend, webhook_key_configured,
                                       weights, deploy})}),
     capabilities: ($caps | {status, delayTime, executionTime, client_wall_s, http_status: .output.status,

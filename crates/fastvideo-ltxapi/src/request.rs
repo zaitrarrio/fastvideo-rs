@@ -11,7 +11,7 @@
 //! | `model` (required) | the target's engine name ([`crate::models`]) |
 //! | `duration` (key required; integer per matrix) | `Seconds{AlignUp}` → 8k+1 frames; `null` → `Length::Auto` (400 `Unsupported(LtxAutoDuration)` at negotiation) |
 //! | `resolution` (required, `WxH`) | `Exact` (the engine pads to its multiple and crops back) |
-//! | `fps` (24 / 25 / 48 / 50, default 24) | `fps` (the engine's caps decide; 400 `Unsupported(LtxFps)` until E4) |
+//! | `fps` (24 / 25 / 48 / 50, default 24) | `fps` (the engine's caps decide; 24 / 25 / 48 / 50 since E4, else 400 `Unsupported(LtxFps)`) |
 //! | `generate_audio` (default `true`) | `false` → `AudioOut::Silent` |
 //! | `camera_motion` | 400 `Unsupported(LtxCameraMotion)` |
 //! | `image_uri` (i2v, required) | `Keyframe{First}`: `I2V` |

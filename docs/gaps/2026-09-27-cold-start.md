@@ -98,13 +98,13 @@ copied tensor to equal its source.
 |---|---|---:|---:|---:|---|---:|
 | US `s2k01690bi` | `h3-base/text_encoder_fp8` | 350 | 201 | 25 950 724 552 | `548475f2…` = `548475f2…` PASS | 763 s |
 | US `s2k01690bi` | `ltx25/text_encoder_fp8` | 328 | 338 | 12 923 848 536 | `d9a78567…` = `d9a78567…` PASS | 323 s |
-| EU `jg48s6o1w0` | not written (see below) | | | | | |
+| EU `jg48s6o1w0` | both trees copied from US byte for byte (SHA-256 equal; docs/gaps/2026-09-27-volume-sync.md) | | | | | |
 
 End to end: H3 with the tree produces the same frames as load-time
 quantization (`6a43b801…`). Writes to the volume run at ~35-40 MB/s whether
-sequential or parallel. The EU trees were not written: creating the EU
-endpoint was refused by the session's permission policy (shared resource);
-it needs an explicit go-ahead.
+sequential or parallel. The EU trees were not written here (creating the EU
+endpoint was refused by the session's permission policy); with the owner's
+go-ahead they were later copied from US (docs/gaps/2026-09-27-volume-sync.md).
 
 ## Serverless cold-start timeline (H200, submit → first output)
 

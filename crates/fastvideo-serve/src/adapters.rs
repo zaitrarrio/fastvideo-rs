@@ -11,8 +11,12 @@
 //! | LTX | `fastvideo_ltxapi::router(LtxConfig)` | — |
 //! | fal queue/sync | `fastvideo_fal::router(ctx, FalConfig)` (a stateful `Router`) | `FalWebhook` renderer, output file names |
 //!
-//! The Reactor adapter (WP-13) and the fal director (WP-14) are not mounted
-//! yet; `reactor` expects `fastvideo_reactor::router()`.
+//! | fal director (WMA) | `fastvideo_fal::director::routes(DirectorService)` merged into the fal router (`router_with`), built in `App::build` by `crate::director` | needs features `fal` + `webrtc` |
+//!
+//! The Reactor runtime (WP-13) and the fal director (WP-14) answer WebRTC
+//! offers, so they are built in `App::build` on one shared WebRTC host
+//! (`crate::rtc`, from `[webrtc]`): the Reactor router is mounted next to
+//! these routers, the director's routes go into the fal router.
 //!
 //! Adapters cannot depend on this crate, so their settings are their own
 //! config types, built here from the `[protocols]`/`[ltx]` sections.
@@ -53,7 +57,7 @@ pub fn inventory(p: &ProtocolsCfg) -> Vec<Mounted> {
         Mounted { api: "minimax", enabled: p.minimax, built: cfg!(feature = "minimax") },
         Mounted { api: "ltx", enabled: p.ltx, built: cfg!(feature = "ltxapi") },
         Mounted { api: "fal", enabled: p.fal, built: cfg!(feature = "fal") },
-        Mounted { api: "fal_director", enabled: p.fal_director, built: false },
+        Mounted { api: "fal_director", enabled: p.fal && p.fal_director, built: cfg!(all(feature = "fal", feature = "webrtc")) },
         Mounted { api: "reactor", enabled: p.reactor, built: cfg!(feature = "reactor") },
     ]
 }
@@ -150,8 +154,10 @@ pub fn root_model(cfg: &MountCfg, ctx: &ServeCtx) -> Option<String> {
 }
 
 /// The enabled, built adapters: routes that still need the `ServeCtx`
-/// state, and routers that already carry it (fal).
-pub fn mount(cfg: &MountCfg, ctx: &ServeCtx) -> (Router<ServeCtx>, Router) {
+/// state, and routers that already carry it (fal). `fal_extra` is merged
+/// into the fal router (the director's routes, so `/fal/proxy` reaches
+/// them).
+pub fn mount(cfg: &MountCfg, ctx: &ServeCtx, fal_extra: Router<ServeCtx>) -> (Router<ServeCtx>, Router) {
     #[allow(unused_mut)]
     let mut r: Router<ServeCtx> = Router::new();
     #[allow(unused_mut)]
@@ -178,17 +184,15 @@ pub fn mount(cfg: &MountCfg, ctx: &ServeCtx) -> (Router<ServeCtx>, Router) {
     }
     #[cfg(feature = "fal")]
     if p.fal {
-        stateful = stateful.merge(fastvideo_fal::router(ctx.clone(), fal_config(cfg)));
-    }
-    #[cfg(feature = "reactor")]
-    if p.reactor {
-        r = r.merge(fastvideo_reactor::router());
+        stateful = stateful.merge(fastvideo_fal::router_with(ctx.clone(), fal_config(cfg), fal_extra));
     }
     for m in inventory(p) {
         if m.enabled && !m.built {
             tracing::warn!(api = m.api, "API enabled in [protocols] but not built into this binary; not mounted");
         }
     }
+    #[cfg(not(feature = "fal"))]
+    let _ = fal_extra;
     let _ = ctx;
     (r, stateful)
 }
