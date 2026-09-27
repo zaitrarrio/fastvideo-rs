@@ -248,7 +248,7 @@ fn caps_helpers() {
             total: 12
         }
     );
-    assert_eq!(KnobCaps::all().flow_shift, true);
+    assert!(KnobCaps::all().flow_shift);
 }
 
 // ---- HTTP replies and traits --------------------------------------------------------

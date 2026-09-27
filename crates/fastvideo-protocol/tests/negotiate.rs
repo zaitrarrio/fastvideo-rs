@@ -685,7 +685,8 @@ fn staged_inputs_must_match() {
 
 #[test]
 fn knobs_refused_not_dropped() {
-    let cases: Vec<(&str, Box<dyn Fn(&mut GenerationRequest)>)> = vec![
+    type Tweak = Box<dyn Fn(&mut GenerationRequest)>;
+    let cases: Vec<(&str, Tweak)> = vec![
         (
             "guidance_scale",
             Box::new(|r| r.sampling.guidance = Some(1.0)),
