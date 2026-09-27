@@ -722,7 +722,21 @@ pub const H3_FPS: usize = 24;
 pub const H3_SHORT_EDGE: usize = 768;
 pub const H3_MAX_PIXELS: usize = 768 * 1344;
 pub const H3_CANVAS_MULTIPLE: usize = 32;
-pub const H3_MIN_DURATION_S: usize = 5;
+/// The long-edge cap at the 768 short edge (`H3_MAX_PIXELS = 768 * 1344`).
+pub const H3_MAX_LONG_EDGE: usize = 1344;
+/// The 480P short edge (MiniMax `resolution: 480P`, fal `480p`): 16:9 is
+/// 832 x 480 (fal FL README "Geometry").
+pub const H3_SHORT_EDGE_480P: usize = 480;
+/// The shortest clip [`H3Geometry`] admits: 4 s, which aligns to 107 frames.
+/// MiniMax's own H3 grid is "107-362 frames in steps of 17" (its `duration`
+/// is 4-15 s); 107 is `17 * 6 + 5`, 32 latents, one VAE decode chunk fewer
+/// than 5 s. FastVideo stops at [`H3_FASTVIDEO_MIN_DURATION_S`].
+pub const H3_MIN_DURATION_S: usize = 4;
+/// FastVideo's `MINIMAX_H3_MIN_DURATION = 5.0` (`packing.py:27`): its
+/// `/v1/videos` refuses clips that align below 124 frames. The FastVideo-
+/// compatible API surface keeps this floor; MiniMax/fal requests use
+/// [`H3_MIN_DURATION_S`].
+pub const H3_FASTVIDEO_MIN_DURATION_S: usize = 5;
 pub const H3_MAX_DURATION_S: usize = 15;
 pub const H3_FRAMES_PER_CHUNK: usize = 17;
 pub const H3_LATENTS_PER_CHUNK: usize = 5;
@@ -741,6 +755,24 @@ pub fn resolve_canvas_size(
     aspect_width: f64,
     aspect_height: f64,
 ) -> Result<(usize, usize), String> {
+    resolve_canvas_size_short(aspect_width, aspect_height, H3_SHORT_EDGE)
+}
+
+/// [`resolve_canvas_size`] at another short edge (a positive multiple of 32,
+/// at most 768). The pixel cap scales with it: the long edge is capped at
+/// `1344 * short_edge / 768`, so 768 is exactly [`resolve_canvas_size`] and
+/// 480 gives the 480P canvases: `16:9` is `(480, 832)`, `1:1` `(480, 480)`.
+pub fn resolve_canvas_size_short(
+    aspect_width: f64,
+    aspect_height: f64,
+    short_edge: usize,
+) -> Result<(usize, usize), String> {
+    let m = H3_CANVAS_MULTIPLE;
+    if short_edge == 0 || short_edge % m != 0 || short_edge > H3_SHORT_EDGE {
+        return Err(format!(
+            "H3 short edge must be a positive multiple of {m} up to {H3_SHORT_EDGE}, got {short_edge}"
+        ));
+    }
     if aspect_width <= 0.0 || aspect_height <= 0.0 {
         return Err(format!(
             "aspect ratio must be positive, got {aspect_width}:{aspect_height}"
@@ -752,19 +784,19 @@ pub fn resolve_canvas_size(
             "H3 supports 1:4 to 4:1, got {aspect_width}:{aspect_height}"
         ));
     }
-    let short = H3_SHORT_EDGE as f64;
+    let short = short_edge as f64;
     let (mut width, mut height) = if ratio >= 1.0 {
         (short * ratio, short)
     } else {
         (short, short / ratio)
     };
+    let max_pixels = short * (H3_MAX_LONG_EDGE as f64 * short / H3_SHORT_EDGE as f64);
     let area = width * height;
-    if area > H3_MAX_PIXELS as f64 {
-        let scale = (H3_MAX_PIXELS as f64 / area).powf(0.5);
+    if area > max_pixels {
+        let scale = (max_pixels / area).powf(0.5);
         width *= scale;
         height *= scale;
     }
-    let m = H3_CANVAS_MULTIPLE;
     let snap = |v: f64| (py_round(v / m as f64) * m).max(m);
     Ok((snap(height), snap(width)))
 }
@@ -859,8 +891,10 @@ pub struct H3Geometry {
 }
 
 impl H3Geometry {
-    /// `requested_frames` is aligned up and must land in the 5 to 15 second
-    /// window (124 to 362 frames) both upstreams enforce.
+    /// `requested_frames` is aligned up and must land in the 4 to 15 second
+    /// window (107 to 362 frames) of MiniMax's H3 grid. FastVideo's own floor
+    /// is 5 s (124 frames, [`H3_FASTVIDEO_MIN_DURATION_S`]); callers that
+    /// promise FastVideo parity check that themselves.
     pub fn new(height: usize, width: usize, requested_frames: usize) -> Result<Self, String> {
         let vae = H3VideoVaeConfig::fasth3_8step();
         let dit = H3TransformerConfig::fasth3_8step();
@@ -1182,9 +1216,57 @@ mod tests {
         assert_eq!(g15.sequence_length(0), 109_062);
         assert_eq!(g15.sequence_length(256), 109_318);
 
-        // Four seconds aligns to 107 frames, below the 124-frame floor.
-        assert!(H3Geometry::default_16x9(4).is_err());
+        // Four seconds aligns to 107 frames (MiniMax's floor); three do not fit.
+        let g4 = H3Geometry::default_16x9(4).unwrap();
+        assert_eq!((g4.num_frames, g4.latent_frames), (107, 32));
+        assert_eq!(g4.token_grid, (32, 24, 42));
+        assert!(H3Geometry::default_16x9(3).is_err());
+        assert!(H3Geometry::new(768, 1344, 106).is_ok());
+        assert!(H3Geometry::new(768, 1344, 90).is_err());
         assert!(H3Geometry::default_16x9(16).is_err());
         assert!(H3Geometry::new(770, 1344, 124).is_err());
+    }
+
+    #[test]
+    fn the_480p_canvas_scales_the_768_rule() {
+        // 768 is exactly the existing resolver.
+        for (aw, ah) in [(16.0, 9.0), (9.0, 16.0), (1.0, 1.0), (4.0, 3.0), (21.0, 9.0), (4.0, 1.0)] {
+            assert_eq!(
+                resolve_canvas_size_short(aw, ah, H3_SHORT_EDGE).unwrap(),
+                resolve_canvas_size(aw, ah).unwrap()
+            );
+        }
+        assert_eq!(resolve_canvas_size(16.0, 9.0).unwrap(), (768, 1344));
+        // 480P: fal's stated 832x480 at 16:9, and every canvas a valid one.
+        let cases = [
+            ((16.0, 9.0), (480, 832)),
+            ((9.0, 16.0), (832, 480)),
+            ((1.0, 1.0), (480, 480)),
+            ((4.0, 3.0), (480, 640)),
+            ((3.0, 4.0), (640, 480)),
+            ((21.0, 9.0), (416, 960)),
+        ];
+        for ((aw, ah), want) in cases {
+            let got = resolve_canvas_size_short(aw, ah, H3_SHORT_EDGE_480P).unwrap();
+            assert_eq!(got, want, "{aw}:{ah}");
+            assert!(check_canvas(got.0, got.1).is_ok());
+            let g = H3Geometry::checked(got.0, got.1, 4 * H3_FPS).unwrap();
+            assert_eq!(g.num_frames, 107);
+        }
+        assert!(resolve_canvas_size_short(16.0, 9.0, 500).is_err());
+        assert!(resolve_canvas_size_short(16.0, 9.0, 800).is_err());
+        assert!(resolve_canvas_size_short(16.0, 9.0, 0).is_err());
+    }
+
+    #[test]
+    fn four_seconds_at_480p_is_the_minimax_minimum() {
+        let (h, w) = resolve_canvas_size_short(16.0, 9.0, H3_SHORT_EDGE_480P).unwrap();
+        let g = H3Geometry::new(h, w, H3_MIN_DURATION_S * H3_FPS).unwrap();
+        assert_eq!((g.height, g.width, g.num_frames), (480, 832, 107));
+        assert_eq!((g.latent_frames, g.latent_height, g.latent_width), (32, 30, 52));
+        assert_eq!(g.audio_latents, 178);
+        assert_eq!(H3VideoVaeConfig::fasth3_8step().temporal_decode_plan(32), (0, 6, 107));
+        // FastVideo's floor is still reported for the parity surface.
+        assert_eq!(align_num_frames(H3_FASTVIDEO_MIN_DURATION_S * H3_FPS), 124);
     }
 }

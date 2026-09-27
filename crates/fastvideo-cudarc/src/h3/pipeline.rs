@@ -70,6 +70,7 @@ use super::transformer::{AttnMode, DeviceLayout, H3SolPolicy, H3TextRefiner, H3T
 use super::vae::H3VideoDecoder;
 use super::vae_encoder::H3VideoEncoder;
 use super::vsa::H3Vsa;
+use crate::hooks::{Hooks, Stage};
 use crate::wan::offload::{DitOffload, MemoryLog, OffloadStats, PhaseMemory, Residency};
 use crate::wan::pipeline::{interleave_audio, write_wav, PipelineError, Result, VideoWriter};
 use crate::wan::taehv::{TaeArch, TaeHv};
@@ -1091,6 +1092,35 @@ impl H3Pipeline {
     }
 
     pub fn generate(&self, request: &H3Request, out_dir: &Path) -> Result<H3Output> {
+        self.generate_with_hooks(request, out_dir, Hooks::NONE)
+    }
+
+    /// [`Self::generate`] with cancellation and progress (serve E1): a stage
+    /// event at text / denoise / audio / video, one per denoise step, one per
+    /// decoded chunk; a tripped token stops at the next of those with
+    /// [`PipelineError::Cancelled`], after the step caches, the streamed
+    /// ring and the pool are handed back.
+    pub fn generate_with_hooks(
+        &self,
+        request: &H3Request,
+        out_dir: &Path,
+        hooks: Hooks<'_>,
+    ) -> Result<H3Output> {
+        let out = self.generate_hooked(request, out_dir, hooks);
+        if matches!(&out, Err(e) if e.is_cancelled()) {
+            self.model.end_denoise();
+            self.model.release_offload_device();
+            crate::wan::device::trim_pool().map_err(|e| msg(e.to_string()))?;
+        }
+        out
+    }
+
+    fn generate_hooked(
+        &self,
+        request: &H3Request,
+        out_dir: &Path,
+        hooks: Hooks<'_>,
+    ) -> Result<H3Output> {
         let cfg = &self.cfg;
         let geometry =
             H3Geometry::new(request.height, request.width, request.num_frames).map_err(msg)?;
@@ -1098,6 +1128,7 @@ impl H3Pipeline {
         let mut memory = MemoryLog::start("h3");
 
         // --- text: cache, else resident, else ~50 GB streamed one layer at a time ---
+        hooks.stage(Stage::Text, 0)?;
         let timer = Instant::now();
         let mut encoder_slot = self.text_encoder.lock().expect("h3 text encoder");
         let resident_choice = matches!(
@@ -1334,6 +1365,7 @@ impl H3Pipeline {
         .to_device()?;
 
         let steps = self.schedule.num_steps();
+        hooks.stage(Stage::Denoise, steps)?;
         let mut step_s = Vec::with_capacity(steps);
         // FASTVIDEO_GPU_TRACE: one step's device activity (a no-op when off).
         crate::wan::gpu_trace::pass_begin("h3");
@@ -1365,7 +1397,7 @@ impl H3Pipeline {
                     crate::wan::gpu_trace::step_begin();
                 }
                 last = Instant::now();
-                Ok(())
+                hooks.step(Stage::Denoise, step + 1, steps, None)
             },
         )?;
         timings.denoise_s = timer.elapsed().as_secs_f64();
@@ -1390,6 +1422,7 @@ impl H3Pipeline {
         memory.mark("denoise")?;
 
         // --- audio first: the WAV must exist before the muxer starts -------------------
+        hooks.stage(Stage::AudioDecode, 0)?;
         let timer = Instant::now();
         let mut transient_booking = crate::wan::ledger::Booking::default();
         let transient_audio = match self.audio_vae {
@@ -1431,6 +1464,7 @@ impl H3Pipeline {
             cfg.patch_size,
         )?;
         let refined_video = self.spark_bridge(&latents)?;
+        hooks.stage(Stage::VideoDecode, 0)?;
         let timer = Instant::now();
         let transient_video = match self.video_vae {
             Some(_) => None,
@@ -1461,11 +1495,14 @@ impl H3Pipeline {
         // The sink speaks TensorError; carry the writer's own error out beside it.
         let mut writer_error: Option<PipelineError> = None;
         let mut sink = |offset: usize, frames: &CudaTensor| {
-            drain.push(offset, frames).map_err(|e| {
-                let text = e.to_string();
-                writer_error = Some(e);
-                TensorError::Message(text)
-            })
+            drain
+                .push(offset, frames)
+                .and_then(|()| hooks.frames(offset + frames.shape[0]))
+                .map_err(|e| {
+                    let text = e.to_string();
+                    writer_error = Some(e);
+                    TensorError::Message(text)
+                })
         };
         let decoded = match video_vae {
             VideoDecoder::Official(vae) => vae.decode_streaming(&latents, &mut sink),
