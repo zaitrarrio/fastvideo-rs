@@ -399,6 +399,24 @@ enum Block {
     },
 }
 
+/// The temporal state TAEHV carries between latent chunks
+/// ([`TaeHv::decode_step`]): one saved input frame per MemBlock, at that
+/// block's own frame rate (it differs after each TGrow, hence per block),
+/// and how many priming frames are still to be trimmed. Its size is fixed,
+/// so an unbounded stream decodes in constant memory.
+pub struct TaeDecodeState {
+    memory: Vec<Option<CudaTensor>>,
+    to_trim: usize,
+    emitted: usize,
+}
+
+impl TaeDecodeState {
+    /// Pixel frames emitted so far.
+    pub fn emitted(&self) -> usize {
+        self.emitted
+    }
+}
+
 pub struct TaeHv {
     arch: TaeArch,
     blocks: Vec<Block>,
@@ -599,49 +617,20 @@ impl TaeHv {
         // 129-frame clip, on top of a resident DiT. So decode in chunks of
         // latent frames, carrying each MemBlock's boundary frame across the
         // seam, which is exactly what the reference's sequential path does with
-        // its `memory[i]`. Results are identical to decoding in one go.
-        // One saved frame per block, at that block's own frame rate — the rate
-        // differs after each TGrow, which is why this is indexed by block.
-        let mut memory: Vec<Option<CudaTensor>> = (0..self.blocks.len()).map(|_| None).collect();
+        // its `memory[i]` ([`TaeDecodeState`]). Results are identical to
+        // decoding in one go.
+        let mut state = self.decode_state();
         let mut out_chunks: Vec<CudaTensor> = Vec::new();
-        // Only the very first output frames are priming frames
-        // (`ltx:taehv.py:300` `x[:, frames_to_trim:]`); a chunk shorter than
-        // the trim is dropped whole and the rest comes off the next.
-        let mut to_trim = self.arch.frames_to_trim();
-        let mut emitted = 0usize;
-
         let mut start = 0usize;
         while start < t {
             let len = chunk.min(t - start);
             let zc = z.narrow(2, start, len)?;
-            let piece = pixel_shuffle(
-                &run_blocks(
-                    &self.blocks,
-                    zc.reshape(vec![c, len, h, w])?.permute(&[1, 0, 2, 3])?,
-                    &mut memory,
-                )?,
-                self.arch.patch_size(),
-            )?;
             start += len;
-            let f = piece.shape[0];
-            let skip = to_trim.min(f);
-            to_trim -= skip;
-            if skip == f {
-                continue;
+            let offset = state.emitted;
+            if let Some(piece) = self.decode_step(&mut state, &zc)? {
+                sink(offset, &piece)?;
+                out_chunks.push(piece);
             }
-            let piece = if skip > 0 {
-                piece.narrow(0, skip, f - skip)?
-            } else {
-                piece
-            };
-            // Clamp to the reference's [0, 1] (`ltx:taehv.py:280`), then map
-            // to the [-1, 1] the rest of the pipeline uses. Per chunk, so the
-            // sink sees finished frames; elementwise, so it is the same as
-            // mapping after the cat.
-            let piece = piece.clamp(0.0, 1.0).mul_scalar(2.0).add_scalar(-1.0);
-            sink(emitted, &piece)?;
-            emitted += piece.shape[0];
-            out_chunks.push(piece);
         }
         if out_chunks.is_empty() {
             return Err(msg(format!(
@@ -655,6 +644,79 @@ impl TaeHv {
         let (frames, oc, oh, ow) = (x.shape[0], x.shape[1], x.shape[2], x.shape[3]);
         x.reshape(vec![1, frames, oc, oh, ow])?
             .permute(&[0, 2, 1, 3, 4])
+    }
+
+    /// A fresh carried decoder state: [`Self::decode_step`] over successive
+    /// latent chunks with one state is [`Self::decode`] of their
+    /// concatenation. The streaming rollout (`wan::stream`) decodes each
+    /// causal block this way as soon as it is generated.
+    pub fn decode_state(&self) -> TaeDecodeState {
+        TaeDecodeState {
+            memory: (0..self.blocks.len()).map(|_| None).collect(),
+            to_trim: self.arch.frames_to_trim(),
+            emitted: 0,
+        }
+    }
+
+    /// Decode the next latent chunk `[1, C, t, H, W]` after everything
+    /// `state` has seen: `[frames, 3, H·s, W·s]` in `[-1, 1]`, or `None` when
+    /// the chunk is all priming frames. Only the very first output frames of
+    /// the stream are priming frames (`ltx:taehv.py:300`
+    /// `x[:, frames_to_trim:]`); a chunk shorter than the trim is dropped
+    /// whole and the rest comes off the next. Each MemBlock's `past` is the
+    /// previous chunk's last input frame, the sequential path's `memory[i]`,
+    /// so chunking is invisible. Not for [`TaeArch::H3`], whose wrap reads
+    /// the whole clip.
+    pub fn decode_step(
+        &self,
+        state: &mut TaeDecodeState,
+        z: &CudaTensor,
+    ) -> Result<Option<CudaTensor>> {
+        let [n, c, len, h, w] = z.shape[..] else {
+            return Err(msg(format!(
+                "taehv expects [N, C, T, H, W] latents, got {:?}",
+                z.shape
+            )));
+        };
+        let want_c = self.arch.latent_channels();
+        if n != 1 || c != want_c || len == 0 {
+            return Err(msg(format!(
+                "taehv ({:?}) expects [1, {want_c}, T, H, W], got {:?}",
+                self.arch, z.shape
+            )));
+        }
+        if self.arch == TaeArch::H3 {
+            return Err(msg("taehv: the H3 wrap has no per-chunk decode"));
+        }
+        if state.memory.len() != self.blocks.len() {
+            return Err(msg("taehv: decode state from another decoder"));
+        }
+        let piece = pixel_shuffle(
+            &run_blocks(
+                &self.blocks,
+                z.reshape(vec![c, len, h, w])?.permute(&[1, 0, 2, 3])?,
+                &mut state.memory,
+            )?,
+            self.arch.patch_size(),
+        )?;
+        let f = piece.shape[0];
+        let skip = state.to_trim.min(f);
+        state.to_trim -= skip;
+        if skip == f {
+            return Ok(None);
+        }
+        let piece = if skip > 0 {
+            piece.narrow(0, skip, f - skip)?
+        } else {
+            piece
+        };
+        // Clamp to the reference's [0, 1] (`ltx:taehv.py:280`), then map to
+        // the [-1, 1] the rest of the pipeline uses. Per chunk, so the sink
+        // sees finished frames; elementwise, so it is the same as mapping
+        // after the cat.
+        let piece = piece.clamp(0.0, 1.0).mul_scalar(2.0).add_scalar(-1.0);
+        state.emitted += piece.shape[0];
+        Ok(Some(piece))
     }
 
     fn decode_chunk_len(&self) -> usize {
@@ -1149,6 +1211,48 @@ mod tests {
             .map(|(x, y)| (x - y).abs())
             .fold(0.0f32, f32::max);
         assert!(worst < 1e-5, "ragged tail changed the output by {worst}");
+    }
+
+    /// The streaming contract (`wan::stream`): 3-latent causal blocks decoded
+    /// one call at a time through one carried state give the whole-clip
+    /// decode, block 0 as `4·3 − 3 = 9` frames and every later block as 12.
+    /// Without the carry this is strobe's `overlap=0` seam.
+    #[test]
+    fn per_block_steps_equal_the_whole_clip() {
+        let tae = TaeHv::load(&tiny_map()).expect("load");
+        let blocks = 4usize;
+        let z = CudaTensor::from_vec(
+            (0..(16 * 3 * blocks * 2 * 2))
+                .map(|i| ((i % 29) as f32 / 29.0) - 0.5)
+                .collect(),
+            vec![1, 16, 3 * blocks, 2, 2],
+        )
+        .unwrap();
+        let whole = tae.decode_streaming_chunked(&z, 64, &mut |_, _| Ok(())).unwrap();
+        let mut state = tae.decode_state();
+        let mut parts = Vec::new();
+        for b in 0..blocks {
+            let piece = tae
+                .decode_step(&mut state, &z.narrow(2, 3 * b, 3).unwrap())
+                .unwrap()
+                .expect("a 3-latent block always yields frames");
+            assert_eq!(piece.shape[0], if b == 0 { 9 } else { 12 });
+            parts.push(piece);
+        }
+        assert_eq!(state.emitted(), whole.shape[2]);
+        let streamed = CudaTensor::cat(&parts.iter().collect::<Vec<_>>(), 0).unwrap();
+        let video = whole
+            .reshape(vec![3, whole.shape[2], whole.shape[3], whole.shape[4]])
+            .unwrap()
+            .permute(&[1, 0, 2, 3])
+            .unwrap();
+        let (a, b) = (streamed.host_cow().unwrap(), video.host_cow().unwrap());
+        let worst = a
+            .iter()
+            .zip(b.iter())
+            .map(|(x, y)| (x - y).abs())
+            .fold(0.0f32, f32::max);
+        assert!(worst < 1e-5, "per-block decode differs by {worst}");
     }
 
     #[test]
