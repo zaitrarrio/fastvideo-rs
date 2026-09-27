@@ -33,6 +33,8 @@ pub mod nn;
 pub mod nvfp4;
 #[cfg(feature = "cuda")]
 pub mod nvfp4_gemm;
+#[cfg(feature = "cuda")]
+pub mod nvfp4_linear;
 pub mod offload;
 pub mod ops;
 pub mod pipeline;
