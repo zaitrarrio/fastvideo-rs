@@ -459,6 +459,64 @@ receiver):
 
 **V1 rate limit:** Hailuo series, 20 RPM (`MM:guides/rate-limits`).
 
+#### V1 versus V2 at a glance
+
+| Aspect | V1 (Hailuo) | V2 (H3) |
+| --- | --- | --- |
+| Create | `POST /v1/video_generation` | `POST /v2/video_generation` |
+| Prompt and media | Flat fields: `prompt`, `first_frame_image`, `last_frame_image`, `subject_reference[]` | `content[]` items with `type` and `role` |
+| Knobs | `prompt_optimizer`, `fast_pretreatment`, `duration` (6 or 10), `resolution` (512P–1080P) | `resolution` (480P, 768P, 2K), `duration` (4–15), `ratio`, `extra.prompt_expansion_mode` |
+| Create response | `{task_id, base_resp}` | `{task_id}` |
+| Query | `GET /v1/query/video_generation?task_id=` returns flat `{task_id, status, file_id, video_width, video_height, base_resp}` | `GET /v2/query/video_generation/{task_id}` returns `{task:{…}}` |
+| Status values | `Preparing`, `Queueing`, `Processing`, `Success`, `Fail`; callbacks send `processing`, `success`, `failed` | `queued`, `running`, `succeeded`, `failed`, `cancelled` in both query and callback |
+| Output | `file_id`, then `GET /v1/files/retrieve` gives a `download_url` valid 1 h | `task.content.url`, time-limited |
+| Errors | HTTP 200 with a non-zero `base_resp.status_code` | Real HTTP status with an `OaiError` body |
+| List and cancel | None | `GET /v2/query/video_generation`, `DELETE /v2/video_generation/{id}` |
+| Rate limit | 20 RPM | 300 RPM, 30 tasks in flight |
+
+Sources: 1.2–1.8 above.
+
+### 1.9 Reconciliation: strobe's `/v2/video_generation` adapter
+
+Source: `strobe:scripts/batch/minimax-v2-server.py`, read in full. It is a
+FastAPI app titled "strobe-minimax-v2". It translates the MiniMax V2 wire
+format into FastVideo `POST /v1/videos` calls against a catalog H3 alias
+(`fasth3-preview` by default).
+
+- **Routes.** It implements only `POST /v2/video_generation`,
+  `GET /v2/query/video_generation/{task_id}` and `GET /health` (lines
+  282-440). There is no list, no delete or cancel, no Context-IR, no
+  regeneration, and no V1 route.
+- **Auth.** An optional bearer token (`MINIMAX_API_TOKEN`) is checked with
+  `secrets.compare_digest` and a failure returns 401 (lines 258-268).
+  Upstream it sends the placeholder `Authorization: Bearer local` to
+  FastVideo (lines 204, 226).
+- **Licence gate.** A create returns 403 unless `STROBE_H3_LICENSE_OK` is
+  true (lines 319-323). MiniMax has no such state.
+
+Differences from the MiniMax spec:
+
+| Aspect | MiniMax V2 spec | strobe adapter |
+| --- | --- | --- |
+| Create response | `{task_id}` only (`VideoGenerationV2Resp`) | `{task_id, base_resp:{status_code:0,status_msg:"success"}}`, which is the V1 envelope (lines 390-393) |
+| Query response | `{task:{…}}`; `error` only on failure; `usage` only on success | `{task:{…, error: null or {…}, usage:{}, content:{} until done}, base_resp:{…}}` (lines 423-440) |
+| Error bodies | `OaiError` `{type:"error", error:{type, message "(code)", http_code}, request_id}` | FastAPI `{"detail": …}`. `detail` is sometimes a string and sometimes a nested OpenAI-style `{"error":{message,type,param,code}}` (lines 120-155, 304-318) |
+| Unknown task | "invalid task_id" (status not stated) | 404 `invalid task_id` (line 399) |
+| `model` | `MiniMax-H3` or `MiniMax-H3-Max` | Both accepted. Both map to the same catalog alias through `Catalog.for_minimax`, which prefers `fasth3-preview` and then `fasth3-8step` (`strobe:scripts/batch/fastvideo-catalog.py:78-90`, `fastvideo-catalog.yaml:49-75`). There are no separate H3-Max weights |
+| `duration` | H3 4–15; H3-Max 5–15 | Validated the same way (lines 72, 339-342), then sent as `seconds` to FastVideo. FastVideo aligns `seconds×24` up and rejects anything under 5 s, so **`duration: 4` is accepted at create and then fails upstream** (INFERRED from `H:api/fastvideo/entrypoints/openai/request_adapter/` and `packing.py:27`). The task is marked `failed` with `upstream_error`, because upstream create errors are caught (lines 379-388) |
+| `resolution` + `ratio` | 480P, 768P or 2K; `adaptive` means derive from input; t2va must not use `adaptive` | Short edge 480, 768 or **1440 for 2K**; the long edge is rounded to a multiple of 32. `adaptive` always becomes 16:9, and t2va with `adaptive` is not rejected (lines 169-192). 2K (1440×2560) is over FastVideo's 768×1344 H3 cap, so **2K always fails upstream** (INFERRED, same adapter page). 480P 16:9 becomes 864×480 |
+| `content` roles | `first_frame`, `last_frame`; references for image, video and audio; frame and reference roles cannot be mixed | Images only. `video_url`, `audio_url` and `mm_file://` return 400 (lines 128-155). Task inference: first + last gives `fl2va`; any `reference*` gives `ref2va`; any other image gives `fl2va` (lines 158-166). **A lone `last_frame` image is sent to FastVideo as `image_reference[0]`, which FastVideo treats as the first frame** (FastVideo maps images[0] to `image_path`; `H:api/fastvideo/entrypoints/openai/request_adapter/`). Mixed roles are not rejected |
+| Multiple `text` items | Exactly one non-empty `text` | Several are joined with newlines (lines 117-122, 166) |
+| `extra` | H3-Max only; `prompt_expansion_mode` enum | Rejected for `MiniMax-H3` (lines 343-347). Accepted for H3-Max but **not forwarded** |
+| `callback_url` | Challenge echo, then a POST per status change | Parsed and **ignored**; no callbacks are sent |
+| Output URL | A time-limited CDN URL | `content.url = {FASTVIDEO_BASE_URL}/videos/{fv_id}/content`, the FastVideo download route. It does not expire, and the host must be reachable by the client (lines 406-410) |
+| Status | `queued` → `running` → `succeeded` / `failed` / `cancelled` | Starts `queued` and becomes `running` as soon as FastVideo accepts the job, even while FastVideo reports `queued`. It is refreshed lazily on each query. FastVideo `in_progress` maps to `running` (lines 380-384, 401-421) |
+| `usage` | Seconds and tokens on success | Always `{}` |
+| Body limit | 64 MB | 64 MB, enforced with 400 (lines 42, 293-298) |
+| Unknown fields | Not stated | Ignored, because pydantic's default is `extra="ignore"`. `ContentItem` adds a non-MiniMax `seconds` field (line 65) |
+| Task id | Numeric string, for example `"424010985738629"` | First 18 digits of `uuid4().int` (line 352) |
+| Persistence | 7-day query window | In-memory `dict`; lost on restart (line 101) |
+
 ---
 
 ## 2. FastVideo API ("fastvideo-api")
@@ -745,6 +803,103 @@ Source: `openai/openai-openapi`, `master/openapi.yaml`, fetched 2026-09-27.
 
 FastVideo's `VideoResponse` is a superset of this resource.
 
+### 2.4 Reconciliation: hosted FastVideo spec versus `fastwan_link.py`
+
+Sources: `H:design/server_contracts/openai/` and `H:cookbook/openai-api/`
+against `livestream:fastwan_link.py` and its README.
+
+| Aspect | FastVideo hosted API | FastWan Video API as the client uses it |
+| --- | --- | --- |
+| Prefix | `/v1` (`FASTVIDEO_BASE_URL` "including /v1", `H:cookbook/openai-api/`) | Root, "no `/v1` prefix" (README "Backends") |
+| Create | `POST /v1/videos` returns a `video` object with `id` | `POST /generate` returns JSON with `prompt_id` (`fastwan_link.py:466-469`) |
+| Create body | `prompt`, `model`, `seconds`, `size` or `width`/`height`, `fps`, `num_frames`, `seed`, … (`H:design/server_contracts/openai/` "Video requests") | `prompt`, `width`, `height`, `num_frames`, `fps`, `seed` (`:458-465`). **INFERRED:** every one of these is also a valid FastVideo field, so the body itself would pass FastVideo's validation |
+| Poll | `GET /v1/videos/{id}` | `GET /status/{id}` (`:478`) |
+| Status values | `queued`, `in_progress`, `completed`, `failed` | `queued`, `processing`, `completed`, `failed` (`:92`). `in_progress` would count as an "unknown status" and fail the clip (`:475-476`) |
+| Failure detail | `error:{code,message}` object | `error`, read as a string (`:473`) |
+| Download | `GET /v1/videos/{id}/content` | `GET /video/{id}` (`:480-481`) |
+| Delete | `DELETE /v1/videos/{id}` | `DELETE /video/{id}` (`:523`) |
+| Health | `GET /health` gives `{"status":"ok"}`, or 503 (`H:design/server_contracts/openai/` "Defaults and errors") | `GET /health` must contain a truthy `model_loaded` (`:359-361`). **FastVideo's reply would read as "not loaded" forever** |
+| Model discovery | `GET /v1/models` | `GET /` with a `model` key (`:362, 370`); FastVideo has no `/` route |
+| Auth | None built in (`H:cookbook/openai-api/`) | Optional `Authorization: Bearer` (`:330`) |
+| Error body | `{"error":{message,type,param,code}}` (`H:design/server_contracts/openai/`) | Parses FastAPI's `{"detail": …}` (`:632-648`). Against FastVideo it would fall back to the first 200 characters of raw text |
+| Concurrency | One pipeline, serialized (`H:cookbook/openai-api/`) | "One generation at a time per replica" (README) |
+| Output | MP4; H3 has audio | MP4, silent (`generates_audio = False`, `:142`) |
+
+Conclusion: `fastwan_link.py` cannot talk to `fastvideo serve` directly. A
+thin route shim would be needed:
+
+- `/generate` → `/v1/videos`, with `prompt_id = id`;
+- status `in_progress` → `processing`;
+- `/health` → add `model_loaded`;
+- add a `/` route.
+
+The FastWan Video API server itself remains unidentified. Neither strobe
+server exposes these routes (2.5).
+
+### 2.5 Reconciliation: strobe's FastVideo stack
+
+Sources: `strobe:scripts/batch/` (read in full).
+
+- **`fastvideo-serve.sh` runs stock `fastvideo serve`.**
+  - It resolves `FASTVIDEO_MODEL` (default `fastwan-5b`) through
+    `fastvideo-catalog.py`.
+  - It then execs `fastvideo serve --config <serve yaml> --server.host
+    ${FASTVIDEO_HOST:-0.0.0.0} --server.port ${FASTVIDEO_PORT:-8000}`
+    (lines 20-45).
+  - So strobe's `/v1/videos` **is** FastVideo's implementation (2.1), with
+    no local changes.
+- **`fastvideo-catalog.yaml` lists five aliases.**
+  - Aliases: `fastwan-5b` (default; FastWan 2.2 TI2V-5B FullAttn, t2v,
+    832×480, 361 frames, 3 steps), `wan22-ti2v-5b`, `ti2v-dmd-student`,
+    `fasth3-preview` and `fasth3-8step` (lines 5-75).
+  - The two H3 rows carry `capabilities: [t2va, fl2va]`, `licensed: false`
+    and `minimax_models: [MiniMax-H3, MiniMax-H3-Max]`.
+  - `fastvideo-catalog.py` requires `server.served_model_name` to equal the
+    alias (lines 219-222), so the FastVideo `model` field equals the catalog
+    id.
+  - `public_cards` adds strobe-specific model-card fields (`label`, `family`,
+    `capabilities`, `hf_id`, `default_*`, `licensed`, `minimax_models`,
+    `serve_config`; lines 92-115). FastVideo's own `/v1/models` card has only
+    `{id, object, created, owned_by, root}`
+    (`H:api/fastvideo/entrypoints/openai/common_api/`).
+  - **INFERRED:** these cards come from strobe tooling (`--list`), not from
+    the HTTP server.
+- **Missing serve configs.** Of the serve configs the catalog names, only
+  `serve/fastwan-5b.yaml` exists in the checkout. The yaml files for
+  `fasth3-preview`, `fasth3-8step`, `wan22-ti2v-5b` and `ti2v-dmd-student`
+  are missing (glob of `scripts/batch/**`), so those aliases would fail
+  `fastvideo-catalog.py`'s "serve config missing" check (lines 217-218).
+- **`serve/fastwan-5b.yaml`** is a standard FastVideo serve config:
+  - `served_model_name: fastwan-5b`, TORCH_SDPA, `torch.compile`;
+  - `default_request` of 832×480, 361 frames, 24 fps, 3 steps, guidance 1.0,
+    seed 1000.
+  - Through FastVideo this gives silent Wan video. FastVideo does not snap
+    Wan frame counts to `4k+1` in the adapter (**INFERRED** from
+    `H:api/fastvideo/entrypoints/openai/request_adapter/`, which aligns
+    frames only for `minimax_h3`), and 361 = 4·90+1 is already on grid.
+- **`h3fast-server.py` is not `/v1/videos`.** It is an A/B benchmark service
+  (FastAPI "h3fast-ab") for the FastWan 2.2 TI2V-5B stack. Two long-lived
+  subprocess workers run the same prompt, one on TORCH_SDPA and one on
+  FLASH_ATTN (lines 1-21, 86-90).
+  - Routes: `GET /healthz` (open), plus `POST/GET /jobs`, `GET /jobs/{id}`
+    and `GET /jobs/{id}/arms/{arm}/video`, with camelCase mirrors under
+    `/experiments` (lines 757-817).
+  - Body: `{prompt, seed=1000, duration_s 1..30, arms (ignored)}`
+    (lines 670-676). The create returns 202, and a full queue returns 429
+    (lines 761-768, 789).
+  - Job states are `queued`, `running`, `done` and `failed`; each arm is
+    `pending`, `running`, `ok` or `error`. Job manifests are durable JSON,
+    and jobs interrupted by a restart are marked failed (lines 408-473,
+    560-626).
+  - Auth: a bearer token is required when binding a non-loopback address
+    (lines 200-205, 733-743).
+  - It matches neither the FastVideo spec nor the FastWan Video API.
+- **`minimax-v2-server.py`:** see 1.9. Toward FastVideo it sends
+  `{model:<alias>, prompt, seconds:"<duration>", size:"WxH", task,
+  image_reference:[{image_url}]}` (lines 369-377). All of these fields are
+  valid on the FastVideo spec (`H:design/server_contracts/openai/`,
+  "MiniMax-H3 and FastH3").
+
 ---
 
 ## 3. Our request surface and the mapping
@@ -923,13 +1078,18 @@ FastVideo's `VideoResponse` is a superset of this resource.
 
 ## Open items
 
-- **FastWan Video API server:** not identified. The grep of the FastVideo
-  checkout was blocked. Next steps: read
-  `examples/inference/gradio/serving/ray_serve_backend.py` at `e90be59`, or
-  ask the user for the deployment's source.
+- **FastWan Video API server:** not identified.
+  - It is not FastVideo's hosted API (2.4), not strobe's `h3fast-server.py`
+    and not strobe's MiniMax adapter (2.5).
+  - The grep of the FastVideo checkout was blocked.
+  - Next steps: read `examples/inference/gradio/serving/ray_serve_backend.py`
+    at `e90be59`, or ask the user for the deployment's source.
 - **FastWan config file not read:** `streaming-client/.env.example` was not
   read, because the session's permission classifier blocked access. Only
-  `fastwan_link.py`, `config.py` and the README were read.
+  `fastwan_link.py`, `config.py` and the README were read. The copy under
+  `.refsrc/` was deliberately not tried either.
+- **Strobe serve configs:** four H3 and Wan serve configs that the catalog
+  references are missing from `strobe:scripts/batch/serve/`.
 - **MiniMax callback details:** the delivery method of the V2 verification
   request, the retry policy and any signature are undocumented.
 - **MiniMax canvases:** the exact output canvas for `21:9` and for `480P` is
