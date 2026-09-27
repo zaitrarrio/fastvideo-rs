@@ -1,0 +1,70 @@
+{
+  "accepted_noop": [
+    "generate_sound",
+    "quality"
+  ],
+  "audio_in": null,
+  "audio_out": "model_default",
+  "callback": null,
+  "canvas": {
+    "aspect": {
+      "ratio": {
+        "h": 16,
+        "w": 9
+      },
+      "short_edge": 768
+    }
+  },
+  "keyframes": [],
+  "model": "h3-max",
+  "negative_prompt": null,
+  "output": {
+    "inline_data_uri": false
+  },
+  "prompt": "The character from the photo sings the reference melody on stage",
+  "protocol": "openai_videos",
+  "references": [
+    {
+      "kind": "image",
+      "media": {
+        "http": "https://example.com/face.png"
+      }
+    },
+    {
+      "kind": "image",
+      "media": {
+        "data_uri": "data:image/png;base64,iVBORw0KGgo="
+      }
+    },
+    {
+      "kind": "video",
+      "media": {
+        "http": "https://example.com/stage.mp4"
+      }
+    },
+    {
+      "kind": "audio",
+      "media": {
+        "http": "https://example.com/melody.wav"
+      }
+    }
+  ],
+  "sampling": {
+    "boundary_ratio": null,
+    "flow_shift": null,
+    "guidance": null,
+    "guidance_2": null,
+    "steps": null
+  },
+  "seed": null,
+  "task": "ref2v",
+  "timing": {
+    "fps": null,
+    "length": {
+      "seconds": {
+        "snap": "align_up",
+        "value": 5.0
+      }
+    }
+  }
+}

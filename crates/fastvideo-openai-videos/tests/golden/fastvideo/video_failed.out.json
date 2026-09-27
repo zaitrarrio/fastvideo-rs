@@ -1,0 +1,31 @@
+{
+  "completed_at": 1790510405,
+  "created_at": 1790510400,
+  "error": {
+    "code": "generation_failed",
+    "message": "CUDA out of memory"
+  },
+  "expires_at": 1790596800,
+  "file_name": null,
+  "file_path": null,
+  "id": "video_gen_fedcba9876543210fedcba9876543210",
+  "inference_time_s": null,
+  "media_type": "video/mp4",
+  "metadata": {
+    "quality_gate": true,
+    "recipe": "4step-vsa",
+    "tier": "turbo"
+  },
+  "model": "h3-turbo",
+  "object": "video",
+  "peak_memory_mb": null,
+  "progress": 0,
+  "prompt": "A red fox runs through fresh snow at dawn",
+  "quality": "standard",
+  "remixed_from_video_id": null,
+  "seconds": "5",
+  "size": "1344x768",
+  "stage_durations": {},
+  "status": "failed",
+  "url": null
+}
