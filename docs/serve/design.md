@@ -1136,10 +1136,13 @@ router so `/fal/proxy` reaches `/wma/*`).
   one `msid` stream (one `MediaStream` in the browser).
 - Codecs: H.264 for every offer that has it (NVENC in production, OpenH264
   in CPU tests). Offers **without** H.264 (open-source Chromium, including
-  Playwright's) get intra-only VP8 through `AnswerOptions::video_codecs =
-  [H264, Vp8]` (`[director] vp8_fallback`), encoded in process by libwebp
-  like the Reactor runtime does (libvpx's VP8 encoder measured ~200 ms per
-  832x480 frame on the CI VM).
+  Playwright's) get VP8 through `AnswerOptions::video_codecs =
+  [H264, Vp8]` (`[director] vp8_fallback`): inter-frame through ffmpeg
+  `libvpx` (`fastvideo_media::vp8`, like the Reactor runtime), intra-only
+  libwebp when ffmpeg has no libvpx. (An earlier measurement of ~200 ms per
+  832x480 libvpx frame was ffmpeg's default thread count: libvpx's VP8
+  worker threads spin-wait and collapse on a contended CPU; one thread
+  encodes 1344x768 at ~60-80 fps.)
 - Tests: `crates/fastvideo-fal/tests/director_e2e.rs` (a str0m client:
   signalling, strict schemas, versions, heartbeat expiry, `/start-session`
   SSE, session limit, `deadline_missed`, A/V at 24 fps / 48 kHz stereo, a
@@ -1794,12 +1797,20 @@ additions and readings; everything is re-exported from the crate root.
   when short). **Deviation (VP8):** the Python `reactor_sdk` 1.6.0's
   libwebrtc offers VP8/VP9/AV1 and no H.264, so `fastvideo-webrtc` gained VP8
   answers (`AnswerOptions::video_codecs`, `PeerHandle::video_codec`) and the
-  runtime sends **intra-only VP8** encoded by libwebp (feature `vp8`, on by
-  default) to such peers; H.264 peers (browsers) get NVENC (`[reactor]
-  h264`, default `auto`: NVENC when the startup probe encodes, else
-  OpenH264). Intra-only
-  VP8 costs bitrate; an inter-frame VP8/AV1 encoder is the follow-up for
-  production SDK clients.
+  runtime sends **inter-frame VP8** to such peers: ffmpeg `libvpx`
+  (`fastvideo_media::vp8`: rgb24 in, IVF out, real-time CBR at the canvas
+  bitrate, no lag, one thread, a keyframe every 2 s; a forced keyframe
+  restarts the process). PLI/FIR is rate-limited to one keyframe per
+  second per codec (a new peer or a resumed track is served at once).
+  When ffmpeg has no libvpx the runtime falls back to intra-only VP8 by
+  libwebp (feature `vp8`, on by default). H.264 peers (browsers) get NVENC
+  (`[reactor] h264`, default `auto`: NVENC when the startup probe encodes,
+  else OpenH264). Measured with `examples/vp8_bitrate` at 1344x768, 24 fps
+  (luma PSNR): moving `testsrc2`, libwebp q70 6100 kb/s at 45.1 dB vs
+  libvpx 5835 kb/s at 47.2 dB (2923 kb/s at 42.6 dB); the fake engine's
+  near-static frames, libwebp 1964 kb/s at 45.3 dB vs libvpx 798 kb/s at
+  45.4 dB. AV1 (`av1_nvenc`) is not used: the serve image's Ubuntu 22.04
+  ffmpeg (4.4) has no `av1_nvenc`, and the SDK decodes VP8 everywhere.
 - **Compat** (`crates/fastvideo-reactor/tests/compat/run.sh`): Python
   `reactor_sdk` 1.6.0 local mode against `examples/fake_runtime` — A/V clip
   model (tracks `main_video` + `main_audio`, 48 kHz mono audio frames,

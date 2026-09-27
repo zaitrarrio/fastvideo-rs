@@ -10,6 +10,7 @@
 //! | [`crossfade`] | Raised-cosine clip-edge fades that keep sample counts |
 //! | [`opus`] | Opus framer (10/20 ms, sample-counter RTP timestamps) and libopus encoder (`opus` feature) |
 //! | [`video`] | `VideoEncoder` trait: NVENC (production, via ffmpeg `h264_nvenc`), OpenH264 (CPU test backend, `openh264` feature); publish profiles (Cloudflare 720p/L3.1, MediaMTX/peer native/L4.0) |
+//! | [`vp8`] | Inter-frame VP8 via ffmpeg `libvpx` (IVF over a pipe; forced keyframes restart the process) for peers without H.264 |
 //! | [`scale`] | Pre-encode canvas scaler (fit+pad or stretch) |
 //! | [`h264`] | Annex-B / SPS helpers and the H.264 level table |
 //! | [`mp4`] | ffmpeg MP4 writer and `finalize` (faststart, `-an`, crop), plus a pure-Rust box inspector |
@@ -38,6 +39,7 @@ pub mod scale;
 pub mod sink;
 pub mod tools;
 pub mod video;
+pub mod vp8;
 
 pub use av::{Pcm, RgbFrame};
 pub use error::{MediaError, Result};
