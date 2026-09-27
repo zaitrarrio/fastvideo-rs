@@ -11,6 +11,8 @@ fastvideo-protocol.workspace = true
 bytes.workspace = true
 image.workspace = true
 rubato.workspace = true
+serde.workspace = true
+serde_json.workspace = true
 thiserror.workspace = true
 tokio = { workspace = true, features = ["sync", "process", "io-util"] }
 tracing.workspace = true
@@ -18,6 +20,9 @@ tracing.workspace = true
 # Native encoders: off by default so CPU-only CI stays fast.
 openh264 = { workspace = true, optional = true }
 audiopus = { workspace = true, optional = true }
+
+[dev-dependencies]
+tempfile = "3"
 
 [features]
 default = []
