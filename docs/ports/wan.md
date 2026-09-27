@@ -142,11 +142,15 @@ TI2V-5B / T2V-14B arms are in `runpod-matrix.sh wan` but were not run: see
 ### Not measured
 
 - SF-Wan 1.3B end to end (flash vs composed LPIPS), Wan2.2 TI2V-5B and
-  Wan2.1 T2V-14B (bf16act / mxfp8): the cells exist in the `wan` family
-  (commits after `f6e8c66`), but no CI image was built for them — pushing
-  the branch that carries them was refused by the session's permission
-  system. Their weights are on `fv-weights-b200-us` only
-  (`RUNPOD_VOLUME_NAME=fv-weights-b200-us`).
+  Wan2.1 T2V-14B (bf16act / mxfp8): the cells are in the `wan` family
+  (`sfwan13-33f-composed`, `sfwan13-33f-flash`, `sfwan13-81f-flash`,
+  `wan5b-{f32act,bf16act,mxfp8}`, `wan14b-{f32act,bf16act,mxfp8}`; image
+  `sha-d18eae2` carries them). Their weights are on `fv-weights-b200-us`
+  (US-CA-2) only, and that datacenter had no RTX PRO 6000 for the whole
+  hour the driver retried (2026-09-27 04:53–05:53 UTC). To run:
+  `RUNPOD_VOLUME_NAME=fv-weights-b200-us FV_FAMILY=wan FV_PROMPTS=5
+  FV_LPIPS=1 FV_CELLS="sfwan13-33f-composed sfwan13-33f-flash ..."
+  scripts/gpu/runpod-http.sh run <sha>`.
 - MXFP8 on sm_100 (B200): default by analogy with H3, not measured here.
 - The fused norm kernels do not yet write MXFP8 activations directly (H3's
   `NormOut::Mx`); with FP8 off on sm_120 they have no consumer there.
