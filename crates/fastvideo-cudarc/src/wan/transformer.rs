@@ -27,26 +27,6 @@ fn pinned(mut t: CudaTensor) -> Result<CudaTensor> {
     Ok(t)
 }
 
-/// Wan's interleaved RoPE (`is_neox_style=False`, tables repeat-interleaved)
-/// on BHSD `x` with `[S, D]` tables: BHSD is BSHD with batch `B·H` and one
-/// head. The result takes `x`'s dtype (FastVideo's `.type_as(v)`).
-fn rope_bhsd(x: &CudaTensor, cos: &CudaTensor, sin: &CudaTensor) -> Result<CudaTensor> {
-    let [b, h, s, d] = x.shape[..] else {
-        return Err(TensorError::Message(format!(
-            "rope_bhsd expects BHSD, got {:?}",
-            x.shape
-        )));
-    };
-    let y = x
-        .reshape(vec![b * h, s, 1, d])?
-        .apply_rotary_bshd(cos, sin)?
-        .reshape(vec![b, h, s, d])?;
-    if x.is_bf16() && !y.is_bf16() {
-        y.quantize_bf16()
-    } else {
-        Ok(y)
-    }
-}
 
 #[derive(Debug, Clone)]
 struct WanAttention {
@@ -268,12 +248,12 @@ impl WanAttention {
                 table.0.shape
             )));
         }
-        let q = rope_bhsd(
+        let q = super::causal::rope_bhsd(
             &q,
             &table.0.narrow(0, window - n, n)?,
             &table.1.narrow(0, window - n, n)?,
         )?;
-        let kw = rope_bhsd(&kw, &table.0, &table.1)?;
+        let kw = super::causal::rope_bhsd(&kw, &table.0, &table.1)?;
         let out = nn::sdpa_kv_window(&q, &kw, &vw)?.merge_heads()?;
         self.to_out.forward(&out)
     }
@@ -494,7 +474,9 @@ fn wan_rope_at(
     let w_dim = h_dim;
     let t_dim = d - h_dim - w_dim;
     let axes = [
-        (t_dim, rotary_1d(t_dim, cfg.rope_max_seq_len, 10000.0)),
+        // Past the checkpoint's table (an open-ended stream, `wan::stream`) the
+        // temporal rows continue with the same formula.
+        (t_dim, rotary_1d(t_dim, cfg.rope_max_seq_len.max(start_frame + frames), 10000.0)),
         (h_dim, rotary_1d(h_dim, cfg.rope_max_seq_len, 10000.0)),
         (w_dim, rotary_1d(w_dim, cfg.rope_max_seq_len, 10000.0)),
     ];
@@ -2151,6 +2133,15 @@ impl WanTransformer3D {
         } else {
             self.rotary_at(t, h, w, start_frame)?
         };
+        if cache.spec.rebase_sink {
+            let target = cache.spec.sink_target(start_frame + t);
+            if target > 0 {
+                let sink_f = cache.spec.sink / frame_tokens.max(1);
+                let orig = self.rotary_at(sink_f, h, w, 0)?;
+                let new = self.rotary_at(sink_f, h, w, target)?;
+                cache.rebase_sink(target, (&orig.0, &orig.1), (&new.0, &new.1))?;
+            }
+        }
         let mut hidden = self.patch_embed(latents)?;
         if super::tensor::bf16_residual() {
             hidden = hidden.quantize_bf16()?;
