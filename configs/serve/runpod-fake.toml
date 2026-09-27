@@ -1,0 +1,57 @@
+# fv-serve deploy smoke config (WP-16): the fake engine on a real Runpod or
+# Vast box, with the production stores (D1 jobs + R2 media when the FV_CF_* /
+# FV_R2_* secrets are mapped, design §0 decision 7). Used by
+# scripts/serve/{runpod-pod,runpod-endpoint,vast}.sh until the CUDA backend
+# (WP-11) serves real models; switch to runpod.toml (engine.backend = cuda)
+# then.
+#
+# State lives on the container disk (/fvstate): the weight volume is never
+# written.
+
+[server]
+bind = "0.0.0.0:8000"
+state_dir = "/fvstate"
+shutdown_grace_s = 25
+
+[auth]
+mode = "keys"
+
+[artifacts]
+backend = "auto"
+url_ttl_s = 86400
+
+[jobs]
+backend = "auto"
+progress_interval_ms = 1000
+stale_after_s = 900
+
+[engine]
+backend = "fake"
+# The fake engine's post-processing crops encode on the GPU like production.
+post_encoder = "nvenc"
+
+[engine.fake]
+step_ms = 20
+load_ms = 500
+all_resident = true
+placeholder_output = true
+
+[aliases]
+"MiniMax-H3" = "fake-h3-turbo"
+"MiniMax-H3-Max" = "fake-h3-max"
+"MiniMax-H3-Turbo" = "fake-h3-turbo"
+"fastwan-1.3b" = "fake-wan"
+
+[protocols]
+openai_videos = true
+fastwan = false
+minimax = true
+fal = true
+fal_director = false
+ltx = true
+reactor = false
+native = true
+
+[limits]
+queue_max = 32
+body_max_mb = 64

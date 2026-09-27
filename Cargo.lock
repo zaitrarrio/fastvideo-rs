@@ -1159,6 +1159,7 @@ dependencies = [
  "rand 0.9.5",
  "rand_distr",
  "rayon",
+ "serde",
  "serde_json",
  "sha2",
  "thiserror",
@@ -1168,9 +1169,9 @@ dependencies = [
 name = "fastvideo-deploy"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
  "axum",
- "fastvideo-protocol",
- "fastvideo-serve-kit",
+ "base64 0.22.1",
  "reqwest",
  "serde",
  "serde_json",
@@ -1178,6 +1179,7 @@ dependencies = [
  "tokio",
  "tower",
  "tracing",
+ "url",
 ]
 
 [[package]]
@@ -1185,9 +1187,12 @@ name = "fastvideo-engine-service"
 version = "0.1.0"
 dependencies = [
  "fastvideo-cudarc",
+ "fastvideo-media",
  "fastvideo-models",
  "fastvideo-protocol",
+ "image",
  "serde",
+ "serde_json",
  "thiserror",
  "time",
  "tokio",
@@ -1230,16 +1235,19 @@ dependencies = [
  "clap",
  "cudarc",
  "fastvideo-cudarc",
+ "fastvideo-loader",
  "fastvideo-models",
  "fastvideo-ops",
  "half",
  "image",
+ "memmap2",
  "rand 0.9.5",
  "rand_distr",
  "rayon",
  "safetensors",
  "serde",
  "serde_json",
+ "sha2",
  "toml",
 ]
 
@@ -1248,6 +1256,7 @@ name = "fastvideo-loader"
 version = "0.1.0"
 dependencies = [
  "fastvideo-models",
+ "libc",
  "memmap2",
  "rayon",
  "safetensors",

@@ -66,6 +66,8 @@ text says **native**.
      volume-sync decision first — it is full).
    - **WP-19 cold-start measurement:** fresh Runpod serverless worker → submit →
      first output, per model family, before and after E12/E13.
+   - Status (2026-09-27): E12/E13 implemented, WP-19 measured — results and
+     open items in [`docs/gaps/2026-09-27-cold-start.md`](../gaps/2026-09-27-cold-start.md).
 
 5. **Sol-H3 serves the tau-ladder route (owner decision).** Whenever the server
    runs Sol-H3 4-step, the engine capability table selects the profile
@@ -1568,6 +1570,65 @@ additions and readings; everything is re-exported from the crate root.
 | **WP-15 CausalSession** | `crates/fastvideo-engine-service/src/stream/causal.rs`, `src/cuda/causal.rs` | 12 (shared `stream/mod.rs` owned by WP-12), E6 | Block loop under an exclusive lease; prompt switch at the block boundary; adaptive pacer; Reactor causal command set works; native WHIP stream to MediaMTX plays in a WHEP viewer; TTFF phases reported |
 | **E4 LTX fps + silent** | `ltx2/pipeline.rs` (after E2) | E2 → E4 | `skip_audio_decode` flag; 25/48/50 fps validated at 1080p (frame count and MP4 rate), recorded in `benchmark.json`-style results; caps updated |
 | **E7 CUDA Graphs for the SF-Wan block loop** | `wan/stream.rs`, new `wan/graph.rs` | E6 → E7 | Graph captured per block position; bitwise-equal output to eager; block time reduced (target ≤ 350 ms on H100 at 832×480; record the actual) |
+
+**WP-12 / WP-15 notes (as implemented): the streaming session API.** All in
+`fastvideo_engine_service::stream` (re-exported at the crate root); Reactor
+(WP-13), the fal director (WP-14) and native `/fv/v1/streams` build on it.
+
+- Admission is `EngineService::open_clip_session` / `open_causal_session`
+  (§3.6, unchanged): one stream session per executor, a session counts busy
+  from open (`Starting`) to close → `Conflict` + `Retry-After: 5`; model not
+  resident / loading → `Loading` + `Retry-After: 1` (503); fps must divide
+  48000 when the tracks carry audio.
+- **Clip sessions.** `ClipSession::into_player(ClipPlayerConfig)` →
+  `(ClipPlayer, ClipOutputs{events, media})`, a tokio task:
+  - `player.command(ClipCommand) -> Result<Option<ClipEvent>, ApiError>`:
+    `Some` is the correlated reply, `None` a bodyless ack. Refusals are
+    broadcast as `ClipEvent::CommandError{command,reason}` (fast-h3 reasons
+    verbatim) and reply `None`. Broadcasts caused by a command are on
+    `events` before the reply returns, in fast-h3's order.
+  - `ClipCommand` deviates from the §5.5 sketch: clip ids are the wire
+    strings (blank/malformed refused inside), `SetCanvas(String)` takes the
+    aspect label, and `Chunk{prompt_version, prompt, first_image, end_image,
+    seconds}` gains `first_image`. Serde form `{"type","data"}` in
+    snake_case.
+  - `ClipEvent` serializes as the fast-h3 message (`type_name()`,
+    `data()`); `ClipGenerated` also carries a `BuildReport{build_s, clip_s,
+    rtf()}` (not serialized). Two native extras (`is_fasth3() == false`):
+    `BuildStarted{clip, prompt_version}` (director `prompt_applied`) and
+    `Starved{after, pending}` (autoplay ran dry with work pending: director
+    `deadline_missed`).
+  - `player.set_audience(bool)`: builds run only with an audience; losing it
+    cuts a playing clip quietly (`Gone`). `state()` / `watch_state()` give
+    the `state_update` snapshot (`ClipState`, fast-h3 fields and
+    `valid_commands`). `close()` cancels the build, drops queues, frees the
+    executor.
+  - Media: `MediaItem::{Slice{clip_id, first_frame, frames, audio}, ClipEnd{
+    outcome, armed}, Clear}`; slices are 3 frames plus exactly their 48 kHz
+    samples at the track's channel count, emitted on a re-anchoring
+    metronome. `Continuity`: `HardCut`; `Crossfade{ms}` fades clip edges at
+    play time (never the first clip's head); `AnchorLastFrame` writes the
+    last frame of each build to `<session_dir>/anchor-<clip>.png` and uses
+    it as `Keyframe{First}` for the next build without its own first frame
+    (refused at `into_player` for models without I2V).
+- **Causal sessions.** `CausalSession::control()` → `CausalControl`
+  (cloneable): `set_prompt` (next block boundary), `set_paused`, `set_seed`
+  (applies at the next reset), `reset`, `apply(CausalCommand) ->
+  CausalReply::{StateUpdate(CausalState), CommandError}` (the §5.7 causal
+  set plus `get_state`), `stats()`, `ttff() -> Ttff{load_ms,
+  first_block_ms, transport_ms, total_ms}` (`transport` ends at
+  `mark_first_frame_sent()`), `close()`.
+- **Pacers** (`stream::pace`). `spawn_clip_pacer(media, ClipPacerConfig)`
+  (AvPacer, 2 s shallow cap, `IdlePolicy::{Hold, Black}` for Reactor's
+  flush-to-black) and `spawn_causal_pacer(session, CausalPacerConfig)`
+  (FramePacer 48, adaptive 4..fps, reports `unique_fps` into the control)
+  both yield `PacedStream{ticks: TickReceiver, first_frame, stats}`: one
+  `Tick{video: VideoOut, audio (exactly 48000/fps samples or None),
+  video_rtp, fps}` per frame into a 10-deep drop-oldest queue
+  (`take_dropped()` → force an IDR). Ticks start at the first frame by
+  default (`TickStart`). `max_seconds` ends the pacer in video time.
+- Owned files: `stream/{mod,clip,queue,rules,causal,player,pace}.rs`,
+  `src/cuda/causal.rs`, `tests/stream_{clip,causal}.rs`.
 
 ### Phase 4: deploy, compat and E2E
 

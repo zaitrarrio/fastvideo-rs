@@ -128,10 +128,42 @@ pub fn load_resident_encoder(
     root: &Path,
     precision: crate::llm::WeightPrecision,
 ) -> Result<crate::llm::ResidentDecoder> {
-    let map = WeightMap::open(&root.join("text_encoder"))?;
+    load_resident_encoder_from(&open_resident_encoder(root, precision)?, precision)
+}
+
+/// The map [`load_resident_encoder`] reads, with its tensors queued for
+/// read-ahead: the pre-quantized `text_encoder_fp8/` tree (E13) when
+/// `precision` is FP8 and a valid tree exists, else `text_encoder/`.
+pub fn open_resident_encoder(
+    root: &Path,
+    precision: crate::llm::WeightPrecision,
+) -> Result<WeightMap> {
+    let cfg = DecoderConfig::qwen3_vl_32b_text().for_bf16_reference();
+    let layers = H3TextEncoderConfig::fasth3_8step().output_hidden_state_index;
+    let source = root.join("text_encoder");
+    let tree = match precision {
+        crate::llm::WeightPrecision::Fp8Rows => crate::llm::prequant::open_tree(&source, layers)?,
+        crate::llm::WeightPrecision::Native => None,
+    };
+    let map = match tree {
+        Some(m) => m,
+        None => WeightMap::open(&source)?,
+    };
+    if let Some(lazy) = map.lazy() {
+        let keys = crate::llm::prequant::kept_keys(lazy, &cfg, layers);
+        lazy.prefetch(&keys);
+    }
+    Ok(map)
+}
+
+/// [`load_resident_encoder`] from a map [`open_resident_encoder`] returned.
+pub fn load_resident_encoder_from(
+    map: &WeightMap,
+    precision: crate::llm::WeightPrecision,
+) -> Result<crate::llm::ResidentDecoder> {
     let cfg = DecoderConfig::qwen3_vl_32b_text().for_bf16_reference();
     crate::llm::ResidentDecoder::load_with(
-        &map,
+        map,
         &cfg,
         H3TextEncoderConfig::fasth3_8step().output_hidden_state_index,
         precision,

@@ -197,6 +197,75 @@ pub fn tensor(name: &str, t: &CudaTensor) -> Result<()> {
     write(name, &t.shape, &t.host_cow()?)
 }
 
+/// `FASTVIDEO_DIGEST=1`: log a sha256 of intermediate tensors at stage
+/// boundaries (`digest <name> <shape> <sha256>`), for finding where two runs
+/// that should be identical part without writing the tensors out. Each digest
+/// downloads (and therefore synchronizes) once per boundary.
+pub fn digest_enabled() -> bool {
+    static FLAG: super::envflag::CachedBool = super::envflag::CachedBool::new();
+    FLAG.get_or_init(|| super::envflag::bool_flag("FASTVIDEO_DIGEST", false))
+}
+
+/// `FASTVIDEO_DIGEST_WEIGHTS=1` (with [`digest_enabled`]): also every weight
+/// read as f32 from a lazy map (`w:<key>`) and every device bf16 linear weight
+/// as loaded (`lin:<prefixes>`). Downloads each weight once; diagnostic only.
+pub fn weights_digest_enabled() -> bool {
+    static FLAG: super::envflag::CachedBool = super::envflag::CachedBool::new();
+    digest_enabled()
+        && FLAG.get_or_init(|| super::envflag::bool_flag("FASTVIDEO_DIGEST_WEIGHTS", false))
+}
+
+/// [`weights_digest_enabled`]: log the digest of a device bf16 weight
+/// (widened exactly to f32).
+#[cfg(feature = "cuda")]
+pub fn digest_bf16_device(name: &str, w: &cudarc::driver::CudaSlice<half::bf16>) -> Result<()> {
+    if !weights_digest_enabled() {
+        return Ok(());
+    }
+    let dev = super::device::global_device()
+        .ok_or_else(|| TensorError::Message("no device".into()))?;
+    let host = dev
+        .stream
+        .memcpy_dtov(w)
+        .map_err(|e| TensorError::Message(e.to_string()))?;
+    let f: Vec<f32> = host.iter().map(|v| v.to_f32()).collect();
+    digest_host(name, &[f.len()], &f);
+    Ok(())
+}
+
+/// sha256 (hex) of the little-endian f32 bytes of `data`.
+pub fn sha256_f32(data: &[f32]) -> String {
+    use sha2::{Digest, Sha256};
+    let mut h = Sha256::new();
+    for chunk in data.chunks(1 << 16) {
+        let mut bytes = Vec::with_capacity(chunk.len() * 4);
+        for v in chunk {
+            bytes.extend_from_slice(&v.to_le_bytes());
+        }
+        h.update(&bytes);
+    }
+    h.finalize().iter().map(|b| format!("{b:02x}")).collect()
+}
+
+/// [`digest_enabled`]: log the digest of host values.
+pub fn digest_host(name: &str, shape: &[usize], data: &[f32]) {
+    if digest_enabled() {
+        super::log::info(format_args!(
+            "digest {name} {shape:?} {}",
+            sha256_f32(data)
+        ));
+    }
+}
+
+/// [`digest_enabled`]: log the digest of a tensor (f32 on the host; a bf16
+/// tensor is widened exactly).
+pub fn digest(name: &str, t: &CudaTensor) -> Result<()> {
+    if digest_enabled() {
+        digest_host(name, &t.shape, &t.host_cow()?);
+    }
+    Ok(())
+}
+
 /// Every `stride`-th row of `t` viewed as `[rows, last_dim]`.
 pub fn rows_strided(name: &str, t: &CudaTensor, stride: usize) -> Result<()> {
     if !enabled() {

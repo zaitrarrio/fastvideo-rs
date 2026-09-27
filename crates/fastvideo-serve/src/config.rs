@@ -13,6 +13,7 @@
 //! | `FV_SERVE_MODE` | `server.mode` (`http` \| `runpod-queue`) |
 //! | `PORT` | port of `server.bind` (Runpod load balancer) |
 //! | `FV_BIND`, `FV_PUBLIC_BASE_URL`, `FV_STATE_DIR`, `FV_WORKER_ID` | `server.*` |
+//! | `FV_SERVE_FORWARD` (`1`) | `server.forward` (Vast PyWorker route) |
 //! | `FV_WEIGHTS` | substituted for `${FV_WEIGHTS}` in `models[].weights` |
 //! | `FV_AUTH_MODE`, `FV_API_KEYS` (SHA-256 hex list) | `auth.*` |
 //! | `FV_ADMIN_TOKEN` | `auth.admin_token` (else generated at startup and logged once) |
@@ -88,6 +89,8 @@ pub struct ServerCfg {
     pub sync_timeout_s: u64,
     /// Serve the `/console` pages (docs/serve/console.md).
     pub console: bool,
+    /// Mount `POST /fv/v1/forward` (the Vast PyWorker target, WP-16).
+    pub forward: bool,
 }
 
 impl Default for ServerCfg {
@@ -101,6 +104,7 @@ impl Default for ServerCfg {
             shutdown_grace_s: 25,
             sync_timeout_s: 600,
             console: true,
+            forward: false,
         }
     }
 }
@@ -515,6 +519,9 @@ impl Config {
         }
         if let Some(v) = env.var("FV_STATE_DIR") {
             self.server.state_dir = v.into();
+        }
+        if let Some(v) = env.var("FV_SERVE_FORWARD") {
+            self.server.forward = matches!(v.trim(), "1" | "true" | "yes");
         }
         if let Some(v) = env.var("FV_WORKER_ID") {
             self.server.worker_id = Some(v);

@@ -14,11 +14,19 @@
 //! un-hooked run are exactly those of a run before this module existed. The
 //! hooks never touch the device either way; a hooked run's frames are
 //! identical too.
+//!
+//! [`Hooks::with_sink`] (serve package E2) also routes the decoded frames and
+//! audio to a [`FrameSink`](crate::sink::FrameSink) in memory; see
+//! [`crate::sink`].
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
+use std::path::Path;
+
+use crate::sink::{AudioPcm, Port};
 use crate::wan::pipeline::{PipelineError, Result};
+use crate::wan::writer::VideoWriter;
 
 /// A shared cancel flag. Clones share the flag; any holder may trip it from
 /// any thread, and the pipeline sees it at its next check.
@@ -107,6 +115,7 @@ pub type ProgressFn<'a> = &'a (dyn Fn(&Progress) + 'a);
 pub struct Hooks<'a> {
     cancel: Option<&'a CancelToken>,
     progress: Option<ProgressFn<'a>>,
+    sink: Option<&'a (dyn Port + 'a)>,
 }
 
 impl std::fmt::Debug for Hooks<'_> {
@@ -114,6 +123,7 @@ impl std::fmt::Debug for Hooks<'_> {
         f.debug_struct("Hooks")
             .field("cancel", &self.cancel)
             .field("progress", &self.progress.is_some())
+            .field("sink", &self.sink.is_some())
             .finish()
     }
 }
@@ -123,10 +133,15 @@ impl<'a> Hooks<'a> {
     pub const NONE: Hooks<'static> = Hooks {
         cancel: None,
         progress: None,
+        sink: None,
     };
 
     pub fn new(cancel: Option<&'a CancelToken>, progress: Option<ProgressFn<'a>>) -> Self {
-        Self { cancel, progress }
+        Self {
+            cancel,
+            progress,
+            sink: None,
+        }
     }
 
     pub fn with_cancel(mut self, cancel: &'a CancelToken) -> Self {
@@ -139,8 +154,50 @@ impl<'a> Hooks<'a> {
         self
     }
 
+    /// Deliver the decoded frames and audio to `port`'s sink in memory
+    /// instead of writing `frame-NNN.png` files (serve E2; see [`crate::sink`]).
+    pub fn with_sink<'s: 'a>(mut self, port: &'a crate::sink::SinkPort<'s>) -> Self {
+        self.sink = Some(port);
+        self
+    }
+
+    pub fn has_sink(&self) -> bool {
+        self.sink.is_some()
+    }
+
     pub fn is_none(&self) -> bool {
-        self.cancel.is_none() && self.progress.is_none()
+        self.cancel.is_none() && self.progress.is_none() && self.sink.is_none()
+    }
+
+    /// The clip's writer: exactly the batch writer
+    /// ([`VideoWriter::spawn_with_audio`]) without a sink; with one, the same
+    /// writer (mp4 as asked, no PNGs) tapped for the sink. `fps` is the
+    /// clip's rate (the mp4 gets it rounded; 0 = no mp4).
+    pub(crate) fn open_writer(
+        &self,
+        dir: &Path,
+        fps: f64,
+        mp4: bool,
+        audio: Option<&Path>,
+    ) -> Result<VideoWriter> {
+        match self.sink {
+            Some(port) => port.open_writer(dir, fps, mp4, audio),
+            None => VideoWriter::spawn_with_audio(dir, crate::sink::mp4_fps(fps), mp4, audio),
+        }
+    }
+
+    /// Hand the clip's audio to the sink (no-op without one).
+    pub(crate) fn audio(&self, pcm: &AudioPcm<'_>) -> Result<()> {
+        match self.sink {
+            Some(port) => port.audio(pcm),
+            None => Ok(()),
+        }
+    }
+
+    /// After the writer's video half has finished: deliver every frame still
+    /// pending. `Some(frames delivered)` with a sink.
+    pub(crate) fn finish_sink(&self) -> Result<Option<usize>> {
+        self.sink.map(|port| port.finish()).transpose()
     }
 
     pub fn is_cancelled(&self) -> bool {
@@ -192,8 +249,12 @@ impl<'a> Hooks<'a> {
         })
     }
 
-    /// The video decode has produced `frames` pixel frames so far.
+    /// The video decode has produced `frames` pixel frames so far. Also
+    /// delivers the chunks the writer has taken so far to the sink, if any.
     pub fn frames(&self, frames: usize) -> Result<()> {
+        if let Some(port) = self.sink {
+            port.pump()?;
+        }
         self.report(Progress {
             stage: Stage::VideoDecode,
             step: 0,
@@ -430,6 +491,34 @@ mod tests {
                 seen.last().map(|p| (p.stage, p.frames)),
                 Some((Stage::VideoDecode, 9))
             );
+
+            // Serve E2: the same clip through a frame sink is the PNG path's
+            // frames byte for byte, with no PNG written.
+            let mut sink = crate::sink::CollectFrames::default();
+            let port = crate::sink::SinkPort::new(&mut sink);
+            let sunk = pipe
+                .generate_to_with_hooks(
+                    &cfg,
+                    &root.join("sink"),
+                    false,
+                    Hooks::default().with_sink(&port),
+                )
+                .unwrap();
+            assert!(sunk.frame_paths.is_empty());
+            assert_eq!(port.frames_delivered(), 9);
+            drop(port);
+            let pngs: Vec<Vec<u8>> = plain
+                .frame_paths
+                .iter()
+                .map(|p| image::open(p).unwrap().to_rgb8().into_raw())
+                .collect();
+            let got: Vec<&[u8]> = sink.frames().collect();
+            assert_eq!(got.len(), pngs.len());
+            assert!(got.iter().zip(&pngs).all(|(a, b)| *a == b.as_slice()));
+            assert!(sink.audio.is_none());
+            assert!(std::fs::read_dir(root.join("sink"))
+                .map(|d| d.count() == 0)
+                .unwrap_or(true));
 
             // Two warm runs have filled every lazy cache, so the pool's live
             // bytes are the resident model alone; a cancel must return to it.
