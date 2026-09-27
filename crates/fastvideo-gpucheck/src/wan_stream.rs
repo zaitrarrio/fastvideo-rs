@@ -62,7 +62,7 @@ fn parse_run(s: &str) -> anyhow::Result<RunSpec> {
     let mut r = RunSpec {
         name: name.to_string(),
         seconds: 10.0,
-        rope: RopePolicy::Relativistic,
+        rope: RopePolicy::RebasedSink,
         sink: 3,
         window: 21,
         switch_at: None,
@@ -77,6 +77,7 @@ fn parse_run(s: &str) -> anyhow::Result<RunSpec> {
                 r.rope = match v {
                     "rel" | "relativistic" => RopePolicy::Relativistic,
                     "abs" | "absolute" => RopePolicy::Absolute,
+                    "rebased" | "rebased_sink" => RopePolicy::RebasedSink,
                     _ => bail!("--run {s}: rope={v}"),
                 }
             }
@@ -175,7 +176,7 @@ fn parity(report: &mut Report, pipe: &WanPipeline, base: &RolloutConfig) -> Stag
     let bounded_h = host(&bounded)?;
 
     let mut arms = serde_json::Map::new();
-    for (name, rope) in [("absolute", RopePolicy::Absolute), ("relativistic", RopePolicy::Relativistic)] {
+    for (name, rope) in [("absolute", RopePolicy::Absolute)] {
         let cfg = RolloutConfig {
             rope,
             sink_frames: 0,
@@ -255,6 +256,36 @@ fn parity(report: &mut Report, pipe: &WanPipeline, base: &RolloutConfig) -> Stag
         )?;
     }
     report.note("parity", json!({"bounded_s": bounded_s, "arms": Value::Object(arms)}));
+
+    // The rebased sink against FastVideo's relativistic policy, past the
+    // first roll (14 blocks, sink 3): the same attention offsets, different
+    // rounding points.
+    let roll = |rope: RopePolicy| -> anyhow::Result<(Vec<f32>, f64)> {
+        let cfg = RolloutConfig { rope, sink_frames: 3, rgb8: false, ..base.clone() };
+        let mut ro = CausalRollout::open(pipe, cfg).map_err(|e| anyhow!("{e}"))?;
+        let (mut lats, mut secs) = (Vec::new(), 0.0);
+        for _ in 0..14 {
+            let b = ro.next_block().map_err(|e| anyhow!("{e}"))?;
+            if b.index >= 8 {
+                secs += b.timings.total_s;
+            }
+            lats.extend_from_slice(&host(&b.latents)?);
+        }
+        Ok((lats, secs / 6.0))
+    };
+    let (rel, rel_s) = roll(RopePolicy::Relativistic)?;
+    let (reb, reb_s) = roll(RopePolicy::RebasedSink)?;
+    let (abs, abs_s) = roll(RopePolicy::Absolute)?;
+    let n7 = rel.len() / 2;
+    let d = |a: &[f32], b: &[f32]| crate::metrics::diff(a, b).to_json();
+    report.note(
+        "parity/sink3_policies",
+        json!({
+            "rebased_vs_relativistic": {"blocks_0_6": d(&reb[..n7], &rel[..n7]), "blocks_7_13": d(&reb[n7..], &rel[n7..])},
+            "absolute_vs_relativistic": {"blocks_0_6": d(&abs[..n7], &rel[..n7]), "blocks_7_13": d(&abs[n7..], &rel[n7..])},
+            "steady_block_s": {"relativistic": rel_s, "rebased": reb_s, "absolute": abs_s},
+        }),
+    );
     Ok(())
 }
 
