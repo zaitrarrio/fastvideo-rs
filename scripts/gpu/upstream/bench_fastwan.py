@@ -13,6 +13,12 @@ stays on the GPU (text_encoder_cpu_offload=False, as our resident UMT5; the
 example offloads it for < 32 GB cards); on sm_120 the VSA kernel is Triton
 (FASTVIDEO_VSA_KERNEL / the fastvideo-kernel wheel has no sm_120 CUDA build).
 
+Wan2.1-T2V-14B (pod.sh fv-wan21-14b): dense FLASH_ATTN, UniPC 50 steps, CFG 5,
+480x832, 81 frames, flow_shift 3.0 -- FastVideo's WanT2V480PConfig recipe, the
+same settings as our wan14 cells. FastVideo's registry maps this checkpoint to
+WanT2V720PConfig / preset wan_t2v_14b (720x1280, flow_shift 5.0); the 480p
+recipe is the one our matrix runs, so both sides are set explicitly.
+
 The weights on our volume are FastVideo/FastWan2.1-T2V-1.3B-Diffusers under a
 different directory name; FastVideo resolves the pipeline config by the
 checkpoint's short name, so the cell links the directory under that name.
@@ -75,6 +81,8 @@ def main() -> int:
     ap.add_argument("--num-frames", type=int, default=81)
     ap.add_argument("--steps", type=int, default=None, help="num_inference_steps (default: the checkpoint's)")
     ap.add_argument("--guidance-scale", type=float, default=None)
+    ap.add_argument("--flow-shift", type=float, default=None,
+                    help="pipeline flow_shift (default: the checkpoint's pipeline config)")
     ap.add_argument("--vsa-sparsity", type=float, default=0.8)
     ap.add_argument("--attention", default="VIDEO_SPARSE_ATTN")
     ap.add_argument("--text-encoder-cpu-offload", action="store_true")
@@ -122,8 +130,13 @@ def main() -> int:
             dit_cpu_offload=False,
             vae_cpu_offload=False,
             **({"VSA_sparsity": a.vsa_sparsity} if a.attention == "VIDEO_SPARSE_ATTN" else {}),
+            **({"flow_shift": a.flow_shift} if a.flow_shift is not None else {}),
         )
         res["load_s"] = time.perf_counter() - t0
+        try:
+            res["pipeline_flow_shift"] = gen.fastvideo_args.pipeline_config.flow_shift
+        except Exception:  # noqa: BLE001
+            pass
         try:
             def one(prompt: str, seed: int, path: Path) -> dict:
                 sp = SamplingParam.from_pretrained(model)

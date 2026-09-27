@@ -331,7 +331,10 @@ cell_fv_wan() {
 
 run_cells() {
   cell_fv_fastwan fv-fastwan13-dmd
-  cell_fv_wan fv-wan21-14b wan21-t2v-14b Wan2.1-T2V-14B-Diffusers --steps 50 --guidance-scale 5.0
+  # Wan2.1 T2V-14B at 480p, the recipe of our wan14 cells (FastVideo WanT2V480PConfig:
+  # flow_shift 3.0; the checkpoint's registry default is the 720p config, shift 5.0).
+  cell_fv_wan fv-wan21-14b wan21-t2v-14b Wan2.1-T2V-14B-Diffusers --steps 50 --guidance-scale 5.0 \
+    --height 480 --width 832 --num-frames 81 --flow-shift 3.0
   cell_fv_wan fv-wan22-5b wan22-ti2v-5b Wan2.2-TI2V-5B-Diffusers --height 704 --width 1280 --num-frames 121
   cell_fv_wan fv-sfwan13 sfwan21-1.3b SFWan2.1-T2V-1.3B-Diffusers
   local g768=(--height 768 --width 1344 --num-frames 124) g480=(--height 480 --width 832 --num-frames 124)
