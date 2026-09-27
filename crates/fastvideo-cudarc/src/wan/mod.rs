@@ -7,6 +7,8 @@ pub mod affine;
 pub mod ar_cache;
 pub mod causal;
 pub mod attn;
+#[cfg(feature = "cuda")]
+pub mod attn_dc;
 pub mod bf16_gemm;
 pub mod clip;
 #[cfg(feature = "cuda")]
@@ -31,6 +33,8 @@ pub mod nn;
 pub mod nvfp4;
 #[cfg(feature = "cuda")]
 pub mod nvfp4_gemm;
+#[cfg(feature = "cuda")]
+pub mod nvfp4_linear;
 pub mod offload;
 pub mod ops;
 pub mod pipeline;

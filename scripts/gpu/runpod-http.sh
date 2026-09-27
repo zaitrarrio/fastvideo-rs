@@ -24,7 +24,9 @@
 # and a wall-clock cap (FV_POD_CAP_S, default 4h) deletes it regardless.
 #
 # RUNPOD_VOLUME_NAME may name several weight volumes; the one whose DC has
-# stock for the GPU is used.
+# stock for the GPU is used. RUNPOD_NO_VOLUME=1 mounts none and takes any
+# datacenter (weight-free work: kernels, upstream bench:attn / bench:attn_dc);
+# RUNPOD_CLOUD_TYPE=COMMUNITY allows community hosts.
 # Env: FV_FAMILY (runpod-matrix.sh family, default rtx6000; rtx5090 is the
 # sol-engine RTX 5090 suite), RUNPOD_GPU_TYPE (default RTX PRO 6000), RUNPOD_API_KEY, RUNPOD_VOLUME_ID (default: volume named
 # fv-weights-h3-ltx-hy), FV_CELLS (subset of cells), FV_GEN_TIMEOUT_S
@@ -113,6 +115,8 @@ fi
   echo "image_build_id=\$(cat /opt/fastvideo-rs/target/release/fv-gpucheck.build-id 2>/dev/null)"
   nvidia-smi --query-gpu=name,memory.total,driver_version --format=csv,noheader
 } >"\$OUT/box.txt" 2>&1
+# kernels mode needs no weights (and may run without a volume).
+if [ "$mode" != kernels ]; then
 ( cd /workspace/weights && for d in *; do echo "== \$d"; find -L "\$d" -maxdepth 3 \( -name '*.safetensors' -o -name '*.json' \) -printf '%s %p\n' 2>/dev/null | head -60; done ) >"\$OUT/tree.txt" 2>&1
 FV_WEIGHTS=/workspace/weights bash /opt/fastvideo-rs/scripts/gpu/verify-weights.sh $cells >"\$OUT/weights.log" 2>&1
 echo "exit=\$?" >>"\$OUT/weights.log"
@@ -121,6 +125,7 @@ echo "exit=\$?" >>"\$OUT/weights.log"
 if [ -f /opt/fastvideo-rs/scripts/gpu/fetch-tae.sh ]; then
   bash /opt/fastvideo-rs/scripts/gpu/fetch-tae.sh \$SCRATCH/tae >"\$OUT/tae.log" 2>&1
   echo "exit=\$?" >>"\$OUT/tae.log"
+fi
 fi
 if [ "$mode" = kernels ] || [ "$mode" = all ]; then
   cd "\$OUT" && env ${FV_EXTRA_ENV:-} /opt/fastvideo-rs/target/release/fv-gpucheck --keep-going --out "\$OUT/gpucheck" kernels >"\$OUT/kernels.out" 2>&1
@@ -173,17 +178,23 @@ EOF
 }
 
 create_pod() {
-  local image="$1" tag="$2" mode="$3" vol dc payload resp id dph
-  read -r vol dc < <(volume) || true
-  [[ -n "${vol:-}" ]] || die "no network volume ($VOL_NAME)"
+  local image="$1" tag="$2" mode="$3" vol="" dc="" payload resp id dph
+  # RUNPOD_NO_VOLUME=1: no network volume, any datacenter with stock (for
+  # work that needs no weights: `kernels`, upstream `bench:attn*`).
+  # RUNPOD_CLOUD_TYPE=COMMUNITY takes community hosts (default SECURE).
+  if [[ "${RUNPOD_NO_VOLUME:-0}" != 1 ]]; then
+    read -r vol dc < <(volume) || true
+    [[ -n "${vol:-}" ]] || die "no network volume ($VOL_NAME)"
+  fi
   payload="$(jq -n --arg name "fv-$FAMILY-$tag" --arg image "$image" --arg vol "$vol" \
-    --arg dc "$dc" --arg gpu "$GPU" --arg disk "${FV_CONTAINER_DISK_GB:-120}" --arg cmd "$(start_cmd "$image" "$tag" "$mode")" '{
-      name: $name, imageName: $image, cloudType: "SECURE", computeType: "GPU",
+    --arg dc "$dc" --arg gpu "$GPU" --arg disk "${FV_CONTAINER_DISK_GB:-120}" --arg cmd "$(start_cmd "$image" "$tag" "$mode")" \
+    --arg cloud "${RUNPOD_CLOUD_TYPE:-SECURE}" '{
+      name: $name, imageName: $image, cloudType: $cloud, computeType: "GPU",
       gpuTypeIds: [$gpu], gpuCount: 1, containerDiskInGb: ($disk|tonumber), volumeInGb: 0,
-      networkVolumeId: $vol, volumeMountPath: "/workspace", dataCenterIds: [$dc],
       ports: ["8000/http"], dockerStartCmd: ["/bin/bash", "-c", $cmd]
-    }')"
-  log "create pod gpu=\"$GPU\" image=$image volume=$vol dc=$dc"
+    } + (if $vol == "" then {} else
+      {networkVolumeId: $vol, volumeMountPath: "/workspace", dataCenterIds: [$dc]} end)')"
+  log "create pod gpu=\"$GPU\" image=$image volume=${vol:-none} dc=${dc:-any} cloud=${RUNPOD_CLOUD_TYPE:-SECURE}"
   # Capacity in the volume's datacenter comes and goes; retry instead of failing.
   local t0 wait="${FV_CREATE_WAIT_S:-3600}"
   t0=$(date +%s)

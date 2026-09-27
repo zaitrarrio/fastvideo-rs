@@ -763,6 +763,30 @@ case "$FAMILY" in
       compare_cells wan14 "wan14-$arm"
       gate_cells wan14 "wan14-$arm" lossy
     done
+    # Wan2.2 TI2V-5B module parity against Diffusers (docs/oracle.md "Wan 2.2 TI2V-5B"),
+    # first so the upstream pod serving the dump can go as soon as it is fetched:
+    # the reference dump of the upstream pod's oracle:wan22-ti2v step
+    # (FV_ORACLE_URL), then `wan oracle` (VAE encode/decode, the t2v and
+    # i2v DiT forwards) in the production mode and the VAE again in exact
+    # f32 math, each diffed with compare-dumps.
+    if [[ -z "${FV_CELLS:-}" || " $FV_CELLS " == *" wan5b-oracle "* ]]; then
+      target=wan22-ti2v
+      ref="$SCRATCH/oracle-ref/$target"
+      if oracle_fetch "$target" "$ref"; then
+        gated_cell wan5b-oracle wan22-ti2v-5b \
+          "$BIN" --mode fast --keep-going wan oracle --weights "$W/wan22-ti2v-5b" --reference "$ref/dump" \
+            --dump-out "$RUNS/wan5b-oracle-dump" --taehv "$TAE/taew2_2.safetensors"
+        oracle_diff wan5b-oracle-diff "$ref/dump" "$RUNS/wan5b-oracle-dump"
+        gated_cell wan5b-oracle-exact wan22-ti2v-5b \
+          "$BIN" --mode exact --keep-going wan oracle --weights "$W/wan22-ti2v-5b" --reference "$ref/dump" \
+            --dump-out "$RUNS/wan5b-oracle-exact-dump" --skip-dit
+        oracle_diff wan5b-oracle-exact-diff "$ref/dump" "$RUNS/wan5b-oracle-exact-dump"
+        rm -rf "$ref" "$RUNS/wan5b-oracle-dump" "$RUNS/wan5b-oracle-exact-dump"
+      else
+        mkdir -p "$RUNS/wan5b-oracle"
+        write_json "$RUNS/wan5b-oracle/summary.json" '{"cell":"wan5b-oracle","exit":null,"skipped":"reference dump unavailable"}'
+      fi
+    fi
     # ---- Wan2.2 TI2V-5B: the checkpoint's recommended recipe (FastVideo
     # WAN_2_2_TI2V_5B preset / Diffusers model card): 704x1280, 121 frames at
     # 24 fps, 50 UniPC steps, CFG 5, flow shift 5 (scheduler_config.json),
@@ -794,29 +818,6 @@ case "$FAMILY" in
       "$BIN" --mode fast wan gen "${ti2v[@]}" --height 704 --width 1280 --num-frames 121 \
         --prompt "$PROMPT" "${PROMPT_ARGS[@]}" --clip-dir "$RUNS/wan5b-easycache/frames"
     compare_cells wan5b wan5b-easycache
-    # Module parity against Diffusers (docs/oracle.md "Wan 2.2 TI2V-5B"):
-    # the reference dump of the upstream pod's oracle:wan22-ti2v step
-    # (FV_ORACLE_URL), then `wan oracle` (VAE encode/decode, the t2v and
-    # i2v DiT forwards) in the production mode and the VAE again in exact
-    # f32 math, each diffed with compare-dumps.
-    if [[ -z "${FV_CELLS:-}" || " $FV_CELLS " == *" wan5b-oracle "* ]]; then
-      target=wan22-ti2v
-      ref="$SCRATCH/oracle-ref/$target"
-      if oracle_fetch "$target" "$ref"; then
-        gated_cell wan5b-oracle wan22-ti2v-5b \
-          "$BIN" --mode fast --keep-going wan oracle --weights "$W/wan22-ti2v-5b" --reference "$ref/dump" \
-            --dump-out "$RUNS/wan5b-oracle-dump" --taehv "$TAE/taew2_2.safetensors"
-        oracle_diff wan5b-oracle-diff "$ref/dump" "$RUNS/wan5b-oracle-dump"
-        gated_cell wan5b-oracle-exact wan22-ti2v-5b \
-          "$BIN" --mode exact --keep-going wan oracle --weights "$W/wan22-ti2v-5b" --reference "$ref/dump" \
-            --dump-out "$RUNS/wan5b-oracle-exact-dump" --skip-dit
-        oracle_diff wan5b-oracle-exact-diff "$ref/dump" "$RUNS/wan5b-oracle-exact-dump"
-        rm -rf "$ref" "$RUNS/wan5b-oracle-dump" "$RUNS/wan5b-oracle-exact-dump"
-      else
-        mkdir -p "$RUNS/wan5b-oracle"
-        write_json "$RUNS/wan5b-oracle/summary.json" '{"cell":"wan5b-oracle","exit":null,"skipped":"reference dump unavailable"}'
-      fi
-    fi
     # SF-Wan 81 frames: TAEHV is the distilled default (sfwan13-81f-flash);
     # the full Wan VAE opt-out on the same recipe, for the decoder A/B.
     sf_arm sfwan13-81f-fullvae 81 FASTVIDEO_WAN_VAE=full
@@ -1143,6 +1144,30 @@ case "$FAMILY" in
     done
     ;;
   precision)
+    if [[ "${FV_PRECISION_ARM:-all}" == ltx-nvfp4 ]]; then
+      # NVFP4 video FFN (sol-engine nvfp4_ffn.py; profile
+      # ltx2/ltx25_distill_sol_nvfp4) against the bf16 default
+      # (ltx2/ltx25_distill_sol): Sol stage 2, same prompt / seed, warm
+      # process, every run encoding its prompt (no text cache, so both arms
+      # feed the DiT the same contexts). FV_NVFP4_WORKLOADS picks workloads.
+      for wl in ${FV_NVFP4_WORKLOADS:-4k5s 1080p20s}; do
+        for v in bf16 nvfp4; do
+          prof=ltx2/ltx25_distill_sol
+          [[ "$v" == nvfp4 ]] && prof=ltx2/ltx25_distill_sol_nvfp4
+          gated_cell "ltx25-$wl-sol-$v" ltx25-two-stage \
+            "$BIN" --techniques "$prof" --mode fast ltx2 gen --model-version 2.5 \
+              --weights "$W/ltx25" --dit "$W/ltx25" --workload "$wl" \
+              --prompt "$PROMPT" --seed "$SEED" --two-stage --text streamed --warm \
+              --no-text-cache --clip "$RUNS/ltx25-$wl-sol-$v/frames" "${PROMPT_ARGS[@]}"
+        done
+        compare_cells "ltx25-$wl-sol-bf16" "ltx25-$wl-sol-nvfp4"
+        gate_cells "ltx25-$wl-sol-bf16" "ltx25-$wl-sol-nvfp4" lossy
+        rm -rf "$RUNS/ltx25-$wl-sol-bf16/frames" "$RUNS/ltx25-$wl-sol-nvfp4/frames"
+      done
+      log "matrix done"
+      write_json "$RUNS/done.json" "$(printf '{"family":"%s","ended":"%s"}' "$FAMILY" "$(date -u +%Y-%m-%dT%H:%M:%SZ)")"
+      exit 0
+    fi
     # Re-measure the precision switches on the current build against the
     # baselines of the fastvideo / rtx5090 families (same prompt, seed, warm).
     h3_common=(

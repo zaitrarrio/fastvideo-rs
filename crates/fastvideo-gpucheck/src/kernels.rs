@@ -2247,6 +2247,7 @@ pub fn run(report: &mut Report, lim: Limits, seed: u64, groups: Option<&str>) ->
     // Phase 3b kernels vs the kernels they replace, then real-shape timings.
     group(&mut c, "attn2_parity", attn2::parity)?;
     group(&mut c, "attn_bench", attn2::bench)?;
+    group(&mut c, "attn_dc", attn2::dc_parity)?;
 
     group(&mut c, "conv", |c| {
         // cuDNN conv2d (patch embed, VAE resample): pad/stride variants + bias.
@@ -2394,6 +2395,11 @@ pub fn run(report: &mut Report, lim: Limits, seed: u64, groups: Option<&str>) ->
 
     group(&mut c, "nvfp4_gemm", |c| {
         crate::nvfp4_bench::run(c.report, c.seed)
+    })?;
+
+    // The model-path NVFP4 linear (LTX-2 video FFN under FASTVIDEO_NVFP4).
+    group(&mut c, "nvfp4_linear", |c| {
+        crate::nvfp4_linear_check::run(c.report, c.seed)
     })?;
 
     // Reference FP8 recipes (W8A8 / MXFP8) and bf16 activations.

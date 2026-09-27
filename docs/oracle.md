@@ -276,3 +276,16 @@ its own fails it.
 Not compared: 4K (not run, to save budget; the 512p profiles show no
 resolution-specific hazard), and our upsampler in isolation (`s2_upsampled`,
 0.35, inherits stage 1's 0.34).
+
+## Wan 2.2 TI2V-5B modules (Diffusers)
+
+`scripts/gpu/upstream/oracle_wan22.py` (upstream step `oracle:wan22-ti2v`,
+47 s on H100) dumps Diffusers' `AutoencoderKLWan` encode and decode of a
+9-frame 704x1280 clip (fp32) and one bf16 `WanTransformer3DModel` forward
+per timestep layout (`t2v_`: one timestep; `i2v_`: frame 0 at 0), with the
+patch embedding, time projection and every block output. `fv-gpucheck wan
+oracle` (matrix cells `wan5b-oracle`, `wan5b-oracle-exact`) injects the same
+inputs into ours and `compare-dumps` diffs them. First run (H100,
+`wan/f5d6595-09271224`): VAE encode rel-L2 1.87e-3 (max-abs 8.4e-3); the
+decode hit cuDNN's 4 GB tensor limit (fixed since, frame split) and the DiT
+rows were not reached. Details in [ports/wan.md](ports/wan.md).

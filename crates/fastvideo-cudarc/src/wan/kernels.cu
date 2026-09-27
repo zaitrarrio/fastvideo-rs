@@ -4578,6 +4578,111 @@ extern "C" __global__ void fill_hash_uniform(float* out, long n, unsigned long l
     float u = (float)(z >> 40) * (1.0f / 16777216.0f);
     out[i] = (2.0f * u - 1.0f) * scale;
 }
+
+// ---- NVFP4 linear (cuBLASLt VEC16_UE4M3; wan/nvfp4_gemm.rs Nvfp4Linear) ----
+// bf16 operands straight into the GEMM's layout. `gelu` = 1 reads
+// bf16(gelu_tanh(x)) instead of x (the value the bf16 FFN rounds and feeds its
+// down projection), so the GELU never round-trips through memory.
+__device__ __forceinline__ float fv_nvfp4_in(unsigned short b, int gelu) {
+    float x = fv_bf16_to_f32(b);
+    if (!gelu) return x;
+    const float k = 0.7978845608028654f;
+    float g = 0.5f * x * (1.0f + tanhf(k * (x + 0.044715f * x * x * x)));
+    return fv_bf16_to_f32(fv_bf16_rne(g));
+}
+
+// Tensor amax of a bf16 buffer (of gelu(x) when `gelu`). 8 elements per load
+// when n % 8 == 0 (the caller's buffers are 256-byte aligned). `out` zeroed.
+extern "C" __global__ void nvfp4_amax_bf16(const unsigned short* x, int gelu, float* out, long n) {
+    __shared__ float sm[256];
+    int tid = threadIdx.x;
+    float acc = 0.0f;
+    long stride = (long)gridDim.x * blockDim.x;
+    if ((n & 7) == 0) {
+        const uint4* v = (const uint4*)x;
+        for (long i = blockIdx.x * (long)blockDim.x + tid; i < n / 8; i += stride) {
+            uint4 q = v[i];
+            unsigned int w[4] = {q.x, q.y, q.z, q.w};
+            for (int j = 0; j < 4; j++) {
+                float a = fabsf(fv_nvfp4_in((unsigned short)(w[j] & 0xFFFFu), gelu));
+                float b = fabsf(fv_nvfp4_in((unsigned short)(w[j] >> 16), gelu));
+                if (!(a <= acc)) acc = a;
+                if (!(b <= acc)) acc = b;
+            }
+        }
+    } else {
+        for (long i = blockIdx.x * (long)blockDim.x + tid; i < n; i += stride) {
+            float a = fabsf(fv_nvfp4_in(x[i], gelu));
+            if (!(a <= acc)) acc = a;
+        }
+    }
+    sm[tid] = acc;
+    __syncthreads();
+    for (int s = blockDim.x >> 1; s > 0; s >>= 1) {
+        if (tid < s) { float o = sm[tid + s]; if (!(o <= sm[tid])) sm[tid] = o; }
+        __syncthreads();
+    }
+    if (tid == 0) atomicMax((int*)out, __float_as_int(sm[0]));
+}
+
+// bf16 [rows, cols] -> packed E2M1 [rows_pack, cols/2] (low nibble first) and
+// E4M3 block scales directly in cuBLASLt's VEC16_UE4M3 tiled layout (128x4
+// tiles, element (r, c) at tile * 512 + (r % 32) * 16 + (r % 128 / 32) * 4 +
+// c % 4; the same map as nvfp4_scales_swizzle). The math per block is
+// fv_nvfp4_scale_block (static_6: e2 6, static_4: e2 4; e4 448), so the codes
+// equal nvfp4_quantize_pack's bit for bit. One thread per (row, 16-block) over
+// rows_scale rows: rows in [rows, rows_pack) get zero codes, rows in
+// [rows, rows_scale) zero scales. Needs cols % 64 == 0 (no scale-column pad).
+extern "C" __global__ void nvfp4_quant_bf16_sw(
+    const unsigned short* x, int gelu, const float* amax_ptr,
+    unsigned char* packed, unsigned char* scales,
+    long rows, long rows_pack, long rows_scale, long cols, int rule
+) {
+    long sc = cols / 16;
+    long b = IDX();
+    if (b >= rows_scale * sc) return;
+    long row = b / sc;
+    long blk = b % sc;
+    long tile = (row / 128) * (sc / 4) + (blk / 4);
+    long rr = row % 128;
+    long s_off = tile * 512 + (rr % 32) * 16 + (rr / 32) * 4 + (blk % 4);
+    if (row >= rows) {
+        scales[s_off] = 0;
+        if (row < rows_pack) {
+            *(uint2*)(packed + row * (cols / 2) + blk * 8) = make_uint2(0u, 0u);
+        }
+        return;
+    }
+    const uint4* src = (const uint4*)(x + row * cols + blk * 16);
+    uint4 q0 = src[0], q1 = src[1];
+    unsigned int w[8] = {q0.x, q0.y, q0.z, q0.w, q1.x, q1.y, q1.z, q1.w};
+    float v[16];
+    for (int j = 0; j < 8; j++) {
+        v[2 * j] = fv_nvfp4_in((unsigned short)(w[j] & 0xFFFFu), gelu);
+        v[2 * j + 1] = fv_nvfp4_in((unsigned short)(w[j] >> 16), gelu);
+    }
+    float fake[16];
+    unsigned char scale;
+    fv_nvfp4_scale_block(v, fake, &scale, *amax_ptr, rule == 1 ? 4.0f : 6.0f, 448.0f, 1.0f);
+    scales[s_off] = scale;
+    unsigned int lo = 0u, hi = 0u;
+    for (int i = 0; i < 4; i++) {
+        lo |= (unsigned int)(fv_nvfp4_code(fake[2 * i]) | (fv_nvfp4_code(fake[2 * i + 1]) << 4)) << (8 * i);
+        hi |= (unsigned int)(fv_nvfp4_code(fake[8 + 2 * i]) | (fv_nvfp4_code(fake[9 + 2 * i]) << 4)) << (8 * i);
+    }
+    *(uint2*)(packed + row * (cols / 2) + blk * 8) = make_uint2(lo, hi);
+}
+
+// The GEMM's alpha / beta on the device: alpha = decode(a) * decode(w),
+// decode = amax / (e2 * 448) (fastvideo_models::nvfp4::dequant_factor), so
+// the per-tensor scales never leave the device.
+extern "C" __global__ void nvfp4_alpha(const float* a_amax, const float* w_amax, float e2, float* out) {
+    float a = *a_amax, w = *w_amax, d = e2 * 448.0f;
+    float da = (a > 0.0f && isfinite(a)) ? a / d : 0.0f;
+    float dw = (w > 0.0f && isfinite(w)) ? w / d : 0.0f;
+    out[0] = da * dw;
+    out[1] = 0.0f;
+}
 // ==== endregion: nvfp4 ====
 
 
