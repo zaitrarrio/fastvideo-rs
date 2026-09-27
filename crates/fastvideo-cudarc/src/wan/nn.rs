@@ -85,6 +85,9 @@ struct LinearLora {
 /// LongLive NVFP4 on every prefix of a fused linear. Conservative: one
 /// filtered module (time/head/norm) keeps the whole stack dense.
 fn nvfp4_rule_for(prefixes: &[&str], in_dim: usize) -> Option<fastvideo_models::nvfp4::ScaleRule> {
+    if !super::nvfp4::generic_scope() {
+        return None;
+    }
     let rule = fastvideo_models::nvfp4::from_env()?;
     if in_dim == 0 || !in_dim.is_multiple_of(fastvideo_models::nvfp4::BLOCK) {
         return None;
@@ -1038,6 +1041,22 @@ impl Linear {
 
     pub fn forward(&self, xs: &CudaTensor) -> Result<CudaTensor> {
         self.forward_act(xs, false)
+    }
+
+    /// The plain device bf16 weight ([`Self::has_bf16_gemm`]), shared.
+    #[cfg(feature = "cuda")]
+    pub(crate) fn weight_bf16_shared(
+        &self,
+    ) -> Option<std::sync::Arc<cudarc::driver::CudaSlice<half::bf16>>> {
+        self.weight_bf16.clone().filter(|_| self.has_bf16_gemm())
+    }
+
+    /// Drop the device bf16 weight (a caller that now holds the weight in
+    /// another form, e.g. [`super::nvfp4_linear::Nvfp4Linear`]). The linear
+    /// cannot run afterwards.
+    #[cfg(feature = "cuda")]
+    pub(crate) fn release_weight_bf16(&mut self) {
+        self.weight_bf16 = None;
     }
 
     /// Whether [`Self::gemm_bf16`] can run: the weight is a plain device

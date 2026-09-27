@@ -1080,6 +1080,30 @@ case "$FAMILY" in
     done
     ;;
   precision)
+    if [[ "${FV_PRECISION_ARM:-all}" == ltx-nvfp4 ]]; then
+      # NVFP4 video FFN (sol-engine nvfp4_ffn.py; profile
+      # ltx2/ltx25_distill_sol_nvfp4) against the bf16 default
+      # (ltx2/ltx25_distill_sol): Sol stage 2, same prompt / seed, warm
+      # process, every run encoding its prompt (no text cache, so both arms
+      # feed the DiT the same contexts). FV_NVFP4_WORKLOADS picks workloads.
+      for wl in ${FV_NVFP4_WORKLOADS:-4k5s 1080p20s}; do
+        for v in bf16 nvfp4; do
+          prof=ltx2/ltx25_distill_sol
+          [[ "$v" == nvfp4 ]] && prof=ltx2/ltx25_distill_sol_nvfp4
+          gated_cell "ltx25-$wl-sol-$v" ltx25-two-stage \
+            "$BIN" --techniques "$prof" --mode fast ltx2 gen --model-version 2.5 \
+              --weights "$W/ltx25" --dit "$W/ltx25" --workload "$wl" \
+              --prompt "$PROMPT" --seed "$SEED" --two-stage --text streamed --warm \
+              --no-text-cache --clip "$RUNS/ltx25-$wl-sol-$v/frames" "${PROMPT_ARGS[@]}"
+        done
+        compare_cells "ltx25-$wl-sol-bf16" "ltx25-$wl-sol-nvfp4"
+        gate_cells "ltx25-$wl-sol-bf16" "ltx25-$wl-sol-nvfp4" lossy
+        rm -rf "$RUNS/ltx25-$wl-sol-bf16/frames" "$RUNS/ltx25-$wl-sol-nvfp4/frames"
+      done
+      log "matrix done"
+      write_json "$RUNS/done.json" "$(printf '{"family":"%s","ended":"%s"}' "$FAMILY" "$(date -u +%Y-%m-%dT%H:%M:%SZ)")"
+      exit 0
+    fi
     # Re-measure the precision switches on the current build against the
     # baselines of the fastvideo / rtx5090 families (same prompt, seed, warm).
     h3_common=(

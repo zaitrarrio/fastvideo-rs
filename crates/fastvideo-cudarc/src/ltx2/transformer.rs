@@ -589,6 +589,8 @@ impl Ltx2Transformer {
         which: &[usize],
         residency: Residency,
     ) -> Result<Self> {
+        // FASTVIDEO_NVFP4 on LTX-2 is sol-engine's video-FFN scope only.
+        crate::wan::nvfp4::enter_ltx_video_ffn_scope();
         if cfg.norm_elementwise_affine
             || cfg.patch_size != 1
             || cfg.patch_size_t != 1
@@ -651,13 +653,14 @@ impl Ltx2Transformer {
                 video: StreamBlock {
                     attn1: attn("attn1", video_dims, video_gated)?,
                     attn2: attn("attn2", video_dims, video_gated)?,
-                    ff: FeedForward::load(
+                    ff: FeedForward::load_scoped(
                         map,
                         keys,
                         &format!("{p}.ff"),
                         dv,
                         cfg.ff_inner_dim(),
                         cfg.ff_bias,
+                        crate::wan::nvfp4::ltx_video_ffn_rule(),
                     )?,
                     scale_shift_table: table(
                         map,

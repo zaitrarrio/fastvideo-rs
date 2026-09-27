@@ -2396,6 +2396,11 @@ pub fn run(report: &mut Report, lim: Limits, seed: u64, groups: Option<&str>) ->
         crate::nvfp4_bench::run(c.report, c.seed)
     })?;
 
+    // The model-path NVFP4 linear (LTX-2 video FFN under FASTVIDEO_NVFP4).
+    group(&mut c, "nvfp4_linear", |c| {
+        crate::nvfp4_linear_check::run(c.report, c.seed)
+    })?;
+
     // Reference FP8 recipes (W8A8 / MXFP8) and bf16 activations.
     group(&mut c, "fp8_recipes", |c| {
         crate::kernels_fp8::fp8_recipes(c.report, &mut c.seed)
