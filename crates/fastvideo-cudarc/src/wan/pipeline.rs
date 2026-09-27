@@ -182,6 +182,10 @@ pub struct GenerateConfig {
     /// When true, mux PNG frames to `output.mp4` via ffmpeg if available.
     pub save_video: bool,
     pub fps: u32,
+    /// Directory of the UMT5 prompt cache (`None`: encode every request).
+    /// Entries are keyed by prompt, tokenizer, text length and encoder
+    /// weights; a damaged entry is a miss (see `h3::text_cache`).
+    pub text_cache: Option<std::path::PathBuf>,
 }
 
 impl Default for GenerateConfig {
@@ -209,6 +213,7 @@ impl Default for GenerateConfig {
             boundary_ratio: None,
             save_video: false,
             fps: 16,
+            text_cache: None,
         }
     }
 }
@@ -292,6 +297,9 @@ pub struct WanPipeline {
     /// rather than the default search (used by the distilled presets).
     taehv_explicit: bool,
     vae_choice: WanVaeChoice,
+    /// `text_encoder/` of the checkpoint (the text-cache key reads it).
+    text_dir: Option<std::path::PathBuf>,
+    text_identity: std::sync::OnceLock<[u8; 32]>,
     clip: Option<ClipVision>,
     tiny: bool,
     boundary_ratio: Option<f32>,
@@ -310,6 +318,8 @@ impl WanPipeline {
             taehv: None,
             taehv_explicit: false,
             vae_choice: WanVaeChoice::Auto,
+            text_dir: None,
+            text_identity: Default::default(),
             clip: None,
             tiny: true,
             boundary_ratio: None,
@@ -333,6 +343,8 @@ impl WanPipeline {
             taehv: None,
             taehv_explicit: false,
             vae_choice: WanVaeChoice::Auto,
+            text_dir: None,
+            text_identity: Default::default(),
             clip: None,
             tiny: false,
             boundary_ratio,
@@ -358,17 +370,18 @@ impl WanPipeline {
             WanVaeConfig::wan_2_1()
         };
         let vae = WeightMap::from_dir(&root.join("vae"))?;
+        let text_dir = if root.join("text_encoder").is_dir() {
+            root.join("text_encoder")
+        } else {
+            root.join("text_encoder_2")
+        };
         let text = if parts.text_encoder {
-            let text_dir = if root.join("text_encoder").is_dir() {
-                root.join("text_encoder")
-            } else {
-                root.join("text_encoder_2")
-            };
             let map = WeightMap::from_dir(&text_dir)?;
             Some(Umt5Encoder::load(Umt5Config::xxl(), &map)?)
         } else {
             None
         };
+        let text_dir = Some(text_dir);
 
         let dit_2 = if root.join("transformer_2").is_dir() {
             let map = WeightMap::from_dir(&root.join("transformer_2"))?;
@@ -424,6 +437,8 @@ impl WanPipeline {
             taehv,
             taehv_explicit,
             vae_choice,
+            text_dir,
+            text_identity: Default::default(),
             clip,
             tiny: false,
             boundary_ratio,
@@ -438,6 +453,106 @@ impl WanPipeline {
 
     /// `[neg, prompt]` UMT5 embeddings padded to `text_len`: `[2, text_len, 4096]`.
     pub fn encode_prompt_embeds(&self, cfg: &GenerateConfig) -> Result<CudaTensor> {
+        Ok(self.encode_text(cfg, true)?.0)
+    }
+
+    /// Whether a request's sampler reads the negative prompt at all: the
+    /// distilled samplers run one conditional pass, and a guidance scale of
+    /// exactly 1 cancels the unconditional branch.
+    fn needs_negative(cfg: &GenerateConfig) -> bool {
+        let unit = |g: f32| (g - 1.0).abs() < 1e-6;
+        !(cfg.is_dmd
+            || cfg.is_rcm
+            || (unit(cfg.guidance_scale) && cfg.guidance_scale_2.is_none_or(unit)))
+    }
+
+    /// UMT5 of one text, `[1, tokens, 4096]` unpadded, through the disk cache
+    /// when `cfg.text_cache` names one. Returns whether it was a hit.
+    fn encode_one(
+        &self,
+        text: &Umt5Encoder,
+        cfg: &GenerateConfig,
+        ids: &[u32],
+        prompt: &str,
+    ) -> Result<(CudaTensor, bool)> {
+        const WIDTH: usize = 4096;
+        let Some(dir) = cfg.text_cache.as_deref() else {
+            return Ok((text.forward(ids, 1, ids.len())?, false));
+        };
+        let key = self.text_cache_key(cfg, prompt)?;
+        let (entry, hit) = crate::h3::text_cache::get_or_compute(dir, &key, ids, WIDTH, || {
+            text.forward(ids, 1, ids.len())?
+                .host_cow()
+                .map(|h| h.into_owned())
+        })
+        .map_err(PipelineError::from)?;
+        Ok((
+            CudaTensor::from_vec(entry.data, vec![1, ids.len(), WIDTH])?.to_device()?,
+            hit,
+        ))
+    }
+
+    /// The disk-cache key of `prompt`: the text, `tokenizer.json`, the padded
+    /// length and an identity of the UMT5 weights (file names, sizes and each
+    /// file's first 256 KiB: the safetensors header and the start of the data).
+    fn text_cache_key(&self, cfg: &GenerateConfig, prompt: &str) -> Result<[u8; 32]> {
+        use sha2::{Digest, Sha256};
+        let identity = self.text_identity.get_or_init(|| {
+            let mut h = Sha256::new();
+            if let Some(dir) = &self.text_dir {
+                let mut files: Vec<_> = std::fs::read_dir(dir)
+                    .map(|rd| rd.flatten().map(|e| e.path()).collect())
+                    .unwrap_or_default();
+                files.retain(|p| p.extension().is_some_and(|e| e == "safetensors"));
+                files.sort();
+                for f in files {
+                    let name = f.file_name().map(|n| n.to_string_lossy().into_owned());
+                    h.update(name.unwrap_or_default().as_bytes());
+                    h.update(
+                        std::fs::metadata(&f)
+                            .map(|m| m.len())
+                            .unwrap_or(0)
+                            .to_le_bytes(),
+                    );
+                    if let Ok(mut file) = std::fs::File::open(&f) {
+                        use std::io::Read as _;
+                        let mut buf = vec![0u8; 256 << 10];
+                        let n = file.read(&mut buf).unwrap_or(0);
+                        h.update(&buf[..n]);
+                    }
+                }
+            }
+            h.finalize().into()
+        });
+        let tokenizer = cfg
+            .tokenizer_path
+            .as_deref()
+            .map(std::fs::read)
+            .transpose()
+            .map_err(|e| PipelineError::Message(format!("tokenizer: {e}")))?
+            .unwrap_or_default();
+        let mut h = Sha256::new();
+        for field in [
+            b"WANTEXT1".as_slice(),
+            prompt.as_bytes(),
+            crate::h3::text_cache::sha256(&tokenizer).as_slice(),
+            (self.dit.cfg.text_len as u64).to_le_bytes().as_slice(),
+            identity.as_slice(),
+        ] {
+            h.update((field.len() as u64).to_le_bytes());
+            h.update(field);
+        }
+        Ok(h.finalize().into())
+    }
+
+    /// Prompt embeddings, `[neg, prompt]` or (`with_negative` false) the
+    /// prompt alone, padded to `text_len`; and `hit` / `miss` / `off` for the
+    /// disk cache.
+    fn encode_text(
+        &self,
+        cfg: &GenerateConfig,
+        with_negative: bool,
+    ) -> Result<(CudaTensor, &'static str)> {
         let text_len = self.dit.cfg.text_len;
         let text = self.text.as_ref().ok_or_else(|| {
             PipelineError::Message(
@@ -447,12 +562,25 @@ impl WanPipeline {
         })?;
         if let Some(tokenizer) = cfg.tokenizer_path.as_ref() {
             let (prompt_ids, prompt_len) = tokenize_prompt(tokenizer, &cfg.prompt, text_len)?;
-            let (neg_ids, neg_len) = tokenize_prompt(tokenizer, &cfg.negative_prompt, text_len)?;
-            let prompt_embeds = text.forward(&prompt_ids, 1, prompt_ids.len())?;
-            let neg_embeds = text.forward(&neg_ids, 1, neg_ids.len())?;
+            let (prompt_embeds, mut hit) = self.encode_one(text, cfg, &prompt_ids, &cfg.prompt)?;
             let prompt_embeds = pad_prompt_embeds(&prompt_embeds, &[prompt_len], text_len)?;
-            let neg_embeds = pad_prompt_embeds(&neg_embeds, &[neg_len], text_len)?;
-            return Ok(CudaTensor::cat(&[&neg_embeds, &prompt_embeds], 0)?);
+            let embeds = if with_negative {
+                let (neg_ids, neg_len) =
+                    tokenize_prompt(tokenizer, &cfg.negative_prompt, text_len)?;
+                let (neg_embeds, neg_hit) =
+                    self.encode_one(text, cfg, &neg_ids, &cfg.negative_prompt)?;
+                hit &= neg_hit;
+                let neg_embeds = pad_prompt_embeds(&neg_embeds, &[neg_len], text_len)?;
+                CudaTensor::cat(&[&neg_embeds, &prompt_embeds], 0)?
+            } else {
+                prompt_embeds
+            };
+            let state = match (cfg.text_cache.is_some(), hit) {
+                (false, _) => "off",
+                (true, true) => "hit",
+                (true, false) => "miss",
+            };
+            return Ok((embeds, state));
         }
         if self.tiny {
             let seq = text_len.min(8);
@@ -461,7 +589,7 @@ impl WanPipeline {
             let neg_embeds = prompt_embeds.clone();
             let prompt_embeds = pad_prompt_embeds(&prompt_embeds, &[seq], text_len)?;
             let neg_embeds = pad_prompt_embeds(&neg_embeds, &[seq], text_len)?;
-            return Ok(CudaTensor::cat(&[&neg_embeds, &prompt_embeds], 0)?);
+            return Ok((CudaTensor::cat(&[&neg_embeds, &prompt_embeds], 0)?, "off"));
         }
         Err(PipelineError::Message(
             "real generate needs tokenizer.json next to the Diffusers weights".into(),
@@ -614,7 +742,7 @@ impl WanPipeline {
 
         let mut timings = WanTimings::default();
         let timer = std::time::Instant::now();
-        let encoder_hs = self.encode_prompt_embeds(cfg)?;
+        let (encoder_hs, text_cache) = self.encode_text(cfg, Self::needs_negative(cfg))?;
         timings.text_s = timer.elapsed().as_secs_f64();
         let timer = std::time::Instant::now();
         let mut last = std::time::Instant::now();
@@ -676,12 +804,8 @@ impl WanPipeline {
             frames,
             frame_paths,
             mp4: mp4_path,
-            decoder: if use_taehv {
-                "taehv"
-            } else {
-                "wan-vae"
-            },
-            text_cache: "off",
+            decoder: if use_taehv { "taehv" } else { "wan-vae" },
+            text_cache,
             timings,
         })
     }
@@ -800,6 +924,18 @@ impl WanPipeline {
                 "FASTVIDEO_TEACACHE and FASTVIDEO_WAN_SOL_CACHE both set".into(),
             ));
         }
+        // `encoder_hs` is `[negative, prompt]`; a single row is the prompt
+        // alone. The rows are split once, so every step passes the same
+        // tensors and the DiTs can keep their text K/V for the whole denoise.
+        let (cond_hs, uncond_hs) = if encoder_hs.shape[0] > 1 {
+            (
+                encoder_hs.narrow(0, 1, 1)?,
+                Some(encoder_hs.narrow(0, 0, 1)?),
+            )
+        } else {
+            (encoder_hs.clone(), None)
+        };
+        let _text_cache = TextCacheScope::begin(&[Some(&self.dit), self.dit_2.as_ref()]);
         let mut ctx = DenoiseCtx {
             high: &self.dit,
             low: self.dit_2.as_ref(),
@@ -811,6 +947,9 @@ impl WanPipeline {
             tea_cache,
             easy_cache,
             sol_tea_step: 0,
+            attn_clock: 0,
+            cond_hs,
+            uncond_hs,
         };
         if cfg.is_rcm {
             let sigma = cfg.rcm_sigma_max.unwrap_or(RCM_SIGMA_MAX_T2V);
@@ -961,6 +1100,34 @@ struct DenoiseCtx<'a> {
     tea_cache: TeaCache,
     easy_cache: Option<EasyCacheRuntime>,
     sol_tea_step: usize,
+    /// Transformer calls so far (the Sol-Attn step clock; see [`forwards_per_step`]).
+    attn_clock: usize,
+    /// The prompt row of the encoder states (the whole tensor when it has one row).
+    cond_hs: CudaTensor,
+    /// The negative row, when there is one.
+    uncond_hs: Option<CudaTensor>,
+}
+
+/// Text K/V caching on the denoising DiTs for one denoise
+/// ([`WanTransformer3D::begin_text_cache`]), ended on drop, errors included.
+struct TextCacheScope<'a>(Vec<&'a WanTransformer3D>);
+
+impl<'a> TextCacheScope<'a> {
+    fn begin(dits: &[Option<&'a WanTransformer3D>]) -> Self {
+        let dits: Vec<_> = dits.iter().flatten().copied().collect();
+        for d in &dits {
+            d.begin_text_cache();
+        }
+        Self(dits)
+    }
+}
+
+impl Drop for TextCacheScope<'_> {
+    fn drop(&mut self) {
+        for d in &self.0 {
+            d.end_text_cache();
+        }
+    }
 }
 
 /// Simple residual TeaCache with Wan2.1-1.3B poly rescale (upstream TeaCache4Wan2.1).
@@ -1037,18 +1204,9 @@ impl TeaCache {
         if prev.shape != latents.shape {
             return None;
         }
-        let Ok(lat_h) = latents.host_cow() else {
+        let Ok((num, den, _)) = super::sol_cache::abs_sums(latents, prev) else {
             return None;
         };
-        let Ok(prev_h) = prev.host_cow() else {
-            return None;
-        };
-        let mut num = 0.0f64;
-        let mut den = 0.0f64;
-        for (a, b) in lat_h.iter().zip(prev_h.iter()) {
-            num += (f64::from(*a) - f64::from(*b)).abs();
-            den += f64::from(*b).abs();
-        }
         let rel = num / (den + 1e-6);
         self.accumulated += self.poly_rescale(rel) as f32;
         self.step += 1;
@@ -1090,22 +1248,8 @@ struct EasyCacheRuntime {
     uncond_residual: Option<CudaTensor>,
 }
 
-fn mean_abs(t: &CudaTensor) -> TensorResult<f64> {
-    let host = t.host_cow()?;
-    let n = host.len().max(1) as f64;
-    Ok(host.iter().map(|v| f64::from(*v).abs()).sum::<f64>() / n)
-}
-
-fn mean_abs_delta(a: &CudaTensor, b: &CudaTensor) -> TensorResult<f64> {
-    let left = a.host_cow()?;
-    let right = b.host_cow()?;
-    let n = left.len().max(1) as f64;
-    let mut sum = 0.0;
-    for (x, y) in left.iter().zip(right.iter()) {
-        sum += (f64::from(*x) - f64::from(*y)).abs();
-    }
-    Ok(sum / n)
-}
+// Device reductions (two scalars back), host loops only off-device.
+use super::sol_cache::{mean_abs, mean_abs_delta};
 
 impl EasyCacheRuntime {
     fn from_env(num_steps: usize) -> Result<Option<Self>> {
@@ -1171,14 +1315,13 @@ fn dit_cfg_easy(
     t: f32,
 ) -> TensorResult<CudaTensor> {
     let latent_in = pack_dit_input(latents, ctx.i2v)?;
+    let clock = ctx.attn_clock;
+    ctx.attn_clock += forwards_per_step(ctx, t);
+    arm_attn(ctx, clock);
     let decision = {
         let easy = ctx.easy_cache.as_mut().expect("easycache");
         let step = easy.step;
         easy.step += 1;
-        ctx.high.arm_attn_step(step);
-        if let Some(low) = ctx.low {
-            low.arm_attn_step(step);
-        }
         let (change, norm) = if easy.state.needs_cond_signal(step) {
             (
                 mean_abs_delta(&latent_in, easy.previous_step_input.as_ref().expect("prev"))?,
@@ -1191,11 +1334,7 @@ fn dit_cfg_easy(
         easy.state.decide_cond(step, change, norm)
     };
     let rows = encoder_hs.shape[0];
-    let cond_hs = if rows > 1 {
-        encoder_hs.narrow(0, 1, 1)?
-    } else {
-        encoder_hs.clone()
-    };
+    let cond_hs = ctx.cond_hs.clone();
     let t1 = CudaTensor::from_vec(vec![t], vec![1])?;
     let (scale, cond) = {
         let (dit, scale) = pick_expert(ctx, t);
@@ -1241,8 +1380,9 @@ fn dit_cfg_easy(
         let easy = ctx.easy_cache.as_ref().expect("easycache");
         easy.state.uncond_compute(easy.uncond_residual.is_some())
     };
-    let uncond_hs = encoder_hs.narrow(0, 0, 1)?;
+    let uncond_hs = uncond_row(ctx)?;
     let uncond = if follow {
+        arm_attn(ctx, clock + 1);
         let out = {
             let (dit, _) = pick_expert(ctx, t);
             dit.forward_ctx(&latent_in, &t1, &uncond_hs, ctx.image)?
@@ -1263,6 +1403,32 @@ fn dit_cfg_easy(
     CudaTensor::lincomb(&[(1.0 - scale, &uncond), (scale, &cond)])
 }
 
+/// Transformer calls one denoise step makes in the reference (cond, then
+/// uncond under CFG): the Sol-Attn step clock counts these, not steps.
+fn forwards_per_step(ctx: &DenoiseCtx<'_>, t: f32) -> usize {
+    let (_, scale) = pick_expert(ctx, t);
+    if (scale - 1.0).abs() < 1e-6 || ctx.uncond_hs.is_none() {
+        1
+    } else {
+        2
+    }
+}
+
+/// Route the next forward(s) as transformer call `clock` of the denoise.
+fn arm_attn(ctx: &DenoiseCtx<'_>, clock: usize) {
+    ctx.high.arm_attn_step(clock);
+    if let Some(low) = ctx.low {
+        low.arm_attn_step(clock);
+    }
+}
+
+/// The negative-prompt row a CFG step needs.
+fn uncond_row(ctx: &DenoiseCtx<'_>) -> TensorResult<CudaTensor> {
+    ctx.uncond_hs.clone().ok_or_else(|| {
+        TensorError::Message("classifier-free guidance without negative embeddings".into())
+    })
+}
+
 fn dit_cfg(
     ctx: &mut DenoiseCtx<'_>,
     latents: &CudaTensor,
@@ -1280,10 +1446,12 @@ fn dit_cfg(
     if tea_on || a14b_on || attn_on {
         ctx.sol_tea_step += 1;
     }
-    ctx.high.arm_attn_step(tea_step);
-    if let Some(low) = ctx.low {
-        low.arm_attn_step(tea_step);
-    }
+    // The Sol-Attn dense-step guard counts transformer calls (the reference's
+    // per-forward step clock): cond is call `clock`, uncond `clock + 1`; a
+    // batched [uncond, cond] forward is routed as the cond call.
+    let clock = ctx.attn_clock;
+    ctx.attn_clock += forwards_per_step(ctx, t);
+    arm_attn(ctx, clock);
     if let Some(cached) = ctx.tea_cache.maybe_reuse(latents) {
         static TEA: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
         let n = TEA.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
@@ -1294,11 +1462,7 @@ fn dit_cfg(
     let latent_in = pack_dit_input(latents, ctx.i2v)?;
     // `encoder_hs` is `[negative, prompt]`; a single row is the prompt alone.
     let rows = encoder_hs.shape[0];
-    let cond_hs = if rows > 1 {
-        encoder_hs.narrow(0, 1, 1)?
-    } else {
-        encoder_hs.clone()
-    };
+    let cond_hs = ctx.cond_hs.clone();
     let t1 = CudaTensor::from_vec(vec![t], vec![1])?;
 
     let out = if (scale - 1.0).abs() < 1e-6 {
@@ -1324,7 +1488,7 @@ fn dit_cfg(
         // uncond + s·(cond − uncond)
         CudaTensor::lincomb(&[(1.0 - scale, &uncond), (scale, &cond)])?
     } else {
-        let uncond_hs = encoder_hs.narrow(0, 0, 1)?;
+        let uncond_hs = uncond_row(ctx)?;
         if tea_on {
             dit.arm_sol_teacache(true, tea_step);
         }
@@ -1338,6 +1502,7 @@ fn dit_cfg(
         if a14b_on {
             dit.arm_a14b_cache(false, tea_step);
         }
+        arm_attn(ctx, clock + 1);
         let uncond = dit.forward_ctx(&latent_in, &t1, &uncond_hs, ctx.image)?;
         CudaTensor::lincomb(&[(1.0 - scale, &uncond), (scale, &cond)])?
     };

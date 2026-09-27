@@ -65,6 +65,13 @@ pub enum Stage {
         /// default to TAEHV when its weights are found): FASTVIDEO_WAN_VAE=full.
         #[arg(long)]
         full_vae: bool,
+        /// UMT5 prompt cache directory. Default: `text-cache` next to the clip
+        /// directory. A prompt seen before costs a file read.
+        #[arg(long)]
+        text_cache: Option<PathBuf>,
+        /// Encode every prompt (no disk cache).
+        #[arg(long)]
+        no_text_cache: bool,
         /// One untimed generation first (recorded as `cold_generation`).
         #[arg(long)]
         warm: bool,
@@ -94,6 +101,8 @@ pub fn run(report: &mut Report, stage: &Stage) -> StageResult<()> {
             clip_dir,
             warm,
             full_vae,
+            text_cache,
+            no_text_cache,
             device,
         } => {
             if *full_vae {
@@ -131,6 +140,14 @@ pub fn run(report: &mut Report, stage: &Stage) -> StageResult<()> {
                 dmd_steps: dmd.then(|| dmd_steps(*steps)),
                 tokenizer_path: Some(tokenizer.to_string_lossy().into_owned()),
                 fps: *fps,
+                text_cache: (!*no_text_cache).then(|| {
+                    text_cache.clone().unwrap_or_else(|| {
+                        clip_dir
+                            .parent()
+                            .unwrap_or(Path::new("."))
+                            .join("text-cache")
+                    })
+                }),
                 ..GenerateConfig::default()
             };
             gen(
@@ -214,6 +231,9 @@ fn gen(report: &mut Report, a: &GenArgs<'_>) -> StageResult<()> {
             "steps": a.base.num_inference_steps, "dmd": a.base.is_dmd, "dmd_steps": a.base.dmd_steps,
             "guidance": a.base.guidance_scale, "flow_shift": a.base.flow_shift, "warm": a.warm,
             "vsa": fastvideo_cudarc::wan::nn::vsa_enabled(),
+            "text_cache": a.base.text_cache,
+            "vae": std::env::var("FASTVIDEO_WAN_VAE").unwrap_or_else(|_| "auto".into()),
+            "cond_cache": std::env::var("FASTVIDEO_WAN_COND_CACHE").map_or(true, |v| !matches!(v.trim(), "0" | "false" | "off")),
             "prompt_set": a.multi.then(|| a.set.iter().map(|p| json!({"name": p.name, "seed": p.seed})).collect::<Vec<_>>()),
         }),
     );

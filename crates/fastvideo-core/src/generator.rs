@@ -253,6 +253,11 @@ impl VideoGenerator {
                     .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
                     .unwrap_or(false),
             fps: self.sampling.fps,
+            text_cache: if self.tiny {
+                None
+            } else {
+                wan_text_cache_dir()
+            },
         };
         if self.tiny {
             gen_cfg.guidance_scale = 1.0;
@@ -371,6 +376,19 @@ impl VideoGenerator {
                     .map(|f| !f.is_empty())
                     .unwrap_or(false)
         })
+    }
+}
+
+/// The Wan UMT5 prompt cache: `FASTVIDEO_WAN_TEXT_CACHE=<dir>`, `off` (or
+/// `0`) to encode every request, default `~/.cache/fastvideo/wan-text`.
+fn wan_text_cache_dir() -> Option<PathBuf> {
+    match std::env::var("FASTVIDEO_WAN_TEXT_CACHE") {
+        Ok(v) if matches!(v.trim(), "off" | "0" | "false" | "none") => None,
+        Ok(v) if !v.trim().is_empty() => Some(PathBuf::from(v.trim())),
+        _ => std::env::var_os("XDG_CACHE_HOME")
+            .map(PathBuf::from)
+            .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".cache")))
+            .map(|c| c.join("fastvideo").join("wan-text")),
     }
 }
 

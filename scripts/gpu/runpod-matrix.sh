@@ -585,6 +585,30 @@ case "$FAMILY" in
     compare_cells wan13-dmd-fullvae wan13-dmd
     gate_cells wan13-dmd-fullvae wan13-dmd lossy
     compare_cells wan13-dmd-fullvae-chunk1 wan13-dmd-fullvae
+    # Exact switches off: text K/V, text and time embeddings recomputed every
+    # forward, every prompt encoded. Must be byte-identical to the baseline
+    # (compare --off-identity; benchmark.json frames_sha256).
+    gated_cell wan13-dmd-nocache fastwan21-1.3b \
+      env FASTVIDEO_WAN_COND_CACHE=0 \
+      "$BIN" --mode fast --vsa wan gen "${wan_common[@]}" --no-text-cache \
+        --clip-dir "$RUNS/wan13-dmd-nocache/frames"
+    compare_cells wan13-dmd wan13-dmd-nocache --off-identity
+    gate_cells wan13-dmd wan13-dmd-nocache exact
+    # Lossy arms, never default; LPIPS against the baseline.
+    # Sol-Attn on 1.3B (tau 1.0, layer 0 dense, Morton3D; replaces VSA).
+    gated_cell wan13-dmd-sol fastwan21-1.3b \
+      env FASTVIDEO_WAN_SOL_ATTN=1 \
+      "$BIN" --mode fast --vsa wan gen "${wan_common[@]}" \
+        --clip-dir "$RUNS/wan13-dmd-sol/frames"
+    # TeaCache4Wan2.1 1.3B (poly-rescaled rel-L1 on the latents, thresh 0.08).
+    gated_cell wan13-dmd-teacache fastwan21-1.3b \
+      env FASTVIDEO_TEACACHE=1 \
+      "$BIN" --mode fast --vsa wan gen "${wan_common[@]}" \
+        --clip-dir "$RUNS/wan13-dmd-teacache/frames"
+    for arm in sol teacache; do
+      compare_cells wan13-dmd "wan13-dmd-$arm"
+      gate_cells wan13-dmd "wan13-dmd-$arm" lossy
+    done
     ;;
   b200)
     # Warm B200 parity: H3 / FastH3 / LTX only. Official VAE stays the

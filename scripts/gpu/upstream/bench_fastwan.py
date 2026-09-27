@@ -55,7 +55,7 @@ def stage_times(li) -> dict:
 
 
 def pick(stages: dict, *needles: str) -> float | None:
-    vals = [v for k, v in stages.items() if v and any(n in k.lower() for n in needles)]
+    vals = [v for k, v in stages.items() if v and any(n in k.lower().replace("_", "") for n in needles)]
     return sum(vals) if vals else None
 
 
@@ -135,7 +135,7 @@ def main() -> int:
                     "denoise_s": pick(st, "denois"),
                     "decode_s": pick(st, "decodingstage"),
                     "postprocess_s": pick(st, "postdecode"),
-                    "text_s": pick(st, "textencod", "text_encod"),
+                    "text_s": pick(st, "textencod", "promptencod"),
                     "save_s": pick(st, "save"),
                     "steps": getattr(sp, "num_inference_steps", None),
                     "guidance_scale": getattr(sp, "guidance_scale", None),
