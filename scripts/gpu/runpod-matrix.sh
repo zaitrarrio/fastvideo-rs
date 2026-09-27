@@ -367,6 +367,70 @@ case "$FAMILY" in
     sub rtx5090 ${FV_HEADLINE_ROUTES:-h3-768p-fullopt ltx25-4k5s-sol}
     sub precision ${FV_HEADLINE_PRECISION:-ltx25-4k5s-sol-bf16act-fp8}
     ;;
+  cold)
+    # Timings measured the way the references measure them, where the warm
+    # cells do not. LTX-2.5: sol-engine times one request end to end in a fresh
+    # process (--offload cpu, weights loading lazily inside the stages), so
+    # these cells run once, without --warm, and always encode the prompt;
+    # compare load_s + total_s with its e2e. They run first, with the page
+    # cache dropped where the container allows it, so load reads the volume.
+    # H3: FastVideo times warm requests but encodes the prompt each time, so
+    # the fresh-prompt cells keep --warm and pass --no-text-cache.
+    drop_page_cache() {
+      sync
+      if echo 3 >/proc/sys/vm/drop_caches 2>/dev/null; then
+        log "cold: page cache dropped before $1"
+      else
+        log "cold: page cache NOT dropped before $1 (no permission); load may read cached pages"
+      fi
+    }
+    for wl in 4k5s 1080p20s; do
+      for mode in cpu resident; do
+        name="ltx25-$wl-sol-cold-$mode"
+        [[ -n "${FV_CELLS:-}" && " $FV_CELLS " != *" $name "* ]] && continue
+        envs=(env -u FASTVIDEO_LTX_OFFLOAD)
+        [[ "$mode" == cpu ]] && envs=(env FASTVIDEO_LTX_OFFLOAD=cpu)
+        drop_page_cache "$name"
+        gated_cell "$name" ltx25-two-stage \
+          "${envs[@]}" "$BIN" --mode fast ltx2 gen --model-version 2.5 \
+            --weights "$W/ltx25" --dit "$W/ltx25" --workload "$wl" \
+            --prompt "$PROMPT" --seed "$SEED" --two-stage --text streamed --no-text-cache \
+            --clip "$RUNS/$name/frames"
+        # The 4K / 20 s PNGs are GBs; the reports keep the numbers.
+        rm -rf "$RUNS/$name/frames"/*.png
+      done
+    done
+    h3_fresh=(
+      --prompt "$PROMPT"
+      --seconds 5
+      --seed "$SEED"
+      --text-encoder auto
+      --no-text-cache
+      --text-weights "$W/h3-base"
+      --warm
+    )
+    for res in 768p 480p; do
+      geo=()
+      [[ "$res" == 480p ]] && geo=(--height 480 --width 832)
+      gated_cell "fasth3-8step-$res-fresh" fasth3-8step \
+        "$BIN" --mode fast h3 gen --weights "$W/h3-8step" --h3-recipe 8step "${geo[@]}" \
+          --adaln-cache "$RUNS/fasth3-8step-$res-adaln.cache" \
+          --clip-dir "$RUNS/fasth3-8step-$res-fresh/frames" "${h3_fresh[@]}"
+      gated_cell "fasth3-4step-vsa-$res-fresh" fasth3-4step-vsa \
+        "$BIN" --mode fast h3 gen --weights "$W/h3-base" --h3-recipe 4step-vsa "${geo[@]}" \
+          --adaln-cache "$RUNS/fasth3-4step-vsa-$res-adaln.cache" \
+          --clip-dir "$RUNS/fasth3-4step-vsa-$res-fresh/frames" "${h3_fresh[@]}"
+    done
+    gated_cell sol-h3-fresh sol-h3 \
+      "$BIN" --mode fast h3 gen --weights "$W/h3-base" --h3-recipe sol-h3 \
+        --adaln-cache "$RUNS/sol-h3-adaln.cache" \
+        --clip-dir "$RUNS/sol-h3-fresh/frames" "${h3_fresh[@]}"
+    gated_cell h3-768p-fullopt-fresh h3-base \
+      env FASTVIDEO_H3_SOL_CACHE=teacache \
+      "$BIN" --mode fast h3 gen --weights "$W/h3-base" --h3-recipe sol-h3-rtx \
+        --adaln-cache "$RUNS/h3-768p-adaln.cache" \
+        --clip-dir "$RUNS/h3-768p-fullopt-fresh/frames" "${h3_fresh[@]}"
+    ;;
   h3)
     run_cell fasth3-8step-warm \
       "$BIN" --mode fast h3 gen \
