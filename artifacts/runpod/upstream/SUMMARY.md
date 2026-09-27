@@ -119,6 +119,27 @@ stage-2 video self-attention to dense (the upstream README's "Dense Stage 2" col
 Sol stage 2 is **1.97x** faster than dense at 4K 5 s (79.1 vs 155.6 s) and **1.98x** at 1080p 20 s (73.7 vs 146.1 s).
 It saves 60 s of e2e at 4K and 71 s at 1080p 20 s. The two dense runs agree within 1 s on stage 2.
 
+## FastWan2.1-T2V-1.3B DMD (3 steps), 832x480, 81 frames at 16 fps
+
+`scripts/gpu/upstream/bench_fastwan.py` (cell `fv-fastwan13-dmd`, `scripts/gpu/upstream/pod.sh`) follows FastVideo's
+`examples/inference/basic/basic_dmd.py`: `FASTVIDEO_ATTENTION_BACKEND=VIDEO_SPARSE_ATTN`, `VSA_sparsity=0.8`,
+the checkpoint's own `SamplingParam` (DMD 1000/757/522, guidance 1), `save_video=True`. It builds the generator,
+runs one excluded warm-up at seed 999, then each of the 5 prompts of `scripts/gpu/prompts-eval.json` 3 times
+at the prompt's seed. Each prompt's number is the median of its 3 runs, and the cell's number is the median
+over prompts. There are two deviations, both recorded in `result.json`. The text encoder stays on the GPU,
+where the example offloads it for cards under 32 GB. VSA runs the Triton kernel (`FASTVIDEO_VSA_SM100A=0`),
+because the sm100a build is datacenter-only. The volume's copy of the checkpoint has no `scheduler/`, so the
+bench links the tree under the Hub name and writes the Hub's 1 KB `scheduler_config.json`; the DMD sampler
+does not read it. Image `upstream-fastvideo:sha-78729d6`, runner `a535bf3`.
+
+| warm request (median) | text | denoise | decode | post-process | VideoSave | peak torch MiB | peak smi MiB | load | run |
+|---|---|---|---|---|---|---|---|---|---|
+| **7.63** | 0.09 | 3.48 | 3.43 | 0.08 | 0.40 | 30 246 | 34 388 | 51.2 | a535bf3-09270324 |
+
+Per prompt, the median wall was 7.48, 7.40, 8.28, 8.72 and 7.63 s. The warm-up ran 14.96 s (denoise 10.35 s,
+the Triton compile). Our number on the same card is in `docs/ports/wan.md`: 2.32 s warm, text + denoise +
+decode through the mp4.
+
 ## Failures and fixes
 
 | cell / step | run | cause | status |

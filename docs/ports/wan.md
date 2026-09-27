@@ -3,6 +3,113 @@
 Code: `crates/fastvideo-cudarc/src/wan/`. Reference: FastVideo
 `fastvideo/models/wan/transformer.py` (DiT), `layers/layernorm.py`.
 
+## Serving path: harness, TAEHV, caches, sparse routes
+
+### Harness
+
+`fv-gpucheck wan gen` runs a prompt set through one resident `WanPipeline`
+(UMT5, DiT and decoder on the device) and writes `benchmark.json` beside the
+clip directory, as the H3 and LTX-2 cells do. `--warm` runs one untimed
+generation first. The timed span (`total_s`) is text + denoise + decode
+through a finished mp4. PNG frames for `compare-clips` are written after the
+mp4 and are not in it. `frames_sha256` (SHA-256 over the PNG frames) is the
+byte-identity check. `peak_memory_mb` is device memory in use, weights
+included. `WanPipeline::generate_to` is `generate()` with timings: the decode
+streams each chunk through the H3/LTX frame drain into `wan/writer.rs`'s
+`VideoWriter`.
+
+Matrix: `runpod-matrix.sh wan`. FastWan 1.3B cells run on
+`fv-weights-h3-ltx-hy`; 14B, TI2V-5B and SF-Wan cells run on
+`fv-weights-b200-us`. Upstream: `scripts/gpu/upstream/bench_fastwan.py`
+(FastVideo `basic_dmd.py` recipe: VSA 0.8, text encoder on the GPU, Triton
+VSA on sm_120; one excluded warm-up, then the median of 3 per prompt and the
+median over prompts), run by the `pod.sh` cells `fv-fastwan13-dmd`,
+`fv-wan21-14b`, `fv-wan22-5b` and `fv-sfwan13`.
+
+### Defaults and switches
+
+| What | Default | Opt-out / switch |
+|---|---|---|
+| Decoder for distilled requests (DMD, rCM, causal DMD) | TAEHV (`taew2_1`) when found (`FASTVIDEO_TAEHV_WEIGHTS`, `FASTVIDEO_TAE_DIR`, `<weights>/taehv`, `<weights>/../taehv`, `~/.cache/fastvideo/taehv`; fetch with `scripts/gpu/fetch_taehv.sh`) | `FASTVIDEO_WAN_VAE=full` (`wan gen --full-vae`); `taehv` forces it |
+| Full Wan VAE latent frames per pass | 2 | `FASTVIDEO_VAE_CHUNK=1` |
+| Text K/V, text embedding, time modulation | computed once (per denoise, per timestep vector) | `FASTVIDEO_WAN_COND_CACHE=0` |
+| UMT5 prompt disk cache | `wan gen`: `<clip dir>/../text-cache`; CLI: `~/.cache/fastvideo/wan-text` | `--no-text-cache`, `FASTVIDEO_WAN_TEXT_CACHE=off` |
+| Negative prompt | encoded only when a sampler reads it (not for DMD, rCM or guidance 1) | |
+| Sol-Attn | off | `FASTVIDEO_WAN_SOL_ATTN=1` (14B: 10 dense transformer calls and layer 0; 1.3B: layer 0 only) |
+| TeaCache / Sol caches | off | `FASTVIDEO_TEACACHE=1`, `FASTVIDEO_WAN_SOL_CACHE=teacache\|easycache\|taylorseer` |
+
+Other fixes in the same pass:
+
+- A model id containing `vsa` no longer sets `FASTVIDEO_SDPA=sparse`. That
+  setting sent cross-attention to the host-only `attn::block_sparse_sdpa`.
+  `FASTVIDEO_VSA=1` alone enables the device VSA kernels, in self-attention
+  only.
+- The TeaCache, Sol TeaCache, EasyCache and A14B decision metrics reduce on
+  the device (`ops::abs_diff_sums_device`); only two scalars come back.
+- The Sol-Attn dense-step guard counts transformer calls (cond, then uncond),
+  as the reference's per-forward step clock does. It no longer counts denoise
+  steps, which gave 14B twice the intended dense steps.
+- The Morton3D reorder is a device row gather over an index buffer uploaded
+  once per grid. Before, each call gathered q/k/v/out through `host_cow`.
+- `tokenizer.json` (16 MB) is parsed and hashed once per process. Before, it
+  cost ~0.45 s on every request.
+
+### FastWan 1.3B: before and after
+
+DMD 3 steps (1000/757/522), 480x832, 81 frames, VSA 0.8, one RTX PRO 6000
+(sm_120). Each cell is warm, medians over the 5 prompts of `prompts-eval.json`.
+Times are in seconds. LPIPS(alex) is the median over prompts of each clip's
+mean against the reference cell's clip.
+
+| Cell (run) | Text | Denoise | Decode | Total | Peak MiB | vs | LPIPS | PSNR dB |
+|---|---|---|---|---|---|---|---|---|
+| **Baseline**: pre-change code, Wan VAE chunk 1 (`425784e-09270342` `wan13-dmd`) | 1.28 | 2.49 | 3.16 | **6.95** | 23 908 | | | |
+| Dense attention, pre-change (`wan13-dmd-dense`) | 1.25 | 3.29 | 3.16 | 7.71 | 23 876 | baseline | 0.539 | 12.3 |
+| After this pass, f32 activations (`35607a6-09270404` `wan13-dmd`: TAEHV, caches) | 0.50 | 2.50 | 0.34 | **3.35** | 23 044 | full VAE | 0.033 | 32.8 |
+| same, full VAE chunk 1 (`wan13-dmd-fullvae-chunk1`) | 0.45 | 2.50 | 3.14 | 6.11 | 24 004 | | byte-identical to the baseline's frames | |
+| same, full VAE chunk 2 (`wan13-dmd-fullvae`) | 0.52 | 2.50 | 2.97 | 6.05 | 29 540 | chunk 1 | 0.000 | 61.4 |
+| same, caches off (`wan13-dmd-nocache`) | 0.49 | 2.50 | 0.34 | 3.33 | 23 428 | cached | byte-identical (5/5 sha) | |
+| **Final** with the bf16 DiT kernels merged (`d18eae2-09270447` `wan13-dmd`) | 0.04 | 1.96 | 0.31 | **2.32** | 23 044 | | | |
+| final, caches off (`wan13-dmd-nocache`) | 0.06 | 1.96 | 0.31 | 2.34 | 23 044 | final | byte-identical (5/5 sha) | |
+| final, full VAE (`wan13-dmd-fullvae`) | 0.04 | 1.96 | 2.92 | 4.93 | 29 700 | final | TAEHV vs VAE 0.032 | 32.8 |
+| final + Sol-Attn 1.3B (`wan13-dmd-sol`, lossy) | 0.04 | 1.80 | 0.31 | 2.17 | 23 140 | final | 0.476 | 13.1 |
+| final + TeaCache 1.3B (`wan13-dmd-teacache`, lossy) | 0.04 | 1.96 | 0.31 | 2.32 | 23 428 | final | 0 (never reuses in 3 steps) | |
+| final, dense attention (`wan13-dmd-dense`) | 0.04 | 2.64 | 0.30 | 2.99 | 23 108 | final | 0.547 | 12.1 |
+| **Upstream FastVideo** (`e90be598`, `a535bf3-09270324` `fv-fastwan13-dmd`) | 0.09 | 3.48 | 3.43 (+0.08 post, +0.40 mp4) | **7.63** | 30 246 (torch) / 34 388 (smi) | | | |
+
+What each change bought (same process state, same run unless noted):
+
+- **TAEHV by default**: the decode drops from 2.97–3.14 s to 0.31–0.34 s. The
+  frames stay close to the full VAE: LPIPS 0.03, PSNR 32.8 dB. They are
+  softer, with sharpness ratio 0.73 on `h3-demo` and 1.02 median. The gate
+  fails that one prompt's sharpness, and its performance check uses
+  `denoise_s`, which TAEHV does not change. The full VAE stays one switch away.
+- **Full-VAE chunk 2**: decode 3.14 → 2.97 s (−5%). Peak goes up 5.5 GiB. The
+  frames are not byte-identical to chunk 1 (PSNR 61 dB, LPIPS 0.000).
+- **Streaming writer**: the mp4 is finished inside the decode (the upstream
+  column adds 0.4 s of VideoSave after its decode). It lands in the harness
+  commit, so the baseline already has it.
+- **Text**: skipping the unused negative prompt took text from 1.28 to
+  0.50 s. Parsing `tokenizer.json` once took it to 0.04 s. A disk-cache hit
+  costs 0.009 s, against 0.02–0.26 s to encode (`h3-demo`, the only prompt
+  seen twice per cell, is the hit).
+- **Invariant caches** (text K/V, text and time embeddings): byte-identical,
+  and no measurable denoise change at this shape (1.96 vs 1.96 s). The
+  cross-attention K/V over 512 text tokens is small next to 32 760-token
+  self-attention.
+- **Sol-Attn on 1.3B** (lossy, opt-in): denoise −8%. LPIPS 0.48 against the
+  VSA baseline is about the same distance as dense vs VSA (0.55): a different
+  sparse approximation of a VSA-trained student gives a different sample.
+  Not a default.
+- **TeaCache (1.3B poly, threshold 0.08)**: a 3-step DMD schedule gives it no
+  step to skip (it always computes the first step, and the accumulator
+  crosses the threshold). The output is byte-identical to the baseline.
+
+Against upstream FastVideo on the same card, the final is 2.32 s vs 7.63 s
+(3.3x). Denoise is 1.96 vs 3.48 s, decode + mp4 is 0.31 vs 3.9 s (their
+full VAE, then VideoSave), and text is 0.04 vs 0.09 s. Upstream's torch peak
+is 30.2 GiB, ours 22.5 GiB in use.
+
 ## DiT kernels (bf16 activations, fusion, FP8, block-causal attention)
 
 ### bf16 activations (default)

@@ -259,12 +259,25 @@ gate_cells() {
   local base="$1" cand="$2" kind="${3:-lossy}" off="${4:-}" tag="$1--$2" dir="$RUNS/gate" f
   local cmp=() offs=()
   mkdir -p "$dir"
-  for f in "$RUNS/compare/compare-clips-$tag.json" "$RUNS/compare/compare-clips-$tag"-*.json; do
-    [[ -f "$f" ]] && cmp+=(--compare "$f")
+  # A prompt set's reports are <tag>-<prompt>.json, one per prompt directory
+  # of the candidate's frames. Globbing <tag>-* instead would also take the
+  # reports of a longer-named cell (<cand>-taeh3 against the same baseline).
+  compare_reports() {
+    local t="$1" c="$2" p
+    [[ -f "$RUNS/compare/compare-clips-$t.json" ]] && echo "$RUNS/compare/compare-clips-$t.json"
+    for p in "$RUNS/$c/frames"/*/; do
+      p="$(basename "$p")"
+      [[ "$p" == cold || "$p" == warmup || "$p" == "*" ]] && continue
+      [[ -f "$RUNS/compare/compare-clips-$t-$p.json" ]] && echo "$RUNS/compare/compare-clips-$t-$p.json"
+    done
+    return 0
+  }
+  for f in $(compare_reports "$tag" "$cand"); do
+    cmp+=(--compare "$f")
   done
   if [[ -n "$off" ]]; then
-    for f in "$RUNS/compare/compare-clips-$base--$off.json" "$RUNS/compare/compare-clips-$base--$off"-*.json; do
-      [[ -f "$f" ]] && offs+=(--off-compare "$f")
+    for f in $(compare_reports "$base--$off" "$off"); do
+      offs+=(--off-compare "$f")
     done
   fi
   local rc
@@ -741,14 +754,10 @@ case "$FAMILY" in
         --steps 50 --guidance 5.0 --flow-shift 5.0 --height 704 --width 1280 --num-frames 121 --fps 24 \
         "${one[@]}" --clip-dir "$RUNS/wan5b-easycache/frames"
     compare_cells wan5b wan5b-easycache
-    # SF-Wan: causal DMD; TAEHV by default (distilled), the full VAE opt-out.
-    gated_cell sfwan13 sfwan21-1.3b \
-      "$BIN" --mode fast wan gen --weights "$W/sfwan21-1.3b" --preset sf_wan_t2v_1_3b "${one[@]}" --warm \
-        --clip-dir "$RUNS/sfwan13/frames"
-    gated_cell sfwan13-fullvae sfwan21-1.3b \
-      "$BIN" --mode fast wan gen --weights "$W/sfwan21-1.3b" --preset sf_wan_t2v_1_3b "${one[@]}" --warm \
-        --full-vae --clip-dir "$RUNS/sfwan13-fullvae/frames"
-    compare_cells sfwan13-fullvae sfwan13
+    # SF-Wan 81 frames: TAEHV is the distilled default (sfwan13-81f-flash);
+    # the full Wan VAE opt-out on the same recipe, for the decoder A/B.
+    sf_arm sfwan13-81f-fullvae 81 FASTVIDEO_WAN_VAE=full
+    compare_cells sfwan13-81f-fullvae sfwan13-81f-flash
     ;;
   b200)
     # Warm B200 parity: H3 / FastH3 / LTX only. Official VAE stays the

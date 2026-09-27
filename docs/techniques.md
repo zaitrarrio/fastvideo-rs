@@ -354,6 +354,73 @@ Cells: FastH3 8-step 768p (MXFP8 default), FastH3 4-step VSA 768p, the H3
 fullopt route (`sol-h3-rtx` + TeaCache, 480p) and LTX-2.5 two-stage 512p with
 Sol stage 2 (`-prof`: `ltx2/ltx25_distill_sol`).
 
+### Results (RTX PRO 6000, 2026-09-27)
+
+Baseline: the runtime image of `a73173e` (main just before this layer).
+Candidate: `89e1fba` (H3 cells), `5ea271c` (LTX rerun). Single prompt,
+seed 1024, warm process; `denoise_s` from `benchmark.json`.
+
+| cell | -env vs -base | -prof vs -base | denoise s (base / env / prof) |
+|---|---|---|---|
+| FastH3 8-step 768p (MXFP8) | identical, 124/124 frames | identical | 46.21 / 46.36 / 46.30 |
+| FastH3 4-step VSA 768p | identical | identical | 19.59 / 19.54 / 19.46 |
+| H3 fullopt 480p (`sol-h3-rtx` + TeaCache) | identical | identical (`h3/rtx5090_fullopt` + `FASTVIDEO_H3_QUANT=mxfp8`) | 25.75 / 25.68 / 25.67 |
+| LTX-2.5 two-stage 512p, Sol stage 2 | identical, 121/121 | identical (`ltx2/ltx25_distill_sol`) | 4.259 / 4.257 / 4.250 |
+
+"Identical" is `compare-clips --off-identity`: `max_abs_diff_uint8 = 0`
+on every frame. Timings agree within 0.4%.
+
+**The LTX-2 conditioning cache is not transparent.** The first LTX run
+shared the default text cache between arms: the `-base` process missed and
+stored its prompt, the `-env` and `-prof` processes hit that entry, and
+every frame of both differed from `-base` (max 238 / 255), with a 14%
+slower denoise (5.44 s against 4.78 s). With every arm encoding its own
+prompt (`--no-text-cache`, as the family now runs) the three are byte for
+byte the same. `ltx2/text_cache.rs` stores the connector outputs as f32 on
+the host, and a hit feeds those to the DiT where a miss passes the device
+tensors, which is the likely cause (not yet isolated: a process never hits
+an entry it stored itself). The technique layer does not touch that code.
+
+### FastH3 8-step technique arms (`h3arms`, RTX PRO 6000, 2026-09-27)
+
+`2c637f7`, five-prompt set (`FV_PROMPTS=5`), medians over the prompts, warm
+process, LPIPS(alex) on sol-engine's frame selection, gate
+`scripts/gpu/gate-policy.toml` (`lossy`). Quality is against plain FastH3
+8-step at the same resolution, from the same run. The 768p baseline's
+`total_s` (147.9 s) includes 94.6 s of first-time streamed prompt encoding;
+without it, it is 53.6 s, the arms' conditions (every later cell hits the
+text cache).
+
+| arm | denoise s | total s | LPIPS | PSNR dB | sharpness | gate |
+|---|---|---|---|---|---|---|
+| 768p FastH3 8-step (baseline) | 46.52 | 53.6 | — | — | — | — |
+| 768p + Sol (dense nowhere) | 40.65 | 48.16 | 0.701 | 10.4 | 0.63 | fail |
+| 768p + TeaCache (steps 3-4 reused) | 36.01 | 43.74 | 0.383 | 14.1 | 0.97 | pass |
+| 768p + Sol + TeaCache | 30.78 | 38.20 | 0.706 | 10.4 | 0.65 | fail |
+| 480p FastH3 8-step (baseline) | 16.48 | 19.95 | — | — | — | — |
+| 480p + Sol | 13.30 | 16.71 | 0.670 | 10.7 | 0.61 | fail |
+| 480p + TeaCache | 12.50 | 15.89 | 0.434 | 13.3 | 0.98 | fail (one prompt's sharpness 0.944 < 0.95) |
+| 480p + Sol + TeaCache | 10.21 | 13.61 | 0.673 | 10.7 | 0.60 | fail |
+
+TAEH3 decode at 480p, against its own twin (the decoder's cost alone) and
+against the plain baseline:
+
+| arm | denoise s | total s | vs twin: LPIPS / PSNR / sharpness | vs baseline: LPIPS / PSNR / sharpness |
+|---|---|---|---|---|
+| Sol + TAEH3 | 13.22 | 14.28 | 0.149 / 27.9 / 0.93 | 0.669 / 10.7 / 0.56 |
+| TeaCache + TAEH3 | 12.49 | 13.93 | 0.125 / 25.2 / 0.84 | 0.453 / 13.5 / 0.83 |
+| Sol + TeaCache + TAEH3 | 10.03 | 11.15 | 0.145 / 27.6 / 0.93 | 0.672 / 10.7 / 0.55 |
+| FastH3 4-step VSA 480p | 7.53 | 10.92 | — | — |
+| FastH3 4-step VSA 480p + TAEH3 | 7.50 | 8.72 | 0.123 / 26.3 / 0.87 (twin = baseline) | |
+
+Every TeaCache run reused exactly steps 3 and 4 (rel-L1 of the block-0
+modulated input 0.08 per step, accumulator 0.16 against the 1.0 threshold).
+Sol with no dense step or block is not viable on the VSA-distilled 8-step
+checkpoint (LPIPS 0.67-0.71); TeaCache on the middle two steps passes the
+768p gate at a 23% denoise saving but moves the clip visibly (LPIPS 0.38).
+TAEH3 fails the gate's sharpness floor everywhere (0.84-0.93 against its
+twin) and saves decode time only (`total_s` -2.2 to -2.5 s at 480p).
+
 ## Adding a technique
 
 1. A parameter struct in `techniques/methods.rs` implementing `Technique`
