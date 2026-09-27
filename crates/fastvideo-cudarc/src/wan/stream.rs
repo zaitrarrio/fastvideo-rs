@@ -45,6 +45,7 @@ use rand::{Rng, SeedableRng};
 use rand_distr::StandardNormal;
 
 use super::causal::{CausalKvCache, KvSpec};
+use crate::hooks::{Hooks, Stage};
 use super::pipeline::{
     causal_noise, frames_to_rgb8, GenerateConfig, PipelineError, Result, WanPipeline,
 };
@@ -383,6 +384,18 @@ impl<'p> CausalRollout<'p> {
 
     /// Generate, decode and return the next block.
     pub fn next_block(&mut self) -> Result<StreamBlock> {
+        self.next_block_with_hooks(Hooks::NONE)
+    }
+
+    /// [`Self::next_block`] under the pipeline hooks (serve E1): a
+    /// [`Stage::Denoise`] step event after each Self-Forcing step (with the
+    /// block index; `total` is the steps of one block) and a
+    /// [`Stage::VideoDecode`] frames event (cumulative since the last reset)
+    /// after the decode, the cancel token checked at each. A cancelled block
+    /// leaves the stream at the same block: the next call generates it again
+    /// (its cache slots are overwritten in place), or [`Self::reset`].
+    pub fn next_block_with_hooks(&mut self, hooks: Hooks<'_>) -> Result<StreamBlock> {
+        hooks.check()?;
         let t_block = Instant::now();
         let dit = self.pipe.transformer();
         let tae = self
@@ -422,6 +435,9 @@ impl<'p> CausalRollout<'p> {
             } else {
                 x0
             };
+            if !hooks.is_none() {
+                hooks.step(Stage::Denoise, i + 1, steps, Some(self.block))?;
+            }
         }
         super::device::synchronize().map_err(|e| err(e.to_string()))?;
         let denoise_s = t_block.elapsed().as_secs_f64();
@@ -445,6 +461,9 @@ impl<'p> CausalRollout<'p> {
             None
         };
         let rgb_s = t.elapsed().as_secs_f64();
+        // The decoder state has moved on: this block is delivered whatever
+        // the token says, and the next call's check sees a cancel.
+        let _ = hooks.frames(self.tae_state.emitted());
         let index = self.block;
         self.block += 1;
         Ok(StreamBlock {

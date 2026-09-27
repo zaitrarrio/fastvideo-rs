@@ -389,6 +389,7 @@ fn one_run(
     let mut switch_info = None;
     let mut mem_first_full = None;
     let mut mem_max = 0u64;
+    let mut mems: Vec<f64> = Vec::new();
     let t_run = Instant::now();
     let mut steady_from: Option<(Instant, usize)> = None;
     let mut count = 0usize;
@@ -413,6 +414,7 @@ fn one_run(
         count += 1;
         if let Some(m) = mem {
             mem_max = mem_max.max(m);
+            mems.push(m as f64);
         }
         let kv_now = ro.kv_bytes();
         blocks.push(json!([b.index, b.num_frames(), tm.denoise_s, tm.context_s, tm.decode_s, tm.rgb_s, tm.total_s, mem, kv_now >> 20]));
@@ -456,12 +458,16 @@ fn one_run(
         "per_block": blocks,
     });
     report.note(format!("run/{}", r.name), summary);
-    if let Some(m0) = mem_first_full {
+    // Settled device memory after the window filled against the end of the
+    // run (medians, so one allocator high-water mark does not count).
+    if mem_first_full.is_some() && mems.len() >= 48 {
+        let base = pct(&mut mems[8..28].to_vec(), 0.5);
+        let end = pct(&mut mems[mems.len() - 20..].to_vec(), 0.5);
         report.check(
             format!("run/{}/no_device_memory_growth", r.name),
-            mem_max <= m0 + 512,
-            json!({"at_block7_mib": m0, "max_mib": mem_max}),
-            json!({"growth_mib_max": 512}),
+            end <= base + 256.0,
+            json!({"settled_mib": base, "end_mib": end, "transient_max_mib": mem_max}),
+            json!({"growth_mib_max": 256}),
         )?;
     }
     report.check(
