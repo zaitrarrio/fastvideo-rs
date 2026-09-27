@@ -1409,7 +1409,10 @@ case "$FAMILY" in
   ltxoffload)
     # FASTVIDEO_LTX_OFFLOAD=cpu (sol-engine's BF16 RTX 5090 `--offload cpu`
     # placement) against the default run, LTX-2.5 distilled two-stage, Sol
-    # stage 2, bf16 activations (the defaults). 512p first: the default
+    # stage 2, bf16 activations (the defaults). Every cell encodes its prompt
+    # (--no-text-cache): run a73173e-09270009 showed a cache hit does not
+    # reproduce a fresh encode bit for bit (every frame differs from step 0),
+    # which would hide what placement does. 512p first: the default
     # (resident), the mode explicitly off, and cpu; frame/wav hashes, the
     # byte-identity compares and the `exact` gate. Then, only when the 512p cpu
     # frames match the resident ones byte for byte, cpu at 4k5s (warm) and
@@ -1424,7 +1427,7 @@ case "$FAMILY" in
       gated_cell "$name" ltx25-two-stage \
         "${envs[@]}" "$BIN" --mode fast ltx2 gen --model-version 2.5 \
           --weights "$W/ltx25" --dit "$W/ltx25" "$@" \
-          --prompt "$PROMPT" --seed "$SEED" --two-stage \
+          --prompt "$PROMPT" --seed "$SEED" --two-stage --no-text-cache \
           --clip "$RUNS/$name/frames"
       grep -h 'ltx2 offload\|ltx2 dit offload\|ltx2 memory\|offload stage\|ltx2 text:' "$RUNS/$name/stderr.log" 2>/dev/null \
         | sed "s/^/[$name] /" | tee -a "$LOG" >/dev/null || true
@@ -1432,7 +1435,10 @@ case "$FAMILY" in
     frames_hash() {
       local d="$RUNS/$1/frames"
       compgen -G "$d/*.png" >/dev/null || { echo missing; return 0; }
-      (cd "$d" && sha256sum -- *.png *.wav 2>/dev/null) | sha256sum | cut -c1-16
+      local png wav
+      png="$(cd "$d" && sha256sum -- *.png | sha256sum | cut -c1-16)"
+      wav="$(cd "$d" && sha256sum -- *.wav 2>/dev/null | sha256sum | cut -c1-16)"
+      echo "png:$png wav:$wav"
     }
     small=(--height 512 --width 768 --num-frames 121 --warm)
     ltx_off_gen ltx25-512p-resident default "${small[@]}"
@@ -1446,7 +1452,8 @@ case "$FAMILY" in
     gate_cells ltx25-512p-resident ltx25-512p-cpu exact ltx25-512p-off
     same=""
     h="$(frames_hash ltx25-512p-cpu)"
-    [[ "$h" != missing && "$h" == "$(frames_hash ltx25-512p-resident)" ]] && same=1
+    r="$(frames_hash ltx25-512p-resident)"
+    [[ "$h" != missing && "${h%% *}" == "${r%% *}" ]] && same=1
     if [[ "${FV_OFFLOAD_BIG:-1}" == 1 && ( -n "$same" || "${FV_OFFLOAD_FORCE:-0}" == 1 ) ]]; then
       ltx_off_gen ltx25-4k5s-cpu cpu --workload 4k5s --warm
       if [[ "${FV_OFFLOAD_4K_RESIDENT:-0}" == 1 ]]; then
