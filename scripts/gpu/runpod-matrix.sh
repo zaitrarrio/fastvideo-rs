@@ -598,6 +598,32 @@ case "$FAMILY" in
       compare_cells wan13-fuse "$arm"
       gate_cells wan13-fuse "$arm" lossy
     done
+    # SF-Wan 1.3B (block-causal self-attention over the whole clip): 4 DMD
+    # steps from 1000, shift 5, guidance 1. The masked flash kernel against
+    # the path it replaces (FASTVIDEO_WAN_CAUSAL_FLASH=0: the [S, S] mask
+    # through sdpa_composed, f32 scores), at 33 frames where the composed
+    # path's two [12, S, S] f32 buffers fit; 81 frames runs flash only.
+    sf_common=(
+      --weights "$W/sfwan21-1.3b"
+      --preset sf_wan_t2v_1_3b
+      --steps 4
+      --flow-shift 5
+      --prompt "$PROMPT"
+      --seed "$SEED"
+      --warm
+      "${PROMPT_ARGS[@]}"
+    )
+    sf_arm() {
+      local name="$1" frames="$2"
+      shift 2
+      gated_cell "$name" sfwan21-1.3b env "$@" \
+        "$BIN" --mode fast wan gen "${sf_common[@]}" --num-frames "$frames" --clip-dir "$RUNS/$name/frames"
+    }
+    sf_arm sfwan13-33f-composed 33 FASTVIDEO_WAN_CAUSAL_FLASH=0
+    sf_arm sfwan13-33f-flash 33 FASTVIDEO_WAN_CAUSAL_FLASH=1
+    sf_arm sfwan13-81f-flash 81 FASTVIDEO_WAN_CAUSAL_FLASH=1
+    compare_cells sfwan13-33f-composed sfwan13-33f-flash
+    gate_cells sfwan13-33f-composed sfwan13-33f-flash lossy
     ;;
   b200)
     # Warm B200 parity: H3 / FastH3 / LTX only. Official VAE stays the
