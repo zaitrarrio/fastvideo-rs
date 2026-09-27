@@ -377,9 +377,28 @@ mod tests {
             crate::wan::device::pool_usage().map(|u| u.used)
         }
 
+        /// Bind CUDA device 0 to this thread when the build and the box have
+        /// one, so the whole run (weights included) takes the GPU path.
+        /// `FV_HOOKS_REQUIRE_GPU=1` fails instead of falling back to the CPU.
+        fn bind_gpu() -> bool {
+            #[cfg(feature = "cuda")]
+            if let Ok(dev) = crate::wan::device::device_for_index(0) {
+                crate::wan::device::set_thread_device(Some(dev));
+            }
+            let live = crate::wan::device::has_live_device();
+            if std::env::var_os("FV_HOOKS_REQUIRE_GPU").is_some() {
+                assert!(
+                    live,
+                    "FV_HOOKS_REQUIRE_GPU is set but no CUDA device is live"
+                );
+            }
+            live
+        }
+
         #[test]
         fn hooks_leave_the_frames_byte_identical_and_cancel_within_one_step() {
             let root = scratch("wan");
+            let on_gpu = bind_gpu();
             let cfg = config(tokenizer(&root));
             let pipe = pipeline();
 
@@ -451,6 +470,13 @@ mod tests {
                 hash_frames(&plain.frame_paths),
                 hash_frames(&again.frame_paths)
             );
+            if on_gpu {
+                assert!(resident.is_some(), "GPU run without a pool to check");
+            }
+            eprintln!("hooks e2e: gpu={on_gpu} resident_pool_bytes={resident:?}");
+            drop(pipe);
+            #[cfg(feature = "cuda")]
+            crate::wan::device::set_thread_device(None);
             let _ = std::fs::remove_dir_all(&root);
         }
     }
