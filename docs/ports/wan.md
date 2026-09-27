@@ -106,23 +106,74 @@ What each change bought (same process state, same run unless noted):
   step to skip (it always computes the first step, and the accumulator
   crosses the threshold). The output is byte-identical to the baseline.
 
-The Wan2.1 T2V-14B cells (`wan14` with 50 UniPC steps at CFG 5, plus EasyCache
-0.036, Sol TeaCache, Sol-Attn, the sol-engine fullstack, and a 4-step identity
-pair), the TI2V-5B cells (`wan5b`, `wan5b-easycache`)
-and the matching upstream cells (`fv-wan21-14b`, `fv-wan22-5b`)
-have not been measured (SF-Wan is measured below, on H100). Their weights are only on `fv-weights-b200-us`
-(US-CA-2), and that datacenter had no RTX PRO 6000 in stock from 04:00 to
-07:50 UTC on 2026-09-27. Pod creation retried the whole time, and no pod ever
-started. To run them: `RUNPOD_VOLUME_NAME=fv-weights-b200-us FV_FAMILY=wan
-FV_CELLS="wan14 ..." runpod-http.sh run <sha>`, then `runpod-http.sh upstream`
-with `UP_CELLS`. Before trusting the 5B cells, expect a load failure or wrong
-output: `WanPipeline` sizes latents at /8 and builds the Wan 2.1 VAE with
-`z_dim` 48. Wan 2.2's VAE downsamples 16x and has a different decoder.
-
 Against upstream FastVideo on the same card, the final is 2.32 s vs 7.63 s
 (3.3x). Denoise is 1.96 vs 3.48 s, decode + mp4 is 0.31 vs 3.9 s (their
 full VAE, then VideoSave), and text is 0.04 vs 0.09 s. Upstream's torch peak
 is 30.2 GiB, ours 22.5 GiB in use.
+
+### Wan2.1 T2V-14B on H100 (2026-09-27)
+
+480x832, 81 frames, UniPC 50 steps, CFG 5, flow shift 3.0 (FastVideo
+`WanT2V480PConfig`), the matrix prompt, seed 1024. One **NVIDIA H100 80GB
+HBM3** in US-CA-2 (`fv-weights-b200-us`). The RTX PRO 6000 had no stock
+there from 11:33 to 11:55 UTC. Image `sha-d18eae2`, run
+`wan/d18eae2-09271156`. The 50-step cells run one cold generation each (no
+`--warm`), with the load excluded. Upstream: `fv-wan21-14b`, run
+`upstream/36ce5a2-09271156`, on the same GPU type. It used image
+`fastvideo-rs-upstream-fastvideo:sha-7a0f247` (FastVideo `e90be598`),
+`FLASH_ATTN` requested, and fell back to Torch SDPA because the image has no
+`flash_attn` wheel. It ran one excluded warm-up, then the median of 3.
+LPIPS(alex), PSNR and sharpness are against `wan14`.
+
+| Cell | Text s | Denoise s | Decode s | Total s | Peak MiB | Steps computed | LPIPS mean / max | PSNR dB | Denoise speedup | Gate (lossy) |
+|---|---|---|---|---|---|---|---|---|---|---|
+| `wan14` (baseline) | 0.64 | 432.27 | 2.52 | **435.45** | 57 246 | 50/50 | — | — | 1.00x | — |
+| `wan14-easycache` (0.036, retain 7) | 0.62 | 185.17 | 2.63 | 188.43 | 56 478 | 21/50 | 0.037 / 0.050 | 26.1 | 2.33x | fail: warm; sharpness 0.949 (min 0.95) |
+| `wan14-teacache` (Sol TeaCache 0.12) | 0.63 | 69.90 | 2.52 | 73.08 | 57 982 | 8/50 | **0.561 / 0.571** | 15.1 | 6.18x | fail: warm; sharpness 0.81; jitter 1.58; LPIPS |
+| `wan14-sol` (Sol-Attn tau 1.0) | 0.65 | 292.05 | 2.52 | 295.24 | 57 758 | 50/50 | 0.164 / 0.179 | 20.0 | 1.48x | fail: warm only (sharpness 0.978) |
+| `wan14-fullstack` (EasyCache + Sol-Attn) | 0.65 | 133.96 | 2.57 | **137.20** | 56 702 | 21/50 | 0.150 / 0.172 | 20.6 | 3.23x | fail: warm; sharpness 0.920 |
+| `wan14-4step` | 0.67 | 34.61 | 2.56 | 37.85 | 56 254 | 4/4 | | | | |
+| `wan14-4step-nocache` (`WAN_COND_CACHE=0`, no text cache) | 0.59 | 34.61 | 2.51 | 37.73 | 56 254 | 4/4 | 0.0001 vs `wan14-4step` | 63.5 | | **off-identity fails**: frames differ |
+| **Upstream FastVideo** `fv-wan21-14b` | 0.06 | 499.79 | 2.32 (+0.06 post, +0.29 save) | **502.63** | 76 227 (torch) | 50/50 | | | | |
+
+What the run shows:
+
+- **Baseline vs upstream**: 435.5 s vs 502.6 s, 1.15x. Denoise is 8.65
+  s/step vs 10.0 s/step. Peak memory is 55.9 GiB vs 74.4 GiB (torch).
+  Ours is a single cold generation and upstream is a warm median, so the
+  comparison does not favour ours. The fullstack arm is 3.66x upstream's
+  total.
+- **The gate fails every lossy arm on `performance/warm`**. The 50-step
+  cells are cold by design (see the matrix comment), and
+  `gate-policy.toml` requires a warm-up for promotion. Apart from that
+  check, Sol-Attn passes (LPIPS 0.16, sharpness 0.98). EasyCache misses
+  sharpness by 0.001 (0.949), and fullstack misses it at 0.92.
+- **Sol TeaCache (threshold 0.12) is far too aggressive on 14B**. It
+  computes 8 of 50 steps, and LPIPS is 0.56. Do not use it at this
+  threshold.
+- **The exact-cache identity does not hold on 14B**. `wan14-4step` and
+  `wan14-4step-nocache` differ (`frames_sha256` `5211920c…` vs
+  `2d36a122…`, PSNR 63.5 dB, LPIPS 0.0001). The same pair was
+  byte-identical on 1.3B. It is not yet known whether this comes from the
+  invariant caches under CFG batching or from run-to-run nondeterminism on
+  sm_90. A repeat of `wan14-4step` would tell them apart. Reported, not
+  fixed (model code).
+- Load (not in the totals): ours about 150–190 s per cell from the network
+  volume (UMT5 f32 and the fp32 DiT converted to bf16). Upstream 147.6 s.
+- 720p (FastVideo's registry default for this checkpoint:
+  `WanT2V720PConfig`, 720x1280, shift 5.0) was not run. It costs about
+  4x per generation.
+
+The TI2V-5B cells (`wan5b`, `wan5b-easycache`)
+and the matching upstream cell `fv-wan22-5b`
+have not been measured (SF-Wan is measured below, on H100). Their weights are only on `fv-weights-b200-us`
+(US-CA-2), and that datacenter had no RTX PRO 6000 in stock from 04:00 to
+07:50 UTC on 2026-09-27. Pod creation retried the whole time, and no pod ever
+started. To run them: `RUNPOD_VOLUME_NAME=fv-weights-b200-us FV_FAMILY=wan
+FV_CELLS="wan5b wan5b-easycache" runpod-http.sh run <sha>`, then `runpod-http.sh upstream`
+with `UP_CELLS`. Before trusting the 5B cells, expect a load failure or wrong
+output: `WanPipeline` sizes latents at /8 and builds the Wan 2.1 VAE with
+`z_dim` 48. Wan 2.2's VAE downsamples 16x and has a different decoder.
 
 ## DiT kernels (bf16 activations, fusion, FP8, block-causal attention)
 

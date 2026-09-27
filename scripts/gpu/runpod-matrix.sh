@@ -280,6 +280,12 @@ gate_cells() {
       offs+=(--off-compare "$f")
     done
   fi
+  # A pair whose cells did not run (FV_CELLS subset, skipped weights) has
+  # nothing to gate; a gate there only logs a failure about missing files.
+  if [[ ! -f "$RUNS/$base/benchmark.json" || ! -f "$RUNS/$cand/benchmark.json" ]]; then
+    log "skip gate $tag (benchmark.json missing)"
+    return 0
+  fi
   local rc
   set +e
   "$BIN" --out "$dir" --tag "$tag" gate --baseline "$RUNS/$base" --candidate "$RUNS/$cand" \
