@@ -11,6 +11,7 @@ Project code: FVID
 - Executed by: Executor
 - ADR: none
 - Verification: pods havhdoj7e5cv4c (B200 kernels), la1etadov0yz8c (H100 harness + bench_attn), 18rfe79oxg4f4d (H100 kernels), all volume-less secure and deleted; artifacts/runpod/dc/, artifacts/runpod/upstream/attn-dc-h100/
+  - B200 generation check (pod feuynzq6ifdjb4, US-CA-2, fv-weights-b200-us, image sha-4bc3ec3 with dc as the B200 default, warm, TAEH3; stopped after four cells, ~19 min): fasth3-8step denoise 31.7 s (earlier B200 suite 49.1 s), fasth3-4step-vsa 12.3 s (21.4 s), fasth3-4step-dense 12.3 s / 3.08 s per step (116.2 s), sol-h3 12.3 s / 3.08 s per step (824 s). The sol-h3 recipe in this build logs `techniques: none ... dense=true`: it no longer routes through the Sol kernel, so it is not a Sol-H3 measurement, and the earlier suite ran an older image, so these ratios are not dc alone. `runpod-matrix.sh` b200 cells ignored FV_CELLS (run_cell now honours it). artifacts/runpod/b200-dc/
 
 ### FVID · 2026-09-27 · FVID-2026-09-27-ltx-nvfp4-ffn-cublaslt
 - Trigger: `FASTVIDEO_NVFP4` dequantized to bf16 at load (no speedup); our scalar W4A4 kernel was 38x slower than bf16; sol-engine runs TE's NVFP4 GEMM on the LTX video FFN (`nvfp4_ffn.py`)
