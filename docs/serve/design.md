@@ -1526,9 +1526,16 @@ additions and readings; everything is re-exported from the crate root.
   streaming packages land. `runpod-queue` mode and `engine.backend = cuda`
   are mount points that fail at startup until WP-16 / WP-11 land.
 - Adapters are features of `fastvideo-serve` (`openai-videos`, `minimax`,
-  `ltxapi`, `fal`, `reactor`); `ltxapi` is on by default and mounted as
-  `fastvideo_ltxapi::router(LtxConfig)` from `[ltx]`. The others call
-  `router()` (fal: `router(&fal_apps)`) behind their feature.
+  `ltxapi`, `fal`, `reactor`), all but `reactor` on by default:
+  FastVideo `/v1/videos` + models (`[protocols] openai_videos`) and FastWan
+  (`fastwan`; `/` then names the FastWan model), MiniMax
+  (`MiniMax::router`, callback renderer registered), LTX
+  (`router(LtxConfig)` from `[ltx]`), fal queue/sync
+  (`router(ctx, FalConfig)` from `fal_apps`; `FalWebhook` renderer; a
+  `WebhookSigner` from `FV_WEBHOOK_ED25519_KEY`, else per process; fal
+  artifacts named by `fastvideo_fal::output_file_name`). The fal director
+  (WP-14) and Reactor (WP-13) routes are reserved in the §9 table only.
+  One engine glue (`gate`) serves every adapter.
 - `ArtifactStore::open` (serve-kit) reads an artifact back (local path or
   S3 object bytes) so LTX `/v1` sync works on R2; the `PUT /uploads` route
   uses the `ServeCtx` clock.

@@ -21,6 +21,8 @@ pub enum Owner {
     MiniMax,
     Ltx,
     Fal,
+    /// fal `minimax/h3-max/director` (WP-14).
+    FalDirector,
     Reactor,
 }
 
@@ -34,6 +36,7 @@ impl Owner {
             Owner::MiniMax => "minimax",
             Owner::Ltx => "ltxapi",
             Owner::Fal => "fal",
+            Owner::FalDirector => "fal-director",
             Owner::Reactor => "reactor",
         }
     }
@@ -104,9 +107,9 @@ pub fn route_table(fal_apps: &[String]) -> Vec<RouteSpec> {
         r(Fal, "POST", "/fal/proxy"),
         r(Fal, "GET", "/fal/proxy"),
         r(Fal, "POST", "/storage/upload/initiate"),
-        r(Fal, "POST", "/wma/session"),
-        r(Fal, "POST", "/start-session"),
-        r(Fal, "GET", "/info"),
+        r(FalDirector, "POST", "/wma/session"),
+        r(FalDirector, "POST", "/start-session"),
+        r(FalDirector, "GET", "/info"),
         r(Fal, "GET", "/.well-known/jwks.json"),
         // Reactor local runtime (§5.7).
         r(Reactor, "POST", "/start_session"),
@@ -267,7 +270,7 @@ mod tests {
             ("GET", "/minimax/h3-max/image-to-video/requests/abc/response", "fal"),
             ("PUT", "/minimax/h3-draft/requests/abc/cancel", "fal"),
             ("POST", "/run/minimax/h3-max/text-to-video", "fal"),
-            ("POST", "/wma/session", "fal"),
+            ("POST", "/wma/session", "fal-director"),
             ("GET", "/session", "reactor"),
             ("POST", "/sessions/s1/offer", "reactor"),
             ("GET", "/status/abc", "openai-videos"),

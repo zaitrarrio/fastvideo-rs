@@ -184,21 +184,29 @@ impl App {
         if config.auth.mode == fastvideo_serve_kit::AuthMode::Keys && keys.is_empty() {
             tracing::warn!("auth.mode = keys with no FV_API_KEYS: every keyed API answers 401");
         }
+        // fal webhooks are Ed25519-signed with a key published at
+        // /.well-known/jwks.json; without FV_WEBHOOK_ED25519_KEY the key is
+        // per process (receivers must re-fetch the JWKS after restarts).
         let signer = if config.webhook_key.is_empty() {
-            None
+            if config.protocols.fal {
+                tracing::warn!("FV_WEBHOOK_ED25519_KEY is not set: fal webhooks use a per-process key");
+            }
+            WebhookSigner::random("fv-serve")
         } else {
-            Some(WebhookSigner::from_seed_str(config.webhook_key.expose(), "fv-serve").map_err(|e| anyhow!(e))?)
+            WebhookSigner::from_seed_str(config.webhook_key.expose(), "fv-serve").map_err(|e| anyhow!(e))?
         };
-        let callbacks = Arc::new(CallbackSender::new(CallbackSender::default_transport(), signer));
-        let ctx = ServeCtx::builder(sc, gate.clone())
+        let callbacks = Arc::new(CallbackSender::new(CallbackSender::default_transport(), Some(signer)));
+        let mcfg = mount_cfg(&config);
+        let mut builder = ServeCtx::builder(sc, gate.clone())
             .auth(Auth::new(config.auth.mode, keys))
             .url_key(key)
             .jobs(jobs.clone())
             .artifacts(artifacts)
-            .callbacks(callbacks)
-            .build()
-            .await
-            .context("building the serve context")?;
+            .callbacks(callbacks);
+        for (p, r) in adapters::renderers(&mcfg) {
+            builder = builder.renderer(p, r);
+        }
+        let ctx = builder.build().await.context("building the serve context")?;
         gate.attach(ctx.clone());
 
         let router = assemble(&config, &ctx, &gate, jobs_kind);
@@ -255,28 +263,40 @@ fn announce_ready(gate: Arc<ServiceGate>) {
     });
 }
 
+/// The adapters' view of the config.
+pub fn mount_cfg(config: &Config) -> MountCfg {
+    MountCfg {
+        protocols: config.protocols.clone(),
+        body_max: config.limits.body_max_mb * 1024 * 1024,
+        sync_timeout: Duration::from_secs(config.server.sync_timeout_s),
+        url_ttl: Duration::from_secs(config.artifacts.url_ttl_s),
+        ltx: config.ltx.clone(),
+    }
+}
+
 /// The full router: health + serve-kit files/uploads + native + adapters,
 /// with request metrics and tracing.
 pub fn assemble(config: &Config, ctx: &ServeCtx, gate: &Arc<ServiceGate>, jobs_kind: &'static str) -> Router {
-    let body_max = config.limits.body_max_mb * 1024 * 1024;
-    let sync = Duration::from_secs(config.server.sync_timeout_s);
+    let mcfg = mount_cfg(config);
     let mut kit: Router<ServeCtx> = ctx.routes();
     if config.protocols.native {
-        kit = kit.merge(native::routes(gate.clone(), body_max, sync));
+        kit = kit.merge(native::routes(gate.clone(), mcfg.body_max, mcfg.sync_timeout));
     }
-    kit = kit.merge(adapters::mount(&MountCfg {
-        protocols: config.protocols.clone(),
-        body_max,
-        sync_timeout: sync,
-        url_ttl: Duration::from_secs(config.artifacts.url_ttl_s),
-        ltx: config.ltx.clone(),
-    }));
+    let (adapters, stateful) = adapters::mount(&mcfg, ctx);
+    kit = kit.merge(adapters);
     let artifacts_kind = match config.artifact_backend() {
         ArtifactBackend::S3 => "s3",
         _ => "local",
     };
-    let h = Health { gate: gate.clone(), metrics: metrics::install(), jobs_backend: jobs_kind, artifacts_backend: artifacts_kind };
+    let h = Health {
+        gate: gate.clone(),
+        metrics: metrics::install(),
+        jobs_backend: jobs_kind,
+        artifacts_backend: artifacts_kind,
+        root_model: adapters::root_model(&mcfg, ctx),
+    };
     kit.with_state(ctx.clone())
+        .merge(stateful)
         .merge(health::routes(h))
         .route_layer(axum::middleware::from_fn(metrics::track))
         .layer(TraceLayer::new_for_http())

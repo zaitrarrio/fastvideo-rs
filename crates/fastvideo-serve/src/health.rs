@@ -31,6 +31,9 @@ pub struct Health {
     pub metrics: Option<metrics_exporter_prometheus::PrometheusHandle>,
     pub jobs_backend: &'static str,
     pub artifacts_backend: &'static str,
+    /// `GET /` model (FastWan's, when mounted); else the first resident
+    /// model's served name.
+    pub root_model: Option<String>,
 }
 
 /// Server state as the probes see it.
@@ -55,6 +58,9 @@ impl Health {
     }
 
     fn served_name(&self) -> Option<String> {
+        if let Some(m) = &self.root_model {
+            return Some(m.clone());
+        }
         let caps = self.gate.engine().caps();
         caps.models()
             .find(|m| m.resident)
@@ -90,7 +96,13 @@ async fn health(State(h): State<Health>) -> Response {
         Phase::Draining => (StatusCode::SERVICE_UNAVAILABLE, "DRAINING"),
     };
     let ready = code == StatusCode::OK;
-    let status = if ready { "ok" } else { "unavailable" };
+    // `status` as FastWan's health body (`ok` / `loading`), plus our states.
+    let status = match h.phase() {
+        Phase::Ready => "ok",
+        Phase::Loading => "loading",
+        Phase::Failed => "failed",
+        Phase::Draining => "draining",
+    };
     (code, Json(json!({"status": status, "model_loaded": ready, "state": state}))).into_response()
 }
 

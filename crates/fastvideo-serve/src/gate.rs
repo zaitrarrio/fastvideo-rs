@@ -114,7 +114,8 @@ impl EngineGate for ServiceGate {
         metrics::counter!("fv_jobs_submitted_total", "api" => job.protocol.as_str()).increment(1);
         let output = self.output.clone();
         let (id, api, resolved) = (job.id, job.protocol.as_str(), job.resolved.clone());
-        tokio::spawn(pump(ctx, id, api, resolved, handle.events, output));
+        let name = crate::adapters::artifact_file_name(job);
+        tokio::spawn(pump(ctx, id, api, resolved, name, handle.events, output));
         Ok(())
     }
 
@@ -129,6 +130,7 @@ async fn pump(
     id: JobId,
     api: &'static str,
     resolved: ResolvedJob,
+    file_name: String,
     mut events: tokio::sync::mpsc::UnboundedReceiver<EngineEvent>,
     output: OutputPolicy,
 ) {
@@ -143,7 +145,7 @@ async fn pump(
             EngineEvent::Log(l) => JobEvent::Log(l),
             EngineEvent::Failed(e) => JobEvent::Failed(e),
             EngineEvent::Cancelled => JobEvent::Cancelled,
-            EngineEvent::Finished(out) => match finish(id, &resolved, out, &output).await {
+            EngineEvent::Finished(out) => match finish(id, &resolved, &file_name, out, &output).await {
                 Ok(f) => JobEvent::Finished(f),
                 Err(e) => JobEvent::Failed(e),
             },
@@ -173,7 +175,7 @@ async fn pump(
 }
 
 /// The engine's output -> a finalized file plus its artifact facts.
-async fn finish(id: JobId, r: &ResolvedJob, out: ClipOutput, policy: &OutputPolicy) -> Result<FinishedOutput, ApiError> {
+async fn finish(id: JobId, r: &ResolvedJob, file_name: &str, out: ClipOutput, policy: &OutputPolicy) -> Result<FinishedOutput, ApiError> {
     let dir = policy.scratch.join(id.to_string());
     tokio::fs::create_dir_all(&dir)
         .await
@@ -211,7 +213,7 @@ async fn finish(id: JobId, r: &ResolvedJob, out: ClipOutput, policy: &OutputPoli
     Ok(FinishedOutput {
         file,
         meta: ArtifactMeta {
-            file_name: format!("{}.mp4", id.0.simple()),
+            file_name: file_name.to_owned(),
             mime: "video/mp4".into(),
             width,
             height,
