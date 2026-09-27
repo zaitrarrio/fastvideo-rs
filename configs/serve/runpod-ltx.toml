@@ -19,7 +19,7 @@ stale_after_s = 900
 
 [engine]
 backend = "cuda"
-post_encoder = "nvenc"
+post_encoder = "auto"
 
 # ltx-turbo: LTX-2.5 distilled two-stage, Sol stage 2 (one GPU).
 [[models]]

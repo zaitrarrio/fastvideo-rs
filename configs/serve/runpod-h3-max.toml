@@ -19,7 +19,7 @@ stale_after_s = 900
 
 [engine]
 backend = "cuda"
-post_encoder = "nvenc"
+post_encoder = "auto"
 
 # h3-max: Sol-H3 4-step on the tau-ladder engine route (one GPU).
 [[models]]

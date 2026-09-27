@@ -19,7 +19,7 @@ stale_after_s = 900
 
 [engine]
 backend = "cuda"
-post_encoder = "nvenc"
+post_encoder = "auto"
 
 # wan-turbo: FastWan2.1 1.3B DMD 3-step, VSA (one GPU; small, add more
 # FASTVIDEO_VSA=1 Wan models here).

@@ -34,7 +34,7 @@ stale_after_s = 900
 
 [engine]
 backend = "cuda"
-post_encoder = "nvenc"
+post_encoder = "auto"
 
 # One GPU (RTX PRO 6000, 96 GB): the resident models load before /ping
 # answers 200. Each entry resolves against the CUDA catalog
