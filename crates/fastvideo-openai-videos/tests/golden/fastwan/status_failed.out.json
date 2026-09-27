@@ -1,0 +1,9 @@
+{
+  "error": "CUDA out of memory",
+  "metadata": {
+    "quality_gate": true,
+    "recipe": "4step-vsa",
+    "tier": "turbo"
+  },
+  "status": "failed"
+}

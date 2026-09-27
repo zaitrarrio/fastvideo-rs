@@ -15,6 +15,10 @@ fastwan21-1.3b	FastVideo/FastWan2.1-T2V-1.3B-Diffusers	transformer/* tokenizer/*
 wan22-ti2v-5b	Wan-AI/Wan2.2-TI2V-5B-Diffusers	scheduler/* tokenizer/* text_encoder/* transformer/* vae/*
 wan21-t2v-14b	Wan-AI/Wan2.1-T2V-14B-Diffusers	scheduler/* tokenizer/* text_encoder/* transformer/* vae/*
 sfwan21-1.3b	wlsaidhi/SFWan2.1-T2V-1.3B-Diffusers	scheduler/* tokenizer/* text_encoder/* transformer/* vae/*
+# mmaudio-44k-v2 spans three repos (hkchengrex/MMAudio, nvidia/bigvgan_v2_44khz_128band_512x,
+# apple/DFN5B-CLIP-ViT-H-14-384) plus converted safetensors: fetch it with scripts/gpu/fetch-mmaudio.sh.
+# The row below is the MMAudio part for hf-fm fetchers.
+mmaudio-44k-v2	hkchengrex/MMAudio	weights/mmaudio_large_44k_v2.pth ext_weights/v1-44.pth ext_weights/synchformer_state_dict.pth
 # auxiliary/: small pinned non-Hub weights (TAE decoders, LPIPS). dest<TAB>url:<pinned url><TAB>sha256:<hex> size:<bytes>.
 # Same files and hashes as fetch-tae.sh / fetch_taehv.sh / fetch-lpips.sh; runpod.sh's Hub fetch skips auxiliary/ rows,
 # verify-weights.sh aux checks each file's size and SHA-256.

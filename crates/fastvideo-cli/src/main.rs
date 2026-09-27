@@ -119,6 +119,10 @@ struct GenerateArgs {
     /// Mux PNG frames to `output.mp4` via ffmpeg (same as FASTVIDEO_SAVE_MP4=1).
     #[arg(long, default_value_t = false)]
     save_mp4: bool,
+    /// Wan family: add a soundtrack to the mp4 with a video-to-audio sidecar
+    /// (`mmaudio`: MMAudio large-44k-v2, AAC). Same as FASTVIDEO_WAN_AUDIO.
+    #[arg(long)]
+    audio: Option<String>,
     /// LTX distilled two-stage (2.3 / 2.5): half-res → upsampler → refine.
     #[arg(long, default_value_t = false)]
     two_stage: bool,
@@ -282,6 +286,11 @@ fn main() -> Result<()> {
             }
         }
         Commands::Generate(args) => {
+            match args.audio.as_deref() {
+                None | Some("none") => {}
+                Some("mmaudio") => std::env::set_var("FASTVIDEO_WAN_AUDIO", "mmaudio"),
+                Some(other) => anyhow::bail!("--audio {other}: want none or mmaudio"),
+            }
             let file = args
                 .config
                 .as_deref()

@@ -1,0 +1,44 @@
+{
+  "accepted_noop": [
+    "user"
+  ],
+  "audio_in": null,
+  "audio_out": "model_default",
+  "callback": null,
+  "canvas": {
+    "aspect": {
+      "ratio": {
+        "h": 9,
+        "w": 16
+      },
+      "short_edge": 0
+    }
+  },
+  "keyframes": [],
+  "model": "wan-turbo",
+  "negative_prompt": "blurry, low quality",
+  "output": {
+    "inline_data_uri": false
+  },
+  "prompt": "Waves crash on black volcanic sand",
+  "protocol": "openai_videos",
+  "references": [],
+  "sampling": {
+    "boundary_ratio": null,
+    "flow_shift": 5.0,
+    "guidance": 1.0,
+    "guidance_2": null,
+    "steps": 3
+  },
+  "seed": 42,
+  "task": "t2v",
+  "timing": {
+    "fps": 16,
+    "length": {
+      "frames": {
+        "snap": "exact",
+        "value": 81
+      }
+    }
+  }
+}

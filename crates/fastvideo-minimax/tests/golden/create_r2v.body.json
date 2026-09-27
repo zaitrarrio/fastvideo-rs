@@ -1,0 +1,4 @@
+{"model":"MiniMax-H3","content":[{"type":"text","text":"Character speaks: hello there. Voice timbre follows reference audio 1."},
+ {"type":"video_url","video_url":{"url":"https://cdn.hailuoai.com/example/reference.mp4"},"role":"reference_video"},
+ {"type":"audio_url","audio_url":{"url":"https://cdn.hailuoai.com/example/voice.mp3"},"role":"reference_audio"}],
+ "resolution":"2K","duration":5,"ratio":"adaptive"}

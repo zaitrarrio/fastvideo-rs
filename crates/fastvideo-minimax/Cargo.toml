@@ -9,14 +9,25 @@ description = "fv-serve adapter: MiniMax V2 video generation (create, query, lis
 [dependencies]
 fastvideo-protocol.workspace = true
 fastvideo-serve-kit.workspace = true
+fastvideo-models.workspace = true
 axum.workspace = true
 bytes.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
 time.workspace = true
+tokio = { workspace = true, features = ["fs"] }
 tracing.workspace = true
+url.workspace = true
 uuid.workspace = true
+
+[dev-dependencies]
+fastvideo-engine-service.workspace = true
+async-trait.workspace = true
+image.workspace = true
+base64.workspace = true
+tower.workspace = true
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "net", "io-util", "time"] }
 
 [lints]
 workspace = true

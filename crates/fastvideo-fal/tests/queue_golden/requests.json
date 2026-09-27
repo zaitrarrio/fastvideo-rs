@@ -1,0 +1,631 @@
+{
+  "i2v_end_only": {
+    "body": {
+      "end_image_url": "https://storage.googleapis.com/falserverless/example_inputs/hailuo23/pro_i2v_in.jpg",
+      "prompt": "p"
+    },
+    "endpoint": "image-to-video",
+    "normalized": {
+      "accepted_noop": [
+        "enable_safety_checker",
+        "prompt_expansion_mode"
+      ],
+      "audio_in": null,
+      "audio_out": "model_default",
+      "callback": null,
+      "canvas": {
+        "follow_image": {
+          "short_edge": 768
+        }
+      },
+      "keyframes": [
+        {
+          "at": "last",
+          "image": {
+            "http": "https://storage.googleapis.com/falserverless/example_inputs/hailuo23/pro_i2v_in.jpg"
+          }
+        }
+      ],
+      "model": "h3-max",
+      "negative_prompt": null,
+      "output": {
+        "inline_data_uri": false
+      },
+      "prompt": "p",
+      "protocol": "fal",
+      "references": [],
+      "sampling": {
+        "boundary_ratio": null,
+        "flow_shift": null,
+        "guidance": null,
+        "guidance_2": null,
+        "steps": null
+      },
+      "seed": null,
+      "task": "keyframes",
+      "timing": {
+        "fps": null,
+        "length": {
+          "seconds": {
+            "snap": "align_up",
+            "value": 5.0
+          }
+        }
+      }
+    },
+    "query": []
+  },
+  "i2v_first_and_last": {
+    "body": {
+      "end_image_url": "data:image/png;base64,iVBORw0KGgo=",
+      "image_url": "https://storage.googleapis.com/falserverless/example_inputs/hailuo23/pro_i2v_in.jpg",
+      "prompt": "p"
+    },
+    "endpoint": "image-to-video",
+    "normalized": {
+      "accepted_noop": [
+        "enable_safety_checker",
+        "prompt_expansion_mode"
+      ],
+      "audio_in": null,
+      "audio_out": "model_default",
+      "callback": null,
+      "canvas": {
+        "follow_image": {
+          "short_edge": 768
+        }
+      },
+      "keyframes": [
+        {
+          "at": "first",
+          "image": {
+            "http": "https://storage.googleapis.com/falserverless/example_inputs/hailuo23/pro_i2v_in.jpg"
+          }
+        },
+        {
+          "at": "last",
+          "image": {
+            "data_uri": "data:image/png;base64,iVBORw0KGgo="
+          }
+        }
+      ],
+      "model": "h3-max",
+      "negative_prompt": null,
+      "output": {
+        "inline_data_uri": false
+      },
+      "prompt": "p",
+      "protocol": "fal",
+      "references": [],
+      "sampling": {
+        "boundary_ratio": null,
+        "flow_shift": null,
+        "guidance": null,
+        "guidance_2": null,
+        "steps": null
+      },
+      "seed": null,
+      "task": "keyframes",
+      "timing": {
+        "fps": null,
+        "length": {
+          "seconds": {
+            "snap": "align_up",
+            "value": 5.0
+          }
+        }
+      }
+    },
+    "query": []
+  },
+  "i2v_full": {
+    "body": {
+      "duration": 5,
+      "enable_safety_checker": true,
+      "image_url": "https://storage.googleapis.com/falserverless/example_inputs/hailuo23/pro_i2v_in.jpg",
+      "prompt": "The camera slowly pulls back from the scene",
+      "prompt_expansion_mode": "disabled",
+      "resolution": "768P"
+    },
+    "endpoint": "image-to-video",
+    "normalized": {
+      "accepted_noop": [
+        "enable_safety_checker",
+        "prompt_expansion_mode"
+      ],
+      "audio_in": null,
+      "audio_out": "model_default",
+      "callback": null,
+      "canvas": {
+        "follow_image": {
+          "short_edge": 768
+        }
+      },
+      "keyframes": [
+        {
+          "at": "first",
+          "image": {
+            "http": "https://storage.googleapis.com/falserverless/example_inputs/hailuo23/pro_i2v_in.jpg"
+          }
+        }
+      ],
+      "model": "h3-max",
+      "negative_prompt": null,
+      "output": {
+        "inline_data_uri": false
+      },
+      "prompt": "The camera slowly pulls back from the scene",
+      "protocol": "fal",
+      "references": [],
+      "sampling": {
+        "boundary_ratio": null,
+        "flow_shift": null,
+        "guidance": null,
+        "guidance_2": null,
+        "steps": null
+      },
+      "seed": null,
+      "task": "i2v",
+      "timing": {
+        "fps": null,
+        "length": {
+          "seconds": {
+            "snap": "align_up",
+            "value": 5.0
+          }
+        }
+      }
+    },
+    "query": []
+  },
+  "i2v_no_images_is_t2v": {
+    "body": {
+      "duration": 10,
+      "prompt": "p",
+      "resolution": "480P"
+    },
+    "endpoint": "image-to-video",
+    "normalized": {
+      "accepted_noop": [
+        "enable_safety_checker",
+        "prompt_expansion_mode"
+      ],
+      "audio_in": null,
+      "audio_out": "model_default",
+      "callback": null,
+      "canvas": {
+        "aspect": {
+          "ratio": {
+            "h": 9,
+            "w": 16
+          },
+          "short_edge": 480
+        }
+      },
+      "keyframes": [],
+      "model": "h3-max",
+      "negative_prompt": null,
+      "output": {
+        "inline_data_uri": false
+      },
+      "prompt": "p",
+      "protocol": "fal",
+      "references": [],
+      "sampling": {
+        "boundary_ratio": null,
+        "flow_shift": null,
+        "guidance": null,
+        "guidance_2": null,
+        "steps": null
+      },
+      "seed": null,
+      "task": "t2v",
+      "timing": {
+        "fps": null,
+        "length": {
+          "seconds": {
+            "snap": "align_up",
+            "value": 10.0
+          }
+        }
+      }
+    },
+    "query": []
+  },
+  "r2v_adaptive_follows_first_image": {
+    "body": {
+      "prompt": "p",
+      "reference_image_urls": [
+        "https://a.test/i1.png"
+      ]
+    },
+    "endpoint": "reference-to-video",
+    "normalized": {
+      "accepted_noop": [
+        "enable_safety_checker",
+        "prompt_expansion_mode"
+      ],
+      "audio_in": null,
+      "audio_out": "model_default",
+      "callback": null,
+      "canvas": {
+        "follow_image": {
+          "short_edge": 768
+        }
+      },
+      "keyframes": [],
+      "model": "h3-max",
+      "negative_prompt": null,
+      "output": {
+        "inline_data_uri": false
+      },
+      "prompt": "p",
+      "protocol": "fal",
+      "references": [
+        {
+          "kind": "image",
+          "media": {
+            "http": "https://a.test/i1.png"
+          }
+        }
+      ],
+      "sampling": {
+        "boundary_ratio": null,
+        "flow_shift": null,
+        "guidance": null,
+        "guidance_2": null,
+        "steps": null
+      },
+      "seed": null,
+      "task": "ref2v",
+      "timing": {
+        "fps": null,
+        "length": {
+          "seconds": {
+            "snap": "align_up",
+            "value": 5.0
+          }
+        }
+      }
+    },
+    "query": []
+  },
+  "r2v_adaptive_without_images": {
+    "body": {
+      "prompt": "p",
+      "reference_video_urls": [
+        "https://a.test/v1.mp4"
+      ]
+    },
+    "endpoint": "reference-to-video",
+    "normalized": {
+      "accepted_noop": [
+        "enable_safety_checker",
+        "prompt_expansion_mode"
+      ],
+      "audio_in": null,
+      "audio_out": "model_default",
+      "callback": null,
+      "canvas": {
+        "aspect": {
+          "ratio": {
+            "h": 9,
+            "w": 16
+          },
+          "short_edge": 768
+        }
+      },
+      "keyframes": [],
+      "model": "h3-max",
+      "negative_prompt": null,
+      "output": {
+        "inline_data_uri": false
+      },
+      "prompt": "p",
+      "protocol": "fal",
+      "references": [
+        {
+          "kind": "video",
+          "media": {
+            "http": "https://a.test/v1.mp4"
+          }
+        }
+      ],
+      "sampling": {
+        "boundary_ratio": null,
+        "flow_shift": null,
+        "guidance": null,
+        "guidance_2": null,
+        "steps": null
+      },
+      "seed": null,
+      "task": "ref2v",
+      "timing": {
+        "fps": null,
+        "length": {
+          "seconds": {
+            "snap": "align_up",
+            "value": 5.0
+          }
+        }
+      }
+    },
+    "query": []
+  },
+  "r2v_all_kinds": {
+    "body": {
+      "aspect_ratio": "9:16",
+      "prompt": "Image 1 walks through Video 1 while Audio 1 plays",
+      "reference_audio_urls": [
+        "https://a.test/a1.wav"
+      ],
+      "reference_image_urls": [
+        "https://a.test/i1.png",
+        "https://a.test/i2.png"
+      ],
+      "reference_video_urls": [
+        "https://a.test/v1.mp4",
+        "https://a.test/v2.mp4"
+      ],
+      "seed": 1851572118
+    },
+    "endpoint": "reference-to-video",
+    "normalized": {
+      "accepted_noop": [
+        "enable_safety_checker",
+        "prompt_expansion_mode"
+      ],
+      "audio_in": null,
+      "audio_out": "model_default",
+      "callback": null,
+      "canvas": {
+        "aspect": {
+          "ratio": {
+            "h": 16,
+            "w": 9
+          },
+          "short_edge": 768
+        }
+      },
+      "keyframes": [],
+      "model": "h3-max",
+      "negative_prompt": null,
+      "output": {
+        "inline_data_uri": false
+      },
+      "prompt": "Image 1 walks through Video 1 while Audio 1 plays",
+      "protocol": "fal",
+      "references": [
+        {
+          "kind": "image",
+          "media": {
+            "http": "https://a.test/i1.png"
+          }
+        },
+        {
+          "kind": "image",
+          "media": {
+            "http": "https://a.test/i2.png"
+          }
+        },
+        {
+          "kind": "video",
+          "media": {
+            "http": "https://a.test/v1.mp4"
+          }
+        },
+        {
+          "kind": "video",
+          "media": {
+            "http": "https://a.test/v2.mp4"
+          }
+        },
+        {
+          "kind": "audio",
+          "media": {
+            "http": "https://a.test/a1.wav"
+          }
+        }
+      ],
+      "sampling": {
+        "boundary_ratio": null,
+        "flow_shift": null,
+        "guidance": null,
+        "guidance_2": null,
+        "steps": null
+      },
+      "seed": 1851572118,
+      "task": "ref2v",
+      "timing": {
+        "fps": null,
+        "length": {
+          "seconds": {
+            "snap": "align_up",
+            "value": 5.0
+          }
+        }
+      }
+    },
+    "query": []
+  },
+  "t2v_full": {
+    "body": {
+      "aspect_ratio": "16:9",
+      "duration": 5,
+      "enable_safety_checker": true,
+      "prompt": "A white kitten chases a butterfly across a sunlit garden. Gentle camera tracking, natural movement, soft afternoon light filtering through the leaves.",
+      "prompt_expansion_mode": "disabled",
+      "resolution": "768P"
+    },
+    "endpoint": "text-to-video",
+    "normalized": {
+      "accepted_noop": [
+        "enable_safety_checker",
+        "prompt_expansion_mode"
+      ],
+      "audio_in": null,
+      "audio_out": "model_default",
+      "callback": null,
+      "canvas": {
+        "aspect": {
+          "ratio": {
+            "h": 9,
+            "w": 16
+          },
+          "short_edge": 768
+        }
+      },
+      "keyframes": [],
+      "model": "h3-max",
+      "negative_prompt": null,
+      "output": {
+        "inline_data_uri": false
+      },
+      "prompt": "A white kitten chases a butterfly across a sunlit garden. Gentle camera tracking, natural movement, soft afternoon light filtering through the leaves.",
+      "protocol": "fal",
+      "references": [],
+      "sampling": {
+        "boundary_ratio": null,
+        "flow_shift": null,
+        "guidance": null,
+        "guidance_2": null,
+        "steps": null
+      },
+      "seed": null,
+      "task": "t2v",
+      "timing": {
+        "fps": null,
+        "length": {
+          "seconds": {
+            "snap": "align_up",
+            "value": 5.0
+          }
+        }
+      }
+    },
+    "query": []
+  },
+  "t2v_required_only": {
+    "body": {
+      "prompt": "A white kitten chases a butterfly across a sunlit garden. Gentle camera tracking, natural movement, soft afternoon light filtering through the leaves.",
+      "prompt_expansion_mode": "disabled"
+    },
+    "endpoint": "text-to-video",
+    "normalized": {
+      "accepted_noop": [
+        "enable_safety_checker",
+        "prompt_expansion_mode"
+      ],
+      "audio_in": null,
+      "audio_out": "model_default",
+      "callback": null,
+      "canvas": {
+        "aspect": {
+          "ratio": {
+            "h": 9,
+            "w": 16
+          },
+          "short_edge": 768
+        }
+      },
+      "keyframes": [],
+      "model": "h3-max",
+      "negative_prompt": null,
+      "output": {
+        "inline_data_uri": false
+      },
+      "prompt": "A white kitten chases a butterfly across a sunlit garden. Gentle camera tracking, natural movement, soft afternoon light filtering through the leaves.",
+      "protocol": "fal",
+      "references": [],
+      "sampling": {
+        "boundary_ratio": null,
+        "flow_shift": null,
+        "guidance": null,
+        "guidance_2": null,
+        "steps": null
+      },
+      "seed": null,
+      "task": "t2v",
+      "timing": {
+        "fps": null,
+        "length": {
+          "seconds": {
+            "snap": "align_up",
+            "value": 5.0
+          }
+        }
+      }
+    },
+    "query": []
+  },
+  "t2v_webhook_seed_sync_mode": {
+    "body": {
+      "aspect_ratio": "21:9",
+      "duration": 15,
+      "prompt": "p",
+      "seed": 42,
+      "sync_mode": true,
+      "target_audio_url": "https://a.test/t.mp3"
+    },
+    "endpoint": "text-to-video",
+    "normalized": {
+      "accepted_noop": [
+        "enable_safety_checker",
+        "prompt_expansion_mode"
+      ],
+      "audio_in": {
+        "media": {
+          "http": "https://a.test/t.mp3"
+        },
+        "role": "target_soundtrack"
+      },
+      "audio_out": "model_default",
+      "callback": {
+        "kind": "fal_webhook",
+        "url": "https://hooks.example.com/fal?x=1"
+      },
+      "canvas": {
+        "aspect": {
+          "ratio": {
+            "h": 9,
+            "w": 21
+          },
+          "short_edge": 768
+        }
+      },
+      "keyframes": [],
+      "model": "h3-max",
+      "negative_prompt": null,
+      "output": {
+        "inline_data_uri": true
+      },
+      "prompt": "p",
+      "protocol": "fal",
+      "references": [],
+      "sampling": {
+        "boundary_ratio": null,
+        "flow_shift": null,
+        "guidance": null,
+        "guidance_2": null,
+        "steps": null
+      },
+      "seed": 42,
+      "task": "t2v",
+      "timing": {
+        "fps": null,
+        "length": {
+          "seconds": {
+            "snap": "align_up",
+            "value": 15.0
+          }
+        }
+      }
+    },
+    "query": [
+      [
+        "fal_webhook",
+        "https://hooks.example.com/fal?x=1"
+      ]
+    ]
+  }
+}
