@@ -1185,18 +1185,26 @@ case "$FAMILY" in
     if want ltx25-512p-sol; then
       # The rtx5090 family's 512p Sol cell; -prof runs it from the
       # ltx2/ltx25_distill_sol profile (Sol stage 2 from the profile).
-      for arm in base env prof; do
-        bin="$BIN"; extra=()
+      # Every arm encodes its prompt (--no-text-cache): a conditioning-cache
+      # hit feeds the DiT the stored f32 connector output instead of the
+      # freshly encoded device tensor, which is not the same clip, so a
+      # shared cache would compare hit against miss. -cache is this build
+      # with the cache on (its warmup writes, its timed pass hits), compared
+      # with -env to show exactly that.
+      for arm in base env prof cache; do
+        bin="$BIN"; extra=(); tc=(--no-text-cache)
         [[ "$arm" == base ]] && bin="$BASE"
         [[ "$arm" == prof ]] && extra=(--techniques ltx2/ltx25_distill_sol)
+        [[ "$arm" == cache ]] && tc=(--text-cache "$SCRATCH/ltx2-text-cache-$arm")
         gated_cell "ltx25-512p-sol-$arm" ltx25-two-stage \
           "$bin" ${extra[@]+"${extra[@]}"} --mode fast ltx2 gen --model-version 2.5 \
             --weights "$W/ltx25" --dit "$W/ltx25" --height 512 --width 768 --num-frames 121 \
-            --prompt "$PROMPT" --seed "$SEED" --two-stage --text streamed --warm \
+            --prompt "$PROMPT" --seed "$SEED" --two-stage --text streamed --warm "${tc[@]}" \
             --clip "$RUNS/ltx25-512p-sol-$arm/frames"
       done
       compare_cells ltx25-512p-sol-base ltx25-512p-sol-env --off-identity
       compare_cells ltx25-512p-sol-base ltx25-512p-sol-prof --off-identity
+      compare_cells ltx25-512p-sol-env ltx25-512p-sol-cache
     fi
     for f in "$RUNS"/compare/compare-clips-*.json; do
       [[ -f "$f" ]] && log "$(basename "$f"): $(grep -oE '"(status|off_identity|max_abs_diff_uint8)": *[^,}]*' "$f" | tr '\n' ' ')"
