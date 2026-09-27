@@ -692,9 +692,8 @@ pub fn resolve_frames(length: &Length, fps: u32, caps: &ModelCaps) -> Result<u32
         Length::Frames { value, snap } => (value, snap, "num_frames"),
     };
     let next = g.next_on_grid(raw);
-    if caps.family == Family::H3 && next == Some(h3::align_num_frames(4 * h3::H3_FPS) as u32) {
-        return Err(ApiError::unsupported(GapId::H3FourSeconds).with_param(param));
-    }
+    // H3 4 s (107 frames) is on the grid since E3; APIs that keep
+    // FastVideo's 5 s floor (openai-videos) enforce it themselves.
     let range = || {
         let f = fps.max(1) as f64;
         format!(
