@@ -18,5 +18,12 @@ time.workspace = true
 tracing.workspace = true
 uuid.workspace = true
 
+[dev-dependencies]
+fastvideo-engine-service.workspace = true
+async-trait.workspace = true
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "sync", "time", "fs"] }
+tower.workspace = true
+url.workspace = true
+
 [lints]
 workspace = true

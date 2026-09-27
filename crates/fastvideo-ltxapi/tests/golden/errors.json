@@ -1,0 +1,13 @@
+[
+  { "http": 400, "body": { "type": "error", "error": { "type": "invalid_request_error", "message": "duration is required" } } },
+  { "http": 401, "body": { "type": "error", "error": { "type": "authentication_error", "message": "Invalid API key" } } },
+  { "http": 402, "body": { "type": "error", "error": { "type": "insufficient_funds_error", "message": "Not enough credits" } } },
+  { "http": 403, "body": { "type": "error", "error": { "type": "permission_error", "message": "endpoint not available for the account" } } },
+  { "http": 404, "body": { "type": "error", "error": { "type": "not_found_error", "message": "Job doesn't exist or has expired" } } },
+  { "http": 422, "body": { "type": "error", "error": { "type": "content_filtered_error", "message": "Rejected by safety filters" } } },
+  { "http": 429, "body": { "type": "error", "error": { "type": "concurrency_limit_error", "message": "Too many concurrent requests. Please try again later." } } },
+  { "http": 429, "body": { "type": "error", "error": { "type": "rate_limit_error", "message": "Queue limit exceeded. Please try again later." } } },
+  { "http": 500, "body": { "type": "error", "error": { "type": "api_error", "message": "Unexpected server error" } } },
+  { "http": 503, "body": { "type": "error", "error": { "type": "service_unavailable_error", "message": "Temporarily unavailable" } } },
+  { "http": 529, "body": { "type": "error", "error": { "type": "overloaded_error", "message": "Temporarily overloaded" } } }
+]
