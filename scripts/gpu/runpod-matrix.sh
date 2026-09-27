@@ -558,6 +558,14 @@ case "$FAMILY" in
       --warm
       "${PROMPT_ARGS[@]}"
     )
+    # The distilled presets decode through TAEHV when taew2_1 is found
+    # (FASTVIDEO_TAE_DIR): fetch it onto the container disk once.
+    TAEW="$TAE/taew2_1.safetensors"
+    if [[ ! -f "$TAEW" ]]; then
+      bash "$(dirname "${BASH_SOURCE[0]}")/fetch_taehv.sh" "$TAE" >>"$RUNS/tae-fetch.log" 2>&1 \
+        || log "WARN: taew2_1 fetch failed (tae-fetch.log); distilled cells decode with the Wan VAE"
+    fi
+    export FASTVIDEO_TAE_DIR="$TAE"
     # Baseline: VSA (the checkpoint's to_gate_compress), the default decoder.
     gated_cell wan13-dmd fastwan21-1.3b \
       "$BIN" --mode fast --vsa wan gen "${wan_common[@]}" --clip-dir "$RUNS/wan13-dmd/frames"
@@ -565,6 +573,18 @@ case "$FAMILY" in
     gated_cell wan13-dmd-dense fastwan21-1.3b \
       "$BIN" --mode fast wan gen "${wan_common[@]}" --clip-dir "$RUNS/wan13-dmd-dense/frames"
     compare_cells wan13-dmd wan13-dmd-dense
+    # The opt-out to the full Wan VAE (2 latent frames per pass by default),
+    # and the old one-frame-per-pass decode.
+    gated_cell wan13-dmd-fullvae fastwan21-1.3b \
+      "$BIN" --mode fast --vsa wan gen "${wan_common[@]}" --full-vae \
+        --clip-dir "$RUNS/wan13-dmd-fullvae/frames"
+    gated_cell wan13-dmd-fullvae-chunk1 fastwan21-1.3b \
+      "$BIN" --mode fast --vsa --vae-chunk 1 wan gen "${wan_common[@]}" --full-vae \
+        --clip-dir "$RUNS/wan13-dmd-fullvae-chunk1/frames"
+    # TAEHV (the default) against the full VAE: LPIPS / PSNR / sharpness.
+    compare_cells wan13-dmd-fullvae wan13-dmd
+    gate_cells wan13-dmd-fullvae wan13-dmd lossy
+    compare_cells wan13-dmd-fullvae-chunk1 wan13-dmd-fullvae
     ;;
   b200)
     # Warm B200 parity: H3 / FastH3 / LTX only. Official VAE stays the

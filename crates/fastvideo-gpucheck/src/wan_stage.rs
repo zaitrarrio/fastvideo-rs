@@ -61,6 +61,10 @@ pub enum Stage {
         no_mp4: bool,
         #[arg(long, default_value = "gpucheck-out/wan-gen")]
         clip_dir: PathBuf,
+        /// Decode with the full Wan VAE even for the distilled presets (which
+        /// default to TAEHV when its weights are found): FASTVIDEO_WAN_VAE=full.
+        #[arg(long)]
+        full_vae: bool,
         /// One untimed generation first (recorded as `cold_generation`).
         #[arg(long)]
         warm: bool,
@@ -89,8 +93,12 @@ pub fn run(report: &mut Report, stage: &Stage) -> StageResult<()> {
             no_mp4,
             clip_dir,
             warm,
+            full_vae,
             device,
         } => {
+            if *full_vae {
+                std::env::set_var("FASTVIDEO_WAN_VAE", "full");
+            }
             let (set, multi) = match prompts {
                 Some(file) => (crate::benchmark::load_prompts(file, *seed)?, true),
                 None => (

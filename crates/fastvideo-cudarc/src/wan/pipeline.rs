@@ -36,12 +36,82 @@ fn load_taehv() -> Result<Option<super::taehv::TaeHv>> {
     if dir.is_empty() {
         return Ok(None);
     }
-    let map = WeightMap::from_dir(Path::new(&dir))
-        .map_err(|e| PipelineError::Message(format!("FASTVIDEO_TAEHV_WEIGHTS={dir}: {e}")))?;
-    let tae = super::taehv::TaeHv::load(&map)
+    let tae = open_taehv(Path::new(&dir))
         .map_err(|e| PipelineError::Message(format!("FASTVIDEO_TAEHV_WEIGHTS={dir}: {e}")))?;
     super::log::info(format_args!("vae=taehv ({dir})"));
     Ok(Some(tae))
+}
+
+/// The TAEHV file name the Wan 2.1 latent space (16 channels) decodes with.
+pub const TAEW2_1: &str = "taew2_1.safetensors";
+
+/// `taew2_1` from a file, or a directory holding `taew2_1.safetensors` (only
+/// that file: a TAE directory may also hold taeh3 / taeltx weights).
+fn open_taehv(path: &Path) -> TensorResult<super::taehv::TaeHv> {
+    let file = if path.is_dir() && path.join(TAEW2_1).is_file() {
+        path.join(TAEW2_1)
+    } else {
+        path.to_path_buf()
+    };
+    let map = if file.is_file() {
+        WeightMap::open_files(&[file])?
+    } else {
+        WeightMap::from_dir(path)?
+    };
+    super::taehv::TaeHv::load(&map)
+}
+
+/// Where the distilled presets look for `taew2_1.safetensors` when
+/// `FASTVIDEO_TAEHV_WEIGHTS` is unset: `FASTVIDEO_TAE_DIR`, `<weights>/taehv`,
+/// `<weights>/../taehv`, then `$XDG_CACHE_HOME` (or `~/.cache`)
+/// `/fastvideo/taehv` — where `scripts/gpu/fetch_taehv.sh` puts it.
+pub fn default_taehv_dirs(root: &Path) -> Vec<std::path::PathBuf> {
+    let mut dirs = Vec::new();
+    if let Ok(d) = std::env::var("FASTVIDEO_TAE_DIR") {
+        if !d.is_empty() {
+            dirs.push(std::path::PathBuf::from(d));
+        }
+    }
+    dirs.push(root.join("taehv"));
+    if let Some(parent) = root.parent() {
+        dirs.push(parent.join("taehv"));
+    }
+    let cache = std::env::var_os("XDG_CACHE_HOME")
+        .map(std::path::PathBuf::from)
+        .or_else(|| std::env::var_os("HOME").map(|h| Path::new(&h).join(".cache")));
+    if let Some(c) = cache {
+        dirs.push(c.join("fastvideo").join("taehv"));
+    }
+    dirs
+}
+
+/// Which decoder a request uses (`FASTVIDEO_WAN_VAE`): `auto` (default:
+/// TAEHV for the distilled DMD / rCM / self-forcing presets when its weights
+/// are found, the Wan VAE otherwise), `full` (always the Wan VAE: the
+/// opt-out) or `taehv` (always TAEHV; an error without its weights).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WanVaeChoice {
+    Auto,
+    Full,
+    Taehv,
+}
+
+impl WanVaeChoice {
+    pub fn from_env() -> Result<Self> {
+        match std::env::var("FASTVIDEO_WAN_VAE")
+            .unwrap_or_default()
+            .trim()
+            .to_ascii_lowercase()
+            .as_str()
+        {
+            "" | "auto" => Ok(Self::Auto),
+            "full" | "wan" | "vae" | "official" => Ok(Self::Full),
+            "taehv" | "tae" | "tiny" => Ok(Self::Taehv),
+            other => Err(PipelineError::Message(format!(
+                "FASTVIDEO_WAN_VAE={other}: expected auto, full or taehv"
+            ))),
+        }
+    }
 }
 
 /// `FASTVIDEO_DEVICE_STATS=1`: log host↔device transfer counts after `generate()`.
@@ -218,6 +288,10 @@ pub struct WanPipeline {
     /// instead of the Wan VAE. Loaded alongside rather than instead of it, so
     /// the Wan VAE stays available and the choice is per-decode.
     taehv: Option<super::taehv::TaeHv>,
+    /// TAEHV came from `FASTVIDEO_TAEHV_WEIGHTS` (used for every request)
+    /// rather than the default search (used by the distilled presets).
+    taehv_explicit: bool,
+    vae_choice: WanVaeChoice,
     clip: Option<ClipVision>,
     tiny: bool,
     boundary_ratio: Option<f32>,
@@ -234,6 +308,8 @@ impl WanPipeline {
             dit_2: None,
             vae: AutoencoderKlWan::zeros(WanVaeConfig::tiny()),
             taehv: None,
+            taehv_explicit: false,
+            vae_choice: WanVaeChoice::Auto,
             clip: None,
             tiny: true,
             boundary_ratio: None,
@@ -255,6 +331,8 @@ impl WanPipeline {
             dit_2: None,
             vae,
             taehv: None,
+            taehv_explicit: false,
+            vae_choice: WanVaeChoice::Auto,
             clip: None,
             tiny: false,
             boundary_ratio,
@@ -307,13 +385,45 @@ impl WanPipeline {
         };
 
         let boundary_ratio = cfg.boundary_ratio;
-        let taehv = load_taehv()?;
+        let vae_choice = WanVaeChoice::from_env()?;
+        let mut taehv = load_taehv()?;
+        let taehv_explicit = taehv.is_some();
+        // taew2_1 decodes the 16-channel Wan 2.1 latent space only.
+        if taehv.is_none() && vae_cfg.z_dim == 16 && vae_choice != WanVaeChoice::Full {
+            for dir in default_taehv_dirs(root) {
+                if !dir.join(TAEW2_1).is_file() {
+                    continue;
+                }
+                match open_taehv(&dir) {
+                    Ok(t) => {
+                        super::log::info(format_args!(
+                            "taehv available for the distilled presets ({})",
+                            dir.display()
+                        ));
+                        taehv = Some(t);
+                        break;
+                    }
+                    Err(e) => super::log::info(format_args!(
+                        "taehv at {} not loaded: {e}",
+                        dir.display()
+                    )),
+                }
+            }
+        }
+        if vae_choice == WanVaeChoice::Taehv && taehv.is_none() {
+            return Err(PipelineError::Message(format!(
+                "FASTVIDEO_WAN_VAE=taehv but no {TAEW2_1} (FASTVIDEO_TAEHV_WEIGHTS, or one of {:?}; scripts/gpu/fetch_taehv.sh)",
+                default_taehv_dirs(root)
+            )));
+        }
         Ok(Self {
             text,
             dit: WanTransformer3D::load(cfg, &dit)?,
             dit_2,
             vae: AutoencoderKlWan::load(vae_cfg, &vae)?,
             taehv,
+            taehv_explicit,
+            vae_choice,
             clip,
             tiny: false,
             boundary_ratio,
@@ -531,7 +641,8 @@ impl WanPipeline {
         let mp4 = mp4 && cfg.fps > 0 && ffmpeg_available();
         let writer = VideoWriter::spawn(out_dir, cfg.fps, mp4)?;
         let mut drain = crate::h3::drain::FrameDrain::new(writer)?;
-        let video = self.decode_latents_streaming(&latents, &mut |offset, frames| {
+        let use_taehv = self.uses_taehv(cfg);
+        let video = self.decode_streaming_with(&latents, use_taehv, &mut |offset, frames| {
             drain.push(offset, frames)
         })?;
         let frames = video.shape[2];
@@ -565,7 +676,7 @@ impl WanPipeline {
             frames,
             frame_paths,
             mp4: mp4_path,
-            decoder: if self.taehv.is_some() {
+            decoder: if use_taehv {
                 "taehv"
             } else {
                 "wan-vae"
@@ -741,9 +852,53 @@ impl WanPipeline {
     /// of finished frames (`[frames, 3, H, W]` in `[-1, 1]`, in order) while
     /// the decoder is still busy with the next one. Feed a [`VideoWriter`]
     /// from the sink and frame encoding overlaps the decode.
+    ///
+    /// TAEHV decodes here only when `FASTVIDEO_TAEHV_WEIGHTS` asked for it;
+    /// [`Self::generate_to`] also uses it by default for distilled requests
+    /// (see [`Self::uses_taehv`]).
     pub fn decode_latents_streaming(
         &self,
         latents: &CudaTensor,
+        sink: &mut dyn FnMut(usize, &CudaTensor) -> Result<()>,
+    ) -> Result<CudaTensor> {
+        let tae = self.taehv.is_some()
+            && self.vae_choice != WanVaeChoice::Full
+            && (self.taehv_explicit || self.vae_choice == WanVaeChoice::Taehv);
+        self.decode_streaming_with(latents, tae, sink)
+    }
+
+    /// Whether `cfg` decodes through TAEHV: never with `FASTVIDEO_WAN_VAE=full`;
+    /// always when TAEHV was asked for explicitly; otherwise for the distilled
+    /// samplers (DMD, rCM, causal DMD), whose few-step outputs are what the
+    /// tiny decoder is for, when its weights were found at load.
+    pub fn uses_taehv(&self, cfg: &GenerateConfig) -> bool {
+        if self.taehv.is_none() {
+            if cfg.is_dmd || cfg.is_rcm {
+                static SAID: std::sync::atomic::AtomicBool =
+                    std::sync::atomic::AtomicBool::new(false);
+                if self.vae_choice == WanVaeChoice::Auto && !self.tiny {
+                    super::log::info_once(
+                        &SAID,
+                        format_args!(
+                            "distilled preset: no {TAEW2_1} found, decoding with the Wan VAE \
+                             (scripts/gpu/fetch_taehv.sh <dir>, then FASTVIDEO_TAE_DIR=<dir>)"
+                        ),
+                    );
+                }
+            }
+            return false;
+        }
+        match self.vae_choice {
+            WanVaeChoice::Full => false,
+            WanVaeChoice::Taehv => true,
+            WanVaeChoice::Auto => self.taehv_explicit || cfg.is_dmd || cfg.is_rcm,
+        }
+    }
+
+    fn decode_streaming_with(
+        &self,
+        latents: &CudaTensor,
+        use_taehv: bool,
         sink: &mut dyn FnMut(usize, &CudaTensor) -> Result<()>,
     ) -> Result<CudaTensor> {
         // Errors from the sink are pipeline errors, not tensor errors; carry
@@ -763,7 +918,7 @@ impl WanPipeline {
         // un-normalisation the Wan VAE needs. That difference is the whole
         // reason this branch sits above `scale_latents` rather than inside the
         // decoder, and the oracle stage is what established it.
-        let decoded = if let Some(tae) = &self.taehv {
+        let decoded = if let Some(tae) = self.taehv.as_ref().filter(|_| use_taehv) {
             let _vae = super::log::StepTimer::start("taehv.decode");
             tae.decode_streaming(latents, &mut tensor_sink)
         } else {

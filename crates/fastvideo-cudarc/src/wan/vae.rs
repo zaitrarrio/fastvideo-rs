@@ -978,7 +978,10 @@ impl AutoencoderKlWan {
         //
         // `FASTVIDEO_VAE_CHUNK` trades memory for utilization: every extra
         // latent frame in a chunk multiplies the decoder's activations.
-        let chunk = super::envflag::usize_flag("FASTVIDEO_VAE_CHUNK", 1).max(1);
+        // Default 2: 18.5% off the 8 s clip's decode (docs/MILESTONES.md,
+        // 2026-09-18); 4 ran out of memory on a 24 GB card. 1 is the old
+        // one-frame-per-pass decode.
+        let chunk = super::envflag::usize_flag("FASTVIDEO_VAE_CHUNK", 2).max(1);
         let mut i = 0usize;
         let mut emitted = 0usize;
         while i < t {
