@@ -1731,7 +1731,10 @@ additions and readings; everything is re-exported from the crate root.
   tick drops (1/s), and sends the WHIP `DELETE` on stop or `max_seconds`.
   `FV_STREAM_STUN` sets the srflx probe (`none` for loopback).
   `tests/streams_whip.rs` decodes what an in-process WHIP endpoint receives;
-  `scripts/serve/whip-e2e.sh` adds MediaMTX and a WHEP viewer.
+  `scripts/serve/whip-e2e.sh` adds MediaMTX and a WHEP viewer (CPU run
+  2026-09-27, MediaMTX v1.15.1: fake causal stream published over WHIP,
+  read back through WHEP, 48 H.264 access units received, 33 decoded with
+  their burned-in frame index).
 - **GPU run (2026-09-27, `scripts/serve/runpod-sfwan-whip.sh`, L40S,
   driver 580.159, serve image built with `webrtc`):** fv-serve with
   `CausalCudaBackend` → `POST /fv/v1/streams` → WHIP (NVENC, Constrained
