@@ -5,7 +5,7 @@
 //!   `get_state`, `set_clip_seconds`, `set_seed`, `set_autoplay`,
 //!   `set_canvas`, `reset`.
 //! - **Causal** (SF-Wan): Waypoint-style `InputState` setters `set_prompt`,
-//!   `set_paused`, `set_seed`, plus `reset`.
+//!   `set_paused`, `set_seed`, plus `reset` and `get_state`.
 //!
 //! A [`CommandTable`] validates `Command.data` like RT's model contract
 //! (types, bounds, `max_length`, choices, required fields, defaults) and
@@ -357,6 +357,7 @@ fn causal_table() -> CommandTable {
         },
         CommandSpec { name: "set_seed", description: "Seed.", params: vec![Param::new("seed", uint(), "Seed.")], reply: None },
         CommandSpec { name: "reset", description: "Clear the KV cache and restart at block 0.", params: vec![], reply: None },
+        CommandSpec { name: "get_state", description: "The session state.", params: vec![], reply: Some("state_update") },
     ];
     let messages = vec![
         MessageSpec {
@@ -422,7 +423,7 @@ mod tests {
 
         let c = CommandTable::for_mode(Mode::Causal, b());
         let names: Vec<&str> = c.commands.iter().map(|c| c.name).collect();
-        assert_eq!(names, ["set_prompt", "set_paused", "set_seed", "reset"]);
+        assert_eq!(names, ["set_prompt", "set_paused", "set_seed", "reset", "get_state"]);
         assert!(c.validate("set_paused", &m(json!({"paused": true}))).is_ok());
     }
 }

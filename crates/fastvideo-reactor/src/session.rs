@@ -16,13 +16,14 @@ use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use fastvideo_engine_service::CausalControl;
 use fastvideo_protocol::{draw_seed, ApiError, Continuity, ModelCaps, SessionSpec, StreamCaps, TrackSet};
 use fastvideo_webrtc::host::{PeerHandle, RtcHost};
 use fastvideo_webrtc::writer::VideoCodec;
 use serde_json::{json, Value};
 
 use crate::causal::CausalDriver;
-use crate::clip::{aspect_canvas, ClipDriver, ClipDriverConfig};
+use crate::clip::{aspect_canvas, ClipDriver};
 use crate::commands::{ClipBounds, CommandTable};
 use crate::driver::{Driver, Outbox};
 use crate::engine::{LoadState, Mode, StreamEngine};
@@ -419,41 +420,43 @@ impl Reactor {
             seed: Some(seed),
         };
         let cfg = &self.inner.cfg;
-        let media = Arc::new(MediaPipeline::start(MediaConfig {
-            h264: cfg.h264,
-            bitrate_bps: cfg.h264_bitrate_bps,
-            vp8_quality: cfg.vp8_quality,
-            ..MediaConfig::new(fps, tracks.has_audio(), canvas)
-        }));
         let out = Outbox::default();
         let refuse = |e: ApiError| {
             let status = e.kind.http_status();
-            Refusal::new(if status == 429 { 409 } else { status }, format!("cannot start session: {}", e.message))
+            let mut r = Refusal::new(
+                if status == 429 { 409 } else { status },
+                format!("cannot start session: {}", e.message),
+            );
+            if status == 503 {
+                r.retry_after = Some(1);
+            }
+            r
         };
-        let driver: Arc<dyn Driver> = match table.mode {
+        let (driver, paced, causal): (Arc<dyn Driver>, _, Option<CausalControl>) = match table.mode {
             Mode::Clip => {
-                let engine = self.inner.engine.open_clip(spec).await.map_err(refuse)?;
-                Arc::new(ClipDriver::start(
-                    ClipDriverConfig {
-                        fps,
-                        bounds: clip_bounds(&caps, fps),
-                        seed,
-                        canvas_caps: caps.canvas.clone(),
-                        short_edge: cfg.short_edge.or_else(|| caps.canvas.short_edges.first().copied()).unwrap_or(canvas.1.min(canvas.0)),
-                        aspect: cfg.aspect.clone(),
-                        canvas,
-                        has_audio: tracks.has_audio(),
-                    },
-                    engine,
-                    media.clone(),
-                    out.clone(),
-                ))
+                let session = self.inner.engine.open_clip(spec).await.map_err(refuse)?;
+                let (d, p) = ClipDriver::start(session, &cfg.aspect, out.clone()).map_err(refuse)?;
+                (Arc::new(d), p, None)
             }
             Mode::Causal => {
-                let engine = self.inner.engine.open_causal(spec).await.map_err(refuse)?;
-                Arc::new(CausalDriver::start(engine, media.clone(), out.clone(), seed))
+                let session = self.inner.engine.open_causal(spec).await.map_err(refuse)?;
+                let (d, p) = CausalDriver::start(session, seed, out.clone()).map_err(refuse)?;
+                let c = d.control().clone();
+                (Arc::new(d), p, Some(c))
             }
         };
+        let media = Arc::new(MediaPipeline::start(
+            MediaConfig {
+                h264: cfg.h264,
+                bitrate_bps: cfg.h264_bitrate_bps,
+                vp8_quality: cfg.vp8_quality,
+                ..MediaConfig::new(fps, tracks.has_audio(), canvas)
+            },
+            paced.ticks,
+        ));
+        if let Some(c) = causal {
+            media.on_first_frame(move || c.mark_first_frame_sent());
+        }
         let openapi = schema::openapi(&caps.id.0, &cfg.server_version, &table, &tracks);
         let codecs = sendable_codecs(cfg.h264);
         let (epoch, gen) = {

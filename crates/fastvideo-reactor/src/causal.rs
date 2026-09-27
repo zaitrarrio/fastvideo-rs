@@ -1,204 +1,157 @@
-//! The causal (SF-Wan) driver: Waypoint-style `InputState` setters
-//! (`set_prompt`, `set_paused`, `set_seed`) plus `reset` (design §5.7).
+//! Causal mode (SF-Wan): Waypoint-style `InputState` setters `set_prompt`,
+//! `set_paused`, `set_seed`, plus `reset` and `get_state` (design §5.7),
+//! over WP-15's `CausalControl` and the adaptive causal pacer.
 //!
-//! One pump task owns the [`CausalEngine`]: it applies control changes and
-//! pulls blocks, pushing their frames into the session pacer (which waits
-//! when full: generation ahead of playout, nothing dropped upstream, design
-//! §5.4). Setters answer with a bodyless ack (as RT's auto-generated
+//! Setters answer with a bodyless ack (as RT's auto-generated `set_<field>`
 //! setters) and broadcast `state_update{prompt, paused, seed, block_index,
-//! unique_fps}`; a `state_update` also follows every block. Generation is
-//! paused while no peer is connected.
+//! unique_fps}`; `get_state` replies with it. Refusals are broadcast
+//! `command_error{command, reason}` plus the ack. Generation pauses while no
+//! peer is connected (design §5.2 Orphaned), and a `state_update` goes out
+//! whenever a new block has been played (at most once a second).
 
-use std::sync::{Arc, Mutex};
-use std::time::Instant;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::Arc;
+use std::time::Duration;
 
 use async_trait::async_trait;
+use fastvideo_engine_service::{
+    spawn_causal_pacer, CausalCommand, CausalControl, CausalPacerConfig, CausalReply, CausalSession, CausalState,
+    PacedStream,
+};
+use fastvideo_protocol::ApiError;
 use serde_json::{json, Map, Value};
-use tokio::sync::{mpsc, oneshot};
 
 use crate::driver::{Driver, Outbox, Outcome};
-use crate::engine::CausalEngine;
-use crate::media::MediaPipeline;
 use crate::wire::ServerMsg;
-
-#[derive(Clone, Debug, Default)]
-struct View {
-    prompt: String,
-    paused: bool,
-    seed: u64,
-    block_index: u64,
-    unique_fps: f64,
-}
-
-impl View {
-    fn json(&self) -> Value {
-        json!({
-            "prompt": self.prompt,
-            "paused": self.paused,
-            "seed": self.seed,
-            "block_index": self.block_index,
-            "unique_fps": (self.unique_fps * 100.0).round() / 100.0,
-        })
-    }
-}
-
-enum Ctl {
-    Prompt(String),
-    Paused(bool),
-    Seed(u64),
-    Reset,
-    Peers(usize),
-    Close(oneshot::Sender<()>),
-}
 
 /// The causal-mode [`Driver`].
 pub struct CausalDriver {
-    view: Arc<Mutex<View>>,
-    tx: mpsc::UnboundedSender<Ctl>,
+    control: CausalControl,
     out: Outbox,
+    user_paused: Arc<AtomicBool>,
+    peers: Arc<AtomicUsize>,
 }
 
-fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
-    m.lock().unwrap_or_else(|e| e.into_inner())
+fn state_msg(s: &CausalState) -> ServerMsg {
+    ServerMsg::broadcast("state_update", serde_json::to_value(s).unwrap_or(Value::Null))
 }
 
 impl CausalDriver {
-    pub fn start(
-        engine: Box<dyn CausalEngine>,
-        media: Arc<MediaPipeline>,
-        out: Outbox,
-        seed: u64,
-    ) -> Self {
-        let view = Arc::new(Mutex::new(View { seed, ..View::default() }));
-        let (tx, rx) = mpsc::unbounded_channel();
-        tokio::spawn(pump(engine, media, out.clone(), view.clone(), rx, seed));
-        Self { view, tx, out }
+    /// Starts the causal pacer over `session` (generation stays parked until
+    /// a prompt arrives and a peer is connected).
+    pub fn start(session: CausalSession, seed: u64, out: Outbox) -> Result<(Self, PacedStream), ApiError> {
+        let control = session.control();
+        control.set_seed(seed);
+        control.set_paused(true);
+        let spec = session.spec().clone();
+        let paced = spawn_causal_pacer(session, CausalPacerConfig::for_spec(&spec))?;
+        // state_update after new blocks.
+        let (c, o) = (control.clone(), out.clone());
+        tokio::spawn(async move {
+            let mut last = u64::MAX;
+            while !c.is_closed() {
+                tokio::time::sleep(Duration::from_secs(1)).await;
+                let s = c.state();
+                if s.block_index != last && s.block_index > 0 {
+                    last = s.block_index;
+                    o.broadcast(state_msg(&s));
+                }
+            }
+        });
+        let d = Self {
+            control,
+            out,
+            user_paused: Arc::new(AtomicBool::new(false)),
+            peers: Arc::new(AtomicUsize::new(0)),
+        };
+        Ok((d, paced))
     }
 
-    fn state(&self) -> ServerMsg {
-        ServerMsg::broadcast("state_update", lock(&self.view).json())
+    pub fn control(&self) -> &CausalControl {
+        &self.control
+    }
+
+    fn apply_pause(&self) {
+        let paused = self.user_paused.load(Ordering::Relaxed) || self.peers.load(Ordering::Relaxed) == 0;
+        self.control.set_paused(paused);
     }
 }
 
-async fn pump(
-    mut engine: Box<dyn CausalEngine>,
-    media: Arc<MediaPipeline>,
-    out: Outbox,
-    view: Arc<Mutex<View>>,
-    mut rx: mpsc::UnboundedReceiver<Ctl>,
-    seed: u64,
-) {
-    engine.set_seed(seed);
-    // No prompt yet and no audience: the engine parks.
-    let (mut user_paused, mut peers) = (false, 0usize);
-    engine.set_paused(true);
-    let mut fps_ema: Option<f64> = None;
-    let mut last = Instant::now();
-    loop {
-        tokio::select! {
-            c = rx.recv() => {
-                let Some(c) = c else { break };
-                match c {
-                    Ctl::Prompt(p) => engine.set_prompt(&p),
-                    Ctl::Paused(p) => {
-                        user_paused = p;
-                        engine.set_paused(user_paused || peers == 0);
-                    }
-                    Ctl::Seed(s) => engine.set_seed(s),
-                    Ctl::Reset => {
-                        engine.reset();
-                        media.flush();
-                    }
-                    Ctl::Peers(n) => {
-                        peers = n;
-                        engine.set_paused(user_paused || peers == 0);
-                    }
-                    Ctl::Close(done) => {
-                        engine.close();
-                        let _ = done.send(());
-                        return;
-                    }
-                }
-            }
-            b = engine.next_block() => {
-                match b {
-                    None => break,
-                    Some(Err(e)) => {
-                        tracing::warn!(error = %e.message, "causal block failed");
-                        out.broadcast(ServerMsg::broadcast(
-                            "command_error",
-                            json!({"command": "generate", "reason": e.message}),
-                        ));
-                    }
-                    Some(Ok(b)) => {
-                        let n = b.frames.len() as f64;
-                        let now = Instant::now();
-                        let dt = now.duration_since(last).as_secs_f64().max(1e-3);
-                        last = now;
-                        let inst = n / dt;
-                        let ema = fps_ema.map_or(inst, |e| 0.7 * e + 0.3 * inst);
-                        fps_ema = Some(ema);
-                        {
-                            let mut v = lock(&view);
-                            v.block_index = b.index;
-                            v.unique_fps = ema;
-                        }
-                        media.push(b.frames, b.audio).await;
-                        out.broadcast(ServerMsg::broadcast("state_update", lock(&view).json()));
-                    }
-                }
-            }
-        }
-    }
-    engine.close();
+/// A validated wire command (see [`crate::commands`]) → [`CausalCommand`].
+pub fn to_command(name: &str, a: &Map<String, Value>) -> Option<CausalCommand> {
+    Some(match name {
+        "set_prompt" => CausalCommand::SetPrompt { prompt: a.get("prompt")?.as_str()?.to_owned() },
+        "set_paused" => CausalCommand::SetPaused { paused: a.get("paused")?.as_bool()? },
+        "set_seed" => CausalCommand::SetSeed { seed: a.get("seed")?.as_u64()? },
+        "reset" => CausalCommand::Reset,
+        "get_state" => CausalCommand::GetState,
+        _ => return None,
+    })
 }
 
 #[async_trait]
 impl Driver for CausalDriver {
-    async fn command(&self, _conn: u32, name: &str, a: Map<String, Value>) -> Outcome {
-        let ctl = match name {
-            "set_prompt" => {
-                let p = a.get("prompt").and_then(Value::as_str).unwrap_or_default().to_owned();
-                lock(&self.view).prompt = p.clone();
-                Ctl::Prompt(p)
-            }
-            "set_paused" => {
-                let p = a.get("paused").and_then(Value::as_bool).unwrap_or(false);
-                lock(&self.view).paused = p;
-                Ctl::Paused(p)
-            }
-            "set_seed" => {
-                let s = a.get("seed").and_then(Value::as_u64).unwrap_or_default();
-                lock(&self.view).seed = s;
-                Ctl::Seed(s)
-            }
-            "reset" => {
-                lock(&self.view).block_index = 0;
-                Ctl::Reset
-            }
-            other => {
-                return Outcome::Error { code: "invalid_command".into(), message: format!("unknown command `{other}`") }
-            }
+    async fn command(&self, _conn: u32, name: &str, args: Map<String, Value>) -> Outcome {
+        let Some(cmd) = to_command(name, &args) else {
+            return Outcome::Error { code: "invalid_command".into(), message: format!("unknown command `{name}`") };
         };
-        if self.tx.send(ctl).is_err() {
-            return Outcome::Error { code: "internal_error".into(), message: "session closed".into() };
+        let get = matches!(cmd, CausalCommand::GetState);
+        let pause = match &cmd {
+            CausalCommand::SetPaused { paused } => Some(*paused),
+            _ => None,
+        };
+        let reply = self.control.apply(cmd);
+        if let (Some(p), CausalReply::StateUpdate(_)) = (pause, &reply) {
+            self.user_paused.store(p, Ordering::Relaxed);
+            self.apply_pause();
         }
-        self.out.broadcast(self.state());
-        Outcome::Ack
+        match reply {
+            CausalReply::StateUpdate(mut s) => {
+                s.paused = self.user_paused.load(Ordering::Relaxed);
+                if get {
+                    return Outcome::Reply("state_update".into(), serde_json::to_value(&s).unwrap_or(Value::Null));
+                }
+                self.out.broadcast(state_msg(&s));
+                Outcome::Ack
+            }
+            CausalReply::CommandError { command, reason } => {
+                self.out.broadcast(ServerMsg::broadcast("command_error", json!({"command": command, "reason": reason})));
+                Outcome::Ack
+            }
+        }
     }
 
     fn greet(&self, conn: u32) {
-        self.out.to(conn, self.state());
+        let mut s = self.control.state();
+        s.paused = self.user_paused.load(Ordering::Relaxed);
+        self.out.to(conn, state_msg(&s));
     }
 
     fn peers_changed(&self, connected: usize) {
-        let _ = self.tx.send(Ctl::Peers(connected));
+        self.peers.store(connected, Ordering::Relaxed);
+        self.apply_pause();
     }
 
     async fn close(&self) {
-        let (tx, rx) = oneshot::channel();
-        if self.tx.send(Ctl::Close(tx)).is_ok() {
-            let _ = rx.await;
-        }
+        self.control.close();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn wire_commands_map_to_the_control() {
+        let m = |v: Value| v.as_object().unwrap().clone();
+        assert_eq!(
+            to_command("set_prompt", &m(json!({"prompt": "p"}))),
+            Some(CausalCommand::SetPrompt { prompt: "p".into() })
+        );
+        assert_eq!(to_command("set_paused", &m(json!({"paused": true}))), Some(CausalCommand::SetPaused { paused: true }));
+        assert_eq!(to_command("set_seed", &m(json!({"seed": 3}))), Some(CausalCommand::SetSeed { seed: 3 }));
+        assert_eq!(to_command("reset", &Map::new()), Some(CausalCommand::Reset));
+        assert_eq!(to_command("get_state", &Map::new()), Some(CausalCommand::GetState));
+        assert_eq!(to_command("enqueue", &Map::new()), None);
     }
 }

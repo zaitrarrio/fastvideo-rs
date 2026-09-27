@@ -1,29 +1,24 @@
-//! Per-session media: pacing, encode-once and fan-out to peers (design §5.1,
-//! §5.3; reactor §4.2, §4.5).
+//! Per-session media: encode once per negotiated codec and fan out to the
+//! peers (design §5.1, §5.3; reactor §4.2, §4.5).
 //!
-//! RT's model: the model emits bundles (one video frame plus that frame's
-//! audio slice); a pacer releases **one bundle per `1/fps` tick**; the
-//! bundle's audio is appended to a ≤200 ms per-track buffer; a separate
-//! feeder pushes **exactly one 10 ms / 480-sample Opus frame per 10 ms
-//! tick** for the life of the track, substituting silence when nothing is
-//! buffered, so the audio clock stays locked to wall time. A/V sync is
-//! co-transport: a frame's audio enters the buffer when the frame is sent.
+//! Pacing is the engine's (`fastvideo_engine_service::stream::pace`, WP-12 /
+//! WP-15): the clip pacer (`AvPacer`, idle policy **Black**) or the causal
+//! pacer (`FramePacer`, adaptive fps) yields one [`Tick`] per frame, each with
+//! exactly `48000/fps` mono samples for an audio session. Here:
 //!
-//! Here:
-//!
-//! - [`MediaPipeline::push`] queues bundles (bounded, `buffer_frames`, the
-//!   producer waits: backpressure, never drops).
-//! - The **video thread** ticks at `fps`, pops one item per tick, encodes it
-//!   once per negotiated codec ([`VideoCodec::H264`] via `fastvideo-media`,
-//!   [`VideoCodec::Vp8`] intra-only via libwebp) and fans the bitstream out.
-//!   The 90 kHz RTP clock advances every tick, sent or not; on underrun
-//!   nothing is sent and the client holds its last frame.
-//! - The **audio thread** runs the 10 ms Opus feeder (48 kHz mono, design
-//!   §5.3 Reactor row) when the session has an audio track.
-//! - A **black frame** is sent at the start of each connection (when its
-//!   video is resumed) and after a flush (reactor §4.2), as an IDR/keyframe.
-//! - A PLI/FIR or a resumed track forces a keyframe of the current picture
-//!   for that codec ([`MediaPipeline::kick`]).
+//! - **Video thread**: a fresh frame is encoded once per codec in use
+//!   ([`VideoCodec::H264`] through `fastvideo-media`, [`VideoCodec::Vp8`]
+//!   intra-only through libwebp) and sent to every peer of that codec at the
+//!   tick's 90 kHz RTP time. A repeated frame is not re-sent (the client holds
+//!   its last frame, as RT's pacer), unless the held picture changed (the
+//!   pacer's flush to black after a clip ends with nothing armed, or on a cut).
+//! - **Audio thread**: RT's feeder. Tick audio goes into a ≤200 ms buffer;
+//!   exactly one 10 ms / 480-sample Opus frame per 10 ms goes out, silence
+//!   when the buffer is short, so the audio RTP clock stays on wall time.
+//! - **Black frame at connection start** (reactor §4.2): a new peer, a
+//!   resumed video track, a PLI/FIR or a dropped tick ([`MediaPipeline::kick`])
+//!   re-sends the current picture as a keyframe; before the first frame the
+//!   current picture is black.
 
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -31,10 +26,11 @@ use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, Instant};
 
 use bytes::Bytes;
-use fastvideo_protocol::{RgbFrame, WIRE_AUDIO_RATE};
+use fastvideo_engine_service::{Tick, TickReceiver};
+use fastvideo_media::pacer::VideoOut;
+use fastvideo_protocol::RgbFrame;
 use fastvideo_webrtc::host::PeerHandle;
-use fastvideo_webrtc::writer::{AudioPacket, VideoCodec, VideoFrame};
-use tokio::sync::{oneshot, Notify};
+use fastvideo_webrtc::writer::{AudioPacket, TrackKind, VideoCodec, VideoFrame};
 
 /// 10 ms at 48 kHz (RT `_push_audio_frame`).
 pub const AUDIO_FRAME_SAMPLES: usize = 480;
@@ -53,13 +49,11 @@ pub enum H264Backend {
 }
 
 impl H264Backend {
-    /// Whether this build can encode H.264 with it.
+    /// Whether this build (and machine) can encode H.264 with it.
     pub fn usable(self) -> bool {
         match self {
             H264Backend::Nvenc => fastvideo_media::video::nvenc_available(),
-            H264Backend::OpenH264 => {
-                fastvideo_media::video::EncoderBackend::OpenH264.compiled()
-            }
+            H264Backend::OpenH264 => fastvideo_media::video::EncoderBackend::OpenH264.compiled(),
             H264Backend::Off => false,
         }
     }
@@ -80,13 +74,12 @@ pub fn sendable_codecs(h264: H264Backend) -> Vec<VideoCodec> {
 
 #[derive(Clone, Debug)]
 pub struct MediaConfig {
+    /// Nominal fps (encoder rate control; RTP comes from the ticks).
     pub fps: u32,
     /// The session has an audio track.
     pub audio: bool,
-    /// Initial canvas (black frames before the first real frame).
+    /// Canvas of the black picture before the first frame.
     pub canvas: (u32, u32),
-    /// Pacer queue depth in frames (2 s by default).
-    pub buffer_frames: usize,
     pub h264: H264Backend,
     /// H.264 target bitrate (`None`: `fastvideo-media` default per canvas).
     pub bitrate_bps: Option<u32>,
@@ -96,36 +89,23 @@ pub struct MediaConfig {
 
 impl MediaConfig {
     pub fn new(fps: u32, audio: bool, canvas: (u32, u32)) -> Self {
-        Self {
-            fps,
-            audio,
-            canvas,
-            buffer_frames: (fps as usize * 2).max(1),
-            h264: H264Backend::Nvenc,
-            bitrate_bps: None,
-            vp8_quality: 70.0,
-        }
+        Self { fps, audio, canvas, h264: H264Backend::Nvenc, bitrate_bps: None, vp8_quality: 70.0 }
     }
 }
 
-/// Counters (tests and `/metrics`-style introspection).
+/// Counters.
 #[derive(Debug, Default)]
 pub struct MediaStats {
     pub ticks: AtomicU64,
+    pub frames_encoded: AtomicU64,
     pub frames_sent: AtomicU64,
     pub black_frames: AtomicU64,
     pub keyframes_forced: AtomicU64,
-    pub underruns: AtomicU64,
+    pub holds: AtomicU64,
     pub encode_errors: AtomicU64,
     pub audio_frames: AtomicU64,
     pub audio_silence_frames: AtomicU64,
     pub audio_samples_in: AtomicU64,
-}
-
-enum Item {
-    Frame(RgbFrame, Option<Vec<f32>>),
-    Black,
-    Marker(oneshot::Sender<()>),
 }
 
 struct PeerSink {
@@ -136,21 +116,20 @@ struct PeerSink {
 
 struct Shared {
     cfg: MediaConfig,
-    queue: Mutex<VecDeque<Item>>,
-    space: Notify,
     peers: Mutex<HashMap<u64, PeerSink>>,
     kicks: Mutex<HashSet<VideoCodec>>,
     audio: Mutex<VecDeque<f32>>,
     closed: AtomicBool,
     wake: (Mutex<()>, Condvar),
     stats: MediaStats,
+    on_first_frame: Mutex<Option<Box<dyn FnOnce() + Send>>>,
 }
 
 fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
     m.lock().unwrap_or_else(|e| e.into_inner())
 }
 
-/// One session's media pipeline. Dropping it stops the threads.
+/// One session's encode and fan-out. Dropping it stops the threads.
 pub struct MediaPipeline {
     sh: Arc<Shared>,
 }
@@ -162,116 +141,49 @@ impl std::fmt::Debug for MediaPipeline {
 }
 
 impl MediaPipeline {
-    pub fn start(cfg: MediaConfig) -> Self {
+    /// Starts consuming `ticks` (must be called inside a tokio runtime).
+    pub fn start(cfg: MediaConfig, ticks: TickReceiver) -> Self {
         let sh = Arc::new(Shared {
             cfg,
-            queue: Mutex::new(VecDeque::new()),
-            space: Notify::new(),
             peers: Mutex::new(HashMap::new()),
             kicks: Mutex::new(HashSet::new()),
             audio: Mutex::new(VecDeque::new()),
             closed: AtomicBool::new(false),
             wake: (Mutex::new(()), Condvar::new()),
             stats: MediaStats::default(),
+            on_first_frame: Mutex::new(None),
         });
         let v = sh.clone();
+        let rt = tokio::runtime::Handle::current();
         std::thread::Builder::new()
             .name("reactor-video".into())
-            .spawn(move || video_loop(v))
-            .expect("spawning the video pacer thread");
+            .spawn(move || video_loop(v, ticks, rt))
+            .expect("spawning the reactor video thread");
         if sh.cfg.audio {
             let a = sh.clone();
             std::thread::Builder::new()
                 .name("reactor-audio".into())
                 .spawn(move || audio_loop(a))
-                .expect("spawning the audio feeder thread");
+                .expect("spawning the reactor audio thread");
         }
         Self { sh }
-    }
-
-    pub fn fps(&self) -> u32 {
-        self.sh.cfg.fps
     }
 
     pub fn stats(&self) -> &MediaStats {
         &self.sh.stats
     }
 
-    /// Bundles still queued (not yet released by the pacer).
-    pub fn queued(&self) -> usize {
-        lock(&self.sh.queue).len()
+    /// Called once when the first real frame goes out (TTFF `transport`).
+    pub fn on_first_frame(&self, f: impl FnOnce() + Send + 'static) {
+        *lock(&self.sh.on_first_frame) = Some(Box::new(f));
     }
 
-    /// Queue frames with their audio (48 kHz mono; split evenly across the
-    /// frames, `48000/fps` each). Waits while the queue is full.
-    pub async fn push(&self, frames: Vec<RgbFrame>, audio: Option<Vec<f32>>) {
-        let n = frames.len().max(1);
-        let spf = WIRE_AUDIO_RATE as usize / self.sh.cfg.fps.max(1) as usize;
-        let mut audio = audio.map(VecDeque::from);
-        for f in frames {
-            let slice = audio.as_mut().map(|a| {
-                let take = spf.min(a.len());
-                a.drain(..take).collect::<Vec<f32>>()
-            });
-            self.push_item(Item::Frame(f, slice)).await;
-        }
-        let _ = n;
-    }
-
-    async fn push_item(&self, item: Item) {
-        let mut item = Some(item);
-        loop {
-            // Register for the wakeup before checking, so a pop between the
-            // check and the await is not missed.
-            let notified = self.sh.space.notified();
-            {
-                let mut q = lock(&self.sh.queue);
-                let data_items = q.iter().filter(|i| matches!(i, Item::Frame(..))).count();
-                let is_frame = matches!(item, Some(Item::Frame(..)));
-                if !is_frame || data_items < self.sh.cfg.buffer_frames || self.sh.closed.load(Ordering::Relaxed) {
-                    q.push_back(item.take().expect("pushed once"));
-                    return;
-                }
-            }
-            notified.await;
-        }
-    }
-
-    /// Resolves once everything queued before it has been released
-    /// (clip end: `clip_finished` is sent when playback really ended).
-    pub async fn drained(&self) {
-        let (tx, rx) = oneshot::channel();
-        self.push_item(Item::Marker(tx)).await;
-        let _ = rx.await;
-    }
-
-    /// Queue one black frame after what is queued (clip end, fast-h3's
-    /// `output.flush()` hold on black).
-    pub async fn black(&self) {
-        self.push_item(Item::Black).await;
-    }
-
-    /// Drop everything queued (video and buffered audio) and show black now
-    /// (stop, reset).
-    pub fn flush(&self) {
-        {
-            let mut q = lock(&self.sh.queue);
-            // Markers still resolve (their waiters see the clip end).
-            let markers: Vec<Item> = q.drain(..).filter(|i| matches!(i, Item::Marker(_))).collect();
-            q.push_back(Item::Black);
-            q.extend(markers);
-        }
-        lock(&self.sh.audio).clear();
-        self.sh.space.notify_waiters();
-    }
-
-    /// Adds a peer. Its first video is a keyframe of the current picture
-    /// (black before the first frame): the start-of-connection black frame.
+    /// Adds a peer; its first video is a keyframe of the current picture
+    /// (black before the first frame).
     pub fn add_peer(&self, handle: PeerHandle) {
         let codec = handle.video_codec();
-        let audio = handle.sends(fastvideo_webrtc::writer::TrackKind::Audio);
-        let id = handle.id();
-        lock(&self.sh.peers).insert(id, PeerSink { handle, codec, audio });
+        let audio = handle.sends(TrackKind::Audio);
+        lock(&self.sh.peers).insert(handle.id(), PeerSink { handle, codec, audio });
         if let Some(c) = codec {
             self.kick(c);
         }
@@ -285,19 +197,16 @@ impl MediaPipeline {
         lock(&self.sh.peers).len()
     }
 
-    /// Re-send the current picture as a keyframe for `codec` on the next
-    /// tick (PLI/FIR, resumed track, new peer).
+    /// Re-send the current picture as a keyframe for `codec` (PLI/FIR,
+    /// resumed track, new peer). Served within 50 ms even when no tick flows.
     pub fn kick(&self, codec: VideoCodec) {
         lock(&self.sh.kicks).insert(codec);
     }
 
     pub fn close(&self) {
         self.sh.closed.store(true, Ordering::Relaxed);
-        self.sh.space.notify_waiters();
         let (_, cv) = &self.sh.wake;
         cv.notify_all();
-        // Resolve pending markers so no waiter hangs.
-        lock(&self.sh.queue).clear();
     }
 }
 
@@ -305,6 +214,142 @@ impl Drop for MediaPipeline {
     fn drop(&mut self) {
         self.close();
     }
+}
+
+fn same_picture(a: &RgbFrame, b: &RgbFrame) -> bool {
+    a.width == b.width && a.height == b.height && a.data.as_ptr() == b.data.as_ptr() && a.data.len() == b.data.len()
+}
+
+struct VideoState {
+    encoders: HashMap<VideoCodec, Box<dyn FrameEncoder>>,
+    /// The picture on screen (last sent), and whether it was ever real.
+    current: Option<RgbFrame>,
+    last_rtp: u64,
+    first_sent: bool,
+}
+
+fn video_loop(sh: Arc<Shared>, mut ticks: TickReceiver, rt: tokio::runtime::Handle) {
+    let step = 90_000 / u64::from(sh.cfg.fps.max(1));
+    let mut st = VideoState { encoders: HashMap::new(), current: None, last_rtp: 0, first_sent: false };
+    while !sh.closed.load(Ordering::Relaxed) {
+        let next = rt.block_on(async { tokio::time::timeout(Duration::from_millis(50), ticks.recv()).await });
+        let tick: Option<Tick> = match next {
+            Ok(Some(t)) => Some(t),
+            // The pacer ended (session closed).
+            Ok(None) => break,
+            Err(_) => None,
+        };
+        let mut kicks: HashSet<VideoCodec> = std::mem::take(&mut *lock(&sh.kicks));
+        if ticks.take_dropped() {
+            // Frames were lost before the encoder: re-sync every codec.
+            kicks.extend(lock(&sh.peers).values().filter_map(|p| p.codec));
+        }
+        let Some(t) = tick else {
+            if !kicks.is_empty() {
+                let rtp = st.last_rtp + step;
+                let pic = st.current.clone();
+                send_picture(&sh, &mut st, pic, rtp, &kicks, true);
+            }
+            continue;
+        };
+        sh.stats.ticks.fetch_add(1, Ordering::Relaxed);
+        if let Some(a) = t.audio {
+            sh.stats.audio_samples_in.fetch_add(a.len() as u64, Ordering::Relaxed);
+            let mut buf = lock(&sh.audio);
+            buf.extend(a);
+            let over = buf.len().saturating_sub(AUDIO_BUFFER_SAMPLES);
+            buf.drain(..over);
+        }
+        let rtp = u64::from(t.video_rtp).max(st.last_rtp + 1);
+        match t.video {
+            VideoOut::Fresh(f) => {
+                send_picture(&sh, &mut st, Some(f), rtp, &kicks, false);
+                if !st.first_sent {
+                    st.first_sent = true;
+                    if let Some(cb) = lock(&sh.on_first_frame).take() {
+                        cb();
+                    }
+                }
+            }
+            VideoOut::Repeat(f) => {
+                let changed = st.current.as_ref().is_none_or(|c| !same_picture(c, &f));
+                if changed {
+                    // The pacer now holds another picture (flush to black).
+                    send_picture(&sh, &mut st, Some(f), rtp, &kicks, true);
+                } else if !kicks.is_empty() {
+                    send_picture(&sh, &mut st, Some(f), rtp, &kicks, true);
+                } else {
+                    sh.stats.holds.fetch_add(1, Ordering::Relaxed);
+                }
+            }
+            VideoOut::Nothing => {
+                if !kicks.is_empty() {
+                    let pic = st.current.clone();
+                    send_picture(&sh, &mut st, pic, rtp, &kicks, true);
+                }
+            }
+        }
+    }
+}
+
+/// Encodes `pic` (black when `None`) for every codec in use and sends it.
+/// `all_key`: a keyframe for every codec; else only for codecs in `kicks`.
+fn send_picture(
+    sh: &Shared,
+    st: &mut VideoState,
+    pic: Option<RgbFrame>,
+    rtp: u64,
+    kicks: &HashSet<VideoCodec>,
+    all_key: bool,
+) {
+    let frame = pic.unwrap_or_else(|| {
+        let (w, h) = st.current.as_ref().map_or(sh.cfg.canvas, |c| (c.width, c.height));
+        RgbFrame::black(w, h, 0)
+    });
+    let peers: Vec<(PeerHandle, VideoCodec)> = lock(&sh.peers)
+        .values()
+        .filter_map(|p| p.codec.map(|c| (p.handle.clone(), c)))
+        .collect();
+    let codecs: HashSet<VideoCodec> = peers.iter().map(|(_, c)| *c).collect();
+    let black = frame.data.iter().step_by(97).all(|b| *b == 0);
+    for codec in codecs {
+        let key = all_key || kicks.contains(&codec);
+        if kicks.contains(&codec) {
+            sh.stats.keyframes_forced.fetch_add(1, Ordering::Relaxed);
+        }
+        let enc = match st.encoders.get_mut(&codec) {
+            Some(e) if e.dims() == (frame.width, frame.height) => e,
+            _ => match new_encoder(codec, &sh.cfg, frame.width, frame.height) {
+                Ok(e) => st.encoders.entry(codec).insert_entry(e).into_mut(),
+                Err(e) => {
+                    tracing::warn!(?codec, error = %e, "video encoder unavailable");
+                    sh.stats.encode_errors.fetch_add(1, Ordering::Relaxed);
+                    continue;
+                }
+            },
+        };
+        match enc.encode(&frame, key) {
+            Ok(Some(data)) => {
+                sh.stats.frames_encoded.fetch_add(1, Ordering::Relaxed);
+                if black {
+                    sh.stats.black_frames.fetch_add(1, Ordering::Relaxed);
+                }
+                for (p, c) in &peers {
+                    if *c == codec && p.send_video(VideoFrame::new(data.clone(), rtp)).is_ok() {
+                        sh.stats.frames_sent.fetch_add(1, Ordering::Relaxed);
+                    }
+                }
+            }
+            Ok(None) => {}
+            Err(e) => {
+                sh.stats.encode_errors.fetch_add(1, Ordering::Relaxed);
+                tracing::warn!(?codec, error = %e, "video encode failed");
+                st.encoders.remove(&codec);
+            }
+        }
+    }
+    st.current = Some(frame);
+    st.last_rtp = rtp;
 }
 
 fn sleep_until(sh: &Shared, t: Instant) {
@@ -322,126 +367,6 @@ fn sleep_until(sh: &Shared, t: Instant) {
     }
 }
 
-fn video_loop(sh: Arc<Shared>) {
-    let fps = sh.cfg.fps.max(1);
-    let period = Duration::from_secs_f64(1.0 / f64::from(fps));
-    let mut encoders: HashMap<VideoCodec, Box<dyn FrameEncoder>> = HashMap::new();
-    let mut current: Option<RgbFrame> = None;
-    let mut tick: u64 = 0;
-    let mut next = Instant::now();
-    while !sh.closed.load(Ordering::Relaxed) {
-        sleep_until(&sh, next);
-        if sh.closed.load(Ordering::Relaxed) {
-            break;
-        }
-        next += period;
-        let now = Instant::now();
-        if now > next + period * 8 {
-            // Far behind (suspended, overloaded): re-anchor, never burst.
-            next = now + period;
-        }
-        let rtp = tick * 90_000 / u64::from(fps);
-        tick += 1;
-        sh.stats.ticks.fetch_add(1, Ordering::Relaxed);
-
-        // Pop one frame; markers resolve and black frames count as frames.
-        let mut out: Option<(RgbFrame, bool)> = None;
-        {
-            let mut q = lock(&sh.queue);
-            while let Some(item) = q.pop_front() {
-                match item {
-                    Item::Marker(tx) => {
-                        let _ = tx.send(());
-                    }
-                    Item::Black => {
-                        let (w, h) = current
-                            .as_ref()
-                            .map(|f| (f.width, f.height))
-                            .unwrap_or(sh.cfg.canvas);
-                        out = Some((RgbFrame::black(w, h, 0), true));
-                        break;
-                    }
-                    Item::Frame(f, a) => {
-                        if let Some(a) = a {
-                            sh.stats.audio_samples_in.fetch_add(a.len() as u64, Ordering::Relaxed);
-                            let mut buf = lock(&sh.audio);
-                            buf.extend(a);
-                            let over = buf.len().saturating_sub(AUDIO_BUFFER_SAMPLES);
-                            buf.drain(..over);
-                        }
-                        out = Some((f, false));
-                        break;
-                    }
-                }
-            }
-        }
-        sh.space.notify_waiters();
-        let kicks: HashSet<VideoCodec> = std::mem::take(&mut *lock(&sh.kicks));
-        let (frame, black) = match out {
-            Some((f, black)) => {
-                if black {
-                    sh.stats.black_frames.fetch_add(1, Ordering::Relaxed);
-                }
-                current = Some(f.clone());
-                (f, black)
-            }
-            None if !kicks.is_empty() => {
-                let f = current.clone().unwrap_or_else(|| {
-                    sh.stats.black_frames.fetch_add(1, Ordering::Relaxed);
-                    RgbFrame::black(sh.cfg.canvas.0, sh.cfg.canvas.1, 0)
-                });
-                (f, true)
-            }
-            None => {
-                sh.stats.underruns.fetch_add(1, Ordering::Relaxed);
-                continue;
-            }
-        };
-        // Encode once per codec in use and fan out.
-        let peers: Vec<(PeerHandle, VideoCodec)> = lock(&sh.peers)
-            .values()
-            .filter_map(|p| p.codec.map(|c| (p.handle.clone(), c)))
-            .collect();
-        let codecs: HashSet<VideoCodec> = peers.iter().map(|(_, c)| *c).collect();
-        for codec in codecs {
-            let key = black || kicks.contains(&codec);
-            if kicks.contains(&codec) {
-                sh.stats.keyframes_forced.fetch_add(1, Ordering::Relaxed);
-            }
-            let enc = match encoders.get_mut(&codec) {
-                Some(e) if e.dims() == (frame.width, frame.height) => e,
-                _ => match new_encoder(codec, &sh.cfg, frame.width, frame.height) {
-                    Ok(e) => {
-                        encoders.insert(codec, e);
-                        encoders.get_mut(&codec).expect("inserted")
-                    }
-                    Err(e) => {
-                        tracing::warn!(?codec, error = %e, "video encoder unavailable");
-                        sh.stats.encode_errors.fetch_add(1, Ordering::Relaxed);
-                        continue;
-                    }
-                },
-            };
-            match enc.encode(&frame, key) {
-                Ok(Some(data)) => {
-                    for (p, c) in &peers {
-                        if *c == codec {
-                            let _ = p.send_video(VideoFrame::new(data.clone(), rtp));
-                        }
-                    }
-                    sh.stats.frames_sent.fetch_add(1, Ordering::Relaxed);
-                }
-                Ok(None) => {}
-                Err(e) => {
-                    sh.stats.encode_errors.fetch_add(1, Ordering::Relaxed);
-                    tracing::warn!(?codec, error = %e, "video encode failed");
-                    encoders.remove(&codec);
-                }
-            }
-        }
-    }
-}
-
 fn audio_loop(sh: Arc<Shared>) {
     let period = Duration::from_millis(10);
     let mut enc = match AudioEncoder::new() {
@@ -456,8 +381,8 @@ fn audio_loop(sh: Arc<Shared>) {
     while !sh.closed.load(Ordering::Relaxed) {
         sleep_until(&sh, next);
         // Catch up at most 5 frames after a stall (RT feeder).
-        let mut due = 0;
         let now = Instant::now();
+        let mut due = 0;
         while next <= now && due < 5 {
             next += period;
             due += 1;
@@ -479,11 +404,8 @@ fn audio_loop(sh: Arc<Shared>) {
             samples += AUDIO_FRAME_SAMPLES as u64;
             sh.stats.audio_frames.fetch_add(1, Ordering::Relaxed);
             let Some(enc) = enc.as_mut() else { continue };
-            let peers: Vec<PeerHandle> = lock(&sh.peers)
-                .values()
-                .filter(|p| p.audio)
-                .map(|p| p.handle.clone())
-                .collect();
+            let peers: Vec<PeerHandle> =
+                lock(&sh.peers).values().filter(|p| p.audio).map(|p| p.handle.clone()).collect();
             if peers.is_empty() {
                 continue;
             }
@@ -508,16 +430,10 @@ pub trait FrameEncoder: Send {
     fn encode(&mut self, f: &RgbFrame, key: bool) -> Result<Option<Bytes>, String>;
 }
 
-fn new_encoder(
-    codec: VideoCodec,
-    cfg: &MediaConfig,
-    w: u32,
-    h: u32,
-) -> Result<Box<dyn FrameEncoder>, String> {
+fn new_encoder(codec: VideoCodec, cfg: &MediaConfig, w: u32, h: u32) -> Result<Box<dyn FrameEncoder>, String> {
     match codec {
         VideoCodec::H264 => H264Encoder::new(cfg, w, h).map(|e| Box::new(e) as Box<dyn FrameEncoder>),
-        VideoCodec::Vp8 => vp8::Vp8Encoder::new(w, h, cfg.vp8_quality)
-            .map(|e| Box::new(e) as Box<dyn FrameEncoder>),
+        VideoCodec::Vp8 => vp8::Vp8Encoder::new(w, h, cfg.vp8_quality).map(|e| Box::new(e) as Box<dyn FrameEncoder>),
     }
 }
 
@@ -534,7 +450,7 @@ impl H264Encoder {
             H264Backend::OpenH264 => EncoderBackend::OpenH264,
             H264Backend::Off => return Err("H.264 is off".into()),
         };
-        let mut c = H264Config::for_publish(PublishTarget::Peer, w, h, cfg.fps);
+        let mut c = H264Config::for_publish(PublishTarget::Peer, w, h, cfg.fps.max(1));
         if let Some(b) = cfg.bitrate_bps {
             c.bitrate_bps = b;
         }
@@ -561,9 +477,9 @@ impl FrameEncoder for H264Encoder {
 pub mod vp8 {
     //! Intra-only VP8: every frame is a keyframe, encoded by libwebp (a
     //! lossy WebP image *is* one VP8 key frame in a RIFF container). Heavier
-    //! on bitrate than a real inter-frame encoder, but it needs no system
-    //! library and every WebRTC stack decodes VP8, including the Python
-    //! reactor_sdk's libwebrtc, which offers no H.264.
+    //! on bitrate than an inter-frame encoder, but it needs no system library
+    //! and every WebRTC stack decodes VP8, including the Python reactor_sdk's
+    //! libwebrtc, which offers no H.264.
 
     use bytes::Bytes;
     use fastvideo_protocol::RgbFrame;
@@ -643,11 +559,9 @@ impl AudioEncoder {
     fn new() -> Result<Self, String> {
         #[cfg(feature = "opus")]
         {
-            let inner = fastvideo_media::opus::OpusEncoder::new(
-                fastvideo_media::opus::OpusConfig::reactor(),
-                0,
-            )
-            .map_err(|e| e.to_string())?;
+            let inner =
+                fastvideo_media::opus::OpusEncoder::new(fastvideo_media::opus::OpusConfig::reactor(), 0)
+                    .map_err(|e| e.to_string())?;
             Ok(Self { inner })
         }
         #[cfg(not(feature = "opus"))]
@@ -689,42 +603,19 @@ mod tests {
     #[test]
     fn vp8_frames_are_keyframes_with_the_right_size() {
         let mut e = vp8::Vp8Encoder::new(64, 48, 60.0).unwrap();
-        let f = RgbFrame::black(64, 48, 0);
-        let data = e.encode(&f, false).unwrap().unwrap();
+        let data = e.encode(&RgbFrame::black(64, 48, 0), false).unwrap().unwrap();
         assert!(vp8::is_keyframe(&data));
-        // RFC 6386 §9.1: start code 9d 01 2a then 14-bit width/height.
+        // RFC 6386 §9.1: start code 9d 01 2a, then 14-bit width and height.
         assert_eq!(&data[3..6], &[0x9d, 0x01, 0x2a]);
         let w = u16::from_le_bytes([data[6], data[7]]) & 0x3fff;
         let h = u16::from_le_bytes([data[8], data[9]]) & 0x3fff;
         assert_eq!((w, h), (64, 48));
     }
 
-    #[tokio::test]
-    async fn pacer_releases_one_frame_per_tick_and_audio_in_lockstep() {
-        let cfg = MediaConfig { h264: H264Backend::Off, ..MediaConfig::new(50, true, (16, 16)) };
-        let m = MediaPipeline::start(cfg);
-        let frames: Vec<RgbFrame> = (0..10).map(|i| RgbFrame::black(16, 16, i)).collect();
-        // 960 samples per frame at 50 fps.
-        m.push(frames, Some(vec![0.25; 9600])).await;
-        let t0 = Instant::now();
-        m.drained().await;
-        let el = t0.elapsed();
-        // 10 frames at 20 ms: about 200 ms, never a burst.
-        assert!(el >= Duration::from_millis(150), "{el:?}");
-        assert_eq!(m.stats().audio_samples_in.load(Ordering::Relaxed), 9600);
-        m.flush();
-        tokio::time::sleep(Duration::from_millis(60)).await;
-        assert!(m.stats().black_frames.load(Ordering::Relaxed) >= 1);
-        assert!(m.stats().audio_frames.load(Ordering::Relaxed) >= 10);
-    }
-
-    #[tokio::test]
-    async fn push_waits_when_the_queue_is_full() {
-        let cfg = MediaConfig { h264: H264Backend::Off, buffer_frames: 2, ..MediaConfig::new(20, false, (8, 8)) };
-        let m = Arc::new(MediaPipeline::start(cfg));
-        let t0 = Instant::now();
-        m.push((0..6).map(|i| RgbFrame::black(8, 8, i)).collect(), None).await;
-        // 6 frames with room for 2 at 50 ms per tick: at least ~150 ms.
-        assert!(t0.elapsed() >= Duration::from_millis(120), "{:?}", t0.elapsed());
+    #[test]
+    fn sendable_codecs_follow_the_build() {
+        let c = sendable_codecs(H264Backend::Off);
+        assert_eq!(c.contains(&VideoCodec::Vp8), cfg!(feature = "vp8"));
+        assert!(!c.contains(&VideoCodec::H264));
     }
 }
