@@ -3,7 +3,9 @@
 #
 #   bash tests/console/run.sh
 #
-# Builds `fv-serve --features fake`, then runs tests/console/smoke.cjs with
+# Builds `fv-serve --features fake,encoders` (the director session needs
+# OpenH264: with no config file its encoder is `auto`, which is OpenH264
+# without NVENC), then runs tests/console/smoke.cjs with
 # the globally installed `playwright` npm package and the preinstalled
 # Chromium (PLAYWRIGHT_BROWSERS_PATH, default /opt/pw-browsers). Never runs
 # `playwright install`. scripts/serve/check.sh runs it when FV_SERVE_UI=1.
@@ -23,6 +25,6 @@ node -e "require('playwright')" 2>/dev/null || {
   exit 1
 }
 
-cargo build -p fastvideo-serve --features fake --bin fv-serve
+cargo build -p fastvideo-serve --features fake,encoders --bin fv-serve
 TARGET_DIR="${CARGO_TARGET_DIR:-$ROOT/target}"
 FV_SERVE_BIN="${FV_SERVE_BIN:-$TARGET_DIR/debug/fv-serve}" node tests/console/smoke.cjs
