@@ -1230,15 +1230,20 @@ dependencies = [
 name = "fastvideo-ltxapi"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
  "axum",
  "bytes",
+ "fastvideo-engine-service",
  "fastvideo-protocol",
  "fastvideo-serve-kit",
  "serde",
  "serde_json",
  "thiserror",
  "time",
+ "tokio",
+ "tower",
  "tracing",
+ "url",
  "uuid",
 ]
 

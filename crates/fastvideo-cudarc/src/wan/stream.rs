@@ -13,13 +13,15 @@
 //!
 //! **Window.** The KV cache rolls (FastVideo `local_attn_size`, default 21
 //! frames, the checkpoint's training window) and keeps `sink_frames` frames
-//! at its head (FastVideo `sink_size`). RoPE follows FastVideo's
-//! `rope_cache_policy`: [`RopePolicy::Relativistic`] (default) caches
-//! un-roped keys and ropes the window from position 0 each forward, so
-//! positions stay inside the trained range for ever;
-//! [`RopePolicy::Absolute`] is the bounded path's policy, which runs out of
-//! RoPE table after `rope_max_seq_len` (1024) latent frames, about 4.3 min at
-//! 16 fps, and puts the sink ever further from the queries.
+//! at its head (FastVideo `sink_size`). RoPE ([`RopePolicy`], the cache's
+//! [`super::causal::KvRope`]): [`RopePolicy::Absolute`] is the bounded
+//! path's policy, which puts the sink ever further from the queries (the
+//! temporal RoPE rows continue past the checkpoint's 1024-frame table);
+//! [`RopePolicy::Relativistic`] is FastVideo's `relativistic` policy, which
+//! caches un-roped keys and ropes the whole window from position 0 at every
+//! forward, so every offset stays inside the trained window;
+//! [`RopePolicy::RebasedSink`] (default) gives the relativistic offsets at
+//! the absolute policy's cost by re-roping only the sink once per block.
 //!
 //! **Noise.** Latent frames `21·g .. 21·(g+1)` start from a `[1, C, 21, H, W]`
 //! draw of `StdRng(seed_g)` (`seed_0 = seed`, the bounded path's own draw);
@@ -45,6 +47,7 @@ use rand::{Rng, SeedableRng};
 use rand_distr::StandardNormal;
 
 use super::causal::{CausalKvCache, KvSpec};
+use crate::hooks::{Hooks, Stage};
 use super::pipeline::{
     causal_noise, frames_to_rgb8, GenerateConfig, PipelineError, Result, WanPipeline,
 };
@@ -55,14 +58,8 @@ fn err(s: impl Into<String>) -> PipelineError {
     PipelineError::Message(s.into())
 }
 
-/// FastVideo `rope_cache_policy`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum RopePolicy {
-    /// Keys roped at their absolute frame (the bounded 81-frame path).
-    Absolute,
-    /// Un-roped keys, the window roped from position 0 each forward.
-    Relativistic,
-}
+/// How the cached keys carry RoPE (see [`super::causal::KvRope`]).
+pub use super::causal::KvRope as RopePolicy;
 
 /// What a prompt change does to the KV cache.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -106,7 +103,7 @@ impl Default for RolloutConfig {
             flow_shift: 5.0,
             local_attn_frames: 21,
             sink_frames: 3,
-            rope: RopePolicy::Relativistic,
+            rope: RopePolicy::RebasedSink,
             prompt_switch: PromptSwitch::Keep,
             rgb8: true,
             tokenizer_path: None,
@@ -243,7 +240,7 @@ impl<'p> CausalRollout<'p> {
             frame_tokens,
             cfg.local_attn_frames,
             cfg.sink_frames,
-            cfg.rope == RopePolicy::Relativistic,
+            cfg.rope,
         )?;
         let cache = CausalKvCache::new(spec, dit.cfg.num_layers);
         let sched = SelfForcingSchedule::new(&cfg.dmd_steps, cfg.flow_shift, 1000, true);
@@ -383,6 +380,18 @@ impl<'p> CausalRollout<'p> {
 
     /// Generate, decode and return the next block.
     pub fn next_block(&mut self) -> Result<StreamBlock> {
+        self.next_block_with_hooks(Hooks::NONE)
+    }
+
+    /// [`Self::next_block`] under the pipeline hooks (serve E1): a
+    /// [`Stage::Denoise`] step event after each Self-Forcing step (with the
+    /// block index; `total` is the steps of one block) and a
+    /// [`Stage::VideoDecode`] frames event (cumulative since the last reset)
+    /// after the decode, the cancel token checked at each. A cancelled block
+    /// leaves the stream at the same block: the next call generates it again
+    /// (its cache slots are overwritten in place), or [`Self::reset`].
+    pub fn next_block_with_hooks(&mut self, hooks: Hooks<'_>) -> Result<StreamBlock> {
+        hooks.check()?;
         let t_block = Instant::now();
         let dit = self.pipe.transformer();
         let tae = self
@@ -391,15 +400,10 @@ impl<'p> CausalRollout<'p> {
             .ok_or_else(|| err("causal rollout: TAEHV unloaded"))?;
         let fpb = self.fpb;
         let start = self.block * fpb;
-        if self.cfg.rope == RopePolicy::Absolute {
-            let limit = dit.cfg.rope_max_seq_len;
-            if start + fpb > limit {
-                return Err(err(format!(
-                    "absolute RoPE ends at {limit} latent frames; use the relativistic policy \
-                     for longer streams"
-                )));
-            }
-            dit.forget_rotary_before(start);
+        if self.cfg.rope != RopePolicy::Relativistic {
+            // One RoPE table per block offset (and per sink target): keep
+            // only the current ones.
+            dit.forget_rotary_before(start.saturating_sub(self.cfg.local_attn_frames));
         }
         let act16 = super::tensor::bf16_activations();
         let round = |x: CudaTensor| -> Result<CudaTensor> {
@@ -422,6 +426,9 @@ impl<'p> CausalRollout<'p> {
             } else {
                 x0
             };
+            if !hooks.is_none() {
+                hooks.step(Stage::Denoise, i + 1, steps, Some(self.block))?;
+            }
         }
         super::device::synchronize().map_err(|e| err(e.to_string()))?;
         let denoise_s = t_block.elapsed().as_secs_f64();
@@ -445,6 +452,9 @@ impl<'p> CausalRollout<'p> {
             None
         };
         let rgb_s = t.elapsed().as_secs_f64();
+        // The decoder state has moved on: this block is delivered whatever
+        // the token says, and the next call's check sees a cancel.
+        let _ = hooks.frames(self.tae_state.emitted());
         let index = self.block;
         self.block += 1;
         Ok(StreamBlock {
@@ -517,7 +527,7 @@ mod tests {
         let c = RolloutConfig::default();
         assert_eq!(c.local_attn_frames, 21);
         assert_eq!(c.sink_frames, 3);
-        assert_eq!(c.rope, RopePolicy::Relativistic);
+        assert_eq!(c.rope, RopePolicy::RebasedSink);
         assert_eq!(c.dmd_steps, vec![1000, 750, 500, 250]);
     }
 }

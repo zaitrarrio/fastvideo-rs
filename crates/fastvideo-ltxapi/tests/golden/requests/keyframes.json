@@ -1,0 +1,33 @@
+{
+  "endpoint": "image-to-video",
+  "api": "v2",
+  "body": {
+    "prompt": "A flower blooms",
+    "model": "ltx-2-5-pro",
+    "image_uri": "https://example.com/first.png",
+    "last_frame_uri": "data:image/png;base64,iVBORw0KGgo=",
+    "duration": 10,
+    "resolution": "3840x2160"
+  },
+  "request": {
+    "protocol": "ltx_v2",
+    "model": "ltx-pro",
+    "task": "keyframes",
+    "prompt": "A flower blooms",
+    "negative_prompt": null,
+    "seed": null,
+    "canvas": { "exact": { "width": 3840, "height": 2160 } },
+    "timing": { "length": { "seconds": { "value": 10.0, "snap": "align_up" } }, "fps": 24 },
+    "keyframes": [
+      { "at": "first", "image": { "http": "https://example.com/first.png" } },
+      { "at": "last", "image": { "data_uri": "data:image/png;base64,iVBORw0KGgo=" } }
+    ],
+    "references": [],
+    "audio_in": null,
+    "audio_out": "model_default",
+    "sampling": { "steps": null, "guidance": null, "guidance_2": null, "flow_shift": null, "boundary_ratio": null },
+    "output": { "inline_data_uri": false },
+    "accepted_noop": [],
+    "callback": null
+  }
+}
