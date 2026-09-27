@@ -191,6 +191,19 @@ pub fn flash_v2_default() -> bool {
     true
 }
 
+/// Whether `auto` hands a bf16-output dense SDPA that V2 would run to
+/// cuDNN's unified SDPA node instead (V2 still runs when cuDNN has no plan):
+/// on sm_12x only. RTX PRO 6000, cuDNN 9.26, `attn3_bench`: 105.0 vs 108.4 ms
+/// at H3 768p, 658.8 vs 682.2 ms at LTX 1080p 20 s, 769.0 vs 759.9 ms at 4K 5 s
+/// (engine 11, heuristic mode A config 0). `FASTVIDEO_FLASH_KERNEL=v2`
+/// restores flash_mma_fwd2.
+pub fn cudnn_default(sm_major: i32) -> bool {
+    CUDNN_DEFAULT_ON && sm_major == 12
+}
+
+/// Flipped only once a generation run has verified the cuDNN default.
+const CUDNN_DEFAULT_ON: bool = false;
+
 /// Fused dense SDPA on tensor cores (`flash_mma_fwd_d{64,128}`): bf16 Q/K/V
 /// (cast once, RNE, when they are f32), f32 online softmax, bf16 P, f32
 /// accumulation; one launch, no score buffer. Output is f32, or bf16 when
@@ -211,7 +224,19 @@ pub fn device_mma_sdpa(
                 .ctx
                 .attribute(CU_DEVICE_ATTRIBUTE_MULTIPROCESSOR_COUNT)
                 .map_or(1, |n| n.max(1) as usize);
-            flash_kernel_for(sq, b * h, sms)
+            match flash_kernel_for(sq, b * h, sms) {
+                // `auto` only: an explicit `v2` stays V2.
+                FlashKernel::V2
+                    if out_bf16
+                        && cudnn_default(dev.sm_major)
+                        && fastvideo_models::techniques::kernels::choice(
+                            fastvideo_models::techniques::kernels::KernelOp::DenseAttention,
+                        ) == "auto" =>
+                {
+                    FlashKernel::Cudnn
+                }
+                k => k,
+            }
         }
         _ => flash_kernel_choice(),
     };
