@@ -10,7 +10,8 @@
 //! - Pure, always-built helpers: [`sdp`] (validation and munging), [`ice`]
 //!   (ICE servers for clients, public addresses, candidate plans),
 //!   [`channel`] (labels, policies), [`writer`] (frame types, PLI limiter),
-//!   [`framing`] (RFC 4571), [`stun`] (binding client codec).
+//!   [`framing`] (RFC 4571), [`stun`] (binding client codec), [`profile`]
+//!   (per-sink resolution cap and H.264 level).
 //!
 //! Owned by WP-04 (docs/serve/design.md §8). Scaffolded by WP-00.
 
@@ -19,6 +20,7 @@ pub mod framing;
 #[cfg(feature = "str0m")]
 pub mod host;
 pub mod ice;
+pub mod profile;
 pub mod sdp;
 pub mod stun;
 pub mod whip;

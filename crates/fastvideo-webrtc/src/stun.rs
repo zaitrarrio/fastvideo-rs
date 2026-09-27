@@ -110,7 +110,9 @@ pub fn parse_binding_success(buf: &[u8]) -> Option<(TransactionId, SocketAddr)> 
     while at + 4 <= body.len() {
         let typ = u16::from_be_bytes([body[at], body[at + 1]]);
         let alen = u16::from_be_bytes([body[at + 2], body[at + 3]]) as usize;
-        let Some(val) = body.get(at + 4..at + 4 + alen) else { break };
+        let Some(val) = body.get(at + 4..at + 4 + alen) else {
+            break;
+        };
         match typ {
             ATTR_XOR_MAPPED_ADDRESS => return decode_addr(val, Some(&tx)).map(|a| (tx, a)),
             ATTR_MAPPED_ADDRESS => plain = decode_addr(val, None),
@@ -187,11 +189,18 @@ mod tests {
     fn decodes_the_rfc5769_ipv4_vector() {
         // RFC 5769 §2.2 response, attributes other than XOR-MAPPED-ADDRESS
         // replaced by a SOFTWARE attribute we skip.
-        let tx: TransactionId = [0xb7, 0xe7, 0xa7, 0x01, 0xbc, 0x34, 0xd6, 0x86, 0xfa, 0x87, 0xdf, 0xae];
+        let tx: TransactionId = [
+            0xb7, 0xe7, 0xa7, 0x01, 0xbc, 0x34, 0xd6, 0x86, 0xfa, 0x87, 0xdf, 0xae,
+        ];
         let mut msg = vec![0x01, 0x01, 0x00, 0x14, 0x21, 0x12, 0xa4, 0x42];
         msg.extend_from_slice(&tx);
         msg.extend_from_slice(&[0x80, 0x22, 0x00, 0x04, b't', b'e', b's', b't']);
-        msg.extend_from_slice(&[0x00, 0x20, 0x00, 0x08, 0x00, 0x01, 0xa1, 0x47, 0xe1, 0x12, 0xa6, 0x43]);
-        assert_eq!(parse_binding_success(&msg), Some((tx, "192.0.2.1:32853".parse().unwrap())));
+        msg.extend_from_slice(&[
+            0x00, 0x20, 0x00, 0x08, 0x00, 0x01, 0xa1, 0x47, 0xe1, 0x12, 0xa6, 0x43,
+        ]);
+        assert_eq!(
+            parse_binding_success(&msg),
+            Some((tx, "192.0.2.1:32853".parse().unwrap()))
+        );
     }
 }

@@ -16,13 +16,20 @@
 //!   (Cloudflare).
 //! - 30 s timeout; teardown is best effort.
 //! - A video-only session offers only a video m-line (design §5.3).
+//! - The config names the [`WhipTarget`], which picks the [`EncodeProfile`]
+//!   (design §0 decision 2): Cloudflare caps at 1280x720 and H.264 level
+//!   3.1; MediaMTX and other relays take native resolution at level 4.0. The
+//!   offer advertises that level and the media layer reads
+//!   [`WhipConfig::profile`] to scale and encode.
 //!
 //! There is no PATCH (trickle) and no ICE restart, as in strobe.
 
 use std::time::Duration;
 
+use serde::{Deserialize, Serialize};
 use url::Url;
 
+use crate::profile::EncodeProfile;
 use crate::WebrtcError;
 
 /// Default POST/DELETE timeout (strobe `whip_timeout_s=30`).
@@ -55,7 +62,10 @@ impl WhipAuth {
     /// otherwise a non-empty token means Bearer.
     pub fn from_user_token(user: &str, token: &str) -> Self {
         if !user.is_empty() {
-            WhipAuth::Basic { user: user.to_string(), password: token.to_string() }
+            WhipAuth::Basic {
+                user: user.to_string(),
+                password: token.to_string(),
+            }
         } else if !token.is_empty() {
             WhipAuth::Bearer(token.to_string())
         } else {
@@ -68,7 +78,10 @@ impl WhipAuth {
         match self {
             WhipAuth::None => None,
             WhipAuth::Bearer(t) => Some(format!("Bearer {t}")),
-            WhipAuth::Basic { user, password } => Some(format!("Basic {}", base64(format!("{user}:{password}").as_bytes()))),
+            WhipAuth::Basic { user, password } => Some(format!(
+                "Basic {}",
+                base64(format!("{user}:{password}").as_bytes())
+            )),
         }
     }
 }
@@ -81,10 +94,66 @@ fn base64(input: &[u8]) -> String {
         let n = (b[0] as u32) << 16 | (b[1] as u32) << 8 | b[2] as u32;
         out.push(T[(n >> 18) as usize & 63] as char);
         out.push(T[(n >> 12) as usize & 63] as char);
-        out.push(if c.len() > 1 { T[(n >> 6) as usize & 63] as char } else { '=' });
-        out.push(if c.len() > 2 { T[n as usize & 63] as char } else { '=' });
+        out.push(if c.len() > 1 {
+            T[(n >> 6) as usize & 63] as char
+        } else {
+            '='
+        });
+        out.push(if c.len() > 2 {
+            T[n as usize & 63] as char
+        } else {
+            '='
+        });
     }
     out
+}
+
+/// The kind of WHIP endpoint, which fixes the encode profile.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum WhipTarget {
+    /// Cloudflare Stream / Realtime: 720p cap, H.264 level 3.1.
+    Cloudflare,
+    /// MediaMTX (self-hosted relay): native resolution, level 4.0.
+    #[serde(alias = "peer")]
+    Mediamtx,
+}
+
+impl WhipTarget {
+    pub fn profile(self) -> EncodeProfile {
+        match self {
+            WhipTarget::Cloudflare => EncodeProfile::CLOUDFLARE,
+            WhipTarget::Mediamtx => EncodeProfile::NATIVE,
+        }
+    }
+
+    /// Best guess from the endpoint URL when the job does not say:
+    /// Cloudflare hosts (`*.cloudflare.com`, `*.cloudflarestream.com`)
+    /// get the Cloudflare profile, anything else native.
+    pub fn guess(url: &Url) -> Self {
+        let host = url.host_str().unwrap_or_default().to_ascii_lowercase();
+        let cf = ["cloudflare.com", "cloudflarestream.com"]
+            .iter()
+            .any(|d| host == *d || host.ends_with(&format!(".{d}")));
+        if cf {
+            WhipTarget::Cloudflare
+        } else {
+            WhipTarget::Mediamtx
+        }
+    }
+}
+
+impl std::str::FromStr for WhipTarget {
+    type Err = WebrtcError;
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "cloudflare" => Ok(WhipTarget::Cloudflare),
+            "mediamtx" | "peer" => Ok(WhipTarget::Mediamtx),
+            other => Err(WebrtcError::Config(format!(
+                "unknown WHIP target {other:?} (cloudflare | mediamtx)"
+            ))),
+        }
+    }
 }
 
 /// Where to publish.
@@ -93,17 +162,38 @@ pub struct WhipConfig {
     pub url: Url,
     pub auth: WhipAuth,
     pub timeout: Duration,
+    /// Selects the encode profile (design §0 decision 2).
+    pub target: WhipTarget,
 }
 
 impl WhipConfig {
+    /// The target is guessed from the URL; set it with [`Self::with_target`]
+    /// when the job names it.
     pub fn new(url: Url, auth: WhipAuth) -> Self {
-        WhipConfig { url, auth, timeout: DEFAULT_TIMEOUT }
+        let target = WhipTarget::guess(&url);
+        WhipConfig {
+            url,
+            auth,
+            timeout: DEFAULT_TIMEOUT,
+            target,
+        }
+    }
+
+    pub fn with_target(mut self, target: WhipTarget) -> Self {
+        self.target = target;
+        self
+    }
+
+    /// Resolution cap and H.264 level the media layer must encode to.
+    pub fn profile(&self) -> EncodeProfile {
+        self.target.profile()
     }
 }
 
 /// Resolve a `Location` header against the request URL (RFC 3986 §5).
 pub fn resolve_location(base: &Url, location: &str) -> Result<Url, WebrtcError> {
-    base.join(location.trim()).map_err(|e| WebrtcError::Whip(format!("bad Location {location:?}: {e}")))
+    base.join(location.trim())
+        .map_err(|e| WebrtcError::Whip(format!("bad Location {location:?}: {e}")))
 }
 
 /// The answer to a WHIP POST.
@@ -116,16 +206,29 @@ pub struct WhipAnswer {
 }
 
 /// Classify a WHIP POST response (pure, for tests and the client).
-pub fn check_post_response(status: u16, request_url: &Url, location: Option<&str>, body: String) -> Result<WhipAnswer, WebrtcError> {
+pub fn check_post_response(
+    status: u16,
+    request_url: &Url,
+    location: Option<&str>,
+    body: String,
+) -> Result<WhipAnswer, WebrtcError> {
     if status != 200 && status != 201 {
         let body: String = body.chars().take(500).collect();
         return Err(WebrtcError::WhipStatus { status, body });
     }
     if !body.trim_start().starts_with("v=0") {
-        return Err(WebrtcError::Whip(format!("HTTP {status} without an SDP answer")));
+        return Err(WebrtcError::Whip(format!(
+            "HTTP {status} without an SDP answer"
+        )));
     }
-    let resource = location.map(|l| resolve_location(request_url, l)).transpose()?;
-    Ok(WhipAnswer { status, sdp: body, resource })
+    let resource = location
+        .map(|l| resolve_location(request_url, l))
+        .transpose()?;
+    Ok(WhipAnswer {
+        status,
+        sdp: body,
+        resource,
+    })
 }
 
 #[cfg(feature = "whip")]
@@ -172,7 +275,11 @@ mod client {
                 .body(offer_sdp.to_string());
             let resp = self.auth(rb).send().await.map_err(|e| {
                 if e.is_timeout() {
-                    WebrtcError::Whip(format!("POST timed out after {:?} to {}", self.cfg.timeout, redact(&self.cfg.url)))
+                    WebrtcError::Whip(format!(
+                        "POST timed out after {:?} to {}",
+                        self.cfg.timeout,
+                        redact(&self.cfg.url)
+                    ))
                 } else {
                     WebrtcError::Whip(format!("POST {}: {e}", redact(&self.cfg.url)))
                 }
@@ -184,7 +291,10 @@ mod client {
                 .get(reqwest::header::LOCATION)
                 .and_then(|v| v.to_str().ok())
                 .map(str::to_string);
-            let body = resp.text().await.map_err(|e| WebrtcError::Whip(format!("reading answer: {e}")))?;
+            let body = resp
+                .text()
+                .await
+                .map_err(|e| WebrtcError::Whip(format!("reading answer: {e}")))?;
             check_post_response(status, &final_url, location.as_deref(), body)
         }
 
@@ -227,7 +337,11 @@ mod publisher {
 
     impl Default for WhipPublishOptions {
         fn default() -> Self {
-            WhipPublishOptions { audio: Some(AudioLayout::Stereo), stun: vec![IceServer::default_stun()], stun_timeout: Duration::from_secs(2) }
+            WhipPublishOptions {
+                audio: Some(AudioLayout::Stereo),
+                stun: vec![IceServer::default_stun()],
+                stun_timeout: Duration::from_secs(2),
+            }
         }
     }
 
@@ -247,21 +361,38 @@ mod publisher {
         ///
         /// Design §5.2: call this **after** the first frame exists, so the
         /// endpoint never sees an empty track.
-        pub async fn publish(host: &RtcHost, cfg: WhipConfig, opts: WhipPublishOptions) -> Result<Self, WebrtcError> {
+        pub async fn publish(
+            host: &RtcHost,
+            cfg: WhipConfig,
+            opts: WhipPublishOptions,
+        ) -> Result<Self, WebrtcError> {
+            let profile = cfg.profile();
             let client = WhipClient::new(cfg)?;
-            let srflx = if opts.stun.is_empty() { Vec::new() } else { host.gather_srflx(&opts.stun, opts.stun_timeout).await };
+            let srflx = if opts.stun.is_empty() {
+                Vec::new()
+            } else {
+                host.gather_srflx(&opts.stun, opts.stun_timeout).await
+            };
             let (pending, offer) = host
                 .offer(OfferOptions {
                     video: Some(Direction::SendOnly),
                     audio: opts.audio.map(|l| (Direction::SendOnly, l)),
                     channels: Vec::new(),
                     srflx,
+                    h264_level: profile.h264_level,
                 })
                 .await?;
             let answer = client.post_offer(&offer).await?;
-            let negotiated_video = crate::sdp::Sdp::parse(&answer.sdp).ok().and_then(|s| s.negotiated_video_codec());
-            tracing::info!(codec = ?negotiated_video, status = answer.status, "whip negotiated");
-            let mut me = WhipPublisher { client, resource: answer.resource.clone(), peer: None, negotiated_video };
+            let negotiated_video = crate::sdp::Sdp::parse(&answer.sdp)
+                .ok()
+                .and_then(|s| s.negotiated_video_codec());
+            tracing::info!(codec = ?negotiated_video, status = answer.status, ?profile, "whip negotiated");
+            let mut me = WhipPublisher {
+                client,
+                resource: answer.resource.clone(),
+                peer: None,
+                negotiated_video,
+            };
             match pending.accept_answer(&answer.sdp).await {
                 Ok(peer) => {
                     me.peer = Some(peer);
@@ -281,6 +412,11 @@ mod publisher {
 
         pub fn resource_url(&self) -> Option<&Url> {
             self.resource.as_ref()
+        }
+
+        /// The resolution cap and H.264 level the encoder must use.
+        pub fn profile(&self) -> EncodeProfile {
+            self.client.config().profile()
         }
 
         /// The first video codec of the answer (should be `H264`).
@@ -307,7 +443,8 @@ mod publisher {
                 p.close();
             }
             // Best effort DELETE when dropped without teardown().
-            if let (Some(r), Ok(rt)) = (self.resource.take(), tokio::runtime::Handle::try_current()) {
+            if let (Some(r), Ok(rt)) = (self.resource.take(), tokio::runtime::Handle::try_current())
+            {
                 let client = self.client.clone();
                 rt.spawn(async move {
                     let _ = client.delete(&r).await;
@@ -324,13 +461,28 @@ mod tests {
     #[test]
     fn auth_headers() {
         assert_eq!(WhipAuth::from_user_token("", "").header_value(), None);
-        assert_eq!(WhipAuth::from_user_token("", "tok").header_value().as_deref(), Some("Bearer tok"));
+        assert_eq!(
+            WhipAuth::from_user_token("", "tok")
+                .header_value()
+                .as_deref(),
+            Some("Bearer tok")
+        );
         // RFC 7617 example.
         assert_eq!(
-            WhipAuth::Basic { user: "Aladdin".into(), password: "open sesame".into() }.header_value().as_deref(),
+            WhipAuth::Basic {
+                user: "Aladdin".into(),
+                password: "open sesame".into()
+            }
+            .header_value()
+            .as_deref(),
             Some("Basic QWxhZGRpbjpvcGVuIHNlc2FtZQ==")
         );
-        assert_eq!(WhipAuth::from_user_token("strobe", "pw").header_value().as_deref(), Some("Basic c3Ryb2JlOnB3"));
+        assert_eq!(
+            WhipAuth::from_user_token("strobe", "pw")
+                .header_value()
+                .as_deref(),
+            Some("Basic c3Ryb2JlOnB3")
+        );
         assert_eq!(base64(b"a"), "YQ==");
         assert_eq!(base64(b"ab"), "YWI=");
         assert_eq!(base64(b""), "");
@@ -338,12 +490,59 @@ mod tests {
     }
 
     #[test]
+    fn target_selects_profile() {
+        let cf =
+            Url::parse("https://customer-abc.cloudflarestream.com/xyz/webRTC/publish").unwrap();
+        let mtx = Url::parse("http://10.0.0.5:8889/strobe/whip").unwrap();
+        assert_eq!(
+            WhipConfig::new(cf.clone(), WhipAuth::None).target,
+            WhipTarget::Cloudflare
+        );
+        assert_eq!(
+            WhipConfig::new(mtx.clone(), WhipAuth::None).target,
+            WhipTarget::Mediamtx
+        );
+        assert_eq!(
+            WhipTarget::guess(&Url::parse("https://notcloudflare.com/w").unwrap()),
+            WhipTarget::Mediamtx
+        );
+        let c = WhipConfig::new(mtx, WhipAuth::None).with_target(WhipTarget::Cloudflare);
+        assert_eq!(c.profile(), EncodeProfile::CLOUDFLARE);
+        assert_eq!(c.profile().output_size(1344, 768), (1260, 720));
+        assert_eq!(WhipTarget::Mediamtx.profile(), EncodeProfile::NATIVE);
+        assert_eq!("peer".parse::<WhipTarget>().unwrap(), WhipTarget::Mediamtx);
+        assert_eq!(
+            " Cloudflare ".parse::<WhipTarget>().unwrap(),
+            WhipTarget::Cloudflare
+        );
+        assert!("rtmp".parse::<WhipTarget>().is_err());
+        let t: WhipTarget = serde_json::from_str("\"cloudflare\"").unwrap();
+        assert_eq!(t, WhipTarget::Cloudflare);
+        let t: WhipTarget = serde_json::from_str("\"peer\"").unwrap();
+        assert_eq!(t, WhipTarget::Mediamtx);
+    }
+
+    #[test]
     fn location_resolution() {
         let base = Url::parse("https://sfu.example/live/whip?x=1").unwrap();
-        assert_eq!(resolve_location(&base, "/resource/abc").unwrap().as_str(), "https://sfu.example/resource/abc");
-        assert_eq!(resolve_location(&base, "abc").unwrap().as_str(), "https://sfu.example/live/abc");
-        assert_eq!(resolve_location(&base, "../r/1").unwrap().as_str(), "https://sfu.example/r/1");
-        assert_eq!(resolve_location(&base, "https://other.example/r").unwrap().as_str(), "https://other.example/r");
+        assert_eq!(
+            resolve_location(&base, "/resource/abc").unwrap().as_str(),
+            "https://sfu.example/resource/abc"
+        );
+        assert_eq!(
+            resolve_location(&base, "abc").unwrap().as_str(),
+            "https://sfu.example/live/abc"
+        );
+        assert_eq!(
+            resolve_location(&base, "../r/1").unwrap().as_str(),
+            "https://sfu.example/r/1"
+        );
+        assert_eq!(
+            resolve_location(&base, "https://other.example/r")
+                .unwrap()
+                .as_str(),
+            "https://other.example/r"
+        );
     }
 
     #[test]
@@ -357,8 +556,14 @@ mod tests {
             Err(WebrtcError::WhipStatus { status: 401, body }) => assert_eq!(body, "unauthorized"),
             other => panic!("{other:?}"),
         }
-        assert!(matches!(check_post_response(202, &base, None, "v=0".into()), Err(WebrtcError::WhipStatus { status: 202, .. })));
-        assert!(matches!(check_post_response(201, &base, None, "".into()), Err(WebrtcError::Whip(_))));
+        assert!(matches!(
+            check_post_response(202, &base, None, "v=0".into()),
+            Err(WebrtcError::WhipStatus { status: 202, .. })
+        ));
+        assert!(matches!(
+            check_post_response(201, &base, None, "".into()),
+            Err(WebrtcError::Whip(_))
+        ));
         let long = "x".repeat(2000);
         match check_post_response(500, &base, None, long) {
             Err(WebrtcError::WhipStatus { body, .. }) => assert_eq!(body.len(), 500),

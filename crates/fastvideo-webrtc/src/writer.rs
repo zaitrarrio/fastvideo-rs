@@ -44,7 +44,10 @@ pub struct VideoFrame {
 
 impl VideoFrame {
     pub fn new(data: impl Into<Bytes>, rtp_time: u64) -> Self {
-        VideoFrame { data: data.into(), rtp_time }
+        VideoFrame {
+            data: data.into(),
+            rtp_time,
+        }
     }
 
     /// Whether the access unit contains an IDR slice (NAL type 5).
@@ -63,7 +66,10 @@ pub struct AudioPacket {
 
 impl AudioPacket {
     pub fn new(data: impl Into<Bytes>, rtp_time: u64) -> Self {
-        AudioPacket { data: data.into(), rtp_time }
+        AudioPacket {
+            data: data.into(),
+            rtp_time,
+        }
     }
 }
 
@@ -110,7 +116,11 @@ impl Default for KeyframeLimiter {
 
 impl KeyframeLimiter {
     pub fn new(min_interval: Duration) -> Self {
-        KeyframeLimiter { min_interval, last: None, pending: false }
+        KeyframeLimiter {
+            min_interval,
+            last: None,
+            pending: false,
+        }
     }
 
     /// Record a request. Returns `true` when the IDR should be forced now;
@@ -126,7 +136,9 @@ impl KeyframeLimiter {
         if !self.pending {
             return false;
         }
-        let ready = self.last.is_none_or(|l| now.duration_since(l) >= self.min_interval);
+        let ready = self
+            .last
+            .is_none_or(|l| now.duration_since(l) >= self.min_interval);
         if ready {
             self.pending = false;
             self.last = Some(now);
@@ -156,7 +168,10 @@ pub struct WallclockMap {
 
 impl WallclockMap {
     pub fn new(clock_hz: u32) -> Self {
-        WallclockMap { clock_hz, anchor: None }
+        WallclockMap {
+            clock_hz,
+            anchor: None,
+        }
     }
 
     pub fn wallclock(&mut self, now: Instant, rtp_time: u64) -> Instant {
@@ -177,7 +192,9 @@ mod tests {
 
     #[test]
     fn nal_types_and_keyframes() {
-        let idr = [0, 0, 0, 1, 0x67, 1, 2, 0, 0, 0, 1, 0x68, 3, 0, 0, 1, 0x65, 9, 9];
+        let idr = [
+            0, 0, 0, 1, 0x67, 1, 2, 0, 0, 0, 1, 0x68, 3, 0, 0, 1, 0x65, 9, 9,
+        ];
         assert_eq!(h264_nal_types(&idr).collect::<Vec<_>>(), vec![7, 8, 5]);
         assert!(VideoFrame::new(idr.to_vec(), 0).is_keyframe());
         let p = [0, 0, 0, 1, 0x41, 1, 2, 3];
@@ -219,7 +236,10 @@ mod tests {
         let t0 = Instant::now();
         let mut w = WallclockMap::new(VIDEO_CLOCK_HZ);
         assert_eq!(w.wallclock(t0, 1000), t0);
-        assert_eq!(w.wallclock(t0 + Duration::from_secs(9), 1000 + 90_000), t0 + Duration::from_secs(1));
+        assert_eq!(
+            w.wallclock(t0 + Duration::from_secs(9), 1000 + 90_000),
+            t0 + Duration::from_secs(1)
+        );
         let t2 = t0 + Duration::from_secs(10);
         assert_eq!(w.wallclock(t2, 5), t2);
     }

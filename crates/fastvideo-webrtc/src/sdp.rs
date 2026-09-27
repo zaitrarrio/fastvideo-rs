@@ -189,7 +189,11 @@ impl MediaSection {
 
     /// The format list of the m-line (payload types for RTP).
     pub fn formats(&self) -> Vec<String> {
-        self.m_fields().iter().skip(3).map(|s| s.to_string()).collect()
+        self.m_fields()
+            .iter()
+            .skip(3)
+            .map(|s| s.to_string())
+            .collect()
     }
 
     /// Values of every `a=<name>:<value>` line (or `a=<name>` flags as "").
@@ -238,7 +242,9 @@ impl MediaSection {
     pub fn codecs(&self) -> Vec<RtpCodec> {
         let mut out = Vec::new();
         for pt in self.formats() {
-            let Ok(pt_num) = pt.parse::<u8>() else { continue };
+            let Ok(pt_num) = pt.parse::<u8>() else {
+                continue;
+            };
             let prefix = format!("{pt} ");
             let Some(map) = self.attrs("rtpmap").find(|v| v.starts_with(&prefix)) else {
                 continue;
@@ -252,7 +258,13 @@ impl MediaSection {
                 .attrs("fmtp")
                 .find(|v| v.starts_with(&prefix))
                 .map(|v| v[prefix.len()..].to_string());
-            out.push(RtpCodec { pt: pt_num, name, clock_rate, channels, fmtp });
+            out.push(RtpCodec {
+                pt: pt_num,
+                name,
+                clock_rate,
+                channels,
+                fmtp,
+            });
         }
         out
     }
@@ -308,10 +320,16 @@ impl Sdp {
             }
             let b = line.as_bytes();
             if b.len() < 2 || b[1] != b'=' || !b[0].is_ascii_lowercase() {
-                return Err(SdpError::Malformed { line: i + 1, text: line.chars().take(80).collect() });
+                return Err(SdpError::Malformed {
+                    line: i + 1,
+                    text: line.chars().take(80).collect(),
+                });
             }
             if line.starts_with("m=") {
-                media.push(MediaSection { m_line: line.to_string(), lines: Vec::new() });
+                media.push(MediaSection {
+                    m_line: line.to_string(),
+                    lines: Vec::new(),
+                });
             } else if let Some(m) = media.last_mut() {
                 m.lines.push(line.to_string());
             } else {
@@ -358,14 +376,23 @@ impl Sdp {
 
     /// True when the SDP carries `a=end-of-candidates` anywhere.
     pub fn has_end_of_candidates(&self) -> bool {
-        attr_values(&self.session, "end-of-candidates").next().is_some()
-            || self.media.iter().any(|m| m.attr("end-of-candidates").is_some())
+        attr_values(&self.session, "end-of-candidates")
+            .next()
+            .is_some()
+            || self
+                .media
+                .iter()
+                .any(|m| m.attr("end-of-candidates").is_some())
     }
 
     /// Set the direction of every non-rejected m-line of `kind`.
     pub fn set_direction_for_kind(&mut self, kind: MediaKind, dir: Direction) -> usize {
         let mut n = 0;
-        for m in self.media.iter_mut().filter(|m| m.kind() == kind && !m.is_rejected()) {
+        for m in self
+            .media
+            .iter_mut()
+            .filter(|m| m.kind() == kind && !m.is_rejected())
+        {
             m.set_direction(dir);
             n += 1;
         }
@@ -377,8 +404,12 @@ impl Sdp {
     /// as peer-reflexive from its connectivity checks. Returns the count.
     pub fn strip_unresolvable_candidates(&mut self) -> usize {
         let keep = |l: &String| -> bool {
-            let Some(c) = l.strip_prefix("a=candidate:") else { return true };
-            c.split_whitespace().nth(4).is_some_and(|a| a.parse::<IpAddr>().is_ok())
+            let Some(c) = l.strip_prefix("a=candidate:") else {
+                return true;
+            };
+            c.split_whitespace()
+                .nth(4)
+                .is_some_and(|a| a.parse::<IpAddr>().is_ok())
         };
         let before = self.line_count();
         self.session.retain(keep);
@@ -399,14 +430,18 @@ impl Sdp {
     pub fn finish_candidates(&mut self) {
         let not_trickle = |l: &String| {
             !(l.starts_with("a=ice-options:")
-                && l["a=ice-options:".len()..].split_whitespace().all(|o| o == "trickle"))
+                && l["a=ice-options:".len()..]
+                    .split_whitespace()
+                    .all(|o| o == "trickle"))
         };
         let strip_trickle_opt = |lines: &mut Vec<String>| {
             lines.retain(not_trickle);
             for l in lines.iter_mut() {
                 if let Some(opts) = l.strip_prefix("a=ice-options:") {
-                    let rest: Vec<&str> =
-                        opts.split_whitespace().filter(|o| *o != "trickle").collect();
+                    let rest: Vec<&str> = opts
+                        .split_whitespace()
+                        .filter(|o| *o != "trickle")
+                        .collect();
                     *l = format!("a=ice-options:{}", rest.join(" "));
                 }
             }
@@ -420,7 +455,11 @@ impl Sdp {
             }
             done_any = true;
             if m.attr("end-of-candidates").is_none() {
-                let last = m.lines.iter().rposition(|l| l.starts_with("a=candidate:")).unwrap_or(0);
+                let last = m
+                    .lines
+                    .iter()
+                    .rposition(|l| l.starts_with("a=candidate:"))
+                    .unwrap_or(0);
                 m.lines.insert(last + 1, "a=end-of-candidates".to_string());
             }
         }
@@ -434,12 +473,23 @@ impl Sdp {
     /// Set `stereo=1;sprop-stereo=1` (or remove them) on every Opus fmtp.
     /// Chrome downmixes to mono unless the SDP it receives says stereo.
     pub fn set_opus_stereo(&mut self, stereo: bool) {
-        for m in self.media.iter_mut().filter(|m| m.kind() == MediaKind::Audio) {
-            let opus_pts: Vec<u8> = m.codecs().iter().filter(|c| c.is_opus()).map(|c| c.pt).collect();
+        for m in self
+            .media
+            .iter_mut()
+            .filter(|m| m.kind() == MediaKind::Audio)
+        {
+            let opus_pts: Vec<u8> = m
+                .codecs()
+                .iter()
+                .filter(|c| c.is_opus())
+                .map(|c| c.pt)
+                .collect();
             for pt in opus_pts {
                 let prefix = format!("a=fmtp:{pt} ");
                 let idx = m.lines.iter().position(|l| l.starts_with(&prefix));
-                let current = idx.map(|i| m.lines[i][prefix.len()..].to_string()).unwrap_or_default();
+                let current = idx
+                    .map(|i| m.lines[i][prefix.len()..].to_string())
+                    .unwrap_or_default();
                 let mut params: Vec<String> = current
                     .split(';')
                     .map(|s| s.trim().to_string())
@@ -479,9 +529,17 @@ impl Sdp {
     /// codec; VP8 there "negotiates fine but produces a black stream"
     /// (streaming-refs §1.9).
     pub fn prefer_h264(&mut self) {
-        for m in self.media.iter_mut().filter(|m| m.kind() == MediaKind::Video) {
+        for m in self
+            .media
+            .iter_mut()
+            .filter(|m| m.kind() == MediaKind::Video)
+        {
             let codecs = m.codecs();
-            let h264: Vec<u8> = codecs.iter().filter(|c| c.is("H264")).map(|c| c.pt).collect();
+            let h264: Vec<u8> = codecs
+                .iter()
+                .filter(|c| c.is("H264"))
+                .map(|c| c.pt)
+                .collect();
             let rank = |pt: &str| -> u8 {
                 let Ok(p) = pt.parse::<u8>() else { return 3 };
                 if h264.contains(&p) {
@@ -490,9 +548,15 @@ impl Sdp {
                 let is_h264_rtx = codecs.iter().any(|c| {
                     c.pt == p
                         && c.is("rtx")
-                        && c.fmtp_param("apt").and_then(|a| a.parse::<u8>().ok()).is_some_and(|a| h264.contains(&a))
+                        && c.fmtp_param("apt")
+                            .and_then(|a| a.parse::<u8>().ok())
+                            .is_some_and(|a| h264.contains(&a))
                 });
-                if is_h264_rtx { 1 } else { 2 }
+                if is_h264_rtx {
+                    1
+                } else {
+                    2
+                }
             };
             let mut fields: Vec<String> = m.m_fields().iter().map(|s| s.to_string()).collect();
             if fields.len() <= 3 {
@@ -507,14 +571,21 @@ impl Sdp {
 
     /// Name of the first non-RTX codec of the first video m-line (for logs).
     pub fn negotiated_video_codec(&self) -> Option<String> {
-        let m = self.media.iter().find(|m| m.kind() == MediaKind::Video && !m.is_rejected())?;
-        m.codecs().into_iter().find(|c| !c.is("rtx") && !c.is("red") && !c.is("ulpfec")).map(|c| c.name)
+        let m = self
+            .media
+            .iter()
+            .find(|m| m.kind() == MediaKind::Video && !m.is_rejected())?;
+        m.codecs()
+            .into_iter()
+            .find(|c| !c.is("rtx") && !c.is("red") && !c.is("ulpfec"))
+            .map(|c| c.name)
     }
 
     /// Remove a session-level attribute (e.g. `x-reactor-frame-metadata`).
     pub fn remove_session_attr(&mut self, name: &str) {
         let full = format!("a={name}");
-        self.session.retain(|l| !(l == &full || l.starts_with(&format!("{full}:"))));
+        self.session
+            .retain(|l| !(l == &full || l.starts_with(&format!("{full}:"))));
     }
 }
 
@@ -599,7 +670,9 @@ pub fn validate_offer(sdp: &Sdp, req: OfferRequirements) -> Result<OfferSummary,
             return Err(SdpError::DuplicateMid(mid));
         }
         if !rejected {
-            if sdp.effective_attr(m, "ice-ufrag").is_none() || sdp.effective_attr(m, "ice-pwd").is_none() {
+            if sdp.effective_attr(m, "ice-ufrag").is_none()
+                || sdp.effective_attr(m, "ice-pwd").is_none()
+            {
                 return Err(SdpError::MissingIceCredentials);
             }
             if sdp.effective_attr(m, "fingerprint").is_none() {
@@ -615,15 +688,25 @@ pub fn validate_offer(sdp: &Sdp, req: OfferRequirements) -> Result<OfferSummary,
             codecs: m.codecs(),
         });
     }
-    let recv = |k: MediaKind| media.iter().filter(move |m| m.kind == k && m.offerer_receives());
-    if req.video && !recv(MediaKind::Video).any(|m| m.codecs.iter().any(RtpCodec::is_sendable_h264)) {
-        return Err(SdpError::NoCommonCodec("video", "H.264 constrained baseline, packetization-mode=1"));
+    let recv = |k: MediaKind| {
+        media
+            .iter()
+            .filter(move |m| m.kind == k && m.offerer_receives())
+    };
+    if req.video && !recv(MediaKind::Video).any(|m| m.codecs.iter().any(RtpCodec::is_sendable_h264))
+    {
+        return Err(SdpError::NoCommonCodec(
+            "video",
+            "H.264 constrained baseline, packetization-mode=1",
+        ));
     }
     if req.audio && !recv(MediaKind::Audio).any(|m| m.codecs.iter().any(RtpCodec::is_opus)) {
         return Err(SdpError::NoCommonCodec("audio", "opus/48000"));
     }
     Ok(OfferSummary {
-        has_data_channel: media.iter().any(|m| m.kind == MediaKind::Application && !m.rejected),
+        has_data_channel: media
+            .iter()
+            .any(|m| m.kind == MediaKind::Application && !m.rejected),
         ice_lite: sdp.session_attr("ice-lite").is_some(),
         candidate_count: sdp.candidates().len(),
         end_of_candidates: sdp.has_end_of_candidates(),
@@ -703,7 +786,14 @@ a=max-message-size:262144\r\n";
     #[test]
     fn summary_reports_mids_kinds_codecs() {
         let sdp = Sdp::parse(OFFER).unwrap();
-        let s = validate_offer(&sdp, OfferRequirements { video: true, audio: true }).unwrap();
+        let s = validate_offer(
+            &sdp,
+            OfferRequirements {
+                video: true,
+                audio: true,
+            },
+        )
+        .unwrap();
         assert_eq!(s.media.len(), 3);
         assert_eq!(s.media[0].mid, "0");
         assert_eq!(s.media[0].kind, MediaKind::Video);
@@ -712,7 +802,12 @@ a=max-message-size:262144\r\n";
         assert!(s.has_data_channel);
         assert_eq!(s.candidate_count, 2);
         assert!(!s.end_of_candidates);
-        let h264: Vec<_> = s.media[0].codecs.iter().filter(|c| c.is_sendable_h264()).map(|c| c.pt).collect();
+        let h264: Vec<_> = s.media[0]
+            .codecs
+            .iter()
+            .filter(|c| c.is_sendable_h264())
+            .map(|c| c.pt)
+            .collect();
         // 108 is packetization-mode=0: not sendable with FU-A.
         assert_eq!(h264, vec![102]);
         assert_eq!(s.media[1].codecs[0].channels, Some(2));
@@ -721,34 +816,75 @@ a=max-message-size:262144\r\n";
     #[test]
     fn rejects_bad_offers() {
         assert_eq!(Sdp::parse(""), Err(SdpError::Empty));
-        assert_eq!(Sdp::parse("o=- 1 1 IN IP4 0.0.0.0\r\n"), Err(SdpError::MissingVersion));
-        assert!(matches!(Sdp::parse("v=0\r\nnot a line\r\n"), Err(SdpError::Malformed { line: 2, .. })));
-        assert_eq!(Sdp::parse(&"v=0\r\n".repeat(20_000)), Err(SdpError::TooLarge));
+        assert_eq!(
+            Sdp::parse("o=- 1 1 IN IP4 0.0.0.0\r\n"),
+            Err(SdpError::MissingVersion)
+        );
+        assert!(matches!(
+            Sdp::parse("v=0\r\nnot a line\r\n"),
+            Err(SdpError::Malformed { line: 2, .. })
+        ));
+        assert_eq!(
+            Sdp::parse(&"v=0\r\n".repeat(20_000)),
+            Err(SdpError::TooLarge)
+        );
 
         let no_media = Sdp::parse("v=0\r\no=- 1 1 IN IP4 0.0.0.0\r\ns=-\r\nt=0 0\r\n").unwrap();
-        assert_eq!(validate_offer(&no_media, OfferRequirements::default()), Err(SdpError::NoMedia));
+        assert_eq!(
+            validate_offer(&no_media, OfferRequirements::default()),
+            Err(SdpError::NoMedia)
+        );
 
         let no_fp = Sdp::parse(&OFFER.replace("a=fingerprint:sha-256 AA:BB\r\n", "")).unwrap();
-        assert_eq!(validate_offer(&no_fp, OfferRequirements::default()), Err(SdpError::MissingFingerprint));
+        assert_eq!(
+            validate_offer(&no_fp, OfferRequirements::default()),
+            Err(SdpError::MissingFingerprint)
+        );
 
-        let no_ice = Sdp::parse(&OFFER.replace("a=ice-pwd:0123456789abcdefghijklmn\r\n", "")).unwrap();
-        assert_eq!(validate_offer(&no_ice, OfferRequirements::default()), Err(SdpError::MissingIceCredentials));
+        let no_ice =
+            Sdp::parse(&OFFER.replace("a=ice-pwd:0123456789abcdefghijklmn\r\n", "")).unwrap();
+        assert_eq!(
+            validate_offer(&no_ice, OfferRequirements::default()),
+            Err(SdpError::MissingIceCredentials)
+        );
 
         let dup = Sdp::parse(&OFFER.replace("a=mid:1", "a=mid:0")).unwrap();
-        assert_eq!(validate_offer(&dup, OfferRequirements::default()), Err(SdpError::DuplicateMid("0".into())));
+        assert_eq!(
+            validate_offer(&dup, OfferRequirements::default()),
+            Err(SdpError::DuplicateMid("0".into()))
+        );
 
         let vp8_only = Sdp::parse(&OFFER.replace("H264", "H263")).unwrap();
         assert!(matches!(
-            validate_offer(&vp8_only, OfferRequirements { video: true, audio: false }),
+            validate_offer(
+                &vp8_only,
+                OfferRequirements {
+                    video: true,
+                    audio: false
+                }
+            ),
             Err(SdpError::NoCommonCodec("video", _))
         ));
         let no_opus = Sdp::parse(&OFFER.replace("opus/48000/2", "G722/8000")).unwrap();
         assert!(matches!(
-            validate_offer(&no_opus, OfferRequirements { video: false, audio: true }),
+            validate_offer(
+                &no_opus,
+                OfferRequirements {
+                    video: false,
+                    audio: true
+                }
+            ),
             Err(SdpError::NoCommonCodec("audio", _))
         ));
         // Video-only sessions don't care about the audio codec.
-        assert!(validate_offer(&no_opus, OfferRequirements { video: true, audio: false }).is_ok());
+        assert!(validate_offer(
+            &no_opus,
+            OfferRequirements {
+                video: true,
+                audio: false
+            }
+        )
+        .is_ok());
     }
 
     #[test]
@@ -768,13 +904,26 @@ a=max-message-size:262144\r\n";
     #[test]
     fn audio_inactive_for_video_only_sessions() {
         let mut sdp = Sdp::parse(OFFER).unwrap();
-        assert_eq!(sdp.set_direction_for_kind(MediaKind::Audio, Direction::Inactive), 1);
+        assert_eq!(
+            sdp.set_direction_for_kind(MediaKind::Audio, Direction::Inactive),
+            1
+        );
         assert_eq!(sdp.media[1].direction(), Direction::Inactive);
         assert_eq!(sdp.media[0].direction(), Direction::RecvOnly);
         // Exactly one direction attribute remains.
-        assert_eq!(sdp.media[1].lines.iter().filter(|l| *l == "a=inactive" || *l == "a=recvonly").count(), 1);
+        assert_eq!(
+            sdp.media[1]
+                .lines
+                .iter()
+                .filter(|l| *l == "a=inactive" || *l == "a=recvonly")
+                .count(),
+            1
+        );
         // No direction attr present: it is inserted after a=mid.
-        let mut m = MediaSection { m_line: "m=audio 9 X 0".into(), lines: vec!["a=mid:7".into(), "a=rtcp-mux".into()] };
+        let mut m = MediaSection {
+            m_line: "m=audio 9 X 0".into(),
+            lines: vec!["a=mid:7".into(), "a=rtcp-mux".into()],
+        };
         assert_eq!(m.direction(), Direction::SendRecv);
         m.set_direction(Direction::SendOnly);
         assert_eq!(m.lines, vec!["a=mid:7", "a=sendonly", "a=rtcp-mux"]);
@@ -784,7 +933,10 @@ a=max-message-size:262144\r\n";
     fn strips_mdns_candidates() {
         let mut sdp = Sdp::parse(OFFER).unwrap();
         assert_eq!(sdp.strip_unresolvable_candidates(), 1);
-        assert_eq!(sdp.candidates(), vec!["candidate:1 1 udp 2122260223 192.168.1.5 50000 typ host generation 0"]);
+        assert_eq!(
+            sdp.candidates(),
+            vec!["candidate:1 1 udp 2122260223 192.168.1.5 50000 typ host generation 0"]
+        );
     }
 
     #[test]
@@ -796,7 +948,10 @@ a=max-message-size:262144\r\n";
         assert!(sdp.has_end_of_candidates());
         // end-of-candidates follows the last candidate of the first section.
         let m0 = &sdp.media[0].lines;
-        let last_c = m0.iter().rposition(|l| l.starts_with("a=candidate:")).unwrap();
+        let last_c = m0
+            .iter()
+            .rposition(|l| l.starts_with("a=candidate:"))
+            .unwrap();
         assert_eq!(m0[last_c + 1], "a=end-of-candidates");
         assert_eq!(text.matches("a=end-of-candidates").count(), 1);
         // Idempotent.
@@ -808,30 +963,55 @@ a=max-message-size:262144\r\n";
         assert_eq!(again, sdp);
 
         // No candidates at all: still terminated (an empty, complete gather).
-        let mut none = Sdp::parse(&OFFER.lines().filter(|l| !l.starts_with("a=candidate")).collect::<Vec<_>>().join("\r\n")).unwrap();
+        let mut none = Sdp::parse(
+            &OFFER
+                .lines()
+                .filter(|l| !l.starts_with("a=candidate"))
+                .collect::<Vec<_>>()
+                .join("\r\n"),
+        )
+        .unwrap();
         none.finish_candidates();
         assert_eq!(none.media[0].lines.last().unwrap(), "a=end-of-candidates");
 
         // Other ice-options survive.
-        let mut renomination = Sdp::parse(&OFFER.replacen("a=ice-options:trickle", "a=ice-options:trickle renomination", 1)).unwrap();
+        let mut renomination = Sdp::parse(&OFFER.replacen(
+            "a=ice-options:trickle",
+            "a=ice-options:trickle renomination",
+            1,
+        ))
+        .unwrap();
         renomination.finish_candidates();
-        assert!(renomination.to_string().contains("a=ice-options:renomination\r\n"));
+        assert!(renomination
+            .to_string()
+            .contains("a=ice-options:renomination\r\n"));
     }
 
     #[test]
     fn opus_stereo_munging() {
         let mut sdp = Sdp::parse(OFFER).unwrap();
         sdp.set_opus_stereo(true);
-        assert!(sdp.media[1].lines.contains(&"a=fmtp:111 minptime=10;useinbandfec=1;stereo=1;sprop-stereo=1".to_string()));
+        assert!(sdp.media[1].lines.contains(
+            &"a=fmtp:111 minptime=10;useinbandfec=1;stereo=1;sprop-stereo=1".to_string()
+        ));
         sdp.set_opus_stereo(true);
-        assert_eq!(sdp.to_string().matches("stereo=1;sprop-stereo=1").count(), 1);
+        assert_eq!(
+            sdp.to_string().matches("stereo=1;sprop-stereo=1").count(),
+            1
+        );
         sdp.set_opus_stereo(false);
-        assert!(sdp.media[1].lines.contains(&"a=fmtp:111 minptime=10;useinbandfec=1".to_string()));
+        assert!(sdp.media[1]
+            .lines
+            .contains(&"a=fmtp:111 minptime=10;useinbandfec=1".to_string()));
         // No fmtp line yet: one is added right after the rtpmap.
-        let mut bare = Sdp::parse(&OFFER.replace("a=fmtp:111 minptime=10;useinbandfec=1\r\n", "")).unwrap();
+        let mut bare =
+            Sdp::parse(&OFFER.replace("a=fmtp:111 minptime=10;useinbandfec=1\r\n", "")).unwrap();
         bare.set_opus_stereo(true);
         let l = &bare.media[1].lines;
-        let i = l.iter().position(|x| x == "a=rtpmap:111 opus/48000/2").unwrap();
+        let i = l
+            .iter()
+            .position(|x| x == "a=rtpmap:111 opus/48000/2")
+            .unwrap();
         assert_eq!(l[i + 1], "a=fmtp:111 stereo=1;sprop-stereo=1");
     }
 
@@ -840,7 +1020,10 @@ a=max-message-size:262144\r\n";
         let mut sdp = Sdp::parse(OFFER).unwrap();
         assert_eq!(sdp.negotiated_video_codec().as_deref(), Some("VP8"));
         sdp.prefer_h264();
-        assert_eq!(sdp.media[0].m_line, "m=video 9 UDP/TLS/RTP/SAVPF 102 108 103 109 96 97");
+        assert_eq!(
+            sdp.media[0].m_line,
+            "m=video 9 UDP/TLS/RTP/SAVPF 102 108 103 109 96 97"
+        );
         assert_eq!(sdp.negotiated_video_codec().as_deref(), Some("H264"));
         // Audio untouched.
         assert_eq!(sdp.media[1].m_line, "m=audio 9 UDP/TLS/RTP/SAVPF 111 0");
@@ -848,22 +1031,46 @@ a=max-message-size:262144\r\n";
 
     #[test]
     fn reactor_metadata_attr_is_detected_and_removable() {
-        let text = OFFER.replace("a=extmap-allow-mixed\r\n", "a=extmap-allow-mixed\r\na=x-reactor-frame-metadata:1\r\n");
+        let text = OFFER.replace(
+            "a=extmap-allow-mixed\r\n",
+            "a=extmap-allow-mixed\r\na=x-reactor-frame-metadata:1\r\n",
+        );
         let mut sdp = Sdp::parse(&text).unwrap();
-        assert!(validate_offer(&sdp, OfferRequirements::default()).unwrap().reactor_frame_metadata);
+        assert!(
+            validate_offer(&sdp, OfferRequirements::default())
+                .unwrap()
+                .reactor_frame_metadata
+        );
         sdp.remove_session_attr("x-reactor-frame-metadata");
-        assert!(!validate_offer(&sdp, OfferRequirements::default()).unwrap().reactor_frame_metadata);
+        assert!(
+            !validate_offer(&sdp, OfferRequirements::default())
+                .unwrap()
+                .reactor_frame_metadata
+        );
     }
 
     #[test]
     fn rejected_mlines_are_skipped() {
         let text = OFFER.replace("m=audio 9 ", "m=audio 0 ");
         let sdp = Sdp::parse(&text).unwrap();
-        let s = validate_offer(&sdp, OfferRequirements { video: true, audio: false }).unwrap();
+        let s = validate_offer(
+            &sdp,
+            OfferRequirements {
+                video: true,
+                audio: false,
+            },
+        )
+        .unwrap();
         assert!(s.media[1].rejected);
         assert!(s.first(MediaKind::Audio).is_none());
         assert!(matches!(
-            validate_offer(&sdp, OfferRequirements { video: true, audio: true }),
+            validate_offer(
+                &sdp,
+                OfferRequirements {
+                    video: true,
+                    audio: true
+                }
+            ),
             Err(SdpError::NoCommonCodec("audio", _))
         ));
     }

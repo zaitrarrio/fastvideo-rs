@@ -65,11 +65,19 @@ pub struct ChannelMessage {
 
 impl ChannelMessage {
     pub fn text(label: impl Into<String>, text: impl Into<String>) -> Self {
-        ChannelMessage { label: label.into(), binary: false, data: Bytes::from(text.into()) }
+        ChannelMessage {
+            label: label.into(),
+            binary: false,
+            data: Bytes::from(text.into()),
+        }
     }
 
     pub fn binary(label: impl Into<String>, data: impl Into<Bytes>) -> Self {
-        ChannelMessage { label: label.into(), binary: true, data: data.into() }
+        ChannelMessage {
+            label: label.into(),
+            binary: true,
+            data: data.into(),
+        }
     }
 
     /// The payload as text, when it is a valid UTF-8 text message.

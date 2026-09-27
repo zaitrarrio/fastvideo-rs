@@ -35,7 +35,9 @@ use bytes::Bytes;
 use str0m::change::{SdpAnswer, SdpOffer, SdpPendingOffer};
 use str0m::channel::ChannelId;
 use str0m::format::Codec;
-use str0m::media::{Direction as RtcDirection, Frequency, MediaKind as RtcMediaKind, MediaTime, Mid, Pt};
+use str0m::media::{
+    Direction as RtcDirection, Frequency, MediaKind as RtcMediaKind, MediaTime, Mid, Pt,
+};
 use str0m::net::{Protocol, Receive, TcpType};
 use str0m::{Candidate, Event, IceConnectionState, IceCreds, Input, Output, Rtc};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -45,9 +47,12 @@ use tokio::sync::{mpsc, oneshot, watch};
 use crate::channel::{ChannelMessage, ChannelPolicy, PendingMessages};
 use crate::framing;
 use crate::ice::{default_interface_ip, CandidatePlan, IceServer, PublicAddrs, Transport};
+use crate::profile::{EncodeProfile, H264Level};
 use crate::sdp::{self, Direction, MediaKind, OfferRequirements, Sdp};
 use crate::stun;
-use crate::writer::{AudioPacket, TrackKind, VideoFrame, WallclockMap, AUDIO_CLOCK_HZ, VIDEO_CLOCK_HZ};
+use crate::writer::{
+    AudioPacket, TrackKind, VideoFrame, WallclockMap, AUDIO_CLOCK_HZ, VIDEO_CLOCK_HZ,
+};
 use crate::WebrtcError;
 
 /// Host configuration (design §6.1 `[webrtc]`).
@@ -137,6 +142,10 @@ pub struct AnswerOptions {
     /// Local ICE credentials (Reactor `ice_credentials` for relaying
     /// front-ends). `None`: random.
     pub ice_credentials: Option<(String, String)>,
+    /// H.264 level we advertise (design §0 decision 2): peer WebRTC takes
+    /// native resolution at level 4.0. Only the profile must match the
+    /// offer; a level difference is allowed (RFC 6184 §8.2.2).
+    pub h264_level: H264Level,
 }
 
 impl Default for AnswerOptions {
@@ -147,6 +156,7 @@ impl Default for AnswerOptions {
             channels: ChannelPolicy::Any,
             start_paused: false,
             ice_credentials: None,
+            h264_level: EncodeProfile::NATIVE.h264_level,
         }
     }
 }
@@ -164,6 +174,9 @@ pub struct OfferOptions {
     /// Server-reflexive addresses to advertise for the UDP socket (from a
     /// STUN probe, see [`RtcHost::stun_probe`]).
     pub srflx: Vec<SocketAddr>,
+    /// H.264 level we offer. WHIP takes it from the target's
+    /// [`EncodeProfile`] (Cloudflare 3.1, MediaMTX 4.0).
+    pub h264_level: H264Level,
 }
 
 impl Default for OfferOptions {
@@ -173,6 +186,7 @@ impl Default for OfferOptions {
             audio: Some((Direction::SendOnly, AudioLayout::Stereo)),
             channels: Vec::new(),
             srflx: Vec::new(),
+            h264_level: H264Level::L3_1,
         }
     }
 }
@@ -215,13 +229,25 @@ pub enum PeerEvent {
     /// ICE and DTLS are up; media can flow. Also a good moment to force an
     /// IDR (a [`PeerEvent::KeyframeRequest`] follows for each video mid).
     Connected,
-    ChannelOpen { label: String },
-    ChannelClose { label: String },
+    ChannelOpen {
+        label: String,
+    },
+    ChannelClose {
+        label: String,
+    },
     Message(ChannelMessage),
     /// PLI/FIR from the remote (or a new viewer): force an IDR.
-    KeyframeRequest { mid: String },
+    KeyframeRequest {
+        mid: String,
+    },
     /// Inbound media (loopback/tests; our server peers only send).
-    Media { mid: String, kind: TrackKind, rtp_time: u64, keyframe: bool, data: Bytes },
+    Media {
+        mid: String,
+        kind: TrackKind,
+        rtp_time: u64,
+        keyframe: bool,
+        data: Bytes,
+    },
     Closed(CloseReason),
 }
 
@@ -243,7 +269,8 @@ pub struct LaneStats {
     pub firs: u64,
 }
 
-/// Snapshot of one peer, refreshed every `stats_interval`.
+/// Snapshot of one peer. Counters refresh every 200 ms housekeeping tick;
+/// transport figures (bytes, RTT, pair) every `stats_interval`.
 #[derive(Debug, Clone, Default, PartialEq, serde::Serialize)]
 pub struct PeerStats {
     pub connected: bool,
@@ -277,17 +304,58 @@ pub struct HostStats {
 type PeerId = u64;
 
 enum Cmd {
-    Answer { offer: String, opts: AnswerOptions, reply: oneshot::Sender<Result<Peer, WebrtcError>>, answer_tx: oneshot::Sender<String> },
-    Offer { opts: OfferOptions, reply: oneshot::Sender<Result<(PendingOffer, String), WebrtcError>> },
-    AcceptAnswer { peer: PeerId, answer: String, reply: oneshot::Sender<Result<Vec<MediaInfo>, WebrtcError>> },
-    Video { peer: PeerId, frame: VideoFrame },
-    Audio { peer: PeerId, packet: AudioPacket },
-    Data { peer: PeerId, msg: ChannelMessage, reply: Option<oneshot::Sender<Result<(), WebrtcError>>> },
-    SetPaused { peer: PeerId, mid: Option<String>, kind: Option<TrackKind>, paused: bool },
-    AddCandidate { peer: PeerId, candidate: String, reply: oneshot::Sender<Result<bool, WebrtcError>> },
-    Close { peer: PeerId },
-    StunProbe { server: SocketAddr, reply: oneshot::Sender<SocketAddr> },
-    Shutdown { reply: oneshot::Sender<()> },
+    Answer {
+        offer: String,
+        opts: AnswerOptions,
+        reply: oneshot::Sender<Result<Peer, WebrtcError>>,
+        answer_tx: oneshot::Sender<String>,
+    },
+    Offer {
+        opts: OfferOptions,
+        reply: oneshot::Sender<Result<(PendingOffer, String), WebrtcError>>,
+    },
+    AcceptAnswer {
+        peer: PeerId,
+        answer: String,
+        reply: oneshot::Sender<Result<Vec<MediaInfo>, WebrtcError>>,
+    },
+    Video {
+        peer: PeerId,
+        frame: VideoFrame,
+    },
+    Audio {
+        peer: PeerId,
+        packet: AudioPacket,
+    },
+    Data {
+        peer: PeerId,
+        msg: ChannelMessage,
+        reply: Option<oneshot::Sender<Result<(), WebrtcError>>>,
+    },
+    SetPaused {
+        peer: PeerId,
+        mid: Option<String>,
+        kind: Option<TrackKind>,
+        paused: bool,
+    },
+    AddCandidate {
+        peer: PeerId,
+        candidate: String,
+        reply: oneshot::Sender<Result<bool, WebrtcError>>,
+    },
+    Close {
+        peer: PeerId,
+    },
+    StunProbe {
+        server: SocketAddr,
+        reply: oneshot::Sender<SocketAddr>,
+    },
+    StunCancel {
+        tx: stun::TransactionId,
+    },
+    Shutdown {
+        reply: oneshot::Sender<()>,
+    },
 }
 
 struct Shared {
@@ -319,7 +387,9 @@ impl RtcHost {
     /// Bind the sockets and start the host task on the current tokio runtime.
     pub async fn bind(cfg: HostConfig) -> Result<Self, WebrtcError> {
         if cfg.udp_bind.is_none() && cfg.tcp_bind.is_none() {
-            return Err(WebrtcError::Config("neither udp_bind nor tcp_bind is set".into()));
+            return Err(WebrtcError::Config(
+                "neither udp_bind nor tcp_bind is set".into(),
+            ));
         }
         let udp = match cfg.udp_bind {
             Some(a) => Some(Arc::new(UdpSocket::bind(a).await?)),
@@ -339,14 +409,27 @@ impl RtcHost {
         } else {
             None
         };
-        let plan = CandidatePlan::build(udp_local, tcp_local, &cfg.public, &cfg.extra_udp, &cfg.extra_tcp, default_ip);
+        let plan = CandidatePlan::build(
+            udp_local,
+            tcp_local,
+            &cfg.public,
+            &cfg.extra_udp,
+            &cfg.extra_tcp,
+            default_ip,
+        );
         if plan.udp.is_empty() && plan.tcp.is_empty() {
             return Err(WebrtcError::Config("no usable candidate address (bound to 0.0.0.0 without a route; set public/extra addresses)".into()));
         }
         tracing::info!(?udp_local, ?tcp_local, candidates = ?plan.candidate_lines(), "webrtc host bound");
         let (tx, rx) = mpsc::channel(4096);
         let (stats_tx, stats_rx) = watch::channel(HostStats::default());
-        let shared = Arc::new(Shared { plan: plan.clone(), udp_local, tcp_local, ice_servers: cfg.ice_servers.clone(), stats: stats_rx });
+        let shared = Arc::new(Shared {
+            plan: plan.clone(),
+            udp_local,
+            tcp_local,
+            ice_servers: cfg.ice_servers.clone(),
+            stats: stats_rx,
+        });
         let (tcp_in_tx, tcp_in_rx) = mpsc::channel(4096);
         let host = HostLoop {
             cfg,
@@ -391,10 +474,20 @@ impl RtcHost {
     }
 
     /// Answer a complete offer. Returns the peer and the non-trickle answer.
-    pub async fn answer(&self, offer: &str, opts: AnswerOptions) -> Result<(Peer, String), WebrtcError> {
+    pub async fn answer(
+        &self,
+        offer: &str,
+        opts: AnswerOptions,
+    ) -> Result<(Peer, String), WebrtcError> {
         let (reply, rx) = oneshot::channel();
         let (answer_tx, answer_rx) = oneshot::channel();
-        self.send(Cmd::Answer { offer: offer.to_string(), opts, reply, answer_tx }).await?;
+        self.send(Cmd::Answer {
+            offer: offer.to_string(),
+            opts,
+            reply,
+            answer_tx,
+        })
+        .await?;
         let peer = rx.await.map_err(|_| WebrtcError::HostGone)??;
         let answer = answer_rx.await.map_err(|_| WebrtcError::HostGone)?;
         Ok((peer, answer))
@@ -410,12 +503,18 @@ impl RtcHost {
 
     /// Ask a STUN server for this host's public UDP address (the mapped
     /// address of the shared socket).
-    pub async fn stun_probe(&self, server: SocketAddr, timeout: Duration) -> Result<SocketAddr, WebrtcError> {
+    pub async fn stun_probe(
+        &self,
+        server: SocketAddr,
+        timeout: Duration,
+    ) -> Result<SocketAddr, WebrtcError> {
         let (reply, rx) = oneshot::channel();
         self.send(Cmd::StunProbe { server, reply }).await?;
         match tokio::time::timeout(timeout, rx).await {
             Ok(Ok(a)) => Ok(a),
-            Ok(Err(_)) => Err(WebrtcError::Stun(format!("no UDP socket to probe {server} from"))),
+            Ok(Err(_)) => Err(WebrtcError::Stun(format!(
+                "no UDP socket to probe {server} from"
+            ))),
             Err(_) => Err(WebrtcError::Stun(format!("no STUN response from {server}"))),
         }
     }
@@ -424,16 +523,22 @@ impl RtcHost {
     /// distinct mapped address (usually one). Failures are logged.
     pub async fn gather_srflx(&self, servers: &[IceServer], timeout: Duration) -> Vec<SocketAddr> {
         let mut out = Vec::new();
-        let Some(local) = self.udp_addr() else { return out };
+        let Some(local) = self.udp_addr() else {
+            return out;
+        };
         for (host, port) in servers.iter().flat_map(IceServer::stun_targets) {
             let addrs = match tokio::net::lookup_host((host.as_str(), port)).await {
-                Ok(a) => a.filter(|a| a.is_ipv4() == local.is_ipv4()).collect::<Vec<_>>(),
+                Ok(a) => a
+                    .filter(|a| a.is_ipv4() == local.is_ipv4())
+                    .collect::<Vec<_>>(),
                 Err(e) => {
                     tracing::warn!(%host, error = %e, "stun host lookup failed");
                     continue;
                 }
             };
-            let Some(server) = addrs.first().copied() else { continue };
+            let Some(server) = addrs.first().copied() else {
+                continue;
+            };
             match self.stun_probe(server, timeout).await {
                 Ok(mapped) if !out.contains(&mapped) => out.push(mapped),
                 Ok(_) => {}
@@ -468,7 +573,10 @@ pub struct PeerHandle {
 
 impl std::fmt::Debug for PeerHandle {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("PeerHandle").field("id", &self.id).field("media", &self.media).finish()
+        f.debug_struct("PeerHandle")
+            .field("id", &self.id)
+            .field("media", &self.media)
+            .finish()
     }
 }
 
@@ -495,36 +603,63 @@ impl PeerHandle {
     /// blocks: when the host is saturated the frame is dropped and
     /// [`WebrtcError::Backpressure`] is returned (force an IDR later).
     pub fn send_video(&self, frame: VideoFrame) -> Result<(), WebrtcError> {
-        self.try_send(Cmd::Video { peer: self.id, frame })
+        self.try_send(Cmd::Video {
+            peer: self.id,
+            frame,
+        })
     }
 
     /// Queue one Opus packet to every unpaused audio m-line (never blocks).
     pub fn send_audio(&self, packet: AudioPacket) -> Result<(), WebrtcError> {
-        self.try_send(Cmd::Audio { peer: self.id, packet })
+        self.try_send(Cmd::Audio {
+            peer: self.id,
+            packet,
+        })
     }
 
     /// Send a data-channel message. Messages to a channel that has not
     /// opened yet are queued (at most 64 per peer) and flushed on open.
     pub async fn send_message(&self, msg: ChannelMessage) -> Result<(), WebrtcError> {
         let (reply, rx) = oneshot::channel();
-        self.tx.send(Cmd::Data { peer: self.id, msg, reply: Some(reply) }).await.map_err(|_| WebrtcError::HostGone)?;
+        self.tx
+            .send(Cmd::Data {
+                peer: self.id,
+                msg,
+                reply: Some(reply),
+            })
+            .await
+            .map_err(|_| WebrtcError::HostGone)?;
         rx.await.map_err(|_| WebrtcError::PeerGone)?
     }
 
     /// Fire-and-forget variant of [`send_message`](Self::send_message).
     pub fn post_message(&self, msg: ChannelMessage) -> Result<(), WebrtcError> {
-        self.try_send(Cmd::Data { peer: self.id, msg, reply: None })
+        self.try_send(Cmd::Data {
+            peer: self.id,
+            msg,
+            reply: None,
+        })
     }
 
     /// Pause or resume one m-line (the Reactor pause gate). A resumed video
     /// m-line emits a [`PeerEvent::KeyframeRequest`].
     pub fn set_paused(&self, mid: &str, paused: bool) -> Result<(), WebrtcError> {
-        self.try_send(Cmd::SetPaused { peer: self.id, mid: Some(mid.to_string()), kind: None, paused })
+        self.try_send(Cmd::SetPaused {
+            peer: self.id,
+            mid: Some(mid.to_string()),
+            kind: None,
+            paused,
+        })
     }
 
     /// Pause or resume every m-line of one kind.
     pub fn set_kind_paused(&self, kind: TrackKind, paused: bool) -> Result<(), WebrtcError> {
-        self.try_send(Cmd::SetPaused { peer: self.id, mid: None, kind: Some(kind), paused })
+        self.try_send(Cmd::SetPaused {
+            peer: self.id,
+            mid: None,
+            kind: Some(kind),
+            paused,
+        })
     }
 
     /// Add a trickled remote candidate (`candidate:…`, with or without
@@ -533,7 +668,11 @@ impl PeerHandle {
     pub async fn add_remote_candidate(&self, candidate: &str) -> Result<bool, WebrtcError> {
         let (reply, rx) = oneshot::channel();
         self.tx
-            .send(Cmd::AddCandidate { peer: self.id, candidate: candidate.to_string(), reply })
+            .send(Cmd::AddCandidate {
+                peer: self.id,
+                candidate: candidate.to_string(),
+                reply,
+            })
             .await
             .map_err(|_| WebrtcError::HostGone)?;
         rx.await.map_err(|_| WebrtcError::PeerGone)?
@@ -598,7 +737,9 @@ pub struct PendingOffer {
 
 impl std::fmt::Debug for PendingOffer {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("PendingOffer").field("peer", &self.handle.as_ref().map(|h| h.id)).finish()
+        f.debug_struct("PendingOffer")
+            .field("peer", &self.handle.as_ref().map(|h| h.id))
+            .finish()
     }
 }
 
@@ -610,11 +751,21 @@ impl PendingOffer {
         let (reply, rx) = oneshot::channel();
         handle
             .tx
-            .send(Cmd::AcceptAnswer { peer: handle.id, answer: answer.to_string(), reply })
+            .send(Cmd::AcceptAnswer {
+                peer: handle.id,
+                answer: answer.to_string(),
+                reply,
+            })
             .await
             .map_err(|_| WebrtcError::HostGone)?;
         match rx.await.map_err(|_| WebrtcError::PeerGone)? {
-            Ok(media) => Ok(Peer { handle: PeerHandle { media: Arc::new(media), ..handle }, events }),
+            Ok(media) => Ok(Peer {
+                handle: PeerHandle {
+                    media: Arc::new(media),
+                    ..handle
+                },
+                events,
+            }),
             Err(e) => {
                 handle.close();
                 Err(e)
@@ -673,10 +824,17 @@ impl Io<'_> {
                 None => self.stats.dropped_tx_packets += 1,
             },
             Protocol::Tcp => {
-                let framed = framing::frame(&t.contents);
-                match (self.tcp_out.get(&t.destination), framed) {
-                    (Some(w), Some(f)) if w.try_send(f).is_ok() => self.stats.tcp_tx_packets += 1,
-                    _ => self.stats.dropped_tx_packets += 1,
+                let sent = match (
+                    self.tcp_out.get(&t.destination),
+                    framing::frame(&t.contents),
+                ) {
+                    (Some(w), Some(f)) => w.try_send(f).is_ok(),
+                    _ => false,
+                };
+                if sent {
+                    self.stats.tcp_tx_packets += 1;
+                } else {
+                    self.stats.dropped_tx_packets += 1;
                 }
             }
             _ => self.stats.dropped_tx_packets += 1,
@@ -799,7 +957,12 @@ impl HostLoop {
                 }
                 Wake::Tcp(None) => {}
                 Wake::Timeout => {
-                    let ids: Vec<PeerId> = self.peers.iter().filter(|(_, p)| p.next_timeout <= now).map(|(id, _)| *id).collect();
+                    let ids: Vec<PeerId> = self
+                        .peers
+                        .iter()
+                        .filter(|(_, p)| p.next_timeout <= now)
+                        .map(|(id, _)| *id)
+                        .collect();
                     for id in ids {
                         self.with_peer(id, now, |slot, _| {
                             if let Err(e) = slot.rtc.handle_input(Input::Timeout(now)) {
@@ -817,8 +980,14 @@ impl HostLoop {
 
     /// Run `f` on a peer, then drain its output (the str0m invariant).
     fn with_peer(&mut self, id: PeerId, now: Instant, f: impl FnOnce(&mut PeerSlot, &mut Io)) {
-        let Some(slot) = self.peers.get_mut(&id) else { return };
-        let mut io = Io { udp: self.udp.as_deref(), tcp_out: &self.tcp_out, stats: &mut self.stats };
+        let Some(slot) = self.peers.get_mut(&id) else {
+            return;
+        };
+        let mut io = Io {
+            udp: self.udp.as_deref(),
+            tcp_out: &self.tcp_out,
+            stats: &mut self.stats,
+        };
         f(slot, &mut io);
         drain(slot, &mut io, now);
     }
@@ -889,7 +1058,12 @@ impl HostLoop {
             return;
         };
         let input = Input::Receive(now, recv);
-        let Some(id) = self.peers.iter().find(|(_, p)| p.closed.is_none() && p.rtc.accepts(&input)).map(|(id, _)| *id) else {
+        let Some(id) = self
+            .peers
+            .iter()
+            .find(|(_, p)| p.closed.is_none() && p.rtc.accepts(&input))
+            .map(|(id, _)| *id)
+        else {
             self.stats.unmatched_packets += 1;
             return;
         };
@@ -907,19 +1081,34 @@ impl HostLoop {
             if slot.closed.is_some() {
                 continue;
             }
+            // Counters (written, dropped, messages) change on every write;
+            // publish them each tick, not only on str0m's stats event.
+            let snapshot = &slot.stats;
+            slot.stats_tx.send_if_modified(|s| {
+                let changed = s != snapshot;
+                if changed {
+                    *s = snapshot.clone();
+                }
+                changed
+            });
             if slot.events.is_closed() {
                 slot.close(CloseReason::Local);
-            } else if !slot.connected && now.duration_since(slot.created) > cfg.negotiation_timeout {
+            } else if !slot.connected && now.duration_since(slot.created) > cfg.negotiation_timeout
+            {
                 slot.close(CloseReason::NegotiationTimeout);
             } else if slot.connected && now.duration_since(slot.last_rx) > cfg.idle_timeout {
                 slot.close(CloseReason::IdleTimeout);
-            } else if slot.disconnected_since.is_some_and(|d| now.duration_since(d) > cfg.disconnect_grace) {
+            } else if slot
+                .disconnected_since
+                .is_some_and(|d| now.duration_since(d) > cfg.disconnect_grace)
+            {
                 slot.close(CloseReason::IceDisconnected);
             } else if !slot.rtc.is_alive() {
                 slot.close(CloseReason::RemoteClosed);
             }
         }
-        self.stun_waiters.retain(|_, (t, w)| now.duration_since(*t) < Duration::from_secs(30) && !w.is_closed());
+        self.stun_waiters
+            .retain(|_, (t, w)| now.duration_since(*t) < Duration::from_secs(30) && !w.is_closed());
         self.stats.peers = self.peers.len();
         self.stats.tcp_connections = self.tcp_out.len();
         self.stats_tx.send_if_modified(|s| {
@@ -932,7 +1121,12 @@ impl HostLoop {
     }
 
     fn reap(&mut self, now: Instant) {
-        let closed: Vec<PeerId> = self.peers.iter().filter(|(_, p)| p.closed.is_some()).map(|(id, _)| *id).collect();
+        let closed: Vec<PeerId> = self
+            .peers
+            .iter()
+            .filter(|(_, p)| p.closed.is_some())
+            .map(|(id, _)| *id)
+            .collect();
         for id in closed {
             self.with_peer(id, now, |slot, _| slot.rtc.disconnect());
             if let Some(mut slot) = self.peers.remove(&id) {
@@ -947,7 +1141,12 @@ impl HostLoop {
 
     fn command(&mut self, cmd: Cmd, now: Instant) {
         match cmd {
-            Cmd::Answer { offer, opts, reply, answer_tx } => {
+            Cmd::Answer {
+                offer,
+                opts,
+                reply,
+                answer_tx,
+            } => {
                 let r = self.answer(&offer, opts, now);
                 match r {
                     Ok((peer, answer)) => {
@@ -965,7 +1164,11 @@ impl HostLoop {
                 let r = self.offer(opts, now);
                 let _ = reply.send(r);
             }
-            Cmd::AcceptAnswer { peer, answer, reply } => {
+            Cmd::AcceptAnswer {
+                peer,
+                answer,
+                reply,
+            } => {
                 let mut result = Err(WebrtcError::PeerGone);
                 self.with_peer(peer, now, |slot, _| result = accept_answer(slot, &answer));
                 let _ = reply.send(result);
@@ -977,7 +1180,14 @@ impl HostLoop {
             }
             Cmd::Audio { peer, packet } => {
                 self.with_peer(peer, now, |slot, io| {
-                    write_media(slot, io, now, TrackKind::Audio, packet.rtp_time, &packet.data);
+                    write_media(
+                        slot,
+                        io,
+                        now,
+                        TrackKind::Audio,
+                        packet.rtp_time,
+                        &packet.data,
+                    );
                 });
             }
             Cmd::Data { peer, msg, reply } => {
@@ -987,13 +1197,23 @@ impl HostLoop {
                     let _ = r.send(result);
                 }
             }
-            Cmd::SetPaused { peer, mid, kind, paused } => {
+            Cmd::SetPaused {
+                peer,
+                mid,
+                kind,
+                paused,
+            } => {
                 self.with_peer(peer, now, |slot, _| {
                     let mut resumed_video = Vec::new();
                     for m in slot.mids.iter_mut() {
-                        let hit = mid.as_deref().is_some_and(|x| x == m.info.mid) || kind.is_some_and(|k| k == m.info.kind);
+                        let hit = mid.as_deref().is_some_and(|x| x == m.info.mid)
+                            || kind.is_some_and(|k| k == m.info.kind);
                         if hit {
-                            if m.paused && !paused && m.info.kind == TrackKind::Video && m.info.sends() {
+                            if m.paused
+                                && !paused
+                                && m.info.kind == TrackKind::Video
+                                && m.info.sends()
+                            {
                                 resumed_video.push(m.info.mid.clone());
                             }
                             m.paused = paused;
@@ -1006,7 +1226,11 @@ impl HostLoop {
                     }
                 });
             }
-            Cmd::AddCandidate { peer, candidate, reply } => {
+            Cmd::AddCandidate {
+                peer,
+                candidate,
+                reply,
+            } => {
                 let mut result = Err(WebrtcError::PeerGone);
                 self.with_peer(peer, now, |slot, _| {
                     let c = candidate.trim();
@@ -1015,7 +1239,11 @@ impl HostLoop {
                         result = Ok(false);
                         return;
                     }
-                    let c = if c.starts_with("candidate:") { c.to_string() } else { format!("candidate:{c}") };
+                    let c = if c.starts_with("candidate:") {
+                        c.to_string()
+                    } else {
+                        format!("candidate:{c}")
+                    };
                     result = match Candidate::from_sdp_string(&c) {
                         Ok(cand) => {
                             slot.rtc.add_remote_candidate(cand);
@@ -1035,25 +1263,46 @@ impl HostLoop {
                 }
             }
             Cmd::StunProbe { server, reply } => {
-                let Some(udp) = &self.udp else { return };
+                let Some(udp) = self.udp.clone() else { return };
                 let tx = stun::new_transaction_id();
-                if udp.try_send_to(&stun::binding_request(&tx), server).is_ok() {
-                    self.stun_waiters.insert(tx, (now, reply));
-                }
+                let req = stun::binding_request(&tx);
+                // Register first; the send is awaited off the loop because
+                // `try_send_to` on a fresh socket can fail with WouldBlock
+                // before the reactor has reported write readiness. A failed
+                // send drops the waiter (the caller sees an error).
+                self.stun_waiters.insert(tx, (now, reply));
+                let weak = self.cmd_tx.clone();
+                tokio::spawn(async move {
+                    if let Err(e) = udp.send_to(&req, server).await {
+                        tracing::warn!(%server, error = %e, "stun probe send failed");
+                        if let Some(cmd) = weak.upgrade() {
+                            let _ = cmd.send(Cmd::StunCancel { tx }).await;
+                        }
+                    }
+                });
+            }
+            Cmd::StunCancel { tx } => {
+                self.stun_waiters.remove(&tx);
             }
             Cmd::Shutdown { .. } => unreachable!("handled in run"),
         }
     }
 
-    fn new_rtc(&self, now: Instant, creds: Option<(String, String)>) -> Rtc {
+    fn new_rtc(&self, now: Instant, creds: Option<(String, String)>, level: H264Level) -> Rtc {
         let mut cfg = Rtc::builder()
             .clear_codecs()
             .enable_opus(true, false)
             .set_stats_interval(Some(self.cfg.stats_interval));
         // Constrained Baseline first (what OpenH264 emits, §5.9), then
         // Baseline as a fallback match; both FU-A (packetization-mode=1).
-        cfg.codec_config().add_h264(108.into(), Some(109.into()), true, 0x42e01f);
-        cfg.codec_config().add_h264(127.into(), Some(121.into()), true, 0x42001f);
+        cfg.codec_config().add_h264(
+            108.into(),
+            Some(109.into()),
+            true,
+            level.constrained_baseline_plid(),
+        );
+        cfg.codec_config()
+            .add_h264(127.into(), Some(121.into()), true, level.baseline_plid());
         if let Some((ufrag, pass)) = creds {
             cfg = cfg.set_local_ice_credentials(IceCreds { ufrag, pass });
         }
@@ -1070,7 +1319,12 @@ impl HostLoop {
             }
         }
         for a in &self.plan.tcp {
-            match Candidate::builder().tcp().host(*a).tcptype(TcpType::Passive).build() {
+            match Candidate::builder()
+                .tcp()
+                .host(*a)
+                .tcptype(TcpType::Passive)
+                .build()
+            {
                 Ok(c) => {
                     rtc.add_local_candidate(c);
                 }
@@ -1078,7 +1332,13 @@ impl HostLoop {
             }
         }
         for s in srflx {
-            let Some(base) = self.plan.udp.iter().find(|b| b.is_ipv4() == s.is_ipv4() && !b.ip().is_loopback()).or(self.plan.udp.first()) else {
+            let Some(base) = self
+                .plan
+                .udp
+                .iter()
+                .find(|b| b.is_ipv4() == s.is_ipv4() && !b.ip().is_loopback())
+                .or(self.plan.udp.first())
+            else {
                 continue;
             };
             match Candidate::server_reflexive(*s, *base, "udp") {
@@ -1090,7 +1350,14 @@ impl HostLoop {
         }
     }
 
-    fn new_slot(&mut self, rtc: Rtc, state: SlotState, policy: ChannelPolicy, mids: Vec<MidState>, now: Instant) -> (PeerId, PeerHandle, mpsc::UnboundedReceiver<PeerEvent>) {
+    fn new_slot(
+        &mut self,
+        rtc: Rtc,
+        state: SlotState,
+        policy: ChannelPolicy,
+        mids: Vec<MidState>,
+        now: Instant,
+    ) -> (PeerId, PeerHandle, mpsc::UnboundedReceiver<PeerEvent>) {
         let id = self.next_id;
         self.next_id += 1;
         let (etx, erx) = mpsc::unbounded_channel();
@@ -1115,19 +1382,50 @@ impl HostLoop {
             closed: None,
         };
         self.peers.insert(id, slot);
-        let tx = self.cmd_tx.upgrade().expect("host holds its own sender while running");
-        (id, PeerHandle { id, tx, media, stats: stats_rx }, erx)
+        let tx = self
+            .cmd_tx
+            .upgrade()
+            .expect("host holds its own sender while running");
+        (
+            id,
+            PeerHandle {
+                id,
+                tx,
+                media,
+                stats: stats_rx,
+            },
+            erx,
+        )
     }
 
-    fn answer(&mut self, offer: &str, opts: AnswerOptions, now: Instant) -> Result<(Peer, String), WebrtcError> {
+    fn answer(
+        &mut self,
+        offer: &str,
+        opts: AnswerOptions,
+        now: Instant,
+    ) -> Result<(Peer, String), WebrtcError> {
         if self.peers.len() >= self.cfg.max_peers {
             return Err(WebrtcError::PeerLimit(self.cfg.max_peers));
         }
         let mut sdp = Sdp::parse(offer)?;
         let summary = sdp::validate_offer(&sdp, OfferRequirements::default())?;
-        let wants_video = opts.video && summary.media.iter().any(|m| m.kind == MediaKind::Video && m.offerer_receives());
-        let wants_audio = opts.audio.is_some() && summary.media.iter().any(|m| m.kind == MediaKind::Audio && m.offerer_receives());
-        sdp::validate_offer(&sdp, OfferRequirements { video: wants_video, audio: wants_audio })?;
+        let wants_video = opts.video
+            && summary
+                .media
+                .iter()
+                .any(|m| m.kind == MediaKind::Video && m.offerer_receives());
+        let wants_audio = opts.audio.is_some()
+            && summary
+                .media
+                .iter()
+                .any(|m| m.kind == MediaKind::Audio && m.offerer_receives());
+        sdp::validate_offer(
+            &sdp,
+            OfferRequirements {
+                video: wants_video,
+                audio: wants_audio,
+            },
+        )?;
         sdp.strip_unresolvable_candidates();
         if opts.audio.is_none() {
             sdp.set_direction_for_kind(MediaKind::Audio, Direction::Inactive);
@@ -1138,10 +1436,14 @@ impl HostLoop {
         // We never mirror the Reactor RXMT trailer (reactor §4.2).
         sdp.remove_session_attr("x-reactor-frame-metadata");
 
-        let mut rtc = self.new_rtc(now, opts.ice_credentials.clone());
+        let mut rtc = self.new_rtc(now, opts.ice_credentials.clone(), opts.h264_level);
         self.add_candidates(&mut rtc, &[]);
-        let offer = SdpOffer::from_sdp_string(&sdp.to_string()).map_err(|e| WebrtcError::Rtc(e.to_string()))?;
-        let answer = rtc.sdp_api().accept_offer(offer).map_err(|e| WebrtcError::Rtc(e.to_string()))?;
+        let offer = SdpOffer::from_sdp_string(&sdp.to_string())
+            .map_err(|e| WebrtcError::Rtc(e.to_string()))?;
+        let answer = rtc
+            .sdp_api()
+            .accept_offer(offer)
+            .map_err(|e| WebrtcError::Rtc(e.to_string()))?;
 
         let mut answer_sdp = Sdp::parse(&answer.to_sdp_string())?;
         answer_sdp.finish_candidates();
@@ -1160,7 +1462,10 @@ impl HostLoop {
                     _ => return None,
                 };
                 let mid = Mid::from(m.mid.as_str());
-                let dir = rtc.media(mid).map(|x| from_rtc_dir(x.direction())).unwrap_or(Direction::Inactive);
+                let dir = rtc
+                    .media(mid)
+                    .map(|x| from_rtc_dir(x.direction()))
+                    .unwrap_or(Direction::Inactive);
                 Some(mid_state(mid, kind, dir, opts.start_paused))
             })
             .collect();
@@ -1169,11 +1474,15 @@ impl HostLoop {
         Ok((Peer { handle, events }, answer_sdp.to_string()))
     }
 
-    fn offer(&mut self, opts: OfferOptions, now: Instant) -> Result<(PendingOffer, String), WebrtcError> {
+    fn offer(
+        &mut self,
+        opts: OfferOptions,
+        now: Instant,
+    ) -> Result<(PendingOffer, String), WebrtcError> {
         if self.peers.len() >= self.cfg.max_peers {
             return Err(WebrtcError::PeerLimit(self.cfg.max_peers));
         }
-        let mut rtc = self.new_rtc(now, None);
+        let mut rtc = self.new_rtc(now, None, opts.h264_level);
         self.add_candidates(&mut rtc, &opts.srflx);
         let mut api = rtc.sdp_api();
         let mut mids = Vec::new();
@@ -1188,7 +1497,9 @@ impl HostLoop {
         for label in &opts.channels {
             api.add_channel(label.clone());
         }
-        let (offer, pending) = api.apply().ok_or_else(|| WebrtcError::Config("offer has no m-lines (no media and no channels)".into()))?;
+        let (offer, pending) = api.apply().ok_or_else(|| {
+            WebrtcError::Config("offer has no m-lines (no media and no channels)".into())
+        })?;
         let mut sdp = Sdp::parse(&offer.to_sdp_string())?;
         sdp.finish_candidates();
         sdp.prefer_h264();
@@ -1196,9 +1507,16 @@ impl HostLoop {
             sdp.set_opus_stereo(layout == AudioLayout::Stereo);
         }
         let policy = ChannelPolicy::Only(opts.channels.clone());
-        let (id, handle, events) = self.new_slot(rtc, SlotState::Offering(Some(pending)), policy, mids, now);
+        let (id, handle, events) =
+            self.new_slot(rtc, SlotState::Offering(Some(pending)), policy, mids, now);
         self.with_peer(id, now, |_, _| {});
-        Ok((PendingOffer { handle: Some(handle), events: Some(events) }, sdp.to_string()))
+        Ok((
+            PendingOffer {
+                handle: Some(handle),
+                events: Some(events),
+            },
+            sdp.to_string(),
+        ))
     }
 }
 
@@ -1207,7 +1525,17 @@ fn mid_state(mid: Mid, kind: TrackKind, direction: Direction, paused: bool) -> M
         TrackKind::Video => VIDEO_CLOCK_HZ,
         TrackKind::Audio => AUDIO_CLOCK_HZ,
     };
-    MidState { info: MediaInfo { mid: mid.to_string(), kind, direction }, mid, pt: None, wall: WallclockMap::new(clock), paused }
+    MidState {
+        info: MediaInfo {
+            mid: mid.to_string(),
+            kind,
+            direction,
+        },
+        mid,
+        pt: None,
+        wall: WallclockMap::new(clock),
+        paused,
+    }
 }
 
 fn to_rtc_dir(d: Direction) -> RtcDirection {
@@ -1232,13 +1560,19 @@ fn accept_answer(slot: &mut PeerSlot, answer: &str) -> Result<Vec<MediaInfo>, We
     let SlotState::Offering(pending) = &mut slot.state else {
         return Err(WebrtcError::Rtc("peer is not waiting for an answer".into()));
     };
-    let pending = pending.take().ok_or_else(|| WebrtcError::Rtc("answer already applied".into()))?;
+    let pending = pending
+        .take()
+        .ok_or_else(|| WebrtcError::Rtc("answer already applied".into()))?;
     let parsed = Sdp::parse(answer)?;
     if parsed.media.is_empty() {
         return Err(sdp::SdpError::NoMedia.into());
     }
-    let ans = SdpAnswer::from_sdp_string(&parsed.to_string()).map_err(|e| WebrtcError::Rtc(e.to_string()))?;
-    slot.rtc.sdp_api().accept_answer(pending, ans).map_err(|e| WebrtcError::Rtc(e.to_string()))?;
+    let ans = SdpAnswer::from_sdp_string(&parsed.to_string())
+        .map_err(|e| WebrtcError::Rtc(e.to_string()))?;
+    slot.rtc
+        .sdp_api()
+        .accept_answer(pending, ans)
+        .map_err(|e| WebrtcError::Rtc(e.to_string()))?;
     slot.state = SlotState::Active;
     for m in slot.mids.iter_mut() {
         if let Some(media) = slot.rtc.media(m.mid) {
@@ -1250,18 +1584,35 @@ fn accept_answer(slot: &mut PeerSlot, answer: &str) -> Result<Vec<MediaInfo>, We
 
 fn send_message(slot: &mut PeerSlot, msg: ChannelMessage) -> Result<(), WebrtcError> {
     let Some(id) = slot.labels.get(&msg.label).copied() else {
-        return slot.pending.push(msg).map_err(|_| WebrtcError::Backpressure);
+        return slot
+            .pending
+            .push(msg)
+            .map_err(|_| WebrtcError::Backpressure);
     };
     let Some(mut ch) = slot.rtc.channel(id) else {
         return Err(WebrtcError::ChannelClosed(msg.label));
     };
-    ch.write(msg.binary, &msg.data).map_err(|e| WebrtcError::Rtc(e.to_string()))?;
+    ch.write(msg.binary, &msg.data)
+        .map_err(|e| WebrtcError::Rtc(e.to_string()))?;
     slot.stats.messages_out += 1;
     Ok(())
 }
 
-fn write_media(slot: &mut PeerSlot, io: &mut Io, now: Instant, kind: TrackKind, rtp_time: u64, data: &Bytes) {
-    let targets: Vec<usize> = slot.mids.iter().enumerate().filter(|(_, m)| m.info.kind == kind).map(|(i, _)| i).collect();
+fn write_media(
+    slot: &mut PeerSlot,
+    io: &mut Io,
+    now: Instant,
+    kind: TrackKind,
+    rtp_time: u64,
+    data: &Bytes,
+) {
+    let targets: Vec<usize> = slot
+        .mids
+        .iter()
+        .enumerate()
+        .filter(|(_, m)| m.info.kind == kind)
+        .map(|(i, _)| i)
+        .collect();
     if targets.is_empty() {
         slot.lane(kind).dropped_paused += 1;
         return;
@@ -1294,7 +1645,14 @@ fn write_media(slot: &mut PeerSlot, io: &mut Io, now: Instant, kind: TrackKind, 
             TrackKind::Video => Frequency::NINETY_KHZ,
             TrackKind::Audio => Frequency::FORTY_EIGHT_KHZ,
         };
-        let res = slot.rtc.writer(mid).map(|w| w.write(pt, wall, MediaTime::new(rtp_time, freq), Arc::<[u8]>::from(&data[..])));
+        let res = slot.rtc.writer(mid).map(|w| {
+            w.write(
+                pt,
+                wall,
+                MediaTime::new(rtp_time, freq),
+                Arc::<[u8]>::from(&data[..]),
+            )
+        });
         match res {
             Some(Ok(())) => slot.lane(kind).written += 1,
             None => slot.lane(kind).write_errors += 1,
@@ -1312,14 +1670,29 @@ fn pick_pt(w: &str0m::media::Writer, kind: TrackKind) -> Option<Pt> {
     let params: Vec<_> = w.payload_params().cloned().collect();
     match kind {
         TrackKind::Video => {
-            let h264: Vec<_> = params.iter().filter(|p| p.spec().codec == Codec::H264).collect();
+            let h264: Vec<_> = params
+                .iter()
+                .filter(|p| p.spec().codec == Codec::H264)
+                .collect();
             h264.iter()
-                .find(|p| p.spec().format.profile_level_id == Some(0x42e01f) && p.spec().format.packetization_mode == Some(1))
-                .or_else(|| h264.iter().find(|p| p.spec().format.packetization_mode == Some(1)))
+                .find(|p| {
+                    p.spec()
+                        .format
+                        .profile_level_id
+                        .is_some_and(|l| l >> 8 == 0x42e0)
+                        && p.spec().format.packetization_mode == Some(1)
+                })
+                .or_else(|| {
+                    h264.iter()
+                        .find(|p| p.spec().format.packetization_mode == Some(1))
+                })
                 .or_else(|| h264.first())
                 .map(|p| p.pt())
         }
-        TrackKind::Audio => params.iter().find(|p| p.spec().codec == Codec::Opus).map(|p| p.pt()),
+        TrackKind::Audio => params
+            .iter()
+            .find(|p| p.spec().codec == Codec::Opus)
+            .map(|p| p.pt()),
     }
 }
 
@@ -1367,7 +1740,9 @@ fn event(slot: &mut PeerSlot, e: Event, now: Instant) {
             IceConnectionState::Disconnected => {
                 slot.disconnected_since.get_or_insert(now);
             }
-            IceConnectionState::Connected | IceConnectionState::Completed => slot.disconnected_since = None,
+            IceConnectionState::Connected | IceConnectionState::Completed => {
+                slot.disconnected_since = None
+            }
             _ => {}
         },
         Event::ChannelOpen(id, label) => {
@@ -1386,9 +1761,15 @@ fn event(slot: &mut PeerSlot, e: Event, now: Instant) {
             slot.emit(PeerEvent::ChannelOpen { label });
         }
         Event::ChannelData(d) => {
-            let Some(label) = slot.channels.get(&d.id).cloned() else { return };
+            let Some(label) = slot.channels.get(&d.id).cloned() else {
+                return;
+            };
             slot.stats.messages_in += 1;
-            slot.emit(PeerEvent::Message(ChannelMessage { label, binary: d.binary, data: Bytes::from(d.data) }));
+            slot.emit(PeerEvent::Message(ChannelMessage {
+                label,
+                binary: d.binary,
+                data: Bytes::from(d.data),
+            }));
         }
         Event::ChannelClose(id) => {
             if let Some(label) = slot.channels.remove(&id) {
@@ -1398,12 +1779,24 @@ fn event(slot: &mut PeerSlot, e: Event, now: Instant) {
         }
         Event::KeyframeRequest(k) => {
             slot.stats.keyframe_requests += 1;
-            slot.emit(PeerEvent::KeyframeRequest { mid: k.mid.to_string() });
+            slot.emit(PeerEvent::KeyframeRequest {
+                mid: k.mid.to_string(),
+            });
         }
         Event::MediaData(d) => {
-            let kind = if d.params.spec().codec.is_audio() { TrackKind::Audio } else { TrackKind::Video };
+            let kind = if d.params.spec().codec.is_audio() {
+                TrackKind::Audio
+            } else {
+                TrackKind::Video
+            };
             let keyframe = d.is_keyframe();
-            slot.emit(PeerEvent::Media { mid: d.mid.to_string(), kind, rtp_time: d.time.numer(), keyframe, data: Bytes::copy_from_slice(&d.data) });
+            slot.emit(PeerEvent::Media {
+                mid: d.mid.to_string(),
+                kind,
+                rtp_time: d.time.numer(),
+                keyframe,
+                data: Bytes::copy_from_slice(&d.data),
+            });
         }
         Event::PeerStats(s) => {
             slot.stats.bytes_rx = s.bytes_rx;
@@ -1416,7 +1809,11 @@ fn event(slot: &mut PeerSlot, e: Event, now: Instant) {
             let _ = slot.stats_tx.send(slot.stats.clone());
         }
         Event::MediaEgressStats(s) => {
-            let kind = slot.mids.iter().find(|m| m.mid == s.mid).map(|m| m.info.kind);
+            let kind = slot
+                .mids
+                .iter()
+                .find(|m| m.mid == s.mid)
+                .map(|m| m.info.kind);
             if let Some(kind) = kind {
                 let lane = slot.lane(kind);
                 lane.bytes = s.bytes;
