@@ -140,7 +140,7 @@ pub struct OxideBackend;
 pub struct CudnnBackend;
 pub struct CublasBackend;
 
-static NVCC: [KernelImpl; 13] = [
+static NVCC: [KernelImpl; 15] = [
     k(
         KernelOp::DenseAttention,
         "v1",
@@ -154,6 +154,20 @@ static NVCC: [KernelImpl; 13] = [
         "v2",
         80,
         "flash_mma_fwd2: 128-query CTAs, double-buffered K/V (bit-identical to v1)",
+    ),
+    k(
+        KernelOp::DenseAttention,
+        "v3",
+        "v3",
+        80,
+        "flash_mma_fwd3: v2 with S_{j+1} issued before softmax(S_j), 3-stage K/V ring (bit-identical to v2; d=128)",
+    ),
+    k(
+        KernelOp::DenseAttention,
+        "v3s",
+        "v3s",
+        80,
+        "flash_mma_fwd3s: v3 that skips the O rescale when no row max rose (d=128)",
     ),
     k(
         KernelOp::DenseAttention,

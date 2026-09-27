@@ -195,6 +195,14 @@ pub enum Stage {
         /// then unused.
         #[arg(long)]
         prompts: Option<PathBuf>,
+        /// One arm of a multi-arm run, `NAME=PROFILE` (repeatable): the loaded
+        /// pipeline switches to each profile's per-request techniques in turn
+        /// (attention route, VSA schedule, FP8 attention, TeaCache;
+        /// `H3Pipeline::set_arm`) and runs the prompt set, `{arm}` in
+        /// `--clip-dir` naming each arm's directory. `PROFILE` `-` is the
+        /// process's own `--techniques`. Load-time settings must match it.
+        #[arg(long = "arm")]
+        arms: Vec<String>,
         /// Dense attention without the compression gate (the parity mode).
         #[arg(long)]
         dense: bool,
@@ -352,6 +360,7 @@ pub fn run(report: &mut Report, stage: &Stage) -> StageResult<()> {
             device_budget_gib,
             seed,
             prompts,
+            arms,
             dense,
             no_mp4,
             clip_dir,
@@ -421,6 +430,7 @@ pub fn run(report: &mut Report, stage: &Stage) -> StageResult<()> {
                 canvas,
                 !*no_mp4,
                 clip_dir,
+                arms,
                 options,
                 *warm,
                 *compare_text_encoders,
@@ -1451,6 +1461,7 @@ fn gen(
     canvas: GenCanvas,
     mp4: bool,
     clip_dir: &Path,
+    arms: &[String],
     options: fastvideo_cudarc::h3::pipeline::H3PipelineOptions,
     warm: bool,
     compare_text_encoders: bool,
@@ -1570,7 +1581,7 @@ fn gen(
     // The first prompt's peak includes the load, as before prompt sets.
     let mut load_mem = Some(crate::gpu::PeakMem::start());
     let timer = std::time::Instant::now();
-    let pipeline = H3Pipeline::load(weights, options)?;
+    let mut pipeline = H3Pipeline::load(weights, options)?;
     let load_s = timer.elapsed().as_secs_f64();
     let l = &pipeline.load_timings;
     let (encoder_kind, encoder_bytes) = pipeline.text_encoder();
@@ -1613,11 +1624,38 @@ fn gen(
             "decode_s": t.audio_decode_s + t.video_decode_s,
         })
     };
+    // `--arm NAME=PROFILE`: every arm runs the prompt set on this one loaded
+    // pipeline, into `--clip-dir` with `{arm}` replaced by NAME.
+    let arm_list: Vec<(String, Option<fastvideo_models::techniques::Profile>)> = arms
+        .iter()
+        .map(|a| {
+            let (name, spec) = a
+                .split_once('=')
+                .ok_or_else(|| anyhow::anyhow!("--arm {a}: expected NAME=PROFILE"))?;
+            let profile = if spec == "-" {
+                None
+            } else {
+                Some(
+                    fastvideo_models::techniques::Profile::load(Path::new(spec))
+                        .map_err(|e| anyhow::anyhow!("--arm {name}: {spec}: {e}"))?,
+                )
+            };
+            Ok::<_, anyhow::Error>((name.to_string(), profile))
+        })
+        .collect::<anyhow::Result<_>>()?;
+    let template = clip_dir.to_string_lossy().into_owned();
+    if !arm_list.is_empty() && !template.contains("{arm}") {
+        return Err(anyhow::anyhow!("--arm needs {{arm}} in --clip-dir ({template})").into());
+    }
+    let arm_dir = |name: &str| std::path::PathBuf::from(template.replace("{arm}", name));
+    let first_dir = arm_list
+        .first()
+        .map_or_else(|| clip_dir.to_path_buf(), |(n, _)| arm_dir(n));
     if warm {
         // Untimed in the sense that it is not THE number; it is still recorded,
         // because cold-vs-warm is itself what the user asked about.
         let timer = std::time::Instant::now();
-        let cold = pipeline.generate(&request, &clip_dir.join("cold"))?;
+        let cold = pipeline.generate(&request, &first_dir.join("cold"))?;
         report.note(
             "cold_generation",
             timings(&cold, timer.elapsed().as_secs_f64()),
@@ -1626,6 +1664,21 @@ fn gen(
         // measured one; dit_phases should describe the timed generate only.
         fastvideo_cudarc::wan::stats::phase_reset();
     }
+    let single = [(String::new(), None)];
+    let run_arms: &[(String, Option<fastvideo_models::techniques::Profile>)] =
+        if arm_list.is_empty() { &single } else { &arm_list };
+    for (arm_index, (arm_name, arm_profile)) in run_arms.iter().enumerate() {
+    let arm_clip = if arm_list.is_empty() { clip_dir.to_path_buf() } else { arm_dir(arm_name) };
+    if !arm_list.is_empty() {
+        if let Err(e) = pipeline.set_arm(arm_profile.as_ref()) {
+            eprintln!("h3 gen arm {arm_name}: {e}");
+            report.note(format!("arm_error/{arm_name}"), json!({"error": e.to_string()}));
+            continue;
+        }
+        fastvideo_cudarc::wan::stats::phase_reset();
+    }
+    let arm_result = (|| -> StageResult<()> {
+    let clip_dir = arm_clip.as_path();
     let mut docs: Vec<(crate::benchmark::PromptSpec, serde_json::Value)> = Vec::new();
     for (index, spec) in prompts.iter().enumerate() {
         let mut request = canvas.request(&spec.prompt, spec.seed)?;
@@ -1636,12 +1689,18 @@ fn gen(
             clip_dir.to_path_buf()
         };
         let clip_dir = clip_dir_owned.as_path();
-        // Suffix per-prompt checks with the prompt name in a prompt-set run.
+        // Suffix per-prompt checks with the prompt name in a prompt-set run,
+        // and prefix them with the arm in a multi-arm run.
         let ck = |name: &str| {
+            let name = if arm_list.is_empty() {
+                name.to_string()
+            } else {
+                format!("{arm_name}/{name}")
+            };
             if multi {
                 format!("{name}/{}", spec.name)
             } else {
-                name.to_string()
+                name
             }
         };
         if index > 0 {
@@ -1739,7 +1798,7 @@ fn gen(
         );
         }
         report.set("output", json!({"frames": out.frames, "text_tokens": out.text_tokens, "sequence_length": out.sequence_length, "mp4": out.mp4, "wav": out.wav, "audio_samples_per_channel": out.geometry.audio_samples()}));
-        if warm && index == 0 {
+        if warm && index == 0 && arm_index == 0 {
             report.check(
                 "warm_text_is_a_cache_hit",
                 out.text_cache.as_str() != "miss",
@@ -1779,13 +1838,34 @@ fn gen(
         }
     }
     let path = crate::benchmark::path_beside(clip_dir);
-    let doc = if multi {
+    let mut doc = if multi {
         crate::benchmark::summarize(&docs)
     } else {
         docs.pop().map(|(_, d)| d).unwrap_or_default()
     };
+    if !arm_list.is_empty() {
+        let t = pipeline.techniques();
+        doc["arm"] = json!({
+            "name": arm_name,
+            "profile": arm_profile.as_ref().map(|p| p.name.clone()),
+            "plan": t.plan.techniques.iter().map(|x| x.describe()).collect::<Vec<_>>(),
+        });
+    }
     crate::benchmark::write(&path, &doc)?;
-    report.set("benchmark_json", path.display().to_string());
+    report.set(
+        &if arm_list.is_empty() { "benchmark_json".to_string() } else { format!("benchmark_json/{arm_name}") },
+        path.display().to_string(),
+    );
+    Ok(())
+    })();
+    match arm_result {
+        Err(e) if !arm_list.is_empty() => {
+            eprintln!("h3 gen arm {arm_name} failed: {e}");
+            report.note(format!("arm_error/{arm_name}"), json!({"error": e.to_string()}));
+        }
+        other => other?,
+    }
+    }
     Ok(())
 }
 

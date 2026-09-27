@@ -25,7 +25,7 @@ use std::path::PathBuf;
 use fastvideo_models::h3::config as h3;
 use serde::{Deserialize, Serialize};
 
-use crate::caps::{CanvasCaps, ModelCaps};
+use crate::caps::{CanvasCaps, ModelCaps, Tier};
 use crate::error::{ApiError, GapId};
 use crate::request::{
     Anchor, AudioOut, AudioRole, CanvasSpec, Family, GenerationRequest, Length, MediaKind,
@@ -121,6 +121,13 @@ pub struct ResolvedJob {
     pub post: PostProcess,
     /// Only knobs the caps honour; others were already rejected.
     pub sampling: SamplingOverrides,
+    /// The model's tier, from [`ModelCaps::tier`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tier: Option<Tier>,
+    /// The resolved internal recipe, from [`ModelCaps::recipe`]; adapters echo
+    /// it in response metadata where the wire format allows (design §0.3).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub recipe: Option<String>,
 }
 
 impl ResolvedJob {
@@ -162,6 +169,27 @@ pub fn resolve_model<'a>(
         .copied()
         .ok_or_else(|| {
             ApiError::invalid_param("model", format!("model `{requested}` is not served here"))
+        })
+}
+
+/// The served model of `family` at `tier` (design §0.3), for adapters that
+/// address models by tier rather than by a configured alias. When several
+/// match (e.g. LTX-2.3 and LTX-2.5 both `Max`), the first wins, so aliases
+/// should be used to pick a specific version. None -> `InvalidRequest` on
+/// `model` naming the tier.
+pub fn resolve_tier<'a>(
+    family: Family,
+    tier: Tier,
+    models: impl IntoIterator<Item = &'a ModelCaps>,
+) -> Result<&'a ModelCaps, ApiError> {
+    models
+        .into_iter()
+        .find(|m| m.family == family && m.tier == Some(tier))
+        .ok_or_else(|| {
+            ApiError::invalid_param(
+                "model",
+                format!("no {tier} tier model of family `{family:?}` is served here"),
+            )
         })
 }
 
@@ -216,6 +244,8 @@ pub fn negotiate(
             drop_audio: audio == AudioPlan::Drop,
         },
         sampling: req.sampling.clone(),
+        tier: caps.tier,
+        recipe: caps.recipe.clone(),
     })
 }
 

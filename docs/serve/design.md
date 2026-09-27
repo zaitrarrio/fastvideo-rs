@@ -67,6 +67,26 @@ text says **native**.
    - **WP-19 cold-start measurement:** fresh Runpod serverless worker → submit →
      first output, per model family, before and after E12/E13.
 
+5. **Sol-H3 serves the tau-ladder route (owner decision).** Whenever the server
+   runs Sol-H3 4-step, the engine capability table selects the profile
+   `h3/sol_h3_4step_engine_ladder` (Sol engine route, tau 1.0 / 1.25 / 1.5 on
+   forwards 1-3; RTX PRO 6000 768p: denoise 21.8 s vs 33.5 s dense, 1.53x,
+   gate PASS, LPIPS 0.375). The `sol-h3` recipe itself stays dense as
+   sol-engine publishes it for one GPU, so parity/oracle runs and the
+   upstream comparison keep their reference; the dense route remains
+   selectable as an explicit profile (`h3/sol_h3_4step`).
+
+6. **Draft tier (owner decision).** A third tier, **`draft`**, exposes our
+   faster configurations that do NOT pass the quality gate, for previews and
+   iteration: public ids `h3-draft` (fal `minimax/h3-draft/*`, MiniMax
+   `MiniMax-H3-Draft`) and `ltx-draft` (LTX API model id), plus openai-videos
+   model ids. Candidates (measured, gate FAIL, fastest first): H3 — FastH3
+   4-step VSA 480p + TAEH3 (8.1 s, RTX PRO 6000), FastH3 8-step Sol+TeaCache+
+   TAEH3; LTX — LTX-2.5 distilled + NVFP4 FFN (4K denoise 1.14x, -8.6 GiB,
+   fails sharpness at 4K) with TAEHV decode. Responses must mark the result as
+   draft quality (metadata where the wire allows). Tier order: draft < turbo <
+   max; `Tier` gains a `Draft` variant.
+
 ## 1. Goals and non-goals
 
 ### 1.1 Goals

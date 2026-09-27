@@ -68,6 +68,7 @@ run_step() {
     info:box) info_box ;;
     lpips:ref) lpips_ref ;;
     bench:attn) bench_attn ;;   # attention microbenchmarks (bench_attn.py)
+    bench:vsa) bench_vsa ;;     # FastVideo VSA stage timings (bench_vsa.py)
     bench:attn_dc) bench_attn_dc "$HERE" ;;   # attn_dc.cu kernels: parity + timings (attn_dc_bench.cu)
     dev:attn_dc) dev_attn_dc ;;   # bench:attn_dc for each new commit of $UP_DEV_BRANCH
     cells) run_cells ;;
@@ -105,6 +106,25 @@ bench_attn() {
   PYTHONUNBUFFERED=1 "$UP/sol-ltx25/LTX-2/.venv/bin/python" "$HERE/bench_attn.py" \
     --sol-engine "$SRC/sol-engine" --out "$OUT/bench-attn/result.json" ${UP_ATTN_SHAPES:+--shapes "$UP_ATTN_SHAPES"} \
     >"$OUT/bench-attn/stdout.log" 2>"$OUT/bench-attn/stderr.log"
+}
+
+# FastVideo's VSA op (fastvideo_kernel.video_sparse_attn) stage by stage at
+# the FastH3 768p / 480p and FastWan 1.3B grids (fv-gpucheck vsa_stages).
+bench_vsa() {
+  mkdir -p "$OUT/bench-vsa"
+  local py="$UP/fastvideo/bin/python"
+  if [[ ! -x "$py" ]]; then
+    # Plain PyTorch image: the PyPI fastvideo-kernel wheel FastVideo pins (0.3.5; its sm_120 sparse
+    # branch is Triton) into the image's python, no FastVideo install needed.
+    py=python3
+    "$py" -c 'import fastvideo_kernel' 2>/dev/null \
+      || "$py" -m pip install -q --no-deps "fastvideo-kernel==${UP_FVK_VERSION:-0.3.5}" einops 2>/dev/null \
+      || "$py" -m pip install -q --break-system-packages --no-deps "fastvideo-kernel==${UP_FVK_VERSION:-0.3.5}" einops || return 1
+    "$py" -c 'import fastvideo_kernel as f; print("fastvideo_kernel", f.__version__)' || return 1
+  fi
+  PYTHONUNBUFFERED=1 "$py" "$HERE/bench_vsa.py" \
+    --out "$OUT/bench-vsa/result.json" ${UP_VSA_WORKLOADS:+--workloads "$UP_VSA_WORKLOADS"} \
+    >"$OUT/bench-vsa/stdout.log" 2>"$OUT/bench-vsa/stderr.log"
 }
 
 # Datacenter attention kernels (crates/fastvideo-cudarc/src/wan/attn_dc.cu)

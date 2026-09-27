@@ -27,6 +27,27 @@ fn pinned(mut t: CudaTensor) -> Result<CudaTensor> {
     Ok(t)
 }
 
+/// Wan's interleaved RoPE (`is_neox_style=False`, tables repeat-interleaved)
+/// on BHSD `x` with `[S, D]` tables: BHSD is BSHD with batch `B·H` and one
+/// head. The result takes `x`'s dtype (FastVideo's `.type_as(v)`).
+fn rope_bhsd(x: &CudaTensor, cos: &CudaTensor, sin: &CudaTensor) -> Result<CudaTensor> {
+    let [b, h, s, d] = x.shape[..] else {
+        return Err(TensorError::Message(format!(
+            "rope_bhsd expects BHSD, got {:?}",
+            x.shape
+        )));
+    };
+    let y = x
+        .reshape(vec![b * h, s, 1, d])?
+        .apply_rotary_bshd(cos, sin)?
+        .reshape(vec![b, h, s, d])?;
+    if x.is_bf16() && !y.is_bf16() {
+        y.quantize_bf16()
+    } else {
+        Ok(y)
+    }
+}
+
 #[derive(Debug, Clone)]
 struct WanAttention {
     /// Self-attention: [q; k; v] rows. Cross-attention: q only.
@@ -223,6 +244,40 @@ impl WanAttention {
         }
     }
 
+    /// FastVideo `rope_cache_policy = "relativistic"`
+    /// (`CausalWanSelfAttention.forward`, `relativistic_window_offsets`): the
+    /// normed, un-roped K goes into the cache; the window is roped at
+    /// positions `[0, window)` and the queries at its tail. `table` is the
+    /// window's table (`[window, d]`, see `WanTransformer3D::forward_kv`).
+    fn forward_self_relativistic(
+        &self,
+        qkv: &CudaTensor,
+        table: &(CudaTensor, CudaTensor),
+        at: super::causal::KvAt<'_>,
+    ) -> Result<CudaTensor> {
+        let dim = self.heads * self.dim_head;
+        let q = self.qk(qkv, 0, &self.norm_q, None)?;
+        let k = self.qk(qkv, dim, &self.norm_k, None)?;
+        let v = qkv.split_heads_bhsd(2 * dim, self.heads, self.dim_head)?;
+        let n = q.shape[2];
+        let (kw, vw) = at.cache.update(at.layer, &k, &v, at.current_start)?;
+        let window = kw.shape[2];
+        if window < n || table.0.shape[0] != window {
+            return Err(TensorError::Message(format!(
+                "relativistic rope: window {window} tokens, {n} queries, table {:?}",
+                table.0.shape
+            )));
+        }
+        let q = rope_bhsd(
+            &q,
+            &table.0.narrow(0, window - n, n)?,
+            &table.1.narrow(0, window - n, n)?,
+        )?;
+        let kw = rope_bhsd(&kw, &table.0, &table.1)?;
+        let out = nn::sdpa_kv_window(&q, &kw, &vw)?.merge_heads()?;
+        self.to_out.forward(&out)
+    }
+
     fn forward_self(
         &self,
         hidden: &CudaTensor,
@@ -236,6 +291,9 @@ impl WanAttention {
     ) -> Result<CudaTensor> {
         let dim = self.heads * self.dim_head;
         let qkv = self.q_or_qkv.forward(hidden)?;
+        if let Some(at) = kv.filter(|a| a.cache.spec.relativistic) {
+            return self.forward_self_relativistic(&qkv, rope, at);
+        }
         let rope = || {
             Some(Rope {
                 cos: &rope.0,
@@ -1848,6 +1906,16 @@ impl WanTransformer3D {
         Ok(None)
     }
 
+    /// Drop the RoPE tables of block offsets before `start_frame` (an
+    /// open-ended absolute-RoPE rollout would otherwise keep one table per
+    /// block for ever). Tables at offset 0 stay.
+    pub fn forget_rotary_before(&self, start_frame: usize) {
+        self.rotary_cache
+            .lock()
+            .expect("rotary cache lock")
+            .retain(|&(_, _, s), _| s == 0 || s >= start_frame);
+    }
+
     /// Get-or-build the `[seq, head_dim]` RoPE tables for a latent grid.
     pub fn rotary_for(&self, t: usize, h: usize, w: usize) -> Result<(CudaTensor, CudaTensor)> {
         self.rotary_at(t, h, w, 0)
@@ -2068,7 +2136,21 @@ impl WanTransformer3D {
         };
         let p = self.cfg.patch_size;
         let frame_tokens = (h / p[1].max(1)) * (w / p[2].max(1));
-        let rope = self.rotary_at(t, h, w, start_frame)?;
+        let rope = if cache.spec.relativistic {
+            // The window's table from position 0: every layer's cache sits
+            // at the same pointers, so layer 0's plan sizes it once.
+            let n = t * frame_tokens;
+            let window = cache.window_after(start_frame * frame_tokens, n)?;
+            let frames = cache.spec.window_frames().max(t);
+            let (cos, sin) = self.rotary_at(frames, h, w, 0)?;
+            if window == cos.shape[0] {
+                (cos, sin)
+            } else {
+                (cos.narrow(0, 0, window)?, sin.narrow(0, 0, window)?)
+            }
+        } else {
+            self.rotary_at(t, h, w, start_frame)?
+        };
         let mut hidden = self.patch_embed(latents)?;
         if super::tensor::bf16_residual() {
             hidden = hidden.quantize_bf16()?;

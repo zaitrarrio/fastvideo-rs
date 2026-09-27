@@ -32,7 +32,7 @@ pub mod technique;
 pub use compose::{compose, CompositionError, Plan, HORIZON};
 pub use kernels::{KernelBackend, KernelChoice, KernelOp, Provider};
 pub use profile::Profile;
-pub use schedule::{Route, Schedule, SparseRoute, StepSet};
+pub use schedule::{Route, Schedule, SparseRoute, StepSet, VsaSchedule};
 pub use technique::{Capability, Kind, ModelSpec, Phase, Seam, Technique, TransformPhase};
 
 #[cfg(test)]
@@ -49,11 +49,7 @@ mod tests {
     fn two_attention_backends_are_a_conflict() {
         let items: Vec<Box<dyn Technique>> = vec![
             Box::new(SolAttn::rtx()),
-            Box::new(Vsa {
-                enabled: on(),
-                sparsity: None,
-                group: None,
-            }),
+            Box::new(Vsa::uniform(None, None)),
         ];
         let e = compose(items, &h3_spec(), HORIZON).unwrap_err().to_string();
         assert!(

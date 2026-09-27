@@ -19,9 +19,14 @@
 #
 #   fetch-tae.sh [dest]    -> dest/taeh3.safetensors, dest/taeltx2_3_wide.safetensors,
 #                             dest/taew2_1.safetensors
+#
+# The weight volume's copy comes first: $FV_AUX_DIR/tae (default
+# <weights>/auxiliary/tae, the auxiliary/ rows of weights-manifest.tsv) is
+# copied when its SHA-256 matches; the pinned URL is the fallback.
 set -euo pipefail
 dest="${1:-${FV_SCRATCH:-/fvscratch}/tae}"
 raw="https://raw.githubusercontent.com/madebyollin/taehv"
+vol="${FV_AUX_DIR:-${FV_WEIGHTS:-${FV_WORK:-/workspace}/weights}/auxiliary}/tae"
 mkdir -p "$dest"
 
 fetch() {
@@ -32,6 +37,13 @@ fetch() {
     return 0
   fi
   part="$out.part.$$"
+  rm -f "$part"
+  if [[ -f "$vol/$name" ]] && cp -f "$vol/$name" "$part" \
+    && [[ "$(sha256sum "$part" | awk '{print $1}')" == "$sha" ]]; then
+    mv -f "$part" "$out"
+    echo "tae ok (volume copy $vol/$name): $out"
+    return 0
+  fi
   rm -f "$part"
   curl -fsSL --proto '=https' --retry 5 --retry-delay 3 --retry-all-errors \
     -o "$part" "$raw/$commit/safetensors/$name"
