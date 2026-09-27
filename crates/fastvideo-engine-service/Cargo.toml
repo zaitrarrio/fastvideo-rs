@@ -1,0 +1,27 @@
+[package]
+name = "fastvideo-engine-service"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "fv-serve engine service: warm model pool, per-GPU executors, scheduler, fake and CUDA backends."
+
+[dependencies]
+fastvideo-protocol.workspace = true
+fastvideo-models.workspace = true
+serde.workspace = true
+thiserror.workspace = true
+tokio = { workspace = true, features = ["sync", "time"] }
+tracing.workspace = true
+uuid.workspace = true
+
+# Only this crate may touch CUDA, and only behind `cuda` (design §2.2).
+fastvideo-cudarc = { workspace = true, optional = true }
+
+[features]
+default = []
+# CudaBackend over the fastvideo-cudarc pipelines (WP-11). FakeBackend is always built.
+cuda = ["dep:fastvideo-cudarc", "fastvideo-cudarc/cuda"]
+
+[lints]
+workspace = true

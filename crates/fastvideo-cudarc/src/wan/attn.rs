@@ -160,7 +160,7 @@ pub enum FlashKernel {
     Dc,
 }
 
-/// `FASTVIDEO_FLASH_KERNEL=v1|v2|cudnn|dc|auto`. `auto` takes Dc on a 10.0
+/// `FASTVIDEO_FLASH_KERNEL=v1|v2|cudnn|dc|auto`. `auto` takes Dc on a 9.0 / 10.0
 /// device (d = 128; other head dims fall to V2), else V2 when its
 /// 128-query grid fills the GPU for many waves ([`flash_v2_default`] and
 /// [`flash_v2_fills`]), V1 otherwise (at LTX 768x512, 6 144 tokens x 32
@@ -183,22 +183,20 @@ pub fn flash_kernel_for(sq: usize, bh: usize, sms: usize) -> FlashKernel {
         "v3s" => FlashKernel::V3s,
         "cudnn" => FlashKernel::Cudnn,
         "dc" => FlashKernel::Dc,
-        // auto on a 10.0 device: the datacenter kernel (sm_120 and older
-        // keep the choice below; `v2` / `v1` are the escape hatch).
+        // auto on a 9.0 / 10.0 device: the datacenter kernel (sm_120 and
+        // older keep the choice below; `v2` / `v1` are the escape hatch).
         _ if dc_default() => FlashKernel::Dc,
         _ if flash_v2_default() && flash_v2_fills(sq, bh, sms) => FlashKernel::V2,
         _ => FlashKernel::V1,
     }
 }
 
-/// Whether `auto` takes [`FlashKernel::Dc`]: the global device is 10.0 (B200)
-/// and its attn_dc module loaded. The sm_90 (wgmma) kernel is built and
-/// loaded too but not yet measured on an H100 / H200, so there it runs only
-/// when asked for (`FASTVIDEO_FLASH_KERNEL=dc`, `[kernels] dense_attention =
-/// "nvcc:dc"`).
+/// Whether `auto` takes [`FlashKernel::Dc`]: the global device is 9.0 or 10.0
+/// and its attn_dc module loaded (d = 128; the caller falls to V2 otherwise).
+/// Measured: B200 1.15 PFLOPS vs V2's 0.37, H100 0.62-0.65 vs 0.32-0.34.
 #[cfg(feature = "cuda")]
 pub fn dc_default() -> bool {
-    super::attn_dc::dense().is_some_and(|k| k.sm == 100)
+    super::attn_dc::dense().is_some()
 }
 
 #[cfg(not(feature = "cuda"))]
