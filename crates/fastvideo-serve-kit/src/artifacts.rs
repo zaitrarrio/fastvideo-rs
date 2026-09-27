@@ -123,6 +123,35 @@ pub trait ArtifactStore: UrlSigner + Send + Sync + 'static {
     async fn delete(&self, a: &Artifact);
     /// `self` as a [`UrlSigner`] (no trait upcasting on the MSRV).
     fn signer(&self) -> &dyn UrlSigner;
+    /// Reads an artifact back (sync endpoints that answer with the file
+    /// itself, e.g. LTX `/v1/*`): a local path, or the object's bytes.
+    async fn open(&self, a: &Artifact) -> Result<ArtifactBody, ApiError> {
+        match &a.location {
+            ArtifactLocation::Local(p) => Ok(ArtifactBody::File(p.clone())),
+            ArtifactLocation::Object { .. } => {
+                Err(ApiError::internal("this artifact store cannot read objects back"))
+            }
+        }
+    }
+}
+
+/// An artifact's content as [`ArtifactStore::open`] returns it.
+#[derive(Clone, Debug, PartialEq)]
+pub enum ArtifactBody {
+    /// A local file (served with range support).
+    File(PathBuf),
+    /// The bytes of a remote object.
+    Bytes(bytes::Bytes),
+}
+
+impl ArtifactBody {
+    /// A reply carrying the content with `mime`.
+    pub fn into_reply(self, status: u16, mime: &str) -> fastvideo_protocol::HttpReply {
+        match self {
+            ArtifactBody::File(p) => fastvideo_protocol::HttpReply::file(status, p, mime),
+            ArtifactBody::Bytes(b) => fastvideo_protocol::HttpReply::bytes(status, mime, b),
+        }
+    }
 }
 
 /// A file name safe as one URL/path segment.
@@ -458,9 +487,38 @@ impl ArtifactStore for S3ArtifactStore {
     fn signer(&self) -> &dyn UrlSigner {
         self
     }
+
+    async fn open(&self, a: &Artifact) -> Result<ArtifactBody, ApiError> {
+        match &a.location {
+            ArtifactLocation::Local(p) => Ok(ArtifactBody::File(p.clone())),
+            ArtifactLocation::Object { key, .. } => self.download(key).await.map(ArtifactBody::Bytes),
+        }
+    }
 }
 
 impl S3ArtifactStore {
+    #[cfg(feature = "fetch")]
+    async fn download(&self, key: &str) -> Result<bytes::Bytes, ApiError> {
+        let u = self.cfg.presign("GET", key, Duration::from_secs(300), OffsetDateTime::now_utc());
+        let r = self
+            .http
+            .get(u)
+            .send()
+            .await
+            .map_err(|e| ApiError::internal(format!("S3 download: {e}")))?;
+        if !r.status().is_success() {
+            return Err(ApiError::internal(format!("S3 download: HTTP {}", r.status())));
+        }
+        r.bytes().await.map_err(|e| ApiError::internal(format!("S3 download: {e}")))
+    }
+
+    #[cfg(not(feature = "fetch"))]
+    async fn download(&self, _key: &str) -> Result<bytes::Bytes, ApiError> {
+        Err(ApiError::internal(
+            "S3 artifacts need fastvideo-serve-kit built with the `fetch` feature",
+        ))
+    }
+
     #[cfg(feature = "fetch")]
     async fn upload(&self, src: &Path, key: &str, mime: &str) -> Result<u64, ApiError> {
         let data = tokio::fs::read(src)
@@ -580,6 +638,73 @@ mod tests {
         assert_eq!(u.path(), "/vol123/out/x/a%20b.mp4");
         let exp = u.query_pairs().find(|(k, _)| k == "X-Amz-Expires").unwrap().1.into_owned();
         assert_eq!(exp, "604800", "clamped to 7 days");
+    }
+
+    #[tokio::test]
+    async fn local_open_is_the_file() {
+        let dir = std::env::temp_dir().join(format!("fvkit-open-{}", crate::random_token()));
+        let urls = LocalUrls { public_base: Url::parse("http://localhost:8000").unwrap(), key: UrlKey::new("k") };
+        let store = LocalArtifactStore::new(dir.join("artifacts"), urls);
+        tokio::fs::create_dir_all(&dir).await.unwrap();
+        let src = dir.join("tmp.mp4");
+        tokio::fs::write(&src, b"abc").await.unwrap();
+        let meta = ArtifactMeta { file_name: "o.mp4".into(), mime: "video/mp4".into(), ..Default::default() };
+        let a = store.put(&src, meta).await.unwrap();
+        match store.open(&a).await.unwrap() {
+            ArtifactBody::File(p) => assert_eq!(std::fs::read(p).unwrap(), b"abc"),
+            other => panic!("{other:?}"),
+        }
+        let reply = store.open(&a).await.unwrap().into_reply(200, "video/mp4");
+        assert_eq!(reply.status, 200);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// PUT then GET through a local S3 stand-in (path-style, presigned).
+    #[cfg(feature = "fetch")]
+    #[tokio::test]
+    async fn s3_put_then_open_reads_the_object_back() {
+        use axum::routing::put;
+        use std::collections::HashMap;
+        use std::sync::Mutex;
+        let objects: Arc<Mutex<HashMap<String, Vec<u8>>>> = Arc::default();
+        let (o1, o2) = (objects.clone(), objects.clone());
+        let app: Router = Router::new().route(
+            "/{*key}",
+            put(move |UrlPath(k): UrlPath<String>, body: axum::body::Bytes| async move {
+                o1.lock().unwrap().insert(k, body.to_vec());
+                StatusCode::OK
+            })
+            .get(move |UrlPath(k): UrlPath<String>| async move {
+                match o2.lock().unwrap().get(&k) {
+                    Some(b) => (StatusCode::OK, b.clone()).into_response(),
+                    None => StatusCode::NOT_FOUND.into_response(),
+                }
+            }),
+        );
+        let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = l.local_addr().unwrap();
+        tokio::spawn(async move { axum::serve(l, app).await.unwrap() });
+        let store = S3ArtifactStore::new(S3Config {
+            endpoint: Url::parse(&format!("http://{addr}")).unwrap(),
+            region: "auto".into(),
+            bucket: "fv-media".into(),
+            access_key: "AK".into(),
+            secret_key: "SK".into(),
+            path_style: true,
+            prefix: "t/".into(),
+        });
+        let dir = std::env::temp_dir().join(format!("fvkit-s3-{}", crate::random_token()));
+        tokio::fs::create_dir_all(&dir).await.unwrap();
+        let src = dir.join("x.mp4");
+        tokio::fs::write(&src, b"mp4 bytes").await.unwrap();
+        let meta = ArtifactMeta { file_name: "x.mp4".into(), mime: "video/mp4".into(), ..Default::default() };
+        let a = store.put(&src, meta).await.unwrap();
+        assert!(matches!(&a.location, ArtifactLocation::Object { bucket, .. } if bucket == "fv-media"));
+        assert_eq!(store.open(&a).await.unwrap(), ArtifactBody::Bytes(bytes::Bytes::from_static(b"mp4 bytes")));
+        let mut gone = a.clone();
+        gone.location = ArtifactLocation::Object { bucket: "fv-media".into(), key: "t/missing".into() };
+        assert!(store.open(&gone).await.is_err());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[tokio::test]

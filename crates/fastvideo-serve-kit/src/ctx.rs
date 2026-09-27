@@ -22,7 +22,7 @@ use crate::auth::Auth;
 use crate::callback::{CallbackRender, CallbackSender};
 use crate::ingest::{DefaultProber, Ingestor, Prober};
 use crate::store::MemJobStore;
-use crate::uploads::{uploads_router, UploadStore};
+use crate::uploads::{uploads_router_with_clock, UploadStore};
 
 /// The engine as the HTTP layer sees it.
 #[async_trait::async_trait]
@@ -296,7 +296,8 @@ impl ServeCtx {
 
     /// `GET /files/{id}/{name}` and `PUT /uploads/{token}` (design §9).
     pub fn routes<S: Clone + Send + Sync + 'static>(&self) -> Router<S> {
-        files_router(self.inner.files.clone()).merge(uploads_router(self.inner.uploads.clone()))
+        files_router(self.inner.files.clone())
+            .merge(uploads_router_with_clock(self.inner.uploads.clone(), self.inner.now.clone()))
     }
 
     /// Sends the job's callback for its current state, if it has one and its

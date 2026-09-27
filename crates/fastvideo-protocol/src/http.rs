@@ -133,7 +133,9 @@ pub enum SseFollow {
     /// (`JobStore::watch`) and renders each change with the endpoint's
     /// `JobView::status_reply` JSON as `data`. With `close_on_terminal`, the
     /// stream ends after the first terminal status (fal `/status/stream`).
-    JobStatus { job: JobId, close_on_terminal: bool },
+    /// `with_logs` renders each change with `ViewCtx::with_logs` (fal
+    /// `?logs=1`).
+    JobStatus { job: JobId, close_on_terminal: bool, with_logs: bool },
 }
 
 /// One SSE event.

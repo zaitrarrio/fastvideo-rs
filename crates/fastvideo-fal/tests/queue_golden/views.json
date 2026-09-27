@@ -1,0 +1,335 @@
+{
+  "result IN_QUEUE": {
+    "body": {
+      "detail": "Request is still in progress"
+    },
+    "headers": [
+      [
+        "x-fal-error-type",
+        "bad_request"
+      ],
+      [
+        "x-fal-request-id",
+        "764cabcf-b745-4b3e-ae38-1200304cf45b"
+      ],
+      [
+        "x-fv-recipe",
+        "full-dense"
+      ],
+      [
+        "x-fv-tier",
+        "max"
+      ]
+    ],
+    "status": 400
+  },
+  "result cancelled": {
+    "body": {
+      "detail": "Request was cancelled",
+      "error_type": "client_cancelled"
+    },
+    "headers": [
+      [
+        "x-fal-error-type",
+        "client_cancelled"
+      ],
+      [
+        "x-fal-request-id",
+        "764cabcf-b745-4b3e-ae38-1200304cf45b"
+      ],
+      [
+        "x-fv-recipe",
+        "full-dense"
+      ],
+      [
+        "x-fv-tier",
+        "max"
+      ]
+    ],
+    "status": 499
+  },
+  "result draft tier": {
+    "body": {
+      "expanded_prompt": null,
+      "timings": {
+        "inference": 2.5285604159580544
+      },
+      "video": {
+        "content_type": "video/mp4",
+        "file_name": "CqfsvQAAQACAAAAAAAAAA_minimax-h3.mp4",
+        "file_size": 3554670,
+        "url": "https://fal.fv.test/files/a0000000-0000-4000-8000-000000000002/CqfsvQAAQACAAAAAAAAAA_minimax-h3.mp4?exp=86400&sig=00"
+      }
+    },
+    "headers": [
+      [
+        "x-fal-request-id",
+        "764cabcf-b745-4b3e-ae38-1200304cf45b"
+      ],
+      [
+        "x-fv-quality",
+        "draft"
+      ],
+      [
+        "x-fv-recipe",
+        "4step-vsa-480p-tae"
+      ],
+      [
+        "x-fv-tier",
+        "draft"
+      ]
+    ],
+    "status": 200
+  },
+  "result failed": {
+    "body": {
+      "detail": [
+        {
+          "loc": [
+            "body"
+          ],
+          "msg": "CUDA error: out of memory",
+          "type": "internal_server_error"
+        }
+      ]
+    },
+    "headers": [
+      [
+        "x-fal-error-type",
+        "internal_server_error"
+      ],
+      [
+        "x-fal-request-id",
+        "764cabcf-b745-4b3e-ae38-1200304cf45b"
+      ],
+      [
+        "x-fv-recipe",
+        "full-dense"
+      ],
+      [
+        "x-fv-tier",
+        "max"
+      ]
+    ],
+    "status": 500
+  },
+  "result r2v (seed)": {
+    "body": {
+      "expanded_prompt": null,
+      "seed": 1851572118,
+      "timings": {
+        "inference": 2.5285604159580544
+      },
+      "video": {
+        "content_type": "video/mp4",
+        "file_name": "CqfsvQAAQACAAAAAAAAAA_minimax-h3.mp4",
+        "file_size": 3554670,
+        "url": "https://fal.fv.test/files/a0000000-0000-4000-8000-000000000002/CqfsvQAAQACAAAAAAAAAA_minimax-h3.mp4?exp=86400&sig=00"
+      }
+    },
+    "headers": [
+      [
+        "x-fal-request-id",
+        "764cabcf-b745-4b3e-ae38-1200304cf45b"
+      ],
+      [
+        "x-fv-recipe",
+        "full-dense"
+      ],
+      [
+        "x-fv-tier",
+        "max"
+      ]
+    ],
+    "status": 200
+  },
+  "result t2v": {
+    "body": {
+      "expanded_prompt": null,
+      "timings": {
+        "inference": 2.5285604159580544
+      },
+      "video": {
+        "content_type": "video/mp4",
+        "file_name": "CqfsvQAAQACAAAAAAAAAA_minimax-h3.mp4",
+        "file_size": 3554670,
+        "url": "https://fal.fv.test/files/a0000000-0000-4000-8000-000000000002/CqfsvQAAQACAAAAAAAAAA_minimax-h3.mp4?exp=86400&sig=00"
+      }
+    },
+    "headers": [
+      [
+        "x-fal-request-id",
+        "764cabcf-b745-4b3e-ae38-1200304cf45b"
+      ],
+      [
+        "x-fv-recipe",
+        "full-dense"
+      ],
+      [
+        "x-fv-tier",
+        "max"
+      ]
+    ],
+    "status": 200
+  },
+  "status COMPLETED cancelled": {
+    "body": {
+      "cancel_url": "https://fal.fv.test/minimax/h3-max/requests/764cabcf-b745-4b3e-ae38-1200304cf45b/cancel",
+      "error_type": "client_cancelled",
+      "logs": [],
+      "metrics": {},
+      "request_id": "764cabcf-b745-4b3e-ae38-1200304cf45b",
+      "response_url": "https://fal.fv.test/minimax/h3-max/requests/764cabcf-b745-4b3e-ae38-1200304cf45b",
+      "status": "COMPLETED",
+      "status_url": "https://fal.fv.test/minimax/h3-max/requests/764cabcf-b745-4b3e-ae38-1200304cf45b/status"
+    },
+    "headers": [
+      [
+        "x-fal-request-id",
+        "764cabcf-b745-4b3e-ae38-1200304cf45b"
+      ]
+    ],
+    "status": 200
+  },
+  "status COMPLETED failed": {
+    "body": {
+      "cancel_url": "https://fal.fv.test/minimax/h3-max/requests/764cabcf-b745-4b3e-ae38-1200304cf45b/cancel",
+      "error": "CUDA error: out of memory",
+      "error_type": "internal_server_error",
+      "logs": [],
+      "metrics": {},
+      "request_id": "764cabcf-b745-4b3e-ae38-1200304cf45b",
+      "response_url": "https://fal.fv.test/minimax/h3-max/requests/764cabcf-b745-4b3e-ae38-1200304cf45b",
+      "status": "COMPLETED",
+      "status_url": "https://fal.fv.test/minimax/h3-max/requests/764cabcf-b745-4b3e-ae38-1200304cf45b/status"
+    },
+    "headers": [
+      [
+        "x-fal-request-id",
+        "764cabcf-b745-4b3e-ae38-1200304cf45b"
+      ]
+    ],
+    "status": 200
+  },
+  "status COMPLETED logs=1": {
+    "body": {
+      "cancel_url": "https://fal.fv.test/minimax/h3-max/requests/764cabcf-b745-4b3e-ae38-1200304cf45b/cancel",
+      "logs": [
+        {
+          "level": "INFO",
+          "message": "stage: denoise",
+          "source": "USER",
+          "timestamp": "2026-09-27T12:00:01.123Z"
+        }
+      ],
+      "metrics": {
+        "inference_time": 2.5285604159580544
+      },
+      "request_id": "764cabcf-b745-4b3e-ae38-1200304cf45b",
+      "response_url": "https://fal.fv.test/minimax/h3-max/requests/764cabcf-b745-4b3e-ae38-1200304cf45b",
+      "status": "COMPLETED",
+      "status_url": "https://fal.fv.test/minimax/h3-max/requests/764cabcf-b745-4b3e-ae38-1200304cf45b/status"
+    },
+    "headers": [
+      [
+        "x-fal-request-id",
+        "764cabcf-b745-4b3e-ae38-1200304cf45b"
+      ]
+    ],
+    "status": 200
+  },
+  "status IN_PROGRESS logs=0": {
+    "body": {
+      "cancel_url": "https://fal.fv.test/minimax/h3-max/requests/764cabcf-b745-4b3e-ae38-1200304cf45b/cancel",
+      "logs": [],
+      "request_id": "764cabcf-b745-4b3e-ae38-1200304cf45b",
+      "response_url": "https://fal.fv.test/minimax/h3-max/requests/764cabcf-b745-4b3e-ae38-1200304cf45b",
+      "status": "IN_PROGRESS",
+      "status_url": "https://fal.fv.test/minimax/h3-max/requests/764cabcf-b745-4b3e-ae38-1200304cf45b/status"
+    },
+    "headers": [
+      [
+        "x-fal-request-id",
+        "764cabcf-b745-4b3e-ae38-1200304cf45b"
+      ]
+    ],
+    "status": 200
+  },
+  "status IN_PROGRESS logs=1": {
+    "body": {
+      "cancel_url": "https://fal.fv.test/minimax/h3-max/requests/764cabcf-b745-4b3e-ae38-1200304cf45b/cancel",
+      "logs": [
+        {
+          "level": "INFO",
+          "message": "Loading model weights...",
+          "source": "USER",
+          "timestamp": "2026-02-17T10:30:01.123Z"
+        }
+      ],
+      "request_id": "764cabcf-b745-4b3e-ae38-1200304cf45b",
+      "response_url": "https://fal.fv.test/minimax/h3-max/requests/764cabcf-b745-4b3e-ae38-1200304cf45b",
+      "status": "IN_PROGRESS",
+      "status_url": "https://fal.fv.test/minimax/h3-max/requests/764cabcf-b745-4b3e-ae38-1200304cf45b/status"
+    },
+    "headers": [
+      [
+        "x-fal-request-id",
+        "764cabcf-b745-4b3e-ae38-1200304cf45b"
+      ]
+    ],
+    "status": 200
+  },
+  "status IN_QUEUE": {
+    "body": {
+      "cancel_url": "https://fal.fv.test/minimax/h3-max/requests/764cabcf-b745-4b3e-ae38-1200304cf45b/cancel",
+      "queue_position": 2,
+      "request_id": "764cabcf-b745-4b3e-ae38-1200304cf45b",
+      "response_url": "https://fal.fv.test/minimax/h3-max/requests/764cabcf-b745-4b3e-ae38-1200304cf45b",
+      "status": "IN_QUEUE",
+      "status_url": "https://fal.fv.test/minimax/h3-max/requests/764cabcf-b745-4b3e-ae38-1200304cf45b/status"
+    },
+    "headers": [
+      [
+        "x-fal-request-id",
+        "764cabcf-b745-4b3e-ae38-1200304cf45b"
+      ]
+    ],
+    "status": 200
+  },
+  "status draft app urls": {
+    "body": {
+      "cancel_url": "https://fal.fv.test/minimax/h3-draft/requests/764cabcf-b745-4b3e-ae38-1200304cf45b/cancel",
+      "logs": [],
+      "metrics": {
+        "inference_time": 2.5285604159580544
+      },
+      "request_id": "764cabcf-b745-4b3e-ae38-1200304cf45b",
+      "response_url": "https://fal.fv.test/minimax/h3-draft/requests/764cabcf-b745-4b3e-ae38-1200304cf45b",
+      "status": "COMPLETED",
+      "status_url": "https://fal.fv.test/minimax/h3-draft/requests/764cabcf-b745-4b3e-ae38-1200304cf45b/status"
+    },
+    "headers": [
+      [
+        "x-fal-request-id",
+        "764cabcf-b745-4b3e-ae38-1200304cf45b"
+      ]
+    ],
+    "status": 200
+  },
+  "submit": {
+    "body": {
+      "cancel_url": "https://fal.fv.test/minimax/h3-max/requests/764cabcf-b745-4b3e-ae38-1200304cf45b/cancel",
+      "queue_position": 2,
+      "request_id": "764cabcf-b745-4b3e-ae38-1200304cf45b",
+      "response_url": "https://fal.fv.test/minimax/h3-max/requests/764cabcf-b745-4b3e-ae38-1200304cf45b",
+      "status_url": "https://fal.fv.test/minimax/h3-max/requests/764cabcf-b745-4b3e-ae38-1200304cf45b/status"
+    },
+    "headers": [
+      [
+        "x-fal-request-id",
+        "764cabcf-b745-4b3e-ae38-1200304cf45b"
+      ]
+    ],
+    "status": 200
+  }
+}

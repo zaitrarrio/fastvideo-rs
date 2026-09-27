@@ -1,0 +1,46 @@
+# fv-serve on the fake engine (CPU CI, local development).
+#   cargo run -p fastvideo-serve --features fake -- --config configs/serve/fake.toml
+# Keys: FV_API_KEYS=<sha256 hex of each key>; without them keyed APIs answer 401.
+
+[server]
+bind = "127.0.0.1:8000"
+state_dir = "/tmp/fv-serve-fake"
+shutdown_grace_s = 5
+
+[auth]
+mode = "keys"
+
+[artifacts]
+backend = "local"
+url_ttl_s = 86400
+
+[jobs]
+backend = "file"
+
+[engine]
+backend = "fake"
+
+[engine.fake]
+step_ms = 20
+load_ms = 500
+all_resident = true
+placeholder_output = true
+
+[aliases]
+"MiniMax-H3" = "fake-h3-turbo"
+"MiniMax-H3-Max" = "fake-h3-max"
+"MiniMax-H3-Turbo" = "fake-h3-turbo"
+
+[protocols]
+openai_videos = true
+fastwan = true
+minimax = true
+fal = true
+fal_director = false
+ltx = true
+reactor = false
+native = true
+
+[limits]
+queue_max = 32
+body_max_mb = 64

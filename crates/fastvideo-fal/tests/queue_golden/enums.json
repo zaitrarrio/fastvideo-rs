@@ -1,0 +1,241 @@
+{
+  "duration 10": {
+    "fps": null,
+    "length": {
+      "seconds": {
+        "snap": "align_up",
+        "value": 10.0
+      }
+    }
+  },
+  "duration 11": {
+    "fps": null,
+    "length": {
+      "seconds": {
+        "snap": "align_up",
+        "value": 11.0
+      }
+    }
+  },
+  "duration 12": {
+    "fps": null,
+    "length": {
+      "seconds": {
+        "snap": "align_up",
+        "value": 12.0
+      }
+    }
+  },
+  "duration 13": {
+    "fps": null,
+    "length": {
+      "seconds": {
+        "snap": "align_up",
+        "value": 13.0
+      }
+    }
+  },
+  "duration 14": {
+    "fps": null,
+    "length": {
+      "seconds": {
+        "snap": "align_up",
+        "value": 14.0
+      }
+    }
+  },
+  "duration 15": {
+    "fps": null,
+    "length": {
+      "seconds": {
+        "snap": "align_up",
+        "value": 15.0
+      }
+    }
+  },
+  "duration 5": {
+    "fps": null,
+    "length": {
+      "seconds": {
+        "snap": "align_up",
+        "value": 5.0
+      }
+    }
+  },
+  "duration 6": {
+    "fps": null,
+    "length": {
+      "seconds": {
+        "snap": "align_up",
+        "value": 6.0
+      }
+    }
+  },
+  "duration 7": {
+    "fps": null,
+    "length": {
+      "seconds": {
+        "snap": "align_up",
+        "value": 7.0
+      }
+    }
+  },
+  "duration 8": {
+    "fps": null,
+    "length": {
+      "seconds": {
+        "snap": "align_up",
+        "value": 8.0
+      }
+    }
+  },
+  "duration 9": {
+    "fps": null,
+    "length": {
+      "seconds": {
+        "snap": "align_up",
+        "value": 9.0
+      }
+    }
+  },
+  "r2v aspect_ratio 16:9": {
+    "aspect": {
+      "ratio": {
+        "h": 9,
+        "w": 16
+      },
+      "short_edge": 768
+    }
+  },
+  "r2v aspect_ratio 1:1": {
+    "aspect": {
+      "ratio": {
+        "h": 1,
+        "w": 1
+      },
+      "short_edge": 768
+    }
+  },
+  "r2v aspect_ratio 21:9": {
+    "aspect": {
+      "ratio": {
+        "h": 9,
+        "w": 21
+      },
+      "short_edge": 768
+    }
+  },
+  "r2v aspect_ratio 3:4": {
+    "aspect": {
+      "ratio": {
+        "h": 4,
+        "w": 3
+      },
+      "short_edge": 768
+    }
+  },
+  "r2v aspect_ratio 4:3": {
+    "aspect": {
+      "ratio": {
+        "h": 3,
+        "w": 4
+      },
+      "short_edge": 768
+    }
+  },
+  "r2v aspect_ratio 9:16": {
+    "aspect": {
+      "ratio": {
+        "h": 16,
+        "w": 9
+      },
+      "short_edge": 768
+    }
+  },
+  "r2v aspect_ratio adaptive": {
+    "follow_image": {
+      "short_edge": 768
+    }
+  },
+  "t2v aspect_ratio 16:9": {
+    "aspect": {
+      "ratio": {
+        "h": 9,
+        "w": 16
+      },
+      "short_edge": 768
+    }
+  },
+  "t2v aspect_ratio 1:1": {
+    "aspect": {
+      "ratio": {
+        "h": 1,
+        "w": 1
+      },
+      "short_edge": 768
+    }
+  },
+  "t2v aspect_ratio 21:9": {
+    "aspect": {
+      "ratio": {
+        "h": 9,
+        "w": 21
+      },
+      "short_edge": 768
+    }
+  },
+  "t2v aspect_ratio 3:4": {
+    "aspect": {
+      "ratio": {
+        "h": 4,
+        "w": 3
+      },
+      "short_edge": 768
+    }
+  },
+  "t2v aspect_ratio 4:3": {
+    "aspect": {
+      "ratio": {
+        "h": 3,
+        "w": 4
+      },
+      "short_edge": 768
+    }
+  },
+  "t2v aspect_ratio 9:16": {
+    "aspect": {
+      "ratio": {
+        "h": 16,
+        "w": 9
+      },
+      "short_edge": 768
+    }
+  },
+  "t2v resolution 1080P": {
+    "aspect": {
+      "ratio": {
+        "h": 9,
+        "w": 16
+      },
+      "short_edge": 1080
+    }
+  },
+  "t2v resolution 480P": {
+    "aspect": {
+      "ratio": {
+        "h": 9,
+        "w": 16
+      },
+      "short_edge": 480
+    }
+  },
+  "t2v resolution 768P": {
+    "aspect": {
+      "ratio": {
+        "h": 9,
+        "w": 16
+      },
+      "short_edge": 768
+    }
+  }
+}

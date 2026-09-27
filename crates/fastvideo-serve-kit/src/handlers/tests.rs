@@ -367,7 +367,7 @@ async fn sse_follows_job_until_terminal() {
     let id = f.ctx.jobs().by_external(ProtocolId::MiniMaxV2, v["task_id"].as_str().unwrap()).await.unwrap().id;
     let spec = SseSpec {
         initial: vec![SseEvent::data(r#"{"status":"queued"}"#)],
-        follow: Some(SseFollow::JobStatus { job: id, close_on_terminal: true }),
+        follow: Some(SseFollow::JobStatus { job: id, close_on_terminal: true, with_logs: false }),
         keepalive: Some(Duration::from_secs(15)),
     };
     let resp = into_response(HttpReply::sse(spec), &f.ctx, Some(Arc::new(View))).await;
@@ -387,6 +387,95 @@ async fn sse_follows_job_until_terminal() {
     let datas: Vec<&str> = text.lines().filter_map(|l| l.strip_prefix("data: ")).collect();
     assert_eq!(datas.first(), Some(&r#"{"status":"queued"}"#));
     assert!(datas.last().unwrap().contains("\"failed\""), "{text}");
+}
+
+/// `with_logs` reaches the follower's `ViewCtx`.
+#[tokio::test]
+async fn sse_follow_renders_with_logs() {
+    struct LogsFlag;
+    impl JobView for LogsFlag {
+        fn status_reply(&self, job: &Job, cx: &ViewCtx) -> HttpReply {
+            HttpReply::json(200, serde_json::json!({"status": job.status().as_str(), "with_logs": cx.with_logs}))
+        }
+        fn result_reply(&self, job: &Job, cx: &ViewCtx) -> HttpReply {
+            self.status_reply(job, cx)
+        }
+    }
+    let f = fixture(Engine::default()).await;
+    let (_, _, v) = call(&f.app, "POST", "/submit", Some("sk-a"), Some(serde_json::json!({"prompt": "a"}))).await;
+    let id = f.ctx.jobs().by_external(ProtocolId::MiniMaxV2, v["task_id"].as_str().unwrap()).await.unwrap().id;
+    let spec = SseSpec {
+        initial: vec![],
+        follow: Some(SseFollow::JobStatus { job: id, close_on_terminal: true, with_logs: true }),
+        keepalive: None,
+    };
+    let resp = into_response(HttpReply::sse(spec), &f.ctx, Some(Arc::new(LogsFlag))).await;
+    let ctx = f.ctx.clone();
+    tokio::spawn(async move {
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        apply_event(&ctx, id, JobEvent::Failed(ApiError::engine_failed("boom"))).await.unwrap();
+    });
+    let body = tokio::time::timeout(Duration::from_secs(5), axum::body::to_bytes(resp.into_body(), 1 << 20))
+        .await
+        .unwrap()
+        .unwrap();
+    let text = String::from_utf8(body.to_vec()).unwrap();
+    assert!(text.contains(r#""with_logs":true"#), "{text}");
+}
+
+/// A job removed while its output is being stored does not leak the
+/// stored artifact.
+#[tokio::test]
+async fn finished_output_is_not_leaked_when_the_job_vanishes() {
+    struct Vanishing(crate::store::MemJobStore);
+    #[async_trait::async_trait]
+    impl fastvideo_protocol::JobStore for Vanishing {
+        async fn insert(&self, job: Job) -> Result<(), fastvideo_protocol::StoreError> {
+            self.0.insert(job).await
+        }
+        async fn get(&self, id: JobId) -> Option<Job> {
+            self.0.get(id).await
+        }
+        async fn by_external(&self, p: ProtocolId, e: &str) -> Option<Job> {
+            self.0.by_external(p, e).await
+        }
+        async fn update(&self, id: JobId, _f: fastvideo_protocol::JobUpdate) -> Result<Job, fastvideo_protocol::StoreError> {
+            // Removed between `get` and `update`.
+            Err(fastvideo_protocol::StoreError::NotFound(id))
+        }
+        async fn list(&self, q: fastvideo_protocol::ListQuery) -> fastvideo_protocol::Page<Job> {
+            self.0.list(q).await
+        }
+        async fn remove(&self, id: JobId) -> Option<Job> {
+            self.0.remove(id).await
+        }
+        fn watch(&self, id: JobId) -> Option<tokio::sync::watch::Receiver<fastvideo_protocol::JobSnapshot>> {
+            self.0.watch(id)
+        }
+        async fn sweep_expired(&self, now: time::OffsetDateTime) -> usize {
+            self.0.sweep_expired(now).await
+        }
+    }
+    use fastvideo_protocol::JobStore as _;
+    let dir = std::env::temp_dir().join(format!("fvkit-leak-{}", crate::random_token()));
+    let store = Arc::new(Vanishing(crate::store::MemJobStore::memory()));
+    let cfg = ServeConfig::new(Url::parse("http://fv.test").unwrap(), &dir);
+    let ctx = ServeCtx::builder(cfg, Arc::new(Engine::default())).jobs(store.clone()).build().await.unwrap();
+    let job = crate::store::tests::job(ProtocolId::MiniMaxV2, "gone", time::OffsetDateTime::now_utc());
+    let id = job.id;
+    store.0.insert(job).await.unwrap();
+    let src = dir.join("out.mp4");
+    std::fs::write(&src, b"mp4").unwrap();
+    let out = FinishedOutput {
+        file: src,
+        meta: ArtifactMeta { file_name: "out.mp4".into(), mime: "video/mp4".into(), ..Default::default() },
+        metrics: Default::default(),
+    };
+    let e = apply_event(&ctx, id, JobEvent::Finished(out)).await.unwrap_err();
+    assert_eq!(e.kind, ErrorKind::NotFound);
+    let left: Vec<_> = std::fs::read_dir(dir.join("artifacts")).unwrap().collect();
+    assert!(left.is_empty(), "stored artifact leaked: {left:?}");
+    let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[tokio::test]

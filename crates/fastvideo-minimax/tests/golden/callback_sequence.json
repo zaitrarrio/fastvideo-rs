@@ -1,0 +1,73 @@
+[
+  {
+    "challenge": "<challenge>"
+  },
+  {
+    "task": {
+      "content": {},
+      "created_at": 0,
+      "duration": 5,
+      "id": "<task_id>",
+      "metadata": {
+        "quality": "standard",
+        "recipe": "full-dense",
+        "tier": "max"
+      },
+      "modality": "video",
+      "model": "MiniMax-H3",
+      "ratio": "16:9",
+      "resolution": "768P",
+      "status": "queued",
+      "task_type": "generation",
+      "updated_at": 0
+    }
+  },
+  {
+    "task": {
+      "content": {},
+      "created_at": 0,
+      "duration": 5,
+      "id": "<task_id>",
+      "metadata": {
+        "quality": "standard",
+        "recipe": "full-dense",
+        "tier": "max"
+      },
+      "modality": "video",
+      "model": "MiniMax-H3",
+      "ratio": "16:9",
+      "resolution": "768P",
+      "status": "running",
+      "task_type": "generation",
+      "updated_at": 0
+    }
+  },
+  {
+    "task": {
+      "content": {
+        "url": "<url>"
+      },
+      "created_at": 0,
+      "duration": 5,
+      "id": "<task_id>",
+      "metadata": {
+        "quality": "standard",
+        "recipe": "full-dense",
+        "tier": "max"
+      },
+      "modality": "video",
+      "model": "MiniMax-H3",
+      "ratio": "16:9",
+      "resolution": "768P",
+      "status": "succeeded",
+      "task_type": "generation",
+      "updated_at": 0,
+      "usage": {
+        "input_image_count": 0,
+        "input_seconds": 0,
+        "output_seconds": 5,
+        "total_seconds": 5
+      }
+    }
+  }
+]

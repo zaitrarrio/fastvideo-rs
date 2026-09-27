@@ -1,0 +1,3 @@
+{"type":"error","error":{"type":"bad_request_error",
+ "message":"invalid params, content must include a non-empty text item (prompt is required) (2013)",
+ "http_code":"400"},"request_id":"021785229015510a2c883cf675b9804d"}

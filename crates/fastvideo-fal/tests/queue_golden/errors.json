@@ -1,0 +1,365 @@
+{
+  "already completed": {
+    "body": {
+      "status": "ALREADY_COMPLETED"
+    },
+    "headers": [
+      [
+        "x-fal-error-type",
+        "bad_request"
+      ],
+      [
+        "x-fal-request-id",
+        "764cabcf-b745-4b3e-ae38-1200304cf45b"
+      ]
+    ],
+    "status": 400
+  },
+  "cancelled": {
+    "body": {
+      "detail": "Request was cancelled",
+      "error_type": "client_cancelled"
+    },
+    "headers": [
+      [
+        "x-fal-error-type",
+        "client_cancelled"
+      ],
+      [
+        "x-fal-request-id",
+        "764cabcf-b745-4b3e-ae38-1200304cf45b"
+      ]
+    ],
+    "status": 499
+  },
+  "conflict": {
+    "body": {
+      "detail": "busy",
+      "error_type": "bad_request"
+    },
+    "headers": [
+      [
+        "x-fal-error-type",
+        "bad_request"
+      ],
+      [
+        "x-fal-request-id",
+        "764cabcf-b745-4b3e-ae38-1200304cf45b"
+      ]
+    ],
+    "status": 409
+  },
+  "content filtered": {
+    "body": {
+      "detail": [
+        {
+          "loc": [
+            "body",
+            "prompt"
+          ],
+          "msg": "flagged",
+          "type": "content_policy_violation"
+        }
+      ]
+    },
+    "headers": [
+      [
+        "x-fal-error-type",
+        "content_policy_violation"
+      ],
+      [
+        "x-fal-request-id",
+        "764cabcf-b745-4b3e-ae38-1200304cf45b"
+      ]
+    ],
+    "status": 422
+  },
+  "engine failed": {
+    "body": {
+      "detail": [
+        {
+          "loc": [
+            "body"
+          ],
+          "msg": "CUDA error",
+          "type": "internal_server_error"
+        }
+      ]
+    },
+    "headers": [
+      [
+        "x-fal-error-type",
+        "internal_server_error"
+      ],
+      [
+        "x-fal-request-id",
+        "764cabcf-b745-4b3e-ae38-1200304cf45b"
+      ]
+    ],
+    "status": 500
+  },
+  "forbidden": {
+    "body": {
+      "detail": "no",
+      "error_type": "forbidden"
+    },
+    "headers": [
+      [
+        "x-fal-error-type",
+        "forbidden"
+      ],
+      [
+        "x-fal-request-id",
+        "764cabcf-b745-4b3e-ae38-1200304cf45b"
+      ]
+    ],
+    "status": 403
+  },
+  "internal": {
+    "body": {
+      "detail": "bug",
+      "error_type": "internal_error"
+    },
+    "headers": [
+      [
+        "x-fal-error-type",
+        "internal_error"
+      ],
+      [
+        "x-fal-request-id",
+        "764cabcf-b745-4b3e-ae38-1200304cf45b"
+      ]
+    ],
+    "status": 500
+  },
+  "invalid": {
+    "body": {
+      "detail": [
+        {
+          "loc": [
+            "body",
+            "duration"
+          ],
+          "msg": "Input should be less than or equal to 15",
+          "type": "value_error"
+        }
+      ]
+    },
+    "headers": [
+      [
+        "x-fal-error-type",
+        "value_error"
+      ],
+      [
+        "x-fal-request-id",
+        "764cabcf-b745-4b3e-ae38-1200304cf45b"
+      ]
+    ],
+    "status": 422
+  },
+  "loading": {
+    "body": {
+      "detail": "models are loading",
+      "error_type": "runner_scheduling_failure"
+    },
+    "headers": [
+      [
+        "retry-after",
+        "1"
+      ],
+      [
+        "x-fal-error-type",
+        "runner_scheduling_failure"
+      ],
+      [
+        "x-fal-request-id",
+        "764cabcf-b745-4b3e-ae38-1200304cf45b"
+      ]
+    ],
+    "status": 503
+  },
+  "not found": {
+    "body": {
+      "detail": "Application \"minimax/h3-draft\" not found",
+      "error_type": "not_found"
+    },
+    "headers": [
+      [
+        "x-fal-error-type",
+        "not_found"
+      ],
+      [
+        "x-fal-request-id",
+        "764cabcf-b745-4b3e-ae38-1200304cf45b"
+      ]
+    ],
+    "status": 404
+  },
+  "payload too large": {
+    "body": {
+      "detail": "too big",
+      "error_type": "bad_request"
+    },
+    "headers": [
+      [
+        "x-fal-error-type",
+        "bad_request"
+      ],
+      [
+        "x-fal-request-id",
+        "764cabcf-b745-4b3e-ae38-1200304cf45b"
+      ]
+    ],
+    "status": 413
+  },
+  "queue full": {
+    "body": {
+      "detail": "queue is full",
+      "error_type": "concurrent_requests_limit"
+    },
+    "headers": [
+      [
+        "x-fal-error-type",
+        "concurrent_requests_limit"
+      ],
+      [
+        "x-fal-needs-retry",
+        "1"
+      ],
+      [
+        "x-fal-request-id",
+        "764cabcf-b745-4b3e-ae38-1200304cf45b"
+      ]
+    ],
+    "status": 429
+  },
+  "rate limited": {
+    "body": {
+      "detail": "slow down",
+      "error_type": "concurrent_requests_limit"
+    },
+    "headers": [
+      [
+        "x-fal-error-type",
+        "concurrent_requests_limit"
+      ],
+      [
+        "x-fal-needs-retry",
+        "1"
+      ],
+      [
+        "x-fal-request-id",
+        "764cabcf-b745-4b3e-ae38-1200304cf45b"
+      ]
+    ],
+    "status": 429
+  },
+  "timeout": {
+    "body": {
+      "detail": "took too long",
+      "error_type": "request_timeout"
+    },
+    "headers": [
+      [
+        "x-fal-error-type",
+        "request_timeout"
+      ],
+      [
+        "x-fal-request-id",
+        "764cabcf-b745-4b3e-ae38-1200304cf45b"
+      ]
+    ],
+    "status": 504
+  },
+  "unauthorized": {
+    "body": {
+      "detail": "invalid key credentials"
+    },
+    "headers": [
+      [
+        "x-fal-error-type",
+        "unauthorized"
+      ],
+      [
+        "x-fal-request-id",
+        "764cabcf-b745-4b3e-ae38-1200304cf45b"
+      ]
+    ],
+    "status": 401
+  },
+  "unsupported 1080P": {
+    "body": {
+      "detail": [
+        {
+          "loc": [
+            "body",
+            "resolution"
+          ],
+          "msg": "1080P resolution is not supported by this server",
+          "type": "value_error"
+        }
+      ]
+    },
+    "headers": [
+      [
+        "x-fal-error-type",
+        "value_error"
+      ],
+      [
+        "x-fal-request-id",
+        "764cabcf-b745-4b3e-ae38-1200304cf45b"
+      ]
+    ],
+    "status": 422
+  },
+  "unsupported media": {
+    "body": {
+      "detail": [
+        {
+          "loc": [
+            "body",
+            "image_url"
+          ],
+          "msg": "could not decode image",
+          "type": "value_error"
+        }
+      ]
+    },
+    "headers": [
+      [
+        "x-fal-error-type",
+        "value_error"
+      ],
+      [
+        "x-fal-request-id",
+        "764cabcf-b745-4b3e-ae38-1200304cf45b"
+      ]
+    ],
+    "status": 422
+  },
+  "unsupported target audio": {
+    "body": {
+      "detail": [
+        {
+          "loc": [
+            "body",
+            "target_audio_url"
+          ],
+          "msg": "target / conditioning audio is not supported by this server yet",
+          "type": "value_error"
+        }
+      ]
+    },
+    "headers": [
+      [
+        "x-fal-error-type",
+        "value_error"
+      ],
+      [
+        "x-fal-request-id",
+        "764cabcf-b745-4b3e-ae38-1200304cf45b"
+      ]
+    ],
+    "status": 422
+  }
+}

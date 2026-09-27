@@ -1,0 +1,8 @@
+{
+  "error": {
+    "code": 400,
+    "message": "length must be within 124..=362 frames",
+    "param": "seconds",
+    "type": "invalid_request_error"
+  }
+}

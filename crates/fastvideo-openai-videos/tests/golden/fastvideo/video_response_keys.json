@@ -1,0 +1,23 @@
+[
+  "id",
+  "object",
+  "model",
+  "prompt",
+  "status",
+  "progress",
+  "created_at",
+  "size",
+  "seconds",
+  "quality",
+  "url",
+  "remixed_from_video_id",
+  "expires_at",
+  "file_path",
+  "file_name",
+  "media_type",
+  "completed_at",
+  "error",
+  "peak_memory_mb",
+  "inference_time_s",
+  "stage_durations"
+]
