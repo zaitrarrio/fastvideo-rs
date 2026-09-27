@@ -1,0 +1,31 @@
+{
+  "endpoint": "image-to-video",
+  "api": "v1",
+  "body": {
+    "prompt": "The woman turns toward the camera and smiles",
+    "model": "ltx-2-3-pro",
+    "image_uri": "ltx://uploads/abc-123",
+    "duration": 6,
+    "resolution": "1080x1920",
+    "fps": 25,
+    "generate_audio": false
+  },
+  "request": {
+    "protocol": "ltx_v1",
+    "model": "ltx-pro",
+    "task": "i2v",
+    "prompt": "The woman turns toward the camera and smiles",
+    "negative_prompt": null,
+    "seed": null,
+    "canvas": { "exact": { "width": 1080, "height": 1920 } },
+    "timing": { "length": { "seconds": { "value": 6.0, "snap": "align_up" } }, "fps": 25 },
+    "keyframes": [ { "at": "first", "image": { "upload": "abc-123" } } ],
+    "references": [],
+    "audio_in": null,
+    "audio_out": "silent",
+    "sampling": { "steps": null, "guidance": null, "guidance_2": null, "flow_shift": null, "boundary_ratio": null },
+    "output": { "inline_data_uri": false },
+    "accepted_noop": [],
+    "callback": null
+  }
+}
