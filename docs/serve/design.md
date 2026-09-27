@@ -1327,6 +1327,43 @@ Merge rules that let packages run in parallel:
 | **WP-04 webrtc** | `crates/fastvideo-webrtc/**` | 01, 03 (types) | str0m host: UDP mux, ICE-TCP passive (RFC 4571 framing), public-address candidates, non-trickle answers with `a=end-of-candidates`, remote trickle add, data channels (accept client-created), per-mid direction (pause gate, `inactive`), pre-encoded H.264 and Opus writers, PLI events; WHIP publisher; loopback bench passes; answering a Chrome offer captured as a fixture |
 | **WP-05 serve-kit** | `crates/fastvideo-serve-kit/**` | 01, 02 | `ServeCtx`; auth modes; `MemJobStore` with manifests, restart recovery and expiry sweep; `ArtifactStore` local plus S3 presign; `UrlSigner`; `UploadStore` + `PUT /uploads/{token}`; ingestion (https fetch without redirects when configured, data URI, per-protocol limits, SSRF guard, `image` decode + ffprobe); callback sender (MiniMax challenge, fal webhook Ed25519); generic `submit/status/result` handlers; SSE helper |
 
+**WP-01 notes (as implemented).** The §3 signatures hold, with these
+additions and readings; everything is re-exported from the crate root.
+
+- Deviations: `GenerationRequest` gains `callback: Option<CallbackSpec>`
+  (fal `?fal_webhook=` / MiniMax `callback_url`, copied onto `Job::callback`),
+  since `normalize` is the only place that sees them. `FrameGrid` gains
+  `default: u32` (the frame count for `Length::ModelDefault`; caps had no
+  default length). `accepted_noop: Vec<&'static str>` is serialized but not
+  deserialized.
+- Readings: `CanvasCaps::short_edges[0]` is the default tier
+  (`CanvasSpec::ModelDefault` = 16:9 at that tier); `max_area` applies at the
+  largest tier and scales by `(short/largest)^2` below it (`area_at`), which
+  gives 832×480 at 480/16:9. `boundary_ratio` is honoured exactly when
+  `KnobCaps::guidance_2` is. A missing seed is drawn inside `negotiate` by
+  `draw_seed()` (u32 range, JSON-safe); a sent seed is refused only if
+  `knobs.seed` is false. Short edge 1080 on H3 → `Unsupported(H3Refine1080P)`,
+  above 1080 → `Unsupported(H3Resolution2K)`; a length snapping to 107 frames
+  on H3 → `Unsupported(H3FourSeconds)`.
+- Types §3 left open: `NormalizeCtx` and `ErrorCtx` are owned (no lifetime);
+  `SseSpec{initial, follow: Option<SseFollow::JobStatus{job, close_on_terminal}>, keepalive}`;
+  `JobSnapshot{id, seq, state, progress, queue_position, log_count}`;
+  `ListQuery` (owner/protocol/statuses/model/task/external_ids, `order`,
+  cursor `after` = external id, `offset`, `limit`) with a pure
+  `ListQuery::apply` any store can use; `Page{items, total, has_more}`;
+  `StoreError`; `RefLimits{images, videos, audio, total}`;
+  `AudioPlan::{Native{rate,channels}, Drop, Sidecar, None}`;
+  `PostProcess{crop, drop_audio}`; `MediaProbe` (all fields optional).
+- Extras: `precheck()` (every rule not needing staged media, to refuse before
+  ingestion), `resolve_model()` (rule 1), `JobStatus` plus checked `Job::mark_*`
+  transitions (`Queued→Running|Failed|Cancelled`,
+  `Running→Succeeded|Failed|Cancelled`; terminal is final) and
+  `Job::recover_after_restart`, `ProtocolId::default_retention`,
+  `ErrorKind::http_status` (canonical/native status only; adapters keep their
+  own tables), `GapId::{code, work_package, default_message}`,
+  `TrackSet::for_model`, `SessionState::can_transition_to`.
+- Not serde: `HttpReply`, `ViewCtx` (manual `Debug`), `RgbFrame`, `Pcm`.
+
 **Engine packages that can start in Phase 1** (independent of the server):
 
 | WP | Owns | Acceptance |
