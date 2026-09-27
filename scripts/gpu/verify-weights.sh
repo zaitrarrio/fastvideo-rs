@@ -5,6 +5,7 @@
 #   verify-weights.sh <cell>...        cells: fasth3-8step h3-base fasth3-4step-vsa
 #                                      fasth3-4step-dense sol-h3 sol-h3-spark
 #                                      ltx25-two-stage fastwan21-1.3b
+#                                      wan22-ti2v-5b wan21-t2v-14b sfwan21-1.3b
 #   verify-weights.sh --list           print the cells and what each needs
 #
 # For every weight root a cell needs, this checks:
@@ -42,11 +43,15 @@ needs() {
     # FastVideo/FastWan2.1-T2V-1.3B-Diffusers (the wan family).
     fastwan21-1.3b)
       echo "fastwan21-1.3b:transformer fastwan21-1.3b:vae fastwan21-1.3b:text_encoder fastwan21-1.3b:tokenizer" ;;
+    # Wan Diffusers trees (weights-manifest.tsv rows of the same name).
+    wan22-ti2v-5b | wan21-t2v-14b | sfwan21-1.3b)
+      echo "$1:transformer $1:vae $1:text_encoder $1:tokenizer $1:scheduler" ;;
     *) return 1 ;;
   esac
 }
 
-CELLS=(fasth3-8step h3-base fasth3-4step-vsa fasth3-4step-dense sol-h3 sol-h3-spark ltx25-two-stage fastwan21-1.3b)
+CELLS=(fasth3-8step h3-base fasth3-4step-vsa fasth3-4step-dense sol-h3 sol-h3-spark ltx25-two-stage fastwan21-1.3b
+  wan22-ti2v-5b wan21-t2v-14b sfwan21-1.3b)
 
 if [[ "${1:-}" == "--list" ]]; then
   for c in "${CELLS[@]}"; do printf '%-20s %s\n' "$c" "$(needs "$c")"; done
