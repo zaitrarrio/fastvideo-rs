@@ -264,7 +264,13 @@ pub fn assemble(config: &Config, ctx: &ServeCtx, gate: &Arc<ServiceGate>, jobs_k
     if config.protocols.native {
         kit = kit.merge(native::routes(gate.clone(), body_max, sync));
     }
-    kit = kit.merge(adapters::mount(&MountCfg { protocols: config.protocols.clone(), body_max, sync_timeout: sync }));
+    kit = kit.merge(adapters::mount(&MountCfg {
+        protocols: config.protocols.clone(),
+        body_max,
+        sync_timeout: sync,
+        url_ttl: Duration::from_secs(config.artifacts.url_ttl_s),
+        ltx: config.ltx.clone(),
+    }));
     let artifacts_kind = match config.artifact_backend() {
         ArtifactBackend::S3 => "s3",
         _ => "local",

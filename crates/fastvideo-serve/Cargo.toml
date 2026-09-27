@@ -49,7 +49,7 @@ fastvideo-serve-kit = { workspace = true, features = ["d1-mock"] }
 tower = { workspace = true, features = ["util"] }
 
 [features]
-default = []
+default = ["ltxapi"]
 # FakeBackend-only engine for CPU CI (FakeBackend is always compiled; the
 # `[engine] backend` config selects it, and it is the default).
 fake = []
@@ -70,7 +70,7 @@ ltxapi = ["dep:fastvideo-ltxapi"]
 fal = ["dep:fastvideo-fal"]
 reactor = ["dep:fastvideo-reactor"]
 # Everything except CUDA (and adapters not merged yet).
-full = ["webrtc", "encoders", "http-client"]
+full = ["webrtc", "encoders", "http-client", "ltxapi"]
 
 [lints]
 workspace = true

@@ -1490,6 +1490,59 @@ additions and readings; everything is re-exported from the crate root.
 | **WP-10 fv-serve binary** | `crates/fastvideo-serve/**`, `configs/serve/*.toml` | 02, 05 | Config and env; router assembly with a route-collision test (§9 table); `/healthz`, `/ping`, `/health` (`{"status":"ok","model_loaded":bool}`), `/`, `/metrics`, `/files`; native `/fv/v1/{capabilities,streams}`; graceful shutdown; `--features fake` e2e smoke in CI |
 | **WP-11 CUDA backend (batch)** | `crates/fastvideo-engine-service/src/cuda/{mod,h3,ltx2,wan,caps}.rs` | 02, E1 | `CudaBackend` loads H3 (recipes), LTX 2.3/2.5, Wan/FastWan/TI2V presets resident; caps derived from the loaded configs (audio rate from vocoder); `generate` maps `ResolvedJob` to `H3Request`/`Ltx2Request`/`GenerateConfig`; GPU smoke per family on a Runpod pod via `fv-gpucheck`-style script |
 
+**WP-10 notes (as implemented).**
+
+- `fastvideo-serve` is a lib plus the `fv-serve` bin. Modules: `config`
+  (TOML < env; secrets only printed redacted), `gate` (serve-kit
+  `EngineGate` over `EngineService`; one pump per job maps `EngineEvent` to
+  `JobEvent` and calls `apply_event`; on `Finished` it runs
+  `mp4::finalize` for crop/`-an`, and the artifact reports
+  `ResolvedJob::output_size`), `storage`, `router` (the §9 table +
+  `check_route_table`), `adapters` (feature-gated mount points), `health`,
+  `metrics`, `native`, `shutdown`, `whip`.
+- Job store `auto`: D1 when `FV_CF_ACCOUNT_ID`/`FV_CF_API_TOKEN`/
+  `FV_D1_DATABASE_ID` are set, else `file` (MemJobStore manifests).
+  Artifacts `auto`: R2/S3 when `FV_R2_*` (or `FV_S3_*`) are complete, else
+  local. D1 and S3 need the `http-client` feature.
+- **`D1JobStore`** lives in serve-kit (`fastvideo_serve_kit::d1`, as §0.7
+  says): D1 `/query` client with retry/backoff (transport, 429, 5xx and D1's
+  transient errors; SQL errors never), migrations (`schema_migrations`;
+  table `jobs` with the full `Job` JSON plus `id, protocol, external_id
+  UNIQUE(protocol, external_id), owner, status, model, resolved_model,
+  task, progress, created_at/updated_at/completed_at/expires_at (unix ms),
+  worker, version`; indexes `(owner, protocol, created_at)`, `(status,
+  created_at)`, `(protocol, created_at)`, `(expires_at)`, `(worker,
+  status)`), write-through inserts, immediate state-change writes,
+  progress/log writes coalesced to ≤ 1/s/job, an authoritative in-memory
+  cache (and `watch`) for this worker's jobs, a 60 s heartbeat, restart
+  recovery of this worker's jobs, and `sweep_expired` failing other
+  workers' jobs with no heartbeat for 15 min. Jobs owned by another worker
+  are updated with a `version` check; the owning worker's next write wins
+  (a cross-worker DELETE cannot trip another worker's cancel token).
+  Tested against a SQLite mock of the D1 HTTP API (`d1-mock` feature) and
+  once live against `fv-jobs`.
+- Native `/fv/v1/jobs` (submit/list/get/content/delete) is the batch path
+  the binary's own e2e tests drive; `/fv/v1/streams` answers 501 until the
+  streaming packages land. `runpod-queue` mode and `engine.backend = cuda`
+  are mount points that fail at startup until WP-16 / WP-11 land.
+- Adapters are features of `fastvideo-serve` (`openai-videos`, `minimax`,
+  `ltxapi`, `fal`, `reactor`); `ltxapi` is on by default and mounted as
+  `fastvideo_ltxapi::router(LtxConfig)` from `[ltx]`. The others call
+  `router()` (fal: `router(&fal_apps)`) behind their feature.
+- `ArtifactStore::open` (serve-kit) reads an artifact back (local path or
+  S3 object bytes) so LTX `/v1` sync works on R2; the `PUT /uploads` route
+  uses the `ServeCtx` clock.
+- WHIP geometry: `whip::whip_h264` takes the encoder frame from
+  `fastvideo-media` (`H264Config::for_publish`: Cloudflare = padded
+  1280x720) and only the level/box from `fastvideo-webrtc`'s
+  `EncodeProfile`, whose `output_size` (1260x720 for H3) is the picture
+  inside that frame; `check_profile` asserts they agree. No crate change is
+  required; renaming `output_size` to `picture_size` in fastvideo-webrtc
+  would make the distinction explicit.
+- `[webrtc] udp_port = 70010 / tcp_port = 70000` (§6.1) exceed the 65535
+  port range; the config keeps them as integers for the streaming packages
+  to settle.
+
 ### Phase 3: streaming (parallel after Phase 2 core)
 
 | WP | Owns | Depends | Acceptance |

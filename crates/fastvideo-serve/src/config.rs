@@ -329,6 +329,24 @@ impl Default for LimitsCfg {
     }
 }
 
+/// `[ltx]` (design §4.5).
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct LtxCfg {
+    /// `/v1/*` wait; default `server.sync_timeout_s`.
+    pub sync_timeout_s: Option<u64>,
+    /// Concurrent `/v1/*` generations per key (upstream: 2); 0 disables.
+    pub v1_concurrency: usize,
+    /// Lifetime of `result.video_url`; default `artifacts.url_ttl_s`.
+    pub url_ttl_s: Option<u64>,
+}
+
+impl Default for LtxCfg {
+    fn default() -> Self {
+        Self { sync_timeout_s: None, v1_concurrency: 2, url_ttl_s: None }
+    }
+}
+
 /// `[webrtc]`: consumed by the streaming packages (WP-13/14/15).
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
@@ -384,6 +402,7 @@ pub struct Config {
     pub models: Vec<ModelCfg>,
     pub aliases: BTreeMap<String, String>,
     pub protocols: ProtocolsCfg,
+    pub ltx: LtxCfg,
     pub limits: LimitsCfg,
     pub webrtc: WebrtcCfg,
     pub log: LogCfg,

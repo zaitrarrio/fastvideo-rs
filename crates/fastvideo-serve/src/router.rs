@@ -125,6 +125,7 @@ pub fn route_table(fal_apps: &[String]) -> Vec<RouteSpec> {
     for ep in LTX_STUBS {
         v.push(r(Ltx, "POST", format!("/v1/{ep}")));
         v.push(r(Ltx, "POST", format!("/v2/{ep}")));
+        v.push(r(Ltx, "GET", format!("/v2/{ep}/{{id}}")));
     }
     for app in fal_apps {
         let app = app.trim_matches('/');
@@ -284,7 +285,7 @@ mod tests {
             assert_eq!(std::str::from_utf8(&b).unwrap(), want, "{m} {uri}");
         }
         // Unknown fal apps and LTX endpoint segments are not routed.
-        for (m, uri) in [("POST", "/minimax/h9/text-to-video"), ("GET", "/v2/retake/abc"), ("POST", "/v2/text-to-image")] {
+        for (m, uri) in [("POST", "/minimax/h9/text-to-video"), ("GET", "/v2/text-to-image/abc"), ("POST", "/v2/text-to-image")] {
             let resp = router
                 .clone()
                 .oneshot(Request::builder().method(m).uri(uri).body(Body::empty()).unwrap())

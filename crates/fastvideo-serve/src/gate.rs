@@ -178,7 +178,9 @@ async fn finish(id: JobId, r: &ResolvedJob, out: ClipOutput, policy: &OutputPoli
     tokio::fs::create_dir_all(&dir)
         .await
         .map_err(|e| ApiError::internal(format!("output dir: {e}")))?;
-    let (mut width, mut height) = (r.width, r.height);
+    // Pad-and-crop canvases (LTX 1280x720 -> 1280x768 -> crop) report the
+    // cropped size; `-an` outputs carry no audio.
+    let (width, height) = r.output_size();
     let mut audio = match r.audio {
         AudioPlan::Native { rate, channels } => Some((rate, channels)),
         _ => None,
@@ -198,9 +200,6 @@ async fn finish(id: JobId, r: &ResolvedJob, out: ClipOutput, policy: &OutputPoli
                     .map_err(|e| ApiError::internal(format!("post-processing task: {e}")))?
                     .map_err(|e| ApiError::engine_failed(format!("post-processing: {e}")))?;
                 let _ = tokio::fs::remove_file(&src).await;
-                if let Some((w, h)) = r.post.crop {
-                    (width, height) = (w, h);
-                }
                 dst
             } else {
                 src

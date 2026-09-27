@@ -59,6 +59,21 @@ impl JobView for V1View {
     }
 }
 
+/// The `/v1/*` reply for a finished job. Artifacts in an object store
+/// (S3/R2 deployments) are read back through `ArtifactStore::open`, since
+/// the sync API answers with the MP4 bytes themselves.
+pub async fn sync_reply(ctx: &fastvideo_serve_kit::ServeCtx, job: &Job) -> HttpReply {
+    if let (JobState::Succeeded, Some(a)) = (&job.state, job.artifacts.first()) {
+        if matches!(a.location, ArtifactLocation::Object { .. }) {
+            return match ctx.artifacts().open(a).await {
+                Ok(body) => with_meta(body.into_reply(200, VIDEO_MP4), job),
+                Err(e) => V1View::error(&e),
+            };
+        }
+    }
+    V1View.result_reply(job, &ctx.view_ctx(false))
+}
+
 /// Per-owner limit on concurrent `/v1/*` generations.
 #[derive(Debug)]
 pub struct ConcurrencyLimit {

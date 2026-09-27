@@ -3,10 +3,9 @@
 //! the engine gate, the job stores (file, and D1 over the SQLite mock of the
 //! D1 HTTP API), artifacts, health, metrics and drain.
 //!
-//! The external-API adapters are mounted by feature (src/adapters.rs); none
-//! had a router on main when this was written, so the batch path is driven
-//! through the native `/fv/v1/jobs` API, which uses the same serve-kit
-//! `submit`/`status`/`result` handlers the adapters use.
+//! The batch path here is the native `/fv/v1/jobs` API, which uses the same
+//! serve-kit `submit`/`status`/`result` handlers the adapters use; the LTX
+//! adapter (the first on main) has its own suite in `tests/ltx.rs`.
 
 use std::collections::BTreeMap;
 use std::sync::Arc;

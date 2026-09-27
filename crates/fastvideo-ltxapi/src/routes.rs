@@ -37,7 +37,7 @@ use crate::models::{parse_tier_alias, LtxModels};
 use crate::request::{Endpoint, Submit};
 use crate::stubs::{refused, STUB_ENDPOINTS};
 use crate::upload::upload_reply;
-use crate::v1::{ConcurrencyLimit, V1View};
+use crate::v1::ConcurrencyLimit;
 use crate::v2::{not_found, V2View};
 
 /// `[ltx]` settings.
@@ -242,7 +242,7 @@ async fn generate(
                     let _ = cancel_job(&ctx, j.id).await;
                     return Err(ApiError::timeout("generation did not finish in time"));
                 }
-                Ok(V1View.result_reply(&j, &ctx.view_ctx(false)))
+                Ok(crate::v1::sync_reply(&ctx, &j).await)
             }
         }
     }
