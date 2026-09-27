@@ -18,6 +18,33 @@ text says **native**.
 
 ---
 
+## 0. Owner decisions (2026-09-27) — these override anything below
+
+1. **Video encoder: NVENC.** The runtime image gains the NVIDIA `video` driver
+   capability (`NVIDIA_DRIVER_CAPABILITIES=compute,utility,video`) and
+   `fastvideo-media` encodes H.264 on the GPU's NVENC. OpenH264 stays only as a
+   CPU-only test/CI backend behind a feature and is never used in a deployed
+   image (no Cisco patent licence when built from source). No x264.
+2. **H.264 level / 1344x768 H3 streams.** WHIP to Cloudflare: scale H3 streams to
+   1280x720 (level 3.1) before encoding. Full resolution (1344x768, level 4.0) is
+   supported when publishing to MediaMTX (self-hosted relay) and for peer WebRTC.
+   The WHIP target config selects the profile: `cloudflare` → 720p cap,
+   `mediamtx` / peer → native resolution.
+3. **Model tiers exposed by the APIs.**
+   - `h3-max` (fal `minimax/h3-max/*`, MiniMax `MiniMax-H3-Max`) and LTX
+     `ltx-2-5-pro` / `ltx-2-3-pro` map to **our highest-quality configuration**
+     of that family (no quality-reducing shortcuts: full step count / non-lossy
+     attention route / full VAE; exact recipe chosen per model in the engine
+     capability table and documented there).
+   - New variants **`h3-turbo`** and **`ltx-turbo`**: our FastH3 and LTX
+     configurations with the **fastest generation times** that still pass the
+     quality gate (e.g. FastH3 4-step VSA; LTX-2.5 distilled two-stage Sol),
+     exposed on every API that accepts a model/endpoint id (fal endpoint ids
+     `minimax/h3-turbo/{text,image,reference}-to-video`, MiniMax model
+     `MiniMax-H3-Turbo`, LTX model `ltx-turbo`, openai-videos model ids).
+   - Responses carry the resolved internal recipe in metadata where the wire
+     format allows it.
+
 ## 1. Goals and non-goals
 
 ### 1.1 Goals
