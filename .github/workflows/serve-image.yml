@@ -11,8 +11,10 @@ on:
         description: "fv-serve cargo features"
         required: false
         default: "cuda,http-client"
+  # main only: agents push the same commits to their branches too, and a
+  # second build of the same sha is wasted. Other branches: workflow_dispatch.
   push:
-    branches: ["**"]
+    branches: ["main"]
     paths:
       - "crates/**"
       - "configs/serve/**"
@@ -31,9 +33,11 @@ permissions:
   contents: read
   packages: write
 
+# main moves every few minutes; cancelling would never let a ~45 min build
+# finish. One build runs, the newest push waits.
 concurrency:
   group: serve-image-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 jobs:
   image:

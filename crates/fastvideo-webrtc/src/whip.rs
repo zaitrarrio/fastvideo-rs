@@ -380,6 +380,7 @@ mod publisher {
                     channels: Vec::new(),
                     srflx,
                     h264_level: profile.h264_level,
+                    video_codecs: vec![crate::writer::VideoCodec::H264],
                 })
                 .await?;
             let answer = client.post_offer(&offer).await?;

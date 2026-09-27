@@ -46,6 +46,9 @@ pub struct App {
     pub keys: Arc<KeyStore>,
     /// Whether the admin token was generated at startup (no `FV_ADMIN_TOKEN`).
     pub admin_token_generated: bool,
+    /// The Reactor local runtime, when mounted (feature `reactor`).
+    #[cfg(feature = "reactor")]
+    pub reactor: Option<fastvideo_reactor::Reactor>,
     sweeper: tokio::task::JoinHandle<()>,
     key_maintenance: tokio::task::JoinHandle<()>,
 }
@@ -220,8 +223,27 @@ impl App {
         let ctx = builder.build().await.context("building the serve context")?;
         gate.attach(ctx.clone());
 
-        let admin_routes = fastvideo_serve_kit::admin_routes(key_store.clone(), Arc::new(admin));
-        let mut router = assemble(&config, &ctx, &gate, jobs_kind, admin_routes);
+        // Streaming front-ends that own sockets (Reactor: the WebRTC host).
+        #[allow(unused_mut)]
+        let mut streams = Router::new();
+        #[cfg(feature = "reactor")]
+        let reactor = if config.protocols.reactor {
+            match crate::reactor::build(&config, gate.engine()).await {
+                Ok(r) => {
+                    streams = streams.merge(fastvideo_reactor::router(r.clone()));
+                    Some(r)
+                }
+                Err(e) => {
+                    tracing::error!(error = %format!("{e:#}"), "the Reactor runtime is not mounted");
+                    None
+                }
+            }
+        } else {
+            None
+        };
+        // Minted API keys: /fv/v1/admin/keys behind the admin token.
+        streams = streams.merge(fastvideo_serve_kit::admin_routes(key_store.clone(), Arc::new(admin)));
+        let mut router = assemble(&config, &ctx, &gate, jobs_kind, streams);
         if config.server.forward {
             let ready = Arc::new(std::sync::OnceLock::new());
             let h = fastvideo_deploy::dispatch::RouterHandler::new(router.clone()).with_info(crate::deploy::info_fn(
@@ -245,6 +267,8 @@ impl App {
             d1,
             keys: key_store,
             admin_token_generated,
+            #[cfg(feature = "reactor")]
+            reactor,
             sweeper,
             key_maintenance,
         })
@@ -258,10 +282,17 @@ impl App {
         let grace = self.config.shutdown_grace();
         let d1 = self.d1.clone();
         let keys = self.keys.clone();
+        #[cfg(feature = "reactor")]
+        let reactor = self.reactor.clone();
         announce_ready(gate.clone());
         let drained = async move {
             stop.await;
             tracing::info!("shutdown requested: draining");
+            // Reactor: `session_ended` with RT's drain reason, then close.
+            #[cfg(feature = "reactor")]
+            if let Some(r) = &reactor {
+                r.drain().await;
+            }
             drain(&gate, grace, d1.as_deref()).await;
             if let Err(e) = keys.flush().await {
                 tracing::warn!(error = %e, "api keys: writing last_used_at failed");
@@ -329,9 +360,16 @@ pub fn mount_cfg(config: &Config) -> MountCfg {
 }
 
 /// The full router: health + serve-kit files/uploads + native + adapters,
-/// with request metrics and tracing. `extra` (the admin routes) is merged
-/// under the same layers.
-pub fn assemble(config: &Config, ctx: &ServeCtx, gate: &Arc<ServiceGate>, jobs_kind: &'static str, extra: Router) -> Router {
+/// with request metrics and tracing, and the `/console` pages.
+/// `streams` carries the streaming front-ends that are built with their own
+/// state (the Reactor runtime) and the admin key routes.
+pub fn assemble(
+    config: &Config,
+    ctx: &ServeCtx,
+    gate: &Arc<ServiceGate>,
+    jobs_kind: &'static str,
+    streams: Router,
+) -> Router {
     let mcfg = mount_cfg(config);
     let mut kit: Router<ServeCtx> = ctx.routes();
     if config.protocols.native {
@@ -350,7 +388,11 @@ pub fn assemble(config: &Config, ctx: &ServeCtx, gate: &Arc<ServiceGate>, jobs_k
         artifacts_backend: artifacts_kind,
         root_model: adapters::root_model(&mcfg, ctx),
     };
-    let mut r = kit.with_state(ctx.clone()).merge(stateful).merge(health::routes(h)).merge(extra);
+    let mut r = kit
+        .with_state(ctx.clone())
+        .merge(stateful)
+        .merge(streams)
+        .merge(health::routes(h));
     if config.server.console {
         r = r.merge(console::routes());
     }

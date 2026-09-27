@@ -231,33 +231,50 @@ impl H3LoraFuse {
 
     /// Apply a pair (if `param` is `{module}.weight`) and then a `.diff`.
     pub fn fuse(&mut self, param: &str, data: &mut [f32], shape: &[usize]) -> Result<()> {
-        if let Some((rshape, rdata)) = self.replacements.remove(param) {
-            if rshape != shape || rdata.len() != data.len() {
-                return Err(msg(format!(
-                    "set_weight fuse {param}: host {shape:?} != {rshape:?}"
-                )));
-            }
-            // FastVideo `DenseLoRAPatch.replacement_for`: value * strength.
-            for (d, r) in data.iter_mut().zip(&rdata) {
-                *d = r * self.diff_scale;
-            }
-        }
-        if let Some(module) = param.strip_suffix(".weight") {
-            if let Some(pair) = self.pairs.remove(module) {
-                if shape != [pair.out, pair.inn] || data.len() != pair.out * pair.inn {
+        self.take_parts(param, shape)?.apply_host(param, data, shape)
+    }
+
+    /// Remove and return what [`Self::fuse`] would apply to `param` (as
+    /// [`Self::fuse`] does, so [`Self::finish`] sees it consumed), checked
+    /// against `shape`. [`FuseParts::apply_host`] is the host merge; the
+    /// device merge (`fastvideo_cudarc::h3::transformer`) runs the same
+    /// arithmetic in a kernel.
+    pub fn take_parts(&mut self, param: &str, shape: &[usize]) -> Result<FuseParts> {
+        let numel: usize = shape.iter().product();
+        let replacement = match self.replacements.remove(param) {
+            Some((rshape, rdata)) => {
+                if rshape != shape || rdata.len() != numel {
                     return Err(msg(format!(
-                        "lora fuse {module}: host {:?} != {}x{}",
-                        shape, pair.out, pair.inn
+                        "set_weight fuse {param}: host {shape:?} != {rshape:?}"
                     )));
                 }
-                add_low_rank(data, pair.out, pair.inn, &pair.b, &pair.a, self.multiplier)
-                    .map_err(msg)?;
+                Some(rdata)
             }
-        }
-        if let Some(delta) = self.diffs.remove(param) {
-            add_diff(data, &delta, self.diff_scale).map_err(msg)?;
-        }
-        Ok(())
+            None => None,
+        };
+        let pair = match param.strip_suffix(".weight") {
+            Some(module) => match self.pairs.remove(module) {
+                Some(pair) => {
+                    if shape != [pair.out, pair.inn] || numel != pair.out * pair.inn {
+                        return Err(msg(format!(
+                            "lora fuse {module}: host {:?} != {}x{}",
+                            shape, pair.out, pair.inn
+                        )));
+                    }
+                    Some(pair)
+                }
+                None => None,
+            },
+            None => None,
+        };
+        let diff = self.diffs.remove(param);
+        Ok(FuseParts {
+            replacement,
+            pair,
+            diff,
+            multiplier: self.multiplier,
+            diff_scale: self.diff_scale,
+        })
     }
 
     pub fn finish(&self) -> Result<()> {
@@ -274,6 +291,63 @@ impl H3LoraFuse {
             "adapter targets were not applied: {left:?} (and {} more)",
             extra - left.len()
         )))
+    }
+}
+
+/// What one parameter of an adapter merge applies: a `.set_weight`
+/// replacement, then a low-rank pair, then a `.diff`, in that order.
+#[derive(Clone)]
+pub struct FuseParts {
+    pub replacement: Option<Vec<f32>>,
+    pair: Option<Pair>,
+    pub diff: Option<Vec<f32>>,
+    pub multiplier: f32,
+    pub diff_scale: f32,
+}
+
+impl FuseParts {
+    /// Nothing to apply.
+    pub fn is_empty(&self) -> bool {
+        self.replacement.is_none() && self.pair.is_none() && self.diff.is_none()
+    }
+
+    /// `(A [rank, in], B [out, rank], rank)` of the pair, if any.
+    pub fn pair(&self) -> Option<(&[f32], &[f32], usize)> {
+        self.pair
+            .as_ref()
+            .map(|p| (&p.a[..], &p.b[..], p.a.len() / p.inn.max(1)))
+    }
+
+    /// The host merge, in float32: `data = replacement * diff_scale`, then
+    /// `data += multiplier * B @ A` ([`add_low_rank`]), then
+    /// `data += diff_scale * diff` ([`add_diff`]).
+    pub fn apply_host(self, param: &str, data: &mut [f32], shape: &[usize]) -> Result<()> {
+        if let Some(rdata) = self.replacement {
+            if rdata.len() != data.len() {
+                return Err(msg(format!(
+                    "set_weight fuse {param}: host {shape:?} holds {} values",
+                    rdata.len()
+                )));
+            }
+            // FastVideo `DenseLoRAPatch.replacement_for`: value * strength.
+            for (d, r) in data.iter_mut().zip(&rdata) {
+                *d = r * self.diff_scale;
+            }
+        }
+        if let Some(pair) = self.pair {
+            if data.len() != pair.out * pair.inn {
+                return Err(msg(format!(
+                    "lora fuse {param}: host {:?} != {}x{}",
+                    shape, pair.out, pair.inn
+                )));
+            }
+            add_low_rank(data, pair.out, pair.inn, &pair.b, &pair.a, self.multiplier)
+                .map_err(msg)?;
+        }
+        if let Some(delta) = self.diff {
+            add_diff(data, &delta, self.diff_scale).map_err(msg)?;
+        }
+        Ok(())
     }
 }
 

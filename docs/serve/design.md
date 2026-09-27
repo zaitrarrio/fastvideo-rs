@@ -1630,6 +1630,62 @@ additions and readings; everything is re-exported from the crate root.
 - Owned files: `stream/{mod,clip,queue,rules,causal,player,pace}.rs`,
   `src/cuda/causal.rs`, `tests/stream_{clip,causal}.rs`.
 
+**WP-13 notes (as implemented): the Reactor local runtime.**
+`fastvideo-reactor` (feature `reactor` of fv-serve, on by default; built in
+`App::build` by `fastvideo_serve::reactor` from `[webrtc]` and `[reactor]`).
+
+- **Wire.** `proto/` is the vendored `reactor_wire.v1` (with RT's LICENSE
+  and NOTICE); the prost bindings are committed (`src/pb/`), and the
+  `proto-codegen` feature regenerates them with protox + prost-build and
+  checks they match. `wire` maps v1 protobuf and v0 JSON onto one
+  vocabulary; the first inbound frame latches the version, and outbound
+  messages wait for the latch (at most `latch_grace`, 2 s, then the
+  `Reactor-WebRTC-Version` seed, always v0) so a v1 SDK never sees a v0
+  greeting.
+- **Lifecycle** exactly as reactor §3.2-3.4 (fixed session id, CORS `*`,
+  503 + `Retry-After: 1` while loading, 409 when not READY, orphan timeout,
+  `session_ended{reason}` / `moderation` before CLOSING, RT's drain reason on
+  shutdown, `/events` journal). Admission refusals from the engine map to
+  409 (busy) or 503 (not resident).
+- **Signalling** as §5.7: ids 1002..9999, 202 → 200-once answers,
+  candidates buffered before the offer (≤256 per connection, ≤128
+  connections), 64 peers, re-offers (PUT) always admitted, 30 s
+  negotiation deadline (host), non-trickle answers, no RXMT. A failed
+  negotiation answers `GET sdp_params` with 400 and the reason (RT would
+  poll 202 until the deadline). `port_range` is accepted and ignored (one
+  shared mux socket).
+- **Gateway**: 20 s watchdog on any inbound message (polled every 2 s);
+  pause gate (every send m-line starts paused; `ResumeTrack` opens it and
+  forces a keyframe of the current picture, black before the first frame:
+  the start-of-connection black frame); `RequestClip`/`RequestRecording` →
+  `clip_failed{"recording disabled"}`; `PublishTrack` → `publish_refused`;
+  commands are validated against the mode's table (`invalid_command`, v1)
+  and run **in arrival order per connection**; acks and command errors are
+  v1 only.
+- **Modes** on the WP-12/WP-15 API: clip mode is `ClipSession::into_player`
+  (fast-h3 events broadcast verbatim, audience = at least one connected
+  peer) with `spawn_clip_pacer` (idle policy `Black`, ticks from the start);
+  causal mode is `CausalControl` with `spawn_causal_pacer` (setters ack
+  bodyless and broadcast `state_update`; `get_state` replies with it;
+  generation pauses without an audience).
+- **Media**: pacer ticks are encoded once per negotiated codec and fanned
+  out; repeated ticks are not re-sent unless the held picture changed (the
+  flush to black). Audio is RT's feeder: a ≤200 ms buffer drained by exactly
+  one 10 ms, 480-sample, 48 kHz **mono** Opus frame every 10 ms (silence
+  when short). **Deviation (VP8):** the Python `reactor_sdk` 1.6.0's
+  libwebrtc offers VP8/VP9/AV1 and no H.264, so `fastvideo-webrtc` gained VP8
+  answers (`AnswerOptions::video_codecs`, `PeerHandle::video_codec`) and the
+  runtime sends **intra-only VP8** encoded by libwebp (feature `vp8`, on by
+  default) to such peers; H.264 peers (browsers) get NVENC (`[reactor]
+  h264 = "nvenc"`) or OpenH264 (`"openh264"`, CPU test backend). Intra-only
+  VP8 costs bitrate; an inter-frame VP8/AV1 encoder is the follow-up for
+  production SDK clients.
+- **Compat** (`crates/fastvideo-reactor/tests/compat/run.sh`): Python
+  `reactor_sdk` 1.6.0 local mode against `examples/fake_runtime` — A/V clip
+  model (tracks `main_video` + `main_audio`, 48 kHz mono audio frames,
+  get_state / set_autoplay / enqueue → clip_finished, invalid command
+  raises), video-only clip model (no audio track), causal model — green.
+
 ### Phase 4: deploy, compat and E2E
 
 | WP | Owns | Depends | Acceptance |
@@ -1663,7 +1719,8 @@ Critical path: `WP-00 → WP-01 → WP-02 → WP-05 → WP-09 → (E1 → E2) �
 | `/v2/video_generation*`, `/v2/query/*`, `/v2/h3_context_ir`, `/v2/video_regeneration` | minimax | |
 | `/v1\|v2/{text-to-video,image-to-video,…}`, `/v1/upload` | ltxapi | No overlap with `/v1/videos` |
 | `/{app}/…` for configured apps, `/run/{app}/…`, `/fal/proxy`, `/storage/upload/initiate`, `/wma/*`, `/start-session`, `/info`, `/.well-known/jwks.json` | fal | Apps are static prefixes |
-| `/start_session`, `/session`, `/stop_session`, `/schema`, `/sessions/{sid}/…`, `/events` | reactor | `GET /session` versus WMA `POST /wma/session` do not collide |
+| `POST /start_session`, `GET /session`, `POST /stop_session`, `GET /schema`, `GET /events` (SSE) | reactor | `GET /session` versus WMA `POST /wma/session` do not collide. CORS `*` |
+| `GET /sessions/{sid}/transport/webrtc/ice_servers`, `POST …/connections`, `POST\|PUT\|GET …/connections/{cid}/sdp_params`, `POST …/connections/{cid}/ice_candidates` | reactor | Mounted by `App::build` (the runtime owns the WebRTC host); feature `reactor`, on by default |
 | `/fv/v1/*` | serve (native) | Includes `POST/GET /fv/v1/admin/keys`, `DELETE /fv/v1/admin/keys/{id}` (serve-kit `keys::admin_routes`, admin token; WP-20) |
 | `GET /fal/schema`, `GET /fal/schema/{owner}/{alias}/{sub}` | fal | Catalog of configured apps and each endpoint's input JSON Schema (native, for the console; WP-20) |
 | `GET /console`, `/console/admin`, `/console/models/{owner}/{alias}/{task}`, `/console/assets/{file}` | serve (console) | Embedded static pages, [`console.md`](console.md); off with `FV_CONSOLE=0` |

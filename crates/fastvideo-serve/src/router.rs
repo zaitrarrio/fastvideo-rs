@@ -131,8 +131,12 @@ pub fn route_table(fal_apps: &[String]) -> Vec<RouteSpec> {
         r(Reactor, "POST", "/stop_session"),
         r(Reactor, "GET", "/schema"),
         r(Reactor, "GET", "/events"),
-        r(Reactor, "GET", "/sessions/{sid}/{*rest}"),
-        r(Reactor, "POST", "/sessions/{sid}/{*rest}"),
+        r(Reactor, "GET", "/sessions/{sid}/transport/webrtc/ice_servers"),
+        r(Reactor, "POST", "/sessions/{sid}/transport/webrtc/connections"),
+        r(Reactor, "POST", "/sessions/{sid}/transport/webrtc/connections/{cid}/sdp_params"),
+        r(Reactor, "PUT", "/sessions/{sid}/transport/webrtc/connections/{cid}/sdp_params"),
+        r(Reactor, "GET", "/sessions/{sid}/transport/webrtc/connections/{cid}/sdp_params"),
+        r(Reactor, "POST", "/sessions/{sid}/transport/webrtc/connections/{cid}/ice_candidates"),
     ];
     for ep in ["text-to-video", "image-to-video"] {
         v.push(r(Ltx, "POST", format!("/v2/{ep}")));
@@ -286,7 +290,10 @@ mod tests {
             ("POST", "/run/minimax/h3-max/text-to-video", "fal"),
             ("POST", "/wma/session", "fal-director"),
             ("GET", "/session", "reactor"),
-            ("POST", "/sessions/s1/offer", "reactor"),
+            ("POST", "/start_session", "reactor"),
+            ("GET", "/sessions/00000000-0000-0000-0000-000000000000/transport/webrtc/ice_servers", "reactor"),
+            ("PUT", "/sessions/s1/transport/webrtc/connections/1002/sdp_params", "reactor"),
+            ("POST", "/sessions/s1/transport/webrtc/connections/1002/ice_candidates", "reactor"),
             ("GET", "/status/abc", "openai-videos"),
             ("GET", "/files/a/b.mp4", "serve-kit"),
             ("GET", "/fv/v1/jobs/fvjob_1", "native"),
