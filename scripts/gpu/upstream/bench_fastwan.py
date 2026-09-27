@@ -31,6 +31,19 @@ from pathlib import Path
 
 HF_NAME = "FastWan2.1-T2V-1.3B-Diffusers"
 
+# FastVideo/FastWan2.1-T2V-1.3B-Diffusers scheduler/scheduler_config.json (Hub main).
+SCHEDULER = {
+    "_class_name": "UniPCMultistepScheduler", "_diffusers_version": "0.33.0.dev0",
+    "beta_end": 0.02, "beta_schedule": "linear", "beta_start": 0.0001, "disable_corrector": [],
+    "dynamic_thresholding_ratio": 0.995, "final_sigmas_type": "zero", "flow_shift": 3.0,
+    "lower_order_final": True, "num_train_timesteps": 1000, "predict_x0": True,
+    "prediction_type": "flow_prediction", "rescale_betas_zero_snr": False, "sample_max_value": 1.0,
+    "solver_order": 2, "solver_p": None, "solver_type": "bh2", "steps_offset": 0,
+    "thresholding": False, "timestep_spacing": "linspace", "trained_betas": None,
+    "use_beta_sigmas": False, "use_exponential_sigmas": False, "use_flow_sigmas": True,
+    "use_karras_sigmas": False,
+}
+
 
 def stage_times(li) -> dict:
     stages = getattr(li, "stages", None) or {}
@@ -70,11 +83,21 @@ def main() -> int:
         # sm100a VSA kernels are Blackwell-datacenter only: Triton VSA on sm_120.
         os.environ.setdefault("FASTVIDEO_VSA_SM100A", "0")
         res["env"] = {k: v for k, v in os.environ.items() if k.startswith("FASTVIDEO_")}
-        link = out / "model" / HF_NAME
-        link.parent.mkdir(parents=True, exist_ok=True)
-        if not link.exists():
-            link.symlink_to(Path(a.model).resolve())
-        model = str(link)
+        # A view of the volume's tree under the Hub name: every component
+        # symlinked, plus scheduler/ (a 1 KB config our volume copy lacks and
+        # FastVideo's loader requires; the DMD sampler does not use it).
+        view = out / "model" / HF_NAME
+        view.mkdir(parents=True, exist_ok=True)
+        src = Path(a.model).resolve()
+        for entry in src.iterdir():
+            dst = view / entry.name
+            if not dst.exists():
+                dst.symlink_to(entry)
+        if not (view / "scheduler").exists():
+            (view / "scheduler").mkdir()
+            (view / "scheduler" / "scheduler_config.json").write_text(json.dumps(SCHEDULER, indent=2))
+            res["scheduler_config"] = "written (Hub FastVideo/FastWan2.1-T2V-1.3B-Diffusers scheduler/)"
+        model = str(view)
         spec = json.loads(Path(a.prompts).read_text())
         prompts = spec["prompts"] if isinstance(spec, dict) else spec
         from fastvideo import VideoGenerator
