@@ -609,6 +609,56 @@ case "$FAMILY" in
       compare_cells wan13-dmd "wan13-dmd-$arm"
       gate_cells wan13-dmd "wan13-dmd-$arm" lossy
     done
+
+    # ---- Wan2.1 T2V-14B, Wan2.2 TI2V-5B, SF-Wan 1.3B (weights on the US
+    # volume, fv-weights-b200-us). One prompt ($PROMPT), warm, the upstream
+    # FastVideo sampling defaults of each checkpoint.
+    one=(--prompt "$PROMPT" --seed "$SEED" --warm)
+    w14=(--weights "$W/wan21-t2v-14b" --preset wan_t2v_14b --unipc --steps 50 --guidance 5.0
+      --flow-shift 3.0 "${one[@]}")
+    gated_cell wan14 wan21-t2v-14b \
+      "$BIN" --mode fast wan gen "${w14[@]}" --clip-dir "$RUNS/wan14/frames"
+    gated_cell wan14-nocache wan21-t2v-14b \
+      env FASTVIDEO_WAN_COND_CACHE=0 \
+      "$BIN" --mode fast wan gen "${w14[@]}" --no-text-cache --clip-dir "$RUNS/wan14-nocache/frames"
+    compare_cells wan14 wan14-nocache --off-identity
+    # sol-engine config/wan21_t2v_14b/fullstack.toml: EasyCache 0.036 + Sol-Attn
+    # (tau 1.0, 10 dense forwards, layer 0 dense, Morton3D); and each alone,
+    # plus the Sol TeaCache preset.
+    gated_cell wan14-easycache wan21-t2v-14b \
+      env FASTVIDEO_WAN_SOL_CACHE=easycache FASTVIDEO_WAN_EASYCACHE_PROFILE=fullstack \
+      "$BIN" --mode fast wan gen "${w14[@]}" --clip-dir "$RUNS/wan14-easycache/frames"
+    gated_cell wan14-teacache wan21-t2v-14b \
+      env FASTVIDEO_WAN_SOL_CACHE=teacache \
+      "$BIN" --mode fast wan gen "${w14[@]}" --clip-dir "$RUNS/wan14-teacache/frames"
+    gated_cell wan14-sol wan21-t2v-14b \
+      env FASTVIDEO_WAN_SOL_ATTN=1 \
+      "$BIN" --mode fast wan gen "${w14[@]}" --clip-dir "$RUNS/wan14-sol/frames"
+    gated_cell wan14-fullstack wan21-t2v-14b \
+      env FASTVIDEO_WAN_SOL_ATTN=1 FASTVIDEO_WAN_SOL_CACHE=easycache FASTVIDEO_WAN_EASYCACHE_PROFILE=fullstack \
+      "$BIN" --mode fast wan gen "${w14[@]}" --clip-dir "$RUNS/wan14-fullstack/frames"
+    for arm in easycache teacache sol fullstack; do
+      compare_cells wan14 "wan14-$arm"
+      gate_cells wan14 "wan14-$arm" lossy
+    done
+    gated_cell wan5b wan22-ti2v-5b \
+      "$BIN" --mode fast wan gen --weights "$W/wan22-ti2v-5b" --preset wan_2_2_ti2v_5b --unipc \
+        --steps 50 --guidance 5.0 --flow-shift 5.0 --height 704 --width 1280 --num-frames 121 --fps 24 \
+        "${one[@]}" --clip-dir "$RUNS/wan5b/frames"
+    gated_cell wan5b-easycache wan22-ti2v-5b \
+      env FASTVIDEO_WAN_SOL_CACHE=easycache \
+      "$BIN" --mode fast wan gen --weights "$W/wan22-ti2v-5b" --preset wan_2_2_ti2v_5b --unipc \
+        --steps 50 --guidance 5.0 --flow-shift 5.0 --height 704 --width 1280 --num-frames 121 --fps 24 \
+        "${one[@]}" --clip-dir "$RUNS/wan5b-easycache/frames"
+    compare_cells wan5b wan5b-easycache
+    # SF-Wan: causal DMD; TAEHV by default (distilled), the full VAE opt-out.
+    gated_cell sfwan13 sfwan21-1.3b \
+      "$BIN" --mode fast wan gen --weights "$W/sfwan21-1.3b" --preset sf_wan_t2v_1_3b "${one[@]}" \
+        --clip-dir "$RUNS/sfwan13/frames"
+    gated_cell sfwan13-fullvae sfwan21-1.3b \
+      "$BIN" --mode fast wan gen --weights "$W/sfwan21-1.3b" --preset sf_wan_t2v_1_3b "${one[@]}" \
+        --full-vae --clip-dir "$RUNS/sfwan13-fullvae/frames"
+    compare_cells sfwan13-fullvae sfwan13
     ;;
   b200)
     # Warm B200 parity: H3 / FastH3 / LTX only. Official VAE stays the

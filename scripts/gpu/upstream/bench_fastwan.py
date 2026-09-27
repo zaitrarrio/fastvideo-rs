@@ -63,19 +63,25 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--model", required=True, help="local Diffusers directory")
     ap.add_argument("--out", required=True, help="cell directory")
-    ap.add_argument("--prompts", required=True, help="prompt-set JSON (scripts/gpu/prompts-eval.json)")
+    ap.add_argument("--prompts", help="prompt-set JSON (scripts/gpu/prompts-eval.json)")
+    ap.add_argument("--prompt", help="one prompt instead of a set (with --seed)")
+    ap.add_argument("--seed", type=int, default=1024)
+    ap.add_argument("--hf-name", default=HF_NAME,
+                    help="the checkpoint's Hub short name (FastVideo resolves its config by it)")
     ap.add_argument("--repeats", type=int, default=3)
     ap.add_argument("--warmup-seed", type=int, default=999)
     ap.add_argument("--height", type=int, default=480)
     ap.add_argument("--width", type=int, default=832)
     ap.add_argument("--num-frames", type=int, default=81)
+    ap.add_argument("--steps", type=int, default=None, help="num_inference_steps (default: the checkpoint's)")
+    ap.add_argument("--guidance-scale", type=float, default=None)
     ap.add_argument("--vsa-sparsity", type=float, default=0.8)
     ap.add_argument("--attention", default="VIDEO_SPARSE_ATTN")
     ap.add_argument("--text-encoder-cpu-offload", action="store_true")
     a = ap.parse_args()
     out = Path(a.out)
     out.mkdir(parents=True, exist_ok=True)
-    res: dict = {"impl": "fastvideo", "model": HF_NAME, "args": vars(a), "runs": [], "ok": False}
+    res: dict = {"impl": "fastvideo", "model": a.hf_name, "args": vars(a), "runs": [], "ok": False}
     t_proc = time.perf_counter()
     try:
         os.environ["FASTVIDEO_ATTENTION_BACKEND"] = a.attention
@@ -86,20 +92,23 @@ def main() -> int:
         # A view of the volume's tree under the Hub name: every component
         # symlinked, plus scheduler/ (a 1 KB config our volume copy lacks and
         # FastVideo's loader requires; the DMD sampler does not use it).
-        view = out / "model" / HF_NAME
+        view = out / "model" / a.hf_name
         view.mkdir(parents=True, exist_ok=True)
         src = Path(a.model).resolve()
         for entry in src.iterdir():
             dst = view / entry.name
             if not dst.exists():
                 dst.symlink_to(entry)
-        if not (view / "scheduler").exists():
+        if not (view / "scheduler").exists() and a.hf_name == HF_NAME:
             (view / "scheduler").mkdir()
             (view / "scheduler" / "scheduler_config.json").write_text(json.dumps(SCHEDULER, indent=2))
             res["scheduler_config"] = "written (Hub FastVideo/FastWan2.1-T2V-1.3B-Diffusers scheduler/)"
         model = str(view)
-        spec = json.loads(Path(a.prompts).read_text())
-        prompts = spec["prompts"] if isinstance(spec, dict) else spec
+        if a.prompts:
+            spec = json.loads(Path(a.prompts).read_text())
+            prompts = spec["prompts"] if isinstance(spec, dict) else spec
+        else:
+            prompts = [{"name": "default", "prompt": a.prompt or "a cat walking on the grass", "seed": a.seed}]
         from fastvideo import VideoGenerator
         from fastvideo.api.sampling_param import SamplingParam
 
@@ -112,7 +121,7 @@ def main() -> int:
             pin_cpu_memory=True,
             dit_cpu_offload=False,
             vae_cpu_offload=False,
-            VSA_sparsity=a.vsa_sparsity,
+            **({"VSA_sparsity": a.vsa_sparsity} if a.attention == "VIDEO_SPARSE_ATTN" else {}),
         )
         res["load_s"] = time.perf_counter() - t0
         try:
@@ -122,6 +131,10 @@ def main() -> int:
                 sp.height = a.height
                 sp.width = a.width
                 sp.seed = seed
+                if a.steps is not None:
+                    sp.num_inference_steps = a.steps
+                if a.guidance_scale is not None:
+                    sp.guidance_scale = a.guidance_scale
                 t = time.perf_counter()
                 r = gen.generate_video(prompt, sampling_param=sp, output_path=str(path), save_video=True)
                 wall = time.perf_counter() - t
