@@ -15,6 +15,7 @@ about each.
 | 2026-09-24 | [decoder-gap.md](2026-09-24-decoder-gap.md) | Official video VAEs vs tiny decoders vs published E2E | Official H3 decode (23-29 s) alone exceeds the published 16.2 s clip; TAEH3 closes it |
 | 2026-09-25 | [sol-engine-docs-level.md](2026-09-25-sol-engine-docs-level.md) | fastvideo-rs vs the published NVlabs Sol-Engine docs (pipelines, techniques, workflow) | Contracts ported, 0/6 pipelines GPU-measured with the optimized line on, 0/3 quality gates |
 | 2026-09-25 | [sol-engine-code-level.md](2026-09-25-sol-engine-code-level.md) | fastvideo-rs source vs NVlabs/Sana `sol-engine` source (HEAD 6c2f582) | Controllers match line for line; six verified defects in clocks, CFG batching, sink layout; Sol kernel 10x structural |
+| 2026-09-27 | [volume-sync.md](2026-09-27-volume-sync.md) | EU `fv-weights-h3-ltx-hy` vs US `fv-weights-b200-us` weight volumes (survey only) | Manifest union 933.5 GB fits 1000 GB only if EU drops 233.7 GB of non-weight/unlisted/partial data; EU needs 149.9 GB, US 223.1 GB |
 
 Related reports that are measurements rather than gap analyses live in the
 decision log and `docs/MILESTONES.md`: the H3 encoder matrix report
