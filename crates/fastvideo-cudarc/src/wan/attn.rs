@@ -160,7 +160,8 @@ pub fn flash_kernel_choice() -> FlashKernel {
 
 /// [`flash_kernel_choice`] for a `bh` x `sq` grid on `sms` SMs.
 pub fn flash_kernel_for(sq: usize, bh: usize, sms: usize) -> FlashKernel {
-    match super::envflag::string_flag("FASTVIDEO_FLASH_KERNEL", "auto").as_str() {
+    // The kernel seam (`[kernels] dense_attention`, else `FASTVIDEO_FLASH_KERNEL`).
+    match fastvideo_models::techniques::kernels::choice(fastvideo_models::techniques::kernels::KernelOp::DenseAttention).as_str() {
         "v1" => FlashKernel::V1,
         "v2" => FlashKernel::V2,
         "cudnn" => FlashKernel::Cudnn,

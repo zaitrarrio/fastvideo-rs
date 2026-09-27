@@ -554,7 +554,7 @@ impl H3Vsa {
         let gate_slice = gate.as_ref().map(slice).transpose()?;
         let sm = device::global_device().map_or(0, |d| d.sm_major);
         let forced_gather =
-            crate::wan::envflag::string_flag("FASTVIDEO_VSA_KERNEL", "auto") == "gather";
+            fastvideo_models::techniques::kernels::choice(fastvideo_models::techniques::kernels::KernelOp::VsaAttention) == "gather";
         if sm >= 8 && dim == 128 && !forced_gather {
             let prefix = self.plan.prefix_tiles;
             let (q_base, q_tiles) = if topk < n && prefix > 0 && prefix < n {

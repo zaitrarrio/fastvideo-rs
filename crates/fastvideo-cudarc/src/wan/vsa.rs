@@ -291,8 +291,8 @@ pub enum FineKernel {
 /// point at a verified kernel, which is why the flip is its own commit.
 #[cfg(feature = "cuda")]
 fn fine_kernel(dim: usize, tile_elems: usize) -> FineKernel {
-    use super::envflag::{bool_flag, string_flag};
-    let pick = string_flag("FASTVIDEO_VSA_KERNEL", "auto");
+    use super::envflag::bool_flag;
+    let pick = fastvideo_models::techniques::kernels::choice(fastvideo_models::techniques::kernels::KernelOp::VsaAttention);
     let sm = super::device::global_device()
         .map(|d| d.sm_major)
         .unwrap_or(0);

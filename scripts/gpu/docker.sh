@@ -40,7 +40,7 @@ require_docker() {
 # plus the vendored cutile-rs commit that compiles the embedded oxide cubins.
 fv_build_id() {
   (cd "$FV_ROOT" && {
-    git ls-files -z -co --exclude-standard -- crates Cargo.toml Cargo.lock rust-toolchain.toml docker/gpucheck.Dockerfile docker/vast-pytorch.Dockerfile scripts/gpu/cuda-13.pins \
+    git ls-files -z -co --exclude-standard -- crates profiles Cargo.toml Cargo.lock rust-toolchain.toml docker/gpucheck.Dockerfile docker/vast-pytorch.Dockerfile scripts/gpu/cuda-13.pins \
       | LC_ALL=C sort -z | xargs -0 shasum -a 256
     git ls-tree HEAD third_party/cutile-rs
   } | shasum -a 256 | cut -c1-16)

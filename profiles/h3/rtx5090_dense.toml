@@ -1,0 +1,22 @@
+# sol-engine config/minimax_h3/rtx5090_dense.toml: released BF16 MiniMax-H3
+# on one card, dense attention, no cache (H3_RTX5090_PROFILE=dense).
+# Workload (1344x768, 5 s, seed 0, 50 sigma points = 49 forwards) is set on
+# the command line; this file carries the techniques only.
+
+[id]
+name = "h3_rtx5090_dense"
+family = "minimax_h3"
+description = "MiniMax-H3 sol-h3-rtx cell with dense attention: the control arm."
+upstream = "sol-engine config/minimax_h3/rtx5090_dense.toml"
+
+[pipeline]
+model = "h3"
+recipe = "sol-h3-rtx"
+
+# The recipe's default is the Sol RTX route; the control arm turns it off
+# (FASTVIDEO_H3_SOL_ATTN=off in the rtx5090 matrix family).
+[techniques.dense_attention]
+
+# official_config.transformer_dtype = "bf16". Our default on sm_100+ is the
+# Sol-H3 MXFP8 recipe; FASTVIDEO_H3_QUANT=mxfp8 still overrides this.
+[techniques.bf16_linears]

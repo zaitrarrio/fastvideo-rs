@@ -1,0 +1,18 @@
+# FastH3 8-step (FastVideo/FastH3 V2): VSA-H3 at the recipe's 0.8 sparsity,
+# Sol-H3 MXFP8 linears on blocks 2..=46, bf16 activations. The same run as
+# `--h3-recipe 8step` with no flags on an sm_100+ card.
+
+[id]
+name = "fasth3_8step"
+family = "minimax_h3"
+description = "FastH3 8-step DMD, VSA, MXFP8."
+
+[pipeline]
+model = "h3"
+recipe = "8step"
+
+[techniques.vsa]          # sparsity / group: the recipe's (0.8, 8)
+
+[techniques.mxfp8]        # FASTVIDEO_H3_QUANT=mxfp8
+
+[techniques.bf16_activations]   # FASTVIDEO_BF16_ACT=1

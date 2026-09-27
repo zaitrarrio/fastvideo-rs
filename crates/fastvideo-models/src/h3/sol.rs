@@ -28,6 +28,8 @@
 
 use super::config::{TAG_AUDIO, TAG_TEXT, TAG_VIDEO};
 use super::packing::H3PackedLayout;
+use crate::techniques::methods::{SinkMode, SolAttn};
+use crate::techniques::schedule::Route;
 
 /// Body layers in MiniMax-H3.
 pub const LAYERS_PER_FORWARD: usize = 50;
@@ -267,20 +269,46 @@ pub fn sink_spec(
     policy: H3SolAttnPolicy,
     layout: &H3PackedLayout,
 ) -> Result<H3SolSinkSpec, String> {
+    sink_spec_for(policy_sink(policy), layout)
+}
+
+/// The sink mode each named policy uses.
+pub fn policy_sink(policy: H3SolAttnPolicy) -> SinkMode {
     match policy {
-        H3SolAttnPolicy::Off => Ok(H3SolSinkSpec {
+        H3SolAttnPolicy::Off => SinkMode::None,
+        H3SolAttnPolicy::Engine => SinkMode::Prefix,
+        H3SolAttnPolicy::Rtx => SinkMode::Text,
+        H3SolAttnPolicy::Spark => SinkMode::Suffix,
+    }
+}
+
+/// The named policy whose sink is `mode` (for the log line and the Ref2VA /
+/// Spark checks).
+pub fn sink_policy(mode: SinkMode) -> H3SolAttnPolicy {
+    match mode {
+        SinkMode::None => H3SolAttnPolicy::Off,
+        SinkMode::Prefix => H3SolAttnPolicy::Engine,
+        SinkMode::Text => H3SolAttnPolicy::Rtx,
+        SinkMode::Suffix => H3SolAttnPolicy::Spark,
+    }
+}
+
+/// The sink (and permutation) a sink mode uses on `layout`.
+pub fn sink_spec_for(mode: SinkMode, layout: &H3PackedLayout) -> Result<H3SolSinkSpec, String> {
+    match mode {
+        SinkMode::None => Ok(H3SolSinkSpec {
             sink: None,
             plan: None,
         }),
-        H3SolAttnPolicy::Engine => Ok(H3SolSinkSpec {
+        SinkMode::Prefix => Ok(H3SolSinkSpec {
             sink: prefix_sink(layout),
             plan: None,
         }),
-        H3SolAttnPolicy::Rtx => Ok(H3SolSinkSpec {
+        SinkMode::Text => Ok(H3SolSinkSpec {
             sink: text_sink(layout),
             plan: None,
         }),
-        H3SolAttnPolicy::Spark => {
+        SinkMode::Suffix => {
             let plan = sink_plan(layout)?;
             Ok(H3SolSinkSpec {
                 sink: Some((plan.sink_start, plan.sink_tokens)),
@@ -288,6 +316,27 @@ pub fn sink_spec(
             })
         }
     }
+}
+
+/// The technique-layer form of a named policy: the same route as
+/// [`policy_route`] written in the `(step, layer)` schedule DSL.
+pub fn policy_technique(policy: H3SolAttnPolicy) -> Option<SolAttn> {
+    match policy {
+        H3SolAttnPolicy::Off => None,
+        H3SolAttnPolicy::Engine => Some(SolAttn::engine()),
+        H3SolAttnPolicy::Spark => Some(SolAttn::spark()),
+        H3SolAttnPolicy::Rtx => Some(SolAttn::rtx()),
+    }
+}
+
+/// Route of one H3 attention call under a Sol technique: `step` is the
+/// 0-based transformer forward of the request, `layer` the block.
+pub fn technique_route(sol: &SolAttn, step: usize, layer: usize) -> Result<H3SolRoute, String> {
+    check_layer(layer)?;
+    Ok(match sol.route.at(step, layer) {
+        Route::Dense => H3SolRoute::Dense,
+        Route::Sparse { tau } => H3SolRoute::Sol { tau },
+    })
 }
 
 /// One-line description of `spec` for the pipeline log.

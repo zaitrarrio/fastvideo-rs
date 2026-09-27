@@ -1507,32 +1507,56 @@ fn gen(
             }),
         );
     }
+    // The technique set the pipeline will resolve (recipe + profile + env).
+    let techniques = {
+        use fastvideo_models::h3::techniques::H3Techniques;
+        let active = fastvideo_models::techniques::settings::active();
+        let recipe = options
+            .recipe
+            .clone()
+            .or_else(|| active.profile.as_ref().and_then(|p| p.recipe.clone()));
+        let contract =
+            fastvideo_cudarc::h3::pipeline::resolve_contract(weights, recipe.as_deref())?;
+        H3Techniques::from_process(recipe.as_deref(), &contract, options.ref2va)
+            .map(|t| (t, contract))
+            .map_err(|e| anyhow::anyhow!(e))?
+    };
     let attention = {
         use fastvideo_models::h3::lora::{
             is_sol_h3_recipe, is_sol_h3_rtx_recipe, is_sol_h3_spark_recipe,
         };
-        use fastvideo_models::h3::sol::{recipe_sol_attn_policy, H3SolAttnPolicy};
-        let recipe = options.recipe.as_deref();
+        use fastvideo_models::h3::sol::H3SolAttnPolicy;
+        let (t, _) = &techniques;
+        let recipe = t.recipe.as_deref();
         let dense_recipe = recipe.is_some_and(|r| {
             (is_sol_h3_recipe(r) && !is_sol_h3_spark_recipe(r)) || is_sol_h3_rtx_recipe(r)
         });
-        match recipe_sol_attn_policy(
-            recipe,
-            std::env::var("FASTVIDEO_H3_SOL_ATTN").ok().as_deref(),
-            options.ref2va,
-        )
-        .map_err(|e| anyhow::anyhow!(e))?
-        {
-            H3SolAttnPolicy::Off if options.dense || dense_recipe => "dense, no gate".to_string(),
-            H3SolAttnPolicy::Off => "vsa-h3 + to_gate_compress".to_string(),
-            policy => format!("sol-attn {policy:?}"),
+        match (t.sol_policy, t.sol()) {
+            (H3SolAttnPolicy::Off, _) if options.dense || dense_recipe || t.forces_dense() => {
+                "dense, no gate".to_string()
+            }
+            (H3SolAttnPolicy::Off, _) => "vsa-h3 + to_gate_compress".to_string(),
+            (policy, Some(sol)) if sol.preset.is_some() => format!("sol-attn {policy:?}"),
+            (_, Some(sol)) => format!("sol-attn ({})", sol.route.describe()),
+            (policy, None) => format!("sol-attn {policy:?}"),
         }
+    };
+    let techniques_json = {
+        let (t, _) = &techniques;
+        let active = fastvideo_models::techniques::settings::active();
+        json!({
+            "profile": active.path.as_ref().map(|p| p.display().to_string()),
+            "plan": t.plan.techniques.iter().map(|x| x.describe()).collect::<Vec<_>>(),
+            "sources": t.sources.iter().map(|(s, f)| json!({"seam": s, "from": f})).collect::<Vec<_>>(),
+            "settings": active.settings.iter().map(|(k, v, s)| json!({"name": k, "value": v, "source": s, "env_overrides": std::env::var_os(k).is_some()})).collect::<Vec<_>>(),
+        })
     };
     report.set(
         "request",
         json!({
             "prompt": prompt, "seconds": seconds, "seed": seed, "warm": warm,
             "attention": attention,
+            "techniques": techniques_json,
             "height": request.height, "width": request.width, "num_frames": request.num_frames,
             "text_cache": options.text_cache, "text_weights": options.text_root,
             "video_vae": if options.taeh3.is_some() { "taeh3" } else { "official" },

@@ -63,8 +63,7 @@ pub fn bf16_activations() -> bool {
         return v;
     }
     let env = BF16_ACT_ENV.get_or_init(|| {
-        std::env::var("FASTVIDEO_BF16_ACT")
-            .ok()
+        fastvideo_models::techniques::settings::var("FASTVIDEO_BF16_ACT")
             .map(|_| super::envflag::bool_flag("FASTVIDEO_BF16_ACT", true))
     });
     match env {

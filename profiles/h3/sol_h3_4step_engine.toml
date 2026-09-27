@@ -1,0 +1,26 @@
+# Sol-H3 4-step with the Sol-H3 engine's multi-GPU sparse policy on one GPU
+# (the opt-in `FASTVIDEO_H3_SOL_ATTN=engine`): forward 0 dense, blocks 0-1
+# dense, tau 1.0 elsewhere, and a prefix sink over every row before the
+# target video (h3_runtime/sparse_attention.py `install`, `sink_mode="prefix"`).
+# T2V / I2V only.
+
+[id]
+name = "sol_h3_4step_engine"
+family = "minimax_h3"
+description = "Sol-H3 4-step with the engine's Sol-Attn policy."
+upstream = "sol-engine models/minimax_h3/Sol-H3 (engine.py sparse_attention.install)"
+
+[pipeline]
+model = "h3"
+recipe = "sol-h3"
+
+[techniques.sol_attn]
+preset = "engine"
+tau = 1.0
+dense_steps = 1
+dense_layers = 2
+sink = "prefix"
+
+[techniques.mxfp8]
+
+[techniques.bf16_activations]

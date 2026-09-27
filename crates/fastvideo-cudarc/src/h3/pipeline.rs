@@ -59,6 +59,7 @@ use fastvideo_models::h3::reference::{
 };
 use fastvideo_models::h3::schedule::{H3JointSchedule, H3Schedule};
 use fastvideo_models::h3::sol::H3SolAttnPolicy;
+use fastvideo_models::h3::techniques::{H3Attention, H3Techniques};
 use rand::{Rng, SeedableRng};
 use rand_distr::StandardNormal;
 
@@ -530,18 +531,6 @@ enum VideoDecoder {
     Taeh3(TaeHv),
 }
 
-/// VSA gate tensors load only when the contract is sparse (Spark) or an MLX
-/// snapshot actually ships them. Dense Sol-H3 / MiniMax-H3 stay ungated.
-/// The Sol-Attn route for `recipe` with the `FASTVIDEO_H3_SOL_ATTN` override.
-fn sol_attn_policy(recipe: Option<&str>, ref2va: bool) -> Result<H3SolAttnPolicy> {
-    fastvideo_models::h3::sol::recipe_sol_attn_policy(
-        recipe,
-        std::env::var("FASTVIDEO_H3_SOL_ATTN").ok().as_deref(),
-        ref2va,
-    )
-    .map_err(msg)
-}
-
 /// VSA runs only with Sol off, a non-dense run, no interleaved condition
 /// audio, and a VSA recipe. A zero-sparsity recipe never builds VSA (its DiT
 /// is loaded without `to_gate_compress`).
@@ -554,6 +543,8 @@ fn uses_vsa(
     sol == H3SolAttnPolicy::Off && !dense && !force_dense && contract.vsa_sparsity > 0.0
 }
 
+/// VSA gate tensors load only when the contract is sparse (Spark) or an MLX
+/// snapshot actually ships them. Dense Sol-H3 / MiniMax-H3 stay ungated.
 fn dit_loads_vsa_gate(contract: &H3InferenceContract, mlx_vsa_capable: Option<bool>) -> bool {
     contract.vsa_sparsity > 0.0 && mlx_vsa_capable.unwrap_or(true)
 }
@@ -562,7 +553,9 @@ fn resolve_taeh3(explicit: Option<&Path>) -> Option<PathBuf> {
     if let Some(p) = explicit {
         return Some(p.to_path_buf());
     }
-    let env = std::env::var("FASTVIDEO_TAEH3_WEIGHTS").unwrap_or_default();
+    // `FASTVIDEO_TAEH3_WEIGHTS`, or a profile's `[techniques.taeh3] weights`.
+    let env = fastvideo_models::techniques::settings::var("FASTVIDEO_TAEH3_WEIGHTS")
+        .unwrap_or_default();
     if env.is_empty() {
         None
     } else {
@@ -576,6 +569,8 @@ pub struct H3Pipeline {
     options: H3PipelineOptions,
     cfg: H3TransformerConfig,
     contract: H3InferenceContract,
+    /// The technique set this pipeline runs (recipe + profile + env flags).
+    techniques: H3Techniques,
     schedule: H3JointSchedule,
     refiner: H3TextRefiner,
     model: H3Transformer,
@@ -616,6 +611,18 @@ impl H3Pipeline {
     pub fn load(root: &Path, options: H3PipelineOptions) -> Result<Self> {
         crate::wan::tensor::default_bf16_activations();
         let mut options = options;
+        // A technique profile names its recipe; the caller's wins.
+        let active = fastvideo_models::techniques::settings::active();
+        if let Some(profile) = active.profile.as_ref() {
+            match (&options.recipe, &profile.recipe) {
+                (None, Some(r)) => options.recipe = Some(r.clone()),
+                (Some(a), Some(b)) if a != b => crate::wan::log::info(format_args!(
+                    "h3 techniques: recipe {a} (command line) overrides profile {}'s {b}",
+                    profile.name
+                )),
+                _ => {}
+            }
+        }
         if options.recipe.as_deref().is_some_and(sol_h3_forces_ref2va) {
             options.ref2va = true;
         }
@@ -630,6 +637,33 @@ impl H3Pipeline {
         if contract.dense {
             options.dense = true;
         }
+        let techniques =
+            H3Techniques::from_process(options.recipe.as_deref(), &contract, options.ref2va)
+                .map_err(msg)?;
+        if techniques.forces_dense() {
+            options.dense = true;
+        }
+        if techniques.taeh3.is_some() && resolve_taeh3(options.taeh3.as_deref()).is_none() {
+            return Err(msg(
+                "techniques.taeh3: no TAEH3 weights (pass --taeh3-weights, set FASTVIDEO_TAEH3_WEIGHTS, or give techniques.taeh3.weights)",
+            ));
+        }
+        if let Some(path) = active.path.as_ref() {
+            crate::wan::log::info(format_args!(
+                "h3 technique profile: {}",
+                path.display()
+            ));
+            for note in active.profile.iter().flat_map(|p| p.notes.iter()) {
+                crate::wan::log::info(format_args!("h3 technique profile note: {note}"));
+            }
+            for (k, v, source) in active.settings.iter() {
+                crate::wan::log::info(format_args!(
+                    "h3 technique setting {k}={v} ({source}{})",
+                    if std::env::var_os(k).is_some() { "; overridden by env" } else { "" }
+                ));
+            }
+        }
+        crate::wan::log::info(format_args!("{}", techniques.describe()));
         let mut load_timings = H3LoadTimings::default();
         let timed = |slot: &mut f64, timer: Instant| *slot = timer.elapsed().as_secs_f64();
 
@@ -716,7 +750,18 @@ impl H3Pipeline {
             contract.vsa_sparsity,
             options.dense
         ));
-        match sol_attn_policy(options.recipe.as_deref(), options.ref2va)? {
+        let preset = techniques
+            .sol()
+            .and_then(|s| s.preset.as_deref())
+            .and_then(fastvideo_models::techniques::methods::SolAttn::preset);
+        let named = techniques.sol().is_some_and(|s| preset.as_ref() == Some(s));
+        match techniques.sol_policy {
+            _ if techniques.sol().is_some() && !named => {
+                crate::wan::log::info(format_args!(
+                    "h3 sol-attn: {}",
+                    techniques.sol().map(|s| s.route.describe()).unwrap_or_default()
+                ));
+            }
             H3SolAttnPolicy::Engine => {
                 crate::wan::log::info(format_args!(
                     "h3 sol-attn: sol-h3 engine policy (opt-in): forward 0 dense, blocks 0-1 dense, blocks 2-49 sol-attn tau 1.0 (thresh_type=diag), prefix sink"
@@ -734,9 +779,6 @@ impl H3Pipeline {
             }
             H3SolAttnPolicy::Off => {}
         }
-        let teacache = fastvideo_models::h3::sol::teacache_requested(
-            std::env::var("FASTVIDEO_H3_SOL_CACHE").ok().as_deref(),
-        );
         let preview = options
             .recipe
             .as_deref()
@@ -872,8 +914,21 @@ impl H3Pipeline {
             },
             |_| None,
         )?;
-        if teacache {
-            model.enable_sol_teacache(schedule.num_steps())?;
+        // The step-output seam: TeaCache over the recipe's forwards unless
+        // the technique names its own count.
+        if let Some(state) = techniques.teacache_state(schedule.num_steps()).map_err(msg)? {
+            if techniques.teacache_is_official() {
+                crate::wan::log::info(format_args!(
+                    "{}",
+                    fastvideo_models::h3::sol::TEACACHE_APPLIED
+                ));
+            } else {
+                crate::wan::log::info(format_args!(
+                    "h3 teacache: threshold {} retain {} cooldown {} coefficients {:?}",
+                    state.threshold, state.retain_steps, state.cooldown_steps, state.coefficients
+                ));
+            }
+            model.enable_teacache(state)?;
         }
         if let Some(fuse) = lora.as_ref() {
             fuse.finish()?;
@@ -905,6 +960,7 @@ impl H3Pipeline {
             options,
             cfg,
             contract,
+            techniques,
             schedule,
             refiner,
             model,
@@ -970,6 +1026,11 @@ impl H3Pipeline {
             (err / bb.max(1e-300)).sqrt(),
             ab / (aa * bb).sqrt().max(1e-300),
         )))
+    }
+
+    /// The resolved technique set (recipe + profile + env flags).
+    pub fn techniques(&self) -> &H3Techniques {
+        &self.techniques
     }
 
     pub fn options(&self) -> &H3PipelineOptions {
@@ -1191,7 +1252,7 @@ impl H3Pipeline {
         let sequence_length = layout.sequence_length();
         // Interleaved Ref2VA condition audio breaks VSA's contiguous-prefix tiles.
         let force_dense = layout.num_condition_audio_rows > 0;
-        let sol_kind = sol_attn_policy(self.options.recipe.as_deref(), self.options.ref2va)?;
+        let sol_kind = self.techniques.sol_policy;
         let vsa = if !uses_vsa(sol_kind, self.options.dense, force_dense, &self.contract) {
             if force_dense && !self.options.dense && sol_kind == H3SolAttnPolicy::Off {
                 crate::wan::log::info(format_args!(
@@ -1200,21 +1261,14 @@ impl H3Pipeline {
             }
             None
         } else {
-            // FASTVIDEO_VSA_SPARSITY overrides the recipe's (the oracle's
-            // control: 0 keeps every tile, removing the top-k selection while
-            // keeping the gated compression branch, as FastVideo's
-            // `--vsa-sparsity 0`).
-            let sparsity = match std::env::var("FASTVIDEO_VSA_SPARSITY") {
-                Ok(v) if !v.is_empty() => v
-                    .parse::<f64>()
-                    .ok()
-                    .filter(|s| (0.0..1.0).contains(s))
-                    .ok_or_else(|| msg(format!("FASTVIDEO_VSA_SPARSITY={v}: need [0, 1)")))?,
-                _ => self.contract.vsa_sparsity,
-            };
+            // FASTVIDEO_VSA_SPARSITY overrides the profile's, which overrides
+            // the recipe's (the oracle's control: 0 keeps every tile,
+            // removing the top-k selection while keeping the gated
+            // compression branch, as FastVideo's `--vsa-sparsity 0`).
+            let sparsity = self.techniques.vsa_sparsity(&self.contract).map_err(msg)?;
             let vsa_cfg = super::vsa::H3VsaConfig {
                 sparsity,
-                group: crate::wan::envflag::usize_flag("FASTVIDEO_VSA_GROUP", 8).max(1),
+                group: self.techniques.vsa_group,
                 tile_size: self.contract.vsa_tile_size,
             };
             Some(H3Vsa::new(
@@ -1225,10 +1279,11 @@ impl H3Pipeline {
             )?)
         };
         let layout = DeviceLayout::new(cfg, layout)?;
-        let sol_policy = match sol_kind {
-            H3SolAttnPolicy::Off => None,
-            kind => {
-                let policy = H3SolPolicy::from_layout(kind, &layout)?;
+        let sol_policy = match &self.techniques.attention {
+            H3Attention::Auto | H3Attention::Dense => None,
+            H3Attention::Sol(technique) => {
+                let kind = sol_kind;
+                let policy = H3SolPolicy::from_technique(technique, &layout)?;
                 crate::wan::log::info(format_args!(
                     "{}",
                     fastvideo_models::h3::sol::describe_sink(

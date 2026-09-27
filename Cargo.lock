@@ -571,9 +571,11 @@ dependencies = [
  "rand",
  "rand_distr",
  "rayon",
+ "serde",
  "serde_json",
  "thiserror",
  "tokenizers",
+ "toml",
 ]
 
 [[package]]

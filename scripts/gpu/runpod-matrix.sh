@@ -17,7 +17,7 @@
 #   gate_cells: fv-gpucheck gate with scripts/gpu/gate-policy.toml
 #     (FV_GATE_POLICY overrides) into $RUNS/gate/.
 set -euo pipefail
-FAMILY="${1:?usage: runpod-matrix.sh h3|ltx|hunyuan|wan|b200|rtx6000|rtx5090|fastvideo|precision|precision-debug|trace|fuse|oracle|ltxvae|writer|eval|ltxoffload}"
+FAMILY="${1:?usage: runpod-matrix.sh h3|ltx|hunyuan|wan|b200|rtx6000|rtx5090|fastvideo|precision|precision-debug|trace|fuse|oracle|ltxvae|writer|eval|ltxoffload|techniques}"
 WORK="${FV_WORK:-/workspace}"
 BIN="${FV_GPUCHECK:-/opt/fastvideo-rs/target/release/fv-gpucheck}"
 W="$WORK/weights"
@@ -1105,6 +1105,101 @@ case "$FAMILY" in
     gate_cells ltx25-512p-f32act ltx25-512p-bf16act lossy
     for f in "$RUNS"/gate/gate-*.json; do
       [[ -f "$f" ]] && log "$(basename "$f"): $(grep -o '"verdict": "[a-z]*"' "$f" | head -1)"
+    done
+    ;;
+  techniques)
+    # The technique composition layer (docs/techniques.md) against the build
+    # before it. Each cell runs three times on this card:
+    #   <cell>-base: the baseline binary (FV_BASELINE_SHA's runtime image,
+    #                scripts/gpu/fetch-baseline.sh) with the legacy flags;
+    #   <cell>-env:  this build, the same command line;
+    #   <cell>-prof: this build, the matching --techniques profile (H3 only).
+    # compare-clips --off-identity: base vs env and base vs prof must be
+    # byte-identical; benchmark.json carries the timings of each arm.
+    # FV_TECH_CELLS narrows the cells (default: all four).
+    base_sha="${FV_BASELINE_SHA:?techniques family needs FV_BASELINE_SHA (the pre-refactor commit)}"
+    BASE="$SCRATCH/baseline-$base_sha/fv-gpucheck"
+    if ! bash "$(dirname "${BASH_SOURCE[0]}")/fetch-baseline.sh" "$base_sha" "$(dirname "$BASE")" >>"$RUNS/baseline-fetch.log" 2>&1; then
+      log "FATAL: baseline binary sha-$base_sha unavailable (baseline-fetch.log)"
+      tee -a "$LOG" <"$RUNS/baseline-fetch.log"
+      exit 2
+    fi
+    log "baseline $(tail -1 "$RUNS/baseline-fetch.log")"
+    h3_common=(
+      --prompt "$PROMPT"
+      --seconds 5
+      --seed "$SEED"
+      --text-encoder auto
+      --text-cache "$SCRATCH/h3-text-cache"
+      --text-weights "$W/h3-base"
+      --warm
+    )
+    tech_cells="${FV_TECH_CELLS:-fasth3-8step-768p fasth3-4step-vsa-768p h3-480p-fullopt ltx25-512p-sol}"
+    want() { [[ " $tech_cells " == *" $1 "* ]]; }
+    # tech_h3 <cell> <weight cell> <weights dir> <profile> <env for base/env arms> -- <recipe args>
+    tech_h3() {
+      local cell="$1" wcell="$2" weights="$3" profile="$4" envs="$5" prof_envs="$6"
+      shift 6
+      local arm bin extra
+      for arm in base env prof; do
+        bin="$BIN"; extra=("$@")
+        [[ "$arm" == base ]] && bin="$BASE"
+        # shellcheck disable=SC2206
+        local e=($envs)
+        if [[ "$arm" == prof ]]; then
+          # shellcheck disable=SC2206
+          e=($prof_envs)
+          extra=(--techniques "$profile")
+          # Keep the geometry arguments (everything after the recipe pair).
+          local a skip=0
+          for a in "$@"; do
+            if (( skip )); then skip=0; continue; fi
+            [[ "$a" == --h3-recipe ]] && { skip=1; continue; }
+            extra+=("$a")
+          done
+        fi
+        gated_cell "$cell-$arm" "$wcell" \
+          env ${e[@]+"${e[@]}"} \
+          "$bin" --mode fast h3 gen --weights "$W/$weights" "${extra[@]}" \
+            --adaln-cache "$RUNS/$cell-adaln.cache" \
+            --clip-dir "$RUNS/$cell-$arm/frames" "${h3_common[@]}"
+      done
+      compare_cells "$cell-base" "$cell-env" --off-identity
+      compare_cells "$cell-base" "$cell-prof" --off-identity
+    }
+    if want fasth3-8step-768p; then
+      tech_h3 fasth3-8step-768p fasth3-8step h3-8step h3/fasth3_8step "" "" --h3-recipe 8step
+    fi
+    if want fasth3-4step-vsa-768p; then
+      tech_h3 fasth3-4step-vsa-768p fasth3-4step-vsa h3-base h3/fasth3_4step_vsa "" "" --h3-recipe 4step-vsa
+    fi
+    if want h3-480p-fullopt; then
+      # The rtx5090 family's fullopt cell (MXFP8 by default on this card).
+      # The profile mirrors sol-engine's BF16 config, so its arm keeps the
+      # matrix cell's precision with the env override FASTVIDEO_H3_QUANT=mxfp8
+      # (env flags override a profile).
+      tech_h3 h3-480p-fullopt h3-base h3-base h3/rtx5090_fullopt \
+        "FASTVIDEO_H3_SOL_CACHE=teacache" "FASTVIDEO_H3_QUANT=mxfp8" \
+        --h3-recipe sol-h3-rtx --height 480 --width 832
+    fi
+    if want ltx25-512p-sol; then
+      for arm in base env; do
+        bin="$BIN"
+        [[ "$arm" == base ]] && bin="$BASE"
+        gated_cell "ltx25-512p-sol-$arm" ltx25-two-stage \
+          "$bin" --mode fast ltx2 gen --model-version 2.5 \
+            --weights "$W/ltx25" --dit "$W/ltx25" --height 512 --width 768 --num-frames 121 \
+            --prompt "$PROMPT" --seed "$SEED" --two-stage --text streamed --warm \
+            --clip "$RUNS/ltx25-512p-sol-$arm/frames"
+      done
+      compare_cells ltx25-512p-sol-base ltx25-512p-sol-env --off-identity
+    fi
+    for f in "$RUNS"/compare/compare-clips-*.json; do
+      [[ -f "$f" ]] && log "$(basename "$f"): $(grep -oE '"(status|off_identity|max_abs_diff_uint8)": *[^,}]*' "$f" | tr '\n' ' ')"
+    done
+    for c in "$RUNS"/*-base "$RUNS"/*-env "$RUNS"/*-prof; do
+      [[ -d "$c" ]] || continue
+      log "$(basename "$c") $(grep -ho '"denoise_s":[0-9.]*\|"total_s":[0-9.]*' "$c/stderr.log" 2>/dev/null | tail -2 | tr '\n' ' ')"
     done
     ;;
   ltxvae)

@@ -1,0 +1,57 @@
+//! The profiles under `profiles/`, compiled in: `--techniques h3/rtx5090_sol`
+//! works in the runtime image without the repo, and every shipped profile
+//! is parsed by the tests.
+
+/// `(name, TOML)`; the name is the path under `profiles/` without `.toml`.
+pub static PROFILES: &[(&str, &str)] = &[
+    (
+        "h3/rtx5090_dense",
+        include_str!("../../../../profiles/h3/rtx5090_dense.toml"),
+    ),
+    (
+        "h3/rtx5090_sol",
+        include_str!("../../../../profiles/h3/rtx5090_sol.toml"),
+    ),
+    (
+        "h3/rtx5090_fullopt",
+        include_str!("../../../../profiles/h3/rtx5090_fullopt.toml"),
+    ),
+    (
+        "h3/rtx5090_fullopt_taeh3",
+        include_str!("../../../../profiles/h3/rtx5090_fullopt_taeh3.toml"),
+    ),
+    (
+        "h3/fasth3_8step",
+        include_str!("../../../../profiles/h3/fasth3_8step.toml"),
+    ),
+    (
+        "h3/fasth3_4step_vsa",
+        include_str!("../../../../profiles/h3/fasth3_4step_vsa.toml"),
+    ),
+    (
+        "h3/fasth3_4step_dense",
+        include_str!("../../../../profiles/h3/fasth3_4step_dense.toml"),
+    ),
+    (
+        "h3/sol_h3_4step",
+        include_str!("../../../../profiles/h3/sol_h3_4step.toml"),
+    ),
+    (
+        "h3/sol_h3_4step_engine",
+        include_str!("../../../../profiles/h3/sol_h3_4step_engine.toml"),
+    ),
+];
+
+/// A builtin profile by name (`h3/rtx5090_sol`, with or without `.toml` or
+/// a leading `profiles/`).
+pub fn get(name: &str) -> Option<&'static str> {
+    let key = name
+        .trim_start_matches("./")
+        .trim_start_matches("profiles/")
+        .trim_end_matches(".toml");
+    PROFILES.iter().find(|(n, _)| *n == key).map(|(_, t)| *t)
+}
+
+pub fn names() -> Vec<&'static str> {
+    PROFILES.iter().map(|(n, _)| *n).collect()
+}

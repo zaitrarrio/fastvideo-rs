@@ -1,0 +1,32 @@
+# rtx5090_fullopt with the TAEH3 video decoder in place of the official ViT
+# VAE (sol-engine models/minimax_h3/super_acceleration stage 1 decodes with
+# TAEH3). The weights come from --taeh3-weights / FASTVIDEO_TAEH3_WEIGHTS,
+# or from `weights = "..."` below.
+
+[id]
+name = "h3_rtx5090_fullopt_taeh3"
+family = "minimax_h3"
+description = "sol-h3-rtx with Sol-Attn, TeaCache and the TAEH3 decoder."
+upstream = "sol-engine config/minimax_h3/rtx5090_fullopt.toml + super_acceleration TAEH3 decode"
+
+[pipeline]
+model = "h3"
+recipe = "sol-h3-rtx"
+
+[techniques.sol_attn]
+preset = "rtx"
+tau = 1.0
+dense_steps = 10
+dense_layers = 2
+sink = "text"
+
+[techniques.teacache]
+threshold = 0.10
+retain_steps = 5
+cooldown_steps = 1
+num_forwards = 49
+coefficients = [1.0, 0.0]
+
+[techniques.taeh3]
+
+[techniques.bf16_linears]

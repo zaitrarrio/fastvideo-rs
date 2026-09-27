@@ -1,0 +1,17 @@
+# FastH3 Preview v1 4-step dense: base MiniMax-H3 + the Preview dense LoRA,
+# dense attention (the recipe is dense), MXFP8 linears, bf16 activations.
+
+[id]
+name = "fasth3_4step_dense"
+family = "minimax_h3"
+description = "FastH3 Preview 4-step, dense attention, MXFP8."
+
+[pipeline]
+model = "h3"
+recipe = "4step-dense"
+
+[techniques.dense_attention]
+
+[techniques.mxfp8]
+
+[techniques.bf16_activations]

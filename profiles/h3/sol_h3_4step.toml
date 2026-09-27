@@ -1,0 +1,20 @@
+# sol-engine models/minimax_h3/Sol-H3: the 4-step Sol-H3 adapter on
+# MiniMax-H3, on one GPU. The Sol-H3 engine refuses sparse attention below
+# two GPU processes (engine.py), so one-GPU Sol-H3 is dense; its linears run
+# the Sol-H3 MXFP8 recipe (h3_runtime/mxfp8.py, compute_quant.py).
+
+[id]
+name = "sol_h3_4step"
+family = "minimax_h3"
+description = "Sol-H3 4-step T2V/I2V, one GPU: dense attention, MXFP8."
+upstream = "sol-engine models/minimax_h3/Sol-H3"
+
+[pipeline]
+model = "h3"
+recipe = "sol-h3"
+
+[techniques.dense_attention]
+
+[techniques.mxfp8]
+
+[techniques.bf16_activations]
