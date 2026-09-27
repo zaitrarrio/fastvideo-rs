@@ -42,6 +42,7 @@ use crate::wan::pipeline::{
 };
 use crate::wan::tensor::{CudaTensor, TensorError};
 use crate::wan::weights::WeightMap;
+pub use fastvideo_models::ltx2::memory::LtxOffload;
 
 use super::audio_vae::{conform_audio_time, pack_audio_latent, AudioDecoder, AudioEncoder};
 use super::diffusion_decoder::DiffusionDecoder;
@@ -329,6 +330,8 @@ pub struct Ltx2Output {
     pub memory: Vec<PhaseMemory>,
     /// `"resident"` or `"streamed"` DiT blocks.
     pub dit_residency: &'static str,
+    /// [`LtxOffload`] of the pipeline: `"none"` or `"cpu"`.
+    pub offload: &'static str,
 }
 
 /// One seeded Gaussian stream, standing in for one `torch.Generator`.
@@ -1888,6 +1891,12 @@ pub struct PipelineOptions {
     /// 4k5s workload). Streamed also keeps the video/audio decoders off the
     /// device except around the calls that read them (`--offload cpu`).
     pub dit_offload: Option<DitOffload>,
+    /// The reference's `--offload` placement ([`LtxOffload`]). `None`:
+    /// `FASTVIDEO_LTX_OFFLOAD`, else `none` (each model by its own policy).
+    /// `cpu` streams the DiT and Gemma and keeps every other model on the
+    /// device only around its call; it refuses an explicit resident DiT or
+    /// resident text encoder.
+    pub offload: Option<LtxOffload>,
     /// `taeltx2_3_wide.safetensors` (or its directory): decode video with the
     /// tiny autoencoder instead of the conv VAE, as sol-engine's LTX-2.5
     /// refiner does (`models/ltx2.5-refiner/GB200/refiner_head_cp.py:567-578`).
@@ -1942,6 +1951,38 @@ fn names_distilled(path: &Path) -> bool {
     named(Some(path)) || named(path.parent())
 }
 
+/// The DiT policy under `offload`: `cpu` streams the blocks, and refuses an
+/// explicit `resident` (flag or `FASTVIDEO_DIT_OFFLOAD`) rather than silently
+/// overriding it.
+fn dit_policy_for_offload(offload: LtxOffload, asked: DitOffload) -> Result<DitOffload> {
+    match (offload, asked) {
+        (LtxOffload::None, p) => Ok(p),
+        (LtxOffload::Cpu, DitOffload::Resident) => Err(err(
+            "ltx2: offload cpu streams the DiT; it conflicts with dit offload 'resident'",
+        )),
+        (LtxOffload::Cpu, _) => Ok(DitOffload::Streamed),
+    }
+}
+
+/// The text residency under `offload`: `cpu` streams Gemma (and loads the
+/// connectors per prompt), and refuses an explicit `resident`.
+fn resolve_text_for_offload(
+    offload: LtxOffload,
+    asked: TextResidency,
+    env: Option<&str>,
+) -> Result<TextResidency> {
+    if !offload.is_cpu() {
+        return Ok(asked);
+    }
+    let env_resident = env.is_some_and(|v| v.trim().eq_ignore_ascii_case("resident"));
+    if asked == TextResidency::Resident || env_resident {
+        return Err(err(
+            "ltx2: offload cpu streams the text encoder; it conflicts with text 'resident'",
+        ));
+    }
+    Ok(TextResidency::Streamed)
+}
+
 /// Whether the DiT can stay loaded while the VAE decodes. A streamed DiT
 /// holds only its block ring on the device (its host copy is what a reload
 /// would rebuild), so it always stays. A resident one stays when free device
@@ -1990,6 +2031,8 @@ pub struct Ltx2Pipeline {
     /// that read them when the DiT is streamed.
     decoders: Option<Decoders>,
     residency: Residency,
+    /// The `--offload` placement this pipeline was loaded with.
+    offload: LtxOffload,
     has_upsampler: bool,
     text: TextEncoder,
     /// Seconds [`Self::load`] took.
@@ -2012,8 +2055,23 @@ impl Ltx2Pipeline {
         } else {
             None
         };
+        let offload = LtxOffload::from_env_or(options.offload).map_err(err)?;
+        let text_residency = resolve_text_for_offload(
+            offload,
+            options.text_residency,
+            std::env::var("FASTVIDEO_LTX2_TEXT").ok().as_deref(),
+        )?;
         let residency = {
-            let policy = DitOffload::from_env_or(options.dit_offload).map_err(err)?;
+            let policy = dit_policy_for_offload(
+                offload,
+                DitOffload::from_env_or(options.dit_offload).map_err(err)?,
+            )?;
+            if offload.is_cpu() {
+                crate::wan::log::info(format_args!(
+                    "ltx2 offload cpu: DiT blocks streamed from pinned host memory ({} device slots), Gemma streamed per layer, connectors / upsampler / video VAE / audio VAE on the device only around their calls",
+                    crate::wan::offload::lookahead() + 1
+                ));
+            }
             let w = fastvideo_models::ltx2::Rtx5090Workload::DEFAULT;
             let need = fastvideo_models::ltx2::memory::plan_distilled_two_stage(
                 cfg,
@@ -2096,8 +2154,16 @@ impl Ltx2Pipeline {
             loaded_strength,
             decoders,
             residency,
+            offload,
             has_upsampler,
-            text: TextEncoder::new(paths, cfg, options),
+            text: TextEncoder::new(
+                paths,
+                cfg,
+                &PipelineOptions {
+                    text_residency,
+                    ..options.clone()
+                },
+            ),
             load_s: timer.elapsed().as_secs_f64(),
             booking,
             tae,
@@ -2795,6 +2861,7 @@ impl Ltx2Pipeline {
             timings,
             memory: memory.phases,
             dit_residency: self.residency.as_str(),
+            offload: self.offload.as_str(),
         })
     }
 
@@ -3021,6 +3088,7 @@ impl Ltx2Pipeline {
             timings,
             memory: memory.phases,
             dit_residency: self.residency.as_str(),
+            offload: self.offload.as_str(),
         })
     }
 }
@@ -3732,6 +3800,44 @@ mod tests {
         assert_eq!(calls.get(), 4);
         let _ = std::fs::remove_dir_all(&dir);
     }
+
+    #[test]
+    fn offload_cpu_streams_the_dit_and_the_text_and_refuses_resident() {
+        use super::{dit_policy_for_offload, resolve_text_for_offload};
+        let (none, cpu) = (LtxOffload::None, LtxOffload::Cpu);
+        // Off: every policy is left as asked (the default run is unchanged).
+        for p in [DitOffload::Auto, DitOffload::Resident, DitOffload::Streamed] {
+            assert_eq!(dit_policy_for_offload(none, p).unwrap(), p);
+        }
+        for t in [
+            TextResidency::Auto,
+            TextResidency::Resident,
+            TextResidency::Streamed,
+        ] {
+            assert_eq!(resolve_text_for_offload(none, t, None).unwrap(), t);
+        }
+        // cpu: streamed DiT and Gemma, whatever `auto` would have chosen.
+        assert_eq!(
+            dit_policy_for_offload(cpu, DitOffload::Auto).unwrap(),
+            DitOffload::Streamed
+        );
+        assert_eq!(
+            dit_policy_for_offload(cpu, DitOffload::Streamed).unwrap(),
+            DitOffload::Streamed
+        );
+        assert!(dit_policy_for_offload(cpu, DitOffload::Resident).is_err());
+        assert_eq!(
+            resolve_text_for_offload(cpu, TextResidency::Auto, None).unwrap(),
+            TextResidency::Streamed
+        );
+        assert_eq!(
+            resolve_text_for_offload(cpu, TextResidency::Auto, Some("auto")).unwrap(),
+            TextResidency::Streamed
+        );
+        assert!(resolve_text_for_offload(cpu, TextResidency::Resident, None).is_err());
+        assert!(resolve_text_for_offload(cpu, TextResidency::Auto, Some("resident")).is_err());
+    }
+
     #[test]
     fn auto_residency_needs_a_device_with_room_and_the_environment_overrides() {
         let gib = |n: u64| n << 30;

@@ -295,6 +295,12 @@ pub enum Stage {
         /// `--offload cpu` profile). Default: `FASTVIDEO_DIT_OFFLOAD`, else `auto`.
         #[arg(long)]
         dit_offload: Option<String>,
+        /// The reference's `--offload` placement: `none` (each model by its
+        /// own policy) or `cpu` (sol-engine's BF16 RTX 5090 profile: DiT and
+        /// Gemma streamed, connectors / upsampler / VAEs on the device only
+        /// around their calls). Default: `FASTVIDEO_LTX_OFFLOAD`, else `none`.
+        #[arg(long)]
+        offload: Option<String>,
         /// Run as if the card had only this many GiB (e.g. 32 on a 96 GB card
         /// to emulate an RTX 5090): every auto policy decides for that card,
         /// the rest is held back, and a phase peaking above it fails the run.
@@ -583,6 +589,7 @@ pub fn run(report: &mut Report, stage: &Stage) -> StageResult<()> {
             text_weights,
             text,
             dit_offload,
+            offload,
             device_budget_gib,
             two_stage,
             diff_vae,
@@ -639,6 +646,11 @@ pub fn run(report: &mut Report, stage: &Stage) -> StageResult<()> {
                     dit_offload: dit_offload
                         .as_deref()
                         .map(fastvideo_cudarc::wan::offload::DitOffload::parse)
+                        .transpose()
+                        .map_err(|e| anyhow::anyhow!(e))?,
+                    offload: offload
+                        .as_deref()
+                        .map(fastvideo_cudarc::ltx2::pipeline::LtxOffload::parse)
                         .transpose()
                         .map_err(|e| anyhow::anyhow!(e))?,
                     tae: ltx_tae_weights.clone(),
@@ -2075,7 +2087,7 @@ fn gen(
         .collect();
         report.set(
         "phase_memory",
-        json!({"load_used_gib": load_used.map(|u| gib_of(u.used)), "phases": phases, "dit_residency": out.dit_residency}),
+        json!({"load_used_gib": load_used.map(|u| gib_of(u.used)), "phases": phases, "dit_residency": out.dit_residency, "offload": out.offload}),
     );
         report.set(
             &if multi {
@@ -2242,6 +2254,7 @@ fn ltx2_benchmark(b: &Ltx2Bench<'_>) -> serde_json::Value {
         "max_device_memory_used_mib": b.peak_mib,
         "memory": {
             "dit_residency": b.out.dit_residency,
+            "offload": b.out.offload,
             "stages": b.out.memory.iter().map(|p| json!({
                 "stage": p.phase,
                 "peak_allocated_gib": gib(p.peak_used),

@@ -17,7 +17,7 @@
 #   gate_cells: fv-gpucheck gate with scripts/gpu/gate-policy.toml
 #     (FV_GATE_POLICY overrides) into $RUNS/gate/.
 set -euo pipefail
-FAMILY="${1:?usage: runpod-matrix.sh h3|ltx|hunyuan|wan|b200|rtx6000|rtx5090|fastvideo|precision|precision-debug|trace|fuse|oracle|ltxvae|writer|eval|techniques}"
+FAMILY="${1:?usage: runpod-matrix.sh h3|ltx|hunyuan|wan|b200|rtx6000|rtx5090|fastvideo|precision|precision-debug|trace|fuse|oracle|ltxvae|writer|eval|ltxoffload|techniques}"
 WORK="${FV_WORK:-/workspace}"
 BIN="${FV_GPUCHECK:-/opt/fastvideo-rs/target/release/fv-gpucheck}"
 W="$WORK/weights"
@@ -1401,6 +1401,63 @@ case "$FAMILY" in
     kill "$SAMPLER_PID" 2>/dev/null || true
     # The frames are GBs; the reports keep the numbers.
     rm -rf "$SCRATCH/writer-bench" "$RUNS"/ltxvae-4k5s-fast-mp4-*/frames
+    ;;
+  ltxoffload)
+    # FASTVIDEO_LTX_OFFLOAD=cpu (sol-engine's BF16 RTX 5090 `--offload cpu`
+    # placement) against the default run, LTX-2.5 distilled two-stage, Sol
+    # stage 2, bf16 activations (the defaults). 512p first: the default
+    # (resident), the mode explicitly off, and cpu; frame/wav hashes, the
+    # byte-identity compares and the `exact` gate. Then, only when the 512p cpu
+    # frames match the resident ones byte for byte, cpu at 4k5s (warm) and
+    # 1080p20s (one cold request, as the reference times it): the reference's
+    # 30.36 / 29.07 GiB cells. FV_OFFLOAD_BIG=0 skips those;
+    # FV_OFFLOAD_4K_RESIDENT=1 adds a resident 4k5s cell.
+    ltx_off_gen() {
+      local name="$1" mode="$2"
+      shift 2
+      local envs=(env -u FASTVIDEO_LTX_OFFLOAD)
+      [[ "$mode" != default ]] && envs=(env FASTVIDEO_LTX_OFFLOAD="$mode")
+      gated_cell "$name" ltx25-two-stage \
+        "${envs[@]}" "$BIN" --mode fast ltx2 gen --model-version 2.5 \
+          --weights "$W/ltx25" --dit "$W/ltx25" "$@" \
+          --prompt "$PROMPT" --seed "$SEED" --two-stage \
+          --clip "$RUNS/$name/frames"
+      grep -h 'ltx2 offload\|ltx2 dit offload\|ltx2 memory\|offload stage\|ltx2 text:' "$RUNS/$name/stderr.log" 2>/dev/null \
+        | sed "s/^/[$name] /" | tee -a "$LOG" >/dev/null || true
+    }
+    frames_hash() {
+      local d="$RUNS/$1/frames"
+      compgen -G "$d/*.png" >/dev/null || { echo missing; return 0; }
+      (cd "$d" && sha256sum -- *.png *.wav 2>/dev/null) | sha256sum | cut -c1-16
+    }
+    small=(--height 512 --width 768 --num-frames 121 --warm)
+    ltx_off_gen ltx25-512p-resident default "${small[@]}"
+    ltx_off_gen ltx25-512p-off none "${small[@]}"
+    ltx_off_gen ltx25-512p-cpu cpu "${small[@]}"
+    for c in ltx25-512p-resident ltx25-512p-off ltx25-512p-cpu; do
+      log "frames+wav sha256 $c $(frames_hash "$c")"
+    done
+    compare_cells ltx25-512p-resident ltx25-512p-off --off-identity
+    compare_cells ltx25-512p-resident ltx25-512p-cpu --off-identity
+    gate_cells ltx25-512p-resident ltx25-512p-cpu exact ltx25-512p-off
+    same=""
+    h="$(frames_hash ltx25-512p-cpu)"
+    [[ "$h" != missing && "$h" == "$(frames_hash ltx25-512p-resident)" ]] && same=1
+    if [[ "${FV_OFFLOAD_BIG:-1}" == 1 && ( -n "$same" || "${FV_OFFLOAD_FORCE:-0}" == 1 ) ]]; then
+      ltx_off_gen ltx25-4k5s-cpu cpu --workload 4k5s --warm
+      if [[ "${FV_OFFLOAD_4K_RESIDENT:-0}" == 1 ]]; then
+        ltx_off_gen ltx25-4k5s-resident default --workload 4k5s --warm
+        compare_cells ltx25-4k5s-resident ltx25-4k5s-cpu --off-identity
+      fi
+      ltx_off_gen ltx25-1080p20s-cpu cpu --workload 1080p20s
+      # The 4K / 20 s PNGs are GBs; the reports and hashes keep the result.
+      for c in ltx25-4k5s-cpu ltx25-4k5s-resident ltx25-1080p20s-cpu; do
+        [[ -d "$RUNS/$c/frames" ]] && log "frames+wav sha256 $c $(frames_hash "$c")"
+      done
+      rm -rf "$RUNS"/ltx25-4k5s-*/frames "$RUNS"/ltx25-1080p20s-*/frames
+    else
+      log "skip the 4k5s / 1080p20s cpu cells (512p frames identical: ${same:-no}; FV_OFFLOAD_BIG=${FV_OFFLOAD_BIG:-1})"
+    fi
     ;;
   *)
     log "FATAL: unknown family $FAMILY"

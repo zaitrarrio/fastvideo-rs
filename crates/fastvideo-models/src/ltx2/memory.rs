@@ -536,6 +536,77 @@ impl MemoryPlan {
     }
 }
 
+/// Model placement of the LTX-2 pipeline, named after `ltx_pipelines`
+/// `OffloadMode` (`utils/types.py:129-144`, the `--offload` flag of
+/// `utils/args.py:643-657`), which sol-engine's BF16 RTX 5090 profile passes as
+/// `--offload cpu` (`models/ltx25/RTX5090/run_ltx25_gpu.sh:47-50`).
+///
+/// * `None`: the default. Every model is placed by its own policy
+///   (`FASTVIDEO_DIT_OFFLOAD`, `FASTVIDEO_LTX2_TEXT`, both `auto`), which on a
+///   96 GB card keeps the DiT and the decoders resident.
+/// * `Cpu`: the reference's placement. The DiT's 48 blocks sit in pinned host
+///   memory and stream through a two-slot device ring (`StreamingModelBuilder`,
+///   `_DEFAULT_GPU_SLOTS = 2`); Gemma streams layer by layer; the connectors,
+///   the latent upsampler, the video VAE and the audio VAE + vocoder are on the
+///   device only around the call that reads them, and the allocator is trimmed
+///   after each (`blocks.py` `gpu_model` / `_streaming_model`, `TRIM`).
+///
+/// Placement only: every kernel and every weight bit is the resident run's,
+/// so the frames are byte-identical.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum LtxOffload {
+    #[default]
+    None,
+    Cpu,
+}
+
+impl LtxOffload {
+    pub const ENV: &'static str = "FASTVIDEO_LTX_OFFLOAD";
+
+    pub fn parse(name: &str) -> Result<Self, String> {
+        match name.trim().to_ascii_lowercase().as_str() {
+            "" | "none" | "off" | "0" => Ok(Self::None),
+            "cpu" | "on" | "1" => Ok(Self::Cpu),
+            "disk" => Err(
+                "offload 'disk' (ltx_pipelines OffloadMode.DISK) is not implemented; use cpu"
+                    .into(),
+            ),
+            other => Err(format!("unknown LTX offload '{other}' (none|cpu)")),
+        }
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::None => "none",
+            Self::Cpu => "cpu",
+        }
+    }
+
+    /// `explicit` (a CLI flag) wins, then [`Self::ENV`], then `None`.
+    pub fn from_env_or(explicit: Option<Self>) -> Result<Self, String> {
+        if let Some(m) = explicit {
+            return Ok(m);
+        }
+        match std::env::var(Self::ENV) {
+            Ok(v) => Self::parse(&v).map_err(|e| format!("{}: {e}", Self::ENV)),
+            Err(_) => Ok(Self::None),
+        }
+    }
+
+    pub fn is_cpu(self) -> bool {
+        self == Self::Cpu
+    }
+
+    /// The plan this placement runs ([`plan_distilled_two_stage`]); `None`
+    /// prices the resident run.
+    pub fn plan_options(self) -> PlanOptions {
+        match self {
+            Self::None => PlanOptions::default(),
+            Self::Cpu => PlanOptions::streamed(),
+        }
+    }
+}
+
 /// Inputs of [`plan_distilled_two_stage`].
 #[derive(Debug, Clone, Copy)]
 pub struct PlanOptions {
@@ -766,6 +837,41 @@ mod tests {
                 DitPlacement::STREAMED.dit_bytes(t, 2) < 3 * GIB,
                 "{:.2} GiB",
                 gib(DitPlacement::STREAMED.dit_bytes(t, 2))
+            );
+        }
+    }
+
+    #[test]
+    fn offload_modes_parse_and_pick_their_plan() {
+        assert_eq!(LtxOffload::parse("cpu").unwrap(), LtxOffload::Cpu);
+        assert_eq!(LtxOffload::parse(" CPU ").unwrap(), LtxOffload::Cpu);
+        assert_eq!(LtxOffload::parse("none").unwrap(), LtxOffload::None);
+        assert_eq!(LtxOffload::parse("").unwrap(), LtxOffload::None);
+        assert!(LtxOffload::parse("disk").is_err());
+        assert!(LtxOffload::parse("gpu").is_err());
+        assert_eq!(LtxOffload::default(), LtxOffload::None);
+        assert_eq!(
+            LtxOffload::from_env_or(Some(LtxOffload::Cpu)).unwrap(),
+            LtxOffload::Cpu
+        );
+        assert!(LtxOffload::Cpu.plan_options().dit.is_streamed());
+        assert!(!LtxOffload::None.plan_options().dit.is_streamed());
+        // Both reference workloads fit the reference's 30.4 GiB under cpu.
+        let cfg = ltx2_5_22b_distilled();
+        for w in [Rtx5090Workload::Uhd5s, Rtx5090Workload::Fhd20s] {
+            let plan = plan_distilled_two_stage(
+                &cfg,
+                w.height(),
+                w.width(),
+                w.num_frames(),
+                w.frame_rate(),
+                LtxOffload::Cpu.plan_options(),
+            );
+            assert!(
+                plan.peak() < 30 * GIB,
+                "{}: {:.2}",
+                w.name(),
+                gib(plan.peak())
             );
         }
     }

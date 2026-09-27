@@ -63,6 +63,71 @@ First validation canvas: final **768×512×121** (stage-1 **384×256**).
 
 ---
 
+## Offload placement (`FASTVIDEO_LTX_OFFLOAD=cpu`)
+
+sol-engine's BF16 RTX 5090 profile peaks at 30.36 GiB allocated / 31.40 GiB
+reserved at 4k5s and 29.07 / 30.15 GiB at 1080p20s. It gets there with the
+official pipeline's `--offload cpu` and nothing else of its own apart from
+the FFN chunking. The sources are sol-engine `6c2f582` and Lightricks/LTX-2
+`fd4ded7`. Paths below are relative to `models/ltx25/RTX5090/` and
+`packages/ltx-*/src/`.
+
+**What sol-engine places where**
+
+| model | where it lives | when it is freed |
+|---|---|---|
+| Gemma 4 text encoder | Streamed layer by layer (`StreamingModelBuilder` over `model.model.language_model.layers`, `blocks.py:696-705`, chosen by `_text_encoder_ctx`, `blocks.py:741-746`) | End of encode (`_streaming_model` teardown + dispose + `cleanup_memory`, `blocks.py:188-209`) |
+| Embeddings processor (connectors) | Whole on the device (`blocks.py:790-795`) | Right after `process_hidden_states` (`gpu_model`, `gpu_model.py:13-34`) |
+| DiT | Streamed per block. The non-block weights are on the device (`_load_non_block_weights`, `builder.py:412-439`). The 48 blocks sit in pinned host buffers, one per block (`_build_pinned_source`, `builder.py:304-364`). Two device slots are used (`_DEFAULT_GPU_SLOTS = 2`, `builder.py:52`). The copy is issued in the block's own pre-hook, with no lookahead (`wrapper.py:54-75`, `provider.py:65-84`) | Rebuilt for **each** stage call and freed at its end (`DiffusionStage.__call__` → `_streaming_transformer_ctx`, `blocks.py:489-499, 501-582`). The registry does not cache weights (`cache_weights=False`, `blocks.py:334`), so each stage re-reads the checkpoint into pinned memory. That load is inside sol's stage times |
+| Video encoder + latent upsampler | Whole on the device (`VideoUpsampler.__call__`, `blocks.py:1027-1045`) | End of the upsample |
+| Video VAE decoder | Whole on the device, with `AUTO_TILING` (conv VAE 768/64 spatial, 80/24 frames, `helpers.py:60-97`) | After the last chunk (`_cleanup_iter`, `blocks.py:238-245`, `1124-1149`) |
+| Audio VAE + vocoder | Whole on the device (`blocks.py:1180-1203`) | End of the audio decode |
+
+The allocator is trimmed after every model (`AllocatorTrimStrategy.TRIM`,
+which runs `gc` + `empty_cache`). The run sets
+`PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True` (`run_ltx25_gpu.sh:38`).
+The only memory measure of its own is FFN chunking: 16 384-row pieces when
+at least 65 536 rows (`memory.py:6-43`, installed at `gpu_infer.py:300-302`).
+So nothing but activations and one model's working set share the device.
+Stage 2 is two DiT block slots plus the 130 560-token activations.
+
+**Ours.** `FASTVIDEO_LTX_OFFLOAD=cpu` (`ltx2 gen --offload cpu`,
+`PipelineOptions::offload`) selects that placement in one switch
+(`fastvideo_models::ltx2::memory::LtxOffload`):
+
+- The DiT is `streamed` (`wan/offload.rs`). Linear weights sit in pinned host
+  memory and go through a `lookahead + 1 = 2` slot device ring. Block
+  `i + 1` is copied on a second stream while block `i` computes. The ring is
+  released at the end of each stage.
+- Gemma is streamed per layer, and the connectors are loaded for the encode
+  and then dropped (`TextResidency::Streamed`).
+- The upsampler is loaded only for its call. The video VAE (for its latent
+  statistics) and the audio VAE + vocoder are loaded for the upsample and
+  for the decode, and dropped after each. The pool is trimmed after every
+  phase.
+- FFN chunking is always on (`FeedForwardChunking::RTX5090`).
+
+It refuses an explicit `resident` DiT (`FASTVIDEO_DIT_OFFLOAD` /
+`--dit-offload`) or an explicit resident text encoder (`FASTVIDEO_LTX2_TEXT` /
+`--text`). The default (`none`) leaves every model to its own `auto` policy,
+so the resident run is unchanged.
+
+There are two deliberate differences from the reference:
+
+- The DiT's host copy is built once per process, not once per stage. Our
+  stage times do not include reading the checkpoint, and a warm request pays
+  no reload.
+- The DiT's device skeleton stays loaded through the upsample and the decode:
+  the non-block weights, the per-block modulation tables, and the biases.
+  That is about 0.7 GiB (`DitPlacement::dit_bytes` less the ring), and
+  neither phase is the peak.
+
+Placement never changes a number. The streamed block runs the same kernels
+on the same weight bits (`streamed_blocks_are_bit_identical_to_resident`),
+so frames and audio are byte-identical to the resident run.
+
+---
+
 ## DiffVAE (diffusion video decoder)
 
 Opt-in replacement for the **video** conv VAE decoder
