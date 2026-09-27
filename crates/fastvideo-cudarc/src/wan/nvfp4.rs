@@ -16,6 +16,33 @@ fn msg(s: impl Into<String>) -> TensorError {
     TensorError::Message(s.into())
 }
 
+/// Set once an LTX-2 pipeline or DiT loads in this process: `FASTVIDEO_NVFP4`
+/// then means sol-engine's scope (`nvfp4_ffn.py`: the video FFN on NVFP4
+/// tensor cores, [`ltx_video_ffn_rule`]) and the LongLive dequant-beforehand
+/// path (every eligible [`super::nn::Linear`], K/V) stays off.
+static LTX_VIDEO_FFN_SCOPE: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+/// Enter the LTX video-FFN scope for the rest of the process. Unit tests
+/// share one process across models, so there it is a no-op.
+pub fn enter_ltx_video_ffn_scope() {
+    #[cfg(not(test))]
+    LTX_VIDEO_FFN_SCOPE.store(true, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// Whether the LongLive path (dequant beforehand on every eligible linear,
+/// K/V fake-quant) may apply: not inside an LTX-2 process.
+pub fn generic_scope() -> bool {
+    !LTX_VIDEO_FFN_SCOPE.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+/// The rule for the LTX-2 video FFN's NVFP4 GEMM (`FASTVIDEO_NVFP4`, e.g. the
+/// `nvfp4` technique). `None` when the flag is off. The FourOverSix `mse`
+/// rule has no cuBLASLt form; it is refused by the loader with a message.
+pub fn ltx_video_ffn_rule() -> Option<ScaleRule> {
+    nvfp4::from_env()
+}
+
 /// A `[rows, cols]` weight stored as packed E2M1 + E4M3 block scales + per-row
 /// decode `amax / (e2m1_max * e4m3_max)`. The FP32 matrix is never the resident
 /// form.
@@ -282,6 +309,9 @@ pub fn kv_for_attention(
     k: &CudaTensor,
     v: &CudaTensor,
 ) -> Result<Option<(CudaTensor, CudaTensor)>> {
+    if !generic_scope() {
+        return Ok(None);
+    }
     let Some(rule) = nvfp4::from_env() else {
         return Ok(None);
     };
@@ -312,7 +342,7 @@ fn dequant_bhsd(t: &CudaTensor, rule: ScaleRule, smooth: bool) -> Result<Option<
 
 /// Whether [`maybe_kv`] changes K/V (the NVFP4 KV flag is set).
 pub fn kv_enabled() -> bool {
-    nvfp4::from_env().is_some()
+    generic_scope() && nvfp4::from_env().is_some()
 }
 
 /// Apply [`kv_for_attention`] when the flag is on; otherwise the inputs.
