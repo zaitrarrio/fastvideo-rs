@@ -313,6 +313,21 @@ async fn mediamtx_roundtrip(router: &Router, base: &str) {
     let idx = indices(&got);
     eprintln!("whep viewer: {} access units, {} decoded with a frame index", got.len(), idx.len());
     assert!(idx.len() >= 24);
+    // MediaMTX asks its WebRTC publishers for a keyframe (PLI) every 2 s.
+    // Those must be answered by the periodic IDRs, not by forced ones (a
+    // forced NVENC IDR restarts ffmpeg).
+    while t0.elapsed() < Duration::from_secs(9) {
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    let (_, _, v) = call(router, "GET", &format!("/fv/v1/streams/{id}"), None).await;
+    eprintln!("mediamtx publish status after ~9 s: {}", v["status"]);
+    let st = &v["status"];
+    let n = |k: &str| st[k].as_u64().unwrap_or(0);
+    assert!(n("keyframe_requests") >= 3, "MediaMTX sent no periodic PLIs? {st}");
+    // At most the reader joining (MediaMTX asks for a keyframe then too)
+    // may force one; before, every periodic PLI did.
+    assert!(n("forced_idrs") <= 2, "periodic PLIs forced IDRs: {st}");
+    assert!(n("keyframes_sent") >= 4, "the 2 s GOP should give ~4 IDRs in 9 s: {st}");
     let (s, _, _) = call(router, "DELETE", &format!("/fv/v1/streams/{id}"), None).await;
     assert_eq!(s, StatusCode::OK);
 }

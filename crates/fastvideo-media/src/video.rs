@@ -262,6 +262,108 @@ impl IdrLimiter {
     }
 }
 
+/// When a keyframe request (PLI/FIR, dropped input, a send error) needs a
+/// forced IDR, for an encoder with a periodic IDR every `gop_frames`.
+///
+/// A request is answered by a keyframe within `window` seconds:
+///
+/// - a keyframe that went out less than `window` before the request covers
+///   it (the requester asked before it arrived);
+/// - the periodic IDR covers it when it is due within `window` (estimated
+///   from the observed frame interval, since an adaptive pacer may run
+///   below the encoder's nominal fps);
+/// - otherwise the next frame is a forced IDR, at most one per `window`.
+///
+/// MediaMTX asks its WebRTC publishers for a keyframe every 2 s. With a 2 s
+/// GOP every such request lands within 1 s of a periodic IDR, so none of
+/// them forces one (a forced NVENC IDR restarts the ffmpeg process).
+#[derive(Debug, Clone)]
+pub struct KeyframePolicy {
+    window: f64,
+    gop_frames: u32,
+    /// Frames given to the encoder since the last keyframe it produced (or
+    /// since the last forced one).
+    since_key: u32,
+    last_frame: Option<f64>,
+    /// Smoothed seconds between frames.
+    interval: Option<f64>,
+    last_key: Option<f64>,
+    last_forced: Option<f64>,
+    pending: bool,
+    covered: u64,
+}
+
+impl KeyframePolicy {
+    pub fn new(window: f64, gop_frames: u32) -> Self {
+        Self {
+            window,
+            gop_frames: gop_frames.max(1),
+            since_key: 0,
+            last_frame: None,
+            interval: None,
+            last_key: None,
+            last_forced: None,
+            pending: false,
+            covered: 0,
+        }
+    }
+
+    /// A keyframe is wanted (PLI/FIR, a gap in the input, a send error).
+    pub fn request(&mut self, now: f64) {
+        if self.last_key.is_some_and(|t| now - t < self.window) {
+            self.covered += 1;
+            return;
+        }
+        self.pending = true;
+    }
+
+    /// Requests answered by a keyframe that had just gone out or by the
+    /// periodic IDR, without forcing one.
+    pub fn covered(&self) -> u64 {
+        self.covered
+    }
+
+    /// Called for every frame about to be encoded: whether to force an IDR.
+    pub fn next_frame(&mut self, now: f64) -> bool {
+        if let Some(t) = self.last_frame {
+            let dt = (now - t).max(0.0);
+            self.interval = Some(self.interval.map_or(dt, |i| 0.8 * i + 0.2 * dt));
+        }
+        self.last_frame = Some(now);
+        let mut force = false;
+        if self.pending {
+            // 0: this very frame is the periodic IDR.
+            let to_gop = (self.gop_frames - self.since_key % self.gop_frames) % self.gop_frames;
+            // One frame of slack so a request exactly `window` after a
+            // keyframe is still covered by the next periodic one.
+            let gop_soon = self.interval.is_some_and(|i| f64::from(to_gop) * i <= self.window + i);
+            let limited = self.last_forced.is_some_and(|t| now - t < self.window);
+            if gop_soon {
+                // Leave it pending: the periodic IDR clears it.
+            } else if !limited {
+                force = true;
+                self.pending = false;
+                self.last_forced = Some(now);
+                self.since_key = 0;
+            }
+        }
+        self.since_key += 1;
+        force
+    }
+
+    /// A keyframe came out of the encoder (periodic or forced).
+    pub fn keyframe_out(&mut self, now: f64) {
+        self.last_key = Some(now);
+        if self.pending {
+            self.pending = false;
+            self.covered += 1;
+        }
+        // The encoder's GOP restarts at a keyframe; one frame may still be
+        // in flight behind it.
+        self.since_key = self.since_key.min(1);
+    }
+}
+
 // ---------------------------------------------------------------------------
 // ffmpeg H.264 encoder arguments (shared by the pipe encoder, sinks, mp4)
 // ---------------------------------------------------------------------------
@@ -880,6 +982,106 @@ mod tests {
         assert!(!l.poll(0.5)); // too soon; stays pending
         assert!(l.poll(1.0));
         assert!(!l.poll(5.0));
+    }
+
+    /// Drives a policy at `fps` for `secs` with a 2 s GOP, PLIs every
+    /// `pli` seconds (phase `phase`); returns (forced, keyframes, covered).
+    fn run_policy(fps: f64, secs: f64, pli: f64, phase: f64) -> (u32, u32, u64) {
+        let gop = (2.0 * fps).round() as u32;
+        let mut p = KeyframePolicy::new(1.0, gop);
+        let (mut forced, mut keys, mut since) = (0, 0, 0u32);
+        let mut next_pli = phase;
+        let n = (secs * fps) as u32;
+        for i in 0..n {
+            let now = f64::from(i) / fps;
+            while next_pli <= now {
+                p.request(next_pli);
+                next_pli += pli;
+            }
+            let force = p.next_frame(now);
+            // The encoder: IDR on frame 0, every `gop` frames, or forced.
+            let key = i == 0 || force || since >= gop;
+            since = if key { 1 } else { since + 1 };
+            forced += u32::from(force);
+            if key {
+                keys += 1;
+                p.keyframe_out(now);
+            }
+        }
+        (forced, keys, p.covered())
+    }
+
+    #[test]
+    fn periodic_plis_are_answered_by_the_gop() {
+        // MediaMTX: a PLI every 2 s, at any phase, against a 2 s GOP.
+        for phase in [0.05, 0.4, 0.9, 1.1, 1.6, 1.95] {
+            for fps in [16.0, 24.0] {
+                let (forced, keys, covered) = run_policy(fps, 37.0, 2.0, phase);
+                assert_eq!(forced, 0, "phase {phase} fps {fps}");
+                assert_eq!(keys, 19, "phase {phase} fps {fps}");
+                assert!(covered >= 18, "phase {phase} fps {fps}: covered {covered}");
+            }
+        }
+    }
+
+    #[test]
+    fn a_pli_far_from_any_keyframe_forces_one_at_most_once_a_second() {
+        // 24 fps, GOP 48 (2 s): keyframe at 0, next periodic one at 2 s.
+        let mut p = KeyframePolicy::new(1.0, 48);
+        assert!(!p.next_frame(0.0));
+        p.keyframe_out(0.0);
+        for i in 1..=26 {
+            assert!(!p.next_frame(f64::from(i) / 24.0));
+        }
+        // 1.1 s in: the periodic IDR is 0.9 s away, so it answers.
+        p.request(1.1);
+        assert!(!p.next_frame(27.0 / 24.0));
+        assert_eq!(p.covered(), 0);
+
+        // GOP of 240 frames (10 s): a request at 3 s forces the next frame.
+        let mut p = KeyframePolicy::new(1.0, 240);
+        assert!(!p.next_frame(0.0));
+        p.keyframe_out(0.0);
+        for i in 1..72 {
+            p.next_frame(f64::from(i) / 24.0);
+        }
+        p.request(3.0);
+        assert!(p.next_frame(3.0));
+        p.keyframe_out(3.0);
+        // Asked before the forced one arrived: covered by it.
+        p.request(3.5);
+        assert!(!p.next_frame(3.5));
+        assert_eq!(p.covered(), 1);
+        p.request(4.2);
+        assert!(p.next_frame(4.2));
+        // The forced IDR at 4.2 is not out yet; still one per second.
+        p.request(4.3);
+        assert!(!p.next_frame(4.3));
+        assert!(p.next_frame(5.3));
+    }
+
+    #[test]
+    fn a_slow_pacer_stretches_the_gop_in_time() {
+        // 6 fps against a GOP of 32 frames (16 fps nominal): 5.3 s between
+        // periodic IDRs, so the 2 s PLIs force some, one per second at most.
+        let mut p = KeyframePolicy::new(1.0, 32);
+        let (mut forced, mut since) = (0, 0u32);
+        let mut next_pli = 0.5;
+        for i in 0..222 {
+            let now = f64::from(i) / 6.0;
+            while next_pli <= now {
+                p.request(next_pli);
+                next_pli += 2.0;
+            }
+            let force = p.next_frame(now);
+            let key = i == 0 || force || since >= 32;
+            since = if key { 1 } else { since + 1 };
+            forced += u32::from(force);
+            if key {
+                p.keyframe_out(now);
+            }
+        }
+        assert!(forced > 0 && forced <= 19, "{forced}");
     }
 
     #[test]

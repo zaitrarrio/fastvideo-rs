@@ -180,7 +180,13 @@ pub struct StreamStatus {
     pub frames_sent: u64,
     pub keyframes_sent: u64,
     pub audio_packets_sent: u64,
+    /// IDRs forced on request (a forced NVENC IDR restarts ffmpeg).
     pub forced_idrs: u64,
+    /// PLI/FIR received from the WHIP endpoint.
+    pub keyframe_requests: u64,
+    /// Requests answered by the periodic IDR or a keyframe that had just
+    /// gone out, without forcing one.
+    pub keyframe_requests_covered: u64,
     pub video_send_errors: u64,
     pub started_ms: u64,
     pub first_frame_ms: Option<u64>,
@@ -537,6 +543,8 @@ fn new_entry(model: &ModelId, mode: &'static str) -> Arc<Entry> {
             keyframes_sent: 0,
             audio_packets_sent: 0,
             forced_idrs: 0,
+            keyframe_requests: 0,
+            keyframe_requests_covered: 0,
             video_send_errors: 0,
             started_ms: now_ms(),
             first_frame_ms: None,
@@ -780,6 +788,7 @@ mod publish {
             tokio::task::spawn_blocking(move || pick_encoder(&c)).await.map_err(internal)??
         };
         let hcfg = crate::whip::whip_h264(target, canvas.0, canvas.1, fps);
+        let gop_frames = hcfg.gop_frames();
         let mut enc: Option<Box<dyn VideoEncoder>> = Some(
             tokio::task::spawn_blocking(move || create_encoder(backend, hcfg))
                 .await
@@ -802,16 +811,22 @@ mod publish {
         };
         #[cfg(not(feature = "encoders"))]
         let _ = audio;
-        let mut idr = fastvideo_media::video::IdrLimiter::new(1.0);
-        idr.request(); // a fresh peer starts on an IDR
+        // A new encoder starts on an IDR, so nothing is requested up front.
+        // PLI/FIR (MediaMTX sends one every 2 s), a gap in the ticks or a
+        // send error ask for a keyframe; the policy answers with the
+        // periodic IDR when it is due within 1 s and forces one otherwise.
         let t0 = Instant::now();
+        let mut idr = fastvideo_media::video::KeyframePolicy::new(1.0, gop_frames);
         let mut rtps: VecDeque<u32> = VecDeque::new();
         let mut first_sent = false;
         let reason = loop {
             tokio::select! {
                 _ = entry.stop.notified() => break "stopped".to_owned(),
                 ev = publisher.peer().next_event() => match ev {
-                    Some(PeerEvent::KeyframeRequest { .. }) => idr.request(),
+                    Some(PeerEvent::KeyframeRequest { .. }) => {
+                        idr.request(t0.elapsed().as_secs_f64());
+                        entry.set(|s| s.keyframe_requests += 1);
+                    }
                     Some(PeerEvent::Closed(r)) => return Err(ApiError::new(ErrorKind::Internal, format!("whip peer closed: {r:?}"))),
                     Some(_) => {}
                     None => return Err(ApiError::new(ErrorKind::Internal, "whip peer ended")),
@@ -825,9 +840,8 @@ mod publish {
                         };
                     };
                     if paced.ticks.take_dropped() {
-                        idr.request();
+                        idr.request(t0.elapsed().as_secs_f64());
                     }
-                    let force = idr.poll(t0.elapsed().as_secs_f64());
                     #[cfg(feature = "encoders")]
                     if let (Some(op), Some(a)) = (opus.as_mut(), t.audio.as_ref()) {
                         match op.push(a) {
@@ -845,6 +859,7 @@ mod publish {
                         VideoOut::Fresh(f) | VideoOut::Repeat(f) => f.clone(),
                         VideoOut::Nothing => continue,
                     };
+                    let force = idr.next_frame(t0.elapsed().as_secs_f64());
                     rtps.push_back(t.video_rtp);
                     let mut e = enc.take().expect("encoder present");
                     let (e, out) = tokio::task::spawn_blocking(move || {
@@ -860,10 +875,15 @@ mod publish {
                     if force {
                         entry.set(|s| s.forced_idrs += 1);
                     }
+                    let covered = idr.covered();
+                    entry.set(|s| s.keyframe_requests_covered = covered);
                     let aus = out.map_err(|e| ApiError::internal(format!("encode: {e}")))?;
                     for au in aus {
                         let rtp = rtps.pop_front().unwrap_or(t.video_rtp);
                         let key = au.keyframe;
+                        if key {
+                            idr.keyframe_out(t0.elapsed().as_secs_f64());
+                        }
                         match handle.send_video(VideoFrame::new(au.data, u64::from(rtp))) {
                             Ok(()) => {
                                 entry.set(|s| {
@@ -883,7 +903,7 @@ mod publish {
                             }
                             Err(_) => {
                                 entry.set(|s| s.video_send_errors += 1);
-                                idr.request();
+                                idr.request(t0.elapsed().as_secs_f64());
                             }
                         }
                     }
