@@ -120,6 +120,11 @@ gpu_clean() {
 run_cell() {
   local name="$1"
   shift
+  # Families that call run_cell directly (b200, ...) honour FV_CELLS too.
+  if [[ -n "${FV_CELLS:-}" && " $FV_CELLS " != *" $name "* ]]; then
+    log "skip $name (not in FV_CELLS)"
+    return 0
+  fi
   if ! gpu_clean; then
     mkdir -p "$RUNS/$name"
     write_json "$RUNS/$name/summary.json" "$(printf '{"cell":"%s","family":"%s","exit":null,"skipped":"gpu not clean"}' "$name" "$FAMILY")"

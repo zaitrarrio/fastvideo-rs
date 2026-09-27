@@ -20,7 +20,7 @@ Conventions:
 
 | Target | HTTP batch API | WebRTC (inbound ICE to GPU box) | WebRTC via outbound WHIP to an SFU | Recommended mode |
 |---|---|---|---|---|
-| Runpod pod | Yes: `https://<pod>-<port>.proxy.runpod.net` (100 s Cloudflare cap), or a public TCP port | **No UDP** ("Pods do not support UDP connections"). ICE-TCP to a mapped public TCP port, or a TURN relay, only. | Yes, needs no inbound port (INFERRED; outbound UDP egress not documented, see §5) | Long-lived pods for the streaming service; the proxy URL for control and batch |
+| Runpod pod | Yes: `https://<pod>-<port>.proxy.runpod.net` (100 s Cloudflare cap), or a public TCP port | **No UDP** ("Pods do not support UDP connections"). ICE-TCP to a mapped public TCP port, or a TURN relay, only. | Yes, needs no inbound port. Outbound UDP is undocumented; strobe's evidence covers serverless only (§5.1). | Long-lived pods for the streaming service; the proxy URL for control and batch |
 | Runpod Serverless, queue endpoint | Via `/run` `/runsync` `/status` `/stream` (job JSON, 10/20 MB caps). Needs a worker speaking the job-take protocol (§1.1). | No UDP. "Expose HTTP/TCP ports" gives public IP + TCP only. | Yes: a job = one stream session, `executionTimeout` ≥ stream length (§6) | Batch generation jobs; WHIP-out streaming sessions |
 | Runpod Serverless, load balancer endpoint | **Yes, our Axum server runs unchanged**: `https://<endpoint>.api.runpod.ai/<path>`, `/ping` health, WebSockets supported. Limits: 5.5 min per request, 30 MB. | No (HTTP/WS only) | Signaling over HTTP/WS works; media must go outbound | Short synchronous APIs, WebRTC signaling |
 | Vast instance | Public IP:random port (`VAST_TCP_PORT_<n>`) | **Yes**: `-p N:N/udp` and `VAST_UDP_PORT_<n>` (random external port, NAT on a shared IP) | Yes | Streaming service with direct ICE, cheap batch |
@@ -284,7 +284,7 @@ CLI flags (https://docs.vast.ai/cli/reference/create-instance):
 
 REST (https://docs.vast.ai/api-reference/instances/create-instance):
 - `PUT https://console.vast.ai/api/v0/asks/{offer_id}/`, Bearer.
-- Body fields: `image, disk, runtype (ssh|jupyter|args|ssh_direct|...), env ("-e K=V -p 8000:8000"), onstart (≤4048 chars), args[], args_str, image_login, label, target_state, price, cancel_unavail, volume_info{create_new, volume_id, size, mount_path}`.
+- Body fields: `image, disk, runtype (ssh|jupyter|args|ssh_direct|...), env (the docs show "-e K=V -p 8000:8000", but the API in practice requires a JSON object such as {"-p 8080:8080":"1","K":"V"}; see §5.1), onstart (≤4048 chars), args[], args_str, image_login, label, target_state, price, cancel_unavail, volume_info{create_new, volume_id, size, mount_path}`.
 - Returns `{"success":true,"new_contract":<id>}`.
 - If `actual_status` becomes `exited|unknown|offline`, it will never reach running.
 
@@ -388,21 +388,74 @@ Implications (**INFERRED**):
    - This is dangerous, though: nothing ties worker lifetime to an active stream, so idle-timeout scale-down could kill a live stream. The queue model (a job in progress keeps the worker) is the safer fit.
 4. One image runs everywhere: pods, serverless, Vast and plain VMs. Viewers use WHEP from the SFU. Local development can use MediaMTX (WHIP/WHEP-capable) in place of Cloudflare.
 
-### 5.1 strobe reference implementation: NOT READ
+### 5.1 strobe: a working reference for this design
 
-The coordinator pointed at `/home/user/refsrc/feb0880a-strobe-source/`. It asked for `src/strobe/runpod_handler.py`, `src/strobe/whip.py`, `deploy/` (cloud-init, mediamtx, compose, providers `runpod.ts`/`vast.ts`/`h3fast-deploy.ts`), `Taskfile.yml`, `CLAUDE.md`, and `docs/`.
+strobe is our near-real-time WebRTC video generation server. Its source was read from a local, git-excluded copy at `.refsrc/strobe/` (not committed; the paths below are relative to that copy). Everything in this section comes from that source unless marked INFERRED.
 
-**Reading that directory was denied by the session's permission classifier**, so none of its contents are reflected here. The coordinator reported, but I have not verified from source:
-- strobe publishes outbound via WHIP to an SFU (Cloudflare Realtime/Stream, or MediaMTX locally), and viewers pull via WHEP;
-- it runs the same image on Runpod serverless, pods and plain VMs;
-- it uses a Runpod **queue** endpoint with `executionTimeout` ≥ stream length;
-- it has a Vast provider flow.
+**Architecture.**
+- The pipeline is "prompt → causal Wan DiT → VAE decode → FramePacer → aiortc H.264 track → WHIP → MediaMTX/Cloudflare → viewers". The GPU host needs "**no inbound port** — that's why it runs on a RunPod serverless worker unchanged" (`CLAUDE.md` §What this is).
+- It "works end to end on a self-hosted MediaMTX relay". Throughput was measured "on the live RunPod endpoint", e.g. H100 SXM warm ~19.7 unique fps (`CLAUDE.md` §Current state).
 
-§5 above is consistent with that report and is built only from public sources. **Gap**: once access is granted, cross-check the following against strobe:
-- the Runpod endpoint settings and handler job/progress shapes (`runpod_handler.py`);
-- WHIP session teardown and ICE/TURN configuration (`whip.py`);
-- the Vast provider flow (`deploy/.../vast.ts`: offer search, `--env` ports, onstart);
-- the cloud-init/MediaMTX setup.
+**WHIP publisher** (`src/strobe/whip.py`):
+- POSTs the full offer SDP with `Content-Type: application/sdp` and accepts 200 or 201. It reads the answer and the `Location` header, which may be relative and is resolved against the request URL (RFC 3986). Teardown is a best-effort `DELETE <resource URL>`.
+- Auth: HTTP Basic (`user:token`) for MediaMTX internal auth, `Bearer <token>` for Cloudflare.
+- ICE is non-trickle: aiortc gathers candidates during `setLocalDescription`, so the offer is complete.
+- The POST times out after 30 s (`timeout_s=30.0`).
+- H.264 is reordered to be offered first. Cloudflare Stream ingests H.264 only, and a VP8 negotiation "negotiates fine but produces a black stream".
+- A short keyframe interval is forced (`KEYFRAME_SECONDS=2.0` per `CLAUDE.md` config list) so joining players don't wait on an IDR.
+- No `RTCConfiguration` / ICE servers are set anywhere in `src/strobe/` (grep: no `iceServers`, `RTCIceServer` or `turn:`). The publisher therefore relies on aiortc's defaults, with no TURN.
+  - **INFERRED**: aiortc has no ICE-TCP, so media from the live Runpod serverless endpoint must have flowed over outbound UDP. That is strong evidence that **outbound UDP egress works on Runpod serverless** (partly closes gap 1 in §7).
+
+**Runpod serverless** (`src/strobe/runpod_handler.py`, `deploy/runpod/README.md`, `scripts/deploy/runpod-endpoint-create.sh`, `deploy/ui/src/server/providers/runpod.ts`):
+- "One queued job = one stream session. The worker dials OUT to the WHIP endpoint."
+- Job input: `{"input":{"prompt","whip_url","whip_token","duration_s","local_attn_size","sink_size","image_url"|"image_b64"}}`. The handler is an async `runpod.serverless.start({"handler": handler})` Python handler.
+  - It returns `{"id","state","stats"}`, or `{"error", "stats"}` on failure.
+  - It sends no progress updates. Viewers find the stream at the SFU, not via `/status`.
+- Endpoint type: "Use a QUEUE-based endpoint, not load-balancing: streams are long jobs". "Set executionTimeout >= your max stream length (default is 600s)".
+- Settings actually used. They go through REST **v1** `https://rest.runpod.io/v1` (`POST /templates`, then `POST /endpoints`), not the v2 API in §1.5:
+  - Template: `isServerless: true`, `imageName: ghcr.io/<owner>/strobe:gpu` (or `@sha256:` digest pin), `containerDiskInGb` 50, `volumeInGb` 0, `dockerStartCmd: ["python3.12","-m","strobe.runpod_handler"]`, `env` = `STROBE_*` + HF/Torch caches on the volume.
+  - Endpoint: `computeType GPU`, `gpuTypeIds` (default `NVIDIA H100 80GB HBM3, NVIDIA A100-SXM4-80GB, NVIDIA GeForce RTX 4090`), `workersMin` 1 in the script (0 in the UI), `workersMax` 3, `idleTimeout` 300, `scalerType QUEUE_DELAY`/`scalerValue 4`, `executionTimeoutMs = STROBE_MAX_STREAM_SECONDS×1000` (default 600 s), `flashboot: true`, and optional `networkVolumeId`.
+  - Production guidance in `CLAUDE.md`: "`gpuTypeIds` = SXM/NVL only, `executionTimeoutMs=1800000` (cold start ~7 min), and `workersMin≥1`".
+- Jobs are submitted with `POST https://api.runpod.ai/v2/$RUNPOD_ENDPOINT_ID/run` and polled at `/status/<id>` (`scripts/deploy/runpod-stream.sh`).
+- Weights and caches live on the network volume at `/runpod-volume`:
+  - checkpoint, HF cache;
+  - `TORCHINDUCTOR_CACHE_DIR`/`TRITON_CACHE_DIR` under `<volume>/torch-compile`, "so only the first cold worker pays the compile";
+  - TensorRT VAE plans at `/runpod-volume/trt-vae` (`scripts/deploy/runpod-configure-optimal.sh`).
+  - Weights are uploaded through Runpod's S3-compatible API at `https://s3api-<dc>.runpod.io` with separate S3 keys, no pod needed (`runpod-common.sh` `runpod_s3_endpoint`).
+- Image pull: the GHCR package is public, so no registry credential is needed. If private, the code recreates `containerregistryauth` on every deploy because "RunPod stores registry credentials immutably (there is no update endpoint)" and a rotated token fails silently.
+  - Templates pin the image **digest** so FlashBoot or scale-up relaunches pull the exact tested image (`deploy/runpod/README.md`).
+- The Runpod pod variant uses the same image with the default CMD (`strobe.server`), `ports: ["8080/http"]`, and health at `https://<pod>-8080.proxy.runpod.net/healthz` (`runpod.ts` `provisionPod`/`getPodStatus`).
+
+**Vast provider flow** (`deploy/ui/src/server/providers/vast.ts`, `scripts/deploy/vast-common.sh`, `vast-create.sh`):
+- Offer search: `POST https://console.vast.ai/api/v0/bundles` with filters `rentable`, `verified`, `disk_space>=`, `cuda_max_good>=12.4`, `reliability>=0.9`, and **`direct_port_count>=1`**. The last one is "mandatory or :8080 is unreachable — proxied ports only forward jupyter/ssh".
+- Rent: `PUT https://console.vast.ai/api/v0/asks/<offer>/` with `{client_id:"me", image, label, disk, runtype:"ssh_direct", target_state:"running", onstart, env, image_login?, volume_info?, price?}`.
+- **`env` must be a JSON object, not the docker flag string the docs show.** The API rejects a string with "invalid env type: env must be a dict". A published port is the key `"-p 8080:8080"` with value `"1"` (`vast-create.sh` comment; `vast.ts`).
+  - This contradicts the REST reference cited in §3.1, which describes `env` as a flag string. Trust strobe's observed behaviour.
+- Under every `ssh_*` runtype, Vast's sshd is PID 1 and the image CMD never runs. **onstart must start the server** (`nohup python3.12 -m strobe.server …&`).
+  - onstart fetches weights to a `.part` file and renames it on success (Hugging Face directly, or `aws s3 sync` from the Runpod volume's S3 endpoint).
+- Endpoint discovery: `GET /api/v0/instances/<id>/` → `http://<public_ipaddr>:<ports["8080/tcp"][0].HostPort>`.
+  - Health: `/healthz` (the h3fast serve mode also tries `/health`, and accepts `ready|ok|status=="ok"`).
+  - Destroy: `DELETE /api/v0/instances/<id>/`. Listing uses `/api/v1/instances/`.
+- Discipline (`vast-common.sh`): ledger, a destroy-on-exit trap, dry-run mode, budget deadline, and a two-unmeasured-rentals stop rule. `CLAUDE.md` notes instances "bill until destroyed".
+- `h3fast-deploy.ts` spawns `scripts/deploy/vast-create-h3fast.sh` for one persistent H100. It needs `VAST_API_KEY` plus the Runpod volume S3 keys, because weights are synced from the Runpod volume. Outside the US, `CLAUDE.md` recommends downloading from Hugging Face instead (45 GiB in 60 s vs 206–646 Mbit/s from the volume).
+
+**Plain VMs and the SFU:**
+- `deploy/cloud-init.yaml` (Vultr, Hetzner, Latitude, Lambda) installs docker + nvidia-container-toolkit and fetches the checkpoint. It then runs `docker run --gpus all -p 8080:8080 --env-file … -v /opt/strobe/weights:/weights`.
+- MediaMTX (`deploy/mediamtx/mediamtx.yml`): WHIP and signalling on `:8889/tcp` (WHIP URL `http://<host>:8889/strobe/whip`), **media on `:8189/udp`**, LL-HLS on `:8888`. Auth is internal: user `strobe` may publish, anyone may read.
+  - The SFU needs public UDP ("Railway can't host it (no public UDP)"; Fly needs a dedicated IPv4, per `CLAUDE.md`).
+  - **INFERRED**: the SFU can therefore never be colocated on a Runpod pod. Put it on a VM, Fly, Cloudflare, or a Vast instance with a `/udp` port.
+
+**Takeaways for fastvideo-rs (INFERRED):**
+- Adopt the same split:
+  - Runpod **queue** job = stream session. Set `executionTimeoutMs` ≥ max stream + cold start (strobe uses 1800000), `workersMin ≥1` for warm starts, and a digest-pinned image.
+  - On pods and Vast: a long-running HTTP server with `/healthz`.
+- A Rust WHIP publisher (webrtc-rs) must:
+  - offer H.264 Constrained Baseline first, with B-frames 0;
+  - send complete (non-trickle) SDP;
+  - resolve a relative `Location`;
+  - `DELETE` on teardown;
+  - support both Bearer and Basic auth.
+- On Vast, `ssh_direct` + onstart is the proven path. Our current `validate.sh` uses the CLI's `--ssh --direct` (§3.1).
 
 ---
 
@@ -425,17 +478,22 @@ The coordinator pointed at `/home/user/refsrc/feb0880a-strobe-source/`. It asked
 **Vast instance:**
 - `vastai create instance <offer> --image ghcr.io/zaitrarrio/fastvideo-rs-runtime:sha-<7> --disk 150 --env '-p 8000:8000 -p 70010:70010/udp -e FV_SERVE_MODE=http' --entrypoint /opt/fastvideo-rs/bin/fv-serve --args ...`.
 - Discover the external addresses from `PUBLIC_IPADDR`, `VAST_TCP_PORT_8000` and `VAST_UDP_PORT_70010`.
+- Over REST, follow strobe's proven form instead (§5.1):
+  - filter offers on `direct_port_count>=1`;
+  - `runtype: ssh_direct` with an onstart that launches the server;
+  - `env` as a JSON object;
+  - endpoint from `ports["8000/tcp"][0].HostPort`.
 
 ---
 
 ## 7. Gaps and open questions
 
-1. **Outbound UDP egress** from Runpod pods and serverless workers is undocumented. It decides whether WHIP works over UDP or only via TURN over TCP/TLS. Test on a pod (`runpod-http.sh`) with a STUN binding request to `stun.cloudflare.com:3478`.
+1. **Outbound UDP egress** from Runpod pods and serverless workers is undocumented. strobe's aiortc WHIP publisher, which has no TURN and no ICE-TCP, streams from a live Runpod serverless endpoint (§5.1). That is strong evidence egress UDP works on serverless (INFERRED). It is still unconfirmed on pods; confirm with a STUN binding request to `stun.cloudflare.com:3478`.
 2. The **SIGTERM grace period** on Runpod Serverless and the effect of scale-down on in-flight jobs are undocumented.
 3. **WebSocket support through the Runpod pod HTTP proxy** is not explicitly documented, beyond the 100 s timeout.
 4. The **execution-timeout default** conflicts: the console docs say 600 s, the REST v2 schema says `timeout` default 300000 ms. Always set it.
 5. The internal job-take/job-done/job-stop protocol is **not a public contract**. It comes from SDK source, and the SDK's own ARCHITECTURE.md disagrees with its code on progress updates. Pin behaviour to `rp@760aea2` and re-check on SDK upgrades.
 6. It is unconfirmed whether Vast identity mapping (`>70000`) applies to `/udp` ports, and whether serverless workergroups' `launch_args` allow `/udp` port options.
 7. Vast `/route` host: the docs' OpenAPI server is `https://console.vast.ai` (`POST /route`), while worker `REPORT_ADDR` defaults to `https://run.vast.ai`. Confirm which host clients should call.
-8. The strobe source (§5.1) was not read, pending permission.
+8. Vast REST `env`: the docs describe a docker flag string, but strobe observed the API reject it ("env must be a dict"). Use the JSON-object form (§5.1).
 9. It is unknown whether LB endpoints count open WebSocket connections as load for scaling (probe with `worker-lb-websocket/test_scaling.py`).

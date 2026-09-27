@@ -542,14 +542,14 @@ impl FeedForward {
         crate::wan::evalstats::quant_call("nvfp4_cublaslt");
         let (h, bias_in) = q.up.forward_bf16(ptr(&x16), m, false)?;
         drop(x16);
-        let h = if bias_in {
-            std::sync::Arc::new(h)
-        } else {
-            let t = CudaTensor::from_device_slice_bf16(h, vec![m, q.up.n])?;
-            let b = self.up.bias.as_ref().ok_or_else(|| msg("nvfp4 ffn: up bias"))?;
-            t.add(&b.quantize_bf16()?)?
+        // A bias-free FFN (LTX-2.5 `ff_bias = false`) or one whose bias the
+        // GEMM epilogue already added uses the GEMM output as is.
+        let h = match (&self.up.bias, bias_in) {
+            (Some(b), false) => CudaTensor::from_device_slice_bf16(h, vec![m, q.up.n])?
+                .add(&b.quantize_bf16()?)?
                 .dev_bf16()?
-                .ok_or_else(|| msg("nvfp4 ffn: up output not on the device"))?
+                .ok_or_else(|| msg("nvfp4 ffn: up output not on the device"))?,
+            _ => std::sync::Arc::new(h),
         };
         crate::wan::evalstats::quant_call("nvfp4_cublaslt");
         let (y, bias_in) = q.down.forward_bf16(ptr(&h), m, true)?;
