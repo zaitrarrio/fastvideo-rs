@@ -87,6 +87,17 @@ text says **native**.
    draft quality (metadata where the wire allows). Tier order: draft < turbo <
    max; `Tier` gains a `Draft` variant.
 
+7. **Cloudflare storage (owner decision).** Job records live in **Cloudflare D1**
+   (SQLite: jobs table + indexes on owner/status/created for the MiniMax and
+   FastVideo list endpoints; state-change writes, throttled progress). Media
+   (outputs, uploads, fetched inputs) lives in **Cloudflare R2** via the
+   existing S3-compatible artifact store with presigned URLs (KV was rejected
+   for media: 25 MiB value limit; and for jobs: 1 write/s/key, eventual
+   consistency, no queries). serve-kit gains a `D1JobStore` (D1 HTTP API)
+   next to the in-memory/file stores; running jobs stay authoritative in the
+   worker's memory, D1 is the durable/shared copy so any worker can answer
+   status/result after restarts or scale-to-zero.
+
 ## 1. Goals and non-goals
 
 ### 1.1 Goals
