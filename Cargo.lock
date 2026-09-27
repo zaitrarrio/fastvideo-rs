@@ -1252,15 +1252,23 @@ dependencies = [
 name = "fastvideo-minimax"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
  "axum",
+ "base64 0.22.1",
  "bytes",
+ "fastvideo-engine-service",
+ "fastvideo-models",
  "fastvideo-protocol",
  "fastvideo-serve-kit",
+ "image",
  "serde",
  "serde_json",
  "thiserror",
  "time",
+ "tokio",
+ "tower",
  "tracing",
+ "url",
  "uuid",
 ]
 
