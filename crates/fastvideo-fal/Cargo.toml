@@ -10,17 +10,28 @@ description = "fv-serve adapter: fal queue/sync API, proxy mode, storage, webhoo
 fastvideo-protocol.workspace = true
 fastvideo-serve-kit.workspace = true
 axum.workspace = true
+base64.workspace = true
 bytes.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
 time.workspace = true
+tower.workspace = true
 tracing.workspace = true
+url.workspace = true
 uuid.workspace = true
 
 fastvideo-media.workspace = true
 fastvideo-webrtc.workspace = true
-tokio = { workspace = true, features = ["sync", "time"] }
+tokio = { workspace = true, features = ["sync", "time", "fs"] }
+
+[dev-dependencies]
+fastvideo-engine-service.workspace = true
+async-trait.workspace = true
+ed25519-dalek.workspace = true
+image.workspace = true
+sha2.workspace = true
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "net", "process", "io-util"] }
 
 [lints]
 workspace = true

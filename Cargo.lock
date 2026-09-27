@@ -1187,18 +1187,26 @@ dependencies = [
 name = "fastvideo-fal"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
  "axum",
+ "base64 0.22.1",
  "bytes",
+ "ed25519-dalek",
+ "fastvideo-engine-service",
  "fastvideo-media",
  "fastvideo-protocol",
  "fastvideo-serve-kit",
  "fastvideo-webrtc",
+ "image",
  "serde",
  "serde_json",
+ "sha2",
  "thiserror",
  "time",
  "tokio",
+ "tower",
  "tracing",
+ "url",
  "uuid",
 ]
 
