@@ -72,7 +72,7 @@ use super::vae_encoder::H3VideoEncoder;
 use super::vsa::H3Vsa;
 use crate::hooks::{Hooks, Stage};
 use crate::wan::offload::{DitOffload, MemoryLog, OffloadStats, PhaseMemory, Residency};
-use crate::wan::pipeline::{interleave_audio, write_wav, PipelineError, Result, VideoWriter};
+use crate::wan::pipeline::{interleave_audio, write_wav, PipelineError, Result};
 use crate::wan::taehv::{TaeArch, TaeHv};
 use crate::wan::tensor::{CudaTensor, TensorError};
 use crate::wan::weights::WeightMap;
@@ -691,43 +691,20 @@ impl H3Pipeline {
         let auto_text_encoder = options.text_encoder == TextEncoderChoice::Auto;
         options.text_encoder = options.text_encoder.resolve(free);
         let mut booking = crate::wan::ledger::Booking::default();
-        let timer = Instant::now();
-        let text_encoder = booking.track(
-            crate::wan::ledger::TEXT_ENCODER,
-            || -> Result<Option<Box<dyn HiddenStateEncoder>>> {
-                Ok(match options.text_encoder {
-                    TextEncoderChoice::Recovered8b => {
-                        let text_root = options.text_root.as_deref().unwrap_or(root);
-                        Some(Box::new(super::recovered_8b::Recovered8bEncoder::load(
-                            text_root,
-                        )?))
-                    }
-                    other => match other.precision() {
-                        Some(precision) => {
-                            let text_root = options.text_root.as_deref().unwrap_or(root);
-                            Some(Box::new(super::text::load_resident_encoder(
-                                text_root, precision,
-                            )?))
-                        }
-                        None => None,
-                    },
-                })
-            },
-            |r| match r {
-                Ok(Some(e)) => Some(e.resident_bytes()),
-                _ => None,
-            },
-        )?;
-        if text_encoder.is_some() {
-            timed(&mut load_timings.text_encoder_s, timer);
-        }
-        // What the DiT placement decides on: the card as the encoder left it.
-        let free = if text_encoder.is_some() {
-            crate::wan::device::free_memory().map(|(free, _)| free)
-        } else {
-            free
-        };
 
+        // E12: open every component's shards up front (headers only) and
+        // queue their tensors for read-ahead in load order — encoder, refiner,
+        // AdaLN projections, blocks, decoders — so the volume stays busy
+        // across component boundaries. The loads below read the same mappings.
+        let io_base = fastvideo_loader::PrefetchStats::now();
+        let io_timer = Instant::now();
+        let text_map = match options.text_encoder.precision() {
+            Some(precision) => Some(super::text::open_resident_encoder(
+                options.text_root.as_deref().unwrap_or(root),
+                precision,
+            )?),
+            None => None,
+        };
         let (map, mlx) = match super::mlx::find(root) {
             Some(dir) if !options.ref2va => {
                 let (map, spec) = super::mlx::open_map(&dir)?;
@@ -756,6 +733,76 @@ impl H3Pipeline {
                 (WeightMap::open(&dit)?, None)
             }
         };
+        {
+            // A fused adapter rebuilds the AdaLN table from the projections;
+            // otherwise a valid cache file means they are never read.
+            let adapter = options
+                .recipe
+                .as_deref()
+                .is_some_and(|r| FastH3PreviewVariant::from_recipe(r).is_some() || is_sol_h3_recipe(r));
+            let skip_adaln = !adapter && options.adaln_cache.as_deref().is_some_and(Path::is_file);
+            let adaln = |k: &str| k.contains(".adaln_proj.");
+            let refiner = |k: &str| k.starts_with("token_refiner") || k.starts_with("context_embedder") || k.starts_with("refiner.");
+            let table = |k: &str| {
+                k.starts_with("time_embedder") || k.starts_with("norm_out.linear") || (!skip_adaln && adaln(k))
+            };
+            let blocks = |k: &str| (k.starts_with("transformer_blocks.") || k.starts_with("blocks.")) && !adaln(k);
+            let rest = |k: &str| !adaln(k);
+            map.prefetch_groups(&[&refiner, &table, &blocks, &rest]);
+        }
+        let not_encoder = |k: &str| !k.starts_with("encoder.");
+        let mut vae_map = match resolve_taeh3(options.taeh3.as_deref()) {
+            Some(_) => None,
+            None => WeightMap::open(&root.join("vae")).ok(),
+        };
+        if let Some(m) = &vae_map {
+            m.prefetch_groups(&[&not_encoder]);
+        }
+        let mut audio_vae_map = WeightMap::open(&root.join("audio_vae")).ok();
+        if let Some(m) = &audio_vae_map {
+            m.prefetch_groups(&[&not_encoder]);
+        }
+
+        let timer = Instant::now();
+        let text_encoder = booking.track(
+            crate::wan::ledger::TEXT_ENCODER,
+            || -> Result<Option<Box<dyn HiddenStateEncoder>>> {
+                Ok(match options.text_encoder {
+                    TextEncoderChoice::Recovered8b => {
+                        let text_root = options.text_root.as_deref().unwrap_or(root);
+                        Some(Box::new(super::recovered_8b::Recovered8bEncoder::load(
+                            text_root,
+                        )?))
+                    }
+                    other => match (other.precision(), text_map.as_ref()) {
+                        (Some(precision), Some(map)) => Some(Box::new(
+                            super::text::load_resident_encoder_from(map, precision)?,
+                        )),
+                        _ => None,
+                    },
+                })
+            },
+            |r| match r {
+                Ok(Some(e)) => Some(e.resident_bytes()),
+                _ => None,
+            },
+        )?;
+        drop(text_map);
+        if text_encoder.is_some() {
+            timed(&mut load_timings.text_encoder_s, timer);
+            crate::wan::weights::log_load_io(
+                "h3 text_encoder",
+                &io_base,
+                io_timer.elapsed().as_secs_f64(),
+            );
+        }
+        // What the DiT placement decides on: the card as the encoder left it.
+        let free = if text_encoder.is_some() {
+            crate::wan::device::free_memory().map(|(free, _)| free)
+        } else {
+            free
+        };
+
         // Gate lives on VSA checkpoints and VSA-DataFree replacements. Sol-H3
         // + MiniMax-H3 is Sol-Attn on a dense backbone (`vsa_sparsity == 0`).
         let with_gate = dit_loads_vsa_gate(&contract, mlx.as_ref().map(|s| s.vsa_capable));
@@ -951,6 +998,8 @@ impl H3Pipeline {
             fuse.finish()?;
         }
         timed(&mut load_timings.dit_s, timer);
+        drop(map);
+        crate::wan::weights::log_load_io("h3 dit", &io_base, io_timer.elapsed().as_secs_f64());
         // Streamed: the decoders are loaded by each decode (the reference makes
         // the full VAE resident only for decoding).
         let (video_vae, audio_vae) = if residency.is_streamed() {
@@ -959,19 +1008,21 @@ impl H3Pipeline {
             let timer = Instant::now();
             let video_vae = booking.track(
                 crate::wan::ledger::VAE,
-                || load_video_decoder(root, options.taeh3.as_deref()),
+                || load_video_decoder_from(root, options.taeh3.as_deref(), vae_map.take()),
                 |_| None,
             )?;
             timed(&mut load_timings.video_vae_s, timer);
             let timer = Instant::now();
             let audio_vae = booking.track(
                 crate::wan::ledger::AUDIO_VAE,
-                || load_audio_decoder(root),
+                || load_audio_decoder_from(root, audio_vae_map.take()),
                 |_| None,
             )?;
             timed(&mut load_timings.audio_vae_s, timer);
             (Some(video_vae), Some(audio_vae))
         };
+        drop((vae_map, audio_vae_map));
+        crate::wan::weights::log_load_io("h3 total", &io_base, io_timer.elapsed().as_secs_f64());
         Ok(Self {
             root: root.to_path_buf(),
             options,
@@ -1212,6 +1263,17 @@ impl H3Pipeline {
         let cfg = &self.cfg;
         let geometry =
             H3Geometry::new(request.height, request.width, request.num_frames).map_err(msg)?;
+        if hooks.has_sink()
+            && self
+                .options
+                .recipe
+                .as_deref()
+                .is_some_and(fastvideo_models::h3::lora::is_sol_h3_spark_recipe)
+        {
+            return Err(msg(
+                "h3: a frame sink is not supported with sol-h3-spark (its LTX refiner writes its own clip)",
+            ));
+        }
         let mut timings = H3Timings::default();
         let mut memory = MemoryLog::start("h3");
 
@@ -1553,13 +1615,15 @@ impl H3Pipeline {
         drop(transient_audio);
         transient_booking.release(crate::wan::ledger::AUDIO_VAE);
         let wav = out_dir.join("audio.wav");
-        write_wav(
-            &wav,
-            &interleave_audio(&wave, H3_AUDIO_CHANNELS)?,
-            H3_AUDIO_CHANNELS as u16,
-            sample_rate,
-        )?;
+        let interleaved = interleave_audio(&wave, H3_AUDIO_CHANNELS)?;
+        write_wav(&wav, &interleaved, H3_AUDIO_CHANNELS as u16, sample_rate)?;
         timings.audio_decode_s = timer.elapsed().as_secs_f64();
+        hooks.audio(&crate::sink::AudioPcm {
+            sample_rate,
+            channels: H3_AUDIO_CHANNELS,
+            samples: &interleaved,
+        })?;
+        drop(interleaved);
         crate::wan::device::trim_pool().map_err(|e| msg(e.to_string()))?;
         memory.mark("audio_decode")?;
 
@@ -1594,8 +1658,9 @@ impl H3Pipeline {
             .as_ref()
             .or(transient_video.as_ref())
             .expect("video decoder");
-        let writer =
-            VideoWriter::spawn_with_audio(out_dir, H3_FPS as u32, request.mp4, Some(&wav))?;
+        // With a frame sink (serve E2) the same writer taps its frames to it
+        // and writes no PNGs.
+        let writer = hooks.open_writer(out_dir, H3_FPS as f64, request.mp4, Some(&wav))?;
         // Chunks go to the writer through a drain thread, so the decode
         // never waits on a copy down or on PNG / mp4 encoding.
         let mut drain = FrameDrain::new(writer)?;
@@ -1630,6 +1695,11 @@ impl H3Pipeline {
         let (mut writer, split) = drain.finish()?;
         let tail = Instant::now();
         let mp4 = writer.finish_video()?;
+        if let Some(sent) = hooks.finish_sink()? {
+            if sent != frames {
+                return Err(msg(format!("h3: frame sink got {sent} of {frames} frames")));
+            }
+        }
         timings.video_encode_s = tail.elapsed().as_secs_f64();
         timings.video_decode_s = timer.elapsed().as_secs_f64();
         timings.video_vae_s = split.vae_s;
@@ -1676,6 +1746,16 @@ impl H3Pipeline {
 
 /// The official ViT video decoder, or TAEH3 when one is configured.
 fn load_video_decoder(root: &Path, taeh3: Option<&Path>) -> Result<VideoDecoder> {
+    load_video_decoder_from(root, taeh3, None)
+}
+
+/// [`load_video_decoder`] reading `vae/` through `opened` when the caller
+/// already opened it (and queued its read-ahead).
+fn load_video_decoder_from(
+    root: &Path,
+    taeh3: Option<&Path>,
+    opened: Option<WeightMap>,
+) -> Result<VideoDecoder> {
     Ok(match resolve_taeh3(taeh3) {
         Some(path) => {
             let tae = TaeHv::load_from_path(&path, TaeArch::H3)
@@ -1685,15 +1765,25 @@ fn load_video_decoder(root: &Path, taeh3: Option<&Path>) -> Result<VideoDecoder>
         }
         None => VideoDecoder::Official(H3VideoDecoder::load(
             H3VideoVaeConfig::fasth3_8step(),
-            &WeightMap::open(&root.join("vae"))?,
+            &match opened {
+                Some(m) => m,
+                None => WeightMap::open(&root.join("vae"))?,
+            },
         )?),
     })
 }
 
 fn load_audio_decoder(root: &Path) -> Result<H3AudioDecoder> {
+    load_audio_decoder_from(root, None)
+}
+
+fn load_audio_decoder_from(root: &Path, opened: Option<WeightMap>) -> Result<H3AudioDecoder> {
     Ok(H3AudioDecoder::load(
         H3AudioVaeConfig::fasth3_8step(),
-        &WeightMap::open(&root.join("audio_vae"))?,
+        &match opened {
+            Some(m) => m,
+            None => WeightMap::open(&root.join("audio_vae"))?,
+        },
     )?)
 }
 

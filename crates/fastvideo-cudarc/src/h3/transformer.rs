@@ -90,6 +90,11 @@ fn load_linear(
         return Linear::load(map, prefix, in_dim, out_dim, has_bias);
     };
     let wkey = format!("{prefix}.weight");
+    // Nothing of the adapter lands here: the plain bf16 load gives the same
+    // bits (bf16 -> f32 -> bf16 is exact) without the f32 detour.
+    if !fuse.touches(&wkey) && !(has_bias && fuse.touches(&format!("{prefix}.bias"))) {
+        return Linear::load(map, prefix, in_dim, out_dim, has_bias);
+    }
     let (shape, mut weight) = map.get_f32(&wkey)?;
     if shape != [out_dim, in_dim] {
         return Err(msg(format!(
@@ -97,7 +102,12 @@ fn load_linear(
             [out_dim, in_dim]
         )));
     }
+    let t = std::time::Instant::now();
     fuse.fuse(&wkey, &mut weight, &shape)?;
+    fastvideo_loader::prefetch::add_consumer_time(
+        fastvideo_loader::prefetch::ConsumerTime::Lora,
+        t.elapsed(),
+    );
     let bias = if has_bias {
         let bkey = format!("{prefix}.bias");
         let (bs, mut bias) = map.get_f32(&bkey)?;

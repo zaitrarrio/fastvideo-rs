@@ -27,7 +27,9 @@
 # stock for the GPU is used. RUNPOD_NO_VOLUME=1 mounts none and takes any
 # datacenter (weight-free work: kernels, upstream bench:attn / bench:attn_dc);
 # RUNPOD_CLOUD_TYPE=COMMUNITY allows community hosts; RUNPOD_ALLOWED_CUDA
-# (e.g. "13.0") restricts hosts to drivers supporting those CUDA versions.
+# (e.g. "13.0") restricts hosts to drivers supporting those CUDA versions. It is
+# off by default because the filter can hide available stock; instead the pod
+# checks its driver (>= FV_MIN_DRIVER, default 580) and stops early if older.
 # Env: FV_FAMILY (runpod-matrix.sh family, default rtx6000; rtx5090 is the
 # sol-engine RTX 5090 suite), RUNPOD_GPU_TYPE (default RTX PRO 6000), RUNPOD_API_KEY, RUNPOD_VOLUME_ID (default: volume named
 # fv-weights-h3-ltx-hy), FV_CELLS (subset of cells), FV_GEN_TIMEOUT_S
@@ -116,6 +118,15 @@ fi
   echo "image_build_id=\$(cat /opt/fastvideo-rs/target/release/fv-gpucheck.build-id 2>/dev/null)"
   nvidia-smi --query-gpu=name,memory.total,driver_version --format=csv,noheader
 } >"\$OUT/box.txt" 2>&1
+# The CUDA 13 image needs driver >= ${FV_MIN_DRIVER:-580}. Hosts are not
+# filtered by allowedCudaVersions by default (that filter can hide stock), so
+# stop here on an older driver instead of failing later.
+drv=\$(nvidia-smi --query-gpu=driver_version --format=csv,noheader 2>/dev/null | head -1 | cut -d. -f1)
+if [ -n "\$drv" ] && [ "\$drv" -lt ${FV_MIN_DRIVER:-580} ]; then
+  echo "driver_too_old=\$drv" >>"\$OUT/box.txt"
+  echo "done $tag" >"\$OUT/DONE"
+  exec sleep infinity
+fi
 # kernels mode needs no weights (and may run without a volume).
 if [ "$mode" != kernels ]; then
 ( cd /workspace/weights && for d in *; do echo "== \$d"; find -L "\$d" -maxdepth 3 \( -name '*.safetensors' -o -name '*.json' \) -printf '%s %p\n' 2>/dev/null | head -60; done ) >"\$OUT/tree.txt" 2>&1
@@ -346,6 +357,10 @@ cmd_run() {
   [[ -n "${FV_POD_FILE:-}" ]] && echo "$id $tag" >"$FV_POD_FILE"
   wait_done "$id" "$tag" || rc=1
   fetch_results "$id" "$tag"
+  if grep -q "driver_too_old" "$OUT_ROOT/$tag/box.txt" 2>/dev/null; then
+    log "host driver too old ($(grep driver_too_old "$OUT_ROOT/$tag/box.txt")); rerun (or set RUNPOD_ALLOWED_CUDA=13.0)"
+    rc=1
+  fi
   if grep -q "matrix_exit=[1-9]" "$OUT_ROOT/$tag/matrix.out" 2>/dev/null; then
     log "matrix exited abnormally: $(grep matrix_exit "$OUT_ROOT/$tag/matrix.out")"
     rc=1

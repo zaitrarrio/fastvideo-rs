@@ -9,10 +9,14 @@ description = "fv-serve engine service: warm model pool, per-GPU executors, sche
 [dependencies]
 fastvideo-protocol.workspace = true
 fastvideo-models.workspace = true
+fastvideo-media.workspace = true
+image.workspace = true
 serde.workspace = true
+serde_json.workspace = true
 thiserror.workspace = true
 time.workspace = true
-tokio = { workspace = true, features = ["sync", "time"] }
+# `rt`/`macros`: the streaming cores (ClipPlayer, pacers) are tokio tasks.
+tokio = { workspace = true, features = ["sync", "time", "rt", "macros"] }
 tracing.workspace = true
 uuid.workspace = true
 
