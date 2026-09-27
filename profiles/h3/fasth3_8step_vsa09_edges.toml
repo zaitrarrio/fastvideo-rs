@@ -1,3 +1,4 @@
+# Measured (RTX PRO 6000, b299214, 5 prompts, medians): 768p denoise 41.39 s (1.11x), LPIPS 0.465, PSNR 13.0 dB, sharpness 1.01 (min 0.945); gate FAIL (sharpness, 1 of 5) vs FastH3 8-step 768p (denoise 45.76 s).
 # FastH3 8-step, VSA 0.9 with step 0 and blocks 0-1 / 48-49 at 0.8, MXFP8.
 # An arm of the h3attn matrix family (docs/techniques.md, "H3 attention arms").
 

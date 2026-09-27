@@ -1,3 +1,4 @@
+# Measured (RTX PRO 6000, b299214, 5 prompts, medians): 768p denoise 23.58 s (1.42x), LPIPS 0.348, PSNR 15.6 dB, sharpness 1.02, jitter 1.04; gate PASS vs Sol-H3 4-step dense 768p (denoise 33.45 s).
 # Sol-H3 4-step, the engine route at tau 0.75 (milder).
 # An arm of the h3attn matrix family (docs/techniques.md, "H3 attention arms").
 

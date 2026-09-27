@@ -1,3 +1,4 @@
+# Measured (RTX PRO 6000, b299214, 5 prompts, medians): 480p denoise 24.59 s (1.02x), LPIPS 0.213, PSNR 20.3 dB, sharpness 0.98 (min 0.947); gate FAIL (sharpness 1 of 5; speedup) vs h3/rtx5090_fullopt at 480p, MXFP8 (denoise 25.09 s).
 # sol-h3-rtx fullopt at tau 1.25 (published: 1.0).
 # An arm of the h3attn matrix family (docs/techniques.md, "H3 attention arms"):
 # h3/rtx5090_fullopt with one change (sol-engine's knobs: SOL_ATTN_TAU,

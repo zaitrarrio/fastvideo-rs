@@ -1,3 +1,4 @@
+# Measured (RTX PRO 6000, b299214, 5 prompts, medians): 480p denoise 25.17 s (1.00x), byte-identical clip (TeaCache already skips forwards 5-12, so dense forwards 6-9 never run); gate FAIL (no speedup) vs h3/rtx5090_fullopt at 480p, MXFP8 (denoise 25.09 s).
 # sol-h3-rtx fullopt with 6 dense warm-up forwards (published: 10).
 # An arm of the h3attn matrix family (docs/techniques.md, "H3 attention arms"):
 # h3/rtx5090_fullopt with one change (sol-engine's knobs: SOL_ATTN_TAU,

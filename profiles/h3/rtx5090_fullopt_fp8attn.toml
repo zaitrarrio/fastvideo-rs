@@ -1,3 +1,4 @@
+# Measured (RTX PRO 6000, b299214, 5 prompts, medians): not run end to end: the attn_fp8 parity checks failed their tolerance on peaked inputs (see docs/techniques.md).
 # sol-h3-rtx fullopt with its dense forwards and blocks on the FP8 Q K^T kernel.
 # An arm of the h3attn matrix family (docs/techniques.md, "H3 attention arms"):
 # h3/rtx5090_fullopt with one change (sol-engine's knobs: SOL_ATTN_TAU,

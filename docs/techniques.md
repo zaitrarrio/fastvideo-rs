@@ -253,6 +253,7 @@ techniques, parameters and settings as the shipped profile of the same name.
 | `h3/fasth3_8step_sol` | `8step` | `sol_attn` (tau 1.0, text sink, no dense step or block), `mxfp8`, `bf16_activations` |
 | `h3/fasth3_8step_teacache` | `8step` | `vsa`, `teacache` (threshold 1.0, retain 3, cooldown 3: only steps 3-4 can reuse), `mxfp8`, `bf16_activations` |
 | `h3/fasth3_8step_sol_teacache` | `8step` | both of the above |
+| `h3/fasth3_8step_vsa*`, `_sol_vsa_d2*`, `_sol_d2`, `h3/fasth3_4step_vsa0925` / `095*`, `h3/sol_h3_4step_engine_t075` / `_ladder`, `h3/rtx5090_fullopt_d6` / `_t125`, `*_fp8attn` | per recipe | the `h3attn` arms (below); each profile's first line holds its numbers |
 | `ltx2/ltx25_rtx5090_distill_bf16` | (two-stage) | `sol_attn` (`ltx25_stage2`), `bf16_linears`, `offload.placement = "cpu"` |
 | `ltx2/ltx25_distill_sol` | (two-stage) | `sol_attn` (`ltx25_stage2`) |
 | `ltx2/ltx25_distill_dense` | (two-stage) | `dense_attention` |
@@ -442,6 +443,109 @@ checkpoint (LPIPS 0.67-0.71); TeaCache on the middle two steps passes the
 768p gate at a 23% denoise saving but moves the clip visibly (LPIPS 0.38).
 TAEH3 fails the gate's sharpness floor everywhere (0.84-0.93 against its
 twin) and saves decode time only (`total_s` -2.2 to -2.5 s at 480p).
+
+### H3 attention arms (`h3attn`, RTX PRO 6000, 2026-09-27)
+
+This family explores doing less attention or cheaper attention on H3, where
+attention is 67% of GPU-busy time. Setup: `b299214`, the five-prompt set,
+LPIPS, and the `lossy` gate against the recipe's own profile. Every arm of a
+recipe ran in one process (`h3 gen --arm NAME=PROFILE`), so all arms of a
+recipe loaded the weights once and ran warm. Each table value is the median
+over the prompts. "sharp. min" is the worst prompt's sharpness ratio; the
+gate's hard floor is 0.95. Each arm is a profile under `profiles/h3/`, and its
+numbers are in the profile's first line. No default changed.
+
+```bash
+FV_FAMILY=h3attn FV_PROMPTS=5 FV_LPIPS=1 scripts/gpu/runpod-http.sh run <sha7>
+```
+
+The 8-step baseline's `total_s` (140.3 s) includes the first-time streamed
+encode of four prompts. With a cached prompt it is denoise + about 7 s, the
+same as the arms.
+
+| arm (768p unless noted) | denoise s | total s | LPIPS | PSNR dB | sharp. (min) | jitter | gate |
+|---|---|---|---|---|---|---|---|
+| **FastH3 8-step** (`fasth3_8step`, VSA 0.8) | 45.76 | 140.3 | — | — | — | — | — |
+| VSA 0.85 | 43.04 | 50.1 | 0.525 | 11.4 | 0.97 (0.94) | 0.98 | fail: sharpness 2/5, 1.06x |
+| VSA 0.9 | 39.71 | 46.7 | 0.634 | 10.9 | 1.02 (0.89) | 1.01 | fail: sharpness 2/5 |
+| VSA 0.925 | 38.19 | 45.1 | 0.653 | 10.4 | 1.03 (0.88) | 0.92 | fail: sharpness 3/5 |
+| VSA 0.95 | 36.59 | 43.5 | 0.648 | 10.1 | 1.05 (0.85) | 0.96 | fail: sharpness 3/5 |
+| VSA 0.9, step 0 + blocks 0-1/48-49 at 0.8 (`_vsa09_edges`) | 41.39 | 49.1 | 0.465 | 13.0 | 1.01 (0.945) | 1.05 | fail: sharpness 1/5 |
+| VSA 0.95, same edges (`_vsa095_edges`) | 38.44 | 45.3 | 0.545 | 11.8 | 1.00 | 1.07 | fail: sharpness 1/5 |
+| Sol tau 1.0, VSA on steps 0-1 + blocks 0-1/48-49 (`_sol_vsa_d2`) | 41.31 | 48.2 | 0.544 | 12.0 | 0.83 (0.77) | 0.78 | fail: sharpness + jitter 5/5 |
+| same, tau 0.5 (`_sol_vsa_d2_t05`) | 45.30 | 52.2 | 0.539 | 12.0 | 0.84 | 0.75 | fail |
+| Sol tau 1.0, *dense* on steps 0-1 + blocks 0-1/48-49 (`_sol_d2`) | 48.62 | 55.5 | 0.698 | 10.3 | 0.64 (0.51) | 0.43 | fail |
+| **FastH3 4-step VSA** (`fasth3_4step_vsa`, 0.9) | 19.81 | 26.7 | — | — | — | — | — |
+| VSA 0.925 | 19.04 | 26.0 | 0.510 | 12.7 | 0.99 (0.96) | 1.01 | quality pass; 1.04x (fail < 1.10) |
+| VSA 0.95 | 18.24 | 25.1 | 0.559 | 12.3 | 1.03 (0.905) | 0.96 | fail: sharpness 2/5 |
+| VSA 0.95, step 0 + blocks 0-1/48-49 at 0.9 | 18.72 | 25.7 | 0.424 | 14.4 | 1.00 (0.99) | 0.99 | quality pass; 1.06x (fail < 1.10) |
+| **Sol-H3 4-step** (`sol_h3_4step`, dense) | 33.45 | 40.3 | — | — | — | — | — |
+| engine route (published; `sol_h3_4step_engine`) | 22.61 | 29.5 | 0.356 | 15.2 | 1.01 (1.00) | 1.07 | **pass**, 1.48x |
+| engine at tau 0.75 | 23.58 | 30.5 | 0.348 | 15.6 | 1.02 (1.00) | 1.04 | **pass**, 1.42x |
+| engine, tau 1.0 / 1.25 / 1.5 on forwards 1-3 (`_engine_ladder`) | **21.80** | **28.7** | 0.375 | 15.2 | 1.02 (1.01) | 1.05 | **pass**, 1.53x |
+| **H3 fullopt 480p** (`rtx5090_fullopt` + MXFP8) | 25.09 | 28.2 | — | — | — | — | — |
+| 6 dense forwards (published: 10) | 25.17 | 28.4 | 0 (identical) | — | 1.00 | 1.00 | fail: no speedup |
+| tau 1.25 (published: 1.0) | 24.59 | 27.7 | 0.213 | 20.3 | 0.98 (0.947) | 1.02 | fail: sharpness 1/5, 1.02x |
+
+What the numbers say:
+
+* **Raising the 8-step VSA sparsity fails the gate at every level.** The
+  denoise gain is linear, 1.06x to 1.25x, but two or three of the five
+  prompts go soft (sharpness 0.85 to 0.94). Keeping step 0 and the first and
+  last two blocks at the trained 0.8 roughly halves the damage: LPIPS drops
+  from 0.63 to 0.47 at 0.9, and from 0.65 to 0.55 at 0.95. In both cases one
+  prompt still fails (0.945 at 0.9, 0.05 short of the floor).
+* **The 4-step VSA checkpoint tolerates 0.95 with edges** (every prompt
+  sharp, LPIPS 0.42). Its attention is too small a share of the 4-step
+  denoise for the gain to reach the promotion bar: 1.06x.
+* **Sol on the 8-step checkpoint needs its dense calls to be VSA.**
+  `dense_backend = "vsa"` moves LPIPS from 0.70 to 0.54 with the same route.
+  Every prompt still loses sharpness and flicker, because the Sol blocks
+  lack the trained compression branch. This route is not viable on the
+  VSA-distilled checkpoint.
+* **Sol-H3 4-step: all three engine routes pass.** The tau ladder
+  1.0 / 1.25 / 1.5 is the fastest route that passes: 1.53x denoise, 28.7 s
+  total against 40.3 s dense. The published engine route gets 1.48x. The
+  recipe default stays dense on one GPU, as sol-engine publishes it.
+* **fullopt: nothing to gain in the route.** TeaCache already reuses forwards
+  5-12, so dense warm-up forwards 6-9 never run: 6 dense forwards produce
+  the identical clip. tau 1.25 buys 2%. The published profile stays.
+  `rtx5090_profiles_equal_the_sol_engine_configs` confirms that the shipped
+  `rtx5090_*` profiles still equal sol-engine's configs.
+
+**FP8 attention (`attn_fp8`), parity and speed** (`kernels --groups
+attn_fp8`). The tolerance was stated in advance as rel-L2 <= 5e-2 and
+cosine >= 0.998 against the bf16 kernel.
+
+| case | rel-L2 vs bf16 | cosine | result |
+|---|---|---|---|
+| dense, unit q/k ("flat"), S = 300 / 1000 | 0.037 / 0.039 | 0.9993 | pass |
+| dense, q x 3 + per-channel K offset ("peaked"), S = 300 / 1000 / 4097 | 0.073 / 0.079 / 0.086 | 0.997 / 0.997 / 0.996 | **fail** |
+| VSA fine stage, flat / peaked | 0.038 / 0.066-0.074 | 0.9993 / 0.997 | pass / **fail** |
+| bf16 kernel vs f64 (reference noise) | 0.0006-0.0013 | 0.99999 | — |
+
+| timing at the 768p shapes | bf16 | FP8 Q K^T | speedup |
+|---|---|---|---|
+| dense, 56 heads x 37 966 rows | 110.3 ms (375 TFLOPS) | 92.3 ms (448 TFLOPS) | 1.19x |
+| VSA fine stage, 660 tiles, top-k 132 (0.8) | 37.0 ms | 27.9 ms | 1.33x |
+| VSA fine stage, top-k 66 (0.9) | 22.7 ms | 16.2 ms | 1.40x |
+
+The kernels run correctly: flat inputs land where E4M3's 3-bit mantissa
+predicts. Their error, however, is 30 to 100 times the bf16 kernel's, and it
+grows with the score scale. It fails the stated tolerance on peaked inputs
+even with K smoothing. For that reason the family dropped the `*_fp8attn`
+arms (`fasth3_8step_fp8attn`, `fasth3_4step_vsa_fp8attn`,
+`sol_h3_4step_fp8attn`, `rtx5090_fullopt_fp8attn`) and did not measure them
+end to end. The profiles and the `FASTVIDEO_ATTN_FP8` knob remain opt-in.
+
+The next step is INT8 `Q K^T` (`mma.sync.s8`, 7 bits, which is what
+SageAttention uses) with per-warp Q scales in the same kernels, and then the
+end-to-end gate. A 1.19x faster dense kernel would save at most about 10% of
+the Sol-H3 dense denoise.
+
+Spend: $0.56 for a 480p smoke run (it found that NVRTC's PTX was refused by
+the pod's driver, so `attn_fp8.cu` now ships ahead-of-time cubins), and $3.93
+for the full run (pod `55cs1dp5beoswb`, 1 h 53 min).
 
 ## Adding a technique
 

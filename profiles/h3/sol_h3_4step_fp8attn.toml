@@ -1,3 +1,4 @@
+# Measured (RTX PRO 6000, b299214, 5 prompts, medians): not run end to end: the attn_fp8 parity checks failed their tolerance on peaked inputs (see docs/techniques.md).
 # Sol-H3 4-step, dense attention on the FP8 Q K^T kernel.
 # An arm of the h3attn matrix family (docs/techniques.md, "H3 attention arms").
 

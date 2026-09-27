@@ -1,3 +1,4 @@
+# Measured (RTX PRO 6000, b299214, 5 prompts, medians): not run end to end: the attn_fp8 parity checks failed their tolerance on peaked inputs (see docs/techniques.md).
 # FastH3 4-step VSA 0.9 with the FP8 Q K^T fine stage, MXFP8.
 # An arm of the h3attn matrix family (docs/techniques.md, "H3 attention arms").
 
