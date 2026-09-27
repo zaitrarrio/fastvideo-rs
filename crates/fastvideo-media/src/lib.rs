@@ -9,7 +9,8 @@
 //! | [`resample`] | rubato FFT resampler (32k/24k to 48k for Opus, 48k to 32k/44.1k for MP4), channel mixing |
 //! | [`crossfade`] | Raised-cosine clip-edge fades that keep sample counts |
 //! | [`opus`] | Opus framer (10/20 ms, sample-counter RTP timestamps) and libopus encoder (`opus` feature) |
-//! | [`video`] | `VideoEncoder` trait: OpenH264 (`openh264` feature), x264 via ffmpeg, an NVENC slot |
+//! | [`video`] | `VideoEncoder` trait: NVENC (production, via ffmpeg `h264_nvenc`), OpenH264 (CPU test backend, `openh264` feature); publish profiles (Cloudflare 720p/L3.1, MediaMTX/peer native/L4.0) |
+//! | [`scale`] | Pre-encode canvas scaler (fit+pad or stretch) |
 //! | [`h264`] | Annex-B / SPS helpers and the H.264 level table |
 //! | [`mp4`] | ffmpeg MP4 writer and `finalize` (faststart, `-an`, crop), plus a pure-Rust box inspector |
 //! | [`probe`] | `MediaProbe` via the image crate, ffprobe, or the MP4 inspector; decoding helpers |
@@ -33,6 +34,7 @@ pub mod pacer;
 pub mod probe;
 pub mod queue;
 pub mod resample;
+pub mod scale;
 pub mod sink;
 pub mod tools;
 pub mod video;

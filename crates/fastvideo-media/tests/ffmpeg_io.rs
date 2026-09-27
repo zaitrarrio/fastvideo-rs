@@ -1,5 +1,8 @@
 //! ffmpeg-backed tests: MP4 structure (faststart, tracks, fal format),
-//! `finalize`, probing, the x264-ffmpeg encoder and the RTMP/HLS/file sinks.
+//! `finalize`, probing, the ffmpeg pipe encoder and the RTMP/HLS/file sinks.
+//! CPU CI has no NVENC, so these run the same ffmpeg plumbing with the
+//! CPU-test codec (`FfmpegH264::Libx264CpuTest`); NVENC runs are GPU-only
+//! (`tests/nvenc.rs`).
 //! Each test skips (passes with a note) when ffmpeg/ffprobe are absent; set
 //! `FV_FFMPEG`/`FV_FFPROBE` to point at binaries off `PATH`.
 
@@ -11,7 +14,7 @@ use fastvideo_media::mp4::{self, AudioTarget, Crop, Mp4Spec, PostProcess};
 use fastvideo_media::probe::{self, MediaKind};
 use fastvideo_media::sink::{FfmpegSink, SinkAudioIn, SinkConfig, SinkTarget, HLS_PLAYLIST};
 use fastvideo_media::tools;
-use fastvideo_media::video::{create_encoder, EncoderBackend, H264Config};
+use fastvideo_media::video::{create_encoder, EncoderBackend, FfmpegH264, H264Config, PublishTarget};
 use fastvideo_media::{Pcm, RgbFrame};
 
 fn have_ffmpeg() -> bool {
@@ -47,6 +50,12 @@ fn tone(rate: u32, channels: u8, secs: f64) -> Pcm {
     Pcm::new(rate, channels, v)
 }
 
+/// CPU CI stand-in for NVENC in the ffmpeg-based writers.
+fn cpu(mut spec: Mp4Spec) -> Mp4Spec {
+    spec.encoder = FfmpegH264::Libx264CpuTest;
+    spec
+}
+
 fn frames(w: u32, h: u32, n: u64) -> Vec<RgbFrame> {
     (0..n).map(|i| pattern(w, h, i)).collect()
 }
@@ -60,7 +69,7 @@ fn fal_h3_mp4_format() {
     let out = dir.path().join("h3.mp4");
     // H3 native audio: 32 kHz stereo; a 1 s clip (24 frames) at a small canvas.
     let native = tone(32_000, 2, 1.1);
-    mp4::write_mp4(&out, Mp4Spec::fal_h3(128, 72), &frames(128, 72, 24), Some(&native)).unwrap();
+    mp4::write_mp4(&out, cpu(Mp4Spec::fal_h3(128, 72)), &frames(128, 72, 24), Some(&native)).unwrap();
     let info = mp4::inspect(&out).unwrap();
     assert!(info.fal_h3_problems().is_empty(), "{:?}\n{info:#?}", info.fal_h3_problems());
     assert_eq!(info.top_level.iter().position(|t| t == "moov") < info.top_level.iter().position(|t| t == "mdat"), true);
@@ -89,7 +98,7 @@ fn mp4_44k_target_and_video_only() {
     }
     let dir = tempfile::tempdir().unwrap();
     let a = dir.path().join("cd.mp4");
-    mp4::write_mp4(&a, Mp4Spec::new(64, 64, 16, Some(AudioTarget::CD)), &frames(64, 64, 16), Some(&tone(48_000, 1, 1.0)))
+    mp4::write_mp4(&a, cpu(Mp4Spec::new(64, 64, 16, Some(AudioTarget::CD))), &frames(64, 64, 16), Some(&tone(48_000, 1, 1.0)))
         .unwrap();
     let ia = mp4::inspect(&a).unwrap();
     let aa = ia.audio().unwrap().audio.clone().unwrap();
@@ -97,7 +106,7 @@ fn mp4_44k_target_and_video_only() {
     assert_eq!(ia.video().unwrap().fps, Some(16.0)); // SF-Wan rate
     // Video-only (Wan): no audio track at all.
     let b = dir.path().join("wan.mp4");
-    mp4::write_mp4(&b, Mp4Spec::new(64, 64, 16, None), &frames(64, 64, 17), None).unwrap();
+    mp4::write_mp4(&b, cpu(Mp4Spec::new(64, 64, 16, None)), &frames(64, 64, 17), None).unwrap();
     let ib = mp4::inspect(&b).unwrap();
     assert!(ib.audio().is_none());
     assert!(ib.faststart);
@@ -111,27 +120,27 @@ fn finalize_faststart_drop_audio_and_crop() {
     }
     let dir = tempfile::tempdir().unwrap();
     let src = dir.path().join("src.mp4");
-    let mut spec = Mp4Spec::new(64, 72, 24, Some(AudioTarget::FAL_H3));
+    let mut spec = cpu(Mp4Spec::new(64, 72, 24, Some(AudioTarget::FAL_H3)));
     spec.faststart = false;
     mp4::write_mp4(&src, spec, &frames(64, 72, 12), Some(&tone(32_000, 2, 0.5))).unwrap();
     assert!(!mp4::inspect(&src).unwrap().faststart);
 
     let fast = dir.path().join("fast.mp4");
-    mp4::finalize(&src, &fast, &PostProcess::default()).unwrap();
+    mp4::finalize_with(&src, &fast, &PostProcess::default(), FfmpegH264::Libx264CpuTest).unwrap();
     let i = mp4::inspect(&fast).unwrap();
     assert!(i.faststart);
     assert!(i.audio().is_some());
     assert_eq!(i.video().unwrap().samples, 12);
 
     let silent = dir.path().join("silent.mp4");
-    mp4::finalize(&src, &silent, &PostProcess { crop: None, drop_audio: true }).unwrap();
+    mp4::finalize_with(&src, &silent, &PostProcess { crop: None, drop_audio: true }, FfmpegH264::Libx264CpuTest).unwrap();
     let i = mp4::inspect(&silent).unwrap();
     assert!(i.faststart && i.audio().is_none());
 
     // Pad-and-crop: 64x72 -> 64x64 (the 1920x1088 -> 1920x1080 case in miniature).
     let cropped = dir.path().join("crop.mp4");
     let post = PostProcess { crop: Some(Crop { width: 64, height: 64, x: None, y: None }), drop_audio: false };
-    mp4::finalize(&src, &cropped, &post).unwrap();
+    mp4::finalize_with(&src, &cropped, &post, FfmpegH264::Libx264CpuTest).unwrap();
     let i = mp4::inspect(&cropped).unwrap();
     assert_eq!((i.video().unwrap().width, i.video().unwrap().height), (Some(64), Some(64)));
     assert!(i.faststart && i.audio().is_some());
@@ -147,12 +156,12 @@ fn finalize_faststart_drop_audio_and_crop() {
 }
 
 #[test]
-fn x264_ffmpeg_encoder_gop_profile_level() {
+fn pipe_encoder_gop_profile_level() {
     if !have_ffmpeg() {
         return;
     }
     let cfg = H264Config::new(1344, 768, 24);
-    let mut enc = create_encoder(EncoderBackend::X264Ffmpeg, cfg).unwrap();
+    let mut enc = create_encoder(EncoderBackend::CpuTestX264, cfg).unwrap();
     let mut aus = Vec::new();
     for i in 0..60 {
         aus.extend(enc.encode(&pattern(1344, 768, i)).unwrap());
@@ -196,7 +205,8 @@ fn file_sink_video_only_still_has_audio() {
     }
     let dir = tempfile::tempdir().unwrap();
     let out = dir.path().join("rec.mp4");
-    let cfg = SinkConfig::new(SinkTarget::File { path: out.clone() }, 64, 64, 16, None);
+    let mut cfg = SinkConfig::new(SinkTarget::File { path: out.clone() }, 64, 64, 16, None);
+    cfg.encoder = FfmpegH264::Libx264CpuTest;
     let mut s = FfmpegSink::start(cfg).unwrap();
     for i in 0..32 {
         s.send(&pattern(64, 64, i), None).unwrap();
@@ -218,13 +228,14 @@ fn file_sink_av_over_two_pipes() {
     }
     let dir = tempfile::tempdir().unwrap();
     let out = dir.path().join("av.mp4");
-    let cfg = SinkConfig::new(
+    let mut cfg = SinkConfig::new(
         SinkTarget::File { path: out.clone() },
         64,
         64,
         24,
         Some(SinkAudioIn { rate: 48_000, channels: 1 }),
     );
+    cfg.encoder = FfmpegH264::Libx264CpuTest;
     let mut s = FfmpegSink::start(cfg).unwrap();
     let tick = vec![0.2f32; 2000];
     for i in 0..48 {
@@ -246,7 +257,8 @@ fn hls_sink_writes_a_playlist() {
     }
     let dir = tempfile::tempdir().unwrap();
     let hls = dir.path().join("hls");
-    let cfg = SinkConfig::new(SinkTarget::Hls { dir: hls.clone(), segment_s: 1, window: 6 }, 64, 64, 24, None);
+    let mut cfg = SinkConfig::new(SinkTarget::Hls { dir: hls.clone(), segment_s: 1, window: 6 }, 64, 64, 24, None);
+    cfg.encoder = FfmpegH264::Libx264CpuTest;
     let mut s = FfmpegSink::start(cfg).unwrap();
     for i in 0..72 {
         s.send(&pattern(64, 64, i), None).unwrap();
@@ -257,4 +269,29 @@ fn hls_sink_writes_a_playlist() {
     let pl = std::fs::read_to_string(hls.join(HLS_PLAYLIST)).unwrap();
     assert!(pl.contains("#EXTM3U"));
     assert!(pl.contains("segment-"));
+}
+
+#[test]
+fn pipe_encoder_cloudflare_scale_and_forced_idr_restart() {
+    if !have_ffmpeg() {
+        return;
+    }
+    // H3 1344x768 published to Cloudflare: encoded at 1280x720, level 3.1.
+    let cfg = H264Config::for_publish(PublishTarget::Cloudflare, 1344, 768, 24);
+    let mut enc = create_encoder(EncoderBackend::CpuTestX264, cfg).unwrap();
+    let mut aus = Vec::new();
+    for i in 0..40 {
+        if i == 20 {
+            enc.force_idr(); // PLI: the pipe encoder restarts ffmpeg
+        }
+        aus.extend(enc.encode(&pattern(1344, 768, i)).unwrap());
+    }
+    aus.extend(enc.finish().unwrap());
+    assert_eq!(aus.len(), 40);
+    assert!(aus.windows(2).all(|w| w[1].index == w[0].index + 1));
+    let keys: Vec<u64> = aus.iter().filter(|a| a.keyframe).map(|a| a.index).collect();
+    assert_eq!(keys, vec![0, 20]);
+    let sps = h264::find_sps(&aus[20].data).unwrap();
+    assert_eq!((sps.width, sps.height, sps.level_idc), (1280, 720, 31));
+    assert!(sps.is_constrained_baseline());
 }

@@ -7,7 +7,7 @@ use std::time::Instant;
 
 use fastvideo_media::h264::{self, H264Level};
 use fastvideo_media::video::openh264_backend::decode_rgb;
-use fastvideo_media::video::{create_encoder, EncoderBackend, H264Config};
+use fastvideo_media::video::{create_encoder, EncoderBackend, H264Config, PublishTarget};
 use fastvideo_media::RgbFrame;
 
 fn pattern(w: u32, h: u32, i: u64) -> RgbFrame {
@@ -87,6 +87,13 @@ fn configured_level_4_and_small_canvas() {
         }
     }
     assert_eq!(keys, vec![0, 32, 64]);
+    // Cloudflare profile: the Rust scaler feeds a 1280x720 level-3.1 stream.
+    let mut cf = create_encoder(EncoderBackend::OpenH264, H264Config::for_publish(PublishTarget::Cloudflare, 1344, 768, 24)).unwrap();
+    let au = cf.encode(&pattern(1344, 768, 0)).unwrap().remove(0);
+    let sps = h264::find_sps(&au.data).unwrap();
+    assert_eq!((sps.width, sps.height, sps.level_idc), (1280, 720, 31));
+    let dec = decode_rgb(&[&au.data[..]]).unwrap();
+    assert_eq!(dec[0].pixel(2, 360).map(|p| p.iter().all(|&c| c < 24)), Some(true), "fit padding is black");
     // Wrong frame size is an error, not a silent re-init.
     assert!(e.encode(&pattern(64, 64, 0)).is_err());
 }

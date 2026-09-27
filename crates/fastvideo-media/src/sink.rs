@@ -12,8 +12,8 @@
 //! - **There is always an audio track** (platforms reject video-only FLV):
 //!   a video-only session gets ffmpeg's `anullsrc` silence instead of the
 //!   second pipe.
-//! - Video is libx264 with the same GOP/profile arguments as the
-//!   `x264-ffmpeg` encoder backend; audio is AAC 128k at 48 kHz (§5.3).
+//! - Video is NVENC (`h264_nvenc`) with the same GOP/profile arguments as the
+//!   NVENC pipe encoder; audio is AAC 128k at 48 kHz (§5.3).
 //! - A dead ffmpeg is restarted lazily (at most once per 2 s).
 
 use std::io::Write;
@@ -31,7 +31,7 @@ use crate::error::{MediaError, Result};
 use crate::mp4::AudioTarget;
 use crate::queue::DropOldest;
 use crate::tools;
-use crate::video::{H264Config, X264FfmpegEncoder};
+use crate::video::{FfmpegH264, H264Config};
 
 /// HLS playlist file name inside the output directory.
 pub const HLS_PLAYLIST: &str = "stream.m3u8";
@@ -65,6 +65,8 @@ pub struct SinkConfig {
     pub aac: AudioTarget,
     /// Ticks buffered per pipe before the oldest is dropped.
     pub queue_ticks: usize,
+    /// NVENC in production.
+    pub encoder: FfmpegH264,
 }
 
 impl SinkConfig {
@@ -78,6 +80,7 @@ impl SinkConfig {
             audio_in,
             aac: AudioTarget::BROADCAST,
             queue_ticks: (fps as usize) * 2,
+            encoder: FfmpegH264::Nvenc,
         }
     }
 
@@ -111,7 +114,7 @@ impl SinkConfig {
         let mut h = H264Config::new(self.width, self.height, self.fps);
         h.bitrate_bps = self.video_bitrate_bps;
         h.gop_seconds = self.gop_seconds();
-        a.extend(X264FfmpegEncoder::x264_args(&h)?);
+        a.extend(self.encoder.stream_args(&h)?);
         a.extend(["-c:a", "aac", "-b:a"].map(String::from));
         a.extend([self.aac.bitrate_bps.to_string(), "-ar".into(), self.aac.rate.to_string()]);
         a.extend(["-ac".into(), self.aac.channels.to_string()]);
@@ -377,8 +380,10 @@ mod tests {
         assert!(a.contains("-f lavfi -i anullsrc=channel_layout=stereo:sample_rate=48000"), "{a}");
         assert!(a.contains("-map 0:v -map 1:a"));
         assert!(a.contains("-c:a aac -b:a 128000 -ar 48000 -ac 2"));
-        assert!(a.contains("-g 48 -keyint_min 48 -sc_threshold 0"));
+        assert!(a.contains("-c:v h264_nvenc"));
+        assert!(a.contains("-g 48 -bf 0 -forced-idr 1 -no-scenecut 1"));
         assert!(a.contains("-profile:v baseline -level:v 3.2"));
+        assert!(!a.contains("libx264"));
         assert!(a.ends_with("-f flv rtmp://x/live/k"));
     }
 
@@ -394,7 +399,7 @@ mod tests {
         let a = c.ffmpeg_args(Some(5555)).unwrap().join(" ");
         assert!(a.contains("-f s16le -ar 48000 -ac 1 -i tcp://127.0.0.1:5555"), "{a}");
         assert!(!a.contains("anullsrc"));
-        assert!(a.contains("-g 16 -keyint_min 16"));
+        assert!(a.contains("-g 16 -bf 0"));
         assert!(a.contains("-hls_time 1 -hls_list_size 6"));
         assert!(a.contains("-hls_start_number_source epoch"));
         assert!(a.ends_with("/tmp/h/stream.m3u8"));

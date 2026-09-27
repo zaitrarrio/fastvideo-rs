@@ -1,14 +1,14 @@
 //! MP4 output (design §4 common conventions).
 //!
 //! - [`Mp4Writer`] / [`write_mp4`]: RGB24 frames plus optional PCM to an MP4
-//!   through ffmpeg, with the engine's `VideoWriter` settings
-//!   (`crates/fastvideo-cudarc/src/wan/writer.rs`: libx264 `veryfast` crf 19
-//!   yuv420p, rgb24 on stdin, audio from a side file, AAC), plus
-//!   `+faststart`. [`Mp4Spec::fal_h3`] is the fal/H3 shape: H.264, 24 fps,
+//!   through ffmpeg, following the engine's `VideoWriter` shape
+//!   (`crates/fastvideo-cudarc/src/wan/writer.rs`: rgb24 on stdin, audio from
+//!   a side file, AAC, yuv420p), plus `+faststart`. Video is encoded on NVENC
+//!   (design §0: no x264) at constant quality 19. [`Mp4Spec::fal_h3`] is the fal/H3 shape: H.264, 24 fps,
 //!   AAC-LC stereo 32 kHz, faststart.
 //! - [`finalize`]: the post-processor every batch job runs: `-c copy
 //!   -movflags +faststart`, `-an` for silent output, and a crop (re-encoded
-//!   with the same x264 settings) for pad-and-crop canvases.
+//!   with the same NVENC settings) for pad-and-crop canvases.
 //! - [`inspect`]: a pure-Rust box reader to verify all of that.
 
 pub mod inspect;
@@ -24,6 +24,7 @@ use crate::error::{MediaError, Result};
 use crate::lockstep::clip_samples;
 use crate::resample;
 use crate::tools;
+use crate::video::FfmpegH264;
 
 /// AAC output settings.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -52,17 +53,18 @@ pub struct Mp4Spec {
     pub width: u32,
     pub height: u32,
     pub fps: u32,
-    pub crf: u8,
-    pub preset: String,
+    /// Constant-quality target (NVENC `-cq`).
+    pub quality: u8,
+    pub encoder: FfmpegH264,
     /// `None` writes a video-only file.
     pub audio: Option<AudioTarget>,
     pub faststart: bool,
 }
 
 impl Mp4Spec {
-    /// The engine writer's settings (crf 19, veryfast), with the audio target given.
+    /// NVENC at quality 19, with the audio target given.
     pub fn new(width: u32, height: u32, fps: u32, audio: Option<AudioTarget>) -> Self {
-        Self { width, height, fps, crf: 19, preset: "veryfast".into(), audio, faststart: true }
+        Self { width, height, fps, quality: 19, encoder: FfmpegH264::Nvenc, audio, faststart: true }
     }
 
     /// What hosted H3 returns on fal: 24 fps, AAC-LC stereo 32 kHz, faststart.
@@ -112,7 +114,7 @@ impl Mp4Writer {
                 cmd.arg("-an");
             }
         }
-        cmd.args(["-c:v", "libx264", "-preset", &spec.preset, "-crf", &spec.crf.to_string(), "-pix_fmt", "yuv420p"])
+        cmd.args(spec.encoder.file_args(spec.quality))
             .args(["-r", &spec.fps.to_string()]);
         if spec.faststart {
             cmd.args(["-movflags", "+faststart"]);
@@ -213,9 +215,13 @@ impl From<&fastvideo_protocol::PostProcess> for PostProcess {
 }
 
 /// Remux `input` to `output` with `+faststart`; `-an` when `drop_audio`;
-/// a crop re-encodes video with the engine writer's x264 settings and copies
-/// audio.
+/// a crop re-encodes video on NVENC (quality 19) and copies audio.
 pub fn finalize(input: &Path, output: &Path, post: &PostProcess) -> Result<()> {
+    finalize_with(input, output, post, FfmpegH264::Nvenc)
+}
+
+/// [`finalize`] with an explicit encoder for the crop re-encode.
+pub fn finalize_with(input: &Path, output: &Path, post: &PostProcess, encoder: FfmpegH264) -> Result<()> {
     if input == output {
         return Err(MediaError::invalid("finalize needs a distinct output path"));
     }
@@ -232,7 +238,7 @@ pub fn finalize(input: &Path, output: &Path, post: &PostProcess) -> Result<()> {
             let x = c.x.map(|v| v.to_string()).unwrap_or_else(|| "(in_w-out_w)/2".into());
             let y = c.y.map(|v| v.to_string()).unwrap_or_else(|| "(in_h-out_h)/2".into());
             cmd.args(["-vf", &format!("crop={}:{}:{x}:{y}", c.width, c.height)])
-                .args(["-c:v", "libx264", "-preset", "veryfast", "-crf", "19", "-pix_fmt", "yuv420p"]);
+                .args(encoder.file_args(19));
             if !post.drop_audio {
                 cmd.args(["-c:a", "copy"]);
             }
@@ -258,7 +264,7 @@ mod tests {
         assert_eq!(s.fps, 24);
         assert_eq!(s.audio, Some(AudioTarget { rate: 32_000, channels: 2, bitrate_bps: 128_000 }));
         assert!(s.faststart);
-        assert_eq!((s.crf, s.preset.as_str()), (19, "veryfast"));
+        assert_eq!((s.quality, s.encoder), (19, FfmpegH264::Nvenc));
         assert_eq!(AudioTarget::CD.rate, 44_100);
     }
 
