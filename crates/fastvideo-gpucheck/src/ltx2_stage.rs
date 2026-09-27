@@ -340,6 +340,15 @@ pub enum Stage {
         /// Default: `FASTVIDEO_LTX2_TAE_WEIGHTS`.
         #[arg(long)]
         ltx_tae_weights: Option<PathBuf>,
+        /// Silent clip (serve E4): skip the audio VAE and vocoder; no WAV, and
+        /// the mp4 has no audio track.
+        #[arg(long)]
+        skip_audio_decode: bool,
+        /// Serve E2: the timed run also delivers its frames and audio to an
+        /// in-memory frame sink (PNG frames kept) and checks the sink's
+        /// frames are byte-identical to the `frame-NNN.png` files.
+        #[arg(long)]
+        sink_check: bool,
     },
     /// Decode only: the conv video VAE on saved latents
     /// (`FASTVIDEO_LTX2_SAVE_LATENTS` from a `gen`) or synthetic ones, at a
@@ -598,6 +607,8 @@ pub fn run(report: &mut Report, stage: &Stage) -> StageResult<()> {
             dense_stage2,
             pisa_stage2,
             ltx_tae_weights,
+            skip_audio_decode,
+            sink_check,
         } => {
             if let Some(gib) = device_budget_gib {
                 crate::gpu::set_budget_gib(*gib)?;
@@ -688,6 +699,10 @@ pub fn run(report: &mut Report, stage: &Stage) -> StageResult<()> {
                 sol_stage2,
                 *pisa_stage2,
                 image.as_deref(),
+                GenExtras {
+                    skip_audio_decode: *skip_audio_decode,
+                    sink_check: *sink_check,
+                },
             )
         }
         Stage::SlimText {
@@ -1896,6 +1911,7 @@ fn gen(
     sol_stage2: bool,
     pisa_stage2: bool,
     image: Option<&Path>,
+    extras: GenExtras,
 ) -> StageResult<()> {
     report.set("device", crate::gpu::init(device)?);
     report.set(
@@ -1938,7 +1954,10 @@ fn gen(
         sol_stage2,
         pisa_stage2,
         image_path: image.map(Path::to_path_buf),
+        skip_audio_decode: extras.skip_audio_decode,
     };
+    report.set("skip_audio_decode", extras.skip_audio_decode);
+    report.set("sink_check", extras.sink_check);
     report.set(
         "request",
         json!({
@@ -2038,7 +2057,16 @@ fn gen(
         };
         fastvideo_cudarc::wan::gpu_trace::reset_report();
         let timed = std::time::Instant::now();
-        let out = pipeline.generate(&request, true, Some(&mut observe))?;
+        let mut collected = fastvideo_cudarc::sink::CollectFrames::default();
+        let sink_check =
+            extras.sink_check || std::env::var("FV_SINK_CHECK").is_ok_and(|v| v == "1");
+        let out = if sink_check {
+            let port = fastvideo_cudarc::sink::SinkPort::new(&mut collected).with_pngs(true);
+            let hooks = fastvideo_cudarc::Hooks::default().with_sink(&port);
+            pipeline.generate_with_hooks(&request, true, Some(&mut observe), hooks)?
+        } else {
+            pipeline.generate(&request, true, Some(&mut observe))?
+        };
         let generate_s = timed.elapsed().as_secs_f64();
         let counters = fastvideo_cudarc::wan::evalstats::snapshot();
         let wall_s = wall.elapsed().as_secs_f64();
@@ -2119,7 +2147,7 @@ fn gen(
         let finite = stats.iter().all(|s| {
             s["non_finite"] == json!(0) && s["video_std"].as_f64().is_some_and(|v| v > 1e-4)
         });
-        let doc = ltx2_benchmark(&Ltx2Bench {
+        let mut doc = ltx2_benchmark(&Ltx2Bench {
             spec,
             model_version,
             g,
@@ -2133,7 +2161,49 @@ fn gen(
             pisa_stage2,
             tae: options.tae.is_some(),
         });
+        let probe = if mp4 {
+            out.mp4.as_deref().map(|p| probe_mp4(Path::new(p)))
+        } else {
+            None
+        };
+        let sink = sink_check.then(|| sink_vs_pngs(&collected, &out.frames, &out.wav));
+        if let Some(map) = doc.as_object_mut() {
+            map.insert("skip_audio_decode".into(), json!(extras.skip_audio_decode));
+            map.insert("mp4_probe".into(), json!(probe));
+            map.insert("sink_check".into(), json!(sink));
+        }
         docs.push((spec.clone(), crate::benchmark::merge(doc, counters)));
+        if let Some(sink) = &sink {
+            report.set(&ck("sink"), sink);
+            report.check(
+                ck("gen.sink_frames_identical"),
+                sink["frames"] == json!(g.num_frames) && sink["mismatched_frames"] == json!(0),
+                sink.clone(),
+                json!({"frames": g.num_frames, "mismatched_frames": 0}),
+            )?;
+            report.check(
+                ck("gen.sink_audio"),
+                if extras.skip_audio_decode {
+                    sink["audio_samples"] == json!(0)
+                } else {
+                    sink["audio_matches_wav"] == json!(true)
+                },
+                sink.clone(),
+                json!({"audio_matches_wav": !extras.skip_audio_decode}),
+            )?;
+        }
+        if let Some(p) = &probe {
+            report.set(&ck("mp4_probe"), p);
+            let want_rate = format!("{}/1", g.frame_rate.round() as u64);
+            report.check(
+                ck("gen.mp4_frames_and_rate"),
+                p["video_frames"] == json!(g.num_frames)
+                    && p["r_frame_rate"] == json!(want_rate)
+                    && p["has_audio"] == json!(!extras.skip_audio_decode),
+                p.clone(),
+                json!({"video_frames": g.num_frames, "r_frame_rate": want_rate, "has_audio": !extras.skip_audio_decode}),
+            )?;
+        }
         report.check(
             ck("gen.latents_finite"),
             finite && stats.len() == want_steps,
@@ -2150,12 +2220,21 @@ fn gen(
         let want_samples = cfg
             .vocoder
             .waveform_samples(cfg.audio_vae.mel_frames(out.audio_tokens));
+        if extras.skip_audio_decode {
+            report.check(
+                ck("gen.no_wav"),
+                out.wav.is_empty() && !clip_owned.join("audio.wav").exists(),
+                json!({"wav": out.wav}),
+                json!({"wav": ""}),
+            )?;
+        } else {
         report.check(
         ck("gen.wav"),
         wav_bytes == 44 + (want_samples * cfg.vocoder.out_channels * 2) as u64,
         json!({"bytes": wav_bytes}),
         json!({"samples_per_channel": want_samples, "sample_rate": cfg.vocoder.output_sampling_rate, "channels": cfg.vocoder.out_channels}),
     )?;
+        }
         if mp4 {
             let size = out
                 .mp4
@@ -2179,6 +2258,118 @@ fn gen(
     crate::benchmark::write(&path, &doc)?;
     report.set("benchmark_json", path.display().to_string());
     Ok(())
+}
+
+/// `gen` switches beyond the pipeline's own (serve E2 / E4).
+#[derive(Debug, Clone, Copy, Default)]
+struct GenExtras {
+    skip_audio_decode: bool,
+    sink_check: bool,
+}
+
+/// `ffprobe` of a finished mp4: the video stream's decoded frame count and
+/// rate, and whether (and how long) an audio stream is present.
+fn probe_mp4(path: &Path) -> serde_json::Value {
+    let run = |args: &[&str]| -> Option<serde_json::Value> {
+        let out = std::process::Command::new("ffprobe")
+            .args(["-v", "error", "-of", "json"])
+            .args(args)
+            .arg(path)
+            .output()
+            .ok()?;
+        serde_json::from_slice(&out.stdout).ok()
+    };
+    let video = run(&[
+        "-select_streams",
+        "v:0",
+        "-count_frames",
+        "-show_entries",
+        "stream=nb_read_frames,r_frame_rate,avg_frame_rate,duration,width,height",
+    ]);
+    let audio = run(&[
+        "-select_streams",
+        "a",
+        "-show_entries",
+        "stream=codec_name,sample_rate,channels,duration",
+    ]);
+    let v = video
+        .as_ref()
+        .and_then(|j| j["streams"].get(0).cloned())
+        .unwrap_or(serde_json::Value::Null);
+    let a = audio
+        .as_ref()
+        .and_then(|j| j["streams"].get(0).cloned())
+        .unwrap_or(serde_json::Value::Null);
+    let frames = v["nb_read_frames"]
+        .as_str()
+        .and_then(|s| s.parse::<u64>().ok());
+    json!({
+        "path": path.display().to_string(),
+        "ffprobe": video.is_some(),
+        "video_frames": frames,
+        "r_frame_rate": v["r_frame_rate"],
+        "avg_frame_rate": v["avg_frame_rate"],
+        "video_duration_s": v["duration"].as_str().and_then(|s| s.parse::<f64>().ok()),
+        "width": v["width"],
+        "height": v["height"],
+        "has_audio": !a.is_null(),
+        "audio": a,
+    })
+}
+
+/// The sink's frames against the same run's `frame-NNN.png` files (decoded
+/// to RGB8), and its PCM against `audio.wav` (16-bit, as `write_wav` rounds).
+pub(crate) fn sink_vs_pngs(
+    sink: &fastvideo_cudarc::sink::CollectFrames,
+    pngs: &[String],
+    wav: &str,
+) -> serde_json::Value {
+    let mut mismatched = 0usize;
+    let mut unreadable = 0usize;
+    let frames: Vec<&[u8]> = sink.frames().collect();
+    for (i, p) in pngs.iter().enumerate() {
+        match image::open(p) {
+            Ok(img) => {
+                let rgb = img.to_rgb8();
+                if frames.get(i).is_none_or(|f| *f != rgb.as_raw().as_slice()) {
+                    mismatched += 1;
+                }
+            }
+            Err(_) => unreadable += 1,
+        }
+    }
+    mismatched += frames.len().abs_diff(pngs.len());
+    let (audio_samples, audio_matches_wav, rate) = match &sink.audio {
+        None => (0, wav.is_empty(), None),
+        Some((rate, channels, pcm)) => {
+            let bytes = std::fs::read(wav).unwrap_or_default();
+            let body = bytes.get(44..).unwrap_or_default();
+            let quantized = |v: f32| (v.clamp(-1.0, 1.0) * 32767.0).round() as i16;
+            let same = body.len() == pcm.len() * 2
+                && body.chunks_exact(2).zip(pcm.iter()).all(|(b, &v)| {
+                    let w = i16::from_le_bytes([b[0], b[1]]);
+                    (i32::from(w) - i32::from(quantized(v))).abs() <= 1
+                });
+            let header_rate = bytes
+                .get(24..28)
+                .map(|r| u32::from_le_bytes([r[0], r[1], r[2], r[3]]));
+            (
+                pcm.len() / (*channels).max(1),
+                same && header_rate == Some(*rate),
+                Some(*rate),
+            )
+        }
+    };
+    json!({
+        "frames": frames.len(),
+        "chunks": sink.chunks.len(),
+        "png_frames": pngs.len(),
+        "mismatched_frames": mismatched,
+        "unreadable_pngs": unreadable,
+        "audio_samples": audio_samples,
+        "audio_rate": rate,
+        "audio_matches_wav": audio_matches_wav,
+    })
 }
 
 struct Ltx2Bench<'a> {

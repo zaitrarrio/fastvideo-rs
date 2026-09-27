@@ -1169,9 +1169,9 @@ dependencies = [
 name = "fastvideo-deploy"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
  "axum",
- "fastvideo-protocol",
- "fastvideo-serve-kit",
+ "base64 0.22.1",
  "reqwest",
  "serde",
  "serde_json",
@@ -1179,6 +1179,7 @@ dependencies = [
  "tokio",
  "tower",
  "tracing",
+ "url",
 ]
 
 [[package]]
