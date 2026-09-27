@@ -6,8 +6,8 @@ use std::path::Path;
 use std::process::Command;
 
 use fastvideo_models::schedulers::{
-    DmdSchedule, FlowUniPCMultistepScheduler, RcmSchedule, UniPcTerm, FAST_WAN_1_3B_DMD_STEPS,
-    RCM_SIGMA_MAX_T2V,
+    DmdSchedule, FlowUniPCMultistepScheduler, RcmSchedule, SelfForcingSchedule, UniPcTerm,
+    FAST_WAN_1_3B_DMD_STEPS, RCM_SIGMA_MAX_T2V, SF_WAN_1_3B_DMD_STEPS,
 };
 use fastvideo_models::wan::{
     i2v_first_frame_mask, moe_expert, MoeExpert, Umt5Config, WanVaeConfig, WanVideoArchConfig,
@@ -378,7 +378,15 @@ impl WanPipeline {
         // `vae_precision` fp32), see umt5.rs / vae.rs. FASTVIDEO_BF16_ACT=0
         // restores f32 activations everywhere.
         crate::wan::tensor::default_bf16_activations();
-        let cfg = WanVideoArchConfig::from_preset(preset);
+        let mut cfg = WanVideoArchConfig::from_preset(preset);
+        if cfg.causal {
+            // Diagnostic: FASTVIDEO_WAN_CAUSAL_FPB=1 with FASTVIDEO_WAN_CAUSAL_AR=0
+            // is the per-frame whole-clip mask this port ran before it
+            // followed FastVideo's blocks.
+            cfg.num_frames_per_block =
+                super::envflag::usize_flag("FASTVIDEO_WAN_CAUSAL_FPB", cfg.num_frames_per_block)
+                    .max(1);
+        }
         let dit = WeightMap::from_dir(&root.join("transformer"))?;
         // The VAE's own config.json (Wan 2.2 TI2V-5B: 48 channels, 16×
         // spatial, residual blocks, patchify 2); the preset's built-in
@@ -850,7 +858,15 @@ impl WanPipeline {
 
         let mut timings = WanTimings::default();
         let timer = std::time::Instant::now();
-        let (encoder_hs, text_cache) = self.encode_text(cfg, Self::needs_negative(cfg))?;
+        let (mut encoder_hs, text_cache) = self.encode_text(cfg, Self::needs_negative(cfg))?;
+        if self.dit.cfg.causal && super::dump::enabled() {
+            super::dump::tensor("text_hidden", &encoder_hs)?;
+        }
+        if self.dit.cfg.causal && super::inject::text_enabled() && encoder_hs.shape[0] == 1 {
+            if let Some(v) = super::inject::load_numel("text_hidden", encoder_hs.numel())? {
+                encoder_hs = CudaTensor::from_vec(v, encoder_hs.shape.clone())?.to_device()?;
+            }
+        }
         timings.text_s = timer.elapsed().as_secs_f64();
         let timer = std::time::Instant::now();
         let mut last = std::time::Instant::now();
@@ -872,6 +888,10 @@ impl WanPipeline {
         timings.denoise_s = timer.elapsed().as_secs_f64();
         timings.step_s = step_s;
         drop(encoder_hs);
+        if self.dit.cfg.causal && !causal_ar_enabled() {
+            // The whole-clip path's result, under the causal sampler's name.
+            super::dump::tensor("sf_latents_out", &latents)?;
+        }
 
         let timer = std::time::Instant::now();
         // A missing ffmpeg costs the mp4, not the clip (as the PNG mux did).
@@ -947,6 +967,12 @@ impl WanPipeline {
             .map(|_| rng.sample::<f32, _>(StandardNormal))
             .collect();
         let mut latents = CudaTensor::from_vec(noise, vec![1, z_c, z_t, z_h, z_w])?;
+        if self.dit.cfg.causal && !self.tiny {
+            // The oracle: FastVideo's initial latents (`sf_latents_in`).
+            if let Some(v) = super::inject::load_numel("sf_latents_in", n_el)? {
+                latents = CudaTensor::from_vec(v, vec![1, z_c, z_t, z_h, z_w])?;
+            }
+        }
         if cfg.is_rcm {
             let sigma = cfg.rcm_sigma_max.unwrap_or(RCM_SIGMA_MAX_T2V);
             let scale =
@@ -1077,6 +1103,19 @@ impl WanPipeline {
             ));
             let _denoise = super::log::StepTimer::start(format!("rcm {} steps", sched.num_steps()));
             rcm_denoise(latents, &encoder_hs, &sched, cfg.seed, &mut ctx, observer)
+        } else if cfg.is_dmd && self.dit.cfg.causal && causal_ar_enabled() {
+            let steps = cfg
+                .dmd_steps
+                .clone()
+                .unwrap_or_else(|| SF_WAN_1_3B_DMD_STEPS.to_vec());
+            let sched = SelfForcingSchedule::new(&steps, cfg.flow_shift, 1000, true);
+            super::log::info(format_args!(
+                "denoise=causal-dmd blocks of {} frames, timesteps {:?}",
+                self.dit.cfg.num_frames_per_block, sched.timesteps
+            ));
+            let _denoise =
+                super::log::StepTimer::start(format!("causal dmd {} steps", steps.len()));
+            causal_dmd_denoise(&self.dit, latents, &ctx.cond_hs, &sched, cfg.seed, observer)
         } else if cfg.is_dmd {
             let steps = cfg
                 .dmd_steps
@@ -1716,6 +1755,13 @@ fn dmd_denoise(
         let t = t as f32;
         let _step = super::log::StepTimer::start(format!("dmd step {}/{total} t={t:.0}", i + 1));
         let velocity = dit_cfg(ctx, &latents, encoder_hs, t)?;
+        if i == 0 && ctx.high.cfg.causal && super::dump::enabled() {
+            // Causal Wan over the whole clip (FASTVIDEO_WAN_CAUSAL_AR=0): the
+            // first block's step-1 prediction, comparable with FastVideo's
+            // first causal forward (same t = 1000, same injected noise).
+            let n = 3.min(latents.shape[2]);
+            super::dump::tensor("sf_c0_s0_flow", &velocity.narrow(2, 0, n)?)?;
+        }
         let c = sched.step_coeffs(i);
         let x0 = CudaTensor::lincomb(&[(1.0, &latents), (-(c.sigma_t as f32), &velocity)])?;
         latents = match c.sigma_next {
@@ -1731,6 +1777,147 @@ fn dmd_denoise(
         notify(&mut observer, i, total, t, &latents)?;
     }
     Ok(latents)
+}
+
+/// `FASTVIDEO_WAN_CAUSAL_AR` (default on): causal Wan DMD generates the clip
+/// block by block through the KV cache, as FastVideo does. `=0` denoises the
+/// whole clip at once under the block-causal mask (FastWan's DMD sampler).
+pub fn causal_ar_enabled() -> bool {
+    static FLAG: super::envflag::CachedBool = super::envflag::CachedBool::new();
+    FLAG.get_or_init(|| super::envflag::bool_flag("FASTVIDEO_WAN_CAUSAL_AR", true))
+}
+
+/// FastVideo `CausalDMDDenosingStage.forward` (T2V, one expert): for each
+/// block of `num_frames_per_block` latent frames, every Self-Forcing timestep
+/// through the KV cache (`x0 = x - sigma_t * v`, re-noised with fresh noise
+/// to the next timestep's sigma, the last step keeps `x0`), then one pass at
+/// `t = context_noise` (0) that rewrites the block's cache slots from the
+/// clean latents. With bf16 activations the latents take FastVideo's bf16
+/// rounding points (the DiT input, `x0`, the re-noised latents).
+///
+/// Oracle names (with `FASTVIDEO_DUMP_DIR`): `sf_c<c>_s<i>_{flow,x0}`,
+/// `sf_c<c>_out`, `sf_latents_out`; block outputs `sf_c<c>_s<i>_block_<l>`
+/// (and `sf_c0_ctx_block_<l>`) for block 0 step 0, block 1 step 0 and block
+/// 0's context pass. `FASTVIDEO_INJECT_DIR` supplies `sf_noise_<k>` (the k-th
+/// re-noise draw, FastVideo's `[B, F, C, H, W]` layout).
+fn causal_dmd_denoise(
+    dit: &WanTransformer3D,
+    latents: CudaTensor,
+    cond: &CudaTensor,
+    sched: &SelfForcingSchedule,
+    seed: u64,
+    mut observer: Option<&mut StepObserver<'_>>,
+) -> Result<CudaTensor> {
+    use super::dump;
+    let [b, c, t, h, w] = latents.shape[..] else {
+        return Err(PipelineError::Message(format!(
+            "latents {:?}",
+            latents.shape
+        )));
+    };
+    let fpb = dit.cfg.num_frames_per_block.max(1);
+    if t % fpb != 0 {
+        return Err(PipelineError::Message(format!(
+            "causal DMD: {t} latent frames is not a multiple of num_frames_per_block {fpb}"
+        )));
+    }
+    let p = dit.cfg.patch_size;
+    let frame_tokens = (h / p[1].max(1)) * (w / p[2].max(1));
+    let cache = super::causal::CausalKvCache::new(
+        super::causal::KvSpec::for_config(&dit.cfg, frame_tokens),
+        dit.cfg.num_layers,
+    );
+    let act16 = super::tensor::bf16_activations();
+    let round = |x: CudaTensor| -> TensorResult<CudaTensor> {
+        if act16 {
+            x.quantize_bf16()
+        } else {
+            Ok(x)
+        }
+    };
+    let context_noise = 0.0f32;
+    let steps = sched.num_steps();
+    let blocks = t / fpb;
+    let total = blocks * steps;
+    let mut chunks = Vec::with_capacity(blocks);
+    let mut draw = 0usize;
+    for blk in 0..blocks {
+        let start = blk * fpb;
+        let mut cur = latents.narrow(2, start, fpb)?;
+        for (i, &ts) in sched.timesteps.iter().enumerate() {
+            let _step = super::log::StepTimer::start(format!(
+                "causal block {}/{blocks} step {}/{steps} t={ts:.1}",
+                blk + 1,
+                i + 1
+            ));
+            dump::set_prefix(&format!("sf_c{blk}_s{i}_"));
+            dump::set_blocks(i == 0 && blk <= 1);
+            let t1 = CudaTensor::from_vec(vec![ts], vec![1])?;
+            let input = round(cur.clone())?;
+            let flow = dit.forward_kv(&input, &t1, cond, &cache, start);
+            dump::set_blocks(false);
+            let flow = flow?;
+            let sigma = sched.sigma(ts) as f32;
+            let x0 = round(CudaTensor::lincomb(&[(1.0, &cur), (-sigma, &flow)])?)?;
+            if dump::enabled() {
+                dump::tensor(&dump::named("flow"), &flow)?;
+                dump::tensor(&dump::named("x0"), &x0)?;
+            }
+            cur = if i + 1 < steps {
+                let next = sched.sigma(sched.timesteps[i + 1]) as f32;
+                let noise = causal_noise(seed, draw, [b, fpb, c, h, w])?;
+                draw += 1;
+                round(CudaTensor::lincomb(&[(1.0 - next, &x0), (next, &noise)])?)?
+            } else {
+                x0
+            };
+            super::device::synchronize().map_err(|e| PipelineError::Message(e.to_string()))?;
+            notify(&mut observer, blk * steps + i, total, ts, &cur)?;
+        }
+        // The clean context pass: the same block at t = context_noise.
+        dump::set_prefix(&format!("sf_c{blk}_ctx_"));
+        dump::set_blocks(blk == 0);
+        let t0 = CudaTensor::from_vec(vec![context_noise], vec![1])?;
+        let ctx_pass = dit.forward_kv(&cur, &t0, cond, &cache, start);
+        dump::set_blocks(false);
+        dump::set_prefix("");
+        ctx_pass?;
+        if dump::enabled() {
+            dump::tensor(&format!("sf_c{blk}_out"), &cur)?;
+        }
+        chunks.push(cur);
+    }
+    let out = CudaTensor::cat(&chunks.iter().collect::<Vec<_>>(), 2)?;
+    if dump::enabled() {
+        dump::tensor("sf_latents_out", &out)?;
+    }
+    Ok(out)
+}
+
+/// Re-noise draw `k` of a causal DMD run, `[B, C, F, H, W]`: FastVideo's
+/// (`sf_noise_<k>`, drawn `[B, F, C, H, W]`) when injected, else seeded
+/// standard normal in the same layout. bf16-valued with bf16 activations
+/// (FastVideo draws it in the DiT dtype).
+fn causal_noise(seed: u64, k: usize, btchw: [usize; 5]) -> Result<CudaTensor> {
+    let n: usize = btchw.iter().product();
+    let raw = match super::inject::load_numel(&format!("sf_noise_{k:03}"), n)? {
+        Some(v) => CudaTensor::from_vec(v, btchw.to_vec())?.to_device()?,
+        None => {
+            let mut rng = rand::rngs::StdRng::seed_from_u64(
+                seed ^ (0xD1B5_4A32_D192_ED03u64.wrapping_mul(k as u64 + 1)),
+            );
+            let v: Vec<f32> = (0..n)
+                .map(|_| rng.sample::<f32, _>(StandardNormal))
+                .collect();
+            CudaTensor::from_vec(v, btchw.to_vec())?.to_device()?
+        }
+    };
+    let raw = if super::tensor::bf16_activations() {
+        raw.quantize_bf16()?
+    } else {
+        raw
+    };
+    Ok(raw.permute(&[0, 2, 1, 3, 4])?)
 }
 
 /// TurboDiffusion rCM: same x0 / re-noise shape as DMD, TrigFlow→RF sigmas.

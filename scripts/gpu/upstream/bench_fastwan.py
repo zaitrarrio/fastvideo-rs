@@ -18,6 +18,19 @@ stays on the GPU (text_encoder_cpu_offload=False, as our resident UMT5; the
 example offloads it for < 32 GB cards); on sm_120 the VSA kernel is Triton
 (FASTVIDEO_VSA_KERNEL / the fastvideo-kernel wheel has no sm_120 CUDA build).
 
+Wan2.1-T2V-14B (pod.sh fv-wan21-14b): dense FLASH_ATTN, UniPC 50 steps, CFG 5,
+480x832, 81 frames, flow_shift 3.0 -- FastVideo's WanT2V480PConfig recipe, the
+same settings as our wan14 cells. FastVideo's registry maps this checkpoint to
+WanT2V720PConfig / preset wan_t2v_14b (720x1280, flow_shift 5.0); the 480p
+recipe is the one our matrix runs, so both sides are set explicitly.
+
+SF-Wan 1.3B (pod.sh fv-sfwan13, oracle.sh sfwan13): wlsaidhi/SFWan2.1-T2V-1.3B-
+Diffusers through FastVideo's WanCausalDMDPipeline at its own defaults
+(SelfForcingWanT2V480PConfig: DMD steps 1000/750/500/250 warped by the
+checkpoint's SelfForcingFlowMatchScheduler, 3-frame blocks through the KV
+cache), dense FLASH_ATTN, 480x832, 81 frames. ``--no-warmup`` (the oracle)
+skips the excluded warm-up request so the dump hooks see the first one.
+
 The weights on our volume are FastVideo/FastWan2.1-T2V-1.3B-Diffusers under a
 different directory name; FastVideo resolves the pipeline config by the
 checkpoint's short name, so the cell links the directory under that name.
@@ -50,6 +63,14 @@ SCHEDULER = {
 }
 
 
+# wlsaidhi/SFWan2.1-T2V-1.3B-Diffusers scheduler/scheduler_config.json (Hub main).
+SF_SCHEDULER = {
+    "_class_name": "SelfForcingFlowMatchScheduler", "_diffusers_version": "0.33.0.dev0",
+    "num_inference_steps": 1000, "shift": 5.0, "sigma_min": 0.0, "extra_one_step": True,
+    "training": True,
+}
+
+
 def stage_times(li) -> dict:
     stages = getattr(li, "stages", None) or {}
     out = {}
@@ -75,11 +96,14 @@ def main() -> int:
                     help="the checkpoint's Hub short name (FastVideo resolves its config by it)")
     ap.add_argument("--repeats", type=int, default=3)
     ap.add_argument("--warmup-seed", type=int, default=999)
+    ap.add_argument("--no-warmup", action="store_true", help="no excluded warm-up request (the oracle)")
     ap.add_argument("--height", type=int, default=480)
     ap.add_argument("--width", type=int, default=832)
     ap.add_argument("--num-frames", type=int, default=81)
     ap.add_argument("--steps", type=int, default=None, help="num_inference_steps (default: the checkpoint's)")
     ap.add_argument("--guidance-scale", type=float, default=None)
+    ap.add_argument("--flow-shift", type=float, default=None,
+                    help="pipeline flow_shift (default: the checkpoint's pipeline config)")
     ap.add_argument("--vsa-sparsity", type=float, default=0.8)
     ap.add_argument("--attention", default="VIDEO_SPARSE_ATTN")
     ap.add_argument("--text-encoder-cpu-offload", action="store_true")
@@ -109,6 +133,10 @@ def main() -> int:
             (view / "scheduler").mkdir()
             (view / "scheduler" / "scheduler_config.json").write_text(json.dumps(SCHEDULER, indent=2))
             res["scheduler_config"] = "written (Hub FastVideo/FastWan2.1-T2V-1.3B-Diffusers scheduler/)"
+        if not (view / "scheduler").exists() and a.hf_name.startswith("SFWan2.1"):
+            (view / "scheduler").mkdir()
+            (view / "scheduler" / "scheduler_config.json").write_text(json.dumps(SF_SCHEDULER, indent=2))
+            res["scheduler_config"] = "written (Hub wlsaidhi/SFWan2.1-T2V-1.3B-Diffusers scheduler/)"
         model = str(view)
         if a.prompts:
             spec = json.loads(Path(a.prompts).read_text())
@@ -128,8 +156,13 @@ def main() -> int:
             dit_cpu_offload=False,
             vae_cpu_offload=False,
             **({"VSA_sparsity": a.vsa_sparsity} if a.attention == "VIDEO_SPARSE_ATTN" else {}),
+            **({"flow_shift": a.flow_shift} if a.flow_shift is not None else {}),
         )
         res["load_s"] = time.perf_counter() - t0
+        try:
+            res["pipeline_flow_shift"] = gen.fastvideo_args.pipeline_config.flow_shift
+        except Exception:  # noqa: BLE001
+            pass
         try:
             def one(prompt: str, seed: int, path: Path) -> dict:
                 sp = SamplingParam.from_pretrained(model)
@@ -165,7 +198,8 @@ def main() -> int:
                     "image_path": getattr(sp, "image_path", None),
                 }
 
-            res["warmup"] = one(prompts[0]["prompt"], a.warmup_seed, out / "warmup")
+            if not a.no_warmup:
+                res["warmup"] = one(prompts[0]["prompt"], a.warmup_seed, out / "warmup")
             for p in prompts:
                 runs = [one(p["prompt"], int(p.get("seed", 1024)), out / p["name"] / f"run_{i + 1:02d}") for i in range(a.repeats)]
                 res["runs"].append({"name": p["name"], "seed": p.get("seed"), "runs": runs})

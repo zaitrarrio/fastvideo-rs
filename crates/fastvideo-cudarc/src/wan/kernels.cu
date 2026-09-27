@@ -3486,9 +3486,11 @@ __device__ __forceinline__ void flash_mma_fwd2_body(
 
 #if defined(__CUDA_ARCH__) && __CUDA_ARCH__ >= 800
 // flash_mma_fwd2_body with Wan's block-causal temporal mask
-// (`causal_temporal_mask`), same per-row arithmetic: query q
-// sees key k iff frame(k) <= frame(q) (frame = index / ft), within `win`
-// frames when win > 0, or frame(k) < sink. Key tiles the CTA's 128 queries
+// (`causal_temporal_mask`, FastVideo `_prepare_blockwise_causal_attn_mask`),
+// same per-row arithmetic: query q sees key k iff block(k) <= block(q)
+// (block = index / ft, ft = frames per block x frame tokens), within the
+// last `win` blocks up to and including q's own when win > 0, or
+// block(k) < sink. Key tiles the CTA's 128 queries
 // cannot see are never loaded; the tiles it walks are the sink tiles, then
 // the contiguous causal band, in key order. Tiles straddling the boundary
 // get -inf scores where masked, which the online softmax treats exactly as a
@@ -3521,7 +3523,7 @@ __device__ __forceinline__ void flash_mma_fwd2_causal_body(
         fq_lo = q0 / ft;
         fq_hi = (q0 + qlen - 1) / ft;
         const int hi_tok = min(sk, (fq_hi + 1) * ft);
-        const int lo_tok = min(hi_tok, win > 0 ? max(0, fq_lo - win) * ft : 0);
+        const int lo_tok = min(hi_tok, win > 0 ? max(0, fq_lo - win + 1) * ft : 0);
         const int sink_tiles = (min(sk, sink * ft) + FA_TILE - 1) / FA_TILE;
         mlo = lo_tok / FA_TILE;
         const int mhi = (hi_tok + FA_TILE - 1) / FA_TILE;
@@ -3586,7 +3588,7 @@ __device__ __forceinline__ void flash_mma_fwd2_causal_body(
         if constexpr (CAUSAL) {
             // Every (query, key) pair of the CTA visible: no per-score mask.
             const int tk_lo = kv0 / ft, tk_hi = (kv0 + len - 1) / ft;
-            const bool all_ok = tk_hi < sink || (tk_hi <= fq_lo && (win <= 0 || fq_hi - tk_lo <= win));
+            const bool all_ok = tk_hi < sink || (tk_hi <= fq_lo && (win <= 0 || fq_hi - tk_lo < win));
             if (!all_ok) {
                 #pragma unroll
                 for (int n = 0; n < 8; n++) {
@@ -3594,8 +3596,8 @@ __device__ __forceinline__ void flash_mma_fwd2_causal_body(
                     for (int c = 0; c < 2; c++) {
                         const int tk = (kv0 + n * 8 + 2 * t + c) / ft;
                         const bool sink_ok = tk < sink;
-                        if (!(sink_ok || (tk <= tq0 && (win <= 0 || tq0 - tk <= win)))) s[n][c] = NEG;
-                        if (!(sink_ok || (tk <= tq1 && (win <= 0 || tq1 - tk <= win)))) s[n][2 + c] = NEG;
+                        if (!(sink_ok || (tk <= tq0 && (win <= 0 || tq0 - tk < win)))) s[n][c] = NEG;
+                        if (!(sink_ok || (tk <= tq1 && (win <= 0 || tq1 - tk < win)))) s[n][2 + c] = NEG;
                     }
                 }
             }
@@ -3700,9 +3702,9 @@ extern "C" __global__ void __launch_bounds__(256, 2) flash_mma_fwd2_d64(
     FA2_ENTRY_BODY(64)
 }
 
-// Block-causal (Wan self-forcing) variants: `ft` tokens per causal frame,
-// `win` frames of lookback (0 = unlimited), the first `sink` frames always
-// visible. Same launch geometry and shared memory as the dense kernels.
+// Block-causal (Wan self-forcing) variants: `ft` tokens per causal block,
+// the last `win` blocks visible counting the query's own (0 = unlimited),
+// the first `sink` blocks always visible. Same launch geometry and shared memory as the dense kernels.
 extern "C" __global__ void __launch_bounds__(256, 1) flash_mma_fwd2_causal_d128(
     const unsigned short* __restrict__ q, const unsigned short* __restrict__ k,
     const unsigned short* __restrict__ v, float* __restrict__ out,

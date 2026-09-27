@@ -5,6 +5,7 @@
 pub(crate) mod act16;
 pub mod affine;
 pub mod ar_cache;
+pub mod causal;
 pub mod attn;
 pub mod bf16_gemm;
 pub mod clip;

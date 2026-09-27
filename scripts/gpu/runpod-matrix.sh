@@ -349,6 +349,7 @@ oracle_run() {
   shift 2
   local out=(--clip-dir "$RUNS/$cell/frames" --adaln-cache "$RUNS/oracle-$target-adaln.cache")
   [[ "$target" == ltx25-* ]] && out=(--clip "$RUNS/$cell/frames")
+  [[ "$target" == sfwan* ]] && out=(--clip-dir "$RUNS/$cell/frames")
   rm -rf "$dump"
   gated_cell "$cell" "$wcell" env "${envs[@]}" FASTVIDEO_DUMP_DIR="$dump" "$@" "${cmd[@]}" "${out[@]}"
 }
@@ -370,6 +371,16 @@ nvidia-smi -L | tee -a "$LOG"
 nvidia-smi --query-gpu=name,memory.total,driver_version --format=csv,noheader | tee -a "$LOG"
 
 case "$FAMILY" in
+  sfwan)
+    # SF-Wan 1.3B on one pod: the oracle diff against FastVideo's dump (when
+    # FV_ORACLE_URL serves one), then the wan family's SF-Wan cells and the
+    # causal kernel checks.
+    if [[ -n "${FV_ORACLE_URL:-}" ]]; then
+      FV_RUNS_DIR="$RUNS" FV_ORACLE_TARGETS="${FV_ORACLE_TARGETS:-sfwan13}" bash "${BASH_SOURCE[0]}" oracle || true
+    fi
+    FV_RUNS_DIR="$RUNS" FV_CELLS="${FV_SFWAN_CELLS:-kernels-wan sfwan13-81f-flash sfwan13-81f-composed sfwan13-81f-wholeclip sfwan13-81f-fullvae}" \
+      bash "${BASH_SOURCE[0]}" wan || true
+    ;;
   headline)
     # The headline configurations on one pod (a new GPU type, one run):
     # cells borrowed from other families, all written into this run dir.
@@ -619,11 +630,12 @@ case "$FAMILY" in
       compare_cells wan13-fuse "$arm"
       gate_cells wan13-fuse "$arm" lossy
     done
-    # SF-Wan 1.3B (block-causal self-attention over the whole clip): 4 DMD
-    # steps from 1000, shift 5, guidance 1. The masked flash kernel against
-    # the path it replaces (FASTVIDEO_WAN_CAUSAL_FLASH=0: the [S, S] mask
-    # through sdpa_composed, f32 scores), at 33 frames where the composed
-    # path's two [12, S, S] f32 buffers fit; 81 frames runs flash only.
+    # SF-Wan 1.3B as FastVideo generates it: 3-frame blocks through the KV
+    # cache, 4 DMD steps (1000/750/500/250 warped by the Self-Forcing
+    # scheduler, shift 5), guidance 1, 480x832, 81 frames. The block
+    # attention on the flash kernel (default) against its composed
+    # reference (FASTVIDEO_WAN_CAUSAL_FLASH=0: f32 scores and softmax), and
+    # the whole-clip masked path (FASTVIDEO_WAN_CAUSAL_AR=0).
     sf_common=(
       --weights "$W/sfwan21-1.3b"
       --preset sf_wan_t2v_1_3b
@@ -640,11 +652,12 @@ case "$FAMILY" in
       gated_cell "$name" sfwan21-1.3b env "$@" \
         "$BIN" --mode fast wan gen "${sf_common[@]}" --num-frames "$frames" --clip-dir "$RUNS/$name/frames"
     }
-    sf_arm sfwan13-33f-composed 33 FASTVIDEO_WAN_CAUSAL_FLASH=0
-    sf_arm sfwan13-33f-flash 33 FASTVIDEO_WAN_CAUSAL_FLASH=1
     sf_arm sfwan13-81f-flash 81 FASTVIDEO_WAN_CAUSAL_FLASH=1
-    compare_cells sfwan13-33f-composed sfwan13-33f-flash
-    gate_cells sfwan13-33f-composed sfwan13-33f-flash lossy
+    sf_arm sfwan13-81f-composed 81 FASTVIDEO_WAN_CAUSAL_FLASH=0
+    sf_arm sfwan13-81f-wholeclip 81 FASTVIDEO_WAN_CAUSAL_AR=0
+    compare_cells sfwan13-81f-composed sfwan13-81f-flash
+    gate_cells sfwan13-81f-composed sfwan13-81f-flash lossy
+    compare_cells sfwan13-81f-flash sfwan13-81f-wholeclip
     # Base Wan2.2 TI2V-5B (704x1280x121) and Wan2.1 T2V-14B (480x832x81),
     # UniPC with guidance 5 over 12 steps (not the 50-step official recipe:
     # an A/B of the kernel arms, same schedule on every arm). f32act is the
@@ -1696,6 +1709,13 @@ case "$FAMILY" in
           [[ "$target" == *-dense ]] && arm=(--dense-stage2)
           cmd=("$BIN" --mode fast ltx2 gen --model-version 2.5 --weights "$W/ltx25" --dit "$W/ltx25"
             "${geo[@]}" "${arm[@]}" "${ltx_oracle[@]}") ;;
+        sfwan13)
+          # FastVideo SF-Wan 1.3B at its defaults; the full Wan VAE (the
+          # reference decodes with it) for the frame metrics.
+          wcell=sfwan21-1.3b
+          envs+=(FASTVIDEO_WAN_VAE=full)
+          cmd=("$BIN" --mode fast wan gen --weights "$W/sfwan21-1.3b" --preset sf_wan_t2v_1_3b
+            --steps 4 --flow-shift 5 --prompt "$PROMPT" --seed "$SEED") ;;
         *) log "unknown oracle target $target"; continue ;;
       esac
       oracle_run "oracle-$target" "$ours"
@@ -1703,7 +1723,7 @@ case "$FAMILY" in
       # The bf16 noise floor (FV_ORACLE_F32, default on for H3): ours with f32
       # activations against the reference, and our bf16 run against our f32
       # run -- how far bf16 rounding alone moves the same pipeline.
-      if [[ "${FV_ORACLE_F32:-auto}" == 1 || ( "${FV_ORACLE_F32:-auto}" == auto && "$target" == fasth3-* ) ]]; then
+      if [[ "${FV_ORACLE_F32:-auto}" == 1 || ( "${FV_ORACLE_F32:-auto}" == auto && ( "$target" == fasth3-* || "$target" == sfwan* ) ) ]]; then
         oracle_run "oracle-$target-f32" "$ours-f32" FASTVIDEO_BF16_ACT=0 FASTVIDEO_H3_QUANT=off
         oracle_diff "oracle-$target-f32-diff" "$ref/dump" "$ours-f32"
         oracle_diff "oracle-$target-bf16-vs-f32" "$ours-f32" "$ours"
@@ -1716,6 +1736,29 @@ case "$FAMILY" in
         oracle_run "oracle-$target-owntext" "$ours-owntext" FASTVIDEO_INJECT_TEXT=0
         oracle_diff "oracle-$target-owntext-diff" "$ref/dump" "$ours-owntext"
         oracle_diff "oracle-$target-owntext-vs-injected" "$ours" "$ours-owntext"
+      fi
+      if [[ "$target" == sfwan* ]]; then
+        # Frames: the reference's mp4 (its full VAE, bf16 decode, then its
+        # encoder) against our PNG frames; our own mp4 against our PNGs is
+        # the codec floor of that comparison.
+        for d in "$ref/frames" "$RUNS/oracle-$target/mp4frames"; do mkdir -p "$d"; done
+        if [[ -f "$ref/dump/ref.mp4" ]]; then
+          ffmpeg -loglevel error -y -i "$ref/dump/ref.mp4" -start_number 0 "$ref/frames/frame-%03d.png" || true
+        fi
+        m="$(ls "$RUNS/oracle-$target"/frames/*.mp4 2>/dev/null | head -1)"
+        [[ -n "$m" ]] && ffmpeg -loglevel error -y -i "$m" -start_number 0 "$RUNS/oracle-$target/mp4frames/frame-%03d.png"
+        compare_one "oracle-$target-frames-vs-ref" "$ref/frames" "$RUNS/oracle-$target/frames"
+        compare_one "oracle-$target-codec-floor" "$RUNS/oracle-$target/frames" "$RUNS/oracle-$target/mp4frames"
+        # Before the fix: the whole clip at once under the per-frame mask
+        # (the path this port ran before), same injected inputs.
+        oracle_run "oracle-$target-legacy" "$ours-legacy" FASTVIDEO_WAN_CAUSAL_AR=0 FASTVIDEO_WAN_CAUSAL_FPB=1
+        oracle_diff "oracle-$target-legacy-diff" "$ref/dump" "$ours-legacy"
+        compare_one "oracle-$target-legacy-frames-vs-ref" "$ref/frames" "$RUNS/oracle-$target-legacy/frames"
+        # The composed reference path of the KV-window attention.
+        oracle_run "oracle-$target-composed" "$ours-composed" FASTVIDEO_WAN_CAUSAL_FLASH=0
+        oracle_diff "oracle-$target-composed-diff" "$ref/dump" "$ours-composed"
+        oracle_diff "oracle-$target-flash-vs-composed" "$ours-composed" "$ours"
+        rm -rf "$ours-legacy" "$ours-composed"
       fi
       # The dumps are hundreds of MB each; the report keeps the numbers.
       rm -rf "$ours" "$ours-f32" "$ours-owntext" "$ref"
