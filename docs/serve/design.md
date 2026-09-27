@@ -1088,6 +1088,67 @@ Control channel `control`:
 - `max_session_seconds` → `stream_exhausted{reason:"session_limit"}`.
 - The default chunk duration is 10 s → 17n+5 → 243 frames (10.125 s).
 
+**WP-14 notes (as implemented).** `fastvideo-fal::director` (feature
+`director`; fv-serve mounts it with `fal` + `webrtc`, merged into the fal
+router so `/fal/proxy` reaches `/wma/*`).
+
+- Routes: the table above plus `POST /wma/ice`, `POST /{app}/director/ice`
+  and `POST /run/{app}/director/ice` (the JS `context.run` fallback, direct
+  or through the proxy), and `GET` + `POST /info`. Every configured fal app
+  gets a director (`minimax/h3-{max,turbo,draft}/director`); the first one
+  answers the runner routes. Bridge errors are `{"error": ...}`, an
+  unparsable body is 422 `text/plain` ("missing field `app_id`"), busy is
+  429, not resident 503 + `Retry-After`. `/wma/session` carries `x-fv-model`,
+  `x-fv-tier`, `x-fv-recipe` headers (the WMA bodies have closed schemas).
+- Admission: the engine clip session is opened at `/session` (Starting is
+  busy) at the default canvas and reopened on the configured canvas at
+  `configure`. The engine seam is a thin trait (`DirectorEngine` /
+  `DirectorClips`: `open`, `build`, `close`) because adapters may not depend
+  on the engine crate; fv-serve implements it over
+  `EngineService::open_clip_session` + `ClipSession::build`.
+- Control (pure state machine, unit-tested): strict schemas (`invalid_message`
+  on extra/mistyped/out-of-range fields or an unknown `type`, with the
+  message's `prompt_version`); `configure` once, `prompt_version:1`;
+  `immutable_settings` for a second one; `not_configured` before it;
+  unserved resolution → `invalid_input`, `audio_url` → `invalid_initial_audio`,
+  audio script beats / script + `end_image_url` → `invalid_initial_script`
+  (all session failures: the session ends). Versions: ≤ last seen →
+  `stale_prompt_version`, a version is spent whatever its outcome.
+  `replan:true` clears the planned deck (replace-pending), `replan:false`
+  appends (`prompt_deck_size` 6 → `queue_full`); `prompt_applied` at the
+  chunk's dispatch. Scripts become chunks cut at beat offsets (end-image
+  beats end a chunk exactly there, 5–15 s, ≥ 3 s apart, else
+  `infeasible_timing`). No prompt expander: a chunk's prompt is the premise
+  plus the current direction; `memory` is accepted and echoed.
+- `session_info` / `DirectorInfo` report our constants (fps from the model,
+  `continuation_context_frames:1`, `resolutions` from the canvas tiers,
+  `prompt_expander:"none"`, `audio_conditioning:false`, …). `session_info`
+  is sent when the client's `control` channel opens. The reserved
+  `wma.network-info.request` is answered (`available:false`: str0m does not
+  expose the selected pair here).
+- Playout: one thread per session runs the `AvPacer` on a `Metronome` and
+  encodes Opus; video is encoded on a second thread behind a 10-tick
+  drop-oldest queue (§5.10), so a slow encoder never stops the audio clock.
+  Continuations trim the duplicated anchor frame (`trimmed_context_frames:1`)
+  and crossfade 20 ms; underruns hold the last frame with silence and the
+  late chunk reports `deadline_missed`. At most `buffer_chunks` (1) built
+  chunks wait behind the playing one. The answer puts video and audio in
+  one `msid` stream (one `MediaStream` in the browser).
+- Codecs: H.264 for every offer that has it (NVENC in production, OpenH264
+  in CPU tests). Offers **without** H.264 (open-source Chromium, including
+  Playwright's) get intra-only VP8 through `AnswerOptions::video_codecs =
+  [H264, Vp8]` (`[director] vp8_fallback`), encoded in process by libwebp
+  like the Reactor runtime does (libvpx's VP8 encoder measured ~200 ms per
+  832x480 frame on the CI VM).
+- Tests: `crates/fastvideo-fal/tests/director_e2e.rs` (a str0m client:
+  signalling, strict schemas, versions, heartbeat expiry, `/start-session`
+  SSE, session limit, `deadline_missed`, A/V at 24 fps / 48 kHz stereo, a
+  video-only model with the audio m-line `inactive`) and
+  `director_browser.rs` (`@fal-ai/client@1.11.0-alpha.4`
+  `fal.realtime.open(wma(...))` in Playwright Chromium, `requestMiddleware`
+  and `proxyUrl` modes, A/V and video-only; decoded 24.0 fps VP8 832x480,
+  48.0 k samples/s stereo Opus, alive past 17 s on heartbeats).
+
 ### 5.7 Reactor mapping (`fastvideo-reactor`)
 
 Local-runtime routes exactly as reactor §3.2-3.3:
@@ -1543,7 +1604,9 @@ additions and readings; everything is re-exported from the crate root.
   (`router(ctx, FalConfig)` from `fal_apps`; `FalWebhook` renderer; a
   `WebhookSigner` from `FV_WEBHOOK_ED25519_KEY`, else per process; fal
   artifacts named by `fastvideo_fal::output_file_name`). The fal director
-  (WP-14) and Reactor (WP-13) routes are reserved in the §9 table only.
+  (WP-14) is mounted with `fal` + `webrtc` (`src/director.rs`, `[director]`
+  config); it and the Reactor runtime (WP-13) answer offers on one shared
+  WebRTC host (`src/rtc.rs`, from `[webrtc]`).
   One engine glue (`gate`) serves every adapter.
 - `ArtifactStore::open` (serve-kit) reads an artifact back (local path or
   S3 object bytes) so LTX `/v1` sync works on R2; the `PUT /uploads` route
@@ -1745,7 +1808,8 @@ Critical path: `WP-00 → WP-01 → WP-02 → WP-05 → WP-09 → (E1 → E2) �
 | `/v1/videos*`, `/v1/models*`, `/v1/model_info`, `/generate`, `/status/{id}`, `/video/{id}` | openai-videos | |
 | `/v2/video_generation*`, `/v2/query/*`, `/v2/h3_context_ir`, `/v2/video_regeneration` | minimax | |
 | `/v1\|v2/{text-to-video,image-to-video,…}`, `/v1/upload` | ltxapi | No overlap with `/v1/videos` |
-| `/{app}/…` for configured apps, `/run/{app}/…`, `/fal/proxy`, `/storage/upload/initiate`, `/wma/*`, `/start-session`, `/info`, `/.well-known/jwks.json` | fal | Apps are static prefixes |
+| `/{app}/…` for configured apps, `/run/{app}/…`, `/fal/proxy`, `/storage/upload/initiate`, `/.well-known/jwks.json` | fal | Apps are static prefixes |
+| `POST /wma/ice`, `POST /wma/session`, `POST /wma/session/heartbeat`, `POST /{app}/director/ice`, `POST /run/{app}/director/ice`, `POST /start-session`, `GET`/`POST /info` | fal director (WP-14) | Merged into the fal router, so `/fal/proxy` maps `wma.fal.run` → `/wma/*` and `fal.run/{app}/director/ice` → `/run/{app}/director/ice`. Features `fal` + `webrtc` (on by default with `reactor`); the WebRTC host is shared with Reactor |
 | `POST /start_session`, `GET /session`, `POST /stop_session`, `GET /schema`, `GET /events` (SSE) | reactor | `GET /session` versus WMA `POST /wma/session` do not collide. CORS `*` |
 | `GET /sessions/{sid}/transport/webrtc/ice_servers`, `POST …/connections`, `POST\|PUT\|GET …/connections/{cid}/sdp_params`, `POST …/connections/{cid}/ice_candidates` | reactor | Mounted by `App::build` (the runtime owns the WebRTC host); feature `reactor`, on by default |
 | `/fv/v1/*` | serve (native) | |

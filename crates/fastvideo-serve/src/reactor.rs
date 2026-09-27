@@ -5,11 +5,10 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use anyhow::{anyhow, Context};
+use anyhow::anyhow;
 use fastvideo_engine_service::EngineService;
 use fastvideo_reactor::{H264Backend, Reactor, ReactorConfig};
-use fastvideo_webrtc::host::{HostConfig, RtcHost};
-use fastvideo_webrtc::ice::{ice_servers_from_rt_env, resolve_ports, IceServer};
+use fastvideo_webrtc::host::RtcHost;
 
 use crate::config::{Config, ReactorCfg};
 
@@ -39,55 +38,19 @@ pub fn reactor_config(c: &ReactorCfg) -> anyhow::Result<ReactorConfig> {
     })
 }
 
-/// ICE servers for clients: `[webrtc] ice_servers`, else RT's
-/// `STUN_SERVERS`/`TURN_SERVERS`, else Google STUN.
-pub fn ice_servers(c: &Config, env: impl Fn(&str) -> Option<String>) -> Vec<IceServer> {
-    let configured: Vec<IceServer> = c
-        .webrtc
-        .ice_servers
-        .iter()
-        .filter_map(|v| serde_json::to_value(v).ok())
-        .filter_map(|v| IceServer::from_reactor_json(&v))
-        .collect();
-    if !configured.is_empty() {
-        return configured;
-    }
-    ice_servers_from_rt_env(env("STUN_SERVERS").as_deref(), env("TURN_SERVERS").as_deref())
-}
-
-/// The host config for this machine: `[webrtc]` ports resolved against the
-/// platform environment; an ephemeral UDP port when nothing resolves (a
-/// plain dev box without the symbolic port variables).
-pub fn host_config(c: &Config, env: impl Fn(&str) -> Option<String>) -> HostConfig {
-    let public_ip = c.webrtc.public_ip.trim().to_owned();
-    let get = |k: &str| {
-        if k == "FV_PUBLIC_IP" && !public_ip.is_empty() && public_ip != "auto" {
-            return Some(public_ip.clone());
-        }
-        env(k)
-    };
-    let r = resolve_ports(get, c.webrtc.udp_port, c.webrtc.tcp_port);
-    let any = |p: u16| std::net::SocketAddr::from(([0, 0, 0, 0], p));
-    let (udp, tcp) = match (r.udp_bind, r.tcp_bind) {
-        (None, None) => (Some(any(0)), None),
-        (u, t) => (u.map(any), t.map(any)),
-    };
-    HostConfig {
-        udp_bind: udp,
-        tcp_bind: tcp,
-        public: r.public,
-        ice_servers: ice_servers(c, &env),
-        max_peers: c.reactor.max_connections.max(1),
-        ..HostConfig::default()
-    }
-}
+// The host config is shared with the fal director (one WebRTC host).
+pub use crate::rtc::{host_config, ice_servers};
 
 /// Binds the host and builds the runtime.
 pub async fn build(c: &Config, engine: &EngineService) -> anyhow::Result<Reactor> {
+    let host = crate::rtc::bind(c).await?;
+    build_on(c, engine, host)
+}
+
+/// Builds the runtime on an already bound host (shared with the fal
+/// director in `App::build`).
+pub fn build_on(c: &Config, engine: &EngineService, host: RtcHost) -> anyhow::Result<Reactor> {
     let cfg = reactor_config(&c.reactor)?;
-    let host = RtcHost::bind(host_config(c, |k| std::env::var(k).ok()))
-        .await
-        .context("binding the WebRTC host for Reactor")?;
     tracing::info!(udp = ?host.udp_addr(), tcp = ?host.tcp_addr(), "reactor runtime ready to answer offers");
     Ok(Reactor::new(cfg, Arc::new(engine.clone()), host))
 }
@@ -95,6 +58,7 @@ pub async fn build(c: &Config, engine: &EngineService) -> anyhow::Result<Reactor
 #[cfg(test)]
 mod tests {
     use super::*;
+    use fastvideo_webrtc::ice::IceServer;
 
     #[test]
     fn config_maps() {
