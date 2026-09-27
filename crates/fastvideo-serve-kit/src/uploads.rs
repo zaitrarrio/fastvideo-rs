@@ -324,14 +324,22 @@ fn sanitize_name(n: &str) -> String {
 /// token is the credential. Answers 200 `{}`; 404 unknown/expired token; 412
 /// already used; 413 too large.
 pub fn uploads_router<S: Clone + Send + Sync + 'static>(store: Arc<UploadStore>) -> Router<S> {
+    uploads_router_with_clock(store, Arc::new(OffsetDateTime::now_utc))
+}
+
+/// A clock for expiry checks (`ServeCtx`'s, so tests control time).
+pub type UploadClock = Arc<dyn Fn() -> OffsetDateTime + Send + Sync>;
+
+/// [`uploads_router`] judging token expiry by `clock`.
+pub fn uploads_router_with_clock<S: Clone + Send + Sync + 'static>(store: Arc<UploadStore>, clock: UploadClock) -> Router<S> {
     Router::new()
         .route("/uploads/{token}", put(put_upload))
         .layer(DefaultBodyLimit::disable())
-        .with_state(store)
+        .with_state((store, clock))
 }
 
 async fn put_upload(
-    State(store): State<Arc<UploadStore>>,
+    State((store, clock)): State<(Arc<UploadStore>, UploadClock)>,
     UrlPath(token): UrlPath<String>,
     headers: HeaderMap,
     body: Body,
@@ -341,7 +349,7 @@ async fn put_upload(
         .and_then(|v| v.to_str().ok())
         .map(|s| s.split(';').next().unwrap_or(s).trim().to_owned());
     let mut resp = match store
-        .put(&token, ct.as_deref(), body, OffsetDateTime::now_utc())
+        .put(&token, ct.as_deref(), body, clock())
         .await
     {
         Ok(_) => (StatusCode::OK, axum::Json(serde_json::json!({}))).into_response(),
@@ -373,6 +381,24 @@ mod tests {
             .header("x-goog-if-generation-match", "0")
             .body(Body::from(body))
             .unwrap()
+    }
+
+    /// The PUT route judges the deadline by the injected clock (ServeCtx's).
+    #[tokio::test]
+    async fn put_uses_the_injected_clock() {
+        let dir = std::env::temp_dir().join(format!("fvkit-upclk-{}", crate::random_token()));
+        let s = store(&dir);
+        let now = OffsetDateTime::now_utc();
+        let t = s.create(None, None, now).unwrap();
+        let late: UploadClock = Arc::new(move || now + Duration::from_secs(10 * 24 * 3600));
+        let app: Router = uploads_router_with_clock(s.clone(), late);
+        let r = app.oneshot(put_req(&t.token, b"x")).await.unwrap();
+        assert_eq!(r.status(), StatusCode::NOT_FOUND, "expired by the injected clock");
+        let on_time: UploadClock = Arc::new(move || now);
+        let app: Router = uploads_router_with_clock(s.clone(), on_time);
+        let r = app.oneshot(put_req(&t.token, b"x")).await.unwrap();
+        assert_eq!(r.status(), StatusCode::OK);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[tokio::test]

@@ -37,7 +37,7 @@ pub mod store;
 pub mod uploads;
 
 pub use artifacts::{
-    files_router, ArtifactMeta, ArtifactStore, LocalArtifactStore, S3ArtifactStore, S3Config,
+    files_router, ArtifactBody, ArtifactMeta, ArtifactStore, LocalArtifactStore, S3ArtifactStore, S3Config,
     UrlKey,
 };
 pub use auth::{Auth, AuthMode, AuthPolicy, KeyRing, Scheme};
