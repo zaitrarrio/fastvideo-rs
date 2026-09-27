@@ -119,6 +119,13 @@ pub struct MmAudioDiTConfig {
     /// `nn.RMSNorm(eps=None)` on q/k takes `finfo(dtype).eps`: 2^-7 for the
     /// bf16 network MMAudio runs (`2^-23` in f32).
     pub qk_norm_eps: f32,
+    /// The network runs as `net.to(bfloat16)`: buffers and parameters that
+    /// are not GEMM weights are rounded too. Upstream's `t_embed.freqs`
+    /// (up to 10^4 rad per unit t) is recomputed in f32 at init and then
+    /// rounded by `.to()`, which moves the timestep embedding a lot, so the
+    /// port rounds exactly those values (freqs, latent mean/std, empty
+    /// features, `sync_pos_emb`).
+    pub bf16_buffers: bool,
 }
 
 impl MmAudioDiTConfig {
@@ -136,6 +143,7 @@ impl MmAudioDiTConfig {
             text_seq_len: 77,
             v2: true,
             qk_norm_eps: 1.0 / 128.0,
+            bf16_buffers: true,
         }
     }
 
@@ -154,6 +162,7 @@ impl MmAudioDiTConfig {
             text_seq_len: 5,
             v2: true,
             qk_norm_eps: 1.0 / 128.0,
+            bf16_buffers: false,
         }
     }
 
@@ -186,6 +195,7 @@ impl MmAudioDiTConfig {
         let scale = 10000.0f32 / max_period;
         (0..f / 2)
             .map(|i| scale * (1.0 / 10000f32.powf((2 * i) as f32 / f as f32)))
+            .map(|v| if self.bf16_buffers { bf16_round(v) } else { v })
             .collect()
     }
 }

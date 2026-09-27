@@ -268,6 +268,13 @@ impl MmAudioTransformer {
             .map(|i| SingleBlock::load(map, &format!("fused_blocks.{i}"), &cfg, false, true))
             .collect::<Result<Vec<_>>>()?;
         let tf = cfg.t_freq_dim();
+        let rb = |v: Vec<f32>| -> Vec<f32> {
+            if cfg.bf16_buffers {
+                v.into_iter().map(fastvideo_models::mmaudio::bf16_round).collect()
+            } else {
+                v
+            }
+        };
         Ok(Self {
             audio_in0: Conv1d::load(map, "audio_input_proj.0", cfg.latent_dim, d, 7, true)?,
             audio_in2: ConvMlp::load(map, "audio_input_proj.2", d, ff, 7)?,
@@ -280,7 +287,7 @@ impl MmAudioTransformer {
             clip_cond_proj: linear(map, "clip_cond_proj", d, d, true)?,
             text_cond_proj: linear(map, "text_cond_proj", d, d, true)?,
             global_cond_mlp: Mlp::load(map, "global_cond_mlp", d, ff)?,
-            sync_pos_emb: host_values(map, "sync_pos_emb", &[1, 1, 8, cfg.sync_dim])?,
+            sync_pos_emb: rb(host_values(map, "sync_pos_emb", &[1, 1, 8, cfg.sync_dim])?),
             t_embed: TEmbed {
                 freqs: cfg.t_freqs(),
                 l0: linear(map, "t_embed.mlp.0", tf, d, true)?,
@@ -290,10 +297,10 @@ impl MmAudioTransformer {
             fused,
             final_ada: linear(map, "final_layer.adaLN_modulation.1", d, 2 * d, true)?,
             final_conv: Conv1d::load(map, "final_layer.conv", d, cfg.latent_dim, 7, true)?,
-            latent_mean: host_values(map, "latent_mean", &[1, 1, cfg.latent_dim])?,
-            latent_std: host_values(map, "latent_std", &[1, 1, cfg.latent_dim])?,
-            empty_clip_feat: host_values(map, "empty_clip_feat", &[1, cfg.clip_dim])?,
-            empty_sync_feat: host_values(map, "empty_sync_feat", &[1, cfg.sync_dim])?,
+            latent_mean: rb(host_values(map, "latent_mean", &[1, 1, cfg.latent_dim])?),
+            latent_std: rb(host_values(map, "latent_std", &[1, 1, cfg.latent_dim])?),
+            empty_clip_feat: rb(host_values(map, "empty_clip_feat", &[1, cfg.clip_dim])?),
+            empty_sync_feat: rb(host_values(map, "empty_sync_feat", &[1, cfg.sync_dim])?),
             empty_string_feat: host_values(
                 map,
                 "empty_string_feat",

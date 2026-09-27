@@ -63,6 +63,7 @@ fn dit_matches_reference() {
         text_seq_len: 5,
         v2: true,
         qk_norm_eps: f32::EPSILON,
+        bf16_buffers: false,
     };
     let net = MmAudioTransformer::load(cfg, &m).unwrap();
     let cond = net

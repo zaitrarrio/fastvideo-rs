@@ -181,12 +181,15 @@ def dump_run(dump, a, clip_frames, sync_frames, fu, net, fm):
     write(dump, "mm_mel", mel)
     wave = fu.vocode(mel)
     write(dump, "mm_wave", wave.reshape(1, -1))
-    # f32 decode + vocode of the same latent: the clean reference for our f32 modules.
-    tod = fu.tod.float()
+    # f32 decode + vocode of the same latent from freshly loaded f32 weights
+    # (fu.tod's were rounded by .to(bf16)): the clean reference for our f32 modules.
+    from mmaudio.ext.autoencoder import AutoEncoderModule
+    tod = AutoEncoderModule(vae_ckpt_path=str(Path(a.weights) / "ext_weights/v1-44.pth"), vocoder_ckpt_path=None,
+                            mode="44k", need_vae_encoder=False).to(device).eval()
     mel32 = tod.decode(x1.float().transpose(1, 2))
     write(dump, "mm_mel_f32", mel32)
     write(dump, "mm_wave_f32", tod.vocode(mel32).reshape(1, -1))
-    fu.tod.to(dtype)
+    del tod
     print("dumped", len(list(dump.glob("*.f32"))), "tensors to", dump)
 
 
