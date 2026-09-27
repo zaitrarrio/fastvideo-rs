@@ -1,0 +1,23 @@
+[package]
+name = "fastvideo-protocol"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "fv-serve protocol model: normalized requests, caps, negotiation, jobs, errors, protocol traits."
+
+[dependencies]
+fastvideo-models.workspace = true
+async-trait.workspace = true
+bytes.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+time.workspace = true
+# Only tokio::sync (JobStore::watch). No runtime, no axum.
+tokio = { workspace = true, features = ["sync"] }
+url.workspace = true
+uuid.workspace = true
+
+[lints]
+workspace = true

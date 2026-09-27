@@ -1,0 +1,37 @@
+[package]
+name = "fastvideo-reactor"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "fv-serve adapter: Reactor local runtime (reactor_wire v1/v0 codecs, sessions, signalling, gateway)."
+
+[dependencies]
+fastvideo-protocol.workspace = true
+fastvideo-serve-kit.workspace = true
+axum.workspace = true
+bytes.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+time.workspace = true
+tracing.workspace = true
+uuid.workspace = true
+
+fastvideo-media.workspace = true
+fastvideo-webrtc.workspace = true
+prost.workspace = true
+tokio = { workspace = true, features = ["sync", "time"] }
+
+[build-dependencies]
+# Codegen from the vendored protos (WP-13 adds build.rs); off by default.
+prost-build = { workspace = true, optional = true }
+protox = { workspace = true, optional = true }
+
+[features]
+default = []
+# Regenerate reactor_wire.v1 from proto/ at build time (WP-13).
+proto-codegen = ["dep:prost-build", "dep:protox"]
+
+[lints]
+workspace = true

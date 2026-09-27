@@ -101,6 +101,11 @@ tasks:
     desc: Unit tests (host)
     cmds: ['cargo test --workspace --lib']
 
+  serve:check:
+    desc: 'fv-serve crates: check, clippy -D warnings and tests on CPU (HEAVY=1 adds str0m/OpenH264/Opus/reqwest, CUDA=1 type-checks the engine cuda feature)'
+    cmds:
+      - '{{if .HEAVY}}FV_SERVE_HEAVY=1 {{end}}{{if .CUDA}}FV_SERVE_CUDA=1 {{end}}bash scripts/serve/check.sh'
+
   test:docker:
     desc: Unit tests inside the builder image
     deps: [docker:up]
