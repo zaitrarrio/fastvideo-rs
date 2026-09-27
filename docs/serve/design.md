@@ -1250,6 +1250,12 @@ At startup `fv-serve` runs one NVENC encode probe (ffmpeg `h264_nvenc`, a
 few black frames) when any setting is `auto`, logs the choice, and resolves
 `auto` to `nvenc` when the probe encoded, else `openh264`
 (`fastvideo-serve::encoders`). Explicit `nvenc` / `openh264` are kept.
+On serverless workers NVENC can fail right after start (driver or NVENC
+sessions not ready): a failure that may be transient (ffmpeg has
+`h264_nvenc` but could not open it) is retried once after 2 s, and if it
+still fails the fallback is logged at WARN. The `info` job reports the
+resolved encoders and the startup probe (`encoders`,
+`encoder_startup_probe`).
 Without OpenH264 in the build the fallback is Reactor `off` (VP8 only) and
 the streams CPU-test encoder.
 

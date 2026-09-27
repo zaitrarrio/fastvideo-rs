@@ -92,6 +92,14 @@ fn cmd_line(prog: &str, args: &[&str]) -> Option<String> {
     o.status.success().then(|| String::from_utf8_lossy(&o.stdout).trim().to_owned())
 }
 
+/// The startup NVENC probe behind `auto`, if it ran.
+fn startup_probe() -> Value {
+    match fastvideo_media::video::auto_encoder_if_probed() {
+        Some(a) => json!({"backend": a.backend, "attempts": a.attempts, "nvenc_error": a.nvenc_error}),
+        None => Value::Null,
+    }
+}
+
 /// The `info` job / diagnostics: version, platform discovery, readiness,
 /// weights root, GPU, NVENC (`nvenc: true` also encodes a few frames).
 pub fn info_fn(config: &Config, gate: Arc<ServiceGate>, boot: Boot, ready_after: Arc<std::sync::OnceLock<f64>>) -> InfoFn {
@@ -101,10 +109,19 @@ pub fn info_fn(config: &Config, gate: Arc<ServiceGate>, boot: Boot, ready_after:
     let jobs = format!("{:?}", config.job_backend()).to_ascii_lowercase();
     let artifacts = format!("{:?}", config.artifact_backend()).to_ascii_lowercase();
     let webhook_key = !config.webhook_key.is_empty();
+    // The encoders in use (after `auto` was resolved at startup) and, when
+    // any setting was `auto`, what the startup probe found.
+    let encoders = json!({
+        "director": config.director.encoder,
+        "reactor": config.reactor.h264,
+        "streams": config.webrtc.encoder,
+        "post": config.engine.post_encoder,
+    });
     Arc::new(move |job: InfoJob| {
         let gate = gate.clone();
         let (engine, jobs, artifacts) = (engine.clone(), jobs.clone(), artifacts.clone());
         let ready_after = ready_after.clone();
+        let encoders = encoders.clone();
         Box::pin(async move {
             let blocking = tokio::task::spawn_blocking(move || {
                 let encoders = cmd_line("ffmpeg", &["-hide_banner", "-encoders"]).unwrap_or_default();
@@ -140,6 +157,8 @@ pub fn info_fn(config: &Config, gate: Arc<ServiceGate>, boot: Boot, ready_after:
                 "ffmpeg_h264_nvenc": nvenc_built,
                 "nvenc_encode_ok": nvenc_ok,
                 "nvenc_probe": nvenc_encode,
+                "encoders": encoders,
+                "encoder_startup_probe": startup_probe(),
                 "nvidia_driver_capabilities": std::env::var("NVIDIA_DRIVER_CAPABILITIES").ok(),
             })
         })

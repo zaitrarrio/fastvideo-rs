@@ -357,27 +357,57 @@ fn nvenc_probe_with(ffmpeg: &std::path::Path) -> std::result::Result<(), String>
 pub struct AutoEncoder {
     /// NVENC when the probe encoded, else OpenH264.
     pub backend: EncoderBackend,
-    /// Why NVENC was not chosen (the probe's error).
+    /// Why NVENC was not chosen (the last probe's error).
     pub nvenc_error: Option<String>,
+    /// Probes run (1, or 2 after a retry).
+    pub attempts: u32,
 }
 
 impl AutoEncoder {
     /// From one probe outcome.
     pub fn from_probe(probe: std::result::Result<(), String>) -> Self {
         match probe {
-            Ok(()) => Self { backend: EncoderBackend::Nvenc, nvenc_error: None },
-            Err(e) => Self { backend: EncoderBackend::OpenH264, nvenc_error: Some(e) },
+            Ok(()) => Self { backend: EncoderBackend::Nvenc, nvenc_error: None, attempts: 1 },
+            Err(e) => Self { backend: EncoderBackend::OpenH264, nvenc_error: Some(e), attempts: 1 },
+        }
+    }
+
+    /// Probes, and when the probe fails in a way that can be transient
+    /// (ffmpeg ran and has `h264_nvenc`, but opening the encoder failed:
+    /// a serverless GPU whose driver or NVENC sessions are not ready yet),
+    /// waits `delay` and probes once more.
+    pub fn probe_with_retry(mut probe: impl FnMut() -> std::result::Result<(), String>, delay: std::time::Duration) -> Self {
+        let first = probe();
+        match first {
+            Err(e) if probe_error_is_transient(&e) => {
+                std::thread::sleep(delay);
+                Self { attempts: 2, ..Self::from_probe(probe()) }
+            }
+            other => Self::from_probe(other),
         }
     }
 }
 
-/// Resolves `encoder = "auto"`: NVENC when an NVENC encode probe succeeds,
-/// else OpenH264. The probe runs once per process (it spawns ffmpeg), so
-/// every `auto` setting and every later session agree.
-pub fn auto_encoder() -> &'static AutoEncoder {
-    static AUTO: std::sync::OnceLock<AutoEncoder> = std::sync::OnceLock::new();
-    AUTO.get_or_init(|| AutoEncoder::from_probe(nvenc_probe()))
+/// Whether a probe error is worth a retry: not a missing ffmpeg and not an
+/// ffmpeg built without `h264_nvenc`, which a retry cannot change.
+pub fn probe_error_is_transient(e: &str) -> bool {
+    !(e.starts_with("cannot run ") || e.contains("Unknown encoder"))
 }
+
+/// Resolves `encoder = "auto"`: NVENC when an NVENC encode probe succeeds
+/// (retried once after 2 s when the failure may be transient), else
+/// OpenH264. The probe runs once per process (it spawns ffmpeg), so every
+/// `auto` setting and every later session agree.
+pub fn auto_encoder() -> &'static AutoEncoder {
+    AUTO.get_or_init(|| AutoEncoder::probe_with_retry(nvenc_probe, std::time::Duration::from_secs(2)))
+}
+
+/// The [`auto_encoder`] outcome when the probe already ran (no probing).
+pub fn auto_encoder_if_probed() -> Option<&'static AutoEncoder> {
+    AUTO.get()
+}
+
+static AUTO: std::sync::OnceLock<AutoEncoder> = std::sync::OnceLock::new();
 
 // ---------------------------------------------------------------------------
 // The ffmpeg pipe encoder (NVENC in production)
@@ -796,6 +826,48 @@ mod tests {
         // A missing ffmpeg is a probe failure, not a panic.
         let e = nvenc_probe_with(std::path::Path::new("/nonexistent/ffmpeg")).unwrap_err();
         assert!(e.contains("cannot run /nonexistent/ffmpeg"), "{e}");
+        assert!(!probe_error_is_transient(&e));
+    }
+
+    #[test]
+    fn auto_probe_retries_once_on_a_transient_failure() {
+        use std::time::Duration;
+        // Fails once (NVENC not ready), then encodes: NVENC after 2 probes.
+        let mut n = 0;
+        let a = AutoEncoder::probe_with_retry(
+            || {
+                n += 1;
+                if n == 1 { Err("OpenEncodeSessionEx failed: out of memory (10)".into()) } else { Ok(()) }
+            },
+            Duration::ZERO,
+        );
+        assert_eq!((a.backend, a.attempts, a.nvenc_error), (EncoderBackend::Nvenc, 2, None));
+        // Fails twice: OpenH264 with the second error.
+        let mut n = 0;
+        let a = AutoEncoder::probe_with_retry(
+            || {
+                n += 1;
+                Err(format!("Cannot load libcuda.so.1 ({n})"))
+            },
+            Duration::ZERO,
+        );
+        assert_eq!((a.backend, a.attempts), (EncoderBackend::OpenH264, 2));
+        assert_eq!(a.nvenc_error.as_deref(), Some("Cannot load libcuda.so.1 (2)"));
+        // No retry when a retry cannot help.
+        for e in ["cannot run ffmpeg: No such file or directory", "Unknown encoder 'h264_nvenc'"] {
+            let mut n = 0;
+            let a = AutoEncoder::probe_with_retry(
+                || {
+                    n += 1;
+                    Err(e.to_owned())
+                },
+                Duration::ZERO,
+            );
+            assert_eq!((a.attempts, n), (1, 1), "{e}");
+        }
+        // Success first time: one probe.
+        let a = AutoEncoder::probe_with_retry(|| Ok(()), Duration::ZERO);
+        assert_eq!((a.backend, a.attempts), (EncoderBackend::Nvenc, 1));
     }
 
     #[test]

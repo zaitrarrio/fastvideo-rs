@@ -3,11 +3,14 @@
 //! Every encoder setting — `[director] encoder`, `[reactor] h264`,
 //! `[webrtc] encoder` (native `/fv/v1/streams` WHIP publishing,
 //! `FV_STREAM_ENCODER`) and `[engine] post_encoder` (the crop re-encode) —
-//! defaults to `auto`. [`resolve`] runs one NVENC encode probe
+//! defaults to `auto`. [`resolve`] runs the NVENC encode probe
 //! ([`fastvideo_media::video::auto_encoder`]) when any setting is `auto`,
 //! logs the choice, and rewrites those settings to the concrete backend:
-//! `nvenc` when the probe encoded, else `openh264`. Explicit values are kept
-//! as they are.
+//! `nvenc` when the probe encoded, else `openh264`. A probe failure that may
+//! be transient (ffmpeg has `h264_nvenc` but opening it failed, as on a
+//! serverless worker whose GPU is not ready) is retried once after 2 s; if
+//! NVENC still fails, the fallback is logged at WARN. Explicit values are
+//! kept as they are.
 //!
 //! Where OpenH264 cannot serve, the fallback is what that consumer can still
 //! do: without OpenH264 in the build (feature `encoders`) the Reactor
@@ -95,15 +98,23 @@ pub async fn resolve(c: &mut Config) {
     };
     let settings = apply(c, &sel);
     match &auto.nvenc_error {
-        None => tracing::info!(?settings, "H.264 encoder: nvenc (auto: the NVENC encode probe succeeded)"),
-        Some(e) => tracing::info!(
+        None => tracing::info!(
             ?settings,
+            attempts = auto.attempts,
+            "H.264 encoder: nvenc (auto: the NVENC encode probe succeeded)"
+        ),
+        // A GPU worker without a working NVENC (a serverless host whose
+        // driver lacks the `video` capability, or no free NVENC session)
+        // still serves, on the CPU fallback.
+        Some(e) => tracing::warn!(
+            ?settings,
+            attempts = auto.attempts,
             director = %sel.director,
             reactor = %sel.reactor,
             streams = %sel.streams,
             post = %sel.post,
             nvenc_error = %e,
-            "H.264 encoder: openh264 (auto: the NVENC encode probe failed)"
+            "H.264 encoder: NVENC unavailable after the startup probe, falling back to openh264 (auto)"
         ),
     }
 }
