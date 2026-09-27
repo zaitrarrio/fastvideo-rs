@@ -946,12 +946,14 @@ impl AutoencoderKlWan {
         latents.sub(&mean)?.div(&std)
     }
 
+    /// The VAE runs f32 activations (FastVideo's `vae_precision` is fp32),
+    /// whatever the DiT's `FASTVIDEO_BF16_ACT` default.
     pub fn encode_video(&self, video: &CudaTensor) -> Result<CudaTensor> {
         let enc = self
             .encoder
             .as_ref()
             .ok_or_else(|| TensorError::Message("VAE encoder not loaded".into()))?;
-        enc.forward(video)
+        super::tensor::with_bf16_act(false, || enc.forward(&video.to_f32_act()?))
     }
 
     pub fn decode(&self, latents: &CudaTensor) -> Result<CudaTensor> {
@@ -960,7 +962,20 @@ impl AutoencoderKlWan {
 
     /// `decode`, handing each chunk's finished frames to `sink(frame_offset,
     /// frames)` — `[frames, 3, H, W]`, in order — while the next chunk decodes.
+    ///
+    /// Always f32 activations (FastVideo's `vae_precision` is fp32): the
+    /// DiT's bf16-activation default must not reach the decoder.
     pub fn decode_streaming(
+        &self,
+        latents: &CudaTensor,
+        sink: &mut dyn FnMut(usize, &CudaTensor) -> Result<()>,
+    ) -> Result<CudaTensor> {
+        super::tensor::with_bf16_act(false, || {
+            self.decode_streaming_f32(&latents.to_f32_act()?, sink)
+        })
+    }
+
+    fn decode_streaming_f32(
         &self,
         latents: &CudaTensor,
         sink: &mut dyn FnMut(usize, &CudaTensor) -> Result<()>,
@@ -978,7 +993,10 @@ impl AutoencoderKlWan {
         //
         // `FASTVIDEO_VAE_CHUNK` trades memory for utilization: every extra
         // latent frame in a chunk multiplies the decoder's activations.
-        let chunk = super::envflag::usize_flag("FASTVIDEO_VAE_CHUNK", 1).max(1);
+        // Default 2: 18.5% off the 8 s clip's decode (docs/MILESTONES.md,
+        // 2026-09-18); 4 ran out of memory on a 24 GB card. 1 is the old
+        // one-frame-per-pass decode.
+        let chunk = super::envflag::usize_flag("FASTVIDEO_VAE_CHUNK", 2).max(1);
         let mut i = 0usize;
         let mut emitted = 0usize;
         while i < t {

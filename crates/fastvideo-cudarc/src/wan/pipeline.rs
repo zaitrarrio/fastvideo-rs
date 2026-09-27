@@ -36,12 +36,82 @@ fn load_taehv() -> Result<Option<super::taehv::TaeHv>> {
     if dir.is_empty() {
         return Ok(None);
     }
-    let map = WeightMap::from_dir(Path::new(&dir))
-        .map_err(|e| PipelineError::Message(format!("FASTVIDEO_TAEHV_WEIGHTS={dir}: {e}")))?;
-    let tae = super::taehv::TaeHv::load(&map)
+    let tae = open_taehv(Path::new(&dir))
         .map_err(|e| PipelineError::Message(format!("FASTVIDEO_TAEHV_WEIGHTS={dir}: {e}")))?;
     super::log::info(format_args!("vae=taehv ({dir})"));
     Ok(Some(tae))
+}
+
+/// The TAEHV file name the Wan 2.1 latent space (16 channels) decodes with.
+pub const TAEW2_1: &str = "taew2_1.safetensors";
+
+/// `taew2_1` from a file, or a directory holding `taew2_1.safetensors` (only
+/// that file: a TAE directory may also hold taeh3 / taeltx weights).
+fn open_taehv(path: &Path) -> TensorResult<super::taehv::TaeHv> {
+    let file = if path.is_dir() && path.join(TAEW2_1).is_file() {
+        path.join(TAEW2_1)
+    } else {
+        path.to_path_buf()
+    };
+    let map = if file.is_file() {
+        WeightMap::open_files(&[file])?
+    } else {
+        WeightMap::from_dir(path)?
+    };
+    super::taehv::TaeHv::load(&map)
+}
+
+/// Where the distilled presets look for `taew2_1.safetensors` when
+/// `FASTVIDEO_TAEHV_WEIGHTS` is unset: `FASTVIDEO_TAE_DIR`, `<weights>/taehv`,
+/// `<weights>/../taehv`, then `$XDG_CACHE_HOME` (or `~/.cache`)
+/// `/fastvideo/taehv` — where `scripts/gpu/fetch_taehv.sh` puts it.
+pub fn default_taehv_dirs(root: &Path) -> Vec<std::path::PathBuf> {
+    let mut dirs = Vec::new();
+    if let Ok(d) = std::env::var("FASTVIDEO_TAE_DIR") {
+        if !d.is_empty() {
+            dirs.push(std::path::PathBuf::from(d));
+        }
+    }
+    dirs.push(root.join("taehv"));
+    if let Some(parent) = root.parent() {
+        dirs.push(parent.join("taehv"));
+    }
+    let cache = std::env::var_os("XDG_CACHE_HOME")
+        .map(std::path::PathBuf::from)
+        .or_else(|| std::env::var_os("HOME").map(|h| Path::new(&h).join(".cache")));
+    if let Some(c) = cache {
+        dirs.push(c.join("fastvideo").join("taehv"));
+    }
+    dirs
+}
+
+/// Which decoder a request uses (`FASTVIDEO_WAN_VAE`): `auto` (default:
+/// TAEHV for the distilled DMD / rCM / self-forcing presets when its weights
+/// are found, the Wan VAE otherwise), `full` (always the Wan VAE: the
+/// opt-out) or `taehv` (always TAEHV; an error without its weights).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WanVaeChoice {
+    Auto,
+    Full,
+    Taehv,
+}
+
+impl WanVaeChoice {
+    pub fn from_env() -> Result<Self> {
+        match std::env::var("FASTVIDEO_WAN_VAE")
+            .unwrap_or_default()
+            .trim()
+            .to_ascii_lowercase()
+            .as_str()
+        {
+            "" | "auto" => Ok(Self::Auto),
+            "full" | "wan" | "vae" | "official" => Ok(Self::Full),
+            "taehv" | "tae" | "tiny" => Ok(Self::Taehv),
+            other => Err(PipelineError::Message(format!(
+                "FASTVIDEO_WAN_VAE={other}: expected auto, full or taehv"
+            ))),
+        }
+    }
 }
 
 /// `FASTVIDEO_DEVICE_STATS=1`: log host↔device transfer counts after `generate()`.
@@ -112,6 +182,10 @@ pub struct GenerateConfig {
     /// When true, mux PNG frames to `output.mp4` via ffmpeg if available.
     pub save_video: bool,
     pub fps: u32,
+    /// Directory of the UMT5 prompt cache (`None`: encode every request).
+    /// Entries are keyed by prompt, tokenizer, text length and encoder
+    /// weights; a damaged entry is a miss (see `h3::text_cache`).
+    pub text_cache: Option<std::path::PathBuf>,
 }
 
 impl Default for GenerateConfig {
@@ -139,6 +213,7 @@ impl Default for GenerateConfig {
             boundary_ratio: None,
             save_video: false,
             fps: 16,
+            text_cache: None,
         }
     }
 }
@@ -171,6 +246,44 @@ pub struct DenoiseStep<'a> {
 
 pub type StepObserver<'o> = dyn FnMut(&DenoiseStep<'_>) -> Result<()> + 'o;
 
+/// Where one [`WanPipeline::generate_to`] call spent its time (seconds).
+#[derive(Debug, Clone, Default)]
+pub struct WanTimings {
+    /// Prompt conditioning (UMT5, or a cache read).
+    pub text_s: f64,
+    pub denoise_s: f64,
+    /// Per denoise step (each step ends with a device sync).
+    pub step_s: Vec<f64>,
+    /// Decode through the finished mp4: decoder, RGB packing, writer
+    /// hand-off and the mp4 tail. PNG frames are not in it.
+    pub decode_s: f64,
+    /// Decoder compute alone (GPU time between chunk hand-offs).
+    pub vae_s: f64,
+    /// RGB8 packing plus the copy down.
+    pub rgb_s: f64,
+    /// Drain-thread time blocked in [`VideoWriter::push`].
+    pub push_s: f64,
+    /// Decode-thread time blocked on the hand-off queue.
+    pub wait_s: f64,
+    /// From the last frame handed over to ffmpeg's exit.
+    pub encode_s: f64,
+    /// PNG frames, written after the mp4.
+    pub write_s: f64,
+}
+
+/// What [`WanPipeline::generate_to`] produced.
+#[derive(Debug, Clone)]
+pub struct WanOutput {
+    pub frames: usize,
+    pub frame_paths: Vec<String>,
+    pub mp4: Option<String>,
+    /// `taehv` or `wan-vae`.
+    pub decoder: &'static str,
+    /// `hit`, `miss` or `off`.
+    pub text_cache: &'static str,
+    pub timings: WanTimings,
+}
+
 pub struct WanPipeline {
     text: Option<Umt5Encoder>,
     dit: WanTransformer3D,
@@ -180,6 +293,13 @@ pub struct WanPipeline {
     /// instead of the Wan VAE. Loaded alongside rather than instead of it, so
     /// the Wan VAE stays available and the choice is per-decode.
     taehv: Option<super::taehv::TaeHv>,
+    /// TAEHV came from `FASTVIDEO_TAEHV_WEIGHTS` (used for every request)
+    /// rather than the default search (used by the distilled presets).
+    taehv_explicit: bool,
+    vae_choice: WanVaeChoice,
+    /// `text_encoder/` of the checkpoint (the text-cache key reads it).
+    text_dir: Option<std::path::PathBuf>,
+    text_identity: std::sync::OnceLock<[u8; 32]>,
     clip: Option<ClipVision>,
     tiny: bool,
     boundary_ratio: Option<f32>,
@@ -196,6 +316,10 @@ impl WanPipeline {
             dit_2: None,
             vae: AutoencoderKlWan::zeros(WanVaeConfig::tiny()),
             taehv: None,
+            taehv_explicit: false,
+            vae_choice: WanVaeChoice::Auto,
+            text_dir: None,
+            text_identity: Default::default(),
             clip: None,
             tiny: true,
             boundary_ratio: None,
@@ -217,6 +341,10 @@ impl WanPipeline {
             dit_2: None,
             vae,
             taehv: None,
+            taehv_explicit: false,
+            vae_choice: WanVaeChoice::Auto,
+            text_dir: None,
+            text_identity: Default::default(),
             clip: None,
             tiny: false,
             boundary_ratio,
@@ -231,6 +359,11 @@ impl WanPipeline {
 
     /// [`Self::load`] with control over which components are materialized.
     pub fn load_with(root: &Path, preset: &str, parts: LoadParts) -> Result<Self> {
+        // The DiT runs bf16 activations as FastVideo does (`dit_precision`
+        // bf16); UMT5 and the VAE keep f32 (`text_encoder_precisions` /
+        // `vae_precision` fp32), see umt5.rs / vae.rs. FASTVIDEO_BF16_ACT=0
+        // restores f32 activations everywhere.
+        crate::wan::tensor::default_bf16_activations();
         let cfg = WanVideoArchConfig::from_preset(preset);
         let dit = WeightMap::from_dir(&root.join("transformer"))?;
         let vae_cfg = if cfg.out_channels == 48 {
@@ -242,17 +375,18 @@ impl WanPipeline {
             WanVaeConfig::wan_2_1()
         };
         let vae = WeightMap::from_dir(&root.join("vae"))?;
+        let text_dir = if root.join("text_encoder").is_dir() {
+            root.join("text_encoder")
+        } else {
+            root.join("text_encoder_2")
+        };
         let text = if parts.text_encoder {
-            let text_dir = if root.join("text_encoder").is_dir() {
-                root.join("text_encoder")
-            } else {
-                root.join("text_encoder_2")
-            };
             let map = WeightMap::from_dir(&text_dir)?;
             Some(Umt5Encoder::load(Umt5Config::xxl(), &map)?)
         } else {
             None
         };
+        let text_dir = Some(text_dir);
 
         let dit_2 = if root.join("transformer_2").is_dir() {
             let map = WeightMap::from_dir(&root.join("transformer_2"))?;
@@ -269,13 +403,47 @@ impl WanPipeline {
         };
 
         let boundary_ratio = cfg.boundary_ratio;
-        let taehv = load_taehv()?;
+        let vae_choice = WanVaeChoice::from_env()?;
+        let mut taehv = load_taehv()?;
+        let taehv_explicit = taehv.is_some();
+        // taew2_1 decodes the 16-channel Wan 2.1 latent space only.
+        if taehv.is_none() && vae_cfg.z_dim == 16 && vae_choice != WanVaeChoice::Full {
+            for dir in default_taehv_dirs(root) {
+                if !dir.join(TAEW2_1).is_file() {
+                    continue;
+                }
+                match open_taehv(&dir) {
+                    Ok(t) => {
+                        super::log::info(format_args!(
+                            "taehv available for the distilled presets ({})",
+                            dir.display()
+                        ));
+                        taehv = Some(t);
+                        break;
+                    }
+                    Err(e) => super::log::info(format_args!(
+                        "taehv at {} not loaded: {e}",
+                        dir.display()
+                    )),
+                }
+            }
+        }
+        if vae_choice == WanVaeChoice::Taehv && taehv.is_none() {
+            return Err(PipelineError::Message(format!(
+                "FASTVIDEO_WAN_VAE=taehv but no {TAEW2_1} (FASTVIDEO_TAEHV_WEIGHTS, or one of {:?}; scripts/gpu/fetch_taehv.sh)",
+                default_taehv_dirs(root)
+            )));
+        }
         Ok(Self {
             text,
             dit: WanTransformer3D::load(cfg, &dit)?,
             dit_2,
             vae: AutoencoderKlWan::load(vae_cfg, &vae)?,
             taehv,
+            taehv_explicit,
+            vae_choice,
+            text_dir,
+            text_identity: Default::default(),
             clip,
             tiny: false,
             boundary_ratio,
@@ -290,6 +458,128 @@ impl WanPipeline {
 
     /// `[neg, prompt]` UMT5 embeddings padded to `text_len`: `[2, text_len, 4096]`.
     pub fn encode_prompt_embeds(&self, cfg: &GenerateConfig) -> Result<CudaTensor> {
+        Ok(self.encode_text(cfg, true)?.0)
+    }
+
+    /// Whether a request's sampler reads the negative prompt at all: the
+    /// distilled samplers run one conditional pass, and a guidance scale of
+    /// exactly 1 cancels the unconditional branch.
+    fn needs_negative(cfg: &GenerateConfig) -> bool {
+        let unit = |g: f32| (g - 1.0).abs() < 1e-6;
+        !(cfg.is_dmd
+            || cfg.is_rcm
+            || (unit(cfg.guidance_scale) && cfg.guidance_scale_2.is_none_or(unit)))
+    }
+
+    /// UMT5 of one text, `[1, tokens, 4096]` unpadded, through the disk cache
+    /// when `cfg.text_cache` names one. Returns whether it was a hit.
+    fn encode_one(
+        &self,
+        text: &Umt5Encoder,
+        cfg: &GenerateConfig,
+        ids: &[u32],
+        prompt: &str,
+    ) -> Result<(CudaTensor, bool)> {
+        const WIDTH: usize = 4096;
+        let Some(dir) = cfg.text_cache.as_deref() else {
+            return Ok((text.forward(ids, 1, ids.len())?, false));
+        };
+        let key = self.text_cache_key(cfg, prompt)?;
+        let (entry, hit) = crate::h3::text_cache::get_or_compute(dir, &key, ids, WIDTH, || {
+            text.forward(ids, 1, ids.len())?
+                .host_cow()
+                .map(|h| h.into_owned())
+        })
+        .map_err(PipelineError::from)?;
+        Ok((
+            CudaTensor::from_vec(entry.data, vec![1, ids.len(), WIDTH])?.to_device()?,
+            hit,
+        ))
+    }
+
+    /// The disk-cache key of `prompt`: the text, `tokenizer.json`, the padded
+    /// length and an identity of the UMT5 weights (file names, sizes and each
+    /// file's first 256 KiB: the safetensors header and the start of the data).
+    fn text_cache_key(&self, cfg: &GenerateConfig, prompt: &str) -> Result<[u8; 32]> {
+        use sha2::{Digest, Sha256};
+        let identity = self.text_identity.get_or_init(|| {
+            let mut h = Sha256::new();
+            if let Some(dir) = &self.text_dir {
+                let mut files: Vec<_> = std::fs::read_dir(dir)
+                    .map(|rd| rd.flatten().map(|e| e.path()).collect())
+                    .unwrap_or_default();
+                files.retain(|p| p.extension().is_some_and(|e| e == "safetensors"));
+                files.sort();
+                for f in files {
+                    let name = f.file_name().map(|n| n.to_string_lossy().into_owned());
+                    h.update(name.unwrap_or_default().as_bytes());
+                    h.update(
+                        std::fs::metadata(&f)
+                            .map(|m| m.len())
+                            .unwrap_or(0)
+                            .to_le_bytes(),
+                    );
+                    if let Ok(mut file) = std::fs::File::open(&f) {
+                        use std::io::Read as _;
+                        let mut buf = vec![0u8; 256 << 10];
+                        let n = file.read(&mut buf).unwrap_or(0);
+                        h.update(&buf[..n]);
+                    }
+                }
+            }
+            h.finalize().into()
+        });
+        // tokenizer.json is ~16 MB: hash it once per path per process.
+        static TOKENIZER_SHA: std::sync::OnceLock<
+            std::sync::Mutex<std::collections::HashMap<String, [u8; 32]>>,
+        > = std::sync::OnceLock::new();
+        let path = cfg.tokenizer_path.clone().unwrap_or_default();
+        let known = TOKENIZER_SHA
+            .get_or_init(Default::default)
+            .lock()
+            .expect("tokenizer sha")
+            .get(&path)
+            .copied();
+        let tokenizer_sha = match known {
+            Some(s) => s,
+            None => {
+                let bytes = if path.is_empty() {
+                    Vec::new()
+                } else {
+                    std::fs::read(&path)
+                        .map_err(|e| PipelineError::Message(format!("tokenizer: {e}")))?
+                };
+                let s = crate::h3::text_cache::sha256(&bytes);
+                TOKENIZER_SHA
+                    .get_or_init(Default::default)
+                    .lock()
+                    .expect("tokenizer sha")
+                    .insert(path, s);
+                s
+            }
+        };
+        let mut h = Sha256::new();
+        for field in [
+            b"WANTEXT1".as_slice(),
+            prompt.as_bytes(),
+            tokenizer_sha.as_slice(),
+            (self.dit.cfg.text_len as u64).to_le_bytes().as_slice(),
+            identity.as_slice(),
+        ] {
+            h.update((field.len() as u64).to_le_bytes());
+            h.update(field);
+        }
+        Ok(h.finalize().into())
+    }
+
+    /// Prompt embeddings, `[neg, prompt]` or (`with_negative` false) the
+    /// prompt alone, padded to `text_len`; and `hit` / `miss` / `off` for the
+    /// disk cache.
+    fn encode_text(
+        &self,
+        cfg: &GenerateConfig,
+        with_negative: bool,
+    ) -> Result<(CudaTensor, &'static str)> {
         let text_len = self.dit.cfg.text_len;
         let text = self.text.as_ref().ok_or_else(|| {
             PipelineError::Message(
@@ -299,12 +589,25 @@ impl WanPipeline {
         })?;
         if let Some(tokenizer) = cfg.tokenizer_path.as_ref() {
             let (prompt_ids, prompt_len) = tokenize_prompt(tokenizer, &cfg.prompt, text_len)?;
-            let (neg_ids, neg_len) = tokenize_prompt(tokenizer, &cfg.negative_prompt, text_len)?;
-            let prompt_embeds = text.forward(&prompt_ids, 1, prompt_ids.len())?;
-            let neg_embeds = text.forward(&neg_ids, 1, neg_ids.len())?;
+            let (prompt_embeds, mut hit) = self.encode_one(text, cfg, &prompt_ids, &cfg.prompt)?;
             let prompt_embeds = pad_prompt_embeds(&prompt_embeds, &[prompt_len], text_len)?;
-            let neg_embeds = pad_prompt_embeds(&neg_embeds, &[neg_len], text_len)?;
-            return Ok(CudaTensor::cat(&[&neg_embeds, &prompt_embeds], 0)?);
+            let embeds = if with_negative {
+                let (neg_ids, neg_len) =
+                    tokenize_prompt(tokenizer, &cfg.negative_prompt, text_len)?;
+                let (neg_embeds, neg_hit) =
+                    self.encode_one(text, cfg, &neg_ids, &cfg.negative_prompt)?;
+                hit &= neg_hit;
+                let neg_embeds = pad_prompt_embeds(&neg_embeds, &[neg_len], text_len)?;
+                CudaTensor::cat(&[&neg_embeds, &prompt_embeds], 0)?
+            } else {
+                prompt_embeds
+            };
+            let state = match (cfg.text_cache.is_some(), hit) {
+                (false, _) => "off",
+                (true, true) => "hit",
+                (true, false) => "miss",
+            };
+            return Ok((embeds, state));
         }
         if self.tiny {
             let seq = text_len.min(8);
@@ -313,7 +616,7 @@ impl WanPipeline {
             let neg_embeds = prompt_embeds.clone();
             let prompt_embeds = pad_prompt_embeds(&prompt_embeds, &[seq], text_len)?;
             let neg_embeds = pad_prompt_embeds(&neg_embeds, &[seq], text_len)?;
-            return Ok(CudaTensor::cat(&[&neg_embeds, &prompt_embeds], 0)?);
+            return Ok((CudaTensor::cat(&[&neg_embeds, &prompt_embeds], 0)?, "off"));
         }
         Err(PipelineError::Message(
             "real generate needs tokenizer.json next to the Diffusers weights".into(),
@@ -359,7 +662,20 @@ impl WanPipeline {
         Ok((mask, cond))
     }
 
+    /// Generate one clip into `cfg.output_dir`; returns the PNG frame paths.
+    /// See [`Self::generate_to`].
     pub fn generate(&mut self, cfg: &GenerateConfig) -> Result<Vec<String>> {
+        let out = self.generate_to(cfg, Path::new(&cfg.output_dir), cfg.save_video)?;
+        Ok(out.frame_paths)
+    }
+
+    /// One request end to end: text, denoise, then a streamed decode. Each
+    /// decoded chunk is packed to RGB8 on the device and handed to a
+    /// [`VideoWriter`] (through the H3 / LTX frame drain) while the decoder
+    /// works on the next one. The mp4 (when `mp4`) is finished inside the
+    /// decode time; the `frame-NNN.png` files are written after it
+    /// (`timings.write_s`).
+    pub fn generate_to(&self, cfg: &GenerateConfig, out_dir: &Path, mp4: bool) -> Result<WanOutput> {
         let _gen = super::log::StepTimer::start("generate");
         let needs_control = matches!(
             self.preset.as_str(),
@@ -451,30 +767,74 @@ impl WanPipeline {
             _ => None,
         };
 
-        let encoder_hs = self.encode_prompt_embeds(cfg)?;
+        let mut timings = WanTimings::default();
+        let timer = std::time::Instant::now();
+        let (encoder_hs, text_cache) = self.encode_text(cfg, Self::needs_negative(cfg))?;
+        timings.text_s = timer.elapsed().as_secs_f64();
+        let timer = std::time::Instant::now();
+        let mut last = std::time::Instant::now();
+        let mut step_s = Vec::new();
+        let mut record = |_: &DenoiseStep<'_>| -> Result<()> {
+            step_s.push(last.elapsed().as_secs_f64());
+            last = std::time::Instant::now();
+            Ok(())
+        };
         let latents = self.denoise_inner(
             cfg,
             latents,
             &encoder_hs,
             clip_tokens.as_ref(),
             i2v_pack.as_ref().map(|(m, c)| (m, c)),
-            None,
+            Some(&mut record),
         )?;
-        let video = self.decode_latents(&latents)?;
-        let paths = write_frames(&video, Path::new(&cfg.output_dir))?;
-        if cfg.save_video {
-            match mux_mp4(Path::new(&cfg.output_dir), cfg.fps) {
-                Ok(p) => super::log::info(format_args!("wrote mp4 {p}")),
-                Err(e) => super::log::info(format_args!("mp4 mux skipped: {e}")),
-            }
+        timings.denoise_s = timer.elapsed().as_secs_f64();
+        timings.step_s = step_s;
+        drop(encoder_hs);
+
+        let timer = std::time::Instant::now();
+        // A missing ffmpeg costs the mp4, not the clip (as the PNG mux did).
+        let mp4 = mp4 && cfg.fps > 0 && ffmpeg_available();
+        let writer = VideoWriter::spawn(out_dir, cfg.fps, mp4)?;
+        let mut drain = crate::h3::drain::FrameDrain::new(writer)?;
+        let use_taehv = self.uses_taehv(cfg);
+        let video = self.decode_streaming_with(&latents, use_taehv, &mut |offset, frames| {
+            drain.push(offset, frames)
+        })?;
+        let frames = video.shape[2];
+        drop(video);
+        let (mut writer, split) = drain.finish()?;
+        let tail = std::time::Instant::now();
+        let mp4_path = writer.finish_video()?;
+        timings.encode_s = tail.elapsed().as_secs_f64();
+        timings.decode_s = timer.elapsed().as_secs_f64();
+        timings.vae_s = split.vae_s;
+        timings.rgb_s = split.rgb_s;
+        timings.push_s = split.push_s;
+        timings.wait_s = split.wait_s;
+        let timer = std::time::Instant::now();
+        let (frame_paths, _) = writer.finish()?;
+        timings.write_s = timer.elapsed().as_secs_f64();
+        if let Some(p) = &mp4_path {
+            super::log::info(format_args!("wrote mp4 {p}"));
         }
         super::log::info(format_args!(
-            "wrote {} png frames → {}",
-            paths.len(),
-            cfg.output_dir
+            "wrote {} png frames → {} (text {:.2}s, denoise {:.2}s, decode+mp4 {:.2}s, png {:.2}s)",
+            frame_paths.len(),
+            out_dir.display(),
+            timings.text_s,
+            timings.denoise_s,
+            timings.decode_s,
+            timings.write_s
         ));
         log_device_stats_if_enabled();
-        Ok(paths)
+        Ok(WanOutput {
+            frames,
+            frame_paths,
+            mp4: mp4_path,
+            decoder: if use_taehv { "taehv" } else { "wan-vae" },
+            text_cache,
+            timings,
+        })
     }
 
     /// `(C, T, H, W)` of the latent for `cfg` (tiny graphs use a fixed shape).
@@ -591,6 +951,18 @@ impl WanPipeline {
                 "FASTVIDEO_TEACACHE and FASTVIDEO_WAN_SOL_CACHE both set".into(),
             ));
         }
+        // `encoder_hs` is `[negative, prompt]`; a single row is the prompt
+        // alone. The rows are split once, so every step passes the same
+        // tensors and the DiTs can keep their text K/V for the whole denoise.
+        let (cond_hs, uncond_hs) = if encoder_hs.shape[0] > 1 {
+            (
+                encoder_hs.narrow(0, 1, 1)?,
+                Some(encoder_hs.narrow(0, 0, 1)?),
+            )
+        } else {
+            (encoder_hs.clone(), None)
+        };
+        let _text_cache = TextCacheScope::begin(&[Some(&self.dit), self.dit_2.as_ref()]);
         let mut ctx = DenoiseCtx {
             high: &self.dit,
             low: self.dit_2.as_ref(),
@@ -602,6 +974,9 @@ impl WanPipeline {
             tea_cache,
             easy_cache,
             sol_tea_step: 0,
+            attn_clock: 0,
+            cond_hs,
+            uncond_hs,
         };
         if cfg.is_rcm {
             let sigma = cfg.rcm_sigma_max.unwrap_or(RCM_SIGMA_MAX_T2V);
@@ -643,9 +1018,53 @@ impl WanPipeline {
     /// of finished frames (`[frames, 3, H, W]` in `[-1, 1]`, in order) while
     /// the decoder is still busy with the next one. Feed a [`VideoWriter`]
     /// from the sink and frame encoding overlaps the decode.
+    ///
+    /// TAEHV decodes here only when `FASTVIDEO_TAEHV_WEIGHTS` asked for it;
+    /// [`Self::generate_to`] also uses it by default for distilled requests
+    /// (see [`Self::uses_taehv`]).
     pub fn decode_latents_streaming(
         &self,
         latents: &CudaTensor,
+        sink: &mut dyn FnMut(usize, &CudaTensor) -> Result<()>,
+    ) -> Result<CudaTensor> {
+        let tae = self.taehv.is_some()
+            && self.vae_choice != WanVaeChoice::Full
+            && (self.taehv_explicit || self.vae_choice == WanVaeChoice::Taehv);
+        self.decode_streaming_with(latents, tae, sink)
+    }
+
+    /// Whether `cfg` decodes through TAEHV: never with `FASTVIDEO_WAN_VAE=full`;
+    /// always when TAEHV was asked for explicitly; otherwise for the distilled
+    /// samplers (DMD, rCM, causal DMD), whose few-step outputs are what the
+    /// tiny decoder is for, when its weights were found at load.
+    pub fn uses_taehv(&self, cfg: &GenerateConfig) -> bool {
+        if self.taehv.is_none() {
+            if cfg.is_dmd || cfg.is_rcm {
+                static SAID: std::sync::atomic::AtomicBool =
+                    std::sync::atomic::AtomicBool::new(false);
+                if self.vae_choice == WanVaeChoice::Auto && !self.tiny {
+                    super::log::info_once(
+                        &SAID,
+                        format_args!(
+                            "distilled preset: no {TAEW2_1} found, decoding with the Wan VAE \
+                             (scripts/gpu/fetch_taehv.sh <dir>, then FASTVIDEO_TAE_DIR=<dir>)"
+                        ),
+                    );
+                }
+            }
+            return false;
+        }
+        match self.vae_choice {
+            WanVaeChoice::Full => false,
+            WanVaeChoice::Taehv => true,
+            WanVaeChoice::Auto => self.taehv_explicit || cfg.is_dmd || cfg.is_rcm,
+        }
+    }
+
+    fn decode_streaming_with(
+        &self,
+        latents: &CudaTensor,
+        use_taehv: bool,
         sink: &mut dyn FnMut(usize, &CudaTensor) -> Result<()>,
     ) -> Result<CudaTensor> {
         // Errors from the sink are pipeline errors, not tensor errors; carry
@@ -665,7 +1084,7 @@ impl WanPipeline {
         // un-normalisation the Wan VAE needs. That difference is the whole
         // reason this branch sits above `scale_latents` rather than inside the
         // decoder, and the oracle stage is what established it.
-        let decoded = if let Some(tae) = &self.taehv {
+        let decoded = if let Some(tae) = self.taehv.as_ref().filter(|_| use_taehv) {
             let _vae = super::log::StepTimer::start("taehv.decode");
             tae.decode_streaming(latents, &mut tensor_sink)
         } else {
@@ -708,6 +1127,34 @@ struct DenoiseCtx<'a> {
     tea_cache: TeaCache,
     easy_cache: Option<EasyCacheRuntime>,
     sol_tea_step: usize,
+    /// Transformer calls so far (the Sol-Attn step clock; see [`forwards_per_step`]).
+    attn_clock: usize,
+    /// The prompt row of the encoder states (the whole tensor when it has one row).
+    cond_hs: CudaTensor,
+    /// The negative row, when there is one.
+    uncond_hs: Option<CudaTensor>,
+}
+
+/// Text K/V caching on the denoising DiTs for one denoise
+/// ([`WanTransformer3D::begin_text_cache`]), ended on drop, errors included.
+struct TextCacheScope<'a>(Vec<&'a WanTransformer3D>);
+
+impl<'a> TextCacheScope<'a> {
+    fn begin(dits: &[Option<&'a WanTransformer3D>]) -> Self {
+        let dits: Vec<_> = dits.iter().flatten().copied().collect();
+        for d in &dits {
+            d.begin_text_cache();
+        }
+        Self(dits)
+    }
+}
+
+impl Drop for TextCacheScope<'_> {
+    fn drop(&mut self) {
+        for d in &self.0 {
+            d.end_text_cache();
+        }
+    }
 }
 
 /// Simple residual TeaCache with Wan2.1-1.3B poly rescale (upstream TeaCache4Wan2.1).
@@ -784,18 +1231,9 @@ impl TeaCache {
         if prev.shape != latents.shape {
             return None;
         }
-        let Ok(lat_h) = latents.host_cow() else {
+        let Ok((num, den, _)) = super::sol_cache::abs_sums(latents, prev) else {
             return None;
         };
-        let Ok(prev_h) = prev.host_cow() else {
-            return None;
-        };
-        let mut num = 0.0f64;
-        let mut den = 0.0f64;
-        for (a, b) in lat_h.iter().zip(prev_h.iter()) {
-            num += (f64::from(*a) - f64::from(*b)).abs();
-            den += f64::from(*b).abs();
-        }
         let rel = num / (den + 1e-6);
         self.accumulated += self.poly_rescale(rel) as f32;
         self.step += 1;
@@ -837,22 +1275,8 @@ struct EasyCacheRuntime {
     uncond_residual: Option<CudaTensor>,
 }
 
-fn mean_abs(t: &CudaTensor) -> TensorResult<f64> {
-    let host = t.host_cow()?;
-    let n = host.len().max(1) as f64;
-    Ok(host.iter().map(|v| f64::from(*v).abs()).sum::<f64>() / n)
-}
-
-fn mean_abs_delta(a: &CudaTensor, b: &CudaTensor) -> TensorResult<f64> {
-    let left = a.host_cow()?;
-    let right = b.host_cow()?;
-    let n = left.len().max(1) as f64;
-    let mut sum = 0.0;
-    for (x, y) in left.iter().zip(right.iter()) {
-        sum += (f64::from(*x) - f64::from(*y)).abs();
-    }
-    Ok(sum / n)
-}
+// Device reductions (two scalars back), host loops only off-device.
+use super::sol_cache::{mean_abs, mean_abs_delta};
 
 impl EasyCacheRuntime {
     fn from_env(num_steps: usize) -> Result<Option<Self>> {
@@ -918,14 +1342,13 @@ fn dit_cfg_easy(
     t: f32,
 ) -> TensorResult<CudaTensor> {
     let latent_in = pack_dit_input(latents, ctx.i2v)?;
+    let clock = ctx.attn_clock;
+    ctx.attn_clock += forwards_per_step(ctx, t);
+    arm_attn(ctx, clock);
     let decision = {
         let easy = ctx.easy_cache.as_mut().expect("easycache");
         let step = easy.step;
         easy.step += 1;
-        ctx.high.arm_attn_step(step);
-        if let Some(low) = ctx.low {
-            low.arm_attn_step(step);
-        }
         let (change, norm) = if easy.state.needs_cond_signal(step) {
             (
                 mean_abs_delta(&latent_in, easy.previous_step_input.as_ref().expect("prev"))?,
@@ -938,11 +1361,7 @@ fn dit_cfg_easy(
         easy.state.decide_cond(step, change, norm)
     };
     let rows = encoder_hs.shape[0];
-    let cond_hs = if rows > 1 {
-        encoder_hs.narrow(0, 1, 1)?
-    } else {
-        encoder_hs.clone()
-    };
+    let cond_hs = ctx.cond_hs.clone();
     let t1 = CudaTensor::from_vec(vec![t], vec![1])?;
     let (scale, cond) = {
         let (dit, scale) = pick_expert(ctx, t);
@@ -988,8 +1407,9 @@ fn dit_cfg_easy(
         let easy = ctx.easy_cache.as_ref().expect("easycache");
         easy.state.uncond_compute(easy.uncond_residual.is_some())
     };
-    let uncond_hs = encoder_hs.narrow(0, 0, 1)?;
+    let uncond_hs = uncond_row(ctx)?;
     let uncond = if follow {
+        arm_attn(ctx, clock + 1);
         let out = {
             let (dit, _) = pick_expert(ctx, t);
             dit.forward_ctx(&latent_in, &t1, &uncond_hs, ctx.image)?
@@ -1010,6 +1430,32 @@ fn dit_cfg_easy(
     CudaTensor::lincomb(&[(1.0 - scale, &uncond), (scale, &cond)])
 }
 
+/// Transformer calls one denoise step makes in the reference (cond, then
+/// uncond under CFG): the Sol-Attn step clock counts these, not steps.
+fn forwards_per_step(ctx: &DenoiseCtx<'_>, t: f32) -> usize {
+    let (_, scale) = pick_expert(ctx, t);
+    if (scale - 1.0).abs() < 1e-6 || ctx.uncond_hs.is_none() {
+        1
+    } else {
+        2
+    }
+}
+
+/// Route the next forward(s) as transformer call `clock` of the denoise.
+fn arm_attn(ctx: &DenoiseCtx<'_>, clock: usize) {
+    ctx.high.arm_attn_step(clock);
+    if let Some(low) = ctx.low {
+        low.arm_attn_step(clock);
+    }
+}
+
+/// The negative-prompt row a CFG step needs.
+fn uncond_row(ctx: &DenoiseCtx<'_>) -> TensorResult<CudaTensor> {
+    ctx.uncond_hs.clone().ok_or_else(|| {
+        TensorError::Message("classifier-free guidance without negative embeddings".into())
+    })
+}
+
 fn dit_cfg(
     ctx: &mut DenoiseCtx<'_>,
     latents: &CudaTensor,
@@ -1027,10 +1473,12 @@ fn dit_cfg(
     if tea_on || a14b_on || attn_on {
         ctx.sol_tea_step += 1;
     }
-    ctx.high.arm_attn_step(tea_step);
-    if let Some(low) = ctx.low {
-        low.arm_attn_step(tea_step);
-    }
+    // The Sol-Attn dense-step guard counts transformer calls (the reference's
+    // per-forward step clock): cond is call `clock`, uncond `clock + 1`; a
+    // batched [uncond, cond] forward is routed as the cond call.
+    let clock = ctx.attn_clock;
+    ctx.attn_clock += forwards_per_step(ctx, t);
+    arm_attn(ctx, clock);
     if let Some(cached) = ctx.tea_cache.maybe_reuse(latents) {
         static TEA: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
         let n = TEA.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
@@ -1041,11 +1489,7 @@ fn dit_cfg(
     let latent_in = pack_dit_input(latents, ctx.i2v)?;
     // `encoder_hs` is `[negative, prompt]`; a single row is the prompt alone.
     let rows = encoder_hs.shape[0];
-    let cond_hs = if rows > 1 {
-        encoder_hs.narrow(0, 1, 1)?
-    } else {
-        encoder_hs.clone()
-    };
+    let cond_hs = ctx.cond_hs.clone();
     let t1 = CudaTensor::from_vec(vec![t], vec![1])?;
 
     let out = if (scale - 1.0).abs() < 1e-6 {
@@ -1071,7 +1515,7 @@ fn dit_cfg(
         // uncond + s·(cond − uncond)
         CudaTensor::lincomb(&[(1.0 - scale, &uncond), (scale, &cond)])?
     } else {
-        let uncond_hs = encoder_hs.narrow(0, 0, 1)?;
+        let uncond_hs = uncond_row(ctx)?;
         if tea_on {
             dit.arm_sol_teacache(true, tea_step);
         }
@@ -1085,6 +1529,7 @@ fn dit_cfg(
         if a14b_on {
             dit.arm_a14b_cache(false, tea_step);
         }
+        arm_attn(ctx, clock + 1);
         let uncond = dit.forward_ctx(&latent_in, &t1, &uncond_hs, ctx.image)?;
         CudaTensor::lincomb(&[(1.0 - scale, &uncond), (scale, &cond)])?
     };
@@ -1424,6 +1869,23 @@ pub fn interleave_audio(planar: &[f32], channels: usize) -> Result<Vec<f32>> {
         }
     }
     Ok(out)
+}
+
+/// Whether an `ffmpeg` binary runs here (checked once per process).
+fn ffmpeg_available() -> bool {
+    static FOUND: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *FOUND.get_or_init(|| {
+        let ok = Command::new("ffmpeg")
+            .arg("-version")
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .is_ok_and(|s| s.success());
+        if !ok {
+            super::log::info(format_args!("mp4 skipped: ffmpeg not available"));
+        }
+        ok
+    })
 }
 
 /// Mux `frame-%03d.png` in `dir` into `dir/output.mp4`.

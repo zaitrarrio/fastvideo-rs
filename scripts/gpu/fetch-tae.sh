@@ -14,7 +14,11 @@
 #       the safetensors at the same commit holds the same 146 tensors bit for
 #       bit)
 #
-#   fetch-tae.sh [dest]    -> dest/taeh3.safetensors, dest/taeltx2_3_wide.safetensors
+#   taew2_1.safetensors         e589fdd  (the Wan 2.1 latent space; the wan
+#       family's default decoder for the distilled presets)
+#
+#   fetch-tae.sh [dest]    -> dest/taeh3.safetensors, dest/taeltx2_3_wide.safetensors,
+#                             dest/taew2_1.safetensors
 set -euo pipefail
 dest="${1:-${FV_SCRATCH:-/fvscratch}/tae}"
 raw="https://raw.githubusercontent.com/madebyollin/taehv"
@@ -47,4 +51,6 @@ fetch taeh3.safetensors e589fddc076e77f5ba8cd6baabe4ba3260b261cd \
   4fd022bfcab08772fe0536b17ea1a3bbb5625be11e397868d1c5d891863d4c13 22709752 || rc=1
 fetch taeltx2_3_wide.safetensors 32ac0146b11007cda5a57b60a3b35653361fb8a4 \
   0a69291425015e8eb4309028e7de1d17d2a11f58ba88e0120453bc36f352e082 60359856 || rc=1
+fetch taew2_1.safetensors e589fddc076e77f5ba8cd6baabe4ba3260b261cd \
+  04766eac0221b5390b985ae3fdcca652cbb4b1e8b82b28ea7ff89dfad1b1a93f 22642902 || rc=1
 exit $rc

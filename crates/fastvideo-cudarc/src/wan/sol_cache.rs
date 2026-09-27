@@ -101,6 +101,99 @@ pub fn gather_bhsd_seq(t: &CudaTensor, perm: &[usize]) -> Result<CudaTensor> {
     pin_like(CudaTensor::from_vec(out, t.shape.clone())?, t)
 }
 
+/// `(sum |a - b|, sum |b|, n)` for the cache decision metrics. On the device
+/// one reduction kernel runs and only the two f64 sums come back (as
+/// `h3::transformer::tea_relative_l1`); the host loop is the CPU path.
+pub fn abs_sums(a: &CudaTensor, b: &CudaTensor) -> Result<(f64, f64, usize)> {
+    if a.shape != b.shape {
+        return Err(msg(format!(
+            "wan cache metric shapes differ: {:?} != {:?}",
+            a.shape, b.shape
+        )));
+    }
+    let n: usize = a.shape.iter().product();
+    #[cfg(feature = "cuda")]
+    if let (Some(x), Some(y)) = (a.dev()?, b.dev()?) {
+        let (diff, prev) = super::ops::abs_diff_sums_device(&x, &y)?;
+        return Ok((diff, prev, n));
+    }
+    let (x, y) = (a.host_cow()?, b.host_cow()?);
+    let mut diff = 0.0f64;
+    let mut prev = 0.0f64;
+    for (p, q) in x.iter().zip(y.iter()) {
+        diff += (f64::from(*p) - f64::from(*q)).abs();
+        prev += f64::from(*q).abs();
+    }
+    Ok((diff, prev, n))
+}
+
+/// `mean |t|`.
+pub fn mean_abs(t: &CudaTensor) -> Result<f64> {
+    let (_, sum, n) = abs_sums(t, t)?;
+    Ok(sum / n.max(1) as f64)
+}
+
+/// `mean |a - b|`.
+pub fn mean_abs_delta(a: &CudaTensor, b: &CudaTensor) -> Result<f64> {
+    let (diff, _, n) = abs_sums(a, b)?;
+    Ok(diff / n.max(1) as f64)
+}
+
+/// Morton3D reorder (or its inverse) of a BHSD tensor along the sequence
+/// for a `(frames, height, width)` token grid. On the device: one row
+/// gather over an index buffer built and uploaded once per grid and
+/// `batch * heads`; the host gather is the CPU path.
+pub fn morton_gather(
+    t: &CudaTensor,
+    grid: (usize, usize, usize),
+    inverse: bool,
+) -> Result<CudaTensor> {
+    if t.rank() != 4 {
+        return Err(msg(format!(
+            "wan morton reorder expects BHSD, got {:?}",
+            t.shape
+        )));
+    }
+    let (b, h, s, d) = (t.shape[0], t.shape[1], t.shape[2], t.shape[3]);
+    if grid.0 * grid.1 * grid.2 != s {
+        return Err(msg(format!(
+            "wan morton grid {grid:?} does not match sequence {s}"
+        )));
+    }
+    #[cfg(feature = "cuda")]
+    if let Some(table) = t.dev()? {
+        type Key = ((usize, usize, usize), usize, bool);
+        static INDEX: std::sync::OnceLock<
+            std::sync::Mutex<
+                std::collections::HashMap<Key, std::sync::Arc<cudarc::driver::CudaSlice<u32>>>,
+            >,
+        > = std::sync::OnceLock::new();
+        let key = (grid, b * h, inverse);
+        let map = INDEX.get_or_init(Default::default);
+        let idx = {
+            let mut m = map.lock().expect("morton index");
+            match m.get(&key) {
+                Some(i) => i.clone(),
+                None => {
+                    let (perm, inv) = morton3d_pair(grid.0, grid.1, grid.2);
+                    let order = if inverse { inv } else { perm };
+                    let mut rows = Vec::with_capacity(b * h * s);
+                    for plane in 0..b * h {
+                        rows.extend(order.iter().map(|&src| (plane * s + src) as u32));
+                    }
+                    let up = std::sync::Arc::new(super::ops::upload_row_indices(&rows)?);
+                    m.insert(key, up.clone());
+                    up
+                }
+            }
+        };
+        let out = super::ops::index_select_rows_idx_device(&table, d, &idx)?;
+        return CudaTensor::from_device_slice(out, t.shape.clone());
+    }
+    let (perm, inv) = morton3d_pair(grid.0, grid.1, grid.2);
+    gather_bhsd_seq(t, if inverse { &inv } else { &perm })
+}
+
 /// Morton3D gather + inverse for the 14B Sol route.
 pub fn morton3d_pair(frames: usize, height: usize, width: usize) -> (Vec<usize>, Vec<usize>) {
     let perm = morton3d_perm(frames, height, width);

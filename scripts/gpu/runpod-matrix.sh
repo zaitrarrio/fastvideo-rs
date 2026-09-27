@@ -558,36 +558,210 @@ case "$FAMILY" in
         --clip "$RUNS/hy15-480-t2v/frames"
     ;;
   wan)
-    wan_w=""
-    for p in "$W/fastwan21-1.3b" "$W/wan21-1.3b" "$W/Wan2.1-T2V-1.3B-Diffusers"; do
-      [[ -d "$p/transformer" || -d "$p" ]] && wan_w="$p" && break
-    done
-    if [[ -z "$wan_w" ]]; then
-      log "skip wan: no 1.3B tree under $W (fastwan21-1.3b / wan21-1.3b)"
-      write_json "$RUNS/skipped.json" '{"status":"skipped","reason":"wan 1.3B weights not on this volume"}'
-      exit 0
+    # FastWan2.1 1.3B DMD, 3 steps (1000/757/522), 480x832, 81 frames: the
+    # published FastVideo recipe (VSA sparsity 0.8, guidance 1). Every cell
+    # is one warm process (--warm: one untimed generation first) with UMT5,
+    # DiT and decoder resident; with FV_PROMPTS=5 each cell runs the five
+    # prompts of prompts-eval.json and benchmark.json holds their medians.
+    # benchmark.json frames_sha256 is the byte-identity check between cells.
+    wan_common=(
+      --weights "$W/fastwan21-1.3b"
+      --prompt "$PROMPT"
+      --seed "$SEED"
+      --warm
+      "${PROMPT_ARGS[@]}"
+    )
+    # The distilled presets decode through TAEHV when taew2_1 is found
+    # (FASTVIDEO_TAE_DIR): fetch it onto the container disk once.
+    TAEW="$TAE/taew2_1.safetensors"
+    if [[ ! -f "$TAEW" ]]; then
+      bash "$(dirname "${BASH_SOURCE[0]}")/fetch_taehv.sh" "$TAE" >>"$RUNS/tae-fetch.log" 2>&1 \
+        || log "WARN: taew2_1 fetch failed (tae-fetch.log); distilled cells decode with the Wan VAE"
     fi
-    # UMT5 first (own process), then 17-frame / 3-step DMD. `--embeds` is a file.
-    mkdir -p "$RUNS/wan13-embeds"
-    neg='Bright tones, overexposed, static, blurred details, subtitles, style, works, paintings, images, static, overall gray, worst quality, low quality, JPEG compression residue, ugly, incomplete, extra fingers, poorly drawn hands, poorly drawn faces, deformed, disfigured, misshapen limbs, fused fingers, still picture, messy background, three legs, many people in the background, walking backwards'
-    printf '{"negative":%s,"prompts":[{"name":"wan13-dmd-3step","prompt":%s}]}\n' \
-      "$(printf '%s' "$neg" | sed 's/\\/\\\\/g;s/"/\\"/g;s/.*/"&"/')" \
-      "$(printf '%s' "$PROMPT" | sed 's/\\/\\\\/g;s/"/\\"/g;s/.*/"&"/')" \
-      >"$RUNS/prompt.json"
-    run_cell wan13-embed \
-      "$BIN" --mode fast embed \
-        --weights "$wan_w" \
-        --prompts "$RUNS/prompt.json" \
-        --embeds "$RUNS/wan13-embeds"
-    run_cell wan13-dmd-3step \
-      "$BIN" --mode fast clip \
-        --weights "$wan_w" \
-        --embeds "$RUNS/wan13-embeds/wan13-dmd-3step.safetensors" \
-        --dmd \
-        --frames 17 \
-        --steps 3 \
-        --seed "$SEED" \
-        --name wan13-dmd-3step
+    export FASTVIDEO_TAE_DIR="$TAE"
+    # Baseline: VSA (the checkpoint's to_gate_compress), the default decoder.
+    gated_cell wan13-dmd fastwan21-1.3b \
+      "$BIN" --mode fast --vsa wan gen "${wan_common[@]}" --clip-dir "$RUNS/wan13-dmd/frames"
+    # Dense attention, same checkpoint (the gates unused).
+    gated_cell wan13-dmd-dense fastwan21-1.3b \
+      "$BIN" --mode fast wan gen "${wan_common[@]}" --clip-dir "$RUNS/wan13-dmd-dense/frames"
+    compare_cells wan13-dmd wan13-dmd-dense
+    # Kernel arms, same recipe as wan13-dmd (VSA). wan13-f32act is the
+    # numerics before bf16 activations (FASTVIDEO_BF16_ACT=0: f32 residual
+    # stream, unfused f32 chain); every arm is compared and gated against it.
+    #   wan13-bf16act  bf16 activations, residual + norm as two kernels
+    #   wan13-fuse     the same math fused (must equal wan13-bf16act byte for byte)
+    #   wan13-mxfp8 / wan13-w8a8  FASTVIDEO_WAN_QUANT on top of wan13-fuse
+    # kernels-wan: fv-gpucheck kernels --groups wan_fusion,wan_causal_attn.
+    if [[ -z "${FV_CELLS:-}" || " $FV_CELLS " == *" kernels-wan "* ]]; then
+      run_cell kernels-wan "$BIN" --out "$RUNS/kernels-wan/gpucheck-out" kernels --groups wan_fusion,wan_causal_attn
+      grep -hE '^\[(PASS|FAIL)\]' "$RUNS/kernels-wan/stderr.log" 2>/dev/null | cut -c1-200 | tee -a "$LOG" || true
+    fi
+    wan_arm() {
+      local name="$1"
+      shift
+      gated_cell "$name" fastwan21-1.3b env "$@" \
+        "$BIN" --mode fast --vsa wan gen "${wan_common[@]}" --clip-dir "$RUNS/$name/frames"
+    }
+    wan_arm wan13-f32act FASTVIDEO_BF16_ACT=0 FASTVIDEO_WAN_QUANT=off
+    wan_arm wan13-bf16act FASTVIDEO_BF16_ACT=1 FASTVIDEO_WAN_FUSE=0 FASTVIDEO_WAN_QUANT=off
+    wan_arm wan13-fuse FASTVIDEO_BF16_ACT=1 FASTVIDEO_WAN_FUSE=1 FASTVIDEO_WAN_QUANT=off
+    wan_arm wan13-mxfp8 FASTVIDEO_BF16_ACT=1 FASTVIDEO_WAN_FUSE=1 FASTVIDEO_WAN_QUANT=mxfp8
+    wan_arm wan13-w8a8 FASTVIDEO_BF16_ACT=1 FASTVIDEO_WAN_FUSE=1 FASTVIDEO_WAN_QUANT=w8a8
+    for arm in wan13-bf16act wan13-fuse wan13-mxfp8 wan13-w8a8; do
+      compare_cells wan13-f32act "$arm"
+      gate_cells wan13-f32act "$arm" lossy
+    done
+    # The fusion is exact: its OFF identity is the fused/unfused pair itself.
+    compare_cells wan13-bf16act wan13-fuse --off-identity
+    gate_cells wan13-bf16act wan13-fuse exact wan13-fuse
+    for arm in wan13-mxfp8 wan13-w8a8; do
+      compare_cells wan13-fuse "$arm"
+      gate_cells wan13-fuse "$arm" lossy
+    done
+    # SF-Wan 1.3B (block-causal self-attention over the whole clip): 4 DMD
+    # steps from 1000, shift 5, guidance 1. The masked flash kernel against
+    # the path it replaces (FASTVIDEO_WAN_CAUSAL_FLASH=0: the [S, S] mask
+    # through sdpa_composed, f32 scores), at 33 frames where the composed
+    # path's two [12, S, S] f32 buffers fit; 81 frames runs flash only.
+    sf_common=(
+      --weights "$W/sfwan21-1.3b"
+      --preset sf_wan_t2v_1_3b
+      --steps 4
+      --flow-shift 5
+      --prompt "$PROMPT"
+      --seed "$SEED"
+      --warm
+      "${PROMPT_ARGS[@]}"
+    )
+    sf_arm() {
+      local name="$1" frames="$2"
+      shift 2
+      gated_cell "$name" sfwan21-1.3b env "$@" \
+        "$BIN" --mode fast wan gen "${sf_common[@]}" --num-frames "$frames" --clip-dir "$RUNS/$name/frames"
+    }
+    sf_arm sfwan13-33f-composed 33 FASTVIDEO_WAN_CAUSAL_FLASH=0
+    sf_arm sfwan13-33f-flash 33 FASTVIDEO_WAN_CAUSAL_FLASH=1
+    sf_arm sfwan13-81f-flash 81 FASTVIDEO_WAN_CAUSAL_FLASH=1
+    compare_cells sfwan13-33f-composed sfwan13-33f-flash
+    gate_cells sfwan13-33f-composed sfwan13-33f-flash lossy
+    # Base Wan2.2 TI2V-5B (704x1280x121) and Wan2.1 T2V-14B (480x832x81),
+    # UniPC with guidance 5 over 12 steps (not the 50-step official recipe:
+    # an A/B of the kernel arms, same schedule on every arm). f32act is the
+    # pre-bf16 numerics; bf16act the default; mxfp8 FASTVIDEO_WAN_QUANT.
+    base_arm() {
+      local name="$1" wcell="$2" preset="$3" h="$4" w="$5" f="$6"
+      shift 6
+      gated_cell "$name" "$wcell" env "$@" \
+        "$BIN" --mode fast wan gen --weights "$W/$wcell" --preset "$preset" \
+          --unipc --steps 12 --guidance 5 --flow-shift 5 \
+          --height "$h" --width "$w" --num-frames "$f" \
+          --prompt "$PROMPT" --seed "$SEED" --warm "${PROMPT_ARGS[@]}" \
+          --clip-dir "$RUNS/$name/frames"
+    }
+    for m in "wan5b wan22-ti2v-5b wan_2_2_ti2v_5b 704 1280 121" "wan14b wan21-t2v-14b wan_t2v_14b 480 832 81"; do
+      read -r tag wcell preset h w f <<<"$m"
+      base_arm "$tag-f32act" "$wcell" "$preset" "$h" "$w" "$f" FASTVIDEO_BF16_ACT=0 FASTVIDEO_WAN_QUANT=off
+      base_arm "$tag-bf16act" "$wcell" "$preset" "$h" "$w" "$f" FASTVIDEO_BF16_ACT=1 FASTVIDEO_WAN_QUANT=off
+      base_arm "$tag-mxfp8" "$wcell" "$preset" "$h" "$w" "$f" FASTVIDEO_BF16_ACT=1 FASTVIDEO_WAN_QUANT=mxfp8
+      for arm in "$tag-bf16act" "$tag-mxfp8"; do
+        compare_cells "$tag-f32act" "$arm"
+        gate_cells "$tag-f32act" "$arm" lossy
+      done
+    done
+    # The opt-out to the full Wan VAE (2 latent frames per pass by default),
+    # and the old one-frame-per-pass decode.
+    gated_cell wan13-dmd-fullvae fastwan21-1.3b \
+      "$BIN" --mode fast --vsa wan gen "${wan_common[@]}" --full-vae \
+        --clip-dir "$RUNS/wan13-dmd-fullvae/frames"
+    gated_cell wan13-dmd-fullvae-chunk1 fastwan21-1.3b \
+      "$BIN" --mode fast --vsa --vae-chunk 1 wan gen "${wan_common[@]}" --full-vae \
+        --clip-dir "$RUNS/wan13-dmd-fullvae-chunk1/frames"
+    # TAEHV (the default) against the full VAE: LPIPS / PSNR / sharpness.
+    compare_cells wan13-dmd-fullvae wan13-dmd
+    gate_cells wan13-dmd-fullvae wan13-dmd lossy
+    compare_cells wan13-dmd-fullvae-chunk1 wan13-dmd-fullvae
+    # Exact switches off: text K/V, text and time embeddings recomputed every
+    # forward, every prompt encoded. Must be byte-identical to the baseline
+    # (compare --off-identity; benchmark.json frames_sha256).
+    gated_cell wan13-dmd-nocache fastwan21-1.3b \
+      env FASTVIDEO_WAN_COND_CACHE=0 \
+      "$BIN" --mode fast --vsa wan gen "${wan_common[@]}" --no-text-cache \
+        --clip-dir "$RUNS/wan13-dmd-nocache/frames"
+    compare_cells wan13-dmd wan13-dmd-nocache --off-identity
+    gate_cells wan13-dmd wan13-dmd-nocache exact
+    # Lossy arms, never default; LPIPS against the baseline.
+    # Sol-Attn on 1.3B (tau 1.0, layer 0 dense, Morton3D; replaces VSA).
+    gated_cell wan13-dmd-sol fastwan21-1.3b \
+      env FASTVIDEO_WAN_SOL_ATTN=1 \
+      "$BIN" --mode fast --vsa wan gen "${wan_common[@]}" \
+        --clip-dir "$RUNS/wan13-dmd-sol/frames"
+    # TeaCache4Wan2.1 1.3B (poly-rescaled rel-L1 on the latents, thresh 0.08).
+    gated_cell wan13-dmd-teacache fastwan21-1.3b \
+      env FASTVIDEO_TEACACHE=1 \
+      "$BIN" --mode fast --vsa wan gen "${wan_common[@]}" \
+        --clip-dir "$RUNS/wan13-dmd-teacache/frames"
+    for arm in sol teacache; do
+      compare_cells wan13-dmd "wan13-dmd-$arm"
+      gate_cells wan13-dmd "wan13-dmd-$arm" lossy
+    done
+
+    # ---- Wan2.1 T2V-14B, Wan2.2 TI2V-5B, SF-Wan 1.3B (weights on the US
+    # volume, fv-weights-b200-us). One prompt ($PROMPT), the upstream
+    # FastVideo sampling defaults of each checkpoint. The 50-step cells run
+    # one generation (no --warm): first-request overhead is small next to
+    # 100 forwards, and each cell would otherwise cost twice the time.
+    one=(--prompt "$PROMPT" --seed "$SEED")
+    w14=(--weights "$W/wan21-t2v-14b" --preset wan_t2v_14b --unipc --guidance 5.0
+      --flow-shift 3.0 "${one[@]}")
+    gated_cell wan14 wan21-t2v-14b \
+      "$BIN" --mode fast wan gen "${w14[@]}" --steps 50 --clip-dir "$RUNS/wan14/frames"
+    # Identity of the exact caches on 14B (CFG batch, 40 blocks): 4 steps each way.
+    gated_cell wan14-4step wan21-t2v-14b \
+      "$BIN" --mode fast wan gen "${w14[@]}" --steps 4 --clip-dir "$RUNS/wan14-4step/frames"
+    gated_cell wan14-4step-nocache wan21-t2v-14b \
+      env FASTVIDEO_WAN_COND_CACHE=0 \
+      "$BIN" --mode fast wan gen "${w14[@]}" --steps 4 --no-text-cache \
+        --clip-dir "$RUNS/wan14-4step-nocache/frames"
+    compare_cells wan14-4step wan14-4step-nocache --off-identity
+    w14+=(--steps 50)
+    # sol-engine config/wan21_t2v_14b/fullstack.toml: EasyCache 0.036 + Sol-Attn
+    # (tau 1.0, 10 dense forwards, layer 0 dense, Morton3D); and each alone,
+    # plus the Sol TeaCache preset.
+    gated_cell wan14-easycache wan21-t2v-14b \
+      env FASTVIDEO_WAN_SOL_CACHE=easycache FASTVIDEO_WAN_EASYCACHE_PROFILE=fullstack \
+      "$BIN" --mode fast wan gen "${w14[@]}" --clip-dir "$RUNS/wan14-easycache/frames"
+    gated_cell wan14-teacache wan21-t2v-14b \
+      env FASTVIDEO_WAN_SOL_CACHE=teacache \
+      "$BIN" --mode fast wan gen "${w14[@]}" --clip-dir "$RUNS/wan14-teacache/frames"
+    gated_cell wan14-sol wan21-t2v-14b \
+      env FASTVIDEO_WAN_SOL_ATTN=1 \
+      "$BIN" --mode fast wan gen "${w14[@]}" --clip-dir "$RUNS/wan14-sol/frames"
+    gated_cell wan14-fullstack wan21-t2v-14b \
+      env FASTVIDEO_WAN_SOL_ATTN=1 FASTVIDEO_WAN_SOL_CACHE=easycache FASTVIDEO_WAN_EASYCACHE_PROFILE=fullstack \
+      "$BIN" --mode fast wan gen "${w14[@]}" --clip-dir "$RUNS/wan14-fullstack/frames"
+    for arm in easycache teacache sol fullstack; do
+      compare_cells wan14 "wan14-$arm"
+      gate_cells wan14 "wan14-$arm" lossy
+    done
+    gated_cell wan5b wan22-ti2v-5b \
+      "$BIN" --mode fast wan gen --weights "$W/wan22-ti2v-5b" --preset wan_2_2_ti2v_5b --unipc \
+        --steps 50 --guidance 5.0 --flow-shift 5.0 --height 704 --width 1280 --num-frames 121 --fps 24 \
+        "${one[@]}" --clip-dir "$RUNS/wan5b/frames"
+    gated_cell wan5b-easycache wan22-ti2v-5b \
+      env FASTVIDEO_WAN_SOL_CACHE=easycache \
+      "$BIN" --mode fast wan gen --weights "$W/wan22-ti2v-5b" --preset wan_2_2_ti2v_5b --unipc \
+        --steps 50 --guidance 5.0 --flow-shift 5.0 --height 704 --width 1280 --num-frames 121 --fps 24 \
+        "${one[@]}" --clip-dir "$RUNS/wan5b-easycache/frames"
+    compare_cells wan5b wan5b-easycache
+    # SF-Wan: causal DMD; TAEHV by default (distilled), the full VAE opt-out.
+    gated_cell sfwan13 sfwan21-1.3b \
+      "$BIN" --mode fast wan gen --weights "$W/sfwan21-1.3b" --preset sf_wan_t2v_1_3b "${one[@]}" --warm \
+        --clip-dir "$RUNS/sfwan13/frames"
+    gated_cell sfwan13-fullvae sfwan21-1.3b \
+      "$BIN" --mode fast wan gen --weights "$W/sfwan21-1.3b" --preset sf_wan_t2v_1_3b "${one[@]}" --warm \
+        --full-vae --clip-dir "$RUNS/sfwan13-fullvae/frames"
+    compare_cells sfwan13-fullvae sfwan13
     ;;
   b200)
     # Warm B200 parity: H3 / FastH3 / LTX only. Official VAE stays the

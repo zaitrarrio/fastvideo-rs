@@ -93,10 +93,12 @@ pub fn load_prompts(path: &Path, default_seed: u64) -> anyhow::Result<Vec<Prompt
 
 /// `hashlib.sha256(prompt.encode()).hexdigest()`, as the H3 runner records it.
 pub fn sha256_hex(s: &str) -> String {
-    sha256(s.as_bytes())
-        .iter()
-        .map(|b| format!("{b:02x}"))
-        .collect()
+    sha256_hex_bytes(s.as_bytes())
+}
+
+/// Hex SHA-256 of raw bytes.
+pub fn sha256_hex_bytes(data: &[u8]) -> String {
+    sha256(data).iter().map(|b| format!("{b:02x}")).collect()
 }
 
 /// FIPS 180-4 SHA-256 (no dependency for one digest per prompt).

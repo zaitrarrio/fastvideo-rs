@@ -29,6 +29,8 @@ mod kernels;
 mod kernels_fp8;
 #[cfg(feature = "cuda")]
 mod kernels_fuse;
+#[cfg(feature = "cuda")]
+mod kernels_wan;
 mod llm_oracle;
 mod lpips;
 mod ltx2_stage;
@@ -49,6 +51,7 @@ mod report;
 mod serve;
 mod st;
 mod taehv;
+mod wan_stage;
 mod writer_bench;
 
 use std::path::PathBuf;
@@ -292,6 +295,11 @@ enum Cmd {
         #[command(subcommand)]
         stage: hunyuan15_stage::Stage,
     },
+    /// Wan 2.1 / FastWan stages (see `wan_stage.rs`).
+    Wan {
+        #[command(subcommand)]
+        stage: wan_stage::Stage,
+    },
     /// A decoder-only text encoder (Qwen3-VL for MiniMax-H3, Gemma-3 for
     /// LTX-2) against transformers' hidden states, on the oracle's own tokens.
     Llm {
@@ -527,6 +535,7 @@ fn stage_name(cmd: &Cmd) -> &'static str {
         Cmd::H3 { .. } => "h3",
         Cmd::Ltx2 { .. } => "ltx2",
         Cmd::Hunyuan { .. } => "hunyuan",
+        Cmd::Wan { .. } => "wan",
         Cmd::Llm { .. } => "llm",
         Cmd::Compare { .. } => "compare",
         Cmd::CompareClips { .. } => "compare-clips",
@@ -655,6 +664,7 @@ fn run(cli: &Cli, report: &mut Report) -> StageResult<()> {
         Cmd::H3 { stage } => h3_stage::run(report, stage),
         Cmd::Ltx2 { stage } => ltx2_stage::run(report, stage),
         Cmd::Hunyuan { stage } => hunyuan15_stage::run(report, stage),
+        Cmd::Wan { stage } => wan_stage::run(report, stage),
         Cmd::Llm {
             weights,
             family,
