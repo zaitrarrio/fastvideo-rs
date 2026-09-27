@@ -16,16 +16,17 @@ fn h3_grid_matches_fastvideo_models() {
     let g = FrameGrid::h3();
     assert_eq!(
         (g.step, g.offset, g.min, g.max, g.default),
-        (17, 5, 124, 362, 124)
+        (17, 5, 107, 362, 124),
+        "4..15 s at 24 fps (MiniMax admits 4 s), default 5 s"
     );
     for n in 1..400 {
         let aligned = h3cfg::align_num_frames(n as usize) as u32;
         assert_eq!(g.next_on_grid(n), Some(aligned), "n={n}");
-        let expect = (124..=362).contains(&aligned).then_some(aligned);
+        let expect = (107..=362).contains(&aligned).then_some(aligned);
         assert_eq!(g.align_up(n), expect, "n={n}");
         assert_eq!(
             g.contains(n),
-            n == aligned && (124..=362).contains(&n),
+            n == aligned && (107..=362).contains(&n),
             "n={n}"
         );
     }

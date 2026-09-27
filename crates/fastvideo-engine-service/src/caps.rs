@@ -36,16 +36,20 @@ pub const SOL_H3_4STEP_PROFILE: &str = "h3/sol_h3_4step_engine_ladder";
 /// The dense Sol-H3 4-step route, selectable as an explicit profile.
 pub const SOL_H3_4STEP_DENSE_PROFILE: &str = "h3/sol_h3_4step";
 
-/// The canonical tier alias for `family`: `h3-max`, `h3-turbo`, `ltx-pro`,
-/// `ltx-turbo`, `wan-max`, `wan-turbo`. `None` for MMAudio.
+/// The canonical tier alias for `family`: `h3-max`, `h3-turbo`, `h3-draft`,
+/// `ltx-pro`, `ltx-turbo`, `ltx-draft`, `wan-max`, `wan-turbo`, `wan-draft`.
+/// `None` for MMAudio.
 pub fn tier_alias(family: Family, tier: Tier) -> Option<&'static str> {
     Some(match (family, tier) {
         (Family::H3, Tier::Max) => "h3-max",
         (Family::H3, Tier::Turbo) => "h3-turbo",
+        (Family::H3, Tier::Draft) => "h3-draft",
         (Family::Ltx2, Tier::Max) => "ltx-pro",
         (Family::Ltx2, Tier::Turbo) => "ltx-turbo",
+        (Family::Ltx2, Tier::Draft) => "ltx-draft",
         (Family::Wan, Tier::Max) => "wan-max",
         (Family::Wan, Tier::Turbo) => "wan-turbo",
+        (Family::Wan, Tier::Draft) => "wan-draft",
         (Family::MmAudio, _) => return None,
     })
 }
@@ -54,7 +58,7 @@ pub fn tier_alias(family: Family, tier: Tier) -> Option<&'static str> {
 pub fn parse_tier_alias(alias: &str) -> Option<(Family, Tier)> {
     [Family::H3, Family::Ltx2, Family::Wan]
         .into_iter()
-        .flat_map(|f| [Tier::Max, Tier::Turbo].into_iter().map(move |t| (f, t)))
+        .flat_map(|f| [Tier::Max, Tier::Turbo, Tier::Draft].into_iter().map(move |t| (f, t)))
         .find(|(f, t)| tier_alias(*f, *t) == Some(alias))
 }
 
@@ -335,10 +339,12 @@ mod tests {
     #[test]
     fn aliases_round_trip() {
         for f in [Family::H3, Family::Ltx2, Family::Wan] {
-            for t in [Tier::Max, Tier::Turbo] {
+            for t in [Tier::Max, Tier::Turbo, Tier::Draft] {
                 assert_eq!(parse_tier_alias(tier_alias(f, t).unwrap()), Some((f, t)));
             }
         }
+        assert_eq!(parse_tier_alias("h3-draft"), Some((Family::H3, Tier::Draft)));
+        assert_eq!(parse_tier_alias("ltx-draft"), Some((Family::Ltx2, Tier::Draft)));
         assert_eq!(tier_alias(Family::MmAudio, Tier::Max), None);
         assert_eq!(parse_tier_alias("nope"), None);
     }

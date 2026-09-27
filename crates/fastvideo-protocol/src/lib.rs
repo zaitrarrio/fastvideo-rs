@@ -1,7 +1,7 @@
 //! Normalized protocol model shared by every fv-serve adapter (design §3).
 //!
 //! - [`request`]: the normalized [`GenerationRequest`] every adapter produces.
-//! - [`caps`]: [`ModelCaps`], the max/turbo [`Tier`]s, and the frame-grid /
+//! - [`caps`]: [`ModelCaps`], the draft/turbo/max [`Tier`]s, and the frame-grid /
 //!   canvas helpers.
 //! - [`negotiate`](mod@negotiate): [`negotiate()`] turns request + caps +
 //!   staged inputs into a [`ResolvedJob`], refusing engine gaps with
