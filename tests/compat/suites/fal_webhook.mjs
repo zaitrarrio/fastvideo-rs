@@ -25,6 +25,10 @@ function check(cond, what) {
   if (!cond) throw new Error(`check failed: ${what}`);
 }
 
+// Signed file URLs carry `exp`/`sig` minted per render: compare without them.
+const unsigned = (v) =>
+  JSON.stringify(v, (_, x) => (typeof x === "string" && /^https?:\/\//.test(x) ? x.split("?")[0] : x));
+
 function verify(jwks, headers, body) {
   const rid = headers["x-fal-webhook-request-id"];
   const uid = headers["x-fal-webhook-user-id"];
@@ -95,7 +99,7 @@ try {
   const okBody = JSON.parse(okHit.body);
   check(okBody.request_id === ok.request_id && okBody.status === "OK", JSON.stringify(okBody));
   const result = await fal.queue.result(APP, { requestId: ok.request_id });
-  check(JSON.stringify(okBody.payload) === JSON.stringify(result.data), "webhook payload equals the result");
+  check(unsigned(okBody.payload) === unsigned(result.data), "webhook payload equals the result (URLs unsigned)");
   checks.push("queue.submit(webhookUrl): OK webhook, Ed25519 verified");
 
   const errHit = await waitFor("/js/err");
