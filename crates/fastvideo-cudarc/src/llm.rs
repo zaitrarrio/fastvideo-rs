@@ -1486,6 +1486,7 @@ pub fn prefetch_self_check(dir: &std::path::Path, stored_bf16: bool) -> Result<P
 
 #[cfg(feature = "cuda")]
 mod prefetch;
+pub mod prequant;
 
 /// The embedding table, held on the host in whatever dtype the checkpoint
 /// stores: a prompt needs a few hundred of its 150k-260k rows, and 2-4 GB of
@@ -2363,6 +2364,76 @@ mod tests {
             );
         }
         assert!(ResidentDecoder::load(&weights(), &tiny(false), 3).is_err());
+    }
+
+    /// E13: a pre-quantized tree loads to the very codes and scales the
+    /// load-time quantization produces, and to the same hidden states.
+    #[test]
+    fn a_prequantized_fp8_tree_is_the_load_time_quantization() {
+        use fastvideo_loader::{LazyDType, SafetensorsWriter, TensorSpec};
+        let cfg = tiny(false);
+        // Materialize the generated checkpoint as a real shard directory.
+        let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::<(String, Vec<usize>)>::new()));
+        let rec = seen.clone();
+        let gen = weights();
+        let recording = WeightMap::generated(move |key, shape| {
+            rec.lock().unwrap().push((key.to_string(), shape.to_vec()));
+            crate::wan::weights::cuda_tensor_shaped(&gen, key, shape)
+                .unwrap()
+                .host_cow()
+                .unwrap()
+                .into_owned()
+        });
+        ResidentDecoder::load(&recording, &cfg, 2).unwrap();
+        let mut tensors = seen.lock().unwrap().clone();
+        tensors.sort();
+        tensors.dedup();
+        let root = std::env::temp_dir().join(format!("fv-prequant-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let src = root.join("text_encoder");
+        std::fs::create_dir_all(&src).unwrap();
+        let specs: Vec<TensorSpec> = tensors
+            .iter()
+            .map(|(k, s)| TensorSpec::new(k.clone(), LazyDType::F32, s.clone()))
+            .collect();
+        let mut w = SafetensorsWriter::create(&src.join("model.safetensors"), &specs, &[]).unwrap();
+        let gen = weights();
+        for (k, s) in &tensors {
+            let t = crate::wan::weights::cuda_tensor_shaped(&gen, k, s).unwrap();
+            let bytes: Vec<u8> = t.host_cow().unwrap().iter().flat_map(|v| v.to_le_bytes()).collect();
+            w.write(k, &bytes).unwrap();
+        }
+        w.finish().unwrap();
+
+        let map = WeightMap::open(&src).unwrap();
+        let (quantized, captured) = crate::wan::nn::capture_fp8_rows(|| {
+            ResidentDecoder::load_with(&map, &cfg, 2, WeightPrecision::Fp8Rows)
+        })
+        .unwrap();
+        assert!(!captured.is_empty());
+        let tree = root.join(prequant::DIR_NAME);
+        prequant::write_tree(&src, &tree, &cfg, 2, &captured, &Default::default(), "test").unwrap();
+        assert!(prequant::check(&src, &tree, 2).is_ok());
+        assert!(prequant::check(&src, &tree, 3).is_err(), "more layers than the tree holds");
+        assert!(
+            prequant::write_tree(&src, &tree, &cfg, 2, &captured, &Default::default(), "t").is_err(),
+            "an existing tree is never overwritten"
+        );
+        let opened = prequant::open_tree(&src, 2).unwrap().expect("valid tree");
+        let (from_tree, again) = crate::wan::nn::capture_fp8_rows(|| {
+            ResidentDecoder::load_with(&opened, &cfg, 2, WeightPrecision::Fp8Rows)
+        })
+        .unwrap();
+        assert_eq!(captured, again, "codes and scales byte-identical");
+        let ids = [1u32, 3, 0, 2];
+        let pos: Vec<u32> = (0..4).collect();
+        let a = quantized.hidden_states(&ids, &pos, &[true; 4], &[2]).unwrap();
+        let b = from_tree.hidden_states(&ids, &pos, &[true; 4], &[2]).unwrap();
+        assert_eq!(&*a[0].host_cow().unwrap(), &*b[0].host_cow().unwrap());
+        // A source that changed size invalidates the tree.
+        std::fs::write(src.join("extra.safetensors"), b"x").unwrap();
+        assert!(prequant::check(&src, &tree, 2).is_err());
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     /// Weight-only FP8 is a storage choice: the encoder it produces tracks the

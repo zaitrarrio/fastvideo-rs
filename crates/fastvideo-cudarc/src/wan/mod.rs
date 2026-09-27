@@ -47,6 +47,8 @@ pub mod sol_ops;
 pub mod sp;
 pub mod stream;
 pub mod stats;
+#[cfg(feature = "cuda")]
+pub mod stage_upload;
 pub mod taehv;
 pub mod taehv_ref;
 pub mod tensor;
