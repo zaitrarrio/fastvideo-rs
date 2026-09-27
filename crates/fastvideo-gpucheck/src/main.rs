@@ -19,6 +19,8 @@
 mod benchmark;
 mod clipcmp;
 mod embed;
+#[cfg(feature = "cuda")]
+mod engine_stage;
 mod gate;
 mod gpu;
 mod h3_stage;
@@ -199,6 +201,51 @@ enum Cmd {
     /// Create the CUDA context (cuBLAS, cuDNN, all kernels) and report the GPU.
     #[cfg(feature = "cuda")]
     Device,
+    /// One model through the serve engine (EngineService + CudaBackend):
+    /// load resident, submit a job, check the MP4 and frames; optionally
+    /// compare the frames with a CLI clip and cancel a second job mid-run.
+    #[cfg(feature = "cuda")]
+    Engine {
+        /// Tier alias (`h3-turbo`, `ltx-turbo`, `wan-turbo`, ...) or catalog model id.
+        #[arg(long)]
+        model: String,
+        #[arg(long, default_value = "/workspace/weights")]
+        weights_root: PathBuf,
+        /// Directory holding taeh3 / taeltx2_3_wide / taew2_1 (default `<root>/auxiliary/tae`).
+        #[arg(long)]
+        tae_dir: Option<PathBuf>,
+        #[arg(long)]
+        prompt: String,
+        #[arg(long, default_value_t = 1024)]
+        seed: u64,
+        #[arg(long)]
+        width: Option<u32>,
+        #[arg(long)]
+        height: Option<u32>,
+        #[arg(long)]
+        num_frames: Option<u32>,
+        /// Engine output directory (`<out>/<job id>/output.mp4`, `frames/`).
+        #[arg(long)]
+        clip_out: PathBuf,
+        /// H3 text encoder (`auto`, `streamed`, `resident-fp8`).
+        #[arg(long)]
+        text_encoder: Option<String>,
+        /// H3 AdaLN table cache.
+        #[arg(long)]
+        adaln_cache: Option<PathBuf>,
+        /// LTX text residency (`auto`, `resident`, `streamed`).
+        #[arg(long)]
+        ltx_text: Option<String>,
+        /// A CLI clip directory whose frame-*.png must equal the job's.
+        #[arg(long)]
+        reference: Option<PathBuf>,
+        /// Cancel a second job once this denoise step is reported.
+        #[arg(long)]
+        cancel_after_step: Option<u32>,
+        /// `nvenc`, `x264` (test boxes only) or `auto`.
+        #[arg(long, default_value = "auto")]
+        encoder: String,
+    },
     /// Kernel/GEMM/attention/conv parity on the live GPU.
     #[cfg(feature = "cuda")]
     Kernels {
@@ -527,6 +574,8 @@ fn stage_name(cmd: &Cmd) -> &'static str {
         #[cfg(feature = "cuda")]
         Cmd::Nvrtc { .. } => "nvrtc",
         #[cfg(feature = "cuda")]
+        Cmd::Engine { .. } => "engine",
+        #[cfg(feature = "cuda")]
         Cmd::Device => "device",
         #[cfg(feature = "cuda")]
         Cmd::Kernels { .. } => "kernels",
@@ -559,6 +608,43 @@ fn run(cli: &Cli, report: &mut Report) -> StageResult<()> {
     report.set("cuda_feature", cfg!(feature = "cuda"));
     match &cli.cmd {
         Cmd::Serve { dir, port } => Ok(serve::run(dir, *port)?),
+        #[cfg(feature = "cuda")]
+        Cmd::Engine {
+            model,
+            weights_root,
+            tae_dir,
+            prompt,
+            seed,
+            width,
+            height,
+            num_frames,
+            clip_out,
+            text_encoder,
+            adaln_cache,
+            ltx_text,
+            reference,
+            cancel_after_step,
+            encoder,
+        } => engine_stage::run(
+            report,
+            &engine_stage::Args {
+                model,
+                weights_root,
+                tae_dir: tae_dir.as_deref(),
+                prompt,
+                seed: *seed,
+                width: *width,
+                height: *height,
+                num_frames: *num_frames,
+                out: clip_out,
+                text_encoder: text_encoder.as_deref(),
+                adaln_cache: adaln_cache.as_deref(),
+                ltx_text: ltx_text.as_deref(),
+                reference: reference.as_deref(),
+                cancel_after_step: *cancel_after_step,
+                encoder,
+            },
+        ),
         #[cfg(feature = "cuda")]
         Cmd::Nvrtc { sm } => {
             // Which SMs this binary carries real SASS for. Empty means it was

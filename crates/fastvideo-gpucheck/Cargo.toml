@@ -25,11 +25,25 @@ fastvideo-cudarc.workspace = true
 fastvideo-ops.workspace = true
 cudarc = { workspace = true, optional = true }
 half = { version = "2", optional = true }
+# `fv-gpucheck engine`: the serve engine's CUDA backend end to end.
+fastvideo-engine-service = { workspace = true, optional = true }
+fastvideo-protocol = { workspace = true, optional = true }
+fastvideo-media = { workspace = true, optional = true }
+tokio = { workspace = true, optional = true, features = ["rt", "time", "sync"] }
 
 [features]
 default = []
 # Device checks (nvrtc, device, kernels) and GPU runs of every other stage.
-cuda = ["fastvideo-cudarc/cuda", "dep:cudarc", "dep:half"]
+cuda = [
+    "fastvideo-cudarc/cuda",
+    "dep:cudarc",
+    "dep:half",
+    "dep:fastvideo-engine-service",
+    "fastvideo-engine-service/cuda",
+    "dep:fastvideo-protocol",
+    "dep:fastvideo-media",
+    "dep:tokio",
+]
 
 [lints.rust]
 # Kernel-level parity checks launch NVRTC kernels directly (`unsafe fn`).

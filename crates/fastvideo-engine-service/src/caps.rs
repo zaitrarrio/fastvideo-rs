@@ -245,7 +245,7 @@ impl CapabilityTable {
                     .and_then(|a| tiers.get(a))
                     .is_some_and(|b| b.model == c.id)
             };
-            let held: Vec<Tier> = [Tier::Max, Tier::Turbo]
+            let held: Vec<Tier> = [Tier::Max, Tier::Turbo, Tier::Draft]
                 .into_iter()
                 .filter(|t| bound(*t))
                 .collect();

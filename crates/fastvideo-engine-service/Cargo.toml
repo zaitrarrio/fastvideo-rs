@@ -18,11 +18,13 @@ uuid.workspace = true
 
 # Only this crate may touch CUDA, and only behind `cuda` (design §2.2).
 fastvideo-cudarc = { workspace = true, optional = true }
+# NVENC MP4 output and PNG frame decode for the CUDA backend.
+fastvideo-media = { workspace = true, optional = true }
 
 [features]
 default = []
 # CudaBackend over the fastvideo-cudarc pipelines (WP-11). FakeBackend is always built.
-cuda = ["dep:fastvideo-cudarc", "fastvideo-cudarc/cuda"]
+cuda = ["dep:fastvideo-cudarc", "fastvideo-cudarc/cuda", "dep:fastvideo-media"]
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["sync", "time", "rt", "rt-multi-thread", "macros"] }

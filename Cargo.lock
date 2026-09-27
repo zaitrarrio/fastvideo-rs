@@ -1152,6 +1152,7 @@ name = "fastvideo-engine-service"
 version = "0.1.0"
 dependencies = [
  "fastvideo-cudarc",
+ "fastvideo-media",
  "fastvideo-models",
  "fastvideo-protocol",
  "serde",
@@ -1189,8 +1190,11 @@ dependencies = [
  "clap",
  "cudarc",
  "fastvideo-cudarc",
+ "fastvideo-engine-service",
+ "fastvideo-media",
  "fastvideo-models",
  "fastvideo-ops",
+ "fastvideo-protocol",
  "half",
  "image",
  "rand 0.9.5",
@@ -1199,6 +1203,7 @@ dependencies = [
  "safetensors",
  "serde",
  "serde_json",
+ "tokio",
  "toml",
 ]
 
