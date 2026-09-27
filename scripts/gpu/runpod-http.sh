@@ -239,7 +239,17 @@ fetch_results() {
   for f in box.txt tree.txt weights.log matrix.out live.log kernels.out kernels.json lpips-fetch.log sysinfo.txt sampler.log; do
     proxy "$id" "$FAMILY/$tag/$f" >"$out/$f" 2>/dev/null || true
   done
-  for cell in $(proxy "$id" "$FAMILY/$tag/" 2>/dev/null | grep -oE 'href="[^"/]+/"' | sed 's/href="//;s/\/"//'); do
+  # The run directory's listing names the cells. One failed proxy read here
+  # once lost every cell of a finished run (the pod is deleted right after),
+  # so it is retried.
+  local cells="" attempt
+  for attempt in 1 2 3 4 5; do
+    cells="$(proxy "$id" "$FAMILY/$tag/" 2>/dev/null | grep -oE 'href="[^"/]+/"' | sed 's/href="//;s/\/"//' || true)"
+    [[ -n "$cells" ]] && break
+    log "cell listing empty (attempt $attempt); retrying"
+    sleep 10
+  done
+  for cell in $cells; do
     mkdir -p "$out/$cell"
     for f in summary.json stderr.log stdout.log; do
       proxy "$id" "$FAMILY/$tag/$cell/$f" >"$out/$cell/$f" 2>/dev/null || rm -f "$out/$cell/$f"

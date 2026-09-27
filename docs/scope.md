@@ -245,7 +245,7 @@ Weights: `--weights`, `FASTVIDEO_WEIGHTS`, or the Hugging Face snapshot.
 | `FASTVIDEO_LTX2_LORA` | Distilled LoRA file. Otherwise a known filename beside the weights |
 | `FASTVIDEO_LTX2_AUDIO_VAE` | Audio encoder file or directory. Otherwise `audio_vae/` or `ltx-2.5-audio-vae-bf16.safetensors` |
 | `FASTVIDEO_LTX2_TEXT` | `resident`, `streamed`, or `auto` |
-| `FASTVIDEO_LTX_OFFLOAD` | `cpu` gives sol-engine's `--offload cpu` placement. The DiT blocks stream from pinned host memory through 2 device slots. Gemma streams per layer. The connectors, upsampler, video VAE and audio VAE are on the device only around their calls, with a trim after each. Output is byte-identical to the resident run. `none` (default) leaves each model to its own policy. `ltx2 gen --offload` overrides it. See [ports/ltx25.md](ports/ltx25.md#offload-placement-fastvideo_ltx_offloadcpu) |
+| `FASTVIDEO_LTX_OFFLOAD` | `cpu` gives sol-engine's `--offload cpu` placement. The DiT blocks stream from pinned host memory through 2 device slots. Gemma streams per layer. The connectors, upsampler, video VAE and audio VAE are on the device only around their calls, with a trim after each. The frames are byte-identical to the resident run. Peak 20.4 GiB at 4k5s and 19.0 GiB at 1080p20s, against the reference's 30.4 and 29.1 GiB. `none` (default) leaves each model to its own policy. `ltx2 gen --offload` overrides it. See [ports/ltx25.md](ports/ltx25.md#offload-placement-fastvideo_ltx_offloadcpu) |
 | `FASTVIDEO_DIT_OFFLOAD` | LTX-2 / H3 DiT blocks: `auto` (default), `resident`, or `streamed` |
 | `FASTVIDEO_DEVICE_BUDGET_GIB` | Plan and run as if the card had this many GiB. A phase that peaks above it fails the run |
 | `FASTVIDEO_LTX2_HQ` | 2.3-base 15+3 HQ contract |
