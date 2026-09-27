@@ -55,6 +55,7 @@ mod st;
 mod taehv;
 mod wan_oracle;
 mod wan_stage;
+mod wan_stream;
 mod writer_bench;
 
 use std::path::PathBuf;

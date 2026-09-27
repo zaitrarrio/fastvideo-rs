@@ -44,6 +44,7 @@ pub mod sla;
 pub mod sol_cache;
 pub mod sol_ops;
 pub mod sp;
+pub mod stream;
 pub mod stats;
 pub mod taehv;
 pub mod taehv_ref;

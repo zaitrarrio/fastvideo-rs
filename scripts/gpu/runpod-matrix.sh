@@ -392,6 +392,27 @@ case "$FAMILY" in
     FV_RUNS_DIR="$RUNS" FV_CELLS="${FV_SFWAN_CELLS:-kernels-wan sfwan13-81f-flash sfwan13-81f-composed sfwan13-81f-wholeclip sfwan13-81f-fullvae}" \
       bash "${BASH_SOURCE[0]}" wan || true
     ;;
+  sfstream)
+    # Open-ended causal SF-Wan (wan::stream, serve E6): parity with the
+    # bounded 81-frame path, long runs (drift, fps, TTFF), prompt switches,
+    # and a 10-minute memory-growth run. TAEHV decodes every block.
+    TAE_W="$TAE/taew2_1.safetensors"
+    [[ -f "$TAE_W" ]] || bash "$(dirname "${BASH_SOURCE[0]}")/fetch_taehv.sh" "$TAE" >>"$RUNS/tae-fetch.log" 2>&1 \
+      || log "WARN: taew2_1 fetch failed (tae-fetch.log)"
+    export FASTVIDEO_TAE_DIR="$TAE"
+    SF_PROMPT="${FV_SF_PROMPT:-A drone shot gliding over a winding river through an autumn forest, golden afternoon light, slow steady forward camera motion, highly detailed}"
+    SF_SWITCH="${FV_SF_SWITCH:-A drone shot gliding over snowy mountain peaks at dawn, pink sky, slow steady forward camera motion, highly detailed}"
+    sf_stream() {
+      local name="$1"; shift
+      gated_cell "$name" sfwan21-1.3b "$BIN" --mode fast wan stream --weights "$W/sfwan21-1.3b" \
+        --prompt "$SF_PROMPT" --switch-prompt "$SF_SWITCH" --seed "$SEED" "$@"
+    }
+    # shellcheck disable=SC2086
+    sf_stream sfstream-main --parity ${FV_SFSTREAM_RUNS:---run rel-sink3-120s,seconds=120,rope=rel,sink=3 \
+      --run rel-sink0-60s,seconds=60,rope=rel,sink=0 --run abs-sink0-60s,seconds=60,rope=abs,sink=0 \
+      --run switch-keep-30s,seconds=30,switch_at=15,switch=keep --run switch-reset-20s,seconds=20,switch_at=10,switch=reset}
+    sf_stream sfstream-10min --run rel-sink3-600s,seconds=600,rope=rel,sink=3,drop_rgb=1 --window-s 60
+    ;;
   headline)
     # The headline configurations on one pod (a new GPU type, one run):
     # cells borrowed from other families, all written into this run dir.
