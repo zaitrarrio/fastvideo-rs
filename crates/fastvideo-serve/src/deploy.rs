@@ -61,6 +61,32 @@ fn weights_summary() -> Value {
     json!({"root": root, "exists": p.is_dir(), "entries": entries})
 }
 
+/// Encodes a few black frames with `h264_nvenc` (the check
+/// `fastvideo_media::video::nvenc_available` makes) and keeps ffmpeg's
+/// error text when it fails, so a host without a working NVENC says why.
+fn nvenc_probe() -> Value {
+    let o = std::process::Command::new("ffmpeg")
+        .args(["-hide_banner", "-loglevel", "error", "-f", "lavfi", "-i", "color=c=black:s=256x144:r=24:d=0.2"])
+        .args(["-c:v", "h264_nvenc", "-f", "null", "-"])
+        .stdin(std::process::Stdio::null())
+        .output();
+    match o {
+        Ok(o) if o.status.success() => json!({"ok": true}),
+        Ok(o) => {
+            let err = String::from_utf8_lossy(&o.stderr);
+            let tail: Vec<&str> = err.lines().rev().take(6).collect::<Vec<_>>().into_iter().rev().collect();
+            let libs: Vec<String> = ["/usr/lib/x86_64-linux-gnu", "/usr/lib64", "/usr/local/nvidia/lib64"]
+                .iter()
+                .filter_map(|d| std::fs::read_dir(d).ok())
+                .flat_map(|rd| rd.filter_map(|e| e.ok()).map(|e| e.file_name().to_string_lossy().into_owned()))
+                .filter(|n| n.starts_with("libnvidia-encode") || n.starts_with("libnvcuvid"))
+                .collect();
+            json!({"ok": false, "stderr": tail, "driver_libs": libs})
+        }
+        Err(e) => json!({"ok": false, "stderr": [e.to_string()]}),
+    }
+}
+
 fn cmd_line(prog: &str, args: &[&str]) -> Option<String> {
     let o = std::process::Command::new(prog).args(args).output().ok()?;
     o.status.success().then(|| String::from_utf8_lossy(&o.stdout).trim().to_owned())
@@ -83,11 +109,12 @@ pub fn info_fn(config: &Config, gate: Arc<ServiceGate>, boot: Boot, ready_after:
             let blocking = tokio::task::spawn_blocking(move || {
                 let encoders = cmd_line("ffmpeg", &["-hide_banner", "-encoders"]).unwrap_or_default();
                 let gpu = cmd_line("nvidia-smi", &["--query-gpu=name,memory.total,driver_version", "--format=csv,noheader"]);
-                let nvenc_encode = job.nvenc.then(fastvideo_media::video::nvenc_available);
+                let nvenc_encode = job.nvenc.then(nvenc_probe);
                 (encoders.contains("h264_nvenc"), gpu, nvenc_encode, weights_summary())
             })
             .await;
             let (nvenc_built, gpu, nvenc_encode, weights) = blocking.unwrap_or((false, None, None, Value::Null));
+            let nvenc_ok = nvenc_encode.as_ref().map(|v| v["ok"] == true);
             let readiness = match gate.engine().readiness() {
                 Readiness::Ready => json!("ready"),
                 Readiness::Loading { done, total } => json!({"loading": [done, total]}),
@@ -111,7 +138,8 @@ pub fn info_fn(config: &Config, gate: Arc<ServiceGate>, boot: Boot, ready_after:
                 "weights": weights,
                 "gpu": gpu,
                 "ffmpeg_h264_nvenc": nvenc_built,
-                "nvenc_encode_ok": nvenc_encode,
+                "nvenc_encode_ok": nvenc_ok,
+                "nvenc_probe": nvenc_encode,
                 "nvidia_driver_capabilities": std::env::var("NVIDIA_DRIVER_CAPABILITIES").ok(),
             })
         })
