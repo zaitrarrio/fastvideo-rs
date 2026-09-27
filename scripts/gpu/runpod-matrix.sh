@@ -565,6 +565,39 @@ case "$FAMILY" in
     gated_cell wan13-dmd-dense fastwan21-1.3b \
       "$BIN" --mode fast wan gen "${wan_common[@]}" --clip-dir "$RUNS/wan13-dmd-dense/frames"
     compare_cells wan13-dmd wan13-dmd-dense
+    # Kernel arms, same recipe as wan13-dmd (VSA). wan13-f32act is the
+    # numerics before bf16 activations (FASTVIDEO_BF16_ACT=0: f32 residual
+    # stream, unfused f32 chain); every arm is compared and gated against it.
+    #   wan13-bf16act  bf16 activations, residual + norm as two kernels
+    #   wan13-fuse     the same math fused (must equal wan13-bf16act byte for byte)
+    #   wan13-mxfp8 / wan13-w8a8  FASTVIDEO_WAN_QUANT on top of wan13-fuse
+    # kernels-wan: fv-gpucheck kernels --groups wan_fusion,wan_causal_attn.
+    if [[ -z "${FV_CELLS:-}" || " $FV_CELLS " == *" kernels-wan "* ]]; then
+      run_cell kernels-wan "$BIN" --out "$RUNS/kernels-wan/gpucheck-out" kernels --groups wan_fusion,wan_causal_attn
+      grep -hE '^\[(PASS|FAIL)\]' "$RUNS/kernels-wan/stderr.log" 2>/dev/null | cut -c1-200 | tee -a "$LOG" || true
+    fi
+    wan_arm() {
+      local name="$1"
+      shift
+      gated_cell "$name" fastwan21-1.3b env "$@" \
+        "$BIN" --mode fast --vsa wan gen "${wan_common[@]}" --clip-dir "$RUNS/$name/frames"
+    }
+    wan_arm wan13-f32act FASTVIDEO_BF16_ACT=0 FASTVIDEO_WAN_QUANT=off
+    wan_arm wan13-bf16act FASTVIDEO_BF16_ACT=1 FASTVIDEO_WAN_FUSE=0 FASTVIDEO_WAN_QUANT=off
+    wan_arm wan13-fuse FASTVIDEO_BF16_ACT=1 FASTVIDEO_WAN_FUSE=1 FASTVIDEO_WAN_QUANT=off
+    wan_arm wan13-mxfp8 FASTVIDEO_BF16_ACT=1 FASTVIDEO_WAN_FUSE=1 FASTVIDEO_WAN_QUANT=mxfp8
+    wan_arm wan13-w8a8 FASTVIDEO_BF16_ACT=1 FASTVIDEO_WAN_FUSE=1 FASTVIDEO_WAN_QUANT=w8a8
+    for arm in wan13-bf16act wan13-fuse wan13-mxfp8 wan13-w8a8; do
+      compare_cells wan13-f32act "$arm"
+      gate_cells wan13-f32act "$arm" lossy
+    done
+    # The fusion is exact: its OFF identity is the fused/unfused pair itself.
+    compare_cells wan13-bf16act wan13-fuse --off-identity
+    gate_cells wan13-bf16act wan13-fuse exact wan13-fuse
+    for arm in wan13-mxfp8 wan13-w8a8; do
+      compare_cells wan13-fuse "$arm"
+      gate_cells wan13-fuse "$arm" lossy
+    done
     ;;
   b200)
     # Warm B200 parity: H3 / FastH3 / LTX only. Official VAE stays the
