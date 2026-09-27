@@ -65,7 +65,11 @@ written while the decode runs, PNG frames after it. Text K/V, text and time
 embeddings are computed once per denoise (`FASTVIDEO_WAN_COND_CACHE=0` turns
 it off, byte-identical), and UMT5 prompts are cached on disk. A VSA model id
 needs `FASTVIDEO_VSA=1`, which enables the device VSA kernels in
-self-attention only. Measurements and the upstream comparison:
+self-attention only. Wan2.2 TI2V-5B runs the Wan 2.2 VAE (z 48, 16×
+spatial through patchify, residual blocks; config from `vae/config.json`)
+and, with `--image`, TI2V image-to-video: the encoded image pinned to latent
+frame 0 at timestep 0 (per-frame DiT timesteps). `taew2_2` decodes it with
+`FASTVIDEO_WAN_VAE=taehv`. Measurements and the upstream comparison:
 [ports/wan.md](ports/wan.md).
 
 ### LTX-2 / 2.3 / 2.5

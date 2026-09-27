@@ -164,16 +164,91 @@ What the run shows:
   `WanT2V720PConfig`, 720x1280, shift 5.0) was not run. It costs about
   4x per generation.
 
-The TI2V-5B cells (`wan5b`, `wan5b-easycache`)
-and the matching upstream cell `fv-wan22-5b`
-have not been measured (SF-Wan is measured below, on H100). Their weights are only on `fv-weights-b200-us`
-(US-CA-2), and that datacenter had no RTX PRO 6000 in stock from 04:00 to
-07:50 UTC on 2026-09-27. Pod creation retried the whole time, and no pod ever
-started. To run them: `RUNPOD_VOLUME_NAME=fv-weights-b200-us FV_FAMILY=wan
-FV_CELLS="wan5b wan5b-easycache" runpod-http.sh run <sha>`, then `runpod-http.sh upstream`
-with `UP_CELLS`. Before trusting the 5B cells, expect a load failure or wrong
-output: `WanPipeline` sizes latents at /8 and builds the Wan 2.1 VAE with
-`z_dim` 48. Wan 2.2's VAE downsamples 16x and has a different decoder.
+### Wan2.2 TI2V-5B
+
+What runs (2026-09-27):
+
+- **VAE** (`wan/vae22.rs`): Diffusers `AutoencoderKLWan` with the Wan 2.2
+  config, read from `vae/config.json` (`WanVaeConfig::from_dir`: z 48,
+  encoder base 160, decoder base 256, `is_residual`, `patch_size` 2, the
+  48 latent means / stds). Around the network: `patchify` / `unpatchify`
+  (2×2 space-to-channel, 12 channels in and out, 16× spatial in all).
+  Encoder: residual down blocks (resnets + downsampler + `AvgDown3D`
+  shortcut); the downsampler pads right/bottom only and runs its stride-2
+  time conv after the spatial conv. Diffusers' chunked encode (frame 0,
+  then 4 frames per pass, feat cache). Decoder: residual up blocks (3
+  resnets, an upsampler that keeps the width, a `DupUp3D` shortcut that
+  drops `factor_t - 1` frames on the first chunk). The decode reuses the
+  Wan 2.1 streaming loop (2 latent frames per pass, f32 activations, cuDNN
+  convs picked per shape). A causal conv or upsample conv whose tensor
+  would pass cuDNN's 4 GB limit is split along frames (the 704x1280 last
+  stage at 2 latents per pass is 4.6 GB).
+- **Geometry**: latents `[48, (F-1)/4+1, H/16, W/16]` from the VAE config
+  (704x1280x121 → 48x31x44x80, 27 280 tokens).
+- **TI2V image-to-video** (`--image`): the image is resized to the request,
+  encoded (posterior mean), normalized, and pinned to latent frame 0 before
+  the first step and after every step (FastVideo
+  `WanDenoisingStage.finish_step`). Its tokens run at timestep 0: the DiT
+  takes one timestep per (batch row, latent frame) — Diffusers'
+  per-token `expand_timesteps` input is constant over a frame's tokens — and
+  every modulated op sees the tokens as `[b·T, S/T, dim]`, so the fused
+  AdaLN / residual kernels are unchanged. CFG stays one batch-2 forward.
+- **TAEHV `taew2_2`** (48 channels, patch 2, the taeh3 network with Wan's
+  plain trim) is fetched by `fetch_taehv.sh` and opt-in for the base
+  checkpoint (`FASTVIDEO_WAN_VAE=taehv`).
+- Defaults (FastVideo `WAN_2_2_TI2V_5B` preset, Diffusers scheduler config):
+  704x1280, 121 frames at 24 fps, 50 UniPC steps, CFG 5, flow shift 5, the
+  Chinese negative prompt. FastVideo generates an image-to-video request at
+  the 480x832 area whatever the requested size (`input_validation.py`
+  `best_output_size`), so the I2V cells run 480x832 with an 832x480 image
+  (`scripts/gpu/fixtures/ti2v-beach-832x480.jpg`, from FastVideo's assets).
+
+Parity (`fv-gpucheck wan oracle` against `scripts/gpu/upstream/oracle_wan22.py`,
+Diffusers 0.40.0, H100 80GB, run `wan/f5d6595-09271224`, upstream
+`f5d6595-09271218`):
+
+| Tensor | rel-L2 | max-abs | Notes |
+|---|---|---|---|
+| VAE encode, 9 frames 704x1280 → `[48, 3, 44, 80]` | 1.87e-3 | 8.4e-3 | cosine 0.999998; `--mode fast` (cuDNN picked bf16 convs for most shapes) |
+| VAE decode of those latents | — | — | failed: `CUDNN_STATUS_NOT_SUPPORTED` on the 4.6 GB `[512, 10, 352, 640]` conv; fixed in `81bf7b3` (frame split), not re-run |
+| DiT forward, t2v and i2v | — | — | not reached (the stage stopped at the decode error) |
+
+The Diffusers VAE reconstructs its own clip at 41.7 dB. The decode, DiT and
+exact-mode rows are the `wan5b-oracle` / `wan5b-oracle-exact` cells; they
+need one more runtime pod (the upstream dump takes 47 s).
+
+Timings, H100 80GB HBM3 (no RTX PRO 6000 or H200 in stock in US-CA-2),
+warm, medians over the five prompts of `prompts-eval.json`, seconds:
+
+| Cell | Text | Denoise | Decode | Total | Peak |
+|---|---|---|---|---|---|
+| Upstream FastVideo T2V 704x1280x121 (`fv-wan22-5b`, 1 run per prompt after 1 warm-up) | 0.10 | 166.6 | 6.89 (+0.23 post, +1.24 mp4) | **175.2** | 44 229 MiB torch / 67 016 MiB smi |
+| Upstream FastVideo I2V 480x832x121 (`fv-wan22-5b-i2v`, one prompt) | 0.06 | 62.8 | 3.13 (+0.09, +0.54) | **66.7** | 40 762 MiB torch / 51 325 MiB smi |
+| Ours T2V (`wan5b`), I2V (`wan5b-i2v`), TAEHV (`wan5b-taehv`) | not measured | | | | |
+
+Upstream: 3.33 s per step (two transformer calls) at 27 280 tokens; its VAE
+decode runs bf16 (`vae_decode_precision`). Ours was not measured: the Runpod
+balance fell to about $8 across all agents while the upstream cells ran,
+and new pods were stopped. To run everything on one pair of pods:
+
+```
+RUNPOD_VOLUME_NAME=fv-weights-b200-us RUNPOD_GPU_TYPE="NVIDIA H100 80GB HBM3" \
+  FV_KEEP_POD=1 UP_IMAGE_TARGET=fastvideo UP_IMAGE_TAG=latest FV_EXTRA_ENV=UP_FV_REPEATS=1 \
+  UP_STEPS="info:box oracle:wan22-ti2v cells:fv-wan22-5b,fv-wan22-5b-i2v" \
+  scripts/gpu/runpod-http.sh upstream <sha>
+RUNPOD_VOLUME_NAME=fv-weights-b200-us RUNPOD_GPU_TYPE="NVIDIA H100 80GB HBM3" FV_FAMILY=wan \
+  FV_PROMPTS=5 FV_CELLS="wan5b wan5b-taehv wan5b-i2v wan5b-oracle wan5b-oracle-exact" \
+  FV_EXTRA_ENV="FV_ORACLE_URL=https://<upstream pod>-8000.proxy.runpod.net/upstream/<tag>" \
+  scripts/gpu/runpod-http.sh run <sha>
+```
+
+Not ported here: the Wan 2.1 encoder (`WanEncoder::load_wan_2_1`) still
+pads its stride-2 downsampler symmetrically, runs the time conv before the
+spatial conv, and encodes the clip in one pass; Diffusers pads right/bottom,
+runs the time conv after, and skips it on the first frame. The 2.2 encoder
+does it the Diffusers way; the 2.1 one (Wan 2.1 I2V, gen3c, Cosmos) is
+unchanged and untested against Diffusers.
+
 
 ## DiT kernels (bf16 activations, fusion, FP8, block-causal attention)
 
@@ -345,8 +420,8 @@ see "Not measured" below. SF-Wan is measured in the next section.
 
 ### Not measured
 
-- Wan2.2 TI2V-5B and
-  Wan2.1 T2V-14B (bf16act / mxfp8): the cells are in the `wan` family
+- Wan2.2 TI2V-5B (ours; the upstream numbers are in "Wan2.2 TI2V-5B" above)
+  and Wan2.1 T2V-14B (bf16act / mxfp8): the cells are in the `wan` family
   (`wan5b-{f32act,bf16act,mxfp8}`, `wan14b-{f32act,bf16act,mxfp8}`; image
   `sha-d18eae2` carries them). Their weights are on `fv-weights-b200-us`
   (US-CA-2) only, and that datacenter had no RTX PRO 6000 for the whole
