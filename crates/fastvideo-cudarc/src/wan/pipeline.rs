@@ -2010,19 +2010,29 @@ fn causal_dmd_denoise(
 /// standard normal in the same layout. bf16-valued with bf16 activations
 /// (FastVideo draws it in the DiT dtype).
 pub(crate) fn causal_noise(seed: u64, k: usize, btchw: [usize; 5]) -> Result<CudaTensor> {
+    causal_noise_from(causal_noise_draw(seed, k, btchw)?, btchw)
+}
+
+/// The host values of [`causal_noise`] draw `k` (`[B, T, C, H, W]`), before
+/// the upload: what an open-ended rollout draws ahead while the device works.
+pub(crate) fn causal_noise_draw(seed: u64, k: usize, btchw: [usize; 5]) -> Result<Vec<f32>> {
     let n: usize = btchw.iter().product();
-    let raw = match super::inject::load_numel(&format!("sf_noise_{k:03}"), n)? {
-        Some(v) => CudaTensor::from_vec(v, btchw.to_vec())?.to_device()?,
+    Ok(match super::inject::load_numel(&format!("sf_noise_{k:03}"), n)? {
+        Some(v) => v,
         None => {
             let mut rng = rand::rngs::StdRng::seed_from_u64(
                 seed ^ (0xD1B5_4A32_D192_ED03u64.wrapping_mul(k as u64 + 1)),
             );
-            let v: Vec<f32> = (0..n)
+            (0..n)
                 .map(|_| rng.sample::<f32, _>(StandardNormal))
-                .collect();
-            CudaTensor::from_vec(v, btchw.to_vec())?.to_device()?
+                .collect()
         }
-    };
+    })
+}
+
+/// [`causal_noise`] from drawn values.
+pub(crate) fn causal_noise_from(v: Vec<f32>, btchw: [usize; 5]) -> Result<CudaTensor> {
+    let raw = CudaTensor::from_vec(v, btchw.to_vec())?.to_device()?;
     let raw = if super::tensor::bf16_activations() {
         raw.quantize_bf16()?
     } else {

@@ -49,7 +49,7 @@ use rand_distr::StandardNormal;
 use super::causal::{CausalKvCache, KvSpec};
 use crate::hooks::{Hooks, Stage};
 use super::pipeline::{
-    causal_noise, frames_to_rgb8, GenerateConfig, PipelineError, Result, WanPipeline,
+    causal_noise, causal_noise_draw, causal_noise_from, frames_to_rgb8, GenerateConfig, PipelineError, Result, WanPipeline,
 };
 use super::taehv::TaeDecodeState;
 use super::tensor::CudaTensor;
@@ -273,6 +273,9 @@ struct GraphRun {
     mid: Option<CudaTensor>,
     entries: std::collections::HashMap<GraphKey, GraphEntry>,
     report: GraphReport,
+    /// Re-noise draws taken ahead (while the device ran the previous
+    /// block): `(seed, first draw, values)`.
+    prefetch: Option<(u64, usize, Vec<Vec<f32>>)>,
 }
 
 /// Graphs kept per rollout (distinct cache states; a 21-frame window with
@@ -387,6 +390,7 @@ impl<'p> CausalRollout<'p> {
                 mid: None,
                 entries: Default::default(),
                 report: GraphReport::default(),
+                prefetch: None,
             })
         } else {
             None
@@ -673,14 +677,25 @@ impl<'p> CausalRollout<'p> {
     fn next_block_graph(&mut self, hooks: Hooks<'_>) -> Result<StreamBlock> {
         let t_block = Instant::now();
         let gs = self.graph.as_ref().expect("graph mode").gs.clone();
-        let (cur, denoise_s, context_s) = gs.scope(|| self.graph_block(&hooks, t_block))?;
+        let (cur, denoise_s, context_s) = gs.scope(|| -> Result<_> {
+            let (cur, denoise_s, t) = self.graph_block(&hooks, t_block)?;
+            // The context pass is queued: draw the next block's noise on the
+            // host meanwhile.
+            self.prefetch_noise()?;
+            gs.synchronize()?;
+            Ok((cur, denoise_s, t.elapsed().as_secs_f64()))
+        })?;
         self.finish_block(cur, t_block, denoise_s, context_s, hooks)
     }
 
     /// The device part of a graph-mode block, inside the graph stream's
     /// scope: `(latents, denoise_s, context_s)`.
     #[cfg(feature = "cuda")]
-    fn graph_block(&mut self, hooks: &Hooks<'_>, t_block: Instant) -> Result<(CudaTensor, f64, f64)> {
+    fn graph_block(
+        &mut self,
+        hooks: &Hooks<'_>,
+        t_block: Instant,
+    ) -> Result<(CudaTensor, f64, Instant)> {
         use super::graph::{assign, duplicate};
         let dit = self.pipe.transformer();
         let fpb = self.fpb;
@@ -693,9 +708,20 @@ impl<'p> CausalRollout<'p> {
         let n = fpb * frame_tokens;
         // Inputs, refilled in place.
         let noise0 = self.block_noise(start)?;
-        let mut renoise = Vec::with_capacity(steps.saturating_sub(1));
-        for _ in 1..steps {
-            renoise.push(causal_noise(self.seed, self.draw, [1, fpb, c, h, w])?);
+        let shape = [1, fpb, c, h, w];
+        let mut drawn = match self.graph.as_mut().expect("graph mode").prefetch.take() {
+            Some((seed, first, v)) if seed == self.seed && first == self.draw => v,
+            _ => Vec::new(),
+        };
+        drawn.resize_with(steps.saturating_sub(1), Vec::new);
+        let mut renoise = Vec::with_capacity(drawn.len());
+        for v in drawn {
+            let v = if v.is_empty() {
+                causal_noise_draw(self.seed, self.draw, shape)?
+            } else {
+                v
+            };
+            renoise.push(causal_noise_from(v, shape)?);
             self.draw += 1;
         }
         let text_now = {
@@ -830,9 +856,8 @@ impl<'p> CausalRollout<'p> {
             let t = Instant::now();
             context(g.mid.as_ref().expect("mid slot"))?;
             let out = duplicate(g.mid.as_ref().expect("mid slot"))?;
-            g.gs.synchronize()?;
             g.report.eager_blocks += 1;
-            return Ok((out, denoise_s, t.elapsed().as_secs_f64()));
+            return Ok((out, denoise_s, t));
         }
 
         let mid = g.mid.as_ref().expect("mid slot");
@@ -892,7 +917,6 @@ impl<'p> CausalRollout<'p> {
             }
         }
         let out = duplicate(mid)?;
-        g.gs.synchronize()?;
         if replay {
             g.report.replayed_blocks += 1;
         } else if fell_back {
@@ -900,7 +924,31 @@ impl<'p> CausalRollout<'p> {
         } else {
             g.report.captured_blocks += 1;
         }
-        Ok((out, denoise_s, t.elapsed().as_secs_f64()))
+        Ok((out, denoise_s, t))
+    }
+
+    /// Graph mode: draw the next block's re-noise values (and its 21-frame
+    /// initial-noise group) on the host ahead of time.
+    #[cfg(feature = "cuda")]
+    fn prefetch_noise(&mut self) -> Result<()> {
+        let fpb = self.fpb;
+        let [c, h, w] = self.latent_chw;
+        let next = (self.block + 1) * fpb;
+        let group = next / NOISE_GROUP;
+        if next % NOISE_GROUP + fpb <= NOISE_GROUP
+            && self.noise.as_ref().map(|(g, _)| *g) != Some(group)
+        {
+            let t = self.draw_noise(group, NOISE_GROUP)?;
+            self.noise = Some((group, t));
+        }
+        let steps = self.sched.num_steps();
+        let v = (0..steps.saturating_sub(1))
+            .map(|j| causal_noise_draw(self.seed, self.draw + j, [1, fpb, c, h, w]))
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        if let Some(g) = self.graph.as_mut() {
+            g.prefetch = Some((self.seed, self.draw, v));
+        }
+        Ok(())
     }
 
     /// Generate until `sink` answers [`Flow::Stop`] (or `max_blocks`).

@@ -157,11 +157,31 @@ fn graph_parity(
 ) -> StageResult<()> {
     // (blocks, then what happens before the next leg)
     const LEGS: [(usize, &str); 4] = [(12, "switch"), (3, "reset"), (10, "reset"), (4, "")];
+    const SHORT: [(usize, &str); 2] = [(10, "reset"), (10, "")];
+    for (arm, rope, legs) in [
+        ("rebased", RopePolicy::RebasedSink, &LEGS[..]),
+        ("relativistic", RopePolicy::Relativistic, &SHORT[..]),
+        ("absolute", RopePolicy::Absolute, &SHORT[..]),
+    ] {
+        graph_parity_arm(report, pipe, base, switch_prompt, arm, rope, legs)?;
+    }
+    Ok(())
+}
+
+fn graph_parity_arm(
+    report: &mut Report,
+    pipe: &WanPipeline,
+    base: &RolloutConfig,
+    switch_prompt: &str,
+    arm: &str,
+    rope: RopePolicy,
+    legs: &[(usize, &str)],
+) -> StageResult<()> {
     let run = |graphs: bool| -> anyhow::Result<(Vec<(Vec<u32>, Vec<u32>, f64)>, Option<Value>)> {
-        let cfg = RolloutConfig { graphs, rgb8: false, ..base.clone() };
+        let cfg = RolloutConfig { graphs, rope, rgb8: false, ..base.clone() };
         let mut ro = CausalRollout::open(pipe, cfg).map_err(|e| anyhow!("{e}"))?;
         let mut out = Vec::new();
-        for (n, then) in LEGS {
+        for &(n, then) in legs {
             for _ in 0..n {
                 let b = ro.next_block().map_err(|e| anyhow!("{e}"))?;
                 let bits = |t: &CudaTensor| -> anyhow::Result<Vec<u32>> {
@@ -208,13 +228,13 @@ fn graph_parity(
     let times = |v: &[(Vec<u32>, Vec<u32>, f64)]| v.iter().map(|x| x.2).collect::<Vec<_>>();
     let failed = g.as_ref().and_then(|g| g.get("failed").cloned()).unwrap_or(Value::Null);
     report.note(
-        "parity/graph_vs_eager",
+        format!("parity/graph_vs_eager/{arm}"),
         json!({"blocks": eager.len(), "differing_blocks": differing, "first_difference": first_diff,
                "graph": g, "eager_wall_s": eager_s, "graph_wall_s": graph_s,
                "eager_block_s": times(&eager), "graph_block_s": times(&graph)}),
     );
     report.check(
-        "parity/graph_bitwise_equals_eager",
+        format!("parity/graph_bitwise_equals_eager/{arm}"),
         differing.is_empty() && failed.is_null() && eager.len() == graph.len(),
         json!({"differing_blocks": differing.len(), "blocks": eager.len(), "failed": failed}),
         json!({"differing_blocks": 0}),

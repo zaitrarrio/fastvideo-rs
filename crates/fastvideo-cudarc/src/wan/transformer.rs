@@ -458,6 +458,24 @@ fn rotary_1d(dim: usize, seq: usize, theta: f64) -> (Vec<f32>, Vec<f32>) {
     (cos, sin)
 }
 
+/// [`rotary_1d`] with at least `seq` rows, memoized per `(dim, theta)`: row
+/// `p` does not depend on the length, so a longer table serves every
+/// shorter request (an open-ended stream asks for a new offset every block).
+fn rotary_1d_cached(dim: usize, seq: usize, theta: f64) -> std::sync::Arc<(Vec<f32>, Vec<f32>)> {
+    type Memo = std::collections::HashMap<(usize, u64), std::sync::Arc<(Vec<f32>, Vec<f32>)>>;
+    static MEMO: std::sync::OnceLock<std::sync::Mutex<Memo>> = std::sync::OnceLock::new();
+    let key = (dim, theta.to_bits());
+    let mut memo = MEMO.get_or_init(Default::default).lock().expect("rope memo");
+    if let Some(t) = memo.get(&key) {
+        if t.0.len() >= seq * dim {
+            return t.clone();
+        }
+    }
+    let t = std::sync::Arc::new(rotary_1d(dim, seq.next_power_of_two(), theta));
+    memo.insert(key, t.clone());
+    t
+}
+
 /// 3-D RoPE tables `[seq, head_dim]` (time, height, width split of the head).
 ///
 /// Latent frames `start_frame ..` (FastVideo `get_rotary_pos_embed(...,
@@ -476,9 +494,9 @@ fn wan_rope_at(
     let axes = [
         // Past the checkpoint's table (an open-ended stream, `wan::stream`) the
         // temporal rows continue with the same formula.
-        (t_dim, rotary_1d(t_dim, cfg.rope_max_seq_len.max(start_frame + frames), 10000.0)),
-        (h_dim, rotary_1d(h_dim, cfg.rope_max_seq_len, 10000.0)),
-        (w_dim, rotary_1d(w_dim, cfg.rope_max_seq_len, 10000.0)),
+        (t_dim, rotary_1d_cached(t_dim, cfg.rope_max_seq_len.max(start_frame + frames), 10000.0)),
+        (h_dim, rotary_1d_cached(h_dim, cfg.rope_max_seq_len, 10000.0)),
+        (w_dim, rotary_1d_cached(w_dim, cfg.rope_max_seq_len, 10000.0)),
     ];
     let (ppf, pph, ppw) = (
         frames / cfg.patch_size[0],
@@ -491,7 +509,8 @@ fn wan_rope_at(
     for ft in start_frame..start_frame + ppf {
         for fh in 0..pph {
             for fw in 0..ppw {
-                for ((ad, (c, s)), pos) in axes.iter().zip([ft, fh, fw]) {
+                for ((ad, t), pos) in axes.iter().zip([ft, fh, fw]) {
+                    let (c, s) = &**t;
                     cos.extend_from_slice(&c[pos * ad..(pos + 1) * ad]);
                     sin.extend_from_slice(&s[pos * ad..(pos + 1) * ad]);
                 }
