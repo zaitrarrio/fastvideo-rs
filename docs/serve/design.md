@@ -836,13 +836,13 @@ Errors are `{"type":"error","error":{"type","message"}}`:
 | H3-Max weights | MiniMax, fal | alias with a documented substitution | none |
 | H3 target/conditioning audio | fal `target_audio_url`, director `audio_url` | 422 / `prompt_rejected{invalid_audio}` | E10 |
 | H3 ref2va co-resident with fl2va | MiniMax/fal/FastVideo ref2v | 400 unless configured | E11 |
-| LTX fps 25/48/50 | LTX, FastVideo | 400 | E4 |
-| LTX silent output | LTX `generate_audio:false` | supported (post `-an`) | E4 (skip compute) |
+| LTX fps 25/48/50 | LTX, FastVideo | served (validated at 1080p, `artifacts/serve/e4-ltx-fps/benchmark.json`; engines without them in caps still 400) | E4 done |
+| LTX silent output | LTX `generate_audio:false` | supported (post `-an`); the engine can skip the audio decode (`Ltx2Request::skip_audio_decode`) | E4 done |
 | LTX-2.5 I2V | LTX `image_uri` on 2.5 | 400 | E5 |
 | LTX last frame | LTX `last_frame_uri` | 400 | E9 |
 | LTX auto duration, camera motion, A2V/retake/extend/HDR/reframe | LTX | 400 / 403 | none planned |
 | Cancellation mid-generation | all DELETE/cancel | cancels only while queued | E1 |
-| In-memory frames (no PNG) | streaming | streaming blocked | E2 |
+| In-memory frames (no PNG) | streaming | `fastvideo_cudarc::sink::FrameSink` via `Hooks::with_sink` | E2 done |
 | SF-Wan open-ended block stream | Reactor causal, WHIP | blocked | E6 |
 | SF-Wan real-time fps | causal streaming quality | ~18 fps (streaming-refs §3.3) | E7 |
 | MMAudio V2A sidecar | video-only plus `AudioOut::Sidecar` | 400 | E8 |

@@ -436,7 +436,7 @@ async fn auth_stubs_and_gaps() {
         b
     };
     let cases = [
-        (with("fps", json!(25)), "frame rate"),
+        (with("fps", json!(30)), "fps must be one of"),
         (with("duration", Value::Null), "automatic duration"),
         (with("camera_motion", json!("dolly_in")), "camera_motion"),
         (with("model", json!("ltx-2-pro")), "removed"),
