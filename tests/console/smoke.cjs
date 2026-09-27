@@ -1,0 +1,248 @@
+// Headless browser smoke test of the fv-serve console (WP-20).
+//
+// Starts `fv-serve` (built with `--features fake`) on a free port with no
+// FV_ADMIN_TOKEN, reads the generated admin token from its WARN banner, and
+// drives Chromium through: mint an API key on /console/admin, run
+// text-to-video, upload an image and run image-to-video, see video results,
+// the API snippets, the history, and the director's "not available" state.
+//
+//   FV_SERVE_BIN=target/debug/fv-serve node tests/console/smoke.cjs
+//
+// Needs the `playwright` npm package (resolved through NODE_PATH) and a
+// Chromium under PLAYWRIGHT_BROWSERS_PATH; tests/console/run.sh sets both.
+// Never prints the admin token or minted keys.
+
+'use strict';
+
+const { spawn } = require('node:child_process');
+const fs = require('node:fs');
+const net = require('node:net');
+const os = require('node:os');
+const path = require('node:path');
+const zlib = require('node:zlib');
+const { chromium } = require('playwright');
+
+const BIN = process.env.FV_SERVE_BIN || path.join(__dirname, '..', '..', 'target', 'debug', 'fv-serve');
+const TIMEOUT = 60_000;
+
+function freePort() {
+  return new Promise((resolve, reject) => {
+    const s = net.createServer();
+    s.listen(0, '127.0.0.1', () => { const { port } = s.address(); s.close(() => resolve(port)); });
+    s.on('error', reject);
+  });
+}
+
+// A solid-colour RGB PNG (no image libraries needed).
+function png(width, height, [r, g, b]) {
+  const crcTable = Array.from({ length: 256 }, (_, n) => {
+    let c = n;
+    for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1;
+    return c >>> 0;
+  });
+  const crc = (buf) => { let c = 0xffffffff; for (const x of buf) c = crcTable[(c ^ x) & 0xff] ^ (c >>> 8); return (c ^ 0xffffffff) >>> 0; };
+  const chunk = (type, data) => {
+    const len = Buffer.alloc(4); len.writeUInt32BE(data.length);
+    const td = Buffer.concat([Buffer.from(type), data]);
+    const c = Buffer.alloc(4); c.writeUInt32BE(crc(td));
+    return Buffer.concat([len, td, c]);
+  };
+  const ihdr = Buffer.alloc(13);
+  ihdr.writeUInt32BE(width, 0); ihdr.writeUInt32BE(height, 4);
+  ihdr[8] = 8; ihdr[9] = 2; ihdr[10] = 0; ihdr[11] = 0; ihdr[12] = 0;
+  const row = Buffer.alloc(1 + width * 3);
+  for (let x = 0; x < width; x++) { row[1 + x * 3] = r; row[2 + x * 3] = g; row[3 + x * 3] = b; }
+  const raw = Buffer.concat(Array.from({ length: height }, () => row));
+  return Buffer.concat([
+    Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+    chunk('IHDR', ihdr), chunk('IDAT', zlib.deflateSync(raw)), chunk('IEND', Buffer.alloc(0)),
+  ]);
+}
+
+// FV_CONSOLE_SHOTS=<dir>: also save screenshots (for reviewing the pages).
+const SHOTS = process.env.FV_CONSOLE_SHOTS || '';
+async function shot(page, name) {
+  if (SHOTS) await page.screenshot({ path: path.join(SHOTS, name + '.png'), fullPage: true });
+}
+
+function step(msg) { process.stdout.write('  - ' + msg + '\n'); }
+
+async function main() {
+  if (!fs.existsSync(BIN)) throw new Error('fv-serve binary not found at ' + BIN + ' (cargo build -p fastvideo-serve --features fake)');
+  const port = await freePort();
+  const origin = 'http://127.0.0.1:' + port;
+  const state = fs.mkdtempSync(path.join(os.tmpdir(), 'fv-console-smoke-'));
+  const env = { ...process.env };
+  for (const k of Object.keys(env)) if (k.startsWith('FV_') && k !== 'FV_SERVE_BIN') delete env[k];
+  Object.assign(env, {
+    FV_BIND: '127.0.0.1:' + port,
+    FV_STATE_DIR: state,
+    FV_JOB_STORE: 'memory',
+    FV_ENGINE: 'fake',
+    FV_URL_SIGNING_KEY: 'console-smoke',
+    RUST_LOG: 'warn',
+  });
+  const server = spawn(BIN, [], { env, stdio: ['ignore', 'pipe', 'pipe'] });
+  let logs = '';
+  server.stdout.on('data', (d) => { logs += d; });
+  server.stderr.on('data', (d) => { logs += d; });
+  let exited = null;
+  server.on('exit', (code) => { exited = code; });
+  const secrets = [];
+  const redact = (s) => secrets.reduce((acc, x) => acc.split(x).join('<redacted>'), s);
+
+  let browser;
+  try {
+    // Ready and the admin banner logged.
+    let admin = null;
+    for (let i = 0; i < 600 && !admin; i++) {
+      if (exited !== null) throw new Error('fv-serve exited with ' + exited);
+      const m = logs.match(/fvadm_[A-Za-z0-9_-]{43}/);
+      if (m) admin = m[0];
+      else await new Promise((r) => setTimeout(r, 100));
+    }
+    if (!admin) throw new Error('no generated admin token in the fv-serve log');
+    secrets.push(admin);
+    if ((logs.match(new RegExp(admin, 'g')) || []).length !== 1) throw new Error('admin token must be logged exactly once');
+    step('fv-serve up on ' + origin + ' (generated admin token found in the WARN banner)');
+    for (let i = 0; i < 600; i++) {
+      try { const r = await fetch(origin + '/health'); if (r.ok) break; } catch { /* not yet */ }
+      await new Promise((r) => setTimeout(r, 100));
+    }
+
+    browser = await chromium.launch();
+    const context = await browser.newContext({ viewport: { width: 1280, height: 900 } });
+    const page = await context.newPage();
+    page.setDefaultTimeout(TIMEOUT);
+    const errors = [];
+    page.on('pageerror', (e) => errors.push(String(e)));
+    page.on('console', (m) => { if (m.type() === 'error' && !/Failed to load resource/.test(m.text())) errors.push(m.text()); });
+
+    // Home: no key yet, models listed from /fal/schema.
+    await page.goto(origin + '/console');
+    await page.waitForSelector('[data-endpoint="minimax/h3-max/reference-to-video"]');
+    await shot(page, '01-home');
+    step('home lists the fal apps');
+
+    // Admin: wrong token refused, right token lists, mint a key.
+    await page.goto(origin + '/console/admin');
+    await page.fill('#admintoken', 'fvadm_wrong');
+    await page.click('#admin-save');
+    await page.waitForSelector('#admin-state.bad');
+    await page.fill('#admintoken', admin);
+    await page.click('#admin-save');
+    await page.waitForSelector('#admin-state.ok');
+    await page.fill('#keyname', 'playwright');
+    await page.click('#mint');
+    await page.waitForSelector('#minted:not([hidden])');
+    const key = (await page.textContent('#minted-key')).trim();
+    if (!/^fv_[A-Za-z0-9_-]{43}$/.test(key)) throw new Error('unexpected minted key shape');
+    secrets.push(key);
+    await page.waitForSelector('#keys tbody tr');
+    await shot(page, '02-admin-minted');
+    await page.click('#use-minted');
+    step('minted a key on /console/admin and stored it in the browser');
+
+    // Home: the key is accepted.
+    await page.goto(origin + '/console');
+    await page.waitForSelector('#conn-state.ok');
+    step('key accepted by /fv/v1/capabilities');
+
+    // Text to video.
+    await page.goto(origin + '/console/models/minimax/h3-turbo/text-to-video');
+    await page.waitForSelector('[data-input="prompt"]');
+    await page.fill('[data-input="prompt"]', 'A red fox trots across fresh snow at dawn, low tracking shot.');
+    await page.selectOption('[data-input="aspect_ratio"]', '9:16');
+    await page.click('#run');
+    await page.waitForSelector('#result-status.s-COMPLETED', { timeout: TIMEOUT });
+    const src1 = await page.getAttribute('#video', 'src');
+    if (!src1 || !src1.includes('/files/')) throw new Error('text-to-video: no video URL in the player');
+    const v1 = await fetch(src1);
+    if (!v1.ok || (await v1.arrayBuffer()).byteLength === 0) throw new Error('text-to-video: video URL does not serve');
+    await shot(page, '03-t2v-result');
+    const out1 = JSON.parse(await page.textContent('#output-json'));
+    if (!out1.video || out1.video.content_type !== 'video/mp4') throw new Error('text-to-video: output JSON lacks video');
+    step('text-to-video completed; player src ' + new URL(src1).pathname.split('/').slice(0, 3).join('/') + '/…');
+
+    // API tab reflects the inputs.
+    await page.click('#tab-api');
+    const curl = await page.textContent('#snippet');
+    if (!curl.includes('/minimax/h3-turbo/text-to-video') || !curl.includes('"9:16"')) throw new Error('API snippet does not reflect the inputs');
+    await page.click('[data-lang="python"]');
+    if (!(await page.textContent('#snippet')).includes('fal_client.subscribe')) throw new Error('python snippet missing');
+    await shot(page, '04-api-tab');
+    await page.click('#tab-playground');
+    step('API tab: cURL / Python snippets carry the chosen inputs');
+
+    // Image to video with an uploaded image.
+    await page.click('[data-task="image-to-video"]');
+    await page.waitForURL(/image-to-video$/);
+    await page.waitForSelector('[data-field-file="image_url"]', { state: 'attached' });
+    const img = path.join(state, 'first-frame.png');
+    fs.writeFileSync(img, png(320, 180, [200, 90, 40]));
+    await page.setInputFiles('[data-field-file="image_url"]', img);
+    await page.waitForSelector('[data-field="image_url"] .media-item:not(.busy) img');
+    await page.fill('[data-input="prompt"]', 'The camera slowly pulls back from the orange wall.');
+    await page.click('#run');
+    await page.waitForSelector('#result-status.s-COMPLETED', { timeout: TIMEOUT });
+    const src2 = await page.getAttribute('#video', 'src');
+    if (!src2 || !src2.includes('/files/') || src2 === src1) throw new Error('image-to-video: no new video URL');
+    const r2 = await fetch(src2);
+    if (!r2.ok) throw new Error('image-to-video: video URL does not serve');
+    await shot(page, '05-i2v-result');
+    step('image-to-video with an uploaded image completed');
+
+    // History holds both requests for this app.
+    const rows = await page.$$('#history tbody tr');
+    if (rows.length < 2) throw new Error('history should list both requests, got ' + rows.length);
+    step('history lists ' + rows.length + ' requests');
+
+    // Validation errors show fal's message.
+    await page.fill('[data-input="prompt"]', ' ');
+    await page.click('#run');
+    await page.waitForSelector('#run-msg.bad');
+
+    // Director: unavailable until the director ships (WP-14).
+    await page.click('[data-task="director"]');
+    await page.waitForURL(/director$/);
+    await page.waitForSelector('#director-unavailable:not([hidden]), #director-state');
+    const unavailable = await page.isVisible('#director-unavailable');
+    await shot(page, '06-director');
+    step('director page renders (' + (unavailable ? 'streaming not available on this server yet' : 'signalling reachable') + ')');
+
+    // Phone width: no horizontal scrolling.
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.goto(origin + '/console/models/minimax/h3-max/reference-to-video');
+    await page.waitForSelector('[data-drop="reference_image_urls"]');
+    const overflow = await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
+    await shot(page, '07-r2v-phone');
+    if (overflow > 1) throw new Error('horizontal overflow at 390 px: ' + overflow + ' px');
+    step('reference-to-video form fits a 390 px viewport');
+
+    // Revoke from the admin page: the key stops working.
+    await page.goto(origin + '/console/admin');
+    await page.waitForSelector('#keys tbody tr [data-revoke]');
+    page.once('dialog', (d) => d.accept());
+    await page.click('#keys tbody tr [data-revoke]');
+    await page.waitForSelector('#keys tbody tr .pill.bad');
+    const refused = await fetch(origin + '/minimax/h3-turbo/text-to-video', {
+      method: 'POST', headers: { Authorization: 'Key ' + key, 'Content-Type': 'application/json' }, body: '{"prompt":"x"}',
+    });
+    if (refused.status !== 401) throw new Error('revoked key still accepted: ' + refused.status);
+    step('revoked on /console/admin; the key is refused');
+
+    if (errors.length) throw new Error('browser errors:\n' + errors.join('\n'));
+    process.stdout.write('console smoke: OK\n');
+  } catch (e) {
+    process.stderr.write('console smoke FAILED: ' + redact(String(e && e.stack || e)) + '\n');
+    process.stderr.write('--- fv-serve log (secrets redacted) ---\n' + redact(logs).slice(-6000) + '\n');
+    process.exitCode = 1;
+  } finally {
+    if (browser) await browser.close().catch(() => {});
+    server.kill('SIGTERM');
+    await new Promise((r) => { if (exited !== null) r(); else { server.on('exit', r); setTimeout(r, 5000); } });
+    fs.rmSync(state, { recursive: true, force: true });
+  }
+}
+
+main();

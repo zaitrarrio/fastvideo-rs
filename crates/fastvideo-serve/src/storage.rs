@@ -14,7 +14,7 @@ use fastvideo_serve_kit::{ArtifactStore, D1Config, D1Options, LocalArtifactStore
 use time::OffsetDateTime;
 use url::Url;
 
-use crate::config::{ArtifactBackend, Config, JobBackend};
+use crate::config::{ArtifactBackend, Config, JobBackend, KeyStoreBackend};
 
 /// What `build_jobs` produced (the D1 store is kept for flushing at shutdown).
 pub struct Jobs {
@@ -122,4 +122,30 @@ pub async fn build_jobs(c: &Config, worker: &str, artifacts: Arc<dyn ArtifactSto
             })
         }
     }
+}
+
+/// The minted-key store (`auth.key_store`): D1 table `api_keys`, the file
+/// `state_dir/api_keys.json`, or memory.
+pub async fn build_key_store(c: &Config) -> Result<Arc<fastvideo_serve_kit::KeyStore>, String> {
+    use fastvideo_serve_kit::keys::{FileKeyBackend, KeyBackend, MemoryKeyBackend};
+    let backend: Arc<dyn KeyBackend> = match c.key_store_backend() {
+        KeyStoreBackend::Memory => Arc::new(MemoryKeyBackend::default()),
+        KeyStoreBackend::D1 => {
+            #[cfg(feature = "http-client")]
+            {
+                let client = fastvideo_serve_kit::D1Client::http(d1_config(c)?).map_err(|e| e.to_string())?;
+                Arc::new(
+                    fastvideo_serve_kit::keys::D1KeyBackend::open(client)
+                        .await
+                        .map_err(|e| format!("opening the D1 key store: {e}"))?,
+                )
+            }
+            #[cfg(not(feature = "http-client"))]
+            {
+                return Err("auth.key_store = d1 needs fv-serve built with `http-client`".into());
+            }
+        }
+        KeyStoreBackend::File | KeyStoreBackend::Auto => Arc::new(FileKeyBackend::new(c.server.state_dir.join("api_keys.json"))),
+    };
+    fastvideo_serve_kit::KeyStore::open(backend).await.map_err(|e| format!("loading API keys: {e}"))
 }

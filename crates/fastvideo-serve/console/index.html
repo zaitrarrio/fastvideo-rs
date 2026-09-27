@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>fv-serve console</title>
+<link rel="stylesheet" href="/console/assets/console.css">
+<script type="module" src="/console/assets/home.js"></script>
+</head>
+<body>
+<main class="page">
+  <div class="page-head">
+    <h1>Console <small>generate video on this server through its fal-compatible API</small></h1>
+  </div>
+  <div class="grid2">
+    <section class="stage" aria-labelledby="h-connect">
+      <div class="stage-head"><h2 id="h-connect">1 · Connect</h2><span id="conn-state" class="pill">not checked</span></div>
+      <div class="stage-body">
+        <label for="base">Server URL</label>
+        <input id="base" spellcheck="false" autocomplete="off" placeholder="same origin">
+        <p class="hint">Leave empty to use this page's origin.</p>
+        <label for="apikey">API key</label>
+        <input id="apikey" type="password" spellcheck="false" autocomplete="off" placeholder="fv_…">
+        <p class="hint">Mint one on the <a href="/console/admin">API keys</a> page with the admin token. It is kept in this browser's local storage.</p>
+        <div class="actions">
+          <button id="connect" class="primary">Save and check</button>
+          <button id="toggle-key" type="button">Show key</button>
+          <button id="forget" type="button">Forget key</button>
+        </div>
+        <div id="connect-msg" class="msg" role="status"></div>
+        <dl id="server-facts" hidden></dl>
+      </div>
+    </section>
+    <section class="stage" aria-labelledby="h-start">
+      <div class="stage-head"><h2 id="h-start">2 · How it works</h2></div>
+      <div class="stage-body">
+        <p class="hint" style="font-size:13.5px">Each model page mirrors a fal.ai model page: a <b>Playground</b> with the
+          endpoint's input form, a result pane with the video, logs, timings and the output JSON, and an <b>API</b> tab
+          with cURL, Python and JavaScript snippets for the inputs you chose.</p>
+        <p class="hint" style="font-size:13.5px">Requests go through this server's fal queue API
+          (<code>POST /{app}/{task}</code>, then status and result); attachments upload through
+          <code>/storage/upload/initiate</code>. The <b>Director</b> page drives the live WebRTC session.</p>
+      </div>
+    </section>
+    <section class="stage span2" aria-labelledby="h-models">
+      <div class="stage-head"><h2 id="h-models">Models</h2></div>
+      <div class="stage-body">
+        <div id="models" class="cards"></div>
+        <div id="models-msg" class="msg" role="status"></div>
+      </div>
+    </section>
+  </div>
+</main>
+</body>
+</html>

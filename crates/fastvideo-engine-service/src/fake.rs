@@ -98,7 +98,7 @@ impl FakeModel {
                 channels: 2,
                 via_sidecar: false,
             }),
-            fps: FpsCaps::fixed(24),
+            fps: crate::caps::ltx_fps_caps(),
             stream: Some(StreamCaps::Clip {
                 min_s: grid.min as f32 / 24.0,
                 max_s: grid.max as f32 / 24.0,

@@ -13,6 +13,8 @@
 //! - [`webhook`]: webhook bodies (signed by serve-kit with our Ed25519 key)
 //!   and `/.well-known/jwks.json`.
 //! - [`error`]: the fal error envelopes.
+//! - [`catalog`]: `GET /fal/schema[/{app}/{sub}]`, the input JSON Schemas
+//!   (from the same limits as [`schema`]) for the console.
 //!
 //! Apps are static routes built from [`FalConfig::apps`], never wildcards.
 //! Each app resolves to a model by name (engine aliases / served names) and
@@ -22,8 +24,12 @@
 //! The binary mounts [`router`] and registers [`webhook::FalWebhook`] as the
 //! `ProtocolId::Fal` callback renderer.
 //!
+//! Director side (WP-14): [`director`], mounted with [`router_with`] and
+//! `director::routes` (feature `director`).
+//!
 //! Owned by WP-09 / WP-14 (docs/serve/design.md §8).
 
+pub mod catalog;
 pub mod director;
 pub mod error;
 pub mod proxy;
@@ -113,11 +119,19 @@ pub fn routes(cfg: FalConfig) -> Router<ServeCtx> {
         r = sync::app_routes(r, &cfg, app);
     }
     r = storage::routes(r, &cfg);
+    r = catalog::routes(r, &cfg);
     webhook::routes(r)
 }
 
 /// The fal API with its state, plus `/fal/proxy` dispatching into it.
 pub fn router(ctx: ServeCtx, cfg: FalConfig) -> Router {
-    let inner = routes(cfg).with_state(ctx);
+    router_with(ctx, cfg, Router::new())
+}
+
+/// [`router`] plus `extra` routes (the director's, see
+/// `director::routes`) that `/fal/proxy` also reaches: `x-fal-target-url`
+/// `https://wma.fal.run/session` maps to `/wma/session`.
+pub fn router_with(ctx: ServeCtx, cfg: FalConfig, extra: Router<ServeCtx>) -> Router {
+    let inner = routes(cfg).merge(extra).with_state(ctx);
     inner.clone().merge(proxy::proxy_router(inner))
 }

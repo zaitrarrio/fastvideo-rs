@@ -26,6 +26,11 @@
 //! `(protocol, created_at)` for the MiniMax / FastVideo list endpoints;
 //! `(expires_at)` for the sweep; `(worker, status)` for restart recovery and
 //! the heartbeat.
+//!
+//! Table `api_keys` (migration 2; `crate::keys::D1KeyBackend`): `id` (the
+//! owner `KeyId`, `key_<digest prefix>`), `name`, `prefix` (display hint),
+//! `digest` (SHA-256 hex, UNIQUE), `created_at`, `last_used_at`,
+//! `revoked_at` (unix ms).
 
 use serde_json::json;
 
@@ -59,6 +64,21 @@ pub const MIGRATIONS: &[(u32, &[&str])] = &[(
         "CREATE INDEX IF NOT EXISTS jobs_protocol_created ON jobs (protocol, created_at)",
         "CREATE INDEX IF NOT EXISTS jobs_expires ON jobs (expires_at)",
         "CREATE INDEX IF NOT EXISTS jobs_worker_status ON jobs (worker, status)",
+    ],
+), (
+    2,
+    &[
+        // Dynamic API keys (`crate::keys`): only the SHA-256 digest of a key
+        // is stored, never the key.
+        "CREATE TABLE IF NOT EXISTS api_keys (
+            id TEXT PRIMARY KEY NOT NULL,
+            name TEXT NOT NULL,
+            prefix TEXT NOT NULL,
+            digest TEXT NOT NULL UNIQUE,
+            created_at INTEGER NOT NULL,
+            last_used_at INTEGER,
+            revoked_at INTEGER
+        )",
     ],
 )];
 

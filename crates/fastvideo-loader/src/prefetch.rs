@@ -460,32 +460,13 @@ fn memory_mode(bytes: u64) -> bool {
     on && mem_available().is_some_and(|a| MEM_RESERVED.load(Ordering::Acquire) + bytes < a / 2)
 }
 
-static DEFAULT_OFF: AtomicBool = AtomicBool::new(false);
-
-/// Make read-ahead default to off for the rest of the process unless
-/// `FASTVIDEO_PREFETCH` is set explicitly (a pipeline whose output has not
-/// yet been shown identical with it on). Returns whether it is now active.
-pub fn default_off() -> bool {
-    DEFAULT_OFF.store(true, Ordering::Release);
-    active()
-}
-
-/// Whether reads are queued: `FASTVIDEO_PREFETCH` when set, else on unless a
-/// pipeline asked for [`default_off`].
-pub fn active() -> bool {
-    match std::env::var("FASTVIDEO_PREFETCH") {
-        Ok(v) => v.trim() != "0",
-        Err(_) => !DEFAULT_OFF.load(Ordering::Acquire),
-    }
-}
-
 /// Queue `ranges` (in the order given) for `store`. `paths[i]` is file `i`.
 /// Returns the bytes queued. Ranges whose tensors were already consumed are
 /// skipped; neighbouring ranges in one file are merged into reads of up to the
 /// configured chunk size.
 pub(crate) fn submit(store: &Arc<StoreShared>, paths: &[PathBuf], ranges: &[Range]) -> u64 {
     let cfg = PrefetchConfig::get();
-    if !cfg.enabled || !active() || ranges.is_empty() {
+    if !cfg.enabled || ranges.is_empty() {
         return 0;
     }
     let mut files: Vec<Option<Arc<File>>> = vec![None; paths.len()];
@@ -690,7 +671,7 @@ impl PrefetchStats {
             c[4],
             c[5],
             MEM_RESERVED.load(Ordering::Relaxed) > 0,
-            PrefetchConfig::get().enabled && active(),
+            PrefetchConfig::get().enabled,
         )
     }
 }

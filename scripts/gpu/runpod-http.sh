@@ -134,7 +134,7 @@ FV_WEIGHTS=/workspace/weights bash /opt/fastvideo-rs/scripts/gpu/verify-weights.
 echo "exit=\$?" >>"\$OUT/weights.log"
 # Tiny-autoencoder weights (taeh3, taeltx2_3_wide) onto the container disk;
 # the matrix's *-taeh3 / *-taehv cells read them from \$SCRATCH/tae.
-if [ -f /opt/fastvideo-rs/scripts/gpu/fetch-tae.sh ]; then
+if [ "${FV_SKIP_TAE:-0}" != 1 ] && [ -f /opt/fastvideo-rs/scripts/gpu/fetch-tae.sh ]; then
   bash /opt/fastvideo-rs/scripts/gpu/fetch-tae.sh \$SCRATCH/tae >"\$OUT/tae.log" 2>&1
   echo "exit=\$?" >>"\$OUT/tae.log"
 fi

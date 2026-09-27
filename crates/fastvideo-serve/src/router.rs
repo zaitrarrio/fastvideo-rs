@@ -24,6 +24,8 @@ pub enum Owner {
     /// fal `minimax/h3-max/director` (WP-14).
     FalDirector,
     Reactor,
+    /// The `/console` pages (WP-20).
+    Console,
 }
 
 impl Owner {
@@ -38,6 +40,7 @@ impl Owner {
             Owner::Fal => "fal",
             Owner::FalDirector => "fal-director",
             Owner::Reactor => "reactor",
+            Owner::Console => "console",
         }
     }
 }
@@ -103,6 +106,15 @@ pub fn route_table(fal_apps: &[String]) -> Vec<RouteSpec> {
         r(Native, "GET", "/fv/v1/jobs/{id}/content"),
         r(Native, "GET", "/fv/v1/streams"),
         r(Native, "POST", "/fv/v1/streams"),
+        // Minted API keys (serve-kit `admin_routes`, admin token).
+        r(Native, "POST", "/fv/v1/admin/keys"),
+        r(Native, "GET", "/fv/v1/admin/keys"),
+        r(Native, "DELETE", "/fv/v1/admin/keys/{id}"),
+        // Console pages (src/console.rs).
+        r(Console, "GET", "/console"),
+        r(Console, "GET", "/console/admin"),
+        r(Console, "GET", "/console/models/{owner}/{alias}/{task}"),
+        r(Console, "GET", "/console/assets/{file}"),
         r(Native, "GET", "/fv/v1/streams/{id}"),
         r(Native, "DELETE", "/fv/v1/streams/{id}"),
         r(Native, "POST", "/fv/v1/streams/{id}/commands"),
@@ -110,9 +122,14 @@ pub fn route_table(fal_apps: &[String]) -> Vec<RouteSpec> {
         r(Fal, "POST", "/fal/proxy"),
         r(Fal, "GET", "/fal/proxy"),
         r(Fal, "POST", "/storage/upload/initiate"),
+        r(Fal, "GET", "/fal/schema"),
+        r(Fal, "GET", "/fal/schema/{owner}/{alias}/{sub}"),
+        r(FalDirector, "POST", "/wma/ice"),
         r(FalDirector, "POST", "/wma/session"),
+        r(FalDirector, "POST", "/wma/session/heartbeat"),
         r(FalDirector, "POST", "/start-session"),
         r(FalDirector, "GET", "/info"),
+        r(FalDirector, "POST", "/info"),
         r(Fal, "GET", "/.well-known/jwks.json"),
         // Reactor local runtime (§5.7).
         r(Reactor, "POST", "/start_session"),
@@ -143,6 +160,10 @@ pub fn route_table(fal_apps: &[String]) -> Vec<RouteSpec> {
             v.push(r(Fal, "POST", format!("/{app}/{sub}")));
             v.push(r(Fal, "POST", format!("/run/{app}/{sub}")));
         }
+        // The director's app-local ICE fallback (`context.run`), direct and
+        // through `/run` (what `/fal/proxy` maps `fal.run` to).
+        v.push(r(FalDirector, "POST", format!("/{app}/director/ice")));
+        v.push(r(FalDirector, "POST", format!("/run/{app}/director/ice")));
         let mut prefixes = vec![format!("/{app}")];
         prefixes.extend(FAL_SUBS.iter().map(|s| format!("/{app}/{s}")));
         for p in prefixes {
@@ -278,6 +299,12 @@ mod tests {
             ("PUT", "/minimax/h3-draft/requests/abc/cancel", "fal"),
             ("POST", "/run/minimax/h3-max/text-to-video", "fal"),
             ("POST", "/wma/session", "fal-director"),
+            ("POST", "/wma/ice", "fal-director"),
+            ("POST", "/wma/session/heartbeat", "fal-director"),
+            ("POST", "/minimax/h3-max/director/ice", "fal-director"),
+            ("POST", "/run/minimax/h3-turbo/director/ice", "fal-director"),
+            ("POST", "/start-session", "fal-director"),
+            ("POST", "/info", "fal-director"),
             ("GET", "/session", "reactor"),
             ("POST", "/start_session", "reactor"),
             ("GET", "/sessions/00000000-0000-0000-0000-000000000000/transport/webrtc/ice_servers", "reactor"),
@@ -286,6 +313,10 @@ mod tests {
             ("GET", "/status/abc", "openai-videos"),
             ("GET", "/files/a/b.mp4", "serve-kit"),
             ("GET", "/fv/v1/jobs/fvjob_1", "native"),
+            ("DELETE", "/fv/v1/admin/keys/key_abc", "native"),
+            ("GET", "/console/models/minimax/h3-max/text-to-video", "console"),
+            ("GET", "/console/assets/model.js", "console"),
+            ("GET", "/fal/schema/minimax/h3-max/image-to-video", "fal"),
         ];
         for (m, uri, want) in cases {
             let resp = router

@@ -296,15 +296,23 @@ fn engine_gaps_render_400() {
     let caps = ltx_caps();
     let mut t2v_only = caps.clone();
     t2v_only.tasks.remove(&Task::I2V);
+    // An engine that has not validated the extra rates (serve E4) serves 24 only.
+    let mut fps24 = caps.clone();
+    fps24.fps = fastvideo_protocol::FpsCaps::fixed(24);
     let base = json!({"prompt": "p", "model": "ltx-2-5-fast", "resolution": "1920x1080", "duration": 8});
     let with = |k: &str, v: Value| {
         let mut b = base.clone();
         b[k] = v;
         b
     };
+    // The engine's validated rates pass the precheck.
+    for fps in fastvideo_engine_service::LTX_FPS {
+        let req = normalize(Endpoint::TextToVideo, Api::V2, &LtxModels::default(), &with("fps", json!(fps))).unwrap();
+        assert!(precheck(&req, &caps).is_ok(), "fps {fps}");
+    }
     let cases: Vec<(Endpoint, Value, &ModelCaps, GapId)> = vec![
-        (Endpoint::TextToVideo, with("fps", json!(25)), &caps, GapId::LtxFps),
-        (Endpoint::TextToVideo, with("fps", json!(50)), &caps, GapId::LtxFps),
+        (Endpoint::TextToVideo, with("fps", json!(25)), &fps24, GapId::LtxFps),
+        (Endpoint::TextToVideo, with("fps", json!(50)), &fps24, GapId::LtxFps),
         (Endpoint::TextToVideo, with("duration", Value::Null), &caps, GapId::LtxAutoDuration),
         (Endpoint::ImageToVideo, {
             let mut b = with("image_uri", json!("ltx://uploads/a"));

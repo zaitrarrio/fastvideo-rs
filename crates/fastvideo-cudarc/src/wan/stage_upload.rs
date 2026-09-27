@@ -38,22 +38,9 @@ thread_local! {
     static STAGE: RefCell<Option<Stage>> = const { RefCell::new(None) };
 }
 
-static DEFAULT_OFF: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
-
-/// Make staging default to off for the rest of the process unless
-/// `FASTVIDEO_STAGED_UPLOAD` is set explicitly (see
-/// [`fastvideo_loader::prefetch::default_off`]).
-pub fn default_off() {
-    DEFAULT_OFF.store(true, std::sync::atomic::Ordering::Release);
-}
-
 pub fn enabled() -> bool {
-    static EXPLICIT: std::sync::OnceLock<Option<bool>> = std::sync::OnceLock::new();
-    let explicit = EXPLICIT.get_or_init(|| {
-        std::env::var_os("FASTVIDEO_STAGED_UPLOAD")
-            .map(|_| super::envflag::bool_flag("FASTVIDEO_STAGED_UPLOAD", true))
-    });
-    explicit.unwrap_or_else(|| !DEFAULT_OFF.load(std::sync::atomic::Ordering::Acquire))
+    static FLAG: super::envflag::CachedBool = super::envflag::CachedBool::new();
+    FLAG.get_or_init(|| super::envflag::bool_flag("FASTVIDEO_STAGED_UPLOAD", true))
 }
 
 /// Upload little-endian bf16 `bytes` (e.g. a view into a mapped shard) as a

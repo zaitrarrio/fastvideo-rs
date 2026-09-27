@@ -13,6 +13,8 @@
 //! - [`callback`]: MiniMax callbacks (challenge echo) and fal webhooks
 //!   (Ed25519) with retry schedules.
 //! - [`d1`]: [`D1JobStore`], the Cloudflare D1 job store (design §0.7).
+//! - [`keys`]: minted API keys ([`KeyStore`], memory / file / D1), the
+//!   admin token and the `/fv/v1/admin/keys` routes.
 //! - [`sse`]: server-sent events from an `SseSpec`.
 //! - [`handlers`]: `HttpReply` -> axum response, and the generic
 //!   `submit`/`status`/`result` handlers.
@@ -31,6 +33,7 @@ pub mod d1;
 pub mod events;
 pub mod handlers;
 pub mod ingest;
+pub mod keys;
 pub mod net;
 pub mod sse;
 pub mod store;
@@ -46,6 +49,7 @@ pub use d1::{D1Client, D1Config, D1JobStore, D1Options};
 pub use ctx::{EngineGate, SafetyFilter, ServeConfig, ServeCtx};
 pub use events::{apply_event, FinishedOutput, JobEvent};
 pub use handlers::{into_response, SubmitOpts};
+pub use keys::{admin_routes, AdminToken, KeyStore};
 pub use ingest::{IngestPolicy, Ingestor, KindLimits, Prober};
 pub use store::MemJobStore;
 pub use uploads::{UploadStore, UploadTicket};

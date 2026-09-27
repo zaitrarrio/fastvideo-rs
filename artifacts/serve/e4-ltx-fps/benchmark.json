@@ -1,0 +1,170 @@
+{
+  "package": "serve E4 (LTX fps + silent) and E2 (in-memory frame sinks) GPU validation",
+  "commit": "3df276d",
+  "image": "ghcr.io/zaitrarrio/fastvideo-rs-runtime:sha-3df276d",
+  "gpu": "NVIDIA RTX PRO 6000 Blackwell Server Edition (97887 MiB), driver 595.91.07",
+  "model": "LTX-2.5 distilled two-stage (stage-2 Sol), bf16; H3 FastH3 8-step for the H3 sink cell",
+  "command": "FV_FAMILY=ltxfps scripts/gpu/runpod-http.sh run 3df276d (runpod-matrix.sh ltxfps)",
+  "raw": "artifacts/runpod/ltxfps/3df276d-09272000",
+  "validated_fps": [
+    24,
+    25,
+    48,
+    50
+  ],
+  "result": "PASS: every fps cell decodes exactly num_frames frames, the mp4 has exactly num_frames video frames at r_frame_rate fps/1, the audio track is present (absent with skip_audio_decode); sink frames are byte-identical to the same run's PNG frames (LTX 25 fps, LTX 50 fps silent, H3), sink PCM equals the WAV",
+  "notes": [
+    "24 fps was already served; this run covers the added rates.",
+    "The AAC track is ~30-50 ms shorter than the video (the mux uses -shortest; the vocoder length follows the audio latents).",
+    "The 25 fps cell is the first of the pod (text encode and warm-up land in its e2e_seconds)."
+  ],
+  "cells": [
+    {
+      "cell": "ltx25-1080p-25fps",
+      "exit": 0,
+      "wall_s": 209,
+      "width": 1920,
+      "height": 1088,
+      "num_frames": 121,
+      "frame_rate": 25.0,
+      "audio_tokens": 121,
+      "skip_audio_decode": false,
+      "e2e_seconds": 91.99415754099999,
+      "denoise_s": 24.271745515,
+      "decode_s": 3.445829105,
+      "mp4": {
+        "video_frames": 121,
+        "r_frame_rate": "25/1",
+        "avg_frame_rate": "25/1",
+        "video_duration_s": 4.84,
+        "has_audio": true,
+        "audio": {
+          "channels": 2,
+          "codec_name": "aac",
+          "duration": "4.810000",
+          "sample_rate": "48000"
+        }
+      },
+      "sink_check": {
+        "audio_matches_wav": true,
+        "audio_rate": 48000,
+        "audio_samples": 230880,
+        "chunks": 16,
+        "frames": 121,
+        "mismatched_frames": 0,
+        "png_frames": 121,
+        "unreadable_pngs": 0
+      }
+    },
+    {
+      "cell": "ltx25-1080p-48fps",
+      "exit": 0,
+      "wall_s": 148,
+      "width": 1920,
+      "height": 1088,
+      "num_frames": 121,
+      "frame_rate": 48.0,
+      "audio_tokens": 63,
+      "skip_audio_decode": false,
+      "e2e_seconds": 29.426977423,
+      "denoise_s": 24.92983619,
+      "decode_s": 3.2895439349999998,
+      "mp4": {
+        "video_frames": 121,
+        "r_frame_rate": "48/1",
+        "avg_frame_rate": "48/1",
+        "video_duration_s": 2.520833,
+        "has_audio": true,
+        "audio": {
+          "channels": 2,
+          "codec_name": "aac",
+          "duration": "2.490000",
+          "sample_rate": "48000"
+        }
+      }
+    },
+    {
+      "cell": "ltx25-1080p-50fps",
+      "exit": 0,
+      "wall_s": 121,
+      "width": 1920,
+      "height": 1088,
+      "num_frames": 121,
+      "frame_rate": 50.0,
+      "audio_tokens": 60,
+      "skip_audio_decode": false,
+      "e2e_seconds": 27.055777634000002,
+      "denoise_s": 22.892251365,
+      "decode_s": 3.359826956,
+      "mp4": {
+        "video_frames": 121,
+        "r_frame_rate": "50/1",
+        "avg_frame_rate": "50/1",
+        "video_duration_s": 2.42,
+        "has_audio": true,
+        "audio": {
+          "channels": 2,
+          "codec_name": "aac",
+          "duration": "2.370000",
+          "sample_rate": "48000"
+        }
+      }
+    },
+    {
+      "cell": "ltx25-1080p-50fps-silent",
+      "exit": 0,
+      "wall_s": 127,
+      "width": 1920,
+      "height": 1088,
+      "num_frames": 121,
+      "frame_rate": 50.0,
+      "audio_tokens": 60,
+      "skip_audio_decode": true,
+      "e2e_seconds": 29.295942196,
+      "denoise_s": 25.192747512,
+      "decode_s": 3.307291352,
+      "mp4": {
+        "video_frames": 121,
+        "r_frame_rate": "50/1",
+        "avg_frame_rate": "50/1",
+        "video_duration_s": 2.42,
+        "has_audio": false,
+        "audio": null
+      },
+      "sink_check": {
+        "audio_matches_wav": true,
+        "audio_rate": null,
+        "audio_samples": 0,
+        "chunks": 16,
+        "frames": 121,
+        "mismatched_frames": 0,
+        "png_frames": 121,
+        "unreadable_pngs": 0
+      }
+    },
+    {
+      "cell": "fasth3-8step-sink",
+      "exit": 0,
+      "wall_s": 176,
+      "width": 1344,
+      "height": 768,
+      "num_frames": 124,
+      "frame_rate": null,
+      "audio_tokens": null,
+      "skip_audio_decode": null,
+      "e2e_seconds": 51.760420987,
+      "denoise_s": 44.391915667,
+      "decode_s": 6.688756369,
+      "sink_check": {
+        "audio_matches_wav": true,
+        "audio_rate": 32000,
+        "audio_samples": 165600,
+        "chunks": 8,
+        "frames": 124,
+        "mismatched_frames": 0,
+        "png_frames": 124,
+        "unreadable_pngs": 0
+      }
+    }
+  ]
+}

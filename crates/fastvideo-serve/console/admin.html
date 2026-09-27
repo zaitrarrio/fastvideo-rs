@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>API keys · fv-serve console</title>
+<link rel="stylesheet" href="/console/assets/console.css">
+<script type="module" src="/console/assets/admin.js"></script>
+</head>
+<body>
+<main class="page">
+  <div class="page-head">
+    <h1>API keys <small>operator page: needs the admin token</small></h1>
+  </div>
+  <div class="grid2">
+    <section class="stage" aria-labelledby="h-admin">
+      <div class="stage-head"><h2 id="h-admin">Admin token</h2><span id="admin-state" class="pill">not set</span></div>
+      <div class="stage-body">
+        <p class="hint" style="font-size:13px">Set <code>FV_ADMIN_TOKEN</code>, or copy the token fv-serve logs at startup
+          (a <code>WARN</code> banner starting <code>fvadm_</code>). It stays in this tab only (session storage).</p>
+        <label for="admintoken">Admin token</label>
+        <input id="admintoken" type="password" spellcheck="false" autocomplete="off" placeholder="fvadm_…">
+        <div class="actions">
+          <button id="admin-save" class="primary">Use token</button>
+          <button id="admin-clear" type="button">Clear</button>
+        </div>
+        <div id="admin-msg" class="msg" role="status"></div>
+      </div>
+    </section>
+    <section class="stage" aria-labelledby="h-mint">
+      <div class="stage-head"><h2 id="h-mint">Create a key</h2></div>
+      <div class="stage-body">
+        <label for="keyname">Name</label>
+        <input id="keyname" placeholder="e.g. laptop, ci, demo" maxlength="64">
+        <div class="actions">
+          <button id="mint" class="primary">Create key</button>
+        </div>
+        <div id="mint-msg" class="msg" role="status"></div>
+        <div id="minted" class="secret" hidden>
+          <div class="hint" style="margin:0 0 6px">Copy it now. Only its SHA-256 digest is stored, so it cannot be shown again.</div>
+          <code id="minted-key"></code>
+          <div class="actions">
+            <button id="use-minted" class="primary">Use in this browser</button>
+            <button id="copy-minted">Copy</button>
+            <button id="hide-minted" type="button">Done</button>
+          </div>
+        </div>
+      </div>
+    </section>
+    <section class="stage span2" aria-labelledby="h-keys">
+      <div class="stage-head"><h2 id="h-keys">Keys</h2><span id="backend" class="pill" hidden></span><button id="refresh" class="small">Refresh</button></div>
+      <div class="stage-body">
+        <div class="scroll"><table id="keys" hidden>
+          <thead><tr><th>Name</th><th>Id (job owner)</th><th>Key</th><th>Created</th><th>Last used</th><th>Status</th><th></th></tr></thead>
+          <tbody></tbody>
+        </table></div>
+        <div id="keys-empty" class="empty">Enter the admin token to list keys.</div>
+        <p class="hint">Keys from <code>FV_API_KEYS</code> (static SHA-256 list) also work and are not listed here.
+          Revocation applies at once on this server; other workers sharing a D1 store pick it up within 30 s.</p>
+      </div>
+    </section>
+  </div>
+</main>
+</body>
+</html>
