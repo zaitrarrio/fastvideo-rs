@@ -131,9 +131,11 @@ implements the client side of design §5.6 in one module,
 `console/director.js` (`DirectorClient`): `POST /wma/ice`, a client-created
 `control` data channel with recv-only video and audio, a non-trickle offer to
 `POST /wma/session`, heartbeats every 5 s, `configure` then versioned
-`prompt` messages, `stop`. While the server has no director (WP-14) the
-signalling routes answer 404/405/501 and the page shows "Streaming is not
-available on this server yet".
+`prompt` messages, `stop`. The server side is the fal director (WP-14,
+`fastvideo-fal::director`), mounted when fv-serve is built with `webrtc`
+and `protocols.fal_director` is on. Otherwise the signalling routes answer
+404/405/501 and the page shows "Streaming is not available on this server
+yet".
 
 ## 5. Tests
 
