@@ -119,7 +119,7 @@ create() {
       gpuTypeIds: [$gpu], gpuCount: 1, containerDiskInGb: 80, volumeInGb: 0,
       allowedCudaVersions: ["13.0"],
       env: {NVIDIA_DRIVER_CAPABILITIES: "compute,utility,video"},
-      ports: ["8000/http"], dockerStartCmd: ["/bin/bash", "-c", $cmd]
+      ports: ["8000/http"], dockerEntrypoint: ["/bin/bash", "-c"], dockerStartCmd: [$cmd]
     }')"
   rest POST /pods "$payload"
 }

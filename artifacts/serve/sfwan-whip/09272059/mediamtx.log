@@ -1,0 +1,14 @@
+2026/09/27 21:05:03 INF MediaMTX v1.15.1
+2026/09/27 21:05:03 INF configuration loaded from /fvscratch/mtx/mediamtx.yml
+2026/09/27 21:05:03 INF [RTSP] listener opened on :8554 (TCP), :8000 (UDP/RTP), :8001 (UDP/RTCP)
+2026/09/27 21:05:03 INF [WebRTC] listener opened on :8889 (HTTP), :8189 (ICE/UDP)
+2026/09/27 21:05:03 INF [API] listener opened on :9997
+2026/09/27 21:05:59 INF [WebRTC] [session fb743aa9] created by 127.0.0.1:43884
+2026/09/27 21:05:59 INF [WebRTC] [session fb743aa9] peer connection established, local candidate: host/udp/172.19.0.2/8189, remote candidate: prflx/udp/127.0.0.1/45539
+2026/09/27 21:06:01 INF [WebRTC] [session fb743aa9] is publishing to path 'sfwan', 1 track (H264)
+2026/09/27 21:06:03 INF [RTSP] [conn 127.0.0.1:52004] opened
+2026/09/27 21:06:03 INF [RTSP] [session 820ebbf4] created by 127.0.0.1:52004
+2026/09/27 21:06:03 INF [RTSP] [session 820ebbf4] is reading from path 'sfwan', with TCP, 1 track (H264)
+2026/09/27 21:06:34 INF [RTSP] [session 820ebbf4] destroyed: torn down by 127.0.0.1:52004
+2026/09/27 21:06:34 INF [RTSP] [conn 127.0.0.1:52004] closed: EOF
+2026/09/27 21:06:36 INF [WebRTC] [session fb743aa9] closed: terminated

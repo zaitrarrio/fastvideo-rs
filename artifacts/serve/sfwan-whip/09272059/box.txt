@@ -1,0 +1,5 @@
+NVIDIA L40S, 46068 MiB, 580.159.03
+caps=compute,utility,video
+cuda,http-client,webrtc
+1
+27G	/fvscratch/weights/sfwan
