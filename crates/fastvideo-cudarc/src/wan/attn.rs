@@ -229,8 +229,9 @@ pub fn cudnn_default(sm_major: i32) -> bool {
     CUDNN_DEFAULT_ON && sm_major == 12
 }
 
-/// Flipped only once a generation run has verified the cuDNN default.
-const CUDNN_DEFAULT_ON: bool = false;
+/// On since the attn3 generation A/B (FastH3 4-step dense 768p denoise 33.23 -> 32.28 s,
+/// LTX-2.5 1080p 20 s dense stage 2 44.0 -> 42.7 s/step).
+const CUDNN_DEFAULT_ON: bool = true;
 
 /// `auto` on sm_12x, bf16 out: the first call of each `(bh, sq, sk, d)`
 /// times cuDNN's plan (after one warm-up execution) against flash_mma_fwd2 on

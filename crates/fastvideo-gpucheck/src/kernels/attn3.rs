@@ -238,6 +238,14 @@ pub(super) fn bench(c: &mut Ctx<'_>) -> StageResult<()> {
                 .ok_or_else(|| anyhow::anyhow!("flash declined"))?;
             bits.insert(kname, bits16(&o, cmp_n)?);
         }
+        // `auto` (on sm_12x: the per-shape cuDNN-vs-fwd2 pick, made on the
+        // first of these calls).
+        let s = median3(&mut || {
+            attn::device_mma_sdpa(&qt, &kt, &vt, None, true)?
+                .ok_or_else(|| anyhow::anyhow!("flash declined"))?;
+            Ok(())
+        })?;
+        row.insert("auto_ms".into(), json!(s * 1e3));
         let v3_bad = mismatches(&bits["v2"], &bits["v3"]);
         let v3s_diff = diff(&to_f32(&bits["v3s"]), &to_f32(&bits["v2"]));
         row.insert("v3_bit_mismatches_first_heads".into(), json!(v3_bad));
