@@ -72,6 +72,10 @@ pub static PROFILES: &[(&str, &str)] = &[
         "ltx2/ltx25_distill_sol_fp8",
         include_str!("../../../../profiles/ltx2/ltx25_distill_sol_fp8.toml"),
     ),
+    (
+        "ltx2/ltx25_distill_sol_nvfp4",
+        include_str!("../../../../profiles/ltx2/ltx25_distill_sol_nvfp4.toml"),
+    ),
 ];
 
 /// A builtin profile by name (`h3/rtx5090_sol`, with or without `.toml` or

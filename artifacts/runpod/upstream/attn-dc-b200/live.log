@@ -1,0 +1,6 @@
+[12:30:59] pod.sh start steps: dev:attn_dc
+[12:31:00] ▶ step dev:attn_dc
+[12:31:01] dev: 78e610fa48
+parity pass 26 fail 0
+[12:34:00] dev: step bench:attn
+[12:35:09] dev: done 78e610fa48

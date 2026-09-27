@@ -35,6 +35,8 @@ UW="${UW:-$UP/weights}"
 . "$HERE/setup.sh"
 PROMPT_OURS="${FV_PROMPT:-A man in his thirties talking to the camera in a bright living room, medium close-up, natural expressions and hand gestures, soft window light. He says: <d>Hello, this was generated entirely in Rust.</d>}"
 SEED_OURS="${FV_SEED:-1024}"
+# The Wan 2.2 TI2V image-to-video prompt (runpod-matrix.sh wan5b-i2v).
+TI2V_PROMPT="Aerial drone shot of a tropical beach: turquoise sea waves roll in and break into white foam on the sand, the camera glides slowly forward along the shoreline, bright sunny day."
 H3_REV=bfc8ed0353f5a9733be73e6b2c98ec0948195b86        # sol-engine H3 configs' H3_MODEL_REVISION
 F8_REV=3da2ddfe1954d9cda4c05b643dc0f26007a655c5        # FastVideo/FastVideo-FastH3-8-Step-V2
 export HF_HOME="$UP/hf"   # the image presets HF_HOME under /workspace
@@ -67,6 +69,8 @@ run_step() {
     lpips:ref) lpips_ref ;;
     bench:attn) bench_attn ;;   # attention microbenchmarks (bench_attn.py)
     bench:vsa) bench_vsa ;;     # FastVideo VSA stage timings (bench_vsa.py)
+    bench:attn_dc) bench_attn_dc "$HERE" ;;   # attn_dc.cu kernels: parity + timings (attn_dc_bench.cu)
+    dev:attn_dc) dev_attn_dc ;;   # bench:attn_dc for each new commit of $UP_DEV_BRANCH
     cells) run_cells ;;
     cells:*) ( UP_CELLS="${s#cells:}"; UP_CELLS="${UP_CELLS//,/ }"; run_cells ) ;;
     oracle) run_oracle ;;   # oracle.sh: dump hooks for the GPU oracle diff
@@ -121,6 +125,64 @@ bench_vsa() {
   PYTHONUNBUFFERED=1 "$py" "$HERE/bench_vsa.py" \
     --out "$OUT/bench-vsa/result.json" ${UP_VSA_WORKLOADS:+--workloads "$UP_VSA_WORKLOADS"} \
     >"$OUT/bench-vsa/stdout.log" 2>"$OUT/bench-vsa/stderr.log"
+}
+
+# Datacenter attention kernels (crates/fastvideo-cudarc/src/wan/attn_dc.cu)
+# against flash_mma_fwd2: attn_dc_bench.cu is built here with the image's
+# nvcc for the GPU's arch-specific target. Parity runs the debug build (a
+# stuck mbarrier wait traps instead of hanging), timings the release build.
+# $1 = directory holding attn_dc_bench.cu, $2 = result subdirectory.
+bench_attn_dc() {
+  local dir="$1" d="$OUT/attn-dc${2:+/$2}" nvcc cc arch
+  mkdir -p "$d"
+  nvcc="$(command -v nvcc || echo /usr/local/cuda/bin/nvcc)"
+  cc="$(nvidia-smi --query-gpu=compute_cap --format=csv,noheader | head -1 | tr -d .)"
+  case "$cc" in
+    90 | 100 | 103) arch="sm_${cc}a" ;;
+    *) echo "no attn_dc kernels for compute capability $cc" >"$d/skipped.txt"; return 0 ;;
+  esac
+  "$nvcc" --version >"$d/nvcc.txt" 2>&1
+  local flags=(-std=c++17 -O3 "-arch=$arch" --fmad=true --prec-div=true --prec-sqrt=true --ftz=false)
+  "$nvcc" "${flags[@]}" -DDC_DEBUG_HANG=20000000000LL -o "$d/dbg" "$dir/attn_dc_bench.cu" \
+    >"$d/build-dbg.log" 2>&1 || { tail -30 "$d/build-dbg.log"; return 1; }
+  "$nvcc" "${flags[@]}" -Xptxas -v -o "$d/rel" "$dir/attn_dc_bench.cu" \
+    >"$d/build-rel.log" 2>&1 || { tail -30 "$d/build-rel.log"; return 1; }
+  timeout 1800 "$d/dbg" parity >"$d/parity.jsonl" 2>"$d/parity.err"
+  timeout 1800 "$d/rel" bench "${UP_ATTN_DC_SHAPES:-}" >"$d/bench.jsonl" 2>"$d/bench.err"
+  rm -f "$d/dbg" "$d/rel"
+  echo "parity pass $(grep -c '"pass": true' "$d/parity.jsonl") fail $(grep -c '"pass": false' "$d/parity.jsonl")"
+  return 0
+}
+
+# Kernel development loop: fetch $UP_DEV_BRANCH every 15 s and run
+# bench:attn_dc on each new commit (results under attn-dc/<sha>/), plus the
+# steps listed in scripts/gpu/upstream/attn_dc.steps of that commit. Ends
+# after $UP_DEV_S seconds or at a commit carrying scripts/gpu/upstream/attn_dc.stop.
+dev_attn_dc() {
+  local repo=/opt/fvrs-dev last="" sha s deadline=$(( $(date +%s) + ${UP_DEV_S:-3600} ))
+  rm -rf "$repo" && git init -q "$repo" && git -C "$repo" remote add origin https://github.com/zaitrarrio/fastvideo-rs.git
+  while (( $(date +%s) < deadline )); do
+    if git -C "$repo" fetch -q --depth 1 origin "${UP_DEV_BRANCH:?UP_DEV_BRANCH}" 2>/dev/null; then
+      sha="$(git -C "$repo" rev-parse --short=10 FETCH_HEAD)"
+      if [[ "$sha" != "$last" ]]; then
+        last="$sha"
+        git -C "$repo" checkout -q -f FETCH_HEAD
+        if [[ -f "$repo/scripts/gpu/upstream/attn_dc.stop" ]]; then log "dev: stop at $sha"; break; fi
+        log "dev: $sha"
+        bench_attn_dc "$repo/scripts/gpu/upstream" "$sha" 2>&1 | tail -5 | tee -a "$LIVE"
+        for s in $(cat "$repo/scripts/gpu/upstream/attn_dc.steps" 2>/dev/null); do
+          log "dev: step $s"
+          case "$s" in
+            bench:attn) bench_attn ;;
+            *) log "dev: unknown step $s" ;;
+          esac
+        done
+        echo "$sha" >>"$OUT/attn-dc/done.txt"
+        log "dev: done $sha"
+      fi
+    fi
+    sleep 15
+  done
 }
 
 # ---------------------------------------------------------------- weights
@@ -355,8 +417,16 @@ run_cells() {
   # flow_shift 3.0; the checkpoint's registry default is the 720p config, shift 5.0).
   cell_fv_wan fv-wan21-14b wan21-t2v-14b Wan2.1-T2V-14B-Diffusers --steps 50 --guidance-scale 5.0 \
     --height 480 --width 832 --num-frames 81 --flow-shift 3.0
-  cell_fv_wan fv-wan22-5b wan22-ti2v-5b Wan2.2-TI2V-5B-Diffusers --height 704 --width 1280 --num-frames 121
-  cell_fv_wan fv-sfwan13 sfwan21-1.3b SFWan2.1-T2V-1.3B-Diffusers
+  # Wan2.2 TI2V-5B at the checkpoint's defaults (50 steps, CFG 5, shift 5,
+  # 24 fps): text-to-video over the five prompts (as our wan5b cell), and
+  # image-to-video on the 832x480 fixture (FastVideo generates TI2V at the
+  # 480x832 area). UP_FV_REPEATS=1 for one run per prompt.
+  cell_fv_wan fv-wan22-5b wan22-ti2v-5b Wan2.2-TI2V-5B-Diffusers --height 704 --width 1280 --num-frames 121 \
+    --prompts "$HERE/../prompts-eval.json"
+  cell_fv_wan fv-wan22-5b-i2v wan22-ti2v-5b Wan2.2-TI2V-5B-Diffusers --height 480 --width 832 --num-frames 121 \
+    --image "$HERE/../fixtures/ti2v-beach-832x480.jpg" --prompt "$TI2V_PROMPT"
+  # SF-Wan: the five prompts of prompts-eval.json, as the sfwan13 cells with FV_PROMPTS=5.
+  cell_fv_wan fv-sfwan13 sfwan21-1.3b SFWan2.1-T2V-1.3B-Diffusers --prompts "$HERE/../prompts-eval.json"
   local g768=(--height 768 --width 1344 --num-frames 124) g480=(--height 480 --width 832 --num-frames 124)
   local f8="$UW/FastVideo-FastH3-8-Step-V2" lora="$W/FastH3-4-step-Preview-v1-LoRA"
   # FastVideo (short cells first)

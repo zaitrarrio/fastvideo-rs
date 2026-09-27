@@ -21,10 +21,19 @@ pub struct WanVideoArchConfig {
     pub added_kv_proj_dim: Option<usize>,
     /// Wan2.2 MoE: `t >= boundary_ratio * num_train` uses high-noise expert.
     pub boundary_ratio: Option<f32>,
-    /// Causal / Self-Forcing temporal window. `-1` is global attention.
+    /// Causal / Self-Forcing temporal window in latent frames (FastVideo
+    /// `local_attn_size`). `-1` is global attention, capped at
+    /// `sliding_window_num_frames` frames of KV cache.
     pub local_attn_size: i32,
+    /// Frames at the head of the KV cache kept when it rolls (`sink_size`).
     pub sink_size: usize,
     pub causal: bool,
+    /// Latent frames generated (and mutually visible) per autoregressive
+    /// block (FastVideo `num_frames_per_block`).
+    pub num_frames_per_block: usize,
+    /// KV cache length in frames when `local_attn_size == -1`
+    /// (FastVideo `sliding_window_num_frames`).
+    pub sliding_window_num_frames: usize,
 }
 
 impl WanVideoArchConfig {
@@ -60,6 +69,8 @@ impl WanVideoArchConfig {
             local_attn_size: -1,
             sink_size: 0,
             causal: false,
+            num_frames_per_block: 3,
+            sliding_window_num_frames: 21,
         }
     }
 
@@ -119,11 +130,14 @@ impl WanVideoArchConfig {
         }
     }
 
-    /// Self-Forcing causal Wan 2.1 1.3B.
+    /// Self-Forcing causal Wan 2.1 1.3B (`wlsaidhi/SFWan2.1-T2V-1.3B-Diffusers`:
+    /// its `transformer/config.json` sets none of the causal fields, so
+    /// FastVideo's `WanVideoArchConfig` defaults apply: global attention over
+    /// a 21-frame KV cache, no sink, 3 frames per block).
     pub fn sf_wan_t2v_1_3b() -> Self {
         Self {
             causal: true,
-            local_attn_size: 21,
+            local_attn_size: -1,
             sink_size: 0,
             ..Self::wan_t2v_1_3b()
         }
@@ -149,6 +163,8 @@ impl WanVideoArchConfig {
             local_attn_size: -1,
             sink_size: 0,
             causal: false,
+            num_frames_per_block: 3,
+            sliding_window_num_frames: 21,
         }
     }
 
@@ -266,7 +282,10 @@ mod tests {
         assert!(moe.is_moe());
         let causal = WanVideoArchConfig::sf_wan_t2v_1_3b();
         assert!(causal.causal);
-        assert_eq!(causal.local_attn_size, 21);
+        assert_eq!(causal.local_attn_size, -1);
+        assert_eq!(causal.sink_size, 0);
+        assert_eq!(causal.num_frames_per_block, 3);
+        assert_eq!(causal.sliding_window_num_frames, 21);
     }
 
     #[test]

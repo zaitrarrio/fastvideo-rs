@@ -2,6 +2,7 @@ pub mod dmd;
 pub mod flow_match;
 pub mod flow_unipc;
 pub mod rcm;
+pub mod self_forcing;
 
 pub use dmd::{
     DmdSchedule, DmdStepCoeffs, DMD_TRAINING_NOISE_SHIFT, FAST_WAN_1_3B_DMD_SHIFT,
@@ -12,3 +13,4 @@ pub use flow_unipc::{FlowUniPCMultistepScheduler, UniPcSolverType, UniPcStepPlan
 pub use rcm::{
     RcmSchedule, RcmStepCoeffs, RCM_MID_TIMESTEPS, RCM_SIGMA_MAX_I2V, RCM_SIGMA_MAX_T2V,
 };
+pub use self_forcing::{SelfForcingSchedule, SF_WAN_1_3B_DMD_STEPS};

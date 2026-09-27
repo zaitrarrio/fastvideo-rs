@@ -5,9 +5,11 @@ Runs in the sol-ltx25 venv (torch + cuDNN + sol-engine Sol-Attn):
 
 * torch SDPA per backend (cuDNN fused attention, FlashAttention, memory
   efficient), bf16 BHSD in and out: the dense references;
-* sol-engine ``sol_attn`` (the CuTe sm120 kernel on RTX PRO 6000, kv_splits=1
-  as models/ltx25/RTX5090/attention.py:94-102 calls it), bf16 BTHD, total and
-  ``prepare`` alone, plus the exact-block fraction of one head.
+* sol-engine ``sol_attn`` (its CuTe kernel for the GPU: sm120 on RTX PRO
+  6000, sm100 on B200, sm90 on H100 / H200; kv_splits=1 as
+  models/ltx25/RTX5090/attention.py:94-102 calls it, and on sm90 also the
+  kv_splits=2 / 4 path), bf16 BTHD, total and ``prepare`` alone, plus the
+  exact-block fraction of one head.
 
 Shapes and data match fv-gpucheck's ``attn_bench`` group: H3 768p (56 heads,
 37 710 tokens), LTX-2.5 stage 2 at 768x512 (6 144), 1080p 20 s (124 440) and
@@ -132,6 +134,13 @@ def main() -> int:
                 exact = (cm > th[:, None]) | ((i[:, None] - i[None, :]).abs() <= 1)
                 out[key] = {"ms": ms, "prepare_ms": pms,
                             "exact_fraction_head0_approx": exact.float().mean().item()}
+                # SM90 has sol-engine's KV-split path (interface.py: 2 / 4
+                # splits need one route group each).
+                if tuple(res["capability"]) == (9, 0):
+                    for splits in (2, 4):
+                        if splits <= (nt + 63) // 64:
+                            out[key][f"splits{splits}_ms"] = timed(
+                                lambda: sol_attn(q, k, v, tau=tau, thresh_type="diag", kv_splits=splits))
             except Exception as exc:  # noqa: BLE001
                 out[key] = {"error": f"{type(exc).__name__}: {str(exc)[:300]}",
                             "trace": traceback.format_exc()[-800:]}

@@ -69,6 +69,14 @@ pub fn i2v_first_frame_mask(frames: usize, height: usize, width: usize) -> Vec<f
 
 /// Additive attention mask `[seq, seq]`: 0 allowed, `-1e9` blocked.
 /// Tokens are time-major patches `(t, h, w)` with `patch_size`.
+///
+/// FastVideo `CausalWanTransformer3DModel._prepare_blockwise_causal_attn_mask`
+/// (the full-sequence causal forward; inference runs block by block through
+/// the KV cache instead): tokens form blocks of `num_frames_per_block`
+/// latent frames; with `end(q)` the end of `q`'s block, `q` sees `k` iff
+/// `k < end(q)` and, when `local_attn_size != -1`,
+/// `k >= end(q) - local_attn_size * frame_tokens`; and always itself. The
+/// mask has no sink (`sink_size` only acts when the KV cache rolls).
 pub fn causal_temporal_mask(
     cfg: &WanVideoArchConfig,
     frames: usize,
@@ -82,22 +90,16 @@ pub fn causal_temporal_mask(
     let hf = height / ph;
     let wf = width / pw;
     let seq = tf * hf * wf;
+    let frame_tokens = hf * wf;
+    let block = cfg.num_frames_per_block.max(1) * frame_tokens;
+    let window = usize::try_from(cfg.local_attn_size)
+        .ok()
+        .map(|l| l * frame_tokens);
     let mut mask = vec![0.0f32; seq * seq];
-    let hw = hf * wf;
     for q in 0..seq {
-        let tq = q / hw;
+        let end = (q / block.max(1) + 1) * block;
         for k in 0..seq {
-            let tk = k / hw;
-            let mut ok = tk <= tq;
-            if cfg.local_attn_size > 0 {
-                let window = cfg.local_attn_size as usize;
-                if tq.saturating_sub(tk) > window {
-                    ok = false;
-                }
-            }
-            if cfg.sink_size > 0 && tk < cfg.sink_size {
-                ok = true;
-            }
+            let ok = (k < end && window.is_none_or(|w| k + w >= end)) || k == q;
             if !ok {
                 mask[q * seq + k] = -1e9;
             }
@@ -142,40 +144,41 @@ mod tests {
     }
 
     #[test]
-    fn causal_mask_blocks_future_frames() {
-        let mut cfg = WanVideoArchConfig::sf_wan_t2v_1_3b();
-        cfg.local_attn_size = -1;
-        let frames = 4;
-        let h = 4;
-        let w = 4;
+    fn causal_mask_blocks_future_blocks() {
+        let cfg = WanVideoArchConfig::sf_wan_t2v_1_3b();
+        let (frames, h, w) = (4, 4, 4);
         let mask = causal_temporal_mask(&cfg, frames, h, w);
-        let tf = frames; // patch_size t=1
         let hw = (h / 2) * (w / 2);
-        let seq = tf * hw;
+        let seq = frames * hw;
         assert_eq!(mask.len(), seq * seq);
-        // query in last frame can see first frame
-        let q = (tf - 1) * hw;
-        assert_eq!(mask[q * seq], 0.0);
-        // query in first frame cannot see last frame
-        let k = (tf - 1) * hw;
-        assert!(mask[k] < -1e8);
+        // Frames 0-2 are one block: frame 0 sees frame 2 (same block) ...
+        assert_eq!(mask[2 * hw], 0.0);
+        // ... but not frame 3 (the next block).
+        assert!(mask[3 * hw] < -1e8);
+        // Frame 3 sees everything before it.
+        assert_eq!(mask[3 * hw * seq], 0.0);
     }
 
     #[test]
-    fn local_window_and_sink() {
+    fn token_window_from_the_block_end() {
         let mut cfg = WanVideoArchConfig::sf_wan_t2v_1_3b();
-        cfg.local_attn_size = 1;
+        cfg.local_attn_size = 4;
         cfg.sink_size = 1;
-        let mask = causal_temporal_mask(&cfg, 6, 4, 4);
+        let mask = causal_temporal_mask(&cfg, 9, 4, 4);
         let hw = 2 * 2;
-        let seq = 6 * hw;
-        // t=5 attending t=3 is outside window=1 and not sink → blocked
-        let q = 5 * hw;
-        let k = 3 * hw;
-        assert!(mask[q * seq + k] < -1e8);
-        // sink frame 0 is always visible
-        assert_eq!(mask[q * seq], 0.0);
-        // t=5 attending t=4 is inside window
-        assert_eq!(mask[q * seq + 4 * hw], 0.0);
+        let seq = 9 * hw;
+        // q in frame 6 (block 6-8, end = frame 9): keys from frame 5 on.
+        let q = 6 * hw;
+        assert_eq!(mask[q * seq + 5 * hw], 0.0);
+        assert!(mask[q * seq + 5 * hw - 1] < -1e8);
+        // No sink in the full-sequence mask.
+        assert!(mask[q * seq] < -1e8);
+        // Future frame in the same block is visible.
+        assert_eq!(mask[q * seq + 8 * hw], 0.0);
+        // With a 1-frame window the query still sees itself.
+        cfg.local_attn_size = 1;
+        let mask = causal_temporal_mask(&cfg, 3, 4, 4);
+        assert_eq!(mask[0], 0.0);
+        assert!(mask[1] < -1e8);
     }
 }

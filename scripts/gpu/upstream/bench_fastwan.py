@@ -1,6 +1,11 @@
 #!/usr/bin/env python3
 """Upstream FastVideo cell: FastWan2.1-T2V-1.3B DMD (3 steps), 480x832, 81 frames.
 
+Also the base Wan checkpoints on the US volume (pod.sh cell_fv_wan) at
+FastVideo's own sampling defaults: Wan2.1 T2V-14B, SF-Wan, and Wan2.2
+TI2V-5B (704x1280x121 text-to-video over the five prompts; ``--image`` for its
+image-to-video, which FastVideo resizes to the 480x832 area).
+
 Follows FastVideo's own examples/inference/basic/basic_dmd.py: VIDEO_SPARSE_ATTN
 with VSA_sparsity=0.8, the checkpoint's own SamplingParam (DMD timesteps
 1000/757/522, guidance 1), save_video=True. Methodology as bench_fastvideo.py
@@ -18,6 +23,13 @@ Wan2.1-T2V-14B (pod.sh fv-wan21-14b): dense FLASH_ATTN, UniPC 50 steps, CFG 5,
 same settings as our wan14 cells. FastVideo's registry maps this checkpoint to
 WanT2V720PConfig / preset wan_t2v_14b (720x1280, flow_shift 5.0); the 480p
 recipe is the one our matrix runs, so both sides are set explicitly.
+
+SF-Wan 1.3B (pod.sh fv-sfwan13, oracle.sh sfwan13): wlsaidhi/SFWan2.1-T2V-1.3B-
+Diffusers through FastVideo's WanCausalDMDPipeline at its own defaults
+(SelfForcingWanT2V480PConfig: DMD steps 1000/750/500/250 warped by the
+checkpoint's SelfForcingFlowMatchScheduler, 3-frame blocks through the KV
+cache), dense FLASH_ATTN, 480x832, 81 frames. ``--no-warmup`` (the oracle)
+skips the excluded warm-up request so the dump hooks see the first one.
 
 The weights on our volume are FastVideo/FastWan2.1-T2V-1.3B-Diffusers under a
 different directory name; FastVideo resolves the pipeline config by the
@@ -51,6 +63,14 @@ SCHEDULER = {
 }
 
 
+# wlsaidhi/SFWan2.1-T2V-1.3B-Diffusers scheduler/scheduler_config.json (Hub main).
+SF_SCHEDULER = {
+    "_class_name": "SelfForcingFlowMatchScheduler", "_diffusers_version": "0.33.0.dev0",
+    "num_inference_steps": 1000, "shift": 5.0, "sigma_min": 0.0, "extra_one_step": True,
+    "training": True,
+}
+
+
 def stage_times(li) -> dict:
     stages = getattr(li, "stages", None) or {}
     out = {}
@@ -76,6 +96,7 @@ def main() -> int:
                     help="the checkpoint's Hub short name (FastVideo resolves its config by it)")
     ap.add_argument("--repeats", type=int, default=3)
     ap.add_argument("--warmup-seed", type=int, default=999)
+    ap.add_argument("--no-warmup", action="store_true", help="no excluded warm-up request (the oracle)")
     ap.add_argument("--height", type=int, default=480)
     ap.add_argument("--width", type=int, default=832)
     ap.add_argument("--num-frames", type=int, default=81)
@@ -86,6 +107,7 @@ def main() -> int:
     ap.add_argument("--vsa-sparsity", type=float, default=0.8)
     ap.add_argument("--attention", default="VIDEO_SPARSE_ATTN")
     ap.add_argument("--text-encoder-cpu-offload", action="store_true")
+    ap.add_argument("--image", help="first frame for image-to-video (Wan 2.2 TI2V: SamplingParam.image_path)")
     a = ap.parse_args()
     out = Path(a.out)
     out.mkdir(parents=True, exist_ok=True)
@@ -111,6 +133,10 @@ def main() -> int:
             (view / "scheduler").mkdir()
             (view / "scheduler" / "scheduler_config.json").write_text(json.dumps(SCHEDULER, indent=2))
             res["scheduler_config"] = "written (Hub FastVideo/FastWan2.1-T2V-1.3B-Diffusers scheduler/)"
+        if not (view / "scheduler").exists() and a.hf_name.startswith("SFWan2.1"):
+            (view / "scheduler").mkdir()
+            (view / "scheduler" / "scheduler_config.json").write_text(json.dumps(SF_SCHEDULER, indent=2))
+            res["scheduler_config"] = "written (Hub wlsaidhi/SFWan2.1-T2V-1.3B-Diffusers scheduler/)"
         model = str(view)
         if a.prompts:
             spec = json.loads(Path(a.prompts).read_text())
@@ -148,6 +174,8 @@ def main() -> int:
                     sp.num_inference_steps = a.steps
                 if a.guidance_scale is not None:
                     sp.guidance_scale = a.guidance_scale
+                if a.image:
+                    sp.image_path = str(Path(a.image).resolve())
                 t = time.perf_counter()
                 r = gen.generate_video(prompt, sampling_param=sp, output_path=str(path), save_video=True)
                 wall = time.perf_counter() - t
@@ -165,9 +193,13 @@ def main() -> int:
                     "save_s": pick(st, "save"),
                     "steps": getattr(sp, "num_inference_steps", None),
                     "guidance_scale": getattr(sp, "guidance_scale", None),
+                    "negative_prompt": getattr(sp, "negative_prompt", None),
+                    "fps": getattr(sp, "fps", None),
+                    "image_path": getattr(sp, "image_path", None),
                 }
 
-            res["warmup"] = one(prompts[0]["prompt"], a.warmup_seed, out / "warmup")
+            if not a.no_warmup:
+                res["warmup"] = one(prompts[0]["prompt"], a.warmup_seed, out / "warmup")
             for p in prompts:
                 runs = [one(p["prompt"], int(p.get("seed", 1024)), out / p["name"] / f"run_{i + 1:02d}") for i in range(a.repeats)]
                 res["runs"].append({"name": p["name"], "seed": p.get("seed"), "runs": runs})

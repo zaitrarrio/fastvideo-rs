@@ -280,6 +280,12 @@ gate_cells() {
       offs+=(--off-compare "$f")
     done
   fi
+  # A pair whose cells did not run (FV_CELLS subset, skipped weights) has
+  # nothing to gate; a gate there only logs a failure about missing files.
+  if [[ ! -f "$RUNS/$base/benchmark.json" || ! -f "$RUNS/$cand/benchmark.json" ]]; then
+    log "skip gate $tag (benchmark.json missing)"
+    return 0
+  fi
   local rc
   set +e
   "$BIN" --out "$dir" --tag "$tag" gate --baseline "$RUNS/$base" --candidate "$RUNS/$cand" \
@@ -349,6 +355,7 @@ oracle_run() {
   shift 2
   local out=(--clip-dir "$RUNS/$cell/frames" --adaln-cache "$RUNS/oracle-$target-adaln.cache")
   [[ "$target" == ltx25-* ]] && out=(--clip "$RUNS/$cell/frames")
+  [[ "$target" == sfwan* ]] && out=(--clip-dir "$RUNS/$cell/frames")
   rm -rf "$dump"
   gated_cell "$cell" "$wcell" env "${envs[@]}" FASTVIDEO_DUMP_DIR="$dump" "$@" "${cmd[@]}" "${out[@]}"
 }
@@ -370,6 +377,16 @@ nvidia-smi -L | tee -a "$LOG"
 nvidia-smi --query-gpu=name,memory.total,driver_version --format=csv,noheader | tee -a "$LOG"
 
 case "$FAMILY" in
+  sfwan)
+    # SF-Wan 1.3B on one pod: the oracle diff against FastVideo's dump (when
+    # FV_ORACLE_URL serves one), then the wan family's SF-Wan cells and the
+    # causal kernel checks.
+    if [[ -n "${FV_ORACLE_URL:-}" ]]; then
+      FV_RUNS_DIR="$RUNS" FV_ORACLE_TARGETS="${FV_ORACLE_TARGETS:-sfwan13}" bash "${BASH_SOURCE[0]}" oracle || true
+    fi
+    FV_RUNS_DIR="$RUNS" FV_CELLS="${FV_SFWAN_CELLS:-kernels-wan sfwan13-81f-flash sfwan13-81f-composed sfwan13-81f-wholeclip sfwan13-81f-fullvae}" \
+      bash "${BASH_SOURCE[0]}" wan || true
+    ;;
   headline)
     # The headline configurations on one pod (a new GPU type, one run):
     # cells borrowed from other families, all written into this run dir.
@@ -574,7 +591,7 @@ case "$FAMILY" in
     # The distilled presets decode through TAEHV when taew2_1 is found
     # (FASTVIDEO_TAE_DIR): fetch it onto the container disk once.
     TAEW="$TAE/taew2_1.safetensors"
-    if [[ ! -f "$TAEW" ]]; then
+    if [[ ! -f "$TAEW" || ! -f "$TAE/taew2_2.safetensors" ]]; then
       bash "$(dirname "${BASH_SOURCE[0]}")/fetch_taehv.sh" "$TAE" >>"$RUNS/tae-fetch.log" 2>&1 \
         || log "WARN: taew2_1 fetch failed (tae-fetch.log); distilled cells decode with the Wan VAE"
     fi
@@ -619,11 +636,12 @@ case "$FAMILY" in
       compare_cells wan13-fuse "$arm"
       gate_cells wan13-fuse "$arm" lossy
     done
-    # SF-Wan 1.3B (block-causal self-attention over the whole clip): 4 DMD
-    # steps from 1000, shift 5, guidance 1. The masked flash kernel against
-    # the path it replaces (FASTVIDEO_WAN_CAUSAL_FLASH=0: the [S, S] mask
-    # through sdpa_composed, f32 scores), at 33 frames where the composed
-    # path's two [12, S, S] f32 buffers fit; 81 frames runs flash only.
+    # SF-Wan 1.3B as FastVideo generates it: 3-frame blocks through the KV
+    # cache, 4 DMD steps (1000/750/500/250 warped by the Self-Forcing
+    # scheduler, shift 5), guidance 1, 480x832, 81 frames. The block
+    # attention on the flash kernel (default) against its composed
+    # reference (FASTVIDEO_WAN_CAUSAL_FLASH=0: f32 scores and softmax), and
+    # the whole-clip masked path (FASTVIDEO_WAN_CAUSAL_AR=0).
     sf_common=(
       --weights "$W/sfwan21-1.3b"
       --preset sf_wan_t2v_1_3b
@@ -640,11 +658,12 @@ case "$FAMILY" in
       gated_cell "$name" sfwan21-1.3b env "$@" \
         "$BIN" --mode fast wan gen "${sf_common[@]}" --num-frames "$frames" --clip-dir "$RUNS/$name/frames"
     }
-    sf_arm sfwan13-33f-composed 33 FASTVIDEO_WAN_CAUSAL_FLASH=0
-    sf_arm sfwan13-33f-flash 33 FASTVIDEO_WAN_CAUSAL_FLASH=1
     sf_arm sfwan13-81f-flash 81 FASTVIDEO_WAN_CAUSAL_FLASH=1
-    compare_cells sfwan13-33f-composed sfwan13-33f-flash
-    gate_cells sfwan13-33f-composed sfwan13-33f-flash lossy
+    sf_arm sfwan13-81f-composed 81 FASTVIDEO_WAN_CAUSAL_FLASH=0
+    sf_arm sfwan13-81f-wholeclip 81 FASTVIDEO_WAN_CAUSAL_AR=0
+    compare_cells sfwan13-81f-composed sfwan13-81f-flash
+    gate_cells sfwan13-81f-composed sfwan13-81f-flash lossy
+    compare_cells sfwan13-81f-flash sfwan13-81f-wholeclip
     # Base Wan2.2 TI2V-5B (704x1280x121) and Wan2.1 T2V-14B (480x832x81),
     # UniPC with guidance 5 over 12 steps (not the 50-step official recipe:
     # an A/B of the kernel arms, same schedule on every arm). f32act is the
@@ -744,16 +763,60 @@ case "$FAMILY" in
       compare_cells wan14 "wan14-$arm"
       gate_cells wan14 "wan14-$arm" lossy
     done
+    # ---- Wan2.2 TI2V-5B: the checkpoint's recommended recipe (FastVideo
+    # WAN_2_2_TI2V_5B preset / Diffusers model card): 704x1280, 121 frames at
+    # 24 fps, 50 UniPC steps, CFG 5, flow shift 5 (scheduler_config.json),
+    # FastVideo's Chinese negative prompt. Warm, the five prompts of
+    # prompts-eval.json (FV_PROMPTS=5), the full Wan 2.2 VAE.
+    wan_neg_cn="色调艳丽，过曝，静态，细节模糊不清，字幕，风格，作品，画作，画面，静止，整体发灰，最差质量，低质量，JPEG压缩残留，丑陋的，残缺的，多余的手指，画得不好的手部，画得不好的脸部，畸形的，毁容的，形态畸形的肢体，手指融合，静止不动的画面，杂乱的背景，三条腿，背景人很多，倒着走"
+    fixtures="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/fixtures"
+    ti2v=(--weights "$W/wan22-ti2v-5b" --preset wan_2_2_ti2v_5b --unipc --steps 50 --guidance 5.0
+      --flow-shift 5.0 --fps 24 --negative "$wan_neg_cn" --seed "$SEED" --warm)
     gated_cell wan5b wan22-ti2v-5b \
-      "$BIN" --mode fast wan gen --weights "$W/wan22-ti2v-5b" --preset wan_2_2_ti2v_5b --unipc \
-        --steps 50 --guidance 5.0 --flow-shift 5.0 --height 704 --width 1280 --num-frames 121 --fps 24 \
-        "${one[@]}" --clip-dir "$RUNS/wan5b/frames"
+      "$BIN" --mode fast wan gen "${ti2v[@]}" --height 704 --width 1280 --num-frames 121 \
+        --prompt "$PROMPT" "${PROMPT_ARGS[@]}" --clip-dir "$RUNS/wan5b/frames"
+    # TAEHV (taew2_2, opt-in for the base checkpoint) on the same recipe.
+    gated_cell wan5b-taehv wan22-ti2v-5b \
+      env FASTVIDEO_WAN_VAE=taehv \
+      "$BIN" --mode fast wan gen "${ti2v[@]}" --height 704 --width 1280 --num-frames 121 \
+        --prompt "$PROMPT" "${PROMPT_ARGS[@]}" --clip-dir "$RUNS/wan5b-taehv/frames"
+    compare_cells wan5b wan5b-taehv
+    # Image-to-video: the 832x480 fixture pinned to latent frame 0 (its
+    # tokens at timestep 0). 480x832 because FastVideo resizes a TI2V image to
+    # the 480x832 area and generates at that size; one prompt.
+    ti2v_prompt="Aerial drone shot of a tropical beach: turquoise sea waves roll in and break into white foam on the sand, the camera glides slowly forward along the shoreline, bright sunny day."
+    gated_cell wan5b-i2v wan22-ti2v-5b \
+      "$BIN" --mode fast wan gen "${ti2v[@]}" --height 480 --width 832 --num-frames 121 \
+        --image "$fixtures/ti2v-beach-832x480.jpg" --prompt "$ti2v_prompt" \
+        --clip-dir "$RUNS/wan5b-i2v/frames"
     gated_cell wan5b-easycache wan22-ti2v-5b \
       env FASTVIDEO_WAN_SOL_CACHE=easycache \
-      "$BIN" --mode fast wan gen --weights "$W/wan22-ti2v-5b" --preset wan_2_2_ti2v_5b --unipc \
-        --steps 50 --guidance 5.0 --flow-shift 5.0 --height 704 --width 1280 --num-frames 121 --fps 24 \
-        "${one[@]}" --clip-dir "$RUNS/wan5b-easycache/frames"
+      "$BIN" --mode fast wan gen "${ti2v[@]}" --height 704 --width 1280 --num-frames 121 \
+        --prompt "$PROMPT" "${PROMPT_ARGS[@]}" --clip-dir "$RUNS/wan5b-easycache/frames"
     compare_cells wan5b wan5b-easycache
+    # Module parity against Diffusers (docs/oracle.md "Wan 2.2 TI2V-5B"):
+    # the reference dump of the upstream pod's oracle:wan22-ti2v step
+    # (FV_ORACLE_URL), then `wan oracle` (VAE encode/decode, the t2v and
+    # i2v DiT forwards) in the production mode and the VAE again in exact
+    # f32 math, each diffed with compare-dumps.
+    if [[ -z "${FV_CELLS:-}" || " $FV_CELLS " == *" wan5b-oracle "* ]]; then
+      target=wan22-ti2v
+      ref="$SCRATCH/oracle-ref/$target"
+      if oracle_fetch "$target" "$ref"; then
+        gated_cell wan5b-oracle wan22-ti2v-5b \
+          "$BIN" --mode fast --keep-going wan oracle --weights "$W/wan22-ti2v-5b" --reference "$ref/dump" \
+            --dump-out "$RUNS/wan5b-oracle-dump" --taehv "$TAE/taew2_2.safetensors"
+        oracle_diff wan5b-oracle-diff "$ref/dump" "$RUNS/wan5b-oracle-dump"
+        gated_cell wan5b-oracle-exact wan22-ti2v-5b \
+          "$BIN" --mode exact --keep-going wan oracle --weights "$W/wan22-ti2v-5b" --reference "$ref/dump" \
+            --dump-out "$RUNS/wan5b-oracle-exact-dump" --skip-dit
+        oracle_diff wan5b-oracle-exact-diff "$ref/dump" "$RUNS/wan5b-oracle-exact-dump"
+        rm -rf "$ref" "$RUNS/wan5b-oracle-dump" "$RUNS/wan5b-oracle-exact-dump"
+      else
+        mkdir -p "$RUNS/wan5b-oracle"
+        write_json "$RUNS/wan5b-oracle/summary.json" '{"cell":"wan5b-oracle","exit":null,"skipped":"reference dump unavailable"}'
+      fi
+    fi
     # SF-Wan 81 frames: TAEHV is the distilled default (sfwan13-81f-flash);
     # the full Wan VAE opt-out on the same recipe, for the decoder A/B.
     sf_arm sfwan13-81f-fullvae 81 FASTVIDEO_WAN_VAE=full
@@ -1080,6 +1143,30 @@ case "$FAMILY" in
     done
     ;;
   precision)
+    if [[ "${FV_PRECISION_ARM:-all}" == ltx-nvfp4 ]]; then
+      # NVFP4 video FFN (sol-engine nvfp4_ffn.py; profile
+      # ltx2/ltx25_distill_sol_nvfp4) against the bf16 default
+      # (ltx2/ltx25_distill_sol): Sol stage 2, same prompt / seed, warm
+      # process, every run encoding its prompt (no text cache, so both arms
+      # feed the DiT the same contexts). FV_NVFP4_WORKLOADS picks workloads.
+      for wl in ${FV_NVFP4_WORKLOADS:-4k5s 1080p20s}; do
+        for v in bf16 nvfp4; do
+          prof=ltx2/ltx25_distill_sol
+          [[ "$v" == nvfp4 ]] && prof=ltx2/ltx25_distill_sol_nvfp4
+          gated_cell "ltx25-$wl-sol-$v" ltx25-two-stage \
+            "$BIN" --techniques "$prof" --mode fast ltx2 gen --model-version 2.5 \
+              --weights "$W/ltx25" --dit "$W/ltx25" --workload "$wl" \
+              --prompt "$PROMPT" --seed "$SEED" --two-stage --text streamed --warm \
+              --no-text-cache --clip "$RUNS/ltx25-$wl-sol-$v/frames" "${PROMPT_ARGS[@]}"
+        done
+        compare_cells "ltx25-$wl-sol-bf16" "ltx25-$wl-sol-nvfp4"
+        gate_cells "ltx25-$wl-sol-bf16" "ltx25-$wl-sol-nvfp4" lossy
+        rm -rf "$RUNS/ltx25-$wl-sol-bf16/frames" "$RUNS/ltx25-$wl-sol-nvfp4/frames"
+      done
+      log "matrix done"
+      write_json "$RUNS/done.json" "$(printf '{"family":"%s","ended":"%s"}' "$FAMILY" "$(date -u +%Y-%m-%dT%H:%M:%SZ)")"
+      exit 0
+    fi
     # Re-measure the precision switches on the current build against the
     # baselines of the fastvideo / rtx5090 families (same prompt, seed, warm).
     h3_common=(
@@ -1693,6 +1780,13 @@ case "$FAMILY" in
           [[ "$target" == *-dense ]] && arm=(--dense-stage2)
           cmd=("$BIN" --mode fast ltx2 gen --model-version 2.5 --weights "$W/ltx25" --dit "$W/ltx25"
             "${geo[@]}" "${arm[@]}" "${ltx_oracle[@]}") ;;
+        sfwan13)
+          # FastVideo SF-Wan 1.3B at its defaults; the full Wan VAE (the
+          # reference decodes with it) for the frame metrics.
+          wcell=sfwan21-1.3b
+          envs+=(FASTVIDEO_WAN_VAE=full)
+          cmd=("$BIN" --mode fast wan gen --weights "$W/sfwan21-1.3b" --preset sf_wan_t2v_1_3b
+            --steps 4 --flow-shift 5 --prompt "$PROMPT" --seed "$SEED") ;;
         *) log "unknown oracle target $target"; continue ;;
       esac
       oracle_run "oracle-$target" "$ours"
@@ -1700,7 +1794,7 @@ case "$FAMILY" in
       # The bf16 noise floor (FV_ORACLE_F32, default on for H3): ours with f32
       # activations against the reference, and our bf16 run against our f32
       # run -- how far bf16 rounding alone moves the same pipeline.
-      if [[ "${FV_ORACLE_F32:-auto}" == 1 || ( "${FV_ORACLE_F32:-auto}" == auto && "$target" == fasth3-* ) ]]; then
+      if [[ "${FV_ORACLE_F32:-auto}" == 1 || ( "${FV_ORACLE_F32:-auto}" == auto && ( "$target" == fasth3-* || "$target" == sfwan* ) ) ]]; then
         oracle_run "oracle-$target-f32" "$ours-f32" FASTVIDEO_BF16_ACT=0 FASTVIDEO_H3_QUANT=off
         oracle_diff "oracle-$target-f32-diff" "$ref/dump" "$ours-f32"
         oracle_diff "oracle-$target-bf16-vs-f32" "$ours-f32" "$ours"
@@ -1713,6 +1807,29 @@ case "$FAMILY" in
         oracle_run "oracle-$target-owntext" "$ours-owntext" FASTVIDEO_INJECT_TEXT=0
         oracle_diff "oracle-$target-owntext-diff" "$ref/dump" "$ours-owntext"
         oracle_diff "oracle-$target-owntext-vs-injected" "$ours" "$ours-owntext"
+      fi
+      if [[ "$target" == sfwan* ]]; then
+        # Frames: the reference's mp4 (its full VAE, bf16 decode, then its
+        # encoder) against our PNG frames; our own mp4 against our PNGs is
+        # the codec floor of that comparison.
+        for d in "$ref/frames" "$RUNS/oracle-$target/mp4frames"; do mkdir -p "$d"; done
+        if [[ -f "$ref/dump/ref.mp4" ]]; then
+          ffmpeg -loglevel error -y -i "$ref/dump/ref.mp4" -start_number 0 "$ref/frames/frame-%03d.png" || true
+        fi
+        m="$(ls "$RUNS/oracle-$target"/frames/*.mp4 2>/dev/null | head -1)"
+        [[ -n "$m" ]] && ffmpeg -loglevel error -y -i "$m" -start_number 0 "$RUNS/oracle-$target/mp4frames/frame-%03d.png"
+        compare_one "oracle-$target-frames-vs-ref" "$ref/frames" "$RUNS/oracle-$target/frames"
+        compare_one "oracle-$target-codec-floor" "$RUNS/oracle-$target/frames" "$RUNS/oracle-$target/mp4frames"
+        # Before the fix: the whole clip at once under the per-frame mask
+        # (the path this port ran before), same injected inputs.
+        oracle_run "oracle-$target-legacy" "$ours-legacy" FASTVIDEO_WAN_CAUSAL_AR=0 FASTVIDEO_WAN_CAUSAL_FPB=1
+        oracle_diff "oracle-$target-legacy-diff" "$ref/dump" "$ours-legacy"
+        compare_one "oracle-$target-legacy-frames-vs-ref" "$ref/frames" "$RUNS/oracle-$target-legacy/frames"
+        # The composed reference path of the KV-window attention.
+        oracle_run "oracle-$target-composed" "$ours-composed" FASTVIDEO_WAN_CAUSAL_FLASH=0
+        oracle_diff "oracle-$target-composed-diff" "$ref/dump" "$ours-composed"
+        oracle_diff "oracle-$target-flash-vs-composed" "$ours-composed" "$ours"
+        rm -rf "$ours-legacy" "$ours-composed"
       fi
       # The dumps are hundreds of MB each; the report keeps the numbers.
       rm -rf "$ours" "$ours-f32" "$ours-owntext" "$ref"

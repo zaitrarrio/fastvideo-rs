@@ -1,0 +1,787 @@
+/opt/fvrs-dev/scripts/gpu/upstream/../../../crates/fastvideo-cudarc/src/wan/kernels.cu(2260): warning #550-D: variable "h" was set but never used
+      int h = t % heads;
+          ^
+
+Remark: The warnings can be suppressed with "-diag-suppress <warning-number>"
+
+/opt/fvrs-dev/scripts/gpu/upstream/../../../crates/fastvideo-cudarc/src/wan/kernels.cu(2260): warning #550-D: variable "h" was set but never used
+      int h = t % heads;
+          ^
+
+Remark: The warnings can be suppressed with "-diag-suppress <warning-number>"
+
+/opt/fvrs-dev/scripts/gpu/upstream/attn_dc_bench.cu(241): warning #1556-D: name linkage conflicts with previous declaration of variable "dc_smem" (declared at line 487 of /opt/fvrs-dev/scripts/gpu/upstream/../../../crates/fastvideo-cudarc/src/wan/attn_dc.cu)
+      extern __attribute__((shared)) __attribute__((aligned(1024))) unsigned char dc_smem[];
+                                                                                  ^
+
+ptxas info    : 24 bytes gmem
+ptxas info    : Compiling entry function '_Z10probe_dc9011DcTensorMapS_S_PKtPfS2_i' for 'sm_100a'
+ptxas info    : Function properties for _Z10probe_dc9011DcTensorMapS_S_PKtPfS2_i
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 4 registers, used 0 barriers
+ptxas info    : Compile time = 2.130 ms
+ptxas info    : Compiling entry function '_Z11probe_dc10011DcTensorMapS_S_PKtPfS2_i' for 'sm_100a'
+ptxas info    : Function properties for _Z11probe_dc10011DcTensorMapS_S_PKtPfS2_i
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 77 registers, used 1 barriers
+ptxas info    : Compile time = 58.581 ms
+ptxas info    : Compiling entry function 'fa_dc90_fwd_d128_nsplit' for 'sm_100a'
+ptxas info    : Function properties for fa_dc90_fwd_d128_nsplit
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 4 registers, used 0 barriers
+ptxas info    : Compile time = 0.890 ms
+ptxas info    : Compiling entry function 'fa_dc90_fwd_d128' for 'sm_100a'
+ptxas info    : Function properties for fa_dc90_fwd_d128
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 4 registers, used 0 barriers
+ptxas info    : Compile time = 0.778 ms
+ptxas info    : Compiling entry function 'fa_dc100_fwd_d128_nsplit' for 'sm_100a'
+ptxas info    : Function properties for fa_dc100_fwd_d128_nsplit
+    8 bytes stack frame, 16 bytes spill stores, 8 bytes spill loads
+ptxas info    : Used 168 registers, used 2 barriers, 8 bytes cumulative stack size
+ptxas info    : Compile time = 190.402 ms
+ptxas info    : Compiling entry function 'fa_dc100_fwd_d128' for 'sm_100a'
+ptxas info    : Function properties for fa_dc100_fwd_d128
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 168 registers, used 2 barriers
+ptxas info    : Compile time = 166.916 ms
+ptxas info    : Compiling entry function 'wan_qk_norm_rope16' for 'sm_100a'
+ptxas info    : Function properties for wan_qk_norm_rope16
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 30 registers, used 1 barriers
+ptxas info    : Compile time = 36.190 ms
+ptxas info    : Compiling entry function 'wan_ln' for 'sm_100a'
+ptxas info    : Function properties for wan_ln
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 32 registers, used 1 barriers
+ptxas info    : Compile time = 27.621 ms
+ptxas info    : Compiling entry function 'wan_res_gate' for 'sm_100a'
+ptxas info    : Function properties for wan_res_gate
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 26 registers, used 0 barriers
+ptxas info    : Compile time = 15.074 ms
+ptxas info    : Compiling entry function 'wan_res_ln' for 'sm_100a'
+ptxas info    : Function properties for wan_res_ln
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 32 registers, used 1 barriers
+ptxas info    : Compile time = 49.876 ms
+ptxas info    : Compiling entry function 'fvf_split_heads_rows' for 'sm_100a'
+ptxas info    : Function properties for fvf_split_heads_rows
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 32 registers, used 0 barriers
+ptxas info    : Compile time = 72.186 ms
+ptxas info    : Compiling entry function 'fvf_h3_gate_res_norm_mod' for 'sm_100a'
+ptxas info    : Function properties for fvf_h3_gate_res_norm_mod
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 32 registers, used 1 barriers
+ptxas info    : Compile time = 31.781 ms
+ptxas info    : Compiling entry function 'fvf_merge_heads_mx' for 'sm_100a'
+ptxas info    : Function properties for fvf_merge_heads_mx
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 25 registers, used 0 barriers
+ptxas info    : Compile time = 19.399 ms
+ptxas info    : Compiling entry function 'fvf_ltx_gate_merge' for 'sm_100a'
+ptxas info    : Function properties for fvf_ltx_gate_merge
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 27 registers, used 1 barriers
+ptxas info    : Compile time = 24.578 ms
+ptxas info    : Compiling entry function 'fvf_ltx_res_norm_mod' for 'sm_100a'
+ptxas info    : Function properties for fvf_ltx_res_norm_mod
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 21 registers, used 1 barriers
+ptxas info    : Compile time = 28.838 ms
+ptxas info    : Compiling entry function 'fvf_ltx_qk_norm_rope' for 'sm_100a'
+ptxas info    : Function properties for fvf_ltx_qk_norm_rope
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 30 registers, used 1 barriers
+ptxas info    : Compile time = 24.466 ms
+ptxas info    : Compiling entry function 'ltxv_out_unpatch' for 'sm_100a'
+ptxas info    : Function properties for ltxv_out_unpatch
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 28 registers, used 0 barriers
+ptxas info    : Compile time = 20.189 ms
+ptxas info    : Compiling entry function 'ltxv_d2s_bias' for 'sm_100a'
+ptxas info    : Function properties for ltxv_d2s_bias
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 34 registers, used 0 barriers
+ptxas info    : Compile time = 23.252 ms
+ptxas info    : Compiling entry function 'ltxv_latent_in' for 'sm_100a'
+ptxas info    : Function properties for ltxv_latent_in
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 26 registers, used 0 barriers
+ptxas info    : Compile time = 15.327 ms
+ptxas info    : Compiling entry function 'ltxv_norm_silu' for 'sm_100a'
+ptxas info    : Function properties for ltxv_norm_silu
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 61 registers, used 0 barriers
+ptxas info    : Compile time = 870.961 ms
+ptxas info    : Compiling entry function 'h3v_swiglu_bf16' for 'sm_100a'
+ptxas info    : Function properties for h3v_swiglu_bf16
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 23 registers, used 0 barriers
+ptxas info    : Compile time = 12.532 ms
+ptxas info    : Compiling entry function 'h3v_merge_heads_bf16' for 'sm_100a'
+ptxas info    : Function properties for h3v_merge_heads_bf16
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 24 registers, used 0 barriers
+ptxas info    : Compile time = 6.708 ms
+ptxas info    : Compiling entry function 'h3v_qkv_heads_bf16' for 'sm_100a'
+ptxas info    : Function properties for h3v_qkv_heads_bf16
+    16 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 40 registers, used 0 barriers, 16 bytes cumulative stack size, 4096 bytes smem
+ptxas info    : Compile time = 78.671 ms
+ptxas info    : Compiling entry function 'h3v_residual_norm_bf16' for 'sm_100a'
+ptxas info    : Function properties for h3v_residual_norm_bf16
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 32 registers, used 1 barriers
+ptxas info    : Compile time = 34.674 ms
+ptxas info    : Compiling entry function 'w8a8_dequantize' for 'sm_100a'
+ptxas info    : Function properties for w8a8_dequantize
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 15 registers, used 0 barriers
+ptxas info    : Compile time = 3.290 ms
+ptxas info    : Compiling entry function 'w8a8_quantize' for 'sm_100a'
+ptxas info    : Function properties for w8a8_quantize
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 17 registers, used 0 barriers
+ptxas info    : Compile time = 13.791 ms
+ptxas info    : Compiling entry function 'amax_abs_mixed' for 'sm_100a'
+ptxas info    : Function properties for amax_abs_mixed
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 28 registers, used 1 barriers
+ptxas info    : Compile time = 19.728 ms
+ptxas info    : Compiling entry function 'mxfp8_dequantize' for 'sm_100a'
+ptxas info    : Function properties for mxfp8_dequantize
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 20 registers, used 0 barriers
+ptxas info    : Compile time = 13.140 ms
+ptxas info    : Compiling entry function 'mxfp8_quantize' for 'sm_100a'
+ptxas info    : Function properties for mxfp8_quantize
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 24 registers, used 0 barriers
+ptxas info    : Compile time = 13.948 ms
+ptxas info    : Compiling entry function 'h3_swiglu_mx' for 'sm_100a'
+ptxas info    : Function properties for h3_swiglu_mx
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 32 registers, used 0 barriers
+ptxas info    : Compile time = 23.073 ms
+ptxas info    : Compiling entry function 'h3_qk_norm_rope' for 'sm_100a'
+ptxas info    : Function properties for h3_qk_norm_rope
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 31 registers, used 1 barriers
+ptxas info    : Compile time = 35.320 ms
+ptxas info    : Compiling entry function 'h3_gate_residual' for 'sm_100a'
+ptxas info    : Function properties for h3_gate_residual
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 16 registers, used 0 barriers
+ptxas info    : Compile time = 12.917 ms
+ptxas info    : Compiling entry function 'h3_res_gate_norm_mod' for 'sm_100a'
+ptxas info    : Function properties for h3_res_gate_norm_mod
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 36 registers, used 1 barriers
+ptxas info    : Compile time = 33.470 ms
+ptxas info    : Compiling entry function 'h3_norm_mod' for 'sm_100a'
+ptxas info    : Function properties for h3_norm_mod
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 32 registers, used 1 barriers
+ptxas info    : Compile time = 26.779 ms
+ptxas info    : Compiling entry function 'mx_rope_half' for 'sm_100a'
+ptxas info    : Function properties for mx_rope_half
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 24 registers, used 0 barriers
+ptxas info    : Compile time = 20.665 ms
+ptxas info    : Compiling entry function 'mx_block_copy' for 'sm_100a'
+ptxas info    : Function properties for mx_block_copy
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 16 registers, used 0 barriers
+ptxas info    : Compile time = 11.296 ms
+ptxas info    : Compiling entry function 'mx_gather_nd' for 'sm_100a'
+ptxas info    : Function properties for mx_gather_nd
+    96 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 34 registers, used 0 barriers, 96 bytes cumulative stack size
+ptxas info    : Compile time = 50.773 ms
+ptxas info    : Compiling entry function 'mx_merge_heads' for 'sm_100a'
+ptxas info    : Function properties for mx_merge_heads
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 28 registers, used 0 barriers
+ptxas info    : Compile time = 16.037 ms
+ptxas info    : Compiling entry function 'mx_split_heads' for 'sm_100a'
+ptxas info    : Function properties for mx_split_heads
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 28 registers, used 0 barriers
+ptxas info    : Compile time = 15.271 ms
+ptxas info    : Compiling entry function 'mx_residual_gate' for 'sm_100a'
+ptxas info    : Function properties for mx_residual_gate
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 26 registers, used 0 barriers
+ptxas info    : Compile time = 14.980 ms
+ptxas info    : Compiling entry function 'mx_ln_adaln_e' for 'sm_100a'
+ptxas info    : Function properties for mx_ln_adaln_e
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 32 registers, used 1 barriers
+ptxas info    : Compile time = 31.388 ms
+ptxas info    : Compiling entry function 'mx_layer_norm' for 'sm_100a'
+ptxas info    : Function properties for mx_layer_norm
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 23 registers, used 1 barriers
+ptxas info    : Compile time = 35.153 ms
+ptxas info    : Compiling entry function 'mx_rms_norm' for 'sm_100a'
+ptxas info    : Function properties for mx_rms_norm
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 17 registers, used 1 barriers
+ptxas info    : Compile time = 29.911 ms
+ptxas info    : Compiling entry function 'mx_swiglu' for 'sm_100a'
+ptxas info    : Function properties for mx_swiglu
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 18 registers, used 0 barriers
+ptxas info    : Compile time = 15.921 ms
+ptxas info    : Compiling entry function 'mx_unary' for 'sm_100a'
+ptxas info    : Function properties for mx_unary
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 16 registers, used 0 barriers
+ptxas info    : Compile time = 18.102 ms
+ptxas info    : Compiling entry function 'mx_binary' for 'sm_100a'
+ptxas info    : Function properties for mx_binary
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 20 registers, used 0 barriers
+ptxas info    : Compile time = 23.615 ms
+ptxas info    : Compiling entry function 'ltx_rope_rows' for 'sm_100a'
+ptxas info    : Function properties for ltx_rope_rows
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 16 registers, used 0 barriers
+ptxas info    : Compile time = 9.053 ms
+ptxas info    : Compiling entry function 'ltx_index_copy_rows' for 'sm_100a'
+ptxas info    : Function properties for ltx_index_copy_rows
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 18 registers, used 0 barriers
+ptxas info    : Compile time = 9.371 ms
+ptxas info    : Compiling entry function 'ltx_row_sumsq' for 'sm_100a'
+ptxas info    : Function properties for ltx_row_sumsq
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 22 registers, used 1 barriers, 1024 bytes smem
+ptxas info    : Compile time = 13.972 ms
+ptxas info    : Compiling entry function 'ltx_abs_diff_sums' for 'sm_100a'
+ptxas info    : Function properties for ltx_abs_diff_sums
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 32 registers, used 1 barriers, 4096 bytes smem
+ptxas info    : Compile time = 16.091 ms
+ptxas info    : Compiling entry function 'fill_hash_uniform' for 'sm_100a'
+ptxas info    : Function properties for fill_hash_uniform
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 12 registers, used 0 barriers
+ptxas info    : Compile time = 3.072 ms
+ptxas info    : Compiling entry function 'nvfp4_scales_swizzle' for 'sm_100a'
+ptxas info    : Function properties for nvfp4_scales_swizzle
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 18 registers, used 0 barriers
+ptxas info    : Compile time = 11.704 ms
+ptxas info    : Compiling entry function 'nvfp4_quantize_pack' for 'sm_100a'
+ptxas info    : Function properties for nvfp4_quantize_pack
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 72 registers, used 0 barriers
+ptxas info    : Compile time = 181.573 ms
+ptxas info    : Compiling entry function 'nvfp4_reconstruct' for 'sm_100a'
+ptxas info    : Function properties for nvfp4_reconstruct
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 69 registers, used 0 barriers
+ptxas info    : Compile time = 155.113 ms
+ptxas info    : Compiling entry function 'scatter_add_rows' for 'sm_100a'
+ptxas info    : Function properties for scatter_add_rows
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 16 registers, used 0 barriers
+ptxas info    : Compile time = 10.304 ms
+ptxas info    : Compiling entry function 'topk_last' for 'sm_100a'
+ptxas info    : Function properties for topk_last
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 40 registers, used 0 barriers
+ptxas info    : Compile time = 54.051 ms
+ptxas info    : Compiling entry function 'copy_f' for 'sm_100a'
+ptxas info    : Function properties for copy_f
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 8 registers, used 0 barriers
+ptxas info    : Compile time = 2.372 ms
+ptxas info    : Compiling entry function 'sigmoid_f' for 'sm_100a'
+ptxas info    : Function properties for sigmoid_f
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 15 registers, used 0 barriers
+ptxas info    : Compile time = 6.239 ms
+ptxas info    : Compiling entry function 'rope_real' for 'sm_100a'
+ptxas info    : Function properties for rope_real
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 24 registers, used 0 barriers
+ptxas info    : Compile time = 18.774 ms
+ptxas info    : Compiling entry function 'sol_split_combine' for 'sm_100a'
+ptxas info    : Function properties for sol_split_combine
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 40 registers, used 0 barriers
+ptxas info    : Compile time = 35.042 ms
+ptxas info    : Compiling entry function 'sol_mma_fwd2' for 'sm_100a'
+ptxas info    : Function properties for sol_mma_fwd2
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 200 registers, used 3 barriers, 34816 bytes smem
+ptxas info    : Compile time = 454.478 ms
+ptxas info    : Compiling entry function 'vsa_mma_attn_tma2' for 'sm_100a'
+ptxas info    : Function properties for vsa_mma_attn_tma2
+    16 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 214 registers, used 1 barriers, 16 bytes cumulative stack size
+ptxas info    : Compile time = 140.008 ms
+ptxas info    : Compiling entry function 'flash_mma_fwd2_causal_d64' for 'sm_100a'
+ptxas info    : Function properties for flash_mma_fwd2_causal_d64
+    8 bytes stack frame, 4 bytes spill stores, 4 bytes spill loads
+ptxas info    : Used 128 registers, used 1 barriers, 8 bytes cumulative stack size
+ptxas info    : Compile time = 112.394 ms
+ptxas info    : Compiling entry function 'flash_mma_fwd2_causal_d128' for 'sm_100a'
+ptxas info    : Function properties for flash_mma_fwd2_causal_d128
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 250 registers, used 1 barriers
+ptxas info    : Compile time = 163.401 ms
+ptxas info    : Compiling entry function 'flash_mma_fwd2_d64' for 'sm_100a'
+ptxas info    : Function properties for flash_mma_fwd2_d64
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 128 registers, used 1 barriers
+ptxas info    : Compile time = 69.655 ms
+ptxas info    : Compiling entry function 'flash_mma_fwd2_d128' for 'sm_100a'
+ptxas info    : Function properties for flash_mma_fwd2_d128
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 247 registers, used 1 barriers
+ptxas info    : Compile time = 112.231 ms
+ptxas info    : Compiling entry function 'sol_mma_fwd_x4f' for 'sm_100a'
+ptxas info    : Function properties for sol_mma_fwd_x4f
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 254 registers, used 1 barriers, 34816 bytes smem
+ptxas info    : Compile time = 271.021 ms
+ptxas info    : Compiling entry function 'sol_mma_fwd_x4' for 'sm_100a'
+ptxas info    : Function properties for sol_mma_fwd_x4
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 254 registers, used 1 barriers, 34816 bytes smem
+ptxas info    : Compile time = 305.085 ms
+ptxas info    : Compiling entry function 'sol_mma_fwd' for 'sm_100a'
+ptxas info    : Function properties for sol_mma_fwd
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 255 registers, used 1 barriers, 34816 bytes smem
+ptxas info    : Compile time = 390.236 ms
+ptxas info    : Compiling entry function 'sol_prep_q' for 'sm_100a'
+ptxas info    : Function properties for sol_prep_q
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 32 registers, used 1 barriers, 1024 bytes smem
+ptxas info    : Compile time = 36.526 ms
+ptxas info    : Compiling entry function 'sol_prep_kgram' for 'sm_100a'
+ptxas info    : Function properties for sol_prep_kgram
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 32 registers, used 1 barriers, 33792 bytes smem
+ptxas info    : Compile time = 34.384 ms
+ptxas info    : Compiling entry function 'sol_prep_kstats' for 'sm_100a'
+ptxas info    : Function properties for sol_prep_kstats
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 25 registers, used 0 barriers
+ptxas info    : Compile time = 15.995 ms
+ptxas info    : Compiling entry function 'sol_prep_kv' for 'sm_100a'
+ptxas info    : Function properties for sol_prep_kv
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 32 registers, used 0 barriers
+ptxas info    : Compile time = 31.249 ms
+ptxas info    : Compiling entry function 'sol_mma_attn_partials' for 'sm_100a'
+ptxas info    : Function properties for sol_mma_attn_partials
+    16 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 255 registers, used 1 barriers, 16 bytes cumulative stack size
+ptxas info    : Compile time = 149.593 ms
+ptxas info    : Compiling entry function 'sol_pisa_first_order' for 'sm_100a'
+ptxas info    : Function properties for sol_pisa_first_order
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 32 registers, used 0 barriers
+ptxas info    : Compile time = 12.876 ms
+ptxas info    : Compiling entry function 'sol_global_h_bar' for 'sm_100a'
+ptxas info    : Function properties for sol_global_h_bar
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 36 registers, used 0 barriers
+ptxas info    : Compile time = 30.020 ms
+ptxas info    : Compiling entry function 'sol_normalize_partials' for 'sm_100a'
+ptxas info    : Function properties for sol_normalize_partials
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 16 registers, used 0 barriers
+ptxas info    : Compile time = 9.546 ms
+ptxas info    : Compiling entry function 'sol_lse_merge' for 'sm_100a'
+ptxas info    : Function properties for sol_lse_merge
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 18 registers, used 0 barriers
+ptxas info    : Compile time = 12.681 ms
+ptxas info    : Compiling entry function 'sol_lse_combine' for 'sm_100a'
+ptxas info    : Function properties for sol_lse_combine
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 19 registers, used 0 barriers
+ptxas info    : Compile time = 6.387 ms
+ptxas info    : Compiling entry function 'sol_coarse_partials' for 'sm_100a'
+ptxas info    : Function properties for sol_coarse_partials
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 28 registers, used 1 barriers
+ptxas info    : Compile time = 12.978 ms
+ptxas info    : Compiling entry function 'sol_fine_partials' for 'sm_100a'
+ptxas info    : Function properties for sol_fine_partials
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 30 registers, used 1 barriers
+ptxas info    : Compile time = 14.374 ms
+ptxas info    : Compiling entry function 'sol_exact_lists' for 'sm_100a'
+ptxas info    : Function properties for sol_exact_lists
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 30 registers, used 0 barriers
+ptxas info    : Compile time = 26.300 ms
+ptxas info    : Compiling entry function 'sol_diag_threshold' for 'sm_100a'
+ptxas info    : Function properties for sol_diag_threshold
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 32 registers, used 1 barriers
+ptxas info    : Compile time = 30.278 ms
+ptxas info    : Compiling entry function 'sol_tile_sum' for 'sm_100a'
+ptxas info    : Function properties for sol_tile_sum
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 34 registers, used 0 barriers
+ptxas info    : Compile time = 19.828 ms
+ptxas info    : Compiling entry function 'ln_adaln_e_rope_half' for 'sm_100a'
+ptxas info    : Function properties for ln_adaln_e_rope_half
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 32 registers, used 1 barriers
+ptxas info    : Compile time = 47.956 ms
+ptxas info    : Compiling entry function 'nvfp4_kv_dequant' for 'sm_100a'
+ptxas info    : Function properties for nvfp4_kv_dequant
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 20 registers, used 0 barriers
+ptxas info    : Compile time = 12.103 ms
+ptxas info    : Compiling entry function 'nvfp4_w4a4_gemm' for 'sm_100a'
+ptxas info    : Function properties for nvfp4_w4a4_gemm
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 32 registers, used 1 barriers, 2048 bytes smem
+ptxas info    : Compile time = 29.509 ms
+ptxas info    : Compiling entry function 'affine_w16_gemm' for 'sm_100a'
+ptxas info    : Function properties for affine_w16_gemm
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 32 registers, used 1 barriers, 8192 bytes smem
+ptxas info    : Compile time = 39.787 ms
+ptxas info    : Compiling entry function 'affine_dequant' for 'sm_100a'
+ptxas info    : Function properties for affine_dequant
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 30 registers, used 0 barriers
+ptxas info    : Compile time = 17.737 ms
+ptxas info    : Compiling entry function 'affine_quantize' for 'sm_100a'
+ptxas info    : Function properties for affine_quantize
+    128 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 40 registers, used 0 barriers, 128 bytes cumulative stack size
+ptxas info    : Compile time = 76.911 ms
+ptxas info    : Compiling entry function 'fp8_rows_dequant_bf16' for 'sm_100a'
+ptxas info    : Function properties for fp8_rows_dequant_bf16
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 18 registers, used 0 barriers
+ptxas info    : Compile time = 10.241 ms
+ptxas info    : Compiling entry function 'fp8_rows_quantize' for 'sm_100a'
+ptxas info    : Function properties for fp8_rows_quantize
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 18 registers, used 0 barriers
+ptxas info    : Compile time = 14.695 ms
+ptxas info    : Compiling entry function 'fp8_row_scales' for 'sm_100a'
+ptxas info    : Function properties for fp8_row_scales
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 26 registers, used 1 barriers
+ptxas info    : Compile time = 14.382 ms
+ptxas info    : Compiling entry function 'group_norm_apply' for 'sm_100a'
+ptxas info    : Function properties for group_norm_apply
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 28 registers, used 0 barriers
+ptxas info    : Compile time = 36.967 ms
+ptxas info    : Compiling entry function 'group_norm_stats' for 'sm_100a'
+ptxas info    : Function properties for group_norm_stats
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 30 registers, used 1 barriers
+ptxas info    : Compile time = 23.063 ms
+ptxas info    : Compiling entry function 'pad_axis' for 'sm_100a'
+ptxas info    : Function properties for pad_axis
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 28 registers, used 0 barriers
+ptxas info    : Compile time = 19.215 ms
+ptxas info    : Compiling entry function 'repeat_kv' for 'sm_100a'
+ptxas info    : Function properties for repeat_kv
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 28 registers, used 0 barriers
+ptxas info    : Compile time = 17.485 ms
+ptxas info    : Compiling entry function 'apply_rotary_bshd' for 'sm_100a'
+ptxas info    : Function properties for apply_rotary_bshd
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 26 registers, used 0 barriers
+ptxas info    : Compile time = 17.243 ms
+ptxas info    : Compiling entry function 'rope_half' for 'sm_100a'
+ptxas info    : Function properties for rope_half
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 24 registers, used 0 barriers
+ptxas info    : Compile time = 17.795 ms
+ptxas info    : Compiling entry function 'snake_beta' for 'sm_100a'
+ptxas info    : Function properties for snake_beta
+    32 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 20 registers, used 0 barriers, 32 bytes cumulative stack size
+ptxas info    : Compile time = 19.081 ms
+ptxas info    : Compiling entry function 'leaky_relu' for 'sm_100a'
+ptxas info    : Function properties for leaky_relu
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 10 registers, used 0 barriers
+ptxas info    : Compile time = 2.374 ms
+ptxas info    : Compiling entry function 'gelu_erf' for 'sm_100a'
+ptxas info    : Function properties for gelu_erf
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 14 registers, used 0 barriers
+ptxas info    : Compile time = 3.538 ms
+ptxas info    : Compiling entry function 'pack_rgb_u8' for 'sm_100a'
+ptxas info    : Function properties for pack_rgb_u8
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 16 registers, used 0 barriers
+ptxas info    : Compile time = 9.968 ms
+ptxas info    : Compiling entry function 'e4m3_scale_from_amax' for 'sm_100a'
+ptxas info    : Function properties for e4m3_scale_from_amax
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 13 registers, used 0 barriers
+ptxas info    : Compile time = 5.243 ms
+ptxas info    : Compiling entry function 'abs_diff_sum' for 'sm_100a'
+ptxas info    : Function properties for abs_diff_sum
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 32 registers, used 1 barriers
+ptxas info    : Compile time = 15.864 ms
+ptxas info    : Compiling entry function 'amax_abs' for 'sm_100a'
+ptxas info    : Function properties for amax_abs
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 30 registers, used 1 barriers
+ptxas info    : Compile time = 13.538 ms
+ptxas info    : Compiling entry function 'dequantize_e4m3' for 'sm_100a'
+ptxas info    : Function properties for dequantize_e4m3
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 15 registers, used 0 barriers
+ptxas info    : Compile time = 3.320 ms
+ptxas info    : Compiling entry function 'quantize_e4m3' for 'sm_100a'
+ptxas info    : Function properties for quantize_e4m3
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 13 registers, used 0 barriers
+ptxas info    : Compile time = 4.813 ms
+ptxas info    : Compiling entry function 'vsa_tile_qkv' for 'sm_100a'
+ptxas info    : Function properties for vsa_tile_qkv
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 18 registers, used 0 barriers
+ptxas info    : Compile time = 10.983 ms
+ptxas info    : Compiling entry function 'vsa_mma_attn_tma' for 'sm_100a'
+ptxas info    : Function properties for vsa_mma_attn_tma
+    32 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 233 registers, used 1 barriers, 32 bytes cumulative stack size
+ptxas info    : Compile time = 148.388 ms
+ptxas info    : Compiling entry function 'flash_mma_fwd_d64' for 'sm_100a'
+ptxas info    : Function properties for flash_mma_fwd_d64
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 128 registers, used 1 barriers, 16384 bytes smem
+ptxas info    : Compile time = 62.015 ms
+ptxas info    : Compiling entry function 'flash_mma_fwd_d128' for 'sm_100a'
+ptxas info    : Function properties for flash_mma_fwd_d128
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 240 registers, used 1 barriers, 32768 bytes smem
+ptxas info    : Compile time = 117.516 ms
+ptxas info    : Compiling entry function 'vsa_mma_attn' for 'sm_100a'
+ptxas info    : Function properties for vsa_mma_attn
+    16 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 250 registers, used 1 barriers, 16 bytes cumulative stack size
+ptxas info    : Compile time = 158.251 ms
+ptxas info    : Compiling entry function 'flash_attn_f32' for 'sm_100a'
+ptxas info    : Function properties for flash_attn_f32
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 32 registers, used 1 barriers
+ptxas info    : Compile time = 72.638 ms
+ptxas info    : Compiling entry function 'vsa_combine' for 'sm_100a'
+ptxas info    : Function properties for vsa_combine
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 24 registers, used 0 barriers
+ptxas info    : Compile time = 12.591 ms
+ptxas info    : Compiling entry function 'vsa_mask_pad' for 'sm_100a'
+ptxas info    : Function properties for vsa_mask_pad
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 32 registers, used 0 barriers
+ptxas info    : Compile time = 16.898 ms
+ptxas info    : Compiling entry function 'vsa_fused_attn' for 'sm_100a'
+ptxas info    : Function properties for vsa_fused_attn
+    192 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 62 registers, used 1 barriers, 192 bytes cumulative stack size
+ptxas info    : Compile time = 131.584 ms
+ptxas info    : Compiling entry function 'vsa_gather_q' for 'sm_100a'
+ptxas info    : Function properties for vsa_gather_q
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 18 registers, used 0 barriers
+ptxas info    : Compile time = 6.005 ms
+ptxas info    : Compiling entry function 'vsa_gather_kv' for 'sm_100a'
+ptxas info    : Function properties for vsa_gather_kv
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 24 registers, used 0 barriers
+ptxas info    : Compile time = 15.504 ms
+ptxas info    : Compiling entry function 'vsa_topk' for 'sm_100a'
+ptxas info    : Function properties for vsa_topk
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 19 registers, used 1 barriers, 1024 bytes smem
+ptxas info    : Compile time = 12.865 ms
+ptxas info    : Compiling entry function 'vsa_tile_mean' for 'sm_100a'
+ptxas info    : Function properties for vsa_tile_mean
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 32 registers, used 0 barriers
+ptxas info    : Compile time = 38.713 ms
+ptxas info    : Compiling entry function 'index_select_rows' for 'sm_100a'
+ptxas info    : Function properties for index_select_rows
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 16 registers, used 0 barriers
+ptxas info    : Compile time = 9.387 ms
+ptxas info    : Compiling entry function 'temporal_unfold' for 'sm_100a'
+ptxas info    : Function properties for temporal_unfold
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 32 registers, used 0 barriers
+ptxas info    : Compile time = 17.379 ms
+ptxas info    : Compiling entry function 'rms_norm_channels' for 'sm_100a'
+ptxas info    : Function properties for rms_norm_channels
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 32 registers, used 0 barriers
+ptxas info    : Compile time = 56.227 ms
+ptxas info    : Compiling entry function 'upsample_nearest' for 'sm_100a'
+ptxas info    : Function properties for upsample_nearest
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 28 registers, used 0 barriers
+ptxas info    : Compile time = 14.424 ms
+ptxas info    : Compiling entry function 'block_copy' for 'sm_100a'
+ptxas info    : Function properties for block_copy
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 16 registers, used 0 barriers
+ptxas info    : Compile time = 9.408 ms
+ptxas info    : Compiling entry function 'gather_nd' for 'sm_100a'
+ptxas info    : Function properties for gather_nd
+    96 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 34 registers, used 0 barriers, 96 bytes cumulative stack size
+ptxas info    : Compile time = 47.371 ms
+ptxas info    : Compiling entry function 'merge_heads' for 'sm_100a'
+ptxas info    : Function properties for merge_heads
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 28 registers, used 0 barriers
+ptxas info    : Compile time = 13.641 ms
+ptxas info    : Compiling entry function 'split_heads_bhsd' for 'sm_100a'
+ptxas info    : Function properties for split_heads_bhsd
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 28 registers, used 0 barriers
+ptxas info    : Compile time = 13.289 ms
+ptxas info    : Compiling entry function 'qk_norm_rope_bhsd' for 'sm_100a'
+ptxas info    : Function properties for qk_norm_rope_bhsd
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 32 registers, used 1 barriers
+ptxas info    : Compile time = 46.597 ms
+ptxas info    : Compiling entry function 'ln_adaln_e' for 'sm_100a'
+ptxas info    : Function properties for ln_adaln_e
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 32 registers, used 1 barriers
+ptxas info    : Compile time = 32.637 ms
+ptxas info    : Compiling entry function 'layer_norm_last' for 'sm_100a'
+ptxas info    : Function properties for layer_norm_last
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 30 registers, used 1 barriers
+ptxas info    : Compile time = 30.761 ms
+ptxas info    : Compiling entry function 'rms_norm_last' for 'sm_100a'
+ptxas info    : Function properties for rms_norm_last
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 26 registers, used 1 barriers
+ptxas info    : Compile time = 21.009 ms
+ptxas info    : Compiling entry function 'softmax_last_bf16' for 'sm_100a'
+ptxas info    : Function properties for softmax_last_bf16
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 28 registers, used 1 barriers
+ptxas info    : Compile time = 28.417 ms
+ptxas info    : Compiling entry function 'softmax_last' for 'sm_100a'
+ptxas info    : Function properties for softmax_last
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 28 registers, used 1 barriers
+ptxas info    : Compile time = 23.086 ms
+ptxas info    : Compiling entry function 'residual_gate_add_e' for 'sm_100a'
+ptxas info    : Function properties for residual_gate_add_e
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 26 registers, used 0 barriers
+ptxas info    : Compile time = 11.370 ms
+ptxas info    : Compiling entry function 'quant_linear_epilogue' for 'sm_100a'
+ptxas info    : Function properties for quant_linear_epilogue
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 18 registers, used 0 barriers
+ptxas info    : Compile time = 12.272 ms
+ptxas info    : Compiling entry function 'cast_bf16_f32_bias_act' for 'sm_100a'
+ptxas info    : Function properties for cast_bf16_f32_bias_act
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 18 registers, used 0 barriers
+ptxas info    : Compile time = 9.713 ms
+ptxas info    : Compiling entry function 'cast_f32_bf16' for 'sm_100a'
+ptxas info    : Function properties for cast_f32_bf16
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 9 registers, used 0 barriers
+ptxas info    : Compile time = 2.934 ms
+ptxas info    : Compiling entry function 'bias_gelu_inplace' for 'sm_100a'
+ptxas info    : Function properties for bias_gelu_inplace
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 20 registers, used 0 barriers
+ptxas info    : Compile time = 8.984 ms
+ptxas info    : Compiling entry function 'add_bias_inplace' for 'sm_100a'
+ptxas info    : Function properties for add_bias_inplace
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 18 registers, used 0 barriers
+ptxas info    : Compile time = 12.929 ms
+ptxas info    : Compiling entry function 'bcast_binary' for 'sm_100a'
+ptxas info    : Function properties for bcast_binary
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 20 registers, used 0 barriers
+ptxas info    : Compile time = 21.575 ms
+ptxas info    : Compiling entry function 'lincomb3' for 'sm_100a'
+ptxas info    : Function properties for lincomb3
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 14 registers, used 0 barriers
+ptxas info    : Compile time = 2.764 ms
+ptxas info    : Compiling entry function 'fill_f' for 'sm_100a'
+ptxas info    : Function properties for fill_f
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 10 registers, used 0 barriers
+ptxas info    : Compile time = 1.961 ms
+ptxas info    : Compiling entry function 'clamp_f' for 'sm_100a'
+ptxas info    : Function properties for clamp_f
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 10 registers, used 0 barriers
+ptxas info    : Compile time = 2.333 ms
+ptxas info    : Compiling entry function 'gelu_tanh' for 'sm_100a'
+ptxas info    : Function properties for gelu_tanh
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 13 registers, used 0 barriers
+ptxas info    : Compile time = 3.108 ms
+ptxas info    : Compiling entry function 'tanh_scaled' for 'sm_100a'
+ptxas info    : Function properties for tanh_scaled
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 18 registers, used 0 barriers
+ptxas info    : Compile time = 9.407 ms
+ptxas info    : Compiling entry function 'swiglu_value_first' for 'sm_100a'
+ptxas info    : Function properties for swiglu_value_first
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 18 registers, used 0 barriers
+ptxas info    : Compile time = 16.431 ms
+ptxas info    : Compiling entry function 'silu' for 'sm_100a'
+ptxas info    : Function properties for silu
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 16 registers, used 0 barriers
+ptxas info    : Compile time = 8.892 ms
+ptxas info    : Compiling entry function 'add_scalar' for 'sm_100a'
+ptxas info    : Function properties for add_scalar
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 10 registers, used 0 barriers
+ptxas info    : Compile time = 2.426 ms
+ptxas info    : Compiling entry function 'mul_scalar' for 'sm_100a'
+ptxas info    : Function properties for mul_scalar
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 10 registers, used 0 barriers
+ptxas info    : Compile time = 2.311 ms
+ptxas info    : Compiling entry function 'elem_sub' for 'sm_100a'
+ptxas info    : Function properties for elem_sub
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 12 registers, used 0 barriers
+ptxas info    : Compile time = 2.465 ms
+ptxas info    : Compiling entry function 'elem_mul' for 'sm_100a'
+ptxas info    : Function properties for elem_mul
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 12 registers, used 0 barriers
+ptxas info    : Compile time = 2.417 ms
+ptxas info    : Compiling entry function 'elem_add' for 'sm_100a'
+ptxas info    : Function properties for elem_add
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 12 registers, used 0 barriers
+ptxas info    : Compile time = 2.439 ms

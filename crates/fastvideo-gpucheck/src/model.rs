@@ -59,6 +59,11 @@ pub fn vae_config() -> WanVaeConfig {
         num_res_blocks: 1,
         temporal_upsample: vec![true, false],
         load_encoder: false,
+        decoder_base_dim: 32,
+        is_residual: false,
+        patch_size: 1,
+        latents_mean: vec![0.0; 16],
+        latents_std: vec![1.0; 16],
     }
 }
 

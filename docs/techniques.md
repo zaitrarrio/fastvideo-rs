@@ -121,7 +121,7 @@ involving a load/build transform always clashes. A technique with
 | `teacache` | on_step | `threshold`, `retain_steps`, `cooldown_steps`, `num_forwards`, `coefficients` | `FASTVIDEO_H3_SOL_CACHE=teacache` |
 | `bf16_linears` / `mxfp8` / `w8a8` | load | — | `FASTVIDEO_H3_QUANT=off|mxfp8|w8a8` (H3) |
 | `fp8` | load | — | `FASTVIDEO_FP8=1` (W8A8 on every linear; LTX-2, Wan) |
-| `nvfp4` | load | `rule` (`static_6`, `static_4`, `mse`) | `FASTVIDEO_NVFP4` |
+| `nvfp4` | load | `rule` (`static_6`, `static_4`, `mse`) | `FASTVIDEO_NVFP4` (LTX-2: the video FFN on NVFP4 tensor cores, `static_6` / `static_4` only; elsewhere the LongLive dequant-beforehand path) |
 | `bf16_activations` / `f32_activations` | load | — | `FASTVIDEO_BF16_ACT=1|0` |
 | `taeh3` (H3) / `taehv` (LTX-2) | load | `weights` | `FASTVIDEO_TAEH3_WEIGHTS` / `--taeh3-weights`; `FASTVIDEO_LTX2_TAE_WEIGHTS` / `--ltx-tae-weights` |
 | `offload` | load | `dit` (`auto` / `resident` / `streamed`), `lookahead`, `placement` (LTX-2: `none` / `cpu`) | `FASTVIDEO_DIT_OFFLOAD`, `_LOOKAHEAD`, `--dit-offload`; `FASTVIDEO_LTX_OFFLOAD`, `--offload` |
@@ -178,7 +178,7 @@ sink = "text"
 threshold = 0.10
 
 [kernels]                  # optional: one implementation per op
-dense_attention = "auto"   # auto | nvcc:v1 | nvcc:v2 | cudnn
+dense_attention = "auto"   # auto | nvcc:v1 | nvcc:v2 | nvcc:dc (sm 9.0 / 10.0) | cudnn
 sol_attention = "x4f"      # auto | v1 | x4 | x4f | ws (sm90+)
 vsa_attention = "auto"     # auto | gather | fused | mma | tma | tma2
 nvfp4_gemm = "cublas"      # cublas | oxide (sm_100 / sm_120 cubins)
@@ -236,12 +236,15 @@ techniques, parameters and settings as the shipped profile of the same name.
 | `ltx2/ltx25_distill_dense` | (two-stage) | `dense_attention` |
 | `ltx2/ltx25_distill_sol_taehv` | (two-stage) | `sol_attn`, `taehv` |
 | `ltx2/ltx25_distill_sol_fp8` | (two-stage) | `sol_attn`, `fp8` |
+| `ltx2/ltx25_distill_sol_nvfp4` | (two-stage) | `sol_attn`, `nvfp4` (`static_6`; video FFN only, sol-engine `nvfp4_ffn.py`) |
 
 `ltx2/ltx25_rtx5090_distill_bf16` is sol-engine's
 `models/ltx25/RTX5090/ltx25_rtx5090_distill_bf16.toml` (`LTX25_PIPELINE=bf16`:
 Sol stage 2 from `gpu_infer.py`, `--offload cpu` from `run_ltx25_gpu.sh`).
-Its `nvfp4` sibling needs the pre-quantized NVFP4 LTX-2.5 checkpoint path,
-which is not ported, so it has no profile. LTX workloads (`--workload 4k5s`,
+Its `nvfp4` sibling (`LTX25_PIPELINE=nvfp4`) loads a pre-quantized NVFP4
+checkpoint that is not on our weight volume; `ltx2/ltx25_distill_sol_nvfp4`
+quantizes the same scope (the video FFN) at load with the same TE rule
+instead. LTX workloads (`--workload 4k5s`,
 `--two-stage`, the resolution) stay on the command line; `[pipeline] recipe`
 is H3-only.
 
@@ -307,7 +310,7 @@ placement reach the pipeline through their settings.
 | seam | command line (wins) | profile | default |
 |---|---|---|---|
 | stage-2 attention | `--sol-stage2` / `--dense-stage2` / `--pisa-stage2` | `sol_attn` (`ltx25_stage2`) / `dense_attention` / `pisa` | Sol on the 2.5 distilled two-stage 3-forward refine (`default_sol_stage2`) |
-| ffn precision | `FASTVIDEO_FP8` | `fp8` / `bf16_linears` | bf16 |
+| ffn precision | `FASTVIDEO_FP8`, `FASTVIDEO_NVFP4` | `fp8` / `nvfp4` / `bf16_linears` | bf16 |
 | video decoder | `--ltx-tae-weights`, `FASTVIDEO_LTX2_TAE_WEIGHTS` | `taehv` (+ `weights`) | conv VAE |
 | placement / residency | `--offload`, `--dit-offload`, `FASTVIDEO_LTX_OFFLOAD`, `FASTVIDEO_DIT_OFFLOAD` | `offload.placement` / `.dit` | `none` / `auto` |
 
