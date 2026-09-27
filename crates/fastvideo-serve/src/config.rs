@@ -375,6 +375,46 @@ impl Default for WebrtcCfg {
     }
 }
 
+/// `[reactor]`: the Reactor local runtime (design §5.7, WP-13).
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct ReactorCfg {
+    /// Model id/served name to stream; unset: the first resident model with
+    /// stream caps.
+    pub model: Option<String>,
+    /// Canvas short edge (default: the model's default tier).
+    pub short_edge: Option<u32>,
+    /// Initial aspect (`16:9`, `1:1`, `9:16`, `4:3`).
+    pub aspect: String,
+    /// Session seed; unset: `/start_session` `seed`, else drawn.
+    pub seed: Option<u64>,
+    /// RT `ORPHAN_TIMEOUT_SECONDS`.
+    pub orphan_timeout_s: u64,
+    /// RT `WEBRTC_CLIENT_PING_TIMEOUT_SECONDS`.
+    pub ping_timeout_s: u64,
+    pub max_connections: usize,
+    /// H.264 encoder for H.264 peers: `nvenc` | `openh264` | `off` (VP8
+    /// peers, such as the Python SDK, always get intra-only VP8).
+    pub h264: String,
+    pub h264_bitrate_bps: Option<u32>,
+}
+
+impl Default for ReactorCfg {
+    fn default() -> Self {
+        Self {
+            model: None,
+            short_edge: None,
+            aspect: "16:9".into(),
+            seed: None,
+            orphan_timeout_s: 60,
+            ping_timeout_s: 20,
+            max_connections: 64,
+            h264: "nvenc".into(),
+            h264_bitrate_bps: None,
+        }
+    }
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct LogCfg {
@@ -405,6 +445,7 @@ pub struct Config {
     pub ltx: LtxCfg,
     pub limits: LimitsCfg,
     pub webrtc: WebrtcCfg,
+    pub reactor: ReactorCfg,
     pub log: LogCfg,
     /// Ed25519 seed for fal webhooks (normally `FV_WEBHOOK_ED25519_KEY`).
     pub webhook_key: Secret,
@@ -518,6 +559,24 @@ impl Config {
         }
         if let Some(v) = env.var("FV_WHIP_TOKEN") {
             self.webrtc.whip_token = Secret(v);
+        }
+        // RT's own environment names (reactor §3.3).
+        for (k, slot) in [
+            ("ORPHAN_TIMEOUT_SECONDS", &mut self.reactor.orphan_timeout_s),
+            ("WEBRTC_CLIENT_PING_TIMEOUT_SECONDS", &mut self.reactor.ping_timeout_s),
+        ] {
+            if let Some(v) = env.var(k) {
+                *slot = v
+                    .trim()
+                    .parse::<f64>()
+                    .ok()
+                    .filter(|s| s.is_finite() && *s > 0.0)
+                    .map(|s| s.ceil() as u64)
+                    .ok_or_else(|| ConfigError::Invalid(format!("{k}={v} is not a positive number of seconds")))?;
+            }
+        }
+        if let Some(v) = env.var("FV_REACTOR_MODEL") {
+            self.reactor.model = Some(v);
         }
         if let Some(v) = env.var("FV_ENGINE") {
             self.engine.backend = parse_enum("FV_ENGINE", &v)?;

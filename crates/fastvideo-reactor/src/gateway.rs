@@ -41,8 +41,9 @@ struct Gw {
     version: Option<WireVersion>,
     seed: WireVersion,
     pending: Vec<ServerMsg>,
-    /// Replies from command tasks (same order guarantees as the outbox).
-    replies: mpsc::UnboundedSender<ServerMsg>,
+    /// Validated commands, run one at a time in arrival order by this
+    /// connection's command worker (RT runs a model's handlers serially).
+    commands: mpsc::UnboundedSender<(Option<String>, String, serde_json::Map<String, serde_json::Value>)>,
 }
 
 /// Runs one connection until its peer closes.
@@ -58,6 +59,22 @@ pub(crate) fn spawn(
         let (handle, events) = peer.split();
         let out = live.out.register(conn);
         let (rtx, rrx) = mpsc::unbounded_channel();
+        let (ctx, mut crx) = mpsc::unbounded_channel::<(Option<String>, String, serde_json::Map<String, serde_json::Value>)>();
+        let driver = live.driver.clone();
+        tokio::spawn(async move {
+            while let Some((request_id, name, args)) = crx.recv().await {
+                let o = driver.command(conn, &name, args).await;
+                let m = match (o, request_id) {
+                    (Outcome::Reply(kind, data), r) => ServerMsg::Model { request_id: r, kind, data },
+                    (Outcome::Ack, Some(r)) => ServerMsg::CommandAck { request_id: r },
+                    (Outcome::Error { code, message }, Some(r)) => ServerMsg::CommandError { request_id: r, code, message },
+                    (_, None) => continue,
+                };
+                if rtx.send(m).is_err() {
+                    break;
+                }
+            }
+        });
         let mut gw = Gw {
             rt,
             live,
@@ -67,7 +84,7 @@ pub(crate) fn spawn(
             version: None,
             seed,
             pending: Vec::new(),
-            replies: rtx,
+            commands: ctx,
         };
         gw.run(events, out, rrx).await;
     });
@@ -250,19 +267,7 @@ impl Gw {
                         return;
                     }
                 };
-                let driver = self.live.driver.clone();
-                let replies = self.replies.clone();
-                let conn = self.conn;
-                tokio::spawn(async move {
-                    let o = driver.command(conn, &name, args).await;
-                    let m = match (o, request_id) {
-                        (Outcome::Reply(kind, data), r) => ServerMsg::Model { request_id: r, kind, data },
-                        (Outcome::Ack, Some(r)) => ServerMsg::CommandAck { request_id: r },
-                        (Outcome::Error { code, message }, Some(r)) => ServerMsg::CommandError { request_id: r, code, message },
-                        (_, None) => return,
-                    };
-                    let _ = replies.send(m);
-                });
+                let _ = self.commands.send((request_id, name, args));
             }
         }
     }

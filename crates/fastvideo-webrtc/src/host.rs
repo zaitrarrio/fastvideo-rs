@@ -184,6 +184,9 @@ pub struct OfferOptions {
     /// H.264 level we offer. WHIP takes it from the target's
     /// [`EncodeProfile`] (Cloudflare 3.1, MediaMTX 4.0).
     pub h264_level: H264Level,
+    /// Video codecs we offer (default: H.264 only). A loopback test client
+    /// can offer VP8 like the Reactor Python SDK does.
+    pub video_codecs: Vec<VideoCodec>,
 }
 
 impl Default for OfferOptions {
@@ -194,6 +197,7 @@ impl Default for OfferOptions {
             channels: Vec::new(),
             srflx: Vec::new(),
             h264_level: H264Level::L3_1,
+            video_codecs: vec![VideoCodec::H264],
         }
     }
 }
@@ -1529,7 +1533,7 @@ impl HostLoop {
         if self.peers.len() >= self.cfg.max_peers {
             return Err(WebrtcError::PeerLimit(self.cfg.max_peers));
         }
-        let mut rtc = self.new_rtc(now, None, opts.h264_level, &[VideoCodec::H264]);
+        let mut rtc = self.new_rtc(now, None, opts.h264_level, &opts.video_codecs);
         self.add_candidates(&mut rtc, &opts.srflx);
         let mut api = rtc.sdp_api();
         let mut mids = Vec::new();
