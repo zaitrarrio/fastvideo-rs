@@ -56,9 +56,9 @@ them at ~2.5 GB/s). The DiT phase (71.6 GB viewed: 26 GB AdaLN projections,
 ~175 s; its measured parts are LoRA fuse 14.9 s, f32→bf16 11.4 s, staging
 fill 3.8 s, read wait 6.7 s. The rest is the host f32 round trip of every
 adapter-fused weight (bf16 → f32 alloc/fill → fuse → bf16) and the per-block
-AdaLN evaluation. **The H3 < 2 min target is not met** (212 s vs 269 s). The
-next cut is fusing the adapter on the device (upload bf16 once, W + m·B·A in
-f32 with the host's operation order, round-to-nearest-even) — not done here.
+AdaLN evaluation. At `72fdf68` the H3 < 2 min target was not met (212 s vs
+269 s); the adapter merge on the device (follow-up below) brings the load to
+**57 s**, frames unchanged.
 
 ## Load breakdown, LTX-2.5 (H200, seconds)
 
@@ -80,16 +80,10 @@ shards are read ahead while the DiT loads). Resident FP8 Gemma from the tree
 the warmed streamed encode at this size; it changes the conditioning numerics
 and stays opt-in.
 
-**Open: LTX frames differ with E12 on.** E12 off (either image) reproduces
-the before frames (`db4e0c86…`, 2 runs); E12 on gives `ad76ebfc…` (3 runs,
-reproducible). The Gemma warm path is excluded (`TEXT_WARM=0` still gives
-`ad76ebfc…`), and `FASTVIDEO_VERIFY_UPLOAD=1` compared all 1 660 staged
-DiT uploads with the plain path on the device: **1 660 equal, 0 different**,
-and no mismatch was logged for any later staged load. What remains is the
-read-ahead (which never changes a byte a view returns) or an allocation-order
-effect of the staged path on a later decision. Not bisected further (budget).
-Until it is, `FASTVIDEO_PREFETCH=0 FASTVIDEO_STAGED_UPLOAD=0` restores the
-exact before-output for LTX. H3 frames are byte-identical in all six runs.
+**Resolved (follow-up below): the two LTX outputs are not E12's.** `db4e0c86…`
+and `ad76ebfc…` are the two outcomes of a timing-based choice in the latent
+upsampler's first 3-D convolution; E12 changed which one usually won. With
+that choice made deterministic, E12 on and off give the same frames.
 
 ## E13 trees (identity)
 
@@ -130,6 +124,80 @@ Image pull: a fresh H200 host took 458 s from submit to worker start (pull of
 the ~6 GB runtime image plus scheduling); with the image on the host, 5-80 s.
 FastWan was not measured (budget).
 
+## Follow-up: E12 identity and the H3 device adapter merge
+
+Image `sha-324bbb3` (H200, US-CA-2, `s2k01690bi` read-only), family
+`runpod-matrix.sh identity`: one pod, the same request under several
+environments, page cache dropped before every cell, frames hashed as the
+serverless worker does, `FASTVIDEO_DIGEST=1` logging a sha256 at every LTX
+stage boundary (Gemma hidden state per layer, contexts, noise, every step of
+both stages, the upsampled latent). Results: `artifacts/runpod/identity/`.
+
+### Root cause of the LTX difference
+
+| cell | prompt | E12 | digests | load_s | e2e | upsampler conv 1 (128→1024) | frames sha256 |
+|---|---|---|---|---:|---:|---|---|
+| ltx-off | matrix default | off | on | 157.4 | 188.3 | CudnnBf16 | `905b70c1…` |
+| ltx-on | matrix default | on | on | 22.8 | 164.0 | CudnnBf16 | `905b70c1…` |
+| ltx-off-nd | matrix default | off | off | 182.2 | 298.4 | CudnnBf16 | `905b70c1…` |
+| ltx-on-nd | matrix default | on | off | 22.6 | 161.9 | CudnnBf16 | `905b70c1…` |
+| fox-off | serverless fox (the table above) | off | on | 177.2 | 187.4 | **CudnnBf16** (Cudnn 1.4 / bf16 1.2 ms) | **`ad76ebfc…`** |
+| fox-on | serverless fox | on | on | 22.6 | 164.2 | **Cudnn** (Cudnn 1.3 / bf16 1.4 ms) | **`db4e0c86…`** |
+
+In the fox pair the E12 flags and the hashes are *swapped* relative to the
+earlier runs: E12 off gave `ad76ebfc…`, E12 on gave `db4e0c86…`. Every digest
+up to and including stage 1 is equal (text hidden states, contexts, noise,
+all 8 stage-1 steps); the first difference is `upsampled_video`.
+`wan::conv::conv3d` in `auto` mode timed three backends per shape on the
+first call (cuDNN f32, temporal unfold, cuDNN on bf16 operands) and kept the
+fastest. They round differently, and for the upsampler's first conv
+(`x=[1,128,18,36,62] w=[1024,128,3,3,3]`) cuDNN f32 and cuDNN bf16 are a
+near tie on an H200 (1.1-1.8 ms each across the six runs; a second shape was
+5.2 vs 5.2 ms once). Whichever won decided the frames: all four shapes on
+bf16 → `ad76ebfc…`; the first on f32 → `db4e0c86…`. E12's background
+reads and staged copies shifted the odds, which is why the earlier runs
+lined up with the flags; the loaded weights were never different (the
+1 660-layer verify, and here every digest before the upsampler).
+
+Fix (`wan/conv.rs`): `auto` is deterministic — cuDNN on bf16 under bf16 math,
+cuDNN f32 under f32 math — whatever the timing. `FASTVIDEO_CONV3D=cudnn|
+unfold|cudnn-bf16` still forces one; `FASTVIDEO_CONV3D_TIMED=1` restores the
+per-shape timing (fastest, not reproducible). On the H200 the timed choice
+was bf16 for every shape except the near tie, so the deterministic output is
+the all-bf16 one: `ad76ebfc…` for the fox request, `905b70c1…` for the
+matrix default, for E12 on and off alike (ltx-off / ltx-on / ltx-off-nd /
+ltx-on-nd above made exactly those picks). The same pattern still exists in
+the sm_12x dense-attention `auto` (cuDNN SDPA vs flash_mma_fwd2 timed per
+shape, `wan/attn.rs`); it does not run on sm_90 and is left for a separate
+change. E12 stays on by default for LTX (an interim default-off,
+`2b78d9c`, is reverted).
+
+### H3: adapter merge on the device
+
+`FASTVIDEO_H3_LORA_DEVICE` (default on; `=0` is the host merge): the base goes
+up as stored (bf16, through the pinned stage), `A`, `B` and any `.diff` in
+f32, and `lora_fuse_bf16` computes the host merge element for element
+(separately rounded `__fmul_rn`/`__fadd_rn`, rank terms in ascending order,
+a zero `m·B[o,r]` skipped as the host skips it, the `.diff` last, the host's
+round-to-nearest-even to bf16). The q/k/v/gate stack is merged part by part
+into one device buffer. `FASTVIDEO_H3_LORA_VERIFY=1` also merges every weight
+on the host and counts equal/different bits.
+
+| cell (FastH3 4-step VSA, 1344x768, 5 s, matrix default prompt) | merge | load_s | dit_s | lora_s (consumer) | total_s | frames sha256 |
+|---|---|---:|---:|---:|---:|---|
+| h3-host | host (`FASTVIDEO_H3_LORA_DEVICE=0`) | 210.7 | 158.8 | 128.8 | 27.7 | `56f23d1d…` |
+| h3-dev | device | **57.3** | 19.3 | 19.4 | 27.5 | `56f23d1d…` |
+
+Byte-identical frames, and **the H3 < 2 min load target is met** (210.7 →
+57.3 s, cold page cache, text encoder 14-17 s of it). The `6a43b801…`
+reference is the serverless fox prompt; these cells used the matrix default
+prompt, so the identity is shown host vs device on the same image and pod.
+The H3 generation runs no `conv3d` (no pick lines in its log), so the conv3d
+change does not touch H3 T2V output.
+
+Spend for the follow-up: four H200 pods at $4.59/h, ~1 + 17 + 14 + 11 min ≈
+**$3.3**.
+
 ## Knobs
 
 `FASTVIDEO_PREFETCH=0` (read-ahead off), `FASTVIDEO_PREFETCH_MODE=cache`
@@ -137,7 +205,9 @@ FastWan was not measured (budget).
 `FASTVIDEO_PREFETCH_CHUNK_MB` (16), `FASTVIDEO_PREFETCH_WINDOW_GB` (cache mode),
 `FASTVIDEO_STAGED_UPLOAD=0`, `FASTVIDEO_VERIFY_UPLOAD=1`,
 `FASTVIDEO_TEXT_FP8_TREE=0` (ignore E13 trees), `FASTVIDEO_LTX2_TEXT_FP8=1`,
-`FASTVIDEO_LTX2_TEXT_WARM=0`. `fv-gpucheck io-bench`, `evict-cache`,
+`FASTVIDEO_LTX2_TEXT_WARM=0`, `FASTVIDEO_H3_LORA_DEVICE=0`,
+`FASTVIDEO_H3_LORA_VERIFY=1`, `FASTVIDEO_CONV3D_TIMED=1`, `FASTVIDEO_DIGEST=1`
+(`FASTVIDEO_DIGEST_WEIGHTS=1`). `fv-gpucheck io-bench`, `evict-cache`,
 `quantize-text-encoder [--verify-only]`.
 
 ## Spend

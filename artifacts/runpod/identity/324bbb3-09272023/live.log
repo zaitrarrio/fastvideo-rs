@@ -1,0 +1,10 @@
+[20:23:18] [identity] matrix start image=354cd961f0d40e75
+GPU 0: NVIDIA H200 (UUID: GPU-fbb3a434-7713-e5e0-a60f-e92adaf1d6a0)
+NVIDIA H200, 143771 MiB, 580.126.20
+[20:23:32] [identity] ▶ fox-off  env FASTVIDEO_DIGEST=1 FASTVIDEO_PREFETCH=0 FASTVIDEO_STAGED_UPLOAD=0 /opt/fastvideo-rs/target/release/fv-gpucheck --mode fast ltx2 gen --model-version 2.5 --weights /workspace/weights/ltx25 --dit /workspace/weights/ltx25 --prompt a red fox trotting through fresh snow in a pine forest, golden hour, cinematic --seed 1024 --two-stage --text streamed --no-text-cache --clip /fvscratch/runs/identity/324bbb3-09272023/fox-off/frames  (wall cap 1500s; 0=none)
+[20:29:48] [identity] ok fox-off  375s  
+[20:29:53] [identity] frames fox-off ad76ebfc1f537072b129d63e90f2c24aa3d13e7dfbec856d0030013e843924d9
+[20:30:07] [identity] ▶ fox-on  env FASTVIDEO_DIGEST=1 FASTVIDEO_PREFETCH=1 FASTVIDEO_STAGED_UPLOAD=1 /opt/fastvideo-rs/target/release/fv-gpucheck --mode fast ltx2 gen --model-version 2.5 --weights /workspace/weights/ltx25 --dit /workspace/weights/ltx25 --prompt a red fox trotting through fresh snow in a pine forest, golden hour, cinematic --seed 1024 --two-stage --text streamed --no-text-cache --clip /fvscratch/runs/identity/324bbb3-09272023/fox-on/frames  (wall cap 1500s; 0=none)
+[20:33:25] [identity] ok fox-on  197s  
+[20:33:30] [identity] frames fox-on db4e0c86b829e8653329b8ec605dbb35bfe14b6b71c70abf7b35405e43e6631d
+[20:33:30] [identity] matrix done

@@ -5,11 +5,18 @@
 //! workspace size are built once per shape and the workspace buffer is shared
 //! and only ever grows. Bias is added in place by one kernel launch.
 //!
-//! 3-D convs have two backends: cuDNN N-D, or a temporal unfold into a cuDNN
-//! conv2d (lets cuDNN pick 2-D Winograd for 3×3). Which is faster depends on
-//! the GPU (unfold 2× faster on an RTX A5000, cuDNN N-D 1.6× faster on an RTX
-//! 5060 Ti at VAE sizes), so by default the first call per shape times both
-//! and caches the winner. `FASTVIDEO_CONV3D=cudnn|unfold` forces one.
+//! 3-D convs have backends that round differently: cuDNN N-D in f32, a
+//! temporal unfold into a cuDNN conv2d (lets cuDNN pick 2-D Winograd for 3×3),
+//! and cuDNN on bf16 operands (bf16 math only). Which is faster depends on the
+//! GPU (unfold 2× faster on an RTX A5000, cuDNN N-D 1.6× faster on an RTX
+//! 5060 Ti at VAE sizes), but a choice made by timing makes the output depend
+//! on timing noise: on an H200 the LTX-2.5 upsampler's first conv times
+//! cuDNN f32 1.3 ms against cuDNN bf16 1.1-1.4 ms, and two runs of the same
+//! request produced different frames depending on which won. So `auto` (the
+//! default) is deterministic: cuDNN on bf16 under bf16 math, cuDNN f32 under
+//! f32 math. `FASTVIDEO_CONV3D=cudnn|unfold|cudnn-bf16` forces one;
+//! `FASTVIDEO_CONV3D_TIMED=1` restores the per-shape timing (fastest, but not
+//! reproducible run to run).
 
 #![cfg(feature = "cuda")]
 
@@ -534,9 +541,18 @@ pub fn conv3d_backend() -> String {
     CONV3D_BACKEND.get_or_init(|| fastvideo_models::techniques::kernels::choice(fastvideo_models::techniques::kernels::KernelOp::Conv3d))
 }
 
-/// 3-D conv with the backend chosen per [`conv3d_backend`]. In `auto` mode the
-/// first call for a shape runs each backend twice, times the second run of
-/// each (synchronized), keeps the faster one's output and remembers the choice.
+/// `FASTVIDEO_CONV3D_TIMED=1`: `auto` times the backends per shape (the
+/// pre-parity behaviour; its output depends on which backend won).
+fn conv3d_timed() -> bool {
+    static FLAG: super::envflag::CachedBool = super::envflag::CachedBool::new();
+    FLAG.get_or_init(|| super::envflag::bool_flag("FASTVIDEO_CONV3D_TIMED", false))
+}
+
+/// 3-D conv with the backend chosen per [`conv3d_backend`]. `auto` is cuDNN
+/// on bf16 under bf16 math and cuDNN f32 under f32 math, whatever the timing.
+/// With [`conv3d_timed`] the first call for a shape runs each backend twice,
+/// times the second run of each (synchronized), keeps the faster one's output
+/// and remembers the choice.
 pub fn conv3d(
     x: &CudaSlice<f32>,
     x_shape: &[usize],
@@ -562,6 +578,13 @@ pub fn conv3d(
     }
     let dev = global_device()
         .ok_or_else(|| DeviceError::Message("no global CUDA device context".into()))?;
+    if !conv3d_timed() {
+        return run(if fma_math(&dev) {
+            Conv3dPick::Cudnn
+        } else {
+            Conv3dPick::CudnnBf16
+        });
+    }
     let key = ConvKey::plain(x_shape, w_shape, &pad, &stride, fma_math(&dev), false);
     let known = dev
         .conv
