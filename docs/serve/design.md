@@ -66,6 +66,8 @@ text says **native**.
      volume-sync decision first — it is full).
    - **WP-19 cold-start measurement:** fresh Runpod serverless worker → submit →
      first output, per model family, before and after E12/E13.
+   - Status (2026-09-27): E12/E13 implemented, WP-19 measured — results and
+     open items in [`docs/gaps/2026-09-27-cold-start.md`](../gaps/2026-09-27-cold-start.md).
 
 5. **Sol-H3 serves the tau-ladder route (owner decision).** Whenever the server
    runs Sol-H3 4-step, the engine capability table selects the profile

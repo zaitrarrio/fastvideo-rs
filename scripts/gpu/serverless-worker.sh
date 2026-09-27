@@ -113,7 +113,7 @@ run_gen() {
   [[ -s "$dir/benchmark.json" ]] && bench="$(cat "$dir/benchmark.json")"
   printf '{"model":%s,"rc":%s,"env":%s,"gen_start":%s,"gen_end":%s,"frames":%s,"frames_sha256":%s,"first_frame_sha256":%s,"timings":%s,"load_io":%s,"benchmark":%s,"stderr_tail":%s}' \
     "$(jstr "$model")" "$rc" "$(jstr "$extra")" "$GEN_START" "$GEN_END" "$frames" "$(jstr "$hash")" "$(jstr "$first_frame")" \
-    "$timings" "$(load_io_json "$dir/stderr.log")" "$bench" "$(jstr "$(grep -v 'block [0-9]*/\|resident layer' "$dir/stderr.log" | grep -i 'load\|text\|INFO\|error\|prequant\|fp8' | tail -40)")"
+    "$timings" "$(load_io_json "$dir/stderr.log")" "$bench" "$(jstr "$(grep -v 'block [0-9]*/\|resident layer' "$dir/stderr.log" | grep -i 'load\|text\|INFO\|error\|prequant\|fp8\|mismatch\|verify' | tail -40)")"
   return $rc
 }
 
