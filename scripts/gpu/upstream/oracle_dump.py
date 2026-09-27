@@ -27,6 +27,8 @@ Targets
   FastVideo's own report-only reorderings.
 * LTX-2 (``ltx_pipelines`` / ``ltx_core``, driven by sol-engine's LTX-2.5
   RTX5090 ``gpu_infer.py``): see ``_patch_ltx_*`` below.
+* FastVideo SF-Wan (``CausalDMDDenosingStage``, ``CausalWanTransformer3DModel``):
+  per-block, per-step names, see ``_patch_sf_*`` below.
 
 Names (step numbers are 1-based after the step, as ours):
   text_hidden, text_refined, video_step00_in, audio_step00_in,
@@ -177,6 +179,7 @@ def install() -> None:
         "fastvideo.models.dits.minimax_h3": _patch_fv_dit,
     }
     targets.update(_LTX_TARGETS)
+    targets.update(_SF_TARGETS)
     for name, patch in list(targets.items()):
         if name in sys.modules:  # imported before install()
             patch(sys.modules[name])
@@ -588,4 +591,145 @@ _LTX_TARGETS: dict = {
     "ltx_core.model.transformer.model": _patch_ltx_model,
     "ltx_core.text_encoders.gemma.encoders.base_encoder": _patch_ltx_gemma_encoder,
     "ltx_core.text_encoders.gemma.feature_extractor": _patch_ltx_feature_extractor,
+}
+
+
+# ------------------------------------------------------------- FastVideo SF-Wan
+# CausalDMDDenosingStage (pipelines/basic/wan/stages/causal_denoising.py) and
+# CausalWanTransformer3DModel._forward_inference (models/wan/causal_transformer.py),
+# the names our wan/pipeline.rs causal_dmd_denoise writes:
+#   sf_latents_in, text_hidden           the stage's inputs (injected into ours)
+#   sf_noise_<k>                          k-th torch.randn on the stage's generator
+#                                         ([B, F, C, H, W], injected into ours)
+#   sf_c<c>_s<i>_flow, sf_c<c>_s<i>_x0    per block c, step i ([B, C, F, H, W])
+#   sf_c<c>_out, sf_latents_out           each block's clean latents, the result
+#   sf_c<c>_s<i>_block_<l>                block outputs (every 64th row) for
+#                                         c0 s0, c1 s0 and c0's context pass
+#                                         (sf_c0_ctx_block_<l>)
+#   ..._b<l>_kwin, ..._b<l>_attn_x        FASTVIDEO_DUMP_OPS layers of those calls:
+#                                         the K window the queries read (rows of
+#                                         H*D) and the attention output
+class _Sf:
+    active = False
+    done = False
+    calls = 0
+    nsteps = 4
+    draws = 0
+    cur = (0, 0)
+
+
+def _sf_tag(n: int) -> tuple[str, int, int, bool]:
+    c, j = divmod(n, _Sf.nsteps + 1)
+    if j < _Sf.nsteps:
+        return f"sf_c{c}_s{j}_", c, j, (j == 0 and c <= 1)
+    return f"sf_c{c}_ctx_", c, j, c == 0
+
+
+def _patch_sf_stage(mod) -> None:
+    import torch
+
+    cls = mod.CausalDMDDenosingStage
+    orig_forward = cls.forward
+    orig_p2v = mod.pred_noise_to_pred_video
+    orig_randn = torch.randn
+
+    def p2v(*a, **kw):
+        out = orig_p2v(*a, **kw)
+        if _Sf.active:
+            c, j = _Sf.cur
+            # [B*F, C, H, W] (B = 1) -> [1, C, F, H, W]
+            write(f"sf_c{c}_s{j}_x0", out.permute(1, 0, 2, 3).unsqueeze(0))
+        return out
+
+    def randn(*a, **kw):
+        out = orig_randn(*a, **kw)
+        if _Sf.active and kw.get("generator") is not None:
+            write(f"sf_noise_{_Sf.draws:03d}", out)
+            _Sf.draws += 1
+        return out
+
+    def forward(self, batch, fastvideo_args):
+        if _Sf.done or _Sf.active:
+            return orig_forward(self, batch, fastvideo_args)
+        pc = fastvideo_args.pipeline_config
+        _Sf.active, _Sf.calls, _Sf.draws = True, 0, 0
+        _Sf.nsteps = len(pc.dmd_denoising_steps)
+        write("sf_latents_in", batch.latents)
+        write("text_hidden", batch.prompt_embeds[0])
+        sched = self.scheduler
+        meta(sf={
+            "dmd_denoising_steps": list(pc.dmd_denoising_steps),
+            "warp_denoising_step": bool(pc.warp_denoising_step),
+            "context_noise": getattr(pc, "context_noise", 0),
+            "num_frames_per_block": int(self.num_frames_per_block),
+            "sliding_window_num_frames": int(self.sliding_window_num_frames),
+            "local_attn_size": int(self.local_attn_size),
+            "sink_size": int(self.sink_size),
+            "scheduler": type(sched).__name__,
+            "scheduler_shift": float(getattr(sched, "shift", float("nan"))),
+            "scheduler_timesteps_head": [float(x) for x in sched.timesteps[:4]],
+            "rope_cache_policy": getattr(self.transformer, "rope_cache_policy", None),
+            "attn_backend": str(getattr(self.transformer.blocks[0].attn1.attn, "backend", None)),
+        }, env={k: v for k, v in os.environ.items() if k.startswith("FASTVIDEO_")})
+        mod.pred_noise_to_pred_video = p2v
+        torch.randn = randn
+        try:
+            out = orig_forward(self, batch, fastvideo_args)
+        finally:
+            mod.pred_noise_to_pred_video = orig_p2v
+            torch.randn = orig_randn
+            _Sf.active, _Sf.done = False, True
+            _note(f"sf-wan denoise done: {_Sf.calls} transformer calls, {_Sf.draws} noise draws")
+        write("sf_latents_out", out.latents)
+        return out
+
+    cls.forward = forward
+
+
+def _patch_sf_dit(mod) -> None:
+    cls = mod.CausalWanTransformer3DModel
+    orig = cls._forward_inference
+
+    def fwd(self, hidden_states, *args, **kwargs):
+        if not _Sf.active:
+            return orig(self, hidden_states, *args, **kwargs)
+        n = _Sf.calls
+        _Sf.calls += 1
+        tag, c, j, dump_blocks = _sf_tag(n)
+        _Sf.cur = (c, j)
+        ctx = j == _Sf.nsteps
+        if ctx:
+            write(f"sf_c{c}_out", hidden_states)
+        handles = []
+        if dump_blocks:
+            ops = set(op_blocks())
+            for i, block in enumerate(self.blocks):
+                handles.append(block.register_forward_hook(
+                    lambda m, a, out, i=i: rows_strided(f"{tag}block_{i}", out)))
+                if i in ops:
+                    def attn_hook(m, a, out, i=i):
+                        kv = a[5] if len(a) > 5 else None
+                        rows_strided(f"{tag}b{i}_attn_x", out.flatten(2))
+                        if isinstance(kv, dict):
+                            fs = hidden_states.shape[-1] * hidden_states.shape[-2] // 4
+                            frames = 21 if m.local_attn_size == -1 else m.local_attn_size
+                            end = int(kv["local_end_index"])
+                            win = kv["k"][:, max(0, end - frames * fs):end]
+                            rows_strided(f"{tag}b{i}_kwin", win.reshape(-1, win.shape[-2] * win.shape[-1]))
+                    handles.append(block.attn1.register_forward_hook(attn_hook))
+        try:
+            out = orig(self, hidden_states, *args, **kwargs)
+        finally:
+            for h in handles:
+                h.remove()
+        if not ctx:
+            write(f"{tag}flow", out)
+        return out
+
+    cls._forward_inference = fwd
+
+
+_SF_TARGETS: dict = {
+    "fastvideo.pipelines.basic.wan.stages.causal_denoising": _patch_sf_stage,
+    "fastvideo.models.wan.causal_transformer": _patch_sf_dit,
 }

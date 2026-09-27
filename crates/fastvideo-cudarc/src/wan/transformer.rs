@@ -231,6 +231,7 @@ impl WanAttention {
         gate: Option<&Linear>,
         vsa: Option<&VsaCtx>,
         ar: Option<&super::ar_cache::ArFrame>,
+        kv: Option<super::causal::KvAt<'_>>,
         plan: AttnPlan,
     ) -> Result<CudaTensor> {
         let dim = self.heads * self.dim_head;
@@ -244,6 +245,30 @@ impl WanAttention {
         let q = self.qk(&qkv, 0, &self.norm_q, rope())?;
         let k = self.qk(&qkv, dim, &self.norm_k, rope())?;
         let v = qkv.split_heads_bhsd(2 * dim, self.heads, self.dim_head)?;
+        // Autoregressive causal Wan: this block's K/V into the cache, the
+        // queries against the cache window, unmasked (super::causal).
+        if let Some(at) = kv {
+            let (kw, vw) = at.cache.update(at.layer, &k, &v, at.current_start)?;
+            let out = nn::sdpa_kv_window(&q, &kw, &vw)?.merge_heads()?;
+            if super::dump::op_block() == Some(at.layer) {
+                let [b, h, sk, d] = kw.shape[..] else {
+                    return Err(TensorError::Message("kv window rank".into()));
+                };
+                let rows = kw.permute(&[0, 2, 1, 3])?.reshape(vec![b * sk, h * d])?;
+                let stride = super::dump::BLOCK_ROW_STRIDE;
+                super::dump::rows_strided(
+                    &super::dump::named(&format!("b{}_kwin", at.layer)),
+                    &rows,
+                    stride,
+                )?;
+                super::dump::rows_strided(
+                    &super::dump::named(&format!("b{}_attn_x", at.layer)),
+                    &out,
+                    stride,
+                )?;
+            }
+            return self.to_out.forward(&out);
+        }
         // Causal + NVFP4 writes each frame into the rolling cache and attends
         // the dequantized span. RoPE is already on Q/K. AdaLN stays on the
         // hidden `[B,S,C]` tensor, which does not share that layout.
@@ -396,11 +421,15 @@ fn rotary_1d(dim: usize, seq: usize, theta: f64) -> (Vec<f32>, Vec<f32>) {
 }
 
 /// 3-D RoPE tables `[seq, head_dim]` (time, height, width split of the head).
-fn wan_rope(
+///
+/// Latent frames `start_frame ..` (FastVideo `get_rotary_pos_embed(...,
+/// start_frame=start_frame)`, the causal blocks; 0 otherwise).
+fn wan_rope_at(
     cfg: &WanVideoArchConfig,
     frames: usize,
     height: usize,
     width: usize,
+    start_frame: usize,
 ) -> Result<(CudaTensor, CudaTensor)> {
     let d = cfg.attention_head_dim;
     let h_dim = 2 * (d / 6);
@@ -419,7 +448,7 @@ fn wan_rope(
     let seq = ppf * pph * ppw;
     let mut cos = Vec::with_capacity(seq * d);
     let mut sin = Vec::with_capacity(seq * d);
-    for ft in 0..ppf {
+    for ft in start_frame..start_frame + ppf {
         for fh in 0..pph {
             for fw in 0..ppw {
                 for ((ad, (c, s)), pos) in axes.iter().zip([ft, fh, fw]) {
@@ -728,6 +757,7 @@ impl WanBlock {
         mask: Option<&BlockCausal>,
         vsa: Option<&VsaCtx>,
         ar: Option<&super::ar_cache::ArFrame>,
+        kv: Option<super::causal::KvAt<'_>>,
         plan: AttnPlan,
     ) -> Result<CudaTensor> {
         use super::stats::phase;
@@ -737,7 +767,7 @@ impl WanBlock {
         })?;
         let attn = phase("2_self_attn", || {
             self.attn1
-                .forward_self(&normed, rope, mask, self.gate.as_ref(), vsa, ar, plan)
+                .forward_self(&normed, rope, mask, self.gate.as_ref(), vsa, ar, kv, plan)
         })?;
         // bf16 activations: FastVideo's residual + norm rounding points
         // (wan::fuse); f32 activations keep the op chain.
@@ -789,9 +819,12 @@ pub struct WanTransformer3D {
     proj_out: Linear,
     scale_shift_table: CudaTensor, // [1, 2, dim]
     freq_dim: usize,
-    /// RoPE tables keyed by `(seq_len, head_dim)`: built and uploaded once.
+    /// RoPE tables keyed by `(seq_len, head_dim, start_frame)`: built and
+    /// uploaded once.
     rotary_cache: std::sync::Arc<
-        std::sync::Mutex<std::collections::HashMap<(usize, usize), (CudaTensor, CudaTensor)>>,
+        std::sync::Mutex<
+            std::collections::HashMap<(usize, usize, usize), (CudaTensor, CudaTensor)>,
+        >,
     >,
     /// VSA tiling per latent grid, built once and shared by every layer.
     #[cfg(feature = "cuda")]
@@ -1064,8 +1097,8 @@ impl WanTransformer3D {
     pub fn from_map(cfg: WanVideoArchConfig, map: &WeightMap) -> Result<Self> {
         let dim = cfg.hidden_size();
         let p = cfg.patch_size;
-        let plan = super::quant::WanQuantPlan::from_env(cfg.num_layers)
-            .map_err(TensorError::Message)?;
+        let plan =
+            super::quant::WanQuantPlan::from_env(cfg.num_layers).map_err(TensorError::Message)?;
         plan.announce();
         // Each block is quantized as it loads, so its bf16 weights are freed
         // before the next block's arrive.
@@ -1770,14 +1803,25 @@ impl WanTransformer3D {
 
     /// Get-or-build the `[seq, head_dim]` RoPE tables for a latent grid.
     pub fn rotary_for(&self, t: usize, h: usize, w: usize) -> Result<(CudaTensor, CudaTensor)> {
+        self.rotary_at(t, h, w, 0)
+    }
+
+    /// [`Self::rotary_for`] for latent frames `start_frame ..`.
+    pub fn rotary_at(
+        &self,
+        t: usize,
+        h: usize,
+        w: usize,
+        start_frame: usize,
+    ) -> Result<(CudaTensor, CudaTensor)> {
         let p = self.cfg.patch_size;
         let seq = (t / p[0]) * (h / p[1]) * (w / p[2]);
-        let key = (seq, self.cfg.attention_head_dim);
+        let key = (seq, self.cfg.attention_head_dim, start_frame);
         let mut map = self.rotary_cache.lock().expect("rotary cache lock");
         if let Some(pair) = map.get(&key) {
             return Ok(pair.clone());
         }
-        let (cos, sin) = wan_rope(&self.cfg, t, h, w)?;
+        let (cos, sin) = wan_rope_at(&self.cfg, t, h, w, start_frame)?;
         let pair = (pinned(cos)?, pinned(sin)?);
         map.insert(key, pair.clone());
         Ok(pair)
@@ -1803,17 +1847,26 @@ impl WanTransformer3D {
         let dim = self.cfg.hidden_size();
         let rope = self.rotary_for(t, h, w)?;
         let ar = self.causal_ar_frame(t, h, w);
-        // Block-causal self-attention as a kernel parameter: the flash kernel
-        // skips invisible key tiles and never builds the [S, S] mask
+        // Block-causal self-attention over the whole clip (FastVideo's
+        // full-sequence causal forward, `_prepare_blockwise_causal_attn_mask`;
+        // its inference is `forward_kv`) as a kernel parameter: the flash
+        // kernel skips invisible key tiles and never builds the [S, S] mask
         // (`nn::sdpa_block_causal` materializes it only on its fallback).
-        let mask = (self.cfg.causal && ar.is_none()).then(|| {
+        let mask = if self.cfg.causal && ar.is_none() {
             let p = self.cfg.patch_size;
-            BlockCausal {
-                frame_tokens: (h / p[1].max(1)) * (w / p[2].max(1)),
-                window: usize::try_from(self.cfg.local_attn_size).unwrap_or(0),
-                sink: self.cfg.sink_size,
-            }
-        });
+            let frame_tokens = (h / p[1].max(1)) * (w / p[2].max(1));
+            Some(
+                super::attn::block_causal_for(&self.cfg, frame_tokens).ok_or_else(|| {
+                    TensorError::Message(format!(
+                        "causal Wan: local_attn_size {} is not whole {}-frame blocks; the \
+                         full-sequence mask takes whole blocks only",
+                        self.cfg.local_attn_size, self.cfg.num_frames_per_block
+                    ))
+                })?,
+            )
+        } else {
+            None
+        };
         let mut hidden = self.patch_embed(latents)?;
         if super::tensor::bf16_residual() {
             // The reference's patch embedding is a bf16 conv: the residual
@@ -1858,6 +1911,7 @@ impl WanTransformer3D {
                 mask.as_ref(),
                 vsa.as_deref(),
                 ar.as_ref(),
+                None,
                 self.attn_plan(0, morton_grid),
             )?;
             match self.begin_a14b_tail(&hidden)? {
@@ -1874,6 +1928,7 @@ impl WanTransformer3D {
                             mask.as_ref(),
                             vsa.as_deref(),
                             ar.as_ref(),
+                            None,
                             self.attn_plan(layer, morton_grid),
                         )?;
                     }
@@ -1893,6 +1948,7 @@ impl WanTransformer3D {
                     mask.as_ref(),
                     vsa.as_deref(),
                     ar.as_ref(),
+                    None,
                     self.attn_plan(layer, morton_grid),
                 )?;
             }
@@ -1908,6 +1964,76 @@ impl WanTransformer3D {
         if taylor == TaylorPhase::Compute {
             self.update_taylor(&hidden)?;
         }
+        self.unpatchify(hidden, b, t, h, w)
+    }
+
+    /// One causal block through the KV cache: FastVideo
+    /// `CausalWanTransformer3DModel._forward_inference`. `latents` are the
+    /// block's `[B, C, F, H, W]` (`F` = frames in the block), `start_frame`
+    /// its first latent frame (RoPE offset and cache position). No sparse
+    /// routes, caches or VSA: the reference has none on this path. With
+    /// dumping on and [`super::dump::blocks`] set, each block output is
+    /// written as `<prefix>block_<i>`; [`super::dump::op_blocks`] layers write
+    /// their key window and attention output.
+    pub fn forward_kv(
+        &self,
+        latents: &CudaTensor,
+        timestep: &CudaTensor,
+        encoder: &CudaTensor,
+        cache: &super::causal::CausalKvCache,
+        start_frame: usize,
+    ) -> Result<CudaTensor> {
+        let [b, _c, t, h, w] = latents.shape[..] else {
+            return Err(TensorError::Message(format!(
+                "forward_kv expects BCTHW latents, got {:?}",
+                latents.shape
+            )));
+        };
+        let p = self.cfg.patch_size;
+        let frame_tokens = (h / p[1].max(1)) * (w / p[2].max(1));
+        let rope = self.rotary_at(t, h, w, start_frame)?;
+        let mut hidden = self.patch_embed(latents)?;
+        if super::tensor::bf16_residual() {
+            hidden = hidden.quantize_bf16()?;
+        }
+        let time = self.prepare_time(timestep, b)?;
+        let (encoder, text) = self.prepare_text(encoder)?;
+        let dump_blocks = super::dump::blocks();
+        for (layer, block) in self.blocks.iter().enumerate() {
+            let op = dump_blocks && super::dump::op_blocks().contains(&layer);
+            super::dump::set_op_block(op.then_some(layer));
+            hidden = block.forward(
+                &hidden,
+                &encoder,
+                BlockCond {
+                    e: &time.e[layer],
+                    cross_kv: text.as_ref().map(|t| &t.kv[layer]),
+                },
+                &rope,
+                None,
+                None,
+                None,
+                None,
+                Some(super::causal::KvAt {
+                    cache,
+                    layer,
+                    current_start: start_frame * frame_tokens,
+                }),
+                AttnPlan::default(),
+            )?;
+            super::dump::set_op_block(None);
+            if dump_blocks {
+                super::dump::rows_strided(
+                    &super::dump::named(&format!("block_{layer}")),
+                    &hidden,
+                    super::dump::BLOCK_ROW_STRIDE,
+                )?;
+            }
+        }
+        let temb_rows = time.temb.unsqueeze(1)?;
+        let e = CudaTensor::cat(&[&temb_rows, &temb_rows], 1)?.add(&self.scale_shift_table)?;
+        hidden = hidden.ln_adaln_e(&e, 1, 0, self.cfg.eps)?;
+        hidden = self.proj_out.forward(&hidden)?;
         self.unpatchify(hidden, b, t, h, w)
     }
 

@@ -95,7 +95,7 @@ pub fn wan_causal_attn(report: &mut Report, seed: &mut u64) -> StageResult<()> {
             300,
             128,
             BlockCausal {
-                frame_tokens: 60,
+                block_tokens: 60,
                 window: 0,
                 sink: 0,
             },
@@ -106,7 +106,7 @@ pub fn wan_causal_attn(report: &mut Report, seed: &mut u64) -> StageResult<()> {
             257,
             128,
             BlockCausal {
-                frame_tokens: 37,
+                block_tokens: 37,
                 window: 2,
                 sink: 0,
             },
@@ -117,7 +117,7 @@ pub fn wan_causal_attn(report: &mut Report, seed: &mut u64) -> StageResult<()> {
             511,
             128,
             BlockCausal {
-                frame_tokens: 50,
+                block_tokens: 50,
                 window: 3,
                 sink: 1,
             },
@@ -128,7 +128,7 @@ pub fn wan_causal_attn(report: &mut Report, seed: &mut u64) -> StageResult<()> {
             190,
             64,
             BlockCausal {
-                frame_tokens: 19,
+                block_tokens: 19,
                 window: 0,
                 sink: 2,
             },
@@ -139,7 +139,7 @@ pub fn wan_causal_attn(report: &mut Report, seed: &mut u64) -> StageResult<()> {
             129,
             128,
             BlockCausal {
-                frame_tokens: 1,
+                block_tokens: 1,
                 window: 0,
                 sink: 0,
             },
@@ -150,7 +150,7 @@ pub fn wan_causal_attn(report: &mut Report, seed: &mut u64) -> StageResult<()> {
             640,
             128,
             BlockCausal {
-                frame_tokens: 128,
+                block_tokens: 128,
                 window: 1,
                 sink: 0,
             },
@@ -161,7 +161,7 @@ pub fn wan_causal_attn(report: &mut Report, seed: &mut u64) -> StageResult<()> {
             96,
             64,
             BlockCausal {
-                frame_tokens: 200,
+                block_tokens: 200,
                 window: 0,
                 sink: 0,
             },
@@ -184,7 +184,7 @@ pub fn wan_causal_attn(report: &mut Report, seed: &mut u64) -> StageResult<()> {
         let want = ref_masked(&q, &k, &v, b * h, s, d, &mask);
         let tag = format!(
             "causal_flash_b{b}h{h}s{s}d{d}_f{}w{}k{}",
-            mask.frame_tokens, mask.window, mask.sink
+            mask.block_tokens, mask.window, mask.sink
         );
         let e_ref = max_abs(&got, &want);
         report.check(
@@ -238,7 +238,7 @@ pub fn wan_causal_attn(report: &mut Report, seed: &mut u64) -> StageResult<()> {
             t16(&bf16v(rand(seed, n, 1.0)), &shape)?,
         );
         let all = BlockCausal {
-            frame_tokens: s,
+            block_tokens: s,
             window: 0,
             sink: 0,
         };
@@ -270,9 +270,10 @@ pub fn wan_causal_attn(report: &mut Report, seed: &mut u64) -> StageResult<()> {
             t16(&bf16v(rand(seed, n, 1.0)), &shape)?,
             t16(&bf16v(rand(seed, n, 1.0)), &shape)?,
         );
+        // FastVideo's full-sequence SF-Wan mask: 3-frame blocks, no window.
         let mask = BlockCausal {
-            frame_tokens: ft,
-            window: 21,
+            block_tokens: 3 * ft,
+            window: 0,
             sink: 0,
         };
         let causal = time_ms(5, || {
@@ -301,6 +302,52 @@ pub fn wan_causal_attn(report: &mut Report, seed: &mut u64) -> StageResult<()> {
             json!({"seq": s, "heads": h, "causal_ms": causal, "dense_flash_ms": dense,
                    "sdpa_composed_ms": composed,
                    "causal_over_dense": causal / dense.max(1e-9)}),
+        );
+    }
+
+    // The autoregressive path (FastVideo's inference): one 3-frame block of
+    // queries against the KV cache window, unmasked (`nn::sdpa_kv_window`).
+    // Correctness of the flash route against the composed reference on a
+    // small odd shape, then the timing of the last block of an 81-frame clip
+    // (4 680 queries x 32 760 keys).
+    {
+        let (b, h, sq, sk, d) = (1usize, 3usize, 150usize, 451usize, 128usize);
+        let q = bf16v(rand(seed, b * h * sq * d, 1.0));
+        let k = bf16v(rand(seed, b * h * sk * d, 1.0));
+        let v = bf16v(rand(seed, b * h * sk * d, 1.0));
+        let (q16, k16, v16) = (
+            t16(&q, &[b, h, sq, d])?,
+            t16(&k, &[b, h, sk, d])?,
+            t16(&v, &[b, h, sk, d])?,
+        );
+        let flash = with_bf16_act(true, || nn::sdpa_kv_window_with(&q16, &k16, &v16, true))?;
+        let composed = with_bf16_act(true, || nn::sdpa_kv_window_with(&q16, &k16, &v16, false))?;
+        let e = max_abs(&host(&flash)?, &host(&composed)?);
+        report.check(
+            "kv_window_flash_vs_sdpa_composed",
+            e <= CAUSAL_ABS_LIMIT,
+            json!({"max_abs": e}),
+            json!({"max_abs": CAUSAL_ABS_LIMIT}),
+        )?;
+    }
+    {
+        let (sq, sk) = (3 * ft, 21 * ft);
+        let (q16, k16, v16) = (
+            t16(&bf16v(rand(seed, h * sq * d, 1.0)), &[1, h, sq, d])?,
+            t16(&bf16v(rand(seed, h * sk * d, 1.0)), &[1, h, sk, d])?,
+            t16(&bf16v(rand(seed, h * sk * d, 1.0)), &[1, h, sk, d])?,
+        );
+        let flash = time_ms(5, || {
+            with_bf16_act(true, || nn::sdpa_kv_window_with(&q16, &k16, &v16, true))?;
+            Ok(())
+        })?;
+        let composed = time_ms(3, || {
+            with_bf16_act(true, || nn::sdpa_kv_window_with(&q16, &k16, &v16, false))?;
+            Ok(())
+        })?;
+        report.note(
+            "kv_window_timing_3x21f",
+            json!({"sq": sq, "sk": sk, "heads": h, "flash_ms": flash, "sdpa_composed_ms": composed}),
         );
     }
     Ok(())
