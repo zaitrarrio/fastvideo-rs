@@ -18,6 +18,93 @@ text says **native**.
 
 ---
 
+## 0. Owner decisions (2026-09-27) — these override anything below
+
+1. **Video encoder: NVENC.** The runtime image gains the NVIDIA `video` driver
+   capability (`NVIDIA_DRIVER_CAPABILITIES=compute,utility,video`) and
+   `fastvideo-media` encodes H.264 on the GPU's NVENC. OpenH264 stays only as a
+   CPU-only test/CI backend behind a feature and is never used in a deployed
+   image (no Cisco patent licence when built from source). No x264.
+2. **H.264 level / 1344x768 H3 streams.** WHIP to Cloudflare: scale H3 streams to
+   1280x720 (level 3.1) before encoding. Full resolution (1344x768, level 4.0) is
+   supported when publishing to MediaMTX (self-hosted relay) and for peer WebRTC.
+   The WHIP target config selects the profile: `cloudflare` → 720p cap,
+   `mediamtx` / peer → native resolution.
+3. **Model tiers exposed by the APIs.**
+   - `h3-max` (fal `minimax/h3-max/*`, MiniMax `MiniMax-H3-Max`) and LTX
+     `ltx-2-5-pro` / `ltx-2-3-pro` map to **our highest-quality configuration**
+     of that family (no quality-reducing shortcuts: full step count / non-lossy
+     attention route / full VAE; exact recipe chosen per model in the engine
+     capability table and documented there).
+   - New variants **`h3-turbo`** and **`ltx-turbo`**: our FastH3 and LTX
+     configurations with the **fastest generation times** that still pass the
+     quality gate (e.g. FastH3 4-step VSA; LTX-2.5 distilled two-stage Sol),
+     exposed on every API that accepts a model/endpoint id (fal endpoint ids
+     `minimax/h3-turbo/{text,image,reference}-to-video`, MiniMax model
+     `MiniMax-H3-Turbo`, LTX model `ltx-turbo`, openai-videos model ids).
+   - Responses carry the resolved internal recipe in metadata where the wire
+     format allows it.
+
+4. **Cold start (serverless).** Serverless workers run the Rust runtime image
+   (`serve` target) with the weight volume mounted (`/runpod-volume`); nothing is
+   downloaded at start. Weight loading is the cold start, so it gets its own
+   engine packages:
+   - **E12 fast weight loading:** parallel large sequential reads from the
+     volume, pinned-host staging, and overlapping load with the first stages
+     (text encode before the DiT is resident). Target: H3 cold load from ~5.4–8.3
+     min to < 2 min; LTX-2.5 from ~2 min to < 1 min.
+   - **E13 pre-quantized FP8 text encoders (owner decision):** store the H3
+     text encoder's resident FP8 form (the weight-only `Fp8Rows` layout: E4M3
+     codes + per-row scales, as `llm::ResidentDecoder` builds today at load,
+     ~118 s) as safetensors next to the bf16 shards (e.g.
+     `h3-base/text_encoder_fp8/` with a manifest recording the source shard
+     hashes and the quantization rule) and load it directly; same treatment for
+     LTX's Gemma encoder so the first LTX request does not stream it (~61 s).
+     An offline `fv-gpucheck quantize-text-encoder` (or equivalent) tool writes
+     it; the loaded tensors must be byte-identical to the load-time
+     quantization (hash test). Written to both weight volumes (EU needs the
+     volume-sync decision first — it is full).
+   - **WP-19 cold-start measurement:** fresh Runpod serverless worker → submit →
+     first output, per model family, before and after E12/E13.
+
+5. **Sol-H3 serves the tau-ladder route (owner decision).** Whenever the server
+   runs Sol-H3 4-step, the engine capability table selects the profile
+   `h3/sol_h3_4step_engine_ladder` (Sol engine route, tau 1.0 / 1.25 / 1.5 on
+   forwards 1-3; RTX PRO 6000 768p: denoise 21.8 s vs 33.5 s dense, 1.53x,
+   gate PASS, LPIPS 0.375). The `sol-h3` recipe itself stays dense as
+   sol-engine publishes it for one GPU, so parity/oracle runs and the
+   upstream comparison keep their reference; the dense route remains
+   selectable as an explicit profile (`h3/sol_h3_4step`).
+
+6. **Draft tier (owner decision).** A third tier, **`draft`**, exposes our
+   faster configurations that do NOT pass the quality gate, for previews and
+   iteration: public ids `h3-draft` (fal `minimax/h3-draft/*`, MiniMax
+   `MiniMax-H3-Draft`) and `ltx-draft` (LTX API model id), plus openai-videos
+   model ids. Candidates (measured, gate FAIL, fastest first): H3 — FastH3
+   4-step VSA 480p + TAEH3 (8.1 s, RTX PRO 6000), FastH3 8-step Sol+TeaCache+
+   TAEH3; LTX — LTX-2.5 distilled + NVFP4 FFN (4K denoise 1.14x, -8.6 GiB,
+   fails sharpness at 4K) with TAEHV decode. Responses must mark the result as
+   draft quality (metadata where the wire allows). Tier order: draft < turbo <
+   max; `Tier` gains a `Draft` variant.
+
+7. **Cloudflare storage (owner decision).** Job records live in **Cloudflare D1**
+   (SQLite: jobs table + indexes on owner/status/created for the MiniMax and
+   FastVideo list endpoints; state-change writes, throttled progress). Media
+   (outputs, uploads, fetched inputs) lives in **Cloudflare R2** via the
+   existing S3-compatible artifact store with presigned URLs (KV was rejected
+   for media: 25 MiB value limit; and for jobs: 1 write/s/key, eventual
+   consistency, no queries). serve-kit gains a `D1JobStore` (D1 HTTP API)
+   next to the in-memory/file stores; running jobs stay authoritative in the
+   worker's memory, D1 is the durable/shared copy so any worker can answer
+   status/result after restarts or scale-to-zero.
+   Provisioned 2026-09-27: D1 `fv-jobs` (id 1796e295-a7f0-4402-bbed-ec94ccb27c15,
+   WNAM), R2 bucket `fv-media`. Runtime credentials are Runpod secrets
+   (reference as `{{ RUNPOD_SECRET_<name> }}` in templates): `fv_cf_account_id`,
+   `fv_cf_api_token` (D1 HTTP API), `fv_d1_database_id`, `fv_r2_bucket`,
+   `fv_r2_endpoint`, `fv_r2_access_key_id` / `fv_r2_secret_access_key` (R2 S3
+   keys derived from the API token: id / SHA-256 of the value). Vast: same
+   names as account env vars once a Vast API key is available.
+
 ## 1. Goals and non-goals
 
 ### 1.1 Goals

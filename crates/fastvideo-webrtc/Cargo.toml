@@ -10,19 +10,25 @@ description = "fv-serve WebRTC: str0m peer host (UDP mux, ICE-TCP), data channel
 fastvideo-protocol.workspace = true
 fastvideo-media.workspace = true
 bytes.workspace = true
+serde.workspace = true
+serde_json.workspace = true
 thiserror.workspace = true
-tokio = { workspace = true, features = ["sync", "net", "time"] }
+tokio = { workspace = true, features = ["sync", "net", "time", "rt", "io-util", "macros"] }
 tracing.workspace = true
 url.workspace = true
 
 str0m = { workspace = true, optional = true }
 reqwest = { workspace = true, optional = true }
 
+[dev-dependencies]
+axum.workspace = true
+tokio = { workspace = true, features = ["sync", "net", "time", "rt", "rt-multi-thread", "io-util", "macros"] }
+
 [features]
 default = []
 # The str0m peer host (pure Rust, rust-crypto provider).
 str0m = ["dep:str0m"]
-# WHIP publisher client (HTTP via reqwest).
+# WHIP publisher client (HTTP via reqwest). The publisher itself also needs `str0m`.
 whip = ["dep:reqwest"]
 
 [lints]

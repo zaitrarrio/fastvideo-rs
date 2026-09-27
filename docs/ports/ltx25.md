@@ -217,23 +217,55 @@ the linear matches the exact dequantized host math (f64) at rel_l2 1.66e-3
 bf16 linear 37.6-40.9 dB PSNR, 37.8 dB at the FFN up shape (rel_l2 0.145,
 the FP4 quantization itself).
 
-**Microbench** (ms, RTX PRO 6000, the shapes the pipeline runs: stage 1
-whole, stage 2 in 16 384-row chunks). "linear" = activation quantize + GEMM
-+ bias; bf16 linear = cuBLASLt bf16 with the bias epilogue; FP8 = the W8A8
-tensorwise linear (`FASTVIDEO_FP8`, activation quantize included, no bias).
+**Microbench** (ms, RTX PRO 6000, run `8f12d44-09271258`, the shapes the
+pipeline runs: stage 1 whole, stage 2 in 16 384-row chunks). "linear" =
+activation quantize + GEMM + bias; for the down projection it includes the
+GELU (the bf16 FFN's bf16 GELU pass; fused into the NVFP4 quantizer). bf16
+linear = cuBLASLt bf16 with the bias epilogue; FP8 = the W8A8 tensorwise
+linear (`FASTVIDEO_FP8`, activation quantize included, no bias, no GELU).
 
 | shape (M, K → N) | bf16 GEMM | bf16 linear | FP8 linear | NVFP4 GEMM | NVFP4 linear | vs bf16 linear |
 |---|---|---|---|---|---|---|
-| 4K stage 1 up (32640, 4096 → 16384) | 10.82 | 10.50 | 6.30 | 3.09 | 3.87 | 2.72x |
-| 1080p stage 1 up (32130, 4096 → 16384) | 10.33 | 10.49 | 6.24 | 3.06 | 3.83 | 2.74x |
-| stage 2 chunk up (16384, 4096 → 16384) | 5.29 | 5.36 | 3.19 | 1.45 | 1.85 | 2.90x |
-| 4K stage 2 whole up (130560, 4096 → 16384) | 46.07 | 46.18 | 26.04 | 11.89 | 14.59 | 3.17x |
-| 4K stage 1 down (32640, 16384 → 4096), GEMM only | 10.10 | | | 2.75 | | 3.67x (GEMM) |
+| 4K stage 1 up (32640, 4096 → 16384) | 11.16 | 10.81 | 6.33 | 3.15 | 3.90 | 2.77x |
+| 4K stage 1 down (32640, 16384 → 4096) | 10.35 | 12.62 | 8.69 | 2.99 | 5.63 | 2.24x |
+| 1080p stage 1 up (32130, 4096 → 16384) | 10.37 | 10.59 | 6.27 | 3.09 | 3.86 | 2.75x |
+| 1080p stage 1 down (32130, 16384 → 4096) | 10.32 | 12.58 | 8.61 | 2.93 | 5.56 | 2.26x |
+| stage 2 chunk up (16384, 4096 → 16384) | 5.30 | 5.43 | 3.21 | 1.47 | 1.87 | 2.91x |
+| stage 2 chunk down (16384, 16384 → 4096) | 5.16 | 6.37 | 4.37 | 1.34 | 2.72 | 2.34x |
+| 4K stage 2 whole up (130560, 4096 → 16384) | 46.60 | 47.00 | 26.44 | 12.11 | 14.77 | 3.18x |
 
-The down-projection linear rows (GELU pass included) failed in that run on a
-harness bug (the bf16 baseline's GELU came back f32); the GEMM-only row is
-from the `nvfp4_gemm` group (run `36ce5a2-09271149`). An unaligned token
-count (32130) runs unpadded.
+The down projection's NVFP4 linear spends about half its time in the two
+activation passes (amax + quantize over the 16384-wide GELU input); a fused
+amax in the up GEMM's epilogue is the next cut. An unaligned token count
+(32130) runs unpadded.
+
+**Generations** (RTX PRO 6000, run `51adbb3-09271342`, `runpod-matrix.sh
+precision` with `FV_PRECISION_ARM=ltx-nvfp4`, `FV_LPIPS=1`): Sol stage 2,
+resident, warm process, every run encoding its prompt (no text cache), one
+prompt, seed 1024. bf16 = `ltx2/ltx25_distill_sol`, NVFP4 =
+`ltx2/ltx25_distill_sol_nvfp4`. Seconds; peak = pool high-water mark
+(allocated / reserved GiB), smi = device-wide peak.
+
+| workload | arm | stage 1 | stage 2 | denoise | total (e2e) | peak GiB | smi GiB |
+|---|---|---|---|---|---|---|---|
+| 4k5s | bf16 | 45.75 | 79.92 | 125.67 | 209.86 | 55.23 / 56.66 | 57.3 |
+| 4k5s | NVFP4 | 40.10 | 70.61 | 110.71 | 186.48 | 46.60 / 47.97 | 48.7 |
+| 1080p20s | bf16 | 43.21 | 75.17 | 118.38 | 194.98 | 54.94 / 56.19 | 56.9 |
+| 1080p20s | NVFP4 | 38.24 | 67.24 | 105.48 | 183.34 | 46.32 / 47.53 | 48.2 |
+
+| workload | denoise speedup | total speedup | LPIPS mean / max | PSNR mean / min dB | sharpness ratio | jitter ratio | gate (`gate-policy.toml`, lossy) |
+|---|---|---|---|---|---|---|---|
+| 4k5s | 1.135x | 1.125x | 0.193 / 0.255 | 19.07 / 17.50 | **1.098** (limit 0.95-1.08) | 1.016 | **fail**: `quantitative_quality` (sharpness); performance pass |
+| 1080p20s | 1.122x | 1.063x | 0.254 / 0.303 | 18.27 / 17.13 | 0.994 | 1.064 | **pass** (visual artifact deferred) |
+
+The NVFP4 cells record 3072 `nvfp4_cublaslt` linear calls per request
+(`benchmark.json` `quantized_linears`). The totals include
+60-68 s of streamed Gemma encoding in both arms (noisy between runs). The
+NVFP4 FFN saves 8.6 GiB of DiT weights, which shows as the ~8.6 GiB lower
+peak in every phase. PSNR and LPIPS are telemetry in the policy (the
+bf16 chaos floor); the 4K candidate fails only the hard sharpness range:
+its frames are ~10% sharper than bf16's (FP4 noise reading as detail),
+so the profile stays default off.
 
 ## DiffVAE (diffusion video decoder)
 

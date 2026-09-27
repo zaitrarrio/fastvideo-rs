@@ -1,0 +1,134 @@
+{
+  "bad_key": {
+    "body": {
+      "error": {
+        "http_code": "401",
+        "message": "login fail: invalid credentials (1004)",
+        "type": "authorized_error"
+      },
+      "request_id": "021785229015510a2c883cf675b9804d",
+      "type": "error"
+    },
+    "http": 401
+  },
+  "body_too_large": {
+    "body": {
+      "error": {
+        "http_code": "400",
+        "message": "invalid params, request body exceeds 64 MB (2013)",
+        "type": "bad_request_error"
+      },
+      "request_id": "021785229015510a2c883cf675b9804d",
+      "type": "error"
+    },
+    "http": 400
+  },
+  "delete_running": {
+    "body": {
+      "error": {
+        "http_code": "400",
+        "message": "invalid params, task 123456789012345678 is running and cannot be cancelled or deleted (2013)",
+        "type": "bad_request_error"
+      },
+      "request_id": "021785229015510a2c883cf675b9804d",
+      "type": "error"
+    },
+    "http": 400
+  },
+  "filtered": {
+    "body": {
+      "error": {
+        "http_code": "422",
+        "message": "video description contains sensitive content (1026)",
+        "type": "unprocessable_entity_error"
+      },
+      "request_id": "021785229015510a2c883cf675b9804d",
+      "type": "error"
+    },
+    "http": 422
+  },
+  "gap_2k": {
+    "body": {
+      "error": {
+        "http_code": "400",
+        "message": "invalid params, 2K resolution is not supported by this server (2013)",
+        "type": "bad_request_error"
+      },
+      "request_id": "021785229015510a2c883cf675b9804d",
+      "type": "error"
+    },
+    "http": 400
+  },
+  "gap_provider_file": {
+    "body": {
+      "error": {
+        "http_code": "400",
+        "message": "invalid params, provider file references are not supported; send a URL or data URI (2013)",
+        "type": "bad_request_error"
+      },
+      "request_id": "021785229015510a2c883cf675b9804d",
+      "type": "error"
+    },
+    "http": 400
+  },
+  "internal": {
+    "body": {
+      "error": {
+        "http_code": "500",
+        "message": "internal error, boom (1000)",
+        "type": "server_error"
+      },
+      "request_id": "021785229015510a2c883cf675b9804d",
+      "type": "error"
+    },
+    "http": 500
+  },
+  "loading": {
+    "body": {
+      "error": {
+        "http_code": "529",
+        "message": "overloaded, models are loading",
+        "type": "overloaded_error"
+      },
+      "request_id": "021785229015510a2c883cf675b9804d",
+      "type": "error"
+    },
+    "http": 529
+  },
+  "queue_full": {
+    "body": {
+      "error": {
+        "http_code": "429",
+        "message": "rate limit, job queue is full (1002)",
+        "type": "rate_limit_error"
+      },
+      "request_id": "021785229015510a2c883cf675b9804d",
+      "type": "error"
+    },
+    "http": 429
+  },
+  "rate_limited": {
+    "body": {
+      "error": {
+        "http_code": "429",
+        "message": "rate limit, please retry later (1002)",
+        "type": "rate_limit_error"
+      },
+      "request_id": "021785229015510a2c883cf675b9804d",
+      "type": "error"
+    },
+    "http": 429
+  },
+  "unknown_task": {
+    "body": {
+      "error": {
+        "http_code": "404",
+        "message": "invalid task_id (2013)",
+        "type": "bad_request_error"
+      },
+      "request_id": "021785229015510a2c883cf675b9804d",
+      "type": "error"
+    },
+    "http": 404
+  }
+}

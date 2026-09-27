@@ -4,9 +4,11 @@
 #
 #   verify-weights.sh <cell>...        cells: fasth3-8step h3-base fasth3-4step-vsa
 #                                      fasth3-4step-dense sol-h3 sol-h3-spark
-#                                      ltx25-two-stage fastwan21-1.3b
+#                                      ltx25-two-stage ltx23 fastwan21-1.3b
 #                                      wan22-ti2v-5b wan21-t2v-14b sfwan21-1.3b
 #                                      mmaudio-44k-v2
+#                                      hy15-480-t2v hy15-480-i2v hy15-720-t2v
+#                                      hy15-720-i2v aux
 #   verify-weights.sh --list           print the cells and what each needs
 #
 # For every weight root a cell needs, this checks:
@@ -14,6 +16,8 @@
 #   2. every `*.safetensors.index.json` lists shards that all exist on disk;
 #   3. every safetensors file is its full length (header + data, via
 #      verify-safetensors.sh), following HF-cache symlinks.
+# The `aux` cell instead checks every auxiliary/ row of weights-manifest.tsv (TAE and
+# LPIPS files): present, the listed size, the listed SHA-256.
 # Exit status is non-zero on the first cell with a gap; the report names it.
 set -euo pipefail
 
@@ -53,12 +57,18 @@ needs() {
     mmaudio-44k-v2)
       local m=mmaudio-44k-v2/safetensors
       echo ":$m/mmaudio_large_44k_v2.safetensors :$m/vae_44k.safetensors :$m/synchformer.safetensors :$m/bigvgan_v2_44k.safetensors :$m/clip_dfn5b_h14_384.safetensors mmaudio-44k-v2:weights mmaudio-44k-v2:ext_weights mmaudio-44k-v2:bigvgan_v2_44khz_128band_512x mmaudio-44k-v2:DFN5B-CLIP-ViT-H-14-384" ;;
+    # HunyuanVideo 1.5 Diffusers trees (weights-manifest.tsv rows of the same name).
+    hy15-480-t2v | hy15-480-i2v | hy15-720-t2v | hy15-720-i2v)
+      echo "$1:transformer $1:vae $1:text_encoder $1:text_encoder_2 $1:tokenizer $1:tokenizer_2 $1:scheduler" ;;
+    ltx23)
+      echo "ltx23:transformer ltx23:vae ltx23:audio_vae ltx23:vocoder ltx23:text_encoder ltx23:text_encoder/gemma ltx23:tokenizer ltx23:text_embedding_projection ltx23:spatial_upscaler" ;;
+    aux) echo "aux" ;;
     *) return 1 ;;
   esac
 }
 
-CELLS=(fasth3-8step h3-base fasth3-4step-vsa fasth3-4step-dense sol-h3 sol-h3-spark ltx25-two-stage fastwan21-1.3b
-  wan22-ti2v-5b wan21-t2v-14b sfwan21-1.3b mmaudio-44k-v2)
+CELLS=(fasth3-8step h3-base fasth3-4step-vsa fasth3-4step-dense sol-h3 sol-h3-spark ltx25-two-stage ltx23 fastwan21-1.3b
+  wan22-ti2v-5b wan21-t2v-14b sfwan21-1.3b mmaudio-44k-v2 hy15-480-t2v hy15-480-i2v hy15-720-t2v hy15-720-i2v aux)
 
 if [[ "${1:-}" == "--list" ]]; then
   for c in "${CELLS[@]}"; do printf '%-20s %s\n' "$c" "$(needs "$c")"; done
@@ -107,7 +117,34 @@ check_path() {
   return $rc
 }
 
+# aux: every auxiliary/ row of weights-manifest.tsv, by size and SHA-256.
+check_aux() {
+  local rc=0 rel url meta sha size p got n=0
+  while IFS=$'\t' read -r rel url meta; do
+    sha="${meta#sha256:}"; sha="${sha%% *}"
+    size="${meta##*size:}"
+    p="$W/$rel"
+    n=$((n + 1))
+    if [[ ! -f "$p" ]]; then
+      echo "  MISSING $p" >&2; rc=1; continue
+    fi
+    if [[ "$(wc -c <"$p" | tr -d ' ')" != "$size" ]]; then
+      echo "  SIZE $p: $(wc -c <"$p" | tr -d ' '), expected $size" >&2; rc=1; continue
+    fi
+    got="$(sha256sum "$p" | awk '{print $1}')"
+    if [[ "$got" != "$sha" ]]; then
+      echo "  SHA256 $p: $got, expected $sha" >&2; rc=1
+    fi
+  done < <(grep -E '^auxiliary/' "$HERE/weights-manifest.tsv")
+  (( n > 0 )) || { echo "  no auxiliary/ rows in weights-manifest.tsv" >&2; rc=1; }
+  return $rc
+}
+
 for cell in "$@"; do
+  if [[ "$cell" == aux ]]; then
+    if check_aux; then echo "weights ok: aux"; else echo "weights INCOMPLETE: aux" >&2; fail=1; fi
+    continue
+  fi
   reqs="$(needs "$cell")" || { echo "unknown cell $cell (see --list)" >&2; exit 2; }
   cell_rc=0
   for r in $reqs; do

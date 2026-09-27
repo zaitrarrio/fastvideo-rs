@@ -301,7 +301,13 @@ pub fn attention_host(
 /// VSA-H3 for one request: built once, shared by every block of every step.
 pub struct H3Vsa {
     plan: H3TilePlan,
-    k_vid: usize,
+    /// Per-(step, layer) sparsity (the `vsa` technique's schedule) and its
+    /// default; `None`: `k_vid` everywhere.
+    schedule: Option<(f64, fastvideo_models::techniques::VsaSchedule)>,
+    /// k_vid of the block about to run ([`Self::select`]).
+    current: std::sync::atomic::AtomicUsize,
+    /// The fine stage on the FP8 kernel (`fp8_attention` with `vsa`).
+    fp8: bool,
     heads: usize,
     head_dim: usize,
     #[cfg(feature = "cuda")]
@@ -386,7 +392,9 @@ impl H3Vsa {
         };
         Ok(Self {
             plan,
-            k_vid,
+            schedule: None,
+            current: std::sync::atomic::AtomicUsize::new(k_vid),
+            fp8: false,
             heads,
             head_dim,
             #[cfg(feature = "cuda")]
@@ -400,8 +408,41 @@ impl H3Vsa {
         &self.plan
     }
 
+    /// The k_vid of the block about to run.
     pub fn k_vid(&self) -> usize {
-        self.k_vid
+        self.current.load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    /// Run `schedule` (per step and layer) around the default `sparsity`.
+    /// A uniform schedule changes nothing.
+    pub fn with_schedule(
+        mut self,
+        sparsity: f64,
+        schedule: fastvideo_models::techniques::VsaSchedule,
+    ) -> Self {
+        if !schedule.is_uniform() {
+            crate::wan::log::info(format_args!(
+                "vsa-h3 schedule: {}",
+                schedule.describe(sparsity)
+            ));
+            self.schedule = Some((sparsity, schedule));
+        }
+        self
+    }
+
+    /// The fine stage on the FP8 kernel ([`crate::wan::attn_fp8`]).
+    pub fn with_fp8(mut self, on: bool) -> Self {
+        self.fp8 = on;
+        self
+    }
+
+    /// Set the k_vid for block `layer` of forward `step` (a no-op without a
+    /// schedule). The block loop calls this before each VSA block.
+    pub fn select(&self, step: usize, layer: usize) {
+        if let Some((default, schedule)) = &self.schedule {
+            let k = self.plan.k_vid(schedule.at(*default, step, layer));
+            self.current.store(k, std::sync::atomic::Ordering::Relaxed);
+        }
     }
 
     /// `q`, `k`, `v` (post-norm, post-RoPE) and `gate` (`to_gate_compress`,
@@ -434,7 +475,7 @@ impl H3Vsa {
                 self.plan.prefix_tiles as u64,
                 self.plan.video_tiles as u64,
             );
-            let kv = (self.k_vid as u64).min(v);
+            let kv = (self.k_vid() as u64).min(v);
             crate::wan::evalstats::vsa(self.heads, v * (p + kv) + p * n, n * n, v * kv, v * v);
         }
         #[cfg(feature = "cuda")]
@@ -458,7 +499,7 @@ impl H3Vsa {
             &v.host_cow()?,
             g.as_deref(),
             &self.plan,
-            self.k_vid,
+            self.k_vid(),
             self.heads,
             self.head_dim,
         )?;
@@ -483,7 +524,11 @@ impl H3Vsa {
             self.plan.num_tiles(),
         );
         let scale = 1.0 / (dim as f32).sqrt();
+        let k_vid = self.k_vid();
         let err = |e: device::DeviceError| msg(e.to_string());
+        if let Some(out) = self.attend_device_b16(dp, &q, &k, &v, gate.as_ref())? {
+            return Ok(out);
+        }
         let on_device = |t: &CudaTensor| -> Result<CudaTensor> {
             let mut t = if t.is_bf16() {
                 t.to_f32_act()?
@@ -536,10 +581,10 @@ impl H3Vsa {
 
         // 3. Selection: all prefix tiles + top-k_vid video tiles, as one top-k
         //    over scores whose prefix columns were lifted above everything.
-        let topk = if self.k_vid >= self.plan.video_tiles {
+        let topk = if k_vid >= self.plan.video_tiles {
             n
         } else {
-            self.plan.prefix_tiles + self.k_vid
+            self.plan.prefix_tiles + k_vid
         };
         let selected = phase("vsa_h3_2_select", || {
             let biased =
@@ -563,6 +608,12 @@ impl H3Vsa {
                 (0, n)
             };
             let sparse = phase("vsa_h3_3_mma", || {
+                if self.fp8 && crate::wan::attn_fp8::supported() {
+                    return crate::wan::attn_fp8::vsa_fine(
+                        qd, kd, vd, &selected, &dp.plan, bh, seq, dim, topk, scale, q_base,
+                        q_tiles,
+                    );
+                }
                 ops::vsa_mma_attn_range_device(
                     qd, kd, vd, &selected, &dp.plan, bh, seq, dim, topk, scale, q_base, q_tiles,
                 )
@@ -652,6 +703,131 @@ impl H3Vsa {
             CudaTensor::cat(&[&dense, &out.narrow(2, prefix, seq - prefix)?], 2)
         })
     }
+
+    /// [`Self::attend_device`] on bf16 q/k/v/gate (`FASTVIDEO_BF16_ACT`),
+    /// without widening them to f32: tile means, tiling and the combine read
+    /// the bf16 buffers directly (`vsa_tile_mean_b16`, `vsa_tile_qkv_b16`,
+    /// `vsa_combine_g16`). The f32 path rounds every one of those reads to
+    /// bf16, so the result is the same bits. `None` when an input is not a
+    /// device bf16 tensor, the fine stage is not the tensor-core kernel, or
+    /// `FASTVIDEO_VSA_BF16=0`: the caller runs the f32 path.
+    #[cfg(feature = "cuda")]
+    fn attend_device_b16(
+        &self,
+        dp: &DevicePlan,
+        q: &CudaTensor,
+        k: &CudaTensor,
+        v: &CudaTensor,
+        gate: Option<&CudaTensor>,
+    ) -> Result<Option<CudaTensor>> {
+        use crate::wan::stats::phase;
+        use crate::wan::{device, ops};
+        if !crate::wan::envflag::bool_flag("FASTVIDEO_VSA_BF16", true) {
+            return Ok(None);
+        }
+        let (bh, seq, dim, n) = (self.heads, self.plan.seq, self.head_dim, self.plan.num_tiles());
+        let sm = device::global_device().map_or(0, |d| d.sm_major);
+        let forced_gather = fastvideo_models::techniques::kernels::choice(
+            fastvideo_models::techniques::kernels::KernelOp::VsaAttention,
+        ) == "gather";
+        if sm < 8 || dim != 128 || forced_gather {
+            return Ok(None);
+        }
+        let (Some(qd), Some(kd), Some(vd)) = (q.device_slice_bf16(), k.device_slice_bf16(), v.device_slice_bf16())
+        else {
+            return Ok(None);
+        };
+        let gd = match gate {
+            Some(g) => match g.device_slice_bf16() {
+                Some(s) => Some(s),
+                None => return Ok(None),
+            },
+            None => None,
+        };
+        static LOGGED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+        crate::wan::log::info_once(&LOGGED, format_args!("vsa-h3: bf16 inputs read in place (no f32 widening)"));
+        let scale = 1.0 / (dim as f32).sqrt();
+        let err = |e: device::DeviceError| msg(e.to_string());
+
+        let (scores, coarse) = phase("vsa_h3_1_coarse", || {
+            let qc = ops::vsa_tile_mean_bf16_device(qd, &dp.plan, bh, seq, dim)?;
+            let kc = ops::vsa_tile_mean_bf16_device(kd, &dp.plan, bh, seq, dim)?;
+            let mut scores = ops::alloc(bh * n * n)?;
+            device::matmul_linear_wt_strided_batched_f32(&qc, &kc, &mut scores, bh, n, dim, n, scale)
+                .map_err(err)?;
+            let coarse = match gd {
+                Some(_) => {
+                    let vc = ops::vsa_tile_mean_bf16_device(vd, &dp.plan, bh, seq, dim)?;
+                    let probs = ops::softmax_last_device(&scores, n)?;
+                    let mut coarse = ops::alloc(bh * n * dim)?;
+                    device::matmul_2d_strided_batched_f32(&probs, &vc, &mut coarse, bh, n, n, dim)
+                        .map_err(err)?;
+                    coarse
+                }
+                None => ops::fill_device(bh * n * dim, 0.0)?,
+            };
+            Ok::<_, TensorError>((scores, coarse))
+        })?;
+        let topk = if self.k_vid() >= self.plan.video_tiles {
+            n
+        } else {
+            self.plan.prefix_tiles + self.k_vid()
+        };
+        let selected = phase("vsa_h3_2_select", || {
+            let biased =
+                CudaTensor::from_device_slice(scores, vec![bh * n, n])?.add(&dp.prefix_bias)?;
+            let b = biased
+                .device_slice()
+                .ok_or_else(|| msg("vsa-h3: biased scores have no device buffer"))?;
+            ops::vsa_topk_device(b, bh * n, n, topk)
+        })?;
+        let mut out = ops::fill_device(bh * seq * dim, 0.0)?;
+        let prefix_tiles = self.plan.prefix_tiles;
+        let (q_base, q_tiles) = if topk < n && prefix_tiles > 0 && prefix_tiles < n {
+            (prefix_tiles, n - prefix_tiles)
+        } else {
+            (0, n)
+        };
+        let sparse = phase("vsa_h3_3_mma", || {
+            let (qt, kt, vt) = (
+                ops::vsa_tile_qkv_bf16_device(qd, &dp.plan, bh, seq, dim)?,
+                ops::vsa_tile_qkv_bf16_device(kd, &dp.plan, bh, seq, dim)?,
+                ops::vsa_tile_qkv_bf16_device(vd, &dp.plan, bh, seq, dim)?,
+            );
+            ops::vsa_mma_attn_tiled_device(&qt, &kt, &vt, &selected, &dp.plan, bh, dim, topk, scale, q_base, q_tiles)
+        })?;
+        ops::vsa_combine_gate16_device(&sparse, &coarse, gd, &dp.plan, &mut out, bh, n, 0, seq, dim)?;
+        drop(sparse);
+        let prefix = self.plan.prefix_rows;
+        if topk == n || prefix == 0 {
+            return Ok(Some(CudaTensor::from_device_slice(out, vec![1, bh, seq, dim])?));
+        }
+        // Text / audio query rows: dense against all keys, plus their
+        // compression term, exactly as the f32 path (the SDPA quantizes its
+        // operands to bf16 either way).
+        phase("vsa_h3_4_prefix_dense", || {
+            let mut dense = crate::wan::nn::scaled_dot_product_attention(&q.narrow(2, 0, prefix)?, k, v, Some(scale))?;
+            if let Some(g) = gate {
+                let branch = CudaTensor::from_device_slice(coarse, vec![bh * n, dim])?
+                    .index_select_rows(&dp.prefix_branch_rows)?;
+                let term = branch
+                    .reshape(vec![1, bh, prefix, dim])?
+                    .quantize_bf16()?
+                    .mul(&g.narrow(2, 0, prefix)?.quantize_bf16()?)?
+                    .quantize_bf16()?;
+                dense = dense.quantize_bf16()?.add(&term)?.quantize_bf16()?.to_f32_act()?;
+            }
+            let dense = if dense.is_bf16() { dense.to_f32_act()? } else { dense };
+            let mut dense = dense;
+            dense.ensure_device()?;
+            if let Some(d) = dense.device_slice() {
+                ops::block_copy_device(d, &mut out, bh, prefix * dim, prefix * dim, seq * dim, 0, 0)?;
+                return Ok(Some(CudaTensor::from_device_slice(out, vec![1, bh, seq, dim])?));
+            }
+            let out = CudaTensor::from_device_slice(out, vec![1, bh, seq, dim])?;
+            Ok(Some(CudaTensor::cat(&[&dense, &out.narrow(2, prefix, seq - prefix)?], 2)?))
+        })
+    }
 }
 
 #[cfg(test)]
@@ -668,6 +844,41 @@ mod tests {
     /// 70 text rows, 2 x 33 audio rows, a 5 x 4 x 6 video grid.
     fn layout() -> H3PackedLayout {
         H3PackedLayout::new(70, (5, 8, 12), 33, [1, 2, 2]).unwrap()
+    }
+
+    /// A schedule moves k_vid per (step, layer); a uniform one never does.
+    #[test]
+    fn a_vsa_schedule_selects_k_vid_per_step_and_layer() {
+        use fastvideo_models::techniques::{StepSet, VsaSchedule};
+        let l = layout();
+        let cfg = H3VsaConfig {
+            sparsity: 0.75,
+            group: 8,
+            tile_size: 64,
+        };
+        let plain = H3Vsa::new(&l, 2, 8, cfg).unwrap();
+        let k0 = plain.k_vid();
+        plain.select(0, 0);
+        assert_eq!(plain.k_vid(), k0, "no schedule: select is a no-op");
+        let uniform = H3Vsa::new(&l, 2, 8, cfg)
+            .unwrap()
+            .with_schedule(0.75, VsaSchedule::default());
+        uniform.select(3, 7);
+        assert_eq!(uniform.k_vid(), k0);
+        let s = VsaSchedule {
+            per_step: [(0, 0.5)].into(),
+            dense_steps: StepSet::empty(),
+            dense_layers: StepSet::parse("1").unwrap(),
+            dense_sparsity: 0.0,
+        };
+        let v = H3Vsa::new(&l, 2, 8, cfg).unwrap().with_schedule(0.75, s);
+        let p = v.plan().clone();
+        v.select(0, 0);
+        assert_eq!(v.k_vid(), p.k_vid(0.5));
+        v.select(2, 1);
+        assert_eq!(v.k_vid(), p.video_tiles, "a dense layer keeps every tile");
+        v.select(2, 0);
+        assert_eq!(v.k_vid(), p.k_vid(0.75));
     }
 
     #[test]

@@ -1,0 +1,8 @@
+{
+  "error": {
+    "code": 422,
+    "message": "Generation failed: CUDA out of memory",
+    "param": null,
+    "type": "invalid_request_error"
+  }
+}

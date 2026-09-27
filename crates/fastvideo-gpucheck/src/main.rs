@@ -26,6 +26,7 @@ mod hunyuan15_stage;
 #[cfg(feature = "cuda")]
 mod kernels;
 #[cfg(feature = "cuda")]
+mod kernels_attn;
 mod kernels_fp8;
 #[cfg(feature = "cuda")]
 mod kernels_fuse;
@@ -56,6 +57,7 @@ mod st;
 mod taehv;
 mod wan_oracle;
 mod wan_stage;
+mod wan_stream;
 mod writer_bench;
 
 use std::path::PathBuf;

@@ -17,7 +17,7 @@
 #   gate_cells: fv-gpucheck gate with scripts/gpu/gate-policy.toml
 #     (FV_GATE_POLICY overrides) into $RUNS/gate/.
 set -euo pipefail
-FAMILY="${1:?usage: runpod-matrix.sh headline|mmaudio|h3|ltx|hunyuan|wan|b200|rtx6000|rtx5090|fastvideo|precision|precision-debug|trace|fuse|oracle|ltxvae|writer|eval|ltxoffload|techniques|h3arms}"
+FAMILY="${1:?usage: runpod-matrix.sh headline|mmaudio|h3|ltx|hunyuan|wan|b200|rtx6000|rtx5090|fastvideo|precision|precision-debug|trace|fuse|oracle|ltxvae|writer|eval|ltxoffload|techniques|h3arms|h3attn}"
 WORK="${FV_WORK:-/workspace}"
 BIN="${FV_GPUCHECK:-/opt/fastvideo-rs/target/release/fv-gpucheck}"
 W="$WORK/weights"
@@ -84,7 +84,17 @@ if [[ -n "$PROMPTS_FILE" ]]; then
   PROMPT_ARGS=(--prompts "$PROMPTS_FILE")
 fi
 LPIPS_ARGS=()
-LPIPS_DIR="${FV_LPIPS_DIR:-$SCRATCH/lpips}"
+# Small pinned non-Hub weights (TAE, LPIPS) live on the weight volume under
+# $W/auxiliary (weights-manifest.tsv auxiliary/ rows, verify-weights.sh aux).
+# They are read in place when complete; otherwise the fetch scripts fill the
+# container disk (volume copy per file first, then the pinned URLs).
+AUX="${FV_AUX_DIR:-$W/auxiliary}"
+export FV_AUX_DIR="$AUX"
+if [[ -z "${FV_LPIPS_DIR:-}" && -f "$AUX/lpips/.complete" ]]; then
+  LPIPS_DIR="$AUX/lpips"
+else
+  LPIPS_DIR="${FV_LPIPS_DIR:-$SCRATCH/lpips}"
+fi
 GATE_POLICY="${FV_GATE_POLICY:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/gate-policy.toml}"
 
 write_json() {
@@ -182,11 +192,18 @@ gated_cell() {
   run_cell "$name" "$@"
 }
 
-# Tiny-autoencoder weights (madebyollin/taehv) live on the container disk:
-# runpod-http's start command fetches them, and this fetches again only when a
-# file is missing. They are not part of the weight tree, so verify-weights.sh
-# never gates on them; a TAE cell whose file is absent is recorded as skipped.
-TAE="${FV_TAE_DIR:-$SCRATCH/tae}"
+# Tiny-autoencoder weights (madebyollin/taehv): the volume copy
+# ($W/auxiliary/tae, complete and hash-checked by verify-weights.sh aux) is
+# read in place. Without it they live on the container disk: runpod-http's
+# start command fetches them, and this fetches again only when a file is
+# missing (fetch-tae.sh copies from the volume first, then downloads). TAE
+# cells do not gate on verify-weights.sh; a TAE cell whose file is absent is
+# recorded as skipped.
+if [[ -z "${FV_TAE_DIR:-}" && -f "$AUX/tae/.complete" ]]; then
+  TAE="$AUX/tae"
+else
+  TAE="${FV_TAE_DIR:-$SCRATCH/tae}"
+fi
 TAEH3="$TAE/taeh3.safetensors"
 TAELTX="$TAE/taeltx2_3_wide.safetensors"
 tae_fetched=""
@@ -463,6 +480,26 @@ Audio: male narration, grass rustle, wind, distant strings, cricket night}"
     fi
     FV_RUNS_DIR="$RUNS" FV_CELLS="${FV_SFWAN_CELLS:-kernels-wan sfwan13-81f-flash sfwan13-81f-composed sfwan13-81f-wholeclip sfwan13-81f-fullvae}" \
       bash "${BASH_SOURCE[0]}" wan || true
+    ;;
+  sfstream)
+    # Open-ended causal SF-Wan (wan::stream, serve E6): parity with the
+    # bounded 81-frame path, long runs (drift, fps, TTFF), prompt switches,
+    # and a 10-minute memory-growth run. TAEHV decodes every block.
+    TAE_W="$TAE/taew2_1.safetensors"
+    [[ -f "$TAE_W" ]] || bash "$(dirname "${BASH_SOURCE[0]}")/fetch_taehv.sh" "$TAE" >>"$RUNS/tae-fetch.log" 2>&1 \
+      || log "WARN: taew2_1 fetch failed (tae-fetch.log)"
+    export FASTVIDEO_TAE_DIR="$TAE"
+    SF_PROMPT="${FV_SF_PROMPT:-A drone shot gliding over a winding river through an autumn forest, golden afternoon light, slow steady forward camera motion, highly detailed}"
+    SF_SWITCH="${FV_SF_SWITCH:-A drone shot gliding over snowy mountain peaks at dawn, pink sky, slow steady forward camera motion, highly detailed}"
+    sf_stream() {
+      local name="$1"; shift
+      gated_cell "$name" sfwan21-1.3b "$BIN" --keep-going --mode fast wan stream --weights "$W/sfwan21-1.3b" \
+        --prompt "$SF_PROMPT" --switch-prompt "$SF_SWITCH" --seed "$SEED" "$@"
+    }
+    # shellcheck disable=SC2086
+    sf_stream sfstream-main --parity ${FV_SFSTREAM_RUNS:---run reb-sink3-120s,seconds=120,rope=rebased,sink=3 \
+      --run switch-keep-30s,seconds=30,switch_at=15,switch=keep --run switch-reset-20s,seconds=20,switch_at=10,switch=reset}
+    sf_stream sfstream-10min --run reb-sink3-600s,seconds=600,rope=rebased,sink=3 --window-s 30
     ;;
   headline)
     # The headline configurations on one pod (a new GPU type, one run):
@@ -905,7 +942,7 @@ Audio: male narration, grass rustle, wind, distant strings, cricket night}"
     # default elsewhere; this family opts into TAEH3. Oxide GEMM stays off.
     unset FASTVIDEO_NVFP4_OXIDE_GEMM
     taeh3=""
-    for p in "$W/taeh3/taeh3.safetensors" "$W/taeh3" "$WORK/taeh3/taeh3.safetensors"; do
+    for p in "$AUX/tae/taeh3.safetensors" "$W/taeh3/taeh3.safetensors" "$W/taeh3" "$WORK/taeh3/taeh3.safetensors" "$TAE/taeh3.safetensors"; do
       if [[ -f "$p" || ( -d "$p" && -f "$p/taeh3.safetensors" ) ]]; then
         taeh3="$p"
         break
@@ -1413,6 +1450,47 @@ Audio: male narration, grass rustle, wind, distant strings, cricket night}"
       grep -h '/gpu_trace ' "$RUNS/$cell/stderr.log" 2>/dev/null | tail -1 | cut -c1-400 | sed "s/^/[$cell] /" | tee -a "$LOG" || true
     done
     ;;
+  attn3)
+    # sm_120 dense attention A/B (FVID-2026-09-27-attention-sm120): flash_mma_fwd2
+    # vs cuDNN's unified SDPA node, FastH3 4-step dense 768p denoise and LTX-2.5
+    # 1080p 20 s dense stage 2, same prompt/seed, then the frame diff.
+    h3_common=(
+      --prompt "$PROMPT"
+      --seconds 5
+      --seed "$SEED"
+      --text-encoder auto
+      --text-cache "$SCRATCH/h3-text-cache"
+      --text-weights "$W/h3-base"
+      --warm
+    )
+    for arm in ${FV_ATTN3_ARMS:-v2 cudnn}; do
+      gated_cell "fasth3-4step-dense-768p-$arm" fasth3-4step-dense \
+        env FASTVIDEO_FLASH_KERNEL="$arm" \
+        "$BIN" --mode fast h3 gen --weights "$W/h3-base" --h3-recipe 4step-dense \
+          --adaln-cache "$RUNS/fasth3-4step-dense-768p-adaln.cache" \
+          --clip-dir "$RUNS/fasth3-4step-dense-768p-$arm/frames" "${h3_common[@]}"
+    done
+    for arm in ${FV_ATTN3_ARMS:-v2 cudnn}; do
+      gated_cell "ltx25-1080p20s-dense-$arm" ltx25-two-stage \
+        env FASTVIDEO_FLASH_KERNEL="$arm" \
+        "$BIN" --mode fast ltx2 gen --model-version 2.5 \
+          --weights "$W/ltx25" --dit "$W/ltx25" --workload 1080p20s --dense-stage2 \
+          --prompt "$PROMPT" --seed "$SEED" --two-stage --text streamed --warm \
+          --clip "$RUNS/ltx25-1080p20s-dense-$arm/frames"
+    done
+    # VSA on bf16 activations read in place (FASTVIDEO_VSA_BF16) vs the f32
+    # widening path: the frames must match bit for bit.
+    for vb in ${FV_ATTN3_VSA:-0 1}; do
+      gated_cell "fasth3-4step-vsa-768p-b16$vb" fasth3-4step-vsa \
+        env FASTVIDEO_VSA_BF16="$vb" \
+        "$BIN" --mode fast h3 gen --weights "$W/h3-base" --h3-recipe 4step-vsa \
+          --adaln-cache "$RUNS/fasth3-4step-vsa-768p-adaln.cache" \
+          --clip-dir "$RUNS/fasth3-4step-vsa-768p-b16$vb/frames" "${h3_common[@]}"
+    done
+    compare_cells fasth3-4step-dense-768p-v2 fasth3-4step-dense-768p-cudnn
+    compare_cells ltx25-1080p20s-dense-v2 ltx25-1080p20s-dense-cudnn
+    compare_cells fasth3-4step-vsa-768p-b160 fasth3-4step-vsa-768p-b161
+    ;;
   fuse)
     # Phase 3c DiT block fusions (FASTVIDEO_H3_FUSE, FASTVIDEO_LTX_FUSE).
     # 1. kernels-fuse: `fv-gpucheck kernels --groups dit_fusion,bf16_act`,
@@ -1714,6 +1792,90 @@ Audio: male narration, grass rustle, wind, distant strings, cricket night}"
         --clip-dir "$RUNS/fasth3-4step-vsa-480p-taeh3/frames" "${h3_common[@]}"
     compare_cells fasth3-4step-vsa-480p fasth3-4step-vsa-480p-taeh3
     gate_cells fasth3-4step-vsa-480p fasth3-4step-vsa-480p-taeh3 lossy
+    for f in "$RUNS"/gate/gate-*.json; do
+      [[ -f "$f" ]] && log "$(basename "$f"): $(grep -o '"verdict": "[a-z]*"' "$f" | head -1)"
+    done
+    ;;
+  h3attn)
+    # H3 attention arms (docs/techniques.md "H3 attention arms"): each arm is
+    # a profiles/h3/*.toml, gated (lossy) against the recipe's plain profile
+    # from the same process. All arms of one recipe run in ONE process
+    # (`h3 gen --arm NAME=PROFILE`): the weights load once, the first arm is
+    # the baseline, and every arm runs the whole prompt set warm.
+    #   attn-fp8-kernels   fv-gpucheck kernels --groups attn_fp8 (FP8 vs bf16
+    #                      parity + timing); on a FAIL the *fp8attn arms are dropped
+    #   fasth3-8step-768p  VSA sparsity sweep / schedules, milder Sol routes, FP8
+    #   fasth3-4step-vsa-768p  VSA sparsity sweep / schedule, FP8
+    #   sol-h3-768p        Sol-H3 4-step engine route tuning, FP8 dense
+    #   h3-480p-fullopt    sol-h3-rtx fullopt route tuning, FP8 dense (480p:
+    #                      49 forwards at 768p cost ~10 min per arm)
+    # FV_CELLS picks cells; FV_H3ATTN_ARMS_<CELL> (dashes as underscores)
+    # (comma-separated) overrides a cell's arm list; FV_H3ATTN_RES=480p runs
+    # every cell at 480p (the smoke run).
+    export FV_GEN_TIMEOUT_S="${FV_ARM_TIMEOUT_S:-7200}"
+    h3_common=(
+      --prompt "$PROMPT"
+      --seconds 5
+      --seed "$SEED"
+      --text-encoder streamed
+      --text-cache "$SCRATCH/h3-text-cache"
+      --text-weights "$W/h3-base"
+      --warm
+      "${PROMPT_ARGS[@]}"
+    )
+    fp8_ok=1
+    if [[ -z "${FV_CELLS:-}" || " $FV_CELLS " == *" attn-fp8-kernels "* ]]; then
+      run_cell attn-fp8-kernels \
+        "$BIN" --out "$RUNS/attn-fp8-kernels" --keep-going kernels --groups attn_fp8
+      if grep -q '\[FAIL\]' "$RUNS/attn-fp8-kernels/stderr.log" 2>/dev/null \
+        || ! grep -q 'attn_fp8_dense' "$RUNS/attn-fp8-kernels/stderr.log" 2>/dev/null; then
+        fp8_ok=0
+        log "attn_fp8 parity did not pass: the fp8attn arms are dropped"
+      fi
+      grep -hE 'attn_fp8_(dense|vsa)' "$RUNS/attn-fp8-kernels/stderr.log" 2>/dev/null | cut -c1-400 | tee -a "$LOG" || true
+    fi
+    # arms_cell <cell> <weight cell> <weights dir> <base profile> <geometry> <arm>...
+    arms_cell() {
+      local cell="$1" wcell="$2" weights="$3" base="$4" geo="$5"
+      shift 5
+      local var="FV_H3ATTN_ARMS_${cell//-/_}" arms=() args=() a
+      # shellcheck disable=SC2206
+      if [[ -n "${!var:-}" ]]; then arms=(${!var//,/ }); else arms=("$@"); fi
+      [[ "${FV_H3ATTN_RES:-}" == 480p ]] && geo="--height 480 --width 832"
+      for a in "${arms[@]}"; do
+        [[ "$a" == *fp8attn* && "$fp8_ok" != 1 ]] && continue
+        args+=(--arm "$a=h3/$a")
+      done
+      # shellcheck disable=SC2086
+      gated_cell "$cell" "$wcell" \
+        env ${ARM_ENV:-} "$BIN" --techniques "h3/$base" --mode fast h3 gen --weights "$W/$weights" \
+          $geo \
+          --adaln-cache "$RUNS/$cell-adaln.cache" \
+          --arm "base=h3/$base" "${args[@]}" \
+          --clip-dir "$RUNS/$cell-{arm}/frames" "${h3_common[@]}"
+      for a in "${arms[@]}"; do
+        [[ -d "$RUNS/$cell-$a" ]] || continue
+        compare_cells "$cell-base" "$cell-$a"
+        gate_cells "$cell-base" "$cell-$a" lossy
+      done
+      for a in base "${arms[@]}"; do
+        [[ -f "$RUNS/$cell-$a/benchmark.json" ]] || continue
+        log "$cell-$a $(grep -oE '"(denoise_s|total_s)": *[0-9.]+' "$RUNS/$cell-$a/benchmark.json" | head -2 | tr '\n' ' ')"
+      done
+    }
+    arms_cell fasth3-8step-768p fasth3-8step h3-8step fasth3_8step "" \
+      fasth3_8step_vsa085 fasth3_8step_vsa09 fasth3_8step_vsa0925 fasth3_8step_vsa095 \
+      fasth3_8step_vsa09_edges fasth3_8step_vsa095_edges \
+      fasth3_8step_sol_vsa_d2 fasth3_8step_sol_vsa_d2_t05 fasth3_8step_sol_d2 \
+      fasth3_8step_fp8attn
+    arms_cell fasth3-4step-vsa-768p fasth3-4step-vsa h3-base fasth3_4step_vsa "" \
+      fasth3_4step_vsa0925 fasth3_4step_vsa095 fasth3_4step_vsa095_edges fasth3_4step_vsa_fp8attn
+    arms_cell sol-h3-768p sol-h3 h3-base sol_h3_4step "" \
+      sol_h3_4step_engine sol_h3_4step_engine_t075 sol_h3_4step_engine_ladder sol_h3_4step_fp8attn
+    # The rtx5090 profiles are sol-engine's BF16 configs; the matrix cell runs
+    # this runtime's MXFP8 default (the env flag overrides every arm alike).
+    ARM_ENV=FASTVIDEO_H3_QUANT=mxfp8 arms_cell h3-480p-fullopt h3-base h3-base rtx5090_fullopt "--height 480 --width 832" \
+      rtx5090_fullopt_d6 rtx5090_fullopt_t125 rtx5090_fullopt_fp8attn
     for f in "$RUNS"/gate/gate-*.json; do
       [[ -f "$f" ]] && log "$(basename "$f"): $(grep -o '"verdict": "[a-z]*"' "$f" | head -1)"
     done

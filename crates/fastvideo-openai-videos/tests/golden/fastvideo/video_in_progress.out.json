@@ -1,0 +1,28 @@
+{
+  "completed_at": null,
+  "created_at": 1790510400,
+  "error": null,
+  "expires_at": 1790596800,
+  "file_name": null,
+  "file_path": null,
+  "id": "video_gen_0123456789abcdef0123456789abcdef",
+  "inference_time_s": null,
+  "media_type": "video/mp4",
+  "metadata": {
+    "quality_gate": true,
+    "recipe": "4step-vsa",
+    "tier": "turbo"
+  },
+  "model": "h3-turbo",
+  "object": "video",
+  "peak_memory_mb": null,
+  "progress": 25,
+  "prompt": "A red fox runs through fresh snow at dawn",
+  "quality": "standard",
+  "remixed_from_video_id": null,
+  "seconds": "5",
+  "size": "1344x768",
+  "stage_durations": {},
+  "status": "in_progress",
+  "url": null
+}

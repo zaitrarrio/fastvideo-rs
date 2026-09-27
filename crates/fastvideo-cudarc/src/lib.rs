@@ -18,6 +18,7 @@ pub mod gamecraft;
 pub mod gen3c;
 pub mod glm_image;
 pub mod h3;
+pub mod hooks;
 pub mod hub_keys;
 pub mod hunyuan15;
 pub mod hyworld;
@@ -39,6 +40,7 @@ pub mod wan;
 pub mod world_fuse;
 pub mod zimage;
 
+pub use hooks::{CancelToken, Hooks, Progress, Stage};
 pub use wan::device::{resolve_device, DeviceError};
 pub use wan::{
     ClipVision, ClipVisionConfig, CudaTensor, DenoiseStep, GenerateConfig, LoadParts, StepObserver,

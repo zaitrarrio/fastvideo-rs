@@ -88,6 +88,38 @@ pub enum Stage {
         #[arg(long, default_value = "none")]
         audio: String,
     },
+    /// The open-ended causal SF-Wan rollout (`wan::stream`): `--parity`
+    /// against the bounded 81-frame path, then each `--run` for its video
+    /// seconds (see `wan_stream.rs` for the run syntax).
+    Stream {
+        #[arg(long)]
+        weights: PathBuf,
+        #[arg(long, default_value = "sf_wan_t2v_1_3b")]
+        preset: String,
+        #[arg(long, default_value = "a cat walking on the grass")]
+        prompt: String,
+        /// The prompt a run's `switch_at` changes to.
+        #[arg(long, default_value = "a dog running along a beach at sunset")]
+        switch_prompt: String,
+        #[arg(long, default_value_t = 1024)]
+        seed: u64,
+        #[arg(long, default_value_t = 480)]
+        height: usize,
+        #[arg(long, default_value_t = 832)]
+        width: usize,
+        #[arg(long, default_value_t = 16)]
+        fps: u32,
+        #[arg(long)]
+        parity: bool,
+        /// `name,seconds=S[,rope=rel|abs][,sink=N][,window=N][,switch_at=S][,switch=keep|reset][,drop_rgb=1]`
+        #[arg(long = "run")]
+        runs: Vec<String>,
+        /// Video seconds per statistics window.
+        #[arg(long, default_value_t = 10.0)]
+        window_s: f64,
+        #[arg(long, default_value = "cuda")]
+        device: String,
+    },
     /// Wan 2.2 TI2V-5B module parity against a reference dump
     /// (`scripts/gpu/upstream/oracle_wan22.py`, Diffusers): VAE encode and
     /// decode of the dump's video / latents, and one DiT forward per
@@ -214,6 +246,36 @@ pub fn run(report: &mut Report, stage: &Stage) -> StageResult<()> {
                 },
             )
         }
+        Stage::Stream {
+            weights,
+            preset,
+            prompt,
+            switch_prompt,
+            seed,
+            height,
+            width,
+            fps,
+            parity,
+            runs,
+            window_s,
+            device,
+        } => crate::wan_stream::run(
+            report,
+            &crate::wan_stream::Args {
+                weights,
+                preset,
+                prompt,
+                switch_prompt,
+                seed: *seed,
+                height: *height,
+                width: *width,
+                fps: *fps,
+                parity: *parity,
+                runs,
+                window_s: *window_s,
+                device,
+            },
+        ),
         Stage::Oracle {
             weights,
             reference,

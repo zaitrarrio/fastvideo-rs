@@ -1,0 +1,8 @@
+{
+  "model": "fasth3",
+  "prompt": "A red fox runs through fresh snow at dawn, cinematic lighting",
+  "size": "1344x768",
+  "seconds": "5",
+  "fps": 24,
+  "seed": 1000
+}

@@ -18,7 +18,12 @@
 //! `max_attention` is `local_attn_size` frames, or `sliding_window_num_frames`
 //! (21) frames when `local_attn_size == -1`, where a clip longer than that is
 //! an error as in FastVideo. RoPE is absolute (`start_frame` offsets the
-//! table); FastVideo's `relativistic` cache policy is not ported.
+//! table) by default. FastVideo's `relativistic` cache policy
+//! (`rope_cache_policy`, `models/dits/_relative_rope.py`) is
+//! [`KvSpec::relativistic`]: the cache holds un-roped keys and every forward
+//! ropes the window at positions `[0, window)`, the queries at its tail, so
+//! positions stay in the trained range however long the rollout runs (the
+//! open-ended stream, `wan::stream`).
 
 use std::sync::Mutex;
 
@@ -43,6 +48,31 @@ pub struct KvSpec {
     pub max_attention: usize,
     /// `local_attn_size != -1`: the cache rolls instead of refusing.
     pub rolling: bool,
+    /// FastVideo `rope_cache_policy = "relativistic"`: raw (normed, un-roped)
+    /// keys in the cache; the window is roped from position 0 each forward.
+    pub relativistic: bool,
+    /// [`KvRope::RebasedSink`]: absolute keys, the sink re-roped each block
+    /// to sit just before the rest of the window.
+    pub rebase_sink: bool,
+}
+
+/// How cached keys carry RoPE in a rolling cache.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum KvRope {
+    /// Keys roped at their absolute frame, the sink too (FastVideo
+    /// `rope_cache_policy = "absolute"`, the bounded path's).
+    Absolute,
+    /// FastVideo `relativistic`: un-roped keys cached, the whole window
+    /// roped from position 0 at every forward, the queries at its tail.
+    Relativistic,
+    /// The relativistic geometry at the absolute policy's cost. Attention
+    /// only sees relative positions, and the rolled part of the window is
+    /// contiguous up to the queries either way; only the sink differs. So
+    /// keep absolute keys and, once the cache rolls, re-rope the sink keys
+    /// (from an un-roped copy taken once) to the frames just before the
+    /// rolled part. Every query–key offset is then the relativistic one;
+    /// the per-forward cost is one sink-sized rope per layer per block.
+    RebasedSink,
 }
 
 impl KvSpec {
@@ -56,6 +86,8 @@ impl KvSpec {
                 sink,
                 max_attention: l * frame_tokens,
                 rolling: true,
+                relativistic: false,
+                rebase_sink: false,
             },
             Err(_) => {
                 let n = cfg.sliding_window_num_frames * frame_tokens;
@@ -65,9 +97,50 @@ impl KvSpec {
                     sink,
                     max_attention: n,
                     rolling: false,
+                    relativistic: false,
+                    rebase_sink: false,
                 }
             }
         }
+    }
+
+    /// A rolling cache of `local_attn_frames` frames that keeps the first
+    /// `sink_frames` frames when it rolls (FastVideo `local_attn_size`,
+    /// `sink_size`), with the given RoPE policy.
+    pub fn rolling(
+        frame_tokens: usize,
+        local_attn_frames: usize,
+        sink_frames: usize,
+        rope: KvRope,
+    ) -> Result<Self> {
+        if local_attn_frames == 0 || sink_frames >= local_attn_frames {
+            return Err(msg(format!(
+                "causal kv: sink {sink_frames} frames must be below the window \
+                 ({local_attn_frames} frames)"
+            )));
+        }
+        Ok(Self {
+            frame_tokens,
+            capacity: local_attn_frames * frame_tokens,
+            sink: sink_frames * frame_tokens,
+            max_attention: local_attn_frames * frame_tokens,
+            rolling: true,
+            relativistic: rope == KvRope::Relativistic,
+            rebase_sink: rope == KvRope::RebasedSink && sink_frames > 0,
+        })
+    }
+
+    /// First frame the sink keys should sit at when the write that ends at
+    /// frame `end_frame` is done: just before the rolled part of a full
+    /// window, and where they are (0) until the cache rolls.
+    pub fn sink_target(&self, end_frame: usize) -> usize {
+        end_frame.saturating_sub(self.window_frames())
+    }
+
+    /// Frames the queries can read (the RoPE table a relativistic window
+    /// needs).
+    pub fn window_frames(&self) -> usize {
+        self.max_attention / self.frame_tokens.max(1)
     }
 }
 
@@ -78,6 +151,32 @@ struct KvLayer {
     v: Option<CudaTensor>,
     global_end: usize,
     local_end: usize,
+    /// [`KvRope::RebasedSink`]: the sink keys without RoPE (f32), taken
+    /// once, and the first frame the cached sink keys are roped at now.
+    raw_sink: Option<CudaTensor>,
+    sink_at: usize,
+}
+
+/// Wan's interleaved RoPE (`is_neox_style=False`, tables repeat-interleaved)
+/// on BHSD `x` with `[S, D]` tables: BHSD is BSHD with batch `B·H` and one
+/// head. The result is f32.
+pub(crate) fn rope_bhsd_f32(x: &CudaTensor, cos: &CudaTensor, sin: &CudaTensor) -> Result<CudaTensor> {
+    let [b, h, s, d] = x.shape[..] else {
+        return Err(msg(format!("rope_bhsd expects BHSD, got {:?}", x.shape)));
+    };
+    x.reshape(vec![b * h, s, 1, d])?
+        .apply_rotary_bshd(cos, sin)?
+        .reshape(vec![b, h, s, d])
+}
+
+/// [`rope_bhsd_f32`] in `x`'s dtype (FastVideo's `.type_as(v)`).
+pub(crate) fn rope_bhsd(x: &CudaTensor, cos: &CudaTensor, sin: &CudaTensor) -> Result<CudaTensor> {
+    let y = rope_bhsd_f32(x, cos, sin)?;
+    if x.is_bf16() && !y.is_bf16() {
+        y.quantize_bf16()
+    } else {
+        Ok(y)
+    }
 }
 
 /// Where the cache pointers moved for one write (the testable arithmetic of
@@ -253,6 +352,94 @@ impl CausalKvCache {
     pub fn is_empty(&self) -> bool {
         self.len() == 0
     }
+
+    /// Tokens of the window the next write of `n` tokens at `current_start`
+    /// will read (layer 0's pointers; every layer moves in step).
+    pub fn window_after(&self, current_start: usize, n: usize) -> Result<usize> {
+        let (global_end, local_end) = self
+            .layers
+            .first()
+            .map(|l| {
+                let l = l.lock().expect("causal kv lock");
+                (l.global_end, l.local_end)
+            })
+            .unwrap_or((0, 0));
+        let mv = self.spec.plan(global_end, local_end, current_start, n)?;
+        Ok(mv.local_end - mv.window_start)
+    }
+
+    /// [`KvRope::RebasedSink`]: re-rope every layer's sink keys to start at
+    /// frame `target` (see [`KvSpec::sink_target`]). `orig` are the RoPE
+    /// tables of the sink's own frames `0 .. sink` (to take the un-roped
+    /// copy the first time), `new` those of `target .. target + sink`
+    /// (`[sink_tokens, D]` each). A no-op when the sink is already there.
+    pub fn rebase_sink(
+        &self,
+        target: usize,
+        orig: (&CudaTensor, &CudaTensor),
+        new: (&CudaTensor, &CudaTensor),
+    ) -> Result<()> {
+        let sink = self.spec.sink;
+        if sink == 0 {
+            return Ok(());
+        }
+        let mut neg_orig: Option<CudaTensor> = None;
+        for l in &self.layers {
+            let mut slot = l.lock().expect("causal kv lock");
+            if slot.sink_at == target {
+                continue;
+            }
+            let Some(k) = slot.k.clone() else { continue };
+            if k.shape[2] < sink {
+                continue;
+            }
+            if slot.raw_sink.is_none() {
+                // Rotating back by the sink's own positions (sin negated)
+                // recovers the un-roped keys up to one rounding; kept f32
+                // so re-roping never compounds error block after block.
+                if neg_orig.is_none() {
+                    neg_orig = Some(orig.1.mul_scalar(-1.0));
+                }
+                let neg = neg_orig.as_ref().expect("negated sin");
+                slot.raw_sink = Some(rope_bhsd_f32(&k.narrow(2, 0, sink)?, orig.0, neg)?);
+            }
+            let raw = slot.raw_sink.as_ref().expect("raw sink");
+            let mut head = rope_bhsd_f32(raw, new.0, new.1)?;
+            if k.is_bf16() {
+                head = head.quantize_bf16()?;
+            }
+            let len = k.shape[2];
+            slot.k = Some(if len > sink {
+                CudaTensor::cat(&[&head, &k.narrow(2, sink, len - sink)?], 2)?
+            } else {
+                head
+            });
+            slot.sink_at = target;
+        }
+        Ok(())
+    }
+
+    /// Drop every cached K/V (a new rollout from block 0).
+    pub fn reset(&self) {
+        for l in &self.layers {
+            *l.lock().expect("causal kv lock") = KvLayer::default();
+        }
+    }
+
+    /// Bytes of K and V held across all layers (for memory-growth checks).
+    pub fn bytes(&self) -> usize {
+        self.layers
+            .iter()
+            .map(|l| {
+                let l = l.lock().expect("causal kv lock");
+                [l.k.as_ref(), l.v.as_ref()]
+                    .into_iter()
+                    .flatten()
+                    .map(|t| t.numel() * if t.is_bf16() { 2 } else { 4 })
+                    .sum::<usize>()
+            })
+            .sum()
+    }
 }
 
 /// One layer's view of the cache for a block forward.
@@ -274,6 +461,8 @@ mod tests {
             sink: 0,
             max_attention: frames * 10,
             rolling: false,
+            relativistic: false,
+            rebase_sink: false,
         }
     }
 
@@ -301,6 +490,8 @@ mod tests {
             sink: 10,
             max_attention: 60,
             rolling: true,
+            relativistic: false,
+            rebase_sink: false,
         };
         assert_eq!(s.plan(0, 0, 0, 30).unwrap().local_end, 30);
         assert_eq!(s.plan(30, 30, 30, 30).unwrap().local_end, 60);
@@ -377,6 +568,126 @@ mod tests {
         assert_eq!(cache.len(), t * frame_tokens);
     }
 
+    fn tiny_causal_dit() -> (crate::wan::transformer::WanTransformer3D, WanVideoArchConfig) {
+        use crate::wan::transformer::WanTransformer3D;
+        use crate::wan::weights::WeightMap;
+        let mut cfg = WanVideoArchConfig::tiny();
+        cfg.causal = true;
+        cfg.num_layers = 2;
+        cfg.num_frames_per_block = 2;
+        let map = WeightMap::generated(|key, shape| {
+            let n: usize = shape.iter().product();
+            let seed = key
+                .bytes()
+                .fold(7u64, |a, b| a.wrapping_mul(131).wrapping_add(u64::from(b)));
+            (0..n)
+                .map(|i| {
+                    let x = seed
+                        .wrapping_add(i as u64)
+                        .wrapping_mul(6364136223846793005)
+                        >> 35;
+                    ((x % 2001) as f32 / 1000.0 - 1.0) * 0.3
+                })
+                .collect()
+        });
+        (WanTransformer3D::load(cfg.clone(), &map).unwrap(), cfg)
+    }
+
+    /// `blocks` blocks of the tiny causal DiT through a rolling cache.
+    fn roll(rope: KvRope, window: usize, sink: usize, blocks: usize) -> Vec<f32> {
+        let (dit, cfg) = tiny_causal_dit();
+        let (c, h, w, fpb) = (cfg.in_channels, 4usize, 6usize, cfg.num_frames_per_block);
+        let frame_tokens = (h / 2) * (w / 2);
+        let text: Vec<f32> = (0..cfg.text_len * cfg.text_dim)
+            .map(|i| ((i as f32) * 0.11).cos())
+            .collect();
+        let text = CudaTensor::from_vec(text, vec![1, cfg.text_len, cfg.text_dim]).unwrap();
+        let ts = CudaTensor::from_vec(vec![500.0], vec![1]).unwrap();
+        let spec = KvSpec::rolling(frame_tokens, window, sink, rope).unwrap();
+        let cache = CausalKvCache::new(spec, cfg.num_layers);
+        let mut out = Vec::new();
+        for blk in 0..blocks {
+            let lat: Vec<f32> = (0..c * fpb * h * w)
+                .map(|i| ((i as f32) * 0.37 + blk as f32).sin())
+                .collect();
+            let x = CudaTensor::from_vec(lat, vec![1, c, fpb, h, w]).unwrap();
+            let y = dit.forward_kv(&x, &ts, &text, &cache, blk * fpb).unwrap();
+            out.extend_from_slice(&y.host_cow().unwrap());
+        }
+        assert_eq!(cache.len(), window.min(blocks * fpb) * frame_tokens);
+        out
+    }
+
+    /// (max abs difference, max abs of `a`).
+    fn max_diff(a: &[f32], b: &[f32]) -> (f32, f32) {
+        let err = a
+            .iter()
+            .zip(b.iter())
+            .map(|(x, y)| (x - y).abs())
+            .fold(0.0f32, f32::max);
+        let scale = a.iter().map(|x| x.abs()).fold(0.0f32, f32::max);
+        assert!(scale > 1e-3, "degenerate output");
+        (err, scale)
+    }
+
+    /// Relativistic RoPE only moves every position by the same amount while
+    /// the window is contiguous (no sink), and attention sees relative
+    /// positions only: rolling past the window, it matches absolute RoPE.
+    #[test]
+    fn relativistic_rope_matches_absolute_without_a_sink() {
+        let a = roll(KvRope::Absolute, 4, 0, 5);
+        let r = roll(KvRope::Relativistic, 4, 0, 5);
+        let (err, scale) = max_diff(&a, &r);
+        assert!(err <= 1e-4 * scale.max(1.0), "max abs {err} (scale {scale})");
+    }
+
+    /// With a sink the policies part once the cache rolls; the rebased sink
+    /// gives FastVideo's relativistic offsets.
+    #[test]
+    fn rebased_sink_matches_relativistic() {
+        let r = roll(KvRope::Relativistic, 6, 2, 8);
+        let b = roll(KvRope::RebasedSink, 6, 2, 8);
+        let a = roll(KvRope::Absolute, 6, 2, 8);
+        let (err, scale) = max_diff(&r, &b);
+        assert!(err <= 1e-4 * scale.max(1.0), "rebased: max abs {err} (scale {scale})");
+        let (apart, _) = max_diff(&r, &a);
+        assert!(apart > 1e2 * err.max(1e-6), "absolute should differ with a sink ({apart})");
+    }
+
+    /// Every policy runs past the checkpoint's RoPE table
+    /// (`rope_max_seq_len`) in constant cache memory.
+    #[test]
+    fn rollouts_outlive_the_rope_table() {
+        let (dit, cfg) = tiny_causal_dit();
+        let (c, h, w, fpb) = (cfg.in_channels, 4usize, 6usize, cfg.num_frames_per_block);
+        let frame_tokens = (h / 2) * (w / 2);
+        let text = CudaTensor::zeros(&[1, cfg.text_len, cfg.text_dim]);
+        let ts = CudaTensor::from_vec(vec![0.0], vec![1]).unwrap();
+        let x = CudaTensor::from_vec(
+            (0..c * fpb * h * w).map(|i| (i as f32 * 0.1).cos()).collect(),
+            vec![1, c, fpb, h, w],
+        )
+        .unwrap();
+        for rope in [KvRope::Absolute, KvRope::Relativistic, KvRope::RebasedSink] {
+            let spec = KvSpec::rolling(frame_tokens, 6, 2, rope).unwrap();
+            let cache = CausalKvCache::new(spec, cfg.num_layers);
+            let blocks = cfg.rope_max_seq_len / fpb + 3;
+            let mut bytes = 0;
+            for blk in 0..blocks {
+                let y = dit.forward_kv(&x, &ts, &text, &cache, blk * fpb).unwrap();
+                assert!(y.host_cow().unwrap().iter().all(|v| v.is_finite()));
+                if blk == 3 {
+                    bytes = cache.bytes();
+                }
+                dit.forget_rotary_before((blk * fpb).saturating_sub(6));
+            }
+            assert_eq!(cache.len(), 6 * frame_tokens);
+            assert_eq!(cache.bytes(), bytes, "{rope:?}: the cache grew after it filled");
+            cache.reset();
+            assert!(cache.is_empty());
+        }
+    }
+
     #[test]
     fn update_keeps_prefix_and_window() {
         let spec = KvSpec {
@@ -385,6 +696,8 @@ mod tests {
             sink: 2,
             max_attention: 8,
             rolling: true,
+            relativistic: false,
+            rebase_sink: false,
         };
         let cache = CausalKvCache::new(spec, 1);
         let blk = |base: f32| {

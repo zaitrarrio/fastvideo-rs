@@ -1,0 +1,31 @@
+{
+  "items": [
+    {
+      "content": {},
+      "created_at": 1785125529,
+      "duration": 4,
+      "id": "100000000000000002",
+      "modality": "video",
+      "model": "MiniMax-H3",
+      "ratio": "9:16",
+      "resolution": "768P",
+      "status": "running",
+      "task_type": "generation",
+      "updated_at": 1785125600
+    },
+    {
+      "content": {},
+      "created_at": 1785125529,
+      "duration": 5,
+      "id": "100000000000000001",
+      "modality": "video",
+      "model": "MiniMax-H3",
+      "ratio": "16:9",
+      "resolution": "768P",
+      "status": "queued",
+      "task_type": "generation",
+      "updated_at": 1785125529
+    }
+  ],
+  "total": 2
+}

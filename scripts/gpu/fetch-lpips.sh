@@ -13,8 +13,13 @@
 #       (the file the lpips 0.1.4 wheel ships)
 #
 #   fetch-lpips.sh [dest]
+#
+# The weight volume's copy comes first: $FV_AUX_DIR/lpips (default
+# <weights>/auxiliary/lpips, the auxiliary/ rows of weights-manifest.tsv) is
+# copied when its SHA-256 matches; the pinned URL is the fallback.
 set -euo pipefail
 dest="${1:-${FV_SCRATCH:-/fvscratch}/lpips}"
+vol="${FV_AUX_DIR:-${FV_WEIGHTS:-${FV_WORK:-/workspace}/weights}/auxiliary}/lpips"
 mkdir -p "$dest"
 
 fetch() {
@@ -25,6 +30,13 @@ fetch() {
     return 0
   fi
   part="$out.part.$$"
+  rm -f "$part"
+  if [[ -f "$vol/$name" ]] && cp -f "$vol/$name" "$part" \
+    && [[ "$(sha256sum "$part" | awk '{print $1}')" == "$sha" ]]; then
+    mv -f "$part" "$out"
+    echo "lpips ok (volume copy $vol/$name): $out"
+    return 0
+  fi
   rm -f "$part"
   curl -fsSL --proto '=https' --retry 5 --retry-delay 3 --retry-all-errors -o "$part" "$url"
   got="$(sha256sum "$part" | awk '{print $1}')"

@@ -1,7 +1,8 @@
 //! Normalized protocol model shared by every fv-serve adapter (design §3).
 //!
 //! - [`request`]: the normalized [`GenerationRequest`] every adapter produces.
-//! - [`caps`]: [`ModelCaps`] and the frame-grid / canvas helpers.
+//! - [`caps`]: [`ModelCaps`], the draft/turbo/max [`Tier`]s, and the frame-grid /
+//!   canvas helpers.
 //! - [`negotiate`](mod@negotiate): [`negotiate()`] turns request + caps +
 //!   staged inputs into a [`ResolvedJob`], refusing engine gaps with
 //!   [`GapId`]s.
@@ -27,7 +28,7 @@ pub mod stream;
 
 pub use av::{Pcm, RgbFrame};
 pub use caps::{
-    AudioCaps, CanvasCaps, FpsCaps, FrameGrid, KnobCaps, ModelCaps, RefLimits, StreamCaps,
+    AudioCaps, CanvasCaps, FpsCaps, FrameGrid, KnobCaps, ModelCaps, RefLimits, StreamCaps, Tier,
 };
 pub use error::{ApiError, ErrorKind, GapId};
 pub use http::{
@@ -41,8 +42,8 @@ pub use job::{
 };
 pub use negotiate::{
     canvas_for_aspect, draw_seed, negotiate, precheck, resolve_canvas, resolve_frames,
-    resolve_model, AudioPlan, MediaProbe, PostProcess, ResolvedCanvas, ResolvedJob, StagedInputs,
-    StagedMedia,
+    resolve_model, resolve_tier, AudioPlan, MediaProbe, PostProcess, ResolvedCanvas, ResolvedJob,
+    StagedInputs, StagedMedia,
 };
 pub use request::{
     Anchor, AudioInput, AudioOut, AudioRole, CanvasSpec, Family, GenerationRequest, Keyframe,

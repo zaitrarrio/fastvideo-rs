@@ -1,0 +1,25 @@
+# Measured (RTX PRO 6000, b299214, 5 prompts, medians): 768p denoise 41.31 s (1.11x), LPIPS 0.544, PSNR 12.0 dB, sharpness 0.83, jitter 0.78; gate FAIL (sharpness + jitter, 5 of 5) vs FastH3 8-step 768p (denoise 45.76 s).
+# FastH3 8-step, Sol-Attn (tau 1.0) except VSA on steps 0-1 and blocks 0-1 / 48-49, MXFP8.
+# An arm of the h3attn matrix family (docs/techniques.md, "H3 attention arms").
+
+[id]
+name = "fasth3_8step_sol_vsa_d2"
+family = "minimax_h3"
+description = "FastH3 8-step, Sol-Attn (tau 1.0) except VSA on steps 0-1 and blocks 0-1 / 48-49, MXFP8."
+
+[pipeline]
+model = "h3"
+recipe = "8step"
+
+[techniques.sol_attn]
+preset = "rtx"
+tau = 1.0
+thresh_type = "diag"
+dense_steps = 2
+dense_layers = "0-1,48-49"
+dense_backend = "vsa"     # the route's dense calls run the checkpoint's VSA
+sink = "text"
+
+[techniques.mxfp8]
+
+[techniques.bf16_activations]
