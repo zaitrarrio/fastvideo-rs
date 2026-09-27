@@ -321,7 +321,8 @@ rp_weight_rows() {
   f="$(dirname "${BASH_SOURCE[0]}")/weights-manifest.tsv"
   [[ -f "$f" ]] || die "weights-manifest.tsv missing at $f"
   local rows
-  rows="$(grep -vE '^[[:space:]]*(#|$)' "$f")"
+  # auxiliary/ rows are pinned URLs (verify-weights.sh aux), not Hub repos.
+  rows="$(grep -vE '^[[:space:]]*(#|$)' "$f" | grep -vE '^auxiliary/')"
   if [[ -n "${RUNPOD_FETCH_DESTS:-}" ]]; then
     echo "$rows" | awk -F'\t' -v allow="$RUNPOD_FETCH_DESTS" '
       BEGIN {
