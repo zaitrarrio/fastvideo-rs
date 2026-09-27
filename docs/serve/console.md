@@ -147,11 +147,14 @@ yet".
   token, keys on fal/native/MiniMax, revocation, restart persistence, pages
   and content types, `/fal/schema`) and `console` unit tests (every asset
   referenced is embedded; no inline scripts).
-- Browser: `bash tests/console/run.sh` builds `fv-serve --features fake`,
-  starts it without `FV_ADMIN_TOKEN`, reads the generated token from the log
-  and drives headless Chromium through minting a key, text-to-video,
-  image-to-video with an uploaded image, the API tab, history, the director
-  page, a 390 px layout and revocation. `FV_SERVE_UI=1 bash
+- Browser: `bash tests/console/run.sh` builds `fv-serve --features
+  fake,encoders`, starts it with no config file and without
+  `FV_ADMIN_TOKEN`, reads the generated token from the log and drives
+  headless Chromium through minting a key, text-to-video, image-to-video
+  with an uploaded image, the API tab, history, a live director session
+  (start, 1344x768 video with one video and one audio track playing, a
+  second prompt applied, stop; the encoder is `auto`, i.e. OpenH264 on a
+  machine without NVENC), a 390 px layout and revocation. `FV_SERVE_UI=1 bash
   scripts/serve/check.sh` runs it; `FV_CONSOLE_SHOTS=<dir>` saves
   screenshots. It needs `node`, the `playwright` npm package and a Chromium
   under `PLAYWRIGHT_BROWSERS_PATH` (default `/opt/pw-browsers`).
