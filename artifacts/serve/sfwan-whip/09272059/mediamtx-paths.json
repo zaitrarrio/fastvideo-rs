@@ -1,0 +1,1 @@
+{"itemCount":1,"pageCount":1,"items":[{"name":"sfwan","confName":"all_others","source":{"type":"webRTCSession","id":"fb743aa9-a7e2-409c-ab40-fad1d9f3c038"},"ready":true,"readyTime":"2026-09-27T21:06:01.222202056Z","tracks":["H264"],"bytesReceived":4333698,"bytesSent":3807581,"readers":[{"type":"rtspSession","id":"820ebbf4-e6da-45fc-b46f-8c40d5ee74dc"}]}]}

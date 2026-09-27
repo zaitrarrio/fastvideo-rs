@@ -1732,6 +1732,18 @@ additions and readings; everything is re-exported from the crate root.
   `FV_STREAM_STUN` sets the srflx probe (`none` for loopback).
   `tests/streams_whip.rs` decodes what an in-process WHIP endpoint receives;
   `scripts/serve/whip-e2e.sh` adds MediaMTX and a WHEP viewer.
+- **GPU run (2026-09-27, `scripts/serve/runpod-sfwan-whip.sh`, L40S,
+  driver 580.159, serve image built with `webrtc`):** fv-serve with
+  `CausalCudaBackend` → `POST /fv/v1/streams` → WHIP (NVENC, Constrained
+  Baseline 832×480, level 4.0) → MediaMTX on the same pod → RTSP reader.
+  TTFF load 673 ms (prompt encode + cache), first block 939 ms, transport
+  2063 ms (WHIP offer + ICE/DTLS + first NVENC AU), total 3.68 s from
+  `POST`. Steady generation on L40S ~6.2 unique frames/s (block ~1.9 s;
+  H100 does 19.2), so the adaptive pacer settled at 5.7-6.3 fps with 2
+  underruns in 37 s of video; the 30 s RTSP recording holds 188 decodable
+  frames. A `set_prompt` at block 10 switched the scene at the next block
+  (autumn river → snowy dawn), with the KV cache kept. Device memory 26.0
+  GiB. Artifacts: `artifacts/serve/sfwan-whip/09272059/`.
 - Owned files: `stream/{mod,clip,queue,rules,causal,player,pace}.rs`,
   `src/cuda/causal.rs`, `tests/stream_{clip,causal}.rs`,
   `fastvideo-serve/src/streams.rs`, `fastvideo-serve/tests/streams_whip.rs`,

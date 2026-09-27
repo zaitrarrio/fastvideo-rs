@@ -1,0 +1,8 @@
+[0s] weights
+[264s] mediamtx
+[265s] fv-serve
+[319s] ready: {"model_loaded":true,"state":"AVAILABLE","status":"ok"}
+[319s] stream fvstream_ceb813eedf8a49ab99fa2cc0ee662700
+[322s] streaming
+[337s] prompt switched
+[358s] done

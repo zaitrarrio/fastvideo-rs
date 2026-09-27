@@ -1,0 +1,2 @@
+memory.used [MiB], utilization.gpu [%], utilization.encoder [%]
+26031 MiB, 100 %, 0 %
