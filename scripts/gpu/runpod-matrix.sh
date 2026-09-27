@@ -404,7 +404,7 @@ case "$FAMILY" in
     SF_SWITCH="${FV_SF_SWITCH:-A drone shot gliding over snowy mountain peaks at dawn, pink sky, slow steady forward camera motion, highly detailed}"
     sf_stream() {
       local name="$1"; shift
-      gated_cell "$name" sfwan21-1.3b "$BIN" --mode fast wan stream --weights "$W/sfwan21-1.3b" \
+      gated_cell "$name" sfwan21-1.3b "$BIN" --keep-going --mode fast wan stream --weights "$W/sfwan21-1.3b" \
         --prompt "$SF_PROMPT" --switch-prompt "$SF_SWITCH" --seed "$SEED" "$@"
     }
     # shellcheck disable=SC2086

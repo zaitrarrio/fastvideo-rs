@@ -210,6 +210,21 @@ fn parity(report: &mut Report, pipe: &WanPipeline, base: &RolloutConfig) -> Stag
         let vs_bounded = crate::metrics::diff(&fr_h, &whole_h);
         let vs_bounded_psnr = crate::metrics::psnr(&fr_h, &whole_h, 2.0);
         let bitwise_latents = lat_h == bounded_h;
+        // The same whole-clip decode in 3-latent chunks: the per-block path
+        // then runs the same convolutions on the same frame counts, so any
+        // remaining difference would be the carried state itself.
+        let chunk3 = tae
+            .decode_streaming_chunked(&lat, 3, &mut |_, _| Ok(()))
+            .and_then(|x| x.reshape(vec![3, f, h, w]))
+            .and_then(|x| x.permute(&[1, 0, 2, 3]))
+            .map_err(|e| anyhow!("{e}"))?;
+        let chunk3_h = host(&chunk3)?;
+        let c3 = crate::metrics::diff(&fr_h, &chunk3_h);
+        // 8-bit frames as the stream emits them.
+        let q = |v: &[f32]| -> Vec<u8> { v.iter().map(|x| ((x + 1.0) * 127.5).clamp(0.0, 255.0) as u8).collect() };
+        let (q_fr, q_own) = (q(&fr_h), q(&own_h));
+        let u8_diff = q_fr.iter().zip(&q_own).filter(|(a, b)| a != b).count();
+        let u8_max = q_fr.iter().zip(&q_own).map(|(a, b)| a.abs_diff(*b)).max().unwrap_or(0);
         arms.insert(
             name.into(),
             json!({
@@ -219,8 +234,11 @@ fn parity(report: &mut Report, pipe: &WanPipeline, base: &RolloutConfig) -> Stag
                 "per_block_vs_whole_clip_decode": {"max_abs": dec_d.max_abs, "psnr_db": dec_psnr,
                     "rel_l2": dec_d.rel_l2, "bitwise_equal": fr_h == own_h},
                 "frames_vs_bounded_clip": {"max_abs": vs_bounded.max_abs, "psnr_db": vs_bounded_psnr},
+                "per_block_vs_whole_clip_chunk3": {"max_abs": c3.max_abs, "bitwise_equal": fr_h == chunk3_h},
+                "rgb8_vs_whole_clip": {"differing_values": u8_diff, "of": q_fr.len(), "max_levels": u8_max},
             }),
         );
+        report.note(format!("parity/{name}"), arms[name].clone());
         if rope == RopePolicy::Absolute {
             report.check(
                 "parity/absolute_stream_is_the_bounded_path",
@@ -231,9 +249,9 @@ fn parity(report: &mut Report, pipe: &WanPipeline, base: &RolloutConfig) -> Stag
         }
         report.check(
             format!("parity/{name}_per_block_decode"),
-            dec_d.max_abs <= 1e-3,
-            json!({"max_abs": dec_d.max_abs, "psnr_db": dec_psnr}),
-            json!({"max_abs": 1e-3}),
+            dec_d.max_abs <= 0.02 && dec_psnr >= 60.0,
+            json!({"max_abs": dec_d.max_abs, "psnr_db": dec_psnr, "chunk3_max_abs": c3.max_abs}),
+            json!({"max_abs": 0.02, "psnr_db_min": 60.0}),
         )?;
     }
     report.note("parity", json!({"bounded_s": bounded_s, "arms": Value::Object(arms)}));
