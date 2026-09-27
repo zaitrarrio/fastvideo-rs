@@ -134,14 +134,45 @@ impl CausalConv3d {
         if pad_t > 0 {
             x = x.pad_zeros(2, pad_t, 0)?;
         }
-        x.conv3d(
-            &self.weight,
-            Some(&self.bias),
-            [0, self.pad[1], self.pad[2]],
-            self.stride,
-        )
+        let conv = |x: &CudaTensor| {
+            x.conv3d(
+                &self.weight,
+                Some(&self.bias),
+                [0, self.pad[1], self.pad[2]],
+                self.stride,
+            )
+        };
+        // cuDNN refuses a tensor past 4 GB (CUDNN_STATUS_NOT_SUPPORTED: the
+        // Wan 2.2 decoder's last stage at 704x1280 with two latent frames per
+        // pass is 4.6 GB). Split the output frames so no input or output
+        // piece crosses CONV_SPLIT_ELEMS; each piece reads its `kt - 1`
+        // frames of context, so the result is the same conv.
+        let (kt, st) = (self.weight.shape[2], self.stride[0].max(1));
+        let t = x.dim(2)?;
+        let hw = x.dim(3)? * x.dim(4)?;
+        let widest = x.dim(1)?.max(self.weight.shape[0]);
+        if st != 1 || t < kt || widest * t * hw <= CONV_SPLIT_ELEMS {
+            return conv(&x);
+        }
+        let out_t = t - kt + 1;
+        let per = (CONV_SPLIT_ELEMS / (widest * hw))
+            .saturating_sub(kt - 1)
+            .max(1);
+        let mut pieces = Vec::new();
+        let mut o = 0;
+        while o < out_t {
+            let n = per.min(out_t - o);
+            pieces.push(conv(&x.narrow(2, o, n + kt - 1)?)?);
+            o += n;
+        }
+        let refs: Vec<&CudaTensor> = pieces.iter().collect();
+        CudaTensor::cat(&refs, 2)
     }
 }
+
+/// Largest conv input or output (elements) handed to cuDNN in one call:
+/// 2 GB of f32, half its 4 GB limit.
+pub(super) const CONV_SPLIT_ELEMS: usize = 1 << 29;
 
 pub(super) fn conv_cached(
     conv: &CausalConv3d,
@@ -487,8 +518,29 @@ impl Resample {
         }
         let (b, c, t, h, w) = (x.shape[0], x.shape[1], x.shape[2], x.shape[3], x.shape[4]);
         let x2 = x.permute(&[0, 2, 1, 3, 4])?.reshape(vec![b * t, c, h, w])?;
-        let up = x2.upsample_nearest2d(h * 2, w * 2)?;
-        let y = up.conv2d(&self.conv_w, Some(&self.conv_b), 1, 1)?;
+        // Frame by frame through the upsample + conv when the upsampled
+        // batch would pass cuDNN's 4 GB tensor limit (see CONV_SPLIT_ELEMS).
+        let per_frame = c.max(self.conv_w.shape[0]) * h * w * 4;
+        let step = (CONV_SPLIT_ELEMS / per_frame.max(1)).max(1);
+        let mut pieces = Vec::new();
+        let mut i = 0;
+        while i < b * t {
+            let n = step.min(b * t - i);
+            let xi = if n == b * t {
+                x2.clone()
+            } else {
+                x2.narrow(0, i, n)?
+            };
+            let up = xi.upsample_nearest2d(h * 2, w * 2)?;
+            pieces.push(up.conv2d(&self.conv_w, Some(&self.conv_b), 1, 1)?);
+            i += n;
+        }
+        let y = if pieces.len() == 1 {
+            pieces.pop().expect("one piece")
+        } else {
+            let refs: Vec<&CudaTensor> = pieces.iter().collect();
+            CudaTensor::cat(&refs, 0)?
+        };
         let oc = y.shape[1];
         y.reshape(vec![b, t, oc, h * 2, w * 2])?
             .permute(&[0, 2, 1, 3, 4])
