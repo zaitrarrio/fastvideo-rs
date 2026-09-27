@@ -1,0 +1,189 @@
+ltx2 ltx2 techniques: sol_attn [ltx25_stage2] (dense steps none, dense layers 0, tau 0:1,1:1.25,2:1.5, sink none, thresh diag) [attention_backend from recipe]
+[fastvideo] cuda device=0 sm_90 kernels=Cubin(90) gemm=Bf16 resident=true sdpa=dense sdpa_chunk=1024 oxide=[] oxide_embedded=10
+ltx2 gen 3840x2176x121: planned peak 59.59 GiB resident, 24.96 GiB streamed
+[fastvideo] ltx2 load: read-ahead on, staged upload on (E12 defaults off for LTX)
+[fastvideo] ltx2 dit offload: auto -> resident (resident 4k5s plan 59.6 GiB, 139.2 GiB free before load)
+[fastvideo] ltx2 dit: loaded block 8/48 (132.9 GiB free)
+[fastvideo] ltx2 dit: loaded block 16/48 (127.7 GiB free)
+[fastvideo] ltx2 dit: loaded block 24/48 (121.9 GiB free)
+[fastvideo] ltx2 dit: loaded block 32/48 (116.1 GiB free)
+[fastvideo] ltx2 dit: loaded block 40/48 (110.4 GiB free)
+[fastvideo] ltx2 dit: loaded block 48/48 (104.6 GiB free)
+[fastvideo] ltx2 dit: 48 blocks resident
+ltx2 vocoder: SnakeBeta main (`vocoder.`) + BWE (Hann-sinc ×3 + MelSTFT + bwe_generator)
+[fastvideo] load/io ltx2 load {"wall_s":22.52,"viewed_gb":39.11,"prefetch_read_gb":39.11,"prefetch_skipped_gb":0.00,"prefetch_busy_s":269.0,"viewed_gbps":1.74,"window_wait_s":0.0,"fill_s":3.6,"h2d_wait_s":0.0,"h2d_pageable_s":0.0,"convert_s":0.0,"lora_s":0.0,"read_wait_s":9.4,"mem_mode":false,"prefetch":true}
+[fastvideo] llm layer 1/48
+[fastvideo] llm layer 2/48
+[fastvideo] llm layer 3/48
+[fastvideo] llm layer 4/48
+[fastvideo] llm layer 5/48
+[fastvideo] llm layer 6/48
+[fastvideo] llm layer 7/48
+[fastvideo] llm layer 8/48
+[fastvideo] llm layer 9/48
+[fastvideo] llm layer 10/48
+[fastvideo] llm layer 11/48
+[fastvideo] llm layer 12/48
+[fastvideo] llm layer 13/48
+[fastvideo] llm layer 14/48
+[fastvideo] llm layer 15/48
+[fastvideo] llm layer 16/48
+[fastvideo] llm layer 17/48
+[fastvideo] llm layer 18/48
+[fastvideo] llm layer 19/48
+[fastvideo] llm layer 20/48
+[fastvideo] llm layer 21/48
+[fastvideo] llm layer 22/48
+[fastvideo] llm layer 23/48
+[fastvideo] llm layer 24/48
+[fastvideo] llm layer 25/48
+[fastvideo] llm layer 26/48
+[fastvideo] llm layer 27/48
+[fastvideo] llm layer 28/48
+[fastvideo] llm layer 29/48
+[fastvideo] llm layer 30/48
+[fastvideo] llm layer 31/48
+[fastvideo] llm layer 32/48
+[fastvideo] llm layer 33/48
+[fastvideo] llm layer 34/48
+[fastvideo] llm layer 35/48
+[fastvideo] llm layer 36/48
+[fastvideo] llm layer 37/48
+[fastvideo] llm layer 38/48
+[fastvideo] llm layer 39/48
+[fastvideo] llm layer 40/48
+[fastvideo] llm layer 41/48
+[fastvideo] llm layer 42/48
+[fastvideo] llm layer 43/48
+[fastvideo] llm layer 44/48
+[fastvideo] llm layer 45/48
+[fastvideo] llm layer 46/48
+[fastvideo] llm layer 47/48
+[fastvideo] llm layer 48/48
+[fastvideo] llm prefetch: 48 layers, host read+convert 9.37s, upload wait 0.13s, compute starved 9.11s
+[fastvideo] sdpa: fused mma B=1 H=32 Sq=1024 Sk=1024 D=128
+[fastvideo] digest text_hidden_0 [18, 3840] d34f32e86d10e90e97b350a200c5fb6d87ae62d8a620ecec7fade091a2a5a13c
+[fastvideo] digest text_hidden_1 [18, 3840] 892d2512faaebd283cc3dbb5038fc32673c13ed5dd133ddb5d163e296137afeb
+[fastvideo] digest text_hidden_2 [18, 3840] 57ba728829cc9fbfd03366bb0a294b871afc94c26818326e1c56eeca6889684b
+[fastvideo] digest text_hidden_3 [18, 3840] 8fb62c28d0bf8c158c5abea763a6f860a604fe2331050a6ea4d33c11a39f3168
+[fastvideo] digest text_hidden_4 [18, 3840] 3d749473c65317311d4903fc094e9f208f4f637a63591bec7c84e4ba62c87c23
+[fastvideo] digest text_hidden_5 [18, 3840] 79ed38f8f3e93e8b0272919963facc44d5a6e14aed563d1cf438af5298e76a63
+[fastvideo] digest text_hidden_6 [18, 3840] 2a934f114e536b61b52a93f668936683a45569587c7d1907f3e1df353d7ec3a9
+[fastvideo] digest text_hidden_7 [18, 3840] 20c908e9d9bc70431cbba14322aa4d764784292508373a2989d6a0280d9ca3ed
+[fastvideo] digest text_hidden_8 [18, 3840] 58292d4a4bda58be78b6a9405a1dd71f7b22548dcee84aa1607e938c258f6c15
+[fastvideo] digest text_hidden_9 [18, 3840] f10e9fc333a45cd520bb21dd20605c6fd453274e4738d7d7d2861aa23eccc6a0
+[fastvideo] digest text_hidden_10 [18, 3840] d7a67b2b8e56310460dd6b9a62f6b3fa60c2da64179e3d17f2fb70d45b98c45b
+[fastvideo] digest text_hidden_11 [18, 3840] fa500631c8f8a960347dcbabaf5749abbdaa69b9f0c33dd63612cefcfd884810
+[fastvideo] digest text_hidden_12 [18, 3840] 6172a64765e97012e3f0092a13524a2c21163c9cf8cd90e7d7392417b7ee1a9c
+[fastvideo] digest text_hidden_13 [18, 3840] b1cc46baf921ad6f22255ee35e56e78626f63cb935a40b4b173fff9807bb5884
+[fastvideo] digest text_hidden_14 [18, 3840] c85713bacbdadd4150bd60e7857859b7fe454225b4d55fc97e2604e2ff61597f
+[fastvideo] digest text_hidden_15 [18, 3840] 945d166ea451829ce0358cfb496877cf7348f6985250f0aa1461a77dbbfad336
+[fastvideo] digest text_hidden_16 [18, 3840] cf9396073800c505df102d129fc91e5adca70effc105c37cc2366a1c2ce56ac2
+[fastvideo] digest text_hidden_17 [18, 3840] 36aba62d2e66d6b723468c565e483031df05192a02e51af38db528692de1135d
+[fastvideo] digest text_hidden_18 [18, 3840] 898e38172a36d20c5dfbf677215784eedb5954f3a596e1a60e7d64a26ea0e439
+[fastvideo] digest text_hidden_19 [18, 3840] 8d00453160873d5e4d9905559c0b7e4000c96e2cecf496276996b449822d239c
+[fastvideo] digest text_hidden_20 [18, 3840] db75c10650484ce1ffc26909636be6f48cb68d2dcf11ce95b9fd6564c7ec0173
+[fastvideo] digest text_hidden_21 [18, 3840] b892e99ac4c6fd1363eea85ac119d8b9bbe400913b76aa8426b9e752783c5dd9
+[fastvideo] digest text_hidden_22 [18, 3840] 706a8fc3c60690c8da6ce7990983c73be57f6c2d6a3a5f4ca4b9b42f7310cebe
+[fastvideo] digest text_hidden_23 [18, 3840] acd89ce87590742ced81a7f373265fa79bea8ba111660fcd6f6c03bb754b6b98
+[fastvideo] digest text_hidden_24 [18, 3840] 3cf343ae4d4b9030d651a758f0367f44c547e385f5a48849187f9df460259620
+[fastvideo] digest text_hidden_25 [18, 3840] 3bd2b68a06e6896ef17a9eef479008399fdeb1fe2cf4cdf4378440d13e616c60
+[fastvideo] digest text_hidden_26 [18, 3840] f773e6c19146f887577a6beac0708df892fbf1fd18d4c26fe0ab99b38054945f
+[fastvideo] digest text_hidden_27 [18, 3840] 0c25fa3219f34fb42475becbe3c7d6b1c7551f3a7477e751bbb3dbc851497839
+[fastvideo] digest text_hidden_28 [18, 3840] 140f6c4d53c253e4fb8f006e8e3b529c8b7a75c1e70653a360ad782b274b2f5a
+[fastvideo] digest text_hidden_29 [18, 3840] 645fc4521212db2923a1e9e877f370229e605305a5c1873e9cf20db35c94913e
+[fastvideo] digest text_hidden_30 [18, 3840] c77d60c9a756e5d1dfcb4c3a0ef61562783a10b9c4e11e3973c6d91657eb8899
+[fastvideo] digest text_hidden_31 [18, 3840] 92e857295904e840f27af5eded0460470634373ae0783f907b7dc0198d9d74d6
+[fastvideo] digest text_hidden_32 [18, 3840] 8f9962e2ac671389c4f269e35fca8a1aaa536226eb7517384a9bcd1f6577fcf0
+[fastvideo] digest text_hidden_33 [18, 3840] cb6332d59c6ef967024d197b8f4fa8add41ccb6a492abd3adbf544f514e83402
+[fastvideo] digest text_hidden_34 [18, 3840] afbf9f0624eb0f354031f8b1788700db62fe67d408a60ea9f76b3f942fc50b7f
+[fastvideo] digest text_hidden_35 [18, 3840] 84203506dfd3f6f9aaf21fdeeda08aa2a4d11aa399bbb052ddcaa0827340f806
+[fastvideo] digest text_hidden_36 [18, 3840] d0285c9e4fbf2c68365e8e0fece0bf0cedf59628558356b098d31e8c4f9a8d68
+[fastvideo] digest text_hidden_37 [18, 3840] 70815081dfdd3291e7590917fd1ea597f36b1690137905a4dc8bd16f0c19bf9a
+[fastvideo] digest text_hidden_38 [18, 3840] 425c57cdf217ec70c21c494da1c00633397204cf4e4a4dcbd28c03904c0acfaa
+[fastvideo] digest text_hidden_39 [18, 3840] 2bcaf08f81b628d579e2f53d17cea90de1dcc837cc0133f069cc5ad98c309336
+[fastvideo] digest text_hidden_40 [18, 3840] fdc389d01c3541acf6f25362758030700ac519245737488f2066fda018158f78
+[fastvideo] digest text_hidden_41 [18, 3840] 51fa605871cc5d731de24501d18b0b8e4546ebef414fdfa615fa2f5b2a55bc87
+[fastvideo] digest text_hidden_42 [18, 3840] 65c5530fb5055b629baae792166151154287b0f288a5feb14ca5e4f4ebcf5116
+[fastvideo] digest text_hidden_43 [18, 3840] 57657ec830c1e067ed456f420192022675a3768fc145607adb417d9e507640d1
+[fastvideo] digest text_hidden_44 [18, 3840] bf8764bde9a149bca8db53a86a3a4c90cfd65d08ef5f8b5eda9bb84cd2ab6bbb
+[fastvideo] digest text_hidden_45 [18, 3840] 9d897686e0b57efed82eaff5d798f5166ee9e4fbf2c5488f5aa385f4fbb74cd2
+[fastvideo] digest text_hidden_46 [18, 3840] 276ff24563d85ddc6f17136869c88c1e80906f6f1d42b0d030c61932a597e0a6
+[fastvideo] digest text_hidden_47 [18, 3840] 8c8694a49bc4dea085d576e1f370e50495bc141f3be8fb98a1cfe6c5b684ddca
+[fastvideo] digest text_hidden_48 [18, 3840] a2eb29a2c97e880a380a1b6c820e3d0e7ba0c68fa0653718bb9db93b3beba6a6
+[fastvideo] digest text_video_ctx [1, 1024, 4096] dcddd236853376438e799f8d41ca38dcb217f3ddb88fc4bb66d7a536f722a0be
+[fastvideo] digest text_audio_ctx [1, 1024, 2048] 7c8d4e5948cc2883ce4b5825b376a32dc21b2dc4453b4d692988078606cf5f15
+[fastvideo] ltx2 memory text: peak 43.56 GiB used, 43.62 GiB reserved; 37.54 GiB live after; ledger: dit_nonlinear 35.38 | vae 2.12 | activations 6.06 | pool_reserved 0.07 | non_pool 0.59 | total 44.15 GiB
+[fastvideo] digest noise_video [1, 32640, 128] a95c73b4662763468fd411a5dda0b5fabc49daaca403f0e5214e6d4d15ae4666
+[fastvideo] digest noise_audio [1, 126, 128] 324dbe9886b84cb06a9937b338e9c241d15bc4956ea8cb9ad48b932e22d07d73
+[fastvideo] digest text_proj_video [1, 1024, 4096] dcddd236853376438e799f8d41ca38dcb217f3ddb88fc4bb66d7a536f722a0be
+[fastvideo] digest text_proj_audio [1, 1024, 2048] 7c8d4e5948cc2883ce4b5825b376a32dc21b2dc4453b4d692988078606cf5f15
+[fastvideo] ltx2 ancestral step 1/8 sigma 1.000000 (3.37s)
+[fastvideo] digest s1_step0_video [1, 32640, 128] aa02680358d53eb482522fe8dbbddc181a6a15d9c5e5b5deeb0ded126c690ca5
+[fastvideo] digest s1_step0_audio [1, 126, 128] aa85119261301de60d4186b1423390a307ac0b16e4104144eeff051594a84c67
+[fastvideo] ltx2 ancestral step 2/8 sigma 0.993750 (3.20s)
+[fastvideo] digest s1_step1_video [1, 32640, 128] 1ba3281128dbcc7002a22235e63a508c26ce0c4d1475d0225203b8a0a5e33784
+[fastvideo] digest s1_step1_audio [1, 126, 128] 36895dc86a47f64ec30e71962ed3ed4a96a229c8b3d592c3e71830c2791a8be6
+[fastvideo] ltx2 ancestral step 3/8 sigma 0.987500 (3.20s)
+[fastvideo] digest s1_step2_video [1, 32640, 128] 7400c67b93badc8bb72395674afc8ecd42f027261f6596d10fac45a317d8ad36
+[fastvideo] digest s1_step2_audio [1, 126, 128] f19b9d6bea3e642b7af51ab6d4440042fb0d0358b0d390511219633fdf1300da
+[fastvideo] ltx2 ancestral step 4/8 sigma 0.981250 (3.20s)
+[fastvideo] digest s1_step3_video [1, 32640, 128] a87f6b39d565fdea52b356b3ad2ce4acca2f9cbb8e98cdfeb545306edd5fde7b
+[fastvideo] digest s1_step3_audio [1, 126, 128] 87a97084c7adde8ef3fe8c0c9c093741996a0ea56c3d721526e2386aadc1ef99
+[fastvideo] ltx2 ancestral step 5/8 sigma 0.975000 (3.20s)
+[fastvideo] digest s1_step4_video [1, 32640, 128] bd1724714cc692211d1a4bb51c781471d2ce36e4a8aeeee0ccb14bd012fa7840
+[fastvideo] digest s1_step4_audio [1, 126, 128] 64d64a28e8912d71f0da4bab1eeccb17f5e1c5d2ac0f35a2e7a026dfb62f88f1
+[fastvideo] ltx2 ancestral step 6/8 sigma 0.909375 (3.20s)
+[fastvideo] digest s1_step5_video [1, 32640, 128] 2bad974f32092c70fdbbb48c9508d0afcd35fcfe0e3cfcee19aa1dd507274461
+[fastvideo] digest s1_step5_audio [1, 126, 128] 75be0fc1bdf6a24cf02ee42c99bca390277d08a9a302aa310bd027980b7538a0
+[fastvideo] ltx2 ancestral step 7/8 sigma 0.725000 (3.20s)
+[fastvideo] digest s1_step6_video [1, 32640, 128] 1f8ea398ba84f8ac2807657839c60b67492b540060bd516dc0b67894efb98469
+[fastvideo] digest s1_step6_audio [1, 126, 128] 47fe4999afc3a4de485d007cccb83dbaf16578d2352e1633529deeaf05f0e46f
+[fastvideo] ltx2 ancestral step 8/8 sigma 0.421875 (3.20s)
+[fastvideo] digest s1_step7_video [1, 32640, 128] dfef2cfd4c49fe6a72d5d13dee73e2dc068e49ed5bae4a51106c04b9ed489f19
+[fastvideo] digest s1_step7_audio [1, 126, 128] ca856ece496320615591f0c39c605e489b9c272b4e94c7ad52fafbc15237af12
+[fastvideo] digest stage1_video [1, 32640, 128] dfef2cfd4c49fe6a72d5d13dee73e2dc068e49ed5bae4a51106c04b9ed489f19
+[fastvideo] digest stage1_audio [1, 126, 128] ca856ece496320615591f0c39c605e489b9c272b4e94c7ad52fafbc15237af12
+[fastvideo] ltx2 memory stage1: peak 41.54 GiB used, 42.72 GiB reserved; 37.55 GiB live after; ledger: dit_nonlinear 35.38 | vae 2.12 | activations 4.05 | pool_reserved 1.18 | non_pool 0.59 | total 42.14 GiB
+[fastvideo] conv3d x=[1, 128, 18, 36, 62] w=[1024, 128, 3, 3, 3]: Cudnn 1.3ms, Unfold 2.4ms, CudnnBf16 1.4ms → Cudnn
+[fastvideo] conv3d x=[1, 1024, 18, 36, 62] w=[1024, 1024, 3, 3, 3]: Cudnn 5.2ms, Unfold 9.7ms, CudnnBf16 3.6ms → CudnnBf16
+[fastvideo] conv3d x=[1, 1024, 18, 70, 122] w=[1024, 1024, 3, 3, 3]: Cudnn 21.3ms, Unfold 25.1ms, CudnnBf16 11.0ms → CudnnBf16
+[fastvideo] conv3d x=[1, 1024, 18, 70, 122] w=[128, 1024, 3, 3, 3]: Cudnn 3.8ms, Unfold 7.8ms, CudnnBf16 2.9ms → CudnnBf16
+[fastvideo] digest upsampled_video [1, 130560, 128] bbfb402e42ae7f7ccb99bbd29ad03a6666009c252927c7020295f58bf2326b96
+[fastvideo] ltx2 memory upsample: peak 46.64 GiB used, 47.59 GiB reserved; 39.77 GiB live after; ledger: dit_nonlinear 35.38 | vae 2.12 | upsampler 0.00 (max 1.85) | activations 7.29 | pool_reserved 0.96 | non_pool 0.59 | total 47.23 GiB
+[fastvideo] ltx2 upsample 4.14s → latent grid [16, 68, 120]
+[fastvideo] ltx2 sol stage-2: taus 1/1.25/1.5, layer 0 dense, layers 1-47 sol-attn kernel (thresh_type=diag), distilled lora not beside weights
+[fastvideo] sol-attn kernel (fused device): thresh_type=Diag tau=1 block=64 tokens=130560 blocks=2040 sink=0
+[fastvideo] ltx2 step transfers: d2h 111 MiB in 7 copies, h2d 8086 MiB in 82 copies
+[fastvideo] ltx2 step 1/3 sigma 0.909375 (18.18s)
+[fastvideo] digest s2_step0_video [1, 130560, 128] e2ad11a85f7dfd33ee0836fd0f5d9a4909fb3c4737ec0b962b7502ea863a4fc7
+[fastvideo] digest s2_step0_audio [1, 126, 128] 494daba347b144a54a4b30027278372bdc3f92c4a024cb1469dc1f70b4d62e3e
+[fastvideo] ltx2 step transfers: d2h 127 MiB in 4 copies, h2d 0 MiB in 1 copies
+[fastvideo] ltx2 step 2/3 sigma 0.725000 (16.11s)
+[fastvideo] digest s2_step1_video [1, 130560, 128] 6003452513a9ba08c122ea85f01c2ab106d40af1fbdb290b8b22ad86abb138c8
+[fastvideo] digest s2_step1_audio [1, 126, 128] 91c03f742b2569a036077c265b7fa205ee535a5d2ec0e15d65466f221896596f
+[fastvideo] ltx2 step transfers: d2h 127 MiB in 4 copies, h2d 0 MiB in 1 copies
+[fastvideo] ltx2 step 3/3 sigma 0.421875 (14.47s)
+[fastvideo] digest s2_step2_video [1, 130560, 128] 6763db0fd8b88255b2572bc6ce1136af2f06185553d191025e91d610beca3352
+[fastvideo] digest s2_step2_audio [1, 126, 128] 1f6939cbb417b0f294aa1848582f580c64349ef34ff280921f564988fa782c12
+[fastvideo] digest stage2_video [1, 130560, 128] 6763db0fd8b88255b2572bc6ce1136af2f06185553d191025e91d610beca3352
+[fastvideo] digest stage2_audio [1, 126, 128] 1f6939cbb417b0f294aa1848582f580c64349ef34ff280921f564988fa782c12
+[fastvideo] ltx2 memory stage2: peak 51.73 GiB used, 52.91 GiB reserved; 39.77 GiB live after; ledger: dit_nonlinear 35.38 | vae 2.12 | activations 14.24 | pool_reserved 1.17 | non_pool 0.59 | total 52.33 GiB
+[fastvideo] ltx vae: channels-last bf16 decoder (0.01s to convert weights)
+[fastvideo] ltx2 video decode 10.67s: vae 9.23s, rgb 2.53s, push 1.49s, wait 1.56s
+[fastvideo] video writer: 121 frames, png deferred (0 inline, 121 after the mp4 in 2.64s, 0.97 GiB, synced), ffmpeg feed blocked 5.97s, mp4 tail 2.70s, buffered peak 2.82 GiB of 941.09
+[fastvideo] ltx2 video decode + mp4 13.38s (mp4 tail 2.70s); png frames after it 2.64s
+[fastvideo] ltx2 memory decode: peak 51.79 GiB used, 52.94 GiB reserved; 40.45 GiB live after; ledger: dit_nonlinear 35.38 | vae 2.12 | activations 14.29 | pool_reserved 1.15 | non_pool 0.60 | total 52.38 GiB
+ltx2 memory load: 37.50 GiB live after load
+ltx2 memory     text: peak  43.56 GiB used,  43.62 GiB reserved,  37.54 GiB live after
+ltx2 memory   stage1: peak  41.54 GiB used,  42.72 GiB reserved,  37.55 GiB live after
+ltx2 memory upsample: peak  46.64 GiB used,  47.59 GiB reserved,  39.77 GiB live after
+ltx2 memory   stage2: peak  51.73 GiB used,  52.91 GiB reserved,  39.77 GiB live after
+ltx2 memory   decode: peak  51.79 GiB used,  52.94 GiB reserved,  40.45 GiB live after
+[PASS] ltx2/gen.mp4_frames_and_rate {"audio":{"channels":2,"codec_name":"aac","duration":"5.010000","sample_rate":"48000"},"avg_frame_rate":"24/1","ffprobe":true,"has_audio":true,"height":2176,"path":"/fvscratch/runs/identity/324bbb3-09272023/fox-on/frames/output.mp4","r_frame_rate":"24/1","video_duration_s":5.041667,"video_frames":121,"width":3840} (limits {"has_audio":true,"r_frame_rate":"24/1","video_frames":121})
+[PASS] ltx2/gen.latents_finite {"steps":11} (limits {"non_finite":0,"steps":11})
+[PASS] ltx2/gen.frames {"frames":121} (limits {"frames":121})
+[PASS] ltx2/gen.wav {"bytes":961964} (limits {"channels":2,"sample_rate":48000,"samples_per_channel":240480})
+[PASS] ltx2/gen.mp4 {"bytes":26987315,"path":"/fvscratch/runs/identity/324bbb3-09272023/fox-on/frames/output.mp4"} (limits {"bytes_min":1})
+benchmark.json → /fvscratch/runs/identity/324bbb3-09272023/fox-on/benchmark.json
+[PASS] stage ltx2 → gpucheck-out/ltx2.json (196.9s)

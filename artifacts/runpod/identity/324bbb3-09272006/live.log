@@ -1,0 +1,10 @@
+[20:09:49] [identity] matrix start image=354cd961f0d40e75
+GPU 0: NVIDIA H200 (UUID: GPU-fbb3a434-7713-e5e0-a60f-e92adaf1d6a0)
+NVIDIA H200, 143771 MiB, 580.126.20
+[20:09:55] [identity] ▶ ltx-off-nd  env FASTVIDEO_DIGEST=1 FASTVIDEO_DIGEST=0 FASTVIDEO_PREFETCH=0 FASTVIDEO_STAGED_UPLOAD=0 /opt/fastvideo-rs/target/release/fv-gpucheck --mode fast ltx2 gen --model-version 2.5 --weights /workspace/weights/ltx25 --dit /workspace/weights/ltx25 --prompt A man in his thirties talking to the camera in a bright living room, medium close-up, natural expressions and hand gestures, soft window light. He says: <d>Hello, this was generated entirely in Rust.</d> --seed 1024 --two-stage --text streamed --no-text-cache --clip /fvscratch/runs/identity/324bbb3-09272006/ltx-off-nd/frames  (wall cap 1500s; 0=none)
+[20:18:03] [identity] ok ltx-off-nd  488s  
+[20:18:07] [identity] frames ltx-off-nd 905b70c1281f3bcef379c46aac09ef17ddd62f2cf8892351ece44e2824f0f4c2
+[20:18:21] [identity] ▶ ltx-on-nd  env FASTVIDEO_DIGEST=1 FASTVIDEO_DIGEST=0 FASTVIDEO_PREFETCH=1 FASTVIDEO_STAGED_UPLOAD=1 /opt/fastvideo-rs/target/release/fv-gpucheck --mode fast ltx2 gen --model-version 2.5 --weights /workspace/weights/ltx25 --dit /workspace/weights/ltx25 --prompt A man in his thirties talking to the camera in a bright living room, medium close-up, natural expressions and hand gestures, soft window light. He says: <d>Hello, this was generated entirely in Rust.</d> --seed 1024 --two-stage --text streamed --no-text-cache --clip /fvscratch/runs/identity/324bbb3-09272006/ltx-on-nd/frames  (wall cap 1500s; 0=none)
+[20:21:33] [identity] ok ltx-on-nd  192s  
+[20:21:37] [identity] frames ltx-on-nd 905b70c1281f3bcef379c46aac09ef17ddd62f2cf8892351ece44e2824f0f4c2
+[20:21:37] [identity] matrix done
