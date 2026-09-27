@@ -11,8 +11,8 @@ use fastvideo_cudarc::h3::pipeline::{H3Pipeline, H3PipelineOptions, H3Request, T
 use fastvideo_protocol::{Anchor, ApiError, JobMetrics, ResolvedJob, Task};
 
 use super::caps::{load_profile, H3Recipe};
-use super::output::{api_err, bytes_mb, stages, RawOutput};
-use crate::cancel::StepControl;
+use super::output::{api_err, bytes_mb, stages};
+use fastvideo_cudarc::Hooks;
 
 /// One resident H3 pipeline.
 pub struct H3Model {
@@ -100,35 +100,35 @@ impl H3Model {
         Ok(req)
     }
 
+    /// Planned denoise steps (progress totals).
+    pub(crate) fn planned_steps(&self) -> u32 {
+        self.recipe.steps
+    }
+
     pub(crate) fn generate(
         &self,
         job: &ResolvedJob,
         dir: &Path,
-        ctl: &StepControl,
-    ) -> Result<RawOutput, ApiError> {
+        hooks: Hooks<'_>,
+    ) -> Result<JobMetrics, ApiError> {
         let req = Self::request(job)?;
-        let out = super::output::with_hooks(ctl, Some(self.recipe.steps), |hooks| {
-            self.pipe.generate_with_hooks(&req, dir, hooks)
-        })
-        .map_err(|e| api_err("h3 generate", e))?;
+        let out = self
+            .pipe
+            .generate_with_hooks(&req, dir, hooks)
+            .map_err(|e| api_err("h3 generate", e))?;
         let t = &out.timings;
         let peak = out.memory.iter().map(|p| p.peak_used).max();
-        Ok(RawOutput {
-            frame_paths: out.frame_paths,
-            wav: Some(out.wav),
-            metrics: JobMetrics {
-                inference_s: Some(t.denoise_s),
-                stage_durations: stages(&[
-                    ("text", t.text_s),
-                    ("refine", t.refine_s),
-                    ("denoise", t.denoise_s),
-                    ("audio_decode", t.audio_decode_s),
-                    ("video_decode", t.video_decode_s),
-                    ("frames_write", t.write_s),
-                ]),
-                peak_memory_mb: peak.map(bytes_mb),
-                build_rtf: None,
-            },
+        Ok(JobMetrics {
+            inference_s: Some(t.denoise_s),
+            stage_durations: stages(&[
+                ("text", t.text_s),
+                ("refine", t.refine_s),
+                ("denoise", t.denoise_s),
+                ("audio_decode", t.audio_decode_s),
+                ("video_decode", t.video_decode_s),
+            ]),
+            peak_memory_mb: peak.map(bytes_mb),
+            build_rtf: None,
         })
     }
 }

@@ -1640,13 +1640,14 @@ additions and readings; everything is re-exported from the crate root.
   `ProcessPlan` refuses a model set whose load-time settings differ (e.g.
   `h3-max` + `h3-turbo`, `ltx-turbo` + `ltx-draft`, `wan-turbo` + `wan-max`);
   such models run in separate processes (they do not co-reside anyway, R18).
-- Deviations: output still goes through the pipelines' lossless PNG frames +
-  WAV (E2's `FrameSink` landed on main after this was written; switching the
-  backend to it is a follow-up), then NVENC MP4 via `fastvideo-media` (or
-  in-memory frames/PCM). SF-Wan causal sessions delegate to WP-15's
-  `CausalDriver`; the SF-Wan pipeline stays resident for the process (the
-  rollout borrows it). `H3Pipeline`'s boxed text encoder gained a `Send`
-  bound (the pipeline lives on the executor thread).
+- Output uses E2's `FrameSink`: frames and PCM arrive in memory and go to
+  an NVENC MP4 (`fastvideo-media`) or to `ClipOutput::{frames, audio}`;
+  LTX skips the audio decode when the output drops audio (E4) and serves
+  `ltx_fps_caps()`; Wan accepts 16 and 24 fps as container rates. SF-Wan
+  causal sessions delegate to WP-15's `CausalDriver`; the SF-Wan pipeline
+  stays resident for the process (the rollout borrows it). `H3Pipeline`'s
+  boxed text encoder gained a `Send` bound (the pipeline lives on the
+  executor thread).
 - GPU check: `fv-gpucheck engine` (one model through `EngineService`, frames
   compared with the CLI clip, a second job cancelled mid-run) and the
   `serve-engine` family of `runpod-matrix.sh`.

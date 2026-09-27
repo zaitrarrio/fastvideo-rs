@@ -17,8 +17,8 @@ use fastvideo_models::ltx2::techniques::{Ltx2Techniques, Stage2Flags};
 use fastvideo_protocol::{ApiError, GapId, JobMetrics, ResolvedJob, Task};
 
 use super::caps::{load_profile, ltx_config, Ltx2Recipe, LtxStage2};
-use super::output::{api_err, bytes_mb, stages, RawOutput};
-use crate::cancel::StepControl;
+use super::output::{api_err, bytes_mb, stages, wants_audio};
+use fastvideo_cudarc::Hooks;
 
 /// One resident LTX-2 pipeline.
 pub struct Ltx2Model {
@@ -147,50 +147,49 @@ impl Ltx2Model {
         req.audio_guidance_scale = 1.0;
         req.sol_stage2 = self.sol_stage2;
         req.pisa_stage2 = self.pisa_stage2;
+        // E4: no audio decode when the output drops it.
+        req.skip_audio_decode = !wants_audio(job);
         req.validate()
             .map_err(|e| ApiError::invalid(e.to_string()))?;
         Ok(req)
+    }
+
+    /// Planned denoise steps (stage 1 + refine).
+    pub(crate) fn planned_steps(&self) -> u32 {
+        self.recipe.stage1_steps
+            + if self.recipe.two_stage {
+                self.recipe.refine_steps
+            } else {
+                0
+            }
     }
 
     pub(crate) fn generate(
         &mut self,
         job: &ResolvedJob,
         dir: &Path,
-        ctl: &StepControl,
-    ) -> Result<RawOutput, ApiError> {
+        hooks: Hooks<'_>,
+    ) -> Result<JobMetrics, ApiError> {
         let req = self.request(job, dir)?;
-        let planned = self.recipe.stage1_steps
-            + if self.recipe.two_stage {
-                self.recipe.refine_steps
-            } else {
-                0
-            };
-        let use_cache = self.use_text_cache;
-        let pipe = &mut self.pipe;
-        let out = super::output::with_hooks(ctl, Some(planned), |hooks| {
-            pipe.generate_with_hooks(&req, use_cache, None, hooks)
-        })
-        .map_err(|e| api_err("ltx2 generate", e))?;
+        let out = self
+            .pipe
+            .generate_with_hooks(&req, self.use_text_cache, None, hooks)
+            .map_err(|e| api_err("ltx2 generate", e))?;
         let t = &out.timings;
         let peak = out.memory.iter().map(|p| p.peak_used).max();
-        Ok(RawOutput {
-            frame_paths: out.frames,
-            wav: Some(out.wav.into()),
-            metrics: JobMetrics {
-                inference_s: Some(t.denoise_s),
-                stage_durations: stages(&[
-                    ("text", t.text_s),
-                    ("stage1", t.stage1_s),
-                    ("upsample", t.upsample_s),
-                    ("stage2", t.stage2_s),
-                    ("denoise", t.denoise_s),
-                    ("audio_decode", t.decode_audio_s),
-                    ("video_decode", t.decode_video_s),
-                    ("frames_write", t.write_s),
-                ]),
-                peak_memory_mb: peak.map(bytes_mb),
-                build_rtf: None,
-            },
+        Ok(JobMetrics {
+            inference_s: Some(t.denoise_s),
+            stage_durations: stages(&[
+                ("text", t.text_s),
+                ("stage1", t.stage1_s),
+                ("upsample", t.upsample_s),
+                ("stage2", t.stage2_s),
+                ("denoise", t.denoise_s),
+                ("audio_decode", t.decode_audio_s),
+                ("video_decode", t.decode_video_s),
+            ]),
+            peak_memory_mb: peak.map(bytes_mb),
+            build_rtf: None,
         })
     }
 }

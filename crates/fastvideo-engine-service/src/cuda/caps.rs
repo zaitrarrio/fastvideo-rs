@@ -458,7 +458,8 @@ fn ltx2_caps(id: &str, r: &Ltx2Recipe) -> ModelCaps {
             channels: cfg.vocoder.out_channels as u8,
             via_sidecar: false,
         }),
-        fps: FpsCaps::fixed(fps),
+        // E4: 24 (default), 25, 48, 50 validated at 1080p.
+        fps: crate::caps::ltx_fps_caps(),
         stream: Some(StreamCaps::Clip {
             min_s: grid.min as f32 / fps as f32,
             max_s: grid.max as f32 / fps as f32,

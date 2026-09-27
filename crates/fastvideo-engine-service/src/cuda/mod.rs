@@ -21,17 +21,18 @@
 //! `upsample`, `refine`, `audio_decode`, `video_decode`, then `encode`);
 //! steps count across the denoise stages (LTX two-stage: 8 + 3 = 11).
 //!
-//! **Output.** The pipelines write lossless `frame-NNN.png` frames and
-//! `audio.wav` into a work directory (byte-comparable with the CLI; moving to
-//! the E2 in-memory `FrameSink` removes the PNG round trip). Then:
-//! - `OutputMode::File{dir}`: frames stream into `<dir>/output.mp4`,
-//!   encoded on NVENC (design §0.1; `fastvideo-media::mp4`), AAC audio at
-//!   the model's native rate unless the plan drops it, crop applied for
-//!   pad-and-crop canvases. The PNGs are removed unless
-//!   `CudaBackendConfig::keep_frames` (the identity check against the CLI
-//!   compares them).
+//! **Output** (E2 in-memory sinks): every generate attaches a
+//! `fastvideo_cudarc::sink::FrameSink`, so the decoded RGB8 frames and the
+//! PCM arrive in memory (the same bytes the CLI writes as `frame-NNN.png`):
+//! - `OutputMode::File{dir}`: frames stream into `<dir>/output.mp4`, encoded
+//!   on NVENC (design §0.1; `fastvideo-media::mp4`), AAC audio at the
+//!   model's native rate unless the plan drops it, crop applied for
+//!   pad-and-crop canvases. With `CudaBackendConfig::keep_frames` the
+//!   pipelines also write their PNGs to `<dir>/frames/` (identity checks
+//!   against the CLI).
 //! - `OutputMode::Frames`: RGB frames and the PCM go to the `ClipSink` and
-//!   into `ClipOutput::{frames, audio}`.
+//!   into `ClipOutput::{frames, audio}`; nothing touches the disk but the
+//!   pipeline's `audio.wav` in a scratch directory that is removed.
 //!
 //! **Technique profiles.** `CudaBackend::new` installs the process's
 //! profile (the models' shared load-time settings, [`ProcessPlan`]) before

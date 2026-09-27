@@ -12,13 +12,13 @@ use super::caps::SfWanRecipe;
 use super::causal::CausalDriver;
 use super::h3::H3Model;
 use super::ltx2::Ltx2Model;
-use super::output::{finish, remove_frames, Mp4Options, RawOutput};
+use super::output::{deliver, remove_dir, Mp4Options};
 use super::wan::WanModel;
 use crate::backend::{
     BlockInput, BlockStats, CausalSpec, ClipOutput, ClipSink, DeviceInfo, EngineBackend, LoadEvent,
     SessionId,
 };
-use crate::cancel::{is_cancel, OutputMode, StepControl};
+use crate::cancel::{OutputMode, StepControl};
 use crate::caps::Recipe;
 
 /// The MP4 encoder (`fastvideo_media::video::FfmpegH264`), serializable.
@@ -317,54 +317,46 @@ impl EngineBackend for CudaBackend {
         ctl: &StepControl,
     ) -> Result<ClipOutput, ApiError> {
         ctl.check()?;
+        // Where the pipeline's own files go: `audio.wav`, and the PNG frames
+        // when `keep_frames` (E2 delivers the frames in memory either way).
         let work = match &ctl.mode {
             OutputMode::File { dir } => dir.join("frames"),
             OutputMode::Frames => self.cfg.work_dir.join(uuid::Uuid::new_v4().to_string()),
         };
         std::fs::create_dir_all(&work)
             .map_err(|e| ApiError::internal(format!("{}: {e}", work.display())))?;
-        let mp4 = self.mp4_options();
+        let opts = self.mp4_options();
+        let text_cache = self.cfg.text_cache.clone();
         let loaded = self
             .loaded
             .get_mut(&job.model)
             .ok_or_else(|| ApiError::loading(format!("model `{}` is not resident", job.model)))?;
-        let raw: Result<RawOutput, ApiError> = match loaded {
-            Loaded::H3(m) => m.generate(job, &work, ctl),
-            Loaded::Ltx2(m) => m.generate(job, &work, ctl),
-            Loaded::Wan(m) => m.generate(job, &work, ctl),
+        let r = match loaded {
+            Loaded::H3(m) => {
+                let planned = m.planned_steps();
+                deliver(job, ctl, out, &opts, Some(planned), |h| m.generate(job, &work, h))
+            }
+            Loaded::Ltx2(m) => {
+                let planned = m.planned_steps();
+                deliver(job, ctl, out, &opts, Some(planned), |h| m.generate(job, &work, h))
+            }
+            Loaded::Wan(m) => {
+                let planned = super::wan::planned_steps(m.recipe(), job);
+                deliver(job, ctl, out, &opts, Some(planned), |h| m.generate(job, &work, h))
+            }
             Loaded::SfWan(m) => {
                 // The bounded SF-Wan clip (`wan gen --preset sf_wan_t2v_1_3b`).
-                let cfg = WanModel::config(&m.recipe.wan, self.cfg.text_cache.as_deref(), job)?;
+                let cfg = WanModel::config(&m.recipe.wan, text_cache.as_deref(), job)?;
+                let planned = super::wan::planned_steps(&m.recipe.wan, job);
                 let pipe = m.pipe;
-                super::output::with_hooks(ctl, Some(cfg.num_inference_steps as u32), |hooks| {
-                    pipe.generate_to_with_hooks(&cfg, &work, false, hooks)
+                deliver(job, ctl, out, &opts, Some(planned), |h| {
+                    super::wan::run_pipeline(pipe, &cfg, &work, h)
                 })
-                .map(|o| RawOutput {
-                    frame_paths: o.frame_paths,
-                    wav: None,
-                    metrics: fastvideo_protocol::JobMetrics {
-                        inference_s: Some(o.timings.denoise_s),
-                        ..Default::default()
-                    },
-                })
-                .map_err(|e| super::output::api_err("sf-wan generate", e))
             }
         };
-        let raw = match raw {
-            Ok(r) => r,
-            Err(e) => {
-                if is_cancel(&e) || !self.cfg.keep_frames {
-                    let _ = std::fs::remove_dir_all(&work);
-                }
-                return Err(e);
-            }
-        };
-        let r = finish(job, raw, ctl, out, &work, &mp4);
-        if let Err(e) = &r {
-            if is_cancel(e) && !self.cfg.keep_frames {
-                remove_frames(&[], None, &work);
-                let _ = std::fs::remove_dir_all(&work);
-            }
+        let keep = self.cfg.keep_frames && matches!(ctl.mode, OutputMode::File { .. }) && r.is_ok();
+        if !keep {
+            remove_dir(&work);
         }
         r
     }

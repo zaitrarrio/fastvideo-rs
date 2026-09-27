@@ -13,8 +13,8 @@ use fastvideo_cudarc::{GenerateConfig, LoadParts, WanPipeline};
 use fastvideo_protocol::{Anchor, ApiError, JobMetrics, ResolvedJob, Task};
 
 use super::caps::{WanDecoder, WanRecipe, WanSampler};
-use super::output::{api_err, stages, RawOutput};
-use crate::cancel::StepControl;
+use super::output::{api_err, stages};
+use fastvideo_cudarc::Hooks;
 
 /// `fv-gpucheck wan gen`'s DMD timesteps for `steps`.
 pub fn dmd_steps(steps: usize) -> Vec<i32> {
@@ -153,29 +153,37 @@ impl WanModel {
         &self,
         job: &ResolvedJob,
         dir: &Path,
-        ctl: &StepControl,
-    ) -> Result<RawOutput, ApiError> {
+        hooks: Hooks<'_>,
+    ) -> Result<JobMetrics, ApiError> {
         let cfg = Self::config(&self.recipe, self.text_cache.as_deref(), job)?;
-        let planned = cfg.num_inference_steps as u32;
-        let out = super::output::with_hooks(ctl, Some(planned), |hooks| {
-            self.pipe.generate_to_with_hooks(&cfg, dir, false, hooks)
-        })
-        .map_err(|e| api_err("wan generate", e))?;
-        let t = &out.timings;
-        Ok(RawOutput {
-            frame_paths: out.frame_paths,
-            wav: None,
-            metrics: JobMetrics {
-                inference_s: Some(t.denoise_s),
-                stage_durations: stages(&[
-                    ("text", t.text_s),
-                    ("denoise", t.denoise_s),
-                    ("video_decode", t.decode_s),
-                    ("frames_write", t.write_s),
-                ]),
-                peak_memory_mb: None,
-                build_rtf: None,
-            },
-        })
+        run_pipeline(&self.pipe, &cfg, dir, hooks)
     }
+}
+
+/// Planned steps of a job on a recipe.
+pub(crate) fn planned_steps(recipe: &WanRecipe, job: &ResolvedJob) -> u32 {
+    job.sampling.steps.unwrap_or(recipe.sampler.steps())
+}
+
+/// One `generate_to_with_hooks` (no mp4: the engine sink encodes).
+pub(crate) fn run_pipeline(
+    pipe: &WanPipeline,
+    cfg: &GenerateConfig,
+    dir: &Path,
+    hooks: Hooks<'_>,
+) -> Result<JobMetrics, ApiError> {
+    let out = pipe
+        .generate_to_with_hooks(cfg, dir, false, hooks)
+        .map_err(|e| api_err("wan generate", e))?;
+    let t = &out.timings;
+    Ok(JobMetrics {
+        inference_s: Some(t.denoise_s),
+        stage_durations: stages(&[
+            ("text", t.text_s),
+            ("denoise", t.denoise_s),
+            ("video_decode", t.decode_s),
+        ]),
+        peak_memory_mb: None,
+        build_rtf: None,
+    })
 }
