@@ -31,7 +31,7 @@
 use std::collections::BTreeMap;
 
 use fastvideo_models::h3::lora::{is_sol_h3_recipe, is_sol_h3_spark_recipe, sol_h3_forces_ref2va};
-use fastvideo_protocol::{ApiError, Family, ModelCaps, ModelId, Tier};
+use fastvideo_protocol::{ApiError, Family, FpsCaps, ModelCaps, ModelId, Tier};
 use serde::{Deserialize, Serialize};
 
 /// The profile Sol-H3 4-step serves with (design §0.5): Sol engine route,
@@ -39,6 +39,22 @@ use serde::{Deserialize, Serialize};
 pub const SOL_H3_4STEP_PROFILE: &str = "h3/sol_h3_4step_engine_ladder";
 /// The dense Sol-H3 4-step route, selectable as an explicit profile.
 pub const SOL_H3_4STEP_DENSE_PROFILE: &str = "h3/sol_h3_4step";
+
+/// The LTX-2 frame rates the engine serves (serve E4): 24, and 25 / 48 / 50,
+/// validated at 1080p on the LTX-2.5 distilled two-stage (exact frame count,
+/// mp4 rate and audio track; `artifacts/serve/e4-ltx-fps/benchmark.json`).
+/// The model is conditioned on the rate (RoPE time and audio length), so
+/// these are generated rates, not container-only ones.
+pub const LTX_FPS: [u32; 4] = [24, 25, 48, 50];
+
+/// [`LTX_FPS`] as caps (default 24) for an LTX-2 backend's `ModelCaps::fps`.
+pub fn ltx_fps_caps() -> FpsCaps {
+    FpsCaps {
+        allowed: LTX_FPS.to_vec(),
+        default: 24,
+        container_only: false,
+    }
+}
 
 /// The canonical tier alias for `family`: `h3-max`, `h3-turbo`, `h3-draft`,
 /// `ltx-pro`, `ltx-turbo`, `ltx-draft`, `wan-max`, `wan-turbo`, `wan-draft`.
