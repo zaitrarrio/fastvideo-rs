@@ -3,7 +3,7 @@
 # FV_URL_SIGNING_KEY, FV_ADMIN_TOKEN and FV_CALLBACKS_ALLOW_PRIVATE=1 (so
 # webhooks reach the suites' local receivers); FV_REACTOR_MODEL picks the
 # Reactor model per mode. `[protocols]` differs per suite: the runner
-# appends a `[protocols]` table from tests/compat/protocols/<name>.toml.
+# appends its own `[protocols]` table (BATCH, DIRECTOR or REACTOR in run.sh).
 
 [server]
 shutdown_grace_s = 2

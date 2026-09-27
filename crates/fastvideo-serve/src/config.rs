@@ -944,6 +944,18 @@ body_max_mb = 64
     }
 
     #[test]
+    fn callbacks_allow_private_is_opt_in() {
+        let mut c = Config::default();
+        assert!(!c.server.callbacks_allow_private, "the SSRF guard is on by default");
+        c.apply_env(&env(&[("FV_CALLBACKS_ALLOW_PRIVATE", "1")])).unwrap();
+        assert!(c.server.callbacks_allow_private);
+        c.apply_env(&env(&[("FV_CALLBACKS_ALLOW_PRIVATE", "0")])).unwrap();
+        assert!(!c.server.callbacks_allow_private);
+        let c = Config::from_toml("[server]\ncallbacks_allow_private = true\n", "t").unwrap();
+        assert!(c.server.callbacks_allow_private);
+    }
+
+    #[test]
     fn bad_values_are_errors() {
         let mut c = Config::default();
         assert!(c.apply_env(&env(&[("FV_SERVE_MODE", "lambda")])).is_err());

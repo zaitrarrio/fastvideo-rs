@@ -6,6 +6,7 @@
 #   bash tests/compat/run.sh               # every suite
 #   bash tests/compat/run.sh openai ltx    # some suites
 #   bash tests/compat/run.sh --list
+#   bash tests/compat/run.sh --setup       # only install the pinned clients
 #
 # Suites:
 #   openai        openai (Python) client.videos.* against /v1/videos
@@ -14,7 +15,7 @@
 #   ltx           LTX API documented requests snippets (v2 async, v1 sync, upload)
 #   fal-py        fal-client (Python): queue, status, result, subscribe, run, cancel, errors
 #   fal-js        @fal-ai/client (JS): requestMiddleware + proxyUrl, SSE, storage upload
-#   fal-webhook   fal webhooks verified with the JWKS + Ed25519 (PyNaCl)
+#   fal-webhook   fal webhooks (fal-client + @fal-ai/client) verified with the JWKS + Ed25519
 #   fal-director  @fal-ai/client alpha fal.realtime.open(wma) in headless Chromium
 #   reactor       reactor_sdk (Python) local mode: A/V, video-only, causal
 #   console       the /console Playwright smoke (tests/console/smoke.cjs)
@@ -32,6 +33,8 @@
 #                             /opt/pw-browsers; this script never installs
 #                             browsers: CI runs `playwright install` itself)
 #   FV_COMPAT_KEEP_LOGS=1     keep the per-suite logs directory
+#   FV_COMPAT_LOGS            write the logs there (kept) instead of a temp dir
+#   FV_COMPAT_DIR             client cache (venv, node_modules)
 #
 # Needs: cargo (unless FV_SERVE_BIN), python3 (3.10+), node 18+, npm,
 # openssl, curl; ffmpeg on PATH so the fake engine writes real MP4s.
@@ -45,6 +48,8 @@ if [[ "${1:-}" == "--list" ]]; then
   printf '%s\n' "${ALL_SUITES[@]}"
   exit 0
 fi
+SETUP_ONLY=0
+if [[ "${1:-}" == "--setup" ]]; then SETUP_ONLY=1; shift; fi
 SUITES=("$@")
 [[ ${#SUITES[@]} -eq 0 ]] && SUITES=("${ALL_SUITES[@]}")
 for s in "${SUITES[@]}"; do
@@ -53,10 +58,12 @@ done
 
 TARGET="${CARGO_TARGET_DIR:-$ROOT/target}"
 CACHE="${FV_COMPAT_DIR:-$TARGET/compat}"
-export PLAYWRIGHT_BROWSERS_PATH="${PLAYWRIGHT_BROWSERS_PATH:-/opt/pw-browsers}"
+if [[ -z "${PLAYWRIGHT_BROWSERS_PATH:-}" && -d /opt/pw-browsers ]]; then
+  export PLAYWRIGHT_BROWSERS_PATH=/opt/pw-browsers
+fi
 KEY="fv-compat-key"
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/fv-compat.XXXXXX")"
-LOGS="$WORK/logs"
+LOGS="${FV_COMPAT_LOGS:-$WORK/logs}"
 mkdir -p "$LOGS" "$CACHE"
 
 log() { printf '\n==> %s\n' "$*" >&2; }
@@ -69,7 +76,7 @@ cleanup() {
   for p in "${PIDS[@]}"; do kill "$p" 2>/dev/null || true; done
   for p in "${PIDS[@]}"; do wait "$p" 2>/dev/null || true; done
   if [[ "${FV_COMPAT_KEEP_LOGS:-0}" == "1" ]]; then
-    echo "compat: logs kept in $LOGS" >&2
+    echo "compat: work dir and logs kept in $WORK ($LOGS)" >&2
   else
     rm -rf "$WORK"
   fi
@@ -92,20 +99,8 @@ command -v node >/dev/null || die "node is required"
 command -v openssl >/dev/null || die "openssl is required"
 command -v ffmpeg >/dev/null || echo "compat: warning: no ffmpeg on PATH; outputs are placeholders and MP4 checks fail" >&2
 
-if [[ -n "${FV_SERVE_BIN:-}" ]]; then
-  BIN="$FV_SERVE_BIN"
-else
-  log "building fv-serve (fake engine, WebRTC, encoders, HTTP client)"
-  (cd "$ROOT" && cargo build -p fastvideo-serve --features fake,full --bin fv-serve \
-    --config 'profile.dev.package.openh264-sys2.opt-level=3' \
-    --config 'profile.dev.package.openh264.opt-level=3' \
-    --config 'profile.dev.package.audiopus_sys.opt-level=3' \
-    --config 'profile.dev.package.libwebp-sys.opt-level=3') || die "cargo build failed"
-  BIN="$TARGET/debug/fv-serve"
-fi
-[[ -x "$BIN" ]] || die "no fv-serve at $BIN"
 
-hash_of() { sha256sum "$@" | sha256sum | cut -c1-16; }
+hash_of() { cat "$@" | sha256sum | cut -c1-16; }
 
 VENV="$CACHE/venv"
 PY="$VENV/bin/python"
@@ -114,7 +109,7 @@ if [[ ! -x "$PY" || "$(cat "$VENV/.stamp" 2>/dev/null)" != "$stamp" ]]; then
   log "python clients (tests/compat/requirements.txt)"
   rm -rf "$VENV"
   python3 -m venv "$VENV" || die "venv"
-  "$VENV/bin/pip" install -q --disable-pip-version-check -r "$HERE/requirements.txt" || die "pip install"
+  "$PY" -m pip install -q --disable-pip-version-check -r "$HERE/requirements.txt" || die "pip install"
   echo "$stamp" > "$VENV/.stamp"
 fi
 
@@ -128,6 +123,24 @@ if [[ ! -d "$NODE_DIR/node_modules" || "$(cat "$NODE_DIR/.stamp" 2>/dev/null)" !
   (cd "$NODE_DIR" && PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1 npm ci --no-audit --no-fund --loglevel=error) || die "npm ci"
   echo "$stamp" > "$NODE_DIR/.stamp"
 fi
+
+if [[ $SETUP_ONLY == 1 ]]; then
+  echo "compat: clients ready in $CACHE" >&2
+  exit 0
+fi
+
+if [[ -n "${FV_SERVE_BIN:-}" ]]; then
+  BIN="$FV_SERVE_BIN"
+else
+  log "building fv-serve (fake engine, WebRTC, encoders, HTTP client)"
+  (cd "$ROOT" && cargo build -p fastvideo-serve --features fake,full --bin fv-serve \
+    --config 'profile.dev.package.openh264-sys2.opt-level=3' \
+    --config 'profile.dev.package.openh264.opt-level=3' \
+    --config 'profile.dev.package.audiopus_sys.opt-level=3' \
+    --config 'profile.dev.package.libwebp-sys.opt-level=3') || die "cargo build failed"
+  BIN="$TARGET/debug/fv-serve"
+fi
+[[ -x "$BIN" ]] || die "no fv-serve at $BIN"
 
 # The throwaway CA (self-signed, CA:TRUE, SAN 127.0.0.1/localhost).
 CERT="$WORK/ca.pem"
@@ -268,6 +281,7 @@ suite_fal-webhook() {
   env "${client_env[@]}" FAL_KEY="$KEY" FAL_QUEUE_RUN_HOST="$host" FAL_RUN_HOST="$host/run" PYTHONPATH="$HERE/suites" \
     timeout 900 "$PY" "$HERE/suites/fal_webhook.py" --base "$BASE" --key "$KEY"
   local rc=$?
+  env "${client_env[@]}" timeout 900 node "$HERE/suites/fal_webhook.mjs" "$NODE_DIR" "$BASE" "$KEY" || rc=1
   stop_serve
   return $rc
 }
