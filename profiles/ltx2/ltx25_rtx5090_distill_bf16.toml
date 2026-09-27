@@ -1,0 +1,26 @@
+# sol-engine models/ltx25/RTX5090/ltx25_rtx5090_distill_bf16.toml
+# (LTX25_PIPELINE=bf16): LTX-2.5 distilled two-stage in BF16 with Sol-Attn
+# on the stage-2 video self-attention (gpu_infer.py: "Sol-Attn is enabled
+# for Stage 2 video self-attention") and the reference's `--offload cpu`
+# placement (run_ltx25_gpu.sh: OFFICIAL_ARGS+=(--offload cpu)).
+# Workload (4k5s / 1080p20s, prompt, seed 42) is set on the command line
+# (`ltx2 gen --model-version 2.5 --two-stage --workload 4k5s ...`).
+
+[id]
+name = "ltx25_rtx5090_distill_bf16"
+family = "ltx25"
+description = "LTX-2.5 distilled two-stage, BF16, Sol stage 2, offload cpu."
+upstream = "sol-engine models/ltx25/RTX5090/ltx25_rtx5090_distill_bf16.toml"
+
+[pipeline]
+model = "ltx2"
+
+# models/ltx25/RTX5090/attention.py: layer 0 dense, layers 1..=47 at tau
+# 1.0 / 1.25 / 1.5 on the three refine forwards.
+[techniques.sol_attn]
+preset = "ltx25_stage2"
+
+[techniques.bf16_linears]
+
+[techniques.offload]
+placement = "cpu"

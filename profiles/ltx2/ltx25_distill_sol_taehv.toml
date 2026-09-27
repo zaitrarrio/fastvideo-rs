@@ -1,0 +1,17 @@
+# LTX-2.5 distilled two-stage, Sol stage 2, video decoded by the wide LTX
+# tiny autoencoder (sol-engine models/ltx2.5-refiner: taeltx2_3_wide replaces
+# the conv VAE decode, GB200/refiner_head_cp.py:567-578). Weights from
+# --ltx-tae-weights / FASTVIDEO_LTX2_TAE_WEIGHTS, or `weights = "..."`.
+
+[id]
+name = "ltx25_distill_sol_taehv"
+family = "ltx25"
+description = "LTX-2.5 distilled two-stage, Sol stage 2, TAEHV decode."
+
+[pipeline]
+model = "ltx2"
+
+[techniques.sol_attn]
+preset = "ltx25_stage2"
+
+[techniques.taehv]

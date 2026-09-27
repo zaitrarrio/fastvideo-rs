@@ -145,6 +145,12 @@ impl Profile {
         let spec = registry::model_spec(&p.model)
             .ok_or_else(|| format!("[pipeline].model = {:?}: expected h3 | ltx2", p.model))?;
         p.recipe = str_of(pipe, "recipe", "pipeline")?.map(str::to_owned);
+        if p.recipe.is_some() && p.model != "h3" {
+            return Err(format!(
+                "[pipeline].recipe is H3's --h3-recipe; {} workloads are set on the command line",
+                p.model
+            ));
+        }
         if let Some(techs) = table_of(&t, "techniques")? {
             for (name, v) in techs {
                 let tab = v

@@ -1,0 +1,14 @@
+# LTX-2.5 distilled two-stage with the Sol stage 2, every model resident: the
+# rtx5090 matrix family's ltx25-*-sol cells on a 96 GB card (the same as
+# `ltx2 gen --model-version 2.5 --two-stage` with no flags).
+
+[id]
+name = "ltx25_distill_sol"
+family = "ltx25"
+description = "LTX-2.5 distilled two-stage, Sol stage 2, resident."
+
+[pipeline]
+model = "ltx2"
+
+[techniques.sol_attn]
+preset = "ltx25_stage2"

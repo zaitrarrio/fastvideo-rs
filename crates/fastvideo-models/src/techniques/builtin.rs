@@ -40,6 +40,26 @@ pub static PROFILES: &[(&str, &str)] = &[
         "h3/sol_h3_4step_engine",
         include_str!("../../../../profiles/h3/sol_h3_4step_engine.toml"),
     ),
+    (
+        "ltx2/ltx25_rtx5090_distill_bf16",
+        include_str!("../../../../profiles/ltx2/ltx25_rtx5090_distill_bf16.toml"),
+    ),
+    (
+        "ltx2/ltx25_distill_sol",
+        include_str!("../../../../profiles/ltx2/ltx25_distill_sol.toml"),
+    ),
+    (
+        "ltx2/ltx25_distill_dense",
+        include_str!("../../../../profiles/ltx2/ltx25_distill_dense.toml"),
+    ),
+    (
+        "ltx2/ltx25_distill_sol_taehv",
+        include_str!("../../../../profiles/ltx2/ltx25_distill_sol_taehv.toml"),
+    ),
+    (
+        "ltx2/ltx25_distill_sol_fp8",
+        include_str!("../../../../profiles/ltx2/ltx25_distill_sol_fp8.toml"),
+    ),
 ];
 
 /// A builtin profile by name (`h3/rtx5090_sol`, with or without `.toml` or

@@ -1,0 +1,15 @@
+# LTX-2.5 distilled two-stage, Sol stage 2, FastVideo's W8A8 tensorwise FP8
+# recipe on every DiT linear (`FASTVIDEO_FP8=1`).
+
+[id]
+name = "ltx25_distill_sol_fp8"
+family = "ltx25"
+description = "LTX-2.5 distilled two-stage, Sol stage 2, FP8 linears."
+
+[pipeline]
+model = "ltx2"
+
+[techniques.sol_attn]
+preset = "ltx25_stage2"
+
+[techniques.fp8]
