@@ -1,0 +1,27 @@
+{
+  "model": "h3-max",
+  "prompt": "The character from the photo sings the reference melody on stage",
+  "seconds": 5,
+  "aspect_ratio": "9:16",
+  "short_edge": 768,
+  "task": "ref2va",
+  "audio_reference": [
+    {
+      "audio_url": "https://example.com/melody.wav"
+    }
+  ],
+  "video_reference": {
+    "video_url": "https://example.com/stage.mp4"
+  },
+  "image_reference": [
+    {
+      "image_url": "https://example.com/face.png"
+    },
+    {
+      "image_url": "data:image/png;base64,iVBORw0KGgo="
+    }
+  ],
+  "n": 1,
+  "quality": "hd",
+  "generate_sound": true
+}

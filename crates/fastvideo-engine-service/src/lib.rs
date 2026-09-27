@@ -1,17 +1,55 @@
 //! Engine service: warm model pool, one executor thread per GPU, scheduler,
 //! cancellation, progress events and the streaming cores (design §3.6, §5).
 //!
-//! `FakeBackend` is always built; `CudaBackend` needs the `cuda` feature.
+//! - [`EngineService`] ([`service`]): the async API every protocol adapter
+//!   uses: `start`, `caps`, `readiness`, `submit`, `cancel`, sessions, `drain`.
+//! - [`executor`]: one OS thread per [`EngineBackend`]; never async.
+//! - [`scheduler`]: `Priority::Stream` before `Priority::Batch`, queue
+//!   positions, the exclusive causal lease.
+//! - [`pool`]: residency and [`Readiness`].
+//! - [`caps`]: the [`CapabilityTable`], recipes, technique profiles and the
+//!   max/turbo [`Tier`]s.
+//! - [`cancel`]: [`CancelToken`], [`StepControl`] and the [`StepHook`] seam the
+//!   CUDA pipelines' step observers plug into (package E1).
+//! - [`backend`]: the [`EngineBackend`] trait and its value types.
+//! - [`fake`]: [`FakeBackend`], deterministic synthetic A/V (always built).
+//! - [`clock`]: [`ManualClock`] for deterministic tests.
+//! - [`stream`]: [`ClipSession`] (clip-queue builds) and [`CausalSession`]
+//!   (SF-Wan block rollout).
 //!
-//! Owned by WP-02 (docs/serve/design.md §8). Scaffolded by WP-00.
+//! `CudaBackend` needs the `cuda` feature (WP-11).
+//!
+//! Owned by WP-02 (docs/serve/design.md §8).
 
-pub mod service;
-pub mod executor;
-pub mod scheduler;
-pub mod caps;
-pub mod pool;
+pub mod backend;
 pub mod cancel;
+pub mod caps;
+pub mod clock;
+pub(crate) mod executor;
 pub mod fake;
+pub mod pool;
+pub mod scheduler;
+pub mod service;
 pub mod stream;
 #[cfg(feature = "cuda")]
 pub mod cuda;
+
+pub use backend::{
+    BlockInput, BlockStats, CausalSpec, ClipOutput, ClipSink, CollectSink, DeviceInfo,
+    EngineBackend, LoadEvent, NullSink, SessionId,
+};
+pub use cancel::{CancelToken, OutputMode, StepControl, StepEvent, StepHook};
+pub use caps::{
+    default_profile, parse_tier_alias, tier_alias, CapabilityTable, ModelEntry, Recipe,
+    TierBinding, SOL_H3_4STEP_DENSE_PROFILE, SOL_H3_4STEP_PROFILE,
+};
+pub use fastvideo_protocol::Tier;
+pub use clock::{Clock, ManualClock, SystemClock};
+pub use fake::{FakeBackend, FakeConfig, FakeFaults, FakeModel, FakeTiming, Mp4Mode};
+pub use pool::{ModelPool, Readiness, Residency};
+pub use scheduler::Priority;
+pub use service::{
+    CancelOutcome, EngineConfig, EngineEvent, EngineService, EngineStats, JobHandle,
+};
+pub use stream::causal::{CausalBlock, CausalSession, CausalStats};
+pub use stream::clip::{ClipBuild, ClipSession};

@@ -226,7 +226,7 @@ fn caps_helpers() {
     assert_eq!(
         c.stream,
         Some(StreamCaps::Clip {
-            min_s: 124.0 / 24.0,
+            min_s: 107.0 / 24.0,
             max_s: 362.0 / 24.0
         })
     );
@@ -288,6 +288,7 @@ fn http_reply_builders() {
         follow: Some(SseFollow::JobStatus {
             job: JobId::new(),
             close_on_terminal: true,
+            with_logs: false,
         }),
         keepalive: Some(Duration::from_secs(15)),
     };

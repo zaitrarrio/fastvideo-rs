@@ -597,3 +597,119 @@ re-run. The flash route's speed is measured end to end above. Whole-clip
 timing (12 heads, 1560 tokens per frame, 3-frame blocks): causal kernel
 12.6 ms vs dense flash 20.4 ms at 21 frames, and 1.97 vs 2.38 ms (composed
 42.2 ms) at 7 frames.
+
+## SF-Wan open-ended streaming (`wan::stream`, serve E6)
+
+`wan::stream::CausalRollout` runs the causal DMD block loop until stopped:
+
+- `open(&pipe, RolloutConfig)` encodes the prompt and sets up an empty
+  rolling cache;
+- `next_block()` / `next_block_with_hooks(Hooks)` denoises one 3-latent
+  block (4 Self-Forcing steps, then the clean-context pass), decodes it with
+  TAEHV and returns a `StreamBlock` (`[n, 3, H, W]` frames on the device,
+  RGB8 on the host, latents, per-phase timings). Block 0 yields 9 frames and
+  every later block 12;
+- `run(max, sink)` loops with a callback; `run_into(max, &SyncSender)` feeds
+  a bounded channel (`HostBlock`, the design's depth-4 hand-off);
+- `set_prompt` encodes at once and applies from the next block: the cache is
+  kept (`PromptSwitch::Keep`, default) or cleared with a restart at block 0
+  (`PromptSwitch::Reset`); `reset(seed)` restarts explicitly;
+- E1 hooks: a denoise step event per step (with the block), a frames event
+  per block, cancel checked between steps. A cancelled block is generated
+  again by the next call (its cache slots are overwritten in place).
+
+The cache rolls at `local_attn_frames` (default 21, the training window) and
+keeps `sink_frames` (default 3) at its head. Three RoPE policies
+(`causal::KvRope`):
+
+| Policy | Keys in the cache | Cost | Offsets seen by attention |
+|---|---|---|---|
+| `Absolute` (bounded path) | roped at their frame | baseline | the sink drifts ever further from the queries |
+| `Relativistic` (FastVideo `rope_cache_policy`) | un-roped; whole window roped from 0 each forward | +0.10 s per block | window `[0, 21)`, queries at the tail |
+| `RebasedSink` (default) | roped; the sink re-roped once per block, from an f32 un-roped copy, to just before the rolled part | +0.015 s per block | same as relativistic |
+
+Only the sink separates the relativistic geometry from the absolute one: the
+rolled part of the window is contiguous up to the queries either way, and
+attention sees only relative positions. The CPU tests check that rebased
+equals relativistic after the cache rolls (tiny DiT, f32, max abs <= 1e-4 of
+scale) and that absolute does not, and that all three run past the
+checkpoint's 1024-frame RoPE table in constant cache memory (the temporal
+rows continue with the same formula; below 1024 nothing changed).
+
+Noise: latent frames `21g .. 21g+21` start from a `StdRng` draw seeded with
+`seed` for g = 0 (the bounded path's own draw) and a derived seed after;
+re-noise draw k is the bounded path's `causal_noise(seed, k)`.
+
+### Decode: per block with carried TAEHV state
+
+TAEHV's temporal memory is one saved frame per MemBlock, so
+`TaeHv::decode_state` / `decode_step` carry it across calls; the whole-clip
+decode now runs through the same step (unchanged: same ops). No latent
+overlap is needed. H100, the 81-frame clip (seed 1024):
+
+| Comparison | Result |
+|---|---|
+| 7 streamed blocks (absolute, sink 0) vs the bounded 81-frame latents | bitwise equal |
+| Per-block decode vs whole-clip decode, chunk 3 (the block size) | bitwise equal |
+| Per-block decode vs whole-clip decode, default chunk 4 | max abs 0.0065 of range 2, PSNR 81.4 dB; in RGB8, 1.3% of values differ, by 1 level at most |
+
+The chunk-4 difference is the convolutions running on different frame
+counts (cuDNN algorithm choice), not the carried state.
+
+### Throughput and memory (H100 80GB HBM3, US-CA-2, 832x480, 16 fps video)
+
+`runpod-matrix.sh sfstream` (`fv-gpucheck wan stream`), warm process,
+steady state = blocks 8 onward (full 21-frame window).
+
+| Policy | Block s (denoise / context / decode) | Frames/s | TTFF |
+|---|---|---|---|
+| Absolute, sink 0 | 0.597 (0.457 / 0.114 / 0.026) | 20.0 | 0.30 s |
+| Relativistic, sink 3 | 0.712 (0.551 / 0.134 / 0.026) | 16.8 | 0.32 s |
+| **RebasedSink, sink 3** (default) | **0.624** (0.483 / 0.113 / 0.026) | **19.2** | **0.30 s** |
+
+TTFF is prompt encode (UMT5 resident, 10 ms) plus the first block (0.29 s,
+the window is empty); the first stream of a fresh process took 1.41 s (0.60
++ 0.81, cold kernels and allocator). Early blocks are cheaper as the window
+fills (block 1: 0.33 s). RGB8 packing is 1 ms per block.
+
+strobe's 22.8 fps (H100, torch.compile, TRT VAE) is a 0.503 s block with
+decode 187 ms; ours decodes in 26 ms and loses in denoise + context (0.60
+vs 0.32 s). CUDA Graphs per block position (E7) are the next lever.
+
+Memory: 10 minutes (9609 frames, 801 blocks) with the rebased sink: device
+memory in use was 26302 MiB at block 20 and 26462 MiB from block 50 to the
+end; the KV cache holds 5758 MiB (30 layers, 21 frames, bf16) from block 6
+on. The relativistic 10-minute run: 25182 MiB at block 7, 25342-25374 MiB
+from block 100 on, one allocator high-water of 25870 MiB.
+
+### Long-run stability (single prompt and seed; statistics, not a visual review)
+
+Per 10 s (30 s for the 10-minute run) of video: mean luma, frame std, mean
+temporal MAD between consecutive frames and across block seams (0-255),
+gradient sharpness, fraction of clipped pixels. Seam MAD tracks in-block MAD
+everywhere (no visible block boundary).
+
+- **RebasedSink, sink 3, 120 s:** stable: MAD 2.6-4.1, sharpness 11.6-15.6,
+  luma 45-66, clipping <= 0.08 in every window after the first.
+- **Relativistic, sink 3, 120 s:** stable to about 60 s, then MAD rises
+  (6 at 70 s, 12-15 at 90-120 s) with sharpness (18-26): growing flicker.
+- **Sink 0 (relativistic or absolute), 60 s:** darkens and clips within
+  10-30 s (luma 21-41 against 58, clipped 0.13-0.57); the relativistic run
+  also flickers by 40-60 s (MAD 13-17). A sink is needed.
+- **RebasedSink, 10 minutes:** stable for 2 minutes (MAD 3.4-4.2); a
+  turbulent stretch from 2.5 to 5.5 min (MAD 6-25, sharpness up to 27); then
+  low contrast and little motion to the end (std 18-25 against about 45,
+  MAD 1.5-3.5). It does not blow up, but by these statistics a single prompt
+  loses contrast and motion after about 6 minutes. Two runs of the same
+  settings differ (the rollout amplifies rounding), so these are single
+  samples.
+
+Prompt switch at a block boundary: the new prompt is encoded in 9-10 ms
+between blocks. Keep changes the scene over the next few seconds (luma 46
+to 80 in the window after the switch, no MAD spike); Reset is a hard cut
+(mean seam MAD over that 20 s run 9.3 against 6.1 in-block) and restarts
+the window from empty.
+
+Not measured: quality with a reference metric (LPIPS or CLIP against a
+bounded clip), several prompts and seeds for the long runs, and RTX PRO
+6000 (none in stock in US-CA-2 during these runs).

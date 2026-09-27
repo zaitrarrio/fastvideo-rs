@@ -219,7 +219,7 @@ fn caps_round_trip() {
     assert_eq!(j["tasks"], json!(["t2v", "i2v", "keyframes"]));
     assert_eq!(
         j["frames"],
-        json!({"step": 17, "offset": 5, "min": 124, "max": 362, "default": 124})
+        json!({"step": 17, "offset": 5, "min": 107, "max": 362, "default": 124})
     );
     assert_eq!(
         j["audio"],
@@ -265,6 +265,35 @@ fn tier_and_recipe_shapes() {
     );
     let j = serde_json::to_value(nego(&r, &h3()).unwrap()).unwrap();
     assert!(j.get("tier").is_none() && j.get("recipe").is_none());
+}
+
+#[test]
+fn draft_tier_shape_and_order() {
+    // Design §0.6: a third tier below the quality gate, serialized "draft".
+    assert_eq!(serde_json::to_value(Tier::Draft).unwrap(), "draft");
+    let back: Tier = serde_json::from_value(json!("draft")).unwrap();
+    assert_eq!(back, Tier::Draft);
+    assert_eq!(Tier::Draft.to_string(), "draft");
+    assert!(Tier::Draft < Tier::Turbo && Tier::Turbo < Tier::Max);
+    let mut all = vec![Tier::Max, Tier::Draft, Tier::Turbo];
+    all.sort();
+    assert_eq!(all, [Tier::Draft, Tier::Turbo, Tier::Max]);
+    assert!(!Tier::Draft.passes_quality_gate());
+    assert!(Tier::Turbo.passes_quality_gate() && Tier::Max.passes_quality_gate());
+
+    // A draft model's resolved jobs say so.
+    let c = h3().with_tier(Tier::Draft, "fasth3-4step-vsa-480p-taeh3");
+    let j = round_trip(&c);
+    assert_eq!(j["tier"], "draft");
+    let mut r = t2v("fasth3", "a cat");
+    r.seed = Some(1);
+    let job = nego(&r, &c).unwrap();
+    assert_eq!(job.tier, Some(Tier::Draft));
+    assert_eq!(round_trip(&job)["tier"], "draft");
+    assert_eq!(
+        resolve_tier(Family::H3, Tier::Draft, [&c]).unwrap().id,
+        c.id
+    );
 }
 
 pub fn sample_job() -> Job {

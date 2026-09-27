@@ -42,6 +42,12 @@ if [[ "${FV_SERVE_HEAVY:-0}" == "1" ]]; then
   run cargo check -p fastvideo-reactor --features proto-codegen
   run cargo clippy -p fastvideo-serve -p fastvideo-webrtc -p fastvideo-media -p fastvideo-serve-kit -p fastvideo-deploy \
     --features fastvideo-serve/full --all-targets --no-deps -- -D warnings
+  # serve-kit's HTTP fetch / callback-receiver tests only exist with `fetch`.
+  run cargo test -p fastvideo-serve-kit --features fetch
+  # fv-serve with outbound HTTP: D1 over HTTP, S3/R2 read-back for LTX v1.
+  # (serve-kit's d1_live smoke test runs above when CLOUDFLARE_API_KEY or
+  # FV_CF_API_TOKEN is set, and skips otherwise.)
+  run cargo test -p fastvideo-serve --features http-client
 fi
 
 if [[ "${FV_SERVE_CUDA:-0}" == "1" ]]; then

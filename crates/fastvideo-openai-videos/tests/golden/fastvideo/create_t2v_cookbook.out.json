@@ -1,0 +1,39 @@
+{
+  "accepted_noop": [],
+  "audio_in": null,
+  "audio_out": "model_default",
+  "callback": null,
+  "canvas": {
+    "exact": {
+      "height": 768,
+      "width": 1344
+    }
+  },
+  "keyframes": [],
+  "model": "fasth3",
+  "negative_prompt": null,
+  "output": {
+    "inline_data_uri": false
+  },
+  "prompt": "A red fox runs through fresh snow at dawn, cinematic lighting",
+  "protocol": "openai_videos",
+  "references": [],
+  "sampling": {
+    "boundary_ratio": null,
+    "flow_shift": null,
+    "guidance": null,
+    "guidance_2": null,
+    "steps": null
+  },
+  "seed": 1000,
+  "task": "t2v",
+  "timing": {
+    "fps": 24,
+    "length": {
+      "seconds": {
+        "snap": "align_up",
+        "value": 5.0
+      }
+    }
+  }
+}

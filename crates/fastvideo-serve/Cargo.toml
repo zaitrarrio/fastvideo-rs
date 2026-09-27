@@ -6,6 +6,9 @@ license.workspace = true
 rust-version.workspace = true
 description = "fv-serve: one binary serving FastVideo, MiniMax, fal, LTX and Reactor APIs over the fastvideo-rs engines."
 
+[lib]
+path = "src/lib.rs"
+
 [[bin]]
 name = "fv-serve"
 path = "src/main.rs"
@@ -16,28 +19,39 @@ fastvideo-engine-service.workspace = true
 fastvideo-media.workspace = true
 fastvideo-webrtc.workspace = true
 fastvideo-serve-kit.workspace = true
-fastvideo-openai-videos.workspace = true
-fastvideo-minimax.workspace = true
-fastvideo-ltxapi.workspace = true
-fastvideo-fal.workspace = true
-fastvideo-reactor.workspace = true
 fastvideo-deploy.workspace = true
 anyhow.workspace = true
+async-trait.workspace = true
 axum.workspace = true
-clap.workspace = true
+clap = { workspace = true, features = ["env"] }
 metrics.workspace = true
 metrics-exporter-prometheus.workspace = true
 serde.workspace = true
 serde_json.workspace = true
-tokio = { workspace = true, features = ["rt-multi-thread", "macros", "signal", "net", "sync", "time"] }
+thiserror.workspace = true
+time.workspace = true
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "signal", "net", "sync", "time", "fs"] }
 toml.workspace = true
 tower-http.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
+url.workspace = true
+
+# External-API adapters: mounted when their feature is on (src/adapters.rs).
+fastvideo-openai-videos = { workspace = true, optional = true }
+fastvideo-minimax = { workspace = true, optional = true }
+fastvideo-ltxapi = { workspace = true, optional = true }
+fastvideo-fal = { workspace = true, optional = true }
+fastvideo-reactor = { workspace = true, optional = true }
+
+[dev-dependencies]
+fastvideo-serve-kit = { workspace = true, features = ["d1-mock"] }
+tower = { workspace = true, features = ["util"] }
 
 [features]
-default = []
-# FakeBackend-only engine for CPU CI (FakeBackend is always compiled; this selects it).
+default = ["openai-videos", "minimax", "ltxapi", "fal"]
+# FakeBackend-only engine for CPU CI (FakeBackend is always compiled; the
+# `[engine] backend` config selects it, and it is the default).
 fake = []
 # CudaBackend over fastvideo-cudarc (the only path to CUDA).
 cuda = ["fastvideo-engine-service/cuda"]
@@ -45,10 +59,18 @@ cuda = ["fastvideo-engine-service/cuda"]
 webrtc = ["fastvideo-webrtc/str0m"]
 # In-process OpenH264 and Opus encoders.
 encoders = ["fastvideo-media/openh264", "fastvideo-media/opus"]
-# Outbound HTTP: ingestion fetch, callbacks, webhooks, WHIP, Runpod worker.
+# Outbound HTTP: ingestion fetch, callbacks, webhooks, S3/R2 uploads, the
+# Cloudflare D1 job store, WHIP, Runpod worker.
 http-client = ["fastvideo-serve-kit/fetch", "fastvideo-webrtc/whip", "fastvideo-deploy/runpod"]
-# Everything except CUDA.
-full = ["webrtc", "encoders", "http-client"]
+# Adapter mount points (design §9, src/adapters.rs); on by default once the
+# adapter is on main (reactor: WP-13 pending).
+openai-videos = ["dep:fastvideo-openai-videos"]
+minimax = ["dep:fastvideo-minimax"]
+ltxapi = ["dep:fastvideo-ltxapi"]
+fal = ["dep:fastvideo-fal"]
+reactor = ["dep:fastvideo-reactor"]
+# Everything except CUDA (and adapters not merged yet).
+full = ["webrtc", "encoders", "http-client", "openai-videos", "minimax", "ltxapi", "fal"]
 
 [lints]
 workspace = true

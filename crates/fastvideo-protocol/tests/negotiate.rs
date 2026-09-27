@@ -16,16 +16,17 @@ fn h3_grid_matches_fastvideo_models() {
     let g = FrameGrid::h3();
     assert_eq!(
         (g.step, g.offset, g.min, g.max, g.default),
-        (17, 5, 124, 362, 124)
+        (17, 5, 107, 362, 124),
+        "4..15 s at 24 fps (MiniMax admits 4 s), default 5 s"
     );
     for n in 1..400 {
         let aligned = h3cfg::align_num_frames(n as usize) as u32;
         assert_eq!(g.next_on_grid(n), Some(aligned), "n={n}");
-        let expect = (124..=362).contains(&aligned).then_some(aligned);
+        let expect = (107..=362).contains(&aligned).then_some(aligned);
         assert_eq!(g.align_up(n), expect, "n={n}");
         assert_eq!(
             g.contains(n),
-            n == aligned && (124..=362).contains(&n),
+            n == aligned && (107..=362).contains(&n),
             "n={n}"
         );
     }
@@ -117,6 +118,22 @@ fn length_errors_and_defaults() {
     assert_eq!(err_of(nego(&w, &fastwan())).kind, ErrorKind::InvalidRequest);
 }
 
+// ---- H3 4 s (E3) --------------------------------------------------------------------
+
+#[test]
+fn h3_four_seconds_negotiates_to_107_frames() {
+    for exact in [false, true] {
+        let mut r = t2v("fasth3", "x");
+        if exact {
+            frames(&mut r, 107, Snap::Exact);
+        } else {
+            seconds(&mut r, 4.0);
+        }
+        let j = negotiate(&r, &h3(), &StagedInputs::default()).expect("4 s is on the H3 grid");
+        assert_eq!(j.num_frames, 107);
+    }
+}
+
 // ---- §4.7 gap table ----------------------------------------------------------------
 
 #[test]
@@ -128,24 +145,6 @@ fn gap_table() {
         gap: GapId,
     }
     let mut cases = Vec::new();
-
-    let mut r = t2v("fasth3", "x");
-    seconds(&mut r, 4.0);
-    cases.push(Case {
-        name: "H3 4 s",
-        caps: h3(),
-        req: r,
-        gap: GapId::H3FourSeconds,
-    });
-
-    let mut r = t2v("fasth3", "x");
-    frames(&mut r, 107, Snap::Exact);
-    cases.push(Case {
-        name: "H3 107 frames",
-        caps: h3(),
-        req: r,
-        gap: GapId::H3FourSeconds,
-    });
 
     let mut r = t2v("fasth3", "x");
     r.canvas = CanvasSpec::Aspect {

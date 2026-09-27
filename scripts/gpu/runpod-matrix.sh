@@ -17,7 +17,7 @@
 #   gate_cells: fv-gpucheck gate with scripts/gpu/gate-policy.toml
 #     (FV_GATE_POLICY overrides) into $RUNS/gate/.
 set -euo pipefail
-FAMILY="${1:?usage: runpod-matrix.sh headline|h3|ltx|hunyuan|wan|b200|rtx6000|rtx5090|fastvideo|precision|precision-debug|trace|fuse|oracle|ltxvae|writer|eval|ltxoffload|techniques|h3arms|h3attn}"
+FAMILY="${1:?usage: runpod-matrix.sh headline|mmaudio|speechtest|h3|ltx|hunyuan|wan|b200|rtx6000|rtx5090|fastvideo|precision|precision-debug|trace|fuse|oracle|ltxvae|writer|eval|ltxoffload|techniques|h3arms|h3attn}"
 WORK="${FV_WORK:-/workspace}"
 BIN="${FV_GPUCHECK:-/opt/fastvideo-rs/target/release/fv-gpucheck}"
 W="$WORK/weights"
@@ -399,6 +399,160 @@ nvidia-smi -L | tee -a "$LOG"
 nvidia-smi --query-gpu=name,memory.total,driver_version --format=csv,noheader | tee -a "$LOG"
 
 case "$FAMILY" in
+  mmaudio)
+    # The MMAudio V2A sidecar on the video-only Wan family (docs/ports/mmaudio.md):
+    #   wan13-audio / sfwan13-audio  FastWan 1.3B DMD and SF-Wan 1.3B, 480x832x81,
+    #                                 warm, with `--audio mmaudio` (video, audio,
+    #                                 audio RTF, e2e, peak VRAM in benchmark.json)
+    #   up-sidecar                    upstream MMAudio (Python, strobe's sidecar
+    #                                 settings) on wan13-audio's clip: timing + the
+    #                                 oracle dump
+    #   ours-v2a                      our port on the same clip, timed
+    #   mm-pixels / mm-features / mm-e2e  our oracle runs against the dump
+    #                                 (reference pixels; reference features, latent
+    #                                 and mel; reference noise only), compare-dumps
+    #   wave-*                        waveform similarity (mmaudio_wave_compare.py)
+    GPU_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+    MMW="$W/mmaudio-44k-v2"
+    MM_PROMPT="${FV_MMAUDIO_PROMPT:-A red fox running through tall grass at dusk. A narrator says <S>The fox cuts through the meadow at dusk.<E>
+Audio: male narration, grass rustle, wind, distant strings, cricket night}"
+    export FASTVIDEO_MMAUDIO_WEIGHTS="$MMW"
+    TAEW="$TAE/taew2_1.safetensors"
+    if [[ ! -f "$TAEW" ]]; then
+      bash "$GPU_DIR/fetch_taehv.sh" "$TAE" >>"$RUNS/tae-fetch.log" 2>&1 || log "WARN: taew2_1 fetch failed"
+    fi
+    export FASTVIDEO_TAE_DIR="$TAE"
+    FV_WEIGHTS="$W" bash "$VERIFY" mmaudio-44k-v2 >"$RUNS/mmaudio.weights.log" 2>&1 || log "WARN: mmaudio weights incomplete"
+    gated_cell wan13-audio fastwan21-1.3b \
+      "$BIN" --mode fast --vsa wan gen --weights "$W/fastwan21-1.3b" --prompt "$MM_PROMPT" --seed "$SEED" \
+        --warm --audio mmaudio --clip-dir "$RUNS/wan13-audio/frames"
+    gated_cell sfwan13-audio sfwan21-1.3b \
+      "$BIN" --mode fast wan gen --weights "$W/sfwan21-1.3b" --preset sf_wan_t2v_1_3b --steps 4 --flow-shift 5 \
+        --num-frames 81 --prompt "$MM_PROMPT" --seed "$SEED" --warm --audio mmaudio \
+        --clip-dir "$RUNS/sfwan13-audio/frames"
+    CLIP="$RUNS/wan13-audio/frames/output.mp4"
+    [[ -f "$CLIP" ]] || CLIP="$(find "$RUNS/wan13-audio" -name output.mp4 | grep -v cold | head -1)"
+    log "V2A clip: $CLIP"
+    # Upstream Python (MMAudio 974010a) in a venv on the container disk.
+    UPV="$SCRATCH/mm-venv"
+    run_cell up-env bash -c "
+      set -e
+      (command -v python3 && python3 -m venv --help) >/dev/null 2>&1 || { apt-get update -qq && apt-get install -y -qq python3-venv python3-pip git >/dev/null; }
+      command -v git >/dev/null || { apt-get update -qq && apt-get install -y -qq git >/dev/null; }
+      python3 -m venv $UPV
+      $UPV/bin/pip install -q --upgrade pip
+      $UPV/bin/pip install -q torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu128
+      $UPV/bin/pip install -q av open_clip_torch einops timm omegaconf librosa soundfile torchdiffeq colorlog requests tqdm safetensors numpy
+      rm -rf $SCRATCH/MMAudio && git clone -q https://github.com/hkchengrex/MMAudio.git $SCRATCH/MMAudio
+      git -C $SCRATCH/MMAudio checkout -q 974010a026c731054592d8f777218bd9d85a6c24
+      $UPV/bin/python -c 'import torch; print(torch.__version__, torch.cuda.get_device_name(0))'
+    "
+    REF="$SCRATCH/mm-ref"
+    run_cell up-sidecar env PYTHONPATH="$SCRATCH/MMAudio" "$UPV/bin/python" "$GPU_DIR/mmaudio_oracle.py" \
+      --weights "$MMW" --video "$CLIP" --prompt "$MM_PROMPT" --seed 1000 --runs 3 \
+      --out "$RUNS/up-sidecar" --dump "$REF"
+    run_cell ours-v2a "$BIN" --mode fast mmaudio v2a --weights "$MMW" --video "$CLIP" --prompt "$MM_PROMPT" --seed 1000 \
+      --runs 3 --out "$RUNS/ours-v2a"
+    for arm in "pixels:pixels" "features:features,x1,mel" "e2e:"; do
+      name="${arm%%:*}"; inj="${arm#*:}"
+      rm -rf "$SCRATCH/mm-ours-$name"
+      run_cell "mm-$name" env FASTVIDEO_DUMP_DIR="$SCRATCH/mm-ours-$name" FASTVIDEO_INJECT_DIR="$REF" \
+        FASTVIDEO_MMAUDIO_INJECT="$inj" "$BIN" --mode fast mmaudio v2a --weights "$MMW" --video "$CLIP" \
+        --prompt "$MM_PROMPT" --seed 1000 --runs 1 --out "$RUNS/mm-$name"
+      oracle_diff "diff-$name" "$REF" "$SCRATCH/mm-ours-$name"
+    done
+    for pair in "e2e-vs-up:$REF/mm_wave.f32:$RUNS/mm-e2e/mmaudio.f32" \
+                "e2e-vs-upf32:$REF/mm_wave_f32.f32:$RUNS/mm-e2e/mmaudio.f32" \
+                "up-bf16-vs-f32:$REF/mm_wave_f32.f32:$REF/mm_wave.f32" \
+                "features-vs-upf32:$REF/mm_wave_f32.f32:$RUNS/mm-features/mmaudio.f32" \
+                "ours-seed-vs-up:$REF/mm_wave.f32:$RUNS/ours-v2a/mmaudio.f32"; do
+      IFS=: read -r label a b <<<"$pair"
+      run_cell "wave-$label" "$UPV/bin/python" "$GPU_DIR/mmaudio_wave_compare.py" --ref "$a" --cand "$b" \
+        --label "$label" --out "$RUNS/wave-$label/wave.json"
+    done
+    ;;
+  speechtest)
+    # Can the audio models say a given line? (docs/ports/mmaudio.md "Speech")
+    # Seeds 1000..1002 everywhere; every wav goes into $RUNS/manifest.tsv
+    # (id, wav, intended line, note) and one Whisper pass transcribes them all.
+    #   t2a-fox / t2a-station / t2a-fox-tagged  MMAudio text-to-audio, 8 s: a plain
+    #                               quoted line, and strobe's <S>..<E> + "Audio:" style
+    #   wan-talk                    FastWan 1.3B, a person speaking to camera (no audio)
+    #   v2a-{notext,text}-<seed>    MMAudio video-to-audio on that clip, without and
+    #                               with the spoken line as the text condition
+    #   h3-speech                   FastH3 4-step VSA 480p, 5 s, joint audio, the
+    #                               same lines in H3's <d>[English] ..</d> markup
+    #   whisper                     openai-whisper (FV_WHISPER_MODEL, default large-v3)
+    GPU_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+    MMW="$W/mmaudio-44k-v2"
+    export FASTVIDEO_MMAUDIO_WEIGHTS="$MMW"
+    SEEDS="1000 1001 1002"
+    FOX="The quick brown fox jumps over the lazy dog."
+    STATION="Welcome to the station, the next train leaves at nine."
+    MAN="A man in his thirties talking to the camera in a bright living room, medium close-up, natural expressions, soft window light."
+    WOMAN="A woman station announcer speaking into a microphone on a train platform, medium close-up, daytime."
+    MANIFEST="$RUNS/manifest.tsv"
+    : >"$MANIFEST"
+    add() { local n="${4//$'\n'/ | }"; printf '%s\t%s\t%s\t%s\n' "$1" "$2" "$3" "${n//$'\t'/ }" >>"$MANIFEST"; }
+    t2a() {
+      local name="$1" line="$2" prompt="$3" seed
+      gated_cell "$name" mmaudio-44k-v2 "$BIN" --mode fast mmaudio t2a --weights "$MMW" --prompt "$prompt" \
+        --seeds "${SEEDS// /,}" --duration 8 --out "$RUNS/$name"
+      for seed in $SEEDS; do add "$name-$seed" "$RUNS/$name/seed-$seed.wav" "$line" "mmaudio t2a: $prompt"; done
+    }
+    t2a t2a-fox "$FOX" "A man says clearly: \"$FOX\""
+    t2a t2a-station "$STATION" "A woman announces: \"$STATION\""
+    t2a t2a-fox-tagged "$FOX" "A man talks to the camera. He says <S>$FOX<E>
+Audio: male speech, clear voice, quiet room"
+    TALK="A man in his thirties speaking to the camera in a bright living room, medium close-up, his lips moving as he talks, natural expressions and hand gestures, soft window light."
+    gated_cell wan-talk fastwan21-1.3b \
+      "$BIN" --mode fast --vsa wan gen --weights "$W/fastwan21-1.3b" --prompt "$TALK" --seed 1024 \
+        --clip-dir "$RUNS/wan-talk/frames"
+    CLIP="$(find "$RUNS/wan-talk" -name output.mp4 | grep -v cold | head -1)"
+    log "V2A clip: ${CLIP:-missing}"
+    for seed in $SEEDS; do
+      for arm in notext text; do
+        prompt=""
+        [[ "$arm" == text ]] && prompt="A man says clearly: \"$FOX\""
+        gated_cell "v2a-$arm-$seed" mmaudio-44k-v2 "$BIN" --mode fast mmaudio v2a --weights "$MMW" --video "$CLIP" \
+          --prompt "$prompt" --seed "$seed" --runs 1 --out "$RUNS/v2a-$arm-$seed"
+        add "v2a-$arm-$seed" "$RUNS/v2a-$arm-$seed/mmaudio.wav" "$FOX" "mmaudio v2a on wan-talk, prompt: ${prompt:-none}"
+      done
+    done
+    H3P="$RUNS/h3-prompts.json"
+    # (No jq in the runtime image; the lines hold no JSON-special characters.)
+    {
+      printf '{"name": "speechtest", "prompts": [\n'
+      sep=""
+      for seed in $SEEDS; do
+        printf '%s{"name": "fox-%s", "seed": %s, "prompt": "%s He says clearly: <d>[English] %s</d>"},\n' "$sep" "$seed" "$seed" "$MAN" "$FOX"
+        printf '{"name": "station-%s", "seed": %s, "prompt": "%s She announces: <d>[English] %s</d>"}' "$seed" "$seed" "$WOMAN" "$STATION"
+        sep=$',\n'
+      done
+      printf '\n]}\n'
+    } >"$H3P"
+    gated_cell h3-speech fasth3-4step-vsa \
+      "$BIN" --mode fast h3 gen --weights "$W/h3-base" --h3-recipe 4step-vsa --height 480 --width 832 \
+        --prompt "$PROMPT" --seconds 5 --seed "$SEED" --text-encoder auto --text-cache "$SCRATCH/h3-text-cache" \
+        --text-weights "$W/h3-base" --warm --prompts "$H3P" \
+        --adaln-cache "$RUNS/h3-speech-adaln.cache" --clip-dir "$RUNS/h3-speech/frames"
+    for seed in $SEEDS; do
+      add "h3-fox-$seed" "$RUNS/h3-speech/frames/fox-$seed/audio.wav" "$FOX" "h3 fasth3-4step-vsa 480p"
+      add "h3-station-$seed" "$RUNS/h3-speech/frames/station-$seed/audio.wav" "$STATION" "h3 fasth3-4step-vsa 480p"
+    done
+    WV="$SCRATCH/whisper-venv"
+    FV_GEN_TIMEOUT_S=2400 run_cell whisper bash -c "
+      set -e
+      (command -v python3 && python3 -m venv --help) >/dev/null 2>&1 || { apt-get update -qq && apt-get install -y -qq python3-venv python3-pip >/dev/null; }
+      command -v ffmpeg >/dev/null || { apt-get update -qq && apt-get install -y -qq ffmpeg >/dev/null; }
+      python3 -m venv $WV
+      $WV/bin/pip install -q --upgrade pip
+      $WV/bin/pip install -q torch --index-url https://download.pytorch.org/whl/cu128
+      $WV/bin/pip install -q openai-whisper
+      $WV/bin/python $GPU_DIR/speech_transcribe.py --manifest $MANIFEST --model ${FV_WHISPER_MODEL:-large-v3} \
+        --out $RUNS/whisper/speech.json
+    "
+    ;;
   sfwan)
     # SF-Wan 1.3B on one pod: the oracle diff against FastVideo's dump (when
     # FV_ORACLE_URL serves one), then the wan family's SF-Wan cells and the
@@ -421,14 +575,13 @@ case "$FAMILY" in
     SF_SWITCH="${FV_SF_SWITCH:-A drone shot gliding over snowy mountain peaks at dawn, pink sky, slow steady forward camera motion, highly detailed}"
     sf_stream() {
       local name="$1"; shift
-      gated_cell "$name" sfwan21-1.3b "$BIN" --mode fast wan stream --weights "$W/sfwan21-1.3b" \
+      gated_cell "$name" sfwan21-1.3b "$BIN" --keep-going --mode fast wan stream --weights "$W/sfwan21-1.3b" \
         --prompt "$SF_PROMPT" --switch-prompt "$SF_SWITCH" --seed "$SEED" "$@"
     }
     # shellcheck disable=SC2086
-    sf_stream sfstream-main --parity ${FV_SFSTREAM_RUNS:---run rel-sink3-120s,seconds=120,rope=rel,sink=3 \
-      --run rel-sink0-60s,seconds=60,rope=rel,sink=0 --run abs-sink0-60s,seconds=60,rope=abs,sink=0 \
+    sf_stream sfstream-main --parity ${FV_SFSTREAM_RUNS:---run reb-sink3-120s,seconds=120,rope=rebased,sink=3 \
       --run switch-keep-30s,seconds=30,switch_at=15,switch=keep --run switch-reset-20s,seconds=20,switch_at=10,switch=reset}
-    sf_stream sfstream-10min --run rel-sink3-600s,seconds=600,rope=rel,sink=3,drop_rgb=1 --window-s 60
+    sf_stream sfstream-10min --run reb-sink3-600s,seconds=600,rope=rebased,sink=3 --window-s 30
     ;;
   headline)
     # The headline configurations on one pod (a new GPU type, one run):

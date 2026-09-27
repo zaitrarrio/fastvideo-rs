@@ -26,7 +26,8 @@
 # RUNPOD_VOLUME_NAME may name several weight volumes; the one whose DC has
 # stock for the GPU is used. RUNPOD_NO_VOLUME=1 mounts none and takes any
 # datacenter (weight-free work: kernels, upstream bench:attn / bench:attn_dc);
-# RUNPOD_CLOUD_TYPE=COMMUNITY allows community hosts.
+# RUNPOD_CLOUD_TYPE=COMMUNITY allows community hosts; RUNPOD_ALLOWED_CUDA
+# (e.g. "13.0") restricts hosts to drivers supporting those CUDA versions.
 # Env: FV_FAMILY (runpod-matrix.sh family, default rtx6000; rtx5090 is the
 # sol-engine RTX 5090 suite), RUNPOD_GPU_TYPE (default RTX PRO 6000), RUNPOD_API_KEY, RUNPOD_VOLUME_ID (default: volume named
 # fv-weights-h3-ltx-hy), FV_CELLS (subset of cells), FV_GEN_TIMEOUT_S
@@ -188,11 +189,12 @@ create_pod() {
   fi
   payload="$(jq -n --arg name "fv-$FAMILY-$tag" --arg image "$image" --arg vol "$vol" \
     --arg dc "$dc" --arg gpu "$GPU" --arg disk "${FV_CONTAINER_DISK_GB:-120}" --arg cmd "$(start_cmd "$image" "$tag" "$mode")" \
-    --arg cloud "${RUNPOD_CLOUD_TYPE:-SECURE}" '{
+    --arg cloud "${RUNPOD_CLOUD_TYPE:-SECURE}" --arg cuda "${RUNPOD_ALLOWED_CUDA:-}" '{
       name: $name, imageName: $image, cloudType: $cloud, computeType: "GPU",
       gpuTypeIds: [$gpu], gpuCount: 1, containerDiskInGb: ($disk|tonumber), volumeInGb: 0,
       ports: ["8000/http"], dockerStartCmd: ["/bin/bash", "-c", $cmd]
-    } + (if $vol == "" then {} else
+    } + (if $cuda == "" then {} else {allowedCudaVersions: ($cuda | split(" "))} end)
+      + (if $vol == "" then {} else
       {networkVolumeId: $vol, volumeMountPath: "/workspace", dataCenterIds: [$dc]} end)')"
   log "create pod gpu=\"$GPU\" image=$image volume=${vol:-none} dc=${dc:-any} cloud=${RUNPOD_CLOUD_TYPE:-SECURE}"
   # Capacity in the volume's datacenter comes and goes; retry instead of failing.
@@ -242,7 +244,9 @@ fetch_tree() {
 fetch_results() {
   local id="$1" tag="$2" out="$OUT_ROOT/$tag" f cell
   mkdir -p "$out"
-  if [[ "$FAMILY" == upstream ]]; then
+  # FV_FETCH_TREE=1 mirrors the whole run directory (wavs, mp4s; FV_FETCH_SKIP
+  # drops e.g. frame PNGs), as the upstream family always does.
+  if [[ "$FAMILY" == upstream || "${FV_FETCH_TREE:-0}" == 1 ]]; then
     fetch_tree "$id" "$FAMILY/$tag/" "$out"
     log "results → $out"
     return

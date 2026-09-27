@@ -1,0 +1,8 @@
+{
+  "error": {
+    "code": 400,
+    "message": "num_inference_steps is fixed by the model recipe and cannot be set per request",
+    "param": "num_inference_steps",
+    "type": "invalid_request_error"
+  }
+}

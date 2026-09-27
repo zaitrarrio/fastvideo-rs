@@ -11,6 +11,7 @@ fastvideo-protocol.workspace = true
 fastvideo-models.workspace = true
 serde.workspace = true
 thiserror.workspace = true
+time.workspace = true
 tokio = { workspace = true, features = ["sync", "time"] }
 tracing.workspace = true
 uuid.workspace = true
@@ -22,6 +23,9 @@ fastvideo-cudarc = { workspace = true, optional = true }
 default = []
 # CudaBackend over the fastvideo-cudarc pipelines (WP-11). FakeBackend is always built.
 cuda = ["dep:fastvideo-cudarc", "fastvideo-cudarc/cuda"]
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["sync", "time", "rt", "rt-multi-thread", "macros"] }
 
 [lints]
 workspace = true

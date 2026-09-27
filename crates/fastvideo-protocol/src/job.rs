@@ -652,7 +652,7 @@ pub trait JobStore: Send + Sync + 'static {
     async fn update(
         &self,
         id: JobId,
-        f: Box<dyn FnOnce(&mut Job) + Send>,
+        f: JobUpdate,
     ) -> Result<Job, StoreError>;
     /// Owner/protocol/status/model filters, cursor.
     async fn list(&self, q: ListQuery) -> Page<Job>;

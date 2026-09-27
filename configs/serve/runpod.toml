@@ -1,0 +1,65 @@
+# fv-serve on Runpod (pod, or serverless load balancer with PORT set).
+#
+# Secrets come from the environment only (design §6.3). The Runpod template
+# maps the account secrets (lower-case names) to the upper-case variables
+# fv-serve reads:
+#
+#   FV_CF_ACCOUNT_ID        = {{ RUNPOD_SECRET_fv_cf_account_id }}
+#   FV_CF_API_TOKEN         = {{ RUNPOD_SECRET_fv_cf_api_token }}
+#   FV_D1_DATABASE_ID       = {{ RUNPOD_SECRET_fv_d1_database_id }}
+#   FV_R2_BUCKET            = {{ RUNPOD_SECRET_fv_r2_bucket }}
+#   FV_R2_ENDPOINT          = {{ RUNPOD_SECRET_fv_r2_endpoint }}
+#   FV_R2_ACCESS_KEY_ID     = {{ RUNPOD_SECRET_fv_r2_access_key_id }}
+#   FV_R2_SECRET_ACCESS_KEY = {{ RUNPOD_SECRET_fv_r2_secret_access_key }}
+#   FV_API_KEYS, FV_URL_SIGNING_KEY, FV_WEBHOOK_ED25519_KEY (same pattern)
+#
+# With those set, `auto` selects the D1 job store and R2 artifacts.
+
+[server]
+bind = "0.0.0.0:8000"
+state_dir = "/workspace/fv-state"
+shutdown_grace_s = 25
+
+[auth]
+mode = "keys"
+
+[artifacts]
+backend = "auto"
+url_ttl_s = 86400
+
+[jobs]
+backend = "auto"
+progress_interval_ms = 1000
+stale_after_s = 900
+
+[engine]
+backend = "cuda"
+post_encoder = "nvenc"
+
+[[models]]
+id = "fasth3"
+family = "h3"
+weights = "${FV_WEIGHTS}/FastH3"
+recipe = "4step-vsa"
+resident = true
+served_names = ["fasth3"]
+continuity = "anchor-last-frame"
+
+[aliases]
+"MiniMax-H3" = "fasth3"
+"MiniMax-H3-Max" = "fasth3"
+"MiniMax-H3-Turbo" = "fasth3"
+
+[protocols]
+openai_videos = true
+fastwan = false
+minimax = true
+fal = true
+fal_director = true
+ltx = false
+reactor = true
+native = true
+
+[limits]
+queue_max = 32
+body_max_mb = 64

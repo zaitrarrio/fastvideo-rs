@@ -89,6 +89,35 @@ text says **native**.
    draft quality (metadata where the wire allows). Tier order: draft < turbo <
    max; `Tier` gains a `Draft` variant.
 
+7. **Cloudflare storage (owner decision).** Job records live in **Cloudflare D1**
+   (SQLite: jobs table + indexes on owner/status/created for the MiniMax and
+   FastVideo list endpoints; state-change writes, throttled progress). Media
+   (outputs, uploads, fetched inputs) lives in **Cloudflare R2** via the
+   existing S3-compatible artifact store with presigned URLs (KV was rejected
+   for media: 25 MiB value limit; and for jobs: 1 write/s/key, eventual
+   consistency, no queries). serve-kit gains a `D1JobStore` (D1 HTTP API)
+   next to the in-memory/file stores; running jobs stay authoritative in the
+   worker's memory, D1 is the durable/shared copy so any worker can answer
+   status/result after restarts or scale-to-zero.
+   Provisioned 2026-09-27: D1 `fv-jobs` (id 1796e295-a7f0-4402-bbed-ec94ccb27c15,
+   WNAM), R2 bucket `fv-media`. Runtime credentials are Runpod secrets
+   (reference as `{{ RUNPOD_SECRET_<name> }}` in templates): `fv_cf_account_id`,
+   `fv_cf_api_token` (D1 HTTP API), `fv_d1_database_id`, `fv_r2_bucket`,
+   `fv_r2_endpoint`, `fv_r2_access_key_id` / `fv_r2_secret_access_key` (R2 S3
+   keys derived from the API token: id / SHA-256 of the value). Vast: same
+   names as account env vars once a Vast API key is available.
+   **Runtime env names (as implemented, WP-10):** `fv-serve` reads the
+   UPPERCASE variables `FV_CF_ACCOUNT_ID`, `FV_CF_API_TOKEN`,
+   `FV_D1_DATABASE_ID`, `FV_R2_BUCKET`, `FV_R2_ENDPOINT`,
+   `FV_R2_ACCESS_KEY_ID`, `FV_R2_SECRET_ACCESS_KEY` (the lower-case spelling
+   is accepted as a fallback). Vast: account env vars under exactly these
+   uppercase names (Vast injects them). Runpod: the secrets keep their
+   lower-case names and the template maps them, e.g.
+   `FV_CF_API_TOKEN={{ RUNPOD_SECRET_fv_cf_api_token }}`, one line per
+   variable (`configs/serve/runpod.toml` lists all seven). With all D1
+   values set, `jobs.backend = "auto"` selects D1; with all R2 values set,
+   `artifacts.backend = "auto"` selects R2 (region `auto`, path-style).
+
 ## 1. Goals and non-goals
 
 ### 1.1 Goals
@@ -937,6 +966,13 @@ Audio wire format:
   - If the E6 parity test shows a seam, the fallback is strobe's latent
     overlap with the `4·n` keep rule (streaming-refs §1.5).
   - The frames go to `ClipSink`.
+  - **Status (E6 landed, measured on H100):** no seam, so no overlap: the
+    per-block decode is bitwise the whole-clip decode at chunk 3 (81.4 dB
+    against the default chunk 4). Default RoPE is `RebasedSink` (FastVideo's
+    relativistic offsets at the absolute cost), sink 3 frames: 19.2 frames/s
+    steady, TTFF 0.30 s warm, flat device memory over 10 minutes. Details
+    and the long-run drift numbers: `docs/ports/wan.md` "SF-Wan open-ended
+    streaming".
 - **Prompt changes** apply at the next block boundary. The text encoder stays
   resident while a causal session is open (memory is recorded in caps).
   `reset` clears the KV and restarts at block 0.
@@ -1263,8 +1299,16 @@ are always open.
   5. The Runpod worker posts job-done `{error}` for anything unfinished.
 - **Secrets** come only from env: `FV_API_KEYS`, `FV_URL_SIGNING_KEY`,
   `FV_WEBHOOK_ED25519_KEY`, `FV_S3_*`, `FV_WHIP_TOKEN` and `HF_TOKEN`.
-  - Runpod: `{{ RUNPOD_SECRET_x }}`.
-  - Vast: account env vars.
+  - Runpod: `{{ RUNPOD_SECRET_x }}`; the Cloudflare set is mapped as
+    `FV_CF_ACCOUNT_ID={{ RUNPOD_SECRET_fv_cf_account_id }}`,
+    `FV_CF_API_TOKEN={{ RUNPOD_SECRET_fv_cf_api_token }}`,
+    `FV_D1_DATABASE_ID={{ RUNPOD_SECRET_fv_d1_database_id }}`,
+    `FV_R2_BUCKET={{ RUNPOD_SECRET_fv_r2_bucket }}`,
+    `FV_R2_ENDPOINT={{ RUNPOD_SECRET_fv_r2_endpoint }}`,
+    `FV_R2_ACCESS_KEY_ID={{ RUNPOD_SECRET_fv_r2_access_key_id }}`,
+    `FV_R2_SECRET_ACCESS_KEY={{ RUNPOD_SECRET_fv_r2_secret_access_key }}`
+    (§0 decision 7).
+  - Vast: account env vars (the same uppercase names).
   - Never passed in onstart text, and never logged. The config loader
     redacts them.
 
@@ -1454,6 +1498,66 @@ additions and readings; everything is re-exported from the crate root.
 | **WP-09 fal queue** | `crates/fastvideo-fal/src/{lib,queue,schema,sync,proxy,storage,webhook}.rs`, `crates/fastvideo-fal/tests/queue*` | 05 | §4.4; both path forms plus `/response`; status invariants (`queue_position`, `logs`, `response_url`); SSE status stream; cancel codes; `x-fal-target-url` routing; storage initiate; Python and JS client compat green |
 | **WP-10 fv-serve binary** | `crates/fastvideo-serve/**`, `configs/serve/*.toml` | 02, 05 | Config and env; router assembly with a route-collision test (§9 table); `/healthz`, `/ping`, `/health` (`{"status":"ok","model_loaded":bool}`), `/`, `/metrics`, `/files`; native `/fv/v1/{capabilities,streams}`; graceful shutdown; `--features fake` e2e smoke in CI |
 | **WP-11 CUDA backend (batch)** | `crates/fastvideo-engine-service/src/cuda/{mod,h3,ltx2,wan,caps}.rs` | 02, E1 | `CudaBackend` loads H3 (recipes), LTX 2.3/2.5, Wan/FastWan/TI2V presets resident; caps derived from the loaded configs (audio rate from vocoder); `generate` maps `ResolvedJob` to `H3Request`/`Ltx2Request`/`GenerateConfig`; GPU smoke per family on a Runpod pod via `fv-gpucheck`-style script |
+
+**WP-10 notes (as implemented).**
+
+- `fastvideo-serve` is a lib plus the `fv-serve` bin. Modules: `config`
+  (TOML < env; secrets only printed redacted), `gate` (serve-kit
+  `EngineGate` over `EngineService`; one pump per job maps `EngineEvent` to
+  `JobEvent` and calls `apply_event`; on `Finished` it runs
+  `mp4::finalize` for crop/`-an`, and the artifact reports
+  `ResolvedJob::output_size`), `storage`, `router` (the §9 table +
+  `check_route_table`), `adapters` (feature-gated mount points), `health`,
+  `metrics`, `native`, `shutdown`, `whip`.
+- Job store `auto`: D1 when `FV_CF_ACCOUNT_ID`/`FV_CF_API_TOKEN`/
+  `FV_D1_DATABASE_ID` are set, else `file` (MemJobStore manifests).
+  Artifacts `auto`: R2/S3 when `FV_R2_*` (or `FV_S3_*`) are complete, else
+  local. D1 and S3 need the `http-client` feature.
+- **`D1JobStore`** lives in serve-kit (`fastvideo_serve_kit::d1`, as §0.7
+  says): D1 `/query` client with retry/backoff (transport, 429, 5xx and D1's
+  transient errors; SQL errors never), migrations (`schema_migrations`;
+  table `jobs` with the full `Job` JSON plus `id, protocol, external_id
+  UNIQUE(protocol, external_id), owner, status, model, resolved_model,
+  task, progress, created_at/updated_at/completed_at/expires_at (unix ms),
+  worker, version`; indexes `(owner, protocol, created_at)`, `(status,
+  created_at)`, `(protocol, created_at)`, `(expires_at)`, `(worker,
+  status)`), write-through inserts, immediate state-change writes,
+  progress/log writes coalesced to ≤ 1/s/job, an authoritative in-memory
+  cache (and `watch`) for this worker's jobs, a 60 s heartbeat, restart
+  recovery of this worker's jobs, and `sweep_expired` failing other
+  workers' jobs with no heartbeat for 15 min. Jobs owned by another worker
+  are updated with a `version` check; the owning worker's next write wins
+  (a cross-worker DELETE cannot trip another worker's cancel token).
+  Tested against a SQLite mock of the D1 HTTP API (`d1-mock` feature) and
+  once live against `fv-jobs`.
+- Native `/fv/v1/jobs` (submit/list/get/content/delete) is the batch path
+  the binary's own e2e tests drive; `/fv/v1/streams` answers 501 until the
+  streaming packages land. `runpod-queue` mode and `engine.backend = cuda`
+  are mount points that fail at startup until WP-16 / WP-11 land.
+- Adapters are features of `fastvideo-serve` (`openai-videos`, `minimax`,
+  `ltxapi`, `fal`, `reactor`), all but `reactor` on by default:
+  FastVideo `/v1/videos` + models (`[protocols] openai_videos`) and FastWan
+  (`fastwan`; `/` then names the FastWan model), MiniMax
+  (`MiniMax::router`, callback renderer registered), LTX
+  (`router(LtxConfig)` from `[ltx]`), fal queue/sync
+  (`router(ctx, FalConfig)` from `fal_apps`; `FalWebhook` renderer; a
+  `WebhookSigner` from `FV_WEBHOOK_ED25519_KEY`, else per process; fal
+  artifacts named by `fastvideo_fal::output_file_name`). The fal director
+  (WP-14) and Reactor (WP-13) routes are reserved in the §9 table only.
+  One engine glue (`gate`) serves every adapter.
+- `ArtifactStore::open` (serve-kit) reads an artifact back (local path or
+  S3 object bytes) so LTX `/v1` sync works on R2; the `PUT /uploads` route
+  uses the `ServeCtx` clock.
+- WHIP geometry: `whip::whip_h264` takes the encoder frame from
+  `fastvideo-media` (`H264Config::for_publish`: Cloudflare = padded
+  1280x720) and only the level/box from `fastvideo-webrtc`'s
+  `EncodeProfile`, whose `output_size` (1260x720 for H3) is the picture
+  inside that frame; `check_profile` asserts they agree. No crate change is
+  required; renaming `output_size` to `picture_size` in fastvideo-webrtc
+  would make the distinction explicit.
+- `[webrtc] udp_port = 70010 / tcp_port = 70000` (§6.1) exceed the 65535
+  port range; the config keeps them as integers for the streaming packages
+  to settle.
 
 ### Phase 3: streaming (parallel after Phase 2 core)
 

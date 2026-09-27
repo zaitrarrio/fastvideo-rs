@@ -1,0 +1,15 @@
+{
+  "model": "h3-turbo",
+  "prompt": "The lighthouse beam sweeps across a stormy sea",
+  "seconds": "6",
+  "size": "1344x768",
+  "task": "fl2va",
+  "image_reference": [
+    {
+      "image_url": "https://example.com/first.png"
+    },
+    {
+      "image_url": "https://example.com/last.png"
+    }
+  ]
+}

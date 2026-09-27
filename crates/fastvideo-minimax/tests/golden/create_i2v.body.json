@@ -1,0 +1,3 @@
+{"model":"MiniMax-H3","content":[{"type":"text","text":"Pull focus to the people in the background."},
+ {"type":"image_url","image_url":{"url":"https://cdn.hailuoai.com/example/first-frame.png"},"role":"first_frame"}],
+ "resolution":"2K","duration":5,"ratio":"adaptive"}

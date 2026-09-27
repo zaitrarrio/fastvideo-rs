@@ -35,6 +35,7 @@ use rand::{Rng, SeedableRng};
 use rand_distr::StandardNormal;
 
 use crate::h3::drain::{DecodeSplit, FrameDrain};
+use crate::hooks::{Hooks, Stage};
 use crate::llm::{DecoderConfig, ResidentDecoder};
 use crate::wan::offload::{DitOffload, Residency};
 use crate::wan::pipeline::{
@@ -2487,6 +2488,43 @@ impl Ltx2Pipeline {
         use_text_cache: bool,
         observer: Option<StepObserver<'_>>,
     ) -> Result<Ltx2Output> {
+        self.generate_with_hooks(req, use_text_cache, observer, Hooks::NONE)
+    }
+
+    /// [`Self::generate`] with cancellation and progress (serve E1): stage
+    /// events at text / stage 1 (`Denoise`) / `Upsample` / stage 2
+    /// (`Refine`) / decode, one per denoise step (after `observer`). A
+    /// tripped token stops at the next of those with
+    /// [`PipelineError::Cancelled`], after the stage caches, the streamed
+    /// ring, transient decoders and the pool are handed back.
+    pub fn generate_with_hooks(
+        &mut self,
+        req: &Ltx2Request,
+        use_text_cache: bool,
+        observer: Option<StepObserver<'_>>,
+        hooks: Hooks<'_>,
+    ) -> Result<Ltx2Output> {
+        let out = self.generate_hooked(req, use_text_cache, observer, hooks);
+        if matches!(&out, Err(e) if e.is_cancelled()) {
+            crate::wan::dump::set_prefix("");
+            if let Some(model) = self.model.as_ref() {
+                model.disarm_fbcache();
+                model.set_prune_active(false);
+            }
+            self.end_stage();
+            self.release_transient_decoders()?;
+            trim()?;
+        }
+        out
+    }
+
+    fn generate_hooked(
+        &mut self,
+        req: &Ltx2Request,
+        use_text_cache: bool,
+        observer: Option<StepObserver<'_>>,
+        hooks: Hooks<'_>,
+    ) -> Result<Ltx2Output> {
         req.validate()?;
         // FASTVIDEO_GPU_TRACE: one step of this generate (stage 1 and 2
         // count as one sequence; FASTVIDEO_GPU_TRACE_STEP picks it).
@@ -2556,6 +2594,7 @@ impl Ltx2Pipeline {
             return Err(err("ltx2: the clip is too short for a single audio latent"));
         }
 
+        hooks.stage(Stage::Text, 0)?;
         let (mut contexts, text_report) = self.text.encode(&req.prompt, use_text_cache)?;
         timings.text_s = text_report.seconds;
         // FASTVIDEO_DUMP_DIR / FASTVIDEO_INJECT_DIR: ours first (so a diff
@@ -2658,6 +2697,8 @@ impl Ltx2Pipeline {
         let ancestral = cfg.version == Ltx2ModelVersion::V25 && distilled;
         let res2s = cfg.version == Ltx2ModelVersion::V23;
         crate::wan::dump::set_prefix(if req.two_stage { "s1_" } else { "" });
+        let stage1_total = schedule.num_steps();
+        hooks.stage(Stage::Denoise, stage1_total)?;
         let (mut video, mut audio) = {
             let model = self.model.as_ref().expect("ensure_dit");
             let mut record = |i: usize, v: &CudaTensor, a: &CudaTensor, s: f64| -> Result<()> {
@@ -2665,7 +2706,8 @@ impl Ltx2Pipeline {
                 match observer.as_mut() {
                     Some(obs) => obs(i, v, a, s),
                     None => Ok(()),
-                }
+                }?;
+                hooks.step(Stage::Denoise, i + 1, stage1_total, None)
             };
             if ancestral {
                 denoise_ancestral(
@@ -2738,6 +2780,7 @@ impl Ltx2Pipeline {
         memory.mark("stage1")?;
 
         let decode_grid = if req.two_stage {
+            hooks.stage(Stage::Upsample, 0)?;
             let up_timer = Instant::now();
             // Loaded for this call only, like the reference's `VideoUpsampler`
             // block. The DiT stays: stage 2 runs the same weights, and the
@@ -2834,6 +2877,8 @@ impl Ltx2Pipeline {
                 }
             }
 
+            let stage2_total = schedule2.num_steps();
+            hooks.stage(Stage::Refine, stage2_total)?;
             let s2_timer = Instant::now();
             let ropes2 = Ropes::new(
                 &cfg.transformer,
@@ -2850,7 +2895,8 @@ impl Ltx2Pipeline {
                         match observer.as_mut() {
                             Some(obs) => obs(step_offset + i, v, a, s),
                             None => Ok(()),
-                        }
+                        }?;
+                        hooks.step(Stage::Refine, i + 1, stage2_total, None)
                     };
                 denoise_with(
                     model,
@@ -2896,6 +2942,7 @@ impl Ltx2Pipeline {
             self.booking.release(crate::wan::ledger::DIT_NONLINEAR);
             trim()?;
         }
+        hooks.stage(Stage::VideoDecode, 0)?;
         self.ensure_decoders()?;
         let decoders = self.decoders.as_ref().expect("decoders");
 
