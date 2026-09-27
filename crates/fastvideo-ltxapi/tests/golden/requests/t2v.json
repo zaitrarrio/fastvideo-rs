@@ -1,0 +1,28 @@
+{
+  "endpoint": "text-to-video",
+  "api": "v2",
+  "body": {
+    "prompt": "A majestic eagle soaring over snow-capped mountains at sunrise",
+    "model": "ltx-2-5-fast",
+    "duration": 8,
+    "resolution": "1920x1080"
+  },
+  "request": {
+    "protocol": "ltx_v2",
+    "model": "ltx-turbo",
+    "task": "t2v",
+    "prompt": "A majestic eagle soaring over snow-capped mountains at sunrise",
+    "negative_prompt": null,
+    "seed": null,
+    "canvas": { "exact": { "width": 1920, "height": 1080 } },
+    "timing": { "length": { "seconds": { "value": 8.0, "snap": "align_up" } }, "fps": 24 },
+    "keyframes": [],
+    "references": [],
+    "audio_in": null,
+    "audio_out": "model_default",
+    "sampling": { "steps": null, "guidance": null, "guidance_2": null, "flow_shift": null, "boundary_ratio": null },
+    "output": { "inline_data_uri": false },
+    "accepted_noop": [],
+    "callback": null
+  }
+}

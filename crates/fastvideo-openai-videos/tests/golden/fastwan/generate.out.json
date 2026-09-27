@@ -1,0 +1,39 @@
+{
+  "accepted_noop": [],
+  "audio_in": null,
+  "audio_out": "model_default",
+  "callback": null,
+  "canvas": {
+    "exact": {
+      "height": 704,
+      "width": 1280
+    }
+  },
+  "keyframes": [],
+  "model": "fastwan-5b",
+  "negative_prompt": null,
+  "output": {
+    "inline_data_uri": false
+  },
+  "prompt": "A neon-lit street at night, rain reflections, slow dolly forward",
+  "protocol": "fastwan",
+  "references": [],
+  "sampling": {
+    "boundary_ratio": null,
+    "flow_shift": null,
+    "guidance": null,
+    "guidance_2": null,
+    "steps": null
+  },
+  "seed": 1000,
+  "task": "t2v",
+  "timing": {
+    "fps": 24,
+    "length": {
+      "frames": {
+        "snap": "exact",
+        "value": 121
+      }
+    }
+  }
+}

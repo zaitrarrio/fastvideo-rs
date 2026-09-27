@@ -9,14 +9,25 @@ description = "fv-serve adapter: FastVideo /v1/videos family and the FastWan /ge
 [dependencies]
 fastvideo-protocol.workspace = true
 fastvideo-serve-kit.workspace = true
-axum.workspace = true
+# Only for the canonical tier aliases (`h3-turbo`, `ltx-draft`, ...): pure
+# functions, no engine runtime.
+fastvideo-engine-service.workspace = true
+axum = { workspace = true, features = ["multipart"] }
+base64.workspace = true
 bytes.workspace = true
 serde.workspace = true
 serde_json.workspace = true
-thiserror.workspace = true
 time.workspace = true
+tokio = { workspace = true, features = ["fs"] }
 tracing.workspace = true
+url.workspace = true
 uuid.workspace = true
+
+[dev-dependencies]
+async-trait.workspace = true
+image.workspace = true
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "time", "fs"] }
+tower.workspace = true
 
 [lints]
 workspace = true

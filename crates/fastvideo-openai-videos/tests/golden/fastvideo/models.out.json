@@ -1,0 +1,33 @@
+{
+  "data": [
+    {
+      "created": 1700000000,
+      "id": "fasth3",
+      "object": "model",
+      "owned_by": "fastvideo",
+      "root": "fake-h3-turbo"
+    },
+    {
+      "created": 1700000000,
+      "id": "fake-h3-max",
+      "object": "model",
+      "owned_by": "fastvideo",
+      "root": "fake-h3-max"
+    },
+    {
+      "created": 1700000000,
+      "id": "h3-turbo",
+      "object": "model",
+      "owned_by": "fastvideo",
+      "root": "fake-h3-turbo"
+    },
+    {
+      "created": 1700000000,
+      "id": "h3-max",
+      "object": "model",
+      "owned_by": "fastvideo",
+      "root": "fake-h3-max"
+    }
+  ],
+  "object": "list"
+}

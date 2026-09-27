@@ -1,0 +1,101 @@
+{
+  "cancelled": {
+    "content": {},
+    "created_at": 1785125529,
+    "duration": 6,
+    "id": "123456789012345678",
+    "modality": "video",
+    "model": "MiniMax-H3-Max",
+    "ratio": "16:9",
+    "resolution": "768P",
+    "status": "cancelled",
+    "task_type": "generation",
+    "updated_at": 1785125650
+  },
+  "failed": {
+    "content": {},
+    "created_at": 1785125529,
+    "duration": 6,
+    "error": {
+      "code": "1000",
+      "message": "injected failure at step 1/8"
+    },
+    "id": "123456789012345678",
+    "modality": "video",
+    "model": "MiniMax-H3-Max",
+    "ratio": "16:9",
+    "resolution": "768P",
+    "status": "failed",
+    "task_type": "generation",
+    "updated_at": 1785125700
+  },
+  "failed_filtered": {
+    "content": {},
+    "created_at": 1785125529,
+    "duration": 6,
+    "error": {
+      "code": "1026",
+      "message": "video description contains sensitive content"
+    },
+    "id": "123456789012345678",
+    "modality": "video",
+    "model": "MiniMax-H3-Max",
+    "ratio": "16:9",
+    "resolution": "768P",
+    "status": "failed",
+    "task_type": "generation",
+    "updated_at": 1785125700
+  },
+  "queued": {
+    "content": {},
+    "created_at": 1785125529,
+    "duration": 6,
+    "id": "123456789012345678",
+    "modality": "video",
+    "model": "MiniMax-H3-Max",
+    "ratio": "16:9",
+    "resolution": "768P",
+    "status": "queued",
+    "task_type": "generation",
+    "updated_at": 1785125529
+  },
+  "running": {
+    "content": {},
+    "created_at": 1785125529,
+    "duration": 6,
+    "id": "123456789012345678",
+    "modality": "video",
+    "model": "MiniMax-H3-Max",
+    "ratio": "16:9",
+    "resolution": "768P",
+    "status": "running",
+    "task_type": "generation",
+    "updated_at": 1785125600
+  },
+  "succeeded_draft": {
+    "content": {
+      "url": "https://cdn.example.com/output.mp4"
+    },
+    "created_at": 1785125529,
+    "duration": 6,
+    "id": "123456789012345678",
+    "metadata": {
+      "quality": "draft",
+      "recipe": "4step-vsa-480p-tiny-vae",
+      "tier": "draft"
+    },
+    "modality": "video",
+    "model": "MiniMax-H3-Max",
+    "ratio": "16:9",
+    "resolution": "768P",
+    "status": "succeeded",
+    "task_type": "generation",
+    "updated_at": 1785125946,
+    "usage": {
+      "input_image_count": 1,
+      "input_seconds": 0,
+      "output_seconds": 6,
+      "total_seconds": 6
+    }
+  }
+}

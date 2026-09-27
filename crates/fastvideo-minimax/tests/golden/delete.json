@@ -1,0 +1,12 @@
+{
+  "cancelled": {
+    "action": "cancelled",
+    "status": "cancelled",
+    "task_id": "123456789012345678"
+  },
+  "deleted": {
+    "action": "deleted",
+    "status": "deleted",
+    "task_id": "123456789012345678"
+  }
+}

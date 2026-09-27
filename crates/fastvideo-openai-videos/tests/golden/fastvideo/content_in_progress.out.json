@@ -1,0 +1,8 @@
+{
+  "error": {
+    "code": 404,
+    "message": "Generation is still in-progress",
+    "param": null,
+    "type": "invalid_request_error"
+  }
+}

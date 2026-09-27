@@ -1,0 +1,52 @@
+{
+  "accepted_noop": [],
+  "audio_in": null,
+  "audio_out": "model_default",
+  "callback": null,
+  "canvas": {
+    "exact": {
+      "height": 768,
+      "width": 1344
+    }
+  },
+  "keyframes": [
+    {
+      "at": "first",
+      "image": {
+        "http": "https://example.com/first.png"
+      }
+    },
+    {
+      "at": "last",
+      "image": {
+        "http": "https://example.com/last.png"
+      }
+    }
+  ],
+  "model": "h3-turbo",
+  "negative_prompt": null,
+  "output": {
+    "inline_data_uri": false
+  },
+  "prompt": "The lighthouse beam sweeps across a stormy sea",
+  "protocol": "openai_videos",
+  "references": [],
+  "sampling": {
+    "boundary_ratio": null,
+    "flow_shift": null,
+    "guidance": null,
+    "guidance_2": null,
+    "steps": null
+  },
+  "seed": null,
+  "task": "keyframes",
+  "timing": {
+    "fps": null,
+    "length": {
+      "seconds": {
+        "snap": "align_up",
+        "value": 6.0
+      }
+    }
+  }
+}
