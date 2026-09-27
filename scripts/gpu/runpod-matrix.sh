@@ -741,14 +741,10 @@ case "$FAMILY" in
         --steps 50 --guidance 5.0 --flow-shift 5.0 --height 704 --width 1280 --num-frames 121 --fps 24 \
         "${one[@]}" --clip-dir "$RUNS/wan5b-easycache/frames"
     compare_cells wan5b wan5b-easycache
-    # SF-Wan: causal DMD; TAEHV by default (distilled), the full VAE opt-out.
-    gated_cell sfwan13 sfwan21-1.3b \
-      "$BIN" --mode fast wan gen --weights "$W/sfwan21-1.3b" --preset sf_wan_t2v_1_3b "${one[@]}" --warm \
-        --clip-dir "$RUNS/sfwan13/frames"
-    gated_cell sfwan13-fullvae sfwan21-1.3b \
-      "$BIN" --mode fast wan gen --weights "$W/sfwan21-1.3b" --preset sf_wan_t2v_1_3b "${one[@]}" --warm \
-        --full-vae --clip-dir "$RUNS/sfwan13-fullvae/frames"
-    compare_cells sfwan13-fullvae sfwan13
+    # SF-Wan 81 frames: TAEHV is the distilled default (sfwan13-81f-flash);
+    # the full Wan VAE opt-out on the same recipe, for the decoder A/B.
+    sf_arm sfwan13-81f-fullvae 81 FASTVIDEO_WAN_VAE=full
+    compare_cells sfwan13-81f-fullvae sfwan13-81f-flash
     ;;
   b200)
     # Warm B200 parity: H3 / FastH3 / LTX only. Official VAE stays the
