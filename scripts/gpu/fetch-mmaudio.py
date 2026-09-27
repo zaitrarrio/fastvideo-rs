@@ -58,6 +58,13 @@ def log(*a):
 
 def main():
     from huggingface_hub import hf_hub_download
+    import shutil
+    base = ROOT.parent if ROOT.parent.exists() else Path("/workspace")
+    log("volume free bytes", shutil.disk_usage(base).free)
+    # Add-only (the default): the tree must not exist yet, so nothing already
+    # on the volume is overwritten or removed. FETCH_ADD_ONLY=0 re-fetches in place.
+    if os.environ.get("FETCH_ADD_ONLY", "1") != "0" and ROOT.exists() and any(ROOT.iterdir()):
+        raise SystemExit(f"add-only: {ROOT} already has files; not touching it")
     ROOT.mkdir(parents=True, exist_ok=True)
     (ROOT / ".complete").unlink(missing_ok=True)
     for repo, files, sub in JOBS:
