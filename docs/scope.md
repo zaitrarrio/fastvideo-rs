@@ -203,7 +203,7 @@ against Hub weights is still gated on those weights. See
 | `glm_image` | t2i | `zai-org/GLM-Image` | ByT5 glyph plus the AR tower when those dirs exist |
 | `stable_audio_open_1_0` | t2a | `FastVideo/stable-audio-open-1.0-Diffusers` | T5 / CLIP |
 | `stable_audio_open_small` | t2a | `FastVideo/stable-audio-open-small-Diffusers` | T5 / CLIP |
-| `mmaudio_large_44k_v2` | v2a, t2a | `hkchengrex/MMAudio`, `FastVideo/MMAudio-large-44k-v2-Diffusers` | Synchformer when `vfeat_extractor.*` is present |
+| `mmaudio_large_44k_v2` | v2a, t2a | `hkchengrex/MMAudio` (tree from `scripts/gpu/fetch-mmaudio.sh`) | CLIP DFN5B text; CLIP + Synchformer visual. Also the opt-in Wan soundtrack stage (`--audio mmaudio`). See [ports/mmaudio.md](ports/mmaudio.md) |
 
 `fastvideo-mlx` is a separate Apple Silicon gate (`mlx-rs` on aarch64). The
 DiT and TAEHV graphs behind that gate are still a scaffold.
