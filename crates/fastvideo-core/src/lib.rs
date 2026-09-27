@@ -90,6 +90,7 @@ mod tests {
         let prev = std::env::var("FASTVIDEO_VSA").ok();
         let prev_sdpa = std::env::var("FASTVIDEO_SDPA").ok();
         std::env::set_var("FASTVIDEO_VSA", "1");
+        std::env::remove_var("FASTVIDEO_SDPA");
         let gen = VideoGenerator::from_pretrained(
             "FastVideo/Wan2.1-VSA-T2V-14B-720P-Diffusers",
             LoadOptions {
@@ -102,6 +103,14 @@ mod tests {
         .unwrap();
         let out = gen.generate_video("a cat").unwrap();
         assert!(!out.frame_paths.is_empty());
+        // The model id must not reroute every attention (cross-attention
+        // included) to the host-only window prototype: VSA is self-attention
+        // only, on the device kernels.
+        assert!(
+            std::env::var("FASTVIDEO_SDPA").is_err(),
+            "a VSA model id set FASTVIDEO_SDPA={:?}",
+            std::env::var("FASTVIDEO_SDPA")
+        );
         match prev {
             Some(v) => std::env::set_var("FASTVIDEO_VSA", v),
             None => std::env::remove_var("FASTVIDEO_VSA"),

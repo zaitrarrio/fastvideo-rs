@@ -207,8 +207,13 @@ impl VideoGenerator {
                         .into(),
                 ));
             }
-            std::env::set_var("FASTVIDEO_SDPA", "sparse");
-            eprintln!("info: VSA id → block-sparse SDPA (FASTVIDEO_VSA=1)");
+            // FASTVIDEO_VSA=1 alone selects the device VSA kernels, and only in
+            // self-attention (wan::vsa, gated on the checkpoint's
+            // to_gate_compress). FASTVIDEO_SDPA=sparse would instead route
+            // *every* attention, cross-attention included, through the
+            // host-only window prototype (attn::block_sparse_sdpa), which
+            // errors on a GPU run.
+            eprintln!("info: VSA id → video sparse attention in self-attention (FASTVIDEO_VSA=1)");
         }
         fastvideo_cudarc::resolve_device(&self.device)
             .map_err(|e| FastVideoError::Message(e.to_string()))?;
