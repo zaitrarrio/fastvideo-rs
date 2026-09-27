@@ -736,6 +736,7 @@ async fn admission_one_session_per_executor_and_resident_models_only() {
     let s = e.open_clip_session(spec("tiny-h3", Continuity::HardCut, Some(1))).await.unwrap();
     let busy = e.open_clip_session(spec("tiny-h3", Continuity::HardCut, Some(1))).await.unwrap_err();
     assert_eq!(busy.kind, ErrorKind::Conflict, "{busy:?}");
+    assert_eq!(busy.retry_after_s, Some(5));
     let (player, _out) = s.into_player(ClipPlayerConfig::default()).unwrap();
     player.close().await;
     // Closing the player frees the executor.
@@ -755,4 +756,88 @@ async fn admission_one_session_per_executor_and_resident_models_only() {
     let err = e2.open_clip_session(spec("tiny-h3", Continuity::HardCut, Some(1))).await.unwrap_err();
     assert_eq!(err.kind, ErrorKind::Loading);
     assert_eq!(err.retry_after_s, Some(1));
+}
+
+impl Rig {
+    /// One scripted step of the fast-h3 command table: sends `c`, checks the
+    /// correlated reply's message type (`None` = bodyless ack) and that the
+    /// fast-h3 broadcasts it caused are exactly `broadcasts`, in order.
+    async fn step(&self, c: ClipCommand, reply: Option<&str>, broadcasts: &[&str]) -> Option<ClipEvent> {
+        let what = c.name();
+        let n0 = self.fasth3_names().len();
+        let got = self.cmd(c).await;
+        assert_eq!(got.as_ref().map(ClipEvent::type_name), reply, "{what} reply");
+        self.until(what, |r| r.fasth3_names().len() >= n0 + broadcasts.len()).await;
+        // Nothing further trails the command.
+        tokio::time::sleep(Duration::from_millis(60)).await;
+        assert_eq!(&self.fasth3_names()[n0..], broadcasts, "{what} broadcasts");
+        got
+    }
+}
+
+/// The rest of the fast-h3 command table (research-reactor §4bis): reply
+/// type and broadcast order for every command, refusals included.
+#[tokio::test(flavor = "multi_thread")]
+async fn scripted_command_table_matches_fasth3_broadcasts() {
+    let cfg = ClipPlayerConfig {
+        audience: false,
+        clip_seconds: Some(2.0),
+        ..ClipPlayerConfig::default()
+    };
+    let r = Rig::new(engine(1).await, spec("tiny-h3", Continuity::HardCut, Some(1)), cfg).await;
+    let enq = |p: &str| ClipCommand::Enqueue {
+        prompt: p.into(),
+        metadata: "m".into(),
+        seed: None,
+        seconds: None,
+        position: None,
+    };
+    let qs = ["queue_update", "state_update"];
+    let a = r.step(enq("a"), Some("clip_queued"), &qs).await.unwrap();
+    let b = r.step(enq("b"), Some("clip_queued"), &qs).await.unwrap();
+    let moved = r
+        .step(ClipCommand::Move { clip_id: clip_id(&b), position: 0 }, Some("clip_moved"), &["queue_update"])
+        .await;
+    let Some(ClipEvent::ClipMoved { queue, position, .. }) = moved else { panic!() };
+    assert_eq!((queue, position), (QueueName::Generation, 0));
+    let popped = r.step(ClipCommand::Pop { clip_id: clip_id(&a) }, Some("clip_popped"), &qs).await;
+    let Some(ClipEvent::ClipPopped { clip }) = popped else { panic!() };
+    assert_eq!(clip.prompt, "a");
+    r.step(ClipCommand::SetClipSeconds(1.0), Some("clip_length_accepted"), &["state_update"]).await;
+    r.step(ClipCommand::SetSeed(3), Some("seed_accepted"), &["state_update"]).await;
+    r.step(ClipCommand::SetAutoplay(false), Some("autoplay_accepted"), &["state_update"]).await;
+    r.step(ClipCommand::GetQueue, Some("queue_update"), &[]).await;
+    r.step(ClipCommand::GetState, Some("state_update"), &[]).await;
+    // Refusals: bodyless, one `command_error` broadcast.
+    r.step(ClipCommand::Play { clip_id: String::new() }, None, &["command_error"]).await;
+    r.step(ClipCommand::SetCanvas("1:1".into()), None, &["command_error"]).await;
+
+    // An audience arrives: `b` builds (clip_generated, queue_update, state_update).
+    let n0 = r.fasth3_names().len();
+    r.player.set_audience(true).await.unwrap();
+    r.until("clip_generated", |r| r.count("clip_generated") == 1).await;
+    r.until("post-build updates", |r| r.fasth3_names().len() >= n0 + 3).await;
+    assert_eq!(&r.fasth3_names()[n0..], ["clip_generated", "queue_update", "state_update"]);
+
+    // play: bodyless; queue_update, state_update, clip_started, state_update.
+    r.step(
+        ClipCommand::Play { clip_id: clip_id(&b) },
+        None,
+        &["queue_update", "state_update", "clip_started", "state_update"],
+    )
+    .await;
+    // stop: bodyless; clip_stopped, state_update.
+    r.step(ClipCommand::Stop, None, &["clip_stopped", "state_update"]).await;
+    r.step(ClipCommand::Stop, None, &["command_error"]).await;
+    let reset = r.step(ClipCommand::Reset, Some("session_reset"), &qs).await;
+    assert_eq!(
+        reset,
+        Some(ClipEvent::SessionReset {
+            cleared_clips: 0,
+            was_playing: false
+        })
+    );
+    // Clip messages carry the whole ClipInfo, metadata echoed.
+    assert_eq!(a.data()["clip"]["metadata"], "m");
+    r.player.close().await;
 }
