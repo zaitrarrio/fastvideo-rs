@@ -40,6 +40,9 @@ pub struct App {
     pub gate: Arc<ServiceGate>,
     pub router: Router,
     pub d1: Option<Arc<fastvideo_serve_kit::D1JobStore>>,
+    /// The Reactor local runtime, when mounted (feature `reactor`).
+    #[cfg(feature = "reactor")]
+    pub reactor: Option<fastvideo_reactor::Reactor>,
     sweeper: tokio::task::JoinHandle<()>,
 }
 
@@ -210,7 +213,25 @@ impl App {
         let ctx = builder.build().await.context("building the serve context")?;
         gate.attach(ctx.clone());
 
-        let mut router = assemble(&config, &ctx, &gate, jobs_kind);
+        // Streaming front-ends that own sockets (Reactor: the WebRTC host).
+        #[allow(unused_mut)]
+        let mut streams = Router::new();
+        #[cfg(feature = "reactor")]
+        let reactor = if config.protocols.reactor {
+            match crate::reactor::build(&config, gate.engine()).await {
+                Ok(r) => {
+                    streams = streams.merge(fastvideo_reactor::router(r.clone()));
+                    Some(r)
+                }
+                Err(e) => {
+                    tracing::error!(error = %format!("{e:#}"), "the Reactor runtime is not mounted");
+                    None
+                }
+            }
+        } else {
+            None
+        };
+        let mut router = assemble(&config, &ctx, &gate, jobs_kind, streams);
         if config.server.forward {
             let ready = Arc::new(std::sync::OnceLock::new());
             let h = fastvideo_deploy::dispatch::RouterHandler::new(router.clone()).with_info(crate::deploy::info_fn(
@@ -222,7 +243,16 @@ impl App {
             router = crate::deploy::with_forward(router, h);
         }
         let sweeper = spawn_sweeper(jobs, Duration::from_secs(config.jobs.sweep_interval_s.max(1)));
-        Ok(App { config, ctx, gate, router, d1, sweeper })
+        Ok(App {
+            config,
+            ctx,
+            gate,
+            router,
+            d1,
+            #[cfg(feature = "reactor")]
+            reactor,
+            sweeper,
+        })
     }
 
     /// Serves on `listener` until `stop` resolves, then drains (§6.3):
@@ -232,10 +262,17 @@ impl App {
         let gate = self.gate.clone();
         let grace = self.config.shutdown_grace();
         let d1 = self.d1.clone();
+        #[cfg(feature = "reactor")]
+        let reactor = self.reactor.clone();
         announce_ready(gate.clone());
         let drained = async move {
             stop.await;
             tracing::info!("shutdown requested: draining");
+            // Reactor: `session_ended` with RT's drain reason, then close.
+            #[cfg(feature = "reactor")]
+            if let Some(r) = &reactor {
+                r.drain().await;
+            }
             drain(&gate, grace, d1.as_deref()).await;
             tracing::info!("drained");
         };
@@ -287,7 +324,15 @@ pub fn mount_cfg(config: &Config) -> MountCfg {
 
 /// The full router: health + serve-kit files/uploads + native + adapters,
 /// with request metrics and tracing.
-pub fn assemble(config: &Config, ctx: &ServeCtx, gate: &Arc<ServiceGate>, jobs_kind: &'static str) -> Router {
+/// `streams` carries the streaming front-ends that are built with their own
+/// state (the Reactor runtime).
+pub fn assemble(
+    config: &Config,
+    ctx: &ServeCtx,
+    gate: &Arc<ServiceGate>,
+    jobs_kind: &'static str,
+    streams: Router,
+) -> Router {
     let mcfg = mount_cfg(config);
     let mut kit: Router<ServeCtx> = ctx.routes();
     if config.protocols.native {
@@ -308,6 +353,7 @@ pub fn assemble(config: &Config, ctx: &ServeCtx, gate: &Arc<ServiceGate>, jobs_k
     };
     kit.with_state(ctx.clone())
         .merge(stateful)
+        .merge(streams)
         .merge(health::routes(h))
         .route_layer(axum::middleware::from_fn(metrics::track))
         .layer(TraceLayer::new_for_http())

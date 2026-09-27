@@ -11,8 +11,9 @@
 //! | LTX | `fastvideo_ltxapi::router(LtxConfig)` | — |
 //! | fal queue/sync | `fastvideo_fal::router(ctx, FalConfig)` (a stateful `Router`) | `FalWebhook` renderer, output file names |
 //!
-//! The Reactor adapter (WP-13) and the fal director (WP-14) are not mounted
-//! yet; `reactor` expects `fastvideo_reactor::router()`.
+//! The Reactor runtime (WP-13) owns a WebRTC host, so it is built in
+//! `App::build` (`crate::reactor`) and mounted there next to these routers;
+//! the fal director (WP-14) is not mounted yet.
 //!
 //! Adapters cannot depend on this crate, so their settings are their own
 //! config types, built here from the `[protocols]`/`[ltx]` sections.
@@ -179,10 +180,6 @@ pub fn mount(cfg: &MountCfg, ctx: &ServeCtx) -> (Router<ServeCtx>, Router) {
     #[cfg(feature = "fal")]
     if p.fal {
         stateful = stateful.merge(fastvideo_fal::router(ctx.clone(), fal_config(cfg)));
-    }
-    #[cfg(feature = "reactor")]
-    if p.reactor {
-        r = r.merge(fastvideo_reactor::router());
     }
     for m in inventory(p) {
         if m.enabled && !m.built {
