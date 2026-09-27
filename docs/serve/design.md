@@ -18,6 +18,55 @@ text says **native**.
 
 ---
 
+## 0. Owner decisions (2026-09-27) — these override anything below
+
+1. **Video encoder: NVENC.** The runtime image gains the NVIDIA `video` driver
+   capability (`NVIDIA_DRIVER_CAPABILITIES=compute,utility,video`) and
+   `fastvideo-media` encodes H.264 on the GPU's NVENC. OpenH264 stays only as a
+   CPU-only test/CI backend behind a feature and is never used in a deployed
+   image (no Cisco patent licence when built from source). No x264.
+2. **H.264 level / 1344x768 H3 streams.** WHIP to Cloudflare: scale H3 streams to
+   1280x720 (level 3.1) before encoding. Full resolution (1344x768, level 4.0) is
+   supported when publishing to MediaMTX (self-hosted relay) and for peer WebRTC.
+   The WHIP target config selects the profile: `cloudflare` → 720p cap,
+   `mediamtx` / peer → native resolution.
+3. **Model tiers exposed by the APIs.**
+   - `h3-max` (fal `minimax/h3-max/*`, MiniMax `MiniMax-H3-Max`) and LTX
+     `ltx-2-5-pro` / `ltx-2-3-pro` map to **our highest-quality configuration**
+     of that family (no quality-reducing shortcuts: full step count / non-lossy
+     attention route / full VAE; exact recipe chosen per model in the engine
+     capability table and documented there).
+   - New variants **`h3-turbo`** and **`ltx-turbo`**: our FastH3 and LTX
+     configurations with the **fastest generation times** that still pass the
+     quality gate (e.g. FastH3 4-step VSA; LTX-2.5 distilled two-stage Sol),
+     exposed on every API that accepts a model/endpoint id (fal endpoint ids
+     `minimax/h3-turbo/{text,image,reference}-to-video`, MiniMax model
+     `MiniMax-H3-Turbo`, LTX model `ltx-turbo`, openai-videos model ids).
+   - Responses carry the resolved internal recipe in metadata where the wire
+     format allows it.
+
+4. **Cold start (serverless).** Serverless workers run the Rust runtime image
+   (`serve` target) with the weight volume mounted (`/runpod-volume`); nothing is
+   downloaded at start. Weight loading is the cold start, so it gets its own
+   engine packages:
+   - **E12 fast weight loading:** parallel large sequential reads from the
+     volume, pinned-host staging, and overlapping load with the first stages
+     (text encode before the DiT is resident). Target: H3 cold load from ~5.4–8.3
+     min to < 2 min; LTX-2.5 from ~2 min to < 1 min.
+   - **E13 pre-quantized FP8 text encoders (owner decision):** store the H3
+     text encoder's resident FP8 form (the weight-only `Fp8Rows` layout: E4M3
+     codes + per-row scales, as `llm::ResidentDecoder` builds today at load,
+     ~118 s) as safetensors next to the bf16 shards (e.g.
+     `h3-base/text_encoder_fp8/` with a manifest recording the source shard
+     hashes and the quantization rule) and load it directly; same treatment for
+     LTX's Gemma encoder so the first LTX request does not stream it (~61 s).
+     An offline `fv-gpucheck quantize-text-encoder` (or equivalent) tool writes
+     it; the loaded tensors must be byte-identical to the load-time
+     quantization (hash test). Written to both weight volumes (EU needs the
+     volume-sync decision first — it is full).
+   - **WP-19 cold-start measurement:** fresh Runpod serverless worker → submit →
+     first output, per model family, before and after E12/E13.
+
 ## 1. Goals and non-goals
 
 ### 1.1 Goals
@@ -1326,6 +1375,43 @@ Merge rules that let packages run in parallel:
 | **WP-03 media** | `crates/fastvideo-media/**` | 01 | `AvPacer` port (MIT attribution header from strobe-core) plus audio lane plus first-frame notify; resampler; Opus framer; `VideoEncoder` with openh264 (CB, IDR 2 s, forced IDR) and x264-ffmpeg; `mp4::finalize` (faststart, `-an`, crop); ffprobe `MediaProbe`; crossfade; RTMP/HLS ffmpeg sink with two pipes; lockstep tests (§7.4); 768p openh264 encode ≤15 ms/frame on the CI runner, recorded |
 | **WP-04 webrtc** | `crates/fastvideo-webrtc/**` | 01, 03 (types) | str0m host: UDP mux, ICE-TCP passive (RFC 4571 framing), public-address candidates, non-trickle answers with `a=end-of-candidates`, remote trickle add, data channels (accept client-created), per-mid direction (pause gate, `inactive`), pre-encoded H.264 and Opus writers, PLI events; WHIP publisher; loopback bench passes; answering a Chrome offer captured as a fixture |
 | **WP-05 serve-kit** | `crates/fastvideo-serve-kit/**` | 01, 02 | `ServeCtx`; auth modes; `MemJobStore` with manifests, restart recovery and expiry sweep; `ArtifactStore` local plus S3 presign; `UrlSigner`; `UploadStore` + `PUT /uploads/{token}`; ingestion (https fetch without redirects when configured, data URI, per-protocol limits, SSRF guard, `image` decode + ffprobe); callback sender (MiniMax challenge, fal webhook Ed25519); generic `submit/status/result` handlers; SSE helper |
+
+**WP-01 notes (as implemented).** The §3 signatures hold, with these
+additions and readings; everything is re-exported from the crate root.
+
+- Deviations: `GenerationRequest` gains `callback: Option<CallbackSpec>`
+  (fal `?fal_webhook=` / MiniMax `callback_url`, copied onto `Job::callback`),
+  since `normalize` is the only place that sees them. `FrameGrid` gains
+  `default: u32` (the frame count for `Length::ModelDefault`; caps had no
+  default length). `accepted_noop: Vec<&'static str>` is serialized but not
+  deserialized.
+- Readings: `CanvasCaps::short_edges[0]` is the default tier
+  (`CanvasSpec::ModelDefault` = 16:9 at that tier); `max_area` applies at the
+  largest tier and scales by `(short/largest)^2` below it (`area_at`), which
+  gives 832×480 at 480/16:9. `boundary_ratio` is honoured exactly when
+  `KnobCaps::guidance_2` is. A missing seed is drawn inside `negotiate` by
+  `draw_seed()` (u32 range, JSON-safe); a sent seed is refused only if
+  `knobs.seed` is false. Short edge 1080 on H3 → `Unsupported(H3Refine1080P)`,
+  above 1080 → `Unsupported(H3Resolution2K)`; a length snapping to 107 frames
+  on H3 → `Unsupported(H3FourSeconds)`.
+- Types §3 left open: `NormalizeCtx` and `ErrorCtx` are owned (no lifetime);
+  `SseSpec{initial, follow: Option<SseFollow::JobStatus{job, close_on_terminal}>, keepalive}`;
+  `JobSnapshot{id, seq, state, progress, queue_position, log_count}`;
+  `ListQuery` (owner/protocol/statuses/model/task/external_ids, `order`,
+  cursor `after` = external id, `offset`, `limit`) with a pure
+  `ListQuery::apply` any store can use; `Page{items, total, has_more}`;
+  `StoreError`; `RefLimits{images, videos, audio, total}`;
+  `AudioPlan::{Native{rate,channels}, Drop, Sidecar, None}`;
+  `PostProcess{crop, drop_audio}`; `MediaProbe` (all fields optional).
+- Extras: `precheck()` (every rule not needing staged media, to refuse before
+  ingestion), `resolve_model()` (rule 1), `JobStatus` plus checked `Job::mark_*`
+  transitions (`Queued→Running|Failed|Cancelled`,
+  `Running→Succeeded|Failed|Cancelled`; terminal is final) and
+  `Job::recover_after_restart`, `ProtocolId::default_retention`,
+  `ErrorKind::http_status` (canonical/native status only; adapters keep their
+  own tables), `GapId::{code, work_package, default_message}`,
+  `TrackSet::for_model`, `SessionState::can_transition_to`.
+- Not serde: `HttpReply`, `ViewCtx` (manual `Debug`), `RgbFrame`, `Pcm`.
 
 **Engine packages that can start in Phase 1** (independent of the server):
 

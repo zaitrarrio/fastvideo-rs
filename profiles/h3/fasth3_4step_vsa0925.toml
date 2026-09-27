@@ -1,0 +1,19 @@
+# Measured (RTX PRO 6000, b299214, 5 prompts, medians): 768p denoise 19.04 s (1.04x), LPIPS 0.510, PSNR 12.7 dB, sharpness 0.99 (min 0.96); quality passes, gate FAIL (speedup < 1.10) vs FastH3 4-step VSA 768p (denoise 19.81 s).
+# FastH3 4-step VSA, sparsity 0.925 everywhere (recipe 0.9), MXFP8.
+# An arm of the h3attn matrix family (docs/techniques.md, "H3 attention arms").
+
+[id]
+name = "fasth3_4step_vsa0925"
+family = "minimax_h3"
+description = "FastH3 4-step VSA, sparsity 0.925 everywhere (recipe 0.9), MXFP8."
+
+[pipeline]
+model = "h3"
+recipe = "4step-vsa"
+
+[techniques.vsa]
+sparsity = 0.925
+
+[techniques.mxfp8]
+
+[techniques.bf16_activations]

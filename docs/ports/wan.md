@@ -204,43 +204,69 @@ What runs (2026-09-27):
   (`scripts/gpu/fixtures/ti2v-beach-832x480.jpg`, from FastVideo's assets).
 
 Parity (`fv-gpucheck wan oracle` against `scripts/gpu/upstream/oracle_wan22.py`,
-Diffusers 0.40.0, H100 80GB, run `wan/f5d6595-09271224`, upstream
-`f5d6595-09271218`):
+Diffusers 0.40.0, H100 80GB; runtime `wan/cfce899-09271307`, upstream dump
+`cfce899-09271304`). The same inputs go to both sides.
 
-| Tensor | rel-L2 | max-abs | Notes |
-|---|---|---|---|
-| VAE encode, 9 frames 704x1280 → `[48, 3, 44, 80]` | 1.87e-3 | 8.4e-3 | cosine 0.999998; `--mode fast` (cuDNN picked bf16 convs for most shapes) |
-| VAE decode of those latents | — | — | failed: `CUDNN_STATUS_NOT_SUPPORTED` on the 4.6 GB `[512, 10, 352, 640]` conv; fixed in `81bf7b3` (frame split), not re-run |
-| DiT forward, t2v and i2v | — | — | not reached (the stage stopped at the decode error) |
+| Tensor | Production (`--mode fast`) | Exact f32 (`--mode exact`) |
+|---|---|---|
+| VAE encode, 9 frames 704x1280 → `[48, 3, 44, 80]` | rel-L2 1.85e-3, max-abs 8.2e-3 | 1.81e-3, 1.7e-2 |
+| VAE decode of those latents → `[3, 9, 704, 1280]` | rel-L2 1.78e-3, **PSNR 65.7 dB**, max-abs 2.5e-2 | rel-L2 1.37e-4, max-abs 1.8e-3 |
+| DiT patch embedding | 3.7e-3 | |
+| DiT time projection (t2v / i2v per frame) | 2.8e-3 / 2.7e-3 | |
+| DiT block 0 / 15 / 29 (t2v) | 3.4e-3 / 5.6e-2 / 2.1e-2 | |
+| DiT output, t2v (t = 781) | rel-L2 2.69e-2, cosine 0.99964 | |
+| DiT output, i2v (frame 0 at t = 0) | rel-L2 1.47e-2, cosine 0.99990 | |
 
-The Diffusers VAE reconstructs its own clip at 41.7 dB. The decode, DiT and
-exact-mode rows are the `wan5b-oracle` / `wan5b-oracle-exact` cells; they
-need one more runtime pod (the upstream dump takes 47 s).
+- Production mode picks bf16 cuDNN convolutions for most VAE shapes; exact
+  f32 decode is 10x closer.
+- The encode stays at 1.8e-3 in both modes. That is smaller than any
+  latent-space effect, but it does not come from our conv precision. The
+  likely source is TF32 in the reference's convs: PyTorch allows TF32 for
+  cuDNN convs by default. Not bisected.
+- The DiT's error starts at the bf16 level: 3e-3 at the input and block 0.
+  It grows to 2–5e-2 through the middle blocks and ends at 2.7e-2
+  (t2v) / 1.5e-2 (i2v). No block jumps. This is the depth-amplified bf16
+  profile seen on H3 (docs/oracle.md), not a systematic error.
+- TAEHV `taew2_2` on the same latents: PSNR 35.5 dB against the Diffusers
+  VAE decode.
 
-Timings, H100 80GB HBM3 (no RTX PRO 6000 or H200 in stock in US-CA-2),
-warm, medians over the five prompts of `prompts-eval.json`, seconds:
+Timings, H100 80GB HBM3. No RTX PRO 6000 or H200 was in stock in US-CA-2,
+so both sides ran on H100. Warm; medians over the five prompts of
+`prompts-eval.json`; seconds. Ours: run `wan/cfce899-09271307`. Upstream:
+`upstream/f5d6595-09271218`, one run per prompt after one warm-up.
 
-| Cell | Text | Denoise | Decode | Total | Peak |
+| Cell | Text | Denoise | Decode (incl. mp4) | Total | Peak |
 |---|---|---|---|---|---|
-| Upstream FastVideo T2V 704x1280x121 (`fv-wan22-5b`, 1 run per prompt after 1 warm-up) | 0.10 | 166.6 | 6.89 (+0.23 post, +1.24 mp4) | **175.2** | 44 229 MiB torch / 67 016 MiB smi |
-| Upstream FastVideo I2V 480x832x121 (`fv-wan22-5b-i2v`, one prompt) | 0.06 | 62.8 | 3.13 (+0.09, +0.54) | **66.7** | 40 762 MiB torch / 51 325 MiB smi |
-| Ours T2V (`wan5b`), I2V (`wan5b-i2v`), TAEHV (`wan5b-taehv`) | not measured | | | | |
+| **Ours T2V** 704x1280x121, full VAE (`wan5b`) | 0.07 | 141.5 | 9.47 | **151.1** | 62 272 MiB in use |
+| Ours T2V, TAEHV `taew2_2` (`wan5b-taehv`) | 0.07 | 140.6 | 0.70 | **141.4** | 32 416 MiB |
+| Upstream FastVideo T2V (`fv-wan22-5b`) | 0.10 | 166.6 | 6.89 + 0.23 post + 1.24 mp4 | **175.2** | 44 229 MiB torch / 67 016 MiB smi |
+| **Ours I2V** 480x832x121 (`wan5b-i2v`, one prompt) | 0.02 | 41.0 | 3.92 | **45.0** | 51 856 MiB |
+| Upstream FastVideo I2V (`fv-wan22-5b-i2v`) | 0.06 | 62.8 | 3.13 + 0.09 + 0.54 | **66.7** | 40 762 MiB torch / 51 325 MiB smi |
 
-Upstream: 3.33 s per step (two transformer calls) at 27 280 tokens; its VAE
-decode runs bf16 (`vae_decode_precision`). Ours was not measured: the Runpod
-balance fell to about $8 across all agents while the upstream cells ran,
-and new pods were stopped. To run everything on one pair of pods:
+- **Denoise.** Ours is 2.83 s per step against upstream's 3.33 s (both are
+  one batched CFG forward pair at 27 280 tokens), 15% faster. I2V is 35%
+  faster, at 11 700 tokens.
+- **Decode.** Our full VAE (f32 activations, cuDNN picking bf16 convs per
+  shape) takes 9.5 s against FastVideo's 6.9 s decode + 1.5 s post/mp4. It is
+  the one stage where upstream is faster; FastVideo runs its decode in
+  bf16 (`vae_decode_precision`).
+- **Totals.** Ours is 1.16x faster on T2V (151.1 vs 175.2 s) and 1.48x on
+  I2V (45.0 vs 66.7 s).
+- **TAEHV.** It cuts decode to 0.7 s and peak memory to 32 GB (the full VAE's
+  2-latent chunks at 704x1280 are the 62 GB peak). Against our full-VAE clips:
+  LPIPS 0.035–0.104 (median 0.064), PSNR 27.7–36.6 dB (median 31.8). It stays
+  opt-in for the base checkpoint.
+- **Peak memory.** Ours is higher than upstream's torch peak because UMT5 stays
+  resident in f32 and the full VAE decodes 2 latent frames per pass.
+- **I2V check.** The I2V clip is checked for frame count and a non-flat
+  middle frame only. Its first frame was not compared against the input
+  image here.
 
-```
-RUNPOD_VOLUME_NAME=fv-weights-b200-us RUNPOD_GPU_TYPE="NVIDIA H100 80GB HBM3" \
-  FV_KEEP_POD=1 UP_IMAGE_TARGET=fastvideo UP_IMAGE_TAG=latest FV_EXTRA_ENV=UP_FV_REPEATS=1 \
-  UP_STEPS="info:box oracle:wan22-ti2v cells:fv-wan22-5b,fv-wan22-5b-i2v" \
-  scripts/gpu/runpod-http.sh upstream <sha>
-RUNPOD_VOLUME_NAME=fv-weights-b200-us RUNPOD_GPU_TYPE="NVIDIA H100 80GB HBM3" FV_FAMILY=wan \
-  FV_PROMPTS=5 FV_CELLS="wan5b wan5b-taehv wan5b-i2v wan5b-oracle wan5b-oracle-exact" \
-  FV_EXTRA_ENV="FV_ORACLE_URL=https://<upstream pod>-8000.proxy.runpod.net/upstream/<tag>" \
-  scripts/gpu/runpod-http.sh run <sha>
-```
+To rerun: the upstream step `oracle:wan22-ti2v` (plus `cells:fv-wan22-5b,fv-wan22-5b-i2v`),
+then `FV_FAMILY=wan FV_PROMPTS=5 FV_CELLS="wan5b-oracle wan5b-oracle-exact wan5b wan5b-taehv wan5b-i2v"
+FV_EXTRA_ENV="FV_ORACLE_URL=https://<upstream pod>-8000.proxy.runpod.net/upstream/<tag>"`
+on `RUNPOD_VOLUME_NAME=fv-weights-b200-us`. The oracle cells run first, so
+the upstream pod can be deleted once the dump is fetched.
 
 Not ported here: the Wan 2.1 encoder (`WanEncoder::load_wan_2_1`) still
 pads its stride-2 downsampler symmetrically, runs the time conv before the
@@ -433,8 +459,8 @@ see "Not measured" below. SF-Wan is measured in the next section.
 
 ### Not measured
 
-- Wan2.2 TI2V-5B (ours; the upstream numbers are in "Wan2.2 TI2V-5B" above)
-  and Wan2.1 T2V-14B (bf16act / mxfp8): the cells are in the `wan` family
+- Wan2.2 TI2V-5B kernel arms (`wan5b-{f32act,bf16act,mxfp8}`; the recipe
+  cells are measured in "Wan2.2 TI2V-5B" above) and Wan2.1 T2V-14B (bf16act / mxfp8): the cells are in the `wan` family
   (`wan5b-{f32act,bf16act,mxfp8}`, `wan14b-{f32act,bf16act,mxfp8}`; image
   `sha-d18eae2` carries them). Their weights are on `fv-weights-b200-us`
   (US-CA-2) only, and that datacenter had no RTX PRO 6000 for the whole

@@ -331,15 +331,34 @@ pub enum AttnMode<'a> {
     Vsa(&'a super::vsa::H3Vsa),
     /// Engine / RTX / Spark Sol-Attn policy. The block loop resolves the per-layer tau.
     Sol(&'a H3SolPolicy),
+    /// A Sol route whose dense calls run VSA (`sol_attn.dense_backend = "vsa"`).
+    SolVsa {
+        policy: &'a H3SolPolicy,
+        vsa: &'a super::vsa::H3Vsa,
+    },
     /// One Sol-Attn layer at this tau.
     SolLayer { tau: f64, policy: &'a H3SolPolicy },
+}
+
+/// A dense block's attention: the FP8 `Q K^T` kernel when the request runs
+/// `fp8_attention` on dense calls ([`crate::wan::attn_fp8`]), otherwise (and
+/// wherever that kernel cannot run) the bf16 SDPA.
+fn dense_attention(q: &CudaTensor, k: &CudaTensor, v: &CudaTensor) -> Result<CudaTensor> {
+    #[cfg(feature = "cuda")]
+    if crate::wan::attn_fp8::dense_enabled() {
+        let out_bf16 = crate::wan::tensor::bf16_activations();
+        if let Some(out) = crate::wan::attn_fp8::dense_sdpa(q, k, v, None, out_bf16)? {
+            return Ok(out);
+        }
+    }
+    scaled_dot_product_attention(q, k, v, None)
 }
 
 /// `benchmark.json` attention route of one block (see [`crate::wan::evalstats`]).
 fn record_attn(step: usize, layer: usize, mode: &AttnMode<'_>) {
     use crate::wan::evalstats::{attn, AttnKind};
     let kind = match mode {
-        AttnMode::Dense | AttnMode::Sol(_) => AttnKind::Dense,
+        AttnMode::Dense | AttnMode::Sol(_) | AttnMode::SolVsa { .. } => AttnKind::Dense,
         AttnMode::Vsa(_) => AttnKind::Vsa,
         AttnMode::SolLayer { tau, .. } => AttnKind::Sol { tau: *tau },
     };
@@ -1191,7 +1210,7 @@ impl Attention {
         })?;
         let (k, v) = crate::wan::nvfp4::maybe_kv(k, v)?;
         let out = match mode {
-            AttnMode::Dense => scaled_dot_product_attention(&q, &k, &v, None)?,
+            AttnMode::Dense => dense_attention(&q, &k, &v)?,
             AttnMode::Vsa(vsa) => {
                 // Gate is a plain projection of the same input: not normed, not rotated.
                 let gate = if self.has_gate {
@@ -1203,7 +1222,7 @@ impl Attention {
                 };
                 vsa.attend(q, k, v, gate)?
             }
-            AttnMode::Sol(_) => {
+            AttnMode::Sol(_) | AttnMode::SolVsa { .. } => {
                 return Err(msg(
                     "h3 attn: Sol policy must be resolved to a per-layer tau before Attention::forward",
                 ));
@@ -2023,6 +2042,11 @@ impl H3Transformer {
         self.sol_tea.lock().expect("h3 sol tea").is_some()
     }
 
+    /// Remove the TeaCache controller (a multi-arm run switching arms).
+    pub fn disable_teacache(&self) {
+        *self.sol_tea.lock().expect("h3 sol tea") = None;
+    }
+
     /// `Some(true)` reuses the block residual. `Some(false)` runs the blocks.
     /// `None` leaves the forward dense.
     fn begin_sol_tea(
@@ -2216,12 +2240,12 @@ impl H3Transformer {
                 )));
             }
         }
-        if matches!(mode, AttnMode::Vsa(_)) && !self.has_gate {
+        if matches!(mode, AttnMode::Vsa(_) | AttnMode::SolVsa { .. }) && !self.has_gate {
             return Err(msg(
                 "h3 dit: VSA needs to_gate_compress; load the transformer with the gate",
             ));
         }
-        if matches!(mode, AttnMode::Vsa(_)) && want_a > 0 {
+        if matches!(mode, AttnMode::Vsa(_) | AttnMode::SolVsa { .. }) && want_a > 0 {
             return Err(msg("h3 dit: interleaved Ref2VA condition audio needs dense attention (VSA prefix assumes contiguous layout)"));
         }
         let seq = l.sequence_length();
@@ -2304,9 +2328,18 @@ impl H3Transformer {
                                 AttnMode::SolLayer { tau, policy }
                             }
                         },
+                        AttnMode::SolVsa { policy, vsa } => match policy.route(step, index).map_err(msg)? {
+                            fastvideo_models::h3::sol::H3SolRoute::Dense => AttnMode::Vsa(vsa),
+                            fastvideo_models::h3::sol::H3SolRoute::Sol { tau } => {
+                                AttnMode::SolLayer { tau, policy }
+                            }
+                        },
                         other => other,
                     };
                     record_attn(step, index, &layer_mode);
+                    if let AttnMode::Vsa(vsa) = layer_mode {
+                        vsa.select(step, index);
+                    }
                     // A block's last residual is deferred into the next
                     // block's first norm (one kernel) unless something reads
                     // the block output: the observer, op dumps, the last block.
@@ -2350,9 +2383,18 @@ impl H3Transformer {
                             AttnMode::SolLayer { tau, policy }
                         }
                     },
+                    AttnMode::SolVsa { policy, vsa } => match policy.route(step, index).map_err(msg)? {
+                        fastvideo_models::h3::sol::H3SolRoute::Dense => AttnMode::Vsa(vsa),
+                        fastvideo_models::h3::sol::H3SolRoute::Sol { tau } => {
+                            AttnMode::SolLayer { tau, policy }
+                        }
+                    },
                     other => other,
                 };
                 record_attn(step, index, &layer_mode);
+                if let AttnMode::Vsa(vsa) = layer_mode {
+                    vsa.select(step, index);
+                }
                 x = self.blocks.with(index, |block| {
                     let n = phase("h3_1_norm_msa", || {
                         mods.modulate(&x.rms_norm(&block.norm1, eps)?, SCALE_MSA, SHIFT_MSA)

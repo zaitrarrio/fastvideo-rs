@@ -26,8 +26,10 @@ use super::sol::{
     H3TeaCache,
 };
 use crate::techniques::methods::{
-    DenseAttention, SinkMode, SolAttn, TeaCache, TinyDecoder, TinyDecoderKind, Vsa,
+    DenseAttention, Fp8Attention, Fp8AttentionOps, SinkMode, SolAttn, TeaCache, TinyDecoder,
+    TinyDecoderKind, Vsa,
 };
+use crate::techniques::VsaSchedule;
 use crate::techniques::registry::h3_spec;
 use crate::techniques::{compose, Plan, Profile, Schedule, Technique, HORIZON};
 
@@ -60,6 +62,12 @@ pub struct H3Techniques {
     /// The profile's VSA sparsity.
     pub vsa_sparsity: Option<f64>,
     pub vsa_group: usize,
+    /// The profile's per-step / per-layer VSA sparsity (uniform when
+    /// `FASTVIDEO_VSA_SPARSITY` is set).
+    pub vsa_schedule: VsaSchedule,
+    /// Where FP8 attention runs: `FASTVIDEO_ATTN_FP8`, else the profile's
+    /// `fp8_attention`, else off.
+    pub fp8_attention: Fp8AttentionOps,
     pub teacache: Option<TeaCache>,
     /// A `taeh3` technique: the video decoder must be TAEH3.
     pub taeh3: Option<TinyDecoder>,
@@ -109,6 +117,7 @@ impl H3Techniques {
         let mut p_attention: Option<Box<dyn Technique>> = None;
         let mut p_teacache: Option<TeaCache> = None;
         let mut taeh3: Option<TinyDecoder> = None;
+        let mut p_fp8: Option<Fp8Attention> = None;
         if let Some(p) = profile {
             for t in p.plan()?.techniques {
                 if t.writes()
@@ -116,6 +125,9 @@ impl H3Techniques {
                 {
                     constant(t.as_ref())?;
                     p_attention = Some(t);
+                } else if let Some(f) = t.downcast_ref::<Fp8Attention>() {
+                    constant(t.as_ref())?;
+                    p_fp8 = Some(f.clone());
                 } else if let Some(tc) = t.downcast_ref::<TeaCache>() {
                     constant(t.as_ref())?;
                     p_teacache = Some(tc.clone());
@@ -159,6 +171,12 @@ impl H3Techniques {
                         return Err("h3 sol: a Sol route needs a sink (prefix | text | suffix)".into())
                     }
                     _ => {}
+                }
+                if sol.dense_vsa && contract.vsa_sparsity <= 0.0 {
+                    return Err(format!(
+                        "h3 sol: dense_backend = \"vsa\" needs a VSA recipe (recipe {} has no VSA gate)",
+                        recipe_ref.unwrap_or("auto")
+                    ));
                 }
                 H3Attention::Sol(sol.clone())
             } else if t.downcast_ref::<DenseAttention>().is_some() {
@@ -204,11 +222,7 @@ impl H3Techniques {
                 enabled: Schedule::Const(true),
             })),
             H3Attention::Auto if contract.vsa_sparsity > 0.0 && !contract.dense => {
-                items.push(Box::new(vsa_profile.clone().unwrap_or(Vsa {
-                    enabled: Schedule::Const(true),
-                    sparsity: None,
-                    group: None,
-                })))
+                items.push(Box::new(vsa_profile.clone().unwrap_or(Vsa::uniform(None, None))))
             }
             H3Attention::Auto => {}
         }
@@ -243,6 +257,37 @@ impl H3Techniques {
             items.push(Box::new(tc.clone()));
         }
 
+        // --- VSA schedule: the legacy flag means one sparsity everywhere ---
+        let vsa_schedule = if vsa_sparsity_env.is_some() {
+            VsaSchedule::default()
+        } else {
+            vsa_profile
+                .as_ref()
+                .map(|v| v.schedule.clone())
+                .unwrap_or_default()
+        };
+
+        // --- FP8 attention (opt-in) ---
+        let fp8_attention = match env("FASTVIDEO_ATTN_FP8") {
+            Some(v) => {
+                sources.push(("attention_precision", "env FASTVIDEO_ATTN_FP8"));
+                Fp8AttentionOps::parse(&v)?
+            }
+            None => match &p_fp8 {
+                Some(f) => {
+                    sources.push(("attention_precision", "profile"));
+                    f.ops
+                }
+                None => Fp8AttentionOps::default(),
+            },
+        };
+        if fp8_attention.any() {
+            items.push(Box::new(Fp8Attention {
+                enabled: Schedule::Const(true),
+                ops: fp8_attention,
+            }));
+        }
+
         let plan = compose(items, &h3_spec(), HORIZON).map_err(|e| e.to_string())?;
         Ok(Self {
             recipe,
@@ -251,6 +296,8 @@ impl H3Techniques {
             vsa_sparsity_env,
             vsa_sparsity: vsa_profile.and_then(|v| v.sparsity),
             vsa_group,
+            vsa_schedule,
+            fp8_attention,
             teacache,
             taeh3,
             plan,
@@ -633,5 +680,39 @@ mod tests {
             }
         }
         assert!(off.settings().unwrap().is_empty());
+    }
+
+    /// A VSA schedule and FP8 attention resolve from the profile; the legacy
+    /// flags win (FASTVIDEO_VSA_SPARSITY makes the schedule uniform), and
+    /// without either the resolution is the uniform bf16 baseline.
+    #[test]
+    fn vsa_schedules_and_fp8_attention_resolve() {
+        let c = contract("8step");
+        let p = profile(
+            "[id]\nname='p'\n[pipeline]\nmodel='h3'\nrecipe='8step'\n\
+             [techniques.vsa]\nsparsity={ default = 0.9, 0 = 0.8 }\n\
+             dense_layers='0,49'\ndense_sparsity=0.5\n\
+             [techniques.fp8_attention]\nops='vsa'\n",
+        );
+        let none = |_: &str| None;
+        let t = H3Techniques::resolve(Some("8step"), &c, false, Some(&p), &none).unwrap();
+        assert_eq!(t.vsa_sparsity(&c).unwrap(), 0.9);
+        assert_eq!(t.vsa_schedule.at(0.9, 0, 5), 0.8);
+        assert_eq!(t.vsa_schedule.at(0.9, 3, 49), 0.5);
+        assert_eq!(t.vsa_schedule.at(0.9, 3, 5), 0.9);
+        assert!(t.fp8_attention.vsa && !t.fp8_attention.dense);
+        assert!(t.plan.names().contains(&"fp8_attention"));
+
+        let mut m = BTreeMap::new();
+        m.insert("FASTVIDEO_VSA_SPARSITY", "0.85".to_string());
+        m.insert("FASTVIDEO_ATTN_FP8", "0".to_string());
+        let t = H3Techniques::resolve(Some("8step"), &c, false, Some(&p), &env_of(m)).unwrap();
+        assert_eq!(t.vsa_sparsity(&c).unwrap(), 0.85);
+        assert!(t.vsa_schedule.is_uniform());
+        assert!(!t.fp8_attention.any());
+
+        let base = H3Techniques::resolve(Some("8step"), &c, false, None, &none).unwrap();
+        assert!(base.vsa_schedule.is_uniform() && !base.fp8_attention.any());
+        assert!(!base.plan.names().contains(&"fp8_attention"));
     }
 }
