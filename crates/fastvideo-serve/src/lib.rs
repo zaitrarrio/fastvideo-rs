@@ -16,22 +16,28 @@
 //! - [`deploy`]: Runpod queue mode, the Vast forwarder route and the
 //!   `info` diagnostics (WP-16, over `fastvideo-deploy`).
 //! - [`shutdown`] waits for signals and [`app::drain`] drains.
+//! - `director` (features `fal` + `webrtc`) mounts the fal WMA director:
+//!   the WebRTC host from `[webrtc]` and the engine seam.
 //! - [`whip`] fixes the WHIP encoder geometry (Cloudflare gets a padded
 //!   1280x720 frame).
-//! - `reactor` (feature `reactor`) binds the WebRTC host from `[webrtc]` and
-//!   builds the Reactor local runtime from `[reactor]` (WP-13).
+//! - `reactor` (feature `reactor`) builds the Reactor local runtime from
+//!   `[reactor]` (WP-13) on the shared WebRTC host of `rtc` (`[webrtc]`).
 
 pub mod adapters;
 pub mod app;
 pub mod config;
 pub mod console;
 pub mod deploy;
+#[cfg(all(feature = "fal", feature = "webrtc"))]
+pub mod director;
 pub mod gate;
 pub mod health;
 pub mod metrics;
 pub mod native;
 #[cfg(feature = "reactor")]
 pub mod reactor;
+#[cfg(any(feature = "reactor", all(feature = "fal", feature = "webrtc")))]
+pub mod rtc;
 pub mod router;
 pub mod shutdown;
 pub mod storage;

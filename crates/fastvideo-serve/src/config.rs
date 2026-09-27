@@ -404,6 +404,39 @@ impl Default for WebrtcCfg {
     }
 }
 
+/// `[director]`: the fal WMA director (design §5.6, WP-14). The WebRTC host
+/// comes from `[webrtc]`; the apps from `[protocols] fal_apps` (each gets
+/// `{app}/director`).
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct DirectorCfg {
+    /// `default_chunk_duration` (clamped to the model's clip range).
+    pub chunk_seconds: f64,
+    /// `max_session_seconds` in video time; 0 = unlimited.
+    pub max_session_seconds: u64,
+    /// H.264 encoder: `nvenc` (production) or `openh264` (CPU tests).
+    pub encoder: String,
+    /// Answer intra-only VP8 (libwebp) to offers without H.264.
+    pub vp8_fallback: bool,
+    /// Built chunks queued behind the one playing (host RAM).
+    pub buffer_chunks: usize,
+    /// Video bitrate in bit/s; 0 = by canvas.
+    pub video_bitrate: u32,
+}
+
+impl Default for DirectorCfg {
+    fn default() -> Self {
+        Self {
+            chunk_seconds: 10.0,
+            max_session_seconds: 0,
+            encoder: "nvenc".into(),
+            vp8_fallback: true,
+            buffer_chunks: 1,
+            video_bitrate: 0,
+        }
+    }
+}
+
 /// `[reactor]`: the Reactor local runtime (design §5.7, WP-13).
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
@@ -474,6 +507,7 @@ pub struct Config {
     pub ltx: LtxCfg,
     pub limits: LimitsCfg,
     pub webrtc: WebrtcCfg,
+    pub director: DirectorCfg,
     pub reactor: ReactorCfg,
     pub log: LogCfg,
     /// Ed25519 seed for fal webhooks (normally `FV_WEBHOOK_ED25519_KEY`).
@@ -701,6 +735,13 @@ impl Config {
         match self.engine.post_encoder.as_str() {
             "nvenc" | "cpu-test-x264" => {}
             other => return Err(ConfigError::Invalid(format!("engine.post_encoder: unknown `{other}`"))),
+        }
+        match self.director.encoder.as_str() {
+            "nvenc" | "openh264" | "cpu-test-x264" => {}
+            other => return Err(ConfigError::Invalid(format!("director.encoder: unknown `{other}` (nvenc | openh264)"))),
+        }
+        if !(self.director.chunk_seconds.is_finite() && self.director.chunk_seconds > 0.0) {
+            return Err(ConfigError::Invalid("director.chunk_seconds must be positive".into()));
         }
         Ok(())
     }

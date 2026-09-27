@@ -40,8 +40,8 @@ pub use backend::{
 };
 pub use cancel::{CancelToken, OutputMode, StepControl, StepEvent, StepHook};
 pub use caps::{
-    default_profile, parse_tier_alias, tier_alias, CapabilityTable, ModelEntry, Recipe,
-    TierBinding, SOL_H3_4STEP_DENSE_PROFILE, SOL_H3_4STEP_PROFILE,
+    default_profile, ltx_fps_caps, parse_tier_alias, tier_alias, CapabilityTable, ModelEntry, Recipe,
+    TierBinding, LTX_FPS, SOL_H3_4STEP_DENSE_PROFILE, SOL_H3_4STEP_PROFILE,
 };
 pub use fastvideo_protocol::Tier;
 pub use clock::{Clock, ManualClock, SystemClock};
