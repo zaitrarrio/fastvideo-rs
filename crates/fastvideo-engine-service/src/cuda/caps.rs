@@ -11,10 +11,10 @@
 //!
 //! | Alias | Model id | Recipe | Profile | Why this tier |
 //! |---|---|---|---|---|
-//! | `h3-max` | `fasth3-8step-dense` | FastH3 8-step DMD (`8step`), dense attention, official VAE, bf16 linears | none | Full published step count, no sparse/lossy attention, no FP8/MXFP8 linears, full VAE |
+//! | `h3-max` | `sol-h3` | Sol-H3 4-step (`sol-h3`), Sol engine route tau 1.0/1.25/1.5, official VAE | `h3/sol_h3_4step_engine_ladder` (§0.5) | Owner decision: the tau-ladder route (quality gate PASS, 1.53x denoise vs dense) |
 //! | `h3-turbo` | `fasth3-4step-vsa` | FastH3 Preview 4-step (`4step-vsa`), VSA-H3, MXFP8 linears, official VAE, 768p | `h3/fasth3_4step_vsa` | Fastest H3 recipe that passes the gate |
 //! | `h3-draft` | `fasth3-4step-vsa-480p-taeh3` | the turbo recipe at 480p with the TAEH3 decoder | `h3/fasth3_4step_vsa` | 8.1 s on RTX PRO 6000; fails the gate (draft) |
-//! | — | `sol-h3` | Sol-H3 4-step (`sol-h3`), Sol engine route tau 1.0/1.25/1.5 | `h3/sol_h3_4step_engine_ladder` (§0.5) | untiered; the ladder is selected whenever Sol-H3 4-step is served |
+//! | — | `fasth3-8step-dense` | FastH3 8-step DMD (`8step`), dense attention, official VAE | none | untiered (explicit id or `recipe = "8step"`) |
 //! | `ltx-pro` | `ltx25-distill-dense` | LTX-2.5 22B distilled two-stage (8 + 3), dense stage 2, conv VAE | `ltx2/ltx25_distill_dense` | Only LTX-2.5 generation path; dense (non-lossy) stage 2, full VAE |
 //! | `ltx-turbo` | `ltx25-distill-sol` | LTX-2.5 distilled two-stage, Sol stage 2 | `ltx2/ltx25_distill_sol` | The reference single-GPU route; passes the gate |
 //! | `ltx-draft` | `ltx25-distill-sol-nvfp4-taehv` | + NVFP4 video FFN + TAEHV (`taeltx2_3_wide`) decode | `ltx2/ltx25_distill_sol_nvfp4` | Faster, fails sharpness at 4K (draft) |
@@ -302,6 +302,36 @@ impl CudaModel {
         self.recipe.family()
     }
 
+    /// The model's weight root (checked before a load).
+    pub fn weights(&self) -> &Path {
+        match &self.recipe {
+            CudaRecipe::H3(r) => &r.weights,
+            CudaRecipe::Ltx2(r) => &r.weights,
+            CudaRecipe::Wan(r) => &r.weights,
+            CudaRecipe::SfWan(r) => &r.wan.weights,
+        }
+    }
+
+    /// On-disk bytes of the DiT, the dominant resident weights: the
+    /// `*.safetensors` under `<weights>/transformer` (LTX: the `dit` file
+    /// when it is one). `None` when there is nothing to measure. A bf16
+    /// checkpoint over-estimates an MXFP8/FP8 residency, which is the safe
+    /// side for the co-residency check.
+    pub fn dit_bytes(&self) -> Option<u64> {
+        let dir = match &self.recipe {
+            CudaRecipe::Ltx2(r) if r.dit.is_file() => return r.dit.metadata().ok().map(|m| m.len()),
+            CudaRecipe::Ltx2(r) => r.dit.join("transformer"),
+            _ => self.weights().join("transformer"),
+        };
+        let total: u64 = std::fs::read_dir(&dir)
+            .ok()?
+            .filter_map(Result::ok)
+            .filter(|e| e.path().extension().is_some_and(|x| x == "safetensors"))
+            .filter_map(|e| e.metadata().ok().map(|m| m.len()))
+            .sum();
+        (total > 0).then_some(total)
+    }
+
     /// `ModelCaps`, derived from the model configs.
     pub fn caps(&self) -> ModelCaps {
         let mut c = match &self.recipe {
@@ -331,15 +361,15 @@ impl CudaModel {
                 },
                 if r.taeh3.is_some() { "taeh3" } else { "full" }.to_owned(),
                 match self.tier {
-                    Some(Tier::Max) => "H3 highest quality: FastH3 8-step DMD, dense attention (no \
-                                        compression gate), bf16 linears, official VAE"
+                    _ if self.recipe_name.starts_with("fasth3-8step") => "FastH3 8-step DMD, dense \
+                                        attention (no compression gate), official VAE"
                         .to_owned(),
                     Some(Tier::Draft) => format!(
                         "H3 draft: FastH3 4-step VSA at {}p with the TAEH3 decoder (fails the quality gate)",
                         r.short_edge
                     ),
                     _ if self.recipe_name.starts_with("sol-h3") => {
-                        "Sol-H3 4-step, Sol engine route tau 1.0/1.25/1.5 on forwards 1-3 \
+                        "H3 highest quality: Sol-H3 4-step, Sol engine route tau 1.0/1.25/1.5 on forwards 1-3 \
                          (1.53x denoise vs dense, quality gate PASS)"
                             .to_owned()
                     }
@@ -628,7 +658,7 @@ fn fastwan(layout: &WeightLayout, decoder: WanDecoder) -> WanRecipe {
 /// [`ProcessPlan::for_models`]).
 pub fn catalog(layout: &WeightLayout) -> Vec<CudaModel> {
     let tae = |f: &str| layout.tae_dir.join(f);
-    let h3_max = H3Recipe {
+    let h3_8step = H3Recipe {
         dense: true,
         ..h3(layout, "h3-8step", "8step", None, 8)
     };
@@ -685,10 +715,10 @@ pub fn catalog(layout: &WeightLayout) -> Vec<CudaModel> {
     };
     vec![
         CudaModel::new(
-            "fasth3-8step-dense",
+            "sol-h3",
             Some(Tier::Max),
-            "fasth3-8step-dense",
-            CudaRecipe::H3(h3_max),
+            "sol-h3-4step-engine-ladder",
+            CudaRecipe::H3(sol_h3),
         ),
         CudaModel::new(
             "fasth3-4step-vsa",
@@ -703,7 +733,12 @@ pub fn catalog(layout: &WeightLayout) -> Vec<CudaModel> {
             "fasth3-4step-vsa-480p-taeh3",
             CudaRecipe::H3(h3_draft),
         ),
-        CudaModel::new("sol-h3", None, "sol-h3", CudaRecipe::H3(sol_h3)),
+        CudaModel::new(
+            "fasth3-8step-dense",
+            None,
+            "fasth3-8step-dense",
+            CudaRecipe::H3(h3_8step),
+        ),
         CudaModel::new(
             "ltx25-distill-dense",
             Some(Tier::Max),
@@ -794,8 +829,8 @@ pub fn model_from_config(layout: &WeightLayout, e: &ModelEntryCfg) -> Result<Cud
     let name = match (family, e.recipe.as_str()) {
         (_, "") => crate::caps::tier_alias(family, Tier::Turbo).unwrap_or_default().to_owned(),
         (Family::H3, "4step-vsa" | "preview-vsa" | "fasth3-4step-vsa") => "h3-turbo".to_owned(),
-        (Family::H3, "8step" | "v2" | "fasth3-8step") => "h3-max".to_owned(),
-        (Family::H3, "sol-h3" | "sol_h3") => "sol-h3".to_owned(),
+        (Family::H3, "8step" | "v2" | "fasth3-8step") => "fasth3-8step-dense".to_owned(),
+        (Family::H3, "sol-h3" | "sol_h3") => "h3-max".to_owned(),
         (_, r) => r.to_owned(),
     };
     let mut m = find(&cat, &name).ok_or_else(|| {
@@ -971,7 +1006,7 @@ mod tests {
         let cat = catalog(&WeightLayout::default());
         let t = table(&cat);
         let want = [
-            ("h3-max", "fasth3-8step-dense"),
+            ("h3-max", "sol-h3"),
             ("h3-turbo", "fasth3-4step-vsa"),
             ("h3-draft", "fasth3-4step-vsa-480p-taeh3"),
             ("ltx-pro", "ltx25-distill-dense"),
@@ -990,7 +1025,7 @@ mod tests {
             assert!(c.resident);
         }
         assert_eq!(t.resolve("fasth3").unwrap().id.as_str(), "fasth3-4step-vsa");
-        assert!(t.get(&ModelId::new("sol-h3")).unwrap().tier.is_none());
+        assert!(t.get(&ModelId::new("fasth3-8step-dense")).unwrap().tier.is_none());
         assert_eq!(t.len(), cat.len());
     }
 
@@ -1007,7 +1042,7 @@ mod tests {
         );
         assert_eq!(r("fasth3-4step-vsa").steps, Some(4));
         assert_eq!(r("fasth3-4step-vsa").attention, "vsa");
-        // Max: no profile (no MXFP8), dense, full VAE, 8 steps.
+        // The untiered 8-step: no profile (no MXFP8), dense, full VAE, 8 steps.
         let max = r("fasth3-8step-dense");
         assert_eq!(
             (
@@ -1153,8 +1188,10 @@ mod tests {
         // techniques may differ).
         let p = ProcessPlan::for_models(&pick(&["h3-turbo", "h3-draft"])).unwrap();
         assert_eq!(p.profile.as_deref(), Some("h3/fasth3_4step_vsa"));
-        // Max has no MXFP8: it cannot share a process with turbo.
-        assert!(ProcessPlan::for_models(&pick(&["h3-max", "h3-turbo"])).is_err());
+        // Max (the Sol-H3 ladder) shares turbo's load-time settings (MXFP8,
+        // bf16 activations); the 8-step dense recipe has no MXFP8.
+        ProcessPlan::for_models(&pick(&["h3-max", "h3-turbo"])).unwrap();
+        assert!(ProcessPlan::for_models(&pick(&["fasth3-8step-dense", "h3-turbo"])).is_err());
         // NVFP4 is load-time: the LTX draft needs its own process.
         assert!(ProcessPlan::for_models(&pick(&["ltx-turbo", "ltx-draft"])).is_err());
         // FastWan's VSA flag is process-wide; the TI2V-5B recipe runs without it.
@@ -1173,7 +1210,7 @@ mod tests {
             id: "fasth3".into(),
             family: "h3".into(),
             recipe: "4step-vsa".into(),
-            weights: Some("/w/FastH3".into()),
+            weights: Some("/w/h3-base".into()),
             resident: true,
             served_names: vec!["fasth3".into()],
             extra: [("text_encoder".to_owned(), "streamed".to_owned())].into_iter().collect(),
@@ -1182,10 +1219,10 @@ mod tests {
         assert_eq!(m.id.as_str(), "fasth3");
         assert_eq!(m.tier, Some(Tier::Turbo));
         let CudaRecipe::H3(r) = &m.recipe else { panic!() };
-        assert_eq!((r.weights.as_path(), r.text_encoder.as_str()), (Path::new("/w/FastH3"), "streamed"));
+        assert_eq!((r.weights.as_path(), r.text_encoder.as_str()), (Path::new("/w/h3-base"), "streamed"));
         let t = CapabilityTable::build(vec![vec![(m.caps(), m.describe())]], &BTreeMap::new()).unwrap();
         assert_eq!(t.resolve("h3-turbo").unwrap().id.as_str(), "fasth3");
-        for (fam, rec, want) in [("ltx2", "ltx-turbo", "ltx25-distill-sol"), ("wan", "", "fastwan21-1.3b"), ("h3", "8step", "fasth3-8step-dense")] {
+        for (fam, rec, want) in [("ltx2", "ltx-turbo", "ltx25-distill-sol"), ("wan", "", "fastwan21-1.3b"), ("h3", "8step", "fasth3-8step-dense"), ("h3", "sol-h3", "sol-h3"), ("h3", "h3-max", "sol-h3")] {
             let e = ModelEntryCfg { family: fam.into(), recipe: rec.into(), resident: true, ..Default::default() };
             assert_eq!(model_from_config(&l, &e).unwrap().id.as_str(), want);
         }
@@ -1204,6 +1241,12 @@ mod tests {
         assert_eq!(r.weights, Path::new("/w/h3-base"));
         assert_eq!(r.taeh3.as_deref(), Some(Path::new("/t/taeh3.safetensors")));
         let m = find(&cat, "h3-max").unwrap();
+        let CudaRecipe::H3(r) = &m.recipe else {
+            panic!()
+        };
+        assert_eq!((r.weights.as_path(), r.recipe.as_str()), (Path::new("/w/h3-base"), "sol-h3"));
+        assert!(!r.dense);
+        let m = find(&cat, "fasth3-8step-dense").unwrap();
         let CudaRecipe::H3(r) = &m.recipe else {
             panic!()
         };

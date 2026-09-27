@@ -128,14 +128,15 @@ pub fn build_engine(c: &Config) -> anyhow::Result<EngineService> {
     EngineService::start(cfg, backends).map_err(|e| anyhow!("starting the engine: {e}"))
 }
 
-/// The WP-11 `CudaBackend` (GPU 0) for `[[models]]`: each entry resolves
-/// against the CUDA catalog (`recipe` = tier alias, catalog id or H3 recipe
-/// name); weights default under `FV_WEIGHTS` (`/workspace/weights`).
-#[cfg(feature = "cuda")]
-fn cuda_backend(c: &Config) -> anyhow::Result<Box<dyn EngineBackend>> {
-    use fastvideo_engine_service::cuda::{
-        model_from_config, CudaBackend, CudaBackendConfig, ModelEntryCfg, Mp4Encoder, WeightLayout,
-    };
+/// The CUDA catalog models for `[[models]]`: each entry resolves against
+/// the catalog (`recipe` = tier alias, catalog id or H3 recipe name, empty =
+/// the family's turbo tier); weights default under `FV_WEIGHTS`
+/// (`/workspace/weights`) and the tiny decoders under `FV_TAE_DIR`
+/// (`$FV_WEIGHTS/auxiliary/tae`). Also checks that the set can share one
+/// process (process-wide technique settings). Built without `cuda` so the
+/// shipped configs are tested on CPU.
+pub fn cuda_models(c: &Config) -> anyhow::Result<Vec<fastvideo_engine_service::cuda::CudaModel>> {
+    use fastvideo_engine_service::cuda::{model_from_config, ModelEntryCfg, ProcessPlan, WeightLayout};
     let root = std::env::var("FV_WEIGHTS").unwrap_or_else(|_| "/workspace/weights".into());
     let mut layout = WeightLayout::new(&root);
     if let Ok(t) = std::env::var("FV_TAE_DIR") {
@@ -162,16 +163,29 @@ fn cuda_backend(c: &Config) -> anyhow::Result<Box<dyn EngineBackend>> {
                     extra,
                 },
             )
-            .map_err(|e| anyhow!(e))
+            .map_err(|e| anyhow!("[[models]]: {e}"))
         })
         .collect::<anyhow::Result<Vec<_>>>()?;
-    let mut cfg = CudaBackendConfig::new(0, models);
+    if !models.iter().any(|m| m.resident) {
+        return Err(anyhow!("[[models]]: no model is `resident = true` (nothing would load before readiness)"));
+    }
+    ProcessPlan::for_models(&models).map_err(|e| anyhow!("[[models]]: {e}"))?;
+    Ok(models)
+}
+
+/// The WP-11 `CudaBackend` (GPU 0) for `[[models]]` ([`cuda_models`]).
+#[cfg(feature = "cuda")]
+fn cuda_backend(c: &Config) -> anyhow::Result<Box<dyn EngineBackend>> {
+    use fastvideo_engine_service::cuda::{CudaBackend, CudaBackendConfig, Mp4Encoder};
+    let mut cfg = CudaBackendConfig::new(0, cuda_models(c)?);
     cfg.work_dir = c.server.state_dir.join("engine-work");
     cfg.text_cache = Some(c.server.state_dir.join("text-cache"));
-    cfg.encoder = if c.engine.post_encoder == "nvenc" {
-        Mp4Encoder::Nvenc
-    } else {
+    // `auto` was resolved at startup (encoders::resolve) to nvenc or the
+    // CPU test encoder.
+    cfg.encoder = if c.engine.post_encoder == "cpu-test-x264" {
         Mp4Encoder::Libx264CpuTest
+    } else {
+        Mp4Encoder::Nvenc
     };
     let b = CudaBackend::new(cfg).map_err(|e| anyhow!("cuda backend: {e}"))?;
     Ok(Box::new(b))

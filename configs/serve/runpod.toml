@@ -36,18 +36,25 @@ stale_after_s = 900
 backend = "cuda"
 post_encoder = "nvenc"
 
+# One GPU (RTX PRO 6000, 96 GB): the resident models load before /ping
+# answers 200. Each entry resolves against the CUDA catalog
+# (crates/fastvideo-engine-service/src/cuda/caps.rs): `recipe` is a tier alias
+# (h3-turbo, h3-max, ltx-turbo, wan-turbo, ...), a catalog id or an H3 recipe
+# name; `weights` replaces the catalog's weight directory. One H3 DiT is
+# ~41 GB, so h3-turbo and h3-max do not co-reside: serve them from separate
+# processes (runpod-h3-max.toml), or mark one `resident = false` with
+# `[engine] swap = true` (a switch reloads from the volume).
 [[models]]
 id = "fasth3"
 family = "h3"
-weights = "${FV_WEIGHTS}/FastH3"
-recipe = "4step-vsa"
+recipe = "h3-turbo"
+weights = "${FV_WEIGHTS}/h3-base"
 resident = true
 served_names = ["fasth3"]
 continuity = "anchor-last-frame"
 
 [aliases]
 "MiniMax-H3" = "fasth3"
-"MiniMax-H3-Max" = "fasth3"
 "MiniMax-H3-Turbo" = "fasth3"
 
 [protocols]

@@ -267,8 +267,33 @@ impl EngineBackend for CudaBackend {
             return Ok(());
         }
         let m = self.model(model)?.clone();
+        if !m.weights().is_dir() {
+            return Err(ApiError::engine_failed(format!(
+                "model `{model}`: weight directory {} does not exist (set `weights` in [[models]] or \
+                 FV_WEIGHTS; is the weight volume mounted?)",
+                m.weights().display()
+            )));
+        }
         obs(LoadEvent::Stage("device"));
         self.device()?;
+        // Co-residency check: the DiT alone must fit in what is free now
+        // (the models already resident hold the rest).
+        if let (Some(need), Some((free, total))) = (m.dit_bytes(), fastvideo_cudarc::wan::device::free_memory()) {
+            if need > free {
+                let gb = |b: u64| b as f64 / 1e9;
+                return Err(ApiError::engine_failed(format!(
+                    "model `{model}`: its DiT needs ~{:.1} GB but only {:.1} of {:.1} GB are free on cuda:{} \
+                     with {:?} resident; serve it from a separate process/GPU, or set `resident = false` \
+                     and `[engine] swap = true`",
+                    gb(need),
+                    gb(free),
+                    gb(total),
+                    self.cfg.device,
+                    self.loaded.keys().map(ModelId::as_str).collect::<Vec<_>>()
+                )));
+            }
+            tracing::info!(model = %model, dit_gb = need as f64 / 1e9, free_gb = free as f64 / 1e9, "loading");
+        }
         obs(LoadEvent::Progress { done: 0, total: 1 });
         let t0 = std::time::Instant::now();
         // One conditioning-cache directory per family (each keys its own).

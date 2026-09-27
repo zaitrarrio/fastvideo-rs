@@ -1,0 +1,47 @@
+# fv-serve on Runpod: h3-max (Sol-H3 tau ladder). Secrets as in runpod.toml.
+
+[server]
+bind = "0.0.0.0:8000"
+state_dir = "/workspace/fv-state"
+shutdown_grace_s = 25
+
+[auth]
+mode = "keys"
+
+[artifacts]
+backend = "auto"
+url_ttl_s = 86400
+
+[jobs]
+backend = "auto"
+progress_interval_ms = 1000
+stale_after_s = 900
+
+[engine]
+backend = "cuda"
+post_encoder = "nvenc"
+
+# h3-max: Sol-H3 4-step on the tau-ladder engine route (one GPU).
+[[models]]
+id = "sol-h3"
+family = "h3"
+recipe = "h3-max"
+weights = "${FV_WEIGHTS}/h3-base"
+resident = true
+
+[aliases]
+"MiniMax-H3-Max" = "sol-h3"
+
+[protocols]
+openai_videos = true
+fastwan = false
+minimax = true
+fal = true
+fal_director = true
+ltx = false
+reactor = true
+native = true
+
+[limits]
+queue_max = 32
+body_max_mb = 64
