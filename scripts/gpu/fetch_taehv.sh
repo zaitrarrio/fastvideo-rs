@@ -4,8 +4,12 @@
 # ~/.cache/fastvideo/taehv, where the Wan pipeline looks for them;
 # FASTVIDEO_TAE_DIR=<dir> points it anywhere else). Run by remote.sh
 # fetch-taehv. Pinned to the madebyollin/taehv commit fetch-tae.sh pins.
+# The weight volume's copy comes first: $FV_AUX_DIR/tae (default
+# <weights>/auxiliary/tae) is copied when its SHA-256 matches; the pinned URL
+# is the fallback.
 set -euo pipefail
 dest="${1:-${XDG_CACHE_HOME:-$HOME/.cache}/fastvideo/taehv}"
+vol="${FV_AUX_DIR:-${FV_WEIGHTS:-${FV_WORK:-/workspace}/weights}/auxiliary}/tae"
 mkdir -p "$dest"
 commit=e589fddc076e77f5ba8cd6baabe4ba3260b261cd
 
@@ -15,6 +19,13 @@ fetch() {
   if [[ -f "$dest/$name.safetensors" ]] && [[ "$(sha256sum "$dest/$name.safetensors" | awk '{print $1}')" == "$sha" ]]; then
     return 0
   fi
+  if [[ -f "$vol/$name.safetensors" ]] && cp -f "$vol/$name.safetensors" "$dest/$name.safetensors.part" \
+    && [[ "$(sha256sum "$dest/$name.safetensors.part" | awk '{print $1}')" == "$sha" ]]; then
+    mv "$dest/$name.safetensors.part" "$dest/$name.safetensors"
+    echo "$name: volume copy $vol/$name.safetensors"
+    return 0
+  fi
+  rm -f "$dest/$name.safetensors.part"
   url="https://raw.githubusercontent.com/madebyollin/taehv/$commit/safetensors/$name.safetensors"
   curl -fsSL --retry 5 --retry-delay 3 -o "$dest/$name.safetensors.part" "$url"
   got="$(sha256sum "$dest/$name.safetensors.part" | awk '{print $1}')"

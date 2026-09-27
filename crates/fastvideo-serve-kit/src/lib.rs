@@ -1,15 +1,81 @@
 //! Shared axum glue for every fv-serve adapter (design §2.1, WP-05).
 //!
-//! Outbound HTTP (media fetch, callbacks, webhooks) is behind `fetch`.
+//! - [`ctx`]: [`ServeCtx`], the state every route shares, and the
+//!   [`EngineGate`] seam to the engine service.
+//! - [`auth`]: `none | keys | trust-gateway` and per-API schemes.
+//! - [`store`]: [`MemJobStore`], an in-memory `JobStore` with optional
+//!   durable JSON manifests, restart recovery and expiry sweep.
+//! - [`artifacts`]: [`ArtifactStore`]s (local disk with HMAC-signed
+//!   `/files/...` URLs, S3-compatible with SigV4 presigned URLs).
+//! - [`uploads`]: [`UploadStore`] and `PUT /uploads/{token}`.
+//! - [`ingest`]: media staging (HTTPS fetch, data URIs, upload ids) with
+//!   per-API limits, an SSRF guard and probing hooks.
+//! - [`callback`]: MiniMax callbacks (challenge echo) and fal webhooks
+//!   (Ed25519) with retry schedules.
+//! - [`sse`]: server-sent events from an `SseSpec`.
+//! - [`handlers`]: `HttpReply` -> axum response, and the generic
+//!   `submit`/`status`/`result` handlers.
+//! - [`events`]: applies engine progress to jobs and fires callbacks.
 //!
-//! Owned by WP-05 (docs/serve/design.md §8). Scaffolded by WP-00.
+//! Outbound HTTP (media fetch, callbacks, webhooks, S3 upload) is behind the
+//! `fetch` feature.
+//!
+//! Owned by WP-05 (docs/serve/design.md §8).
 
-pub mod ctx;
-pub mod auth;
-pub mod store;
 pub mod artifacts;
-pub mod uploads;
-pub mod ingest;
+pub mod auth;
 pub mod callback;
-pub mod sse;
+pub mod ctx;
+pub mod events;
 pub mod handlers;
+pub mod ingest;
+pub mod net;
+pub mod sse;
+pub mod store;
+pub mod uploads;
+
+pub use artifacts::{
+    files_router, ArtifactMeta, ArtifactStore, LocalArtifactStore, S3ArtifactStore, S3Config,
+    UrlKey,
+};
+pub use auth::{Auth, AuthMode, AuthPolicy, KeyRing, Scheme};
+pub use callback::{CallbackRender, CallbackSender, Delivery, RetrySchedule, WebhookSigner};
+pub use ctx::{EngineGate, SafetyFilter, ServeConfig, ServeCtx};
+pub use events::{apply_event, FinishedOutput, JobEvent};
+pub use handlers::{into_response, SubmitOpts};
+pub use ingest::{IngestPolicy, Ingestor, KindLimits, Prober};
+pub use store::MemJobStore;
+pub use uploads::{UploadStore, UploadTicket};
+
+/// Lowercase hex helpers (no extra dependency).
+pub(crate) mod hex {
+    pub fn encode(b: &[u8]) -> String {
+        const D: &[u8; 16] = b"0123456789abcdef";
+        let mut s = String::with_capacity(b.len() * 2);
+        for x in b {
+            s.push(D[(x >> 4) as usize] as char);
+            s.push(D[(x & 15) as usize] as char);
+        }
+        s
+    }
+    pub fn decode(s: &str) -> Option<Vec<u8>> {
+        if s.len() % 2 != 0 {
+            return None;
+        }
+        let nib = |c: u8| match c {
+            b'0'..=b'9' => Some(c - b'0'),
+            b'a'..=b'f' => Some(c - b'a' + 10),
+            b'A'..=b'F' => Some(c - b'A' + 10),
+            _ => None,
+        };
+        s.as_bytes()
+            .chunks(2)
+            .map(|p| Some(nib(p[0])? << 4 | nib(p[1])?))
+            .collect()
+    }
+}
+
+/// A fresh unguessable token: 32 lowercase hex characters (122 random bits).
+pub fn random_token() -> String {
+    uuid::Uuid::new_v4().simple().to_string()
+}
