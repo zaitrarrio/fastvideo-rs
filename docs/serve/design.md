@@ -964,6 +964,13 @@ Audio wire format:
   - If the E6 parity test shows a seam, the fallback is strobe's latent
     overlap with the `4·n` keep rule (streaming-refs §1.5).
   - The frames go to `ClipSink`.
+  - **Status (E6 landed, measured on H100):** no seam, so no overlap: the
+    per-block decode is bitwise the whole-clip decode at chunk 3 (81.4 dB
+    against the default chunk 4). Default RoPE is `RebasedSink` (FastVideo's
+    relativistic offsets at the absolute cost), sink 3 frames: 19.2 frames/s
+    steady, TTFF 0.30 s warm, flat device memory over 10 minutes. Details
+    and the long-run drift numbers: `docs/ports/wan.md` "SF-Wan open-ended
+    streaming".
 - **Prompt changes** apply at the next block boundary. The text encoder stays
   resident while a causal session is open (memory is recorded in caps).
   `reset` clears the KV and restarts at block 0.
