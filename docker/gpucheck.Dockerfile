@@ -147,3 +147,43 @@ LABEL org.opencontainers.image.source="https://github.com/zaitrarrio/fastvideo-r
       org.opencontainers.image.description="fastvideo-rs cudarc GPU validation runtime (fv-gpucheck + CUDA runtime + hf-fm)" \
       org.opencontainers.image.licenses="Apache-2.0"
 WORKDIR /opt/fastvideo-rs
+
+# ---- serve: fv-serve on the runtime image (docs/serve/design.md §6.1, WP-16) --
+# serve-build compiles fv-serve with the CUDA backend and outbound HTTP (the
+# Runpod queue worker, D1, R2) on top of the `build` stage, sharing its
+# cargo caches. FV_SERVE_FEATURES never includes `encoders` (OpenH264 is a
+# CPU-only test backend and is not shipped, design §0 decision 1).
+FROM build AS serve-build
+ARG FV_SERVE_FEATURES=cuda,http-client
+# The Reactor adapter (a default feature) encodes Opus: audiopus_sys builds
+# libopus statically with CMake.
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends cmake \
+ && rm -rf /var/lib/apt/lists/*
+RUN --mount=type=cache,target=/usr/local/cargo/registry \
+    --mount=type=cache,target=/target \
+    cargo build --release -p fastvideo-serve --features "$FV_SERVE_FEATURES" \
+ && mkdir -p /out \
+ && cp /target/release/fv-serve /out/fv-serve \
+ && echo "$FV_SERVE_FEATURES" > /out/fv-serve.features
+
+# serve: what Runpod pods / serverless workers and Vast instances run
+# (ghcr.io/zaitrarrio/fastvideo-rs-serve). NVENC needs the driver's `video`
+# capability; Ubuntu 22.04's ffmpeg (nv-codec-headers 11.1, driver >= 470,
+# so any driver that runs CUDA 13) is built with h264_nvenc, checked here.
+# Ports: 8000/http. The ICE ports of design §6.1 (70000/tcp, 70010/udp) are
+# symmetric platform requests above 65535, so they are published by the
+# deploy scripts, not EXPOSEd.
+FROM runtime AS serve
+ENV NVIDIA_DRIVER_CAPABILITIES=compute,utility,video \
+    FV_CONFIG=/etc/fv/runpod.toml \
+    FV_STATE_DIR=/fvstate \
+    RUST_LOG=info
+RUN ffmpeg -hide_banner -encoders 2>/dev/null | grep -q ' h264_nvenc ' \
+ && mkdir -p /fvstate /var/log
+COPY configs/serve /etc/fv
+COPY deploy/vast/worker.py /opt/fastvideo-rs/deploy/vast/worker.py
+COPY --from=serve-build /out/fv-serve /out/fv-serve.features /opt/fastvideo-rs/bin/
+LABEL org.opencontainers.image.description="fv-serve: FastVideo, MiniMax, fal and LTX APIs over the fastvideo-rs CUDA engines"
+EXPOSE 8000
+ENTRYPOINT ["/opt/fastvideo-rs/bin/fv-serve"]

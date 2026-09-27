@@ -2178,11 +2178,17 @@ impl Ltx2Pipeline {
         // FASTVIDEO_PREFETCH / FASTVIDEO_STAGED_UPLOAD ask for it: with it on,
         // the frames were not byte-identical to the plain load's.
         let prefetch = fastvideo_loader::prefetch::default_off();
-        crate::wan::stage_upload::default_off();
+        #[cfg(feature = "cuda")]
+        let staged = {
+            crate::wan::stage_upload::default_off();
+            crate::wan::stage_upload::enabled()
+        };
+        #[cfg(not(feature = "cuda"))]
+        let staged = false;
         crate::wan::log::info(format_args!(
             "ltx2 load: read-ahead {}, staged upload {} (E12 defaults off for LTX)",
             if prefetch { "on" } else { "off" },
-            if crate::wan::stage_upload::enabled() { "on" } else { "off" },
+            if staged { "on" } else { "off" },
         ));
         // FASTVIDEO_NVFP4 here is the video FFN only (sol-engine scope):
         // Gemma, the connectors and the other DiT linears stay dense.

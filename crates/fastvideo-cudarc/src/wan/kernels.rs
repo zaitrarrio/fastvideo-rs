@@ -211,6 +211,8 @@ kernel_fns!(
     wan_res_gate,
     wan_ln,
     wan_qk_norm_rope16,
+    // ---- adapter fuse on the device (appended) ----
+    lora_fuse_bf16,
 );
 
 /// NVRTC-compile the kernel module for `sm_major.sm_minor` without touching a

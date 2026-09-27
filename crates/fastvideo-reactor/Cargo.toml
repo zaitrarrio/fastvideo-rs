@@ -8,30 +8,51 @@ description = "fv-serve adapter: Reactor local runtime (reactor_wire v1/v0 codec
 
 [dependencies]
 fastvideo-protocol.workspace = true
-fastvideo-serve-kit.workspace = true
+fastvideo-engine-service.workspace = true
+async-trait.workspace = true
 axum.workspace = true
 bytes.workspace = true
+futures.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
 time.workspace = true
+tower-http.workspace = true
 tracing.workspace = true
 uuid.workspace = true
 
 fastvideo-media.workspace = true
-fastvideo-webrtc.workspace = true
+# The Reactor runtime answers offers itself, so the str0m host is always on.
+fastvideo-webrtc = { workspace = true, features = ["str0m"] }
 prost.workspace = true
-tokio = { workspace = true, features = ["sync", "time"] }
+prost-types = "0.14"
+tokio = { workspace = true, features = ["sync", "time", "rt", "macros"] }
+
+# VP8 (intra-only, via libwebp built from its vendored C source): the Python
+# reactor_sdk's libwebrtc offers VP8/VP9/AV1 and no H.264.
+webp = { version = "0.3", default-features = false, optional = true }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["sync", "time", "rt", "rt-multi-thread", "macros", "net"] }
+tower = { workspace = true, features = ["util"] }
 
 [build-dependencies]
-# Codegen from the vendored protos (WP-13 adds build.rs); off by default.
+# Codegen from the vendored protos; off by default (the bindings are committed).
 prost-build = { workspace = true, optional = true }
 protox = { workspace = true, optional = true }
 
 [features]
-default = []
-# Regenerate reactor_wire.v1 from proto/ at build time (WP-13).
+default = ["vp8", "opus"]
+# Regenerate reactor_wire.v1 from proto/ at build time and check the
+# committed bindings against it.
 proto-codegen = ["dep:prost-build", "dep:protox"]
+# VP8 video for clients without H.264 (the Python/C++ SDKs).
+vp8 = ["dep:webp"]
+# Opus (libopus) for the audio track; without it audio tracks carry nothing.
+opus = ["fastvideo-media/opus"]
+# In-process H.264 (OpenH264; the CPU test backend). Production H.264 is
+# NVENC through ffmpeg; without either only VP8 clients get video.
+openh264 = ["fastvideo-media/openh264"]
 
 [lints]
 workspace = true

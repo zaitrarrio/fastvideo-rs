@@ -624,6 +624,51 @@ impl Linear {
         })
     }
 
+    /// Whether [`Self::from_tensors`] of an f32 weight ends as a plain device
+    /// bf16 weight (bf16 GEMM math, no process-wide FP8): the linears a
+    /// caller may instead build with [`Self::from_device_bf16_bias`] from a
+    /// weight it rounded to bf16 on the device the same way.
+    #[cfg(feature = "cuda")]
+    pub(crate) fn device_bf16_route() -> bool {
+        !fp8_linears() && bf16_linears()
+    }
+
+    /// What [`Self::from_tensors`] builds on the [`Self::device_bf16_route`]
+    /// when its f32 weight rounds to `weight` (`[out_dim, in_dim]` bf16).
+    #[cfg(feature = "cuda")]
+    pub(crate) fn from_device_bf16_bias(
+        weight: cudarc::driver::CudaSlice<half::bf16>,
+        mut bias: Option<CudaTensor>,
+        in_dim: usize,
+        out_dim: usize,
+    ) -> Result<Self> {
+        if weight.len() != in_dim * out_dim || bias.as_ref().is_some_and(|b| b.numel() != out_dim)
+        {
+            return Err(msg(format!(
+                "bf16 weight of {} elements for a {out_dim}x{in_dim} linear, bias {:?}",
+                weight.len(),
+                bias.as_ref().map(|b| &b.shape)
+            )));
+        }
+        if let Some(b) = &mut bias {
+            b.pin_device()?;
+        }
+        super::dump::digest_bf16_device("lin:host", &weight)?;
+        Ok(Self {
+            weight: CudaTensor::from_vec(Vec::new(), vec![0, in_dim])?,
+            bias,
+            in_dim,
+            out_dim,
+            weight_bf16: Some(std::sync::Arc::new(weight)),
+            quant: None,
+            f32_island: false,
+            weight_fp8_rows: None,
+            weight_affine: None,
+            nvfp4_act: None,
+            lora: None,
+        })
+    }
+
     /// Load `prefix.weight` as weight-only FP8: E4M3 codes, one scale per output
     /// row, one byte per parameter on the device. Quantized on the device, so a
     /// 130M-element weight costs a transient upload rather than seconds of host

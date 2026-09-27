@@ -23,13 +23,25 @@ uuid.workspace = true
 
 fastvideo-media.workspace = true
 fastvideo-webrtc.workspace = true
-tokio = { workspace = true, features = ["sync", "time", "fs"] }
+tokio = { workspace = true, features = ["sync", "time", "fs", "rt", "macros"] }
+async-trait.workspace = true
+futures.workspace = true
+image.workspace = true
+# Intra-only VP8 via libwebp (built from its vendored C source) for offers
+# without H.264.
+webp = { version = "0.3", default-features = false, optional = true }
+
+[features]
+default = []
+# The WMA director runtime (design §5.6): str0m peers and Opus. Encoders:
+# NVENC through ffmpeg (always built), OpenH264 with `openh264`, and
+# intra-only VP8 (libwebp) for offers without H.264.
+director = ["fastvideo-webrtc/str0m", "fastvideo-media/opus", "dep:webp"]
+openh264 = ["fastvideo-media/openh264"]
 
 [dev-dependencies]
 fastvideo-engine-service.workspace = true
-async-trait.workspace = true
 ed25519-dalek.workspace = true
-image.workspace = true
 sha2.workspace = true
 tokio = { workspace = true, features = ["macros", "rt-multi-thread", "net", "process", "io-util"] }
 

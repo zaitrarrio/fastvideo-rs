@@ -7,21 +7,27 @@ rust-version.workspace = true
 description = "fv-serve deploy: Runpod queue worker, RUNPOD_*/VAST_* environment discovery, Vast forwarder assets."
 
 [dependencies]
-fastvideo-protocol.workspace = true
-fastvideo-serve-kit.workspace = true
+async-trait.workspace = true
 axum.workspace = true
+base64.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
-tokio = { workspace = true, features = ["sync", "time"] }
+tokio = { workspace = true, features = ["sync", "time", "rt", "macros", "net"] }
 tower = { workspace = true, features = ["util"] }
 tracing.workspace = true
+url.workspace = true
 
 reqwest = { workspace = true, optional = true }
 
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "test-util"] }
+
 [features]
 default = []
-# Runpod queue worker HTTP client (job-take, job-done, stream, ping, job-stop).
+# Runpod queue worker HTTP client (job-take, job-done, stream, ping, job-stop)
+# over reqwest. Without it the worker runs on any `Transport` (the in-process
+# simulator transport is always built).
 runpod = ["dep:reqwest"]
 
 [lints]
