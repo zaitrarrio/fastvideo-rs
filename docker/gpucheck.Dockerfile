@@ -170,7 +170,10 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
 # serve: what Runpod pods / serverless workers and Vast instances run
 # (ghcr.io/zaitrarrio/fastvideo-rs-serve). NVENC needs the driver's `video`
 # capability; Ubuntu 22.04's ffmpeg (nv-codec-headers 11.1, driver >= 470,
-# so any driver that runs CUDA 13) is built with h264_nvenc, checked here.
+# so any driver that runs CUDA 13) is built with h264_nvenc, checked here,
+# and with libvpx, the inter-frame VP8 encoder for peers without H.264 (the
+# Reactor Python SDK, open-source Chromium; fastvideo-media::vp8), also
+# checked with a real encode.
 # Ports: 8000/http. The ICE ports of design §6.1 (70000/tcp, 70010/udp) are
 # symmetric platform requests above 65535, so they are published by the
 # deploy scripts, not EXPOSEd.
@@ -180,6 +183,7 @@ ENV NVIDIA_DRIVER_CAPABILITIES=compute,utility,video \
     FV_STATE_DIR=/fvstate \
     RUST_LOG=info
 RUN ffmpeg -hide_banner -encoders 2>/dev/null | grep -q ' h264_nvenc ' \
+ && ffmpeg -hide_banner -loglevel error -f lavfi -i color=c=black:s=64x48:r=24:d=0.1 -c:v libvpx -f ivf -y /dev/null \
  && mkdir -p /fvstate /var/log
 COPY configs/serve /etc/fv
 COPY deploy/vast/worker.py /opt/fastvideo-rs/deploy/vast/worker.py

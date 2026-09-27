@@ -1,10 +1,11 @@
-//! Intra-only VP8 for offers without H.264 (open-source Chromium builds,
-//! which is what headless test browsers are): every frame is a keyframe,
-//! encoded in process by libwebp (a lossy WebP image *is* one VP8 key frame
-//! in a RIFF container). Heavier on bitrate than an inter-frame encoder, but
-//! it needs no system library and every WebRTC stack decodes VP8. H.264
-//! stays the codec of every offer that has it (design §5.9); the Reactor
-//! runtime uses the same technique for its VP8-only Python SDK peers.
+//! Intra-only VP8, the fallback for offers without H.264 (open-source
+//! Chromium builds, which is what headless test browsers are) when ffmpeg
+//! has no `libvpx` (otherwise `fastvideo_media::vp8` encodes inter-frame
+//! VP8): every frame is a keyframe, encoded in process by libwebp (a lossy
+//! WebP image *is* one VP8 key frame in a RIFF container). Heavier on
+//! bitrate than an inter-frame encoder, but it needs no external tool and
+//! every WebRTC stack decodes VP8. H.264 stays the codec of every offer that
+//! has it (design §5.9); the Reactor runtime has the same fallback.
 
 use bytes::Bytes;
 use fastvideo_protocol::RgbFrame;

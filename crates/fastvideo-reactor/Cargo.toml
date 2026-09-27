@@ -28,8 +28,9 @@ prost.workspace = true
 prost-types = "0.14"
 tokio = { workspace = true, features = ["sync", "time", "rt", "macros"] }
 
-# VP8 (intra-only, via libwebp built from its vendored C source): the Python
-# reactor_sdk's libwebrtc offers VP8/VP9/AV1 and no H.264.
+# VP8 fallback (intra-only, via libwebp built from its vendored C source) when
+# ffmpeg has no libvpx; with libvpx VP8 is inter-frame (fastvideo-media::vp8).
+# The Python reactor_sdk's libwebrtc offers VP8/VP9/AV1 and no H.264.
 webp = { version = "0.3", default-features = false, optional = true }
 
 [dev-dependencies]

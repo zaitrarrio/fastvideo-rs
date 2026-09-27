@@ -14,7 +14,7 @@
 //! | [`control`] | the pure control state machine: configure once, prompt versions, `replan`, the planned deck, scripts |
 //! | [`info`] | `session_info` / `DirectorInfo` with **our** constants |
 //! | [`engine`] | the thin adapter trait over the engine's clip sessions (fv-serve implements it over `EngineService`) |
-//! | [`vp8`] | intra-only VP8 (libwebp) for offers without H.264 (open-source Chromium) |
+//! | [`vp8`] | intra-only VP8 (libwebp), the fallback when ffmpeg has no `libvpx` (else `fastvideo_media::vp8`), for offers without H.264 (open-source Chromium) |
 //! | `service`, `session`, `media`, `routes` (feature `director`) | the WebRTC runtime: admission, heartbeats, the session task, lockstep playout and encoding, the HTTP routes |
 //!
 //! Chunks run as a clip session with continuity `AnchorLastFrame` (chunk

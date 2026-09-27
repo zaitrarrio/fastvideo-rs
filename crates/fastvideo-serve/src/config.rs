@@ -429,7 +429,8 @@ pub struct DirectorCfg {
     /// H.264 encoder: `auto` (NVENC when the startup probe encodes, else
     /// OpenH264), `nvenc` or `openh264`.
     pub encoder: String,
-    /// Answer intra-only VP8 (libwebp) to offers without H.264.
+    /// Answer VP8 to offers without H.264 (ffmpeg `libvpx`, else
+    /// intra-only libwebp).
     pub vp8_fallback: bool,
     /// Built chunks queued behind the one playing (host RAM).
     pub buffer_chunks: usize,
@@ -470,7 +471,8 @@ pub struct ReactorCfg {
     pub max_connections: usize,
     /// H.264 encoder for H.264 peers: `auto` (NVENC when the startup probe
     /// encodes, else OpenH264) | `nvenc` | `openh264` | `off` (VP8
-    /// peers, such as the Python SDK, always get intra-only VP8).
+    /// peers, such as the Python SDK, always get VP8: inter-frame through
+    /// ffmpeg `libvpx`, intra-only libwebp when ffmpeg has no libvpx).
     pub h264: String,
     pub h264_bitrate_bps: Option<u32>,
 }
