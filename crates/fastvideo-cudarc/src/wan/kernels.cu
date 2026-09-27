@@ -4513,6 +4513,77 @@ extern "C" __global__ void __launch_bounds__(256, 1) flash_mma_fwd3s_d128(
 ) {
     FA3_ENTRY_BODY(128, true)
 }
+
+// ---- VSA on bf16 activations -----------------------------------------------
+// H3 stores q/k/v/gate in bf16 (FASTVIDEO_BF16_ACT). The f32 VSA kernels
+// (vsa_tile_mean round16, vsa_tile_qkv, vsa_combine round16) round every
+// input to bf16 before use, so reading the bf16 tensors directly gives the
+// same bits without the f32 widening of all four tensors.
+
+// vsa_tile_mean(round16 = 1) on bf16 input.
+extern "C" __global__ void vsa_tile_mean_b16(
+    const unsigned short* x, const int* slot_src, const int* block_sizes, float* out,
+    long seq, int dim, int num_tiles, int tile_elems
+) {
+    int tile = blockIdx.x;
+    long bh = blockIdx.y;
+    if (tile >= num_tiles) return;
+    int n = block_sizes[tile];
+    const unsigned short* xb = x + bh * seq * (long)dim;
+    float* ob = out + (bh * (long)num_tiles + tile) * (long)dim;
+    for (int d = threadIdx.x; d < dim; d += blockDim.x) {
+        float acc = 0.0f;
+        for (int j = 0; j < n; j++) {
+            int tok = slot_src[(long)tile * tile_elems + j];
+            acc += __uint_as_float(((unsigned int)xb[(long)tok * dim + d]) << 16);
+        }
+        ob[d] = n > 0 ? acc / (float)n : 0.0f;
+    }
+}
+
+// vsa_tile_qkv on bf16 input: a gather, 16 bytes (8 elements) per thread.
+// `dim` is a multiple of 8.
+extern "C" __global__ void vsa_tile_qkv_b16(
+    const unsigned short* __restrict__ x, const int* __restrict__ slot_src, unsigned short* __restrict__ xt,
+    long seq, long padded, int dim
+) {
+    const long chunks = (long)dim / 8;
+    long rem = blockIdx.x * (long)blockDim.x + threadIdx.x;
+    if (rem >= padded * chunks) return;
+    long bh = blockIdx.z;
+    long slot = rem / chunks;
+    long c = rem - slot * chunks;
+    int src = slot_src[slot];
+    uint4 v = make_uint4(0u, 0u, 0u, 0u);
+    if (src >= 0) v = *reinterpret_cast<const uint4*>(x + (bh * seq + src) * dim + c * 8);
+    *reinterpret_cast<uint4*>(xt + (bh * padded + slot) * dim + c * 8) = v;
+}
+
+// vsa_combine(round16 = 1) with a bf16 gate.
+extern "C" __global__ void vsa_combine_g16(
+    const float* sparse, const float* coarse, const unsigned short* gate, const int* slot_src,
+    float* out, long seq, int dim, int tile_elems, int q_base, int num_tiles, int has_gate
+) {
+    long slot_in_group = (long)blockIdx.x * blockDim.y + threadIdx.y;
+    long g = blockIdx.y;
+    long bh = blockIdx.z;
+    if (slot_in_group >= tile_elems) return;
+    int tile = q_base + (int)g;
+    if (tile >= num_tiles) return;
+    int src = slot_src[(long)tile * tile_elems + slot_in_group];
+    if (src < 0) return;
+    const float* sp = sparse + ((bh * gridDim.y + g) * (long)tile_elems + slot_in_group) * (long)dim;
+    const float* co = coarse + (bh * (long)num_tiles + tile) * (long)dim;
+    float* ob = out + bh * seq * (long)dim + (long)src * dim;
+    const unsigned short* ga = has_gate ? gate + bh * seq * (long)dim + (long)src * dim : nullptr;
+    for (int d = threadIdx.x; d < dim; d += blockDim.x) {
+#define FV_R16(x) __uint_as_float(((unsigned int)fv_bf16_rne(x)) << 16)
+        float c = FV_R16(co[d]);
+        float p = ga ? FV_R16(c * __uint_as_float(((unsigned int)ga[d]) << 16)) : c;
+        ob[d] = FV_R16(FV_R16(sp[d]) + p);
+#undef FV_R16
+    }
+}
 // ==== end region: attn3 ====
 
 // ==== region: moe ====

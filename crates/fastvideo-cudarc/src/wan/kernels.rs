@@ -154,6 +154,9 @@ kernel_fns!(
     // ---- attn3 region (sm_120 dense tuning) ----
     flash_mma_fwd3_d128,
     flash_mma_fwd3s_d128,
+    vsa_tile_mean_b16,
+    vsa_tile_qkv_b16,
+    vsa_combine_g16,
     // ---- ltx2 region (appended; see the end of kernels.cu) ----
     ltx_abs_diff_sums,
     ltx_row_sumsq,

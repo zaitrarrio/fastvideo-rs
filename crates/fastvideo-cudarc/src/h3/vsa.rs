@@ -484,6 +484,9 @@ impl H3Vsa {
         );
         let scale = 1.0 / (dim as f32).sqrt();
         let err = |e: device::DeviceError| msg(e.to_string());
+        if let Some(out) = self.attend_device_b16(dp, &q, &k, &v, gate.as_ref())? {
+            return Ok(out);
+        }
         let on_device = |t: &CudaTensor| -> Result<CudaTensor> {
             let mut t = if t.is_bf16() {
                 t.to_f32_act()?
@@ -650,6 +653,131 @@ impl H3Vsa {
             }
             let out = CudaTensor::from_device_slice(out, vec![1, bh, seq, dim])?;
             CudaTensor::cat(&[&dense, &out.narrow(2, prefix, seq - prefix)?], 2)
+        })
+    }
+
+    /// [`Self::attend_device`] on bf16 q/k/v/gate (`FASTVIDEO_BF16_ACT`),
+    /// without widening them to f32: tile means, tiling and the combine read
+    /// the bf16 buffers directly (`vsa_tile_mean_b16`, `vsa_tile_qkv_b16`,
+    /// `vsa_combine_g16`). The f32 path rounds every one of those reads to
+    /// bf16, so the result is the same bits. `None` when an input is not a
+    /// device bf16 tensor, the fine stage is not the tensor-core kernel, or
+    /// `FASTVIDEO_VSA_BF16=0`: the caller runs the f32 path.
+    #[cfg(feature = "cuda")]
+    fn attend_device_b16(
+        &self,
+        dp: &DevicePlan,
+        q: &CudaTensor,
+        k: &CudaTensor,
+        v: &CudaTensor,
+        gate: Option<&CudaTensor>,
+    ) -> Result<Option<CudaTensor>> {
+        use crate::wan::stats::phase;
+        use crate::wan::{device, ops};
+        if !crate::wan::envflag::bool_flag("FASTVIDEO_VSA_BF16", true) {
+            return Ok(None);
+        }
+        let (bh, seq, dim, n) = (self.heads, self.plan.seq, self.head_dim, self.plan.num_tiles());
+        let sm = device::global_device().map_or(0, |d| d.sm_major);
+        let forced_gather = fastvideo_models::techniques::kernels::choice(
+            fastvideo_models::techniques::kernels::KernelOp::VsaAttention,
+        ) == "gather";
+        if sm < 8 || dim != 128 || forced_gather {
+            return Ok(None);
+        }
+        let (Some(qd), Some(kd), Some(vd)) = (q.device_slice_bf16(), k.device_slice_bf16(), v.device_slice_bf16())
+        else {
+            return Ok(None);
+        };
+        let gd = match gate {
+            Some(g) => match g.device_slice_bf16() {
+                Some(s) => Some(s),
+                None => return Ok(None),
+            },
+            None => None,
+        };
+        static LOGGED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+        crate::wan::log::info_once(&LOGGED, format_args!("vsa-h3: bf16 inputs read in place (no f32 widening)"));
+        let scale = 1.0 / (dim as f32).sqrt();
+        let err = |e: device::DeviceError| msg(e.to_string());
+
+        let (scores, coarse) = phase("vsa_h3_1_coarse", || {
+            let qc = ops::vsa_tile_mean_bf16_device(qd, &dp.plan, bh, seq, dim)?;
+            let kc = ops::vsa_tile_mean_bf16_device(kd, &dp.plan, bh, seq, dim)?;
+            let mut scores = ops::alloc(bh * n * n)?;
+            device::matmul_linear_wt_strided_batched_f32(&qc, &kc, &mut scores, bh, n, dim, n, scale)
+                .map_err(err)?;
+            let coarse = match gd {
+                Some(_) => {
+                    let vc = ops::vsa_tile_mean_bf16_device(vd, &dp.plan, bh, seq, dim)?;
+                    let probs = ops::softmax_last_device(&scores, n)?;
+                    let mut coarse = ops::alloc(bh * n * dim)?;
+                    device::matmul_2d_strided_batched_f32(&probs, &vc, &mut coarse, bh, n, n, dim)
+                        .map_err(err)?;
+                    coarse
+                }
+                None => ops::fill_device(bh * n * dim, 0.0)?,
+            };
+            Ok::<_, TensorError>((scores, coarse))
+        })?;
+        let topk = if self.k_vid >= self.plan.video_tiles {
+            n
+        } else {
+            self.plan.prefix_tiles + self.k_vid
+        };
+        let selected = phase("vsa_h3_2_select", || {
+            let biased =
+                CudaTensor::from_device_slice(scores, vec![bh * n, n])?.add(&dp.prefix_bias)?;
+            let b = biased
+                .device_slice()
+                .ok_or_else(|| msg("vsa-h3: biased scores have no device buffer"))?;
+            ops::vsa_topk_device(b, bh * n, n, topk)
+        })?;
+        let mut out = ops::fill_device(bh * seq * dim, 0.0)?;
+        let prefix_tiles = self.plan.prefix_tiles;
+        let (q_base, q_tiles) = if topk < n && prefix_tiles > 0 && prefix_tiles < n {
+            (prefix_tiles, n - prefix_tiles)
+        } else {
+            (0, n)
+        };
+        let sparse = phase("vsa_h3_3_mma", || {
+            let (qt, kt, vt) = (
+                ops::vsa_tile_qkv_bf16_device(qd, &dp.plan, bh, seq, dim)?,
+                ops::vsa_tile_qkv_bf16_device(kd, &dp.plan, bh, seq, dim)?,
+                ops::vsa_tile_qkv_bf16_device(vd, &dp.plan, bh, seq, dim)?,
+            );
+            ops::vsa_mma_attn_tiled_device(&qt, &kt, &vt, &selected, &dp.plan, bh, dim, topk, scale, q_base, q_tiles)
+        })?;
+        ops::vsa_combine_gate16_device(&sparse, &coarse, gd, &dp.plan, &mut out, bh, n, 0, seq, dim)?;
+        drop(sparse);
+        let prefix = self.plan.prefix_rows;
+        if topk == n || prefix == 0 {
+            return Ok(Some(CudaTensor::from_device_slice(out, vec![1, bh, seq, dim])?));
+        }
+        // Text / audio query rows: dense against all keys, plus their
+        // compression term, exactly as the f32 path (the SDPA quantizes its
+        // operands to bf16 either way).
+        phase("vsa_h3_4_prefix_dense", || {
+            let mut dense = crate::wan::nn::scaled_dot_product_attention(&q.narrow(2, 0, prefix)?, k, v, Some(scale))?;
+            if let Some(g) = gate {
+                let branch = CudaTensor::from_device_slice(coarse, vec![bh * n, dim])?
+                    .index_select_rows(&dp.prefix_branch_rows)?;
+                let term = branch
+                    .reshape(vec![1, bh, prefix, dim])?
+                    .quantize_bf16()?
+                    .mul(&g.narrow(2, 0, prefix)?.quantize_bf16()?)?
+                    .quantize_bf16()?;
+                dense = dense.quantize_bf16()?.add(&term)?.quantize_bf16()?.to_f32_act()?;
+            }
+            let dense = if dense.is_bf16() { dense.to_f32_act()? } else { dense };
+            let mut dense = dense;
+            dense.ensure_device()?;
+            if let Some(d) = dense.device_slice() {
+                ops::block_copy_device(d, &mut out, bh, prefix * dim, prefix * dim, seq * dim, 0, 0)?;
+                return Ok(Some(CudaTensor::from_device_slice(out, vec![1, bh, seq, dim])?));
+            }
+            let out = CudaTensor::from_device_slice(out, vec![1, bh, seq, dim])?;
+            Ok(Some(CudaTensor::cat(&[&dense, &out.narrow(2, prefix, seq - prefix)?], 2)?))
         })
     }
 }

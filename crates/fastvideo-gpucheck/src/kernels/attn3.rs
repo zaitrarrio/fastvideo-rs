@@ -326,6 +326,67 @@ pub(super) fn vsa_stages(c: &mut Ctx<'_>) -> StageResult<()> {
         row.insert("h3_widen_qkvg_ms".into(), json!(widen * 1e3));
         drop(q16);
 
+        // bf16-input kernels (H3's bf16 activations): bit for bit against the
+        // f32 kernels on the widened tensors, and their timings.
+        {
+            let to16 = |x: &CudaSlice<f32>| -> anyhow::Result<CudaSlice<bf16>> {
+                let t = CudaTensor::from_device_slice(x.clone(), shape.clone())?.quantize_bf16()?;
+                Ok(t.device_slice_bf16().ok_or_else(|| anyhow::anyhow!("bf16"))?.clone())
+            };
+            let widen = |x: &CudaSlice<bf16>| -> anyhow::Result<CudaSlice<f32>> {
+                let t = CudaTensor::from_device_slice_bf16(x.clone(), shape.clone())?.to_f32_act()?;
+                Ok(t.device_slice().ok_or_else(|| anyhow::anyhow!("f32"))?.clone())
+            };
+            let (q16, g16) = (to16(&q)?, to16(&gate)?);
+            let (qw, gw) = (widen(&q16)?, widen(&g16)?);
+            let m32 = down(&ops::vsa_tile_mean_round_device(&qw, &plan_dev, bh, seq, D, true)?)?;
+            let m16 = down(&ops::vsa_tile_mean_bf16_device(&q16, &plan_dev, bh, seq, D)?)?;
+            let bad_mean = mismatches(
+                &m32.iter().map(|x| x.to_bits()).collect::<Vec<_>>(),
+                &m16.iter().map(|x| x.to_bits()).collect::<Vec<_>>(),
+            );
+            let t32 = dev.stream.memcpy_dtov(&ops::vsa_tile_qkv_device(&qw, &plan_dev, bh, seq, D)?)?;
+            let t16 = dev.stream.memcpy_dtov(&ops::vsa_tile_qkv_bf16_device(&q16, &plan_dev, bh, seq, D)?)?;
+            let bad_tile = mismatches(
+                &t32.iter().map(|x| x.to_bits()).collect::<Vec<_>>(),
+                &t16.iter().map(|x| x.to_bits()).collect::<Vec<_>>(),
+            );
+            let sparse = up(&c.rand(bh * nb * 64 * D, 1.0))?;
+            let coarse0 = up(&c.rand(bh * nb * D, 1.0))?;
+            let mut o32 = ops::fill_device(bh * seq * D, 0.0)?;
+            let mut o16 = ops::fill_device(bh * seq * D, 0.0)?;
+            ops::vsa_combine_round_device(&sparse, &coarse0, Some(&gw), &plan_dev, &mut o32, bh, nb, 0, seq, D, true)?;
+            ops::vsa_combine_gate16_device(&sparse, &coarse0, Some(&g16), &plan_dev, &mut o16, bh, nb, 0, seq, D)?;
+            let bad_comb = mismatches(
+                &down(&o32)?.iter().map(|x| x.to_bits()).collect::<Vec<_>>(),
+                &down(&o16)?.iter().map(|x| x.to_bits()).collect::<Vec<_>>(),
+            );
+            let tm16 = median3(&mut || {
+                for _ in 0..3 {
+                    ops::vsa_tile_mean_bf16_device(&q16, &plan_dev, bh, seq, D)?;
+                }
+                Ok(())
+            })?;
+            let tq16 = median3(&mut || {
+                for _ in 0..3 {
+                    ops::vsa_tile_qkv_bf16_device(&q16, &plan_dev, bh, seq, D)?;
+                }
+                Ok(())
+            })?;
+            let cb16 = median3(&mut || {
+                ops::vsa_combine_gate16_device(&sparse, &coarse0, Some(&g16), &plan_dev, &mut o16, bh, nb, 0, seq, D)?;
+                Ok(())
+            })?;
+            c.report.check(
+                format!("vsa_b16_{name}_bitexact_vs_f32"),
+                bad_mean == 0 && bad_tile == 0 && bad_comb == 0,
+                json!({"tile_mean_mismatched": bad_mean, "tile_qkv_mismatched": bad_tile,
+                       "combine_mismatched": bad_comb,
+                       "tile_mean_x3_ms": tm16 * 1e3, "tile_qkv_x3_ms": tq16 * 1e3, "combine_ms": cb16 * 1e3}),
+                json!({"all": 0}),
+            )?;
+        }
+
         let coarse_fn = || -> anyhow::Result<(CudaSlice<f32>, CudaSlice<f32>)> {
             let qc = ops::vsa_tile_mean_device(&q, &plan_dev, bh, seq, D)?;
             let kc = ops::vsa_tile_mean_device(&k, &plan_dev, bh, seq, D)?;

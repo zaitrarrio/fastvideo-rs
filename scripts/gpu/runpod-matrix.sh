@@ -1276,8 +1276,18 @@ case "$FAMILY" in
           --prompt "$PROMPT" --seed "$SEED" --two-stage --text streamed --warm \
           --clip "$RUNS/ltx25-1080p20s-dense-$arm/frames"
     done
+    # VSA on bf16 activations read in place (FASTVIDEO_VSA_BF16) vs the f32
+    # widening path: the frames must match bit for bit.
+    for vb in ${FV_ATTN3_VSA:-0 1}; do
+      gated_cell "fasth3-4step-vsa-768p-b16$vb" fasth3-4step-vsa \
+        env FASTVIDEO_VSA_BF16="$vb" \
+        "$BIN" --mode fast h3 gen --weights "$W/h3-base" --h3-recipe 4step-vsa \
+          --adaln-cache "$RUNS/fasth3-4step-vsa-768p-adaln.cache" \
+          --clip-dir "$RUNS/fasth3-4step-vsa-768p-b16$vb/frames" "${h3_common[@]}"
+    done
     compare_cells fasth3-4step-dense-768p-v2 fasth3-4step-dense-768p-cudnn
     compare_cells ltx25-1080p20s-dense-v2 ltx25-1080p20s-dense-cudnn
+    compare_cells fasth3-4step-vsa-768p-b160 fasth3-4step-vsa-768p-b161
     ;;
   fuse)
     # Phase 3c DiT block fusions (FASTVIDEO_H3_FUSE, FASTVIDEO_LTX_FUSE).
