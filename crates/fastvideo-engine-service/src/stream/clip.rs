@@ -3,10 +3,12 @@
 //! WP-02 provides admission (one session per executor, resident model,
 //! `48000 % fps == 0` when the session has audio) and clip **builds**: each
 //! build is a `Priority::Stream` job pinned to the session's executor whose
-//! output (frames + native-rate PCM) stays in memory. WP-12 adds the
-//! fast-h3 queue semantics on top (generation/playout queues, reservation,
-//! autoplay, `valid_commands`, lockstep slicing, continuity) in
-//! `stream/{queue,rules}.rs` and this file.
+//! output (frames + native-rate PCM) stays in memory.
+//!
+//! WP-12 adds the fast-h3 queue semantics on top: [`ClipSession::into_player`]
+//! starts a [`ClipPlayer`](super::player::ClipPlayer) (generation/playout
+//! queues with reservation, autoplay, `valid_commands`, lockstep slicing and
+//! `Continuity`), see `stream/{player,queue,rules,pace}.rs`.
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -30,6 +32,10 @@ pub struct ClipBuild {
     pub seed: Option<u64>,
     /// Snapped up onto the model's frame grid; `None`: the model default.
     pub seconds: Option<f64>,
+    /// An exact frame count (must be admissible); overrides `seconds`.
+    pub frames: Option<u32>,
+    /// `(width, height)`; `None`: the session canvas.
+    pub canvas: Option<(u32, u32)>,
     /// `Keyframe{First}` (continuity `AnchorLastFrame`, director `image_url`).
     pub first_frame: Option<PathBuf>,
     /// `Keyframe{Last}` (director `end_image_url`).
@@ -114,7 +120,17 @@ impl ClipSession {
 
     /// The engine job for one build (pure).
     pub fn resolve(&self, b: &ClipBuild) -> Result<ResolvedJob, ApiError> {
-        let num_frames = self.frames_for(b.seconds)?;
+        let num_frames = match b.frames {
+            Some(n) if self.caps.frames.contains(n) => n,
+            Some(n) => {
+                return Err(ApiError::invalid_param(
+                    "frames",
+                    format!("{n} frames is not an admissible clip length for `{}`", self.caps.id),
+                ))
+            }
+            None => self.frames_for(b.seconds)?,
+        };
+        let (width, height) = b.canvas.unwrap_or(self.spec.canvas);
         let mut keyframes = Vec::new();
         if let Some(p) = &b.first_frame {
             keyframes.push((Anchor::First, p.clone()));
@@ -147,8 +163,8 @@ impl ClipSession {
             prompt: b.prompt.clone(),
             negative_prompt: b.negative_prompt.clone().unwrap_or_default(),
             seed: b.seed.or(self.spec.seed).unwrap_or_else(draw_seed),
-            width: self.spec.canvas.0,
-            height: self.spec.canvas.1,
+            width,
+            height,
             num_frames,
             fps: self.spec.fps,
             keyframes,
@@ -175,8 +191,22 @@ impl ClipSession {
         )
     }
 
+    /// Starts the fast-h3 queue-and-playout player over this session (needs
+    /// a tokio runtime). The player owns the session from now on.
+    pub fn into_player(
+        self,
+        cfg: super::player::ClipPlayerConfig,
+    ) -> Result<(super::player::ClipPlayer, super::player::ClipOutputs), ApiError> {
+        super::player::ClipPlayer::start(self, cfg)
+    }
+
     /// Ends the session.
     pub fn close(mut self) {
+        self.do_close();
+    }
+
+    /// Ends the session in place (the player's shutdown path).
+    pub(crate) fn end(&mut self) {
         self.do_close();
     }
 

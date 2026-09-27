@@ -51,5 +51,16 @@ pub use scheduler::Priority;
 pub use service::{
     CancelOutcome, EngineConfig, EngineEvent, EngineService, EngineStats, JobHandle,
 };
-pub use stream::causal::{CausalBlock, CausalSession, CausalStats};
+pub use stream::causal::{
+    CausalBlock, CausalCommand, CausalControl, CausalReply, CausalSession, CausalState,
+    CausalStats, Ttff,
+};
 pub use stream::clip::{ClipBuild, ClipSession};
+pub use stream::pace::{
+    spawn_causal_pacer, spawn_clip_pacer, CausalPacerConfig, ClipPacerConfig, IdlePolicy,
+    MediaItem, MediaSlice, PaceStats, PacedStream, PlayOutcome, Tick, TickReceiver, TickStart,
+};
+pub use stream::player::{
+    BuildReport, ClipCommand, ClipEvent, ClipOutputs, ClipPlayer, ClipPlayerConfig, ClipState,
+};
+pub use stream::queue::{ClipInfo, QueueName};

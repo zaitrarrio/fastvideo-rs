@@ -1185,9 +1185,12 @@ name = "fastvideo-engine-service"
 version = "0.1.0"
 dependencies = [
  "fastvideo-cudarc",
+ "fastvideo-media",
  "fastvideo-models",
  "fastvideo-protocol",
+ "image",
  "serde",
+ "serde_json",
  "thiserror",
  "time",
  "tokio",
