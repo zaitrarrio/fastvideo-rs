@@ -301,7 +301,13 @@ pub fn attention_host(
 /// VSA-H3 for one request: built once, shared by every block of every step.
 pub struct H3Vsa {
     plan: H3TilePlan,
-    k_vid: usize,
+    /// Per-(step, layer) sparsity (the `vsa` technique's schedule) and its
+    /// default; `None`: `k_vid` everywhere.
+    schedule: Option<(f64, fastvideo_models::techniques::VsaSchedule)>,
+    /// k_vid of the block about to run ([`Self::select`]).
+    current: std::sync::atomic::AtomicUsize,
+    /// The fine stage on the FP8 kernel (`fp8_attention` with `vsa`).
+    fp8: bool,
     heads: usize,
     head_dim: usize,
     #[cfg(feature = "cuda")]
@@ -386,7 +392,9 @@ impl H3Vsa {
         };
         Ok(Self {
             plan,
-            k_vid,
+            schedule: None,
+            current: std::sync::atomic::AtomicUsize::new(k_vid),
+            fp8: false,
             heads,
             head_dim,
             #[cfg(feature = "cuda")]
@@ -400,8 +408,41 @@ impl H3Vsa {
         &self.plan
     }
 
+    /// The k_vid of the block about to run.
     pub fn k_vid(&self) -> usize {
-        self.k_vid
+        self.current.load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    /// Run `schedule` (per step and layer) around the default `sparsity`.
+    /// A uniform schedule changes nothing.
+    pub fn with_schedule(
+        mut self,
+        sparsity: f64,
+        schedule: fastvideo_models::techniques::VsaSchedule,
+    ) -> Self {
+        if !schedule.is_uniform() {
+            crate::wan::log::info(format_args!(
+                "vsa-h3 schedule: {}",
+                schedule.describe(sparsity)
+            ));
+            self.schedule = Some((sparsity, schedule));
+        }
+        self
+    }
+
+    /// The fine stage on the FP8 kernel ([`crate::wan::attn_fp8`]).
+    pub fn with_fp8(mut self, on: bool) -> Self {
+        self.fp8 = on;
+        self
+    }
+
+    /// Set the k_vid for block `layer` of forward `step` (a no-op without a
+    /// schedule). The block loop calls this before each VSA block.
+    pub fn select(&self, step: usize, layer: usize) {
+        if let Some((default, schedule)) = &self.schedule {
+            let k = self.plan.k_vid(schedule.at(*default, step, layer));
+            self.current.store(k, std::sync::atomic::Ordering::Relaxed);
+        }
     }
 
     /// `q`, `k`, `v` (post-norm, post-RoPE) and `gate` (`to_gate_compress`,
@@ -434,7 +475,7 @@ impl H3Vsa {
                 self.plan.prefix_tiles as u64,
                 self.plan.video_tiles as u64,
             );
-            let kv = (self.k_vid as u64).min(v);
+            let kv = (self.k_vid() as u64).min(v);
             crate::wan::evalstats::vsa(self.heads, v * (p + kv) + p * n, n * n, v * kv, v * v);
         }
         #[cfg(feature = "cuda")]
@@ -458,7 +499,7 @@ impl H3Vsa {
             &v.host_cow()?,
             g.as_deref(),
             &self.plan,
-            self.k_vid,
+            self.k_vid(),
             self.heads,
             self.head_dim,
         )?;
@@ -483,6 +524,7 @@ impl H3Vsa {
             self.plan.num_tiles(),
         );
         let scale = 1.0 / (dim as f32).sqrt();
+        let k_vid = self.k_vid();
         let err = |e: device::DeviceError| msg(e.to_string());
         if let Some(out) = self.attend_device_b16(dp, &q, &k, &v, gate.as_ref())? {
             return Ok(out);
@@ -539,10 +581,10 @@ impl H3Vsa {
 
         // 3. Selection: all prefix tiles + top-k_vid video tiles, as one top-k
         //    over scores whose prefix columns were lifted above everything.
-        let topk = if self.k_vid >= self.plan.video_tiles {
+        let topk = if k_vid >= self.plan.video_tiles {
             n
         } else {
-            self.plan.prefix_tiles + self.k_vid
+            self.plan.prefix_tiles + k_vid
         };
         let selected = phase("vsa_h3_2_select", || {
             let biased =
@@ -566,6 +608,12 @@ impl H3Vsa {
                 (0, n)
             };
             let sparse = phase("vsa_h3_3_mma", || {
+                if self.fp8 && crate::wan::attn_fp8::supported() {
+                    return crate::wan::attn_fp8::vsa_fine(
+                        qd, kd, vd, &selected, &dp.plan, bh, seq, dim, topk, scale, q_base,
+                        q_tiles,
+                    );
+                }
                 ops::vsa_mma_attn_range_device(
                     qd, kd, vd, &selected, &dp.plan, bh, seq, dim, topk, scale, q_base, q_tiles,
                 )
@@ -720,10 +768,10 @@ impl H3Vsa {
             };
             Ok::<_, TensorError>((scores, coarse))
         })?;
-        let topk = if self.k_vid >= self.plan.video_tiles {
+        let topk = if self.k_vid() >= self.plan.video_tiles {
             n
         } else {
-            self.plan.prefix_tiles + self.k_vid
+            self.plan.prefix_tiles + self.k_vid()
         };
         let selected = phase("vsa_h3_2_select", || {
             let biased =
@@ -796,6 +844,41 @@ mod tests {
     /// 70 text rows, 2 x 33 audio rows, a 5 x 4 x 6 video grid.
     fn layout() -> H3PackedLayout {
         H3PackedLayout::new(70, (5, 8, 12), 33, [1, 2, 2]).unwrap()
+    }
+
+    /// A schedule moves k_vid per (step, layer); a uniform one never does.
+    #[test]
+    fn a_vsa_schedule_selects_k_vid_per_step_and_layer() {
+        use fastvideo_models::techniques::{StepSet, VsaSchedule};
+        let l = layout();
+        let cfg = H3VsaConfig {
+            sparsity: 0.75,
+            group: 8,
+            tile_size: 64,
+        };
+        let plain = H3Vsa::new(&l, 2, 8, cfg).unwrap();
+        let k0 = plain.k_vid();
+        plain.select(0, 0);
+        assert_eq!(plain.k_vid(), k0, "no schedule: select is a no-op");
+        let uniform = H3Vsa::new(&l, 2, 8, cfg)
+            .unwrap()
+            .with_schedule(0.75, VsaSchedule::default());
+        uniform.select(3, 7);
+        assert_eq!(uniform.k_vid(), k0);
+        let s = VsaSchedule {
+            per_step: [(0, 0.5)].into(),
+            dense_steps: StepSet::empty(),
+            dense_layers: StepSet::parse("1").unwrap(),
+            dense_sparsity: 0.0,
+        };
+        let v = H3Vsa::new(&l, 2, 8, cfg).unwrap().with_schedule(0.75, s);
+        let p = v.plan().clone();
+        v.select(0, 0);
+        assert_eq!(v.k_vid(), p.k_vid(0.5));
+        v.select(2, 1);
+        assert_eq!(v.k_vid(), p.video_tiles, "a dense layer keeps every tile");
+        v.select(2, 0);
+        assert_eq!(v.k_vid(), p.k_vid(0.75));
     }
 
     #[test]

@@ -252,8 +252,12 @@ rows padded to 16, bf16 fallback below sm_100. Audio FFN, attention, Gemma
 and every other linear stay bf16, and the LongLive dequant / K/V path is off
 in an LTX process. RTX PRO 6000 (`fv-gpucheck kernels`, group
 `nvfp4_linear`): the up projection's whole linear (quantize + GEMM + bias)
-is 2.7-3.2x the bf16 linear (4K stage 1: 3.87 vs 10.50 ms; stage-2 chunk
-1.85 vs 5.36 ms), the GEMM alone ~3.5-4x; output PSNR vs bf16 37.8 dB.
+is 2.7-3.2x the bf16 linear (down projection with its GELU 2.2-2.3x), the
+GEMM alone ~3.5-4x; output PSNR vs bf16 37.8 dB. Generations (Sol stage 2,
+warm): denoise 1.135x at 4k5s and 1.122x at 1080p20s, peak VRAM 8.6 GiB
+lower; the promotion gate passes at 1080p20s (LPIPS 0.254) and fails at
+4k5s on the sharpness range (1.098 > 1.08; LPIPS 0.193), so it stays off.
+See [ports/ltx25.md](ports/ltx25.md#nvfp4-video-ffn-fastvideo_nvfp4-profile-ltx2ltx25_distill_sol_nvfp4).
 sol-engine's pre-quantized RTX5090 checkpoint is not on our volume, so it is
 not loaded.
 The Tile-IR W4A4 GEMM stays off (`FASTVIDEO_NVFP4_OXIDE_GEMM`) until it beats

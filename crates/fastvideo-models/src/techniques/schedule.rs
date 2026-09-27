@@ -351,9 +351,107 @@ pub fn parse_tau(v: &toml::Value) -> Result<Schedule<f64>, String> {
     }
 }
 
+/// A VSA sparsity per `(step, layer)` (the `vsa` technique's schedule):
+/// `dense_steps` / `dense_layers` run at `dense_sparsity` (0 keeps every
+/// tile; the compression branch stays on), other steps at their `per_step`
+/// value, else the default (the technique's `sparsity`, else the recipe's).
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct VsaSchedule {
+    pub per_step: BTreeMap<usize, f64>,
+    pub dense_steps: StepSet,
+    pub dense_layers: StepSet,
+    pub dense_sparsity: f64,
+}
+
+impl VsaSchedule {
+    /// No per-step or per-layer entry: every call runs at the default.
+    pub fn is_uniform(&self) -> bool {
+        self.per_step.is_empty() && self.dense_steps.is_empty() && self.dense_layers.is_empty()
+    }
+
+    pub fn at(&self, default: f64, step: usize, layer: usize) -> f64 {
+        if self.dense_steps.contains(step) || self.dense_layers.contains(layer) {
+            self.dense_sparsity
+        } else {
+            self.per_step.get(&step).copied().unwrap_or(default)
+        }
+    }
+
+    pub fn describe(&self, default: f64) -> String {
+        let mut parts = vec![format!("sparsity {default}")];
+        for (s, v) in &self.per_step {
+            parts.push(format!("step {s}: {v}"));
+        }
+        if !self.dense_steps.is_empty() {
+            parts.push(format!("steps {} at {}", self.dense_steps, self.dense_sparsity));
+        }
+        if !self.dense_layers.is_empty() {
+            parts.push(format!("layers {} at {}", self.dense_layers, self.dense_sparsity));
+        }
+        parts.join(", ")
+    }
+}
+
+/// `sparsity = 0.9` or `sparsity = { default = 0.9, 0 = 0.8 }`: the default
+/// (if given) and the per-step values. Every value must be in `[0, 1)`.
+#[allow(clippy::type_complexity)]
+pub fn parse_sparsity(v: &toml::Value) -> Result<(Option<f64>, BTreeMap<usize, f64>), String> {
+    let num = |v: &toml::Value, what: &str| -> Result<f64, String> {
+        let x = v
+            .as_float()
+            .or_else(|| v.as_integer().map(|i| i as f64))
+            .ok_or_else(|| format!("{what} must be a number"))?;
+        if (0.0..1.0).contains(&x) {
+            Ok(x)
+        } else {
+            Err(format!("{what} = {x}: need [0, 1)"))
+        }
+    };
+    match v {
+        toml::Value::Table(t) => {
+            let mut values = BTreeMap::new();
+            let mut default = None;
+            for (k, v) in t {
+                if k == "default" {
+                    default = Some(num(v, "sparsity.default")?);
+                    continue;
+                }
+                let step = k
+                    .parse::<usize>()
+                    .map_err(|_| format!("sparsity: key {k:?} is not a step index"))?;
+                values.insert(step, num(v, &format!("sparsity.{k}"))?);
+            }
+            Ok((default, values))
+        }
+        other => Ok((Some(num(other, "sparsity")?), BTreeMap::new())),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn vsa_schedules_resolve_per_step_and_layer() {
+        let s = VsaSchedule {
+            per_step: [(0, 0.8)].into(),
+            dense_steps: StepSet::empty(),
+            dense_layers: StepSet::parse("0,49").unwrap(),
+            dense_sparsity: 0.5,
+        };
+        assert_eq!(s.at(0.9, 0, 5), 0.8);
+        assert_eq!(s.at(0.9, 1, 5), 0.9);
+        assert_eq!(s.at(0.9, 3, 0), 0.5);
+        assert_eq!(s.at(0.9, 3, 49), 0.5);
+        assert!(VsaSchedule::default().is_uniform());
+        let v: toml::Value = toml::from_str::<toml::Table>("s = { default = 0.9, 0 = 0.8 }")
+            .unwrap()["s"]
+            .clone();
+        let (d, m) = parse_sparsity(&v).unwrap();
+        assert_eq!((d, m.get(&0).copied()), (Some(0.9), Some(0.8)));
+        let bad: toml::Value = toml::Value::Float(1.0);
+        assert!(parse_sparsity(&bad).is_err());
+    }
 
     #[test]
     fn step_sets_parse_like_parse_steps() {

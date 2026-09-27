@@ -2432,6 +2432,11 @@ pub fn run(report: &mut Report, lim: Limits, seed: u64, groups: Option<&str>) ->
     group(&mut c, "wan_causal_attn", |c| {
         crate::kernels_wan::wan_causal_attn(c.report, &mut c.seed)
     })?;
+    // FP8 attention (opt-in, lossy): parity against the bf16 kernels and
+    // timing at the H3 768p shapes.
+    group(&mut c, "attn_fp8", |c| {
+        crate::kernels_attn::attn_fp8_group(c.report, &mut c.seed)
+    })?;
 
     group(&mut c, "no_host_fallback", |c| {
         // With a device live, an op without a device path must error, not
