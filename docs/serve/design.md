@@ -45,6 +45,28 @@ text says **native**.
    - Responses carry the resolved internal recipe in metadata where the wire
      format allows it.
 
+4. **Cold start (serverless).** Serverless workers run the Rust runtime image
+   (`serve` target) with the weight volume mounted (`/runpod-volume`); nothing is
+   downloaded at start. Weight loading is the cold start, so it gets its own
+   engine packages:
+   - **E12 fast weight loading:** parallel large sequential reads from the
+     volume, pinned-host staging, and overlapping load with the first stages
+     (text encode before the DiT is resident). Target: H3 cold load from ~5.4–8.3
+     min to < 2 min; LTX-2.5 from ~2 min to < 1 min.
+   - **E13 pre-quantized FP8 text encoders (owner decision):** store the H3
+     text encoder's resident FP8 form (the weight-only `Fp8Rows` layout: E4M3
+     codes + per-row scales, as `llm::ResidentDecoder` builds today at load,
+     ~118 s) as safetensors next to the bf16 shards (e.g.
+     `h3-base/text_encoder_fp8/` with a manifest recording the source shard
+     hashes and the quantization rule) and load it directly; same treatment for
+     LTX's Gemma encoder so the first LTX request does not stream it (~61 s).
+     An offline `fv-gpucheck quantize-text-encoder` (or equivalent) tool writes
+     it; the loaded tensors must be byte-identical to the load-time
+     quantization (hash test). Written to both weight volumes (EU needs the
+     volume-sync decision first — it is full).
+   - **WP-19 cold-start measurement:** fresh Runpod serverless worker → submit →
+     first output, per model family, before and after E12/E13.
+
 ## 1. Goals and non-goals
 
 ### 1.1 Goals
