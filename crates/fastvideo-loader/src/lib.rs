@@ -11,7 +11,7 @@ pub use raw::{
     load_raw_component, load_raw_component_native, load_raw_tensors, load_raw_tensors_native,
     RawDType, RawTensor,
 };
-pub use writer::{SafetensorsWriter, TensorSpec};
+pub use writer::{write_parallel, SafetensorsWriter, TensorSpec};
 
 use std::path::{Path, PathBuf};
 

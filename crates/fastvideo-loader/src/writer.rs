@@ -55,15 +55,12 @@ fn io(path: &Path, e: impl std::fmt::Display) -> LoaderError {
     LoaderError::Message(format!("{}: {e}", path.display()))
 }
 
-impl SafetensorsWriter {
-    /// Write the header for `specs` (file order = slice order) and return a
-    /// writer expecting their data in that order. `metadata` lands in
-    /// `__metadata__`: say where the file came from and what was done to it.
-    pub fn create(
-        path: &Path,
-        specs: &[TensorSpec],
-        metadata: &[(&str, &str)],
-    ) -> Result<Self, LoaderError> {
+/// The padded JSON header and `(name, bytes)` layout of `specs`, in order.
+fn build_header(
+    path: &Path,
+    specs: &[TensorSpec],
+    metadata: &[(&str, &str)],
+) -> Result<(String, Vec<(String, usize)>), LoaderError> {
         let mut seen = std::collections::HashSet::new();
         let mut header = String::from("{");
         if !metadata.is_empty() {
@@ -112,6 +109,75 @@ impl SafetensorsWriter {
         while (8 + header.len()) % 8 != 0 {
             header.push(' ');
         }
+        Ok((header, layout))
+}
+
+/// Write a whole safetensors file with positioned writes spread over the
+/// rayon pool: tensor `i` of `specs` is `data(i)`, written at its offset in
+/// pieces of `piece` bytes. For network filesystems, where one sequential
+/// stream is far below what parallel writes reach. Same header and layout as
+/// [`SafetensorsWriter`]; the file appears under its final name only when
+/// complete.
+pub fn write_parallel<'a>(
+    path: &Path,
+    specs: &[TensorSpec],
+    metadata: &[(&str, &str)],
+    data: &(dyn Fn(usize) -> Result<std::borrow::Cow<'a, [u8]>, LoaderError> + Sync),
+    piece: usize,
+) -> Result<(), LoaderError> {
+    use rayon::prelude::*;
+    use std::os::unix::fs::FileExt;
+    // Header and layout exactly as the streaming writer makes them.
+    let (header, _) = build_header(path, specs, metadata)?;
+    let mut header_len = (header.len() as u64).to_le_bytes().to_vec();
+    header_len.extend_from_slice(header.as_bytes());
+    let mut offsets = Vec::with_capacity(specs.len());
+    let mut at = header_len.len() as u64;
+    for spec in specs {
+        offsets.push(at);
+        at += spec.bytes()? as u64;
+    }
+    let mut part = path.as_os_str().to_owned();
+    part.push(".part");
+    let part = PathBuf::from(part);
+    let file = File::create(&part).map_err(|e| io(&part, e))?;
+    file.set_len(at).map_err(|e| io(&part, e))?;
+    file.write_all_at(&header_len, 0).map_err(|e| io(&part, e))?;
+    let jobs: Vec<(usize, usize, usize)> = specs
+        .iter()
+        .enumerate()
+        .flat_map(|(i, s)| {
+            let len = s.bytes().unwrap_or(0);
+            (0..len.div_ceil(piece.max(1))).map(move |k| (i, k * piece, (len - k * piece).min(piece)))
+        })
+        .collect();
+    jobs.par_iter().try_for_each(|&(i, off, len)| -> Result<(), LoaderError> {
+        let bytes = data(i)?;
+        let want = specs[i].bytes()?;
+        if bytes.len() != want {
+            return Err(io(
+                path,
+                format!("'{}': {} bytes, {want} declared", specs[i].name, bytes.len()),
+            ));
+        }
+        file.write_all_at(&bytes[off..off + len], offsets[i] + off as u64)
+            .map_err(|e| io(&part, e))
+    })?;
+    file.sync_all().map_err(|e| io(&part, e))?;
+    drop(file);
+    std::fs::rename(&part, path).map_err(|e| io(path, e))
+}
+
+impl SafetensorsWriter {
+    /// Write the header for `specs` (file order = slice order) and return a
+    /// writer expecting their data in that order. `metadata` lands in
+    /// `__metadata__`: say where the file came from and what was done to it.
+    pub fn create(
+        path: &Path,
+        specs: &[TensorSpec],
+        metadata: &[(&str, &str)],
+    ) -> Result<Self, LoaderError> {
+        let (header, layout) = build_header(path, specs, metadata)?;
         if let Some(dir) = path.parent() {
             std::fs::create_dir_all(dir).map_err(|e| io(path, e))?;
         }
@@ -202,6 +268,32 @@ mod tests {
         let _ = std::fs::remove_dir_all(&d);
         std::fs::create_dir_all(&d).unwrap();
         d
+    }
+
+    #[test]
+    fn parallel_writes_make_the_streaming_writers_file() {
+        let d = tmp("parallel");
+        let specs = vec![
+            TensorSpec::new("b.10.w", LazyDType::F8E4M3, vec![3, 5]),
+            TensorSpec::new("b.2.s", LazyDType::F32, vec![3]),
+            TensorSpec::new("e", LazyDType::BF16, vec![7]),
+        ];
+        let data: Vec<Vec<u8>> = specs
+            .iter()
+            .enumerate()
+            .map(|(i, s)| (0..s.bytes().unwrap()).map(|b| (b * 7 + i) as u8).collect())
+            .collect();
+        let a = d.join("a.safetensors");
+        let mut w = SafetensorsWriter::create(&a, &specs, &[("k", "v")]).unwrap();
+        for (s, bytes) in specs.iter().zip(&data) {
+            w.write(&s.name, bytes).unwrap();
+        }
+        w.finish().unwrap();
+        let b = d.join("b.safetensors");
+        write_parallel(&b, &specs, &[("k", "v")], &|i| Ok(std::borrow::Cow::Borrowed(&data[i][..])), 4)
+            .unwrap();
+        assert_eq!(std::fs::read(&a).unwrap(), std::fs::read(&b).unwrap());
+        let _ = std::fs::remove_dir_all(&d);
     }
 
     #[test]

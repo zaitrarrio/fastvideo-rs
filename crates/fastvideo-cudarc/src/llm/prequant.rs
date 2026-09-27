@@ -22,7 +22,7 @@
 
 use std::path::{Path, PathBuf};
 
-use fastvideo_loader::{LazyDType, LazyStore, SafetensorsWriter, TensorSpec};
+use fastvideo_loader::{LazyDType, LazyStore, TensorSpec};
 use serde::{Deserialize, Serialize};
 
 use super::DecoderConfig;
@@ -230,7 +230,13 @@ pub fn write_tree(
         .map(|(i, (p, _, _))| (format!("{p}.weight"), i))
         .collect();
     let keys = kept_keys(&src, cfg, layers);
+    enum Part<'a> {
+        Codes(usize),
+        Scales(usize),
+        Copy(&'a str),
+    }
     let mut specs = Vec::new();
+    let mut parts = Vec::new();
     for k in &keys {
         let shape = src
             .shape(k)
@@ -242,15 +248,18 @@ pub fn write_tree(
                 return Err(msg(format!("{k}: captured codes do not match {shape:?}")));
             }
             specs.push(TensorSpec::new(k.clone(), LazyDType::F8E4M3, shape.clone()));
+            parts.push(Part::Codes(i));
             let base = k.strip_suffix(".weight").expect("weight key");
             specs.push(TensorSpec::new(
                 format!("{base}.{FP8_ROWS_SCALE_SUFFIX}"),
                 LazyDType::F32,
                 vec![shape[0]],
             ));
+            parts.push(Part::Scales(i));
         } else {
             let v = src.view(k).map_err(|e| msg(e.to_string()))?;
             specs.push(TensorSpec::new(k.clone(), v.dtype.clone(), shape));
+            parts.push(Part::Copy(k));
         }
     }
     if by_weight.keys().any(|k| !keys.contains(k)) {
@@ -258,26 +267,23 @@ pub fn write_tree(
     }
     let path = out_dir.join("model.safetensors");
     let layers_s = layers.to_string();
-    let mut w = SafetensorsWriter::create(
+    let data = |i: usize| -> std::result::Result<std::borrow::Cow<'_, [u8]>, fastvideo_loader::LoaderError> {
+        Ok(match parts[i] {
+            Part::Codes(c) => std::borrow::Cow::Borrowed(&captured[c].1[..]),
+            Part::Scales(c) => std::borrow::Cow::Owned(
+                captured[c].2.iter().flat_map(|v| v.to_le_bytes()).collect(),
+            ),
+            Part::Copy(k) => std::borrow::Cow::Borrowed(src.view(k)?.bytes),
+        })
+    };
+    fastvideo_loader::write_parallel(
         &path,
         &specs,
         &[("format", FORMAT), ("rule", RULE), ("layers", &layers_s)],
+        &data,
+        16 << 20,
     )
     .map_err(|e| msg(e.to_string()))?;
-    for k in &keys {
-        if let Some(&i) = by_weight.get(k) {
-            let (_, codes, scales) = &captured[i];
-            w.write(k, codes).map_err(|e| msg(e.to_string()))?;
-            let base = k.strip_suffix(".weight").expect("weight key");
-            let bytes: Vec<u8> = scales.iter().flat_map(|v| v.to_le_bytes()).collect();
-            w.write(&format!("{base}.{FP8_ROWS_SCALE_SUFFIX}"), &bytes)
-                .map_err(|e| msg(e.to_string()))?;
-        } else {
-            let v = src.view(k).map_err(|e| msg(e.to_string()))?;
-            w.write(k, v.bytes).map_err(|e| msg(e.to_string()))?;
-        }
-    }
-    w.finish().map_err(|e| msg(e.to_string()))?;
     let source = source_files(source_dir)?
         .iter()
         .map(|p| {
