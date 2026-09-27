@@ -8,7 +8,7 @@
 //! `repr(u32)`, so the ABI is the same) and statuses read as plain `i32`
 //! (a newer cuDNN may return status codes cudarc's enum does not list).
 //!
-//! Three operation graphs, in the order `auto` tries them:
+//! Three operation graphs (`auto` tries unified, then composite; softmax only by name):
 //!
 //! * [`SdpaGraph::Unified`]: one `CUDNN_BACKEND_OPERATION_SDPA_FWD_DESCRIPTOR`
 //!   (Q, K, V, O and a by-value scale), which is what cudnn-frontend's
@@ -330,13 +330,15 @@ impl SdpaGraph {
 }
 
 /// `FASTVIDEO_CUDNN_SDPA_GRAPH=auto|unified|softmax|composite`: the graphs to
-/// try, in order (`auto`: all three).
+/// try, in order (`auto`: unified, then composite).
 fn graphs_requested() -> Vec<SdpaGraph> {
     match super::envflag::string_flag("FASTVIDEO_CUDNN_SDPA_GRAPH", "auto").as_str() {
         "unified" => vec![SdpaGraph::Unified],
         "softmax" => vec![SdpaGraph::Softmax],
         "composite" => vec![SdpaGraph::Composite],
-        _ => SdpaGraph::ALL.to_vec(),
+        // Not Softmax: on cuDNN 9.26 / sm_120 it builds a plan whose output is
+        // inf / NaN (attn3_parity), so it runs only when asked for by name.
+        _ => vec![SdpaGraph::Unified, SdpaGraph::Composite],
     }
 }
 

@@ -54,7 +54,16 @@ Default on sm_12x (`attn.rs` `cudnn_default`, `auto_cudnn_or_v2`): for each
 bf16-output shape, the first call times cuDNN's plan (after a warm-up
 execution) against fwd2 on the real inputs and keeps the faster, so H3 768p
 and LTX 1080p take cuDNN and a shape where fwd2 wins keeps fwd2.
-`FASTVIDEO_FLASH_KERNEL=v2` / `=cudnn` fix the kernel.
+`FASTVIDEO_FLASH_KERNEL=v2` / `=cudnn` fix the kernel. Third pod, `auto` as
+shipped: H3 768p 103.7 ms (fwd2 106.6; pick log: cuDNN 101.95 vs 108.42),
+LTX 1080p20s 650.3 (fwd2 672.1; cuDNN 649.3 vs 679.0), 4K 5s picks fwd2
+(cuDNN 759.8 vs 754.9). The softmax graph is excluded from `auto`.
+
+Generation A/B (runpod-matrix `attn3` family, same prompt / seed,
+`FASTVIDEO_FLASH_KERNEL=v2` vs `cudnn`): FastH3 4-step dense 768p denoise
+33.23 -> 32.28 s (8.30 -> 8.07 s/step), frames 20.4 dB PSNR vs fwd2 (H3's known
+sensitivity to 1-ulp bf16 changes; kernel-level rel_l2 3e-4); LTX-2.5 1080p
+20 s dense stage 2 44.0 -> 42.7 s/step, 32.7 dB.
 
 ## 3. VSA: ours vs FastVideo's `video_sparse_attn` (ms per call)
 
@@ -63,27 +72,30 @@ tensors (its attention backend's raster->tile gather of q/k/v/gate and the
 tile->raster gather of the output are separate columns); ours times the Wan
 f32 path (`vsa_attention_device`, whose tiling is inside `tile+fine`).
 
-| workload | stage | FastVideo (Triton) | ours (before) |
-|---|---|---|---|
-| FastH3 768p, 56 h, 660 tiles, k=66 (0.9) | coarse | 1.89 | 2.73 |
-| | top-k | **0.24** | 1.80 |
-| | tile q/k/v(/gate) | 9.32 (4 tensors) | 5.39 (3 tensors, f32->bf16) |
-| | fine | 22.65 (226 TFLOPS) | **15.79** (324 TFLOPS) |
-| | combine (+ untile) | 2.44 + 1.94 | 2.28 (scatter included) |
-| | op total (tile/untile excluded) | 27.81 | 28.33 (tile included) |
-| FastH3 768p, k=132 (0.8) | fine | 43.92 | **31.01** |
-| | op total | 48.40 | 43.81 |
-| FastH3 480p, 56 h, 280 tiles, k=28 (0.9) | coarse / top-k / fine / combine | 0.81 / 0.11 / 5.09 / 1.04 | 1.05 / 0.66 / 2.92 / 0.91 |
-| | op total | **6.42** | 7.89 |
-| FastH3 480p, k=56 (0.8) | op total | **10.30** | 10.57 |
-| FastWan 1.3B, 12 h, 624 tiles, k=125 (0.8) | coarse / top-k / fine / combine | 0.42 / 0.06 / 9.51 / 0.50 | 0.58 / 0.46 / 5.96 / 0.63 |
-| | op total | 10.36 | **8.53** |
+| workload | stage | FastVideo (Triton) | ours before | ours after (`vsa_topk2`) |
+|---|---|---|---|---|
+| FastH3 768p, 56 h, 660 tiles, k=66 (0.9) | coarse | 1.89 | 2.73 | 2.72 |
+| | top-k | 0.24 | 1.80 | **0.27** |
+| | tile q/k/v(/gate) | 9.32 (4 tensors) | 5.39 (3 tensors, f32->bf16) | 5.41 |
+| | fine | 22.65 (226 TFLOPS) | **15.79** (324 TFLOPS) | **15.66** (327) |
+| | combine (+ untile) | 2.44 + 1.94 | 2.28 (scatter included) | 2.23 |
+| | op total, tile excluded (theirs) / included (ours) | 27.81 | 28.33 | **26.77** |
+| | incl. tile + untile | 39.08 | 28.33 | **26.77** |
+| FastH3 768p, k=132 (0.8) | fine | 43.92 | 31.01 | **30.72** |
+| | op total (theirs excl. tile) | 48.40 | 43.81 | **41.82** |
+| FastH3 480p, 56 h, 280 tiles, k=28 (0.9) | coarse / top-k / fine / combine | 0.81 / 0.11 / 5.09 / 1.04 | 1.05 / 0.66 / 2.92 / 0.91 | 1.03 / 0.12 / 2.95 / 0.89 |
+| | op total (theirs excl. tile) | **6.42** | 7.89 | 7.33 |
+| | incl. tile + untile | 10.90 | 7.89 | **7.33** |
+| FastH3 480p, k=56 (0.8) | op total (theirs excl. tile) | 10.30 | 10.57 | **10.07** |
+| FastWan 1.3B, 12 h, 624 tiles, k=125 (0.8) | coarse / top-k / fine / combine | 0.42 / 0.06 / 9.51 / 0.50 | 0.58 / 0.46 / 5.96 / 0.63 | 0.58 / 0.08 / 5.97 / 0.45 |
+| | op total (theirs excl. tile) | 10.36 | 8.53 | **8.17** |
 
 Our fine stage (`vsa_mma_attn_tma2`) is 1.4-1.7x faster everywhere. We lost
 on top-k (4-8x slower: 32 bisection passes with block reductions, then one
-thread writing the list), on coarse (f32 tile means + f32 GEMMs), and, in H3,
-on widening bf16 q/k/v/gate to f32 before VSA (5.6 ms at 768p) and reading
-f32 in tiling / combine. At 480p those made the whole op 23% slower.
+thread writing the list) and on coarse (f32 tile means + f32 GEMMs); with bf16
+activations the f32 path would also pay a widening of q/k/v/gate (5.6 ms at
+768p). At 480p / 0.9 the op total was 23% slower than FastVideo's (tiling
+excluded on their side).
 
 Fixes (bit-exact):
 
@@ -95,4 +107,14 @@ Fixes (bit-exact):
   `vsa_tile_qkv_b16`, `vsa_combine_g16`, `vsa_mma_attn_tiled_device`):
   no widening; tile means x3 1.17 ms, tiling x3 2.38 ms (was 5.37), combine
   1.87 ms (was 2.23) at 768p, all bit-identical to the f32 kernels.
-  `FASTVIDEO_VSA_BF16=0` restores the widening path.
+  `FASTVIDEO_VSA_BF16=0` restores the widening path. In the FastH3 4-step
+  VSA generation the attention inputs reach VSA as f32, so this path does not
+  engage there (frames identical with it on and off, denoise unchanged); it
+  applies when q/k/v/gate are bf16 device tensors.
+
+After `vsa_topk2` the only stage where we remain behind is coarse (f32 tile
+means + f32 cuBLAS, ~1.3-1.4x FastVideo's bf16 Triton); FastH3 480p at 0.9
+is slower than FastVideo's op only if its separate raster->tile gather (3.7
+ms) is left out, which our op total includes. The coarse stage stays f32
+because it decides the top-k selection and our H3 port pins it to the
+reference's float32 pooled scores.
