@@ -105,10 +105,48 @@ mod imp {
         })
     }
 
+    mod aot {
+        include!(concat!(env!("OUT_DIR"), "/aot_attn_fp8.rs"));
+    }
+
+    /// The embedded module for this SM: its cubin, else a same-major PTX at
+    /// or below it (driver JIT). NVRTC is the last resort: a driver older
+    /// than the box's NVRTC refuses NVRTC's PTX (seen on RTX PRO 6000:
+    /// `CUDA_ERROR_UNSUPPORTED_PTX_VERSION`).
+    fn load_embedded(dev: &DeviceContext) -> Result<Option<(Arc<cudarc::driver::CudaModule>, String)>> {
+        let want = (dev.sm_major * 10 + dev.sm_minor) as u32;
+        if crate::wan::envflag::string_flag("FASTVIDEO_KERNELS", "auto") == "nvrtc" {
+            return Ok(None);
+        }
+        if let Some((_, cubin, _)) = aot::AOT_ATTN_FP8.iter().find(|(sm, _, _)| *sm == want) {
+            let path = std::env::temp_dir()
+                .join(format!("fv-attn-fp8-{}-sm{want}.cubin", std::process::id()));
+            std::fs::write(&path, cubin).map_err(err)?;
+            let loaded = dev.ctx.load_module(cudarc::nvrtc::Ptx::from_file(&path));
+            let _ = std::fs::remove_file(&path);
+            return Ok(Some((loaded.map_err(err)?, format!("cubin sm{want}"))));
+        }
+        if let Some((sm, _, ptx)) = aot::AOT_ATTN_FP8
+            .iter()
+            .filter(|(sm, _, _)| sm / 10 == want / 10 && *sm <= want)
+            .max_by_key(|(sm, _, _)| *sm)
+        {
+            let module = dev
+                .ctx
+                .load_module(cudarc::nvrtc::Ptx::from_src(*ptx))
+                .map_err(err)?;
+            return Ok(Some((module, format!("ptx compute{sm}"))));
+        }
+        Ok(None)
+    }
+
     fn load() -> Result<Kernels> {
         use cudarc::nvrtc::{compile_ptx_with_opts, CompileOptions};
         let dev = ctx()?;
         let timer = std::time::Instant::now();
+        if let Some((module, origin)) = load_embedded(&dev)? {
+            return finish(&dev, module, origin, timer);
+        }
         let mut last = None;
         let mut ptx = None;
         for arch in crate::wan::hopper::nvrtc_arches(dev.sm_major, dev.sm_minor) {
@@ -134,6 +172,15 @@ mod imp {
             ))
         })?;
         let module = dev.ctx.load_module(ptx).map_err(err)?;
+        finish(&dev, module, "nvrtc".into(), timer)
+    }
+
+    fn finish(
+        dev: &DeviceContext,
+        module: Arc<cudarc::driver::CudaModule>,
+        origin: String,
+        timer: std::time::Instant,
+    ) -> Result<Kernels> {
         let f = |name: &str| module.load_function(name).map_err(err);
         let k = Kernels {
             colsum_bf16: f("attn_fp8_colsum_bf16")?,
@@ -147,7 +194,7 @@ mod imp {
         crate::wan::ops::opt_in_dynamic_shared(&k.fwd_d128, SMEM)?;
         crate::wan::ops::opt_in_dynamic_shared(&k.vsa, SMEM)?;
         crate::wan::log::info(format_args!(
-            "attn_fp8: kernels compiled ({:.1}s, sm{}{})",
+            "attn_fp8: kernels loaded ({origin}, {:.1}s, sm{}{})",
             timer.elapsed().as_secs_f64(),
             dev.sm_major,
             dev.sm_minor

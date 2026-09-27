@@ -96,7 +96,7 @@ Where it differs, on purpose:
 | `video_decoder` | yes | `taeh3`, `taehv` |
 | `residency` | yes | `offload` |
 | `token_set` | yes | (none yet: token pruning is not ported) |
-| `kernel_fusion`, `residual_cache`, `attention`, `hidden_states` | no | `kernel_fusion`, `teacache` |
+| `kernel_fusion`, `residual_cache`, `attention`, `hidden_states` | no | `kernel_fusion`, `teacache`, `fp8_attention` (`attention`) |
 
 Two active writers of an exclusive seam are a config error at load:
 
@@ -115,8 +115,9 @@ involving a load/build transform always clashes. A technique with
 | name | kind | parameters | legacy flag it replaces |
 |---|---|---|---|
 | `dense_attention` | build | — | `FASTVIDEO_H3_SOL_ATTN=off` on a Sol recipe; `--dense` |
-| `sol_attn` | build | `preset` (`rtx` / `engine` / `spark` / `ltx25_stage2`), `tau`, `dense_steps`, `dense_layers`, `sink` (`text` / `prefix` / `suffix`), `thresh_type` (`diag`), `correctness_gate`, `force_dense` | `FASTVIDEO_H3_SOL_ATTN=rtx|engine|spark`; LTX `--sol-stage2` |
-| `vsa` | build | `sparsity`, `group` | `FASTVIDEO_VSA_SPARSITY`, `FASTVIDEO_VSA_GROUP` |
+| `sol_attn` | build | `preset` (`rtx` / `engine` / `spark` / `ltx25_stage2`), `tau`, `dense_steps`, `dense_layers`, `sink` (`text` / `prefix` / `suffix`), `thresh_type` (`diag`), `correctness_gate`, `force_dense`, `dense_backend` (`dense` / `vsa`) | `FASTVIDEO_H3_SOL_ATTN=rtx|engine|spark`; LTX `--sol-stage2` |
+| `vsa` | build | `sparsity` (a number or a per-step table), `group`, `dense_steps`, `dense_layers`, `dense_sparsity` | `FASTVIDEO_VSA_SPARSITY` (one sparsity everywhere), `FASTVIDEO_VSA_GROUP` |
+| `fp8_attention` | build | `ops` (`all` / `dense` / `vsa`, or a list) | `FASTVIDEO_ATTN_FP8` = `0` / `1` / `dense` / `vsa` (opt-in, lossy; H3) |
 | `pisa` | build | `sparsity`, `dense_layers` | LTX `--pisa-stage2` |
 | `teacache` | on_step | `threshold`, `retain_steps`, `cooldown_steps`, `num_forwards`, `coefficients` | `FASTVIDEO_H3_SOL_CACHE=teacache` |
 | `bf16_linears` / `mxfp8` / `w8a8` | load | — | `FASTVIDEO_H3_QUANT=off|mxfp8|w8a8` (H3) |
@@ -154,6 +155,27 @@ code at every step below 64 and every block:
 | Sol-H3 engine (`engine.py` `sparse_attention.install`) | `1` | `2` | `1.0` | `prefix` |
 | Spark Ref2VA draft (`stage1_ops/sol.py`) | `"0,4-"` | `1` | `{1 = 1.0, 2 = 1.25, 3 = 1.5}` | `suffix` |
 | LTX-2.5 stage 2 (`models/ltx25/RTX5090/attention.py`) | none | `1` | `{0 = 1.0, 1 = 1.25, 2 = 1.5}` | none |
+
+`dense_backend = "vsa"` makes a Sol route's dense calls run the recipe's VSA
+(with its trained compression gate) instead of plain dense attention: on the
+VSA-distilled FastH3 checkpoints VSA is the trained function, dense attention
+is not. It needs a VSA recipe (the DiT must load `to_gate_compress`).
+
+VSA takes the same shape of schedule over its sparsity:
+
+```toml
+[techniques.vsa]
+sparsity = { default = 0.95, 0 = 0.8 }   # or one number; unlisted steps take default
+dense_layers = "0-1,48-49"               # these blocks (and dense_steps) ...
+dense_sparsity = 0.8                     # ... run at this sparsity (default 0: every tile)
+```
+
+A call on a step in `dense_steps` or a block in `dense_layers` runs at
+`dense_sparsity`, otherwise at the step's value, else the default (the
+technique's, else the recipe's). The block loop sets the top-k per block
+(`H3Vsa::select`); a schedule with no per-step or per-layer entry is the
+uniform VSA it replaces (a unit test checks both). `FASTVIDEO_VSA_SPARSITY`
+still wins and means one sparsity everywhere.
 
 ## Profile format
 

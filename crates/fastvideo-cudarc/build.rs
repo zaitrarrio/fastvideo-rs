@@ -29,6 +29,8 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 const SRC: &str = "src/wan/kernels.cu";
+/// The FP8 attention module (`wan::attn_fp8`): its own cubins, sm_89 and newer.
+const SRC_FP8: &str = "src/wan/attn_fp8.cu";
 const DEFAULT_SMS: &str = "75,80,86,89,90,100,120";
 
 fn find_nvcc() -> Option<PathBuf> {
@@ -152,6 +154,7 @@ fn write_aot(table: &Path, nvcc_entries: &str, oxide: &str) {
 
 fn main() {
     println!("cargo:rerun-if-changed={SRC}");
+    println!("cargo:rerun-if-changed={SRC_FP8}");
     println!("cargo:rerun-if-changed=build.rs");
     println!("cargo:rerun-if-env-changed=NVCC");
     println!("cargo:rerun-if-env-changed=FV_CUBIN_SMS");
@@ -161,6 +164,7 @@ fn main() {
 
     let out = PathBuf::from(env::var("OUT_DIR").expect("OUT_DIR"));
     let table = out.join("aot.rs");
+    let fp8_table = out.join("aot_attn_fp8.rs");
     let cuda_on = env::var_os("CARGO_FEATURE_CUDA").is_some();
     let nvcc = if cuda_on { find_nvcc() } else { None };
     let oxide_rows = find_oxide_cubins();
@@ -182,6 +186,7 @@ fn main() {
         if cuda_on {
             println!("cargo:warning=fastvideo-cudarc: no nvcc found; kernels will be NVRTC-compiled at run time (set NVCC=... for ahead-of-time cubins)");
         }
+        write_fp8(&fp8_table, "");
         write_aot(&table, "", &oxide);
         return;
     };
@@ -236,9 +241,50 @@ fn main() {
         ));
     }
     write_aot(&table, &entries, &oxide);
+    write_fp8(&fp8_table, &fp8_entries(&nvcc, &out, &sms));
     println!(
         "cargo:warning=fastvideo-cudarc: embedded cubins for sm {:?} via {}",
         sms,
         nvcc.display()
     );
+}
+
+fn write_fp8(table: &Path, entries: &str) {
+    fs::write(
+        table,
+        format!("pub static AOT_ATTN_FP8: &[(u32, &[u8], &str)] = &[\n{entries}];\n"),
+    )
+    .expect("write aot_attn_fp8.rs");
+}
+
+/// `attn_fp8.cu` for every SM in the list with FP8 `mma.sync` (sm_89+), with
+/// the options its NVRTC fallback uses (fast math, FTZ, C++17). A driver
+/// older than the box's NVRTC refuses NVRTC's PTX, so the cubin is the path.
+fn fp8_entries(nvcc: &Path, out: &Path, sms: &[u32]) -> String {
+    let mut entries = String::new();
+    for sm in sms.iter().filter(|&&s| s >= 89) {
+        let cubin = out.join(format!("attn_fp8_sm{sm}.cubin"));
+        let ptx = out.join(format!("attn_fp8_compute{sm}.ptx"));
+        for (kind, arch, dest) in [
+            ("-cubin", format!("sm_{sm}"), &cubin),
+            ("-ptx", format!("compute_{sm}"), &ptx),
+        ] {
+            let status = Command::new(nvcc)
+                .args([kind, "-arch", &arch, "-O3", "-std=c++17", "--use_fast_math", "-o"])
+                .arg(dest)
+                .arg(SRC_FP8)
+                .status()
+                .unwrap_or_else(|e| panic!("running {}: {e}", nvcc.display()));
+            assert!(
+                status.success(),
+                "nvcc {kind} -arch={arch} failed for {SRC_FP8}"
+            );
+        }
+        entries.push_str(&format!(
+            "    ({sm}, include_bytes!({:?}), include_str!({:?})),\n",
+            cubin.display(),
+            ptx.display()
+        ));
+    }
+    entries
 }
