@@ -1,0 +1,243 @@
+{
+  "checks": [
+    {
+      "limits": {
+        "packed_mismatch": 0,
+        "pad_nonzero": 0,
+        "scale_mismatch": 0
+      },
+      "name": "nvfp4_operand_plain_matches_te_reference",
+      "ok": true,
+      "values": {
+        "amax": 40.0,
+        "host_amax": 40.0,
+        "packed_mismatch": 0,
+        "pad_nonzero": 0,
+        "rows": 300,
+        "rows_pack": 304,
+        "scale_bytes": 24576,
+        "scale_mismatch": 0
+      }
+    },
+    {
+      "limits": {
+        "packed_mismatch": 153,
+        "pad_nonzero": 0,
+        "scale_mismatch": 19
+      },
+      "name": "nvfp4_operand_gelu_matches_te_reference",
+      "ok": true,
+      "values": {
+        "amax": 40.0,
+        "host_amax": 40.0,
+        "packed_mismatch": 0,
+        "pad_nonzero": 0,
+        "rows": 300,
+        "rows_pack": 304,
+        "scale_bytes": 24576,
+        "scale_mismatch": 0
+      }
+    },
+    {
+      "limits": {
+        "rel_l2": 0.004
+      },
+      "name": "nvfp4_linear_plain_matches_host",
+      "ok": true,
+      "values": {
+        "bias_in_epilogue": true,
+        "k": 1024,
+        "m": 300,
+        "n": 512,
+        "ok": true,
+        "vs_dense_psnr_db": 37.59100420691227,
+        "vs_dense_rel_l2": 0.13198552967026916,
+        "vs_exact": {
+          "cosine": 0.9999986270480533,
+          "max_abs": 0.01560354232788086,
+          "non_finite": 0,
+          "ref_norm": 639.0685544810273,
+          "rel_l2": 0.0016570883124330275
+        }
+      }
+    },
+    {
+      "limits": {
+        "rel_l2": 0.004
+      },
+      "name": "nvfp4_linear_gelu_in_matches_host",
+      "ok": true,
+      "values": {
+        "bias_in_epilogue": true,
+        "k": 1024,
+        "m": 300,
+        "n": 256,
+        "ok": true,
+        "vs_dense_psnr_db": 40.85529132214213,
+        "vs_dense_rel_l2": 0.12817017690158114,
+        "vs_exact": {
+          "cosine": 0.9999986121021998,
+          "max_abs": 0.015584468841552734,
+          "non_finite": 0,
+          "ref_norm": 303.2306798079754,
+          "rel_l2": 0.0016661353482985985
+        }
+      }
+    },
+    {
+      "limits": {},
+      "name": "nvfp4_linear_vs_bf16_ffn_up",
+      "ok": true,
+      "values": {
+        "cosine": 0.9899038129124595,
+        "k": 4096,
+        "m": 2048,
+        "n": 16384,
+        "psnr_db": 37.83409881510093,
+        "rel_l2": 0.14507019414077335
+      }
+    },
+    {
+      "limits": {},
+      "name": "nvfp4_linear_bench_s1_4k_up_m32640",
+      "ok": true,
+      "values": {
+        "bf16_gemm_ms": 10.819670392857144,
+        "bf16_gemm_tflops": 404.8983455921292,
+        "bf16_linear_ms": 10.503409535714285,
+        "fp8_w8a8_linear_ms": 6.304273488372092,
+        "gelu_in": false,
+        "k": 4096,
+        "m": 32640,
+        "n": 16384,
+        "nvfp4_gemm_ms": 3.0924850999999993,
+        "nvfp4_gemm_speedup_vs_bf16_gemm": 3.4986976632020466,
+        "nvfp4_gemm_tflops": 1416.6168955575567,
+        "nvfp4_linear_ms": 3.8648301400000005,
+        "nvfp4_linear_speedup_vs_bf16_linear": 2.717689822123537,
+        "nvfp4_linear_speedup_vs_fp8_linear": 1.631190313676267,
+        "nvfp4_quantize_ms": 0.70867878
+      }
+    },
+    {
+      "limits": {},
+      "name": "nvfp4_linear_bench_s1_4k_down_m32640/completed",
+      "ok": false,
+      "values": {
+        "error": "bf16"
+      }
+    },
+    {
+      "limits": {},
+      "name": "nvfp4_linear_bench_s1_1080p_up_m32130",
+      "ok": true,
+      "values": {
+        "bf16_gemm_ms": 10.32538251724138,
+        "bf16_gemm_tflops": 417.65189749039376,
+        "bf16_linear_ms": 10.493854392857143,
+        "fp8_w8a8_linear_ms": 6.241039586956522,
+        "gelu_in": false,
+        "k": 4096,
+        "m": 32130,
+        "n": 16384,
+        "nvfp4_gemm_ms": 3.05675772,
+        "nvfp4_gemm_speedup_vs_bf16_gemm": 3.3778871153849184,
+        "nvfp4_gemm_tflops": 1410.7809632488636,
+        "nvfp4_linear_ms": 3.8301209600000004,
+        "nvfp4_linear_speedup_vs_bf16_linear": 2.7398232333782855,
+        "nvfp4_linear_speedup_vs_fp8_linear": 1.6294627903752996,
+        "nvfp4_quantize_ms": 0.68840616
+      }
+    },
+    {
+      "limits": {},
+      "name": "nvfp4_linear_bench_s1_1080p_down_m32130/completed",
+      "ok": false,
+      "values": {
+        "error": "bf16"
+      }
+    },
+    {
+      "limits": {},
+      "name": "nvfp4_linear_bench_s2_chunk_up_m16384",
+      "ok": true,
+      "values": {
+        "bf16_gemm_ms": 5.2883961799999994,
+        "bf16_gemm_tflops": 415.8204455007379,
+        "bf16_linear_ms": 5.3587155399999995,
+        "fp8_w8a8_linear_ms": 3.18980472,
+        "gelu_in": false,
+        "k": 4096,
+        "m": 16384,
+        "n": 16384,
+        "nvfp4_gemm_ms": 1.4467860799999999,
+        "nvfp4_gemm_speedup_vs_bf16_gemm": 3.6552716763766484,
+        "nvfp4_gemm_tflops": 1519.9366968971667,
+        "nvfp4_linear_ms": 1.84633916,
+        "nvfp4_linear_speedup_vs_bf16_linear": 2.902346251487186,
+        "nvfp4_linear_speedup_vs_fp8_linear": 1.727637472629893,
+        "nvfp4_quantize_ms": 0.33350776
+      }
+    },
+    {
+      "limits": {},
+      "name": "nvfp4_linear_bench_s2_chunk_down_m16384/completed",
+      "ok": false,
+      "values": {
+        "error": "bf16"
+      }
+    },
+    {
+      "limits": {},
+      "name": "nvfp4_linear_bench_s2_4k_whole_up_m130560",
+      "ok": true,
+      "values": {
+        "bf16_gemm_ms": 46.069474500000005,
+        "bf16_gemm_tflops": 380.3704461113399,
+        "bf16_linear_ms": 46.18275916666667,
+        "fp8_w8a8_linear_ms": 26.040308600000003,
+        "gelu_in": false,
+        "k": 4096,
+        "m": 130560,
+        "n": 16384,
+        "nvfp4_gemm_ms": 11.892585125000002,
+        "nvfp4_gemm_speedup_vs_bf16_gemm": 3.873798170521819,
+        "nvfp4_gemm_tflops": 1473.4783382666765,
+        "nvfp4_linear_ms": 14.591395578947369,
+        "nvfp4_linear_speedup_vs_bf16_linear": 3.1650679961894586,
+        "nvfp4_linear_speedup_vs_fp8_linear": 1.7846345443181086,
+        "nvfp4_quantize_ms": 2.7117762
+      }
+    }
+  ],
+  "context": {
+    "cuda_feature": true,
+    "device": {
+      "compute_capability": [
+        12,
+        0
+      ],
+      "free_mib": 96545,
+      "name": "NVIDIA RTX PRO 6000 Blackwell Server Edition",
+      "spec": "cuda",
+      "total_mib": 97251
+    },
+    "gemm_math": "F32",
+    "limits": {
+      "denoise": 0.002,
+      "forward": 0.001,
+      "op": 0.00001
+    },
+    "mode": "exact"
+  },
+  "elapsed_s": 7.502643986,
+  "env": {
+    "FASTVIDEO_BF16": "0",
+    "FASTVIDEO_TEACACHE": "0",
+    "FASTVIDEO_TF32": "0"
+  },
+  "error": "check failed: 3 check(s) failed: kernels/nvfp4_linear_bench_s1_4k_down_m32640/completed: {\"error\":\"bf16\"} vs limits {}; kernels/nvfp4_linear_bench_s1_1080p_down_m32130/completed: {\"error\":\"bf16\"} vs limits {}; kernels/nvfp4_linear_bench_s2_chunk_down_m16384/completed: {\"error\":\"bf16\"} vs limits {}",
+  "git_sha": null,
+  "stage": "kernels",
+  "status": "fail"
+}

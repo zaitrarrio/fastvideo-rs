@@ -1,0 +1,8 @@
+weights ok: fasth3-8step
+weights ok: fasth3-4step-vsa
+weights ok: fasth3-4step-dense
+weights ok: sol-h3
+missing /workspace/weights/upscaler/minimax_h3_latent_upscaler_3d_conv_v1/minimax_h3_latent_upscaler_3d_conv_v1_bf16.safetensors
+weights INCOMPLETE: sol-h3-spark
+weights ok: ltx25-two-stage
+exit=1
