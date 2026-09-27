@@ -67,6 +67,15 @@ text says **native**.
    - **WP-19 cold-start measurement:** fresh Runpod serverless worker → submit →
      first output, per model family, before and after E12/E13.
 
+5. **Sol-H3 serves the tau-ladder route (owner decision).** Whenever the server
+   runs Sol-H3 4-step, the engine capability table selects the profile
+   `h3/sol_h3_4step_engine_ladder` (Sol engine route, tau 1.0 / 1.25 / 1.5 on
+   forwards 1-3; RTX PRO 6000 768p: denoise 21.8 s vs 33.5 s dense, 1.53x,
+   gate PASS, LPIPS 0.375). The `sol-h3` recipe itself stays dense as
+   sol-engine publishes it for one GPU, so parity/oracle runs and the
+   upstream comparison keep their reference; the dense route remains
+   selectable as an explicit profile (`h3/sol_h3_4step`).
+
 ## 1. Goals and non-goals
 
 ### 1.1 Goals

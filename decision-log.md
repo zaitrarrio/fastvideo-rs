@@ -2,6 +2,16 @@
 
 Project code: FVID
 
+### FVID · 2026-09-27 · FVID-2026-09-27-attention-sm120
+- Trigger: dense attention 5-6% behind cuDNN-via-torch on sm_120 (H3 768p 109.3 vs 103.0 ms, LTX 1080p20s 680.1 vs 647.0, 4K 752.1 vs 704.0); our cuDNN path never ran (cudarc 0.17.8 has no unified SDPA / softmax bindings); our VSA never compared with FastVideo's
+- Options: bind cuDNN's unified SDPA node ourselves; tune flash_mma_fwd2 (software-pipelined QK, 3-stage ring, rescale skipping); both, winner as sm_120 default with escape hatches
+- Decision: **sm_12x `auto` = cuDNN unified SDPA node, picked per shape by a one-time timing against flash_mma_fwd2** (`attn.rs` `auto_cudnn_or_v2`; bf16 out only; `FASTVIDEO_FLASH_KERNEL=v2|cudnn` fix the kernel). Raw FFI in `cudnn_sdpa::raw` (OPERATION_SDPA_FWD=41, attrs 2800-2805; OPERATION_SOFTMAX=45, attrs 3100-3101; cuDNN 9.26 header values). `flash_mma_fwd3` / `fwd3s` kept opt-in (`v3|v3s`). VSA: `vsa_topk2` (radix select) default (`FASTVIDEO_VSA_TOPK=v1` escape); H3 bf16-in-place VSA inputs (`FASTVIDEO_VSA_BF16`, bit-identical)
+- Reason: `attn3_bench` (2 pods): cuDNN unified cfg0 (engine 11) 104.8-105.0 vs fwd2 108.4-109.1 ms at H3 768p, 658.8-659.8 vs 682.2-682.7 at LTX 1080p20s, but 766.6-769.0 vs 757.2-759.9 at 4K 5s (hence per-shape). fwd3 bit-identical but 3% slower (255 regs, ptxas does not interleave), fwd3s 0.5% better than fwd3 only. Composite-softmax graph plans on engine 1 but returns inf/NaN: rejected. VSA fine stage ours 1.4-1.7x faster than FastVideo's Triton; top-k was 4-8x slower (bisection), coarse ~1.4x slower
+- Reversibility: cheap (env flags; fwd2 / vsa_topk kept)
+- Executed by: Executor
+- ADR: none
+- Verification: `attn3_parity` on GPU: fwd3 bit-exact vs fwd2 (11 shapes, f32+bf16 out), fwd3s within 1 bf16 ulp, cuDNN unified vs f32 reference rel_l2 <= 4.3e-3 on every shape; `vsa_b16_*` bit-exact; generation A/B (attn3 family, RTX PRO 6000): FastH3 4-step dense 768p denoise 33.23 -> 32.28 s (8.30 -> 8.07 s/step; frames PSNR 20.4 dB vs fwd2, the known H3 sensitivity to 1-ulp bf16 changes), LTX-2.5 1080p20s dense stage 2 44.0 -> 42.7 s/step (PSNR 32.7 dB); FastH3 VSA frames identical with FASTVIDEO_VSA_BF16=0/1 (path not engaged there: inputs arrive f32); `vsa_topk2` bit-exact vs `vsa_topk` on real and tied scores, 1.78 -> 0.27 ms at FastH3 768p; `auto` pod: H3 768p 103.7 vs fwd2 106.6 ms, LTX 1080p20s 650.3 vs 672.1, 4K picks fwd2. VSA op vs FastVideo (ms, 0.9 / 0.8): 768p 26.8 / 41.8 vs 27.8 / 48.4, 480p 7.3 / 10.1 vs 6.4 / 10.3 (theirs without its 3.7 ms tiling), FastWan 8.2 vs 10.4. Spend ~$4.6 (7 pods, all deleted). Details: `docs/gaps/2026-09-27-attention-sm120-cudnn-vsa.md`; artifacts/runpod/{rtx6000,attn3,upstream}
+
 ### FVID · 2026-09-27 · FVID-2026-09-27-attention-datacenter-sm90
 - Trigger: balance topped up; run the Rust-path `attn_dc` group on B200, the same plus `bench:attn_dc bench:attn` on H100, make the sm_90 kernel automatic if it passes and beats V2
 - Options: keep dc90 opt-in; make it `auto` on 9.0; flip B200 back to V2 if its group failed

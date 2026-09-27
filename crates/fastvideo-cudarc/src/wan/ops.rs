@@ -887,6 +887,20 @@ pub fn vsa_topk_device(
     let dev = ctx()?;
     let mut out = unsafe { dev.stream.alloc::<u32>((rows * k).max(1)) }.map_err(err)?;
     const THREADS: u32 = 256;
+    // vsa_topk2 (radix select, row in shared memory, parallel ordered
+    // compaction): the same indices in the same order.
+    // FASTVIDEO_VSA_TOPK=v1 keeps the bisection kernel.
+    if n <= 4096 && crate::wan::envflag::string_flag("FASTVIDEO_VSA_TOPK", "v2") != "v1" {
+        let cfg = LaunchConfig {
+            grid_dim: (rows as u32, 1, 1),
+            block_dim: (THREADS, 1, 1),
+            shared_mem_bytes: 0,
+        };
+        let (rows_i, n_i, k_i) = (rows as i32, n as i32, k as i32);
+        launch!(dev.stream, &dev.kernels.vsa_topk2, cfg; scores, &mut out, &rows_i, &n_i, &k_i)
+            .map_err(err)?;
+        return Ok(out);
+    }
     let cfg = LaunchConfig {
         grid_dim: (rows as u32, 1, 1),
         block_dim: (THREADS, 1, 1),
@@ -1125,6 +1139,124 @@ pub fn vsa_mma_attn_range_device(
     q_tiles: usize,
 ) -> Result<CudaSlice<f32>> {
     use crate::wan::stats::phase;
+    let (qt, kt, vt) = phase("vsa_mma_tile", || {
+        Ok::<_, TensorError>((
+            vsa_tile_qkv_device(q, plan, bh, seq, dim)?,
+            vsa_tile_qkv_device(k, plan, bh, seq, dim)?,
+            vsa_tile_qkv_device(v, plan, bh, seq, dim)?,
+        ))
+    })?;
+    vsa_mma_attn_tiled_device(&qt, &kt, &vt, selected, plan, bh, dim, topk, scale, q_base, q_tiles)
+}
+
+/// [`vsa_tile_qkv_device`] on a bf16 `[bh, seq, dim]` tensor: the same bits
+/// (the f32 kernel rounds to bf16, which bf16 input already is), 16 B per thread.
+#[cfg(feature = "cuda")]
+pub fn vsa_tile_qkv_bf16_device(
+    x: &CudaSlice<half::bf16>,
+    plan: &VsaPlanDev,
+    bh: usize,
+    seq: usize,
+    dim: usize,
+) -> Result<CudaSlice<half::bf16>> {
+    check("vsa_tile_qkv_b16 dim", dim % 8 == 0 && x.len() >= bh * seq * dim)?;
+    let dev = ctx()?;
+    let padded = plan.num_tiles * plan.tile_elems;
+    let total = bh * padded * dim;
+    let mut out = unsafe { dev.stream.alloc::<half::bf16>(total.max(1)) }.map_err(err)?;
+    let mut cfg = cfg_n(padded * dim / 8);
+    cfg.grid_dim.2 = bh as u32;
+    let (seq_i, padded_i, dim_i) = (seq as i64, padded as i64, dim as i32);
+    launch!(dev.stream, &dev.kernels.vsa_tile_qkv_b16, cfg; x, &plan.slot_src, &mut out, &seq_i, &padded_i, &dim_i)
+        .map_err(err)?;
+    Ok(out)
+}
+
+/// [`vsa_tile_mean_round_device`] (`round16`) on a bf16 tensor: same bits.
+#[cfg(feature = "cuda")]
+pub fn vsa_tile_mean_bf16_device(
+    x: &CudaSlice<half::bf16>,
+    plan: &VsaPlanDev,
+    bh: usize,
+    seq: usize,
+    dim: usize,
+) -> Result<CudaSlice<f32>> {
+    check("vsa_tile_mean_b16", x.len() >= bh * seq * dim && dim > 0)?;
+    let dev = ctx()?;
+    let mut out = alloc(bh * plan.num_tiles * dim)?;
+    let cfg = LaunchConfig {
+        grid_dim: (plan.num_tiles as u32, bh as u32, 1),
+        block_dim: (dim.min(256) as u32, 1, 1),
+        shared_mem_bytes: 0,
+    };
+    let (seq_i, dim_i) = (seq as i64, dim as i32);
+    let (nt, te) = (plan.num_tiles as i32, plan.tile_elems as i32);
+    launch!(dev.stream, &dev.kernels.vsa_tile_mean_b16, cfg;
+        x, &plan.slot_src, &plan.block_sizes, &mut out, &seq_i, &dim_i, &nt, &te)
+    .map_err(err)?;
+    Ok(out)
+}
+
+/// [`vsa_combine_round_device`] (`round16`) with a bf16 gate: same bits.
+#[cfg(feature = "cuda")]
+#[allow(clippy::too_many_arguments)]
+pub fn vsa_combine_gate16_device(
+    sparse: &CudaSlice<f32>,
+    coarse: &CudaSlice<f32>,
+    gate: Option<&CudaSlice<half::bf16>>,
+    plan: &VsaPlanDev,
+    out: &mut CudaSlice<f32>,
+    bh: usize,
+    group: usize,
+    q_base: usize,
+    seq: usize,
+    dim: usize,
+) -> Result<()> {
+    let dev = ctx()?;
+    let rows_per_block = (256 / dim.min(128)).max(1);
+    let cfg = LaunchConfig {
+        grid_dim: (
+            plan.tile_elems.div_ceil(rows_per_block) as u32,
+            group as u32,
+            bh as u32,
+        ),
+        block_dim: (dim.min(128) as u32, rows_per_block as u32, 1),
+        shared_mem_bytes: 0,
+    };
+    let (seq_i, dim_i) = (seq as i64, dim as i32);
+    let (te, qb, nt) = (plan.tile_elems as i32, q_base as i32, plan.num_tiles as i32);
+    let placeholder;
+    let gate_ref = match gate {
+        Some(g) => g,
+        None => {
+            placeholder = unsafe { dev.stream.alloc::<half::bf16>(1) }.map_err(err)?;
+            &placeholder
+        }
+    };
+    let has_gate = i32::from(gate.is_some());
+    launch!(dev.stream, &dev.kernels.vsa_combine_g16, cfg;
+        sparse, coarse, gate_ref, &plan.slot_src, out, &seq_i, &dim_i, &te, &qb, &nt, &has_gate)
+    .map_err(err)?;
+    Ok(())
+}
+
+/// The fine stage of [`vsa_mma_attn_range_device`] on Q/K/V already tiled
+/// (`[bh, num_tiles * 64, 128]` bf16, [`vsa_tile_qkv_device`] layout).
+#[cfg(feature = "cuda")]
+#[allow(clippy::too_many_arguments)]
+pub fn vsa_mma_attn_tiled_device(
+    qt: &CudaSlice<half::bf16>,
+    kt: &CudaSlice<half::bf16>,
+    vt: &CudaSlice<half::bf16>,
+    selected: &CudaSlice<u32>,
+    plan: &VsaPlanDev,
+    bh: usize,
+    dim: usize,
+    topk: usize,
+    scale: f32,
+    q_base: usize,
+    q_tiles: usize,
+) -> Result<CudaSlice<f32>> {
     const THREADS: u32 = 128;
     const TILE: usize = 64;
     const DIM: usize = 128;
@@ -1143,14 +1275,6 @@ pub fn vsa_mma_attn_range_device(
     )?;
     let padded = nb * TILE;
 
-    let (qt, kt, vt) = phase("vsa_mma_tile", || {
-        Ok::<_, TensorError>((
-            vsa_tile_qkv_device(q, plan, bh, seq, dim)?,
-            vsa_tile_qkv_device(k, plan, bh, seq, dim)?,
-            vsa_tile_qkv_device(v, plan, bh, seq, dim)?,
-        ))
-    })?;
-
     // K[2] + V[2] tiles of 64x128 bf16: 64 KiB, plus two mbarriers on the TMA
     // path. Past the 48 KiB default, so the function has to opt in.
     let shared_mma = (4 * TILE * DIM * 2) as u32;
@@ -1167,7 +1291,7 @@ pub fn vsa_mma_attn_range_device(
     let scale_log2 = scale * std::f32::consts::LOG2_E;
     let want_tma = tma_requested(dev.sm_major);
     if want_tma {
-        match encode_qkv_panels(&qt, &kt, &vt, bh, padded) {
+        match encode_qkv_panels(qt, kt, vt, bh, padded) {
             Ok(maps) => {
                 // The ring kernel keeps three 16 KB slots (48 KB + three
                 // mbarriers): two CTAs per SM where the two-stage one fits one.
@@ -1215,7 +1339,7 @@ pub fn vsa_mma_attn_range_device(
         shared_mem_bytes: shared_mma,
     };
     launch!(dev.stream, &dev.kernels.vsa_mma_attn, cfg;
-        &qt, &kt, &vt, selected, &plan.block_sizes, &mut out, &nt, &tk, &scale_log2, &qb)
+        qt, kt, vt, selected, &plan.block_sizes, &mut out, &nt, &tk, &scale_log2, &qb)
     .map_err(err)?;
     Ok(out)
 }

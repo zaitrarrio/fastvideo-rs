@@ -1362,6 +1362,47 @@ case "$FAMILY" in
       grep -h '/gpu_trace ' "$RUNS/$cell/stderr.log" 2>/dev/null | tail -1 | cut -c1-400 | sed "s/^/[$cell] /" | tee -a "$LOG" || true
     done
     ;;
+  attn3)
+    # sm_120 dense attention A/B (FVID-2026-09-27-attention-sm120): flash_mma_fwd2
+    # vs cuDNN's unified SDPA node, FastH3 4-step dense 768p denoise and LTX-2.5
+    # 1080p 20 s dense stage 2, same prompt/seed, then the frame diff.
+    h3_common=(
+      --prompt "$PROMPT"
+      --seconds 5
+      --seed "$SEED"
+      --text-encoder auto
+      --text-cache "$SCRATCH/h3-text-cache"
+      --text-weights "$W/h3-base"
+      --warm
+    )
+    for arm in ${FV_ATTN3_ARMS:-v2 cudnn}; do
+      gated_cell "fasth3-4step-dense-768p-$arm" fasth3-4step-dense \
+        env FASTVIDEO_FLASH_KERNEL="$arm" \
+        "$BIN" --mode fast h3 gen --weights "$W/h3-base" --h3-recipe 4step-dense \
+          --adaln-cache "$RUNS/fasth3-4step-dense-768p-adaln.cache" \
+          --clip-dir "$RUNS/fasth3-4step-dense-768p-$arm/frames" "${h3_common[@]}"
+    done
+    for arm in ${FV_ATTN3_ARMS:-v2 cudnn}; do
+      gated_cell "ltx25-1080p20s-dense-$arm" ltx25-two-stage \
+        env FASTVIDEO_FLASH_KERNEL="$arm" \
+        "$BIN" --mode fast ltx2 gen --model-version 2.5 \
+          --weights "$W/ltx25" --dit "$W/ltx25" --workload 1080p20s --dense-stage2 \
+          --prompt "$PROMPT" --seed "$SEED" --two-stage --text streamed --warm \
+          --clip "$RUNS/ltx25-1080p20s-dense-$arm/frames"
+    done
+    # VSA on bf16 activations read in place (FASTVIDEO_VSA_BF16) vs the f32
+    # widening path: the frames must match bit for bit.
+    for vb in ${FV_ATTN3_VSA:-0 1}; do
+      gated_cell "fasth3-4step-vsa-768p-b16$vb" fasth3-4step-vsa \
+        env FASTVIDEO_VSA_BF16="$vb" \
+        "$BIN" --mode fast h3 gen --weights "$W/h3-base" --h3-recipe 4step-vsa \
+          --adaln-cache "$RUNS/fasth3-4step-vsa-768p-adaln.cache" \
+          --clip-dir "$RUNS/fasth3-4step-vsa-768p-b16$vb/frames" "${h3_common[@]}"
+    done
+    compare_cells fasth3-4step-dense-768p-v2 fasth3-4step-dense-768p-cudnn
+    compare_cells ltx25-1080p20s-dense-v2 ltx25-1080p20s-dense-cudnn
+    compare_cells fasth3-4step-vsa-768p-b160 fasth3-4step-vsa-768p-b161
+    ;;
   fuse)
     # Phase 3c DiT block fusions (FASTVIDEO_H3_FUSE, FASTVIDEO_LTX_FUSE).
     # 1. kernels-fuse: `fv-gpucheck kernels --groups dit_fusion,bf16_act`,
