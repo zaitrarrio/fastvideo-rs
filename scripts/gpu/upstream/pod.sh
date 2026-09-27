@@ -336,7 +336,8 @@ run_cells() {
   cell_fv_wan fv-wan21-14b wan21-t2v-14b Wan2.1-T2V-14B-Diffusers --steps 50 --guidance-scale 5.0 \
     --height 480 --width 832 --num-frames 81 --flow-shift 3.0
   cell_fv_wan fv-wan22-5b wan22-ti2v-5b Wan2.2-TI2V-5B-Diffusers --height 704 --width 1280 --num-frames 121
-  cell_fv_wan fv-sfwan13 sfwan21-1.3b SFWan2.1-T2V-1.3B-Diffusers
+  # SF-Wan: the five prompts of prompts-eval.json, as the sfwan13 cells with FV_PROMPTS=5.
+  cell_fv_wan fv-sfwan13 sfwan21-1.3b SFWan2.1-T2V-1.3B-Diffusers --prompts "$HERE/../prompts-eval.json"
   local g768=(--height 768 --width 1344 --num-frames 124) g480=(--height 480 --width 832 --num-frames 124)
   local f8="$UW/FastVideo-FastH3-8-Step-V2" lora="$W/FastH3-4-step-Preview-v1-LoRA"
   # FastVideo (short cells first)

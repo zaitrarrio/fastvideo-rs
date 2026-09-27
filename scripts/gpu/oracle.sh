@@ -19,7 +19,9 @@
 #
 # Env: ORACLE_TARGETS (default: fasth3-8step fasth3-4step-vsa fasth3-8step-vsa0
 # fasth3-4step-dense ltx25-512p-dense
-# ltx25-512p), FASTVIDEO_DUMP_OPS (blocks whose inside is dumped, default
+# ltx25-512p; sfwan13 on request), FV_ORACLE_FAMILY (the runtime pod's
+# family, default oracle; sfwan runs the SF-Wan cells after it), UP_AFTER
+# (upstream steps after the dumps), FASTVIDEO_DUMP_OPS (blocks whose inside is dumped, default
 # 0,1,24,47), FV_ORACLE_F32 (1: the f32-activation control for every target,
 # 0: none; default H3 only), FV_ORACLE_OWN_TEXT (1: LTX targets also run on our own text
 # contexts, no text injection), plus runpod-http.sh's (RUNPOD_API_KEY, ...).
@@ -46,7 +48,7 @@ log() { printf '[%s] oracle: %s\n' "$(date -u +%H:%M:%S)" "$*" | tee -a "$logs/o
 fv=() ltx=()
 for t in $targets; do
   case "$t" in
-    fasth3-*) fv+=("$t") ;;
+    fasth3-* | sfwan13) fv+=("$t") ;;
     ltx25-*) ltx+=("$t") ;;
     *) log "unknown target $t"; exit 2 ;;
   esac
@@ -74,7 +76,7 @@ start_up() {
   (
     for attempt in 1 2 3; do
       FV_KEEP_POD=1 FV_POD_FILE="$work/$image.pod" UP_IMAGE_TARGET="$image" \
-        UP_STEPS="info:box $wsteps oracle:$csv" UP_CELL_TIMEOUT_S="${UP_CELL_TIMEOUT_S:-7200}" \
+        UP_STEPS="info:box $wsteps oracle:$csv ${UP_AFTER:-}" UP_CELL_TIMEOUT_S="${UP_CELL_TIMEOUT_S:-7200}" \
         FV_EXTRA_ENV="FASTVIDEO_DUMP_OPS=$ops${extra:+ $extra}" FV_FETCH_SKIP='oracle-dump\.tar|/dump/|\.mp4$' FV_CONTAINER_DISK_GB="$disk" \
         bash "$HERE/runpod-http.sh" upstream "$sha" >>"$logs/oracle-up-$image.log" 2>&1 && exit 0
       [[ -s "$work/$image.pod" ]] && exit 1   # the pod came up; its run failed
@@ -86,7 +88,12 @@ start_up() {
   bg[$image]=$!
 }
 
-(( ${#fv[@]} )) && start_up fastvideo "${fv[*]}" "weights:fasth3-8step weights:h3-diffusers" 150
+# The H3 targets need their weight views; SF-Wan reads the volume as it is.
+fvw=""
+[[ " ${fv[*]} " == *" fasth3-"* ]] && fvw="weights:fasth3-8step weights:h3-diffusers"
+# UP_AFTER: upstream steps run once the oracle dumps are served (e.g.
+# cells:fv-sfwan13, the upstream benchmark on the same pod).
+(( ${#fv[@]} )) && start_up fastvideo "${fv[*]}" "$fvw" 150
 # RECON_ACCEPT_MISMATCH=1: the LTX-2.5 single-file packs are rebuilt from the
 # Diffusers copy, and two of them (Gemma layers 12-47, the DiT's embedding
 # connectors) carry the Diffusers numbers -- the ones our port loads -- in the
@@ -115,7 +122,7 @@ done
 
 log "runtime pod: targets $targets"
 rc=0
-FV_FAMILY=oracle FV_EXTRA_ENV="FV_ORACLE_URL='$urls' FV_ORACLE_TARGETS='$targets' FASTVIDEO_DUMP_OPS=$ops${FV_ORACLE_F32:+ FV_ORACLE_F32=$FV_ORACLE_F32}${FV_ORACLE_OWN_TEXT:+ FV_ORACLE_OWN_TEXT=$FV_ORACLE_OWN_TEXT}" \
+FV_FAMILY="${FV_ORACLE_FAMILY:-oracle}" FV_EXTRA_ENV="FV_ORACLE_URL='$urls' FV_ORACLE_TARGETS='$targets' FASTVIDEO_DUMP_OPS=$ops${FV_ORACLE_F32:+ FV_ORACLE_F32=$FV_ORACLE_F32}${FV_ORACLE_OWN_TEXT:+ FV_ORACLE_OWN_TEXT=$FV_ORACLE_OWN_TEXT}" \
   FV_GEN_TIMEOUT_S="${FV_GEN_TIMEOUT_S:-5400}" \
   bash "$HERE/runpod-http.sh" run "$sha" >"$logs/oracle-rust.log" 2>&1 || rc=$?
 log "runtime pod finished rc=$rc"

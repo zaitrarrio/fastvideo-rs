@@ -276,7 +276,9 @@ impl Linear {
                         std::sync::atomic::AtomicBool::new(false);
                     super::log::info_once(
                         &SAID,
-                        format_args!("FASTVIDEO_FP8: FastVideo W8A8 tensorwise recipe on every linear"),
+                        format_args!(
+                            "FASTVIDEO_FP8: FastVideo W8A8 tensorwise recipe on every linear"
+                        ),
                     );
                     return Ok(Self {
                         weight: CudaTensor::from_vec(Vec::new(), vec![0, in_dim])?,
@@ -319,7 +321,7 @@ impl Linear {
                 out_dim,
                 weight_bf16: Some(std::sync::Arc::new(slice)),
                 quant: None,
-            f32_island: false,
+                f32_island: false,
                 weight_fp8_rows: None,
                 weight_affine: None,
                 nvfp4_act,
@@ -791,7 +793,9 @@ impl Linear {
             || self.nvfp4_act.is_some()
             || self.quant.is_some()
         {
-            return Err(msg("quantize: only a plain bf16/f32 linear can take an FP8 recipe"));
+            return Err(msg(
+                "quantize: only a plain bf16/f32 linear can take an FP8 recipe",
+            ));
         }
         let layout = super::quant::QuantLayout::new(kind, self.in_dim, sections)?;
         if layout.out_dim != self.out_dim {
@@ -824,7 +828,11 @@ impl Linear {
     /// The quantized linear on an MXFP8 activation a fused producer already
     /// wrote (RMSNorm+modulate, residual+norm+modulate, SwiGLU). bf16 output.
     #[cfg(feature = "cuda")]
-    pub fn forward_mx(&self, act: &super::quant::MxAct, out_shape: Vec<usize>) -> Result<CudaTensor> {
+    pub fn forward_mx(
+        &self,
+        act: &super::quant::MxAct,
+        out_shape: Vec<usize>,
+    ) -> Result<CudaTensor> {
         let q = self
             .quant
             .as_ref()
@@ -856,11 +864,19 @@ impl Linear {
                 return Ok(out);
             }
             let bias = match &self.bias {
-                Some(b) => Some(b.dev()?.ok_or_else(|| msg("quantized linear bias off the device"))?),
+                Some(b) => Some(
+                    b.dev()?
+                        .ok_or_else(|| msg("quantized linear bias off the device"))?,
+                ),
                 None => None,
             };
             let shape = out.shape.clone();
-            return match super::ops::quant_linear_epilogue_device(y16, bias.as_deref(), gelu, act16)? {
+            return match super::ops::quant_linear_epilogue_device(
+                y16,
+                bias.as_deref(),
+                gelu,
+                act16,
+            )? {
                 Ok(y16) => CudaTensor::from_device_slice_bf16(y16, shape),
                 Err(y32) => CudaTensor::from_dev_result(y32, shape),
             };
@@ -878,7 +894,10 @@ impl Linear {
     }
 
     fn forward_quant(&self, xs: &CudaTensor, gelu: bool) -> Result<CudaTensor> {
-        let q = self.quant.as_ref().ok_or_else(|| msg("forward_quant without a quant weight"))?;
+        let q = self
+            .quant
+            .as_ref()
+            .ok_or_else(|| msg("forward_quant without a quant weight"))?;
         super::evalstats::quant_call(quant_label(q.kind()));
         let (m, _, out_shape) = self.out_shape(xs)?;
         #[cfg(feature = "cuda")]
@@ -891,7 +910,9 @@ impl Linear {
             let y = match &pre {
                 // Q/K/V (and cross-attention K/V) read one activation: its
                 // tensorwise quantization is shared, no bf16 view needed.
-                Some(a) if q.layout_all_quantized() => q.forward_device_with(None, None, Some(a), m)?,
+                Some(a) if q.layout_all_quantized() => {
+                    q.forward_device_with(None, None, Some(a), m)?
+                }
                 _ => {
                     let x16 = xs
                         .dev_bf16()?
@@ -907,7 +928,10 @@ impl Linear {
             let out = CudaTensor::from_device_slice_bf16(y, out_shape)?;
             return self.quant_epilogue(out, gelu);
         }
-        stats::host_fallback("quantized linear", format_args!("host weight, input {:?}", xs.shape))?;
+        stats::host_fallback(
+            "quantized linear",
+            format_args!("host weight, input {:?}", xs.shape),
+        )?;
         let x: Vec<f32> = xs
             .host_cow()?
             .iter()
@@ -1283,9 +1307,7 @@ impl Linear {
         let mut fused_bias = false;
         let mut c16 = None;
         if let Some(b) = &self.bias {
-            let b16 = b
-                .dev_bf16()?
-                .ok_or_else(|| msg("bias without a device"))?;
+            let b16 = b.dev_bf16()?.ok_or_else(|| msg("bias without a device"))?;
             if let Some(c) = super::quant::linear_bf16_bias(x16, w16, &b16, m, k, n)? {
                 c16 = Some(c);
                 fused_bias = true;
@@ -1577,9 +1599,11 @@ pub fn scaled_dot_product_attention_masked(
     }
 }
 
-/// `FASTVIDEO_WAN_CAUSAL_FLASH` (default on): block-causal self-attention
-/// runs the masked flash kernel. `=0` materializes the `[S, S]` mask and runs
-/// [`sdpa_composed`] (the path it replaces).
+/// `FASTVIDEO_WAN_CAUSAL_FLASH` (default on): causal Wan self-attention runs
+/// the flash kernels (the masked one over a whole clip, the dense one over
+/// the KV-cache window of autoregressive generation). `=0` runs
+/// [`sdpa_composed`] instead (f32 scores; the whole-clip path materializes
+/// the `[S, S]` mask): the reference path.
 pub fn causal_flash_enabled() -> bool {
     static FLAG: super::envflag::CachedBool = super::envflag::CachedBool::new();
     FLAG.get_or_init(|| super::envflag::bool_flag("FASTVIDEO_WAN_CAUSAL_FLASH", true))
@@ -1618,6 +1642,54 @@ pub fn sdpa_block_causal(
     }
     let dense = CudaTensor::from_vec(mask.dense_mask(sq, sk), vec![1, 1, sq, sk])?;
     scaled_dot_product_attention_masked(q, k, v, scale, Some(&dense))
+}
+
+/// Causal Wan's autoregressive self-attention: one block's queries against
+/// the KV-cache window, no mask (FastVideo `CausalWanSelfAttention` with a
+/// `kv_cache`: `self.attn(roped_query, key_window, value_window)`). The flash
+/// route or the composed reference by [`causal_flash_enabled`].
+pub fn sdpa_kv_window(q: &CudaTensor, k: &CudaTensor, v: &CudaTensor) -> Result<CudaTensor> {
+    sdpa_kv_window_with(q, k, v, causal_flash_enabled())
+}
+
+/// [`sdpa_kv_window`] with the route chosen by the caller (`flash = false`:
+/// [`sdpa_composed`], f32 scores and softmax).
+pub fn sdpa_kv_window_with(
+    q: &CudaTensor,
+    k: &CudaTensor,
+    v: &CudaTensor,
+    flash: bool,
+) -> Result<CudaTensor> {
+    if q.rank() != 4 || k.rank() != 4 || v.rank() != 4 {
+        return Err(msg("sdpa expects BHSD"));
+    }
+    if flash {
+        return scaled_dot_product_attention_masked(q, k, v, None, None);
+    }
+    let act16 = super::tensor::bf16_activations();
+    let (qa, ka, va);
+    let (q, k, v) = if act16 {
+        qa = q.quantize_bf16()?;
+        ka = k.quantize_bf16()?;
+        va = v.quantize_bf16()?;
+        (&qa, &ka, &va)
+    } else {
+        (q, k, v)
+    };
+    let out = super::tensor::with_bf16_act(false, || {
+        sdpa_composed(
+            &q.to_f32_act()?,
+            &k.to_f32_act()?,
+            &v.to_f32_act()?,
+            None,
+            None,
+        )
+    })?;
+    if act16 {
+        out.quantize_bf16()
+    } else {
+        Ok(out)
+    }
 }
 
 /// SDPA from tensor ops (masked attention, CPU runs). Every op here has a
