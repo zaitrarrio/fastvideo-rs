@@ -1,0 +1,11 @@
+{
+  "name": "fv-serve-client-compat",
+  "private": true,
+  "description": "Pinned JS clients for tests/compat (docs/serve/design.md 7.5)",
+  "dependencies": {
+    "@fal-ai/client": "1.10.1",
+    "fal-client-alpha": "npm:@fal-ai/client@1.11.0-alpha.4",
+    "esbuild": "0.28.2",
+    "playwright": "1.56.1"
+  }
+}

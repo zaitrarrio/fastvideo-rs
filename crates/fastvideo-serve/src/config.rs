@@ -14,6 +14,7 @@
 //! | `PORT` | port of `server.bind` (Runpod load balancer) |
 //! | `FV_BIND`, `FV_PUBLIC_BASE_URL`, `FV_STATE_DIR`, `FV_WORKER_ID` | `server.*` |
 //! | `FV_SERVE_FORWARD` (`1`) | `server.forward` (Vast PyWorker route) |
+//! | `FV_CALLBACKS_ALLOW_PRIVATE` (`1`) | `server.callbacks_allow_private` (tests only: webhooks to loopback/private hosts) |
 //! | `FV_WEIGHTS` | substituted for `${FV_WEIGHTS}` in `models[].weights` |
 //! | `FV_AUTH_MODE`, `FV_API_KEYS` (SHA-256 hex list) | `auth.*` |
 //! | `FV_ADMIN_TOKEN` | `auth.admin_token` (else generated at startup and logged once) |
@@ -91,6 +92,10 @@ pub struct ServerCfg {
     pub console: bool,
     /// Mount `POST /fv/v1/forward` (the Vast PyWorker target, WP-16).
     pub forward: bool,
+    /// Let webhooks/callbacks (fal `fal_webhook`, MiniMax `callback_url`)
+    /// reach loopback and private hosts. Off in production (the SSRF
+    /// guard); the client-compat suites turn it on to receive them locally.
+    pub callbacks_allow_private: bool,
 }
 
 impl Default for ServerCfg {
@@ -105,6 +110,7 @@ impl Default for ServerCfg {
             sync_timeout_s: 600,
             console: true,
             forward: false,
+            callbacks_allow_private: false,
         }
     }
 }
@@ -606,6 +612,9 @@ impl Config {
         if let Some(v) = env.var("FV_SERVE_FORWARD") {
             self.server.forward = matches!(v.trim(), "1" | "true" | "yes");
         }
+        if let Some(v) = env.var("FV_CALLBACKS_ALLOW_PRIVATE") {
+            self.server.callbacks_allow_private = matches!(v.trim(), "1" | "true" | "yes");
+        }
         if let Some(v) = env.var("FV_WORKER_ID") {
             self.server.worker_id = Some(v);
         }
@@ -932,6 +941,18 @@ body_max_mb = 64
         c.auth.key_store = KeyStoreBackend::D1;
         assert!(c.validate().is_err(), "d1 key store without credentials");
         assert!(c.apply_env(&env(&[("FV_KEY_STORE", "redis")])).is_err());
+    }
+
+    #[test]
+    fn callbacks_allow_private_is_opt_in() {
+        let mut c = Config::default();
+        assert!(!c.server.callbacks_allow_private, "the SSRF guard is on by default");
+        c.apply_env(&env(&[("FV_CALLBACKS_ALLOW_PRIVATE", "1")])).unwrap();
+        assert!(c.server.callbacks_allow_private);
+        c.apply_env(&env(&[("FV_CALLBACKS_ALLOW_PRIVATE", "0")])).unwrap();
+        assert!(!c.server.callbacks_allow_private);
+        let c = Config::from_toml("[server]\ncallbacks_allow_private = true\n", "t").unwrap();
+        assert!(c.server.callbacks_allow_private);
     }
 
     #[test]
