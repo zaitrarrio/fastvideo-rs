@@ -47,6 +47,9 @@ fastvideo-reactor = { workspace = true, optional = true }
 [dev-dependencies]
 fastvideo-serve-kit = { workspace = true, features = ["d1-mock"] }
 tower = { workspace = true, features = ["util"] }
+# WHEP viewer in tests/streams_whip.rs.
+reqwest.workspace = true
+bytes.workspace = true
 
 [features]
 default = ["openai-videos", "minimax", "ltxapi", "fal", "reactor"]

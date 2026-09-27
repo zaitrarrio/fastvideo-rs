@@ -115,6 +115,9 @@ pub fn route_table(fal_apps: &[String]) -> Vec<RouteSpec> {
         r(Console, "GET", "/console/admin"),
         r(Console, "GET", "/console/models/{owner}/{alias}/{task}"),
         r(Console, "GET", "/console/assets/{file}"),
+        r(Native, "GET", "/fv/v1/streams/{id}"),
+        r(Native, "DELETE", "/fv/v1/streams/{id}"),
+        r(Native, "POST", "/fv/v1/streams/{id}/commands"),
         // fal shared routes (§4.4, §5.6).
         r(Fal, "POST", "/fal/proxy"),
         r(Fal, "GET", "/fal/proxy"),

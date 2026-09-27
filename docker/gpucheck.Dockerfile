@@ -155,6 +155,11 @@ WORKDIR /opt/fastvideo-rs
 # CPU-only test backend and is not shipped, design §0 decision 1).
 FROM build AS serve-build
 ARG FV_SERVE_FEATURES=cuda,http-client
+# The Reactor adapter (a default feature) encodes Opus: audiopus_sys builds
+# libopus statically with CMake.
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends cmake \
+ && rm -rf /var/lib/apt/lists/*
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/target \
     cargo build --release -p fastvideo-serve --features "$FV_SERVE_FEATURES" \
