@@ -18,6 +18,8 @@
 //! - [`shutdown`] waits for signals and [`app::drain`] drains.
 //! - `director` (features `fal` + `webrtc`) mounts the fal WMA director:
 //!   the WebRTC host from `[webrtc]` and the engine seam.
+//! - [`encoders`] resolves the `auto` H.264 encoder settings at startup
+//!   (NVENC probe, else OpenH264).
 //! - [`whip`] fixes the WHIP encoder geometry (Cloudflare gets a padded
 //!   1280x720 frame).
 //! - `reactor` (feature `reactor`) builds the Reactor local runtime from
@@ -30,6 +32,7 @@ pub mod console;
 pub mod deploy;
 #[cfg(all(feature = "fal", feature = "webrtc"))]
 pub mod director;
+pub mod encoders;
 pub mod gate;
 pub mod health;
 pub mod metrics;

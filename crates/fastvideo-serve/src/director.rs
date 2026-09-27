@@ -72,6 +72,17 @@ impl DirectorEngine for EngineDirector {
     }
 }
 
+/// `[director] encoder` → backend (`auto`, normally resolved at startup by
+/// [`crate::encoders::resolve`], probes here).
+fn h264_backend(s: &str) -> EncoderBackend {
+    match s {
+        "openh264" => EncoderBackend::OpenH264,
+        "cpu-test-x264" => EncoderBackend::CpuTestX264,
+        "auto" => h264_backend(&crate::encoders::auto_selection().1.director),
+        _ => EncoderBackend::Nvenc,
+    }
+}
+
 /// `DirectorConfig` from the server config.
 pub fn director_config(c: &Config, m: &MountCfg, host: &RtcHost) -> DirectorConfig {
     let d = &c.director;
@@ -81,11 +92,7 @@ pub fn director_config(c: &Config, m: &MountCfg, host: &RtcHost) -> DirectorConf
         chunk_seconds: d.chunk_seconds,
         max_session_seconds: (d.max_session_seconds > 0).then_some(d.max_session_seconds),
         buffer_chunks: d.buffer_chunks.max(1),
-        h264: match d.encoder.as_str() {
-            "openh264" => EncoderBackend::OpenH264,
-            "cpu-test-x264" => EncoderBackend::CpuTestX264,
-            _ => EncoderBackend::Nvenc,
-        },
+        h264: h264_backend(&d.encoder),
         video_bitrate: (d.video_bitrate > 0).then_some(d.video_bitrate),
         vp8_fallback: d.vp8_fallback,
         ingest: fastvideo_fal::FalConfig::default().ingest,

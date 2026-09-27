@@ -12,13 +12,15 @@ use fastvideo_webrtc::host::RtcHost;
 
 use crate::config::{Config, ReactorCfg};
 
-/// `[reactor] h264` → the encoder behind H.264 peers.
+/// `[reactor] h264` → the encoder behind H.264 peers (`auto`, normally
+/// resolved at startup by [`crate::encoders::resolve`], probes here).
 pub fn h264_backend(s: &str) -> anyhow::Result<H264Backend> {
     match s {
         "nvenc" => Ok(H264Backend::Nvenc),
         "openh264" => Ok(H264Backend::OpenH264),
         "off" => Ok(H264Backend::Off),
-        other => Err(anyhow!("[reactor] h264 = {other:?} (nvenc | openh264 | off)")),
+        "auto" => h264_backend(&crate::encoders::auto_selection().1.reactor),
+        other => Err(anyhow!("[reactor] h264 = {other:?} (auto | nvenc | openh264 | off)")),
     }
 }
 
@@ -67,8 +69,11 @@ mod tests {
         assert_eq!(r.orphan_timeout, Duration::from_secs(60));
         assert_eq!(r.ping_timeout, Duration::from_secs(20));
         assert_eq!(r.max_connections, 64);
-        assert_eq!(r.h264, H264Backend::Nvenc);
+        assert_eq!(h264_backend("nvenc").unwrap(), H264Backend::Nvenc);
         assert!(h264_backend("x264").is_err());
+        // `auto` follows the per-process NVENC probe.
+        let want = h264_backend(&crate::encoders::auto_selection().1.reactor).unwrap();
+        assert_eq!(r.h264, want);
     }
 
     #[test]

@@ -13,8 +13,9 @@
 //! [`spawn_clip_pacer`]) → **wait for the first frame** (WHIP is a
 //! transport we initiate: never offer an empty track, §5.2) → WHIP offer
 //! (H.264 first, video-only sessions offer no audio m-line, §5.3) → one
-//! encoder per session (H.264: NVENC, else OpenH264, else the CPU test
-//! x264; Opus 48 kHz stereo) → the published peer. PLI/FIR and tick drops
+//! encoder per session (H.264 from `[webrtc] encoder`, `auto` = NVENC when
+//! the startup probe encodes, else OpenH264, else the CPU test x264; Opus
+//! 48 kHz stereo) → the published peer. PLI/FIR and tick drops
 //! force an IDR (at most one per second).
 //!
 //! The publisher needs the `webrtc` and `http-client` features (and
@@ -54,7 +55,9 @@ pub struct StreamsConfig {
     pub whip_target: Option<String>,
     /// Default WHIP bearer token (`FV_WHIP_TOKEN`).
     pub whip_token: Option<String>,
-    /// `auto` | `nvenc` | `openh264` | `x264-test` (`FV_STREAM_ENCODER`).
+    /// `auto` | `nvenc` | `openh264` | `x264-test` (`[webrtc] encoder`,
+    /// `FV_STREAM_ENCODER`; `auto` is normally resolved at startup by
+    /// [`crate::encoders::resolve`]).
     pub encoder: String,
     /// STUN servers for the publisher's srflx candidate (empty: host only).
     pub stun: Vec<String>,
@@ -82,17 +85,15 @@ impl Default for StreamsConfig {
 }
 
 impl StreamsConfig {
-    /// From the serve config plus `FV_STREAM_ENCODER` / `FV_STREAM_STUN`
-    /// (comma-separated; `none` disables the probe).
+    /// From the serve config plus `FV_STREAM_STUN` (comma-separated;
+    /// `none` disables the probe).
     pub fn from_config(c: &crate::config::Config) -> Self {
         let mut s = Self {
             whip_target: c.webrtc.whip_target.clone(),
             whip_token: (!c.webrtc.whip_token.is_empty()).then(|| c.webrtc.whip_token.expose().to_owned()),
+            encoder: c.webrtc.encoder.clone(),
             ..Self::default()
         };
-        if let Ok(v) = std::env::var("FV_STREAM_ENCODER") {
-            s.encoder = v;
-        }
         if let Ok(v) = std::env::var("FV_STREAM_STUN") {
             s.stun = if v.trim() == "none" {
                 Vec::new()
@@ -565,7 +566,7 @@ mod publish {
         ClipPlayerConfig, PacedStream,
     };
     use fastvideo_media::pacer::VideoOut;
-    use fastvideo_media::video::{create_encoder, nvenc_available, EncoderBackend, VideoEncoder};
+    use fastvideo_media::video::{create_encoder, EncoderBackend, VideoEncoder};
     use fastvideo_protocol::{ApiError, ErrorKind, StreamCaps};
     use fastvideo_webrtc::host::{AudioLayout, HostConfig, PeerEvent, RtcHost};
     use fastvideo_webrtc::ice::IceServer;
@@ -586,13 +587,10 @@ mod publish {
             "openh264" => Ok(EncoderBackend::OpenH264),
             "x264-test" => Ok(EncoderBackend::CpuTestX264),
             _ => {
-                if nvenc_available() {
-                    Ok(EncoderBackend::Nvenc)
-                } else if EncoderBackend::OpenH264.compiled() {
-                    Ok(EncoderBackend::OpenH264)
-                } else {
-                    Ok(EncoderBackend::CpuTestX264)
-                }
+                // `auto` left unresolved (a router built without
+                // `App::build`): the same per-process probe.
+                let (_, sel) = crate::encoders::auto_selection();
+                pick_encoder(&sel.streams)
             }
         }
     }

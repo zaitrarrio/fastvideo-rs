@@ -1243,6 +1243,16 @@ risk R2. The strobe workspace already pinned `str0m 0.21.0`
 
 ### 5.9 Encoder decision
 
+**As implemented (supersedes the text below, see §0 decision 1):** every
+H.264 encoder setting — `[director] encoder`, `[reactor] h264`, `[webrtc]
+encoder` (`/fv/v1/streams` WHIP, `FV_STREAM_ENCODER`) — defaults to `auto`.
+At startup `fv-serve` runs one NVENC encode probe (ffmpeg `h264_nvenc`, a
+few black frames) when any setting is `auto`, logs the choice, and resolves
+`auto` to `nvenc` when the probe encoded, else `openh264`
+(`fastvideo-serve::encoders`). Explicit `nvenc` / `openh264` are kept.
+Without OpenH264 in the build the fallback is Reactor `off` (VP8 only) and
+the streams CPU-test encoder.
+
 **Video: OpenH264 in-process** (the `openh264` crate, built from source).
 
 - It gives Constrained Baseline with no B-frames, `IDR every 2 s`, no
@@ -1709,7 +1719,8 @@ additions and readings; everything is re-exported from the crate root.
   TTFF, recent session events), `POST /fv/v1/streams/{id}/commands` (a
   `ClipCommand` or `CausalCommand` as `{type,data}`). The publisher waits
   for the first frame, offers H.264 first (no audio m-line for video-only
-  models), encodes once (NVENC, else OpenH264, else the CPU-test x264;
+  models), encodes once (`[webrtc] encoder`, default `auto`: NVENC when
+  the startup probe encodes, else OpenH264, else the CPU-test x264;
   `FV_STREAM_ENCODER` overrides), Opus stereo, forces an IDR on PLI/FIR or
   tick drops (1/s), and sends the WHIP `DELETE` on stop or `max_seconds`.
   `FV_STREAM_STUN` sets the srflx probe (`none` for loopback).
@@ -1767,7 +1778,8 @@ additions and readings; everything is re-exported from the crate root.
   answers (`AnswerOptions::video_codecs`, `PeerHandle::video_codec`) and the
   runtime sends **intra-only VP8** encoded by libwebp (feature `vp8`, on by
   default) to such peers; H.264 peers (browsers) get NVENC (`[reactor]
-  h264 = "nvenc"`) or OpenH264 (`"openh264"`, CPU test backend). Intra-only
+  h264`, default `auto`: NVENC when the startup probe encodes, else
+  OpenH264). Intra-only
   VP8 costs bitrate; an inter-frame VP8/AV1 encoder is the follow-up for
   production SDK clients.
 - **Compat** (`crates/fastvideo-reactor/tests/compat/run.sh`): Python

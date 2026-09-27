@@ -5,6 +5,10 @@
 //! | **NVENC** (production) | `nvenc` | always built; needs ffmpeg with `h264_nvenc`, an NVIDIA GPU and the `video` driver capability at run time | ffmpeg subprocess: rgb24 on stdin, scaler in the filter graph, Annex-B with AUDs on stdout. Constrained Baseline, CBR, no B-frames, IDR every `gop_seconds`, no scene-cut IDRs, zero-latency |
 //! | OpenH264 | `openh264` | `openh264` feature; **CPU-only tests/CI, never deployed** (no patent licence for a source build) | In process; scaler in Rust |
 //!
+//! `auto` (fv-serve's default for every encoder setting) resolves once per
+//! process through [`auto_encoder`]: NVENC when an NVENC encode probe
+//! succeeds, else OpenH264.
+//!
 //! x264 is not a backend (owner decision). The ffmpeg pipe encoder can run
 //! libx264 only as [`FfmpegH264::Libx264CpuTest`], which exists so the
 //! ffmpeg plumbing is testable on GPU-less CI; nothing selects it by default
@@ -322,12 +326,57 @@ impl FfmpegH264 {
 /// Whether ffmpeg can open `h264_nvenc` here (GPU, driver `video`
 /// capability, and an ffmpeg built with nvenc). Encodes a few black frames.
 pub fn nvenc_available() -> bool {
-    let mut c = tools::ffmpeg_command();
-    c.args(["-f", "lavfi", "-i", "color=c=black:s=256x144:r=24:d=0.2", "-c:v", "h264_nvenc", "-f", "null", "-"])
+    nvenc_probe().is_ok()
+}
+
+/// One NVENC encode probe: `Err` says why (ffmpeg missing, or the tail of
+/// ffmpeg's error output).
+pub fn nvenc_probe() -> std::result::Result<(), String> {
+    nvenc_probe_with(&tools::ffmpeg_bin())
+}
+
+fn nvenc_probe_with(ffmpeg: &std::path::Path) -> std::result::Result<(), String> {
+    let mut c = std::process::Command::new(ffmpeg);
+    c.args(["-hide_banner", "-loglevel", "error", "-nostats"])
+        .args(["-f", "lavfi", "-i", "color=c=black:s=256x144:r=24:d=0.2", "-c:v", "h264_nvenc", "-f", "null", "-"])
         .stdin(Stdio::null())
         .stdout(Stdio::null())
-        .stderr(Stdio::null());
-    c.status().map(|s| s.success()).unwrap_or(false)
+        .stderr(Stdio::piped());
+    let out = c.output().map_err(|e| format!("cannot run {}: {e}", ffmpeg.display()))?;
+    if out.status.success() {
+        return Ok(());
+    }
+    let err = String::from_utf8_lossy(&out.stderr);
+    let lines: Vec<&str> = err.lines().map(str::trim).filter(|l| !l.is_empty()).collect();
+    let tail = lines[lines.len().saturating_sub(3)..].join(" | ");
+    Err(if tail.is_empty() { format!("ffmpeg h264_nvenc exited with {}", out.status) } else { tail })
+}
+
+/// What an `auto` encoder setting resolves to (see [`auto_encoder`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AutoEncoder {
+    /// NVENC when the probe encoded, else OpenH264.
+    pub backend: EncoderBackend,
+    /// Why NVENC was not chosen (the probe's error).
+    pub nvenc_error: Option<String>,
+}
+
+impl AutoEncoder {
+    /// From one probe outcome.
+    pub fn from_probe(probe: std::result::Result<(), String>) -> Self {
+        match probe {
+            Ok(()) => Self { backend: EncoderBackend::Nvenc, nvenc_error: None },
+            Err(e) => Self { backend: EncoderBackend::OpenH264, nvenc_error: Some(e) },
+        }
+    }
+}
+
+/// Resolves `encoder = "auto"`: NVENC when an NVENC encode probe succeeds,
+/// else OpenH264. The probe runs once per process (it spawns ffmpeg), so
+/// every `auto` setting and every later session agree.
+pub fn auto_encoder() -> &'static AutoEncoder {
+    static AUTO: std::sync::OnceLock<AutoEncoder> = std::sync::OnceLock::new();
+    AUTO.get_or_init(|| AutoEncoder::from_probe(nvenc_probe()))
 }
 
 // ---------------------------------------------------------------------------
@@ -735,6 +784,18 @@ mod tests {
         assert_eq!(serde_json::to_string(&EncoderBackend::Nvenc).unwrap(), "\"nvenc\"");
         assert_eq!(serde_json::to_string(&EncoderBackend::OpenH264).unwrap(), "\"openh264\"");
         assert!(serde_json::from_str::<EncoderBackend>("\"cpu-test-x264\"").is_err());
+    }
+
+    #[test]
+    fn auto_picks_nvenc_only_when_the_probe_encodes() {
+        let a = AutoEncoder::from_probe(Ok(()));
+        assert_eq!((a.backend, a.nvenc_error), (EncoderBackend::Nvenc, None));
+        let a = AutoEncoder::from_probe(Err("No NVENC capable devices found".into()));
+        assert_eq!(a.backend, EncoderBackend::OpenH264);
+        assert_eq!(a.nvenc_error.as_deref(), Some("No NVENC capable devices found"));
+        // A missing ffmpeg is a probe failure, not a panic.
+        let e = nvenc_probe_with(std::path::Path::new("/nonexistent/ffmpeg")).unwrap_err();
+        assert!(e.contains("cannot run /nonexistent/ffmpeg"), "{e}");
     }
 
     #[test]

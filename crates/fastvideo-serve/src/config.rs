@@ -277,7 +277,8 @@ pub struct EngineCfg {
     /// Tier alias (`h3-max`, `ltx-turbo`, ...) -> model id.
     pub tier_overrides: BTreeMap<String, String>,
     pub fake: FakeCfg,
-    /// Post-processing H.264 encoder for crops: `nvenc` (deployed) or
+    /// Post-processing H.264 encoder for crops: `auto` (NVENC when the
+    /// startup probe encodes, else `cpu-test-x264`), `nvenc` (deployed) or
     /// `cpu-test-x264` (CPU CI only).
     pub post_encoder: String,
 }
@@ -289,7 +290,7 @@ impl Default for EngineCfg {
             swap: false,
             tier_overrides: BTreeMap::new(),
             fake: FakeCfg::default(),
-            post_encoder: "nvenc".into(),
+            post_encoder: "auto".into(),
         }
     }
 }
@@ -389,6 +390,10 @@ pub struct WebrtcCfg {
     /// Default WHIP target when a stream does not say (`cloudflare` \| `mediamtx`).
     pub whip_target: Option<String>,
     pub whip_token: Secret,
+    /// H.264 encoder for native `/fv/v1/streams` WHIP publishing
+    /// (`FV_STREAM_ENCODER`): `auto` (NVENC when the startup probe encodes,
+    /// else OpenH264) | `nvenc` | `openh264` | `x264-test`.
+    pub encoder: String,
 }
 
 impl Default for WebrtcCfg {
@@ -400,6 +405,7 @@ impl Default for WebrtcCfg {
             ice_servers: Vec::new(),
             whip_target: None,
             whip_token: Secret::default(),
+            encoder: "auto".into(),
         }
     }
 }
@@ -414,7 +420,8 @@ pub struct DirectorCfg {
     pub chunk_seconds: f64,
     /// `max_session_seconds` in video time; 0 = unlimited.
     pub max_session_seconds: u64,
-    /// H.264 encoder: `nvenc` (production) or `openh264` (CPU tests).
+    /// H.264 encoder: `auto` (NVENC when the startup probe encodes, else
+    /// OpenH264), `nvenc` or `openh264`.
     pub encoder: String,
     /// Answer intra-only VP8 (libwebp) to offers without H.264.
     pub vp8_fallback: bool,
@@ -429,7 +436,7 @@ impl Default for DirectorCfg {
         Self {
             chunk_seconds: 10.0,
             max_session_seconds: 0,
-            encoder: "nvenc".into(),
+            encoder: "auto".into(),
             vp8_fallback: true,
             buffer_chunks: 1,
             video_bitrate: 0,
@@ -455,7 +462,8 @@ pub struct ReactorCfg {
     /// RT `WEBRTC_CLIENT_PING_TIMEOUT_SECONDS`.
     pub ping_timeout_s: u64,
     pub max_connections: usize,
-    /// H.264 encoder for H.264 peers: `nvenc` | `openh264` | `off` (VP8
+    /// H.264 encoder for H.264 peers: `auto` (NVENC when the startup probe
+    /// encodes, else OpenH264) | `nvenc` | `openh264` | `off` (VP8
     /// peers, such as the Python SDK, always get intra-only VP8).
     pub h264: String,
     pub h264_bitrate_bps: Option<u32>,
@@ -471,7 +479,7 @@ impl Default for ReactorCfg {
             orphan_timeout_s: 60,
             ping_timeout_s: 20,
             max_connections: 64,
-            h264: "nvenc".into(),
+            h264: "auto".into(),
             h264_bitrate_bps: None,
         }
     }
@@ -635,6 +643,9 @@ impl Config {
         if let Some(v) = env.var("FV_WHIP_TOKEN") {
             self.webrtc.whip_token = Secret(v);
         }
+        if let Some(v) = env.var("FV_STREAM_ENCODER") {
+            self.webrtc.encoder = v;
+        }
         // RT's own environment names (reactor §3.3).
         for (k, slot) in [
             ("ORPHAN_TIMEOUT_SECONDS", &mut self.reactor.orphan_timeout_s),
@@ -733,12 +744,24 @@ impl Config {
             }
         }
         match self.engine.post_encoder.as_str() {
-            "nvenc" | "cpu-test-x264" => {}
+            "auto" | "nvenc" | "cpu-test-x264" => {}
             other => return Err(ConfigError::Invalid(format!("engine.post_encoder: unknown `{other}`"))),
         }
         match self.director.encoder.as_str() {
-            "nvenc" | "openh264" | "cpu-test-x264" => {}
-            other => return Err(ConfigError::Invalid(format!("director.encoder: unknown `{other}` (nvenc | openh264)"))),
+            "auto" | "nvenc" | "openh264" | "cpu-test-x264" => {}
+            other => {
+                return Err(ConfigError::Invalid(format!("director.encoder: unknown `{other}` (auto | nvenc | openh264)")))
+            }
+        }
+        match self.reactor.h264.as_str() {
+            "auto" | "nvenc" | "openh264" | "off" => {}
+            other => return Err(ConfigError::Invalid(format!("reactor.h264: unknown `{other}` (auto | nvenc | openh264 | off)"))),
+        }
+        match self.webrtc.encoder.as_str() {
+            "auto" | "nvenc" | "openh264" | "x264-test" => {}
+            other => {
+                return Err(ConfigError::Invalid(format!("webrtc.encoder: unknown `{other}` (auto | nvenc | openh264)")))
+            }
         }
         if !(self.director.chunk_seconds.is_finite() && self.director.chunk_seconds > 0.0) {
             return Err(ConfigError::Invalid("director.chunk_seconds must be positive".into()));

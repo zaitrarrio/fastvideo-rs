@@ -145,7 +145,9 @@ fn worker_id(c: &Config) -> String {
 impl App {
     /// Builds everything (starts the engine and background tasks; needs a
     /// tokio runtime).
-    pub async fn build(config: Config, ov: Overrides) -> anyhow::Result<App> {
+    pub async fn build(mut config: Config, ov: Overrides) -> anyhow::Result<App> {
+        // `auto` encoder settings → NVENC or OpenH264, probed once.
+        crate::encoders::resolve(&mut config).await;
         tokio::fs::create_dir_all(&config.server.state_dir)
             .await
             .with_context(|| format!("creating {}", config.server.state_dir.display()))?;
@@ -176,6 +178,7 @@ impl App {
         };
         let encoder = match config.engine.post_encoder.as_str() {
             "cpu-test-x264" => FfmpegH264::Libx264CpuTest,
+            "auto" if crate::encoders::auto_selection().1.post == "cpu-test-x264" => FfmpegH264::Libx264CpuTest,
             _ => FfmpegH264::Nvenc,
         };
         let gate = ServiceGate::new(
