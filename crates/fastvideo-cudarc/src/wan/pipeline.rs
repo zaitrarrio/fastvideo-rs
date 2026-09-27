@@ -17,12 +17,12 @@ use rand_distr::StandardNormal;
 use thiserror::Error;
 
 use super::clip::{ClipVision, ClipVisionConfig};
-use crate::hooks::{Hooks, Stage};
 use super::tensor::{CudaTensor, Result as TensorResult, TensorError};
 use super::transformer::WanTransformer3D;
 use super::umt5::{pad_prompt_embeds, Umt5Encoder};
 use super::vae::AutoencoderKlWan;
 use super::weights::WeightMap;
+use crate::hooks::{Hooks, Stage};
 
 /// TAEHV replaces the Wan VAE decode when `FASTVIDEO_TAEHV_WEIGHTS` names a
 /// directory holding `taew2_1.safetensors` (`taew2_2.safetensors` for the

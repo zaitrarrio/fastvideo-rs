@@ -87,7 +87,9 @@ pub struct H3Request {
     pub seed: u64,
     pub height: usize,
     pub width: usize,
-    /// Aligned up to `17 n + 5`; 5 to 15 seconds at 24 fps.
+    /// Aligned up to `17 n + 5`; 4 to 15 seconds at 24 fps (107 to 362
+    /// frames). FastVideo-parity callers hold the 5 s floor
+    /// (`H3_FASTVIDEO_MIN_DURATION_S`).
     pub num_frames: usize,
     /// Write `output.mp4` (needs ffmpeg) next to the PNG frames.
     pub mp4: bool,

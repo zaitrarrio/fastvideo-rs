@@ -176,7 +176,13 @@ impl<'a> Hooks<'a> {
     }
 
     /// `done` of `total` steps of `stage` are finished.
-    pub fn step(&self, stage: Stage, done: usize, total: usize, block: Option<usize>) -> Result<()> {
+    pub fn step(
+        &self,
+        stage: Stage,
+        done: usize,
+        total: usize,
+        block: Option<usize>,
+    ) -> Result<()> {
         self.report(Progress {
             stage,
             step: done,
@@ -217,7 +223,9 @@ mod tests {
         let seen = RefCell::new(Vec::new());
         let progress = |p: &Progress| seen.borrow_mut().push(*p);
         let token = CancelToken::new();
-        let h = Hooks::default().with_cancel(&token).with_progress(&progress);
+        let h = Hooks::default()
+            .with_cancel(&token)
+            .with_progress(&progress);
         assert!(h.step(Stage::Denoise, 1, 2, Some(0)).is_ok());
         token.clone().cancel();
         let e = h.step(Stage::Denoise, 2, 2, Some(1)).unwrap_err();
@@ -362,6 +370,13 @@ mod tests {
             format!("{:x}", h.finalize())
         }
 
+        /// The default pool's live bytes after the stream drains (`None` on a
+        /// CPU build, where there is no device allocator to check).
+        fn live_bytes() -> Option<u64> {
+            crate::wan::device::synchronize().unwrap();
+            crate::wan::device::pool_usage().map(|u| u.used)
+        }
+
         #[test]
         fn hooks_leave_the_frames_byte_identical_and_cancel_within_one_step() {
             let root = scratch("wan");
@@ -374,11 +389,16 @@ mod tests {
             let seen = RefCell::new(Vec::new());
             let progress = |p: &Progress| seen.borrow_mut().push(*p);
             let token = CancelToken::new();
-            let hooks = Hooks::default().with_cancel(&token).with_progress(&progress);
+            let hooks = Hooks::default()
+                .with_cancel(&token)
+                .with_progress(&progress);
             let hooked = pipe
                 .generate_to_with_hooks(&cfg, &root.join("hooked"), false, hooks)
                 .unwrap();
-            assert_eq!(hash_frames(&plain.frame_paths), hash_frames(&hooked.frame_paths));
+            assert_eq!(
+                hash_frames(&plain.frame_paths),
+                hash_frames(&hooked.frame_paths)
+            );
             let seen = seen.into_inner();
             let steps: Vec<_> = seen
                 .iter()
@@ -387,7 +407,14 @@ mod tests {
                 .collect();
             assert_eq!(steps, vec![(1, 3), (2, 3), (3, 3)]);
             assert_eq!(seen.first().map(|p| p.stage), Some(Stage::Text));
-            assert_eq!(seen.last().map(|p| (p.stage, p.frames)), Some((Stage::VideoDecode, 9)));
+            assert_eq!(
+                seen.last().map(|p| (p.stage, p.frames)),
+                Some((Stage::VideoDecode, 9))
+            );
+
+            // Two warm runs have filled every lazy cache, so the pool's live
+            // bytes are the resident model alone; a cancel must return to it.
+            let resident = live_bytes();
 
             // Tripped by the observer after step 1: no step 2 runs.
             let token = CancelToken::new();
@@ -404,6 +431,11 @@ mod tests {
                 .unwrap_err();
             assert!(err.is_cancelled(), "{err}");
             assert_eq!(count.into_inner(), 1);
+            assert_eq!(
+                live_bytes(),
+                resident,
+                "a cancelled run leaked device memory"
+            );
 
             // A token tripped before the call stops before the text encoder.
             let hooks = Hooks::default().with_cancel(&token);
@@ -411,10 +443,14 @@ mod tests {
                 .generate_to_with_hooks(&cfg, &root.join("early"), false, hooks)
                 .unwrap_err()
                 .is_cancelled());
+            assert_eq!(live_bytes(), resident);
 
             // And the pipeline still produces the same clip afterwards.
             let again = pipe.generate_to(&cfg, &root.join("again"), false).unwrap();
-            assert_eq!(hash_frames(&plain.frame_paths), hash_frames(&again.frame_paths));
+            assert_eq!(
+                hash_frames(&plain.frame_paths),
+                hash_frames(&again.frame_paths)
+            );
             let _ = std::fs::remove_dir_all(&root);
         }
     }

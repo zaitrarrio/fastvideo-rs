@@ -35,8 +35,8 @@ use rand::{Rng, SeedableRng};
 use rand_distr::StandardNormal;
 
 use crate::h3::drain::{DecodeSplit, FrameDrain};
-use crate::llm::{DecoderConfig, ResidentDecoder};
 use crate::hooks::{Hooks, Stage};
+use crate::llm::{DecoderConfig, ResidentDecoder};
 use crate::wan::offload::{DitOffload, Residency};
 use crate::wan::pipeline::{
     frames_to_rgb8, interleave_audio, write_wav, PipelineError, Result, VideoWriter,

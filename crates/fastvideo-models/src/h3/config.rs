@@ -768,7 +768,7 @@ pub fn resolve_canvas_size_short(
     short_edge: usize,
 ) -> Result<(usize, usize), String> {
     let m = H3_CANVAS_MULTIPLE;
-    if short_edge == 0 || short_edge % m != 0 || short_edge > H3_SHORT_EDGE {
+    if short_edge == 0 || !short_edge.is_multiple_of(m) || short_edge > H3_SHORT_EDGE {
         return Err(format!(
             "H3 short edge must be a positive multiple of {m} up to {H3_SHORT_EDGE}, got {short_edge}"
         ));
@@ -1230,7 +1230,14 @@ mod tests {
     #[test]
     fn the_480p_canvas_scales_the_768_rule() {
         // 768 is exactly the existing resolver.
-        for (aw, ah) in [(16.0, 9.0), (9.0, 16.0), (1.0, 1.0), (4.0, 3.0), (21.0, 9.0), (4.0, 1.0)] {
+        for (aw, ah) in [
+            (16.0, 9.0),
+            (9.0, 16.0),
+            (1.0, 1.0),
+            (4.0, 3.0),
+            (21.0, 9.0),
+            (4.0, 1.0),
+        ] {
             assert_eq!(
                 resolve_canvas_size_short(aw, ah, H3_SHORT_EDGE).unwrap(),
                 resolve_canvas_size(aw, ah).unwrap()
@@ -1263,9 +1270,15 @@ mod tests {
         let (h, w) = resolve_canvas_size_short(16.0, 9.0, H3_SHORT_EDGE_480P).unwrap();
         let g = H3Geometry::new(h, w, H3_MIN_DURATION_S * H3_FPS).unwrap();
         assert_eq!((g.height, g.width, g.num_frames), (480, 832, 107));
-        assert_eq!((g.latent_frames, g.latent_height, g.latent_width), (32, 30, 52));
+        assert_eq!(
+            (g.latent_frames, g.latent_height, g.latent_width),
+            (32, 30, 52)
+        );
         assert_eq!(g.audio_latents, 178);
-        assert_eq!(H3VideoVaeConfig::fasth3_8step().temporal_decode_plan(32), (0, 6, 107));
+        assert_eq!(
+            H3VideoVaeConfig::fasth3_8step().temporal_decode_plan(32),
+            (0, 6, 107)
+        );
         // FastVideo's floor is still reported for the parity surface.
         assert_eq!(align_num_frames(H3_FASTVIDEO_MIN_DURATION_S * H3_FPS), 124);
     }
