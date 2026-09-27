@@ -949,7 +949,9 @@ impl WanPipeline {
         let timer = std::time::Instant::now();
         // A missing ffmpeg costs the mp4, not the clip (as the PNG mux did).
         let mp4 = mp4 && cfg.fps > 0 && ffmpeg_available();
-        let writer = VideoWriter::spawn(out_dir, cfg.fps, mp4)?;
+        // With a frame sink (serve E2) the same writer taps its frames to it
+        // and writes no PNGs; without one this is `VideoWriter::spawn`.
+        let writer = hooks.open_writer(out_dir, f64::from(cfg.fps), mp4, None)?;
         let mut drain = crate::h3::drain::FrameDrain::new(writer)?;
         let use_taehv = self.uses_taehv(cfg);
         hooks.stage(Stage::VideoDecode, 0)?;
@@ -962,6 +964,13 @@ impl WanPipeline {
         let (mut writer, split) = drain.finish()?;
         let tail = std::time::Instant::now();
         let mp4_path = writer.finish_video()?;
+        if let Some(sent) = hooks.finish_sink()? {
+            if sent != frames {
+                return Err(PipelineError::Message(format!(
+                    "frame sink got {sent} of {frames} frames"
+                )));
+            }
+        }
         timings.encode_s = tail.elapsed().as_secs_f64();
         timings.decode_s = timer.elapsed().as_secs_f64();
         timings.vae_s = split.vae_s;

@@ -17,7 +17,7 @@
 #   gate_cells: fv-gpucheck gate with scripts/gpu/gate-policy.toml
 #     (FV_GATE_POLICY overrides) into $RUNS/gate/.
 set -euo pipefail
-FAMILY="${1:?usage: runpod-matrix.sh headline|mmaudio|speechtest|h3|ltx|hunyuan|wan|b200|rtx6000|rtx5090|fastvideo|precision|precision-debug|trace|fuse|oracle|ltxvae|writer|eval|ltxoffload|techniques|h3arms|h3attn}"
+FAMILY="${1:?usage: runpod-matrix.sh headline|mmaudio|speechtest|h3|ltx|hunyuan|wan|b200|rtx6000|rtx5090|fastvideo|precision|precision-debug|trace|fuse|oracle|ltxvae|ltxfps|writer|eval|ltxoffload|techniques|h3arms|h3attn}"
 WORK="${FV_WORK:-/workspace}"
 BIN="${FV_GPUCHECK:-/opt/fastvideo-rs/target/release/fv-gpucheck}"
 W="$WORK/weights"
@@ -1960,6 +1960,43 @@ Audio: male speech, clear voice, quiet room"
       rtx5090_fullopt_d6 rtx5090_fullopt_t125 rtx5090_fullopt_fp8attn
     for f in "$RUNS"/gate/gate-*.json; do
       [[ -f "$f" ]] && log "$(basename "$f"): $(grep -o '"verdict": "[a-z]*"' "$f" | head -1)"
+    done
+    ;;
+  ltxfps)
+    # Serve E4: LTX-2.5 distilled two-stage at 1080p (the 1920x1088 engine
+    # canvas) at the frame rates the APIs accept beyond 24. Each cell checks
+    # the frame count and the mp4's rate and audio track with ffprobe
+    # (gen.mp4_frames_and_rate, benchmark.json "mp4_probe"). The 25 fps cell
+    # and the silent one (--skip-audio-decode) also run serve E2's frame sink
+    # beside the PNG writer and check its frames byte for byte against the
+    # PNGs of the same run (gen.sink_frames_identical). fasth3-8step-sink does
+    # the same for H3 (FV_SINK_CHECK=1).
+    frames="${FV_LTXFPS_FRAMES:-121}"
+    for fps in ${FV_LTXFPS:-25 48 50}; do
+      extra=()
+      [[ "$fps" == 25 ]] && extra=(--sink-check)
+      gated_cell "ltx25-1080p-${fps}fps" ltx25-two-stage \
+        "$BIN" --mode fast ltx2 gen --model-version 2.5 \
+          --weights "$W/ltx25" --dit "$W/ltx25" --workload 1080p20s \
+          --num-frames "$frames" --frame-rate "$fps" \
+          --prompt "$PROMPT" --seed "$SEED" --two-stage --text streamed \
+          --clip "$RUNS/ltx25-1080p-${fps}fps/frames" "${extra[@]}"
+    done
+    gated_cell ltx25-1080p-50fps-silent ltx25-two-stage \
+      "$BIN" --mode fast ltx2 gen --model-version 2.5 \
+        --weights "$W/ltx25" --dit "$W/ltx25" --workload 1080p20s \
+        --num-frames "$frames" --frame-rate 50 --skip-audio-decode --sink-check \
+        --prompt "$PROMPT" --seed "$SEED" --two-stage --text streamed \
+        --clip "$RUNS/ltx25-1080p-50fps-silent/frames"
+    gated_cell fasth3-8step-sink fasth3-8step \
+      env FV_SINK_CHECK=1 \
+      "$BIN" --mode fast h3 gen --weights "$W/h3-8step" --h3-recipe 8step \
+        --prompt "$PROMPT" --seconds 5 --seed "$SEED" --text-encoder auto \
+        --text-cache "$SCRATCH/h3-text-cache" --text-weights "$W/h3-base" \
+        --clip-dir "$RUNS/fasth3-8step-sink/frames"
+    for cell in $(ls "$RUNS" 2>/dev/null | grep -E '^(ltx25-1080p|fasth3-8step-sink)'); do
+      grep -h 'PASS\|FAIL' "$RUNS/$cell/stderr.log" 2>/dev/null | grep -E 'sink|mp4_frames|no_wav|gen\.frames' \
+        | cut -c1-300 | sed "s/^/[$cell] /" | tee -a "$LOG" || true
     done
     ;;
   ltxvae)

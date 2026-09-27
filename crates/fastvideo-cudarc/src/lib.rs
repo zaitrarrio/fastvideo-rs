@@ -32,6 +32,7 @@ pub mod matrixgame;
 pub mod mmaudio;
 pub mod pisa_attn;
 pub mod sd35;
+pub mod sink;
 pub mod sol_attn;
 pub mod stable_audio;
 pub mod text_encode;
@@ -41,6 +42,7 @@ pub mod world_fuse;
 pub mod zimage;
 
 pub use hooks::{CancelToken, Hooks, Progress, Stage};
+pub use sink::{AudioPcm, CollectFrames, FrameSink, SinkPort, VideoFrames};
 pub use wan::device::{resolve_device, DeviceError};
 pub use wan::{
     ClipVision, ClipVisionConfig, CudaTensor, DenoiseStep, GenerateConfig, LoadParts, StepObserver,

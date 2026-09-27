@@ -161,6 +161,11 @@ pub struct Ltx2Request {
     /// First-frame image for I2V (`None` = T2AV). Uses VAE encode stub until
     /// the full encoder lands.
     pub image_path: Option<PathBuf>,
+    /// Silent output (serve E4): skip the audio VAE and vocoder. The audio
+    /// latents are still denoised with the video (the model is joint, so the
+    /// video is unchanged), but no `audio.wav` is written (`Ltx2Output::wav`
+    /// is empty), the mp4 has no audio track, and a frame sink gets no PCM.
+    pub skip_audio_decode: bool,
 }
 
 /// Whether stage 2 runs the Sol route when the caller did not choose. The
@@ -210,6 +215,7 @@ impl Ltx2Request {
             sol_stage2: false,
             pisa_stage2: false,
             image_path: None,
+            skip_audio_decode: false,
         }
     }
 
@@ -319,8 +325,10 @@ pub struct Ltx2Timings {
 
 #[derive(Debug, Clone)]
 pub struct Ltx2Output {
+    /// `frame-NNN.png` paths (empty when a frame sink took the frames).
     pub frames: Vec<String>,
     pub mp4: Option<String>,
+    /// `audio.wav` (empty with `skip_audio_decode`).
     pub wav: String,
     pub prompt_tokens: usize,
     pub video_tokens: usize,
@@ -1148,8 +1156,10 @@ fn trim() -> Result<()> {
 /// What [`decode_and_write`] left on disk, and how long each part took.
 #[derive(Debug, Clone)]
 pub struct Written {
+    /// `frame-NNN.png` paths (empty when a frame sink took the frames).
     pub frames: Vec<String>,
     pub mp4: Option<String>,
+    /// `audio.wav`, or empty when the audio decode was skipped.
     pub wav: String,
     pub decode_audio_s: f64,
     /// Through a finished mp4 (see [`Ltx2Timings::decode_video_s`]).
@@ -1163,15 +1173,51 @@ pub struct Written {
     pub writer: crate::wan::writer::WriterStats,
 }
 
-/// Close the video half of `writer` (ffmpeg fed and exited) and add that tail
-/// to `decode_video_s`; then write the PNG frames. Returns
-/// `(frames, mp4, decode_video_s, encode_s, write_s)`.
+/// Where and how the decoders write a clip.
+#[derive(Debug, Clone, Copy)]
+pub struct DecodeOut<'a> {
+    pub dir: &'a Path,
+    pub frame_rate: f64,
+    /// Also mux `output.mp4`.
+    pub mp4: bool,
+    /// No audio VAE / vocoder: no `audio.wav`, a silent mp4, no PCM to a sink
+    /// (serve E4, `Ltx2Request::skip_audio_decode`).
+    pub skip_audio: bool,
+    /// Cancellation, progress per decoded chunk, and the frame sink (E2).
+    pub hooks: Hooks<'a>,
+}
+
+impl<'a> DecodeOut<'a> {
+    /// The batch output: audio decoded, no hooks.
+    pub fn files(dir: &'a Path, frame_rate: f64, mp4: bool) -> Self {
+        Self {
+            dir,
+            frame_rate,
+            mp4,
+            skip_audio: false,
+            hooks: Hooks::NONE,
+        }
+    }
+}
+
+/// Close the video half of `writer` (ffmpeg fed and exited), hand any frames
+/// still pending to the sink, and add that tail to `decode_video_s`; then
+/// write the PNG frames. Returns `(frames, mp4, decode_video_s, encode_s, write_s)`.
 fn finish_writer(
     writer: &mut VideoWriter,
     decode_video_s: f64,
+    hooks: &Hooks<'_>,
 ) -> Result<(Vec<String>, Option<String>, f64, f64, f64)> {
     let timer = Instant::now();
     let mp4 = writer.finish_video()?;
+    if let Some(sent) = hooks.finish_sink()? {
+        let pushed = writer.stats().frames;
+        if sent != pushed {
+            return Err(err(format!(
+                "ltx2: frame sink got {sent} of {pushed} frames"
+            )));
+        }
+    }
     let encode_s = timer.elapsed().as_secs_f64();
     let timer = Instant::now();
     let (frames, _) = writer.finish()?;
@@ -1179,23 +1225,18 @@ fn finish_writer(
     Ok((frames, mp4, decode_video_s + encode_s, encode_s, write_s))
 }
 
-/// Final packed latents → `audio.wav`, `frame-NNN.png` and (when `mp4`)
-/// `output.mp4` in `dir`. Audio is decoded and written first so the muxer can
-/// take it as an input while frames are still arriving. `tiling`: the
-/// reference's blended tile decode ([`VideoDecoder::decode_tiled`]); `None`
-/// decodes the whole clip exactly, streamed in time.
-#[allow(clippy::too_many_arguments)]
-pub fn decode_and_write(
+/// The audio half, first: the WAV must exist before the muxer starts. Also
+/// hands the PCM to the frame sink. `(None, 0)` when skipped.
+fn decode_audio_first(
     dec: &Decoders,
-    video: &CudaTensor,
     audio: &CudaTensor,
-    grid: [usize; 3],
-    dir: &Path,
-    frame_rate: f64,
-    mp4: bool,
-    tiling: Option<&TileSizeConfig>,
-) -> Result<Written> {
+    out: &DecodeOut<'_>,
+) -> Result<(Option<PathBuf>, f64)> {
+    let dir = out.dir;
     std::fs::create_dir_all(dir).map_err(|e| err(format!("{}: {e}", dir.display())))?;
+    if out.skip_audio {
+        return Ok((None, 0.0));
+    }
     let timer = Instant::now();
     let wave = dec.vocoder.forward(&dec.audio.decode_packed(audio)?)?;
     let channels = wave.shape[1];
@@ -1204,28 +1245,53 @@ pub fn decode_and_write(
         .map_err(|_| err("ltx2: vocoder sample rate out of range"))?;
     let channel_count =
         u16::try_from(channels).map_err(|_| err("ltx2: too many audio channels"))?;
-    write_wav(
-        &wav,
-        &interleave_audio(&wave.host_cow()?, channels)?,
-        channel_count,
-        rate,
-    )?;
+    let interleaved = interleave_audio(&wave.host_cow()?, channels)?;
+    write_wav(&wav, &interleaved, channel_count, rate)?;
     let decode_audio_s = timer.elapsed().as_secs_f64();
+    out.hooks.audio(&crate::sink::AudioPcm {
+        sample_rate: rate,
+        channels,
+        samples: &interleaved,
+    })?;
+    Ok((Some(wav), decode_audio_s))
+}
+
+fn wav_string(wav: Option<&PathBuf>) -> String {
+    wav.map(|w| w.to_string_lossy().into_owned())
+        .unwrap_or_default()
+}
+
+/// Final packed latents → `audio.wav`, `frame-NNN.png` and (when `mp4`)
+/// `output.mp4` in `out.dir`. Audio is decoded and written first so the muxer
+/// can take it as an input while frames are still arriving. `tiling`: the
+/// reference's blended tile decode ([`VideoDecoder::decode_tiled`]); `None`
+/// decodes the whole clip exactly, streamed in time.
+pub fn decode_and_write(
+    dec: &Decoders,
+    video: &CudaTensor,
+    audio: &CudaTensor,
+    grid: [usize; 3],
+    out: &DecodeOut<'_>,
+    tiling: Option<&TileSizeConfig>,
+) -> Result<Written> {
+    let (wav, decode_audio_s) = decode_audio_first(dec, audio, out)?;
 
     let latents = unpack_video(video, grid)?;
     save_latents(&latents)?;
-    let fps = frame_rate.round().max(1.0) as u32;
-    let writer = VideoWriter::spawn_with_audio(dir, fps, mp4, Some(&wav))?;
-    let (mut writer, frames_s, split) = decode_video_drained(&dec.video, &latents, tiling, writer)?;
+    let writer = out
+        .hooks
+        .open_writer(out.dir, out.frame_rate, out.mp4, wav.as_deref())?;
+    let (mut writer, frames_s, split) =
+        decode_video_drained_hooked(&dec.video, &latents, tiling, writer, out.hooks)?;
     let (frames, mp4_path, decode_video_s, encode_s, write_s) =
-        finish_writer(&mut writer, frames_s)?;
+        finish_writer(&mut writer, frames_s, &out.hooks)?;
     crate::wan::log::info(format_args!(
         "ltx2 video decode + mp4 {decode_video_s:.2}s (mp4 tail {encode_s:.2}s); png frames after it {write_s:.2}s"
     ));
     Ok(Written {
         frames,
         mp4: mp4_path,
-        wav: wav.to_string_lossy().into_owned(),
+        wav: wav_string(wav.as_ref()),
         decode_audio_s,
         decode_video_s,
         encode_s,
@@ -1266,13 +1332,28 @@ pub fn decode_video_drained(
     tiling: Option<&TileSizeConfig>,
     writer: VideoWriter,
 ) -> Result<(VideoWriter, f64, DecodeSplit)> {
+    decode_video_drained_hooked(video, latents, tiling, writer, Hooks::NONE)
+}
+
+/// [`decode_video_drained`] reporting each chunk to `hooks` (progress,
+/// cancellation, frame sink).
+fn decode_video_drained_hooked(
+    video: &VideoDecoder,
+    latents: &CudaTensor,
+    tiling: Option<&TileSizeConfig>,
+    writer: VideoWriter,
+    hooks: Hooks<'_>,
+) -> Result<(VideoWriter, f64, DecodeSplit)> {
     let timer = Instant::now();
     crate::wan::gpu_trace::window_begin("ltx2/decode");
     let mut drain = FrameDrain::new(writer)?;
     // The decoder's sink speaks tensor errors; carry the drain's own across.
     let mut sink_err: Option<PipelineError> = None;
     let mut sink = |offset: usize, frames: &CudaTensor| -> std::result::Result<(), TensorError> {
-        match drain.push(offset, frames) {
+        let pushed = drain
+            .push(offset, frames)
+            .and_then(|()| hooks.frames(offset + frames.shape[0]));
+        match pushed {
             Ok(()) => Ok(()),
             Err(e) => {
                 let text = e.to_string();
@@ -1303,41 +1384,26 @@ pub fn decode_video_drained(
 /// Like [`decode_and_write`], but video goes through the tiny autoencoder
 /// (`taeltx2_3_wide`), which takes the DiT-normalised latents directly and
 /// streams finished frames to the writer one latent frame at a time.
-#[allow(clippy::too_many_arguments)]
 pub fn decode_tae_and_write(
     dec: &Decoders,
     tae: &crate::wan::taehv::TaeHv,
     video: &CudaTensor,
     audio: &CudaTensor,
     grid: [usize; 3],
-    dir: &Path,
-    frame_rate: f64,
-    mp4: bool,
+    out: &DecodeOut<'_>,
 ) -> Result<Written> {
-    std::fs::create_dir_all(dir).map_err(|e| err(format!("{}: {e}", dir.display())))?;
-    let timer = Instant::now();
-    let wave = dec.vocoder.forward(&dec.audio.decode_packed(audio)?)?;
-    let channels = wave.shape[1];
-    let wav = dir.join("audio.wav");
-    let rate = u32::try_from(dec.vocoder.sample_rate())
-        .map_err(|_| err("ltx2: vocoder sample rate out of range"))?;
-    let channel_count =
-        u16::try_from(channels).map_err(|_| err("ltx2: too many audio channels"))?;
-    write_wav(
-        &wav,
-        &interleave_audio(&wave.host_cow()?, channels)?,
-        channel_count,
-        rate,
-    )?;
-    let decode_audio_s = timer.elapsed().as_secs_f64();
+    let (wav, decode_audio_s) = decode_audio_first(dec, audio, out)?;
 
     let timer = Instant::now();
-    let fps = frame_rate.round().max(1.0) as u32;
-    let mut writer = VideoWriter::spawn_with_audio(dir, fps, mp4, Some(&wav))?;
+    let hooks = out.hooks;
+    let mut writer = hooks.open_writer(out.dir, out.frame_rate, out.mp4, wav.as_deref())?;
     let mut sink_err: Option<PipelineError> = None;
     let mut sink = |offset: usize, frames: &CudaTensor| -> std::result::Result<(), TensorError> {
         let (h, w) = (frames.shape[2], frames.shape[3]);
-        match frames_to_rgb8(frames).and_then(|rgb| writer.push(offset, h, w, rgb)) {
+        let pushed = frames_to_rgb8(frames)
+            .and_then(|rgb| writer.push(offset, h, w, rgb))
+            .and_then(|()| hooks.frames(offset + frames.shape[0]));
+        match pushed {
             Ok(()) => Ok(()),
             Err(e) => {
                 let text = e.to_string();
@@ -1354,11 +1420,11 @@ pub fn decode_tae_and_write(
         (Ok(_), None) => {}
     }
     let (frames, mp4_path, decode_video_s, encode_s, write_s) =
-        finish_writer(&mut writer, timer.elapsed().as_secs_f64())?;
+        finish_writer(&mut writer, timer.elapsed().as_secs_f64(), &hooks)?;
     Ok(Written {
         frames,
         mp4: mp4_path,
-        wav: wav.to_string_lossy().into_owned(),
+        wav: wav_string(wav.as_ref()),
         decode_audio_s,
         decode_video_s,
         encode_s,
@@ -1375,27 +1441,10 @@ pub fn decode_diffvae_and_write(
     video: &CudaTensor,
     audio: &CudaTensor,
     grid: [usize; 3],
-    dir: &Path,
-    frame_rate: f64,
-    mp4: bool,
+    out: &DecodeOut<'_>,
     seed: u64,
 ) -> Result<Written> {
-    std::fs::create_dir_all(dir).map_err(|e| err(format!("{}: {e}", dir.display())))?;
-    let timer = Instant::now();
-    let wave = dec.vocoder.forward(&dec.audio.decode_packed(audio)?)?;
-    let channels = wave.shape[1];
-    let wav = dir.join("audio.wav");
-    let rate = u32::try_from(dec.vocoder.sample_rate())
-        .map_err(|_| err("ltx2: vocoder sample rate out of range"))?;
-    let channel_count =
-        u16::try_from(channels).map_err(|_| err("ltx2: too many audio channels"))?;
-    write_wav(
-        &wav,
-        &interleave_audio(&wave.host_cow()?, channels)?,
-        channel_count,
-        rate,
-    )?;
-    let decode_audio_s = timer.elapsed().as_secs_f64();
+    let (wav, decode_audio_s) = decode_audio_first(dec, audio, out)?;
 
     let timer = Instant::now();
     let unpacked = unpack_video(video, grid)?;
@@ -1412,8 +1461,8 @@ pub fn decode_diffvae_and_write(
     };
     // [1,3,F,H,W] → [F,3,H,W] for the writer.
     let frames_nchw = rgb.permute(&[0, 2, 1, 3, 4])?.reshape(vec![f, 3, h, w])?;
-    let fps = frame_rate.round().max(1.0) as u32;
-    let mut writer = VideoWriter::spawn_with_audio(dir, fps, mp4, Some(&wav))?;
+    let hooks = out.hooks;
+    let mut writer = hooks.open_writer(out.dir, out.frame_rate, out.mp4, wav.as_deref())?;
     // Chunk frames to bound peak host RGB buffers.
     const CHUNK: usize = 8;
     let mut offset = 0usize;
@@ -1423,13 +1472,14 @@ pub fn decode_diffvae_and_write(
         let rgb8 = frames_to_rgb8(&chunk)?;
         writer.push(offset, h, w, rgb8)?;
         offset += n;
+        hooks.frames(offset)?;
     }
     let (frames, mp4_path, decode_video_s, encode_s, write_s) =
-        finish_writer(&mut writer, timer.elapsed().as_secs_f64())?;
+        finish_writer(&mut writer, timer.elapsed().as_secs_f64(), &hooks)?;
     Ok(Written {
         frames,
         mp4: mp4_path,
-        wav: wav.to_string_lossy().into_owned(),
+        wav: wav_string(wav.as_ref()),
         decode_audio_s,
         decode_video_s,
         encode_s,
@@ -2852,6 +2902,13 @@ impl Ltx2Pipeline {
         hooks.stage(Stage::VideoDecode, 0)?;
         self.ensure_decoders()?;
         let decoders = self.decoders.as_ref().expect("decoders");
+        let out = DecodeOut {
+            dir: &req.output_dir,
+            frame_rate: req.frame_rate,
+            mp4: req.mp4,
+            skip_audio: req.skip_audio_decode,
+            hooks,
+        };
 
         let written = if let Some(tae) = self.tae.as_ref() {
             if req.diff_vae {
@@ -2859,16 +2916,7 @@ impl Ltx2Pipeline {
                     "ltx2: the tiny autoencoder and DiffVAE are both video decoders; pick one",
                 ));
             }
-            decode_tae_and_write(
-                decoders,
-                tae,
-                &video,
-                &audio,
-                decode_grid,
-                &req.output_dir,
-                req.frame_rate,
-                req.mp4,
-            )?
+            decode_tae_and_write(decoders, tae, &video, &audio, decode_grid, &out)?
         } else if req.diff_vae {
             crate::wan::log::info(format_args!("ltx2: DiffVAE decode (DiT dropped)"));
             let dd_cfg = cfg.diffusion_decoder.as_ref().expect("checked above");
@@ -2882,9 +2930,7 @@ impl Ltx2Pipeline {
                 &video,
                 &audio,
                 decode_grid,
-                &req.output_dir,
-                req.frame_rate,
-                req.mp4,
+                &out,
                 req.seed + 40_000,
             )?
         } else {
@@ -2895,16 +2941,7 @@ impl Ltx2Pipeline {
             } else {
                 None
             };
-            decode_and_write(
-                decoders,
-                &video,
-                &audio,
-                decode_grid,
-                &req.output_dir,
-                req.frame_rate,
-                req.mp4,
-                tiling.as_ref(),
-            )?
+            decode_and_write(decoders, &video, &audio, decode_grid, &out, tiling.as_ref())?
         };
         timings.decode_audio_s = written.decode_audio_s;
         timings.decode_video_s = written.decode_video_s;
@@ -3141,7 +3178,7 @@ impl Ltx2Pipeline {
             (Ok(_), None) => {}
         };
         let (frames, mp4_path, decode_video_s, encode_s, write_s) =
-            finish_writer(&mut writer, timer.elapsed().as_secs_f64())?;
+            finish_writer(&mut writer, timer.elapsed().as_secs_f64(), &Hooks::NONE)?;
         timings.decode_video_s = decode_video_s;
         timings.video_encode_s = encode_s;
         timings.write_s = write_s;
@@ -3751,8 +3788,15 @@ mod tests {
             initial_noise(&cfg, [2, 2, 2], 3, &mut NoiseStream::new(1, false)).unwrap();
         let dir = std::env::temp_dir().join(format!("fv-ltx2-pipeline-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
-        let out =
-            decode_and_write(&dec, &video, &audio, [2, 2, 2], &dir, 24.0, false, None).unwrap();
+        let out = decode_and_write(
+            &dec,
+            &video,
+            &audio,
+            [2, 2, 2],
+            &DecodeOut::files(&dir, 24.0, false),
+            None,
+        )
+        .unwrap();
         // 2 latent frames → 9 frames of 32x32 (×8 by the VAE, ×2 by its patch… in this tiny config ×16).
         assert_eq!(out.frames.len(), 9);
         assert!(out.frames.iter().all(|p| Path::new(p).is_file()));
@@ -3767,6 +3811,87 @@ mod tests {
             24_000
         );
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Serve E2 / E4 on the decode path: a frame sink gets exactly the PNG
+    /// frames' bytes and the WAV's PCM (and no PNG is written); a silent
+    /// decode writes no WAV and hands the sink no audio, with the same frames.
+    #[test]
+    fn a_frame_sink_gets_the_png_frames_and_silent_skips_the_audio() {
+        use crate::sink::{CollectFrames, SinkPort};
+        let cfg = tiny();
+        let map = weights();
+        let dec = Decoders {
+            video: VideoDecoder::load(&map, &cfg.vae).unwrap(),
+            audio: AudioDecoder::load(&map, &cfg.audio_vae).unwrap(),
+            vocoder: Vocoder::load(&map, &cfg.vocoder).unwrap(),
+            upsampler: None,
+        };
+        let (video, audio) =
+            initial_noise(&cfg, [2, 2, 2], 3, &mut NoiseStream::new(1, false)).unwrap();
+        let root = std::env::temp_dir().join(format!("fv-ltx2-sink-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let plain_dir = root.join("plain");
+        let plain = decode_and_write(
+            &dec,
+            &video,
+            &audio,
+            [2, 2, 2],
+            &DecodeOut::files(&plain_dir, 25.0, false),
+            None,
+        )
+        .unwrap();
+        let pngs: Vec<Vec<u8>> = plain
+            .frames
+            .iter()
+            .map(|p| image::open(p).unwrap().to_rgb8().into_raw())
+            .collect();
+        assert_eq!(pngs.len(), 9);
+
+        for silent in [false, true] {
+            let dir = root.join(if silent { "silent" } else { "sink" });
+            let mut sink = CollectFrames::default();
+            let port = SinkPort::new(&mut sink);
+            let out = DecodeOut {
+                skip_audio: silent,
+                hooks: Hooks::default().with_sink(&port),
+                ..DecodeOut::files(&dir, 25.0, false)
+            };
+            let got = decode_and_write(&dec, &video, &audio, [2, 2, 2], &out, None).unwrap();
+            assert!(got.frames.is_empty(), "a sink run wrote PNGs");
+            assert_eq!(port.frames_delivered(), 9);
+            drop(port);
+            let frames: Vec<&[u8]> = sink.frames().collect();
+            assert_eq!(frames.len(), 9);
+            for (i, (a, b)) in frames.iter().zip(&pngs).enumerate() {
+                assert!(*a == b.as_slice(), "frame {i} differs from its PNG");
+            }
+            assert!(sink.chunks.iter().all(|c| c.fps == 25.0));
+            let pngs_on_disk = std::fs::read_dir(&dir)
+                .unwrap()
+                .filter(|e| {
+                    e.as_ref()
+                        .is_ok_and(|e| e.file_name().to_string_lossy().ends_with(".png"))
+                })
+                .count();
+            assert_eq!(pngs_on_disk, 0);
+            if silent {
+                assert!(got.wav.is_empty() && sink.audio.is_none());
+                assert!(!dir.join("audio.wav").exists());
+                assert_eq!(got.decode_audio_s, 0.0);
+            } else {
+                let (rate, channels, pcm) = sink.audio.clone().unwrap();
+                assert_eq!((rate, channels, pcm.len()), (24_000, 2, 9 * 48 * 2));
+                let wav = std::fs::read(&got.wav).unwrap();
+                assert_eq!(wav, std::fs::read(&plain.wav).unwrap());
+                for (b, v) in wav[44..].chunks_exact(2).zip(&pcm) {
+                    let w = i16::from_le_bytes([b[0], b[1]]);
+                    let q = (v.clamp(-1.0, 1.0) * 32767.0).round() as i16;
+                    assert!((i32::from(w) - i32::from(q)).abs() <= 1);
+                }
+            }
+        }
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]

@@ -1711,8 +1711,34 @@ fn gen(
         // FASTVIDEO_GPU_TRACE: the cold pass traces too; only the timed one is kept.
         fastvideo_cudarc::wan::gpu_trace::reset_report();
         let timer = std::time::Instant::now();
-        let out = pipeline.generate(&request, clip_dir)?;
+        // FV_SINK_CHECK=1 (serve E2): the timed run also feeds an in-memory
+        // frame sink (PNG frames kept), checked byte for byte against them.
+        let sink_check = std::env::var("FV_SINK_CHECK").is_ok_and(|v| v == "1");
+        let mut collected = fastvideo_cudarc::sink::CollectFrames::default();
+        let out = if sink_check {
+            let port = fastvideo_cudarc::sink::SinkPort::new(&mut collected).with_pngs(true);
+            let hooks = fastvideo_cudarc::Hooks::default().with_sink(&port);
+            pipeline.generate_with_hooks(&request, clip_dir, hooks)?
+        } else {
+            pipeline.generate(&request, clip_dir)?
+        };
         let total = timer.elapsed().as_secs_f64();
+        if sink_check {
+            let sink = crate::ltx2_stage::sink_vs_pngs(
+                &collected,
+                &out.frame_paths,
+                &out.wav.to_string_lossy(),
+            );
+            report.set(&ck("sink"), &sink);
+            report.check(
+                ck("gen.sink_identical"),
+                sink["frames"] == json!(out.frames)
+                    && sink["mismatched_frames"] == json!(0)
+                    && sink["audio_matches_wav"] == json!(true),
+                sink.clone(),
+                json!({"frames": out.frames, "mismatched_frames": 0, "audio_matches_wav": true}),
+            )?;
+        }
         let counters = fastvideo_cudarc::wan::evalstats::snapshot();
         let mut values = timings(&out, total);
         values["warm"] = json!(warm);

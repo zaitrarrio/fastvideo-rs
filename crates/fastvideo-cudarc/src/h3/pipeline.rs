@@ -72,7 +72,7 @@ use super::vae_encoder::H3VideoEncoder;
 use super::vsa::H3Vsa;
 use crate::hooks::{Hooks, Stage};
 use crate::wan::offload::{DitOffload, MemoryLog, OffloadStats, PhaseMemory, Residency};
-use crate::wan::pipeline::{interleave_audio, write_wav, PipelineError, Result, VideoWriter};
+use crate::wan::pipeline::{interleave_audio, write_wav, PipelineError, Result};
 use crate::wan::taehv::{TaeArch, TaeHv};
 use crate::wan::tensor::{CudaTensor, TensorError};
 use crate::wan::weights::WeightMap;
@@ -1212,6 +1212,17 @@ impl H3Pipeline {
         let cfg = &self.cfg;
         let geometry =
             H3Geometry::new(request.height, request.width, request.num_frames).map_err(msg)?;
+        if hooks.has_sink()
+            && self
+                .options
+                .recipe
+                .as_deref()
+                .is_some_and(fastvideo_models::h3::lora::is_sol_h3_spark_recipe)
+        {
+            return Err(msg(
+                "h3: a frame sink is not supported with sol-h3-spark (its LTX refiner writes its own clip)",
+            ));
+        }
         let mut timings = H3Timings::default();
         let mut memory = MemoryLog::start("h3");
 
@@ -1553,13 +1564,15 @@ impl H3Pipeline {
         drop(transient_audio);
         transient_booking.release(crate::wan::ledger::AUDIO_VAE);
         let wav = out_dir.join("audio.wav");
-        write_wav(
-            &wav,
-            &interleave_audio(&wave, H3_AUDIO_CHANNELS)?,
-            H3_AUDIO_CHANNELS as u16,
-            sample_rate,
-        )?;
+        let interleaved = interleave_audio(&wave, H3_AUDIO_CHANNELS)?;
+        write_wav(&wav, &interleaved, H3_AUDIO_CHANNELS as u16, sample_rate)?;
         timings.audio_decode_s = timer.elapsed().as_secs_f64();
+        hooks.audio(&crate::sink::AudioPcm {
+            sample_rate,
+            channels: H3_AUDIO_CHANNELS,
+            samples: &interleaved,
+        })?;
+        drop(interleaved);
         crate::wan::device::trim_pool().map_err(|e| msg(e.to_string()))?;
         memory.mark("audio_decode")?;
 
@@ -1594,8 +1607,9 @@ impl H3Pipeline {
             .as_ref()
             .or(transient_video.as_ref())
             .expect("video decoder");
-        let writer =
-            VideoWriter::spawn_with_audio(out_dir, H3_FPS as u32, request.mp4, Some(&wav))?;
+        // With a frame sink (serve E2) the same writer taps its frames to it
+        // and writes no PNGs.
+        let writer = hooks.open_writer(out_dir, H3_FPS as f64, request.mp4, Some(&wav))?;
         // Chunks go to the writer through a drain thread, so the decode
         // never waits on a copy down or on PNG / mp4 encoding.
         let mut drain = FrameDrain::new(writer)?;
@@ -1630,6 +1644,11 @@ impl H3Pipeline {
         let (mut writer, split) = drain.finish()?;
         let tail = Instant::now();
         let mp4 = writer.finish_video()?;
+        if let Some(sent) = hooks.finish_sink()? {
+            if sent != frames {
+                return Err(msg(format!("h3: frame sink got {sent} of {frames} frames")));
+            }
+        }
         timings.video_encode_s = tail.elapsed().as_secs_f64();
         timings.video_decode_s = timer.elapsed().as_secs_f64();
         timings.video_vae_s = split.vae_s;
