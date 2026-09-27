@@ -88,6 +88,54 @@ Conventions:
 
 ## 1. MiniMax H3 API (MiniMax Open Platform, "Video Generation V2")
 
+### 1.0 Primary source: `MM:api-reference/api-overview`
+
+The user named `https://platform.minimax.io/docs/api-reference/api-overview`
+as the authoritative MiniMax source. Its "Video Model" section says:
+
+- **Models.** "Supported Models" lists exactly two ids:
+  - `MiniMax-H3`: text, image, first-and-last-frame and reference input;
+    768P/2K; 4–15 s.
+  - `MiniMax-H3-Max`: T2V, I2V (first or last frame) and reference input;
+    480P/768P "(no 2K)"; 5–15 s.
+- **Shared protocol.** "Both models share the same `content[]` request
+  protocol and query endpoints — switching models only requires changing the
+  `model` field."
+- **Endpoints.** There are three creation endpoints (Create Video Generation
+  Task, Create H3-Context-IR Task, Create Video Regeneration Task) and shared
+  Query, List and Cancel/Delete endpoints. "MiniMax-H3-Max supports the
+  Create Video Generation Task endpoint only."
+- **Workflow.** Create, get a `task_id`, then query it. `content.url` holds
+  the video, or `content.prompt` for Context-IR. `task_type` tells the three
+  apart.
+- **Links.** The section's cards link only to the V2 pages:
+  `MM:api-reference/video-generation-v2-{create,h3-context-ir,regeneration,query,list,delete}`.
+  - The legacy V1 pages (`video-generation-{t2v,i2v,fl2v,s2v,query,download}`)
+    are **not** linked from the overview. They remain in `MM:llms.txt` and
+    serve only Hailuo models (1.8).
+  - The brief's split into text-to-video, image-to-video, first/last frame
+    and subject reference is therefore a V1 split. In V2 all four are one
+    create endpoint, and the mode is chosen by the `content[].role` values
+    (1.3.1).
+- **API key.** Pay-as-you-go keys come from "API Keys > Create new secret
+  key" and cover all modalities, including video. The Token Plan
+  "Subscription Key" is a separate kind of key ("Get API Key").
+- **File management.** Five endpoints: Upload, List, Retrieve, Retrieve
+  Content and Delete. Formats and limits are defined by the Upload page.
+  - `MM:api-reference/file-management-upload` adds
+    `purpose=video_generation_input` for first-frame images and reference
+    images, video and audio.
+  - The upload's `file_id` is then used in V2 `content[].*.url` as
+    `mm_file://{file_id}`. It is "valid for 7 days (after expiry, generation
+    returns file expired …)". Upload validates specs and rejects invalid
+    files with 400.
+  - Per-file limits: images (jpg, jpeg, png, webp, heic, heif) 30 MB;
+    reference video (mp4, mov) 50 MB; reference audio (wav, mp3) 15 MB.
+  - V2 generation results come back as a direct `content.url`, so the V1
+    `GET /v1/files/retrieve` step is not part of the H3 flow.
+
+The subsections below give the per-endpoint detail from the linked V2 pages.
+
 ### 1.1 Hosts, auth and product naming
 
 | Item | Value | Source |
@@ -415,39 +463,94 @@ receiver):
 
 ## 2. FastVideo API ("fastvideo-api")
 
-### 2.1 FastVideo's own server: `fastvideo serve` (OpenAI/vLLM-Omni `/v1/videos`)
+### 2.1 Primary spec: FastVideo's hosted API (`fastvideo serve`, OpenAI/vLLM-Omni `/v1/videos`)
 
-**Version:**
+**Pages fetched on 2026-09-27:**
 
-- This repo pins `FV_REV=e90be598e56138af5c82590f0d72f6fa2dfce400`
-  ("FastVideo main, 2026-09-24"; `scripts/gpu/upstream/setup.sh:23-24`).
-- A fetch of `origin/main` on 2026-09-27 returned the same commit
-  (`e90be59 [perf] MiniMax H3: return uint8 frames from the decode worker (#1828)`),
-  so pinned equals latest.
+- `H:api/`: the index. It names `VideoGenerator`, `PipelineConfig` and
+  `SamplingParam` as the core Python API.
+- `H:api/fastvideo/entrypoints/openai/{api_server,common_api,video_api,image_api,protocol,request_adapter,serving_engine,state,stores,utils,playground,mlx_server}/`.
+- `H:api/fastvideo/entrypoints/cli/{serve,router_serve}/`.
+- `H:api/fastvideo/entrypoints/streaming/{protocol,server,router/main}/`.
+- `H:api/fastvideo/api/{,schema,errors,results,compat}/`.
+- `H:design/server_contracts/{,openai,streaming,dynamo}/`.
+- `H:cookbook/openai-api/`, `H:getting_started/v1_api/`, `H:inference/cli/`.
+
+`H:api/` itself links the whole site navigation, about 950 links. The pages
+above are its HTTP-server subset; model, attention and training module pages
+were not fetched.
+
+**Provenance check:**
+
+- The text of `H:design/server_contracts/openai/` equals
+  `FV@e90be59:docs/design/server_contracts/openai.md` token for token, apart
+  from Markdown syntax and the page date "September 15, 2026".
+- `H:design/server_contracts/streaming/` likewise equals the repo copy.
+- The code shown on `H:api/fastvideo/entrypoints/openai/video_api/` sits at
+  the same line numbers as `e90be59`; for example `create_video` is at
+  `video_api.py` line 350.
+- `H:cookbook/openai-api/` has the same content as the repo, with the client
+  scripts inlined.
+- This repo pins `FV_REV=e90be598…` (`scripts/gpu/upstream/setup.sh:23-24`),
+  and FastVideo `origin/main` was the same commit on 2026-09-27.
+
+So the hosted spec, the pinned code and the latest code agree. Where the
+hosted reference omits detail (mkdocstrings shows no attribute tables for the
+pydantic models on `H:api/fastvideo/entrypoints/openai/protocol/`), fields are
+cited from the pinned source.
 
 **Launch:**
 
-- Command: `fastvideo serve --config <yaml> [--dotted.override V]`
-  (`FV@e90be59:fastvideo/entrypoints/cli/serve.py`).
-- The YAML has `generator:`, `server:` and `default_request:` blocks.
-  `server` holds `host` (0.0.0.0), `port` (8000), `output_dir` (`outputs/`)
-  and `served_model_name` (`fastvideo/api/schema.py:9-13`).
-- A `streaming:` block switches to the WebSocket server instead (`serve.py:30-36`).
-- The H3 example config is `examples/serving/openai_fasth3.yaml`:
-  - `FastVideo/FastVideo-Minimax-FastH3-Preview-v0.2`, served as `fasth3`;
-  - defaults 768×1344, 124 frames, 24 fps, 5 steps, guidance 1.0, seed 1000.
+- Command: `fastvideo serve --config <yaml> [--dotted.override V]`.
+  It "Starts an OpenAI-compatible API server"
+  (`H:api/fastvideo/entrypoints/cli/serve/`; `H:cookbook/openai-api/`).
+- The YAML has `generator:`, `server:` and `default_request:` blocks. The
+  `ServeConfig` dataclass is documented at `H:api/fastvideo/api/schema/`.
+  - `server` holds `host` (0.0.0.0), `port` (8000), `output_dir` (`outputs/`)
+    and `served_model_name`
+    (`FV@e90be59:fastvideo/api/schema.py:9-13`).
+  - A `streaming:` block selects the WebSocket runtime instead
+    (`H:design/server_contracts/streaming/`, "Endpoint").
+- The cookbook launch command is
+  `fastvideo serve --config examples/serving/openai_fasth3.yaml --server.host 127.0.0.1`.
+  - It loads `FastVideo/FastVideo-Minimax-FastH3-Preview-v0.2` "and
+    advertises it as `fasth3`" (`H:cookbook/openai-api/`).
+  - Its defaults are 1344×768, 124 frames, 24 fps and a five-point sigma
+    schedule with 4 DiT forwards (`H:cookbook/openai-api/`, "Generate with
+    cURL or an SDK").
+- A Spark variant (`openai_fasth3_spark.yaml`) and an MLX variant
+  (`python -m fastvideo.entrypoints.openai.mlx_server`, default 832×480)
+  advertise the same `fasth3` alias (`H:cookbook/openai-api/`).
 
-**Implementation:** FastAPI (`openai/api_server.py`).
+**Auth:**
 
-- **Auth:** there is no authentication. CORS allows `*`. A grep found no
-  `Authorization`/`api_key` in `entrypoints/openai/`, and `openai.md` says
-  the playground "does not add authentication".
-- **Engine concurrency:** a single `asyncio.Lock`, so the pipeline runs
-  exactly one generation at a time (`openai/serving_engine.py`). A running
-  CUDA call cannot be interrupted.
-- **Job store:** in memory (`openai/stores.py`). Jobs are lost on restart.
+- "The client key `local` is a placeholder required by the SDK, not server
+  authentication. FastVideo's HTTP server has no built-in API-key check."
+- The docs recommend an authenticated TLS proxy "with restricted origins,
+  request limits, and access controls" (`H:cookbook/openai-api/`, "Connect
+  your app").
+- The server allows CORS `*` (`H:api/fastvideo/entrypoints/openai/api_server/`,
+  `create_app` source).
 
-#### Endpoints (`FV@e90be59:docs/design/server_contracts/openai.md`, `openai/video_api.py`, `openai/common_api.py`)
+**Rate limits:** none are built in. The docs leave request limits to the
+proxy (same cookbook section).
+
+**Concurrency and job semantics:**
+
+- "The server serializes generation through one loaded pipeline. Job
+  metadata is in memory and is lost on restart. Async artifacts remain on
+  disk until deleted through the API … Deleting an in-progress job does not
+  interrupt an already running CUDA call" (`H:cookbook/openai-api/`,
+  "Compatibility and limits").
+- The lock is described at `H:api/fastvideo/entrypoints/openai/serving_engine/`
+  ("serialize access to its mutable pipeline").
+- The store is described at `H:api/fastvideo/entrypoints/openai/stores/`.
+
+**Tested clients:** `openai==3.6.0` for Python; Node.js 22+ for the
+JavaScript client. Both use `base_url=http://127.0.0.1:8000/v1`, poll every
+2 s, and stop polling after 30 minutes (`H:cookbook/openai-api/`).
+
+#### Endpoints (`H:design/server_contracts/openai/` "Endpoints"; `H:cookbook/openai-api/` "Compatibility and limits"; handler code on `H:api/fastvideo/entrypoints/openai/{video_api,common_api,api_server}/` and `FV@e90be59:fastvideo/entrypoints/openai/video_api.py`)
 
 | Method and path | Behavior |
 | --- | --- |
