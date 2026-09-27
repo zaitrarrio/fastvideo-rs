@@ -319,8 +319,21 @@ cell_fv_fastwan() {
     --prompts "$HERE/../prompts-eval.json" "$@"
 }
 
+# Wan checkpoints on the US volume (fv-weights-b200-us), one prompt (ours),
+# each at FastVideo's own sampling defaults for the checkpoint, dense
+# FLASH_ATTN, the same warm-up + median-of-repeats methodology.
+cell_fv_wan() {
+  local name="$1" dir="$2" hf="$3"; shift 3
+  run_cell "$name" env PYTHONUNBUFFERED=1 "$UP/fastvideo/bin/python" "$HERE/bench_fastwan.py" \
+    --model "$W/$dir" --hf-name "$hf" --out "$OUT/$name" --repeats "${UP_FV_REPEATS:-3}" \
+    --prompt "$PROMPT_OURS" --seed "$SEED_OURS" --attention FLASH_ATTN "$@"
+}
+
 run_cells() {
   cell_fv_fastwan fv-fastwan13-dmd
+  cell_fv_wan fv-wan21-14b wan21-t2v-14b Wan2.1-T2V-14B-Diffusers --steps 50 --guidance-scale 5.0
+  cell_fv_wan fv-wan22-5b wan22-ti2v-5b Wan2.2-TI2V-5B-Diffusers --height 704 --width 1280 --num-frames 121
+  cell_fv_wan fv-sfwan13 sfwan21-1.3b SFWan2.1-T2V-1.3B-Diffusers
   local g768=(--height 768 --width 1344 --num-frames 124) g480=(--height 480 --width 832 --num-frames 124)
   local f8="$UW/FastVideo-FastH3-8-Step-V2" lora="$W/FastH3-4-step-Preview-v1-LoRA"
   # FastVideo (short cells first)

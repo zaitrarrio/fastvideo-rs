@@ -31,6 +31,19 @@ from pathlib import Path
 
 HF_NAME = "FastWan2.1-T2V-1.3B-Diffusers"
 
+# FastVideo/FastWan2.1-T2V-1.3B-Diffusers scheduler/scheduler_config.json (Hub main).
+SCHEDULER = {
+    "_class_name": "UniPCMultistepScheduler", "_diffusers_version": "0.33.0.dev0",
+    "beta_end": 0.02, "beta_schedule": "linear", "beta_start": 0.0001, "disable_corrector": [],
+    "dynamic_thresholding_ratio": 0.995, "final_sigmas_type": "zero", "flow_shift": 3.0,
+    "lower_order_final": True, "num_train_timesteps": 1000, "predict_x0": True,
+    "prediction_type": "flow_prediction", "rescale_betas_zero_snr": False, "sample_max_value": 1.0,
+    "solver_order": 2, "solver_p": None, "solver_type": "bh2", "steps_offset": 0,
+    "thresholding": False, "timestep_spacing": "linspace", "trained_betas": None,
+    "use_beta_sigmas": False, "use_exponential_sigmas": False, "use_flow_sigmas": True,
+    "use_karras_sigmas": False,
+}
+
 
 def stage_times(li) -> dict:
     stages = getattr(li, "stages", None) or {}
@@ -42,7 +55,7 @@ def stage_times(li) -> dict:
 
 
 def pick(stages: dict, *needles: str) -> float | None:
-    vals = [v for k, v in stages.items() if v and any(n in k.lower() for n in needles)]
+    vals = [v for k, v in stages.items() if v and any(n in k.lower().replace("_", "") for n in needles)]
     return sum(vals) if vals else None
 
 
@@ -50,19 +63,25 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--model", required=True, help="local Diffusers directory")
     ap.add_argument("--out", required=True, help="cell directory")
-    ap.add_argument("--prompts", required=True, help="prompt-set JSON (scripts/gpu/prompts-eval.json)")
+    ap.add_argument("--prompts", help="prompt-set JSON (scripts/gpu/prompts-eval.json)")
+    ap.add_argument("--prompt", help="one prompt instead of a set (with --seed)")
+    ap.add_argument("--seed", type=int, default=1024)
+    ap.add_argument("--hf-name", default=HF_NAME,
+                    help="the checkpoint's Hub short name (FastVideo resolves its config by it)")
     ap.add_argument("--repeats", type=int, default=3)
     ap.add_argument("--warmup-seed", type=int, default=999)
     ap.add_argument("--height", type=int, default=480)
     ap.add_argument("--width", type=int, default=832)
     ap.add_argument("--num-frames", type=int, default=81)
+    ap.add_argument("--steps", type=int, default=None, help="num_inference_steps (default: the checkpoint's)")
+    ap.add_argument("--guidance-scale", type=float, default=None)
     ap.add_argument("--vsa-sparsity", type=float, default=0.8)
     ap.add_argument("--attention", default="VIDEO_SPARSE_ATTN")
     ap.add_argument("--text-encoder-cpu-offload", action="store_true")
     a = ap.parse_args()
     out = Path(a.out)
     out.mkdir(parents=True, exist_ok=True)
-    res: dict = {"impl": "fastvideo", "model": HF_NAME, "args": vars(a), "runs": [], "ok": False}
+    res: dict = {"impl": "fastvideo", "model": a.hf_name, "args": vars(a), "runs": [], "ok": False}
     t_proc = time.perf_counter()
     try:
         os.environ["FASTVIDEO_ATTENTION_BACKEND"] = a.attention
@@ -70,13 +89,26 @@ def main() -> int:
         # sm100a VSA kernels are Blackwell-datacenter only: Triton VSA on sm_120.
         os.environ.setdefault("FASTVIDEO_VSA_SM100A", "0")
         res["env"] = {k: v for k, v in os.environ.items() if k.startswith("FASTVIDEO_")}
-        link = out / "model" / HF_NAME
-        link.parent.mkdir(parents=True, exist_ok=True)
-        if not link.exists():
-            link.symlink_to(Path(a.model).resolve())
-        model = str(link)
-        spec = json.loads(Path(a.prompts).read_text())
-        prompts = spec["prompts"] if isinstance(spec, dict) else spec
+        # A view of the volume's tree under the Hub name: every component
+        # symlinked, plus scheduler/ (a 1 KB config our volume copy lacks and
+        # FastVideo's loader requires; the DMD sampler does not use it).
+        view = out / "model" / a.hf_name
+        view.mkdir(parents=True, exist_ok=True)
+        src = Path(a.model).resolve()
+        for entry in src.iterdir():
+            dst = view / entry.name
+            if not dst.exists():
+                dst.symlink_to(entry)
+        if not (view / "scheduler").exists() and a.hf_name == HF_NAME:
+            (view / "scheduler").mkdir()
+            (view / "scheduler" / "scheduler_config.json").write_text(json.dumps(SCHEDULER, indent=2))
+            res["scheduler_config"] = "written (Hub FastVideo/FastWan2.1-T2V-1.3B-Diffusers scheduler/)"
+        model = str(view)
+        if a.prompts:
+            spec = json.loads(Path(a.prompts).read_text())
+            prompts = spec["prompts"] if isinstance(spec, dict) else spec
+        else:
+            prompts = [{"name": "default", "prompt": a.prompt or "a cat walking on the grass", "seed": a.seed}]
         from fastvideo import VideoGenerator
         from fastvideo.api.sampling_param import SamplingParam
 
@@ -89,7 +121,7 @@ def main() -> int:
             pin_cpu_memory=True,
             dit_cpu_offload=False,
             vae_cpu_offload=False,
-            VSA_sparsity=a.vsa_sparsity,
+            **({"VSA_sparsity": a.vsa_sparsity} if a.attention == "VIDEO_SPARSE_ATTN" else {}),
         )
         res["load_s"] = time.perf_counter() - t0
         try:
@@ -99,6 +131,10 @@ def main() -> int:
                 sp.height = a.height
                 sp.width = a.width
                 sp.seed = seed
+                if a.steps is not None:
+                    sp.num_inference_steps = a.steps
+                if a.guidance_scale is not None:
+                    sp.guidance_scale = a.guidance_scale
                 t = time.perf_counter()
                 r = gen.generate_video(prompt, sampling_param=sp, output_path=str(path), save_video=True)
                 wall = time.perf_counter() - t
@@ -112,7 +148,7 @@ def main() -> int:
                     "denoise_s": pick(st, "denois"),
                     "decode_s": pick(st, "decodingstage"),
                     "postprocess_s": pick(st, "postdecode"),
-                    "text_s": pick(st, "textencod", "text_encod"),
+                    "text_s": pick(st, "textencod", "promptencod"),
                     "save_s": pick(st, "save"),
                     "steps": getattr(sp, "num_inference_steps", None),
                     "guidance_scale": getattr(sp, "guidance_scale", None),

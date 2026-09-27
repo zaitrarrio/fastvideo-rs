@@ -9,10 +9,19 @@
 
 /// Wan 2.1 14B Sol-Attn tau (`WAN22_SOL_TAU`).
 pub const SOL_14B_TAU: f64 = 1.0;
-/// First N denoising steps stay dense (`WAN22_SOL_DENSE_STEPS`).
+/// First N transformer forwards stay dense (`WAN22_SOL_DENSE_STEPS`). The
+/// engine's step clock advances once per `transformer.forward` (a pre-hook,
+/// `gpu_infer.py:259`), so with CFG this is 5 denoise steps, not 10: callers
+/// pass the forward count as `step` to [`route`].
 pub const SOL_14B_DENSE_STEPS: usize = 10;
 /// Layer 0 stays dense (`WAN22_SOL_DENSE_LAYERS=0`).
 pub const SOL_14B_DENSE_LAYER: usize = 0;
+
+/// Wan 2.1 1.3B Sol-Attn: the same kernel settings (tau 1.0, layer 0 dense,
+/// Morton3D) with no dense forwards (sol-engine's 1.3B `full.toml`,
+/// `WAN22_SOL_DENSE_STEPS=0`). A 3-step DMD student has no warm-up steps to
+/// spend on dense attention.
+pub const SOL_13B_DENSE_STEPS: usize = 0;
 
 /// Published PISA keep fraction (`WAN22_PISA_DENSITY`).
 pub const PISA_DENSITY: f64 = 0.10;
@@ -25,6 +34,8 @@ pub enum WanAttnProfile {
     Off,
     /// Wan 2.1 14B Sol-Attn + Morton3D.
     Sol14b,
+    /// Wan 2.1 1.3B Sol-Attn + Morton3D (no dense forwards).
+    Sol13b,
     /// Wan 2.2 TI2V-5B PISA.
     Pisa5b,
     /// Wan 2.2 A14B PISA.
@@ -74,6 +85,13 @@ pub fn route(profile: WanAttnProfile, step: usize, layer: usize) -> WanAttnRoute
         WanAttnProfile::Off => WanAttnRoute::Dense,
         WanAttnProfile::Sol14b => {
             if step < SOL_14B_DENSE_STEPS || layer == SOL_14B_DENSE_LAYER {
+                WanAttnRoute::Dense
+            } else {
+                WanAttnRoute::Sol { tau: SOL_14B_TAU }
+            }
+        }
+        WanAttnProfile::Sol13b => {
+            if step < SOL_13B_DENSE_STEPS || layer == SOL_14B_DENSE_LAYER {
                 WanAttnRoute::Dense
             } else {
                 WanAttnRoute::Sol { tau: SOL_14B_TAU }
@@ -151,6 +169,20 @@ pub fn morton3d_inverse(perm: &[usize]) -> Vec<usize> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn sol_13b_has_no_dense_forwards_but_keeps_layer_zero() {
+        assert_eq!(route(WanAttnProfile::Sol13b, 0, 0), WanAttnRoute::Dense);
+        assert_eq!(
+            route(WanAttnProfile::Sol13b, 0, 1),
+            WanAttnRoute::Sol { tau: 1.0 }
+        );
+        assert_eq!(
+            route(WanAttnProfile::Sol13b, 2, 29),
+            WanAttnRoute::Sol { tau: 1.0 }
+        );
+        assert!(morton3d_on_route(WanAttnProfile::Sol13b, 0, 1));
+    }
 
     #[test]
     fn sol_14b_keeps_ten_dense_steps_and_layer_zero() {

@@ -384,6 +384,23 @@ impl CudaTensor {
         ))
     }
 
+    /// An identity of this tensor's device storage, shared by its clones
+    /// (the buffer is reference counted), so a holder of a clone keeps the
+    /// identity from being reused. `None` for host-only tensors, whose
+    /// clones copy.
+    pub fn storage_id(&self) -> Option<usize> {
+        #[cfg(feature = "cuda")]
+        {
+            if let Some(d) = &self.device {
+                return Some(std::sync::Arc::as_ptr(&d.slice) as usize);
+            }
+            if let Some(d) = &self.device_bf16 {
+                return Some(std::sync::Arc::as_ptr(&d.slice) as usize);
+            }
+        }
+        None
+    }
+
     #[cfg(feature = "cuda")]
     pub fn device_slice(&self) -> Option<&cudarc::driver::CudaSlice<f32>> {
         self.device.as_ref().map(|b| b.slice.as_ref())

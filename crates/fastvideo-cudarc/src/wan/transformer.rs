@@ -198,29 +198,22 @@ impl WanAttention {
         match route(plan.profile, plan.step, plan.layer) {
             WanAttnRoute::Dense => Ok(None),
             WanAttnRoute::Sol { tau } => {
-                let (q, k, v, inverse) = if morton3d_on_route(plan.profile, plan.step, plan.layer) {
-                    if let Some((frames, height, width)) = plan.morton_grid {
-                        if frames.saturating_mul(height).saturating_mul(width) == q.shape[2] {
-                            let (perm, inverse) =
-                                super::sol_cache::morton3d_pair(frames, height, width);
-                            (
-                                super::sol_cache::gather_bhsd_seq(q, &perm)?,
-                                super::sol_cache::gather_bhsd_seq(k, &perm)?,
-                                super::sol_cache::gather_bhsd_seq(v, &perm)?,
-                                Some(inverse),
-                            )
-                        } else {
-                            (q.clone(), k.clone(), v.clone(), None)
-                        }
-                    } else {
-                        (q.clone(), k.clone(), v.clone(), None)
-                    }
-                } else {
-                    (q.clone(), k.clone(), v.clone(), None)
+                let grid = plan
+                    .morton_grid
+                    .filter(|&(f, h, w)| f.saturating_mul(h).saturating_mul(w) == q.shape[2])
+                    .filter(|_| morton3d_on_route(plan.profile, plan.step, plan.layer));
+                use super::sol_cache::morton_gather;
+                let (q, k, v) = match grid {
+                    Some(g) => (
+                        morton_gather(q, g, false)?,
+                        morton_gather(k, g, false)?,
+                        morton_gather(v, g, false)?,
+                    ),
+                    None => (q.clone(), k.clone(), v.clone()),
                 };
                 let mut out = crate::sol_attn::sol_attn(&q, &k, &v, tau, scale, None, 0)?;
-                if let Some(inverse) = inverse {
-                    out = super::sol_cache::gather_bhsd_seq(&out, &inverse)?;
+                if let Some(g) = grid {
+                    out = morton_gather(&out, g, true)?;
                 }
                 Ok(Some(out))
             }
@@ -341,21 +334,34 @@ impl WanAttention {
         Ok(None)
     }
 
-    fn forward_cross(
-        &self,
-        hidden: &CudaTensor,
-        encoder: &CudaTensor,
-        image: Option<&CudaTensor>,
-    ) -> Result<CudaTensor> {
+    /// Cross-attention K (RMS-normed) and V over the text tokens, BHSD. A
+    /// function of the text alone: the same for every step of a denoise.
+    fn cross_kv(&self, encoder: &CudaTensor) -> Result<(CudaTensor, CudaTensor)> {
         let dim = self.heads * self.dim_head;
         let kv_proj = self
             .kv
             .as_ref()
             .ok_or_else(|| TensorError::Message("cross attention without kv".into()))?;
-        let q = self.qk(&self.q_or_qkv.forward(hidden)?, 0, &self.norm_q, None)?;
         let kv = kv_proj.forward(encoder)?;
-        let mut k = self.qk(&kv, 0, &self.norm_k, None)?;
-        let mut v = kv.split_heads_bhsd(dim, self.heads, self.dim_head)?;
+        let k = self.qk(&kv, 0, &self.norm_k, None)?;
+        let v = kv.split_heads_bhsd(dim, self.heads, self.dim_head)?;
+        Ok((k, v))
+    }
+
+    /// `cached`: this block's [`Self::cross_kv`] for `encoder`, computed once
+    /// per denoise (see [`WanTransformer3D::begin_text_cache`]).
+    fn forward_cross(
+        &self,
+        hidden: &CudaTensor,
+        encoder: &CudaTensor,
+        image: Option<&CudaTensor>,
+        cached: Option<&(CudaTensor, CudaTensor)>,
+    ) -> Result<CudaTensor> {
+        let q = self.qk(&self.q_or_qkv.forward(hidden)?, 0, &self.norm_q, None)?;
+        let (mut k, mut v) = match cached {
+            Some((k, v)) => (k.clone(), v.clone()),
+            None => self.cross_kv(encoder)?,
+        };
         if let (Some(add_k), Some(add_v), Some(img)) = (&self.add_k, &self.add_v, image) {
             let ik = add_k
                 .forward(img)?
@@ -544,6 +550,49 @@ impl Default for AttnPlan {
     }
 }
 
+/// The step-invariant inputs of one block forward.
+#[derive(Clone, Copy)]
+struct BlockCond<'a> {
+    /// `timestep_proj + scale_shift_table`, `[b, 6, dim]`.
+    e: &'a CudaTensor,
+    /// Cross-attention K/V over the text, when cached for this denoise.
+    cross_kv: Option<&'a (CudaTensor, CudaTensor)>,
+}
+
+/// Text conditioning prepared once per denoise: the text embedder's output
+/// and every block's cross-attention K/V. Holds the encoder tensor it was
+/// computed from, so its storage identity cannot be reused while cached.
+#[derive(Debug)]
+struct PreparedText {
+    encoder: CudaTensor,
+    embedded: CudaTensor,
+    kv: Vec<(CudaTensor, CudaTensor)>,
+}
+
+/// Time conditioning for one timestep vector: the time embedding (the
+/// output head's), `timestep_proj` (`[b, 6, dim]`) and every block's
+/// modulation. A function of the timestep values and the weights only.
+#[derive(Debug)]
+struct PreparedTime {
+    key: Vec<u32>,
+    temb: CudaTensor,
+    timestep_proj: CudaTensor,
+    e: Vec<CudaTensor>,
+}
+
+/// Distinct timestep vectors kept: a 50-step UniPC run with a CFG batch is
+/// 50; DMD / rCM runs are 3-4 per request and repeat across requests.
+const TIME_CACHE_ENTRIES: usize = 64;
+/// Encoder tensors kept per denoise (the CFG pair, its rows, a margin).
+const TEXT_CACHE_ENTRIES: usize = 4;
+
+/// `FASTVIDEO_WAN_COND_CACHE=0` recomputes the text K/V, text embedding and
+/// time modulation in every forward (the byte-identical reference path).
+fn cond_cache_enabled() -> bool {
+    static FLAG: super::envflag::CachedBool = super::envflag::CachedBool::new();
+    FLAG.get_or_init(|| super::envflag::bool_flag("FASTVIDEO_WAN_COND_CACHE", true))
+}
+
 /// Modulation table slots of [`WanBlock::scale_shift_table`] + time projection.
 const SHIFT_MSA: usize = 0;
 const SCALE_MSA: usize = 1;
@@ -667,11 +716,13 @@ impl WanBlock {
         apply(&mut self.ffn.out, vec![q(dim)])
     }
 
+    /// `cond.e`: this block's modulation, `timestep_proj + scale_shift_table`
+    /// ([`WanBlock::modulation`]); `cond.cross_kv`: its cached cross K/V.
     fn forward(
         &self,
         hidden: &CudaTensor,
         encoder: &CudaTensor,
-        timestep_proj: &CudaTensor,
+        cond: BlockCond<'_>,
         rope: &(CudaTensor, CudaTensor),
         image: Option<&CudaTensor>,
         mask: Option<&BlockCausal>,
@@ -680,7 +731,7 @@ impl WanBlock {
         plan: AttnPlan,
     ) -> Result<CudaTensor> {
         use super::stats::phase;
-        let e = timestep_proj.add(&self.scale_shift_table)?;
+        let e = cond.e;
         let normed = phase("1_norm_msa", || {
             hidden.ln_adaln_e(&e, SCALE_MSA, SHIFT_MSA, self.eps)
         })?;
@@ -702,7 +753,8 @@ impl WanBlock {
             Ok::<_, TensorError>((hidden, normed))
         })?;
         let cross = phase("5_cross_attn", || {
-            self.attn2.forward_cross(&normed, encoder, image)
+            self.attn2
+                .forward_cross(&normed, encoder, image, cond.cross_kv)
         })?;
         let (hidden, normed) = phase("6_residual_norm_ffn", || {
             if let Some(p) = super::fuse::cross_residual_norm_mod(
@@ -754,6 +806,11 @@ pub struct WanTransformer3D {
     sol_a14b: std::sync::Arc<std::sync::Mutex<Option<A14bRuntime>>>,
     attn_step: std::sync::Arc<std::sync::Mutex<Option<usize>>>,
     attn_profile: std::sync::Arc<std::sync::Mutex<WanAttnProfile>>,
+    /// Text conditioning per encoder tensor, between [`Self::begin_text_cache`]
+    /// and [`Self::end_text_cache`] (`None` outside: nothing cached).
+    text_cache: std::sync::Arc<std::sync::Mutex<Option<Vec<std::sync::Arc<PreparedText>>>>>,
+    /// Time conditioning per timestep vector (weights-only function; kept).
+    time_cache: std::sync::Arc<std::sync::Mutex<Vec<std::sync::Arc<PreparedTime>>>>,
 }
 
 use fastvideo_models::wan::sol_cache::{SolTeaCache, TaylorSchedule, TeaBranch};
@@ -808,33 +865,13 @@ struct A14bRuntime {
     uncond_residual: Option<CudaTensor>,
 }
 
-fn mean_abs(t: &CudaTensor) -> Result<f64> {
-    let host = t.host_cow()?;
-    let n = host.len().max(1) as f64;
-    Ok(host.iter().map(|v| f64::from(*v).abs()).sum::<f64>() / n)
-}
+use super::sol_cache::{mean_abs, mean_abs_delta};
 
-fn mean_abs_delta(a: &CudaTensor, b: &CudaTensor) -> Result<f64> {
-    let left = a.host_cow()?;
-    let right = b.host_cow()?;
-    let n = left.len().max(1) as f64;
-    let mut sum = 0.0;
-    for (x, y) in left.iter().zip(right.iter()) {
-        sum += (f64::from(*x) - f64::from(*y)).abs();
-    }
-    Ok(sum / n)
-}
-
+/// `mean|current - previous| / max(mean|previous|, 1e-8)`, reduced on the
+/// device (two scalars come back) — see [`super::sol_cache::abs_sums`].
 fn relative_l1(current: &CudaTensor, previous: &CudaTensor) -> Result<f64> {
-    let cur = current.host_cow()?;
-    let prev = previous.host_cow()?;
-    let n = cur.len().max(1) as f64;
-    let mut num = 0.0;
-    let mut den = 0.0;
-    for (a, b) in cur.iter().zip(prev.iter()) {
-        num += (f64::from(*a) - f64::from(*b)).abs();
-        den += f64::from(*b).abs();
-    }
+    let (num, den, n) = super::sol_cache::abs_sums(current, previous)?;
+    let n = n.max(1) as f64;
     Ok((num / n) / (den / n).max(1e-8))
 }
 
@@ -1014,6 +1051,8 @@ impl WanTransformer3D {
             sol_a14b: Default::default(),
             attn_step: Default::default(),
             attn_profile: Default::default(),
+            text_cache: Default::default(),
+            time_cache: Default::default(),
             cfg,
         })
     }
@@ -1095,6 +1134,8 @@ impl WanTransformer3D {
             sol_a14b: Default::default(),
             attn_step: Default::default(),
             attn_profile: Default::default(),
+            text_cache: Default::default(),
+            time_cache: Default::default(),
             cfg,
         })
     }
@@ -1354,6 +1395,14 @@ impl WanTransformer3D {
             WanAttnProfile::Pisa5b
         } else if self.cfg.num_layers >= 40 && !self.cfg.is_moe() && sol {
             WanAttnProfile::Sol14b
+        } else if self.cfg.num_layers == 30
+            && self.cfg.out_channels == 16
+            && !self.cfg.is_moe()
+            && !self.cfg.causal
+            && sol
+        {
+            // Wan 2.1 1.3B (T2V / FastWan / TurboWan): 30 layers, 16-channel latents.
+            WanAttnProfile::Sol13b
         } else {
             WanAttnProfile::Off
         };
@@ -1564,6 +1613,111 @@ impl WanTransformer3D {
         })
     }
 
+    /// From here until [`Self::end_text_cache`], the text embedding and every
+    /// block's cross-attention K/V are computed once per encoder tensor (by
+    /// storage identity: pass the same tensor, or clones of it, each step)
+    /// and reused. Off with `FASTVIDEO_WAN_COND_CACHE=0`.
+    pub fn begin_text_cache(&self) {
+        let mut slot = self.text_cache.lock().expect("text cache");
+        *slot = cond_cache_enabled().then(Vec::new);
+    }
+
+    /// Drop the text conditioning cached since [`Self::begin_text_cache`].
+    pub fn end_text_cache(&self) {
+        *self.text_cache.lock().expect("text cache") = None;
+    }
+
+    fn prepare_text(
+        &self,
+        encoder: &CudaTensor,
+    ) -> Result<(CudaTensor, Option<std::sync::Arc<PreparedText>>)> {
+        let id = encoder.storage_id();
+        {
+            let slot = self.text_cache.lock().expect("text cache");
+            let (Some(cache), Some(id)) = (slot.as_ref(), id) else {
+                drop(slot);
+                return Ok((self.text_embedder.forward_gelu(encoder)?, None));
+            };
+            if let Some(hit) = cache
+                .iter()
+                .find(|p| p.encoder.storage_id() == Some(id) && p.encoder.shape == encoder.shape)
+            {
+                return Ok((hit.embedded.clone(), Some(hit.clone())));
+            }
+        }
+        let embedded = self.text_embedder.forward_gelu(encoder)?;
+        let kv = self
+            .blocks
+            .iter()
+            .map(|b| b.attn2.cross_kv(&embedded))
+            .collect::<Result<Vec<_>>>()?;
+        let prepared = std::sync::Arc::new(PreparedText {
+            encoder: encoder.clone(),
+            embedded: embedded.clone(),
+            kv,
+        });
+        let mut slot = self.text_cache.lock().expect("text cache");
+        if let Some(cache) = slot.as_mut() {
+            if cache.len() >= TEXT_CACHE_ENTRIES {
+                cache.remove(0);
+            }
+            cache.push(prepared.clone());
+        }
+        Ok((embedded, Some(prepared)))
+    }
+
+    /// Time embedding, `timestep_proj` and each block's modulation for
+    /// `timestep` (`[b]`), from the cache when the same values were seen.
+    fn prepare_time(
+        &self,
+        timestep: &CudaTensor,
+        b: usize,
+    ) -> Result<std::sync::Arc<PreparedTime>> {
+        let key: Option<Vec<u32>> = cond_cache_enabled()
+            .then(|| {
+                timestep
+                    .host_cow()
+                    .map(|h| h.iter().map(|v| v.to_bits()).collect())
+            })
+            .transpose()?;
+        if let Some(key) = &key {
+            let cache = self.time_cache.lock().expect("time cache");
+            if let Some(hit) = cache
+                .iter()
+                .find(|p| &p.key == key && p.timestep_proj.shape[0] == b)
+            {
+                return Ok(hit.clone());
+            }
+        }
+        let dim = self.cfg.hidden_size();
+        let temb = self
+            .time_embedder
+            .forward_silu(&nn::sinusoidal_timesteps(timestep, self.freq_dim)?)?;
+        let timestep_proj = self
+            .time_proj
+            .forward(&temb.silu())?
+            .reshape(vec![b, 6, dim])?;
+        let e = self
+            .blocks
+            .iter()
+            .map(|blk| timestep_proj.add(&blk.scale_shift_table))
+            .collect::<Result<Vec<_>>>()?;
+        let prepared = std::sync::Arc::new(PreparedTime {
+            key: key.clone().unwrap_or_default(),
+            temb,
+            timestep_proj,
+            e,
+        });
+        if key.is_some() {
+            let mut cache = self.time_cache.lock().expect("time cache");
+            if cache.len() >= TIME_CACHE_ENTRIES {
+                cache.remove(0);
+            }
+            cache.push(prepared.clone());
+        }
+        Ok(prepared)
+    }
+
     pub fn forward(
         &self,
         latents: &CudaTensor,
@@ -1666,14 +1820,16 @@ impl WanTransformer3D {
             // stream starts bf16 (FASTVIDEO_BF16_ACT).
             hidden = hidden.quantize_bf16()?;
         }
-        let temb = self
-            .time_embedder
-            .forward_silu(&nn::sinusoidal_timesteps(timestep, self.freq_dim)?)?;
-        let timestep_proj = self
-            .time_proj
-            .forward(&temb.silu())?
-            .reshape(vec![b, 6, dim])?;
-        let encoder = self.text_embedder.forward_gelu(encoder)?;
+        let _ = dim;
+        // Step-invariant conditioning: cached by timestep values / encoder
+        // tensor when enabled, recomputed with the same ops otherwise.
+        let time = self.prepare_time(timestep, b)?;
+        let (temb, timestep_proj) = (&time.temb, &time.timestep_proj);
+        let (encoder, text) = self.prepare_text(encoder)?;
+        let cond = |layer: usize| BlockCond {
+            e: &time.e[layer],
+            cross_kv: text.as_ref().map(|t| &t.kv[layer]),
+        };
         let image = match (image, &self.image_embedder) {
             (Some(img), Some(emb)) => Some(emb.forward(img)?),
             (Some(img), None) => Some(img.clone()),
@@ -1696,7 +1852,7 @@ impl WanTransformer3D {
             hidden = self.blocks[0].forward(
                 &hidden,
                 &encoder,
-                &timestep_proj,
+                cond(0),
                 &rope,
                 image.as_ref(),
                 mask.as_ref(),
@@ -1712,7 +1868,7 @@ impl WanTransformer3D {
                         hidden = block.forward(
                             &hidden,
                             &encoder,
-                            &timestep_proj,
+                            cond(layer),
                             &rope,
                             image.as_ref(),
                             mask.as_ref(),
@@ -1731,7 +1887,7 @@ impl WanTransformer3D {
                 hidden = block.forward(
                     &hidden,
                     &encoder,
-                    &timestep_proj,
+                    cond(layer),
                     &rope,
                     image.as_ref(),
                     mask.as_ref(),
