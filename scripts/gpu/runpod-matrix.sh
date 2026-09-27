@@ -17,7 +17,7 @@
 #   gate_cells: fv-gpucheck gate with scripts/gpu/gate-policy.toml
 #     (FV_GATE_POLICY overrides) into $RUNS/gate/.
 set -euo pipefail
-FAMILY="${1:?usage: runpod-matrix.sh serve-engine|headline|mmaudio|h3|ltx|hunyuan|wan|b200|rtx6000|rtx5090|fastvideo|precision|precision-debug|trace|fuse|oracle|ltxvae|writer|eval|ltxoffload|techniques|h3arms|h3attn}"
+FAMILY="${1:?usage: runpod-matrix.sh serve-engine|headline|mmaudio|speechtest|h3|ltx|hunyuan|wan|b200|rtx6000|rtx5090|fastvideo|precision|precision-debug|trace|fuse|oracle|ltxvae|ltxfps|writer|eval|ltxoffload|techniques|h3arms|h3attn}"
 WORK="${FV_WORK:-/workspace}"
 BIN="${FV_GPUCHECK:-/opt/fastvideo-rs/target/release/fv-gpucheck}"
 W="$WORK/weights"
@@ -471,6 +471,88 @@ Audio: male narration, grass rustle, wind, distant strings, cricket night}"
         --label "$label" --out "$RUNS/wave-$label/wave.json"
     done
     ;;
+  speechtest)
+    # Can the audio models say a given line? (docs/ports/mmaudio.md "Speech")
+    # Seeds 1000..1002 everywhere; every wav goes into $RUNS/manifest.tsv
+    # (id, wav, intended line, note) and one Whisper pass transcribes them all.
+    #   t2a-fox / t2a-station / t2a-fox-tagged  MMAudio text-to-audio, 8 s: a plain
+    #                               quoted line, and strobe's <S>..<E> + "Audio:" style
+    #   wan-talk                    FastWan 1.3B, a person speaking to camera (no audio)
+    #   v2a-{notext,text}-<seed>    MMAudio video-to-audio on that clip, without and
+    #                               with the spoken line as the text condition
+    #   h3-speech                   FastH3 4-step VSA 480p, 5 s, joint audio, the
+    #                               same lines in H3's <d>[English] ..</d> markup
+    #   whisper                     openai-whisper (FV_WHISPER_MODEL, default large-v3)
+    GPU_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+    MMW="$W/mmaudio-44k-v2"
+    export FASTVIDEO_MMAUDIO_WEIGHTS="$MMW"
+    SEEDS="1000 1001 1002"
+    FOX="The quick brown fox jumps over the lazy dog."
+    STATION="Welcome to the station, the next train leaves at nine."
+    MAN="A man in his thirties talking to the camera in a bright living room, medium close-up, natural expressions, soft window light."
+    WOMAN="A woman station announcer speaking into a microphone on a train platform, medium close-up, daytime."
+    MANIFEST="$RUNS/manifest.tsv"
+    : >"$MANIFEST"
+    add() { local n="${4//$'\n'/ | }"; printf '%s\t%s\t%s\t%s\n' "$1" "$2" "$3" "${n//$'\t'/ }" >>"$MANIFEST"; }
+    t2a() {
+      local name="$1" line="$2" prompt="$3" seed
+      gated_cell "$name" mmaudio-44k-v2 "$BIN" --mode fast mmaudio t2a --weights "$MMW" --prompt "$prompt" \
+        --seeds "${SEEDS// /,}" --duration 8 --out "$RUNS/$name"
+      for seed in $SEEDS; do add "$name-$seed" "$RUNS/$name/seed-$seed.wav" "$line" "mmaudio t2a: $prompt"; done
+    }
+    t2a t2a-fox "$FOX" "A man says clearly: \"$FOX\""
+    t2a t2a-station "$STATION" "A woman announces: \"$STATION\""
+    t2a t2a-fox-tagged "$FOX" "A man talks to the camera. He says <S>$FOX<E>
+Audio: male speech, clear voice, quiet room"
+    TALK="A man in his thirties speaking to the camera in a bright living room, medium close-up, his lips moving as he talks, natural expressions and hand gestures, soft window light."
+    gated_cell wan-talk fastwan21-1.3b \
+      "$BIN" --mode fast --vsa wan gen --weights "$W/fastwan21-1.3b" --prompt "$TALK" --seed 1024 \
+        --clip-dir "$RUNS/wan-talk/frames"
+    CLIP="$(find "$RUNS/wan-talk" -name output.mp4 | grep -v cold | head -1)"
+    log "V2A clip: ${CLIP:-missing}"
+    for seed in $SEEDS; do
+      for arm in notext text; do
+        prompt=""
+        [[ "$arm" == text ]] && prompt="A man says clearly: \"$FOX\""
+        gated_cell "v2a-$arm-$seed" mmaudio-44k-v2 "$BIN" --mode fast mmaudio v2a --weights "$MMW" --video "$CLIP" \
+          --prompt "$prompt" --seed "$seed" --runs 1 --out "$RUNS/v2a-$arm-$seed"
+        add "v2a-$arm-$seed" "$RUNS/v2a-$arm-$seed/mmaudio.wav" "$FOX" "mmaudio v2a on wan-talk, prompt: ${prompt:-none}"
+      done
+    done
+    H3P="$RUNS/h3-prompts.json"
+    # (No jq in the runtime image; the lines hold no JSON-special characters.)
+    {
+      printf '{"name": "speechtest", "prompts": [\n'
+      sep=""
+      for seed in $SEEDS; do
+        printf '%s{"name": "fox-%s", "seed": %s, "prompt": "%s He says clearly: <d>[English] %s</d>"},\n' "$sep" "$seed" "$seed" "$MAN" "$FOX"
+        printf '{"name": "station-%s", "seed": %s, "prompt": "%s She announces: <d>[English] %s</d>"}' "$seed" "$seed" "$WOMAN" "$STATION"
+        sep=$',\n'
+      done
+      printf '\n]}\n'
+    } >"$H3P"
+    gated_cell h3-speech fasth3-4step-vsa \
+      "$BIN" --mode fast h3 gen --weights "$W/h3-base" --h3-recipe 4step-vsa --height 480 --width 832 \
+        --prompt "$PROMPT" --seconds 5 --seed "$SEED" --text-encoder auto --text-cache "$SCRATCH/h3-text-cache" \
+        --text-weights "$W/h3-base" --warm --prompts "$H3P" \
+        --adaln-cache "$RUNS/h3-speech-adaln.cache" --clip-dir "$RUNS/h3-speech/frames"
+    for seed in $SEEDS; do
+      add "h3-fox-$seed" "$RUNS/h3-speech/frames/fox-$seed/audio.wav" "$FOX" "h3 fasth3-4step-vsa 480p"
+      add "h3-station-$seed" "$RUNS/h3-speech/frames/station-$seed/audio.wav" "$STATION" "h3 fasth3-4step-vsa 480p"
+    done
+    WV="$SCRATCH/whisper-venv"
+    FV_GEN_TIMEOUT_S=2400 run_cell whisper bash -c "
+      set -e
+      (command -v python3 && python3 -m venv --help) >/dev/null 2>&1 || { apt-get update -qq && apt-get install -y -qq python3-venv python3-pip >/dev/null; }
+      command -v ffmpeg >/dev/null || { apt-get update -qq && apt-get install -y -qq ffmpeg >/dev/null; }
+      python3 -m venv $WV
+      $WV/bin/pip install -q --upgrade pip
+      $WV/bin/pip install -q torch --index-url https://download.pytorch.org/whl/cu128
+      $WV/bin/pip install -q openai-whisper
+      $WV/bin/python $GPU_DIR/speech_transcribe.py --manifest $MANIFEST --model ${FV_WHISPER_MODEL:-large-v3} \
+        --out $RUNS/whisper/speech.json
+    "
+    ;;
   sfwan)
     # SF-Wan 1.3B on one pod: the oracle diff against FastVideo's dump (when
     # FV_ORACLE_URL serves one), then the wan family's SF-Wan cells and the
@@ -510,6 +592,50 @@ Audio: male narration, grass rustle, wind, distant strings, cricket night}"
     sub rtx6000 ${FV_HEADLINE_SOLH3:-sol-h3}
     sub rtx5090 ${FV_HEADLINE_ROUTES:-h3-768p-fullopt ltx25-4k5s-sol}
     sub precision ${FV_HEADLINE_PRECISION:-ltx25-4k5s-sol-bf16act-fp8}
+    ;;
+  identity)
+    # E12 identity bisect: the same generation under several environments in
+    # one pod, frames hashed (sorted PNG sha256s, hashed again: the serverless
+    # worker's frames_sha256), FASTVIDEO_DIGEST=1 stage digests in stderr.log.
+    # FV_ID_CASES: space-separated "<cell>|<model>|K=V,K=V" (model ltx25 or
+    # fasth3; "-" for no env). FV_ID_EVICT=1 drops the weights from the page
+    # cache before each cell (fv-gpucheck evict-cache).
+    id_hash() {
+      local dir="$1" out="$2" h f
+      h="$(find "$dir" -name '*.png' 2>/dev/null | sort | xargs -r sha256sum | awk '{print $1}' | sha256sum | awk '{print $1}')"
+      f="$(find "$dir" -name '*.png' 2>/dev/null | sort | head -1 | xargs -r sha256sum | awk '{print $1}')"
+      printf '{"frames":%s,"frames_sha256":"%s","first_frame_sha256":"%s"}\n' \
+        "$(find "$dir" -name '*.png' 2>/dev/null | wc -l)" "$h" "$f" >"$out"
+      log "frames $(basename "$(dirname "$out")") $h"
+    }
+    for spec in ${FV_ID_CASES:?FV_ID_CASES}; do
+      IFS='|' read -r name model envs <<<"$spec"
+      envs="${envs//,/ }"
+      [[ "$envs" == "-" ]] && envs=""
+      if [[ "${FV_ID_EVICT:-0}" == 1 ]]; then
+        "$BIN" --out "$RUNS/evict" evict-cache "$W/h3-base" "$W/ltx25" >/dev/null 2>&1 || true
+      fi
+      case "$model" in
+        ltx25)
+          # shellcheck disable=SC2086
+          gated_cell "$name" ltx25-two-stage env FASTVIDEO_DIGEST=1 $envs \
+            "$BIN" --mode fast ltx2 gen --model-version 2.5 --weights "$W/ltx25" --dit "$W/ltx25" \
+              --prompt "$PROMPT" --seed "$SEED" --two-stage --text streamed --no-text-cache \
+              --clip "$RUNS/$name/frames" ;;
+        fasth3)
+          # shellcheck disable=SC2086
+          gated_cell "$name" fasth3-4step-vsa env FASTVIDEO_DIGEST=1 $envs \
+            "$BIN" --mode fast h3 gen --weights "$W/h3-base" --h3-recipe 4step-vsa \
+              --adaln-cache "$RUNS/$name/adaln.cache" --clip-dir "$RUNS/$name/frames" \
+              --prompt "$PROMPT" --seconds 5 --seed "$SEED" --text-encoder auto --no-text-cache \
+              --text-weights "$W/h3-base" ;;
+        *) log "identity: unknown model $model"; continue ;;
+      esac
+      id_hash "$RUNS/$name/frames" "$RUNS/$name/frames.json"
+      grep -E '^\[fastvideo\] (digest|load/|ltx2 load|h3 load|llm prefetch)' "$RUNS/$name/stderr.log" \
+        | grep -v 'digest w:\|digest lin:' >"$RUNS/$name/digests.txt" 2>/dev/null || true
+      rm -rf "$RUNS/$name/frames"
+    done
     ;;
   cold)
     # Timings measured the way the references measure them, where the warm
@@ -1878,6 +2004,43 @@ Audio: male narration, grass rustle, wind, distant strings, cricket night}"
       rtx5090_fullopt_d6 rtx5090_fullopt_t125 rtx5090_fullopt_fp8attn
     for f in "$RUNS"/gate/gate-*.json; do
       [[ -f "$f" ]] && log "$(basename "$f"): $(grep -o '"verdict": "[a-z]*"' "$f" | head -1)"
+    done
+    ;;
+  ltxfps)
+    # Serve E4: LTX-2.5 distilled two-stage at 1080p (the 1920x1088 engine
+    # canvas) at the frame rates the APIs accept beyond 24. Each cell checks
+    # the frame count and the mp4's rate and audio track with ffprobe
+    # (gen.mp4_frames_and_rate, benchmark.json "mp4_probe"). The 25 fps cell
+    # and the silent one (--skip-audio-decode) also run serve E2's frame sink
+    # beside the PNG writer and check its frames byte for byte against the
+    # PNGs of the same run (gen.sink_frames_identical). fasth3-8step-sink does
+    # the same for H3 (FV_SINK_CHECK=1).
+    frames="${FV_LTXFPS_FRAMES:-121}"
+    for fps in ${FV_LTXFPS:-25 48 50}; do
+      extra=()
+      [[ "$fps" == 25 ]] && extra=(--sink-check)
+      gated_cell "ltx25-1080p-${fps}fps" ltx25-two-stage \
+        "$BIN" --mode fast ltx2 gen --model-version 2.5 \
+          --weights "$W/ltx25" --dit "$W/ltx25" --workload 1080p20s \
+          --num-frames "$frames" --frame-rate "$fps" \
+          --prompt "$PROMPT" --seed "$SEED" --two-stage --text streamed \
+          --clip "$RUNS/ltx25-1080p-${fps}fps/frames" "${extra[@]}"
+    done
+    gated_cell ltx25-1080p-50fps-silent ltx25-two-stage \
+      "$BIN" --mode fast ltx2 gen --model-version 2.5 \
+        --weights "$W/ltx25" --dit "$W/ltx25" --workload 1080p20s \
+        --num-frames "$frames" --frame-rate 50 --skip-audio-decode --sink-check \
+        --prompt "$PROMPT" --seed "$SEED" --two-stage --text streamed \
+        --clip "$RUNS/ltx25-1080p-50fps-silent/frames"
+    gated_cell fasth3-8step-sink fasth3-8step \
+      env FV_SINK_CHECK=1 \
+      "$BIN" --mode fast h3 gen --weights "$W/h3-8step" --h3-recipe 8step \
+        --prompt "$PROMPT" --seconds 5 --seed "$SEED" --text-encoder auto \
+        --text-cache "$SCRATCH/h3-text-cache" --text-weights "$W/h3-base" \
+        --clip-dir "$RUNS/fasth3-8step-sink/frames"
+    for cell in $(ls "$RUNS" 2>/dev/null | grep -E '^(ltx25-1080p|fasth3-8step-sink)'); do
+      grep -h 'PASS\|FAIL' "$RUNS/$cell/stderr.log" 2>/dev/null | grep -E 'sink|mp4_frames|no_wav|gen\.frames' \
+        | cut -c1-300 | sed "s/^/[$cell] /" | tee -a "$LOG" || true
     done
     ;;
   ltxvae)

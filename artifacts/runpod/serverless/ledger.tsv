@@ -1,0 +1,11 @@
+2026-09-27T16:14:41Z	template-created cto24f7zso fv-coldstart-0927161440 ghcr.io/zaitrarrio/fastvideo-rs-runtime:sha-c582b63
+2026-09-27T16:14:42Z	endpoint-created ltf9nt77yn545m fv-coldstart-0927161440 gpu=NVIDIA H200 vol=s2k01690bi dc=US-CA-2
+2026-09-27T16:22:50Z	template-updated cto24f7zso same-image
+2026-09-27T16:30:51Z	template-updated cto24f7zso same-image
+2026-09-27T16:53:32Z	template-updated cto24f7zso ghcr.io/zaitrarrio/fastvideo-rs-runtime:sha-47aa7b7
+2026-09-27T17:34:16Z	template-updated cto24f7zso ghcr.io/zaitrarrio/fastvideo-rs-runtime:sha-0536e9a
+2026-09-27T17:55:49Z	template-updated cto24f7zso ghcr.io/zaitrarrio/fastvideo-rs-runtime:sha-f6a775c
+2026-09-27T18:20:03Z	template-updated cto24f7zso ghcr.io/zaitrarrio/fastvideo-rs-runtime:sha-72fdf68
+2026-09-27T18:33:15Z	template-updated cto24f7zso ghcr.io/zaitrarrio/fastvideo-rs-runtime:sha-72fdf68
+2026-09-27T18:41:07Z	endpoint-deleted ltf9nt77yn545m
+2026-09-27T18:41:08Z	template-deleted cto24f7zso

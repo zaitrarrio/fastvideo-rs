@@ -13,6 +13,7 @@
 //! | `FV_SERVE_MODE` | `server.mode` (`http` \| `runpod-queue`) |
 //! | `PORT` | port of `server.bind` (Runpod load balancer) |
 //! | `FV_BIND`, `FV_PUBLIC_BASE_URL`, `FV_STATE_DIR`, `FV_WORKER_ID` | `server.*` |
+//! | `FV_SERVE_FORWARD` (`1`) | `server.forward` (Vast PyWorker route) |
 //! | `FV_WEIGHTS` | substituted for `${FV_WEIGHTS}` in `models[].weights` |
 //! | `FV_AUTH_MODE`, `FV_API_KEYS` (SHA-256 hex list) | `auth.*` |
 //! | `FV_URL_SIGNING_KEY`, `FV_WEBHOOK_ED25519_KEY` | signing keys |
@@ -83,6 +84,8 @@ pub struct ServerCfg {
     pub shutdown_grace_s: u64,
     /// Sync endpoints' wait (`/v1/videos/sync`, LTX v1, fal `/run`).
     pub sync_timeout_s: u64,
+    /// Mount `POST /fv/v1/forward` (the Vast PyWorker target, WP-16).
+    pub forward: bool,
 }
 
 impl Default for ServerCfg {
@@ -95,6 +98,7 @@ impl Default for ServerCfg {
             worker_id: None,
             shutdown_grace_s: 25,
             sync_timeout_s: 600,
+            forward: false,
         }
     }
 }
@@ -375,6 +379,46 @@ impl Default for WebrtcCfg {
     }
 }
 
+/// `[reactor]`: the Reactor local runtime (design §5.7, WP-13).
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct ReactorCfg {
+    /// Model id/served name to stream; unset: the first resident model with
+    /// stream caps.
+    pub model: Option<String>,
+    /// Canvas short edge (default: the model's default tier).
+    pub short_edge: Option<u32>,
+    /// Initial aspect (`16:9`, `1:1`, `9:16`, `4:3`).
+    pub aspect: String,
+    /// Session seed; unset: `/start_session` `seed`, else drawn.
+    pub seed: Option<u64>,
+    /// RT `ORPHAN_TIMEOUT_SECONDS`.
+    pub orphan_timeout_s: u64,
+    /// RT `WEBRTC_CLIENT_PING_TIMEOUT_SECONDS`.
+    pub ping_timeout_s: u64,
+    pub max_connections: usize,
+    /// H.264 encoder for H.264 peers: `nvenc` | `openh264` | `off` (VP8
+    /// peers, such as the Python SDK, always get intra-only VP8).
+    pub h264: String,
+    pub h264_bitrate_bps: Option<u32>,
+}
+
+impl Default for ReactorCfg {
+    fn default() -> Self {
+        Self {
+            model: None,
+            short_edge: None,
+            aspect: "16:9".into(),
+            seed: None,
+            orphan_timeout_s: 60,
+            ping_timeout_s: 20,
+            max_connections: 64,
+            h264: "nvenc".into(),
+            h264_bitrate_bps: None,
+        }
+    }
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct LogCfg {
@@ -405,6 +449,7 @@ pub struct Config {
     pub ltx: LtxCfg,
     pub limits: LimitsCfg,
     pub webrtc: WebrtcCfg,
+    pub reactor: ReactorCfg,
     pub log: LogCfg,
     /// Ed25519 seed for fal webhooks (normally `FV_WEBHOOK_ED25519_KEY`).
     pub webhook_key: Secret,
@@ -491,6 +536,9 @@ impl Config {
         if let Some(v) = env.var("FV_STATE_DIR") {
             self.server.state_dir = v.into();
         }
+        if let Some(v) = env.var("FV_SERVE_FORWARD") {
+            self.server.forward = matches!(v.trim(), "1" | "true" | "yes");
+        }
         if let Some(v) = env.var("FV_WORKER_ID") {
             self.server.worker_id = Some(v);
         }
@@ -518,6 +566,24 @@ impl Config {
         }
         if let Some(v) = env.var("FV_WHIP_TOKEN") {
             self.webrtc.whip_token = Secret(v);
+        }
+        // RT's own environment names (reactor §3.3).
+        for (k, slot) in [
+            ("ORPHAN_TIMEOUT_SECONDS", &mut self.reactor.orphan_timeout_s),
+            ("WEBRTC_CLIENT_PING_TIMEOUT_SECONDS", &mut self.reactor.ping_timeout_s),
+        ] {
+            if let Some(v) = env.var(k) {
+                *slot = v
+                    .trim()
+                    .parse::<f64>()
+                    .ok()
+                    .filter(|s| s.is_finite() && *s > 0.0)
+                    .map(|s| s.ceil() as u64)
+                    .ok_or_else(|| ConfigError::Invalid(format!("{k}={v} is not a positive number of seconds")))?;
+            }
+        }
+        if let Some(v) = env.var("FV_REACTOR_MODEL") {
+            self.reactor.model = Some(v);
         }
         if let Some(v) = env.var("FV_ENGINE") {
             self.engine.backend = parse_enum("FV_ENGINE", &v)?;

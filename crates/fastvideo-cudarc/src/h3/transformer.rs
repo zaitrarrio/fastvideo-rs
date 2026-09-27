@@ -90,14 +90,13 @@ fn load_linear(
         return Linear::load(map, prefix, in_dim, out_dim, has_bias);
     };
     let wkey = format!("{prefix}.weight");
-    let (shape, mut weight) = map.get_f32(&wkey)?;
-    if shape != [out_dim, in_dim] {
-        return Err(msg(format!(
-            "key {wkey}: shape {shape:?} != expected {:?}",
-            [out_dim, in_dim]
-        )));
+    // Nothing of the adapter lands here: the plain bf16 load gives the same
+    // bits (bf16 -> f32 -> bf16 is exact) without the f32 detour.
+    if !fuse.touches(&wkey) && !(has_bias && fuse.touches(&format!("{prefix}.bias"))) {
+        return Linear::load(map, prefix, in_dim, out_dim, has_bias);
     }
-    fuse.fuse(&wkey, &mut weight, &shape)?;
+    let t = std::time::Instant::now();
+    let parts = fuse.take_parts(&wkey, &[out_dim, in_dim])?;
     let bias = if has_bias {
         let bkey = format!("{prefix}.bias");
         let (bs, mut bias) = map.get_f32(&bkey)?;
@@ -109,7 +108,252 @@ fn load_linear(
     } else {
         None
     };
+    #[cfg(feature = "cuda")]
+    let parts = match lora_device::fused(map, &wkey, out_dim, in_dim, parts)? {
+        Ok(w) => {
+            fastvideo_loader::prefetch::add_consumer_time(
+                fastvideo_loader::prefetch::ConsumerTime::Lora,
+                t.elapsed(),
+            );
+            return Linear::from_device_bf16_bias(w, bias, in_dim, out_dim);
+        }
+        Err(parts) => parts,
+    };
+    let (shape, mut weight) = map.get_f32(&wkey)?;
+    if shape != [out_dim, in_dim] {
+        return Err(msg(format!(
+            "key {wkey}: shape {shape:?} != expected {:?}",
+            [out_dim, in_dim]
+        )));
+    }
+    parts.apply_host(&wkey, &mut weight, &shape)?;
+    fastvideo_loader::prefetch::add_consumer_time(
+        fastvideo_loader::prefetch::ConsumerTime::Lora,
+        t.elapsed(),
+    );
     Linear::from_tensors(CudaTensor::from_vec(weight, vec![out_dim, in_dim])?, bias)
+}
+
+/// The adapter merge on the device (`FASTVIDEO_H3_LORA_DEVICE`, default on):
+/// the base weight goes up as it is on disk (bf16, 2 bytes a parameter,
+/// through the pinned stage when that is on), the factors and any `.diff` in
+/// float32, and one kernel computes the host merge's arithmetic element for
+/// element and rounds to bf16 as the host does (see `lora_fuse_bf16` in
+/// kernels.cu and [`super::lora::FuseParts::apply_host`]). The weight that
+/// comes out is the host path's bit for bit; what goes away is the host's
+/// float32 copy of every adapted weight, its merge, and its bf16 round.
+#[cfg(feature = "cuda")]
+pub(crate) mod lora_device {
+    use super::super::lora::FuseParts;
+    use crate::wan::nn::Linear;
+    use crate::wan::ops::{lora_fuse_bf16_device, LoraBase, LoraPairDev};
+    use crate::wan::tensor::{Result, TensorError};
+    use crate::wan::weights::WeightMap;
+    use cudarc::driver::{CudaSlice, CudaViewMut};
+    use fastvideo_loader::LazyDType;
+    use half::bf16;
+
+    fn msg(s: impl Into<String>) -> TensorError {
+        TensorError::Message(s.into())
+    }
+
+    pub fn enabled() -> bool {
+        static FLAG: crate::wan::envflag::CachedBool = crate::wan::envflag::CachedBool::new();
+        FLAG.get_or_init(|| crate::wan::envflag::bool_flag("FASTVIDEO_H3_LORA_DEVICE", true))
+            && Linear::device_bf16_route()
+    }
+
+    enum Base {
+        Bf16(CudaSlice<bf16>),
+        F32(CudaSlice<f32>),
+    }
+
+    /// `key`'s base as stored, on the device; `None` when it is not a lazily
+    /// mapped bf16 / f32 tensor of `rows x cols` (the host path serves it).
+    fn base(map: &WeightMap, key: &str, rows: usize, cols: usize) -> Result<Option<Base>> {
+        let Some(lazy) = map.lazy() else {
+            return Ok(None);
+        };
+        let Ok(v) = lazy.view(&map.resolved_key(key)) else {
+            return Ok(None);
+        };
+        if v.shape != [rows, cols] {
+            return Ok(None);
+        }
+        let dev = crate::wan::device::global_device().ok_or_else(|| msg("no device"))?;
+        let e = |e: cudarc::driver::DriverError| msg(format!("lora base {key}: {e}"));
+        match *v.dtype {
+            LazyDType::BF16 => {
+                if let Some(w) = crate::wan::stage_upload::upload_bf16_bytes(v.bytes)? {
+                    return Ok(Some(Base::Bf16(w)));
+                }
+                let host: Vec<bf16> = v
+                    .bytes
+                    .chunks_exact(2)
+                    .map(|c| bf16::from_bits(u16::from_le_bytes([c[0], c[1]])))
+                    .collect();
+                crate::wan::stats::record_h2d(host.len() / 2);
+                Ok(Some(Base::Bf16(dev.stream.memcpy_stod(&host).map_err(e)?)))
+            }
+            LazyDType::F32 => {
+                let host: Vec<f32> = v
+                    .bytes
+                    .chunks_exact(4)
+                    .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
+                    .collect();
+                crate::wan::stats::record_h2d(host.len());
+                Ok(Some(Base::F32(dev.stream.memcpy_stod(&host).map_err(e)?)))
+            }
+            _ => Ok(None),
+        }
+    }
+
+    /// Merge `parts` into `key` (`rows x cols`) on the device, writing bf16
+    /// into `out`. `Ok(false)` (nothing written) when the base cannot be read
+    /// on the device; the caller then merges on the host.
+    pub fn fuse_into(
+        map: &WeightMap,
+        key: &str,
+        rows: usize,
+        cols: usize,
+        parts: &FuseParts,
+        out: &mut CudaViewMut<'_, bf16>,
+    ) -> Result<bool> {
+        let dev = crate::wan::device::global_device().ok_or_else(|| msg("no device"))?;
+        let e = |e: cudarc::driver::DriverError| msg(format!("lora fuse {key}: {e}"));
+        let up = |v: &[f32]| -> Result<CudaSlice<f32>> {
+            crate::wan::stats::record_h2d(v.len());
+            dev.stream.memcpy_stod(v).map_err(e)
+        };
+        // A `.set_weight` replacement overwrites the base: it is not read.
+        let replacement = match &parts.replacement {
+            Some(r) => Some(up(r)?),
+            None => None,
+        };
+        let base = match &replacement {
+            Some(_) => None,
+            None => match base(map, key, rows, cols)? {
+                Some(b) => Some(b),
+                None => return Ok(false),
+            },
+        };
+        let base_ref = match (&replacement, &base) {
+            (Some(r), _) => LoraBase::Replacement(r, parts.diff_scale),
+            (None, Some(Base::Bf16(w))) => LoraBase::Bf16(w),
+            (None, Some(Base::F32(w))) => LoraBase::F32(w),
+            (None, None) => return Ok(false),
+        };
+        let pair = match parts.pair() {
+            Some((a, b, rank)) => Some((up(a)?, up(b)?, rank)),
+            None => None,
+        };
+        let diff = match &parts.diff {
+            Some(d) => Some(up(d)?),
+            None => None,
+        };
+        lora_fuse_bf16_device(
+            base_ref,
+            pair.as_ref().map(|(a, b, rank)| LoraPairDev {
+                a,
+                b,
+                rank: *rank,
+                multiplier: parts.multiplier,
+            }),
+            diff.as_ref().map(|d| (d, parts.diff_scale)),
+            out,
+            rows,
+            cols,
+        )?;
+        Ok(true)
+    }
+
+    /// [`fuse_into`] a new `rows x cols` weight. `Err(parts)` hands the parts
+    /// back for the host merge (device merge off, or the base not servable).
+    #[allow(clippy::type_complexity)]
+    pub fn fused(
+        map: &WeightMap,
+        key: &str,
+        rows: usize,
+        cols: usize,
+        parts: FuseParts,
+    ) -> Result<std::result::Result<CudaSlice<bf16>, FuseParts>> {
+        if !enabled() {
+            return Ok(Err(parts));
+        }
+        let dev = crate::wan::device::global_device().ok_or_else(|| msg("no device"))?;
+        // SAFETY: fully written by the kernel before any read.
+        let mut out = unsafe { dev.stream.alloc::<bf16>(rows * cols) }
+            .map_err(|e| msg(format!("lora fuse {key}: {e}")))?;
+        if fuse_into(map, key, rows, cols, &parts, &mut out.slice_mut(..))? {
+            if verify_enabled() {
+                verify(map, key, rows, cols, parts, &out)?;
+            }
+            Ok(Ok(out))
+        } else {
+            Ok(Err(parts))
+        }
+    }
+
+    /// `FASTVIDEO_H3_LORA_VERIFY=1`: also merge every weight on the host and
+    /// require the device merge's bits to equal it (an identity check; the
+    /// load then costs both paths).
+    pub fn verify_enabled() -> bool {
+        static FLAG: crate::wan::envflag::CachedBool = crate::wan::envflag::CachedBool::new();
+        FLAG.get_or_init(|| crate::wan::envflag::bool_flag("FASTVIDEO_H3_LORA_VERIFY", false))
+    }
+
+    static COUNTS: [std::sync::atomic::AtomicU64; 2] =
+        [std::sync::atomic::AtomicU64::new(0), std::sync::atomic::AtomicU64::new(0)];
+
+    /// `(equal, different)` device merges checked so far.
+    pub fn verify_counts() -> (u64, u64) {
+        (
+            COUNTS[0].load(std::sync::atomic::Ordering::Relaxed),
+            COUNTS[1].load(std::sync::atomic::Ordering::Relaxed),
+        )
+    }
+
+    /// [`verify`] of one part of a stacked weight.
+    pub fn verify_part(
+        map: &WeightMap,
+        key: &str,
+        rows: usize,
+        cols: usize,
+        parts: FuseParts,
+        got: &impl cudarc::driver::DevicePtr<bf16>,
+    ) -> Result<()> {
+        verify(map, key, rows, cols, parts, got)
+    }
+
+    fn verify(
+        map: &WeightMap,
+        key: &str,
+        rows: usize,
+        cols: usize,
+        parts: FuseParts,
+        got: &impl cudarc::driver::DevicePtr<bf16>,
+    ) -> Result<()> {
+        let mut host = if parts.replacement.is_some() {
+            vec![0f32; rows * cols]
+        } else {
+            map.get_f32(key)?.1
+        };
+        parts.apply_host(key, &mut host, &[rows, cols])?;
+        let dev = crate::wan::device::global_device().ok_or_else(|| msg("no device"))?;
+        let got = dev
+            .stream
+            .memcpy_dtov(got)
+            .map_err(|e| msg(format!("lora verify {key}: {e}")))?;
+        let equal = got
+            .iter()
+            .zip(&host)
+            .all(|(g, h)| g.to_bits() == bf16::from_f32(*h).to_bits());
+        let n = COUNTS[usize::from(!equal)].fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        if !equal && n < 5 {
+            crate::wan::log::info(format_args!("h3 lora device merge MISMATCH: {key}"));
+        }
+        Ok(())
+    }
 }
 
 /// Rows per FFN pass when the full `[S, 2*ffn]` f32 buffer would exceed
@@ -1020,12 +1264,20 @@ impl Attention {
             names.push(format!("{prefix}.to_gate_compress"));
         }
         if lora.is_some() {
-            let mut stacked = Vec::with_capacity(names.len() * inner * hidden);
-            for name in &names {
-                let key = format!("{name}.weight");
-                let (shape, mut row) = match map.get_f32(&key) {
+            // One part of the stack on the host: the base (or, absent from
+            // the checkpoint, the adapter's `.set_weight`), merged in f32.
+            let host_part = |key: &str,
+                             parts: super::lora::FuseParts,
+                             lora: &Option<super::lora::H3LoraFuse>|
+             -> Result<Vec<f32>> {
+                let (shape, mut row) = match map.get_f32(key) {
                     Ok(v) => v,
-                    Err(e) => match lora.as_ref().and_then(|f| f.replacement(&key)) {
+                    Err(e) => match parts
+                        .replacement
+                        .clone()
+                        .map(|r| (vec![inner, hidden], r))
+                        .or_else(|| lora.as_ref().and_then(|f| f.replacement(key)))
+                    {
                         Some(v) => v,
                         None => return Err(e),
                     },
@@ -1035,13 +1287,59 @@ impl Attention {
                         "key {key}: shape {shape:?} != [{inner}, {hidden}]"
                     )));
                 }
-                lora.as_mut().unwrap().fuse(&key, &mut row, &shape)?;
-                stacked.extend(row);
-            }
-            let qkvg = Linear::from_tensors(
-                CudaTensor::from_vec(stacked, vec![names.len() * inner, hidden])?,
-                None,
-            )?;
+                parts.apply_host(key, &mut row, &shape)?;
+                Ok(row)
+            };
+            let t = std::time::Instant::now();
+            let rows = names.len() * inner;
+            #[cfg(feature = "cuda")]
+            let device = lora_device::enabled();
+            #[cfg(not(feature = "cuda"))]
+            let device = false;
+            let qkvg = if device {
+                #[cfg(feature = "cuda")]
+                {
+                    let dev = crate::wan::device::global_device()
+                        .ok_or_else(|| msg("no device"))?;
+                    // SAFETY: every part is written below before any read.
+                    let mut stacked = unsafe { dev.stream.alloc::<half::bf16>(rows * hidden) }
+                        .map_err(|e| msg(format!("qkvg stack: {e}")))?;
+                    for (i, name) in names.iter().enumerate() {
+                        let key = format!("{name}.weight");
+                        let parts = lora.as_mut().unwrap().take_parts(&key, &[inner, hidden])?;
+                        let mut view =
+                            stacked.slice_mut(i * inner * hidden..(i + 1) * inner * hidden);
+                        let check = lora_device::verify_enabled().then(|| parts.clone());
+                        if lora_device::fuse_into(map, &key, inner, hidden, &parts, &mut view)? {
+                            if let Some(parts) = check {
+                                lora_device::verify_part(map, &key, inner, hidden, parts, &view)?;
+                            }
+                        } else {
+                            let row = host_part(&key, parts, lora)?;
+                            let row16: Vec<half::bf16> =
+                                row.iter().map(|&v| half::bf16::from_f32(v)).collect();
+                            dev.stream
+                                .memcpy_htod(&row16, &mut view)
+                                .map_err(|e| msg(format!("qkvg stack: {e}")))?;
+                        }
+                    }
+                    Linear::from_device_bf16_bias(stacked, None, hidden, rows)?
+                }
+                #[cfg(not(feature = "cuda"))]
+                unreachable!()
+            } else {
+                let mut stacked = Vec::with_capacity(rows * hidden);
+                for name in &names {
+                    let key = format!("{name}.weight");
+                    let parts = lora.as_mut().unwrap().take_parts(&key, &[inner, hidden])?;
+                    stacked.extend(host_part(&key, parts, lora)?);
+                }
+                Linear::from_tensors(CudaTensor::from_vec(stacked, vec![rows, hidden])?, None)?
+            };
+            fastvideo_loader::prefetch::add_consumer_time(
+                fastvideo_loader::prefetch::ConsumerTime::Lora,
+                t.elapsed(),
+            );
             let to_out = load_linear(
                 map,
                 &format!("{prefix}.to_out.0"),

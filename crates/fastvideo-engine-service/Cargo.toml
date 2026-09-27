@@ -9,22 +9,24 @@ description = "fv-serve engine service: warm model pool, per-GPU executors, sche
 [dependencies]
 fastvideo-protocol.workspace = true
 fastvideo-models.workspace = true
+fastvideo-media.workspace = true
+image.workspace = true
 serde.workspace = true
+serde_json.workspace = true
 thiserror.workspace = true
 time.workspace = true
-tokio = { workspace = true, features = ["sync", "time"] }
+# `rt`/`macros`: the streaming cores (ClipPlayer, pacers) are tokio tasks.
+tokio = { workspace = true, features = ["sync", "time", "rt", "macros"] }
 tracing.workspace = true
 uuid.workspace = true
 
 # Only this crate may touch CUDA, and only behind `cuda` (design §2.2).
 fastvideo-cudarc = { workspace = true, optional = true }
-# NVENC MP4 output and PNG frame decode for the CUDA backend.
-fastvideo-media = { workspace = true, optional = true }
 
 [features]
 default = []
 # CudaBackend over the fastvideo-cudarc pipelines (WP-11). FakeBackend is always built.
-cuda = ["dep:fastvideo-cudarc", "fastvideo-cudarc/cuda", "dep:fastvideo-media"]
+cuda = ["dep:fastvideo-cudarc", "fastvideo-cudarc/cuda"]
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["sync", "time", "rt", "rt-multi-thread", "macros"] }

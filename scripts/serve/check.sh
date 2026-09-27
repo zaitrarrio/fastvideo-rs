@@ -39,7 +39,7 @@ run cargo test "${PKGS[@]}"
 
 if [[ "${FV_SERVE_HEAVY:-0}" == "1" ]]; then
   run cargo check -p fastvideo-serve --features full,fake --all-targets
-  run cargo check -p fastvideo-reactor --features proto-codegen
+  run cargo test -p fastvideo-reactor --features proto-codegen --lib
   run cargo clippy -p fastvideo-serve -p fastvideo-webrtc -p fastvideo-media -p fastvideo-serve-kit -p fastvideo-deploy \
     --features fastvideo-serve/full --all-targets --no-deps -- -D warnings
   # serve-kit's HTTP fetch / callback-receiver tests only exist with `fetch`.
@@ -48,6 +48,11 @@ if [[ "${FV_SERVE_HEAVY:-0}" == "1" ]]; then
   # (serve-kit's d1_live smoke test runs above when CLOUDFLARE_API_KEY or
   # FV_CF_API_TOKEN is set, and skips otherwise.)
   run cargo test -p fastvideo-serve --features http-client
+  # Native /fv/v1/streams: fake engine → pacer → OpenH264/Opus → WHIP (in
+  # process endpoint); scripts/serve/whip-e2e.sh adds MediaMTX + WHEP.
+  run cargo test -p fastvideo-serve --features full --test streams_whip
+  # The Runpod worker over reqwest against the queue simulator on TCP.
+  run cargo test -p fastvideo-deploy --features runpod
 fi
 
 if [[ "${FV_SERVE_CUDA:-0}" == "1" ]]; then

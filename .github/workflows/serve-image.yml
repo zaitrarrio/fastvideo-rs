@@ -1,0 +1,129 @@
+# Builds the fv-serve image (docker/gpucheck.Dockerfile target `serve`,
+# docs/serve/design.md §6.1) and pushes ghcr.io/<owner>/fastvideo-rs-serve.
+# Deploy tooling (scripts/serve/*.sh) pins the pushed **digest**, which the
+# job prints as a notice and writes to the run summary.
+name: serve-image
+
+on:
+  workflow_dispatch:
+    inputs:
+      features:
+        description: "fv-serve cargo features"
+        required: false
+        default: "cuda,http-client"
+  # main only: agents push the same commits to their branches too, and a
+  # second build of the same sha is wasted. Other branches: workflow_dispatch.
+  push:
+    branches: ["main"]
+    paths:
+      - "crates/**"
+      - "configs/serve/**"
+      - "deploy/**"
+      - "third_party/**"
+      - ".gitmodules"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "rust-toolchain.toml"
+      - "docker/gpucheck.Dockerfile"
+      - ".dockerignore"
+      - "scripts/gpu/**"
+      - ".github/workflows/serve-image.yml"
+
+permissions:
+  contents: read
+  packages: write
+
+# main moves every few minutes; cancelling would never let a ~45 min build
+# finish. One build runs, the newest push waits.
+concurrency:
+  group: serve-image-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  image:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 120
+    steps:
+      - name: Free disk space
+        run: |
+          df -h /
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL \
+            /usr/local/share/boost /usr/share/swift /usr/local/.ghcup
+          docker image prune -af >/dev/null
+          df -h /
+
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Image name and tags
+        id: meta
+        run: |
+          echo "build_id=$(bash scripts/gpu/docker.sh build-id)" >> "$GITHUB_OUTPUT"
+          echo "image=ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/fastvideo-rs-serve" >> "$GITHUB_OUTPUT"
+          echo "runtime=ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/fastvideo-rs-runtime" >> "$GITHUB_OUTPUT"
+          echo "short_sha=${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
+          echo "features=${{ github.event.inputs.features || 'cuda,http-client' }}" >> "$GITHUB_OUTPUT"
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push
+        id: push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: docker/gpucheck.Dockerfile
+          target: serve
+          platforms: linux/amd64
+          push: true
+          build-args: |
+            BUILD_ID=${{ steps.meta.outputs.build_id }}
+            FV_SERVE_FEATURES=${{ steps.meta.outputs.features }}
+          tags: |
+            ${{ steps.meta.outputs.image }}:sha-${{ steps.meta.outputs.short_sha }}
+            ${{ github.ref == 'refs/heads/main' && format('{0}:latest', steps.meta.outputs.image) || '' }}
+          labels: |
+            org.opencontainers.image.revision=${{ github.sha }}
+            dev.fastvideo.build-id=${{ steps.meta.outputs.build_id }}
+          # The runtime image's registry cache covers builder/oxide/build and
+          # runtime; the serve cache adds serve-build.
+          cache-from: |
+            type=registry,ref=${{ steps.meta.outputs.runtime }}:buildcache
+            type=registry,ref=${{ steps.meta.outputs.image }}:buildcache
+          cache-to: type=registry,ref=${{ steps.meta.outputs.image }}:buildcache,mode=max,image-manifest=true,oci-mediatypes=true,ignore-error=true
+
+      - name: Smoke-check the pushed image (no GPU)
+        run: |
+          img="${{ steps.meta.outputs.image }}@${{ steps.push.outputs.digest }}"
+          docker pull "$img"
+          docker image inspect "$img" --format 'size={{.Size}} entrypoint={{json .Config.Entrypoint}}'
+          docker run --rm "$img" --version
+          docker run --rm --entrypoint bash "$img" -euo pipefail -c '
+            test "$NVIDIA_DRIVER_CAPABILITIES" = compute,utility,video
+            ffmpeg -hide_banner -encoders | grep " h264_nvenc "
+            cat /opt/fastvideo-rs/bin/fv-serve.features
+            test -f /opt/fastvideo-rs/deploy/vast/worker.py
+            for c in /etc/fv/*.toml; do FV_ENGINE=fake /opt/fastvideo-rs/bin/fv-serve --config "$c" --print-config >/dev/null; echo "config ok: $c"; done'
+          # HTTP mode on the fake engine: /healthz turns 200.
+          cid=$(docker run -d -p 18000:8000 -e FV_ENGINE=fake -e FV_AUTH_MODE=none "$img" --config /etc/fv/runpod-fake.toml)
+          ok=0
+          for _ in $(seq 1 60); do
+            if curl -fsS localhost:18000/healthz; then ok=1; break; fi
+            sleep 1
+          done
+          curl -fsS localhost:18000/fv/v1/capabilities | head -c 400; echo
+          docker logs "$cid" 2>&1 | tail -20
+          docker rm -f "$cid" >/dev/null
+          test "$ok" = 1
+
+      - name: Digest
+        run: |
+          ref="${{ steps.meta.outputs.image }}@${{ steps.push.outputs.digest }}"
+          echo "::notice title=fv-serve image::$ref"
+          echo "fv-serve image: \`$ref\` (tag sha-${{ steps.meta.outputs.short_sha }})" >> "$GITHUB_STEP_SUMMARY"

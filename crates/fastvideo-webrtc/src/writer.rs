@@ -32,11 +32,24 @@ pub enum TrackKind {
     Audio,
 }
 
-/// One encoded H.264 access unit.
+/// Video codecs the host can answer with (pre-encoded; str0m packetizes).
+///
+/// H.264 is the default everywhere (design §5.9). VP8 exists for clients
+/// whose WebRTC stack offers no H.264 at all, such as the Reactor Python SDK
+/// (its libwebrtc offers VP8/VP9/AV1 only; WP-13).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum VideoCodec {
+    H264,
+    Vp8,
+}
+
+/// One encoded video frame.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct VideoFrame {
-    /// Annex-B bitstream (`00 00 00 01` / `00 00 01` start codes). An IDR
-    /// access unit should carry SPS and PPS in-band.
+    /// H.264: an Annex-B access unit (`00 00 00 01` / `00 00 01` start
+    /// codes); an IDR access unit should carry SPS and PPS in-band.
+    /// VP8: one complete VP8 frame. The peer's negotiated
+    /// [`VideoCodec`] decides which (`PeerHandle::video_codec`).
     pub data: Bytes,
     /// RTP timestamp, 90 kHz, monotonically increasing.
     pub rtp_time: u64,

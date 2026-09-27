@@ -3,7 +3,9 @@
 //! default frames / fps; 25 Euler steps, CFG 4.5, negative prompt ""), writes
 //! the waveform and a muxed mp4, and times `--runs` generations (the first
 //! is the warm-up when `--runs` > 1). With `FASTVIDEO_DUMP_DIR` /
-//! `FASTVIDEO_INJECT_DIR` it is the oracle side (docs/oracle.md).
+//! `FASTVIDEO_INJECT_DIR` it is the oracle side (docs/oracle.md). `t2a` is
+//! text-to-audio (no video features), one wav per `--seeds` entry from one
+//! loaded pipeline.
 
 use std::path::PathBuf;
 
@@ -43,9 +45,95 @@ pub enum Stage {
         #[arg(long, default_value = "cuda")]
         device: String,
     },
+    T2a {
+        /// Weight root (`scripts/gpu/fetch-mmaudio.py` layout).
+        #[arg(long, default_value = "/workspace/weights/mmaudio-44k-v2")]
+        weights: PathBuf,
+        #[arg(long)]
+        prompt: String,
+        #[arg(long, default_value = "")]
+        negative: String,
+        /// Seconds (the preset's training length, 8 s, by default).
+        #[arg(long)]
+        duration: Option<f64>,
+        /// Comma-separated seeds; each writes `<out>/seed-<seed>.wav`.
+        #[arg(long, default_value = "1000", value_delimiter = ',')]
+        seeds: Vec<u64>,
+        #[arg(long, default_value_t = 25)]
+        steps: usize,
+        #[arg(long, default_value_t = 4.5)]
+        cfg: f32,
+        #[arg(long)]
+        out: PathBuf,
+        #[arg(long, default_value = "cuda")]
+        device: String,
+    },
+}
+
+fn run_t2a(report: &mut Report, stage: &Stage) -> StageResult<()> {
+    let Stage::T2a {
+        weights,
+        prompt,
+        negative,
+        duration,
+        seeds,
+        steps,
+        cfg,
+        out,
+        device,
+    } = stage
+    else {
+        unreachable!("t2a stage")
+    };
+    report.set("device", crate::gpu::init(device)?);
+    std::fs::create_dir_all(out).map_err(anyhow::Error::from)?;
+    let t = std::time::Instant::now();
+    let pipe = MmAudioPipeline::load(weights, MmAudioPreset::Large44kV2)
+        .map_err(|e| anyhow::anyhow!("load {}: {e}", weights.display()))?;
+    let load_s = t.elapsed().as_secs_f64();
+    let mut runs = Vec::new();
+    for &seed in seeds {
+        let mut req = MmAudioRequest::t2a(prompt.clone(), seed);
+        req.negative_prompt = negative.clone();
+        req.num_steps = *steps;
+        req.cfg_strength = *cfg;
+        if let Some(d) = duration {
+            req.duration_s = *d;
+        }
+        let t = std::time::Instant::now();
+        let o = pipe
+            .generate(&req)
+            .map_err(|e| anyhow::anyhow!("generate: {e}"))?;
+        let wall = t.elapsed().as_secs_f64();
+        let wav = out.join(format!("seed-{seed}.wav"));
+        write_wav(&wav, &o.waveform, o.sample_rate).map_err(|e| anyhow::anyhow!("{e}"))?;
+        eprintln!(
+            "mmaudio t2a seed {seed}: {wall:.3}s duration {:.3}s -> {}",
+            o.duration_s,
+            wav.display()
+        );
+        runs.push(json!({"seed": seed, "wall_s": wall, "duration_s": o.duration_s, "sample_rate": o.sample_rate, "wav": wav}));
+    }
+    let doc = json!({
+        "pipeline": "MMAudioT2A (fastvideo-rs cudarc)",
+        "variant": "large_44k_v2",
+        "prompt": prompt,
+        "load_s": load_s,
+        "runs": runs,
+    });
+    std::fs::write(
+        out.join("mmaudio.json"),
+        serde_json::to_string_pretty(&doc).unwrap_or_default(),
+    )
+    .map_err(anyhow::Error::from)?;
+    report.set("mmaudio", doc);
+    Ok(())
 }
 
 pub fn run(report: &mut Report, stage: &Stage) -> StageResult<()> {
+    if matches!(stage, Stage::T2a { .. }) {
+        return run_t2a(report, stage);
+    }
     let Stage::V2a {
         weights,
         video,
@@ -58,7 +146,10 @@ pub fn run(report: &mut Report, stage: &Stage) -> StageResult<()> {
         runs,
         out,
         device,
-    } = stage;
+    } = stage
+    else {
+        unreachable!("v2a stage")
+    };
     report.set("device", crate::gpu::init(device)?);
     std::fs::create_dir_all(out).map_err(anyhow::Error::from)?;
     let t = std::time::Instant::now();

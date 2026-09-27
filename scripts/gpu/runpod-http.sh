@@ -26,13 +26,14 @@
 # RUNPOD_VOLUME_NAME may name several weight volumes; the one whose DC has
 # stock for the GPU is used. RUNPOD_NO_VOLUME=1 mounts none and takes any
 # datacenter (weight-free work: kernels, upstream bench:attn / bench:attn_dc);
-# RUNPOD_CLOUD_TYPE=COMMUNITY allows community hosts.
+# RUNPOD_CLOUD_TYPE=COMMUNITY allows community hosts; RUNPOD_ALLOWED_CUDA
+# (e.g. "13.0") restricts hosts to drivers supporting those CUDA versions. It is
+# off by default because the filter can hide available stock; instead the pod
+# checks its driver (>= FV_MIN_DRIVER, default 580) and stops early if older.
 # Env: FV_FAMILY (runpod-matrix.sh family, default rtx6000; rtx5090 is the
 # sol-engine RTX 5090 suite), RUNPOD_GPU_TYPE (default RTX PRO 6000), RUNPOD_API_KEY, RUNPOD_VOLUME_ID (default: volume named
 # fv-weights-h3-ltx-hy), FV_CELLS (subset of cells), FV_GEN_TIMEOUT_S
-# (per-cell cap, default 3600), RUNPOD_ALLOWED_CUDA (space-separated host CUDA
-# versions the pod may land on, default "13.0": the image needs driver >= 580),
-# FV_PROMPTS / FV_LPIPS (forwarded to
+# (per-cell cap, default 3600), FV_PROMPTS / FV_LPIPS (forwarded to
 # runpod-matrix.sh), FV_EXTRA_ENV (space-separated K=V for cells).
 set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -117,6 +118,15 @@ fi
   echo "image_build_id=\$(cat /opt/fastvideo-rs/target/release/fv-gpucheck.build-id 2>/dev/null)"
   nvidia-smi --query-gpu=name,memory.total,driver_version --format=csv,noheader
 } >"\$OUT/box.txt" 2>&1
+# The CUDA 13 image needs driver >= ${FV_MIN_DRIVER:-580}. Hosts are not
+# filtered by allowedCudaVersions by default (that filter can hide stock), so
+# stop here on an older driver instead of failing later.
+drv=\$(nvidia-smi --query-gpu=driver_version --format=csv,noheader 2>/dev/null | head -1 | cut -d. -f1)
+if [ -n "\$drv" ] && [ "\$drv" -lt ${FV_MIN_DRIVER:-580} ]; then
+  echo "driver_too_old=\$drv" >>"\$OUT/box.txt"
+  echo "done $tag" >"\$OUT/DONE"
+  exec sleep infinity
+fi
 # kernels mode needs no weights (and may run without a volume).
 if [ "$mode" != kernels ]; then
 ( cd /workspace/weights && for d in *; do echo "== \$d"; find -L "\$d" -maxdepth 3 \( -name '*.safetensors' -o -name '*.json' \) -printf '%s %p\n' 2>/dev/null | head -60; done ) >"\$OUT/tree.txt" 2>&1
@@ -190,12 +200,12 @@ create_pod() {
   fi
   payload="$(jq -n --arg name "fv-$FAMILY-$tag" --arg image "$image" --arg vol "$vol" \
     --arg dc "$dc" --arg gpu "$GPU" --arg disk "${FV_CONTAINER_DISK_GB:-120}" --arg cmd "$(start_cmd "$image" "$tag" "$mode")" \
-    --arg cloud "${RUNPOD_CLOUD_TYPE:-SECURE}" --arg cuda "${RUNPOD_ALLOWED_CUDA:-13.0}" '{
+    --arg cloud "${RUNPOD_CLOUD_TYPE:-SECURE}" --arg cuda "${RUNPOD_ALLOWED_CUDA:-}" '{
       name: $name, imageName: $image, cloudType: $cloud, computeType: "GPU",
       gpuTypeIds: [$gpu], gpuCount: 1, containerDiskInGb: ($disk|tonumber), volumeInGb: 0,
-      ports: ["8000/http"], dockerStartCmd: ["/bin/bash", "-c", $cmd],
-      allowedCudaVersions: ($cuda | split(" ") | map(select(length > 0)))
-    } + (if $vol == "" then {} else
+      ports: ["8000/http"], dockerStartCmd: ["/bin/bash", "-c", $cmd]
+    } + (if $cuda == "" then {} else {allowedCudaVersions: ($cuda | split(" "))} end)
+      + (if $vol == "" then {} else
       {networkVolumeId: $vol, volumeMountPath: "/workspace", dataCenterIds: [$dc]} end)')"
   log "create pod gpu=\"$GPU\" image=$image volume=${vol:-none} dc=${dc:-any} cloud=${RUNPOD_CLOUD_TYPE:-SECURE}"
   # Capacity in the volume's datacenter comes and goes; retry instead of failing.
@@ -245,7 +255,9 @@ fetch_tree() {
 fetch_results() {
   local id="$1" tag="$2" out="$OUT_ROOT/$tag" f cell
   mkdir -p "$out"
-  if [[ "$FAMILY" == upstream ]]; then
+  # FV_FETCH_TREE=1 mirrors the whole run directory (wavs, mp4s; FV_FETCH_SKIP
+  # drops e.g. frame PNGs), as the upstream family always does.
+  if [[ "$FAMILY" == upstream || "${FV_FETCH_TREE:-0}" == 1 ]]; then
     fetch_tree "$id" "$FAMILY/$tag/" "$out"
     log "results → $out"
     return
@@ -345,6 +357,10 @@ cmd_run() {
   [[ -n "${FV_POD_FILE:-}" ]] && echo "$id $tag" >"$FV_POD_FILE"
   wait_done "$id" "$tag" || rc=1
   fetch_results "$id" "$tag"
+  if grep -q "driver_too_old" "$OUT_ROOT/$tag/box.txt" 2>/dev/null; then
+    log "host driver too old ($(grep driver_too_old "$OUT_ROOT/$tag/box.txt")); rerun (or set RUNPOD_ALLOWED_CUDA=13.0)"
+    rc=1
+  fi
   if grep -q "matrix_exit=[1-9]" "$OUT_ROOT/$tag/matrix.out" 2>/dev/null; then
     log "matrix exited abnormally: $(grep matrix_exit "$OUT_ROOT/$tag/matrix.out")"
     rc=1

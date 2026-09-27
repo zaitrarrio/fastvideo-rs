@@ -66,6 +66,8 @@ text says **native**.
      volume-sync decision first — it is full).
    - **WP-19 cold-start measurement:** fresh Runpod serverless worker → submit →
      first output, per model family, before and after E12/E13.
+   - Status (2026-09-27): E12/E13 implemented, WP-19 measured — results and
+     open items in [`docs/gaps/2026-09-27-cold-start.md`](../gaps/2026-09-27-cold-start.md).
 
 5. **Sol-H3 serves the tau-ladder route (owner decision).** Whenever the server
    runs Sol-H3 4-step, the engine capability table selects the profile
@@ -964,6 +966,13 @@ Audio wire format:
   - If the E6 parity test shows a seam, the fallback is strobe's latent
     overlap with the `4·n` keep rule (streaming-refs §1.5).
   - The frames go to `ClipSink`.
+  - **Status (E6 landed, measured on H100):** no seam, so no overlap: the
+    per-block decode is bitwise the whole-clip decode at chunk 3 (81.4 dB
+    against the default chunk 4). Default RoPE is `RebasedSink` (FastVideo's
+    relativistic offsets at the absolute cost), sink 3 frames: 19.2 frames/s
+    steady, TTFF 0.30 s warm, flat device memory over 10 minutes. Details
+    and the long-run drift numbers: `docs/ports/wan.md` "SF-Wan open-ended
+    streaming".
 - **Prompt changes** apply at the next block boundary. The text encoder stays
   resident while a causal session is open (memory is recorded in caps).
   `reset` clears the KV and restarts at block 0.
@@ -1568,10 +1577,13 @@ additions and readings; everything is re-exported from the crate root.
   `ProcessPlan` refuses a model set whose load-time settings differ (e.g.
   `h3-max` + `h3-turbo`, `ltx-turbo` + `ltx-draft`, `wan-turbo` + `wan-max`);
   such models run in separate processes (they do not co-reside anyway, R18).
-- Deviations: output goes through the pipelines' PNG frames + WAV until E2
-  lands, then NVENC MP4 via `fastvideo-media` (or in-memory frames/PCM); the
-  SF-Wan pipeline is kept for the process lifetime (the rollout borrows it);
-  `H3Pipeline`'s boxed text encoder gained a `Send` bound.
+- Deviations: output still goes through the pipelines' lossless PNG frames +
+  WAV (E2's `FrameSink` landed on main after this was written; switching the
+  backend to it is a follow-up), then NVENC MP4 via `fastvideo-media` (or
+  in-memory frames/PCM). SF-Wan causal sessions delegate to WP-15's
+  `CausalDriver`; the SF-Wan pipeline stays resident for the process (the
+  rollout borrows it). `H3Pipeline`'s boxed text encoder gained a `Send`
+  bound (the pipeline lives on the executor thread).
 - GPU check: `fv-gpucheck engine` (one model through `EngineService`, frames
   compared with the CLI clip, a second job cancelled mid-run) and the
   `serve-engine` family of `runpod-matrix.sh`.
@@ -1587,6 +1599,148 @@ additions and readings; everything is re-exported from the crate root.
 | **WP-15 CausalSession** | `crates/fastvideo-engine-service/src/stream/causal.rs`, `src/cuda/causal.rs` | 12 (shared `stream/mod.rs` owned by WP-12), E6 | Block loop under an exclusive lease; prompt switch at the block boundary; adaptive pacer; Reactor causal command set works; native WHIP stream to MediaMTX plays in a WHEP viewer; TTFF phases reported |
 | **E4 LTX fps + silent** | `ltx2/pipeline.rs` (after E2) | E2 → E4 | `skip_audio_decode` flag; 25/48/50 fps validated at 1080p (frame count and MP4 rate), recorded in `benchmark.json`-style results; caps updated |
 | **E7 CUDA Graphs for the SF-Wan block loop** | `wan/stream.rs`, new `wan/graph.rs` | E6 → E7 | Graph captured per block position; bitwise-equal output to eager; block time reduced (target ≤ 350 ms on H100 at 832×480; record the actual) |
+
+**WP-12 / WP-15 notes (as implemented): the streaming session API.** All in
+`fastvideo_engine_service::stream` (re-exported at the crate root); Reactor
+(WP-13), the fal director (WP-14) and native `/fv/v1/streams` build on it.
+
+- Admission is `EngineService::open_clip_session` / `open_causal_session`
+  (§3.6, unchanged): one stream session per executor, a session counts busy
+  from open (`Starting`) to close → `Conflict` + `Retry-After: 5`; model not
+  resident / loading → `Loading` + `Retry-After: 1` (503); fps must divide
+  48000 when the tracks carry audio.
+- **Clip sessions.** `ClipSession::into_player(ClipPlayerConfig)` →
+  `(ClipPlayer, ClipOutputs{events, media})`, a tokio task:
+  - `player.command(ClipCommand) -> Result<Option<ClipEvent>, ApiError>`:
+    `Some` is the correlated reply, `None` a bodyless ack. Refusals are
+    broadcast as `ClipEvent::CommandError{command,reason}` (fast-h3 reasons
+    verbatim) and reply `None`. Broadcasts caused by a command are on
+    `events` before the reply returns, in fast-h3's order.
+  - `ClipCommand` deviates from the §5.5 sketch: clip ids are the wire
+    strings (blank/malformed refused inside), `SetCanvas(String)` takes the
+    aspect label, and `Chunk{prompt_version, prompt, first_image, end_image,
+    seconds}` gains `first_image`. Serde form `{"type","data"}` in
+    snake_case.
+  - `ClipEvent` serializes as the fast-h3 message (`type_name()`,
+    `data()`); `ClipGenerated` also carries a `BuildReport{build_s, clip_s,
+    rtf()}` (not serialized). Two native extras (`is_fasth3() == false`):
+    `BuildStarted{clip, prompt_version}` (director `prompt_applied`) and
+    `Starved{after, pending}` (autoplay ran dry with work pending: director
+    `deadline_missed`).
+  - `player.set_audience(bool)`: builds run only with an audience; losing it
+    cuts a playing clip quietly (`Gone`). `state()` / `watch_state()` give
+    the `state_update` snapshot (`ClipState`, fast-h3 fields and
+    `valid_commands`). `close()` cancels the build, drops queues, frees the
+    executor.
+  - Media: `MediaItem::{Slice{clip_id, first_frame, frames, audio}, ClipEnd{
+    outcome, armed}, Clear}`; slices are 3 frames plus exactly their 48 kHz
+    samples at the track's channel count, emitted on a re-anchoring
+    metronome. `Continuity`: `HardCut`; `Crossfade{ms}` fades clip edges at
+    play time (never the first clip's head); `AnchorLastFrame` writes the
+    last frame of each build to `<session_dir>/anchor-<clip>.png` and uses
+    it as `Keyframe{First}` for the next build without its own first frame
+    (refused at `into_player` for models without I2V).
+- **Causal sessions.** `CausalSession::control()` → `CausalControl`
+  (cloneable): `set_prompt` (next block boundary), `set_paused`, `set_seed`
+  (applies at the next reset), `reset`, `apply(CausalCommand) ->
+  CausalReply::{StateUpdate(CausalState), CommandError}` (the §5.7 causal
+  set plus `get_state`), `stats()`, `ttff() -> Ttff{load_ms,
+  first_block_ms, transport_ms, total_ms}` (`transport` ends at
+  `mark_first_frame_sent()`), `close()`.
+- **Pacers** (`stream::pace`). `spawn_clip_pacer(media, ClipPacerConfig)`
+  (AvPacer, 2 s shallow cap, `IdlePolicy::{Hold, Black}` for Reactor's
+  flush-to-black) and `spawn_causal_pacer(session, CausalPacerConfig)`
+  (FramePacer 48, adaptive 4..fps, reports `unique_fps` into the control)
+  both yield `PacedStream{ticks: TickReceiver, first_frame, stats}`: one
+  `Tick{video: VideoOut, audio (exactly 48000/fps samples or None),
+  video_rtp, fps}` per frame into a 10-deep drop-oldest queue
+  (`take_dropped()` → force an IDR). Ticks start at the first frame by
+  default (`TickStart`). `max_seconds` ends the pacer in video time.
+- **CUDA causal path** (`cuda::causal`, feature `cuda`): `CausalDriver`
+  runs one `wan::stream::CausalRollout` per session over a resident SF-Wan
+  pipeline (reset with the block's seed, prompt change encoded at the block
+  boundary with the KV cache kept, engine cancel bridged to the pipeline
+  hooks, RGB8 frames to the sink); WP-11's `CudaBackend` delegates its
+  `causal_*` calls to it. `CausalCudaBackend` serves SF-Wan alone and is what
+  `engine.backend = cuda` builds when `FV_SFWAN_WEIGHTS` is set (until
+  WP-11 lands; also `FV_SFWAN_MODEL`, `FV_SFWAN_PRESET`, `FV_CUDA_DEVICE`;
+  TAEHV via `FASTVIDEO_TAE_DIR`).
+- **Native streams** (`fastvideo-serve::streams`, features `webrtc` +
+  `http-client`, `encoders` for OpenH264/Opus): `POST /fv/v1/streams
+  {model, whip_url, whip_token?, whip_user?, whip_target?, prompt?,
+  clips?[{prompt,seconds?,seed?}], width?, height?, fps?, seed?,
+  max_seconds?, audio?, continuity?, autoplay?}` → 201; busy 429 +
+  `Retry-After`, not resident 503 + `Retry-After`. `GET /fv/v1/streams`,
+  `GET|DELETE /fv/v1/streams/{id}` (status, WHIP resource, pacer stats,
+  TTFF, recent session events), `POST /fv/v1/streams/{id}/commands` (a
+  `ClipCommand` or `CausalCommand` as `{type,data}`). The publisher waits
+  for the first frame, offers H.264 first (no audio m-line for video-only
+  models), encodes once (NVENC, else OpenH264, else the CPU-test x264;
+  `FV_STREAM_ENCODER` overrides), Opus stereo, forces an IDR on PLI/FIR or
+  tick drops (1/s), and sends the WHIP `DELETE` on stop or `max_seconds`.
+  `FV_STREAM_STUN` sets the srflx probe (`none` for loopback).
+  `tests/streams_whip.rs` decodes what an in-process WHIP endpoint receives;
+  `scripts/serve/whip-e2e.sh` adds MediaMTX and a WHEP viewer.
+- Owned files: `stream/{mod,clip,queue,rules,causal,player,pace}.rs`,
+  `src/cuda/causal.rs`, `tests/stream_{clip,causal}.rs`,
+  `fastvideo-serve/src/streams.rs`, `fastvideo-serve/tests/streams_whip.rs`,
+  `scripts/serve/whip-e2e.sh`.
+
+**WP-13 notes (as implemented): the Reactor local runtime.**
+`fastvideo-reactor` (feature `reactor` of fv-serve, on by default; built in
+`App::build` by `fastvideo_serve::reactor` from `[webrtc]` and `[reactor]`).
+
+- **Wire.** `proto/` is the vendored `reactor_wire.v1` (with RT's LICENSE
+  and NOTICE); the prost bindings are committed (`src/pb/`), and the
+  `proto-codegen` feature regenerates them with protox + prost-build and
+  checks they match. `wire` maps v1 protobuf and v0 JSON onto one
+  vocabulary; the first inbound frame latches the version, and outbound
+  messages wait for the latch (at most `latch_grace`, 2 s, then the
+  `Reactor-WebRTC-Version` seed, always v0) so a v1 SDK never sees a v0
+  greeting.
+- **Lifecycle** exactly as reactor §3.2-3.4 (fixed session id, CORS `*`,
+  503 + `Retry-After: 1` while loading, 409 when not READY, orphan timeout,
+  `session_ended{reason}` / `moderation` before CLOSING, RT's drain reason on
+  shutdown, `/events` journal). Admission refusals from the engine map to
+  409 (busy) or 503 (not resident).
+- **Signalling** as §5.7: ids 1002..9999, 202 → 200-once answers,
+  candidates buffered before the offer (≤256 per connection, ≤128
+  connections), 64 peers, re-offers (PUT) always admitted, 30 s
+  negotiation deadline (host), non-trickle answers, no RXMT. A failed
+  negotiation answers `GET sdp_params` with 400 and the reason (RT would
+  poll 202 until the deadline). `port_range` is accepted and ignored (one
+  shared mux socket).
+- **Gateway**: 20 s watchdog on any inbound message (polled every 2 s);
+  pause gate (every send m-line starts paused; `ResumeTrack` opens it and
+  forces a keyframe of the current picture, black before the first frame:
+  the start-of-connection black frame); `RequestClip`/`RequestRecording` →
+  `clip_failed{"recording disabled"}`; `PublishTrack` → `publish_refused`;
+  commands are validated against the mode's table (`invalid_command`, v1)
+  and run **in arrival order per connection**; acks and command errors are
+  v1 only.
+- **Modes** on the WP-12/WP-15 API: clip mode is `ClipSession::into_player`
+  (fast-h3 events broadcast verbatim, audience = at least one connected
+  peer) with `spawn_clip_pacer` (idle policy `Black`, ticks from the start);
+  causal mode is `CausalControl` with `spawn_causal_pacer` (setters ack
+  bodyless and broadcast `state_update`; `get_state` replies with it;
+  generation pauses without an audience).
+- **Media**: pacer ticks are encoded once per negotiated codec and fanned
+  out; repeated ticks are not re-sent unless the held picture changed (the
+  flush to black). Audio is RT's feeder: a ≤200 ms buffer drained by exactly
+  one 10 ms, 480-sample, 48 kHz **mono** Opus frame every 10 ms (silence
+  when short). **Deviation (VP8):** the Python `reactor_sdk` 1.6.0's
+  libwebrtc offers VP8/VP9/AV1 and no H.264, so `fastvideo-webrtc` gained VP8
+  answers (`AnswerOptions::video_codecs`, `PeerHandle::video_codec`) and the
+  runtime sends **intra-only VP8** encoded by libwebp (feature `vp8`, on by
+  default) to such peers; H.264 peers (browsers) get NVENC (`[reactor]
+  h264 = "nvenc"`) or OpenH264 (`"openh264"`, CPU test backend). Intra-only
+  VP8 costs bitrate; an inter-frame VP8/AV1 encoder is the follow-up for
+  production SDK clients.
+- **Compat** (`crates/fastvideo-reactor/tests/compat/run.sh`): Python
+  `reactor_sdk` 1.6.0 local mode against `examples/fake_runtime` — A/V clip
+  model (tracks `main_video` + `main_audio`, 48 kHz mono audio frames,
+  get_state / set_autoplay / enqueue → clip_finished, invalid command
+  raises), video-only clip model (no audio track), causal model — green.
 
 ### Phase 4: deploy, compat and E2E
 
@@ -1621,7 +1775,8 @@ Critical path: `WP-00 → WP-01 → WP-02 → WP-05 → WP-09 → (E1 → E2) �
 | `/v2/video_generation*`, `/v2/query/*`, `/v2/h3_context_ir`, `/v2/video_regeneration` | minimax | |
 | `/v1\|v2/{text-to-video,image-to-video,…}`, `/v1/upload` | ltxapi | No overlap with `/v1/videos` |
 | `/{app}/…` for configured apps, `/run/{app}/…`, `/fal/proxy`, `/storage/upload/initiate`, `/wma/*`, `/start-session`, `/info`, `/.well-known/jwks.json` | fal | Apps are static prefixes |
-| `/start_session`, `/session`, `/stop_session`, `/schema`, `/sessions/{sid}/…`, `/events` | reactor | `GET /session` versus WMA `POST /wma/session` do not collide |
+| `POST /start_session`, `GET /session`, `POST /stop_session`, `GET /schema`, `GET /events` (SSE) | reactor | `GET /session` versus WMA `POST /wma/session` do not collide. CORS `*` |
+| `GET /sessions/{sid}/transport/webrtc/ice_servers`, `POST …/connections`, `POST\|PUT\|GET …/connections/{cid}/sdp_params`, `POST …/connections/{cid}/ice_candidates` | reactor | Mounted by `App::build` (the runtime owns the WebRTC host); feature `reactor`, on by default |
 | `/fv/v1/*` | serve (native) | |
 
 ---

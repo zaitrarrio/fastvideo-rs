@@ -8,7 +8,8 @@ use fastvideo_protocol::{ApiError, ModelCaps, ModelId, ResolvedJob};
 use serde::{Deserialize, Serialize};
 
 use super::caps::{CudaModel, CudaRecipe, ProcessPlan};
-use super::causal::SfWanModel;
+use super::caps::SfWanRecipe;
+use super::causal::CausalDriver;
 use super::h3::H3Model;
 use super::ltx2::Ltx2Model;
 use super::output::{finish, remove_frames, Mp4Options, RawOutput};
@@ -70,7 +71,32 @@ enum Loaded {
     H3(Box<H3Model>),
     Ltx2(Box<Ltx2Model>),
     Wan(Box<WanModel>),
-    SfWan(Box<SfWanModel>),
+    SfWan(Box<SfWan>),
+}
+
+/// A resident SF-Wan pipeline: bounded clips through `WanPipeline`, causal
+/// sessions through WP-15's [`CausalDriver`].
+struct SfWan {
+    pipe: &'static fastvideo_cudarc::WanPipeline,
+    recipe: SfWanRecipe,
+    driver: CausalDriver,
+}
+
+/// The rollout settings of a recipe (everything but prompt, canvas, seed).
+fn rollout_base(r: &SfWanRecipe, text_cache: Option<&Path>) -> fastvideo_cudarc::wan::stream::RolloutConfig {
+    use fastvideo_cudarc::wan::stream::{PromptSwitch, RolloutConfig, RopePolicy};
+    let tok = r.wan.weights.join("tokenizer").join("tokenizer.json");
+    RolloutConfig {
+        flow_shift: r.wan.flow_shift,
+        local_attn_frames: r.local_attn_frames as usize,
+        sink_frames: r.sink_frames as usize,
+        rope: RopePolicy::Relativistic,
+        prompt_switch: PromptSwitch::Keep,
+        rgb8: true,
+        tokenizer_path: tok.is_file().then(|| tok.to_string_lossy().into_owned()),
+        text_cache: text_cache.map(Path::to_path_buf),
+        ..RolloutConfig::default()
+    }
 }
 
 /// `EngineBackend` over the fastvideo-cudarc pipelines.
@@ -82,6 +108,8 @@ pub struct CudaBackend {
     /// SF-Wan pipelines are borrowed by their rollouts for the process
     /// lifetime; kept here across unload so a reload reuses them.
     causal_pipes: BTreeMap<ModelId, &'static fastvideo_cudarc::WanPipeline>,
+    /// Open causal sessions and the model serving each.
+    causal_owner: BTreeMap<SessionId, ModelId>,
     device_up: bool,
     info: DeviceInfo,
 }
@@ -160,6 +188,7 @@ impl CudaBackend {
             models,
             loaded: BTreeMap::new(),
             causal_pipes: BTreeMap::new(),
+            causal_owner: BTreeMap::new(),
             device_up: false,
             info,
         })
@@ -259,11 +288,11 @@ impl EngineBackend for CudaBackend {
                         p
                     }
                 };
-                Loaded::SfWan(Box::new(SfWanModel::new(
+                Loaded::SfWan(Box::new(SfWan {
                     pipe,
-                    r.clone(),
-                    cache.map(Path::to_path_buf),
-                )))
+                    recipe: r.clone(),
+                    driver: CausalDriver::new(pipe, rollout_base(r, cache)),
+                }))
             }
         };
         obs(LoadEvent::Progress { done: 1, total: 1 });
@@ -305,8 +334,8 @@ impl EngineBackend for CudaBackend {
             Loaded::Wan(m) => m.generate(job, &work, ctl),
             Loaded::SfWan(m) => {
                 // The bounded SF-Wan clip (`wan gen --preset sf_wan_t2v_1_3b`).
-                let cfg = WanModel::config(&m.recipe().wan, self.cfg.text_cache.as_deref(), job)?;
-                let pipe = m.pipeline();
+                let cfg = WanModel::config(&m.recipe.wan, self.cfg.text_cache.as_deref(), job)?;
+                let pipe = m.pipe;
                 super::output::with_hooks(ctl, Some(cfg.num_inference_steps as u32), |hooks| {
                     pipe.generate_to_with_hooks(&cfg, &work, false, hooks)
                 })
@@ -342,7 +371,11 @@ impl EngineBackend for CudaBackend {
 
     fn causal_open(&mut self, s: SessionId, spec: &CausalSpec) -> Result<(), ApiError> {
         match self.loaded.get_mut(&spec.model) {
-            Some(Loaded::SfWan(m)) => m.open(s, spec),
+            Some(Loaded::SfWan(m)) => {
+                m.driver.open(s, spec)?;
+                self.causal_owner.insert(s, spec.model.clone());
+                Ok(())
+            }
             Some(_) => Err(ApiError::invalid(format!(
                 "model `{}` is not a causal model",
                 spec.model
@@ -361,20 +394,20 @@ impl EngineBackend for CudaBackend {
         out: &mut dyn ClipSink,
         ctl: &StepControl,
     ) -> Result<BlockStats, ApiError> {
-        for l in self.loaded.values_mut() {
-            if let Loaded::SfWan(m) = l {
-                if m.is_open(s) {
-                    return m.block(s, input, out, ctl);
-                }
-            }
+        let model = self
+            .causal_owner
+            .get(&s)
+            .ok_or_else(|| ApiError::invalid(format!("causal session {s} is not open")))?;
+        match self.loaded.get_mut(model) {
+            Some(Loaded::SfWan(m)) => m.driver.block(s, input, out, ctl),
+            _ => Err(ApiError::engine_failed(format!("causal model `{model}` is not resident"))),
         }
-        Err(ApiError::invalid(format!("causal session {s} is not open")))
     }
 
     fn causal_close(&mut self, s: SessionId) {
-        for l in self.loaded.values_mut() {
-            if let Loaded::SfWan(m) = l {
-                m.close(s);
+        if let Some(model) = self.causal_owner.remove(&s) {
+            if let Some(Loaded::SfWan(m)) = self.loaded.get_mut(&model) {
+                m.driver.close(s);
             }
         }
     }

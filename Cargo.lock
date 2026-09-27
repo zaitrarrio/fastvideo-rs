@@ -1159,6 +1159,7 @@ dependencies = [
  "rand 0.9.5",
  "rand_distr",
  "rayon",
+ "serde",
  "serde_json",
  "sha2",
  "thiserror",
@@ -1168,9 +1169,9 @@ dependencies = [
 name = "fastvideo-deploy"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
  "axum",
- "fastvideo-protocol",
- "fastvideo-serve-kit",
+ "base64 0.22.1",
  "reqwest",
  "serde",
  "serde_json",
@@ -1178,6 +1179,7 @@ dependencies = [
  "tokio",
  "tower",
  "tracing",
+ "url",
 ]
 
 [[package]]
@@ -1188,7 +1190,9 @@ dependencies = [
  "fastvideo-media",
  "fastvideo-models",
  "fastvideo-protocol",
+ "image",
  "serde",
+ "serde_json",
  "thiserror",
  "time",
  "tokio",
@@ -1232,18 +1236,21 @@ dependencies = [
  "cudarc",
  "fastvideo-cudarc",
  "fastvideo-engine-service",
+ "fastvideo-loader",
  "fastvideo-media",
  "fastvideo-models",
  "fastvideo-ops",
  "fastvideo-protocol",
  "half",
  "image",
+ "memmap2",
  "rand 0.9.5",
  "rand_distr",
  "rayon",
  "safetensors",
  "serde",
  "serde_json",
+ "sha2",
  "tokio",
  "toml",
 ]
@@ -1253,6 +1260,7 @@ name = "fastvideo-loader"
 version = "0.1.0"
 dependencies = [
  "fastvideo-models",
+ "libc",
  "memmap2",
  "rayon",
  "safetensors",
@@ -1394,22 +1402,28 @@ dependencies = [
 name = "fastvideo-reactor"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
  "axum",
  "bytes",
+ "fastvideo-engine-service",
  "fastvideo-media",
  "fastvideo-protocol",
- "fastvideo-serve-kit",
  "fastvideo-webrtc",
+ "futures",
  "prost",
  "prost-build",
+ "prost-types",
  "protox",
  "serde",
  "serde_json",
  "thiserror",
  "time",
  "tokio",
+ "tower",
+ "tower-http 0.7.1",
  "tracing",
  "uuid",
+ "webp",
 ]
 
 [[package]]
@@ -1419,6 +1433,7 @@ dependencies = [
  "anyhow",
  "async-trait",
  "axum",
+ "bytes",
  "clap",
  "fastvideo-deploy",
  "fastvideo-engine-service",
@@ -1433,6 +1448,7 @@ dependencies = [
  "fastvideo-webrtc",
  "metrics",
  "metrics-exporter-prometheus",
+ "reqwest",
  "serde",
  "serde_json",
  "thiserror",
@@ -2260,6 +2276,16 @@ dependencies = [
  "cc",
  "pkg-config",
  "vcpkg",
+]
+
+[[package]]
+name = "libwebp-sys"
+version = "0.9.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "54cd30df7c7165ce74a456e4ca9732c603e8dc5e60784558c1c6dc047f876733"
+dependencies = [
+ "cc",
+ "glob",
 ]
 
 [[package]]
@@ -4808,6 +4834,15 @@ checksum = "5a6580f308b1fad9207618087a65c04e7a10bc77e02c8e84e9b00dd4b12fa0bb"
 dependencies = [
  "js-sys",
  "wasm-bindgen",
+]
+
+[[package]]
+name = "webp"
+version = "0.3.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c071456adef4aca59bf6a583c46b90ff5eb0b4f758fc347cea81290288f37ce1"
+dependencies = [
+ "libwebp-sys",
 ]
 
 [[package]]

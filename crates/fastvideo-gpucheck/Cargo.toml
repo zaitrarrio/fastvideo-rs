@@ -23,6 +23,9 @@ rand_distr.workspace = true
 fastvideo-models.workspace = true
 fastvideo-cudarc.workspace = true
 fastvideo-ops.workspace = true
+fastvideo-loader.workspace = true
+sha2.workspace = true
+memmap2.workspace = true
 cudarc = { workspace = true, optional = true }
 half = { version = "2", optional = true }
 # `fv-gpucheck engine`: the serve engine's CUDA backend end to end.

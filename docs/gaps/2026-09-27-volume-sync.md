@@ -96,6 +96,39 @@ both**. The manifest's `latent_upsampler/*` and
 `ltx-2.3-22b-distilled-lora-384*.safetensors` globs match nothing in the repo
 at `22b09fb`.
 
+### Pre-quantized FP8 text encoders (E13, copied US → EU)
+
+`h3-base/text_encoder_fp8` and `ltx25/text_encoder_fp8` were written on US
+by `fv-gpucheck quantize-text-encoder` (docs/gaps/2026-09-27-cold-start.md)
+and are now on EU too, byte for byte (owner-approved, add-only). They are
+derived, not fetched, so they have no `weights-manifest.tsv` row;
+`verify-weights.sh text-fp8` checks them (manifest SHA-256, model size and
+full length; the model's SHA-256 too with `FV_VERIFY_FP8_SHA=1`).
+
+| Tree | File | Bytes | SHA-256 (US = EU) |
+|---|---|---:|---|
+| `h3-base/text_encoder_fp8` | `manifest.json` | 2 965 | `e5504561…190a42` |
+| | `model.safetensors` | 25 950 724 552 | `c13fab5c…072c2d` |
+| `ltx25/text_encoder_fp8` | `manifest.json` | 1 408 | `bb5a3049…ba06db` |
+| | `model.safetensors` | 12 923 848 536 | `0615832b…b4ae2f` |
+
+Method: a CPU pod on US (`fuh1p8uetgkvlf`, 2 vCPU, $0.06/hr) served the two
+folders read-only over HTTP with Range support (under a random path, through
+the Runpod proxy; the pod had no public IP) and SHA-256'd every file on the
+volume. A CPU pod on EU (`2elq70bhx34ihm`, cpu3c 8 vCPU) checked that neither
+destination existed, pulled into `<tree>/.text_encoder_fp8.partial-<stamp>`
+(416 s for 38.9 GB, ~93 MB/s, no retries), fsync'd, re-read every file from
+the volume and compared its SHA-256 with the US hash, and checked the files
+against `manifest.json` (file list and sizes; the manifest's own `sha256`
+fields are empty). Only then it renamed each temp folder to
+`text_encoder_fp8`. A separate fresh EU pod (`yj7x7p9n9km0r8`) then ran
+`FV_VERIFY_FP8_SHA=1 verify-weights.sh text-fp8`: **ok** (full SHA-256 of
+both models = US), and every source shard the manifests name
+(`text_encoder/`, 14 for h3-base, 5 for ltx25) has the manifest's size on EU,
+which the loader requires before it uses a tree. Nothing else on either
+volume was touched. About 20 minutes wall clock, about $0.11 of pods (all
+deleted; a watchdog would have deleted them after 2.5 h).
+
 ### Remaining differences (left alone on purpose)
 
 | Where | What | GB | Why left |
@@ -105,7 +138,6 @@ at `22b09fb`.
 | EU only | `upstream/`, `runs/`, `.cache/` | 104.1 | not weights |
 | US only | `runs/` | 1.78 | not weights |
 | both | `weights/mmaudio-44k-v2` (US 21.46 complete, EU 10.73 in progress, no marker at the time) | — | being written by another agent |
-| both | pre-quantized FP8 text encoders | — | being written by another agent (not present at the time) |
 | layout | FastH3 LoRA `vsa-datafree` adapter and upscaler: plain file on EU, HF blob on US; new trees: HF-cache 2.0 on US / 1.x on EU | 0 | same bytes |
 
 Weight bytes now (`du -sb` of `weights/`, from the post-sync pass): the two

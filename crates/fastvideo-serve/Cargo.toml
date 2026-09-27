@@ -47,9 +47,12 @@ fastvideo-reactor = { workspace = true, optional = true }
 [dev-dependencies]
 fastvideo-serve-kit = { workspace = true, features = ["d1-mock"] }
 tower = { workspace = true, features = ["util"] }
+# WHEP viewer in tests/streams_whip.rs.
+reqwest.workspace = true
+bytes.workspace = true
 
 [features]
-default = ["openai-videos", "minimax", "ltxapi", "fal"]
+default = ["openai-videos", "minimax", "ltxapi", "fal", "reactor"]
 # FakeBackend-only engine for CPU CI (FakeBackend is always compiled; the
 # `[engine] backend` config selects it, and it is the default).
 fake = []
@@ -63,14 +66,14 @@ encoders = ["fastvideo-media/openh264", "fastvideo-media/opus"]
 # Cloudflare D1 job store, WHIP, Runpod worker.
 http-client = ["fastvideo-serve-kit/fetch", "fastvideo-webrtc/whip", "fastvideo-deploy/runpod"]
 # Adapter mount points (design §9, src/adapters.rs); on by default once the
-# adapter is on main (reactor: WP-13 pending).
+# adapter is on main. `reactor` brings the str0m host (it answers offers).
 openai-videos = ["dep:fastvideo-openai-videos"]
 minimax = ["dep:fastvideo-minimax"]
 ltxapi = ["dep:fastvideo-ltxapi"]
 fal = ["dep:fastvideo-fal"]
-reactor = ["dep:fastvideo-reactor"]
+reactor = ["dep:fastvideo-reactor", "webrtc"]
 # Everything except CUDA (and adapters not merged yet).
-full = ["webrtc", "encoders", "http-client", "openai-videos", "minimax", "ltxapi", "fal"]
+full = ["webrtc", "encoders", "http-client", "openai-videos", "minimax", "ltxapi", "fal", "reactor"]
 
 [lints]
 workspace = true

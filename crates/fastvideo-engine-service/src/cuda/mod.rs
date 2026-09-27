@@ -8,8 +8,9 @@
 //!   (`H3Pipeline`, `Ltx2Pipeline`, `WanPipeline` incl. TI2V-5B), loaded
 //!   once and kept (the warm pool), and `generate` mapping a `ResolvedJob`
 //!   onto `H3Request` / `Ltx2Request` / `GenerateConfig`.
-//! - `causal` (feature `cuda`): the SF-Wan open-ended block rollout (E6,
-//!   `wan::stream::CausalRollout`) behind `causal_open/block/close`.
+//! - `causal` (feature `cuda`, WP-15): `CausalDriver`, the SF-Wan open-ended
+//!   block rollout (E6, `wan::stream::CausalRollout`); `CudaBackend`
+//!   delegates `causal_open/block/close` to it for its SF-Wan model.
 //!
 //! **Cancel and progress** (E1): every generate runs with
 //! `fastvideo_cudarc::Hooks`. The job's `CancelToken` trips a cudarc
@@ -21,8 +22,8 @@
 //! steps count across the denoise stages (LTX two-stage: 8 + 3 = 11).
 //!
 //! **Output.** The pipelines write lossless `frame-NNN.png` frames and
-//! `audio.wav` into a work directory (the E2 in-memory `FrameSink` seam is
-//! not on main yet; when it lands the PNG round trip goes away). Then:
+//! `audio.wav` into a work directory (byte-comparable with the CLI; moving to
+//! the E2 in-memory `FrameSink` removes the PNG round trip). Then:
 //! - `OutputMode::File{dir}`: frames stream into `<dir>/output.mp4`,
 //!   encoded on NVENC (design §0.1; `fastvideo-media::mp4`), AAC audio at
 //!   the model's native rate unless the plan drops it, crop applied for

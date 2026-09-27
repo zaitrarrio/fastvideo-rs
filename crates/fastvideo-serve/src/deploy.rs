@@ -1,0 +1,222 @@
+//! Deploy glue (WP-16, design §6.2-§6.4): the Runpod queue mode, the Vast
+//! forwarder route and the diagnostics `info` job, over `fastvideo-deploy`.
+//!
+//! - `server.mode = runpod-queue` ([`run_runpod_queue`]): no HTTP listener;
+//!   the Rust worker loop takes jobs from `RUNPOD_WEBHOOK_GET_JOB` and
+//!   dispatches their native envelope into the same router the HTTP mode
+//!   serves. Models load before the first take; a load failure fails one job
+//!   with the reason and exits 1 (design §6.2). SIGTERM stops taking, lets
+//!   the running job finish within `shutdown_grace_s`, then drains.
+//!   Without `RUNPOD_WEBHOOK_GET_JOB` (local), `FV_RUNPOD_TEST_INPUT`
+//!   (a JSON envelope, or `@file`) runs once and prints the output.
+//! - `server.forward = true` mounts `POST /fv/v1/forward` (Vast PyWorker).
+
+use std::path::Path;
+use std::sync::Arc;
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+
+use anyhow::{anyhow, Context};
+use axum::Router;
+use fastvideo_deploy::dispatch::{InfoFn, RouterHandler};
+use fastvideo_deploy::env::Discovery;
+use fastvideo_deploy::runpod::{InfoJob, JobCtx, JobHandler, JobInput};
+use fastvideo_engine_service::Readiness;
+use serde_json::{json, Value};
+
+use crate::app::App;
+use crate::config::Config;
+use crate::gate::ServiceGate;
+
+/// When this process started (for cold-start reports).
+#[derive(Clone, Copy, Debug)]
+pub struct Boot {
+    pub at: Instant,
+    pub unix: f64,
+}
+
+impl Boot {
+    pub fn now() -> Self {
+        let unix = SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs_f64()).unwrap_or(0.0);
+        Self { at: Instant::now(), unix }
+    }
+}
+
+fn http_port(c: &Config) -> u16 {
+    c.bind_addr().map(|a| a.port()).unwrap_or(8000)
+}
+
+fn weights_summary() -> Value {
+    let Some(root) = std::env::var("FV_WEIGHTS").ok().filter(|s| !s.is_empty()) else {
+        return json!({"root": null});
+    };
+    let p = Path::new(&root);
+    let entries: Vec<String> = std::fs::read_dir(p)
+        .map(|rd| {
+            let mut v: Vec<String> = rd.filter_map(|e| e.ok()).map(|e| e.file_name().to_string_lossy().into_owned()).collect();
+            v.sort();
+            v.truncate(64);
+            v
+        })
+        .unwrap_or_default();
+    json!({"root": root, "exists": p.is_dir(), "entries": entries})
+}
+
+fn cmd_line(prog: &str, args: &[&str]) -> Option<String> {
+    let o = std::process::Command::new(prog).args(args).output().ok()?;
+    o.status.success().then(|| String::from_utf8_lossy(&o.stdout).trim().to_owned())
+}
+
+/// The `info` job / diagnostics: version, platform discovery, readiness,
+/// weights root, GPU, NVENC (`nvenc: true` also encodes a few frames).
+pub fn info_fn(config: &Config, gate: Arc<ServiceGate>, boot: Boot, ready_after: Arc<std::sync::OnceLock<f64>>) -> InfoFn {
+    let port = http_port(config);
+    let (udp, tcp) = (config.webrtc.udp_port, config.webrtc.tcp_port);
+    let engine = format!("{:?}", config.engine.backend).to_ascii_lowercase();
+    let jobs = format!("{:?}", config.job_backend()).to_ascii_lowercase();
+    let artifacts = format!("{:?}", config.artifact_backend()).to_ascii_lowercase();
+    let webhook_key = !config.webhook_key.is_empty();
+    Arc::new(move |job: InfoJob| {
+        let gate = gate.clone();
+        let (engine, jobs, artifacts) = (engine.clone(), jobs.clone(), artifacts.clone());
+        let ready_after = ready_after.clone();
+        Box::pin(async move {
+            let blocking = tokio::task::spawn_blocking(move || {
+                let encoders = cmd_line("ffmpeg", &["-hide_banner", "-encoders"]).unwrap_or_default();
+                let gpu = cmd_line("nvidia-smi", &["--query-gpu=name,memory.total,driver_version", "--format=csv,noheader"]);
+                let nvenc_encode = job.nvenc.then(fastvideo_media::video::nvenc_available);
+                (encoders.contains("h264_nvenc"), gpu, nvenc_encode, weights_summary())
+            })
+            .await;
+            let (nvenc_built, gpu, nvenc_encode, weights) = blocking.unwrap_or((false, None, None, Value::Null));
+            let readiness = match gate.engine().readiness() {
+                Readiness::Ready => json!("ready"),
+                Readiness::Loading { done, total } => json!({"loading": [done, total]}),
+                Readiness::Failed(e) => json!({"failed": e}),
+            };
+            let models: Vec<String> = gate.engine().caps().models().map(|m| m.id.0.clone()).collect();
+            json!({
+                "server": "fv-serve",
+                "version": env!("CARGO_PKG_VERSION"),
+                "runtime": fastvideo_deploy::runpod::version(),
+                "process_start_unix": boot.unix,
+                "uptime_s": boot.at.elapsed().as_secs_f64(),
+                "ready_after_s": ready_after.get(),
+                "readiness": readiness,
+                "models": models,
+                "engine": engine,
+                "jobs_backend": jobs,
+                "artifacts_backend": artifacts,
+                "webhook_key_configured": webhook_key,
+                "deploy": Discovery::from_process().summary(port, udp, tcp),
+                "weights": weights,
+                "gpu": gpu,
+                "ffmpeg_h264_nvenc": nvenc_built,
+                "nvenc_encode_ok": nvenc_encode,
+                "nvidia_driver_capabilities": std::env::var("NVIDIA_DRIVER_CAPABILITIES").ok(),
+            })
+        })
+    })
+}
+
+/// The dispatcher over the app's router.
+pub fn handler(app: &App, boot: Boot, ready_after: Arc<std::sync::OnceLock<f64>>) -> RouterHandler {
+    RouterHandler::new(app.router.clone()).with_info(info_fn(&app.config, app.gate.clone(), boot, ready_after))
+}
+
+/// Adds `POST /fv/v1/forward` (Vast PyWorker target) to a built router.
+pub fn with_forward(router: Router, handler: RouterHandler) -> Router {
+    router.merge(fastvideo_deploy::dispatch::forward_routes::<()>(handler))
+}
+
+fn test_input() -> anyhow::Result<Option<Value>> {
+    let Some(v) = std::env::var("FV_RUNPOD_TEST_INPUT").ok().filter(|s| !s.trim().is_empty()) else { return Ok(None) };
+    let text = match v.strip_prefix('@') {
+        Some(path) => std::fs::read_to_string(path).with_context(|| format!("reading {path}"))?,
+        None => v,
+    };
+    let j: Value = serde_json::from_str(&text).context("FV_RUNPOD_TEST_INPUT is not JSON")?;
+    Ok(Some(j.get("input").cloned().unwrap_or(j)))
+}
+
+/// Runs `server.mode = runpod-queue` until `stop` resolves.
+pub async fn run_runpod_queue(app: App, boot: Boot, stop: impl std::future::Future<Output = ()> + Send + 'static) -> anyhow::Result<()> {
+    let ready_after = Arc::new(std::sync::OnceLock::new());
+    let h = handler(&app, boot, ready_after.clone());
+    let gate = app.gate.clone();
+    let grace = app.config.shutdown_grace();
+    let d1 = app.d1.clone();
+    let env = match fastvideo_deploy::runpod::RunpodEnv::from_process() {
+        Ok(e) => e,
+        Err(why) => {
+            // Local mode: one job from FV_RUNPOD_TEST_INPUT.
+            let Some(input) = test_input()? else {
+                return Err(anyhow!("server.mode = runpod-queue: {why}; set FV_RUNPOD_TEST_INPUT to run one job locally"));
+            };
+            let r = gate.engine().wait_ready().await;
+            if let Readiness::Failed(e) = r {
+                return Err(anyhow!("model loading failed: {e}"));
+            }
+            let (cx, _rx) = JobCtx::detached("local-test");
+            let input = JobInput::parse(&input).map_err(|e| anyhow!(e))?;
+            let out = h.handle(input, cx).await;
+            let v = match out {
+                Ok(v) => json!({"output": v}),
+                Err(e) => json!({"error": e.to_string(), "output": e.output}),
+            };
+            println!("{}", serde_json::to_string_pretty(&v)?);
+            crate::app::drain(&gate, grace, d1.as_deref()).await;
+            return Ok(());
+        }
+    };
+    tracing::info!(worker = %env.worker_id, "runpod-queue: waiting for models before taking jobs");
+    let run = run_worker(env, h, gate.clone(), grace, boot, ready_after, stop).await;
+    crate::app::drain(&gate, grace, d1.as_deref()).await;
+    run
+}
+
+#[cfg(feature = "http-client")]
+async fn run_worker(
+    env: fastvideo_deploy::runpod::RunpodEnv,
+    h: RouterHandler,
+    gate: Arc<ServiceGate>,
+    grace: Duration,
+    boot: Boot,
+    ready_after: Arc<std::sync::OnceLock<f64>>,
+    stop: impl std::future::Future<Output = ()> + Send + 'static,
+) -> anyhow::Result<()> {
+    use fastvideo_deploy::runpod::{ReqwestTransport, Worker, WorkerOptions};
+    let transport = ReqwestTransport::new().map_err(|e| anyhow!("HTTP client: {e}"))?;
+    let opts = WorkerOptions { shutdown_grace: grace, ..WorkerOptions::default() };
+    let worker = Worker::new(env, transport, h, opts);
+    match gate.engine().wait_ready().await {
+        Readiness::Failed(e) => {
+            tracing::error!(error = %e, "model loading failed: failing one job, then exiting");
+            let r = worker.fail_one(&format!("model loading failed: {e}"), Duration::from_secs(120)).await;
+            tracing::info!(?r, "prestart failure reported");
+            Err(anyhow!("model loading failed: {e}"))
+        }
+        _ => {
+            let secs = boot.at.elapsed().as_secs_f64();
+            let _ = ready_after.set(secs);
+            let ids: Vec<String> = gate.engine().caps().models().map(|m| m.id.0.clone()).collect();
+            println!("FV-SERVE READY models={}", ids.join(","));
+            tracing::info!(ready_after_s = secs, "runpod worker: ready");
+            let r = worker.run(stop).await;
+            tracing::info!(?r, "runpod worker stopped");
+            Ok(())
+        }
+    }
+}
+
+#[cfg(not(feature = "http-client"))]
+async fn run_worker(
+    _env: fastvideo_deploy::runpod::RunpodEnv,
+    _h: RouterHandler,
+    _gate: Arc<ServiceGate>,
+    _grace: Duration,
+    _boot: Boot,
+    _ready_after: Arc<std::sync::OnceLock<f64>>,
+    _stop: impl std::future::Future<Output = ()> + Send + 'static,
+) -> anyhow::Result<()> {
+    Err(anyhow!("server.mode = runpod-queue needs fv-serve built with `http-client`"))
+}
