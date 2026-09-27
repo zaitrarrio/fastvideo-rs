@@ -425,10 +425,9 @@ case "$FAMILY" in
         --prompt "$SF_PROMPT" --switch-prompt "$SF_SWITCH" --seed "$SEED" "$@"
     }
     # shellcheck disable=SC2086
-    sf_stream sfstream-main --parity ${FV_SFSTREAM_RUNS:---run rel-sink3-120s,seconds=120,rope=rel,sink=3 \
-      --run rel-sink0-60s,seconds=60,rope=rel,sink=0 --run abs-sink0-60s,seconds=60,rope=abs,sink=0 \
+    sf_stream sfstream-main --parity ${FV_SFSTREAM_RUNS:---run reb-sink3-120s,seconds=120,rope=rebased,sink=3 \
       --run switch-keep-30s,seconds=30,switch_at=15,switch=keep --run switch-reset-20s,seconds=20,switch_at=10,switch=reset}
-    sf_stream sfstream-10min --run rel-sink3-600s,seconds=600,rope=rel,sink=3,drop_rgb=1 --window-s 60
+    sf_stream sfstream-10min --run reb-sink3-600s,seconds=600,rope=rebased,sink=3 --window-s 30
     ;;
   headline)
     # The headline configurations on one pod (a new GPU type, one run):

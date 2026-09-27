@@ -1,0 +1,6 @@
+{
+  "upload_url": "https://api.example.test/uploads/<token>",
+  "storage_uri": "ltx://uploads/<token>",
+  "expires_at": "2026-09-06T13:00:00.000Z",
+  "required_headers": {}
+}
