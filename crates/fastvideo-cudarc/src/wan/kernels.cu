@@ -4586,6 +4586,99 @@ extern "C" __global__ void vsa_combine_g16(
 #undef FV_R16
     }
 }
+
+// vsa_topk with the same output, bit for bit: T = the k-th largest sortable
+// key (vsa_topk's "largest T with count(key >= T) >= k"), found by an 8-bit
+// radix select (4 histogram passes over the row held in shared memory)
+// instead of 32 bisection passes; then the indices with key > T in ascending
+// order, then those with key == T in ascending order up to k, written by a
+// block-wide ordered compaction instead of one thread. 256 threads; the row
+// (n <= FV_TOPK2_MAXN keys) lives in shared memory.
+#define FV_TOPK2_MAXN 4096
+extern "C" __global__ void __launch_bounds__(256) vsa_topk2(
+    const float* scores, unsigned int* out, int rows, int n, int k
+) {
+    const int row = blockIdx.x;
+    if (row >= rows) return;
+    __shared__ unsigned int keys[FV_TOPK2_MAXN];
+    __shared__ unsigned int hist[256];
+    __shared__ unsigned int sel_prefix, sel_rem, warp_cnt[8], base_s;
+    const float* s = scores + (long)row * n;
+    const int tid = threadIdx.x, lane = tid & 31, warp = tid >> 5;
+    for (int i = tid; i < n; i += 256) keys[i] = fv_sortable(s[i]);
+    if (tid == 0) { sel_prefix = 0u; sel_rem = (unsigned int)k; }
+    __syncthreads();
+    #pragma unroll 1
+    for (int pass = 0; pass < 4; pass++) {
+        const int shift = 24 - 8 * pass;
+        const unsigned int hi_mask = pass == 0 ? 0u : (0xFFFFFFFFu << (shift + 8));
+        hist[tid] = 0u;
+        __syncthreads();
+        const unsigned int prefix = sel_prefix;
+        for (int i = tid; i < n; i += 256) {
+            const unsigned int key = keys[i];
+            if ((key & hi_mask) == prefix) atomicAdd(&hist[(key >> shift) & 255u], 1u);
+        }
+        __syncthreads();
+        if (warp == 0) {
+            // Lane l owns bins [8l, 8l + 8); suffix counts from the top bin down.
+            unsigned int local = 0;
+            #pragma unroll
+            for (int b = 0; b < 8; b++) local += hist[lane * 8 + b];
+            unsigned int suffix = local;   // inclusive sum over lanes >= lane
+            #pragma unroll
+            for (int off = 1; off < 32; off <<= 1) {
+                const unsigned int o = __shfl_down_sync(0xffffffffu, suffix, off);
+                if (lane + off < 32) suffix += o;
+            }
+            const unsigned int rem = sel_rem;
+            // The bin holding the rem-th largest: the lane whose suffix range covers it.
+            const unsigned int above = suffix - local;   // keys in lanes > lane
+            const bool mine = above < rem && suffix >= rem;
+            if (mine) {
+                unsigned int acc = above;
+                int b = 7;
+                for (; b > 0; b--) {
+                    const unsigned int c = hist[lane * 8 + b];
+                    if (acc + c >= rem) break;
+                    acc += c;
+                }
+                sel_prefix = prefix | ((unsigned int)(lane * 8 + b) << shift);
+                sel_rem = rem - acc;
+            }
+        }
+        __syncthreads();
+    }
+    const unsigned int thr = sel_prefix;
+    unsigned int* dst = out + (long)row * k;
+    // Ordered compaction: pass 0 takes key > thr, pass 1 key == thr.
+    if (tid == 0) base_s = 0u;
+    __syncthreads();
+    #pragma unroll 1
+    for (int pass = 0; pass < 2; pass++) {
+        #pragma unroll 1
+        for (int c0 = 0; c0 < n; c0 += 256) {
+            const int i = c0 + tid;
+            const unsigned int key = i < n ? keys[i] : 0u;
+            const bool f = i < n && (pass == 0 ? key > thr : key == thr);
+            const unsigned int m = __ballot_sync(0xffffffffu, f);
+            if (lane == 0) warp_cnt[warp] = __popc(m);
+            __syncthreads();
+            unsigned int before = base_s;
+            for (int w = 0; w < warp; w++) before += warp_cnt[w];
+            const unsigned int pos = before + __popc(m & ((1u << lane) - 1u));
+            if (f && pos < (unsigned int)k) dst[pos] = (unsigned int)i;
+            __syncthreads();
+            if (tid == 0) {
+                unsigned int tot = 0;
+                for (int w = 0; w < 8; w++) tot += warp_cnt[w];
+                base_s += tot;
+            }
+            __syncthreads();
+        }
+    }
+    for (int p = (int)min(base_s, (unsigned int)k) + tid; p < k; p += 256) dst[p] = 0u;
+}
 // ==== end region: attn3 ====
 
 // ==== region: moe ====

@@ -418,6 +418,37 @@ pub(super) fn vsa_stages(c: &mut Ctx<'_>) -> StageResult<()> {
                 Ok(())
             })?;
             let selected = ops::vsa_topk_device(&scores, bh * nb, nb, topk)?;
+            // vsa_topk2 (the default) vs the bisection kernel, bit for bit, on
+            // these scores and on heavily tied ones (scores rounded to 1/8).
+            {
+                let pick = |which: &str, s: &CudaSlice<f32>| -> anyhow::Result<(Vec<u32>, f64)> {
+                    std::env::set_var("FASTVIDEO_VSA_TOPK", which);
+                    let r = (|| -> anyhow::Result<(Vec<u32>, f64)> {
+                        let o = ops::vsa_topk_device(s, bh * nb, nb, topk)?;
+                        let t = median3(&mut || {
+                            ops::vsa_topk_device(s, bh * nb, nb, topk)?;
+                            Ok(())
+                        })?;
+                        Ok((dev.stream.memcpy_dtov(&o)?, t))
+                    })();
+                    std::env::remove_var("FASTVIDEO_VSA_TOPK");
+                    r
+                };
+                let tied: Vec<f32> = down(&scores)?.iter().map(|x| (x * 8.0).round() / 8.0).collect();
+                let tied = up(&tied)?;
+                let (a, t1) = pick("v1", &scores)?;
+                let (b, t2) = pick("v2", &scores)?;
+                let (at, _) = pick("v1", &tied)?;
+                let (btd, _) = pick("v2", &tied)?;
+                let (bad, bad_tied) = (mismatches(&a, &b), mismatches(&at, &btd));
+                c.report.check(
+                    format!("vsa_topk2_{name}_k{topk}_bitexact_vs_v1"),
+                    bad == 0 && bad_tied == 0,
+                    json!({"mismatched": bad, "tied_mismatched": bad_tied, "of": a.len(),
+                           "v1_ms": t1 * 1e3, "v2_ms": t2 * 1e3}),
+                    json!({"mismatched": 0, "tied_mismatched": 0}),
+                )?;
+            }
             let mut fine = std::collections::BTreeMap::new();
             for kernel in ["tma2", "tma"] {
                 std::env::set_var("FASTVIDEO_VSA_KERNEL", kernel);

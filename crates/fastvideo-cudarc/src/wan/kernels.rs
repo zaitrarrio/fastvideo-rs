@@ -160,6 +160,7 @@ kernel_fns!(
     vsa_tile_mean_b16,
     vsa_tile_qkv_b16,
     vsa_combine_g16,
+    vsa_topk2,
     // ---- ltx2 region (appended; see the end of kernels.cu) ----
     ltx_abs_diff_sums,
     ltx_row_sumsq,

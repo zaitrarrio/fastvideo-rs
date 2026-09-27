@@ -887,6 +887,20 @@ pub fn vsa_topk_device(
     let dev = ctx()?;
     let mut out = unsafe { dev.stream.alloc::<u32>((rows * k).max(1)) }.map_err(err)?;
     const THREADS: u32 = 256;
+    // vsa_topk2 (radix select, row in shared memory, parallel ordered
+    // compaction): the same indices in the same order.
+    // FASTVIDEO_VSA_TOPK=v1 keeps the bisection kernel.
+    if n <= 4096 && crate::wan::envflag::string_flag("FASTVIDEO_VSA_TOPK", "v2") != "v1" {
+        let cfg = LaunchConfig {
+            grid_dim: (rows as u32, 1, 1),
+            block_dim: (THREADS, 1, 1),
+            shared_mem_bytes: 0,
+        };
+        let (rows_i, n_i, k_i) = (rows as i32, n as i32, k as i32);
+        launch!(dev.stream, &dev.kernels.vsa_topk2, cfg; scores, &mut out, &rows_i, &n_i, &k_i)
+            .map_err(err)?;
+        return Ok(out);
+    }
     let cfg = LaunchConfig {
         grid_dim: (rows as u32, 1, 1),
         block_dim: (THREADS, 1, 1),
