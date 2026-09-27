@@ -512,8 +512,11 @@ fn wan_caps(id: &str, r: &WanRecipe) -> ModelCaps {
         served_names: vec![id.to_owned()],
         tasks,
         audio: None,
+        // The frames do not depend on the fps: the backend muxes the MP4 at
+        // the job's fps (FastWan clients send 24 for a 16 fps model), so both
+        // container rates are accepted; the model's own rate is the default.
         fps: FpsCaps {
-            allowed: vec![fps],
+            allowed: if fps == 16 { vec![16, 24] } else { vec![fps, 16] },
             default: fps,
             container_only: true,
         },
@@ -994,6 +997,16 @@ mod tests {
         assert!(wan.audio.is_none());
         assert_eq!((wan.frames.default, wan.fps.default), (81, 16));
         assert!(wan.fps.container_only);
+        // FastWan API clients send 24 fps: accepted as the container rate.
+        assert!(wan.fps.allows(24) && wan.fps.allows(16));
+        let mut req = fastvideo_protocol::GenerationRequest::text(
+            fastvideo_protocol::ProtocolId::FastWan,
+            "fastwan21-1.3b",
+            "a cat",
+        );
+        req.timing.fps = Some(24);
+        let r = fastvideo_protocol::negotiate(&req, &wan, &Default::default()).unwrap();
+        assert_eq!((r.fps, r.num_frames), (24, 81));
         assert!(!wan.knobs.negative && !wan.knobs.guidance && wan.knobs.steps);
         let ti2v = get("wan22-ti2v-5b");
         assert!(ti2v.supports(Task::I2V));
