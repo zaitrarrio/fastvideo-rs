@@ -124,7 +124,54 @@ There are two deliberate differences from the reference:
 
 Placement never changes a number. The streamed block runs the same kernels
 on the same weight bits (`streamed_blocks_are_bit_identical_to_resident`),
-so frames and audio are byte-identical to the resident run.
+so the frames are byte-identical to the resident run.
+
+**Measured** on RTX PRO 6000 Blackwell Server Edition, with the Sol stage 2,
+bf16 activations and FFN chunking (all defaults). These are the matrix family
+`ltxoffload` (`scripts/gpu/runpod-matrix.sh`), runs `a73173e-09270009`,
+`a2cd194-09270039` and `a2cd194-09270103`. The peaks are the pool's
+high-water marks, the equivalent of `torch.cuda.max_memory_allocated` /
+`_reserved`. "smi" is the device-wide peak.
+
+| cell | peak alloc / reserved GiB (phase) | smi GiB | stage 1 s | upsample s | stage 2 s | video VAE s | e2e s |
+|---|---|---|---|---|---|---|---|
+| 512p resident (default), warm | 40.63 / 40.97 (upsample) | 44.3 | 2.13 | 0.47 | 2.76 | 0.62 | 7.17 |
+| 512p `cpu`, warm | 5.72 / 6.31 (decode) | 7.8 | 7.26 | 1.08 | 4.32 | 0.64 | 15.32 |
+| 4k5s `cpu`, warm | **20.41 / 21.19** (decode; stage 2 19.24 / 20.69) | 22.3 | 45.16 | 4.81 | 75.57 | 14.56 | 189.75 |
+| 1080p20s `cpu`, cold | **18.95 / 20.19** (stage 2) | 20.9 | 42.55 | 5.43 | 71.42 | 14.23 | 178.93 |
+| sol-engine 4k5s (Sol) | 30.36 / 31.40 | 32.3 | 55.88 | in stage 2 | 79.08 | 27.91 | 196.99 |
+| sol-engine 1080p20s (Sol) | 29.07 / 30.15 | 31.0 | 54.85 | in stage 2 | 73.66 | 20.44 | 163.46 |
+
+The 512p resident and `cpu` rows both read the prompt's contexts from the
+text cache. Every other row of ours encodes the prompt. The 4k5s and
+1080p20s e2e times include 46.5 s and 43.4 s of streamed Gemma encoding
+with no text cache. A cache hit takes about 1 s.
+
+Findings:
+
+- **Byte identity.** In run `a2cd194-09270039` every cell encoded its
+  prompt. The 512p PNG frames of resident, `none` and `cpu` hash the same
+  (`a84cec39fd1c8f18`), and both compares report `off_identity` ok. The
+  4k5s and 1080p20s `cpu` frames also hash the same on two different pods.
+- **The wav is not deterministic run to run, in any mode.** Resident and
+  `none` differ from each other just as `cpu` differs from both. Placement
+  has no part in it.
+- **The text cache does not replay a fresh encode bit for bit.** In run
+  `a73173e-09270009` the resident cell missed the cache and the other two
+  hit it. Their latents differed from stage-1 step 0, while `none` and `cpu`
+  matched at every step. That is why the family now passes
+  `--no-text-cache`.
+- **The `exact` gate** passes `official_config`, `quantitative_quality` and
+  (with every cell encoding) `off_identity`. It fails `performance`: at
+  512p, `cpu` runs `denoise_s` at 0.38x of resident. At 512p stage 1 is
+  PCIe-bound, because 8 forwards x 48 blocks = 277 GiB at 57 GB/s against
+  2 s of compute. At 4K the same copies take 5.3 s beside a 45 s stage 1 and
+  are fully hidden. For a placement mode, this failure is expected.
+- **About 4.9 GiB stays live from the upsample onward.** This is the cuDNN
+  conv workspace cache (`wan/conv.rs`, `ConvCache::workspace`, grown to the
+  largest conv and never shrunk). At 4K it is most of the gap between the
+  stage-2 activations and the phase peak. Releasing it in the phase trims is
+  the next cut if a smaller card needs one.
 
 ---
 

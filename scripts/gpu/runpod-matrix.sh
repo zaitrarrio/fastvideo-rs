@@ -17,7 +17,7 @@
 #   gate_cells: fv-gpucheck gate with scripts/gpu/gate-policy.toml
 #     (FV_GATE_POLICY overrides) into $RUNS/gate/.
 set -euo pipefail
-FAMILY="${1:?usage: runpod-matrix.sh h3|ltx|hunyuan|wan|b200|rtx6000|rtx5090|fastvideo|precision|precision-debug|trace|fuse|oracle|ltxvae|writer|eval|ltxoffload|techniques}"
+FAMILY="${1:?usage: runpod-matrix.sh headline|h3|ltx|hunyuan|wan|b200|rtx6000|rtx5090|fastvideo|precision|precision-debug|trace|fuse|oracle|ltxvae|writer|eval|ltxoffload|techniques}"
 WORK="${FV_WORK:-/workspace}"
 BIN="${FV_GPUCHECK:-/opt/fastvideo-rs/target/release/fv-gpucheck}"
 W="$WORK/weights"
@@ -25,7 +25,8 @@ W="$WORK/weights"
 # SCRATCH: the pod's container disk when FV_SCRATCH is set. The weight volume
 # is only read (some hosts have silently dropped data writes to it).
 SCRATCH="${FV_SCRATCH:-$WORK}"
-RUNS="$SCRATCH/runs/${FAMILY}${FV_RUN_TAG:+/$FV_RUN_TAG}"
+# FV_RUNS_DIR lets one family run cells of others into its own run dir.
+RUNS="${FV_RUNS_DIR:-$SCRATCH/runs/${FAMILY}${FV_RUN_TAG:+/$FV_RUN_TAG}}"
 LOG="$RUNS/live.log"
 PROMPT="${FV_PROMPT:-A man in his thirties talking to the camera in a bright living room, medium close-up, natural expressions and hand gestures, soft window light. He says: <d>Hello, this was generated entirely in Rust.</d>}"
 SEED="${FV_SEED:-1024}"
@@ -356,6 +357,16 @@ nvidia-smi -L | tee -a "$LOG"
 nvidia-smi --query-gpu=name,memory.total,driver_version --format=csv,noheader | tee -a "$LOG"
 
 case "$FAMILY" in
+  headline)
+    # The headline configurations on one pod (a new GPU type, one run):
+    # cells borrowed from other families, all written into this run dir.
+    sub() { local fam="$1"; shift
+      FV_RUNS_DIR="$RUNS" FV_CELLS="$*" bash "${BASH_SOURCE[0]}" "$fam" || true; }
+    sub fastvideo ${FV_HEADLINE_FASTVIDEO:-fasth3-4step-vsa-480p fasth3-8step-480p fasth3-4step-vsa-768p fasth3-8step-768p}
+    sub rtx6000 ${FV_HEADLINE_SOLH3:-sol-h3}
+    sub rtx5090 ${FV_HEADLINE_ROUTES:-h3-768p-fullopt ltx25-4k5s-sol}
+    sub precision ${FV_HEADLINE_PRECISION:-ltx25-4k5s-sol-bf16act-fp8}
+    ;;
   h3)
     run_cell fasth3-8step-warm \
       "$BIN" --mode fast h3 gen \
