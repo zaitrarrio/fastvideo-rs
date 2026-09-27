@@ -228,6 +228,9 @@ techniques, parameters and settings as the shipped profile of the same name.
 | `h3/fasth3_4step_dense` | `4step-dense` | `dense_attention`, `mxfp8`, `bf16_activations` |
 | `h3/sol_h3_4step` | `sol-h3` | `dense_attention`, `mxfp8`, `bf16_activations` |
 | `h3/sol_h3_4step_engine` | `sol-h3` | `sol_attn` (engine, prefix sink), `mxfp8`, `bf16_activations` |
+| `h3/fasth3_8step_sol` | `8step` | `sol_attn` (tau 1.0, text sink, no dense step or block), `mxfp8`, `bf16_activations` |
+| `h3/fasth3_8step_teacache` | `8step` | `vsa`, `teacache` (threshold 1.0, retain 3, cooldown 3: only steps 3-4 can reuse), `mxfp8`, `bf16_activations` |
+| `h3/fasth3_8step_sol_teacache` | `8step` | both of the above |
 | `ltx2/ltx25_rtx5090_distill_bf16` | (two-stage) | `sol_attn` (`ltx25_stage2`), `bf16_linears`, `offload.placement = "cpu"` |
 | `ltx2/ltx25_distill_sol` | (two-stage) | `sol_attn` (`ltx25_stage2`) |
 | `ltx2/ltx25_distill_dense` | (two-stage) | `dense_attention` |
@@ -246,6 +249,12 @@ The H3 `rtx5090_*` profiles are sol-engine's configs, which run the transformer
 in BF16. The rtx5090 matrix family runs the same recipe with this runtime's
 default, MXFP8 on sm_100+; with a profile, `FASTVIDEO_H3_QUANT=mxfp8` gives
 that precision back (the env var overrides the profile's `bf16_linears`).
+
+The three `fasth3_8step_*` profiles are the FastH3 8-step arms of the
+`h3arms` matrix family (768p and 480p, TAEH3 twins at 480p, each gated with
+LPIPS against plain FastH3 8-step on the five-prompt set). Every TeaCache
+decision is logged (`h3 teacache step N: compute|REUSE (reason; rel_l1 ..
+indicator .. acc ..)`) and recorded in `benchmark.json` under `teacache`.
 
 ## The kernel seam
 

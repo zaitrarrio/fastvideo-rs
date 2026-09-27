@@ -1,0 +1,29 @@
+# FastH3 8-step (VSA, MXFP8) with an aggressive TeaCache. The RTX settings
+# (retain 5, cooldown 1, threshold 0.10) leave at most steps 5-6 of 8 as
+# candidates and the DMD steps move far enough to compute them anyway.
+# Here steps 0-2 always compute (warm-up), steps 6-7 always compute
+# (cool-down), and the middle steps 3-4 reuse the whole-stack residual while
+# the accumulated rel-L1 of the block-0 modulated input stays under 1.0.
+# Every decision (compute or reuse, rel-L1, accumulator) is logged and lands
+# in benchmark.json under `teacache`.
+
+[id]
+name = "fasth3_8step_teacache"
+family = "minimax_h3"
+description = "FastH3 8-step, VSA, MXFP8, TeaCache on the middle steps."
+
+[pipeline]
+model = "h3"
+recipe = "8step"
+
+[techniques.vsa]
+
+[techniques.teacache]
+threshold = 1.0
+retain_steps = 3
+cooldown_steps = 3
+coefficients = [1.0, 0.0]
+
+[techniques.mxfp8]
+
+[techniques.bf16_activations]

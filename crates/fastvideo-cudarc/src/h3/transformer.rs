@@ -2058,6 +2058,14 @@ impl H3Transformer {
             decision.accumulator,
         );
         runtime.signal = Some(probe);
+        crate::wan::log::info(format_args!(
+            "h3 teacache step {step}: {} ({}; rel_l1 {} indicator {} acc {:.4})",
+            if decision.compute { "compute" } else { "REUSE" },
+            decision.reason,
+            decision.relative_l1.map_or("-".into(), |v| format!("{v:.4}")),
+            decision.indicator.map_or("-".into(), |v| format!("{v:.4}")),
+            decision.accumulator
+        ));
         if decision.compute {
             runtime.pending = Some(hidden.clone());
             runtime.book();

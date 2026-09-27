@@ -17,7 +17,7 @@
 #   gate_cells: fv-gpucheck gate with scripts/gpu/gate-policy.toml
 #     (FV_GATE_POLICY overrides) into $RUNS/gate/.
 set -euo pipefail
-FAMILY="${1:?usage: runpod-matrix.sh headline|h3|ltx|hunyuan|wan|b200|rtx6000|rtx5090|fastvideo|precision|precision-debug|trace|fuse|oracle|ltxvae|writer|eval|ltxoffload|techniques}"
+FAMILY="${1:?usage: runpod-matrix.sh headline|h3|ltx|hunyuan|wan|b200|rtx6000|rtx5090|fastvideo|precision|precision-debug|trace|fuse|oracle|ltxvae|writer|eval|ltxoffload|techniques|h3arms}"
 WORK="${FV_WORK:-/workspace}"
 BIN="${FV_GPUCHECK:-/opt/fastvideo-rs/target/release/fv-gpucheck}"
 W="$WORK/weights"
@@ -1223,6 +1223,87 @@ case "$FAMILY" in
     for c in "$RUNS"/*-base "$RUNS"/*-env "$RUNS"/*-prof; do
       [[ -d "$c" ]] || continue
       log "$(basename "$c") $(grep -ho '"denoise_s":[0-9.]*\|"total_s":[0-9.]*' "$c/stderr.log" 2>/dev/null | tail -2 | tr '\n' ' ')"
+    done
+    ;;
+  h3arms)
+    # FastH3 8-step technique arms on the technique layer (docs/techniques.md),
+    # each gated against the plain FastH3 8-step cell of the same run:
+    #   -sol     profiles/h3/fasth3_8step_sol: Sol-Attn on every step and block
+    #   -tea     profiles/h3/fasth3_8step_teacache: TeaCache free to reuse the
+    #            middle steps 3-4 of 8 (threshold 1.0, retain 3, cooldown 3)
+    #   -soltea  both
+    # at 768p and 480p; at 480p also each arm decoded by TAEH3 (compared with
+    # its own twin, isolating the decoder, and with the plain baseline), and
+    # FastH3 4-step VSA 480p against its TAEH3 twin. Meant for FV_PROMPTS=5
+    # and FV_LPIPS=1 (the gate reads the per-prompt reports). The text encoder
+    # streams: the prompts are encoded once, into the shared cache.
+    h3_common=(
+      --prompt "$PROMPT"
+      --seconds 5
+      --seed "$SEED"
+      --text-encoder streamed
+      --text-cache "$SCRATCH/h3-text-cache"
+      --text-weights "$W/h3-base"
+      --warm
+      "${PROMPT_ARGS[@]}"
+    )
+    arm_profile() {
+      case "$1" in
+        sol) echo h3/fasth3_8step_sol ;;
+        tea) echo h3/fasth3_8step_teacache ;;
+        soltea) echo h3/fasth3_8step_sol_teacache ;;
+      esac
+    }
+    for res in 768p 480p; do
+      geo=()
+      [[ "$res" == 480p ]] && geo=(--height 480 --width 832)
+      base="fasth3-8step-$res"
+      gated_cell "$base" fasth3-8step \
+        "$BIN" --mode fast h3 gen --weights "$W/h3-8step" --h3-recipe 8step "${geo[@]}" \
+          --adaln-cache "$RUNS/fasth3-8step-$res-adaln.cache" \
+          --clip-dir "$RUNS/$base/frames" "${h3_common[@]}"
+      for arm in sol tea soltea; do
+        gated_cell "$base-$arm" fasth3-8step \
+          "$BIN" --techniques "$(arm_profile "$arm")" --mode fast h3 gen --weights "$W/h3-8step" "${geo[@]}" \
+            --adaln-cache "$RUNS/fasth3-8step-$res-adaln.cache" \
+            --clip-dir "$RUNS/$base-$arm/frames" "${h3_common[@]}"
+        grep -h "h3 teacache step" "$RUNS/$base-$arm/stderr.log" 2>/dev/null | grep -c REUSE \
+          | sed "s/^/[$base-$arm] teacache reused steps (all passes): /" | tee -a "$LOG" || true
+      done
+      if [[ "$res" == 480p ]]; then
+        for arm in sol tea soltea; do
+          tae_gated_cell "$base-$arm-taeh3" "$TAEH3" fasth3-8step \
+            "$BIN" --techniques "$(arm_profile "$arm")" --mode fast h3 gen --weights "$W/h3-8step" "${geo[@]}" \
+              --taeh3-weights "$TAEH3" \
+              --adaln-cache "$RUNS/fasth3-8step-$res-adaln.cache" \
+              --clip-dir "$RUNS/$base-$arm-taeh3/frames" "${h3_common[@]}"
+        done
+      fi
+      for arm in sol tea soltea; do
+        compare_cells "$base" "$base-$arm"
+        gate_cells "$base" "$base-$arm" lossy
+      done
+      if [[ "$res" == 480p ]]; then
+        for arm in sol tea soltea; do
+          compare_cells "$base-$arm" "$base-$arm-taeh3"
+          compare_cells "$base" "$base-$arm-taeh3"
+          gate_cells "$base" "$base-$arm-taeh3" lossy
+        done
+      fi
+    done
+    gated_cell fasth3-4step-vsa-480p fasth3-4step-vsa \
+      "$BIN" --mode fast h3 gen --weights "$W/h3-base" --h3-recipe 4step-vsa --height 480 --width 832 \
+        --adaln-cache "$RUNS/fasth3-4step-vsa-480p-adaln.cache" \
+        --clip-dir "$RUNS/fasth3-4step-vsa-480p/frames" "${h3_common[@]}"
+    tae_gated_cell fasth3-4step-vsa-480p-taeh3 "$TAEH3" fasth3-4step-vsa \
+      "$BIN" --mode fast h3 gen --weights "$W/h3-base" --h3-recipe 4step-vsa --height 480 --width 832 \
+        --taeh3-weights "$TAEH3" \
+        --adaln-cache "$RUNS/fasth3-4step-vsa-480p-adaln.cache" \
+        --clip-dir "$RUNS/fasth3-4step-vsa-480p-taeh3/frames" "${h3_common[@]}"
+    compare_cells fasth3-4step-vsa-480p fasth3-4step-vsa-480p-taeh3
+    gate_cells fasth3-4step-vsa-480p fasth3-4step-vsa-480p-taeh3 lossy
+    for f in "$RUNS"/gate/gate-*.json; do
+      [[ -f "$f" ]] && log "$(basename "$f"): $(grep -o '"verdict": "[a-z]*"' "$f" | head -1)"
     done
     ;;
   ltxvae)

@@ -1,0 +1,26 @@
+# FastH3 8-step with Sol-Attn in place of VSA, dense nowhere: the RTX cell's
+# Sol kernel settings (tau 1.0, thresh_type diag, exact text KV sink with
+# dense text query rows) on every step and every block. The RTX route's
+# 10 dense warm-up forwards would cover all 8 steps, so they are dropped,
+# and so are its 2 dense blocks.
+
+[id]
+name = "fasth3_8step_sol"
+family = "minimax_h3"
+description = "FastH3 8-step, Sol-Attn on every step and block, MXFP8."
+
+[pipeline]
+model = "h3"
+recipe = "8step"
+
+[techniques.sol_attn]
+preset = "rtx"
+tau = 1.0
+thresh_type = "diag"
+dense_steps = 0           # no dense forwards
+dense_layers = 0          # no dense blocks
+sink = "text"
+
+[techniques.mxfp8]
+
+[techniques.bf16_activations]

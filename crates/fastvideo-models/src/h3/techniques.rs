@@ -570,6 +570,43 @@ mod tests {
         assert!(H3Techniques::resolve(None, &contract("8step"), false, Some(&ltx), &none).is_err());
     }
 
+    /// The FastH3 8-step arms: Sol dense nowhere; TeaCache free to reuse
+    /// only the middle steps 3 and 4 of 8.
+    #[test]
+    fn fasth3_8step_arms_resolve_as_described() {
+        let none = |_: &str| None;
+        let c = contract("8step");
+        let load = |n: &str| {
+            Profile::parse(crate::techniques::builtin::get(n).unwrap()).unwrap()
+        };
+        let sol = H3Techniques::resolve(None, &c, false, Some(&load("h3/fasth3_8step_sol")), &none).unwrap();
+        let s = sol.sol().unwrap();
+        for step in 0..8 {
+            for layer in 0..super::super::sol::LAYERS_PER_FORWARD {
+                assert_eq!(
+                    technique_route(s, step, layer).unwrap(),
+                    super::super::sol::H3SolRoute::Sol { tau: 1.0 }
+                );
+            }
+        }
+        assert!(sol.teacache.is_none());
+        for name in ["h3/fasth3_8step_teacache", "h3/fasth3_8step_sol_teacache"] {
+            let t = H3Techniques::resolve(None, &c, false, Some(&load(name)), &none).unwrap();
+            let mut tc = t.teacache_state(8).unwrap().unwrap();
+            // Every step's signal is tiny: exactly the middle steps reuse.
+            let reused: Vec<usize> = (0..8)
+                .filter(|&s| {
+                    let d = tc.decide(s, 0.01);
+                    if d.compute {
+                        tc.note_computed();
+                    }
+                    !d.compute
+                })
+                .collect();
+            assert_eq!(reused, vec![3, 4], "{name}");
+        }
+    }
+
     /// OFF: listing a technique with `enabled = false` resolves exactly like
     /// not listing it.
     #[test]

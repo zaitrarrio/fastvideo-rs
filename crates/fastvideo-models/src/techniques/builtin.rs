@@ -41,6 +41,18 @@ pub static PROFILES: &[(&str, &str)] = &[
         include_str!("../../../../profiles/h3/sol_h3_4step_engine.toml"),
     ),
     (
+        "h3/fasth3_8step_sol",
+        include_str!("../../../../profiles/h3/fasth3_8step_sol.toml"),
+    ),
+    (
+        "h3/fasth3_8step_teacache",
+        include_str!("../../../../profiles/h3/fasth3_8step_teacache.toml"),
+    ),
+    (
+        "h3/fasth3_8step_sol_teacache",
+        include_str!("../../../../profiles/h3/fasth3_8step_sol_teacache.toml"),
+    ),
+    (
         "ltx2/ltx25_rtx5090_distill_bf16",
         include_str!("../../../../profiles/ltx2/ltx25_rtx5090_distill_bf16.toml"),
     ),

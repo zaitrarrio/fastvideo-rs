@@ -1,0 +1,29 @@
+# FastH3 8-step with both: Sol-Attn on every step and block
+# (fasth3_8step_sol) and the middle-step TeaCache (fasth3_8step_teacache).
+
+[id]
+name = "fasth3_8step_sol_teacache"
+family = "minimax_h3"
+description = "FastH3 8-step, Sol-Attn everywhere + middle-step TeaCache, MXFP8."
+
+[pipeline]
+model = "h3"
+recipe = "8step"
+
+[techniques.sol_attn]
+preset = "rtx"
+tau = 1.0
+thresh_type = "diag"
+dense_steps = 0
+dense_layers = 0
+sink = "text"
+
+[techniques.teacache]
+threshold = 1.0
+retain_steps = 3
+cooldown_steps = 3
+coefficients = [1.0, 0.0]
+
+[techniques.mxfp8]
+
+[techniques.bf16_activations]
