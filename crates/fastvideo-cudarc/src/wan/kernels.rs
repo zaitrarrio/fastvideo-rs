@@ -25,6 +25,9 @@ const KERNEL_SRC: &str = include_str!("kernels.cu");
 /// can't be compiled but not loaded (or vice versa).
 macro_rules! kernel_fns {
     ($($name:ident),+ $(,)?) => {
+        /// Cloneable (function handles into the loaded module): a second
+        /// [`super::device::DeviceContext`] on another stream shares them.
+        #[derive(Clone)]
         pub struct KernelFns {
             $(pub $name: CudaFunction,)+
             /// Tile-IR NVFP4 GEMMs (fv-oxide-aot) embedded for this SM, one

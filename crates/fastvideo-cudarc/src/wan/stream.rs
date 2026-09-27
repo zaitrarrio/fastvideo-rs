@@ -90,6 +90,10 @@ pub struct RolloutConfig {
     pub rgb8: bool,
     pub tokenizer_path: Option<String>,
     pub text_cache: Option<std::path::PathBuf>,
+    /// Replay CUDA graphs of the block forwards ([`super::graph`]; default
+    /// from `FASTVIDEO_WAN_GRAPH`, on). Off (or without a CUDA device): every
+    /// block runs eagerly on the device's own stream.
+    pub graphs: bool,
 }
 
 impl Default for RolloutConfig {
@@ -108,6 +112,7 @@ impl Default for RolloutConfig {
             rgb8: true,
             tokenizer_path: None,
             text_cache: None,
+            graphs: super::graph::graphs_enabled(),
         }
     }
 }
@@ -208,6 +213,120 @@ pub struct CausalRollout<'p> {
     seed: u64,
     /// Initial noise of the current 21-frame group: `(group, [1, C, 21, h, w])`.
     noise: Option<(usize, CudaTensor)>,
+    /// Graph mode ([`RolloutConfig::graphs`] on a CUDA device).
+    #[cfg(feature = "cuda")]
+    graph: Option<GraphRun>,
+}
+
+/// What the graph mode of a rollout has done so far.
+#[derive(Debug, Clone, Default)]
+pub struct GraphReport {
+    /// Blocks run eagerly on the graph stream (the first of each cache
+    /// state: it warms every lazy cache before a capture).
+    pub eager_blocks: usize,
+    /// Blocks whose graphs were captured (then launched).
+    pub captured_blocks: usize,
+    /// Blocks run by replaying graphs captured before.
+    pub replayed_blocks: usize,
+    /// Distinct cache states (graph keys) seen.
+    pub keys: usize,
+    /// Kernel nodes of the last captured denoise / context graph.
+    pub denoise_kernels: usize,
+    pub context_kernels: usize,
+    /// Why graph mode fell back to eager for good, if it did.
+    pub failed: Option<String>,
+}
+
+/// One graph per cache state: the fill states of the window's first blocks,
+/// then one steady state per roll.
+#[cfg(feature = "cuda")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+struct GraphKey {
+    kv: super::causal::KvBlockKey,
+    rows: usize,
+    sink: bool,
+}
+
+#[cfg(feature = "cuda")]
+struct GraphEntry {
+    /// The RoPE tables the graphs read, refilled per block.
+    tables: super::transformer::KvTables,
+    runs: usize,
+    denoise: Option<super::graph::Graph>,
+    context: Option<super::graph::Graph>,
+}
+
+/// Graph-mode state: the stream, and every persistent buffer a graph
+/// reads (the inputs are refilled in place before each launch).
+#[cfg(feature = "cuda")]
+struct GraphRun {
+    gs: super::graph::GraphStream,
+    /// Time conditioning of each Self-Forcing step, then the context pass.
+    times: Vec<super::transformer::KvTime>,
+    /// The text conditioning slot and the prompt version it holds.
+    text: Option<(super::transformer::KvText, u64)>,
+    /// The block's initial noise and each re-noise draw.
+    noise0: Option<CudaTensor>,
+    renoise: Vec<CudaTensor>,
+    /// The denoised latents: the denoise graph's output, the context
+    /// graph's input.
+    mid: Option<CudaTensor>,
+    entries: std::collections::HashMap<GraphKey, GraphEntry>,
+    report: GraphReport,
+}
+
+/// Graphs kept per rollout (distinct cache states; a 21-frame window with
+/// 3-frame blocks has 9).
+#[cfg(feature = "cuda")]
+const MAX_GRAPH_KEYS: usize = 32;
+
+#[cfg(feature = "cuda")]
+impl Drop for GraphRun {
+    fn drop(&mut self) {
+        self.entries.clear();
+        self.gs.trim();
+    }
+}
+
+/// Graph mode falls back to eager blocks for good, saying why once.
+#[cfg(feature = "cuda")]
+fn give_up(failed: &mut Option<String>, why: String) {
+    super::log::info(format_args!("causal rollout: {why}; running eagerly from here"));
+    failed.get_or_insert(why);
+}
+
+/// Keep a captured (and launched) graph for replay, unless allocations
+/// escape it: their memory is live (the launch made it), may be referenced,
+/// and a replay would hand the same addresses out again, so the graph is
+/// leaked (never replayed, never destroyed) and graph mode gives up.
+#[cfg(feature = "cuda")]
+fn keep_graph(
+    graph: super::graph::Graph,
+    slot: &mut Option<super::graph::Graph>,
+    failed: &mut Option<String>,
+    what: &str,
+) {
+    if graph.escaped() == 0 {
+        *slot = Some(graph);
+    } else {
+        give_up(
+            failed,
+            format!("{what} graph: {} allocations outlive it ({:?})", graph.escaped(), graph.stats),
+        );
+        std::mem::forget(graph);
+    }
+}
+
+/// Refill slot `slot` with `src` (allocating it the first time).
+#[cfg(feature = "cuda")]
+fn fill(slot: &mut Option<CudaTensor>, src: &CudaTensor) -> Result<()> {
+    match slot {
+        Some(s) if s.shape == src.shape && s.dtype() == src.dtype() => {
+            super::graph::assign(s, src)?;
+        }
+        _ => *slot = Some(super::graph::duplicate(src)?),
+    }
+    Ok(())
 }
 
 impl<'p> CausalRollout<'p> {
@@ -242,9 +361,44 @@ impl<'p> CausalRollout<'p> {
             cfg.sink_frames,
             cfg.rope,
         )?;
-        let cache = CausalKvCache::new(spec, dit.cfg.num_layers);
         let sched = SelfForcingSchedule::new(&cfg.dmd_steps, cfg.flow_shift, 1000, true);
         dit.begin_text_cache();
+        #[cfg(feature = "cuda")]
+        let graph = if cfg.graphs && super::device::has_live_device() {
+            let gs = super::graph::GraphStream::new()?;
+            // The time conditioning of every step (and of the context
+            // pass), held for the rollout's life: graphs read it by address.
+            let times = gs.scope(|| -> Result<Vec<_>> {
+                let mut ts: Vec<f32> = sched.timesteps.clone();
+                ts.push(0.0);
+                let out = ts
+                    .iter()
+                    .map(|&t| dit.kv_time(&CudaTensor::from_vec(vec![t], vec![1])?, 1))
+                    .collect::<std::result::Result<Vec<_>, _>>()?;
+                gs.synchronize()?;
+                Ok(out)
+            })?;
+            Some(GraphRun {
+                gs,
+                times,
+                text: None,
+                noise0: None,
+                renoise: Vec::new(),
+                mid: None,
+                entries: Default::default(),
+                report: GraphReport::default(),
+            })
+        } else {
+            None
+        };
+        #[cfg(feature = "cuda")]
+        let cache = if graph.is_some() {
+            CausalKvCache::new_static(spec, dit.cfg.num_layers)
+        } else {
+            CausalKvCache::new(spec, dit.cfg.num_layers)
+        };
+        #[cfg(not(feature = "cuda"))]
+        let cache = CausalKvCache::new(spec, dit.cfg.num_layers);
         let mut me = Self {
             pipe,
             sched,
@@ -258,6 +412,8 @@ impl<'p> CausalRollout<'p> {
             draw: 0,
             seed: cfg.seed,
             noise: None,
+            #[cfg(feature = "cuda")]
+            graph,
             cfg,
         };
         let prompt = me.cfg.prompt.clone();
@@ -392,12 +548,15 @@ impl<'p> CausalRollout<'p> {
     /// (its cache slots are overwritten in place), or [`Self::reset`].
     pub fn next_block_with_hooks(&mut self, hooks: Hooks<'_>) -> Result<StreamBlock> {
         hooks.check()?;
+        #[cfg(feature = "cuda")]
+        if self.graph.is_some() {
+            return self.next_block_graph(hooks);
+        }
         let t_block = Instant::now();
         let dit = self.pipe.transformer();
-        let tae = self
-            .pipe
-            .taehv()
-            .ok_or_else(|| err("causal rollout: TAEHV unloaded"))?;
+        if self.pipe.taehv().is_none() {
+            return Err(err("causal rollout: TAEHV unloaded"));
+        }
         let fpb = self.fpb;
         let start = self.block * fpb;
         if self.cfg.rope != RopePolicy::Relativistic {
@@ -438,6 +597,23 @@ impl<'p> CausalRollout<'p> {
         dit.forward_kv(&cur, &t0, &self.cond, &self.cache, start)?;
         super::device::synchronize().map_err(|e| err(e.to_string()))?;
         let context_s = t.elapsed().as_secs_f64();
+        self.finish_block(cur, t_block, denoise_s, context_s, hooks)
+    }
+
+    /// Decode the block's latents `cur` (TAEHV, carried state), pack RGB8
+    /// and deliver the block.
+    fn finish_block(
+        &mut self,
+        cur: CudaTensor,
+        t_block: Instant,
+        denoise_s: f64,
+        context_s: f64,
+        hooks: Hooks<'_>,
+    ) -> Result<StreamBlock> {
+        let tae = self
+            .pipe
+            .taehv()
+            .ok_or_else(|| err("causal rollout: TAEHV unloaded"))?;
         let t = Instant::now();
         let first_frame = self.tae_state.emitted();
         let frames = tae
@@ -472,6 +648,259 @@ impl<'p> CausalRollout<'p> {
                 total_s: t_block.elapsed().as_secs_f64(),
             },
         })
+    }
+
+    /// What graph mode has done so far (`None`: the rollout runs eagerly).
+    pub fn graph_report(&self) -> Option<GraphReport> {
+        #[cfg(feature = "cuda")]
+        if let Some(g) = &self.graph {
+            let mut r = g.report.clone();
+            r.keys = g.entries.len();
+            return Some(r);
+        }
+        None
+    }
+
+    /// [`Self::next_block_with_hooks`] in graph mode: the denoise steps and
+    /// the context pass run on the graph stream from persistent buffers, as
+    /// one graph each per cache state. The first block of a state runs
+    /// eagerly (warming every lazy cache, allocating the static KV buffers
+    /// and the slots), the second captures and launches, later ones replay.
+    /// The step events fire together once the denoise graph is done (a
+    /// cancel is seen then: the block's cache slots are written, and the
+    /// next call generates it again, as in eager mode).
+    #[cfg(feature = "cuda")]
+    fn next_block_graph(&mut self, hooks: Hooks<'_>) -> Result<StreamBlock> {
+        let t_block = Instant::now();
+        let gs = self.graph.as_ref().expect("graph mode").gs.clone();
+        let (cur, denoise_s, context_s) = gs.scope(|| self.graph_block(&hooks, t_block))?;
+        self.finish_block(cur, t_block, denoise_s, context_s, hooks)
+    }
+
+    /// The device part of a graph-mode block, inside the graph stream's
+    /// scope: `(latents, denoise_s, context_s)`.
+    #[cfg(feature = "cuda")]
+    fn graph_block(&mut self, hooks: &Hooks<'_>, t_block: Instant) -> Result<(CudaTensor, f64, f64)> {
+        use super::graph::{assign, duplicate};
+        let dit = self.pipe.transformer();
+        let fpb = self.fpb;
+        let block = self.block;
+        let start = block * fpb;
+        let [c, h, w] = self.latent_chw;
+        let steps = self.sched.num_steps();
+        let p = dit.cfg.patch_size;
+        let frame_tokens = (h / p[1].max(1)) * (w / p[2].max(1));
+        let n = fpb * frame_tokens;
+        // Inputs, refilled in place.
+        let noise0 = self.block_noise(start)?;
+        let mut renoise = Vec::with_capacity(steps.saturating_sub(1));
+        for _ in 1..steps {
+            renoise.push(causal_noise(self.seed, self.draw, [1, fpb, c, h, w])?);
+            self.draw += 1;
+        }
+        let text_now = {
+            let g = self.graph.as_ref().expect("graph mode");
+            g.text.as_ref().map(|(_, v)| *v)
+        };
+        if text_now != Some(self.prompt_version) {
+            let fresh = dit.kv_text(&self.cond)?;
+            let g = self.graph.as_mut().expect("graph mode");
+            match &g.text {
+                Some((slot, _)) => slot.assign(&fresh)?,
+                None => g.text = Some((fresh.duplicate()?, 0)),
+            }
+            g.text.as_mut().expect("text slot").1 = self.prompt_version;
+        }
+        let spec = dit.kv_table_spec(fpb, h, w, &self.cache, start)?;
+        let target = spec.sink.map_or(0, |s| s.0);
+        let host_tables = dit.kv_tables_host(&spec, h, w)?;
+        let key = GraphKey {
+            kv: self.cache.block_key(start * frame_tokens, n, target)?,
+            rows: spec.rows,
+            sink: spec.sink.is_some(),
+        };
+        let g = self.graph.as_mut().expect("graph mode");
+        fill(&mut g.noise0, &noise0)?;
+        if g.renoise.len() != renoise.len() {
+            g.renoise.clear();
+        }
+        for (i, r) in renoise.iter().enumerate() {
+            if let Some(slot) = g.renoise.get(i) {
+                if slot.shape == r.shape && slot.dtype() == r.dtype() {
+                    assign(slot, r)?;
+                    continue;
+                }
+            }
+            let d = duplicate(r)?;
+            if i < g.renoise.len() {
+                g.renoise[i] = d;
+            } else {
+                g.renoise.push(d);
+            }
+        }
+        drop((noise0, renoise));
+        let over_cap = !g.entries.contains_key(&key) && g.entries.len() >= MAX_GRAPH_KEYS;
+        let entry = match g.entries.get_mut(&key) {
+            Some(e) if e.tables.same_layout(&host_tables) => {
+                for (d, s) in e.tables.tensors().into_iter().zip(host_tables.tensors()) {
+                    assign(d, s)?;
+                }
+                e
+            }
+            _ => {
+                let t = &host_tables;
+                let tables = super::transformer::KvTables {
+                    rope: (duplicate(&t.rope.0)?, duplicate(&t.rope.1)?),
+                    sink: match &t.sink {
+                        Some((tg, a, b)) => Some((
+                            *tg,
+                            (duplicate(&a.0)?, duplicate(&a.1)?),
+                            (duplicate(&b.0)?, duplicate(&b.1)?),
+                        )),
+                        None => None,
+                    },
+                };
+                g.entries.insert(
+                    key,
+                    GraphEntry {
+                        tables,
+                        runs: 0,
+                        denoise: None,
+                        context: None,
+                    },
+                );
+                g.entries.get_mut(&key).expect("graph entry")
+            }
+        };
+        // The target frame is the tables' (the slot keeps the first one's).
+        if let (Some(s), Some(h)) = (entry.tables.sink.as_mut(), host_tables.sink.as_ref()) {
+            s.0 = h.0;
+        }
+        let first = entry.runs == 0 || over_cap || g.report.failed.is_some();
+        entry.runs += 1;
+
+        let act16 = super::tensor::bf16_activations();
+        let sched = &self.sched;
+        let cache = &self.cache;
+        let times = &g.times;
+        let text = &g.text.as_ref().expect("text slot").0;
+        let noise0 = g.noise0.as_ref().expect("noise slot");
+        let renoise = &g.renoise;
+        let tables = &entry.tables;
+        let denoise = || -> super::tensor::Result<CudaTensor> {
+            let round = |x: CudaTensor| -> super::tensor::Result<CudaTensor> {
+                Ok(if act16 { x.quantize_bf16()? } else { x })
+            };
+            let mut cur = noise0.clone();
+            for (i, &ts) in sched.timesteps.iter().enumerate() {
+                let input = round(cur.clone())?;
+                let flow = dit.forward_kv_cond(&input, &times[i], text, cache, start, tables)?;
+                let sigma = sched.sigma(ts) as f32;
+                let x0 = round(CudaTensor::lincomb(&[(1.0, &cur), (-sigma, &flow)])?)?;
+                cur = if i + 1 < steps {
+                    let next = sched.sigma(sched.timesteps[i + 1]) as f32;
+                    round(CudaTensor::lincomb(&[(1.0 - next, &x0), (next, &renoise[i])])?)?
+                } else {
+                    x0
+                };
+            }
+            Ok(cur)
+        };
+        let context = |mid: &CudaTensor| -> super::tensor::Result<()> {
+            dit.forward_kv_cond(mid, &times[steps], text, cache, start, tables)?;
+            Ok(())
+        };
+        let step_events = |hooks: &Hooks<'_>| -> Result<()> {
+            if !hooks.is_none() {
+                for i in 0..steps {
+                    hooks.step(Stage::Denoise, i + 1, steps, Some(block))?;
+                }
+            }
+            Ok(())
+        };
+
+        if first {
+            // Eager: the same work on the same buffers.
+            let cur = denoise()?;
+            fill(&mut g.mid, &cur)?;
+            drop(cur);
+            g.gs.synchronize()?;
+            let denoise_s = t_block.elapsed().as_secs_f64();
+            step_events(hooks)?;
+            let t = Instant::now();
+            context(g.mid.as_ref().expect("mid slot"))?;
+            let out = duplicate(g.mid.as_ref().expect("mid slot"))?;
+            g.gs.synchronize()?;
+            g.report.eager_blocks += 1;
+            return Ok((out, denoise_s, t.elapsed().as_secs_f64()));
+        }
+
+        let mid = g.mid.as_ref().expect("mid slot");
+        let replay = entry.denoise.is_some() && entry.context.is_some();
+        let mut fell_back = false;
+        if replay {
+            entry.denoise.as_ref().expect("denoise graph").launch()?;
+            for _ in 0..steps {
+                cache.advance(start * frame_tokens, n, target)?;
+            }
+        } else {
+            let before = cache.pointers();
+            match g.gs.capture(|| {
+                let cur = denoise()?;
+                assign(mid, &cur)
+            }) {
+                Ok(graph) => {
+                    // The launch is this block's denoise.
+                    graph.launch()?;
+                    g.report.denoise_kernels = graph.stats.kernels;
+                    keep_graph(graph, &mut entry.denoise, &mut g.report.failed, "denoise");
+                }
+                Err(e) => {
+                    // The capture moved the cache's pointers but ran nothing.
+                    fell_back = true;
+                    give_up(&mut g.report.failed, format!("denoise capture: {e}"));
+                    cache.set_pointers(&before)?;
+                    let cur = denoise()?;
+                    assign(mid, &cur)?;
+                }
+            }
+        }
+        g.gs.synchronize()?;
+        let denoise_s = t_block.elapsed().as_secs_f64();
+        step_events(hooks)?;
+        let t = Instant::now();
+        if replay {
+            entry.context.as_ref().expect("context graph").launch()?;
+            cache.advance(start * frame_tokens, n, target)?;
+        } else if g.report.failed.is_some() {
+            fell_back = true;
+            context(mid)?;
+        } else {
+            let before = cache.pointers();
+            match g.gs.capture(|| context(mid)) {
+                Ok(graph) => {
+                    graph.launch()?;
+                    g.report.context_kernels = graph.stats.kernels;
+                    keep_graph(graph, &mut entry.context, &mut g.report.failed, "context");
+                }
+                Err(e) => {
+                    fell_back = true;
+                    give_up(&mut g.report.failed, format!("context capture: {e}"));
+                    cache.set_pointers(&before)?;
+                    context(mid)?;
+                }
+            }
+        }
+        let out = duplicate(mid)?;
+        g.gs.synchronize()?;
+        if replay {
+            g.report.replayed_blocks += 1;
+        } else if fell_back {
+            g.report.eager_blocks += 1;
+        } else {
+            g.report.captured_blocks += 1;
+        }
+        Ok((out, denoise_s, t.elapsed().as_secs_f64()))
     }
 
     /// Generate until `sink` answers [`Flow::Stop`] (or `max_blocks`).

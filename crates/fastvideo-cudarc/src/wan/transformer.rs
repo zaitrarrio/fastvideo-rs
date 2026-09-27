@@ -638,6 +638,97 @@ struct PreparedText {
     kv: Vec<(CudaTensor, CudaTensor)>,
 }
 
+/// Which RoPE rows a causal block forward reads
+/// ([`WanTransformer3D::kv_table_spec`]): `rows` rows of the table of
+/// `frames` latent frames from `start_frame`, and for a rebased sink
+/// (`sink`: target frame, sink frames) the sink's tables at 0 and at the
+/// target.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct KvTableSpec {
+    pub frames: usize,
+    pub start_frame: usize,
+    pub rows: usize,
+    pub sink: Option<(usize, usize)>,
+}
+
+/// The RoPE tables of one causal block forward: `(cos, sin)` of the rows
+/// the block reads, and for a rebased sink `(target, at 0, at target)`.
+#[derive(Debug, Clone)]
+pub struct KvTables {
+    pub rope: (CudaTensor, CudaTensor),
+    pub sink: Option<(usize, (CudaTensor, CudaTensor), (CudaTensor, CudaTensor))>,
+}
+
+impl KvTables {
+    /// Every table, in a fixed order (for copying one set into another).
+    pub fn tensors(&self) -> Vec<&CudaTensor> {
+        let mut v = vec![&self.rope.0, &self.rope.1];
+        if let Some((_, a, b)) = &self.sink {
+            v.extend([&a.0, &a.1, &b.0, &b.1]);
+        }
+        v
+    }
+
+    /// The same shapes: one set can be copied into the other.
+    pub fn same_layout(&self, other: &KvTables) -> bool {
+        let (a, b) = (self.tensors(), other.tensors());
+        a.len() == b.len() && a.iter().zip(&b).all(|(x, y)| x.shape == y.shape)
+    }
+}
+
+/// The time conditioning of one causal block forward (a timestep's
+/// embedding and every block's modulation), held on the device.
+#[derive(Debug, Clone)]
+pub struct KvTime(std::sync::Arc<PreparedTime>);
+
+/// The text conditioning of one causal block forward: the text embedding
+/// and, when cached, every block's cross-attention K/V.
+#[derive(Debug, Clone)]
+pub struct KvText {
+    embedded: CudaTensor,
+    kv: Option<Vec<(CudaTensor, CudaTensor)>>,
+}
+
+impl KvText {
+    fn tensors(&self) -> Vec<&CudaTensor> {
+        let mut v = vec![&self.embedded];
+        for (k, vv) in self.kv.iter().flatten() {
+            v.extend([k, vv]);
+        }
+        v
+    }
+
+    /// A copy in buffers of its own: a slot a CUDA graph reads by address
+    /// while [`Self::assign`] refills it for a new prompt.
+    pub fn duplicate(&self) -> Result<KvText> {
+        Ok(KvText {
+            embedded: super::graph::duplicate(&self.embedded)?,
+            kv: match &self.kv {
+                Some(kv) => Some(
+                    kv.iter()
+                        .map(|(k, v)| Ok((super::graph::duplicate(k)?, super::graph::duplicate(v)?)))
+                        .collect::<Result<Vec<_>>>()?,
+                ),
+                None => None,
+            },
+        })
+    }
+
+    /// Overwrite this slot's buffers with `src`'s values, in place.
+    pub fn assign(&self, src: &KvText) -> Result<()> {
+        let (d, s) = (self.tensors(), src.tensors());
+        if d.len() != s.len() || d.iter().zip(&s).any(|(a, b)| a.shape != b.shape) {
+            return Err(TensorError::Message(
+                "KvText::assign: the conditioning layouts differ".into(),
+            ));
+        }
+        for (d, s) in d.into_iter().zip(s) {
+            super::graph::assign(d, s)?;
+        }
+        Ok(())
+    }
+}
+
 /// Time conditioning for one timestep vector: the time embedding (the
 /// output head's), `timestep_proj` (`[b, 6, dim]`) and every block's
 /// modulation. A function of the timestep values and the weights only.
@@ -2110,6 +2201,126 @@ impl WanTransformer3D {
         cache: &super::causal::CausalKvCache,
         start_frame: usize,
     ) -> Result<CudaTensor> {
+        let [b, _, t, h, w] = latents.shape[..] else {
+            return Err(TensorError::Message(format!(
+                "forward_kv expects BCTHW latents, got {:?}",
+                latents.shape
+            )));
+        };
+        let spec = self.kv_table_spec(t, h, w, cache, start_frame)?;
+        let tables = self.kv_tables(&spec, h, w)?;
+        let time = self.kv_time(timestep, b)?;
+        let text = self.kv_text(encoder)?;
+        self.forward_kv_cond(latents, &time, &text, cache, start_frame, &tables)
+    }
+
+    /// The RoPE rows a [`Self::forward_kv`] of a `t`-frame block at
+    /// `start_frame` reads, given the cache's state now.
+    pub fn kv_table_spec(
+        &self,
+        t: usize,
+        h: usize,
+        w: usize,
+        cache: &super::causal::CausalKvCache,
+        start_frame: usize,
+    ) -> Result<KvTableSpec> {
+        let p = self.cfg.patch_size;
+        let frame_tokens = (h / p[1].max(1)) * (w / p[2].max(1));
+        let n = t * frame_tokens;
+        let (frames, start, rows) = if cache.spec.relativistic {
+            // The window's table from position 0: every layer's cache sits
+            // at the same pointers, so layer 0's plan sizes it once.
+            let window = cache.window_after(start_frame * frame_tokens, n)?;
+            (cache.spec.window_frames().max(t), 0, window)
+        } else {
+            (t, start_frame, n)
+        };
+        let sink = if cache.spec.rebase_sink {
+            let target = cache.spec.sink_target(start_frame + t);
+            (target > 0).then(|| (target, cache.spec.sink / frame_tokens.max(1)))
+        } else {
+            None
+        };
+        Ok(KvTableSpec {
+            frames,
+            start_frame: start,
+            rows,
+            sink,
+        })
+    }
+
+    /// [`KvTableSpec`]'s tables from the device RoPE cache.
+    pub fn kv_tables(&self, spec: &KvTableSpec, h: usize, w: usize) -> Result<KvTables> {
+        let (cos, sin) = self.rotary_at(spec.frames, h, w, spec.start_frame)?;
+        let rope = if spec.rows == cos.shape[0] {
+            (cos, sin)
+        } else {
+            (cos.narrow(0, 0, spec.rows)?, sin.narrow(0, 0, spec.rows)?)
+        };
+        let sink = match spec.sink {
+            Some((target, sink_f)) => Some((
+                target,
+                self.rotary_at(sink_f, h, w, 0)?,
+                self.rotary_at(sink_f, h, w, target)?,
+            )),
+            None => None,
+        };
+        Ok(KvTables { rope, sink })
+    }
+
+    /// [`Self::kv_tables`] as host tensors computed afresh (no cache, no
+    /// device): the same values, for a caller that copies them into buffers
+    /// of its own (the inputs of a CUDA graph, `wan::graph`).
+    pub fn kv_tables_host(&self, spec: &KvTableSpec, h: usize, w: usize) -> Result<KvTables> {
+        let (cos, sin) = wan_rope_at(&self.cfg, spec.frames, h, w, spec.start_frame)?;
+        let rope = if spec.rows == cos.shape[0] {
+            (cos, sin)
+        } else {
+            (cos.narrow(0, 0, spec.rows)?, sin.narrow(0, 0, spec.rows)?)
+        };
+        let sink = match spec.sink {
+            Some((target, sink_f)) => Some((
+                target,
+                wan_rope_at(&self.cfg, sink_f, h, w, 0)?,
+                wan_rope_at(&self.cfg, sink_f, h, w, target)?,
+            )),
+            None => None,
+        };
+        Ok(KvTables { rope, sink })
+    }
+
+    /// The time conditioning of `timestep` (`b` values), from the time
+    /// cache when seen before. Held by the caller, it stays valid whatever
+    /// the cache evicts.
+    pub fn kv_time(&self, timestep: &CudaTensor, b: usize) -> Result<KvTime> {
+        Ok(KvTime(self.prepare_time(timestep, b)?))
+    }
+
+    /// The text conditioning of `encoder`: the text embedding and, with the
+    /// text cache on ([`Self::begin_text_cache`]), every block's
+    /// cross-attention K/V (else each forward computes them from the
+    /// embedding).
+    pub fn kv_text(&self, encoder: &CudaTensor) -> Result<KvText> {
+        let (embedded, text) = self.prepare_text(encoder)?;
+        Ok(KvText {
+            embedded,
+            kv: text.map(|t| t.kv.clone()),
+        })
+    }
+
+    /// [`Self::forward_kv`] on prepared conditioning and RoPE tables: the
+    /// rebased sink (when `tables.sink`), then the block. Past the host
+    /// bookkeeping of the cache, only kernel launches and stream-ordered
+    /// allocations: what a CUDA graph can capture (`wan::graph`).
+    pub fn forward_kv_cond(
+        &self,
+        latents: &CudaTensor,
+        time: &KvTime,
+        text: &KvText,
+        cache: &super::causal::CausalKvCache,
+        start_frame: usize,
+        tables: &KvTables,
+    ) -> Result<CudaTensor> {
         let [b, _c, t, h, w] = latents.shape[..] else {
             return Err(TensorError::Message(format!(
                 "forward_kv expects BCTHW latents, got {:?}",
@@ -2118,48 +2329,28 @@ impl WanTransformer3D {
         };
         let p = self.cfg.patch_size;
         let frame_tokens = (h / p[1].max(1)) * (w / p[2].max(1));
-        let rope = if cache.spec.relativistic {
-            // The window's table from position 0: every layer's cache sits
-            // at the same pointers, so layer 0's plan sizes it once.
-            let n = t * frame_tokens;
-            let window = cache.window_after(start_frame * frame_tokens, n)?;
-            let frames = cache.spec.window_frames().max(t);
-            let (cos, sin) = self.rotary_at(frames, h, w, 0)?;
-            if window == cos.shape[0] {
-                (cos, sin)
-            } else {
-                (cos.narrow(0, 0, window)?, sin.narrow(0, 0, window)?)
-            }
-        } else {
-            self.rotary_at(t, h, w, start_frame)?
-        };
-        if cache.spec.rebase_sink {
-            let target = cache.spec.sink_target(start_frame + t);
-            if target > 0 {
-                let sink_f = cache.spec.sink / frame_tokens.max(1);
-                let orig = self.rotary_at(sink_f, h, w, 0)?;
-                let new = self.rotary_at(sink_f, h, w, target)?;
-                cache.rebase_sink(target, (&orig.0, &orig.1), (&new.0, &new.1))?;
-            }
+        let rope = &tables.rope;
+        if let Some((target, orig, new)) = &tables.sink {
+            cache.rebase_sink(*target, (&orig.0, &orig.1), (&new.0, &new.1))?;
         }
         let mut hidden = self.patch_embed(latents)?;
         if super::tensor::bf16_residual() {
             hidden = hidden.quantize_bf16()?;
         }
-        let time = self.prepare_time(timestep, b)?;
-        let (encoder, text) = self.prepare_text(encoder)?;
+        let time = &time.0;
+        let encoder = &text.embedded;
         let dump_blocks = super::dump::blocks();
         for (layer, block) in self.blocks.iter().enumerate() {
             let op = dump_blocks && super::dump::op_blocks().contains(&layer);
             super::dump::set_op_block(op.then_some(layer));
             hidden = block.forward(
                 &hidden,
-                &encoder,
+                encoder,
                 BlockCond {
                     e: &time.e[layer],
-                    cross_kv: text.as_ref().map(|t| &t.kv[layer]),
+                    cross_kv: text.kv.as_ref().map(|kv| &kv[layer]),
                 },
-                &rope,
+                rope,
                 None,
                 None,
                 None,
