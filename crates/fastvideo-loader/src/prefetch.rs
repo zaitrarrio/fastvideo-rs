@@ -376,9 +376,42 @@ pub struct PrefetchStats {
     pub window_wait_s: f64,
     /// Bytes of distinct tensors any lazy store handed out.
     pub viewed_bytes: u64,
+    /// [`ConsumerTime`] totals, seconds.
+    pub consumer_s: [f64; 5],
 }
 
 pub(crate) static VIEWED_BYTES: AtomicU64 = AtomicU64::new(0);
+
+/// Where a loader's own (consumer-side) time goes, summed across threads.
+#[derive(Debug, Clone, Copy)]
+pub enum ConsumerTime {
+    /// Mapped bytes copied / converted into an upload buffer.
+    Fill = 0,
+    /// Waiting for a staged host-to-device copy.
+    H2dWait = 1,
+    /// A synchronous upload from pageable memory.
+    H2dPageable = 2,
+    /// f32 <-> bf16 conversions of whole weights on the host.
+    Convert = 3,
+    /// Host-side adapter (LoRA) fusion.
+    Lora = 4,
+}
+
+static CONSUMER_NS: [AtomicU64; 5] = [
+    AtomicU64::new(0),
+    AtomicU64::new(0),
+    AtomicU64::new(0),
+    AtomicU64::new(0),
+    AtomicU64::new(0),
+];
+
+pub fn add_consumer_time(kind: ConsumerTime, d: Duration) {
+    CONSUMER_NS[kind as usize].fetch_add(d.as_nanos() as u64, Ordering::Relaxed);
+}
+
+fn consumer_s() -> [f64; 5] {
+    std::array::from_fn(|i| CONSUMER_NS[i].load(Ordering::Relaxed) as f64 * 1e-9)
+}
 
 impl PrefetchStats {
     pub fn now() -> Self {
@@ -398,6 +431,7 @@ impl PrefetchStats {
             },
             window_wait_s: s.window_wait_ns.load(Ordering::Relaxed) as f64 * 1e-9,
             viewed_bytes: VIEWED_BYTES.load(Ordering::Relaxed),
+            consumer_s: consumer_s(),
         }
     }
 
@@ -413,6 +447,7 @@ impl PrefetchStats {
             read_wall_s: self.read_wall_s,
             window_wait_s: self.window_wait_s - base.window_wait_s,
             viewed_bytes: self.viewed_bytes - base.viewed_bytes,
+            consumer_s: std::array::from_fn(|i| self.consumer_s[i] - base.consumer_s[i]),
         }
     }
 
@@ -420,14 +455,20 @@ impl PrefetchStats {
     /// elapsed time for the phase this covers.
     pub fn json(&self, wall_s: f64) -> String {
         let gb = |b: u64| b as f64 / 1e9;
+        let c = &self.consumer_s;
         format!(
-            "{{\"wall_s\":{wall_s:.2},\"viewed_gb\":{:.2},\"prefetch_read_gb\":{:.2},\"prefetch_skipped_gb\":{:.2},\"prefetch_busy_s\":{:.1},\"viewed_gbps\":{:.2},\"window_wait_s\":{:.1},\"prefetch\":{}}}",
+            "{{\"wall_s\":{wall_s:.2},\"viewed_gb\":{:.2},\"prefetch_read_gb\":{:.2},\"prefetch_skipped_gb\":{:.2},\"prefetch_busy_s\":{:.1},\"viewed_gbps\":{:.2},\"window_wait_s\":{:.1},\"fill_s\":{:.1},\"h2d_wait_s\":{:.1},\"h2d_pageable_s\":{:.1},\"convert_s\":{:.1},\"lora_s\":{:.1},\"prefetch\":{}}}",
             gb(self.viewed_bytes),
             gb(self.read_bytes),
             gb(self.skipped_bytes),
             self.read_busy_s,
             if wall_s > 0.0 { gb(self.viewed_bytes) / wall_s } else { 0.0 },
             self.window_wait_s,
+            c[0],
+            c[1],
+            c[2],
+            c[3],
+            c[4],
             PrefetchConfig::get().enabled,
         )
     }

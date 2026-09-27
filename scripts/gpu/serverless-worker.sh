@@ -24,6 +24,11 @@ FV="${FV_BIN:-/opt/fastvideo-rs/target/release/fv-gpucheck}"
 W="${FV_W:-/runpod-volume/weights}"
 SCRATCH="${FV_SCRATCH:-/tmp/fv-worker}"
 mkdir -p "$SCRATCH"
+# The volume's HF-cache trees link absolutely into /workspace/weights (where a
+# pod mounts it); a serverless worker mounts it at /runpod-volume.
+if [[ -d /runpod-volume/weights && ! -e /workspace/weights ]]; then
+  mkdir -p /workspace && ln -sfn /runpod-volume/weights /workspace/weights
+fi
 POD="${RUNPOD_POD_ID:-local}"
 AUTH="${RUNPOD_AI_API_KEY:-}"
 VERSION="fv-rs-worker/1"
@@ -104,9 +109,11 @@ run_gen() {
     ltx25) timings="$(info_json 'ltx2/timings' "$dir/stderr.log")" ;;
     *) timings="$(info_json '/timings' "$dir/stderr.log")" ;;
   esac
-  printf '{"model":%s,"rc":%s,"env":%s,"gen_start":%s,"gen_end":%s,"frames":%s,"frames_sha256":%s,"first_frame_sha256":%s,"timings":%s,"load_io":%s,"stderr_tail":%s}' \
+  local bench=null
+  [[ -s "$dir/benchmark.json" ]] && bench="$(cat "$dir/benchmark.json")"
+  printf '{"model":%s,"rc":%s,"env":%s,"gen_start":%s,"gen_end":%s,"frames":%s,"frames_sha256":%s,"first_frame_sha256":%s,"timings":%s,"load_io":%s,"benchmark":%s,"stderr_tail":%s}' \
     "$(jstr "$model")" "$rc" "$(jstr "$extra")" "$GEN_START" "$GEN_END" "$frames" "$(jstr "$hash")" "$(jstr "$first_frame")" \
-    "$timings" "$(load_io_json "$dir/stderr.log")" "$(jstr "$(grep -v '^\[INFO\] .*block\|resident layer' "$dir/stderr.log" | tail -25)")"
+    "$timings" "$(load_io_json "$dir/stderr.log")" "$bench" "$(jstr "$(grep -v 'block [0-9]*/\|resident layer' "$dir/stderr.log" | grep -i 'load\|text\|INFO\|error\|prequant\|fp8' | tail -40)")"
   return $rc
 }
 
@@ -145,14 +152,16 @@ if [[ -z "${RUNPOD_WEBHOOK_GET_JOB:-}" ]]; then
 fi
 
 GET_URL="${RUNPOD_WEBHOOK_GET_JOB//\$ID/$POD}"
+[[ "$GET_URL" == *\?* ]] || GET_URL="$GET_URL?"
 PING_URL="${RUNPOD_WEBHOOK_PING//\$RUNPOD_POD_ID/$POD}"
 CURRENT="$SCRATCH/current-job"
 : >"$CURRENT"
 # Heartbeat.
 (
   while :; do
+    sep='?'; [[ "$PING_URL" == *\?* ]] && sep='&'
     curl -sS -m 10 -o /dev/null -H "Authorization: $AUTH" \
-      "${PING_URL}?job_id=$(cat "$CURRENT" 2>/dev/null)&runpod_version=$VERSION" 2>/dev/null
+      "${PING_URL}${sep}job_id=$(cat "$CURRENT" 2>/dev/null)&runpod_version=$VERSION" 2>/dev/null
     sleep $(( ${RUNPOD_PING_INTERVAL:-10000} / 1000 ))
   done
 ) &

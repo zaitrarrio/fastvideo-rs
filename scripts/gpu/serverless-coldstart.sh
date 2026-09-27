@@ -12,6 +12,9 @@
 #       executionTime and the worker's output (its own timestamps).
 #   serverless-coldstart.sh wait-idle <endpoint>
 #       until /health reports no workers (the next job is a cold start).
+#   serverless-coldstart.sh retemplate <template> [image]
+#       push the current serverless-worker.sh (and optionally another image)
+#       into the template; the next worker boots with it.
 #   serverless-coldstart.sh down <endpoint> <template>
 #
 # Ledger: artifacts/runpod/serverless/ledger.tsv (created/deleted ids).
@@ -89,6 +92,14 @@ cmd_wait_idle() {
   return 1
 }
 
+cmd_retemplate() {
+  local tpl="$1" image="${2:-}"
+  rest PATCH "/templates/$tpl" "$(jq -n --arg s "$(cat "$HERE/serverless-worker.sh")" --arg image "$image" '
+    {dockerStartCmd: ["bash", "-c", $s, "fv-worker"]} + (if $image == "" then {} else {imageName: $image} end)')" \
+    | jq -c '{id, imageName}'
+  ledger "template-updated $tpl ${image:-same-image}"
+}
+
 cmd_down() {
   local ep="$1" tpl="$2"
   # Scale to zero first; a delete with a running worker can be refused.
@@ -102,6 +113,7 @@ case "${1:-}" in
   up) shift; cmd_up "$@" ;;
   job) shift; cmd_job "$@" ;;
   wait-idle) shift; cmd_wait_idle "$@" ;;
+  retemplate) shift; cmd_retemplate "$@" ;;
   down) shift; cmd_down "$@" ;;
   *) sed -n '2,20p' "$0" | sed 's/^# \{0,1\}//'; exit 2 ;;
 esac

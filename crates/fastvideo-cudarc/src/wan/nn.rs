@@ -261,11 +261,7 @@ impl Linear {
             });
             match layout {
                 Ok(layout) => {
-                    let host: Vec<half::bf16> = weight
-                        .host_cow()?
-                        .iter()
-                        .map(|&v| half::bf16::from_f32(v))
-                        .collect();
+                    let host = to_bf16_par(&weight.host_cow()?);
                     let w16 = dev
                         .stream
                         .memcpy_stod(&host)
@@ -304,11 +300,7 @@ impl Linear {
         #[cfg(feature = "cuda")]
         if bf16_linears() {
             let dev = super::device::global_device().ok_or_else(|| msg("no device"))?;
-            let host: Vec<half::bf16> = weight
-                .host_cow()?
-                .iter()
-                .map(|&v| half::bf16::from_f32(v))
-                .collect();
+            let host = to_bf16_par(&weight.host_cow()?);
             let slice = dev
                 .stream
                 .memcpy_stod(&host)
@@ -469,8 +461,9 @@ impl Linear {
             return Ok(None);
         }
         let dev = super::device::global_device().ok_or_else(|| msg("no device"))?;
+        let staged = Self::stage_bf16_weights(map, prefixes, in_dim, out_dim)?;
         let mut host: Vec<half::bf16> = Vec::new();
-        for prefix in prefixes {
+        for prefix in prefixes.iter().filter(|_| staged.is_none()) {
             let key = super::weights::join_key(prefix, "weight");
             let (shape, values) = map
                 .lazy_bf16(&key)?
@@ -489,11 +482,22 @@ impl Linear {
                 host.extend_from_slice(&values);
             }
         }
-        let slice = dev
-            .stream
-            .memcpy_stod(&host)
-            .map_err(|e| msg(e.to_string()))?;
-        stats::record_h2d(host.len() / 2);
+        let slice = match staged {
+            Some(slice) => slice,
+            None => {
+                let t = std::time::Instant::now();
+                let slice = dev
+                    .stream
+                    .memcpy_stod(&host)
+                    .map_err(|e| msg(e.to_string()))?;
+                fastvideo_loader::prefetch::add_consumer_time(
+                    fastvideo_loader::prefetch::ConsumerTime::H2dPageable,
+                    t.elapsed(),
+                );
+                stats::record_h2d(host.len() / 2);
+                slice
+            }
+        };
         drop(host);
         let rows = prefixes.len() * out_dim;
         let bias = if has_bias {
@@ -527,6 +531,41 @@ impl Linear {
         };
         maybe_attach_ltx2_lora(prefixes, &mut lin)?;
         Ok(Some(lin))
+    }
+
+    /// E12: the bf16-on-disk weights of `prefixes`, stacked, uploaded through
+    /// pinned staging straight from the mapping ([`super::stage_upload`]).
+    /// `None` (take the plain path) unless every part is bf16 of the expected
+    /// shape and no LTX-2 LoRA fuses into it on the host.
+    #[cfg(feature = "cuda")]
+    fn stage_bf16_weights(
+        map: &super::weights::WeightMap,
+        prefixes: &[&str],
+        in_dim: usize,
+        out_dim: usize,
+    ) -> Result<Option<cudarc::driver::CudaSlice<half::bf16>>> {
+        use fastvideo_loader::LazyDType;
+        let Some(lazy) = map.lazy() else {
+            return Ok(None);
+        };
+        if !super::stage_upload::enabled() {
+            return Ok(None);
+        }
+        let mut parts = Vec::with_capacity(prefixes.len());
+        for prefix in prefixes {
+            let key = map.resolved_key(&super::weights::join_key(prefix, "weight"));
+            if crate::ltx2::lora::wants(&key) {
+                return Ok(None);
+            }
+            let Ok(v) = lazy.view(&key) else {
+                return Ok(None);
+            };
+            if *v.dtype != LazyDType::BF16 || v.shape != [out_dim, in_dim] {
+                return Ok(None);
+            }
+            parts.push(v.bytes);
+        }
+        super::stage_upload::upload_bf16_parts(&parts)
     }
 
     /// A bias-free linear around a bf16 weight that is already on the device
@@ -611,7 +650,10 @@ impl Linear {
         #[cfg(feature = "cuda")]
         if rows.dev.is_none() && prequant.is_none() && stats::device_expected() {
             let dev = super::device::global_device().ok_or_else(|| msg("no device"))?;
-            let wf = match map.lazy_bf16(&key)? {
+            let staged = Self::stage_bf16_weights(map, &[prefix], in_dim, out_dim)?;
+            let wf = match staged {
+                Some(w16) => super::ops::cast_bf16_f32_bias_act_device(&w16, None, false)?,
+                None => match map.lazy_bf16(&key)? {
                 // bf16 on disk: upload 2 bytes/param and widen on the device.
                 Some((shape, values)) => {
                     if shape != [out_dim, in_dim] {
@@ -635,6 +677,7 @@ impl Linear {
                         .memcpy_stod(&host[..])
                         .map_err(|e| msg(e.to_string()))?
                 }
+                },
             };
             rows.dev = Some(super::ops::fp8_rows_quantize_device(&wf, out_dim, in_dim)?);
         }
@@ -2199,4 +2242,19 @@ fn fp8_capture_push(prefix: &str, rows: &Fp8Rows) -> Result<()> {
         }
     });
     Ok(())
+}
+
+
+/// `half::bf16::from_f32` of every value, across the rayon pool. The rounding
+/// is per element, so the result is the sequential one bit for bit.
+#[cfg(feature = "cuda")]
+fn to_bf16_par(values: &[f32]) -> Vec<half::bf16> {
+    use rayon::prelude::*;
+    let t = std::time::Instant::now();
+    let out = values.par_iter().map(|&v| half::bf16::from_f32(v)).collect();
+    fastvideo_loader::prefetch::add_consumer_time(
+        fastvideo_loader::prefetch::ConsumerTime::Convert,
+        t.elapsed(),
+    );
+    out
 }

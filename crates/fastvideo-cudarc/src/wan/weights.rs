@@ -150,6 +150,11 @@ impl WeightMap {
         out
     }
 
+    /// The key a lookup of `key` reads (after the MLX / Hunyuan aliases).
+    pub fn resolved_key(&self, key: &str) -> String {
+        self.resolved(key)
+    }
+
     fn resolved(&self, key: &str) -> String {
         if self.has_direct(key) {
             return key.to_string();
