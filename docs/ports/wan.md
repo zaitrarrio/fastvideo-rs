@@ -222,28 +222,41 @@ off elsewhere — on RTX PRO 6000 neither recipe won speed and quality (below).
 `FASTVIDEO_FP8` (W8A8 on every linear) still applies and takes precedence
 per linear.
 
-### Datacenter dense attention (`attn_dc.cu`, B200 default)
+### Datacenter dense attention (`attn_dc.cu`, default on B200 and H100 / H200)
 
-Dense SDPA at head dim 128 on a 10.0 device (B200) runs
-`fa_dc100_fwd_d128`: tcgen05 MMA into tensor memory, TMA loads, and a
-warp-specialised pipeline in the FlashAttention-4 / CUTLASS sm100 FMHA
-order (256 queries per CTA as two 128-row tiles; one MMA thread; TMEM
-S0 | S1 | O0 | O1; P written over S and read by the P.V MMA from TMEM; one
-thread per query row for the softmax, which also rescales O in TMEM when a
-row's max grows). Same per-row arithmetic as `flash_mma_fwd2` except the max
-advances per 128 keys, so it agrees with V2 to bf16-P rounding (rel L2
-1e-4 to 8e-4), not bit for bit. B200: 1.09-1.11 PFLOPS at the H3 768p / LTX
-1080p 20 s / 4K shapes, 2.9x V2 (372 TFLOPS), 0.74-0.78x cuDNN SDPA
-(1.40-1.49 PFLOPS). `fa_dc90_fwd_d128` (wgmma, FA3-style producer +
-two consumer warpgroups with QK/PV overlap) is built for sm_90a and
-selectable with `FASTVIDEO_FLASH_KERNEL=dc`, but not yet run on an
-H100 / H200, so `auto` does not take it. Escape hatch everywhere:
-`FASTVIDEO_FLASH_KERNEL=v2` (or `[kernels] dense_attention = "nvcc:v2"`).
-The arch-specific cubins (sm_90a, sm_100a) are built by build.rs next to
-the per-SM kernels.cu cubins; `scripts/gpu/upstream/attn_dc_bench.cu`
-(pod step `bench:attn_dc`, dev loop `dev:attn_dc`) is the standalone
-parity and timing harness, `fv-gpucheck kernels --groups attn_dc` the Rust
-parity group.
+Dense SDPA at head dim 128 on a 10.0 (B200) or 9.0 (H100 / H200) device runs
+`attn_dc.cu`; every other GPU keeps the mma.sync kernels (sm_120 unchanged).
+
+- `fa_dc100_fwd_d128` (sm_100a): tcgen05 MMA into tensor memory, TMA loads,
+  warp-specialised in the FlashAttention-4 / CUTLASS sm100 FMHA order (256
+  queries per CTA as two 128-row tiles; one MMA thread; TMEM S0 | S1 | O0 |
+  O1; P written over S and read by the P.V MMA from TMEM; one thread per
+  query row for the softmax, which also rescales O in TMEM when a row's max
+  grows).
+- `fa_dc90_fwd_d128` (sm_90a): wgmma + TMA, FlashAttention-3 structure (a
+  producer warpgroup, two consumer warpgroups of 64 rows; QK of tile j and
+  PV of tile j-1 in flight while the softmax of tile j runs).
+
+Same per-row arithmetic as `flash_mma_fwd2` except the max advances per 128
+keys, so both agree with V2 to bf16-P rounding (rel L2 1e-4 to 8e-4), not
+bit for bit. `fv-gpucheck kernels` (group `attn_bench`, Rust path, bf16 out):
+
+| GPU | shape | V2 TFLOPS | dc TFLOPS | cuDNN SDPA (torch) |
+|---|---|---|---|---|
+| B200 | H3 768p | 369 | 1173 | 1490 |
+| B200 | LTX 1080p 20 s | 372 | 1148 | 1401 |
+| B200 | LTX 4K 5 s | 373 | 1152 | 1405 |
+| H100 SXM | H3 768p | 303 | 616 | 598 |
+| H100 SXM | LTX 1080p 20 s | 326 | 565 | 587 |
+| H100 SXM | LTX 4K 5 s | 321 | 570 | 632 |
+
+Escape hatch everywhere: `FASTVIDEO_FLASH_KERNEL=v2` (or `[kernels]
+dense_attention = "nvcc:v2"`). build.rs builds the arch-specific cubins
+(sm_90a, sm_100a) next to the per-SM kernels.cu cubins.
+`scripts/gpu/upstream/attn_dc_bench.cu` (pod step `bench:attn_dc`, dev loop
+`dev:attn_dc`) is the standalone parity / timing harness; `fv-gpucheck
+kernels --groups attn_dc` the Rust parity group. Sol, VSA and block-causal
+still run mma.sync on these GPUs.
 
 ### Block-causal flash attention (SF-Wan, `FASTVIDEO_WAN_CAUSAL_FLASH`, default on)
 
