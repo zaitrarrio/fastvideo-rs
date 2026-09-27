@@ -115,6 +115,10 @@ const H3_TOKEN_DROP: usize = 3;
 pub enum TaeArch {
     /// Wan 2.1: 16 latent channels, 8× spatial, `4T − 3` frames.
     Wan,
+    /// Wan 2.2 TI2V-5B `taew2_2`: 48 latent channels, 16× spatial (`8×`
+    /// upsample + pixel-shuffle 2), `4T − 3` frames (the taeh3 network with
+    /// the Wan trim, no H3 wrap).
+    Wan22,
     /// MiniMax-H3: 24 latent channels, 16× spatial (`8×` upsample + pixel-shuffle 2),
     /// then the 17-frame chunk wrap.
     H3,
@@ -127,6 +131,7 @@ impl TaeArch {
     pub fn latent_channels(self) -> usize {
         match self {
             Self::Wan => 16,
+            Self::Wan22 => 48,
             Self::H3 => 24,
             Self::LtxWide => 128,
         }
@@ -137,7 +142,7 @@ impl TaeArch {
     pub fn patch_size(self) -> usize {
         match self {
             Self::Wan => 1,
-            Self::H3 => 2,
+            Self::Wan22 | Self::H3 => 2,
             Self::LtxWide => 4,
         }
     }
@@ -145,7 +150,7 @@ impl TaeArch {
     /// Decoder `n_f` (`ltx:taehv.py:213,222`).
     pub fn decoder_widths(self) -> [usize; 4] {
         match self {
-            Self::Wan | Self::H3 => [256, 128, 64, 64],
+            Self::Wan | Self::Wan22 | Self::H3 => [256, 128, 64, 64],
             Self::LtxWide => [1024, 512, 256, 64],
         }
     }
@@ -160,7 +165,7 @@ impl TaeArch {
     /// (`ltx:taehv.py:204-205`).
     pub fn decoder_time_upscale(self) -> [usize; 3] {
         match self {
-            Self::Wan | Self::H3 => [1, 2, 2],
+            Self::Wan | Self::Wan22 | Self::H3 => [1, 2, 2],
             Self::LtxWide => [2, 2, 2],
         }
     }
@@ -170,7 +175,7 @@ impl TaeArch {
     /// `[64, 64]` for taeh3).
     pub fn encoder_time_downscale(self) -> [usize; 3] {
         match self {
-            Self::Wan | Self::H3 => [2, 2, 1],
+            Self::Wan | Self::Wan22 | Self::H3 => [2, 2, 1],
             Self::LtxWide => [2, 2, 2],
         }
     }
@@ -206,7 +211,7 @@ impl TaeArch {
     /// latent is ~4 GB of activations), so it decodes one latent at a time.
     fn default_decode_chunk(self) -> usize {
         match self {
-            Self::Wan | Self::H3 => 4,
+            Self::Wan | Self::Wan22 | Self::H3 => 4,
             Self::LtxWide => 1,
         }
     }
@@ -221,6 +226,8 @@ impl TaeArch {
             Some(Self::H3)
         } else if name.contains("taew2_1") {
             Some(Self::Wan)
+        } else if name.contains("taew2_2") {
+            Some(Self::Wan22)
         } else {
             None
         }
@@ -230,6 +237,7 @@ impl TaeArch {
     pub fn file_name(self) -> &'static str {
         match self {
             Self::Wan => "taew2_1.safetensors",
+            Self::Wan22 => "taew2_2.safetensors",
             Self::H3 => "taeh3.safetensors",
             Self::LtxWide => "taeltx2_3_wide.safetensors",
         }
@@ -1439,6 +1447,12 @@ mod tests {
     #[test]
     fn wan_decode_matches_reference() {
         check_decode(TaeArch::Wan, [3, 2, 2], &[1, 4]);
+    }
+
+    /// taew2_2: the taeh3 network at 48 channels with Wan's plain trim.
+    #[test]
+    fn wan22_decode_matches_reference() {
+        check_decode(TaeArch::Wan22, [3, 2, 2], &[1, 4]);
     }
 
     #[test]

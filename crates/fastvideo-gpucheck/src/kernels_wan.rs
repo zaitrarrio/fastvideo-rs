@@ -320,7 +320,12 @@ pub fn wan_causal_attn(report: &mut Report, seed: &mut u64) -> StageResult<()> {
             t16(&k, &[b, h, sk, d])?,
             t16(&v, &[b, h, sk, d])?,
         );
-        let flash = with_bf16_act(true, || nn::sdpa_kv_window_with(&q16, &k16, &v16, true))?;
+        // The mma kernel itself: in an exact-math context (`kernels` without
+        // `--mode fast`) the routed entry point takes cuBLAS instead.
+        let flash = need(
+            attn::device_mma_sdpa(&q16, &k16, &v16, None, true)?,
+            "kv window flash",
+        )?;
         let composed = with_bf16_act(true, || nn::sdpa_kv_window_with(&q16, &k16, &v16, false))?;
         let e = max_abs(&host(&flash)?, &host(&composed)?);
         report.check(
@@ -338,7 +343,7 @@ pub fn wan_causal_attn(report: &mut Report, seed: &mut u64) -> StageResult<()> {
             t16(&bf16v(rand(seed, h * sk * d, 1.0)), &[1, h, sk, d])?,
         );
         let flash = time_ms(5, || {
-            with_bf16_act(true, || nn::sdpa_kv_window_with(&q16, &k16, &v16, true))?;
+            attn::device_mma_sdpa(&q16, &k16, &v16, None, true)?;
             Ok(())
         })?;
         let composed = time_ms(3, || {

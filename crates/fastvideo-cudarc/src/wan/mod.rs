@@ -7,6 +7,8 @@ pub mod affine;
 pub mod ar_cache;
 pub mod causal;
 pub mod attn;
+#[cfg(feature = "cuda")]
+pub mod attn_dc;
 pub mod bf16_gemm;
 pub mod clip;
 #[cfg(feature = "cuda")]
@@ -49,6 +51,7 @@ pub mod tensor;
 pub mod transformer;
 pub mod umt5;
 pub mod vae;
+pub mod vae22;
 pub mod vsa;
 pub mod weights;
 pub mod writer;
@@ -113,6 +116,11 @@ mod tests {
             num_res_blocks: 1,
             temporal_upsample: vec![true, true],
             load_encoder: false,
+            decoder_base_dim: 8,
+            is_residual: false,
+            patch_size: 1,
+            latents_mean: vec![0.0; 4],
+            latents_std: vec![1.0; 4],
         };
         let vae = AutoencoderKlWan::zeros(cfg);
         let z = CudaTensor::zeros(&[1, 4, 3, 2, 2]);

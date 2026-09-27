@@ -348,6 +348,11 @@ pub enum KernelOrigin {
     Nvrtc(&'static str),
 }
 
+/// The embedded attn_dc.cu cubin (sm_90a / sm_100a) for SM `sm`, if built.
+pub fn dc_cubin(sm: u32) -> Option<&'static [u8]> {
+    aot::DC_AOT.iter().find(|(s, _)| *s == sm).map(|(_, c)| *c)
+}
+
 /// SMs with an embedded cubin, for the compile gate to report.
 pub fn aot_sms() -> Vec<u32> {
     aot::AOT.iter().map(|k| k.sm).collect()

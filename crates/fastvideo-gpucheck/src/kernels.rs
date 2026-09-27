@@ -2247,6 +2247,7 @@ pub fn run(report: &mut Report, lim: Limits, seed: u64, groups: Option<&str>) ->
     // Phase 3b kernels vs the kernels they replace, then real-shape timings.
     group(&mut c, "attn2_parity", attn2::parity)?;
     group(&mut c, "attn_bench", attn2::bench)?;
+    group(&mut c, "attn_dc", attn2::dc_parity)?;
 
     group(&mut c, "conv", |c| {
         // cuDNN conv2d (patch embed, VAE resample): pad/stride variants + bias.

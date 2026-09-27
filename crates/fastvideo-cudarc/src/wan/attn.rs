@@ -148,9 +148,13 @@ pub enum FlashKernel {
     /// cuDNN's fused attention engine (`cudnn_sdpa`), bf16 output only;
     /// V2 whenever cuDNN offers no engine or the caller wants f32 out.
     Cudnn,
+    /// `attn_dc.cu` (d = 128 on 9.0 / 10.0): tcgen05 + TMEM on B200, wgmma
+    /// on H100 / H200, TMA-fed and warp-specialised; V2 anywhere else.
+    Dc,
 }
 
-/// `FASTVIDEO_FLASH_KERNEL=v1|v2|cudnn|auto`. `auto` takes V2 when its
+/// `FASTVIDEO_FLASH_KERNEL=v1|v2|cudnn|dc|auto`. `auto` takes Dc on a 10.0
+/// device (d = 128; other head dims fall to V2), else V2 when its
 /// 128-query grid fills the GPU for many waves ([`flash_v2_default`] and
 /// [`flash_v2_fills`]), V1 otherwise (at LTX 768x512, 6 144 tokens x 32
 /// heads, V2's one-CTA-per-SM tail costs 2%).
@@ -169,9 +173,28 @@ pub fn flash_kernel_for(sq: usize, bh: usize, sms: usize) -> FlashKernel {
         "v1" => FlashKernel::V1,
         "v2" => FlashKernel::V2,
         "cudnn" => FlashKernel::Cudnn,
+        "dc" => FlashKernel::Dc,
+        // auto on a 10.0 device: the datacenter kernel (sm_120 and older
+        // keep the choice below; `v2` / `v1` are the escape hatch).
+        _ if dc_default() => FlashKernel::Dc,
         _ if flash_v2_default() && flash_v2_fills(sq, bh, sms) => FlashKernel::V2,
         _ => FlashKernel::V1,
     }
+}
+
+/// Whether `auto` takes [`FlashKernel::Dc`]: the global device is 10.0 (B200)
+/// and its attn_dc module loaded. The sm_90 (wgmma) kernel is built and
+/// loaded too but not yet measured on an H100 / H200, so there it runs only
+/// when asked for (`FASTVIDEO_FLASH_KERNEL=dc`, `[kernels] dense_attention =
+/// "nvcc:dc"`).
+#[cfg(feature = "cuda")]
+pub fn dc_default() -> bool {
+    super::attn_dc::dense().is_some_and(|k| k.sm == 100)
+}
+
+#[cfg(not(feature = "cuda"))]
+pub fn dc_default() -> bool {
+    false
 }
 
 /// Whether V2's grid (one 256-thread CTA per SM) is at least 16 waves.
@@ -254,7 +277,26 @@ pub fn device_mma_sdpa_with(
             )?));
         }
     }
-    let kernel = if kernel == FlashKernel::Cudnn {
+    if kernel == FlashKernel::Dc {
+        if out_bf16 {
+            let mut out =
+                unsafe { dev.stream.alloc::<half::bf16>(n) }.map_err(|e| msg(e.to_string()))?;
+            let dout = super::attn_dc::DcOut::Bf16(&mut out);
+            if super::attn_dc::dense_fwd(&qb, &kb, &vb, dout, bh, sq, sk, d, sl2)? {
+                return Ok(Some(CudaTensor::from_device_slice_bf16(
+                    out,
+                    vec![b, h, sq, d],
+                )?));
+            }
+        } else {
+            let mut out = super::ops::alloc(n)?;
+            let dout = super::attn_dc::DcOut::F32(&mut out);
+            if super::attn_dc::dense_fwd(&qb, &kb, &vb, dout, bh, sq, sk, d, sl2)? {
+                return Ok(Some(CudaTensor::from_device_slice(out, vec![b, h, sq, d])?));
+            }
+        }
+    }
+    let kernel = if matches!(kernel, FlashKernel::Cudnn | FlashKernel::Dc) {
         FlashKernel::V2
     } else {
         kernel
@@ -273,7 +315,7 @@ pub fn device_mma_sdpa_with(
                 shared_mem_bytes: 0,
             },
         ),
-        FlashKernel::V2 | FlashKernel::Cudnn => {
+        FlashKernel::V2 | FlashKernel::Cudnn | FlashKernel::Dc => {
             let func = if d == 64 {
                 &dev.kernels.flash_mma_fwd2_d64
             } else {

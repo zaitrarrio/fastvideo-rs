@@ -38,6 +38,13 @@ Names:
   `{video,audio}_{vel,x0}_stepNN`, `{video,audio}_stepNN`; `s2_upsampled` and
   `s2_entry_{video,audio}` (our stage-2 entry before the reference's is
   injected; `FASTVIDEO_INJECT_STAGE2=0` keeps ours).
+* SF-Wan 1.3B (FastVideo `WanCausalDMDPipeline`, target `sfwan13`):
+  `sf_latents_in`, `text_hidden`, `sf_noise_<k>` (injected), per causal block
+  `c` and step `i` `sf_c<c>_s<i>_{flow,x0}`, `sf_c<c>_out`, `sf_latents_out`,
+  and for block 0 step 0, block 1 step 0 and block 0's context pass
+  (`sf_c0_ctx_`) the block outputs `..._block_<l>` plus, for
+  `FASTVIDEO_DUMP_OPS` layers, the K window `..._b<l>_kwin` and the attention
+  output `..._b<l>_attn_x`. Results: docs/ports/wan.md "SF-Wan".
 
 The FastVideo side runs its strict eager route (`--profile strict
 --no-inference-torch-compile`): hooks inside fullgraph-compiled blocks would

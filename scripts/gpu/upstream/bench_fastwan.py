@@ -1,6 +1,11 @@
 #!/usr/bin/env python3
 """Upstream FastVideo cell: FastWan2.1-T2V-1.3B DMD (3 steps), 480x832, 81 frames.
 
+Also the base Wan checkpoints on the US volume (pod.sh cell_fv_wan) at
+FastVideo's own sampling defaults: Wan2.1 T2V-14B, SF-Wan, and Wan2.2
+TI2V-5B (704x1280x121 text-to-video over the five prompts; ``--image`` for its
+image-to-video, which FastVideo resizes to the 480x832 area).
+
 Follows FastVideo's own examples/inference/basic/basic_dmd.py: VIDEO_SPARSE_ATTN
 with VSA_sparsity=0.8, the checkpoint's own SamplingParam (DMD timesteps
 1000/757/522, guidance 1), save_video=True. Methodology as bench_fastvideo.py
@@ -102,6 +107,7 @@ def main() -> int:
     ap.add_argument("--vsa-sparsity", type=float, default=0.8)
     ap.add_argument("--attention", default="VIDEO_SPARSE_ATTN")
     ap.add_argument("--text-encoder-cpu-offload", action="store_true")
+    ap.add_argument("--image", help="first frame for image-to-video (Wan 2.2 TI2V: SamplingParam.image_path)")
     a = ap.parse_args()
     out = Path(a.out)
     out.mkdir(parents=True, exist_ok=True)
@@ -168,6 +174,8 @@ def main() -> int:
                     sp.num_inference_steps = a.steps
                 if a.guidance_scale is not None:
                     sp.guidance_scale = a.guidance_scale
+                if a.image:
+                    sp.image_path = str(Path(a.image).resolve())
                 t = time.perf_counter()
                 r = gen.generate_video(prompt, sampling_param=sp, output_path=str(path), save_video=True)
                 wall = time.perf_counter() - t
@@ -185,6 +193,9 @@ def main() -> int:
                     "save_s": pick(st, "save"),
                     "steps": getattr(sp, "num_inference_steps", None),
                     "guidance_scale": getattr(sp, "guidance_scale", None),
+                    "negative_prompt": getattr(sp, "negative_prompt", None),
+                    "fps": getattr(sp, "fps", None),
+                    "image_path": getattr(sp, "image_path", None),
                 }
 
             if not a.no_warmup:

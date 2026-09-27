@@ -53,6 +53,7 @@ mod report;
 mod serve;
 mod st;
 mod taehv;
+mod wan_oracle;
 mod wan_stage;
 mod writer_bench;
 

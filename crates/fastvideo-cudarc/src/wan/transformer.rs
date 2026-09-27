@@ -762,8 +762,18 @@ impl WanBlock {
     ) -> Result<CudaTensor> {
         use super::stats::phase;
         let e = cond.e;
+        // Per-frame modulation (Wan 2.2 TI2V: the first latent frame at
+        // timestep 0): `e` has one row per (batch, latent frame), and every
+        // modulated op sees the tokens as `[b·T, S/T, dim]` — time-major
+        // tokens make each frame a contiguous row block. Attention and the
+        // FFN keep `[b, S, dim]`. Both are the same buffer.
+        let b = hidden.shape[0];
+        let v = |x: &CudaTensor| mod_view(x, e);
+        let u = |x: CudaTensor| unview(x, b);
         let normed = phase("1_norm_msa", || {
-            hidden.ln_adaln_e(&e, SCALE_MSA, SHIFT_MSA, self.eps)
+            v(hidden)?
+                .ln_adaln_e(e, SCALE_MSA, SHIFT_MSA, self.eps)
+                .and_then(u)
         })?;
         let attn = phase("2_self_attn", || {
             self.attn1
@@ -773,12 +783,13 @@ impl WanBlock {
         // (wan::fuse); f32 activations keep the op chain.
         let (w2, b2) = (&self.norm2_weight, &self.norm2_bias);
         let (hidden, normed) = phase("3_residual_norm_cross", || {
-            if let Some(p) =
-                super::fuse::self_residual_norm(hidden, &attn, &e, GATE_MSA, w2, b2, self.eps)?
+            let (hv, av) = (v(hidden)?, v(&attn)?);
+            if let Some((h, n)) =
+                super::fuse::self_residual_norm(&hv, &av, e, GATE_MSA, w2, b2, self.eps)?
             {
-                return Ok(p);
+                return Ok((u(h)?, u(n)?));
             }
-            let hidden = hidden.residual_gate_add_e(&attn, &e, GATE_MSA)?;
+            let hidden = u(hv.residual_gate_add_e(&av, e, GATE_MSA)?)?;
             let normed = hidden.layer_norm(self.eps, Some(w2), Some(b2))?;
             Ok::<_, TensorError>((hidden, normed))
         })?;
@@ -787,23 +798,58 @@ impl WanBlock {
                 .forward_cross(&normed, encoder, image, cond.cross_kv)
         })?;
         let (hidden, normed) = phase("6_residual_norm_ffn", || {
-            if let Some(p) = super::fuse::cross_residual_norm_mod(
-                &hidden, &cross, &e, SCALE_FFN, SHIFT_FFN, self.eps,
-            )? {
-                return Ok(p);
+            let (hv, cv) = (v(&hidden)?, v(&cross)?);
+            if let Some((h, n)) =
+                super::fuse::cross_residual_norm_mod(&hv, &cv, e, SCALE_FFN, SHIFT_FFN, self.eps)?
+            {
+                return Ok((u(h)?, u(n)?));
             }
-            let hidden = hidden.add(&cross)?;
-            let normed = hidden.ln_adaln_e(&e, SCALE_FFN, SHIFT_FFN, self.eps)?;
-            Ok::<_, TensorError>((hidden, normed))
+            let hidden = hv.add(&cv)?;
+            let normed = hidden.ln_adaln_e(e, SCALE_FFN, SHIFT_FFN, self.eps)?;
+            Ok::<_, TensorError>((u(hidden)?, u(normed)?))
         })?;
         let ff = phase("7_ffn", || self.ffn.forward(&normed))?;
         phase("8_residual_ffn", || {
-            match super::fuse::gate_residual(&hidden, &ff, &e, GATE_FFN)? {
-                Some(h) => Ok(h),
-                None => hidden.residual_gate_add_e(&ff, &e, GATE_FFN),
+            let (hv, fv) = (v(&hidden)?, v(&ff)?);
+            match super::fuse::gate_residual(&hv, &fv, e, GATE_FFN)? {
+                Some(h) => u(h),
+                None => u(hv.residual_gate_add_e(&fv, e, GATE_FFN)?),
             }
         })
     }
+}
+
+/// `x` (`[b, S, dim]`) as `[rows, b·S/rows, dim]` for a modulation table with
+/// `rows` rows: one per batch row (the usual case: `x` itself), or one per
+/// (batch row, latent frame) under per-frame timesteps.
+fn mod_view(x: &CudaTensor, e: &CudaTensor) -> Result<CudaTensor> {
+    let [b, s, d] = x.shape[..] else {
+        return Err(TensorError::Message(format!(
+            "modulated op expects [b, S, dim], got {:?}",
+            x.shape
+        )));
+    };
+    let rows = e.shape[0];
+    if rows == b {
+        return Ok(x.clone());
+    }
+    if rows % b != 0 || (b * s) % rows != 0 {
+        return Err(TensorError::Message(format!(
+            "modulation rows {rows} do not tile {:?}",
+            x.shape
+        )));
+    }
+    x.reshape(vec![rows, b * s / rows, d])
+}
+
+/// Undo [`mod_view`]: back to `[b, S, dim]`.
+fn unview(x: CudaTensor, b: usize) -> Result<CudaTensor> {
+    if x.shape[0] == b {
+        return Ok(x);
+    }
+    let d = *x.shape.last().unwrap_or(&1);
+    let n = x.numel() / (b * d).max(1);
+    x.reshape_owned(vec![b, n, d])
 }
 
 #[derive(Debug, Clone)]
@@ -1700,7 +1746,8 @@ impl WanTransformer3D {
     }
 
     /// Time embedding, `timestep_proj` and each block's modulation for
-    /// `timestep` (`[b]`), from the cache when the same values were seen.
+    /// `timestep` (`[b]`, or `[b·T]` per latent frame), from the cache when
+    /// the same values were seen. `b` is the number of timestep values.
     fn prepare_time(
         &self,
         timestep: &CudaTensor,
@@ -1876,7 +1923,18 @@ impl WanTransformer3D {
         let _ = dim;
         // Step-invariant conditioning: cached by timestep values / encoder
         // tensor when enabled, recomputed with the same ops otherwise.
-        let time = self.prepare_time(timestep, b)?;
+        // One timestep per batch row, or (Wan 2.2 TI2V, `expand_timesteps`)
+        // one per (batch row, latent frame): the modulation then goes per
+        // frame (see `mod_view`).
+        let p0 = self.cfg.patch_size[0].max(1);
+        let n_t = timestep.numel();
+        if n_t != b && n_t != b * (t / p0) {
+            return Err(TensorError::Message(format!(
+                "timestep has {n_t} values for batch {b} and {} latent frames",
+                t / p0
+            )));
+        }
+        let time = self.prepare_time(timestep, n_t)?;
         let (temb, timestep_proj) = (&time.temb, &time.timestep_proj);
         let (encoder, text) = self.prepare_text(encoder)?;
         let cond = |layer: usize| BlockCond {
@@ -1938,6 +1996,15 @@ impl WanTransformer3D {
                 }
             }
         } else {
+            let dump_blocks = super::dump::blocks();
+            if dump_blocks {
+                super::dump::rows_strided(
+                    &super::dump::named("patch_embed"),
+                    &hidden,
+                    super::dump::BLOCK_ROW_STRIDE,
+                )?;
+                super::dump::tensor(&super::dump::named("timestep_proj"), &timestep_proj)?;
+            }
             for (layer, block) in self.blocks.iter().enumerate() {
                 hidden = block.forward(
                     &hidden,
@@ -1951,6 +2018,13 @@ impl WanTransformer3D {
                     None,
                     self.attn_plan(layer, morton_grid),
                 )?;
+                if dump_blocks {
+                    super::dump::rows_strided(
+                        &super::dump::named(&format!("block_{layer}")),
+                        &hidden,
+                        super::dump::BLOCK_ROW_STRIDE,
+                    )?;
+                }
             }
             if let Some(before) = block_in.as_ref() {
                 self.finish_sol_tea(before, &hidden)?;
@@ -1959,7 +2033,10 @@ impl WanTransformer3D {
         // Output head: table [1, 2, dim] + temb broadcast over both rows.
         let temb_rows = temb.unsqueeze(1)?;
         let e = CudaTensor::cat(&[&temb_rows, &temb_rows], 1)?.add(&self.scale_shift_table)?;
-        hidden = hidden.ln_adaln_e(&e, 1, 0, self.cfg.eps)?;
+        hidden = unview(
+            mod_view(&hidden, &e)?.ln_adaln_e(&e, 1, 0, self.cfg.eps)?,
+            b,
+        )?;
         hidden = self.proj_out.forward(&hidden)?;
         if taylor == TaylorPhase::Compute {
             self.update_taylor(&hidden)?;
@@ -2060,5 +2137,79 @@ impl WanTransformer3D {
             .permute(&[0, 5, 1, 3, 2, 4])?
             .reshape(vec![b, ppf, oc, pph * p[1], ppw * p[2]])?;
         x.permute(&[0, 2, 1, 3, 4])
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Deterministic small weights for every key the loader asks for.
+    fn generated_map() -> WeightMap {
+        WeightMap::generated(|key, shape| {
+            let n: usize = shape.iter().product();
+            let seed = key.bytes().fold(0x9e37_79b9u32, |h, b| {
+                h.rotate_left(5) ^ u32::from(b).wrapping_mul(0x0100_0193)
+            });
+            (0..n)
+                .map(|i| {
+                    let x = (i as u32).wrapping_mul(2_654_435_761).wrapping_add(seed);
+                    ((x >> 8) as f32 / (1u32 << 24) as f32 - 0.5) * 0.2
+                })
+                .collect()
+        })
+    }
+
+    fn ramp(shape: &[usize], k: f32) -> CudaTensor {
+        let n: usize = shape.iter().product();
+        CudaTensor::from_vec(
+            (0..n).map(|i| ((i as f32) * k).sin()).collect(),
+            shape.to_vec(),
+        )
+        .unwrap()
+    }
+
+    fn close(a: &CudaTensor, b: &CudaTensor) {
+        let (a, b) = (a.host_cow().unwrap(), b.host_cow().unwrap());
+        assert_eq!(a.len(), b.len());
+        let worst = a
+            .iter()
+            .zip(b.iter())
+            .map(|(x, y)| (x - y).abs())
+            .fold(0.0f32, f32::max);
+        assert!(worst < 1e-5, "max abs {worst}");
+    }
+
+    fn ts(v: Vec<f32>) -> CudaTensor {
+        let n = v.len();
+        CudaTensor::from_vec(v, vec![n]).unwrap()
+    }
+
+    /// Per-frame timesteps (Wan 2.2 TI2V `expand_timesteps`) with every frame
+    /// at the same value are the per-batch timestep: the modulation views
+    /// and the output head's must be pure re-indexing, for batch 1 and 2.
+    #[test]
+    fn per_frame_timesteps_equal_per_batch_when_uniform() {
+        let dit = WanTransformer3D::load(WanVideoArchConfig::tiny(), &generated_map()).unwrap();
+        let (t, h, w) = (3, 4, 4);
+        let lat = ramp(&[1, 4, t, h, w], 0.37);
+        let enc = ramp(&[1, 8, 16], 0.11);
+        let one = dit.forward(&lat, &ts(vec![500.0]), &enc).unwrap();
+        let frames = dit.forward(&lat, &ts(vec![500.0; t]), &enc).unwrap();
+        close(&one, &frames);
+
+        let lat2 = CudaTensor::cat(&[&lat, &lat], 0).unwrap();
+        let enc2 = CudaTensor::cat(&[&enc, &enc], 0).unwrap();
+        let two = dit.forward(&lat2, &ts(vec![500.0, 500.0]), &enc2).unwrap();
+        let two_frames = dit.forward(&lat2, &ts(vec![500.0; 2 * t]), &enc2).unwrap();
+        close(&two, &two_frames);
+        // Frame 0 at timestep 0 changes the output (the modulation reaches it).
+        let mut ti2v = vec![500.0; t];
+        ti2v[0] = 0.0;
+        let pinned = dit.forward(&lat, &ts(ti2v), &enc).unwrap();
+        let (a, b) = (one.host_cow().unwrap(), pinned.host_cow().unwrap());
+        assert!(a.iter().zip(b.iter()).any(|(x, y)| (x - y).abs() > 1e-4));
+        // A timestep count that is neither the batch nor batch x frames is refused.
+        assert!(dit.forward(&lat, &ts(vec![1.0, 2.0]), &enc).is_err());
     }
 }

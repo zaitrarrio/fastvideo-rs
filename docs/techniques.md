@@ -178,7 +178,7 @@ sink = "text"
 threshold = 0.10
 
 [kernels]                  # optional: one implementation per op
-dense_attention = "auto"   # auto | nvcc:v1 | nvcc:v2 | cudnn
+dense_attention = "auto"   # auto | nvcc:v1 | nvcc:v2 | nvcc:dc (sm 9.0 / 10.0) | cudnn
 sol_attention = "x4f"      # auto | v1 | x4 | x4f | ws (sm90+)
 vsa_attention = "auto"     # auto | gather | fused | mma | tma | tma2
 nvfp4_gemm = "cublas"      # cublas | oxide (sm_100 / sm_120 cubins)
