@@ -872,7 +872,14 @@ Fan-out: WebRTC peers (str0m) | WHIP publisher | RTMP/HLS (ffmpeg) | recorder
 - Media conversion work never runs on the executor: RGB→I420, resampling and
   encoding.
 - Encoding happens **once per session**, and the bitstream is fanned out.
-  - A PLI or FIR from any peer forces an IDR, rate-limited to one per second.
+  - A PLI or FIR from any peer is answered by a keyframe within 1 s: a
+    keyframe sent less than 1 s before it, or the periodic IDR when it is
+    due within 1 s, covers it; otherwise it forces an IDR, rate-limited to
+    one per second (`fastvideo_media::video::KeyframePolicy` for WHIP
+    streams; the Reactor runtime rate-limits PLI keyframes per codec).
+    MediaMTX asks its WebRTC publishers for a keyframe every 2 s; with the
+    2 s GOP none of those forces an IDR (a forced NVENC IDR restarts the
+    ffmpeg process).
   - This loses per-peer bitrate adaptation, which RT gets from libwebrtc. In
     return we pay for one encoder per session, not one per viewer.
   - The target bitrate is fixed by config: 6 Mb/s at 768p and 2.5 Mb/s at
@@ -1730,8 +1737,9 @@ additions and readings; everything is re-exported from the crate root.
   for the first frame, offers H.264 first (no audio m-line for video-only
   models), encodes once (`[webrtc] encoder`, default `auto`: NVENC when
   the startup probe encodes, else OpenH264, else the CPU-test x264;
-  `FV_STREAM_ENCODER` overrides), Opus stereo, forces an IDR on PLI/FIR or
-  tick drops (1/s), and sends the WHIP `DELETE` on stop or `max_seconds`.
+  `FV_STREAM_ENCODER` overrides), Opus stereo, answers PLI/FIR, tick drops
+  and send errors with a keyframe within 1 s (`KeyframePolicy`: the
+  periodic IDR when due, else a forced one, 1/s), and sends the WHIP `DELETE` on stop or `max_seconds`.
   `FV_STREAM_STUN` sets the srflx probe (`none` for loopback).
   `tests/streams_whip.rs` decodes what an in-process WHIP endpoint receives;
   `scripts/serve/whip-e2e.sh` adds MediaMTX and a WHEP viewer (CPU run
@@ -1749,7 +1757,16 @@ additions and readings; everything is re-exported from the crate root.
   underruns in 37 s of video; the 30 s RTSP recording holds 188 decodable
   frames. A `set_prompt` at block 10 switched the scene at the next block
   (autumn river → snowy dawn), with the KV cache kept. Device memory 26.0
-  GiB. Artifacts: `artifacts/serve/sfwan-whip/09272059/`.
+  GiB. Artifacts: `artifacts/serve/sfwan-whip/09272059/`. That run forced
+  19 IDRs in 37 s (`forced_idrs`; `pacer_dropped` 0 and no send errors):
+  1 at start plus MediaMTX's PLI every 2 s, each an ffmpeg restart. Fixed
+  by `KeyframePolicy` (above): on CPU (`whip-e2e.sh`, OpenH264, 16 fps)
+  the same MediaMTX PLIs went from 5 forced IDRs in 9 s to 0 (5
+  `keyframe_requests`, all `keyframe_requests_covered`). Open: the encoder
+  GOP and CBR budget use the nominal fps (16), so at L40S's ~6 fps the
+  periodic IDR comes every ~5.3 s (some PLIs still force one) and the
+  stream runs below its target bitrate (the RTSP recording averaged
+  ~1.4 Mb/s against 2.5 Mb/s).
 - Owned files: `stream/{mod,clip,queue,rules,causal,player,pace}.rs`,
   `src/cuda/causal.rs`, `tests/stream_{clip,causal}.rs`,
   `fastvideo-serve/src/streams.rs`, `fastvideo-serve/tests/streams_whip.rs`,
