@@ -624,6 +624,30 @@ case "$FAMILY" in
     sf_arm sfwan13-81f-flash 81 FASTVIDEO_WAN_CAUSAL_FLASH=1
     compare_cells sfwan13-33f-composed sfwan13-33f-flash
     gate_cells sfwan13-33f-composed sfwan13-33f-flash lossy
+    # Base Wan2.2 TI2V-5B (704x1280x121) and Wan2.1 T2V-14B (480x832x81),
+    # UniPC with guidance 5 over 12 steps (not the 50-step official recipe:
+    # an A/B of the kernel arms, same schedule on every arm). f32act is the
+    # pre-bf16 numerics; bf16act the default; mxfp8 FASTVIDEO_WAN_QUANT.
+    base_arm() {
+      local name="$1" wcell="$2" preset="$3" h="$4" w="$5" f="$6"
+      shift 6
+      gated_cell "$name" "$wcell" env "$@" \
+        "$BIN" --mode fast wan gen --weights "$W/$wcell" --preset "$preset" \
+          --unipc --steps 12 --guidance 5 --flow-shift 5 \
+          --height "$h" --width "$w" --num-frames "$f" \
+          --prompt "$PROMPT" --seed "$SEED" --warm "${PROMPT_ARGS[@]}" \
+          --clip-dir "$RUNS/$name/frames"
+    }
+    for m in "wan5b wan22-ti2v-5b wan_2_2_ti2v_5b 704 1280 121" "wan14b wan21-t2v-14b wan_t2v_14b 480 832 81"; do
+      read -r tag wcell preset h w f <<<"$m"
+      base_arm "$tag-f32act" "$wcell" "$preset" "$h" "$w" "$f" FASTVIDEO_BF16_ACT=0 FASTVIDEO_WAN_QUANT=off
+      base_arm "$tag-bf16act" "$wcell" "$preset" "$h" "$w" "$f" FASTVIDEO_BF16_ACT=1 FASTVIDEO_WAN_QUANT=off
+      base_arm "$tag-mxfp8" "$wcell" "$preset" "$h" "$w" "$f" FASTVIDEO_BF16_ACT=1 FASTVIDEO_WAN_QUANT=mxfp8
+      for arm in "$tag-bf16act" "$tag-mxfp8"; do
+        compare_cells "$tag-f32act" "$arm"
+        gate_cells "$tag-f32act" "$arm" lossy
+      done
+    done
     ;;
   b200)
     # Warm B200 parity: H3 / FastH3 / LTX only. Official VAE stays the

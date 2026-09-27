@@ -206,19 +206,24 @@ pub fn wan_causal_attn(report: &mut Report, seed: &mut u64) -> StageResult<()> {
             json!({"max_abs": e_comp, "composed_vs_f64": max_abs(&host(&composed)?, &want)}),
             json!({"max_abs": CAUSAL_ABS_LIMIT}),
         )?;
-        // The routed entry point (bf16 activations) returns the same bytes.
-        let routed = with_bf16_act(true, || nn::sdpa_block_causal(&q16, &k16, &v16, None, mask))?;
-        let got16 = need(
-            attn::device_mma_sdpa_causal(&q16, &k16, &v16, None, true, mask)?,
-            "causal flash bf16",
-        )?;
-        check_ulps(
-            report,
-            &format!("{tag}_routed_bf16"),
-            &host(&routed)?,
-            &host(&got16)?,
-            true,
-        )?;
+        // The routed entry point (bf16 activations) returns the kernel's bytes
+        // where the fused kernels are the default (bf16 GEMM math, `--mode
+        // fast`); in an exact-math context it takes the composed fallback.
+        if attn::mma_sdpa_default() {
+            let routed =
+                with_bf16_act(true, || nn::sdpa_block_causal(&q16, &k16, &v16, None, mask))?;
+            let got16 = need(
+                attn::device_mma_sdpa_causal(&q16, &k16, &v16, None, true, mask)?,
+                "causal flash bf16",
+            )?;
+            check_ulps(
+                report,
+                &format!("{tag}_routed_bf16"),
+                &host(&routed)?,
+                &host(&got16)?,
+                true,
+            )?;
+        }
     }
 
     // One frame spanning the sequence: no score is masked and the walk is
