@@ -104,6 +104,17 @@ text says **native**.
    `fv_r2_endpoint`, `fv_r2_access_key_id` / `fv_r2_secret_access_key` (R2 S3
    keys derived from the API token: id / SHA-256 of the value). Vast: same
    names as account env vars once a Vast API key is available.
+   **Runtime env names (as implemented, WP-10):** `fv-serve` reads the
+   UPPERCASE variables `FV_CF_ACCOUNT_ID`, `FV_CF_API_TOKEN`,
+   `FV_D1_DATABASE_ID`, `FV_R2_BUCKET`, `FV_R2_ENDPOINT`,
+   `FV_R2_ACCESS_KEY_ID`, `FV_R2_SECRET_ACCESS_KEY` (the lower-case spelling
+   is accepted as a fallback). Vast: account env vars under exactly these
+   uppercase names (Vast injects them). Runpod: the secrets keep their
+   lower-case names and the template maps them, e.g.
+   `FV_CF_API_TOKEN={{ RUNPOD_SECRET_fv_cf_api_token }}`, one line per
+   variable (`configs/serve/runpod.toml` lists all seven). With all D1
+   values set, `jobs.backend = "auto"` selects D1; with all R2 values set,
+   `artifacts.backend = "auto"` selects R2 (region `auto`, path-style).
 
 ## 1. Goals and non-goals
 
@@ -1279,8 +1290,16 @@ are always open.
   5. The Runpod worker posts job-done `{error}` for anything unfinished.
 - **Secrets** come only from env: `FV_API_KEYS`, `FV_URL_SIGNING_KEY`,
   `FV_WEBHOOK_ED25519_KEY`, `FV_S3_*`, `FV_WHIP_TOKEN` and `HF_TOKEN`.
-  - Runpod: `{{ RUNPOD_SECRET_x }}`.
-  - Vast: account env vars.
+  - Runpod: `{{ RUNPOD_SECRET_x }}`; the Cloudflare set is mapped as
+    `FV_CF_ACCOUNT_ID={{ RUNPOD_SECRET_fv_cf_account_id }}`,
+    `FV_CF_API_TOKEN={{ RUNPOD_SECRET_fv_cf_api_token }}`,
+    `FV_D1_DATABASE_ID={{ RUNPOD_SECRET_fv_d1_database_id }}`,
+    `FV_R2_BUCKET={{ RUNPOD_SECRET_fv_r2_bucket }}`,
+    `FV_R2_ENDPOINT={{ RUNPOD_SECRET_fv_r2_endpoint }}`,
+    `FV_R2_ACCESS_KEY_ID={{ RUNPOD_SECRET_fv_r2_access_key_id }}`,
+    `FV_R2_SECRET_ACCESS_KEY={{ RUNPOD_SECRET_fv_r2_secret_access_key }}`
+    (§0 decision 7).
+  - Vast: account env vars (the same uppercase names).
   - Never passed in onstart text, and never logged. The config loader
     redacts them.
 

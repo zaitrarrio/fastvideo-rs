@@ -12,6 +12,7 @@
 //!   per-API limits, an SSRF guard and probing hooks.
 //! - [`callback`]: MiniMax callbacks (challenge echo) and fal webhooks
 //!   (Ed25519) with retry schedules.
+//! - [`d1`]: [`D1JobStore`], the Cloudflare D1 job store (design §0.7).
 //! - [`sse`]: server-sent events from an `SseSpec`.
 //! - [`handlers`]: `HttpReply` -> axum response, and the generic
 //!   `submit`/`status`/`result` handlers.
@@ -26,6 +27,7 @@ pub mod artifacts;
 pub mod auth;
 pub mod callback;
 pub mod ctx;
+pub mod d1;
 pub mod events;
 pub mod handlers;
 pub mod ingest;
@@ -40,6 +42,7 @@ pub use artifacts::{
 };
 pub use auth::{Auth, AuthMode, AuthPolicy, KeyRing, Scheme};
 pub use callback::{CallbackRender, CallbackSender, Delivery, RetrySchedule, WebhookSigner};
+pub use d1::{D1Client, D1Config, D1JobStore, D1Options};
 pub use ctx::{EngineGate, SafetyFilter, ServeConfig, ServeCtx};
 pub use events::{apply_event, FinishedOutput, JobEvent};
 pub use handlers::{into_response, SubmitOpts};

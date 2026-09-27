@@ -31,14 +31,19 @@ url.workspace = true
 uuid.workspace = true
 
 reqwest = { workspace = true, optional = true }
+# SQLite behind the D1 HTTP API mock (feature `d1-mock`; always in tests).
+rusqlite = { version = "0.37", features = ["bundled"], optional = true }
 
 [dev-dependencies]
+rusqlite = { version = "0.37", features = ["bundled"] }
 tokio = { workspace = true, features = ["macros", "rt-multi-thread", "test-util"] }
 
 [features]
 default = []
 # Outbound HTTP: media fetch, MiniMax callbacks, fal webhooks, S3 uploads.
 fetch = ["dep:reqwest"]
+# `d1::mock::MockD1`: a SQLite-backed D1 HTTP API for other crates' tests.
+d1-mock = ["dep:rusqlite"]
 
 [lints]
 workspace = true
