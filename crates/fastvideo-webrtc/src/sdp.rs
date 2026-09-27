@@ -155,6 +155,11 @@ impl RtpCodec {
     pub fn is_opus(&self) -> bool {
         self.is("opus") && self.clock_rate == 48_000
     }
+
+    /// VP8 at the 90 kHz video clock (no format parameters to match).
+    pub fn is_vp8(&self) -> bool {
+        self.is("VP8") && self.clock_rate == 90_000
+    }
 }
 
 /// One m-section: the `m=` line and every line after it up to the next `m=`.
@@ -654,6 +659,16 @@ pub struct OfferRequirements {
 
 /// Validate an offer (client → us) and summarise it.
 pub fn validate_offer(sdp: &Sdp, req: OfferRequirements) -> Result<OfferSummary, SdpError> {
+    validate_offer_with(sdp, req, false)
+}
+
+/// [`validate_offer`], where VP8 also satisfies the video requirement when
+/// `vp8_ok` (answers that can send VP8, `AnswerOptions::video_codecs`).
+pub fn validate_offer_with(
+    sdp: &Sdp,
+    req: OfferRequirements,
+    vp8_ok: bool,
+) -> Result<OfferSummary, SdpError> {
     if sdp.media.is_empty() {
         return Err(SdpError::NoMedia);
     }
@@ -693,11 +708,20 @@ pub fn validate_offer(sdp: &Sdp, req: OfferRequirements) -> Result<OfferSummary,
             .iter()
             .filter(move |m| m.kind == k && m.offerer_receives())
     };
-    if req.video && !recv(MediaKind::Video).any(|m| m.codecs.iter().any(RtpCodec::is_sendable_h264))
+    if req.video
+        && !recv(MediaKind::Video).any(|m| {
+            m.codecs
+                .iter()
+                .any(|c| c.is_sendable_h264() || (vp8_ok && c.is_vp8()))
+        })
     {
         return Err(SdpError::NoCommonCodec(
             "video",
-            "H.264 constrained baseline, packetization-mode=1",
+            if vp8_ok {
+                "H.264 constrained baseline (packetization-mode=1) or VP8"
+            } else {
+                "H.264 constrained baseline, packetization-mode=1"
+            },
         ));
     }
     if req.audio && !recv(MediaKind::Audio).any(|m| m.codecs.iter().any(RtpCodec::is_opus)) {
