@@ -33,6 +33,7 @@ mod kernels_fuse;
 mod kernels_wan;
 mod llm_oracle;
 mod lpips;
+mod mmaudio_stage;
 mod ltx2_stage;
 #[cfg(feature = "cuda")]
 mod mathprobe;
@@ -298,6 +299,11 @@ enum Cmd {
         #[command(subcommand)]
         stage: hunyuan15_stage::Stage,
     },
+    /// MMAudio stages (see `mmaudio_stage.rs`).
+    Mmaudio {
+        #[command(subcommand)]
+        stage: mmaudio_stage::Stage,
+    },
     /// Wan 2.1 / FastWan stages (see `wan_stage.rs`).
     Wan {
         #[command(subcommand)]
@@ -539,6 +545,7 @@ fn stage_name(cmd: &Cmd) -> &'static str {
         Cmd::Ltx2 { .. } => "ltx2",
         Cmd::Hunyuan { .. } => "hunyuan",
         Cmd::Wan { .. } => "wan",
+        Cmd::Mmaudio { .. } => "mmaudio",
         Cmd::Llm { .. } => "llm",
         Cmd::Compare { .. } => "compare",
         Cmd::CompareClips { .. } => "compare-clips",
@@ -668,6 +675,7 @@ fn run(cli: &Cli, report: &mut Report) -> StageResult<()> {
         Cmd::Ltx2 { stage } => ltx2_stage::run(report, stage),
         Cmd::Hunyuan { stage } => hunyuan15_stage::run(report, stage),
         Cmd::Wan { stage } => wan_stage::run(report, stage),
+        Cmd::Mmaudio { stage } => mmaudio_stage::run(report, stage),
         Cmd::Llm {
             weights,
             family,

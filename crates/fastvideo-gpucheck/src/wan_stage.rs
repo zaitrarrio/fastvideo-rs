@@ -82,6 +82,11 @@ pub enum Stage {
         image: Option<PathBuf>,
         #[arg(long, default_value = "cuda")]
         device: String,
+        /// Audio sidecar after the video: `none` or `mmaudio` (MMAudio
+        /// large-44k-v2 V2A on the finished mp4, muxed in as AAC; weights
+        /// from FASTVIDEO_MMAUDIO_WEIGHTS or $FV_WEIGHTS/mmaudio-44k-v2).
+        #[arg(long, default_value = "none")]
+        audio: String,
     },
     /// Wan 2.2 TI2V-5B module parity against a reference dump
     /// (`scripts/gpu/upstream/oracle_wan22.py`, Diffusers): VAE encode and
@@ -141,7 +146,13 @@ pub fn run(report: &mut Report, stage: &Stage) -> StageResult<()> {
             no_text_cache,
             image,
             device,
+            audio,
         } => {
+            match audio.as_str() {
+                "none" => {}
+                "mmaudio" => std::env::set_var("FASTVIDEO_WAN_AUDIO", "mmaudio"),
+                other => return Err(anyhow::anyhow!("--audio {other}: want none or mmaudio").into()),
+            }
             if *full_vae {
                 std::env::set_var("FASTVIDEO_WAN_VAE", "full");
             }
@@ -290,6 +301,34 @@ fn timings_json(out: &WanOutput, total: f64) -> serde_json::Value {
         "video_encode_s": t.encode_s,
         "write_s": t.write_s,
         "decoder": out.decoder,
+        "audio_s": t.audio_s,
+        "audio_generate_s": t.audio_generate_s,
+    })
+}
+
+/// The sidecar's split (strobe's #83 fields): `video_s` is everything but
+/// the audio stage, `audio_rtf` MMAudio's generate time over the clip length.
+fn audio_json(out: &WanOutput, total: f64, frames: usize, fps: u32) -> serde_json::Value {
+    let t = &out.timings;
+    if t.audio_s == 0.0 {
+        return json!({"audio": false});
+    }
+    let clip_s = frames as f64 / f64::from(fps.max(1));
+    let video_s = total - t.audio_s;
+    json!({
+        "audio": true,
+        "audio_path": "sidecar",
+        "audio_codec": "mmaudio",
+        "variant": "large_44k_v2",
+        "clip_s": clip_s,
+        "audio_clip_s": t.audio_clip_s,
+        "video_s": video_s,
+        "audio_s": t.audio_generate_s,
+        "audio_stage_s": t.audio_s,
+        "video_rtf": video_s / clip_s,
+        "audio_rtf": t.audio_generate_s / clip_s,
+        "e2e_s": total,
+        "e2e_rtf": total / clip_s,
     })
 }
 
@@ -313,7 +352,15 @@ fn gen(report: &mut Report, a: &GenArgs<'_>) -> StageResult<()> {
     let timer = std::time::Instant::now();
     let pipe = WanPipeline::load_with(a.weights, a.preset, LoadParts { text_encoder: true })
         .map_err(|e| anyhow::anyhow!("load {}: {e}", a.weights.display()))?;
-    let load_s = timer.elapsed().as_secs_f64();
+    let mut load_s = timer.elapsed().as_secs_f64();
+    if fastvideo_cudarc::mmaudio::sidecar::requested() {
+        let t = std::time::Instant::now();
+        fastvideo_cudarc::mmaudio::sidecar::shared()
+            .map_err(|e| anyhow::anyhow!("load MMAudio: {e}"))?;
+        let s = t.elapsed().as_secs_f64();
+        report.note("load_mmaudio", json!({"seconds": s}));
+        load_s += s;
+    }
     report.note(
         "load",
         json!({"seconds": load_s, "mem_used_mib": crate::gpu::mem_info().map(|(f, t)| (t - f) >> 20)}),
@@ -421,6 +468,7 @@ fn gen(report: &mut Report, a: &GenArgs<'_>) -> StageResult<()> {
             "peak_memory_mb": peak_mib,
             "max_device_memory_used_mib": peak_mib,
             "frames_sha256": digest,
+            "audio": audio_json(&out, total, a.base.num_frames, a.base.fps),
         });
         let doc = crate::benchmark::merge(crate::benchmark::common("wan", a.warm), doc);
         docs.push((spec.clone(), crate::benchmark::merge(doc, counters)));

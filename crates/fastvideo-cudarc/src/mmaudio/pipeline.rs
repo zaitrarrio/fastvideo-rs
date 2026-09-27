@@ -194,8 +194,16 @@ fn dump_host(name: &str, shape: &[usize], data: &[f32]) -> Result<()> {
     dump::host(name, shape, data).map_err(Into::into)
 }
 
-fn inject_mode() -> String {
-    std::env::var("FASTVIDEO_MMAUDIO_INJECT").unwrap_or_default()
+/// `FASTVIDEO_MMAUDIO_INJECT`: comma-separated stages whose reference inputs
+/// replace ours: `pixels` (the preprocessed frames), `features` (CLIP, sync
+/// and text features), `x1` (the sampled latent, for the VAE) and `mel`
+/// (the reference's f32 decode `mm_mel_f32`, for the vocoder).
+fn inject_on(stage: &str) -> bool {
+    inject::enabled()
+        && std::env::var("FASTVIDEO_MMAUDIO_INJECT")
+            .unwrap_or_default()
+            .split(',')
+            .any(|s| s.trim() == stage)
 }
 
 impl MmAudioPipeline {
@@ -247,7 +255,6 @@ impl MmAudioPipeline {
         let t_all = Instant::now();
         let mut tm = MmAudioTimings::default();
         let dcfg = &self.cfg.dit;
-        let mode = inject_mode();
 
         // Frames -> the two pixel streams (host).
         let t0 = Instant::now();
@@ -273,7 +280,7 @@ impl MmAudioPipeline {
                 dump_host("mm_sync_pixels", &[*ts, 3, ss, ss], sp)?;
                 let mut cpx = CudaTensor::from_vec(cp.clone(), vec![*tc, 3, cs, cs])?;
                 let mut spx = CudaTensor::from_vec(sp.clone(), vec![*ts, 3, ss, ss])?;
-                if mode == "pixels" {
+                if inject_on("pixels") {
                     if let Some(t) = Self::injected("mm_clip_pixels", vec![*tc, 3, cs, cs])? {
                         cpx = t;
                     }
@@ -312,7 +319,7 @@ impl MmAudioPipeline {
         dump::tensor("mm_text_f", &text_f)?;
         dump::tensor("mm_neg_text_f", &neg_f)?;
         let (mut clip_f, mut sync_f) = (clip_f, sync_f);
-        if mode == "features" {
+        if inject_on("features") {
             let td = dcfg.text_dim;
             if let Some(t) = Self::injected("mm_clip_f", vec![1, nc, dcfg.clip_dim])? {
                 clip_f = t;
@@ -385,7 +392,7 @@ impl MmAudioPipeline {
             dump_host(&format!("mm_x_step{i:02}"), &[1, nl, ld], &x)?;
         }
         // unnormalize (bf16, in place upstream).
-        let x1: Vec<f32> = x
+        let mut x1: Vec<f32> = x
             .iter()
             .enumerate()
             .map(|(i, &v)| {
@@ -394,14 +401,24 @@ impl MmAudioPipeline {
             })
             .collect();
         dump_host("mm_x1", &[1, nl, ld], &x1)?;
+        if inject_on("x1") {
+            if let Some(v) = inject::load_numel("mm_x1", n)? {
+                x1 = v;
+            }
+        }
         tm.dit_s = t4.elapsed().as_secs_f64();
 
         let t5 = Instant::now();
         let z = CudaTensor::from_vec(x1, vec![1, nl, ld])?.transpose(1, 2)?;
-        let mel = self.vae.decode(&z)?;
+        let mut mel = self.vae.decode(&z)?;
         sync()?;
         tm.vae_s = t5.elapsed().as_secs_f64();
         dump::tensor("mm_mel", &mel)?;
+        if inject_on("mel") {
+            if let Some(t) = Self::injected("mm_mel_f32", mel.shape.clone())? {
+                mel = t;
+            }
+        }
         let t6 = Instant::now();
         let wav = self.vocoder.forward(&mel)?;
         let waveform = wav.host_cow()?.into_owned();
