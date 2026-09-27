@@ -224,12 +224,30 @@ impl App {
         let ctx = builder.build().await.context("building the serve context")?;
         gate.attach(ctx.clone());
 
-        // Streaming front-ends that own sockets (Reactor: the WebRTC host).
+        // Streaming front-ends that own sockets answer offers on one shared
+        // WebRTC host (the Reactor runtime, the fal director): they share
+        // the `[webrtc]` ports.
+        #[cfg(any(feature = "reactor", all(feature = "fal", feature = "webrtc")))]
+        let rtc_host = {
+            let reactor_on = cfg!(feature = "reactor") && config.protocols.reactor;
+            let director_on = cfg!(all(feature = "fal", feature = "webrtc")) && config.protocols.fal && config.protocols.fal_director;
+            if reactor_on || director_on {
+                match crate::rtc::bind(&config).await {
+                    Ok(h) => Some(h),
+                    Err(e) => {
+                        tracing::error!(error = %format!("{e:#}"), "no WebRTC host: the Reactor runtime and the fal director are not mounted");
+                        None
+                    }
+                }
+            } else {
+                None
+            }
+        };
         #[allow(unused_mut)]
         let mut streams = Router::new();
         #[cfg(feature = "reactor")]
-        let reactor = if config.protocols.reactor {
-            match crate::reactor::build(&config, gate.engine()).await {
+        let reactor = match (&rtc_host, config.protocols.reactor) {
+            (Some(host), true) => match crate::reactor::build_on(&config, gate.engine(), host.clone()) {
                 Ok(r) => {
                     streams = streams.merge(fastvideo_reactor::router(r.clone()));
                     Some(r)
@@ -238,11 +256,17 @@ impl App {
                     tracing::error!(error = %format!("{e:#}"), "the Reactor runtime is not mounted");
                     None
                 }
-            }
-        } else {
-            None
+            },
+            _ => None,
         };
-        let mut router = assemble(&config, &ctx, &gate, jobs_kind, streams);
+        #[allow(unused_mut)]
+        let mut fal_extra: Router<ServeCtx> = Router::new();
+        #[cfg(all(feature = "fal", feature = "webrtc"))]
+        if let (Some(host), true) = (&rtc_host, config.protocols.fal && config.protocols.fal_director) {
+            let svc = crate::director::build(&config, &mcfg, gate.engine().clone(), host.clone());
+            fal_extra = fastvideo_fal::director::routes(svc);
+        }
+        let mut router = assemble(&config, &ctx, &gate, jobs_kind, streams, fal_extra);
         if config.server.forward {
             let ready = Arc::new(std::sync::OnceLock::new());
             let h = fastvideo_deploy::dispatch::RouterHandler::new(router.clone()).with_info(crate::deploy::info_fn(
@@ -336,13 +360,15 @@ pub fn mount_cfg(config: &Config) -> MountCfg {
 /// The full router: health + serve-kit files/uploads + native + adapters,
 /// with request metrics and tracing.
 /// `streams` carries the streaming front-ends that are built with their own
-/// state (the Reactor runtime).
+/// state (the Reactor runtime); `fal_extra` goes into the fal router (the
+/// director's routes, so `/fal/proxy` reaches them).
 pub fn assemble(
     config: &Config,
     ctx: &ServeCtx,
     gate: &Arc<ServiceGate>,
     jobs_kind: &'static str,
     streams: Router,
+    fal_extra: Router<ServeCtx>,
 ) -> Router {
     let mcfg = mount_cfg(config);
     let mut kit: Router<ServeCtx> = ctx.routes();
@@ -350,7 +376,7 @@ pub fn assemble(
         kit = kit.merge(native::routes(gate.clone(), mcfg.body_max, mcfg.sync_timeout));
         kit = kit.merge(crate::streams::routes(gate.clone(), crate::streams::StreamsConfig::from_config(config)));
     }
-    let (adapters, stateful) = adapters::mount(&mcfg, ctx);
+    let (adapters, stateful) = adapters::mount(&mcfg, ctx, fal_extra);
     kit = kit.merge(adapters);
     let artifacts_kind = match config.artifact_backend() {
         ArtifactBackend::S3 => "s3",

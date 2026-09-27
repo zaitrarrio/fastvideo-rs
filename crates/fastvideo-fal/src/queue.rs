@@ -310,7 +310,7 @@ async fn queued_for(ctx: &ServeCtx, app: &str) -> usize {
 
 /// Resolves the app's model: its name through the engine's aliases and
 /// served names, else its tier (design §0.3).
-fn resolve_app_model(ctx: &ServeCtx, app: &FalApp) -> Result<String, ApiError> {
+pub(crate) fn resolve_app_model(ctx: &ServeCtx, app: &FalApp) -> Result<String, ApiError> {
     let models = ctx.engine().models();
     let engine = ctx.engine().clone();
     let by_name = fastvideo_protocol::resolve_model(&app.model, |n| engine.alias(n), &models).map(|c| c.id.0.clone());

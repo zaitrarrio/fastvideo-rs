@@ -58,10 +58,10 @@ default = ["openai-videos", "minimax", "ltxapi", "fal", "reactor"]
 fake = []
 # CudaBackend over fastvideo-cudarc (the only path to CUDA).
 cuda = ["fastvideo-engine-service/cuda"]
-# str0m peer host for Reactor and the fal director.
-webrtc = ["fastvideo-webrtc/str0m"]
+# str0m peer host for Reactor and the fal director (the director also needs `fal`).
+webrtc = ["fastvideo-webrtc/str0m", "fastvideo-media/opus", "fastvideo-fal?/director"]
 # In-process OpenH264 and Opus encoders.
-encoders = ["fastvideo-media/openh264", "fastvideo-media/opus"]
+encoders = ["fastvideo-media/openh264", "fastvideo-media/opus", "fastvideo-fal?/openh264"]
 # Outbound HTTP: ingestion fetch, callbacks, webhooks, S3/R2 uploads, the
 # Cloudflare D1 job store, WHIP, Runpod worker.
 http-client = ["fastvideo-serve-kit/fetch", "fastvideo-webrtc/whip", "fastvideo-deploy/runpod"]
