@@ -175,6 +175,66 @@ Findings:
 
 ---
 
+## NVFP4 video FFN (`FASTVIDEO_NVFP4`, profile `ltx2/ltx25_distill_sol_nvfp4`)
+
+sol-engine `transforms/nvfp4_ffn.py`: TransformerEngine's NVFP4 GEMM on the
+video feed-forward only (`transformer_blocks.*.ff.net.{0.proj,2}`, 48 x 2
+linears, 4096 → 16384 → 4096), RHT and stochastic rounding off, rows padded
+to 16, bf16 fallback. Default off.
+
+- **GEMM**: cuBLASLt block-scaled FP4 (`CUDA_R_4F_E2M1` A/B,
+  `CUBLASLT_MATMUL_MATRIX_SCALE_VEC16_UE4M3`, f32 compute, bf16 D, bias in
+  the epilogue), TN with the weight as A. `alpha = decode(x) · decode(w)`
+  (`amax / (6 · 448)` each) is computed on the device and read with
+  `CUBLASLT_POINTER_MODE_DEVICE`, so a call never synchronizes. Descriptors
+  and the heuristic's algorithm are cached per shape
+  (`wan/nvfp4_linear.rs`). cudarc 0.17.8 already binds every enum needed.
+- **Weights**: the loaded bf16 weights are quantized once with the TE
+  `NVFP4BlockScaling` rule (`static_6`: tensor amax, E4M3 scale per 16
+  elements) and the bf16 copies dropped: 72 MiB per block instead of
+  256 MiB (about 8.6 GiB less on the DiT). The NVFP4 FFN stays resident
+  when the other block weights stream.
+- **Activations**: `nvfp4_amax_bf16` then `nvfp4_quant_bf16_sw` write packed
+  E2M1 and the scales directly in cuBLASLt's 128x4 tiled layout
+  (`to_blocked`: tile `(r/128)·(K/64) + c/4`, byte `(r%32)·16 + (r%128/32)·4
+  + c%4`), no swizzle pass. The down projection's quantizer reads
+  `bf16(gelu_tanh(h))`, so the GELU output is never written. The FFN input
+  comes out of the fused norm/modulate kernel (`fuse::res_norm_mod`) in
+  bf16; its amax needs one extra read (a fused amax would need a delayed
+  scale, which TE's current-scaling recipe does not use).
+- **Scope**: an LTX process takes `FASTVIDEO_NVFP4` as this scope only; the
+  LongLive dequant-beforehand path (every eligible linear, K/V) is off in
+  it. `mse` has no tensor-core form and keeps the bf16 FFN (logged).
+- sol-engine's RTX5090 pre-quantized checkpoint (`gpu_infer.py`) is not on
+  the weight volume (`fv-weights-h3-ltx-hy`), so it is not loaded; the same
+  scope is quantized at load instead.
+
+**Parity** (`fv-gpucheck kernels`, group `nvfp4_linear`, RTX PRO 6000, run
+`600c38f-09271221`): the operand quantizer's codes and swizzled scales equal
+the host TE reference bit for bit (plain and GELU; 300 rows, pads zero);
+the linear matches the exact dequantized host math (f64) at rel_l2 1.66e-3
+(bf16 output rounding; m = 300, bias in the epilogue); output vs the dense
+bf16 linear 37.6-40.9 dB PSNR, 37.8 dB at the FFN up shape (rel_l2 0.145,
+the FP4 quantization itself).
+
+**Microbench** (ms, RTX PRO 6000, the shapes the pipeline runs: stage 1
+whole, stage 2 in 16 384-row chunks). "linear" = activation quantize + GEMM
++ bias; bf16 linear = cuBLASLt bf16 with the bias epilogue; FP8 = the W8A8
+tensorwise linear (`FASTVIDEO_FP8`, activation quantize included, no bias).
+
+| shape (M, K → N) | bf16 GEMM | bf16 linear | FP8 linear | NVFP4 GEMM | NVFP4 linear | vs bf16 linear |
+|---|---|---|---|---|---|---|
+| 4K stage 1 up (32640, 4096 → 16384) | 10.82 | 10.50 | 6.30 | 3.09 | 3.87 | 2.72x |
+| 1080p stage 1 up (32130, 4096 → 16384) | 10.33 | 10.49 | 6.24 | 3.06 | 3.83 | 2.74x |
+| stage 2 chunk up (16384, 4096 → 16384) | 5.29 | 5.36 | 3.19 | 1.45 | 1.85 | 2.90x |
+| 4K stage 2 whole up (130560, 4096 → 16384) | 46.07 | 46.18 | 26.04 | 11.89 | 14.59 | 3.17x |
+| 4K stage 1 down (32640, 16384 → 4096), GEMM only | 10.10 | | | 2.75 | | 3.67x (GEMM) |
+
+The down-projection linear rows (GELU pass included) failed in that run on a
+harness bug (the bf16 baseline's GELU came back f32); the GEMM-only row is
+from the `nvfp4_gemm` group (run `36ce5a2-09271149`). An unaligned token
+count (32130) runs unpadded.
+
 ## DiffVAE (diffusion video decoder)
 
 Opt-in replacement for the **video** conv VAE decoder

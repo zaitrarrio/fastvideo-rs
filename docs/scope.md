@@ -237,6 +237,21 @@ Hunyuan Diffusers keys do not match `Hunyuan15.*`; Wan 1.3B not on the volume.
 
 NVFP4 (`FASTVIDEO_NVFP4=1` → TE `static_6`; `mse` / `4o6` stay FourOverSix)
 dequantizes W4A4 on device when a CUDA context is live (`nvfp4_reconstruct`).
+**LTX-2 is the exception:** there `FASTVIDEO_NVFP4` (profile
+`ltx2/ltx25_distill_sol_nvfp4`, default off) is sol-engine's `nvfp4_ffn.py`
+scope, a real W4A4 GEMM on the 48 video FFNs only: cuBLASLt block-scaled
+FP4 (`CUDA_R_4F_E2M1`, `VEC16_UE4M3` scales in the 128x4 tiled layout,
+device alpha, bf16 out, bias epilogue; `wan/nvfp4_linear.rs`), weights
+quantized at load and activations per call with the TE rule, the FFN's GELU
+fused into the down projection's quantizer, RHT / stochastic rounding off,
+rows padded to 16, bf16 fallback below sm_100. Audio FFN, attention, Gemma
+and every other linear stay bf16, and the LongLive dequant / K/V path is off
+in an LTX process. RTX PRO 6000 (`fv-gpucheck kernels`, group
+`nvfp4_linear`): the up projection's whole linear (quantize + GEMM + bias)
+is 2.7-3.2x the bf16 linear (4K stage 1: 3.87 vs 10.50 ms; stage-2 chunk
+1.85 vs 5.36 ms), the GEMM alone ~3.5-4x; output PSNR vs bf16 37.8 dB.
+sol-engine's pre-quantized RTX5090 checkpoint is not on our volume, so it is
+not loaded.
 The Tile-IR W4A4 GEMM stays off (`FASTVIDEO_NVFP4_OXIDE_GEMM`) until it beats
 cuBLAS bf16 on the H3 FFN shape and PSNR ≥ 30 dB vs bf16. CUTLASS
 SM100/SM120, Blackwell `to_blocked`, RHT, 2D block scales, and stochastic
@@ -284,7 +299,7 @@ Weights: `--weights`, `FASTVIDEO_WEIGHTS`, or the Hugging Face snapshot.
 | `FASTVIDEO_HUNYUAN15_SOL` | Logs the 13B TeaCache gap and stays dense |
 | `FASTVIDEO_LINGBOT_OFFICIAL` | 832×480 / 121f / 40-step canvas |
 | `FASTVIDEO_LINGBOT_SOL` | Logs the unspecified cache/PISA/topology gap and stays dense |
-| `FASTVIDEO_NVFP4` | W4A4 dequant (`1` → `static_6`; `mse` for FourOverSix) |
+| `FASTVIDEO_NVFP4` | W4A4 dequant (`1` → `static_6`; `mse` for FourOverSix). LTX-2: the video FFN on NVFP4 tensor cores (`static_6` / `static_4`) |
 | `FASTVIDEO_BF16` | cuBLAS tf32/bf16 compute. On unless set to `0` |
 | `FASTVIDEO_BF16_ACT` | DiT activations (and residual) as bf16, as the reference runs them. On by default for H3, LTX-2 and Wan on a GPU (Wan's UMT5 and VAE stay f32, FastVideo's fp32 precisions); `0` restores f32, `1` forces bf16 for every model. CPU runs keep f32. FastWan 1.3B 480x832x81 on RTX PRO 6000: denoise 2.50 → 1.96 s, LPIPS 0.107 vs f32 (see [ports/wan.md](ports/wan.md)) |
 | `FASTVIDEO_H3_QUANT` | H3 FP8 linear recipe: `mxfp8` (Sol-H3, the default on sm_100+ GPUs), `w8a8` (FastVideo) or `off` (bf16) |

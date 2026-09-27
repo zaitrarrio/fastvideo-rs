@@ -2,6 +2,16 @@
 
 Project code: FVID
 
+### FVID · 2026-09-27 · FVID-2026-09-27-ltx-nvfp4-ffn-cublaslt
+- Trigger: `FASTVIDEO_NVFP4` dequantized to bf16 at load (no speedup); our scalar W4A4 kernel was 38x slower than bf16; sol-engine runs TE's NVFP4 GEMM on the LTX video FFN (`nvfp4_ffn.py`)
+- Options: oxide Tile-IR cubins (1.4-2.3x bf16 at the FFN shapes); cuBLASLt block-scaled FP4 (`VEC16_UE4M3`); a hand-written CUTLASS-style kernel; load sol-engine's pre-quantized RTX5090 checkpoint
+- Decision: **cuBLASLt block-scaled FP4 on the LTX-2 video FFN only** (`wan/nvfp4_linear.rs`): weights quantized at load and activations per call with the TE `static_6` rule straight into cuBLASLt's layout (scales pre-swizzled, rows padded to 16), GELU fused into the down projection's quantizer, alpha on the device (pointer mode device), bias epilogue, RHT / SR off, bf16 fallback below sm_100 or for `mse`. An LTX process takes `FASTVIDEO_NVFP4` as this scope only (LongLive dequant / K/V path off there). Profile `ltx2/ltx25_distill_sol_nvfp4`, default off. Pre-quantized checkpoint not loaded: it is not on `fv-weights-h3-ltx-hy`.
+- Reason: RTX PRO 6000 cuBLASLt NVFP4 GEMM 3.5-4.0x bf16 (1.48-1.66 PFLOPS) vs oxide 1.4-2.3x; whole linear incl. activation quantize 2.7-3.2x the bf16 linear; codes / scales bit-identical to the host TE reference, GEMM at bf16-rounding distance from the exact dequantized math
+- Reversibility: cheap — profile / env opt-in; bf16 path unchanged when off
+- Executed by: Executor
+- ADR: none
+- Verification: **kernels pass** (`fv-gpucheck kernels`, groups `nvfp4_gemm` / `nvfp4_linear`, runs `36ce5a2-09271149`, `600c38f-09271221`): operand quantizer 0 mismatches (plain, GELU), linear rel_l2 1.66e-3 vs exact, 37.8 dB vs bf16 at the FFN up shape. LTX-2.5 4k5s / 1080p20s generations (`runpod-matrix.sh precision`, `FV_PRECISION_ARM=ltx-nvfp4`) not yet run: pod creation paused on a low Runpod balance.
+
 ### FVID · 2026-09-26 · FVID-2026-09-26-attention-phase3b
 - Trigger: LTX-2.5 1080p 20 s Sol stage 2 1.15x slower than sol-engine; dense flash the largest H3 kernel; VSA 1.34x vs FastVideo's 1.49x
 - Options: warp-specialised Sol + KV splits (as asked); mirror sol-engine's sm120 kernel (`sol_attn/sm120/mainloop.py`: 4 MMA warps, warp 0 issues TMA, STAGES=1, kv_splits=1 — splits are sm90-only, `interface.py:114-116`); cuDNN fused SDPA for dense; FA2-style 128-query dense; smaller VSA smem
