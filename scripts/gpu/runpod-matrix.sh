@@ -17,7 +17,7 @@
 #   gate_cells: fv-gpucheck gate with scripts/gpu/gate-policy.toml
 #     (FV_GATE_POLICY overrides) into $RUNS/gate/.
 set -euo pipefail
-FAMILY="${1:?usage: runpod-matrix.sh headline|mmaudio|h3|ltx|hunyuan|wan|b200|rtx6000|rtx5090|fastvideo|precision|precision-debug|trace|fuse|oracle|ltxvae|writer|eval|ltxoffload|techniques|h3arms|h3attn}"
+FAMILY="${1:?usage: runpod-matrix.sh headline|mmaudio|speechtest|h3|ltx|hunyuan|wan|b200|rtx6000|rtx5090|fastvideo|precision|precision-debug|trace|fuse|oracle|ltxvae|writer|eval|ltxoffload|techniques|h3arms|h3attn}"
 WORK="${FV_WORK:-/workspace}"
 BIN="${FV_GPUCHECK:-/opt/fastvideo-rs/target/release/fv-gpucheck}"
 W="$WORK/weights"
@@ -470,6 +470,88 @@ Audio: male narration, grass rustle, wind, distant strings, cricket night}"
       run_cell "wave-$label" "$UPV/bin/python" "$GPU_DIR/mmaudio_wave_compare.py" --ref "$a" --cand "$b" \
         --label "$label" --out "$RUNS/wave-$label/wave.json"
     done
+    ;;
+  speechtest)
+    # Can the audio models say a given line? (docs/ports/mmaudio.md "Speech")
+    # Seeds 1000..1002 everywhere; every wav goes into $RUNS/manifest.tsv
+    # (id, wav, intended line, note) and one Whisper pass transcribes them all.
+    #   t2a-fox / t2a-station / t2a-fox-tagged  MMAudio text-to-audio, 8 s: a plain
+    #                               quoted line, and strobe's <S>..<E> + "Audio:" style
+    #   wan-talk                    FastWan 1.3B, a person speaking to camera (no audio)
+    #   v2a-{notext,text}-<seed>    MMAudio video-to-audio on that clip, without and
+    #                               with the spoken line as the text condition
+    #   h3-speech                   FastH3 4-step VSA 480p, 5 s, joint audio, the
+    #                               same lines in H3's <d>[English] ..</d> markup
+    #   whisper                     openai-whisper (FV_WHISPER_MODEL, default large-v3)
+    GPU_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+    MMW="$W/mmaudio-44k-v2"
+    export FASTVIDEO_MMAUDIO_WEIGHTS="$MMW"
+    SEEDS="1000 1001 1002"
+    FOX="The quick brown fox jumps over the lazy dog."
+    STATION="Welcome to the station, the next train leaves at nine."
+    MAN="A man in his thirties talking to the camera in a bright living room, medium close-up, natural expressions, soft window light."
+    WOMAN="A woman station announcer speaking into a microphone on a train platform, medium close-up, daytime."
+    MANIFEST="$RUNS/manifest.tsv"
+    : >"$MANIFEST"
+    add() { local n="${4//$'\n'/ | }"; printf '%s\t%s\t%s\t%s\n' "$1" "$2" "$3" "${n//$'\t'/ }" >>"$MANIFEST"; }
+    t2a() {
+      local name="$1" line="$2" prompt="$3" seed
+      gated_cell "$name" mmaudio-44k-v2 "$BIN" --mode fast mmaudio t2a --weights "$MMW" --prompt "$prompt" \
+        --seeds "${SEEDS// /,}" --duration 8 --out "$RUNS/$name"
+      for seed in $SEEDS; do add "$name-$seed" "$RUNS/$name/seed-$seed.wav" "$line" "mmaudio t2a: $prompt"; done
+    }
+    t2a t2a-fox "$FOX" "A man says clearly: \"$FOX\""
+    t2a t2a-station "$STATION" "A woman announces: \"$STATION\""
+    t2a t2a-fox-tagged "$FOX" "A man talks to the camera. He says <S>$FOX<E>
+Audio: male speech, clear voice, quiet room"
+    TALK="A man in his thirties speaking to the camera in a bright living room, medium close-up, his lips moving as he talks, natural expressions and hand gestures, soft window light."
+    gated_cell wan-talk fastwan21-1.3b \
+      "$BIN" --mode fast --vsa wan gen --weights "$W/fastwan21-1.3b" --prompt "$TALK" --seed 1024 \
+        --clip-dir "$RUNS/wan-talk/frames"
+    CLIP="$(find "$RUNS/wan-talk" -name output.mp4 | grep -v cold | head -1)"
+    log "V2A clip: ${CLIP:-missing}"
+    for seed in $SEEDS; do
+      for arm in notext text; do
+        prompt=""
+        [[ "$arm" == text ]] && prompt="A man says clearly: \"$FOX\""
+        gated_cell "v2a-$arm-$seed" mmaudio-44k-v2 "$BIN" --mode fast mmaudio v2a --weights "$MMW" --video "$CLIP" \
+          --prompt "$prompt" --seed "$seed" --runs 1 --out "$RUNS/v2a-$arm-$seed"
+        add "v2a-$arm-$seed" "$RUNS/v2a-$arm-$seed/mmaudio.wav" "$FOX" "mmaudio v2a on wan-talk, prompt: ${prompt:-none}"
+      done
+    done
+    H3P="$RUNS/h3-prompts.json"
+    # (No jq in the runtime image; the lines hold no JSON-special characters.)
+    {
+      printf '{"name": "speechtest", "prompts": [\n'
+      sep=""
+      for seed in $SEEDS; do
+        printf '%s{"name": "fox-%s", "seed": %s, "prompt": "%s He says clearly: <d>[English] %s</d>"},\n' "$sep" "$seed" "$seed" "$MAN" "$FOX"
+        printf '{"name": "station-%s", "seed": %s, "prompt": "%s She announces: <d>[English] %s</d>"}' "$seed" "$seed" "$WOMAN" "$STATION"
+        sep=$',\n'
+      done
+      printf '\n]}\n'
+    } >"$H3P"
+    gated_cell h3-speech fasth3-4step-vsa \
+      "$BIN" --mode fast h3 gen --weights "$W/h3-base" --h3-recipe 4step-vsa --height 480 --width 832 \
+        --prompt "$PROMPT" --seconds 5 --seed "$SEED" --text-encoder auto --text-cache "$SCRATCH/h3-text-cache" \
+        --text-weights "$W/h3-base" --warm --prompts "$H3P" \
+        --adaln-cache "$RUNS/h3-speech-adaln.cache" --clip-dir "$RUNS/h3-speech/frames"
+    for seed in $SEEDS; do
+      add "h3-fox-$seed" "$RUNS/h3-speech/frames/fox-$seed/audio.wav" "$FOX" "h3 fasth3-4step-vsa 480p"
+      add "h3-station-$seed" "$RUNS/h3-speech/frames/station-$seed/audio.wav" "$STATION" "h3 fasth3-4step-vsa 480p"
+    done
+    WV="$SCRATCH/whisper-venv"
+    FV_GEN_TIMEOUT_S=2400 run_cell whisper bash -c "
+      set -e
+      (command -v python3 && python3 -m venv --help) >/dev/null 2>&1 || { apt-get update -qq && apt-get install -y -qq python3-venv python3-pip >/dev/null; }
+      command -v ffmpeg >/dev/null || { apt-get update -qq && apt-get install -y -qq ffmpeg >/dev/null; }
+      python3 -m venv $WV
+      $WV/bin/pip install -q --upgrade pip
+      $WV/bin/pip install -q torch --index-url https://download.pytorch.org/whl/cu128
+      $WV/bin/pip install -q openai-whisper
+      $WV/bin/python $GPU_DIR/speech_transcribe.py --manifest $MANIFEST --model ${FV_WHISPER_MODEL:-large-v3} \
+        --out $RUNS/whisper/speech.json
+    "
     ;;
   sfwan)
     # SF-Wan 1.3B on one pod: the oracle diff against FastVideo's dump (when
