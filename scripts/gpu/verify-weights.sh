@@ -6,6 +6,7 @@
 #                                      fasth3-4step-dense sol-h3 sol-h3-spark
 #                                      ltx25-two-stage ltx23 fastwan21-1.3b
 #                                      wan22-ti2v-5b wan21-t2v-14b sfwan21-1.3b
+#                                      mmaudio-44k-v2
 #                                      hy15-480-t2v hy15-480-i2v hy15-720-t2v
 #                                      hy15-720-i2v aux
 #   verify-weights.sh --list           print the cells and what each needs
@@ -50,6 +51,12 @@ needs() {
     # Wan Diffusers trees (weights-manifest.tsv rows of the same name).
     wan22-ti2v-5b | wan21-t2v-14b | sfwan21-1.3b)
       echo "$1:transformer $1:vae $1:text_encoder $1:tokenizer $1:scheduler" ;;
+    # MMAudio large-44k-v2 V2A (scripts/gpu/fetch-mmaudio.py): the converted
+    # safetensors the port reads, plus the upstream .pth tree and the CLIP
+    # tokenizer. The .pth files are md5-checked at fetch time.
+    mmaudio-44k-v2)
+      local m=mmaudio-44k-v2/safetensors
+      echo ":$m/mmaudio_large_44k_v2.safetensors :$m/vae_44k.safetensors :$m/synchformer.safetensors :$m/bigvgan_v2_44k.safetensors :$m/clip_dfn5b_h14_384.safetensors mmaudio-44k-v2:weights mmaudio-44k-v2:ext_weights mmaudio-44k-v2:bigvgan_v2_44khz_128band_512x mmaudio-44k-v2:DFN5B-CLIP-ViT-H-14-384" ;;
     # HunyuanVideo 1.5 Diffusers trees (weights-manifest.tsv rows of the same name).
     hy15-480-t2v | hy15-480-i2v | hy15-720-t2v | hy15-720-i2v)
       echo "$1:transformer $1:vae $1:text_encoder $1:text_encoder_2 $1:tokenizer $1:tokenizer_2 $1:scheduler" ;;
@@ -61,7 +68,7 @@ needs() {
 }
 
 CELLS=(fasth3-8step h3-base fasth3-4step-vsa fasth3-4step-dense sol-h3 sol-h3-spark ltx25-two-stage ltx23 fastwan21-1.3b
-  wan22-ti2v-5b wan21-t2v-14b sfwan21-1.3b hy15-480-t2v hy15-480-i2v hy15-720-t2v hy15-720-i2v aux)
+  wan22-ti2v-5b wan21-t2v-14b sfwan21-1.3b mmaudio-44k-v2 hy15-480-t2v hy15-480-i2v hy15-720-t2v hy15-720-i2v aux)
 
 if [[ "${1:-}" == "--list" ]]; then
   for c in "${CELLS[@]}"; do printf '%-20s %s\n' "$c" "$(needs "$c")"; done

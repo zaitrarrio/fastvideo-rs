@@ -1532,25 +1532,26 @@ fn generate_mmaudio(
                 )));
             }
         };
-        let mut pipe = MmAudioPipeline::open(&weights, preset)
+        let pipe = MmAudioPipeline::load(&weights, preset)
             .map_err(|e| FastVideoError::Message(e.to_string()))?;
-        if weights.join("transformer").is_dir() {
-            pipe.load_dit()
-                .map_err(|e| FastVideoError::Message(e.to_string()))?;
-        } else {
-            pipe.load_dit_zeros_tiny()
-                .map_err(|e| FastVideoError::Message(e.to_string()))?;
-        }
-        pipe.load_vae_stub();
         let mut request = MmAudioRequest::t2a(opts.prompt, opts.seed);
-        request.video_path = opts.image_path.clone();
+        if let Some(v) = opts.image_path.as_ref() {
+            let frames = fastvideo_cudarc::mmaudio::VideoFrames::from_file(std::path::Path::new(v))
+                .map_err(|e| FastVideoError::Message(e.to_string()))?;
+            request.duration_s = frames.times.len() as f64
+                / (frames.times.get(1).map_or(1.0, |t| 1.0 / t.max(1e-9)));
+            request.video = Some(frames);
+        }
         if let Some(s) = opts.num_inference_steps {
             request.num_steps = s as usize;
         }
         std::fs::create_dir_all(&opts.output)
             .map_err(|e| FastVideoError::Message(e.to_string()))?;
         let out_wav = opts.output.join("mmaudio.wav");
-        pipe.generate(&request, &out_wav)
+        let out = pipe
+            .generate(&request)
+            .map_err(|e| FastVideoError::Message(e.to_string()))?;
+        fastvideo_cudarc::mmaudio::pipeline::write_wav(&out_wav, &out.waveform, out.sample_rate)
             .map_err(|e| FastVideoError::Message(e.to_string()))?;
         Ok(AvGenerateOutput {
             family: ModelFamily::MmAudio,

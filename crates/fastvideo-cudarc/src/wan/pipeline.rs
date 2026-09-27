@@ -297,6 +297,14 @@ pub struct WanTimings {
     pub encode_s: f64,
     /// PNG frames, written after the mp4.
     pub write_s: f64,
+    /// The opt-in V2A sidecar (`FASTVIDEO_WAN_AUDIO=mmaudio`,
+    /// `crate::mmaudio::sidecar`): read-back, MMAudio and the AAC mux,
+    /// after the mp4 and before the PNGs. 0 when off.
+    pub audio_s: f64,
+    /// Of `audio_s`: MMAudio itself (features through vocoder).
+    pub audio_generate_s: f64,
+    /// Seconds of audio produced.
+    pub audio_clip_s: f64,
 }
 
 /// What [`WanPipeline::generate_to`] produced.
@@ -960,6 +968,19 @@ impl WanPipeline {
         timings.rgb_s = split.rgb_s;
         timings.push_s = split.push_s;
         timings.wait_s = split.wait_s;
+        if let (true, Some(p)) = (crate::mmaudio::sidecar::requested(), &mp4_path) {
+            let timer = std::time::Instant::now();
+            let rep = crate::mmaudio::sidecar::run_on_mp4(Path::new(p), &cfg.prompt, cfg.seed, frames, cfg.fps)?;
+            timings.audio_s = timer.elapsed().as_secs_f64();
+            timings.audio_generate_s = rep.audio_s;
+            timings.audio_clip_s = rep.audio.waveform.len() as f64 / f64::from(rep.audio.sample_rate);
+            super::log::info(format_args!(
+                "audio sidecar (mmaudio): {:.2}s generate, {:.2}s total, rtf {:.3} -> {p}",
+                rep.audio_s,
+                timings.audio_s,
+                rep.audio_rtf()
+            ));
+        }
         let timer = std::time::Instant::now();
         let (frame_paths, _) = writer.finish()?;
         timings.write_s = timer.elapsed().as_secs_f64();
