@@ -58,6 +58,16 @@ Samplers: UniPC, DMD, causal DMD, TurboDiffusion rCM.
 QAD checkpoints are the same architecture as FastWan 1.3B and ship
 unquantized. They are listed so they do not fall through to UniPC.
 
+The distilled presets (DMD, rCM, causal DMD) decode through TAEHV
+(`taew2_1`) by default when its weights are found; `FASTVIDEO_WAN_VAE=full`
+opts out to the Wan VAE (2 latent frames per pass by default). The mp4 is
+written while the decode runs, PNG frames after it. Text K/V, text and time
+embeddings are computed once per denoise (`FASTVIDEO_WAN_COND_CACHE=0` turns
+it off, byte-identical), and UMT5 prompts are cached on disk. A VSA model id
+needs `FASTVIDEO_VSA=1`, which enables the device VSA kernels in
+self-attention only. Measurements and the upstream comparison:
+[ports/wan.md](ports/wan.md).
+
 ### LTX-2 / 2.3 / 2.5
 
 Joint text-to-audio-and-video. Gemma text, video VAE, audio VAE, vocoder.
@@ -261,7 +271,13 @@ Weights: `--weights`, `FASTVIDEO_WEIGHTS`, or the Hugging Face snapshot.
 | `FASTVIDEO_H3_SOL_ATTN` | `spark` or `rtx` |
 | `FASTVIDEO_H3_SOL_CACHE` | RTX TeaCache |
 | `FASTVIDEO_H3_UPSCALER` / `FASTVIDEO_H3_LTX_ADAPTER` | Spark bridge checkpoints, if not beside the H3 weights |
-| `FASTVIDEO_WAN_SOL_CACHE` | `taylorseer` |
+| `FASTVIDEO_WAN_SOL_CACHE` | `easycache`, `teacache` or `taylorseer` (lossy; off by default) |
+| `FASTVIDEO_WAN_SOL_ATTN` | Sol-Attn route: 14B (10 dense forwards, layer 0 dense) and 1.3B (layer 0 dense), Morton3D on the device |
+| `FASTVIDEO_WAN_VAE` | `auto` (TAEHV for distilled presets when found), `full`, `taehv` |
+| `FASTVIDEO_TAE_DIR` | Where the distilled presets look for `taew2_1.safetensors` (`scripts/gpu/fetch_taehv.sh`) |
+| `FASTVIDEO_VAE_CHUNK` | Latent frames per Wan VAE pass (default 2) |
+| `FASTVIDEO_WAN_COND_CACHE` | `0`: recompute text K/V, text and time embeddings every forward |
+| `FASTVIDEO_WAN_TEXT_CACHE` | UMT5 prompt cache directory, or `off` (default `~/.cache/fastvideo/wan-text`) |
 | `FASTVIDEO_COSMOS3_OFFICIAL` | Cosmos3 canvas |
 | `FASTVIDEO_COSMOS_SOL` | Cosmos TeaCache |
 | `FASTVIDEO_HUNYUAN15_OFFICIAL` | 720p / 129f / 50-step canvas |
