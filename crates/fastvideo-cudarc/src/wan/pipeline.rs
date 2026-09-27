@@ -524,18 +524,40 @@ impl WanPipeline {
             }
             h.finalize().into()
         });
-        let tokenizer = cfg
-            .tokenizer_path
-            .as_deref()
-            .map(std::fs::read)
-            .transpose()
-            .map_err(|e| PipelineError::Message(format!("tokenizer: {e}")))?
-            .unwrap_or_default();
+        // tokenizer.json is ~16 MB: hash it once per path per process.
+        static TOKENIZER_SHA: std::sync::OnceLock<
+            std::sync::Mutex<std::collections::HashMap<String, [u8; 32]>>,
+        > = std::sync::OnceLock::new();
+        let path = cfg.tokenizer_path.clone().unwrap_or_default();
+        let known = TOKENIZER_SHA
+            .get_or_init(Default::default)
+            .lock()
+            .expect("tokenizer sha")
+            .get(&path)
+            .copied();
+        let tokenizer_sha = match known {
+            Some(s) => s,
+            None => {
+                let bytes = if path.is_empty() {
+                    Vec::new()
+                } else {
+                    std::fs::read(&path)
+                        .map_err(|e| PipelineError::Message(format!("tokenizer: {e}")))?
+                };
+                let s = crate::h3::text_cache::sha256(&bytes);
+                TOKENIZER_SHA
+                    .get_or_init(Default::default)
+                    .lock()
+                    .expect("tokenizer sha")
+                    .insert(path, s);
+                s
+            }
+        };
         let mut h = Sha256::new();
         for field in [
             b"WANTEXT1".as_slice(),
             prompt.as_bytes(),
-            crate::h3::text_cache::sha256(&tokenizer).as_slice(),
+            tokenizer_sha.as_slice(),
             (self.dit.cfg.text_len as u64).to_le_bytes().as_slice(),
             identity.as_slice(),
         ] {
