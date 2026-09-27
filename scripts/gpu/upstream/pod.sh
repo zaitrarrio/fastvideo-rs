@@ -114,8 +114,8 @@ bench_vsa() {
     # branch is Triton) into the image's python, no FastVideo install needed.
     py=python3
     "$py" -c 'import fastvideo_kernel' 2>/dev/null \
-      || "$py" -m pip install -q --no-deps "fastvideo-kernel==${UP_FVK_VERSION:-0.3.5}" 2>/dev/null \
-      || "$py" -m pip install -q --break-system-packages --no-deps "fastvideo-kernel==${UP_FVK_VERSION:-0.3.5}" || return 1
+      || "$py" -m pip install -q --no-deps "fastvideo-kernel==${UP_FVK_VERSION:-0.3.5}" einops 2>/dev/null \
+      || "$py" -m pip install -q --break-system-packages --no-deps "fastvideo-kernel==${UP_FVK_VERSION:-0.3.5}" einops || return 1
     "$py" -c 'import fastvideo_kernel as f; print("fastvideo_kernel", f.__version__)' || return 1
   fi
   PYTHONUNBUFFERED=1 "$py" "$HERE/bench_vsa.py" \
