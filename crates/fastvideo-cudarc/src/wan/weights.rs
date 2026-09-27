@@ -76,6 +76,17 @@ impl WeightMap {
         self.lazy.as_ref()
     }
 
+    /// Queue read-ahead of the keys the groups match, group by group
+    /// ([`LazyStore::prefetch_groups`]). A no-op on eager maps.
+    pub fn prefetch_groups(&self, groups: &[&dyn Fn(&str) -> bool]) -> u64 {
+        self.lazy.as_ref().map_or(0, |l| l.prefetch_groups(groups))
+    }
+
+    /// Queue read-ahead of every tensor, in natural key order.
+    pub fn prefetch_all(&self) -> u64 {
+        self.lazy.as_ref().map_or(0, LazyStore::prefetch_all)
+    }
+
     pub fn from_dir(dir: &Path) -> Result<Self> {
         Self::load_dir(dir)
     }
@@ -316,6 +327,12 @@ pub fn cuda_tensor_shaped(map: &WeightMap, key: &str, expected: &[usize]) -> Res
     expect_shape(key, &shape, expected)?;
     crate::ltx2::lora::apply_f32(key, &mut values, &shape)?;
     CudaTensor::from_vec(values, shape)
+}
+
+/// Log one `load/io` line: what `phase` read since `base`, over `wall_s`.
+pub fn log_load_io(phase: &str, base: &fastvideo_loader::PrefetchStats, wall_s: f64) {
+    let d = fastvideo_loader::PrefetchStats::now().since(base);
+    super::log::info(format_args!("load/io {phase} {}", d.json(wall_s)));
 }
 
 pub fn join_key(prefix: &str, name: &str) -> String {

@@ -1,10 +1,12 @@
 //! Hugging Face Diffusers weight loading (raw mmap / lazy stores).
 
 mod lazy;
+pub mod prefetch;
 mod raw;
 mod writer;
 
-pub use lazy::{LazyDType, LazyStore, LazyView};
+pub use lazy::{natural_cmp, LazyDType, LazyStore, LazyView};
+pub use prefetch::{evict_page_cache, read_bench, PrefetchConfig, PrefetchStats};
 pub use raw::{
     load_raw_component, load_raw_component_native, load_raw_tensors, load_raw_tensors_native,
     RawDType, RawTensor,

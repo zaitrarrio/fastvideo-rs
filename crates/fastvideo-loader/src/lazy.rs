@@ -76,6 +76,8 @@ impl LazyDType {
 
 #[derive(Debug, Clone)]
 struct Entry {
+    /// Position in [`LazyStore::names`]; the prefetcher's tensor id.
+    id: usize,
     file: usize,
     dtype: LazyDType,
     shape: Vec<usize>,
@@ -100,6 +102,10 @@ impl LazyView<'_> {
 pub struct LazyStore {
     files: Vec<(PathBuf, Mmap)>,
     index: HashMap<String, Entry>,
+    /// Tensor names by [`Entry::id`].
+    names: Vec<String>,
+    /// First-view tracking and the read-ahead's per-tensor accounting.
+    shared: std::sync::Arc<crate::prefetch::StoreShared>,
     /// Safetensors `__metadata__` (string values; numbers are rendered).
     metadata: HashMap<String, String>,
 }
@@ -220,6 +226,49 @@ fn resolve_shard_files(dir: &Path) -> Result<Vec<PathBuf>, LoaderError> {
     Ok(files)
 }
 
+/// Compare keys with digit runs as numbers: `blocks.2.w` < `blocks.10.w`.
+pub fn natural_cmp(a: &str, b: &str) -> std::cmp::Ordering {
+    let (mut a, mut b) = (a.as_bytes(), b.as_bytes());
+    loop {
+        match (a.first(), b.first()) {
+            (None, None) => return std::cmp::Ordering::Equal,
+            (None, Some(_)) => return std::cmp::Ordering::Less,
+            (Some(_), None) => return std::cmp::Ordering::Greater,
+            (Some(x), Some(y)) if x.is_ascii_digit() && y.is_ascii_digit() => {
+                let na = a.iter().take_while(|c| c.is_ascii_digit()).count();
+                let nb = b.iter().take_while(|c| c.is_ascii_digit()).count();
+                let (da, db) = (&a[..na], &b[..nb]);
+                let strip = |d: &[u8]| {
+                    let z = d.iter().take_while(|c| **c == b'0').count();
+                    d.len() - z
+                };
+                let ord = strip(da)
+                    .cmp(&strip(db))
+                    .then_with(|| da[na - strip(da)..].cmp(&db[nb - strip(db)..]))
+                    .then_with(|| na.cmp(&nb));
+                if ord != std::cmp::Ordering::Equal {
+                    return ord;
+                }
+                a = &a[na..];
+                b = &b[nb..];
+            }
+            (Some(x), Some(y)) => {
+                if x != y {
+                    return x.cmp(y);
+                }
+                a = &a[1..];
+                b = &b[1..];
+            }
+        }
+    }
+}
+
+impl Drop for LazyStore {
+    fn drop(&mut self) {
+        self.shared.release();
+    }
+}
+
 /// `foo-00001-of-00008` → `Some("foo")`; anything else → `None`.
 fn sharded_stem_prefix(stem: &str) -> Option<&str> {
     let bytes = stem.as_bytes();
@@ -268,6 +317,7 @@ impl LazyStore {
     pub fn open_files(paths: &[PathBuf]) -> Result<Self, LoaderError> {
         let mut files = Vec::with_capacity(paths.len());
         let mut index = HashMap::new();
+        let mut names = Vec::new();
         let mut metadata = HashMap::new();
         for (fi, path) in paths.iter().enumerate() {
             let map = crate::raw::mmap_file(path)?;
@@ -340,6 +390,7 @@ impl LazyStore {
                     }
                 }
                 let entry = Entry {
+                    id: names.len(),
                     file: fi,
                     dtype,
                     shape,
@@ -352,14 +403,60 @@ impl LazyStore {
                         format!("{name}: also present in an earlier shard"),
                     ));
                 }
+                names.push(name.clone());
             }
             files.push((path.clone(), map));
         }
+        let shared = crate::prefetch::new_shared(names.len());
         Ok(Self {
             files,
             index,
+            names,
+            shared,
             metadata,
         })
+    }
+
+    /// Start reading `keys` (in this order) into the page cache in the
+    /// background ([`crate::prefetch`]). Unknown keys are ignored. Returns the
+    /// bytes queued (0 when `FASTVIDEO_PREFETCH=0`).
+    pub fn prefetch<S: AsRef<str>>(&self, keys: &[S]) -> u64 {
+        let ranges: Vec<crate::prefetch::Range> = keys
+            .iter()
+            .filter_map(|k| self.index.get(k.as_ref()))
+            .map(|e| crate::prefetch::Range {
+                entry: e.id,
+                file: e.file,
+                start: e.start,
+                end: e.end,
+            })
+            .collect();
+        let paths: Vec<PathBuf> = self.files.iter().map(|(p, _)| p.clone()).collect();
+        crate::prefetch::submit(&self.shared, &paths, &ranges)
+    }
+
+    /// [`Self::prefetch`] of every key some group matches, group by group (a
+    /// key goes to the first group that matches it; keys no group matches are
+    /// not read), each group in natural order (`blocks.2` before `blocks.10`):
+    /// the order a layer-by-layer loader asks for them.
+    pub fn prefetch_groups(&self, groups: &[&dyn Fn(&str) -> bool]) -> u64 {
+        let mut buckets: Vec<Vec<&str>> = vec![Vec::new(); groups.len()];
+        for name in &self.names {
+            if let Some(g) = groups.iter().position(|f| f(name)) {
+                buckets[g].push(name);
+            }
+        }
+        let mut order = Vec::with_capacity(self.names.len());
+        for mut b in buckets {
+            b.sort_by(|a, b| natural_cmp(a, b));
+            order.extend(b);
+        }
+        self.prefetch(&order)
+    }
+
+    /// Every tensor, in natural key order.
+    pub fn prefetch_all(&self) -> u64 {
+        self.prefetch_groups(&[&|_| true])
     }
 
     /// `__metadata__` from the opened shards. Later shards overwrite earlier keys.
@@ -405,6 +502,12 @@ impl LazyStore {
             .index
             .get(key)
             .ok_or_else(|| LoaderError::Message(format!("missing weight key: {key}")))?;
+        if self.shared.consume(e.id) {
+            crate::prefetch::VIEWED_BYTES.fetch_add(
+                (e.end - e.start) as u64,
+                std::sync::atomic::Ordering::Relaxed,
+            );
+        }
         Ok(LazyView {
             dtype: &e.dtype,
             shape: &e.shape,
@@ -602,6 +705,48 @@ mod tests {
             &*conv,
             [bf16(0.5), bf16(4.0), bf16(8.0)].concat().as_slice()
         );
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn natural_order_puts_block_2_before_block_10() {
+        let mut v = vec!["b.10.w", "b.2.w", "b.1.w", "a", "b.02.x"];
+        v.sort_by(|a, b| natural_cmp(a, b));
+        assert_eq!(v, vec!["a", "b.1.w", "b.2.w", "b.02.x", "b.10.w"]);
+    }
+
+    #[test]
+    fn prefetch_reads_the_queued_tensors_and_views_are_unchanged() {
+        let d = tmp("prefetch");
+        let a: Vec<u8> = (0..4096u32)
+            .flat_map(|v| (v as f32).to_le_bytes())
+            .collect();
+        let b: Vec<u8> = (0..300u32).flat_map(|v| bf16(v as f32)).collect();
+        write_st(
+            &d.join("m.safetensors"),
+            &[
+                ("blocks.10.w", "F32", vec![4096], a.clone()),
+                ("blocks.2.w", "BF16", vec![300], b.clone()),
+            ],
+        );
+        let before = crate::PrefetchStats::now();
+        let s = LazyStore::open(&d).unwrap();
+        let queued = s.prefetch_groups(&[&|k: &str| k.starts_with("blocks.")]);
+        if crate::PrefetchConfig::get().enabled {
+            assert_eq!(queued, (a.len() + b.len()) as u64);
+            let t0 = std::time::Instant::now();
+            while crate::PrefetchStats::now().since(&before).read_bytes < queued
+                && t0.elapsed().as_secs() < 10
+            {
+                std::thread::sleep(std::time::Duration::from_millis(5));
+            }
+            assert!(crate::PrefetchStats::now().since(&before).read_bytes >= queued);
+        }
+        assert_eq!(s.view("blocks.10.w").unwrap().bytes, &a[..]);
+        assert_eq!(s.view("blocks.2.w").unwrap().bytes, &b[..]);
+        // A tensor already viewed is not queued again.
+        assert_eq!(s.prefetch(&["blocks.2.w", "nope"]), 0);
+        drop(s);
         let _ = std::fs::remove_dir_all(&d);
     }
 

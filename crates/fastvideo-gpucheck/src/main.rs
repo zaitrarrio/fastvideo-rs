@@ -58,6 +58,7 @@ mod wan_oracle;
 mod wan_stage;
 mod wan_stream;
 mod writer_bench;
+mod coldstart;
 
 use std::path::PathBuf;
 
@@ -473,6 +474,55 @@ enum Cmd {
         #[arg(long)]
         dir: PathBuf,
     },
+    /// Raw read throughput of weight files (E12): parallel preads per
+    /// thread count, and optionally the page-fault path through a mapping.
+    IoBench {
+        /// Directories (their .safetensors, recursively) or files.
+        #[arg(long, required = true, num_args = 1..)]
+        dir: Vec<PathBuf>,
+        #[arg(long, default_value = "1,4,16,32")]
+        threads: String,
+        #[arg(long, default_value_t = 16)]
+        chunk_mb: usize,
+        /// Stop each pass after this many GB (0 = everything).
+        #[arg(long, default_value_t = 8.0)]
+        limit_gb: f64,
+        /// Drop the files' page cache before each pass.
+        #[arg(long)]
+        evict: bool,
+        /// Also time the mapped page-fault read.
+        #[arg(long)]
+        mmap: bool,
+    },
+    /// Drop the page cache of every file under the given paths (cold loads).
+    EvictCache {
+        #[arg(required = true)]
+        paths: Vec<PathBuf>,
+    },
+    /// E13: write `<root>/text_encoder_fp8/` (resident FP8 rows, manifest) from
+    /// `<root>/text_encoder/`, then verify it loads byte-identical to the
+    /// load-time quantization. Only adds files; refuses an existing manifest.
+    #[cfg(feature = "cuda")]
+    QuantizeTextEncoder {
+        /// `h3` (Qwen3-VL-32B, 50 layers), `ltx2-gemma4` (LTX-2.5) or `ltx2-gemma3` (LTX-2.3).
+        #[arg(long)]
+        family: String,
+        /// Directory holding `text_encoder/`.
+        #[arg(long)]
+        root: PathBuf,
+        /// Default `<root>/text_encoder_fp8`.
+        #[arg(long)]
+        tree: Option<PathBuf>,
+        /// Skip hashing the source shards into the manifest.
+        #[arg(long)]
+        no_hash: bool,
+        /// Skip the identity check after writing.
+        #[arg(long)]
+        no_verify: bool,
+        /// Only check an existing tree against the load-time quantization.
+        #[arg(long)]
+        verify_only: bool,
+    },
     /// Diff our text encoder and one DiT step against an external reference.
     Oracle {
         #[arg(long)]
@@ -550,6 +600,10 @@ fn stage_name(cmd: &Cmd) -> &'static str {
         Cmd::Oracle { .. } => "oracle",
         Cmd::Taehv { .. } => "taehv",
         Cmd::WriterBench { .. } => "writer-bench",
+        Cmd::IoBench { .. } => "io-bench",
+        Cmd::EvictCache { .. } => "evict-cache",
+        #[cfg(feature = "cuda")]
+        Cmd::QuantizeTextEncoder { .. } => "quantize-text-encoder",
         Cmd::TaehvDevice { .. } => "taehv-device",
     }
 }
@@ -801,6 +855,40 @@ fn run(cli: &Cli, report: &mut Report) -> StageResult<()> {
                 modes: png,
                 produce_s: *produce_s,
             },
+        ),
+        Cmd::IoBench {
+            dir,
+            threads,
+            chunk_mb,
+            limit_gb,
+            evict,
+            mmap,
+        } => coldstart::io_bench(
+            report,
+            dir,
+            &parse_list(threads)?,
+            *chunk_mb,
+            *limit_gb,
+            *evict,
+            *mmap,
+        ),
+        Cmd::EvictCache { paths } => coldstart::evict(report, paths),
+        #[cfg(feature = "cuda")]
+        Cmd::QuantizeTextEncoder {
+            family,
+            root,
+            tree,
+            no_hash,
+            no_verify,
+            verify_only,
+        } => coldstart::quantize_text_encoder(
+            report,
+            family,
+            root,
+            tree.as_deref(),
+            !*no_hash,
+            !*no_verify,
+            *verify_only,
         ),
         Cmd::Oracle {
             weights,

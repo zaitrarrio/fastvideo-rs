@@ -591,8 +591,25 @@ impl Linear {
             #[cfg(feature = "cuda")]
             dev: None,
         };
+        // E13: a pre-quantized tree stores exactly the codes and row scales
+        // the device quantization below produces; upload them as they are.
+        let prequant = fp8_rows_prequantized(map, prefix, in_dim, out_dim)?;
         #[cfg(feature = "cuda")]
-        if stats::device_expected() {
+        if let (Some((codes, scales)), true) = (&prequant, stats::device_expected()) {
+            let dev = super::device::global_device().ok_or_else(|| msg("no device"))?;
+            let c = dev
+                .stream
+                .memcpy_stod(&codes[..])
+                .map_err(|e| msg(e.to_string()))?;
+            let s = dev
+                .stream
+                .memcpy_stod(&scales[..])
+                .map_err(|e| msg(e.to_string()))?;
+            stats::record_h2d(codes.len() / 4 + scales.len());
+            rows.dev = Some((c, s));
+        }
+        #[cfg(feature = "cuda")]
+        if rows.dev.is_none() && prequant.is_none() && stats::device_expected() {
             let dev = super::device::global_device().ok_or_else(|| msg("no device"))?;
             let wf = match map.lazy_bf16(&key)? {
                 // bf16 on disk: upload 2 bytes/param and widen on the device.
@@ -626,9 +643,15 @@ impl Linear {
         #[cfg(not(feature = "cuda"))]
         let on_device = false;
         if !on_device {
-            let w = super::weights::cuda_tensor_shaped(map, &key, &[out_dim, in_dim])?;
-            rows.host = Some(host::fp8_rows_quantize(&w.host_cow()?, out_dim, in_dim));
+            rows.host = Some(match prequant {
+                Some(parts) => parts,
+                None => {
+                    let w = super::weights::cuda_tensor_shaped(map, &key, &[out_dim, in_dim])?;
+                    host::fp8_rows_quantize(&w.host_cow()?, out_dim, in_dim)
+                }
+            });
         }
+        fp8_capture_push(prefix, &rows)?;
         Ok(Self {
             weight: CudaTensor::from_vec(Vec::new(), vec![0, in_dim])?,
             bias,
@@ -2082,4 +2105,98 @@ mod bf16_act_tests {
             "residual-as-bf16 adopted after ≥ 35 dB (h3 {h3:.2}, ltx {ltx:.2}, wan {wan:.2})"
         );
     }
+}
+
+
+/// Key of the per-row scales a pre-quantized FP8 tree stores beside each
+/// linear's E4M3 `weight` (E13).
+pub const FP8_ROWS_SCALE_SUFFIX: &str = "weight_scale_rows";
+
+/// `(codes, scales)` of `prefix` when `map` holds it pre-quantized: an
+/// `F8_E4M3` `weight` of `[out, in]` plus an F32 `weight_scale_rows` of
+/// `[out]`. `None` for a float checkpoint.
+fn fp8_rows_prequantized(
+    map: &super::weights::WeightMap,
+    prefix: &str,
+    in_dim: usize,
+    out_dim: usize,
+) -> Result<Option<(Vec<u8>, Vec<f32>)>> {
+    use fastvideo_loader::LazyDType;
+    let Some(lazy) = map.lazy() else {
+        return Ok(None);
+    };
+    let scale_key = super::weights::join_key(prefix, FP8_ROWS_SCALE_SUFFIX);
+    if !lazy.contains(&scale_key) {
+        return Ok(None);
+    }
+    let key = super::weights::join_key(prefix, "weight");
+    let w = lazy.view(&key).map_err(|e| msg(e.to_string()))?;
+    let sc = lazy.view(&scale_key).map_err(|e| msg(e.to_string()))?;
+    if *w.dtype != LazyDType::F8E4M3 || w.shape != [out_dim, in_dim] {
+        return Err(msg(format!(
+            "{key}: pre-quantized weight is {:?} {:?}, expected F8_E4M3 [{out_dim}, {in_dim}]",
+            w.dtype, w.shape
+        )));
+    }
+    if *sc.dtype != LazyDType::F32 || sc.shape != [out_dim] {
+        return Err(msg(format!(
+            "{scale_key}: {:?} {:?}, expected F32 [{out_dim}]",
+            sc.dtype, sc.shape
+        )));
+    }
+    let scales = sc
+        .bytes
+        .chunks_exact(4)
+        .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
+        .collect();
+    Ok(Some((w.bytes.to_vec(), scales)))
+}
+
+/// Per-linear FP8 rows `(prefix, codes, scales)` recorded by
+/// [`capture_fp8_rows`].
+pub type Fp8Capture = Vec<(String, Vec<u8>, Vec<f32>)>;
+
+thread_local! {
+    static FP8_CAPTURE: std::cell::RefCell<Option<Fp8Capture>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// Run `f` and return, beside its result, the codes and scales of every
+/// [`Linear::load_fp8_rows`] it made on this thread, in load order, read back
+/// from wherever they live: what the offline quantizer writes and what its
+/// identity check hashes.
+pub fn capture_fp8_rows<R>(f: impl FnOnce() -> Result<R>) -> Result<(R, Fp8Capture)> {
+    FP8_CAPTURE.with(|c| *c.borrow_mut() = Some(Vec::new()));
+    let out = f();
+    let captured = FP8_CAPTURE.with(|c| c.borrow_mut().take()).unwrap_or_default();
+    Ok((out?, captured))
+}
+
+fn fp8_capture_push(prefix: &str, rows: &Fp8Rows) -> Result<()> {
+    if !FP8_CAPTURE.with(|c| c.borrow().is_some()) {
+        return Ok(());
+    }
+    let (codes, scales) = if let Some((c, s)) = &rows.host {
+        (c.clone(), s.clone())
+    } else {
+        #[cfg(feature = "cuda")]
+        {
+            let (c, s) = rows
+                .dev
+                .as_ref()
+                .ok_or_else(|| msg("fp8 rows: no codes on host or device"))?;
+            let dev = super::device::global_device().ok_or_else(|| msg("no device"))?;
+            let c = dev.stream.memcpy_dtov(c).map_err(|e| msg(e.to_string()))?;
+            let s = dev.stream.memcpy_dtov(s).map_err(|e| msg(e.to_string()))?;
+            (c, s)
+        }
+        #[cfg(not(feature = "cuda"))]
+        return Err(msg("fp8 rows: no codes on the host"));
+    };
+    FP8_CAPTURE.with(|c| {
+        if let Some(v) = c.borrow_mut().as_mut() {
+            v.push((prefix.to_string(), codes, scales));
+        }
+    });
+    Ok(())
 }

@@ -1110,7 +1110,11 @@ impl Decoders {
     /// The video VAE, audio VAE and vocoder; `upsampler` is left `None` for a
     /// caller that loads it only around its one call ([`load_upsampler`]).
     pub fn load_without_upsampler(weights: &Path, cfg: &Ltx2Config) -> Result<Self> {
-        let open = |sub: &str| WeightMap::open(&weights.join(sub));
+        let open = |sub: &str| {
+            let m = WeightMap::open(&weights.join(sub))?;
+            m.prefetch_groups(&[&|k: &str| !k.starts_with("encoder.")]);
+            Ok::<_, crate::wan::tensor::TensorError>(m)
+        };
         Ok(Self {
             video: VideoDecoder::load(&open("vae")?, &cfg.vae)?,
             audio: AudioDecoder::load(&open("audio_vae")?, &cfg.audio_vae)?,
@@ -1566,6 +1570,14 @@ pub struct TextEncoder {
     booking: crate::wan::ledger::Booking,
     /// `(sha256-able tokenizer bytes, gemma identity, connector identity)`.
     identity: Option<(Vec<u8>, [u8; 32], [u8; 32])>,
+    /// `FASTVIDEO_LTX2_TEXT_FP8=1` (E13): Gemma resident with weight-only FP8
+    /// rows, read from the pre-quantized `text_encoder_fp8/` tree when one is
+    /// valid (else quantized at load), instead of streamed at bf16. Opt-in:
+    /// it changes the conditioning numerics.
+    fp8: bool,
+    /// Gemma's shards, opened at pipeline load with their read-ahead queued
+    /// (E12), handed to the first encode that needs them.
+    warm: Option<WeightMap>,
 }
 
 impl TextEncoder {
@@ -1578,6 +1590,47 @@ impl TextEncoder {
             resident: None,
             booking: crate::wan::ledger::Booking::default(),
             identity: None,
+            fp8: std::env::var("FASTVIDEO_LTX2_TEXT_FP8").is_ok_and(|v| v.trim() == "1"),
+            warm: None,
+        }
+    }
+
+    /// The Gemma map the next encode reads: the FP8 tree when `fp8` and one
+    /// is valid, else `text_encoder/`. Its tensors are queued for read-ahead.
+    fn open_gemma(&self) -> Result<WeightMap> {
+        let cfg = Self::decoder_config(&self.cfg);
+        let source = self.paths.text_root().join("text_encoder");
+        let tree = if self.fp8 {
+            crate::llm::prequant::open_tree(&source, cfg.num_layers())?
+        } else {
+            None
+        };
+        let map = match tree {
+            Some(m) => m,
+            None => WeightMap::open(&source)?,
+        };
+        if let Some(lazy) = map.lazy() {
+            lazy.prefetch(&crate::llm::prequant::kept_keys(lazy, &cfg, cfg.num_layers()));
+        }
+        Ok(map)
+    }
+
+    /// Queue Gemma's read-ahead now (behind whatever the pipeline load
+    /// queued), so the first cache miss finds it in the page cache.
+    /// `FASTVIDEO_LTX2_TEXT_WARM=0` skips it.
+    pub fn warm(&mut self) -> Result<()> {
+        if self.warm.is_none()
+            && std::env::var("FASTVIDEO_LTX2_TEXT_WARM").map_or(true, |v| v.trim() != "0")
+        {
+            self.warm = Some(self.open_gemma()?);
+        }
+        Ok(())
+    }
+
+    fn take_gemma(&mut self) -> Result<WeightMap> {
+        match self.warm.take() {
+            Some(m) => Ok(m),
+            None => self.open_gemma(),
         }
     }
 
@@ -1715,7 +1768,8 @@ impl TextEncoder {
         let env = std::env::var("FASTVIDEO_LTX2_TEXT").ok();
         let free = crate::wan::device::free_memory().map(|(free, _)| free);
         let needed = self.resident_bytes() + RESIDENT_HEADROOM;
-        if !self.residency.resolve(env.as_deref(), free, needed)? {
+        let resident = self.fp8 || self.residency.resolve(env.as_deref(), free, needed)?;
+        if !resident {
             crate::wan::log::info(format_args!(
                 "ltx2 text: streamed (free {:?} bytes, resident needs {needed})",
                 free
@@ -1725,12 +1779,17 @@ impl TextEncoder {
         }
         let timer = Instant::now();
         let cfg = Self::decoder_config(&self.cfg);
-        let map = WeightMap::open(&self.paths.text_root().join("text_encoder"))?;
+        let map = self.take_gemma()?;
+        let precision = if self.fp8 {
+            crate::llm::WeightPrecision::Fp8Rows
+        } else {
+            crate::llm::WeightPrecision::Native
+        };
         let mut booking = std::mem::take(&mut self.booking);
         let loaded = booking.track(
             crate::wan::ledger::TEXT_ENCODER,
             || -> Result<(ResidentDecoder, TextConnectors)> {
-                let gemma = ResidentDecoder::load(&map, &cfg, cfg.num_layers())?;
+                let gemma = ResidentDecoder::load_with(&map, &cfg, cfg.num_layers(), precision)?;
                 let connectors = self.load_connectors()?;
                 sync()?;
                 Ok((gemma, connectors))
@@ -1760,7 +1819,7 @@ impl TextEncoder {
                 (stack, out)
             }
             None => {
-                let gemma = WeightMap::open(&self.paths.text_root().join("text_encoder"))?;
+                let gemma = self.take_gemma()?;
                 let stack = HiddenStack::encode(&gemma, &Self::decoder_config(&self.cfg), padded)?;
                 drop(gemma);
                 let out = self.load_connectors()?.forward(&stack, padded.max_len())?;
@@ -1788,7 +1847,8 @@ impl TextEncoder {
     /// resident beside that swap and OOM a 96 GB card. `FASTVIDEO_LTX2_TEXT`
     /// / an explicit residency still win.
     pub fn prefer_streamed_for_two_stage(&mut self) {
-        if self.residency != TextResidency::Auto {
+        // FP8 Gemma is half the size and two-stage drops it after encoding.
+        if self.residency != TextResidency::Auto || self.fp8 {
             return;
         }
         let env = std::env::var("FASTVIDEO_LTX2_TEXT").ok();
@@ -1839,6 +1899,10 @@ impl TextEncoder {
         });
         self.cache = cache;
         let (contexts, outcome) = result?;
+        if outcome == CacheOutcome::Hit {
+            // Gemma was not needed; release its read-ahead window.
+            self.warm = None;
+        }
         sync()?;
         let mode = if outcome == CacheOutcome::Hit {
             "cache"
@@ -2042,6 +2106,9 @@ pub struct Ltx2Pipeline {
     booking: crate::wan::ledger::Booking,
     /// Resident `taeltx2_3_wide` video decoder ([`PipelineOptions::tae`]).
     tae: Option<crate::wan::taehv::TaeHv>,
+    /// A DiT that loads on the first request (LoRA pipelines): its shards,
+    /// opened at pipeline load with read-ahead queued behind Gemma's (E12).
+    dit_warm: std::sync::Mutex<Option<WeightMap>>,
 }
 
 impl Ltx2Pipeline {
@@ -2122,8 +2189,10 @@ impl Ltx2Pipeline {
             residency
         };
         let mut booking = crate::wan::ledger::Booking::default();
+        let io_base = fastvideo_loader::PrefetchStats::now();
         let model = if lora.is_none() {
             let map = open_distilled(&paths.dit, "transformer")?;
+            map.prefetch_all();
             Some(booking.track(
                 crate::wan::ledger::DIT_NONLINEAR,
                 || {
@@ -2168,8 +2237,28 @@ impl Ltx2Pipeline {
             None => None,
         };
         sync()?;
+        crate::wan::weights::log_load_io("ltx2 load", &io_base, timer.elapsed().as_secs_f64());
         let loaded_strength = model.as_ref().map(|_| 0.0);
+        let mut text = TextEncoder::new(
+            paths,
+            cfg,
+            &PipelineOptions {
+                text_residency,
+                ..options.clone()
+            },
+        );
+        // The first request encodes the prompt (Gemma), then a LoRA pipeline
+        // loads its DiT: queue both reads now, in that order.
+        text.warm()?;
+        let dit_warm = if model.is_none() {
+            let map = open_distilled(&paths.dit, "transformer")?;
+            map.prefetch_all();
+            Some(map)
+        } else {
+            None
+        };
         Ok(Self {
+            dit_warm: std::sync::Mutex::new(dit_warm),
             cfg: cfg.clone(),
             dit: paths.dit.clone(),
             weights: paths.weights.clone(),
@@ -2180,14 +2269,7 @@ impl Ltx2Pipeline {
             residency,
             offload,
             has_upsampler,
-            text: TextEncoder::new(
-                paths,
-                cfg,
-                &PipelineOptions {
-                    text_residency,
-                    ..options.clone()
-                },
-            ),
+            text,
             load_s: timer.elapsed().as_secs_f64(),
             booking,
             tae,
@@ -2237,7 +2319,17 @@ impl Ltx2Pipeline {
 
     /// Load the DiT (fused at `strength` when a LoRA is configured).
     fn load_dit(&self, strength: f32) -> Result<Ltx2Transformer> {
-        let map = open_distilled(&self.dit, "transformer")?;
+        let io_base = fastvideo_loader::PrefetchStats::now();
+        let timer = Instant::now();
+        let warm = self.dit_warm.lock().ok().and_then(|mut w| w.take());
+        let map = match warm {
+            Some(m) => m,
+            None => {
+                let m = open_distilled(&self.dit, "transformer")?;
+                m.prefetch_all();
+                m
+            }
+        };
         let keys = Keys::transformer(Keys::detect(&map));
         let model = if let Some(path) = self.lora.clone() {
             // Strength 0 so `apply_bf16` is a no-op and `attach_linear` snapshots
@@ -2273,6 +2365,7 @@ impl Ltx2Pipeline {
             )?
         };
         sync()?;
+        crate::wan::weights::log_load_io("ltx2 dit", &io_base, timer.elapsed().as_secs_f64());
         Ok(model)
     }
 
