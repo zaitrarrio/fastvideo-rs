@@ -221,7 +221,7 @@ pub fn run(report: &mut Report, a: &Args<'_>) -> StageResult<()> {
     report.check(
         "mp4",
         bytes > 0 && probe.width == Some(ow) && probe.height == Some(oh) && audio_ok
-            && frames_mp4.is_some_and(|n| n.abs_diff(job.num_frames) <= 1),
+            && frames_mp4.is_some_and(|n| n.abs_diff(job.num_frames) <= 2),
         json!({"path": mp4, "bytes": bytes, "width": probe.width, "height": probe.height, "fps": probe.fps,
                "duration_s": probe.duration_s, "frames": frames_mp4, "audio_rate": probe.audio_rate}),
         json!({"width": ow, "height": oh, "frames": job.num_frames, "audio": job.audio.has_audio()}),

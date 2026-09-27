@@ -2117,7 +2117,7 @@ case "$FAMILY" in
           "${h3geo[@]}" --text-encoder streamed --text-weights "$W/h3-base" --no-text-cache --no-mp4 \
           --clip-dir "$RUNS/cli-h3-turbo/frames"
       gated_cell engine-h3-turbo fasth3-4step-vsa \
-        "$BIN" --mode fast --techniques h3/fasth3_4step_vsa engine --model h3-turbo --weights-root "$W" --tae-dir "$TAE" \
+        "$BIN" --keep-going --mode fast --techniques h3/fasth3_4step_vsa engine --model h3-turbo --weights-root "$W" --tae-dir "$TAE" \
           "${h3geo[@]}" --text-encoder streamed --reference "$RUNS/cli-h3-turbo/frames" --cancel-after-step 2 \
           --clip-out "$RUNS/engine-h3-turbo/out"
     fi
@@ -2128,7 +2128,7 @@ case "$FAMILY" in
           --dit "$W/ltx25" "${ltxgeo[@]}" --two-stage --text streamed --no-text-cache --no-mp4 \
           --clip "$RUNS/cli-ltx-turbo/frames"
       gated_cell engine-ltx-turbo ltx25-two-stage \
-        "$BIN" --mode fast --techniques ltx2/ltx25_distill_sol engine --model ltx-turbo --weights-root "$W" \
+        "$BIN" --keep-going --mode fast --techniques ltx2/ltx25_distill_sol engine --model ltx-turbo --weights-root "$W" \
           --tae-dir "$TAE" "${ltxgeo[@]}" --ltx-text streamed --reference "$RUNS/cli-ltx-turbo/frames" \
           --cancel-after-step 3 --clip-out "$RUNS/engine-ltx-turbo/out"
     fi
@@ -2138,7 +2138,7 @@ case "$FAMILY" in
         "$BIN" --mode fast --vsa wan gen --weights "$W/fastwan21-1.3b" "${wangeo[@]}" --no-text-cache --no-mp4 \
           --clip-dir "$RUNS/cli-wan-turbo/frames"
       gated_cell engine-wan-turbo fastwan21-1.3b \
-        "$BIN" --mode fast engine --model wan-turbo --weights-root "$W" --tae-dir "$TAE" "${wangeo[@]}" \
+        "$BIN" --keep-going --mode fast engine --model wan-turbo --weights-root "$W" --tae-dir "$TAE" "${wangeo[@]}" \
           --reference "$RUNS/cli-wan-turbo/frames" --cancel-after-step 1 --clip-out "$RUNS/engine-wan-turbo/out"
     fi
     # Keep the reports and MP4s; the PNG frames were compared on the box.
