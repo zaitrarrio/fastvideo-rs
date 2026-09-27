@@ -317,6 +317,7 @@ impl Linear {
                     slice
                 }
             };
+            super::dump::digest_bf16_device("lin:host", &slice)?;
             return Ok(Self {
                 weight: CudaTensor::from_vec(Vec::new(), vec![0, in_dim])?,
                 bias,
@@ -523,6 +524,7 @@ impl Linear {
             }
         };
         drop(host);
+        super::dump::digest_bf16_device(&format!("lin:{}", prefixes.join("+")), &slice)?;
         let rows = prefixes.len() * out_dim;
         let bias = if has_bias {
             let mut b = Vec::with_capacity(rows);

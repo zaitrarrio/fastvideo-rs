@@ -184,9 +184,13 @@ impl WeightMap {
     pub fn get_f32(&self, key: &str) -> Result<(Vec<usize>, Vec<f32>)> {
         let key = self.resolved(key);
         if let Some(lazy) = &self.lazy {
-            return lazy
+            let out = lazy
                 .to_f32(&key)
-                .map_err(|e| TensorError::Message(e.to_string()));
+                .map_err(|e| TensorError::Message(e.to_string()))?;
+            if super::dump::weights_digest_enabled() {
+                super::dump::digest_host(&format!("w:{key}"), &out.0, &out.1);
+            }
+            return Ok(out);
         }
         let t = self.require(&key)?;
         let values = t

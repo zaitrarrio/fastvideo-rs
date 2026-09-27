@@ -1828,6 +1828,15 @@ impl TextEncoder {
             }
         };
         super::text::dump_stages(padded, &stack, &out)?;
+        if crate::wan::dump::digest_enabled() {
+            for (k, state) in stack.states.iter().enumerate() {
+                crate::wan::dump::digest_host(
+                    &format!("text_hidden_{k}"),
+                    &[stack.tokens, stack.hidden],
+                    state,
+                );
+            }
+        }
         Ok(CachedContexts {
             video: out.video,
             audio: out.audio,
@@ -2115,6 +2124,16 @@ pub struct Ltx2Pipeline {
 impl Ltx2Pipeline {
     pub fn load(paths: &Ltx2Paths, cfg: &Ltx2Config, options: &PipelineOptions) -> Result<Self> {
         crate::wan::tensor::default_bf16_activations();
+        // E12 (read-ahead, pinned staged uploads) stays off for LTX unless
+        // FASTVIDEO_PREFETCH / FASTVIDEO_STAGED_UPLOAD ask for it: with it on,
+        // the frames were not byte-identical to the plain load's.
+        let prefetch = fastvideo_loader::prefetch::default_off();
+        crate::wan::stage_upload::default_off();
+        crate::wan::log::info(format_args!(
+            "ltx2 load: read-ahead {}, staged upload {} (E12 defaults off for LTX)",
+            if prefetch { "on" } else { "off" },
+            if crate::wan::stage_upload::enabled() { "on" } else { "off" },
+        ));
         // FASTVIDEO_NVFP4 here is the video FFN only (sol-engine scope):
         // Gemma, the connectors and the other DiT linears stay dense.
         crate::wan::nvfp4::enter_ltx_video_ffn_scope();
@@ -2601,6 +2620,8 @@ impl Ltx2Pipeline {
         // shows the text path's own parity), then the reference's contexts.
         crate::wan::dump::tensor("text_video_ctx", &contexts.video)?;
         crate::wan::dump::tensor("text_audio_ctx", &contexts.audio)?;
+        crate::wan::dump::digest("text_video_ctx", &contexts.video)?;
+        crate::wan::dump::digest("text_audio_ctx", &contexts.audio)?;
         if crate::wan::inject::text_enabled() {
             for (name, slot) in [
                 ("text_video_ctx", &mut contexts.video),
@@ -2661,6 +2682,10 @@ impl Ltx2Pipeline {
         // the stage-1 initial noise and, later, the stage-2 renoise.
         let mut noise = NoiseStream::new(req.seed, state == LatentState::Bf16);
         let (mut video, audio) = initial_noise(&cfg, grid1, audio_tokens, &mut noise)?;
+        crate::wan::dump::digest("noise_video", &video)?;
+        crate::wan::dump::digest("noise_audio", &audio)?;
+        crate::wan::dump::digest("text_proj_video", &text.video)?;
+        crate::wan::dump::digest("text_proj_audio", &text.audio)?;
         if let Some(ref image_path) = req.image_path {
             let spat = cfg.transformer.vae_scale_factors[1];
             let vae_dir = self.weights.join("vae");
@@ -2703,6 +2728,8 @@ impl Ltx2Pipeline {
             let model = self.model.as_ref().expect("ensure_dit");
             let mut record = |i: usize, v: &CudaTensor, a: &CudaTensor, s: f64| -> Result<()> {
                 step_s.push(s);
+                crate::wan::dump::digest(&format!("s1_step{i}_video"), v)?;
+                crate::wan::dump::digest(&format!("s1_step{i}_audio"), a)?;
                 match observer.as_mut() {
                     Some(obs) => obs(i, v, a, s),
                     None => Ok(()),
@@ -2768,6 +2795,8 @@ impl Ltx2Pipeline {
             }
         };
         timings.stage1_s = timer.elapsed().as_secs_f64();
+        crate::wan::dump::digest("stage1_video", &video)?;
+        crate::wan::dump::digest("stage1_audio", &audio)?;
         self.report_offload("stage1");
         if let Some(model) = self.model.as_ref() {
             model.disarm_fbcache();
@@ -2805,6 +2834,7 @@ impl Ltx2Pipeline {
                 let upsampled =
                     up.forward(&decoders.video.denormalize(&unpack_video(&video, grid1)?)?)?;
                 video = state.store(pack_video(&decoders.video.normalize(&upsampled)?)?)?;
+                crate::wan::dump::digest("upsampled_video", &video)?;
                 crate::wan::dump::rows_strided(
                     "s2_upsampled",
                     &video,
@@ -2892,6 +2922,8 @@ impl Ltx2Pipeline {
                 let mut record2 =
                     |i: usize, v: &CudaTensor, a: &CudaTensor, s: f64| -> Result<()> {
                         step_s.push(s);
+                        crate::wan::dump::digest(&format!("s2_step{i}_video"), v)?;
+                        crate::wan::dump::digest(&format!("s2_step{i}_audio"), a)?;
                         match observer.as_mut() {
                             Some(obs) => obs(step_offset + i, v, a, s),
                             None => Ok(()),
@@ -2915,6 +2947,8 @@ impl Ltx2Pipeline {
             }
             video = v2;
             audio = a2;
+            crate::wan::dump::digest("stage2_video", &video)?;
+            crate::wan::dump::digest("stage2_audio", &audio)?;
             timings.stage2_s = s2_timer.elapsed().as_secs_f64();
             self.report_offload("stage2");
             self.end_stage();
