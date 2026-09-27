@@ -1,0 +1,35 @@
+# sol-engine config/minimax_h3/rtx5090_fullopt.toml: BF16 MiniMax-H3 with
+# SM120 Sol-Attn, TeaCache, regional torch.compile and a full BF16 video VAE
+# resident after denoising (H3_RTX5090_PROFILE=fullopt).
+#
+# torch.compile has no counterpart (the DiT runs our fused kernels), and the
+# full VAE is resident here unless the DiT streams, so neither needs a key.
+
+[id]
+name = "h3_rtx5090_fullopt"
+family = "minimax_h3"
+description = "MiniMax-H3 sol-h3-rtx cell with Sol-Attn and TeaCache."
+upstream = "sol-engine config/minimax_h3/rtx5090_fullopt.toml"
+
+[pipeline]
+model = "h3"
+recipe = "sol-h3-rtx"
+
+[techniques.sol_attn]
+preset = "rtx"
+tau = 1.0                 # SOL_ATTN_TAU
+thresh_type = "diag"      # SOL_ATTN_THRESH_TYPE
+dense_steps = 10          # SOL_ATTN_FIRST_DENSE_STEPS
+dense_layers = 2          # SOL_ATTN_FIRST_DENSE_LAYERS
+sink = "text"
+
+# models/minimax_h3/RTX5090/teacache.py: block-0 modulated-norm probe,
+# whole-stack residual reuse.
+[techniques.teacache]
+threshold = 0.10          # H3_TEACACHE_THRESHOLD
+retain_steps = 5          # H3_TEACACHE_RETAIN_STEPS
+cooldown_steps = 1        # H3_TEACACHE_COOLDOWN_STEPS
+num_forwards = 49         # H3_TEACACHE_NUM_FORWARDS
+coefficients = [1.0, 0.0] # H3_TEACACHE_COEFFICIENTS
+
+[techniques.bf16_linears]   # official_config.transformer_dtype = "bf16"

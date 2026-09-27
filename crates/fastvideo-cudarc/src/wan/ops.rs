@@ -1226,7 +1226,7 @@ fn tma_requested(sm_major: i32) -> bool {
     if string_flag("FASTVIDEO_VSA_TMA", "1") == "0" {
         return false;
     }
-    let pick = string_flag("FASTVIDEO_VSA_KERNEL", "auto");
+    let pick = fastvideo_models::techniques::kernels::choice(fastvideo_models::techniques::kernels::KernelOp::VsaAttention);
     if pick == "mma" {
         return false; // explicit Ampere path for A/B
     }
@@ -1241,7 +1241,7 @@ fn tma_requested(sm_major: i32) -> bool {
 /// [`vsa_ring_default`].
 #[cfg(feature = "cuda")]
 fn vsa_ring_requested() -> bool {
-    match crate::wan::envflag::string_flag("FASTVIDEO_VSA_KERNEL", "auto").as_str() {
+    match fastvideo_models::techniques::kernels::choice(fastvideo_models::techniques::kernels::KernelOp::VsaAttention).as_str() {
         "tma2" => true,
         "tma" => false,
         _ => vsa_ring_default(),
@@ -3296,7 +3296,8 @@ pub enum SolKernel {
 /// sm90+ and V1 below (the producer/consumer mbarriers need sm90).
 #[cfg(feature = "cuda")]
 pub fn sol_kernel_choice(sm_major: i32) -> SolKernel {
-    match crate::wan::envflag::string_flag("FASTVIDEO_SOL_KERNEL", "auto").as_str() {
+    // The kernel seam (`[kernels] sol_attention`, else `FASTVIDEO_SOL_KERNEL`).
+    match fastvideo_models::techniques::kernels::choice(fastvideo_models::techniques::kernels::KernelOp::SolAttention).as_str() {
         "v1" => SolKernel::V1,
         "x4" => SolKernel::X4,
         "x4f" => SolKernel::X4f,

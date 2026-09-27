@@ -181,7 +181,7 @@ pub fn requested(value: Option<&str>) -> Option<ScaleRule> {
 
 /// Process env. Safe to call from load paths; not cached (tests mutate env).
 pub fn from_env() -> Option<ScaleRule> {
-    requested(std::env::var(ENV).ok().as_deref())
+    requested(crate::techniques::settings::var(ENV).as_deref())
 }
 
 /// Serialize tests that poke [`ENV`]. Production load paths do not take this.
@@ -269,7 +269,7 @@ pub fn oxide_gemm_flag(value: Option<&str>) -> bool {
 
 /// Process env for [`ENV_OXIDE_GEMM`].
 pub fn oxide_gemm_enabled() -> bool {
-    oxide_gemm_flag(std::env::var(ENV_OXIDE_GEMM).ok().as_deref())
+    oxide_gemm_flag(crate::techniques::settings::var(ENV_OXIDE_GEMM).as_deref())
 }
 
 /// LTX-2.3 video FFN key (`transformer_blocks.N.ff.net.*`). Audio FFN

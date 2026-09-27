@@ -531,7 +531,7 @@ static CONV3D_BACKEND: CachedString = CachedString::new();
 
 /// `auto` (default), `cudnn` or `unfold`.
 pub fn conv3d_backend() -> String {
-    CONV3D_BACKEND.get_or_init(|| super::envflag::string_flag("FASTVIDEO_CONV3D", "auto"))
+    CONV3D_BACKEND.get_or_init(|| fastvideo_models::techniques::kernels::choice(fastvideo_models::techniques::kernels::KernelOp::Conv3d))
 }
 
 /// 3-D conv with the backend chosen per [`conv3d_backend`]. In `auto` mode the

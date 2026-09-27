@@ -83,9 +83,9 @@ impl DitOffload {
         if let Some(p) = explicit {
             return Ok(p);
         }
-        match std::env::var(ENV) {
-            Ok(v) => Self::parse(&v).map_err(|e| format!("{ENV}: {e}")),
-            Err(_) => Ok(Self::Auto),
+        match fastvideo_models::techniques::settings::var(ENV) {
+            Some(v) => Self::parse(&v).map_err(|e| format!("{ENV}: {e}")),
+            None => Ok(Self::Auto),
         }
     }
 

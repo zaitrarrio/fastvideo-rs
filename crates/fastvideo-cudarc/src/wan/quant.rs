@@ -351,9 +351,9 @@ impl QuantMode {
     /// denoise on RTX PRO 6000) on a live device with block-scaled FP8
     /// (sm_100+), and to off on older GPUs and CPU runs. `=off` restores bf16.
     pub fn from_env() -> std::result::Result<Self, String> {
-        match std::env::var(ENV) {
-            Ok(v) => Self::parse(&v),
-            Err(_) => Ok(Self::default_for_device()),
+        match fastvideo_models::techniques::settings::var(ENV) {
+            Some(v) => Self::parse(&v),
+            None => Ok(Self::default_for_device()),
         }
     }
 

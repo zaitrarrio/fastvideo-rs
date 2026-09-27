@@ -7,14 +7,20 @@
 //! parsed result behind a local `OnceLock<bool>` and only calls into here
 //! once, on first use. This module holds just the shared parse logic so the
 //! "0/false/off" and "1/true" spellings stay consistent across all flags.
+//!
+//! Every read goes through [`fastvideo_models::techniques::settings::var`]:
+//! the environment variable first (unchanged behaviour), then the value the
+//! active technique profile installed for that name, then the default.
+
+use fastvideo_models::techniques::settings::var;
 
 /// Parse a boolean env flag that defaults to `true` when unset (`FASTVIDEO_RESIDENT`,
 /// `FASTVIDEO_BF16`, `FASTVIDEO_TF32`, `FASTVIDEO_TWO_STREAMS`, …): explicit
 /// `0` / `false` / `off` (case-insensitive, trimmed) turn it off, anything
 /// else (including unset) leaves it on.
 pub fn bool_flag(name: &str, default: bool) -> bool {
-    match std::env::var(name) {
-        Ok(v) => {
+    match var(name) {
+        Some(v) => {
             let v = v.trim();
             if default {
                 !(v == "0" || v.eq_ignore_ascii_case("false") || v.eq_ignore_ascii_case("off"))
@@ -22,37 +28,34 @@ pub fn bool_flag(name: &str, default: bool) -> bool {
                 v == "1" || v.eq_ignore_ascii_case("true") || v.eq_ignore_ascii_case("on")
             }
         }
-        Err(_) => default,
+        None => default,
     }
 }
 
 /// Parse a `usize` env flag, falling back to `default` when unset or invalid.
 pub fn f64_flag(name: &str, default: f64) -> f64 {
-    std::env::var(name)
-        .ok()
+    var(name)
         .and_then(|v| v.trim().parse().ok())
         .unwrap_or(default)
 }
 
 pub fn usize_flag(name: &str, default: usize) -> usize {
-    std::env::var(name)
-        .ok()
+    var(name)
         .and_then(|s| s.parse::<usize>().ok())
         .unwrap_or(default)
 }
 
 /// Parse a `f32` env flag, falling back to `default` when unset or invalid.
 pub fn f32_flag(name: &str, default: f32) -> f32 {
-    std::env::var(name)
-        .ok()
+    var(name)
         .and_then(|s| s.parse::<f32>().ok())
         .unwrap_or(default)
 }
 
 /// Read a string env flag, lower-cased, falling back to `default` when unset.
 pub fn string_flag(name: &str, default: &'static str) -> String {
-    std::env::var(name)
-        .unwrap_or_else(|_| default.to_string())
+    var(name)
+        .unwrap_or_else(|| default.to_string())
         .to_ascii_lowercase()
 }
 

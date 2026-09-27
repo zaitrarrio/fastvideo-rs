@@ -24,6 +24,7 @@ pub mod schedulers;
 pub mod sd35;
 pub mod sol_attn;
 pub mod stable_audio;
+pub mod techniques;
 pub mod vae;
 pub mod wan;
 pub mod zimage;

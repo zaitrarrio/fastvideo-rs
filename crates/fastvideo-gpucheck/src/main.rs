@@ -113,6 +113,12 @@ struct Cli {
     /// tips it over.
     #[arg(long, global = true)]
     vae_chunk: Option<usize>,
+    /// Technique profile (`profiles/<model>/*.toml`, or a sol-engine
+    /// `config/minimax_h3/rtx5090_*.toml`): the techniques, kernels and
+    /// settings the pipeline runs with (docs/techniques.md). Default:
+    /// `FASTVIDEO_TECHNIQUES`. Every `FASTVIDEO_*` env var still overrides it.
+    #[arg(long, global = true, value_name = "FILE")]
+    techniques: Option<PathBuf>,
     #[command(subcommand)]
     cmd: Cmd,
 }
@@ -815,6 +821,12 @@ fn main() {
         return;
     }
     // Must precede every cudarc call: its FASTVIDEO_* flags are cached on first read.
+    if let Err(e) =
+        fastvideo_models::techniques::settings::install_from_env(cli.techniques.as_deref())
+    {
+        eprintln!("technique profile: {e}");
+        std::process::exit(2);
+    }
     cli.mode.apply_env();
     if cli.vsa {
         std::env::set_var("FASTVIDEO_VSA", "1");

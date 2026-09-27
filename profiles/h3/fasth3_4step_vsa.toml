@@ -1,0 +1,17 @@
+# FastH3 Preview v1 4-step VSA: base MiniMax-H3 + the Preview VSA LoRA,
+# VSA-H3, MXFP8 linears, bf16 activations.
+
+[id]
+name = "fasth3_4step_vsa"
+family = "minimax_h3"
+description = "FastH3 Preview 4-step, VSA, MXFP8."
+
+[pipeline]
+model = "h3"
+recipe = "4step-vsa"
+
+[techniques.vsa]
+
+[techniques.mxfp8]
+
+[techniques.bf16_activations]

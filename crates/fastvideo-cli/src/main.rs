@@ -33,6 +33,12 @@ const DEFAULT_DEVICE: &str = "cpu";
     about = "Rust FastVideo inference (Wan / LTX / H3 / T2I / T2A; cudarc CUDA primary)."
 )]
 struct Cli {
+    /// Technique profile (`profiles/<model>/*.toml`, or a sol-engine config):
+    /// the techniques, kernels and settings the pipeline runs with
+    /// (docs/techniques.md). Default: `FASTVIDEO_TECHNIQUES`. Every
+    /// `FASTVIDEO_*` env var still overrides it.
+    #[arg(long, global = true, value_name = "FILE")]
+    techniques: Option<std::path::PathBuf>,
     #[command(subcommand)]
     command: Commands,
 }
@@ -266,6 +272,9 @@ impl From<CliBackend> for BackendKind {
 
 fn main() -> Result<()> {
     let cli = Cli::parse();
+    // Before any FASTVIDEO_* setting is read (getters cache on first read).
+    fastvideo_models::techniques::settings::install_from_env(cli.techniques.as_deref())
+        .map_err(|e| anyhow::anyhow!("technique profile: {e}"))?;
     match cli.command {
         Commands::ListModels => {
             for (family, id, preset) in all_registered_ids() {

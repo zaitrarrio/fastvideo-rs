@@ -231,18 +231,37 @@ pub struct H3SolPermutation {
 /// contiguous sink range in the coordinates of the Q/K/V the kernel sees
 /// (packed `[text | cond | audio | video]` order, or the permuted order when
 /// [`Self::permutation`] is set). The sink rows are also the dense query rows.
+///
+/// The route is the `sol_attn` technique's `(step, layer)` schedule
+/// ([`fastvideo_models::techniques::SparseRoute`]); the named policies are
+/// three values of it ([`fastvideo_models::h3::sol::policy_technique`]).
 pub struct H3SolPolicy {
+    /// The named policy with this sink (for the log and benchmark labels).
     pub kind: fastvideo_models::h3::sol::H3SolAttnPolicy,
+    pub technique: fastvideo_models::techniques::methods::SolAttn,
     pub sink: Option<(usize, usize)>,
     pub permutation: Option<H3SolPermutation>,
 }
 
 impl H3SolPolicy {
+    /// A named policy's route and sink.
     pub fn from_layout(
         kind: fastvideo_models::h3::sol::H3SolAttnPolicy,
         layout: &DeviceLayout,
     ) -> Result<Self> {
-        let spec = fastvideo_models::h3::sol::sink_spec(kind, &layout.layout).map_err(msg)?;
+        let technique = fastvideo_models::h3::sol::policy_technique(kind)
+            .ok_or_else(|| msg("h3 sol: the Off policy has no Sol route"))?;
+        Self::from_technique(&technique, layout)
+    }
+
+    /// A `sol_attn` technique on this request's layout.
+    pub fn from_technique(
+        technique: &fastvideo_models::techniques::methods::SolAttn,
+        layout: &DeviceLayout,
+    ) -> Result<Self> {
+        let kind = fastvideo_models::h3::sol::sink_policy(technique.sink);
+        let spec =
+            fastvideo_models::h3::sol::sink_spec_for(technique.sink, &layout.layout).map_err(msg)?;
         let permutation = match spec.plan {
             None => None,
             Some(plan) => {
@@ -267,6 +286,7 @@ impl H3SolPolicy {
         };
         Ok(Self {
             kind,
+            technique: technique.clone(),
             sink: spec.sink,
             permutation,
         })
@@ -277,7 +297,7 @@ impl H3SolPolicy {
         step: usize,
         layer: usize,
     ) -> std::result::Result<fastvideo_models::h3::sol::H3SolRoute, String> {
-        fastvideo_models::h3::sol::policy_route(self.kind, step, layer)
+        fastvideo_models::h3::sol::technique_route(&self.technique, step, layer)
     }
 
     /// One Sol layer on BHSD q/k/v already in kernel order: Sol-Attn with the
@@ -1961,13 +1981,20 @@ impl H3Transformer {
         })
     }
 
-    /// Install RTX TeaCache. The default path leaves this empty.
+    /// Install RTX TeaCache with the run script's parameters. The default
+    /// path leaves this empty.
     pub fn enable_sol_teacache(&self, num_forwards: usize) -> Result<()> {
         let state = H3TeaCache::official(num_forwards).map_err(msg)?;
         crate::wan::log::info(format_args!(
             "{}",
             fastvideo_models::h3::sol::TEACACHE_APPLIED
         ));
+        self.enable_teacache(state)
+    }
+
+    /// Install a TeaCache controller (the `teacache` technique's step-output
+    /// seam: the whole-stack residual is reused while it says so).
+    pub fn enable_teacache(&self, state: H3TeaCache) -> Result<()> {
         *self.sol_tea.lock().expect("h3 sol tea") = Some(H3TeaRuntime {
             state,
             signal: None,
@@ -3079,6 +3106,59 @@ pub(crate) mod tests {
                 .fold(0.0f32, f32::max);
             assert!(err < 1e-4, "{kind:?}: max err {err}");
         }
+    }
+
+    /// Off-identity of the technique seams through the whole block stack:
+    /// a `sol_attn` technique whose route is dense everywhere, and a TeaCache
+    /// that never reuses (every step inside its warmup), leave every output
+    /// bit of a three-step run as the plain dense forward's.
+    #[test]
+    fn inactive_technique_seams_are_the_dense_forward_bit_for_bit() {
+        use fastvideo_models::techniques::methods::SolAttn;
+        use fastvideo_models::techniques::StepSet;
+        let (cfg, map) = (tiny_cfg(), weights());
+        let schedule = H3JointSchedule::fasth3_8step();
+        let layout = H3PackedLayout::new(3, (2, 4, 4), 2, cfg.patch_size).unwrap();
+        let (nv, na, nt) = (layout.video.len, layout.audio.len, layout.text.len);
+        let video = CudaTensor::from_vec(
+            seeded(nv * cfg.video_patch_dim(), 0.41),
+            vec![nv, cfg.video_patch_dim()],
+        )
+        .unwrap();
+        let audio = CudaTensor::from_vec(
+            seeded(na * cfg.audio_in_channels, 0.23),
+            vec![na, cfg.audio_in_channels],
+        )
+        .unwrap();
+        let text = CudaTensor::from_vec(
+            seeded(nt * cfg.hidden_size, 0.57),
+            vec![1, nt, cfg.hidden_size],
+        )
+        .unwrap();
+        let dl = DeviceLayout::new(&cfg, layout).unwrap();
+        let bits = |model: &H3Transformer, mode: AttnMode<'_>| -> Vec<u32> {
+            let mut out = Vec::new();
+            for step in 0..3 {
+                let (v, a) = model
+                    .forward(step, &video, &audio, &text, &dl, mode, None, None, None)
+                    .unwrap();
+                out.extend(v.host_cow().unwrap().iter().map(|x| x.to_bits()));
+                out.extend(a.host_cow().unwrap().iter().map(|x| x.to_bits()));
+            }
+            out
+        };
+        let base = H3Transformer::load(cfg.clone(), &map, &schedule, false).unwrap();
+        let dense = bits(&base, AttnMode::Dense);
+        let mut never = SolAttn::rtx();
+        never.route.dense_steps = StepSet::from(0);
+        let policy = H3SolPolicy::from_technique(&never, &dl).unwrap();
+        assert_eq!(bits(&base, AttnMode::Sol(&policy)), dense, "all-dense sol_attn");
+        let cached = H3Transformer::load(cfg.clone(), &map, &schedule, false).unwrap();
+        let warm_only =
+            fastvideo_models::h3::sol::H3TeaCache::new(0.1, 8, 0, 8, vec![1.0, 0.0]).unwrap();
+        cached.enable_teacache(warm_only).unwrap();
+        assert_eq!(bits(&cached, AttnMode::Dense), dense, "a TeaCache that never reuses");
+        cached.end_denoise();
     }
 
     #[test]
