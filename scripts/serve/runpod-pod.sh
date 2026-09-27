@@ -26,7 +26,7 @@
 # /etc/fv/runpod.toml for real models); RUNPOD_GPU_TYPES (comma list, cheapest
 # first); RUNPOD_VOLUME_ID (optional weight volume at /workspace, read only:
 # state goes to /fvstate on the container disk); RUNPOD_ALLOWED_CUDA (default
-# 13.0); FV_SMOKE_MODEL (default fake-wan, the FastWan stand-in).
+# 13.0; set it empty to drop the filter, which can hide stock); FV_SMOKE_MODEL (default fake-wan, the FastWan stand-in).
 set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source-path=SCRIPTDIR source=../gpu/lib.sh
@@ -40,7 +40,7 @@ GPUS="${RUNPOD_GPU_TYPES:-NVIDIA RTX A4000,NVIDIA RTX A4500,NVIDIA RTX 4000 Ada 
 MAX_DPH="${RUNPOD_GPU_MAX_DPH:-1.0}"
 CAP_S="${FV_POD_CAP_S:-1800}"
 MIN_BALANCE="${FV_MIN_BALANCE:-8}"
-CUDA="${RUNPOD_ALLOWED_CUDA:-13.0}"
+CUDA="${RUNPOD_ALLOWED_CUDA-13.0}"
 MODEL="${FV_SMOKE_MODEL:-fake-wan}"
 LEDGER="${FV_SERVE_LEDGER:-$FV_ROOT/artifacts/runpod/serve/ledger.tsv}"
 OUT_DIR="$FV_ROOT/artifacts/runpod/serve"
@@ -110,12 +110,11 @@ payload() {
       ports: ["8000/http", "70000/tcp"],
       dockerEntrypoint: ["/opt/fastvideo-rs/bin/fv-serve"],
       dockerStartCmd: ["--config", $cfg],
-      allowedCudaVersions: ($cuda | split(" ")),
       env: ($secrets + {
         FV_SERVE_MODE: "http", FV_STATE_DIR: "/fvstate", FV_WEIGHTS: "/workspace/weights",
         FV_API_KEYS: $keys, FV_SERVE_FORWARD: "1", RUST_LOG: "info"
       })
-    } + $vol'
+    } + $vol + (if $cuda == "" then {} else {allowedCudaVersions: ($cuda | split(" "))} end)'
 }
 
 POD=""
@@ -219,7 +218,7 @@ cmd_smoke() {
       create_to_ready_s: (($tr|tonumber) - ($tc|tonumber)),
       job: {id: $st.id, model: $st.model, status: $st.status, wall_s: (($te|tonumber) - ($tj|tonumber)),
             content_status: ($content|tonumber), media_host: $host, media_status: $mcode, media_bytes: $mbytes},
-      info: ($info | {gpu, ffmpeg_h264_nvenc, nvenc_encode_ok, nvidia_driver_capabilities, jobs_backend, artifacts_backend,
+      info: ($info | {gpu, ffmpeg_h264_nvenc, nvenc_encode_ok, nvenc_probe, nvidia_driver_capabilities, jobs_backend, artifacts_backend,
                       webhook_key_configured, ready_after_s, deploy})
     }' | tee "$OUT_DIR/pod-smoke-$(date -u +%m%d%H%M%S).json"
   [[ "$(jq -r .status <<<"$st")" == succeeded ]] || die "job $id ended $(jq -c '{status, error}' <<<"$st")"
