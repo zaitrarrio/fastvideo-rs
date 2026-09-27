@@ -1471,6 +1471,32 @@ additions and readings; everything is re-exported from the crate root.
 | **WP-10 fv-serve binary** | `crates/fastvideo-serve/**`, `configs/serve/*.toml` | 02, 05 | Config and env; router assembly with a route-collision test (§9 table); `/healthz`, `/ping`, `/health` (`{"status":"ok","model_loaded":bool}`), `/`, `/metrics`, `/files`; native `/fv/v1/{capabilities,streams}`; graceful shutdown; `--features fake` e2e smoke in CI |
 | **WP-11 CUDA backend (batch)** | `crates/fastvideo-engine-service/src/cuda/{mod,h3,ltx2,wan,caps}.rs` | 02, E1 | `CudaBackend` loads H3 (recipes), LTX 2.3/2.5, Wan/FastWan/TI2V presets resident; caps derived from the loaded configs (audio rate from vocoder); `generate` maps `ResolvedJob` to `H3Request`/`Ltx2Request`/`GenerateConfig`; GPU smoke per family on a Runpod pod via `fv-gpucheck`-style script |
 
+**WP-11 notes (as implemented).**
+
+- Tier table (`cuda/caps.rs`, built without `cuda` so it is CPU-tested):
+  `h3-max` = FastH3 8-step DMD, dense attention, bf16 linears, official VAE
+  (`fasth3-8step-dense`); `h3-turbo` = FastH3 4-step VSA + profile
+  `h3/fasth3_4step_vsa` (`fasth3-4step-vsa`, also `fasth3`); `h3-draft` = the
+  same at 480p with TAEH3; untiered `sol-h3` = Sol-H3 4-step on
+  `h3/sol_h3_4step_engine_ladder` (§0.5). `ltx-pro` = LTX-2.5 distilled
+  two-stage, dense stage 2 (`ltx2/ltx25_distill_dense`); `ltx-turbo` = the Sol
+  stage 2 (`ltx2/ltx25_distill_sol`); `ltx-draft` = + NVFP4 video FFN
+  (`ltx2/ltx25_distill_sol_nvfp4`) + TAEHV. `wan-max` = Wan2.2 TI2V-5B, 50
+  UniPC steps, CFG 5 (T2V + I2V); `wan-turbo` = FastWan2.1 1.3B DMD 3-step
+  VSA, full Wan VAE; `wan-draft` = the same with TAEHV; untiered
+  `sfwan21-1.3b` = causal SF-Wan (E6 `CausalRollout`).
+- Technique profiles and `FASTVIDEO_VSA` are process-wide and read once:
+  `ProcessPlan` refuses a model set whose load-time settings differ (e.g.
+  `h3-max` + `h3-turbo`, `ltx-turbo` + `ltx-draft`, `wan-turbo` + `wan-max`);
+  such models run in separate processes (they do not co-reside anyway, R18).
+- Deviations: output goes through the pipelines' PNG frames + WAV until E2
+  lands, then NVENC MP4 via `fastvideo-media` (or in-memory frames/PCM); the
+  SF-Wan pipeline is kept for the process lifetime (the rollout borrows it);
+  `H3Pipeline`'s boxed text encoder gained a `Send` bound.
+- GPU check: `fv-gpucheck engine` (one model through `EngineService`, frames
+  compared with the CLI clip, a second job cancelled mid-run) and the
+  `serve-engine` family of `runpod-matrix.sh`.
+
 ### Phase 3: streaming (parallel after Phase 2 core)
 
 | WP | Owns | Depends | Acceptance |
