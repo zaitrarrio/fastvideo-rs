@@ -26,6 +26,7 @@ mod hunyuan15_stage;
 #[cfg(feature = "cuda")]
 mod kernels;
 #[cfg(feature = "cuda")]
+mod kernels_attn;
 mod kernels_fp8;
 #[cfg(feature = "cuda")]
 mod kernels_fuse;

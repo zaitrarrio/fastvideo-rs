@@ -5,7 +5,7 @@
 use std::collections::BTreeMap;
 
 use super::methods::*;
-use super::schedule::{Schedule, SparseRoute, StepSet};
+use super::schedule::{parse_sparsity, Schedule, SparseRoute, StepSet, VsaSchedule};
 use super::technique::{Capability, ModelSpec, Technique};
 
 type Factory = fn(&str, &toml::Table) -> Result<Box<dyn Technique>, String>;
@@ -23,6 +23,11 @@ pub static TECHNIQUES: &[(&str, &str, Factory)] = &[
         sol_attn,
     ),
     ("vsa", "FastVideo VSA", vsa),
+    (
+        "fp8_attention",
+        "SageAttention-style FP8 Q K^T (opt-in, lossy)",
+        fp8_attention,
+    ),
     ("pisa", "PISA piecewise sparse attention", pisa),
     ("teacache", "TeaCache step-output reuse", teacache),
     ("bf16_linears", "bf16 linears", |n, t| {
@@ -117,6 +122,15 @@ fn sol_attn(name: &str, t: &toml::Table) -> Result<Box<dyn Technique>, String> {
     if let Some(v) = p.bool("correctness_gate")? {
         sol.correctness_gate = v;
     }
+    match p.string("dense_backend")?.as_deref() {
+        None | Some("dense") => {}
+        Some("vsa") => sol.dense_vsa = true,
+        Some(other) => {
+            return Err(format!(
+                "techniques.{name}.dense_backend = {other:?}: expected \"dense\" or \"vsa\""
+            ))
+        }
+    }
     if p.bool("force_dense")? == Some(true) {
         // SOL_ATTN_FORCE_DENSE: every call dense.
         sol.route = SparseRoute {
@@ -131,19 +145,60 @@ fn sol_attn(name: &str, t: &toml::Table) -> Result<Box<dyn Technique>, String> {
 fn vsa(name: &str, t: &toml::Table) -> Result<Box<dyn Technique>, String> {
     let mut p = Params::new(name, t);
     let enabled = p.enabled()?;
-    let sparsity = p.f64("sparsity")?;
-    if let Some(s) = sparsity {
-        if !(0.0..1.0).contains(&s) {
-            return Err(format!("techniques.{name}.sparsity = {s}: need [0, 1)"));
-        }
-    }
+    let (sparsity, per_step) = match p.get("sparsity") {
+        Some(v) => parse_sparsity(v).map_err(|e| format!("techniques.{name}.{e}"))?,
+        None => (None, BTreeMap::new()),
+    };
     let group = p.usize("group")?.map(|g| g.max(1));
+    let dense_steps = p.index_set("dense_steps")?.unwrap_or_default();
+    let dense_layers = p.index_set("dense_layers")?.unwrap_or_default();
+    let dense_sparsity = p.f64("dense_sparsity")?.unwrap_or(0.0);
+    if !(0.0..1.0).contains(&dense_sparsity) {
+        return Err(format!(
+            "techniques.{name}.dense_sparsity = {dense_sparsity}: need [0, 1)"
+        ));
+    }
     p.finish()?;
     Ok(Box::new(Vsa {
         enabled,
         sparsity,
         group,
+        schedule: VsaSchedule {
+            per_step,
+            dense_steps,
+            dense_layers,
+            dense_sparsity,
+        },
     }))
+}
+
+fn fp8_attention(name: &str, t: &toml::Table) -> Result<Box<dyn Technique>, String> {
+    let mut p = Params::new(name, t);
+    let enabled = p.enabled()?;
+    let ops = match p.get("ops") {
+        None => Fp8AttentionOps::parse("all")?,
+        Some(toml::Value::String(s)) => {
+            Fp8AttentionOps::parse(s).map_err(|e| format!("techniques.{name}.ops: {e}"))?
+        }
+        Some(toml::Value::Array(a)) => {
+            let list: Vec<&str> = a.iter().filter_map(|v| v.as_str()).collect();
+            if list.len() != a.len() {
+                return Err(format!("techniques.{name}.ops must be strings"));
+            }
+            Fp8AttentionOps::parse(&list.join(","))
+                .map_err(|e| format!("techniques.{name}.ops: {e}"))?
+        }
+        Some(other) => {
+            return Err(format!(
+                "techniques.{name}.ops = {other}: expected \"all\", \"dense\", \"vsa\" or a list"
+            ))
+        }
+    };
+    if !ops.any() {
+        return Err(format!("techniques.{name}.ops: nothing selected"));
+    }
+    p.finish()?;
+    Ok(Box::new(Fp8Attention { enabled, ops }))
 }
 
 fn pisa(name: &str, t: &toml::Table) -> Result<Box<dyn Technique>, String> {

@@ -6,6 +6,7 @@ pub(crate) mod act16;
 pub mod affine;
 pub mod ar_cache;
 pub mod attn;
+pub mod attn_fp8;
 pub mod bf16_gemm;
 pub mod clip;
 #[cfg(feature = "cuda")]

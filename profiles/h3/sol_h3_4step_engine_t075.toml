@@ -1,0 +1,22 @@
+# Sol-H3 4-step, the engine route at tau 0.75 (milder).
+# An arm of the h3attn matrix family (docs/techniques.md, "H3 attention arms").
+
+[id]
+name = "sol_h3_4step_engine_t075"
+family = "minimax_h3"
+description = "Sol-H3 4-step, the engine route at tau 0.75 (milder)."
+
+[pipeline]
+model = "h3"
+recipe = "sol-h3"
+
+[techniques.sol_attn]
+preset = "engine"
+tau = 0.75
+dense_steps = 1
+dense_layers = 2
+sink = "prefix"
+
+[techniques.mxfp8]
+
+[techniques.bf16_activations]

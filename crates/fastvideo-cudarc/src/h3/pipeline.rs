@@ -571,6 +571,9 @@ pub struct H3Pipeline {
     contract: H3InferenceContract,
     /// The technique set this pipeline runs (recipe + profile + env flags).
     techniques: H3Techniques,
+    /// `options.dense` before a `dense_attention` technique forced it (the
+    /// caller's `--dense` or a dense recipe); [`Self::set_arm`] restores it.
+    base_dense: bool,
     schedule: H3JointSchedule,
     refiner: H3TextRefiner,
     model: H3Transformer,
@@ -650,6 +653,7 @@ impl H3Pipeline {
         let techniques =
             H3Techniques::from_process(options.recipe.as_deref(), &contract, options.ref2va)
                 .map_err(msg)?;
+        let base_dense = options.dense;
         if techniques.forces_dense() {
             options.dense = true;
         }
@@ -971,6 +975,7 @@ impl H3Pipeline {
             cfg,
             contract,
             techniques,
+            base_dense,
             schedule,
             refiner,
             model,
@@ -1041,6 +1046,87 @@ impl H3Pipeline {
     /// The resolved technique set (recipe + profile + env flags).
     pub fn techniques(&self) -> &H3Techniques {
         &self.techniques
+    }
+
+    /// Switch the loaded pipeline to another technique profile's runtime
+    /// choices (one arm of a multi-arm run: `fv-gpucheck h3 gen --arm`),
+    /// without reloading anything. `None` is the process's own profile.
+    ///
+    /// Only what is decided per request may differ: the attention route
+    /// (dense / VSA and its schedule / Sol-Attn and its route), FP8
+    /// attention and TeaCache. Everything fixed at load (recipe, linear and
+    /// activation precision, kernels, residency, decoder, every installed
+    /// `FASTVIDEO_*` setting) must equal the process's, or this is an error
+    /// and the arm needs its own process.
+    pub fn set_arm(
+        &mut self,
+        profile: Option<&fastvideo_models::techniques::Profile>,
+    ) -> Result<()> {
+        let active = fastvideo_models::techniques::settings::active();
+        let profile = profile.or(active.profile.as_ref());
+        if let Some(p) = profile {
+            if let (Some(want), Some(have)) = (p.recipe.as_deref(), self.options.recipe.as_deref())
+            {
+                if want != have {
+                    return Err(msg(format!(
+                        "arm {}: recipe {want} differs from the loaded {have}",
+                        p.name
+                    )));
+                }
+            }
+            let settings = p.settings().map_err(msg)?;
+            for (k, v, source) in settings.iter() {
+                if active.settings.get(k) != Some(v) {
+                    return Err(msg(format!(
+                        "arm {}: technique '{source}' installs {k}={v}, the loaded process has {:?}; run it in its own process",
+                        p.name,
+                        active.settings.get(k)
+                    )));
+                }
+            }
+            for (k, v, _) in active.settings.iter() {
+                if settings.get(k) != Some(v) {
+                    return Err(msg(format!(
+                        "arm {}: the loaded process installs {k}={v}, the arm does not; run it in its own process",
+                        p.name
+                    )));
+                }
+            }
+        }
+        let techniques = H3Techniques::resolve(
+            self.options.recipe.as_deref(),
+            &self.contract,
+            self.options.ref2va,
+            profile,
+            &|k| fastvideo_models::techniques::settings::var(k),
+        )
+        .map_err(msg)?;
+        if techniques.taeh3.is_some() != self.techniques.taeh3.is_some() {
+            return Err(msg("arm: the video decoder (taeh3) is fixed at load"));
+        }
+        // `dense` came from the caller, the contract, or a dense_attention
+        // technique; only the last one belongs to the arm.
+        let was_forced = self.techniques.forces_dense();
+        if was_forced && !techniques.forces_dense() && !self.contract.dense {
+            self.options.dense = self.base_dense;
+        }
+        if techniques.forces_dense() {
+            self.options.dense = true;
+        }
+        self.model.disable_teacache();
+        if let Some(state) = techniques
+            .teacache_state(self.schedule.num_steps())
+            .map_err(msg)?
+        {
+            self.model.enable_teacache(state)?;
+        }
+        crate::wan::log::info(format_args!(
+            "h3 arm {}: {}",
+            profile.map_or("(none)", |p| p.name.as_str()),
+            techniques.describe()
+        ));
+        self.techniques = techniques;
+        Ok(())
     }
 
     pub fn options(&self) -> &H3PipelineOptions {
@@ -1263,7 +1349,14 @@ impl H3Pipeline {
         // Interleaved Ref2VA condition audio breaks VSA's contiguous-prefix tiles.
         let force_dense = layout.num_condition_audio_rows > 0;
         let sol_kind = self.techniques.sol_policy;
-        let vsa = if !uses_vsa(sol_kind, self.options.dense, force_dense, &self.contract) {
+        // A Sol route with `dense_backend = "vsa"` runs its dense calls on VSA.
+        let sol_dense_vsa = self.techniques.sol().is_some_and(|s| s.dense_vsa)
+            && !self.options.dense
+            && !force_dense
+            && self.contract.vsa_sparsity > 0.0;
+        let vsa = if !sol_dense_vsa
+            && !uses_vsa(sol_kind, self.options.dense, force_dense, &self.contract)
+        {
             if force_dense && !self.options.dense && sol_kind == H3SolAttnPolicy::Off {
                 crate::wan::log::info(format_args!(
                     "h3 ref2va: dense attention (interleaved condition audio)"
@@ -1281,12 +1374,16 @@ impl H3Pipeline {
                 group: self.techniques.vsa_group,
                 tile_size: self.contract.vsa_tile_size,
             };
-            Some(H3Vsa::new(
-                &layout,
-                cfg.num_attention_heads,
-                cfg.attention_head_dim,
-                vsa_cfg,
-            )?)
+            Some(
+                H3Vsa::new(
+                    &layout,
+                    cfg.num_attention_heads,
+                    cfg.attention_head_dim,
+                    vsa_cfg,
+                )?
+                .with_schedule(sparsity, self.techniques.vsa_schedule.clone())
+                .with_fp8(self.techniques.fp8_attention.vsa),
+            )
         };
         let layout = DeviceLayout::new(cfg, layout)?;
         let sol_policy = match &self.techniques.attention {
@@ -1308,7 +1405,10 @@ impl H3Pipeline {
             }
         };
         let mode = if let Some(ref policy) = sol_policy {
-            AttnMode::Sol(policy)
+            match vsa.as_ref() {
+                Some(vsa) if sol_dense_vsa => AttnMode::SolVsa { policy, vsa },
+                _ => AttnMode::Sol(policy),
+            }
         } else {
             vsa.as_ref().map_or(AttnMode::Dense, AttnMode::Vsa)
         };
@@ -1340,7 +1440,10 @@ impl H3Pipeline {
         crate::wan::gpu_trace::step_begin();
         let timer = Instant::now();
         let mut last = Instant::now();
-        let (video_rows, audio_rows) = denoise(
+        // fp8_attention (opt-in): dense calls of this denoise on the FP8 kernel;
+        // the refiner above and the decoders below stay bf16.
+        crate::wan::attn_fp8::set_ops(self.techniques.fp8_attention.dense, false);
+        let denoised = denoise(
             &self.model,
             &layout,
             &text_refined,
@@ -1367,7 +1470,9 @@ impl H3Pipeline {
                 last = Instant::now();
                 Ok(())
             },
-        )?;
+        );
+        crate::wan::attn_fp8::set_ops(false, false);
+        let (video_rows, audio_rows) = denoised?;
         timings.denoise_s = timer.elapsed().as_secs_f64();
         timings.step_s = step_s;
         // TeaCache rows and the step's AdaLN rows go with the denoise.

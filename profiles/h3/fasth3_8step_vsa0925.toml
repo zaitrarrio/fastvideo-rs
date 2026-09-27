@@ -1,0 +1,18 @@
+# FastH3 8-step, VSA sparsity 0.925 everywhere (recipe 0.8), MXFP8.
+# An arm of the h3attn matrix family (docs/techniques.md, "H3 attention arms").
+
+[id]
+name = "fasth3_8step_vsa0925"
+family = "minimax_h3"
+description = "FastH3 8-step, VSA sparsity 0.925 everywhere (recipe 0.8), MXFP8."
+
+[pipeline]
+model = "h3"
+recipe = "8step"
+
+[techniques.vsa]
+sparsity = 0.925
+
+[techniques.mxfp8]
+
+[techniques.bf16_activations]

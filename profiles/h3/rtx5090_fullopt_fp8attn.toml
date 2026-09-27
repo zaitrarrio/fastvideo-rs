@@ -1,0 +1,33 @@
+# sol-h3-rtx fullopt with its dense forwards and blocks on the FP8 Q K^T kernel.
+# An arm of the h3attn matrix family (docs/techniques.md, "H3 attention arms"):
+# h3/rtx5090_fullopt with one change (sol-engine's knobs: SOL_ATTN_TAU,
+# SOL_ATTN_FIRST_DENSE_STEPS / _LAYERS). The published profile stays the default.
+
+[id]
+name = "rtx5090_fullopt_fp8attn"
+family = "minimax_h3"
+description = "sol-h3-rtx fullopt with its dense forwards and blocks on the FP8 Q K^T kernel."
+
+[pipeline]
+model = "h3"
+recipe = "sol-h3-rtx"
+
+[techniques.sol_attn]
+preset = "rtx"
+tau = 1.0
+thresh_type = "diag"
+dense_steps = 10
+dense_layers = 2
+sink = "text"
+
+[techniques.fp8_attention]
+ops = "dense"
+
+[techniques.teacache]
+threshold = 0.10
+retain_steps = 5
+cooldown_steps = 1
+num_forwards = 49
+coefficients = [1.0, 0.0]
+
+[techniques.bf16_linears]

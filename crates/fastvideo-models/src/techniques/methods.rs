@@ -17,7 +17,7 @@
 use std::any::Any;
 use std::collections::BTreeMap;
 
-use super::schedule::{parse_index_set, parse_tau, Schedule, SparseRoute, StepSet};
+use super::schedule::{parse_index_set, parse_tau, Schedule, SparseRoute, StepSet, VsaSchedule};
 use super::technique::{Capability, Kind, ModelSpec, Phase, Seam, Technique, TransformPhase};
 
 /// Where a Sol layer's exact KV sink sits (and whether Q/K/V are permuted).
@@ -81,6 +81,11 @@ pub struct SolAttn {
     /// `SOL_ATTN_CORRECTNESS_GATE`: sol-engine's sampled dense-vs-Sol gate.
     /// Not implemented here (recorded, and a warning when on).
     pub correctness_gate: bool,
+    /// What a dense `(step, layer)` of the route runs: dense attention
+    /// (`false`, every published route), or the recipe's VSA with its gate
+    /// (`dense_backend = "vsa"`, for the VSA-distilled FastH3 checkpoints,
+    /// whose trained function is VSA, not dense).
+    pub dense_vsa: bool,
     /// The named route this came from, if any (`rtx`, `engine`, `spark`).
     pub preset: Option<String>,
 }
@@ -99,6 +104,7 @@ impl SolAttn {
             sink: SinkMode::Text,
             thresh_type: "diag".into(),
             correctness_gate: false,
+            dense_vsa: false,
             preset: Some("rtx".into()),
         }
     }
@@ -173,6 +179,77 @@ pub struct Vsa {
     pub sparsity: Option<f64>,
     /// Query-tile group size; `None` keeps the model default.
     pub group: Option<usize>,
+    /// Per-step / per-layer sparsity (`sparsity = { 0 = 0.8 }`,
+    /// `dense_steps`, `dense_layers`, `dense_sparsity`); uniform by default.
+    pub schedule: VsaSchedule,
+}
+
+impl Vsa {
+    /// VSA at one sparsity everywhere (`None`: the recipe's).
+    pub fn uniform(sparsity: Option<f64>, group: Option<usize>) -> Self {
+        Self {
+            enabled: Schedule::Const(true),
+            sparsity,
+            group,
+            schedule: VsaSchedule::default(),
+        }
+    }
+}
+
+/// Where FP8 attention replaces the bf16 kernels.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Fp8AttentionOps {
+    /// Dense attention calls (the dense recipes, dense Sol steps / layers).
+    pub dense: bool,
+    /// The VSA fine stage.
+    pub vsa: bool,
+}
+
+impl Fp8AttentionOps {
+    pub fn any(self) -> bool {
+        self.dense || self.vsa
+    }
+
+    /// `FASTVIDEO_ATTN_FP8`: `0` / `off`, `1` / `on` / `all`, `dense`, `vsa`,
+    /// or a comma list.
+    pub fn parse(s: &str) -> Result<Self, String> {
+        let mut out = Self::default();
+        for tok in s.split(',').map(|t| t.trim().to_ascii_lowercase()) {
+            match tok.as_str() {
+                "" | "0" | "off" | "false" => {}
+                "1" | "on" | "all" | "true" => {
+                    out.dense = true;
+                    out.vsa = true;
+                }
+                "dense" => out.dense = true,
+                "vsa" => out.vsa = true,
+                other => {
+                    return Err(format!(
+                        "FP8 attention op {other:?}: expected off|all|dense|vsa"
+                    ))
+                }
+            }
+        }
+        Ok(out)
+    }
+
+    pub fn describe(self) -> &'static str {
+        match (self.dense, self.vsa) {
+            (true, true) => "dense+vsa",
+            (true, false) => "dense",
+            (false, true) => "vsa",
+            (false, false) => "off",
+        }
+    }
+}
+
+/// SageAttention-style FP8 attention (opt-in, lossy): Q and smoothed K
+/// quantized to E4M3 per 64-row block, `Q K^T` on FP8 tensor cores with f32
+/// accumulation, `P V` in bf16 (`cudarc::wan::attn_fp8`).
+#[derive(Clone, Debug, PartialEq)]
+pub struct Fp8Attention {
+    pub enabled: Schedule<bool>,
+    pub ops: Fp8AttentionOps,
 }
 
 /// PISA piecewise sparse attention (LTX-2 stage 2).
@@ -345,14 +422,15 @@ impl Technique for SolAttn {
     }
     fn describe(&self) -> String {
         format!(
-            "sol_attn{} ({}, sink {}, thresh {})",
+            "sol_attn{} ({}, sink {}, thresh {}{})",
             self.preset
                 .as_deref()
                 .map(|p| format!(" [{p}]"))
                 .unwrap_or_default(),
             self.route.describe(),
             self.sink.as_str(),
-            self.thresh_type
+            self.thresh_type,
+            if self.dense_vsa { ", dense calls on VSA" } else { "" }
         )
     }
     any!();
@@ -375,11 +453,56 @@ impl Technique for Vsa {
         &self.enabled
     }
     fn describe(&self) -> String {
+        let schedule = if self.schedule.is_uniform() {
+            String::new()
+        } else {
+            let mut parts: Vec<String> = self
+                .schedule
+                .per_step
+                .iter()
+                .map(|(s, v)| format!("step {s}: {v}"))
+                .collect();
+            if !self.schedule.dense_steps.is_empty() {
+                parts.push(format!(
+                    "steps {} at {}",
+                    self.schedule.dense_steps, self.schedule.dense_sparsity
+                ));
+            }
+            if !self.schedule.dense_layers.is_empty() {
+                parts.push(format!(
+                    "layers {} at {}",
+                    self.schedule.dense_layers, self.schedule.dense_sparsity
+                ));
+            }
+            format!("; {}", parts.join(", "))
+        };
         format!(
-            "vsa (sparsity {}, group {})",
+            "vsa (sparsity {}, group {}{schedule})",
             self.sparsity.map_or("recipe".into(), |s| s.to_string()),
             self.group.map_or("default".into(), |g| g.to_string())
         )
+    }
+    any!();
+}
+
+impl Technique for Fp8Attention {
+    fn name(&self) -> &'static str {
+        "fp8_attention"
+    }
+    fn kind(&self) -> Kind {
+        Kind::Transform(TransformPhase::Build)
+    }
+    fn writes(&self) -> &'static [Seam] {
+        &[Seam::Attention]
+    }
+    fn required_capabilities(&self) -> &'static [Capability] {
+        SWAPPABLE_ATTENTION
+    }
+    fn enabled(&self) -> &Schedule<bool> {
+        &self.enabled
+    }
+    fn describe(&self) -> String {
+        format!("fp8_attention ({}; Q K^T e4m3, P V bf16)", self.ops.describe())
     }
     any!();
 }

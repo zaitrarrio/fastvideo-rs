@@ -1,0 +1,20 @@
+# Sol-H3 4-step, dense attention on the FP8 Q K^T kernel.
+# An arm of the h3attn matrix family (docs/techniques.md, "H3 attention arms").
+
+[id]
+name = "sol_h3_4step_fp8attn"
+family = "minimax_h3"
+description = "Sol-H3 4-step, dense attention on the FP8 Q K^T kernel."
+
+[pipeline]
+model = "h3"
+recipe = "sol-h3"
+
+[techniques.dense_attention]
+
+[techniques.fp8_attention]
+ops = "dense"
+
+[techniques.mxfp8]
+
+[techniques.bf16_activations]

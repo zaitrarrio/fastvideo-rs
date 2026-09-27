@@ -1,0 +1,20 @@
+# FastH3 4-step VSA, 0.95 with step 0 and blocks 0-1 / 48-49 at 0.9, MXFP8.
+# An arm of the h3attn matrix family (docs/techniques.md, "H3 attention arms").
+
+[id]
+name = "fasth3_4step_vsa095_edges"
+family = "minimax_h3"
+description = "FastH3 4-step VSA, 0.95 with step 0 and blocks 0-1 / 48-49 at 0.9, MXFP8."
+
+[pipeline]
+model = "h3"
+recipe = "4step-vsa"
+
+[techniques.vsa]
+sparsity = { default = 0.95, 0 = 0.9 }
+dense_layers = "0-1,48-49"
+dense_sparsity = 0.9
+
+[techniques.mxfp8]
+
+[techniques.bf16_activations]
