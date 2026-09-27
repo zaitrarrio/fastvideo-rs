@@ -17,6 +17,10 @@
 //! inline. `FASTVIDEO_PNG_SYNC=0`: skip the per-file sync.
 //! `FASTVIDEO_WRITER_TRACE=1`: log one line per batch (arrival time, ffmpeg
 //! blocking, PNGs in flight, bytes buffered).
+//!
+//! A third, in-memory output (serve E2, [`crate::sink`]): a writer opened
+//! with [`WriterOptions::tap`] hands every batch's buffer, the one ffmpeg and
+//! the PNG encoder read, to that channel as well.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -125,6 +129,32 @@ struct Fed {
     stats: WriterStats,
 }
 
+/// How [`VideoWriter::open`] writes a clip.
+#[derive(Debug, Clone)]
+pub struct WriterOptions {
+    /// The mp4's frame rate (0 = no mp4).
+    pub fps: u32,
+    /// Produce `output.mp4` (with `fps > 0`).
+    pub mp4: bool,
+    /// A WAV on disk muxed into the mp4 as AAC.
+    pub audio: Option<PathBuf>,
+    pub png: PngMode,
+    /// Also send every batch here (in push order), sharing its buffer.
+    pub(crate) tap: Option<std::sync::mpsc::Sender<crate::sink::Tapped>>,
+}
+
+impl WriterOptions {
+    pub fn new(fps: u32, mp4: bool, audio: Option<PathBuf>, png: PngMode) -> Self {
+        Self {
+            fps,
+            mp4,
+            audio,
+            png,
+            tap: None,
+        }
+    }
+}
+
 /// Writes frames as they are decoded: raw rgb24 straight into an ffmpeg
 /// process (when `fps > 0` and `mp4` is set) and `frame-NNN.png` files as
 /// [`PngMode`] says. See the module docs.
@@ -161,36 +191,45 @@ impl VideoWriter {
         audio: Option<&Path>,
         png: PngMode,
     ) -> Result<Self> {
-        let budget = match png {
+        Self::open(
+            dir,
+            WriterOptions {
+                fps,
+                mp4,
+                audio: audio.map(Path::to_path_buf),
+                png,
+                tap: None,
+            },
+        )
+    }
+
+    /// A writer as `opts` says (the PNG deferral budget from the environment).
+    pub fn open(dir: &Path, opts: WriterOptions) -> Result<Self> {
+        let budget = match opts.png {
             PngMode::Deferred => buffer_budget(),
             _ => 0,
         };
-        Self::spawn_budget(dir, fps, mp4, audio, png, budget)
+        Self::spawn_budget(dir, opts, budget)
     }
 
-    /// [`Self::spawn_with`] with an explicit deferral budget in bytes.
-    fn spawn_budget(
-        dir: &Path,
-        fps: u32,
-        mp4: bool,
-        audio: Option<&Path>,
-        png: PngMode,
-        budget: usize,
-    ) -> Result<Self> {
+    /// [`Self::open`] with an explicit deferral budget in bytes.
+    fn spawn_budget(dir: &Path, opts: WriterOptions, budget: usize) -> Result<Self> {
         std::fs::create_dir_all(dir).map_err(|e| msg(e.to_string()))?;
-        if let Some(a) = audio {
+        if let Some(a) = &opts.audio {
             if !a.is_file() {
                 return Err(msg(format!("audio track {} does not exist", a.display())));
             }
         }
+        let png = opts.png;
         let cfg = FeedConfig {
             dir: dir.to_path_buf(),
-            fps,
-            mp4,
-            audio: audio.map(Path::to_path_buf),
+            fps: opts.fps,
+            mp4: opts.mp4,
+            audio: opts.audio,
             png,
             budget,
             trace: super::envflag::bool_flag("FASTVIDEO_WRITER_TRACE", false),
+            tap: opts.tap,
         };
         Self::start(
             "fv-video-writer",
@@ -409,6 +448,7 @@ struct FeedConfig {
     png: PngMode,
     budget: usize,
     trace: bool,
+    tap: Option<std::sync::mpsc::Sender<crate::sink::Tapped>>,
 }
 
 /// The feed thread: rgb24 into ffmpeg in order, PNGs encoded inline or held
@@ -444,6 +484,15 @@ fn feed(rx: std::sync::mpsc::Receiver<FrameBatch>, cfg: &FeedConfig) -> Result<F
                 ffmpeg = Some(spawn_ffmpeg_rgb(&out, w, h, cfg.fps, cfg.audio.as_deref())?);
             }
             let rgb = Arc::new(rgb);
+            if let Some(tap) = &cfg.tap {
+                // A dropped receiver (the caller gave up) costs the tap only.
+                let _ = tap.send(crate::sink::Tapped {
+                    offset,
+                    h,
+                    w,
+                    rgb: rgb.clone(),
+                });
+            }
             let inline = match cfg.png {
                 PngMode::Off => false,
                 PngMode::Inline => true,
@@ -654,6 +703,16 @@ fn spawn_ffmpeg_rgb(
 mod tests {
     use super::*;
 
+    fn opts(png: PngMode) -> WriterOptions {
+        WriterOptions {
+            fps: 0,
+            mp4: false,
+            audio: None,
+            png,
+            tap: None,
+        }
+    }
+
     fn tmp(tag: &str) -> PathBuf {
         std::env::temp_dir().join(format!("fv-writer-{tag}-{}", std::process::id()))
     }
@@ -668,8 +727,7 @@ mod tests {
         for mode in [PngMode::Inline, PngMode::Deferred] {
             let dir = tmp(mode.as_str());
             let _ = std::fs::remove_dir_all(&dir);
-            let mut writer =
-                VideoWriter::spawn_budget(&dir, 0, false, None, mode, 1 << 20).unwrap();
+            let mut writer = VideoWriter::spawn_budget(&dir, opts(mode), 1 << 20).unwrap();
             writer
                 .push(0, h, w, frames[..3 * h * w * 3].to_vec())
                 .unwrap();
@@ -702,8 +760,7 @@ mod tests {
         let (h, w) = (4usize, 4usize);
         let dir = tmp("spill");
         let _ = std::fs::remove_dir_all(&dir);
-        let mut writer =
-            VideoWriter::spawn_budget(&dir, 0, false, None, PngMode::Deferred, 0).unwrap();
+        let mut writer = VideoWriter::spawn_budget(&dir, opts(PngMode::Deferred), 0).unwrap();
         writer.push(0, h, w, vec![9u8; 2 * h * w * 3]).unwrap();
         let (paths, _) = writer.finish().unwrap();
         assert_eq!(paths.len(), 2);

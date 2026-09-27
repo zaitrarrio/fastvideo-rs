@@ -52,8 +52,13 @@ fn main() -> ExitCode {
     };
     let res = rt.block_on(async move {
         tracing::info!(config = %config.redacted(), "fv-serve {}", env!("CARGO_PKG_VERSION"));
+        let boot = fastvideo_serve::deploy::Boot::now();
+        let queue = config.server.mode == fastvideo_serve::config::Mode::RunpodQueue;
         let addr = config.bind_addr()?;
         let app = App::build(config, Overrides::default()).await?;
+        if queue {
+            return fastvideo_serve::deploy::run_runpod_queue(app, boot, fastvideo_serve::shutdown::signal()).await;
+        }
         let listener = tokio::net::TcpListener::bind(addr).await?;
         tracing::info!(%addr, "listening");
         app.serve(listener, fastvideo_serve::shutdown::signal()).await

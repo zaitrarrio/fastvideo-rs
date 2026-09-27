@@ -48,6 +48,8 @@ if [[ "${FV_SERVE_HEAVY:-0}" == "1" ]]; then
   # (serve-kit's d1_live smoke test runs above when CLOUDFLARE_API_KEY or
   # FV_CF_API_TOKEN is set, and skips otherwise.)
   run cargo test -p fastvideo-serve --features http-client
+  # The Runpod worker over reqwest against the queue simulator on TCP.
+  run cargo test -p fastvideo-deploy --features runpod
 fi
 
 if [[ "${FV_SERVE_CUDA:-0}" == "1" ]]; then

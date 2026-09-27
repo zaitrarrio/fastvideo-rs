@@ -109,6 +109,12 @@ fn public_base(c: &Config) -> anyhow::Result<Url> {
         return Url::parse(u).context("server.public_base_url");
     }
     let addr: SocketAddr = c.bind_addr()?;
+    // Runpod pod proxy / LB URL, Vast public IP:port (WP-16 discovery).
+    if c.server.mode == Mode::Http {
+        if let Some(u) = fastvideo_deploy::env::Discovery::from_process().public_base_url(addr.port()) {
+            return Url::parse(&u).context("discovered public base URL");
+        }
+    }
     let host = if addr.ip().is_unspecified() { "127.0.0.1".to_owned() } else { addr.ip().to_string() };
     Url::parse(&format!("http://{host}:{}", addr.port())).context("public base")
 }
@@ -121,11 +127,6 @@ impl App {
     /// Builds everything (starts the engine and background tasks; needs a
     /// tokio runtime).
     pub async fn build(config: Config, ov: Overrides) -> anyhow::Result<App> {
-        if config.server.mode == Mode::RunpodQueue {
-            // Mount point for WP-16 (`fastvideo_deploy::runpod` worker loop
-            // driving this router in-process).
-            return Err(anyhow!("server.mode = runpod-queue needs the Runpod worker (WP-16), not in this build"));
-        }
         tokio::fs::create_dir_all(&config.server.state_dir)
             .await
             .with_context(|| format!("creating {}", config.server.state_dir.display()))?;
@@ -230,7 +231,17 @@ impl App {
         } else {
             None
         };
-        let router = assemble(&config, &ctx, &gate, jobs_kind, streams);
+        let mut router = assemble(&config, &ctx, &gate, jobs_kind, streams);
+        if config.server.forward {
+            let ready = Arc::new(std::sync::OnceLock::new());
+            let h = fastvideo_deploy::dispatch::RouterHandler::new(router.clone()).with_info(crate::deploy::info_fn(
+                &config,
+                gate.clone(),
+                crate::deploy::Boot::now(),
+                ready,
+            ));
+            router = crate::deploy::with_forward(router, h);
+        }
         let sweeper = spawn_sweeper(jobs, Duration::from_secs(config.jobs.sweep_interval_s.max(1)));
         Ok(App {
             config,
