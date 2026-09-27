@@ -72,7 +72,7 @@ fn fal_h3_mp4_format() {
     mp4::write_mp4(&out, cpu(Mp4Spec::fal_h3(128, 72)), &frames(128, 72, 24), Some(&native)).unwrap();
     let info = mp4::inspect(&out).unwrap();
     assert!(info.fal_h3_problems().is_empty(), "{:?}\n{info:#?}", info.fal_h3_problems());
-    assert_eq!(info.top_level.iter().position(|t| t == "moov") < info.top_level.iter().position(|t| t == "mdat"), true);
+    assert!(info.top_level.iter().position(|t| t == "moov") < info.top_level.iter().position(|t| t == "mdat"));
     let v = info.video().unwrap();
     assert_eq!((v.width, v.height, v.samples), (Some(128), Some(72), 24));
     let a = info.audio().unwrap().audio.clone().unwrap();

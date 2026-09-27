@@ -111,7 +111,7 @@ mod tests {
 
     #[test]
     fn stereo_channels_share_the_gain() {
-        let mut v = vec![1.0f32, -1.0].repeat(100);
+        let mut v = [1.0f32, -1.0].repeat(100);
         fade_in(&mut v, 1000, 2, 50);
         for f in v.chunks_exact(2) {
             assert_eq!(f[0], -f[1]);

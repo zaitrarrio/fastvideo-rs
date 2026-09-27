@@ -139,7 +139,7 @@ impl StreamResampler {
         self.to
     }
 
-    fn run_chunks(&mut self, out: &mut Vec<Vec<f32>>, allow_partial: bool) -> Result<()> {
+    fn run_chunks(&mut self, out: &mut [Vec<f32>], allow_partial: bool) -> Result<()> {
         let Some(r) = self.inner.as_mut() else { return Ok(()) };
         loop {
             let need = r.input_frames_next();
