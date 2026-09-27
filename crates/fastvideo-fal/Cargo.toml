@@ -1,0 +1,26 @@
+[package]
+name = "fastvideo-fal"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "fv-serve adapter: fal queue/sync API, proxy mode, storage, webhooks, and the WMA director."
+
+[dependencies]
+fastvideo-protocol.workspace = true
+fastvideo-serve-kit.workspace = true
+axum.workspace = true
+bytes.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+time.workspace = true
+tracing.workspace = true
+uuid.workspace = true
+
+fastvideo-media.workspace = true
+fastvideo-webrtc.workspace = true
+tokio = { workspace = true, features = ["sync", "time"] }
+
+[lints]
+workspace = true

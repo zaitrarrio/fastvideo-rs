@@ -1,0 +1,30 @@
+[package]
+name = "fastvideo-media"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "fv-serve media: A/V pacer, resampler, Opus and H.264 encoders, MP4 finalize, probing, sinks."
+
+[dependencies]
+fastvideo-protocol.workspace = true
+bytes.workspace = true
+image.workspace = true
+rubato.workspace = true
+thiserror.workspace = true
+tokio = { workspace = true, features = ["sync", "process", "io-util"] }
+tracing.workspace = true
+
+# Native encoders: off by default so CPU-only CI stays fast.
+openh264 = { workspace = true, optional = true }
+audiopus = { workspace = true, optional = true }
+
+[features]
+default = []
+# In-process H.264 (OpenH264, built from source).
+openh264 = ["dep:openh264"]
+# In-process Opus (libopus via audiopus).
+opus = ["dep:audiopus"]
+
+[lints]
+workspace = true
