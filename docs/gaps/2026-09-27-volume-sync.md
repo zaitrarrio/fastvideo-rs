@@ -79,14 +79,22 @@ exists (else the container disk, as before), and the b200 family looks for
 New cells: `hy15-480-t2v`, `hy15-480-i2v`, `hy15-720-t2v`, `hy15-720-i2v`,
 `ltx23` (includes `text_embedding_projection`) and `aux`. On **both**
 volumes: aux, fastwan21-1.3b, the four hy15 trees, wan21-t2v-14b,
-wan22-ti2v-5b and sfwan21-1.3b are **ok**. `ltx23` is **INCOMPLETE on both,
+wan22-ti2v-5b and sfwan21-1.3b are **ok**. `ltx23` was first **INCOMPLETE on both,
 identically**: `text_encoder/gemma/model.safetensors.index.json` names
 `text_encoder/gemma/model-0000{1..5}-of-00005.safetensors` (24.37 GB), and
-neither volume has them, because the manifest glob `text_encoder/model-*`
-does not match the `gemma/` subdirectory. The manifest's
-`latent_upsampler/*` and `ltx-2.3-22b-distilled-lora-384*.safetensors` globs
-match nothing in the repo at `22b09fb`. Fixing the glob (and fetching 24.37 GB
-on each side) is a follow-up, not done here.
+neither volume had them, because the manifest glob `text_encoder/model-*`
+does not match the `gemma/` subdirectory. With the owner's approval the
+manifest row now also takes `text_encoder/gemma/*`, the `ltx23` cell also
+requires `text_encoder/gemma`, and a CPU pod per volume (`ena0opqz49za8o` US,
+`c7cyktznj8g6wf` EU, cpu3c 8 vCPU, 4 download workers, no OOM, about 1.5
+minutes each, deleted) added `text_encoder/gemma/*` at `22b09fb` into the
+existing tree (add-only; nothing else touched). Each volume gained
+24 374 828 489 (US) / 24 374 819 368 (EU) bytes; `ltx23` is now
+71 559 124 637 (US) / 71 559 124 839 (EU) bytes. All five shards match the
+Hub's LFS SHA-256 on both volumes, and **`verify-weights.sh ltx23` is ok on
+both**. The manifest's `latent_upsampler/*` and
+`ltx-2.3-22b-distilled-lora-384*.safetensors` globs match nothing in the repo
+at `22b09fb`.
 
 ### Remaining differences (left alone on purpose)
 
@@ -108,7 +116,7 @@ Pods (all deleted; each had a local delete backstop, killed after the
 delete): `ktrxja4eloj1tv` (US, stopped: `aux` EINVAL), `273mwscpn7uuu1` (US,
 OOM-killed with `HF_XET_HIGH_PERFORMANCE`), `ul6ticbyj1y3ai` (EU, OOM-killed),
 `fkukcxrlu1b1nx` (US), `d0ut8xr2lvo98a` (EU), `1eqmqy2ozjw36e` (US check),
-`ane2ky628scnep` (EU check). About 30 pod-minutes at $0.24/hr, about $0.12.
+`ane2ky628scnep` (EU check), then `ena0opqz49za8o` / `c7cyktznj8g6wf` (ltx23 Gemma). About 33 pod-minutes at $0.24/hr, about $0.14.
 
 ## Survey (before the sync)
 

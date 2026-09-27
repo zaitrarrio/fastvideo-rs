@@ -54,7 +54,7 @@ needs() {
     hy15-480-t2v | hy15-480-i2v | hy15-720-t2v | hy15-720-i2v)
       echo "$1:transformer $1:vae $1:text_encoder $1:text_encoder_2 $1:tokenizer $1:tokenizer_2 $1:scheduler" ;;
     ltx23)
-      echo "ltx23:transformer ltx23:vae ltx23:audio_vae ltx23:vocoder ltx23:text_encoder ltx23:tokenizer ltx23:text_embedding_projection ltx23:spatial_upscaler" ;;
+      echo "ltx23:transformer ltx23:vae ltx23:audio_vae ltx23:vocoder ltx23:text_encoder ltx23:text_encoder/gemma ltx23:tokenizer ltx23:text_embedding_projection ltx23:spatial_upscaler" ;;
     aux) echo "aux" ;;
     *) return 1 ;;
   esac
