@@ -996,6 +996,20 @@ impl H3Pipeline {
         }
         if let Some(fuse) = lora.as_ref() {
             fuse.finish()?;
+            #[cfg(feature = "cuda")]
+            {
+                use super::transformer::lora_device;
+                crate::wan::log::info(format_args!(
+                    "h3 lora merge: {}",
+                    if lora_device::enabled() { "device" } else { "host" }
+                ));
+                if lora_device::verify_enabled() {
+                    let (ok, bad) = lora_device::verify_counts();
+                    crate::wan::log::info(format_args!(
+                        "load/verify h3 lora {{\"device_equal\":{ok},\"device_different\":{bad}}}"
+                    ));
+                }
+            }
         }
         timed(&mut load_timings.dit_s, timer);
         drop(map);
