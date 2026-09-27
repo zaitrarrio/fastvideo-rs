@@ -25,11 +25,11 @@ fn msg(s: impl Into<String>) -> TensorError {
     TensorError::Message(s.into())
 }
 
-/// Elements per staging chunk (64 MiB of bf16).
-const CHUNK: usize = 32 << 20;
+/// Bytes per staging chunk (a multiple of every element size used).
+const CHUNK: usize = 64 << 20;
 
 struct Stage {
-    bufs: [PinnedHostSlice<bf16>; 2],
+    bufs: [PinnedHostSlice<u8>; 2],
     pending: [Option<CudaEvent>; 2],
     next: usize,
 }
@@ -47,26 +47,46 @@ pub fn enabled() -> bool {
 /// new device buffer on the global stream. `None` when staging is off or its
 /// pinned buffers cannot be had; the caller then takes its plain path.
 pub fn upload_bf16_bytes(bytes: &[u8]) -> Result<Option<CudaSlice<bf16>>> {
-    upload_bf16_parts(&[bytes])
+    upload_parts::<bf16>(&[bytes])
 }
 
 /// [`upload_bf16_bytes`] of the concatenation of `parts` (stacked rows of a
 /// fused projection), without building the concatenation on the host.
 pub fn upload_bf16_parts(parts: &[&[u8]]) -> Result<Option<CudaSlice<bf16>>> {
-    if !enabled() || parts.iter().any(|p| p.len() % 2 != 0) {
+    upload_parts::<bf16>(parts)
+}
+
+/// A host bf16 buffer (e.g. a weight fused on the host) through the stage.
+pub fn upload_bf16_values(values: &[bf16]) -> Result<Option<CudaSlice<bf16>>> {
+    // SAFETY: bf16 is two plain bytes.
+    let bytes = unsafe { std::slice::from_raw_parts(values.as_ptr().cast::<u8>(), values.len() * 2) };
+    upload_parts::<bf16>(&[bytes])
+}
+
+/// Raw bytes (FP8 codes) through the stage.
+pub fn upload_u8(bytes: &[u8]) -> Result<Option<CudaSlice<u8>>> {
+    upload_parts::<u8>(&[bytes])
+}
+
+/// The concatenation of `parts` (little-endian `T`s) as a new `CudaSlice<T>`.
+fn upload_parts<T: cudarc::driver::DeviceRepr + cudarc::driver::ValidAsZeroBits>(
+    parts: &[&[u8]],
+) -> Result<Option<CudaSlice<T>>> {
+    let size = std::mem::size_of::<T>();
+    if !enabled() || parts.iter().any(|p| p.len() % size != 0) {
         return Ok(None);
     }
     let Some(dev) = super::device::global_device() else {
         return Ok(None);
     };
-    let n: usize = parts.iter().map(|p| p.len() / 2).sum();
-    STAGE.with(|slot| -> Result<Option<CudaSlice<bf16>>> {
+    let n: usize = parts.iter().map(|p| p.len() / size).sum();
+    STAGE.with(|slot| -> Result<Option<CudaSlice<T>>> {
         let mut slot = slot.borrow_mut();
         if slot.is_none() {
-            // SAFETY: every element is written before it is read.
+            // SAFETY: every byte is written before it is read.
             let made = (|| -> std::result::Result<_, cudarc::driver::DriverError> {
-                let a = unsafe { dev.ctx.alloc_pinned::<bf16>(CHUNK) }?;
-                let b = unsafe { dev.ctx.alloc_pinned::<bf16>(CHUNK) }?;
+                let a = unsafe { dev.ctx.alloc_pinned::<u8>(CHUNK) }?;
+                let b = unsafe { dev.ctx.alloc_pinned::<u8>(CHUNK) }?;
                 Ok([a, b])
             })();
             match made {
@@ -87,13 +107,12 @@ pub fn upload_bf16_parts(parts: &[&[u8]]) -> Result<Option<CudaSlice<bf16>>> {
         let err = |e: cudarc::driver::DriverError| msg(format!("staged upload: {e}"));
         // SAFETY: fully written by the copies below before any kernel reads it
         // (they are ordered on the same stream).
-        let mut dst = unsafe { dev.stream.alloc::<bf16>(n) }.map_err(err)?;
+        let mut dst = unsafe { dev.stream.alloc::<T>(n) }.map_err(err)?;
         let mut at = 0;
         for bytes in parts {
-            let part_n = bytes.len() / 2;
             let mut off = 0;
-            while off < part_n {
-                let len = (part_n - off).min(CHUNK);
+            while off < bytes.len() {
+                let len = (bytes.len() - off).min(CHUNK);
                 let k = stage.next;
                 stage.next ^= 1;
                 if let Some(ev) = stage.pending[k].take() {
@@ -103,25 +122,24 @@ pub fn upload_bf16_parts(parts: &[&[u8]]) -> Result<Option<CudaSlice<bf16>>> {
                 }
                 let t = Instant::now();
                 let host = stage.bufs[k].as_mut_slice().map_err(err)?;
-                // SAFETY: bf16 is two plain bytes; the pinned buffer is aligned.
-                let dst_bytes: &mut [u8] = unsafe {
-                    std::slice::from_raw_parts_mut(host.as_mut_ptr().cast::<u8>(), len * 2)
-                };
-                dst_bytes
+                host[..len]
                     .par_chunks_mut(4 << 20)
-                    .zip(bytes[off * 2..(off + len) * 2].par_chunks(4 << 20))
+                    .zip(bytes[off..off + len].par_chunks(4 << 20))
                     .for_each(|(d, s)| d.copy_from_slice(s));
                 add_consumer_time(ConsumerTime::Fill, t.elapsed());
-                let mut view = dst.slice_mut(at + off..at + off + len);
-                dev.stream
-                    .memcpy_htod(&host[..len], &mut view)
-                    .map_err(err)?;
+                // SAFETY: pinned memory is page-aligned and `len` is a whole
+                // number of `T`s; `T` is plain data.
+                let typed: &[T] =
+                    unsafe { std::slice::from_raw_parts(host.as_ptr().cast::<T>(), len / size) };
+                let first = (at + off) / size;
+                let mut view = dst.slice_mut(first..first + len / size);
+                dev.stream.memcpy_htod(typed, &mut view).map_err(err)?;
                 stage.pending[k] = Some(dev.stream.record_event(None).map_err(err)?);
                 off += len;
             }
-            at += part_n;
+            at += bytes.len();
         }
-        stats::record_h2d(n / 2);
+        stats::record_h2d(n * size / 4);
         Ok(Some(dst))
     })
 }

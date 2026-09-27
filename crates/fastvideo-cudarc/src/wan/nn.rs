@@ -301,11 +301,22 @@ impl Linear {
         if bf16_linears() {
             let dev = super::device::global_device().ok_or_else(|| msg("no device"))?;
             let host = to_bf16_par(&weight.host_cow()?);
-            let slice = dev
-                .stream
-                .memcpy_stod(&host)
-                .map_err(|e| msg(e.to_string()))?;
-            stats::record_h2d(host.len() / 2);
+            let slice = match super::stage_upload::upload_bf16_values(&host)? {
+                Some(slice) => slice,
+                None => {
+                    let t = std::time::Instant::now();
+                    let slice = dev
+                        .stream
+                        .memcpy_stod(&host)
+                        .map_err(|e| msg(e.to_string()))?;
+                    fastvideo_loader::prefetch::add_consumer_time(
+                        fastvideo_loader::prefetch::ConsumerTime::H2dPageable,
+                        t.elapsed(),
+                    );
+                    stats::record_h2d(host.len() / 2);
+                    slice
+                }
+            };
             return Ok(Self {
                 weight: CudaTensor::from_vec(Vec::new(), vec![0, in_dim])?,
                 bias,
@@ -649,15 +660,20 @@ impl Linear {
         #[cfg(feature = "cuda")]
         if let (Some((codes, scales)), true) = (&prequant, stats::device_expected()) {
             let dev = super::device::global_device().ok_or_else(|| msg("no device"))?;
-            let c = dev
-                .stream
-                .memcpy_stod(&codes[..])
-                .map_err(|e| msg(e.to_string()))?;
+            let c = match super::stage_upload::upload_u8(&codes[..])? {
+                Some(c) => c,
+                None => {
+                    stats::record_h2d(codes.len() / 4);
+                    dev.stream
+                        .memcpy_stod(&codes[..])
+                        .map_err(|e| msg(e.to_string()))?
+                }
+            };
             let s = dev
                 .stream
                 .memcpy_stod(&scales[..])
                 .map_err(|e| msg(e.to_string()))?;
-            stats::record_h2d(codes.len() / 4 + scales.len());
+            stats::record_h2d(scales.len());
             rows.dev = Some((c, s));
         }
         #[cfg(feature = "cuda")]
@@ -700,7 +716,7 @@ impl Linear {
         let on_device = false;
         if !on_device {
             rows.host = Some(match prequant {
-                Some(parts) => parts,
+                Some((codes, scales)) => (codes.to_vec(), scales),
                 None => {
                     let w = super::weights::cuda_tensor_shaped(map, &key, &[out_dim, in_dim])?;
                     host::fp8_rows_quantize(&w.host_cow()?, out_dim, in_dim)
@@ -2171,12 +2187,12 @@ pub const FP8_ROWS_SCALE_SUFFIX: &str = "weight_scale_rows";
 /// `(codes, scales)` of `prefix` when `map` holds it pre-quantized: an
 /// `F8_E4M3` `weight` of `[out, in]` plus an F32 `weight_scale_rows` of
 /// `[out]`. `None` for a float checkpoint.
-fn fp8_rows_prequantized(
-    map: &super::weights::WeightMap,
+fn fp8_rows_prequantized<'a>(
+    map: &'a super::weights::WeightMap,
     prefix: &str,
     in_dim: usize,
     out_dim: usize,
-) -> Result<Option<(Vec<u8>, Vec<f32>)>> {
+) -> Result<Option<(&'a [u8], Vec<f32>)>> {
     use fastvideo_loader::LazyDType;
     let Some(lazy) = map.lazy() else {
         return Ok(None);
@@ -2205,7 +2221,7 @@ fn fp8_rows_prequantized(
         .chunks_exact(4)
         .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
         .collect();
-    Ok(Some((w.bytes.to_vec(), scales)))
+    Ok(Some((w.bytes, scales)))
 }
 
 /// Per-linear FP8 rows `(prefix, codes, scales)` recorded by
