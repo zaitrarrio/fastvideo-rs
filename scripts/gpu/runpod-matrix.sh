@@ -425,7 +425,7 @@ Audio: male narration, grass rustle, wind, distant strings, cricket night}"
       python3 -m venv $UPV
       $UPV/bin/pip install -q --upgrade pip
       $UPV/bin/pip install -q torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu128
-      $UPV/bin/pip install -q av open_clip_torch einops timm omegaconf librosa torchdiffeq colorlog requests tqdm safetensors numpy
+      $UPV/bin/pip install -q av open_clip_torch einops timm omegaconf librosa soundfile torchdiffeq colorlog requests tqdm safetensors numpy
       rm -rf $SCRATCH/MMAudio && git clone -q https://github.com/hkchengrex/MMAudio.git $SCRATCH/MMAudio
       git -C $SCRATCH/MMAudio checkout -q 974010a026c731054592d8f777218bd9d85a6c24
       $UPV/bin/python -c 'import torch; print(torch.__version__, torch.cuda.get_device_name(0))'

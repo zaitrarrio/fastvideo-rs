@@ -70,7 +70,7 @@ def main():
     out = Path(a.out)
     out.mkdir(parents=True, exist_ok=True)
     setup(root)
-    import torchaudio
+    import soundfile  # torchaudio.save needs torchcodec on current torchaudio
     from mmaudio.eval_utils import all_model_cfg, generate, load_video
     from mmaudio.model.flow_matching import FlowMatching
     from mmaudio.model.networks import get_my_mmaudio
@@ -117,7 +117,7 @@ def main():
         runs.append(time.monotonic() - t0)
         print(f"upstream generate run {i}: {runs[-1]:.3f}s", flush=True)
     wave = audio.float().cpu()[0]
-    torchaudio.save(str(out / "upstream.flac"), wave, seq_cfg.sampling_rate)
+    soundfile.write(str(out / "upstream.wav"), wave[0].numpy(), seq_cfg.sampling_rate, subtype="FLOAT")
     (out / "upstream.f32").write_bytes(wave[0].numpy().tobytes())
     audio_s = runs[-1]
     doc = {"pipeline": "MMAudio (upstream Python, strobe sidecar settings)", "commit": "974010a",
