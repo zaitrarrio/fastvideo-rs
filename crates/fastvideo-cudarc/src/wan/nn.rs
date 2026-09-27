@@ -462,8 +462,11 @@ impl Linear {
         }
         let dev = super::device::global_device().ok_or_else(|| msg("no device"))?;
         let staged = Self::stage_bf16_weights(map, prefixes, in_dim, out_dim)?;
+        // FASTVIDEO_VERIFY_UPLOAD=1: build the plain path's buffer as well and
+        // require the staged device bytes to equal it (an identity check).
+        let verify = staged.is_some() && super::stage_upload::verify_enabled();
         let mut host: Vec<half::bf16> = Vec::new();
-        for prefix in prefixes.iter().filter(|_| staged.is_none()) {
+        for prefix in prefixes.iter().filter(|_| staged.is_none() || verify) {
             let key = super::weights::join_key(prefix, "weight");
             let (shape, values) = map
                 .lazy_bf16(&key)?
@@ -481,6 +484,16 @@ impl Linear {
             } else {
                 host.extend_from_slice(&values);
             }
+        }
+        if let (true, Some(slice)) = (verify, staged.as_ref()) {
+            let got = dev
+                .stream
+                .memcpy_dtov(slice)
+                .map_err(|e| msg(e.to_string()))?;
+            super::stage_upload::record_verify(
+                prefixes.first().copied().unwrap_or(""),
+                got.iter().map(|v| v.to_bits()).eq(host.iter().map(|v| v.to_bits())),
+            );
         }
         let slice = match staged {
             Some(slice) => slice,

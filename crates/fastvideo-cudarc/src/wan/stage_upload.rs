@@ -126,6 +126,33 @@ pub fn upload_bf16_parts(parts: &[&[u8]]) -> Result<Option<CudaSlice<bf16>>> {
     })
 }
 
+/// `FASTVIDEO_VERIFY_UPLOAD=1`: loaders also build the plain upload and
+/// compare it with the staged one.
+pub fn verify_enabled() -> bool {
+    static FLAG: super::envflag::CachedBool = super::envflag::CachedBool::new();
+    FLAG.get_or_init(|| super::envflag::bool_flag("FASTVIDEO_VERIFY_UPLOAD", false))
+}
+
+static VERIFY: [std::sync::atomic::AtomicU64; 2] =
+    [std::sync::atomic::AtomicU64::new(0), std::sync::atomic::AtomicU64::new(0)];
+
+/// Book one comparison; the first few mismatches are logged by name.
+pub fn record_verify(what: &str, equal: bool) {
+    let i = usize::from(!equal);
+    let n = VERIFY[i].fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    if !equal && n < 5 {
+        crate::wan::log::info(format_args!("staged upload MISMATCH: {what}"));
+    }
+}
+
+/// `(equal, different)` comparisons so far.
+pub fn verify_counts() -> (u64, u64) {
+    (
+        VERIFY[0].load(std::sync::atomic::Ordering::Relaxed),
+        VERIFY[1].load(std::sync::atomic::Ordering::Relaxed),
+    )
+}
+
 /// Wait for every staged copy this thread queued (before its pinned buffers
 /// could be dropped, or for a timing that must include the transfers).
 pub fn drain() -> Result<()> {

@@ -407,7 +407,7 @@ impl LazyStore {
             }
             files.push((path.clone(), map));
         }
-        let shared = crate::prefetch::new_shared(names.len());
+        let shared = crate::prefetch::new_shared(names.len(), files.len());
         Ok(Self {
             files,
             index,
@@ -507,6 +507,13 @@ impl LazyStore {
                 (e.end - e.start) as u64,
                 std::sync::atomic::Ordering::Relaxed,
             );
+        }
+        if let Some(bytes) = self.shared.mem_bytes(e.id, e.file, e.start, e.end) {
+            return Ok(LazyView {
+                dtype: &e.dtype,
+                shape: &e.shape,
+                bytes,
+            });
         }
         Ok(LazyView {
             dtype: &e.dtype,

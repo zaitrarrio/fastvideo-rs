@@ -338,6 +338,13 @@ pub fn cuda_tensor_shaped(map: &WeightMap, key: &str, expected: &[usize]) -> Res
 pub fn log_load_io(phase: &str, base: &fastvideo_loader::PrefetchStats, wall_s: f64) {
     let d = fastvideo_loader::PrefetchStats::now().since(base);
     super::log::info(format_args!("load/io {phase} {}", d.json(wall_s)));
+    #[cfg(feature = "cuda")]
+    if super::stage_upload::verify_enabled() {
+        let (ok, bad) = super::stage_upload::verify_counts();
+        super::log::info(format_args!(
+            "load/verify {phase} {{\"staged_equal\":{ok},\"staged_different\":{bad}}}"
+        ));
+    }
 }
 
 pub fn join_key(prefix: &str, name: &str) -> String {

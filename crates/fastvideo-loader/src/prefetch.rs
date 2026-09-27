@@ -29,7 +29,7 @@ use std::collections::VecDeque;
 use std::fs::File;
 use std::os::unix::fs::FileExt;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU64, AtomicU8, Ordering};
 use std::sync::{Arc, Condvar, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
@@ -98,6 +98,60 @@ pub(crate) struct StoreShared {
     prefetched: Vec<AtomicU64>,
     consumed: Vec<AtomicBool>,
     dropped: AtomicBool,
+    /// Memory mode: per shard, an anonymous mapping of the file's size that
+    /// the reads land in (`None` until a submission uses memory mode).
+    mem: Vec<OnceLock<Arc<MemShard>>>,
+    /// Per tensor: [`IDLE`], [`PENDING`] (queued into memory), [`READY`] or [`FAILED`].
+    state: Vec<AtomicU8>,
+    /// Per tensor: bytes still to land in memory.
+    remaining: Vec<AtomicU64>,
+    /// Bytes of memory-mode reads this store reserved (released on drop).
+    reserved: AtomicU64,
+}
+
+const IDLE: u8 = 0;
+const PENDING: u8 = 1;
+const READY: u8 = 2;
+const FAILED: u8 = 3;
+
+/// An anonymous mapping the size of one shard: reads are written at their
+/// file offsets, and a tensor's view is the same range of this memory.
+#[derive(Debug)]
+pub(crate) struct MemShard {
+    map: std::cell::UnsafeCell<memmap2::MmapMut>,
+}
+
+// SAFETY: disjoint ranges are written by one reader each, before the range's
+// tensor is marked READY (Release) and read (Acquire); nothing writes after.
+unsafe impl Sync for MemShard {}
+unsafe impl Send for MemShard {}
+
+impl MemShard {
+    fn new(len: usize) -> std::io::Result<Self> {
+        Ok(Self {
+            map: std::cell::UnsafeCell::new(memmap2::MmapMut::map_anon(len.max(1))?),
+        })
+    }
+
+    /// SAFETY: the caller is the only writer of `[off, off + len)`.
+    #[allow(clippy::mut_from_ref)]
+    unsafe fn range_mut(&self, off: usize, len: usize) -> &mut [u8] {
+        let m = &mut *self.map.get();
+        &mut m[off..off + len]
+    }
+
+    /// SAFETY: `[off, off + len)` is READY.
+    unsafe fn range(&self, off: usize, len: usize) -> &[u8] {
+        let m = &*self.map.get();
+        &m[off..off + len]
+    }
+}
+
+static MEM_RESERVED: AtomicU64 = AtomicU64::new(0);
+
+fn ready_cv() -> &'static (Mutex<()>, Condvar) {
+    static CV: OnceLock<(Mutex<()>, Condvar)> = OnceLock::new();
+    CV.get_or_init(|| (Mutex::new(()), Condvar::new()))
 }
 
 impl StoreShared {
@@ -115,8 +169,55 @@ impl StoreShared {
         true
     }
 
+    /// The bytes of entry `i` (`[start, end)` of file `file`) when a
+    /// memory-mode read has them, waiting for (or doing) that read if it is
+    /// still pending. `None`: read the mapping.
+    pub(crate) fn mem_bytes(&self, i: usize, file: usize, start: usize, end: usize) -> Option<&[u8]> {
+        let mut st = self.state[i].load(Ordering::Acquire);
+        if st == PENDING {
+            let t = Instant::now();
+            // Do its queued reads here rather than wait behind the queue.
+            let mine: Vec<Chunk> = {
+                let mut q = pool().queue.lock().expect("prefetch queue");
+                let mut taken = Vec::new();
+                let mut kept = VecDeque::with_capacity(q.len());
+                for c in q.drain(..) {
+                    if c.store.id == self.id && c.keys.iter().any(|(k, _)| *k as usize == i) {
+                        taken.push(c);
+                    } else {
+                        kept.push_back(c);
+                    }
+                }
+                *q = kept;
+                taken
+            };
+            let mut buf = Vec::new();
+            for c in mine {
+                process_chunk(&c, &mut buf);
+            }
+            let (m, cv) = ready_cv();
+            let mut g = m.lock().expect("ready");
+            while self.state[i].load(Ordering::Acquire) == PENDING {
+                g = cv.wait_timeout(g, Duration::from_millis(50)).expect("ready").0;
+            }
+            drop(g);
+            add_consumer_time(ConsumerTime::ReadWait, t.elapsed());
+            st = self.state[i].load(Ordering::Acquire);
+        }
+        if st != READY {
+            return None;
+        }
+        let shard = self.mem[file].get()?;
+        // SAFETY: READY was stored (Release) after the last write of this range.
+        Some(unsafe { shard.range(start, end - start) })
+    }
+
     pub(crate) fn release(&self) {
         self.dropped.store(true, Ordering::Release);
+        let r = self.reserved.swap(0, Ordering::AcqRel);
+        if r > 0 {
+            MEM_RESERVED.fetch_sub(r, Ordering::AcqRel);
+        }
         if !pool().started.load(Ordering::Acquire) {
             return;
         }
@@ -138,6 +239,8 @@ impl StoreShared {
 
 struct Chunk {
     file: Arc<File>,
+    /// Memory mode: where the bytes land (at their file offsets).
+    mem: Option<Arc<MemShard>>,
     offset: u64,
     len: usize,
     /// `(entry index, bytes of that entry inside this chunk)`.
@@ -203,6 +306,7 @@ fn start_workers(cfg: PrefetchConfig) {
 fn worker(cfg: PrefetchConfig) {
     let p = pool();
     let mut buf = vec![0u8; cfg.chunk];
+    #[allow(clippy::never_loop)]
     loop {
         let chunk = {
             let mut q = p.queue.lock().expect("prefetch queue");
@@ -211,7 +315,9 @@ fn worker(cfg: PrefetchConfig) {
                     q = p.cv.wait(q).expect("prefetch queue");
                     continue;
                 }
-                if p.outstanding.load(Ordering::Acquire) > cfg.window as i64 {
+                if q.front().is_some_and(|c| c.mem.is_none())
+                    && p.outstanding.load(Ordering::Acquire) > cfg.window as i64
+                {
                     let t = Instant::now();
                     q =
                         p.cv.wait_timeout(q, Duration::from_millis(20))
@@ -225,18 +331,26 @@ fn worker(cfg: PrefetchConfig) {
                 break q.pop_front().expect("non-empty");
             }
         };
-        let store = &chunk.store;
-        if store.dropped.load(Ordering::Acquire)
+        process_chunk(&chunk, &mut buf);
+    }
+}
+
+fn process_chunk(chunk: &Chunk, buf: &mut Vec<u8>) {
+    let p = pool();
+    let store = &chunk.store;
+    if chunk.mem.is_none()
+        && (store.dropped.load(Ordering::Acquire)
             || chunk
                 .keys
                 .iter()
-                .all(|(k, _)| store.consumed[*k as usize].load(Ordering::Acquire))
-        {
-            p.stats
-                .skipped_bytes
-                .fetch_add(chunk.len as u64, Ordering::Relaxed);
-            continue;
-        }
+                .all(|(k, _)| store.consumed[*k as usize].load(Ordering::Acquire)))
+    {
+        p.stats
+            .skipped_bytes
+            .fetch_add(chunk.len as u64, Ordering::Relaxed);
+        return;
+    }
+    if chunk.mem.is_none() {
         // Book the bytes before the read so the window holds while it runs.
         for &(k, b) in &chunk.keys {
             let k = k as usize;
@@ -249,31 +363,65 @@ fn worker(cfg: PrefetchConfig) {
                 }
             }
         }
-        let t0 = Instant::now();
-        let start_ns = t0.duration_since(epoch()).as_nanos() as u64;
-        p.stats.first_ns.fetch_min(start_ns, Ordering::Relaxed);
-        let mut done = 0usize;
-        while done < chunk.len {
-            match chunk
-                .file
-                .read_at(&mut buf[..chunk.len - done], chunk.offset + done as u64)
-            {
-                Ok(0) => break,
-                Ok(n) => done += n,
-                Err(e) if e.kind() == std::io::ErrorKind::Interrupted => {}
-                Err(_) => break,
+    }
+    let t0 = Instant::now();
+    let start_ns = t0.duration_since(epoch()).as_nanos() as u64;
+    p.stats.first_ns.fetch_min(start_ns, Ordering::Relaxed);
+    let dst: &mut [u8] = match &chunk.mem {
+        // SAFETY: each byte range is queued exactly once.
+        Some(m) => unsafe { m.range_mut(chunk.offset as usize, chunk.len) },
+        None => {
+            if buf.len() < chunk.len {
+                buf.resize(chunk.len, 0);
+            }
+            &mut buf[..chunk.len]
+        }
+    };
+    let mut done = 0usize;
+    while done < chunk.len {
+        match chunk
+            .file
+            .read_at(&mut dst[done..], chunk.offset + done as u64)
+        {
+            Ok(0) => break,
+            Ok(n) => done += n,
+            Err(e) if e.kind() == std::io::ErrorKind::Interrupted => {}
+            Err(_) => break,
+        }
+    }
+    let end = Instant::now();
+    p.stats
+        .read_ns
+        .fetch_add((end - t0).as_nanos() as u64, Ordering::Relaxed);
+    p.stats.read_bytes.fetch_add(done as u64, Ordering::Relaxed);
+    p.stats.chunks.fetch_add(1, Ordering::Relaxed);
+    p.stats.last_ns.fetch_max(
+        end.duration_since(epoch()).as_nanos() as u64,
+        Ordering::Relaxed,
+    );
+    if chunk.mem.is_some() {
+        let ok = done == chunk.len;
+        let mut changed = false;
+        for &(k, b) in &chunk.keys {
+            let k = k as usize;
+            if !ok {
+                store.state[k].store(FAILED, Ordering::Release);
+                changed = true;
+            } else if store.remaining[k].fetch_sub(b, Ordering::AcqRel) == b {
+                let _ = store.state[k].compare_exchange(
+                    PENDING,
+                    READY,
+                    Ordering::AcqRel,
+                    Ordering::Acquire,
+                );
+                changed = true;
             }
         }
-        let end = Instant::now();
-        p.stats
-            .read_ns
-            .fetch_add((end - t0).as_nanos() as u64, Ordering::Relaxed);
-        p.stats.read_bytes.fetch_add(done as u64, Ordering::Relaxed);
-        p.stats.chunks.fetch_add(1, Ordering::Relaxed);
-        p.stats.last_ns.fetch_max(
-            end.duration_since(epoch()).as_nanos() as u64,
-            Ordering::Relaxed,
-        );
+        if changed {
+            let (m, cv) = ready_cv();
+            drop(m.lock().expect("ready"));
+            cv.notify_all();
+        }
     }
 }
 
@@ -286,13 +434,30 @@ pub(crate) struct Range {
 }
 
 /// A store's bookkeeping, before any read is queued.
-pub(crate) fn new_shared(entries: usize) -> Arc<StoreShared> {
+pub(crate) fn new_shared(entries: usize, files: usize) -> Arc<StoreShared> {
     Arc::new(StoreShared {
         id: pool().next_id.fetch_add(1, Ordering::Relaxed),
         prefetched: (0..entries).map(|_| AtomicU64::new(0)).collect(),
         consumed: (0..entries).map(|_| AtomicBool::new(false)).collect(),
         dropped: AtomicBool::new(false),
+        mem: (0..files).map(|_| OnceLock::new()).collect(),
+        state: (0..entries).map(|_| AtomicU8::new(IDLE)).collect(),
+        remaining: (0..entries).map(|_| AtomicU64::new(0)).collect(),
+        reserved: AtomicU64::new(0),
     })
+}
+
+/// Memory mode (the default): reads land in anonymous memory the views then
+/// borrow, instead of relying on the page cache — which a network volume's
+/// mapping may not use at all (measured on Runpod: prefetched bytes did not
+/// speed up page faults). Used while the reservations stay under half of
+/// `MemAvailable`; `FASTVIDEO_PREFETCH_MODE=cache` forces page-cache mode.
+fn memory_mode(bytes: u64) -> bool {
+    static MODE: OnceLock<bool> = OnceLock::new();
+    let on = *MODE.get_or_init(|| {
+        std::env::var("FASTVIDEO_PREFETCH_MODE").map_or(true, |v| v.trim() != "cache")
+    });
+    on && mem_available().is_some_and(|a| MEM_RESERVED.load(Ordering::Acquire) + bytes < a / 2)
 }
 
 /// Queue `ranges` (in the order given) for `store`. `paths[i]` is file `i`.
@@ -307,9 +472,39 @@ pub(crate) fn submit(store: &Arc<StoreShared>, paths: &[PathBuf], ranges: &[Rang
     let mut files: Vec<Option<Arc<File>>> = vec![None; paths.len()];
     let mut chunks: Vec<Chunk> = Vec::new();
     let mut total = 0u64;
+    let wanted: u64 = ranges
+        .iter()
+        .filter(|r| store.state[r.entry].load(Ordering::Acquire) == IDLE)
+        .map(|r| (r.end - r.start) as u64)
+        .sum();
+    let mem = memory_mode(wanted);
+    if mem {
+        MEM_RESERVED.fetch_add(wanted, Ordering::AcqRel);
+        store.reserved.fetch_add(wanted, Ordering::AcqRel);
+    }
     for r in ranges {
-        if store.consumed[r.entry].load(Ordering::Acquire) || r.end <= r.start {
+        if store.consumed[r.entry].load(Ordering::Acquire)
+            || r.end <= r.start
+            || store.state[r.entry].load(Ordering::Acquire) != IDLE
+        {
             continue;
+        }
+        let shard = if mem {
+            let len = std::fs::metadata(&paths[r.file]).map(|m| m.len() as usize).ok();
+            let made = store.mem[r.file].get().cloned().or_else(|| {
+                let m = Arc::new(MemShard::new(len?).ok()?);
+                Some(store.mem[r.file].get_or_init(|| m).clone())
+            });
+            match made {
+                Some(m) => Some(m),
+                None => continue,
+            }
+        } else {
+            None
+        };
+        if shard.is_some() {
+            store.remaining[r.entry].store((r.end - r.start) as u64, Ordering::Release);
+            store.state[r.entry].store(PENDING, Ordering::Release);
         }
         let file = match &files[r.file] {
             Some(f) => f.clone(),
@@ -327,6 +522,7 @@ pub(crate) fn submit(store: &Arc<StoreShared>, paths: &[PathBuf], ranges: &[Rang
             let n = (r.end - at).min(cfg.chunk);
             let merged = chunks.last_mut().is_some_and(|c| {
                 let contiguous = Arc::ptr_eq(&c.file, &file)
+                    && c.mem.is_some() == shard.is_some()
                     && c.offset + c.len as u64 == at as u64
                     && c.len + n <= cfg.chunk;
                 if contiguous {
@@ -341,6 +537,7 @@ pub(crate) fn submit(store: &Arc<StoreShared>, paths: &[PathBuf], ranges: &[Rang
             if !merged {
                 chunks.push(Chunk {
                     file: file.clone(),
+                    mem: shard.clone(),
                     offset: at as u64,
                     len: n,
                     keys: vec![(r.entry as u32, n as u64)],
@@ -377,7 +574,7 @@ pub struct PrefetchStats {
     /// Bytes of distinct tensors any lazy store handed out.
     pub viewed_bytes: u64,
     /// [`ConsumerTime`] totals, seconds.
-    pub consumer_s: [f64; 5],
+    pub consumer_s: [f64; 6],
 }
 
 pub(crate) static VIEWED_BYTES: AtomicU64 = AtomicU64::new(0);
@@ -395,9 +592,12 @@ pub enum ConsumerTime {
     Convert = 3,
     /// Host-side adapter (LoRA) fusion.
     Lora = 4,
+    /// Waiting for (or doing) a memory-mode read of a tensor being viewed.
+    ReadWait = 5,
 }
 
-static CONSUMER_NS: [AtomicU64; 5] = [
+static CONSUMER_NS: [AtomicU64; 6] = [
+    AtomicU64::new(0),
     AtomicU64::new(0),
     AtomicU64::new(0),
     AtomicU64::new(0),
@@ -409,7 +609,7 @@ pub fn add_consumer_time(kind: ConsumerTime, d: Duration) {
     CONSUMER_NS[kind as usize].fetch_add(d.as_nanos() as u64, Ordering::Relaxed);
 }
 
-fn consumer_s() -> [f64; 5] {
+fn consumer_s() -> [f64; 6] {
     std::array::from_fn(|i| CONSUMER_NS[i].load(Ordering::Relaxed) as f64 * 1e-9)
 }
 
@@ -457,7 +657,7 @@ impl PrefetchStats {
         let gb = |b: u64| b as f64 / 1e9;
         let c = &self.consumer_s;
         format!(
-            "{{\"wall_s\":{wall_s:.2},\"viewed_gb\":{:.2},\"prefetch_read_gb\":{:.2},\"prefetch_skipped_gb\":{:.2},\"prefetch_busy_s\":{:.1},\"viewed_gbps\":{:.2},\"window_wait_s\":{:.1},\"fill_s\":{:.1},\"h2d_wait_s\":{:.1},\"h2d_pageable_s\":{:.1},\"convert_s\":{:.1},\"lora_s\":{:.1},\"prefetch\":{}}}",
+            "{{\"wall_s\":{wall_s:.2},\"viewed_gb\":{:.2},\"prefetch_read_gb\":{:.2},\"prefetch_skipped_gb\":{:.2},\"prefetch_busy_s\":{:.1},\"viewed_gbps\":{:.2},\"window_wait_s\":{:.1},\"fill_s\":{:.1},\"h2d_wait_s\":{:.1},\"h2d_pageable_s\":{:.1},\"convert_s\":{:.1},\"lora_s\":{:.1},\"read_wait_s\":{:.1},\"mem_mode\":{},\"prefetch\":{}}}",
             gb(self.viewed_bytes),
             gb(self.read_bytes),
             gb(self.skipped_bytes),
@@ -469,6 +669,8 @@ impl PrefetchStats {
             c[2],
             c[3],
             c[4],
+            c[5],
+            MEM_RESERVED.load(Ordering::Relaxed) > 0,
             PrefetchConfig::get().enabled,
         )
     }
