@@ -434,13 +434,13 @@ Audio: male narration, grass rustle, wind, distant strings, cricket night}"
     run_cell up-sidecar env PYTHONPATH="$SCRATCH/MMAudio" "$UPV/bin/python" "$GPU_DIR/mmaudio_oracle.py" \
       --weights "$MMW" --video "$CLIP" --prompt "$MM_PROMPT" --seed 1000 --runs 3 \
       --out "$RUNS/up-sidecar" --dump "$REF"
-    run_cell ours-v2a "$BIN" mmaudio v2a --weights "$MMW" --video "$CLIP" --prompt "$MM_PROMPT" --seed 1000 \
+    run_cell ours-v2a "$BIN" --mode fast mmaudio v2a --weights "$MMW" --video "$CLIP" --prompt "$MM_PROMPT" --seed 1000 \
       --runs 3 --out "$RUNS/ours-v2a"
     for arm in "pixels:pixels" "features:features,x1,mel" "e2e:"; do
       name="${arm%%:*}"; inj="${arm#*:}"
       rm -rf "$SCRATCH/mm-ours-$name"
       run_cell "mm-$name" env FASTVIDEO_DUMP_DIR="$SCRATCH/mm-ours-$name" FASTVIDEO_INJECT_DIR="$REF" \
-        FASTVIDEO_MMAUDIO_INJECT="$inj" "$BIN" mmaudio v2a --weights "$MMW" --video "$CLIP" \
+        FASTVIDEO_MMAUDIO_INJECT="$inj" "$BIN" --mode fast mmaudio v2a --weights "$MMW" --video "$CLIP" \
         --prompt "$MM_PROMPT" --seed 1000 --runs 1 --out "$RUNS/mm-$name"
       oracle_diff "diff-$name" "$REF" "$SCRATCH/mm-ours-$name"
     done
