@@ -545,36 +545,26 @@ case "$FAMILY" in
         --clip "$RUNS/hy15-480-t2v/frames"
     ;;
   wan)
-    wan_w=""
-    for p in "$W/fastwan21-1.3b" "$W/wan21-1.3b" "$W/Wan2.1-T2V-1.3B-Diffusers"; do
-      [[ -d "$p/transformer" || -d "$p" ]] && wan_w="$p" && break
-    done
-    if [[ -z "$wan_w" ]]; then
-      log "skip wan: no 1.3B tree under $W (fastwan21-1.3b / wan21-1.3b)"
-      write_json "$RUNS/skipped.json" '{"status":"skipped","reason":"wan 1.3B weights not on this volume"}'
-      exit 0
-    fi
-    # UMT5 first (own process), then 17-frame / 3-step DMD. `--embeds` is a file.
-    mkdir -p "$RUNS/wan13-embeds"
-    neg='Bright tones, overexposed, static, blurred details, subtitles, style, works, paintings, images, static, overall gray, worst quality, low quality, JPEG compression residue, ugly, incomplete, extra fingers, poorly drawn hands, poorly drawn faces, deformed, disfigured, misshapen limbs, fused fingers, still picture, messy background, three legs, many people in the background, walking backwards'
-    printf '{"negative":%s,"prompts":[{"name":"wan13-dmd-3step","prompt":%s}]}\n' \
-      "$(printf '%s' "$neg" | sed 's/\\/\\\\/g;s/"/\\"/g;s/.*/"&"/')" \
-      "$(printf '%s' "$PROMPT" | sed 's/\\/\\\\/g;s/"/\\"/g;s/.*/"&"/')" \
-      >"$RUNS/prompt.json"
-    run_cell wan13-embed \
-      "$BIN" --mode fast embed \
-        --weights "$wan_w" \
-        --prompts "$RUNS/prompt.json" \
-        --embeds "$RUNS/wan13-embeds"
-    run_cell wan13-dmd-3step \
-      "$BIN" --mode fast clip \
-        --weights "$wan_w" \
-        --embeds "$RUNS/wan13-embeds/wan13-dmd-3step.safetensors" \
-        --dmd \
-        --frames 17 \
-        --steps 3 \
-        --seed "$SEED" \
-        --name wan13-dmd-3step
+    # FastWan2.1 1.3B DMD, 3 steps (1000/757/522), 480x832, 81 frames: the
+    # published FastVideo recipe (VSA sparsity 0.8, guidance 1). Every cell
+    # is one warm process (--warm: one untimed generation first) with UMT5,
+    # DiT and decoder resident; with FV_PROMPTS=5 each cell runs the five
+    # prompts of prompts-eval.json and benchmark.json holds their medians.
+    # benchmark.json frames_sha256 is the byte-identity check between cells.
+    wan_common=(
+      --weights "$W/fastwan21-1.3b"
+      --prompt "$PROMPT"
+      --seed "$SEED"
+      --warm
+      "${PROMPT_ARGS[@]}"
+    )
+    # Baseline: VSA (the checkpoint's to_gate_compress), the default decoder.
+    gated_cell wan13-dmd fastwan21-1.3b \
+      "$BIN" --mode fast --vsa wan gen "${wan_common[@]}" --clip-dir "$RUNS/wan13-dmd/frames"
+    # Dense attention, same checkpoint (the gates unused).
+    gated_cell wan13-dmd-dense fastwan21-1.3b \
+      "$BIN" --mode fast wan gen "${wan_common[@]}" --clip-dir "$RUNS/wan13-dmd-dense/frames"
+    compare_cells wan13-dmd wan13-dmd-dense
     ;;
   b200)
     # Warm B200 parity: H3 / FastH3 / LTX only. Official VAE stays the

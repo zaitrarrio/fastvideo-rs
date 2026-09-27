@@ -310,7 +310,17 @@ cell_fv() {
     --prompt "$PROMPT_OURS" --seed "$SEED_OURS" --num-gpus 1 --vsa-kernel triton "${fa4[@]}" "$@"
 }
 
+# FastWan2.1 1.3B DMD (FastVideo basic_dmd.py: VSA 0.8, 3 steps), 480x832x81,
+# the matrix's five prompts; one warm-up, median of UP_FV_REPEATS per prompt.
+cell_fv_fastwan() {
+  local name="${1:-fv-fastwan13-dmd}"; shift || true
+  run_cell "$name" env PYTHONUNBUFFERED=1 "$UP/fastvideo/bin/python" "$HERE/bench_fastwan.py" \
+    --model "$W/fastwan21-1.3b" --out "$OUT/$name" --repeats "${UP_FV_REPEATS:-3}" \
+    --prompts "$HERE/../prompts-eval.json" "$@"
+}
+
 run_cells() {
+  cell_fv_fastwan fv-fastwan13-dmd
   local g768=(--height 768 --width 1344 --num-frames 124) g480=(--height 480 --width 832 --num-frames 124)
   local f8="$UW/FastVideo-FastH3-8-Step-V2" lora="$W/FastH3-4-step-Preview-v1-LoRA"
   # FastVideo (short cells first)
