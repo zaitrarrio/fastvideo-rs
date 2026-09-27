@@ -75,6 +75,42 @@ pub enum Stage {
         /// One untimed generation first (recorded as `cold_generation`).
         #[arg(long)]
         warm: bool,
+        /// First frame (PNG/JPEG) for image-to-video: Wan 2.2 TI2V-5B pins
+        /// its latent to frame 0; the Wan 2.1 I2V presets pack it as the
+        /// 36-channel condition.
+        #[arg(long)]
+        image: Option<PathBuf>,
+        #[arg(long, default_value = "cuda")]
+        device: String,
+    },
+    /// Wan 2.2 TI2V-5B module parity against a reference dump
+    /// (`scripts/gpu/upstream/oracle_wan22.py`, Diffusers): VAE encode and
+    /// decode of the dump's video / latents, and one DiT forward per
+    /// `<case>_dit_latents` (text-to-video `t2v_`, per-frame timesteps
+    /// `i2v_`) with the dump's inputs injected. Our tensors go to `--dump-out`
+    /// under the reference's names for `compare-dumps`; decode PSNR and
+    /// max-abs are checked here.
+    Oracle {
+        /// Diffusers root (`transformer/`, `vae/`).
+        #[arg(long)]
+        weights: PathBuf,
+        /// The reference dump directory.
+        #[arg(long)]
+        reference: PathBuf,
+        /// Where our tensors go (created).
+        #[arg(long)]
+        dump_out: PathBuf,
+        #[arg(long, default_value = "wan_2_2_ti2v_5b")]
+        preset: String,
+        /// Also decode the reference latents through TAEHV (`taew2_2`) from
+        /// this file or directory: PSNR against the reference VAE decode.
+        #[arg(long)]
+        taehv: Option<PathBuf>,
+        /// Minimum decode PSNR (dB, range 2) against the reference.
+        #[arg(long, default_value_t = 40.0)]
+        min_psnr: f64,
+        #[arg(long)]
+        skip_dit: bool,
         #[arg(long, default_value = "cuda")]
         device: String,
     },
@@ -103,6 +139,7 @@ pub fn run(report: &mut Report, stage: &Stage) -> StageResult<()> {
             full_vae,
             text_cache,
             no_text_cache,
+            image,
             device,
         } => {
             if *full_vae {
@@ -139,6 +176,7 @@ pub fn run(report: &mut Report, stage: &Stage) -> StageResult<()> {
                 is_dmd: dmd,
                 dmd_steps: dmd.then(|| dmd_steps(*steps)),
                 tokenizer_path: Some(tokenizer.to_string_lossy().into_owned()),
+                image_path: image.as_ref().map(|p| p.to_string_lossy().into_owned()),
                 fps: *fps,
                 text_cache: (!*no_text_cache).then(|| {
                     text_cache.clone().unwrap_or_else(|| {
@@ -165,6 +203,40 @@ pub fn run(report: &mut Report, stage: &Stage) -> StageResult<()> {
                 },
             )
         }
+        Stage::Oracle {
+            weights,
+            reference,
+            dump_out,
+            preset,
+            taehv,
+            min_psnr,
+            skip_dit,
+            device,
+        } => crate::wan_oracle::run(
+            report,
+            &crate::wan_oracle::Args {
+                weights,
+                reference,
+                out: dump_out,
+                preset,
+                taehv: taehv.as_deref(),
+                min_psnr: *min_psnr,
+                skip_dit: *skip_dit,
+                device,
+            },
+        ),
+    }
+}
+
+/// The checkpoint a preset names, for `benchmark.json`.
+fn model_name(preset: &str) -> &'static str {
+    match preset {
+        "wan_2_2_ti2v_5b" => "Wan2.2-TI2V-5B",
+        "fast_wan_2_2_ti2v_5b" => "FastWan2.2-TI2V-5B",
+        "wan_t2v_14b" => "Wan2.1-T2V-14B",
+        "sf_wan_t2v_1_3b" => "SFWan2.1-T2V-1.3B",
+        "wan_t2v_1_3b" => "Wan2.1-T2V-1.3B",
+        _ => "FastWan2.1-T2V-1.3B",
     }
 }
 
@@ -239,14 +311,8 @@ fn gen(report: &mut Report, a: &GenArgs<'_>) -> StageResult<()> {
     );
     let mut load_mem = Some(crate::gpu::PeakMem::start());
     let timer = std::time::Instant::now();
-    let pipe = WanPipeline::load_with(
-        a.weights,
-        a.preset,
-        LoadParts {
-            text_encoder: true,
-        },
-    )
-    .map_err(|e| anyhow::anyhow!("load {}: {e}", a.weights.display()))?;
+    let pipe = WanPipeline::load_with(a.weights, a.preset, LoadParts { text_encoder: true })
+        .map_err(|e| anyhow::anyhow!("load {}: {e}", a.weights.display()))?;
     let load_s = timer.elapsed().as_secs_f64();
     report.note(
         "load",
@@ -309,13 +375,18 @@ fn gen(report: &mut Report, a: &GenArgs<'_>) -> StageResult<()> {
             "wan gen {}: total {total:.2}s (text {:.2}s, denoise {:.2}s, decode {:.2}s) png {:.2}s peak {:?} MiB frames {digest}",
             spec.name, t.text_s, t.denoise_s, t.decode_s, t.write_s, peak_mib
         );
+        let task = if a.base.image_path.is_some() {
+            "i2v"
+        } else {
+            "t2v"
+        };
         let doc = json!({
-            "model": "FastWan2.1-T2V-1.3B",
+            "model": model_name(a.preset),
             "preset": a.preset,
             "dtype": "float32 weights, bf16 tensor-core GEMMs",
-            "task": "t2v",
+            "task": task,
             "workload": {
-                "task": "t2v",
+                "task": task,
                 "prompt_name": spec.name,
                 "prompt_sha256": crate::benchmark::sha256_hex(&spec.prompt),
                 "seed": spec.seed,

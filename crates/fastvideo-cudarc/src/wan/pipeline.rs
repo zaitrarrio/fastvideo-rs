@@ -24,19 +24,20 @@ use super::vae::AutoencoderKlWan;
 use super::weights::WeightMap;
 
 /// TAEHV replaces the Wan VAE decode when `FASTVIDEO_TAEHV_WEIGHTS` names a
-/// directory holding `taew2_1.safetensors`.
+/// directory holding `taew2_1.safetensors` (`taew2_2.safetensors` for the
+/// 48-channel Wan 2.2 latent space).
 ///
 /// A path rather than a boolean, because the weights ship separately from the
 /// Wan checkpoint (they live in madebyollin/taehv, not the Diffusers repo) and
 /// there is no sensible place to guess. A set-but-unloadable path is an error
 /// rather than a silent fall back to the Wan VAE: asking for TAEHV and getting
 /// a 3.9s Wan decode would look exactly like TAEHV being slow.
-fn load_taehv() -> Result<Option<super::taehv::TaeHv>> {
+fn load_taehv(arch: TaeArch) -> Result<Option<super::taehv::TaeHv>> {
     let dir = std::env::var("FASTVIDEO_TAEHV_WEIGHTS").unwrap_or_default();
     if dir.is_empty() {
         return Ok(None);
     }
-    let tae = open_taehv(Path::new(&dir))
+    let tae = open_taehv(Path::new(&dir), arch)
         .map_err(|e| PipelineError::Message(format!("FASTVIDEO_TAEHV_WEIGHTS={dir}: {e}")))?;
     super::log::info(format_args!("vae=taehv ({dir})"));
     Ok(Some(tae))
@@ -44,12 +45,25 @@ fn load_taehv() -> Result<Option<super::taehv::TaeHv>> {
 
 /// The TAEHV file name the Wan 2.1 latent space (16 channels) decodes with.
 pub const TAEW2_1: &str = "taew2_1.safetensors";
+/// The TAEHV file for the Wan 2.2 TI2V-5B latent space (48 channels, 16×).
+pub const TAEW2_2: &str = "taew2_2.safetensors";
 
-/// `taew2_1` from a file, or a directory holding `taew2_1.safetensors` (only
-/// that file: a TAE directory may also hold taeh3 / taeltx weights).
-fn open_taehv(path: &Path) -> TensorResult<super::taehv::TaeHv> {
-    let file = if path.is_dir() && path.join(TAEW2_1).is_file() {
-        path.join(TAEW2_1)
+use super::taehv::TaeArch;
+
+/// The TAEHV checkpoint for a VAE latent width.
+pub fn taehv_arch(z_dim: usize) -> TaeArch {
+    if z_dim == 48 {
+        TaeArch::Wan22
+    } else {
+        TaeArch::Wan
+    }
+}
+
+/// `taew2_1` / `taew2_2` from a file, or a directory holding it (only that
+/// file: a TAE directory may also hold taeh3 / taeltx weights).
+fn open_taehv(path: &Path, arch: TaeArch) -> TensorResult<super::taehv::TaeHv> {
+    let file = if path.is_dir() && path.join(arch.file_name()).is_file() {
+        path.join(arch.file_name())
     } else {
         path.to_path_buf()
     };
@@ -58,7 +72,7 @@ fn open_taehv(path: &Path) -> TensorResult<super::taehv::TaeHv> {
     } else {
         WeightMap::from_dir(path)?
     };
-    super::taehv::TaeHv::load(&map)
+    super::taehv::TaeHv::load_arch(&map, arch)
 }
 
 /// Where the distilled presets look for `taew2_1.safetensors` when
@@ -366,14 +380,30 @@ impl WanPipeline {
         crate::wan::tensor::default_bf16_activations();
         let cfg = WanVideoArchConfig::from_preset(preset);
         let dit = WeightMap::from_dir(&root.join("transformer"))?;
-        let vae_cfg = if cfg.out_channels == 48 {
-            WanVaeConfig {
-                z_dim: 48,
-                ..WanVaeConfig::wan_2_1()
+        // The VAE's own config.json (Wan 2.2 TI2V-5B: 48 channels, 16×
+        // spatial, residual blocks, patchify 2); the preset's built-in
+        // config when the file is missing.
+        let vae_cfg = match WanVaeConfig::from_dir(&root.join("vae")) {
+            Ok(c) => c,
+            Err(e) => {
+                let c = if cfg.out_channels == 48 {
+                    WanVaeConfig::wan_2_2()
+                } else {
+                    WanVaeConfig::wan_2_1()
+                };
+                super::log::info(format_args!(
+                    "vae config: {e}; using the built-in {}-channel config",
+                    c.z_dim
+                ));
+                c
             }
-        } else {
-            WanVaeConfig::wan_2_1()
         };
+        if vae_cfg.z_dim != cfg.out_channels {
+            return Err(PipelineError::Message(format!(
+                "VAE z_dim {} does not match the DiT's {} output channels",
+                vae_cfg.z_dim, cfg.out_channels
+            )));
+        }
         let vae = WeightMap::from_dir(&root.join("vae"))?;
         let text_dir = if root.join("text_encoder").is_dir() {
             root.join("text_encoder")
@@ -404,15 +434,17 @@ impl WanPipeline {
 
         let boundary_ratio = cfg.boundary_ratio;
         let vae_choice = WanVaeChoice::from_env()?;
-        let mut taehv = load_taehv()?;
+        // taew2_1 decodes the 16-channel Wan 2.1 latent space, taew2_2 the
+        // 48-channel Wan 2.2 one.
+        let tae_arch = taehv_arch(vae_cfg.z_dim);
+        let mut taehv = load_taehv(tae_arch)?;
         let taehv_explicit = taehv.is_some();
-        // taew2_1 decodes the 16-channel Wan 2.1 latent space only.
-        if taehv.is_none() && vae_cfg.z_dim == 16 && vae_choice != WanVaeChoice::Full {
+        if taehv.is_none() && matches!(vae_cfg.z_dim, 16 | 48) && vae_choice != WanVaeChoice::Full {
             for dir in default_taehv_dirs(root) {
-                if !dir.join(TAEW2_1).is_file() {
+                if !dir.join(tae_arch.file_name()).is_file() {
                     continue;
                 }
-                match open_taehv(&dir) {
+                match open_taehv(&dir, tae_arch) {
                     Ok(t) => {
                         super::log::info(format_args!(
                             "taehv available for the distilled presets ({})",
@@ -421,16 +453,16 @@ impl WanPipeline {
                         taehv = Some(t);
                         break;
                     }
-                    Err(e) => super::log::info(format_args!(
-                        "taehv at {} not loaded: {e}",
-                        dir.display()
-                    )),
+                    Err(e) => {
+                        super::log::info(format_args!("taehv at {} not loaded: {e}", dir.display()))
+                    }
                 }
             }
         }
         if vae_choice == WanVaeChoice::Taehv && taehv.is_none() {
             return Err(PipelineError::Message(format!(
-                "FASTVIDEO_WAN_VAE=taehv but no {TAEW2_1} (FASTVIDEO_TAEHV_WEIGHTS, or one of {:?}; scripts/gpu/fetch_taehv.sh)",
+                "FASTVIDEO_WAN_VAE=taehv but no {} (FASTVIDEO_TAEHV_WEIGHTS, or one of {:?}; scripts/gpu/fetch_taehv.sh)",
+                tae_arch.file_name(),
                 default_taehv_dirs(root)
             )));
         }
@@ -662,6 +694,40 @@ impl WanPipeline {
         Ok((mask, cond))
     }
 
+    /// Wan 2.2 TI2V first-frame condition: the image (resized to the
+    /// request) through the VAE encoder, normalized to DiT space —
+    /// `[1, 48, 1, H/16, W/16]` (Diffusers `WanImageToVideoPipeline` with
+    /// `expand_timesteps`, FastVideo `WanFirstFrameEncodingStage`).
+    fn encode_first_frame(
+        &self,
+        image_path: &str,
+        height: usize,
+        width: usize,
+        z_h: usize,
+        z_w: usize,
+    ) -> Result<CudaTensor> {
+        let video = load_rgb_frame(image_path, height, width)?;
+        let encoded = self.vae.encode_video(&video)?;
+        let latent = self.vae.normalize_latents(&encoded)?.narrow(2, 0, 1)?;
+        if latent.shape[3] != z_h || latent.shape[4] != z_w {
+            return Err(PipelineError::Message(format!(
+                "TI2V first-frame latent {:?} does not match the {z_h}x{z_w} latent grid",
+                latent.shape
+            )));
+        }
+        Ok(latent.to_device()?)
+    }
+
+    /// Whether `cfg` runs Wan 2.2 TI2V image-to-video: a 48-channel
+    /// text-and-image DiT (same width in and out), the Wan 2.2 VAE, an image.
+    fn is_ti2v(&self, cfg: &GenerateConfig) -> bool {
+        !self.tiny
+            && cfg.image_path.is_some()
+            && self.vae.cfg.is_residual
+            && self.dit.cfg.in_channels == self.dit.cfg.out_channels
+            && self.preset != "lucy_edit_dev"
+    }
+
     /// Generate one clip into `cfg.output_dir`; returns the PNG frame paths.
     /// See [`Self::generate_to`].
     pub fn generate(&mut self, cfg: &GenerateConfig) -> Result<Vec<String>> {
@@ -675,7 +741,12 @@ impl WanPipeline {
     /// works on the next one. The mp4 (when `mp4`) is finished inside the
     /// decode time; the `frame-NNN.png` files are written after it
     /// (`timings.write_s`).
-    pub fn generate_to(&self, cfg: &GenerateConfig, out_dir: &Path, mp4: bool) -> Result<WanOutput> {
+    pub fn generate_to(
+        &self,
+        cfg: &GenerateConfig,
+        out_dir: &Path,
+        mp4: bool,
+    ) -> Result<WanOutput> {
         let _gen = super::log::StepTimer::start("generate");
         let needs_control = matches!(
             self.preset.as_str(),
@@ -721,6 +792,7 @@ impl WanPipeline {
             .map(|s| s.as_str());
 
         let i2v = !self.tiny && self.dit.cfg.in_channels > self.dit.cfg.out_channels;
+        let ti2v = self.is_ti2v(cfg);
         if i2v && cfg.image_path.is_none() && control_src.is_none() {
             return Err(PipelineError::Message(
                 "I2V generate needs --image <png|jpeg> for 36-channel latent packing".into(),
@@ -762,6 +834,15 @@ impl WanPipeline {
             None
         };
 
+        // TI2V: the image's latent replaces latent frame 0 (and its tokens
+        // run at timestep 0) for the whole denoise.
+        let first_frame = match (ti2v, cfg.image_path.as_deref()) {
+            (true, Some(image)) => {
+                Some(self.encode_first_frame(image, cfg.height, cfg.width, z_h, z_w)?)
+            }
+            _ => None,
+        };
+
         let clip_tokens = match (&self.clip, cfg.image_path.as_ref()) {
             (Some(clip), Some(path)) => Some(clip.encode_image_file(path)?),
             _ => None,
@@ -785,6 +866,7 @@ impl WanPipeline {
             &encoder_hs,
             clip_tokens.as_ref(),
             i2v_pack.as_ref().map(|(m, c)| (m, c)),
+            first_frame.as_ref(),
             Some(&mut record),
         )?;
         timings.denoise_s = timer.elapsed().as_secs_f64();
@@ -842,11 +924,14 @@ impl WanPipeline {
         if self.tiny {
             (4, 2, 4, 4)
         } else {
+            // Wan 2.1: 8× spatial; Wan 2.2 TI2V-5B: 16× (the VAE's patchify).
+            let s = self.vae.spatial_compression();
+            let tc = self.vae.cfg.temporal_compression();
             (
                 self.dit.cfg.out_channels,
-                (cfg.num_frames.saturating_sub(1)) / 4 + 1,
-                cfg.height / 8,
-                cfg.width / 8,
+                (cfg.num_frames.saturating_sub(1)) / tc + 1,
+                cfg.height / s,
+                cfg.width / s,
             )
         }
     }
@@ -885,7 +970,7 @@ impl WanPipeline {
                 "denoise() is text-to-video only; use generate() for I2V".into(),
             ));
         }
-        self.denoise_inner(cfg, latents, encoder_hs, None, None, observer)
+        self.denoise_inner(cfg, latents, encoder_hs, None, None, None, observer)
     }
 
     fn denoise_inner(
@@ -895,10 +980,14 @@ impl WanPipeline {
         encoder_hs: &CudaTensor,
         image: Option<&CudaTensor>,
         i2v: Option<(&CudaTensor, &CudaTensor)>,
+        first_frame: Option<&CudaTensor>,
         observer: Option<&mut StepObserver<'_>>,
     ) -> Result<CudaTensor> {
         // Inputs cross to the device once; every step then stays there.
         let latents = latents.to_device()?;
+        // TI2V: latent frame 0 is the image's from the start (FastVideo
+        // `WanDenoisingStage.prepare_denoising`).
+        let latents = pin_first_frame(first_frame, latents)?;
         let encoder_hs = encoder_hs.clone().to_device()?;
         let boundary = cfg.boundary_ratio.or(self.boundary_ratio);
         // DMD / rCM students are distilled for a single conditional pass.
@@ -969,6 +1058,7 @@ impl WanPipeline {
             boundary_ratio: boundary,
             image,
             i2v,
+            first_frame,
             guidance,
             guidance_2,
             tea_cache,
@@ -1046,8 +1136,9 @@ impl WanPipeline {
                     super::log::info_once(
                         &SAID,
                         format_args!(
-                            "distilled preset: no {TAEW2_1} found, decoding with the Wan VAE \
-                             (scripts/gpu/fetch_taehv.sh <dir>, then FASTVIDEO_TAE_DIR=<dir>)"
+                            "distilled preset: no {} found, decoding with the Wan VAE \
+                             (scripts/gpu/fetch_taehv.sh <dir>, then FASTVIDEO_TAE_DIR=<dir>)",
+                            taehv_arch(self.vae.cfg.z_dim).file_name()
                         ),
                     );
                 }
@@ -1122,6 +1213,9 @@ struct DenoiseCtx<'a> {
     boundary_ratio: Option<f32>,
     image: Option<&'a CudaTensor>,
     i2v: Option<(&'a CudaTensor, &'a CudaTensor)>,
+    /// Wan 2.2 TI2V: the image latent pinned to latent frame 0, whose
+    /// tokens run at timestep 0 (`expand_timesteps`).
+    first_frame: Option<&'a CudaTensor>,
     guidance: f32,
     guidance_2: f32,
     tea_cache: TeaCache,
@@ -1313,6 +1407,46 @@ impl EasyCacheRuntime {
     }
 }
 
+/// The DiT's timestep input for `rows` batch rows at `t`: `[t; rows]`, or
+/// under TI2V one value per (row, latent frame) with frame 0 at 0 — Diffusers'
+/// `(first_frame_mask[:, ::2, ::2] * t).flatten()` is constant over each
+/// frame's tokens, so per frame carries the same values.
+fn timestep_input(
+    ctx: &DenoiseCtx<'_>,
+    latents: &CudaTensor,
+    t: f32,
+    rows: usize,
+) -> TensorResult<CudaTensor> {
+    match ctx.first_frame {
+        Some(_) => {
+            let frames = latents.dim(2)?;
+            let mut v = Vec::with_capacity(rows * frames);
+            for _ in 0..rows {
+                v.push(0.0);
+                v.extend(std::iter::repeat_n(t, frames.saturating_sub(1)));
+            }
+            CudaTensor::from_vec(v, vec![rows * frames])
+        }
+        None => CudaTensor::from_vec(vec![t; rows], vec![rows]),
+    }
+}
+
+/// TI2V: put the image latent back into latent frame 0 (FastVideo
+/// `WanDenoisingStage.finish_step`: `(1 - mask) * first_frame + mask * latents`).
+fn pin_first_frame(
+    first_frame: Option<&CudaTensor>,
+    latents: CudaTensor,
+) -> TensorResult<CudaTensor> {
+    let Some(ff) = first_frame else {
+        return Ok(latents);
+    };
+    let t = latents.dim(2)?;
+    if t <= 1 {
+        return Ok(ff.clone());
+    }
+    CudaTensor::cat(&[ff, &latents.narrow(2, 1, t - 1)?], 2)
+}
+
 fn pick_expert<'a>(ctx: &'a DenoiseCtx<'_>, t: f32) -> (&'a WanTransformer3D, f32) {
     if let (Some(ratio), Some(low)) = (ctx.boundary_ratio, ctx.low) {
         match moe_expert(f64::from(t), ratio, 1000) {
@@ -1362,7 +1496,7 @@ fn dit_cfg_easy(
     };
     let rows = encoder_hs.shape[0];
     let cond_hs = ctx.cond_hs.clone();
-    let t1 = CudaTensor::from_vec(vec![t], vec![1])?;
+    let t1 = timestep_input(ctx, latents, t, 1)?;
     let (scale, cond) = {
         let (dit, scale) = pick_expert(ctx, t);
         if decision.compute {
@@ -1490,7 +1624,7 @@ fn dit_cfg(
     // `encoder_hs` is `[negative, prompt]`; a single row is the prompt alone.
     let rows = encoder_hs.shape[0];
     let cond_hs = ctx.cond_hs.clone();
-    let t1 = CudaTensor::from_vec(vec![t], vec![1])?;
+    let t1 = timestep_input(ctx, latents, t, 1)?;
 
     let out = if (scale - 1.0).abs() < 1e-6 {
         if tea_on {
@@ -1508,7 +1642,7 @@ fn dit_cfg(
             dit.arm_sol_teacache_batch(tea_step);
         }
         let latent_batch = CudaTensor::cat(&[&latent_in, &latent_in], 0)?;
-        let t_batch = CudaTensor::from_vec(vec![t, t], vec![2])?;
+        let t_batch = timestep_input(ctx, latents, t, 2)?;
         let out_batch = dit.forward_ctx(&latent_batch, &t_batch, encoder_hs, None)?;
         let uncond = out_batch.narrow(0, 0, 1)?;
         let cond = out_batch.narrow(0, 1, 1)?;
@@ -1591,6 +1725,8 @@ fn dmd_denoise(
             }
             None => x0,
         };
+        let latents_pinned = pin_first_frame(ctx.first_frame, latents)?;
+        latents = latents_pinned;
         super::device::synchronize().map_err(|e| PipelineError::Message(e.to_string()))?;
         notify(&mut observer, i, total, t, &latents)?;
     }
@@ -1706,7 +1842,7 @@ fn unipc_denoise(
         history.push_front(converted);
         history.truncate(plan.history_len);
         last_sample = Some(corrected);
-        latents = prev;
+        latents = pin_first_frame(ctx.first_frame, prev)?;
         super::device::synchronize().map_err(|e| PipelineError::Message(e.to_string()))?;
         notify(&mut observer, i, ts.len(), t, &latents)?;
     }

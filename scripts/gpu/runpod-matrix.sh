@@ -574,7 +574,7 @@ case "$FAMILY" in
     # The distilled presets decode through TAEHV when taew2_1 is found
     # (FASTVIDEO_TAE_DIR): fetch it onto the container disk once.
     TAEW="$TAE/taew2_1.safetensors"
-    if [[ ! -f "$TAEW" ]]; then
+    if [[ ! -f "$TAEW" || ! -f "$TAE/taew2_2.safetensors" ]]; then
       bash "$(dirname "${BASH_SOURCE[0]}")/fetch_taehv.sh" "$TAE" >>"$RUNS/tae-fetch.log" 2>&1 \
         || log "WARN: taew2_1 fetch failed (tae-fetch.log); distilled cells decode with the Wan VAE"
     fi
@@ -744,16 +744,60 @@ case "$FAMILY" in
       compare_cells wan14 "wan14-$arm"
       gate_cells wan14 "wan14-$arm" lossy
     done
+    # ---- Wan2.2 TI2V-5B: the checkpoint's recommended recipe (FastVideo
+    # WAN_2_2_TI2V_5B preset / Diffusers model card): 704x1280, 121 frames at
+    # 24 fps, 50 UniPC steps, CFG 5, flow shift 5 (scheduler_config.json),
+    # FastVideo's Chinese negative prompt. Warm, the five prompts of
+    # prompts-eval.json (FV_PROMPTS=5), the full Wan 2.2 VAE.
+    wan_neg_cn="色调艳丽，过曝，静态，细节模糊不清，字幕，风格，作品，画作，画面，静止，整体发灰，最差质量，低质量，JPEG压缩残留，丑陋的，残缺的，多余的手指，画得不好的手部，画得不好的脸部，畸形的，毁容的，形态畸形的肢体，手指融合，静止不动的画面，杂乱的背景，三条腿，背景人很多，倒着走"
+    fixtures="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/fixtures"
+    ti2v=(--weights "$W/wan22-ti2v-5b" --preset wan_2_2_ti2v_5b --unipc --steps 50 --guidance 5.0
+      --flow-shift 5.0 --fps 24 --negative "$wan_neg_cn" --seed "$SEED" --warm)
     gated_cell wan5b wan22-ti2v-5b \
-      "$BIN" --mode fast wan gen --weights "$W/wan22-ti2v-5b" --preset wan_2_2_ti2v_5b --unipc \
-        --steps 50 --guidance 5.0 --flow-shift 5.0 --height 704 --width 1280 --num-frames 121 --fps 24 \
-        "${one[@]}" --clip-dir "$RUNS/wan5b/frames"
+      "$BIN" --mode fast wan gen "${ti2v[@]}" --height 704 --width 1280 --num-frames 121 \
+        --prompt "$PROMPT" "${PROMPT_ARGS[@]}" --clip-dir "$RUNS/wan5b/frames"
+    # TAEHV (taew2_2, opt-in for the base checkpoint) on the same recipe.
+    gated_cell wan5b-taehv wan22-ti2v-5b \
+      env FASTVIDEO_WAN_VAE=taehv \
+      "$BIN" --mode fast wan gen "${ti2v[@]}" --height 704 --width 1280 --num-frames 121 \
+        --prompt "$PROMPT" "${PROMPT_ARGS[@]}" --clip-dir "$RUNS/wan5b-taehv/frames"
+    compare_cells wan5b wan5b-taehv
+    # Image-to-video: the 832x480 fixture pinned to latent frame 0 (its
+    # tokens at timestep 0). 480x832 because FastVideo resizes a TI2V image to
+    # the 480x832 area and generates at that size; one prompt.
+    ti2v_prompt="Aerial drone shot of a tropical beach: turquoise sea waves roll in and break into white foam on the sand, the camera glides slowly forward along the shoreline, bright sunny day."
+    gated_cell wan5b-i2v wan22-ti2v-5b \
+      "$BIN" --mode fast wan gen "${ti2v[@]}" --height 480 --width 832 --num-frames 121 \
+        --image "$fixtures/ti2v-beach-832x480.jpg" --prompt "$ti2v_prompt" \
+        --clip-dir "$RUNS/wan5b-i2v/frames"
     gated_cell wan5b-easycache wan22-ti2v-5b \
       env FASTVIDEO_WAN_SOL_CACHE=easycache \
-      "$BIN" --mode fast wan gen --weights "$W/wan22-ti2v-5b" --preset wan_2_2_ti2v_5b --unipc \
-        --steps 50 --guidance 5.0 --flow-shift 5.0 --height 704 --width 1280 --num-frames 121 --fps 24 \
-        "${one[@]}" --clip-dir "$RUNS/wan5b-easycache/frames"
+      "$BIN" --mode fast wan gen "${ti2v[@]}" --height 704 --width 1280 --num-frames 121 \
+        --prompt "$PROMPT" "${PROMPT_ARGS[@]}" --clip-dir "$RUNS/wan5b-easycache/frames"
     compare_cells wan5b wan5b-easycache
+    # Module parity against Diffusers (docs/oracle.md "Wan 2.2 TI2V-5B"):
+    # the reference dump of the upstream pod's oracle:wan22-ti2v step
+    # (FV_ORACLE_URL), then `wan oracle` (VAE encode/decode, the t2v and
+    # i2v DiT forwards) in the production mode and the VAE again in exact
+    # f32 math, each diffed with compare-dumps.
+    if [[ -z "${FV_CELLS:-}" || " $FV_CELLS " == *" wan5b-oracle "* ]]; then
+      target=wan22-ti2v
+      ref="$SCRATCH/oracle-ref/$target"
+      if oracle_fetch "$target" "$ref"; then
+        gated_cell wan5b-oracle wan22-ti2v-5b \
+          "$BIN" --mode fast --keep-going wan oracle --weights "$W/wan22-ti2v-5b" --reference "$ref/dump" \
+            --dump-out "$RUNS/wan5b-oracle-dump" --taehv "$TAE/taew2_2.safetensors"
+        oracle_diff wan5b-oracle-diff "$ref/dump" "$RUNS/wan5b-oracle-dump"
+        gated_cell wan5b-oracle-exact wan22-ti2v-5b \
+          "$BIN" --mode exact --keep-going wan oracle --weights "$W/wan22-ti2v-5b" --reference "$ref/dump" \
+            --dump-out "$RUNS/wan5b-oracle-exact-dump" --skip-dit
+        oracle_diff wan5b-oracle-exact-diff "$ref/dump" "$RUNS/wan5b-oracle-exact-dump"
+        rm -rf "$ref" "$RUNS/wan5b-oracle-dump" "$RUNS/wan5b-oracle-exact-dump"
+      else
+        mkdir -p "$RUNS/wan5b-oracle"
+        write_json "$RUNS/wan5b-oracle/summary.json" '{"cell":"wan5b-oracle","exit":null,"skipped":"reference dump unavailable"}'
+      fi
+    fi
     # SF-Wan 81 frames: TAEHV is the distilled default (sfwan13-81f-flash);
     # the full Wan VAE opt-out on the same recipe, for the decoder A/B.
     sf_arm sfwan13-81f-fullvae 81 FASTVIDEO_WAN_VAE=full

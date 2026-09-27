@@ -5,56 +5,47 @@ use fastvideo_models::wan::WanVaeConfig;
 use super::tensor::{CudaTensor, Result, TensorError};
 use super::weights::{self, WeightMap};
 
-const CACHE_T: usize = 2;
+pub(super) const CACHE_T: usize = 2;
 
 /// Weights live on the device (a no-op on CPU runs). An upload failure here is
 /// fatal: there is no host path to continue on.
-fn pinned(mut t: CudaTensor) -> CudaTensor {
+pub(super) fn pinned(mut t: CudaTensor) -> CudaTensor {
     t.pin_device().expect("upload VAE weight to device");
     t
 }
 
 /// A `[c, 1, 1(, 1)]` gamma as a pinned `[c]` vector.
-fn gamma(map: &WeightMap, key: &str, shape: &[usize]) -> Result<CudaTensor> {
+pub(super) fn gamma(map: &WeightMap, key: &str, shape: &[usize]) -> Result<CudaTensor> {
     Ok(pinned(
         weights::cuda_tensor_shaped(map, key, shape)?.reshape(vec![shape[0]])?,
     ))
 }
 
-const LATENTS_MEAN: [f32; 16] = [
-    -0.7571, -0.7089, -0.9113, 0.1075, -0.1745, 0.9653, -0.1517, 1.5508, 0.4134, -0.0715, 0.5517,
-    -0.3632, -0.1922, -0.9497, 0.2503, -0.2921,
-];
-const LATENTS_STD: [f32; 16] = [
-    2.8184, 1.4541, 2.3275, 2.6558, 1.2196, 1.7708, 2.6052, 2.0743, 3.2687, 2.1526, 2.8652, 1.5579,
-    1.6382, 1.1253, 2.8251, 1.9160,
-];
-
 #[derive(Clone)]
-enum CacheSlot {
+pub(super) enum CacheSlot {
     Empty,
     Rep,
     Tensor(CudaTensor),
 }
 
-struct FeatCache {
-    slots: Vec<CacheSlot>,
+pub(super) struct FeatCache {
+    pub(super) slots: Vec<CacheSlot>,
     idx: usize,
 }
 
 impl FeatCache {
-    fn new() -> Self {
+    pub(super) fn new() -> Self {
         Self {
             slots: Vec::new(),
             idx: 0,
         }
     }
 
-    fn begin_pass(&mut self) {
+    pub(super) fn begin_pass(&mut self) {
         self.idx = 0;
     }
 
-    fn reserve(&mut self) -> usize {
+    pub(super) fn reserve(&mut self) -> usize {
         let i = self.idx;
         if i >= self.slots.len() {
             self.slots.push(CacheSlot::Empty);
@@ -64,14 +55,14 @@ impl FeatCache {
     }
 }
 
-fn last_frames(x: &CudaTensor, n: usize) -> Result<CudaTensor> {
+pub(super) fn last_frames(x: &CudaTensor, n: usize) -> Result<CudaTensor> {
     let t = x.dim(2)?;
     let take = t.min(n);
     x.narrow(2, t - take, take)
 }
 
 #[derive(Debug, Clone)]
-struct CausalConv3d {
+pub(super) struct CausalConv3d {
     weight: CudaTensor, // [out, in, kt, kh, kw]
     bias: CudaTensor,
     stride: [usize; 3],
@@ -79,7 +70,7 @@ struct CausalConv3d {
 }
 
 impl CausalConv3d {
-    fn zeros(
+    pub(super) fn zeros(
         in_c: usize,
         out_c: usize,
         kernel: [usize; 3],
@@ -96,7 +87,7 @@ impl CausalConv3d {
         }
     }
 
-    fn load(
+    pub(super) fn load(
         map: &WeightMap,
         prefix: &str,
         in_c: usize,
@@ -121,13 +112,13 @@ impl CausalConv3d {
         })
     }
 
-    fn forward(&self, xs: &CudaTensor) -> Result<CudaTensor> {
+    pub(super) fn forward(&self, xs: &CudaTensor) -> Result<CudaTensor> {
         self.forward_with_cache(xs, None)
     }
 
     /// Causal time padding (`2*pad_t` frames in front, filled from the feat
     /// cache first), symmetric spatial padding inside the conv.
-    fn forward_with_cache(
+    pub(super) fn forward_with_cache(
         &self,
         xs: &CudaTensor,
         cache_x: Option<&CudaTensor>,
@@ -152,7 +143,7 @@ impl CausalConv3d {
     }
 }
 
-fn conv_cached(
+pub(super) fn conv_cached(
     conv: &CausalConv3d,
     x: &CudaTensor,
     cache: Option<&mut FeatCache>,
@@ -177,7 +168,7 @@ fn conv_cached(
     Ok(y)
 }
 
-fn double_time(x: CudaTensor) -> Result<CudaTensor> {
+pub(super) fn double_time(x: CudaTensor) -> Result<CudaTensor> {
     let (b, c2, t, h, w) = (x.shape[0], x.shape[1], x.shape[2], x.shape[3], x.shape[4]);
     let c = c2 / 2;
     x.reshape(vec![b, 2, c, t, h, w])?
@@ -191,7 +182,7 @@ fn rms_video(xs: &CudaTensor, gamma: &CudaTensor) -> Result<CudaTensor> {
 }
 
 /// `rms_video` with SiLU folded in, which is how the decoder always uses it.
-fn rms_silu_video(xs: &CudaTensor, gamma: &CudaTensor) -> Result<CudaTensor> {
+pub(super) fn rms_silu_video(xs: &CudaTensor, gamma: &CudaTensor) -> Result<CudaTensor> {
     xs.rms_norm_channels_act(gamma, 1e-12, true)
 }
 
@@ -200,7 +191,7 @@ fn silu_video(xs: &CudaTensor) -> CudaTensor {
 }
 
 #[derive(Debug, Clone)]
-struct ResidualBlock {
+pub(super) struct ResidualBlock {
     norm1: CudaTensor,
     conv1: CausalConv3d,
     norm2: CudaTensor,
@@ -209,7 +200,7 @@ struct ResidualBlock {
 }
 
 impl ResidualBlock {
-    fn zeros(in_dim: usize, out_dim: usize) -> Self {
+    pub(super) fn zeros(in_dim: usize, out_dim: usize) -> Self {
         let shortcut = if in_dim != out_dim {
             Some(CausalConv3d::zeros(
                 in_dim,
@@ -230,7 +221,12 @@ impl ResidualBlock {
         }
     }
 
-    fn load(map: &WeightMap, prefix: &str, in_dim: usize, out_dim: usize) -> Result<Self> {
+    pub(super) fn load(
+        map: &WeightMap,
+        prefix: &str,
+        in_dim: usize,
+        out_dim: usize,
+    ) -> Result<Self> {
         let shortcut = if in_dim != out_dim {
             Some(CausalConv3d::load(
                 map,
@@ -277,7 +273,11 @@ impl ResidualBlock {
         })
     }
 
-    fn forward(&self, xs: &CudaTensor, mut cache: Option<&mut FeatCache>) -> Result<CudaTensor> {
+    pub(super) fn forward(
+        &self,
+        xs: &CudaTensor,
+        mut cache: Option<&mut FeatCache>,
+    ) -> Result<CudaTensor> {
         let mut x = rms_silu_video(xs, &self.norm1)?;
         x = conv_cached(&self.conv1, &x, cache.as_deref_mut())?;
         x = rms_silu_video(&x, &self.norm2)?;
@@ -290,7 +290,7 @@ impl ResidualBlock {
 }
 
 #[derive(Debug, Clone)]
-struct AttentionBlock {
+pub(super) struct AttentionBlock {
     norm: CudaTensor,
     qkv: CudaTensor, // [3c, c, 1, 1]
     qkv_bias: CudaTensor,
@@ -299,7 +299,7 @@ struct AttentionBlock {
 }
 
 impl AttentionBlock {
-    fn zeros(dim: usize) -> Self {
+    pub(super) fn zeros(dim: usize) -> Self {
         Self {
             norm: pinned(CudaTensor::ones(&[dim])),
             qkv: pinned(CudaTensor::zeros(&[dim * 3, dim, 1, 1])),
@@ -309,7 +309,7 @@ impl AttentionBlock {
         }
     }
 
-    fn load(map: &WeightMap, prefix: &str, dim: usize) -> Result<Self> {
+    pub(super) fn load(map: &WeightMap, prefix: &str, dim: usize) -> Result<Self> {
         let key = |name: &str| weights::join_key(prefix, name);
         Ok(Self {
             norm: gamma(map, &key("norm.gamma"), &[dim, 1, 1])?,
@@ -334,7 +334,7 @@ impl AttentionBlock {
 
     /// Per-frame single-head attention over `h*w` tokens, identity residual.
     /// Accepts `[b, c, t, h, w]` or `[b, c, h, w]`.
-    fn forward(&self, xs: &CudaTensor) -> Result<CudaTensor> {
+    pub(super) fn forward(&self, xs: &CudaTensor) -> Result<CudaTensor> {
         let (b, c) = (xs.shape[0], xs.shape[1]);
         let (t, h, w) = match xs.shape[..] {
             [_, _, t, h, w] => (t, h, w),
@@ -377,13 +377,13 @@ impl AttentionBlock {
 }
 
 #[derive(Debug, Clone, Copy)]
-enum ResampleMode {
+pub(super) enum ResampleMode {
     Upsample2d,
     Upsample3d,
 }
 
 #[derive(Debug, Clone)]
-struct Resample {
+pub(super) struct Resample {
     mode: ResampleMode,
     conv_w: CudaTensor,
     conv_b: CudaTensor,
@@ -391,8 +391,9 @@ struct Resample {
 }
 
 impl Resample {
-    fn zeros(dim: usize, mode: ResampleMode) -> Self {
-        let out = dim / 2;
+    /// `out`: the spatial conv's width (Wan 2.1 `dim / 2`, Wan 2.2's residual
+    /// up blocks `dim`).
+    pub(super) fn zeros(dim: usize, out: usize, mode: ResampleMode) -> Self {
         let time_conv = match mode {
             ResampleMode::Upsample2d => None,
             ResampleMode::Upsample3d => Some(CausalConv3d::zeros(
@@ -411,8 +412,13 @@ impl Resample {
         }
     }
 
-    fn load(map: &WeightMap, prefix: &str, dim: usize, mode: ResampleMode) -> Result<Self> {
-        let out = dim / 2;
+    pub(super) fn load(
+        map: &WeightMap,
+        prefix: &str,
+        dim: usize,
+        out: usize,
+        mode: ResampleMode,
+    ) -> Result<Self> {
         let time_conv = match mode {
             ResampleMode::Upsample2d => None,
             ResampleMode::Upsample3d => Some(CausalConv3d::load(
@@ -441,7 +447,11 @@ impl Resample {
         })
     }
 
-    fn forward(&self, xs: &CudaTensor, cache: Option<&mut FeatCache>) -> Result<CudaTensor> {
+    pub(super) fn forward(
+        &self,
+        xs: &CudaTensor,
+        cache: Option<&mut FeatCache>,
+    ) -> Result<CudaTensor> {
         let mut x = xs.clone();
         if matches!(self.mode, ResampleMode::Upsample3d) {
             if let Some(tc) = &self.time_conv {
@@ -499,7 +509,7 @@ impl UpBlock {
             resnets.push(ResidualBlock::zeros(current, out_dim));
             current = out_dim;
         }
-        let upsample = upsample.map(|mode| Resample::zeros(out_dim, mode));
+        let upsample = upsample.map(|mode| Resample::zeros(out_dim, out_dim / 2, mode));
         Self { resnets, upsample }
     }
 
@@ -527,6 +537,7 @@ impl UpBlock {
                 map,
                 &weights::join_key(prefix, "upsamplers.0"),
                 out_dim,
+                out_dim / 2,
                 mode,
             )?),
             None => None,
@@ -558,9 +569,9 @@ pub struct WanDecoder {
 
 impl WanDecoder {
     pub fn zeros(cfg: &WanVaeConfig) -> Self {
-        let mut dims: Vec<usize> = vec![cfg.base_dim * *cfg.dim_mult.last().unwrap()];
+        let mut dims: Vec<usize> = vec![cfg.decoder_base_dim * *cfg.dim_mult.last().unwrap()];
         for u in cfg.dim_mult.iter().rev() {
-            dims.push(cfg.base_dim * *u);
+            dims.push(cfg.decoder_base_dim * *u);
         }
         let conv_in = CausalConv3d::zeros(cfg.z_dim, dims[0], [3, 3, 3], [1, 1, 1], [1, 1, 1]);
         let mid_res0 = ResidualBlock::zeros(dims[0], dims[0]);
@@ -596,9 +607,9 @@ impl WanDecoder {
     }
 
     pub fn load(map: &WeightMap, prefix: &str, cfg: &WanVaeConfig) -> Result<Self> {
-        let mut dims: Vec<usize> = vec![cfg.base_dim * *cfg.dim_mult.last().unwrap()];
+        let mut dims: Vec<usize> = vec![cfg.decoder_base_dim * *cfg.dim_mult.last().unwrap()];
         for u in cfg.dim_mult.iter().rev() {
-            dims.push(cfg.base_dim * *u);
+            dims.push(cfg.decoder_base_dim * *u);
         }
         let conv_in = CausalConv3d::load(
             map,
@@ -882,20 +893,56 @@ impl WanEncoder {
     }
 }
 
+/// The decoder half: the Wan 2.1 graph, or Wan 2.2's residual one
+/// (`super::vae22`), which writes patchified channels.
+#[derive(Debug, Clone)]
+enum Decoder {
+    V21(WanDecoder),
+    V22(super::vae22::Decoder22),
+}
+
+#[derive(Debug, Clone)]
+enum Encoder {
+    V21(WanEncoder),
+    V22(super::vae22::Encoder22),
+}
+
 #[derive(Debug, Clone)]
 pub struct AutoencoderKlWan {
     pub cfg: WanVaeConfig,
     post_quant: CausalConv3d,
-    decoder: WanDecoder,
-    encoder: Option<WanEncoder>,
+    decoder: Decoder,
+    encoder: Option<Encoder>,
 }
 
 impl AutoencoderKlWan {
+    /// A 48-channel config built from the Wan 2.1 preset (`z_dim = 48` alone)
+    /// means the Wan 2.2 VAE: the 2.1 graph cannot carry 48 channels.
+    fn resolve(cfg: WanVaeConfig) -> WanVaeConfig {
+        if cfg.z_dim == 48 && !cfg.is_residual && cfg.patch_size <= 1 {
+            WanVaeConfig {
+                load_encoder: cfg.load_encoder,
+                ..WanVaeConfig::wan_2_2()
+            }
+        } else {
+            cfg
+        }
+    }
+
     pub fn zeros(cfg: WanVaeConfig) -> Self {
+        let (decoder, encoder) = if cfg.is_residual {
+            (
+                Decoder::V22(super::vae22::Decoder22::zeros(&cfg)),
+                cfg.load_encoder
+                    .then(|| Encoder::V22(super::vae22::Encoder22::zeros(&cfg))),
+            )
+        } else {
+            (Decoder::V21(WanDecoder::zeros(&cfg)), None)
+        };
         Self {
             post_quant: CausalConv3d::zeros(cfg.z_dim, cfg.z_dim, [1, 1, 1], [1, 1, 1], [0, 0, 0]),
-            decoder: WanDecoder::zeros(&cfg),
-            encoder: None,
+            decoder,
+            encoder,
             cfg,
         }
     }
@@ -905,8 +952,14 @@ impl AutoencoderKlWan {
     }
 
     pub fn from_map(cfg: WanVaeConfig, map: &WeightMap) -> Result<Self> {
+        let cfg = Self::resolve(cfg);
         let encoder = if cfg.load_encoder {
-            match WanEncoder::load_wan_2_1(map) {
+            let enc = if cfg.is_residual {
+                super::vae22::Encoder22::load(map, &cfg).map(Encoder::V22)
+            } else {
+                WanEncoder::load_wan_2_1(map).map(Encoder::V21)
+            };
+            match enc {
                 Ok(enc) => Some(enc),
                 Err(e) => {
                     eprintln!("warn: VAE encoder not loaded ({e}); I2V encode unavailable");
@@ -915,6 +968,11 @@ impl AutoencoderKlWan {
             }
         } else {
             None
+        };
+        let decoder = if cfg.is_residual {
+            Decoder::V22(super::vae22::Decoder22::load(map, &cfg)?)
+        } else {
+            Decoder::V21(WanDecoder::load(map, "decoder", &cfg)?)
         };
         Ok(Self {
             post_quant: CausalConv3d::load(
@@ -926,26 +984,47 @@ impl AutoencoderKlWan {
                 [1, 1, 1],
                 [0, 0, 0],
             )?,
-            decoder: WanDecoder::load(map, "decoder", &cfg)?,
+            decoder,
             encoder,
             cfg,
         })
     }
 
+    /// Per-channel `(mean, std)` as `[1, C, 1, 1, 1]` for latents with `c`
+    /// channels (the config's `latents_mean` / `latents_std`).
+    fn stats(&self, c: usize) -> Result<(CudaTensor, CudaTensor)> {
+        let (m, s) = (&self.cfg.latents_mean, &self.cfg.latents_std);
+        if m.len() < c || s.len() < c {
+            return Err(TensorError::Message(format!(
+                "VAE latent stats have {} channels, latents {c}",
+                m.len()
+            )));
+        }
+        Ok((
+            CudaTensor::from_vec(m[..c].to_vec(), vec![1, c, 1, 1, 1])?,
+            CudaTensor::from_vec(s[..c].to_vec(), vec![1, c, 1, 1, 1])?,
+        ))
+    }
+
+    /// DiT space → VAE space: `z · std + mean`.
     pub fn scale_latents(&self, latents: &CudaTensor) -> Result<CudaTensor> {
-        let n = self.cfg.z_dim.min(16);
-        let mean = CudaTensor::from_vec(LATENTS_MEAN[..n].to_vec(), vec![1, n, 1, 1, 1])?;
-        let std = CudaTensor::from_vec(LATENTS_STD[..n].to_vec(), vec![1, n, 1, 1, 1])?;
+        let (mean, std) = self.stats(latents.dim(1)?)?;
         latents.mul(&std)?.add(&mean)
     }
 
+    /// VAE space → DiT space: `(z − mean) / std`.
     pub fn normalize_latents(&self, latents: &CudaTensor) -> Result<CudaTensor> {
-        let n = self.cfg.z_dim.min(16);
-        let mean = CudaTensor::from_vec(LATENTS_MEAN[..n].to_vec(), vec![1, n, 1, 1, 1])?;
-        let std = CudaTensor::from_vec(LATENTS_STD[..n].to_vec(), vec![1, n, 1, 1, 1])?;
+        let (mean, std) = self.stats(latents.dim(1)?)?;
         latents.sub(&mean)?.div(&std)
     }
 
+    /// Pixels per latent cell (Wan 2.1: 8, Wan 2.2: 16).
+    pub fn spatial_compression(&self) -> usize {
+        self.cfg.spatial_compression()
+    }
+
+    /// `[1, 3, F, H, W]` in `[-1, 1]` → the posterior mean (VAE space).
+    ///
     /// The VAE runs f32 activations (FastVideo's `vae_precision` is fp32),
     /// whatever the DiT's `FASTVIDEO_BF16_ACT` default.
     pub fn encode_video(&self, video: &CudaTensor) -> Result<CudaTensor> {
@@ -953,7 +1032,13 @@ impl AutoencoderKlWan {
             .encoder
             .as_ref()
             .ok_or_else(|| TensorError::Message("VAE encoder not loaded".into()))?;
-        super::tensor::with_bf16_act(false, || enc.forward(&video.to_f32_act()?))
+        super::tensor::with_bf16_act(false, || {
+            let v = video.to_f32_act()?;
+            match enc {
+                Encoder::V21(e) => e.forward(&v),
+                Encoder::V22(e) => e.encode(&v),
+            }
+        })
     }
 
     pub fn decode(&self, latents: &CudaTensor) -> Result<CudaTensor> {
@@ -1002,9 +1087,17 @@ impl AutoencoderKlWan {
         while i < t {
             let n = if i == 0 { 1 } else { chunk.min(t - i) };
             cache.begin_pass();
-            let piece = self
-                .decoder
-                .forward(&z.narrow(2, i, n)?, Some(&mut cache))?;
+            let zi = z.narrow(2, i, n)?;
+            let piece = match &self.decoder {
+                Decoder::V21(d) => d.forward(&zi, Some(&mut cache))?,
+                // Wan 2.2: 12 patchified channels → RGB at 2× (Diffusers
+                // `unpatchify`, then the clamp; both per frame).
+                Decoder::V22(d) => super::vae22::unpatchify(
+                    &d.forward(&zi, Some(&mut cache), i == 0)?,
+                    self.cfg.patch_size,
+                )?
+                .clamp(-1.0, 1.0),
+            };
             // [1, 3, f, H, W] → [f, 3, H, W] for the sink; a small copy next to
             // the decode that produced it.
             let (f, hh, ww) = (piece.shape[2], piece.shape[3], piece.shape[4]);
@@ -1056,6 +1149,11 @@ mod tests {
             num_res_blocks: 1,
             temporal_upsample: vec![true, true],
             load_encoder: false,
+            decoder_base_dim: 8,
+            is_residual: false,
+            patch_size: 1,
+            latents_mean: vec![0.0; 4],
+            latents_std: vec![1.0; 4],
         };
         let vae = AutoencoderKlWan::zeros(cfg);
         let latent_frames = 5;
@@ -1093,6 +1191,11 @@ mod tests {
             num_res_blocks: 1,
             temporal_upsample: vec![true, true],
             load_encoder: false,
+            decoder_base_dim: 8,
+            is_residual: false,
+            patch_size: 1,
+            latents_mean: vec![0.0; 4],
+            latents_std: vec![1.0; 4],
         };
         let vae = AutoencoderKlWan::zeros(cfg);
 

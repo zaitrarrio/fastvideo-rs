@@ -8,7 +8,8 @@
 #   UP_STEPS="... oracle"                    every target below
 #   UP_STEPS="... oracle:fasth3-8step,ltx25-512p"   a subset
 #
-# Targets: fasth3-8step (FastVideo FastH3 8-step V2, 768x1344x124),
+# Targets: wan22-ti2v (Wan 2.2 TI2V-5B modules through Diffusers, oracle_wan22.py),
+# fasth3-8step (FastVideo FastH3 8-step V2, 768x1344x124),
 # fasth3-4step-vsa (MiniMax-H3 + Preview v1 vsa-datafree LoRA), the dense
 # controls fasth3-8step-vsa0 (the 8-step checkpoint at VSA sparsity 0) and
 # fasth3-4step-dense (dense-datafree LoRA, FLASH_ATTN), and the
@@ -74,8 +75,18 @@ oracle_ltx() {
     --output-path "$OUT/oracle-$name/out.mp4"
 }
 
+# Wan 2.2 TI2V-5B modules (Diffusers, oracle_wan22.py): VAE encode/decode
+# of a fixed 704x1280 clip and one DiT forward per timestep layout (t2v, and
+# i2v's frame-0-at-timestep-0), inputs dumped for `fv-gpucheck wan oracle`.
+# Weights: fv-weights-b200-us.
+oracle_wan22() {
+  oracle_cell wan22-ti2v env PYTHONUNBUFFERED=1 "$UP/fastvideo/bin/python" "$HERE/oracle_wan22.py" \
+    --model "$W/wan22-ti2v-5b" --image "$HERE/../fixtures/ti2v-beach-832x480.jpg"
+}
+
 run_oracle() {
   local f8="$UW/FastVideo-FastH3-8-Step-V2" lora="$W/FastH3-4-step-Preview-v1-LoRA"
+  oracle_wan22
   local g768=(--height 768 --width 1344 --num-frames 124)
   oracle_fv fasth3-8step 8step --model-path "$f8" "${g768[@]}"
   oracle_fv fasth3-4step-vsa lora --model-path "$UW/MiniMax-H3" \
