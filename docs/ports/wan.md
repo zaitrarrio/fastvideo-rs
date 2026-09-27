@@ -170,6 +170,29 @@ off elsewhere — on RTX PRO 6000 neither recipe won speed and quality (below).
 `FASTVIDEO_FP8` (W8A8 on every linear) still applies and takes precedence
 per linear.
 
+### Datacenter dense attention (`attn_dc.cu`, B200 default)
+
+Dense SDPA at head dim 128 on a 10.0 device (B200) runs
+`fa_dc100_fwd_d128`: tcgen05 MMA into tensor memory, TMA loads, and a
+warp-specialised pipeline in the FlashAttention-4 / CUTLASS sm100 FMHA
+order (256 queries per CTA as two 128-row tiles; one MMA thread; TMEM
+S0 | S1 | O0 | O1; P written over S and read by the P.V MMA from TMEM; one
+thread per query row for the softmax, which also rescales O in TMEM when a
+row's max grows). Same per-row arithmetic as `flash_mma_fwd2` except the max
+advances per 128 keys, so it agrees with V2 to bf16-P rounding (rel L2
+1e-4 to 8e-4), not bit for bit. B200: 1.09-1.11 PFLOPS at the H3 768p / LTX
+1080p 20 s / 4K shapes, 2.9x V2 (372 TFLOPS), 0.74-0.78x cuDNN SDPA
+(1.40-1.49 PFLOPS). `fa_dc90_fwd_d128` (wgmma, FA3-style producer +
+two consumer warpgroups with QK/PV overlap) is built for sm_90a and
+selectable with `FASTVIDEO_FLASH_KERNEL=dc`, but not yet run on an
+H100 / H200, so `auto` does not take it. Escape hatch everywhere:
+`FASTVIDEO_FLASH_KERNEL=v2` (or `[kernels] dense_attention = "nvcc:v2"`).
+The arch-specific cubins (sm_90a, sm_100a) are built by build.rs next to
+the per-SM kernels.cu cubins; `scripts/gpu/upstream/attn_dc_bench.cu`
+(pod step `bench:attn_dc`, dev loop `dev:attn_dc`) is the standalone
+parity and timing harness, `fv-gpucheck kernels --groups attn_dc` the Rust
+parity group.
+
 ### Block-causal flash attention (SF-Wan, `FASTVIDEO_WAN_CAUSAL_FLASH`, default on)
 
 A causal Wan forward without the AR cache used to build the `[S, S]`

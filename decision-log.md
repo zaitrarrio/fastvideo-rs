@@ -2,6 +2,17 @@
 
 Project code: FVID
 
+### FVID · 2026-09-27 · FVID-2026-09-27-attention-datacenter
+- Trigger: Sol-H3 on B200 gained only 1.30x over RTX PRO 6000 (cuBLAS / cuDNN parts ~2x): every attention kernel is mma.sync; asked for tcgen05 / TMEM / TMA (sm_100) and wgmma / TMA (sm_90) kernels, dense first, then Sol, VSA, block-causal
+- Options: hand-written tcgen05 + TMEM FA4-style kernel in a new file with arch-specific cubins; CUTLASS / CuTe C++ (new dependency, not NVRTC-able); cuDNN SDPA only (binding still rejects the graph, other agent's work); keep mma.sync on B200
+- Decision: new `attn_dc.cu` (separate module; build.rs compiles it for sm_90a and sm_100a only; loaded only on 9.0 / 10.0), `FlashKernel::Dc` / seam value `dc`; `auto` takes it on 10.0 only (sm_90 wgmma kernel built but unmeasured -> opt-in); `FASTVIDEO_FLASH_KERNEL=v2` restores mma.sync; sm_120 path unchanged. Sol / VSA / block-causal datacenter kernels not started
+- Reason: B200 `attn_dc_bench` (pod-built harness): dc100 passes all 13 parity cases (vs flash_mma_fwd2 rel L2 <= 7.7e-4, error vs f64 equal to V2's, bf16 out = RNE(f32 out), component probes exact) and runs 1092 / 964 / 1102 / 1109 TFLOPS at H3 768p / LTX 512p / 1080p20s / 4K (V2: 372 / 347 / 374 / 374; cuDNN SDPA 1490 / 1350 / 1401 / 1405; the N=64 P.V variant ~8% slower). Runpod balance fell to ~$10 (other agents' pods at $17-24/hr) and the coordinator froze pod creation, so the H100 run, the Rust-path `attn_dc` group, and the B200 generation check did not run
+- Reversibility: cheap (env / profile seam; old kernels kept; module isolated)
+- Executed by: Executor
+- ADR: none
+- Verification: B200 pod 3dxiud5gyc8hnr (secure $6.79/hr, 12:18-12:36Z, ~$2.0, deleted): harness parity + bench, `bench_attn.py` (torch 2.13 cuDNN, sol-engine 6c2f582 sm100 Sol: tau 1.0 15.3 ms H3 768p, 87.8 ms 1080p20s, 95.7 ms 4K). Host: `cargo check` cuda features, techniques / attn unit tests green. Pending on hardware: `fv-gpucheck kernels --groups attn_dc,attn_bench` on B200 and H100 (`RUNPOD_NO_VOLUME=1 FV_EXTRA_ENV=FV_KERNEL_GROUPS=attn_dc,attn_bench runpod-http.sh kernels <sha>`), dc90 parity / timing (`UP_STEPS=bench:attn_dc bench:attn`), FastH3 8-step + Sol-H3 on B200
+  - Results: artifacts/runpod/upstream/attn-dc-b200/
+
 ### FVID · 2026-09-26 · FVID-2026-09-26-attention-phase3b
 - Trigger: LTX-2.5 1080p 20 s Sol stage 2 1.15x slower than sol-engine; dense flash the largest H3 kernel; VSA 1.34x vs FastVideo's 1.49x
 - Options: warp-specialised Sol + KV splits (as asked); mirror sol-engine's sm120 kernel (`sol_attn/sm120/mainloop.py`: 4 MMA warps, warp 0 issues TMA, STAGES=1, kv_splits=1 — splits are sm90-only, `interface.py:114-116`); cuDNN fused SDPA for dense; FA2-style 128-query dense; smaller VSA smem
