@@ -13,6 +13,8 @@
 //! - [`webhook`]: webhook bodies (signed by serve-kit with our Ed25519 key)
 //!   and `/.well-known/jwks.json`.
 //! - [`error`]: the fal error envelopes.
+//! - [`catalog`]: `GET /fal/schema[/{app}/{sub}]`, the input JSON Schemas
+//!   (from the same limits as [`schema`]) for the console.
 //!
 //! Apps are static routes built from [`FalConfig::apps`], never wildcards.
 //! Each app resolves to a model by name (engine aliases / served names) and
@@ -24,6 +26,7 @@
 //!
 //! Owned by WP-09 / WP-14 (docs/serve/design.md §8).
 
+pub mod catalog;
 pub mod director;
 pub mod error;
 pub mod proxy;
@@ -113,6 +116,7 @@ pub fn routes(cfg: FalConfig) -> Router<ServeCtx> {
         r = sync::app_routes(r, &cfg, app);
     }
     r = storage::routes(r, &cfg);
+    r = catalog::routes(r, &cfg);
     webhook::routes(r)
 }
 

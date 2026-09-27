@@ -58,7 +58,8 @@ async fn schema_migrates_idempotently() {
         ["jobs_expires", "jobs_owner_created", "jobs_protocol_created", "jobs_status_created", "jobs_worker_status"]
     );
     let v = m.sql("SELECT COUNT(*) AS n FROM schema_migrations", &[]).unwrap();
-    assert_eq!(v[0]["n"], 1);
+    assert_eq!(v[0]["n"], schema::latest());
+    assert_eq!(m.sql("SELECT COUNT(*) AS n FROM api_keys", &[]).unwrap()[0]["n"], 0);
 }
 
 #[tokio::test]

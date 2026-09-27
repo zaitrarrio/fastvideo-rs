@@ -13,7 +13,9 @@ use fastvideo_engine_service::{
 use fastvideo_media::video::FfmpegH264;
 use fastvideo_protocol::{JobStore, ModelId, ProtocolId};
 use fastvideo_serve_kit::store::spawn_sweeper;
-use fastvideo_serve_kit::{Auth, CallbackSender, KeyRing, ServeConfig, ServeCtx, UrlKey, WebhookSigner};
+use fastvideo_serve_kit::{
+    AdminToken, Auth, CallbackSender, KeyRing, KeyStore, ServeConfig, ServeCtx, UrlKey, WebhookSigner,
+};
 use tokio::net::TcpListener;
 use tower_http::trace::TraceLayer;
 use url::Url;
@@ -22,7 +24,7 @@ use crate::adapters::{self, MountCfg};
 use crate::config::{ArtifactBackend, Config, EngineBackendKind, JobBackend, Mode};
 use crate::gate::{OutputPolicy, ServiceGate};
 use crate::health::{self, Health};
-use crate::{metrics, native, storage};
+use crate::{console, metrics, native, storage};
 
 /// Parts tests (or other front ends) substitute.
 #[derive(Default)]
@@ -40,7 +42,12 @@ pub struct App {
     pub gate: Arc<ServiceGate>,
     pub router: Router,
     pub d1: Option<Arc<fastvideo_serve_kit::D1JobStore>>,
+    /// Minted API keys (`/fv/v1/admin/keys`).
+    pub keys: Arc<KeyStore>,
+    /// Whether the admin token was generated at startup (no `FV_ADMIN_TOKEN`).
+    pub admin_token_generated: bool,
     sweeper: tokio::task::JoinHandle<()>,
+    key_maintenance: tokio::task::JoinHandle<()>,
 }
 
 impl std::fmt::Debug for App {
@@ -52,6 +59,7 @@ impl std::fmt::Debug for App {
 impl Drop for App {
     fn drop(&mut self) {
         self.sweeper.abort();
+        self.key_maintenance.abort();
     }
 }
 
@@ -181,9 +189,11 @@ impl App {
         } else {
             KeyRing::from_hash_list(config.auth.keys.expose()).map_err(|e| anyhow!(e))?
         };
-        if config.auth.mode == fastvideo_serve_kit::AuthMode::Keys && keys.is_empty() {
-            tracing::warn!("auth.mode = keys with no FV_API_KEYS: every keyed API answers 401");
+        let key_store = storage::build_key_store(&config).await.map_err(|e| anyhow!(e))?;
+        if config.auth.mode == fastvideo_serve_kit::AuthMode::Keys && keys.is_empty() && key_store.list().is_empty() {
+            tracing::warn!("auth.mode = keys with no FV_API_KEYS and no minted keys: keyed APIs answer 401 until a key is minted (/console/admin)");
         }
+        let (admin, admin_token_generated) = admin_token(&config);
         // fal webhooks are Ed25519-signed with a key published at
         // /.well-known/jwks.json; without FV_WEBHOOK_ED25519_KEY the key is
         // per process (receivers must re-fetch the JWKS after restarts).
@@ -198,7 +208,7 @@ impl App {
         let callbacks = Arc::new(CallbackSender::new(CallbackSender::default_transport(), Some(signer)));
         let mcfg = mount_cfg(&config);
         let mut builder = ServeCtx::builder(sc, gate.clone())
-            .auth(Auth::new(config.auth.mode, keys))
+            .auth(Auth::new(config.auth.mode, keys).with_key_store(key_store.clone()))
             .url_key(key)
             .jobs(jobs.clone())
             .artifacts(artifacts)
@@ -209,9 +219,24 @@ impl App {
         let ctx = builder.build().await.context("building the serve context")?;
         gate.attach(ctx.clone());
 
-        let router = assemble(&config, &ctx, &gate, jobs_kind);
+        let admin_routes = fastvideo_serve_kit::admin_routes(key_store.clone(), Arc::new(admin));
+        let router = assemble(&config, &ctx, &gate, jobs_kind, admin_routes);
         let sweeper = spawn_sweeper(jobs, Duration::from_secs(config.jobs.sweep_interval_s.max(1)));
-        Ok(App { config, ctx, gate, router, d1, sweeper })
+        // D1 is shared between workers: reload it so keys minted or revoked
+        // elsewhere apply here within 30 s.
+        let refresh = (key_store.backend_kind() == "d1").then_some(Duration::from_secs(30));
+        let key_maintenance = key_store.spawn_maintenance(refresh, Duration::from_secs(30));
+        Ok(App {
+            config,
+            ctx,
+            gate,
+            router,
+            d1,
+            keys: key_store,
+            admin_token_generated,
+            sweeper,
+            key_maintenance,
+        })
     }
 
     /// Serves on `listener` until `stop` resolves, then drains (§6.3):
@@ -221,11 +246,15 @@ impl App {
         let gate = self.gate.clone();
         let grace = self.config.shutdown_grace();
         let d1 = self.d1.clone();
+        let keys = self.keys.clone();
         announce_ready(gate.clone());
         let drained = async move {
             stop.await;
             tracing::info!("shutdown requested: draining");
             drain(&gate, grace, d1.as_deref()).await;
+            if let Err(e) = keys.flush().await {
+                tracing::warn!(error = %e, "api keys: writing last_used_at failed");
+            }
             tracing::info!("drained");
         };
         axum::serve(listener, self.router.clone())
@@ -234,6 +263,20 @@ impl App {
             .context("HTTP server")?;
         Ok(())
     }
+}
+
+/// The admin token: `auth.admin_token` (`FV_ADMIN_TOKEN`), else a fresh
+/// CSPRNG token logged once at WARN. Only its digest is kept.
+fn admin_token(config: &Config) -> (AdminToken, bool) {
+    if !config.auth.admin_token.is_empty() {
+        return (AdminToken::from_secret(config.auth.admin_token.expose()), false);
+    }
+    let (token, plain) = AdminToken::generate();
+    let line = "=".repeat(78);
+    tracing::warn!(
+        "\n{line}\n  fv-serve admin token (generated at startup; set FV_ADMIN_TOKEN to choose one):\n\n      {plain}\n\n  Mint API keys at /console/admin or POST /fv/v1/admin/keys with\n  `Authorization: Bearer <admin token>`. It is not stored and not shown again.\n{line}"
+    );
+    (token, true)
 }
 
 /// Stops admission, drains the engine, waits for the job pumps, flushes D1.
@@ -275,8 +318,9 @@ pub fn mount_cfg(config: &Config) -> MountCfg {
 }
 
 /// The full router: health + serve-kit files/uploads + native + adapters,
-/// with request metrics and tracing.
-pub fn assemble(config: &Config, ctx: &ServeCtx, gate: &Arc<ServiceGate>, jobs_kind: &'static str) -> Router {
+/// with request metrics and tracing. `extra` (the admin routes) is merged
+/// under the same layers.
+pub fn assemble(config: &Config, ctx: &ServeCtx, gate: &Arc<ServiceGate>, jobs_kind: &'static str, extra: Router) -> Router {
     let mcfg = mount_cfg(config);
     let mut kit: Router<ServeCtx> = ctx.routes();
     if config.protocols.native {
@@ -295,9 +339,11 @@ pub fn assemble(config: &Config, ctx: &ServeCtx, gate: &Arc<ServiceGate>, jobs_k
         artifacts_backend: artifacts_kind,
         root_model: adapters::root_model(&mcfg, ctx),
     };
-    kit.with_state(ctx.clone())
-        .merge(stateful)
-        .merge(health::routes(h))
+    let mut r = kit.with_state(ctx.clone()).merge(stateful).merge(health::routes(h)).merge(extra);
+    if config.server.console {
+        r = r.merge(console::routes());
+    }
+    r
         .route_layer(axum::middleware::from_fn(metrics::track))
         .layer(TraceLayer::new_for_http())
 }

@@ -1456,6 +1456,7 @@ dependencies = [
  "futures",
  "hmac",
  "image",
+ "rand 0.9.5",
  "reqwest",
  "rusqlite",
  "serde",

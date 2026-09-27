@@ -133,11 +133,24 @@ fn ct_eq(a: &[u8; 32], b: &[u8; 32]) -> bool {
     a.iter().zip(b).fold(0u8, |acc, (x, y)| acc | (x ^ y)) == 0
 }
 
+/// Keys minted at run time ([`crate::keys::KeyStore`]), checked after the
+/// static ring.
+#[derive(Clone)]
+pub struct DynamicKeys(pub std::sync::Arc<dyn crate::keys::KeyCheck>);
+
+impl std::fmt::Debug for DynamicKeys {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("DynamicKeys")
+    }
+}
+
 /// Auth configuration and checks.
 #[derive(Clone, Debug, Default)]
 pub struct Auth {
     pub mode: AuthMode,
     pub keys: KeyRing,
+    /// Minted keys (accepted for every API and scheme, like `keys`).
+    pub dynamic: Option<DynamicKeys>,
     overrides: BTreeMap<ProtocolId, AuthPolicy>,
 }
 
@@ -146,8 +159,18 @@ impl Auth {
         Self {
             mode,
             keys,
+            dynamic: None,
             overrides: BTreeMap::new(),
         }
+    }
+    /// Also accepts keys from a [`crate::keys::KeyStore`].
+    pub fn with_key_store(mut self, store: std::sync::Arc<dyn crate::keys::KeyCheck>) -> Self {
+        self.dynamic = Some(DynamicKeys(store));
+        self
+    }
+    /// Static ring first, then minted keys.
+    pub fn check_key(&self, key: &str) -> Option<KeyId> {
+        self.keys.check(key).or_else(|| self.dynamic.as_ref().and_then(|d| d.0.check(key)))
     }
     /// Open everything.
     pub fn none() -> Self {
@@ -177,7 +200,7 @@ impl Auth {
             .and_then(|v| v.to_str().ok())
             .and_then(parse_authorization);
         match self.policy(p) {
-            AuthPolicy::Open => Ok(presented.and_then(|(_, k)| self.keys.check(&k))),
+            AuthPolicy::Open => Ok(presented.and_then(|(_, k)| self.check_key(&k))),
             AuthPolicy::Require(schemes) => {
                 let Some((scheme, key)) = presented else {
                     return Err(ApiError::unauthorized("missing credentials"));
@@ -189,8 +212,7 @@ impl Auth {
                         want.join(" or ")
                     )));
                 }
-                self.keys
-                    .check(&key)
+                self.check_key(&key)
                     .map(Some)
                     .ok_or_else(|| ApiError::unauthorized("invalid credentials"))
             }
@@ -280,6 +302,24 @@ mod tests {
             let a = Auth::new(mode, KeyRing::default());
             assert_eq!(a.authenticate(ProtocolId::Fal, &HeaderMap::new()).unwrap(), None);
         }
+    }
+
+    #[tokio::test]
+    async fn minted_keys_work_for_every_api() {
+        let store = crate::keys::KeyStore::memory().await;
+        let (k, rec) = store.mint("t").await.unwrap();
+        let a = auth().with_key_store(store.clone());
+        assert!(a.authenticate(ProtocolId::Fal, &h(&format!("Key {k}"))).unwrap().is_some());
+        for p in [ProtocolId::MiniMaxV2, ProtocolId::LtxV1, ProtocolId::LtxV2, ProtocolId::Native] {
+            let id = a.authenticate(p, &h(&format!("Bearer {k}"))).unwrap().unwrap();
+            assert_eq!(id.0, rec.id);
+        }
+        assert_eq!(a.authenticate(ProtocolId::OpenAiVideos, &h(&format!("Bearer {k}"))).unwrap().unwrap().0, rec.id);
+        // Static keys still work.
+        assert!(a.authenticate(ProtocolId::Fal, &h("Key sk-good")).unwrap().is_some());
+        store.revoke(&rec.id).await.unwrap();
+        assert!(a.authenticate(ProtocolId::Fal, &h(&format!("Key {k}"))).is_err());
+        assert!(a.authenticate(ProtocolId::Native, &h(&format!("Bearer {k}"))).is_err());
     }
 
     #[test]

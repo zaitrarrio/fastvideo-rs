@@ -24,6 +24,8 @@ pub enum Owner {
     /// fal `minimax/h3-max/director` (WP-14).
     FalDirector,
     Reactor,
+    /// The `/console` pages (WP-20).
+    Console,
 }
 
 impl Owner {
@@ -38,6 +40,7 @@ impl Owner {
             Owner::Fal => "fal",
             Owner::FalDirector => "fal-director",
             Owner::Reactor => "reactor",
+            Owner::Console => "console",
         }
     }
 }
@@ -103,10 +106,21 @@ pub fn route_table(fal_apps: &[String]) -> Vec<RouteSpec> {
         r(Native, "GET", "/fv/v1/jobs/{id}/content"),
         r(Native, "GET", "/fv/v1/streams"),
         r(Native, "POST", "/fv/v1/streams"),
+        // Minted API keys (serve-kit `admin_routes`, admin token).
+        r(Native, "POST", "/fv/v1/admin/keys"),
+        r(Native, "GET", "/fv/v1/admin/keys"),
+        r(Native, "DELETE", "/fv/v1/admin/keys/{id}"),
+        // Console pages (src/console.rs).
+        r(Console, "GET", "/console"),
+        r(Console, "GET", "/console/admin"),
+        r(Console, "GET", "/console/models/{owner}/{alias}/{task}"),
+        r(Console, "GET", "/console/assets/{file}"),
         // fal shared routes (§4.4, §5.6).
         r(Fal, "POST", "/fal/proxy"),
         r(Fal, "GET", "/fal/proxy"),
         r(Fal, "POST", "/storage/upload/initiate"),
+        r(Fal, "GET", "/fal/schema"),
+        r(Fal, "GET", "/fal/schema/{owner}/{alias}/{sub}"),
         r(FalDirector, "POST", "/wma/session"),
         r(FalDirector, "POST", "/start-session"),
         r(FalDirector, "GET", "/info"),
@@ -276,6 +290,10 @@ mod tests {
             ("GET", "/status/abc", "openai-videos"),
             ("GET", "/files/a/b.mp4", "serve-kit"),
             ("GET", "/fv/v1/jobs/fvjob_1", "native"),
+            ("DELETE", "/fv/v1/admin/keys/key_abc", "native"),
+            ("GET", "/console/models/minimax/h3-max/text-to-video", "console"),
+            ("GET", "/console/assets/model.js", "console"),
+            ("GET", "/fal/schema/minimax/h3-max/image-to-video", "fal"),
         ];
         for (m, uri, want) in cases {
             let resp = router

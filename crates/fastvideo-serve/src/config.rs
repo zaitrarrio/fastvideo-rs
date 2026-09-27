@@ -15,6 +15,9 @@
 //! | `FV_BIND`, `FV_PUBLIC_BASE_URL`, `FV_STATE_DIR`, `FV_WORKER_ID` | `server.*` |
 //! | `FV_WEIGHTS` | substituted for `${FV_WEIGHTS}` in `models[].weights` |
 //! | `FV_AUTH_MODE`, `FV_API_KEYS` (SHA-256 hex list) | `auth.*` |
+//! | `FV_ADMIN_TOKEN` | `auth.admin_token` (else generated at startup and logged once) |
+//! | `FV_KEY_STORE` (`auto` \| `memory` \| `file` \| `d1`) | `auth.key_store` (minted API keys) |
+//! | `FV_CONSOLE` (`0` \| `1`) | `server.console` (the `/console` pages) |
 //! | `FV_URL_SIGNING_KEY`, `FV_WEBHOOK_ED25519_KEY` | signing keys |
 //! | `FV_ENGINE` (`fake` \| `cuda`) | `engine.backend` |
 //! | `FV_JOB_STORE` (`auto` \| `memory` \| `file` \| `d1`) | `jobs.backend` |
@@ -83,6 +86,8 @@ pub struct ServerCfg {
     pub shutdown_grace_s: u64,
     /// Sync endpoints' wait (`/v1/videos/sync`, LTX v1, fal `/run`).
     pub sync_timeout_s: u64,
+    /// Serve the `/console` pages (docs/serve/console.md).
+    pub console: bool,
 }
 
 impl Default for ServerCfg {
@@ -95,8 +100,23 @@ impl Default for ServerCfg {
             worker_id: None,
             shutdown_grace_s: 25,
             sync_timeout_s: 600,
+            console: true,
         }
     }
+}
+
+/// Where minted API keys live (`auth.key_store`).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum KeyStoreBackend {
+    /// D1 when D1 is configured (and built), else `file`.
+    #[default]
+    Auto,
+    Memory,
+    /// `state_dir/api_keys.json`.
+    File,
+    /// Cloudflare D1 table `api_keys`.
+    D1,
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
@@ -105,6 +125,11 @@ pub struct AuthCfg {
     pub mode: AuthMode,
     /// SHA-256 hex hashes of the accepted keys (normally `FV_API_KEYS`).
     pub keys: Secret,
+    /// Admin token for `/fv/v1/admin/*` (normally `FV_ADMIN_TOKEN`); when
+    /// unset a random one is generated at startup and logged once.
+    pub admin_token: Secret,
+    /// Minted-key store.
+    pub key_store: KeyStoreBackend,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -510,6 +535,15 @@ impl Config {
         if let Some(v) = env.var("FV_API_KEYS") {
             self.auth.keys = Secret(v);
         }
+        if let Some(v) = env.var("FV_ADMIN_TOKEN") {
+            self.auth.admin_token = Secret(v.trim().to_owned());
+        }
+        if let Some(v) = env.var("FV_KEY_STORE") {
+            self.auth.key_store = parse_enum("FV_KEY_STORE", &v)?;
+        }
+        if let Some(v) = env.var("FV_CONSOLE") {
+            self.server.console = !matches!(v.trim(), "0" | "false" | "off" | "no");
+        }
         if let Some(v) = env.var("FV_URL_SIGNING_KEY") {
             self.artifacts.signing_key = Secret(v);
         }
@@ -580,6 +614,9 @@ impl Config {
         if self.auth.mode == AuthMode::Keys && !self.auth.keys.is_empty() {
             fastvideo_serve_kit::KeyRing::from_hash_list(self.auth.keys.expose()).map_err(ConfigError::Invalid)?;
         }
+        if self.auth.key_store == KeyStoreBackend::D1 && !self.d1_configured() {
+            return Err(ConfigError::Invalid("auth.key_store = d1 needs the D1 settings (FV_CF_ACCOUNT_ID, FV_CF_API_TOKEN, FV_D1_DATABASE_ID)".into()));
+        }
         if self.jobs.backend == JobBackend::D1 && !self.d1_configured() {
             return Err(ConfigError::Invalid(
                 "jobs.backend = d1 needs account id, API token and database id (FV_CF_ACCOUNT_ID, FV_CF_API_TOKEN, FV_D1_DATABASE_ID)".into(),
@@ -624,6 +661,16 @@ impl Config {
         match self.jobs.backend {
             JobBackend::Auto if self.d1_configured() => JobBackend::D1,
             JobBackend::Auto => JobBackend::File,
+            b => b,
+        }
+    }
+
+    /// The minted-key store `auto` resolves to (D1 only in builds with
+    /// `http-client`).
+    pub fn key_store_backend(&self) -> KeyStoreBackend {
+        match self.auth.key_store {
+            KeyStoreBackend::Auto if self.d1_configured() && cfg!(feature = "http-client") => KeyStoreBackend::D1,
+            KeyStoreBackend::Auto => KeyStoreBackend::File,
             b => b,
         }
     }
@@ -725,6 +772,7 @@ body_max_mb = 64
             ("fv_r2_access_key_id", "AKID"),
             ("fv_r2_secret_access_key", "r2-secret-value"),
             ("FV_API_KEYS", &fastvideo_serve_kit::KeyRing::hash_hex("k")),
+            ("FV_ADMIN_TOKEN", "fvadm_admin-secret-value"),
             ("FV_SERVE_MODE", "runpod-queue"),
             ("RUNPOD_POD_ID", "pod-123"),
         ]))
@@ -736,10 +784,24 @@ body_max_mb = 64
         assert_eq!(c.server.mode, Mode::RunpodQueue);
         assert_eq!(c.server.worker_id.as_deref(), Some("pod-123"));
         let shown = format!("{} {:?}", c.redacted(), c);
-        for secret in ["cf-token-value", "r2-secret-value", "AKID"] {
+        for secret in ["cf-token-value", "r2-secret-value", "AKID", "admin-secret-value"] {
             assert!(!shown.contains(secret), "{secret} leaked");
         }
         assert!(shown.contains("fv-media"));
+    }
+
+    #[test]
+    fn key_store_and_console_env() {
+        let mut c = Config::default();
+        assert!(c.server.console);
+        assert_eq!(c.key_store_backend(), KeyStoreBackend::File);
+        c.apply_env(&env(&[("FV_KEY_STORE", "memory"), ("FV_CONSOLE", "0"), ("FV_ADMIN_TOKEN", " t ")])).unwrap();
+        assert_eq!(c.key_store_backend(), KeyStoreBackend::Memory);
+        assert!(!c.server.console);
+        assert_eq!(c.auth.admin_token.expose(), "t");
+        c.auth.key_store = KeyStoreBackend::D1;
+        assert!(c.validate().is_err(), "d1 key store without credentials");
+        assert!(c.apply_env(&env(&[("FV_KEY_STORE", "redis")])).is_err());
     }
 
     #[test]

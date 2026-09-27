@@ -1603,7 +1603,9 @@ Critical path: `WP-00 → WP-01 → WP-02 → WP-05 → WP-09 → (E1 → E2) �
 | `/v1\|v2/{text-to-video,image-to-video,…}`, `/v1/upload` | ltxapi | No overlap with `/v1/videos` |
 | `/{app}/…` for configured apps, `/run/{app}/…`, `/fal/proxy`, `/storage/upload/initiate`, `/wma/*`, `/start-session`, `/info`, `/.well-known/jwks.json` | fal | Apps are static prefixes |
 | `/start_session`, `/session`, `/stop_session`, `/schema`, `/sessions/{sid}/…`, `/events` | reactor | `GET /session` versus WMA `POST /wma/session` do not collide |
-| `/fv/v1/*` | serve (native) | |
+| `/fv/v1/*` | serve (native) | Includes `POST/GET /fv/v1/admin/keys`, `DELETE /fv/v1/admin/keys/{id}` (serve-kit `keys::admin_routes`, admin token; WP-20) |
+| `GET /fal/schema`, `GET /fal/schema/{owner}/{alias}/{sub}` | fal | Catalog of configured apps and each endpoint's input JSON Schema (native, for the console; WP-20) |
+| `GET /console`, `/console/admin`, `/console/models/{owner}/{alias}/{task}`, `/console/assets/{file}` | serve (console) | Embedded static pages, [`console.md`](console.md); off with `FV_CONSOLE=0` |
 
 ---
 

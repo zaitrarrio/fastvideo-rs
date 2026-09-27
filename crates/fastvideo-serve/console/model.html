@@ -1,0 +1,110 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Model · fv-serve console</title>
+<link rel="stylesheet" href="/console/assets/console.css">
+<script type="module" src="/console/assets/model.js"></script>
+</head>
+<body>
+<main class="page">
+  <p class="crumbs" id="crumbs"><a href="/console">Models</a></p>
+  <div class="page-head"><h1 id="title">…</h1></div>
+  <div class="model-nav" id="variants"></div>
+  <nav class="tasknav" id="tasks" aria-label="Endpoints"></nav>
+  <div id="key-banner" class="banner" hidden>No API key in this browser. <a href="/console/admin">Mint one</a> or enter it on the <a href="/console">Models</a> page.</div>
+  <div id="page-error" class="banner bad" hidden></div>
+
+  <div id="batch" hidden>
+    <div class="actions" style="margin:0 0 14px">
+      <div class="tabs" role="tablist" aria-label="View">
+        <button type="button" role="tab" id="tab-playground" aria-selected="true" aria-controls="playground">Playground</button>
+        <button type="button" role="tab" id="tab-api" aria-selected="false" aria-controls="api">API</button>
+      </div>
+      <span class="grow"></span>
+      <span class="hint mono" id="endpoint-id"></span>
+    </div>
+
+    <div id="playground" class="grid2" role="tabpanel" aria-labelledby="tab-playground">
+      <section class="stage" aria-labelledby="h-input">
+        <div class="stage-head"><h2 id="h-input">Input</h2></div>
+        <div class="stage-body">
+          <form id="form"></form>
+          <div class="actions">
+            <button id="reset" type="button">Reset</button>
+            <span class="grow"></span>
+            <button id="run" class="primary" type="button">Run</button>
+          </div>
+          <div id="run-msg" class="msg" role="status"></div>
+        </div>
+      </section>
+
+      <section class="stage" aria-labelledby="h-result">
+        <div class="stage-head">
+          <h2 id="h-result">Result</h2>
+          <span id="result-status" class="pill" hidden></span>
+          <button id="cancel" class="small" type="button" hidden>Cancel</button>
+        </div>
+        <div class="stage-body">
+          <div class="actions" style="margin-top:8px">
+            <div class="tabs" role="tablist" aria-label="Result view">
+              <button type="button" role="tab" data-rtab="preview" aria-selected="true">Preview</button>
+              <button type="button" role="tab" data-rtab="json" aria-selected="false">JSON</button>
+              <button type="button" role="tab" data-rtab="logs" aria-selected="false">Logs</button>
+            </div>
+          </div>
+          <div data-rpanel="preview">
+            <div id="video-empty" class="placeholder-video" style="margin-top:10px">Run a request to see the video here.</div>
+            <video id="video" controls playsinline preload="metadata" hidden style="margin-top:10px"></video>
+            <div class="actions" id="result-links" hidden>
+              <a id="download" download>Download MP4</a>
+              <a id="open-video" target="_blank" rel="noopener">Open</a>
+            </div>
+            <dl id="facts"></dl>
+          </div>
+          <div data-rpanel="json" hidden><pre id="output-json">{}</pre></div>
+          <div data-rpanel="logs" hidden><div id="logs" class="logs"><div class="lv">No logs yet.</div></div></div>
+          <div id="result-msg" class="msg" role="status"></div>
+        </div>
+      </section>
+
+      <section class="stage span2" aria-labelledby="h-history">
+        <div class="stage-head"><h2 id="h-history">Requests <span class="hint" style="text-transform:none;letter-spacing:0">(this browser)</span></h2><button id="clear-history" class="small" type="button">Clear</button></div>
+        <div class="stage-body">
+          <div class="scroll"><table id="history" hidden>
+            <thead><tr><th>Status</th><th>Endpoint</th><th>Prompt</th><th>Request id</th><th>Created</th></tr></thead>
+            <tbody></tbody>
+          </table></div>
+          <div id="history-empty" class="empty">No requests yet.</div>
+        </div>
+      </section>
+    </div>
+
+    <div id="api" role="tabpanel" aria-labelledby="tab-api" hidden>
+      <section class="stage">
+        <div class="stage-head">
+          <h2>Call it from code</h2>
+          <div class="tabs" role="tablist" aria-label="Language">
+            <button type="button" data-lang="curl" aria-selected="true">cURL</button>
+            <button type="button" data-lang="python" aria-selected="false">Python</button>
+            <button type="button" data-lang="js" aria-selected="false">JavaScript</button>
+          </div>
+          <button id="copy-snippet" class="small" type="button">Copy</button>
+        </div>
+        <div class="stage-body">
+          <p class="hint">Filled with the inputs currently set in the Playground. Auth is fal's <code>Authorization: Key &lt;key&gt;</code>.</p>
+          <pre id="snippet"></pre>
+          <details class="more">
+            <summary>Input schema</summary>
+            <pre id="schema-json"></pre>
+          </details>
+        </div>
+      </section>
+    </div>
+  </div>
+
+  <div id="director" hidden></div>
+</main>
+</body>
+</html>

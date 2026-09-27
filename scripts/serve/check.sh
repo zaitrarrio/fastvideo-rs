@@ -6,6 +6,9 @@
 #   FV_SERVE_HEAVY=1 bash scripts/serve/check.sh
 #                                          # also build str0m, OpenH264, Opus,
 #                                          # reqwest and prost codegen features
+#   FV_SERVE_UI=1 bash scripts/serve/check.sh
+#                                          # also run the /console browser smoke
+#                                          # test (tests/console/, headless Chromium)
 #   FV_SERVE_CUDA=1 bash scripts/serve/check.sh
 #                                          # also type-check the engine's `cuda`
 #                                          # feature (compiles, never runs CUDA)
@@ -48,6 +51,12 @@ if [[ "${FV_SERVE_HEAVY:-0}" == "1" ]]; then
   # (serve-kit's d1_live smoke test runs above when CLOUDFLARE_API_KEY or
   # FV_CF_API_TOKEN is set, and skips otherwise.)
   run cargo test -p fastvideo-serve --features http-client
+fi
+
+if [[ "${FV_SERVE_UI:-0}" == "1" ]]; then
+  # Headless Chromium smoke test of the /console pages against
+  # `fv-serve --features fake` (needs node + the playwright npm package).
+  run bash tests/console/run.sh
 fi
 
 if [[ "${FV_SERVE_CUDA:-0}" == "1" ]]; then
