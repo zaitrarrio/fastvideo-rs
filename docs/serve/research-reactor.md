@@ -19,6 +19,9 @@ pin down the client side of every exchange:
 | **SDK** | https://github.com/reactor-team/reactor-client-sdks | `f9df0e05181b5b7a46ce179f098ea478ba36e657` (2026-09-21) | Rust core (`crates/reactor-core`, `crates/reactor-protocol`) shared by the JS (wasm), Python (ctypes FFI), C++, Swift and Java SDKs |
 | **RW** | https://github.com/reactor-team/reactor-webrtc | `bebf63e42624ee440e066b692494dd3229d29ae7` (2026-09-15), version `0.18.0` | Rust + PyO3 wrapper over an owned libwebrtc build; RT pins `reactor-webrtc==0.18.0` |
 
+| **LS** | user-supplied `/home/user/refsrc/d5fc0bdf-infinite-livestream-source/` ("Reactor Infinite Livestream", Apache-2.0, `NOTICE`: "Copyright 2026 Reactor Technologies, Inc."; contains the fast-h3 model from reactor-cookbook) | as uploaded | a **working production Reactor model with video + audio** (`fast-h3/`), plus a Python-SDK client (`streaming-client/`) |
+| **PyPI** | `reactor_runtime-3.2.6-py3-none-any.whl` and `reactor_sdk-1.6.0-…manylinux_2_34_x86_64.whl`, fetched with `pip download --no-deps` into `/tmp/claude-0/pypi/` | — | 3.2.6 is the runtime version that fast-h3 builds against (`LS:fast-h3/reactor.yaml` `build.runtime_version: "3.2.6"`) |
+
 Citations look like `RT:src/reactor_runtime/transport/webrtc/router.py`. All
 paths are relative to the repo root at the commit above. Anything I derived
 rather than read is marked **INFERRED**. The clones used were at
@@ -54,11 +57,16 @@ I did not need them, because the source settled every question below.
    treats v0 as the default until the first frame arrives.
 5. **Media**: server-to-client video, with the codec negotiated from the
    preference list VP9 (profile 0), VP8, H264 (42e01f, packetization-mode 1),
-   AV1, H265. Optional Opus audio at 48 kHz mono. Optional client-to-server
-   camera/mic tracks. Outbound tracks start **paused**; the client sends
+   AV1, H265. Audio is optional and uses **Opus**. The runtime always pushes
+   it as **48 kHz mono int16 PCM** in 10 ms frames. Optional client-to-server
+   camera/mic tracks. **A session's tracks are exactly the fields of the
+   model's `Output` subclass**, so a video-only model simply declares no
+   `Audio` field (§4.5). Outbound tracks start **paused**; the client sends
    `ResumeTrack` for each one it wants. Frames are paced by a per-connection
-   pacer at the model-reported fps. There is an optional per-frame metadata
-   trailer (`RXMT`), negotiated in SDP by `a=x-reactor-frame-metadata:1`.
+   pacer at the model-reported fps. Audio rides in the same per-frame bundle
+   as its video frame, which is how A/V sync works (§4.5). There is an
+   optional per-frame metadata trailer (`RXMT`), negotiated in SDP by
+   `a=x-reactor-frame-metadata:1`.
 6. **Keepalive**: any inbound data-channel message counts as a ping. The
    watchdog closes a connection after 20 s of silence (polled every 2 s). SDK
    clients send `Ping` on the control channel every 10 s.
@@ -749,6 +757,228 @@ buffers, which the model reads with `try_read()` or `read()`
 (`RT:interface/internal/input_buffer.py`). Publishing is arbitrated per track
 name through `PublishTrack`/`UnpublishTrack`, with one publisher at a time.
 
+### 4.5 How a session declares its tracks, and how audio is carried and synced
+
+**Declaring tracks: video+audio vs video-only.** The track set is whatever
+the model's `Output` subclass declares. For example:
+
+```python
+class FastH3Output(Output):      # video + audio   (LS:fast-h3/fasth3_types.py)
+    main_video: Video
+    main_audio: Audio
+class WaypointOutput(Output):    # video only      (RT:examples/waypoint/waypoint.py)
+    main_video: Video
+```
+
+This declaration drives three things:
+
+- The `x-reactor.tracks` entry in `/schema`. fast-h3's test pins this to
+  `[("main_video","video","out"),("main_audio","audio","out")]`
+  (`LS:fast-h3/tests/test_fasth3.py:test_the_model_publishes_two_outbound_tracks`).
+- `capabilities.tracks` in `/start_session` and `/session`, with directions
+  given from the client's side as `recvonly`.
+- `track_map` in `POST /connections`.
+
+The client creates one transceiver per advertised track and sends the
+`mid`→name mapping with its offer. RT attaches a sender only to the mids that
+map to OUT tracks (`peer.py:_attach_out_tracks`). A video-only session
+therefore has no audio m-line in the answer. The audio feeder is a no-op in
+that case, because `_push_audio_frame` returns unless the track is audio. The
+track **names** are the model's field names, and clients subscribe by name:
+the fast-h3 streaming client registers `reactor.track("main_video")` and
+`reactor.track("main_audio")` before connecting
+(`LS:streaming-client/reactor_link.py`). A Rust server must let each engine
+declare its own list, for example:
+
+- `[main_video, main_audio]` for H3 and LTX-2;
+- `[main_video]` for Wan, FastWan and SF-Wan.
+
+It must publish that list identically in all three places. **INFERRED:**
+reusing the names `main_video`/`main_audio` keeps existing frontends
+working.
+
+**Audio format on the model side.** The model emits a numpy array, either
+int16 or float in [-1,1], shaped `(M,)`, `(1,M)` or `(C,M)`. Multi-channel
+audio is **mean-downmixed to mono** (`RT:transport/webrtc/frames.py:to_int16_mono`).
+`Audio.sample_rate` defaults to 48 000, and a subclass may declare another
+value (`RT:interface/tracks/descriptors.py`). However, **the outbound path
+never resamples**. The peer hands every buffered sample to libwebrtc as
+48 kHz mono (`track.push_pcm(payload, _AUDIO_SAMPLE_RATE=48_000, 1)` in
+`RT:transport/webrtc/peer.py:_push_audio_frame`). The declared rate only
+reaches the `rate` field of `track_map`. **INFERRED:** a model must therefore
+emit 48 kHz itself. fast-h3 does exactly that: its checkpoint's audio decoder
+produces 32 kHz stereo, which the backend resamples to 48 kHz with
+`torchaudio.functional.resample`, averages to mono in float, and scales to
+int16 `[1, samples]`. The backend comment explains the choice: "the transport
+mean-downmixes before the wire anyway, and the runtime recorder flattens two
+channels by concatenation, so a stereo emit only corrupts recordings"
+(`LS:fast-h3/fasth3_backend.py:_to_wire_audio`, `OUTPUT_SAMPLE_RATE = 48_000`,
+`NATIVE_SAMPLE_RATE = 32_000`).
+
+**Codec.** libwebrtc negotiates **Opus**
+(`RT:transport/webrtc/config.py:_DEFAULT_AUDIO_CODECS = ({"codec":"Opus"},)`).
+RT sets no Opus fmtp or bitrate. The per-sender bitrate bounds apply only to
+video, and a peer.py comment mentions "a 64 kbps Opus stream". Each outbound
+audio track gets its own `LocalPush` source, so audio never crosses between
+peers (`peer.py` module docstring, "Per-peer audio isolation"). On the
+receiving side the Python SDK delivers audio frames as interleaved int16 plus
+`(num_samples, sample_rate, channels)`
+(`PyPI:reactor_sdk/client.py`, `_media.py:_pcm_to_array`). The fast-h3 client
+warns if `sample_rate != 48000`
+(`LS:streaming-client/reactor_link.py:_on_audio_frame`).
+
+**A/V sync mechanism.** Neither stream carries a capture timestamp:
+libwebrtc leaves `abs-capture-time` unoffered, and RT deliberately stamps
+neither track (`peer.py` module docstring, "Audio/video sync"). Sync is
+achieved **by co-transport and wall-clock feeding**:
+
+1. The model emits video and audio for the same span of time in one `Output`.
+   fast-h3 slices each clip into 3-frame emits, taking audio samples
+   `[round(lo*2000), round(hi*2000))` (48000/24 = 2000 samples per frame).
+   A test asserts `audio_samples == video_frames * 48000 / 24` for every emit
+   (`LS:fast-h3/fasth3.py:_emit_clip`,
+   `tests/test_fasth3.py:test_video_and_audio_stay_locked_slice_for_slice`).
+2. `split_batch` splits a batched chunk into per-video-frame bundles and
+   divides the audio **proportionally across the frames** with
+   `np.array_split(audio, n_frames, axis=1)`. Each video frame therefore
+   travels with its own slice of audio (`RT:core/values.py:split_batch`).
+3. The pacer releases one bundle per `1/fps` tick. The peer's drain thread
+   pushes the video frame to libwebrtc, which timestamps it on push, and
+   appends that bundle's audio to a ≤200 ms per-track buffer.
+4. A separate feeder thread pushes exactly one 10 ms / 480-sample frame per
+   tick to each audio track. It uses the model's samples when a full frame is
+   buffered and silence otherwise, so the audio RTP clock (a sample counter)
+   stays locked to wall time. Silence is counted as under-production for up
+   to 3 s (`_AUDIO_GRACE_TICKS=300`). A stall is repaid in at most 5 catch-up
+   frames. Overflow beyond 200 ms drops the oldest samples.
+5. Gap-fill video repeats (during underrun) never replay audio
+   (`pacer.py:_video_only`). `output.flush()` drops queued bundles, audio
+   included, and emits one black frame.
+
+A pinned `fps` matters for audio models. fast-h3 pins `fps = 24` and never
+passes `compute_time`. Its comment explains why: "Measuring instead
+re-estimates the rate from observed timing, whose wobble both drops chunks
+while converging and drifts video against the sample-clocked audio"
+(`LS:fast-h3/fasth3.py`). It also sets `buffer_size = 48`, which is 2 s of
+transport slack. **INFERRED:** in a Rust server, audio-bearing engines (H3,
+LTX-2) should pace at the model's native fps and deliver exactly
+`sr/fps` samples per frame. Video-only engines can use measured pacing.
+
+---
+
+## 4bis. Reference implementation with audio: fast-h3 (the queue-and-playout contract)
+
+`LS:fast-h3/` is a production Reactor model with video and audio: it is
+MiniMax-H3 distilled by FastVideo, served on 8×B200. Its client contract
+lives entirely in `LS:fast-h3/fasth3_types.py`, and its handlers are in
+`LS:fast-h3/fasth3.py`. Its reactor.yaml declares
+`runtime.import: fasth3:FastH3` and `build.runtime_version: "3.2.6"`. That
+version is wire-identical to 3.6.0 in every `reactor_wire.v1` field. I
+checked by diffing the `*_FIELD_NUMBER` sets in the 3.2.6 wheel's
+`reactor_wire/v1/*_pb2.pyi` against the protos. `protocol/base.py`,
+`protocol/v0/codec.py`, `transport/webrtc/version.py` and `frames.py` are
+byte-identical. 3.6.0 adds only the optional `ice_credentials`/`port_range`
+offer fields and the 409 (`diff` of `transport/webrtc/router.py`,
+`config.py`).
+
+**Model shape.** fast-h3 subclasses **`ReactorModel`**, the 3.2.x name. In
+3.6.0 this is a deprecated alias of `ReactorApp`
+(`RT:interface/model/reactor_model.py`). It overrides `run()` itself instead
+of using the step hooks, because its unit of work is a whole clip. The loop:
+
+```python
+async def run(self):
+    while True:
+        await self.connected.wait()   # generation gated on an audience
+        await self._serve()           # pump builds (worker thread), play armed clips
+```
+
+The model's surfaces are:
+
+- **Lifecycle hooks.** `@session_started` resets session state.
+  `@session_ended` cancels builds and clears the queues. `@connected(client)`
+  greets the joining client with `state_update` and `queue_update` via
+  `client.send(...)`, which is addressed to that client and not correlated.
+- **Replies and broadcasts.** `await self.send(msg)` broadcasts to everyone.
+  A handler's return value is the correlated reply. Returning `None` gives a
+  bodyless ack.
+- **Media.** `self.emit(FastH3Output(main_video=uint8[N,H,W,3], main_audio=int16[1,S]))`
+  sends a slice. `self.output.flush()` runs after each clip and on
+  `stop`/`reset`, and holds the stream on black.
+- **Weights.** `reactor_runtime.get_weights_path()` is also present in 3.6.0
+  (`RT:paths.py`).
+
+**Commands** (each is `@event`; the wire name is `Command.type`, and the args
+travel in `Command.data`):
+
+| command | args (InputField constraints) | correlated reply (`ModelMessage.type`) | also broadcasts |
+|---|---|---|---|
+| `enqueue` | `prompt: str` (≤800, moderate), `metadata: str` (≤2000, moderate, echoed opaque), `seed: int\|null` (≥0), `seconds: float\|null` (5.167–14.375, snapped to 17n+5 frames @24 fps), `position: int\|null` (≥0) | `clip_queued{clip}` | `queue_update`, `state_update` |
+| `play` | `clip_id: str` (blank = playout front) | bodyless | `queue_update`, `state_update`, then `clip_started`, and later `clip_finished` or `clip_stopped` |
+| `pop` | `clip_id` | `clip_popped{clip}` | `queue_update`, `state_update` |
+| `move` | `clip_id`, `position: int` (0 = front) | `clip_moved{clip,queue,position}` | `queue_update` |
+| `stop` | — | bodyless | `clip_stopped`, `state_update` |
+| `get_queue` / `get_state` | — | `queue_update` / `state_update` | — |
+| `set_clip_seconds` | `seconds: float` | `clip_length_accepted{clip_seconds,frames}` | `state_update` |
+| `set_seed` | `seed: int ≥0` | `seed_accepted{seed}` | `state_update` |
+| `set_autoplay` | `enabled: bool` | `autoplay_accepted{enabled}` | `state_update` |
+| `set_canvas` | `aspect ∈ {16:9,1:1,9:16,4:3}` (the 16:9 canvas is 1344×768) | `canvas_accepted{aspect,width,height}` | `state_update` |
+| `reset` | — | `session_reset{cleared_clips,was_playing}` | `queue_update`, `state_update` |
+
+Message `type` strings are the snake_case of the `ModelMessage` class name
+(`RT:interface/events/messages.py`: `cls.name = pascal_to_snake(cls.__name__)`).
+So `StateUpdate` becomes `state_update` and `CommandError` becomes
+`command_error`.
+
+`ClipInfo` is embedded whole in every clip message as
+`{clip_id(uuid), prompt, metadata, frames, seconds, seed, ready}`.
+`state_update` carries these fields:
+
+- `clip_seconds`, `clip_seconds_min`, `clip_seconds_max`
+- `seed`, `autoplay`, `aspect`, `width`, `height`
+- `playing`, `playing_clip_id|null`
+- `generation_queued`, `generation_capacity`, `playout_queued`, `playout_capacity`
+- `clips_played`, `seconds_sent`
+- `valid_commands[]`, computed by `LS:fast-h3/fasth3_session_rules.py`
+
+The **queue and playout semantics** work as follows (`LS:fast-h3/fasth3.py`,
+`fasth3_queue.py`, `LS:skills/reactor-fast-h3-model/SKILL.md` §3):
+
+- A clip moves generation queue (cap 20) → build (one at a time, front
+  first, continuing while a clip plays) → playout queue (cap 10; builds pause
+  while it is full) → playing. The playing clip is in neither queue.
+- Nothing plays unless `play` is sent or autoplay is on. After each clip the
+  model flushes to black and holds.
+- **Refusals are broadcast, never raised.** A refused command broadcasts
+  `command_error{command,reason}` and returns bodyless, "because a raised
+  `CommandError`'s failure frame is withheld from older SDK generations",
+  meaning v0 (§2.2; `connection_manager.py:send_command_ack` skips v0).
+
+The Python SDK's `reactor.send_command(cmd, data)` returns the reply as a
+`{"type","data"}` envelope, or `None` for a bodyless ack
+(`LS:streaming-client/reactor_link.py:payload`, `model_link.py`).
+
+Operational facts from LS:
+
+- A local runtime hosts one session. A second client must join with
+  `connect(session_id=…)`, which maps to `GET /session`.
+- A plain connect is answered **409** while a session is streaming or
+  orphaned. This is `/start_session` from a non-READY state (§3.2).
+- A dead client leaves the session ORPHANED until the 60 s orphan timeout.
+  The streaming client clears it with a bare `POST /stop_session`
+  (`LS:skills/reactor-streaming-client/SKILL.md` §6).
+- Frame handlers are registered by wire track name before connecting,
+  because "querying the track list after connect races the session's track
+  declaration".
+
+**Why this matters for the Rust server.** Reproducing fast-h3's command set,
+message names and track names on top of fastvideo-rs H3 or LTX-2 would make
+the existing `streaming-client` (its `ReactorLink`) work unchanged. For
+video-only Wan, the same contract applies with `generates_audio = False` and
+no `main_audio` track. LS's `FastWanLink` already emulates this contract
+client-side over FastVideo's HTTP job API (`LS:streaming-client/model_link.py`,
+`fastwan_link.py`).
+
 ---
 
 ## 5. Commands, replies and telemetry
@@ -854,8 +1084,19 @@ class MyApp(ReactorApp):
     # or override `async def run(self)` and call self.emit()/self.send() yourself
 ```
 
-The loop runs steps only while a session is live **and** at least one client
-is connected. A refused step (`ApplicationError`) sleeps 5 ms
+There are two plug-in styles. The **step style** is `ReactorApp` with
+`generate()`, as in Waypoint. The **own-loop style** overrides `run()` and
+calls `emit`/`send`/`output.flush()` directly; fast-h3 uses this, under the
+3.2.x name `ReactorModel`, which is now an alias of `ReactorApp` (§4bis). In
+the own-loop style, command handlers run as concurrent coroutines on the
+model's asyncio loop. `self.connected` (an `asyncio.Event`) gates work on
+having an audience. Blocking GPU work must sit on a worker thread, as
+`LS:fast-h3/fasth3_backend.py` does with `submit()` → `ClipJob`. The older
+generator-based `ReactorPipeline` (one `yield` per chunk) is deprecated in
+3.6.0 (`RT:src/reactor_runtime/__init__.py`).
+
+In the step style, the loop runs steps only while a session is live **and**
+at least one client is connected. A refused step (`ApplicationError`) sleeps 5 ms
 (`_REFUSED_SLEEP`). A raise out of `process_output` evicts the session to
 TERMINATED and the process exits (`runner.py:_on_model_failure`).
 
@@ -943,13 +1184,19 @@ These are recommendations. **All of this section is INFERRED.**
    - Pace at the engine's measured fps, keeping a black-frame boundary on
      reset.
 4. **Map the fastvideo-rs engines to the command model.**
-   - Expose `set_prompt`, `set_seed`, `set_paused`, `reset`, and
-     action/camera fields (for H3/LTX-2/causal Wan) as `InputState`-style
-     setters.
-   - Publish them in the OpenAPI shape of §6.3 so the typed client SDKs and
-     the Reactor Sandbox can drive them.
-   - Emit `(N,H,W,3)` chunks per causal block, tagged with
-     `fps = N / step_time`, which mirrors RT's default pacing.
+   - For clip models (H3, LTX-2, bidirectional Wan/FastWan), reproduce the
+     fast-h3 queue-and-playout contract of §4bis verbatim, so the existing
+     `streaming-client` works unchanged.
+   - For streaming causal models (SF-Wan), use `InputState`-style setters
+     (`set_prompt`, `set_paused`, action/camera fields) plus `reset`, as in
+     Waypoint.
+   - Publish all of them in the OpenAPI shape of §6.3.
+   - Track list per engine: `[main_video, main_audio]` when audio is
+     generated, and `[main_video]` otherwise (§4.5).
+   - Audio: 48 kHz mono int16, exactly `48000/fps` samples per video frame,
+     carried in the same emit, with a pinned fps.
+   - Video-only causal engines may pace at `N / step_time`, which is RT's
+     default.
 
 ---
 
@@ -973,3 +1220,11 @@ These are recommendations. **All of this section is INFERRED.**
   AV1 from NVENC, or its Linux hardware-codec status beyond the OpenH264
   comment.
 - `docs.reactor.inc` was not consulted, because the source was sufficient.
+- **Audio at a declared rate other than 48 kHz.** I found no resampling in
+  RT's outbound path. **INFERRED:** a non-48k emit would play at the wrong
+  speed. I did not test this.
+- **The Opus parameters** (bitrate, stereo, DTX, FEC) are libwebrtc defaults
+  and were not inspected. The LS client only observes 48 kHz.
+- **The Python SDK wheel** (`reactor_sdk 1.6.0`) wraps the same Rust core
+  (`libreactor_ffi.so`). Its on-wire behaviour is therefore the SDK repo's,
+  and I did not re-verify it separately.
