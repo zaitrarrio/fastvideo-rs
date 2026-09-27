@@ -32,6 +32,7 @@ pub mod reactor;
 pub mod router;
 pub mod shutdown;
 pub mod storage;
+pub mod streams;
 pub mod whip;
 
 pub use app::{App, Overrides};

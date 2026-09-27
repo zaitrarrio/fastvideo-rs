@@ -103,6 +103,9 @@ pub fn route_table(fal_apps: &[String]) -> Vec<RouteSpec> {
         r(Native, "GET", "/fv/v1/jobs/{id}/content"),
         r(Native, "GET", "/fv/v1/streams"),
         r(Native, "POST", "/fv/v1/streams"),
+        r(Native, "GET", "/fv/v1/streams/{id}"),
+        r(Native, "DELETE", "/fv/v1/streams/{id}"),
+        r(Native, "POST", "/fv/v1/streams/{id}/commands"),
         // fal shared routes (§4.4, §5.6).
         r(Fal, "POST", "/fal/proxy"),
         r(Fal, "GET", "/fal/proxy"),

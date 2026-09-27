@@ -1627,8 +1627,35 @@ additions and readings; everything is re-exported from the crate root.
   video_rtp, fps}` per frame into a 10-deep drop-oldest queue
   (`take_dropped()` → force an IDR). Ticks start at the first frame by
   default (`TickStart`). `max_seconds` ends the pacer in video time.
+- **CUDA causal path** (`cuda::causal`, feature `cuda`): `CausalDriver`
+  runs one `wan::stream::CausalRollout` per session over a resident SF-Wan
+  pipeline (reset with the block's seed, prompt change encoded at the block
+  boundary with the KV cache kept, engine cancel bridged to the pipeline
+  hooks, RGB8 frames to the sink); WP-11's `CudaBackend` delegates its
+  `causal_*` calls to it. `CausalCudaBackend` serves SF-Wan alone and is what
+  `engine.backend = cuda` builds when `FV_SFWAN_WEIGHTS` is set (until
+  WP-11 lands; also `FV_SFWAN_MODEL`, `FV_SFWAN_PRESET`, `FV_CUDA_DEVICE`;
+  TAEHV via `FASTVIDEO_TAE_DIR`).
+- **Native streams** (`fastvideo-serve::streams`, features `webrtc` +
+  `http-client`, `encoders` for OpenH264/Opus): `POST /fv/v1/streams
+  {model, whip_url, whip_token?, whip_user?, whip_target?, prompt?,
+  clips?[{prompt,seconds?,seed?}], width?, height?, fps?, seed?,
+  max_seconds?, audio?, continuity?, autoplay?}` → 201; busy 429 +
+  `Retry-After`, not resident 503 + `Retry-After`. `GET /fv/v1/streams`,
+  `GET|DELETE /fv/v1/streams/{id}` (status, WHIP resource, pacer stats,
+  TTFF, recent session events), `POST /fv/v1/streams/{id}/commands` (a
+  `ClipCommand` or `CausalCommand` as `{type,data}`). The publisher waits
+  for the first frame, offers H.264 first (no audio m-line for video-only
+  models), encodes once (NVENC, else OpenH264, else the CPU-test x264;
+  `FV_STREAM_ENCODER` overrides), Opus stereo, forces an IDR on PLI/FIR or
+  tick drops (1/s), and sends the WHIP `DELETE` on stop or `max_seconds`.
+  `FV_STREAM_STUN` sets the srflx probe (`none` for loopback).
+  `tests/streams_whip.rs` decodes what an in-process WHIP endpoint receives;
+  `scripts/serve/whip-e2e.sh` adds MediaMTX and a WHEP viewer.
 - Owned files: `stream/{mod,clip,queue,rules,causal,player,pace}.rs`,
-  `src/cuda/causal.rs`, `tests/stream_{clip,causal}.rs`.
+  `src/cuda/causal.rs`, `tests/stream_{clip,causal}.rs`,
+  `fastvideo-serve/src/streams.rs`, `fastvideo-serve/tests/streams_whip.rs`,
+  `scripts/serve/whip-e2e.sh`.
 
 **WP-13 notes (as implemented): the Reactor local runtime.**
 `fastvideo-reactor` (feature `reactor` of fv-serve, on by default; built in

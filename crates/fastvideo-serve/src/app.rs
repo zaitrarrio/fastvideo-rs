@@ -86,6 +86,17 @@ pub fn build_engine(c: &Config) -> anyhow::Result<EngineService> {
             vec![Box::new(FakeBackend::new(fc))]
         }
         EngineBackendKind::Cuda => {
+            // WP-15 stopgap until the full CudaBackend (WP-11) lands: an
+            // SF-Wan-only causal streaming backend from `FV_SFWAN_WEIGHTS`.
+            #[cfg(feature = "cuda")]
+            if let Some(b) = fastvideo_engine_service::cuda::causal::CausalCudaBackend::from_env() {
+                let cfg = EngineConfig {
+                    queue_max: c.limits.queue_max,
+                    output_dir: c.server.state_dir.join("engine-out"),
+                    ..EngineConfig::default()
+                };
+                return EngineService::start(cfg, vec![Box::new(b)]).map_err(|e| anyhow!("starting the engine: {e}"));
+            }
             // Mount point for WP-11 (`fastvideo_engine_service::cuda::CudaBackend`
             // built from `[[models]]`, one backend per GPU).
             return Err(anyhow!(
@@ -337,6 +348,7 @@ pub fn assemble(
     let mut kit: Router<ServeCtx> = ctx.routes();
     if config.protocols.native {
         kit = kit.merge(native::routes(gate.clone(), mcfg.body_max, mcfg.sync_timeout));
+        kit = kit.merge(crate::streams::routes(gate.clone(), crate::streams::StreamsConfig::from_config(config)));
     }
     let (adapters, stateful) = adapters::mount(&mcfg, ctx);
     kit = kit.merge(adapters);
