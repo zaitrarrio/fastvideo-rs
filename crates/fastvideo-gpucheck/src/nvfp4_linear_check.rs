@@ -310,8 +310,16 @@ fn bench(seed: u64, m: usize, k: usize, n: usize, gelu: bool) -> anyhow::Result<
             vec![m, k],
         )?;
         let ms = time_ms(|| {
-            let src = if gelu { xt.gelu_tanh() } else { xt.clone() };
-            let s = src.device_slice_bf16().ok_or_else(|| anyhow::anyhow!("bf16"))?;
+            // The bf16 FFN's GELU: a bf16 pass over the up projection's output.
+            let src = if gelu {
+                fastvideo_cudarc::wan::tensor::with_bf16_act(true, || xt.gelu_tanh())
+                    .quantize_bf16()?
+            } else {
+                xt.clone()
+            };
+            let s = src
+                .device_slice_bf16()
+                .ok_or_else(|| anyhow::anyhow!("GELU output is not device bf16"))?;
             quant::linear_bf16_bias(s, &w, &b16, m, k, n)?
                 .ok_or_else(|| anyhow::anyhow!("bf16 bias epilogue unavailable"))?;
             Ok(())

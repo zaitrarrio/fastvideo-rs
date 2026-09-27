@@ -6,7 +6,7 @@
 //! | seam | command line (wins) | profile | default |
 //! |---|---|---|---|
 //! | stage-2 attention_backend | `--sol-stage2` / `--dense-stage2` / `--pisa-stage2` | `sol_attn` (`ltx25_stage2`) / `dense_attention` / `pisa` | Sol on the 2.5 distilled two-stage 3-forward refine (`default_sol_stage2`) |
-//! | ffn_precision | `FASTVIDEO_FP8` | `fp8` / `bf16_linears` | bf16 |
+//! | ffn_precision | `FASTVIDEO_FP8`, `FASTVIDEO_NVFP4` | `fp8` / `nvfp4` (video FFN) / `bf16_linears` | bf16 |
 //! | video_decoder | `--ltx-tae-weights`, `FASTVIDEO_LTX2_TAE_WEIGHTS` | `taehv` | conv VAE |
 //! | residency | `--offload`, `--dit-offload`, `FASTVIDEO_LTX_OFFLOAD`, `FASTVIDEO_DIT_OFFLOAD` | `offload.placement` / `.dit` | none / auto |
 //!
