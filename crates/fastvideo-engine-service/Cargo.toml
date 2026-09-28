@@ -29,7 +29,7 @@ default = []
 cuda = ["dep:fastvideo-cudarc", "fastvideo-cudarc/cuda"]
 
 [dev-dependencies]
-tokio = { workspace = true, features = ["sync", "time", "rt", "rt-multi-thread", "macros"] }
+tokio = { workspace = true, features = ["sync", "time", "rt", "rt-multi-thread", "macros", "test-util"] }
 
 [lints]
 workspace = true

@@ -31,7 +31,7 @@ use fastvideo_media::clock::{MonotonicClock, VideoRtpClock};
 use fastvideo_media::pacer::{
     AvPacer, AvPacerConfig, FramePacer, Metronome, VideoOut, CAUSAL_BUFFER_FRAMES, CAUSAL_MIN_FPS,
 };
-use fastvideo_protocol::{ApiError, EndReason, RgbFrame, SessionSpec};
+use fastvideo_protocol::{ApiError, CausalLimits, EndReason, RgbFrame, SessionSpec};
 use tokio::sync::{mpsc, watch, Notify};
 use tokio::task::JoinHandle;
 use uuid::Uuid;
@@ -239,6 +239,9 @@ pub struct PaceStats {
     pub effective_fps: f64,
     /// Seconds of video emitted since the first frame.
     pub video_seconds: f64,
+    /// Seconds counted against `max_seconds`: since the first frame (clip),
+    /// or since the first frame or the last `reset` (causal).
+    pub limit_seconds: f64,
     /// Set when the pacer ended on its own (`max_seconds`, the source ended).
     pub ended: Option<EndReason>,
 }
@@ -409,6 +412,7 @@ pub fn spawn_clip_pacer(
             stats.pacer_dropped = pacer.stats().dropped_frames;
             let shown = first_at.map_or(0, |f| t.index + 1 - f);
             stats.video_seconds = shown as f64 / fps as f64;
+            stats.limit_seconds = stats.video_seconds;
             stats.unique_fps = if shown > 0 {
                 stats.fresh_frames as f64 / (shown as f64 / fps as f64)
             } else {
@@ -454,10 +458,16 @@ pub struct CausalPacerConfig {
     /// Adaptive playout from the generation-rate EMA (on by default).
     pub adaptive: bool,
     pub tick_depth: usize,
+    /// Video seconds from the first frame, or from the first frame after the
+    /// last `reset` (a reset restarts this clock).
     pub max_seconds: Option<u32>,
+    /// Video seconds of the whole session, resets included.
+    pub total_max_seconds: Option<u32>,
 }
 
 impl CausalPacerConfig {
+    /// Settings for `spec`: resets do not extend the session
+    /// (`total_max_seconds = max_seconds`).
     pub fn for_spec(spec: &SessionSpec) -> Self {
         Self {
             fps: spec.fps,
@@ -466,6 +476,17 @@ impl CausalPacerConfig {
             adaptive: true,
             tick_depth: TICK_DEPTH,
             max_seconds: spec.max_seconds,
+            total_max_seconds: spec.max_seconds,
+        }
+    }
+
+    /// Settings for a live session under `limits` (design §5.2): the clock
+    /// restarts at each `reset`, up to `limits.hard_max_s` of video in all.
+    pub fn with_limits(spec: &SessionSpec, limits: &CausalLimits) -> Self {
+        let total = spec.max_seconds.map(|m| m.max(limits.hard_max_s)).unwrap_or(limits.hard_max_s);
+        Self {
+            total_max_seconds: Some(total),
+            ..Self::for_spec(spec)
         }
     }
 
@@ -499,7 +520,9 @@ pub fn spawn_causal_pacer(
     let (first_tx, first_rx) = watch::channel(false);
     let (stats_tx, stats_rx) = watch::channel(PaceStats::default());
     let task = tokio::spawn(async move {
-        let t0 = Instant::now();
+        // tokio's clock (not std's), so a paused-time test can run the
+        // session limits in virtual time.
+        let t0 = tokio::time::Instant::now();
         let mut met = Metronome::new(pacer.effective_fps());
         let mut rtp = VideoRtpClock::adaptive(0);
         let mut stats = PaceStats::default();
@@ -507,6 +530,8 @@ pub fn spawn_causal_pacer(
         let ended: Option<EndReason>;
         let mut started = false;
         let mut video_s = 0.0f64;
+        // Video seconds since the first frame or the last reset.
+        let mut window_s = 0.0f64;
         let mut last_len = 0usize;
         loop {
             let now = t0.elapsed().as_secs_f64();
@@ -527,6 +552,9 @@ pub fn spawn_causal_pacer(
                         Some(Ok(block)) => {
                             if block.reset {
                                 pacer.clear();
+                                // A reset renews the anchor: the limit clock
+                                // restarts at its first block.
+                                window_s = 0.0;
                             }
                             last_len = block.frames.len();
                             // The generation rate from the block's own time:
@@ -573,7 +601,9 @@ pub fn spawn_causal_pacer(
             stats.effective_fps = eff;
             stats.unique_fps = pacer.unique_fps();
             video_s += 1.0 / eff.max(1e-3);
+            window_s += 1.0 / eff.max(1e-3);
             stats.video_seconds = video_s;
+            stats.limit_seconds = window_s;
             control.report_playout(stats.unique_fps, eff);
             tx.send(Tick {
                 index,
@@ -586,7 +616,9 @@ pub fn spawn_causal_pacer(
             // The next tick comes at the (possibly new) effective rate.
             met.set_fps(pacer.effective_fps());
             stats_tx.send_replace(stats.clone());
-            if cfg.max_seconds.is_some_and(|m| video_s >= f64::from(m)) {
+            if cfg.max_seconds.is_some_and(|m| window_s >= f64::from(m))
+                || cfg.total_max_seconds.is_some_and(|m| video_s >= f64::from(m))
+            {
                 ended = Some(EndReason::SessionLimit);
                 break;
             }

@@ -201,7 +201,10 @@ impl DirectorService {
         self.sessions.lock().expect("sessions").values().filter(|s| s.is_open()).count()
     }
 
-    /// The app's model caps (clip streaming required).
+    /// The app's model caps (clip streaming required). Causal (SF-Wan)
+    /// models are refused here, so the causal session limits of design §5.2
+    /// (`[streams] causal_*_max_s`) never apply to the director; its own
+    /// `max_session_seconds` bounds clip sessions.
     pub fn caps_for(&self, ctx: &ServeCtx, app: &FalApp) -> Result<ModelCaps, ApiError> {
         let id = crate::queue::resolve_app_model(ctx, app, crate::Endpoint::TextToVideo)?;
         let caps = ctx

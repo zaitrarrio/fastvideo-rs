@@ -2,6 +2,16 @@
 
 Project code: FVID
 
+### FVID · 2026-09-28 · FVID-2026-09-28-sfwan-stream-cap
+- Trigger: the R12 study (`docs/ports/wan.md`) rates a single-prompt SF-Wan stream (sink 15) clean for 2 min and usable to 5 min with a transient top-edge strip; owner: "yes cap SF-Wan streams"
+- Options: leave `max_seconds` to each request; cap per front-end; one shared cap for every live causal session, with or without a reset restarting the clock
+- Decision: **every live causal session has a limit**: request `max_seconds`, else `[streams] causal_default_max_s` = 120, clamped to `causal_hard_max_s` = 300 (env `FV_CAUSAL_DEFAULT_MAX_S` / `FV_CAUSAL_HARD_MAX_S`; 0 refused). Video time from the first frame; **a `reset` restarts the clock, the session never exceeds the hard ceiling in all**; a kept prompt switch does not restart it. Native streams end `session_limit`, Reactor `session_ended{reason}`; the fal director is clip-only (causal models refused), so it is unaffected. Advertised in `/fv/v1/capabilities` (`stream_limits`), the Reactor schema (`x-reactor.session_limits`) and the console
+- Reason: the study's numbers; the reset rule follows from "a reset renews the anchor" while the ceiling bounds the total session simply
+- Reversibility: cheap (config)
+- Executed by: Executor
+- ADR: none
+- Verification: fake-engine tests (paused tokio clock: default ends at 120 s, 30/200 s honoured, 3600 clamped to 300; real time: resets extend to the ceiling; native end_reason and Reactor session_ended); `docs/serve/design.md` §5.2/§5.4
+
 ### FVID · 2026-09-27 · FVID-2026-09-27-attention-sm120
 - Trigger: dense attention 5-6% behind cuDNN-via-torch on sm_120 (H3 768p 109.3 vs 103.0 ms, LTX 1080p20s 680.1 vs 647.0, 4K 752.1 vs 704.0); our cuDNN path never ran (cudarc 0.17.8 has no unified SDPA / softmax bindings); our VSA never compared with FastVideo's
 - Options: bind cuDNN's unified SDPA node ourselves; tune flash_mma_fwd2 (software-pipelined QK, 3-stage ring, rescale skipping); both, winner as sm_120 default with escape hatches

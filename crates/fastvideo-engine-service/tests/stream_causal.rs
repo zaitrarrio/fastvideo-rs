@@ -13,7 +13,7 @@ use fastvideo_engine_service::{
 };
 use fastvideo_media::pacer::VideoOut;
 use fastvideo_protocol::{
-    AudioPlan, Continuity, EndReason, JobId, ModelId, PostProcess, ResolvedJob, SamplingOverrides,
+    AudioPlan, CausalLimits, Continuity, EndReason, JobId, ModelId, PostProcess, ResolvedJob, SamplingOverrides,
     SessionSpec, StreamCaps, Task, TrackSet,
 };
 
@@ -251,4 +251,86 @@ async fn max_seconds_ends_the_causal_stream_in_video_time() {
     // The lease is released: a new session opens.
     tokio::time::sleep(Duration::from_millis(50)).await;
     assert!(e.open_causal_session(spec()).await.is_ok());
+}
+
+/// Runs a causal session under `limits` in tokio's paused (virtual) time
+/// until the pacer ends it; returns the stats at the end.
+async fn run_limited(limits: CausalLimits, requested: Option<u32>) -> fastvideo_engine_service::stream::PaceStats {
+    // No tokio timeouts here: paused time would fire them while the
+    // (real-time) fake executor loads.
+    let cfg = FakeConfig {
+        timing: FakeTiming { step: Duration::from_millis(1), ..FakeTiming::default() },
+        mp4: Mp4Mode::Off,
+        ..FakeConfig::default()
+    };
+    let e = EngineService::start(EngineConfig::default(), vec![Box::new(FakeBackend::new(cfg))]).unwrap();
+    assert_eq!(e.wait_ready().await, Readiness::Ready);
+    let mut sp = spec();
+    sp.max_seconds = Some(limits.resolve(requested).unwrap());
+    let s = e.open_causal_session(sp.clone()).await.unwrap();
+    s.set_prompt("x");
+    let mut paced = spawn_causal_pacer(s, CausalPacerConfig::with_limits(&sp, &limits)).unwrap();
+    while paced.ticks.recv().await.is_some() {}
+    let st = paced.stats.borrow().clone();
+    st
+}
+
+// Simulated clock: tokio's paused time drives the pacer's metronome, so
+// minutes of video play out in milliseconds (the fake executor is real).
+#[tokio::test(start_paused = true)]
+async fn the_default_limit_ends_a_live_session_at_120_s() {
+    let st = run_limited(CausalLimits::default(), None).await;
+    assert_eq!(st.ended, Some(EndReason::SessionLimit));
+    assert!((120.0..121.0).contains(&st.video_seconds), "{}", st.video_seconds);
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_requested_limit_is_honoured_and_clamped_to_the_ceiling() {
+    let l = CausalLimits::default();
+    let st = run_limited(l, Some(30)).await;
+    assert_eq!(st.ended, Some(EndReason::SessionLimit));
+    assert!((30.0..31.0).contains(&st.video_seconds), "{}", st.video_seconds);
+    let st = run_limited(l, Some(200)).await;
+    assert!((200.0..201.0).contains(&st.video_seconds), "{}", st.video_seconds);
+    // 3600 asked, 300 served.
+    assert_eq!(l.resolve(Some(3600)).unwrap(), 300);
+    let st = run_limited(l, Some(3600)).await;
+    assert_eq!(st.ended, Some(EndReason::SessionLimit));
+    assert!((300.0..301.0).contains(&st.video_seconds), "{}", st.video_seconds);
+    assert!(l.resolve(Some(0)).is_err());
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_reset_restarts_the_clock_up_to_the_hard_ceiling() {
+    let e = engine(1).await;
+    // Real time, small limits: a reset lands a few blocks after it is asked
+    // for (the blocks already queued play first), well inside the 4 s window.
+    let limits = CausalLimits { default_max_s: 4, hard_max_s: 9 };
+    let mut sp = spec();
+    sp.max_seconds = Some(limits.resolve(None).unwrap());
+    let s = e.open_causal_session(sp.clone()).await.unwrap();
+    s.set_prompt("x");
+    let c = s.control();
+    let cfg = CausalPacerConfig { buffer_frames: 12, ..CausalPacerConfig::with_limits(&sp, &limits) };
+    let mut paced = spawn_causal_pacer(s, cfg).unwrap();
+    let (mut resets, mut pending, mut last, mut peak) = (0, false, 0.0f64, 0.0f64);
+    while tokio::time::timeout(T, paced.ticks.recv()).await.unwrap().is_some() {
+        let st = paced.stats.borrow().clone();
+        if st.limit_seconds < last {
+            pending = false; // the reset block arrived: the clock restarted
+        }
+        last = st.limit_seconds;
+        peak = peak.max(st.limit_seconds);
+        if !pending && st.limit_seconds >= 0.5 {
+            c.reset();
+            resets += 1;
+            pending = true;
+        }
+    }
+    let st = paced.stats.borrow().clone();
+    assert_eq!(st.ended, Some(EndReason::SessionLimit));
+    assert!(resets >= 2, "{resets} resets");
+    assert!(peak < 4.0, "the window reached {peak} s");
+    // Ended by the 9 s ceiling, not the 4 s window.
+    assert!((9.0..9.4).contains(&st.video_seconds), "{} s, {} in the window", st.video_seconds, st.limit_seconds);
 }

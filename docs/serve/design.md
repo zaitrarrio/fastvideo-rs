@@ -935,7 +935,36 @@ pub enum Continuity { HardCut, Crossfade { ms: u16 }, AnchorLastFrame { crossfad
      black encode, except for Reactor's start-of-connection black frame
      (reactor §4.2).
 3. **Streaming.** The duration clock starts at the first emitted frame
-   (streaming-refs §1.2). `max_seconds` is enforced in video time.
+   (streaming-refs §1.2). `max_seconds` is enforced in video time: the
+   seconds of playout, repeated frames (underruns, a user pause) included.
+   At the limit the pacer ends with `EndReason::SessionLimit`.
+
+   **Causal session limit (decided 2026-09-28, the R12 study in
+   `docs/ports/wan.md`).** A live causal (SF-Wan) session always has a
+   limit, whichever front-end opens it (`CausalLimits` in
+   `fastvideo-protocol`):
+
+   | Setting | Default | Meaning |
+   |---|---|---|
+   | `[streams] causal_default_max_s` (`FV_CAUSAL_DEFAULT_MAX_S`) | 120 | `max_seconds` when the request gives none: clean unattended with sink 15 |
+   | `[streams] causal_hard_max_s` (`FV_CAUSAL_HARD_MAX_S`) | 300 | the most a request may ask for (larger values are clamped, 0 is refused), and the whole session's ceiling: usable, with a transient top-edge strip after 2 min |
+
+   A `reset` restarts the clock, because it renews the sink anchor and the
+   quality with it; the session still never exceeds `causal_hard_max_s` of
+   video in all. A kept prompt switch does not restart it. This is the one
+   simple rule: `max_seconds` counts from the first frame or the last reset,
+   the ceiling counts from the first frame (`CausalPacerConfig::with_limits`).
+
+   | Front-end | Request | At the limit |
+   |---|---|---|
+   | native `POST /fv/v1/streams` | body `max_seconds` | stream `status.end_reason: "session_limit"`, WHIP `DELETE`; the stream object shows the resolved `max_seconds` and `pacer.limit_seconds` |
+   | Reactor causal mode | `/start_session` `{"max_seconds": n}` | `session_ended{reason: "Session ended: the <n> s session length limit was reached."}`, then `READY` |
+   | fal director | — | clip models only (causal models are refused), so it never opens a causal session; its own `max_session_seconds` bounds clip sessions |
+
+   Advertised in `/fv/v1/capabilities` (each causal model's
+   `stream_limits{default_max_s, hard_max_s, clock, reset_restarts_clock}`),
+   the Reactor schema (`x-reactor.session_limits`, causal mode) and the
+   console home page. Clip sessions have no default limit.
 4. **Orphaned**: all peers are gone.
    - Generation pauses: clip builds stop and causal blocks stop.
    - After `orphan_timeout` (60 s, as RT) the session enters `Closing`.
@@ -1017,6 +1046,12 @@ Audio wire format:
   unique_fps. E7 (CUDA Graphs per block position) closes the gap from our
   ~547 ms/block to strobe's 316 ms (streaming-refs §3.3). Until then the
   default stream canvas is 832×480 at 16 fps.
+- **Length** (R12): with the default sink 15 a single prompt is clean for
+  2 minutes and coherent to 5 with a transient top-edge strip, so every
+  live causal session is capped: 120 s of video by default, at most 300 s,
+  a `reset` restarting the clock within the 300 s ceiling (§5.2). The
+  pacer enforces it (`CausalPacerConfig::with_limits`; `PaceStats`
+  `video_seconds` and `limit_seconds`, the latter since the last reset).
 
 ### 5.5 Clip-queue playout (`ClipSession`) for H3, LTX and FastWan
 

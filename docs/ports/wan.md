@@ -881,6 +881,17 @@ up to 300 s where a transient top-edge artefact is acceptable. A prompt
 switch (keep) does not reset this: the sink keeps the first prompt's
 frames. `PromptSwitch::Reset` or `reset()` renews the anchor.
 
+**Served (decided 2026-09-28: cap SF-Wan streams).** fv-serve enforces this
+on every live causal session (`docs/serve/design.md` §5.2): 120 s of video
+by default, a request may ask for another length up to a hard ceiling of
+300 s (`[streams] causal_default_max_s` / `causal_hard_max_s`, env
+`FV_CAUSAL_DEFAULT_MAX_S` / `FV_CAUSAL_HARD_MAX_S`). A `reset` restarts the
+clock, since it renews the anchor, but the whole session never exceeds the
+300 s ceiling; a kept prompt switch does not restart it. Native
+`/fv/v1/streams` ends with `end_reason: "session_limit"`, Reactor causal
+mode with `session_ended{reason}`; the fal director serves clip models
+only, so the limit never applies there.
+
 Device memory rose 0.5-1.6 GiB over these runs, against flat in E7. That
 growth is from the diagnostics (a 12-latent fresh decode every 10 s and the
 kept latents), not the rollout: the sink 15 runs, which had no `keep_s`, passed the
