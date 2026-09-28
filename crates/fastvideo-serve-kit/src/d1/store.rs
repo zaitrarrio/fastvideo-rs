@@ -63,6 +63,11 @@ pub struct D1Options {
     pub stale_after: Option<Duration>,
     /// Refuse inserts (`StoreError::Full`) beyond this many unfinished jobs.
     pub max_active: Option<usize>,
+    /// Keep inserted jobs in memory as this worker's (the default). A
+    /// gateway (docs/serve/gateway.md) sets `false`: it inserts rows for
+    /// jobs a worker then [`adopt`](D1JobStore::adopt)s, so the row is
+    /// written with no `worker` and every read goes to D1.
+    pub hold_inserts: bool,
 }
 
 impl D1Options {
@@ -75,6 +80,7 @@ impl D1Options {
             heartbeat: Duration::from_secs(60),
             stale_after: Some(Duration::from_secs(900)),
             max_active: None,
+            hold_inserts: true,
         }
     }
 }
@@ -291,6 +297,67 @@ impl D1JobStore {
 
     pub fn options(&self) -> &D1Options {
         &self.opts
+    }
+    /// The D1 client (for tables other than `jobs`).
+    pub fn client(&self) -> &D1Client {
+        &self.db
+    }
+
+    /// Takes over a job another process inserted (a gateway, see
+    /// docs/serve/gateway.md): from now on this worker's memory is
+    /// authoritative for it and the row's `worker` is this worker. `job` is
+    /// the dispatched copy; the row's fields win except `resolved` (whose
+    /// input paths are this worker's). Idempotent for a job already held
+    /// here. Refused (`AlreadyExists`) when the row is finished, cancel was
+    /// requested, or another worker holds it with a fresh heartbeat
+    /// (younger than `stale_after`).
+    pub async fn adopt(&self, job: Job) -> Result<Job, StoreError> {
+        if let Some(e) = self.lock().jobs.get(&job.id) {
+            return Ok(e.job.clone());
+        }
+        let rows = self
+            .read(Stmt::new("SELECT job, version, worker, updated_at FROM jobs WHERE id = ?", vec![json!(job.id.to_string())]))
+            .await
+            .map_err(io)?;
+        let mut next = job;
+        if let Some(r) = rows.first() {
+            let held_by = r.get("worker").and_then(Value::as_str).filter(|w| *w != self.opts.worker_id);
+            let fresh = r
+                .get("updated_at")
+                .and_then(Value::as_f64)
+                .is_some_and(|t| now_ms() - (t as i64) < self.opts.stale_after.unwrap_or(Duration::from_secs(900)).as_millis() as i64);
+            if let Some(row) = decode_job(r) {
+                if row.is_terminal() || row.cancel_requested {
+                    return Err(StoreError::AlreadyExists(row.id));
+                }
+                if held_by.is_some() && fresh {
+                    return Err(StoreError::AlreadyExists(row.id));
+                }
+                let resolved = next.resolved.clone();
+                next = row;
+                next.resolved = resolved;
+            }
+        }
+        let stmt = upsert_stmt(&next, Some(&self.opts.worker_id))?;
+        self.write(stmt).await.map_err(io)?;
+        let mut g = self.lock();
+        g.seq += 1;
+        let seq = g.seq;
+        let (tx, _) = watch::channel(next.snapshot(seq));
+        g.by_ext.insert((next.protocol, next.external_id.clone()), next.id);
+        g.jobs.insert(
+            next.id,
+            Entry {
+                job: next.clone(),
+                tx,
+                seq,
+                flushed: Arc::new(tokio::sync::Mutex::new(seq)),
+                last_write: Some(Instant::now()),
+                dirty: false,
+                terminal_since: None,
+            },
+        );
+        Ok(next)
     }
     pub fn stats(&self) -> D1Stats {
         self.stats.lock().unwrap_or_else(|p| p.into_inner()).clone()
@@ -616,7 +683,8 @@ impl JobStore for D1JobStore {
                 }
             }
         }
-        let stmt = insert_stmt(&job, Some(&self.opts.worker_id))?;
+        let hold = self.opts.hold_inserts;
+        let stmt = insert_stmt(&job, hold.then_some(self.opts.worker_id.as_str()))?;
         match self.write(stmt).await {
             Ok(_) => {}
             Err(e) if e.is_constraint() => {
@@ -629,6 +697,9 @@ impl JobStore for D1JobStore {
                 }
             }
             Err(e) => return Err(io(e)),
+        }
+        if !hold {
+            return Ok(());
         }
         let mut g = self.lock();
         g.seq += 1;

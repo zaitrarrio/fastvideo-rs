@@ -46,3 +46,11 @@ native = true
 [limits]
 queue_max = 32
 body_max_mb = 64
+
+# Behind the gateway (docs/serve/gateway.md): set FV_SERVE_ROLE=worker and
+# FV_INTERNAL_TOKEN (the gateway's value) on the template. The worker then
+# requires the internal token on every API route, trusts the gateway's
+# authentication, and takes jobs from `/fv/v1/internal/jobs` (queue: the
+# gateway's `kind: http` envelope). Standalone deployments ignore this.
+[gateway]
+pool = "wan"

@@ -35,6 +35,11 @@ reqwest = { workspace = true, optional = true }
 # SQLite behind the D1 HTTP API mock (feature `d1-mock`; always in tests).
 rusqlite = { version = "0.37", features = ["bundled"], optional = true }
 
+[[bin]]
+name = "fv-d1-mock"
+path = "src/bin/fv-d1-mock.rs"
+required-features = ["d1-mock"]
+
 [dev-dependencies]
 rusqlite = { version = "0.37", features = ["bundled"] }
 tokio = { workspace = true, features = ["macros", "rt-multi-thread", "test-util"] }
@@ -44,7 +49,7 @@ default = []
 # Outbound HTTP: media fetch, MiniMax callbacks, fal webhooks, S3 uploads.
 fetch = ["dep:reqwest"]
 # `d1::mock::MockD1`: a SQLite-backed D1 HTTP API for other crates' tests.
-d1-mock = ["dep:rusqlite"]
+d1-mock = ["dep:rusqlite", "tokio/macros", "tokio/rt-multi-thread"]
 
 [lints]
 workspace = true

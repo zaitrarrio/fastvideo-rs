@@ -201,7 +201,15 @@ pub fn info_fn(config: &Config, gate: Arc<ServiceGate>, boot: Boot, ready_after:
 
 /// The dispatcher over the app's router.
 pub fn handler(app: &App, boot: Boot, ready_after: Arc<std::sync::OnceLock<f64>>) -> RouterHandler {
-    RouterHandler::new(app.router.clone()).with_info(info_fn(&app.config, app.gate.clone(), boot, ready_after))
+    let h = RouterHandler::new(app.router.clone()).with_info(info_fn(&app.config, app.gate.clone(), boot, ready_after));
+    // A queue worker behind the gateway: queue jobs are authenticated by
+    // the platform, so the dispatcher adds the internal token itself (it
+    // never travels in the job input, docs/serve/gateway.md §3).
+    if app.config.server.role == crate::config::Role::Worker {
+        h.with_header("x-fv-internal-token", app.config.gateway.internal_token.expose())
+    } else {
+        h
+    }
 }
 
 /// Adds `POST /fv/v1/forward` (Vast PyWorker target) to a built router.
