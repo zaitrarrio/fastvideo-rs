@@ -9,6 +9,7 @@
 
 use std::path::Path;
 
+use fastvideo_cudarc::ltx2::i2v_encode::ConditioningImage;
 use fastvideo_cudarc::ltx2::pipeline::{
     default_sol_stage2, Ltx2Paths, Ltx2Pipeline, Ltx2Request, PipelineOptions, TextResidency,
 };
@@ -16,9 +17,31 @@ use fastvideo_models::ltx2::config::Ltx2Config;
 use fastvideo_models::ltx2::techniques::{Ltx2Techniques, Stage2Flags};
 use fastvideo_protocol::{ApiError, GapId, JobMetrics, ResolvedJob, Task};
 
-use super::caps::{load_profile, ltx_config, Ltx2Recipe, LtxStage2};
+use super::caps::{load_profile, ltx_config, Ltx2Recipe, LtxStage2, LtxVersion};
 use super::output::{api_err, bytes_mb, stages, wants_audio};
 use fastvideo_cudarc::Hooks;
+
+/// The job's keyframes as image conditionings: the first frame at pixel frame
+/// 0, the last at `num_frames - 1` (`last_frame_uri`), both at strength 1 and
+/// the checkpoint's CRF (`ltx_pipelines` `--image PATH FRAME_IDX 1.0`).
+pub fn conditioning_images(job: &ResolvedJob) -> Vec<ConditioningImage> {
+    let mut out: Vec<ConditioningImage> = job
+        .keyframes
+        .iter()
+        .map(|(anchor, path)| ConditioningImage {
+            path: path.clone(),
+            frame_idx: match anchor {
+                fastvideo_protocol::Anchor::First => 0,
+                fastvideo_protocol::Anchor::Last => (job.num_frames as usize).saturating_sub(1),
+            },
+            strength: 1.0,
+            crf: None,
+        })
+        .collect();
+    // The first frame first, as the reference lists them.
+    out.sort_by_key(|c| c.frame_idx);
+    out
+}
 
 /// One resident LTX-2 pipeline.
 pub struct Ltx2Model {
@@ -122,19 +145,14 @@ impl Ltx2Model {
 
     /// The request `fv-gpucheck ltx2 gen` would build for this job.
     pub fn request(&self, job: &ResolvedJob, dir: &Path) -> Result<Ltx2Request, ApiError> {
-        if job.task != Task::T2V || !job.keyframes.is_empty() {
-            return Err(ApiError::unsupported(
-                if job
-                    .keyframes
-                    .iter()
-                    .any(|(a, _)| *a == fastvideo_protocol::Anchor::Last)
-                {
-                    GapId::LtxKeyframes
-                } else {
-                    GapId::Ltx25I2V
-                },
-            ));
-        }
+        let images = match job.task {
+            Task::T2V if job.keyframes.is_empty() => Vec::new(),
+            Task::I2V | Task::Keyframes if self.recipe.version == LtxVersion::V25 => {
+                conditioning_images(job)
+            }
+            Task::Keyframes => return Err(ApiError::unsupported(GapId::LtxKeyframes)),
+            _ => return Err(ApiError::unsupported(GapId::Ltx25I2V)),
+        };
         let mut req = Ltx2Request::new(&self.cfg, job.prompt.clone(), dir.to_path_buf());
         req.height = job.height as usize;
         req.width = job.width as usize;
@@ -149,6 +167,7 @@ impl Ltx2Model {
         req.pisa_stage2 = self.pisa_stage2;
         // E4: no audio decode when the output drops it.
         req.skip_audio_decode = !wants_audio(job);
+        req.images = images;
         req.validate()
             .map_err(|e| ApiError::invalid(e.to_string()))?;
         Ok(req)

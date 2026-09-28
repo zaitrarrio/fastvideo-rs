@@ -126,7 +126,9 @@ retries = 1
 [[pools.models]]
 id = "fastwan21-1.3b"
 family = "wan"
-recipe = "wan-turbo"
+# The 1.3B recipe by id: the `wan-turbo` tier is the 5B FastWan model now
+# (runpod-wan5b.toml, docs/serve/fal-parity.md §3).
+recipe = "fastwan21-1.3b"
 
 [[pools]]
 id = "sfwan-live"

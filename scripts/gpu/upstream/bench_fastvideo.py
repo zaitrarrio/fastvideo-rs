@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
-"""Upstream FastVideo cell: FastH3 8-step, FastH3 4-step LoRA previews, MiniMax-H3 base.
+"""Upstream FastVideo cell: FastH3 8-step, FastH3 4-step LoRA previews, MiniMax-H3 base, and
+MiniMax-H3 Ref2VA (`--recipe ref2va`: MiniMaxH3Ref2VAModularPipeline on the checkpoint's
+`transformer_ref`, the base engine config, ordered `--reference` media).
 
 Reuses FastVideo's own example builders (examples/inference/basic/basic_fasth3.py)
 so the generator/engine configuration is exactly the published profile, and
@@ -27,7 +29,9 @@ from pathlib import Path
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--fastvideo-src", required=True)
-    ap.add_argument("--recipe", required=True, choices=("8step", "lora", "base"))
+    ap.add_argument("--recipe", required=True, choices=("8step", "lora", "base", "ref2va"))
+    ap.add_argument("--reference", action="append", default=[],
+                    help="ref2va: ordered reference media (repeatable); kind from the extension")
     ap.add_argument("--out", required=True, help="cell directory")
     ap.add_argument("--repeats", type=int, default=1)
     ap.add_argument("--warmup-seed", type=int, default=None)
@@ -37,7 +41,8 @@ def main() -> int:
     sys.path.insert(0, str(Path(a.fastvideo_src) / "examples/inference/basic"))
     out = Path(a.out)
     out.mkdir(parents=True, exist_ok=True)
-    res: dict = {"impl": "fastvideo", "recipe": a.recipe, "argv": rest, "runs": [], "ok": False}
+    res: dict = {"impl": "fastvideo", "recipe": a.recipe, "argv": rest, "references": a.reference,
+                 "runs": [], "ok": False}
     t_proc = time.perf_counter()
     try:
         import basic_fasth3  # noqa: F401  (FastVideo's example module)
@@ -63,12 +68,20 @@ def main() -> int:
         basic_fasth3.validate_profile_dependencies(args)
         from fastvideo import VideoGenerator
 
-        if a.recipe == "base":
-            from fastvideo.api import (CompileConfig, EngineConfig, GeneratorConfig, OffloadConfig,
-                                       ParallelismConfig, PipelineSelection)
+        if a.recipe in ("base", "ref2va"):
+            from fastvideo.api import (CompileConfig, ComponentConfig, EngineConfig, GeneratorConfig,
+                                       OffloadConfig, ParallelismConfig, PipelineSelection)
+            selection = PipelineSelection(experimental={"attention_backend": "FLASH_ATTN"})
+            if a.recipe == "ref2va":
+                # basic_minimax_h3_ref2va.py's selection, dense attention as for base.
+                selection = PipelineSelection(
+                    workload_type="i2v",
+                    components=ComponentConfig(override_pipeline_cls_name="MiniMaxH3Ref2VAModularPipeline"),
+                    experimental={"attention_backend": "FLASH_ATTN"},
+                )
             cfg = GeneratorConfig(
                 model_path=args.model_path,
-                pipeline=PipelineSelection(experimental={"attention_backend": "FLASH_ATTN"}),
+                pipeline=selection,
                 engine=EngineConfig(
                     num_gpus=args.num_gpus, execution_backend="mp", use_fsdp_inference=False,
                     parallelism=ParallelismConfig(tp_size=1, sp_size=args.num_gpus),
@@ -83,9 +96,21 @@ def main() -> int:
         gen = VideoGenerator.from_config(cfg)
         res["load_s"] = time.perf_counter() - t0
         try:
+            def request(path: Path, seed: int):
+                req = basic_fasth3.build_request(args, path, seed)
+                if a.recipe == "ref2va":
+                    from fastvideo.pipelines.basic.minimax_h3 import MiniMaxH3Reference
+                    kinds = {".mp4": "video", ".mov": "video", ".webm": "video", ".mkv": "video",
+                             ".wav": "audio", ".mp3": "audio", ".flac": "audio", ".m4a": "audio"}
+                    req.inputs.references = [
+                        MiniMaxH3Reference(source=r, media_type=kinds.get(Path(r).suffix.lower(), "image"))
+                        for r in a.reference
+                    ]
+                return req
+
             def one(seed: int, path: Path) -> dict:
                 t = time.perf_counter()
-                r = gen.generate(basic_fasth3.build_request(args, path, seed))
+                r = gen.generate(request(path, seed))
                 wall = time.perf_counter() - t
                 stages = getattr(getattr(r, "logging_info", None), "stages", None) or {}
                 return {

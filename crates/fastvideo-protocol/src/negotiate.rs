@@ -182,15 +182,45 @@ pub fn resolve_tier<'a>(
     tier: Tier,
     models: impl IntoIterator<Item = &'a ModelCaps>,
 ) -> Result<&'a ModelCaps, ApiError> {
-    models
+    let at_tier: Vec<&ModelCaps> = models
         .into_iter()
-        .find(|m| m.family == family && m.tier == Some(tier))
+        .filter(|m| m.family == family && m.tier == Some(tier))
+        .collect();
+    // A tier's own model serves text-to-video; a task companion (e.g. the
+    // H3 Ref2VA DiT) sharing the tier is reached through [`route_task`].
+    at_tier
+        .iter()
+        .find(|m| m.supports(Task::T2V))
+        .or_else(|| at_tier.first())
+        .copied()
         .ok_or_else(|| {
             ApiError::invalid_param(
                 "model",
                 format!("no {tier} tier model of family `{family:?}` is served here"),
             )
         })
+}
+
+/// Task routing after name resolution: when `caps` does not serve `task`,
+/// the first model of the same family *and tier* that does (a task
+/// companion, e.g. the H3 Ref2VA DiT beside the base `h3-max` model, which
+/// loads a different transformer). Otherwise `caps` itself, so `negotiate`
+/// reports the usual unsupported-task error. Untiered models are never
+/// rerouted: a client that names a model gets that model.
+pub fn route_task<'a>(
+    caps: &'a ModelCaps,
+    task: Task,
+    models: impl IntoIterator<Item = &'a ModelCaps>,
+) -> &'a ModelCaps {
+    if caps.supports(task) || caps.tier.is_none() {
+        return caps;
+    }
+    models
+        .into_iter()
+        .find(|m| {
+            m.id != caps.id && m.family == caps.family && m.tier == caps.tier && m.supports(task)
+        })
+        .unwrap_or(caps)
 }
 
 /// Pure and deterministic (except that a missing seed is drawn with
@@ -208,6 +238,7 @@ pub fn negotiate(
     check_fps(fps, caps)?;
     check_h3_geometry(caps, width, height, num_frames)?;
     check_refs(req, caps)?;
+    check_ref_durations(caps, staged)?;
     check_knobs(req, caps)?;
     let audio = plan_audio(req, caps)?;
 
@@ -457,11 +488,12 @@ fn follow_dims(
         .or_else(|| staged.keyframes.first())
         .map(|(_, m)| m)
         .or_else(|| {
-            staged
-                .references
-                .iter()
-                .find(|(k, _)| *k == MediaKind::Image)
-                .map(|(_, m)| m)
+            // Reference-to-video: the first image reference, else the first
+            // video reference (fal and MiniMax allow video-only references).
+            let first = |kind: MediaKind| {
+                staged.references.iter().find(|(k, _)| *k == kind).map(|(_, m)| m)
+            };
+            first(MediaKind::Image).or_else(|| first(MediaKind::Video))
         });
     let Some(img) = img else {
         return Err(ApiError::invalid_param(
@@ -757,6 +789,45 @@ fn check_refs(req: &GenerationRequest, caps: &ModelCaps) -> Result<(), ApiError>
             return Err(ApiError::invalid_param(
                 "references",
                 format!("at most {max} {what} are allowed, got {n}"),
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// H3 Ref2VA clip lengths (MiniMax README, fal `reference-to-video`): each
+/// reference video or audio clip 2 to 15 s, and each kind at most 15 s in
+/// total. A clip whose length the probe could not read is left to the engine.
+fn check_ref_durations(caps: &ModelCaps, staged: &StagedInputs) -> Result<(), ApiError> {
+    use fastvideo_models::h3::reference::{
+        REFERENCE_CLIP_MAX_S, REFERENCE_CLIP_MIN_S, REFERENCE_TOTAL_MAX_S,
+    };
+    // Container rounding (a 15 s clip probes as 15.02 s).
+    const SLACK_S: f64 = 0.05;
+    if caps.family != Family::H3 {
+        return Ok(());
+    }
+    for (kind, what) in [(MediaKind::Video, "video"), (MediaKind::Audio, "audio")] {
+        let mut total = 0.0;
+        for (i, (_, m)) in staged.references.iter().filter(|(k, _)| *k == kind).enumerate() {
+            let Some(d) = m.probe.duration_s else { continue };
+            if d + SLACK_S < REFERENCE_CLIP_MIN_S || d > REFERENCE_CLIP_MAX_S + SLACK_S {
+                return Err(ApiError::invalid_param(
+                    "references",
+                    format!(
+                        "reference {what} {} is {d:.2} s; each must be {REFERENCE_CLIP_MIN_S} to {REFERENCE_CLIP_MAX_S} s",
+                        i + 1
+                    ),
+                ));
+            }
+            total += d;
+        }
+        if total > REFERENCE_TOTAL_MAX_S + SLACK_S {
+            return Err(ApiError::invalid_param(
+                "references",
+                format!(
+                    "reference {what} clips add up to {total:.2} s; at most {REFERENCE_TOTAL_MAX_S} s in total"
+                ),
             ));
         }
     }

@@ -475,11 +475,11 @@ async fn auth_stubs_and_gaps() {
         let msg = r.json()["error"]["message"].as_str().unwrap().to_owned();
         assert!(msg.contains(needle), "{msg} !~ {needle}");
     }
-    let mut kf = with("image_uri", json!("https://example.com/a.png"));
-    kf["last_frame_uri"] = json!("https://example.com/b.png");
+    let mut kf = with("image_uri", json!(format!("data:image/png;base64,{PNG_B64}")));
+    kf["last_frame_uri"] = json!(format!("data:image/png;base64,{PNG_B64}"));
+    // First + last frame (E9): accepted by an engine with keyframe conditioning.
     let r = call(app, "POST", "/v2/image-to-video", Some("sk-a"), Some(kf)).await;
-    assert_eq!((r.status, r.err_type()), (StatusCode::BAD_REQUEST, "invalid_request_error".into()));
-    assert!(r.json()["error"]["message"].as_str().unwrap().contains("last-frame"));
+    assert_eq!(r.status, StatusCode::ACCEPTED, "{:?}", r.json());
     let r = call(app, "POST", "/v2/text-to-video", Some("sk-a"), Some(json!("nope"))).await;
     assert_eq!(r.status, StatusCode::BAD_REQUEST);
     let req = Request::post("/v2/text-to-video")
@@ -494,8 +494,9 @@ async fn auth_stubs_and_gaps() {
     // Without gate aliases the tier still binds (resolve_tier).
     let r = call(app, "POST", "/v2/text-to-video", Some("sk-a"), Some(body.clone())).await;
     assert_eq!(r.status, StatusCode::ACCEPTED, "{:?}", r.json());
-    // No job was stored for any refused request.
-    assert_eq!(fx.ctx.jobs().list(Default::default()).await.items.len(), 1);
+    // No job was stored for any refused request (the two are the keyframes
+    // job and this one).
+    assert_eq!(fx.ctx.jobs().list(Default::default()).await.items.len(), 2);
 }
 
 trait TapRes {

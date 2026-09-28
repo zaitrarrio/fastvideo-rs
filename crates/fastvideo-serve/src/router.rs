@@ -62,8 +62,23 @@ fn r(owner: Owner, method: &'static str, path: impl Into<String>) -> RouteSpec {
 
 /// LTX endpoints with no engine path (design §4.5): 403 stubs.
 pub const LTX_STUBS: &[&str] = &["audio-to-video", "retake", "extend", "video-to-video-hdr", "video-to-video-reframe"];
-/// fal submit sub-paths (design §4.4).
+/// fal submit sub-paths of the H3 apps (design §4.4).
 pub const FAL_SUBS: &[&str] = &["text-to-video", "image-to-video", "reference-to-video"];
+
+/// An app's submit sub-paths (several segments on `lightricks/ltx-2.5` and
+/// `fal-ai/wan`) and whether it has the director.
+fn fal_app_subs(app: &str) -> (Vec<&'static str>, bool) {
+    #[cfg(feature = "fal")]
+    {
+        let a = fastvideo_fal::FalApp::from_id(app);
+        (a.endpoints().iter().map(|e| e.sub()).collect(), a.kind().director())
+    }
+    #[cfg(not(feature = "fal"))]
+    {
+        let _ = app;
+        (FAL_SUBS.to_vec(), true)
+    }
+}
 
 /// Every route of design §9, with `fal_apps` as static prefixes.
 pub fn route_table(fal_apps: &[String]) -> Vec<RouteSpec> {
@@ -116,7 +131,7 @@ pub fn route_table(fal_apps: &[String]) -> Vec<RouteSpec> {
         // Console pages (src/console.rs).
         r(Console, "GET", "/console"),
         r(Console, "GET", "/console/admin"),
-        r(Console, "GET", "/console/models/{owner}/{alias}/{task}"),
+        r(Console, "GET", "/console/models/{owner}/{alias}/{*task}"),
         r(Console, "GET", "/console/assets/{file}"),
         r(Native, "GET", "/fv/v1/streams/{id}"),
         r(Native, "DELETE", "/fv/v1/streams/{id}"),
@@ -133,7 +148,7 @@ pub fn route_table(fal_apps: &[String]) -> Vec<RouteSpec> {
         r(Fal, "GET", "/fal/proxy"),
         r(Fal, "POST", "/storage/upload/initiate"),
         r(Fal, "GET", "/fal/schema"),
-        r(Fal, "GET", "/fal/schema/{owner}/{alias}/{sub}"),
+        r(Fal, "GET", "/fal/schema/{owner}/{alias}/{*sub}"),
         r(FalDirector, "POST", "/wma/ice"),
         r(FalDirector, "POST", "/wma/session"),
         r(FalDirector, "POST", "/wma/session/heartbeat"),
@@ -166,16 +181,19 @@ pub fn route_table(fal_apps: &[String]) -> Vec<RouteSpec> {
     }
     for app in fal_apps {
         let app = app.trim_matches('/');
-        for sub in FAL_SUBS {
+        let (subs, director) = fal_app_subs(app);
+        for sub in &subs {
             v.push(r(Fal, "POST", format!("/{app}/{sub}")));
             v.push(r(Fal, "POST", format!("/run/{app}/{sub}")));
         }
         // The director's app-local ICE fallback (`context.run`), direct and
         // through `/run` (what `/fal/proxy` maps `fal.run` to).
-        v.push(r(FalDirector, "POST", format!("/{app}/director/ice")));
-        v.push(r(FalDirector, "POST", format!("/run/{app}/director/ice")));
+        if director {
+            v.push(r(FalDirector, "POST", format!("/{app}/director/ice")));
+            v.push(r(FalDirector, "POST", format!("/run/{app}/director/ice")));
+        }
         let mut prefixes = vec![format!("/{app}")];
-        prefixes.extend(FAL_SUBS.iter().map(|s| format!("/{app}/{s}")));
+        prefixes.extend(subs.iter().map(|s| format!("/{app}/{s}")));
         for p in prefixes {
             v.push(r(Fal, "GET", format!("{p}/requests/{{id}}")));
             v.push(r(Fal, "GET", format!("{p}/requests/{{id}}/response")));
@@ -246,8 +264,11 @@ mod tests {
     use axum::http::Request;
     use tower::ServiceExt;
 
+    /// The default apps plus fal's LTX-2.5 and Wan apps (multi-segment subs).
     fn apps() -> Vec<String> {
-        crate::config::ProtocolsCfg::default().fal_apps
+        let mut v = crate::config::ProtocolsCfg::default().fal_apps;
+        v.extend(["lightricks/ltx-2.5".to_owned(), "fal-ai/wan".to_owned(), "fastvideo/ltx-turbo".to_owned()]);
+        v
     }
 
     #[test]
@@ -327,6 +348,21 @@ mod tests {
             ("GET", "/console/models/minimax/h3-max/text-to-video", "console"),
             ("GET", "/console/assets/model.js", "console"),
             ("GET", "/fal/schema/minimax/h3-max/image-to-video", "fal"),
+            ("POST", "/minimax/h3-max-turbo/text-to-video", "fal"),
+            ("POST", "/minimax/h3/image-to-video", "fal"),
+            ("GET", "/minimax/h3/requests/abc/status", "fal"),
+            ("POST", "/minimax/h3/director/ice", "fal-director"),
+            ("POST", "/lightricks/ltx-2.5/text-to-video/fast", "fal"),
+            ("POST", "/run/lightricks/ltx-2.5/image-to-video/pro", "fal"),
+            ("GET", "/lightricks/ltx-2.5/requests/abc", "fal"),
+            ("GET", "/lightricks/ltx-2.5/text-to-video/fast/requests/abc/status", "fal"),
+            ("POST", "/fal-ai/wan/v2.2-5b/text-to-video", "fal"),
+            ("POST", "/fal-ai/wan/v2.2-5b/text-to-video/fast-wan", "fal"),
+            ("POST", "/run/fal-ai/wan/v2.2-5b/image-to-video", "fal"),
+            ("GET", "/fal-ai/wan/requests/abc/status/stream", "fal"),
+            ("PUT", "/fal-ai/wan/v2.2-5b/text-to-video/fast-wan/requests/abc/cancel", "fal"),
+            ("GET", "/fal/schema/fal-ai/wan/v2.2-5b/text-to-video/fast-wan", "fal"),
+            ("GET", "/console/models/lightricks/ltx-2.5/text-to-video/fast", "console"),
         ];
         for (m, uri, want) in cases {
             let resp = router
@@ -339,7 +375,15 @@ mod tests {
             assert_eq!(std::str::from_utf8(&b).unwrap(), want, "{m} {uri}");
         }
         // Unknown fal apps and LTX endpoint segments are not routed.
-        for (m, uri) in [("POST", "/minimax/h9/text-to-video"), ("GET", "/v2/text-to-image/abc"), ("POST", "/v2/text-to-image")] {
+        for (m, uri) in [
+            ("POST", "/minimax/h9/text-to-video"),
+            ("GET", "/v2/text-to-image/abc"),
+            ("POST", "/v2/text-to-image"),
+            // The family apps have only their own subs, and no director.
+            ("POST", "/lightricks/ltx-2.5/text-to-video"),
+            ("POST", "/fal-ai/wan/reference-to-video"),
+            ("POST", "/lightricks/ltx-2.5/director/ice"),
+        ] {
             let resp = router
                 .clone()
                 .oneshot(Request::builder().method(m).uri(uri).body(Body::empty()).unwrap())
