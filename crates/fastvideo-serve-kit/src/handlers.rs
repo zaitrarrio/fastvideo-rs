@@ -137,6 +137,9 @@ pub async fn submit_request<P: BatchProtocol + ?Sized>(
     let models = ctx.engine().models();
     let engine = ctx.engine().clone();
     let caps = resolve_model(&req.model, |n| engine.alias(n), &models)?;
+    // A tier alias names the tier's base model; a task it does not serve
+    // (H3 reference-to-video) goes to the tier's companion for that task.
+    let caps = fastvideo_protocol::route_task(caps, req.task, &models);
     precheck(&req, caps)?;
     let id = JobId::new();
     let dir = ctx.inputs_dir(id);

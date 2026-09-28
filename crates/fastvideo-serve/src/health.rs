@@ -2,7 +2,9 @@
 //!
 //! - `GET /ping` (Runpod load balancer): **204** while models load, **200**
 //!   `{"status":"healthy"}` when ready, **503** when loading failed or the
-//!   server is draining (the balancer stops routing to it).
+//!   server is draining (the balancer stops routing to it). The binary
+//!   binds before building the app, and answers 204 from
+//!   [`crate::app::serve_while_building`] until these routes exist.
 //! - `GET /health`: the merged FastVideo / FastWan / Reactor body
 //!   `{"status":"ok","model_loaded":true,"state":"AVAILABLE"}`; 503 with
 //!   `model_loaded:false` until ready.

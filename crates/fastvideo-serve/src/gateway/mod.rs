@@ -405,7 +405,7 @@ pub fn assemble(
         .with_state(ctx.clone())
         .merge(stateful)
         .merge(fastvideo_serve_kit::admin_routes(keys, admin.clone()))
-        .merge(routes::routes(gw.clone(), admin, crate::metrics::install()));
+        .merge(routes::routes(gw.clone(), admin, crate::metrics::install(), crate::adapters::root_model(&mcfg, ctx)));
     if config.protocols.reactor {
         r = r.merge(proxy::reactor_routes(gw.clone(), ctx.clone()));
     }
@@ -417,7 +417,12 @@ pub fn assemble(
     if policy.multi() {
         tracing::info!(workers_max = policy.workers_max, "gateway replicas: every route but uploads is served by any replica");
     }
-    crate::multiworker::layer(r, policy, &config.protocols.fal_apps).layer(tower_http::trace::TraceLayer::new_for_http())
+    let r = crate::multiworker::layer(r, policy, &config.protocols.fal_apps).layer(tower_http::trace::TraceLayer::new_for_http());
+    // The gateway is the public front: the same CORS as a standalone server.
+    match crate::app::cors_layer(&config.server.cors_origins) {
+        Some(cors) => r.layer(cors),
+        None => r,
+    }
 }
 
 #[async_trait::async_trait]

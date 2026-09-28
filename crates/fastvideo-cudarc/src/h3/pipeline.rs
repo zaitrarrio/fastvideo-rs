@@ -245,6 +245,11 @@ pub struct H3PipelineOptions {
     pub recipe: Option<String>,
     /// Load `transformer_ref/` (Ref2VA) instead of `transformer/` (T2AV/FL2VA).
     pub ref2va: bool,
+    /// Root holding `transformer_ref/` (and the Ref2VA turbo adapter) when it
+    /// is not the snapshot itself, e.g. `weights/h3-ref2va` beside
+    /// `weights/h3-base`. The VAEs and the text encoder still come from the
+    /// snapshot (and `text_root`).
+    pub ref_root: Option<PathBuf>,
     /// Sol-H3 / FastH3 Preview adapter file. When unset, the recipe's adapter is
     /// searched under and beside the weight root.
     pub adapter: Option<PathBuf>,
@@ -425,6 +430,44 @@ pub struct H3Output {
     pub dit_residency: &'static str,
     /// Block streaming over the denoise (streamed runs).
     pub offload: Option<OffloadStats>,
+}
+
+/// Oracle injection of one modality's starting rows (`FASTVIDEO_INJECT_DIR`).
+/// The reference dumps its packed rows: the target noise alone, or
+/// `[condition | target]` when the request has condition rows. The target
+/// part replaces `target`; the condition part replaces `cond` only with
+/// `FASTVIDEO_INJECT_COND=1`. Returns `(target, cond)`.
+fn inject_start_rows(
+    name: &str,
+    target: Vec<f32>,
+    cond: Option<CudaTensor>,
+) -> Result<(Vec<f32>, Option<CudaTensor>)> {
+    let Some((shape, v)) = crate::wan::inject::load(name)? else {
+        return Ok((target, cond));
+    };
+    let cond_n = cond.as_ref().map_or(0, CudaTensor::numel);
+    if v.len() == target.len() {
+        return Ok((v, cond));
+    }
+    if cond_n == 0 || v.len() != cond_n + target.len() {
+        return Err(msg(format!(
+            "FASTVIDEO_INJECT_DIR: {name}: reference shape {shape:?} ({} values); ours needs {} target (+ {cond_n} condition)",
+            v.len(),
+            target.len()
+        )));
+    }
+    let tail = v[cond_n..].to_vec();
+    let cond = match cond {
+        Some(c) if std::env::var("FASTVIDEO_INJECT_COND").is_ok_and(|x| x == "1") => {
+            crate::wan::log::info(format_args!(
+                "inject: {name} condition rows ({cond_n} values) from the reference"
+            ));
+            Some(CudaTensor::from_vec(v[..cond_n].to_vec(), c.shape.clone())?.to_device()?)
+        }
+        c => c,
+    };
+    crate::wan::log::info(format_args!("inject: {name} target rows from the reference"));
+    Ok((tail, cond))
 }
 
 /// The request's starting noise, from one generator in the reference's order:
@@ -772,7 +815,7 @@ impl H3Pipeline {
             }
             _ => {
                 let dit = if options.ref2va {
-                    let p = root.join("transformer_ref");
+                    let p = options.ref_root.as_deref().unwrap_or(root).join("transformer_ref");
                     if !p.is_dir() {
                         return Err(msg(format!(
                             "Ref2VA needs {} (MiniMax-H3 Base Ref2VA partition)",
@@ -950,8 +993,12 @@ impl H3Pipeline {
             } else {
                 SolH3AdapterSpec::t2v_i2v()
             };
+            let adapter_root = match (options.ref2va, options.ref_root.as_deref()) {
+                (true, Some(r)) => r,
+                _ => root,
+            };
             let path = spec
-                .resolve(root, options.adapter.as_deref())
+                .resolve(adapter_root, options.adapter.as_deref())
                 .map_err(msg)?;
             let fuse = super::lora::H3LoraFuse::open(&map, &path, spec.alpha, spec.scale)?;
             crate::wan::log::info(format_args!(
@@ -1512,7 +1559,14 @@ impl H3Pipeline {
                 .precision()
                 .unwrap_or(crate::llm::WeightPrecision::Native);
             let abort = || hooks.is_cancelled();
-            let text = encode_request_multimodal(encoder_root, request, lm, precision, &abort);
+            let text = encode_request_multimodal(
+                encoder_root,
+                request,
+                lm,
+                precision,
+                &abort,
+                self.options.reference_image_resize,
+            );
             // A cancel during the (streamed) multimodal stage stops it
             // between layers; report it as the cancel it is.
             hooks.check()?;
@@ -1710,12 +1764,17 @@ impl H3Pipeline {
             seeded_noise(cfg, &geometry, request.seed).map_err(msg)?;
         // FASTVIDEO_INJECT_DIR: the reference's packed starting rows (torch's
         // draws, patchified by the reference), in place of our seeded noise.
-        if let Some(v) = crate::wan::inject::load_numel("video_step00_in", video_noise.len())? {
+        // With condition rows (FL2VA / Ref2VA) the reference's rows are
+        // `[condition | target]`; only the target part is injected unless
+        // FASTVIDEO_INJECT_COND=1, which also takes its condition rows (the
+        // control that isolates the DiT from our reference encode).
+        let (cond_rows, cond_audio_rows) = {
+            let (v, c) = inject_start_rows("video_step00_in", video_noise, cond_rows)?;
             video_noise = v;
-        }
-        if let Some(v) = crate::wan::inject::load_numel("audio_step00_in", audio_noise.len())? {
-            audio_noise = v;
-        }
+            let (a, ca) = inject_start_rows("audio_step00_in", audio_noise, cond_audio_rows)?;
+            audio_noise = a;
+            (c, ca)
+        };
         let video_rows = CudaTensor::from_vec(
             video_noise,
             vec![geometry.video_rows(), cfg.video_patch_dim()],
@@ -2063,6 +2122,7 @@ fn encode_request_multimodal(
     resident: Option<(&super::text::MultimodalEncoder, &crate::llm::ResidentDecoder)>,
     precision: crate::llm::WeightPrecision,
     abort: &dyn Fn() -> bool,
+    resize: ReferenceImageResize,
 ) -> Result<super::text::TextConditioning> {
     use super::text::{MultimodalLm, VisionImage, VisionVideo};
     use fastvideo_models::h3::presentation::PresentationRef;
@@ -2100,11 +2160,8 @@ fn encode_request_multimodal(
             match spec.kind {
                 ReferenceKind::Audio => refs.push(PresentationRef::Audio),
                 ReferenceKind::Image => {
-                    let img = image::open(&spec.path)
-                        .map_err(|e| msg(format!("open {}: {e}", spec.path.display())))?
-                        .into_rgb8();
-                    let (w, h) = (img.width() as usize, img.height() as usize);
-                    images_owned.push((img.into_raw(), h, w));
+                    let (rgb, h, w, _, _) = load_reference_image(&spec.path, resize)?;
+                    images_owned.push((rgb, h, w));
                     refs.push(PresentationRef::Image { token_count: 0 });
                 }
                 ReferenceKind::Video => {
@@ -2232,6 +2289,28 @@ fn encode_fl2va_cond_rows(
     }
 }
 
+/// A Ref2VA reference image as FastVideo prepares it (`reference.py`
+/// `prepare_reference_image`): RGB8 resized with Lanczos to the reference
+/// canvas (2048 short edge, or `match`). The VAE encodes this image and
+/// Qwen-VL sees the same one, so its vision-token count follows the canvas.
+/// Returns `(rgb, height, width, source width, source height)`.
+fn load_reference_image(
+    path: &Path,
+    resize: ReferenceImageResize,
+) -> Result<(Vec<u8>, usize, usize, usize, usize)> {
+    let img = image::open(path)
+        .map_err(|e| msg(format!("open {}: {e}", path.display())))?
+        .into_rgb8();
+    let (sw, sh) = (img.width() as usize, img.height() as usize);
+    let (out_h, out_w) = resolve_reference_image_size_with(sw, sh, resize).map_err(msg)?;
+    let img = if (sw, sh) == (out_w, out_h) {
+        img
+    } else {
+        image::imageops::resize(&img, out_w as u32, out_h as u32, image::imageops::FilterType::Lanczos3)
+    };
+    Ok((img.into_raw(), out_h, out_w, sw, sh))
+}
+
 struct Ref2VaEncoded {
     prepared: Vec<PreparedReference>,
     video_rows: CudaTensor,
@@ -2281,12 +2360,7 @@ fn encode_ref2va_conditions(
                 });
             }
             ReferenceKind::Image => {
-                let img = image::open(&spec.path)
-                    .map_err(|e| msg(format!("open {}: {e}", spec.path.display())))?
-                    .into_rgb8();
-                let (sw, sh) = (img.width() as usize, img.height() as usize);
-                let (out_h, out_w) =
-                    resolve_reference_image_size_with(sw, sh, resize).map_err(msg)?;
+                let (rgb, out_h, out_w, sw, sh) = load_reference_image(&spec.path, resize)?;
                 let prep = PreparedImageRef::from_pixel_size(out_h, out_w, ratio).map_err(msg)?;
                 crate::wan::log::info(format_args!(
                     "h3 ref2va: encode image {} {}x{} → {}x{} ({})",
@@ -2297,14 +2371,7 @@ fn encode_ref2va_conditions(
                     out_h,
                     spec.path.display()
                 ));
-                let z = encoder.encode_keyframe_file(
-                    &spec.path,
-                    out_h,
-                    out_w,
-                    true,
-                    true,
-                    seed.wrapping_add(31 + i as u64),
-                )?;
+                let z = encoder.encode_rgb8(&rgb, out_h, out_w, true, seed.wrapping_add(31 + i as u64))?;
                 let host = z.host_cow()?.into_owned();
                 let shape = [cfg.in_channels, 1, prep.latent_height, prep.latent_width];
                 if host.len() != shape.iter().product::<usize>() {

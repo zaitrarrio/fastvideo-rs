@@ -45,13 +45,10 @@ use crate::{FalApp, FalConfig};
 // ---------------------------------------------------------------- views
 
 /// The app id a job was submitted under (`request_echo.model` is the full
-/// endpoint id, e.g. `minimax/h3-max/text-to-video`).
+/// endpoint id, e.g. `minimax/h3-max/text-to-video` or
+/// `lightricks/ltx-2.5/text-to-video/fast`).
 pub fn app_of(job: &Job) -> &str {
-    let m = job.requested_model();
-    match m.rsplit_once('/') {
-        Some((app, sub)) if Endpoint::from_sub(sub).is_some() => app,
-        _ => m,
-    }
+    crate::schema::app_id(job.requested_model())
 }
 
 /// `(response_url, status_url, cancel_url)`: app-only, no `/response`
@@ -153,14 +150,47 @@ pub fn output_json(job: &Job, cx: &ViewCtx, url_ttl: Duration) -> Option<Value> 
             file_size: Some(a.bytes),
         },
         expanded_prompt: None,
-        seed: (job.resolved.task == fastvideo_protocol::Task::Ref2V).then_some(job.resolved.seed),
-        timings: job.metrics.inference_s.map(|s| {
-            let mut m = serde_json::Map::new();
-            m.insert("inference".into(), s.into());
-            m
-        }),
+        // The effective seed (the request's, or the one the server drew),
+        // on every task: fal's r2v schema requires it, and on t2v/i2v it
+        // is an extra key clients ignore but callers need to reproduce a
+        // clip.
+        seed: Some(job.resolved.seed),
+        timings: timings(job),
     };
     serde_json::to_value(out).ok()
+}
+
+/// The output `timings` (fal: `object<string, number>`, "'inference' is the
+/// DiT denoising time"). `inference` keeps fal's meaning (denoise only);
+/// the other keys are our breakdown, all in seconds:
+///
+/// - one key per engine stage, named as in `X-Stage-Durations` (H3:
+///   `text`, `refine`, `denoise`, `audio_decode`, `video_decode`, `encode`;
+///   `text` includes the I2V multimodal text encoder);
+/// - `queue`: submit to start; `total`: start to completion (the whole
+///   engine run, so `total - inference` is the time outside the denoise).
+///
+/// `None` when nothing was measured (fal: "Null on routes that do not
+/// report backend timings").
+pub fn timings(job: &Job) -> Option<serde_json::Map<String, Value>> {
+    let mut m = serde_json::Map::new();
+    let secs = |d: time::Duration| Value::from(d.as_seconds_f64().max(0.0));
+    if let Some(s) = job.metrics.inference_s {
+        m.insert("inference".into(), s.into());
+    }
+    for (stage, s) in &job.metrics.stage_durations {
+        m.entry(stage.clone()).or_insert_with(|| (*s).into());
+    }
+    if m.is_empty() {
+        return None;
+    }
+    if let Some(start) = job.started_at {
+        m.entry("queue").or_insert_with(|| secs(start - job.created_at));
+        if let Some(end) = job.completed_at {
+            m.entry("total").or_insert_with(|| secs(end - start));
+        }
+    }
+    Some(m)
 }
 
 /// Headers that carry our tier/recipe metadata (design §0.3, §0.6: the fal
@@ -275,7 +305,7 @@ impl FalEndpoint {
 impl SubmitEndpoint for FalEndpoint {
     type Body = Value;
     fn normalize(&self, body: Value, cx: &NormalizeCtx) -> Result<GenerationRequest, ApiError> {
-        FalInput::parse(self.endpoint, &body)?.normalize(&self.app.model, cx)
+        FalInput::parse_for(self.app.kind(), self.endpoint, &body)?.normalize(&self.app.target(self.endpoint).0, cx)
     }
     /// HTTP 200 `{request_id, response_url, status_url, cancel_url,
     /// queue_position}` with app-only URLs (design §4.4), plus
@@ -308,18 +338,27 @@ async fn queued_for(ctx: &ServeCtx, app: &str) -> usize {
     ctx.jobs().list(q).await.items.iter().filter(|j| app_of(j) == app).count()
 }
 
-/// Resolves the app's model: its name through the engine's aliases and
-/// served names, else its tier (design §0.3).
-pub(crate) fn resolve_app_model(ctx: &ServeCtx, app: &FalApp) -> Result<String, ApiError> {
+/// Resolves an endpoint's model: its name (the app's model, or the LTX /
+/// Wan endpoint's tier alias) through the engine's aliases and served
+/// names, else its tier (design §0.3).
+pub(crate) fn resolve_app_model(ctx: &ServeCtx, app: &FalApp, endpoint: Endpoint) -> Result<String, ApiError> {
+    let (name, tier) = app.target(endpoint);
     let models = ctx.engine().models();
     let engine = ctx.engine().clone();
-    let by_name = fastvideo_protocol::resolve_model(&app.model, |n| engine.alias(n), &models).map(|c| c.id.0.clone());
+    let by_name = fastvideo_protocol::resolve_model(&name, |n| engine.alias(n), &models).map(|c| c.id.0.clone());
     by_name
-        .or_else(|e| match app.tier {
+        .or_else(|e| match tier {
             Some((family, tier)) => fastvideo_protocol::resolve_tier(family, tier, &models).map(|c| c.id.0.clone()),
             None => Err(e),
         })
-        .map_err(|_| ApiError::not_found(format!("Application \"{}\" not found", app.id)))
+        .map_err(|_| match endpoint.target() {
+            Some(_) => ApiError::not_found(format!(
+                "Application \"{}/{}\" not found (no `{name}` model is served here)",
+                app.id,
+                endpoint.sub()
+            )),
+            None => ApiError::not_found(format!("Application \"{}\" not found", app.id)),
+        })
 }
 
 /// Auth, validation, normalization, queue limit, then serve-kit's submit
@@ -361,8 +400,10 @@ pub(crate) async fn submit_job(
         }
     }
     crate::storage::rewrite_own_uploads(ctx, &mut req);
-    req.model = resolve_app_model(ctx, &ep.app)?;
-    if echo.get("resolution").is_none() {
+    req.model = resolve_app_model(ctx, &ep.app, ep.endpoint)?;
+    // The H3 schema's omitted `resolution` (768P) follows the model's tiers;
+    // the LTX and Wan schemas have their own defaults.
+    if echo.get("resolution").is_none() && ep.endpoint.target().is_none() {
         if let Some(caps) = ctx.engine().models().into_iter().find(|m| m.id.0 == req.model) {
             crate::schema::default_resolution_for(&mut req, &caps.canvas.short_edges);
         }
@@ -510,7 +551,7 @@ pub(crate) fn app_routes(
 ) -> axum::Router<ServeCtx> {
     use axum::routing::{get, post, put};
     let body_max = cfg.body_max;
-    for endpoint in Endpoint::ALL {
+    for &endpoint in app.endpoints() {
         let ep = Arc::new(FalEndpoint { app: app.clone(), endpoint });
         let path = format!("/{}", ep.endpoint_id());
         let (c, e) = (cfg.clone(), ep.clone());
@@ -524,7 +565,7 @@ pub(crate) fn app_routes(
     }
     let app_id: Arc<str> = Arc::from(app.id.as_str());
     let prefixes: Vec<String> = std::iter::once(format!("/{}", app.id))
-        .chain(Endpoint::ALL.iter().map(|e| format!("/{}/{}", app.id, e.sub())))
+        .chain(app.endpoints().iter().map(|e| format!("/{}/{}", app.id, e.sub())))
         .collect();
     for prefix in prefixes {
         let mk = |op: Op| {

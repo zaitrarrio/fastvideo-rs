@@ -173,6 +173,12 @@ pub enum Stage {
         /// Canvas width in pixels (default 1344).
         #[arg(long)]
         width: Option<usize>,
+        /// Test only: skip the 768 x 1344 pixel cap (`check_canvas`) so an
+        /// above-training canvas (1920x1088, 1088x1920) can be measured. The
+        /// sides must still be multiples of 32 and the aspect 1:4 to 4:1. The
+        /// serving path keeps the cap (docs/serve/h3-1080p-and-upscaler.md).
+        #[arg(long)]
+        oversize_canvas: bool,
         /// Refiner and DiT block residency: `auto` (resident when the free
         /// memory covers the planned need, else streamed), `resident`, or
         /// `streamed` (blocks copied from pinned host memory one ahead of the
@@ -253,6 +259,14 @@ pub enum Stage {
         /// read `fastvideo_inference.json` or 8-step.
         #[arg(long)]
         h3_recipe: Option<String>,
+        /// Ordered Ref2VA reference (repeatable; image / video / audio from
+        /// the extension). Any `--ref` loads `transformer_ref/` (Ref2VA).
+        #[arg(long = "ref")]
+        references: Vec<PathBuf>,
+        /// Root holding `transformer_ref/` and the Ref2VA turbo adapter when
+        /// it is not `--weights` (e.g. `$W/h3-ref2va`).
+        #[arg(long)]
+        ref_root: Option<PathBuf>,
         #[arg(long, default_value = "cuda")]
         device: String,
     },
@@ -398,6 +412,7 @@ pub fn run(report: &mut Report, stage: &Stage) -> StageResult<()> {
             num_frames,
             height,
             width,
+            oversize_canvas,
             dit_offload,
             device_budget_gib,
             seed,
@@ -415,6 +430,8 @@ pub fn run(report: &mut Report, stage: &Stage) -> StageResult<()> {
             warm,
             taeh3_weights,
             h3_recipe,
+            references,
+            ref_root,
             device,
         } => {
             let text_cache = if *no_text_cache {
@@ -438,7 +455,8 @@ pub fn run(report: &mut Report, stage: &Stage) -> StageResult<()> {
                 .map_err(|e| anyhow::anyhow!(e))?,
                 taeh3: taeh3_weights.clone(),
                 recipe: h3_recipe.clone(),
-                ref2va: false,
+                ref2va: !references.is_empty(),
+                ref_root: ref_root.clone(),
                 adapter: None,
                 reference_image_resize: Default::default(),
                 dit_offload: dit_offload
@@ -453,6 +471,7 @@ pub fn run(report: &mut Report, stage: &Stage) -> StageResult<()> {
                 num_frames: *num_frames,
                 height: *height,
                 width: *width,
+                oversize: *oversize_canvas,
             };
             let (set, multi) = match prompts {
                 Some(file) => (crate::benchmark::load_prompts(file, *seed)?, true),
@@ -475,6 +494,7 @@ pub fn run(report: &mut Report, stage: &Stage) -> StageResult<()> {
                 clip_dir,
                 arms,
                 options,
+                references,
                 *warm,
                 *compare_text_encoders,
                 device,
@@ -1498,6 +1518,9 @@ pub struct GenCanvas {
     pub num_frames: Option<usize>,
     pub height: Option<usize>,
     pub width: Option<usize>,
+    /// `h3 gen --oversize-canvas`: [`H3Geometry::new`] instead of
+    /// [`H3Geometry::checked`] (no pixel cap; test path only).
+    pub oversize: bool,
 }
 
 impl GenCanvas {
@@ -1516,6 +1539,33 @@ impl GenCanvas {
         }
         if self.height.is_some() != self.width.is_some() {
             anyhow::bail!("h3 gen: pass --height and --width together");
+        }
+        if self.oversize {
+            let (height, width) = (
+                self.height.unwrap_or(default.height),
+                self.width.unwrap_or(default.width),
+            );
+            let ratio = width as f64 / height as f64;
+            if !(0.25..=4.0).contains(&ratio) {
+                anyhow::bail!("h3 gen: aspect {height}x{width} outside 1:4..4:1");
+            }
+            let g = fastvideo_models::h3::config::H3Geometry::new(
+                height,
+                width,
+                self.num_frames.unwrap_or(default.num_frames),
+            )
+            .map_err(|e| anyhow::anyhow!(e))?;
+            let mut r = default;
+            (r.height, r.width, r.num_frames) = (g.height, g.width, g.num_frames);
+            eprintln!(
+                "h3 gen: --oversize-canvas {}x{} ({} px, {:.2}x the trained cap)",
+                g.width,
+                g.height,
+                g.width * g.height,
+                (g.width * g.height) as f64
+                    / fastvideo_models::h3::config::H3_MAX_PIXELS as f64
+            );
+            return Ok(r);
         }
         H3Request::sized(
             prompt,
@@ -1539,6 +1589,7 @@ fn gen(
     clip_dir: &Path,
     arms: &[String],
     options: fastvideo_cudarc::h3::pipeline::H3PipelineOptions,
+    references: &[PathBuf],
     warm: bool,
     compare_text_encoders: bool,
     device: &str,
@@ -1557,8 +1608,16 @@ fn gen(
     );
     let seconds = canvas.seconds;
     let (prompt, seed) = (prompts[0].prompt.as_str(), prompts[0].seed);
+    let refs: Vec<fastvideo_models::h3::reference::H3ReferenceSpec> = references
+        .iter()
+        .map(|path| fastvideo_models::h3::reference::H3ReferenceSpec {
+            kind: fastvideo_models::h3::reference::infer_reference_kind(path),
+            path: path.clone(),
+        })
+        .collect();
     let mut request = canvas.request(prompt, seed)?;
     request.mp4 = mp4;
+    request.references = refs.clone();
     {
         use fastvideo_models::h3::memory::{plan, H3PlanOptions};
         let g = fastvideo_models::h3::config::H3Geometry::new(
@@ -1758,6 +1817,7 @@ fn gen(
     let mut docs: Vec<(crate::benchmark::PromptSpec, serde_json::Value)> = Vec::new();
     for (index, spec) in prompts.iter().enumerate() {
         let mut request = canvas.request(&spec.prompt, spec.seed)?;
+        request.references = refs.clone();
         request.mp4 = mp4;
         let clip_dir_owned = if multi {
             clip_dir.join(&spec.name)

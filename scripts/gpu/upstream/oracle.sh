@@ -9,6 +9,8 @@
 #   UP_STEPS="... oracle:fasth3-8step,ltx25-512p"   a subset
 #
 # Targets: wan22-ti2v (Wan 2.2 TI2V-5B modules through Diffusers, oracle_wan22.py),
+# fastwan22-ti2v (the same modules with the FastWan2.2 TI2V-5B FullAttn weights,
+# DiT at the DMD timestep 757),
 # fasth3-8step (FastVideo FastH3 8-step V2, 768x1344x124),
 # fasth3-4step-vsa (MiniMax-H3 + Preview v1 vsa-datafree LoRA), the dense
 # controls fasth3-8step-vsa0 (the 8-step checkpoint at VSA sparsity 0) and
@@ -16,7 +18,9 @@
 # sol-engine LTX-2.5 distilled two-stage: ltx25-512p / ltx25-4k with Sol
 # stage 2, ltx25-512p-dense / ltx25-4k-dense with dense stage 2, ltx25-i2v /
 # ltx25-kf (512p dense, first-frame / first+last image conditioning); sfwan13
-# (FastVideo SF-Wan 1.3B causal DMD, 480x832x81, bench_fastwan.py).
+# (FastVideo SF-Wan 1.3B causal DMD, 480x832x81, bench_fastwan.py);
+# h3-ref2va-4step (FastVideo MiniMaxH3Ref2VAModularPipeline on transformer_ref,
+# one image reference, dense, 4 forwards on the uniform grid; ours: `base-4step`).
 # FastVideo runs its strict eager route (--profile strict
 # --no-inference-torch-compile): no report-only fusions, no compiled blocks
 # for the hooks to break. FASTVIDEO_DUMP_OPS (default 0,1,24,47) picks the
@@ -93,6 +97,14 @@ oracle_wan22() {
     --model "$W/wan22-ti2v-5b" --image "$HERE/../fixtures/ti2v-beach-832x480.jpg"
 }
 
+# FastWan2.2 TI2V-5B FullAttn (FastVideo/FastWan2.2-TI2V-5B-FullAttn-Diffusers):
+# the TI2V-5B network DMD-distilled, so the same Diffusers modules; the DiT
+# forwards at the middle DMD timestep (1000/757/522). Weights: both volumes.
+oracle_fastwan22() {
+  oracle_cell fastwan22-ti2v env PYTHONUNBUFFERED=1 "$UP/fastvideo/bin/python" "$HERE/oracle_wan22.py" \
+    --model "$W/fastwan22-ti2v-5b" --image "$HERE/../fixtures/ti2v-beach-832x480.jpg" --timestep 757
+}
+
 # FastVideo SF-Wan 1.3B (WanCausalDMDPipeline at its defaults), one request,
 # no warm-up: the hooks dump the first denoise (oracle_dump.py _patch_sf_*).
 oracle_sfwan() {
@@ -101,10 +113,33 @@ oracle_sfwan() {
     --repeats 1 --no-warmup --prompt "$PROMPT_OURS" --seed "$SEED_OURS" --attention FLASH_ATTN
 }
 
+# The Ref2VA reference prompt and image, shared with runpod-matrix.sh's
+# `oracle` family (target h3-ref2va-*).
+REF2VA_PROMPT="${FV_REF2VA_PROMPT:-The camera glides slowly forward along the shoreline of the beach in <Picture 1>, turquoise waves rolling in and breaking into white foam, bright sunny day, the sound of the surf and a light wind.}"
+REF2VA_IMAGE="$HERE/../fixtures/ti2v-beach-832x480.jpg"
+
+# MiniMax-H3 Ref2VA (docs/ports/h3-ref2v.md): the diffusers view of h3-base
+# (weights_h3_diffusers) plus transformer_ref linked from the h3-ref2va tree
+# (same LFS objects at every revision since bfc8ed0). Base engine config
+# (text encoder and VAEs offloaded), FLASH_ATTN, `--steps <forwards+1>`.
+oracle_ref2va() {
+  local name="$1" forwards="$2" root="$UW/MiniMax-H3"
+  [[ -f "$root/model_index.json" && -d "$root/transformer" ]] || weights_h3_diffusers || return 1
+  [[ -e "$root/transformer_ref" ]] || ln -s "$W/h3-ref2va/transformer_ref" "$root/transformer_ref"
+  oracle_cell "$name" env PYTHONUNBUFFERED=1 "$UP/fastvideo/bin/python" "$HERE/oracle_fastvideo.py" \
+    --fastvideo-src "$SRC/FastVideo" --recipe ref2va --reference "$REF2VA_IMAGE" \
+    --out "$OUT/oracle-$name" --repeats 1 -- \
+    --model-path "$root" --prompt "$REF2VA_PROMPT" --seed "$SEED_OURS" --num-gpus 1 \
+    --vsa-kernel triton --no-fa4 --no-warmup --profile strict --no-inference-torch-compile --no-compile-vae \
+    --steps "$((forwards + 1))" --height 768 --width 1344 --num-frames 124
+}
+
 run_oracle() {
+  oracle_ref2va h3-ref2va-4step 4
   oracle_sfwan
   local f8="$UW/FastVideo-FastH3-8-Step-V2" lora="$W/FastH3-4-step-Preview-v1-LoRA"
   oracle_wan22
+  oracle_fastwan22
   local g768=(--height 768 --width 1344 --num-frames 124)
   oracle_fv fasth3-8step 8step --model-path "$f8" "${g768[@]}"
   oracle_fv fasth3-4step-vsa lora --model-path "$UW/MiniMax-H3" \

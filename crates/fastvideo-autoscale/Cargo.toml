@@ -1,0 +1,49 @@
+[package]
+name = "fastvideo-autoscale"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "fv-serve gateway autoscaler: a pure scaling policy per GPU worker pool, Runpod serverless/pod providers, a leader-elected controller and a traffic simulator."
+
+[dependencies]
+async-trait.workspace = true
+axum.workspace = true
+metrics.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tokio = { workspace = true, features = ["sync", "time", "rt", "macros"] }
+toml.workspace = true
+tracing.workspace = true
+
+# Runpod REST/GraphQL providers and the `fv-autoscale` binary (feature `runpod`).
+reqwest = { workspace = true, optional = true }
+tracing-subscriber = { workspace = true, optional = true }
+# D1 client for the leader lease row (fastvideo-serve-kit::d1).
+fastvideo-serve-kit.workspace = true
+
+[dev-dependencies]
+fastvideo-serve-kit = { workspace = true, features = ["d1-mock"] }
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "test-util"] }
+tower = { workspace = true, features = ["util"] }
+
+[features]
+default = []
+# Runpod REST v1 / GraphQL / queue-health clients over reqwest, the
+# gateway pools poller, and the standalone `fv-autoscale` binary.
+runpod = ["dep:reqwest", "dep:tracing-subscriber", "tokio/net", "tokio/rt-multi-thread", "tokio/signal"]
+# The D1 lease over HTTPS (the D1 client's reqwest transport).
+d1-http = ["fastvideo-serve-kit/fetch"]
+
+[[bin]]
+name = "fv-autoscale-sim"
+path = "src/bin/sim.rs"
+
+[[bin]]
+name = "fv-autoscale"
+path = "src/bin/autoscale.rs"
+required-features = ["runpod"]
+
+[lints]
+workspace = true

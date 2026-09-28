@@ -38,6 +38,13 @@ Names:
   `{video,audio}_{vel,x0}_stepNN`, `{video,audio}_stepNN`; `s2_upsampled` and
   `s2_entry_{video,audio}` (our stage-2 entry before the reference's is
   injected; `FASTVIDEO_INJECT_STAGE2=0` keeps ours).
+* H3 Ref2VA (FastVideo `MiniMaxH3Ref2VAModularPipeline` on `transformer_ref`,
+  target `h3-ref2va-<N>step`; ours `h3 gen --h3-recipe base-<N>step --ref <image>
+  --ref-root $W/h3-ref2va`): the H3 names above. `video_step00_in` is the
+  reference's `[condition | target]` rows; only the target part is injected
+  (`FASTVIDEO_INJECT_COND=1` also takes the condition rows), so
+  `step00_packed_in` compares our reference-image encode. Results:
+  docs/ports/h3-ref2v.md §8.
 * SF-Wan 1.3B (FastVideo `WanCausalDMDPipeline`, target `sfwan13`):
   `sf_latents_in`, `text_hidden`, `sf_noise_<k>` (injected), per causal block
   `c` and step `i` `sf_c<c>_s<i>_{flow,x0}`, `sf_c<c>_out`, `sf_latents_out`,
