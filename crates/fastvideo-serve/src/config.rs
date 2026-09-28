@@ -700,6 +700,8 @@ pub struct Config {
     pub webhook_key: Secret,
     pub gateway: GatewayCfg,
     pub pools: Vec<PoolCfg>,
+    /// The gateway's autoscaler (docs/serve/gateway.md §8; configs/serve/autoscale.toml).
+    pub autoscale: fastvideo_autoscale::AutoscaleConfig,
 }
 
 /// Why a config was refused.

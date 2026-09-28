@@ -20,6 +20,8 @@ fastvideo-media.workspace = true
 fastvideo-webrtc.workspace = true
 fastvideo-serve-kit.workspace = true
 fastvideo-deploy.workspace = true
+# `[autoscale]` in gateway mode (docs/serve/gateway.md §8).
+fastvideo-autoscale.workspace = true
 anyhow.workspace = true
 async-trait.workspace = true
 axum.workspace = true
@@ -69,7 +71,7 @@ webrtc = ["fastvideo-webrtc/str0m", "fastvideo-media/opus", "fastvideo-fal?/dire
 encoders = ["fastvideo-media/openh264", "fastvideo-media/opus", "fastvideo-fal?/openh264"]
 # Outbound HTTP: ingestion fetch, callbacks, webhooks, S3/R2 uploads, the
 # Cloudflare D1 job store, WHIP, Runpod worker.
-http-client = ["dep:reqwest", "fastvideo-serve-kit/fetch", "fastvideo-webrtc/whip", "fastvideo-deploy/runpod"]
+http-client = ["dep:reqwest", "fastvideo-serve-kit/fetch", "fastvideo-webrtc/whip", "fastvideo-deploy/runpod", "fastvideo-autoscale/runpod"]
 # Adapter mount points (design §9, src/adapters.rs); on by default once the
 # adapter is on main. `reactor` brings the str0m host (it answers offers).
 openai-videos = ["dep:fastvideo-openai-videos"]

@@ -98,5 +98,4 @@ for clip in talking-head spark-mountain-lake ltx-frogyoga; do
 done
 upscale seedvr2-3b-1536 seedvr2_ema_3b_fp16.safetensors 1536 spark-mountain-lake "${common[@]}" \
   --vae_encode_tiled --vae_decode_tiled
-upscale seedvr2-7b-1088 seedvr2_ema_7b_fp16.safetensors 1088 spark-mountain-lake "${common[@]}"
 log "done"

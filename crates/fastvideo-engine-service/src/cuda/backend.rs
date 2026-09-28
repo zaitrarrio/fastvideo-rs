@@ -314,6 +314,10 @@ impl CudaBackend {
             ("i2v", job(Task::I2V, vec![(Anchor::First, image.clone())])),
             ("t2v", job(Task::T2V, Vec::new())),
         ] {
+            // A Ref2VA-only model takes neither; it skips the warmup.
+            if !caps.supports(j.task) {
+                continue;
+            }
             let t = std::time::Instant::now();
             let ctl = StepControl::detached(
                 crate::cancel::CancelToken::new(),

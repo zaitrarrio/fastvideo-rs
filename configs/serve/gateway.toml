@@ -143,3 +143,11 @@ retries = 0
 id = "sfwan21-1.3b"
 family = "wan"
 recipe = "sfwan21-1.3b"
+
+# ---- BEGIN [autoscale] (crates/fastvideo-autoscale; docs/serve/gateway.md §8) ----
+# Off here. The full example (per-pool SLOs, budgets, prices, schedules, the
+# pod pool) is configs/serve/autoscale.toml: replace this block with its
+# tables to turn the autoscaler on (dry run first).
+[autoscale]
+enabled = false
+# ---- END [autoscale] ----

@@ -306,3 +306,230 @@ pub trait PoolScaler: Send + Sync + 'static {
   SIGTERM) so no new work is dispatched to it.
 - D1 tables (gateway-owned, read-only for the autoscaler): `gw_dispatch`,
   `gw_sessions`, `gw_workers` (schema in `gateway/schema.rs`).
+
+<!-- BEGIN §8 Autoscaling: owned by crates/fastvideo-autoscale -->
+
+## 8. Autoscaling (`crates/fastvideo-autoscale`)
+
+One controller steers every pool from the §7 metrics. It runs inside the
+gateway process (`[autoscale]`, in-process `PoolScaler`) or as its own
+process (`fv-autoscale`, feature `runpod`), and only the holder of a D1
+lease row acts, so several gateway replicas do not fight.
+
+### 8.1 Pieces
+
+| Module | Role |
+|---|---|
+| `policy` | Pure and deterministic: time, signals, observation and balance in; one decision per pool out. Unit-tested on a simulated clock. |
+| `provider::runpod` | `RunpodServerless` (primary path: Runpod scales, we steer the endpoint), `RunpodPods` (pods from a template), `RunpodBalance`, `RunpodHealthSignals` (signals from `/health`, no gateway), `HttpGatewayPools` (`GET /fv/v1/gateway/pools`), `GatewayWorkers` (per-pod load from `gw_workers`). |
+| `sim` | The simulated world and provider, traces, and the harness behind `fv-autoscale-sim`. |
+| `gateway` | Mirror of §7 `PoolMetrics` (same JSON) and `GatewaySignals`, the sink `PoolScaler::observe` feeds. |
+| `controller`, `lease`, `admin` | The loop, the D1 lease (`fv_autoscale_lease`, one conditional upsert), and `/fv/v1/admin/autoscale`. |
+
+Gateway wiring (`crates/fastvideo-serve/src/autoscale.rs`, feature
+`http-client`): with `[autoscale] enabled` in gateway mode, `App::build`
+registers a `PoolScaler` that turns each tick's `PoolMetrics` into
+`GatewaySignals`, fills an empty `serverless.endpoint_id` from the matching
+`[[pools]]` entry (every autoscale pool must name a gateway pool), uses the
+gateway's D1 connection for the lease and for `gw_workers`, the Runpod key
+of `gateway.runpod_api_key`, and merges `/fv/v1/admin/autoscale` behind the
+admin token. `fv-autoscale` runs the same controller outside the gateway
+(signals from `GET /fv/v1/gateway/pools`, or from Runpod `/health`).
+
+### 8.2 Policy (per pool, every `interval_s`)
+
+1. **Demand** in workers: the larger of
+   - the **queue need**: busy workers plus what starts every queued job
+     within the SLO once capacity is ready (a busy worker takes
+     `floor(SLO/D)` more jobs, any other `floor(SLO/D)+1`, `D` = recent job
+     duration, EWMA of the gateway's `run_time.mean_s`);
+   - the **steady state** `λ·D / (0.8 · jobs_per_worker)` plus streams
+     (`λ` measured over at least 60 s, so a burst counts as queue).
+2. **Cold-start prediction**: the queue when a worker started now is
+   ready is `Q + max(λ − μ, dQ/dt) · cold_start` (cold start: configured,
+   then the EWMA of measured starts). If that queue would miss the SLO, the
+   demand covers it now.
+3. **Queue-age breach**: the oldest job waited more than
+   `slo_breach_fraction · SLO` and no idle or booting worker will take it →
+   one more worker, cooldown bypassed.
+4. **Floors and caps**: `max(min_workers, warm_min, schedule)` up to
+   `min(max_workers, pool budget / price)`; never below the busy workers.
+5. **Steps**: rate- and prediction-driven growth by at most
+   `scale_up_step` per `scale_up_cooldown_s`; queued jobs and floors are met
+   at once. Scale-down only after the work in hand fits one worker fewer
+   and the steady demand leaves `hysteresis` headroom for `idle_timeout_s`,
+   then one step per `scale_down_cooldown_s`.
+6. **Budgets**: global `$/hr` across pools (busy workers first, then floors,
+   then the rest by `priority` and queue urgency). **Balance floor** ($8):
+   below it the controller is in hard stop: serverless `workersMin = 0`,
+   `workersMax = busy`; pods: idle ones drained, booting ones deleted, no
+   new ones. An unknown balance blocks scale-ups.
+7. **Actions**:
+   - serverless: `workersMin = target`, `workersMax = cap` (never below the
+     busy workers), plus the pool's `scalerType`/`scalerValue`/`idleTimeout`,
+     PATCHed only when different. Runpod starts and reaps the workers: min
+     raised ahead of load, max capped by budget, min back to 0 when idle.
+     Recommended scaler: `QUEUE_DELAY` at SLO/2, so Runpod's own scaler is a
+     backstop and does not start a worker per short job;
+   - pods: `create` (GPU-type list × region+volume placements, e.g. US-CA-2
+     with `s2k01690bi`, then EUR-IS-1 with `jg48s6o1w0`; out of stock →
+     next; no `allowedCudaVersions` filter; a pod above 1.25 × the price table
+     is deleted at once), `drain` (idle ready workers, oldest first), `delete`
+     (draining with zero in-flight, re-checked right before `DELETE`;
+     booting past `boot_timeout_s`), `undrain` (instead of a new pod). Pods
+     past `max_lifetime_s` are replaced first and drained when the
+     replacement is ready. A worker holding a job or a live stream is never
+     deleted.
+
+### 8.3 Configuration
+
+`configs/serve/autoscale.toml` holds the full example; `gateway.toml` ends
+with a delimited `[autoscale] enabled = false` block to replace with its
+tables (or pass the file to `fv-autoscale --config`). Pool names are the §2
+`[[pools]] id`s (`h3-turbo`, `wan`, `ltx`, `sfwan-live` in the example);
+`kind = "runpod-serverless"` is accepted as `serverless`. Start with
+`dry_run = true`, read the decisions in the log and on the admin route, then
+`POST /fv/v1/admin/autoscale {"dry_run": false}`.
+
+| Key | Default | |
+|---|---|---|
+| `enabled`, `dry_run` | false, true | dry run decides and logs, never writes |
+| `interval_s` | 15 | tick |
+| `budget_usd_per_hr` | 0 (none) | global cap |
+| `balance_floor_usd` | 8 | hard stop |
+| `prices` | table as of 2026-09-28 | pods: secure price; `serverless:<gpu>`: flex price |
+| `lease` | memory | `d1` for replicas (`ttl_s` 60) |
+| pool `min_workers` / `max_workers` / `warm_min` | 0 / 2 / 0 | |
+| pool `schedule` | [] | `{days, start_hour, end_hour, min_workers}`, clock `schedule_utc_offset_min` |
+| pool `jobs_per_worker`, `streams_per_worker` | 1, 1 | one batch job / live stream per GPU |
+| pool `slo_queue_wait_s`, `slo_breach_fraction` | 60, 0.5 | |
+| pool `scale_up_step`, `scale_up_cooldown_s` | 2, 30 | |
+| pool `idle_timeout_s`, `scale_down_cooldown_s`, `scale_down_step`, `hysteresis` | 300, 120, 1, 0.2 | |
+| pool `cold_start_s`, `default_job_s` | 130, 30 | until measured |
+| pool `budget_usd_per_hr`, `price_usd_per_hr`, `priority` | 0, table, 0 | |
+| `serverless` | | `endpoint_id`, `gpu_type`, `scaler_type`, `scaler_value`, `idle_timeout_s` |
+| `pod` | | `template_id`, `gpu_types`, `placements`, `cloud_type`, `max_lifetime_s` (12 h), `boot_timeout_s` (1200), `url_template`, `ready_path`, `max_usd_per_hr` |
+
+### 8.4 Observability
+
+- Log line `autoscale decision` per change (pool, action, current, target,
+  busy, demand, floor, cap, endpoint min/max, create/drain/delete,
+  leader, dry run, reasons such as `queue: 4 queued, oldest 12s`,
+  `predictive: queue 9.0 in 120s cold start`, `pool budget $9.00/h caps 2`).
+- `GET /fv/v1/admin/autoscale` (admin token): config summary, leader,
+  balance, the last tick (decision + observation + apply report per pool),
+  per-pool estimates, the last `history` decisions. `POST` with
+  `{"dry_run": false}` switches dry run off (`{"tick": true}` runs a tick).
+- `/metrics`: `fv_autoscale_{target,demand,busy,floor,cap}_workers{pool}`,
+  `fv_autoscale_workers{pool,state}`, `fv_autoscale_target_usd_per_hour{pool}`,
+  `fv_autoscale_queued{pool}`, `fv_autoscale_oldest_queued_seconds{pool}`,
+  `fv_autoscale_decisions_total{pool,action}`,
+  `fv_autoscale_apply_errors_total{pool}`, `fv_autoscale_leader`,
+  `fv_autoscale_dry_run`, `fv_autoscale_balance_usd`.
+
+### 8.5 Requests to the gateway
+
+- **Drain a pod**: §7 says a pod leaving should be `draining` first, and
+  `gw_workers` is read-only for the autoscaler. `GatewayWorkers::drain`
+  calls `POST {worker}/fv/v1/internal/drain` (internal token) best effort;
+  the worker should set its `gw_workers` row to `draining` and keep it so
+  (and `…/undrain`). Until then deletion relies on zero in-flight work
+  (`running + sessions`) read right before `DELETE`.
+- **Arrivals**: `PoolMetrics` has no arrival counter; the rate is estimated
+  as `run_time.count / window_s` plus the growth of queued + running. A
+  monotonic `submitted_total` per pool would make it exact.
+
+### 8.6 Simulation
+
+`cargo run -p fastvideo-autoscale --bin fv-autoscale-sim` (5 seeds pooled;
+`--timeline <trace> <family>` prints one run per minute). Per-family
+timings from the WP-18/19 runs: wan cold start 49 + 70 s, job 6.4 s; h3
+80 + 52 s, job 24.4 s (+45 s on a worker's first job); ltx 79 + 33 s, job
+40 s (+15 s first); 10 % of cold starts land on a host without the image
+(458 s start). Serverless H100 at $4.18/h, max 4 workers. Average load per
+family (assumption; the business plan's shape): wan 120, h3 60, ltx 40
+jobs/h; *diurnal* peaks at 14:00 with the busiest hour 2.5× the daily
+average; *spike* is 10× for 10 min; *idle→burst* is 20 jobs in 2 min after
+2 h idle. Strategies: **autoscaler** (the pools of
+`sim::harness::pool_for`: SLO 60 s wan / 120 s h3, ltx; Runpod scaler
+`QUEUE_DELAY` at SLO/2, idle 60 s; diurnal adds a 10:00-19:00 floor of 1),
+**runpod-only** (the endpoint at min 0 / max 4 with Runpod's console
+defaults, `QUEUE_DELAY` 4 s, idle 5 s), **always-on N** (min = max = N).
+
+| trace | family | strategy | jobs/run | wait p50 s | wait p95 s | ≤ SLO | GPU-h/run | $/run | cold starts/run (uncached) | max workers |
+|---|---|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| steady | wan | autoscaler | 713 | 0 | 7 | 99% (SLO 60s) | 6.40 | 26.74 | 4.0 (0.4) | 4 |
+| steady | wan | runpod-only | 713 | 59 | 132 | 51% (SLO 60s) | 14.69 | 61.40 | 296.4 (26.6) | 4 |
+| diurnal 2.5x | wan | autoscaler | 2905 | 0 | 13 | 100% (SLO 60s) | 20.80 | 86.94 | 13.6 (1.4) | 3 |
+| diurnal 2.5x | wan | runpod-only | 2905 | 61 | 131 | 50% (SLO 60s) | 44.09 | 184.30 | 839.2 (81.6) | 4 |
+| spike 10x/10min | wan | autoscaler | 641 | 0 | 67 | 94% (SLO 60s) | 5.23 | 21.86 | 7.0 (0.4) | 4 |
+| spike 10x/10min | wan | runpod-only | 641 | 50 | 131 | 57% (SLO 60s) | 10.11 | 42.26 | 195.2 (19.0) | 4 |
+| idle→burst 20 | wan | autoscaler | 20 | 115 | 138 | 0% (SLO 60s) | 0.72 | 2.99 | 4.0 (0.4) | 4 |
+| idle→burst 20 | wan | runpod-only | 20 | 97 | 124 | 18% (SLO 60s) | 0.22 | 0.93 | 4.0 (0.4) | 4 |
+| steady | h3 | autoscaler | 349 | 0 | 43 | 99% (SLO 120s) | 7.57 | 31.64 | 9.6 (0.4) | 4 |
+| steady | h3 | runpod-only | 349 | 91 | 183 | 61% (SLO 120s) | 13.21 | 55.23 | 187.4 (17.4) | 4 |
+| steady | h3 | always-on 2 | 349 | 0 | 4 | 100% (SLO 120s) | 12.00 | 50.18 | 2.0 (0.2) | 2 |
+| diurnal 2.5x | h3 | autoscaler | 1469 | 0 | 26 | 99% (SLO 120s) | 29.75 | 124.36 | 27.4 (2.6) | 4 |
+| diurnal 2.5x | h3 | runpod-only | 1469 | 72 | 169 | 68% (SLO 120s) | 40.82 | 170.65 | 517.0 (50.2) | 4 |
+| diurnal 2.5x | h3 | always-on 2 | 1469 | 0 | 18 | 100% (SLO 120s) | 48.00 | 200.64 | 2.0 (0.2) | 2 |
+| spike 10x/10min | h3 | autoscaler | 340 | 6 | 248 | 73% (SLO 120s) | 6.68 | 27.93 | 10.6 (1.0) | 4 |
+| spike 10x/10min | h3 | runpod-only | 340 | 112 | 279 | 52% (SLO 120s) | 9.61 | 40.18 | 127.8 (10.6) | 4 |
+| spike 10x/10min | h3 | always-on 2 | 340 | 0 | 570 | 72% (SLO 120s) | 8.01 | 33.47 | 2.0 (0.2) | 2 |
+| idle→burst 20 | h3 | autoscaler | 20 | 214 | 245 | 0% (SLO 120s) | 0.87 | 3.65 | 4.0 (0.4) | 4 |
+| idle→burst 20 | h3 | autoscaler, warm 1 | 20 | 162 | 197 | 21% (SLO 120s) | 3.61 | 15.09 | 4.0 (0.4) | 4 |
+| idle→burst 20 | h3 | runpod-only | 20 | 189 | 222 | 0% (SLO 120s) | 0.38 | 1.58 | 4.0 (0.4) | 4 |
+| idle→burst 20 | h3 | always-on 2 | 20 | 107 | 164 | 61% (SLO 120s) | 6.07 | 25.36 | 2.0 (0.2) | 2 |
+| steady | ltx | autoscaler | 231 | 0 | 59 | 99% (SLO 120s) | 8.68 | 36.28 | 16.2 (1.4) | 4 |
+| steady | ltx | runpod-only | 231 | 98 | 167 | 88% (SLO 120s) | 9.63 | 40.25 | 157.8 (13.6) | 4 |
+| diurnal 2.5x | ltx | autoscaler | 944 | 0 | 48 | 99% (SLO 120s) | 30.64 | 128.09 | 40.8 (3.8) | 4 |
+| diurnal 2.5x | ltx | runpod-only | 944 | 73 | 159 | 88% (SLO 120s) | 32.29 | 134.96 | 470.8 (45.2) | 4 |
+| spike 10x/10min | ltx | autoscaler | 220 | 8 | 244 | 78% (SLO 120s) | 7.05 | 29.48 | 14.2 (1.2) | 4 |
+| spike 10x/10min | ltx | runpod-only | 220 | 116 | 301 | 63% (SLO 120s) | 7.13 | 29.81 | 102.4 (9.4) | 4 |
+| idle→burst 20 | ltx | autoscaler | 20 | 191 | 275 | 2% (SLO 120s) | 0.91 | 3.80 | 4.0 (0.4) | 4 |
+| idle→burst 20 | ltx | runpod-only | 20 | 173 | 257 | 17% (SLO 120s) | 0.41 | 1.71 | 4.0 (0.4) | 4 |
+
+Reading it:
+
+- Steady and diurnal load: the autoscaler meets the SLO for ≥ 99 % of jobs
+  (p95 7-48 s) at 44-95 % of runpod-only's cost, which pays a cold start
+  (and a first-job penalty) per burst of arrivals and misses the SLO for
+  a third to a half of the jobs. Against always-on sized for the peak it
+  saves 25-40 % on h3 at a similar p95.
+- Spike 10× for 10 min: both are capped by `max_workers = 4`; the
+  autoscaler holds the workers it raised instead of dropping them between
+  arrivals, so p50 stays near 0.
+- Idle→burst: every strategy without a warm worker pays the cold start
+  (p50 ≈ cold start + queue); the autoscaler costs more than runpod-only
+  there (it keeps workers for `idle_timeout_s` after the burst). The lever
+  is `warm_min` or a `schedule` floor (`autoscaler, warm 1`: p50 214 → 162 s
+  for $15 over 3 h).
+
+### 8.7 Live validation
+
+2026-09-28, provider path (`fv-autoscale` standalone, signals from Runpod
+`/health`; the gateway was not on main yet when the run started).
+
+- Endpoint `fv-as-q-0928193752` (`5plvepwya58f25`, template `86oapybs4p`)
+  from `runpod-endpoint.sh up` with `FV_ENDPOINT_PREFIX=fv-as`,
+  `/etc/fv/runpod-wan.toml` (wan-turbo, `fastwan21-1.3b`), image
+  `sha-7e82504`, GPUs H100 80GB HBM3 / H100 NVL / H200, US volume
+  `s2k01690bi` (read only), created at min 0 / max 1, `QUEUE_DELAY` 1, idle 30 s.
+- Pool: `max_workers = 2`, pool budget $9/h (cap 2), SLO 60 s, idle timeout
+  120 s, scale-down cooldown 60 s, Runpod scaler `QUEUE_DELAY` 30, idle 30 s.
+
+| step | time (UTC) | what happened (Runpod REST `GET /endpoints/{id}` and `/health`) |
+|---|---|---|
+| dry run, 4 jobs | 19:38:33 | decisions logged (`ScaleUp 0 → 2`: queue 4, prediction, queue age), **no PATCH**: the endpoint stayed min 0 / max 1 / scaler 1; Runpod's own scaler ran the 4 jobs on one worker (all `succeeded`, delay 135 s, execution 5.3 s) |
+| live, controller starts | 19:41:59 | PATCH `{"scalerValue":30,"workersMax":2}` (max from the pool budget) |
+| live, burst of 6 jobs | 19:42:03 | 19:42:08 PATCH `{"workersMin":2}` (queue 6 + prediction); two workers came up; all 6 `succeeded` (delay 77-93 s from zero, execution 5.3-6.3 s) |
+| idle | 19:43:53 | last job done; `/health` kept `workers.running: 2` with `jobs.inProgress: 0` for minutes, which the first controller counted as busy (min pinned at 2). Fixed (busy = `min(running, inProgress)`, `a970484`) and restarted at 19:44:56 |
+| scale down | 19:46:57 | PATCH `{"workersMin":1}` after 120 s idle |
+| scale down | 19:47:57 | PATCH `{"workersMin":0}` after the 60 s cooldown |
+| at zero | 19:50:32 | min 0 / max 2, workers idle 0, initializing 0, running 0 (2 `throttled` = unallocated) |
+| cleanup | 19:51 | endpoint and template deleted; `GET` of both → 404; no `fv-as*` endpoint, template or pod left; no volume written |
+
+Spend: ≈ 17 H100 worker-minutes (≈ 2.5 dry run, ≈ 2 × 7.5 live) ≈ $1.2 at
+$4.18/h; the account balance went $48.03 → $46.74 over the run, which
+includes other agents' pods.
+
+<!-- END §8 Autoscaling -->
