@@ -533,5 +533,53 @@ pub fn assemble(
             "server.workers_max > 1: serving only routes any worker can answer"
         );
     }
-    crate::multiworker::layer(r, policy, &config.protocols.fal_apps).layer(TraceLayer::new_for_http())
+    let r = crate::multiworker::layer(r, policy, &config.protocols.fal_apps).layer(TraceLayer::new_for_http());
+    match cors_layer(&config.server.cors_origins) {
+        Some(cors) => r.layer(cors),
+        None => r,
+    }
+}
+
+/// Response headers a cross-origin page may read: the FastVideo metric
+/// headers, our tier/recipe metadata and the fal request id.
+const CORS_EXPOSE: [&str; 11] = [
+    "x-request-id",
+    "x-model",
+    "x-inference-time-s",
+    "x-stage-durations",
+    "x-peak-memory-mb",
+    "x-fv-tier",
+    "x-fv-recipe",
+    "x-fv-quality",
+    "x-fal-request-id",
+    "content-disposition",
+    "content-length",
+];
+
+/// CORS for every route (`server.cors_origins`, config validated): answers
+/// preflights (so `PUT /uploads/{token}` and `POST /storage/upload/initiate`
+/// work from a page on another origin, as fal's storage does) with the
+/// request's method and headers mirrored (`Authorization` is never covered
+/// by a `*` allow-list, so it must be echoed), and exposes the metric
+/// headers. `["*"]` allows any origin; `[]` is `None` (no CORS). Never with
+/// credentials.
+pub fn cors_layer(origins: &[String]) -> Option<tower_http::cors::CorsLayer> {
+    use axum::http::{HeaderName, HeaderValue};
+    use tower_http::cors::{AllowHeaders, AllowMethods, AllowOrigin, CorsLayer};
+    if origins.is_empty() {
+        return None;
+    }
+    let allow = if origins.iter().any(|o| o == "*") {
+        AllowOrigin::any()
+    } else {
+        AllowOrigin::list(origins.iter().filter_map(|o| HeaderValue::from_str(o).ok()))
+    };
+    Some(
+        CorsLayer::new()
+            .allow_origin(allow)
+            .allow_methods(AllowMethods::mirror_request())
+            .allow_headers(AllowHeaders::mirror_request())
+            .expose_headers(CORS_EXPOSE.map(HeaderName::from_static))
+            .max_age(Duration::from_secs(3600)),
+    )
 }

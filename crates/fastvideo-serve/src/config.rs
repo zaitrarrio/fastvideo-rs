@@ -21,6 +21,7 @@
 //! | `FV_ADMIN_TOKEN` | `auth.admin_token` (else generated at startup and logged once) |
 //! | `FV_KEY_STORE` (`auto` \| `memory` \| `file` \| `d1`) | `auth.key_store` (minted API keys) |
 //! | `FV_CONSOLE` (`0` \| `1`) | `server.console` (the `/console` pages) |
+//! | `FV_CORS_ORIGINS` (`*` \| comma-separated origins \| `none`) | `server.cors_origins` |
 //! | `FV_URL_SIGNING_KEY`, `FV_WEBHOOK_ED25519_KEY` | signing keys |
 //! | `FV_ENGINE` (`fake` \| `cuda`) | `engine.backend` |
 //! | `FV_JOB_STORE` (`auto` \| `memory` \| `file` \| `d1`) | `jobs.backend` |
@@ -102,6 +103,13 @@ pub struct ServerCfg {
     /// (`crate::multiworker`): async jobs need D1 jobs and S3/R2 artifacts;
     /// cancel, uploads and streaming sessions are never served.
     pub workers_max: u32,
+    /// Browser origins allowed to call the API cross-origin (CORS on every
+    /// route, preflights included: fal-style uploads from another page,
+    /// the console opened on another host). `["*"]` (the default, as fal's
+    /// own endpoints) allows any origin; otherwise exact origins such as
+    /// `https://app.example.com`; `[]` turns CORS off. Credentials
+    /// (cookies) are never allowed: the APIs authenticate with headers.
+    pub cors_origins: Vec<String>,
 }
 
 impl Default for ServerCfg {
@@ -118,6 +126,7 @@ impl Default for ServerCfg {
             forward: false,
             callbacks_allow_private: false,
             workers_max: 1,
+            cors_origins: vec!["*".into()],
         }
     }
 }
@@ -632,6 +641,12 @@ impl Config {
                 .filter(|n| *n >= 1)
                 .ok_or_else(|| ConfigError::Invalid(format!("FV_WORKERS_MAX={v} is not a worker count (1 or more)")))?;
         }
+        if let Some(v) = env.var("FV_CORS_ORIGINS") {
+            self.server.cors_origins = match v.trim() {
+                "" | "none" | "off" => Vec::new(),
+                list => list.split(',').map(|o| o.trim().to_owned()).filter(|o| !o.is_empty()).collect(),
+            };
+        }
         if let Some(v) = env.var("FV_WORKER_ID") {
             self.server.worker_id = Some(v);
         }
@@ -751,6 +766,22 @@ impl Config {
         if let Some(u) = &self.server.public_base_url {
             url::Url::parse(u).map_err(|e| ConfigError::Invalid(format!("server.public_base_url: {e}")))?;
         }
+        for o in &self.server.cors_origins {
+            if o == "*" {
+                if self.server.cors_origins.len() > 1 {
+                    return Err(ConfigError::Invalid("server.cors_origins: `*` cannot be combined with origins".into()));
+                }
+                continue;
+            }
+            let ok = url::Url::parse(o)
+                .map(|u| matches!(u.scheme(), "http" | "https") && u.host().is_some() && u.origin().ascii_serialization() == *o)
+                .unwrap_or(false);
+            if !ok {
+                return Err(ConfigError::Invalid(format!(
+                    "server.cors_origins: `{o}` is not an origin (scheme://host[:port], no path or trailing slash)"
+                )));
+            }
+        }
         if self.auth.mode == AuthMode::Keys && !self.auth.keys.is_empty() {
             fastvideo_serve_kit::KeyRing::from_hash_list(self.auth.keys.expose()).map_err(ConfigError::Invalid)?;
         }
@@ -859,6 +890,22 @@ mod tests {
 
     fn env(pairs: &[(&str, &str)]) -> BTreeMap<String, String> {
         pairs.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect()
+    }
+
+    #[test]
+    fn cors_origins_default_env_and_validation() {
+        let mut c = Config::default();
+        assert_eq!(c.server.cors_origins, vec!["*"]);
+        c.apply_env(&env(&[("FV_CORS_ORIGINS", "https://a.example, http://127.0.0.1:3000")])).unwrap();
+        assert_eq!(c.server.cors_origins, vec!["https://a.example", "http://127.0.0.1:3000"]);
+        c.validate().unwrap();
+        c.apply_env(&env(&[("FV_CORS_ORIGINS", "none")])).unwrap();
+        assert!(c.server.cors_origins.is_empty());
+        c.validate().unwrap();
+        for bad in ["https://a.example/", "a.example", "https://a.example/path", "*,https://a.example"] {
+            c.apply_env(&env(&[("FV_CORS_ORIGINS", bad)])).unwrap();
+            assert!(c.validate().is_err(), "{bad}");
+        }
     }
 
     #[test]

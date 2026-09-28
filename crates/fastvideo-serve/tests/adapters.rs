@@ -213,6 +213,90 @@ async fn every_mounted_route_of_the_table_answers() {
     }
 }
 
+async fn preflight(app: &Router, path: &str, origin: &str, method: &str, headers: &str) -> axum::http::Response<Body> {
+    let req = Request::builder()
+        .method("OPTIONS")
+        .uri(path)
+        .header("origin", origin)
+        .header("access-control-request-method", method)
+        .header("access-control-request-headers", headers)
+        .body(Body::empty())
+        .unwrap();
+    app.clone().oneshot(req).await.unwrap()
+}
+
+/// A browser page on another origin can upload the fal way: the preflights
+/// of `POST /storage/upload/initiate` (with `Authorization`) and `PUT
+/// /uploads/{token}` succeed, and so do the requests themselves.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn cors_preflights_and_cross_origin_upload() {
+    let a = app("cors").await;
+    let origin = "https://page.example";
+    let r = preflight(&a.router, "/storage/upload/initiate", origin, "POST", "authorization,content-type").await;
+    assert!(r.status().is_success(), "{}", r.status());
+    let h = r.headers();
+    assert_eq!(h["access-control-allow-origin"], "*");
+    let allowed = h["access-control-allow-headers"].to_str().unwrap().to_ascii_lowercase();
+    assert!(allowed.contains("authorization") && allowed.contains("content-type"), "{allowed}");
+    assert!(h["access-control-allow-methods"].to_str().unwrap().contains("POST"));
+
+    let req = Request::post("/storage/upload/initiate")
+        .header("origin", origin)
+        .header("authorization", "Key sk-adapters")
+        .header("content-type", "application/json")
+        .body(Body::from(json!({"content_type": "image/png", "file_name": "a.png"}).to_string()))
+        .unwrap();
+    let r = a.router.clone().oneshot(req).await.unwrap();
+    assert_eq!(r.status(), StatusCode::OK);
+    assert_eq!(r.headers()["access-control-allow-origin"], "*");
+    let body = axum::body::to_bytes(r.into_body(), 1 << 20).await.unwrap();
+    let v: Value = serde_json::from_slice(&body).unwrap();
+    let upload = url::Url::parse(v["upload_url"].as_str().unwrap()).unwrap();
+
+    let r = preflight(&a.router, upload.path(), origin, "PUT", "content-type").await;
+    assert!(r.status().is_success(), "{}", r.status());
+    assert_eq!(r.headers()["access-control-allow-origin"], "*");
+    assert!(r.headers()["access-control-allow-methods"].to_str().unwrap().contains("PUT"));
+    let req = Request::put(upload.path())
+        .header("origin", origin)
+        .header("content-type", "image/png")
+        .body(Body::from(&b"\x89PNG\r\n\x1a\n"[..]))
+        .unwrap();
+    let r = a.router.clone().oneshot(req).await.unwrap();
+    assert_eq!(r.status(), StatusCode::OK);
+    assert_eq!(r.headers()["access-control-allow-origin"], "*");
+
+    // The FastVideo metric headers are readable cross-origin.
+    let r = preflight(&a.router, "/v1/videos/sync", origin, "POST", "authorization,content-type").await;
+    assert!(r.status().is_success());
+    let req = Request::post("/v1/videos/sync")
+        .header("origin", origin)
+        .header("authorization", bearer().unwrap())
+        .header("content-type", "application/json")
+        .body(Body::from(json!({"model": "fake-wan", "prompt": "waves", "size": "832x480", "num_frames": 49, "fps": 16}).to_string()))
+        .unwrap();
+    let r = a.router.clone().oneshot(req).await.unwrap();
+    assert_eq!(r.status(), StatusCode::OK);
+    let exposed = r.headers()["access-control-expose-headers"].to_str().unwrap().to_ascii_lowercase();
+    assert!(exposed.contains("x-inference-time-s"), "{exposed}");
+}
+
+/// `server.cors_origins` narrows CORS to the listed origins; `none` turns
+/// it off (a preflight is then an ordinary unrouted OPTIONS).
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn cors_origins_are_configurable() {
+    let a = app_with("cors-list", &[("FV_CORS_ORIGINS", "https://ok.example".to_owned())]).await;
+    let r = preflight(&a.router, "/storage/upload/initiate", "https://ok.example", "POST", "authorization").await;
+    assert!(r.status().is_success());
+    assert_eq!(r.headers()["access-control-allow-origin"], "https://ok.example");
+    let r = preflight(&a.router, "/storage/upload/initiate", "https://evil.example", "POST", "authorization").await;
+    assert!(r.headers().get("access-control-allow-origin").is_none());
+
+    let a = app_with("cors-off", &[("FV_CORS_ORIGINS", "none".to_owned())]).await;
+    let r = preflight(&a.router, "/storage/upload/initiate", "https://ok.example", "POST", "authorization").await;
+    assert!(r.headers().get("access-control-allow-origin").is_none());
+}
+
 /// `/v1/videos/sync` with outputs in an S3-compatible bucket (the R2
 /// deployment): the reply is the MP4 itself with the `X-*` metric headers
 /// (design §4.1), not a redirect to the bucket.

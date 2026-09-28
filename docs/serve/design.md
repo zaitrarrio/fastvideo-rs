@@ -1972,6 +1972,16 @@ Critical path: `WP-00 → WP-01 → WP-02 → WP-05 → WP-09 → (E1 → E2) �
 | `GET /fal/schema`, `GET /fal/schema/{owner}/{alias}/{sub}` | fal | Catalog of configured apps and each endpoint's input JSON Schema (native, for the console; WP-20) |
 | `GET /console`, `/console/admin`, `/console/models/{owner}/{alias}/{task}`, `/console/assets/{file}` | serve (console) | Embedded static pages, [`console.md`](console.md); off with `FV_CONSOLE=0` |
 
+**CORS.** One layer outside every route (`app::cors_layer`) answers
+preflights (`OPTIONS` with `Access-Control-Request-Method`) for any path,
+mirrors the requested method and headers (so `Authorization`, which a `*`
+allow-list never covers, and `Content-Type` pass), and exposes the `X-*`
+metric headers. Origins come from `server.cors_origins` /
+`FV_CORS_ORIGINS`: `*` by default, as fal's own endpoints (a page on
+another origin can `POST /storage/upload/initiate` and `PUT
+/uploads/{token}`), a list of exact origins, or `none`. Credentials are
+never allowed; the APIs authenticate with headers.
+
 ---
 
 ## 10. Risks and open questions
