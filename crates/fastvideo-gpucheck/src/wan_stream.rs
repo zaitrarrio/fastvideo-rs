@@ -79,7 +79,7 @@ fn parse_run(s: &str) -> anyhow::Result<RunSpec> {
         name: name.to_string(),
         seconds: 10.0,
         rope: RopePolicy::RebasedSink,
-        sink: 3,
+        sink: RolloutConfig::default().sink_frames,
         window: 21,
         switch_at: None,
         switch: PromptSwitch::Keep,

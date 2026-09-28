@@ -128,7 +128,12 @@ impl Default for RolloutConfig {
             dmd_steps: SF_WAN_1_3B_DMD_STEPS.to_vec(),
             flow_shift: 5.0,
             local_attn_frames: 21,
-            sink_frames: 3,
+            // A deep sink: five of the window's seven blocks, re-roped to sit
+            // just before the last two. With the one-block sink (3) the
+            // rollout falls apart within 30-60 s (dark, then horizontal
+            // bands growing from the top rows of the latents); 12-15 keeps
+            // it coherent for minutes (docs/ports/wan.md, long-run quality).
+            sink_frames: 15,
             rope: RopePolicy::RebasedSink,
             prompt_switch: PromptSwitch::Keep,
             rgb8: true,
@@ -1089,10 +1094,11 @@ mod tests {
     use super::*;
 
     #[test]
-    fn default_window_is_the_training_window_with_a_block_sink() {
+    fn default_window_is_the_training_window_with_a_deep_sink() {
         let c = RolloutConfig::default();
         assert_eq!(c.local_attn_frames, 21);
-        assert_eq!(c.sink_frames, 3);
+        assert_eq!(c.sink_frames, 15);
+        assert!(c.recache.is_none());
         assert_eq!(c.rope, RopePolicy::RebasedSink);
         assert_eq!(c.dmd_steps, vec![1000, 750, 500, 250]);
     }

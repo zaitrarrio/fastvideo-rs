@@ -121,6 +121,16 @@ frames show visible artefacts well before that. It needs a visual long-run
 study of the rollout (TAEHV carried state on the top rows is one suspect)
 before `max_seconds` defaults above ~30 s are sensible.
 
+**Follow-up (R12 study, `docs/ports/wan.md` "Long-run quality: the R12
+study").** Reproduced without the server (`runpod-matrix.sh sfquality`).
+The bands are in the DiT latents, not the decoder: a fresh-state TAEHV
+decode matches the carried state to a few levels, and the latents' top
+rows turn into stripes. Graph and eager runs are bitwise equal over 90 s,
+and f32 degrades too. The cause is the one-block sink. The default sink is
+now 15 frames (a deep sink), clean for 2 minutes on two seeds; to 5 minutes
+the content stays coherent, with a transient artefact strip along the top
+edge. Sheets: `r12/`.
+
 ## Bugs
 
 1. **SF-Wan served with the relativistic RoPE policy** (`cuda/backend.rs`
