@@ -406,8 +406,24 @@ async fn every_api_routes_to_its_pool_through_the_gateway() {
     assert!(!rec.0.lock().unwrap().is_empty(), "the scaler hook ran");
     let (_, m, _) = http.call("GET", &format!("{g}/metrics"), None, None).await;
     assert!(m.as_str().unwrap_or_default().contains("fv_pool_queued"), "{m}");
+    assert!(h3m.submitted_total >= 4, "{h3m:?}");
     let (s, hz, _) = http.call("GET", &format!("{g}/healthz"), None, None).await;
     assert_eq!((s, hz["state"].as_str()), (200, Some("ready")), "{hz}");
+
+    // Drain (the autoscaler's request): the worker takes nothing new and
+    // the gateway stops dispatching to it; undrain restores it.
+    let tok = |r: reqwest::RequestBuilder| r.header("x-fv-internal-token", TOKEN);
+    let d: Value = tok(http.0.post(format!("{}/fv/v1/internal/drain", h3.base))).send().await.unwrap().json().await.unwrap();
+    assert_eq!(d["draining"], true, "{d}");
+    tokio::time::sleep(Duration::from_millis(2500)).await;
+    let (s, v, h) = http.call("POST", &format!("{g}/fv/v1/jobs"), Some(json!({"model": "fake-h3-turbo", "prompt": "while drained"})), bearer()).await;
+    assert_eq!(s, 503, "{v}");
+    assert!(h.get("retry-after").is_some());
+    let d: Value = tok(http.0.post(format!("{}/fv/v1/internal/undrain", h3.base))).send().await.unwrap().json().await.unwrap();
+    assert_eq!(d["draining"], false, "{d}");
+    tokio::time::sleep(Duration::from_millis(2500)).await;
+    let (s, v, _) = http.call("POST", &format!("{g}/fv/v1/jobs"), Some(json!({"model": "fake-h3-turbo", "prompt": "after undrain"})), bearer()).await;
+    assert_eq!(s, 202, "{v}");
     drop(gw);
 }
 

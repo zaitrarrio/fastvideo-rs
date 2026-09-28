@@ -349,6 +349,9 @@ impl App {
             tracing::warn!("server.callbacks_allow_private: webhooks may target loopback/private hosts (tests only)");
             callbacks.target.allow_private = true;
         }
+        // A worker's jobs came through the gateway, which ran the MiniMax
+        // callback challenge when it took the request.
+        callbacks.challenge_done_elsewhere = worker_role;
         let callbacks = Arc::new(callbacks);
         let mcfg = mount_cfg(&config);
         // Gateway mode: the pools behind a `RemoteGate` (docs/serve/gateway.md)
@@ -397,13 +400,20 @@ impl App {
         #[cfg(feature = "http-client")]
         if let Some(g) = &gw {
             g.attach(ctx.clone());
-            let router = crate::gateway::assemble(&config, &ctx, g, admin.clone(), key_store.clone());
+            let mut router = crate::gateway::assemble(&config, &ctx, g, admin.clone(), key_store.clone());
+            let d1_client = d1.as_ref().map(|d| d.client().clone());
+            let autoscale = crate::autoscale::start(&config, g, d1_client, admin.clone(), &worker)?;
             let sweeper = spawn_sweeper(jobs, Duration::from_secs(config.jobs.sweep_interval_s.max(1)));
             let refresh = (key_store.backend_kind() == "d1").then_some(Duration::from_secs(30));
             let key_maintenance = key_store.spawn_maintenance(refresh, Duration::from_secs(30));
             // First probes before serving, then the tick loop.
             g.tick().await;
             let tick = g.spawn_tick();
+            let mut background = vec![tick];
+            if let Some((admin_routes, handle)) = autoscale {
+                router = router.merge(admin_routes);
+                background.push(handle);
+            }
             return Ok(App {
                 config,
                 ctx,
@@ -419,7 +429,7 @@ impl App {
                 registration: None,
                 sweeper,
                 key_maintenance,
-                background: vec![tick],
+                background,
             });
         }
 
@@ -475,15 +485,7 @@ impl App {
         // layers, so metrics and the multi-worker filter see them).
         #[cfg(feature = "http-client")]
         if worker_role {
-            let st = crate::worker::WorkerState::new(
-                ctx.clone(),
-                gate.clone(),
-                d1.clone(),
-                worker.clone(),
-                config.gateway.pool.clone(),
-                config.limits.queue_max,
-            );
-            streams = streams.merge(crate::worker::routes(st));
+            let drained = Arc::new(std::sync::atomic::AtomicBool::new(false));
             if let (Some(pool), Some(d), Some(url), true, Mode::Http) =
                 (&config.gateway.pool, &d1, &config.server.public_base_url, config.gateway.register, config.server.mode)
             {
@@ -493,10 +495,21 @@ impl App {
                     worker_id: worker.clone(),
                     url: url.trim_end_matches('/').to_owned(),
                     gate: gate.clone(),
+                    drained: drained.clone(),
                 };
                 background.push(crate::worker::spawn_registration(reg.clone()));
                 registration = Some(reg);
             }
+            let st = crate::worker::WorkerState::new(
+                ctx.clone(),
+                gate.clone(),
+                d1.clone(),
+                worker.clone(),
+                config.gateway.pool.clone(),
+                config.limits.queue_max,
+            )
+            .with_drain(drained, registration.clone());
+            streams = streams.merge(crate::worker::routes(st));
         }
         let mut router = assemble(&config, &ctx, &gate, jobs_kind, streams, fal_extra);
         #[cfg(feature = "http-client")]

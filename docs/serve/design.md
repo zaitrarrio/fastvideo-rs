@@ -1732,8 +1732,13 @@ additions and readings; everything is re-exported from the crate root.
   denoise); I2V 110-154 s wall (21.8 s denoise). The I2V gap is the FL2VA
   text stage: `encode_request_multimodal` streams the Qwen-VL encoder (vision
   tower + LM) from the weight volume on every request and ignores the
-  resident text encoder; T2V uses the resident one. A resident multimodal
-  path (mRoPE + deepstack on the resident encoder) is the follow-up.
+  resident text encoder; T2V uses the resident one. Fixed: the multimodal
+  path runs on the resident text encoder plus a resident vision tower
+  (1.1 GB; `[[models]] i2v_encoder = auto|resident|stream`). Streaming uses
+  the same precision, so both give identical bytes. With `warmup = true`,
+  one I2V and one T2V job run before readiness. I2V is now 16.4 s wall at
+  480P and 33.1 s at 768P, and the first job equals a warm one
+  (docs/serve/e2e/i2v-resident.md).
 - The H3 profiles ask for MXFP8, which cuBLASLt runs only on sm_100+. On
   Hopper every H3 job failed (`h3-max`: "no MXFP8 ... algorithm on sm90";
   `h3-turbo`: the same, masked by the zero-padded retry refusing layers with a

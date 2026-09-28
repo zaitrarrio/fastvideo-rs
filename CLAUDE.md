@@ -18,3 +18,10 @@
 - Only touch pods and endpoints you created; give each a wall-clock backstop,
   never leave one idle while building or debugging, and delete it when done.
 - Stop before the Runpod balance would drop below $8.
+
+## Builds
+
+- Compile and test on the shared **build pod** (a small Runpod CPU pod with a
+  50 GB network volume), not in this container, whose disk is small. Each
+  agent gets its own worktree directory and `CARGO_TARGET_DIR` on that volume.
+  See `scripts/dev/build-pod.sh` and `docs/dev/build-pod.md`.

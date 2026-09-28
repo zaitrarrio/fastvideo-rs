@@ -24,6 +24,7 @@ members = [
     "crates/fastvideo-fal",
     "crates/fastvideo-reactor",
     "crates/fastvideo-deploy",
+    "crates/fastvideo-autoscale",
     "crates/fastvideo-serve",
 ]
 
@@ -102,6 +103,7 @@ fastvideo-ltxapi = { path = "crates/fastvideo-ltxapi" }
 fastvideo-fal = { path = "crates/fastvideo-fal" }
 fastvideo-reactor = { path = "crates/fastvideo-reactor" }
 fastvideo-deploy = { path = "crates/fastvideo-deploy" }
+fastvideo-autoscale = { path = "crates/fastvideo-autoscale" }
 
 cudarc = { version = "0.17", default-features = false, features = ["std", "driver", "cublas", "cublaslt", "cudnn", "nvrtc", "f16", "cuda-version-from-build-system", "dynamic-loading"] }
 

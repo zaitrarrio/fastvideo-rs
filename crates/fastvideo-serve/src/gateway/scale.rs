@@ -78,6 +78,11 @@ pub struct PoolMetrics {
     pub max_queued: u32,
     /// Stream sessions limit (0: one per pod worker; serverless: none).
     pub max_streams: u32,
+    /// Jobs ever dispatched to this pool (monotonic, from D1; a re-dispatch
+    /// after a worker loss does not count again): the arrival rate is its
+    /// difference over time.
+    #[serde(default)]
+    pub submitted_total: u64,
 }
 
 /// Implemented by the autoscaler. Each gateway replica calls its hooks
@@ -120,6 +125,7 @@ mod tests {
             available: true,
             max_queued: 32,
             max_streams: 0,
+            submitted_total: 9,
         };
         let v = serde_json::to_value(&m).unwrap();
         assert_eq!(v["kind"], "runpod-serverless");
