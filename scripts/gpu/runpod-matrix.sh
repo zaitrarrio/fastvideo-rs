@@ -608,12 +608,20 @@ Audio: male speech, clear voice, quiet room"
       reb-s6-120,seconds=120,sink=6 reb-s9-120,seconds=120,sink=9 reb-s12-120,seconds=120,sink=12
       reb-s3-w12-90,seconds=90,window=12 reb-s3-w27-90,seconds=90,window=27
       reb-s3-rc7k9-120,seconds=120,recache=7:9 reb-s3-rc14k18-120,seconds=120,recache=14:18}"
+    # Runs are separated by spaces or "+" (so a list fits in FV_EXTRA_ENV).
     args=()
-    for r in $SFQ_RUNS; do args+=(--run "$r"); done
-    sfq sfq-main "" --parity "${args[@]}"
+    for r in ${SFQ_RUNS//+/ }; do args+=(--run "$r"); done
+    # shellcheck disable=SC2086
+    sfq sfq-main "" ${FV_SFQ_PARITY---parity} "${args[@]}"
+    # A second seed (FV_SFQ_SEED2_RUNS; skipped when unset).
+    if [[ -n "${FV_SFQ_SEED2_RUNS:-}" ]]; then
+      args=()
+      for r in ${FV_SFQ_SEED2_RUNS//+/ }; do args+=(--run "$r"); done
+      SEED="${FV_SFQ_SEED2:-7}" sfq sfq-seed2 "" "${args[@]}"
+    fi
     args=()
-    for r in ${FV_SFQ_F32_RUNS:-reb-s3-f32-60,seconds=60,graphs=0}; do args+=(--run "$r"); done
-    sfq sfq-f32 "env FASTVIDEO_BF16_ACT=0" "${args[@]}"
+    for r in ${FV_SFQ_F32_RUNS-reb-s3-f32-60,seconds=60,graphs=0}; do args+=(--run "$r"); done
+    if (( ${#args[@]} )); then sfq sfq-f32 "env FASTVIDEO_BF16_ACT=0" "${args[@]}"; fi
     ;;
   headline)
     # The headline configurations on one pod (a new GPU type, one run):
