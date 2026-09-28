@@ -32,7 +32,7 @@ use fastvideo_protocol::{
 };
 use fastvideo_serve_kit::events::{cancel_job, wait_terminal};
 use fastvideo_serve_kit::handlers::{find_job, submit_request};
-use fastvideo_serve_kit::{handlers, into_response, ServeCtx};
+use fastvideo_serve_kit::{handlers, into_response, ArtifactBody, ServeCtx};
 use serde::Deserialize;
 use serde_json::{json, Map, Value};
 
@@ -1052,7 +1052,8 @@ async fn create(
 /// `X-Request-Id`, `X-Model`, `X-Inference-Time-S`, `X-Stage-Durations`,
 /// `X-Peak-Memory-MB` (and `X-FV-Tier` / `X-FV-Recipe` when known). The job
 /// and its file are removed after reading, as FastVideo removes its
-/// temporary MP4.
+/// temporary MP4. Artifacts in an object store (S3/R2) are read back through
+/// `ArtifactStore::open` and streamed, not redirected.
 async fn sync_reply(ctx: &ServeCtx, job: Job) -> Result<HttpReply, ApiError> {
     let job = wait_terminal(ctx, job.id, ctx.config().sync_timeout)
         .await
@@ -1072,7 +1073,23 @@ async fn sync_reply(ctx: &ServeCtx, job: Job) -> Result<HttpReply, ApiError> {
                         .map_err(|e| ApiError::internal(format!("reading the output: {e}")))?;
                     HttpReply::bytes(200, a.mime.clone(), data)
                 }
-                Some(_) => artifact_reply(&job, &cx).unwrap_or_else(|| HttpReply::empty(500)),
+                // S3/R2 artifacts are read back and streamed, so the reply
+                // is `video/mp4` with the `X-*` headers (design §4.1), as
+                // the LTX v1 sync path does; a store that cannot read
+                // objects back falls back to the redirect.
+                Some((_, a)) => match ctx.artifacts().open(a).await {
+                    Ok(ArtifactBody::Bytes(b)) => HttpReply::bytes(200, a.mime.clone(), b),
+                    Ok(ArtifactBody::File(p)) => {
+                        let data = tokio::fs::read(&p)
+                            .await
+                            .map_err(|e| ApiError::internal(format!("reading the output: {e}")))?;
+                        HttpReply::bytes(200, a.mime.clone(), data)
+                    }
+                    Err(e) => {
+                        tracing::warn!(error = %e.message, "/v1/videos/sync: reading the artifact back failed; answering a redirect");
+                        artifact_reply(&job, &cx).unwrap_or_else(|| HttpReply::empty(500))
+                    }
+                },
                 None => return Err(ApiError::internal("the generation produced no file")),
             }
         }

@@ -22,6 +22,11 @@ use tower::ServiceExt;
 const KEY: &str = "sk-adapters";
 
 async fn app(tag: &str) -> App {
+    app_with(tag, &[]).await
+}
+
+/// [`app`] with extra environment (`FV_*`) on top of the defaults.
+async fn app_with(tag: &str, extra: &[(&str, String)]) -> App {
     let dir = std::env::temp_dir().join(format!(
         "fv-serve-adapters-{tag}-{:x}",
         std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()
@@ -31,6 +36,9 @@ async fn app(tag: &str) -> App {
     env.insert("FV_URL_SIGNING_KEY".to_owned(), "k".to_owned());
     env.insert("FV_STATE_DIR".to_owned(), dir.display().to_string());
     env.insert("FV_PUBLIC_BASE_URL".to_owned(), "http://fv.test".to_owned());
+    for (k, v) in extra {
+        env.insert((*k).to_owned(), v.clone());
+    }
     let mut c = Config::default();
     c.apply_env(&env).unwrap();
     c.jobs.backend = JobBackend::Memory;
@@ -203,4 +211,55 @@ async fn every_mounted_route_of_the_table_answers() {
             spec.owner
         );
     }
+}
+
+/// `/v1/videos/sync` with outputs in an S3-compatible bucket (the R2
+/// deployment): the reply is the MP4 itself with the `X-*` metric headers
+/// (design §4.1), not a redirect to the bucket.
+#[cfg(feature = "http-client")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn fastvideo_sync_streams_s3_artifacts_with_headers() {
+    use axum::extract::Path;
+    use axum::response::IntoResponse;
+    use axum::routing::put;
+    use std::collections::HashMap;
+    use std::sync::{Arc, Mutex};
+    let objects: Arc<Mutex<HashMap<String, Vec<u8>>>> = Arc::default();
+    let (o1, o2) = (objects.clone(), objects.clone());
+    let s3: Router = Router::new().route(
+        "/{*key}",
+        put(move |Path(k): Path<String>, body: axum::body::Bytes| async move {
+            o1.lock().unwrap().insert(k, body.to_vec());
+            StatusCode::OK
+        })
+        .get(move |Path(k): Path<String>| async move {
+            match o2.lock().unwrap().get(&k) {
+                Some(b) => (StatusCode::OK, b.clone()).into_response(),
+                None => StatusCode::NOT_FOUND.into_response(),
+            }
+        }),
+    );
+    let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = l.local_addr().unwrap();
+    tokio::spawn(async move { axum::serve(l, s3).await.unwrap() });
+    let a = app_with(
+        "s3",
+        &[
+            ("FV_R2_ENDPOINT", format!("http://{addr}")),
+            ("FV_R2_BUCKET", "fv-media".to_owned()),
+            ("FV_R2_ACCESS_KEY_ID", "AK".to_owned()),
+            ("FV_R2_SECRET_ACCESS_KEY", "SK".to_owned()),
+        ],
+    )
+    .await;
+    let body = json!({"model": "fake-wan", "prompt": "waves", "size": "832x480", "num_frames": 49, "fps": 16});
+    let s = call(&a.router, "POST", "/v1/videos/sync", Some(body), bearer()).await;
+    assert_eq!(s.status, 200, "{}", String::from_utf8_lossy(&s.bytes));
+    assert_eq!(s.headers["content-type"], "video/mp4");
+    assert!(s.headers.get("location").is_none());
+    for h in ["x-request-id", "x-model", "x-inference-time-s", "x-stage-durations"] {
+        assert!(s.headers.get(h).is_some(), "missing {h}");
+    }
+    let stored = objects.lock().unwrap().values().next().cloned().expect("uploaded to the bucket");
+    assert_eq!(s.bytes, stored);
 }
