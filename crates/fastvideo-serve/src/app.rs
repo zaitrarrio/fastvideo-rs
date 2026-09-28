@@ -401,14 +401,24 @@ impl App {
     /// admission stops (503), queued jobs are cancelled, the running one
     /// gets `shutdown_grace`, pending D1 writes are flushed, HTTP closes.
     pub async fn serve(self, listener: TcpListener, stop: impl std::future::Future<Output = ()> + Send + 'static) -> anyhow::Result<()> {
+        announce_ready(self.gate.clone());
+        let drained = self.drain_after(stop);
+        axum::serve(listener, self.router.clone())
+            .with_graceful_shutdown(drained)
+            .await
+            .context("HTTP server")?;
+        Ok(())
+    }
+
+    /// Waits for `stop`, then drains (see [`App::serve`]).
+    fn drain_after(&self, stop: impl std::future::Future<Output = ()> + Send + 'static) -> impl std::future::Future<Output = ()> + Send + 'static {
         let gate = self.gate.clone();
         let grace = self.config.shutdown_grace();
         let d1 = self.d1.clone();
         let keys = self.keys.clone();
         #[cfg(feature = "reactor")]
         let reactor = self.reactor.clone();
-        announce_ready(gate.clone());
-        let drained = async move {
+        async move {
             stop.await;
             tracing::info!("shutdown requested: draining");
             // Reactor: `session_ended` with RT's drain reason, then close.
@@ -421,12 +431,105 @@ impl App {
                 tracing::warn!(error = %e, "api keys: writing last_used_at failed");
             }
             tracing::info!("drained");
-        };
-        axum::serve(listener, self.router.clone())
-            .with_graceful_shutdown(drained)
+        }
+    }
+}
+
+/// Serves on `listener` from the start while `build` runs (the encoder
+/// probe, stores, D1, the engine), then hands every request to the built
+/// app, which serves and drains as [`App::serve`]. Until the app exists
+/// the probes answer without blocking: `/ping` **204** (Runpod load
+/// balancer: initializing), `/health` and `/healthz` 503 `loading`, every
+/// other route 503 with `Retry-After`. Model loading itself runs in the
+/// background after `build` (`/ping` stays 204 until ready), so no probe
+/// waits for weights. A failed `build` stops the listener and returns
+/// the error; `stop` during `build` exits without draining.
+pub async fn serve_while_building(
+    listener: TcpListener,
+    build: impl std::future::Future<Output = anyhow::Result<App>> + Send,
+    stop: impl std::future::Future<Output = ()> + Send + 'static,
+) -> anyhow::Result<()> {
+    let slot: Arc<std::sync::OnceLock<Router>> = Arc::default();
+    let (tx, rx) = tokio::sync::oneshot::channel::<()>();
+    let boot = booting_router(slot.clone());
+    let server = tokio::spawn(async move {
+        axum::serve(listener, boot)
+            .with_graceful_shutdown(async {
+                let _ = rx.await;
+            })
             .await
-            .context("HTTP server")?;
-        Ok(())
+    });
+    // `stop` fires once; a watch lets both the build race and the drain
+    // wait on it.
+    let (stop_tx, stop_rx) = tokio::sync::watch::channel(false);
+    let stop_task = tokio::spawn(async move {
+        stop.await;
+        let _ = stop_tx.send(true);
+    });
+    let stopped = |mut rx: tokio::sync::watch::Receiver<bool>| async move {
+        let _ = rx.wait_for(|s| *s).await;
+    };
+    let built = tokio::select! {
+        r = build => r,
+        _ = stopped(stop_rx.clone()) => {
+            let _ = tx.send(());
+            let _ = server.await;
+            return Ok(());
+        }
+    };
+    let app = match built {
+        Ok(a) => a,
+        Err(e) => {
+            stop_task.abort();
+            let _ = tx.send(());
+            let _ = server.await;
+            return Err(e);
+        }
+    };
+    let _ = slot.set(app.router.clone());
+    announce_ready(app.gate.clone());
+    tracing::info!("app built: serving every route");
+    app.drain_after(stopped(stop_rx)).await;
+    let _ = tx.send(());
+    server.await.context("HTTP server task")?.context("HTTP server")?;
+    Ok(())
+}
+
+/// The router while the app builds: [`booting_reply`] until `slot` holds
+/// the built router, then that router.
+fn booting_router(slot: Arc<std::sync::OnceLock<Router>>) -> Router {
+    Router::new().fallback(move |req: axum::extract::Request| {
+        let slot = slot.clone();
+        async move {
+            use tower::ServiceExt;
+            match slot.get() {
+                Some(r) => r.clone().oneshot(req).await.unwrap_or_else(|e| match e {}),
+                None => booting_reply(req.uri().path()),
+            }
+        }
+    })
+}
+
+/// A probe's answer before the app is built (see [`serve_while_building`]).
+fn booting_reply(path: &str) -> axum::response::Response {
+    use axum::http::{header, StatusCode};
+    use axum::response::IntoResponse;
+    use axum::Json;
+    use serde_json::json;
+    match path {
+        "/ping" => StatusCode::NO_CONTENT.into_response(),
+        "/health" => (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(json!({"status": "loading", "model_loaded": false, "state": "LOADING"})),
+        )
+            .into_response(),
+        "/healthz" => (StatusCode::SERVICE_UNAVAILABLE, Json(json!({"state": "starting"}))).into_response(),
+        _ => (
+            StatusCode::SERVICE_UNAVAILABLE,
+            [(header::RETRY_AFTER, "5")],
+            Json(json!({"error": {"kind": "loading", "message": "fv-serve is starting"}})),
+        )
+            .into_response(),
     }
 }
 

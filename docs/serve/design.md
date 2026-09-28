@@ -1385,6 +1385,14 @@ are always open.
   - `fv-serve` loads every `resident` model before reporting ready:
     `/ping` is 204 until then, `/healthz` shows `{state:"loading",loaded:[…]}`,
     and Reactor `/start_session` answers 503 + `Retry-After: 1`.
+  - In `http` mode the port is bound **before** the app is built
+    (`app::serve_while_building`): while the encoder probe, the stores
+    (D1, R2) and the engine start, `/ping` answers 204, `/health` and
+    `/healthz` 503 `loading`, and every other route 503 + `Retry-After`;
+    no probe waits on startup or on the weights. (The WP-18 serverless
+    LB run saw `/ping` hang: part of that is the Runpod gateway holding
+    requests until a worker container runs, which the server cannot
+    change.)
   - Optional `warmup = true` runs one short generation per model and
     geometry, so first-request JIT and allocation costs are paid before
     ready.

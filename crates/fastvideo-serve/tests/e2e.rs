@@ -227,6 +227,62 @@ async fn ping_is_204_while_loading() {
     assert_eq!(s, 200);
 }
 
+/// The binary binds before `App::build` finishes: `/ping` answers 204 at
+/// once while the build is held back (a load balancer probing a booting
+/// worker never hangs), other routes 503; after the build, the app serves
+/// every route and drains on `stop`.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn ping_answers_while_the_app_builds() {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let base = format!("http://{}", listener.local_addr().unwrap());
+    let (go_tx, go_rx) = tokio::sync::oneshot::channel::<()>();
+    let (stop_tx, stop_rx) = tokio::sync::oneshot::channel::<()>();
+    let c = config("booting");
+    let build = async move {
+        let _ = go_rx.await;
+        App::build(c, Overrides::default()).await
+    };
+    let server = tokio::spawn(fastvideo_serve::app::serve_while_building(listener, build, async {
+        let _ = stop_rx.await;
+    }));
+    let http = reqwest::Client::new();
+    let get = |p: &str| {
+        let req = http.get(format!("{base}{p}")).timeout(Duration::from_secs(5));
+        async move { req.send().await.unwrap() }
+    };
+    assert_eq!(get("/ping").await.status(), 204);
+    let r = get("/health").await;
+    assert_eq!(r.status(), 503);
+    assert_eq!(r.json::<Value>().await.unwrap()["model_loaded"], false);
+    let r = get("/fv/v1/capabilities").await;
+    assert_eq!(r.status(), 503);
+    assert!(r.headers().get("retry-after").is_some());
+
+    go_tx.send(()).unwrap();
+    let mut ready = false;
+    for _ in 0..400 {
+        if get("/ping").await.status() == 200 {
+            ready = true;
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
+    assert!(ready, "/ping never reached 200 after the build");
+    let r = http.get(format!("{base}/fv/v1/capabilities")).bearer_auth(KEY).send().await.unwrap();
+    assert_eq!(r.status(), 200);
+    stop_tx.send(()).unwrap();
+    tokio::time::timeout(Duration::from_secs(30), server).await.unwrap().unwrap().unwrap();
+}
+
+/// A failed build stops the early listener and returns the error.
+#[tokio::test]
+async fn a_failed_build_stops_the_early_listener() {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let build = async { Err::<App, _>(anyhow::anyhow!("no engine")) };
+    let r = fastvideo_serve::app::serve_while_building(listener, build, std::future::pending()).await;
+    assert!(r.is_err());
+}
+
 #[tokio::test]
 async fn d1_job_store_end_to_end_over_the_mock() {
     let mock = MockD1::new();
