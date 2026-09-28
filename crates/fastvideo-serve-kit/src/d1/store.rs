@@ -628,7 +628,8 @@ impl D1JobStore {
             ip.push(json!(after));
         }
         items_sql.push_str(&format!(" ORDER BY created_at {dir}, id {dir} LIMIT ? OFFSET ?"));
-        ip.push(json!(q.limit as i64 + 1));
+        // SQLite: LIMIT -1 is "no limit" (callers pass usize::MAX for all).
+        ip.push(json!(i64::try_from(q.limit).ok().and_then(|l| l.checked_add(1)).unwrap_or(-1)));
         ip.push(json!(q.offset as i64));
         self.count(|s| s.reads += 1);
         let res = self

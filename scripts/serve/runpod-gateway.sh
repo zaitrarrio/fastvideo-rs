@@ -119,6 +119,15 @@ gw_call() {
     ${body:+-d "$body"} -w '\n%{http_code} %{time_total}' "$GW$p"
 }
 
+# split_submit <gw_call output>: sets `sub` ("<code> <seconds>") and `body`
+# in the caller, logs the reply (ids and errors only), stops on a refusal.
+split_submit() {
+  sub="$(tail -1 <<<"$1")"
+  body="$(sed '$d' <<<"$1")"
+  log "submit: $sub $(jq -c '{id, request_id, task_id, error}' <<<"$body" 2>/dev/null | head -c 400)"
+  [[ "${sub%% *}" == 2* ]] || die "submit refused: $sub $(head -c 400 <<<"$body")"
+}
+
 # poll_gw <status path> <jq done expr> [auth]: seconds until done, and the last body.
 poll_gw() {
   local p="$1" expr="$2" auth="${3:-Bearer}" t0 out body
@@ -190,7 +199,7 @@ cmd_validate() {
       })
     }')"
   t_create="$(now)"
-  resp="$(rest POST /pods "$payload")" || die "gateway pod create failed: $(head -c 300 <<<"$resp")"
+  resp="$(rest POST /pods "$payload")" || die "gateway pod create failed: $(jq -r ".error // .message // \"unknown error\"" <<<"$resp" 2>/dev/null | head -c 300)"
   POD="$(jq -r '.id // empty' <<<"$resp")"
   [[ -n "$POD" ]] || die "gateway pod create returned no id"
   ledger "pod-created $POD gateway cpu=$CPU_FLAVOR $(jq -r '.costPerHr // empty' <<<"$resp")/h"
@@ -215,22 +224,22 @@ cmd_validate() {
 
   # 1. native → wan (cold pool start included).
   out="$(gw_call POST /fv/v1/jobs '{"model":"fastwan21-1.3b","prompt":"a red fox trotting through fresh snow, cinematic","seed":1}')"
-  sub="$(tail -1 <<<"$out")"; body="$(sed '$d' <<<"$out")"
+  split_submit "$out"
   r="$(poll_gw "/fv/v1/jobs/$(jq -r .id <<<"$body")" '.status == "succeeded" or .status == "failed"')"
   add "$(jq -c --arg sub "$sub" --arg w "$(head -1 <<<"$r")" '{api: "native", pool: "wan", cold: true, submit: $sub, wall_s: ($w|tonumber), status: .status, url_host: (.output.url // "" | sub("\\?.*"; "") | sub("^(https://[^/]+).*"; "\\1"))}' <<<"$(sed 1d <<<"$r")")"
   # 2. FastVideo /v1/videos → wan (warm).
   out="$(gw_call POST /v1/videos '{"model":"fastwan21-1.3b","prompt":"ocean waves at sunset","seconds":"5"}')"
-  sub="$(tail -1 <<<"$out")"; body="$(sed '$d' <<<"$out")"
+  split_submit "$out"
   r="$(poll_gw "/v1/videos/$(jq -r .id <<<"$body")" '.status == "completed" or .status == "failed"')"
   add "$(jq -c --arg sub "$sub" --arg w "$(head -1 <<<"$r")" '{api: "fastvideo", pool: "wan", cold: false, submit: $sub, wall_s: ($w|tonumber), status: .status}' <<<"$(sed 1d <<<"$r")")"
   # 3. fal queue → h3-turbo (cold pool start included).
   out="$(gw_call POST /minimax/h3-turbo/text-to-video '{"prompt":"A red fox trots through fresh snow at dawn","seed":1}' Key)"
-  sub="$(tail -1 <<<"$out")"; body="$(sed '$d' <<<"$out")"
+  split_submit "$out"
   r="$(poll_gw "/minimax/h3-turbo/requests/$(jq -r .request_id <<<"$body")/status" '.status == "COMPLETED"' Key)"
   add "$(jq -c --arg sub "$sub" --arg w "$(head -1 <<<"$r")" '{api: "fal", pool: "h3-turbo", cold: true, submit: $sub, wall_s: ($w|tonumber), status: .status, error: .error}' <<<"$(sed 1d <<<"$r")")"
   # 4. MiniMax → h3-turbo (warm).
   out="$(gw_call POST /v2/video_generation '{"model":"MiniMax-H3-Turbo","content":[{"type":"text","text":"a lighthouse in a storm"}],"resolution":"768P","duration":5,"ratio":"16:9"}')"
-  sub="$(tail -1 <<<"$out")"; body="$(sed '$d' <<<"$out")"
+  split_submit "$out"
   r="$(poll_gw "/v2/query/video_generation/$(jq -r .task_id <<<"$body")" '.task.status == "succeeded" or .task.status == "failed"')"
   add "$(jq -c --arg sub "$sub" --arg w "$(head -1 <<<"$r")" '{api: "minimax", pool: "h3-turbo", cold: false, submit: $sub, wall_s: ($w|tonumber), status: .task.status}' <<<"$(sed 1d <<<"$r")")"
   # 5. LTX → no ltx pool deployed: 503 + Retry-After.
@@ -241,7 +250,7 @@ cmd_validate() {
   local lat='[]' i g d
   for i in 1 2 3; do
     out="$(gw_call POST /fv/v1/jobs '{"model":"fastwan21-1.3b","prompt":"a paper boat on a stream","seed":7}')"
-    sub="$(tail -1 <<<"$out")"; body="$(sed '$d' <<<"$out")"
+    split_submit "$out"
     g="$(poll_gw "/fv/v1/jobs/$(jq -r .id <<<"$body")" '.status == "succeeded" or .status == "failed"' | head -1)"
     d="$(direct "$ep_wan" '{"kind":"http","method":"POST","path":"/fv/v1/jobs","headers":{},"body":{"model":"fastwan21-1.3b","prompt":"a paper boat on a stream","seed":7},"wait":true}')"
     lat="$(jq -c --arg g "$g" --arg sub "$sub" --argjson d "$d" '. + [{gateway_wall_s: ($g|tonumber), gateway_submit: $sub, direct: $d}]' <<<"$lat")"

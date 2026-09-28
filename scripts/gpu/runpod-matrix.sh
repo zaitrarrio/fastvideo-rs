@@ -579,9 +579,49 @@ Audio: male speech, clear voice, quiet room"
         --prompt "$SF_PROMPT" --switch-prompt "$SF_SWITCH" --seed "$SEED" "$@"
     }
     # shellcheck disable=SC2086
-    sf_stream sfstream-main --parity ${FV_SFSTREAM_RUNS:---run reb-sink3-120s,seconds=120,rope=rebased,sink=3 \
+    sf_stream sfstream-main --parity ${FV_SFSTREAM_RUNS:---run reb-sink15-120s,seconds=120,rope=rebased,sink=15 \
       --run switch-keep-30s,seconds=30,switch_at=15,switch=keep --run switch-reset-20s,seconds=20,switch_at=10,switch=reset}
-    sf_stream sfstream-10min --run reb-sink3-600s,seconds=600,rope=rebased,sink=3 --window-s 30
+    sf_stream sfstream-10min --run reb-sink15-600s,seconds=600,rope=rebased,sink=15 --window-s 30
+    ;;
+  sfquality)
+    # Long-rollout quality of the open-ended SF-Wan stream (design risk
+    # R12): per 10 s window picture and latent statistics (top band against
+    # the rest), a fresh-state TAEHV decode against the carried state, one
+    # contact sheet per run (gpucheck-out/sheets/<run>.jpg), for the RoPE
+    # policies, sink and window sizes, periodic KV re-cache, graph against
+    # eager, and f32 activations. FV_SFQ_RUNS / FV_SFQ_F32_RUNS override.
+    TAE_W="$TAE/taew2_1.safetensors"
+    [[ -f "$TAE_W" ]] || bash "$(dirname "${BASH_SOURCE[0]}")/fetch_taehv.sh" "$TAE" >>"$RUNS/tae-fetch.log" 2>&1 \
+      || log "WARN: taew2_1 fetch failed (tae-fetch.log)"
+    export FASTVIDEO_TAE_DIR="$TAE"
+    SF_PROMPT="${FV_SF_PROMPT:-A drone shot gliding over a winding river through an autumn forest, golden afternoon light, slow steady forward camera motion, highly detailed}"
+    SF_SWITCH="${FV_SF_SWITCH:-A drone shot gliding over snowy mountain peaks at dawn, pink sky, slow steady forward camera motion, highly detailed}"
+    sfq() {
+      # $2: a command prefix (e.g. "env FASTVIDEO_BF16_ACT=0"), word-split.
+      local name="$1" pre="$2"; shift 2
+      # shellcheck disable=SC2086
+      gated_cell "$name" sfwan21-1.3b $pre "$BIN" --keep-going --mode fast wan stream --weights "$W/sfwan21-1.3b" \
+        --prompt "$SF_PROMPT" --switch-prompt "$SF_SWITCH" --seed "$SEED" "$@"
+    }
+    SFQ_RUNS="${FV_SFQ_RUNS:-reb-s3-180,seconds=180,keep_s=60 reb-s3-eager-90,seconds=90,graphs=0
+      rel-s3-120,seconds=120,rope=rel abs-s3-90,seconds=90,rope=abs reb-s1-90,seconds=90,sink=1
+      reb-s6-120,seconds=120,sink=6 reb-s9-120,seconds=120,sink=9 reb-s12-120,seconds=120,sink=12
+      reb-s3-w12-90,seconds=90,window=12 reb-s3-w27-90,seconds=90,window=27
+      reb-s3-rc7k9-120,seconds=120,recache=7:9 reb-s3-rc14k18-120,seconds=120,recache=14:18}"
+    # Runs are separated by spaces or "+" (so a list fits in FV_EXTRA_ENV).
+    args=()
+    for r in ${SFQ_RUNS//+/ }; do args+=(--run "$r"); done
+    # shellcheck disable=SC2086
+    sfq sfq-main "" ${FV_SFQ_PARITY---parity} "${args[@]}"
+    # A second seed (FV_SFQ_SEED2_RUNS; skipped when unset).
+    if [[ -n "${FV_SFQ_SEED2_RUNS:-}" ]]; then
+      args=()
+      for r in ${FV_SFQ_SEED2_RUNS//+/ }; do args+=(--run "$r"); done
+      SEED="${FV_SFQ_SEED2:-7}" sfq sfq-seed2 "" "${args[@]}"
+    fi
+    args=()
+    for r in ${FV_SFQ_F32_RUNS-reb-s3-f32-60,seconds=60,graphs=0}; do args+=(--run "$r"); done
+    if (( ${#args[@]} )); then sfq sfq-f32 "env FASTVIDEO_BF16_ACT=0" "${args[@]}"; fi
     ;;
   headline)
     # The headline configurations on one pod (a new GPU type, one run):
@@ -2195,6 +2235,18 @@ Audio: male speech, clear voice, quiet room"
         fasth3-4step-dense | fasth3-4step-vsa)
           wcell="$target"
           cmd=("$BIN" --mode fast h3 gen --weights "$W/h3-base" --h3-recipe "${target#fasth3-}" "${h3_oracle[@]}") ;;
+        h3-ref2va-*)
+          # MiniMax-H3 Ref2VA (docs/ports/h3-ref2v.md) against FastVideo's
+          # Ref2VA pipeline: transformer_ref from h3-ref2va, one image
+          # reference, dense, `base-<N>step` = the reference's --steps N+1.
+          # Prompt and image as scripts/gpu/upstream/oracle.sh oracle_ref2va.
+          wcell=h3-ref2va
+          ref2va_prompt="${FV_REF2VA_PROMPT:-The camera glides slowly forward along the shoreline of the beach in <Picture 1>, turquoise waves rolling in and breaking into white foam, bright sunny day, the sound of the surf and a light wind.}"
+          cmd=("$BIN" --mode fast h3 gen --weights "$W/h3-base" --ref-root "$W/h3-ref2va"
+            --h3-recipe "base-${target#h3-ref2va-}" --dense
+            --ref "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/fixtures/ti2v-beach-832x480.jpg"
+            --prompt "$ref2va_prompt" --seconds 5 --seed "$SEED" --text-encoder streamed
+            --text-cache "$SCRATCH/h3-text-cache" --text-weights "$W/h3-base") ;;
         ltx25-*)
           wcell=ltx25-two-stage
           geo=(--height 512 --width 768 --num-frames 121)
@@ -2221,6 +2273,12 @@ Audio: male speech, clear voice, quiet room"
       esac
       oracle_run "oracle-$target" "$ours"
       oracle_diff "oracle-$target-diff" "$ref/dump" "$ours"
+      # Ref2VA control: the reference's condition rows injected as well, so
+      # only the DiT (and the text, when its token count matches) differs.
+      if [[ "$target" == h3-ref2va-* ]]; then
+        oracle_run "oracle-$target-cond" "$ours-cond" FASTVIDEO_INJECT_COND=1
+        oracle_diff "oracle-$target-cond-diff" "$ref/dump" "$ours-cond"
+      fi
       # The bf16 noise floor (FV_ORACLE_F32, default on for H3): ours with f32
       # activations against the reference, and our bf16 run against our f32
       # run -- how far bf16 rounding alone moves the same pipeline.
@@ -2237,6 +2295,39 @@ Audio: male speech, clear voice, quiet room"
         oracle_run "oracle-$target-owntext" "$ours-owntext" FASTVIDEO_INJECT_TEXT=0
         oracle_diff "oracle-$target-owntext-diff" "$ref/dump" "$ours-owntext"
         oracle_diff "oracle-$target-owntext-vs-injected" "$ours" "$ours-owntext"
+      fi
+      # Image conditioning (ltx25-i2v / ltx25-kf): the main run injects the
+      # reference's conditioning latents. -ownenc encodes the reference's
+      # preprocessed pixels with our encoder (the cond latent diff is the
+      # encoder's alone); -ownimg preprocesses and encodes on our own (the
+      # whole path end to end). Then frame fidelity: SSIM / PSNR of the
+      # output's pinned frames against the conditioning images (cover +
+      # center crop to the canvas), ours and the reference's.
+      if [[ "$target" == ltx25-i2v || "$target" == ltx25-kf ]]; then
+        oracle_run "oracle-$target-ownenc" "$ours-ownenc" FASTVIDEO_INJECT_COND=0
+        oracle_diff "oracle-$target-ownenc-diff" "$ref/dump" "$ours-ownenc"
+        oracle_run "oracle-$target-ownimg" "$ours-ownimg" FASTVIDEO_INJECT_COND=0 FASTVIDEO_INJECT_PIXELS=0
+        oracle_diff "oracle-$target-ownimg-diff" "$ref/dump" "$ours-ownimg"
+        fm="$RUNS/oracle-$target-frames"
+        mkdir -p "$fm"
+        pins=("0 $fx/ti2v-beach-832x480.jpg")
+        [[ "$target" == ltx25-kf ]] && pins+=("120 $fx/ti2v-beach-zoom-832x480.jpg")
+        for src in "ours:$RUNS/oracle-$target/frames/output.mp4" "ownimg:$RUNS/oracle-$target-ownimg/frames/output.mp4" \
+          "reference:$ref/dump/ref.mp4"; do
+          mp4="${src#*:}"
+          [[ -f "$mp4" ]] || { echo "${src%%:*} missing $mp4" >>"$fm/metrics.txt"; continue; }
+          cp "$mp4" "$fm/${src%%:*}.mp4" 2>/dev/null || true
+          for pin in "${pins[@]}"; do
+            idx="${pin%% *}" img="${pin#* }"
+            for m in ssim psnr; do
+              r="$(ffmpeg -v info -nostats -i "$mp4" -i "$img" -lavfi \
+                "[0:v]select=eq(n\,$idx),setpts=N/TB[a];[1:v]scale=768:512:force_original_aspect_ratio=increase:flags=bilinear,crop=768:512,format=yuv420p[b];[a]format=yuv420p[c];[c][b]$m" \
+                -frames:v 1 -f null - 2>&1 | grep -E "Parsed_$m" | tail -1)"
+              echo "${src%%:*} frame $idx $m: ${r##*] }" >>"$fm/metrics.txt"
+            done
+          done
+        done
+        sed "s/^/[$target-frames] /" "$fm/metrics.txt" | tee -a "$LOG" || true
       fi
       if [[ "$target" == sfwan* ]]; then
         # Frames: the reference's mp4 (its full VAE, bf16 decode, then its
@@ -2415,9 +2506,11 @@ Audio: male speech, clear voice, quiet room"
     # compared with the native 1080p clip of the same prompt and seed
     # (compare-clips: sharpness, jitter, patch-boundary ratios; LPIPS with
     # FV_LPIPS=1). Keyframes 0/40/80/120 of every clip are kept; the rest of
-    # the PNGs are deleted after the compares. FV_HD_POST_URL: a script fetched
-    # and run before that with $RUNS (scripts/gpu/hd-upscaler.sh, the upscaler
-    # benchmark).
+    # the PNGs are deleted after the compares (fetch with FV_FETCH_TREE=1 and
+    # FV_FETCH_SKIP='\.cache$'; a skip matching `frames/` also drops
+    # `keyframes/`). FV_HD_POST_URL: a script fetched and run before the prune
+    # with $RUNS (an upscaler benchmark; its weights must already be on the
+    # volumes, see CLAUDE.md).
     : "${FV_PROMPTS:=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/prompts-hd.json}"
     hd_common=(
       --seconds 5

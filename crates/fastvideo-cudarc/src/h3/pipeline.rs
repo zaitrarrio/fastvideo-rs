@@ -1559,7 +1559,14 @@ impl H3Pipeline {
                 .precision()
                 .unwrap_or(crate::llm::WeightPrecision::Native);
             let abort = || hooks.is_cancelled();
-            let text = encode_request_multimodal(encoder_root, request, lm, precision, &abort);
+            let text = encode_request_multimodal(
+                encoder_root,
+                request,
+                lm,
+                precision,
+                &abort,
+                self.options.reference_image_resize,
+            );
             // A cancel during the (streamed) multimodal stage stops it
             // between layers; report it as the cancel it is.
             hooks.check()?;
@@ -2115,6 +2122,7 @@ fn encode_request_multimodal(
     resident: Option<(&super::text::MultimodalEncoder, &crate::llm::ResidentDecoder)>,
     precision: crate::llm::WeightPrecision,
     abort: &dyn Fn() -> bool,
+    resize: ReferenceImageResize,
 ) -> Result<super::text::TextConditioning> {
     use super::text::{MultimodalLm, VisionImage, VisionVideo};
     use fastvideo_models::h3::presentation::PresentationRef;
@@ -2152,11 +2160,8 @@ fn encode_request_multimodal(
             match spec.kind {
                 ReferenceKind::Audio => refs.push(PresentationRef::Audio),
                 ReferenceKind::Image => {
-                    let img = image::open(&spec.path)
-                        .map_err(|e| msg(format!("open {}: {e}", spec.path.display())))?
-                        .into_rgb8();
-                    let (w, h) = (img.width() as usize, img.height() as usize);
-                    images_owned.push((img.into_raw(), h, w));
+                    let (rgb, h, w, _, _) = load_reference_image(&spec.path, resize)?;
+                    images_owned.push((rgb, h, w));
                     refs.push(PresentationRef::Image { token_count: 0 });
                 }
                 ReferenceKind::Video => {
@@ -2284,6 +2289,28 @@ fn encode_fl2va_cond_rows(
     }
 }
 
+/// A Ref2VA reference image as FastVideo prepares it (`reference.py`
+/// `prepare_reference_image`): RGB8 resized with Lanczos to the reference
+/// canvas (2048 short edge, or `match`). The VAE encodes this image and
+/// Qwen-VL sees the same one, so its vision-token count follows the canvas.
+/// Returns `(rgb, height, width, source width, source height)`.
+fn load_reference_image(
+    path: &Path,
+    resize: ReferenceImageResize,
+) -> Result<(Vec<u8>, usize, usize, usize, usize)> {
+    let img = image::open(path)
+        .map_err(|e| msg(format!("open {}: {e}", path.display())))?
+        .into_rgb8();
+    let (sw, sh) = (img.width() as usize, img.height() as usize);
+    let (out_h, out_w) = resolve_reference_image_size_with(sw, sh, resize).map_err(msg)?;
+    let img = if (sw, sh) == (out_w, out_h) {
+        img
+    } else {
+        image::imageops::resize(&img, out_w as u32, out_h as u32, image::imageops::FilterType::Lanczos3)
+    };
+    Ok((img.into_raw(), out_h, out_w, sw, sh))
+}
+
 struct Ref2VaEncoded {
     prepared: Vec<PreparedReference>,
     video_rows: CudaTensor,
@@ -2333,12 +2360,7 @@ fn encode_ref2va_conditions(
                 });
             }
             ReferenceKind::Image => {
-                let img = image::open(&spec.path)
-                    .map_err(|e| msg(format!("open {}: {e}", spec.path.display())))?
-                    .into_rgb8();
-                let (sw, sh) = (img.width() as usize, img.height() as usize);
-                let (out_h, out_w) =
-                    resolve_reference_image_size_with(sw, sh, resize).map_err(msg)?;
+                let (rgb, out_h, out_w, sw, sh) = load_reference_image(&spec.path, resize)?;
                 let prep = PreparedImageRef::from_pixel_size(out_h, out_w, ratio).map_err(msg)?;
                 crate::wan::log::info(format_args!(
                     "h3 ref2va: encode image {} {}x{} → {}x{} ({})",
@@ -2349,14 +2371,7 @@ fn encode_ref2va_conditions(
                     out_h,
                     spec.path.display()
                 ));
-                let z = encoder.encode_keyframe_file(
-                    &spec.path,
-                    out_h,
-                    out_w,
-                    true,
-                    true,
-                    seed.wrapping_add(31 + i as u64),
-                )?;
+                let z = encoder.encode_rgb8(&rgb, out_h, out_w, true, seed.wrapping_add(31 + i as u64))?;
                 let host = z.host_cow()?.into_owned();
                 let shape = [cfg.in_channels, 1, prep.latent_height, prep.latent_width];
                 if host.len() != shape.iter().product::<usize>() {

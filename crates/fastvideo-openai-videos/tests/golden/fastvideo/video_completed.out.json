@@ -28,5 +28,5 @@
     "text_encode": 1.5
   },
   "status": "completed",
-  "url": null
+  "url": "https://r2.example.com/fv-media/video.mp4?X-Amz-Signature=x"
 }

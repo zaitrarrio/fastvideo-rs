@@ -70,10 +70,17 @@ struct HealthState {
     gw: Arc<Gateway>,
     admin: Arc<AdminToken>,
     metrics: Option<metrics_exporter_prometheus::PrometheusHandle>,
+    root_model: Option<String>,
 }
 
 /// `/ping`, `/health`, `/healthz`, `/`, `/metrics` and `/fv/v1/gateway/pools`.
-pub fn routes(gw: Arc<Gateway>, admin: Arc<AdminToken>, metrics: Option<metrics_exporter_prometheus::PrometheusHandle>) -> Router {
+/// `root_model`: what `GET /` names (FastWan's model when FastWan is mounted).
+pub fn routes(
+    gw: Arc<Gateway>,
+    admin: Arc<AdminToken>,
+    metrics: Option<metrics_exporter_prometheus::PrometheusHandle>,
+    root_model: Option<String>,
+) -> Router {
     Router::new()
         .route("/ping", get(ping))
         .route("/health", get(health))
@@ -81,7 +88,7 @@ pub fn routes(gw: Arc<Gateway>, admin: Arc<AdminToken>, metrics: Option<metrics_
         .route("/", get(root))
         .route("/metrics", get(metrics_text))
         .route("/fv/v1/gateway/pools", get(pools_route))
-        .with_state(HealthState { gw, admin, metrics })
+        .with_state(HealthState { gw, admin, metrics, root_model })
 }
 
 fn phase(gw: &Gateway) -> (&'static str, StatusCode) {
@@ -130,7 +137,7 @@ async fn healthz(State(h): State<HealthState>) -> Response {
 
 async fn root(State(h): State<HealthState>) -> Response {
     let cat = h.gw.catalog();
-    let model = cat.table.models().next().map(|m| m.served_names.first().cloned().unwrap_or_else(|| m.id.0.clone()));
+    let model = h.root_model.clone().or_else(|| cat.table.models().next().map(|m| m.served_names.first().cloned().unwrap_or_else(|| m.id.0.clone())));
     Json(json!({"model": model, "server": "fv-serve", "role": "gateway", "version": env!("CARGO_PKG_VERSION")})).into_response()
 }
 

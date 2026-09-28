@@ -619,7 +619,9 @@ timing (12 heads, 1560 tokens per frame, 3-frame blocks): causal kernel
   again by the next call (its cache slots are overwritten in place).
 
 The cache rolls at `local_attn_frames` (default 21, the training window) and
-keeps `sink_frames` (default 3) at its head. Three RoPE policies
+keeps `sink_frames` at its head: default 15 (a deep sink, five of the seven
+blocks; it was 3 until the long-run quality study below showed that one
+block of sink falls apart within a minute). Three RoPE policies
 (`causal::KvRope`):
 
 | Policy | Keys in the cache | Cost | Offsets seen by attention |
@@ -763,6 +765,10 @@ equal.
 
 ### Long-run stability (single prompt and seed; statistics, not a visual review)
 
+> Superseded by the visual study in the next section. These statistics
+> (whole-frame luma, contrast, motion) missed the banding: the E2E rerun
+> and the contact sheets below show sink 3 degrading from 30-60 s.
+
 Per 10 s (30 s for the 10-minute run) of video: mean luma, frame std, mean
 temporal MAD between consecutive frames and across block seams (0-255),
 gradient sharpness, fraction of clipped pixels. Seam MAD tracks in-block MAD
@@ -792,3 +798,90 @@ the window from empty.
 Not measured: quality with a reference metric (LPIPS or CLIP against a
 bounded clip), several prompts and seeds for the long runs, and RTX PRO
 6000 (none in stock in US-CA-2 during these runs).
+
+### Long-run quality: the R12 study (sink size decides it)
+
+The E2E rerun (`docs/serve/e2e/wan.md`) showed a glow from about 30 s and
+horizontal bands growing down from the top rows from about 45 s with the
+rebased sink 3. `runpod-matrix.sh sfquality` (`fv-gpucheck wan stream`,
+no server) reproduces it and isolates it. RTX PRO 6000 (EUR-IS-1), the E2E
+prompt, 832x480, 16 fps. Images `sha-f2b3180` (matrix) and `sha-2c987e8`
+(long and second-seed runs). Every run records, per 10 s window, the
+picture statistics above plus the **top band** (first eighth of the rows)
+against the rest: mean saturation, and `hu`, the variance along a row over
+the variance of the band (about 1 for texture, near 0 for horizontal
+stripes). The same is recorded on the **DiT latents**, along with a hash of
+the latents per window. At the start of each window, a **fresh-state
+TAEHV decode** of the last four blocks is compared with the streamed
+(carried-state) frames. Each run also writes a contact sheet: one tile per
+10 s, the streamed frame over its fresh-state decode. Reports and sheets
+are in `artifacts/serve/e2e/wan/r12/`.
+
+**It is not the decoder, graphs or precision.** It is the DiT's
+extrapolation under a small sink.
+
+| Check | Result |
+|---|---|
+| Fresh-state TAEHV decode vs the carried state, every 10 s over 180-300 s | MAD 0.02-0.07 of 255, max 1-10 levels, the same in the top band. The bands are in both rows of every sheet. |
+| Whole-clip decode (4-latent chunks, one state) vs the streamed 3-latent blocks, first 60 s (969 frames) | 1.9-3.2% of RGB8 values differ, by at most 4 levels. The top band and the rest are equal (mean 0.02-0.03). |
+| DiT latents, top band | `hu` falls from 0.25-0.55 to **0.01-0.05**, with the top-band std rising 0.64 → 1.2, as the picture bands. The stripes are in the latents. |
+| Graph vs eager (rebased sink 3, 90 s) | the per-window latent hashes are identical: bit for bit over 1440 frames |
+| f32 activations and KV cache (`FASTVIDEO_BF16_ACT=0`, eager, 60 s) | also darkens, and the top band starts from 40-50 s. Rounding is not the cause. |
+| Bounded parity (absolute, sink 0 vs the 81-frame path), graph parity (3 policies) | still bitwise |
+
+No positional, padding or decoder-state bug was found. The RoPE geometry
+matches FastVideo's `relativistic` policy: the rebased sink equals it up to
+rounding, and after a minute the two rollouts differ only as chaotic
+trajectories do. FastVideo's reference was not run (its SF-Wan pipeline
+refuses more than 21 frames without `local_attn_size`, and
+`relativistic` + sink there is this same geometry).
+
+**Sink size** (rebased, window 21; seed 1024 unless noted; top-band
+saturation 0-255, about 30 on a clean picture, 150-220 once banded):
+
+| Sink (frames) | Seconds | What happens |
+|---|---|---|
+| 1 | 90 | top band from 30-40 s, off-colour glowing scene by 60 s |
+| 3 (old default) | 180 | dark at 10-20 s, glow and top bands from 50-60 s; top band saturated (130-220) and latent `hu` 0.01 from 90 s; the picture is mostly bands by 2 min (`before-reb-sink3-180s-seed1024.jpg`) |
+| 3, seed 7 | 120 | smeared, repeated shapes by 50 s, then bands (`before-reb-sink3-120s-seed7.jpg`) |
+| 6 | 120 | top band from 70 s (latent `hu` 0.06-0.11) |
+| 9 | 300 | coherent to about 3 min, then bands (top sat 170-215 from 190 s) |
+| 12 | 300 | coherent content to 5 min, but a thin coloured strip in the top rows from about 2 min, on and off (`reb-sink12-300s.jpg`); seed 7, 120 s: clean |
+| **15 (new default)** | 300 | clean to 2 min (top sat 20-44, latent `hu` 0.11-0.39); from 2 to 4 min a thin strip in the top 3-5% of rows comes and goes, with one banded-water scene at 3:20-3:50; clean again by 4:10. It never spreads down the frame (`after-reb-sink15-300s-seed1024.jpg`). |
+| **15**, seed 7 | 180 | clean throughout (`after-reb-sink15-180s-seed7.jpg`) |
+| 15, prompt switch (keep) at 60 s | 120 | clean; the new scene takes over within 10 s |
+
+Other levers, sink 3 (none helps):
+
+| Setting | Result |
+|---|---|
+| Relativistic (FastVideo) | the same failure on a different trajectory: dark at 60-70 s, a top band after that (`rel-sink3-120s.jpg`) |
+| Absolute | no bands, but dark and clipped (clipped fraction 0.13-0.47 from 10 s): positions past the training window |
+| Window 12 | fewer bands in 90 s, but the picture wanders (MAD up to 14); 1.4x faster |
+| Window 27 | darker, and bands by 60 s |
+| Periodic KV re-cache (`RolloutConfig::recache`, new, off by default): every 7 blocks, 9 frames kept, and every 14 blocks, 18 frames kept | worse: the content goes green and dark, with streaks, within 20 s (`recache-7-9-120s.jpg`). An ordinary latent at position 0 is off-distribution, the same failure as sink 0 (strobe's live Wan default resets the whole cache every 21 latents instead: a hard cut every 5 s). |
+
+Reading: a Self-Forcing rollout past its 21-frame training horizon drifts.
+A sink made of the first, clean frames anchors it, and the anchor has to
+be most of the window ("deep sink": the rebased geometry puts it just
+before the two recent blocks). One block of sink is too weak an anchor.
+The bands grow from the top rows of the latents. The mechanism is in the
+DiT, not in any code path found here.
+
+**Cost:** 15 sink frames re-rope five times the tokens of 3: on RTX PRO
+6000 the steady block is 0.809 s against 0.788 s (14.8 against 15.2
+frames/s, graphs). Recent context is 6 frames: the previous block and the
+current one. Motion stays continuous (MAD 4-15, seam MAD tracks in-block).
+
+**Recommendation:** default sink 15 (`RolloutConfig::default`, the serve
+SF-Wan recipe). A single prompt is reliably clean for **2 minutes**. Up to
+5 minutes the content stays coherent, but it may show a thin artefact strip
+along the top edge. Keep `max_seconds` at 120 s for unattended sessions, or
+up to 300 s where a transient top-edge artefact is acceptable. A prompt
+switch (keep) does not reset this: the sink keeps the first prompt's
+frames. `PromptSwitch::Reset` or `reset()` renews the anchor.
+
+Device memory rose 0.5-1.6 GiB over these runs, against flat in E7. That
+growth is from the diagnostics (a 12-latent fresh decode every 10 s and the
+kept latents), not the rollout: the sink 15 runs, which had no `keep_s`, passed the
+growth check.

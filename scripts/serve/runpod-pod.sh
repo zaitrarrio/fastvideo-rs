@@ -132,7 +132,7 @@ cleanup() {
 # Sets POD; prints nothing. $1 image, $2 api-key hash.
 create() {
   local image="$1" keyhash="$2" gpu resp dph name
-  name="fv-serve-smoke-$(date -u +%m%d%H%M%S)"
+  name="${FV_POD_NAME_PREFIX:-fv-serve-smoke}-$(date -u +%m%d%H%M%S)"
   IFS=',' read -r -a types <<<"$GPUS"
   for gpu in "${types[@]}"; do
     if ! resp="$(rest POST /pods "$(payload "$image" "$gpu" "$name" "$keyhash")" 2>&1)"; then

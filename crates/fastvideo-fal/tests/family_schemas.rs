@@ -152,7 +152,7 @@ fn endpoint_ids_and_slugs() {
     assert_eq!(app_id("lightricks/ltx-2.5/image-to-video/pro"), "lightricks/ltx-2.5");
     assert_eq!(app_id("minimax/h3/text-to-video"), "minimax/h3");
     assert_eq!(app_id("fastvideo/ltx-turbo/text-to-video"), "fastvideo/ltx-turbo");
-    assert_eq!(output_slug("minimax/h3-max-turbo"), "minimax-h3");
+    assert_eq!(output_slug("minimax/h3-max-turbo"), "minimax-h3-max-turbo");
     assert_eq!(output_slug("lightricks/ltx-2.5"), "ltx-2.5");
     assert_eq!(output_slug("fal-ai/wan"), "wan");
     assert_eq!(output_slug("fastvideo/fastwan21-1.3b"), "fastwan21-1.3b");

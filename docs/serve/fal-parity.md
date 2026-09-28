@@ -149,7 +149,7 @@ The five `minimax/h3-max[-turbo]` HTTP endpoints share these fields:
 |---|---|---|---|
 | `minimax/h3-max/text-to-video` | **served** (`sol-h3`, E2E h3-max.md) | `1080P` is refused (`H3Refine1080P`). `target_audio_url` is refused (`H3TargetAudio`, E10). `prompt_expansion_mode` is accepted and ignored. No safety checker | 1080P: **not possible** (fal's latent refiner is not published). target audio: **engine port** (FL2VA target-audio conditioning, E10). Prompt expansion: an LLM service integration |
 | `minimax/h3-max/image-to-video` | **served** (first frame, last frame, both) | same as t2v | same |
-| `minimax/h3-max/reference-to-video` | **partial**: route and schema exist; the engine refuses (`H3Ref2vaNotLoaded`) | the whole mode | **engine port + config** (ref2va DiT resident). **In progress (other agent); targets in §1.3** |
+| `minimax/h3-max/reference-to-video` | **served when configured**: the Ref2VA companions `h3-ref2v-max` (base Ref2VA DiT, 49 forwards) and `h3-ref2v-turbo` (Sol-H3 Ref2VA, 4 forwards) take Ref2V requests on `h3-max` / `h3-turbo` (`route_task`); limits 9 / 3 / 3 / 12, clips 2 to 15 s and 15 s per kind, `adaptive` from the first image (else video) reference (docs/ports/h3-ref2v.md) | `1080P` (`H3Refine1080P`); reference-token billing is not modelled | Deploy `configs/serve/runpod-h3-ref2v.toml` (own process on 80-96 GB cards) |
 | `minimax/h3-max/director` | **served** (`fal_director`) | `1080p` gives `invalid_input`. `audio_url` gives `invalid_initial_audio`. No prompt expander (a chunk's prompt is premise + direction) | 1080p: not possible (as above). `audio_url`: engine port (E10) |
 | `minimax/h3-max-turbo/{text,image}-to-video` | **served (P0, §5)**: mounted by default on the H3 Turbo tier. Was **partial**: we serve the turbo tier as `minimax/h3-turbo` (plus `h3-draft`), not under fal's id | app id | **config**: add `"minimax/h3-max-turbo"` to `fal_apps` and `[aliases] "h3-max-turbo" = "fasth3-4step-vsa"`. Better: a one-line arm in `adapters::fal_config` giving it the H3 Turbo tier fallback. fal has no `h3-max-turbo/reference-to-video`; ours adds it on every app, which is harmless |
 | `minimax/h3/{t2v,i2v,r2v}` (base H3) | **served (P0, §5)** at 480P and 768P on the H3 Max tier (mounted by default; `2K` / `4K` are listed and answer a clean 422 `H3Resolution2K` on `resolution`). Was **partial**: 480P and 768P are what we generate; the base-model app id is not mounted | `2K` and `4K` (the default!) are refused (`H3Resolution2K`). App id `minimax/h3` | App id: **config**. 2K/4K: **not possible** with fal's pipeline. It would take **new weights**: an open video super-resolution model (none is vetted for this repo yet) |
@@ -396,7 +396,7 @@ Ours today:
      schema (§3.1 5B fields).
    - Queue status and result URLs drop the sub-path (research-fal.md §2), so
      multi-segment subs only affect submit routes.
-   - Fix the output file slug per app (`…_minimax-h3.mp4` on every app,
+   - Fix the output file slug per app and tier (`…_minimax-h3.mp4` on every app,
      E2E wan.md).
    - This unlocks, on the fal wire: 720p, 1440p and 2160p; fps
      24/25/48/50; LTX `generate_audio`; LTX 6 to 20 s; and the Wan knobs.

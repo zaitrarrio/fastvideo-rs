@@ -48,7 +48,9 @@ let app = fastvideo_fal::router(ctx.clone(), FalConfig::default()); // a Router<
 ```
 
 Fal artifacts should be named with `fastvideo_fal::output_file_name(&job)`
-(`<nanoid21>_minimax-h3.mp4`), because hosted fal returns names in that form.
+(`<nanoid21>_<app>[-<tier>].mp4`, e.g. `…_minimax-h3-max.mp4`): hosted fal's
+form, but named by the app and tier that made the file (hosted fal writes
+`minimax-h3` for every H3 app).
 
 ## Tests
 

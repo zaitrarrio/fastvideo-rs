@@ -1,0 +1,192 @@
+{
+  "checks": [
+    {
+      "limits": {},
+      "name": "run_resident-cold",
+      "ok": true,
+      "values": {
+        "denoise_s": 15.527254687,
+        "files": 125,
+        "frames": 124,
+        "peak_gib": 71.84204711019993,
+        "sha256": "a5f1102d6d26ffe260f820eb0e0566824f2db001431537fca14163ec016bc8d8",
+        "text_encoder": "resident-fp8-multimodal",
+        "text_s": 0.683266262,
+        "wall_s": 40.276206356
+      }
+    },
+    {
+      "limits": {},
+      "name": "run_stream",
+      "ok": true,
+      "values": {
+        "denoise_s": 15.603711823,
+        "files": 125,
+        "frames": 124,
+        "peak_gib": 72.1092285066843,
+        "sha256": "a5f1102d6d26ffe260f820eb0e0566824f2db001431537fca14163ec016bc8d8",
+        "text_encoder": "streamed-fp8-multimodal",
+        "text_s": 51.164362063,
+        "wall_s": 89.946698275
+      }
+    },
+    {
+      "limits": {},
+      "name": "run_resident",
+      "ok": true,
+      "values": {
+        "denoise_s": 15.62581327,
+        "files": 125,
+        "frames": 124,
+        "peak_gib": 72.1092285066843,
+        "sha256": "a5f1102d6d26ffe260f820eb0e0566824f2db001431537fca14163ec016bc8d8",
+        "text_encoder": "resident-fp8-multimodal",
+        "text_s": 0.602220667,
+        "wall_s": 38.204684046
+      }
+    },
+    {
+      "limits": {
+        "differing": 0
+      },
+      "name": "i2v_resident_vs_stream_bytes",
+      "ok": true,
+      "values": {
+        "differing_resident_vs_resident_cold": 0,
+        "differing_resident_vs_stream": 0,
+        "files": 125
+      }
+    }
+  ],
+  "context": {
+    "cuda_feature": true,
+    "device": {
+      "compute_capability": [
+        12,
+        0
+      ],
+      "free_mib": 96545,
+      "name": "NVIDIA RTX PRO 6000 Blackwell Server Edition",
+      "spec": "cuda",
+      "total_mib": 97251
+    },
+    "load_s": 140.783152368,
+    "load_vision_s": 6.701105753,
+    "mode": "exact",
+    "text_encoder": [
+      "resident-fp8",
+      24395827200
+    ]
+  },
+  "elapsed_s": 309.910944843,
+  "env": {
+    "FASTVIDEO_BF16": "0",
+    "FASTVIDEO_TEACACHE": "0",
+    "FASTVIDEO_TF32": "0"
+  },
+  "error": null,
+  "git_sha": null,
+  "stage": "h3",
+  "status": "pass"
+}{
+  "checks": [
+    {
+      "limits": {
+        "differing_elements": 0
+      },
+      "name": "i2v_text_resident_vs_streamed",
+      "ok": true,
+      "values": {
+        "differing_elements": 0,
+        "elements": 2160640,
+        "resident_encoder": "resident-bf16-multimodal",
+        "resident_gib": 90.82226753234863,
+        "resident_load_s": 73.624896788,
+        "resident_s": [
+          0.921333217,
+          1.204761878
+        ],
+        "same_ids": true,
+        "streamed_encoder": "streamed-multimodal",
+        "streamed_s": 131.494333293,
+        "tokens": 422
+      }
+    }
+  ],
+  "context": {
+    "cuda_feature": true,
+    "device": {
+      "compute_capability": [
+        12,
+        0
+      ],
+      "free_mib": 96545,
+      "name": "NVIDIA RTX PRO 6000 Blackwell Server Edition",
+      "spec": "cuda",
+      "total_mib": 97251
+    },
+    "mode": "exact"
+  },
+  "elapsed_s": 207.914585072,
+  "env": {
+    "FASTVIDEO_BF16": "0",
+    "FASTVIDEO_TEACACHE": "0",
+    "FASTVIDEO_TF32": "0"
+  },
+  "error": null,
+  "git_sha": null,
+  "stage": "h3",
+  "status": "pass"
+}{
+  "checks": [
+    {
+      "limits": {
+        "differing_elements": 0
+      },
+      "name": "i2v_text_resident_vs_streamed",
+      "ok": true,
+      "values": {
+        "bf16_streamed_s": 126.731352651,
+        "differing_elements": 0,
+        "elements": 2160640,
+        "fp8_vs_bf16_cosine": 0.9997948669296296,
+        "fp8_vs_bf16_rel_l2": 0.020311434752699878,
+        "resident_encoder": "resident-fp8-multimodal",
+        "resident_gib": 22.72038459777832,
+        "resident_load_s": 35.540452751,
+        "resident_s": [
+          0.873211256,
+          0.971012045
+        ],
+        "same_ids": true,
+        "streamed_encoder": "streamed-fp8-multimodal",
+        "streamed_s": 50.857020428,
+        "tokens": 422
+      }
+    }
+  ],
+  "context": {
+    "cuda_feature": true,
+    "device": {
+      "compute_capability": [
+        12,
+        0
+      ],
+      "free_mib": 96545,
+      "name": "NVIDIA RTX PRO 6000 Blackwell Server Edition",
+      "spec": "cuda",
+      "total_mib": 97251
+    },
+    "mode": "exact"
+  },
+  "elapsed_s": 215.427439617,
+  "env": {
+    "FASTVIDEO_BF16": "0",
+    "FASTVIDEO_TEACACHE": "0",
+    "FASTVIDEO_TF32": "0"
+  },
+  "error": null,
+  "git_sha": null,
+  "stage": "h3",
+  "status": "pass"
+}

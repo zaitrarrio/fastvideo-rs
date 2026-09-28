@@ -1,0 +1,746 @@
+{
+ "tensors": {
+  "video_step00_in": {
+   "shape": [
+    44400,
+    96
+   ],
+   "dtype": "torch.float32"
+  },
+  "audio_step00_in": {
+   "shape": [
+    414,
+    32
+   ],
+   "dtype": "torch.float32"
+  },
+  "text_hidden": {
+   "shape": [
+    1,
+    7154,
+    5120
+   ],
+   "dtype": "torch.bfloat16"
+  },
+  "text_refined": {
+   "shape": [
+    1,
+    7154,
+    5376
+   ],
+   "dtype": "torch.bfloat16"
+  },
+  "step00_packed_in": {
+   "shape": [
+    812,
+    5376
+   ],
+   "dtype": "torch.bfloat16"
+  },
+  "rope_cos": {
+   "shape": [
+    812,
+    96
+   ],
+   "dtype": "torch.bfloat16"
+  },
+  "rope_sin": {
+   "shape": [
+    812,
+    96
+   ],
+   "dtype": "torch.bfloat16"
+  },
+  "step00_b0_adaln": {
+   "shape": [
+    812,
+    32256
+   ],
+   "dtype": "torch.bfloat16"
+  },
+  "step00_b0_attn_in": {
+   "shape": [
+    812,
+    5376
+   ],
+   "dtype": "torch.bfloat16"
+  },
+  "step00_b0_attn_out": {
+   "shape": [
+    812,
+    5376
+   ],
+   "dtype": "torch.bfloat16"
+  },
+  "step00_b0_resid_msa": {
+   "shape": [
+    812,
+    5376
+   ],
+   "dtype": "torch.bfloat16"
+  },
+  "step00_b0_ffn_in": {
+   "shape": [
+    812,
+    5376
+   ],
+   "dtype": "torch.bfloat16"
+  },
+  "step00_b0_ffn_out": {
+   "shape": [
+    812,
+    5376
+   ],
+   "dtype": "torch.bfloat16"
+  },
+  "step00_block_0": {
+   "shape": [
+    812,
+    5376
+   ],
+   "dtype": "torch.bfloat16"
+  },
+  "step00_b1_adaln": {
+   "shape": [
+    812,
+    32256
+   ],
+   "dtype": "torch.bfloat16"
+  },
+  "step00_b1_attn_in": {
+   "shape": [
+    812,
+    5376
+   ],
+   "dtype": "torch.bfloat16"
+  },
+  "step00_b1_attn_out": {
+   "shape": [
+    812,
+    5376
+   ],
+   "dtype": "torch.bfloat16"
+  },
+  "step00_b1_resid_msa": {
+   "shape": [
+    812,
+    5376
+   ],
+   "dtype": "torch.bfloat16"
+  },
+  "step00_b1_ffn_in": {
+   "shape": [
+    812,
+    5376
+   ],
+   "dtype": "torch.bfloat16"
+  },
+  "step00_b1_ffn_out": {
+   "shape": [
+    812,
+    5376
+   ],
+   "dtype": "torch.bfloat16"
+  },
+  "step00_block_1": {
+   "shape": [
+    812,
+    5376
+   ],
+   "dtype": "torch.bfloat16"
+  },
+  "step00_block_2": {
+   "shape": [
+    812,
+    5376
+   ],
+   "dtype": "torch.bfloat16"
+  },
+  "step00_block_3": {
+   "shape": [
+    812,
+    5376
+   ],
+   "dtype": "torch.bfloat16"
+  },
+  "step00_block_4": {
+   "shape": [
+    812,
+    5376
+   ],
+   "dtype": "torch.bfloat16"
+  },
+  "step00_block_5": {
+   "shape": [
+    812,
+    5376
+   ],
+   "dtype": "torch.bfloat16"
+  },
+  "step00_block_6": {
+   "shape": [
+    812,
+    5376
+   ],
+   "dtype": "torch.bfloat16"
+  },
+  "step00_block_7": {
+   "shape": [
+    812,
+    5376
+   ],
+   "dtype": "torch.bfloat16"
+  },
+  "step00_block_8": {
+   "shape": [
+    812,
+    5376
+   ],
+   "dtype": "torch.bfloat16"
+  },
+  "step00_block_9": {
+   "shape": [
+    812,
+    5376
+   ],
+   "dtype": "torch.bfloat16"
+  },
+  "step00_block_10": {
+   "shape": [
+    812,
+    5376
+   ],
+   "dtype": "torch.bfloat16"
+  },
+  "step00_block_11": {
+   "shape": [
+    812,
+    5376
+   ],
+   "dtype": "torch.bfloat16"
+  },
+  "step00_block_12": {
+   "shape": [
+    812,
+    5376
+   ],
+   "dtype": "torch.bfloat16"
+  },
+  "step00_block_13": {
+   "shape": [
+    812,
+    5376
+   ],
+   "dtype": "torch.bfloat16"
+  },
+  "step00_block_14": {
+   "shape": [
+    812,
+    5376
+   ],
+   "dtype": "torch.bfloat16"
+  },
+  "step00_block_15": {
+   "shape": [
+    812,
+    5376
+   ],
+   "dtype": "torch.bfloat16"
+  },
+  "step00_block_16": {
+   "shape": [
+    812,
+    5376
+   ],
+   "dtype": "torch.bfloat16"
+  },
+  "step00_block_17": {
+   "shape": [
+    812,
+    5376
+   ],
+   "dtype": "torch.bfloat16"
+  },
+  "step00_block_18": {
+   "shape": [
+    812,
+    5376
+   ],
+   "dtype": "torch.bfloat16"
+  },
+  "step00_block_19": {
+   "shape": [
+    812,
+    5376
+   ],
+   "dtype": "torch.bfloat16"
+  },
+  "step00_block_20": {
+   "shape": [
+    812,
+    5376
+   ],
+   "dtype": "torch.bfloat16"
+  },
+  "step00_block_21": {
+   "shape": [
+    812,
+    5376
+   ],
+   "dtype": "torch.bfloat16"
+  },
+  "step00_block_22": {
+   "shape": [
+    812,
+    5376
+   ],
+   "dtype": "torch.bfloat16"
+  },
+  "step00_block_23": {
+   "shape": [
+    812,
+    5376
+   ],
+   "dtype": "torch.bfloat16"
+  },
+  "step00_b24_adaln": {
+   "shape": [
+    812,
+    32256
+   ],
+   "dtype": "torch.bfloat16"
+  },
+  "step00_b24_attn_in": {
+   "shape": [
+    812,
+    5376
+   ],
+   "dtype": "torch.bfloat16"
+  },
+  "step00_b24_attn_out": {
+   "shape": [
+    812,
+    5376
+   ],
+   "dtype": "torch.bfloat16"
+  },
+  "step00_b24_resid_msa": {
+   "shape": [
+    812,
+    5376
+   ],
+   "dtype": "torch.bfloat16"
+  },
+  "step00_b24_ffn_in": {
+   "shape": [
+    812,
+    5376
+   ],
+   "dtype": "torch.bfloat16"
+  },
+  "step00_b24_ffn_out": {
+   "shape": [
+    812,
+    5376
+   ],
+   "dtype": "torch.bfloat16"
+  },
+  "step00_block_24": {
+   "shape": [
+    812,
+    5376
+   ],
+   "dtype": "torch.bfloat16"
+  },
+  "step00_block_25": {
+   "shape": [
+    812,
+    5376
+   ],
+   "dtype": "torch.bfloat16"
+  },
+  "step00_block_26": {
+   "shape": [
+    812,
+    5376
+   ],
+   "dtype": "torch.bfloat16"
+  },
+  "step00_block_27": {
+   "shape": [
+    812,
+    5376
+   ],
+   "dtype": "torch.bfloat16"
+  },
+  "step00_block_28": {
+   "shape": [
+    812,
+    5376
+   ],
+   "dtype": "torch.bfloat16"
+  },
+  "step00_block_29": {
+   "shape": [
+    812,
+    5376
+   ],
+   "dtype": "torch.bfloat16"
+  },
+  "step00_block_30": {
+   "shape": [
+    812,
+    5376
+   ],
+   "dtype": "torch.bfloat16"
+  },
+  "step00_block_31": {
+   "shape": [
+    812,
+    5376
+   ],
+   "dtype": "torch.bfloat16"
+  },
+  "step00_block_32": {
+   "shape": [
+    812,
+    5376
+   ],
+   "dtype": "torch.bfloat16"
+  },
+  "step00_block_33": {
+   "shape": [
+    812,
+    5376
+   ],
+   "dtype": "torch.bfloat16"
+  },
+  "step00_block_34": {
+   "shape": [
+    812,
+    5376
+   ],
+   "dtype": "torch.bfloat16"
+  },
+  "step00_block_35": {
+   "shape": [
+    812,
+    5376
+   ],
+   "dtype": "torch.bfloat16"
+  },
+  "step00_block_36": {
+   "shape": [
+    812,
+    5376
+   ],
+   "dtype": "torch.bfloat16"
+  },
+  "step00_block_37": {
+   "shape": [
+    812,
+    5376
+   ],
+   "dtype": "torch.bfloat16"
+  },
+  "step00_block_38": {
+   "shape": [
+    812,
+    5376
+   ],
+   "dtype": "torch.bfloat16"
+  },
+  "step00_block_39": {
+   "shape": [
+    812,
+    5376
+   ],
+   "dtype": "torch.bfloat16"
+  },
+  "step00_block_40": {
+   "shape": [
+    812,
+    5376
+   ],
+   "dtype": "torch.bfloat16"
+  },
+  "step00_block_41": {
+   "shape": [
+    812,
+    5376
+   ],
+   "dtype": "torch.bfloat16"
+  },
+  "step00_block_42": {
+   "shape": [
+    812,
+    5376
+   ],
+   "dtype": "torch.bfloat16"
+  },
+  "step00_block_43": {
+   "shape": [
+    812,
+    5376
+   ],
+   "dtype": "torch.bfloat16"
+  },
+  "step00_block_44": {
+   "shape": [
+    812,
+    5376
+   ],
+   "dtype": "torch.bfloat16"
+  },
+  "step00_block_45": {
+   "shape": [
+    812,
+    5376
+   ],
+   "dtype": "torch.bfloat16"
+  },
+  "step00_block_46": {
+   "shape": [
+    812,
+    5376
+   ],
+   "dtype": "torch.bfloat16"
+  },
+  "step00_b47_adaln": {
+   "shape": [
+    812,
+    32256
+   ],
+   "dtype": "torch.bfloat16"
+  },
+  "step00_b47_attn_in": {
+   "shape": [
+    812,
+    5376
+   ],
+   "dtype": "torch.bfloat16"
+  },
+  "step00_b47_attn_out": {
+   "shape": [
+    812,
+    5376
+   ],
+   "dtype": "torch.bfloat16"
+  },
+  "step00_b47_resid_msa": {
+   "shape": [
+    812,
+    5376
+   ],
+   "dtype": "torch.bfloat16"
+  },
+  "step00_b47_ffn_in": {
+   "shape": [
+    812,
+    5376
+   ],
+   "dtype": "torch.bfloat16"
+  },
+  "step00_b47_ffn_out": {
+   "shape": [
+    812,
+    5376
+   ],
+   "dtype": "torch.bfloat16"
+  },
+  "step00_block_47": {
+   "shape": [
+    812,
+    5376
+   ],
+   "dtype": "torch.bfloat16"
+  },
+  "step00_block_48": {
+   "shape": [
+    812,
+    5376
+   ],
+   "dtype": "torch.bfloat16"
+  },
+  "step00_block_49": {
+   "shape": [
+    812,
+    5376
+   ],
+   "dtype": "torch.bfloat16"
+  },
+  "video_sigmas": {
+   "shape": [
+    5
+   ],
+   "dtype": "torch.float32"
+  },
+  "video_timesteps": {
+   "shape": [
+    4
+   ],
+   "dtype": "torch.float32"
+  },
+  "video_vel_step01": {
+   "shape": [
+    37296,
+    96
+   ],
+   "dtype": "torch.float32"
+  },
+  "video_step01": {
+   "shape": [
+    37296,
+    96
+   ],
+   "dtype": "torch.float32"
+  },
+  "audio_sigmas": {
+   "shape": [
+    5
+   ],
+   "dtype": "torch.float32"
+  },
+  "audio_timesteps": {
+   "shape": [
+    4
+   ],
+   "dtype": "torch.float32"
+  },
+  "audio_vel_step01": {
+   "shape": [
+    414,
+    32
+   ],
+   "dtype": "torch.float32"
+  },
+  "audio_step01": {
+   "shape": [
+    414,
+    32
+   ],
+   "dtype": "torch.float32"
+  },
+  "video_vel_step02": {
+   "shape": [
+    37296,
+    96
+   ],
+   "dtype": "torch.float32"
+  },
+  "video_step02": {
+   "shape": [
+    37296,
+    96
+   ],
+   "dtype": "torch.float32"
+  },
+  "audio_vel_step02": {
+   "shape": [
+    414,
+    32
+   ],
+   "dtype": "torch.float32"
+  },
+  "audio_step02": {
+   "shape": [
+    414,
+    32
+   ],
+   "dtype": "torch.float32"
+  },
+  "video_vel_step03": {
+   "shape": [
+    37296,
+    96
+   ],
+   "dtype": "torch.float32"
+  },
+  "video_step03": {
+   "shape": [
+    37296,
+    96
+   ],
+   "dtype": "torch.float32"
+  },
+  "audio_vel_step03": {
+   "shape": [
+    414,
+    32
+   ],
+   "dtype": "torch.float32"
+  },
+  "audio_step03": {
+   "shape": [
+    414,
+    32
+   ],
+   "dtype": "torch.float32"
+  },
+  "video_vel_step04": {
+   "shape": [
+    37296,
+    96
+   ],
+   "dtype": "torch.float32"
+  },
+  "video_step04": {
+   "shape": [
+    37296,
+    96
+   ],
+   "dtype": "torch.float32"
+  },
+  "audio_vel_step04": {
+   "shape": [
+    414,
+    32
+   ],
+   "dtype": "torch.float32"
+  },
+  "audio_step04": {
+   "shape": [
+    414,
+    32
+   ],
+   "dtype": "torch.float32"
+  }
+ },
+ "pid_start": 410,
+ "started": 1790626189.5009344,
+ "argv": [
+  "-c",
+  "--multiprocessing-fork"
+ ],
+ "op_blocks": [
+  0,
+  1,
+  24,
+  47
+ ],
+ "layout": {
+  "sequence_length": 51968,
+  "text": 7154,
+  "audio": 414,
+  "video": 44400,
+  "num_condition_video_rows": 7104
+ },
+ "env": {
+  "FASTVIDEO_DUMP_OPS": "0,1,24,47",
+  "FASTVIDEO_ATTENTION_BACKEND": "FLASH_ATTN",
+  "FASTVIDEO_VSA_SM100A": "0",
+  "FASTVIDEO_VSA_CUTEDSL": "0",
+  "FASTVIDEO_DISABLE_ATTENTION_COMPILE": "0",
+  "FASTVIDEO_FA4": "0",
+  "FASTVIDEO_NVFP4_FA4": "0",
+  "FASTVIDEO_MINIMAX_H3_FA4_PACKED_VARLEN": "0",
+  "FASTVIDEO_MINIMAX_H3_FUSIONS": "0",
+  "FASTVIDEO_INFERENCE_TORCH_COMPILE": "0",
+  "FASTVIDEO_VAE_PARALLEL_DECODE": "1",
+  "FASTVIDEO_VAE_PARALLEL_ENCODE": "0",
+  "FASTVIDEO_VAE_PARALLEL_DECODE_STRATEGY": "gather",
+  "FASTVIDEO_ULYSSES_A2A": "off",
+  "FASTVIDEO_STAGE_LOGGING": "1"
+ },
+ "vsa_sparsity": 0.0
+}

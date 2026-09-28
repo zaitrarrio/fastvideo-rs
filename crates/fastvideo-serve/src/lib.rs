@@ -38,6 +38,8 @@ pub mod encoders;
 pub mod gate;
 /// Gateway mode (`engine.backend = "remote"`, docs/serve/gateway.md).
 #[cfg(feature = "http-client")]
+pub mod autoscale;
+#[cfg(feature = "http-client")]
 pub mod gateway;
 pub mod health;
 pub mod metrics;
