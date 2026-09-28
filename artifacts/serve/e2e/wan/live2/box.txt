@@ -1,0 +1,11 @@
+NVIDIA RTX PRO 6000 Blackwell Server Edition, 97887 MiB, 595.91.07
+features=cuda,http-client
+h264_nvenc_listed=1
+public_ip_set=yes tcp70000=15340
+fastwan21-1.3b: model_index.json models--FastVideo--FastWan2.1-T2V-1.3B-Diffusers text_encoder tokenizer transformer vae 
+sfwan21-1.3b: model_index.json scheduler text_encoder tokenizer transformer vae 
+auxiliary/tae: taeh3.safetensors taeltx2_3_wide.safetensors taew2_1.safetensors taew2_2.safetensors 
+256
+               total        used        free      shared  buff/cache   available
+Mem:            1511         167         552           0         791        1335
+overlay          60G   16M   60G   1% /

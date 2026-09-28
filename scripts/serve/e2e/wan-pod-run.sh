@@ -38,6 +38,11 @@ echo "$FV_E2E_PY_B64" | base64 -d | tar xz -C "$E"
   for d in fastwan21-1.3b sfwan21-1.3b auxiliary/tae; do echo "$d: $(ls "$W/$d" 2>&1 | tr '\n' ' ')"; done
   nproc; free -g | head -2; df -h /fvscratch | tail -1; } >"$R/box.txt" 2>&1
 
+# The image needs a CUDA 13 driver (>= 580); the create call may run
+# without the allowedCudaVersions filter when stock is short.
+drv=$(nvidia-smi --query-gpu=driver_version --format=csv,noheader | head -1 | cut -d. -f1)
+[ "${drv:-0}" -ge 580 ] || { say "driver ${drv:-none} is older than 580"; finish; }
+
 # A pod-local key for the in-pod clients (hash appended to FV_API_KEYS).
 LKEY="fvk-$(openssl rand -hex 16)"
 LHASH="$(printf '%s' "$LKEY" | sha256sum | cut -d' ' -f1)"

@@ -1,0 +1,22 @@
+2026-09-28T17:52:32.829775Z  INFO fv_serve: fv-serve 0.1.0 config=[redacted]
+2026-09-28T17:52:33.338220Z  INFO fastvideo_serve::encoders: H.264 encoder: nvenc (auto: the NVENC encode probe succeeded) settings=["director.encoder", "reactor.h264", "webrtc.encoder", "engine.post_encoder"] attempts=1
+2026-09-28T17:52:33.338584Z  WARN fastvideo_serve::app: FV_URL_SIGNING_KEY is not set: /files URLs die with this process
+[fastvideo] cuda device=0 sm_120 kernels=Cubin(120) gemm=Bf16 resident=true sdpa=dense sdpa_chunk=1024 oxide=[bf16_128x128x128,bf16_128x256x128,bf16_256x128x128,bf16_128x128x256,f32_128x128x128] oxide_embedded=10
+2026-09-28T17:52:35.480975Z  INFO fastvideo_engine_service::cuda::backend: loading model=sf-wan dit_gb=5.676070816 free_gb=101.235359744
+2026-09-28T17:52:36.420467Z  INFO fastvideo_webrtc::host: webrtc host bound udp_local=None tcp_local=Some(0.0.0.0:15340) candidates=["candidate:101 1 tcp 1526726655 157.157.221.177 15340 typ host tcptype passive", "candidate:102 1 tcp 1526726399 172.20.0.2 15340 typ host tcptype passive"]
+2026-09-28T17:52:36.420535Z  INFO fastvideo_serve::rtc: webrtc host bound udp=None tcp=Some(0.0.0.0:15340)
+2026-09-28T17:52:36.420585Z  INFO fastvideo_serve::reactor: reactor runtime ready to answer offers udp=None tcp=Some(0.0.0.0:15340)
+2026-09-28T17:52:36.422158Z  INFO fv_serve: listening addr=0.0.0.0:8000
+[fastvideo] taehv available for the distilled presets (/workspace/weights/auxiliary/tae)
+2026-09-28T17:53:39.296026Z  INFO fastvideo_engine_service::cuda::backend: model resident model=sf-wan seconds=63.815007697
+FV-SERVE READY models=sf-wan
+2026-09-28T17:53:39.296212Z  INFO fastvideo_serve::app: ready models=1
+[fastvideo] causal rollout 832x480 window=21 sink=3 rope=RebasedSink switch=Keep timesteps [1000.0, 937.5, 833.3333, 625.0]
+[fastvideo] sdpa: fused mma B=1 H=12 Sq=4680 Sk=4680 D=128
+2026-09-28T17:53:42.111475Z  INFO fastvideo_webrtc::host: webrtc host bound udp_local=Some(0.0.0.0:44748) tcp_local=None candidates=["candidate:1 1 udp 2130706431 172.20.0.2 44748 typ host"]
+2026-09-28T17:53:42.127140Z  INFO fastvideo_webrtc::whip::publisher: whip negotiated codec=Some("H264") status=201 profile=EncodeProfile { max_size: None, h264_level: L4_0 }
+[fastvideo] causal rollout 832x480 window=21 sink=3 rope=RebasedSink switch=Keep timesteps [1000.0, 937.5, 833.3333, 625.0]
+2026-09-28T17:59:37.067838Z  INFO fastvideo_reactor::gateway: reactor connection closed conn=8587 reason=RemoteClosed
+2026-09-28T17:59:37.130830Z  INFO fastvideo_serve::shutdown: SIGTERM
+2026-09-28T17:59:37.130869Z  INFO fastvideo_serve::app: shutdown requested: draining
+2026-09-28T17:59:37.687730Z  INFO fastvideo_serve::app: drained

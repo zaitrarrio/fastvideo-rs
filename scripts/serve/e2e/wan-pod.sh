@@ -62,11 +62,10 @@ payload() { # image gpu name keyhash
   dc="$(rest GET "/networkvolumes/$VOLUME" | jq -r '.dataCenterId')"
   jq -n --arg name "$3" --arg image "$1" --arg gpu "$2" --arg keys "$4" --arg py "$py" --arg run "$run" \
     --arg vol "$VOLUME" --arg dc "$dc" --arg tag "$(date -u +%m%d%H%M)" \
-    --arg skip1 "${FV_E2E_SKIP_PHASE1:-0}" --arg live "${FV_E2E_LIVE_S:-300}" '{
+    --arg cuda "${RUNPOD_ALLOWED_CUDA-13.0}" --arg skip1 "${FV_E2E_SKIP_PHASE1:-0}" --arg live "${FV_E2E_LIVE_S:-300}" '{
     name: $name, imageName: $image, cloudType: "SECURE", computeType: "GPU",
     gpuTypeIds: [$gpu], gpuCount: 1, containerDiskInGb: 60, volumeInGb: 0,
     networkVolumeId: $vol, volumeMountPath: "/workspace", dataCenterIds: [$dc],
-    allowedCudaVersions: ["13.0"],
     ports: ["8000/http", "8001/http", "70000/tcp"],
     dockerEntrypoint: ["/bin/bash", "-c"],
     dockerStartCmd: ["echo \"$FV_E2E_RUN_B64\" | base64 -d >/wan-pod-run.sh && exec bash /wan-pod-run.sh"],
@@ -82,7 +81,7 @@ payload() { # image gpu name keyhash
       FV_API_KEYS: $keys, FV_SERVE_MODE: "http", RUST_LOG: "info",
       FV_E2E_TAG: $tag, FV_E2E_PY_B64: $py, FV_E2E_RUN_B64: $run,
       FV_E2E_SKIP_PHASE1: $skip1, FV_E2E_LIVE_S: $live
-    }}'
+    }} + (if $cuda == "" then {} else {allowedCudaVersions: ($cuda | split(" "))} end)'
 }
 
 cmd_up() {

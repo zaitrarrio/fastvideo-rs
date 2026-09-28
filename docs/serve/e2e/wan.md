@@ -15,13 +15,18 @@ mode).
 | Encoders | H200 has no NVENC: the startup probe resolved `streams = x264-test`, `post = cpu-test-x264`, `reactor = off` (VP8 via libvpx) |
 | Driver | `scripts/serve/e2e/wan-pod.sh up / batch / fetch / down`; `wan_batch.py` (phase 1, from outside through the Runpod proxy); `wan-pod-run.sh` runs on the pod (phase 2: MediaMTX, WHIP stream, WHEP viewer, RTSP recorder, `reactor_causal.py`, `fv-gpucheck wan stream`) and publishes results read-only on :8001 |
 | Raw results | `artifacts/serve/e2e/wan/batch/results.json`, `artifacts/serve/e2e/wan/live/` |
-| Samples | `batch/fastwan-81f-a.mp4` (served MP4), `live/sample-switch.mp4` (16 s of the WHIP stream around a prompt switch, re-encoded); `live/relativistic-collapse-sheet.jpg` |
+| Samples | `batch/fastwan-81f-a.mp4` (served MP4), `live2/sample-switch.mp4` (16 s of the rerun's WHIP stream around a prompt switch, re-encoded); contact sheets `live/relativistic-collapse-sheet.jpg`, `live2/rebased-longrun-sheet.jpg` |
 
 **Result:** every batch endpoint passes. SF-Wan live streams at a steady
 16 fps with 30 IDR/min, 2.1 s TTFF and 0 underruns, and Reactor causal mode
 works end to end, but the run found three bugs in the live path (fixed
-below) and one harness bug (the WHEP viewer). Pod lifetime 14.5 min
-(create 16:45:13, delete 16:59:43 UTC, deletion verified): **$1.11**.
+below) and one harness bug (the WHEP viewer). A second pod (phase 2 only,
+image `sha-9d3f245` with the fixes, RTX PRO 6000) verified them and found
+that long SF-Wan rollouts still degrade visually (open, below). Pods: H200
+`3wow7t6n2sabhs` 14.5 min ($1.11) and RTX PRO 6000 `zuiko32mh86f3k` (EU
+volume `jg48s6o1w0`; no US GPU of any type could be created for 18 min:
+"create pod: There are no instances currently available") 11.5 min
+($0.40), both deleted and verified gone: **$1.51**.
 
 ## Phase 1: FastWan batch
 
@@ -93,6 +98,29 @@ offers no H.264).
 | `reset` | bodyless ack; `block_index` 57 → 3 two seconds later; 80 frames in the next 5 s |
 | messages seen | `state_update` only (no errors) |
 
+### Rerun with the fixes (image `sha-9d3f245`, RTX PRO 6000, NVENC)
+
+Same script, phase 2 only (`FV_E2E_SKIP_PHASE1=1`), results in
+`artifacts/serve/e2e/wan/live2/`. fv-serve start → ready 69 s.
+
+| Metric | Value |
+|---|---|
+| RoPE policy in the serve log | `rope=RebasedSink` (was `Relativistic`) |
+| TTFF | first frame at the publisher 0.98 s; `load` 481 ms, `first_block` 500 ms, `transport` 649 ms, total 1.63 s |
+| WHEP viewer (aiortc, WHEP from MediaMTX) | **4537 frames decoded in 299.2 s = 15.16 fps**, first frame 0.87 s after the WHEP POST, largest gap between frames 0.16 s |
+| RTSP recording | 4555 frames / 300.3 s; 143 key frames = **28.6/min**; Constrained Baseline L4.0 832x480, 2.37 Mb/s, encoder `Nvenc` |
+| Pacer | `effective_fps` 15.14 (adaptive: this GPU generates ~15.2 frames/s, below 16), 0 underruns, **0 dropped** (the backpressure path is not exercised on a GPU slower than playout; covered by the CPU test) |
+| Raw rollout (`fv-gpucheck wan stream`, 60 s) | 15.22 frames/s, block p50 0.788 s (first SF-Wan number on sm_120) |
+| GPU memory, 5 min | 27761 → 28026 MiB (+265 MiB in 32 MiB steps) |
+| Reactor causal | all steps pass; canvas now **832x480**; steady 15.33 fps; first frame 0.18 s after `set_prompt`; `reset` block 45 → 3 |
+| Quality | better than relativistic, but still **degrades**: a glowing artefact from ~30 s and horizontal banding along the top rows from ~45 s (before the first prompt switch at 60 s), covering the top third by 3-5 min (`live2/rebased-longrun-sheet.jpg`) |
+
+The long-horizon degradation (design risk R12) is not fixed: the E6/E7
+10-minute statistics rated the rebased sink stable for 2 minutes, but these
+frames show visible artefacts well before that. It needs a visual long-run
+study of the rollout (TAEHV carried state on the top rows is one suspect)
+before `max_seconds` defaults above ~30 s are sensible.
+
 ## Bugs
 
 1. **SF-Wan served with the relativistic RoPE policy** (`cuda/backend.rs`
@@ -101,7 +129,8 @@ offers no H.264).
    block slower; the WP-11 `CudaBackend` (every `[[models]]` config)
    hard-coded `Relativistic`, while the older `FV_SFWAN_WEIGHTS` backend used
    the default. Seen here as 20.3 instead of 23.6 frames/s and the collapse
-   above. **Fixed:** `RopePolicy::RebasedSink`.
+   above. **Fixed:** `RopePolicy::RebasedSink` (verified in the rerun log;
+   the remaining degradation is the open item above).
 2. **The causal pacer drops a fifth of the frames on a fast GPU**
    (`stream/pace.rs`). The pacer pulled every block as soon as it arrived,
    so any generator faster than 16 fps overflowed the 48-frame drop-oldest
@@ -114,16 +143,17 @@ offers no H.264).
    so the frames queued ahead of a prompt switch stay near the old bound
    (≤ 24 in the pacer + 2 blocks). Test:
    `a_generator_faster_than_playout_is_held_back_not_dropped` (fails on the
-   old pacer at tick 3).
+   old pacer at tick 3). On GPU only the slower-than-playout case was
+   rerun (0 drops, 0 underruns); a Hopper rerun is still owed.
 3. **Aspect canvases can exceed the pixel budget** (`canvas_for_aspect`).
    Capping the area and then rounding both sides to the nearest multiple
    gave 848x480 (407040 px) for 16:9 at 480 on an 832x480 budget: fal
    `480P` on Wan and the Reactor canvas both generated 848x480. **Fixed:**
    when rounding overshoots, a side is rounded down (largest area within the
-   budget, then the closest aspect): 832x480. H3's `resolve_canvas_size`
-   parity test still passes.
+   budget, then the closest aspect): 832x480 (the rerun's Reactor canvas).
+   H3's `resolve_canvas_size` parity test still passes.
 
-Harness: the WHEP viewer needed `numpy` (added); fv-serve prints a generated
+Harness: the WHEP viewer needed `numpy` (added; the rerun decoded every frame); fv-serve prints a generated
 admin token in its log and the pod script published the logs on :8001 for
 the pod's lifetime (now it sets `FV_ADMIN_TOKEN` itself; the committed logs
 are redacted excerpts). Recorded, not fixed: the fal output file name uses

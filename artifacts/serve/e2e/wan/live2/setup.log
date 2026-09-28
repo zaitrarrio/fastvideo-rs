@@ -1,0 +1,42 @@
+downloading uv 0.12.19 x86_64-unknown-linux-gnu
+installing to /fvscratch/uv
+  uv
+  uvx
+everything's installed!
+
+To add /fvscratch/uv to your PATH, either restart your shell or run:
+
+    source /fvscratch/uv/env (sh, bash, zsh)
+    source /fvscratch/uv/env.fish (fish)
+INFO Fetching requested Python...
+INFO add_decision: Id::<PubGrubPackage>(0) @ 0a0.dev0 without checking dependencies    
+INFO add_decision: Id::<PubGrubPackage>(1) @ 1.6.0 without checking dependencies    
+INFO add_decision: Id::<PubGrubPackage>(2) @ 1.15.0 without checking dependencies    
+INFO add_decision: Id::<PubGrubPackage>(3) @ 3.14.3 without checking dependencies    
+INFO add_decision: Id::<PubGrubPackage>(4) @ 2.5.3 without checking dependencies    
+INFO add_decision: Id::<PubGrubPackage>(5) @ 0.10.2 without checking dependencies    
+INFO add_decision: Id::<PubGrubPackage>(6) @ 17.1.0 without checking dependencies    
+INFO add_decision: Id::<PubGrubPackage>(7) @ 50.0.1 without checking dependencies    
+INFO add_decision: Id::<PubGrubPackage>(8) @ 1.9.0 without checking dependencies    
+INFO add_decision: Id::<PubGrubPackage>(9) @ 14.0.0 without checking dependencies    
+INFO add_decision: Id::<PubGrubPackage>(10) @ 1.0.0 without checking dependencies    
+INFO add_decision: Id::<PubGrubPackage>(11) @ 26.4.0 without checking dependencies    
+INFO add_decision: Id::<PubGrubPackage>(14) @ 2.7.1 without checking dependencies    
+INFO add_decision: Id::<PubGrubPackage>(15) @ 1.4.0 without checking dependencies    
+INFO add_decision: Id::<PubGrubPackage>(16) @ 26.1.0 without checking dependencies    
+INFO add_decision: Id::<PubGrubPackage>(17) @ 1.8.0 without checking dependencies    
+INFO add_decision: Id::<PubGrubPackage>(18) @ 6.9.1 without checking dependencies    
+INFO add_decision: Id::<PubGrubPackage>(19) @ 0.5.4 without checking dependencies    
+INFO add_decision: Id::<PubGrubPackage>(12) @ 4.16.0 without checking dependencies    
+INFO add_decision: Id::<PubGrubPackage>(13) @ 4.16.0 without checking dependencies    
+INFO add_decision: Id::<PubGrubPackage>(25) @ 4.16.0 without checking dependencies    
+INFO add_decision: Id::<PubGrubPackage>(20) @ 1.25.1 without checking dependencies    
+INFO add_decision: Id::<PubGrubPackage>(21) @ 2.8.0 without checking dependencies    
+INFO add_decision: Id::<PubGrubPackage>(22) @ 0.2.0 without checking dependencies    
+INFO add_decision: Id::<PubGrubPackage>(23) @ 2.1.1 without checking dependencies    
+INFO add_decision: Id::<PubGrubPackage>(24) @ 2.1.1 without checking dependencies    
+INFO add_decision: Id::<PubGrubPackage>(27) @ 2.1.1 without checking dependencies    
+INFO add_decision: Id::<PubGrubPackage>(26) @ 3.20 without checking dependencies    
+INFO add_decision: Id::<PubGrubPackage>(28) @ 3.0 without checking dependencies    
+INFO add_decision: Id::<PubGrubPackage>(29) @ 3.0 without checking dependencies    
+INFO add_decision: Id::<PubGrubPackage>(30) @ 3.0 without checking dependencies    
