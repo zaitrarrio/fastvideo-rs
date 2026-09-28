@@ -587,3 +587,42 @@ async fn director_and_reactor_sessions_through_the_gateway() {
     assert_eq!((l[0]["state"].as_str(), l[0]["target"].as_str()), (Some("ended"), Some(r.base.as_str())));
     drop((gw, d, r));
 }
+
+/// `configs/serve/gateway.toml`: every pool's static caps resolve against
+/// the CUDA catalog (CPU only) and the aliases name served models.
+#[test]
+fn shipped_gateway_config_resolves_every_pool() {
+    let p = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../configs/serve/gateway.toml");
+    let mut c = Config::from_toml(&std::fs::read_to_string(&p).unwrap(), "gateway.toml").unwrap();
+    let mut env: BTreeMap<String, String> = [("FV_INTERNAL_TOKEN", "t"), ("FV_CF_ACCOUNT_ID", "a"), ("FV_CF_API_TOKEN", "t"), ("FV_D1_DATABASE_ID", "d")]
+        .into_iter()
+        .map(|(k, v)| (k.to_owned(), v.to_owned()))
+        .collect();
+    for pool in &c.pools {
+        env.insert(format!("{}ENDPOINT", pool.env_prefix()), "ep".into());
+    }
+    env.insert("FV_POOL_SFWAN_LIVE_URLS".into(), "https://a.example, https://b.example".into());
+    c.apply_env(&env).unwrap();
+    c.validate().unwrap();
+    assert_eq!(c.pools.iter().find(|p| p.id == "h3-turbo").unwrap().endpoint_id.as_deref(), Some("ep"));
+    assert_eq!(c.pools.iter().find(|p| p.id == "sfwan-live").unwrap().urls.len(), 2);
+    let mut ids = Vec::new();
+    for pool in &c.pools {
+        let caps = fastvideo_serve::gateway::static_caps(pool).unwrap_or_else(|e| panic!("{}: {e}", pool.id));
+        assert!(!caps.is_empty(), "{}", pool.id);
+        ids.extend(caps.into_iter().map(|(m, _)| m.id.0));
+    }
+    for (alias, model) in &c.aliases {
+        assert!(ids.contains(model), "alias {alias} → {model} is not served by a pool ({ids:?})");
+    }
+    // The worker configs name their pool.
+    for (f, pool) in [("runpod.toml", "h3-turbo"), ("runpod-h3-max.toml", "h3-max"), ("runpod-ltx.toml", "ltx"), ("runpod-wan.toml", "wan"), ("runpod-sfwan.toml", "sfwan-live")] {
+        let p = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../configs/serve").join(f);
+        let w = Config::from_toml(&std::fs::read_to_string(&p).unwrap(), f).unwrap();
+        assert_eq!(w.gateway.pool.as_deref(), Some(pool), "{f}");
+        assert!(c.pools.iter().any(|p| p.id == pool), "{f}");
+        let models: Vec<String> = w.models.iter().map(|m| m.id.clone()).collect();
+        let static_ids: Vec<String> = c.pools.iter().find(|p| p.id == pool).unwrap().models.iter().map(|m| m.id.clone()).collect();
+        assert_eq!(models, static_ids, "{f}: the pool's static caps repeat the worker's [[models]]");
+    }
+}

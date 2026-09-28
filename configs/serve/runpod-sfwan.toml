@@ -1,0 +1,58 @@
+# fv-serve on a Runpod pod: SF-Wan causal streaming (the gateway's
+# `sfwan-live` pod pool, docs/serve/gateway.md §5). Secrets as in
+# runpod.toml. Peer WebRTC sessions (Reactor, native streams) need inbound
+# ICE-TCP/UDP, so this pool runs on pods, not serverless workers.
+#
+# Behind the gateway: FV_SERVE_ROLE=worker, FV_INTERNAL_TOKEN, and
+# FV_PUBLIC_BASE_URL = this pod's proxy URL (the gateway reaches the pod
+# there; the pod registers itself in `gw_workers` under `gateway.pool`).
+
+[server]
+bind = "0.0.0.0:8000"
+state_dir = "/workspace/fv-state"
+shutdown_grace_s = 25
+
+[auth]
+mode = "keys"
+
+[artifacts]
+backend = "auto"
+url_ttl_s = 86400
+
+[jobs]
+backend = "auto"
+progress_interval_ms = 1000
+stale_after_s = 900
+heartbeat_s = 10
+
+[engine]
+backend = "cuda"
+post_encoder = "auto"
+
+# SF-Wan 1.3B causal rollout (StreamCaps::Causal), one session per GPU.
+[[models]]
+id = "sfwan21-1.3b"
+family = "wan"
+recipe = "sfwan21-1.3b"
+weights = "${FV_WEIGHTS}/sfwan21-1.3b"
+resident = true
+
+[protocols]
+openai_videos = false
+fastwan = false
+minimax = false
+fal = false
+fal_director = false
+ltx = false
+reactor = true
+native = true
+
+[reactor]
+model = "sfwan21-1.3b"
+
+[limits]
+queue_max = 8
+body_max_mb = 64
+
+[gateway]
+pool = "sfwan-live"

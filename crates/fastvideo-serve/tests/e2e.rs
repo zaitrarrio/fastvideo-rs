@@ -307,7 +307,23 @@ fn shipped_configs_parse() {
             continue;
         }
         let text = std::fs::read_to_string(&p).unwrap();
-        let c = Config::from_toml(&text, &p.display().to_string()).unwrap();
+        let mut c = Config::from_toml(&text, &p.display().to_string()).unwrap();
+        // The gateway's secrets and pool endpoints come from the environment.
+        if c.engine.backend == fastvideo_serve::config::EngineBackendKind::Remote {
+            let mut env: BTreeMap<String, String> = [
+                ("FV_INTERNAL_TOKEN", "t"),
+                ("FV_CF_ACCOUNT_ID", "a"),
+                ("FV_CF_API_TOKEN", "t"),
+                ("FV_D1_DATABASE_ID", "d"),
+            ]
+            .into_iter()
+            .map(|(k, v)| (k.to_owned(), v.to_owned()))
+            .collect();
+            for pool in &c.pools {
+                env.insert(format!("{}ENDPOINT", pool.env_prefix()), "ep".into());
+            }
+            c.apply_env(&env).unwrap();
+        }
         c.validate().unwrap_or_else(|e| panic!("{}: {e}", p.display()));
         // CUDA configs: every `[[models]]` entry resolves against the
         // catalog and the set shares one process.

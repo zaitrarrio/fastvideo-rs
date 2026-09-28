@@ -259,8 +259,14 @@ impl Gateway {
             config.engine.tier_overrides.iter().map(|(k, v)| (k.clone(), ModelId::new(v))).collect();
         let catalog = Catalog::build(&pools, &base_aliases, &tier_overrides).map_err(|e| anyhow!("pool caps: {e}"))?;
         let fal_apps = crate::adapters::fal_app_models(&config.protocols.fal_apps);
+        let mut cfg = config.gateway.clone();
+        // The Reactor routes' model: `[gateway] reactor_model`, else `[reactor] model`
+        // (FV_REACTOR_MODEL), else the first stream-capable pod-pool model.
+        if cfg.reactor_model.is_none() {
+            cfg.reactor_model = config.reactor.model.clone();
+        }
         let gw = Arc::new(Self {
-            cfg: config.gateway.clone(),
+            cfg,
             runpod: runpod::RunpodApi::new(http.clone(), &config.gateway.runpod_api_base, config.gateway.runpod_api_key.expose()),
             http,
             pools,

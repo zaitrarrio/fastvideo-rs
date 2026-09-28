@@ -36,6 +36,7 @@
 //! | `FV_RUNPOD_API_BASE` | `gateway.runpod_api_base` |
 //! | `FV_POOL_<ID>_ENDPOINT`, `FV_POOL_<ID>_URLS` | a pool's endpoint id / pod URLs (`<ID>`: the pool id upper-cased, `-` → `_`) |
 //! | `FV_ARTIFACTS_DIR` | `artifacts.local_dir` (local artifacts shared by processes on one host) |
+//! | `FV_JOBS_HEARTBEAT_S` | `jobs.heartbeat_s` (D1 heartbeat of unfinished jobs) |
 //!
 //! `auto` picks D1 when the three D1 values are set (else the file store)
 //! and S3/R2 when bucket, endpoint and both keys are set (else local).
@@ -883,6 +884,14 @@ impl Config {
         }
         if let Some(v) = env.var("FV_S3_REGION") {
             s3.region = Some(v);
+        }
+        if let Some(v) = env.var("FV_JOBS_HEARTBEAT_S") {
+            self.jobs.heartbeat_s = v
+                .trim()
+                .parse()
+                .ok()
+                .filter(|n| *n >= 1)
+                .ok_or_else(|| ConfigError::Invalid(format!("FV_JOBS_HEARTBEAT_S={v} is not a number of seconds")))?;
         }
         if let Some(v) = env.var("FV_ARTIFACTS_DIR") {
             self.artifacts.local_dir = Some(v.into());
