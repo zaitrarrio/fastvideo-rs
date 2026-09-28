@@ -115,6 +115,8 @@ go-ahead they were later copied from US (docs/gaps/2026-09-27-volume-sync.md).
 | FastH3 after (72fdf68, scale from 0, image cached on host) | +49 s | +261 s** | +314 s** |
 | LTX-2.5 before (scale from 0) | +79 s | (≈ +79 +183) | +495 s |
 | LTX-2.5 after (0536e9a; queued behind the FastH3 job, times from job start) | (0) | +33 s*** | +194 s*** |
+| **real backend via fv-serve**: h3-turbo, fal T2V (9c42844, H100 80GB, scale from 0, image cached) | +80 s | +133 s (load 52 s) | +202 s (warm job: 25 s) |
+| **real backend via fv-serve**: wan-turbo, native job (9c42844, H100 80GB, scale from 0, image cached) | +49 s | +120 s (load 70 s) | +127 s (warm job: 7 s) |
 
 \** includes 24 s of page-cache eviction before the load (measurement only):
 submit → first output without it ≈ 290 s, of which load 212 s.
@@ -123,6 +125,13 @@ submit → first output without it ≈ 290 s, of which load 212 s.
 Image pull: a fresh H200 host took 458 s from submit to worker start (pull of
 the ~6 GB runtime image plus scheduling); with the image on the host, 5-80 s.
 FastWan was not measured (budget).
+
+The two fv-serve rows (WP-18 test E, 2026-09-28; docs/serve/e2e/serverless.md)
+are the serving path, not `fv-gpucheck`: the Rust queue worker takes jobs
+only after the resident model loaded, media go to R2, no page-cache
+eviction. The first h3-turbo job still spends ~45 s outside the 17.5 s
+denoise (69.5 s against 24.4 s warm); `warmup = true` would move that before
+readiness. FastWan loads slower than H3 here (70 s vs 52 s).
 
 ## Follow-up: E12 identity and the H3 device adapter merge
 

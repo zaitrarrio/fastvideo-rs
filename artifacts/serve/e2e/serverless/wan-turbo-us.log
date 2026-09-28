@@ -1,0 +1,18 @@
+[16:53:00] Runpod balance $37.7790518645 (floor $8)
+[16:53:03] queue endpoint 102wh2sgqet2i7 (template d0i9dap671, volume s2k01690bi in US-CA-2, cap 1500s)
+[16:53:03] endpoint 102wh2sgqet2i7 template d0i9dap671
+[16:53:03] cold gen submit
+[16:53:04] job 04cfdc11-a189-45d9-91d0-f4b0a018c546-u1: IN_QUEUE
+[16:55:03] job 04cfdc11-a189-45d9-91d0-f4b0a018c546-u1: IN_PROGRESS
+[16:55:10] job 04cfdc11-a189-45d9-91d0-f4b0a018c546-u1: COMPLETED
+[16:55:10] cold done: {"status":"COMPLETED","delayTime":119623,"executionTime":6423,"client_wall_s":126.60164213180542}
+[16:55:10] warm gen submit
+[16:55:10] job f74bffef-cd9e-437d-8dd7-cca812ae1415-u1: IN_PROGRESS
+[16:55:17] job f74bffef-cd9e-437d-8dd7-cca812ae1415-u1: COMPLETED
+[16:55:17] warm done: {"status":"COMPLETED","delayTime":23,"executionTime":6384,"client_wall_s":6.980545282363892}
+[16:55:17] job c9c5ad7f-0143-408f-8bc6-b7816a0a03c9-u1: IN_PROGRESS
+[16:55:19] job c9c5ad7f-0143-408f-8bc6-b7816a0a03c9-u1: COMPLETED
+[16:55:19] info done: {"status":"COMPLETED","delayTime":20,"executionTime":728}
+[16:55:21] wrote /home/user/fastvideo-rs/.claude/worktrees/agent-ac97a00f2f8209790/artifacts/serve/e2e/serverless/wan-turbo-us.json
+[16:55:21] down 102wh2sgqet2i7 d0i9dap671
+deleted 102wh2sgqet2i7 d0i9dap671

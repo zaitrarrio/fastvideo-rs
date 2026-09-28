@@ -1,0 +1,177 @@
+{
+  "target": "runpod-serverless-queue (real CUDA backend)",
+  "endpoint": "w9nun9n2evt009",
+  "template": "kqb3xwrdwx",
+  "image": "ghcr.io/zaitrarrio/fastvideo-rs-serve:sha-9c42844",
+  "app": "minimax/h3-turbo",
+  "volume": "s2k01690bi",
+  "submit_unix": {
+    "cold": 1790613913.368878557,
+    "warm": 1790614115.775443761,
+    "info": 1790614140.883414693,
+    "up": 1790613910.558586430
+  },
+  "cold": {
+    "job": "4a0fa52b-e97e-44dd-ad33-05b8a218b7b6-u2",
+    "status": "COMPLETED",
+    "delayTime": 132448,
+    "executionTime": 69488,
+    "workerId": "kbkl1zsr11c4xf",
+    "client_wall_s": 202.37694263458252,
+    "first_in_progress_s": 134.07291722297668,
+    "output": {
+      "body": {
+        "expanded_prompt": null,
+        "timings": {
+          "inference": 17.490929048
+        },
+        "video": {
+          "content_type": "video/mp4",
+          "file_name": "aQfs6XXxQRqm32eZmLxil_minimax-h3.mp4",
+          "file_size": 3234357,
+          "url": "https://0cd06fd37ee4e07de370821cb3852a8a.r2.cloudflarestorage.com/fv-media/fv-serve/6c9b21b6-99fe-4055-abc9-80cbebcee702/aQfs6XXxQRqm32eZmLxil_minimax-h3.mp4?<signed query removed>"
+        }
+      },
+      "elapsed_s": 69.30470609,
+      "headers": {
+        "content-length": "610",
+        "content-type": "application/json"
+      },
+      "poll_path": "/minimax/h3-turbo/requests/c43efca8-520d-46f0-9b9f-47c18310ddae/status",
+      "status": 200
+    },
+    "error": null
+  },
+  "cold_media": {
+    "host": "https://0cd06fd37ee4e07de370821cb3852a8a.r2.cloudflarestorage.com",
+    "fetch": "200 3234357",
+    "ffprobe": "codec_name=h264|width=1344|height=768|nb_frames=124 codec_name=aac|nb_frames=163 "
+  },
+  "warm": {
+    "job": "2fa4aaa1-bef1-4219-8faa-877d2411a7ef-u2",
+    "status": "COMPLETED",
+    "delayTime": 17,
+    "executionTime": 24437,
+    "workerId": "kbkl1zsr11c4xf",
+    "client_wall_s": 25.077906847000122,
+    "first_in_progress_s": 0.6014120578765869,
+    "output": {
+      "body": {
+        "expanded_prompt": null,
+        "timings": {
+          "inference": 17.498739345
+        },
+        "video": {
+          "content_type": "video/mp4",
+          "file_name": "rh49k1FKSL-uNOI8_HbeY_minimax-h3.mp4",
+          "file_size": 3668582,
+          "url": "https://0cd06fd37ee4e07de370821cb3852a8a.r2.cloudflarestorage.com/fv-media/fv-serve/d45358a2-d3f6-4136-9bb7-c15f06c49efc/rh49k1FKSL-uNOI8_HbeY_minimax-h3.mp4?<signed query removed>"
+        }
+      },
+      "elapsed_s": 24.241104064,
+      "headers": {
+        "content-length": "610",
+        "content-type": "application/json"
+      },
+      "poll_path": "/minimax/h3-turbo/requests/b28c9386-9de3-4408-aa11-d49cd64385a6/status",
+      "status": 200
+    },
+    "error": null
+  },
+  "warm_media": {
+    "host": "https://0cd06fd37ee4e07de370821cb3852a8a.r2.cloudflarestorage.com",
+    "fetch": "200 3668582",
+    "ffprobe": "codec_name=h264|width=1344|height=768|nb_frames=124 codec_name=aac|nb_frames=163 "
+  },
+  "info": {
+    "job": "b9ce14a6-b238-4e30-843c-fec2d065f52b-u1",
+    "status": "COMPLETED",
+    "delayTime": 42,
+    "executionTime": 709,
+    "workerId": "kbkl1zsr11c4xf",
+    "client_wall_s": 2.581561803817749,
+    "first_in_progress_s": 0.38548707962036133,
+    "output": {
+      "artifacts_backend": "s3",
+      "deploy": {
+        "dc": "US-CA-2",
+        "endpoint_id": "w9nun9n2evt009",
+        "ice_candidates": [],
+        "platform": "runpod-serverless",
+        "pod_id": "kbkl1zsr11c4xf",
+        "public_base_url": null,
+        "public_ip": "38.80.152.148"
+      },
+      "encoder_startup_probe": {
+        "attempts": 2,
+        "backend": "openh264",
+        "nvenc_error": "[h264_nvenc @ 0x63e3173b1c80] OpenEncodeSessionEx failed: unsupported device (2): (no details) | [h264_nvenc @ 0x63e3173b1c80] No capable devices found | Error initializing output stream 0:0 -- Error while opening encoder for output stream #0:0 - maybe incorrect parameters such as bit_rate, rate, width or height"
+      },
+      "encoders": {
+        "director": "openh264",
+        "post": "cpu-test-x264",
+        "reactor": "off",
+        "streams": "x264-test"
+      },
+      "engine": "cuda",
+      "ffmpeg_h264_nvenc": true,
+      "gpu": "NVIDIA H100 80GB HBM3, 81559 MiB, 580.126.09",
+      "jobs_backend": "d1",
+      "models": [
+        "fasth3"
+      ],
+      "nvenc_encode_ok": false,
+      "nvenc_probe": {
+        "driver_libs": [
+          "libnvcuvid.so.580.126.09",
+          "libnvidia-encode.so.580.126.09",
+          "libnvcuvid.so.1",
+          "libnvcuvid.so",
+          "libnvidia-encode.so.1",
+          "libnvidia-encode.so"
+        ],
+        "ok": false,
+        "stderr": [
+          "[h264_nvenc @ 0x5edf72ba4c80] OpenEncodeSessionEx failed: unsupported device (2): (no details)",
+          "[h264_nvenc @ 0x5edf72ba4c80] No capable devices found",
+          "Error initializing output stream 0:0 -- Error while opening encoder for output stream #0:0 - maybe incorrect parameters such as bit_rate, rate, width or height"
+        ]
+      },
+      "nvidia_driver_capabilities": "compute,utility,video",
+      "process_start_unix": 1790613993.6430106,
+      "readiness": "ready",
+      "ready_after_s": 52.287327542,
+      "runtime": "fv-rs/0.1.0",
+      "server": "fv-serve",
+      "uptime_s": 148.167141198,
+      "version": "0.1.0",
+      "webhook_key_configured": true,
+      "weights": {
+        "entries": [
+          "FastH3-4-step-Preview-v1-LoRA",
+          "auxiliary",
+          "fastwan21-1.3b",
+          "h3-8step",
+          "h3-base",
+          "h3-to-ltx",
+          "hy15-480-i2v",
+          "hy15-480-t2v",
+          "hy15-720-i2v",
+          "hy15-720-t2v",
+          "ltx2",
+          "ltx23",
+          "ltx25",
+          "mmaudio-44k-v2",
+          "sfwan21-1.3b",
+          "taeh3",
+          "upscaler",
+          "wan21-t2v-14b",
+          "wan22-ti2v-5b"
+        ],
+        "exists": true,
+        "root": "/runpod-volume/weights"
+      }
+    },
+    "error": null
+  }
+}

@@ -1,0 +1,217 @@
+{
+  "target": "runpod-serverless-queue (real CUDA backend)",
+  "endpoint": "102wh2sgqet2i7",
+  "template": "d0i9dap671",
+  "image": "ghcr.io/zaitrarrio/fastvideo-rs-serve:sha-9c42844",
+  "app": "/fv/v1/jobs",
+  "volume": "s2k01690bi",
+  "submit_unix": {
+    "cold": 1790614383.576815418,
+    "warm": 1790614510.203888768,
+    "info": 1790614517.216831981,
+    "up": 1790614380.379261420
+  },
+  "cold": {
+    "job": "04cfdc11-a189-45d9-91d0-f4b0a018c546-u1",
+    "status": "COMPLETED",
+    "delayTime": 119623,
+    "executionTime": 6423,
+    "workerId": "s4zfsn31psp3gz",
+    "client_wall_s": 126.60164213180542,
+    "first_in_progress_s": 120.07398462295532,
+    "output": {
+      "body": {
+        "completed_at": "2026-09-28T16:55:08.772794874Z",
+        "created_at": "2026-09-28T16:55:03.518659145Z",
+        "error": null,
+        "expires_at": "2026-09-29T16:55:03.518659145Z",
+        "fps": 16,
+        "height": 480,
+        "id": "fvjob_90468e065da746988eca7ea87950de3b",
+        "model": "fastwan21-1.3b",
+        "num_frames": 81,
+        "object": "fv.job",
+        "output": {
+          "audio": null,
+          "bytes": 1064742,
+          "fps": 16,
+          "frames": 81,
+          "height": 480,
+          "mime": "video/mp4",
+          "url": "https://0cd06fd37ee4e07de370821cb3852a8a.r2.cloudflarestorage.com/fv-media/fv-serve/54bf029c-1d20-4aee-a596-27529f1fa513/90468e065da746988eca7ea87950de3b.mp4?<signed query removed>",
+          "width": 848
+        },
+        "progress": 1,
+        "queue_position": null,
+        "recipe": "fastwan21-1.3b-dmd3-vsa",
+        "resolved_model": "fastwan21-1.3b",
+        "seed": 1,
+        "started_at": "2026-09-28T16:55:03.735586375Z",
+        "status": "succeeded",
+        "task": "t2v",
+        "tier": "turbo",
+        "width": 848
+      },
+      "elapsed_s": 6.223712909,
+      "headers": {
+        "content-length": "1049",
+        "content-type": "application/json"
+      },
+      "poll_path": "/fv/v1/jobs/fvjob_90468e065da746988eca7ea87950de3b",
+      "status": 200
+    },
+    "error": null
+  },
+  "cold_media": {
+    "host": "https://0cd06fd37ee4e07de370821cb3852a8a.r2.cloudflarestorage.com",
+    "fetch": "200 1064742",
+    "ffprobe": "codec_name=h264|width=848|height=480|nb_frames=81 "
+  },
+  "warm": {
+    "job": "f74bffef-cd9e-437d-8dd7-cca812ae1415-u1",
+    "status": "COMPLETED",
+    "delayTime": 23,
+    "executionTime": 6384,
+    "workerId": "s4zfsn31psp3gz",
+    "client_wall_s": 6.980545282363892,
+    "first_in_progress_s": 0.3910074234008789,
+    "output": {
+      "body": {
+        "completed_at": "2026-09-28T16:55:14.792733031Z",
+        "created_at": "2026-09-28T16:55:10.500619786Z",
+        "error": null,
+        "expires_at": "2026-09-29T16:55:10.500619786Z",
+        "fps": 16,
+        "height": 480,
+        "id": "fvjob_d900c558e5114c03b3806b403a515c07",
+        "model": "fastwan21-1.3b",
+        "num_frames": 81,
+        "object": "fv.job",
+        "output": {
+          "audio": null,
+          "bytes": 840159,
+          "fps": 16,
+          "frames": 81,
+          "height": 480,
+          "mime": "video/mp4",
+          "url": "https://0cd06fd37ee4e07de370821cb3852a8a.r2.cloudflarestorage.com/fv-media/fv-serve/e2912f9c-5410-4097-a009-7941e89d4792/d900c558e5114c03b3806b403a515c07.mp4?<signed query removed>",
+          "width": 848
+        },
+        "progress": 1,
+        "queue_position": null,
+        "recipe": "fastwan21-1.3b-dmd3-vsa",
+        "resolved_model": "fastwan21-1.3b",
+        "seed": 2,
+        "started_at": "2026-09-28T16:55:10.674210997Z",
+        "status": "succeeded",
+        "task": "t2v",
+        "tier": "turbo",
+        "width": 848
+      },
+      "elapsed_s": 6.180301453,
+      "headers": {
+        "content-length": "1048",
+        "content-type": "application/json"
+      },
+      "poll_path": "/fv/v1/jobs/fvjob_d900c558e5114c03b3806b403a515c07",
+      "status": 200
+    },
+    "error": null
+  },
+  "warm_media": {
+    "host": "https://0cd06fd37ee4e07de370821cb3852a8a.r2.cloudflarestorage.com",
+    "fetch": "200 840159",
+    "ffprobe": "codec_name=h264|width=848|height=480|nb_frames=81 "
+  },
+  "info": {
+    "job": "c9c5ad7f-0143-408f-8bc6-b7816a0a03c9-u1",
+    "status": "COMPLETED",
+    "delayTime": 20,
+    "executionTime": 728,
+    "workerId": "s4zfsn31psp3gz",
+    "client_wall_s": 2.5714263916015625,
+    "first_in_progress_s": 0.3860146999359131,
+    "output": {
+      "artifacts_backend": "s3",
+      "deploy": {
+        "dc": "US-CA-2",
+        "endpoint_id": "102wh2sgqet2i7",
+        "ice_candidates": [],
+        "platform": "runpod-serverless",
+        "pod_id": "s4zfsn31psp3gz",
+        "public_base_url": null,
+        "public_ip": "38.80.152.148"
+      },
+      "encoder_startup_probe": {
+        "attempts": 2,
+        "backend": "openh264",
+        "nvenc_error": "[h264_nvenc @ 0x5e16625a5c80] OpenEncodeSessionEx failed: unsupported device (2): (no details) | [h264_nvenc @ 0x5e16625a5c80] No capable devices found | Error initializing output stream 0:0 -- Error while opening encoder for output stream #0:0 - maybe incorrect parameters such as bit_rate, rate, width or height"
+      },
+      "encoders": {
+        "director": "openh264",
+        "post": "cpu-test-x264",
+        "reactor": "off",
+        "streams": "x264-test"
+      },
+      "engine": "cuda",
+      "ffmpeg_h264_nvenc": true,
+      "gpu": "NVIDIA H100 80GB HBM3, 81559 MiB, 580.126.09",
+      "jobs_backend": "d1",
+      "models": [
+        "fastwan21-1.3b"
+      ],
+      "nvenc_encode_ok": false,
+      "nvenc_probe": {
+        "driver_libs": [
+          "libnvcuvid.so.580.126.09",
+          "libnvidia-encode.so.580.126.09",
+          "libnvcuvid.so.1",
+          "libnvcuvid.so",
+          "libnvidia-encode.so.1",
+          "libnvidia-encode.so"
+        ],
+        "ok": false,
+        "stderr": [
+          "[h264_nvenc @ 0x57dcf9c81c80] OpenEncodeSessionEx failed: unsupported device (2): (no details)",
+          "[h264_nvenc @ 0x57dcf9c81c80] No capable devices found",
+          "Error initializing output stream 0:0 -- Error while opening encoder for output stream #0:0 - maybe incorrect parameters such as bit_rate, rate, width or height"
+        ]
+      },
+      "nvidia_driver_capabilities": "compute,utility,video",
+      "process_start_unix": 1790614432.9220588,
+      "readiness": "ready",
+      "ready_after_s": 70.437910698,
+      "runtime": "fv-rs/0.1.0",
+      "server": "fv-serve",
+      "uptime_s": 85.197630511,
+      "version": "0.1.0",
+      "webhook_key_configured": true,
+      "weights": {
+        "entries": [
+          "FastH3-4-step-Preview-v1-LoRA",
+          "auxiliary",
+          "fastwan21-1.3b",
+          "h3-8step",
+          "h3-base",
+          "h3-to-ltx",
+          "hy15-480-i2v",
+          "hy15-480-t2v",
+          "hy15-720-i2v",
+          "hy15-720-t2v",
+          "ltx2",
+          "ltx23",
+          "ltx25",
+          "mmaudio-44k-v2",
+          "sfwan21-1.3b",
+          "taeh3",
+          "upscaler",
+          "wan21-t2v-14b",
+          "wan22-ti2v-5b"
+        ],
+        "exists": true,
+        "root": "/runpod-volume/weights"
+      }
+    },
+    "error": null
+  }
+}
