@@ -159,7 +159,7 @@ def ltx_upload_i2v(case):
     record(case, api="ltx /v1/upload + PUT + image-to-video(ltx://)", upload_http=up.status_code,
            storage_uri_ok=u.get("storage_uri", "").startswith("ltx://uploads/"), put_http=put.status_code,
            v1=summ(v1), v2=summ(v2),
-           ok=up.status_code == 200 and put.status_code in (200, 201, 204) and v1.status_code in (200, 400) and v2.status_code in (202, 400))
+           ok=up.status_code == 200 and put.status_code in (200, 201, 204) and v1.status_code == 200 and v2.status_code == 202)
 
 
 def openai_videos(case, body, want):
@@ -243,6 +243,62 @@ def probe(case):
            models=models, fal_schema=fal.json() if fal.ok else fal.status_code)
 
 
+FIXTURES = os.path.join(os.path.dirname(os.path.abspath(__file__)), "../../gpu/fixtures")
+BEACH = os.path.join(FIXTURES, "ti2v-beach-832x480.jpg")
+BEACH_ZOOM = os.path.join(FIXTURES, "ti2v-beach-zoom-832x480.jpg")
+I2V_PROMPT = ("Aerial drone shot of a tropical beach: turquoise sea waves roll in and break into white foam "
+              "on the sand, the camera glides slowly forward along the shoreline, bright sunny day.")
+
+
+def data_uri(path):
+    import base64
+    return "data:image/jpeg;base64," + base64.b64encode(open(path, "rb").read()).decode()
+
+
+def frame_fidelity(mp4, pins, width, height):
+    """SSIM / PSNR of the pinned frames of `mp4` against their images (cover + center
+    crop to the output canvas, as the engine prepares them): [(frame, image)]."""
+    out = {}
+    for idx, img in pins:
+        for m in ("ssim", "psnr"):
+            lav = (f"[0:v]select=eq(n\\,{idx}),setpts=N/TB,format=yuv420p[a];"
+                   f"[1:v]scale={width}:{height}:force_original_aspect_ratio=increase:flags=bilinear,"
+                   f"crop={width}:{height},format=yuv420p[b];[a][b]{m}")
+            r = subprocess.run(["ffmpeg", "-v", "info", "-nostats", "-i", mp4, "-i", img, "-lavfi", lav,
+                                "-frames:v", "1", "-f", "null", "-"], capture_output=True, text=True)
+            line = [x for x in r.stderr.splitlines() if f"Parsed_{m}" in x]
+            out[f"frame{idx}_{m}"] = line[-1].split("] ", 1)[-1] if line else r.stderr[-200:]
+    return out
+
+
+def ltx_i2v_v2(case, res, last=False, seconds=6, fps=24):
+    w, h = (int(x) for x in res.split("x"))
+    body = ltx_body(seconds=seconds, fps=fps, res=res, image_uri=data_uri(BEACH))
+    body["prompt"] = I2V_PROMPT
+    if last:
+        body["last_frame_uri"] = data_uri(BEACH_ZOOM)
+    frames = seconds * fps + 1
+    ltx_v2(case, body, expect(frames, fps, True), endpoint="image-to-video")
+    p = f"{OUT}/mp4/{case}.mp4"
+    if os.path.exists(p):
+        pins = [(0, BEACH)] + ([(frames - 1, BEACH_ZOOM)] if last else [])
+        record(case + "-fidelity", api="frame fidelity (ffmpeg)", ok=True, **frame_fidelity(p, pins, w, h))
+
+
+def native_i2v(case, size, last=False, seconds=5):
+    w, h = (int(x) for x in size.split("x"))
+    body = {"model": "ltx-turbo", "prompt": I2V_PROMPT, "seconds": seconds, "size": size, "seed": 11,
+            "image_url": data_uri(BEACH)}
+    if last:
+        body["last_image_url"] = data_uri(BEACH_ZOOM)
+    frames = seconds * 24 + 1
+    native(case, body, expect(frames, 24, True))
+    p = f"{OUT}/mp4/{case}.mp4"
+    if os.path.exists(p):
+        pins = [(0, BEACH)] + ([(frames - 1, BEACH_ZOOM)] if last else [])
+        record(case + "-fidelity", api="frame fidelity (ffmpeg)", ok=True, **frame_fidelity(p, pins, w, h))
+
+
 CASES = {
     "probe": lambda: probe("probe"),
     # warm-up + v2 at 720p
@@ -254,6 +310,12 @@ CASES = {
     "v2-1080p-24-silent": lambda: ltx_v2("v2-1080p-24-silent", ltx_body(generate_audio=False), expect(145, 24, False)),
     "v2-1080p-20s": lambda: ltx_v2("v2-1080p-20s", ltx_body(seconds=20), expect(481, 24, True)),
     "i2v-upload": lambda: ltx_upload_i2v("i2v-upload"),
+    # E5 / E9 image conditioning, and the 1440p tier.
+    "i2v-v2-1080p": lambda: ltx_i2v_v2("i2v-v2-1080p", "1920x1080"),
+    "kf-v2-1080p": lambda: ltx_i2v_v2("kf-v2-1080p", "1920x1080", last=True),
+    "i2v-v2-720p": lambda: ltx_i2v_v2("i2v-v2-720p", "1280x720"),
+    "native-kf-720p": lambda: native_i2v("native-kf-720p", "1280x720", last=True),
+    "v2-1440p-24": lambda: ltx_v2("v2-1440p-24", ltx_body(res="2560x1440"), expect(145, 24, True)),
     "errors": lambda: [
         ltx_error("err-pro-unserved", "POST", "/v2/text-to-video", ltx_body(model="ltx-2-5-pro"), 403, "permission_error"),
         ltx_error("err-5s", "POST", "/v2/text-to-video", ltx_body(seconds=5), 400, "invalid_request_error"),
