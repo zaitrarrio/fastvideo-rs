@@ -12,6 +12,10 @@
 #                                 2. a CPU pod on the EU volume (fv-weights-h3-ltx-hy)
 #                                    pulls it from the US pod, checks SHA-256, renames;
 #                                 3. both pods are deleted (and checked gone).
+#   fetch-ltx-iclora.sh hub <volume name>
+#                                 one CPU pod on that volume pulls the pinned Hub
+#                                 revision directly (same SHA-256 check and
+#                                 temp-then-rename); for catching a volume up.
 #
 # Default: Lightricks/LTX-2.5-22b-IC-LoRA-Ingredients @ 12040e4 into
 # weights/ltx25-ic-lora-ingredients (1.31 GB; LTX-2.x Community License).
@@ -110,6 +114,14 @@ if [[ "${1:-}" == probe ]]; then
     p="$(start probe "$name")"; pods+=("$p")
     log "$name: $(wait_done "$p")"
   done
+  exit 0
+fi
+if [[ "${1:-}" == hub ]]; then
+  [[ -n "${2:-}" ]] || { log "usage: $0 hub <volume name>"; exit 2; }
+  p="$(start hub "$2")"; pods+=("$p")
+  j="$(wait_done "$p")"; echo "$j" >"$OUT/hub-$2.json"; log "$2: $j"
+  [[ "$(jq -r .ok <<<"$j")" == true ]] || exit 1
+  log "ok: $2 carries $IC_DEST ($(jq -c .bytes <<<"$j"))"
   exit 0
 fi
 us="$(start hub fv-weights-b200-us)"; pods+=("$us")

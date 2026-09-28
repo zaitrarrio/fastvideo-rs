@@ -34,6 +34,11 @@ FILES = json.loads(os.environ["IC_FILES"])
 ROLE = os.environ.get("ROLE", "hub")
 SRV = pathlib.Path("/srv")
 
+# The Runpod proxy (Cloudflare) answers urllib's default User-Agent with 403.
+_opener = urllib.request.build_opener()
+_opener.addheaders = [("User-Agent", "fv-fetch-ltx-iclora/1")]
+urllib.request.install_opener(_opener)
+
 
 def log(msg: str) -> None:
     line = f"[{time.strftime('%H:%M:%S')}] {msg}"
