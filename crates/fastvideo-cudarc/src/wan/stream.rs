@@ -35,6 +35,12 @@
 //! with the stream restarted at block 0 ([`PromptSwitch::Reset`], a hard
 //! cut). [`CausalRollout::reset`] is the explicit restart.
 //!
+//! **Graphs** ([`RolloutConfig::graphs`], serve E7): on a CUDA device the
+//! denoise steps and the context pass run on [`super::graph::GraphStream`]
+//! through a static KV cache and persistent input buffers, captured once per
+//! cache state and replayed; bit for bit the eager path
+//! (`FASTVIDEO_WAN_GRAPH=0`). See `docs/ports/wan.md`.
+//!
 //! Only TAEHV decodes per block; the full Wan VAE clears its causal feature
 //! cache per call, which is strobe's seam, so a pipeline without TAEHV
 //! weights is refused.
