@@ -1,0 +1,77 @@
+{
+ "caps": {
+  "ok": true,
+  "data": {
+   "models": [
+    {
+     "id": null,
+     "tier": null,
+     "tasks": null,
+     "refs": null,
+     "recipe": {
+      "attention": "dense",
+      "name": "h3-ref2va-base-49step",
+      "profile": "h3/h3_ref2va_base",
+      "steps": 49,
+      "summary": "H3 reference-to-video, highest quality: the base Ref2VA DiT (transformer_ref), 49 forwards on the 50-point grid, dense attention, official VAE (the upstream default)",
+      "vae": "full"
+     },
+     "resident": null
+    },
+    {
+     "id": null,
+     "tier": null,
+     "tasks": null,
+     "refs": null,
+     "recipe": {
+      "attention": "dense",
+      "name": "sol-h3-ref2va",
+      "profile": "h3/sol_h3_ref2va",
+      "steps": 4,
+      "summary": "H3 reference-to-video, fast: the Ref2VA DiT with the lightx2v turbo LoRA fused (Sol-H3 Ref2VA route), 4 forwards, dense attention, official VAE",
+      "vae": "full"
+     },
+     "resident": null
+    }
+   ],
+   "ref2v_models": []
+  },
+  "s": 0.6
+ },
+ "fal.turbo": {
+  "ok": true,
+  "data": {
+   "request_id": "e086c69e-628e-405f-b852-71aa13aae633",
+   "wall_s": 47.2,
+   "statuses": [
+    "IN_PROGRESS",
+    "COMPLETED"
+   ],
+   "timings": {
+    "audio_decode": 0.073470149,
+    "denoise": 33.571052313,
+    "encode": 0.627271927,
+    "inference": 33.571052313,
+    "queue": 0.656263106,
+    "refine": 0.002456684,
+    "text": 0.670619535,
+    "total": 44.745688558,
+    "video_decode": 6.597232463
+   },
+   "seed": 7,
+   "mp4": {
+    "width": 1344,
+    "height": 768,
+    "frames": 124,
+    "duration_s": 5.175,
+    "audio": {
+     "codec": "aac",
+     "rate": 32000,
+     "channels": 2
+    },
+    "bytes": 7067139
+   }
+  },
+  "s": 56.2
+ }
+}

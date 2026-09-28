@@ -1,0 +1,100 @@
+{
+ "caps": {
+  "ok": true,
+  "data": {
+   "models": [
+    {
+     "id": "h3-ref2v-max",
+     "tier": "max",
+     "tasks": [
+      "ref2v"
+     ],
+     "refs": {
+      "audio": 3,
+      "images": 9,
+      "total": 12,
+      "videos": 3
+     },
+     "recipe": "h3-ref2va-base-49step",
+     "resident": false
+    },
+    {
+     "id": "h3-ref2v-turbo",
+     "tier": "turbo",
+     "tasks": [
+      "ref2v"
+     ],
+     "refs": {
+      "audio": 3,
+      "images": 9,
+      "total": 12,
+      "videos": 3
+     },
+     "recipe": "sol-h3-ref2va",
+     "resident": true
+    }
+   ],
+   "ref2v_models": [
+    "h3-ref2v-max",
+    "h3-ref2v-turbo"
+   ],
+   "tiers": [
+    {
+     "alias": "h3-max",
+     "family": "h3",
+     "model": "h3-ref2v-max",
+     "tier": "max"
+    },
+    {
+     "alias": "h3-turbo",
+     "family": "h3",
+     "model": "h3-ref2v-turbo",
+     "tier": "turbo"
+    }
+   ],
+   "aliases": {
+    "MiniMax-H3-Max": "h3-ref2v-max",
+    "MiniMax-H3-Turbo": "h3-ref2v-turbo",
+    "h3-max": "h3-ref2v-max",
+    "h3-turbo": "h3-ref2v-turbo"
+   }
+  },
+  "s": 0.4
+ },
+ "fal.two": {
+  "ok": true,
+  "data": {
+   "request_id": "18572be5-46e5-45ab-9112-e32690ea0cda",
+   "wall_s": 19.3,
+   "statuses": [
+    "IN_PROGRESS",
+    "COMPLETED"
+   ],
+   "timings": {
+    "audio_decode": 0.057688397,
+    "denoise": 8.822093343,
+    "encode": 0.577310935,
+    "inference": 8.822093343,
+    "queue": 0.290802298,
+    "refine": 0.005243121,
+    "text": 1.016569175,
+    "total": 16.165602861,
+    "video_decode": 2.6998192149999998
+   },
+   "seed": 77576018,
+   "mp4": {
+    "width": 832,
+    "height": 480,
+    "frames": 124,
+    "duration_s": 5.175,
+    "audio": {
+     "codec": "aac",
+     "rate": 32000,
+     "channels": 2
+    },
+    "bytes": 2240301
+   }
+  },
+  "s": 21.6
+ }
+}

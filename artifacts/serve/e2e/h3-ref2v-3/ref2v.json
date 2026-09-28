@@ -1,0 +1,38 @@
+{
+ "fal.max": {
+  "ok": true,
+  "data": {
+   "request_id": "3b96fb44-cc2c-4108-947a-4eb4f024bbd1",
+   "wall_s": 853.2,
+   "statuses": [
+    "IN_PROGRESS",
+    "COMPLETED"
+   ],
+   "timings": {
+    "audio_decode": 0.056004329,
+    "denoise": 681.446694599,
+    "encode": 0.653480062,
+    "inference": 681.446694599,
+    "queue": 0.416318505,
+    "refine": 0.03776544,
+    "text": 28.237823839,
+    "total": 848.571714208,
+    "video_decode": 6.493127991
+   },
+   "seed": 7,
+   "mp4": {
+    "width": 1344,
+    "height": 768,
+    "frames": 124,
+    "duration_s": 5.175,
+    "audio": {
+     "codec": "aac",
+     "rate": 32000,
+     "channels": 2
+    },
+    "bytes": 7654601
+   }
+  },
+  "s": 857.5
+ }
+}
