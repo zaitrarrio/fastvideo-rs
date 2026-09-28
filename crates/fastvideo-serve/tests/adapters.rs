@@ -213,6 +213,48 @@ async fn every_mounted_route_of_the_table_answers() {
     }
 }
 
+/// Native job objects carry `protocol` and the engine's stage `metrics`;
+/// `GET /fv/v1/jobs` lists native jobs by default and every API's with
+/// `?protocol=all` (or one API by name).
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn native_jobs_metrics_and_list_scope() {
+    let a = app("native-list").await;
+    let r = a.router.clone();
+    let body = json!({"model": "h3-turbo", "prompt": "a fox", "aspect_ratio": "16:9", "short_edge": 768});
+    let s = call(&r, "POST", "/fv/v1/jobs", Some(body), bearer()).await;
+    assert_eq!(s.status, 202, "{}", String::from_utf8_lossy(&s.bytes));
+    let nid = s.json()["id"].as_str().unwrap().to_owned();
+    let v = poll(&r, &format!("/fv/v1/jobs/{nid}"), bearer(), |v| v["status"] == "succeeded").await;
+    assert_eq!(v["protocol"], "native");
+    let m = &v["metrics"];
+    assert!(m["inference_s"].is_number(), "{m}");
+    assert!(m["stage_durations"]["denoise"].is_number(), "{m}");
+    assert!(m["queue_s"].is_number() && m["run_s"].is_number(), "{m}");
+
+    let key = Some("Key sk-adapters");
+    let s = call(&r, "POST", "/minimax/h3-turbo/text-to-video", Some(json!({"prompt": "a kitten"})), key).await;
+    assert_eq!(s.status, 200);
+    let fid = s.json()["request_id"].as_str().unwrap().to_owned();
+    poll(&r, &format!("/minimax/h3-turbo/requests/{fid}/status"), key, |v| v["status"] == "COMPLETED").await;
+
+    let ids = |v: Value| -> Vec<(String, String)> {
+        v["data"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|j| (j["protocol"].as_str().unwrap().to_owned(), j["id"].as_str().unwrap().to_owned()))
+            .collect()
+    };
+    let native = ids(call(&r, "GET", "/fv/v1/jobs", None, bearer()).await.json());
+    assert_eq!(native, vec![("native".to_owned(), nid.clone())]);
+    let all = ids(call(&r, "GET", "/fv/v1/jobs?protocol=all", None, bearer()).await.json());
+    assert!(all.contains(&("native".to_owned(), nid.clone())) && all.contains(&("fal".to_owned(), fid.clone())), "{all:?}");
+    let fal = ids(call(&r, "GET", "/fv/v1/jobs?protocol=fal", None, bearer()).await.json());
+    assert_eq!(fal, vec![("fal".to_owned(), fid)]);
+    let bad = call(&r, "GET", "/fv/v1/jobs?protocol=nope", None, bearer()).await;
+    assert_eq!((bad.status, bad.json()["error"]["param"].as_str()), (StatusCode::BAD_REQUEST, Some("protocol")));
+}
+
 async fn preflight(app: &Router, path: &str, origin: &str, method: &str, headers: &str) -> axum::http::Response<Body> {
     let req = Request::builder()
         .method("OPTIONS")

@@ -1669,7 +1669,13 @@ additions and readings; everything is re-exported from the crate root.
   Tested against a SQLite mock of the D1 HTTP API (`d1-mock` feature) and
   once live against `fv-jobs`.
 - Native `/fv/v1/jobs` (submit/list/get/content/delete) is the batch path
-  the binary's own e2e tests drive; `/fv/v1/streams` answers 501 until the
+  the binary's own e2e tests drive. The job object carries `protocol` and
+  `metrics` (`inference_s`, `stage_durations`, `peak_memory_mb`,
+  `build_rtf` from the engine's `Finished` event; `queue_s`, `run_s` from
+  the job timestamps). The list shows native jobs by default (ids resolve
+  per API, and `/fv/v1/jobs/{id}` takes native ids);
+  `?protocol=all` or `?protocol=<api>` lists the caller's jobs of every
+  API or one API, in the native shape. `/fv/v1/streams` answers 501 until the
   streaming packages land. `runpod-queue` mode and `engine.backend = cuda`
   are mount points that fail at startup until WP-16 / WP-11 land.
 - Adapters are features of `fastvideo-serve` (`openai-videos`, `minimax`,
