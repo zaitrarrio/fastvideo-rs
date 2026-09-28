@@ -203,7 +203,7 @@ impl DirectorService {
 
     /// The app's model caps (clip streaming required).
     pub fn caps_for(&self, ctx: &ServeCtx, app: &FalApp) -> Result<ModelCaps, ApiError> {
-        let id = crate::queue::resolve_app_model(ctx, app)?;
+        let id = crate::queue::resolve_app_model(ctx, app, crate::Endpoint::TextToVideo)?;
         let caps = ctx
             .engine()
             .models()

@@ -1058,6 +1058,67 @@ Audio: male speech, clear voice, quiet room"
       "$BIN" --mode fast wan gen "${ti2v[@]}" --height 704 --width 1280 --num-frames 121 \
         --prompt "$PROMPT" "${PROMPT_ARGS[@]}" --clip-dir "$RUNS/wan5b-easycache/frames"
     compare_cells wan5b wan5b-easycache
+    # ---- fal parity (docs/serve/fal-parity.md §3, P0 3-4) ----------------
+    # FastWan2.2 TI2V-5B FullAttn, the wan-turbo tier (fal's
+    # fal-ai/wan/v2.2-5b/text-to-video/fast-wan): module parity on its own
+    # weights against Diffusers (the upstream pod's oracle:fastwan22-ti2v
+    # dump, DiT at the DMD timestep 757), then its model card recipe: 3 DMD
+    # steps (1000/757/522), shift 5, 704x1280x121 at 24 fps, the full Wan 2.2
+    # VAE (fw22) and TAEHV taew2_2 (fw22-taehv, the wan-draft tier).
+    if [[ -z "${FV_CELLS:-}" || " $FV_CELLS " == *" fw22-oracle "* ]]; then
+      target=fastwan22-ti2v
+      ref="$SCRATCH/oracle-ref/$target"
+      if oracle_fetch "$target" "$ref"; then
+        gated_cell fw22-oracle fastwan22-ti2v-5b \
+          "$BIN" --mode fast --keep-going wan oracle --weights "$W/fastwan22-ti2v-5b" --reference "$ref/dump" \
+            --dump-out "$RUNS/fw22-oracle-dump" --taehv "$TAE/taew2_2.safetensors"
+        oracle_diff fw22-oracle-diff "$ref/dump" "$RUNS/fw22-oracle-dump"
+        rm -rf "$ref" "$RUNS/fw22-oracle-dump"
+      else
+        mkdir -p "$RUNS/fw22-oracle"
+        write_json "$RUNS/fw22-oracle/summary.json" '{"cell":"fw22-oracle","exit":null,"skipped":"reference dump unavailable"}'
+      fi
+    fi
+    fw22=(--weights "$W/fastwan22-ti2v-5b" --preset fast_wan_2_2_ti2v_5b --steps 3 --flow-shift 5.0 --fps 24
+      --seed "$SEED" --warm)
+    gated_cell fw22 fastwan22-ti2v-5b env FASTVIDEO_WAN_VAE=full \
+      "$BIN" --mode fast wan gen "${fw22[@]}" --height 704 --width 1280 --num-frames 121 \
+        --prompt "$PROMPT" "${PROMPT_ARGS[@]}" --clip-dir "$RUNS/fw22/frames"
+    gated_cell fw22-taehv fastwan22-ti2v-5b env FASTVIDEO_WAN_VAE=taehv \
+      "$BIN" --mode fast wan gen "${fw22[@]}" --height 704 --width 1280 --num-frames 121 \
+        --prompt "$PROMPT" "${PROMPT_ARGS[@]}" --clip-dir "$RUNS/fw22-taehv/frames"
+    compare_cells fw22 fw22-taehv
+    # The distilled model against the base checkpoint's 50-step recipe.
+    compare_cells wan5b fw22
+    gated_cell fw22-i2v fastwan22-ti2v-5b env FASTVIDEO_WAN_VAE=full \
+      "$BIN" --mode fast wan gen "${fw22[@]}" --height 480 --width 832 --num-frames 121 \
+        --image "$fixtures/ti2v-beach-832x480.jpg" --prompt "$ti2v_prompt" --clip-dir "$RUNS/fw22-i2v/frames"
+    # fal's 580p (1024x576) and 161 frames on both 5B tiers; the 5B at fal's
+    # defaults (40 UniPC steps, CFG 3.5, shift 5). One prompt each.
+    fal5b=(--weights "$W/wan22-ti2v-5b" --preset wan_2_2_ti2v_5b --unipc --steps 40 --guidance 3.5
+      --flow-shift 5.0 --fps 24 --negative "$wan_neg_cn" --seed "$SEED")
+    gated_cell fw22-580p-161f fastwan22-ti2v-5b env FASTVIDEO_WAN_VAE=full \
+      "$BIN" --mode fast wan gen "${fw22[@]}" --height 576 --width 1024 --num-frames 161 \
+        --prompt "$PROMPT" --clip-dir "$RUNS/fw22-580p-161f/frames"
+    gated_cell fw22-720p-161f fastwan22-ti2v-5b env FASTVIDEO_WAN_VAE=full \
+      "$BIN" --mode fast wan gen "${fw22[@]}" --height 704 --width 1280 --num-frames 161 \
+        --prompt "$PROMPT" --clip-dir "$RUNS/fw22-720p-161f/frames"
+    gated_cell wan5b-580p-161f wan22-ti2v-5b \
+      "$BIN" --mode fast wan gen "${fal5b[@]}" --height 576 --width 1024 --num-frames 161 \
+        --prompt "$PROMPT" --clip-dir "$RUNS/wan5b-580p-161f/frames"
+    gated_cell wan5b-720p-161f wan22-ti2v-5b \
+      "$BIN" --mode fast wan gen "${fal5b[@]}" --height 704 --width 1280 --num-frames 161 \
+        --prompt "$PROMPT" --clip-dir "$RUNS/wan5b-720p-161f/frames"
+    # The catalog's wan-turbo through the engine service (`fv-gpucheck
+    # engine`): the same frames as the CLI at the recipe's settings.
+    fwgeo=(--height 704 --width 1280 --num-frames 121 --prompt "$PROMPT" --seed "$SEED")
+    gated_cell cli-fw22 fastwan22-ti2v-5b env FASTVIDEO_WAN_VAE=full \
+      "$BIN" --mode fast wan gen --weights "$W/fastwan22-ti2v-5b" --preset fast_wan_2_2_ti2v_5b --steps 3 \
+        --flow-shift 5.0 --fps 24 "${fwgeo[@]}" --no-text-cache --no-mp4 --clip-dir "$RUNS/cli-fw22/frames"
+    gated_cell engine-fw22 fastwan22-ti2v-5b \
+      "$BIN" --keep-going --mode fast engine --model wan-turbo --weights-root "$W" --tae-dir "$TAE" "${fwgeo[@]}" \
+        --reference "$RUNS/cli-fw22/frames" --cancel-after-step 1 --clip-out "$RUNS/engine-fw22/out"
+    rm -rf "$RUNS"/cli-fw22/frames "$RUNS"/engine-fw22/out/*/frames
     # SF-Wan 81 frames: TAEHV is the distilled default (sfwan13-81f-flash);
     # the full Wan VAE opt-out on the same recipe, for the decoder A/B.
     sf_arm sfwan13-81f-fullvae 81 FASTVIDEO_WAN_VAE=full
@@ -2372,7 +2433,7 @@ Audio: male speech, clear voice, quiet room"
         "$BIN" --mode fast --vsa wan gen --weights "$W/fastwan21-1.3b" "${wangeo[@]}" --no-text-cache --no-mp4 \
           --clip-dir "$RUNS/cli-wan-turbo/frames"
       gated_cell engine-wan-turbo fastwan21-1.3b \
-        "$BIN" --keep-going --mode fast engine --model wan-turbo --weights-root "$W" --tae-dir "$TAE" "${wangeo[@]}" \
+        "$BIN" --keep-going --mode fast engine --model fastwan21-1.3b --weights-root "$W" --tae-dir "$TAE" "${wangeo[@]}" \
           --reference "$RUNS/cli-wan-turbo/frames" --cancel-after-step 1 --clip-out "$RUNS/engine-wan-turbo/out"
     fi
     # Keep the reports and MP4s; the PNG frames were compared on the box.

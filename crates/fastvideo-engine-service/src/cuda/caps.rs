@@ -18,9 +18,11 @@
 //! | `ltx-pro` | `ltx25-distill-dense` | LTX-2.5 22B distilled two-stage (8 + 3), dense stage 2, conv VAE | `ltx2/ltx25_distill_dense` | Only LTX-2.5 generation path; dense (non-lossy) stage 2, full VAE |
 //! | `ltx-turbo` | `ltx25-distill-sol` | LTX-2.5 distilled two-stage, Sol stage 2 | `ltx2/ltx25_distill_sol` | The reference single-GPU route; passes the gate |
 //! | `ltx-draft` | `ltx25-distill-sol-nvfp4-taehv` | + NVFP4 video FFN + TAEHV (`taeltx2_3_wide`) decode | `ltx2/ltx25_distill_sol_nvfp4` | Faster, fails sharpness at 4K (draft) |
-//! | `wan-max` | `wan22-ti2v-5b` | Wan2.2 TI2V-5B, 50 UniPC steps, CFG 5, shift 5, full Wan 2.2 VAE, 704x1280x121 @ 24 fps | none | The checkpoint's recommended recipe |
-//! | `wan-turbo` | `fastwan21-1.3b` | FastWan2.1 1.3B DMD 3-step (1000/757/522), VSA, full Wan VAE, 480x832x81 @ 16 fps | none (`FASTVIDEO_VSA=1`) | The published FastWan recipe |
-//! | `wan-draft` | `fastwan21-1.3b-taehv` | the turbo recipe decoded by TAEHV (`taew2_1`) | none (`FASTVIDEO_VSA=1`) | Tiny decoder: faster, lossy (draft) |
+//! | `wan-max` | `wan22-ti2v-5b` | Wan2.2 TI2V-5B, 50 UniPC steps, CFG 5, shift 5, full Wan 2.2 VAE, 704x1280x121 @ 24 fps (short edges 704, 576, 480; up to 161 frames) | none | The checkpoint's recommended recipe |
+//! | `wan-turbo` | `fastwan22-ti2v-5b` | FastWan2.2 TI2V-5B (FullAttn) DMD 3-step (1000/757/522), shift 5, full Wan 2.2 VAE, 704x1280x121 @ 24 fps, same canvas and frames as `wan-max` | none | fal's `fal-ai/wan/v2.2-5b/text-to-video/fast-wan` model (docs/serve/fal-parity.md §3) |
+//! | `wan-draft` | `fastwan22-ti2v-5b-taehv` | the turbo recipe decoded by TAEHV (`taew2_2`) | none | Tiny decoder: faster, lossy (draft) |
+//! | — | `fastwan21-1.3b` | FastWan2.1 1.3B DMD 3-step (1000/757/522), VSA, full Wan VAE, 480x832x81 @ 16 fps | none (`FASTVIDEO_VSA=1`) | untiered (was `wan-turbo`): the published FastWan 1.3B recipe |
+//! | — | `fastwan21-1.3b-taehv` | the 1.3B recipe decoded by TAEHV (`taew2_1`) | none (`FASTVIDEO_VSA=1`) | untiered (was `wan-draft`) |
 //! | — | `sfwan21-1.3b` | SF-Wan 1.3B causal, 4 Self-Forcing steps, shift 5, TAEHV per block | none | Causal streaming (`StreamCaps::Causal`) |
 //!
 //! # Process settings
@@ -448,6 +450,13 @@ impl CudaModel {
     }
 }
 
+/// Frame ceiling of the Wan 5B recipes (fal's `num_frames` 17..=161).
+pub const WAN5B_FRAMES_MAX: u32 = 161;
+/// Container frame rates a Wan clip may be muxed at (fal's
+/// `frames_per_second` 4..=60): the frames do not depend on it.
+pub const WAN_FPS_MIN: u32 = 4;
+pub const WAN_FPS_MAX: u32 = 60;
+
 /// The LTX draft profile (NVFP4 video FFN).
 pub const LTX_DRAFT_PROFILE: &str = "ltx2/ltx25_distill_sol_nvfp4";
 
@@ -546,8 +555,9 @@ fn wan_caps(id: &str, r: &WanRecipe) -> ModelCaps {
         // The frames do not depend on the fps: the backend muxes the MP4 at
         // the job's fps (FastWan clients send 24 for a 16 fps model), so both
         // container rates are accepted; the model's own rate is the default.
+        // Any integer rate 4..=60 (fal's `frames_per_second`), the model's first.
         fps: FpsCaps {
-            allowed: if fps == 16 { vec![16, 24] } else { vec![fps, 16] },
+            allowed: std::iter::once(fps).chain((WAN_FPS_MIN..=WAN_FPS_MAX).filter(|&f| f != fps)).collect(),
             default: fps,
             container_only: true,
         },
@@ -691,12 +701,23 @@ pub fn catalog(layout: &WeightLayout) -> Vec<CudaModel> {
         decoder: WanDecoder::Full,
         default: (1280, 704, 121, 24),
         max_area: 1280 * 704,
-        short_edges: vec![704, 480],
+        // fal's 720p, 580p and 480p (docs/serve/fal-parity.md §3).
+        short_edges: vec![704, 576, 480],
         multiple: 32,
-        frames_max: 121,
+        frames_max: WAN5B_FRAMES_MAX,
         i2v: true,
         negative: WAN_NEGATIVE_CN.to_owned(),
         tae_dir: None,
+    };
+    // FastWan2.2 TI2V-5B (FullAttn): the TI2V-5B network DMD-distilled to 3
+    // steps (1000/757/522), shift 5, full attention; trained at 704x1280x121.
+    let fastwan22 = |decoder: WanDecoder| WanRecipe {
+        preset: "fast_wan_2_2_ti2v_5b".to_owned(),
+        weights: layout.at("fastwan22-ti2v-5b"),
+        sampler: WanSampler::Dmd { steps: 3 },
+        decoder,
+        tae_dir: Some(layout.tae_dir.clone()),
+        ..wan_max.clone()
     };
     let sfwan = SfWanRecipe {
         wan: WanRecipe {
@@ -761,18 +782,31 @@ pub fn catalog(layout: &WeightLayout) -> Vec<CudaModel> {
             "wan22-ti2v-5b",
             Some(Tier::Max),
             "wan22-ti2v-5b-unipc50",
-            CudaRecipe::Wan(wan_max),
+            CudaRecipe::Wan(wan_max.clone()),
+        ),
+        CudaModel::new(
+            "fastwan22-ti2v-5b",
+            Some(Tier::Turbo),
+            "fastwan22-ti2v-5b-dmd3",
+            CudaRecipe::Wan(fastwan22(WanDecoder::Full)),
+        )
+        .with_served_names(&["FastVideo/FastWan2.2-TI2V-5B-FullAttn-Diffusers"]),
+        CudaModel::new(
+            "fastwan22-ti2v-5b-taehv",
+            Some(Tier::Draft),
+            "fastwan22-ti2v-5b-dmd3-taehv",
+            CudaRecipe::Wan(fastwan22(WanDecoder::Taehv)),
         ),
         CudaModel::new(
             "fastwan21-1.3b",
-            Some(Tier::Turbo),
+            None,
             "fastwan21-1.3b-dmd3-vsa",
             CudaRecipe::Wan(fastwan(layout, WanDecoder::Full)),
         )
         .with_served_names(&["FastVideo/FastWan2.1-T2V-1.3B-Diffusers"]),
         CudaModel::new(
             "fastwan21-1.3b-taehv",
-            Some(Tier::Draft),
+            None,
             "fastwan21-1.3b-dmd3-vsa-taehv",
             CudaRecipe::Wan(fastwan(layout, WanDecoder::Taehv)),
         ),
@@ -1013,8 +1047,8 @@ mod tests {
             ("ltx-turbo", "ltx25-distill-sol"),
             ("ltx-draft", "ltx25-distill-sol-nvfp4-taehv"),
             ("wan-max", "wan22-ti2v-5b"),
-            ("wan-turbo", "fastwan21-1.3b"),
-            ("wan-draft", "fastwan21-1.3b-taehv"),
+            ("wan-turbo", "fastwan22-ti2v-5b"),
+            ("wan-draft", "fastwan22-ti2v-5b-taehv"),
         ];
         for (alias, id) in want {
             assert_eq!(t.resolve(alias).map(|c| c.id.as_str()), Some(id), "{alias}");
@@ -1151,6 +1185,26 @@ mod tests {
         assert!(ti2v.supports(Task::I2V));
         assert!(ti2v.knobs.guidance && ti2v.knobs.negative && !ti2v.knobs.guidance_2);
         assert_eq!(ti2v.fps.default, 24);
+        // fal's Wan 5B: 720p/580p/480p, 17..=161 frames, 4..=60 fps (container).
+        for id in ["wan22-ti2v-5b", "fastwan22-ti2v-5b", "fastwan22-ti2v-5b-taehv"] {
+            let c = get(id);
+            assert_eq!(c.canvas.short_edges, vec![704, 576, 480], "{id}");
+            assert_eq!((c.frames.min, c.frames.max, c.frames.default), (9, 161, 121), "{id}");
+            assert!(c.frames.contains(17) && c.frames.contains(161));
+            assert!((4..=60).all(|f| c.fps.allows(f)) && !c.fps.allows(3) && !c.fps.allows(61), "{id}");
+            assert!(c.supports(Task::I2V), "{id}");
+            let mut req = fastvideo_protocol::GenerationRequest::text(fastvideo_protocol::ProtocolId::Fal, id, "a cat");
+            req.canvas = fastvideo_protocol::CanvasSpec::Aspect { ratio: fastvideo_protocol::Ratio::R16_9, short_edge: 576 };
+            req.timing = fastvideo_protocol::TimingSpec {
+                length: fastvideo_protocol::Length::Frames { value: 161, snap: fastvideo_protocol::Snap::AlignUp },
+                fps: Some(60),
+            };
+            let r = fastvideo_protocol::negotiate(&req, &c, &Default::default()).unwrap();
+            assert_eq!((r.width, r.height, r.num_frames, r.fps), (1024, 576, 161, 60), "{id}");
+        }
+        let fw = get("fastwan22-ti2v-5b");
+        assert!(!fw.knobs.negative && !fw.knobs.guidance && fw.knobs.steps && fw.knobs.flow_shift);
+        assert_eq!(fw.tier, Some(Tier::Turbo));
         let sf = get("sfwan21-1.3b");
         assert_eq!(
             sf.stream,
@@ -1195,9 +1249,12 @@ mod tests {
         // NVFP4 is load-time: the LTX draft needs its own process.
         assert!(ProcessPlan::for_models(&pick(&["ltx-turbo", "ltx-draft"])).is_err());
         // FastWan's VSA flag is process-wide; the TI2V-5B recipe runs without it.
-        let p = ProcessPlan::for_models(&pick(&["wan-turbo", "wan-draft"])).unwrap();
+        let p = ProcessPlan::for_models(&pick(&["fastwan21-1.3b", "fastwan21-1.3b-taehv"])).unwrap();
         assert_eq!(p.env.get("FASTVIDEO_VSA").map(String::as_str), Some("1"));
-        assert!(ProcessPlan::for_models(&pick(&["wan-turbo", "wan-max"])).is_err());
+        assert!(ProcessPlan::for_models(&pick(&["fastwan21-1.3b", "wan-max"])).is_err());
+        // The 5B tiers (FastWan2.2 FullAttn has no VSA) share one process.
+        let p = ProcessPlan::for_models(&pick(&["wan-max", "wan-turbo", "wan-draft"])).unwrap();
+        assert_eq!(p.env.get("FASTVIDEO_VSA").map(String::as_str), Some("0"));
         let p = ProcessPlan::for_models(&pick(&["wan-max", "sfwan21-1.3b"])).unwrap();
         assert_eq!(p.env.get("FASTVIDEO_VSA").map(String::as_str), Some("0"));
     }
@@ -1222,7 +1279,7 @@ mod tests {
         assert_eq!((r.weights.as_path(), r.text_encoder.as_str()), (Path::new("/w/h3-base"), "streamed"));
         let t = CapabilityTable::build(vec![vec![(m.caps(), m.describe())]], &BTreeMap::new()).unwrap();
         assert_eq!(t.resolve("h3-turbo").unwrap().id.as_str(), "fasth3");
-        for (fam, rec, want) in [("ltx2", "ltx-turbo", "ltx25-distill-sol"), ("wan", "", "fastwan21-1.3b"), ("h3", "8step", "fasth3-8step-dense"), ("h3", "sol-h3", "sol-h3"), ("h3", "h3-max", "sol-h3")] {
+        for (fam, rec, want) in [("ltx2", "ltx-turbo", "ltx25-distill-sol"), ("wan", "", "fastwan22-ti2v-5b"), ("wan", "fastwan21-1.3b", "fastwan21-1.3b"), ("h3", "8step", "fasth3-8step-dense"), ("h3", "sol-h3", "sol-h3"), ("h3", "h3-max", "sol-h3")] {
             let e = ModelEntryCfg { family: fam.into(), recipe: rec.into(), resident: true, ..Default::default() };
             assert_eq!(model_from_config(&l, &e).unwrap().id.as_str(), want);
         }

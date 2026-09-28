@@ -354,7 +354,11 @@ impl Default for ProtocolsCfg {
             ltx: true,
             reactor: true,
             native: true,
-            fal_apps: vec!["minimax/h3-max".into(), "minimax/h3-turbo".into(), "minimax/h3-draft".into()],
+            // = fastvideo_fal::DEFAULT_APPS (the H3 tiers plus fal's own
+            // `minimax/h3-max-turbo` and base `minimax/h3` ids).
+            fal_apps: ["minimax/h3-max", "minimax/h3-turbo", "minimax/h3-draft", "minimax/h3-max-turbo", "minimax/h3"]
+                .map(String::from)
+                .to_vec(),
         }
     }
 }

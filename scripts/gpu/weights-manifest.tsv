@@ -13,6 +13,7 @@ hy15-720-t2v	hunyuanvideo-community/HunyuanVideo-1.5-Diffusers-720p_t2v	tokenize
 hy15-720-i2v	hunyuanvideo-community/HunyuanVideo-1.5-Diffusers-720p_i2v_distilled	tokenizer/* tokenizer_2/* text_encoder/* text_encoder_2/* transformer/* vae/* scheduler/*
 fastwan21-1.3b	FastVideo/FastWan2.1-T2V-1.3B-Diffusers	transformer/* tokenizer/* text_encoder/* vae/*
 wan22-ti2v-5b	Wan-AI/Wan2.2-TI2V-5B-Diffusers	scheduler/* tokenizer/* text_encoder/* transformer/* vae/*
+fastwan22-ti2v-5b	FastVideo/FastWan2.2-TI2V-5B-FullAttn-Diffusers	scheduler/* tokenizer/* text_encoder/* transformer/* vae/*
 wan21-t2v-14b	Wan-AI/Wan2.1-T2V-14B-Diffusers	scheduler/* tokenizer/* text_encoder/* transformer/* vae/*
 sfwan21-1.3b	wlsaidhi/SFWan2.1-T2V-1.3B-Diffusers	scheduler/* tokenizer/* text_encoder/* transformer/* vae/*
 # mmaudio-44k-v2 spans three repos (hkchengrex/MMAudio, nvidia/bigvgan_v2_44khz_128band_512x,

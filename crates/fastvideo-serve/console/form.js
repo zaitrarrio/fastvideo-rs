@@ -108,16 +108,19 @@ function scalarField(name, prop, { onChange }) {
     return { node: el('label', { class: 'check', for: id }, box, human(name)), get: () => box.checked, set: (v) => { box.checked = !!v; }, inline: true };
   }
   if (Array.isArray(p.enum)) {
-    const sel = el('select', { id, 'data-input': name }, p.enum.map((v) => el('option', { value: v }, v)));
-    sel.value = prop.default ?? p.enum[0];
+    // Values keep their JSON type (integer `fps`, `duration: 6 | "auto"`).
+    const opts = nullable(prop) ? [null, ...p.enum] : p.enum;
+    const sel = el('select', { id, 'data-input': name }, opts.map((v) => el('option', { value: String(v) }, v === null ? '—' : String(v))));
+    const set = (v) => { const i = opts.findIndex((o) => String(o) === String(v)); sel.selectedIndex = i < 0 ? 0 : i; };
+    set(prop.default !== undefined ? prop.default : opts[0]);
     sel.onchange = onChange;
-    return { node: sel, get: () => sel.value, set: (v) => { sel.value = v; } };
+    return { node: sel, get: () => opts[sel.selectedIndex], set };
   }
   if (t === 'integer' || t === 'number') {
     const lo = p.minimum; const hi = p.maximum;
     if (!nullable(prop) && Number.isFinite(lo) && Number.isFinite(hi) && hi - lo <= 30) {
       const out = el('span', { class: 'mono' }, String(prop.default ?? lo));
-      const r = el('input', { type: 'range', id, min: lo, max: hi, step: 1, value: prop.default ?? lo, 'data-input': name });
+      const r = el('input', { type: 'range', id, min: lo, max: hi, step: t === 'integer' ? 1 : 0.1, value: prop.default ?? lo, 'data-input': name });
       r.oninput = () => { out.textContent = r.value; onChange(); };
       return {
         node: el('div', {}, r), get: () => Number(r.value),

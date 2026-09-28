@@ -9,6 +9,8 @@
 #   UP_STEPS="... oracle:fasth3-8step,ltx25-512p"   a subset
 #
 # Targets: wan22-ti2v (Wan 2.2 TI2V-5B modules through Diffusers, oracle_wan22.py),
+# fastwan22-ti2v (the same modules with the FastWan2.2 TI2V-5B FullAttn weights,
+# DiT at the DMD timestep 757),
 # fasth3-8step (FastVideo FastH3 8-step V2, 768x1344x124),
 # fasth3-4step-vsa (MiniMax-H3 + Preview v1 vsa-datafree LoRA), the dense
 # controls fasth3-8step-vsa0 (the 8-step checkpoint at VSA sparsity 0) and
@@ -89,6 +91,14 @@ oracle_wan22() {
     --model "$W/wan22-ti2v-5b" --image "$HERE/../fixtures/ti2v-beach-832x480.jpg"
 }
 
+# FastWan2.2 TI2V-5B FullAttn (FastVideo/FastWan2.2-TI2V-5B-FullAttn-Diffusers):
+# the TI2V-5B network DMD-distilled, so the same Diffusers modules; the DiT
+# forwards at the middle DMD timestep (1000/757/522). Weights: both volumes.
+oracle_fastwan22() {
+  oracle_cell fastwan22-ti2v env PYTHONUNBUFFERED=1 "$UP/fastvideo/bin/python" "$HERE/oracle_wan22.py" \
+    --model "$W/fastwan22-ti2v-5b" --image "$HERE/../fixtures/ti2v-beach-832x480.jpg" --timestep 757
+}
+
 # FastVideo SF-Wan 1.3B (WanCausalDMDPipeline at its defaults), one request,
 # no warm-up: the hooks dump the first denoise (oracle_dump.py _patch_sf_*).
 oracle_sfwan() {
@@ -101,6 +111,7 @@ run_oracle() {
   oracle_sfwan
   local f8="$UW/FastVideo-FastH3-8-Step-V2" lora="$W/FastH3-4-step-Preview-v1-LoRA"
   oracle_wan22
+  oracle_fastwan22
   local g768=(--height 768 --width 1344 --num-frames 124)
   oracle_fv fasth3-8step 8step --model-path "$f8" "${g768[@]}"
   oracle_fv fasth3-4step-vsa lora --model-path "$UW/MiniMax-H3" \
