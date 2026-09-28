@@ -1,0 +1,139 @@
+# fv-serve as the gateway in front of four GPU *pod* pools (one pod each):
+# the cluster of scripts/serve/runpod-cluster.sh. Same as gateway.toml except
+# the pools (kind "pod", worker URLs from FV_POOL_<ID>_URLS), the wan pool
+# (the Wan 5B tiers of runpod-wan5b.toml), the fal apps the workers mount,
+# and the Reactor model (H3 clip mode on the h3-turbo pod). The cluster
+# script passes this file to the CPU pod (the image may predate it).
+#
+# The workers do not self-register: gw_workers takes the worker's
+# server.public_base_url as its URL, and here that is the gateway's URL (the
+# URLs a worker renders must point at the gateway), so the cluster script
+# sets `[gateway] register = false` on each worker and lists the pods in
+# FV_POOL_<ID>_URLS instead.
+#
+# Environment (secrets never in this file): FV_INTERNAL_TOKEN (shared with
+# the workers), FV_URL_SIGNING_KEY and FV_WEBHOOK_ED25519_KEY (same values as
+# the workers), the D1 + R2 set (FV_CF_*, FV_D1_DATABASE_ID, FV_R2_*),
+# FV_ADMIN_TOKEN, FV_PUBLIC_BASE_URL (this gateway's URL, also given to the
+# workers), FV_POOL_<ID>_URLS, and FV_AUTH_MODE (the cluster runs `none`).
+#
+# Pools and their workers (FV_SERVE_ROLE=worker, FV_INTERNAL_TOKEN,
+# FV_PUBLIC_BASE_URL = this gateway's URL):
+#
+#   h3-turbo  pod  configs/serve/runpod.toml        (fasth3)
+#   h3-max    pod  configs/serve/runpod-h3-max.toml (sol-h3)
+#   ltx       pod  configs/serve/runpod-ltx.toml    (ltx25-distill-sol)
+#   wan       pod  configs/serve/runpod-wan5b.toml  (fastwan22-ti2v-5b, wan22-ti2v-5b)
+
+[server]
+bind = "0.0.0.0:8000"
+state_dir = "/fvstate"
+shutdown_grace_s = 10
+sync_timeout_s = 600
+
+[auth]
+mode = "keys"
+
+[artifacts]
+backend = "auto"
+url_ttl_s = 86400
+
+[jobs]
+backend = "auto"
+progress_interval_ms = 1000
+stale_after_s = 900
+
+[engine]
+backend = "remote"
+
+[gateway]
+caps_refresh_s = 60
+tick_s = 5
+metrics_window_s = 600
+watch_poll_ms = 1000
+runpod_api_base = "https://api.runpod.ai/v2"
+reactor_model = "fasth3"
+
+[aliases]
+"MiniMax-H3" = "fasth3"
+"MiniMax-H3-Turbo" = "fasth3"
+"MiniMax-H3-Max" = "sol-h3"
+
+[protocols]
+openai_videos = true
+fastwan = false
+minimax = true
+fal = true
+fal_director = true
+ltx = true
+reactor = true
+native = true
+# Every pool's fal apps (the workers mount the same ids).
+fal_apps = ["minimax/h3-max", "minimax/h3-turbo", "fastvideo/ltx-turbo", "lightricks/ltx-2.5", "fal-ai/wan"]
+
+[limits]
+queue_max = 256
+body_max_mb = 64
+
+[[pools]]
+id = "h3-turbo"
+kind = "pod"
+urls = []                      # FV_POOL_H3_TURBO_URLS (runpod.toml workers)
+max_queued = 32
+dispatch_timeout_s = 30
+job_timeout_s = 1800
+stale_after_s = 120
+retries = 1
+[[pools.models]]
+id = "fasth3"
+family = "h3"
+recipe = "h3-turbo"
+
+[[pools]]
+id = "h3-max"
+kind = "pod"
+urls = []                      # FV_POOL_H3_MAX_URLS (runpod-h3-max.toml workers)
+max_queued = 16
+dispatch_timeout_s = 30
+job_timeout_s = 3600
+stale_after_s = 180
+retries = 1
+[[pools.models]]
+id = "sol-h3"
+family = "h3"
+recipe = "h3-max"
+
+[[pools]]
+id = "ltx"
+kind = "pod"
+urls = []                      # FV_POOL_LTX_URLS (runpod-ltx.toml workers)
+max_queued = 32
+dispatch_timeout_s = 30
+job_timeout_s = 1800
+stale_after_s = 120
+retries = 1
+[[pools.models]]
+id = "ltx25-distill-sol"
+family = "ltx2"
+recipe = "ltx-turbo"
+
+[[pools]]
+id = "wan"
+kind = "pod"
+urls = []                      # FV_POOL_WAN_URLS (runpod-wan5b.toml workers)
+max_queued = 64
+dispatch_timeout_s = 30
+job_timeout_s = 1800
+stale_after_s = 120
+retries = 1
+[[pools.models]]
+id = "fastwan22-ti2v-5b"
+family = "wan"
+recipe = "wan-turbo"
+[[pools.models]]
+id = "wan22-ti2v-5b"
+family = "wan"
+recipe = "wan-max"
+
+[autoscale]
+enabled = false
