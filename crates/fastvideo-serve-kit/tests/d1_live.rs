@@ -5,10 +5,14 @@
 //! `FV_CF_ACCOUNT_ID` / `FV_D1_DATABASE_ID` or are looked up through the
 //! Cloudflare API (first account; database named `fv-jobs`).
 //!
-//! It applies the schema migrations to the real database, writes jobs under
-//! a clearly prefixed test owner and worker (`fvtest-smoke-<random>`), and
-//! deletes every row of that owner at the end. It never sweeps or reaps, so
-//! real jobs are never touched.
+//! The database is shared (production workers, other test runs at the same
+//! time), so every write and assertion is scoped to this run: the jobs carry
+//! a per-run id (`fvtest-smoke-<uuid>`) as owner, external-id prefix and
+//! worker name; lists filter on that owner; cleanup deletes exactly the rows
+//! with that owner or those two worker names and checks it deleted no more
+//! than it wrote. It never sweeps or reaps (which touch every row), never
+//! drops or alters a table, and accepts a schema newer than this build's
+//! (another branch may have migrated the shared database further).
 
 #![cfg(feature = "fetch")]
 
@@ -89,7 +93,8 @@ async fn live_d1_smoke() {
     let tag = format!("fvtest-smoke-{}", uuid::Uuid::new_v4().simple());
     let cfg = D1Config::new(&account, &token, &database);
     let db = D1Client::http(cfg.clone()).unwrap();
-    assert_eq!(schema::migrate(&db).await.unwrap(), schema::latest());
+    let version = schema::migrate(&db).await.unwrap();
+    assert!(version >= schema::latest(), "schema {version} < {}", schema::latest());
 
     let mut opts = D1Options::new(&tag);
     opts.stale_after = None;
@@ -173,15 +178,14 @@ async fn live_d1_smoke() {
     tokio::time::sleep(Duration::from_millis(500)).await;
 
     // Clean up every row of the test owner, whatever happened above.
-    let r = db
-        .query(Stmt::new("DELETE FROM jobs WHERE owner = ? OR worker LIKE ?", vec![json!(tag), json!(format!("{tag}%"))]))
-        .await
-        .unwrap();
+    // Exact matches only (no LIKE pattern), and at most the rows written.
+    let workers = (tag.clone(), format!("{tag}-b"));
+    let mine = "owner = ? OR worker = ? OR worker = ?";
+    let params = || vec![json!(tag), json!(workers.0), json!(workers.1)];
+    let r = db.query(Stmt::new(format!("DELETE FROM jobs WHERE {mine}"), params())).await.unwrap();
     eprintln!("live_d1_smoke: removed {} test rows", r.changes);
-    let left = db
-        .query(Stmt::new("SELECT COUNT(*) AS n FROM jobs WHERE owner = ?", vec![json!(tag)]))
-        .await
-        .unwrap();
+    assert!(r.changes <= ids.len() as u64, "cleanup removed {} rows, more than the {} written", r.changes, ids.len());
+    let left = db.query(Stmt::new(format!("SELECT COUNT(*) AS n FROM jobs WHERE {mine}"), params())).await.unwrap();
     assert_eq!(left.rows[0]["n"].as_f64(), Some(0.0));
     if let Err(e) = result {
         std::panic::resume_unwind(e.into_panic());
