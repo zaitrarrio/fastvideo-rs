@@ -47,6 +47,10 @@ impl H3Model {
                 .map(fastvideo_cudarc::wan::offload::DitOffload::parse)
                 .transpose()
                 .map_err(ApiError::internal)?,
+            i2v_encoder: fastvideo_cudarc::h3::pipeline::I2vEncoderChoice::parse(
+                &recipe.i2v_encoder,
+            )
+            .map_err(ApiError::internal)?,
         };
         obs("h3_pipeline");
         let mut pipe = H3Pipeline::load(&recipe.weights, options)

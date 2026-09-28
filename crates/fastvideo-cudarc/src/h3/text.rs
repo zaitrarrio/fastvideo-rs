@@ -76,6 +76,11 @@ pub trait HiddenStateEncoder {
     fn resident_bytes(&self) -> u64 {
         0
     }
+    /// The resident Qwen3-VL language model, when this encoder is one: the
+    /// multimodal (FL2VA / Ref2VA) path runs its layers too.
+    fn decoder(&self) -> Option<&crate::llm::ResidentDecoder> {
+        None
+    }
 }
 
 /// One layer on the device at a time, nothing kept: the ~50 GB of decoder
@@ -117,6 +122,10 @@ impl HiddenStateEncoder for crate::llm::ResidentDecoder {
 
     fn resident_bytes(&self) -> u64 {
         self.device_bytes()
+    }
+
+    fn decoder(&self) -> Option<&crate::llm::ResidentDecoder> {
+        Some(self)
     }
 }
 
@@ -339,9 +348,149 @@ pub struct VisionVideo<'a> {
     pub width: usize,
 }
 
-/// FL2VA / Ref2VA multimodal text: presentation → vision tower → mRoPE LM.
+/// Where the multimodal path's language model runs.
+pub enum MultimodalLm<'a> {
+    /// The resident decoder (the T2V text encoder: same checkpoint, same
+    /// layers 0..=49); nothing is read from the volume.
+    Resident(&'a crate::llm::ResidentDecoder),
+    /// One layer at a time from `map` at `precision` (`Fp8Rows`: the resident
+    /// FP8 decoder's numbers, streamed).
+    Streamed {
+        map: &'a WeightMap,
+        precision: crate::llm::WeightPrecision,
+        /// Asked before each layer; true stops the forward with
+        /// [`crate::llm::ABORTED`] (a cancelled request).
+        abort: Option<&'a dyn Fn() -> bool>,
+    },
+}
+
+impl MultimodalLm<'_> {
+    fn kind(&self) -> &'static str {
+        use crate::llm::WeightPrecision::{Fp8Rows, Native};
+        match self {
+            Self::Resident(d) => match d.precision() {
+                Native => "resident-bf16-multimodal",
+                Fp8Rows => "resident-fp8-multimodal",
+            },
+            Self::Streamed {
+                precision: Native, ..
+            } => "streamed-multimodal",
+            Self::Streamed {
+                precision: Fp8Rows,
+                ..
+            } => "streamed-fp8-multimodal",
+        }
+    }
+}
+
+/// What the multimodal text path keeps between requests besides the language
+/// model: the tokenizer and the Qwen3-VL vision tower (27 blocks + mergers,
+/// ~1.2 GB as bf16), read once from `<root>/text_encoder/`.
+pub struct MultimodalEncoder {
+    tokenizer: H3Tokenizer,
+    vision: super::vision::H3VisionTower,
+}
+
+impl MultimodalEncoder {
+    /// `root` holds `tokenizer/` and `text_encoder/` (the bf16 checkpoint,
+    /// which carries `model.visual.*`).
+    pub fn load(root: &Path) -> Result<Self> {
+        use fastvideo_models::h3::config::H3VisionConfig;
+        let tok_path = root.join("tokenizer").join("tokenizer.json");
+        let tokenizer = H3Tokenizer::from_file(&tok_path).map_err(msg)?;
+        let map = WeightMap::open(&root.join("text_encoder"))?;
+        let vision = super::vision::H3VisionTower::load(H3VisionConfig::fasth3_8step(), &map)?;
+        Ok(Self { tokenizer, vision })
+    }
+
+    /// Encode with `lm` as the language model (the vision tower is this one).
+    pub fn encode(
+        &self,
+        lm: MultimodalLm<'_>,
+        prompt: &str,
+        images: &[VisionImage<'_>],
+        videos: &[VisionVideo<'_>],
+        refs: Option<&[fastvideo_models::h3::presentation::PresentationRef]>,
+    ) -> Result<TextConditioning> {
+        encode_multimodal_parts(
+            &self.tokenizer,
+            &self.vision,
+            lm,
+            prompt,
+            images,
+            videos,
+            refs,
+        )
+    }
+}
+
+/// FL2VA / Ref2VA multimodal text, everything read from `root` for this one
+/// call: the vision tower, and the language model streamed at `precision`
+/// (`text_encoder_fp8/` when FP8 and a valid tree exists). With `Native` this
+/// is the original streamed path. `abort` is asked before the vision load and
+/// before each language-model layer.
+#[allow(clippy::too_many_arguments)]
+pub fn encode_multimodal_streamed(
+    root: &Path,
+    precision: crate::llm::WeightPrecision,
+    prompt: &str,
+    images: &[VisionImage<'_>],
+    videos: &[VisionVideo<'_>],
+    refs: Option<&[fastvideo_models::h3::presentation::PresentationRef]>,
+    abort: Option<&dyn Fn() -> bool>,
+) -> Result<TextConditioning> {
+    if abort.is_some_and(|a| a()) {
+        return Err(msg(crate::llm::ABORTED));
+    }
+    let once = MultimodalEncoder::load(root)?;
+    let map = WeightMap::open(&root.join("text_encoder"))?;
+    let lm_map = match precision {
+        crate::llm::WeightPrecision::Native => None,
+        crate::llm::WeightPrecision::Fp8Rows => {
+            let layers = H3TextEncoderConfig::fasth3_8step().output_hidden_state_index;
+            crate::llm::prequant::open_tree(&root.join("text_encoder"), layers)?
+        }
+    };
+    once.encode(
+        MultimodalLm::Streamed {
+            map: lm_map.as_ref().unwrap_or(&map),
+            precision,
+            abort,
+        },
+        prompt,
+        images,
+        videos,
+        refs,
+    )
+}
+
+/// FL2VA / Ref2VA multimodal text: presentation → vision tower → mRoPE LM,
+/// streamed at the checkpoint's precision.
 pub fn encode_multimodal(
     root: &Path,
+    prompt: &str,
+    images: &[VisionImage<'_>],
+    videos: &[VisionVideo<'_>],
+    refs: Option<&[fastvideo_models::h3::presentation::PresentationRef]>,
+) -> Result<TextConditioning> {
+    encode_multimodal_streamed(
+        root,
+        crate::llm::WeightPrecision::Native,
+        prompt,
+        images,
+        videos,
+        refs,
+        None,
+    )
+}
+
+/// The one multimodal path: whichever language model runs, the presentation,
+/// vision forward, embedding scatter, mRoPE and DeepStack are these lines, so
+/// a resident run cannot drift from a streamed one.
+fn encode_multimodal_parts(
+    tokenizer: &H3Tokenizer,
+    vision: &super::vision::H3VisionTower,
+    lm: MultimodalLm<'_>,
     prompt: &str,
     images: &[VisionImage<'_>],
     videos: &[VisionVideo<'_>],
@@ -358,12 +507,8 @@ pub fn encode_multimodal(
 
     let text_cfg = H3TextEncoderConfig::fasth3_8step();
     let vision_cfg = H3VisionConfig::fasth3_8step();
-    let tok_path = root.join("tokenizer").join("tokenizer.json");
-    let tokenizer = H3Tokenizer::from_file(&tok_path).map_err(msg)?;
 
     // Prepare vision pixels + grids; collect pad counts for the presentation.
-    let map = WeightMap::open(&root.join("text_encoder"))?;
-    let vision = super::vision::H3VisionTower::load(vision_cfg.clone(), &map)?;
 
     let mut image_prepared = Vec::with_capacity(images.len());
     let mut image_grids = Vec::with_capacity(images.len());
@@ -449,12 +594,12 @@ pub fn encode_multimodal(
                 "ref presentation: image/video counts do not match refs",
             ));
         }
-        build_ref2va_presentation(&tokenizer, &text_cfg, prompt, &rebuilt).map_err(msg)?
+        build_ref2va_presentation(tokenizer, &text_cfg, prompt, &rebuilt).map_err(msg)?
     } else {
         if !videos.is_empty() {
             return Err(msg("FL2VA multimodal encode does not take video refs"));
         }
-        build_fl2va_presentation(&tokenizer, &text_cfg, prompt, &image_token_counts).map_err(msg)?
+        build_fl2va_presentation(tokenizer, &text_cfg, prompt, &image_token_counts).map_err(msg)?
     };
 
     let ids = presentation.token_ids.clone();
@@ -497,9 +642,12 @@ pub fn encode_multimodal(
 
     let cfg = DecoderConfig::qwen3_vl_32b_text().for_bf16_reference();
     let tap = text_cfg.output_hidden_state_index;
-    let (embedded, image_mask, video_mask) = llm::embed_with_vision(
-        &map,
-        &cfg,
+    let tokens = match &lm {
+        MultimodalLm::Resident(d) => d.embed_ids(&ids)?,
+        MultimodalLm::Streamed { map, .. } => llm::embed_tokens(map, &cfg, &ids)?,
+    };
+    let (embedded, image_mask, video_mask) = llm::scatter_vision(
+        tokens,
         &ids,
         text_cfg.image_token_id,
         image_features.as_ref(),
@@ -536,7 +684,24 @@ pub fn encode_multimodal(
         deepstack,
     };
     let attend = vec![true; ids.len()];
-    let mut taps = llm::hidden_states_multimodal(&map, &cfg, embedded, &attend, &[tap], &mm)?;
+    let encoder = lm.kind();
+    let mut taps = match lm {
+        MultimodalLm::Resident(d) => d.hidden_states_multimodal(embedded, &attend, &[tap], &mm)?,
+        MultimodalLm::Streamed {
+            map,
+            precision,
+            abort,
+        } => llm::hidden_states_multimodal_at(
+            map,
+            &cfg,
+            embedded,
+            &attend,
+            &[tap],
+            &mm,
+            precision,
+            abort,
+        )?,
+    };
     let hidden = taps
         .pop()
         .ok_or_else(|| msg("h3 multimodal: decoder returned no hidden state"))?;
@@ -545,7 +710,7 @@ pub fn encode_multimodal(
         ids,
         hidden,
         cache: CacheStatus::Disabled,
-        encoder: "streamed-multimodal",
+        encoder,
         token_tags,
     })
 }
