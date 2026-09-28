@@ -1,5 +1,16 @@
-//! Request and output schemas of the `minimax/h3-{max,turbo,draft}` apps
-//! (design §4.4; fal §3-§5).
+//! Request and output schemas of the fal apps (design §4.4; fal §3-§5;
+//! docs/serve/fal-parity.md).
+//!
+//! Each app follows one family's schema ([`AppKind`], from its id):
+//!
+//! | App | Kind | Endpoints (sub-paths) |
+//! |---|---|---|
+//! | `minimax/h3-max`, `minimax/h3-max-turbo`, `minimax/h3-{turbo,draft}`, any other `owner/alias` | [`AppKind::H3`] | `text-to-video`, `image-to-video`, `reference-to-video` |
+//! | `minimax/h3` (base) | [`AppKind::H3Base`] | the same; `resolution` `480P 768P 2K 4K` |
+//! | `lightricks/ltx-2.5` | [`AppKind::Ltx25`] | `{text,image}-to-video/{fast,pro}` ([`ltx`]) |
+//! | `fal-ai/wan` | [`AppKind::Wan`] | `v2.2-5b/text-to-video`, `v2.2-5b/image-to-video`, `v2.2-5b/text-to-video/fast-wan` ([`wan`]) |
+//!
+//! The H3 fields:
 //!
 //! Inputs are validated field by field from the JSON body, so every
 //! refusal names the fal field (`ApiError::param`, rendered as the
@@ -20,13 +31,24 @@
 //! | `target_audio_url` (t2v, i2v) | `null` | non-blank string |
 //! | `image_url`, `end_image_url` (i2v) | `null` | strings |
 //! | `reference_{image,video,audio}_urls` (r2v) | `[]` | at most 9 / 3 / 3, 12 in total |
+//!
+//! `minimax/h3` (base) lists `480P`, `768P`, `2K` and `4K` (fal's default is
+//! `2K`, an upscale from 768P). 2K and 4K normalize to the 1440 and 2160
+//! short edges, which the H3 caps refuse as `Unsupported(H3Resolution2K)`,
+//! so an omitted `resolution` means `768P` here.
+
+pub mod ltx;
+pub mod wan;
 
 use base64::Engine as _;
 use fastvideo_protocol::{
-    Anchor, ApiError, AudioInput, AudioRole, CallbackSpec, CanvasSpec, GenerationRequest, Job,
-    Keyframe, Length, MediaKind, MediaRef, NormalizeCtx, ProtocolId, Ratio, Reference, Snap,
-    Task, TimingSpec,
+    Anchor, ApiError, AudioInput, AudioRole, CallbackSpec, CanvasSpec, Family, GenerationRequest,
+    Job, Keyframe, Length, MediaKind, MediaRef, NormalizeCtx, ProtocolId, Ratio, Reference, Snap,
+    Task, Tier, TimingSpec,
 };
+
+pub use ltx::{LtxClass, LtxInput};
+pub use wan::{WanInput, WanVariant};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
@@ -40,36 +62,152 @@ pub const MAX_REFERENCE_IMAGES: usize = 9;
 pub const MAX_REFERENCE_VIDEOS: usize = 3;
 pub const MAX_REFERENCE_AUDIO: usize = 3;
 pub const MAX_REFERENCES: usize = 12;
-/// The hosted file name suffix (`<nanoid21>_minimax-h3.mp4`, fal §3.1).
-pub const OUTPUT_SLUG: &str = "minimax-h3";
 
-/// One of the three HTTP endpoints under an app.
+/// One HTTP endpoint under an app. The sub-path may have several segments
+/// (`text-to-video/fast`, `v2.2-5b/text-to-video/fast-wan`); every sub is
+/// unique across families, so the sub alone names the endpoint.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum Endpoint {
     TextToVideo,
     ImageToVideo,
     ReferenceToVideo,
+    /// `lightricks/ltx-2.5/text-to-video/fast`.
+    LtxTextToVideoFast,
+    /// `lightricks/ltx-2.5/text-to-video/pro`.
+    LtxTextToVideoPro,
+    /// `lightricks/ltx-2.5/image-to-video/fast`.
+    LtxImageToVideoFast,
+    /// `lightricks/ltx-2.5/image-to-video/pro`.
+    LtxImageToVideoPro,
+    /// `fal-ai/wan/v2.2-5b/text-to-video`.
+    WanTextToVideo,
+    /// `fal-ai/wan/v2.2-5b/image-to-video`.
+    WanImageToVideo,
+    /// `fal-ai/wan/v2.2-5b/text-to-video/fast-wan`.
+    WanFastWan,
 }
 
 impl Endpoint {
+    /// The H3 endpoints (every H3-schema app has these three).
     pub const ALL: [Endpoint; 3] = [
         Endpoint::TextToVideo,
         Endpoint::ImageToVideo,
         Endpoint::ReferenceToVideo,
     ];
+    /// `lightricks/ltx-2.5`.
+    pub const LTX: [Endpoint; 4] = [
+        Endpoint::LtxTextToVideoFast,
+        Endpoint::LtxTextToVideoPro,
+        Endpoint::LtxImageToVideoFast,
+        Endpoint::LtxImageToVideoPro,
+    ];
+    /// `fal-ai/wan`.
+    pub const WAN: [Endpoint; 3] = [Endpoint::WanTextToVideo, Endpoint::WanImageToVideo, Endpoint::WanFastWan];
+    /// Every endpoint of every family.
+    pub const EVERY: [Endpoint; 10] = [
+        Endpoint::TextToVideo,
+        Endpoint::ImageToVideo,
+        Endpoint::ReferenceToVideo,
+        Endpoint::LtxTextToVideoFast,
+        Endpoint::LtxTextToVideoPro,
+        Endpoint::LtxImageToVideoFast,
+        Endpoint::LtxImageToVideoPro,
+        Endpoint::WanTextToVideo,
+        Endpoint::WanImageToVideo,
+        Endpoint::WanFastWan,
+    ];
 
-    /// The path segment after the app id.
+    /// The path after the app id (one or more segments).
     pub fn sub(&self) -> &'static str {
         match self {
             Endpoint::TextToVideo => "text-to-video",
             Endpoint::ImageToVideo => "image-to-video",
             Endpoint::ReferenceToVideo => "reference-to-video",
+            Endpoint::LtxTextToVideoFast => "text-to-video/fast",
+            Endpoint::LtxTextToVideoPro => "text-to-video/pro",
+            Endpoint::LtxImageToVideoFast => "image-to-video/fast",
+            Endpoint::LtxImageToVideoPro => "image-to-video/pro",
+            Endpoint::WanTextToVideo => "v2.2-5b/text-to-video",
+            Endpoint::WanImageToVideo => "v2.2-5b/image-to-video",
+            Endpoint::WanFastWan => "v2.2-5b/text-to-video/fast-wan",
         }
     }
 
     pub fn from_sub(s: &str) -> Option<Self> {
-        Self::ALL.into_iter().find(|e| e.sub() == s)
+        Self::EVERY.into_iter().find(|e| e.sub() == s)
+    }
+
+    /// The console / catalog title.
+    pub fn title(&self) -> &'static str {
+        match self {
+            Endpoint::TextToVideo => "Text to Video",
+            Endpoint::ImageToVideo => "Image to Video",
+            Endpoint::ReferenceToVideo => "Reference to Video",
+            Endpoint::LtxTextToVideoFast => "Text to Video · Fast",
+            Endpoint::LtxTextToVideoPro => "Text to Video · Pro",
+            Endpoint::LtxImageToVideoFast => "Image to Video · Fast",
+            Endpoint::LtxImageToVideoPro => "Image to Video · Pro",
+            Endpoint::WanTextToVideo => "Text to Video · 5B",
+            Endpoint::WanImageToVideo => "Image to Video · 5B",
+            Endpoint::WanFastWan => "Text to Video · FastWan",
+        }
+    }
+
+    /// The family tier an LTX or Wan endpoint runs on (`None` for the H3
+    /// endpoints: they run the app's own model).
+    pub fn target(&self) -> Option<(Family, Tier)> {
+        Some(match self {
+            Endpoint::TextToVideo | Endpoint::ImageToVideo | Endpoint::ReferenceToVideo => return None,
+            Endpoint::LtxTextToVideoFast | Endpoint::LtxImageToVideoFast => (Family::Ltx2, Tier::Turbo),
+            Endpoint::LtxTextToVideoPro | Endpoint::LtxImageToVideoPro => (Family::Ltx2, Tier::Max),
+            Endpoint::WanTextToVideo | Endpoint::WanImageToVideo => (Family::Wan, Tier::Max),
+            Endpoint::WanFastWan => (Family::Wan, Tier::Turbo),
+        })
+    }
+}
+
+/// Which family schema an app follows (from its id).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AppKind {
+    /// `minimax/h3-max[-turbo]`, `minimax/h3-{turbo,draft}` and any other
+    /// `owner/alias`: the H3 Max schema.
+    H3,
+    /// `minimax/h3`: the base H3 schema (`2K`/`4K` listed, refused).
+    H3Base,
+    /// `lightricks/ltx-2.5`.
+    Ltx25,
+    /// `fal-ai/wan`.
+    Wan,
+}
+
+impl AppKind {
+    pub fn of(app_id: &str) -> Self {
+        match app_id {
+            "minimax/h3" => AppKind::H3Base,
+            "lightricks/ltx-2.5" => AppKind::Ltx25,
+            "fal-ai/wan" => AppKind::Wan,
+            _ => AppKind::H3,
+        }
+    }
+    pub fn endpoints(self) -> &'static [Endpoint] {
+        match self {
+            AppKind::H3 | AppKind::H3Base => &Endpoint::ALL,
+            AppKind::Ltx25 => &Endpoint::LTX,
+            AppKind::Wan => &Endpoint::WAN,
+        }
+    }
+    /// Whether the app has the H3 WMA director (`{app}/director`).
+    pub fn director(self) -> bool {
+        matches!(self, AppKind::H3 | AppKind::H3Base)
+    }
+    /// The H3 schemas' `resolution` enum.
+    pub fn h3_resolutions(self) -> &'static [Resolution] {
+        match self {
+            AppKind::H3Base => &Resolution::BASE,
+            _ => &Resolution::ALL,
+        }
     }
 }
 
@@ -82,26 +220,40 @@ pub enum Resolution {
     P768,
     #[serde(rename = "1080P")]
     P1080,
+    /// `minimax/h3` only (an upscale from 768P on fal).
+    #[serde(rename = "2K")]
+    K2,
+    /// `minimax/h3` only.
+    #[serde(rename = "4K")]
+    K4,
 }
 
 impl Resolution {
+    /// The H3 Max enum (`minimax/h3-max[-turbo]`).
     pub const ALL: [Resolution; 3] = [Resolution::P480, Resolution::P768, Resolution::P1080];
+    /// The base H3 enum (`minimax/h3`).
+    pub const BASE: [Resolution; 4] = [Resolution::P480, Resolution::P768, Resolution::K2, Resolution::K4];
 
     pub fn as_str(&self) -> &'static str {
         match self {
             Resolution::P480 => "480P",
             Resolution::P768 => "768P",
             Resolution::P1080 => "1080P",
+            Resolution::K2 => "2K",
+            Resolution::K4 => "4K",
         }
     }
     /// Short edge the canvas is generated at. 1080P is the hosted latent
     /// refinement from a 768P source; `negotiate` refuses it as
-    /// `Unsupported(H3Refine1080P)`.
+    /// `Unsupported(H3Refine1080P)`, and 2K / 4K (1440 / 2160) as
+    /// `Unsupported(H3Resolution2K)`.
     pub fn short_edge(&self) -> u32 {
         match self {
             Resolution::P480 => 480,
             Resolution::P768 => 768,
             Resolution::P1080 => 1080,
+            Resolution::K2 => 1440,
+            Resolution::K4 => 2160,
         }
     }
 }
@@ -208,6 +360,10 @@ pub enum FalInput {
         reference_video_urls: Vec<String>,
         reference_audio_urls: Vec<String>,
     },
+    /// `lightricks/ltx-2.5/*`.
+    Ltx(LtxInput),
+    /// `fal-ai/wan/v2.2-5b/*`.
+    Wan(WanInput),
 }
 
 // ---------------------------------------------------------------- parsing
@@ -305,7 +461,7 @@ fn parse_enum<T: Copy>(f: &Fields, k: &str, allowed: &[T], name: fn(&T) -> &'sta
     })
 }
 
-fn parse_common(f: &Fields) -> Result<CommonInput, ApiError> {
+fn parse_prompt(f: &Fields, max: usize) -> Result<String, ApiError> {
     let prompt = match f.get("prompt") {
         None => return Err(bad("prompt", "Field required")),
         Some(Value::String(s)) => s.clone(),
@@ -315,9 +471,22 @@ fn parse_common(f: &Fields) -> Result<CommonInput, ApiError> {
     if n < 1 {
         return Err(bad("prompt", "String should have at least 1 character"));
     }
-    if n > PROMPT_MAX_CHARS {
-        return Err(bad("prompt", format!("String should have at most {PROMPT_MAX_CHARS} characters")));
+    if n > max {
+        return Err(bad("prompt", format!("String should have at most {max} characters")));
     }
+    Ok(prompt)
+}
+
+fn parse_seed(f: &Fields) -> Result<Option<u64>, ApiError> {
+    match f.int("seed")? {
+        None => Ok(None),
+        Some(s) if s < 0 => Err(bad("seed", "Input should be greater than or equal to 0")),
+        Some(s) => Ok(Some(s as u64)),
+    }
+}
+
+fn parse_common(f: &Fields, resolutions: &[Resolution]) -> Result<CommonInput, ApiError> {
+    let prompt = parse_prompt(f, PROMPT_MAX_CHARS)?;
     let duration = f.int("duration")?.unwrap_or(DURATION_MIN);
     if duration < DURATION_MIN {
         return Err(bad("duration", format!("Input should be greater than or equal to {DURATION_MIN}")));
@@ -325,12 +494,8 @@ fn parse_common(f: &Fields) -> Result<CommonInput, ApiError> {
     if duration > DURATION_MAX {
         return Err(bad("duration", format!("Input should be less than or equal to {DURATION_MAX}")));
     }
-    let resolution = parse_enum(f, "resolution", &Resolution::ALL, Resolution::as_str, Resolution::P768)?;
-    let seed = match f.int("seed")? {
-        None => None,
-        Some(s) if s < 0 => return Err(bad("seed", "Input should be greater than or equal to 0")),
-        Some(s) => Some(s as u64),
-    };
+    let resolution = parse_enum(f, "resolution", resolutions, Resolution::as_str, Resolution::P768)?;
+    let seed = parse_seed(f)?;
     Ok(CommonInput {
         prompt,
         duration: duration as u32,
@@ -359,8 +524,15 @@ fn opt_url(f: &Fields, k: &str) -> Result<Option<String>, ApiError> {
 }
 
 impl FalInput {
-    /// Validates a request body for `endpoint`, applying defaults.
+    /// Validates a request body for `endpoint`, applying defaults. The H3
+    /// endpoints follow the H3 Max schema; see [`FalInput::parse_for`].
     pub fn parse(endpoint: Endpoint, body: &Value) -> Result<Self, ApiError> {
+        Self::parse_for(AppKind::H3, endpoint, body)
+    }
+
+    /// Validates a request body for `endpoint` of an app of `kind` (the
+    /// kind only matters for the H3 endpoints: `minimax/h3`'s resolutions).
+    pub fn parse_for(kind: AppKind, endpoint: Endpoint, body: &Value) -> Result<Self, ApiError> {
         let Value::Object(map) = body else {
             return Err(ApiError::invalid(format!(
                 "Input should be a valid dictionary, got {}",
@@ -368,7 +540,17 @@ impl FalInput {
             )));
         };
         let f = Fields(map);
-        let common = parse_common(&f)?;
+        match endpoint {
+            Endpoint::LtxTextToVideoFast => return Ok(FalInput::Ltx(ltx::parse(&f, LtxClass::Fast, false)?)),
+            Endpoint::LtxTextToVideoPro => return Ok(FalInput::Ltx(ltx::parse(&f, LtxClass::Pro, false)?)),
+            Endpoint::LtxImageToVideoFast => return Ok(FalInput::Ltx(ltx::parse(&f, LtxClass::Fast, true)?)),
+            Endpoint::LtxImageToVideoPro => return Ok(FalInput::Ltx(ltx::parse(&f, LtxClass::Pro, true)?)),
+            Endpoint::WanTextToVideo => return Ok(FalInput::Wan(wan::parse(&f, WanVariant::TextToVideo)?)),
+            Endpoint::WanImageToVideo => return Ok(FalInput::Wan(wan::parse(&f, WanVariant::ImageToVideo)?)),
+            Endpoint::WanFastWan => return Ok(FalInput::Wan(wan::parse(&f, WanVariant::FastWan)?)),
+            Endpoint::TextToVideo | Endpoint::ImageToVideo | Endpoint::ReferenceToVideo => {}
+        }
+        let common = parse_common(&f, kind.h3_resolutions())?;
         Ok(match endpoint {
             Endpoint::TextToVideo => FalInput::TextToVideo {
                 aspect_ratio: parse_enum(&f, "aspect_ratio", &AspectRatio::T2V, AspectRatio::as_str, AspectRatio::R16x9)?,
@@ -404,6 +586,7 @@ impl FalInput {
                     common,
                 }
             }
+            _ => return Err(ApiError::internal("not an H3 endpoint")),
         })
     }
 
@@ -412,21 +595,32 @@ impl FalInput {
             FalInput::TextToVideo { .. } => Endpoint::TextToVideo,
             FalInput::ImageToVideo { .. } => Endpoint::ImageToVideo,
             FalInput::ReferenceToVideo { .. } => Endpoint::ReferenceToVideo,
+            FalInput::Ltx(i) => match (i.class, i.image_to_video) {
+                (LtxClass::Fast, false) => Endpoint::LtxTextToVideoFast,
+                (LtxClass::Pro, false) => Endpoint::LtxTextToVideoPro,
+                (LtxClass::Fast, true) => Endpoint::LtxImageToVideoFast,
+                (LtxClass::Pro, true) => Endpoint::LtxImageToVideoPro,
+            },
+            FalInput::Wan(i) => match i.variant {
+                WanVariant::TextToVideo => Endpoint::WanTextToVideo,
+                WanVariant::ImageToVideo => Endpoint::WanImageToVideo,
+                WanVariant::FastWan => Endpoint::WanFastWan,
+            },
         }
     }
 
-    pub fn common(&self) -> &CommonInput {
+    /// The H3 fields (`None` for the LTX and Wan inputs).
+    pub fn common(&self) -> Option<&CommonInput> {
         match self {
             FalInput::TextToVideo { common, .. }
             | FalInput::ImageToVideo { common, .. }
-            | FalInput::ReferenceToVideo { common, .. } => common,
+            | FalInput::ReferenceToVideo { common, .. } => Some(common),
+            FalInput::Ltx(_) | FalInput::Wan(_) => None,
         }
     }
 
-    /// The normalized request (design §4.4 mapping table). `model` is the
-    /// name the app resolves through (a tier alias such as `h3-max`).
-    pub fn normalize(&self, model: &str, cx: &NormalizeCtx) -> Result<GenerationRequest, ApiError> {
-        let c = self.common();
+    fn normalize_h3(&self, model: &str) -> Result<GenerationRequest, ApiError> {
+        let Some(c) = self.common() else { return Err(ApiError::internal("not an H3 input")) };
         let mut r = GenerationRequest::text(ProtocolId::Fal, model, c.prompt.clone());
         r.seed = c.seed;
         r.timing = TimingSpec {
@@ -489,7 +683,19 @@ impl FalInput {
                     a => aspect_canvas(*a, short_edge),
                 };
             }
+            FalInput::Ltx(_) | FalInput::Wan(_) => {}
         }
+        Ok(r)
+    }
+
+    /// The normalized request (design §4.4 mapping table). `model` is the
+    /// name the endpoint resolves through (a tier alias such as `h3-max`).
+    pub fn normalize(&self, model: &str, cx: &NormalizeCtx) -> Result<GenerationRequest, ApiError> {
+        let mut r = match self {
+            FalInput::Ltx(i) => i.normalize(model)?,
+            FalInput::Wan(i) => i.normalize(model)?,
+            _ => self.normalize_h3(model)?,
+        };
         if let Some(hook) = cx.query_param("fal_webhook") {
             let url = url::Url::parse(hook)
                 .ok()
@@ -549,7 +755,15 @@ pub fn fal_param(param: &str, req: &GenerationRequest) -> String {
             return format!("{field}[{k}]");
         }
     }
+    // The Wan schema sends `num_frames` / `frames_per_second` (Length::Frames);
+    // H3 and LTX send `duration` / `fps`.
+    let wan = matches!(req.timing.length, Length::Frames { .. });
     match param {
+        "fps" if wan => "frames_per_second".into(),
+        "flow_shift" => "shift".into(),
+        "image_uri" => "image_url".into(),
+        "last_frame_uri" => "end_image_url".into(),
+        "size" => "resolution".into(),
         "audio" | "audio_url" => "target_audio_url".into(),
         "references" => match req.references.first().map(|r| r.kind) {
             Some(MediaKind::Video) => "reference_video_urls".into(),
@@ -594,7 +808,9 @@ pub struct File {
     pub file_size: Option<u64>,
 }
 
-/// t2v / i2v / r2v output (fal §3.4, §5.2). `seed` is set on r2v only.
+/// t2v / i2v / r2v output (fal §3.4, §5.2). `seed` is the effective seed
+/// (requested or drawn) on every task: required by fal's r2v schema, an
+/// extra key on t2v/i2v.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct VideoOutput {
     pub video: File,
@@ -604,12 +820,50 @@ pub struct VideoOutput {
     pub timings: Option<serde_json::Map<String, Value>>,
 }
 
-/// The output artifact's file name: `<nanoid21>_minimax-h3.mp4`, derived
-/// from the job id so it is stable (fal §3.1). The binary names fal
-/// artifacts with it (`ArtifactMeta::file_name`).
+/// The file name slug of an app's outputs: `minimax-<alias>` for the
+/// `minimax/*` apps (hosted fal writes `minimax-h3` for all of them; the
+/// alias keeps the tier: `minimax-h3-max`, `minimax-h3-turbo`), else the app
+/// alias (`ltx-2.5`, `wan`, `fastwan21-1.3b`), limited to `[A-Za-z0-9._-]`.
+pub fn output_slug(app_id: &str) -> String {
+    let (owner, alias) = app_id.split_once('/').unwrap_or(("", app_id));
+    let clean = |s: &str| -> String {
+        s.chars().map(|c| if c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.') { c } else { '-' }).collect()
+    };
+    match (owner, alias) {
+        (_, "") => "video".to_owned(),
+        ("minimax", a) => format!("minimax-{}", clean(a)),
+        (_, a) => clean(a),
+    }
+}
+
+/// The output artifact's file name: `<nanoid21>_<slug>.mp4` in hosted fal's
+/// form (fal §3.1), with the 21 characters derived from the job id so it is
+/// stable. `slug` is [`output_slug`] of the job's app plus `-<tier>` when
+/// the resolved tier is not already a word of it (`wan` at turbo →
+/// `wan-turbo`, `ltx-2.5` at max → `ltx-2.5-max`; `minimax-h3-max` stays).
+/// The binary names fal artifacts with it (`ArtifactMeta::file_name`).
 pub fn output_file_name(job: &Job) -> String {
     let b64 = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(job.id.0.as_bytes());
-    format!("{}_{OUTPUT_SLUG}.mp4", &b64[..21])
+    let mut slug = output_slug(app_id(job.requested_model()));
+    if let Some(t) = job.resolved.tier.map(|t| t.as_str()) {
+        if !slug.split(['-', '_', '.']).any(|w| w == t) {
+            slug.push('-');
+            slug.push_str(t);
+        }
+    }
+    format!("{}_{slug}.mp4", &b64[..21])
+}
+
+/// The app id of an endpoint id (`fal-ai/wan/v2.2-5b/text-to-video/fast-wan`
+/// → `fal-ai/wan`): the longest known sub-path suffix is dropped. An id
+/// with no known sub is returned as is.
+pub fn app_id(endpoint_id: &str) -> &str {
+    Endpoint::EVERY
+        .iter()
+        .filter_map(|e| endpoint_id.strip_suffix(e.sub())?.strip_suffix('/'))
+        .filter(|app| app.split('/').count() == 2)
+        .min_by_key(|app| app.len())
+        .unwrap_or(endpoint_id)
 }
 
 /// Whether the job asked for `sync_mode` (inline data URI).

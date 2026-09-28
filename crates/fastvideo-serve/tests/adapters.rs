@@ -22,6 +22,11 @@ use tower::ServiceExt;
 const KEY: &str = "sk-adapters";
 
 async fn app(tag: &str) -> App {
+    app_with(tag, &[]).await
+}
+
+/// [`app`] with extra environment (`FV_*`) on top of the defaults.
+async fn app_with(tag: &str, extra: &[(&str, String)]) -> App {
     let dir = std::env::temp_dir().join(format!(
         "fv-serve-adapters-{tag}-{:x}",
         std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()
@@ -31,6 +36,9 @@ async fn app(tag: &str) -> App {
     env.insert("FV_URL_SIGNING_KEY".to_owned(), "k".to_owned());
     env.insert("FV_STATE_DIR".to_owned(), dir.display().to_string());
     env.insert("FV_PUBLIC_BASE_URL".to_owned(), "http://fv.test".to_owned());
+    for (k, v) in extra {
+        env.insert((*k).to_owned(), v.clone());
+    }
     let mut c = Config::default();
     c.apply_env(&env).unwrap();
     c.jobs.backend = JobBackend::Memory;
@@ -157,8 +165,8 @@ async fn fal_queue_submit_status_result() {
     assert_eq!(out.status, 200);
     let o = out.json();
     let url = o["video"]["url"].as_str().unwrap();
-    // Named like hosted fal output (`<nanoid21>_minimax-h3.mp4`).
-    assert!(url.split('?').next().unwrap().ends_with("_minimax-h3.mp4"), "{url}");
+    // Hosted fal's form, named by app and tier (`<nanoid21>_minimax-h3-turbo.mp4`).
+    assert!(url.split('?').next().unwrap().ends_with("_minimax-h3-turbo.mp4"), "{url}");
     let job = a.ctx.jobs().by_external(ProtocolId::Fal, &rid).await.unwrap();
     assert_eq!(job.artifacts[0].file_name, fastvideo_fal::output_file_name(&job));
     // JWKS for our webhook signatures.
@@ -177,7 +185,7 @@ async fn every_mounted_route_of_the_table_answers() {
     let a = app("table").await;
     let apps = a.config.protocols.fal_apps.clone();
     for spec in route_table(&apps) {
-        if matches!(spec.owner, Owner::Reactor | Owner::FalDirector) {
+        if matches!(spec.owner, Owner::Reactor | Owner::FalDirector | Owner::Gateway) {
             continue;
         }
         let mut uri = String::new();
@@ -203,4 +211,181 @@ async fn every_mounted_route_of_the_table_answers() {
             spec.owner
         );
     }
+}
+
+/// Native job objects carry `protocol` and the engine's stage `metrics`;
+/// `GET /fv/v1/jobs` lists native jobs by default and every API's with
+/// `?protocol=all` (or one API by name).
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn native_jobs_metrics_and_list_scope() {
+    let a = app("native-list").await;
+    let r = a.router.clone();
+    let body = json!({"model": "h3-turbo", "prompt": "a fox", "aspect_ratio": "16:9", "short_edge": 768});
+    let s = call(&r, "POST", "/fv/v1/jobs", Some(body), bearer()).await;
+    assert_eq!(s.status, 202, "{}", String::from_utf8_lossy(&s.bytes));
+    let nid = s.json()["id"].as_str().unwrap().to_owned();
+    let v = poll(&r, &format!("/fv/v1/jobs/{nid}"), bearer(), |v| v["status"] == "succeeded").await;
+    assert_eq!(v["protocol"], "native");
+    let m = &v["metrics"];
+    assert!(m["inference_s"].is_number(), "{m}");
+    assert!(m["stage_durations"]["denoise"].is_number(), "{m}");
+    assert!(m["queue_s"].is_number() && m["run_s"].is_number(), "{m}");
+
+    let key = Some("Key sk-adapters");
+    let s = call(&r, "POST", "/minimax/h3-turbo/text-to-video", Some(json!({"prompt": "a kitten"})), key).await;
+    assert_eq!(s.status, 200);
+    let fid = s.json()["request_id"].as_str().unwrap().to_owned();
+    poll(&r, &format!("/minimax/h3-turbo/requests/{fid}/status"), key, |v| v["status"] == "COMPLETED").await;
+
+    let ids = |v: Value| -> Vec<(String, String)> {
+        v["data"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|j| (j["protocol"].as_str().unwrap().to_owned(), j["id"].as_str().unwrap().to_owned()))
+            .collect()
+    };
+    let native = ids(call(&r, "GET", "/fv/v1/jobs", None, bearer()).await.json());
+    assert_eq!(native, vec![("native".to_owned(), nid.clone())]);
+    let all = ids(call(&r, "GET", "/fv/v1/jobs?protocol=all", None, bearer()).await.json());
+    assert!(all.contains(&("native".to_owned(), nid.clone())) && all.contains(&("fal".to_owned(), fid.clone())), "{all:?}");
+    let fal = ids(call(&r, "GET", "/fv/v1/jobs?protocol=fal", None, bearer()).await.json());
+    assert_eq!(fal, vec![("fal".to_owned(), fid)]);
+    let bad = call(&r, "GET", "/fv/v1/jobs?protocol=nope", None, bearer()).await;
+    assert_eq!((bad.status, bad.json()["error"]["param"].as_str()), (StatusCode::BAD_REQUEST, Some("protocol")));
+}
+
+async fn preflight(app: &Router, path: &str, origin: &str, method: &str, headers: &str) -> axum::http::Response<Body> {
+    let req = Request::builder()
+        .method("OPTIONS")
+        .uri(path)
+        .header("origin", origin)
+        .header("access-control-request-method", method)
+        .header("access-control-request-headers", headers)
+        .body(Body::empty())
+        .unwrap();
+    app.clone().oneshot(req).await.unwrap()
+}
+
+/// A browser page on another origin can upload the fal way: the preflights
+/// of `POST /storage/upload/initiate` (with `Authorization`) and `PUT
+/// /uploads/{token}` succeed, and so do the requests themselves.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn cors_preflights_and_cross_origin_upload() {
+    let a = app("cors").await;
+    let origin = "https://page.example";
+    let r = preflight(&a.router, "/storage/upload/initiate", origin, "POST", "authorization,content-type").await;
+    assert!(r.status().is_success(), "{}", r.status());
+    let h = r.headers();
+    assert_eq!(h["access-control-allow-origin"], "*");
+    let allowed = h["access-control-allow-headers"].to_str().unwrap().to_ascii_lowercase();
+    assert!(allowed.contains("authorization") && allowed.contains("content-type"), "{allowed}");
+    assert!(h["access-control-allow-methods"].to_str().unwrap().contains("POST"));
+
+    let req = Request::post("/storage/upload/initiate")
+        .header("origin", origin)
+        .header("authorization", "Key sk-adapters")
+        .header("content-type", "application/json")
+        .body(Body::from(json!({"content_type": "image/png", "file_name": "a.png"}).to_string()))
+        .unwrap();
+    let r = a.router.clone().oneshot(req).await.unwrap();
+    assert_eq!(r.status(), StatusCode::OK);
+    assert_eq!(r.headers()["access-control-allow-origin"], "*");
+    let body = axum::body::to_bytes(r.into_body(), 1 << 20).await.unwrap();
+    let v: Value = serde_json::from_slice(&body).unwrap();
+    let upload = url::Url::parse(v["upload_url"].as_str().unwrap()).unwrap();
+
+    let r = preflight(&a.router, upload.path(), origin, "PUT", "content-type").await;
+    assert!(r.status().is_success(), "{}", r.status());
+    assert_eq!(r.headers()["access-control-allow-origin"], "*");
+    assert!(r.headers()["access-control-allow-methods"].to_str().unwrap().contains("PUT"));
+    let req = Request::put(upload.path())
+        .header("origin", origin)
+        .header("content-type", "image/png")
+        .body(Body::from(&b"\x89PNG\r\n\x1a\n"[..]))
+        .unwrap();
+    let r = a.router.clone().oneshot(req).await.unwrap();
+    assert_eq!(r.status(), StatusCode::OK);
+    assert_eq!(r.headers()["access-control-allow-origin"], "*");
+
+    // The FastVideo metric headers are readable cross-origin.
+    let r = preflight(&a.router, "/v1/videos/sync", origin, "POST", "authorization,content-type").await;
+    assert!(r.status().is_success());
+    let req = Request::post("/v1/videos/sync")
+        .header("origin", origin)
+        .header("authorization", bearer().unwrap())
+        .header("content-type", "application/json")
+        .body(Body::from(json!({"model": "fake-wan", "prompt": "waves", "size": "832x480", "num_frames": 49, "fps": 16}).to_string()))
+        .unwrap();
+    let r = a.router.clone().oneshot(req).await.unwrap();
+    assert_eq!(r.status(), StatusCode::OK);
+    let exposed = r.headers()["access-control-expose-headers"].to_str().unwrap().to_ascii_lowercase();
+    assert!(exposed.contains("x-inference-time-s"), "{exposed}");
+}
+
+/// `server.cors_origins` narrows CORS to the listed origins; `none` turns
+/// it off (a preflight is then an ordinary unrouted OPTIONS).
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn cors_origins_are_configurable() {
+    let a = app_with("cors-list", &[("FV_CORS_ORIGINS", "https://ok.example".to_owned())]).await;
+    let r = preflight(&a.router, "/storage/upload/initiate", "https://ok.example", "POST", "authorization").await;
+    assert!(r.status().is_success());
+    assert_eq!(r.headers()["access-control-allow-origin"], "https://ok.example");
+    let r = preflight(&a.router, "/storage/upload/initiate", "https://evil.example", "POST", "authorization").await;
+    assert!(r.headers().get("access-control-allow-origin").is_none());
+
+    let a = app_with("cors-off", &[("FV_CORS_ORIGINS", "none".to_owned())]).await;
+    let r = preflight(&a.router, "/storage/upload/initiate", "https://ok.example", "POST", "authorization").await;
+    assert!(r.headers().get("access-control-allow-origin").is_none());
+}
+
+/// `/v1/videos/sync` with outputs in an S3-compatible bucket (the R2
+/// deployment): the reply is the MP4 itself with the `X-*` metric headers
+/// (design §4.1), not a redirect to the bucket.
+#[cfg(feature = "http-client")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn fastvideo_sync_streams_s3_artifacts_with_headers() {
+    use axum::extract::Path;
+    use axum::response::IntoResponse;
+    use axum::routing::put;
+    use std::collections::HashMap;
+    use std::sync::{Arc, Mutex};
+    let objects: Arc<Mutex<HashMap<String, Vec<u8>>>> = Arc::default();
+    let (o1, o2) = (objects.clone(), objects.clone());
+    let s3: Router = Router::new().route(
+        "/{*key}",
+        put(move |Path(k): Path<String>, body: axum::body::Bytes| async move {
+            o1.lock().unwrap().insert(k, body.to_vec());
+            StatusCode::OK
+        })
+        .get(move |Path(k): Path<String>| async move {
+            match o2.lock().unwrap().get(&k) {
+                Some(b) => (StatusCode::OK, b.clone()).into_response(),
+                None => StatusCode::NOT_FOUND.into_response(),
+            }
+        }),
+    );
+    let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = l.local_addr().unwrap();
+    tokio::spawn(async move { axum::serve(l, s3).await.unwrap() });
+    let a = app_with(
+        "s3",
+        &[
+            ("FV_R2_ENDPOINT", format!("http://{addr}")),
+            ("FV_R2_BUCKET", "fv-media".to_owned()),
+            ("FV_R2_ACCESS_KEY_ID", "AK".to_owned()),
+            ("FV_R2_SECRET_ACCESS_KEY", "SK".to_owned()),
+        ],
+    )
+    .await;
+    let body = json!({"model": "fake-wan", "prompt": "waves", "size": "832x480", "num_frames": 49, "fps": 16});
+    let s = call(&a.router, "POST", "/v1/videos/sync", Some(body), bearer()).await;
+    assert_eq!(s.status, 200, "{}", String::from_utf8_lossy(&s.bytes));
+    assert_eq!(s.headers["content-type"], "video/mp4");
+    assert!(s.headers.get("location").is_none());
+    for h in ["x-request-id", "x-model", "x-inference-time-s", "x-stage-durations"] {
+        assert!(s.headers.get(h).is_some(), "missing {h}");
+    }
+    let stored = objects.lock().unwrap().values().next().cloned().expect("uploaded to the bucket");
+    assert_eq!(s.bytes, stored);
 }

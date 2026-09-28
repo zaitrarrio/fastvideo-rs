@@ -348,11 +348,48 @@ Not isomorphic to 2.0: `decoder_block_out_channels=[256,512,512,1024]`,
 
 ---
 
+## Image conditioning: I2V and keyframes (serve E5 / E9)
+
+Reference: `ltx_pipelines.distilled.DistilledPipeline(images=[(path, frame_idx,
+strength, crf)])` at Lightricks/LTX-2 `fd4ded7` (the `--image PATH FRAME_IDX
+STRENGTH [CRF]` of `gpu_infer.py`). Code: `ltx2/i2v_encode.rs`,
+`ltx2/vae_encoder.rs`, `Ltx2Transformer::set_video_conditioning`, the `_cond`
+samplers in `ltx2/pipeline.rs`; `Ltx2Request::images` (and the older
+`image_path` = one image at frame 0).
+
+| step | reference | ours |
+|---|---|---|
+| decode | PIL, EXIF rotations 3/6/8, RGBA→RGB, ICC → sRGB | `image` crate, same rotations and alpha drop; no ICC transform |
+| CRF | one libx264 frame, `veryfast`, yuv420p, even crop, CRF 18 from 2.4 on (33 before), decoded back (PyAV) | same through the `ffmpeg` CLI (`FASTVIDEO_FFMPEG`), `-sws_flags bilinear` |
+| resize | `resize_and_center_crop`: bilinear, `align_corners=False`, no antialias, cover then center crop; `x/127.5 − 1` → bf16 | same arithmetic on the host |
+| encode | `VideoEncoder` in bf16 | `vae_encoder.rs` in f32 over the bf16 weights (Diffusers `encoder.*` keys; zero spatial padding; `SpaceToDepthDownsample` with its group-mean skip) |
+| frame 0 | `VideoConditionByLatentIndex`: latent frame 0's tokens get the clean latent and mask `1 − strength` | same rows |
+| frame k > 0 | `VideoConditionByKeyframeIndex`: tokens *appended*, RoPE time `[k, k+1)/fps`, no attention mask | appended block, `Ltx2RopeTables::with_keyframes` |
+| noise | one draw over all tokens; `lerp(clean, lerp(init, ε, scale), mask)` | `initial_noise_with`, `StageConditioning::apply_initial` |
+| DiT | per-token `timesteps = mask·σ`: video AdaLN, text-Q AdaLN/gate, a↔v scale/shift, head per token; a↔v gates and prompt AdaLN at the scalar σ | `forward_segmented`: runs of rows at one timestep, the modulation applied per run |
+| x0 | `x − mask·σ·v`, then `x0·mask + clean·(1 − mask)` (`post_process_latent`) | `StageConditioning::{x0, post}` |
+| samplers | stage 1 ancestral: blend x0, step, blend after the noise; stage 2 Euler: blend x0 | `ancestral_update_cond`, `euler_update_cond` |
+| between stages | `clear_conditioning` drops the appended tokens; stage 2 re-encodes every image at full size | same |
+
+Both stages condition (stage 1 at half size, stage 2 at full size). The
+conditioned forwards run without FBCache, the midpoint prune and the stage-1
+cache. `fv-gpucheck ltx2 gen --image PATH` (frame 0) and `--cond-image
+PATH@FRAME[@STRENGTH[@CRF]]` (`FRAME` may be `last`). Serve maps `image_uri`
+/ `image_url` to frame 0 and `last_frame_uri` / `last_image_url` to frame
+`num_frames − 1`, strength 1, the checkpoint's CRF.
+
+Oracle targets `ltx25-i2v` and `ltx25-kf` (scripts/gpu/upstream/oracle.sh,
+runpod-matrix.sh `oracle`): 768×512×121, dense stage 2, the TI2V beach
+fixture at frame 0 and (kf) its 1.35× zoom at frame 120. The reference also
+dumps `s{n}_cond{i}_{pixels,latent}`; ours injects the reference's latents
+(`FASTVIDEO_INJECT_COND=0` keeps ours) so the denoiser diff is the
+conditioning's alone. Results: docs/oracle.md, "LTX-2.5 image conditioning".
+
 ## Out of scope (this milestone)
 
 DiffVAE tiling / multi-step stage-5 / two-stage+DiffVAE combo, duration head,
-prompt enhancer, multishot/keyframes, dev DiT + CFG/STG/modality guidance,
-Comfy int8/nvfp4, official 1536×1024 canvas.
+prompt enhancer, generated keyframes (`VideoGeneratedKeyframeSlots`), dev DiT
++ CFG/STG/modality guidance, Comfy int8/nvfp4, official 1536×1024 canvas.
 
 ---
 

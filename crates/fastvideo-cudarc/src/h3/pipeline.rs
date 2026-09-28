@@ -245,6 +245,11 @@ pub struct H3PipelineOptions {
     pub recipe: Option<String>,
     /// Load `transformer_ref/` (Ref2VA) instead of `transformer/` (T2AV/FL2VA).
     pub ref2va: bool,
+    /// Root holding `transformer_ref/` (and the Ref2VA turbo adapter) when it
+    /// is not the snapshot itself, e.g. `weights/h3-ref2va` beside
+    /// `weights/h3-base`. The VAEs and the text encoder still come from the
+    /// snapshot (and `text_root`).
+    pub ref_root: Option<PathBuf>,
     /// Sol-H3 / FastH3 Preview adapter file. When unset, the recipe's adapter is
     /// searched under and beside the weight root.
     pub adapter: Option<PathBuf>,
@@ -254,6 +259,52 @@ pub struct H3PipelineOptions {
     /// else `Auto` (resident when the free memory covers the planned need).
     /// Streamed also loads the decoders for the decode only.
     pub dit_offload: Option<DitOffload>,
+    /// Where the FL2VA / Ref2VA multimodal text encoder lives
+    /// ([`I2vEncoderChoice`]).
+    pub i2v_encoder: I2vEncoderChoice,
+}
+
+/// Where the multimodal (image-conditioned) text encoder's weights live.
+///
+/// The language model is the T2V text encoder (same checkpoint, same layers)
+/// and runs at its precision either way; the vision tower is ~1.2 GB. So
+/// `Resident` keeps the vision tower and reuses the resident text encoder, and
+/// `Stream` reads both from the volume for every request (the original path:
+/// ~50 GB of bf16 or ~24 GB of FP8 language model per image request). The two
+/// give the same bytes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum I2vEncoderChoice {
+    /// `Resident` when the text encoder is resident and the vision tower fits
+    /// beside the planned DiT; else `Stream`.
+    #[default]
+    Auto,
+    Resident,
+    Stream,
+}
+
+/// What [`I2vEncoderChoice::Auto`] sets aside for the vision tower (bf16
+/// weights ~1.15 GB plus its forward's transients) when deciding residency.
+pub const I2V_VISION_RESERVE_BYTES: u64 = 2 << 30;
+
+impl I2vEncoderChoice {
+    pub fn parse(name: &str) -> std::result::Result<Self, String> {
+        match name {
+            "auto" | "" => Ok(Self::Auto),
+            "resident" => Ok(Self::Resident),
+            "stream" | "streamed" => Ok(Self::Stream),
+            other => Err(format!(
+                "unknown i2v encoder '{other}' (auto|resident|stream)"
+            )),
+        }
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Auto => "auto",
+            Self::Resident => "resident",
+            Self::Stream => "stream",
+        }
+    }
 }
 
 /// Resolve the inference contract: explicit recipe name, then
@@ -379,6 +430,44 @@ pub struct H3Output {
     pub dit_residency: &'static str,
     /// Block streaming over the denoise (streamed runs).
     pub offload: Option<OffloadStats>,
+}
+
+/// Oracle injection of one modality's starting rows (`FASTVIDEO_INJECT_DIR`).
+/// The reference dumps its packed rows: the target noise alone, or
+/// `[condition | target]` when the request has condition rows. The target
+/// part replaces `target`; the condition part replaces `cond` only with
+/// `FASTVIDEO_INJECT_COND=1`. Returns `(target, cond)`.
+fn inject_start_rows(
+    name: &str,
+    target: Vec<f32>,
+    cond: Option<CudaTensor>,
+) -> Result<(Vec<f32>, Option<CudaTensor>)> {
+    let Some((shape, v)) = crate::wan::inject::load(name)? else {
+        return Ok((target, cond));
+    };
+    let cond_n = cond.as_ref().map_or(0, CudaTensor::numel);
+    if v.len() == target.len() {
+        return Ok((v, cond));
+    }
+    if cond_n == 0 || v.len() != cond_n + target.len() {
+        return Err(msg(format!(
+            "FASTVIDEO_INJECT_DIR: {name}: reference shape {shape:?} ({} values); ours needs {} target (+ {cond_n} condition)",
+            v.len(),
+            target.len()
+        )));
+    }
+    let tail = v[cond_n..].to_vec();
+    let cond = match cond {
+        Some(c) if std::env::var("FASTVIDEO_INJECT_COND").is_ok_and(|x| x == "1") => {
+            crate::wan::log::info(format_args!(
+                "inject: {name} condition rows ({cond_n} values) from the reference"
+            ));
+            Some(CudaTensor::from_vec(v[..cond_n].to_vec(), c.shape.clone())?.to_device()?)
+        }
+        c => c,
+    };
+    crate::wan::log::info(format_args!("inject: {name} target rows from the reference"));
+    Ok((tail, cond))
 }
 
 /// The request's starting noise, from one generator in the reference's order:
@@ -523,6 +612,8 @@ pub fn unpatchify_rows(
 pub struct H3LoadTimings {
     /// Zero when the encoder is streamed.
     pub text_encoder_s: f64,
+    /// The resident multimodal vision tower (zero when I2V streams).
+    pub vision_s: f64,
     pub refiner_s: f64,
     pub dit_s: f64,
     pub video_vae_s: f64,
@@ -589,6 +680,12 @@ pub struct H3Pipeline {
     text_encoder: std::sync::Mutex<Option<Box<dyn HiddenStateEncoder + Send>>>,
     /// The encoder choice was `Auto` (resolved at load), so it may be released.
     auto_text_encoder: bool,
+    /// The resident vision tower + tokenizer of the multimodal text path
+    /// (`None`: FL2VA/Ref2VA stream it per request).
+    multimodal: Option<super::text::MultimodalEncoder>,
+    /// Stream the multimodal encoder even when [`Self::multimodal`] is
+    /// loaded ([`Self::set_i2v_encoder`]; the parity check).
+    i2v_stream: bool,
     pub load_timings: H3LoadTimings,
     /// What this pipeline keeps on the device, by ledger category.
     booking: std::sync::Mutex<crate::wan::ledger::Booking>,
@@ -718,7 +815,7 @@ impl H3Pipeline {
             }
             _ => {
                 let dit = if options.ref2va {
-                    let p = root.join("transformer_ref");
+                    let p = options.ref_root.as_deref().unwrap_or(root).join("transformer_ref");
                     if !p.is_dir() {
                         return Err(msg(format!(
                             "Ref2VA needs {} (MiniMax-H3 Base Ref2VA partition)",
@@ -896,8 +993,12 @@ impl H3Pipeline {
             } else {
                 SolH3AdapterSpec::t2v_i2v()
             };
+            let adapter_root = match (options.ref2va, options.ref_root.as_deref()) {
+                (true, Some(r)) => r,
+                _ => root,
+            };
             let path = spec
-                .resolve(root, options.adapter.as_deref())
+                .resolve(adapter_root, options.adapter.as_deref())
                 .map_err(msg)?;
             let fuse = super::lora::H3LoraFuse::open(&map, &path, spec.alpha, spec.scale)?;
             crate::wan::log::info(format_args!(
@@ -926,6 +1027,89 @@ impl H3Pipeline {
             Some(fuse)
         } else {
             None
+        };
+        // The multimodal (FL2VA / Ref2VA) text encoder: the vision tower
+        // beside the resident language model, decided before the DiT
+        // placement so the placement sees what it leaves.
+        let (multimodal, free) = {
+            let lm = text_encoder
+                .as_deref()
+                .and_then(|e| e.decoder())
+                .map(|d| d.precision());
+            let need = H3Geometry::default_16x9(5)
+                .map(|g| {
+                    fastvideo_models::h3::memory::plan(
+                        &g,
+                        fastvideo_models::h3::memory::H3PlanOptions {
+                            gate: with_gate,
+                            ..Default::default()
+                        },
+                    )
+                    .peak()
+                })
+                .map_err(msg)?;
+            let gib = |b: u64| b as f64 / f64::from(1u32 << 30);
+            let (load, why) = match (options.i2v_encoder, lm) {
+                (I2vEncoderChoice::Stream, _) => (false, "configured".to_owned()),
+                (I2vEncoderChoice::Resident | I2vEncoderChoice::Auto, None) => {
+                    if options.i2v_encoder == I2vEncoderChoice::Resident {
+                        return Err(msg(format!(
+                            "i2v_encoder = resident needs a resident Qwen3-VL text encoder (text_encoder = resident-fp8 | resident-bf16, or auto on a card with {:.0} GB free); it resolved to {:?}",
+                            AUTO_RESIDENT_FREE_BYTES as f64 / 1e9,
+                            options.text_encoder
+                        )));
+                    }
+                    (false, format!("the text encoder is {:?}, not a resident Qwen3-VL", options.text_encoder))
+                }
+                (I2vEncoderChoice::Resident, Some(_)) => (true, "configured".to_owned()),
+                (I2vEncoderChoice::Auto, Some(_)) => match free {
+                    Some(f) if f >= need + I2V_VISION_RESERVE_BYTES => (
+                        true,
+                        format!(
+                            "{:.1} GiB free covers the vision tower ({:.1} GiB) and the resident plan ({:.1} GiB)",
+                            gib(f),
+                            gib(I2V_VISION_RESERVE_BYTES),
+                            gib(need)
+                        ),
+                    ),
+                    Some(f) => (
+                        false,
+                        format!(
+                            "{:.1} GiB free does not cover the vision tower ({:.1} GiB) and the resident plan ({:.1} GiB)",
+                            gib(f),
+                            gib(I2V_VISION_RESERVE_BYTES),
+                            gib(need)
+                        ),
+                    ),
+                    None => (false, "free device memory unknown".to_owned()),
+                },
+            };
+            if load {
+                let timer = Instant::now();
+                let text_root = options.text_root.as_deref().unwrap_or(root);
+                let before = crate::wan::device::free_memory().map(|(f, _)| f);
+                let mm = super::text::MultimodalEncoder::load(text_root)?;
+                let after = crate::wan::device::free_memory().map(|(f, _)| f);
+                let held = before.zip(after).map(|(b, a)| b.saturating_sub(a));
+                load_timings.vision_s = timer.elapsed().as_secs_f64();
+                crate::wan::log::info(format_args!(
+                    "h3 i2v encoder: resident ({why}): vision tower {} GiB loaded in {:.1} s; the language model is the resident text encoder ({:?}), {:.1} GiB free now",
+                    held.map_or("?".into(), |b| format!("{:.2}", gib(b))),
+                    load_timings.vision_s,
+                    options.text_encoder,
+                    after.map_or(0.0, gib),
+                ));
+                (Some(mm), after.or(free))
+            } else {
+                crate::wan::log::info(format_args!(
+                    "h3 i2v encoder: stream ({why}): FL2VA/Ref2VA requests read the vision tower and the {} language model from the volume per request",
+                    match options.text_encoder.precision() {
+                        Some(crate::llm::WeightPrecision::Fp8Rows) => "fp8",
+                        _ => "bf16",
+                    }
+                ));
+                (None, free)
+            }
         };
         let residency = {
             let policy = DitOffload::from_env_or(options.dit_offload).map_err(msg)?;
@@ -1052,6 +1236,8 @@ impl H3Pipeline {
             residency,
             text_encoder: std::sync::Mutex::new(text_encoder),
             auto_text_encoder,
+            multimodal,
+            i2v_stream: false,
             load_timings,
             booking: std::sync::Mutex::new(booking),
         })
@@ -1071,6 +1257,34 @@ impl H3Pipeline {
         *self.text_encoder.get_mut().expect("h3 text encoder") = Some(encoder);
         self.auto_text_encoder = false;
         self
+    }
+
+    /// Where FL2VA / Ref2VA requests encode their multimodal text now:
+    /// `Resident` (the vision tower is loaded and not overridden) or `Stream`.
+    pub fn i2v_encoder(&self) -> I2vEncoderChoice {
+        if self.multimodal.is_some() && !self.i2v_stream {
+            I2vEncoderChoice::Resident
+        } else {
+            I2vEncoderChoice::Stream
+        }
+    }
+
+    /// Switch the multimodal text path between the resident vision tower and
+    /// per-request streaming (same bytes either way; used by the parity
+    /// check). `Resident` needs the tower loaded at [`Self::load`].
+    pub fn set_i2v_encoder(&mut self, choice: I2vEncoderChoice) -> Result<()> {
+        match choice {
+            I2vEncoderChoice::Stream => self.i2v_stream = true,
+            I2vEncoderChoice::Resident | I2vEncoderChoice::Auto => {
+                if self.multimodal.is_none() && choice == I2vEncoderChoice::Resident {
+                    return Err(msg(
+                        "i2v encoder: the vision tower was not loaded (i2v_encoder resolved to stream at load)",
+                    ));
+                }
+                self.i2v_stream = false;
+            }
+        }
+        Ok(())
     }
 
     /// `(kind, device bytes)` of the encoder a cache miss will use.
@@ -1331,7 +1545,32 @@ impl H3Pipeline {
                     "FL2VA/Ref2VA multimodal text needs Qwen3-VL-32B with vision tower; recovered-8b is text-only",
                 ));
             }
-            encode_request_multimodal(encoder_root, request)?
+            let lm = match (self.i2v_stream, self.multimodal.as_ref()) {
+                (false, Some(mm)) => match encoder_slot.as_deref().and_then(|e| e.decoder()) {
+                    Some(decoder) => Some((mm, decoder)),
+                    // An `Auto` encoder released before an earlier denoise.
+                    None => None,
+                },
+                _ => None,
+            };
+            let precision = self
+                .options
+                .text_encoder
+                .precision()
+                .unwrap_or(crate::llm::WeightPrecision::Native);
+            let abort = || hooks.is_cancelled();
+            let text = encode_request_multimodal(
+                encoder_root,
+                request,
+                lm,
+                precision,
+                &abort,
+                self.options.reference_image_resize,
+            );
+            // A cancel during the (streamed) multimodal stage stops it
+            // between layers; report it as the cancel it is.
+            hooks.check()?;
+            text?
         } else if matches!(self.options.text_encoder, TextEncoderChoice::Recovered8b) {
             super::text::encode_prompt_recovered(
                 tokenizer_root,
@@ -1525,12 +1764,17 @@ impl H3Pipeline {
             seeded_noise(cfg, &geometry, request.seed).map_err(msg)?;
         // FASTVIDEO_INJECT_DIR: the reference's packed starting rows (torch's
         // draws, patchified by the reference), in place of our seeded noise.
-        if let Some(v) = crate::wan::inject::load_numel("video_step00_in", video_noise.len())? {
+        // With condition rows (FL2VA / Ref2VA) the reference's rows are
+        // `[condition | target]`; only the target part is injected unless
+        // FASTVIDEO_INJECT_COND=1, which also takes its condition rows (the
+        // control that isolates the DiT from our reference encode).
+        let (cond_rows, cond_audio_rows) = {
+            let (v, c) = inject_start_rows("video_step00_in", video_noise, cond_rows)?;
             video_noise = v;
-        }
-        if let Some(v) = crate::wan::inject::load_numel("audio_step00_in", audio_noise.len())? {
-            audio_noise = v;
-        }
+            let (a, ca) = inject_start_rows("audio_step00_in", audio_noise, cond_audio_rows)?;
+            audio_noise = a;
+            (c, ca)
+        };
         let video_rows = CudaTensor::from_vec(
             video_noise,
             vec![geometry.video_rows(), cfg.video_patch_dim()],
@@ -1868,12 +2112,45 @@ fn refine_spark(
 }
 
 /// Qwen3-VL multimodal text for FL2VA keyframes / Ref2VA ordered refs.
+///
+/// `resident`: the loaded vision tower and the resident language model; else
+/// both are read from `text_root` for this request, the language model at
+/// `precision` (the resident encoder's, so the bytes match).
 fn encode_request_multimodal(
     text_root: &Path,
     request: &H3Request,
+    resident: Option<(&super::text::MultimodalEncoder, &crate::llm::ResidentDecoder)>,
+    precision: crate::llm::WeightPrecision,
+    abort: &dyn Fn() -> bool,
+    resize: ReferenceImageResize,
 ) -> Result<super::text::TextConditioning> {
-    use super::text::{VisionImage, VisionVideo};
+    use super::text::{MultimodalLm, VisionImage, VisionVideo};
     use fastvideo_models::h3::presentation::PresentationRef;
+    let where_ = if resident.is_some() {
+        "resident"
+    } else {
+        "streamed from the volume"
+    };
+    let encode = |prompt: &str,
+                  images: &[VisionImage<'_>],
+                  videos: &[VisionVideo<'_>],
+                  refs: Option<&[PresentationRef]>|
+     -> Result<super::text::TextConditioning> {
+        Ok(match resident {
+            Some((mm, decoder)) => {
+                mm.encode(MultimodalLm::Resident(decoder), prompt, images, videos, refs)?
+            }
+            None => super::text::encode_multimodal_streamed(
+                text_root,
+                precision,
+                prompt,
+                images,
+                videos,
+                refs,
+                Some(abort),
+            )?,
+        })
+    };
 
     if request.is_ref2va() {
         let mut images_owned: Vec<(Vec<u8>, usize, usize)> = Vec::new();
@@ -1883,11 +2160,8 @@ fn encode_request_multimodal(
             match spec.kind {
                 ReferenceKind::Audio => refs.push(PresentationRef::Audio),
                 ReferenceKind::Image => {
-                    let img = image::open(&spec.path)
-                        .map_err(|e| msg(format!("open {}: {e}", spec.path.display())))?
-                        .into_rgb8();
-                    let (w, h) = (img.width() as usize, img.height() as usize);
-                    images_owned.push((img.into_raw(), h, w));
+                    let (rgb, h, w, _, _) = load_reference_image(&spec.path, resize)?;
+                    images_owned.push((rgb, h, w));
                     refs.push(PresentationRef::Image { token_count: 0 });
                 }
                 ReferenceKind::Video => {
@@ -1920,17 +2194,12 @@ fn encode_request_multimodal(
             })
             .collect();
         crate::wan::log::info(format_args!(
-            "h3 ref2va: Qwen-VL multimodal ({} images, {} videos)",
+            "h3 ref2va: Qwen-VL multimodal ({} images, {} videos, {})",
             images.len(),
-            videos.len()
+            videos.len(),
+            where_
         ));
-        return Ok(super::text::encode_ref2va_multimodal(
-            text_root,
-            &request.prompt,
-            &refs,
-            &images,
-            &videos,
-        )?);
+        return encode(&request.prompt, &images, &videos, Some(&refs));
     }
 
     let mut owned = Vec::new();
@@ -1953,14 +2222,11 @@ fn encode_request_multimodal(
         })
         .collect();
     crate::wan::log::info(format_args!(
-        "h3 fl2va: Qwen-VL multimodal ({} images)",
-        images.len()
+        "h3 fl2va: Qwen-VL multimodal ({} images, {})",
+        images.len(),
+        where_
     ));
-    Ok(super::text::encode_fl2va_multimodal(
-        text_root,
-        &request.prompt,
-        &images,
-    )?)
+    encode(&request.prompt, &images, &[], None)
 }
 
 /// GPU-encode FL2VA keyframe images → patchified cond rows (`[Nc, patch_dim]`).
@@ -2023,6 +2289,28 @@ fn encode_fl2va_cond_rows(
     }
 }
 
+/// A Ref2VA reference image as FastVideo prepares it (`reference.py`
+/// `prepare_reference_image`): RGB8 resized with Lanczos to the reference
+/// canvas (2048 short edge, or `match`). The VAE encodes this image and
+/// Qwen-VL sees the same one, so its vision-token count follows the canvas.
+/// Returns `(rgb, height, width, source width, source height)`.
+fn load_reference_image(
+    path: &Path,
+    resize: ReferenceImageResize,
+) -> Result<(Vec<u8>, usize, usize, usize, usize)> {
+    let img = image::open(path)
+        .map_err(|e| msg(format!("open {}: {e}", path.display())))?
+        .into_rgb8();
+    let (sw, sh) = (img.width() as usize, img.height() as usize);
+    let (out_h, out_w) = resolve_reference_image_size_with(sw, sh, resize).map_err(msg)?;
+    let img = if (sw, sh) == (out_w, out_h) {
+        img
+    } else {
+        image::imageops::resize(&img, out_w as u32, out_h as u32, image::imageops::FilterType::Lanczos3)
+    };
+    Ok((img.into_raw(), out_h, out_w, sw, sh))
+}
+
 struct Ref2VaEncoded {
     prepared: Vec<PreparedReference>,
     video_rows: CudaTensor,
@@ -2072,12 +2360,7 @@ fn encode_ref2va_conditions(
                 });
             }
             ReferenceKind::Image => {
-                let img = image::open(&spec.path)
-                    .map_err(|e| msg(format!("open {}: {e}", spec.path.display())))?
-                    .into_rgb8();
-                let (sw, sh) = (img.width() as usize, img.height() as usize);
-                let (out_h, out_w) =
-                    resolve_reference_image_size_with(sw, sh, resize).map_err(msg)?;
+                let (rgb, out_h, out_w, sw, sh) = load_reference_image(&spec.path, resize)?;
                 let prep = PreparedImageRef::from_pixel_size(out_h, out_w, ratio).map_err(msg)?;
                 crate::wan::log::info(format_args!(
                     "h3 ref2va: encode image {} {}x{} → {}x{} ({})",
@@ -2088,14 +2371,7 @@ fn encode_ref2va_conditions(
                     out_h,
                     spec.path.display()
                 ));
-                let z = encoder.encode_keyframe_file(
-                    &spec.path,
-                    out_h,
-                    out_w,
-                    true,
-                    true,
-                    seed.wrapping_add(31 + i as u64),
-                )?;
+                let z = encoder.encode_rgb8(&rgb, out_h, out_w, true, seed.wrapping_add(31 + i as u64))?;
                 let host = z.host_cow()?.into_owned();
                 let shape = [cfg.in_channels, 1, prep.latent_height, prep.latent_width];
                 if host.len() != shape.iter().product::<usize>() {
@@ -2275,6 +2551,23 @@ mod tests {
         let last = scheduler_step(&schedule.video, 7, &xt, &vt).unwrap();
         let sigma = 1.0f32 - schedule.video.timesteps[7];
         assert!((last.host_cow().unwrap()[0] - (0.5 + sigma * 1.0)).abs() < 1e-6);
+    }
+
+    #[test]
+    fn i2v_encoder_names() {
+        use super::I2vEncoderChoice as C;
+        for (name, want) in [
+            ("auto", C::Auto),
+            ("", C::Auto),
+            ("resident", C::Resident),
+            ("stream", C::Stream),
+            ("streamed", C::Stream),
+        ] {
+            assert_eq!(C::parse(name), Ok(want), "{name}");
+        }
+        assert!(C::parse("vram").is_err());
+        assert_eq!(C::default(), C::Auto);
+        assert_eq!(C::parse(C::Resident.as_str()), Ok(C::Resident));
     }
 
     #[test]

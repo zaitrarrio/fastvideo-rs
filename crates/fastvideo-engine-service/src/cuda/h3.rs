@@ -8,7 +8,8 @@
 use std::path::Path;
 
 use fastvideo_cudarc::h3::pipeline::{H3Pipeline, H3PipelineOptions, H3Request, TextEncoderChoice};
-use fastvideo_protocol::{Anchor, ApiError, JobMetrics, ResolvedJob, Task};
+use fastvideo_models::h3::reference::{H3ReferenceSpec, ReferenceKind};
+use fastvideo_protocol::{Anchor, ApiError, JobMetrics, MediaKind, ResolvedJob, Task};
 
 use super::caps::{load_profile, H3Recipe};
 use super::output::{api_err, bytes_mb, stages};
@@ -28,14 +29,16 @@ impl H3Model {
     ) -> Result<Self, ApiError> {
         let options = H3PipelineOptions {
             dense: recipe.dense,
-            adaln_cache: recipe.adaln_cache.clone(),
+            // The AdaLN table is the base DiT's; a Ref2VA DiT builds its own.
+            adaln_cache: recipe.adaln_cache.clone().filter(|_| !recipe.ref2va),
             text_root: recipe.text_weights.clone(),
             text_cache: text_cache.map(Path::to_path_buf),
             text_encoder: TextEncoderChoice::parse(&recipe.text_encoder)
                 .map_err(ApiError::internal)?,
             taeh3: recipe.taeh3.clone(),
             recipe: Some(recipe.recipe.clone()),
-            ref2va: false,
+            ref2va: recipe.ref2va,
+            ref_root: recipe.ref_weights.clone(),
             adapter: None,
             reference_image_resize: Default::default(),
             dit_offload: recipe
@@ -44,6 +47,10 @@ impl H3Model {
                 .map(fastvideo_cudarc::wan::offload::DitOffload::parse)
                 .transpose()
                 .map_err(ApiError::internal)?,
+            i2v_encoder: fastvideo_cudarc::h3::pipeline::I2vEncoderChoice::parse(
+                &recipe.i2v_encoder,
+            )
+            .map_err(ApiError::internal)?,
         };
         obs("h3_pipeline");
         let mut pipe = H3Pipeline::load(&recipe.weights, options)
@@ -92,9 +99,24 @@ impl H3Model {
                 Anchor::Last => req.last_image = Some(path.clone()),
             }
         }
-        if job.task == Task::Ref2V || !job.references.is_empty() {
-            return Err(ApiError::unsupported(
-                fastvideo_protocol::GapId::H3Ref2vaNotLoaded,
+        // Ordered Ref2VA references, in the client's order (prompts say
+        // "Image 1", "Video 1"; research-minimax-fastvideo.md §3).
+        req.references = job
+            .references
+            .iter()
+            .map(|(kind, path)| H3ReferenceSpec {
+                path: path.clone(),
+                kind: match kind {
+                    MediaKind::Image => ReferenceKind::Image,
+                    MediaKind::Video => ReferenceKind::Video,
+                    MediaKind::Audio => ReferenceKind::Audio,
+                },
+            })
+            .collect();
+        if job.task == Task::Ref2V && req.references.is_empty() {
+            return Err(ApiError::invalid_param(
+                "references",
+                "reference-to-video takes one or more references",
             ));
         }
         Ok(req)
@@ -112,6 +134,19 @@ impl H3Model {
         hooks: Hooks<'_>,
     ) -> Result<JobMetrics, ApiError> {
         let req = Self::request(job)?;
+        // A pipeline serves either `transformer/` or `transformer_ref/`; the
+        // caps route each task to the right one, so a mismatch here is a
+        // routing bug, not a client error.
+        if req.is_ref2va() != self.recipe.ref2va {
+            return Err(if req.is_ref2va() {
+                ApiError::unsupported(fastvideo_protocol::GapId::H3Ref2vaNotLoaded)
+            } else {
+                ApiError::invalid_param(
+                    "task",
+                    "this H3 model serves reference-to-video only",
+                )
+            });
+        }
         let out = self
             .pipe
             .generate_with_hooks(&req, dir, hooks)

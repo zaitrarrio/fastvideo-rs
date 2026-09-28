@@ -137,7 +137,40 @@ and `protocols.fal_director` is on. Otherwise the signalling routes answer
 404/405/501 and the page shows "Streaming is not available on this server
 yet".
 
-## 5. Tests
+## 5. Calling a server behind the Runpod proxy
+
+These notes apply to the console's API snippets and to your own scripts
+when fv-serve runs on a Runpod pod or load-balancer endpoint
+(`https://<pod>-8000.proxy.runpod.net`, `https://<endpoint>.api.runpod.ai`).
+
+- **Set a User-Agent.** Runpod's proxy sits behind Cloudflare, which
+  answers **403 `error code: 1010`** to Python-urllib's default
+  `User-Agent` (`Python-urllib/3.x`; seen on the pod proxy in the WP-18
+  E2E, docs/serve/e2e/h3-max.md; treat the load-balancer URL the same
+  way). The request never reaches fv-serve, so its logs show nothing. `requests`, `httpx`, `fal-client`, `openai`,
+  `@fal-ai/client` and `curl` send their own agent and pass. With
+  `urllib.request`, set one yourself:
+
+  ```python
+  import json, urllib.request
+  req = urllib.request.Request(
+      f"{base}/fv/v1/jobs",
+      data=json.dumps({"model": "h3-turbo", "prompt": "a fox"}).encode(),
+      headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json",
+               "User-Agent": "my-client/1.0"},
+  )
+  print(json.load(urllib.request.urlopen(req)))
+  ```
+
+- **~100 s per request.** The proxy closes a request after about 100 s.
+  Long generations belong on the queue/async routes (fal queue,
+  `/v1/videos` + poll, MiniMax, LTX v2, `/fv/v1/jobs`), not the sync ones.
+- **Cross-origin pages.** A page on another origin (or the console opened
+  on a different host than `public_base_url`) may call the API and upload
+  files: CORS allows any origin by default, preflights included
+  (`server.cors_origins` / `FV_CORS_ORIGINS` narrows it; design §9).
+
+## 6. Tests
 
 - Rust: `fastvideo-serve-kit` `keys` (mint / check / revoke, file
   persistence and digest-only storage, D1 over the SQLite mock shared by two

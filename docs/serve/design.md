@@ -600,7 +600,7 @@ Source: minimax-fastvideo §2.1 and §3.3.
 | `POST /v1/videos`, `POST /v1/videos/generations` | JSON, multipart or form (fields `image_reference`… as JSON strings). `extra_body`/`extra_json` are merged. `extra="forbid"`: unknown field → 400. Reply `VideoResponse` with `status:"queued"` |
 | `POST /v1/videos/sync` | Blocks. Returns `video/mp4` with `X-Request-Id`, `X-Model`, `X-Inference-Time-S`, `X-Stage-Durations`, `X-Peak-Memory-MB` |
 | `GET /v1/videos?after&limit&order` | `{object:"list",data,first_id,last_id,has_more}`, default `desc` |
-| `GET /v1/videos/{id}` | `VideoResponse`. A failed job is **200** with `status:"failed"`, `error:{code:"generation_failed",message}` |
+| `GET /v1/videos/{id}` | `VideoResponse`. A failed job is **200** with `status:"failed"`, `error:{code:"generation_failed",message}`. A completed job's `url` is a signed download URL of the MP4 (1 h, re-signed on every retrieve; FastVideo always sends `null`); other statuses keep `url: null` |
 | `GET /v1/videos/{id}/content?variant=video` | File. Other variant → 400; failed → 422; not done → 404 `"Generation is still in-progress"` |
 | `DELETE /v1/videos/{id}` | `{id,deleted:true,object:"video.deleted"}`. A running job is **cancelled** through `CancelToken`. This is a deliberate improvement: FastVideo can't interrupt, and our observer can |
 | `GET /v1/models`, `/v1/models/{model}`, `GET /v1/model_info` | Cards `{id,object:"model",created,owned_by:"fastvideo",root}` for every `served_names` entry |
@@ -738,8 +738,27 @@ Configuring each client (fal §12):
 | `prompt_expansion_mode` (default `balanced`, all accepted) | `accepted_noop` | Output `expanded_prompt: null`. The schema allows null "when prompt expansion was disabled, left the prompt unchanged" (fal §3.4) |
 | `sync_mode: true` | `inline_data_uri` | `video.url = data:video/mp4;base64,…` (INFERRED, fal §14 #1) |
 
-Output: `{video:{url,content_type:"video/mp4",file_name:"<nanoid21>_<model-slug>.mp4",file_size}, expanded_prompt:null, timings:{inference:<denoise s>}}`,
-plus `seed` on r2v.
+Output: `{video:{url,content_type:"video/mp4",file_name:"<nanoid21>_<app-slug>.mp4",file_size}, expanded_prompt:null, seed, timings:{inference:<denoise s>}}`.
+`<app-slug>` is `minimax-<alias>` for the `minimax/*` apps, else the app
+alias, plus `-<tier>` when the resolved tier is not already a word of it
+(`minimax-h3-max`, `minimax-h3-turbo`, `ltx-2.5-turbo`, `wan-turbo`;
+`fastvideo_fal::output_file_name`). Hosted fal writes `minimax-h3` for
+every H3 app, which hides the tier.
+`seed` is the effective seed (the request's, or the one the server drew)
+on every task: fal's r2v schema requires it, and on t2v/i2v it is an extra
+key the clients ignore.
+
+`timings` is fal's `object<string, number>` (seconds). `inference` keeps
+fal's meaning, the denoise only (also the status `metrics.inference_time`).
+The other keys are our breakdown, which the schema allows and the clients
+pass through untouched:
+
+| Key | Carries |
+|---|---|
+| `inference` | Denoise wall time (fal: "the DiT denoising time") |
+| one key per engine stage (`text`, `refine`, `denoise`, `audio_decode`, `video_decode`, `encode`, as in `X-Stage-Durations`) | That stage. `text` includes the I2V multimodal text encoder, which `inference` does not show |
+| `queue` | Submit to engine start |
+| `total` | Engine start to completion; `total - inference` is the time outside the denoise |
 
 Status: `Queued` → `IN_QUEUE`, `Running` → `IN_PROGRESS`, and
 `Succeeded`/`Failed`/`Cancelled` → `COMPLETED`. Failed adds `error` and
@@ -835,7 +854,7 @@ Errors are `{"type":"error","error":{"type","message"}}`:
 | H3 2K, fal 1080P refine, Context-IR, regeneration | MiniMax, fal | 400/422 | none (permanent) |
 | H3-Max weights | MiniMax, fal | alias with a documented substitution | none |
 | H3 target/conditioning audio | fal `target_audio_url`, director `audio_url` | 422 / `prompt_rejected{invalid_audio}` | E10 |
-| H3 ref2va co-resident with fl2va | MiniMax/fal/FastVideo ref2v | 400 unless configured | E11 |
+| H3 ref2va co-resident with fl2va | MiniMax/fal/FastVideo ref2v | served by the Ref2VA companion models `h3-ref2v-max` / `h3-ref2v-turbo` (`route_task`); 400 when none is configured. Own process on 80-96 GB cards (`configs/serve/runpod-h3-ref2v.toml`); docs/ports/h3-ref2v.md | E11 |
 | LTX fps 25/48/50 | LTX, FastVideo | served (validated at 1080p, `artifacts/serve/e4-ltx-fps/benchmark.json`; engines without them in caps still 400) | E4 done |
 | LTX silent output | LTX `generate_audio:false` | supported (post `-an`); the engine can skip the audio decode (`Ltx2Request::skip_audio_decode`) | E4 done |
 | LTX-2.5 I2V | LTX `image_uri` on 2.5 | 400 | E5 |
@@ -1371,6 +1390,14 @@ are always open.
   - `fv-serve` loads every `resident` model before reporting ready:
     `/ping` is 204 until then, `/healthz` shows `{state:"loading",loaded:[…]}`,
     and Reactor `/start_session` answers 503 + `Retry-After: 1`.
+  - In `http` mode the port is bound **before** the app is built
+    (`app::serve_while_building`): while the encoder probe, the stores
+    (D1, R2) and the engine start, `/ping` answers 204, `/health` and
+    `/healthz` 503 `loading`, and every other route 503 + `Retry-After`;
+    no probe waits on startup or on the weights. (The WP-18 serverless
+    LB run saw `/ping` hang: part of that is the Runpod gateway holding
+    requests until a worker container runs, which the server cannot
+    change.)
   - Optional `warmup = true` runs one short generation per model and
     geometry, so first-request JIT and allocation costs are paid before
     ready.
@@ -1451,6 +1478,18 @@ worker that took the job sees it through. Tests:
 `multiworker::tests` (every route classified), `tests/e2e.rs`
 `multi_worker_*` (filtering; a job submitted on one worker polled to
 completion on another over the D1 mock).
+
+### 6.6 One gateway in front of per-family pools
+
+`[engine] backend = "remote"` turns fv-serve into the gateway: one URL and
+one API key for every API and model, in front of one worker pool per model
+family (Runpod serverless queue endpoints or pods), with all state in D1 and
+R2 so gateway replicas are interchangeable. Workers run
+`server.role = "worker"` (internal token, `/fv/v1/internal/*`). Design,
+configuration and the autoscaler interface: [`gateway.md`](gateway.md);
+configs `configs/serve/gateway.toml` and the `[gateway] pool` of each worker
+config; tests `crates/fastvideo-serve/tests/gateway.rs` and
+`FV_COMPAT_GATEWAY=1 tests/compat/run.sh`.
 
 ---
 
@@ -1644,7 +1683,13 @@ additions and readings; everything is re-exported from the crate root.
   Tested against a SQLite mock of the D1 HTTP API (`d1-mock` feature) and
   once live against `fv-jobs`.
 - Native `/fv/v1/jobs` (submit/list/get/content/delete) is the batch path
-  the binary's own e2e tests drive; `/fv/v1/streams` answers 501 until the
+  the binary's own e2e tests drive. The job object carries `protocol` and
+  `metrics` (`inference_s`, `stage_durations`, `peak_memory_mb`,
+  `build_rtf` from the engine's `Finished` event; `queue_s`, `run_s` from
+  the job timestamps). The list shows native jobs by default (ids resolve
+  per API, and `/fv/v1/jobs/{id}` takes native ids);
+  `?protocol=all` or `?protocol=<api>` lists the caller's jobs of every
+  API or one API, in the native shape. `/fv/v1/streams` answers 501 until the
   streaming packages land. `runpod-queue` mode and `engine.backend = cuda`
   are mount points that fail at startup until WP-16 / WP-11 land.
 - Adapters are features of `fastvideo-serve` (`openai-videos`, `minimax`,
@@ -1720,8 +1765,13 @@ additions and readings; everything is re-exported from the crate root.
   denoise); I2V 110-154 s wall (21.8 s denoise). The I2V gap is the FL2VA
   text stage: `encode_request_multimodal` streams the Qwen-VL encoder (vision
   tower + LM) from the weight volume on every request and ignores the
-  resident text encoder; T2V uses the resident one. A resident multimodal
-  path (mRoPE + deepstack on the resident encoder) is the follow-up.
+  resident text encoder; T2V uses the resident one. Fixed: the multimodal
+  path runs on the resident text encoder plus a resident vision tower
+  (1.1 GB; `[[models]] i2v_encoder = auto|resident|stream`). Streaming uses
+  the same precision, so both give identical bytes. With `warmup = true`,
+  one I2V and one T2V job run before readiness. I2V is now 16.4 s wall at
+  480P and 33.1 s at 768P, and the first job equals a warm one
+  (docs/serve/e2e/i2v-resident.md).
 - The H3 profiles ask for MXFP8, which cuBLASLt runs only on sm_100+. On
   Hopper every H3 job failed (`h3-max`: "no MXFP8 ... algorithm on sm90";
   `h3-turbo`: the same, masked by the zero-padded retry refusing layers with a
@@ -1933,7 +1983,7 @@ additions and readings; everything is re-exported from the crate root.
 | **E5 LTX-2.5 I2V** | `ltx2/{i2v_encode.rs,pipeline.rs}`, the preset entry in `crates/fastvideo-core/src/registry.rs` | E4 → E5 | First-frame I2V on the 2.5 distilled two-stage; CLIP frame-0 similarity ≥ the 2.3 baseline; caps add `I2V` |
 | **E9 LTX last-frame keyframes** | `ltx2/pipeline.rs` | E5 → E9 | `last_frame_uri` interpolation; `Keyframes` in caps |
 | **E10 H3 target-audio conditioning** | `h3/{pipeline.rs,audio_vae.rs}` | after E2 | Research first: upstream FL2VA target-audio semantics. Then `target_audio_url` and director `audio_url` support |
-| **E11 H3 fl2va + ref2va co-residency** | `h3/pipeline.rs` (load options) | after E10 | Both DiTs served by one process within the memory budget, or a documented swap cost; caps advertise `Ref2V` |
+| **E11 H3 fl2va + ref2va co-residency** | `h3/pipeline.rs` (load options) | after E10 | Both DiTs served by one process within the memory budget, or a documented swap cost; caps advertise `Ref2V`. **Built**: catalog `h3-ref2v-max` (base, 49 forwards) and `h3-ref2v-turbo` (Sol-H3 Ref2VA, 4 forwards), weights `h3-ref2va` on both volumes; docs/ports/h3-ref2v.md |
 | **S1 (stretch) MiniMax V1 shape** | `crates/fastvideo-minimax/src/v1.rs` | after WP-07 | Only if a real client needs H3 over V1 |
 
 Critical path: `WP-00 → WP-01 → WP-02 → WP-05 → WP-09 → (E1 → E2) → WP-12 → WP-14 → WP-18`.
@@ -1957,6 +2007,18 @@ Critical path: `WP-00 → WP-01 → WP-02 → WP-05 → WP-09 → (E1 → E2) �
 | `/fv/v1/*` | serve (native) | Includes `POST/GET /fv/v1/admin/keys`, `DELETE /fv/v1/admin/keys/{id}` (serve-kit `keys::admin_routes`, admin token; WP-20) |
 | `GET /fal/schema`, `GET /fal/schema/{owner}/{alias}/{sub}` | fal | Catalog of configured apps and each endpoint's input JSON Schema (native, for the console; WP-20) |
 | `GET /console`, `/console/admin`, `/console/models/{owner}/{alias}/{task}`, `/console/assets/{file}` | serve (console) | Embedded static pages, [`console.md`](console.md); off with `FV_CONSOLE=0` |
+| `GET /fv/v1/gateway/pools` | serve (gateway) | Per-pool metrics for the autoscaler (admin token); gateway mode only ([`gateway.md`](gateway.md) §7) |
+| `POST /fv/v1/internal/jobs`, `GET`/`DELETE /fv/v1/internal/jobs/{id}`, `GET /fv/v1/internal/status` | serve (worker role) | Gateway → worker dispatch, cancel and probes; internal token only ([`gateway.md`](gateway.md) §3) |
+
+**CORS.** One layer outside every route (`app::cors_layer`) answers
+preflights (`OPTIONS` with `Access-Control-Request-Method`) for any path,
+mirrors the requested method and headers (so `Authorization`, which a `*`
+allow-list never covers, and `Content-Type` pass), and exposes the `X-*`
+metric headers. Origins come from `server.cors_origins` /
+`FV_CORS_ORIGINS`: `*` by default, as fal's own endpoints (a page on
+another origin can `POST /storage/upload/initiate` and `PUT
+/uploads/{token}`), a list of exact origins, or `none`. Credentials are
+never allowed; the APIs authenticate with headers.
 
 ---
 

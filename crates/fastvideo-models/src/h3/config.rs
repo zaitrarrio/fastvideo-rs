@@ -693,10 +693,28 @@ impl H3InferenceContract {
         }
     }
 
+    /// The base MiniMax-H3 checkpoint as MiniMax, diffusers and FastVideo run
+    /// it (`basic_minimax_h3_ref2va.py --steps 50`, guidance 1.0): a uniform
+    /// `points`-point grid (`points - 1` forwards) with the base shifts
+    /// 12 / 3, dense attention, no adapter and no Sol route. `base` is the
+    /// published 50-point grid (the Ref2VA max tier); `base-<N>step` takes
+    /// N forwards on the same kind of grid (parity runs; FastVideo's
+    /// `--steps N+1`).
+    pub fn base(points: usize) -> Self {
+        Self {
+            num_inference_steps: points,
+            transformer_forwards: points - 1,
+            ..Self::sol_h3_rtx()
+        }
+    }
+
     /// Named recipe: `8step` / `v2`, `4step-vsa` / `preview-vsa`,
     /// `4step-dense` / `preview-dense`, `sol-h3` (and `sol-h3-ref2va`),
-    /// `sol-h3-spark`, `sol-h3-rtx`.
+    /// `sol-h3-spark`, `sol-h3-rtx`, `base`, `base-<N>step`.
     pub fn named(name: &str) -> Result<Self, String> {
+        if let Some(n) = base_recipe_forwards(name) {
+            return Ok(Self::base(n + 1));
+        }
         match name {
             "8step" | "v2" | "fasth3-8step" => Ok(Self::fasth3_8step()),
             "4step-vsa" | "preview-vsa" | "fasth3-4step-vsa" => {
@@ -710,10 +728,20 @@ impl H3InferenceContract {
             "sol-h3" | "sol_h3" | "sol-h3-t2v" | "sol-h3-i2v" | "sol-h3-ref2va"
             | "sol_h3_ref2va" => Ok(Self::sol_h3()),
             other => Err(format!(
-                "unknown H3 recipe '{other}' (8step|4step-vsa|4step-dense|sol-h3|sol-h3-spark|sol-h3-rtx)"
+                "unknown H3 recipe '{other}' (8step|4step-vsa|4step-dense|sol-h3|sol-h3-spark|sol-h3-rtx|base|base-<N>step)"
             )),
         }
     }
+}
+
+/// Forwards of a `base` / `base-<N>step` recipe name (`base` = 49, the
+/// published 50-point grid); `None` for any other name.
+pub fn base_recipe_forwards(name: &str) -> Option<usize> {
+    if name == "base" {
+        return Some(49);
+    }
+    let n: usize = name.strip_prefix("base-")?.strip_suffix("step")?.parse().ok()?;
+    (1..=99).contains(&n).then_some(n)
 }
 
 // ---- request geometry (`packing.py`) ---------------------------------------
@@ -972,6 +1000,21 @@ impl H3Geometry {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn base_recipes_are_the_uniform_grid_without_an_adapter() {
+        let base = H3InferenceContract::named("base").unwrap();
+        assert_eq!((base.num_inference_steps, base.transformer_forwards), (50, 49));
+        assert_eq!((base.video_scheduler_shift, base.audio_scheduler_shift), (12.0, 3.0));
+        assert!(base.dense && base.vsa_sparsity == 0.0 && base.guidance_scale == 1.0);
+        assert_eq!(base.sigma_source, H3SigmaSource::Uniform);
+        let four = H3InferenceContract::named("base-4step").unwrap();
+        assert_eq!((four.num_inference_steps, four.transformer_forwards), (5, 4));
+        assert_eq!(base_recipe_forwards("base-0step"), None);
+        assert_eq!(base_recipe_forwards("base-x"), None);
+        assert_eq!(base_recipe_forwards("sol-h3"), None);
+        assert!(!crate::h3::lora::is_sol_h3_recipe("base"));
+    }
 
     #[test]
     fn explicit_canvases_are_checked_and_snapped() {

@@ -48,7 +48,7 @@ log() { printf '[%s] oracle: %s\n' "$(date -u +%H:%M:%S)" "$*" | tee -a "$logs/o
 fv=() ltx=()
 for t in $targets; do
   case "$t" in
-    fasth3-* | sfwan13) fv+=("$t") ;;
+    fasth3-* | sfwan13 | h3-ref2va-*) fv+=("$t") ;;
     ltx25-*) ltx+=("$t") ;;
     *) log "unknown target $t"; exit 2 ;;
   esac
@@ -120,6 +120,28 @@ for image in "${!bg[@]}"; do
 done
 [[ -n "$targets" ]] || { log "no upstream pod came up"; exit 1; }
 
+# ORACLE_WAIT_FIRST=1: start the runtime pod only once the first target's dump
+# is served (saves the runtime pod's idle hour while the references rebuild
+# their weight packs and run).
+if [[ "${ORACLE_WAIT_FIRST:-0}" == 1 ]]; then
+  first="${targets%% *}"
+  log "waiting for oracle-$first before the runtime pod"
+  t0=$(date +%s)
+  served() {
+    local u
+    for u in $urls; do
+      curl -sS --max-time 30 --fail -o /dev/null "$u/oracle-$first/ORACLE_DONE" 2>/dev/null && return 0
+    done
+    return 1
+  }
+  until served; do
+    if (( $(date +%s) - t0 >= ${FV_ORACLE_WAIT_S:-10800} )); then log "oracle-$first never finished"; exit 1; fi
+    alive=0
+    for image in "${!bg[@]}"; do kill -0 "${bg[$image]}" 2>/dev/null && alive=1; done
+    (( alive )) || { log "upstream drivers exited before oracle-$first"; exit 1; }
+    sleep 30
+  done
+fi
 log "runtime pod: targets $targets"
 rc=0
 FV_FAMILY="${FV_ORACLE_FAMILY:-oracle}" FV_EXTRA_ENV="FV_ORACLE_URL='$urls' FV_ORACLE_TARGETS='$targets' FASTVIDEO_DUMP_OPS=$ops${FV_ORACLE_F32:+ FV_ORACLE_F32=$FV_ORACLE_F32}${FV_ORACLE_OWN_TEXT:+ FV_ORACLE_OWN_TEXT=$FV_ORACLE_OWN_TEXT}" \

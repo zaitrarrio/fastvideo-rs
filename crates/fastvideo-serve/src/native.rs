@@ -5,13 +5,21 @@
 //! |---|---|
 //! | `GET /fv/v1/capabilities` | Models (caps, recipe, tier), tier bindings and aliases: what every public id maps to (risk R10) |
 //! | `POST /fv/v1/jobs` | Submit `{model, prompt, ...}` → 202 job object |
-//! | `GET /fv/v1/jobs` | Caller's jobs, newest first (`status`, `model`, `limit`, `after`, `order`) |
-//! | `GET /fv/v1/jobs/{id}` | Job object |
+//! | `GET /fv/v1/jobs` | Caller's jobs, newest first (`status`, `model`, `limit`, `after`, `order`, `protocol`) |
+//! | `GET /fv/v1/jobs/{id}` | Job object (with `protocol` and `metrics`: stage timings from the engine) |
 //! | `GET /fv/v1/jobs/{id}/content` | 302 to the signed output URL; 409 until done |
 //! | `DELETE /fv/v1/jobs/{id}` | Cancels an unfinished job, deletes a finished one |
 //! | `/fv/v1/streams*` | Native WHIP streams: [`crate::streams`] (WP-15), mounted by `app::assemble` |
 //!
 //! Auth: `Authorization: Bearer <key>` (serve-kit `ProtocolId::Native`).
+//!
+//! **List scope.** `GET /fv/v1/jobs` lists native jobs by default, because
+//! a job's `id` is its API's own id and `/fv/v1/jobs/{id}` resolves native
+//! ids only. `?protocol=all` lists the caller's jobs from every API (fal,
+//! `/v1/videos`, MiniMax, LTX, …) in the native shape, with `protocol`
+//! naming the API that owns each `id` (fetch or cancel it there);
+//! `?protocol=<name>` lists one API. Owner scoping is unchanged: with keys,
+//! a caller lists only the jobs its key created.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -93,6 +101,9 @@ pub struct NativeBody {
     /// First-frame image (https URL or data URI): image-to-video.
     #[serde(default)]
     pub image_url: Option<String>,
+    /// Last-frame image: keyframes (with or without `image_url`).
+    #[serde(default)]
+    pub last_image_url: Option<String>,
 }
 
 fn media(s: &str, field: &str) -> Result<MediaRef, ApiError> {
@@ -157,6 +168,10 @@ impl SubmitEndpoint for NativeSubmit {
             r.task = Task::I2V;
             r.keyframes.push(Keyframe { at: fastvideo_protocol::Anchor::First, image: media(&u, "image_url")? });
         }
+        if let Some(u) = b.last_image_url {
+            r.task = Task::Keyframes;
+            r.keyframes.push(Keyframe { at: fastvideo_protocol::Anchor::Last, image: media(&u, "last_image_url")? });
+        }
         Ok(r)
     }
 
@@ -202,7 +217,43 @@ pub fn job_json(job: &Job, cx: &ViewCtx) -> Value {
         "expires_at": rfc(job.expires_at),
         "error": error,
         "output": output,
+        "protocol": job.protocol.as_str(),
+        "metrics": metrics_json(job),
     })
+}
+
+/// The job's measurements: the engine's `Finished` event metrics
+/// (`inference_s` = denoise, `stage_durations` = per-stage seconds as in
+/// FastVideo `X-Stage-Durations` and fal `timings`, `peak_memory_mb`,
+/// `build_rtf`), plus `queue_s` (created → started) and `run_s` (started →
+/// completed) from the job's own timestamps. Unmeasured values are `null`
+/// (the stages stay `{}` until the job finishes).
+pub fn metrics_json(job: &Job) -> Value {
+    let secs = |d: time::Duration| d.as_seconds_f64().max(0.0);
+    let m = &job.metrics;
+    json!({
+        "inference_s": m.inference_s,
+        "stage_durations": m.stage_durations,
+        "peak_memory_mb": m.peak_memory_mb,
+        "build_rtf": m.build_rtf,
+        "queue_s": job.started_at.map(|s| secs(s - job.created_at)),
+        "run_s": job.started_at.zip(job.completed_at).map(|(s, e)| secs(e - s)),
+    })
+}
+
+/// `?protocol=` of `GET /fv/v1/jobs`: `native` (default), `all`, or one
+/// API's name (`fal`, `openai_videos`, `minimax_v2`, `ltx_v1`, `ltx_v2`,
+/// `fastwan`, …). `None` is every API.
+fn protocol_filter(p: Option<&str>) -> Result<Option<ProtocolId>, ApiError> {
+    match p.map(str::trim) {
+        None | Some("") | Some("native") => Ok(Some(ProtocolId::Native)),
+        Some("all") => Ok(None),
+        Some(name) => ProtocolId::ALL
+            .iter()
+            .find(|p| p.as_str() == name)
+            .map(|p| Some(*p))
+            .ok_or_else(|| ApiError::invalid_param("protocol", format!("unknown protocol `{name}` (native, all, or an API name)"))),
+    }
 }
 
 /// Status and content views.
@@ -235,6 +286,7 @@ struct ListParams {
     limit: Option<usize>,
     after: Option<String>,
     order: Option<String>,
+    protocol: Option<String>,
 }
 
 fn reply_err(e: ApiError) -> Response {
@@ -248,9 +300,13 @@ async fn list(State(ctx): State<ServeCtx>, headers: HeaderMap, Query(p): Query<L
         Ok(o) => o,
         Err(e) => return reply_err(e),
     };
+    let protocol = match protocol_filter(p.protocol.as_deref()) {
+        Ok(p) => p,
+        Err(e) => return reply_err(e),
+    };
     let mut q = ListQuery {
         owner,
-        protocol: Some(ProtocolId::Native),
+        protocol,
         model: p.model,
         after: p.after,
         limit: p.limit.unwrap_or(20).clamp(1, 100),
@@ -323,22 +379,30 @@ fn capabilities(gate: &ServiceGate) -> Value {
     })
 }
 
+/// The `/fv/v1/capabilities` body.
+pub type CapsFn = Arc<dyn Fn() -> Value + Send + Sync>;
+
 /// The native routes.
 pub fn routes(gate: Arc<ServiceGate>, body_max: usize, sync_timeout: Duration) -> Router<ServeCtx> {
     let _ = sync_timeout;
+    routes_with(Arc::new(move || capabilities(&gate)), body_max)
+}
+
+/// The native routes with `/fv/v1/capabilities` from `caps` (the gateway
+/// aggregates its pools, docs/serve/gateway.md §4).
+pub fn routes_with(caps: CapsFn, body_max: usize) -> Router<ServeCtx> {
     let proto = Arc::new(Native);
     let view = Arc::new(NativeView);
     let mut opts = SubmitOpts::new(IngestPolicy::default());
     opts.body_max = body_max;
-    let cap_gate = gate.clone();
     Router::new()
         .route(
             "/fv/v1/capabilities",
             get(move |State(ctx): State<ServeCtx>, headers: HeaderMap| {
-                let g = cap_gate.clone();
+                let caps = caps.clone();
                 async move {
                     match ctx.auth().authenticate(ProtocolId::Native, &headers) {
-                        Ok(_) => Json(capabilities(&g)).into_response(),
+                        Ok(_) => Json(caps()).into_response(),
                         Err(e) => reply_err(e),
                     }
                 }

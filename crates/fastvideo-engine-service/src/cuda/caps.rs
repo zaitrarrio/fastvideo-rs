@@ -18,9 +18,11 @@
 //! | `ltx-pro` | `ltx25-distill-dense` | LTX-2.5 22B distilled two-stage (8 + 3), dense stage 2, conv VAE | `ltx2/ltx25_distill_dense` | Only LTX-2.5 generation path; dense (non-lossy) stage 2, full VAE |
 //! | `ltx-turbo` | `ltx25-distill-sol` | LTX-2.5 distilled two-stage, Sol stage 2 | `ltx2/ltx25_distill_sol` | The reference single-GPU route; passes the gate |
 //! | `ltx-draft` | `ltx25-distill-sol-nvfp4-taehv` | + NVFP4 video FFN + TAEHV (`taeltx2_3_wide`) decode | `ltx2/ltx25_distill_sol_nvfp4` | Faster, fails sharpness at 4K (draft) |
-//! | `wan-max` | `wan22-ti2v-5b` | Wan2.2 TI2V-5B, 50 UniPC steps, CFG 5, shift 5, full Wan 2.2 VAE, 704x1280x121 @ 24 fps | none | The checkpoint's recommended recipe |
-//! | `wan-turbo` | `fastwan21-1.3b` | FastWan2.1 1.3B DMD 3-step (1000/757/522), VSA, full Wan VAE, 480x832x81 @ 16 fps | none (`FASTVIDEO_VSA=1`) | The published FastWan recipe |
-//! | `wan-draft` | `fastwan21-1.3b-taehv` | the turbo recipe decoded by TAEHV (`taew2_1`) | none (`FASTVIDEO_VSA=1`) | Tiny decoder: faster, lossy (draft) |
+//! | `wan-max` | `wan22-ti2v-5b` | Wan2.2 TI2V-5B, 50 UniPC steps, CFG 5, shift 5, full Wan 2.2 VAE, 704x1280x121 @ 24 fps (short edges 704, 576, 480; up to 161 frames) | none | The checkpoint's recommended recipe |
+//! | `wan-turbo` | `fastwan22-ti2v-5b` | FastWan2.2 TI2V-5B (FullAttn) DMD 3-step (1000/757/522), shift 5, full Wan 2.2 VAE, 704x1280x121 @ 24 fps, same canvas and frames as `wan-max` | none | fal's `fal-ai/wan/v2.2-5b/text-to-video/fast-wan` model (docs/serve/fal-parity.md §3) |
+//! | `wan-draft` | `fastwan22-ti2v-5b-taehv` | the turbo recipe decoded by TAEHV (`taew2_2`) | none | Tiny decoder: faster, lossy (draft) |
+//! | — | `fastwan21-1.3b` | FastWan2.1 1.3B DMD 3-step (1000/757/522), VSA, full Wan VAE, 480x832x81 @ 16 fps | none (`FASTVIDEO_VSA=1`) | untiered (was `wan-turbo`): the published FastWan 1.3B recipe |
+//! | — | `fastwan21-1.3b-taehv` | the 1.3B recipe decoded by TAEHV (`taew2_1`) | none (`FASTVIDEO_VSA=1`) | untiered (was `wan-draft`) |
 //! | — | `sfwan21-1.3b` | SF-Wan 1.3B causal, 4 Self-Forcing steps, shift 5, TAEHV per block | none | Causal streaming (`StreamCaps::Causal`) |
 //!
 //! # Process settings
@@ -110,6 +112,27 @@ pub struct H3Recipe {
     /// `auto` | `resident` | `streamed` (None: env / auto).
     pub dit_offload: Option<String>,
     pub steps: u32,
+    /// Ref2VA: the model loads `transformer_ref/` and serves reference-to-
+    /// video only (a Ref2VA pipeline refuses requests without references).
+    #[serde(default)]
+    pub ref2va: bool,
+    /// Root of `transformer_ref/` and the Ref2VA turbo adapter when not
+    /// `weights` (the `h3-ref2va` tree beside `h3-base`).
+    #[serde(default)]
+    pub ref_weights: Option<PathBuf>,
+    /// Where the image-to-video multimodal text encoder lives: `auto`
+    /// (resident when the text encoder is and the vision tower fits),
+    /// `resident`, or `stream` (read from the volume per request).
+    #[serde(default = "auto_str")]
+    pub i2v_encoder: String,
+    /// Run one text-to-video and one image-to-video generation at the default
+    /// canvas after the load, before the model is reported ready.
+    #[serde(default)]
+    pub warmup: bool,
+}
+
+fn auto_str() -> String {
+    "auto".to_owned()
 }
 
 /// LTX-2 checkpoint line.
@@ -321,6 +344,9 @@ impl CudaModel {
         let dir = match &self.recipe {
             CudaRecipe::Ltx2(r) if r.dit.is_file() => return r.dit.metadata().ok().map(|m| m.len()),
             CudaRecipe::Ltx2(r) => r.dit.join("transformer"),
+            CudaRecipe::H3(r) if r.ref2va => {
+                r.ref_weights.as_deref().unwrap_or(&r.weights).join("transformer_ref")
+            }
             _ => self.weights().join("transformer"),
         };
         let total: u64 = std::fs::read_dir(&dir)
@@ -352,7 +378,7 @@ impl CudaModel {
         let (steps, attention, vae, summary) = match &self.recipe {
             CudaRecipe::H3(r) => (
                 r.steps,
-                if r.dense {
+                if r.dense || r.ref2va {
                     "dense".to_owned()
                 } else if self.recipe_name.starts_with("sol-h3") {
                     "sol-engine-tau-ladder".to_owned()
@@ -361,6 +387,15 @@ impl CudaModel {
                 },
                 if r.taeh3.is_some() { "taeh3" } else { "full" }.to_owned(),
                 match self.tier {
+                    _ if r.ref2va && r.recipe == "base" => "H3 reference-to-video, highest quality: \
+                        the base Ref2VA DiT (transformer_ref), 49 forwards on the 50-point grid, dense \
+                        attention, official VAE (the upstream default)"
+                        .to_owned(),
+                    _ if r.ref2va => format!(
+                        "H3 reference-to-video, fast: the Ref2VA DiT with the lightx2v turbo LoRA fused \
+                         (Sol-H3 Ref2VA route), {} forwards, dense attention, official VAE",
+                        r.steps
+                    ),
                     _ if self.recipe_name.starts_with("fasth3-8step") => "FastH3 8-step DMD, dense \
                                         attention (no compression gate), official VAE"
                         .to_owned(),
@@ -448,11 +483,23 @@ impl CudaModel {
     }
 }
 
+/// Frame ceiling of the Wan 5B recipes (fal's `num_frames` 17..=161).
+pub const WAN5B_FRAMES_MAX: u32 = 161;
+/// Container frame rates a Wan clip may be muxed at (fal's
+/// `frames_per_second` 4..=60): the frames do not depend on it.
+pub const WAN_FPS_MIN: u32 = 4;
+pub const WAN_FPS_MAX: u32 = 60;
+
 /// The LTX draft profile (NVFP4 video FFN).
 pub const LTX_DRAFT_PROFILE: &str = "ltx2/ltx25_distill_sol_nvfp4";
 
 fn h3_caps(id: &str, r: &H3Recipe) -> ModelCaps {
-    let mut c = ModelCaps::h3(id, false);
+    let mut c = ModelCaps::h3(id, r.ref2va);
+    if r.ref2va {
+        // `transformer_ref/` serves references only: the pipeline refuses a
+        // request without them, and FL2VA keyframes need `transformer/`.
+        c.tasks = [Task::Ref2V].into_iter().collect();
+    }
     let base = CanvasCaps {
         short_edges: vec![
             h3cfg::H3_SHORT_EDGE as u32,
@@ -482,7 +529,12 @@ fn ltx2_caps(id: &str, r: &Ltx2Recipe) -> ModelCaps {
         id: ModelId::new(id),
         family: Family::Ltx2,
         served_names: vec![id.to_owned()],
-        tasks: [Task::T2V].into_iter().collect(),
+        // E5 / E9: first-frame image and last-frame keyframe conditioning on
+        // the 2.5 distilled pipeline (`ltx2::i2v_encode`, oracle-checked on 2.5).
+        tasks: match r.version {
+            LtxVersion::V25 => [Task::T2V, Task::I2V, Task::Keyframes].into_iter().collect(),
+            LtxVersion::V23 => [Task::T2V].into_iter().collect(),
+        },
         audio: Some(AudioCaps {
             native_rate: cfg.vocoder.output_sampling_rate as u32,
             channels: cfg.vocoder.out_channels as u8,
@@ -546,8 +598,9 @@ fn wan_caps(id: &str, r: &WanRecipe) -> ModelCaps {
         // The frames do not depend on the fps: the backend muxes the MP4 at
         // the job's fps (FastWan clients send 24 for a 16 fps model), so both
         // container rates are accepted; the model's own rate is the default.
+        // Any integer rate 4..=60 (fal's `frames_per_second`), the model's first.
         fps: FpsCaps {
-            allowed: if fps == 16 { vec![16, 24] } else { vec![fps, 16] },
+            allowed: std::iter::once(fps).chain((WAN_FPS_MIN..=WAN_FPS_MAX).filter(|&f| f != fps)).collect(),
             default: fps,
             container_only: true,
         },
@@ -614,6 +667,10 @@ fn h3(
         adaln_cache: None,
         dit_offload: None,
         steps,
+        ref2va: false,
+        ref_weights: None,
+        i2v_encoder: auto_str(),
+        warmup: false,
     }
 }
 
@@ -675,6 +732,16 @@ pub fn catalog(layout: &WeightLayout) -> Vec<CudaModel> {
         ..h3_turbo.clone()
     };
     let sol_h3 = h3(layout, "h3-base", "sol-h3", Some(SOL_H3_4STEP_PROFILE), 4);
+    // Ref2VA (docs/ports/h3-ref2v.md): `transformer_ref/` and the turbo LoRA
+    // live in `h3-ref2va`; the text encoder and both VAEs come from `h3-base`.
+    let h3_ref = |recipe: &str, profile: &str, steps: u32| H3Recipe {
+        dense: true,
+        ref2va: true,
+        ref_weights: Some(layout.at("h3-ref2va")),
+        ..h3(layout, "h3-base", recipe, Some(profile), steps)
+    };
+    let h3_ref_max = h3_ref("base", "h3/h3_ref2va_base", 49);
+    let h3_ref_turbo = h3_ref("sol-h3-ref2va", "h3/sol_h3_ref2va", 4);
     let ltx_draft = Ltx2Recipe {
         tae: Some(tae("taeltx2_3_wide.safetensors")),
         ..ltx25(layout, LtxStage2::Sol, LTX_DRAFT_PROFILE)
@@ -691,12 +758,23 @@ pub fn catalog(layout: &WeightLayout) -> Vec<CudaModel> {
         decoder: WanDecoder::Full,
         default: (1280, 704, 121, 24),
         max_area: 1280 * 704,
-        short_edges: vec![704, 480],
+        // fal's 720p, 580p and 480p (docs/serve/fal-parity.md §3).
+        short_edges: vec![704, 576, 480],
         multiple: 32,
-        frames_max: 121,
+        frames_max: WAN5B_FRAMES_MAX,
         i2v: true,
         negative: WAN_NEGATIVE_CN.to_owned(),
         tae_dir: None,
+    };
+    // FastWan2.2 TI2V-5B (FullAttn): the TI2V-5B network DMD-distilled to 3
+    // steps (1000/757/522), shift 5, full attention; trained at 704x1280x121.
+    let fastwan22 = |decoder: WanDecoder| WanRecipe {
+        preset: "fast_wan_2_2_ti2v_5b".to_owned(),
+        weights: layout.at("fastwan22-ti2v-5b"),
+        sampler: WanSampler::Dmd { steps: 3 },
+        decoder,
+        tae_dir: Some(layout.tae_dir.clone()),
+        ..wan_max.clone()
     };
     let sfwan = SfWanRecipe {
         wan: WanRecipe {
@@ -741,6 +819,20 @@ pub fn catalog(layout: &WeightLayout) -> Vec<CudaModel> {
             "fasth3-8step-dense",
             CudaRecipe::H3(h3_8step),
         ),
+        // Reference-to-video companions of the H3 max / turbo tiers: the
+        // routing sends Ref2V requests for `h3-max` / `h3-turbo` here.
+        CudaModel::new(
+            "h3-ref2v-max",
+            Some(Tier::Max),
+            "h3-ref2va-base-49step",
+            CudaRecipe::H3(h3_ref_max),
+        ),
+        CudaModel::new(
+            "h3-ref2v-turbo",
+            Some(Tier::Turbo),
+            "sol-h3-ref2va",
+            CudaRecipe::H3(h3_ref_turbo),
+        ),
         CudaModel::new(
             "ltx25-distill-dense",
             Some(Tier::Max),
@@ -763,18 +855,31 @@ pub fn catalog(layout: &WeightLayout) -> Vec<CudaModel> {
             "wan22-ti2v-5b",
             Some(Tier::Max),
             "wan22-ti2v-5b-unipc50",
-            CudaRecipe::Wan(wan_max),
+            CudaRecipe::Wan(wan_max.clone()),
+        ),
+        CudaModel::new(
+            "fastwan22-ti2v-5b",
+            Some(Tier::Turbo),
+            "fastwan22-ti2v-5b-dmd3",
+            CudaRecipe::Wan(fastwan22(WanDecoder::Full)),
+        )
+        .with_served_names(&["FastVideo/FastWan2.2-TI2V-5B-FullAttn-Diffusers"]),
+        CudaModel::new(
+            "fastwan22-ti2v-5b-taehv",
+            Some(Tier::Draft),
+            "fastwan22-ti2v-5b-dmd3-taehv",
+            CudaRecipe::Wan(fastwan22(WanDecoder::Taehv)),
         ),
         CudaModel::new(
             "fastwan21-1.3b",
-            Some(Tier::Turbo),
+            None,
             "fastwan21-1.3b-dmd3-vsa",
             CudaRecipe::Wan(fastwan(layout, WanDecoder::Full)),
         )
         .with_served_names(&["FastVideo/FastWan2.1-T2V-1.3B-Diffusers"]),
         CudaModel::new(
             "fastwan21-1.3b-taehv",
-            Some(Tier::Draft),
+            None,
             "fastwan21-1.3b-dmd3-vsa-taehv",
             CudaRecipe::Wan(fastwan(layout, WanDecoder::Taehv)),
         ),
@@ -814,8 +919,9 @@ pub struct ModelEntryCfg {
     pub weights: Option<PathBuf>,
     pub resident: bool,
     pub served_names: Vec<String>,
-    /// Optional per-model settings: `text_encoder` (H3), `text` (LTX),
-    /// `adaln_cache` (H3), `taeh3` / `tae` (tiny decoders).
+    /// Optional per-model settings: `text_encoder`, `i2v_encoder`, `warmup`
+    /// (H3), `text` (LTX), `adaln_cache` (H3), `taeh3` / `tae` (tiny
+    /// decoders).
     pub extra: BTreeMap<String, String>,
 }
 
@@ -874,6 +980,27 @@ pub fn model_from_config(layout: &WeightLayout, e: &ModelEntryCfg) -> Result<Cud
             }
             if let Some(t) = x("text_weights") {
                 r.text_weights = Some(t.into());
+            }
+            if let Some(t) = x("ref_weights").filter(|_| r.ref2va) {
+                r.ref_weights = Some(t.into());
+            }
+            if let Some(t) = x("i2v_encoder") {
+                r.i2v_encoder = t;
+            }
+            if let Some(w) = x("warmup") {
+                r.warmup = match w.as_str() {
+                    "true" => true,
+                    "false" => false,
+                    other => {
+                        return Err(format!("model `{}`: warmup = {other:?} (true | false)", e.id))
+                    }
+                };
+            }
+            if r.ref2va && r.warmup {
+                return Err(format!(
+                    "model `{}`: warmup runs text- and image-to-video; a Ref2VA model serves references only",
+                    e.id
+                ));
             }
         }
         CudaRecipe::Ltx2(r) => {
@@ -1015,8 +1142,8 @@ mod tests {
             ("ltx-turbo", "ltx25-distill-sol"),
             ("ltx-draft", "ltx25-distill-sol-nvfp4-taehv"),
             ("wan-max", "wan22-ti2v-5b"),
-            ("wan-turbo", "fastwan21-1.3b"),
-            ("wan-draft", "fastwan21-1.3b-taehv"),
+            ("wan-turbo", "fastwan22-ti2v-5b"),
+            ("wan-draft", "fastwan22-ti2v-5b-taehv"),
         ];
         for (alias, id) in want {
             assert_eq!(t.resolve(alias).map(|c| c.id.as_str()), Some(id), "{alias}");
@@ -1153,6 +1280,26 @@ mod tests {
         assert!(ti2v.supports(Task::I2V));
         assert!(ti2v.knobs.guidance && ti2v.knobs.negative && !ti2v.knobs.guidance_2);
         assert_eq!(ti2v.fps.default, 24);
+        // fal's Wan 5B: 720p/580p/480p, 17..=161 frames, 4..=60 fps (container).
+        for id in ["wan22-ti2v-5b", "fastwan22-ti2v-5b", "fastwan22-ti2v-5b-taehv"] {
+            let c = get(id);
+            assert_eq!(c.canvas.short_edges, vec![704, 576, 480], "{id}");
+            assert_eq!((c.frames.min, c.frames.max, c.frames.default), (9, 161, 121), "{id}");
+            assert!(c.frames.contains(17) && c.frames.contains(161));
+            assert!((4..=60).all(|f| c.fps.allows(f)) && !c.fps.allows(3) && !c.fps.allows(61), "{id}");
+            assert!(c.supports(Task::I2V), "{id}");
+            let mut req = fastvideo_protocol::GenerationRequest::text(fastvideo_protocol::ProtocolId::Fal, id, "a cat");
+            req.canvas = fastvideo_protocol::CanvasSpec::Aspect { ratio: fastvideo_protocol::Ratio::R16_9, short_edge: 576 };
+            req.timing = fastvideo_protocol::TimingSpec {
+                length: fastvideo_protocol::Length::Frames { value: 161, snap: fastvideo_protocol::Snap::AlignUp },
+                fps: Some(60),
+            };
+            let r = fastvideo_protocol::negotiate(&req, &c, &Default::default()).unwrap();
+            assert_eq!((r.width, r.height, r.num_frames, r.fps), (1024, 576, 161, 60), "{id}");
+        }
+        let fw = get("fastwan22-ti2v-5b");
+        assert!(!fw.knobs.negative && !fw.knobs.guidance && fw.knobs.steps && fw.knobs.flow_shift);
+        assert_eq!(fw.tier, Some(Tier::Turbo));
         let sf = get("sfwan21-1.3b");
         assert_eq!(
             sf.stream,
@@ -1169,12 +1316,67 @@ mod tests {
         let cat = catalog(&WeightLayout::default());
         for m in &cat {
             let caps = m.caps();
-            let req = GenerationRequest::text(ProtocolId::Native, m.id.as_str(), "a cat");
-            let staged = StagedInputs::default();
+            let mut req = GenerationRequest::text(ProtocolId::Native, m.id.as_str(), "a cat");
+            let mut staged = StagedInputs::default();
+            if !caps.supports(Task::T2V) {
+                // Ref2VA models serve reference-to-video only.
+                assert_eq!(caps.tasks.iter().copied().collect::<Vec<_>>(), vec![Task::Ref2V]);
+                req.task = Task::Ref2V;
+                req.references = vec![Reference {
+                    kind: MediaKind::Image,
+                    media: MediaRef::parse("https://e.x/r.png", "references").unwrap(),
+                }];
+                staged.references = vec![(
+                    MediaKind::Image,
+                    StagedMedia {
+                        path: "/stage/r.png".into(),
+                        mime: "image/png".into(),
+                        bytes: 1,
+                        probe: MediaProbe { width: Some(1024), height: Some(1024), ..Default::default() },
+                    },
+                )];
+            }
             let r = negotiate(&req, &caps, &staged).unwrap_or_else(|e| panic!("{}: {e:?}", m.id));
             assert_eq!(r.num_frames, caps.frames.default, "{}", m.id);
             assert_eq!(r.recipe.as_deref(), Some(m.recipe_name.as_str()));
         }
+    }
+
+    #[test]
+    fn ref2va_models_are_task_companions_of_the_h3_tiers() {
+        let cat = catalog(&WeightLayout::default());
+        let get = |id: &str| cat.iter().find(|m| m.id.as_str() == id).unwrap().clone();
+        for (id, tier, recipe, steps) in [
+            ("h3-ref2v-max", Tier::Max, "base", 49),
+            ("h3-ref2v-turbo", Tier::Turbo, "sol-h3-ref2va", 4),
+        ] {
+            let m = get(id);
+            let CudaRecipe::H3(r) = &m.recipe else { panic!("{id}") };
+            assert!(r.ref2va && r.dense, "{id}");
+            assert_eq!((r.recipe.as_str(), r.steps), (recipe, steps), "{id}");
+            assert!(r.ref_weights.as_ref().unwrap().ends_with("h3-ref2va"), "{id}");
+            assert!(r.weights.ends_with("h3-base"), "{id}");
+            let c = m.caps();
+            assert!(c.supports(Task::Ref2V) && !c.supports(Task::T2V) && !c.supports(Task::I2V));
+            assert_eq!(c.refs, fastvideo_protocol::RefLimits::h3());
+            assert_eq!(c.tier, Some(tier));
+            let d = m.describe();
+            assert_eq!((d.attention.as_str(), d.steps), ("dense", Some(steps)), "{id}");
+        }
+        // The tier aliases still name the base models; Ref2V requests on them
+        // route to the companion, other tasks stay.
+        let t = table(&cat);
+        assert_eq!(t.tier(Family::H3, Tier::Max).unwrap().as_str(), "sol-h3");
+        assert_eq!(t.tier(Family::H3, Tier::Turbo).unwrap().as_str(), "fasth3-4step-vsa");
+        let models: Vec<&ModelCaps> = t.models().collect();
+        for (alias, want) in [("h3-max", "h3-ref2v-max"), ("h3-turbo", "h3-ref2v-turbo")] {
+            let base = t.resolve(alias).unwrap();
+            assert_eq!(fastvideo_protocol::route_task(base, Task::Ref2V, models.iter().copied()).id.as_str(), want);
+            assert_eq!(fastvideo_protocol::route_task(base, Task::I2V, models.iter().copied()).id, base.id);
+            assert_eq!(t.get(&ModelId::new(want)).unwrap().tier, base.tier, "{want} keeps its tier tag");
+        }
+        let tier_max = fastvideo_protocol::resolve_tier(Family::H3, Tier::Max, models.iter().copied()).unwrap();
+        assert_eq!(tier_max.id.as_str(), "sol-h3");
     }
 
     #[test]
@@ -1197,9 +1399,12 @@ mod tests {
         // NVFP4 is load-time: the LTX draft needs its own process.
         assert!(ProcessPlan::for_models(&pick(&["ltx-turbo", "ltx-draft"])).is_err());
         // FastWan's VSA flag is process-wide; the TI2V-5B recipe runs without it.
-        let p = ProcessPlan::for_models(&pick(&["wan-turbo", "wan-draft"])).unwrap();
+        let p = ProcessPlan::for_models(&pick(&["fastwan21-1.3b", "fastwan21-1.3b-taehv"])).unwrap();
         assert_eq!(p.env.get("FASTVIDEO_VSA").map(String::as_str), Some("1"));
-        assert!(ProcessPlan::for_models(&pick(&["wan-turbo", "wan-max"])).is_err());
+        assert!(ProcessPlan::for_models(&pick(&["fastwan21-1.3b", "wan-max"])).is_err());
+        // The 5B tiers (FastWan2.2 FullAttn has no VSA) share one process.
+        let p = ProcessPlan::for_models(&pick(&["wan-max", "wan-turbo", "wan-draft"])).unwrap();
+        assert_eq!(p.env.get("FASTVIDEO_VSA").map(String::as_str), Some("0"));
         let p = ProcessPlan::for_models(&pick(&["wan-max", "sfwan21-1.3b"])).unwrap();
         assert_eq!(p.env.get("FASTVIDEO_VSA").map(String::as_str), Some("0"));
     }
@@ -1222,9 +1427,23 @@ mod tests {
         assert_eq!(m.tier, Some(Tier::Turbo));
         let CudaRecipe::H3(r) = &m.recipe else { panic!() };
         assert_eq!((r.weights.as_path(), r.text_encoder.as_str()), (Path::new("/w/h3-base"), "streamed"));
+        assert_eq!((r.i2v_encoder.as_str(), r.warmup), ("auto", false));
+        let with = |k: &str, v: &str| ModelEntryCfg {
+            extra: [(k.to_owned(), v.to_owned())].into_iter().collect(),
+            ..e.clone()
+        };
+        let h3 = |e: &ModelEntryCfg| match model_from_config(&l, e).map(|m| m.recipe) {
+            Ok(CudaRecipe::H3(r)) => Ok(r),
+            Ok(_) => panic!("not h3"),
+            Err(e) => Err(e),
+        };
+        assert_eq!(h3(&with("i2v_encoder", "stream")).unwrap().i2v_encoder, "stream");
+        assert!(h3(&with("warmup", "true")).unwrap().warmup);
+        assert!(!h3(&with("warmup", "false")).unwrap().warmup);
+        assert!(h3(&with("warmup", "yes")).is_err());
         let t = CapabilityTable::build(vec![vec![(m.caps(), m.describe())]], &BTreeMap::new()).unwrap();
         assert_eq!(t.resolve("h3-turbo").unwrap().id.as_str(), "fasth3");
-        for (fam, rec, want) in [("ltx2", "ltx-turbo", "ltx25-distill-sol"), ("wan", "", "fastwan21-1.3b"), ("h3", "8step", "fasth3-8step-dense"), ("h3", "sol-h3", "sol-h3"), ("h3", "h3-max", "sol-h3")] {
+        for (fam, rec, want) in [("ltx2", "ltx-turbo", "ltx25-distill-sol"), ("wan", "", "fastwan22-ti2v-5b"), ("wan", "fastwan21-1.3b", "fastwan21-1.3b"), ("h3", "8step", "fasth3-8step-dense"), ("h3", "sol-h3", "sol-h3"), ("h3", "h3-max", "sol-h3")] {
             let e = ModelEntryCfg { family: fam.into(), recipe: rec.into(), resident: true, ..Default::default() };
             assert_eq!(model_from_config(&l, &e).unwrap().id.as_str(), want);
         }

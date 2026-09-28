@@ -425,6 +425,11 @@ run_cells() {
     --prompts "$HERE/../prompts-eval.json"
   cell_fv_wan fv-wan22-5b-i2v wan22-ti2v-5b Wan2.2-TI2V-5B-Diffusers --height 480 --width 832 --num-frames 121 \
     --image "$HERE/../fixtures/ti2v-beach-832x480.jpg" --prompt "$TI2V_PROMPT"
+  # FastWan2.2 TI2V-5B FullAttn (wan-turbo) at its model card recipe: 3 DMD
+  # steps (1000/757/522, the checkpoint's SamplingParam), 704x1280x121 at
+  # 24 fps, dense FLASH_ATTN, over the five prompts (as our fw22 cell).
+  cell_fv_wan fv-fastwan22-5b fastwan22-ti2v-5b FastWan2.2-TI2V-5B-FullAttn-Diffusers --height 704 --width 1280 \
+    --num-frames 121 --prompts "$HERE/../prompts-eval.json"
   # SF-Wan: the five prompts of prompts-eval.json, as the sfwan13 cells with FV_PROMPTS=5.
   cell_fv_wan fv-sfwan13 sfwan21-1.3b SFWan2.1-T2V-1.3B-Diffusers --prompts "$HERE/../prompts-eval.json"
   local g768=(--height 768 --width 1344 --num-frames 124) g480=(--height 480 --width 832 --num-frames 124)

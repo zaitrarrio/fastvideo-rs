@@ -30,6 +30,13 @@ pub const MAX_REFERENCE_IMAGES: usize = 9;
 pub const MAX_REFERENCE_VIDEOS: usize = 3;
 pub const MAX_REFERENCE_AUDIOS: usize = 3;
 pub const MAX_REFERENCES: usize = 12;
+/// Reference video / audio clip length, per clip (MiniMax README "H3-Base-
+/// Ref2VA", fal `reference_{video,audio}_urls`): 2 to 15 s each.
+pub const REFERENCE_CLIP_MIN_S: f64 = 2.0;
+pub const REFERENCE_CLIP_MAX_S: f64 = 15.0;
+/// Combined length of the reference videos, and of the reference audio clips
+/// (each kind on its own): at most 15 s.
+pub const REFERENCE_TOTAL_MAX_S: f64 = 15.0;
 
 /// Ordered Ref2VA input kind.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

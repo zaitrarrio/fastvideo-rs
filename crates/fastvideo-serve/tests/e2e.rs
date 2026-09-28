@@ -227,6 +227,62 @@ async fn ping_is_204_while_loading() {
     assert_eq!(s, 200);
 }
 
+/// The binary binds before `App::build` finishes: `/ping` answers 204 at
+/// once while the build is held back (a load balancer probing a booting
+/// worker never hangs), other routes 503; after the build, the app serves
+/// every route and drains on `stop`.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn ping_answers_while_the_app_builds() {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let base = format!("http://{}", listener.local_addr().unwrap());
+    let (go_tx, go_rx) = tokio::sync::oneshot::channel::<()>();
+    let (stop_tx, stop_rx) = tokio::sync::oneshot::channel::<()>();
+    let c = config("booting");
+    let build = async move {
+        let _ = go_rx.await;
+        App::build(c, Overrides::default()).await
+    };
+    let server = tokio::spawn(fastvideo_serve::app::serve_while_building(listener, build, async {
+        let _ = stop_rx.await;
+    }));
+    let http = reqwest::Client::new();
+    let get = |p: &str| {
+        let req = http.get(format!("{base}{p}")).timeout(Duration::from_secs(5));
+        async move { req.send().await.unwrap() }
+    };
+    assert_eq!(get("/ping").await.status(), 204);
+    let r = get("/health").await;
+    assert_eq!(r.status(), 503);
+    assert_eq!(r.json::<Value>().await.unwrap()["model_loaded"], false);
+    let r = get("/fv/v1/capabilities").await;
+    assert_eq!(r.status(), 503);
+    assert!(r.headers().get("retry-after").is_some());
+
+    go_tx.send(()).unwrap();
+    let mut ready = false;
+    for _ in 0..400 {
+        if get("/ping").await.status() == 200 {
+            ready = true;
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
+    assert!(ready, "/ping never reached 200 after the build");
+    let r = http.get(format!("{base}/fv/v1/capabilities")).bearer_auth(KEY).send().await.unwrap();
+    assert_eq!(r.status(), 200);
+    stop_tx.send(()).unwrap();
+    tokio::time::timeout(Duration::from_secs(30), server).await.unwrap().unwrap().unwrap();
+}
+
+/// A failed build stops the early listener and returns the error.
+#[tokio::test]
+async fn a_failed_build_stops_the_early_listener() {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let build = async { Err::<App, _>(anyhow::anyhow!("no engine")) };
+    let r = fastvideo_serve::app::serve_while_building(listener, build, std::future::pending()).await;
+    assert!(r.is_err());
+}
+
 #[tokio::test]
 async fn d1_job_store_end_to_end_over_the_mock() {
     let mock = MockD1::new();
@@ -307,7 +363,23 @@ fn shipped_configs_parse() {
             continue;
         }
         let text = std::fs::read_to_string(&p).unwrap();
-        let c = Config::from_toml(&text, &p.display().to_string()).unwrap();
+        let mut c = Config::from_toml(&text, &p.display().to_string()).unwrap();
+        // The gateway's secrets and pool endpoints come from the environment.
+        if c.engine.backend == fastvideo_serve::config::EngineBackendKind::Remote {
+            let mut env: BTreeMap<String, String> = [
+                ("FV_INTERNAL_TOKEN", "t"),
+                ("FV_CF_ACCOUNT_ID", "a"),
+                ("FV_CF_API_TOKEN", "t"),
+                ("FV_D1_DATABASE_ID", "d"),
+            ]
+            .into_iter()
+            .map(|(k, v)| (k.to_owned(), v.to_owned()))
+            .collect();
+            for pool in &c.pools {
+                env.insert(format!("{}ENDPOINT", pool.env_prefix()), "ep".into());
+            }
+            c.apply_env(&env).unwrap();
+        }
         c.validate().unwrap_or_else(|e| panic!("{}: {e}", p.display()));
         // CUDA configs: every `[[models]]` entry resolves against the
         // catalog and the set shares one process.
@@ -369,7 +441,7 @@ async fn multi_worker_with_shared_jobs_reads_across_workers() {
     use fastvideo_serve::multiworker::{layer, Policy};
     let mock = MockD1::new();
     let db = || D1Client::new(Arc::new(mock.clone()));
-    let policy = Policy { workers_max: 2, jobs: true, artifacts: true, keys: false };
+    let policy = Policy { workers_max: 2, jobs: true, artifacts: true, keys: false, gateway: false };
     let mut workers = Vec::new();
     for (tag, id) in [("lb-a", "worker-a"), ("lb-b", "worker-b")] {
         let store = D1JobStore::new(db(), D1Options::new(id)).open(time::OffsetDateTime::now_utc()).await.unwrap();

@@ -17,7 +17,7 @@
 #   gate_cells: fv-gpucheck gate with scripts/gpu/gate-policy.toml
 #     (FV_GATE_POLICY overrides) into $RUNS/gate/.
 set -euo pipefail
-FAMILY="${1:?usage: runpod-matrix.sh serve-engine|headline|mmaudio|speechtest|h3|ltx|hunyuan|wan|b200|rtx6000|rtx5090|fastvideo|precision|precision-debug|trace|fuse|oracle|ltxvae|ltxfps|writer|eval|ltxoffload|techniques|h3arms|h3attn}"
+FAMILY="${1:?usage: runpod-matrix.sh serve-engine|hd|headline|mmaudio|speechtest|h3|ltx|hunyuan|wan|b200|rtx6000|rtx5090|fastvideo|precision|precision-debug|trace|fuse|oracle|ltxvae|ltxfps|writer|eval|ltxoffload|techniques|h3arms|h3attn}"
 WORK="${FV_WORK:-/workspace}"
 BIN="${FV_GPUCHECK:-/opt/fastvideo-rs/target/release/fv-gpucheck}"
 W="$WORK/weights"
@@ -1098,6 +1098,67 @@ Audio: male speech, clear voice, quiet room"
       "$BIN" --mode fast wan gen "${ti2v[@]}" --height 704 --width 1280 --num-frames 121 \
         --prompt "$PROMPT" "${PROMPT_ARGS[@]}" --clip-dir "$RUNS/wan5b-easycache/frames"
     compare_cells wan5b wan5b-easycache
+    # ---- fal parity (docs/serve/fal-parity.md §3, P0 3-4) ----------------
+    # FastWan2.2 TI2V-5B FullAttn, the wan-turbo tier (fal's
+    # fal-ai/wan/v2.2-5b/text-to-video/fast-wan): module parity on its own
+    # weights against Diffusers (the upstream pod's oracle:fastwan22-ti2v
+    # dump, DiT at the DMD timestep 757), then its model card recipe: 3 DMD
+    # steps (1000/757/522), shift 5, 704x1280x121 at 24 fps, the full Wan 2.2
+    # VAE (fw22) and TAEHV taew2_2 (fw22-taehv, the wan-draft tier).
+    if [[ -z "${FV_CELLS:-}" || " $FV_CELLS " == *" fw22-oracle "* ]]; then
+      target=fastwan22-ti2v
+      ref="$SCRATCH/oracle-ref/$target"
+      if oracle_fetch "$target" "$ref"; then
+        gated_cell fw22-oracle fastwan22-ti2v-5b \
+          "$BIN" --mode fast --keep-going wan oracle --weights "$W/fastwan22-ti2v-5b" --reference "$ref/dump" \
+            --dump-out "$RUNS/fw22-oracle-dump" --taehv "$TAE/taew2_2.safetensors"
+        oracle_diff fw22-oracle-diff "$ref/dump" "$RUNS/fw22-oracle-dump"
+        rm -rf "$ref" "$RUNS/fw22-oracle-dump"
+      else
+        mkdir -p "$RUNS/fw22-oracle"
+        write_json "$RUNS/fw22-oracle/summary.json" '{"cell":"fw22-oracle","exit":null,"skipped":"reference dump unavailable"}'
+      fi
+    fi
+    fw22=(--weights "$W/fastwan22-ti2v-5b" --preset fast_wan_2_2_ti2v_5b --steps 3 --flow-shift 5.0 --fps 24
+      --seed "$SEED" --warm)
+    gated_cell fw22 fastwan22-ti2v-5b env FASTVIDEO_WAN_VAE=full \
+      "$BIN" --mode fast wan gen "${fw22[@]}" --height 704 --width 1280 --num-frames 121 \
+        --prompt "$PROMPT" "${PROMPT_ARGS[@]}" --clip-dir "$RUNS/fw22/frames"
+    gated_cell fw22-taehv fastwan22-ti2v-5b env FASTVIDEO_WAN_VAE=taehv \
+      "$BIN" --mode fast wan gen "${fw22[@]}" --height 704 --width 1280 --num-frames 121 \
+        --prompt "$PROMPT" "${PROMPT_ARGS[@]}" --clip-dir "$RUNS/fw22-taehv/frames"
+    compare_cells fw22 fw22-taehv
+    # The distilled model against the base checkpoint's 50-step recipe.
+    compare_cells wan5b fw22
+    gated_cell fw22-i2v fastwan22-ti2v-5b env FASTVIDEO_WAN_VAE=full \
+      "$BIN" --mode fast wan gen "${fw22[@]}" --height 480 --width 832 --num-frames 121 \
+        --image "$fixtures/ti2v-beach-832x480.jpg" --prompt "$ti2v_prompt" --clip-dir "$RUNS/fw22-i2v/frames"
+    # fal's 580p (1024x576) and 161 frames on both 5B tiers; the 5B at fal's
+    # defaults (40 UniPC steps, CFG 3.5, shift 5). One prompt each.
+    fal5b=(--weights "$W/wan22-ti2v-5b" --preset wan_2_2_ti2v_5b --unipc --steps 40 --guidance 3.5
+      --flow-shift 5.0 --fps 24 --negative "$wan_neg_cn" --seed "$SEED")
+    gated_cell fw22-580p-161f fastwan22-ti2v-5b env FASTVIDEO_WAN_VAE=full \
+      "$BIN" --mode fast wan gen "${fw22[@]}" --height 576 --width 1024 --num-frames 161 \
+        --prompt "$PROMPT" --clip-dir "$RUNS/fw22-580p-161f/frames"
+    gated_cell fw22-720p-161f fastwan22-ti2v-5b env FASTVIDEO_WAN_VAE=full \
+      "$BIN" --mode fast wan gen "${fw22[@]}" --height 704 --width 1280 --num-frames 161 \
+        --prompt "$PROMPT" --clip-dir "$RUNS/fw22-720p-161f/frames"
+    gated_cell wan5b-580p-161f wan22-ti2v-5b \
+      "$BIN" --mode fast wan gen "${fal5b[@]}" --height 576 --width 1024 --num-frames 161 \
+        --prompt "$PROMPT" --clip-dir "$RUNS/wan5b-580p-161f/frames"
+    gated_cell wan5b-720p-161f wan22-ti2v-5b \
+      "$BIN" --mode fast wan gen "${fal5b[@]}" --height 704 --width 1280 --num-frames 161 \
+        --prompt "$PROMPT" --clip-dir "$RUNS/wan5b-720p-161f/frames"
+    # The catalog's wan-turbo through the engine service (`fv-gpucheck
+    # engine`): the same frames as the CLI at the recipe's settings.
+    fwgeo=(--height 704 --width 1280 --num-frames 121 --prompt "$PROMPT" --seed "$SEED")
+    gated_cell cli-fw22 fastwan22-ti2v-5b env FASTVIDEO_WAN_VAE=full \
+      "$BIN" --mode fast wan gen --weights "$W/fastwan22-ti2v-5b" --preset fast_wan_2_2_ti2v_5b --steps 3 \
+        --flow-shift 5.0 --fps 24 "${fwgeo[@]}" --no-text-cache --no-mp4 --clip-dir "$RUNS/cli-fw22/frames"
+    gated_cell engine-fw22 fastwan22-ti2v-5b \
+      "$BIN" --keep-going --mode fast engine --model wan-turbo --weights-root "$W" --tae-dir "$TAE" "${fwgeo[@]}" \
+        --reference "$RUNS/cli-fw22/frames" --cancel-after-step 1 --clip-out "$RUNS/engine-fw22/out"
+    rm -rf "$RUNS"/cli-fw22/frames "$RUNS"/engine-fw22/out/*/frames
     # SF-Wan 81 frames: TAEHV is the distilled default (sfwan13-81f-flash);
     # the full Wan VAE opt-out on the same recipe, for the decoder A/B.
     sf_arm sfwan13-81f-fullvae 81 FASTVIDEO_WAN_VAE=full
@@ -2174,12 +2235,31 @@ Audio: male speech, clear voice, quiet room"
         fasth3-4step-dense | fasth3-4step-vsa)
           wcell="$target"
           cmd=("$BIN" --mode fast h3 gen --weights "$W/h3-base" --h3-recipe "${target#fasth3-}" "${h3_oracle[@]}") ;;
+        h3-ref2va-*)
+          # MiniMax-H3 Ref2VA (docs/ports/h3-ref2v.md) against FastVideo's
+          # Ref2VA pipeline: transformer_ref from h3-ref2va, one image
+          # reference, dense, `base-<N>step` = the reference's --steps N+1.
+          # Prompt and image as scripts/gpu/upstream/oracle.sh oracle_ref2va.
+          wcell=h3-ref2va
+          ref2va_prompt="${FV_REF2VA_PROMPT:-The camera glides slowly forward along the shoreline of the beach in <Picture 1>, turquoise waves rolling in and breaking into white foam, bright sunny day, the sound of the surf and a light wind.}"
+          cmd=("$BIN" --mode fast h3 gen --weights "$W/h3-base" --ref-root "$W/h3-ref2va"
+            --h3-recipe "base-${target#h3-ref2va-}" --dense
+            --ref "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/fixtures/ti2v-beach-832x480.jpg"
+            --prompt "$ref2va_prompt" --seconds 5 --seed "$SEED" --text-encoder streamed
+            --text-cache "$SCRATCH/h3-text-cache" --text-weights "$W/h3-base") ;;
         ltx25-*)
           wcell=ltx25-two-stage
           geo=(--height 512 --width 768 --num-frames 121)
           [[ "$target" == ltx25-4k* ]] && geo=(--workload 4k5s)
           arm=()
           [[ "$target" == *-dense ]] && arm=(--dense-stage2)
+          # Image conditioning targets (upstream oracle.sh): 512p, dense stage 2.
+          fx="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/fixtures"
+          case "$target" in
+            ltx25-i2v) arm=(--dense-stage2 --image "$fx/ti2v-beach-832x480.jpg") ;;
+            ltx25-kf) arm=(--dense-stage2 --image "$fx/ti2v-beach-832x480.jpg"
+              --cond-image "$fx/ti2v-beach-zoom-832x480.jpg@120@1.0") ;;
+          esac
           cmd=("$BIN" --mode fast ltx2 gen --model-version 2.5 --weights "$W/ltx25" --dit "$W/ltx25"
             "${geo[@]}" "${arm[@]}" "${ltx_oracle[@]}") ;;
         sfwan13)
@@ -2193,6 +2273,12 @@ Audio: male speech, clear voice, quiet room"
       esac
       oracle_run "oracle-$target" "$ours"
       oracle_diff "oracle-$target-diff" "$ref/dump" "$ours"
+      # Ref2VA control: the reference's condition rows injected as well, so
+      # only the DiT (and the text, when its token count matches) differs.
+      if [[ "$target" == h3-ref2va-* ]]; then
+        oracle_run "oracle-$target-cond" "$ours-cond" FASTVIDEO_INJECT_COND=1
+        oracle_diff "oracle-$target-cond-diff" "$ref/dump" "$ours-cond"
+      fi
       # The bf16 noise floor (FV_ORACLE_F32, default on for H3): ours with f32
       # activations against the reference, and our bf16 run against our f32
       # run -- how far bf16 rounding alone moves the same pipeline.
@@ -2377,6 +2463,82 @@ Audio: male speech, clear voice, quiet room"
       log "skip the 4k5s / 1080p20s cpu cells (512p frames identical: ${same:-no}; FV_OFFLOAD_BIG=${FV_OFFLOAD_BIG:-1})"
     fi
     ;;
+  hd)
+    # H3 at 1080p-class canvases (docs/serve/h3-1080p-and-upscaler.md):
+    # h3-turbo (FastH3 4-step VSA) and h3-max (Sol-H3 tau ladder) at the
+    # trained 768p canvas and at 1920x1088 / 1088x1920 (`h3 gen
+    # --oversize-canvas`, test path only: 2.02x the trained pixel cap), the
+    # prompts of scripts/gpu/prompts-hd.json in one process per cell. Then
+    # each 768p clip is Lanczos-upscaled (ffmpeg) to the 1080p canvas and
+    # compared with the native 1080p clip of the same prompt and seed
+    # (compare-clips: sharpness, jitter, patch-boundary ratios; LPIPS with
+    # FV_LPIPS=1). Keyframes 0/40/80/120 of every clip are kept; the rest of
+    # the PNGs are deleted after the compares. FV_HD_POST_URL: a script fetched
+    # and run before that with $RUNS (scripts/gpu/hd-upscaler.sh, the upscaler
+    # benchmark).
+    : "${FV_PROMPTS:=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/prompts-hd.json}"
+    hd_common=(
+      --seconds 5
+      --prompt "$PROMPT"
+      --seed "$SEED"
+      --prompts "$FV_PROMPTS"
+      --text-encoder streamed
+      --text-cache "$SCRATCH/h3-text-cache"
+      --text-weights "$W/h3-base"
+    )
+    hd_cell() {
+      local name="$1" wcell="$2" profile="$3" recipe="$4" h="$5" w="$6" over=()
+      (( h * w > 768 * 1344 )) && over=(--oversize-canvas)
+      gated_cell "$name" "$wcell" \
+        "$BIN" --mode fast --techniques "$profile" h3 gen --weights "$W/h3-base" --h3-recipe "$recipe" \
+          --height "$h" --width "$w" ${over[@]+"${over[@]}"} \
+          --adaln-cache "$RUNS/$recipe-adaln.cache" \
+          --clip-dir "$RUNS/$name/frames" "${hd_common[@]}"
+      log "$name $(grep -oE '"(denoise_s|total_s|inference_time_s|peak_memory_mb|peak_allocated_gib)": *[0-9.]+' "$RUNS/$name/benchmark.json" 2>/dev/null | head -8 | tr '\n' ' ')"
+    }
+    T=(fasth3-4step-vsa h3/fasth3_4step_vsa 4step-vsa)
+    M=(sol-h3 h3/sol_h3_4step_engine_ladder sol-h3)
+    hd_cell turbo-768p "${T[@]}" 768 1344
+    hd_cell turbo-1080p "${T[@]}" 1088 1920
+    hd_cell turbo-768p-v "${T[@]}" 1344 768
+    hd_cell turbo-1080p-v "${T[@]}" 1920 1088
+    hd_cell max-768p "${M[@]}" 768 1344
+    hd_cell max-1080p "${M[@]}" 1088 1920
+    # 768p -> 1080p Lanczos baselines, then native 1080p against them.
+    for pair in turbo-768p:turbo-1080p:1920:1088 turbo-768p-v:turbo-1080p-v:1088:1920 max-768p:max-1080p:1920:1088; do
+      IFS=: read -r lo hi uw uh <<<"$pair"
+      for d in "$RUNS/$lo/frames"/*/; do
+        p="$(basename "$d")"
+        [[ "$p" == cold || "$p" == warmup ]] && continue
+        compgen -G "$d/frame-*.png" >/dev/null || continue
+        up="$RUNS/$lo-lanczos/frames/$p"
+        mkdir -p "$up"
+        ffmpeg -nostdin -loglevel error -y -start_number 0 -i "$d/frame-%03d.png" \
+          -vf "scale=$uw:$uh:flags=lanczos" -start_number 0 "$up/frame-%03d.png" >>"$RUNS/lanczos.log" 2>&1 \
+          || log "lanczos $lo/$p failed"
+      done
+      compare_cells "$lo-lanczos" "$hi"
+    done
+    if [[ -n "${FV_HD_POST_URL:-}" ]]; then
+      log "post script $FV_HD_POST_URL"
+      if curl -fsSL "$FV_HD_POST_URL" -o "$SCRATCH/hd-post.sh"; then
+        FV_GEN_TIMEOUT_S="${FV_HD_POST_TIMEOUT_S:-3600}" run_cell upscaler env FV_BIN="$BIN" FV_LPIPS_ARGS="${LPIPS_ARGS[*]+${LPIPS_ARGS[*]}}" bash "$SCRATCH/hd-post.sh" "$RUNS"
+      else
+        log "post script fetch failed"
+      fi
+    fi
+    for c in "$RUNS"/*/frames; do
+      for d in "$c"/*/; do
+        [[ -d "$d" ]] || continue
+        k="${d%/frames/*}/keyframes/$(basename "$d")"
+        mkdir -p "$k"
+        for n in 000 040 080 120; do
+          [[ -f "$d/frame-$n.png" ]] && cp "$d/frame-$n.png" "$k/"
+        done
+        rm -f "$d"/frame-*.png
+      done
+    done
+    ;;
   serve-engine)
     # Serve engine CUDA backend (WP-11): for each family, the CLI generation
     # (`h3|ltx2|wan gen`) and the same recipe / canvas / seed through
@@ -2412,7 +2574,7 @@ Audio: male speech, clear voice, quiet room"
         "$BIN" --mode fast --vsa wan gen --weights "$W/fastwan21-1.3b" "${wangeo[@]}" --no-text-cache --no-mp4 \
           --clip-dir "$RUNS/cli-wan-turbo/frames"
       gated_cell engine-wan-turbo fastwan21-1.3b \
-        "$BIN" --keep-going --mode fast engine --model wan-turbo --weights-root "$W" --tae-dir "$TAE" "${wangeo[@]}" \
+        "$BIN" --keep-going --mode fast engine --model fastwan21-1.3b --weights-root "$W" --tae-dir "$TAE" "${wangeo[@]}" \
           --reference "$RUNS/cli-wan-turbo/frames" --cancel-after-step 1 --clip-out "$RUNS/engine-wan-turbo/out"
     fi
     # Keep the reports and MP4s; the PNG frames were compared on the box.

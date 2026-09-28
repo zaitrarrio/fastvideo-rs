@@ -152,7 +152,7 @@ def main():
     res = h.get()
     v = res["video"]
     check(v["content_type"] == "video/mp4", v)
-    check(v["file_name"].endswith("_minimax-h3.mp4"), v)
+    check(v["file_name"].endswith("_minimax-h3-max.mp4"), v)  # named by app and tier
     check(res["expanded_prompt"] is None and "inference" in res["timings"], res)
     body = httpx.get(v["url"], verify=cert).content  # unauthenticated download
     check(len(body) == v["file_size"], f"downloaded {len(body)} != {v['file_size']}")
