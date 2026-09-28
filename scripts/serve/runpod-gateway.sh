@@ -226,7 +226,7 @@ cmd_validate() {
   out="$(gw_call POST /fv/v1/jobs '{"model":"fastwan21-1.3b","prompt":"a red fox trotting through fresh snow, cinematic","seed":1}')"
   split_submit "$out"
   r="$(poll_gw "/fv/v1/jobs/$(jq -r .id <<<"$body")" '.status == "succeeded" or .status == "failed"')"
-  add "$(jq -c --arg sub "$sub" --arg w "$(head -1 <<<"$r")" '{api: "native", pool: "wan", cold: true, submit: $sub, wall_s: ($w|tonumber), status: .status, url_host: (.output.url // "" | sub("\\?.*"; "") | sub("^(https://[^/]+).*"; "\\1"))}' <<<"$(sed 1d <<<"$r")")"
+  add "$(jq -c --arg sub "$sub" --arg w "$(head -1 <<<"$r")" '{api: "native", pool: "wan", cold: true, submit: $sub, wall_s: ($w|tonumber), status: .status, url_host: (.output.url // "" | capture("^(?<h>https://[^/?]+)").h? // "")}' <<<"$(sed 1d <<<"$r")")"
   # 2. FastVideo /v1/videos → wan (warm).
   out="$(gw_call POST /v1/videos '{"model":"fastwan21-1.3b","prompt":"ocean waves at sunset","seconds":"5"}')"
   split_submit "$out"

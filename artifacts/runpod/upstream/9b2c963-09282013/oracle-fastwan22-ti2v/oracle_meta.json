@@ -1,0 +1,29 @@
+{
+  "model": "/workspace/weights/fastwan22-ti2v-5b",
+  "args": {
+    "model": "/workspace/weights/fastwan22-ti2v-5b",
+    "out": "/root/runs/upstream/9b2c963-09282013/oracle-fastwan22-ti2v/dump",
+    "image": "/opt/fvrs-live/scripts/gpu/upstream/../fixtures/ti2v-beach-832x480.jpg",
+    "height": 704,
+    "width": 1280,
+    "vae_frames": 9,
+    "dit_frames": 121,
+    "timestep": 757.0,
+    "seed": 0,
+    "skip_dit": false
+  },
+  "torch": "2.12.0+cu130",
+  "diffusers": "0.40.0",
+  "vae_encode_s": 0.5533424471504986,
+  "vae_decode_s": 1.2972037568688393,
+  "vae_latent_shape": [
+    1,
+    48,
+    3,
+    44,
+    80
+  ],
+  "vae_recon_psnr_db": 41.70883560180664,
+  "t2v_dit_s": 1.9525790670886636,
+  "i2v_dit_s": 2.104192820843309
+}

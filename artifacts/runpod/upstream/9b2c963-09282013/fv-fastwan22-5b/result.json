@@ -1,0 +1,288 @@
+{
+  "impl": "fastvideo",
+  "model": "FastWan2.2-TI2V-5B-FullAttn-Diffusers",
+  "args": {
+    "model": "/workspace/weights/fastwan22-ti2v-5b",
+    "out": "/root/runs/upstream/9b2c963-09282013/fv-fastwan22-5b",
+    "prompts": "/opt/fvrs-live/scripts/gpu/upstream/../prompts-eval.json",
+    "prompt": "A man in his thirties talking to the camera in a bright living room, medium close-up, natural expressions and hand gestures, soft window light. He says: <d>Hello, this was generated entirely in Rust.</d>",
+    "seed": 1024,
+    "hf_name": "FastWan2.2-TI2V-5B-FullAttn-Diffusers",
+    "repeats": 1,
+    "warmup_seed": 999,
+    "no_warmup": false,
+    "height": 704,
+    "width": 1280,
+    "num_frames": 121,
+    "steps": null,
+    "guidance_scale": null,
+    "flow_shift": null,
+    "vsa_sparsity": 0.8,
+    "attention": "FLASH_ATTN",
+    "text_encoder_cpu_offload": false,
+    "image": null
+  },
+  "runs": [
+    {
+      "name": "h3-demo",
+      "seed": 0,
+      "runs": [
+        {
+          "wall_s": 19.544674886856228,
+          "generation_time_s": 18.775947879999876,
+          "peak_memory_mb": 44122.13818359375,
+          "stages_s": {
+            "input_validation_stage": 2.969987690448761e-05,
+            "prompt_encoding_stage": 0.13526962092146277,
+            "conditioning_stage": 1.0099727660417557e-05,
+            "timestep_preparation_stage": 0.0003802431747317314,
+            "latent_preparation_stage": 0.01737846015021205,
+            "denoising_stage": 6.843906815163791,
+            "decoding_stage": 11.744702534284443,
+            "PostDecodeFrameProcessStage": 0.1745167849585414,
+            "VideoSaveStage": 0.5756080029532313,
+            "AudioMuxStage": 0.0
+          },
+          "denoise_s": 6.843906815163791,
+          "decode_s": 11.744702534284443,
+          "postprocess_s": 0.1745167849585414,
+          "text_s": 0.13526962092146277,
+          "save_s": 0.5756080029532313,
+          "steps": 50,
+          "guidance_scale": 5.0,
+          "negative_prompt": "\u8272\u8c03\u8273\u4e3d\uff0c\u8fc7\u66dd\uff0c\u9759\u6001\uff0c\u7ec6\u8282\u6a21\u7cca\u4e0d\u6e05\uff0c\u5b57\u5e55\uff0c\u98ce\u683c\uff0c\u4f5c\u54c1\uff0c\u753b\u4f5c\uff0c\u753b\u9762\uff0c\u9759\u6b62\uff0c\u6574\u4f53\u53d1\u7070\uff0c\u6700\u5dee\u8d28\u91cf\uff0c\u4f4e\u8d28\u91cf\uff0cJPEG\u538b\u7f29\u6b8b\u7559\uff0c\u4e11\u964b\u7684\uff0c\u6b8b\u7f3a\u7684\uff0c\u591a\u4f59\u7684\u624b\u6307\uff0c\u753b\u5f97\u4e0d\u597d\u7684\u624b\u90e8\uff0c\u753b\u5f97\u4e0d\u597d\u7684\u8138\u90e8\uff0c\u7578\u5f62\u7684\uff0c\u6bc1\u5bb9\u7684\uff0c\u5f62\u6001\u7578\u5f62\u7684\u80a2\u4f53\uff0c\u624b\u6307\u878d\u5408\uff0c\u9759\u6b62\u4e0d\u52a8\u7684\u753b\u9762\uff0c\u6742\u4e71\u7684\u80cc\u666f\uff0c\u4e09\u6761\u817f\uff0c\u80cc\u666f\u4eba\u5f88\u591a\uff0c\u5012\u7740\u8d70",
+          "fps": 24,
+          "image_path": null
+        }
+      ]
+    },
+    {
+      "name": "ltx-multishot",
+      "seed": 42,
+      "runs": [
+        {
+          "wall_s": 19.653909743763506,
+          "generation_time_s": 18.73820130666718,
+          "peak_memory_mb": 44123.4970703125,
+          "stages_s": {
+            "input_validation_stage": 5.8650970458984375e-05,
+            "prompt_encoding_stage": 0.08101033605635166,
+            "conditioning_stage": 1.0400079190731049e-05,
+            "timestep_preparation_stage": 0.0003851228393614292,
+            "latent_preparation_stage": 0.01659593405202031,
+            "denoising_stage": 6.849321246147156,
+            "decoding_stage": 11.757181947119534,
+            "PostDecodeFrameProcessStage": 0.24963423609733582,
+            "VideoSaveStage": 0.6439091041684151,
+            "AudioMuxStage": 0.0
+          },
+          "denoise_s": 6.849321246147156,
+          "decode_s": 11.757181947119534,
+          "postprocess_s": 0.24963423609733582,
+          "text_s": 0.08101033605635166,
+          "save_s": 0.6439091041684151,
+          "steps": 50,
+          "guidance_scale": 5.0,
+          "negative_prompt": "\u8272\u8c03\u8273\u4e3d\uff0c\u8fc7\u66dd\uff0c\u9759\u6001\uff0c\u7ec6\u8282\u6a21\u7cca\u4e0d\u6e05\uff0c\u5b57\u5e55\uff0c\u98ce\u683c\uff0c\u4f5c\u54c1\uff0c\u753b\u4f5c\uff0c\u753b\u9762\uff0c\u9759\u6b62\uff0c\u6574\u4f53\u53d1\u7070\uff0c\u6700\u5dee\u8d28\u91cf\uff0c\u4f4e\u8d28\u91cf\uff0cJPEG\u538b\u7f29\u6b8b\u7559\uff0c\u4e11\u964b\u7684\uff0c\u6b8b\u7f3a\u7684\uff0c\u591a\u4f59\u7684\u624b\u6307\uff0c\u753b\u5f97\u4e0d\u597d\u7684\u624b\u90e8\uff0c\u753b\u5f97\u4e0d\u597d\u7684\u8138\u90e8\uff0c\u7578\u5f62\u7684\uff0c\u6bc1\u5bb9\u7684\uff0c\u5f62\u6001\u7578\u5f62\u7684\u80a2\u4f53\uff0c\u624b\u6307\u878d\u5408\uff0c\u9759\u6b62\u4e0d\u52a8\u7684\u753b\u9762\uff0c\u6742\u4e71\u7684\u80cc\u666f\uff0c\u4e09\u6761\u817f\uff0c\u80cc\u666f\u4eba\u5f88\u591a\uff0c\u5012\u7740\u8d70",
+          "fps": 24,
+          "image_path": null
+        }
+      ]
+    },
+    {
+      "name": "ltx-newsbroadcast",
+      "seed": 42,
+      "runs": [
+        {
+          "wall_s": 19.787784993182868,
+          "generation_time_s": 18.77828664612025,
+          "peak_memory_mb": 44123.4970703125,
+          "stages_s": {
+            "input_validation_stage": 2.832990139722824e-05,
+            "prompt_encoding_stage": 0.10790097573772073,
+            "conditioning_stage": 1.469021663069725e-05,
+            "timestep_preparation_stage": 0.00038653286173939705,
+            "latent_preparation_stage": 0.016382023226469755,
+            "denoising_stage": 6.853298795875162,
+            "decoding_stage": 11.765981782227755,
+            "PostDecodeFrameProcessStage": 0.4582938360981643,
+            "VideoSaveStage": 0.527718055061996,
+            "AudioMuxStage": 0.0
+          },
+          "denoise_s": 6.853298795875162,
+          "decode_s": 11.765981782227755,
+          "postprocess_s": 0.4582938360981643,
+          "text_s": 0.10790097573772073,
+          "save_s": 0.527718055061996,
+          "steps": 50,
+          "guidance_scale": 5.0,
+          "negative_prompt": "\u8272\u8c03\u8273\u4e3d\uff0c\u8fc7\u66dd\uff0c\u9759\u6001\uff0c\u7ec6\u8282\u6a21\u7cca\u4e0d\u6e05\uff0c\u5b57\u5e55\uff0c\u98ce\u683c\uff0c\u4f5c\u54c1\uff0c\u753b\u4f5c\uff0c\u753b\u9762\uff0c\u9759\u6b62\uff0c\u6574\u4f53\u53d1\u7070\uff0c\u6700\u5dee\u8d28\u91cf\uff0c\u4f4e\u8d28\u91cf\uff0cJPEG\u538b\u7f29\u6b8b\u7559\uff0c\u4e11\u964b\u7684\uff0c\u6b8b\u7f3a\u7684\uff0c\u591a\u4f59\u7684\u624b\u6307\uff0c\u753b\u5f97\u4e0d\u597d\u7684\u624b\u90e8\uff0c\u753b\u5f97\u4e0d\u597d\u7684\u8138\u90e8\uff0c\u7578\u5f62\u7684\uff0c\u6bc1\u5bb9\u7684\uff0c\u5f62\u6001\u7578\u5f62\u7684\u80a2\u4f53\uff0c\u624b\u6307\u878d\u5408\uff0c\u9759\u6b62\u4e0d\u52a8\u7684\u753b\u9762\uff0c\u6742\u4e71\u7684\u80cc\u666f\uff0c\u4e09\u6761\u817f\uff0c\u80cc\u666f\u4eba\u5f88\u591a\uff0c\u5012\u7740\u8d70",
+          "fps": 24,
+          "image_path": null
+        }
+      ]
+    },
+    {
+      "name": "ltx-frogyoga",
+      "seed": 42,
+      "runs": [
+        {
+          "wall_s": 19.773197893984616,
+          "generation_time_s": 18.77673467481509,
+          "peak_memory_mb": 44123.4970703125,
+          "stages_s": {
+            "input_validation_stage": 3.044959157705307e-05,
+            "prompt_encoding_stage": 0.0861386340111494,
+            "conditioning_stage": 1.0449904948472977e-05,
+            "timestep_preparation_stage": 0.0003858627751469612,
+            "latent_preparation_stage": 0.01652969280257821,
+            "denoising_stage": 6.86129857506603,
+            "decoding_stage": 11.769772651139647,
+            "PostDecodeFrameProcessStage": 0.37926799478009343,
+            "VideoSaveStage": 0.5952712702564895,
+            "AudioMuxStage": 0.0
+          },
+          "denoise_s": 6.86129857506603,
+          "decode_s": 11.769772651139647,
+          "postprocess_s": 0.37926799478009343,
+          "text_s": 0.0861386340111494,
+          "save_s": 0.5952712702564895,
+          "steps": 50,
+          "guidance_scale": 5.0,
+          "negative_prompt": "\u8272\u8c03\u8273\u4e3d\uff0c\u8fc7\u66dd\uff0c\u9759\u6001\uff0c\u7ec6\u8282\u6a21\u7cca\u4e0d\u6e05\uff0c\u5b57\u5e55\uff0c\u98ce\u683c\uff0c\u4f5c\u54c1\uff0c\u753b\u4f5c\uff0c\u753b\u9762\uff0c\u9759\u6b62\uff0c\u6574\u4f53\u53d1\u7070\uff0c\u6700\u5dee\u8d28\u91cf\uff0c\u4f4e\u8d28\u91cf\uff0cJPEG\u538b\u7f29\u6b8b\u7559\uff0c\u4e11\u964b\u7684\uff0c\u6b8b\u7f3a\u7684\uff0c\u591a\u4f59\u7684\u624b\u6307\uff0c\u753b\u5f97\u4e0d\u597d\u7684\u624b\u90e8\uff0c\u753b\u5f97\u4e0d\u597d\u7684\u8138\u90e8\uff0c\u7578\u5f62\u7684\uff0c\u6bc1\u5bb9\u7684\uff0c\u5f62\u6001\u7578\u5f62\u7684\u80a2\u4f53\uff0c\u624b\u6307\u878d\u5408\uff0c\u9759\u6b62\u4e0d\u52a8\u7684\u753b\u9762\uff0c\u6742\u4e71\u7684\u80cc\u666f\uff0c\u4e09\u6761\u817f\uff0c\u80cc\u666f\u4eba\u5f88\u591a\uff0c\u5012\u7740\u8d70",
+          "fps": 24,
+          "image_path": null
+        }
+      ]
+    },
+    {
+      "name": "spark-mountain-lake",
+      "seed": 42,
+      "runs": [
+        {
+          "wall_s": 19.556099438108504,
+          "generation_time_s": 18.744979434181005,
+          "peak_memory_mb": 44123.4970703125,
+          "stages_s": {
+            "input_validation_stage": 2.9050279408693314e-05,
+            "prompt_encoding_stage": 0.06527986796572804,
+            "conditioning_stage": 1.0250136256217957e-05,
+            "timestep_preparation_stage": 0.00040931301191449165,
+            "latent_preparation_stage": 0.01683673495426774,
+            "denoising_stage": 6.859002568293363,
+            "decoding_stage": 11.769348736852407,
+            "PostDecodeFrameProcessStage": 0.22340837121009827,
+            "VideoSaveStage": 0.5679742363281548,
+            "AudioMuxStage": 0.0
+          },
+          "denoise_s": 6.859002568293363,
+          "decode_s": 11.769348736852407,
+          "postprocess_s": 0.22340837121009827,
+          "text_s": 0.06527986796572804,
+          "save_s": 0.5679742363281548,
+          "steps": 50,
+          "guidance_scale": 5.0,
+          "negative_prompt": "\u8272\u8c03\u8273\u4e3d\uff0c\u8fc7\u66dd\uff0c\u9759\u6001\uff0c\u7ec6\u8282\u6a21\u7cca\u4e0d\u6e05\uff0c\u5b57\u5e55\uff0c\u98ce\u683c\uff0c\u4f5c\u54c1\uff0c\u753b\u4f5c\uff0c\u753b\u9762\uff0c\u9759\u6b62\uff0c\u6574\u4f53\u53d1\u7070\uff0c\u6700\u5dee\u8d28\u91cf\uff0c\u4f4e\u8d28\u91cf\uff0cJPEG\u538b\u7f29\u6b8b\u7559\uff0c\u4e11\u964b\u7684\uff0c\u6b8b\u7f3a\u7684\uff0c\u591a\u4f59\u7684\u624b\u6307\uff0c\u753b\u5f97\u4e0d\u597d\u7684\u624b\u90e8\uff0c\u753b\u5f97\u4e0d\u597d\u7684\u8138\u90e8\uff0c\u7578\u5f62\u7684\uff0c\u6bc1\u5bb9\u7684\uff0c\u5f62\u6001\u7578\u5f62\u7684\u80a2\u4f53\uff0c\u624b\u6307\u878d\u5408\uff0c\u9759\u6b62\u4e0d\u52a8\u7684\u753b\u9762\uff0c\u6742\u4e71\u7684\u80cc\u666f\uff0c\u4e09\u6761\u817f\uff0c\u80cc\u666f\u4eba\u5f88\u591a\uff0c\u5012\u7740\u8d70",
+          "fps": 24,
+          "image_path": null
+        }
+      ]
+    }
+  ],
+  "ok": true,
+  "env": {
+    "FASTVIDEO_ATTENTION_BACKEND": "FLASH_ATTN",
+    "FASTVIDEO_STAGE_LOGGING": "1",
+    "FASTVIDEO_VSA_SM100A": "0"
+  },
+  "load_s": 44.44850410707295,
+  "pipeline_flow_shift": 5.0,
+  "warmup": {
+    "wall_s": 20.221243084874004,
+    "generation_time_s": 19.269692200236022,
+    "peak_memory_mb": 42847.3203125,
+    "stages_s": {
+      "input_validation_stage": 3.915978595614433e-05,
+      "prompt_encoding_stage": 0.3785356800071895,
+      "conditioning_stage": 2.274010330438614e-05,
+      "timestep_preparation_stage": 0.0005904240533709526,
+      "latent_preparation_stage": 0.016772155184298754,
+      "denoising_stage": 7.077821024227887,
+      "decoding_stage": 11.751629455015063,
+      "PostDecodeFrameProcessStage": 0.2998147811740637,
+      "VideoSaveStage": 0.6389714470133185,
+      "AudioMuxStage": 0.0
+    },
+    "denoise_s": 7.077821024227887,
+    "decode_s": 11.751629455015063,
+    "postprocess_s": 0.2998147811740637,
+    "text_s": 0.3785356800071895,
+    "save_s": 0.6389714470133185,
+    "steps": 50,
+    "guidance_scale": 5.0,
+    "negative_prompt": "\u8272\u8c03\u8273\u4e3d\uff0c\u8fc7\u66dd\uff0c\u9759\u6001\uff0c\u7ec6\u8282\u6a21\u7cca\u4e0d\u6e05\uff0c\u5b57\u5e55\uff0c\u98ce\u683c\uff0c\u4f5c\u54c1\uff0c\u753b\u4f5c\uff0c\u753b\u9762\uff0c\u9759\u6b62\uff0c\u6574\u4f53\u53d1\u7070\uff0c\u6700\u5dee\u8d28\u91cf\uff0c\u4f4e\u8d28\u91cf\uff0cJPEG\u538b\u7f29\u6b8b\u7559\uff0c\u4e11\u964b\u7684\uff0c\u6b8b\u7f3a\u7684\uff0c\u591a\u4f59\u7684\u624b\u6307\uff0c\u753b\u5f97\u4e0d\u597d\u7684\u624b\u90e8\uff0c\u753b\u5f97\u4e0d\u597d\u7684\u8138\u90e8\uff0c\u7578\u5f62\u7684\uff0c\u6bc1\u5bb9\u7684\uff0c\u5f62\u6001\u7578\u5f62\u7684\u80a2\u4f53\uff0c\u624b\u6307\u878d\u5408\uff0c\u9759\u6b62\u4e0d\u52a8\u7684\u753b\u9762\uff0c\u6742\u4e71\u7684\u80cc\u666f\uff0c\u4e09\u6761\u817f\uff0c\u80cc\u666f\u4eba\u5f88\u591a\uff0c\u5012\u7740\u8d70",
+    "fps": 24,
+    "image_path": null
+  },
+  "per_prompt": [
+    {
+      "name": "h3-demo",
+      "wall_s": 19.544674886856228,
+      "denoise_s": 6.843906815163791,
+      "decode_s": 11.744702534284443,
+      "text_s": 0.13526962092146277,
+      "save_s": 0.5756080029532313,
+      "postprocess_s": 0.1745167849585414,
+      "peak_memory_mb": 44122.13818359375
+    },
+    {
+      "name": "ltx-multishot",
+      "wall_s": 19.653909743763506,
+      "denoise_s": 6.849321246147156,
+      "decode_s": 11.757181947119534,
+      "text_s": 0.08101033605635166,
+      "save_s": 0.6439091041684151,
+      "postprocess_s": 0.24963423609733582,
+      "peak_memory_mb": 44123.4970703125
+    },
+    {
+      "name": "ltx-newsbroadcast",
+      "wall_s": 19.787784993182868,
+      "denoise_s": 6.853298795875162,
+      "decode_s": 11.765981782227755,
+      "text_s": 0.10790097573772073,
+      "save_s": 0.527718055061996,
+      "postprocess_s": 0.4582938360981643,
+      "peak_memory_mb": 44123.4970703125
+    },
+    {
+      "name": "ltx-frogyoga",
+      "wall_s": 19.773197893984616,
+      "denoise_s": 6.86129857506603,
+      "decode_s": 11.769772651139647,
+      "text_s": 0.0861386340111494,
+      "save_s": 0.5952712702564895,
+      "postprocess_s": 0.37926799478009343,
+      "peak_memory_mb": 44123.4970703125
+    },
+    {
+      "name": "spark-mountain-lake",
+      "wall_s": 19.556099438108504,
+      "denoise_s": 6.859002568293363,
+      "decode_s": 11.769348736852407,
+      "text_s": 0.06527986796572804,
+      "save_s": 0.5679742363281548,
+      "postprocess_s": 0.22340837121009827,
+      "peak_memory_mb": 44123.4970703125
+    }
+  ],
+  "median_wall_s": 19.653909743763506,
+  "median_denoise_s": 6.853298795875162,
+  "median_decode_s": 11.765981782227755,
+  "median_text_s": 0.0861386340111494,
+  "median_save_s": 0.5756080029532313,
+  "median_postprocess_s": 0.24963423609733582,
+  "warm_total_s": 19.653909743763506,
+  "peak_memory_mb": 44123.4970703125,
+  "process_s": 174.69272769615054
+}
