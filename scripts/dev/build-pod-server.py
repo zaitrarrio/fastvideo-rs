@@ -1,0 +1,822 @@
+#!/usr/bin/env python3
+"""fv-build pod service: authenticated sync + allowlisted build runner.
+
+Runs on the shared CPU build pod (docs/dev/build-pod.md), started by the pod's
+start command from scripts/dev/build-pod.sh. Python standard library only.
+
+Layout on the network volume (FV_BUILD_ROOT, default /workspace/fv-build):
+  worktrees/<agent>/   the agent's synced source snapshot
+  target/<agent>/      its CARGO_TARGET_DIR
+  cargo/               CARGO_HOME (registry and git caches, shared)
+  rustup/              RUSTUP_HOME (toolchains, shared)
+  sccache/             SCCACHE_DIR (shared; FV_BUILD_SCCACHE_SIZE, default 40G)
+  cuda-13.4/           CUDA 13.4 nvcc/NVRTC/crt/cudart/cccl/tileiras (redist)
+  tools/               sccache binary
+  jobs/<id>.log        job logs; logs/pod.log service log; ledger.tsv
+
+Auth: every endpoint but GET /healthz needs "Authorization: Bearer <token>";
+the pod only knows sha256(token) (FV_BUILD_TOKEN_SHA256).
+
+Endpoints (all JSON unless noted):
+  GET  /healthz                         {ok, ready}            (no auth)
+  GET  /v1/status                       setup state, jobs, idle timer, disk
+  GET  /v1/agents[?sizes=1]             agent dirs (sizes via du, slow)
+  GET  /v1/agents/<a>/manifest          text: path\\tsize\\tmtime per file
+  PUT  /v1/agents/<a>/files             body: tar.gz of changed files
+  POST /v1/agents/<a>/delete            body: NUL-separated relative paths
+  POST /v1/agents/<a>/jobs              {argv:[...], env:{K:V}} -> {id}
+  GET  /v1/jobs/<id>?offset=N&wait=S    {state, exit, next, data}  (long poll)
+  POST /v1/jobs/<id>/cancel
+  GET  /v1/agents/<a>/artifact?path=P[&gz=1]   file under target/<a> (binary)
+  POST /v1/agents/<a>/clean             {what: target|worktree|all}
+  POST /v1/stop                         stop the pod now
+
+Only these commands run (no shell): cargo {check,build,test,clippy,fmt,doc,
+tree,metadata}, and `bash <script>` for the scripts in SCRIPTS. Environment
+overrides must match ENV_ALLOW. Build scripts still execute code, so the token
+is the real boundary; the allowlist keeps agents on the build path.
+
+Auto-stop: after FV_BUILD_IDLE_MIN minutes (default 20) with no request and no
+running job, or FV_BUILD_MAX_HOURS (default 8) after boot regardless, the pod
+stops itself through the Runpod API with the pod-scoped key Runpod injects
+(RUNPOD_API_KEY, RUNPOD_POD_ID). If stopping is refused (pods with a network
+volume may only be terminated), it terminates instead: everything worth
+keeping lives on the volume.
+"""
+
+import gzip
+import hashlib
+import hmac
+import json
+import os
+import re
+import shutil
+import signal
+import subprocess
+import sys
+import tarfile
+import threading
+import time
+import urllib.parse
+import urllib.request
+import uuid
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+ROOT = os.environ.get("FV_BUILD_ROOT", "/workspace/fv-build")
+PORT = int(os.environ.get("FV_BUILD_PORT", "8000"))
+TOKEN_SHA = os.environ.get("FV_BUILD_TOKEN_SHA256", "").strip().lower()
+IDLE_S = float(os.environ.get("FV_BUILD_IDLE_MIN", "20")) * 60
+MAX_S = float(os.environ.get("FV_BUILD_MAX_HOURS", "8")) * 3600
+MAX_JOBS = int(os.environ.get("FV_BUILD_MAX_JOBS", "4"))
+TARGET_TTL_DAYS = float(os.environ.get("FV_BUILD_TARGET_TTL_DAYS", "14"))
+SCCACHE_SIZE = os.environ.get("FV_BUILD_SCCACHE_SIZE", "40G")
+SCCACHE_VER = os.environ.get("FV_BUILD_SCCACHE_VERSION", "v0.10.0")
+CUDA_REDIST = os.environ.get("FV_BUILD_CUDA_REDIST", "13.4.2")
+CUDA_DIR = os.path.join(ROOT, "cuda-13.4")
+MAX_UPLOAD = 512 << 20
+MAX_ARTIFACT = 2 << 30
+BOOT = time.time()
+with open(os.path.abspath(__file__), "rb") as _f:
+    SERVER_SHA = hashlib.sha256(_f.read()).hexdigest()[:12]
+
+AGENT_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
+CARGO_SUBCOMMANDS = {"check", "build", "test", "clippy", "fmt", "doc", "tree", "metadata"}
+SCRIPTS = {
+    "scripts/serve/check.sh",
+    "scripts/gpu/lint.sh",
+}
+ENV_ALLOW = re.compile(
+    r"^(CUDARC_CUDA_VERSION|FV_[A-Z0-9_]+|RUST_LOG|RUST_BACKTRACE|RUSTFLAGS|RUSTDOCFLAGS"
+    r"|CARGO_PROFILE_[A-Z0-9_]+|CARGO_INCREMENTAL|CARGO_BUILD_JOBS|CARGO_TERM_COLOR)$"
+)
+ENV_DENY = {"FV_BUILD_TOKEN_SHA256", "FV_BUILD_ROOT"}
+
+state_lock = threading.Lock()
+last_activity = time.time()
+jobs = {}  # id -> Job
+job_slots = threading.Semaphore(MAX_JOBS)
+agent_locks = {}
+setup_state = {"phase": "starting", "error": None, "ready": False, "log": []}
+setup_done = threading.Event()
+
+
+def log(msg):
+    line = f"[{time.strftime('%H:%M:%S', time.gmtime())}] {msg}"
+    print(line, flush=True)
+    try:
+        os.makedirs(os.path.join(ROOT, "logs"), exist_ok=True)
+        with open(os.path.join(ROOT, "logs", "pod.log"), "a") as f:
+            f.write(line + "\n")
+    except OSError:
+        pass
+
+
+def ledger(event):
+    try:
+        with open(os.path.join(ROOT, "ledger.tsv"), "a") as f:
+            pod = os.environ.get("RUNPOD_POD_ID", "?")
+            f.write(f"{time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())}\t{pod}\t{event}\n")
+    except OSError:
+        pass
+
+
+def touch():
+    global last_activity
+    with state_lock:
+        last_activity = time.time()
+
+
+# --------------------------------------------------------------------------- setup
+
+
+def sh(cmd, **kw):
+    setup_state["log"].append(" ".join(cmd) if isinstance(cmd, list) else cmd)
+    return subprocess.run(cmd, check=True, **kw)
+
+
+def job_env(agent=None):
+    env = dict(os.environ)
+    for k in ("FV_BUILD_TOKEN_SHA256", "RUNPOD_API_KEY"):
+        env.pop(k, None)
+    env.update(
+        {
+            "CARGO_HOME": os.path.join(ROOT, "cargo"),
+            "RUSTUP_HOME": os.path.join(ROOT, "rustup"),
+            "CUDA_HOME": CUDA_DIR,
+            "CUDA_PATH": CUDA_DIR,
+            "CUDA_TOOLKIT_PATH": CUDA_DIR,
+            "NVCC": os.path.join(CUDA_DIR, "bin", "nvcc"),
+            "CUDARC_CUDA_VERSION": "13000",
+            # Same release overrides as the CI builder (docker/gpucheck.Dockerfile):
+            # what the published images ship, at a fraction of fat-LTO time.
+            "CARGO_PROFILE_RELEASE_LTO": "off",
+            "CARGO_PROFILE_RELEASE_CODEGEN_UNITS": "16",
+            "CARGO_PROFILE_RELEASE_PANIC": "unwind",
+            "CARGO_TERM_COLOR": "never",
+            "SCCACHE_DIR": os.path.join(ROOT, "sccache"),
+            "SCCACHE_CACHE_SIZE": SCCACHE_SIZE,
+            "SCCACHE_IDLE_TIMEOUT": "0",
+        }
+    )
+    path = [
+        os.path.join(ROOT, "cargo", "bin"),
+        "/usr/local/cargo/bin",
+        os.path.join(CUDA_DIR, "bin"),
+        os.path.join(ROOT, "tools"),
+    ]
+    env["PATH"] = ":".join(path + [env.get("PATH", "/usr/local/bin:/usr/bin:/bin")])
+    lib = os.path.join(CUDA_DIR, "lib64")
+    env["LD_LIBRARY_PATH"] = lib + (":" + env["LD_LIBRARY_PATH"] if env.get("LD_LIBRARY_PATH") else "")
+    sccache = os.path.join(ROOT, "tools", "sccache")
+    if os.path.exists(sccache) and os.environ.get("FV_BUILD_SCCACHE", "1") == "1":
+        env["RUSTC_WRAPPER"] = sccache
+    if shutil.which("mold"):
+        env["CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS"] = "-C link-arg=-fuse-ld=mold"
+    if agent:
+        env["CARGO_TARGET_DIR"] = os.path.join(ROOT, "target", agent)
+    return env
+
+
+def fetch(url, dest):
+    tmp = dest + ".part"
+    with urllib.request.urlopen(url, timeout=600) as r, open(tmp, "wb") as f:
+        shutil.copyfileobj(r, f, 1 << 20)
+    os.replace(tmp, dest)
+
+
+def install_cuda():
+    marker = os.path.join(CUDA_DIR, ".fv-redist-" + CUDA_REDIST)
+    if os.path.exists(marker):
+        return
+    setup_state["phase"] = "cuda"
+    base = "https://developer.download.nvidia.com/compute/cuda/redist/"
+    with urllib.request.urlopen(base + f"redistrib_{CUDA_REDIST}.json", timeout=60) as r:
+        index = json.load(r)
+    stage = CUDA_DIR + ".staging"
+    shutil.rmtree(stage, ignore_errors=True)
+    os.makedirs(stage)
+    dl = os.path.join(ROOT, "tmp")
+    os.makedirs(dl, exist_ok=True)
+    for comp in ("cuda_nvcc", "cuda_crt", "cuda_cudart", "cuda_nvrtc", "libnvvm", "cccl", "cuda_tileiras"):
+        rel = index[comp]["linux-x86_64"]["relative_path"]
+        want = index[comp]["linux-x86_64"]["sha256"]
+        path = os.path.join(dl, os.path.basename(rel))
+        fetch(base + rel, path)
+        h = hashlib.sha256()
+        with open(path, "rb") as f:
+            for chunk in iter(lambda: f.read(1 << 20), b""):
+                h.update(chunk)
+        if h.hexdigest() != want:
+            raise RuntimeError(f"sha256 mismatch for {comp}")
+        sh(["tar", "-xJf", path, "-C", stage, "--strip-components=1"])
+        os.remove(path)
+    lib = os.path.join(stage, "lib")
+    if os.path.isdir(lib) and not os.path.exists(os.path.join(stage, "lib64")):
+        os.symlink("lib", os.path.join(stage, "lib64"))
+    shutil.rmtree(CUDA_DIR, ignore_errors=True)
+    os.replace(stage, CUDA_DIR)
+    open(marker, "w").close()
+    log(f"cuda redist {CUDA_REDIST} installed at {CUDA_DIR}")
+
+
+def install_sccache():
+    dest = os.path.join(ROOT, "tools", "sccache")
+    ver_marker = dest + "." + SCCACHE_VER
+    if os.path.exists(ver_marker):
+        return
+    setup_state["phase"] = "sccache"
+    os.makedirs(os.path.dirname(dest), exist_ok=True)
+    name = f"sccache-{SCCACHE_VER}-x86_64-unknown-linux-musl"
+    url = f"https://github.com/mozilla/sccache/releases/download/{SCCACHE_VER}/{name}.tar.gz"
+    tgz = os.path.join(ROOT, "tmp", name + ".tar.gz")
+    os.makedirs(os.path.dirname(tgz), exist_ok=True)
+    try:
+        fetch(url, tgz)
+        with tarfile.open(tgz) as t:
+            member = t.getmember(f"{name}/sccache")
+            with t.extractfile(member) as src, open(dest + ".part", "wb") as out:
+                shutil.copyfileobj(src, out)
+        os.chmod(dest + ".part", 0o755)
+        os.replace(dest + ".part", dest)
+        open(ver_marker, "w").close()
+    except Exception as e:  # sccache is optional
+        log(f"sccache install skipped: {e}")
+    finally:
+        if os.path.exists(tgz):
+            os.remove(tgz)
+
+
+def setup():
+    try:
+        for d in ("worktrees", "target", "cargo", "rustup", "sccache", "tools", "jobs", "logs", "tmp"):
+            os.makedirs(os.path.join(ROOT, d), exist_ok=True)
+        setup_state["phase"] = "apt"
+        need = [p for p, b in (("cmake", "cmake"), ("clang", "clang"), ("mold", "mold"), ("pkg-config", "pkg-config")) if not shutil.which(b)]
+        if need:
+            env = dict(os.environ, DEBIAN_FRONTEND="noninteractive")
+            sh(["apt-get", "update", "-qq"], env=env, stdout=subprocess.DEVNULL)
+            sh(["apt-get", "install", "-y", "-qq", "--no-install-recommends", *need, "libssl-dev", "xz-utils"],
+               env=env, stdout=subprocess.DEVNULL)
+        install_cuda()
+        install_sccache()
+        setup_state["phase"] = "rustup"
+        env = job_env()
+        if not os.path.isdir(os.path.join(ROOT, "rustup", "toolchains")) or not os.listdir(os.path.join(ROOT, "rustup", "toolchains")):
+            sh(["rustup", "toolchain", "install", "stable", "--profile", "minimal", "-c", "rustfmt", "-c", "clippy"], env=env)
+        sh(["rustup", "default", "stable"], env=env, stdout=subprocess.DEVNULL)
+        prune_targets()
+        setup_state["phase"] = "ready"
+        setup_state["ready"] = True
+        log("setup complete")
+    except Exception as e:
+        setup_state["phase"] = "failed"
+        setup_state["error"] = str(e)
+        log(f"setup failed: {e}")
+    finally:
+        setup_done.set()
+
+
+def prune_targets():
+    """Drop target dirs untouched for FV_BUILD_TARGET_TTL_DAYS (volume space)."""
+    tdir = os.path.join(ROOT, "target")
+    cutoff = time.time() - TARGET_TTL_DAYS * 86400
+    for a in os.listdir(tdir):
+        stamp = os.path.join(ROOT, "worktrees", a, ".fv-build-last-run")
+        try:
+            last = os.path.getmtime(stamp)
+        except OSError:
+            last = os.path.getmtime(os.path.join(tdir, a))
+        if last < cutoff:
+            log(f"pruning target/{a} (unused {TARGET_TTL_DAYS:g} days)")
+            shutil.rmtree(os.path.join(tdir, a), ignore_errors=True)
+
+
+# --------------------------------------------------------------------------- jobs
+
+
+class Job:
+    def __init__(self, agent, argv, env_over):
+        self.id = time.strftime("%m%d%H%M%S", time.gmtime()) + "-" + uuid.uuid4().hex[:6]
+        self.agent = agent
+        self.argv = argv
+        self.env_over = env_over
+        self.state = "queued"
+        self.exit = None
+        self.started = None
+        self.ended = None
+        self.proc = None
+        self.log_path = os.path.join(ROOT, "jobs", self.id + ".log")
+        self.cond = threading.Condition()
+        open(self.log_path, "wb").close()
+
+    def info(self):
+        dur = None
+        if self.started:
+            dur = round((self.ended or time.time()) - self.started, 1)
+        return {"id": self.id, "agent": self.agent, "argv": self.argv, "state": self.state,
+                "exit": self.exit, "seconds": dur}
+
+    def write(self, b):
+        with open(self.log_path, "ab") as f:
+            f.write(b)
+        with self.cond:
+            self.cond.notify_all()
+
+    def run(self):
+        lock = agent_locks.setdefault(self.agent, threading.Lock())
+        setup_done.wait()
+        if not setup_state["ready"]:
+            self.write(f"build pod setup failed: {setup_state['error']}\n".encode())
+            self.finish(125)
+            return
+        with lock, job_slots:
+            if self.state == "cancelled":
+                self.finish(130)
+                return
+            wt = os.path.join(ROOT, "worktrees", self.agent)
+            env = job_env(self.agent)
+            env.update(self.env_over)
+            self.state = "running"
+            self.started = time.time()
+            touch()
+            try:
+                open(os.path.join(wt, ".fv-build-last-run"), "w").close()
+            except OSError:
+                pass
+            self.write(f"$ {' '.join(self.argv)}   [agent {self.agent}, CARGO_TARGET_DIR={env['CARGO_TARGET_DIR']}]\n".encode())
+            try:
+                self.proc = subprocess.Popen(self.argv, cwd=wt, env=env, stdin=subprocess.DEVNULL,
+                                             stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                                             start_new_session=True)
+                for chunk in iter(lambda: self.proc.stdout.read1(65536), b""):
+                    self.write(chunk)
+                    touch()
+                rc = self.proc.wait()
+            except OSError as e:
+                self.write(f"failed to start: {e}\n".encode())
+                rc = 127
+            self.write(f"\n[exit {rc} after {time.time() - self.started:.1f}s]\n".encode())
+            self.finish(rc)
+
+    def finish(self, rc):
+        self.exit = rc
+        self.ended = time.time()
+        if self.state != "cancelled":
+            self.state = "done"
+        touch()
+        with self.cond:
+            self.cond.notify_all()
+
+    def cancel(self):
+        if self.state == "queued":
+            self.state = "cancelled"
+        elif self.state == "running" and self.proc:
+            self.state = "cancelled"
+            try:
+                os.killpg(self.proc.pid, signal.SIGTERM)
+            except ProcessLookupError:
+                pass
+
+
+def validate_command(argv, env):
+    if not isinstance(argv, list) or not argv or not all(isinstance(a, str) for a in argv):
+        return "argv must be a non-empty list of strings"
+    if not isinstance(env, dict) or not all(isinstance(k, str) and isinstance(v, str) for k, v in env.items()):
+        return "env must map strings to strings"
+    for k in env:
+        if k in ENV_DENY or not ENV_ALLOW.match(k):
+            return f"env {k} is not allowed"
+    if argv[0] == "cargo":
+        sub = next((a for a in argv[1:] if not a.startswith("+")), None)
+        if sub not in CARGO_SUBCOMMANDS:
+            return f"cargo {sub} is not allowed (allowed: {', '.join(sorted(CARGO_SUBCOMMANDS))})"
+        for a in argv[1:]:
+            if a.startswith(("--target-dir", "--manifest-path")):
+                return f"argument {a} is not allowed"
+        return None
+    if argv[0] == "bash" and len(argv) >= 2 and os.path.normpath(argv[1]) in SCRIPTS:
+        return None
+    return f"not allowed: {' '.join(argv[:3])} (cargo {'/'.join(sorted(CARGO_SUBCOMMANDS))} or bash one of {sorted(SCRIPTS)})"
+
+
+# --------------------------------------------------------------------------- files
+
+
+def safe_rel(p):
+    p = p.replace("\\", "/")
+    if not p or p.startswith("/") or "\x00" in p:
+        return None
+    parts = [x for x in p.split("/") if x not in ("", ".")]
+    if not parts or any(x == ".." for x in parts):
+        return None
+    return "/".join(parts)
+
+
+def manifest(wt):
+    out = []
+    for dirpath, dirnames, filenames in os.walk(wt):
+        rel_dir = os.path.relpath(dirpath, wt)
+        for name in filenames + [d for d in dirnames if os.path.islink(os.path.join(dirpath, d))]:
+            full = os.path.join(dirpath, name)
+            rel = name if rel_dir == "." else os.path.join(rel_dir, name)
+            if rel == ".fv-build-last-run":
+                continue
+            st = os.lstat(full)
+            out.append(f"{rel}\t{st.st_size}\t{int(st.st_mtime)}")
+    return "\n".join(sorted(out)) + ("\n" if out else "")
+
+
+def extract(tar_path, wt):
+    n = 0
+    real_wt = os.path.realpath(wt)
+    with tarfile.open(tar_path, "r:*") as t:
+        for m in t:
+            rel = safe_rel(m.name)
+            if rel is None:
+                raise ValueError(f"unsafe path {m.name!r}")
+            if not (m.isfile() or m.isdir() or m.issym()):
+                raise ValueError(f"unsupported member type {m.name!r}")
+            if m.issym():
+                target = os.path.normpath(os.path.join(os.path.dirname(os.path.join(real_wt, rel)), m.linkname))
+                if not (target == real_wt or target.startswith(real_wt + os.sep)):
+                    raise ValueError(f"symlink escapes worktree: {m.name!r}")
+            dest = os.path.join(real_wt, rel)
+            parent = os.path.realpath(os.path.dirname(dest))
+            if not (parent == real_wt or parent.startswith(real_wt + os.sep)):
+                raise ValueError(f"path escapes worktree: {m.name!r}")
+            if not m.isdir() and (os.path.islink(dest) or os.path.isfile(dest)):
+                os.unlink(dest)
+            elif not m.isdir() and os.path.isdir(dest):
+                shutil.rmtree(dest)
+            m.name = rel
+            m.uid = m.gid = 0
+            m.uname = m.gname = ""
+            m.mode = (m.mode & 0o755) | 0o600
+            t.extract(m, real_wt, set_attrs=True)
+            n += 1
+    return n
+
+
+def delete_paths(wt, paths):
+    n = 0
+    real_wt = os.path.realpath(wt)
+    for p in paths:
+        rel = safe_rel(p)
+        if rel is None:
+            continue
+        full = os.path.join(real_wt, rel)
+        if not os.path.realpath(os.path.dirname(full)).startswith(real_wt):
+            continue
+        try:
+            if os.path.islink(full) or os.path.isfile(full):
+                os.unlink(full)
+                n += 1
+        except OSError:
+            pass
+        d = os.path.dirname(full)
+        while d.startswith(real_wt + os.sep):
+            try:
+                os.rmdir(d)
+            except OSError:
+                break
+            d = os.path.dirname(d)
+    return n
+
+
+def du(path):
+    try:
+        r = subprocess.run(["du", "-sb", path], capture_output=True, text=True, timeout=60)
+        return int(r.stdout.split()[0])
+    except Exception:
+        return None
+
+
+# --------------------------------------------------------------------------- self-stop
+
+
+def runpod_call(method, path):
+    key = os.environ.get("RUNPOD_API_KEY")
+    if not key:
+        raise RuntimeError("no RUNPOD_API_KEY in the pod environment")
+    req = urllib.request.Request("https://rest.runpod.io/v1" + path, method=method,
+                                 headers={"Authorization": "Bearer " + key, "content-type": "application/json"},
+                                 data=b"" if method == "POST" else None)
+    with urllib.request.urlopen(req, timeout=30) as r:
+        return r.status
+
+
+def self_stop(reason):
+    pod = os.environ.get("RUNPOD_POD_ID")
+    log(f"self-stop ({reason}) pod={pod}")
+    ledger(f"self-stop {reason}")
+    if not pod:
+        return False
+    for method, path in (("POST", f"/pods/{pod}/stop"), ("DELETE", f"/pods/{pod}")):
+        try:
+            runpod_call(method, path)
+            ledger(f"self-stop-ok {method} {path}")
+            return True
+        except Exception as e:
+            log(f"{method} {path} failed: {e}")
+    return False
+
+
+def watchdog():
+    fired = False
+    while True:
+        time.sleep(30)
+        running = any(j.state in ("running", "queued") for j in list(jobs.values()))
+        idle = time.time() - last_activity
+        reason = None
+        if time.time() - BOOT > MAX_S:
+            reason = f"wall-clock cap {MAX_S / 3600:g}h"
+        elif not running and idle > IDLE_S:
+            reason = f"idle {idle / 60:.0f} min"
+        if reason and not fired:
+            fired = self_stop(reason)
+            if not fired:
+                time.sleep(300)  # retry later rather than spinning
+
+
+# --------------------------------------------------------------------------- http
+
+
+class Handler(BaseHTTPRequestHandler):
+    protocol_version = "HTTP/1.1"
+    server_version = "fv-build/1"
+
+    def log_message(self, fmt, *args):
+        pass
+
+    def send_json(self, code, obj):
+        body = (json.dumps(obj) + "\n").encode()
+        self.send_response(code)
+        self.send_header("content-type", "application/json")
+        self.send_header("content-length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def send_text(self, code, text):
+        body = text.encode()
+        self.send_response(code)
+        self.send_header("content-type", "text/plain; charset=utf-8")
+        self.send_header("content-length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def authed(self):
+        h = self.headers.get("authorization", "")
+        if not TOKEN_SHA or not h.startswith("Bearer "):
+            return False
+        got = hashlib.sha256(h[7:].strip().encode()).hexdigest()
+        return hmac.compare_digest(got, TOKEN_SHA)
+
+    def body(self, limit=1 << 20):
+        n = int(self.headers.get("content-length") or 0)
+        if n > limit:
+            raise ValueError(f"body too large ({n} > {limit})")
+        return self.rfile.read(n) if n else b""
+
+    def route(self, method):
+        u = urllib.parse.urlparse(self.path)
+        q = dict(urllib.parse.parse_qsl(u.query))
+        parts = [p for p in u.path.split("/") if p]
+        if method == "GET" and parts == ["healthz"]:
+            return self.send_json(200, {"ok": True, "ready": setup_state["ready"], "phase": setup_state["phase"]})
+        if not self.authed():
+            return self.send_json(401, {"error": "unauthorized"})
+        touch()
+        if parts[:1] != ["v1"]:
+            return self.send_json(404, {"error": "not found"})
+        parts = parts[1:]
+        if method == "GET" and parts == ["status"]:
+            return self.status()
+        if method == "POST" and parts == ["stop"]:
+            threading.Thread(target=self_stop, args=("requested",), daemon=True).start()
+            return self.send_json(202, {"stopping": True})
+        if method == "GET" and parts == ["agents"]:
+            return self.agents(q.get("sizes") == "1")
+        if len(parts) >= 2 and parts[0] == "jobs":
+            job = jobs.get(parts[1])
+            if not job:
+                return self.send_json(404, {"error": "no such job"})
+            if method == "GET" and len(parts) == 2:
+                return self.job_poll(job, int(q.get("offset", "0")), min(float(q.get("wait", "20")), 25))
+            if method == "POST" and parts[2:] == ["cancel"]:
+                job.cancel()
+                return self.send_json(200, job.info())
+        if len(parts) >= 3 and parts[0] == "agents":
+            agent = parts[1]
+            if not AGENT_RE.match(agent):
+                return self.send_json(400, {"error": "bad agent name"})
+            wt = os.path.join(ROOT, "worktrees", agent)
+            action = parts[2]
+            if method == "GET" and action == "manifest":
+                return self.send_text(200, manifest(wt) if os.path.isdir(wt) else "")
+            if method == "PUT" and action == "files":
+                return self.put_files(agent, wt)
+            if method == "POST" and action == "delete":
+                paths = [p for p in self.body(64 << 20).decode().split("\0") if p]
+                with agent_locks.setdefault(agent, threading.Lock()):
+                    n = delete_paths(wt, paths) if os.path.isdir(wt) else 0
+                return self.send_json(200, {"deleted": n})
+            if method == "POST" and action == "jobs":
+                return self.new_job(agent, wt)
+            if method == "GET" and action == "artifact":
+                return self.artifact(agent, q.get("path", ""), q.get("gz") == "1")
+            if method == "POST" and action == "clean":
+                return self.clean(agent, json.loads(self.body() or b"{}").get("what", "all"))
+        return self.send_json(404, {"error": "not found"})
+
+    def status(self):
+        disk = shutil.disk_usage(ROOT)
+        running = [j.info() for j in jobs.values() if j.state in ("running", "queued")]
+        recent = sorted((j.info() for j in jobs.values() if j.state not in ("running", "queued")),
+                        key=lambda i: i["id"])[-10:]
+        mem = None
+        try:
+            with open("/proc/meminfo") as f:
+                mem = int(f.readline().split()[1]) // 1024
+        except OSError:
+            pass
+        self.send_json(200, {
+            "pod": os.environ.get("RUNPOD_POD_ID"), "setup": {k: setup_state[k] for k in ("phase", "ready", "error")},
+            "nproc": os.cpu_count(), "mem_mib": mem, "uptime_s": round(time.time() - BOOT),
+            "idle_s": round(time.time() - last_activity), "idle_stop_s": IDLE_S, "max_s": MAX_S,
+            "disk": {"total_gb": round(disk.total / 1e9, 1), "used_gb": round(disk.used / 1e9, 1),
+                     "free_gb": round(disk.free / 1e9, 1)},
+            "sccache": os.path.exists(os.path.join(ROOT, "tools", "sccache")), "mold": bool(shutil.which("mold")),
+            "server_sha": SERVER_SHA, "self_stop_key": bool(os.environ.get("RUNPOD_API_KEY")),
+            "jobs_active": running, "jobs_recent": recent,
+        })
+
+    def agents(self, sizes):
+        names = sorted(set(os.listdir(os.path.join(ROOT, "worktrees"))) | set(os.listdir(os.path.join(ROOT, "target"))))
+        out = []
+        for a in names:
+            stamp = os.path.join(ROOT, "worktrees", a, ".fv-build-last-run")
+            e = {"agent": a, "last_run": int(os.path.getmtime(stamp)) if os.path.exists(stamp) else None}
+            if sizes:
+                e["worktree_bytes"] = du(os.path.join(ROOT, "worktrees", a))
+                e["target_bytes"] = du(os.path.join(ROOT, "target", a))
+            out.append(e)
+        self.send_json(200, {"agents": out})
+
+    def put_files(self, agent, wt):
+        tmp = os.path.join(ROOT, "tmp", f"sync-{agent}-{uuid.uuid4().hex[:8]}.tar")
+        try:
+            n = int(self.headers.get("content-length") or 0)
+            if n > MAX_UPLOAD:
+                return self.send_json(413, {"error": f"upload over {MAX_UPLOAD >> 20} MiB"})
+            with open(tmp, "wb") as f:
+                left = n
+                while left:
+                    chunk = self.rfile.read(min(left, 1 << 20))
+                    if not chunk:
+                        break
+                    f.write(chunk)
+                    left -= len(chunk)
+            os.makedirs(wt, exist_ok=True)
+            with agent_locks.setdefault(agent, threading.Lock()):
+                count = extract(tmp, wt)
+            return self.send_json(200, {"extracted": count})
+        except (ValueError, tarfile.TarError) as e:
+            return self.send_json(400, {"error": str(e)})
+        finally:
+            if os.path.exists(tmp):
+                os.remove(tmp)
+
+    def new_job(self, agent, wt):
+        req = json.loads(self.body() or b"{}")
+        argv, env = req.get("argv"), req.get("env", {})
+        err = validate_command(argv, env)
+        if err:
+            return self.send_json(403, {"error": err})
+        if not os.path.isdir(wt):
+            return self.send_json(409, {"error": f"agent {agent} has no worktree; sync first"})
+        job = Job(agent, argv, env)
+        jobs[job.id] = job
+        threading.Thread(target=job.run, daemon=True).start()
+        return self.send_json(202, job.info())
+
+    def job_poll(self, job, offset, wait):
+        deadline = time.time() + wait
+        while True:
+            size = os.path.getsize(job.log_path)
+            if size > offset or job.state in ("done", "cancelled") or time.time() >= deadline:
+                break
+            with job.cond:
+                job.cond.wait(timeout=max(0.1, min(2.0, deadline - time.time())))
+        with open(job.log_path, "rb") as f:
+            f.seek(offset)
+            data = f.read(1 << 20)
+        info = job.info()
+        info.update({"next": offset + len(data), "data": data.decode("utf-8", "replace"),
+                     "finished": job.state in ("done", "cancelled") and offset + len(data) >= os.path.getsize(job.log_path)})
+        return self.send_json(200, info)
+
+    def artifact(self, agent, rel_path, gz):
+        rel = safe_rel(rel_path)
+        base = os.path.realpath(os.path.join(ROOT, "target", agent))
+        if rel is None:
+            return self.send_json(400, {"error": "bad path"})
+        full = os.path.realpath(os.path.join(base, rel))
+        if not full.startswith(base + os.sep) or not os.path.isfile(full):
+            return self.send_json(404, {"error": f"no file target/{agent}/{rel}"})
+        size = os.path.getsize(full)
+        if size > MAX_ARTIFACT:
+            return self.send_json(413, {"error": "artifact too large"})
+        self.send_response(200)
+        self.send_header("content-type", "application/octet-stream")
+        self.send_header("x-fv-size", str(size))
+        with open(full, "rb") as f:
+            if gz:
+                self.send_header("transfer-encoding", "chunked")
+                self.end_headers()
+
+                class Chunked:
+                    def __init__(s, w):
+                        s.w = w
+
+                    def write(s, b):
+                        if b:
+                            s.w.write(b"%x\r\n" % len(b) + b + b"\r\n")
+                        return len(b)
+
+                    def flush(s):
+                        pass
+
+                ch = Chunked(self.wfile)
+                with gzip.GzipFile(fileobj=ch, mode="wb", compresslevel=3, mtime=0) as z:
+                    shutil.copyfileobj(f, z, 1 << 20)
+                self.wfile.write(b"0\r\n\r\n")
+            else:
+                self.send_header("content-length", str(size))
+                self.end_headers()
+                shutil.copyfileobj(f, self.wfile, 1 << 20)
+
+    def clean(self, agent, what):
+        if what not in ("target", "worktree", "all"):
+            return self.send_json(400, {"error": "what must be target, worktree or all"})
+        if any(j.agent == agent and j.state in ("running", "queued") for j in jobs.values()):
+            return self.send_json(409, {"error": f"agent {agent} has a job in flight"})
+        dirs = []
+        if what in ("target", "all"):
+            dirs.append(os.path.join(ROOT, "target", agent))
+        if what in ("worktree", "all"):
+            dirs.append(os.path.join(ROOT, "worktrees", agent))
+        for d in dirs:
+            if os.path.isdir(d):
+                trash = os.path.join(ROOT, "tmp", f"trash-{agent}-{uuid.uuid4().hex[:6]}")
+                os.replace(d, trash)
+                threading.Thread(target=shutil.rmtree, args=(trash, True), daemon=True).start()
+        return self.send_json(200, {"cleaned": [os.path.relpath(d, ROOT) for d in dirs]})
+
+    def handle_one(self, method):
+        try:
+            self.route(method)
+        except (BrokenPipeError, ConnectionResetError):
+            pass
+        except Exception as e:  # keep the service alive
+            log(f"{method} {self.path}: {e!r}")
+            try:
+                self.send_json(500, {"error": str(e)})
+            except Exception:
+                pass
+
+    def do_GET(self):
+        self.handle_one("GET")
+
+    def do_POST(self):
+        self.handle_one("POST")
+
+    def do_PUT(self):
+        self.handle_one("PUT")
+
+
+def main():
+    if not TOKEN_SHA or not re.fullmatch(r"[0-9a-f]{64}", TOKEN_SHA):
+        print("FV_BUILD_TOKEN_SHA256 must be a sha256 hex digest", file=sys.stderr)
+        sys.exit(2)
+    os.makedirs(os.path.join(ROOT, "tmp"), exist_ok=True)
+    for d in ("worktrees", "target", "jobs", "logs"):
+        os.makedirs(os.path.join(ROOT, d), exist_ok=True)
+    # Leftovers from a clean that the previous pod did not finish.
+    for name in os.listdir(os.path.join(ROOT, "tmp")):
+        if name.startswith(("trash-", "sync-")):
+            threading.Thread(target=shutil.rmtree, args=(os.path.join(ROOT, "tmp", name), True), daemon=True).start()
+    ledger("service-start")
+    log(f"fv-build service on :{PORT} root={ROOT} idle={IDLE_S / 60:g}min cap={MAX_S / 3600:g}h")
+    if os.environ.get("FV_BUILD_SKIP_SETUP") == "1":
+        setup_state.update(phase="ready", ready=True)
+        setup_done.set()
+    else:
+        threading.Thread(target=setup, daemon=True).start()
+    if os.environ.get("FV_BUILD_NO_WATCHDOG") != "1":
+        threading.Thread(target=watchdog, daemon=True).start()
+    ThreadingHTTPServer.daemon_threads = True
+    ThreadingHTTPServer(("0.0.0.0", PORT), Handler).serve_forever()
+
+
+if __name__ == "__main__":
+    main()
