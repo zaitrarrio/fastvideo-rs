@@ -350,11 +350,34 @@ impl QuantMode {
     /// run. Unset, H3 defaults to MXFP8 (Sol-H3's recipe; gate pass at 1.52x
     /// denoise on RTX PRO 6000) on a live device with block-scaled FP8
     /// (sm_100+), and to off on older GPUs and CPU runs. `=off` restores bf16.
+    /// `=mxfp8` (e.g. from a technique profile) on a live pre-Blackwell device
+    /// runs W8A8 instead: cuBLASLt has no MXFP8 kernels below sm_100, and
+    /// W8A8 is the other reference recipe (said once in the log).
     pub fn from_env() -> std::result::Result<Self, String> {
         match fastvideo_models::techniques::settings::var(ENV) {
-            Some(v) => Self::parse(&v),
+            Some(v) => Ok(Self::parse(&v)?.for_device()),
             None => Ok(Self::default_for_device()),
         }
+    }
+
+    fn for_device(self) -> Self {
+        #[cfg(feature = "cuda")]
+        if self == Self::Mxfp8 && crate::wan::stats::device_expected() {
+            if let Some(d) = crate::wan::device::global_device() {
+                if d.sm_major < 10 {
+                    static SAID: std::sync::atomic::AtomicBool =
+                        std::sync::atomic::AtomicBool::new(false);
+                    if !SAID.swap(true, std::sync::atomic::Ordering::Relaxed) {
+                        crate::wan::log::info(format_args!(
+                            "{ENV}=mxfp8 needs sm_100+ (this GPU is sm_{}{}); running W8A8",
+                            d.sm_major, d.sm_minor
+                        ));
+                    }
+                    return Self::W8A8;
+                }
+            }
+        }
+        self
     }
 
     fn default_for_device() -> Self {
