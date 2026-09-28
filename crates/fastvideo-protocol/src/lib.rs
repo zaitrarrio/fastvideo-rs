@@ -51,6 +51,6 @@ pub use request::{
     SamplingOverrides, Snap, Task, TimingSpec, UploadId,
 };
 pub use stream::{
-    AudioTrack, Continuity, EndReason, SessionSpec, SessionState, StreamProtocol, TrackSet,
+    AudioTrack, CausalLimits, Continuity, EndReason, SessionSpec, SessionState, StreamProtocol, TrackSet,
     VideoTrack, WIRE_AUDIO_RATE,
 };

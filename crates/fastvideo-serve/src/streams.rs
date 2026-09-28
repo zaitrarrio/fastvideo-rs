@@ -3,7 +3,7 @@
 //!
 //! | Route | Behaviour |
 //! |---|---|
-//! | `POST /fv/v1/streams` | Open a session (`causal` for SF-Wan, `clip` for H3/LTX/Wan clip models), start the pacer and publish via WHIP → 201 stream object. Busy → 429 + `Retry-After`; model not resident → 503 + `Retry-After` |
+//! | `POST /fv/v1/streams` | Open a session (`causal` for SF-Wan, `clip` for H3/LTX/Wan clip models), start the pacer and publish via WHIP → 201 stream object. A causal stream always has a length: `max_seconds`, else `[streams] causal_default_max_s` (120), at most `causal_hard_max_s` (300); it then closes with `end_reason: "session_limit"` (a `reset` restarts the clock, up to the ceiling in all). Busy → 429 + `Retry-After`; model not resident → 503 + `Retry-After` |
 //! | `GET /fv/v1/streams` | Live and recently ended streams |
 //! | `GET /fv/v1/streams/{id}` | State, WHIP resource, pacer stats, TTFF phases, recent session events |
 //! | `POST /fv/v1/streams/{id}/commands` | One session command, `{"type","data"}`: the clip set ([`ClipCommand`]) or the causal set ([`CausalCommand`]) → `{"reply": …}` |
@@ -38,7 +38,7 @@ use fastvideo_engine_service::stream::{
 };
 use fastvideo_engine_service::EngineService;
 use fastvideo_protocol::{
-    canvas_for_aspect, ApiError, Continuity, ErrorKind, ModelCaps, ModelId, ProtocolId, SessionSpec,
+    canvas_for_aspect, ApiError, CausalLimits, Continuity, ErrorKind, ModelCaps, ModelId, ProtocolId, SessionSpec,
     StreamCaps, TrackSet,
 };
 use fastvideo_serve_kit::ServeCtx;
@@ -67,6 +67,8 @@ pub struct StreamsConfig {
     pub connect_timeout: Duration,
     /// Ended streams kept for `GET`.
     pub keep_ended: usize,
+    /// Live causal session length (`[streams]`, design §5.2).
+    pub causal: CausalLimits,
 }
 
 impl Default for StreamsConfig {
@@ -80,6 +82,7 @@ impl Default for StreamsConfig {
             first_frame_timeout: Duration::from_secs(300),
             connect_timeout: Duration::from_secs(30),
             keep_ended: 32,
+            causal: CausalLimits::default(),
         }
     }
 }
@@ -92,6 +95,7 @@ impl StreamsConfig {
             whip_target: c.webrtc.whip_target.clone(),
             whip_token: (!c.webrtc.whip_token.is_empty()).then(|| c.webrtc.whip_token.expose().to_owned()),
             encoder: c.webrtc.encoder.clone(),
+            causal: c.streams.causal_limits(),
             ..Self::default()
         };
         if let Ok(v) = std::env::var("FV_STREAM_STUN") {
@@ -202,6 +206,8 @@ struct Entry {
     id: String,
     model: String,
     mode: &'static str,
+    /// The session limit in video seconds (resolved, design §5.2).
+    max_seconds: Option<u32>,
     created_ms: u64,
     status: Mutex<StreamStatus>,
     pace: Mutex<Option<watch::Receiver<PaceStats>>>,
@@ -228,6 +234,7 @@ impl Entry {
             "object": "fv.stream",
             "model": self.model,
             "mode": self.mode,
+            "max_seconds": self.max_seconds,
             "created_at": self.created_ms / 1000,
             "status": st,
             "pacer": pace.map(pace_json),
@@ -263,6 +270,7 @@ fn pace_json(p: PaceStats) -> Value {
         "unique_fps": (p.unique_fps * 100.0).round() / 100.0,
         "effective_fps": (p.effective_fps * 100.0).round() / 100.0,
         "video_seconds": (p.video_seconds * 1000.0).round() / 1000.0,
+        "limit_seconds": (p.limit_seconds * 1000.0).round() / 1000.0,
         "ended": p.ended.map(|e| serde_json::to_value(e).unwrap_or(Value::Null)),
     })
 }
@@ -351,8 +359,10 @@ impl Streams {
     }
 }
 
-/// The session spec for a body (pure; exposed for tests).
-pub fn session_spec(caps: &ModelCaps, b: &StreamBody) -> Result<SessionSpec, ApiError> {
+/// The session spec for a body (pure; exposed for tests). A causal session
+/// always gets a limit: `max_seconds`, else `causal.default_max_s`, clamped
+/// to `causal.hard_max_s` (design §5.2); a clip session keeps the request's.
+pub fn session_spec(caps: &ModelCaps, b: &StreamBody, causal: &CausalLimits) -> Result<SessionSpec, ApiError> {
     let fps = b.fps.unwrap_or(match caps.stream {
         Some(StreamCaps::Causal { target_fps, .. }) => target_fps,
         _ => caps.fps.default,
@@ -382,7 +392,10 @@ pub fn session_spec(caps: &ModelCaps, b: &StreamBody) -> Result<SessionSpec, Api
         canvas,
         fps,
         continuity,
-        max_seconds: b.max_seconds,
+        max_seconds: match caps.stream {
+            Some(StreamCaps::Causal { .. }) => Some(causal.resolve(b.max_seconds)?),
+            _ => b.max_seconds,
+        },
         seed: b.seed,
     })
 }
@@ -525,12 +538,13 @@ pub fn routes(gate: Arc<ServiceGate>, cfg: StreamsConfig) -> Router<ServeCtx> {
         )
 }
 
-fn new_entry(model: &ModelId, mode: &'static str) -> Arc<Entry> {
+fn new_entry(model: &ModelId, mode: &'static str, max_seconds: Option<u32>) -> Arc<Entry> {
     let id = format!("fvstream_{}", uuid_simple());
     Arc::new(Entry {
         id,
         model: model.to_string(),
         mode,
+        max_seconds,
         created_ms: now_ms(),
         status: Mutex::new(StreamStatus {
             state: StreamState::Starting,
@@ -621,9 +635,9 @@ mod publish {
             .get(&fastvideo_protocol::ModelId::new(&b.model))
             .cloned()
             .ok_or_else(|| ApiError::invalid_param("model", format!("model `{}` is not served here", b.model)))?;
-        let spec = session_spec(&caps, &b)?;
+        let spec = session_spec(&caps, &b, &st.cfg.causal)?;
         let causal = matches!(caps.stream, Some(StreamCaps::Causal { .. }));
-        let entry = new_entry(&caps.id, if causal { "causal" } else { "clip" });
+        let entry = new_entry(&caps.id, if causal { "causal" } else { "clip" }, spec.max_seconds);
         let paced: PacedStream = if causal {
             let prompt = b
                 .prompt
@@ -634,7 +648,7 @@ mod publish {
             let control = session.control();
             control.set_prompt(prompt.trim());
             *entry.control.lock().map_err(internal)? = Some(Control::Causal(control));
-            spawn_causal_pacer(session, CausalPacerConfig::for_spec(&spec))?
+            spawn_causal_pacer(session, CausalPacerConfig::with_limits(&spec, &st.cfg.causal))?
         } else {
             let session = st.engine.open_clip_session(spec.clone()).await?;
             let (player, out) = session.into_player(ClipPlayerConfig {
@@ -914,5 +928,35 @@ mod publish {
             let _ = tokio::task::spawn_blocking(move || e.finish()).await;
         }
         Ok(reason)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use fastvideo_engine_service::FakeModel;
+
+    use super::*;
+
+    fn body(max_seconds: Option<u32>) -> StreamBody {
+        StreamBody { model: "m".into(), prompt: Some("p".into()), max_seconds, ..StreamBody::default() }
+    }
+
+    #[test]
+    fn causal_sessions_always_get_a_clamped_limit() {
+        let sf = FakeModel::sf_wan().caps;
+        let l = CausalLimits::default();
+        assert_eq!(session_spec(&sf, &body(None), &l).unwrap().max_seconds, Some(120));
+        assert_eq!(session_spec(&sf, &body(Some(45)), &l).unwrap().max_seconds, Some(45));
+        assert_eq!(session_spec(&sf, &body(Some(250)), &l).unwrap().max_seconds, Some(250));
+        assert_eq!(session_spec(&sf, &body(Some(900)), &l).unwrap().max_seconds, Some(300));
+        let e = session_spec(&sf, &body(Some(0)), &l).unwrap_err();
+        assert_eq!(e.param.as_deref(), Some("max_seconds"));
+        let tight = CausalLimits { default_max_s: 10, hard_max_s: 20 };
+        assert_eq!(session_spec(&sf, &body(None), &tight).unwrap().max_seconds, Some(10));
+        assert_eq!(session_spec(&sf, &body(Some(60)), &tight).unwrap().max_seconds, Some(20));
+        // Clip sessions keep the request's (no default).
+        let h3 = FakeModel::h3_max().caps;
+        assert_eq!(session_spec(&h3, &body(None), &l).unwrap().max_seconds, None);
+        assert_eq!(session_spec(&h3, &body(Some(900)), &l).unwrap().max_seconds, Some(900));
     }
 }

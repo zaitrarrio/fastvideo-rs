@@ -781,7 +781,7 @@ pub fn assemble(
     let mcfg = mount_cfg(config);
     let mut kit: Router<ServeCtx> = ctx.routes();
     if config.protocols.native {
-        kit = kit.merge(native::routes(gate.clone(), mcfg.body_max, mcfg.sync_timeout));
+        kit = kit.merge(native::routes(gate.clone(), mcfg.body_max, mcfg.sync_timeout, config.streams.causal_limits()));
         kit = kit.merge(crate::streams::routes(gate.clone(), crate::streams::StreamsConfig::from_config(config)));
     }
     let (adapters, stateful) = adapters::mount(&mcfg, ctx, fal_extra);

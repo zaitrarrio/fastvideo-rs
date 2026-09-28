@@ -8,6 +8,12 @@
 //! `command_error{command, reason}` plus the ack. Generation pauses while no
 //! peer is connected (design §5.2 Orphaned), and a `state_update` goes out
 //! whenever a new block has been played (at most once a second).
+//!
+//! A session is length-limited (design §5.2): `/start_session`
+//! `max_seconds`, else `[streams] causal_default_max_s` (120 s of video),
+//! at most `causal_hard_max_s` (300). `reset` restarts the clock, up to the
+//! ceiling in all. At the limit the runtime closes the session with
+//! `session_ended{reason}` ([`crate::session::session_limit_reason`]).
 
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
@@ -18,7 +24,7 @@ use fastvideo_engine_service::{
     spawn_causal_pacer, CausalCommand, CausalControl, CausalPacerConfig, CausalReply, CausalSession, CausalState,
     PacedStream,
 };
-use fastvideo_protocol::ApiError;
+use fastvideo_protocol::{ApiError, CausalLimits};
 use serde_json::{json, Map, Value};
 
 use crate::driver::{Driver, Outbox, Outcome};
@@ -39,12 +45,19 @@ fn state_msg(s: &CausalState) -> ServerMsg {
 impl CausalDriver {
     /// Starts the causal pacer over `session` (generation stays parked until
     /// a prompt arrives and a peer is connected).
-    pub fn start(session: CausalSession, seed: u64, out: Outbox) -> Result<(Self, PacedStream), ApiError> {
+    /// The pacer ends the stream at the spec's `max_seconds` (restarted by a
+    /// `reset`, `limits.hard_max_s` in all).
+    pub fn start(
+        session: CausalSession,
+        seed: u64,
+        limits: &CausalLimits,
+        out: Outbox,
+    ) -> Result<(Self, PacedStream), ApiError> {
         let control = session.control();
         control.set_seed(seed);
         control.set_paused(true);
         let spec = session.spec().clone();
-        let paced = spawn_causal_pacer(session, CausalPacerConfig::for_spec(&spec))?;
+        let paced = spawn_causal_pacer(session, CausalPacerConfig::with_limits(&spec, limits))?;
         // state_update after new blocks.
         let (c, o) = (control.clone(), out.clone());
         tokio::spawn(async move {

@@ -158,9 +158,68 @@ pub struct SessionSpec {
     pub canvas: (u32, u32),
     pub fps: u32,
     pub continuity: Continuity,
-    /// Enforced in video time from the first emitted frame.
+    /// Enforced in video time from the first emitted frame (causal
+    /// sessions: from the first frame or the last `reset`, see
+    /// [`CausalLimits`]).
     pub max_seconds: Option<u32>,
     pub seed: Option<u64>,
+}
+
+/// Length limits of live causal (SF-Wan) sessions (design §5.2, §5.4).
+///
+/// Every front-end that opens a causal session resolves its `max_seconds`
+/// here: the request's value, else `default_max_s`, clamped to
+/// `hard_max_s`. The clock is video time from the first emitted frame. A
+/// `reset` restarts it (a reset renews the anchor, so quality recovers), but
+/// the whole session never exceeds `hard_max_s` of video. The defaults follow
+/// the R12 study (docs/ports/wan.md): 120 s is clean unattended, 300 s is
+/// usable with a transient top-edge strip.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CausalLimits {
+    /// Per-session limit when the request gives none (seconds of video).
+    pub default_max_s: u32,
+    /// Ceiling of a requested limit, and of the whole session across resets.
+    pub hard_max_s: u32,
+}
+
+impl Default for CausalLimits {
+    fn default() -> Self {
+        Self { default_max_s: 120, hard_max_s: 300 }
+    }
+}
+
+impl CausalLimits {
+    /// The session limit for a request: `requested`, else the default, then
+    /// clamped to the hard ceiling. `Some(0)` is refused (param
+    /// `max_seconds`).
+    pub fn resolve(&self, requested: Option<u32>) -> Result<u32, ApiError> {
+        match requested {
+            Some(0) => Err(ApiError::invalid_param("max_seconds", "max_seconds must be at least 1")),
+            Some(s) => Ok(s.min(self.hard_max_s)),
+            None => Ok(self.default_max_s.min(self.hard_max_s)),
+        }
+    }
+
+    /// Whether the limits are usable: `1 <= default <= hard`.
+    pub fn check(&self) -> Result<(), String> {
+        if self.default_max_s == 0 || self.hard_max_s < self.default_max_s {
+            return Err(format!(
+                "causal stream limits need 1 <= default ({}) <= hard ({})",
+                self.default_max_s, self.hard_max_s
+            ));
+        }
+        Ok(())
+    }
+
+    /// How capabilities advertise the limits.
+    pub fn advertised(&self) -> serde_json::Value {
+        serde_json::json!({
+            "default_max_s": self.default_max_s,
+            "hard_max_s": self.hard_max_s,
+            "clock": "video_seconds_from_first_frame",
+            "reset_restarts_clock": true,
+        })
+    }
 }
 
 /// How consecutive clips join (design §5.5).

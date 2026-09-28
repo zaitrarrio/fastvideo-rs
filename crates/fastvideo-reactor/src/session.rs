@@ -3,7 +3,9 @@
 //!
 //! States: `CREATED` (model loading) → `READY` → `WAITING` (on
 //! `/start_session`) → `STREAMING` (first connection) ↔ `ORPHANED` (last
-//! connection gone) → `CLOSING` (on `/stop_session` or after
+//! connection gone) → `CLOSING` (on `/stop_session`, at a causal session's
+//! length limit (design §5.2; `session_ended` with
+//! [`session_limit_reason`]), or after
 //! `orphan_timeout` in WAITING/ORPHANED) → `READY`. A failed model load is
 //! `TERMINATED`. One process hosts exactly one session, with the fixed id
 //! [`SESSION_ID`].
@@ -16,8 +18,8 @@ use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use fastvideo_engine_service::CausalControl;
-use fastvideo_protocol::{draw_seed, ApiError, Continuity, ModelCaps, SessionSpec, StreamCaps, TrackSet};
+use fastvideo_engine_service::{CausalControl, PacedStream};
+use fastvideo_protocol::{draw_seed, ApiError, CausalLimits, Continuity, EndReason, ModelCaps, SessionSpec, StreamCaps, TrackSet};
 use fastvideo_webrtc::host::{PeerHandle, RtcHost};
 use fastvideo_webrtc::writer::VideoCodec;
 use serde_json::{json, Value};
@@ -39,6 +41,10 @@ pub const VIDEO_TRACK: &str = "main_video";
 pub const AUDIO_TRACK: &str = "main_audio";
 /// RT's drain reason (`_DRAIN_CLOSE_REASON`).
 pub const DRAIN_REASON: &str = "Session ended: the server is shutting down.";
+/// `session_ended.reason` when a causal session reaches its length limit.
+pub fn session_limit_reason(seconds: u32) -> String {
+    format!("Session ended: the {seconds} s session length limit was reached.")
+}
 /// RT's moderated-stop notice.
 pub const MODERATION_MESSAGE: &str = "Session terminated due to policy violation.";
 
@@ -76,6 +82,10 @@ pub struct ReactorConfig {
     pub latch_grace: Duration,
     /// `server_info.server_version`.
     pub server_version: String,
+    /// Causal-mode session length (design §5.2): `/start_session`
+    /// `max_seconds`, else the default, at most the hard ceiling; a `reset`
+    /// restarts the clock up to the ceiling in all.
+    pub causal_limits: CausalLimits,
 }
 
 impl Default for ReactorConfig {
@@ -96,6 +106,7 @@ impl Default for ReactorConfig {
             vp8_quality: 70.0,
             latch_grace: Duration::from_secs(2),
             server_version: format!("fastvideo-rs {}", env!("CARGO_PKG_VERSION")),
+            causal_limits: CausalLimits::default(),
         }
     }
 }
@@ -302,7 +313,13 @@ impl Reactor {
         }
         match self.model() {
             Some(caps) => match Self::table(&caps) {
-                Some(t) => schema::openapi(&caps.id.0, &self.inner.cfg.server_version, &t, &self.tracks(&caps)),
+                Some(t) => schema::openapi(
+                    &caps.id.0,
+                    &self.inner.cfg.server_version,
+                    &t,
+                    &self.tracks(&caps),
+                    &self.inner.cfg.causal_limits,
+                ),
                 None => json!({}),
             },
             None => json!({}),
@@ -410,13 +427,29 @@ impl Reactor {
             .seed
             .or_else(|| params.get("seed").and_then(Value::as_u64))
             .unwrap_or_else(draw_seed);
+        // Causal sessions always have a length (design §5.2); clip sessions
+        // run until stopped.
+        let max_seconds = match table.mode {
+            Mode::Causal => {
+                let asked = match params.get("max_seconds") {
+                    None | Some(Value::Null) => None,
+                    Some(v) => Some(
+                        v.as_u64()
+                            .and_then(|n| u32::try_from(n).ok())
+                            .ok_or_else(|| Refusal::new(400, "max_seconds must be a whole number of seconds"))?,
+                    ),
+                };
+                Some(self.inner.cfg.causal_limits.resolve(asked).map_err(|e| Refusal::new(400, e.message))?)
+            }
+            Mode::Clip => None,
+        };
         let spec = SessionSpec {
             model: caps.id.clone(),
             tracks: tracks.clone(),
             canvas,
             fps,
             continuity: Continuity::HardCut,
-            max_seconds: None,
+            max_seconds,
             seed: Some(seed),
         };
         let cfg = &self.inner.cfg;
@@ -432,7 +465,7 @@ impl Reactor {
             }
             r
         };
-        let (driver, paced, causal): (Arc<dyn Driver>, _, Option<CausalControl>) = match table.mode {
+        let (driver, paced, causal): (Arc<dyn Driver>, PacedStream, Option<CausalControl>) = match table.mode {
             Mode::Clip => {
                 let session = self.inner.engine.open_clip(spec).await.map_err(refuse)?;
                 let (d, p) = ClipDriver::start(session, &cfg.aspect, out.clone()).map_err(refuse)?;
@@ -440,11 +473,13 @@ impl Reactor {
             }
             Mode::Causal => {
                 let session = self.inner.engine.open_causal(spec).await.map_err(refuse)?;
-                let (d, p) = CausalDriver::start(session, seed, out.clone()).map_err(refuse)?;
+                let (d, p) =
+                    CausalDriver::start(session, seed, &cfg.causal_limits, out.clone()).map_err(refuse)?;
                 let c = d.control().clone();
                 (Arc::new(d), p, Some(c))
             }
         };
+        let mut pace_stats = paced.stats.clone();
         let media = Arc::new(MediaPipeline::start(
             MediaConfig {
                 h264: cfg.h264,
@@ -457,7 +492,7 @@ impl Reactor {
         if let Some(c) = causal {
             media.on_first_frame(move || c.mark_first_frame_sent());
         }
-        let openapi = schema::openapi(&caps.id.0, &cfg.server_version, &table, &tracks);
+        let openapi = schema::openapi(&caps.id.0, &cfg.server_version, &table, &tracks, &cfg.causal_limits);
         let codecs = sendable_codecs(cfg.h264);
         let (epoch, gen) = {
             let mut st = lock(&self.inner.st);
@@ -480,6 +515,17 @@ impl Reactor {
             (st.epoch, st.orphan_gen)
         };
         self.arm_orphan_timer(epoch, gen);
+        // The pacer ends the session at its length limit: session_ended.
+        if let Some(limit) = max_seconds {
+            let me = self.clone();
+            tokio::spawn(async move {
+                let hit = pace_stats.wait_for(|s| s.ended.is_some()).await.is_ok_and(|s| s.ended == Some(EndReason::SessionLimit));
+                if hit {
+                    tracing::info!(limit, "reactor session reached its length limit: closing");
+                    me.close_epoch(Some(epoch), Some(session_limit_reason(limit)), false, "session_limit").await;
+                }
+            });
+        }
         Ok(self.descriptor())
     }
 
@@ -506,9 +552,17 @@ impl Reactor {
 
     /// CLOSING: farewell, close every connection, release the engine, READY.
     async fn close(&self, reason: Option<String>, moderated: bool, event: &str) {
+        self.close_epoch(None, reason, moderated, event).await;
+    }
+
+    /// [`Self::close`], only if the live session is still `epoch` (when set).
+    async fn close_epoch(&self, epoch: Option<u64>, reason: Option<String>, moderated: bool, event: &str) {
         let _op = self.inner.op.lock().await;
         let live = {
             let mut st = lock(&self.inner.st);
+            if epoch.is_some_and(|e| st.live.as_ref().is_none_or(|l| l.epoch != e)) {
+                return;
+            }
             let Some(live) = st.live.take() else { return };
             self.transition(&mut st, RtState::Closing, event, json!({"reason": reason, "moderated": moderated}));
             live

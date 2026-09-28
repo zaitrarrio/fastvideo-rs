@@ -3,7 +3,7 @@
 //!
 //! | Route | Behaviour |
 //! |---|---|
-//! | `GET /fv/v1/capabilities` | Models (caps, recipe, tier), tier bindings and aliases: what every public id maps to (risk R10) |
+//! | `GET /fv/v1/capabilities` | Models (caps, recipe, tier; causal models also `stream_limits`, design §5.2), tier bindings and aliases: what every public id maps to (risk R10) |
 //! | `POST /fv/v1/jobs` | Submit `{model, prompt, ...}` → 202 job object |
 //! | `GET /fv/v1/jobs` | Caller's jobs, newest first (`status`, `model`, `limit`, `after`, `order`, `protocol`) |
 //! | `GET /fv/v1/jobs/{id}` | Job object (with `protocol` and `metrics`: stage timings from the engine) |
@@ -30,9 +30,9 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::get;
 use axum::{Json, Router};
 use fastvideo_protocol::{
-    ApiError, BatchProtocol, CanvasSpec, ErrorCtx, GenerationRequest, HttpReply, Job, JobId, JobState, JobStatus,
+    ApiError, BatchProtocol, CanvasSpec, CausalLimits, ErrorCtx, GenerationRequest, HttpReply, Job, JobId, JobState, JobStatus,
     JobView, Keyframe, Length, ListQuery, MediaRef, NormalizeCtx, ProtocolId, Ratio, SamplingOverrides, Snap,
-    SortOrder, SubmitEndpoint, Task, TimingSpec, ViewCtx,
+    SortOrder, StreamCaps, SubmitEndpoint, Task, TimingSpec, ViewCtx,
 };
 use fastvideo_serve_kit::handlers::{self, error_reply, find_job, SubmitOpts};
 use fastvideo_serve_kit::{IngestPolicy, ServeCtx};
@@ -363,11 +363,18 @@ async fn delete(State(ctx): State<ServeCtx>, headers: HeaderMap, Path(id): Path<
     }
 }
 
-fn capabilities(gate: &ServiceGate) -> Value {
+fn capabilities(gate: &ServiceGate, causal: &CausalLimits) -> Value {
     let caps = gate.engine().caps();
     let models: Vec<Value> = caps
         .entries()
-        .map(|e| json!({"caps": e.caps, "recipe": e.recipe, "executors": e.executors}))
+        .map(|e| {
+            let mut m = json!({"caps": e.caps, "recipe": e.recipe, "executors": e.executors});
+            // Live causal sessions are length-limited (design §5.2).
+            if matches!(e.caps.stream, Some(StreamCaps::Causal { .. })) {
+                m["stream_limits"] = causal.advertised();
+            }
+            m
+        })
         .collect();
     let tiers: Vec<Value> = caps.tier_bindings().map(|b| serde_json::to_value(b).unwrap_or(Value::Null)).collect();
     json!({
@@ -382,10 +389,11 @@ fn capabilities(gate: &ServiceGate) -> Value {
 /// The `/fv/v1/capabilities` body.
 pub type CapsFn = Arc<dyn Fn() -> Value + Send + Sync>;
 
-/// The native routes.
-pub fn routes(gate: Arc<ServiceGate>, body_max: usize, sync_timeout: Duration) -> Router<ServeCtx> {
+/// The native routes; `causal` is advertised as each causal model's
+/// `stream_limits`.
+pub fn routes(gate: Arc<ServiceGate>, body_max: usize, sync_timeout: Duration, causal: CausalLimits) -> Router<ServeCtx> {
     let _ = sync_timeout;
-    routes_with(Arc::new(move || capabilities(&gate)), body_max)
+    routes_with(Arc::new(move || capabilities(&gate, &causal)), body_max)
 }
 
 /// The native routes with `/fv/v1/capabilities` from `caps` (the gateway
