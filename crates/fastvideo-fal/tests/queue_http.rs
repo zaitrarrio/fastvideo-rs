@@ -79,12 +79,12 @@ async fn submit_poll_result_both_path_forms() {
     assert!(bodies.windows(2).all(|w| w[0]["video"]["file_size"] == w[1]["video"]["file_size"]));
     let out = &bodies[0];
     assert_eq!(out["expanded_prompt"], Value::Null);
-    assert!(out.get("seed").is_none(), "seed is r2v-only");
+    assert_eq!(out["seed"], 7, "the effective seed is returned on t2v too");
     assert!(out["timings"]["inference"].is_number());
     let v = &out["video"];
     assert_eq!(v["content_type"], "video/mp4");
     let name = v["file_name"].as_str().unwrap();
-    assert!(name.ends_with("_minimax-h3.mp4") && name.len() == 36, "{name}");
+    assert!(name.ends_with("_minimax-h3-max.mp4") && name.len() == 40, "{name}");
     let url = v["url"].as_str().unwrap();
     assert!(url.starts_with("https://fal.fv.test/files/") && url.contains(name));
 
@@ -239,6 +239,9 @@ async fn sync_run_and_sync_mode() {
     let rid = r.header("x-fal-request-id").unwrap().to_owned();
     let out = r.json();
     assert!(out["video"]["url"].as_str().unwrap().starts_with("https://fal.fv.test/files/"));
+    // No seed in the request: the output reports the one the server drew.
+    let j = f.ctx.jobs().by_external(ProtocolId::Fal, &rid).await.unwrap();
+    assert_eq!(out["seed"].as_u64(), Some(j.resolved.seed), "{out}");
     // The sync job is visible through the queue routes too.
     let st = call(&f.app, "GET", &format!("/minimax/h3-max/requests/{rid}/status"), None).await.json();
     assert_eq!(st["status"], "COMPLETED");
@@ -584,7 +587,7 @@ async fn family_apps_and_multi_segment_subs() {
             json!({"prompt": "p"}),
             "fasth3-4step-vsa",
             (1344, 768, 124, 24),
-            "minimax-h3",
+            "minimax-h3-max-turbo",
         ),
     ] {
         let s = submit(&f.app, path, body.clone()).await;
@@ -602,7 +605,12 @@ async fn family_apps_and_multi_segment_subs() {
         }
         let out = call(&f.app, "GET", &format!("/{app}/requests/{rid}"), None).await.json();
         let name = out["video"]["file_name"].as_str().unwrap();
-        assert!(name.ends_with(&format!("_{slug}.mp4")), "{name}");
+        // `<nanoid21>_<app slug>[-<tier>].mp4`: named by app and tier.
+        let named = name.strip_suffix(".mp4").and_then(|n| n.get(22..)).unwrap_or_default();
+        assert!(named.starts_with(slug), "{name}");
+        if let Some(t) = j.resolved.tier {
+            assert!(named.split(['-', '_', '.']).any(|w| w == t.as_str()), "{name} names no tier");
+        }
         // Another app's prefix does not find it.
         let other = if app == "fal-ai/wan" { "lightricks/ltx-2.5" } else { "fal-ai/wan" };
         assert_eq!(call(&f.app, "GET", &format!("/{other}/requests/{rid}/status"), None).await.status, StatusCode::NOT_FOUND);
@@ -610,7 +618,8 @@ async fn family_apps_and_multi_segment_subs() {
     // The sync route with a multi-segment sub.
     let r = call(&f.app, "POST", "/run/fal-ai/wan/v2.2-5b/text-to-video/fast-wan", Some(json!({"prompt": "p", "num_frames": 17}))).await;
     assert_eq!(r.status, StatusCode::OK, "{:?}", r.json());
-    assert!(r.json()["video"]["file_name"].as_str().unwrap().ends_with("_wan.mp4"));
+    let name = r.json()["video"]["file_name"].as_str().unwrap().to_owned();
+    assert!(name.contains("_wan") && name.ends_with(".mp4"), "{name}");
     // Validation names fal's fields; the base H3 app refuses 2K / 4K cleanly.
     for (path, body, loc) in [
         ("/lightricks/ltx-2.5/text-to-video/fast", json!({"prompt": "p", "duration": 20}), "duration"),

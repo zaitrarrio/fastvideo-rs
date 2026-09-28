@@ -62,10 +62,6 @@ pub const MAX_REFERENCE_IMAGES: usize = 9;
 pub const MAX_REFERENCE_VIDEOS: usize = 3;
 pub const MAX_REFERENCE_AUDIO: usize = 3;
 pub const MAX_REFERENCES: usize = 12;
-/// The hosted file name suffix of the MiniMax apps
-/// (`<nanoid21>_minimax-h3.mp4`, fal §3.1); other apps use their alias
-/// ([`output_slug`]).
-pub const OUTPUT_SLUG: &str = "minimax-h3";
 
 /// One HTTP endpoint under an app. The sub-path may have several segments
 /// (`text-to-video/fast`, `v2.2-5b/text-to-video/fast-wan`); every sub is
@@ -812,7 +808,9 @@ pub struct File {
     pub file_size: Option<u64>,
 }
 
-/// t2v / i2v / r2v output (fal §3.4, §5.2). `seed` is set on r2v only.
+/// t2v / i2v / r2v output (fal §3.4, §5.2). `seed` is the effective seed
+/// (requested or drawn) on every task: required by fal's r2v schema, an
+/// extra key on t2v/i2v.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct VideoOutput {
     pub video: File,
@@ -822,24 +820,38 @@ pub struct VideoOutput {
     pub timings: Option<serde_json::Map<String, Value>>,
 }
 
-/// The file name suffix of an app's outputs: `minimax-h3` for every
-/// `minimax/*` app (fal §3.1), else the app alias (`ltx-2.5`, `wan`,
-/// `fastwan21-1.3b`), limited to `[A-Za-z0-9._-]`.
+/// The file name slug of an app's outputs: `minimax-<alias>` for the
+/// `minimax/*` apps (hosted fal writes `minimax-h3` for all of them; the
+/// alias keeps the tier: `minimax-h3-max`, `minimax-h3-turbo`), else the app
+/// alias (`ltx-2.5`, `wan`, `fastwan21-1.3b`), limited to `[A-Za-z0-9._-]`.
 pub fn output_slug(app_id: &str) -> String {
     let (owner, alias) = app_id.split_once('/').unwrap_or(("", app_id));
-    if owner == "minimax" || alias.is_empty() {
-        return OUTPUT_SLUG.to_owned();
+    let clean = |s: &str| -> String {
+        s.chars().map(|c| if c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.') { c } else { '-' }).collect()
+    };
+    match (owner, alias) {
+        (_, "") => "video".to_owned(),
+        ("minimax", a) => format!("minimax-{}", clean(a)),
+        (_, a) => clean(a),
     }
-    alias.chars().map(|c| if c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.') { c } else { '-' }).collect()
 }
 
-/// The output artifact's file name: `<nanoid21>_<slug>.mp4` (`slug` from
-/// [`output_slug`] of the job's app), derived from the job id so it is
-/// stable (fal §3.1). The binary names fal artifacts with it
-/// (`ArtifactMeta::file_name`).
+/// The output artifact's file name: `<nanoid21>_<slug>.mp4` in hosted fal's
+/// form (fal §3.1), with the 21 characters derived from the job id so it is
+/// stable. `slug` is [`output_slug`] of the job's app plus `-<tier>` when
+/// the resolved tier is not already a word of it (`wan` at turbo →
+/// `wan-turbo`, `ltx-2.5` at max → `ltx-2.5-max`; `minimax-h3-max` stays).
+/// The binary names fal artifacts with it (`ArtifactMeta::file_name`).
 pub fn output_file_name(job: &Job) -> String {
     let b64 = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(job.id.0.as_bytes());
-    format!("{}_{}.mp4", &b64[..21], output_slug(app_id(job.requested_model())))
+    let mut slug = output_slug(app_id(job.requested_model()));
+    if let Some(t) = job.resolved.tier.map(|t| t.as_str()) {
+        if !slug.split(['-', '_', '.']).any(|w| w == t) {
+            slug.push('-');
+            slug.push_str(t);
+        }
+    }
+    format!("{}_{slug}.mp4", &b64[..21])
 }
 
 /// The app id of an endpoint id (`fal-ai/wan/v2.2-5b/text-to-video/fast-wan`

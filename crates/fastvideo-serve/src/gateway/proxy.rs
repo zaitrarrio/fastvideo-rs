@@ -90,10 +90,13 @@ impl Gateway {
             g.values().filter(|l| l.state == "live" && l.pool == pool.id()).map(|l| l.target.clone()).collect()
         };
         let st = pool.lock();
-        st.workers
-            .values()
-            .filter(|w| w.usable() && w.ready && w.sessions == 0 && !leased.contains(&w.url))
+        // Free workers first; else the least busy ready one, whose own
+        // admission answers (busy → 429): the probes and leases lag.
+        let ready = || st.workers.values().filter(|w| w.usable() && w.ready);
+        ready()
+            .filter(|w| w.sessions == 0 && !leased.contains(&w.url))
             .min_by_key(|w| w.load())
+            .or_else(|| ready().min_by_key(|w| (w.sessions, w.load())))
             .map(|w| w.url.clone())
     }
 

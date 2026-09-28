@@ -12,6 +12,7 @@
 //! | `GET /fv/v1/internal/jobs/{id}` | `{id, status, progress}` (what a queue `wait` polls) |
 //! | `DELETE /fv/v1/internal/jobs/{id}` | cancel |
 //! | `GET /fv/v1/internal/status` | worker id, pool, readiness, draining, load, caps (gateway probes) |
+//! | `POST /fv/v1/internal/drain`, `…/undrain` | stop / resume taking new jobs and sessions (running work finishes); the `gw_workers` row says `draining` (the autoscaler, gateway.md §8.5) |
 //!
 //! - [`spawn_registration`]: pod workers upsert `gw_workers` every 10 s.
 
@@ -19,6 +20,7 @@
 #![allow(clippy::result_large_err)]
 
 use std::collections::{BTreeMap, HashSet};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -83,13 +85,61 @@ pub struct WorkerState {
     pub pool: Option<String>,
     pub queue_max: usize,
     submitted: Mutex<HashSet<JobId>>,
+    /// Set by `POST /fv/v1/internal/drain` (the autoscaler, docs/serve/gateway.md §8.5).
+    drained: Arc<AtomicBool>,
+    registration: Option<Registration>,
 }
 
 impl WorkerState {
-    pub fn new(ctx: ServeCtx, gate: Arc<ServiceGate>, d1: Option<Arc<D1JobStore>>, worker_id: String, pool: Option<String>, queue_max: usize) -> Arc<Self> {
+    pub fn new(ctx: ServeCtx, gate: Arc<ServiceGate>, d1: Option<Arc<D1JobStore>>, worker_id: String, pool: Option<String>, queue_max: usize) -> Self {
         let http = reqwest::Client::builder().connect_timeout(Duration::from_secs(10)).build().unwrap_or_default();
-        Arc::new(Self { ctx, gate, d1, http, worker_id, pool, queue_max, submitted: Mutex::new(HashSet::new()) })
+        Self {
+            ctx,
+            gate,
+            d1,
+            http,
+            worker_id,
+            pool,
+            queue_max,
+            submitted: Mutex::new(HashSet::new()),
+            drained: Arc::default(),
+            registration: None,
+        }
     }
+
+    /// Shares the drain flag with the registration (which reports it).
+    pub fn with_drain(mut self, drained: Arc<AtomicBool>, registration: Option<Registration>) -> Self {
+        self.drained = drained;
+        self.registration = registration;
+        self
+    }
+
+    /// Drained (autoscaler) or shutting down: no new jobs or sessions.
+    pub fn draining(&self) -> bool {
+        self.drained.load(Ordering::SeqCst) || !self.gate.admitting()
+    }
+}
+
+async fn set_drain(st: &WorkerState, on: bool) -> Response {
+    st.drained.store(on, Ordering::SeqCst);
+    if let Some(r) = &st.registration {
+        r.write(false).await;
+    }
+    tracing::info!(drained = on, "worker: drain state changed");
+    let s = st.gate.engine().stats();
+    Json(json!({"worker_id": st.worker_id, "draining": st.draining(), "running": s.running, "queued": s.queued_batch, "sessions": s.sessions}))
+        .into_response()
+}
+
+/// `POST /fv/v1/internal/drain`: take no new jobs or sessions; running
+/// work finishes. The `gw_workers` row reports `draining`.
+async fn drain(State(st): State<Arc<WorkerState>>) -> Response {
+    set_drain(&st, true).await
+}
+
+/// `POST /fv/v1/internal/undrain`.
+async fn undrain(State(st): State<Arc<WorkerState>>) -> Response {
+    set_drain(&st, false).await
 }
 
 fn err(e: &ApiError) -> Response {
@@ -102,11 +152,14 @@ fn err(e: &ApiError) -> Response {
 }
 
 /// `/fv/v1/internal/*`.
-pub fn routes(st: Arc<WorkerState>) -> Router {
+pub fn routes(st: WorkerState) -> Router {
+    let st = Arc::new(st);
     Router::new()
         .route("/fv/v1/internal/jobs", post(take))
         .route("/fv/v1/internal/jobs/{id}", get(job_status).delete(job_cancel))
         .route("/fv/v1/internal/status", get(status))
+        .route("/fv/v1/internal/drain", post(drain))
+        .route("/fv/v1/internal/undrain", post(undrain))
         .with_state(st)
 }
 
@@ -127,7 +180,7 @@ async fn status(State(st): State<Arc<WorkerState>>) -> Response {
         "worker_id": st.worker_id,
         "pool": st.pool,
         "readiness": readiness_word(&engine.readiness()),
-        "draining": !st.gate.admitting(),
+        "draining": st.draining(),
         "stats": {"queued_batch": s.queued_batch, "queued_stream": s.queued_stream, "running": s.running, "sessions": s.sessions},
         "models": models,
         "version": env!("CARGO_PKG_VERSION"),
@@ -176,6 +229,21 @@ async fn fetch_inputs(st: &WorkerState, env: &Envelope, job: &mut Job) -> Result
     for (i, input) in env.inputs.iter().enumerate() {
         let name = input.path.file_name().and_then(|n| n.to_str()).map(str::to_owned).unwrap_or_else(|| format!("input-{i}"));
         let dst = dir.join(format!("{i}-{name}"));
+        // The shared store first (R2, or a directory shared on one host):
+        // no round trip through the gateway's public URL.
+        if let Some(a) = &input.artifact {
+            match st.ctx.artifacts().open(a).await {
+                Ok(fastvideo_serve_kit::artifacts::ArtifactBody::File(p)) if tokio::fs::copy(&p, &dst).await.is_ok() => {
+                    map.insert(input.path.clone(), dst);
+                    continue;
+                }
+                Ok(fastvideo_serve_kit::artifacts::ArtifactBody::Bytes(b)) if tokio::fs::write(&dst, &b).await.is_ok() => {
+                    map.insert(input.path.clone(), dst);
+                    continue;
+                }
+                _ => {}
+            }
+        }
         let resp = st
             .http
             .get(&input.url)
@@ -231,6 +299,9 @@ async fn take(State(st): State<Arc<WorkerState>>, Json(env): Json<Envelope>) -> 
         let s = st.ctx.jobs().get(id).await.map(|j| j.status().as_str().to_owned()).unwrap_or_default();
         return (StatusCode::OK, Json(json!({"id": id.to_string(), "status": s, "worker": st.worker_id, "duplicate": true}))).into_response();
     }
+    if st.draining() {
+        return err(&ApiError::loading("this worker is draining").with_retry_after(5));
+    }
     if let Err(e) = st.ctx.engine().admit() {
         return err(&e);
     }
@@ -275,13 +346,15 @@ pub struct Registration {
     pub worker_id: String,
     pub url: String,
     pub gate: Arc<ServiceGate>,
+    /// The drain flag of `POST /fv/v1/internal/drain`.
+    pub drained: Arc<AtomicBool>,
 }
 
 impl Registration {
     /// Upserts the row now (`draining` overrides the state).
     pub async fn write(&self, draining: bool) {
         let engine = self.gate.engine();
-        let state = if draining || !self.gate.admitting() {
+        let state = if draining || !self.gate.admitting() || self.drained.load(Ordering::SeqCst) {
             "draining"
         } else {
             readiness_word(&engine.readiness())

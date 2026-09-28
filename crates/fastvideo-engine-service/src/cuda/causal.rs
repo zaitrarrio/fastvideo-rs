@@ -279,7 +279,7 @@ impl EngineBackend for CausalCudaBackend {
             steps: Some(4),
             attention: "dense".into(),
             vae: "taehv".into(),
-            summary: "Self-Forcing Wan 2.1 1.3B, causal DMD 4 steps, rolling KV (sink 3), TAEHV per block".into(),
+            summary: "Self-Forcing Wan 2.1 1.3B, causal DMD 4 steps, rolling KV (sink 15), TAEHV per block".into(),
         }
     }
 

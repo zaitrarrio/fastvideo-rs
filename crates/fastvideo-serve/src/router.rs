@@ -143,6 +143,8 @@ pub fn route_table(fal_apps: &[String]) -> Vec<RouteSpec> {
         r(Gateway, "GET", "/fv/v1/internal/jobs/{id}"),
         r(Gateway, "DELETE", "/fv/v1/internal/jobs/{id}"),
         r(Gateway, "GET", "/fv/v1/internal/status"),
+        r(Gateway, "POST", "/fv/v1/internal/drain"),
+        r(Gateway, "POST", "/fv/v1/internal/undrain"),
         // fal shared routes (§4.4, §5.6).
         r(Fal, "POST", "/fal/proxy"),
         r(Fal, "GET", "/fal/proxy"),

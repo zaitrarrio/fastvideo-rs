@@ -29,6 +29,7 @@ CRATES=(
   fastvideo-fal
   fastvideo-reactor
   fastvideo-deploy
+  fastvideo-autoscale
   fastvideo-serve
 )
 PKGS=()
@@ -67,6 +68,9 @@ if [[ "${FV_SERVE_HEAVY:-0}" == "1" ]]; then
   run cargo test -p fastvideo-serve --features full --test streams_whip
   # The Runpod worker over reqwest against the queue simulator on TCP.
   run cargo test -p fastvideo-deploy --features runpod
+  # Autoscaler: Runpod providers, gateway poller, D1 lease over HTTPS, fv-autoscale.
+  run cargo clippy -p fastvideo-autoscale --features runpod,d1-http --all-targets --no-deps -- -D warnings
+  run cargo test -p fastvideo-autoscale --features runpod,d1-http
 fi
 
 if [[ "${FV_SERVE_UI:-0}" == "1" ]]; then

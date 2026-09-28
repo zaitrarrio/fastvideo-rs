@@ -100,6 +100,22 @@ pub struct RolloutConfig {
     /// from `FASTVIDEO_WAN_GRAPH`, on). Off (or without a CUDA device): every
     /// block runs eagerly on the device's own stream.
     pub graphs: bool,
+    /// Periodic KV re-cache ([`Recache`]); `None` (default): the cache only
+    /// rolls.
+    pub recache: Option<Recache>,
+}
+
+/// Periodic KV re-cache (strobe's full-window segments with a motion
+/// context, LongLive's KV re-cache): every `every_blocks` blocks the cache
+/// is cleared and the last `keep_frames` clean latent frames are written
+/// back as context (clean passes at `t = 0`) from position 0, so the sink
+/// becomes recent content and the window restarts inside the trained
+/// positions. The decoder state and the noise stream carry on: nothing is
+/// visible at the seam but what the new context changes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Recache {
+    pub every_blocks: usize,
+    pub keep_frames: usize,
 }
 
 impl Default for RolloutConfig {
@@ -112,13 +128,19 @@ impl Default for RolloutConfig {
             dmd_steps: SF_WAN_1_3B_DMD_STEPS.to_vec(),
             flow_shift: 5.0,
             local_attn_frames: 21,
-            sink_frames: 3,
+            // A deep sink: five of the window's seven blocks, re-roped to sit
+            // just before the last two. With the one-block sink (3) the
+            // rollout falls apart within 30-60 s (dark, then horizontal
+            // bands growing from the top rows of the latents); 12-15 keeps
+            // it coherent for minutes (docs/ports/wan.md, long-run quality).
+            sink_frames: 15,
             rope: RopePolicy::RebasedSink,
             prompt_switch: PromptSwitch::Keep,
             rgb8: true,
             tokenizer_path: None,
             text_cache: None,
             graphs: super::graph::graphs_enabled(),
+            recache: None,
         }
     }
 }
@@ -213,6 +235,15 @@ pub struct CausalRollout<'p> {
     fpb: usize,
     /// Blocks since the last reset.
     block: usize,
+    /// Cache position of the next block, in blocks: [`Self::block`] until a
+    /// [`Recache`] rewrites the context from position 0.
+    pos_block: usize,
+    /// [`Recache`]: the latest clean block latents, oldest first.
+    recent: std::collections::VecDeque<CudaTensor>,
+    /// Blocks since the last reset or re-cache.
+    since_recache: usize,
+    /// Re-caches since the last reset.
+    recaches: usize,
     /// Re-noise draws since the last reset.
     draw: usize,
     /// Seed of the current run (a reset may change it).
@@ -364,6 +395,15 @@ impl<'p> CausalRollout<'p> {
                 cfg.local_attn_frames
             )));
         }
+        if let Some(rc) = cfg.recache {
+            if rc.every_blocks == 0 || rc.keep_frames < fpb || rc.keep_frames + fpb > cfg.local_attn_frames {
+                return Err(err(format!(
+                    "recache every {} blocks keeping {} frames: keep at least one block ({fpb} \
+                     frames) and leave one block of the {}-frame window",
+                    rc.every_blocks, rc.keep_frames, cfg.local_attn_frames
+                )));
+            }
+        }
         let spec = KvSpec::rolling(
             frame_tokens,
             cfg.local_attn_frames,
@@ -419,6 +459,10 @@ impl<'p> CausalRollout<'p> {
             latent_chw: [z_c, z_h, z_w],
             fpb,
             block: 0,
+            pos_block: 0,
+            recent: Default::default(),
+            since_recache: 0,
+            recaches: 0,
             draw: 0,
             seed: cfg.seed,
             noise: None,
@@ -486,6 +530,10 @@ impl<'p> CausalRollout<'p> {
             self.tae_state = tae.decode_state();
         }
         self.block = 0;
+        self.pos_block = 0;
+        self.recent.clear();
+        self.since_recache = 0;
+        self.recaches = 0;
         self.draw = 0;
         self.noise = None;
         if let Some(s) = seed {
@@ -497,6 +545,11 @@ impl<'p> CausalRollout<'p> {
     /// Blocks generated since the last reset.
     pub fn blocks(&self) -> usize {
         self.block
+    }
+
+    /// [`Recache`]s done since the last reset.
+    pub fn recaches(&self) -> usize {
+        self.recaches
     }
 
     pub fn prompt_version(&self) -> u64 {
@@ -567,8 +620,9 @@ impl<'p> CausalRollout<'p> {
         if self.pipe.taehv().is_none() {
             return Err(err("causal rollout: TAEHV unloaded"));
         }
+        self.maybe_recache()?;
         let fpb = self.fpb;
-        let start = self.block * fpb;
+        let start = self.pos_block * fpb;
         if self.cfg.rope != RopePolicy::Relativistic {
             // One RoPE table per block offset (and per sink target): keep
             // only the current ones.
@@ -580,7 +634,7 @@ impl<'p> CausalRollout<'p> {
         };
         let [c, h, w] = self.latent_chw;
         let steps = self.sched.num_steps();
-        let mut cur = self.block_noise(start)?;
+        let mut cur = self.block_noise(self.block * fpb)?;
         for (i, &ts) in self.sched.timesteps.iter().enumerate() {
             let t1 = CudaTensor::from_vec(vec![ts], vec![1])?;
             let input = round(cur.clone())?;
@@ -643,6 +697,14 @@ impl<'p> CausalRollout<'p> {
         let _ = hooks.frames(self.tae_state.emitted());
         let index = self.block;
         self.block += 1;
+        self.pos_block += 1;
+        self.since_recache += 1;
+        if let Some(rc) = self.cfg.recache {
+            self.recent.push_back(cur.clone());
+            while self.recent.len() * self.fpb > rc.keep_frames.max(self.fpb) {
+                self.recent.pop_front();
+            }
+        }
         Ok(StreamBlock {
             index,
             first_frame,
@@ -658,6 +720,31 @@ impl<'p> CausalRollout<'p> {
                 total_s: t_block.elapsed().as_secs_f64(),
             },
         })
+    }
+
+    /// [`Recache`]: when due, clear the KV cache and write the kept clean
+    /// latents back as context from position 0 (one clean pass per block,
+    /// eagerly; in graph mode on the graph stream, after which the next
+    /// blocks meet the cache states of the first fill and replay their
+    /// graphs).
+    fn maybe_recache(&mut self) -> Result<()> {
+        let Some(rc) = self.cfg.recache else {
+            return Ok(());
+        };
+        if rc.every_blocks == 0 || self.since_recache < rc.every_blocks || self.recent.is_empty() {
+            return Ok(());
+        }
+        let dit = self.pipe.transformer();
+        self.cache.reset();
+        dit.forget_rotary_before(usize::MAX);
+        let t0 = CudaTensor::from_vec(vec![0.0f32], vec![1])?;
+        for (i, lat) in self.recent.iter().enumerate() {
+            dit.forward_kv(lat, &t0, &self.cond, &self.cache, i * self.fpb)?;
+        }
+        self.pos_block = self.recent.len();
+        self.since_recache = 0;
+        self.recaches += 1;
+        Ok(())
     }
 
     /// What graph mode has done so far (`None`: the rollout runs eagerly).
@@ -684,6 +771,7 @@ impl<'p> CausalRollout<'p> {
         let t_block = Instant::now();
         let gs = self.graph.as_ref().expect("graph mode").gs.clone();
         let (cur, denoise_s, context_s) = gs.scope(|| -> Result<_> {
+            self.maybe_recache()?;
             let (cur, denoise_s, t) = self.graph_block(&hooks, t_block)?;
             // The context pass is queued: draw the next block's noise on the
             // host meanwhile.
@@ -706,14 +794,14 @@ impl<'p> CausalRollout<'p> {
         let dit = self.pipe.transformer();
         let fpb = self.fpb;
         let block = self.block;
-        let start = block * fpb;
+        let start = self.pos_block * fpb;
         let [c, h, w] = self.latent_chw;
         let steps = self.sched.num_steps();
         let p = dit.cfg.patch_size;
         let frame_tokens = (h / p[1].max(1)) * (w / p[2].max(1));
         let n = fpb * frame_tokens;
         // Inputs, refilled in place.
-        let noise0 = self.block_noise(start)?;
+        let noise0 = self.block_noise(block * fpb)?;
         let shape = [1, fpb, c, h, w];
         let mut drawn = match self.graph.as_mut().expect("graph mode").prefetch.take() {
             Some((seed, first, v)) if seed == self.seed && first == self.draw => v,
@@ -1006,10 +1094,11 @@ mod tests {
     use super::*;
 
     #[test]
-    fn default_window_is_the_training_window_with_a_block_sink() {
+    fn default_window_is_the_training_window_with_a_deep_sink() {
         let c = RolloutConfig::default();
         assert_eq!(c.local_attn_frames, 21);
-        assert_eq!(c.sink_frames, 3);
+        assert_eq!(c.sink_frames, 15);
+        assert!(c.recache.is_none());
         assert_eq!(c.rope, RopePolicy::RebasedSink);
         assert_eq!(c.dmd_steps, vec![1000, 750, 500, 250]);
     }
