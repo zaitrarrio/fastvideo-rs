@@ -221,7 +221,7 @@ create_worker() {
         --arg gw "$(st .gateway_url)" --arg cfg "$(pool_config "$pool")" --arg name "fv-cluster-$pool-$(date -u +%m%d%H%M%S)" '{
           name: $name, imageName: $image, cloudType: "SECURE", computeType: "GPU", gpuTypeIds: [$gpu], gpuCount: 1,
           containerDiskInGb: 40, volumeInGb: 0, networkVolumeId: $vol, volumeMountPath: "/workspace", dataCenterIds: [$dc],
-          ports: ["8000/http"], dockerEntrypoint: ["bash", "-c"], dockerStartCmd: [$boot],
+          ports: ["8000/http", "70000/tcp"], dockerEntrypoint: ["bash", "-c"], dockerStartCmd: [$boot],
           env: ($s + {FV_SERVE_MODE: "http", FV_SERVE_ROLE: "worker", FV_INTERNAL_TOKEN: $tok, FV_URL_SIGNING_KEY: $sign,
             FV_PUBLIC_BASE_URL: $gw, FV_WORKER_CONFIG: $cfg, FV_STATE_DIR: "/fvstate", FV_WEIGHTS: "/workspace/weights",
             FV_JOBS_HEARTBEAT_S: "10", RUST_LOG: "info"})}')"
