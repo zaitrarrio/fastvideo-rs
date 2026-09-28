@@ -1,4 +1,4 @@
-import { $, el, store, K, base, apiKey, request, setMsg, loadCatalog, TASKS, modelHref, topbar, refreshConnPill } from './common.js';
+import { $, el, store, K, base, apiKey, request, setMsg, loadCatalog, appTasks, modelHref, topbar, refreshConnPill } from './common.js';
 
 topbar('home');
 
@@ -59,7 +59,7 @@ async function renderModels() {
     const { apps } = await loadCatalog();
     box.replaceChildren(...apps.map((app) => el('div', { class: 'card' },
       el('h3', {}, app.id, app.tier ? el('span', { class: 'tag' }, app.tier) : null),
-      el('ul', {}, TASKS.map((t) => el('li', {},
+      el('ul', {}, appTasks(app).map((t) => el('li', {},
         el('a', { href: modelHref(app.id, t.sub), 'data-endpoint': app.id + '/' + t.sub }, t.title),
         t.tag ? el('span', { class: 'tag' }, t.tag) : null))))));
     setMsg('models-msg', apps.length ? '' : 'No fal apps are mounted on this server.');

@@ -1,16 +1,32 @@
-//! LTX-2 video VAE **encoder** (`AutoencoderKLLTX2Video` / Diffusers `encoder.*`).
+//! LTX-2 video VAE **encoder**, for image conditioning (I2V, keyframes).
 //!
-//! Full causal ResNet + [`LTXVideoDownsampler3d`]-style space-to-depth stack when
-//! `encoder.down_blocks.*` keys are present. Falls back to patchify + `conv_in`
-//! (+ channel fold) when only the stem is available. I2V uses this for real
-//! encode whenever `vae/` is present with encoder probes.
+//! `ltx_core.model.video_vae.VideoEncoder` (Lightricks/LTX-2 `fd4ded7`,
+//! `video_vae.py:148-330`), loaded from the Diffusers key layout
+//! (`AutoencoderKLLTX2Video`, `encoder.*`):
+//!
+//! * patchify 4×4 into 48 channels, channel = `(c·4 + pw)·4 + ph`
+//!   (`ops.py:patchify`, `"b c (f p) (h q) (w r) -> b (c p r q) f h w"`);
+//! * `conv_in`, then per block `resnets.*` (`res_x`: PixelNorm → SiLU →
+//!   conv, twice, plus the input) and `downsamplers.0`
+//!   (`SpaceToDepthDownsample`, `sampling.py:12-60`: the first frame
+//!   duplicated for a temporal stride, a causal conv then space-to-depth,
+//!   plus the space-to-depth of the input averaged over channel groups);
+//! * `mid_block.resnets.*`, PixelNorm → SiLU → `conv_out` (`latent + 1`
+//!   channels; the first `latent` are the means, the last the shared
+//!   log-variance), then the per-channel statistics normalize the means.
+//!
+//! Every conv is causal in time (the first frame repeated `k − 1` times in
+//! front) with the encoder's spatial padding (`zeros` unless the config
+//! says otherwise). The strides of each downsampler follow from its weight
+//! (`out = in·2 → conv out = out / prod(stride)`): 4 is `(1, 2, 2)`, 2 is
+//! `(2, 1, 1)`, 8 is `(2, 2, 2)`.
+//!
+//! The reference runs the encoder in bf16; this runs it in f32 over the bf16
+//! weights, so its latents differ from the reference's by bf16 rounding
+//! (the oracle dumps both, `s{n}_cond{i}_latent`).
 
 use std::path::Path;
 
-use fastvideo_models::ltx2::config::Ltx2VideoVaeConfig;
-use image::RgbImage;
-
-use crate::hub_keys::{self, ltx2_vae_encoder as ekeys};
 use crate::wan::ops::PadMode;
 use crate::wan::pipeline::{PipelineError, Result};
 use crate::wan::tensor::CudaTensor;
@@ -25,755 +41,392 @@ fn pinned(mut t: CudaTensor) -> Result<CudaTensor> {
     Ok(t)
 }
 
-/// Causal 3×3×3 (or 1×1×1) conv: time pad on the left only, spatial reflect.
+fn ones(c: usize) -> Result<CudaTensor> {
+    pinned(CudaTensor::ones(&[c]))
+}
+
+/// `CausalConv3d` (`convolution.py:270-317`): 3×3×3, stride 1, the first
+/// frame repeated twice in front, spatial pad 1.
 struct CausalConv {
     weight: CudaTensor,
     bias: CudaTensor,
-    stride: [usize; 3],
-    spatial_pad: usize,
-    temporal_pad: usize,
+    reflect: bool,
 }
 
 impl CausalConv {
-    fn load(
-        map: &WeightMap,
-        prefix: &str,
-        cin: usize,
-        cout: usize,
-        kernel: [usize; 3],
-        stride: [usize; 3],
-    ) -> Result<Self> {
-        // Diffusers LTX nests `CausalConv3d` as `{prefix}.conv.weight`.
-        let w_key = format!("{prefix}.conv.weight");
-        let b_key = format!("{prefix}.conv.bias");
-        let (w_key, b_key) = if map.contains(&w_key) {
-            (w_key, b_key)
-        } else {
-            (format!("{prefix}.weight"), format!("{prefix}.bias"))
-        };
-        let spatial_pad = kernel[1] / 2;
-        let temporal_pad = kernel[0].saturating_sub(1);
+    fn load(map: &WeightMap, prefix: &str, cin: usize, cout: usize, reflect: bool) -> Result<Self> {
         Ok(Self {
             weight: pinned(cuda_tensor_shaped(
                 map,
-                &w_key,
-                &[cout, cin, kernel[0], kernel[1], kernel[2]],
+                &format!("{prefix}.conv.weight"),
+                &[cout, cin, 3, 3, 3],
             )?)?,
-            bias: pinned(cuda_tensor_shaped(map, &b_key, &[cout])?)?,
-            stride,
-            spatial_pad,
-            temporal_pad,
+            bias: pinned(cuda_tensor_shaped(map, &format!("{prefix}.conv.bias"), &[cout])?)?,
+            reflect,
         })
     }
 
+    fn out_channels(&self) -> usize {
+        self.weight.shape[0]
+    }
+
     fn forward(&self, x: &CudaTensor) -> Result<CudaTensor> {
-        let mut x = x.clone();
-        if self.spatial_pad > 0 {
-            let p = self.spatial_pad;
-            x = x
-                .pad(3, p, p, PadMode::Reflect)?
-                .pad(4, p, p, PadMode::Reflect)?;
+        let first = x.narrow(2, 0, 1)?;
+        let x = CudaTensor::cat(&[&first, &first, x], 2)?;
+        if self.reflect {
+            let x = x
+                .pad(3, 1, 1, PadMode::Reflect)?
+                .pad(4, 1, 1, PadMode::Reflect)?;
+            Ok(x.conv3d(&self.weight, Some(&self.bias), [0, 0, 0], [1, 1, 1])?)
+        } else {
+            Ok(x.conv3d(&self.weight, Some(&self.bias), [0, 1, 1], [1, 1, 1])?)
         }
-        if self.temporal_pad > 0 {
-            // Causal: replicate first frame (Diffusers LTX) — use zeros pad for
-            // stills; replicate is closer for video. Prefer replicate via cat.
-            let first = x.narrow(2, 0, 1)?;
-            let mut parts = Vec::with_capacity(self.temporal_pad + 1);
-            for _ in 0..self.temporal_pad {
-                parts.push(first.clone());
-            }
-            parts.push(x);
-            let refs: Vec<&CudaTensor> = parts.iter().collect();
-            x = CudaTensor::cat(&refs, 2)?;
-        }
-        x.conv3d(&self.weight, Some(&self.bias), [0, 0, 0], self.stride)
-            .map_err(Into::into)
     }
 }
 
+/// `ResnetBlock3D` with `in == out` (`resnet.py`): the encoder's only kind.
 struct Resnet {
     conv1: CausalConv,
     conv2: CausalConv,
     ones: CudaTensor,
-    shortcut: Option<CausalConv>,
 }
 
 impl Resnet {
-    fn load(map: &WeightMap, prefix: &str, cin: usize, cout: usize) -> Result<Self> {
-        let shortcut = if cin != cout {
-            Some(CausalConv::load(
-                map,
-                &format!("{prefix}.conv_shortcut"),
-                cin,
-                cout,
-                [1, 1, 1],
-                [1, 1, 1],
-            )?)
-        } else {
-            None
-        };
+    fn load(map: &WeightMap, prefix: &str, ch: usize, reflect: bool) -> Result<Self> {
         Ok(Self {
-            conv1: CausalConv::load(
-                map,
-                &format!("{prefix}.conv1"),
-                cin,
-                cout,
-                [3, 3, 3],
-                [1, 1, 1],
-            )?,
-            conv2: CausalConv::load(
-                map,
-                &format!("{prefix}.conv2"),
-                cout,
-                cout,
-                [3, 3, 3],
-                [1, 1, 1],
-            )?,
-            ones: {
-                let mut t = CudaTensor::ones(&[cout]);
-                t.pin_device()?;
-                t
-            },
-            shortcut,
+            conv1: CausalConv::load(map, &format!("{prefix}.conv1"), ch, ch, reflect)?,
+            conv2: CausalConv::load(map, &format!("{prefix}.conv2"), ch, ch, reflect)?,
+            ones: ones(ch)?,
         })
     }
 
-    fn forward(&self, x: &CudaTensor, eps: f32) -> Result<CudaTensor> {
-        let ones_in = if x.shape[1] == self.ones.shape[0] {
-            self.ones.clone()
-        } else {
-            let mut t = CudaTensor::ones(&[x.shape[1]]);
-            t.pin_device()?;
-            t
-        };
-        let h = x.rms_norm_channels_act(&ones_in, eps, true)?;
+    fn forward(&self, x: CudaTensor, eps: f32) -> Result<CudaTensor> {
+        let h = x.rms_norm_channels_act(&self.ones, eps, true)?;
         let h = self.conv1.forward(&h)?;
         let h = h.rms_norm_channels_act(&self.ones, eps, true)?;
         let h = self.conv2.forward(&h)?;
-        match &self.shortcut {
-            Some(sc) => Ok(sc.forward(x)?.add(&h)?),
-            None => Ok(x.add(&h)?),
-        }
+        Ok(x.add(&h)?)
     }
 }
 
-/// Diffusers `LTXVideoDownsampler3d`: stride-1 causal conv then space-to-depth.
-struct Downsampler3d {
+/// `SpaceToDepthDownsample` (`sampling.py:12-60`).
+struct Downsampler {
     conv: CausalConv,
     stride: [usize; 3],
     out_channels: usize,
 }
 
-impl Downsampler3d {
-    fn try_load(
-        map: &WeightMap,
-        prefix: &str,
-        in_ch: usize,
-        out_ch: usize,
-    ) -> Result<Option<Self>> {
-        // Nested: `{prefix}.conv.conv.weight` (Downsampler wraps CausalConv).
-        let nested = format!("{prefix}.conv.conv.weight");
-        let flat = format!("{prefix}.conv.weight");
-        let (st, sh, sw) = infer_stride(map, &nested, &flat, in_ch, out_ch)?;
-        let prod = st * sh * sw;
-        if prod == 0 {
-            return Ok(None);
-        }
-        let conv_out = out_ch / prod;
-        if conv_out == 0 || out_ch % prod != 0 {
-            return Err(msg(format!(
-                "ltx2 encoder downsampler: out_ch {out_ch} not divisible by stride ({st},{sh},{sw})"
-            )));
-        }
-        let conv_prefix = if map.contains(&nested) {
-            format!("{prefix}.conv")
-        } else if map.contains(&flat) {
-            prefix.to_string()
-        } else {
-            return Ok(None);
-        };
-        Ok(Some(Self {
-            conv: CausalConv::load(map, &conv_prefix, in_ch, conv_out, [3, 3, 3], [1, 1, 1])?,
-            stride: [st, sh, sw],
-            out_channels: out_ch,
-        }))
-    }
-
-    fn forward(&self, x: &CudaTensor) -> Result<CudaTensor> {
-        let [st, sh, sw] = self.stride;
-        // Diffusers prepends `stride_t - 1` frames for temporal alignment.
-        let x = if st > 1 {
+impl Downsampler {
+    fn forward(&self, x: CudaTensor) -> Result<CudaTensor> {
+        let x = if self.stride[0] == 2 {
             let first = x.narrow(2, 0, 1)?;
-            let mut parts = Vec::with_capacity(st);
-            for _ in 0..(st - 1) {
-                parts.push(first.clone());
-            }
-            parts.push(x.clone());
-            let refs: Vec<&CudaTensor> = parts.iter().collect();
-            CudaTensor::cat(&refs, 2)?
+            CudaTensor::cat(&[&first, &x], 2)?
         } else {
-            x.clone()
+            x
         };
+        let skip = space_to_depth(&x, self.stride)?;
+        let group = skip.shape[1] / self.out_channels;
+        let skip = group_mean(&skip, self.out_channels, group)?;
         let y = self.conv.forward(&x)?;
-        space_to_depth(&y, [st, sh, sw], self.out_channels)
+        drop(x);
+        let y = space_to_depth(&y, self.stride)?;
+        Ok(y.add(&skip)?)
     }
 }
 
-fn infer_stride(
-    map: &WeightMap,
-    nested: &str,
-    flat: &str,
-    in_ch: usize,
-    out_ch: usize,
-) -> Result<(usize, usize, usize)> {
-    if map.contains(nested) {
-        for (st, sh, sw) in [(2usize, 2, 2), (1, 2, 2), (2, 1, 1), (2, 2, 1), (1, 1, 1)] {
-            let prod = st * sh * sw;
-            if prod == 0 || out_ch % prod != 0 {
-                continue;
-            }
-            let cout = out_ch / prod;
-            if cuda_tensor_shaped(map, nested, &[cout, in_ch, 3, 3, 3]).is_ok() {
-                return Ok((st, sh, sw));
-            }
-        }
-        return Err(msg(format!(
-            "ltx2 encoder: cannot infer stride for {nested} (in={in_ch} out={out_ch})"
-        )));
-    } else if map.contains(flat) {
-        return Ok((2, 2, 2));
-    }
-    Ok((0, 0, 0))
-}
-
-/// Pixel-unshuffle / space-to-depth: spatial shrink × stride, channels × product.
-fn space_to_depth(y: &CudaTensor, stride: [usize; 3], out_channels: usize) -> Result<CudaTensor> {
-    let [st, sh, sw] = stride;
-    let prod = st * sh * sw;
-    let [b, c, f, h, w] = match y.shape[..] {
-        [b, c, f, h, w] => [b, c, f, h, w],
-        _ => return Err(msg(format!("space_to_depth rank {:?}", y.shape))),
+/// `"b c (d p1) (h p2) (w p3) -> b (c p1 p2 p3) d h w"` on the device, in two
+/// moves of rank ≤ 6 (time, then space), which give the same channel order.
+fn space_to_depth(x: &CudaTensor, stride: [usize; 3]) -> Result<CudaTensor> {
+    let [b, c, f, h, w] = x.shape[..] else {
+        return Err(msg(format!("ltx2 encoder s2d: shape {:?}", x.shape)));
     };
+    let [st, sh, sw] = stride;
     if b != 1 || f % st != 0 || h % sh != 0 || w % sw != 0 {
         return Err(msg(format!(
-            "space_to_depth: shape {:?} not divisible by stride {stride:?}",
-            y.shape
+            "ltx2 encoder s2d: {:?} not divisible by {stride:?}",
+            x.shape
         )));
     }
-    let (nf, nh, nw) = (f / st, h / sh, w / sw);
-    // Host rearrange matching Diffusers permute after unflatten.
-    let host = y.host_cow()?;
-    let mut out = vec![0f32; out_channels * nf * nh * nw];
-    let oc_expected = c * prod;
-    if oc_expected != out_channels {
-        return Err(msg(format!(
-            "space_to_depth: c*{prod}={oc_expected} vs out_channels {out_channels}"
-        )));
+    let mut y = x.clone();
+    let (mut c, mut f) = (c, f);
+    if st > 1 {
+        y = y
+            .reshape(vec![c, f / st, st, h * w])?
+            .permute(&[0, 2, 1, 3])?
+            .reshape(vec![1, c * st, f / st, h, w])?;
+        c *= st;
+        f /= st;
     }
-    for oc in 0..out_channels {
-        let (ic, rem) = (oc / prod, oc % prod);
-        let ft = rem / (sh * sw);
-        let rem = rem % (sh * sw);
-        let fy = rem / sw;
-        let fx = rem % sw;
-        for t in 0..nf {
-            for yy in 0..nh {
-                for xx in 0..nw {
-                    let src_t = t * st + ft;
-                    let src_y = yy * sh + fy;
-                    let src_x = xx * sw + fx;
-                    let src = ((ic * f + src_t) * h + src_y) * w + src_x;
-                    let dst = ((oc * nf + t) * nh + yy) * nw + xx;
-                    out[dst] = host[src];
-                }
-            }
-        }
+    if sh > 1 || sw > 1 {
+        y = y
+            .reshape(vec![c, f, h / sh, sh, w / sw, sw])?
+            .permute(&[0, 3, 5, 1, 2, 4])?
+            .reshape(vec![1, c * sh * sw, f, h / sh, w / sw])?;
     }
-    CudaTensor::from_vec(out, vec![1, out_channels, nf, nh, nw]).map_err(Into::into)
+    Ok(y)
+}
+
+/// `rearrange(x, "b (c g) d h w -> b c g d h w").mean(dim=2)`.
+fn group_mean(x: &CudaTensor, out: usize, group: usize) -> Result<CudaTensor> {
+    if group == 1 {
+        return Ok(x.clone());
+    }
+    let rest: usize = x.shape[2..].iter().product();
+    let v = x.reshape(vec![out, group, rest])?;
+    let parts = (0..group)
+        .map(|k| v.narrow(1, k, 1))
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+    let terms: Vec<(f32, &CudaTensor)> = parts.iter().map(|p| (1.0 / group as f32, p)).collect();
+    let mut shape = x.shape.clone();
+    shape[1] = out;
+    Ok(CudaTensor::lincomb(&terms)?.reshape(shape)?)
 }
 
 struct DownBlock {
     resnets: Vec<Resnet>,
-    downsampler: Option<Downsampler3d>,
+    downsampler: Option<Downsampler>,
 }
 
-impl DownBlock {
-    fn load(
-        map: &WeightMap,
-        idx: usize,
-        in_ch: usize,
-        out_ch: usize,
-        n_res: usize,
-        has_scale: bool,
-    ) -> Result<Self> {
-        let prefix = format!("encoder.down_blocks.{idx}");
-        let mut resnets = Vec::with_capacity(n_res);
-        for i in 0..n_res {
-            // Resnets keep `in_ch` until after downsample (Diffusers LTXVideoDownBlock3D).
-            resnets.push(Resnet::load(
-                map,
-                &format!("{prefix}.resnets.{i}"),
-                in_ch,
-                in_ch,
-            )?);
-        }
-        let downsampler = if has_scale {
-            Downsampler3d::try_load(map, &format!("{prefix}.downsamplers.0"), in_ch, out_ch)?
-        } else {
-            None
-        };
-        Ok(Self {
-            resnets,
-            downsampler,
-        })
-    }
-
-    fn forward(&self, mut x: CudaTensor, eps: f32) -> Result<CudaTensor> {
-        for r in &self.resnets {
-            x = r.forward(&x, eps)?;
-        }
-        if let Some(ds) = &self.downsampler {
-            x = ds.forward(&x)?;
-        }
-        Ok(x)
-    }
-}
-
-/// Full Diffusers encoder when down_blocks present; else stem-only.
+/// The LTX-2 video encoder, resident until dropped.
 pub struct VideoEncoder {
-    pub cfg: Ltx2VideoVaeConfig,
-    pub loaded_key: String,
-    pub full_stack: bool,
-    conv_in: Option<CausalConv>,
-    down_blocks: Vec<DownBlock>,
-    mid_resnets: Vec<Resnet>,
-    conv_out: Option<CausalConv>,
-    /// Stem-only fallback weights (host).
-    conv_in_w: Option<Vec<f32>>,
-    conv_in_shape: Option<[usize; 5]>,
-    latents_mean: Vec<f32>,
-    latents_std: Vec<f32>,
-    #[allow(dead_code)]
-    mid_ch: usize,
+    conv_in: CausalConv,
+    blocks: Vec<DownBlock>,
+    mid: Vec<Resnet>,
+    conv_out: CausalConv,
+    ones_out: CudaTensor,
+    mean: Vec<f32>,
+    std: Vec<f32>,
+    patch: usize,
+    eps: f32,
+    latent_channels: usize,
+}
+
+fn count(map: &WeightMap, key: impl Fn(usize) -> String) -> usize {
+    (0..64).take_while(|&i| map.contains(&key(i))).count()
+}
+
+fn padding_is_reflect(vae_dir: &Path) -> bool {
+    let Ok(text) = std::fs::read_to_string(vae_dir.join("config.json")) else {
+        return false;
+    };
+    let Ok(v) = serde_json::from_str::<serde_json::Value>(&text) else {
+        return false;
+    };
+    v.get("encoder_spatial_padding_mode")
+        .or_else(|| v.get("spatial_padding_mode"))
+        .and_then(|m| m.as_str())
+        == Some("reflect")
 }
 
 impl VideoEncoder {
-    pub fn try_load(map: &WeightMap, cfg: &Ltx2VideoVaeConfig) -> Result<Option<Self>> {
-        let Some(hit) = hub_keys::first_present(map, ekeys::PROBES) else {
-            return Ok(None);
-        };
-        let z = cfg.latent_channels;
-        let mean = if map.contains("latents_mean") {
-            cuda_tensor_shaped(map, "latents_mean", &[z])?
-                .host_cow()?
-                .to_vec()
-        } else {
-            vec![0f32; z]
-        };
-        let std = if map.contains("latents_std") {
-            cuda_tensor_shaped(map, "latents_std", &[z])?
-                .host_cow()?
-                .to_vec()
-        } else {
-            vec![1f32; z]
-        };
-
-        let full = map.contains("encoder.down_blocks.0.resnets.0.conv1.conv.weight")
-            || map.contains("encoder.down_blocks.0.resnets.0.conv1.weight");
-
-        if full {
-            return Self::load_full(map, cfg, hit, mean, std).map(Some);
-        }
-
-        // Stem-only: patchify + conv_in center tap.
-        let cin = 3 * cfg.patch_size * cfg.patch_size;
-        let cout = cfg.block_out_channels.first().copied().unwrap_or(128);
-        let mut conv_in_w = None;
-        let mut conv_in_shape = None;
-        for key in ["encoder.conv_in.conv.weight", "encoder.conv_in.weight"] {
-            if map.contains(key) {
-                if let Ok(t) = cuda_tensor_shaped(map, key, &[cout, cin, 3, 3, 3]) {
-                    conv_in_w = Some(t.host_cow()?.to_vec());
-                    conv_in_shape = Some([cout, cin, 3, 3, 3]);
-                    break;
-                }
-            }
-        }
-        Ok(Some(Self {
-            cfg: cfg.clone(),
-            loaded_key: hit,
-            full_stack: false,
-            conv_in: None,
-            down_blocks: Vec::new(),
-            mid_resnets: Vec::new(),
-            conv_out: None,
-            conv_in_w,
-            conv_in_shape,
-            latents_mean: mean,
-            latents_std: std,
-            mid_ch: cout,
-        }))
+    /// Whether `vae_dir` carries the encoder.
+    pub fn present(map: &WeightMap) -> bool {
+        map.contains("encoder.conv_in.conv.weight")
+            && map.contains("encoder.conv_out.conv.weight")
+            && map.contains("latents_mean")
     }
 
-    fn load_full(
-        map: &WeightMap,
-        cfg: &Ltx2VideoVaeConfig,
-        hit: String,
-        mean: Vec<f32>,
-        std: Vec<f32>,
-    ) -> Result<Self> {
-        // Channel ladder from weights / config.
-        let mut widths = cfg.block_out_channels.clone();
-        if widths.is_empty() {
-            widths = vec![128, 256, 512, 1024];
+    /// Load `encoder.*` and the latent statistics from a Diffusers `vae/`.
+    pub fn load(vae_dir: &Path, patch: usize, eps: f64) -> Result<Self> {
+        let map = WeightMap::open(vae_dir).map_err(|e| msg(e.to_string()))?;
+        if !Self::present(&map) {
+            return Err(msg(format!(
+                "ltx2 image conditioning: {} has no video encoder (encoder.* keys)",
+                vae_dir.display()
+            )));
         }
-        // Infer first width from conv_in.
-        let cin_patch = 3 * cfg.patch_size * cfg.patch_size;
-        let first = widths[0];
-        let conv_in = CausalConv::load(
-            map,
-            "encoder.conv_in",
-            cin_patch,
-            first,
-            [3, 3, 3],
-            [1, 1, 1],
-        )
-        .or_else(|_| {
-            // Manifest / LTX-2 sometimes starts at 128 even when config lists 256.
-            CausalConv::load(map, "encoder.conv_in", cin_patch, 128, [3, 3, 3], [1, 1, 1])
-        })?;
-        let mut ch = conv_in.weight.shape[0];
-        let n_down = (0..8)
-            .take_while(|i| {
-                map.contains(&format!(
-                    "encoder.down_blocks.{i}.resnets.0.conv1.conv.weight"
-                )) || map.contains(&format!("encoder.down_blocks.{i}.resnets.0.conv1.weight"))
-            })
-            .count();
-        let mut down_blocks = Vec::with_capacity(n_down);
-        for i in 0..n_down {
-            let n_res = (0..16)
-                .take_while(|r| {
-                    map.contains(&format!(
-                        "encoder.down_blocks.{i}.resnets.{r}.conv1.conv.weight"
-                    )) || map.contains(&format!("encoder.down_blocks.{i}.resnets.{r}.conv1.weight"))
-                })
-                .count()
-                .max(1);
-            let has_ds = map.contains(&format!(
-                "encoder.down_blocks.{i}.downsamplers.0.conv.conv.weight"
-            )) || map.contains(&format!(
-                "encoder.down_blocks.{i}.downsamplers.0.conv.weight"
-            ));
-            // Next channel: peek downsampler out or next block's resnet.
-            let next_ch = if i + 1 < n_down {
-                guess_resnet_channels(map, i + 1).unwrap_or(ch * 2)
-            } else if has_ds {
-                guess_down_out(map, i, ch).unwrap_or(ch * 2)
-            } else {
-                ch
+        let reflect = padding_is_reflect(vae_dir);
+        let shape = |k: &str| {
+            map.shape(k)
+                .ok_or_else(|| msg(format!("ltx2 encoder: missing {k}")))
+        };
+        let cin = shape("encoder.conv_in.conv.weight")?;
+        let conv_in = CausalConv::load(&map, "encoder.conv_in", cin[1], cin[0], reflect)?;
+        if cin[1] != 3 * patch * patch {
+            return Err(msg(format!(
+                "ltx2 encoder: conv_in takes {} channels, patch {patch} gives {}",
+                cin[1],
+                3 * patch * patch
+            )));
+        }
+        let mut ch = conv_in.out_channels();
+        let n_blocks = count(&map, |i| format!("encoder.down_blocks.{i}.resnets.0.conv1.conv.weight"));
+        let mut blocks = Vec::with_capacity(n_blocks);
+        for i in 0..n_blocks {
+            let n_res = count(&map, |r| {
+                format!("encoder.down_blocks.{i}.resnets.{r}.conv1.conv.weight")
+            });
+            let resnets = (0..n_res)
+                .map(|r| Resnet::load(&map, &format!("encoder.down_blocks.{i}.resnets.{r}"), ch, reflect))
+                .collect::<Result<Vec<_>>>()?;
+            let dkey = format!("encoder.down_blocks.{i}.downsamplers.0.conv.conv.weight");
+            let downsampler = match map.shape(&dkey) {
+                None => None,
+                Some(ds) => {
+                    // The next width: the next block's resnets, else the mid block's.
+                    let next = if i + 1 < n_blocks {
+                        format!("encoder.down_blocks.{}.resnets.0.conv1.conv.weight", i + 1)
+                    } else {
+                        "encoder.mid_block.resnets.0.conv1.conv.weight".to_string()
+                    };
+                    let out = shape(&next)?[0];
+                    let prod = out / ds[0];
+                    let stride = match prod {
+                        2 => [2, 1, 1],
+                        4 => [1, 2, 2],
+                        8 => [2, 2, 2],
+                        _ => {
+                            return Err(msg(format!(
+                                "ltx2 encoder: block {i} downsampler {ds:?} → {out} channels"
+                            )))
+                        }
+                    };
+                    let conv = CausalConv::load(
+                        &map,
+                        &format!("encoder.down_blocks.{i}.downsamplers.0.conv"),
+                        ch,
+                        ds[0],
+                        reflect,
+                    )?;
+                    ch = out;
+                    Some(Downsampler {
+                        conv,
+                        stride,
+                        out_channels: out,
+                    })
+                }
             };
-            let block = DownBlock::load(map, i, ch, next_ch, n_res, has_ds)?;
-            if has_ds {
-                ch = next_ch;
-            }
-            down_blocks.push(block);
+            blocks.push(DownBlock {
+                resnets,
+                downsampler,
+            });
         }
-        let mut mid_resnets = Vec::new();
-        let mid_n = (0..8)
-            .take_while(|r| {
-                map.contains(&format!("encoder.mid_block.resnets.{r}.conv1.conv.weight"))
-                    || map.contains(&format!("encoder.mid_block.resnets.{r}.conv1.weight"))
-            })
-            .count();
-        for r in 0..mid_n {
-            mid_resnets.push(Resnet::load(
-                map,
-                &format!("encoder.mid_block.resnets.{r}"),
-                ch,
-                ch,
-            )?);
-        }
-        let z = cfg.latent_channels;
-        let conv_out = CausalConv::load(
-            map,
-            "encoder.conv_out",
-            ch,
-            z + 1, // Diffusers emits mean + logvar (+ extra)
-            [3, 3, 3],
-            [1, 1, 1],
-        )
-        .ok();
+        let n_mid = count(&map, |r| format!("encoder.mid_block.resnets.{r}.conv1.conv.weight"));
+        let mid = (0..n_mid)
+            .map(|r| Resnet::load(&map, &format!("encoder.mid_block.resnets.{r}"), ch, reflect))
+            .collect::<Result<Vec<_>>>()?;
+        let co = shape("encoder.conv_out.conv.weight")?;
+        let conv_out = CausalConv::load(&map, "encoder.conv_out", ch, co[0], reflect)?;
+        let latent_channels = co[0] - 1;
+        let stat = |k: &str| -> Result<Vec<f32>> {
+            Ok(cuda_tensor_shaped(&map, k, &[latent_channels])?
+                .host_cow()?
+                .into_owned())
+        };
         Ok(Self {
-            cfg: cfg.clone(),
-            loaded_key: hit,
-            full_stack: true,
-            conv_in: Some(conv_in),
-            down_blocks,
-            mid_resnets,
+            conv_in,
+            blocks,
+            mid,
             conv_out,
-            conv_in_w: None,
-            conv_in_shape: None,
-            latents_mean: mean,
-            latents_std: std,
-            mid_ch: ch,
+            ones_out: ones(ch)?,
+            mean: stat("latents_mean")?,
+            std: stat("latents_std")?,
+            patch,
+            eps: eps as f32,
+            latent_channels,
         })
     }
 
-    pub fn load(map: &WeightMap, cfg: &Ltx2VideoVaeConfig) -> Result<Self> {
-        Self::try_load(map, cfg)?.ok_or_else(|| {
-            msg(hub_keys::require_any(map, "ltx2_vae_encoder", ekeys::PROBES).unwrap_err())
-        })
+    pub fn latent_channels(&self) -> usize {
+        self.latent_channels
     }
 
-    pub fn encode_first_frame(
-        &self,
-        path: &Path,
-        pixel_height: usize,
-        pixel_width: usize,
-    ) -> Result<CudaTensor> {
-        let img = image::open(path)
-            .map_err(|e| msg(format!("ltx2 encode open {}: {e}", path.display())))?
-            .into_rgb8();
-        let img = image::imageops::resize(
-            &img,
-            pixel_width as u32,
-            pixel_height as u32,
-            image::imageops::FilterType::Lanczos3,
-        );
-        self.encode_rgb8(&img, pixel_height, pixel_width)
-    }
-
-    pub fn encode_rgb8(
-        &self,
-        img: &RgbImage,
-        pixel_height: usize,
-        pixel_width: usize,
-    ) -> Result<CudaTensor> {
-        if self.full_stack {
-            return self.encode_rgb8_full(img, pixel_height, pixel_width);
-        }
-        self.encode_rgb8_stem(img, pixel_height, pixel_width)
-    }
-
-    fn encode_rgb8_full(
-        &self,
-        img: &RgbImage,
-        pixel_height: usize,
-        pixel_width: usize,
-    ) -> Result<CudaTensor> {
-        let p = self.cfg.patch_size.max(1);
-        let ph = pixel_height / p;
-        let pw = pixel_width / p;
-        if ph == 0 || pw == 0 {
+    /// One frame, `pixels` `[3, H, W]` row-major in `[-1, 1]` → the
+    /// normalized latent `[1, C, 1, H/32, W/32]`.
+    pub fn encode_image(&self, pixels: &[f32], height: usize, width: usize) -> Result<CudaTensor> {
+        let p = self.patch;
+        if pixels.len() != 3 * height * width || height % p != 0 || width % p != 0 {
             return Err(msg(format!(
-                "ltx2 encode: {pixel_height}x{pixel_width} too small for patch {p}"
+                "ltx2 encoder: {} pixels for 3x{height}x{width} (patch {p})",
+                pixels.len()
             )));
         }
+        let (ph, pw) = (height / p, width / p);
         let cin = 3 * p * p;
-        // Patchify Diffusers order: flatten (c, pt, p_w, p_h) — spatial p×p.
         let mut patched = vec![0f32; cin * ph * pw];
-        for y in 0..ph {
-            for x in 0..pw {
-                for dy in 0..p {
-                    for dx in 0..p {
-                        let py = (y * p + dy).min(pixel_height - 1);
-                        let px = (x * p + dx).min(pixel_width - 1);
-                        let pix = img.get_pixel(px as u32, py as u32);
-                        for ch in 0..3 {
-                            let v = f32::from(pix[ch]) / 127.5 - 1.0;
-                            // Match encoder forward permute: (c, p_w, p_h) with
-                            // more-significant patch index on width (Diffusers).
-                            let cidx = (ch * p + dx) * p + dy;
-                            patched[(cidx * ph + y) * pw + x] = v;
-                        }
-                    }
+        for c in 0..3 {
+            for y in 0..height {
+                for x in 0..width {
+                    // channel = (c·p + r)·p + q, r the column and q the row in the patch.
+                    let k = (c * p + x % p) * p + y % p;
+                    patched[(k * ph + y / p) * pw + x / p] = pixels[(c * height + y) * width + x];
                 }
             }
         }
-        let mut x = CudaTensor::from_vec(patched, vec![1, cin, 1, ph, pw])?;
-        let eps = self.cfg.pixel_norm_eps as f32;
-        let conv_in = self
-            .conv_in
-            .as_ref()
-            .ok_or_else(|| msg("ltx2 encoder: full stack missing conv_in"))?;
-        x = conv_in.forward(&x)?;
-        for block in &self.down_blocks {
-            x = block.forward(x, eps)?;
-        }
-        for r in &self.mid_resnets {
-            x = r.forward(&x, eps)?;
-        }
-        let ones = {
-            let mut t = CudaTensor::ones(&[x.shape[1]]);
-            t.pin_device()?;
-            t
-        };
-        x = x.rms_norm_channels_act(&ones, eps, true)?;
-        if let Some(co) = &self.conv_out {
-            x = co.forward(&x)?;
-            // Take first `latent_channels` (drop logvar / extra).
-            let z = self.cfg.latent_channels;
-            if x.shape[1] > z {
-                x = x.narrow(1, 0, z)?;
+        let mut x = CudaTensor::from_vec(patched, vec![1, cin, 1, ph, pw])?.to_device()?;
+        x = self.conv_in.forward(&x)?;
+        for block in &self.blocks {
+            for r in &block.resnets {
+                x = r.forward(x, self.eps)?;
+            }
+            if let Some(d) = &block.downsampler {
+                x = d.forward(x)?;
             }
         }
-        // Normalize to DiT space.
-        let [_, c, f, h, w] = match x.shape[..] {
-            [1, c, f, h, w] => [1, c, f, h, w],
-            _ => return Err(msg(format!("ltx2 encode out {:?}", x.shape))),
-        };
-        let host = x.host_cow()?;
-        let mut lat = vec![0f32; c * f * h * w];
+        for r in &self.mid {
+            x = r.forward(x, self.eps)?;
+        }
+        let x = x.rms_norm_channels_act(&self.ones_out, self.eps, true)?;
+        let x = self.conv_out.forward(&x)?;
+        let c = self.latent_channels;
+        let means = x.narrow(1, 0, c)?;
+        let shape = means.shape.clone();
+        let n: usize = shape[2..].iter().product();
+        let host = means.host_cow()?;
+        let mut out = vec![0f32; c * n];
         for ch in 0..c {
-            let mean = self.latents_mean.get(ch).copied().unwrap_or(0.0);
-            let std = self.latents_std.get(ch).copied().unwrap_or(1.0).max(1e-6);
-            for i in 0..(f * h * w) {
-                let v = host[ch * f * h * w + i];
-                lat[ch * f * h * w + i] = (v - mean) / std * self.cfg.scaling_factor as f32;
+            let (m, s) = (self.mean[ch], self.std[ch]);
+            for i in 0..n {
+                out[ch * n + i] = (host[ch * n + i] - m) / s;
             }
         }
-        CudaTensor::from_vec(lat, vec![1, c, f, h, w]).map_err(Into::into)
+        Ok(CudaTensor::from_vec(out, shape)?)
     }
-
-    fn encode_rgb8_stem(
-        &self,
-        img: &RgbImage,
-        pixel_height: usize,
-        pixel_width: usize,
-    ) -> Result<CudaTensor> {
-        let spat = self.cfg.spatial_compression_ratio.max(1);
-        let lh = pixel_height / spat;
-        let lw = pixel_width / spat;
-        if lh == 0 || lw == 0 {
-            return Err(msg(format!(
-                "ltx2 encode: {pixel_height}x{pixel_width} too small"
-            )));
-        }
-        let z = self.cfg.latent_channels;
-        let p = self.cfg.patch_size.max(1);
-        let ph = (pixel_height / p).max(1);
-        let pw = (pixel_width / p).max(1);
-        let cin = 3 * p * p;
-        let mut patched = vec![0f32; cin * ph * pw];
-        for y in 0..ph {
-            for x in 0..pw {
-                for dy in 0..p {
-                    for dx in 0..p {
-                        let py = (y * p + dy).min(pixel_height - 1);
-                        let px = (x * p + dx).min(pixel_width - 1);
-                        let pix = img.get_pixel(px as u32, py as u32);
-                        for ch in 0..3 {
-                            let v = f32::from(pix[ch]) / 127.5 - 1.0;
-                            let cidx = (ch * p + dy) * p + dx;
-                            patched[(cidx * ph + y) * pw + x] = v;
-                        }
-                    }
-                }
-            }
-        }
-        let mut feat = patched;
-        let mut feat_c = cin;
-        let fh = ph;
-        let fw = pw;
-        if let (Some(w), Some(shape)) = (&self.conv_in_w, self.conv_in_shape) {
-            let [cout, cin_w, _, _, _] = shape;
-            if cin_w == cin {
-                let mut out = vec![0f32; cout * ph * pw];
-                for oc in 0..cout {
-                    for y in 0..ph {
-                        for x in 0..pw {
-                            let mut acc = 0f32;
-                            for ic in 0..cin {
-                                let widx = (((oc * cin + ic) * 3 + 1) * 3 + 1) * 3 + 1;
-                                acc += w[widx] * feat[(ic * ph + y) * pw + x];
-                            }
-                            out[(oc * ph + y) * pw + x] = acc;
-                        }
-                    }
-                }
-                feat = out;
-                feat_c = cout;
-            }
-        }
-        let mut lat = vec![0f32; z * lh * lw];
-        for y in 0..lh {
-            for x in 0..lw {
-                let y0 = y * fh / lh;
-                let x0 = x * fw / lw;
-                for ch in 0..z {
-                    let src_c = ch % feat_c;
-                    let v = feat[(src_c * fh + y0.min(fh - 1)) * fw + x0.min(fw - 1)];
-                    let mean = self.latents_mean.get(ch).copied().unwrap_or(0.0);
-                    let std = self.latents_std.get(ch).copied().unwrap_or(1.0).max(1e-6);
-                    lat[(ch * lh + y) * lw + x] = (v - mean) / std * self.cfg.scaling_factor as f32;
-                }
-            }
-        }
-        CudaTensor::from_vec(lat, vec![1, z, 1, lh, lw]).map_err(Into::into)
-    }
-}
-
-fn guess_resnet_channels(map: &WeightMap, block: usize) -> Option<usize> {
-    let k = format!("encoder.down_blocks.{block}.resnets.0.conv1.conv.weight");
-    for c in [128usize, 256, 512, 1024, 2048, 64] {
-        if cuda_tensor_shaped(map, &k, &[c, c, 3, 3, 3]).is_ok() {
-            return Some(c);
-        }
-    }
-    None
-}
-
-fn guess_down_out(map: &WeightMap, block: usize, in_ch: usize) -> Option<usize> {
-    let k = format!("encoder.down_blocks.{block}.downsamplers.0.conv.conv.weight");
-    for (st, sh, sw) in [(2usize, 2, 2), (1, 2, 2), (2, 1, 1)] {
-        let prod = st * sh * sw;
-        for out in [128usize, 256, 512, 1024, 2048] {
-            if out % prod != 0 {
-                continue;
-            }
-            let cout = out / prod;
-            if cuda_tensor_shaped(map, &k, &[cout, in_ch, 3, 3, 3]).is_ok() {
-                return Some(out);
-            }
-        }
-    }
-    None
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use image::{Rgb, RgbImage};
 
     #[test]
-    fn probes_documented() {
-        assert!(ekeys::PROBES.iter().any(|k| k.contains("encoder")));
-        assert!(ekeys::PROBES.iter().any(|k| k.contains("down_blocks")));
+    fn space_to_depth_matches_the_einops_order() {
+        // [1, 2, 2, 2, 2] with value = index; stride (2, 2, 2).
+        let v: Vec<f32> = (0..16).map(|i| i as f32).collect();
+        let x = CudaTensor::from_vec(v, vec![1, 2, 2, 2, 2]).unwrap();
+        let y = space_to_depth(&x, [2, 2, 2]).unwrap();
+        assert_eq!(y.shape, vec![1, 16, 1, 1, 1]);
+        let y = y.host_cow().unwrap().into_owned();
+        // out channel ((c·2 + pt)·2 + ph)·2 + pw reads x[c, pt, ph, pw].
+        for c in 0..2 {
+            for pt in 0..2 {
+                for ph in 0..2 {
+                    for pw in 0..2 {
+                        let o = ((c * 2 + pt) * 2 + ph) * 2 + pw;
+                        let i = ((c * 2 + pt) * 2 + ph) * 2 + pw;
+                        assert_eq!(y[o], i as f32);
+                    }
+                }
+            }
+        }
     }
 
     #[test]
-    fn encode_rgb_without_conv_weights() {
-        let cfg = Ltx2VideoVaeConfig::ltx2_19b();
-        let enc = VideoEncoder {
-            cfg: cfg.clone(),
-            loaded_key: "encoder.conv_in.conv.weight".into(),
-            full_stack: false,
-            conv_in: None,
-            down_blocks: Vec::new(),
-            mid_resnets: Vec::new(),
-            conv_out: None,
-            conv_in_w: None,
-            conv_in_shape: None,
-            latents_mean: vec![0f32; cfg.latent_channels],
-            latents_std: vec![1f32; cfg.latent_channels],
-            mid_ch: 128,
-        };
-        let mut img = RgbImage::new(64, 64);
-        for p in img.pixels_mut() {
-            *p = Rgb([10, 20, 30]);
-        }
-        let lat = enc.encode_rgb8(&img, 64, 64).unwrap();
-        assert_eq!(lat.shape, vec![1, cfg.latent_channels, 1, 2, 2]);
+    fn space_to_depth_spatial_only() {
+        // [1, 1, 1, 2, 4]: out channel ph·2 + pw at (h', w').
+        let v: Vec<f32> = (0..8).map(|i| i as f32).collect();
+        let x = CudaTensor::from_vec(v, vec![1, 1, 1, 2, 4]).unwrap();
+        let y = space_to_depth(&x, [1, 2, 2]).unwrap();
+        assert_eq!(y.shape, vec![1, 4, 1, 1, 2]);
+        let y = y.host_cow().unwrap().into_owned();
+        // x[h, w] = h·4 + w; out[(ph·2+pw), 0, w'] = x[ph, w'·2 + pw].
+        assert_eq!(y, vec![0.0, 2.0, 1.0, 3.0, 4.0, 6.0, 5.0, 7.0]);
+    }
+
+    #[test]
+    fn group_mean_averages_consecutive_channels() {
+        let x = CudaTensor::from_vec(vec![1.0, 3.0, 5.0, 7.0], vec![1, 4, 1, 1, 1]).unwrap();
+        let y = group_mean(&x, 2, 2).unwrap();
+        assert_eq!(y.shape, vec![1, 2, 1, 1, 1]);
+        assert_eq!(y.host_cow().unwrap().into_owned(), vec![2.0, 6.0]);
     }
 }

@@ -23,7 +23,6 @@ use fastvideo_serve_kit::{into_response, ServeCtx};
 
 use crate::error::FalProtocol;
 use crate::queue::{inline_video, submit_job, FalEndpoint, FalView};
-use crate::schema::Endpoint;
 use crate::{FalApp, FalConfig};
 
 async fn run_handler(
@@ -58,7 +57,7 @@ async fn run_handler(
 
 /// Adds `POST /run/{app}/{sub}` for every endpoint of `app`.
 pub(crate) fn app_routes(mut router: Router<ServeCtx>, cfg: &Arc<FalConfig>, app: &FalApp) -> Router<ServeCtx> {
-    for endpoint in Endpoint::ALL {
+    for &endpoint in app.endpoints() {
         let ep = Arc::new(FalEndpoint { app: app.clone(), endpoint });
         let (c, e) = (cfg.clone(), ep.clone());
         router = router.route(

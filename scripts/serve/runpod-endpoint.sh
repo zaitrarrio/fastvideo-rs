@@ -32,7 +32,10 @@
 # (comma list); RUNPOD_ALLOWED_CUDA (default 13.0; empty drops the filter); FV_SMOKE_MODEL (default
 # fake-wan); FV_LB_WORKERS_MAX (LB workers.max, default 1; also passed to
 # fv-serve as FV_WORKERS_MAX); FV_ENDPOINT_PREFIX (endpoint/template name
-# prefix, default fv-serve); FV_IDLE_TIMEOUT_S (default 5).
+# prefix, default fv-serve); FV_IDLE_TIMEOUT_S (default 5); FV_EXTRA_ENV_JSON
+# (a JSON object merged into the queue template's env, e.g. the gateway
+# worker role {"FV_SERVE_ROLE":"worker","FV_INTERNAL_TOKEN":"…"}, see
+# scripts/serve/runpod-gateway.sh).
 set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source-path=SCRIPTDIR source=../gpu/lib.sh
@@ -120,13 +123,14 @@ gpu_json() { jq -cn --arg g "$GPUS" '$g | split(",") | map(gsub("^ +| +$"; ""))'
 LINK_WEIGHTS='if [ -d /runpod-volume/weights ] && [ ! -e /workspace/weights ]; then mkdir -p /workspace && ln -s /runpod-volume/weights /workspace/weights; fi; exec /opt/fastvideo-rs/bin/fv-serve "$@"'
 template_payload() {
   local image="$1" name="$2"
-  jq -n --arg name "$name" --arg image "$image" --arg cfg "$CONFIG" --arg link "$LINK_WEIGHTS" --argjson secrets "$SECRET_ENV_JSON" '{
+  jq -n --arg name "$name" --arg image "$image" --arg cfg "$CONFIG" --arg link "$LINK_WEIGHTS" --argjson secrets "$SECRET_ENV_JSON" \
+    --argjson extra "${FV_EXTRA_ENV_JSON:-{\}}" '{
     name: $name, imageName: $image, isServerless: true, containerDiskInGb: 20, volumeInGb: 0,
     dockerEntrypoint: ["/bin/sh", "-c", $link, "fv-serve"], dockerStartCmd: ["--config", $cfg],
     env: ($secrets + {
       FV_SERVE_MODE: "runpod-queue", FV_AUTH_MODE: "trust-gateway", FV_STATE_DIR: "/fvstate",
       FV_WEIGHTS: "/runpod-volume/weights", FV_CACHE_DIR: "/fvstate/cache", RUST_LOG: "info"
-    })
+    } + $extra)
   }'
 }
 
@@ -336,5 +340,5 @@ case "${1:-}" in
     echo "# queue endpoint (REST v1 POST /endpoints)"; endpoint_payload "<template id>" fv-serve-plan "${RUNPOD_VOLUME_DC:-<volume dc>}"
     echo "# load balancer (REST v2 POST /serverless)"
     RUNPOD_API_KEY="${RUNPOD_API_KEY:-}" lb_payload "$img" fv-serve-plan "${RUNPOD_VOLUME_DC:-<volume dc>}" ;;
-  *) sed -n '2,36p' "$0" | sed 's/^# \{0,1\}//'; exit 2 ;;
+  *) sed -n '2,38p' "$0" | sed 's/^# \{0,1\}//'; exit 2 ;;
 esac

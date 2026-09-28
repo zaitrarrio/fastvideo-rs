@@ -1,4 +1,5 @@
-# fv-serve on Runpod: FastWan (wan-turbo). Secrets as in runpod.toml.
+# fv-serve on Runpod: FastWan2.1 1.3B. Secrets as in runpod.toml. (The Wan
+# tiers are the 5B models: runpod-wan5b.toml.)
 
 [server]
 bind = "0.0.0.0:8000"
@@ -21,12 +22,12 @@ stale_after_s = 900
 backend = "cuda"
 post_encoder = "auto"
 
-# wan-turbo: FastWan2.1 1.3B DMD 3-step, VSA (one GPU; small, add more
-# FASTVIDEO_VSA=1 Wan models here).
+# FastWan2.1 1.3B DMD 3-step, VSA (one GPU; small, add more FASTVIDEO_VSA=1
+# Wan models here). Untiered since the 5B FastWan2.2 became wan-turbo.
 [[models]]
 id = "fastwan21-1.3b"
 family = "wan"
-recipe = "wan-turbo"
+recipe = "fastwan21-1.3b"
 weights = "${FV_WEIGHTS}/fastwan21-1.3b"
 resident = true
 
@@ -46,3 +47,11 @@ native = true
 [limits]
 queue_max = 32
 body_max_mb = 64
+
+# Behind the gateway (docs/serve/gateway.md): set FV_SERVE_ROLE=worker and
+# FV_INTERNAL_TOKEN (the gateway's value) on the template. The worker then
+# requires the internal token on every API route, trusts the gateway's
+# authentication, and takes jobs from `/fv/v1/internal/jobs` (queue: the
+# gateway's `kind: http` envelope). Standalone deployments ignore this.
+[gateway]
+pool = "wan"
