@@ -355,6 +355,34 @@ pub struct H3VideoEncoder {
     quant_conv: CausalConv3d,
     mean: CudaTensor,
     std: CudaTensor,
+    /// `Some(seed)`: [`Self::encode`] draws a posterior sample instead of
+    /// taking the mode (see [`Self::with_posterior_sample`]).
+    sample_seed: Option<u64>,
+}
+
+/// FastVideo `MINIMAX_H3_KEYFRAME_ENCODE_SEED` (`packing.py:39`).
+pub const KEYFRAME_ENCODE_SEED: u64 = 42;
+
+/// `DiagonalGaussianDistribution.sample()` on host moments `[1, 2C, ...]`:
+/// `mean + exp(0.5 * clamp(logvar, -30, 20)) * eps`, then the fp16 round
+/// trip FastVideo keeps (`_encode_keyframe_latents`, `_encode_visual_rows`).
+/// `eps` comes from our own generator seeded with `seed` (torch's CPU stream
+/// is not reproduced), so the sample matches the reference in distribution.
+pub fn sample_posterior_host(moments: &[f32], channels: usize, seed: u64) -> Vec<f32> {
+    use rand::{Rng, SeedableRng};
+    use rand_distr::StandardNormal;
+    let n = moments.len() / 2;
+    debug_assert_eq!(n % channels, 0);
+    let (mean, logvar) = moments.split_at(n);
+    let mut rng = rand::rngs::StdRng::seed_from_u64(seed);
+    mean.iter()
+        .zip(logvar)
+        .map(|(&m, &lv)| {
+            let eps: f32 = rng.sample(StandardNormal);
+            let z = m + (0.5 * lv.clamp(-30.0, 20.0)).exp() * eps;
+            half::f16::from_f32(z).to_f32()
+        })
+        .collect()
 }
 
 impl H3VideoEncoder {
@@ -387,6 +415,7 @@ impl H3VideoEncoder {
             mean,
             std,
             cfg,
+            sample_seed: None,
         })
     }
 
@@ -411,6 +440,14 @@ impl H3VideoEncoder {
             )));
         }
         let moments = self.encode_temporal(x)?;
+        if let Some(seed) = self.sample_seed {
+            let c = self.cfg.latent_channels;
+            let mut shape = moments.shape.clone();
+            shape[1] = c;
+            let z = sample_posterior_host(&moments.host_cow()?, c, seed);
+            let z = CudaTensor::from_vec(z, shape)?.to_device()?;
+            return z.sub(&self.mean)?.div(&self.std);
+        }
         // DiagonalGaussian: first half = mean (mode).
         let mean = moments.narrow(1, 0, self.cfg.latent_channels)?;
         mean.sub(&self.mean)?.div(&self.std)
@@ -503,6 +540,14 @@ impl H3VideoEncoder {
             z = scale_noise_latent(&z, KEYFRAME_NOISE_AUG, seed)?;
         }
         Ok(z)
+    }
+
+    /// Draw posterior samples (seeded per encode call) instead of taking the
+    /// mode, as FastVideo's Ref2VA reference encode does
+    /// (`_sample_visual_posterior`, seed [`KEYFRAME_ENCODE_SEED`]).
+    pub fn with_posterior_sample(mut self, seed: u64) -> Self {
+        self.sample_seed = Some(seed);
+        self
     }
 
     /// Encode an interleaved RGB8 image already at `(height, width)` (a
@@ -717,6 +762,21 @@ fn blend(a: &CudaTensor, b: &CudaTensor, overlap: usize, dim: usize) -> Result<C
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn posterior_sample_is_mean_plus_scaled_noise_in_fp16() {
+        // Two channels x 2 values: mean [1, 2, 3, 4], logvar [-100 (clamped
+        // to -30: std ~3e-7), 0, 0, 2*ln 2 (std 2)].
+        let moments = [1.0, 2.0, 3.0, 4.0, -100.0, 0.0, 0.0, 2.0 * 2f32.ln()];
+        let a = sample_posterior_host(&moments, 2, KEYFRAME_ENCODE_SEED);
+        let b = sample_posterior_host(&moments, 2, KEYFRAME_ENCODE_SEED);
+        assert_eq!(a, b, "seeded");
+        assert_eq!(a.len(), 4);
+        assert_eq!(a[0], 1.0, "clamped logvar leaves the mean (after fp16)");
+        assert!(a.iter().all(|v| half::f16::from_f32(*v).to_f32() == *v));
+        assert!((a[1] - 2.0).abs() > 0.0 && (a[3] - 4.0).abs() < 2.0 * 6.0);
+        assert_ne!(sample_posterior_host(&moments, 2, 7), a);
+    }
 
     #[test]
     fn split_tiles_covers_length() {

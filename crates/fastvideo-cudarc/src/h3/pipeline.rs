@@ -2331,7 +2331,9 @@ fn encode_ref2va_conditions(
     let audio_cfg = H3AudioVaeConfig::fasth3_8step();
     let ratio = vae_cfg.spatial_compression_ratio();
     let sample_rate = audio_cfg.sampling_rate as u32;
-    let encoder = H3VideoEncoder::load(vae_cfg, &WeightMap::open(&root.join("vae"))?)?;
+    // Posterior samples, as FastVideo's Ref2VA encode (`_sample_visual_posterior`).
+    let encoder = H3VideoEncoder::load(vae_cfg, &WeightMap::open(&root.join("vae"))?)?
+        .with_posterior_sample(super::vae_encoder::KEYFRAME_ENCODE_SEED);
     let audio_map = WeightMap::open(&root.join("audio_vae"))?;
     let audio_encoder = super::audio_vae::H3AudioEncoder::load(audio_cfg, &audio_map)?;
     let mut prepared = Vec::with_capacity(references.len());
