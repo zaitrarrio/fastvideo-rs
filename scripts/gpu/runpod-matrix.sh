@@ -17,7 +17,7 @@
 #   gate_cells: fv-gpucheck gate with scripts/gpu/gate-policy.toml
 #     (FV_GATE_POLICY overrides) into $RUNS/gate/.
 set -euo pipefail
-FAMILY="${1:?usage: runpod-matrix.sh headline|mmaudio|speechtest|h3|ltx|hunyuan|wan|b200|rtx6000|rtx5090|fastvideo|precision|precision-debug|trace|fuse|oracle|ltxvae|ltxfps|writer|eval|ltxoffload|techniques|h3arms|h3attn}"
+FAMILY="${1:?usage: runpod-matrix.sh serve-engine|headline|mmaudio|speechtest|h3|ltx|hunyuan|wan|b200|rtx6000|rtx5090|fastvideo|precision|precision-debug|trace|fuse|oracle|ltxvae|ltxfps|writer|eval|ltxoffload|techniques|h3arms|h3attn}"
 WORK="${FV_WORK:-/workspace}"
 BIN="${FV_GPUCHECK:-/opt/fastvideo-rs/target/release/fv-gpucheck}"
 W="$WORK/weights"
@@ -2336,6 +2336,47 @@ Audio: male speech, clear voice, quiet room"
     else
       log "skip the 4k5s / 1080p20s cpu cells (512p frames identical: ${same:-no}; FV_OFFLOAD_BIG=${FV_OFFLOAD_BIG:-1})"
     fi
+    ;;
+  serve-engine)
+    # Serve engine CUDA backend (WP-11): for each family, the CLI generation
+    # (`h3|ltx2|wan gen`) and the same recipe / canvas / seed through
+    # EngineService + CudaBackend (`fv-gpucheck engine`): MP4 out, frames
+    # byte-compared with the CLI clip, then a second job cancelled mid-run.
+    # FV_ENGINE_CELLS picks families (h3 ltx wan).
+    want() { [[ " ${FV_ENGINE_CELLS:-h3 ltx wan} " == *" $1 "* ]]; }
+    if want h3; then
+      h3geo=(--height 480 --width 832 --num-frames 124 --prompt "$PROMPT" --seed "$SEED" --adaln-cache "$RUNS/h3-adaln.cache")
+      gated_cell cli-h3-turbo fasth3-4step-vsa \
+        "$BIN" --mode fast --techniques h3/fasth3_4step_vsa h3 gen --weights "$W/h3-base" --h3-recipe 4step-vsa \
+          "${h3geo[@]}" --text-encoder streamed --text-weights "$W/h3-base" --no-text-cache --no-mp4 \
+          --clip-dir "$RUNS/cli-h3-turbo/frames"
+      gated_cell engine-h3-turbo fasth3-4step-vsa \
+        "$BIN" --keep-going --mode fast --techniques h3/fasth3_4step_vsa engine --model h3-turbo --weights-root "$W" --tae-dir "$TAE" \
+          "${h3geo[@]}" --text-encoder streamed --reference "$RUNS/cli-h3-turbo/frames" --cancel-after-step 2 \
+          --clip-out "$RUNS/engine-h3-turbo/out"
+    fi
+    if want ltx; then
+      ltxgeo=(--height 704 --width 1280 --num-frames 121 --prompt "$PROMPT" --seed "$SEED")
+      gated_cell cli-ltx-turbo ltx25-two-stage \
+        "$BIN" --mode fast --techniques ltx2/ltx25_distill_sol ltx2 gen --model-version 2.5 --weights "$W/ltx25" \
+          --dit "$W/ltx25" "${ltxgeo[@]}" --two-stage --text streamed --no-text-cache --no-mp4 \
+          --clip "$RUNS/cli-ltx-turbo/frames"
+      gated_cell engine-ltx-turbo ltx25-two-stage \
+        "$BIN" --keep-going --mode fast --techniques ltx2/ltx25_distill_sol engine --model ltx-turbo --weights-root "$W" \
+          --tae-dir "$TAE" "${ltxgeo[@]}" --ltx-text streamed --reference "$RUNS/cli-ltx-turbo/frames" \
+          --cancel-after-step 3 --clip-out "$RUNS/engine-ltx-turbo/out"
+    fi
+    if want wan; then
+      wangeo=(--height 480 --width 832 --num-frames 81 --prompt "$PROMPT" --seed "$SEED")
+      gated_cell cli-wan-turbo fastwan21-1.3b env FASTVIDEO_WAN_VAE=full \
+        "$BIN" --mode fast --vsa wan gen --weights "$W/fastwan21-1.3b" "${wangeo[@]}" --no-text-cache --no-mp4 \
+          --clip-dir "$RUNS/cli-wan-turbo/frames"
+      gated_cell engine-wan-turbo fastwan21-1.3b \
+        "$BIN" --keep-going --mode fast engine --model wan-turbo --weights-root "$W" --tae-dir "$TAE" "${wangeo[@]}" \
+          --reference "$RUNS/cli-wan-turbo/frames" --cancel-after-step 1 --clip-out "$RUNS/engine-wan-turbo/out"
+    fi
+    # Keep the reports and MP4s; the PNG frames were compared on the box.
+    rm -rf "$RUNS"/cli-*/frames "$RUNS"/engine-*/out/*/frames
     ;;
   *)
     log "FATAL: unknown family $FAMILY"

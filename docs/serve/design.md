@@ -1648,6 +1648,47 @@ additions and readings; everything is re-exported from the crate root.
   port range; the config keeps them as integers for the streaming packages
   to settle.
 
+**WP-11 notes (as implemented).**
+
+- Tier table (`cuda/caps.rs`, built without `cuda` so it is CPU-tested):
+  `h3-max` = Sol-H3 4-step on `h3/sol_h3_4step_engine_ladder` (`sol-h3`,
+  §0.5; owner decision); `h3-turbo` = FastH3 4-step VSA + profile
+  `h3/fasth3_4step_vsa` (`fasth3-4step-vsa`, also `fasth3`); `h3-draft` = the
+  same at 480p with TAEH3; untiered `fasth3-8step-dense` = FastH3 8-step DMD,
+  dense attention, official VAE. `ltx-pro` = LTX-2.5 distilled
+  two-stage, dense stage 2 (`ltx2/ltx25_distill_dense`); `ltx-turbo` = the Sol
+  stage 2 (`ltx2/ltx25_distill_sol`); `ltx-draft` = + NVFP4 video FFN
+  (`ltx2/ltx25_distill_sol_nvfp4`) + TAEHV. `wan-max` = Wan2.2 TI2V-5B, 50
+  UniPC steps, CFG 5 (T2V + I2V); `wan-turbo` = FastWan2.1 1.3B DMD 3-step
+  VSA, full Wan VAE; `wan-draft` = the same with TAEHV; untiered
+  `sfwan21-1.3b` = causal SF-Wan (E6 `CausalRollout`).
+- Technique profiles and `FASTVIDEO_VSA` are process-wide and read once:
+  `ProcessPlan` refuses a model set whose load-time settings differ (e.g.
+  `fasth3-8step-dense` + `h3-turbo`, `ltx-turbo` + `ltx-draft`, `wan-turbo` +
+  `wan-max`); such models run in separate processes (they do not co-reside
+  anyway, R18).
+- Deployment (`[[models]]`, one GPU per process): each entry resolves against
+  the catalog (`recipe` = tier alias, catalog id or H3 recipe name; `weights`
+  replaces the catalog directory; `resident` models load before readiness).
+  `fv-serve` refuses at startup a set with no resident model, an unknown
+  recipe or a process-settings conflict; a load fails with a named error when
+  the weight directory is missing or the DiT (on-disk bytes) exceeds the free
+  device memory. One H3 DiT is ~41 GB, so `h3-max` and `h3-turbo` do not
+  co-reside on a 96 GB card: one per process, or `resident = false` +
+  `[engine] swap = true`. Shipped configs: `configs/serve/runpod.toml`
+  (h3-turbo), `runpod-h3-max.toml`, `runpod-ltx.toml`, `runpod-wan.toml`.
+- Output uses E2's `FrameSink`: frames and PCM arrive in memory and go to
+  an NVENC MP4 (`fastvideo-media`) or to `ClipOutput::{frames, audio}`;
+  LTX skips the audio decode when the output drops audio (E4) and serves
+  `ltx_fps_caps()`; Wan accepts 16 and 24 fps as container rates. SF-Wan
+  causal sessions delegate to WP-15's `CausalDriver`; the SF-Wan pipeline
+  stays resident for the process (the rollout borrows it). `H3Pipeline`'s
+  boxed text encoder gained a `Send` bound (the pipeline lives on the
+  executor thread).
+- GPU check: `fv-gpucheck engine` (one model through `EngineService`, frames
+  compared with the CLI clip, a second job cancelled mid-run) and the
+  `serve-engine` family of `runpod-matrix.sh`.
+
 ### Phase 3: streaming (parallel after Phase 2 core)
 
 | WP | Owns | Depends | Acceptance |

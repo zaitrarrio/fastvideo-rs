@@ -266,6 +266,12 @@ fn shipped_configs_parse() {
         let text = std::fs::read_to_string(&p).unwrap();
         let c = Config::from_toml(&text, &p.display().to_string()).unwrap();
         c.validate().unwrap_or_else(|e| panic!("{}: {e}", p.display()));
+        // CUDA configs: every `[[models]]` entry resolves against the
+        // catalog and the set shares one process.
+        if c.engine.backend == fastvideo_serve::config::EngineBackendKind::Cuda {
+            let models = fastvideo_serve::app::cuda_models(&c).unwrap_or_else(|e| panic!("{}: {e}", p.display()));
+            assert!(!models.is_empty(), "{}", p.display());
+        }
         n += 1;
     }
     assert!(n >= 2, "configs/serve has {n} configs");

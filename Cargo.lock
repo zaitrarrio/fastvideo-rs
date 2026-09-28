@@ -1237,9 +1237,12 @@ dependencies = [
  "clap",
  "cudarc",
  "fastvideo-cudarc",
+ "fastvideo-engine-service",
  "fastvideo-loader",
+ "fastvideo-media",
  "fastvideo-models",
  "fastvideo-ops",
+ "fastvideo-protocol",
  "half",
  "image",
  "memmap2",
@@ -1250,6 +1253,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2",
+ "tokio",
  "toml",
 ]
 

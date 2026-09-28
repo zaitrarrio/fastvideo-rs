@@ -17,7 +17,9 @@
 //! - [`stream`]: [`ClipSession`] (clip-queue builds) and [`CausalSession`]
 //!   (SF-Wan block rollout).
 //!
-//! `CudaBackend` needs the `cuda` feature (WP-11).
+//! - [`cuda`]: the CUDA model catalog (tiers, recipes, caps; always built)
+//!   and, with the `cuda` feature, `CudaBackend` over the fastvideo-cudarc
+//!   pipelines (WP-11).
 //!
 //! Owned by WP-02 (docs/serve/design.md §8).
 
@@ -31,7 +33,6 @@ pub mod pool;
 pub mod scheduler;
 pub mod service;
 pub mod stream;
-#[cfg(feature = "cuda")]
 pub mod cuda;
 
 pub use backend::{

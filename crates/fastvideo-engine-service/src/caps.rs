@@ -10,6 +10,10 @@
 //! - **Turbo** (`h3-turbo`, `ltx-turbo`, `wan-turbo`): the fastest
 //!   configuration that still passes the quality gate (e.g. FastH3 4-step
 //!   VSA; LTX-2.5 distilled two-stage Sol).
+//! - **Draft** (`h3-draft`, `ltx-draft`, `wan-draft`, §0.6): faster
+//!   configurations that do not pass the gate (previews).
+//!
+//! The CUDA catalog (`crate::cuda::caps`) documents each tier's recipe.
 //!
 //! A backend tags each model's caps with its tier and recipe name
 //! (`ModelCaps::with_tier`) and describes the recipe in detail through
