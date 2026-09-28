@@ -2177,6 +2177,39 @@ Audio: male speech, clear voice, quiet room"
         oracle_diff "oracle-$target-owntext-diff" "$ref/dump" "$ours-owntext"
         oracle_diff "oracle-$target-owntext-vs-injected" "$ours" "$ours-owntext"
       fi
+      # Image conditioning (ltx25-i2v / ltx25-kf): the main run injects the
+      # reference's conditioning latents. -ownenc encodes the reference's
+      # preprocessed pixels with our encoder (the cond latent diff is the
+      # encoder's alone); -ownimg preprocesses and encodes on our own (the
+      # whole path end to end). Then frame fidelity: SSIM / PSNR of the
+      # output's pinned frames against the conditioning images (cover +
+      # center crop to the canvas), ours and the reference's.
+      if [[ "$target" == ltx25-i2v || "$target" == ltx25-kf ]]; then
+        oracle_run "oracle-$target-ownenc" "$ours-ownenc" FASTVIDEO_INJECT_COND=0
+        oracle_diff "oracle-$target-ownenc-diff" "$ref/dump" "$ours-ownenc"
+        oracle_run "oracle-$target-ownimg" "$ours-ownimg" FASTVIDEO_INJECT_COND=0 FASTVIDEO_INJECT_PIXELS=0
+        oracle_diff "oracle-$target-ownimg-diff" "$ref/dump" "$ours-ownimg"
+        fm="$RUNS/oracle-$target-frames"
+        mkdir -p "$fm"
+        pins=("0 $fx/ti2v-beach-832x480.jpg")
+        [[ "$target" == ltx25-kf ]] && pins+=("120 $fx/ti2v-beach-zoom-832x480.jpg")
+        for src in "ours:$RUNS/oracle-$target/frames/output.mp4" "ownimg:$RUNS/oracle-$target-ownimg/frames/output.mp4" \
+          "reference:$ref/dump/ref.mp4"; do
+          mp4="${src#*:}"
+          [[ -f "$mp4" ]] || { echo "${src%%:*} missing $mp4" >>"$fm/metrics.txt"; continue; }
+          cp "$mp4" "$fm/${src%%:*}.mp4" 2>/dev/null || true
+          for pin in "${pins[@]}"; do
+            idx="${pin%% *}" img="${pin#* }"
+            for m in ssim psnr; do
+              r="$(ffmpeg -v info -nostats -i "$mp4" -i "$img" -lavfi \
+                "[0:v]select=eq(n\,$idx),setpts=N/TB[a];[1:v]scale=768:512:force_original_aspect_ratio=increase:flags=bilinear,crop=768:512,format=yuv420p[b];[a]format=yuv420p[c];[c][b]$m" \
+                -frames:v 1 -f null - 2>&1 | grep -E "Parsed_$m" | tail -1)"
+              echo "${src%%:*} frame $idx $m: ${r##*] }" >>"$fm/metrics.txt"
+            done
+          done
+        done
+        sed "s/^/[$target-frames] /" "$fm/metrics.txt" | tee -a "$LOG" || true
+      fi
       if [[ "$target" == sfwan* ]]; then
         # Frames: the reference's mp4 (its full VAE, bf16 decode, then its
         # encoder) against our PNG frames; our own mp4 against our PNGs is
