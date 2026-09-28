@@ -110,6 +110,19 @@ pub struct H3Recipe {
     /// `auto` | `resident` | `streamed` (None: env / auto).
     pub dit_offload: Option<String>,
     pub steps: u32,
+    /// Where the image-to-video multimodal text encoder lives: `auto`
+    /// (resident when the text encoder is and the vision tower fits),
+    /// `resident`, or `stream` (read from the volume per request).
+    #[serde(default = "auto_str")]
+    pub i2v_encoder: String,
+    /// Run one text-to-video and one image-to-video generation at the default
+    /// canvas after the load, before the model is reported ready.
+    #[serde(default)]
+    pub warmup: bool,
+}
+
+fn auto_str() -> String {
+    "auto".to_owned()
 }
 
 /// LTX-2 checkpoint line.
@@ -619,6 +632,8 @@ fn h3(
         adaln_cache: None,
         dit_offload: None,
         steps,
+        i2v_encoder: auto_str(),
+        warmup: false,
     }
 }
 
@@ -817,8 +832,9 @@ pub struct ModelEntryCfg {
     pub weights: Option<PathBuf>,
     pub resident: bool,
     pub served_names: Vec<String>,
-    /// Optional per-model settings: `text_encoder` (H3), `text` (LTX),
-    /// `adaln_cache` (H3), `taeh3` / `tae` (tiny decoders).
+    /// Optional per-model settings: `text_encoder`, `i2v_encoder`, `warmup`
+    /// (H3), `text` (LTX), `adaln_cache` (H3), `taeh3` / `tae` (tiny
+    /// decoders).
     pub extra: BTreeMap<String, String>,
 }
 
@@ -877,6 +893,18 @@ pub fn model_from_config(layout: &WeightLayout, e: &ModelEntryCfg) -> Result<Cud
             }
             if let Some(t) = x("text_weights") {
                 r.text_weights = Some(t.into());
+            }
+            if let Some(t) = x("i2v_encoder") {
+                r.i2v_encoder = t;
+            }
+            if let Some(w) = x("warmup") {
+                r.warmup = match w.as_str() {
+                    "true" => true,
+                    "false" => false,
+                    other => {
+                        return Err(format!("model `{}`: warmup = {other:?} (true | false)", e.id))
+                    }
+                };
             }
         }
         CudaRecipe::Ltx2(r) => {
@@ -1225,6 +1253,20 @@ mod tests {
         assert_eq!(m.tier, Some(Tier::Turbo));
         let CudaRecipe::H3(r) = &m.recipe else { panic!() };
         assert_eq!((r.weights.as_path(), r.text_encoder.as_str()), (Path::new("/w/h3-base"), "streamed"));
+        assert_eq!((r.i2v_encoder.as_str(), r.warmup), ("auto", false));
+        let with = |k: &str, v: &str| ModelEntryCfg {
+            extra: [(k.to_owned(), v.to_owned())].into_iter().collect(),
+            ..e.clone()
+        };
+        let h3 = |e: &ModelEntryCfg| match model_from_config(&l, e).map(|m| m.recipe) {
+            Ok(CudaRecipe::H3(r)) => Ok(r),
+            Ok(_) => panic!("not h3"),
+            Err(e) => Err(e),
+        };
+        assert_eq!(h3(&with("i2v_encoder", "stream")).unwrap().i2v_encoder, "stream");
+        assert!(h3(&with("warmup", "true")).unwrap().warmup);
+        assert!(!h3(&with("warmup", "false")).unwrap().warmup);
+        assert!(h3(&with("warmup", "yes")).is_err());
         let t = CapabilityTable::build(vec![vec![(m.caps(), m.describe())]], &BTreeMap::new()).unwrap();
         assert_eq!(t.resolve("h3-turbo").unwrap().id.as_str(), "fasth3");
         for (fam, rec, want) in [("ltx2", "ltx-turbo", "ltx25-distill-sol"), ("wan", "", "fastwan21-1.3b"), ("h3", "8step", "fasth3-8step-dense"), ("h3", "sol-h3", "sol-h3"), ("h3", "h3-max", "sol-h3")] {

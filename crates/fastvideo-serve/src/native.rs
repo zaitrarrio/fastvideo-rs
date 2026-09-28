@@ -330,22 +330,30 @@ fn capabilities(gate: &ServiceGate) -> Value {
     })
 }
 
+/// The `/fv/v1/capabilities` body.
+pub type CapsFn = Arc<dyn Fn() -> Value + Send + Sync>;
+
 /// The native routes.
 pub fn routes(gate: Arc<ServiceGate>, body_max: usize, sync_timeout: Duration) -> Router<ServeCtx> {
     let _ = sync_timeout;
+    routes_with(Arc::new(move || capabilities(&gate)), body_max)
+}
+
+/// The native routes with `/fv/v1/capabilities` from `caps` (the gateway
+/// aggregates its pools, docs/serve/gateway.md §4).
+pub fn routes_with(caps: CapsFn, body_max: usize) -> Router<ServeCtx> {
     let proto = Arc::new(Native);
     let view = Arc::new(NativeView);
     let mut opts = SubmitOpts::new(IngestPolicy::default());
     opts.body_max = body_max;
-    let cap_gate = gate.clone();
     Router::new()
         .route(
             "/fv/v1/capabilities",
             get(move |State(ctx): State<ServeCtx>, headers: HeaderMap| {
-                let g = cap_gate.clone();
+                let caps = caps.clone();
                 async move {
                     match ctx.auth().authenticate(ProtocolId::Native, &headers) {
-                        Ok(_) => Json(capabilities(&g)).into_response(),
+                        Ok(_) => Json(caps()).into_response(),
                         Err(e) => reply_err(e),
                     }
                 }

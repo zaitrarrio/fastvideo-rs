@@ -1043,12 +1043,17 @@ trait LayerSource {
 struct Streamed<'a> {
     map: &'a WeightMap,
     cfg: &'a DecoderConfig,
+    /// `Native` for the plain streamed encoder; `Fp8Rows` streams the same
+    /// layers a resident FP8 decoder holds (the codes are read from a
+    /// pre-quantized tree, or quantized per layer exactly as the resident
+    /// load does), so the numbers are the resident FP8 decoder's.
+    precision: WeightPrecision,
 }
 
 impl LayerSource for Streamed<'_> {
     fn with_layer<R>(&mut self, index: usize, f: impl FnOnce(&Layer) -> Result<R>) -> Result<R> {
         // Loaded here and dropped on return: one layer on the device at a time.
-        let layer = Layer::load(self.map, self.cfg, index, WeightPrecision::Native)?;
+        let layer = Layer::load(self.map, self.cfg, index, self.precision)?;
         f(&layer)
     }
 
@@ -1199,35 +1204,101 @@ pub fn hidden_states_multimodal(
     taps: &[usize],
     multimodal: &MultimodalCtx,
 ) -> Result<Vec<CudaTensor>> {
+    hidden_states_multimodal_at(
+        map,
+        cfg,
+        embedded,
+        attend,
+        taps,
+        multimodal,
+        WeightPrecision::Native,
+        None,
+    )
+}
+
+/// The message a streamed forward stops with when its `abort` says so.
+pub const ABORTED: &str = "llm: aborted between layers";
+
+/// A layer source that asks `abort` before each layer: a streamed forward
+/// spends a second or more per layer reading weights, and a cancelled
+/// request should not wait for the rest.
+struct Abortable<'a, S> {
+    inner: &'a mut S,
+    abort: Option<&'a dyn Fn() -> bool>,
+}
+
+impl<S: LayerSource> LayerSource for Abortable<'_, S> {
+    fn with_layer<R>(&mut self, index: usize, f: impl FnOnce(&Layer) -> Result<R>) -> Result<R> {
+        if self.abort.is_some_and(|a| a()) {
+            return Err(msg(ABORTED));
+        }
+        self.inner.with_layer(index, f)
+    }
+
+    fn final_norm(&mut self) -> Result<CudaTensor> {
+        self.inner.final_norm()
+    }
+}
+
+/// [`hidden_states_multimodal`] with the streamed layers held at
+/// `precision`, stopping with [`ABORTED`] before any layer once `abort`
+/// returns true. `Native` streams bf16 (prefetched when it can). `Fp8Rows`
+/// loads each layer as [`ResidentDecoder::load_with`] does at that precision
+/// (from a pre-quantized tree when `map` is one) and drops it after use: the
+/// numbers are those of a resident FP8 decoder, bit for bit, without keeping
+/// it.
+#[allow(clippy::too_many_arguments)]
+pub fn hidden_states_multimodal_at(
+    map: &WeightMap,
+    cfg: &DecoderConfig,
+    embedded: CudaTensor,
+    attend: &[bool],
+    taps: &[usize],
+    multimodal: &MultimodalCtx,
+    precision: WeightPrecision,
+    abort: Option<&dyn Fn() -> bool>,
+) -> Result<Vec<CudaTensor>> {
     let s = embedded.shape.get(1).copied().unwrap_or(0);
     if s == 0 {
         return Err(msg("llm: empty multimodal prompt"));
     }
     let positions: Vec<u32> = (0..s as u32).collect();
     #[cfg(feature = "cuda")]
-    if let Some(stage) = map.lazy().and_then(|lazy| prefetch::Stage::new(lazy, cfg)) {
-        let last = taps
-            .iter()
-            .copied()
-            .max()
-            .unwrap_or(0)
-            .min(cfg.num_layers());
-        return stage.run(map, cfg, last, |source| {
-            encode(
-                cfg,
-                source,
-                embedded,
-                &positions,
-                attend,
-                taps,
-                true,
-                Some(multimodal),
-            )
-        });
+    if precision == WeightPrecision::Native {
+        if let Some(stage) = map.lazy().and_then(|lazy| prefetch::Stage::new(lazy, cfg)) {
+            let last = taps
+                .iter()
+                .copied()
+                .max()
+                .unwrap_or(0)
+                .min(cfg.num_layers());
+            return stage.run(map, cfg, last, |source| {
+                encode(
+                    cfg,
+                    &mut Abortable {
+                        inner: source,
+                        abort,
+                    },
+                    embedded,
+                    &positions,
+                    attend,
+                    taps,
+                    true,
+                    Some(multimodal),
+                )
+            });
+        }
     }
     encode(
         cfg,
-        &mut Streamed { map, cfg },
+        &mut Abortable {
+            inner: &mut Streamed {
+                map,
+                cfg,
+                precision,
+            },
+            abort,
+        },
         embedded,
         &positions,
         attend,
@@ -1235,6 +1306,15 @@ pub fn hidden_states_multimodal(
         true,
         Some(multimodal),
     )
+}
+
+/// The (scaled) token embeddings of `ids` read from `map`: `[1, S, hidden]`,
+/// the numbers [`ResidentDecoder::embed_ids`] gives for the same checkpoint.
+pub fn embed_tokens(map: &WeightMap, cfg: &DecoderConfig, ids: &[u32]) -> Result<CudaTensor> {
+    if ids.is_empty() {
+        return Err(msg("llm: empty prompt"));
+    }
+    embed(map, cfg, ids)
 }
 
 /// Scatter token embedding rows, then replace pad positions with vision features.
@@ -1247,7 +1327,28 @@ pub fn embed_with_vision(
     video_token_id: u32,
     video_features: Option<&CudaTensor>,
 ) -> Result<(CudaTensor, Vec<bool>, Vec<bool>)> {
-    let mut embedded = embed(map, cfg, ids)?;
+    let embedded = embed(map, cfg, ids)?;
+    scatter_vision(
+        embedded,
+        ids,
+        image_token_id,
+        image_features,
+        video_token_id,
+        video_features,
+    )
+}
+
+/// [`embed_with_vision`] from embeddings already looked up (e.g. by
+/// [`ResidentDecoder::embed_ids`]): pad positions take the vision features.
+pub fn scatter_vision(
+    embedded: CudaTensor,
+    ids: &[u32],
+    image_token_id: u32,
+    image_features: Option<&CudaTensor>,
+    video_token_id: u32,
+    video_features: Option<&CudaTensor>,
+) -> Result<(CudaTensor, Vec<bool>, Vec<bool>)> {
+    let mut embedded = embedded;
     let mut image_mask = vec![false; ids.len()];
     let mut video_mask = vec![false; ids.len()];
     for (i, &id) in ids.iter().enumerate() {
@@ -1352,7 +1453,11 @@ fn hidden_states_opt(
     let _ = allow_prefetch;
     encode(
         cfg,
-        &mut Streamed { map, cfg },
+        &mut Streamed {
+            map,
+            cfg,
+            precision: WeightPrecision::Native,
+        },
         embedded,
         positions,
         attend,
@@ -1722,17 +1827,7 @@ impl ResidentDecoder {
         attend: &[bool],
         taps: &[usize],
     ) -> Result<Vec<CudaTensor>> {
-        if ids.is_empty() {
-            return Err(msg("llm: empty prompt"));
-        }
-        let h = self.cfg.hidden;
-        let x =
-            CudaTensor::from_vec(self.embed.rows(ids, h)?, vec![1, ids.len(), h])?.to_device()?;
-        let x = if self.cfg.embed_scale == 1.0 {
-            x
-        } else {
-            x.try_mul_scalar(self.cfg.embed_scale)?
-        };
+        let x = self.embed_ids(ids)?;
         encode(
             &self.cfg,
             &mut Resident(self),
@@ -1743,6 +1838,23 @@ impl ResidentDecoder {
             false,
             None,
         )
+    }
+
+    /// The (scaled) token embeddings of `ids` from the host table:
+    /// `[1, S, hidden]` on the device, the numbers [`embed_tokens`] reads
+    /// from the checkpoint (the table holds the checkpoint's own dtype).
+    pub fn embed_ids(&self, ids: &[u32]) -> Result<CudaTensor> {
+        if ids.is_empty() {
+            return Err(msg("llm: empty prompt"));
+        }
+        let h = self.cfg.hidden;
+        let x =
+            CudaTensor::from_vec(self.embed.rows(ids, h)?, vec![1, ids.len(), h])?.to_device()?;
+        if self.cfg.embed_scale == 1.0 {
+            Ok(x)
+        } else {
+            x.try_mul_scalar(self.cfg.embed_scale)
+        }
     }
 
     /// Multimodal forward: pre-scattered embeds + mRoPE + DeepStack.
@@ -2618,6 +2730,98 @@ mod tests {
 
     /// DeepStack adds features only at visual pads and leaves text tokens
     /// unchanged — including through the device `index_select` + `add` path.
+    /// The image-to-video text path: a resident decoder (the T2V encoder)
+    /// gives the streamed multimodal numbers bit for bit, at bf16 and at FP8
+    /// rows, from the same embeddings, vision scatter, mRoPE and DeepStack.
+    #[test]
+    fn a_resident_multimodal_forward_is_the_streamed_one() {
+        let cfg = tiny(false);
+        let ids = [1u32, 3, 0, 3, 2];
+        let h = cfg.hidden;
+        let feats = || {
+            CudaTensor::from_vec((0..2 * h).map(|i| (i as f32 * 0.37).sin()).collect(), vec![2, h])
+                .unwrap()
+        };
+        let ctx = |mask: Vec<bool>| MultimodalCtx {
+            mrope_positions: (0..ids.len())
+                .map(|i| [i as f64, (i % 2) as f64, (i / 2) as f64])
+                .collect(),
+            mrope_section: [1, 1, 0],
+            visual_mask: mask,
+            deepstack: vec![CudaTensor::from_vec(
+                (0..2 * h).map(|i| (i as f32 * 0.11).cos()).collect(),
+                vec![2, h],
+            )
+            .unwrap()],
+        };
+        let f = feats();
+        for precision in [WeightPrecision::Native, WeightPrecision::Fp8Rows] {
+            let map = weights();
+            let resident = ResidentDecoder::load_with(&map, &cfg, 2, precision).unwrap();
+            let streamed_tokens = embed_tokens(&map, &cfg, &ids).unwrap();
+            let resident_tokens = resident.embed_ids(&ids).unwrap();
+            assert_eq!(
+                &*streamed_tokens.host_cow().unwrap(),
+                &*resident_tokens.host_cow().unwrap()
+            );
+            let (se, smask, _) =
+                scatter_vision(streamed_tokens, &ids, 3, Some(&f), 9, None).unwrap();
+            let (re, rmask, _) =
+                scatter_vision(resident_tokens, &ids, 3, Some(&f), 9, None).unwrap();
+            assert_eq!(smask, vec![false, true, false, true, false]);
+            let attend = vec![true; ids.len()];
+            let want = hidden_states_multimodal_at(
+                &map,
+                &cfg,
+                se,
+                &attend,
+                &[1, 2],
+                &ctx(smask),
+                precision,
+                None,
+            )
+            .unwrap();
+            let got = resident
+                .hidden_states_multimodal(re, &attend, &[1, 2], &ctx(rmask))
+                .unwrap();
+            for (w, g) in want.iter().zip(&got) {
+                assert_eq!(
+                    &*w.host_cow().unwrap(),
+                    &*g.host_cow().unwrap(),
+                    "{precision:?}"
+                );
+            }
+            // A cancelled request stops before the next streamed layer.
+            let (se, smask, _) = scatter_vision(
+                embed_tokens(&map, &cfg, &ids).unwrap(),
+                &ids,
+                3,
+                Some(&f),
+                9,
+                None,
+            )
+            .unwrap();
+            let asked = std::cell::Cell::new(0);
+            let abort = || {
+                asked.set(asked.get() + 1);
+                asked.get() > 1
+            };
+            let err = hidden_states_multimodal_at(
+                &map,
+                &cfg,
+                se,
+                &attend,
+                &[2],
+                &ctx(smask),
+                precision,
+                Some(&abort),
+            )
+            .unwrap_err();
+            assert!(err.to_string().contains(ABORTED), "{err}");
+            assert_eq!(asked.get(), 2, "layer 0 ran, layer 1 was refused");
+        }
+    }
+
     #[test]
     fn deepstack_adds_only_visual_tokens() {
         let (s, h) = (4usize, 3);
