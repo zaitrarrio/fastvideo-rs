@@ -526,3 +526,148 @@ fn hex(b: &[u8]) -> String {
 fn unhex(s: &str) -> Vec<u8> {
     (0..s.len()).step_by(2).map(|i| u8::from_str_radix(&s[i..i + 2], 16).unwrap()).collect()
 }
+
+/// fal's own app ids with multi-segment subs (docs/serve/fal-parity.md P0):
+/// `lightricks/ltx-2.5` and `fal-ai/wan` pick their tier per endpoint, the
+/// status and result URLs are app-only, the output is named after the app,
+/// and `minimax/h3` / `minimax/h3-max-turbo` alias the H3 tiers.
+#[tokio::test]
+async fn family_apps_and_multi_segment_subs() {
+    use fastvideo_engine_service::cuda::caps::{catalog, WeightLayout};
+    use fastvideo_engine_service::FakeModel;
+    use fastvideo_protocol::{Family, Tier};
+    let models: Vec<FakeModel> = catalog(&WeightLayout::default())
+        .into_iter()
+        .filter(|m| matches!(m.tier, Some(Tier::Max | Tier::Turbo)))
+        .filter(|m| m.family() != Family::H3 || m.tier == Some(Tier::Turbo))
+        .map(|m| FakeModel { caps: m.caps(), recipe: m.describe() })
+        .collect();
+    let f = fixture(Opts {
+        models,
+        fal_apps: vec!["lightricks/ltx-2.5", "fal-ai/wan", "minimax/h3-max-turbo", "minimax/h3"],
+        ..Opts::default()
+    })
+    .await;
+    for (path, app, body, model, dims, slug) in [
+        (
+            "/lightricks/ltx-2.5/text-to-video/fast",
+            "lightricks/ltx-2.5",
+            json!({"prompt": "p", "resolution": "720p", "fps": 24, "duration": 8}),
+            "ltx25-distill-sol",
+            (1280, 768, 193, 24),
+            "ltx-2.5",
+        ),
+        (
+            "/lightricks/ltx-2.5/text-to-video/pro",
+            "lightricks/ltx-2.5",
+            json!({"prompt": "p", "aspect_ratio": "9:16"}),
+            "ltx25-distill-dense",
+            (1088, 1920, 153, 25),
+            "ltx-2.5",
+        ),
+        (
+            "/fal-ai/wan/v2.2-5b/text-to-video",
+            "fal-ai/wan",
+            json!({"prompt": "p", "resolution": "580p", "num_frames": 161, "frames_per_second": 30}),
+            "wan22-ti2v-5b",
+            (1024, 576, 161, 30),
+            "wan",
+        ),
+        (
+            "/fal-ai/wan/v2.2-5b/text-to-video/fast-wan",
+            "fal-ai/wan",
+            json!({"prompt": "p", "resolution": "480p", "aspect_ratio": "1:1"}),
+            "fastwan22-ti2v-5b",
+            (480, 480, 81, 24),
+            "wan",
+        ),
+        (
+            "/minimax/h3-max-turbo/text-to-video",
+            "minimax/h3-max-turbo",
+            json!({"prompt": "p"}),
+            "fasth3-4step-vsa",
+            (1344, 768, 124, 24),
+            "minimax-h3-max-turbo",
+        ),
+    ] {
+        let s = submit(&f.app, path, body.clone()).await;
+        let rid = s["request_id"].as_str().unwrap().to_owned();
+        assert_eq!(s["status_url"], format!("https://fal.fv.test/{app}/requests/{rid}/status"), "{path}");
+        let j = f.ctx.jobs().by_external(ProtocolId::Fal, &rid).await.unwrap();
+        assert_eq!(j.resolved.model.0, model, "{path}");
+        let r = &j.resolved;
+        assert_eq!((r.width, r.height, r.num_frames, r.fps), dims, "{path}");
+        assert_eq!(j.requested_model(), &path[1..]);
+        wait_completed(&f.app, &path_of(s["status_url"].as_str().unwrap())).await;
+        // App-only and full-endpoint forms.
+        for p in [format!("/{app}/requests/{rid}"), format!("{path}/requests/{rid}/status")] {
+            assert_eq!(call(&f.app, "GET", &p, None).await.status, StatusCode::OK, "{p}");
+        }
+        let out = call(&f.app, "GET", &format!("/{app}/requests/{rid}"), None).await.json();
+        let name = out["video"]["file_name"].as_str().unwrap();
+        // `<nanoid21>_<app slug>[-<tier>].mp4`: named by app and tier.
+        let named = name.strip_suffix(".mp4").and_then(|n| n.get(22..)).unwrap_or_default();
+        assert!(named.starts_with(slug), "{name}");
+        if let Some(t) = j.resolved.tier {
+            assert!(named.split(['-', '_', '.']).any(|w| w == t.as_str()), "{name} names no tier");
+        }
+        // Another app's prefix does not find it.
+        let other = if app == "fal-ai/wan" { "lightricks/ltx-2.5" } else { "fal-ai/wan" };
+        assert_eq!(call(&f.app, "GET", &format!("/{other}/requests/{rid}/status"), None).await.status, StatusCode::NOT_FOUND);
+    }
+    // The sync route with a multi-segment sub.
+    let r = call(&f.app, "POST", "/run/fal-ai/wan/v2.2-5b/text-to-video/fast-wan", Some(json!({"prompt": "p", "num_frames": 17}))).await;
+    assert_eq!(r.status, StatusCode::OK, "{:?}", r.json());
+    let name = r.json()["video"]["file_name"].as_str().unwrap().to_owned();
+    assert!(name.contains("_wan") && name.ends_with(".mp4"), "{name}");
+    // Validation names fal's fields; the base H3 app refuses 2K / 4K cleanly.
+    for (path, body, loc) in [
+        ("/lightricks/ltx-2.5/text-to-video/fast", json!({"prompt": "p", "duration": 20}), "duration"),
+        ("/lightricks/ltx-2.5/text-to-video/pro", json!({"prompt": "p", "resolution": "2160p"}), "resolution"),
+        ("/lightricks/ltx-2.5/image-to-video/fast", json!({"prompt": "p"}), "image_url"),
+        ("/fal-ai/wan/v2.2-5b/text-to-video", json!({"prompt": "p", "frames_per_second": 61}), "frames_per_second"),
+        ("/fal-ai/wan/v2.2-5b/text-to-video", json!({"prompt": "p", "num_frames": 162}), "num_frames"),
+        ("/minimax/h3-max-turbo/text-to-video", json!({"prompt": "p", "resolution": "2K"}), "resolution"),
+    ] {
+        let r = call(&f.app, "POST", path, Some(body.clone())).await;
+        assert_eq!(r.status, StatusCode::UNPROCESSABLE_ENTITY, "{path} {body}");
+        assert_eq!(r.json()["detail"][0]["loc"], json!(["body", loc]), "{path} {body}: {:?}", r.json());
+    }
+    // `minimax/h3` runs on the Max tier, absent from this fixture: a clean 404.
+    let r = call(&f.app, "POST", "/minimax/h3/text-to-video", Some(json!({"prompt": "p"}))).await;
+    assert_eq!(r.status, StatusCode::NOT_FOUND);
+    // The family apps have only their own subs.
+    for p in ["/lightricks/ltx-2.5/text-to-video", "/fal-ai/wan/text-to-video", "/fal-ai/wan/v2.2-5b/reference-to-video"] {
+        let r = call(&f.app, "POST", p, Some(json!({"prompt": "p"}))).await;
+        assert!(matches!(r.status.as_u16(), 404 | 405), "{p}: {}", r.status);
+    }
+    // Schemas for the console, by multi-segment sub.
+    let r = call(&f.app, "GET", "/fal/schema/fal-ai/wan/v2.2-5b/text-to-video/fast-wan", None).await;
+    assert_eq!(r.status, StatusCode::OK);
+    assert!(r.json()["properties"].get("num_inference_steps").is_none());
+    let r = call(&f.app, "GET", "/fal/schema/lightricks/ltx-2.5/image-to-video/pro", None).await;
+    assert_eq!(r.json()["properties"]["resolution"]["enum"], json!(["720p", "1080p"]));
+    assert_eq!(call(&f.app, "GET", "/fal/schema/lightricks/ltx-2.5/reference-to-video", None).await.status, StatusCode::NOT_FOUND);
+    let c = call(&f.app, "GET", "/fal/schema", None).await.json();
+    assert_eq!(c["apps"][1]["endpoints"][2]["endpoint_id"], "fal-ai/wan/v2.2-5b/text-to-video/fast-wan");
+}
+
+/// `minimax/h3` (base) on the Max tier: 768P runs, 2K and 4K are the
+/// `H3Resolution2K` gap (422 on `resolution`).
+#[tokio::test]
+async fn base_h3_app() {
+    let f = fixture(Opts { fal_apps: vec!["minimax/h3", "minimax/h3-max-turbo"], ..Opts::default() }).await;
+    let s = submit(&f.app, "/minimax/h3/text-to-video", json!({"prompt": "p", "resolution": "768P"})).await;
+    let j = f.ctx.jobs().by_external(ProtocolId::Fal, s["request_id"].as_str().unwrap()).await.unwrap();
+    assert_eq!(j.resolved.model.0, "fake-h3-max");
+    let s = submit(&f.app, "/minimax/h3-max-turbo/image-to-video", json!({"prompt": "p"})).await;
+    let j = f.ctx.jobs().by_external(ProtocolId::Fal, s["request_id"].as_str().unwrap()).await.unwrap();
+    assert_eq!(j.resolved.model.0, "fake-h3-turbo");
+    for res in ["2K", "4K"] {
+        let r = call(&f.app, "POST", "/minimax/h3/text-to-video", Some(json!({"prompt": "p", "resolution": res}))).await;
+        assert_eq!(r.status, StatusCode::UNPROCESSABLE_ENTITY, "{res}");
+        let d = &r.json()["detail"][0];
+        assert_eq!(d["loc"], json!(["body", "resolution"]), "{res}");
+        assert_eq!(d["msg"], "2K resolution is not supported by this server", "{res}");
+    }
+}

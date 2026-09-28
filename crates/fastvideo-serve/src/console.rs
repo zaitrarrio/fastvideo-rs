@@ -70,7 +70,7 @@ pub fn routes() -> Router {
     Router::new()
         .route("/console", get(|| async { page(INDEX) }))
         .route("/console/admin", get(|| async { page(ADMIN) }))
-        .route("/console/models/{owner}/{alias}/{task}", get(|| async { page(MODEL) }))
+        .route("/console/models/{owner}/{alias}/{*task}", get(|| async { page(MODEL) }))
         .route("/console/assets/{file}", get(asset))
 }
 

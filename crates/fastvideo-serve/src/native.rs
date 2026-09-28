@@ -101,6 +101,9 @@ pub struct NativeBody {
     /// First-frame image (https URL or data URI): image-to-video.
     #[serde(default)]
     pub image_url: Option<String>,
+    /// Last-frame image: keyframes (with or without `image_url`).
+    #[serde(default)]
+    pub last_image_url: Option<String>,
 }
 
 fn media(s: &str, field: &str) -> Result<MediaRef, ApiError> {
@@ -164,6 +167,10 @@ impl SubmitEndpoint for NativeSubmit {
         if let Some(u) = b.image_url {
             r.task = Task::I2V;
             r.keyframes.push(Keyframe { at: fastvideo_protocol::Anchor::First, image: media(&u, "image_url")? });
+        }
+        if let Some(u) = b.last_image_url {
+            r.task = Task::Keyframes;
+            r.keyframes.push(Keyframe { at: fastvideo_protocol::Anchor::Last, image: media(&u, "last_image_url")? });
         }
         Ok(r)
     }

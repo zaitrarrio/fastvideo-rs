@@ -1073,3 +1073,96 @@ fn resolved_job_carries_tier_and_recipe() {
     let j = nego(&t2v("fasth3", "a cat"), &h3()).unwrap();
     assert_eq!((j.tier, j.recipe), (None, None));
 }
+
+// ---- H3 reference-to-video (docs/ports/h3-ref2v.md) --------------------------------
+
+fn h3_tier(id: &str, ref2va_only: bool, tier: Tier) -> ModelCaps {
+    let mut c = ModelCaps::h3(id, ref2va_only);
+    if ref2va_only {
+        c.tasks = [Task::Ref2V].into_iter().collect();
+    }
+    c.tier = Some(tier);
+    c
+}
+
+fn image_ref(u: &str) -> Reference {
+    Reference { kind: MediaKind::Image, media: url(u) }
+}
+
+#[test]
+fn ref2v_routes_to_the_tier_companion() {
+    let base = h3_tier("sol-h3", false, Tier::Max);
+    let companion = h3_tier("h3-ref2v-max", true, Tier::Max);
+    let turbo = h3_tier("fasth3", false, Tier::Turbo);
+    let untiered = ModelCaps::h3("plain", false);
+    let models = [companion.clone(), base.clone(), turbo.clone(), untiered.clone()];
+    // The tier resolves to its text-to-video model even when the companion
+    // comes first.
+    assert_eq!(resolve_tier(Family::H3, Tier::Max, &models).unwrap().id, base.id);
+    assert_eq!(route_task(&base, Task::Ref2V, &models).id, companion.id);
+    assert_eq!(route_task(&base, Task::T2V, &models).id, base.id);
+    // No companion at that tier, or an untiered model: unchanged, so
+    // negotiate reports the gap.
+    assert_eq!(route_task(&turbo, Task::Ref2V, &models).id, turbo.id);
+    assert_eq!(route_task(&untiered, Task::Ref2V, &models).id, untiered.id);
+    let mut r = t2v("h3-max", "x");
+    r.task = Task::Ref2V;
+    r.references = vec![image_ref("https://e.x/r.png")];
+    assert_eq!(gap_of(nego(&r, &turbo)), Some(GapId::H3Ref2vaNotLoaded));
+    assert!(nego(&r, &companion).is_ok());
+}
+
+#[test]
+fn ref2v_clip_lengths_follow_the_minimax_limits() {
+    let caps = h3_ref2va();
+    let clip = |kind: MediaKind, secs: f64, i: usize| {
+        let (mime, name) = match kind {
+            MediaKind::Video => ("video/mp4", format!("v{i}.mp4")),
+            _ => ("audio/wav", format!("a{i}.wav")),
+        };
+        let mut m = staged(mime, (kind == MediaKind::Video).then_some((1280, 720)), &name);
+        m.probe.duration_s = Some(secs);
+        (kind, m)
+    };
+    let run = |clips: Vec<(MediaKind, StagedMedia)>| {
+        let mut r = t2v("fasth3", "x");
+        r.task = Task::Ref2V;
+        r.references = clips
+            .iter()
+            .map(|(k, _)| Reference { kind: *k, media: url("https://e.x/c") })
+            .collect();
+        let staged = StagedInputs { references: clips, ..StagedInputs::default() };
+        negotiate(&r, &caps, &staged)
+    };
+    assert!(run(vec![clip(MediaKind::Video, 5.0, 0), clip(MediaKind::Audio, 15.02, 1)]).is_ok());
+    assert!(run(vec![clip(MediaKind::Video, 7.5, 0), clip(MediaKind::Video, 7.5, 1)]).is_ok());
+    for bad in [
+        vec![clip(MediaKind::Video, 1.5, 0)],
+        vec![clip(MediaKind::Video, 16.0, 0)],
+        vec![clip(MediaKind::Video, 8.0, 0), clip(MediaKind::Video, 8.0, 1)],
+        vec![clip(MediaKind::Video, 4.0, 0), clip(MediaKind::Audio, 9.0, 1), clip(MediaKind::Audio, 9.0, 2)],
+    ] {
+        let e = run(bad).unwrap_err();
+        assert_eq!((e.kind, e.param.as_deref()), (ErrorKind::InvalidRequest, Some("references")));
+    }
+}
+
+#[test]
+fn ref2v_adaptive_canvas_follows_the_first_image_else_the_first_video() {
+    let caps = h3_ref2va();
+    let mut r = t2v("fasth3", "x");
+    r.task = Task::Ref2V;
+    r.canvas = CanvasSpec::FollowImage { short_edge: 768 };
+    r.references = vec![
+        Reference { kind: MediaKind::Video, media: url("https://e.x/v.mp4") },
+        image_ref("https://e.x/i.png"),
+    ];
+    let mut staged = stage_all(&r);
+    staged.references[1].1 = image("i.png", 768, 1344);
+    let j = negotiate(&r, &caps, &staged).unwrap();
+    assert!(j.height > j.width, "the portrait image wins over the landscape video");
+    r.references.truncate(1);
+    staged.references.truncate(1);
+    let j = negotiate(&r, &caps, &staged).unwrap();
+    assert!(j.width > j.height, "video only: the video's landscape canvas");
+}

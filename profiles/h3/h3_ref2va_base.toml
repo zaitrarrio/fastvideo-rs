@@ -1,0 +1,20 @@
+# MiniMax-H3 Ref2VA as MiniMax, diffusers and FastVideo run it
+# (basic_minimax_h3_ref2va.py: 50-point grid, guidance 1.0): the Ref2VA DiT
+# (transformer_ref), 49 forwards, shifts 12 / 3, dense attention, MXFP8
+# linears. The H3 reference-to-video max tier (docs/ports/h3-ref2v.md).
+
+[id]
+name = "h3_ref2va_base"
+family = "minimax_h3"
+description = "MiniMax-H3 Ref2VA base, 49 forwards, dense attention, MXFP8."
+upstream = "FastVideo MiniMaxH3Ref2VAModularPipeline, --steps 50"
+
+[pipeline]
+model = "h3"
+recipe = "base"
+
+[techniques.dense_attention]
+
+[techniques.mxfp8]
+
+[techniques.bf16_activations]

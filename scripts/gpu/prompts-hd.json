@@ -1,0 +1,24 @@
+{
+  "name": "hd-3",
+  "source": "docs/serve/h3-1080p-and-upscaler.md: a talking head (lip sync), a landscape (fine detail), a dialogue scene; seeds as in prompts-eval.json / runpod-matrix.sh",
+  "prompts": [
+    {
+      "name": "talking-head",
+      "seed": 1024,
+      "source": "runpod-matrix.sh default FV_PROMPT (seed 1024)",
+      "prompt": "A man in his thirties talking to the camera in a bright living room, medium close-up, natural expressions and hand gestures, soft window light. He says: <d>Hello, this was generated entirely in Rust.</d>"
+    },
+    {
+      "name": "spark-mountain-lake",
+      "seed": 42,
+      "source": "models/minimax_h3/Sol-H3-Spark/examples/prompts.jsonl case mountain-lake (seed 42)",
+      "prompt": "integrated_multimodal_description: A wide aerial shot follows an eagle gliding over a turquoise alpine lake, with pine forest, a narrow waterfall and snow-covered peaks visible in the background. Its wings flex gently as it banks through the warm afternoon light. The camera maintains its distance and reveals the landscape in one continuous five-second shot. Natural colors, realistic feathers, no cuts or text. overall_soundscape: Wind moving through the valley, a distant eagle call and soft waterfall noise. non_diegetic_music: None."
+    },
+    {
+      "name": "ltx-frogyoga",
+      "seed": 42,
+      "source": "models/ltx25/prompts/p03_frogyoga.txt (seed 42)",
+      "prompt": "The camera opens in a calm, sunlit frog yoga studio. Warm morning light washes over the wooden floor as incense smoke drifts lazily in the air. The senior frog instructor sits cross-legged at the center, eyes closed, voice deep and calm. \"We are one with the pond.\" All the frogs answer softly: \"Ommm…\" \"We are one with the mud.\" \"Ommm…\" He smiles faintly. \"We are one with the flies.\" A pause.\nThe camera pans to the side towards one frog who twitches, eyes darting. Suddenly its tongue snaps out, catching a fly mid-air and pulling it into its mouth.\nThe master exhales slowly, still serene. \"But we do not chase the flies…\" Beat. \"not during class.\"\nThe guilty frog lowers its head in shame, folding its hands back into a meditative pose. The other frogs resume their chant: \"Ommm…\" Camera holds for a moment on the embarrassed frog, eyes closed too tightly, pretending nothing happened."
+    }
+  ]
+}

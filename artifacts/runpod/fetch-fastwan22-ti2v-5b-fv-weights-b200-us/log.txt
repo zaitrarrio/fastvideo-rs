@@ -1,0 +1,22 @@
+WARNING: Running pip as the 'root' user can result in broken permissions and conflicting behaviour with the system package manager, possibly rendering your system unusable. It is recommended to use a virtual environment instead: https://pip.pypa.io/warnings/venv. Use the --root-user-action option if you know what you are doing and want to suppress this warning.
+
+[notice] A new release of pip is available: 25.0.1 -> 26.2.1
+[notice] To update, run: pip install --upgrade pip
+19:24:53 FastVideo/FastWan2.2-TI2V-5B-FullAttn-Diffusers@3e187042a324f6f5fb68fd22110a78725253de8f: 15 files, 24201770562 bytes -> /workspace/weights/.fastwan22-ti2v-5b.partial-20260928192452
+19:25:39 downloaded in 46 s; verifying
+19:25:39 ok model_index.json 502 a43fbeeb22389574
+19:25:39 ok scheduler/scheduler_config.json 820 571a3eed68bcd943
+19:25:39 ok text_encoder/config.json 855 a2bcb24699f6c009
+19:25:48 ok text_encoder/model-00001-of-00003.safetensors 4935812536 a8e861969c7433e7 lfs
+19:25:58 ok text_encoder/model-00002-of-00003.safetensors 4983103192 d57d948ece4837d8 lfs
+19:26:00 ok text_encoder/model-00003-of-00003.safetensors 1442935480 0da9ee284e21d140 lfs
+19:26:00 ok text_encoder/model.safetensors.index.json 22476 31c4c7bcce679eaa
+19:26:00 ok tokenizer/special_tokens_map.json 7079 456b58fd240a06c7
+19:26:00 ok tokenizer/spiece.model 4548313 e3909a67b780650b lfs
+19:26:00 ok tokenizer/tokenizer.json 16837459 20a46ac256746594 lfs
+19:26:00 ok tokenizer/tokenizer_config.json 61758 1d8d2a216bf8e70a
+19:26:00 ok transformer/config.json 503 9ffd02a1f2159858
+19:26:20 ok transformer/diffusion_pytorch_model.safetensors 9999660080 a1cf4acd5d0242ca lfs
+19:26:20 ok vae/config.json 1701 d996c340fe9a7df5
+19:26:26 ok vae/diffusion_pytorch_model.safetensors 2818777808 62cd18f19438e35b lfs
+19:26:26 renamed to /workspace/weights/fastwan22-ti2v-5b; 24201770562 bytes in 94 s

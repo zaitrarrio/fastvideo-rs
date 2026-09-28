@@ -739,9 +739,11 @@ Configuring each client (fal §12):
 | `sync_mode: true` | `inline_data_uri` | `video.url = data:video/mp4;base64,…` (INFERRED, fal §14 #1) |
 
 Output: `{video:{url,content_type:"video/mp4",file_name:"<nanoid21>_<app-slug>.mp4",file_size}, expanded_prompt:null, seed, timings:{inference:<denoise s>}}`.
-`<app-slug>` is the app id with `/` as `-`, plus `-<tier>` when the tier
-is not already part of it (`minimax-h3-max`, `fastvideo-ltx-pro-max`);
-hosted fal writes `minimax-h3` for every H3 app.
+`<app-slug>` is `minimax-<alias>` for the `minimax/*` apps, else the app
+alias, plus `-<tier>` when the resolved tier is not already a word of it
+(`minimax-h3-max`, `minimax-h3-turbo`, `ltx-2.5-turbo`, `wan-turbo`;
+`fastvideo_fal::output_file_name`). Hosted fal writes `minimax-h3` for
+every H3 app, which hides the tier.
 `seed` is the effective seed (the request's, or the one the server drew)
 on every task: fal's r2v schema requires it, and on t2v/i2v it is an extra
 key the clients ignore.

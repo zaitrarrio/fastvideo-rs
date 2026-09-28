@@ -445,15 +445,17 @@ fn small_helpers() {
     assert!(name.ends_with("_minimax-h3-max.mp4"), "{name}");
     assert!(name[..21].chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_'));
     assert_eq!(name, fastvideo_fal::output_file_name(&j), "stable per job");
-    let mut t = job(Task::T2V, "minimax/h3-turbo/text-to-video");
-    t.resolved.tier = Some(Tier::Turbo);
-    assert_eq!(fastvideo_fal::output_slug(&t), "minimax-h3-turbo");
-    let mut p = job(Task::T2V, "fastvideo/ltx-pro/text-to-video");
-    p.resolved.tier = Some(Tier::Max);
-    assert_eq!(fastvideo_fal::output_slug(&p), "fastvideo-ltx-pro-max");
-    let mut w = job(Task::T2V, "fastvideo/fastwan21-1.3b/text-to-video");
-    w.resolved.tier = None;
-    assert_eq!(fastvideo_fal::output_slug(&w), "fastvideo-fastwan21-1.3b");
+    // The tier is appended when the app alias does not name it.
+    for (endpoint, tier, want) in [
+        ("minimax/h3-turbo/text-to-video", Some(Tier::Turbo), "_minimax-h3-turbo.mp4"),
+        ("lightricks/ltx-2.5/text-to-video", Some(Tier::Max), "_ltx-2.5-max.mp4"),
+        ("fastvideo/fastwan21-1.3b/text-to-video", None, "_fastwan21-1.3b.mp4"),
+    ] {
+        let mut t = job(Task::T2V, endpoint);
+        t.resolved.tier = tier;
+        let name = fastvideo_fal::output_file_name(&t);
+        assert!(name.ends_with(want), "{endpoint}: {name}");
+    }
     assert_eq!(FalProtocol.id(), ProtocolId::Fal);
     let a = FalProtocol.new_external_id(j.id);
     assert!(uuid::Uuid::parse_str(&a).is_ok() && a != FalProtocol.new_external_id(j.id));
