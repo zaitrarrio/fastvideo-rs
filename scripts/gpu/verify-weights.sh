@@ -9,7 +9,7 @@
 #                                      sfwan21-1.3b
 #                                      mmaudio-44k-v2
 #                                      hy15-480-t2v hy15-480-i2v hy15-720-t2v
-#                                      hy15-720-i2v aux text-fp8
+#                                      hy15-720-i2v aux text-fp8 upscalers
 #   verify-weights.sh --list           print the cells and what each needs
 #
 # For every weight root a cell needs, this checks:
@@ -17,8 +17,11 @@
 #   2. every `*.safetensors.index.json` lists shards that all exist on disk;
 #   3. every safetensors file is its full length (header + data, via
 #      verify-safetensors.sh), following HF-cache symlinks.
-# The `aux` cell instead checks every auxiliary/ row of weights-manifest.tsv (TAE and
+# The `aux` cell instead checks every auxiliary/ url: row of weights-manifest.tsv (TAE and
 # LPIPS files): present, the listed size, the listed SHA-256.
+# The `upscalers` cell checks the video super-resolution trees under
+# auxiliary/upscalers/ (SeedVR2 3B, FlashVSR v1.1): a .complete marker and
+# every pinned file with its size and SHA-256 (about 14 GB read).
 # The `text-fp8` cell checks the optional pre-quantized FP8 text encoders
 # (`fv-gpucheck quantize-text-encoder`, E13) in h3-base/ and ltx25/: the
 # manifest's SHA-256 and the model's size and full length, plus the model's
@@ -76,12 +79,13 @@ needs() {
       echo "ltx23:transformer ltx23:vae ltx23:audio_vae ltx23:vocoder ltx23:text_encoder ltx23:text_encoder/gemma ltx23:tokenizer ltx23:text_embedding_projection ltx23:spatial_upscaler" ;;
     aux) echo "aux" ;;
     text-fp8) echo "text-fp8" ;;
+    upscalers) echo "upscalers" ;;
     *) return 1 ;;
   esac
 }
 
 CELLS=(fasth3-8step h3-base fasth3-4step-vsa fasth3-4step-dense sol-h3 sol-h3-spark h3-ref2va h3-ref2va-turbo ltx25-two-stage ltx23 fastwan21-1.3b
-  wan22-ti2v-5b fastwan22-ti2v-5b wan21-t2v-14b sfwan21-1.3b mmaudio-44k-v2 hy15-480-t2v hy15-480-i2v hy15-720-t2v hy15-720-i2v aux text-fp8)
+  wan22-ti2v-5b fastwan22-ti2v-5b wan21-t2v-14b sfwan21-1.3b mmaudio-44k-v2 hy15-480-t2v hy15-480-i2v hy15-720-t2v hy15-720-i2v aux text-fp8 upscalers)
 
 if [[ "${1:-}" == "--list" ]]; then
   for c in "${CELLS[@]}"; do printf '%-20s %s\n' "$c" "$(needs "$c")"; done
@@ -148,7 +152,7 @@ check_aux() {
     if [[ "$got" != "$sha" ]]; then
       echo "  SHA256 $p: $got, expected $sha" >&2; rc=1
     fi
-  done < <(grep -E '^auxiliary/' "$HERE/weights-manifest.tsv")
+  done < <(grep -E $'^auxiliary/[^\t]+\turl:' "$HERE/weights-manifest.tsv")
   (( n > 0 )) || { echo "  no auxiliary/ rows in weights-manifest.tsv" >&2; rc=1; }
   return $rc
 }
@@ -176,7 +180,38 @@ check_text_fp8() {
   return $rc
 }
 
+# upscalers: the auxiliary/upscalers/ trees (weights-manifest.tsv Hub rows at
+# the revisions pinned there). rel<TAB>bytes<TAB>sha256: the Hub's LFS SHA-256;
+# the two small JSON files hashed at the pinned revision.
+UPSCALER_TREES="auxiliary/upscalers/seedvr2/seedvr2_ema_3b_fp16.safetensors	6783018808	2fd0e03a3dad24e07086750360727ca437de4ecd456f769856e960ae93e2b304
+auxiliary/upscalers/seedvr2/ema_vae_fp16.safetensors	501324814	20678548f420d98d26f11442d3528f8b8c94e57ee046ef93dbb7633da8612ca1
+auxiliary/upscalers/flashvsr-v1.1/diffusion_pytorch_model_streaming_dmd.safetensors	5676070392	bd28180edcf3446c028e32fc6b731a80bf7e4da2ab4caac3186b9499964d37be
+auxiliary/upscalers/flashvsr-v1.1/LQ_proj_in.ckpt	575694948	d6d011cdaaba6a52645086caa08fa04124e746f6ca568140a24007591142bfd2
+auxiliary/upscalers/flashvsr-v1.1/TCDecoder.ckpt	189018333	e224bdcf2f52745cbf4d393ff5374c2ba09e90285d5d19062d2bf63b915b6161
+auxiliary/upscalers/flashvsr-v1.1/Wan2.1_VAE.pth	507609880	38071ab59bd94681c686fa51d75a1968f64e470262043be31f7a094e442fd981
+auxiliary/upscalers/flashvsr-v1.1/config.json	30	2c51a6dc7dfcb5aaef299c6c2e1d25b870666760713f54ca6287c022ff189bd1
+auxiliary/upscalers/flashvsr-v1.1/model_index.json	73	85be89792ac836177eba736bce70ea44b034cf18bf5d527e40e8a4a5299e73b6"
+check_upscalers() {
+  local rc=0 rel size sha p got d
+  for d in seedvr2 flashvsr-v1.1; do
+    [[ -f "$W/auxiliary/upscalers/$d/.complete" ]] || { echo "  NO MARKER $W/auxiliary/upscalers/$d/.complete" >&2; rc=1; }
+  done
+  while IFS=$'\t' read -r rel size sha; do
+    p="$W/$rel"
+    if [[ ! -f "$p" ]]; then echo "  MISSING $p" >&2; rc=1; continue; fi
+    got="$(wc -c <"$p" | tr -d ' ')"
+    if [[ "$got" != "$size" ]]; then echo "  SIZE $p: $got, expected $size" >&2; rc=1; continue; fi
+    got="$(sha256sum "$p" | awk '{print $1}')"
+    if [[ "$got" != "$sha" ]]; then echo "  SHA256 $p: $got, expected $sha" >&2; rc=1; fi
+  done <<<"$UPSCALER_TREES"
+  return $rc
+}
+
 for cell in "$@"; do
+  if [[ "$cell" == upscalers ]]; then
+    if check_upscalers; then echo "weights ok: upscalers"; else echo "weights INCOMPLETE: upscalers" >&2; fail=1; fi
+    continue
+  fi
   if [[ "$cell" == text-fp8 ]]; then
     if check_text_fp8; then echo "weights ok: text-fp8"; else echo "weights INCOMPLETE: text-fp8" >&2; fail=1; fi
     continue

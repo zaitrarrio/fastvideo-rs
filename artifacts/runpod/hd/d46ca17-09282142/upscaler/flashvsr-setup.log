@@ -1,0 +1,126 @@
++ UP=/root/hd-up
++ FVSR_SHA=cf910c61a60733e610e9c6e8b607f80c3a6c202b
++ BSA_SHA=49d6c39e4dc0303442cda3bb758b3925d4399c49
++ arch=120
++ export PATH=/root/hd-up/bin:/root/hd-up/venv/bin:/root/hd-up/bin:/opt/fastvideo-rs/target/release:/usr/local/bin:/usr/local/cuda/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
++ PATH=/root/hd-up/bin:/root/hd-up/venv/bin:/root/hd-up/bin:/opt/fastvideo-rs/target/release:/usr/local/bin:/usr/local/cuda/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
++ '[' '!' -x /usr/local/cuda-12.8/bin/nvcc ']'
++ pk='cuda-nvcc-12-8 cuda-cudart-dev-12-8 cuda-cccl-12-8 cuda-libraries-dev-12-8'
++ apt-get update -qq
++ DEBIAN_FRONTEND=noninteractive
++ apt-get install -y -qq --no-install-recommends cuda-nvcc-12-8 cuda-cudart-dev-12-8 cuda-cccl-12-8 cuda-libraries-dev-12-8
+debconf: delaying package configuration, since apt-utils is not installed
++ /usr/local/cuda-12.8/bin/nvcc --version
++ tail -2
+Cuda compilation tools, release 12.8, V12.8.93
+Build cuda_12.8.r12.8/compiler.35583870_0
++ uv venv -q -p 3.11 /root/hd-up/fvenv
++ . /root/hd-up/fvenv/bin/activate
+++ '[' -z '' ']'
+++ '[' -n x ']'
+++ SCRIPT_PATH=/root/hd-up/fvenv/bin/activate
+++ '[' /root/hd-up/fvenv/bin/activate = bash ']'
+++ deactivate nondestructive
+++ unset -f pydoc
+++ '[' -z '' ']'
+++ '[' -z '' ']'
+++ hash -r
+++ '[' -z '' ']'
+++ unset VIRTUAL_ENV
+++ unset VIRTUAL_ENV_PROMPT
+++ '[' '!' nondestructive = nondestructive ']'
+++ VIRTUAL_ENV=/root/hd-up/fvenv
+++ '[' linux-gnu = cygwin ']'
+++ '[' linux-gnu = msys ']'
+++ export VIRTUAL_ENV
+++ '[' -z '' ']'
+++ unset SCRIPT_PATH
+++ _OLD_VIRTUAL_PATH=/root/hd-up/bin:/root/hd-up/venv/bin:/root/hd-up/bin:/opt/fastvideo-rs/target/release:/usr/local/bin:/usr/local/cuda/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+++ PATH=/root/hd-up/fvenv/bin:/root/hd-up/bin:/root/hd-up/venv/bin:/root/hd-up/bin:/opt/fastvideo-rs/target/release:/usr/local/bin:/usr/local/cuda/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+++ export PATH
+++ '[' x '!=' x ']'
++++ basename /root/hd-up/fvenv
+++ VIRTUAL_ENV_PROMPT=fvenv
+++ export VIRTUAL_ENV_PROMPT
+++ '[' -z '' ']'
+++ '[' -z '' ']'
+++ _OLD_VIRTUAL_PS1=
+++ PS1='(fvenv) '
+++ export PS1
+++ alias pydoc
+++ true
+++ hash -r
++ uv pip install -q torch==2.7.1 torchvision==0.22.1 --index-url https://download.pytorch.org/whl/cu128
++ for r in FlashVSR:OpenImagingLab/FlashVSR:$FVSR_SHA Block-Sparse-Attention:mit-han-lab/Block-Sparse-Attention:$BSA_SHA
++ IFS=:
++ read -r d repo sha
++ rm -rf /root/hd-up/FlashVSR
++ git init -q /root/hd-up/FlashVSR
++ git -C /root/hd-up/FlashVSR remote add origin https://github.com/OpenImagingLab/FlashVSR.git
++ git -C /root/hd-up/FlashVSR fetch -q --depth 1 origin cf910c61a60733e610e9c6e8b607f80c3a6c202b
++ git -C /root/hd-up/FlashVSR checkout -q FETCH_HEAD
++ for r in FlashVSR:OpenImagingLab/FlashVSR:$FVSR_SHA Block-Sparse-Attention:mit-han-lab/Block-Sparse-Attention:$BSA_SHA
++ IFS=:
++ read -r d repo sha
++ rm -rf /root/hd-up/Block-Sparse-Attention
++ git init -q /root/hd-up/Block-Sparse-Attention
++ git -C /root/hd-up/Block-Sparse-Attention remote add origin https://github.com/mit-han-lab/Block-Sparse-Attention.git
++ git -C /root/hd-up/Block-Sparse-Attention fetch -q --depth 1 origin 49d6c39e4dc0303442cda3bb758b3925d4399c49
++ git -C /root/hd-up/Block-Sparse-Attention checkout -q FETCH_HEAD
++ grep -vE '^(torch|torchvision|torchaudio)==' /root/hd-up/FlashVSR/requirements.txt
++ uv pip install -q -r /root/hd-up/fvsr-req.txt packaging ninja psutil wheel setuptools
++ cd /root/hd-up/Block-Sparse-Attention
++ CUDA_HOME=/usr/local/cuda-12.8
++ BLOCK_SPARSE_ATTN_CUDA_ARCHS=120
++ tail -40
+++ nproc
++ MAX_JOBS=128
++ uv pip install --no-build-isolation -v .
+DEBUG copying build/lib.linux-x86_64-cpython-311/block_sparse_attn/utils/benchmark.py -> build/bdist.linux-x86_64/wheel/./block_sparse_attn/utils
+DEBUG copying build/lib.linux-x86_64-cpython-311/block_sparse_attn_cuda.cpython-311-x86_64-linux-gnu.so -> build/bdist.linux-x86_64/wheel/.
+DEBUG running install_egg_info
+DEBUG running egg_info
+DEBUG creating block_sparse_attn.egg-info
+DEBUG writing block_sparse_attn.egg-info/PKG-INFO
+DEBUG writing dependency_links to block_sparse_attn.egg-info/dependency_links.txt
+DEBUG writing requirements to block_sparse_attn.egg-info/requires.txt
+DEBUG writing top-level names to block_sparse_attn.egg-info/top_level.txt
+DEBUG writing manifest file 'block_sparse_attn.egg-info/SOURCES.txt'
+DEBUG reading manifest file 'block_sparse_attn.egg-info/SOURCES.txt'
+DEBUG reading manifest template 'MANIFEST.in'
+DEBUG warning: no files found matching '*.cu' under directory 'block_flash_attn'
+DEBUG warning: no files found matching '*.h' under directory 'block_flash_attn'
+DEBUG warning: no files found matching '*.cuh' under directory 'block_flash_attn'
+DEBUG warning: no files found matching '*.cpp' under directory 'block_flash_attn'
+DEBUG warning: no files found matching '*.hpp' under directory 'block_flash_attn'
+DEBUG adding license file 'LICENSE'
+DEBUG writing manifest file 'block_sparse_attn.egg-info/SOURCES.txt'
+DEBUG Copying block_sparse_attn.egg-info to build/bdist.linux-x86_64/wheel/./block_sparse_attn-0.0.2-py3.11.egg-info
+DEBUG running install_scripts
+DEBUG creating build/bdist.linux-x86_64/wheel/block_sparse_attn-0.0.2.dist-info/WHEEL
+DEBUG creating '/root/.cache/uv/builds-v0/.tmpI62IDb/.tmp-ctk8xqme/block_sparse_attn-0.0.2-cp311-cp311-linux_x86_64.whl' and adding 'build/bdist.linux-x86_64/wheel' to it
+DEBUG adding 'block_sparse_attn_cuda.cpython-311-x86_64-linux-gnu.so'
+DEBUG adding 'block_sparse_attn/__init__.py'
+DEBUG adding 'block_sparse_attn/bert_padding.py'
+DEBUG adding 'block_sparse_attn/block_sparse_attn_interface.py'
+DEBUG adding 'block_sparse_attn/utils/__init__.py'
+DEBUG adding 'block_sparse_attn/utils/benchmark.py'
+DEBUG adding 'block_sparse_attn-0.0.2.dist-info/licenses/LICENSE'
+DEBUG adding 'block_sparse_attn-0.0.2.dist-info/METADATA'
+DEBUG adding 'block_sparse_attn-0.0.2.dist-info/WHEEL'
+DEBUG adding 'block_sparse_attn-0.0.2.dist-info/top_level.txt'
+DEBUG adding 'block_sparse_attn-0.0.2.dist-info/RECORD'
+DEBUG removing build/bdist.linux-x86_64/wheel
+DEBUG Built `block-sparse-attn @ file:///root/hd-up/Block-Sparse-Attention` into `block_sparse_attn-0.0.2-cp311-cp311-linux_x86_64.whl`
+      Built block-sparse-attn @ file:///root/hd-up/Block-Sparse-Attention
+Prepared 1 package in 2m 19s
+Installed 1 package in 22ms
+ + block-sparse-attn==0.0.2 (from file:///root/hd-up/Block-Sparse-Attention)
++ python -c 'import block_sparse_attn, torch; print("bsa ok", torch.__version__)'
+Traceback (most recent call last):
+  File "<string>", line 1, in <module>
+  File "/root/hd-up/Block-Sparse-Attention/block_sparse_attn/__init__.py", line 3, in <module>
+    from block_sparse_attn.block_sparse_attn_interface import (
+  File "/root/hd-up/Block-Sparse-Attention/block_sparse_attn/block_sparse_attn_interface.py", line 3, in <module>
+    import block_sparse_attn_cuda
+ImportError: libc10.so: cannot open shared object file: No such file or directory

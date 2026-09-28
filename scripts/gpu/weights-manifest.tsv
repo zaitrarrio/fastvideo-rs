@@ -33,3 +33,9 @@ auxiliary/lpips/lpips_v0.1_alex.pth	url:https://raw.githubusercontent.com/richzh
 # `fv-gpucheck quantize-text-encoder`, not fetched (no row here). On both volumes; sizes and SHA-256 in
 # verify-weights.sh (cell text-fp8). Without them the loader quantizes at load.
 # h3-ref2va (not a hub row: two repos, plain files): MiniMaxAI/MiniMax-H3 @ 42ed227ee7df40d41602854ae760620d6eb651fe transformer_ref/* processor/* model_index.json LICENSE README.md, plus lightx2v/Minimax-h3-Turbo @ 3ec17a324ced54151364f24f8b5fb6bf7e26414f minimax_h3_ref2v_turbo_{4step_v0.1,8step_v1.0_768p}_bf16.safetensors under Minimax-h3-Turbo/. Written by scripts/gpu/fetch-h3-ref2va.sh (LFS SHA-256 checked; the tree keeps sha256.txt); checked by verify-weights.sh h3-ref2va.
+# auxiliary/upscalers/: video super-resolution models for the upscaler benchmark (docs/serve/h3-1080p-and-upscaler.md).
+# Hub rows (dest, hub_id, globs), added add-only to both volumes by fetch-hub-tree.sh at the pinned revisions
+# numz/SeedVR2_comfyUI @ 09ced71023636e9bc8cdf9cdecfb2625d1e691e8 and JunhaoZhuang/FlashVSR-v1.1 @ 27561b186ded3402d7c975f4fd722e2885b6135f.
+# runpod.sh's Hub fetch skips auxiliary/ rows; verify-weights.sh upscalers checks each file's size and SHA-256.
+auxiliary/upscalers/seedvr2	numz/SeedVR2_comfyUI	seedvr2_ema_3b_fp16.safetensors ema_vae_fp16.safetensors
+auxiliary/upscalers/flashvsr-v1.1	JunhaoZhuang/FlashVSR-v1.1	diffusion_pytorch_model_streaming_dmd.safetensors LQ_proj_in.ckpt TCDecoder.ckpt Wan2.1_VAE.pth config.json

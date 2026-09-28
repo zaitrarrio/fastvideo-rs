@@ -1,0 +1,9 @@
+WARNING: Running pip as the 'root' user can result in broken permissions and conflicting behaviour with the system package manager, possibly rendering your system unusable. It is recommended to use a virtual environment instead: https://pip.pypa.io/warnings/venv. Use the --root-user-action option if you know what you are doing and want to suppress this warning.
+
+[notice] A new release of pip is available: 25.0.1 -> 26.2.1
+[notice] To update, run: pip install --upgrade pip
+21:17:17 numz/SeedVR2_comfyUI@09ced71023636e9bc8cdf9cdecfb2625d1e691e8: 2 files, 7284343622 bytes -> /workspace/weights/auxiliary/upscalers/.seedvr2.partial-20260928211717
+21:17:42 downloaded in 26 s; verifying
+21:17:43 ok ema_vae_fp16.safetensors 501324814 20678548f420d98d lfs
+21:17:51 ok seedvr2_ema_3b_fp16.safetensors 6783018808 2fd0e03a3dad24e0 lfs
+21:17:51 renamed to /workspace/weights/auxiliary/upscalers/seedvr2; 7284343622 bytes in 34 s

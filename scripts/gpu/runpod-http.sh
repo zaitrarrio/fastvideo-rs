@@ -34,7 +34,9 @@
 # sol-engine RTX 5090 suite), RUNPOD_GPU_TYPE (default RTX PRO 6000), RUNPOD_API_KEY, RUNPOD_VOLUME_ID (default: volume named
 # fv-weights-h3-ltx-hy), FV_CELLS (subset of cells), FV_GEN_TIMEOUT_S
 # (per-cell cap, default 3600), FV_PROMPTS / FV_LPIPS (forwarded to
-# runpod-matrix.sh), FV_EXTRA_ENV (space-separated K=V for cells).
+# runpod-matrix.sh), FV_EXTRA_ENV (space-separated K=V for cells),
+# FV_POD_FILES (space-separated local files, at most a few hundred KB in all,
+# unpacked on the pod into /fvscratch/files/<basename>; run mode only).
 set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # Bash reads a script as it runs; a runs lasts hours, so run from a private
@@ -106,6 +108,11 @@ set -u
 SCRATCH=/fvscratch
 OUT=\$SCRATCH/runs/$FAMILY/$tag
 mkdir -p "\$OUT"
+# FV_POD_FILES: local files shipped in the pod's env (a base64 tar.gz),
+# unpacked into \$SCRATCH/files (e.g. FV_HD_POST_URL=file:///fvscratch/files/hd-upscaler.sh).
+if [ -n "\${FV_POD_FILES_TGZ:-}" ]; then
+  mkdir -p \$SCRATCH/files && echo "\$FV_POD_FILES_TGZ" | base64 -d | tar -xz -C \$SCRATCH/files
+fi
 FV=/opt/fastvideo-rs/target/release/fv-gpucheck
 if "\$FV" serve --help >/dev/null 2>&1; then
   "\$FV" serve --dir \$SCRATCH/runs --port 8000 >"\$OUT/http.log" 2>&1 &
@@ -198,13 +205,22 @@ create_pod() {
     read -r vol dc < <(volume) || true
     [[ -n "${vol:-}" ]] || die "no network volume ($VOL_NAME)"
   fi
-  payload="$(jq -n --arg name "${FV_POD_PREFIX:-fv}-$FAMILY-$tag" --arg image "$image" --arg vol "$vol" \
+  local files="" f
+  if [[ -n "${FV_POD_FILES:-}" ]]; then
+    local ft
+    ft="$(mktemp -d)"
+    for f in $FV_POD_FILES; do cp "$f" "$ft/" || die "FV_POD_FILES: $f"; done
+    files="$(tar -czf - -C "$ft" . | base64 -w0)"
+    rm -rf "$ft"
+  fi
+  payload="$(jq -n --arg files "$files" --arg name "${FV_POD_PREFIX:-fv}-$FAMILY-$tag" --arg image "$image" --arg vol "$vol" \
     --arg dc "$dc" --arg gpu "$GPU" --arg disk "${FV_CONTAINER_DISK_GB:-120}" --arg cmd "$(start_cmd "$image" "$tag" "$mode")" \
     --arg cloud "${RUNPOD_CLOUD_TYPE:-SECURE}" --arg cuda "${RUNPOD_ALLOWED_CUDA:-}" '{
       name: $name, imageName: $image, cloudType: $cloud, computeType: "GPU",
       gpuTypeIds: [$gpu], gpuCount: 1, containerDiskInGb: ($disk|tonumber), volumeInGb: 0,
       ports: ["8000/http"], dockerStartCmd: ["/bin/bash", "-c", $cmd]
     } + (if $cuda == "" then {} else {allowedCudaVersions: ($cuda | split(" "))} end)
+      + (if $files == "" then {} else {env: {FV_POD_FILES_TGZ: $files}} end)
       + (if $vol == "" then {} else
       {networkVolumeId: $vol, volumeMountPath: "/workspace", dataCenterIds: [$dc]} end)')"
   log "create pod gpu=\"$GPU\" image=$image volume=${vol:-none} dc=${dc:-any} cloud=${RUNPOD_CLOUD_TYPE:-SECURE}"

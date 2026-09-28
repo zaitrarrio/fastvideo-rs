@@ -1,0 +1,44 @@
+balance 33.9319985896
+pod 8ie3j3ouvtnw8n 0.06/hr US-CA-2
+.:
+total 1
+drwxr-xr-x 2 root root 4096 Sep 28 21:14 .
+drwxr-xr-x 2 root root 4096 Sep 28 19:51 ..
+-rw-r--r-- 1 root root   16 Sep 27 15:38 .complete
+drwxr-xr-x 2 root root 4096 Sep 27 15:38 lpips
+drwxr-xr-x 2 root root 4096 Sep 27 15:38 tae
+drwxr-xr-x 2 root root 4096 Sep 28 21:16 upscalers
+
+upscalers:
+total 0
+drwxr-xr-x 2 root root 4096 Sep 28 21:16 .
+drwxr-xr-x 2 root root 4096 Sep 28 21:14 ..
+drwxr-xr-x 2 root root 4096 Sep 28 21:16 flashvsr-v1.1
+drwxr-xr-x 2 root root 4096 Sep 28 21:15 seedvr2
+
+upscalers/flashvsr-v1.1:
+total 6785543
+drwxr-xr-x 2 root root       4096 Sep 28 21:16 .
+drwxr-xr-x 2 root root       4096 Sep 28 21:16 ..
+-rw-r--r-- 1 root root          3 Sep 28 21:16 .complete
+-rw-r--r-- 1 root root  575694948 Sep 28 21:15 LQ_proj_in.ckpt
+-rw-r--r-- 1 root root  189018333 Sep 28 21:15 TCDecoder.ckpt
+-rw-r--r-- 1 root root  507609880 Sep 28 21:15 Wan2.1_VAE.pth
+-rw-r--r-- 1 root root         30 Sep 28 21:15 config.json
+-rw-r--r-- 1 root root 5676070392 Sep 28 21:16 diffusion_pytorch_model_streaming_dmd.safetensors
+-rw-r--r-- 1 root root         73 Sep 28 21:15 model_index.json
+
+upscalers/seedvr2:
+total 7113618
+drwxr-xr-x 2 root root       4096 Sep 28 21:15 .
+drwxr-xr-x 2 root root       4096 Sep 28 21:16 ..
+-rw-r--r-- 1 root root          3 Sep 28 21:15 .complete
+-rw-r--r-- 1 root root  501324814 Sep 28 21:14 ema_vae_fp16.safetensors
+-rw-r--r-- 1 root root 6783018808 Sep 28 21:14 seedvr2_ema_3b_fp16.safetensors
+upscalers/flashvsr-v1.1/.complete: 43
+upscalers/seedvr2/.complete: 40
+6948393659	upscalers/flashvsr-v1.1
+7284343625	upscalers/seedvr2
+weights ok: upscalers
+verify_exit=0 in 24 s
+pod 8ie3j3ouvtnw8n deleted (verified)

@@ -39,12 +39,23 @@ JSONs, logs). Frames: [`artifacts/serve/h3-1080p/`](../../artifacts/serve/h3-108
   one, FlashVSR is the candidate to port, because it is Wan 2.1 1.3B plus
   small parts we mostly already have. Estimate: 7-9 agent-days and about
   $15-25 of GPU time.
-- **Not done:** the Python upscaler benchmark (SeedVR2 3B) did not run. The
-  weights rule changed during the task: new weights must go add-only on
-  both network volumes, and large downloads need the owner's approval. The
-  step that would write the weights to the volumes was refused by the
-  permission system, so nothing was downloaded. See
-  [Upscaler benchmark: blocked](#upscaler-benchmark-blocked).
+- **Upscaler benchmark (measured, 2026-09-28 evening).** SeedVR2 3B fp16
+  took our 768p H3 clips to 1080p on one RTX PRO 6000 in **150-198 s per
+  5 s clip** (0.66-0.85 fps), with a 47 GB peak. To 1440p it took 250 s
+  (0.50 fps) with a 77 GB peak. So 768p + SeedVR2 costs about 3x the GPU
+  time of native 1080p (26 + ~160 s against 62 s). The output is much
+  sharper than Lanczos: 15-66x the energy above the 768p band. On the
+  metrics it is even sharper than native 1080p. It gets there by raising
+  contrast, shifting tone (PSNR against its own 768p input is 30-35 dB) and
+  inventing texture, and fine detail shimmers 1.5-1.9x more than with
+  Lanczos. It shows no seams between its 33-frame batches. The weights
+  (SeedVR2 3B + VAE, FlashVSR v1.1) are now on both volumes and verified.
+  FlashVSR was not benchmarked: its sparse-attention extension built for
+  Blackwell (sm_120) in 2 min 19 s, but a check-order bug in the setup
+  script stopped the phase, and a coordinator budget stop ended the rerun.
+  **The recommendation stands:** serve native 1080p and do not add an
+  upscaler for 1080p. See
+  [Upscaler benchmark](#upscaler-benchmark-seedvr2-3b-measured).
 
 ## Part A: native H3 1080p
 
@@ -253,7 +264,7 @@ PRO 6000 time, less than any of these on top of a 768p generation.
 | Native 1080p, turbo / max | 62 / 78 (measured) | The model itself | None | Works (this doc) |
 | 768p + Lanczos | 26 / 29 | None | None | Measured baseline: soft |
 | 768p + FlashVSR (x2 to 1536p, then resize) | 26 / 29 + ~15-30 (estimate: paper throughput scaled to 1536p output pixels) | VSR model hallucination from 768p | ~4 GB bf16 (+ Wan VAE) | Needs port or sidecar |
-| 768p + SeedVR2-3B | 26 / 29 + ~100-150 (paper throughput at 1080p pixels) | VSR model | ~7 GB + large activations (53 GB peak in the paper at 768x1408) | Slower than native |
+| 768p + SeedVR2-3B | 26 / 29 + **150-198 (measured**, numz CLI, SDPA, model load included) | VSR model: sharper than native, but tone-shifted and with invented texture | 47 GB peak (measured) | Measured below: about 3x the GPU time of native |
 | Spark-1080p: H3 draft 960x544 → H3 x2 latent → adapter → LTX 3-step refine at 1920x1088 | ~9 (draft) + ~12-15 (refine) + ~4 (LTX decode) ≈ 25-30 (estimate) | LTX refiner at full resolution | LTX 22B resident beside H3 | Pieces exist, pinned to the 768p Spark canvas |
 
 ### Recommendation
@@ -282,55 +293,171 @@ PRO 6000 time, less than any of these on top of a 768p generation.
 
    A Python sidecar with the resident-worker pattern would take 1-2
    agent-days plus about $3-5 of GPU, but it adds a PyTorch runtime to the
-   serve image. Either way, the weights must first go add-only on both
-   volumes, with the owner's approval.
+   serve image. The FlashVSR v1.1 weights are already on both volumes
+   (`auxiliary/upscalers/flashvsr-v1.1/`).
 4. **The highest-leverage experiment is Spark-1080p**, above all for h3-max.
    Generalise the Spark bridge shapes to a 960x544 draft and a 1920x1088 LTX
    refine. It reuses only ported kernels and weights already on both
    volumes, and could reach 1080p in about 25-30 s instead of 62-78 s.
    Effort: 3-5 agent-days, about $10-15. Risks: the LTX refiner changes H3's
    look, and both models must be resident (memory).
-5. SeedVR2 was ruled out for serving on speed and memory. It stays the
-   quality reference for an offline A/B, through fal ($0.25 per clip, no
-   weights needed).
+5. SeedVR2 is ruled out for serving on speed, memory and fidelity, and the
+   benchmark below confirms it. It takes 150-198 s and 47 GB per 1080p clip,
+   and it changes the look of the clip. It remains an option for an offline
+   or premium 1440p pass: it runs on one 96 GB card in about 250 s ($0.15
+   of GPU per clip).
 
-### Upscaler benchmark: blocked
+### Upscaler benchmark: SeedVR2 3B (measured)
 
-The plan was to run SeedVR2-3B once, through its standalone CLI (numz port,
-pinned `4490bd1f`, SDPA), on the same pod after the H3 cells. Inputs were
-the three turbo 768p clips, upscaled to a 1088 short side (and one clip to
-1536). It would record wall time and peak memory, then run `compare-clips`
-against the Lanczos baseline. The `hd` family keeps the hook for this
-(`FV_HD_POST_URL`, run before the PNGs are pruned).
+Run on 2026-09-28, with the owner's approval for the weights. Raw data:
+`artifacts/runpod/hd/d46ca17-09282142/` (speed, memory, 1440p, and the
+Lanczos and native metrics) and `artifacts/runpod/hd/d46ca17-09282245/`
+(full-clip SeedVR2 1080p metrics).
 
-During the task, the repository rule changed (`CLAUDE.md`): new weights
-must go add-only on **both** network volumes, nothing may live only on a
-pod's container disk, and large downloads need the owner's approval.
-Writing the weights to the volumes was refused by the permission system,
-so no weights were downloaded and the benchmark did not run. To run it:
+**Weights, now on both volumes.** They were added add-only by
+`fetch-hub-tree.sh`. Each file was downloaded into a temporary
+`.<name>.partial-<stamp>` folder, SHA-256'd against the Hub (EU also against
+the US list), and the folder was then renamed. A fresh CPU pod per volume
+then ran `verify-weights.sh upscalers` (size and SHA-256 of every file):
+**ok on US `s2k01690bi` and EU `jg48s6o1w0`**. Nothing else was touched.
 
-1. With the owner's approval, add `numz/SeedVR2_comfyUI` @ `09ced71` to both
-   volumes under `auxiliary/upscalers/seedvr2/`:
-   `seedvr2_ema_3b_fp16.safetensors` (6 783 018 808 B, sha256 `2fd0e03a…2b304`)
-   and `ema_vae_fp16.safetensors` (501 324 814 B, sha256 `20678548…12ca1`),
-   7.3 GB in total. Use the copy-and-verify method of
-   `docs/gaps/2026-09-27-volume-sync.md`, then add rows to
-   `weights-manifest.tsv` and `verify-weights.sh`. The same goes for FlashVSR
-   (`JunhaoZhuang/FlashVSR-v1.1`, about 4 GB) if it is the one to be tried.
-2. Rerun `FV_FAMILY=hd` with `FV_HD_POST_URL` pointing at a script that
-   symlinks those files into a container-disk model directory (the CLI writes
-   validation caches next to its models), with `FV_CELLS` limited to
-   `turbo-768p` so the Lanczos baseline exists. About 20 min, about $0.70.
+| Tree | Repo @ revision | Files | Bytes |
+|---|---|---|---:|
+| `auxiliary/upscalers/seedvr2/` | `numz/SeedVR2_comfyUI` @ `09ced71` | `seedvr2_ema_3b_fp16.safetensors` (`2fd0e03a…2b304`), `ema_vae_fp16.safetensors` (`20678548…12ca1`) | 7 284 343 622 |
+| `auxiliary/upscalers/flashvsr-v1.1/` | `JunhaoZhuang/FlashVSR-v1.1` @ `27561b1` | `diffusion_pytorch_model_streaming_dmd.safetensors`, `LQ_proj_in.ckpt`, `TCDecoder.ckpt`, `Wan2.1_VAE.pth`, `config.json`, `model_index.json` | 6 948 393 656 |
+
+The rows are in `weights-manifest.tsv`, and the hashes are pinned in
+`verify-weights.sh` (cell `upscalers`). Logs are in
+`artifacts/runpod/fetch-auxiliary-upscalers-*` and
+`artifacts/runpod/upscaler-weights/`. Together the two trees add 14.2 GB
+per volume.
+
+**Setup.** One RTX PRO 6000 (EUR-IS-1). The `hd` family ran with
+`FV_CELLS="turbo-768p turbo-1080p upscaler"`. It regenerated the three turbo
+clips at 768p and 1080p. H3 is deterministic here: the Lanczos metrics of
+the two runs match to every digit. Then `scripts/gpu/hd-upscaler.sh`
+ran SeedVR2 3B fp16 through the numz standalone CLI (pinned `4490bd1f`,
+torch 2.11 cu128, SDPA, no compile) on the lossless 768p frames, encoded as
+x264 CRF 8 yuv444. The settings were `--batch_size 33
+--uniform_batch_size --temporal_overlap 3 --seed 42` with the default `lab`
+colour correction. Each clip was one CLI process, so model load is
+included. `scripts/gpu/hd_upscaler_metrics.py` scored every 124-frame clip.
+
+**Speed and memory** (5 s clip = 124 frames):
+
+| Target | Output | Wall per clip | fps | Phases (warm) | Peak GPU (nvidia-smi) |
+|---|---|---:|---:|---|---:|
+| 1088 short side | 1904x1088, resized to 1920x1088 | 150-157 s warm, 174 s cold (first run, hashes the weights); 176-198 s on a second host | 0.66-0.85 | VAE encode 25 s, DiT 39 s (about 20 s of it model load), **VAE decode 64 s**, post-processing and writes about 10 s | 46.7-47.3 GB |
+| 1440 short side | 2520x1440 | 246-252 s | 0.50-0.51 | encode 55 s, DiT 55 s, decode 115 s, post 20 s | 76.5-77.0 GB |
+
+For comparison, native H3 turbo at 1080p takes 62 s end to end. 768p
+(26 s) + SeedVR2 takes about 176-224 s, so **about 3x the GPU time**, and
+the upscale alone costs $0.087-0.115 per clip at $2.09/hr. The VAE, not
+the one-step DiT, dominates. A resident worker with a faster VAE would help. Even
+then, the DiT alone (about 20 s) plus any decode would at best match the
+36 s that native 1080p adds.
+
+**Quality** (luma, all 124 frames; spectra on every 4th frame). SeedVR2
+1080p numbers are for talking-head and mountain-lake over the full clip.
+For frog-yoga and all 1440p outputs only frames 0-3 were scored; see the
+note below.
+
+| Clip | Variant | Laplacian var | Energy above the 768p band (share, x Lanczos) | Warp error (all / high-pass) | Luma flicker | PSNR vs 768p input |
+|---|---|---:|---|---|---:|---:|
+| talking-head | 768p + Lanczos | 21 | 5.4e-5 (1x) | 1.35 / 0.89 | 0.447 | 51.2 dB |
+| | 768p + SeedVR2 | 94 | 8.4e-4 (**15x**) | 1.94 / 1.30 (1.44x / 1.46x) | 0.456 | 34.9 dB |
+| | native 1080p | 37 | 3.4e-4 (6x) | 1.23 / 0.85 | 0.547 | n/a |
+| mountain-lake | 768p + Lanczos | 37 | 1.3e-4 (1x) | 2.36 / 1.86 | 0.350 | 49.6 dB |
+| | 768p + SeedVR2 | 502 | 8.6e-3 (**66x**) | 4.39 / 3.60 (1.86x / 1.93x) | 0.357 | 30.1 dB |
+| | native 1080p | 216 | 2.4e-3 (18x) | 3.20 / 2.83 | 0.272 | n/a |
+| frog-yoga (frames 0-3) | Lanczos / SeedVR2 / native | 68 / 202 / 174 | 1.1e-4 / 6.6e-4 (6x) / 5.6e-4 | n/a | n/a | 47.0 / 31.7 dB |
+| 1440p (frames 0-3), three clips | Lanczos / SeedVR2 at 2520x1440 | 9-27 / 42-122 | SeedVR2 7-12x Lanczos | n/a | n/a | SeedVR2 33.6-36.6 dB |
+
+How to read it:
+
+- **Detail.** SeedVR2 puts 15-66x Lanczos's energy above the 768p band.
+  That is 2.5-3.6x even native 1080p's, and its Laplacian variance is also
+  above native. It is not "more real detail than native": the crops show
+  higher contrast, deeper shadows and synthetic texture, such as vertical
+  striations on the cliff and crisp wing feathers.
+- **Fidelity.** Area-downscaled back to 768p, SeedVR2 is 30-35 dB from its
+  own input, against 50-51 dB for the Lanczos round trip. It changes tone
+  and structure, not just adds detail, so for a generated clip it changes
+  the look the user saw at 768p.
+- **Temporal flicker.** The warp error is the mean |frame t − flow-warped
+  frame t−1| over flow-consistent pixels, with flow from the 768p source.
+  It rises 1.44-1.93x over Lanczos, and most of the rise is on the
+  high-pass band: fine detail shimmers. Native 1080p also carries more
+  high-pass detail on the landscape (2.83 vs 1.86), but less than SeedVR2
+  (3.60) for less invented structure. Mean-luma flicker is unchanged. The
+  per-pair series has **no spikes at the 33-frame batch boundaries**: the
+  maxima (1.4-1.8x the median) are at the same motion frames as in
+  Lanczos.
+- **1440p** behaves the same way (7-12x Lanczos above the band) at 250 s and
+  77 GB.
+
+Crops (frame 40, 1:1 on the 1920x1088 canvas; the native column is a
+different sample of the same prompt):
+
+- [`upscaler-talking-head-1to1.jpg`](../../artifacts/serve/h3-1080p/upscaler-talking-head-1to1.jpg):
+  SeedVR2 gives crisper eyes, brows and skin pores, but also stronger
+  contrast and a "processed" look. Native is softer and more natural.
+- [`upscaler-spark-mountain-lake-1to1.jpg`](../../artifacts/serve/h3-1080p/upscaler-spark-mountain-lake-1to1.jpg):
+  SeedVR2 resolves the waterfall and trees far beyond Lanczos, but paints
+  regular striations onto the cliff and darkens the scene.
+
+**Caveats.** Three prompts, one seed each, one GPU type. The first full run
+had a frame-collection bug: the CLI writes its PNGs into a subfolder, and an
+ffmpeg concat list kept only 4 frames. For that run the SeedVR2 metrics,
+the `compare-clips` reports against Lanczos and the keyframes cover frames
+0-3 only, and they are not used above except where marked. Speed and memory
+are unaffected. The bug is fixed in `hd-upscaler.sh`. A second, shorter run
+re-collected full clips for talking-head and mountain-lake; its pod was
+stopped by a coordinator budget stop before frog-yoga and 1440p, and its
+metrics were computed locally from the lossless PNGs fetched from the pod.
+No LPIPS against Lanczos over the full clip was taken.
+
+**FlashVSR v1.1: not benchmarked.** The same hook (`FV_HD_FLASHVSR=1`,
+`scripts/gpu/hd_flashvsr.py`) installed a CUDA 12.8 nvcc (apt), torch 2.7.1
+cu128 and the official FlashVSR (`cf910c6`). It then built the
+Block-Sparse-Attention extension (`49d6c39`) for sm_120 **in 2 min 19 s
+without errors**. This is the first sign that the official sparse
+attention builds on Blackwell. The script's import check then loaded the
+extension before torch (`libc10.so` not found), so the phase stopped. That
+is fixed (torch first). The coordinator's budget stop ruled out another GPU
+pod. A FlashVSR run on this hook needs about 25 min of RTX PRO 6000 (about
+$0.90): 12 min of setup, most of it apt, then the runs.
+
+### Recommendation after the benchmark
+
+1. **Serve native H3 1080p; do not add an upscaler for 1080p.** SeedVR2
+   costs about 3x the GPU time of native 1080p, needs another 47 GB model
+   resident (or a separate worker), and changes the clip's look (30-35 dB
+   from its input, contrast and invented texture). Native 1080p adds
+   detail that follows the prompt, at 62 s.
+2. **Do not port SeedVR2.** Its time is spent in its VAE, not in the
+   one-step DiT, and its output is not faithful to the 768p generation.
+3. **For 1440p/4K, evaluate FlashVSR first**, as planned in item 3 above.
+   The weights are on both volumes, and the sparse-attention extension
+   builds on sm_120. Run `FV_HD_FLASHVSR=1` once (about $0.90) before
+   committing to the 7-9 agent-day port. SeedVR2 at 1440p (250 s, 77 GB,
+   about $0.15 of GPU per clip) is the fallback for an offline or premium
+   tier.
 
 ## Spend
 
 | Item | Cost |
 |---|---|
-| Pod `awwqw8dm96u7h8` (RTX PRO 6000, EUR-IS-1), 33.5 min | ~$1.17 |
-| Upscaler benchmark | $0 (not run) |
+| Earlier: pod `awwqw8dm96u7h8` (RTX PRO 6000, EUR-IS-1), 33.5 min | ~$1.17 |
+| Weight fetch and verify CPU pods, 7 pods (`b0j2pm5iey43cc`, `w1ukymy5rr6q9i`, `7z3ntxbtmetfb6` US; `yphft7ob6phlrg`, `j369wnd98qkwc8` EU; verify `8ie3j3ouvtnw8n` US, `1lu3s5qw2mcp91` EU), about 10 pod-minutes at $0.06-0.08/hr | ~$0.01 |
+| Pod `v5vlk9khz9hm5n` (RTX PRO 6000): H3 cells only. `FV_CELLS` lacked `upscaler`, so the hook was skipped. 14.5 min | ~$0.50 |
+| Pod `z40i7yclzakuse` (RTX PRO 6000): H3 + SeedVR2 1080p/1440p + FlashVSR setup + metrics, 60.5 min | ~$2.11 |
+| Pod `r69atksckzoztw` (RTX PRO 6000): SeedVR2 1080p rerun with full frames, stopped at the coordinator's budget stop, 15.8 min | ~$0.55 |
+| **Upscaler benchmark total** | **~$3.17** |
 
-Runpod balance before the pod: $42.97. After: $37.11. The balance is
-shared, and other agents' pods ran at the same time.
+All pods were deleted, and a GET after each delete returned 404. The
+Runpod balance was $34.49 before the weight pods and $20.26 after the last
+GPU pod. The balance is shared: other agents' pods ran at the same time.
 
 ## Reproduce
 
@@ -339,6 +466,16 @@ shared, and other agents' pods ran at the same time.
 FV_FAMILY=hd FV_LPIPS=1 FV_FETCH_TREE=1 FV_SKIP_TAE=1 FV_FETCH_SKIP='\.cache$' \
   scripts/gpu/runpod-http.sh run <sha>
 python3 scripts/gpu/hd_report.py artifacts/runpod/hd/<sha>-<time>
+
+# the upscaler benchmark (weights already on both volumes: verify-weights.sh upscalers);
+# the hook runs as the matrix cell `upscaler`, so FV_CELLS must list it
+FV_FAMILY=hd FV_CELLS="turbo-768p turbo-1080p upscaler" FV_LPIPS=1 FV_FETCH_TREE=1 FV_SKIP_TAE=1 \
+  FV_FETCH_SKIP='\.cache$' FV_POD_PREFIX=fv-upsc \
+  FV_POD_FILES="scripts/gpu/hd-upscaler.sh scripts/gpu/hd_upscaler_metrics.py scripts/gpu/hd_flashvsr.py" \
+  FV_EXTRA_ENV="FV_HD_POST_URL=file:///fvscratch/files/hd-upscaler.sh FV_HD_POST_TIMEOUT_S=5400 FV_HD_FLASHVSR=1" \
+  scripts/gpu/runpod-http.sh run d46ca17
+# FV_HD_UP_WARM=0 skips the warm repeat; FV_HD_UP_1440_CLIPS picks the 1440p clips;
+# FV_HD_UP_CLIPS the clips overall.
 ```
 
 The run behind this page used `FV_FETCH_SKIP='frames/[^/]+/frame-[0-9]+\.png$|\.cache$'`.
