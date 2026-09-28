@@ -45,6 +45,9 @@ use crate::types::{
 /// Weight of a new sample in the duration EWMAs.
 const EWMA_ALPHA: f64 = 0.3;
 
+/// Shortest span the arrival rate and queue growth are measured over.
+const MIN_RATE_SPAN_S: f64 = 60.0;
+
 #[derive(Clone, Copy, Debug)]
 struct Sample {
     t: f64,
@@ -99,10 +102,12 @@ impl PoolState {
     /// (arrivals per second, queue growth per second) over the window.
     fn rates(&self) -> (f64, f64) {
         let (Some(a), Some(b)) = (self.samples.front(), self.samples.back()) else { return (0.0, 0.0) };
-        let dt = b.t - a.t;
-        if dt <= 0.0 {
+        if b.t <= a.t {
             return (0.0, 0.0);
         }
+        // At least a minute: a burst seen over a few seconds is queue (the
+        // queue need covers it), not a rate.
+        let dt = (b.t - a.t).max(MIN_RATE_SPAN_S);
         let arrivals = b.arrivals.saturating_sub(a.arrivals) as f64 / dt;
         let growth = (f64::from(b.queued) - f64::from(a.queued)) / dt;
         (arrivals, growth)

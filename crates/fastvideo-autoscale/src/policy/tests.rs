@@ -142,8 +142,9 @@ fn rate_driven_growth_steps_with_cooldown() {
         }
         min = d.target;
     }
-    // +2 per 30 s cooldown (ticks every 15 s) up to 5.
-    assert_eq!(seen, vec![(1, 3), (3, 5)]);
+    // One scale-up per 30 s cooldown (ticks every 15 s), at most +2, up to
+    // 5; the rate is measured over at least a minute, so it builds up.
+    assert_eq!(seen, vec![(1, 2), (3, 4), (5, 5)]);
 }
 
 #[test]
