@@ -1,0 +1,27 @@
+2026-09-28T18:51:23.144041Z  INFO fastvideo_fal::director::service: director session starting session=fb17a545-6fe8-40d2-8a6b-72c284fdcb14 app=minimax/h3-turbo 
+[fastvideo] h3 memory text: peak 49.90 GiB used, 50.50 GiB reserved; 49.90 GiB live after; ledger: text_encoder 22.72 | text_refiner 0.77 | dit_nonlinear 21.57 
+[fastvideo] h3 step 4/4: 3.3s
+[fastvideo] h3 video decode + mp4 3.94s: vae 3.93s, rgb+copy 0.06s, writer push 0.00s, decode waited 0.21s, mp4 tail 0.01s
+[fastvideo] h3 fl2va: Qwen-VL multimodal (1 images)
+2026-09-28T18:51:46.362155Z  INFO fastvideo_fal::director::session: director session closing session=fb17a545-6fe8-40d2-8a6b-72c284fdcb14 reason=Stopped chunks=
+2026-09-28T18:51:47.769290Z  INFO fastvideo_fal::director::service: director session starting session=ffc41ec6-1031-4159-90ad-39697ff4f54e app=minimax/h3-turbo 
+[fastvideo] llm prefetch: 50 layers, host read+convert 5.80s, upload wait 0.53s, compute starved 6.28s
+[fastvideo] h3 memory text: peak 52.08 GiB used, 52.34 GiB reserved; 49.91 GiB live after; ledger: text_encoder 22.72 | text_refiner 0.77 | dit_nonlinear 21.57 
+[fastvideo] h3 fl2va: encode first (/fvstate/director/wma-fb17a545-6fe8-40d2-8a6b-72c284fdcb14/anchor-0.png)
+[fastvideo] h3 memory text: peak 49.90 GiB used, 52.34 GiB reserved; 49.90 GiB live after; ledger: text_encoder 22.72 | text_refiner 0.77 | dit_nonlinear 21.57 
+[fastvideo] h3 step 4/4: 3.3s
+[fastvideo] h3 video decode + mp4 3.97s: vae 3.94s, rgb+copy 0.09s, writer push 0.00s, decode waited 0.21s, mp4 tail 0.02s
+[fastvideo] h3 fl2va: Qwen-VL multimodal (1 images)
+[fastvideo] llm prefetch: 50 layers, host read+convert 5.94s, upload wait 0.53s, compute starved 6.40s
+[fastvideo] h3 memory text: peak 52.16 GiB used, 52.41 GiB reserved; 49.91 GiB live after; ledger: text_encoder 22.72 | text_refiner 0.77 | dit_nonlinear 21.57 
+[fastvideo] h3 fl2va: encode first (/fvstate/director/wma-ffc41ec6-1031-4159-90ad-39697ff4f54e/anchor-0.png)
+[fastvideo] h3 step 4/4: 3.6s
+[fastvideo] h3 video decode + mp4 3.96s: vae 3.94s, rgb+copy 0.11s, writer push 0.00s, decode waited 0.21s, mp4 tail 0.01s
+[fastvideo] h3 fl2va: Qwen-VL multimodal (1 images)
+2026-09-28T18:52:47.742480Z  INFO fastvideo_fal::director::session: director session closing session=ffc41ec6-1031-4159-90ad-39697ff4f54e reason=Stopped chunks=
+[fastvideo] llm prefetch: 50 layers, host read+convert 5.86s, upload wait 0.52s, compute starved 6.34s
+[fastvideo] h3 memory text: peak 52.08 GiB used, 52.41 GiB reserved; 49.91 GiB live after; ledger: text_encoder 22.72 | text_refiner 0.77 | dit_nonlinear 21.57 
+[fastvideo] h3 fl2va: encode first (/fvstate/director/wma-ffc41ec6-1031-4159-90ad-39697ff4f54e/anchor-1.png)
+[fastvideo] h3 memory text: peak 49.90 GiB used, 52.41 GiB reserved; 49.90 GiB live after; ledger: text_encoder 22.72 | text_refiner 0.77 | dit_nonlinear 21.57 
+[fastvideo] h3 step 4/4: 1.5s
+[fastvideo] h3 video decode + mp4 2.28s: vae 2.17s, rgb+copy 0.08s, writer push 0.00s, decode waited 0.13s, mp4 tail 0.10s
