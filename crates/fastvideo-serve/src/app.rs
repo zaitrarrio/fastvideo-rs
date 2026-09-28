@@ -68,6 +68,15 @@ impl Drop for App {
 
 /// The engine from `[engine]`.
 pub fn build_engine(c: &Config) -> anyhow::Result<EngineService> {
+    build_engine_with_clock(c, None)
+}
+
+/// [`build_engine`], with the fake backend's load and step time on `clock`
+/// (tests pass a `ManualClock` to decide when loading and steps end).
+pub fn build_engine_with_clock(
+    c: &Config,
+    clock: Option<std::sync::Arc<dyn fastvideo_engine_service::Clock>>,
+) -> anyhow::Result<EngineService> {
     let backends: Vec<Box<dyn EngineBackend>> = match c.engine.backend {
         EngineBackendKind::Fake => {
             let f = &c.engine.fake;
@@ -91,6 +100,9 @@ pub fn build_engine(c: &Config) -> anyhow::Result<EngineService> {
                 ..FakeTiming::default()
             };
             fc.mp4 = Mp4Mode::Auto;
+            if let Some(clock) = clock {
+                fc.clock = clock;
+            }
             vec![Box::new(FakeBackend::new(fc))]
         }
         EngineBackendKind::Cuda => {

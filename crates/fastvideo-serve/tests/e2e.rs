@@ -14,6 +14,7 @@ use std::time::Duration;
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use axum::Router;
+use fastvideo_engine_service::ManualClock;
 use fastvideo_protocol::JobStore;
 use fastvideo_serve::config::{Config, JobBackend};
 use fastvideo_serve::router::{route_table, Owner};
@@ -186,11 +187,21 @@ async fn assembled_router_serves_its_route_table() {
     }
 }
 
-#[tokio::test]
+/// A fake engine whose load and denoise steps run on a manual clock: the
+/// test decides when loading and each step end.
+fn manual_engine(c: &Config) -> (fastvideo_engine_service::EngineService, Arc<ManualClock>) {
+    let clock = Arc::new(ManualClock::new());
+    let engine = fastvideo_serve::app::build_engine_with_clock(c, Some(clock.clone())).unwrap();
+    (engine, clock)
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn ping_is_204_while_loading() {
     let mut c = config("loading");
     c.engine.fake.load_ms = 1500;
-    let app = App::build(c, Overrides::default()).await.unwrap();
+    // Loading cannot finish before the clock moves, however slow the host.
+    let (engine, clock) = manual_engine(&c);
+    let app = App::build(c, Overrides { engine: Some(engine), ..Default::default() }).await.unwrap();
     let (s, _, _) = call(&app.router, "GET", "/ping", None, false).await;
     assert_eq!(s, StatusCode::NO_CONTENT);
     let (s, v, _) = call(&app.router, "GET", "/health", None, false).await;
@@ -199,6 +210,18 @@ async fn ping_is_204_while_loading() {
     let (s, v, h) = call(&app.router, "POST", "/fv/v1/jobs", Some(submit_body("x")), true).await;
     assert_eq!(s, 503, "{v}");
     assert_eq!(h["retry-after"], "1");
+    // Let the load run: each of its slices sleeps from the time it starts.
+    let c2 = clock.clone();
+    let engine = app.gate.engine().clone();
+    tokio::task::spawn_blocking(move || {
+        while !matches!(engine.readiness(), fastvideo_engine_service::Readiness::Ready) {
+            if c2.wait_for_sleepers(1, Duration::from_millis(20)) {
+                c2.advance(Duration::from_millis(375));
+            }
+        }
+    })
+    .await
+    .unwrap();
     wait_ready(&app).await;
     let (s, _, _) = call(&app.router, "GET", "/ping", None, false).await;
     assert_eq!(s, 200);
@@ -232,17 +255,36 @@ async fn d1_job_store_end_to_end_over_the_mock() {
     assert!(mock.statements().iter().any(|s| s.starts_with("SELECT COUNT(*)")));
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn drain_cancels_queued_and_refuses_new_work() {
     let mut c = config("drain");
     c.engine.fake.step_ms = 300;
-    let app = App::build(c, Overrides::default()).await.unwrap();
+    // `a` stays in its first denoise step until the clock moves, so the
+    // drain always finds it running and `b` queued.
+    let (engine, clock) = manual_engine(&c);
+    let app = App::build(c, Overrides { engine: Some(engine), ..Default::default() }).await.unwrap();
     wait_ready(&app).await;
     let r = app.router.clone();
     let (_, a, _) = call(&r, "POST", "/fv/v1/jobs", Some(submit_body("long one")), true).await;
     let (_, b, _) = call(&r, "POST", "/fv/v1/jobs", Some(submit_body("queued one")), true).await;
     let (a, b) = (a["id"].as_str().unwrap().to_owned(), b["id"].as_str().unwrap().to_owned());
     wait_status(&r, &a, &["running"]).await;
+    let c2 = clock.clone();
+    assert!(tokio::task::spawn_blocking(move || c2.wait_for_sleepers(1, Duration::from_secs(60))).await.unwrap());
+    // `a` is parked in its first step and virtual time stands still for
+    // the first second of the drain (ten times its 100 ms grace), so the
+    // drain always cancels a running job; then time moves so the step ends
+    // and the executor sees the cancellation.
+    let tick = {
+        let clock = clock.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_secs(1)).await;
+            loop {
+                clock.advance(Duration::from_millis(50));
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+    };
     fastvideo_serve::app::drain(&app.gate, Duration::from_millis(100), None).await;
     let (s, _, _) = call(&r, "GET", "/ping", None, false).await;
     assert_eq!(s, 503, "draining");
@@ -252,6 +294,7 @@ async fn drain_cancels_queued_and_refuses_new_work() {
     assert_eq!(vb["status"], "cancelled");
     let va = wait_status(&r, &a, &["cancelled", "succeeded"]).await;
     assert_eq!(va["status"], "cancelled", "the running job was cut after the grace period");
+    tick.abort();
 }
 
 #[test]

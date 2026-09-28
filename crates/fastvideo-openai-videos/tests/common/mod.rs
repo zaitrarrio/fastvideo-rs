@@ -4,6 +4,7 @@
 #![allow(dead_code)]
 
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
@@ -12,7 +13,8 @@ use axum::http::{HeaderMap, Request, StatusCode};
 use axum::Router;
 use fastvideo_engine_service::{
     CancelOutcome, EngineBackend, EngineConfig, EngineEvent, EngineService, FakeBackend,
-    FakeConfig, FakeModel, FakeTiming, JobHandle, Mp4Mode, Priority, Readiness, Recipe,
+    FakeConfig, FakeModel, FakeTiming, JobHandle, ManualClock, Mp4Mode, Priority, Readiness,
+    Recipe,
 };
 use fastvideo_openai_videos::{fastwan, router, VideosConfig};
 use fastvideo_protocol::{
@@ -206,6 +208,8 @@ pub struct Opts {
     pub keys: bool,
     pub models: Vec<FakeModel>,
     pub cfg: VideosConfig,
+    /// Run the fake's denoise steps on this clock instead of wall time.
+    pub clock: Option<Arc<ManualClock>>,
 }
 
 impl Default for Opts {
@@ -224,6 +228,7 @@ impl Default for Opts {
                 created: 1_700_000_000,
                 ..VideosConfig::default()
             },
+            clock: None,
         }
     }
 }
@@ -231,7 +236,7 @@ impl Default for Opts {
 pub async fn fixture(o: Opts) -> Fixture {
     let dir = std::env::temp_dir().join(format!("fv-oaiv-{}", fastvideo_serve_kit::random_token()));
     std::fs::create_dir_all(&dir).unwrap();
-    let fake = FakeConfig {
+    let mut fake = FakeConfig {
         models: o.models,
         timing: FakeTiming {
             step: o.step,
@@ -240,6 +245,9 @@ pub async fn fixture(o: Opts) -> Fixture {
         mp4: Mp4Mode::Off,
         ..FakeConfig::default()
     };
+    if let Some(c) = &o.clock {
+        fake.clock = c.clone();
+    }
     let ecfg = EngineConfig {
         output_dir: dir.join("engine"),
         ..EngineConfig::default()
@@ -326,6 +334,56 @@ pub async fn call_key(
         None => b.body(Body::empty()).unwrap(),
     };
     send(app, req).await
+}
+
+/// Advances a [`ManualClock`] by `step` whenever the engine's executor is
+/// parked on it, until dropped: jobs then run as fast as the host allows,
+/// with no wall-time step budget to miss.
+pub struct ClockDriver {
+    stop: Arc<AtomicBool>,
+    thread: Option<std::thread::JoinHandle<()>>,
+}
+
+impl ClockDriver {
+    pub fn start(clock: Arc<ManualClock>, step: Duration) -> Self {
+        let stop = Arc::new(AtomicBool::new(false));
+        let s = stop.clone();
+        let thread = std::thread::spawn(move || {
+            while !s.load(Ordering::Relaxed) {
+                if clock.wait_for_sleepers(1, Duration::from_millis(20)) {
+                    clock.advance(step);
+                }
+            }
+        });
+        Self {
+            stop,
+            thread: Some(thread),
+        }
+    }
+}
+
+impl Drop for ClockDriver {
+    fn drop(&mut self) {
+        self.stop.store(true, Ordering::Relaxed);
+        if let Some(t) = self.thread.take() {
+            let _ = t.join();
+        }
+    }
+}
+
+/// Occupies the engine's single executor with a FastWan job parked on the
+/// fixture's manual clock (nothing advances it yet), so the next job
+/// submitted is deterministically `queued`. Returns the blocker's id.
+pub async fn hold_executor(f: &Fixture, clock: &Arc<ManualClock>) -> String {
+    let body = serde_json::json!({"prompt": "blocker", "width": 640, "height": 352, "num_frames": 49, "fps": 24, "seed": 1});
+    let r = call(&f.app, "POST", "/generate", Some(body)).await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.json());
+    let c = clock.clone();
+    let parked = tokio::task::spawn_blocking(move || c.wait_for_sleepers(1, T))
+        .await
+        .unwrap();
+    assert!(parked, "the blocker never reached its first denoise step");
+    r.json()["prompt_id"].as_str().unwrap().to_owned()
 }
 
 /// Polls `uri` until `done(json)` or the timeout.
