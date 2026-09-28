@@ -176,6 +176,21 @@ async fn fetch_inputs(st: &WorkerState, env: &Envelope, job: &mut Job) -> Result
     for (i, input) in env.inputs.iter().enumerate() {
         let name = input.path.file_name().and_then(|n| n.to_str()).map(str::to_owned).unwrap_or_else(|| format!("input-{i}"));
         let dst = dir.join(format!("{i}-{name}"));
+        // The shared store first (R2, or a directory shared on one host):
+        // no round trip through the gateway's public URL.
+        if let Some(a) = &input.artifact {
+            match st.ctx.artifacts().open(a).await {
+                Ok(fastvideo_serve_kit::artifacts::ArtifactBody::File(p)) if tokio::fs::copy(&p, &dst).await.is_ok() => {
+                    map.insert(input.path.clone(), dst);
+                    continue;
+                }
+                Ok(fastvideo_serve_kit::artifacts::ArtifactBody::Bytes(b)) if tokio::fs::write(&dst, &b).await.is_ok() => {
+                    map.insert(input.path.clone(), dst);
+                    continue;
+                }
+                _ => {}
+            }
+        }
         let resp = st
             .http
             .get(&input.url)

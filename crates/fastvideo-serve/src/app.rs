@@ -349,6 +349,9 @@ impl App {
             tracing::warn!("server.callbacks_allow_private: webhooks may target loopback/private hosts (tests only)");
             callbacks.target.allow_private = true;
         }
+        // A worker's jobs came through the gateway, which ran the MiniMax
+        // callback challenge when it took the request.
+        callbacks.challenge_done_elsewhere = worker_role;
         let callbacks = Arc::new(callbacks);
         let mcfg = mount_cfg(&config);
         // Gateway mode: the pools behind a `RemoteGate` (docs/serve/gateway.md)
