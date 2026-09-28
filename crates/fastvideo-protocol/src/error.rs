@@ -215,7 +215,9 @@ pub enum GapId {
     /// Permanent (no upscaler).
     #[serde(rename = "h3_resolution_2k")]
     H3Resolution2K,
-    /// fal 1080P latent refinement; permanent.
+    /// 1080P on a model without the opt-in native H3 1080P tier (h3-draft,
+    /// Ref2V, or a GPU below the tier's memory plan). The wire name is
+    /// historical (fal hosts 1080P as a latent refinement).
     #[serde(rename = "h3_refine_1080p")]
     H3Refine1080P,
     /// E10: `target_audio_url` / director `audio_url`.

@@ -138,6 +138,21 @@ impl H3Request {
         Ok(r)
     }
 
+    /// [`Self::sized`] that also admits the opt-in 1080P tier's canvases, up
+    /// to 1088 x 1920 ([`H3Geometry::checked_1080p`]).
+    pub fn sized_1080p(
+        prompt: impl Into<String>,
+        height: usize,
+        width: usize,
+        num_frames: usize,
+        seed: u64,
+    ) -> std::result::Result<Self, String> {
+        let g = H3Geometry::checked_1080p(height, width, num_frames)?;
+        let mut r = Self::seconds(prompt, 5, seed)?;
+        (r.height, r.width, r.num_frames) = (g.height, g.width, g.num_frames);
+        Ok(r)
+    }
+
     /// Ordered FL2VA anchors implied by the request images.
     pub fn keyframe_anchors(&self) -> Vec<KeyframeAnchor> {
         let mut a = Vec::new();

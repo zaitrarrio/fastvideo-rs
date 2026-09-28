@@ -129,6 +129,12 @@ pub struct H3Recipe {
     /// canvas after the load, before the model is reported ready.
     #[serde(default)]
     pub warmup: bool,
+    /// The opt-in native 1080P tier (short edge 1080, generated at
+    /// 1920x1088 and cropped; docs/serve/h3-1080p-and-upscaler.md). Offered
+    /// only when the GPU passes the tier's memory plan ([`gate_h3_1080p`]).
+    /// Catalog: h3-max and h3-turbo; `h3_1080p = false` turns it off.
+    #[serde(default)]
+    pub hd_1080p: bool,
 }
 
 fn auto_str() -> String {
@@ -514,10 +520,43 @@ fn h3_caps(id: &str, r: &H3Recipe) -> ModelCaps {
             short_edges: vec![r.short_edge],
             ..base
         }
+    } else if r.hd_1080p && !r.ref2va {
+        // 768 (default), 480, then the opt-in 1080 tier with its own budget.
+        base.with_h3_1080p()
     } else {
         base
     };
     c
+}
+
+/// Turns the native 1080P tier off on every H3 model when the GPU has less
+/// memory than the tier's plan (`plan_1080p_min_device_bytes`, about 72 GiB:
+/// 80 GB and 96 GB cards keep it, 48 GB ones do not). `device_total` is the
+/// device's memory (under `FASTVIDEO_DEVICE_BUDGET_GIB`, the budget); `None`
+/// (not known) turns it off. Returns what it turned off, for the log.
+pub fn gate_h3_1080p(models: &mut [CudaModel], device_total: Option<u64>) -> Option<String> {
+    let need = fastvideo_models::h3::memory::plan_1080p_min_device_bytes();
+    if device_total.is_some_and(|t| t >= need) {
+        return None;
+    }
+    let mut off = Vec::new();
+    for m in models.iter_mut() {
+        if let CudaRecipe::H3(r) = &mut m.recipe {
+            if r.hd_1080p {
+                r.hd_1080p = false;
+                off.push(m.id.as_str().to_owned());
+            }
+        }
+    }
+    let gib = |b: u64| b as f64 / f64::from(1u32 << 30);
+    (!off.is_empty()).then(|| {
+        format!(
+            "H3 1080P tier off for {}: the device has {} and the tier's memory plan needs {:.1} GiB",
+            off.join(", "),
+            device_total.map_or("unknown memory".to_owned(), |t| format!("{:.1} GiB", gib(t))),
+            gib(need)
+        )
+    })
 }
 
 /// LTX caps from the model config (audio from the vocoder).
@@ -555,6 +594,7 @@ fn ltx2_caps(id: &str, r: &Ltx2Recipe) -> ModelCaps {
             // at 1088 and cropped back, ltx §3.1).
             short_edges: vec![1080, 720, 1440, 2160],
             pad_and_crop: true,
+            hd: None,
         },
         refs: RefLimits::none(),
         // Distilled LTX-2.5 is unguided and the stage steps are fixed by the
@@ -615,6 +655,7 @@ fn wan_caps(id: &str, r: &WanRecipe) -> ModelCaps {
             aspect: (0.25, 4.0),
             short_edges: r.short_edges.clone(),
             pad_and_crop: false,
+            hd: None,
         },
         refs: RefLimits::none(),
         knobs,
@@ -671,6 +712,7 @@ fn h3(
         ref_weights: None,
         i2v_encoder: auto_str(),
         warmup: false,
+        hd_1080p: false,
     }
 }
 
@@ -719,19 +761,22 @@ pub fn catalog(layout: &WeightLayout) -> Vec<CudaModel> {
         dense: true,
         ..h3(layout, "h3-8step", "8step", None, 8)
     };
-    let h3_turbo = h3(
-        layout,
-        "h3-base",
-        "4step-vsa",
-        Some("h3/fasth3_4step_vsa"),
-        4,
-    );
+    // h3-turbo and h3-max offer the native 1080P tier (9/9 coherent clips
+    // at 1920x1088 and 1088x1920, docs/serve/h3-1080p-and-upscaler.md).
+    let h3_turbo = H3Recipe {
+        hd_1080p: true,
+        ..h3(layout, "h3-base", "4step-vsa", Some("h3/fasth3_4step_vsa"), 4)
+    };
     let h3_draft = H3Recipe {
         taeh3: Some(tae("taeh3.safetensors")),
         short_edge: h3cfg::H3_SHORT_EDGE_480P as u32,
+        hd_1080p: false,
         ..h3_turbo.clone()
     };
-    let sol_h3 = h3(layout, "h3-base", "sol-h3", Some(SOL_H3_4STEP_PROFILE), 4);
+    let sol_h3 = H3Recipe {
+        hd_1080p: true,
+        ..h3(layout, "h3-base", "sol-h3", Some(SOL_H3_4STEP_PROFILE), 4)
+    };
     // Ref2VA (docs/ports/h3-ref2v.md): `transformer_ref/` and the turbo LoRA
     // live in `h3-ref2va`; the text encoder and both VAEs come from `h3-base`.
     let h3_ref = |recipe: &str, profile: &str, steps: u32| H3Recipe {
@@ -919,7 +964,7 @@ pub struct ModelEntryCfg {
     pub weights: Option<PathBuf>,
     pub resident: bool,
     pub served_names: Vec<String>,
-    /// Optional per-model settings: `text_encoder`, `i2v_encoder`, `warmup`
+    /// Optional per-model settings: `text_encoder`, `i2v_encoder`, `warmup`, `h3_1080p`
     /// (H3), `text` (LTX), `adaln_cache` (H3), `taeh3` / `tae` (tiny
     /// decoders).
     pub extra: BTreeMap<String, String>,
@@ -993,6 +1038,23 @@ pub fn model_from_config(layout: &WeightLayout, e: &ModelEntryCfg) -> Result<Cud
                     "false" => false,
                     other => {
                         return Err(format!("model `{}`: warmup = {other:?} (true | false)", e.id))
+                    }
+                };
+            }
+            if let Some(w) = x("h3_1080p") {
+                r.hd_1080p = match w.as_str() {
+                    "true" => {
+                        if !r.hd_1080p {
+                            return Err(format!(
+                                "model `{}`: h3_1080p = true: the native 1080P tier is validated for h3-max and h3-turbo only",
+                                e.id
+                            ));
+                        }
+                        true
+                    }
+                    "false" => false,
+                    other => {
+                        return Err(format!("model `{}`: h3_1080p = {other:?} (true | false)", e.id))
                     }
                 };
             }
@@ -1230,7 +1292,15 @@ mod tests {
         let h3 = get("fasth3-4step-vsa");
         assert_eq!(h3.audio.as_ref().unwrap().native_rate, 32_000);
         assert_eq!(h3.audio.as_ref().unwrap().channels, 2);
-        assert_eq!(h3.canvas.short_edges, vec![768, 480]);
+        assert_eq!(h3.canvas.short_edges, vec![768, 480, 1080]);
+        assert_eq!(h3.canvas.hd, Some(fastvideo_protocol::HdTier::h3_1080p()));
+        // The 1080 tier does not move the budgets of the others.
+        assert_eq!(h3.canvas.area_at(768), 768 * 1344);
+        assert_eq!(h3.canvas.area_at(1080), 1088 * 1920);
+        assert_eq!(fastvideo_protocol::canvas_for_aspect(&h3.canvas, 16.0 / 9.0, 480), (832, 480));
+        assert_eq!(fastvideo_protocol::canvas_for_aspect(&h3.canvas, 16.0 / 9.0, 768), (1344, 768));
+        assert_eq!(get("sol-h3").canvas.short_edges, vec![768, 480, 1080]);
+        assert_eq!(get("fasth3-8step-dense").canvas.short_edges, vec![768, 480]);
         assert_eq!(h3.frames.default, 124);
         assert!(h3.frames.contains(107) && h3.frames.contains(362));
         assert!(
@@ -1238,6 +1308,7 @@ mod tests {
         );
         let draft = get("fasth3-4step-vsa-480p-taeh3");
         assert_eq!(draft.canvas.short_edges, vec![480]);
+        assert_eq!(draft.canvas.hd, None);
         assert!(draft.canvas.area_at(480) >= 832 * 480);
         assert!(draft.canvas.area_at(480) < 768 * 1344);
         let ltx = get("ltx25-distill-sol");
@@ -1441,6 +1512,23 @@ mod tests {
         assert!(h3(&with("warmup", "true")).unwrap().warmup);
         assert!(!h3(&with("warmup", "false")).unwrap().warmup);
         assert!(h3(&with("warmup", "yes")).is_err());
+        assert!(r.hd_1080p);
+        assert!(!h3(&with("h3_1080p", "false")).unwrap().hd_1080p);
+        assert!(h3(&with("h3_1080p", "true")).unwrap().hd_1080p);
+        assert!(h3(&with("h3_1080p", "on")).is_err());
+        let e8 = ModelEntryCfg { recipe: "8step".into(), ..with("h3_1080p", "true") };
+        assert!(model_from_config(&l, &e8).unwrap_err().contains("h3-max and h3-turbo"));
+        // The memory gate: 96 GB and 80 GB cards keep the tier, 48 GB ones not.
+        let gib = |g: f64| (g * f64::from(1u32 << 30)) as u64;
+        for (total, keep) in [(Some(gib(95.6)), true), (Some(gib(79.6)), true), (Some(gib(44.4)), false), (None, false)] {
+            let mut ms = vec![m.clone(), model_from_config(&l, &with("h3_1080p", "false")).unwrap()];
+            let off = gate_h3_1080p(&mut ms, total);
+            assert_eq!(off.is_none(), keep, "{total:?}");
+            assert_eq!(ms[0].caps().canvas.short_edges.contains(&1080), keep);
+            if let Some(o) = off {
+                assert!(o.contains("fasth3") && o.contains("memory plan"), "{o}");
+            }
+        }
         let t = CapabilityTable::build(vec![vec![(m.caps(), m.describe())]], &BTreeMap::new()).unwrap();
         assert_eq!(t.resolve("h3-turbo").unwrap().id.as_str(), "fasth3");
         for (fam, rec, want) in [("ltx2", "ltx-turbo", "ltx25-distill-sol"), ("wan", "", "fastwan22-ti2v-5b"), ("wan", "fastwan21-1.3b", "fastwan21-1.3b"), ("h3", "8step", "fasth3-8step-dense"), ("h3", "sol-h3", "sol-h3"), ("h3", "h3-max", "sol-h3")] {

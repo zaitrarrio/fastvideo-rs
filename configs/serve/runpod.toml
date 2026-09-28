@@ -58,6 +58,12 @@ continuity = "anchor-last-frame"
 # before readiness so the first request pays no setup.
 i2v_encoder = "auto"
 warmup = true
+# The native 1080P tier (fal `resolution: "1080P"`, native `short_edge: 1080`
+# or `size: "1920x1080"`; generated at 1920x1088, cropped to 1080, about 2.5x
+# the time of 768P): offered by h3-turbo and h3-max when the GPU passes the
+# tier's memory plan (80 GB-class cards and up). 768P stays the default.
+# `h3_1080p = false` turns it off. docs/serve/h3-1080p-and-upscaler.md.
+# h3_1080p = false
 
 [aliases]
 "MiniMax-H3" = "fasth3"

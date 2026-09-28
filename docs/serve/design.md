@@ -728,7 +728,7 @@ Configuring each client (fal §12):
 |---|---|---|
 | `prompt` (1..50000) | `prompt` | OK |
 | `duration` 5..15 | `Seconds{AlignUp}` | 5 → 124 frames, as hosted (5.167 s) |
-| `resolution` `768P` / `480P` / `1080P` | `short_edge` 768 / 480 / — | 480P needs E3 (832×480 at 16:9, fal §6), else 422. 1080P → 422 `Unsupported(H3Refine1080P)` |
+| `resolution` `768P` / `480P` / `1080P` | `short_edge` 768 / 480 / 1080 | 480P needs E3 (832×480 at 16:9, fal §6), else 422. 1080P: the native tier (1920x1088 cropped to 1080) on 80 GB-class GPUs, else 422 `Unsupported(H3Refine1080P)` |
 | `aspect_ratio` (t2v; r2v adds `adaptive`) | `Aspect` / `FollowImage` | `resolve_canvas_size` |
 | `image_url` / `end_image_url` (i2v) | `Keyframe{First/Last}`. Neither → `T2V` (spec) | fl2va; the canvas follows the image |
 | `reference_{image,video,audio}_urls` (r2v) | `Reference` in list order: images, then videos, then audio, following the "Image 1… Video 1…" numbering | Ref2V. Output includes required `seed` |
@@ -1645,7 +1645,7 @@ additions and readings; everything is re-exported from the crate root.
   gives 832×480 at 480/16:9. `boundary_ratio` is honoured exactly when
   `KnobCaps::guidance_2` is. A missing seed is drawn inside `negotiate` by
   `draw_seed()` (u32 range, JSON-safe); a sent seed is refused only if
-  `knobs.seed` is false. Short edge 1080 on H3 → `Unsupported(H3Refine1080P)`,
+  `knobs.seed` is false. Short edge 1080 on H3 without the native 1080P tier (`CanvasCaps::hd`) → `Unsupported(H3Refine1080P)`,
   above 1080 → `Unsupported(H3Resolution2K)`; a length snapping to 107 frames
   on H3 → `Unsupported(H3FourSeconds)`.
 - Types §3 left open: `NormalizeCtx` and `ErrorCtx` are owned (no lifetime);

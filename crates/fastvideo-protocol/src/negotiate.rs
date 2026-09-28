@@ -590,8 +590,7 @@ fn exact_canvas(w: u32, h: u32, caps: &ModelCaps) -> Result<ResolvedCanvas, ApiE
         ));
     }
     if caps.family == Family::H3 {
-        h3::check_canvas(h as usize, w as usize).map_err(|e| ApiError::invalid_param("size", e))?;
-        return Ok((w, h, None));
+        return h3_exact_canvas(w, h, caps);
     }
     if !c.aspect_ok(w, h) {
         return Err(ApiError::invalid_param(
@@ -624,6 +623,44 @@ fn exact_canvas(w: u32, h: u32, caps: &ModelCaps) -> Result<ResolvedCanvas, ApiE
     Ok((gw, gh, crop))
 }
 
+/// An explicit H3 canvas: exactly `check_canvas` (multiples of 32 within
+/// 768x1344), or, when the model serves the 1080P tier and the canvas is
+/// above the trained budget, `check_canvas_1080p` on the canvas padded up to
+/// the multiple, generated padded and centre-cropped back (1920x1080 is
+/// generated at 1920x1088).
+fn h3_exact_canvas(w: u32, h: u32, caps: &ModelCaps) -> Result<ResolvedCanvas, ApiError> {
+    let exact = h3::check_canvas(h as usize, w as usize);
+    if exact.is_ok() || caps.canvas.hd.is_none() {
+        return exact.map(|()| (w, h, None)).map_err(|e| ApiError::invalid_param("size", e));
+    }
+    let m = h3::H3_CANVAS_MULTIPLE as u32;
+    let (gw, gh) = (w.div_ceil(m) * m, h.div_ceil(m) * m);
+    if (gw as usize) * (gh as usize) <= h3::H3_MAX_PIXELS {
+        // Within the trained budget: the canvas must be exact, as before.
+        return exact.map(|()| (w, h, None)).map_err(|e| ApiError::invalid_param("size", e));
+    }
+    if (gw, gh) != (w, h) && (w % 2 != 0 || h % 2 != 0) {
+        return Err(ApiError::invalid_param(
+            "size",
+            format!("a 1080P-tier size off the multiple of {m} is cropped from a padded canvas and needs even sides, got {w}x{h}"),
+        ));
+    }
+    h3::check_canvas_1080p(gh as usize, gw as usize).map_err(|e| ApiError::invalid_param("size", e))?;
+    let crop = ((gw, gh) != (w, h)).then_some((w, h));
+    Ok((gw, gh, crop))
+}
+
+/// The generation canvas of the H3 1080P tier at an aspect ratio: the
+/// canvas-for-aspect rule at the 1080 short edge within the tier's
+/// 1088x1920 budget (16:9 is 1920x1088, 1:1 1088x1088, 4:3 1440x1088,
+/// 21:9 2176x960), with every 1088 side cropped to 1080 on delivery.
+pub fn h3_1080p_canvas(caps: &ModelCaps, aw: f64, ah: f64) -> ResolvedCanvas {
+    let (w, h) = canvas_for_aspect(&caps.canvas, aw / ah, h3::H3_SHORT_EDGE_1080P as u32);
+    let (dh, dw) = h3::delivered_1080p(h as usize, w as usize);
+    let crop = ((dw as u32, dh as u32) != (w, h)).then_some((dw as u32, dh as u32));
+    (w, h, crop)
+}
+
 fn aspect_canvas(
     aw: f64,
     ah: f64,
@@ -634,6 +671,12 @@ fn aspect_canvas(
         let (h, w) = h3::resolve_canvas_size(aw, ah)
             .map_err(|e| ApiError::invalid_param("aspect_ratio", e))?;
         return Ok((w as u32, h as u32, None));
+    }
+    if caps.family == Family::H3 && caps.canvas.is_hd(short_edge) {
+        let (w, h, crop) = h3_1080p_canvas(caps, aw, ah);
+        h3::check_canvas_1080p(h as usize, w as usize)
+            .map_err(|e| ApiError::invalid_param("aspect_ratio", e))?;
+        return Ok((w, h, crop));
     }
     let c = &caps.canvas;
     if c.pad_and_crop {

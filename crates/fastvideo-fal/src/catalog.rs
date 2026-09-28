@@ -127,7 +127,7 @@ fn h3_schema(kind: AppKind, endpoint: Endpoint) -> Value {
     );
     let res_desc = match kind {
         AppKind::H3Base => "The generation resolution. 480P and 768P are native; 2K and 4K (fal: upscaled from 768P) are not available on this server.",
-        _ => "The native generation resolution, or 1080P latent refinement from a native 768P source.",
+        _ => "The generation resolution. 480P and 768P are native; 1080P is generated natively at 1920x1088 and cropped to 1080 (about 2.5x the time of 768P; served on 80 GB-class GPUs).",
     };
     props.insert(
         "resolution".into(),
