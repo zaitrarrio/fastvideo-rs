@@ -2088,7 +2088,7 @@ fn gen(
         report.set(
         &if multi { format!("timings/{}", spec.name) } else { "timings".to_string() },
         json!({
-            "warm": warm, "wall_s": wall_s, "generate_s": generate_s, "load_s": pipeline.load_s, "text_s": t.text_s,
+            "warm": warm, "wall_s": wall_s, "generate_s": generate_s, "load_s": pipeline.load_s, "text_s": t.text_s, "image_s": t.image_s,
             "denoise_s": t.denoise_s, "stage1_s": t.stage1_s, "upsample_s": t.upsample_s, "stage2_s": t.stage2_s,
             "step_s": t.step_s, "decode_audio_s": t.decode_audio_s, "decode_video_s": t.decode_video_s, "video_encode_s": t.video_encode_s, "write_s": t.write_s,
             "writer": t.writer.as_ref().map(writer_json),
@@ -2472,6 +2472,7 @@ fn ltx2_benchmark(b: &Ltx2Bench<'_>) -> serde_json::Value {
         "decode_s": t.decode_audio_s + t.decode_video_s,
         "load_s": b.load_s,
         "text_s": t.text_s,
+        "image_s": t.image_s,
         "text_cache": b.out.text.cache.as_str(),
         "stage_1_seconds": t.stage1_s,
         "stage_2_seconds": t.upsample_s + t.stage2_s,

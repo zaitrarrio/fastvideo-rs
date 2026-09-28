@@ -330,6 +330,20 @@ mod tests {
     }
 
     #[test]
+    fn a_2048_short_edge_reference_keeps_every_token() {
+        // FastVideo (processor/preprocessor_config.json) on the prepared
+        // Ref2VA image: 3552x2048 -> grid 222x128 -> 7 104 merged tokens.
+        let cfg = H3VisionConfig::fasth3_8step();
+        let factor = cfg.patch_size * cfg.spatial_merge_size;
+        let (h, w) = smart_resize(2048, 3552, factor, cfg.min_pixels, cfg.max_pixels).unwrap();
+        assert_eq!((h, w), (2048, 3552));
+        assert_eq!((h / factor) * (w / factor), 7104);
+        // A 768x1344 keyframe is not shrunk either (1 008 tokens).
+        let (h, w) = smart_resize(768, 1344, factor, cfg.min_pixels, cfg.max_pixels).unwrap();
+        assert_eq!((h / factor) * (w / factor), 1008);
+    }
+
+    #[test]
     fn prepare_square_image_token_count() {
         let cfg = H3VisionConfig::fasth3_8step();
         let (h, w) = (64, 64);

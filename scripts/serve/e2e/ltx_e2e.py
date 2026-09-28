@@ -61,7 +61,10 @@ def iso(s):
 
 
 def native_times(model=None):
-    """started/completed of the newest native-listed job (every protocol shares the store)."""
+    """started/completed of the newest job in the native listing. That listing holds
+    native-protocol jobs only, so this describes a native job, never an LTX, fal or
+    /v1/videos one (an earlier run attached it to those and reported another job's
+    dims); only native() cases use it now."""
     try:
         r = requests.get(f"{BASE}/fv/v1/jobs", headers=H, params={"limit": 1}, timeout=30).json()
         j = r["data"][0] if "data" in r else r[0]
@@ -105,7 +108,7 @@ def ltx_v1(case, body, want):
     if r.status_code != 200 or not r.headers.get("content-type", "").startswith("video/mp4"):
         return record(case, api="ltx v1 sync", ok=False, body=r.text[:400], **info)
     p = save(case, r.content)
-    record(case, api="ltx v1 sync", ok=want(p), mp4=p, server=native_times(), **info)
+    record(case, api="ltx v1 sync", ok=want(p), mp4=p, **info)
 
 
 def ltx_v2(case, body, want, endpoint="text-to-video"):
@@ -130,7 +133,7 @@ def ltx_v2(case, body, want, endpoint="text-to-video"):
     p = save(case, v.content)
     record(case, api=f"ltx v2 {endpoint}", ok=want(p) and v.status_code == 200, statuses=seen,
            submit_to_completed_s=round(done, 2), download_http=v.status_code,
-           video_host=s["result"]["video_url"].split("/")[2], mp4=p, server=native_times(), request=body)
+           video_host=s["result"]["video_url"].split("/")[2], mp4=p, request=body)
 
 
 def ltx_error(case, method, path, body, want_http, want_type, headers=None):
@@ -150,16 +153,20 @@ def ltx_upload_i2v(case):
     put = requests.put(u["upload_url"], data=img, headers={"Content-Type": "image/jpeg", **u.get("required_headers", {})}, timeout=60)
     body = ltx_body(image_uri=u["storage_uri"], prompt="waves roll onto the beach")
     body["prompt"] = "waves roll onto the beach, gentle camera push in"
+    # v2 first, then v1 sync, then v2 again: the same upload serves all three.
+    v2a = requests.post(f"{BASE}/v2/image-to-video", json=body, headers=H, timeout=60)
     v1 = requests.post(f"{BASE}/v1/image-to-video", json=body, headers=H, timeout=900)
-    v2 = requests.post(f"{BASE}/v2/image-to-video", json=body, headers=H, timeout=60)
+    v2b = requests.post(f"{BASE}/v2/image-to-video", json=body, headers=H, timeout=60)
     def summ(r):
+        hdr = {k: v for k, v in r.headers.items() if k.lower() in ("x-request-id", "server", "content-type", "cf-ray")}
         if r.headers.get("content-type", "").startswith("video/mp4"):
-            return {"http": r.status_code, "mp4": save(case, r.content)}
-        return {"http": r.status_code, "body": r.text[:300]}
+            return {"http": r.status_code, "headers": hdr, "mp4": save(case, r.content)}
+        return {"http": r.status_code, "headers": hdr, "body": r.text[:300]}
     record(case, api="ltx /v1/upload + PUT + image-to-video(ltx://)", upload_http=up.status_code,
            storage_uri_ok=u.get("storage_uri", "").startswith("ltx://uploads/"), put_http=put.status_code,
-           v1=summ(v1), v2=summ(v2),
-           ok=up.status_code == 200 and put.status_code in (200, 201, 204) and v1.status_code in (200, 400) and v2.status_code in (202, 400))
+           v2_first=summ(v2a), v1=summ(v1), v2_after_v1=summ(v2b),
+           ok=up.status_code == 200 and put.status_code in (200, 201, 204) and v1.status_code == 200
+           and v2a.status_code == 202 and v2b.status_code == 202)
 
 
 def openai_videos(case, body, want):
@@ -181,7 +188,7 @@ def openai_videos(case, body, want):
     p = save(case, c.content) if c.status_code == 200 else None
     record(case, api="/v1/videos", ok=bool(p) and want(p) and s["status"] == "completed", status=s.get("status"),
            error=s.get("error"), submit_to_completed_s=round(done, 2), content_http=c.status_code, headers=hdr, mp4=p,
-           server=native_times(), request=body)
+           request=body)
 
 
 def native(case, body, want):
@@ -230,7 +237,7 @@ def fal_queue(case, app, body, want):
     p = save(case, requests.get(url, timeout=300).content) if url else None
     record(case, api=f"fal queue {app}", ok=bool(p) and want(p), submit_to_completed_s=round(done, 2),
            status_body={k: v for k, v in s.items() if k not in ("logs",)}, result_http=res.status_code,
-           result_keys=sorted(j), mp4=p, server=native_times(), request=body)
+           result_keys=sorted(j), mp4=p, request=body)
 
 
 def probe(case):
@@ -241,6 +248,65 @@ def probe(case):
                "audio": m["caps"].get("audio"), "recipe": m.get("recipe")} for m in caps.get("models", [])]
     record(case, api="probe", ok=hz.status_code == 200 and bool(models), tiers=caps.get("tiers"), healthz=hz.json() if hz.ok else hz.text[:200],
            models=models, fal_schema=fal.json() if fal.ok else fal.status_code)
+
+
+FIXTURES = os.path.join(os.path.dirname(os.path.abspath(__file__)), "../../gpu/fixtures")
+BEACH = os.path.join(FIXTURES, "ti2v-beach-832x480.jpg")
+BEACH_ZOOM = os.path.join(FIXTURES, "ti2v-beach-zoom-832x480.jpg")
+I2V_PROMPT = ("Aerial drone shot of a tropical beach: turquoise sea waves roll in and break into white foam "
+              "on the sand, the camera glides slowly forward along the shoreline, bright sunny day.")
+
+
+def data_uri(path):
+    import base64
+    return "data:image/jpeg;base64," + base64.b64encode(open(path, "rb").read()).decode()
+
+
+def frame_fidelity(mp4, pins, width, height):
+    """SSIM / PSNR of the pinned frames of `mp4` against their images, prepared as the
+    engine prepares them: cover + center crop to the generation canvas (the output
+    rounded up to a multiple of 64, LTX pad-and-crop), then the output's center crop.
+    pins: [(frame, image)]."""
+    gw, gh = -(-width // 64) * 64, -(-height // 64) * 64
+    out = {}
+    for idx, img in pins:
+        for m in ("ssim", "psnr"):
+            lav = (f"[0:v]select=eq(n\\,{idx}),setpts=N/TB,format=yuv420p[a];"
+                   f"[1:v]scale={gw}:{gh}:force_original_aspect_ratio=increase:flags=bilinear,"
+                   f"crop={gw}:{gh},crop={width}:{height},format=yuv420p[b];[a][b]{m}")
+            r = subprocess.run(["ffmpeg", "-v", "info", "-nostats", "-i", mp4, "-i", img, "-lavfi", lav,
+                                "-frames:v", "1", "-f", "null", "-"], capture_output=True, text=True)
+            line = [x for x in r.stderr.splitlines() if f"Parsed_{m}" in x]
+            out[f"frame{idx}_{m}"] = line[-1].split("] ", 1)[-1] if line else r.stderr[-200:]
+    return out
+
+
+def ltx_i2v_v2(case, res, last=False, seconds=6, fps=24):
+    w, h = (int(x) for x in res.split("x"))
+    body = ltx_body(seconds=seconds, fps=fps, res=res, image_uri=data_uri(BEACH))
+    body["prompt"] = I2V_PROMPT
+    if last:
+        body["last_frame_uri"] = data_uri(BEACH_ZOOM)
+    frames = seconds * fps + 1
+    ltx_v2(case, body, expect(frames, fps, True), endpoint="image-to-video")
+    p = f"{OUT}/mp4/{case}.mp4"
+    if os.path.exists(p):
+        pins = [(0, BEACH)] + ([(frames - 1, BEACH_ZOOM)] if last else [])
+        record(case + "-fidelity", api="frame fidelity (ffmpeg)", ok=True, **frame_fidelity(p, pins, w, h))
+
+
+def native_i2v(case, size, last=False, seconds=5):
+    w, h = (int(x) for x in size.split("x"))
+    body = {"model": "ltx-turbo", "prompt": I2V_PROMPT, "seconds": seconds, "size": size, "seed": 11,
+            "image_url": data_uri(BEACH)}
+    if last:
+        body["last_image_url"] = data_uri(BEACH_ZOOM)
+    frames = seconds * 24 + 1
+    native(case, body, expect(frames, 24, True))
+    p = f"{OUT}/mp4/{case}.mp4"
+    if os.path.exists(p):
+        pins = [(0, BEACH)] + ([(frames - 1, BEACH_ZOOM)] if last else [])
+        record(case + "-fidelity", api="frame fidelity (ffmpeg)", ok=True, **frame_fidelity(p, pins, w, h))
 
 
 CASES = {
@@ -254,6 +320,12 @@ CASES = {
     "v2-1080p-24-silent": lambda: ltx_v2("v2-1080p-24-silent", ltx_body(generate_audio=False), expect(145, 24, False)),
     "v2-1080p-20s": lambda: ltx_v2("v2-1080p-20s", ltx_body(seconds=20), expect(481, 24, True)),
     "i2v-upload": lambda: ltx_upload_i2v("i2v-upload"),
+    # E5 / E9 image conditioning, and the 1440p tier.
+    "i2v-v2-1080p": lambda: ltx_i2v_v2("i2v-v2-1080p", "1920x1080"),
+    "kf-v2-1080p": lambda: ltx_i2v_v2("kf-v2-1080p", "1920x1080", last=True),
+    "i2v-v2-720p": lambda: ltx_i2v_v2("i2v-v2-720p", "1280x720"),
+    "native-kf-720p": lambda: native_i2v("native-kf-720p", "1280x720", last=True),
+    "v2-1440p-24": lambda: ltx_v2("v2-1440p-24", ltx_body(res="2560x1440"), expect(145, 24, True)),
     "errors": lambda: [
         ltx_error("err-pro-unserved", "POST", "/v2/text-to-video", ltx_body(model="ltx-2-5-pro"), 403, "permission_error"),
         ltx_error("err-5s", "POST", "/v2/text-to-video", ltx_body(seconds=5), 400, "invalid_request_error"),

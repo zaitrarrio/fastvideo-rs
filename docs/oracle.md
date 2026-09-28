@@ -284,6 +284,65 @@ Not compared: 4K (not run, to save budget; the 512p profiles show no
 resolution-specific hazard), and our upsampler in isolation (`s2_upsampled`,
 0.35, inherits stage 1's 0.34).
 
+## LTX-2.5 image conditioning (I2V and keyframes, serve E5 / E9)
+
+Reference: the same sol-engine / Lightricks/LTX-2 `fd4ded7` driver with
+`--image PATH FRAME_IDX STRENGTH` (docs/ports/ltx25.md "Image
+conditioning"), 768x512x121, dense stage 2, the matrix prompt, seed 1024.
+`ltx25-i2v`: the TI2V beach fixture at frame 0. `ltx25-kf`: the same at
+frame 0 plus its 1.35x zoom at pixel frame 120 (an appended keyframe block).
+Runs: runtime 82ce54a / 0ead025, upstream `sol-ltx25:latest` with the scripts
+at the same shas, RTX PRO 6000 (EUR-IS-1), 2026-09-28. Injected as for T2V
+(noise, text), plus the conditioning (three arms, below). rel-L2 of ours
+against the reference.
+
+**Denoiser under conditioning** (the reference's conditioning latents
+injected; this isolates the per-token timesteps, the appended keyframe tokens
+and their RoPE, and the masked samplers):
+
+| | ltx25-i2v | ltx25-kf | T2V 512p dense (above) |
+|---|---|---|---|
+| s1 block 0 / 24 / 47 (step 1) | 5.1e-3 / 7.9e-3 / 2.5e-2 | 3.4e-3 / 6.9e-3 / 1.0e-2 | 3.3e-3 / 5.4e-3 / 2.3e-2 |
+| s1 latents steps 1-4 | 1.0e-3 … 2.3e-3 | 6.5e-4 … 1.3e-3 | 9e-4 … 2.2e-3 |
+| s1 latents steps 5 / 6 / 7 / 8 | 7.8e-3 / 3.5e-2 / 0.10 / 0.16 | 2.4e-3 / 5.7e-3 / 1.8e-2 / 3.0e-2 | 7.1e-3 / 7.5e-2 / 0.25 / 0.34 |
+| s2 block 0 / 24 / 47 (step 1) | 2.3e-3 / 6.5e-3 / 8.9e-3 | 1.8e-3 / 7.0e-3 / 6.8e-3 | 2.9e-3 / 5.0e-3 / 1.5e-2 |
+| s2 latents steps 1 / 2 / 3 | 6.8e-3 / 2.0e-2 / 3.6e-2 | 3.6e-3 / 7.9e-3 / 1.3e-2 | 1.3e-2 / 4.8e-2 / 8.0e-2 |
+| stage-1 / stage-2 entry state | 0 / 0 | 0 / 0 (1632 = 1536 grid + 96 appended rows) | |
+
+Both are at or below the T2V profile at every step (the pinned frames anchor
+the trajectory), with no block where the error jumps. The keyframe run
+matches the reference's appended-token layout exactly (row counts and the
+entry states are identical).
+
+**Encoder and preprocessing:**
+
+| | s1 (384x256) | s2 (768x512) |
+|---|---|---|
+| preprocessed pixels (CRF re-encode + resize) | 1.2e-2 | 1.2e-2 |
+| conditioning latent, reference pixels injected (`-ownenc`: our encoder alone, f32 vs the reference's bf16) | 1.5e-2 | 1.7e-2 |
+| conditioning latent, all ours (`-ownimg`) | 8.2e-2 | 0.14 |
+
+The encoder is at the bf16 floor. The rest of the end-to-end latent gap is
+the H.264 re-encode: our `ffmpeg` CLI libx264 and PyAV's libx264 / swscale
+give pixels 1.2e-2 apart (max 0.06, about 7/255), and the one-frame CRF
+round trip is not bit-reproducible across builds. End to end (`-ownimg`)
+the final latents are 5.5e-2 (i2v) and 5.1e-2 (kf) from the reference.
+
+**Frame fidelity** (the pinned output frames against the conditioning
+images, cover + center crop to 768x512, ffmpeg SSIM / PSNR):
+
+| | ours (reference latents) | ours end to end | reference |
+|---|---|---|---|
+| i2v frame 0 | 0.9666 / 39.46 dB | 0.9668 / 39.59 dB | 0.9661 / 39.25 dB |
+| kf frame 0 | 0.9658 / 39.38 dB | 0.9659 / 39.49 dB | 0.9655 / 39.16 dB |
+| kf frame 120 (last) | 0.9691 / 40.14 dB | 0.9689 / 40.13 dB | 0.9685 / 39.91 dB |
+
+Verdict: **E5 and E9 pass.** The conditioned denoiser matches the reference
+to its bf16 floor, the encoder too, and the pinned frames are as faithful to
+the images as the reference's. Timings (ours, RTX PRO 6000, 512p, warm
+weights): image preprocessing + encode for both stages 1.7-2.3 s,
+denoise 10.8-12.5 s.
+
 ## Wan 2.2 TI2V-5B modules (Diffusers)
 
 `scripts/gpu/upstream/oracle_wan22.py` (upstream step `oracle:wan22-ti2v`,
