@@ -296,7 +296,12 @@ fn succeed(j: &mut Job) {
         fps: 24,
         audio: Some((32_000, 2)),
     };
-    let metrics = JobMetrics { inference_s: Some(2.5285604159580544), ..Default::default() };
+    let stages = [("text", 1.25), ("denoise", 2.5285604159580544), ("video_decode", 0.75), ("encode", 0.25)];
+    let metrics = JobMetrics {
+        inference_s: Some(2.5285604159580544),
+        stage_durations: stages.iter().map(|(k, v)| ((*k).to_owned(), *v)).collect(),
+        ..Default::default()
+    };
     j.mark_succeeded(datetime!(2026-09-27 12:00:05 UTC), vec![a], metrics).unwrap();
 }
 
@@ -435,10 +440,22 @@ fn small_helpers() {
     assert!(!logs_param(&[]));
     let j = job(Task::T2V, "minimax/h3-max/text-to-video");
     let name = fastvideo_fal::output_file_name(&j);
-    assert_eq!(name.len(), 21 + "_minimax-h3.mp4".len());
-    assert!(name.ends_with("_minimax-h3.mp4"));
+    // Named by app (the tier is already a word of `h3-max`).
+    assert_eq!(name.len(), 21 + "_minimax-h3-max.mp4".len());
+    assert!(name.ends_with("_minimax-h3-max.mp4"), "{name}");
     assert!(name[..21].chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_'));
     assert_eq!(name, fastvideo_fal::output_file_name(&j), "stable per job");
+    // The tier is appended when the app alias does not name it.
+    for (endpoint, tier, want) in [
+        ("minimax/h3-turbo/text-to-video", Some(Tier::Turbo), "_minimax-h3-turbo.mp4"),
+        ("lightricks/ltx-2.5/text-to-video", Some(Tier::Max), "_ltx-2.5-max.mp4"),
+        ("fastvideo/fastwan21-1.3b/text-to-video", None, "_fastwan21-1.3b.mp4"),
+    ] {
+        let mut t = job(Task::T2V, endpoint);
+        t.resolved.tier = tier;
+        let name = fastvideo_fal::output_file_name(&t);
+        assert!(name.ends_with(want), "{endpoint}: {name}");
+    }
     assert_eq!(FalProtocol.id(), ProtocolId::Fal);
     let a = FalProtocol.new_external_id(j.id);
     assert!(uuid::Uuid::parse_str(&a).is_ok() && a != FalProtocol.new_external_id(j.id));

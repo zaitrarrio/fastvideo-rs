@@ -22,6 +22,6 @@
 ## Builds
 
 - Compile and test on the shared **build pod** (a small Runpod CPU pod with a
-  50 GB network volume), not in this container, whose disk is small. Each
+  200 GB network volume `fv-build`), not in this container, whose disk is small. Each
   agent gets its own worktree directory and `CARGO_TARGET_DIR` on that volume.
   See `scripts/dev/build-pod.sh` and `docs/dev/build-pod.md`.

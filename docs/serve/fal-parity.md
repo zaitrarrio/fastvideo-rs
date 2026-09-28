@@ -394,7 +394,7 @@ Ours today:
      schema (§3.1 5B fields).
    - Queue status and result URLs drop the sub-path (research-fal.md §2), so
      multi-segment subs only affect submit routes.
-   - Fix the output file slug per app (`…_minimax-h3.mp4` on every app,
+   - Fix the output file slug per app and tier (`…_minimax-h3.mp4` on every app,
      E2E wan.md).
    - This unlocks, on the fal wire: 720p, 1440p and 2160p; fps
      24/25/48/50; LTX `generate_audio`; LTX 6 to 20 s; and the Wan knobs.

@@ -32,7 +32,7 @@ use fastvideo_protocol::{
 };
 use fastvideo_serve_kit::events::{cancel_job, wait_terminal};
 use fastvideo_serve_kit::handlers::{find_job, submit_request};
-use fastvideo_serve_kit::{handlers, into_response, ServeCtx};
+use fastvideo_serve_kit::{handlers, into_response, ArtifactBody, ServeCtx};
 use serde::Deserialize;
 use serde_json::{json, Map, Value};
 
@@ -824,8 +824,12 @@ fn opt_f64(v: Option<f64>) -> Value {
         .map_or(Value::Null, Value::Number)
 }
 
-/// `VideoResponse` (`openai/protocol.py:213-234`).
-pub fn video_response(job: &Job, _cx: &ViewCtx) -> Value {
+/// `VideoResponse` (`openai/protocol.py:213-234`). FastVideo always sends
+/// `url: null` and serves the file from `/content`; a completed job here
+/// also carries a signed download URL of the MP4 in `url` (valid for
+/// `URL_TTL`, re-signed on every retrieve), so clients need not proxy the
+/// bytes through `/content`. Every other status keeps `url: null`.
+pub fn video_response(job: &Job, cx: &ViewCtx) -> Value {
     let r = &job.resolved;
     let (w, h) = r.output_size();
     let status = job.status();
@@ -841,6 +845,10 @@ pub fn video_response(job: &Job, _cx: &ViewCtx) -> Value {
     let seconds =
         echo_str(job, "seconds").unwrap_or_else(|| format!("{}", r.duration_s().round() as u64));
     let art = job.artifacts.first();
+    let url = match (&job.state, art) {
+        (fastvideo_protocol::JobState::Succeeded, Some(a)) => Value::String(cx.urls.url_for(a, URL_TTL).to_string()),
+        _ => Value::Null,
+    };
     let mut v = json!({
         "id": job.external_id,
         "object": "video",
@@ -852,7 +860,7 @@ pub fn video_response(job: &Job, _cx: &ViewCtx) -> Value {
         "size": format!("{w}x{h}"),
         "seconds": seconds,
         "quality": echo_str(job, "quality").unwrap_or_else(|| "standard".into()),
-        "url": null,
+        "url": url,
         "remixed_from_video_id": null,
         "expires_at": job.expires_at.unix_timestamp(),
         "file_path": null,
@@ -1052,7 +1060,8 @@ async fn create(
 /// `X-Request-Id`, `X-Model`, `X-Inference-Time-S`, `X-Stage-Durations`,
 /// `X-Peak-Memory-MB` (and `X-FV-Tier` / `X-FV-Recipe` when known). The job
 /// and its file are removed after reading, as FastVideo removes its
-/// temporary MP4.
+/// temporary MP4. Artifacts in an object store (S3/R2) are read back through
+/// `ArtifactStore::open` and streamed, not redirected.
 async fn sync_reply(ctx: &ServeCtx, job: Job) -> Result<HttpReply, ApiError> {
     let job = wait_terminal(ctx, job.id, ctx.config().sync_timeout)
         .await
@@ -1072,7 +1081,23 @@ async fn sync_reply(ctx: &ServeCtx, job: Job) -> Result<HttpReply, ApiError> {
                         .map_err(|e| ApiError::internal(format!("reading the output: {e}")))?;
                     HttpReply::bytes(200, a.mime.clone(), data)
                 }
-                Some(_) => artifact_reply(&job, &cx).unwrap_or_else(|| HttpReply::empty(500)),
+                // S3/R2 artifacts are read back and streamed, so the reply
+                // is `video/mp4` with the `X-*` headers (design §4.1), as
+                // the LTX v1 sync path does; a store that cannot read
+                // objects back falls back to the redirect.
+                Some((_, a)) => match ctx.artifacts().open(a).await {
+                    Ok(ArtifactBody::Bytes(b)) => HttpReply::bytes(200, a.mime.clone(), b),
+                    Ok(ArtifactBody::File(p)) => {
+                        let data = tokio::fs::read(&p)
+                            .await
+                            .map_err(|e| ApiError::internal(format!("reading the output: {e}")))?;
+                        HttpReply::bytes(200, a.mime.clone(), data)
+                    }
+                    Err(e) => {
+                        tracing::warn!(error = %e.message, "/v1/videos/sync: reading the artifact back failed; answering a redirect");
+                        artifact_reply(&job, &cx).unwrap_or_else(|| HttpReply::empty(500))
+                    }
+                },
                 None => return Err(ApiError::internal("the generation produced no file")),
             }
         }
