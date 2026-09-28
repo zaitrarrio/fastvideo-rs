@@ -25,6 +25,16 @@
 //!   x − mask·σ·v` and `x0 ← x0·mask + clean·(1 − mask)` before every update,
 //!   and again after an ancestral step's noise (`samplers.py:post_process_latent`).
 //!   The appended tokens are dropped after the stage (`clear_conditioning`).
+//! * **IC-LoRA reference** (`iclora_utils.py:append_ic_lora_reference_video_conditionings`,
+//!   `VideoConditionByReferenceLatent`): a reference *video* (the Ingredients
+//!   LoRA's reference sheet looped into a static clip) is decoded frame by
+//!   frame, `resize_and_center_crop`ped to the stage size over the LoRA's
+//!   `reference_downscale_factor` (no CRF re-encode), VAE-encoded and appended
+//!   after the image conditionings as clean tokens (mask `1 − strength`) with
+//!   their own causal-fixed positions ([`fastvideo_models::ltx2::rope::ReferenceBlock`]).
+//!   A static clip of identical frames encodes to one latent frame repeated
+//!   (every causal conv and space-to-depth sees identical frames), so
+//!   [`ReferenceTokens::static_clip`] encodes the still once and repeats it.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -224,6 +234,60 @@ pub fn image_pixels(img: &RgbImage, height: usize, width: usize) -> Vec<f32> {
     out
 }
 
+/// The IC-LoRA reference of a stage (stage 1 of `ICLoraPipeline` only).
+pub struct ReferenceTokens {
+    /// The reference's latent grid `[F, H, W]`.
+    pub grid: [usize; 3],
+    /// `reference_downscale_factor` of the LoRA.
+    pub downscale: usize,
+    /// `VideoConditionByReferenceLatent.strength`: 1 keeps it clean.
+    pub strength: f32,
+    /// Packed `[1, F·H·W, C]` in the state's dtype.
+    pub clean: CudaTensor,
+}
+
+impl ReferenceTokens {
+    /// A static clip of `frames` latent frames of one still: `frame` is the
+    /// still's packed latent `[1, H·W, C]`, repeated frame-major.
+    pub fn static_clip(
+        frame: &CudaTensor,
+        frames: usize,
+        hw: [usize; 2],
+        downscale: usize,
+        strength: f32,
+    ) -> Result<Self> {
+        if frame.shape.len() != 3 || frame.shape[1] != hw[0] * hw[1] || frames == 0 {
+            return Err(msg(format!(
+                "ltx2 reference latent {:?} for a {}x{} grid, {frames} frames",
+                frame.shape, hw[0], hw[1]
+            )));
+        }
+        let parts: Vec<&CudaTensor> = std::iter::repeat_n(frame, frames).collect();
+        let clean = if frames == 1 {
+            frame.clone()
+        } else {
+            CudaTensor::cat(&parts, 1)?
+        };
+        Ok(Self {
+            grid: [frames, hw[0], hw[1]],
+            downscale,
+            strength,
+            clean,
+        })
+    }
+
+    pub fn tokens(&self) -> usize {
+        self.grid.iter().product()
+    }
+
+    pub fn block(&self) -> fastvideo_models::ltx2::rope::ReferenceBlock {
+        fastvideo_models::ltx2::rope::ReferenceBlock {
+            grid: self.grid,
+            downscale: self.downscale,
+        }
+    }
+}
+
 /// One conditioned run of video rows of a stage.
 pub struct CondSegment {
     pub start: usize,
@@ -245,6 +309,8 @@ pub struct StageConditioning {
     pub frame_tokens: usize,
     /// Sorted, disjoint.
     pub segments: Vec<CondSegment>,
+    /// The IC-LoRA reference block after the keyframe blocks, if any.
+    pub reference: Option<fastvideo_models::ltx2::rope::ReferenceBlock>,
 }
 
 impl StageConditioning {
@@ -308,12 +374,47 @@ impl StageConditioning {
             extra_frames,
             frame_tokens: hw,
             segments,
+            reference: None,
         })
     }
 
-    /// All rows: the grid and the appended keyframe tokens.
+    /// Append the IC-LoRA reference after every other block (`ic_lora.py`
+    /// `_create_conditionings`: image conditionings first, references last).
+    pub fn with_reference(mut self, r: ReferenceTokens) -> Result<Self> {
+        if self.reference.is_some() {
+            return Err(msg("ltx2 conditioning: one reference per stage"));
+        }
+        if !(0.0..=1.0).contains(&r.strength) {
+            return Err(msg(format!(
+                "ltx2 reference strength {} is outside [0, 1]",
+                r.strength
+            )));
+        }
+        if r.clean.shape.len() != 3 || r.clean.shape[1] != r.tokens() {
+            return Err(msg(format!(
+                "ltx2 reference latent {:?} for a {:?} grid",
+                r.clean.shape, r.grid
+            )));
+        }
+        let start = self.total_tokens();
+        self.reference = Some(r.block());
+        self.segments.push(CondSegment {
+            start,
+            len: r.tokens(),
+            mask: 1.0 - r.strength,
+            clean: r.clean,
+        });
+        Ok(self)
+    }
+
+    /// Rows appended after the grid (keyframes and the reference).
+    pub fn appended_tokens(&self) -> usize {
+        self.extra_frames.len() * self.frame_tokens + self.reference.map_or(0, |r| r.tokens())
+    }
+
+    /// All rows: the grid, the appended keyframe tokens and the reference.
     pub fn total_tokens(&self) -> usize {
-        self.grid_tokens + self.extra_frames.len() * self.frame_tokens
+        self.grid_tokens + self.appended_tokens()
     }
 
     /// The per-token timestep runs for the transformer (rows with mask 1 are
@@ -489,5 +590,47 @@ mod tests {
         assert_eq!(&p[..6], &[7.0; 6]);
         assert_eq!(&p[18..], &[0.5 * 2.5 + 0.5 * 9.0; 6]);
         assert_eq!(c.clear(&noise).unwrap().shape, vec![1, 6, 3]);
+    }
+
+    #[test]
+    fn reference_rows_follow_the_keyframes_and_stay_clean() {
+        let lat = |v: f32, n: usize| t(vec![v; n * 3], vec![1, n, 3]);
+        let imgs = vec![ConditioningImage {
+            path: "b.png".into(),
+            frame_idx: 16,
+            strength: 1.0,
+            crf: None,
+        }];
+        // Grid [3, 1, 2]: 6 rows; one keyframe block (2); a static reference
+        // clip of 3 latent frames of the same 1x2 still (6).
+        let r = ReferenceTokens::static_clip(&lat(4.0, 2), 3, [1, 2], 1, 1.0).unwrap();
+        assert_eq!(r.grid, [3, 1, 2]);
+        let c = StageConditioning::new([3, 1, 2], &imgs, vec![lat(9.0, 2)], 17)
+            .unwrap()
+            .with_reference(r)
+            .unwrap();
+        assert_eq!(c.total_tokens(), 14);
+        assert_eq!(c.appended_tokens(), 8);
+        let segs = c.timestep_segments();
+        assert_eq!((segs[1].start, segs[1].len, segs[1].mask), (8, 6, 0.0));
+        let noise = t(vec![1.0; 14 * 3], vec![1, 14, 3]);
+        let x = c.apply_initial(&noise).unwrap().host_cow().unwrap().into_owned();
+        assert_eq!(&x[..18], &[1.0; 18]);
+        assert_eq!(&x[18..24], &[9.0; 6]);
+        assert_eq!(&x[24..], &[4.0; 18]);
+        let v = t(vec![2.0; 14 * 3], vec![1, 14, 3]);
+        let x0 = c.x0(&noise, &v, 0.5).unwrap().host_cow().unwrap().into_owned();
+        assert_eq!(&x0[24..], &[1.0; 18]); // mask 0: timestep 0, x0 = x
+        let p = c.post(&t(x0, vec![1, 14, 3])).unwrap().host_cow().unwrap().into_owned();
+        assert_eq!(&p[24..], &[4.0; 18]);
+        assert_eq!(c.clear(&noise).unwrap().shape, vec![1, 6, 3]);
+        // A second reference, or one outside [0, 1], is refused.
+        let r2 = ReferenceTokens::static_clip(&lat(4.0, 2), 1, [1, 2], 1, 1.0).unwrap();
+        assert!(c.with_reference(r2).is_err());
+        let bad = ReferenceTokens::static_clip(&lat(4.0, 2), 1, [1, 2], 1, 1.5).unwrap();
+        assert!(StageConditioning::new([3, 1, 2], &[], vec![], 17)
+            .unwrap()
+            .with_reference(bad)
+            .is_err());
     }
 }

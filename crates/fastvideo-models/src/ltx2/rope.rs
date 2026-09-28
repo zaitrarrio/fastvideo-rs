@@ -141,6 +141,26 @@ impl SplitRope {
     }
 }
 
+/// An IC-LoRA reference block appended after the grid and any keyframe
+/// blocks (`VideoConditionByReferenceLatent`,
+/// `ltx_core/conditioning/types/reference_video_cond.py`): the reference's own
+/// latent grid `[frames, height, width]` with its own causal-fixed pixel
+/// extents, time in seconds at the target fps, and both spatial axes scaled by
+/// `downscale` (the LoRA's `reference_downscale_factor`) so a reduced-size
+/// reference overlays the target frame. A temporal scale factor other than 1
+/// is not modelled (the Ingredients LoRA has none).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ReferenceBlock {
+    pub grid: [usize; 3],
+    pub downscale: usize,
+}
+
+impl ReferenceBlock {
+    pub fn tokens(&self) -> usize {
+        self.grid.iter().product()
+    }
+}
+
 /// `[tokens, 3]` midpoints of each latent cell's extent in (seconds, px, px).
 /// Token order is frame-major, then row, then column — the packing order of
 /// the latents.
@@ -150,6 +170,7 @@ fn video_midpoints(
     fps: f32,
     division: ScalarDivision,
     extra: &[usize],
+    reference: Option<ReferenceBlock>,
 ) -> Vec<f32> {
     let [frames, height, width] = grid;
     let [st, sh, sw] = cfg.vae_scale_factors.map(|s| s as f32);
@@ -165,7 +186,8 @@ fn video_midpoints(
     let space = |i: usize, scale: f32| -> f32 {
         (i as f32 * scale + (i as f32 + cfg.patch_size as f32) * scale) / 2.0
     };
-    let mut out = Vec::with_capacity((frames + extra.len()) * height * width * 3);
+    let ref_tokens = reference.map_or(0, |r| r.tokens());
+    let mut out = Vec::with_capacity(((frames + extra.len()) * height * width + ref_tokens) * 3);
     for f in 0..frames {
         for h in 0..height {
             for w in 0..width {
@@ -185,6 +207,23 @@ fn video_midpoints(
         for h in 0..height {
             for w in 0..width {
                 out.extend([t, space(h, sh), space(w, sw)]);
+            }
+        }
+    }
+    // The reference block: its own grid, causal fix on (as the target grid),
+    // seconds at the target fps; the pixel bounds times `downscale` before
+    // the midpoint, as the reference scales `positions` in place.
+    if let Some(r) = reference {
+        let [rf, rh, rw] = r.grid;
+        let d = r.downscale as f32;
+        let space_scaled = |i: usize, scale: f32| -> f32 {
+            (i as f32 * scale * d + (i as f32 + cfg.patch_size as f32) * scale * d) / 2.0
+        };
+        for f in 0..rf {
+            for h in 0..rh {
+                for w in 0..rw {
+                    out.extend([time(f), space_scaled(h, sh), space_scaled(w, sw)]);
+                }
             }
         }
     }
@@ -211,12 +250,24 @@ pub fn video_fractions_with(
     division: ScalarDivision,
     extra: &[usize],
 ) -> Vec<f32> {
+    video_fractions_cond(cfg, grid, fps, division, extra, None)
+}
+
+/// [`video_fractions_with`] plus an appended IC-LoRA reference block.
+pub fn video_fractions_cond(
+    cfg: &Ltx2TransformerConfig,
+    grid: [usize; 3],
+    fps: f32,
+    division: ScalarDivision,
+    extra: &[usize],
+    reference: Option<ReferenceBlock>,
+) -> Vec<f32> {
     let max = [
         cfg.pos_embed_max_pos as f32,
         cfg.base_height as f32,
         cfg.base_width as f32,
     ];
-    video_midpoints(cfg, grid, fps, division, extra)
+    video_midpoints(cfg, grid, fps, division, extra, reference)
         .chunks_exact(3)
         .flat_map(|c| {
             [
@@ -250,7 +301,20 @@ pub fn video_time_fractions_with(
     division: ScalarDivision,
     extra: &[usize],
 ) -> Vec<f32> {
-    video_midpoints(cfg, grid, fps, division, extra)
+    video_time_fractions_cond(cfg, grid, fps, max_seconds, division, extra, None)
+}
+
+/// [`video_time_fractions_with`] plus an appended IC-LoRA reference block.
+pub fn video_time_fractions_cond(
+    cfg: &Ltx2TransformerConfig,
+    grid: [usize; 3],
+    fps: f32,
+    max_seconds: f32,
+    division: ScalarDivision,
+    extra: &[usize],
+    reference: Option<ReferenceBlock>,
+) -> Vec<f32> {
+    video_midpoints(cfg, grid, fps, division, extra, reference)
         .chunks_exact(3)
         .map(|c| division.div(c[0], max_seconds))
         .collect()
@@ -339,13 +403,27 @@ impl Ltx2RopeTables {
         fps: f32,
         division: ScalarDivision,
     ) -> Self {
+        Self::with_conditioning(cfg, grid, extra, None, audio_tokens, fps, division)
+    }
+
+    /// [`Self::with_keyframes`] plus an IC-LoRA reference block after the
+    /// keyframe blocks (`ic_lora.py` appends the reference conditionings last).
+    pub fn with_conditioning(
+        cfg: &Ltx2TransformerConfig,
+        grid: [usize; 3],
+        extra: &[usize],
+        reference: Option<ReferenceBlock>,
+        audio_tokens: usize,
+        fps: f32,
+        division: ScalarDivision,
+    ) -> Self {
         let theta = cfg.rope_theta;
         let cross_dim = cfg.audio_cross_attention_dim;
         // Both cross tables share one time base so equal instants rotate equally.
         let cross_max = cfg.pos_embed_max_pos.max(cfg.audio_pos_embed_max_pos) as f32;
         Self {
             video: SplitRope::from_fractions(
-                &video_fractions_with(cfg, grid, fps, division, extra),
+                &video_fractions_cond(cfg, grid, fps, division, extra, reference),
                 3,
                 cfg.inner_dim(),
                 cfg.num_attention_heads,
@@ -364,7 +442,7 @@ impl Ltx2RopeTables {
                 theta,
             ),
             cross_video: SplitRope::from_fractions(
-                &video_time_fractions_with(cfg, grid, fps, cross_max, division, extra),
+                &video_time_fractions_cond(cfg, grid, fps, cross_max, division, extra, reference),
                 1,
                 cross_dim,
                 cfg.num_attention_heads,
@@ -419,6 +497,36 @@ mod tests {
         assert!((t - 16.5 / 24.0).abs() < 1e-6, "{t}");
         // Same spatial midpoints as frame 0.
         assert_eq!(&f[3 * 4 * 3 + 1..3 * 4 * 3 + 3], &f[1..3]);
+    }
+
+    #[test]
+    fn a_full_size_reference_sits_on_the_grid_it_overlays() {
+        // Downscale 1, same grid: every reference token has the position of
+        // the grid token it overlays (the Ingredients LoRA's layout).
+        let grid = [3, 2, 2];
+        let r = ReferenceBlock { grid, downscale: 1 };
+        let f = video_fractions_cond(&cfg(), grid, 24.0, ScalarDivision::Reciprocal, &[16], Some(r));
+        let n = 3 * 4 * 3;
+        assert_eq!(f.len(), (3 * 4 + 4 + 3 * 4) * 3);
+        let base = video_fractions(&cfg(), grid, 24.0, ScalarDivision::Reciprocal);
+        assert_eq!(&f[..n], &base[..]);
+        // After the grid and the one keyframe block.
+        assert_eq!(&f[n + 4 * 3..], &base[..]);
+        let t = video_time_fractions_cond(&cfg(), grid, 24.0, 20.0, ScalarDivision::Exact, &[], Some(r));
+        let tb = video_time_fractions(&cfg(), grid, 24.0, 20.0, ScalarDivision::Exact);
+        assert_eq!(&t[12..], &tb[..]);
+    }
+
+    #[test]
+    fn a_half_size_reference_is_stretched_over_the_target() {
+        // Downscale 2: a [1, 1, 1] reference cell covers pixels [0, 64) of the
+        // target, midpoint 32 (the target's own first cell: 16).
+        let r = ReferenceBlock { grid: [1, 1, 1], downscale: 2 };
+        let f = video_fractions_cond(&cfg(), [1, 2, 2], 24.0, ScalarDivision::Exact, &[], Some(r));
+        let last = &f[4 * 3..];
+        assert_eq!(last[1], 32.0 / 2048.0);
+        assert_eq!(last[2], 32.0 / 2048.0);
+        assert_eq!(last[0], f[0]);
     }
 
     #[test]

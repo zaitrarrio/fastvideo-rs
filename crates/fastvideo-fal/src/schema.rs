@@ -8,6 +8,7 @@
 //! | `minimax/h3-max`, `minimax/h3-max-turbo`, `minimax/h3-{turbo,draft}`, any other `owner/alias` | [`AppKind::H3`] | `text-to-video`, `image-to-video`, `reference-to-video` |
 //! | `minimax/h3` (base) | [`AppKind::H3Base`] | the same; `resolution` `480P 768P 2K 4K` |
 //! | `lightricks/ltx-2.5` | [`AppKind::Ltx25`] | `{text,image}-to-video/{fast,pro}` ([`ltx`]) |
+//! | `fal-ai/ltx-2.3-quality` | [`AppKind::LtxQuality`] | `ingredient` ([`ingredient`]: reference-sheet video, `ltx-pro` Ref2V) |
 //! | `fal-ai/wan` | [`AppKind::Wan`] | `v2.2-5b/text-to-video`, `v2.2-5b/image-to-video`, `v2.2-5b/text-to-video/fast-wan` ([`wan`]) |
 //!
 //! The H3 fields:
@@ -37,6 +38,7 @@
 //! short edges, which the H3 caps refuse as `Unsupported(H3Resolution2K)`,
 //! so an omitted `resolution` means `768P` here.
 
+pub mod ingredient;
 pub mod ltx;
 pub mod wan;
 
@@ -47,6 +49,7 @@ use fastvideo_protocol::{
     Task, Tier, TimingSpec,
 };
 
+pub use ingredient::IngredientInput;
 pub use ltx::{LtxClass, LtxInput};
 pub use wan::{WanInput, WanVariant};
 use serde::{Deserialize, Serialize};
@@ -86,6 +89,8 @@ pub enum Endpoint {
     WanImageToVideo,
     /// `fal-ai/wan/v2.2-5b/text-to-video/fast-wan`.
     WanFastWan,
+    /// `fal-ai/ltx-2.3-quality/ingredient` (reference sheet, IC-LoRA).
+    LtxIngredient,
 }
 
 impl Endpoint {
@@ -104,8 +109,10 @@ impl Endpoint {
     ];
     /// `fal-ai/wan`.
     pub const WAN: [Endpoint; 3] = [Endpoint::WanTextToVideo, Endpoint::WanImageToVideo, Endpoint::WanFastWan];
+    /// `fal-ai/ltx-2.3-quality`.
+    pub const LTX_QUALITY: [Endpoint; 1] = [Endpoint::LtxIngredient];
     /// Every endpoint of every family.
-    pub const EVERY: [Endpoint; 10] = [
+    pub const EVERY: [Endpoint; 11] = [
         Endpoint::TextToVideo,
         Endpoint::ImageToVideo,
         Endpoint::ReferenceToVideo,
@@ -116,6 +123,7 @@ impl Endpoint {
         Endpoint::WanTextToVideo,
         Endpoint::WanImageToVideo,
         Endpoint::WanFastWan,
+        Endpoint::LtxIngredient,
     ];
 
     /// The path after the app id (one or more segments).
@@ -131,6 +139,7 @@ impl Endpoint {
             Endpoint::WanTextToVideo => "v2.2-5b/text-to-video",
             Endpoint::WanImageToVideo => "v2.2-5b/image-to-video",
             Endpoint::WanFastWan => "v2.2-5b/text-to-video/fast-wan",
+            Endpoint::LtxIngredient => "ingredient",
         }
     }
 
@@ -151,6 +160,7 @@ impl Endpoint {
             Endpoint::WanTextToVideo => "Text to Video · 5B",
             Endpoint::WanImageToVideo => "Image to Video · 5B",
             Endpoint::WanFastWan => "Text to Video · FastWan",
+            Endpoint::LtxIngredient => "Reference Sheet to Video · Ingredients",
         }
     }
 
@@ -160,7 +170,10 @@ impl Endpoint {
         Some(match self {
             Endpoint::TextToVideo | Endpoint::ImageToVideo | Endpoint::ReferenceToVideo => return None,
             Endpoint::LtxTextToVideoFast | Endpoint::LtxImageToVideoFast => (Family::Ltx2, Tier::Turbo),
-            Endpoint::LtxTextToVideoPro | Endpoint::LtxImageToVideoPro => (Family::Ltx2, Tier::Max),
+            // `ltx-pro`: its Ref2V requests route to the IC-LoRA companion.
+            Endpoint::LtxTextToVideoPro | Endpoint::LtxImageToVideoPro | Endpoint::LtxIngredient => {
+                (Family::Ltx2, Tier::Max)
+            }
             Endpoint::WanTextToVideo | Endpoint::WanImageToVideo => (Family::Wan, Tier::Max),
             Endpoint::WanFastWan => (Family::Wan, Tier::Turbo),
         })
@@ -180,6 +193,8 @@ pub enum AppKind {
     Ltx25,
     /// `fal-ai/wan`.
     Wan,
+    /// `fal-ai/ltx-2.3-quality` (the `ingredient` endpoint).
+    LtxQuality,
 }
 
 impl AppKind {
@@ -188,6 +203,7 @@ impl AppKind {
             "minimax/h3" => AppKind::H3Base,
             "lightricks/ltx-2.5" => AppKind::Ltx25,
             "fal-ai/wan" => AppKind::Wan,
+            "fal-ai/ltx-2.3-quality" => AppKind::LtxQuality,
             _ => AppKind::H3,
         }
     }
@@ -196,6 +212,7 @@ impl AppKind {
             AppKind::H3 | AppKind::H3Base => &Endpoint::ALL,
             AppKind::Ltx25 => &Endpoint::LTX,
             AppKind::Wan => &Endpoint::WAN,
+            AppKind::LtxQuality => &Endpoint::LTX_QUALITY,
         }
     }
     /// Whether the app has the H3 WMA director (`{app}/director`).
@@ -365,6 +382,8 @@ pub enum FalInput {
     Ltx(LtxInput),
     /// `fal-ai/wan/v2.2-5b/*`.
     Wan(WanInput),
+    /// `fal-ai/ltx-2.3-quality/ingredient`.
+    Ingredient(IngredientInput),
 }
 
 // ---------------------------------------------------------------- parsing
@@ -549,6 +568,7 @@ impl FalInput {
             Endpoint::WanTextToVideo => return Ok(FalInput::Wan(wan::parse(&f, WanVariant::TextToVideo)?)),
             Endpoint::WanImageToVideo => return Ok(FalInput::Wan(wan::parse(&f, WanVariant::ImageToVideo)?)),
             Endpoint::WanFastWan => return Ok(FalInput::Wan(wan::parse(&f, WanVariant::FastWan)?)),
+            Endpoint::LtxIngredient => return Ok(FalInput::Ingredient(ingredient::parse(&f)?)),
             Endpoint::TextToVideo | Endpoint::ImageToVideo | Endpoint::ReferenceToVideo => {}
         }
         let common = parse_common(&f, kind.h3_resolutions())?;
@@ -607,6 +627,7 @@ impl FalInput {
                 WanVariant::ImageToVideo => Endpoint::WanImageToVideo,
                 WanVariant::FastWan => Endpoint::WanFastWan,
             },
+            FalInput::Ingredient(_) => Endpoint::LtxIngredient,
         }
     }
 
@@ -616,7 +637,7 @@ impl FalInput {
             FalInput::TextToVideo { common, .. }
             | FalInput::ImageToVideo { common, .. }
             | FalInput::ReferenceToVideo { common, .. } => Some(common),
-            FalInput::Ltx(_) | FalInput::Wan(_) => None,
+            FalInput::Ltx(_) | FalInput::Wan(_) | FalInput::Ingredient(_) => None,
         }
     }
 
@@ -684,7 +705,7 @@ impl FalInput {
                     a => aspect_canvas(*a, short_edge),
                 };
             }
-            FalInput::Ltx(_) | FalInput::Wan(_) => {}
+            FalInput::Ltx(_) | FalInput::Wan(_) | FalInput::Ingredient(_) => {}
         }
         Ok(r)
     }
@@ -695,6 +716,7 @@ impl FalInput {
         let mut r = match self {
             FalInput::Ltx(i) => i.normalize(model)?,
             FalInput::Wan(i) => i.normalize(model)?,
+            FalInput::Ingredient(i) => i.normalize(model)?,
             _ => self.normalize_h3(model)?,
         };
         if let Some(hook) = cx.query_param("fal_webhook") {
@@ -744,6 +766,15 @@ pub fn fal_param(param: &str, req: &GenerationRequest) -> String {
             Some(Anchor::Last) => "end_image_url".into(),
             _ => "image_url".into(),
         };
+    }
+    // `ingredient` (the only fal input that sets the reference LoRA strength)
+    // names its sheet `image_url` and the LoRA strength `ingredient_strength`.
+    let ingredient = req.sampling.reference_lora_strength.is_some();
+    if ingredient && (param == "references" || idx(param, "references").is_some()) {
+        return "image_url".into();
+    }
+    if ingredient && param == "reference_lora_strength" {
+        return "ingredient_strength".into();
     }
     if let Some(i) = idx(param, "references") {
         if let Some(r) = req.references.get(i) {
@@ -901,6 +932,48 @@ mod tests {
         assert_eq!(fal_param("references[2]", &r), "reference_audio_urls[1]");
         assert_eq!(fal_param("audio", &r), "target_audio_url");
         assert_eq!(fal_param("duration", &r), "duration");
+    }
+
+    #[test]
+    fn ingredient_is_a_reference_sheet_request_on_ltx_pro() {
+        let kind = AppKind::of("fal-ai/ltx-2.3-quality");
+        assert_eq!(kind, AppKind::LtxQuality);
+        assert_eq!(kind.endpoints(), &[Endpoint::LtxIngredient]);
+        assert_eq!(Endpoint::from_sub("ingredient"), Some(Endpoint::LtxIngredient));
+        assert_eq!(Endpoint::LtxIngredient.target(), Some((Family::Ltx2, Tier::Max)));
+        assert_eq!(app_id("fal-ai/ltx-2.3-quality/ingredient"), "fal-ai/ltx-2.3-quality");
+        let body = json!({
+            "prompt": "Reference sheet: a crab. Generated video: the crab walks.",
+            "image_url": "https://a.test/sheet.png",
+            "ingredient_strength": 1.5,
+            "num_frames": 100,
+            "generate_audio": false,
+            "negative_prompt": "blurry",
+        });
+        let i = FalInput::parse_for(kind, Endpoint::LtxIngredient, &body).unwrap();
+        assert_eq!(i.endpoint(), Endpoint::LtxIngredient);
+        let r = i.normalize("ltx-pro", &cx()).unwrap();
+        assert_eq!(r.task, Task::Ref2V);
+        assert_eq!(r.model, "ltx-pro");
+        assert_eq!(r.references.len(), 1);
+        assert_eq!(r.references[0].kind, MediaKind::Image);
+        assert_eq!(r.canvas, CanvasSpec::Exact { width: 1536, height: 896 });
+        assert_eq!(r.timing.length, Length::Frames { value: 100, snap: Snap::AlignUp });
+        assert_eq!(r.timing.fps, Some(24));
+        assert_eq!(r.sampling.reference_lora_strength, Some(1.5));
+        assert_eq!(r.sampling.reference_strength, Some(1.0));
+        assert_eq!(r.audio_out, fastvideo_protocol::AudioOut::Silent);
+        // Engine errors name the fal fields.
+        assert_eq!(fal_param("references[0]", &r), "image_url");
+        assert_eq!(fal_param("reference_lora_strength", &r), "ingredient_strength");
+        assert_eq!(fal_param("reference_strength", &r), "reference_strength");
+        assert_eq!(fal_param("fps", &r), "frames_per_second");
+        // The sheet is required; strengths stay within fal's 0..=2.
+        let no_sheet = json!({"prompt": "p"});
+        assert!(FalInput::parse_for(kind, Endpoint::LtxIngredient, &no_sheet).is_err());
+        let hot = json!({"prompt": "p", "image_url": "https://a.test/s.png", "reference_strength": 2.5});
+        let e = FalInput::parse_for(kind, Endpoint::LtxIngredient, &hot).unwrap_err();
+        assert_eq!(e.param.as_deref(), Some("reference_strength"));
     }
 
     #[test]

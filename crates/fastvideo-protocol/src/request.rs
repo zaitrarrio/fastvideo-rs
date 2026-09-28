@@ -460,6 +460,14 @@ pub struct SamplingOverrides {
     pub guidance_2: Option<f32>,
     pub flow_shift: Option<f64>,
     pub boundary_ratio: Option<f32>,
+    /// Reference-to-video conditioning strength in `[0, 1]` (LTX IC-LoRA:
+    /// the reference tokens' denoise mask is `1 − s`; 1 keeps them clean).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reference_strength: Option<f32>,
+    /// Reference-to-video LoRA strength in `[0, 2]` (LTX IC-LoRA: the stage-1
+    /// fuse strength; fal `ingredient_strength`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reference_lora_strength: Option<f32>,
 }
 
 impl SamplingOverrides {

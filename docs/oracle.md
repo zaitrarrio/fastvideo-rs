@@ -343,6 +343,65 @@ the images as the reference's. Timings (ours, RTX PRO 6000, 512p, warm
 weights): image preprocessing + encode for both stages 1.7-2.3 s,
 denoise 10.8-12.5 s.
 
+## LTX-2.5 reference-to-video (Ingredients IC-LoRA)
+
+Reference: Lightricks/LTX-2 `fd4ded7` `python -m ltx_pipelines.ic_lora`
+(`ICLoraPipeline`) with `--lora ltx-2.5-22b-ic-lora-ingredients-0.9.safetensors
+1.0 --video-conditioning reference.mov 1.0 --offload cpu`, 1536x896x121 at
+24 fps (stage 1 at the LoRA's 768x448 bucket), seed 1024, the reference-sheet
+prompt of `scripts/gpu/upstream/oracle.sh` (`LTX_REF_PROMPT`). The reference
+clip is `scripts/gpu/fixtures/ltx-ref-sheet-768x448.png` looped into 121
+lossless PNG frames (QuickTime), so upstream decodes the sheet's exact pixels.
+Target `ltx25-ref2v`; ours: `fv-gpucheck ltx2 gen --two-stage --dense-stage2
+--reference <sheet> --ic-lora <file>`. Run 2026-09-28, runtime and scripts at
+`b38a408`, upstream `sol-ltx25:latest`, both on H100 80GB HBM3 in US-CA-2 on the
+US volume `s2k01690bi`. Injected as for T2V (noise, text); the main arm also
+injects the reference latent, `-ownimg` preprocesses and encodes the sheet
+on our own. Stage 2 starts from the reference's entry state
+(`FASTVIDEO_INJECT_STAGE2`, as every LTX target), so the stage-2 rows and the
+clip metrics measure stage 2 and the decode alone.
+
+Layout: identical. The reference latent is `[1, 128, 16, 14, 24]` upstream
+(5376 tokens, downscale 1 and temporal scale 1 from the LoRA metadata), the
+stage-1 sequence 10752 = 5376 grid + 5376 reference rows, the noise draws
+`[1, 10752, 128]` then audio then the stage-2 renoise; ours attached all 480
+LoRA pairs (every block's attn1 / attn2 q/k/v/out and FF).
+
+| | main (reference latent injected) | -ownimg (all ours) |
+|---|---|---|
+| reference pixels (sheet, 768x448) | 1.6e-6 | 1.6e-6 |
+| reference latent (our f32 encoder vs their bf16) | 1.7e-2 (ours, dumped) | 1.7e-2 |
+| s1 step-0 input | 0 | 1.3e-2 (the reference rows) |
+| s1 block 0 / 12 / 24 / 36 / 47 (step 1) | 2.1e-3 / 5.5e-3 / 1.7e-2 / 4.1e-2 / 3.5e-2 | |
+| s1 latents steps 1-4 | 7.4e-4 … 1.8e-3 | 1.3e-2 (the reference rows' offset) |
+| s1 latents steps 5 / 6 / 7 / 8 | 9.8e-3 / 5.9e-2 / 0.17 / 0.31 | 1.7e-2 / 5.7e-2 / 0.16 / 0.30 |
+| s2 block 0 / 24 / 47 (step 1) | 2.4e-3 / 6.2e-3 / 1.6e-2 | same |
+| s2 latents steps 1 / 2 / 3 | 1.2e-2 / 5.6e-2 / 0.10 | same |
+| decoded clip vs the reference's (121 frames) | SSIM 0.982, PSNR 38.9 dB (min 32.2) | same |
+
+Reading: the conditioned stage 1 with the LoRA fused starts at the bf16
+floor (block 0 2.1e-3, the T2V 512p dense row above has 3.3e-3) and its
+latents follow the T2V profile (T2V 512p dense: 9e-4 … 2.2e-3, then 7.1e-3 /
+7.5e-2 / 0.25 / 0.34): the 8-step distilled stage 1 amplifies bf16 noise in
+its last three steps, here as there. One difference from T2V: at step 1 the
+video blocks 25-33 rise to 6e-2 … 0.12 (max-abs outliers up to ~830 in the
+strided rows) and fall back to 3.5e-2 by block 47, while stage 2 (same
+weights without the LoRA and without the reference) stays smooth. The
+likeliest cause is the large-magnitude activations of the clean (timestep 0)
+reference rows under the fused weights, where our single-rounding fuse and
+upstream's double bf16 rounding differ by an ulp; it was not isolated
+further (the GPU budget of this run). The encoder is at the bf16 floor, as
+for I2V (1.5e-2 there), and preprocessing is exact. Stage 2 and the decode
+match as for T2V. Verdict: **pass** at the bf16 floor, with the stage-1
+mid-block bump noted.
+
+Timings (ours, H100, warm steps): stage 1 about 1.0 s per step at 10752
+tokens (the reference doubles the sequence), stage 2 1.8-2.1 s per step at
+21504, upsample 2.8 s, decode 1.6 s; the IC-LoRA fuse 0.20 s and unfuse
+0.10 s. Device memory 64 GiB live (the DiT with the kept base of the 480
+LoRA linears is 61.8 GiB), peak 70 GiB. Upstream (`--offload cpu`) ran the
+cell in 116 s, peak 9.3 GiB. Spend: upstream pod 13 min, runtime pod 8 min.
+
 ## Wan 2.2 TI2V-5B modules (Diffusers)
 
 `scripts/gpu/upstream/oracle_wan22.py` (upstream step `oracle:wan22-ti2v`,
