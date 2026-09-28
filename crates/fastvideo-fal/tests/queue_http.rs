@@ -79,7 +79,7 @@ async fn submit_poll_result_both_path_forms() {
     assert!(bodies.windows(2).all(|w| w[0]["video"]["file_size"] == w[1]["video"]["file_size"]));
     let out = &bodies[0];
     assert_eq!(out["expanded_prompt"], Value::Null);
-    assert!(out.get("seed").is_none(), "seed is r2v-only");
+    assert_eq!(out["seed"], 7, "the effective seed is returned on t2v too");
     assert!(out["timings"]["inference"].is_number());
     let v = &out["video"];
     assert_eq!(v["content_type"], "video/mp4");
@@ -239,6 +239,9 @@ async fn sync_run_and_sync_mode() {
     let rid = r.header("x-fal-request-id").unwrap().to_owned();
     let out = r.json();
     assert!(out["video"]["url"].as_str().unwrap().starts_with("https://fal.fv.test/files/"));
+    // No seed in the request: the output reports the one the server drew.
+    let j = f.ctx.jobs().by_external(ProtocolId::Fal, &rid).await.unwrap();
+    assert_eq!(out["seed"].as_u64(), Some(j.resolved.seed), "{out}");
     // The sync job is visible through the queue routes too.
     let st = call(&f.app, "GET", &format!("/minimax/h3-max/requests/{rid}/status"), None).await.json();
     assert_eq!(st["status"], "COMPLETED");

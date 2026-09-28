@@ -31,6 +31,7 @@
     "gateway_request_id": "764cabcf-b745-4b3e-ae38-1200304cf45b",
     "payload": {
       "expanded_prompt": null,
+      "seed": 1851572118,
       "timings": {
         "inference": 2.5285604159580544
       },

@@ -51,6 +51,7 @@
   "result draft tier": {
     "body": {
       "expanded_prompt": null,
+      "seed": 1851572118,
       "timings": {
         "inference": 2.5285604159580544
       },
@@ -146,6 +147,7 @@
   "result t2v": {
     "body": {
       "expanded_prompt": null,
+      "seed": 1851572118,
       "timings": {
         "inference": 2.5285604159580544
       },

@@ -594,7 +594,9 @@ pub struct File {
     pub file_size: Option<u64>,
 }
 
-/// t2v / i2v / r2v output (fal §3.4, §5.2). `seed` is set on r2v only.
+/// t2v / i2v / r2v output (fal §3.4, §5.2). `seed` is the effective seed
+/// (requested or drawn) on every task: required by fal's r2v schema, an
+/// extra key on t2v/i2v.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct VideoOutput {
     pub video: File,

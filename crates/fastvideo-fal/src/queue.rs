@@ -153,7 +153,11 @@ pub fn output_json(job: &Job, cx: &ViewCtx, url_ttl: Duration) -> Option<Value> 
             file_size: Some(a.bytes),
         },
         expanded_prompt: None,
-        seed: (job.resolved.task == fastvideo_protocol::Task::Ref2V).then_some(job.resolved.seed),
+        // The effective seed (the request's, or the one the server drew),
+        // on every task: fal's r2v schema requires it, and on t2v/i2v it
+        // is an extra key clients ignore but callers need to reproduce a
+        // clip.
+        seed: Some(job.resolved.seed),
         timings: job.metrics.inference_s.map(|s| {
             let mut m = serde_json::Map::new();
             m.insert("inference".into(), s.into());

@@ -738,8 +738,10 @@ Configuring each client (fal §12):
 | `prompt_expansion_mode` (default `balanced`, all accepted) | `accepted_noop` | Output `expanded_prompt: null`. The schema allows null "when prompt expansion was disabled, left the prompt unchanged" (fal §3.4) |
 | `sync_mode: true` | `inline_data_uri` | `video.url = data:video/mp4;base64,…` (INFERRED, fal §14 #1) |
 
-Output: `{video:{url,content_type:"video/mp4",file_name:"<nanoid21>_<model-slug>.mp4",file_size}, expanded_prompt:null, timings:{inference:<denoise s>}}`,
-plus `seed` on r2v.
+Output: `{video:{url,content_type:"video/mp4",file_name:"<nanoid21>_<model-slug>.mp4",file_size}, expanded_prompt:null, seed, timings:{inference:<denoise s>}}`.
+`seed` is the effective seed (the request's, or the one the server drew)
+on every task: fal's r2v schema requires it, and on t2v/i2v it is an extra
+key the clients ignore.
 
 Status: `Queued` → `IN_QUEUE`, `Running` → `IN_PROGRESS`, and
 `Succeeded`/`Failed`/`Cancelled` → `COMPLETED`. Failed adds `error` and
