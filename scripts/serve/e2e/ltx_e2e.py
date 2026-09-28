@@ -216,10 +216,10 @@ def native(case, body, want):
            output={k: v for k, v in (s.get("output") or {}).items() if k != "url"}, mp4=p, request=body)
 
 
-def fal_queue(case, app, body, want):
+def fal_queue(case, app, body, want, sub="text-to-video"):
     fh = {"Authorization": f"Key {KEY}", "Content-Type": "application/json"}
     t0 = time.time()
-    r = requests.post(f"{BASE}/{app}/text-to-video", json=body, headers=fh, timeout=60)
+    r = requests.post(f"{BASE}/{app}/{sub}", json=body, headers=fh, timeout=60)
     if r.status_code != 200:
         return record(case, api=f"fal {app}", ok=False, http=r.status_code, body=r.text[:400])
     rid = r.json()["request_id"]
@@ -259,7 +259,36 @@ I2V_PROMPT = ("Aerial drone shot of a tropical beach: turquoise sea waves roll i
 
 def data_uri(path):
     import base64
-    return "data:image/jpeg;base64," + base64.b64encode(open(path, "rb").read()).decode()
+    mime = "image/png" if path.endswith(".png") else "image/jpeg"
+    return f"data:{mime};base64," + base64.b64encode(open(path, "rb").read()).decode()
+
+
+# Reference-to-video (docs/ports/ltx-ref2v.md): the oracle's reference sheet and prompt.
+SHEET = os.path.join(FIXTURES, "ltx-ref-sheet-768x448.png")
+REF_PROMPT = (
+    "Reference sheet: Top Row Left (Setting): a rocky coastline at golden hour, dark boulders in the surf and "
+    "green hills behind a sandy beach. Top Row Right (Setting): a closer view of the same boulders with waves "
+    "breaking around them. Bottom Row Left (Prop): a red and white striped beach umbrella, shown twice. Bottom Row "
+    "Right (Character): a cartoon orange crab with big claws and eyes on stalks, shown twice. Generated video: A "
+    "bright 3D animated shot on the rocky beach at golden hour. The cheerful orange cartoon crab scuttles sideways "
+    "across the wet sand in front of the dark boulders, waving its big claws, next to the red and white striped "
+    "beach umbrella planted in the sand, while waves roll in and break into white foam behind it."
+)
+
+
+def ref_first_frame_vs_sheet(case):
+    """How much of the sheet shows up: SSIM of the first frame against the sheet (both at
+    768x448). Low by design (the video is a new shot, not the sheet); recorded as context."""
+    p = f"{OUT}/mp4/{case}.mp4"
+    if not os.path.exists(p):
+        return
+    lav = ("[0:v]select=eq(n\\,0),setpts=N/TB,scale=768:448,format=yuv420p[a];"
+           "[1:v]format=yuv420p[b];[a][b]ssim")
+    r = subprocess.run(["ffmpeg", "-v", "info", "-nostats", "-i", p, "-i", SHEET, "-lavfi", lav,
+                        "-frames:v", "1", "-f", "null", "-"], capture_output=True, text=True)
+    line = [x for x in r.stderr.splitlines() if "Parsed_ssim" in x]
+    record(case + "-sheet", api="frame 0 vs sheet (ffmpeg)", ok=True,
+           ssim=line[-1].split("] ", 1)[-1] if line else r.stderr[-200:])
 
 
 def frame_fidelity(mp4, pins, width, height):
@@ -342,6 +371,17 @@ CASES = {
     "pro-v2-1080p-24": lambda: ltx_v2("pro-v2-1080p-24", ltx_body(model="ltx-2-5-pro"), expect(145, 24, True)),
     "pro-native-1080p-20s": lambda: native("pro-native-1080p-20s", {"model": "ltx-pro", "prompt": PROMPT, "seconds": 20, "size": "1920x1080", "seed": 7}, expect(481, 24, True)),
     "pro-fal-1080p": lambda: fal_queue("pro-fal-1080p", "fastvideo/ltx-pro", {"prompt": PROMPT, "seed": 3, "resolution": "1080P"}, expect(121, 24, True)),
+    # Reference-to-video pod (configs/serve/runpod-ltx-ref2v.toml): fal's `ingredient`
+    # endpoint on ltx-pro -> the IC-LoRA companion, 1536x896x121, and the native API.
+    "ref2v-fal-ingredient": lambda: (
+        fal_queue("ref2v-fal-ingredient", "fal-ai/ltx-2.3-quality",
+                  {"prompt": REF_PROMPT, "image_url": data_uri(SHEET), "seed": 1024},
+                  expect(121, 24, True), sub="ingredient"),
+        ref_first_frame_vs_sheet("ref2v-fal-ingredient")),
+    "ref2v-native": lambda: (
+        native("ref2v-native", {"model": "ltx-pro", "prompt": REF_PROMPT, "size": "1536x896", "num_frames": 121,
+                                "seed": 1024, "reference_urls": [data_uri(SHEET)]}, expect(121, 24, True)),
+        ref_first_frame_vs_sheet("ref2v-native")),
     "pro-err-20s": lambda: ltx_error("pro-err-20s", "POST", "/v2/text-to-video", ltx_body(model="ltx-2-5-pro", seconds=20), 400, "invalid_request_error"),
 }
 

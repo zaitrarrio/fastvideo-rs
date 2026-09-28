@@ -957,8 +957,30 @@ fn check_knobs(req: &GenerationRequest, caps: &ModelCaps) -> Result<(), ApiError
             ));
         }
     }
+    for (param, v, max) in [
+        ("reference_strength", s.reference_strength, REFERENCE_STRENGTH_MAX),
+        ("reference_lora_strength", s.reference_lora_strength, REFERENCE_LORA_STRENGTH_MAX),
+    ] {
+        let Some(v) = v else { continue };
+        if !k.reference_strength {
+            return Err(refuse(param));
+        }
+        if !(v.is_finite() && (0.0..=max).contains(&v)) {
+            return Err(ApiError::invalid_param(
+                param,
+                format!("{param} must be within 0..={max}"),
+            ));
+        }
+    }
     Ok(())
 }
+
+/// `SamplingOverrides::reference_strength` ceiling: the reference tokens'
+/// denoise mask `1 − s` must stay in `[0, 1]`.
+pub const REFERENCE_STRENGTH_MAX: f32 = 1.0;
+/// `SamplingOverrides::reference_lora_strength` ceiling (fal's
+/// `ingredient_strength` range).
+pub const REFERENCE_LORA_STRENGTH_MAX: f32 = 2.0;
 
 fn plan_audio(req: &GenerationRequest, caps: &ModelCaps) -> Result<AudioPlan, ApiError> {
     if let Some(a) = &req.audio_in {

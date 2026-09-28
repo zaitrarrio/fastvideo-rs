@@ -711,6 +711,7 @@ impl SubmitEndpoint for VideosCreate {
             guidance_2: b.guidance_scale_2,
             flow_shift: b.flow_shift,
             boundary_ratio: b.boundary_ratio,
+            ..Default::default()
         };
         if b.generate_sound.is_some() {
             req.note_noop("generate_sound");

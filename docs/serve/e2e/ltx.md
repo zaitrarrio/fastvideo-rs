@@ -154,3 +154,26 @@ Notes:
   same level (512p: ours 0.9668, reference 0.9661 SSIM).
 - 720p and 1440p text-to-video now both ran on GPU (720p in the first run,
   row 1; 1440p here).
+
+## Reference-to-video (Ingredients IC-LoRA), 2026-09-28: pending GPU run
+
+The serve path for the LTX reference mode (docs/ports/ltx-ref2v.md) is built
+and tested on CPU (`scripts/serve/check.sh`: caps, routing, negotiate, the
+native body and the fal `ingredient` schema), and the engine path passed the
+GPU oracle on H100 (docs/oracle.md, "LTX-2.5 reference-to-video"). The serve
+E2E on a GPU pod is **not run yet**: it was held for budget on 2026-09-28.
+Everything for it is in the repo:
+
+- config `configs/serve/runpod-ltx-ref2v.toml`: only the `ltx25-ref2v`
+  companion (the `ltx-pro` recipe with the IC-LoRA at stage 1), fal app
+  `fal-ai/ltx-2.3-quality`; an 80 GB card suffices (64 GiB live, 70 GiB peak
+  in the oracle run at 1536x896x121);
+- pod: `RUNPOD_VOLUME_ID=s2k01690bi RUNPOD_GPU_TYPES="NVIDIA H100 80GB HBM3"
+  RUNPOD_GPU_MAX_DPH=3.6 FV_SERVE_TOML=configs/serve/runpod-ltx-ref2v.toml
+  bash scripts/serve/e2e/ltx-pod.sh up ghcr.io/zaitrarrio/fastvideo-rs-serve:sha-<sha>`
+  (US-CA-2 had no RTX PRO 6000 stock that day);
+- cases (`ltx_e2e.py`): `probe`, `ref2v-fal-ingredient` (fal queue
+  `fal-ai/ltx-2.3-quality/ingredient`, `image_url` = the oracle's sheet as a
+  data URI, the oracle's prompt, seed 1024: expect 1536x896, 121 @ 24 with
+  audio, plus frame 0 against the sheet), `ref2v-native` (`/fv/v1/jobs`,
+  `model: ltx-pro`, `reference_urls`, `size: 1536x896`, `num_frames: 121`).

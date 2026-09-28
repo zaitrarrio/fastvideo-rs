@@ -31,7 +31,7 @@ use axum::routing::get;
 use axum::{Json, Router};
 use fastvideo_protocol::{
     ApiError, BatchProtocol, CanvasSpec, CausalLimits, ErrorCtx, GenerationRequest, HttpReply, Job, JobId, JobState, JobStatus,
-    JobView, Keyframe, Length, ListQuery, MediaRef, NormalizeCtx, ProtocolId, Ratio, SamplingOverrides, Snap,
+    JobView, Keyframe, Length, ListQuery, MediaKind, MediaRef, Reference, NormalizeCtx, ProtocolId, Ratio, SamplingOverrides, Snap,
     SortOrder, StreamCaps, SubmitEndpoint, Task, TimingSpec, ViewCtx,
 };
 use fastvideo_serve_kit::handlers::{self, error_reply, find_job, SubmitOpts};
@@ -104,6 +104,20 @@ pub struct NativeBody {
     /// Last-frame image: keyframes (with or without `image_url`).
     #[serde(default)]
     pub last_image_url: Option<String>,
+    /// Reference images (https URLs or data URIs): reference-to-video
+    /// (`Task::Ref2V`). LTX-2.5 (`ltx-pro`, served by its IC-LoRA companion
+    /// `ltx25-ref2v`) takes one: a reference sheet of the characters, props
+    /// and location, with a "Reference sheet: … Generated video: …" prompt.
+    #[serde(default)]
+    pub reference_urls: Vec<String>,
+    /// Reference conditioning strength, 0 to 1 (default 1: the reference is
+    /// kept clean).
+    #[serde(default)]
+    pub reference_strength: Option<f32>,
+    /// Reference LoRA strength, 0 to 2 (LTX: the IC-LoRA's stage-1 strength;
+    /// default 1).
+    #[serde(default)]
+    pub reference_lora_strength: Option<f32>,
 }
 
 fn media(s: &str, field: &str) -> Result<MediaRef, ApiError> {
@@ -163,7 +177,13 @@ impl SubmitEndpoint for NativeSubmit {
             (None, None) => Length::ModelDefault,
         };
         r.timing = TimingSpec { length, fps: b.fps };
-        r.sampling = SamplingOverrides { steps: b.steps, guidance: b.guidance, ..Default::default() };
+        r.sampling = SamplingOverrides {
+            steps: b.steps,
+            guidance: b.guidance,
+            reference_strength: b.reference_strength,
+            reference_lora_strength: b.reference_lora_strength,
+            ..Default::default()
+        };
         if let Some(u) = b.image_url {
             r.task = Task::I2V;
             r.keyframes.push(Keyframe { at: fastvideo_protocol::Anchor::First, image: media(&u, "image_url")? });
@@ -171,6 +191,16 @@ impl SubmitEndpoint for NativeSubmit {
         if let Some(u) = b.last_image_url {
             r.task = Task::Keyframes;
             r.keyframes.push(Keyframe { at: fastvideo_protocol::Anchor::Last, image: media(&u, "last_image_url")? });
+        }
+        if !b.reference_urls.is_empty() {
+            // `negotiate` refuses references mixed with first/last frames.
+            r.task = Task::Ref2V;
+            for (i, u) in b.reference_urls.iter().enumerate() {
+                r.references.push(Reference {
+                    kind: MediaKind::Image,
+                    media: media(u, &format!("reference_urls[{i}]"))?,
+                });
+            }
         }
         Ok(r)
     }
@@ -422,4 +452,48 @@ pub fn routes_with(caps: CapsFn, body_max: usize) -> Router<ServeCtx> {
         )
         .route("/fv/v1/jobs/{id}", handlers::status(proto.clone(), view.clone(), "id").delete(delete))
         .route("/fv/v1/jobs/{id}/content", handlers::result(proto, view, "id"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn body(v: Value) -> NativeBody {
+        serde_json::from_value(v).unwrap()
+    }
+
+    #[test]
+    fn reference_urls_make_a_reference_to_video_request() {
+        let cx = NormalizeCtx::new(time::OffsetDateTime::UNIX_EPOCH);
+        let r = NativeSubmit
+            .normalize(
+                body(json!({
+                    "model": "ltx-pro",
+                    "prompt": "Reference sheet: a crab. Generated video: the crab walks.",
+                    "size": "1536x896",
+                    "reference_urls": ["https://e.x/sheet.png"],
+                    "reference_strength": 0.9,
+                    "reference_lora_strength": 1.2,
+                })),
+                &cx,
+            )
+            .unwrap();
+        assert_eq!(r.task, Task::Ref2V);
+        assert_eq!(r.references.len(), 1);
+        assert_eq!(r.references[0].kind, MediaKind::Image);
+        assert_eq!(r.sampling.reference_strength, Some(0.9));
+        assert_eq!(r.sampling.reference_lora_strength, Some(1.2));
+        assert_eq!(r.canvas, CanvasSpec::Exact { width: 1536, height: 896 });
+        let bad = NativeSubmit.normalize(
+            body(json!({"model": "ltx-pro", "prompt": "p", "reference_urls": ["not a url"]})),
+            &cx,
+        );
+        assert_eq!(bad.unwrap_err().param.as_deref(), Some("reference_urls[0]"));
+        // Without references the task and knobs are untouched.
+        let t2v = NativeSubmit
+            .normalize(body(json!({"model": "ltx-pro", "prompt": "p"})), &cx)
+            .unwrap();
+        assert_eq!(t2v.task, Task::T2V);
+        assert!(t2v.references.is_empty() && t2v.sampling.is_empty());
+    }
 }

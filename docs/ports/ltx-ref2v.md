@@ -46,15 +46,12 @@ the 100 GB stop line. Destination (add-only, both volumes):
 temp folder into place, serves it; the EU pod copies from it, checks, renames;
 `probe` reports Hub access).
 
-**Status: blocked on Hub access.** The first fetch (2026-09-28, CPU pod on
-the US volume) got **HTTP 403** from the Hub for the LoRA: the HF token on the
-volumes (`/workspace/hf/token`) belongs to an account that has not accepted
-this repo's gate. The gate is auto-approved, but it must be accepted once on
-https://huggingface.co/Lightricks/LTX-2.5-22b-IC-LoRA-Ingredients by the
-token's account (a human click; we do not do that on anyone's behalf). After
-that, `bash scripts/gpu/fetch-ltx-iclora.sh` does both volumes in a few
-minutes (about $0.02 of CPU pods). Nothing was written to either volume
-except this script's own temp folder, which its `probe` mode removes.
+**Status: on both volumes** (2026-09-28). The first fetch got HTTP 403 (the
+volumes' HF token had not accepted the gate); once it had, the tree landed on
+the US volume `s2k01690bi` and then the EU volume `jg48s6o1w0`, SHA-256
+identical (`ff873a5b…8715e95`), recorded in `scripts/gpu/weights-manifest.tsv`
+and the `ltx25-ic-lora-ingredients` cell of `scripts/gpu/verify-weights.sh`
+(plus the composite `ltx25-ref2v` cell: the two-stage base and the LoRA).
 
 ## 3. How the reference mode works (upstream)
 
@@ -95,7 +92,52 @@ What remains:
 Estimated at one engine session plus one GPU oracle run, once the weights are
 on the volumes.
 
-## 4. Options until then
+## 4. Implementation (2026-09-28)
+
+The model card adds two facts the pipeline code does not show: the LoRA is
+**rank 128 on every block's `attn1` / `attn2` q/k/v/out and feed-forward**
+(video stream only), and its reference input is **a static video**: the sheet
+looped to the output's length and frame rate (at least 121 frames), so the
+reference is a full clip of latent frames, not one frame. Trained bucket:
+768x448, 121 frames, 24 fps (the stage-1 size of a 1536x896 output),
+`reference_downscale_factor` 1.
+
+| Piece | Where | What |
+|---|---|---|
+| IC-LoRA attach | `ltx2::pipeline::load_transformer_ic`, `ltx2::lora::{install, ic_lora_info}` | `PipelineOptions::ic_lora` (or `FASTVIDEO_LTX2_IC_LORA`) loads the DiT with the LoRA's factors attached at strength 0: every touched linear keeps its unfused base `W0` beside the live weight (480 linears, ~26 GB on the 22B DiT, plus the f32 factors ~2.6 GB). `reference_downscale_factor` / `reference_temporal_scale_factor` come from the safetensors `__metadata__` (default 1; a temporal factor other than 1 is refused) |
+| Stage-1 fuse, stage-2 unfuse | `Ltx2Pipeline::set_ic_strength` | `W = W0 + s·B·A` rebuilt from the kept base (f32 accumulate, one bf16 rounding; upstream rounds `(B·s)@A` to bf16 then adds in bf16) before stage 1, and `W = W0` again before stage 2 (exact). Every request sets it, so a plain request on the same pipeline runs the base weights |
+| Reference tokens | `i2v_encode::ReferenceTokens`, `StageConditioning::with_reference` | the sheet decoded (EXIF orientation applied), `resize_and_center_crop` to the stage-1 size over the downscale factor, no CRF, VAE-encoded once: a static clip of identical frames encodes to one latent frame repeated (every causal conv and space-to-depth sees identical frames), so the `(num_frames−1)/8+1` latent frames are that frame repeated. Appended after the image conditionings, clean latent = the reference, noisy placeholder zeros, denoise mask `1 − strength` (per-token timestep 0 at strength 1) |
+| Positions | `fastvideo_models::ltx2::rope::ReferenceBlock`, `Ropes::with_conditioning` | the reference grid's own pixel extents with the causal fix, seconds at the target fps, spatial × downscale; at downscale 1 and the full clip they equal the target grid's positions, so each sheet token overlays the target token it came from |
+| Sampling | `generate_hooked` | stage 1: `DiffusionStage`'s default Euler over the 8 distilled sigmas (not the ancestral sampler `DistilledPipeline` uses on 2.5), bf16 state, noise drawn over grid + reference rows (the reference rows then lerp back to clean); `clear_conditioning` drops the reference; upsample; stage 2 dense, no LoRA, no reference, image conditionings only |
+| CLI | `fv-gpucheck ltx2 gen --two-stage --dense-stage2 --reference SHEET --ic-lora FILE [--reference-strength S] [--ic-lora-strength S]` | |
+| Serve | `ltx25-ref2v` (catalog), `configs/serve/runpod-ltx-ref2v.toml` | the Ref2V companion of `ltx-pro` (tier Max, `route_task`): `Task::Ref2V` only, `RefLimits::ltx_ingredients()` (one image), knobs `seed` + `reference_strength`/`reference_lora_strength`, canvas default 896 short edge, frames 9 to 241. Native `/fv/v1/jobs`: `reference_urls`, `reference_strength` (0 to 1), `reference_lora_strength` (0 to 2). fal: `fal-ai/ltx-2.3-quality/ingredient` (`image_url`, `ingredient_strength`, `reference_strength`, `num_frames`, `frames_per_second`, `generate_audio`, 1536x896) |
+
+Known differences from upstream, by design:
+
+* The sheet is read as an image and looped in memory; upstream reads a
+  static *video file*. With a lossless clip (the oracle's) the pixels are
+  identical; with a lossy H.264 clip upstream sees codec noise we do not add.
+* The fused weight is rounded once (f32 accumulate) instead of twice (bf16
+  product, bf16 add): sub-ulp per element.
+* Memory: the kept base costs ~26 GB of device memory for the pipeline's
+  lifetime (fits an 80 GB H100 or a 96 GB RTX PRO 6000 at 1536x896). A host
+  copy of the base (restore by H2D per request) would drop that at a few
+  seconds per request; not done.
+
+## 5. Results
+
+* **GPU oracle** (docs/oracle.md, "LTX-2.5 reference-to-video"; H100, US-CA-2,
+  2026-09-28): identical token layout (5376 grid + 5376 reference rows at
+  stage 1, all 480 LoRA pairs attached), stage-1 block 0 at 2.1e-3 and the
+  stage-1 latents on the T2V profile (steps 1-4 ≤ 1.8e-3, final 0.31 vs 0.34
+  for T2V), a bump to ~0.1 in video blocks 25-33 at step 1 that recovers by
+  block 47, encoder 1.7e-2, pixels exact, stage 2 and decode as T2V (clip
+  SSIM 0.982 / PSNR 38.9 dB against the reference's with the stage-2 entry
+  injected). Pass.
+* **Serve**: CPU-tested (check.sh); the GPU E2E is pending (docs/serve/e2e/ltx.md).
+* **Spend**: about $1.2 of H100 (upstream pod 13 min, runtime pod 8 min).
+
+## 6. Options before the weights landed (historical)
 
 1. Serve reference mode as **first-frame I2V from the sheet**: wrong
    (the sheet would become frame 0), so we do not.

@@ -438,6 +438,27 @@ impl Ropes {
         ))
     }
 
+    /// [`Self::with_keyframes`] plus an IC-LoRA reference block after the
+    /// keyframe blocks.
+    pub fn with_conditioning(
+        cfg: &Ltx2TransformerConfig,
+        grid: [usize; 3],
+        extra: &[usize],
+        reference: Option<fastvideo_models::ltx2::rope::ReferenceBlock>,
+        audio_tokens: usize,
+        fps: f32,
+    ) -> Result<Self> {
+        Self::upload(&Ltx2RopeTables::with_conditioning(
+            cfg,
+            grid,
+            extra,
+            reference,
+            audio_tokens,
+            fps,
+            fastvideo_models::ltx2::rope::ScalarDivision::Reciprocal,
+        ))
+    }
+
     pub fn upload(t: &Ltx2RopeTables) -> Result<Self> {
         Ok(Self {
             video: DeviceRope::upload(&t.video)?,
