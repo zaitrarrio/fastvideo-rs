@@ -245,6 +245,11 @@ pub struct H3PipelineOptions {
     pub recipe: Option<String>,
     /// Load `transformer_ref/` (Ref2VA) instead of `transformer/` (T2AV/FL2VA).
     pub ref2va: bool,
+    /// Root holding `transformer_ref/` (and the Ref2VA turbo adapter) when it
+    /// is not the snapshot itself, e.g. `weights/h3-ref2va` beside
+    /// `weights/h3-base`. The VAEs and the text encoder still come from the
+    /// snapshot (and `text_root`).
+    pub ref_root: Option<PathBuf>,
     /// Sol-H3 / FastH3 Preview adapter file. When unset, the recipe's adapter is
     /// searched under and beside the weight root.
     pub adapter: Option<PathBuf>,
@@ -425,6 +430,44 @@ pub struct H3Output {
     pub dit_residency: &'static str,
     /// Block streaming over the denoise (streamed runs).
     pub offload: Option<OffloadStats>,
+}
+
+/// Oracle injection of one modality's starting rows (`FASTVIDEO_INJECT_DIR`).
+/// The reference dumps its packed rows: the target noise alone, or
+/// `[condition | target]` when the request has condition rows. The target
+/// part replaces `target`; the condition part replaces `cond` only with
+/// `FASTVIDEO_INJECT_COND=1`. Returns `(target, cond)`.
+fn inject_start_rows(
+    name: &str,
+    target: Vec<f32>,
+    cond: Option<CudaTensor>,
+) -> Result<(Vec<f32>, Option<CudaTensor>)> {
+    let Some((shape, v)) = crate::wan::inject::load(name)? else {
+        return Ok((target, cond));
+    };
+    let cond_n = cond.as_ref().map_or(0, CudaTensor::numel);
+    if v.len() == target.len() {
+        return Ok((v, cond));
+    }
+    if cond_n == 0 || v.len() != cond_n + target.len() {
+        return Err(msg(format!(
+            "FASTVIDEO_INJECT_DIR: {name}: reference shape {shape:?} ({} values); ours needs {} target (+ {cond_n} condition)",
+            v.len(),
+            target.len()
+        )));
+    }
+    let tail = v[cond_n..].to_vec();
+    let cond = match cond {
+        Some(c) if std::env::var("FASTVIDEO_INJECT_COND").is_ok_and(|x| x == "1") => {
+            crate::wan::log::info(format_args!(
+                "inject: {name} condition rows ({cond_n} values) from the reference"
+            ));
+            Some(CudaTensor::from_vec(v[..cond_n].to_vec(), c.shape.clone())?.to_device()?)
+        }
+        c => c,
+    };
+    crate::wan::log::info(format_args!("inject: {name} target rows from the reference"));
+    Ok((tail, cond))
 }
 
 /// The request's starting noise, from one generator in the reference's order:
@@ -772,7 +815,7 @@ impl H3Pipeline {
             }
             _ => {
                 let dit = if options.ref2va {
-                    let p = root.join("transformer_ref");
+                    let p = options.ref_root.as_deref().unwrap_or(root).join("transformer_ref");
                     if !p.is_dir() {
                         return Err(msg(format!(
                             "Ref2VA needs {} (MiniMax-H3 Base Ref2VA partition)",
@@ -950,8 +993,12 @@ impl H3Pipeline {
             } else {
                 SolH3AdapterSpec::t2v_i2v()
             };
+            let adapter_root = match (options.ref2va, options.ref_root.as_deref()) {
+                (true, Some(r)) => r,
+                _ => root,
+            };
             let path = spec
-                .resolve(root, options.adapter.as_deref())
+                .resolve(adapter_root, options.adapter.as_deref())
                 .map_err(msg)?;
             let fuse = super::lora::H3LoraFuse::open(&map, &path, spec.alpha, spec.scale)?;
             crate::wan::log::info(format_args!(
@@ -1710,12 +1757,17 @@ impl H3Pipeline {
             seeded_noise(cfg, &geometry, request.seed).map_err(msg)?;
         // FASTVIDEO_INJECT_DIR: the reference's packed starting rows (torch's
         // draws, patchified by the reference), in place of our seeded noise.
-        if let Some(v) = crate::wan::inject::load_numel("video_step00_in", video_noise.len())? {
+        // With condition rows (FL2VA / Ref2VA) the reference's rows are
+        // `[condition | target]`; only the target part is injected unless
+        // FASTVIDEO_INJECT_COND=1, which also takes its condition rows (the
+        // control that isolates the DiT from our reference encode).
+        let (cond_rows, cond_audio_rows) = {
+            let (v, c) = inject_start_rows("video_step00_in", video_noise, cond_rows)?;
             video_noise = v;
-        }
-        if let Some(v) = crate::wan::inject::load_numel("audio_step00_in", audio_noise.len())? {
-            audio_noise = v;
-        }
+            let (a, ca) = inject_start_rows("audio_step00_in", audio_noise, cond_audio_rows)?;
+            audio_noise = a;
+            (c, ca)
+        };
         let video_rows = CudaTensor::from_vec(
             video_noise,
             vec![geometry.video_rows(), cfg.video_patch_dim()],

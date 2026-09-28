@@ -32,3 +32,4 @@ auxiliary/lpips/lpips_v0.1_alex.pth	url:https://raw.githubusercontent.com/richzh
 # h3-base/text_encoder_fp8 and ltx25/text_encoder_fp8: optional pre-quantized FP8 text encoders (E13), derived with
 # `fv-gpucheck quantize-text-encoder`, not fetched (no row here). On both volumes; sizes and SHA-256 in
 # verify-weights.sh (cell text-fp8). Without them the loader quantizes at load.
+# h3-ref2va (not a hub row: two repos, plain files): MiniMaxAI/MiniMax-H3 @ 42ed227ee7df40d41602854ae760620d6eb651fe transformer_ref/* processor/* model_index.json LICENSE README.md, plus lightx2v/Minimax-h3-Turbo @ 3ec17a324ced54151364f24f8b5fb6bf7e26414f minimax_h3_ref2v_turbo_{4step_v0.1,8step_v1.0_768p}_bf16.safetensors under Minimax-h3-Turbo/. Written by scripts/gpu/fetch-h3-ref2va.sh (LFS SHA-256 checked; the tree keeps sha256.txt); checked by verify-weights.sh h3-ref2va.

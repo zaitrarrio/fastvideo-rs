@@ -1,0 +1,68 @@
+# fv-serve on Runpod: H3 reference-to-video (docs/ports/h3-ref2v.md).
+# Secrets as in runpod.toml. Weights: $FV_WEIGHTS/h3-base (text encoder,
+# VAEs) and $FV_WEIGHTS/h3-ref2va (transformer_ref + the lightx2v turbo LoRA).
+#
+# The Ref2VA DiT is a second full 66 GB DiT, so on a 96 GB card (RTX PRO
+# 6000) or an 80 GB H100 this is its own process / pool beside the T2V/I2V
+# one (runpod-h3-max.toml, runpod.toml); a gateway sends `reference-to-video`
+# here. On a 141-180 GB card the companions can join the T2V/I2V process
+# instead (same [[models]] entries): Ref2V requests on `h3-max` / `h3-turbo`
+# route to them (fastvideo_protocol::route_task).
+#
+# Turbo (Sol-H3 Ref2VA, 4 forwards) stays resident; max (base Ref2VA, 49
+# forwards) is loaded on demand, swapping the turbo DiT out.
+
+[server]
+bind = "0.0.0.0:8000"
+state_dir = "/workspace/fv-state"
+shutdown_grace_s = 25
+
+[auth]
+mode = "keys"
+
+[artifacts]
+backend = "auto"
+url_ttl_s = 86400
+
+[jobs]
+backend = "auto"
+progress_interval_ms = 1000
+stale_after_s = 900
+
+[engine]
+backend = "cuda"
+post_encoder = "auto"
+# h3-ref2v-max is not resident: its first request swaps the turbo DiT out.
+swap = true
+
+[[models]]
+id = "h3-ref2v-turbo"
+family = "h3"
+recipe = "h3-ref2v-turbo"
+weights = "${FV_WEIGHTS}/h3-base"
+resident = true
+
+[[models]]
+id = "h3-ref2v-max"
+family = "h3"
+recipe = "h3-ref2v-max"
+weights = "${FV_WEIGHTS}/h3-base"
+resident = false
+
+[aliases]
+"MiniMax-H3-Max" = "h3-ref2v-max"
+"MiniMax-H3-Turbo" = "h3-ref2v-turbo"
+
+[protocols]
+openai_videos = true
+fastwan = false
+minimax = true
+fal = true
+fal_director = false
+ltx = false
+reactor = false
+native = true
+
+[limits]
+queue_max = 32
+body_max_mb = 64

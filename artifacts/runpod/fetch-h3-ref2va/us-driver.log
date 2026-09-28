@@ -1,0 +1,19 @@
+[19:06:18] pod davmpuszksq3y8 $0.24/hr dc=US-CA-2 vol=s2k01690bi
+[19:06:18] backstop pid 24165 (cap 5400s)
+[19:06:29] ok transformer_ref/config.json 546 74c11bff52433657 small 0s
+[19:07:15] ok transformer_ref/diffusion_pytorch_model-00002-of-00014.safetensors 4702158032 1638ae1dc8ae26c4 lfs 24s
+[19:07:35] ok transformer_ref/diffusion_pytorch_model-00003-of-00014.safetensors 4933368192 1ef3c4954ffe5a66 lfs 21s
+[19:08:18] ok transformer_ref/diffusion_pytorch_model-00005-of-00014.safetensors 4702158080 304d41ce03d59ac9 lfs 21s
+[19:08:40] ok transformer_ref/diffusion_pytorch_model-00006-of-00014.safetensors 4933368232 12a134b7c76d86ed lfs 23s
+[19:09:23] ok transformer_ref/diffusion_pytorch_model-00008-of-00014.safetensors 4702158080 1897a6bf3b4fc834 lfs 22s
+[19:09:49] ok transformer_ref/diffusion_pytorch_model-00009-of-00014.safetensors 4933368232 edfb38235adc96b9 lfs 25s
+[19:10:13] ok transformer_ref/diffusion_pytorch_model-00010-of-00014.safetensors 4567069608 f8710775cf341367 lfs 25s
+[19:11:00] ok transformer_ref/diffusion_pytorch_model-00012-of-00014.safetensors 4933368232 ea2e18228f8bdba1 lfs 26s
+[19:11:21] ok transformer_ref/diffusion_pytorch_model-00013-of-00014.safetensors 4567069608 1e12083b1875678f lfs 21s
+[19:11:57] ok Minimax-h3-Turbo/minimax_h3_ref2v_turbo_8step_v1.0_768p_bf16.safetensors 1383677808 9bac880b1a5d7ac0 lfs 7s
+[19:11:57] ok Minimax-h3-Turbo/minimax_h3_ref2v_turbo_8step_v1.0_768p_bf16.safetensors 1383677808 9bac880b1a5d7ac0 lfs 7s
+[19:11:57] ok Minimax-h3-Turbo/minimax_h3_ref2v_turbo_8step_v1.0_768p_bf16.safetensors 1383677808 9bac880b1a5d7ac0 lfs 7s
+[19:11:57] ok Minimax-h3-Turbo/minimax_h3_ref2v_turbo_8step_v1.0_768p_bf16.safetensors 1383677808 9bac880b1a5d7ac0 lfs 7s
+[19:13:49] h3-base snapshots: ['h3-base/models--MiniMaxAI--MiniMax-H3/snapshots/42ed227ee7df40d41602854ae760620d6eb651fe']
+[19:14:12] DONE=0
+[19:14:18] pod davmpuszksq3y8 deleted (verified)
