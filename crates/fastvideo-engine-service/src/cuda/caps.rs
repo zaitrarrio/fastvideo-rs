@@ -110,6 +110,14 @@ pub struct H3Recipe {
     /// `auto` | `resident` | `streamed` (None: env / auto).
     pub dit_offload: Option<String>,
     pub steps: u32,
+    /// Ref2VA: the model loads `transformer_ref/` and serves reference-to-
+    /// video only (a Ref2VA pipeline refuses requests without references).
+    #[serde(default)]
+    pub ref2va: bool,
+    /// Root of `transformer_ref/` and the Ref2VA turbo adapter when not
+    /// `weights` (the `h3-ref2va` tree beside `h3-base`).
+    #[serde(default)]
+    pub ref_weights: Option<PathBuf>,
     /// Where the image-to-video multimodal text encoder lives: `auto`
     /// (resident when the text encoder is and the vision tower fits),
     /// `resident`, or `stream` (read from the volume per request).
@@ -334,6 +342,9 @@ impl CudaModel {
         let dir = match &self.recipe {
             CudaRecipe::Ltx2(r) if r.dit.is_file() => return r.dit.metadata().ok().map(|m| m.len()),
             CudaRecipe::Ltx2(r) => r.dit.join("transformer"),
+            CudaRecipe::H3(r) if r.ref2va => {
+                r.ref_weights.as_deref().unwrap_or(&r.weights).join("transformer_ref")
+            }
             _ => self.weights().join("transformer"),
         };
         let total: u64 = std::fs::read_dir(&dir)
@@ -365,7 +376,7 @@ impl CudaModel {
         let (steps, attention, vae, summary) = match &self.recipe {
             CudaRecipe::H3(r) => (
                 r.steps,
-                if r.dense {
+                if r.dense || r.ref2va {
                     "dense".to_owned()
                 } else if self.recipe_name.starts_with("sol-h3") {
                     "sol-engine-tau-ladder".to_owned()
@@ -374,6 +385,15 @@ impl CudaModel {
                 },
                 if r.taeh3.is_some() { "taeh3" } else { "full" }.to_owned(),
                 match self.tier {
+                    _ if r.ref2va && r.recipe == "base" => "H3 reference-to-video, highest quality: \
+                        the base Ref2VA DiT (transformer_ref), 49 forwards on the 50-point grid, dense \
+                        attention, official VAE (the upstream default)"
+                        .to_owned(),
+                    _ if r.ref2va => format!(
+                        "H3 reference-to-video, fast: the Ref2VA DiT with the lightx2v turbo LoRA fused \
+                         (Sol-H3 Ref2VA route), {} forwards, dense attention, official VAE",
+                        r.steps
+                    ),
                     _ if self.recipe_name.starts_with("fasth3-8step") => "FastH3 8-step DMD, dense \
                                         attention (no compression gate), official VAE"
                         .to_owned(),
@@ -465,7 +485,12 @@ impl CudaModel {
 pub const LTX_DRAFT_PROFILE: &str = "ltx2/ltx25_distill_sol_nvfp4";
 
 fn h3_caps(id: &str, r: &H3Recipe) -> ModelCaps {
-    let mut c = ModelCaps::h3(id, false);
+    let mut c = ModelCaps::h3(id, r.ref2va);
+    if r.ref2va {
+        // `transformer_ref/` serves references only: the pipeline refuses a
+        // request without them, and FL2VA keyframes need `transformer/`.
+        c.tasks = [Task::Ref2V].into_iter().collect();
+    }
     let base = CanvasCaps {
         short_edges: vec![
             h3cfg::H3_SHORT_EDGE as u32,
@@ -632,6 +657,8 @@ fn h3(
         adaln_cache: None,
         dit_offload: None,
         steps,
+        ref2va: false,
+        ref_weights: None,
         i2v_encoder: auto_str(),
         warmup: false,
     }
@@ -695,6 +722,16 @@ pub fn catalog(layout: &WeightLayout) -> Vec<CudaModel> {
         ..h3_turbo.clone()
     };
     let sol_h3 = h3(layout, "h3-base", "sol-h3", Some(SOL_H3_4STEP_PROFILE), 4);
+    // Ref2VA (docs/ports/h3-ref2v.md): `transformer_ref/` and the turbo LoRA
+    // live in `h3-ref2va`; the text encoder and both VAEs come from `h3-base`.
+    let h3_ref = |recipe: &str, profile: &str, steps: u32| H3Recipe {
+        dense: true,
+        ref2va: true,
+        ref_weights: Some(layout.at("h3-ref2va")),
+        ..h3(layout, "h3-base", recipe, Some(profile), steps)
+    };
+    let h3_ref_max = h3_ref("base", "h3/h3_ref2va_base", 49);
+    let h3_ref_turbo = h3_ref("sol-h3-ref2va", "h3/sol_h3_ref2va", 4);
     let ltx_draft = Ltx2Recipe {
         tae: Some(tae("taeltx2_3_wide.safetensors")),
         ..ltx25(layout, LtxStage2::Sol, LTX_DRAFT_PROFILE)
@@ -758,6 +795,20 @@ pub fn catalog(layout: &WeightLayout) -> Vec<CudaModel> {
             None,
             "fasth3-8step-dense",
             CudaRecipe::H3(h3_8step),
+        ),
+        // Reference-to-video companions of the H3 max / turbo tiers: the
+        // routing sends Ref2V requests for `h3-max` / `h3-turbo` here.
+        CudaModel::new(
+            "h3-ref2v-max",
+            Some(Tier::Max),
+            "h3-ref2va-base-49step",
+            CudaRecipe::H3(h3_ref_max),
+        ),
+        CudaModel::new(
+            "h3-ref2v-turbo",
+            Some(Tier::Turbo),
+            "sol-h3-ref2va",
+            CudaRecipe::H3(h3_ref_turbo),
         ),
         CudaModel::new(
             "ltx25-distill-dense",
@@ -894,6 +945,9 @@ pub fn model_from_config(layout: &WeightLayout, e: &ModelEntryCfg) -> Result<Cud
             if let Some(t) = x("text_weights") {
                 r.text_weights = Some(t.into());
             }
+            if let Some(t) = x("ref_weights").filter(|_| r.ref2va) {
+                r.ref_weights = Some(t.into());
+            }
             if let Some(t) = x("i2v_encoder") {
                 r.i2v_encoder = t;
             }
@@ -905,6 +959,12 @@ pub fn model_from_config(layout: &WeightLayout, e: &ModelEntryCfg) -> Result<Cud
                         return Err(format!("model `{}`: warmup = {other:?} (true | false)", e.id))
                     }
                 };
+            }
+            if r.ref2va && r.warmup {
+                return Err(format!(
+                    "model `{}`: warmup runs text- and image-to-video; a Ref2VA model serves references only",
+                    e.id
+                ));
             }
         }
         CudaRecipe::Ltx2(r) => {
@@ -1200,12 +1260,67 @@ mod tests {
         let cat = catalog(&WeightLayout::default());
         for m in &cat {
             let caps = m.caps();
-            let req = GenerationRequest::text(ProtocolId::Native, m.id.as_str(), "a cat");
-            let staged = StagedInputs::default();
+            let mut req = GenerationRequest::text(ProtocolId::Native, m.id.as_str(), "a cat");
+            let mut staged = StagedInputs::default();
+            if !caps.supports(Task::T2V) {
+                // Ref2VA models serve reference-to-video only.
+                assert_eq!(caps.tasks.iter().copied().collect::<Vec<_>>(), vec![Task::Ref2V]);
+                req.task = Task::Ref2V;
+                req.references = vec![Reference {
+                    kind: MediaKind::Image,
+                    media: MediaRef::parse("https://e.x/r.png", "references").unwrap(),
+                }];
+                staged.references = vec![(
+                    MediaKind::Image,
+                    StagedMedia {
+                        path: "/stage/r.png".into(),
+                        mime: "image/png".into(),
+                        bytes: 1,
+                        probe: MediaProbe { width: Some(1024), height: Some(1024), ..Default::default() },
+                    },
+                )];
+            }
             let r = negotiate(&req, &caps, &staged).unwrap_or_else(|e| panic!("{}: {e:?}", m.id));
             assert_eq!(r.num_frames, caps.frames.default, "{}", m.id);
             assert_eq!(r.recipe.as_deref(), Some(m.recipe_name.as_str()));
         }
+    }
+
+    #[test]
+    fn ref2va_models_are_task_companions_of_the_h3_tiers() {
+        let cat = catalog(&WeightLayout::default());
+        let get = |id: &str| cat.iter().find(|m| m.id.as_str() == id).unwrap().clone();
+        for (id, tier, recipe, steps) in [
+            ("h3-ref2v-max", Tier::Max, "base", 49),
+            ("h3-ref2v-turbo", Tier::Turbo, "sol-h3-ref2va", 4),
+        ] {
+            let m = get(id);
+            let CudaRecipe::H3(r) = &m.recipe else { panic!("{id}") };
+            assert!(r.ref2va && r.dense, "{id}");
+            assert_eq!((r.recipe.as_str(), r.steps), (recipe, steps), "{id}");
+            assert!(r.ref_weights.as_ref().unwrap().ends_with("h3-ref2va"), "{id}");
+            assert!(r.weights.ends_with("h3-base"), "{id}");
+            let c = m.caps();
+            assert!(c.supports(Task::Ref2V) && !c.supports(Task::T2V) && !c.supports(Task::I2V));
+            assert_eq!(c.refs, fastvideo_protocol::RefLimits::h3());
+            assert_eq!(c.tier, Some(tier));
+            let d = m.describe();
+            assert_eq!((d.attention.as_str(), d.steps), ("dense", Some(steps)), "{id}");
+        }
+        // The tier aliases still name the base models; Ref2V requests on them
+        // route to the companion, other tasks stay.
+        let t = table(&cat);
+        assert_eq!(t.tier(Family::H3, Tier::Max).unwrap().as_str(), "sol-h3");
+        assert_eq!(t.tier(Family::H3, Tier::Turbo).unwrap().as_str(), "fasth3-4step-vsa");
+        let models: Vec<&ModelCaps> = t.models().collect();
+        for (alias, want) in [("h3-max", "h3-ref2v-max"), ("h3-turbo", "h3-ref2v-turbo")] {
+            let base = t.resolve(alias).unwrap();
+            assert_eq!(fastvideo_protocol::route_task(base, Task::Ref2V, models.iter().copied()).id.as_str(), want);
+            assert_eq!(fastvideo_protocol::route_task(base, Task::I2V, models.iter().copied()).id, base.id);
+            assert_eq!(t.get(&ModelId::new(want)).unwrap().tier, base.tier, "{want} keeps its tier tag");
+        }
+        let tier_max = fastvideo_protocol::resolve_tier(Family::H3, Tier::Max, models.iter().copied()).unwrap();
+        assert_eq!(tier_max.id.as_str(), "sol-h3");
     }
 
     #[test]

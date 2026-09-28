@@ -37,6 +37,14 @@ pub static PROFILES: &[(&str, &str)] = &[
         include_str!("../../../../profiles/h3/sol_h3_4step.toml"),
     ),
     (
+        "h3/sol_h3_ref2va",
+        include_str!("../../../../profiles/h3/sol_h3_ref2va.toml"),
+    ),
+    (
+        "h3/h3_ref2va_base",
+        include_str!("../../../../profiles/h3/h3_ref2va_base.toml"),
+    ),
+    (
         "h3/sol_h3_4step_engine",
         include_str!("../../../../profiles/h3/sol_h3_4step_engine.toml"),
     ),
