@@ -199,7 +199,12 @@ pub fn endpoint_patch(cur: Option<&EndpointSettings>, want: &EndpointSettings) -
 
 /// Workers of a serverless endpoint as `/health` counts them (ids are
 /// positional: Runpod does not list serverless workers by id here).
-pub fn health_workers(h: &HealthWorkers, now_s: f64) -> Vec<Worker> {
+/// `workers.running` stays up for a while after a worker's last job ends
+/// (seen live: `running: 2` with `inProgress: 0`), so only
+/// `min(running, jobs.inProgress)` of them count as busy.
+pub fn health_workers(health: &Health, now_s: f64) -> Vec<Worker> {
+    let h = &health.workers;
+    let busy_n = u64::from(h.running).min(health.jobs.in_progress) as u32;
     let mk = |kind: &str, i: u32, state: WorkerState, busy: u32| Worker {
         id: format!("{kind}-{i}"),
         state,
@@ -211,7 +216,7 @@ pub fn health_workers(h: &HealthWorkers, now_s: f64) -> Vec<Worker> {
         usd_per_hr: None,
     };
     let mut v = Vec::new();
-    v.extend((0..h.running).map(|i| mk("running", i, WorkerState::Ready, 1)));
+    v.extend((0..h.running).map(|i| mk("running", i, WorkerState::Ready, u32::from(i < busy_n))));
     v.extend((0..h.idle).map(|i| mk("idle", i, WorkerState::Ready, 0)));
     v.extend((0..h.initializing).map(|i| mk("initializing", i, WorkerState::Starting, 0)));
     v
@@ -238,7 +243,7 @@ impl Provider for RunpodServerless {
         let id = &pool.serverless.endpoint_id;
         let ep = self.api.endpoint(id).await?;
         let h = self.api.health(id).await?;
-        Ok(PoolObservation { workers: health_workers(&h.workers, now_s), endpoint: Some(endpoint_settings(&ep)) })
+        Ok(PoolObservation { workers: health_workers(&h, now_s), endpoint: Some(endpoint_settings(&ep)) })
     }
 
     async fn apply(&self, pool: &PoolConfig, d: &PoolDecision, _now_s: f64) -> Result<ApplyReport, ProviderError> {
@@ -705,9 +710,12 @@ mod tests {
                 "workers":{"idle":1,"initializing":1,"ready":1,"running":1,"throttled":0,"unhealthy":0}}"#,
         )
         .unwrap();
-        let w = health_workers(&h.workers, 10.0);
+        let w = health_workers(&h, 10.0);
         assert_eq!(w.len(), 3);
         assert_eq!(w.iter().filter(|w| w.busy > 0).count(), 1);
+        // Running workers with no job in progress are not busy.
+        let idle: Health = serde_json::from_str(r#"{"jobs":{"inProgress":0},"workers":{"running":2}}"#).unwrap();
+        assert!(health_workers(&idle, 0.0).iter().all(|w| w.busy == 0));
         assert_eq!(w.iter().filter(|w| w.state == WorkerState::Starting).count(), 1);
     }
 
