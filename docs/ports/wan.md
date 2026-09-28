@@ -674,13 +674,92 @@ fills (block 1: 0.33 s). RGB8 packing is 1 ms per block.
 
 strobe's 22.8 fps (H100, torch.compile, TRT VAE) is a 0.503 s block with
 decode 187 ms; ours decodes in 26 ms and loses in denoise + context (0.60
-vs 0.32 s). CUDA Graphs per block position (E7) are the next lever.
+vs 0.32 s). These are the eager numbers (`FASTVIDEO_WAN_GRAPH=0`); graph
+mode (E7, below) takes the default block to 0.504 s.
 
 Memory: 10 minutes (9609 frames, 801 blocks) with the rebased sink: device
 memory in use was 26302 MiB at block 20 and 26462 MiB from block 50 to the
 end; the KV cache holds 5758 MiB (30 layers, 21 frames, bf16) from block 6
 on. The relativistic 10-minute run: 25182 MiB at block 7, 25342-25374 MiB
 from block 100 on, one allocator high-water of 25870 MiB.
+
+### CUDA graphs and the static KV cache (serve E7, `wan::graph`)
+
+Graph mode is the default (`RolloutConfig::graphs`, from
+`FASTVIDEO_WAN_GRAPH`, on; `=0` is the eager path above, unchanged).
+`CausalRollout`'s API is unchanged apart from that field and
+`graph_report()`.
+
+- **Stream.** The device stream is the legacy default stream, which cannot
+  be captured. `graph::GraphStream` is a second `DeviceContext` on the same
+  CUDA context (`DeviceContext::on_new_stream`): a non-blocking stream, its
+  own cuBLAS handle with an explicit 32 MiB workspace
+  (`FASTVIDEO_WAN_GRAPH_CUBLAS_WS_MIB`), its own cuDNN handle (the shared
+  cuDNN SDPA handle now takes the caller's stream on every call). A block's
+  denoise and context pass run on it, with the thread's device pointed at
+  it; the legacy stream is drained on entry and the graph stream before the
+  TAEHV decode, which stays on the legacy stream.
+- **Static KV cache** (`CausalKvCache::new_static`): one `[B, H, 21·1560,
+  D]` K/V buffer pair per layer, written in place (the roll moves tokens
+  down inside it, the rebased sink's un-roped copy is a persistent f32
+  buffer), kept across `reset`. The allocating cache rebuilt every layer's
+  window with a `cat` per forward.
+- **Persistent inputs**, refilled in place before each launch: the block's
+  initial noise, the three re-noise draws, the RoPE tables of the block
+  (and of the sink's rebase), the text conditioning (text embedding and the
+  30 layers' cross-attention K/V: a prompt switch copies the new prompt's
+  into the same buffers, so graphs survive it), and the time conditioning of
+  each of the five timesteps (computed once per rollout: timesteps are
+  device data, never host scalars inside a graph). The denoised latents are
+  a persistent buffer too (the denoise graph's output, the context graph's
+  input); each block's latents are a copy of it.
+- **One graph pair per cache state** (`causal::KvBlockKey`: valid tokens,
+  append or overwrite, evicted tokens, sink rebase, first rebase; plus the
+  table layout). The first block of a state runs eagerly on the graph
+  stream (it warms every lazy cache and allocates the buffers), the second
+  captures the denoise steps and the context pass
+  (`CU_STREAM_CAPTURE_MODE_THREAD_LOCAL`) and launches them, later ones
+  replay and move only the cache's host pointers (`CausalKvCache::advance`).
+  The default window has 9 states (8 while it fills, one steady); graphs
+  are kept across `reset`, so a restarted stream replays its fill blocks
+  too. Every graph allocation must be freed inside the graph (the node list
+  is checked); a capture error or an escaping allocation drops the rollout
+  to eager blocks for good (`GraphReport::failed`). Denoise graph 3715-3836
+  kernels, context graph 824 (rebased sink).
+- Host work off the critical path: the RoPE axis tables are memoized, and
+  the next block's noise is drawn on the host while the context pass runs.
+  The step hook events of a graph block fire together after the denoise
+  graph (a cancel is seen then, as between steps before).
+
+H100 80GB HBM3 (US-CA-2), 832x480, `fv-gpucheck wan stream --parity
+--run reb-sink3-60s,seconds=60,rope=rebased,sink=3`, image `sha-551beb4`:
+
+| Policy | Eager block s (steady) | Graph block s (steady) |
+|---|---|---|
+| **RebasedSink, sink 3** (default) | 0.624 | **0.496** (60 s run: **0.504**: denoise 0.382, context 0.094, decode 0.027) |
+| Relativistic, sink 3 | 0.715 | 0.594 |
+| Absolute, sink 3 | 0.611 | 0.493 |
+
+The 60 s run: 23.8 frames/s steady (19.2 eager), TTFF 0.33 s, block p90
+0.507 s; device memory 26532 MiB at block 7 and 26980 MiB from block 9
+(the steady graph's capture) to the end, flat (eager: 26462 MiB).
+
+Most of the gain is the static cache, not the replay: the eager blocks of
+graph mode (static cache, graph stream) already take 0.49-0.51 s in the
+steady state, and the replayed ones 0.50 s. The device is busy through a
+block either way: 94 ms per forward at the full window is the kernels
+themselves (attention of 4680 queries over 32760 keys in 30 layers is most
+of it), so the 350 ms target is not reached by graphs; it needs faster
+attention and GEMMs. Blocks whose graph is being captured cost 0.03-0.06 s
+more once (0.54-0.57 s).
+
+**Parity** (`parity/graph_bitwise_equals_eager/*`, both pods): graph mode
+against the eager path, every block's latents and decoded frames compared
+bit for bit. Rebased sink: 29 blocks through the fill, the rolls, a prompt
+switch (keep) and two resets (9 blocks eager, 9 captured, 11 replayed);
+relativistic and absolute: 20 blocks with a reset. No bit differs. The
+bounded-path parity (absolute, sink 0, now in graph mode) stays bitwise
+equal.
 
 ### Long-run stability (single prompt and seed; statistics, not a visual review)
 

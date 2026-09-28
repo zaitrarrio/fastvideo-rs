@@ -135,11 +135,110 @@ pub fn run(report: &mut Report, a: &Args<'_>) -> StageResult<()> {
         ..RolloutConfig::default()
     };
     if a.parity {
+        graph_parity(report, &pipe, &base, a.switch_prompt)?;
         parity(report, &pipe, &base)?;
     }
     for r in &runs {
         one_run(report, &pipe, &base, r, a)?;
     }
+    Ok(())
+}
+
+/// Graph mode (E7) against eager blocks (`graphs: false`, the
+/// `FASTVIDEO_WAN_GRAPH=0` path), bit for bit: the default rollout through
+/// the window filling, the rolls, a prompt switch (keep) and two resets, so
+/// every block of the second and third fills and the steady state replay
+/// graphs captured earlier.
+fn graph_parity(
+    report: &mut Report,
+    pipe: &WanPipeline,
+    base: &RolloutConfig,
+    switch_prompt: &str,
+) -> StageResult<()> {
+    // (blocks, then what happens before the next leg)
+    const LEGS: [(usize, &str); 4] = [(12, "switch"), (3, "reset"), (10, "reset"), (4, "")];
+    const SHORT: [(usize, &str); 2] = [(10, "reset"), (10, "")];
+    for (arm, rope, legs) in [
+        ("rebased", RopePolicy::RebasedSink, &LEGS[..]),
+        ("relativistic", RopePolicy::Relativistic, &SHORT[..]),
+        ("absolute", RopePolicy::Absolute, &SHORT[..]),
+    ] {
+        graph_parity_arm(report, pipe, base, switch_prompt, arm, rope, legs)?;
+    }
+    Ok(())
+}
+
+fn graph_parity_arm(
+    report: &mut Report,
+    pipe: &WanPipeline,
+    base: &RolloutConfig,
+    switch_prompt: &str,
+    arm: &str,
+    rope: RopePolicy,
+    legs: &[(usize, &str)],
+) -> StageResult<()> {
+    let run = |graphs: bool| -> anyhow::Result<(Vec<(Vec<u32>, Vec<u32>, f64)>, Option<Value>)> {
+        let cfg = RolloutConfig { graphs, rope, rgb8: false, ..base.clone() };
+        let mut ro = CausalRollout::open(pipe, cfg).map_err(|e| anyhow!("{e}"))?;
+        let mut out = Vec::new();
+        for &(n, then) in legs {
+            for _ in 0..n {
+                let b = ro.next_block().map_err(|e| anyhow!("{e}"))?;
+                let bits = |t: &CudaTensor| -> anyhow::Result<Vec<u32>> {
+                    Ok(host(t)?.iter().map(|v| v.to_bits()).collect())
+                };
+                out.push((bits(&b.latents)?, bits(&b.frames)?, b.timings.total_s));
+            }
+            match then {
+                "switch" => {
+                    ro.set_prompt(switch_prompt).map_err(|e| anyhow!("{e}"))?;
+                }
+                "reset" => ro.reset(None),
+                _ => {}
+            }
+        }
+        let g = ro.graph_report().map(|r| {
+            json!({"eager_blocks": r.eager_blocks, "captured_blocks": r.captured_blocks,
+                   "replayed_blocks": r.replayed_blocks, "keys": r.keys,
+                   "denoise_kernels": r.denoise_kernels, "context_kernels": r.context_kernels,
+                   "failed": r.failed})
+        });
+        Ok((out, g))
+    };
+    let t = Instant::now();
+    let (eager, _) = run(false)?;
+    let eager_s = t.elapsed().as_secs_f64();
+    let t = Instant::now();
+    let (graph, g) = run(true)?;
+    let graph_s = t.elapsed().as_secs_f64();
+    let differing: Vec<usize> = eager
+        .iter()
+        .zip(&graph)
+        .enumerate()
+        .filter(|(_, (a, b))| a.0 != b.0 || a.1 != b.1)
+        .map(|(i, _)| i)
+        .collect();
+    let first_diff = differing.first().map(|&i| {
+        let (a, b) = (&eager[i], &graph[i]);
+        let f = |v: &[u32]| v.iter().map(|&x| f32::from_bits(x)).collect::<Vec<_>>();
+        json!({"block": i,
+               "latents": crate::metrics::diff(&f(&a.0), &f(&b.0)).to_json(),
+               "frames": crate::metrics::diff(&f(&a.1), &f(&b.1)).to_json()})
+    });
+    let times = |v: &[(Vec<u32>, Vec<u32>, f64)]| v.iter().map(|x| x.2).collect::<Vec<_>>();
+    let failed = g.as_ref().and_then(|g| g.get("failed").cloned()).unwrap_or(Value::Null);
+    report.note(
+        format!("parity/graph_vs_eager/{arm}"),
+        json!({"blocks": eager.len(), "differing_blocks": differing, "first_difference": first_diff,
+               "graph": g, "eager_wall_s": eager_s, "graph_wall_s": graph_s,
+               "eager_block_s": times(&eager), "graph_block_s": times(&graph)}),
+    );
+    report.check(
+        format!("parity/graph_bitwise_equals_eager/{arm}"),
+        differing.is_empty() && failed.is_null() && eager.len() == graph.len(),
+        json!({"differing_blocks": differing.len(), "blocks": eager.len(), "failed": failed}),
+        json!({"differing_blocks": 0}),
+    )?;
     Ok(())
 }
 
@@ -459,6 +558,12 @@ fn one_run(
     }
     let t_end = Instant::now();
     let kv_bytes = ro.kv_bytes();
+    let graph = ro.graph_report().map(|r| {
+        json!({"eager_blocks": r.eager_blocks, "captured_blocks": r.captured_blocks,
+               "replayed_blocks": r.replayed_blocks, "keys": r.keys,
+               "denoise_kernels": r.denoise_kernels, "context_kernels": r.context_kernels,
+               "failed": r.failed})
+    });
     drop(ro);
     drop(tx);
     let (windows, rx_frames) = consumer.join().map_err(|_| anyhow!("consumer panicked"))?;
@@ -483,6 +588,7 @@ fn one_run(
         "fps_steady_wall": steady_fps, "fps_steady_engine": steady_engine_fps,
         "mem_used_mib_at_block7": mem_first_full, "mem_used_mib_max": mem_max,
         "kv_mib_end": kv_bytes >> 20,
+        "graph": graph,
         "windows": windows,
         "block_rows": ["index", "frames", "denoise_s", "context_s", "decode_s", "rgb_s", "total_s", "mem_used_mib", "kv_mib"],
         "switch": switch_info,

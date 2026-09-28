@@ -155,6 +155,96 @@ struct KvLayer {
     /// once, and the first frame the cached sink keys are roped at now.
     raw_sink: Option<CudaTensor>,
     sink_at: usize,
+    /// Static mode ([`CausalKvCache::new_static`]): the persistent buffers,
+    /// allocated at the first write and kept across [`CausalKvCache::reset`].
+    st: Option<StaticKv>,
+    /// Static mode: `st.raw_sink` holds the un-roped sink.
+    raw_valid: bool,
+}
+
+/// One layer's persistent storage in a static cache: `[B, H, capacity, D]`
+/// K and V in the keys' dtype, valid over `[0, local_end)`, and the f32
+/// un-roped sink `[B, H, sink, D]` of [`KvRope::RebasedSink`]. Every write
+/// lands in place, so the addresses never change: what a CUDA graph of a
+/// block forward needs (`wan::graph`).
+struct StaticKv {
+    k: CudaTensor,
+    v: CudaTensor,
+    raw_sink: Option<CudaTensor>,
+}
+
+/// A fresh tensor of `shape` in `like`'s dtype (f32 with `f32_only`) and
+/// residency: contents unspecified on the device, zero on the host.
+fn alloc_like(like: &CudaTensor, shape: Vec<usize>, f32_only: bool) -> Result<CudaTensor> {
+    let n: usize = shape.iter().product();
+    #[cfg(feature = "cuda")]
+    if like.is_device_fresh() {
+        return super::act16::OutBuf::new(n, like.is_bf16() && !f32_only)?.into_tensor(shape);
+    }
+    let dtype = if f32_only {
+        super::tensor::TensorDType::F32
+    } else {
+        like.dtype()
+    };
+    Ok(CudaTensor::host_only_dtype(vec![0.0; n], shape, dtype))
+}
+
+/// `dst[:, :, dst_off .. dst_off + len] = src[:, :, src_off .. src_off + len]`
+/// on BHSD tensors, in place in `dst`'s storage.
+fn copy_tokens(
+    dst: &mut CudaTensor,
+    dst_off: usize,
+    src: &CudaTensor,
+    src_off: usize,
+    len: usize,
+) -> Result<()> {
+    let (&[b, h, s_dst, d], &[sb, sh, s_src, sd]) = (&dst.shape[..], &src.shape[..]) else {
+        return Err(msg("causal kv: copy_tokens expects BHSD"));
+    };
+    if (b, h, d) != (sb, sh, sd) || dst_off + len > s_dst || src_off + len > s_src {
+        return Err(msg(format!(
+            "causal kv: copy {len} tokens {:?}@{src_off} -> {:?}@{dst_off}",
+            src.shape, dst.shape
+        )));
+    }
+    if len == 0 {
+        return Ok(());
+    }
+    #[cfg(feature = "cuda")]
+    if dst.is_device_fresh() {
+        return super::act16::copy_rows_into(
+            src,
+            dst,
+            b * h,
+            len * d,
+            s_src * d,
+            s_dst * d,
+            src_off * d,
+            dst_off * d,
+        );
+    }
+    let sv = src.host_cow()?.into_owned();
+    let dv = dst.host_mut()?;
+    for r in 0..b * h {
+        let (o, i) = ((r * s_dst + dst_off) * d, (r * s_src + src_off) * d);
+        dv[o..o + len * d].copy_from_slice(&sv[i..i + len * d]);
+    }
+    Ok(())
+}
+
+/// Move tokens `[from, from + len)` down to `[to, to + len)` (`to < from`)
+/// inside `t`, in chunks no longer than the shift so that no chunk's source
+/// overlaps its destination (the device copy runs its elements in parallel).
+fn shift_tokens_down(t: &mut CudaTensor, from: usize, to: usize, len: usize) -> Result<()> {
+    let shift = from - to;
+    let mut done = 0;
+    while done < len {
+        let n = shift.min(len - done);
+        let src = t.clone();
+        copy_tokens(t, to + done, &src, from + done, n)?;
+        done += n;
+    }
+    Ok(())
 }
 
 /// Wan's interleaved RoPE (`is_neox_style=False`, tables repeat-interleaved)
@@ -251,6 +341,34 @@ impl KvSpec {
 pub struct CausalKvCache {
     pub spec: KvSpec,
     layers: Vec<Mutex<KvLayer>>,
+    /// Persistent in-place buffers instead of a new tensor per write.
+    static_mode: bool,
+}
+
+/// One layer's cache pointers (see [`CausalKvCache::pointers`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct KvPointers {
+    pub global_end: usize,
+    pub local_end: usize,
+    pub sink_at: usize,
+    pub raw_valid: bool,
+}
+
+/// What decides the device work of one block forward through a static
+/// cache: two forwards with the same key run the same kernels on the same
+/// buffers with the same shapes (one CUDA graph per key, `wan::graph`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct KvBlockKey {
+    /// Valid cached tokens before the forward.
+    pub local_end: usize,
+    /// The write appends (a new block) rather than overwriting in place.
+    pub appends: bool,
+    /// Tokens dropped after the sink first.
+    pub evicted: usize,
+    /// The sink is re-roped ([`KvRope::RebasedSink`]) first ...
+    pub rebase: bool,
+    /// ... from an un-roped copy taken before that.
+    pub take_raw: bool,
 }
 
 impl CausalKvCache {
@@ -260,7 +378,127 @@ impl CausalKvCache {
             layers: (0..num_layers)
                 .map(|_| Mutex::new(KvLayer::default()))
                 .collect(),
+            static_mode: false,
         }
+    }
+
+    /// A cache whose K/V live in one persistent `[B, H, capacity, D]`
+    /// buffer pair per layer, written in place (the roll moves tokens down
+    /// inside it), so a block forward touches the same addresses every time:
+    /// what CUDA-graph replay needs. Same values as [`Self::new`]: the
+    /// window the queries read is the same tokens in the same order.
+    pub fn new_static(spec: KvSpec, num_layers: usize) -> Self {
+        Self {
+            static_mode: true,
+            ..Self::new(spec, num_layers)
+        }
+    }
+
+    pub fn is_static(&self) -> bool {
+        self.static_mode
+    }
+
+    /// Static mode: every layer's buffers exist (after the first write).
+    pub fn is_allocated(&self) -> bool {
+        self.static_mode
+            && self
+                .layers
+                .iter()
+                .all(|l| l.lock().expect("causal kv lock").st.is_some())
+    }
+
+    /// Every layer's pointers.
+    pub fn pointers(&self) -> Vec<KvPointers> {
+        self.layers
+            .iter()
+            .map(|l| {
+                let l = l.lock().expect("causal kv lock");
+                KvPointers {
+                    global_end: l.global_end,
+                    local_end: l.local_end,
+                    sink_at: l.sink_at,
+                    raw_valid: l.raw_valid,
+                }
+            })
+            .collect()
+    }
+
+    /// Put pointers back: a CUDA-graph replay moves no host state, and a
+    /// failed capture must leave none behind. Static mode only (the buffers
+    /// hold whatever the device work wrote).
+    pub fn set_pointers(&self, p: &[KvPointers]) -> Result<()> {
+        if !self.static_mode || p.len() != self.layers.len() {
+            return Err(msg(
+                "causal kv: set_pointers needs a static cache and one entry per layer",
+            ));
+        }
+        for (l, p) in self.layers.iter().zip(p) {
+            let mut l = l.lock().expect("causal kv lock");
+            l.global_end = p.global_end;
+            l.local_end = p.local_end;
+            l.sink_at = p.sink_at;
+            l.raw_valid = p.raw_valid;
+        }
+        Ok(())
+    }
+
+    /// The [`KvBlockKey`] of a forward of `n` tokens at `current_start`
+    /// whose RebasedSink target frame is `sink_target` (0: none), from layer
+    /// 0's pointers (every layer moves in step).
+    pub fn block_key(
+        &self,
+        current_start: usize,
+        n: usize,
+        sink_target: usize,
+    ) -> Result<KvBlockKey> {
+        let p = self.pointers().first().copied().unwrap_or_default();
+        let mv = self.spec.plan(p.global_end, p.local_end, current_start, n)?;
+        let rebase = self.spec.rebase_sink
+            && self.spec.sink > 0
+            && sink_target > 0
+            && p.sink_at != sink_target
+            && p.local_end >= self.spec.sink;
+        Ok(KvBlockKey {
+            local_end: p.local_end,
+            appends: current_start + n > p.global_end,
+            evicted: mv.evicted,
+            rebase,
+            take_raw: rebase && !p.raw_valid,
+        })
+    }
+
+    /// The host bookkeeping of one block forward of `n` tokens at
+    /// `current_start` whose RebasedSink target frame is `sink_target` (0:
+    /// none), without its device work: what a CUDA-graph replay of that
+    /// forward leaves behind. [`Self::rebase_sink`]'s pointer moves, then
+    /// [`Self::update`]'s, on every layer. Static mode only.
+    pub fn advance(&self, current_start: usize, n: usize, sink_target: usize) -> Result<()> {
+        if !self.static_mode {
+            return Err(msg("causal kv: advance needs a static cache"));
+        }
+        let sink = self.spec.sink;
+        for l in &self.layers {
+            let mut slot = l.lock().expect("causal kv lock");
+            if self.spec.rebase_sink
+                && sink > 0
+                && sink_target > 0
+                && slot.sink_at != sink_target
+                && slot.st.is_some()
+                && slot.local_end >= sink
+            {
+                slot.raw_valid = true;
+                slot.sink_at = sink_target;
+            }
+            let mv = self
+                .spec
+                .plan(slot.global_end, slot.local_end, current_start, n)?;
+            if slot.st.is_none() {
+                return Err(msg("causal kv: advance over an unwritten cache"));
+            }
+            slot.global_end = current_start + n;
+            slot.local_end = mv.local_end;
+        }
+        Ok(())
     }
 
     /// Write one block's `k`/`v` (`[B, H, n, D]`, RoPE applied) for layer
@@ -283,6 +521,9 @@ impl CausalKvCache {
         let mv = self
             .spec
             .plan(slot.global_end, slot.local_end, current_start, n)?;
+        if self.static_mode {
+            return self.update_static(&mut slot, mv, k, v, current_start);
+        }
         let keep = |t: Option<&CudaTensor>| -> Result<Option<CudaTensor>> {
             let Some(t) = t else { return Ok(None) };
             // Roll: [0, sink) stays, [sink + evicted, local_end_prev) moves
@@ -341,6 +582,81 @@ impl CausalKvCache {
         Ok(out)
     }
 
+    /// [`Self::update`] on the persistent buffers: roll in place, write the
+    /// block at `[local_start, local_end)`, read the window back.
+    fn update_static(
+        &self,
+        slot: &mut KvLayer,
+        mv: KvMove,
+        k: &CudaTensor,
+        v: &CudaTensor,
+        current_start: usize,
+    ) -> Result<(CudaTensor, CudaTensor)> {
+        let n = k.shape[2];
+        let [b, h, _, d] = k.shape[..] else {
+            return Err(msg(format!("causal kv: keys {:?}", k.shape)));
+        };
+        if v.shape.len() != 4 || v.shape[..3] != k.shape[..3] {
+            return Err(msg(format!("causal kv: keys {:?} values {:?}", k.shape, v.shape)));
+        }
+        if slot.st.is_none() {
+            let cap = self.spec.capacity.max(n);
+            let sink = self.spec.sink;
+            slot.st = Some(StaticKv {
+                k: alloc_like(k, vec![b, h, cap, d], false)?,
+                v: alloc_like(v, vec![b, h, cap, v.shape[3]], false)?,
+                raw_sink: if self.spec.rebase_sink && sink > 0 {
+                    Some(alloc_like(k, vec![b, h, sink, d], true)?)
+                } else {
+                    None
+                },
+            });
+        }
+        let prev = slot.local_end;
+        let st = slot.st.as_mut().expect("static kv");
+        if st.k.shape[..2] != k.shape[..2]
+            || st.k.shape[3] != d
+            || st.k.shape[2] < n
+            || st.k.is_bf16() != k.is_bf16()
+            || st.v.is_bf16() != v.is_bf16()
+        {
+            return Err(msg(format!(
+                "causal kv: static buffers {:?} ({:?}) for keys {:?} ({:?})",
+                st.k.shape,
+                st.k.dtype(),
+                k.shape,
+                k.dtype()
+            )));
+        }
+        // Roll: [0, sink) stays, [sink + evicted, prev) moves down to sink.
+        let mut valid = prev;
+        if mv.evicted > 0 {
+            let sink = self.spec.sink.min(prev);
+            let tail_start = (sink + mv.evicted).min(prev);
+            let tail = prev - tail_start;
+            if tail > 0 {
+                shift_tokens_down(&mut st.k, tail_start, sink, tail)?;
+                shift_tokens_down(&mut st.v, tail_start, sink, tail)?;
+            }
+            valid = sink + tail;
+        }
+        if mv.local_start > valid {
+            return Err(msg(format!(
+                "causal kv: write at {} leaves a gap after {valid} cached tokens",
+                mv.local_start
+            )));
+        }
+        copy_tokens(&mut st.k, mv.local_start, k, 0, n)?;
+        copy_tokens(&mut st.v, mv.local_start, v, 0, n)?;
+        slot.global_end = current_start + n;
+        slot.local_end = mv.local_end;
+        let len = mv.local_end - mv.window_start;
+        Ok((
+            st.k.narrow(2, mv.window_start, len)?,
+            st.v.narrow(2, mv.window_start, len)?,
+        ))
+    }
+
     /// Cached tokens of layer 0 (`local_end`), for logs and tests.
     pub fn len(&self) -> usize {
         self.layers
@@ -389,6 +705,33 @@ impl CausalKvCache {
             if slot.sink_at == target {
                 continue;
             }
+            if self.static_mode {
+                let (local_end, raw_valid) = (slot.local_end, slot.raw_valid);
+                let Some(st) = slot.st.as_mut() else { continue };
+                if local_end < sink {
+                    continue;
+                }
+                let raw_buf = st
+                    .raw_sink
+                    .as_mut()
+                    .ok_or_else(|| msg("causal kv: static rebased sink without its buffer"))?;
+                if !raw_valid {
+                    if neg_orig.is_none() {
+                        neg_orig = Some(orig.1.mul_scalar(-1.0));
+                    }
+                    let neg = neg_orig.as_ref().expect("negated sin");
+                    let raw = rope_bhsd_f32(&st.k.narrow(2, 0, sink)?, orig.0, neg)?;
+                    copy_tokens(raw_buf, 0, &raw, 0, sink)?;
+                }
+                let mut head = rope_bhsd_f32(raw_buf, new.0, new.1)?;
+                if st.k.is_bf16() {
+                    head = head.quantize_bf16()?;
+                }
+                copy_tokens(&mut st.k, 0, &head, 0, sink)?;
+                slot.raw_valid = true;
+                slot.sink_at = target;
+                continue;
+            }
             let Some(k) = slot.k.clone() else { continue };
             if k.shape[2] < sink {
                 continue;
@@ -422,7 +765,13 @@ impl CausalKvCache {
     /// Drop every cached K/V (a new rollout from block 0).
     pub fn reset(&self) {
         for l in &self.layers {
-            *l.lock().expect("causal kv lock") = KvLayer::default();
+            let mut l = l.lock().expect("causal kv lock");
+            // A static cache keeps its buffers (and so its addresses).
+            let st = l.st.take();
+            *l = KvLayer {
+                st,
+                ..KvLayer::default()
+            };
         }
     }
 
@@ -432,9 +781,16 @@ impl CausalKvCache {
             .iter()
             .map(|l| {
                 let l = l.lock().expect("causal kv lock");
-                [l.k.as_ref(), l.v.as_ref()]
-                    .into_iter()
-                    .flatten()
+                let st = l.st.as_ref();
+                [
+                    l.k.as_ref(),
+                    l.v.as_ref(),
+                    st.map(|s| &s.k),
+                    st.map(|s| &s.v),
+                    st.and_then(|s| s.raw_sink.as_ref()),
+                ]
+                .into_iter()
+                .flatten()
                     .map(|t| t.numel() * if t.is_bf16() { 2 } else { 4 })
                     .sum::<usize>()
             })
@@ -699,24 +1055,148 @@ mod tests {
             relativistic: false,
             rebase_sink: false,
         };
-        let cache = CausalKvCache::new(spec, 1);
-        let blk = |base: f32| {
-            let data: Vec<f32> = (0..4).map(|i| base + i as f32).collect();
-            CudaTensor::from_vec(data, vec![1, 1, 4, 1]).unwrap()
+        for cache in [CausalKvCache::new(spec, 1), CausalKvCache::new_static(spec, 1)] {
+            let blk = |base: f32| {
+                let data: Vec<f32> = (0..4).map(|i| base + i as f32).collect();
+                CudaTensor::from_vec(data, vec![1, 1, 4, 1]).unwrap()
+            };
+            let (k, _) = cache.update(0, &blk(0.0), &blk(0.0), 0).unwrap();
+            assert_eq!(k.host_cow().unwrap().to_vec(), vec![0.0, 1.0, 2.0, 3.0]);
+            // Same block again (next step): overwritten.
+            let (k, _) = cache.update(0, &blk(10.0), &blk(10.0), 0).unwrap();
+            assert_eq!(k.host_cow().unwrap().to_vec(), vec![10.0, 11.0, 12.0, 13.0]);
+            let (k, _) = cache.update(0, &blk(20.0), &blk(20.0), 4).unwrap();
+            assert_eq!(k.shape[2], 8);
+            // Third block: 4 evicted after the 2-token sink.
+            let (k, _) = cache.update(0, &blk(30.0), &blk(30.0), 8).unwrap();
+            assert_eq!(
+                k.host_cow().unwrap().to_vec(),
+                vec![10.0, 11.0, 22.0, 23.0, 30.0, 31.0, 32.0, 33.0]
+            );
+            assert_eq!(cache.len(), 8);
+            // Fourth block, 1-token shifts: the roll moves 2 tokens by 4.
+            let (k, _) = cache.update(0, &blk(40.0), &blk(40.0), 12).unwrap();
+            assert_eq!(
+                k.host_cow().unwrap().to_vec(),
+                vec![10.0, 11.0, 32.0, 33.0, 40.0, 41.0, 42.0, 43.0]
+            );
+        }
+    }
+
+    /// The static cache (persistent buffers written in place) is the
+    /// allocating cache, bit for bit, through the stream's pattern: every
+    /// block run several times (denoising steps, then the context pass),
+    /// the window filling, rolling past the sink, and each RoPE policy.
+    #[test]
+    fn static_cache_is_the_allocating_cache() {
+        let (dit, cfg) = tiny_causal_dit();
+        let (c, h, w, fpb) = (cfg.in_channels, 4usize, 6usize, cfg.num_frames_per_block);
+        let frame_tokens = (h / 2) * (w / 2);
+        let text: Vec<f32> = (0..cfg.text_len * cfg.text_dim)
+            .map(|i| ((i as f32) * 0.11).cos())
+            .collect();
+        let text = CudaTensor::from_vec(text, vec![1, cfg.text_len, cfg.text_dim]).unwrap();
+        for rope in [KvRope::Absolute, KvRope::Relativistic, KvRope::RebasedSink] {
+            let spec = KvSpec::rolling(frame_tokens, 6, 2, rope).unwrap();
+            let run = |cache: &CausalKvCache| -> Vec<Vec<u32>> {
+                let mut out = Vec::new();
+                for blk in 0..7 {
+                    let lat: Vec<f32> = (0..c * fpb * h * w)
+                        .map(|i| ((i as f32) * 0.37 + blk as f32).sin())
+                        .collect();
+                    let x = CudaTensor::from_vec(lat, vec![1, c, fpb, h, w]).unwrap();
+                    for ts in [750.0f32, 250.0, 0.0] {
+                        let t = CudaTensor::from_vec(vec![ts], vec![1]).unwrap();
+                        let y = dit.forward_kv(&x, &t, &text, cache, blk * fpb).unwrap();
+                        out.push(y.host_cow().unwrap().iter().map(|v| v.to_bits()).collect());
+                    }
+                }
+                out
+            };
+            let a = run(&CausalKvCache::new(spec, cfg.num_layers));
+            let st = CausalKvCache::new_static(spec, cfg.num_layers);
+            let b = run(&st);
+            assert!(a == b, "{rope:?}: static cache differs");
+            assert!(st.is_allocated());
+            // After a reset the buffers stay and the rollout repeats exactly.
+            st.reset();
+            assert!(st.is_empty() && st.is_allocated());
+            assert!(run(&st) == b, "{rope:?}: static cache after reset differs");
+        }
+    }
+
+    /// Keys follow the fill: appends while the window fills, the first roll
+    /// takes the un-roped sink, then every block has the same key.
+    #[test]
+    fn block_keys_settle_once_the_window_is_full() {
+        let spec = KvSpec::rolling(10, 6, 2, KvRope::RebasedSink).unwrap();
+        let cache = CausalKvCache::new_static(spec, 1);
+        let blk = |start: usize| {
+            let data: Vec<f32> = (0..40).map(|i| (start + i) as f32).collect();
+            CudaTensor::from_vec(data, vec![1, 1, 20, 2]).unwrap()
         };
-        let (k, _) = cache.update(0, &blk(0.0), &blk(0.0), 0).unwrap();
-        assert_eq!(k.host_cow().unwrap().to_vec(), vec![0.0, 1.0, 2.0, 3.0]);
-        // Same block again (next step): overwritten.
-        let (k, _) = cache.update(0, &blk(10.0), &blk(10.0), 0).unwrap();
-        assert_eq!(k.host_cow().unwrap().to_vec(), vec![10.0, 11.0, 12.0, 13.0]);
-        let (k, _) = cache.update(0, &blk(20.0), &blk(20.0), 4).unwrap();
-        assert_eq!(k.shape[2], 8);
-        // Third block: 4 evicted after the 2-token sink.
-        let (k, _) = cache.update(0, &blk(30.0), &blk(30.0), 8).unwrap();
-        assert_eq!(
-            k.host_cow().unwrap().to_vec(),
-            vec![10.0, 11.0, 22.0, 23.0, 30.0, 31.0, 32.0, 33.0]
-        );
-        assert_eq!(cache.len(), 8);
+        let tab = CudaTensor::from_vec(vec![1.0; 40], vec![20, 2]).unwrap();
+        let zero = CudaTensor::from_vec(vec![0.0; 40], vec![20, 2]).unwrap();
+        let mut keys = Vec::new();
+        for b in 0..6 {
+            let start = b * 20;
+            let target = spec.sink_target(b * 2 + 2);
+            let key = cache.block_key(start, 20, target).unwrap();
+            keys.push(key);
+            if key.rebase {
+                cache.rebase_sink(target, (&tab, &zero), (&tab, &zero)).unwrap();
+            }
+            cache.update(0, &blk(start), &blk(start), start).unwrap();
+            // The in-place re-run of the same block (next step).
+            let again = cache.block_key(start, 20, target).unwrap();
+            assert!(!again.appends && !again.rebase && again.evicted == 0);
+        }
+        assert_eq!(keys[0].local_end, 0);
+        assert!(keys[1].appends && keys[1].evicted == 0 && !keys[1].rebase);
+        assert!(keys[3].rebase && keys[3].take_raw && keys[3].evicted == 20);
+        assert!(keys[4].rebase && !keys[4].take_raw);
+        assert_eq!(keys[4], keys[5]);
+        let p = cache.pointers();
+        cache.set_pointers(&p).unwrap();
+        assert_eq!(cache.pointers(), p);
+    }
+
+    /// `advance` (a graph replay's host bookkeeping) moves the pointers as
+    /// the real rebase + write do, through the fill, the first roll (which
+    /// takes the un-roped sink) and the steady state, several forwards per
+    /// block.
+    #[test]
+    fn advance_moves_the_pointers_as_a_forward_does() {
+        let spec = KvSpec::rolling(10, 6, 2, KvRope::RebasedSink).unwrap();
+        let real = CausalKvCache::new_static(spec, 2);
+        let replay = CausalKvCache::new_static(spec, 2);
+        let blk = |start: usize| {
+            let data: Vec<f32> = (0..40).map(|i| (start + i) as f32).collect();
+            CudaTensor::from_vec(data, vec![1, 1, 20, 2]).unwrap()
+        };
+        let tab = CudaTensor::from_vec(vec![1.0; 40], vec![20, 2]).unwrap();
+        let zero = CudaTensor::from_vec(vec![0.0; 40], vec![20, 2]).unwrap();
+        for b in 0..7 {
+            let start = b * 20;
+            let target = spec.sink_target(b * 2 + 2);
+            for _ in 0..3 {
+                if target > 0 {
+                    real.rebase_sink(target, (&tab, &zero), (&tab, &zero)).unwrap();
+                }
+                for layer in 0..2 {
+                    real.update(layer, &blk(start), &blk(start), start).unwrap();
+                }
+                if b == 0 {
+                    // The buffers exist after a real first write.
+                    for layer in 0..2 {
+                        replay.update(layer, &blk(start), &blk(start), start).unwrap();
+                    }
+                } else {
+                    replay.advance(start, 20, target).unwrap();
+                }
+                assert_eq!(real.pointers(), replay.pointers(), "block {b}");
+            }
+        }
+        assert!(CausalKvCache::new(spec, 1).advance(0, 20, 0).is_err());
     }
 }

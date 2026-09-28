@@ -40,9 +40,11 @@ on:
 permissions:
   contents: read
 
+# Pull requests cancel superseded runs; main runs every pushed sha to the end
+# (agents push to main often, and a cancelled matrix says nothing).
 concurrency:
-  group: serve-compat-${{ github.ref }}
-  cancel-in-progress: true
+  group: serve-compat-${{ github.event_name == 'pull_request' && github.ref || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
   CARGO_TERM_COLOR: always

@@ -30,6 +30,18 @@ def b64url(s):
     return base64.urlsafe_b64decode(s + "=" * (-len(s) % 4))
 
 
+def unsigned(v):
+    """`v` with the query (the `exp`/`sig` of signed file URLs, minted per
+    render) cut from every URL, so a webhook payload and a later result compare."""
+    if isinstance(v, dict):
+        return {k: unsigned(x) for k, x in v.items()}
+    if isinstance(v, list):
+        return [unsigned(x) for x in v]
+    if isinstance(v, str) and v.startswith(("http://", "https://")):
+        return v.split("?", 1)[0]
+    return v
+
+
 def fetch_jwks(base):
     r = httpx.get(f"{base}/.well-known/jwks.json", timeout=10)
     r.raise_for_status()
@@ -77,7 +89,7 @@ def main(s, a):
         body = json.loads(raw)
         s.check(body["request_id"] == ok_h.request_id and body["status"] == "OK", body)
         s.check("gateway_request_id" in body and body["payload"]["video"]["content_type"] == "video/mp4", body)
-        s.check(body["payload"] == ok_h.get(), "webhook payload equals the result")
+        s.check(unsigned(body["payload"]) == unsigned(ok_h.get()), "webhook payload equals the result (URLs unsigned)")
         s.ok("OK webhook: payload + Ed25519 signature")
 
         h, raw = by_path["/fal/err"]

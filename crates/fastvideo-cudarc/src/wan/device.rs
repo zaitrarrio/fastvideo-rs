@@ -135,6 +135,29 @@ impl DeviceContext {
         })
     }
 
+    /// A second context on the same device and CUDA context with a new
+    /// non-blocking stream of its own, and its own cuBLAS / cuDNN handles on
+    /// it: loaded kernels are shared, the convolution plan cache starts
+    /// empty. What `wan::graph` captures on (the default stream cannot be
+    /// captured). Work on it is not ordered with this context's stream:
+    /// synchronize at the boundaries.
+    pub fn on_new_stream(&self) -> Result<Self> {
+        let stream = self.ctx.new_stream()?;
+        let cublas = cudarc::cublas::CudaBlas::new(stream.clone())?;
+        let cudnn = cudarc::cudnn::Cudnn::new(stream.clone())?;
+        Ok(Self {
+            ctx: self.ctx.clone(),
+            stream,
+            cublas,
+            cudnn,
+            kernels: self.kernels.clone(),
+            sm_major: self.sm_major,
+            sm_minor: self.sm_minor,
+            gemm_math: self.gemm_math,
+            conv: Mutex::new(super::conv::ConvCache::default()),
+        })
+    }
+
     /// Block until every queued kernel has finished. Timing code must call
     /// this before reading a clock: launches return as soon as they are queued.
     pub fn synchronize(&self) -> Result<()> {
@@ -215,6 +238,13 @@ thread_local! {
 #[cfg(feature = "cuda")]
 pub fn set_thread_device(ctx: Option<Arc<DeviceContext>>) {
     THREAD_DEVICE.with(|d| *d.borrow_mut() = ctx);
+}
+
+/// [`set_thread_device`] returning the override it replaced, so a scope can
+/// put it back (`wan::graph` runs a block on its own stream this way).
+#[cfg(feature = "cuda")]
+pub fn replace_thread_device(ctx: Option<Arc<DeviceContext>>) -> Option<Arc<DeviceContext>> {
+    THREAD_DEVICE.with(|d| std::mem::replace(&mut *d.borrow_mut(), ctx))
 }
 
 /// `(free, total)` bytes of the global device, or `None` without one. What a
