@@ -468,6 +468,14 @@ impl CausalPacerConfig {
             max_seconds: spec.max_seconds,
         }
     }
+
+    /// Buffered frames above which the pacer stops taking blocks: half the
+    /// drop-oldest bound, so a hot generator waits on the session channel
+    /// (depth `EngineConfig::causal_depth`) and the frames queued ahead of a
+    /// prompt switch stay near the old 48-frame bound.
+    pub fn pull_mark(&self) -> usize {
+        (self.buffer_frames / 2).max(1)
+    }
 }
 
 /// Starts the causal pacer: it owns `session` (dropping it at the end closes
@@ -499,17 +507,33 @@ pub fn spawn_causal_pacer(
         let ended: Option<EndReason>;
         let mut started = false;
         let mut video_s = 0.0f64;
+        let mut last_len = 0usize;
         loop {
             let now = t0.elapsed().as_secs_f64();
             let wait = if started { met.poll(now).err() } else { Some(1.0) };
             if let Some(dt) = wait {
+                // Backpressure: take the next block only when it fits under
+                // the pull mark, so a generator faster than playout blocks on
+                // the session channel (the executor waits) instead of
+                // overflowing the drop-oldest buffer (skipped frames). A reset
+                // is taken promptly by the next pull (the buffer drains).
+                let room = pacer.buffered() == 0 || pacer.buffered() + last_len <= cfg.pull_mark();
+                if !room {
+                    tokio::time::sleep(Duration::from_secs_f64(dt)).await;
+                    continue;
+                }
                 tokio::select! {
                     b = session.next_block() => match b {
                         Some(Ok(block)) => {
                             if block.reset {
                                 pacer.clear();
                             }
-                            pacer.push_chunk(block.frames);
+                            last_len = block.frames.len();
+                            // The generation rate from the block's own time:
+                            // arrivals are paced by the pull mark.
+                            let gen_fps = (block.stats.block_ms > 0.0)
+                                .then(|| last_len as f64 * 1e3 / block.stats.block_ms);
+                            pacer.push_chunk_rate(block.frames, gen_fps);
                             if !started {
                                 started = true;
                                 first_tx.send_replace(true);

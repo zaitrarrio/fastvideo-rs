@@ -1,0 +1,91 @@
+2026-09-28T16:47:00.478485Z  INFO fv_serve: fv-serve 0.1.0 config=[redacted]
+2026-09-28T16:47:04.636293Z  WARN fastvideo_serve::encoders: H.264 encoder: NVENC unavailable after the startup probe, falling back to openh264 (auto) settings=["director.encoder", "reactor.h264", "webrtc.encoder", "engine.post_encoder"] attempts=2 director=openh264 reactor=off streams=x264-test post=cpu-test-x264 nvenc_error=[h264_nvenc @ 0x58b60ceec080] OpenEncodeSessionEx failed: unsupported device (2): (no details) | [h264_nvenc @ 0x58b60ceec080] No capable devices found | Error initializing output stream 0:0 -- Error while opening encoder for output stream #0:0 - maybe incorrect parameters such as bit_rate, rate, width or height
+2026-09-28T16:47:04.636889Z  WARN fastvideo_serve::app: FV_URL_SIGNING_KEY is not set: /files URLs die with this process
+2026-09-28T16:47:05.904233Z  WARN fastvideo_serve::app: 
+==============================================================================
+[admin token banner redacted]
+[admin token banner redacted]
+2026-09-28T16:47:05.929749Z  INFO fastvideo_engine_service::cuda::backend: loading model=fastwan21-1.3b dit_gb=7.9e-8 free_gb=149.475688448
+2026-09-28T16:48:42.866640Z  INFO fastvideo_engine_service::cuda::backend: model resident model=fastwan21-1.3b seconds=96.936841671
+FV-SERVE READY models=fastwan21-1.3b
+2026-09-28T16:48:42.867025Z  INFO fastvideo_serve::app: ready models=1
+[fastvideo] generate preset=fast_wan_t2v_480p tiny=false 832x480 frames=81 steps=3 dmd=true rcm=false latent=1x16x21x60x104 nvfp4=off resident=true cuda=true
+[fastvideo] denoise=dmd steps=3
+[fastvideo] vsa: grid (21, 30, 52) tiles 624 topk 125 group 32
+[fastvideo] vsa fine kernel: Mma (sm9, dim 128, auto)
+[fastvideo] vsa fine kernel: Tma ring (3 slots) (sm9, 128B swizzle)
+[fastvideo] sdpa: fused mma B=1 H=12 Sq=32760 Sk=512 D=128
+[fastvideo] dmd step 1/3 t=1000 done in 766ms
+[fastvideo] dmd step 2/3 t=757 done in 571ms
+[fastvideo] dmd step 3/3 t=522 done in 571ms
+[fastvideo] dmd 3 steps done in 1909ms
+[fastvideo] sdpa: device dense B=1 H=1 Sq=6240 Sk=6240 D=384 query_chunk=6240
+[fastvideo] vae.decode done in 1850ms
+[fastvideo] video writer: 81 frames, png off (0 inline, 0 after the mp4 in 0.00s, 0.00 GiB), ffmpeg feed blocked 0.00s, mp4 tail 0.00s, buffered peak 0.00 GiB of 0.00
+[fastvideo] wrote 0 png frames → /fvscratch/state1/engine-out/2bdc3e73-02a6-40be-9045-105b972dff93/frames (text 1.05s, denoise 1.91s, decode+mp4 2.25s, png 0.00s)
+[fastvideo] generate done in 5272ms
+[fastvideo] generate preset=fast_wan_t2v_480p tiny=false 832x480 frames=81 steps=3 dmd=true rcm=false latent=1x16x21x60x104 nvfp4=off resident=true cuda=true
+[fastvideo] denoise=dmd steps=3
+[fastvideo] dmd step 1/3 t=1000 done in 572ms
+[fastvideo] dmd step 2/3 t=757 done in 572ms
+[fastvideo] dmd step 3/3 t=522 done in 568ms
+[fastvideo] dmd 3 steps done in 1713ms
+[fastvideo] vae.decode done in 1586ms
+[fastvideo] video writer: 81 frames, png off (0 inline, 0 after the mp4 in 0.00s, 0.00 GiB), ffmpeg feed blocked 0.00s, mp4 tail 0.00s, buffered peak 0.00 GiB of 0.00
+[fastvideo] wrote 0 png frames → /fvscratch/state1/engine-out/c673fb18-09c1-44e2-862b-ad03c7d2e63c/frames (text 0.02s, denoise 1.71s, decode+mp4 2.02s, png 0.00s)
+[fastvideo] generate done in 3806ms
+[fastvideo] generate preset=fast_wan_t2v_480p tiny=false 832x480 frames=121 steps=3 dmd=true rcm=false latent=1x16x31x60x104 nvfp4=off resident=true cuda=true
+[fastvideo] denoise=dmd steps=3
+[fastvideo] vsa: grid (31, 30, 52) tiles 832 topk 167 group 32
+[fastvideo] dmd step 1/3 t=1000 done in 1034ms
+[fastvideo] dmd step 2/3 t=757 done in 919ms
+[fastvideo] dmd step 3/3 t=522 done in 916ms
+[fastvideo] dmd 3 steps done in 2870ms
+[fastvideo] vae.decode done in 2398ms
+[fastvideo] video writer: 121 frames, png off (0 inline, 0 after the mp4 in 0.00s, 0.00 GiB), ffmpeg feed blocked 0.00s, mp4 tail 0.00s, buffered peak 0.00 GiB of 0.00
+[fastvideo] wrote 0 png frames → /fvscratch/state1/engine-out/30439dd7-f824-42b5-8a98-b20a39e3bf4d/frames (text 0.02s, denoise 2.87s, decode+mp4 2.99s, png 0.00s)
+[fastvideo] generate done in 5961ms
+[fastvideo] generate preset=fast_wan_t2v_480p tiny=false 832x480 frames=81 steps=3 dmd=true rcm=false latent=1x16x21x60x104 nvfp4=off resident=true cuda=true
+[fastvideo] denoise=dmd steps=3
+[fastvideo] dmd step 1/3 t=1000 done in 572ms
+[fastvideo] dmd step 2/3 t=757 done in 571ms
+[fastvideo] dmd step 3/3 t=522 done in 568ms
+[fastvideo] dmd 3 steps done in 1712ms
+[fastvideo] vae.decode done in 1607ms
+[fastvideo] video writer: 81 frames, png off (0 inline, 0 after the mp4 in 0.00s, 0.00 GiB), ffmpeg feed blocked 0.00s, mp4 tail 0.00s, buffered peak 0.00 GiB of 0.00
+[fastvideo] wrote 0 png frames → /fvscratch/state1/engine-out/73de6212-289b-43da-acce-47724c042699/frames (text 0.03s, denoise 1.71s, decode+mp4 2.02s, png 0.00s)
+[fastvideo] generate done in 3816ms
+[fastvideo] generate preset=fast_wan_t2v_480p tiny=false 832x480 frames=81 steps=3 dmd=true rcm=false latent=1x16x21x60x104 nvfp4=off resident=true cuda=true
+[fastvideo] denoise=dmd steps=3
+[fastvideo] dmd step 1/3 t=1000 done in 573ms
+[fastvideo] dmd step 2/3 t=757 done in 571ms
+[fastvideo] dmd step 3/3 t=522 done in 568ms
+[fastvideo] dmd 3 steps done in 1713ms
+[fastvideo] vae.decode done in 1606ms
+[fastvideo] video writer: 81 frames, png off (0 inline, 0 after the mp4 in 0.00s, 0.00 GiB), ffmpeg feed blocked 0.00s, mp4 tail 0.00s, buffered peak 0.00 GiB of 0.00
+[fastvideo] wrote 0 png frames → /fvscratch/state1/engine-out/a6e88cb8-7db7-4879-b999-64ad75b8b956/frames (text 0.00s, denoise 1.72s, decode+mp4 2.02s, png 0.00s)
+[fastvideo] generate done in 3787ms
+[fastvideo] generate preset=fast_wan_t2v_480p tiny=false 832x480 frames=81 steps=3 dmd=true rcm=false latent=1x16x21x60x104 nvfp4=off resident=true cuda=true
+[fastvideo] denoise=dmd steps=3
+[fastvideo] dmd step 1/3 t=1000 done in 573ms
+[fastvideo] dmd step 2/3 t=757 done in 571ms
+[fastvideo] dmd step 3/3 t=522 done in 569ms
+[fastvideo] dmd 3 steps done in 1713ms
+[fastvideo] vae.decode done in 1602ms
+[fastvideo] video writer: 81 frames, png off (0 inline, 0 after the mp4 in 0.00s, 0.00 GiB), ffmpeg feed blocked 0.00s, mp4 tail 0.00s, buffered peak 0.00 GiB of 0.00
+[fastvideo] wrote 0 png frames → /fvscratch/state1/engine-out/755b335d-9581-4889-9f12-425068979b4f/frames (text 0.00s, denoise 1.72s, decode+mp4 2.00s, png 0.00s)
+[fastvideo] generate done in 3779ms
+[fastvideo] generate preset=fast_wan_t2v_480p tiny=false 848x480 frames=81 steps=3 dmd=true rcm=false latent=1x16x21x60x106 nvfp4=off resident=true cuda=true
+[fastvideo] denoise=dmd steps=3
+[fastvideo] vsa: grid (21, 30, 53) tiles 672 topk 135 group 32
+[fastvideo] dmd step 1/3 t=1000 done in 653ms
+[fastvideo] dmd step 2/3 t=757 done in 622ms
+[fastvideo] dmd step 3/3 t=522 done in 620ms
+[fastvideo] dmd 3 steps done in 1895ms
+[fastvideo] vae.decode done in 1709ms
+[fastvideo] video writer: 81 frames, png off (0 inline, 0 after the mp4 in 0.00s, 0.00 GiB), ffmpeg feed blocked 0.00s, mp4 tail 0.00s, buffered peak 0.00 GiB of 0.00
+[fastvideo] wrote 0 png frames → /fvscratch/state1/engine-out/da1e9053-4802-4813-9392-c58c2b67fffa/frames (text 0.00s, denoise 1.90s, decode+mp4 2.12s, png 0.00s)
+[fastvideo] generate done in 4078ms
+2026-09-28T16:49:53.087105Z  INFO fastvideo_serve::shutdown: SIGTERM
+2026-09-28T16:49:53.087162Z  INFO fastvideo_serve::app: shutdown requested: draining
+2026-09-28T16:49:53.632595Z  INFO fastvideo_serve::app: drained

@@ -1,0 +1,22 @@
+2026-09-28T16:49:54.125344Z  INFO fv_serve: fv-serve 0.1.0 config=[redacted]
+2026-09-28T16:49:58.199512Z  WARN fastvideo_serve::encoders: H.264 encoder: NVENC unavailable after the startup probe, falling back to openh264 (auto) settings=["director.encoder", "reactor.h264", "webrtc.encoder", "engine.post_encoder"] attempts=2 director=openh264 reactor=off streams=x264-test post=cpu-test-x264 nvenc_error=[h264_nvenc @ 0x59f7a48b1080] OpenEncodeSessionEx failed: unsupported device (2): (no details) | [h264_nvenc @ 0x59f7a48b1080] No capable devices found | Error initializing output stream 0:0 -- Error while opening encoder for output stream #0:0 - maybe incorrect parameters such as bit_rate, rate, width or height
+2026-09-28T16:49:58.199922Z  WARN fastvideo_serve::app: FV_URL_SIGNING_KEY is not set: /files URLs die with this process
+[fastvideo] cuda device=0 sm_90 kernels=Cubin(90) gemm=Bf16 resident=true sdpa=dense sdpa_chunk=1024 oxide=[] oxide_embedded=10
+2026-09-28T16:49:59.199369Z  INFO fastvideo_engine_service::cuda::backend: loading model=sf-wan dit_gb=5.676070816 free_gb=149.475688448
+2026-09-28T16:49:59.252389Z  WARN fastvideo_serve::app: 
+==============================================================================
+[admin token banner redacted]
+[admin token banner redacted]
+[fastvideo] taehv available for the distilled presets (/workspace/weights/auxiliary/tae)
+2026-09-28T16:51:20.863633Z  INFO fastvideo_engine_service::cuda::backend: model resident model=sf-wan seconds=81.664228253
+FV-SERVE READY models=sf-wan
+2026-09-28T16:51:20.864005Z  INFO fastvideo_serve::app: ready models=1
+[fastvideo] causal rollout 832x480 window=21 sink=3 rope=Relativistic switch=Keep timesteps [1000.0, 937.5, 833.3333, 625.0]
+[fastvideo] sdpa: fused mma B=1 H=12 Sq=4680 Sk=4680 D=128
+2026-09-28T16:51:22.724800Z  INFO fastvideo_webrtc::host: webrtc host bound udp_local=Some(0.0.0.0:41784) tcp_local=None candidates=["candidate:1 1 udp 2130706431 172.21.0.2 41784 typ host"]
+2026-09-28T16:51:22.755780Z  INFO fastvideo_webrtc::whip::publisher: whip negotiated codec=Some("H264") status=201 profile=EncodeProfile { max_size: None, h264_level: L4_0 }
+[fastvideo] causal rollout 848x480 window=21 sink=3 rope=Relativistic switch=Keep timesteps [1000.0, 937.5, 833.3333, 625.0]
+2026-09-28T16:57:18.806089Z  INFO fastvideo_reactor::gateway: reactor connection closed conn=2034 reason=RemoteClosed
+2026-09-28T16:57:18.931485Z  INFO fastvideo_serve::shutdown: SIGTERM
+2026-09-28T16:57:18.931537Z  INFO fastvideo_serve::app: shutdown requested: draining
+2026-09-28T16:57:19.373671Z  INFO fastvideo_serve::app: drained

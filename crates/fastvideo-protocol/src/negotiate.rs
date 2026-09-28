@@ -639,7 +639,25 @@ pub fn canvas_for_aspect(c: &CanvasCaps, ratio: f64, short_edge: u32) -> (u32, u
     }
     let m = c.multiple.max(1) as f64;
     let snap = |v: f64| (((v / m).round_ties_even() * m) as u32).max(m as u32);
-    (snap(w), snap(h))
+    let (sw, sh) = (snap(w), snap(h));
+    if (sw as f64) * (sh as f64) <= cap {
+        return (sw, sh);
+    }
+    // Rounding both sides up can overshoot the budget (Wan 480p at 16:9:
+    // 842.6x473.9 snaps to 848x480 > 832x480). Round a side down instead:
+    // the largest area within the budget, then the closest aspect.
+    let floor = |v: f64| (((v / m).floor() * m) as u32).max(m as u32);
+    let (fw, fh) = (floor(w), floor(h));
+    [(fw, sh), (sw, fh), (fw, fh)]
+        .into_iter()
+        .filter(|&(a, b)| (a as f64) * (b as f64) <= cap)
+        .max_by(|&(a, b), &(x, y)| {
+            let (ar, xr) = ((a as u64) * (b as u64), (x as u64) * (y as u64));
+            let da = ((a as f64 / b as f64) - ratio).abs();
+            let dx = ((x as f64 / y as f64) - ratio).abs();
+            ar.cmp(&xr).then(dx.total_cmp(&da))
+        })
+        .unwrap_or((fw, fh))
 }
 
 // ---- rules 4-5: frames and fps ------------------------------------------------

@@ -1,0 +1,8 @@
+[INFO  reactor_ffi::peer] [peer] transceiver #0: name=main_video kind=Video dir=Recvonly mid="0"
+[INFO  reactor_ffi::peer] [peer] track received  kind=Video  name=Some("main_video")  mid=Some("0")
+[INFO  reactor_ffi::peer] [peer] connection state → Connecting
+[INFO  reactor_ffi::peer] [peer] connection state → Connected
+[INFO  reactor_ffi::peer] [peer] data channel open
+[INFO  reactor_ffi::peer] [peer] control channel open
+[INFO  reactor_ffi::peer] [peer] connection state → Closed
+{"sdk": "1.6.0", "connect_s": 0.257, "tracks": ["main_video"], "set_prompt_ack_s": 0.002, "first_frame_after_connect_s": 0.722, "first_frame_after_prompt_s": 0.464, "video_size": [848, 480], "steady": {"seconds": 30.0, "frames": 481, "fps": 16.032}, "switch_ack_s": 0.004, "switch_state_update_s": 0.003, "paused_frames_in_5s": 43, "paused_state": {"block_index": 56.0, "paused": true, "prompt": "A drone shot gliding over snowy mountain peaks at dawn, pink sky, slow steady forward camera motion, highly detailed", "seed": 2838528141.0, "unique_fps": 15.75}, "resume_to_5_frames_s": 1.059, "get_state": {"data": {"block_index": 57.0, "paused": false, "prompt": "A drone shot gliding over snowy mountain peaks at dawn, pink sky, slow steady forward camera motion, highly detailed", "seed": 2838528141.0, "unique_fps": 14.55}, "type": "state_update"}, "reset_ack": null, "reset": {"block_index_before": 57.0, "block_index_2s_after": 3.0, "ack_s": 2.007}, "frames_5s_after_reset": 80, "frames_total": 695, "message_types": ["state_update"], "ok": true}

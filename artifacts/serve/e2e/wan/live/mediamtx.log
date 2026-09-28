@@ -1,0 +1,18 @@
+2026/09/28 16:49:54 INF MediaMTX v1.15.1
+2026/09/28 16:49:54 INF configuration loaded from /fvscratch/mtx/mediamtx.yml
+2026/09/28 16:49:54 INF [RTSP] listener opened on :8554 (TCP), :8000 (UDP/RTP), :8001 (UDP/RTCP)
+2026/09/28 16:49:54 INF [WebRTC] listener opened on :8889 (HTTP), :8189 (ICE/UDP)
+2026/09/28 16:49:54 INF [API] listener opened on :9997
+2026/09/28 16:51:22 INF [WebRTC] [session 6c7d41bc] created by 127.0.0.1:50394
+2026/09/28 16:51:22 INF [WebRTC] [session 6c7d41bc] peer connection established, local candidate: host/udp/172.21.0.2/8189, remote candidate: prflx/udp/127.0.0.1/41784
+2026/09/28 16:51:23 INF [WebRTC] [session 6c7d41bc] is publishing to path 'sfwan', 1 track (H264)
+2026/09/28 16:51:23 INF [RTSP] [conn 127.0.0.1:56188] opened
+2026/09/28 16:51:23 INF [RTSP] [session af6f9b4c] created by 127.0.0.1:56188
+2026/09/28 16:51:23 INF [RTSP] [session af6f9b4c] is reading from path 'sfwan', with TCP, 1 track (H264)
+2026/09/28 16:51:25 INF [WebRTC] [session fdacbb0b] created by 127.0.0.1:50408
+2026/09/28 16:51:25 INF [WebRTC] [session fdacbb0b] peer connection established, local candidate: host/udp/127.0.0.1/8189, remote candidate: host/udp/172.21.0.2/48888
+2026/09/28 16:51:25 INF [WebRTC] [session fdacbb0b] is reading from path 'sfwan', 1 track (H264)
+2026/09/28 16:51:55 INF [WebRTC] [session fdacbb0b] closed: peer connection closed
+2026/09/28 16:56:25 INF [RTSP] [session af6f9b4c] destroyed: torn down by 127.0.0.1:56188
+2026/09/28 16:56:25 INF [RTSP] [conn 127.0.0.1:56188] closed: EOF
+2026/09/28 16:56:26 INF [WebRTC] [session 6c7d41bc] closed: terminated

@@ -90,7 +90,10 @@ fn rollout_base(r: &SfWanRecipe, text_cache: Option<&Path>) -> fastvideo_cudarc:
         flow_shift: r.wan.flow_shift,
         local_attn_frames: r.local_attn_frames as usize,
         sink_frames: r.sink_frames as usize,
-        rope: RopePolicy::Relativistic,
+        // The rebased sink: stable over long rollouts and 0.1 s per block
+        // cheaper than relativistic, which flickers and collapses after
+        // about a minute (docs/ports/wan.md, long-run stability).
+        rope: RopePolicy::RebasedSink,
         prompt_switch: PromptSwitch::Keep,
         rgb8: true,
         tokenizer_path: tok.is_file().then(|| tok.to_string_lossy().into_owned()),

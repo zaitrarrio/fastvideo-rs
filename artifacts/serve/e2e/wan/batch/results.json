@@ -1,0 +1,254 @@
+[
+ {
+  "endpoint": "GET /health + / + /fv/v1/capabilities",
+  "ok": false,
+  "health": {
+   "model_loaded": true,
+   "state": "AVAILABLE",
+   "status": "ok"
+  },
+  "root": {
+   "model": "fastwan21-1.3b",
+   "server": "fv-serve",
+   "version": "0.1.0"
+  },
+  "models": [
+   null
+  ],
+  "recipe": null,
+  "wall_s": 1.35
+ },
+ {
+  "endpoint": "FastWan POST /generate -> /status -> /video (81 f, warm-up)",
+  "ok": true,
+  "id": "2bdc3e73-02a6-40be-9045-105b972dff93",
+  "frames": 81,
+  "statuses": [
+   "queued",
+   "processing",
+   "completed"
+  ],
+  "submit_to_completed_s": 6.728,
+  "queued_s": 1.072,
+  "download_s": 1.043,
+  "bytes": 1229355,
+  "faststart": true,
+  "ffprobe": {
+   "streams": [
+    {
+     "codec_name": "h264",
+     "profile": "High",
+     "codec_type": "video",
+     "width": 832,
+     "height": 480,
+     "r_frame_rate": "16/1",
+     "nb_frames": "81"
+    }
+   ],
+   "format": {
+    "duration": "5.062500",
+    "size": "1229355"
+   }
+  },
+  "wall_s": 7.839
+ },
+ {
+  "endpoint": "FastWan /generate (81 f, warm)",
+  "ok": true,
+  "id": "c673fb18-09c1-44e2-862b-ad03c7d2e63c",
+  "frames": 81,
+  "statuses": [
+   "queued",
+   "processing",
+   "completed"
+  ],
+  "submit_to_completed_s": 5.004,
+  "queued_s": 0.729,
+  "download_s": 0.408,
+  "bytes": 1012213,
+  "faststart": true,
+  "ffprobe": {
+   "streams": [
+    {
+     "codec_name": "h264",
+     "profile": "High",
+     "codec_type": "video",
+     "width": 832,
+     "height": 480,
+     "r_frame_rate": "16/1",
+     "nb_frames": "81"
+    }
+   ],
+   "format": {
+    "duration": "5.062500",
+    "size": "1012213"
+   }
+  },
+  "wall_s": 5.477
+ },
+ {
+  "endpoint": "FastWan /generate (121 f)",
+  "ok": true,
+  "id": "30439dd7-f824-42b5-8a98-b20a39e3bf4d",
+  "frames": 121,
+  "statuses": [
+   "queued",
+   "processing",
+   "completed"
+  ],
+  "submit_to_completed_s": 7.385,
+  "queued_s": 0.726,
+  "download_s": 0.518,
+  "bytes": 931866,
+  "faststart": true,
+  "ffprobe": {
+   "streams": [
+    {
+     "codec_name": "h264",
+     "profile": "High",
+     "codec_type": "video",
+     "width": 832,
+     "height": 480,
+     "r_frame_rate": "16/1",
+     "nb_frames": "121"
+    }
+   ],
+   "format": {
+    "duration": "7.562500",
+    "size": "931866"
+   }
+  },
+  "wall_s": 7.986
+ },
+ {
+  "endpoint": "FastWan /generate off-grid rejection",
+  "ok": true,
+  "status": 400,
+  "body": "{\"detail\":\"num_frames 50 must be one of 9..=129 frames (0.562..=8.062 s at 16 fps) on the 4k+1 grid; nearest valid: 53\"}",
+  "wall_s": 0.35
+ },
+ {
+  "endpoint": "FastWan DELETE /video/{id}",
+  "ok": true,
+  "delete": 200,
+  "status_after": 404,
+  "wall_s": 0.843
+ },
+ {
+  "endpoint": "openai models.list",
+  "ok": true,
+  "ids": [
+   "fastwan21-1.3b",
+   "FastVideo/FastWan2.1-T2V-1.3B-Diffusers",
+   "wan-turbo"
+  ],
+  "wall_s": 1.239
+ },
+ {
+  "endpoint": "openai videos.create -> retrieve -> download_content -> delete",
+  "ok": true,
+  "id": "video_gen_73de6212289b43daacce47724c042699",
+  "created": {
+   "status": "queued",
+   "model": "fastwan21-1.3b",
+   "size": "832x480",
+   "seconds": "5"
+  },
+  "submit_to_completed_s": 5.102,
+  "bytes": 1135232,
+  "ffprobe": {
+   "streams": [
+    {
+     "codec_name": "h264",
+     "profile": "High",
+     "codec_type": "video",
+     "width": 832,
+     "height": 480,
+     "r_frame_rate": "16/1",
+     "nb_frames": "81"
+    }
+   ],
+   "format": {
+    "duration": "5.062500",
+    "size": "1135232"
+   }
+  },
+  "faststart": true,
+  "wall_s": 6.545
+ },
+ {
+  "endpoint": "openai videos.create_and_poll",
+  "ok": true,
+  "status": "completed",
+  "wall": 5.032,
+  "wall_s": 5.032
+ },
+ {
+  "endpoint": "native POST /fv/v1/jobs -> GET -> /content",
+  "ok": true,
+  "id": "fvjob_755b335d958148899f12425068979b4f",
+  "status": "succeeded",
+  "content_status": 302,
+  "media_host": "<account>.r2.cloudflarestorage.com",
+  "submit_to_succeeded_s": 5.629,
+  "bytes": 1031707,
+  "job_timings": null,
+  "ffprobe": {
+   "streams": [
+    {
+     "codec_name": "h264",
+     "profile": "High",
+     "codec_type": "video",
+     "width": 832,
+     "height": 480,
+     "r_frame_rate": "16/1",
+     "nb_frames": "81"
+    }
+   ],
+   "format": {
+    "duration": "5.062500",
+    "size": "1031707"
+   }
+  },
+  "wall_s": 6.274
+ },
+ {
+  "endpoint": "fal queue fastvideo/fastwan21-1.3b/text-to-video",
+  "ok": true,
+  "submit": {
+   "cancel_url": "https://3wow7t6n2sabhs-8000.proxy.runpod.net/fastvideo/fastwan21-1.3b/requests/a8f2ff62-5b26-4b4b-b97b-1646c4f65432/cancel",
+   "queue_position": 0,
+   "request_id": "a8f2ff62-5b26-4b4b-b97b-1646c4f65432",
+   "response_url": "https://3wow7t6n2sabhs-8000.proxy.runpod.net/fastvideo/fastwan21-1.3b/requests/a8f2ff62-5b26-4b4b-b97b-1646c4f65432",
+   "status_url": "https://3wow7t6n2sabhs-8000.proxy.runpod.net/fastvideo/fastwan21-1.3b/requests/a8f2ff62-5b26-4b4b-b97b-1646c4f65432/status"
+  },
+  "status": "COMPLETED",
+  "submit_to_completed_s": 5.989,
+  "response_status": 200,
+  "output": {
+   "expanded_prompt": null,
+   "timings": {
+    "inference": 1.896757294
+   }
+  },
+  "file": "2h6QU0gCSBOTksWMK2f_-_minimax-h3.mp4",
+  "ffprobe": {
+   "streams": [
+    {
+     "codec_name": "h264",
+     "profile": "High",
+     "codec_type": "video",
+     "width": 848,
+     "height": 480,
+     "r_frame_rate": "16/1",
+     "nb_frames": "81"
+    }
+   ],
+   "format": {
+    "duration": "5.062500",
+    "size": "942374"
+   }
+  },
+  "wall_s": 6.558
+ }
+]

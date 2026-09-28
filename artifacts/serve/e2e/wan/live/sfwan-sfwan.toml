@@ -1,0 +1,40 @@
+[server]
+bind = "0.0.0.0:8000"
+state_dir = "/fvscratch/state2"
+shutdown_grace_s = 5
+
+[auth]
+mode = "keys"
+
+[artifacts]
+backend = "auto"
+
+[jobs]
+backend = "auto"
+
+[engine]
+backend = "cuda"
+post_encoder = "auto"
+
+[[models]]
+id = "sf-wan"
+family = "wan"
+recipe = "sfwan21-1.3b"
+weights = "${FV_WEIGHTS}/sfwan21-1.3b"
+resident = true
+
+[protocols]
+openai_videos = false
+fastwan = false
+minimax = false
+fal = false
+fal_director = false
+ltx = false
+reactor = true
+native = true
+
+[reactor]
+model = "sf-wan"
+
+[webrtc]
+public_ip = "auto"

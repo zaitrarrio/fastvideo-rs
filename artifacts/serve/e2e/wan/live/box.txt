@@ -1,0 +1,11 @@
+NVIDIA H200, 143771 MiB, 580.126.09
+features=cuda,http-client
+h264_nvenc_listed=1
+public_ip_set=yes tcp70000=32858
+fastwan21-1.3b: CACHEDIR.TAG blobs model_index.json models--FastVideo--FastWan2.1-T2V-1.3B-Diffusers text_encoder tokenizer transformer vae 
+sfwan21-1.3b: model_index.json scheduler text_encoder tokenizer transformer vae 
+auxiliary/tae: taeh3.safetensors taeltx2_3_wide.safetensors taew2_1.safetensors taew2_2.safetensors 
+192
+               total        used        free      shared  buff/cache   available
+Mem:            2015          42         345          31        1627        1931
+overlay          60G   16M   60G   1% /
