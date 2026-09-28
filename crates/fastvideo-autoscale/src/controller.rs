@@ -245,8 +245,8 @@ impl Controller {
         }
     }
 
-    /// Runs `tick` every `interval_s` on the wall clock until `stop` fires;
-    /// releases the lease on the way out.
+    /// Runs `tick` every `interval_s` on the wall clock until `stop` turns
+    /// true (a dropped sender never stops it); releases the lease on the way out.
     pub fn spawn(self: Arc<Self>, mut stop: tokio::sync::watch::Receiver<bool>) -> tokio::task::JoinHandle<()> {
         tokio::spawn(async move {
             let mut every = tokio::time::interval(Duration::from_secs_f64(self.cfg.interval_s));
@@ -257,10 +257,16 @@ impl Controller {
                 holder = %self.holder,
                 "autoscale: controller started"
             );
+            // A dropped sender means "no stop signal": run for the process lifetime.
+            let mut stoppable = true;
             loop {
                 tokio::select! {
                     _ = every.tick() => { self.tick(unix_now()).await; }
-                    r = stop.changed() => { if r.is_err() || *stop.borrow() { break; } }
+                    r = stop.changed(), if stoppable => match r {
+                        Ok(()) if *stop.borrow() => break,
+                        Ok(()) => {}
+                        Err(_) => stoppable = false,
+                    },
                 }
             }
             if let Err(e) = self.lease.release(&self.cfg.lease.name, &self.holder).await {
