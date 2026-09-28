@@ -402,8 +402,15 @@ async fn v1_client_av_session() {
     pump(&mut peer, &mut seen, Duration::from_millis(500), |_| false).await;
     let sent = seen.video.len() - v0;
     assert!(sent > frames, "{sent} video frames for a {frames}-frame clip (+ black)");
-    // Intra-only VP8: every frame is a key frame.
-    assert!(seen.video.iter().all(|(k, _)| *k));
+    // The peer starts on a key frame. With ffmpeg libvpx the rest are
+    // mostly inter frames; the libwebp fallback sends only key frames.
+    assert!(seen.video[0].0, "first frame is not a key frame");
+    let keys = seen.video.iter().filter(|(k, _)| *k).count();
+    if fastvideo_media::vp8::libvpx_available() {
+        assert!(keys * 4 < seen.video.len(), "{keys} key frames of {}", seen.video.len());
+    } else {
+        assert_eq!(keys, seen.video.len());
+    }
 
     // Stop with a reason: session_ended, then the wire closes; READY.
     let (s, _, _) = call(&app, "POST", "/stop_session", Some(json!({"reason": "bye"}))).await;

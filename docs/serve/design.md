@@ -872,7 +872,14 @@ Fan-out: WebRTC peers (str0m) | WHIP publisher | RTMP/HLS (ffmpeg) | recorder
 - Media conversion work never runs on the executor: RGB→I420, resampling and
   encoding.
 - Encoding happens **once per session**, and the bitstream is fanned out.
-  - A PLI or FIR from any peer forces an IDR, rate-limited to one per second.
+  - A PLI or FIR from any peer is answered by a keyframe within 1 s: a
+    keyframe sent less than 1 s before it, or the periodic IDR when it is
+    due within 1 s, covers it; otherwise it forces an IDR, rate-limited to
+    one per second (`fastvideo_media::video::KeyframePolicy` for WHIP
+    streams; the Reactor runtime rate-limits PLI keyframes per codec).
+    MediaMTX asks its WebRTC publishers for a keyframe every 2 s; with the
+    2 s GOP none of those forces an IDR (a forced NVENC IDR restarts the
+    ffmpeg process).
   - This loses per-peer bitrate adaptation, which RT gets from libwebrtc. In
     return we pay for one encoder per session, not one per viewer.
   - The target bitrate is fixed by config: 6 Mb/s at 768p and 2.5 Mb/s at
@@ -1136,10 +1143,13 @@ router so `/fal/proxy` reaches `/wma/*`).
   one `msid` stream (one `MediaStream` in the browser).
 - Codecs: H.264 for every offer that has it (NVENC in production, OpenH264
   in CPU tests). Offers **without** H.264 (open-source Chromium, including
-  Playwright's) get intra-only VP8 through `AnswerOptions::video_codecs =
-  [H264, Vp8]` (`[director] vp8_fallback`), encoded in process by libwebp
-  like the Reactor runtime does (libvpx's VP8 encoder measured ~200 ms per
-  832x480 frame on the CI VM).
+  Playwright's) get VP8 through `AnswerOptions::video_codecs =
+  [H264, Vp8]` (`[director] vp8_fallback`): inter-frame through ffmpeg
+  `libvpx` (`fastvideo_media::vp8`, like the Reactor runtime), intra-only
+  libwebp when ffmpeg has no libvpx. (An earlier measurement of ~200 ms per
+  832x480 libvpx frame was ffmpeg's default thread count: libvpx's VP8
+  worker threads spin-wait and collapse on a contended CPU; one thread
+  encodes 1344x768 at ~60-80 fps.)
 - Tests: `crates/fastvideo-fal/tests/director_e2e.rs` (a str0m client:
   signalling, strict schemas, versions, heartbeat expiry, `/start-session`
   SSE, session limit, `deadline_missed`, A/V at 24 fps / 48 kHz stereo, a
@@ -1727,11 +1737,15 @@ additions and readings; everything is re-exported from the crate root.
   for the first frame, offers H.264 first (no audio m-line for video-only
   models), encodes once (`[webrtc] encoder`, default `auto`: NVENC when
   the startup probe encodes, else OpenH264, else the CPU-test x264;
-  `FV_STREAM_ENCODER` overrides), Opus stereo, forces an IDR on PLI/FIR or
-  tick drops (1/s), and sends the WHIP `DELETE` on stop or `max_seconds`.
+  `FV_STREAM_ENCODER` overrides), Opus stereo, answers PLI/FIR, tick drops
+  and send errors with a keyframe within 1 s (`KeyframePolicy`: the
+  periodic IDR when due, else a forced one, 1/s), and sends the WHIP `DELETE` on stop or `max_seconds`.
   `FV_STREAM_STUN` sets the srflx probe (`none` for loopback).
   `tests/streams_whip.rs` decodes what an in-process WHIP endpoint receives;
-  `scripts/serve/whip-e2e.sh` adds MediaMTX and a WHEP viewer.
+  `scripts/serve/whip-e2e.sh` adds MediaMTX and a WHEP viewer (CPU run
+  2026-09-27, MediaMTX v1.15.1: fake causal stream published over WHIP,
+  read back through WHEP, 48 H.264 access units received, 33 decoded with
+  their burned-in frame index).
 - **GPU run (2026-09-27, `scripts/serve/runpod-sfwan-whip.sh`, L40S,
   driver 580.159, serve image built with `webrtc`):** fv-serve with
   `CausalCudaBackend` → `POST /fv/v1/streams` → WHIP (NVENC, Constrained
@@ -1743,7 +1757,16 @@ additions and readings; everything is re-exported from the crate root.
   underruns in 37 s of video; the 30 s RTSP recording holds 188 decodable
   frames. A `set_prompt` at block 10 switched the scene at the next block
   (autumn river → snowy dawn), with the KV cache kept. Device memory 26.0
-  GiB. Artifacts: `artifacts/serve/sfwan-whip/09272059/`.
+  GiB. Artifacts: `artifacts/serve/sfwan-whip/09272059/`. That run forced
+  19 IDRs in 37 s (`forced_idrs`; `pacer_dropped` 0 and no send errors):
+  1 at start plus MediaMTX's PLI every 2 s, each an ffmpeg restart. Fixed
+  by `KeyframePolicy` (above): on CPU (`whip-e2e.sh`, OpenH264, 16 fps)
+  the same MediaMTX PLIs went from 5 forced IDRs in 9 s to 0 (5
+  `keyframe_requests`, all `keyframe_requests_covered`). Open: the encoder
+  GOP and CBR budget use the nominal fps (16), so at L40S's ~6 fps the
+  periodic IDR comes every ~5.3 s (some PLIs still force one) and the
+  stream runs below its target bitrate (the RTSP recording averaged
+  ~1.4 Mb/s against 2.5 Mb/s).
 - Owned files: `stream/{mod,clip,queue,rules,causal,player,pace}.rs`,
   `src/cuda/causal.rs`, `tests/stream_{clip,causal}.rs`,
   `fastvideo-serve/src/streams.rs`, `fastvideo-serve/tests/streams_whip.rs`,
@@ -1794,12 +1817,20 @@ additions and readings; everything is re-exported from the crate root.
   when short). **Deviation (VP8):** the Python `reactor_sdk` 1.6.0's
   libwebrtc offers VP8/VP9/AV1 and no H.264, so `fastvideo-webrtc` gained VP8
   answers (`AnswerOptions::video_codecs`, `PeerHandle::video_codec`) and the
-  runtime sends **intra-only VP8** encoded by libwebp (feature `vp8`, on by
-  default) to such peers; H.264 peers (browsers) get NVENC (`[reactor]
-  h264`, default `auto`: NVENC when the startup probe encodes, else
-  OpenH264). Intra-only
-  VP8 costs bitrate; an inter-frame VP8/AV1 encoder is the follow-up for
-  production SDK clients.
+  runtime sends **inter-frame VP8** to such peers: ffmpeg `libvpx`
+  (`fastvideo_media::vp8`: rgb24 in, IVF out, real-time CBR at the canvas
+  bitrate, no lag, one thread, a keyframe every 2 s; a forced keyframe
+  restarts the process). PLI/FIR is rate-limited to one keyframe per
+  second per codec (a new peer or a resumed track is served at once).
+  When ffmpeg has no libvpx the runtime falls back to intra-only VP8 by
+  libwebp (feature `vp8`, on by default). H.264 peers (browsers) get NVENC
+  (`[reactor] h264`, default `auto`: NVENC when the startup probe encodes,
+  else OpenH264). Measured with `examples/vp8_bitrate` at 1344x768, 24 fps
+  (luma PSNR): moving `testsrc2`, libwebp q70 6100 kb/s at 45.1 dB vs
+  libvpx 5835 kb/s at 47.2 dB (2923 kb/s at 42.6 dB); the fake engine's
+  near-static frames, libwebp 1964 kb/s at 45.3 dB vs libvpx 798 kb/s at
+  45.4 dB. AV1 (`av1_nvenc`) is not used: the serve image's Ubuntu 22.04
+  ffmpeg (4.4) has no `av1_nvenc`, and the SDK decodes VP8 everywhere.
 - **Compat** (`crates/fastvideo-reactor/tests/compat/run.sh`): Python
   `reactor_sdk` 1.6.0 local mode against `examples/fake_runtime` — A/V clip
   model (tracks `main_video` + `main_audio`, 48 kHz mono audio frames,

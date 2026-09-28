@@ -133,7 +133,7 @@ impl Gw {
                         }
                         PeerEvent::KeyframeRequest { .. } => {
                             if let Some(c) = self.handle.video_codec() {
-                                self.live.media.kick(c);
+                                self.live.media.request_keyframe(c);
                             }
                         }
                         PeerEvent::Media { .. } => {}

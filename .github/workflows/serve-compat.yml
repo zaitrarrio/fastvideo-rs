@@ -1,0 +1,134 @@
+# Client-compat CI (docs/serve/design.md §7.5, WP-17): the real client
+# libraries (openai, fal-client, @fal-ai/client, reactor_sdk, requests,
+# aiohttp, Playwright Chromium) against `fv-serve --features fake`.
+#
+# One job builds fv-serve once; a matrix runs each suite of
+# tests/compat/run.sh against that binary. Client versions are pinned in
+# tests/compat/requirements.txt and tests/compat/package-lock.json.
+name: serve-compat
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - "crates/**"
+      - "tests/compat/**"
+      - "tests/console/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "rust-toolchain.toml"
+      - ".github/workflows/serve-compat.yml"
+  push:
+    branches: ["main"]
+    paths:
+      - "crates/fastvideo-serve/**"
+      - "crates/fastvideo-serve-kit/**"
+      - "crates/fastvideo-engine-service/**"
+      - "crates/fastvideo-protocol/**"
+      - "crates/fastvideo-media/**"
+      - "crates/fastvideo-webrtc/**"
+      - "crates/fastvideo-openai-videos/**"
+      - "crates/fastvideo-minimax/**"
+      - "crates/fastvideo-ltxapi/**"
+      - "crates/fastvideo-fal/**"
+      - "crates/fastvideo-reactor/**"
+      - "tests/compat/**"
+      - "tests/console/**"
+      - "Cargo.lock"
+      - ".github/workflows/serve-compat.yml"
+
+permissions:
+  contents: read
+
+# Pull requests cancel superseded runs; main runs every pushed sha to the end
+# (agents push to main often, and a cancelled matrix says nothing).
+concurrency:
+  group: serve-compat-${{ github.event_name == 'pull_request' && github.ref || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: "0"
+  CARGO_PROFILE_DEV_DEBUG: "0"
+
+jobs:
+  build:
+    name: build fv-serve (fake)
+    runs-on: ubuntu-22.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: serve-compat
+      - name: Build fv-serve --features fake,full
+        run: |
+          cargo build -p fastvideo-serve --features fake,full --bin fv-serve \
+            --config 'profile.dev.package.openh264-sys2.opt-level=3' \
+            --config 'profile.dev.package.openh264.opt-level=3' \
+            --config 'profile.dev.package.audiopus_sys.opt-level=3' \
+            --config 'profile.dev.package.libwebp-sys.opt-level=3'
+      - uses: actions/upload-artifact@v4
+        with:
+          name: fv-serve-fake
+          path: target/debug/fv-serve
+          retention-days: 3
+
+  suite:
+    name: compat ${{ matrix.suite }}
+    needs: build
+    runs-on: ubuntu-22.04
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        suite: [openai, fastwan, minimax, ltx, fal-py, fal-js, fal-webhook, fal-director, reactor, console]
+    env:
+      FV_SERVE_BIN: ${{ github.workspace }}/bin/fv-serve
+      FV_COMPAT_DIR: ${{ github.workspace }}/compat-clients
+      PLAYWRIGHT_BROWSERS_PATH: ${{ github.workspace }}/pw-browsers
+      FV_COMPAT_KEEP_LOGS: "1"
+      FV_COMPAT_LOGS: ${{ github.workspace }}/compat-logs
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: fv-serve-fake
+          path: bin
+      - run: chmod +x bin/fv-serve
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: tests/compat/requirements.txt
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: tests/compat/package-lock.json
+      - name: ffmpeg
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq ffmpeg
+      - name: Pinned clients
+        run: bash tests/compat/run.sh --setup
+      - name: Chromium cache
+        if: matrix.suite == 'fal-director' || matrix.suite == 'console'
+        uses: actions/cache@v4
+        with:
+          path: pw-browsers
+          key: pw-${{ runner.os }}-${{ hashFiles('tests/compat/package-lock.json') }}
+      - name: Chromium (Playwright)
+        if: matrix.suite == 'fal-director' || matrix.suite == 'console'
+        run: |
+          cd "$FV_COMPAT_DIR/node"
+          npx --no-install playwright install --with-deps chromium
+      - name: Run ${{ matrix.suite }}
+        run: bash tests/compat/run.sh ${{ matrix.suite }}
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: compat-logs-${{ matrix.suite }}
+          path: compat-logs/
+          retention-days: 7

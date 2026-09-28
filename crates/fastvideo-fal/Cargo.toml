@@ -28,14 +28,14 @@ async-trait.workspace = true
 futures.workspace = true
 image.workspace = true
 # Intra-only VP8 via libwebp (built from its vendored C source) for offers
-# without H.264.
+# without H.264 when ffmpeg has no libvpx (inter-frame VP8 otherwise).
 webp = { version = "0.3", default-features = false, optional = true }
 
 [features]
 default = []
 # The WMA director runtime (design §5.6): str0m peers and Opus. Encoders:
 # NVENC through ffmpeg (always built), OpenH264 with `openh264`, and
-# intra-only VP8 (libwebp) for offers without H.264.
+# VP8 for offers without H.264 (ffmpeg libvpx, else libwebp intra-only).
 director = ["fastvideo-webrtc/str0m", "fastvideo-media/opus", "dep:webp"]
 openh264 = ["fastvideo-media/openh264"]
 

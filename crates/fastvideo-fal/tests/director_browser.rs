@@ -10,8 +10,8 @@
 //!   `PLAYWRIGHT_BROWSERS_PATH` (never `playwright install` here).
 //!
 //! Playwright's Chromium is built without H.264, so its offers carry
-//! VP8/VP9/AV1 only and the director answers intra-only VP8 (libwebp,
-//! `vp8_fallback`). Real Chrome offers H.264 and gets it.
+//! VP8/VP9/AV1 only and the director answers VP8 (ffmpeg libvpx, or
+//! intra-only libwebp without it; `vp8_fallback`). Real Chrome offers H.264 and gets it.
 //!
 //! Skipped when `FV_FAL_JS_DIR` is unset.
 //!

@@ -13,8 +13,9 @@
 //! - a re-anchoring [`Metronome`] at the model fps (never bursts);
 //! - Opus, with RTP times from the sample counter.
 //!
-//! Video is encoded on a second thread (H.264, or intra-only VP8 for offers
-//! without H.264) fed through a 10-tick drop-oldest queue, so a slow or
+//! Video is encoded on a second thread (H.264, or VP8 for offers without
+//! H.264: inter-frame through ffmpeg `libvpx`, intra-only libwebp when
+//! ffmpeg has no libvpx) fed through a 10-tick drop-oldest queue, so a slow or
 //! restarting encoder never stalls the clock or the audio (design §5.10:
 //! "encoder input 10 ticks, drop-oldest, then force IDR"). RTP times come
 //! from the tick counter; PLI/FIR is rate limited to one keyframe a second.
@@ -43,7 +44,8 @@ use super::vp8::{quality_for, Vp8Encoder};
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum VideoCodec {
     H264,
-    /// Intra-only VP8 for offers without H.264 (`vp8_fallback`).
+    /// VP8 for offers without H.264 (`vp8_fallback`): ffmpeg `libvpx`, else
+    /// intra-only libwebp.
     Vp8,
 }
 
@@ -130,6 +132,8 @@ enum Video {
     None,
     H264(Box<dyn VideoEncoder>),
     Vp8(Vp8Encoder),
+    /// Inter-frame VP8 through ffmpeg `libvpx` (when ffmpeg has it).
+    Libvpx(fastvideo_media::vp8::Vp8Encoder),
 }
 
 /// The playout thread's state.
@@ -382,9 +386,27 @@ struct VideoThread<S: MediaSink> {
 impl<S: MediaSink> VideoThread<S> {
     fn run(mut self) {
         loop {
-            let Some((f, rtp)) = self.q.pop_timeout(Duration::from_millis(200)) else {
+            let Some((f, rtp)) = self.q.pop_timeout(Duration::from_millis(50)) else {
                 if self.q.is_closed() {
                     return;
+                }
+                // The libvpx pipe hands frames back a few ms after the
+                // input: send the last one before a pause now.
+                if let Video::Libvpx(e) = &mut self.video {
+                    match e.poll() {
+                        Ok(frames) => {
+                            for x in frames {
+                                let t = self.pending_rtp.pop_front().unwrap_or_default();
+                                self.sink.video(x.data, t, x.keyframe);
+                                self.gauges.video_packets.fetch_add(1, Ordering::Relaxed);
+                            }
+                        }
+                        Err(e) => {
+                            self.failed.store(true, Ordering::Relaxed);
+                            let _ = self.events.send(MediaEvent::Failed(format!("vp8: {e}")));
+                            return;
+                        }
+                    }
                 }
                 continue;
             };
@@ -395,6 +417,7 @@ impl<S: MediaSink> VideoThread<S> {
             if self.keyframe.swap(false, Ordering::Relaxed) {
                 match &mut self.video {
                     Video::H264(e) => e.force_idr(),
+                    Video::Libvpx(e) => e.force_keyframe(),
                     Video::Vp8(_) => {}
                     Video::None => {}
                 }
@@ -418,6 +441,12 @@ impl<S: MediaSink> VideoThread<S> {
                 c.gop_seconds = self.cfg.gop_seconds;
                 Video::H264(create_encoder(self.cfg.h264, c).map_err(|e| format!("h264 encoder: {e}"))?)
             }
+            VideoCodec::Vp8 if fastvideo_media::vp8::libvpx_available() => {
+                let mut c = fastvideo_media::vp8::Vp8Config::new(f.width, f.height, self.cfg.fps);
+                c.bitrate_bps = bitrate;
+                c.gop_seconds = self.cfg.gop_seconds;
+                Video::Libvpx(fastvideo_media::vp8::Vp8Encoder::new(c).map_err(|e| format!("vp8 encoder: {e}"))?)
+            }
             VideoCodec::Vp8 => Video::Vp8(
                 Vp8Encoder::new(f.width, f.height, quality_for(bitrate, f.width, f.height, self.cfg.fps))
                     .map_err(|e| format!("vp8 encoder: {e}"))?,
@@ -436,6 +465,11 @@ impl<S: MediaSink> VideoThread<S> {
                 self.pending_rtp.push_back(rtp);
                 let aus = e.encode(f).map_err(|e| format!("h264: {e}"))?;
                 aus.into_iter().map(|x| (self.pending_rtp.pop_front().unwrap_or(rtp), x.data, x.keyframe)).collect()
+            }
+            Video::Libvpx(e) => {
+                self.pending_rtp.push_back(rtp);
+                let frames = e.encode(f).map_err(|e| format!("vp8: {e}"))?;
+                frames.into_iter().map(|x| (self.pending_rtp.pop_front().unwrap_or(rtp), x.data, x.keyframe)).collect()
             }
             Video::Vp8(e) => vec![(rtp, e.encode(f).map_err(|e| format!("vp8: {e}"))?, true)],
             Video::None => Vec::new(),

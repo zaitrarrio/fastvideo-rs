@@ -1,0 +1,60 @@
+# fv-serve config for the client-compat suites (tests/compat/run.sh).
+# The runner sets FV_BIND, FV_STATE_DIR, FV_PUBLIC_BASE_URL, FV_API_KEYS,
+# FV_URL_SIGNING_KEY, FV_ADMIN_TOKEN and FV_CALLBACKS_ALLOW_PRIVATE=1 (so
+# webhooks reach the suites' local receivers); FV_REACTOR_MODEL picks the
+# Reactor model per mode. `[protocols]` differs per suite: the runner
+# appends its own `[protocols]` table (BATCH, DIRECTOR or REACTOR in run.sh).
+
+[server]
+shutdown_grace_s = 2
+sync_timeout_s = 120
+
+[auth]
+mode = "keys"
+key_store = "memory"
+
+[artifacts]
+backend = "local"
+url_ttl_s = 3600
+
+[jobs]
+backend = "memory"
+sweep_interval_s = 60
+
+[engine]
+backend = "fake"
+# Crops (LTX 720p/1080p pad-and-crop) re-encode on the CPU here; NVENC in images.
+post_encoder = "cpu-test-x264"
+
+[engine.fake]
+step_ms = 15
+load_ms = 0
+all_resident = true
+placeholder_output = true
+
+[aliases]
+"MiniMax-H3" = "fake-h3-turbo"
+"MiniMax-H3-Max" = "fake-h3-max"
+"MiniMax-H3-Turbo" = "fake-h3-turbo"
+
+[limits]
+queue_max = 32
+body_max_mb = 64
+
+[webrtc]
+public_ip = "127.0.0.1"
+# No STUN: everything is on loopback (and CI has no UDP egress to Google).
+ice_servers = [{ urls = ["stun:127.0.0.1:9"] }]
+
+[director]
+# Playwright's Chromium offers no H.264, so it gets intra-only VP8.
+encoder = "openh264"
+vp8_fallback = true
+chunk_seconds = 5.0
+
+[reactor]
+# 160p canvas and VP8 for the Python SDK keep the fake stream real time
+# in a debug build.
+short_edge = 160
+h264 = "openh264"
+seed = 7

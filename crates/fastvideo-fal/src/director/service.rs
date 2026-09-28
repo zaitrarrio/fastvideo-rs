@@ -49,7 +49,8 @@ pub struct DirectorConfig {
     pub h264: EncoderBackend,
     /// Video bitrate; `None`: by canvas (§5.1).
     pub video_bitrate: Option<u32>,
-    /// Answer intra-only VP8 (libwebp) to offers without H.264; real
+    /// Answer VP8 (ffmpeg `libvpx`; intra-only libwebp when ffmpeg has no
+    /// libvpx) to offers without H.264; real
     /// Chrome/Safari/Firefox offer H.264 and get it.
     pub vp8_fallback: bool,
     /// Audio crossfade at chunk joins (design §5.5).

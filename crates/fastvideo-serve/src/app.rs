@@ -223,7 +223,12 @@ impl App {
         } else {
             WebhookSigner::from_seed_str(config.webhook_key.expose(), "fv-serve").map_err(|e| anyhow!(e))?
         };
-        let callbacks = Arc::new(CallbackSender::new(CallbackSender::default_transport(), Some(signer)));
+        let mut callbacks = CallbackSender::new(CallbackSender::default_transport(), Some(signer));
+        if config.server.callbacks_allow_private {
+            tracing::warn!("server.callbacks_allow_private: webhooks may target loopback/private hosts (tests only)");
+            callbacks.target.allow_private = true;
+        }
+        let callbacks = Arc::new(callbacks);
         let mcfg = mount_cfg(&config);
         let mut builder = ServeCtx::builder(sc, gate.clone())
             .auth(Auth::new(config.auth.mode, keys).with_key_store(key_store.clone()))
