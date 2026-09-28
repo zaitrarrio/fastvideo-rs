@@ -1,0 +1,2 @@
+2026-09-28T16:43:47Z	pod-created itxbg5fnspe3nz fv-e2e-a-0928164345 gpu=NVIDIA RTX PRO 6000 Blackwell Server Edition dph=2.09 image=ghcr.io/zaitrarrio/fastvideo-rs-serve@sha256:3beb71e40a7b6cb8ec23e5858627c614bdffe8447766181555fb6601937bc330
+2026-09-28T17:37:29Z	pod-deleted itxbg5fnspe3nz

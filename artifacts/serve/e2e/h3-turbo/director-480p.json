@@ -1,0 +1,158 @@
+{
+  "checks": [
+    "requestMiddleware: A/V session, strict schemas, versions, heartbeats, stop",
+    "proxyUrl: legacy receive (video only transceiver)"
+  ],
+  "results": {
+    "middleware": {
+      "mode": "middleware",
+      "app": "minimax/h3-turbo/director",
+      "sessionId": "419d390c-13dc-45c2-83b2-df4cac2acf0a",
+      "info": {
+        "fps": 24,
+        "resolutions": [
+          "480p",
+          "768p"
+        ],
+        "app": "minimax-h3-turbo-director"
+      },
+      "video": {
+        "codec": "video/VP8",
+        "width": 832,
+        "height": 480,
+        "decodedFps": 23.998200135275933,
+        "receivedFps": 23.998200135275933,
+        "presentedFps": 23.998200135275933
+      },
+      "audio": {
+        "codec": "audio/opus",
+        "channels": 2,
+        "samplesPerSecond": 47996.400270551865
+      },
+      "timeline": [
+        [
+          "ready (pc new)",
+          0
+        ],
+        [
+          "pc:connecting",
+          19
+        ],
+        [
+          "pc:connected",
+          19
+        ],
+        [
+          "session_info",
+          19
+        ],
+        [
+          "first audio rtp",
+          101
+        ],
+        [
+          "chunk 0",
+          20497
+        ],
+        [
+          "first video rtp",
+          20701
+        ],
+        [
+          "snap a",
+          21635
+        ]
+      ],
+      "aliveAfterMs": 25635,
+      "states": [
+        "live",
+        "closed"
+      ],
+      "messageTypes": [
+        "session_info",
+        "error",
+        "configured",
+        "session_metrics",
+        "chunk",
+        "chunk_metrics",
+        "prompt_pending",
+        "prompt_rejected",
+        "prompt_applied",
+        "pong",
+        "stream_exhausted"
+      ]
+    },
+    "proxy": {
+      "mode": "proxy",
+      "app": "minimax/h3-turbo/director",
+      "sessionId": "b6dd0085-984c-4ccd-8054-6ce11120ab2a",
+      "info": {
+        "fps": 24,
+        "resolutions": [
+          "480p",
+          "768p"
+        ],
+        "app": "minimax-h3-turbo-director"
+      },
+      "video": {
+        "codec": "video/VP8",
+        "width": 832,
+        "height": 480,
+        "decodedFps": 23.9994000155718,
+        "receivedFps": 23.9994000155718,
+        "presentedFps": 23.9994000155718
+      },
+      "audio": {
+        "samples": 0
+      },
+      "timeline": [
+        [
+          "ready (pc new)",
+          0
+        ],
+        [
+          "pc:connecting",
+          1
+        ],
+        [
+          "pc:connected",
+          1
+        ],
+        [
+          "session_info",
+          2
+        ],
+        [
+          "chunk 0",
+          88791
+        ],
+        [
+          "first video rtp",
+          88901
+        ],
+        [
+          "snap a",
+          89905
+        ]
+      ],
+      "states": [
+        "failed",
+        "live",
+        "closed"
+      ],
+      "messageTypes": [
+        "session_info",
+        "error",
+        "configured",
+        "session_metrics",
+        "chunk",
+        "chunk_metrics",
+        "prompt_pending",
+        "prompt_rejected",
+        "prompt_applied",
+        "pong",
+        "stream_exhausted"
+      ]
+    }
+  }
+}

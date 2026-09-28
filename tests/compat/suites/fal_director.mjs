@@ -4,7 +4,8 @@
 //
 // Adapted from crates/fastvideo-fal/tests/director_browser/wma_compat.mjs
 // (which drives an in-process fixture with a 480p tier and a silent H3):
-// here the resolution comes from FV_WMA_RESOLUTION (fv-serve's fake H3 is
+// here the app from FV_WMA_APP (default minimax/h3-max/director), the
+// resolution from FV_WMA_RESOLUTION (fv-serve's fake H3 is
 // 768p only), the alpha client is the `fal-client-alpha` npm alias from
 // tests/compat/package.json, and the video-only scenario runs only when an
 // app is given.
@@ -27,6 +28,7 @@ import path from "node:path";
 
 const [, , modulesDir, base, key, silentApp = ""] = process.argv;
 const RES = process.env.FV_WMA_RESOLUTION || "768p";
+const APP = process.env.FV_WMA_APP || "minimax/h3-max/director";
 const ALPHA = process.env.FV_FAL_ALPHA_PKG || "fal-client-alpha";
 const require = createRequire(path.join(modulesDir, "package.json"));
 const esbuild = require("esbuild");
@@ -290,11 +292,11 @@ try {
   };
 
   results.middleware = await page.evaluate(scenario, {
-    base, key, mode: "middleware", app: "minimax/h3-max/director", receive: ["video", "audio"], long: true, expectAudio: true, res: RES,
+    base, key, mode: "middleware", app: APP, receive: ["video", "audio"], long: true, expectAudio: true, res: RES,
   });
   checks.push("requestMiddleware: A/V session, strict schemas, versions, heartbeats, stop");
   results.proxy = await page.evaluate(scenario, {
-    base, key, mode: "proxy", app: "minimax/h3-max/director", receive: null, long: false, expectAudio: false, res: RES,
+    base, key, mode: "proxy", app: APP, receive: null, long: false, expectAudio: false, res: RES,
   });
   checks.push("proxyUrl: legacy receive (video only transceiver)");
   if (silentApp) {

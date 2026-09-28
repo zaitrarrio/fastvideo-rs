@@ -9,10 +9,10 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use fastvideo_engine_service::{ClipBuild, ClipSession, EngineService};
+use fastvideo_engine_service::{CancelToken, ClipBuild, ClipSession, EngineService};
 use fastvideo_fal::director::{ChunkBuild, ChunkOutput, DirectorClips, DirectorConfig, DirectorEngine, DirectorService};
 use fastvideo_media::video::EncoderBackend;
-use fastvideo_protocol::{ApiError, ModelCaps, SessionSpec};
+use fastvideo_protocol::{ApiError, JobId, ModelCaps, SessionSpec};
 #[cfg(test)]
 use fastvideo_webrtc::host::HostConfig;
 use fastvideo_webrtc::host::RtcHost;
@@ -23,11 +23,30 @@ use crate::config::Config;
 /// `DirectorEngine` over the engine's clip sessions.
 pub struct EngineDirector(pub EngineService);
 
-/// One clip session; `close` releases it even while a build is in flight.
+/// One clip session; `close` releases it even while a build is in flight
+/// and cancels the builds it queued (a queued one is dropped, a running one
+/// ends at its next denoise step), so the next session on the executor does
+/// not wait behind a stopped session's chunks.
 pub struct Clips {
     caps: ModelCaps,
     spec: SessionSpec,
     session: tokio::sync::RwLock<Option<ClipSession>>,
+    inflight: std::sync::Mutex<Vec<(JobId, CancelToken)>>,
+}
+
+impl Clips {
+    fn new(s: ClipSession) -> Self {
+        Self {
+            caps: s.caps().clone(),
+            spec: s.spec().clone(),
+            session: tokio::sync::RwLock::new(Some(s)),
+            inflight: std::sync::Mutex::new(Vec::new()),
+        }
+    }
+
+    fn inflight(&self) -> std::sync::MutexGuard<'_, Vec<(JobId, CancelToken)>> {
+        self.inflight.lock().unwrap_or_else(|e| e.into_inner())
+    }
 }
 
 #[async_trait::async_trait]
@@ -54,10 +73,18 @@ impl DirectorClips for Clips {
             let s = g.as_ref().ok_or_else(|| ApiError::internal("the clip session is closed"))?;
             s.build(b).await?
         };
-        let out = job.wait().await?;
+        let id = job.id;
+        self.inflight().push((id, job.cancel.clone()));
+        let out = job.wait().await;
+        self.inflight().retain(|(j, _)| *j != id);
+        let out = out?;
         Ok(ChunkOutput { frames: out.frames.unwrap_or_default(), audio: out.audio })
     }
     async fn close(&self) {
+        let tokens: Vec<CancelToken> = self.inflight().drain(..).map(|(_, t)| t).collect();
+        for t in tokens {
+            t.cancel();
+        }
         if let Some(s) = self.session.write().await.take() {
             s.close();
         }
@@ -68,7 +95,7 @@ impl DirectorClips for Clips {
 impl DirectorEngine for EngineDirector {
     async fn open(&self, spec: SessionSpec) -> Result<Arc<dyn DirectorClips>, ApiError> {
         let s = self.0.open_clip_session(spec).await?;
-        Ok(Arc::new(Clips { caps: s.caps().clone(), spec: s.spec().clone(), session: tokio::sync::RwLock::new(Some(s)) }))
+        Ok(Arc::new(Clips::new(s)))
     }
 }
 
@@ -112,6 +139,50 @@ pub fn build(c: &Config, m: &MountCfg, engine: EngineService, host: RtcHost) -> 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A stopped session's in-flight chunk must not keep the executor busy:
+    /// `close` cancels it (WP-18 GPU E2E: a stopped director session's
+    /// anchored chunk delayed the next session's first chunk by ~70 s).
+    #[test]
+    fn close_cancels_the_inflight_build() {
+        use fastvideo_protocol::{AudioTrack, Continuity, TrackSet, VideoTrack};
+        let mut c = Config::default();
+        c.engine.fake.step_ms = 2_000;
+        let engine = crate::app::build_engine(&c).unwrap();
+        let rt = tokio::runtime::Builder::new_multi_thread().enable_all().build().unwrap();
+        rt.block_on(async {
+            let spec = SessionSpec {
+                model: "fake-h3-turbo".into(),
+                tracks: TrackSet {
+                    video: VideoTrack { name: "main_video".into(), width: 64, height: 32, fps: 24 },
+                    audio: Some(AudioTrack { name: "main_audio".into(), rate: 48_000, channels: 2 }),
+                },
+                canvas: (64, 32),
+                fps: 24,
+                continuity: Continuity::HardCut,
+                max_seconds: None,
+                seed: Some(7),
+            };
+            let d = EngineDirector(engine);
+            let clips = loop {
+                match d.open(spec.clone()).await {
+                    Ok(c) => break c,
+                    Err(_) => tokio::time::sleep(Duration::from_millis(20)).await,
+                }
+            };
+            let c2 = clips.clone();
+            let build = tokio::spawn(async move {
+                c2.build(ChunkBuild { prompt: "p".into(), seconds: 5.0, ..ChunkBuild::default() }).await
+            });
+            tokio::time::sleep(Duration::from_millis(300)).await;
+            let t0 = std::time::Instant::now();
+            clips.close().await;
+            let r = tokio::time::timeout(Duration::from_secs(5), build).await.expect("build ends").unwrap();
+            let e = r.expect_err("the build is cancelled");
+            assert!(fastvideo_engine_service::cancel::is_cancel(&e), "{e:?}");
+            assert!(t0.elapsed() < Duration::from_secs(5));
+        });
+    }
 
     #[test]
     fn config_maps() {

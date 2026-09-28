@@ -17,6 +17,10 @@
 // Needs the `playwright` npm package (resolved through NODE_PATH) and a
 // Chromium under PLAYWRIGHT_BROWSERS_PATH; tests/console/run.sh sets both.
 // Never prints the admin token or minted keys.
+//
+// Against a running server (the WP-18 GPU E2E): FV_CONSOLE_ORIGIN=<origin>
+// with FV_ADMIN_TOKEN set skips starting fv-serve; FV_CONSOLE_TIMEOUT_MS
+// (default 60 s) bounds each wait (real generations need minutes).
 
 'use strict';
 
@@ -29,7 +33,8 @@ const zlib = require('node:zlib');
 const { chromium } = require('playwright');
 
 const BIN = process.env.FV_SERVE_BIN || path.join(__dirname, '..', '..', 'target', 'debug', 'fv-serve');
-const TIMEOUT = 60_000;
+const REMOTE = process.env.FV_CONSOLE_ORIGIN || '';
+const TIMEOUT = Number(process.env.FV_CONSOLE_TIMEOUT_MS || 60_000);
 
 function freePort() {
   return new Promise((resolve, reject) => {
@@ -74,9 +79,9 @@ async function shot(page, name) {
 function step(msg) { process.stdout.write('  - ' + msg + '\n'); }
 
 async function main() {
-  if (!fs.existsSync(BIN)) throw new Error('fv-serve binary not found at ' + BIN + ' (cargo build -p fastvideo-serve --features fake)');
-  const port = await freePort();
-  const origin = 'http://127.0.0.1:' + port;
+  if (!REMOTE && !fs.existsSync(BIN)) throw new Error('fv-serve binary not found at ' + BIN + ' (cargo build -p fastvideo-serve --features fake)');
+  const port = REMOTE ? 0 : await freePort();
+  const origin = REMOTE ? REMOTE.replace(/\/$/, '') : 'http://127.0.0.1:' + port;
   const state = fs.mkdtempSync(path.join(os.tmpdir(), 'fv-console-smoke-'));
   const env = { ...process.env };
   for (const k of Object.keys(env)) if (k.startsWith('FV_') && k !== 'FV_SERVE_BIN') delete env[k];
@@ -88,19 +93,22 @@ async function main() {
     FV_URL_SIGNING_KEY: 'console-smoke',
     RUST_LOG: 'warn',
   });
-  const server = spawn(BIN, [], { env, stdio: ['ignore', 'pipe', 'pipe'] });
+  const server = REMOTE ? null : spawn(BIN, [], { env, stdio: ['ignore', 'pipe', 'pipe'] });
   let logs = '';
-  server.stdout.on('data', (d) => { logs += d; });
-  server.stderr.on('data', (d) => { logs += d; });
   let exited = null;
-  server.on('exit', (code) => { exited = code; });
+  if (server) {
+    server.stdout.on('data', (d) => { logs += d; });
+    server.stderr.on('data', (d) => { logs += d; });
+    server.on('exit', (code) => { exited = code; });
+  }
   const secrets = [];
   const redact = (s) => secrets.reduce((acc, x) => acc.split(x).join('<redacted>'), s);
 
   let browser;
   try {
     // Ready and the admin banner logged.
-    let admin = null;
+    let admin = REMOTE ? process.env.FV_ADMIN_TOKEN : null;
+    if (REMOTE && !admin) throw new Error('FV_CONSOLE_ORIGIN needs FV_ADMIN_TOKEN');
     for (let i = 0; i < 600 && !admin; i++) {
       if (exited !== null) throw new Error('fv-serve exited with ' + exited);
       const m = logs.match(/fvadm_[A-Za-z0-9_-]{43}/);
@@ -109,8 +117,8 @@ async function main() {
     }
     if (!admin) throw new Error('no generated admin token in the fv-serve log');
     secrets.push(admin);
-    if ((logs.match(new RegExp(admin, 'g')) || []).length !== 1) throw new Error('admin token must be logged exactly once');
-    step('fv-serve up on ' + origin + ' (generated admin token found in the WARN banner)');
+    if (!REMOTE && (logs.match(new RegExp(admin, 'g')) || []).length !== 1) throw new Error('admin token must be logged exactly once');
+    step(REMOTE ? 'target ' + origin + ' (admin token from FV_ADMIN_TOKEN)' : 'fv-serve up on ' + origin + ' (generated admin token found in the WARN banner)');
     for (let i = 0; i < 600; i++) {
       try { const r = await fetch(origin + '/health'); if (r.ok) break; } catch { /* not yet */ }
       await new Promise((r) => setTimeout(r, 100));
@@ -161,8 +169,12 @@ async function main() {
     await page.selectOption('[data-input="aspect_ratio"]', '9:16');
     await page.click('#run');
     await page.waitForSelector('#result-status.s-COMPLETED', { timeout: TIMEOUT });
+    // The result (and the player src) is fetched after the status turns
+    // COMPLETED; over a real network that takes a moment.
+    await page.waitForFunction(() => !!document.querySelector('#video')?.getAttribute('src'), null, { timeout: 30_000 });
     const src1 = await page.getAttribute('#video', 'src');
-    if (!src1 || !src1.includes('/files/')) throw new Error('text-to-video: no video URL in the player');
+    const isMedia = (u) => !!u && (REMOTE ? /^https?:\/\//.test(u) : u.includes('/files/'));
+    if (!isMedia(src1)) throw new Error('text-to-video: no video URL in the player (' + String(src1).split('?')[0].slice(0, 120) + ')');
     const v1 = await fetch(src1);
     if (!v1.ok || (await v1.arrayBuffer()).byteLength === 0) throw new Error('text-to-video: video URL does not serve');
     await shot(page, '03-t2v-result');
@@ -191,8 +203,9 @@ async function main() {
     await page.fill('[data-input="prompt"]', 'The camera slowly pulls back from the orange wall.');
     await page.click('#run');
     await page.waitForSelector('#result-status.s-COMPLETED', { timeout: TIMEOUT });
+    await page.waitForFunction((prev) => { const s = document.querySelector('#video')?.getAttribute('src'); return !!s && s !== prev; }, src1, { timeout: 30_000 }).catch(() => {});
     const src2 = await page.getAttribute('#video', 'src');
-    if (!src2 || !src2.includes('/files/') || src2 === src1) throw new Error('image-to-video: no new video URL');
+    if (!isMedia(src2) || src2 === src1) throw new Error('image-to-video: no new video URL');
     const r2 = await fetch(src2);
     if (!r2.ok) throw new Error('image-to-video: video URL does not serve');
     await shot(page, '05-i2v-result');
@@ -272,8 +285,10 @@ async function main() {
     process.exitCode = 1;
   } finally {
     if (browser) await browser.close().catch(() => {});
-    server.kill('SIGTERM');
-    await new Promise((r) => { if (exited !== null) r(); else { server.on('exit', r); setTimeout(r, 5000); } });
+    if (server) {
+      server.kill('SIGTERM');
+      await new Promise((r) => { if (exited !== null) r(); else { server.on('exit', r); setTimeout(r, 5000); } });
+    }
     fs.rmSync(state, { recursive: true, force: true });
   }
 }
