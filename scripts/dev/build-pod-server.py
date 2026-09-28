@@ -4,10 +4,16 @@
 Runs on the shared CPU build pod (docs/dev/build-pod.md), started by the pod's
 start command from scripts/dev/build-pod.sh. Python standard library only.
 
-Layout on the network volume (FV_BUILD_ROOT, default /workspace/fv-build):
-  worktrees/<agent>/   the agent's synced source snapshot
-  target/<agent>/      its CARGO_TARGET_DIR
-  cargo/               CARGO_HOME (registry and git caches, shared)
+Layout. Source snapshots, target dirs and CARGO_HOME live on the container
+disk (FV_BUILD_LOCAL, default /root/fvb): cargo on the network volume spent
+18 min on a cold `cargo check` that sccache and a local disk make minutes, and
+30 s on a no-op one (fingerprint stats over the network filesystem). They are
+lost when the pod stops; FV_BUILD_TARGETS=volume keeps them on the volume.
+  <local>/worktrees/<agent>/   the agent's synced source snapshot
+  <local>/target/<agent>/      its CARGO_TARGET_DIR
+  <local>/cargo/               CARGO_HOME; registry/cache and git/db link to the volume
+On the network volume (FV_BUILD_ROOT, default /workspace/fv-build):
+  cargo/registry/cache, cargo/git/db   downloaded crates and git checkouts (shared)
   rustup/              RUSTUP_HOME (toolchains, shared)
   sccache/             SCCACHE_DIR (shared; FV_BUILD_SCCACHE_SIZE, default 40G)
   cuda-13.4/           CUDA 13.4 nvcc/NVRTC/crt/cudart/cccl/tileiras (redist)
@@ -73,6 +79,20 @@ SCCACHE_SIZE = os.environ.get("FV_BUILD_SCCACHE_SIZE", "40G")
 SCCACHE_VER = os.environ.get("FV_BUILD_SCCACHE_VERSION", "v0.10.0")
 CUDA_REDIST = os.environ.get("FV_BUILD_CUDA_REDIST", "13.4.2")
 CUDA_DIR = os.path.join(ROOT, "cuda-13.4")
+# Browser / client-compat extras (tests/compat/run.sh, tests/console/run.sh,
+# FV_SERVE_UI=1): Node on the volume, Playwright's Chromium on the volume,
+# ffmpeg + python3-venv + Chromium's system libraries in the container.
+NODE_VER = os.environ.get("FV_BUILD_NODE_VERSION", "v22.23.3")
+NODE_DIR = os.path.join(ROOT, "node-" + NODE_VER)
+PLAYWRIGHT_VER = os.environ.get("FV_BUILD_PLAYWRIGHT_VERSION", "1.56.1")  # tests/compat/package.json
+PW_DIR = os.path.join(ROOT, "playwright-" + PLAYWRIGHT_VER)
+PW_BROWSERS = os.path.join(ROOT, "pw-browsers")
+# Where snapshots, target dirs and CARGO_HOME live (see the docstring).
+TARGETS_ON = os.environ.get("FV_BUILD_TARGETS", "local")
+LOCAL = ROOT if TARGETS_ON == "volume" else os.environ.get("FV_BUILD_LOCAL", "/root/fvb")
+WT_BASE = os.path.join(LOCAL, "worktrees")
+TARGET_BASE = os.path.join(LOCAL, "target")
+CARGO_HOME = os.path.join(LOCAL, "cargo")
 MAX_UPLOAD = 512 << 20
 MAX_ARTIFACT = 2 << 30
 BOOT = time.time()
@@ -84,7 +104,11 @@ CARGO_SUBCOMMANDS = {"check", "build", "test", "clippy", "fmt", "doc", "tree", "
 SCRIPTS = {
     "scripts/serve/check.sh",
     "scripts/gpu/lint.sh",
+    "tests/compat/run.sh",
+    "tests/console/run.sh",
 }
+# Jobs that wait for the browser extras (the second setup phase).
+EXTRAS_SCRIPTS = {"tests/compat/run.sh", "tests/console/run.sh"}
 ENV_ALLOW = re.compile(
     r"^(CUDARC_CUDA_VERSION|FV_[A-Z0-9_]+|RUST_LOG|RUST_BACKTRACE|RUSTFLAGS|RUSTDOCFLAGS"
     r"|CARGO_PROFILE_[A-Z0-9_]+|CARGO_INCREMENTAL|CARGO_BUILD_JOBS|CARGO_TERM_COLOR)$"
@@ -98,6 +122,8 @@ job_slots = threading.Semaphore(MAX_JOBS)
 agent_locks = {}
 setup_state = {"phase": "starting", "error": None, "ready": False, "log": []}
 setup_done = threading.Event()
+extras_state = {"phase": "pending", "error": None, "ready": False}
+extras_done = threading.Event()
 
 
 def log(msg):
@@ -130,17 +156,28 @@ def touch():
 
 
 def sh(cmd, **kw):
+    """Run a setup command; on failure the error carries its output's tail
+    (the pod's stdout is not reachable over the proxy)."""
     setup_state["log"].append(" ".join(cmd) if isinstance(cmd, list) else cmd)
-    return subprocess.run(cmd, check=True, **kw)
+    kw.pop("stdout", None)
+    r = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, **kw)
+    if r.returncode != 0:
+        tail = r.stdout.decode("utf-8", "replace")[-1500:]
+        log(f"{' '.join(cmd)} exited {r.returncode}:\n{tail}")
+        raise RuntimeError(f"{' '.join(cmd[:3])} exited {r.returncode}: {tail[-600:]}")
+    return r
 
 
 def job_env(agent=None):
-    env = dict(os.environ)
-    for k in ("FV_BUILD_TOKEN_SHA256", "RUNPOD_API_KEY"):
-        env.pop(k, None)
+    # Nothing Runpod-specific reaches jobs: besides the pod-scoped API key,
+    # RUNPOD_POD_ID / RUNPOD_PUBLIC_IP / RUNPOD_TCP_PORT_* switch fv-serve's
+    # WebRTC ICE and worker identity into "serving on a Runpod pod" mode,
+    # which local tests (director, console) must not see.
+    env = {k: v for k, v in os.environ.items() if not k.startswith("RUNPOD_")}
+    env.pop("FV_BUILD_TOKEN_SHA256", None)
     env.update(
         {
-            "CARGO_HOME": os.path.join(ROOT, "cargo"),
+            "CARGO_HOME": CARGO_HOME,
             "RUSTUP_HOME": os.path.join(ROOT, "rustup"),
             "CUDA_HOME": CUDA_DIR,
             "CUDA_PATH": CUDA_DIR,
@@ -156,13 +193,16 @@ def job_env(agent=None):
             "SCCACHE_DIR": os.path.join(ROOT, "sccache"),
             "SCCACHE_CACHE_SIZE": SCCACHE_SIZE,
             "SCCACHE_IDLE_TIMEOUT": "0",
+            "PLAYWRIGHT_BROWSERS_PATH": PW_BROWSERS,
+            "NODE_PATH": os.path.join(PW_DIR, "node_modules"),
         }
     )
     path = [
-        os.path.join(ROOT, "cargo", "bin"),
+        os.path.join(CARGO_HOME, "bin"),
         "/usr/local/cargo/bin",
         os.path.join(CUDA_DIR, "bin"),
         os.path.join(ROOT, "tools"),
+        os.path.join(NODE_DIR, "bin"),
     ]
     env["PATH"] = ":".join(path + [env.get("PATH", "/usr/local/bin:/usr/bin:/bin")])
     lib = os.path.join(CUDA_DIR, "lib64")
@@ -173,7 +213,7 @@ def job_env(agent=None):
     if shutil.which("mold"):
         env["CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS"] = "-C link-arg=-fuse-ld=mold"
     if agent:
-        env["CARGO_TARGET_DIR"] = os.path.join(ROOT, "target", agent)
+        env["CARGO_TARGET_DIR"] = os.path.join(TARGET_BASE, agent)
     return env
 
 
@@ -248,8 +288,9 @@ def install_sccache():
 
 def setup():
     try:
-        for d in ("worktrees", "target", "cargo", "rustup", "sccache", "tools", "jobs", "logs", "tmp"):
+        for d in ("rustup", "sccache", "tools", "jobs", "logs", "tmp"):
             os.makedirs(os.path.join(ROOT, d), exist_ok=True)
+        link_cargo_caches()
         setup_state["phase"] = "apt"
         need = [p for p, b in (("cmake", "cmake"), ("clang", "clang"), ("mold", "mold"), ("pkg-config", "pkg-config")) if not shutil.which(b)]
         if need:
@@ -261,27 +302,129 @@ def setup():
         install_sccache()
         setup_state["phase"] = "rustup"
         env = job_env()
-        if not os.path.isdir(os.path.join(ROOT, "rustup", "toolchains")) or not os.listdir(os.path.join(ROOT, "rustup", "toolchains")):
-            sh(["rustup", "toolchain", "install", "stable", "--profile", "minimal", "-c", "rustfmt", "-c", "clippy"], env=env)
+        marker = os.path.join(ROOT, "rustup", ".fv-stable-ok")
+        if not os.path.exists(marker):
+            # --no-self-update: rustup lives in the image, not in CARGO_HOME/bin on
+            # the volume, and its self-update step fails the install otherwise.
+            # Idempotent, so a boot interrupted mid-install just completes it.
+            sh(["rustup", "toolchain", "install", "stable", "--profile", "minimal", "-c", "rustfmt", "-c", "clippy",
+                "--no-self-update"], env=env)
+            open(marker, "w").close()
         sh(["rustup", "default", "stable"], env=env, stdout=subprocess.DEVNULL)
         prune_targets()
         setup_state["phase"] = "ready"
         setup_state["ready"] = True
-        log("setup complete")
+        log(f"setup complete after {time.time() - BOOT:.0f}s")
     except Exception as e:
         setup_state["phase"] = "failed"
         setup_state["error"] = str(e)
         log(f"setup failed: {e}")
     finally:
         setup_done.set()
+    if setup_state["ready"]:
+        setup_extras()
+    else:
+        extras_state.update(phase="skipped", error="setup failed")
+        extras_done.set()
+
+
+def install_node():
+    marker = os.path.join(NODE_DIR, ".fv-ok")
+    if os.path.exists(marker):
+        return
+    extras_state["phase"] = "node"
+    base = f"https://nodejs.org/dist/{NODE_VER}/"
+    name = f"node-{NODE_VER}-linux-x64.tar.xz"
+    with urllib.request.urlopen(base + "SHASUMS256.txt", timeout=60) as r:
+        sums = {ln.split()[1]: ln.split()[0] for ln in r.read().decode().splitlines() if len(ln.split()) == 2}
+    path = os.path.join(ROOT, "tmp", name)
+    fetch(base + name, path)
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(1 << 20), b""):
+            h.update(chunk)
+    if h.hexdigest() != sums.get(name):
+        raise RuntimeError(f"sha256 mismatch for {name}")
+    stage = NODE_DIR + ".staging"
+    shutil.rmtree(stage, ignore_errors=True)
+    os.makedirs(stage)
+    sh(["tar", "-xJf", path, "-C", stage, "--strip-components=1"])
+    os.remove(path)
+    shutil.rmtree(NODE_DIR, ignore_errors=True)
+    os.replace(stage, NODE_DIR)
+    open(marker, "w").close()
+    log(f"node {NODE_VER} installed at {NODE_DIR}")
+
+
+def setup_extras():
+    """Second phase, after the build toolchain is ready: what the browser and
+    client-compat jobs need. Build jobs never wait for it."""
+    try:
+        t0 = time.time()
+        env = dict(job_env(), DEBIAN_FRONTEND="noninteractive")
+        extras_state["phase"] = "apt"
+        sh(["apt-get", "update", "-qq"], env=env, stdout=subprocess.DEVNULL)
+        sh(["apt-get", "install", "-y", "-qq", "--no-install-recommends", "ffmpeg", "python3-venv"],
+           env=env, stdout=subprocess.DEVNULL)
+        install_node()
+        extras_state["phase"] = "playwright"
+        if not os.path.exists(os.path.join(PW_DIR, ".fv-ok")):
+            os.makedirs(PW_DIR, exist_ok=True)
+            sh(["npm", "install", "--prefix", PW_DIR, "--no-audit", "--no-fund", "--loglevel=error",
+                f"playwright@{PLAYWRIGHT_VER}"], env=dict(env, PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD="1"),
+               stdout=subprocess.DEVNULL)
+            open(os.path.join(PW_DIR, ".fv-ok"), "w").close()
+        pw = os.path.join(PW_DIR, "node_modules", ".bin", "playwright")
+        extras_state["phase"] = "chromium"
+        sh([pw, "install", "chromium"], env=env, stdout=subprocess.DEVNULL)  # no-op when present
+        sh([pw, "install-deps", "chromium"], env=env, stdout=subprocess.DEVNULL)
+        extras_state.update(phase="ready", ready=True)
+        log(f"extras ready after {time.time() - t0:.0f}s (ffmpeg, node, playwright chromium)")
+    except Exception as e:
+        extras_state.update(phase="failed", error=str(e))
+        log(f"extras setup failed: {e}")
+    finally:
+        extras_done.set()
+
+
+def link_cargo_caches():
+    """CARGO_HOME on the container disk, with the download caches (registry
+    .crate files, git databases) on the volume: crates download once, while
+    the many small files cargo extracts and stats stay local."""
+    for d in (WT_BASE, TARGET_BASE, CARGO_HOME, os.path.join(LOCAL, "trash")):
+        os.makedirs(d, exist_ok=True)
+    if CARGO_HOME == os.path.join(ROOT, "cargo"):
+        return
+    for rel in (("registry", "cache"), ("git", "db")):
+        vol = os.path.join(ROOT, "cargo", *rel)
+        loc = os.path.join(CARGO_HOME, *rel)
+        os.makedirs(vol, exist_ok=True)
+        os.makedirs(os.path.dirname(loc), exist_ok=True)
+        if not os.path.islink(loc):
+            shutil.rmtree(loc, ignore_errors=True)
+            os.symlink(vol, loc)
 
 
 def prune_targets():
-    """Drop target dirs untouched for FV_BUILD_TARGET_TTL_DAYS (volume space)."""
-    tdir = os.path.join(ROOT, "target")
+    """Drop target dirs untouched for FV_BUILD_TARGET_TTL_DAYS (volume space),
+    including those an earlier volume-mode pod left on the volume."""
     cutoff = time.time() - TARGET_TTL_DAYS * 86400
+    prune_dir(TARGET_BASE, WT_BASE, cutoff)
+    if LOCAL != ROOT:
+        # Snapshots and target dirs a volume-mode pod left behind are dead
+        # weight for a local-mode one (tens of GB after a few check.sh runs).
+        for d in ("target", "worktrees"):
+            old = os.path.join(ROOT, d)
+            if os.path.isdir(old) and os.listdir(old):
+                log(f"removing volume-mode {d}/ (targets are local now)")
+                trash = os.path.join(ROOT, "tmp", f"trash-{d}-{uuid.uuid4().hex[:6]}")
+                os.replace(old, trash)
+                threading.Thread(target=shutil.rmtree, args=(trash, True), daemon=True).start()
+
+
+def prune_dir(tdir, wdir, cutoff):
     for a in os.listdir(tdir):
-        stamp = os.path.join(ROOT, "worktrees", a, ".fv-build-last-run")
+        stamp = os.path.join(wdir, a, ".fv-build-last-run")
         try:
             last = os.path.getmtime(stamp)
         except OSError:
@@ -329,11 +472,19 @@ class Job:
             self.write(f"build pod setup failed: {setup_state['error']}\n".encode())
             self.finish(125)
             return
+        if needs_extras(self.argv, self.env_over):
+            if not extras_done.is_set():
+                self.write(f"waiting for the browser extras (phase {extras_state['phase']})\n".encode())
+            extras_done.wait()
+            if not extras_state["ready"]:
+                self.write(f"browser extras setup failed: {extras_state['error']}\n".encode())
+                self.finish(125)
+                return
         with lock, job_slots:
             if self.state == "cancelled":
                 self.finish(130)
                 return
-            wt = os.path.join(ROOT, "worktrees", self.agent)
+            wt = os.path.join(WT_BASE, self.agent)
             env = job_env(self.agent)
             env.update(self.env_over)
             self.state = "running"
@@ -376,6 +527,11 @@ class Job:
                 os.killpg(self.proc.pid, signal.SIGTERM)
             except ProcessLookupError:
                 pass
+
+
+def needs_extras(argv, env):
+    return (len(argv) >= 2 and argv[0] == "bash" and os.path.normpath(argv[1]) in EXTRAS_SCRIPTS) \
+        or env.get("FV_SERVE_UI") == "1"
 
 
 def validate_command(argv, env):
@@ -483,9 +639,73 @@ def delete_paths(wt, paths):
     return n
 
 
-def du(path):
+def disk_gb(path):
     try:
-        r = subprocess.run(["du", "-sb", path], capture_output=True, text=True, timeout=60)
+        d = shutil.disk_usage(path)
+        return {"total_gb": round(d.total / 1e9, 1), "free_gb": round(d.free / 1e9, 1)}
+    except OSError:
+        return None
+
+
+def cgroup_limits():
+    """(vCPUs, memory MiB) from the container's cgroup (v2, then v1); the
+    host's numbers when unlimited."""
+    try:  # the CPUs this container may run on (what cargo sizes -j by)
+        vcpus = len(os.sched_getaffinity(0))
+    except (AttributeError, OSError):
+        vcpus = os.cpu_count()
+    mem = None
+    try:
+        with open("/sys/fs/cgroup/cpu.max") as f:
+            q, period = f.read().split()
+        if q != "max":
+            vcpus = min(vcpus, round(int(q) / int(period), 1))
+    except (OSError, ValueError):
+        try:
+            with open("/sys/fs/cgroup/cpu/cpu.cfs_quota_us") as f:
+                q = int(f.read())
+            with open("/sys/fs/cgroup/cpu/cpu.cfs_period_us") as f:
+                period = int(f.read())
+            if q > 0:
+                vcpus = min(vcpus, round(q / period, 1))
+        except (OSError, ValueError):
+            pass
+    for path in ("/sys/fs/cgroup/memory.max", "/sys/fs/cgroup/memory/memory.limit_in_bytes"):
+        try:
+            with open(path) as f:
+                v = f.read().strip()
+            if v != "max" and int(v) < 1 << 50:
+                mem = int(v) >> 20
+                break
+        except (OSError, ValueError):
+            pass
+    if mem is None:
+        try:
+            with open("/proc/meminfo") as f:
+                mem = int(f.readline().split()[1]) // 1024
+        except OSError:
+            pass
+    return vcpus, mem
+
+
+# The volume's quota is not visible from the pod (statfs shows the whole
+# shared filesystem behind it), so status reports our usage from a periodic du.
+VOLUME_GB = float(os.environ.get("FV_BUILD_VOLUME_GB", "200"))
+volume_usage = {}
+
+
+def volume_usage_loop():
+    while True:
+        t = time.time()
+        n = du(ROOT, timeout=900)
+        if n is not None:
+            volume_usage.update(used_gb=round(n / 1e9, 1), t=t)
+        time.sleep(900)
+
+
+def du(path, timeout=60):
+    try:
+        r = subprocess.run(["du", "-sb", path], capture_output=True, text=True, timeout=timeout)
         return int(r.stdout.split()[0])
     except Exception:
         return None
@@ -609,7 +829,7 @@ class Handler(BaseHTTPRequestHandler):
             agent = parts[1]
             if not AGENT_RE.match(agent):
                 return self.send_json(400, {"error": "bad agent name"})
-            wt = os.path.join(ROOT, "worktrees", agent)
+            wt = os.path.join(WT_BASE, agent)
             action = parts[2]
             if method == "GET" and action == "manifest":
                 return self.send_text(200, manifest(wt) if os.path.isdir(wt) else "")
@@ -629,41 +849,39 @@ class Handler(BaseHTTPRequestHandler):
         return self.send_json(404, {"error": "not found"})
 
     def status(self):
-        disk = shutil.disk_usage(ROOT)
         running = [j.info() for j in jobs.values() if j.state in ("running", "queued")]
         recent = sorted((j.info() for j in jobs.values() if j.state not in ("running", "queued")),
                         key=lambda i: i["id"])[-10:]
-        mem = None
-        try:
-            with open("/proc/meminfo") as f:
-                mem = int(f.readline().split()[1]) // 1024
-        except OSError:
-            pass
+        vcpus, mem = cgroup_limits()
         self.send_json(200, {
             "pod": os.environ.get("RUNPOD_POD_ID"), "setup": {k: setup_state[k] for k in ("phase", "ready", "error")},
-            "nproc": os.cpu_count(), "mem_mib": mem, "uptime_s": round(time.time() - BOOT),
+            "extras": dict(extras_state),
+            # The container sees the host's CPUs and RAM and the whole shared
+            # filesystem behind the volume; report the pod's own limits.
+            "vcpus": vcpus, "host_cpus": os.cpu_count(), "mem_mib": mem, "uptime_s": round(time.time() - BOOT),
             "idle_s": round(time.time() - last_activity), "idle_stop_s": IDLE_S, "max_s": MAX_S,
-            "disk": {"total_gb": round(disk.total / 1e9, 1), "used_gb": round(disk.used / 1e9, 1),
-                     "free_gb": round(disk.free / 1e9, 1)},
+            "volume": {"size_gb": VOLUME_GB, "used_gb": volume_usage.get("used_gb"),
+                       "measured_s_ago": round(time.time() - volume_usage["t"]) if "t" in volume_usage else None},
+            "local_disk": disk_gb(LOCAL),
             "sccache": os.path.exists(os.path.join(ROOT, "tools", "sccache")), "mold": bool(shutil.which("mold")),
             "server_sha": SERVER_SHA, "self_stop_key": bool(os.environ.get("RUNPOD_API_KEY")),
             "jobs_active": running, "jobs_recent": recent,
         })
 
     def agents(self, sizes):
-        names = sorted(set(os.listdir(os.path.join(ROOT, "worktrees"))) | set(os.listdir(os.path.join(ROOT, "target"))))
+        names = sorted(set(os.listdir(WT_BASE)) | set(os.listdir(TARGET_BASE)))
         out = []
         for a in names:
-            stamp = os.path.join(ROOT, "worktrees", a, ".fv-build-last-run")
+            stamp = os.path.join(WT_BASE, a, ".fv-build-last-run")
             e = {"agent": a, "last_run": int(os.path.getmtime(stamp)) if os.path.exists(stamp) else None}
             if sizes:
-                e["worktree_bytes"] = du(os.path.join(ROOT, "worktrees", a))
-                e["target_bytes"] = du(os.path.join(ROOT, "target", a))
+                e["worktree_bytes"] = du(os.path.join(WT_BASE, a))
+                e["target_bytes"] = du(os.path.join(TARGET_BASE, a))
             out.append(e)
         self.send_json(200, {"agents": out})
 
     def put_files(self, agent, wt):
-        tmp = os.path.join(ROOT, "tmp", f"sync-{agent}-{uuid.uuid4().hex[:8]}.tar")
+        tmp = os.path.join(LOCAL, f"sync-{agent}-{uuid.uuid4().hex[:8]}.tar")
         try:
             n = int(self.headers.get("content-length") or 0)
             if n > MAX_UPLOAD:
@@ -717,7 +935,7 @@ class Handler(BaseHTTPRequestHandler):
 
     def artifact(self, agent, rel_path, gz):
         rel = safe_rel(rel_path)
-        base = os.path.realpath(os.path.join(ROOT, "target", agent))
+        base = os.path.realpath(os.path.join(TARGET_BASE, agent))
         if rel is None:
             return self.send_json(400, {"error": "bad path"})
         full = os.path.realpath(os.path.join(base, rel))
@@ -762,15 +980,16 @@ class Handler(BaseHTTPRequestHandler):
             return self.send_json(409, {"error": f"agent {agent} has a job in flight"})
         dirs = []
         if what in ("target", "all"):
-            dirs.append(os.path.join(ROOT, "target", agent))
+            dirs.append(os.path.join(TARGET_BASE, agent))
         if what in ("worktree", "all"):
-            dirs.append(os.path.join(ROOT, "worktrees", agent))
+            dirs.append(os.path.join(WT_BASE, agent))
         for d in dirs:
             if os.path.isdir(d):
-                trash = os.path.join(ROOT, "tmp", f"trash-{agent}-{uuid.uuid4().hex[:6]}")
+                # Same filesystem as the dir, so the rename is instant.
+                trash = os.path.join(LOCAL, "trash" if LOCAL != ROOT else "tmp", f"trash-{agent}-{uuid.uuid4().hex[:6]}")
                 os.replace(d, trash)
                 threading.Thread(target=shutil.rmtree, args=(trash, True), daemon=True).start()
-        return self.send_json(200, {"cleaned": [os.path.relpath(d, ROOT) for d in dirs]})
+        return self.send_json(200, {"cleaned": [os.path.relpath(d, LOCAL) for d in dirs]})
 
     def handle_one(self, method):
         try:
@@ -799,19 +1018,31 @@ def main():
         print("FV_BUILD_TOKEN_SHA256 must be a sha256 hex digest", file=sys.stderr)
         sys.exit(2)
     os.makedirs(os.path.join(ROOT, "tmp"), exist_ok=True)
-    for d in ("worktrees", "target", "jobs", "logs"):
+    for d in ("jobs", "logs"):
         os.makedirs(os.path.join(ROOT, d), exist_ok=True)
+    for d in (WT_BASE, TARGET_BASE):
+        os.makedirs(d, exist_ok=True)
     # Leftovers from a clean that the previous pod did not finish.
-    for name in os.listdir(os.path.join(ROOT, "tmp")):
-        if name.startswith(("trash-", "sync-")):
-            threading.Thread(target=shutil.rmtree, args=(os.path.join(ROOT, "tmp", name), True), daemon=True).start()
+    os.makedirs(os.path.join(LOCAL, "trash"), exist_ok=True)
+    for d in {os.path.join(ROOT, "tmp"), os.path.join(LOCAL, "trash"), LOCAL}:
+        for name in os.listdir(d):
+            full = os.path.join(d, name)
+            if not name.startswith(("trash-", "sync-")):
+                continue
+            if os.path.isdir(full) and not os.path.islink(full):
+                threading.Thread(target=shutil.rmtree, args=(full, True), daemon=True).start()
+            else:
+                os.remove(full)
     ledger("service-start")
-    log(f"fv-build service on :{PORT} root={ROOT} idle={IDLE_S / 60:g}min cap={MAX_S / 3600:g}h")
+    log(f"fv-build service on :{PORT} root={ROOT} local={LOCAL} idle={IDLE_S / 60:g}min cap={MAX_S / 3600:g}h")
     if os.environ.get("FV_BUILD_SKIP_SETUP") == "1":
         setup_state.update(phase="ready", ready=True)
         setup_done.set()
+        extras_state.update(phase="ready", ready=True)
+        extras_done.set()
     else:
         threading.Thread(target=setup, daemon=True).start()
+    threading.Thread(target=volume_usage_loop, daemon=True).start()
     if os.environ.get("FV_BUILD_NO_WATCHDOG") != "1":
         threading.Thread(target=watchdog, daemon=True).start()
     ThreadingHTTPServer.daemon_threads = True
