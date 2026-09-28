@@ -1714,6 +1714,20 @@ additions and readings; everything is re-exported from the crate root.
 - GPU check: `fv-gpucheck engine` (one model through `EngineService`, frames
   compared with the CLI clip, a second job cancelled mid-run) and the
   `serve-engine` family of `runpod-matrix.sh`.
+- Pod results through the fal queue (`scripts/serve/fal-queue-smoke.sh`,
+  `configs/serve/runpod.toml`, RTX PRO 6000, NVENC post encoder):
+  h3-turbo T2V 1344x768 124 frames + 32 kHz AAC in 32.8 s wall (19.1 s
+  denoise); I2V 110-154 s wall (21.8 s denoise). The I2V gap is the FL2VA
+  text stage: `encode_request_multimodal` streams the Qwen-VL encoder (vision
+  tower + LM) from the weight volume on every request and ignores the
+  resident text encoder; T2V uses the resident one. A resident multimodal
+  path (mRoPE + deepstack on the resident encoder) is the follow-up.
+- The H3 profiles ask for MXFP8, which cuBLASLt runs only on sm_100+. On
+  Hopper every H3 job failed (`h3-max`: "no MXFP8 ... algorithm on sm90";
+  `h3-turbo`: the same, masked by the zero-padded retry refusing layers with a
+  bf16 section). `FASTVIDEO_H3_QUANT=mxfp8` now runs W8A8 below sm_100 (logged
+  once), and the padded retry pads the bf16 input too. Model load on the
+  Runpod network volume: h3-turbo ~6 min, h3-max (Sol-H3) ~19 min.
 
 ### Phase 3: streaming (parallel after Phase 2 core)
 
