@@ -405,7 +405,7 @@ pub fn assemble(
         .with_state(ctx.clone())
         .merge(stateful)
         .merge(fastvideo_serve_kit::admin_routes(keys, admin.clone()))
-        .merge(routes::routes(gw.clone(), admin, crate::metrics::install()));
+        .merge(routes::routes(gw.clone(), admin, crate::metrics::install(), crate::adapters::root_model(&mcfg, ctx)));
     if config.protocols.reactor {
         r = r.merge(proxy::reactor_routes(gw.clone(), ctx.clone()));
     }

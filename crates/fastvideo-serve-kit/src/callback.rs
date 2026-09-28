@@ -233,6 +233,9 @@ pub struct CallbackSender {
     pub fal: RetrySchedule,
     pub minimax: RetrySchedule,
     pub challenge_timeout: Duration,
+    /// Skip the MiniMax challenge: another process (the gateway, which
+    /// took the request) already ran it for this callback URL.
+    pub challenge_done_elsewhere: bool,
     queues: Mutex<HashMap<JobId, mpsc::UnboundedSender<Item>>>,
     log: Mutex<Vec<(JobId, Delivery)>>,
 }
@@ -254,6 +257,7 @@ impl CallbackSender {
             fal: RetrySchedule::fal(),
             minimax: RetrySchedule::minimax(),
             challenge_timeout: Duration::from_secs(3),
+            challenge_done_elsewhere: false,
             queues: Mutex::new(HashMap::new()),
             log: Mutex::new(Vec::new()),
         }
@@ -316,7 +320,7 @@ impl CallbackSender {
             let done = match job.callback.clone() {
                 Some(CallbackSpec::MiniMax { url }) => {
                     if verified.is_none() {
-                        let ok = self.minimax_challenge(&url).await;
+                        let ok = self.challenge_done_elsewhere || self.minimax_challenge(&url).await;
                         if !ok {
                             tracing::warn!(job = %id, "MiniMax callback challenge failed; callbacks disabled");
                             self.record(id, Delivery::Permanent { attempts: 1, reason: "challenge failed".into() });

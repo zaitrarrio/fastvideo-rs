@@ -381,6 +381,13 @@ impl Gateway {
                 }
             }
         }
+        let mut submitted: BTreeMap<String, u64> = BTreeMap::new();
+        if let Ok(r) = self.db.query(Stmt::raw("SELECT pool, COUNT(*) AS n FROM gw_dispatch GROUP BY pool")).await {
+            for row in r.rows {
+                let pool = row.get("pool").and_then(Value::as_str).unwrap_or_default().to_owned();
+                submitted.insert(pool, row.get("n").and_then(Value::as_f64).unwrap_or(0.0) as u64);
+            }
+        }
         let mut streams: BTreeMap<String, u32> = BTreeMap::new();
         if let Ok(r) = self.db.query(Stmt::raw("SELECT pool, COUNT(*) AS n FROM gw_sessions WHERE state = 'live' GROUP BY pool")).await {
             for row in r.rows {
@@ -410,6 +417,7 @@ impl Gateway {
                 available,
                 max_queued: p.cfg.max_queued,
                 max_streams: p.cfg.max_streams,
+                submitted_total: submitted.get(p.id()).copied().unwrap_or(0),
             };
             st.queued = queued;
             st.running = running;
@@ -425,6 +433,7 @@ impl Gateway {
             metrics::gauge!("fv_pool_oldest_queued_seconds", "pool" => pool.clone()).set(m.oldest_queued_age_s);
             metrics::gauge!("fv_pool_streams", "pool" => pool.clone()).set(m.streams as f64);
             metrics::gauge!("fv_pool_available", "pool" => pool.clone()).set(if m.available { 1.0 } else { 0.0 });
+            metrics::gauge!("fv_pool_submitted_total", "pool" => pool.clone()).set(m.submitted_total as f64);
             for (state, n) in [
                 ("total", m.workers.total),
                 ("ready", m.workers.ready),

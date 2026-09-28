@@ -282,6 +282,8 @@ pub struct PoolMetrics {
     pub available: bool,                    // the gateway would dispatch now
     pub max_queued: u32,                    // admission limit (0 = none)
     pub max_streams: u32,
+    #[serde(default)]
+    pub submitted_total: u64,               // jobs ever dispatched here (monotonic, D1)
 }
 
 /// Implemented by the autoscaler; called after every metrics tick
@@ -300,10 +302,19 @@ pub trait PoolScaler: Send + Sync + 'static {
   `{"object":"fv.gateway.pools","pools":[PoolMetrics…]}`, and Prometheus
   gauges on `/metrics`: `fv_pool_queued`, `fv_pool_running`,
   `fv_pool_oldest_queued_seconds`, `fv_pool_streams`, `fv_pool_workers`
-  (label `state`), `fv_pool_available`, all labelled `pool`.
+  (label `state`), `fv_pool_available`, `fv_pool_submitted_total`, all
+  labelled `pool`.
 - Pods the autoscaler starts join the pool by themselves (§5.3); a pod
-  going away should first be set `draining` (the worker does it on
-  SIGTERM) so no new work is dispatched to it.
+  going away should first be set `draining` so no new work is dispatched
+  to it: the worker does it on SIGTERM, and on
+  `POST {worker}/fv/v1/internal/drain` (internal token; `…/undrain`
+  reverses it). A draining worker refuses new jobs and sessions (503),
+  finishes what it holds, reports `draining` in `/fv/v1/internal/status`
+  and its `gw_workers` row; gateways skip it when dispatching. The reply
+  is `{worker_id, draining, running, queued, sessions}`.
+- Arrivals: `submitted_total` counts every job dispatched to the pool
+  (one per job, re-dispatches excluded), from `gw_dispatch`, so every
+  replica reports the same monotonic value.
 - D1 tables (gateway-owned, read-only for the autoscaler): `gw_dispatch`,
   `gw_sessions`, `gw_workers` (schema in `gateway/schema.rs`).
 
