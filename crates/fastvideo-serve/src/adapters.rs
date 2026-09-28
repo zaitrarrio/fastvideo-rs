@@ -134,7 +134,7 @@ pub fn renderers(cfg: &MountCfg) -> Vec<(ProtocolId, Arc<dyn CallbackRender>)> {
 }
 
 /// The output file name a job's artifact is stored under: fal's own
-/// `<nanoid21>_minimax-h3.mp4`, else `<job id>.mp4`.
+/// `<nanoid21>_<app>[-<tier>].mp4`, else `<job id>.mp4`.
 pub fn artifact_file_name(job: &Job) -> String {
     #[cfg(feature = "fal")]
     if job.protocol == ProtocolId::Fal {

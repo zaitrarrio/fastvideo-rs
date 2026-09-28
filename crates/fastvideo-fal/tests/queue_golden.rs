@@ -440,10 +440,20 @@ fn small_helpers() {
     assert!(!logs_param(&[]));
     let j = job(Task::T2V, "minimax/h3-max/text-to-video");
     let name = fastvideo_fal::output_file_name(&j);
-    assert_eq!(name.len(), 21 + "_minimax-h3.mp4".len());
-    assert!(name.ends_with("_minimax-h3.mp4"));
+    // Named by app (the tier is already a word of `h3-max`).
+    assert_eq!(name.len(), 21 + "_minimax-h3-max.mp4".len());
+    assert!(name.ends_with("_minimax-h3-max.mp4"), "{name}");
     assert!(name[..21].chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_'));
     assert_eq!(name, fastvideo_fal::output_file_name(&j), "stable per job");
+    let mut t = job(Task::T2V, "minimax/h3-turbo/text-to-video");
+    t.resolved.tier = Some(Tier::Turbo);
+    assert_eq!(fastvideo_fal::output_slug(&t), "minimax-h3-turbo");
+    let mut p = job(Task::T2V, "fastvideo/ltx-pro/text-to-video");
+    p.resolved.tier = Some(Tier::Max);
+    assert_eq!(fastvideo_fal::output_slug(&p), "fastvideo-ltx-pro-max");
+    let mut w = job(Task::T2V, "fastvideo/fastwan21-1.3b/text-to-video");
+    w.resolved.tier = None;
+    assert_eq!(fastvideo_fal::output_slug(&w), "fastvideo-fastwan21-1.3b");
     assert_eq!(FalProtocol.id(), ProtocolId::Fal);
     let a = FalProtocol.new_external_id(j.id);
     assert!(uuid::Uuid::parse_str(&a).is_ok() && a != FalProtocol.new_external_id(j.id));

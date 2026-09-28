@@ -165,8 +165,8 @@ async fn fal_queue_submit_status_result() {
     assert_eq!(out.status, 200);
     let o = out.json();
     let url = o["video"]["url"].as_str().unwrap();
-    // Named like hosted fal output (`<nanoid21>_minimax-h3.mp4`).
-    assert!(url.split('?').next().unwrap().ends_with("_minimax-h3.mp4"), "{url}");
+    // Hosted fal's form, named by app and tier (`<nanoid21>_minimax-h3-turbo.mp4`).
+    assert!(url.split('?').next().unwrap().ends_with("_minimax-h3-turbo.mp4"), "{url}");
     let job = a.ctx.jobs().by_external(ProtocolId::Fal, &rid).await.unwrap();
     assert_eq!(job.artifacts[0].file_name, fastvideo_fal::output_file_name(&job));
     // JWKS for our webhook signatures.

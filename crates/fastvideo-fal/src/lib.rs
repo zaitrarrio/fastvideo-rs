@@ -48,7 +48,7 @@ use fastvideo_serve_kit::{IngestPolicy, ServeCtx};
 
 pub use error::FalProtocol;
 pub use queue::{FalEndpoint, FalView};
-pub use schema::{output_file_name, Endpoint, FalInput};
+pub use schema::{output_file_name, output_slug, Endpoint, FalInput};
 pub use webhook::FalWebhook;
 
 /// One fal app (`owner/alias`) this server answers for.

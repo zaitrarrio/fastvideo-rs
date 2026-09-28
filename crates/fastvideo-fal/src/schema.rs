@@ -40,8 +40,6 @@ pub const MAX_REFERENCE_IMAGES: usize = 9;
 pub const MAX_REFERENCE_VIDEOS: usize = 3;
 pub const MAX_REFERENCE_AUDIO: usize = 3;
 pub const MAX_REFERENCES: usize = 12;
-/// The hosted file name suffix (`<nanoid21>_minimax-h3.mp4`, fal §3.1).
-pub const OUTPUT_SLUG: &str = "minimax-h3";
 
 /// One of the three HTTP endpoints under an app.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -606,12 +604,39 @@ pub struct VideoOutput {
     pub timings: Option<serde_json::Map<String, Value>>,
 }
 
-/// The output artifact's file name: `<nanoid21>_minimax-h3.mp4`, derived
-/// from the job id so it is stable (fal §3.1). The binary names fal
-/// artifacts with it (`ArtifactMeta::file_name`).
+/// The output artifact's file name: `<nanoid21>_<slug>.mp4` in hosted fal's
+/// form (fal §3.1), with the 21 characters derived from the job id so it is
+/// stable. Hosted fal writes `minimax-h3` for every H3 app; the slug here
+/// names the app and tier that made the file ([`output_slug`]). The binary
+/// names fal artifacts with it (`ArtifactMeta::file_name`).
 pub fn output_file_name(job: &Job) -> String {
     let b64 = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(job.id.0.as_bytes());
-    format!("{}_{OUTPUT_SLUG}.mp4", &b64[..21])
+    format!("{}_{}.mp4", &b64[..21], output_slug(job))
+}
+
+/// The app id with `/` as `-` (`minimax/h3-max` → `minimax-h3-max`,
+/// `fastvideo/fastwan21-1.3b` → `fastvideo-fastwan21-1.3b`), plus
+/// `-<tier>` when the resolved tier is not already a word of it
+/// (`fastvideo/ltx-pro` at tier max → `fastvideo-ltx-pro-max`). Only
+/// `[A-Za-z0-9._-]`, at most 120 characters; `video` when nothing is left.
+pub fn output_slug(job: &Job) -> String {
+    let app = crate::queue::app_of(job);
+    let mut slug: String = app
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-') { c } else { '-' })
+        .collect();
+    if let Some(t) = job.resolved.tier.map(|t| t.as_str()) {
+        if !slug.split(['-', '_', '.']).any(|w| w == t) {
+            slug.push('-');
+            slug.push_str(t);
+        }
+    }
+    let slug: String = slug.trim_matches(['-', '.', '_']).chars().take(120).collect();
+    if slug.is_empty() {
+        "video".into()
+    } else {
+        slug
+    }
 }
 
 /// Whether the job asked for `sync_mode` (inline data URI).

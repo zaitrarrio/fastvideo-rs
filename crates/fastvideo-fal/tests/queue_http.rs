@@ -84,7 +84,7 @@ async fn submit_poll_result_both_path_forms() {
     let v = &out["video"];
     assert_eq!(v["content_type"], "video/mp4");
     let name = v["file_name"].as_str().unwrap();
-    assert!(name.ends_with("_minimax-h3.mp4") && name.len() == 36, "{name}");
+    assert!(name.ends_with("_minimax-h3-max.mp4") && name.len() == 40, "{name}");
     let url = v["url"].as_str().unwrap();
     assert!(url.starts_with("https://fal.fv.test/files/") && url.contains(name));
 
