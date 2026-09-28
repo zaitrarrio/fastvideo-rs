@@ -19,7 +19,8 @@ import sys
 import numpy as np
 from PIL import Image
 
-CELLS = ["turbo-768p", "turbo-1080p", "turbo-768p-v", "turbo-1080p-v", "max-768p", "max-1080p"]
+CELLS = ["turbo-768p", "turbo-1080p", "turbo-768p-v", "turbo-1080p-v", "max-768p", "max-1080p",
+         "turbo-1080p-10s", "max-1080p-10s"]
 
 
 def gray(path, size=None):

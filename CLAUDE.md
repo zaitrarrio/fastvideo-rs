@@ -3,8 +3,11 @@
 ## Model weights and network volumes
 
 - New weights always go on **both** Runpod network volumes: US `s2k01690bi`
-  (US-CA-2) and EU `jg48s6o1w0` (EUR-IS-1). Nothing may live on only one
-  volume or only on a pod's container disk.
+  (US-CA-2) and EU `jg48s6o1w0` (EUR-IS-1), and never only on a pod's
+  container disk. The volumes need only be *eventually* in sync: landing a
+  tree on one volume first (usually US) and building/testing against it is
+  fine; the copy to the other volume must follow, and a failed copy is
+  retried, not a reason to stop work.
 - Writes are add-only: new folders, written under a temporary name, verified
   (sha256) and then renamed. Never modify or delete existing volume data, and
   never delete a volume.

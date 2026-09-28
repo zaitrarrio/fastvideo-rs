@@ -261,6 +261,25 @@ pub fn free_memory() -> Option<(u64, u64)> {
     Some(budgeted_free(free, total, ballast_bytes(), device_budget()))
 }
 
+/// Total memory of CUDA device `index` without creating a context (a
+/// server deciding what to offer before its executor owns the device), capped
+/// at [`device_budget`] when one is set. `None` without a driver or device.
+pub fn device_total_memory(index: usize) -> Option<u64> {
+    #[cfg(feature = "cuda")]
+    {
+        use cudarc::driver::result;
+        result::init().ok()?;
+        let dev = result::device::get(i32::try_from(index).ok()?).ok()?;
+        let total = unsafe { result::device::total_mem(dev) }.ok()? as u64;
+        Some(device_budget().map_or(total, |b| b.min(total)))
+    }
+    #[cfg(not(feature = "cuda"))]
+    {
+        let _ = index;
+        None
+    }
+}
+
 /// `(free, total)` as the driver reports them, ballast included.
 pub fn raw_free_memory() -> Option<(u64, u64)> {
     #[cfg(feature = "cuda")]

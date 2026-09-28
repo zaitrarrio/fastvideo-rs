@@ -8,7 +8,7 @@ use std::time::Duration;
 
 use fastvideo_media::video::EncoderBackend;
 use fastvideo_protocol::{
-    canvas_for_aspect, ApiError, Continuity, ErrorKind, ModelCaps, ModelId, SessionSpec, StreamCaps, Task, TrackSet,
+    canvas_for_aspect, h3_1080p_canvas, ApiError, Continuity, ErrorKind, Family, ModelCaps, ModelId, SessionSpec, StreamCaps, Task, TrackSet,
 };
 use fastvideo_serve_kit::{IngestPolicy, ServeCtx};
 use fastvideo_webrtc::channel::ChannelPolicy;
@@ -85,13 +85,21 @@ impl Default for DirectorConfig {
 }
 
 /// `(width, height)` of `res` at `aspect` on the model's canvas rules.
+/// The H3 1080P tier streams the generation canvas (1920x1088 at 16:9):
+/// chunks are not cropped.
 pub fn canvas_for(caps: &ModelCaps, res: Resolution, aspect: Aspect) -> (u32, u32) {
+    if caps.family == Family::H3 && caps.canvas.is_hd(res.short_edge()) {
+        let (w, h, _) = h3_1080p_canvas(caps, aspect.ratio(), 1.0);
+        return (w, h);
+    }
     canvas_for_aspect(&caps.canvas, aspect.ratio(), res.short_edge())
 }
 
-/// Resolutions a model serves: its canvas tiers among 480p / 768p.
+/// Resolutions a model serves: its canvas tiers among 480p / 768p / 1080p
+/// (1080p only with the opt-in H3 1080P tier: each chunk takes about 2.5x
+/// as long to build as at 768p).
 pub fn served_resolutions(caps: &ModelCaps) -> Vec<Resolution> {
-    [Resolution::R480, Resolution::R768]
+    [Resolution::R480, Resolution::R768, Resolution::R1080]
         .into_iter()
         .filter(|r| caps.canvas.short_edges.contains(&r.short_edge()))
         .collect()
@@ -201,7 +209,10 @@ impl DirectorService {
         self.sessions.lock().expect("sessions").values().filter(|s| s.is_open()).count()
     }
 
-    /// The app's model caps (clip streaming required).
+    /// The app's model caps (clip streaming required). Causal (SF-Wan)
+    /// models are refused here, so the causal session limits of design §5.2
+    /// (`[streams] causal_*_max_s`) never apply to the director; its own
+    /// `max_session_seconds` bounds clip sessions.
     pub fn caps_for(&self, ctx: &ServeCtx, app: &FalApp) -> Result<ModelCaps, ApiError> {
         let id = crate::queue::resolve_app_model(ctx, app, crate::Endpoint::TextToVideo)?;
         let caps = ctx
@@ -332,5 +343,18 @@ mod tests {
             unify_msid(a, "fv"),
             "v=0\r\na=msid:fv v1\r\na=ssrc:11 msid:fv v1\r\na=ssrc:11 cname:x\r\na=msid:fv a1\r\n"
         );
+    }
+
+    #[test]
+    fn the_h3_1080p_tier_serves_director_1080p() {
+        let mut caps = ModelCaps::h3("h3", false);
+        caps.canvas.short_edges.push(480);
+        assert_eq!(served_resolutions(&caps), [Resolution::R480, Resolution::R768]);
+        caps.canvas = caps.canvas.clone().with_h3_1080p();
+        assert_eq!(served_resolutions(&caps), [Resolution::R480, Resolution::R768, Resolution::R1080]);
+        assert_eq!(canvas_for(&caps, Resolution::R768, Aspect::Landscape), (1344, 768));
+        assert_eq!(canvas_for(&caps, Resolution::R1080, Aspect::Landscape), (1920, 1088));
+        assert_eq!(canvas_for(&caps, Resolution::R1080, Aspect::Portrait), (1088, 1920));
+        assert_eq!(canvas_for(&caps, Resolution::R1080, Aspect::Square), (1088, 1088));
     }
 }

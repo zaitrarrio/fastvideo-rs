@@ -59,7 +59,7 @@ cmd_up() {
   awk -v b="$b" -v m="$MIN_BALANCE" 'BEGIN{exit !(b+0 >= m+2.5)}' || die "balance \$$b too close to the floor \$$MIN_BALANCE"
   [[ ! -s "$STATE" ]] || die "state $STATE exists (pod up?); run down first"
   key="fvk-$(openssl rand -hex 16)"; keyhash="$(printf '%s' "$key" | sha256sum | cut -d' ' -f1)"
-  name="fv-e2e-c-$(date -u +%m%d%H%M%S)"
+  name="${FV_POD_NAME_PREFIX:-fv-e2e-c}-$(date -u +%m%d%H%M%S)"
   IFS=',' read -r -a types <<<"$GPUS"
   for gpu in "${types[@]}"; do
     if ! resp="$(rest POST /pods "$(payload "$image" "$gpu" "$name" "$keyhash" "$RECIPE")" 2>&1)"; then

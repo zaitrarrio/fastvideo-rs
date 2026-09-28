@@ -406,6 +406,15 @@ async fn upload_then_image_to_video() {
     let r = call(&fx.app, "GET", &format!("/v2/text-to-video/{id}"), Some("sk-a"), None).await;
     assert_eq!(r.status, StatusCode::NOT_FOUND);
 
+    // The same upload serves a v1 sync request and then another v2 job
+    // (uploads are not single use; GPU E2E i2v-upload).
+    let mut b = t2v("ltx-2-3-pro", "720x1280", 6);
+    b["image_uri"] = json!(storage);
+    let r = call(&fx.app, "POST", "/v1/image-to-video", Some("sk-a"), Some(b.clone())).await;
+    assert_eq!(r.status, StatusCode::OK);
+    let r = call(&fx.app, "POST", "/v2/image-to-video", Some("sk-a"), Some(b)).await;
+    assert_eq!(r.status, StatusCode::ACCEPTED, "{:?}", r.json());
+
     // Data URIs work too; unknown upload tokens and plain http are refused.
     let mut b = t2v("ltx-2-3-pro", "1280x720", 6);
     b["image_uri"] = json!(format!("data:image/png;base64,{PNG_B64}"));

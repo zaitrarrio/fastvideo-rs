@@ -1,0 +1,317 @@
+INFO 09-28 20:20:18.576 [__init__.py:47] CUDA is available
+INFO 09-28 20:20:20.931 [multiproc_executor.py:107] Use master port: 39567
+INFO 09-28 20:20:25.396 [__init__.py:47] CUDA is available
+INFO 09-28 20:20:26.585 [parallel_state.py:909] Initializing distributed environment with world_size=1, device=cuda:0
+INFO 09-28 20:20:26.585 [parallel_state.py:737] Using nccl backend for CUDA platform
+INFO 09-28 20:20:26.615 [__init__.py:39] Building pipeline of type: basic
+INFO 09-28 20:20:26.620 [utils.py:691] Diffusers version: 0.35.0.dev0
+INFO 09-28 20:20:26.620 [pipeline_registry.py:134] Loading pipelines for types: ['basic']
+INFO 09-28 20:20:26.781 [pipeline_registry.py:176] Loaded 54 pipeline classes across 1 types
+INFO 09-28 20:20:26.781 [utils.py:544] Model already exists locally at /root/runs/upstream/9b2c963-09282013/fv-fastwan22-5b/model/FastWan2.2-TI2V-5B-FullAttn-Diffusers
+INFO 09-28 20:20:26.781 [__init__.py:56] Model path: /root/runs/upstream/9b2c963-09282013/fv-fastwan22-5b/model/FastWan2.2-TI2V-5B-FullAttn-Diffusers
+INFO 09-28 20:20:26.781 [profiler.py:198] Torch profiler disabled; returning no-op controller
+INFO 09-28 20:20:26.781 [composed_pipeline_base.py:171] Loading pipeline modules...
+INFO 09-28 20:20:26.781 [utils.py:544] Model already exists locally at /root/runs/upstream/9b2c963-09282013/fv-fastwan22-5b/model/FastWan2.2-TI2V-5B-FullAttn-Diffusers
+INFO 09-28 20:20:26.781 [composed_pipeline_base.py:471] Model path: /root/runs/upstream/9b2c963-09282013/fv-fastwan22-5b/model/FastWan2.2-TI2V-5B-FullAttn-Diffusers
+INFO 09-28 20:20:26.785 [utils.py:691] Diffusers version: 0.35.0.dev0
+INFO 09-28 20:20:26.785 [composed_pipeline_base.py:532] Loading pipeline modules from config: {'_class_name': 'WanDMDPipeline', '_diffusers_version': '0.35.0.dev0', 'boundary_ratio': None, 'expand_timesteps': True, 'scheduler': ['diffusers', 'UniPCMultistepScheduler'], 'text_encoder': ['transformers', 'UMT5EncoderModel'], 'tokenizer': ['transformers', 'T5TokenizerFast'], 'transformer': ['diffusers', 'WanTransformer3DModel'], 'transformer_2': [None, None], 'vae': ['diffusers', 'AutoencoderKLWan']}
+INFO 09-28 20:20:26.785 [composed_pipeline_base.py:571] Loading required modules: ['text_encoder', 'tokenizer', 'vae', 'transformer', 'scheduler']
+INFO 09-28 20:20:26.785 [component_loader.py:1380] Loading scheduler using diffusers from /root/runs/upstream/9b2c963-09282013/fv-fastwan22-5b/model/FastWan2.2-TI2V-5B-FullAttn-Diffusers/scheduler
+INFO 09-28 20:20:26.793 [composed_pipeline_base.py:626] Loaded module scheduler from /root/runs/upstream/9b2c963-09282013/fv-fastwan22-5b/model/FastWan2.2-TI2V-5B-FullAttn-Diffusers/scheduler
+INFO 09-28 20:20:26.793 [component_loader.py:1380] Loading text_encoder using transformers from /root/runs/upstream/9b2c963-09282013/fv-fastwan22-5b/model/FastWan2.2-TI2V-5B-FullAttn-Diffusers/text_encoder
+INFO 09-28 20:20:26.814 [component_loader.py:299] HF Model config: {'architectures': ['UMT5EncoderModel'], 'classifier_dropout': 0.0, 'd_ff': 10240, 'd_kv': 64, 'd_model': 4096, 'decoder_start_token_id': 0, 'dense_act_fn': 'gelu_new', 'dropout_rate': 0.1, 'eos_token_id': 1, 'feed_forward_proj': 'gated-gelu', 'initializer_factor': 1.0, 'is_encoder_decoder': True, 'is_gated_act': True, 'layer_norm_epsilon': 1e-06, 'num_decoder_layers': 24, 'num_heads': 64, 'num_layers': 24, 'output_past': True, 'pad_token_id': 0, 'relative_attention_max_distance': 128, 'relative_attention_num_buckets': 32, 'scalable_attention': True, 'tie_word_embeddings': False, 'use_cache': True, 'vocab_size': 256384}
+INFO 09-28 20:20:46.687 [component_loader.py:448] Loading weights took 19.84 seconds
+INFO 09-28 20:20:46.690 [composed_pipeline_base.py:626] Loaded module text_encoder from /root/runs/upstream/9b2c963-09282013/fv-fastwan22-5b/model/FastWan2.2-TI2V-5B-FullAttn-Diffusers/text_encoder
+INFO 09-28 20:20:46.690 [component_loader.py:1380] Loading tokenizer using transformers from /root/runs/upstream/9b2c963-09282013/fv-fastwan22-5b/model/FastWan2.2-TI2V-5B-FullAttn-Diffusers/tokenizer
+INFO 09-28 20:20:46.690 [component_loader.py:626] Loading tokenizer from /root/runs/upstream/9b2c963-09282013/fv-fastwan22-5b/model/FastWan2.2-TI2V-5B-FullAttn-Diffusers/tokenizer
+INFO 09-28 20:20:47.960 [component_loader.py:724] Loaded tokenizer: T5Tokenizer
+INFO 09-28 20:20:47.960 [composed_pipeline_base.py:626] Loaded module tokenizer from /root/runs/upstream/9b2c963-09282013/fv-fastwan22-5b/model/FastWan2.2-TI2V-5B-FullAttn-Diffusers/tokenizer
+INFO 09-28 20:20:47.960 [component_loader.py:1380] Loading transformer using diffusers from /root/runs/upstream/9b2c963-09282013/fv-fastwan22-5b/model/FastWan2.2-TI2V-5B-FullAttn-Diffusers/transformer
+INFO 09-28 20:20:47.963 [component_loader.py:1042] transformer cls_name: WanTransformer3DModel
+INFO 09-28 20:20:47.964 [component_loader.py:1094] Loading model from 1 safetensors files: ['/root/runs/upstream/9b2c963-09282013/fv-fastwan22-5b/model/FastWan2.2-TI2V-5B-FullAttn-Diffusers/transformer/diffusion_pytorch_model.safetensors']
+INFO 09-28 20:20:47.964 [component_loader.py:1103] Loading model from WanTransformer3DModel, default_dtype: torch.bfloat16
+INFO 09-28 20:20:47.964 [component_loader.py:1119] Worker 0 transformer attention backend: FLASH_ATTN
+INFO 09-28 20:20:47.964 [fsdp_load.py:228] Loading model with default_dtype: torch.bfloat16
+INFO 09-28 20:20:47.966 [cuda.py:174] Trying FASTVIDEO_ATTENTION_BACKEND=FLASH_ATTN
+INFO 09-28 20:20:47.966 [cuda.py:175] Selected backend: AttentionBackendEnum.FLASH_ATTN
+INFO 09-28 20:20:47.983 [cuda.py:332] Cannot use FlashAttention-2 backend because the flash_attn package is not found. Make sure that flash_attn was built and installed (on by default).
+INFO 09-28 20:20:47.983 [cuda.py:339] Using Torch SDPA backend.
+INFO 09-28 20:20:47.984 [cuda.py:174] Trying FASTVIDEO_ATTENTION_BACKEND=FLASH_ATTN
+INFO 09-28 20:20:47.984 [cuda.py:175] Selected backend: AttentionBackendEnum.FLASH_ATTN
+INFO 09-28 20:20:47.984 [cuda.py:332] Cannot use FlashAttention-2 backend because the flash_attn package is not found. Make sure that flash_attn was built and installed (on by default).
+INFO 09-28 20:20:47.984 [cuda.py:339] Using Torch SDPA backend.
+INFO 09-28 20:20:48.003 [fsdp_load.py:282] Loading transformer weights with to_cpu=False
+INFO 09-28 20:20:49.083 [component_loader.py:1155] Loaded model with 5.00B parameters
+INFO 09-28 20:20:58.890 [composed_pipeline_base.py:626] Loaded module transformer from /root/runs/upstream/9b2c963-09282013/fv-fastwan22-5b/model/FastWan2.2-TI2V-5B-FullAttn-Diffusers/transformer
+WARNING 09-28 20:20:58.890 [composed_pipeline_base.py:590] Module transformer_2 in model_index.json has null value, removing from required_config_modules
+INFO 09-28 20:20:58.890 [component_loader.py:1380] Loading vae using diffusers from /root/runs/upstream/9b2c963-09282013/fv-fastwan22-5b/model/FastWan2.2-TI2V-5B-FullAttn-Diffusers/vae
+INFO 09-28 20:21:05.375 [composed_pipeline_base.py:626] Loaded module vae from /root/runs/upstream/9b2c963-09282013/fv-fastwan22-5b/model/FastWan2.2-TI2V-5B-FullAttn-Diffusers/vae
+INFO 09-28 20:21:05.376 [lora_pipeline.py:202] trainable_transformer_modules: dict_keys(['transformer'])
+INFO 09-28 20:21:05.376 [__init__.py:61] Pipelines instantiated
+[1;36m(Worker pid=1207)[0;0m INFO 09-28 20:21:05.376 [multiproc_executor.py:716] Worker 0 starting event loop...
+INFO 09-28 20:21:05.377 [multiproc_executor.py:707] 1 workers ready
+INFO 09-28 20:21:05.380 [video_generator.py:766] 
+INFO 09-28 20:21:05.380 [video_generator.py:766]                       height: 704
+INFO 09-28 20:21:05.380 [video_generator.py:766]                        width: 1280
+INFO 09-28 20:21:05.380 [video_generator.py:766]                 video_length: 121
+INFO 09-28 20:21:05.380 [video_generator.py:766]                       prompt: integrated_multimodal_description: [Shot 1] Cinematic, medium wide shot, pushing in slowly. In the cavernous, dimly lit bridge of a starship, sleek metallic consoles with glowing amber displays flank a massive, curved observation window. A female captain, in her late 40s with an athletic build and short silver-streaked black hair, stands in the center midground. She wears a structured, high-collared dark navy military tunic with silver chest insignias. Her back is to the camera, silhouetted against the cool, ambient starlight pouring through the thick glass. She stands perfectly still with her hands clasped tightly behind her back. Outside the window, a massive armada of jagged, dark grey dreadnoughts hovers in tight formation against a deep purple space nebula. The fleet's massive rear thrusters begin to glow with an intense, escalating bright blue light. [Shot 2] At 00:04.500, the camera cuts to a close-up of the captain's face and shakes strongly. The brilliant blue-white light from the fleet's gathering energy reflects vividly in her dark eyes. Suddenly, a blinding white flash floods through the window, completely washing out the background as the fleet jumps to hyperspace. The sheer spatial force violently jolts the bridge, causing the captain from Shot 1 to stagger slightly forward, her shoulders tensing as she visibly braces herself against the physical tremors. As the intense white light fades abruptly, leaving only the dim, empty expanse of the purple nebula reflected on her starkly lit skin, her jaw clenches, and she slowly closes her eyes in the newly emptied space.
+INFO 09-28 20:21:05.380 [video_generator.py:766] overall_soundscape: A low, resonant hum of the ship's ambient life support systems serves as the baseline, soon drowned out by an audible, escalating, high-pitched electronic whine as the fleet outside charges its hyperdrives. A massive, deafening, bass-heavy boom and sharp crackle erupts during the blinding flash, accompanied by the loud metallic creaking, rattling, and deep thuds of the bridge's bulkheads vibrating under immense physical stress. The intense roaring impact then cuts abruptly back to a hollow, echoing room tone, leaving only the faint, steady hum of the isolated bridge.
+INFO 09-28 20:21:05.380 [video_generator.py:766] non_diegetic_music: Cinematic space-opera orchestral score, slow tempo, featuring a solitary, mournful French horn melody over deep, sustained string dissonances that build rapidly in volume and intensity, swelling to a massive orchestral peak before snapping immediately into silence right after the jump.
+INFO 09-28 20:21:05.380 [video_generator.py:766]                       image_path: None
+INFO 09-28 20:21:05.380 [video_generator.py:766]                   neg_prompt: 色调艳丽，过曝，静态，细节模糊不清，字幕，风格，作品，画作，画面，静止，整体发灰，最差质量，低质量，JPEG压缩残留，丑陋的，残缺的，多余的手指，画得不好的手部，画得不好的脸部，畸形的，毁容的，形态畸形的肢体，手指融合，静止不动的画面，杂乱的背景，三条腿，背景人很多，倒着走
+INFO 09-28 20:21:05.380 [video_generator.py:766]                         seed: 999
+INFO 09-28 20:21:05.380 [video_generator.py:766]                  infer_steps: 50
+INFO 09-28 20:21:05.380 [video_generator.py:766]        num_videos_per_prompt: 1
+INFO 09-28 20:21:05.380 [video_generator.py:766]               guidance_scale: 5.0
+INFO 09-28 20:21:05.380 [video_generator.py:766]                     n_tokens: 436480
+INFO 09-28 20:21:05.380 [video_generator.py:766]                   flow_shift: 5.0
+INFO 09-28 20:21:05.380 [video_generator.py:766]      embedded_guidance_scale: 6.0
+INFO 09-28 20:21:05.380 [video_generator.py:766]                   save_video: True
+INFO 09-28 20:21:05.380 [video_generator.py:766]                   output_path: /root/runs/upstream/9b2c963-09282013/fv-fastwan22-5b/warmup/integrated_multimodal_description [Shot 1] Cinematic, medium wide shot, pushing in slowly. In the c.mp4
+INFO 09-28 20:21:05.380 [video_generator.py:766]         
+[1;36m(Worker pid=1207)[0;0m INFO 09-28 20:21:05.385 [composed_pipeline_base.py:388] Creating pipeline stages...
+[1;36m(Worker pid=1207)[0;0m INFO 09-28 20:21:05.386 [cuda.py:174] Trying FASTVIDEO_ATTENTION_BACKEND=FLASH_ATTN
+[1;36m(Worker pid=1207)[0;0m INFO 09-28 20:21:05.386 [cuda.py:175] Selected backend: AttentionBackendEnum.FLASH_ATTN
+[1;36m(Worker pid=1207)[0;0m INFO 09-28 20:21:05.387 [cuda.py:332] Cannot use FlashAttention-2 backend because the flash_attn package is not found. Make sure that flash_attn was built and installed (on by default).
+[1;36m(Worker pid=1207)[0;0m INFO 09-28 20:21:05.387 [cuda.py:339] Using Torch SDPA backend.
+[1;36m(Worker pid=1207)[0;0m INFO 09-28 20:21:05.387 [composed_pipeline_base.py:758] Running pipeline stages: dict_keys(['input_validation_stage', 'prompt_encoding_stage', 'conditioning_stage', 'timestep_preparation_stage', 'latent_preparation_stage', 'denoising_stage', 'decoding_stage'])
+[1;36m(Worker pid=1207)[0;0m INFO 09-28 20:21:05.387 [base.py:182] [input_validation_stage|InputValidationStage] Starting execution
+[1;36m(Worker pid=1207)[0;0m INFO 09-28 20:21:05.387 [base.py:190] [input_validation_stage|InputValidationStage] Execution completed in 0.03915978595614433 ms
+[1;36m(Worker pid=1207)[0;0m INFO 09-28 20:21:05.387 [base.py:182] [prompt_encoding_stage|TextEncodingStage] Starting execution
+[1;36m(Worker pid=1207)[0;0m INFO 09-28 20:21:05.766 [base.py:190] [prompt_encoding_stage|TextEncodingStage] Execution completed in 378.5356800071895 ms
+[1;36m(Worker pid=1207)[0;0m INFO 09-28 20:21:05.773 [base.py:182] [conditioning_stage|ConditioningStage] Starting execution
+[1;36m(Worker pid=1207)[0;0m INFO 09-28 20:21:05.773 [base.py:190] [conditioning_stage|ConditioningStage] Execution completed in 0.02274010330438614 ms
+[1;36m(Worker pid=1207)[0;0m INFO 09-28 20:21:05.773 [base.py:182] [timestep_preparation_stage|TimestepPreparationStage] Starting execution
+[1;36m(Worker pid=1207)[0;0m INFO 09-28 20:21:05.774 [base.py:190] [timestep_preparation_stage|TimestepPreparationStage] Execution completed in 0.5904240533709526 ms
+[1;36m(Worker pid=1207)[0;0m INFO 09-28 20:21:05.774 [base.py:182] [latent_preparation_stage|LatentPreparationStage] Starting execution
+[1;36m(Worker pid=1207)[0;0m INFO 09-28 20:21:05.791 [base.py:190] [latent_preparation_stage|LatentPreparationStage] Execution completed in 16.772155184298754 ms
+[1;36m(Worker pid=1207)[0;0m INFO 09-28 20:21:05.791 [base.py:182] [denoising_stage|DmdDenoisingStage] Starting execution
+[1;36m(Worker pid=1207)[0;0m INFO 09-28 20:21:12.869 [base.py:190] [denoising_stage|DmdDenoisingStage] Execution completed in 7077.821024227887 ms
+[1;36m(Worker pid=1207)[0;0m INFO 09-28 20:21:12.869 [base.py:182] [decoding_stage|DecodingStage] Starting execution
+[1;36m(Worker pid=1207)[0;0m INFO 09-28 20:21:24.621 [base.py:190] [decoding_stage|DecodingStage] Execution completed in 11751.629455015063 ms
+[1;36m(Worker pid=1207)[0;0m INFO 09-28 20:21:24.625 [multiproc_executor.py:716] Worker 0 starting event loop...
+INFO 09-28 20:21:24.650 [video_generator.py:863] Generated successfully in 19.27 seconds
+INFO 09-28 20:21:24.950 [video_generator.py:919] PostDecodeFrameProcessStage completed in 0.300 s
+INFO 09-28 20:21:25.589 [video_generator.py:990] Saved video to /root/runs/upstream/9b2c963-09282013/fv-fastwan22-5b/warmup/integrated_multimodal_description [Shot 1] Cinematic, medium wide shot, pushing in slowly. In the c.mp4
+INFO 09-28 20:21:25.589 [video_generator.py:992] VideoSaveStage completed in 0.639 s
+INFO 09-28 20:21:25.589 [video_generator.py:995] AudioMuxStage completed in 0.000 s
+INFO 09-28 20:21:25.589 [video_generator.py:1000] End-to-end latency: 20.21 seconds
+INFO 09-28 20:21:25.600 [video_generator.py:766] 
+INFO 09-28 20:21:25.600 [video_generator.py:766]                       height: 704
+INFO 09-28 20:21:25.600 [video_generator.py:766]                        width: 1280
+INFO 09-28 20:21:25.600 [video_generator.py:766]                 video_length: 121
+INFO 09-28 20:21:25.600 [video_generator.py:766]                       prompt: integrated_multimodal_description: [Shot 1] Cinematic, medium wide shot, pushing in slowly. In the cavernous, dimly lit bridge of a starship, sleek metallic consoles with glowing amber displays flank a massive, curved observation window. A female captain, in her late 40s with an athletic build and short silver-streaked black hair, stands in the center midground. She wears a structured, high-collared dark navy military tunic with silver chest insignias. Her back is to the camera, silhouetted against the cool, ambient starlight pouring through the thick glass. She stands perfectly still with her hands clasped tightly behind her back. Outside the window, a massive armada of jagged, dark grey dreadnoughts hovers in tight formation against a deep purple space nebula. The fleet's massive rear thrusters begin to glow with an intense, escalating bright blue light. [Shot 2] At 00:04.500, the camera cuts to a close-up of the captain's face and shakes strongly. The brilliant blue-white light from the fleet's gathering energy reflects vividly in her dark eyes. Suddenly, a blinding white flash floods through the window, completely washing out the background as the fleet jumps to hyperspace. The sheer spatial force violently jolts the bridge, causing the captain from Shot 1 to stagger slightly forward, her shoulders tensing as she visibly braces herself against the physical tremors. As the intense white light fades abruptly, leaving only the dim, empty expanse of the purple nebula reflected on her starkly lit skin, her jaw clenches, and she slowly closes her eyes in the newly emptied space.
+INFO 09-28 20:21:25.600 [video_generator.py:766] overall_soundscape: A low, resonant hum of the ship's ambient life support systems serves as the baseline, soon drowned out by an audible, escalating, high-pitched electronic whine as the fleet outside charges its hyperdrives. A massive, deafening, bass-heavy boom and sharp crackle erupts during the blinding flash, accompanied by the loud metallic creaking, rattling, and deep thuds of the bridge's bulkheads vibrating under immense physical stress. The intense roaring impact then cuts abruptly back to a hollow, echoing room tone, leaving only the faint, steady hum of the isolated bridge.
+INFO 09-28 20:21:25.600 [video_generator.py:766] non_diegetic_music: Cinematic space-opera orchestral score, slow tempo, featuring a solitary, mournful French horn melody over deep, sustained string dissonances that build rapidly in volume and intensity, swelling to a massive orchestral peak before snapping immediately into silence right after the jump.
+INFO 09-28 20:21:25.600 [video_generator.py:766]                       image_path: None
+INFO 09-28 20:21:25.600 [video_generator.py:766]                   neg_prompt: 色调艳丽，过曝，静态，细节模糊不清，字幕，风格，作品，画作，画面，静止，整体发灰，最差质量，低质量，JPEG压缩残留，丑陋的，残缺的，多余的手指，画得不好的手部，画得不好的脸部，畸形的，毁容的，形态畸形的肢体，手指融合，静止不动的画面，杂乱的背景，三条腿，背景人很多，倒着走
+INFO 09-28 20:21:25.600 [video_generator.py:766]                         seed: 0
+INFO 09-28 20:21:25.600 [video_generator.py:766]                  infer_steps: 50
+INFO 09-28 20:21:25.600 [video_generator.py:766]        num_videos_per_prompt: 1
+INFO 09-28 20:21:25.600 [video_generator.py:766]               guidance_scale: 5.0
+INFO 09-28 20:21:25.600 [video_generator.py:766]                     n_tokens: 436480
+INFO 09-28 20:21:25.600 [video_generator.py:766]                   flow_shift: 5.0
+INFO 09-28 20:21:25.600 [video_generator.py:766]      embedded_guidance_scale: 6.0
+INFO 09-28 20:21:25.600 [video_generator.py:766]                   save_video: True
+INFO 09-28 20:21:25.600 [video_generator.py:766]                   output_path: /root/runs/upstream/9b2c963-09282013/fv-fastwan22-5b/h3-demo/run_01/integrated_multimodal_description [Shot 1] Cinematic, medium wide shot, pushing in slowly. In the c.mp4
+INFO 09-28 20:21:25.600 [video_generator.py:766]         
+[1;36m(Worker pid=1207)[0;0m INFO 09-28 20:21:25.605 [composed_pipeline_base.py:758] Running pipeline stages: dict_keys(['input_validation_stage', 'prompt_encoding_stage', 'conditioning_stage', 'timestep_preparation_stage', 'latent_preparation_stage', 'denoising_stage', 'decoding_stage'])
+[1;36m(Worker pid=1207)[0;0m INFO 09-28 20:21:25.605 [base.py:182] [input_validation_stage|InputValidationStage] Starting execution
+[1;36m(Worker pid=1207)[0;0m INFO 09-28 20:21:25.605 [base.py:190] [input_validation_stage|InputValidationStage] Execution completed in 0.02969987690448761 ms
+[1;36m(Worker pid=1207)[0;0m INFO 09-28 20:21:25.605 [base.py:182] [prompt_encoding_stage|TextEncodingStage] Starting execution
+[1;36m(Worker pid=1207)[0;0m INFO 09-28 20:21:25.740 [base.py:190] [prompt_encoding_stage|TextEncodingStage] Execution completed in 135.26962092146277 ms
+[1;36m(Worker pid=1207)[0;0m INFO 09-28 20:21:25.740 [base.py:182] [conditioning_stage|ConditioningStage] Starting execution
+[1;36m(Worker pid=1207)[0;0m INFO 09-28 20:21:25.740 [base.py:190] [conditioning_stage|ConditioningStage] Execution completed in 0.010099727660417557 ms
+[1;36m(Worker pid=1207)[0;0m INFO 09-28 20:21:25.741 [base.py:182] [timestep_preparation_stage|TimestepPreparationStage] Starting execution
+[1;36m(Worker pid=1207)[0;0m INFO 09-28 20:21:25.741 [base.py:190] [timestep_preparation_stage|TimestepPreparationStage] Execution completed in 0.3802431747317314 ms
+[1;36m(Worker pid=1207)[0;0m INFO 09-28 20:21:25.741 [base.py:182] [latent_preparation_stage|LatentPreparationStage] Starting execution
+[1;36m(Worker pid=1207)[0;0m INFO 09-28 20:21:25.759 [base.py:190] [latent_preparation_stage|LatentPreparationStage] Execution completed in 17.37846015021205 ms
+[1;36m(Worker pid=1207)[0;0m INFO 09-28 20:21:25.759 [base.py:182] [denoising_stage|DmdDenoisingStage] Starting execution
+[1;36m(Worker pid=1207)[0;0m INFO 09-28 20:21:32.603 [base.py:190] [denoising_stage|DmdDenoisingStage] Execution completed in 6843.906815163791 ms
+[1;36m(Worker pid=1207)[0;0m INFO 09-28 20:21:32.603 [base.py:182] [decoding_stage|DecodingStage] Starting execution
+[1;36m(Worker pid=1207)[0;0m INFO 09-28 20:21:44.348 [base.py:190] [decoding_stage|DecodingStage] Execution completed in 11744.702534284443 ms
+[1;36m(Worker pid=1207)[0;0m INFO 09-28 20:21:44.352 [multiproc_executor.py:716] Worker 0 starting event loop...
+INFO 09-28 20:21:44.376 [video_generator.py:863] Generated successfully in 18.78 seconds
+INFO 09-28 20:21:44.551 [video_generator.py:919] PostDecodeFrameProcessStage completed in 0.175 s
+INFO 09-28 20:21:45.127 [video_generator.py:990] Saved video to /root/runs/upstream/9b2c963-09282013/fv-fastwan22-5b/h3-demo/run_01/integrated_multimodal_description [Shot 1] Cinematic, medium wide shot, pushing in slowly. In the c.mp4
+INFO 09-28 20:21:45.128 [video_generator.py:992] VideoSaveStage completed in 0.576 s
+INFO 09-28 20:21:45.128 [video_generator.py:995] AudioMuxStage completed in 0.000 s
+INFO 09-28 20:21:45.128 [video_generator.py:1000] End-to-end latency: 19.53 seconds
+INFO 09-28 20:21:45.147 [video_generator.py:766] 
+INFO 09-28 20:21:45.147 [video_generator.py:766]                       height: 704
+INFO 09-28 20:21:45.147 [video_generator.py:766]                        width: 1280
+INFO 09-28 20:21:45.147 [video_generator.py:766]                 video_length: 121
+INFO 09-28 20:21:45.147 [video_generator.py:766]                       prompt: A wide shot frames a rainy city intersection at dusk, neon signs reflecting on wet asphalt. A young woman in a yellow raincoat walks toward camera, gripping a folded newspaper, while cars hiss past behind her. Soft synth music and distant traffic fill the air. A hard cut transitions to a medium close-up of her face under the hood, raindrops catching the neon as she looks off-screen left; the synth score continues across the cut, traffic muffled. She whispers, "He's late." Another hard cut jumps to a low-angle shot of a man's scuffed boots stepping into a puddle at the curb; the music drops to a low drone. He lifts his head into frame — short dark hair, soaked jacket — and smiles toward her off-screen as a bus rumbles past.
+INFO 09-28 20:21:45.147 [video_generator.py:766]                       image_path: None
+INFO 09-28 20:21:45.147 [video_generator.py:766]                   neg_prompt: 色调艳丽，过曝，静态，细节模糊不清，字幕，风格，作品，画作，画面，静止，整体发灰，最差质量，低质量，JPEG压缩残留，丑陋的，残缺的，多余的手指，画得不好的手部，画得不好的脸部，畸形的，毁容的，形态畸形的肢体，手指融合，静止不动的画面，杂乱的背景，三条腿，背景人很多，倒着走
+INFO 09-28 20:21:45.147 [video_generator.py:766]                         seed: 42
+INFO 09-28 20:21:45.147 [video_generator.py:766]                  infer_steps: 50
+INFO 09-28 20:21:45.147 [video_generator.py:766]        num_videos_per_prompt: 1
+INFO 09-28 20:21:45.147 [video_generator.py:766]               guidance_scale: 5.0
+INFO 09-28 20:21:45.147 [video_generator.py:766]                     n_tokens: 436480
+INFO 09-28 20:21:45.147 [video_generator.py:766]                   flow_shift: 5.0
+INFO 09-28 20:21:45.147 [video_generator.py:766]      embedded_guidance_scale: 6.0
+INFO 09-28 20:21:45.147 [video_generator.py:766]                   save_video: True
+INFO 09-28 20:21:45.147 [video_generator.py:766]                   output_path: /root/runs/upstream/9b2c963-09282013/fv-fastwan22-5b/ltx-multishot/run_01/A wide shot frames a rainy city intersection at dusk, neon signs reflecting on wet asphalt. A young.mp4
+INFO 09-28 20:21:45.147 [video_generator.py:766]         
+[1;36m(Worker pid=1207)[0;0m INFO 09-28 20:21:45.151 [composed_pipeline_base.py:758] Running pipeline stages: dict_keys(['input_validation_stage', 'prompt_encoding_stage', 'conditioning_stage', 'timestep_preparation_stage', 'latent_preparation_stage', 'denoising_stage', 'decoding_stage'])
+[1;36m(Worker pid=1207)[0;0m INFO 09-28 20:21:45.152 [base.py:182] [input_validation_stage|InputValidationStage] Starting execution
+[1;36m(Worker pid=1207)[0;0m INFO 09-28 20:21:45.152 [base.py:190] [input_validation_stage|InputValidationStage] Execution completed in 0.058650970458984375 ms
+[1;36m(Worker pid=1207)[0;0m INFO 09-28 20:21:45.152 [base.py:182] [prompt_encoding_stage|TextEncodingStage] Starting execution
+[1;36m(Worker pid=1207)[0;0m INFO 09-28 20:21:45.233 [base.py:190] [prompt_encoding_stage|TextEncodingStage] Execution completed in 81.01033605635166 ms
+[1;36m(Worker pid=1207)[0;0m INFO 09-28 20:21:45.233 [base.py:182] [conditioning_stage|ConditioningStage] Starting execution
+[1;36m(Worker pid=1207)[0;0m INFO 09-28 20:21:45.233 [base.py:190] [conditioning_stage|ConditioningStage] Execution completed in 0.010400079190731049 ms
+[1;36m(Worker pid=1207)[0;0m INFO 09-28 20:21:45.233 [base.py:182] [timestep_preparation_stage|TimestepPreparationStage] Starting execution
+[1;36m(Worker pid=1207)[0;0m INFO 09-28 20:21:45.234 [base.py:190] [timestep_preparation_stage|TimestepPreparationStage] Execution completed in 0.3851228393614292 ms
+[1;36m(Worker pid=1207)[0;0m INFO 09-28 20:21:45.234 [base.py:182] [latent_preparation_stage|LatentPreparationStage] Starting execution
+[1;36m(Worker pid=1207)[0;0m INFO 09-28 20:21:45.250 [base.py:190] [latent_preparation_stage|LatentPreparationStage] Execution completed in 16.59593405202031 ms
+[1;36m(Worker pid=1207)[0;0m INFO 09-28 20:21:45.251 [base.py:182] [denoising_stage|DmdDenoisingStage] Starting execution
+[1;36m(Worker pid=1207)[0;0m INFO 09-28 20:21:52.100 [base.py:190] [denoising_stage|DmdDenoisingStage] Execution completed in 6849.321246147156 ms
+[1;36m(Worker pid=1207)[0;0m INFO 09-28 20:21:52.101 [base.py:182] [decoding_stage|DecodingStage] Starting execution
+[1;36m(Worker pid=1207)[0;0m INFO 09-28 20:22:03.858 [base.py:190] [decoding_stage|DecodingStage] Execution completed in 11757.181947119534 ms
+[1;36m(Worker pid=1207)[0;0m INFO 09-28 20:22:03.861 [multiproc_executor.py:716] Worker 0 starting event loop...
+INFO 09-28 20:22:03.886 [video_generator.py:863] Generated successfully in 18.74 seconds
+INFO 09-28 20:22:04.136 [video_generator.py:919] PostDecodeFrameProcessStage completed in 0.250 s
+INFO 09-28 20:22:04.780 [video_generator.py:990] Saved video to /root/runs/upstream/9b2c963-09282013/fv-fastwan22-5b/ltx-multishot/run_01/A wide shot frames a rainy city intersection at dusk, neon signs reflecting on wet asphalt. A young.mp4
+INFO 09-28 20:22:04.781 [video_generator.py:992] VideoSaveStage completed in 0.644 s
+INFO 09-28 20:22:04.781 [video_generator.py:995] AudioMuxStage completed in 0.000 s
+INFO 09-28 20:22:04.781 [video_generator.py:1000] End-to-end latency: 19.63 seconds
+INFO 09-28 20:22:04.802 [video_generator.py:766] 
+INFO 09-28 20:22:04.802 [video_generator.py:766]                       height: 704
+INFO 09-28 20:22:04.802 [video_generator.py:766]                        width: 1280
+INFO 09-28 20:22:04.802 [video_generator.py:766]                 video_length: 121
+INFO 09-28 20:22:04.802 [video_generator.py:766]                       prompt: EXT. SMALL TOWN STREET – MORNING – LIVE NEWS BROADCAST
+INFO 09-28 20:22:04.802 [video_generator.py:766] The shot opens on a news reporter standing in front of a row of cordoned-off cars, yellow caution tape fluttering behind him. The light is warm, early sun reflecting off the camera lens. The faint hum of chatter and distant drilling fills the air.
+INFO 09-28 20:22:04.802 [video_generator.py:766] The reporter, composed but visibly excited, looks directly into the camera, microphone in hand.
+INFO 09-28 20:22:04.802 [video_generator.py:766] Reporter (live):
+INFO 09-28 20:22:04.802 [video_generator.py:766] "Thank you, Sylvia. And yes — this is a sentence I never thought I'd say on live television — but this morning, here in the quiet town of New Castle, Vermont… black gold has been found!"
+INFO 09-28 20:22:04.802 [video_generator.py:766] He gestures slightly toward the field behind him.
+INFO 09-28 20:22:04.802 [video_generator.py:766] Reporter (grinning):
+INFO 09-28 20:22:04.802 [video_generator.py:766] "If my cameraman can pan over, you'll see what all the excitement's about."
+INFO 09-28 20:22:04.802 [video_generator.py:766] The camera pans right, slowly revealing a construction site surrounded by workers in hard hats. A beat of silence — then, with a sudden roar, a geyser of oil erupts from the ground, blasting upward in a violent plume.
+INFO 09-28 20:22:04.802 [video_generator.py:766] Workers cheer and scramble, the black stream glistening in the morning light. The camera shakes slightly, trying to stay focused through the chaos.
+INFO 09-28 20:22:04.802 [video_generator.py:766] Reporter (off-screen, shouting over the noise):
+INFO 09-28 20:22:04.802 [video_generator.py:766] "There it is, folks — the moment New Castle will never forget!"
+INFO 09-28 20:22:04.802 [video_generator.py:766] The camera catches the sunlight gleaming off the oil mist before pulling back, revealing the entire scene — the small-town skyline silhouetted against the wild fountain of oil.
+INFO 09-28 20:22:04.802 [video_generator.py:766]                       image_path: None
+INFO 09-28 20:22:04.802 [video_generator.py:766]                   neg_prompt: 色调艳丽，过曝，静态，细节模糊不清，字幕，风格，作品，画作，画面，静止，整体发灰，最差质量，低质量，JPEG压缩残留，丑陋的，残缺的，多余的手指，画得不好的手部，画得不好的脸部，畸形的，毁容的，形态畸形的肢体，手指融合，静止不动的画面，杂乱的背景，三条腿，背景人很多，倒着走
+INFO 09-28 20:22:04.802 [video_generator.py:766]                         seed: 42
+INFO 09-28 20:22:04.802 [video_generator.py:766]                  infer_steps: 50
+INFO 09-28 20:22:04.802 [video_generator.py:766]        num_videos_per_prompt: 1
+INFO 09-28 20:22:04.802 [video_generator.py:766]               guidance_scale: 5.0
+INFO 09-28 20:22:04.802 [video_generator.py:766]                     n_tokens: 436480
+INFO 09-28 20:22:04.802 [video_generator.py:766]                   flow_shift: 5.0
+INFO 09-28 20:22:04.802 [video_generator.py:766]      embedded_guidance_scale: 6.0
+INFO 09-28 20:22:04.802 [video_generator.py:766]                   save_video: True
+INFO 09-28 20:22:04.802 [video_generator.py:766]                   output_path: /root/runs/upstream/9b2c963-09282013/fv-fastwan22-5b/ltx-newsbroadcast/run_01/EXT. SMALL TOWN STREET – MORNING – LIVE NEWS BROADCAST The shot opens on a news reporter standing in.mp4
+INFO 09-28 20:22:04.802 [video_generator.py:766]         
+[1;36m(Worker pid=1207)[0;0m INFO 09-28 20:22:04.807 [composed_pipeline_base.py:758] Running pipeline stages: dict_keys(['input_validation_stage', 'prompt_encoding_stage', 'conditioning_stage', 'timestep_preparation_stage', 'latent_preparation_stage', 'denoising_stage', 'decoding_stage'])
+[1;36m(Worker pid=1207)[0;0m INFO 09-28 20:22:04.807 [base.py:182] [input_validation_stage|InputValidationStage] Starting execution
+[1;36m(Worker pid=1207)[0;0m INFO 09-28 20:22:04.807 [base.py:190] [input_validation_stage|InputValidationStage] Execution completed in 0.02832990139722824 ms
+[1;36m(Worker pid=1207)[0;0m INFO 09-28 20:22:04.807 [base.py:182] [prompt_encoding_stage|TextEncodingStage] Starting execution
+[1;36m(Worker pid=1207)[0;0m INFO 09-28 20:22:04.915 [base.py:190] [prompt_encoding_stage|TextEncodingStage] Execution completed in 107.90097573772073 ms
+[1;36m(Worker pid=1207)[0;0m INFO 09-28 20:22:04.915 [base.py:182] [conditioning_stage|ConditioningStage] Starting execution
+[1;36m(Worker pid=1207)[0;0m INFO 09-28 20:22:04.915 [base.py:190] [conditioning_stage|ConditioningStage] Execution completed in 0.01469021663069725 ms
+[1;36m(Worker pid=1207)[0;0m INFO 09-28 20:22:04.915 [base.py:182] [timestep_preparation_stage|TimestepPreparationStage] Starting execution
+[1;36m(Worker pid=1207)[0;0m INFO 09-28 20:22:04.916 [base.py:190] [timestep_preparation_stage|TimestepPreparationStage] Execution completed in 0.38653286173939705 ms
+[1;36m(Worker pid=1207)[0;0m INFO 09-28 20:22:04.916 [base.py:182] [latent_preparation_stage|LatentPreparationStage] Starting execution
+[1;36m(Worker pid=1207)[0;0m INFO 09-28 20:22:04.932 [base.py:190] [latent_preparation_stage|LatentPreparationStage] Execution completed in 16.382023226469755 ms
+[1;36m(Worker pid=1207)[0;0m INFO 09-28 20:22:04.933 [base.py:182] [denoising_stage|DmdDenoisingStage] Starting execution
+[1;36m(Worker pid=1207)[0;0m INFO 09-28 20:22:11.786 [base.py:190] [denoising_stage|DmdDenoisingStage] Execution completed in 6853.298795875162 ms
+[1;36m(Worker pid=1207)[0;0m INFO 09-28 20:22:11.786 [base.py:182] [decoding_stage|DecodingStage] Starting execution
+[1;36m(Worker pid=1207)[0;0m INFO 09-28 20:22:23.553 [base.py:190] [decoding_stage|DecodingStage] Execution completed in 11765.981782227755 ms
+[1;36m(Worker pid=1207)[0;0m INFO 09-28 20:22:23.556 [multiproc_executor.py:716] Worker 0 starting event loop...
+INFO 09-28 20:22:23.581 [video_generator.py:863] Generated successfully in 18.78 seconds
+INFO 09-28 20:22:24.040 [video_generator.py:919] PostDecodeFrameProcessStage completed in 0.458 s
+INFO 09-28 20:22:24.568 [video_generator.py:990] Saved video to /root/runs/upstream/9b2c963-09282013/fv-fastwan22-5b/ltx-newsbroadcast/run_01/EXT. SMALL TOWN STREET – MORNING – LIVE NEWS BROADCAST The shot opens on a news reporter standing in.mp4
+INFO 09-28 20:22:24.568 [video_generator.py:992] VideoSaveStage completed in 0.528 s
+INFO 09-28 20:22:24.568 [video_generator.py:995] AudioMuxStage completed in 0.000 s
+INFO 09-28 20:22:24.568 [video_generator.py:1000] End-to-end latency: 19.77 seconds
+INFO 09-28 20:22:24.591 [video_generator.py:766] 
+INFO 09-28 20:22:24.591 [video_generator.py:766]                       height: 704
+INFO 09-28 20:22:24.591 [video_generator.py:766]                        width: 1280
+INFO 09-28 20:22:24.591 [video_generator.py:766]                 video_length: 121
+INFO 09-28 20:22:24.591 [video_generator.py:766]                       prompt: The camera opens in a calm, sunlit frog yoga studio. Warm morning light washes over the wooden floor as incense smoke drifts lazily in the air. The senior frog instructor sits cross-legged at the center, eyes closed, voice deep and calm. "We are one with the pond." All the frogs answer softly: "Ommm…" "We are one with the mud." "Ommm…" He smiles faintly. "We are one with the flies." A pause.
+INFO 09-28 20:22:24.591 [video_generator.py:766] The camera pans to the side towards one frog who twitches, eyes darting. Suddenly its tongue snaps out, catching a fly mid-air and pulling it into its mouth.
+INFO 09-28 20:22:24.591 [video_generator.py:766] The master exhales slowly, still serene. "But we do not chase the flies…" Beat. "not during class."
+INFO 09-28 20:22:24.591 [video_generator.py:766] The guilty frog lowers its head in shame, folding its hands back into a meditative pose. The other frogs resume their chant: "Ommm…" Camera holds for a moment on the embarrassed frog, eyes closed too tightly, pretending nothing happened.
+INFO 09-28 20:22:24.591 [video_generator.py:766]                       image_path: None
+INFO 09-28 20:22:24.591 [video_generator.py:766]                   neg_prompt: 色调艳丽，过曝，静态，细节模糊不清，字幕，风格，作品，画作，画面，静止，整体发灰，最差质量，低质量，JPEG压缩残留，丑陋的，残缺的，多余的手指，画得不好的手部，画得不好的脸部，畸形的，毁容的，形态畸形的肢体，手指融合，静止不动的画面，杂乱的背景，三条腿，背景人很多，倒着走
+INFO 09-28 20:22:24.591 [video_generator.py:766]                         seed: 42
+INFO 09-28 20:22:24.591 [video_generator.py:766]                  infer_steps: 50
+INFO 09-28 20:22:24.591 [video_generator.py:766]        num_videos_per_prompt: 1
+INFO 09-28 20:22:24.591 [video_generator.py:766]               guidance_scale: 5.0
+INFO 09-28 20:22:24.591 [video_generator.py:766]                     n_tokens: 436480
+INFO 09-28 20:22:24.591 [video_generator.py:766]                   flow_shift: 5.0
+INFO 09-28 20:22:24.591 [video_generator.py:766]      embedded_guidance_scale: 6.0
+INFO 09-28 20:22:24.591 [video_generator.py:766]                   save_video: True
+INFO 09-28 20:22:24.591 [video_generator.py:766]                   output_path: /root/runs/upstream/9b2c963-09282013/fv-fastwan22-5b/ltx-frogyoga/run_01/The camera opens in a calm, sunlit frog yoga studio. Warm morning light washes over the wooden floor.mp4
+INFO 09-28 20:22:24.591 [video_generator.py:766]         
+[1;36m(Worker pid=1207)[0;0m INFO 09-28 20:22:24.596 [composed_pipeline_base.py:758] Running pipeline stages: dict_keys(['input_validation_stage', 'prompt_encoding_stage', 'conditioning_stage', 'timestep_preparation_stage', 'latent_preparation_stage', 'denoising_stage', 'decoding_stage'])
+[1;36m(Worker pid=1207)[0;0m INFO 09-28 20:22:24.597 [base.py:182] [input_validation_stage|InputValidationStage] Starting execution
+[1;36m(Worker pid=1207)[0;0m INFO 09-28 20:22:24.597 [base.py:190] [input_validation_stage|InputValidationStage] Execution completed in 0.03044959157705307 ms
+[1;36m(Worker pid=1207)[0;0m INFO 09-28 20:22:24.597 [base.py:182] [prompt_encoding_stage|TextEncodingStage] Starting execution
+[1;36m(Worker pid=1207)[0;0m INFO 09-28 20:22:24.683 [base.py:190] [prompt_encoding_stage|TextEncodingStage] Execution completed in 86.1386340111494 ms
+[1;36m(Worker pid=1207)[0;0m INFO 09-28 20:22:24.683 [base.py:182] [conditioning_stage|ConditioningStage] Starting execution
+[1;36m(Worker pid=1207)[0;0m INFO 09-28 20:22:24.683 [base.py:190] [conditioning_stage|ConditioningStage] Execution completed in 0.010449904948472977 ms
+[1;36m(Worker pid=1207)[0;0m INFO 09-28 20:22:24.683 [base.py:182] [timestep_preparation_stage|TimestepPreparationStage] Starting execution
+[1;36m(Worker pid=1207)[0;0m INFO 09-28 20:22:24.684 [base.py:190] [timestep_preparation_stage|TimestepPreparationStage] Execution completed in 0.3858627751469612 ms
+[1;36m(Worker pid=1207)[0;0m INFO 09-28 20:22:24.684 [base.py:182] [latent_preparation_stage|LatentPreparationStage] Starting execution
+[1;36m(Worker pid=1207)[0;0m INFO 09-28 20:22:24.700 [base.py:190] [latent_preparation_stage|LatentPreparationStage] Execution completed in 16.52969280257821 ms
+[1;36m(Worker pid=1207)[0;0m INFO 09-28 20:22:24.701 [base.py:182] [denoising_stage|DmdDenoisingStage] Starting execution
+[1;36m(Worker pid=1207)[0;0m INFO 09-28 20:22:31.562 [base.py:190] [denoising_stage|DmdDenoisingStage] Execution completed in 6861.29857506603 ms
+[1;36m(Worker pid=1207)[0;0m INFO 09-28 20:22:31.563 [base.py:182] [decoding_stage|DecodingStage] Starting execution
+[1;36m(Worker pid=1207)[0;0m INFO 09-28 20:22:43.333 [base.py:190] [decoding_stage|DecodingStage] Execution completed in 11769.772651139647 ms
+[1;36m(Worker pid=1207)[0;0m INFO 09-28 20:22:43.337 [multiproc_executor.py:716] Worker 0 starting event loop...
+INFO 09-28 20:22:43.368 [video_generator.py:863] Generated successfully in 18.78 seconds
+INFO 09-28 20:22:43.748 [video_generator.py:919] PostDecodeFrameProcessStage completed in 0.379 s
+INFO 09-28 20:22:44.344 [video_generator.py:990] Saved video to /root/runs/upstream/9b2c963-09282013/fv-fastwan22-5b/ltx-frogyoga/run_01/The camera opens in a calm, sunlit frog yoga studio. Warm morning light washes over the wooden floor.mp4
+INFO 09-28 20:22:44.344 [video_generator.py:992] VideoSaveStage completed in 0.595 s
+INFO 09-28 20:22:44.344 [video_generator.py:995] AudioMuxStage completed in 0.000 s
+INFO 09-28 20:22:44.344 [video_generator.py:1000] End-to-end latency: 19.75 seconds
+INFO 09-28 20:22:44.366 [video_generator.py:766] 
+INFO 09-28 20:22:44.366 [video_generator.py:766]                       height: 704
+INFO 09-28 20:22:44.366 [video_generator.py:766]                        width: 1280
+INFO 09-28 20:22:44.366 [video_generator.py:766]                 video_length: 121
+INFO 09-28 20:22:44.366 [video_generator.py:766]                       prompt: integrated_multimodal_description: A wide aerial shot follows an eagle gliding over a turquoise alpine lake, with pine forest, a narrow waterfall and snow-covered peaks visible in the background. Its wings flex gently as it banks through the warm afternoon light. The camera maintains its distance and reveals the landscape in one continuous five-second shot. Natural colors, realistic feathers, no cuts or text. overall_soundscape: Wind moving through the valley, a distant eagle call and soft waterfall noise. non_diegetic_music: None.
+INFO 09-28 20:22:44.366 [video_generator.py:766]                       image_path: None
+INFO 09-28 20:22:44.366 [video_generator.py:766]                   neg_prompt: 色调艳丽，过曝，静态，细节模糊不清，字幕，风格，作品，画作，画面，静止，整体发灰，最差质量，低质量，JPEG压缩残留，丑陋的，残缺的，多余的手指，画得不好的手部，画得不好的脸部，畸形的，毁容的，形态畸形的肢体，手指融合，静止不动的画面，杂乱的背景，三条腿，背景人很多，倒着走
+INFO 09-28 20:22:44.366 [video_generator.py:766]                         seed: 42
+INFO 09-28 20:22:44.366 [video_generator.py:766]                  infer_steps: 50
+INFO 09-28 20:22:44.366 [video_generator.py:766]        num_videos_per_prompt: 1
+INFO 09-28 20:22:44.366 [video_generator.py:766]               guidance_scale: 5.0
+INFO 09-28 20:22:44.366 [video_generator.py:766]                     n_tokens: 436480
+INFO 09-28 20:22:44.366 [video_generator.py:766]                   flow_shift: 5.0
+INFO 09-28 20:22:44.366 [video_generator.py:766]      embedded_guidance_scale: 6.0
+INFO 09-28 20:22:44.366 [video_generator.py:766]                   save_video: True
+INFO 09-28 20:22:44.366 [video_generator.py:766]                   output_path: /root/runs/upstream/9b2c963-09282013/fv-fastwan22-5b/spark-mountain-lake/run_01/integrated_multimodal_description A wide aerial shot follows an eagle gliding over a turquoise alpi.mp4
+INFO 09-28 20:22:44.366 [video_generator.py:766]         
+[1;36m(Worker pid=1207)[0;0m INFO 09-28 20:22:44.370 [composed_pipeline_base.py:758] Running pipeline stages: dict_keys(['input_validation_stage', 'prompt_encoding_stage', 'conditioning_stage', 'timestep_preparation_stage', 'latent_preparation_stage', 'denoising_stage', 'decoding_stage'])
+[1;36m(Worker pid=1207)[0;0m INFO 09-28 20:22:44.370 [base.py:182] [input_validation_stage|InputValidationStage] Starting execution
+[1;36m(Worker pid=1207)[0;0m INFO 09-28 20:22:44.370 [base.py:190] [input_validation_stage|InputValidationStage] Execution completed in 0.029050279408693314 ms
+[1;36m(Worker pid=1207)[0;0m INFO 09-28 20:22:44.370 [base.py:182] [prompt_encoding_stage|TextEncodingStage] Starting execution
+[1;36m(Worker pid=1207)[0;0m INFO 09-28 20:22:44.436 [base.py:190] [prompt_encoding_stage|TextEncodingStage] Execution completed in 65.27986796572804 ms
+[1;36m(Worker pid=1207)[0;0m INFO 09-28 20:22:44.436 [base.py:182] [conditioning_stage|ConditioningStage] Starting execution
+[1;36m(Worker pid=1207)[0;0m INFO 09-28 20:22:44.436 [base.py:190] [conditioning_stage|ConditioningStage] Execution completed in 0.010250136256217957 ms
+[1;36m(Worker pid=1207)[0;0m INFO 09-28 20:22:44.436 [base.py:182] [timestep_preparation_stage|TimestepPreparationStage] Starting execution
+[1;36m(Worker pid=1207)[0;0m INFO 09-28 20:22:44.436 [base.py:190] [timestep_preparation_stage|TimestepPreparationStage] Execution completed in 0.40931301191449165 ms
+[1;36m(Worker pid=1207)[0;0m INFO 09-28 20:22:44.436 [base.py:182] [latent_preparation_stage|LatentPreparationStage] Starting execution
+[1;36m(Worker pid=1207)[0;0m INFO 09-28 20:22:44.453 [base.py:190] [latent_preparation_stage|LatentPreparationStage] Execution completed in 16.83673495426774 ms
+[1;36m(Worker pid=1207)[0;0m INFO 09-28 20:22:44.454 [base.py:182] [denoising_stage|DmdDenoisingStage] Starting execution
+[1;36m(Worker pid=1207)[0;0m INFO 09-28 20:22:51.313 [base.py:190] [denoising_stage|DmdDenoisingStage] Execution completed in 6859.002568293363 ms
+[1;36m(Worker pid=1207)[0;0m INFO 09-28 20:22:51.313 [base.py:182] [decoding_stage|DecodingStage] Starting execution
+[1;36m(Worker pid=1207)[0;0m INFO 09-28 20:23:03.083 [base.py:190] [decoding_stage|DecodingStage] Execution completed in 11769.348736852407 ms
+[1;36m(Worker pid=1207)[0;0m INFO 09-28 20:23:03.086 [multiproc_executor.py:716] Worker 0 starting event loop...
+INFO 09-28 20:23:03.111 [video_generator.py:863] Generated successfully in 18.74 seconds
+INFO 09-28 20:23:03.335 [video_generator.py:919] PostDecodeFrameProcessStage completed in 0.223 s
+INFO 09-28 20:23:03.903 [video_generator.py:990] Saved video to /root/runs/upstream/9b2c963-09282013/fv-fastwan22-5b/spark-mountain-lake/run_01/integrated_multimodal_description A wide aerial shot follows an eagle gliding over a turquoise alpi.mp4
+INFO 09-28 20:23:03.903 [video_generator.py:992] VideoSaveStage completed in 0.568 s
+INFO 09-28 20:23:03.903 [video_generator.py:995] AudioMuxStage completed in 0.000 s
+INFO 09-28 20:23:03.903 [video_generator.py:1000] End-to-end latency: 19.54 seconds
+INFO 09-28 20:23:03.919 [multiproc_executor.py:347] Shutting down MultiprocExecutor...
+[1;36m(Worker pid=1207)[0;0m INFO 09-28 20:23:03.920 [gpu_worker.py:108] Worker 0 shutting down...
+[1;36m(Worker pid=1207)[0;0m INFO 09-28 20:23:04.332 [gpu_worker.py:117] Worker 0 shutdown complete
+[1;36m(Worker pid=1207)[0;0m INFO 09-28 20:23:04.332 [gpu_worker.py:108] Worker 0 shutting down...
+[1;36m(Worker pid=1207)[0;0m INFO 09-28 20:23:04.592 [gpu_worker.py:117] Worker 0 shutdown complete
+INFO 09-28 20:23:07.724 [multiproc_executor.py:402] MultiprocExecutor shutdown complete
+{"ok": true, "load_s": 44.44850410707295, "warm_total_s": 19.653909743763506, "median_denoise_s": 6.853298795875162, "median_decode_s": 11.765981782227755, "error": null}

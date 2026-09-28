@@ -9,7 +9,8 @@
 //! - `audio_sample_rate: 48000` (Opus on the wire), conditioning audio would
 //!   be 32 kHz but `audio_conditioning: false` until E10;
 //! - `resolutions` lists what the model's canvas tiers serve (`768p`, plus
-//!   `480p` once E3 adds the tier); `1080p` is never listed;
+//!   `480p` once E3 adds the tier, and `1080p` when the model serves the
+//!   opt-in H3 1080P tier);
 //! - `prompt_expander: "none"`, `accelerations: ["none"]`.
 
 use serde_json::{json, Value};

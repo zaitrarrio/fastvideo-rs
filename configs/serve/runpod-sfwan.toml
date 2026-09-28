@@ -50,6 +50,12 @@ native = true
 [reactor]
 model = "sfwan21-1.3b"
 
+# Live causal session length in video seconds (design §5.2, the R12 study):
+# requests may ask for up to the hard ceiling; a reset restarts the clock.
+[streams]
+causal_default_max_s = 120
+causal_hard_max_s = 300
+
 [limits]
 queue_max = 8
 body_max_mb = 64

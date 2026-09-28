@@ -1,0 +1,32 @@
+{
+  "h3-demo": {
+    "lapvar_lanczos": 65.5,
+    "lapvar_native": 98.1,
+    "grad_ratio": 1.011,
+    "hf_ratio": 2.6
+  },
+  "ltx-frogyoga": {
+    "lapvar_lanczos": 76.6,
+    "lapvar_native": 197.7,
+    "grad_ratio": 1.223,
+    "hf_ratio": 4.7
+  },
+  "ltx-newsbroadcast": {
+    "lapvar_lanczos": 32.1,
+    "lapvar_native": 78.5,
+    "grad_ratio": 1.019,
+    "hf_ratio": 5.4
+  },
+  "spark-mountain-lake": {
+    "lapvar_lanczos": 36.6,
+    "lapvar_native": 227.0,
+    "grad_ratio": 1.859,
+    "hf_ratio": 23.2
+  },
+  "talking-head": {
+    "lapvar_lanczos": 21.9,
+    "lapvar_native": 43.6,
+    "grad_ratio": 0.919,
+    "hf_ratio": 7.0
+  }
+}

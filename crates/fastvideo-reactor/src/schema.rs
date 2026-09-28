@@ -8,12 +8,15 @@
 //! - `x-reactor.tracks[{name, kind, direction}]` in **model** perspective
 //!   (`out` for what we send): `[main_video, main_audio]` or `[main_video]`,
 //!   identical to the descriptor and `track_map` (design §5.3);
-//! - each field carries `x-reactor-moderate`.
+//! - each field carries `x-reactor-moderate`;
+//! - causal mode adds `x-reactor.session_limits{default_max_s, hard_max_s,
+//!   clock, reset_restarts_clock}` (design §5.2).
 
-use fastvideo_protocol::TrackSet;
+use fastvideo_protocol::{CausalLimits, TrackSet};
 use serde_json::{json, Map, Value};
 
 use crate::commands::CommandTable;
+use crate::engine::Mode;
 
 /// `x-reactor.tracks` entries, model perspective.
 pub fn model_tracks(tracks: &TrackSet) -> Vec<Value> {
@@ -39,7 +42,7 @@ pub fn component_name(msg: &str) -> String {
 }
 
 /// The OpenAPI document for `table`.
-pub fn openapi(title: &str, version: &str, table: &CommandTable, tracks: &TrackSet) -> Value {
+pub fn openapi(title: &str, version: &str, table: &CommandTable, tracks: &TrackSet, causal: &CausalLimits) -> Value {
     let mut paths = Map::new();
     for c in &table.commands {
         let mut props = Map::new();
@@ -93,13 +96,17 @@ pub fn openapi(title: &str, version: &str, table: &CommandTable, tracks: &TrackS
             "mime_type": {"type": "string"}, "size": {"type": "integer"}
         }, "required": ["upload_id"]}),
     );
+    let mut x = json!({"tracks": model_tracks(tracks), "mode": table.mode});
+    if table.mode == Mode::Causal {
+        x["session_limits"] = causal.advertised();
+    }
     json!({
         "openapi": "3.1.0",
         "info": {"title": title, "version": version},
         "paths": paths,
         "webhooks": webhooks,
         "components": {"schemas": schemas},
-        "x-reactor": {"tracks": model_tracks(tracks), "mode": table.mode}
+        "x-reactor": x
     })
 }
 
@@ -107,7 +114,6 @@ pub fn openapi(title: &str, version: &str, table: &CommandTable, tracks: &TrackS
 mod tests {
     use super::*;
     use crate::commands::ClipBounds;
-    use crate::engine::Mode;
     use fastvideo_protocol::{AudioTrack, VideoTrack};
 
     fn tracks(audio: bool) -> TrackSet {
@@ -120,7 +126,8 @@ mod tests {
     #[test]
     fn document_shape() {
         let t = CommandTable::for_mode(Mode::Clip, ClipBounds { min_s: 5.167, max_s: 14.375, default_s: 5.167 });
-        let d = openapi("fasth3", "1", &t, &tracks(true));
+        let l = CausalLimits::default();
+        let d = openapi("fasth3", "1", &t, &tracks(true), &l);
         assert_eq!(d["openapi"], "3.1.0");
         // fast-h3's own test pins these two outbound tracks.
         assert_eq!(
@@ -136,8 +143,11 @@ mod tests {
         assert!(d["components"]["schemas"]["StateUpdate"].is_object());
         assert!(d["components"]["schemas"]["ReactorUploadReference"].is_object());
 
-        let v = openapi("sfwan", "1", &CommandTable::for_mode(Mode::Causal, ClipBounds { min_s: 0.0, max_s: 0.0, default_s: 0.0 }), &tracks(false));
+        assert!(d["x-reactor"].get("session_limits").is_none());
+        let v = openapi("sfwan", "1", &CommandTable::for_mode(Mode::Causal, ClipBounds { min_s: 0.0, max_s: 0.0, default_s: 0.0 }), &tracks(false), &l);
         assert_eq!(v["x-reactor"]["tracks"], json!([{"name":"main_video","kind":"video","direction":"out"}]));
+        assert_eq!(v["x-reactor"]["session_limits"]["default_max_s"], 120);
+        assert_eq!(v["x-reactor"]["session_limits"]["hard_max_s"], 300);
         assert!(v["paths"]["/events/set_prompt"].is_object());
     }
 

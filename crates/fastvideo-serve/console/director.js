@@ -132,7 +132,7 @@ export function mountDirector(root, { app }) {
   const video = el('video', { id: 'director-video', autoplay: true, playsinline: true, controls: true });
   const statePill = el('span', { class: 'pill', id: 'director-state' }, 'idle');
   const prompt = el('textarea', { id: 'director-prompt', rows: 4 }, 'A continuous live-action shot: a lighthouse keeper climbs the spiral stairs at dusk, lamp in hand.');
-  const resolution = el('select', { id: 'director-resolution' }, ['480p', '768p'].map((v) => el('option', { value: v }, v)));
+  const resolution = el('select', { id: 'director-resolution' }, ['480p', '768p', '1080p'].map((v) => el('option', { value: v }, v === '1080p' ? '1080p (about 2.5x slower per chunk)' : v)));
   resolution.value = '768p';
   const aspect = el('select', { id: 'director-aspect' }, ['16:9', '9:16', '1:1'].map((v) => el('option', { value: v }, v)));
   const seed = el('input', { inputmode: 'numeric', placeholder: 'random' });

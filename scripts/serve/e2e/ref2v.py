@@ -102,10 +102,12 @@ def fal_job(app, body, name, timeout=3600):
 def t_caps():
     r = requests.get(f"{a.base}/fv/v1/capabilities", headers={"Authorization": f"Bearer {a.key}"}, timeout=30)
     r.raise_for_status()
-    ms = r.json()["models"]
-    ref = [m for m in ms if "ref2v" in [t.lower() for t in m.get("tasks", [])] or "Ref2V" in m.get("tasks", [])]
+    j = r.json()
+    ms = [m["caps"] for m in j["models"]]
+    ref = [m for m in ms if "ref2v" in m.get("tasks", [])]
+    check(ref, "no ref2v model")
     return {"models": [{k: m.get(k) for k in ("id", "tier", "tasks", "refs", "recipe", "resident")} for m in ms],
-            "ref2v_models": [m.get("id") for m in ref]}
+            "ref2v_models": [m.get("id") for m in ref], "tiers": j.get("tiers"), "aliases": j.get("aliases")}
 
 
 def t_fal_turbo():
@@ -137,11 +139,12 @@ def t_minimax():
     tid = r.json()["task_id"]
     while True:
         q = requests.get(f"{a.base}/v2/query/video_generation/{tid}", headers=h, timeout=30).json()
-        if q.get("status") in ("Success", "Fail"):
+        q = q.get("task", q)
+        if str(q.get("status", "")).lower() in ("success", "succeeded", "fail", "failed"):
             break
         check(time.monotonic() - t0 < 3600, q)
         time.sleep(3)
-    check(q["status"] == "Success", q)
+    check(str(q["status"]).lower() in ("success", "succeeded"), q)
     return {"task_id": tid, "wall_s": round(time.monotonic() - t0, 1), "usage": q.get("usage"),
             "mp4": download(q["content"]["url"], "minimax-r2v-768p")}
 

@@ -1,0 +1,96 @@
+[fastvideo] cuda device=0 sm_120 kernels=Cubin(120) gemm=Bf16 resident=true sdpa=dense sdpa_chunk=1024 oxide=[bf16_128x128x128,bf16_128x256x128,bf16_256x128x128,bf16_128x128x256,f32_128x128x128] oxide_embedded=10
+[fastvideo] taehv available for the distilled presets (/workspace/weights/auxiliary/tae)
+[INFO] wan/load {"mem_used_mib":21826,"seconds":114.930114151}
+[fastvideo] generate preset=fast_wan_2_2_ti2v_5b tiny=false 1280x704 frames=121 steps=3 dmd=true rcm=false latent=1x48x31x44x80 nvfp4=off resident=true cuda=true
+[fastvideo] denoise=dmd steps=3
+[fastvideo] sdpa: cuDNN fused attention (cuDNN 92600, graph unified CUDNN_HEUR_MODE_A config 0 of 2, engine 11, , workspace 0 B)
+[fastvideo] sdpa: fused mma B=1 H=24 Sq=27280 Sk=27280 D=128
+[fastvideo] sdpa auto (sm_12x): bh=24 sq=27280 sk=27280 d=128: cuDNN 23.07 ms, flash_mma_fwd2 25.22 ms -> cuDNN
+[fastvideo] sdpa auto (sm_12x): bh=24 sq=27280 sk=512 d=128: cuDNN 0.64 ms, flash_mma_fwd2 0.63 ms -> flash_mma_fwd2
+[fastvideo] dmd step 1/3 t=1000 done in 2146ms
+[fastvideo] dmd step 2/3 t=757 done in 1477ms
+[fastvideo] dmd step 3/3 t=522 done in 1482ms
+[fastvideo] dmd 3 steps done in 5106ms
+[fastvideo] taehv.decode done in 221ms
+[fastvideo] video writer: 121 frames, png deferred (0 inline, 121 after the mp4 in 0.33s, 0.11 GiB, synced), ffmpeg feed blocked 0.75s, mp4 tail 0.37s, buffered peak 0.30 GiB of 85.14
+[fastvideo] wrote mp4 /fvscratch/runs/wan/9b2c963-09282019/fw22-taehv/frames/cold/output.mp4
+[fastvideo] wrote 121 png frames → /fvscratch/runs/wan/9b2c963-09282019/fw22-taehv/frames/cold (text 4.22s, denoise 5.11s, decode+mp4 1.00s, png 0.33s)
+[fastvideo] generate done in 10709ms
+[INFO] wan/cold_generation {"audio_generate_s":0.0,"audio_s":0.0,"decode_s":1.004485906,"decoder":"taehv","denoise_s":5.113542348,"step_s":[2.152516277,1.478002335,1.4827089359999999],"text_cache":"miss","text_s":4.22220807,"total_s":10.709651645,"video_encode_s":0.371520951,"video_push_s":0.30594771,"video_rgb_s":0.20568919899719285,"video_vae_s":0.27380403327941893,"video_wait_s":0.370720192,"write_s":0.328852355}
+[fastvideo] generate preset=fast_wan_2_2_ti2v_5b tiny=false 1280x704 frames=121 steps=3 dmd=true rcm=false latent=1x48x31x44x80 nvfp4=off resident=true cuda=true
+[fastvideo] denoise=dmd steps=3
+[fastvideo] dmd step 1/3 t=1000 done in 1484ms
+[fastvideo] dmd step 2/3 t=757 done in 1489ms
+[fastvideo] dmd step 3/3 t=522 done in 1491ms
+[fastvideo] dmd 3 steps done in 4465ms
+[fastvideo] taehv.decode done in 214ms
+[fastvideo] video writer: 121 frames, png deferred (0 inline, 121 after the mp4 in 0.26s, 0.11 GiB, synced), ffmpeg feed blocked 0.69s, mp4 tail 0.33s, buffered peak 0.30 GiB of 85.14
+[fastvideo] wrote mp4 /fvscratch/runs/wan/9b2c963-09282019/fw22-taehv/frames/h3-demo/output.mp4
+[fastvideo] wrote 121 png frames → /fvscratch/runs/wan/9b2c963-09282019/fw22-taehv/frames/h3-demo (text 0.01s, denoise 4.47s, decode+mp4 0.88s, png 0.26s)
+[fastvideo] generate done in 5658ms
+[INFO] wan/timings/h3-demo {"audio_generate_s":0.0,"audio_s":0.0,"decode_s":0.876166585,"decoder":"taehv","denoise_s":4.46644398,"frames_sha256":"d2b4cdc2a5e37249e7a35b3a53bf4ce78837e48d7c17385c13816df3743aa621","peak_mib":29004,"step_s":[1.485484736,1.489601427,1.491092397],"text_cache":"hit","text_s":0.012867952,"total_s":5.394718804,"video_encode_s":0.333404595,"video_push_s":0.27722937599999997,"video_rgb_s":0.20950939500017215,"video_vae_s":0.24563231849670408,"video_wait_s":0.36304917000000003,"write_s":0.263475574}
+wan gen h3-demo: total 5.39s (text 0.01s, denoise 4.47s, decode 0.88s) png 0.26s peak Some(29004) MiB frames d2b4cdc2a5e37249e7a35b3a53bf4ce78837e48d7c17385c13816df3743aa621
+[PASS] wan/frames/h3-demo {"decoded":121,"written":121} (limits {"expected":121})
+[PASS] wan/middle_frame_not_flat/h3-demo {"frame":"/fvscratch/runs/wan/9b2c963-09282019/fw22-taehv/frames/h3-demo/frame-060.png","mean":0.23371058365525785,"std":0.18352719354673705} (limits {"std_min":0.02})
+[fastvideo] generate preset=fast_wan_2_2_ti2v_5b tiny=false 1280x704 frames=121 steps=3 dmd=true rcm=false latent=1x48x31x44x80 nvfp4=off resident=true cuda=true
+[fastvideo] denoise=dmd steps=3
+[fastvideo] dmd step 1/3 t=1000 done in 1489ms
+[fastvideo] dmd step 2/3 t=757 done in 1493ms
+[fastvideo] dmd step 3/3 t=522 done in 1495ms
+[fastvideo] dmd 3 steps done in 4477ms
+[fastvideo] taehv.decode done in 209ms
+[fastvideo] video writer: 121 frames, png deferred (0 inline, 121 after the mp4 in 0.22s, 0.10 GiB, synced), ffmpeg feed blocked 0.73s, mp4 tail 0.38s, buffered peak 0.30 GiB of 85.12
+[fastvideo] wrote mp4 /fvscratch/runs/wan/9b2c963-09282019/fw22-taehv/frames/ltx-multishot/output.mp4
+[fastvideo] wrote 121 png frames → /fvscratch/runs/wan/9b2c963-09282019/fw22-taehv/frames/ltx-multishot (text 0.06s, denoise 4.48s, decode+mp4 0.92s, png 0.22s)
+[fastvideo] generate done in 5715ms
+[INFO] wan/timings/ltx-multishot {"audio_generate_s":0.0,"audio_s":0.0,"decode_s":0.921645633,"decoder":"taehv","denoise_s":4.478909952,"frames_sha256":"fb1b691fae56b931cd336b7938a7c6e05a73ed3d033020b5d417c8fc793096a5","peak_mib":29196,"step_s":[1.490138577,1.493119587,1.495407338],"text_cache":"miss","text_s":0.06001722,"total_s":5.49457615,"video_encode_s":0.380356893,"video_push_s":0.305437401,"video_rgb_s":0.17815617899298522,"video_vae_s":0.2456556797027588,"video_wait_s":0.3618169,"write_s":0.220494057}
+wan gen ltx-multishot: total 5.49s (text 0.06s, denoise 4.48s, decode 0.92s) png 0.22s peak Some(29196) MiB frames fb1b691fae56b931cd336b7938a7c6e05a73ed3d033020b5d417c8fc793096a5
+[PASS] wan/frames/ltx-multishot {"decoded":121,"written":121} (limits {"expected":121})
+[PASS] wan/middle_frame_not_flat/ltx-multishot {"frame":"/fvscratch/runs/wan/9b2c963-09282019/fw22-taehv/frames/ltx-multishot/frame-060.png","mean":0.4347710416322765,"std":0.2966063685291367} (limits {"std_min":0.02})
+[fastvideo] generate preset=fast_wan_2_2_ti2v_5b tiny=false 1280x704 frames=121 steps=3 dmd=true rcm=false latent=1x48x31x44x80 nvfp4=off resident=true cuda=true
+[fastvideo] denoise=dmd steps=3
+[fastvideo] dmd step 1/3 t=1000 done in 1494ms
+[fastvideo] dmd step 2/3 t=757 done in 1497ms
+[fastvideo] dmd step 3/3 t=522 done in 1500ms
+[fastvideo] dmd 3 steps done in 4493ms
+[fastvideo] taehv.decode done in 215ms
+[fastvideo] video writer: 121 frames, png deferred (0 inline, 121 after the mp4 in 0.23s, 0.11 GiB, synced), ffmpeg feed blocked 0.66s, mp4 tail 0.35s, buffered peak 0.30 GiB of 85.12
+[fastvideo] wrote mp4 /fvscratch/runs/wan/9b2c963-09282019/fw22-taehv/frames/ltx-newsbroadcast/output.mp4
+[fastvideo] wrote 121 png frames → /fvscratch/runs/wan/9b2c963-09282019/fw22-taehv/frames/ltx-newsbroadcast (text 0.19s, denoise 4.49s, decode+mp4 0.85s, png 0.23s)
+[fastvideo] generate done in 5795ms
+[INFO] wan/timings/ltx-newsbroadcast {"audio_generate_s":0.0,"audio_s":0.0,"decode_s":0.849101111,"decoder":"taehv","denoise_s":4.494078575,"frames_sha256":"3cd1c41ee7dd9967439f2e4a838ec6135f0ae80bb71ad281cc496a5af7292e34","peak_mib":29420,"step_s":[1.4949288379999999,1.4978961179999999,1.501018299],"text_cache":"miss","text_s":0.192114112,"total_s":5.564378863,"video_encode_s":0.353945979,"video_push_s":0.25508695299999995,"video_rgb_s":0.18488423701649762,"video_vae_s":0.24567129707336421,"video_wait_s":0.31259268100000004,"write_s":0.230791698}
+wan gen ltx-newsbroadcast: total 5.56s (text 0.19s, denoise 4.49s, decode 0.85s) png 0.23s peak Some(29420) MiB frames 3cd1c41ee7dd9967439f2e4a838ec6135f0ae80bb71ad281cc496a5af7292e34
+[PASS] wan/frames/ltx-newsbroadcast {"decoded":121,"written":121} (limits {"expected":121})
+[PASS] wan/middle_frame_not_flat/ltx-newsbroadcast {"frame":"/fvscratch/runs/wan/9b2c963-09282019/fw22-taehv/frames/ltx-newsbroadcast/frame-060.png","mean":0.3872281052005235,"std":0.3111597540621107} (limits {"std_min":0.02})
+[fastvideo] generate preset=fast_wan_2_2_ti2v_5b tiny=false 1280x704 frames=121 steps=3 dmd=true rcm=false latent=1x48x31x44x80 nvfp4=off resident=true cuda=true
+[fastvideo] denoise=dmd steps=3
+[fastvideo] dmd step 1/3 t=1000 done in 1496ms
+[fastvideo] dmd step 2/3 t=757 done in 1500ms
+[fastvideo] dmd step 3/3 t=522 done in 1498ms
+[fastvideo] dmd 3 steps done in 4495ms
+[fastvideo] taehv.decode done in 211ms
+[fastvideo] video writer: 121 frames, png deferred (0 inline, 121 after the mp4 in 0.25s, 0.12 GiB, synced), ffmpeg feed blocked 0.72s, mp4 tail 0.34s, buffered peak 0.30 GiB of 85.12
+[fastvideo] wrote mp4 /fvscratch/runs/wan/9b2c963-09282019/fw22-taehv/frames/ltx-frogyoga/output.mp4
+[fastvideo] wrote 121 png frames → /fvscratch/runs/wan/9b2c963-09282019/fw22-taehv/frames/ltx-frogyoga (text 0.09s, denoise 4.50s, decode+mp4 0.88s, png 0.25s)
+[fastvideo] generate done in 5752ms
+[INFO] wan/timings/ltx-frogyoga {"audio_generate_s":0.0,"audio_s":0.0,"decode_s":0.882781706,"decoder":"taehv","denoise_s":4.496104395,"frames_sha256":"321c2bdb749d3c69ce82f91f4a1be96b90b9f6959bdda77c5857bed928a6ceea","peak_mib":29420,"step_s":[1.497205218,1.500069688,1.498643738],"text_cache":"miss","text_s":0.094318606,"total_s":5.501699322,"video_encode_s":0.339014686,"video_push_s":0.303383821,"video_rgb_s":0.1849961479802394,"video_vae_s":0.24540575981140136,"video_wait_s":0.36410487199999997,"write_s":0.250793062}
+wan gen ltx-frogyoga: total 5.50s (text 0.09s, denoise 4.50s, decode 0.88s) png 0.25s peak Some(29420) MiB frames 321c2bdb749d3c69ce82f91f4a1be96b90b9f6959bdda77c5857bed928a6ceea
+[PASS] wan/frames/ltx-frogyoga {"decoded":121,"written":121} (limits {"expected":121})
+[PASS] wan/middle_frame_not_flat/ltx-frogyoga {"frame":"/fvscratch/runs/wan/9b2c963-09282019/fw22-taehv/frames/ltx-frogyoga/frame-060.png","mean":0.33237476015332207,"std":0.27308421383794657} (limits {"std_min":0.02})
+[fastvideo] generate preset=fast_wan_2_2_ti2v_5b tiny=false 1280x704 frames=121 steps=3 dmd=true rcm=false latent=1x48x31x44x80 nvfp4=off resident=true cuda=true
+[fastvideo] denoise=dmd steps=3
+[fastvideo] dmd step 1/3 t=1000 done in 1498ms
+[fastvideo] dmd step 2/3 t=757 done in 1498ms
+[fastvideo] dmd step 3/3 t=522 done in 1498ms
+[fastvideo] dmd 3 steps done in 4496ms
+[fastvideo] taehv.decode done in 214ms
+[fastvideo] video writer: 121 frames, png deferred (0 inline, 121 after the mp4 in 0.25s, 0.12 GiB, synced), ffmpeg feed blocked 0.69s, mp4 tail 0.33s, buffered peak 0.30 GiB of 85.12
+[fastvideo] wrote mp4 /fvscratch/runs/wan/9b2c963-09282019/fw22-taehv/frames/spark-mountain-lake/output.mp4
+[fastvideo] wrote 121 png frames → /fvscratch/runs/wan/9b2c963-09282019/fw22-taehv/frames/spark-mountain-lake (text 0.04s, denoise 4.50s, decode+mp4 0.86s, png 0.25s)
+[fastvideo] generate done in 5672ms
+[INFO] wan/timings/spark-mountain-lake {"audio_generate_s":0.0,"audio_s":0.0,"decode_s":0.860064642,"decoder":"taehv","denoise_s":4.497409086,"frames_sha256":"e4433168bc973f368af49a8f58f09b5aa296bc182433c8b768263de49d866ba3","peak_mib":29772,"step_s":[1.499203449,1.498985968,1.498978989],"text_cache":"miss","text_s":0.035539086,"total_s":5.421590208,"video_encode_s":0.326347624,"video_push_s":0.291769189,"video_rgb_s":0.1862802580056834,"video_vae_s":0.2458270378112793,"video_wait_s":0.349613097,"write_s":0.250872012}
+wan gen spark-mountain-lake: total 5.42s (text 0.04s, denoise 4.50s, decode 0.86s) png 0.25s peak Some(29772) MiB frames e4433168bc973f368af49a8f58f09b5aa296bc182433c8b768263de49d866ba3
+[PASS] wan/frames/spark-mountain-lake {"decoded":121,"written":121} (limits {"expected":121})
+[PASS] wan/middle_frame_not_flat/spark-mountain-lake {"frame":"/fvscratch/runs/wan/9b2c963-09282019/fw22-taehv/frames/spark-mountain-lake/frame-060.png","mean":0.2973729906337229,"std":0.226012228730326} (limits {"std_min":0.02})
+benchmark.json → /fvscratch/runs/wan/9b2c963-09282019/fw22-taehv/benchmark.json
+[PASS] stage wan → gpucheck-out/wan.json (157.5s)

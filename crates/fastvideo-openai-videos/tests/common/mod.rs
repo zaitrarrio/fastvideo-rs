@@ -56,6 +56,7 @@ pub fn fastwan_model() -> FakeModel {
                 aspect: (0.25, 4.0),
                 short_edges: vec![704, 480],
                 pad_and_crop: false,
+                hd: None,
             },
             refs: RefLimits::none(),
             knobs: KnobCaps {

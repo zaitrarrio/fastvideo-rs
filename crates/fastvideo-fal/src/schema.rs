@@ -243,9 +243,10 @@ impl Resolution {
             Resolution::K4 => "4K",
         }
     }
-    /// Short edge the canvas is generated at. 1080P is the hosted latent
-    /// refinement from a 768P source; `negotiate` refuses it as
-    /// `Unsupported(H3Refine1080P)`, and 2K / 4K (1440 / 2160) as
+    /// Delivered short edge. 1080P is the opt-in native H3 1080P tier
+    /// (generated at 1920x1088 and cropped to 1920x1080; about 2.5x the GPU
+    /// time of 768P); a model without it answers
+    /// `Unsupported(H3Refine1080P)`, and 2K / 4K (1440 / 2160)
     /// `Unsupported(H3Resolution2K)`.
     pub fn short_edge(&self) -> u32 {
         match self {

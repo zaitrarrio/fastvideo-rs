@@ -1,0 +1,31 @@
+[fastvideo] cuda device=0 sm_120 kernels=Cubin(120) gemm=Bf16 resident=true sdpa=dense sdpa_chunk=1024 oxide=[bf16_128x128x128,bf16_128x256x128,bf16_256x128x128,bf16_128x128x256,f32_128x128x128] oxide_embedded=10
+[INFO] engine/load {"pool":"ModelPool { entries: {(0, ModelId(\"fastwan22-ti2v-5b\")): PoolEntry { executor: 0, model: ModelId(\"fastwan22-ti2v-5b\"), warm: true, state: Resident }} }","readiness":"Ready","seconds":109.655372097}
+[PASS] engine/ready {"readiness":"Ready"} (limits {"want":"Ready"})
+[fastvideo] generate preset=fast_wan_2_2_ti2v_5b tiny=false 1280x704 frames=121 steps=3 dmd=true rcm=false latent=1x48x31x44x80 nvfp4=off resident=true cuda=true
+[fastvideo] denoise=dmd steps=3
+[fastvideo] sdpa: cuDNN fused attention (cuDNN 92600, graph unified CUDNN_HEUR_MODE_A config 0 of 2, engine 11, , workspace 0 B)
+[fastvideo] sdpa: fused mma B=1 H=24 Sq=27280 Sk=27280 D=128
+[fastvideo] sdpa auto (sm_12x): bh=24 sq=27280 sk=27280 d=128: cuDNN 23.31 ms, flash_mma_fwd2 25.17 ms -> cuDNN
+[fastvideo] sdpa auto (sm_12x): bh=24 sq=27280 sk=512 d=128: cuDNN 0.63 ms, flash_mma_fwd2 0.63 ms -> cuDNN
+[fastvideo] dmd step 1/3 t=1000 done in 2143ms
+[fastvideo] dmd step 2/3 t=757 done in 1477ms
+[fastvideo] dmd step 3/3 t=522 done in 1483ms
+[fastvideo] dmd 3 steps done in 5105ms
+[fastvideo] sdpa: device dense B=1 H=1 Sq=3520 Sk=3520 D=1024 query_chunk=3520
+[fastvideo] vae.decode done in 11965ms
+[fastvideo] video writer: 121 frames, png deferred (0 inline, 121 after the mp4 in 0.32s, 0.11 GiB, synced), ffmpeg feed blocked 0.00s, mp4 tail 0.00s, buffered peak 0.30 GiB of 85.15
+[fastvideo] wrote 121 png frames → /fvscratch/runs/wan/9b2c963-09282019/engine-fw22/out/6f27472d-e935-4655-b744-2818c5f13555/frames (text 0.80s, denoise 5.11s, decode+mp4 13.81s, png 0.32s)
+[fastvideo] generate done in 20065ms
+[INFO] engine/timings {"first_step_s":2.97853332,"load_s":109.655372097,"metrics":{"build_rtf":1.0128055838677685,"inference_s":5.106228152,"peak_memory_mb":null,"stage_durations":{"denoise":5.106228152,"encode":1.128052488,"text":0.796816061,"video_decode":13.809679917}},"stages":[{"at_s":0.037333746,"stage":"text"},{"at_s":0.834155717,"stage":"denoise"},{"at_s":5.940930329,"stage":"video_decode"}],"submit_to_mp4_s":20.19893021}
+[PASS] engine/progress {"events":3,"last":[3,3]} (limits {"steps":3})
+[PASS] engine/mp4 {"audio_rate":null,"bytes":4064982,"duration_s":5.042,"fps":24.0,"frames":121,"height":704,"path":"/fvscratch/runs/wan/9b2c963-09282019/engine-fw22/out/6f27472d-e935-4655-b744-2818c5f13555/output.mp4","width":1280} (limits {"audio":false,"frames":121,"height":704,"width":1280})
+[PASS] engine/frames {"frames_sha256":"e46b7b2ce2afa34fc72270649c078b2dedd21b0ea7ff40630a72a7301be4ad46","pngs":121} (limits {"frames":121})
+[PASS] engine/identical_to_cli {"cli_dir":"/fvscratch/runs/wan/9b2c963-09282019/cli-fw22/frames","cli_frames":121,"cli_sha256":"e46b7b2ce2afa34fc72270649c078b2dedd21b0ea7ff40630a72a7301be4ad46","engine_frames":121,"engine_sha256":"e46b7b2ce2afa34fc72270649c078b2dedd21b0ea7ff40630a72a7301be4ad46","first_differing_frame":null} (limits {"identical":true})
+[fastvideo] generate preset=fast_wan_2_2_ti2v_5b tiny=false 1280x704 frames=121 steps=3 dmd=true rcm=false latent=1x48x31x44x80 nvfp4=off resident=true cuda=true
+[fastvideo] denoise=dmd steps=3
+[fastvideo] dmd step 1/3 t=1000 done in 1491ms
+[fastvideo] dmd step 2/3 t=757 done in 1495ms
+[fastvideo] dmd 3 steps done in 2987ms
+[fastvideo] generate done in 3072ms
+[PASS] engine/cancel {"cancel_at_s":1.57725917,"cancel_to_end_s":1.644858121,"cancelled_at_step":1,"end":"cancelled","end_s":3.222117291,"leftover_frames_dir":null,"pool_used_after":27728053279,"pool_used_before":27728053279,"steps_after_cancel":1} (limits {"end":"cancelled","steps_after_cancel_max":1})
+[PASS] stage engine → gpucheck-out/engine.json (135.3s)

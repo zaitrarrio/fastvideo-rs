@@ -254,6 +254,51 @@ pub fn video_decode_transient_bytes(
     vit + decoded + stitched
 }
 
+/// Device bytes one H3 generation's working set was measured to take per
+/// packed row, on top of the loaded weights (RTX PRO 6000, h3-turbo,
+/// docs/serve/h3-1080p-and-upscaler.md): 1344x768x124 grew the pool by
+/// 11.2 GiB over the weights for about 38 k rows, 1920x1088x124 by 22.5 GiB
+/// for about 76 k rows (FFN chunking on). That is about 300 KiB per row;
+/// this rounds it up. [`plan`] prices the same denoise higher (it is the
+/// planning bound: 74 GiB resident at 1920x1088x124 against 52.7 GiB
+/// measured); this is the live admission estimate.
+pub const MEASURED_WORKING_BYTES_PER_ROW: u64 = 320 << 10;
+
+/// The measured-rate estimate of what one generation at `geometry` needs
+/// free beside the loaded weights: [`MEASURED_WORKING_BYTES_PER_ROW`] per
+/// packed row (with [`PLAN_TEXT_TOKENS`] text rows) plus
+/// [`RUNTIME_ALLOWANCE`]. The serve engine checks a 1080P-tier job against
+/// the device's free memory with it before the job starts.
+pub fn measured_working_bytes(geometry: &H3Geometry) -> u64 {
+    geometry.sequence_length(PLAN_TEXT_TOKENS) as u64 * MEASURED_WORKING_BYTES_PER_ROW
+        + RUNTIME_ALLOWANCE
+}
+
+/// The device memory a GPU needs before a server offers the 1080P tier at
+/// all: the resident plan's weights at the denoise ([`plan`], bf16 DiT with
+/// the VSA gate, decoders held; the turbo recipe's MXFP8 linears are
+/// smaller) plus the measured-rate working set of the tier's largest 5 s
+/// clip, 1920x1088x124 ([`measured_working_bytes`]). About 72 GiB: 80 GB
+/// and 96 GB cards yes, 48 GB cards no. The whole [`plan`] peak (about
+/// 80 GiB) prices the activations well above the 52.7 GiB measured.
+pub fn plan_1080p_min_device_bytes() -> u64 {
+    let g = H3Geometry::new(
+        super::config::H3_CANVAS_SHORT_1080P,
+        1920,
+        super::config::H3_FASTVIDEO_MIN_DURATION_S * super::config::H3_FPS,
+    )
+    .expect("the 1080P tier canvas is a valid geometry");
+    let p = plan(
+        &g,
+        H3PlanOptions {
+            gate: true,
+            ..H3PlanOptions::default()
+        },
+    );
+    let weights = p.stage("denoise").map_or(0, |s| s.weights);
+    weights + measured_working_bytes(&g)
+}
+
 /// One stage of the plan.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StageBytes {
@@ -471,5 +516,32 @@ mod tests {
             // The denoise binds; the decoders never sit beside the ring.
             assert_eq!(streamed.peak(), streamed.stage("denoise").unwrap().total());
         }
+    }
+
+    /// The 1080P tier is offered on 80 GB-class cards (an H100 80 GB reports
+    /// 79.6 GiB) and up, not on 48 GB ones. The live estimate covers the
+    /// measured working sets, 22.5 GiB at 1920x1088x124 and 11.2 GiB at
+    /// 1344x768x124, and grows with the clip length.
+    #[test]
+    fn the_1080p_tier_needs_an_80_gb_class_card() {
+        let min = gib(plan_1080p_min_device_bytes());
+        eprintln!("1080P tier: planned resident peak {min:.2} GiB");
+        assert!((60.0..79.0).contains(&min), "{min:.2}");
+        let at = |h: usize, w: usize, s: usize| {
+            gib(measured_working_bytes(&H3Geometry::new(h, w, s * 24).unwrap()))
+        };
+        let (hd5, hd10, hd15, sd5, sd15) = (
+            at(1088, 1920, 5),
+            at(1088, 1920, 10),
+            at(1088, 1920, 15),
+            at(768, 1344, 5),
+            at(768, 1344, 15),
+        );
+        eprintln!(
+            "measured-rate working set: 1080p 5/10/15 s {hd5:.1}/{hd10:.1}/{hd15:.1} GiB, 768p 5/15 s {sd5:.1}/{sd15:.1} GiB"
+        );
+        assert!((22.5..28.0).contains(&hd5), "{hd5:.2}");
+        assert!((11.2..16.0).contains(&sd5), "{sd5:.2}");
+        assert!(hd10 > 1.8 * hd5 - 2.0 && hd15 > hd10);
     }
 }

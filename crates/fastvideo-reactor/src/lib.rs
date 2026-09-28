@@ -37,4 +37,4 @@ pub mod wire;
 pub use engine::{LoadState, Mode, StreamEngine};
 pub use http::router;
 pub use media::H264Backend;
-pub use session::{Reactor, ReactorConfig, RtState, SESSION_ID};
+pub use session::{session_limit_reason, Reactor, ReactorConfig, RtState, SESSION_ID};

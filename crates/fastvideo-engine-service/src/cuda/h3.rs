@@ -15,6 +15,40 @@ use super::caps::{load_profile, H3Recipe};
 use super::output::{api_err, bytes_mb, stages};
 use fastvideo_cudarc::Hooks;
 
+/// A 1080P-tier job (above the trained 768 x 1344 budget) starts only when
+/// the device can hold its working set beside the loaded weights: the
+/// measured-rate estimate (`measured_working_bytes`) against the driver's
+/// free memory plus what the pool has cached but not in use. Otherwise it is
+/// refused before any work, naming the sizes (the long 1080P clips on a card
+/// that also keeps the text encoder resident).
+fn check_hd_memory(req: &H3Request) -> Result<(), ApiError> {
+    use fastvideo_cudarc::wan::device::{free_memory, pool_usage};
+    use fastvideo_models::h3::config::H3Geometry;
+    let g = H3Geometry::new(req.height, req.width, req.num_frames)
+        .map_err(|e| ApiError::invalid(format!("h3: {e}")))?;
+    let need = fastvideo_models::h3::memory::measured_working_bytes(&g);
+    let Some((free, _)) = free_memory() else {
+        return Ok(());
+    };
+    let cached = pool_usage().map_or(0, |p| p.reserved.saturating_sub(p.used));
+    let available = free + cached;
+    if need <= available {
+        return Ok(());
+    }
+    let gib = |b: u64| b as f64 / f64::from(1u32 << 30);
+    let seconds = req.num_frames as f64 / fastvideo_models::h3::config::H3_FPS as f64;
+    Err(ApiError::unsupported_msg(
+        fastvideo_protocol::GapId::H3Refine1080P,
+        format!(
+            "1080P at {}x{} for {seconds:.1} s needs about {:.1} GiB of GPU memory beside the loaded model; {:.1} GiB is free on this server. Use a shorter duration or 768P",
+            req.width,
+            req.height,
+            gib(need),
+            gib(available)
+        ),
+    ))
+}
+
 /// One resident H3 pipeline.
 pub struct H3Model {
     pipe: H3Pipeline,
@@ -81,15 +115,16 @@ impl H3Model {
         &self.recipe
     }
 
-    /// The request `fv-gpucheck h3 gen` would build for this job.
-    pub fn request(job: &ResolvedJob) -> Result<H3Request, ApiError> {
-        let mut req = H3Request::sized(
-            job.prompt.clone(),
-            job.height as usize,
-            job.width as usize,
-            job.num_frames as usize,
-            job.seed,
-        )
+    /// The request `fv-gpucheck h3 gen` would build for this job. `hd_1080p`:
+    /// the model serves the native 1080P tier, so canvases up to 1088 x 1920
+    /// are admitted (`fv-gpucheck h3 gen --oversize-canvas`).
+    pub fn request(job: &ResolvedJob, hd_1080p: bool) -> Result<H3Request, ApiError> {
+        let (h, w, n) = (job.height as usize, job.width as usize, job.num_frames as usize);
+        let mut req = if hd_1080p {
+            H3Request::sized_1080p(job.prompt.clone(), h, w, n, job.seed)
+        } else {
+            H3Request::sized(job.prompt.clone(), h, w, n, job.seed)
+        }
         .map_err(|e| ApiError::invalid(format!("h3: {e}")))?;
         // NVENC encodes the MP4 afterwards (design §0.1); the pipeline writes PNGs.
         req.mp4 = false;
@@ -133,7 +168,10 @@ impl H3Model {
         dir: &Path,
         hooks: Hooks<'_>,
     ) -> Result<JobMetrics, ApiError> {
-        let req = Self::request(job)?;
+        let req = Self::request(job, self.recipe.hd_1080p)?;
+        if req.height * req.width > fastvideo_models::h3::config::H3_MAX_PIXELS {
+            check_hd_memory(&req)?;
+        }
         // A pipeline serves either `transformer/` or `transformer_ref/`; the
         // caps route each task to the right one, so a mismatch here is a
         // routing bug, not a client error.

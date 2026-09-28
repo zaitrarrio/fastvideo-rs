@@ -10,7 +10,7 @@
 //!
 //! - `configure` exactly once, with `prompt_version: 1`; a second one is
 //!   `error{code:"immutable_settings"}`. `resolution` must be served
-//!   (`1080p` → `invalid_input`), `audio_url` → `invalid_initial_audio`
+//!   (`1080p` without the H3 1080P tier → `invalid_input`), `audio_url` → `invalid_initial_audio`
 //!   (target audio arrives with E10), script beats with audio →
 //!   `invalid_initial_script`; these are session failures.
 //! - `prompt` before `configured` → `error{code:"not_configured"}`.

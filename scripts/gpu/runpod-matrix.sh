@@ -2296,6 +2296,39 @@ Audio: male speech, clear voice, quiet room"
         oracle_diff "oracle-$target-owntext-diff" "$ref/dump" "$ours-owntext"
         oracle_diff "oracle-$target-owntext-vs-injected" "$ours" "$ours-owntext"
       fi
+      # Image conditioning (ltx25-i2v / ltx25-kf): the main run injects the
+      # reference's conditioning latents. -ownenc encodes the reference's
+      # preprocessed pixels with our encoder (the cond latent diff is the
+      # encoder's alone); -ownimg preprocesses and encodes on our own (the
+      # whole path end to end). Then frame fidelity: SSIM / PSNR of the
+      # output's pinned frames against the conditioning images (cover +
+      # center crop to the canvas), ours and the reference's.
+      if [[ "$target" == ltx25-i2v || "$target" == ltx25-kf ]]; then
+        oracle_run "oracle-$target-ownenc" "$ours-ownenc" FASTVIDEO_INJECT_COND=0
+        oracle_diff "oracle-$target-ownenc-diff" "$ref/dump" "$ours-ownenc"
+        oracle_run "oracle-$target-ownimg" "$ours-ownimg" FASTVIDEO_INJECT_COND=0 FASTVIDEO_INJECT_PIXELS=0
+        oracle_diff "oracle-$target-ownimg-diff" "$ref/dump" "$ours-ownimg"
+        fm="$RUNS/oracle-$target-frames"
+        mkdir -p "$fm"
+        pins=("0 $fx/ti2v-beach-832x480.jpg")
+        [[ "$target" == ltx25-kf ]] && pins+=("120 $fx/ti2v-beach-zoom-832x480.jpg")
+        for src in "ours:$RUNS/oracle-$target/frames/output.mp4" "ownimg:$RUNS/oracle-$target-ownimg/frames/output.mp4" \
+          "reference:$ref/dump/ref.mp4"; do
+          mp4="${src#*:}"
+          [[ -f "$mp4" ]] || { echo "${src%%:*} missing $mp4" >>"$fm/metrics.txt"; continue; }
+          cp "$mp4" "$fm/${src%%:*}.mp4" 2>/dev/null || true
+          for pin in "${pins[@]}"; do
+            idx="${pin%% *}" img="${pin#* }"
+            for m in ssim psnr; do
+              r="$(ffmpeg -v info -nostats -i "$mp4" -i "$img" -lavfi \
+                "[0:v]select=eq(n\,$idx),setpts=N/TB[a];[1:v]scale=768:512:force_original_aspect_ratio=increase:flags=bilinear,crop=768:512,format=yuv420p[b];[a]format=yuv420p[c];[c][b]$m" \
+                -frames:v 1 -f null - 2>&1 | grep -E "Parsed_$m" | tail -1)"
+              echo "${src%%:*} frame $idx $m: ${r##*] }" >>"$fm/metrics.txt"
+            done
+          done
+        done
+        sed "s/^/[$target-frames] /" "$fm/metrics.txt" | tee -a "$LOG" || true
+      fi
       if [[ "$target" == sfwan* ]]; then
         # Frames: the reference's mp4 (its full VAE, bf16 decode, then its
         # encoder) against our PNG frames; our own mp4 against our PNGs is
@@ -2477,7 +2510,11 @@ Audio: male speech, clear voice, quiet room"
     # FV_FETCH_SKIP='\.cache$'; a skip matching `frames/` also drops
     # `keyframes/`). FV_HD_POST_URL: a script fetched and run before the prune
     # with $RUNS (an upscaler benchmark; its weights must already be on the
-    # volumes, see CLAUDE.md).
+    # volumes, see CLAUDE.md). turbo-1080p-10s / max-1080p-10s: the tier at
+    # 10 s (one prompt) for time and memory. The 1080P serve gate runs
+    # FV_PROMPTS=scripts/gpu/prompts-hd5.json FV_CELLS="turbo-768p
+    # turbo-1080p max-768p max-1080p turbo-1080p-10s max-1080p-10s", then
+    # scripts/gpu/lipsync_proxy.py on the speech prompts' MP4s.
     : "${FV_PROMPTS:=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/prompts-hd.json}"
     hd_common=(
       --seconds 5
@@ -2506,9 +2543,24 @@ Audio: male speech, clear voice, quiet room"
     hd_cell turbo-1080p-v "${T[@]}" 1920 1088
     hd_cell max-768p "${M[@]}" 768 1344
     hd_cell max-1080p "${M[@]}" 1088 1920
+    # The 1080P tier at 10 s, one prompt ($FV_PROMPT): time and peak memory
+    # of a longer tier clip, against the serve engine's working-set estimate
+    # (fastvideo_models::h3::memory::measured_working_bytes).
+    hd_long() {
+      local name="$1" wcell="$2" profile="$3" recipe="$4"
+      gated_cell "$name" "$wcell" \
+        "$BIN" --mode fast --techniques "$profile" h3 gen --weights "$W/h3-base" --h3-recipe "$recipe" \
+          --height 1088 --width 1920 --oversize-canvas --seconds 10 --prompt "$PROMPT" --seed "$SEED" \
+          --text-encoder streamed --text-cache "$SCRATCH/h3-text-cache" --text-weights "$W/h3-base" \
+          --adaln-cache "$RUNS/$recipe-adaln.cache" --clip-dir "$RUNS/$name/frames"
+      log "$name $(grep -oE '"(denoise_s|total_s|peak_memory_mb|peak_allocated_gib)": *[0-9.]+' "$RUNS/$name/benchmark.json" 2>/dev/null | head -8 | tr '\n' ' ')"
+    }
+    hd_long turbo-1080p-10s "${T[@]}"
+    hd_long max-1080p-10s "${M[@]}"
     # 768p -> 1080p Lanczos baselines, then native 1080p against them.
     for pair in turbo-768p:turbo-1080p:1920:1088 turbo-768p-v:turbo-1080p-v:1088:1920 max-768p:max-1080p:1920:1088; do
       IFS=: read -r lo hi uw uh <<<"$pair"
+      [[ -d "$RUNS/$lo/frames" && -d "$RUNS/$hi/frames" ]] || continue
       for d in "$RUNS/$lo/frames"/*/; do
         p="$(basename "$d")"
         [[ "$p" == cold || "$p" == warmup ]] && continue

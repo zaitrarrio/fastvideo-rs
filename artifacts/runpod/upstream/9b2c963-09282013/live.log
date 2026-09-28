@@ -1,0 +1,11 @@
+[20:19:21] pod.sh start steps: oracle:fastwan22-ti2v cells:fv-fastwan22-5b
+[20:19:21] ▶ step oracle:fastwan22-ti2v
+[20:19:28] ▶ cell oracle-fastwan22-ti2v
+[20:20:12] ok oracle-fastwan22-ti2v 44s peak 39105MiB
+599M	/root/runs/upstream/9b2c963-09282013/oracle-fastwan22-ti2v/dump
+[20:20:12] ok step oracle:fastwan22-ti2v  51s
+[20:20:12] ▶ step cells:fv-fastwan22-5b
+[20:20:13] ▶ cell fv-fastwan22-5b
+[20:23:09] ok fv-fastwan22-5b 176s peak 59378MiB
+[20:23:09] ok step cells:fv-fastwan22-5b  177s
+[20:23:09] pod.sh done

@@ -187,6 +187,7 @@ pub fn sfwan_caps(id: &str) -> ModelCaps {
             aspect: (0.25, 4.0),
             short_edges: vec![480],
             pad_and_crop: false,
+            hd: None,
         },
         refs: RefLimits::none(),
         knobs: KnobCaps {

@@ -35,6 +35,10 @@ use tower::ServiceExt;
 const KEY: &str = "sk-streams";
 
 async fn app() -> App {
+    app_with(&[]).await
+}
+
+async fn app_with(extra: &[(&str, &str)]) -> App {
     let dir = std::env::temp_dir().join(format!(
         "fv-serve-streams-{:x}",
         std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()
@@ -44,6 +48,9 @@ async fn app() -> App {
     env.insert("FV_URL_SIGNING_KEY".to_owned(), "k".to_owned());
     env.insert("FV_STATE_DIR".to_owned(), dir.display().to_string());
     env.insert("FV_PUBLIC_BASE_URL".to_owned(), "http://fv.test".to_owned());
+    for (k, v) in extra {
+        env.insert((*k).to_owned(), (*v).to_owned());
+    }
     let mut c = Config::default();
     c.apply_env(&env).unwrap();
     c.jobs.backend = JobBackend::Memory;
@@ -281,6 +288,57 @@ async fn clip_stream_publishes_av_and_takes_clip_commands() {
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
     wait("WHIP DELETE", 10, || rx.lock().unwrap().deletes == 1).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn causal_streams_end_at_the_session_limit() {
+    // [streams] limits from the environment, small enough for real time.
+    let a = app_with(&[("FV_CAUSAL_DEFAULT_MAX_S", "2"), ("FV_CAUSAL_HARD_MAX_S", "3")]).await;
+    let (_, _, caps) = call(&a.router, "GET", "/fv/v1/capabilities", None).await;
+    let sf = caps["models"].as_array().unwrap().iter().find(|m| m["caps"]["id"] == "fake-sfwan").unwrap();
+    assert_eq!(sf["stream_limits"]["default_max_s"], 2, "{sf}");
+    assert_eq!(sf["stream_limits"]["hard_max_s"], 3);
+    assert_eq!(sf["stream_limits"]["reset_restarts_clock"], true);
+    let (url, rx) = endpoint().await;
+    let body = json!({"model": "fake-sfwan", "whip_url": url, "prompt": "a road", "width": 64, "height": 32});
+    let (s, _, v) = call(&a.router, "POST", "/fv/v1/streams", Some(body.clone())).await;
+    assert_eq!(s, StatusCode::CREATED, "{v}");
+    // No max_seconds: the default.
+    assert_eq!(v["max_seconds"], 2);
+    let id = v["id"].as_str().unwrap().to_owned();
+    let t0 = std::time::Instant::now();
+    let v = loop {
+        let (_, _, v) = call(&a.router, "GET", &format!("/fv/v1/streams/{id}"), None).await;
+        if v["status"]["state"] == "closed" {
+            break v;
+        }
+        assert!(t0.elapsed() < Duration::from_secs(30), "{v}");
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    };
+    assert_eq!(v["status"]["end_reason"], "session_limit", "{v}");
+    let vs = v["pacer"]["video_seconds"].as_f64().unwrap();
+    assert!((2.0..2.5).contains(&vs), "{vs}");
+    wait("WHIP DELETE", 10, || rx.lock().unwrap().deletes == 1).await;
+    // A longer request is clamped to the hard ceiling; 0 is refused.
+    let mut zero = body.clone();
+    zero["max_seconds"] = json!(0);
+    let (s, _, v) = call(&a.router, "POST", "/fv/v1/streams", Some(zero)).await;
+    assert_eq!(s, StatusCode::BAD_REQUEST, "{v}");
+    let mut long = body;
+    long["max_seconds"] = json!(3600);
+    let mut created = Value::Null;
+    // The executor may still be releasing the previous session.
+    for _ in 0..50 {
+        let (s, _, v) = call(&a.router, "POST", "/fv/v1/streams", Some(long.clone())).await;
+        if s == StatusCode::CREATED {
+            created = v;
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    assert_eq!(created["max_seconds"], 3, "{created}");
+    let id = created["id"].as_str().unwrap().to_owned();
+    call(&a.router, "DELETE", &format!("/fv/v1/streams/{id}"), None).await;
 }
 
 /// Publishes to MediaMTX and plays it back through WHEP.

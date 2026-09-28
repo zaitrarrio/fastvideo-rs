@@ -728,7 +728,7 @@ Configuring each client (fal §12):
 |---|---|---|
 | `prompt` (1..50000) | `prompt` | OK |
 | `duration` 5..15 | `Seconds{AlignUp}` | 5 → 124 frames, as hosted (5.167 s) |
-| `resolution` `768P` / `480P` / `1080P` | `short_edge` 768 / 480 / — | 480P needs E3 (832×480 at 16:9, fal §6), else 422. 1080P → 422 `Unsupported(H3Refine1080P)` |
+| `resolution` `768P` / `480P` / `1080P` | `short_edge` 768 / 480 / 1080 | 480P needs E3 (832×480 at 16:9, fal §6), else 422. 1080P: the native tier (1920x1088 cropped to 1080) on 80 GB-class GPUs, else 422 `Unsupported(H3Refine1080P)` |
 | `aspect_ratio` (t2v; r2v adds `adaptive`) | `Aspect` / `FollowImage` | `resolve_canvas_size` |
 | `image_url` / `end_image_url` (i2v) | `Keyframe{First/Last}`. Neither → `T2V` (spec) | fl2va; the canvas follows the image |
 | `reference_{image,video,audio}_urls` (r2v) | `Reference` in list order: images, then videos, then audio, following the "Image 1… Video 1…" numbering | Ref2V. Output includes required `seed` |
@@ -806,8 +806,8 @@ Every reply carries `x-request-id` (32 hex characters).
 | `fps` 24 (default) / 25 / 48 / 50 | `fps` | Only 24 until E4 validates the rest → 400 `Unsupported(LtxFps)` |
 | `resolution` `WxH` | `Exact` with `pad_and_crop` | 1920×1080 → 1920×1088 → crop; 1280×720 → 1280×768 → crop; 3840×2160 → 3840×2176 → crop; portrait by transpose |
 | `generate_audio: false` | `AudioOut::Silent` | Post `-an` at launch. E4 also skips the audio decode |
-| `image_uri` | `Keyframe{First}`: `I2V` | 2.3 OK. 2.5 → 400 `Unsupported(Ltx25I2V)` until E5 |
-| `last_frame_uri` | `Keyframe{Last}` | 400 `Unsupported(LtxKeyframes)` until E9 |
+| `image_uri` | `Keyframe{First}`: `I2V` | 2.5: frame-0 image conditioning (E5, `ltx2/i2v_encode.rs`). An engine without `I2V` in its caps → 400 `Unsupported(Ltx25I2V)` |
+| `last_frame_uri` | `Keyframe{Last}` | 2.5: a keyframe at pixel frame `num_frames − 1` (E9). Without `Keyframes` in caps → 400 `Unsupported(LtxKeyframes)` |
 | `camera_motion` | — | 400 `Unsupported(LtxCameraMotion)` |
 | `prompt` ≤5000 | `prompt` | |
 
@@ -857,8 +857,9 @@ Errors are `{"type":"error","error":{"type","message"}}`:
 | H3 ref2va co-resident with fl2va | MiniMax/fal/FastVideo ref2v | served by the Ref2VA companion models `h3-ref2v-max` / `h3-ref2v-turbo` (`route_task`); 400 when none is configured. Own process on 80-96 GB cards (`configs/serve/runpod-h3-ref2v.toml`); docs/ports/h3-ref2v.md | E11 |
 | LTX fps 25/48/50 | LTX, FastVideo | served (validated at 1080p, `artifacts/serve/e4-ltx-fps/benchmark.json`; engines without them in caps still 400) | E4 done |
 | LTX silent output | LTX `generate_audio:false` | supported (post `-an`); the engine can skip the audio decode (`Ltx2Request::skip_audio_decode`) | E4 done |
-| LTX-2.5 I2V | LTX `image_uri` on 2.5 | 400 | E5 |
-| LTX last frame | LTX `last_frame_uri` | 400 | E9 |
+| LTX-2.5 I2V | LTX `image_uri` on 2.5 | served (E5, oracle-checked: docs/oracle.md "LTX-2.5 image conditioning") | E5 done |
+| LTX last frame | LTX `last_frame_uri` | served (E9) | E9 done |
+| LTX reference (Ingredients IC-LoRA) | fal `ingredient`, `Task::Ref2V` on LTX | 400 (task) | blocked on the LoRA's Hub gate; docs/ports/ltx-ref2v.md |
 | LTX auto duration, camera motion, A2V/retake/extend/HDR/reframe | LTX | 400 / 403 | none planned |
 | Cancellation mid-generation | all DELETE/cancel | cancels only while queued | E1 |
 | In-memory frames (no PNG) | streaming | `fastvideo_cudarc::sink::FrameSink` via `Hooks::with_sink` | E2 done |
@@ -934,7 +935,36 @@ pub enum Continuity { HardCut, Crossfade { ms: u16 }, AnchorLastFrame { crossfad
      black encode, except for Reactor's start-of-connection black frame
      (reactor §4.2).
 3. **Streaming.** The duration clock starts at the first emitted frame
-   (streaming-refs §1.2). `max_seconds` is enforced in video time.
+   (streaming-refs §1.2). `max_seconds` is enforced in video time: the
+   seconds of playout, repeated frames (underruns, a user pause) included.
+   At the limit the pacer ends with `EndReason::SessionLimit`.
+
+   **Causal session limit (decided 2026-09-28, the R12 study in
+   `docs/ports/wan.md`).** A live causal (SF-Wan) session always has a
+   limit, whichever front-end opens it (`CausalLimits` in
+   `fastvideo-protocol`):
+
+   | Setting | Default | Meaning |
+   |---|---|---|
+   | `[streams] causal_default_max_s` (`FV_CAUSAL_DEFAULT_MAX_S`) | 120 | `max_seconds` when the request gives none: clean unattended with sink 15 |
+   | `[streams] causal_hard_max_s` (`FV_CAUSAL_HARD_MAX_S`) | 300 | the most a request may ask for (larger values are clamped, 0 is refused), and the whole session's ceiling: usable, with a transient top-edge strip after 2 min |
+
+   A `reset` restarts the clock, because it renews the sink anchor and the
+   quality with it; the session still never exceeds `causal_hard_max_s` of
+   video in all. A kept prompt switch does not restart it. This is the one
+   simple rule: `max_seconds` counts from the first frame or the last reset,
+   the ceiling counts from the first frame (`CausalPacerConfig::with_limits`).
+
+   | Front-end | Request | At the limit |
+   |---|---|---|
+   | native `POST /fv/v1/streams` | body `max_seconds` | stream `status.end_reason: "session_limit"`, WHIP `DELETE`; the stream object shows the resolved `max_seconds` and `pacer.limit_seconds` |
+   | Reactor causal mode | `/start_session` `{"max_seconds": n}` | `session_ended{reason: "Session ended: the <n> s session length limit was reached."}`, then `READY` |
+   | fal director | — | clip models only (causal models are refused), so it never opens a causal session; its own `max_session_seconds` bounds clip sessions |
+
+   Advertised in `/fv/v1/capabilities` (each causal model's
+   `stream_limits{default_max_s, hard_max_s, clock, reset_restarts_clock}`),
+   the Reactor schema (`x-reactor.session_limits`, causal mode) and the
+   console home page. Clip sessions have no default limit.
 4. **Orphaned**: all peers are gone.
    - Generation pauses: clip builds stop and causal blocks stop.
    - After `orphan_timeout` (60 s, as RT) the session enters `Closing`.
@@ -1016,6 +1046,12 @@ Audio wire format:
   unique_fps. E7 (CUDA Graphs per block position) closes the gap from our
   ~547 ms/block to strobe's 316 ms (streaming-refs §3.3). Until then the
   default stream canvas is 832×480 at 16 fps.
+- **Length** (R12): with the default sink 15 a single prompt is clean for
+  2 minutes and coherent to 5 with a transient top-edge strip, so every
+  live causal session is capped: 120 s of video by default, at most 300 s,
+  a `reset` restarting the clock within the 300 s ceiling (§5.2). The
+  pacer enforces it (`CausalPacerConfig::with_limits`; `PaceStats`
+  `video_seconds` and `limit_seconds`, the latter since the last reset).
 
 ### 5.5 Clip-queue playout (`ClipSession`) for H3, LTX and FastWan
 
@@ -1609,7 +1645,7 @@ additions and readings; everything is re-exported from the crate root.
   gives 832×480 at 480/16:9. `boundary_ratio` is honoured exactly when
   `KnobCaps::guidance_2` is. A missing seed is drawn inside `negotiate` by
   `draw_seed()` (u32 range, JSON-safe); a sent seed is refused only if
-  `knobs.seed` is false. Short edge 1080 on H3 → `Unsupported(H3Refine1080P)`,
+  `knobs.seed` is false. Short edge 1080 on H3 without the native 1080P tier (`CanvasCaps::hd`) → `Unsupported(H3Refine1080P)`,
   above 1080 → `Unsupported(H3Resolution2K)`; a length snapping to 107 frames
   on H3 → `Unsupported(H3FourSeconds)`.
 - Types §3 left open: `NormalizeCtx` and `ErrorCtx` are owned (no lifetime);

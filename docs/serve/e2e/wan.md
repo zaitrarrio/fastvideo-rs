@@ -129,7 +129,10 @@ rows turn into stripes. Graph and eager runs are bitwise equal over 90 s,
 and f32 degrades too. The cause is the one-block sink. The default sink is
 now 15 frames (a deep sink), clean for 2 minutes on two seeds; to 5 minutes
 the content stays coherent, with a transient artefact strip along the top
-edge. Sheets: `r12/`.
+edge. Sheets: `r12/`. Live causal sessions are now capped on every
+front-end: 120 s of video by default, up to 300 s on request, a `reset`
+restarting the clock within the 300 s ceiling (`docs/serve/design.md`
+§5.2).
 
 ## Bugs
 

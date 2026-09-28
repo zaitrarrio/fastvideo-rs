@@ -34,6 +34,8 @@ resident = true
 # before readiness so the first request pays no setup.
 i2v_encoder = "auto"
 warmup = true
+# The native 1080P tier is on (80 GB-class GPUs and up): see runpod.toml.
+# h3_1080p = false
 
 [aliases]
 "MiniMax-H3-Max" = "sol-h3"
