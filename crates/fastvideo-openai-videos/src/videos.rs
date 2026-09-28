@@ -824,8 +824,12 @@ fn opt_f64(v: Option<f64>) -> Value {
         .map_or(Value::Null, Value::Number)
 }
 
-/// `VideoResponse` (`openai/protocol.py:213-234`).
-pub fn video_response(job: &Job, _cx: &ViewCtx) -> Value {
+/// `VideoResponse` (`openai/protocol.py:213-234`). FastVideo always sends
+/// `url: null` and serves the file from `/content`; a completed job here
+/// also carries a signed download URL of the MP4 in `url` (valid for
+/// `URL_TTL`, re-signed on every retrieve), so clients need not proxy the
+/// bytes through `/content`. Every other status keeps `url: null`.
+pub fn video_response(job: &Job, cx: &ViewCtx) -> Value {
     let r = &job.resolved;
     let (w, h) = r.output_size();
     let status = job.status();
@@ -841,6 +845,10 @@ pub fn video_response(job: &Job, _cx: &ViewCtx) -> Value {
     let seconds =
         echo_str(job, "seconds").unwrap_or_else(|| format!("{}", r.duration_s().round() as u64));
     let art = job.artifacts.first();
+    let url = match (&job.state, art) {
+        (fastvideo_protocol::JobState::Succeeded, Some(a)) => Value::String(cx.urls.url_for(a, URL_TTL).to_string()),
+        _ => Value::Null,
+    };
     let mut v = json!({
         "id": job.external_id,
         "object": "video",
@@ -852,7 +860,7 @@ pub fn video_response(job: &Job, _cx: &ViewCtx) -> Value {
         "size": format!("{w}x{h}"),
         "seconds": seconds,
         "quality": echo_str(job, "quality").unwrap_or_else(|| "standard".into()),
-        "url": null,
+        "url": url,
         "remixed_from_video_id": null,
         "expires_at": job.expires_at.unix_timestamp(),
         "file_path": null,

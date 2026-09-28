@@ -84,6 +84,12 @@ async fn fastvideo_submit_poll_download_delete() {
     assert!(v["completed_at"].is_i64());
     assert!(v["stage_durations"]["denoise"].is_f64());
     assert_eq!(v["file_name"], "video.mp4");
+    // A completed job carries a signed download URL of the MP4.
+    let u = url::Url::parse(v["url"].as_str().expect("completed url")).unwrap();
+    assert!(u.path().starts_with("/files/"), "{u}");
+    let path = format!("{}?{}", u.path(), u.query().unwrap_or_default());
+    let c = call(&f.app, "GET", &path, None).await;
+    assert_eq!((c.status, &c.bytes[4..8]), (StatusCode::OK, &b"ftyp"[..]));
 
     let c = call(&f.app, "GET", &format!("/v1/videos/{id}/content"), None).await;
     assert_eq!(c.status, StatusCode::OK);

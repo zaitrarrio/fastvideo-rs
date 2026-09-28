@@ -600,7 +600,7 @@ Source: minimax-fastvideo §2.1 and §3.3.
 | `POST /v1/videos`, `POST /v1/videos/generations` | JSON, multipart or form (fields `image_reference`… as JSON strings). `extra_body`/`extra_json` are merged. `extra="forbid"`: unknown field → 400. Reply `VideoResponse` with `status:"queued"` |
 | `POST /v1/videos/sync` | Blocks. Returns `video/mp4` with `X-Request-Id`, `X-Model`, `X-Inference-Time-S`, `X-Stage-Durations`, `X-Peak-Memory-MB` |
 | `GET /v1/videos?after&limit&order` | `{object:"list",data,first_id,last_id,has_more}`, default `desc` |
-| `GET /v1/videos/{id}` | `VideoResponse`. A failed job is **200** with `status:"failed"`, `error:{code:"generation_failed",message}` |
+| `GET /v1/videos/{id}` | `VideoResponse`. A failed job is **200** with `status:"failed"`, `error:{code:"generation_failed",message}`. A completed job's `url` is a signed download URL of the MP4 (1 h, re-signed on every retrieve; FastVideo always sends `null`); other statuses keep `url: null` |
 | `GET /v1/videos/{id}/content?variant=video` | File. Other variant → 400; failed → 422; not done → 404 `"Generation is still in-progress"` |
 | `DELETE /v1/videos/{id}` | `{id,deleted:true,object:"video.deleted"}`. A running job is **cancelled** through `CancelToken`. This is a deliberate improvement: FastVideo can't interrupt, and our observer can |
 | `GET /v1/models`, `/v1/models/{model}`, `GET /v1/model_info` | Cards `{id,object:"model",created,owned_by:"fastvideo",root}` for every `served_names` entry |
