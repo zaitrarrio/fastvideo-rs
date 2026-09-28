@@ -1,0 +1,6 @@
+[20:19:21] pod.sh start steps: oracle:fastwan22-ti2v cells:fv-fastwan22-5b
+[20:19:21] ▶ step oracle:fastwan22-ti2v
+[20:20:12] ok step oracle:fastwan22-ti2v  51s
+[20:20:12] ▶ step cells:fv-fastwan22-5b
+[20:23:09] ok step cells:fv-fastwan22-5b  177s
+[20:23:09] pod.sh done

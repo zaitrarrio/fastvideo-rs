@@ -806,8 +806,8 @@ Every reply carries `x-request-id` (32 hex characters).
 | `fps` 24 (default) / 25 / 48 / 50 | `fps` | Only 24 until E4 validates the rest → 400 `Unsupported(LtxFps)` |
 | `resolution` `WxH` | `Exact` with `pad_and_crop` | 1920×1080 → 1920×1088 → crop; 1280×720 → 1280×768 → crop; 3840×2160 → 3840×2176 → crop; portrait by transpose |
 | `generate_audio: false` | `AudioOut::Silent` | Post `-an` at launch. E4 also skips the audio decode |
-| `image_uri` | `Keyframe{First}`: `I2V` | 2.3 OK. 2.5 → 400 `Unsupported(Ltx25I2V)` until E5 |
-| `last_frame_uri` | `Keyframe{Last}` | 400 `Unsupported(LtxKeyframes)` until E9 |
+| `image_uri` | `Keyframe{First}`: `I2V` | 2.5: frame-0 image conditioning (E5, `ltx2/i2v_encode.rs`). An engine without `I2V` in its caps → 400 `Unsupported(Ltx25I2V)` |
+| `last_frame_uri` | `Keyframe{Last}` | 2.5: a keyframe at pixel frame `num_frames − 1` (E9). Without `Keyframes` in caps → 400 `Unsupported(LtxKeyframes)` |
 | `camera_motion` | — | 400 `Unsupported(LtxCameraMotion)` |
 | `prompt` ≤5000 | `prompt` | |
 
@@ -857,8 +857,9 @@ Errors are `{"type":"error","error":{"type","message"}}`:
 | H3 ref2va co-resident with fl2va | MiniMax/fal/FastVideo ref2v | served by the Ref2VA companion models `h3-ref2v-max` / `h3-ref2v-turbo` (`route_task`); 400 when none is configured. Own process on 80-96 GB cards (`configs/serve/runpod-h3-ref2v.toml`); docs/ports/h3-ref2v.md | E11 |
 | LTX fps 25/48/50 | LTX, FastVideo | served (validated at 1080p, `artifacts/serve/e4-ltx-fps/benchmark.json`; engines without them in caps still 400) | E4 done |
 | LTX silent output | LTX `generate_audio:false` | supported (post `-an`); the engine can skip the audio decode (`Ltx2Request::skip_audio_decode`) | E4 done |
-| LTX-2.5 I2V | LTX `image_uri` on 2.5 | 400 | E5 |
-| LTX last frame | LTX `last_frame_uri` | 400 | E9 |
+| LTX-2.5 I2V | LTX `image_uri` on 2.5 | served (E5, oracle-checked: docs/oracle.md "LTX-2.5 image conditioning") | E5 done |
+| LTX last frame | LTX `last_frame_uri` | served (E9) | E9 done |
+| LTX reference (Ingredients IC-LoRA) | fal `ingredient`, `Task::Ref2V` on LTX | 400 (task) | blocked on the LoRA's Hub gate; docs/ports/ltx-ref2v.md |
 | LTX auto duration, camera motion, A2V/retake/extend/HDR/reframe | LTX | 400 / 403 | none planned |
 | Cancellation mid-generation | all DELETE/cancel | cancels only while queued | E1 |
 | In-memory frames (no PNG) | streaming | `fastvideo_cudarc::sink::FrameSink` via `Hooks::with_sink` | E2 done |

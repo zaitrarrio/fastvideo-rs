@@ -1,0 +1,33 @@
+[fastvideo] cuda device=0 sm_120 kernels=Cubin(120) gemm=Bf16 resident=true sdpa=dense sdpa_chunk=1024 oxide=[bf16_128x128x128,bf16_128x256x128,bf16_256x128x128,bf16_128x128x256,f32_128x128x128] oxide_embedded=10
+[INFO] wan/load {"mem_used_mib":21794,"seconds":113.966361661}
+[fastvideo] generate preset=fast_wan_2_2_ti2v_5b tiny=false 832x480 frames=121 steps=3 dmd=true rcm=false latent=1x48x31x30x52 nvfp4=off resident=true cuda=true
+[fastvideo] sdpa: device dense B=1 H=1 Sq=1560 Sk=1560 D=640 query_chunk=1560
+[fastvideo] denoise=dmd steps=3
+[fastvideo] sdpa: fused mma B=1 H=24 Sq=12090 Sk=12090 D=128
+[fastvideo] dmd step 1/3 t=1000 done in 567ms
+[fastvideo] dmd step 2/3 t=757 done in 521ms
+[fastvideo] dmd step 3/3 t=522 done in 520ms
+[fastvideo] dmd 3 steps done in 1609ms
+[fastvideo] vae.decode done in 4762ms
+[fastvideo] video writer: 121 frames, png deferred (0 inline, 121 after the mp4 in 0.19s, 0.06 GiB, synced), ffmpeg feed blocked 0.58s, mp4 tail 0.10s, buffered peak 0.14 GiB of 85.13
+[fastvideo] wrote mp4 /fvscratch/runs/wan/9b2c963-09282019/fw22-i2v/frames/cold/output.mp4
+[fastvideo] wrote 121 png frames → /fvscratch/runs/wan/9b2c963-09282019/fw22-i2v/frames/cold (text 2.39s, denoise 1.61s, decode+mp4 5.73s, png 0.19s)
+[fastvideo] generate done in 10186ms
+[INFO] wan/cold_generation {"audio_generate_s":0.0,"audio_s":0.0,"decode_s":5.73335312,"decoder":"wan-vae","denoise_s":1.612882667,"step_s":[0.570714634,0.521605387,0.520290116],"text_cache":"miss","text_s":2.390442356,"total_s":10.186498998,"video_encode_s":0.099376766,"video_push_s":0.00018356,"video_rgb_s":0.0933556439999645,"video_vae_s":5.5772728195190435,"video_wait_s":0.821492925,"write_s":0.193215872}
+[fastvideo] generate preset=fast_wan_2_2_ti2v_5b tiny=false 832x480 frames=121 steps=3 dmd=true rcm=false latent=1x48x31x30x52 nvfp4=off resident=true cuda=true
+[fastvideo] denoise=dmd steps=3
+[fastvideo] dmd step 1/3 t=1000 done in 525ms
+[fastvideo] dmd step 2/3 t=757 done in 521ms
+[fastvideo] dmd step 3/3 t=522 done in 521ms
+[fastvideo] dmd 3 steps done in 1569ms
+[fastvideo] vae.decode done in 4741ms
+[fastvideo] video writer: 121 frames, png deferred (0 inline, 121 after the mp4 in 0.15s, 0.06 GiB, synced), ffmpeg feed blocked 0.45s, mp4 tail 0.10s, buffered peak 0.14 GiB of 85.11
+[fastvideo] wrote mp4 /fvscratch/runs/wan/9b2c963-09282019/fw22-i2v/frames/output.mp4
+[fastvideo] wrote 121 png frames → /fvscratch/runs/wan/9b2c963-09282019/fw22-i2v/frames (text 0.02s, denoise 1.57s, decode+mp4 5.67s, png 0.15s)
+[fastvideo] generate done in 7456ms
+[INFO] wan/timings {"audio_generate_s":0.0,"audio_s":0.0,"decode_s":5.66897659,"decoder":"wan-vae","denoise_s":1.5703725400000001,"frames_sha256":"403a604bb25d87a29932c4b458cef359c76c6fc45bdf63e8fec61495461789ae","peak_mib":39396,"step_s":[0.526334887,0.521934587,0.521819056],"text_cache":"hit","text_s":0.016941483,"total_s":7.307290351,"video_encode_s":0.104910497,"video_push_s":0.00018815000000000002,"video_rgb_s":0.09902864000127481,"video_vae_s":5.557458190917968,"video_wait_s":0.821139414,"write_s":0.149127235}
+wan gen default: total 7.31s (text 0.02s, denoise 1.57s, decode 5.67s) png 0.15s peak Some(39396) MiB frames 403a604bb25d87a29932c4b458cef359c76c6fc45bdf63e8fec61495461789ae
+[PASS] wan/frames {"decoded":121,"written":121} (limits {"expected":121})
+[PASS] wan/middle_frame_not_flat {"frame":"/fvscratch/runs/wan/9b2c963-09282019/fw22-i2v/frames/frame-060.png","mean":0.3351938811155693,"std":0.2794331042143852} (limits {"std_min":0.02})
+benchmark.json → /fvscratch/runs/wan/9b2c963-09282019/fw22-i2v/benchmark.json
+[PASS] stage wan → gpucheck-out/wan.json (132.5s)
