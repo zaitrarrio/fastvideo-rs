@@ -132,6 +132,43 @@ pub fn resolve(weights: &Path, dit: &Path, version: Ltx2ModelVersion) -> Result<
     Ok(None)
 }
 
+/// An IC-LoRA file's reference geometry (`iclora_utils.py`
+/// `read_lora_reference_{downscale,temporal_scale}_factor`) and its number of
+/// `lora_A` / `lora_B` pairs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct IcLoraInfo {
+    pub downscale: usize,
+    pub temporal_scale: usize,
+    pub pairs: usize,
+}
+
+/// Read [`IcLoraInfo`] from the safetensors header (no tensor data).
+pub fn ic_lora_info(path: &Path) -> Result<IcLoraInfo> {
+    let map = WeightMap::open_files(&[path.to_path_buf()])?;
+    let lazy = map
+        .lazy()
+        .ok_or_else(|| msg("ltx2 ic-lora: checkpoint is not a safetensors map"))?;
+    let meta = lazy.metadata();
+    let pairs = lazy
+        .keys()
+        .filter(|k| weight_key_for_lora_a(k).is_some())
+        .count();
+    if pairs == 0 {
+        return Err(msg(format!(
+            "ltx2 ic-lora: no .lora_A.weight keys in {}",
+            path.display()
+        )));
+    }
+    Ok(IcLoraInfo {
+        downscale: fastvideo_models::ltx2::lora::reference_scale(meta, "reference_downscale_factor"),
+        temporal_scale: fastvideo_models::ltx2::lora::reference_scale(
+            meta,
+            "reference_temporal_scale_factor",
+        ),
+        pairs,
+    })
+}
+
 /// Fuse into an f32 weight buffer when `key` is one of the installed pairs.
 pub fn apply_f32(key: &str, weight: &mut [f32], shape: &[usize]) -> Result<()> {
     if !wants(key) {

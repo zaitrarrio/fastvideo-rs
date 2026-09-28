@@ -37,6 +37,28 @@ pub const LTX23_LORA_NAMES: &[&str] = &[
 /// Stage-2 refiner adapter. Stage 1 of a 2.5 two-stage run stays unfused.
 pub const LTX25_LORA_NAMES: &[&str] = &["ltx-2.5-22b-distilled-lora-450-bf16.safetensors"];
 
+/// The LTX-2.5 IC-LoRA "Ingredients" (`Lightricks/LTX-2.5-22b-IC-LoRA-Ingredients`
+/// @ `12040e4`): a reference sheet in context. `ICLoraPipeline`
+/// (`ltx_pipelines/ic_lora.py`) fuses it into stage 1 only (`DiffusionStage`
+/// built with `loras=[…]`); stage 2 runs the plain distilled DiT. Rank 128 on
+/// every block's `attn1` / `attn2` q/k/v/out and feed-forward (model card).
+pub const LTX25_INGREDIENTS_FILE: &str = "ltx-2.5-22b-ic-lora-ingredients-0.9.safetensors";
+
+/// Where the weight volumes keep it (`weights/<dir>/<file>`).
+pub const LTX25_INGREDIENTS_DIR: &str = "ltx25-ic-lora-ingredients";
+
+/// `read_lora_reference_downscale_factor` / `…_temporal_scale_factor`
+/// (`ltx_pipelines/iclora_utils.py`): an integer in the safetensors
+/// `__metadata__`, 1 when absent. An unparsable value is 1 too, as the
+/// reference's `except Exception` fallback.
+pub fn reference_scale(metadata: &std::collections::HashMap<String, String>, key: &str) -> usize {
+    metadata
+        .get(key)
+        .and_then(|v| v.trim().parse::<usize>().ok())
+        .filter(|&v| v > 0)
+        .unwrap_or(1)
+}
+
 /// `(stage1, stage2)` strengths of a *dev* two-stage generate. `None` for 2.0,
 /// which has no distilled LoRA in the sol-engine profiles. Distilled
 /// checkpoints never fuse (the adapter is baked in), and the refiners use
@@ -158,6 +180,16 @@ mod tests {
         assert!(weight_key_aliases(stem).contains(&format!("{stem}.weight")));
         assert!(weight_key_aliases(stem)
             .contains(&"transformer_blocks.0.attn1.to_q.weight".to_string()));
+    }
+
+    #[test]
+    fn reference_scales_default_to_one() {
+        let mut m = std::collections::HashMap::new();
+        assert_eq!(reference_scale(&m, "reference_downscale_factor"), 1);
+        m.insert("reference_downscale_factor".to_string(), "2".to_string());
+        m.insert("reference_temporal_scale_factor".to_string(), "x".to_string());
+        assert_eq!(reference_scale(&m, "reference_downscale_factor"), 2);
+        assert_eq!(reference_scale(&m, "reference_temporal_scale_factor"), 1);
     }
 
     #[test]

@@ -1,0 +1,11 @@
+WARNING: Running pip as the 'root' user can result in broken permissions and conflicting behaviour with the system package manager, possibly rendering your system unusable. It is recommended to use a virtual environment instead: https://pip.pypa.io/warnings/venv. Use the --root-user-action option if you know what you are doing and want to suppress this warning.
+
+[notice] A new release of pip is available: 25.0.1 -> 26.2.1
+[notice] To update, run: pip install --upgrade pip
+21:15:42 Traceback (most recent call last):
+  File "/srv/fetch.py", line 114, in <module>
+    main()
+  File "/srv/fetch.py", line 57, in main
+    raise SystemExit(f"{final} exists: add-only fetch refuses to touch it")
+SystemExit: /workspace/weights/auxiliary/upscalers/seedvr2 exists: add-only fetch refuses to touch it
+

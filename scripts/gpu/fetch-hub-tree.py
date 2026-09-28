@@ -3,7 +3,9 @@
 
 Runs on a CPU pod with the volume at /workspace. Downloads REPO@REVISION
 (the manifest globs plus model_index.json) with `local_dir` (plain files)
-into weights/.<DEST>.partial-<stamp>, checks every file against the Hub
+into weights/.<DEST>.partial-<stamp> (for a nested DEST such as
+auxiliary/upscalers/seedvr2: <parent>/.<name>.partial-<stamp>, the parent
+created if missing), checks every file against the Hub
 listing at that revision (size; LFS files by SHA-256, the others by their
 git blob SHA-1), writes .complete and sha256.txt, and only then renames the
 temp folder to weights/<DEST>. Refuses to start if weights/<DEST> exists.
@@ -53,7 +55,8 @@ def main():
     final = WEIGHTS / DEST
     if final.exists():
         raise SystemExit(f"{final} exists: add-only fetch refuses to touch it")
-    tmp = WEIGHTS / f".{DEST}.partial-{time.strftime('%Y%m%d%H%M%S')}"
+    final.parent.mkdir(parents=True, exist_ok=True)
+    tmp = final.parent / f".{final.name}.partial-{time.strftime('%Y%m%d%H%M%S')}"
     info = HfApi().model_info(REPO, revision=REV, files_metadata=True)
     want = [s for s in info.siblings if any(fnmatch.fnmatch(s.rfilename, g) for g in GLOBS)]
     total = sum(s.size or 0 for s in want)

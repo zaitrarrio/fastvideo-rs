@@ -24,6 +24,11 @@
 //! | `MiniMax-H3-Turbo` | alias, else the H3 `turbo` tier | 4–15 s | `480P`, `768P` |
 //! | `MiniMax-H3-Draft` | alias, else the H3 `draft` tier | 4–15 s | `480P`, `768P` |
 //!
+//! MiniMax's H3 schema has no `1080P` (H3: `768P`/`2K`, H3-Max:
+//! `480P`/`768P`), so this wire does not offer the native 1080P tier; fal
+//! (`resolution: "1080P"`), the native API (`short_edge: 1080`) and
+//! `/v1/videos` (`size: "1920x1080"`) do.
+//!
 //! Turbo and Draft are our own ids; they take the H3-Max request shape
 //! (including `extra`) with the H3 duration range, since the engine grid
 //! admits 4 s.

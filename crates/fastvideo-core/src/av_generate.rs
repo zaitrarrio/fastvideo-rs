@@ -245,6 +245,7 @@ fn generate_ltx2(
             pisa_stage2: stage2.pisa_stage2(),
             image_path: opts.image_path,
             skip_audio_decode: false,
+            reference: None,
         };
         request
             .validate()

@@ -13,7 +13,8 @@ use axum::Router;
 use fastvideo_engine_service::{EngineConfig, EngineService, FakeBackend, FakeConfig, FakeModel, FakeTiming, Mp4Mode};
 use fastvideo_reactor::pb;
 use fastvideo_reactor::wire::json_to_struct;
-use fastvideo_reactor::{router, H264Backend, Reactor, ReactorConfig, RtState, SESSION_ID};
+use fastvideo_protocol::CausalLimits;
+use fastvideo_reactor::{router, session_limit_reason, H264Backend, Reactor, ReactorConfig, RtState, SESSION_ID};
 use fastvideo_webrtc::channel::ChannelMessage;
 use fastvideo_webrtc::host::{AudioLayout, HostConfig, OfferOptions, Peer, PeerEvent, RtcHost};
 use fastvideo_webrtc::sdp::{Direction, MediaKind, Sdp};
@@ -533,4 +534,47 @@ async fn causal_session_setters() {
     assert_eq!(st["prompt"], "a road");
     assert!(seen.video.len() > 20, "{} frames", seen.video.len());
     rt.drain().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn causal_session_ends_at_its_length_limit() {
+    use pb::control_server_message::Payload as CS;
+    let e = engine(FakeModel::sf_wan(), Duration::ZERO);
+    e.wait_ready().await;
+    // Small limits for real time: 1 s by default, 2 s at most.
+    let (rt, app) = runtime(e, |c| c.causal_limits = CausalLimits { default_max_s: 1, hard_max_s: 2 }).await;
+    let (_, _, schema) = call(&app, "GET", "/schema", None).await;
+    assert_eq!(schema["x-reactor"]["session_limits"]["default_max_s"], 1, "{schema}");
+    assert_eq!(schema["x-reactor"]["session_limits"]["hard_max_s"], 2);
+    let (s, _, _) = call(&app, "POST", "/start_session", Some(json!({"max_seconds": 0}))).await;
+    assert_eq!(s, StatusCode::BAD_REQUEST);
+    // The default, then a longer request clamped to the ceiling.
+    for (params, limit) in [(json!({}), 1u32), (json!({"max_seconds": 600}), 2)] {
+        let (s, _, d) = call(&app, "POST", "/start_session", Some(params)).await;
+        assert_eq!(s, StatusCode::OK, "{d}");
+        let Client { mut peer, .. } = connect(&app, false).await;
+        let h = peer.handle().clone();
+        h.send_message(control(
+            pb::control_client_message::Payload::ResumeTrack(pb::ResumeTrack { name: "main_video".into() }),
+            "",
+            pb::MessageKind::Notification,
+        ))
+        .await
+        .unwrap();
+        h.send_message(command("set_prompt", json!({"prompt": "a road"}), "data_1")).await.unwrap();
+        let want = session_limit_reason(limit);
+        let ended =
+            |s: &Seen| s.control.iter().any(|m| matches!(&m.payload, Some(CS::SessionEnded(e)) if e.reason == want));
+        let t0 = Instant::now();
+        let mut seen = Seen::default();
+        pump(&mut peer, &mut seen, Duration::from_secs(20), ended).await;
+        assert!(ended(&seen), "{:?}", seen.control);
+        // Not before the limit: the clock starts at the first frame.
+        assert!(t0.elapsed() >= Duration::from_secs(u64::from(limit)), "{:?}", t0.elapsed());
+        let t1 = Instant::now();
+        while rt.state() != RtState::Ready && t1.elapsed() < Duration::from_secs(5) {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        assert_eq!(rt.state(), RtState::Ready);
+    }
 }

@@ -1,0 +1,20 @@
+[22:43:51] balance $25.3135343442 (stop under $14)
+[22:43:51] Runpod balance $25.3135343442 (floor $8)
+[22:43:53] variant wan: the published template cyj8xv01wd (ghcr.io/zaitrarrio/fastvideo-rs-serve@sha256:7ad81c50cf9eca2b1e79554469ec07eb5956abf731b6392466508c2146a1b54e)
+[22:43:53] queue endpoint 7rvc47m5qtbfxi (template cyj8xv01wd, volume s2k01690bi in US-CA-2, cap 2400s)
+[22:43:53] endpoint 7rvc47m5qtbfxi template - flashboot=on
+[22:43:54] balance $25.3135343442 (stop under $14)
+[22:43:54] job e5068986-a08a-4d1f-9261-134fa040bfd3-u1: IN_QUEUE
+[22:46:02] job e5068986-a08a-4d1f-9261-134fa040bfd3-u1: IN_PROGRESS
+[22:46:09] job e5068986-a08a-4d1f-9261-134fa040bfd3-u1: COMPLETED
+[22:46:09] job 3d456dbf-3740-422b-a5a5-ffa4e2a09bc9-u2: IN_PROGRESS
+[22:46:11] job 3d456dbf-3740-422b-a5a5-ffa4e2a09bc9-u2: COMPLETED
+{"cycle":1,"flashboot":"on","submit_unix":1790635434.424344078,"health_before":{"jobs":{"completed":0,"failed":0,"inProgress":0,"inQueue":0,"retried":0},"workers":{"idle":0,"initializing":1,"ready":0,"running":0,"throttled":0,"unhealthy":0}},"gen":{"status":"COMPLETED","delayTime":127621,"executionTime":6312,"workerId":"nfqdm74yiutir5","client_wall_s":134.72883439064026,"first_in_progress_s":128.23209071159363,"job_status":"succeeded","bytes":1089835,"error":null},"info":{"workerId":"nfqdm74yiutir5","client_wall_s":2.5218870639801025,"gpu":"NVIDIA H100 80GB HBM3, 81559 MiB, 580.126.09","process_start_unix":1790635514.648087,"ready_after_s":47.577237319,"uptime_s":55.353844498,"nvenc_encode_ok":false,"ffmpeg_h264_nvenc":true},"process_start_after_submit_s":80.22374296188354,"ready_after_submit_s":127.80098032951355}
+[22:54:00] cycle 2: worker down (uptime frozen at 0s) after 469s; waiting 30s
+[22:54:30] balance $23.1436084303 (stop under $14)
+[22:54:30] job dae09de5-2580-45f1-8898-e6f51f7e9fb1-u2: IN_QUEUE
+[22:55:26] job dae09de5-2580-45f1-8898-e6f51f7e9fb1-u2: IN_PROGRESS
+[22:55:32] job dae09de5-2580-45f1-8898-e6f51f7e9fb1-u2: COMPLETED
+[22:55:33] job dacbef23-1b04-4493-8218-b2dabc31ea0c-u1: IN_PROGRESS
+[22:55:35] job dacbef23-1b04-4493-8218-b2dabc31ea0c-u1: COMPLETED
+{"cycle":2,"flashboot":"on","submit_unix":1790636070.567691700,"health_before":{"jobs":{"completed":2,"failed":0,"inProgress":0,"inQueue":0,"retried":0},"workers":{"idle":1,"initializing":0,"ready":1,"running":0,"throttled":0,"unhealthy":0}},"gen":{"status":"COMPLETED","delayTime":54636,"executionTime":7305,"workerId":"nfqdm74yiutir5","client_wall_s":62.20153045654297,"first_in_progress_s":55.66870331764221,"job_status":"succeeded","bytes":963470,"error":null},"info":{"workerId":"nfqdm74yiutir5","client_wall_s":2.707852840423584,"gpu":"NVIDIA H100 80GB HBM3, 81559 MiB, 580.126.09","process_start_unix":1790636079.0592082,"ready_after_s":46.238622959,"uptime_s":55.191334595,"nvenc_encode_ok":false,"ffmpeg_h264_nvenc":true},"process_start_after_submit_s":8.491516351699829,"ready_after_submit_s":54.73013925552368}

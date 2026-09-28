@@ -1,0 +1,6 @@
+[22:50:07] [upscaler] setup: uv + python 3.12 + torch cu128 + SeedVR2 CLI @ 4490bd1f
+[22:54:02] [upscaler] setup exit=0 235s 2.11.0+cu128 NVIDIA RTX PRO 6000 Blackwell Server Edition
+[22:57:22] [upscaler] seedvr2-3b-1088/talking-head exit=0 wall=198.4s processing=?s fps=0.66 peak_gpu_mib=46725 frames=124 size=1904x1088
+[22:57:24] [upscaler] seedvr2-3b-1088/talking-head: 124 frames on the canvas
+[23:00:23] [upscaler] seedvr2-3b-1088/spark-mountain-lake exit=0 wall=176.0s processing=?s fps=0.73 peak_gpu_mib=47284 frames=124 size=1904x1088
+[23:00:24] [upscaler] seedvr2-3b-1088/spark-mountain-lake: 124 frames on the canvas

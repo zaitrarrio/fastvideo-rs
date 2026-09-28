@@ -110,6 +110,7 @@ impl FakeModel {
                 aspect: (0.25, 4.0),
                 short_edges: vec![1080, 720, 1440, 2160],
                 pad_and_crop: true,
+                hd: None,
             },
             refs: RefLimits::none(),
             knobs: KnobCaps {
@@ -189,6 +190,7 @@ impl FakeModel {
                 aspect: (0.25, 4.0),
                 short_edges: vec![480],
                 pad_and_crop: false,
+                hd: None,
             },
             refs: RefLimits::none(),
             knobs: KnobCaps {

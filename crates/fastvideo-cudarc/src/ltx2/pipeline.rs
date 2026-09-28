@@ -47,7 +47,7 @@ pub use fastvideo_models::ltx2::memory::LtxOffload;
 
 use super::audio_vae::{conform_audio_time, pack_audio_latent, AudioDecoder, AudioEncoder};
 use super::diffusion_decoder::DiffusionDecoder;
-use super::i2v_encode::{ConditioningImage, StageConditioning};
+use super::i2v_encode::{ConditioningImage, ReferenceTokens, StageConditioning};
 use super::keys::Keys;
 use super::latent_upsampler::LatentUpsampler;
 use super::text::{HiddenStack, PaddedPrompt, TextConnectors};
@@ -171,6 +171,34 @@ pub struct Ltx2Request {
     /// video is unchanged), but no `audio.wav` is written (`Ltx2Output::wav`
     /// is empty), the mp4 has no audio track, and a frame sink gets no PCM.
     pub skip_audio_decode: bool,
+    /// IC-LoRA reference-to-video (`ltx_pipelines/ic_lora.py`
+    /// `--video-conditioning PATH STRENGTH --lora <ic-lora> S`): needs a
+    /// pipeline loaded with [`PipelineOptions::ic_lora`].
+    pub reference: Option<IcReference>,
+}
+
+/// One IC-LoRA reference: a still (the Ingredients LoRA's reference sheet)
+/// that is looped into a static clip of the output's length, as the model
+/// card prescribes, then conditioned on at stage 1 with the LoRA fused.
+#[derive(Debug, Clone, PartialEq)]
+pub struct IcReference {
+    pub path: PathBuf,
+    /// `VideoConditionByReferenceLatent.strength` (denoise mask `1 − s`), in
+    /// `[0, 1]`; 1 keeps the reference clean.
+    pub strength: f32,
+    /// The IC-LoRA's fuse strength at stage 1 (`--lora PATH S`); 1 is the
+    /// card's default ("the weights ship pre-scaled").
+    pub lora_strength: f32,
+}
+
+impl IcReference {
+    pub fn new(path: impl Into<PathBuf>) -> Self {
+        Self {
+            path: path.into(),
+            strength: 1.0,
+            lora_strength: 1.0,
+        }
+    }
 }
 
 /// Whether stage 2 runs the Sol route when the caller did not choose. The
@@ -222,6 +250,7 @@ impl Ltx2Request {
             image_path: None,
             images: Vec::new(),
             skip_audio_decode: false,
+            reference: None,
         }
     }
 
@@ -268,6 +297,25 @@ impl Ltx2Request {
         }
         if self.sol_stage2 && self.pisa_stage2 {
             return Err(err("ltx2 stage-2 Sol and PISA are separate routes"));
+        }
+        if let Some(r) = &self.reference {
+            // `ICLoraPipeline` is the two-stage distilled pipeline with a
+            // dense stage 2 (its `DiffusionStage`s carry no Sol/PISA route).
+            if !self.two_stage {
+                return Err(err("ltx2 reference-to-video is two-stage (`ICLoraPipeline`)"));
+            }
+            if self.sol_stage2 || self.pisa_stage2 {
+                return Err(err("ltx2 reference-to-video runs a dense stage 2"));
+            }
+            if !(0.0..=1.0).contains(&r.strength) {
+                return Err(err(format!(
+                    "ltx2 reference strength {} is outside [0, 1]",
+                    r.strength
+                )));
+            }
+            if !r.lora_strength.is_finite() {
+                return Err(err("ltx2 reference LoRA strength must be finite"));
+            }
         }
         if self.sol_stage2 || self.pisa_stage2 {
             if !self.two_stage {
@@ -778,6 +826,7 @@ fn dump_step_velocity(
     v_audio: &CudaTensor,
     sigma: f64,
     state: LatentState,
+    cond: Option<&StageConditioning>,
 ) -> Result<()> {
     use crate::wan::dump;
     dump::set_blocks(false);
@@ -787,7 +836,12 @@ fn dump_step_velocity(
     for (tag, x, v) in [("video", video, v_video), ("audio", audio, v_audio)] {
         let v = state.store(v.clone())?;
         dump::tensor(&dump::named(&format!("{tag}_vel_step{:02}", i + 1)), &v)?;
-        let x0 = state.store(CudaTensor::lincomb(&[(1.0, x), (-(sigma as f32), &v)])?)?;
+        // `X0Model`'s output: per-token timesteps under conditioning, before
+        // the clean-latent blend.
+        let x0 = match cond {
+            Some(c) if tag == "video" => state.store(c.x0(x, &v, sigma as f32)?)?,
+            _ => state.store(CudaTensor::lincomb(&[(1.0, x), (-(sigma as f32), &v)])?)?,
+        };
         dump::tensor(&dump::named(&format!("{tag}_x0_step{:02}", i + 1)), &x0)?;
     }
     Ok(())
@@ -905,6 +959,7 @@ pub fn denoise_with_cond(
             &v_audio,
             schedule.sigmas[i],
             state,
+            cond,
         )?;
         video = euler_update_cond(&video, &v_video, schedule, i, state, cond)?;
         audio = euler_update(&audio, &v_audio, schedule, i, state)?;
@@ -1241,7 +1296,7 @@ pub fn denoise_ancestral_cond(
             model.stage1_store(&out.0, &out.1);
             out
         };
-        dump_step_velocity(i, &video, &audio, &v_video, &v_audio, sigma, state)?;
+        dump_step_velocity(i, &video, &audio, &v_video, &v_audio, sigma, state, cond)?;
         // One draw (one upload) per step: video, then audio.
         let draws = if opts.eta > 0.0 && sigma_next != 0.0 {
             noise.draw(&[&video.shape, &audio.shape])?
@@ -2208,6 +2263,23 @@ pub struct PipelineOptions {
     /// Audio still goes through the audio VAE and vocoder. `None`:
     /// `FASTVIDEO_LTX2_TAE_WEIGHTS`, else the conv VAE.
     pub tae: Option<PathBuf>,
+    /// An IC-LoRA (the Ingredients reference-sheet LoRA,
+    /// [`fastvideo_models::ltx2::lora::LTX25_INGREDIENTS_FILE`]) for
+    /// reference-to-video ([`Ltx2Request::reference`]). The DiT then keeps its
+    /// unfused base beside the live weights of every linear the LoRA touches
+    /// (about 26 GB on the 22B DiT) so stage 1 fuses it and stage 2 does not,
+    /// without a reload. `None`: `FASTVIDEO_LTX2_IC_LORA`, else no reference mode.
+    pub ic_lora: Option<PathBuf>,
+}
+
+/// [`PipelineOptions::ic_lora`], else `FASTVIDEO_LTX2_IC_LORA`.
+fn resolve_ic_lora(explicit: Option<&Path>) -> Option<PathBuf> {
+    explicit.map(Path::to_path_buf).or_else(|| {
+        std::env::var("FASTVIDEO_LTX2_IC_LORA")
+            .ok()
+            .filter(|v| !v.is_empty())
+            .map(PathBuf::from)
+    })
 }
 
 /// [`PipelineOptions::tae`], else `FASTVIDEO_LTX2_TAE_WEIGHTS`.
@@ -2322,6 +2394,35 @@ fn release_dit_for_decode(model: &mut Option<Ltx2Transformer>, loaded_strength: 
 /// decode only — and for text not even that when the prompt was seen before.
 /// `model` is `None` after generate-decode (DiT dropped for VRAM); the next
 /// generate reloads it from `dit`.
+/// The DiT, with the IC-LoRA's factors attached (strength 0: the live
+/// weights are the base, the base is kept for later re-fuses) when `ic` is set.
+fn load_transformer_ic(
+    map: &WeightMap,
+    cfg: &Ltx2Config,
+    residency: Residency,
+    ic: Option<&Path>,
+) -> Result<Ltx2Transformer> {
+    let keys = Keys::transformer(Keys::detect(map));
+    let Some(path) = ic else {
+        return Ok(Ltx2Transformer::load_with_residency(map, &keys, &cfg.transformer, residency)?);
+    };
+    let guard = super::lora::install(path, 0.0)?;
+    let model = Ltx2Transformer::load_with_residency(map, &keys, &cfg.transformer, residency)?;
+    let hits = super::lora::hits();
+    drop(guard);
+    if hits == 0 {
+        return Err(err(format!(
+            "ltx2 ic-lora: no base weight matched {}",
+            path.display()
+        )));
+    }
+    crate::wan::log::info(format_args!(
+        "ltx2 ic-lora: attached {hits} linears (base kept for the stage-2 unfuse) from {}",
+        path.display()
+    ));
+    Ok(model)
+}
+
 pub struct Ltx2Pipeline {
     cfg: Ltx2Config,
     dit: PathBuf,
@@ -2350,6 +2451,11 @@ pub struct Ltx2Pipeline {
     /// A DiT that loads on the first request (LoRA pipelines): its shards,
     /// opened at pipeline load with read-ahead queued behind Gemma's (E12).
     dit_warm: std::sync::Mutex<Option<WeightMap>>,
+    /// The IC-LoRA for reference-to-video, attached (unfused base kept) to
+    /// the resident DiT, and its reference geometry.
+    ic_lora: Option<(PathBuf, super::lora::IcLoraInfo)>,
+    /// The strength the IC-LoRA is fused at right now (0 = the base DiT).
+    ic_strength: f32,
 }
 
 impl Ltx2Pipeline {
@@ -2366,6 +2472,33 @@ impl Ltx2Pipeline {
             super::lora::resolve(&paths.weights, &paths.dit, cfg.version)?
         } else {
             None
+        };
+        let ic_lora = match resolve_ic_lora(options.ic_lora.as_deref()) {
+            None => None,
+            Some(path) => {
+                if lora.is_some() || cfg.version != Ltx2ModelVersion::V25 {
+                    return Err(err(
+                        "ltx2 ic-lora: reference-to-video runs on the LTX-2.5 distilled DiT only",
+                    ));
+                }
+                if !path.is_file() {
+                    return Err(err(format!("ltx2 ic-lora: {} is not a file", path.display())));
+                }
+                let info = super::lora::ic_lora_info(&path)?;
+                if info.temporal_scale != 1 {
+                    return Err(err(format!(
+                        "ltx2 ic-lora: reference_temporal_scale_factor {} is not supported",
+                        info.temporal_scale
+                    )));
+                }
+                crate::wan::log::info(format_args!(
+                    "ltx2 ic-lora: {} ({} pairs, reference downscale {}, stage 1 only)",
+                    path.display(),
+                    info.pairs,
+                    info.downscale
+                ));
+                Some((path, info))
+            }
         };
         let active = fastvideo_models::techniques::settings::active();
         if let Some(path) = active.path.as_ref() {
@@ -2437,11 +2570,11 @@ impl Ltx2Pipeline {
             Some(booking.track(
                 crate::wan::ledger::DIT_NONLINEAR,
                 || {
-                    Ltx2Transformer::load_with_residency(
+                    load_transformer_ic(
                         &map,
-                        &Keys::transformer(Keys::detect(&map)),
-                        &cfg.transformer,
+                        &cfg,
                         residency,
+                        ic_lora.as_ref().map(|(p, _)| p.as_path()),
                     )
                 },
                 |_| None,
@@ -2499,6 +2632,8 @@ impl Ltx2Pipeline {
             None
         };
         Ok(Self {
+            ic_lora,
+            ic_strength: 0.0,
             dit_warm: std::sync::Mutex::new(dit_warm),
             cfg: cfg.clone(),
             dit: paths.dit.clone(),
@@ -2555,7 +2690,39 @@ impl Ltx2Pipeline {
         let model = loaded?;
         self.loaded_strength = Some(strength);
         self.model = Some(model);
+        self.ic_strength = 0.0;
         Ok(self.model.as_ref().expect("just loaded"))
+    }
+
+    /// Fuse the IC-LoRA into the resident DiT at `s` (0 restores the base
+    /// weights exactly: the live weight is rebuilt from the kept base).
+    fn set_ic_strength(&mut self, s: f32) -> Result<()> {
+        if self.ic_lora.is_none() {
+            if s != 0.0 {
+                return Err(err(
+                    "ltx2: reference-to-video needs the pipeline loaded with an IC-LoRA (--ic-lora / FASTVIDEO_LTX2_IC_LORA)",
+                ));
+            }
+            return Ok(());
+        }
+        if self.ic_strength == s {
+            return Ok(());
+        }
+        let model = self.model.as_mut().ok_or_else(|| err("ltx2 ic-lora: no resident DiT"))?;
+        let t = Instant::now();
+        model.set_lora_strength(s)?;
+        sync()?;
+        self.ic_strength = s;
+        crate::wan::log::info(format_args!(
+            "ltx2 ic-lora: fused at strength {s} ({:.2}s)",
+            t.elapsed().as_secs_f64()
+        ));
+        Ok(())
+    }
+
+    /// The IC-LoRA's reference downscale factor, when one is loaded.
+    pub fn ic_lora_downscale(&self) -> Option<usize> {
+        self.ic_lora.as_ref().map(|(_, i)| i.downscale)
     }
 
     /// Load the DiT (fused at `strength` when a LoRA is configured).
@@ -2572,6 +2739,14 @@ impl Ltx2Pipeline {
             }
         };
         let keys = Keys::transformer(Keys::detect(&map));
+        if self.lora.is_none() {
+            if let Some((ic, _)) = &self.ic_lora {
+                let model = load_transformer_ic(&map, &self.cfg, self.residency, Some(ic))?;
+                sync()?;
+                crate::wan::weights::log_load_io("ltx2 dit", &io_base, timer.elapsed().as_secs_f64());
+                return Ok(model);
+            }
+        }
         let model = if let Some(path) = self.lora.clone() {
             // Strength 0 so `apply_bf16` is a no-op and `attach_linear` snapshots
             // unfused `W0`. Device re-fuse walks the resident linears.
@@ -2730,8 +2905,9 @@ impl Ltx2Pipeline {
         &self,
         images: &[ConditioningImage],
         sizes: &[(usize, usize, &str)],
+        reference: Option<(&Path, usize, usize)>,
         state: LatentState,
-    ) -> Result<Vec<Vec<CudaTensor>>> {
+    ) -> Result<(Vec<Vec<CudaTensor>>, Option<CudaTensor>)> {
         let default_crf = super::i2v_encode::default_crf(self.cfg.version);
         let rgbs = images
             .iter()
@@ -2751,8 +2927,20 @@ impl Ltx2Pipeline {
         for &(h, w, tag) in sizes {
             let mut stage = Vec::with_capacity(rgbs.len());
             for (i, rgb) in rgbs.iter().enumerate() {
-                let px = super::i2v_encode::image_pixels(rgb, h, w);
-                crate::wan::dump::host(&format!("{tag}_cond{i}_pixels"), &[3, h, w], &px)?;
+                let mut px = super::i2v_encode::image_pixels(rgb, h, w);
+                let pname = format!("{tag}_cond{i}_pixels");
+                crate::wan::dump::host(&pname, &[3, h, w], &px)?;
+                // FASTVIDEO_INJECT_PIXELS (default on with FASTVIDEO_INJECT_DIR):
+                // encode the reference's preprocessed pixels, so the latent diff
+                // is the encoder's alone.
+                if crate::wan::inject::enabled()
+                    && std::env::var("FASTVIDEO_INJECT_PIXELS").map_or(true, |v| v != "0")
+                {
+                    if let Some(v) = crate::wan::inject::load_numel(&pname, px.len())? {
+                        crate::wan::log::info(format_args!("inject: {pname} (reference)"));
+                        px = v;
+                    }
+                }
                 let lat = encoder.encode_image(&px, h, w)?;
                 let lat = state.store(pack_video(&lat)?)?;
                 let name = format!("{tag}_cond{i}_latent");
@@ -2773,8 +2961,31 @@ impl Ltx2Pipeline {
             }
             out.push(stage);
         }
+        // The IC-LoRA reference (`append_ic_lora_reference_video_conditionings`):
+        // decoded, `video_preprocess` (resize + center crop, no CRF) at the
+        // stage-1 size over the downscale factor, encoded. One frame: the
+        // static clip's frames are identical (see [`ReferenceTokens`]).
+        // FASTVIDEO_DUMP_DIR gets `s1_ref0_pixels` (frame 0).
+        let reference = match reference {
+            None => None,
+            Some((path, h, w)) => {
+                let rgb = super::i2v_encode::decode_image(path)?;
+                let mut px = super::i2v_encode::image_pixels(&rgb, h, w);
+                let pname = "s1_ref0_pixels";
+                crate::wan::dump::host(pname, &[3, h, w], &px)?;
+                if crate::wan::inject::enabled()
+                    && std::env::var("FASTVIDEO_INJECT_PIXELS").map_or(true, |v| v != "0")
+                {
+                    if let Some(v) = crate::wan::inject::load_numel(pname, px.len())? {
+                        crate::wan::log::info(format_args!("inject: {pname} (reference)"));
+                        px = v;
+                    }
+                }
+                Some(state.store(pack_video(&encoder.encode_image(&px, h, w)?)?)?)
+            }
+        };
         drop(encoder);
-        Ok(out)
+        Ok((out, reference))
     }
 
     /// One clip. `use_text_cache = false` bypasses the conditioning cache for
@@ -2941,15 +3152,40 @@ impl Ltx2Pipeline {
         // Image conditioning (I2V / keyframes): encode every image at each
         // stage's resolution now, before the DiT loads, then free the encoder.
         let images = req.conditioning_images();
+        // IC-LoRA reference: the stage-1 size over the LoRA's downscale factor
+        // (`append_ic_lora_reference_video_conditionings`).
+        let ref_geom = match &req.reference {
+            None => None,
+            Some(r) => {
+                let Some(d) = self.ic_lora_downscale() else {
+                    return Err(err(
+                        "ltx2: reference-to-video needs the pipeline loaded with an IC-LoRA (--ic-lora / FASTVIDEO_LTX2_IC_LORA)",
+                    ));
+                };
+                if stage1_h % d != 0 || stage1_w % d != 0 {
+                    return Err(err(format!(
+                        "ltx2 reference: stage-1 {stage1_w}x{stage1_h} is not divisible by the reference downscale factor {d}"
+                    )));
+                }
+                Some((r, stage1_h / d, stage1_w / d, d))
+            }
+        };
         let mut cond_latents: Option<(Vec<CudaTensor>, Vec<CudaTensor>)> = None;
-        if !images.is_empty() {
+        let mut ref_latent: Option<CudaTensor> = None;
+        if !images.is_empty() || ref_geom.is_some() {
             let t = Instant::now();
             let state = LatentState::for_version(cfg.version);
             let mut sizes = vec![(stage1_h, stage1_w, "s1")];
             if req.two_stage {
                 sizes.push((req.height, req.width, "s2"));
             }
-            let mut per_stage = self.encode_images(&images, &sizes, state)?;
+            let (mut per_stage, reference) = self.encode_images(
+                &images,
+                &sizes,
+                ref_geom.map(|(r, h, w, _)| (r.path.as_path(), h, w)),
+                state,
+            )?;
+            ref_latent = reference;
             let s2 = if req.two_stage {
                 per_stage.pop().expect("stage-2 latents")
             } else {
@@ -2960,13 +3196,14 @@ impl Ltx2Pipeline {
             trim()?;
             timings.image_s = t.elapsed().as_secs_f64();
             crate::wan::log::info(format_args!(
-                "ltx2: {} conditioning image(s) encoded in {:.2}s",
+                "ltx2: {} conditioning image(s){} encoded in {:.2}s",
                 images.len(),
+                if ref_geom.is_some() { " and the reference" } else { "" },
                 t.elapsed().as_secs_f64()
             ));
             memory.mark("image_encode")?;
         }
-        let cond1 = match &mut cond_latents {
+        let mut cond1 = match &mut cond_latents {
             Some((l1, _)) => Some(StageConditioning::new(
                 grid1,
                 &images,
@@ -2975,11 +3212,44 @@ impl Ltx2Pipeline {
             )?),
             None => None,
         };
+        if let (Some((r, h, w, d)), Some(frame)) = (ref_geom, ref_latent.take()) {
+            // The static clip is `num_frames` pixel frames (the card: looped to
+            // the output's length; the reference reads at most `num_frames`).
+            let [rf, rh, rw] = cfg.transformer.latent_grid(req.num_frames, h, w);
+            let mut tokens = ReferenceTokens::static_clip(&frame, rf, [rh, rw], d, r.strength)?;
+            drop(frame);
+            crate::wan::dump::tensor("s1_ref0_latent", &tokens.clean)?;
+            crate::wan::dump::digest("s1_ref0_latent", &tokens.clean)?;
+            if crate::wan::inject::enabled()
+                && std::env::var("FASTVIDEO_INJECT_COND").map_or(true, |v| v != "0")
+            {
+                if let Some(v) = crate::wan::inject::load_numel("s1_ref0_latent", tokens.clean.numel())? {
+                    crate::wan::log::info(format_args!("inject: s1_ref0_latent (reference)"));
+                    tokens.clean = CudaTensor::from_vec(v, tokens.clean.shape.clone())?.to_device()?;
+                }
+            }
+            crate::wan::log::info(format_args!(
+                "ltx2 reference: {} at {w}x{h} (downscale {d}), {} tokens [{rf}, {rh}, {rw}], strength {}, ic-lora {}",
+                r.path.display(),
+                tokens.tokens(),
+                r.strength,
+                r.lora_strength
+            ));
+            let base = match cond1.take() {
+                Some(c) => c,
+                None => StageConditioning::new(grid1, &[], Vec::new(), req.num_frames)?,
+            };
+            cond1 = Some(base.with_reference(tokens)?);
+        }
         let extra1 = cond1.as_ref().map(|c| c.extra_frames.clone()).unwrap_or_default();
+        let reference1 = cond1.as_ref().and_then(|c| c.reference);
 
         let (s1, s2) = self.stage_lora_strengths(req.two_stage);
         let timer = Instant::now();
         self.dit_for(s1)?;
+        // `ICLoraPipeline`: stage 1 with the IC-LoRA fused, stage 2 without.
+        // Every request sets it, so a T2V/I2V request runs the base weights.
+        self.set_ic_strength(req.reference.as_ref().map_or(0.0, |r| r.lora_strength))?;
         let distilled = !cfg.scheduler.use_dynamic_shifting;
         self.arm_requested(distilled, use_cfg)?;
         let state = LatentState::for_version(cfg.version);
@@ -2997,19 +3267,20 @@ impl Ltx2Pipeline {
         // Stage 2 is one unguided forward per step on every line
         // (`distilled.py:294-313`, `ti2vid_two_stages.py:289-307`): only the
         // conditional context is ever re-projected.
-        let reproject = req.two_stage && s1 != s2;
+        let reproject = req.two_stage && (s1 != s2 || self.ic_strength != 0.0);
         let mut kept_contexts = reproject.then_some(contexts);
-        let ropes = Ropes::with_keyframes(
+        let ropes = Ropes::with_conditioning(
             &cfg.transformer,
             grid1,
             &extra1,
+            reference1,
             audio_tokens,
             req.frame_rate as f32,
         )?;
         // `generator = torch.Generator().manual_seed(seed)` (`distilled.py:217`):
         // the stage-1 initial noise and, later, the stage-2 renoise.
         let mut noise = NoiseStream::new(req.seed, state == LatentState::Bf16);
-        let extra_tokens1 = extra1.len() * grid1[1] * grid1[2];
+        let extra_tokens1 = cond1.as_ref().map_or(0, StageConditioning::appended_tokens);
         let (mut video, audio) =
             initial_noise_with(&cfg, grid1, extra_tokens1, audio_tokens, &mut noise)?;
         crate::wan::dump::digest("noise_video", &video)?;
@@ -3040,8 +3311,10 @@ impl Ltx2Pipeline {
             Ltx2Schedule::distilled_subset(req.stage1_steps()).map_err(err)?
         };
         // `DistilledPipeline` samples stage 1 ancestrally from 2.5 on
-        // (`distilled.py:62-85`); the dev line never does.
-        let ancestral = cfg.version == Ltx2ModelVersion::V25 && distilled;
+        // (`distilled.py:62-85`); the dev line never does, nor does
+        // `ICLoraPipeline` (its stage 1 is `DiffusionStage`'s default Euler).
+        let ancestral =
+            cfg.version == Ltx2ModelVersion::V25 && distilled && req.reference.is_none();
         let res2s = cfg.version == Ltx2ModelVersion::V23;
         crate::wan::dump::set_prefix(if req.two_stage { "s1_" } else { "" });
         let stage1_total = schedule.num_steps();
@@ -3115,7 +3388,12 @@ impl Ltx2Pipeline {
                     audio,
                     Some(&mut record),
                     Ltx2Stage2Attn::Off,
-                    LatentState::F32,
+                    // `ltx_core` keeps the 2.5 state bf16 between updates.
+                    if req.reference.is_some() {
+                        state
+                    } else {
+                        LatentState::F32
+                    },
                     cond1.as_ref(),
                 )?
             }
@@ -3197,6 +3475,8 @@ impl Ltx2Pipeline {
                 ));
             }
             self.dit_for(s2)?;
+            // `ICLoraPipeline.stage_2` is built with `loras=()`.
+            self.set_ic_strength(0.0)?;
             if reproject {
                 let contexts = kept_contexts.take().expect("stage-2 text context");
                 text = {
@@ -3214,14 +3494,16 @@ impl Ltx2Pipeline {
             let schedule2 =
                 Ltx2Schedule::distilled_stage_2_steps(req.stage2_steps()).map_err(err)?;
             let sigma = schedule2.sigmas[0] as f32;
+            // Stage 2 carries the image conditionings only (`ICLoraPipeline`
+            // drops the reference): none at all is the unconditioned stage.
             let cond2 = match &mut cond_latents {
-                Some((_, l2)) => Some(StageConditioning::new(
+                Some((_, l2)) if !images.is_empty() => Some(StageConditioning::new(
                     grid_full,
                     &images,
                     std::mem::take(l2),
                     req.num_frames,
                 )?),
-                None => None,
+                _ => None,
             };
             let extra2 = cond2
                 .as_ref()

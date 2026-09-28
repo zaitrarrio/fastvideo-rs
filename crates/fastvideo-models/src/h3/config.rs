@@ -479,6 +479,11 @@ pub struct H3VisionConfig {
     pub out_hidden_size: usize,
     pub num_position_embeddings: usize,
     pub deepstack_visual_indexes: [usize; 3],
+    /// Image pixel bounds of `smart_resize`: the checkpoint's
+    /// `processor/preprocessor_config.json` `size` (`shortest_edge` 65 536,
+    /// `longest_edge` 16 777 216 pixels), not Qwen2-VL's defaults. A
+    /// 2048-short-edge Ref2VA reference (3552x2048) keeps its 7 104 tokens,
+    /// as FastVideo's `processor.image_processor` gives it.
     pub min_pixels: usize,
     pub max_pixels: usize,
     /// Qwen presentation sample rate for reference videos.
@@ -500,8 +505,8 @@ impl H3VisionConfig {
             out_hidden_size: 5120,
             num_position_embeddings: 2304,
             deepstack_visual_indexes: [8, 16, 24],
-            min_pixels: 56 * 56,
-            max_pixels: 28 * 28 * 1280,
+            min_pixels: 65_536,
+            max_pixels: 16_777_216,
             video_sample_fps_num: 2,
             video_sample_fps_den: 1,
         }
@@ -755,6 +760,15 @@ pub const H3_MAX_LONG_EDGE: usize = 1344;
 /// The 480P short edge (MiniMax `resolution: 480P`, fal `480p`): 16:9 is
 /// 832 x 480 (fal FL README "Geometry").
 pub const H3_SHORT_EDGE_480P: usize = 480;
+/// The opt-in 1080P tier (fal `resolution: "1080P"`), generated natively above
+/// the trained pixel cap (docs/serve/h3-1080p-and-upscaler.md): the delivered
+/// short edge. The generation canvas rounds it up to [`H3_CANVAS_SHORT_1080P`]
+/// and the output is centre-cropped back (1920x1088 -> 1920x1080).
+pub const H3_SHORT_EDGE_1080P: usize = 1080;
+/// The 1080P tier's generation short edge (the next multiple of 32).
+pub const H3_CANVAS_SHORT_1080P: usize = 1088;
+/// The 1080P tier's pixel budget: 1088 x 1920, 2.02x [`H3_MAX_PIXELS`].
+pub const H3_MAX_PIXELS_1080P: usize = 1088 * 1920;
 /// The shortest clip [`H3Geometry`] admits: 4 s, which aligns to 107 frames.
 /// MiniMax's own H3 grid is "107-362 frames in steps of 17" (its `duration`
 /// is 4-15 s); 107 is `17 * 6 + 5`, 32 latents, one VAE decode chunk fewer
@@ -869,6 +883,10 @@ pub fn check_canvas(height: usize, width: usize) -> Result<(), String> {
             height * width
         ));
     }
+    check_aspect(height, width)
+}
+
+fn check_aspect(height: usize, width: usize) -> Result<(), String> {
     let ratio = width as f64 / height as f64;
     if !(0.25..=4.0).contains(&ratio) {
         return Err(format!(
@@ -876,6 +894,39 @@ pub fn check_canvas(height: usize, width: usize) -> Result<(), String> {
         ));
     }
     Ok(())
+}
+
+/// [`check_canvas`] for a server that serves the opt-in 1080P tier: a canvas
+/// within [`H3_MAX_PIXELS`] passes as before, and one above it passes up to
+/// [`H3_MAX_PIXELS_1080P`] (1088 x 1920). Same multiple-of-32 and aspect rules.
+/// The model was not trained above 768 x 1344; the 1080P tier is validated in
+/// docs/serve/h3-1080p-and-upscaler.md.
+pub fn check_canvas_1080p(height: usize, width: usize) -> Result<(), String> {
+    if height * width <= H3_MAX_PIXELS {
+        return check_canvas(height, width);
+    }
+    let m = H3_CANVAS_MULTIPLE;
+    if !height.is_multiple_of(m) || !width.is_multiple_of(m) {
+        return Err(format!(
+            "H3 height and width must be positive multiples of {m}, got {height}x{width}"
+        ));
+    }
+    if height * width > H3_MAX_PIXELS_1080P {
+        return Err(format!(
+            "H3 canvas {height}x{width} is {} pixels, above the 1080P tier's {H3_MAX_PIXELS_1080P} ({H3_CANVAS_SHORT_1080P}x1920)",
+            height * width
+        ));
+    }
+    check_aspect(height, width)
+}
+
+/// The delivered size of a 1080P-tier generation canvas `(height, width)`:
+/// each side of [`H3_CANVAS_SHORT_1080P`] is centre-cropped to
+/// [`H3_SHORT_EDGE_1080P`] (1088x1920 -> 1080x1920, 1088x1088 -> 1080x1080,
+/// 1088x1440 -> 1080x1440). Other sides (21:9 is 960x2176) are kept.
+pub fn delivered_1080p(height: usize, width: usize) -> (usize, usize) {
+    let crop = |v: usize| if v == H3_CANVAS_SHORT_1080P { H3_SHORT_EDGE_1080P } else { v };
+    (crop(height), crop(width))
 }
 
 /// `align_num_frames`: round up to the next `17 n + 5`.
@@ -970,6 +1021,17 @@ impl H3Geometry {
         Self::new(height, width, requested_frames)
     }
 
+    /// [`Self::new`] validated by [`check_canvas_1080p`]: the 1080P tier's
+    /// canvases (up to 1088 x 1920) as well as the trained ones.
+    pub fn checked_1080p(
+        height: usize,
+        width: usize,
+        requested_frames: usize,
+    ) -> Result<Self, String> {
+        check_canvas_1080p(height, width)?;
+        Self::new(height, width, requested_frames)
+    }
+
     /// The default 16:9 canvas for a duration in whole seconds.
     pub fn default_16x9(seconds: usize) -> Result<Self, String> {
         let (height, width) = resolve_canvas_size(16.0, 9.0)?;
@@ -1041,6 +1103,33 @@ mod tests {
         assert!(check_canvas(0, 640).is_err());
         // Frame counts outside 5..15 s stay refused by the geometry.
         assert!(H3Geometry::checked(480, 832, 24).is_err());
+    }
+
+    #[test]
+    fn the_1080p_tier_admits_its_canvases_only() {
+        // The trained canvases pass unchanged, with the same hints.
+        assert!(check_canvas_1080p(768, 1344).is_ok());
+        assert!(check_canvas_1080p(720, 1280).unwrap_err().contains("704x1280"));
+        // 16:9, 9:16, 1:1, 4:3 at the 1088 short edge; 21:9 in the budget.
+        for (h, w) in [(1088, 1920), (1920, 1088), (1088, 1088), (1088, 1440), (960, 2176)] {
+            assert!(check_canvas_1080p(h, w).is_ok(), "{h}x{w}");
+            assert!(check_canvas(h, w).is_err(), "{h}x{w} is above the trained cap");
+        }
+        let g = H3Geometry::checked_1080p(1088, 1920, 124).unwrap();
+        assert_eq!(g.token_grid, (37, 34, 60));
+        assert!(H3Geometry::checked(1088, 1920, 124).is_err());
+        // Above the tier, off the multiple, or outside the aspect range.
+        assert!(check_canvas_1080p(1088, 1952).unwrap_err().contains("1080P"));
+        assert!(check_canvas_1080p(1080, 1920).unwrap_err().contains("multiples"));
+        assert!(check_canvas_1080p(1440, 1440).is_ok());
+        assert!(check_canvas_1080p(1472, 1472).is_err());
+        assert!(check_canvas_1080p(544, 2176).is_ok());
+        assert!(check_canvas_1080p(512, 2176).is_err());
+        // Delivered sizes: 1088 sides crop to 1080.
+        assert_eq!(delivered_1080p(1088, 1920), (1080, 1920));
+        assert_eq!(delivered_1080p(1920, 1088), (1920, 1080));
+        assert_eq!(delivered_1080p(1088, 1088), (1080, 1080));
+        assert_eq!(delivered_1080p(960, 2176), (960, 2176));
     }
 
     #[test]

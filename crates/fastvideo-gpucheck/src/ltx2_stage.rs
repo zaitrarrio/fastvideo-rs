@@ -324,6 +324,22 @@ pub enum Stage {
         /// be `last` (`num_frames - 1`). Repeatable.
         #[arg(long = "cond-image")]
         cond_image: Vec<String>,
+        /// IC-LoRA reference-to-video (`ic_lora.py --video-conditioning`): a
+        /// still (the Ingredients reference sheet) looped into a static clip
+        /// of the output's length, conditioned on at stage 1 with the
+        /// `--ic-lora` fused. Needs `--two-stage` and runs a dense stage 2.
+        #[arg(long)]
+        reference: Option<PathBuf>,
+        /// The IC-LoRA file (`ltx-2.5-22b-ic-lora-ingredients-0.9.safetensors`).
+        /// Default: `FASTVIDEO_LTX2_IC_LORA`.
+        #[arg(long)]
+        ic_lora: Option<PathBuf>,
+        /// `--reference`'s conditioning strength (denoise mask `1 − s`), 0 to 1.
+        #[arg(long, default_value_t = 1.0)]
+        reference_strength: f32,
+        /// The IC-LoRA's stage-1 fuse strength.
+        #[arg(long, default_value_t = 1.0)]
+        ic_lora_strength: f32,
         /// LTX-2.5 stage-2 Sol route (needs `--two-stage`, 3 refine steps):
         /// video self-attention on layer 0 dense, layers 1-47 on the Sol-Attn
         /// kernel at tau 1.0 / 1.25 / 1.5 (one per forward, `thresh_type=diag`,
@@ -609,6 +625,10 @@ pub fn run(report: &mut Report, stage: &Stage) -> StageResult<()> {
             diff_vae,
             image,
             cond_image,
+            reference,
+            ic_lora,
+            reference_strength,
+            ic_lora_strength,
             sol_stage2,
             dense_stage2,
             pisa_stage2,
@@ -621,6 +641,12 @@ pub fn run(report: &mut Report, stage: &Stage) -> StageResult<()> {
             }
             if *sol_stage2 && *dense_stage2 {
                 return Err(anyhow::anyhow!("--sol-stage2 and --dense-stage2 conflict").into());
+            }
+            if reference.is_some() && !*dense_stage2 {
+                return Err(anyhow::anyhow!(
+                    "--reference runs `ICLoraPipeline`, whose stage 2 is dense: pass --dense-stage2"
+                )
+                .into());
             }
             // The stage-2 route: command line, else the technique profile,
             // else the recipe default (docs/techniques.md).
@@ -683,6 +709,7 @@ pub fn run(report: &mut Report, stage: &Stage) -> StageResult<()> {
                         .transpose()
                         .map_err(|e| anyhow::anyhow!(e))?,
                     tae: ltx_tae_weights.clone(),
+                    ic_lora: ic_lora.clone(),
                 },
                 &match prompts {
                     Some(file) => (crate::benchmark::load_prompts(file, *seed)?, true),
@@ -709,6 +736,13 @@ pub fn run(report: &mut Report, stage: &Stage) -> StageResult<()> {
                     skip_audio_decode: *skip_audio_decode,
                     sink_check: *sink_check,
                     cond_images: cond_image.clone(),
+                    reference: reference.clone().map(|path| {
+                        fastvideo_cudarc::ltx2::pipeline::IcReference {
+                            path,
+                            strength: *reference_strength,
+                            lora_strength: *ic_lora_strength,
+                        }
+                    }),
                 },
             )
         }
@@ -1967,8 +2001,15 @@ fn gen(
             .map(|s| parse_cond_image(s, g.num_frames))
             .collect::<StageResult<Vec<_>>>()?,
         skip_audio_decode: extras.skip_audio_decode,
+        reference: extras.reference.clone(),
     };
     report.set("skip_audio_decode", extras.skip_audio_decode);
+    if let Some(r) = &extras.reference {
+        report.set(
+            "reference",
+            json!({"path": r.path.display().to_string(), "strength": r.strength, "ic_lora_strength": r.lora_strength}),
+        );
+    }
     report.set("sink_check", extras.sink_check);
     report.set(
         "request",
@@ -2088,7 +2129,7 @@ fn gen(
         report.set(
         &if multi { format!("timings/{}", spec.name) } else { "timings".to_string() },
         json!({
-            "warm": warm, "wall_s": wall_s, "generate_s": generate_s, "load_s": pipeline.load_s, "text_s": t.text_s,
+            "warm": warm, "wall_s": wall_s, "generate_s": generate_s, "load_s": pipeline.load_s, "text_s": t.text_s, "image_s": t.image_s,
             "denoise_s": t.denoise_s, "stage1_s": t.stage1_s, "upsample_s": t.upsample_s, "stage2_s": t.stage2_s,
             "step_s": t.step_s, "decode_audio_s": t.decode_audio_s, "decode_video_s": t.decode_video_s, "video_encode_s": t.video_encode_s, "write_s": t.write_s,
             "writer": t.writer.as_ref().map(writer_json),
@@ -2280,6 +2321,8 @@ struct GenExtras {
     sink_check: bool,
     /// `--cond-image` specs.
     cond_images: Vec<String>,
+    /// `--reference` (IC-LoRA reference-to-video).
+    reference: Option<fastvideo_cudarc::ltx2::pipeline::IcReference>,
 }
 
 /// `PATH@FRAME[@STRENGTH[@CRF]]` → a conditioning image.
@@ -2472,6 +2515,7 @@ fn ltx2_benchmark(b: &Ltx2Bench<'_>) -> serde_json::Value {
         "decode_s": t.decode_audio_s + t.decode_video_s,
         "load_s": b.load_s,
         "text_s": t.text_s,
+        "image_s": t.image_s,
         "text_cache": b.out.text.cache.as_str(),
         "stage_1_seconds": t.stage1_s,
         "stage_2_seconds": t.upsample_s + t.stage2_s,

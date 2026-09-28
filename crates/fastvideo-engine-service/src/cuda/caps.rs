@@ -18,6 +18,7 @@
 //! | `ltx-pro` | `ltx25-distill-dense` | LTX-2.5 22B distilled two-stage (8 + 3), dense stage 2, conv VAE | `ltx2/ltx25_distill_dense` | Only LTX-2.5 generation path; dense (non-lossy) stage 2, full VAE |
 //! | `ltx-turbo` | `ltx25-distill-sol` | LTX-2.5 distilled two-stage, Sol stage 2 | `ltx2/ltx25_distill_sol` | The reference single-GPU route; passes the gate |
 //! | `ltx-draft` | `ltx25-distill-sol-nvfp4-taehv` | + NVFP4 video FFN + TAEHV (`taeltx2_3_wide`) decode | `ltx2/ltx25_distill_sol_nvfp4` | Faster, fails sharpness at 4K (draft) |
+//! | (`ltx-pro` Ref2V) | `ltx25-ref2v` | the `ltx-pro` recipe plus the Ingredients IC-LoRA fused at stage 1 (`ICLoraPipeline`): reference-to-video only, one reference sheet, 1536x896 default | `ltx2/ltx25_distill_dense` | The LTX reference mode (docs/ports/ltx-ref2v.md); `route_task` sends `ltx-pro` Ref2V requests here |
 //! | `wan-max` | `wan22-ti2v-5b` | Wan2.2 TI2V-5B, 50 UniPC steps, CFG 5, shift 5, full Wan 2.2 VAE, 704x1280x121 @ 24 fps (short edges 704, 576, 480; up to 161 frames) | none | The checkpoint's recommended recipe |
 //! | `wan-turbo` | `fastwan22-ti2v-5b` | FastWan2.2 TI2V-5B (FullAttn) DMD 3-step (1000/757/522), shift 5, full Wan 2.2 VAE, 704x1280x121 @ 24 fps, same canvas and frames as `wan-max` | none | fal's `fal-ai/wan/v2.2-5b/text-to-video/fast-wan` model (docs/serve/fal-parity.md §3) |
 //! | `wan-draft` | `fastwan22-ti2v-5b-taehv` | the turbo recipe decoded by TAEHV (`taew2_2`) | none | Tiny decoder: faster, lossy (draft) |
@@ -129,6 +130,12 @@ pub struct H3Recipe {
     /// canvas after the load, before the model is reported ready.
     #[serde(default)]
     pub warmup: bool,
+    /// The opt-in native 1080P tier (short edge 1080, generated at
+    /// 1920x1088 and cropped; docs/serve/h3-1080p-and-upscaler.md). Offered
+    /// only when the GPU passes the tier's memory plan ([`gate_h3_1080p`]).
+    /// Catalog: h3-max and h3-turbo; `h3_1080p = false` turns it off.
+    #[serde(default)]
+    pub hd_1080p: bool,
 }
 
 fn auto_str() -> String {
@@ -173,6 +180,11 @@ pub struct Ltx2Recipe {
     pub canvas: (u32, u32),
     pub stage1_steps: u32,
     pub refine_steps: u32,
+    /// Reference-to-video: the IC-LoRA (the Ingredients reference-sheet LoRA)
+    /// fused into stage 1 (`PipelineOptions::ic_lora`). The model then serves
+    /// `Task::Ref2V` only, with a dense stage 2 (`ICLoraPipeline`).
+    #[serde(default)]
+    pub ic_lora: Option<PathBuf>,
 }
 
 /// Wan sampler.
@@ -421,7 +433,12 @@ impl CudaModel {
                 .to_owned(),
                 if r.tae.is_some() { "taehv" } else { "full" }.to_owned(),
                 format!(
-                    "LTX-{} distilled {}, {} stage 2{}{}",
+                    "{}LTX-{} distilled {}, {} stage 2{}{}",
+                    if r.ic_lora.is_some() {
+                        "Reference-to-video (Ingredients IC-LoRA at stage 1, one reference sheet): "
+                    } else {
+                        ""
+                    },
                     match r.version {
                         LtxVersion::V23 => "2.3",
                         LtxVersion::V25 => "2.5",
@@ -514,10 +531,43 @@ fn h3_caps(id: &str, r: &H3Recipe) -> ModelCaps {
             short_edges: vec![r.short_edge],
             ..base
         }
+    } else if r.hd_1080p && !r.ref2va {
+        // 768 (default), 480, then the opt-in 1080 tier with its own budget.
+        base.with_h3_1080p()
     } else {
         base
     };
     c
+}
+
+/// Turns the native 1080P tier off on every H3 model when the GPU has less
+/// memory than the tier's plan (`plan_1080p_min_device_bytes`, about 72 GiB:
+/// 80 GB and 96 GB cards keep it, 48 GB ones do not). `device_total` is the
+/// device's memory (under `FASTVIDEO_DEVICE_BUDGET_GIB`, the budget); `None`
+/// (not known) turns it off. Returns what it turned off, for the log.
+pub fn gate_h3_1080p(models: &mut [CudaModel], device_total: Option<u64>) -> Option<String> {
+    let need = fastvideo_models::h3::memory::plan_1080p_min_device_bytes();
+    if device_total.is_some_and(|t| t >= need) {
+        return None;
+    }
+    let mut off = Vec::new();
+    for m in models.iter_mut() {
+        if let CudaRecipe::H3(r) = &mut m.recipe {
+            if r.hd_1080p {
+                r.hd_1080p = false;
+                off.push(m.id.as_str().to_owned());
+            }
+        }
+    }
+    let gib = |b: u64| b as f64 / f64::from(1u32 << 30);
+    (!off.is_empty()).then(|| {
+        format!(
+            "H3 1080P tier off for {}: the device has {} and the tier's memory plan needs {:.1} GiB",
+            off.join(", "),
+            device_total.map_or("unknown memory".to_owned(), |t| format!("{:.1} GiB", gib(t))),
+            gib(need)
+        )
+    })
 }
 
 /// LTX caps from the model config (audio from the vocoder).
@@ -525,6 +575,9 @@ fn ltx2_caps(id: &str, r: &Ltx2Recipe) -> ModelCaps {
     let cfg = ltx_config(r.version);
     let fps = cfg.defaults.frame_rate.round() as u32;
     let grid = FrameGrid::new(8, 1, 9, 481, 121);
+    if r.ic_lora.is_some() {
+        return ltx2_ref_caps(id, r, fps);
+    }
     ModelCaps {
         id: ModelId::new(id),
         family: Family::Ltx2,
@@ -555,6 +608,7 @@ fn ltx2_caps(id: &str, r: &Ltx2Recipe) -> ModelCaps {
             // at 1088 and cropped back, ltx §3.1).
             short_edges: vec![1080, 720, 1440, 2160],
             pad_and_crop: true,
+            hd: None,
         },
         refs: RefLimits::none(),
         // Distilled LTX-2.5 is unguided and the stage steps are fixed by the
@@ -566,6 +620,42 @@ fn ltx2_caps(id: &str, r: &Ltx2Recipe) -> ModelCaps {
         resident: true,
         tier: None,
         recipe: None,
+    }
+}
+
+/// Stage-1 bucket of the Ingredients IC-LoRA (model card: trained at
+/// 768x448, 121 frames, 24 fps); the two-stage output is twice that.
+pub const LTX_REF_CANVAS: (u32, u32) = (1536, 896);
+/// Frame ceiling of LTX reference-to-video: the reference doubles stage 1's
+/// sequence (and the IC-LoRA keeps an unfused copy of the weights it
+/// touches), so the clip stays at 10 s (the LoRA was trained on 121 frames).
+pub const LTX_REF_FRAMES_MAX: u32 = 241;
+
+/// LTX-2.5 reference-to-video (the IC-LoRA companion of `ltx-pro`).
+fn ltx2_ref_caps(id: &str, r: &Ltx2Recipe, fps: u32) -> ModelCaps {
+    let base = ltx2_caps(id, &Ltx2Recipe { ic_lora: None, ..r.clone() });
+    let grid = FrameGrid::new(8, 1, 9, LTX_REF_FRAMES_MAX, 121);
+    ModelCaps {
+        tasks: [Task::Ref2V].into_iter().collect(),
+        stream: Some(StreamCaps::Clip {
+            min_s: grid.min as f32 / fps as f32,
+            max_s: grid.max as f32 / fps as f32,
+        }),
+        frames: grid,
+        canvas: CanvasCaps {
+            // The first tier is the default: 16:9 at 896 is 1600x896 (stage 1
+            // 800x448); fal's `ingredient` default is exactly 1536x896.
+            short_edges: vec![LTX_REF_CANVAS.1, 720, 1080],
+            max_area: 1920 * 1088,
+            ..base.canvas
+        },
+        refs: RefLimits::ltx_ingredients(),
+        knobs: KnobCaps {
+            seed: true,
+            reference_strength: true,
+            ..KnobCaps::default()
+        },
+        ..base
     }
 }
 
@@ -615,6 +705,7 @@ fn wan_caps(id: &str, r: &WanRecipe) -> ModelCaps {
             aspect: (0.25, 4.0),
             short_edges: r.short_edges.clone(),
             pad_and_crop: false,
+            hd: None,
         },
         refs: RefLimits::none(),
         knobs,
@@ -671,6 +762,7 @@ fn h3(
         ref_weights: None,
         i2v_encoder: auto_str(),
         warmup: false,
+        hd_1080p: false,
     }
 }
 
@@ -688,6 +780,7 @@ fn ltx25(layout: &WeightLayout, stage2: LtxStage2, profile: &str) -> Ltx2Recipe 
         canvas: (1920, 1080),
         stage1_steps: 8,
         refine_steps: 3,
+        ic_lora: None,
     }
 }
 
@@ -719,19 +812,22 @@ pub fn catalog(layout: &WeightLayout) -> Vec<CudaModel> {
         dense: true,
         ..h3(layout, "h3-8step", "8step", None, 8)
     };
-    let h3_turbo = h3(
-        layout,
-        "h3-base",
-        "4step-vsa",
-        Some("h3/fasth3_4step_vsa"),
-        4,
-    );
+    // h3-turbo and h3-max offer the native 1080P tier (9/9 coherent clips
+    // at 1920x1088 and 1088x1920, docs/serve/h3-1080p-and-upscaler.md).
+    let h3_turbo = H3Recipe {
+        hd_1080p: true,
+        ..h3(layout, "h3-base", "4step-vsa", Some("h3/fasth3_4step_vsa"), 4)
+    };
     let h3_draft = H3Recipe {
         taeh3: Some(tae("taeh3.safetensors")),
         short_edge: h3cfg::H3_SHORT_EDGE_480P as u32,
+        hd_1080p: false,
         ..h3_turbo.clone()
     };
-    let sol_h3 = h3(layout, "h3-base", "sol-h3", Some(SOL_H3_4STEP_PROFILE), 4);
+    let sol_h3 = H3Recipe {
+        hd_1080p: true,
+        ..h3(layout, "h3-base", "sol-h3", Some(SOL_H3_4STEP_PROFILE), 4)
+    };
     // Ref2VA (docs/ports/h3-ref2v.md): `transformer_ref/` and the turbo LoRA
     // live in `h3-ref2va`; the text encoder and both VAEs come from `h3-base`.
     let h3_ref = |recipe: &str, profile: &str, steps: u32| H3Recipe {
@@ -742,6 +838,17 @@ pub fn catalog(layout: &WeightLayout) -> Vec<CudaModel> {
     };
     let h3_ref_max = h3_ref("base", "h3/h3_ref2va_base", 49);
     let h3_ref_turbo = h3_ref("sol-h3-ref2va", "h3/sol_h3_ref2va", 4);
+    // Reference-to-video (docs/ports/ltx-ref2v.md): the dense two-stage with
+    // the Ingredients IC-LoRA at stage 1, as `ICLoraPipeline`.
+    let ltx_ref = Ltx2Recipe {
+        ic_lora: Some(
+            layout
+                .at(fastvideo_models::ltx2::lora::LTX25_INGREDIENTS_DIR)
+                .join(fastvideo_models::ltx2::lora::LTX25_INGREDIENTS_FILE),
+        ),
+        canvas: LTX_REF_CANVAS,
+        ..ltx25(layout, LtxStage2::Dense, "ltx2/ltx25_distill_dense")
+    };
     let ltx_draft = Ltx2Recipe {
         tae: Some(tae("taeltx2_3_wide.safetensors")),
         ..ltx25(layout, LtxStage2::Sol, LTX_DRAFT_PROFILE)
@@ -851,6 +958,14 @@ pub fn catalog(layout: &WeightLayout) -> Vec<CudaModel> {
             "ltx25-distill-two-stage-sol-nvfp4-taehv",
             CudaRecipe::Ltx2(ltx_draft),
         ),
+        // Reference-to-video companion of `ltx-pro`: the routing sends Ref2V
+        // requests for `ltx-pro` here.
+        CudaModel::new(
+            "ltx25-ref2v",
+            Some(Tier::Max),
+            "ltx25-ic-lora-ingredients-dense",
+            CudaRecipe::Ltx2(ltx_ref),
+        ),
         CudaModel::new(
             "wan22-ti2v-5b",
             Some(Tier::Max),
@@ -919,7 +1034,7 @@ pub struct ModelEntryCfg {
     pub weights: Option<PathBuf>,
     pub resident: bool,
     pub served_names: Vec<String>,
-    /// Optional per-model settings: `text_encoder`, `i2v_encoder`, `warmup`
+    /// Optional per-model settings: `text_encoder`, `i2v_encoder`, `warmup`, `h3_1080p`
     /// (H3), `text` (LTX), `adaln_cache` (H3), `taeh3` / `tae` (tiny
     /// decoders).
     pub extra: BTreeMap<String, String>,
@@ -996,6 +1111,23 @@ pub fn model_from_config(layout: &WeightLayout, e: &ModelEntryCfg) -> Result<Cud
                     }
                 };
             }
+            if let Some(w) = x("h3_1080p") {
+                r.hd_1080p = match w.as_str() {
+                    "true" => {
+                        if !r.hd_1080p {
+                            return Err(format!(
+                                "model `{}`: h3_1080p = true: the native 1080P tier is validated for h3-max and h3-turbo only",
+                                e.id
+                            ));
+                        }
+                        true
+                    }
+                    "false" => false,
+                    other => {
+                        return Err(format!("model `{}`: h3_1080p = {other:?} (true | false)", e.id))
+                    }
+                };
+            }
             if r.ref2va && r.warmup {
                 return Err(format!(
                     "model `{}`: warmup runs text- and image-to-video; a Ref2VA model serves references only",
@@ -1013,6 +1145,9 @@ pub fn model_from_config(layout: &WeightLayout, e: &ModelEntryCfg) -> Result<Cud
             }
             if let Some(t) = x("tae").filter(|_| r.tae.is_some()) {
                 r.tae = Some(t.into());
+            }
+            if let Some(t) = x("ic_lora").filter(|_| r.ic_lora.is_some()) {
+                r.ic_lora = Some(t.into());
             }
         }
         CudaRecipe::Wan(r) => {
@@ -1230,7 +1365,15 @@ mod tests {
         let h3 = get("fasth3-4step-vsa");
         assert_eq!(h3.audio.as_ref().unwrap().native_rate, 32_000);
         assert_eq!(h3.audio.as_ref().unwrap().channels, 2);
-        assert_eq!(h3.canvas.short_edges, vec![768, 480]);
+        assert_eq!(h3.canvas.short_edges, vec![768, 480, 1080]);
+        assert_eq!(h3.canvas.hd, Some(fastvideo_protocol::HdTier::h3_1080p()));
+        // The 1080 tier does not move the budgets of the others.
+        assert_eq!(h3.canvas.area_at(768), 768 * 1344);
+        assert_eq!(h3.canvas.area_at(1080), 1088 * 1920);
+        assert_eq!(fastvideo_protocol::canvas_for_aspect(&h3.canvas, 16.0 / 9.0, 480), (832, 480));
+        assert_eq!(fastvideo_protocol::canvas_for_aspect(&h3.canvas, 16.0 / 9.0, 768), (1344, 768));
+        assert_eq!(get("sol-h3").canvas.short_edges, vec![768, 480, 1080]);
+        assert_eq!(get("fasth3-8step-dense").canvas.short_edges, vec![768, 480]);
         assert_eq!(h3.frames.default, 124);
         assert!(h3.frames.contains(107) && h3.frames.contains(362));
         assert!(
@@ -1238,6 +1381,7 @@ mod tests {
         );
         let draft = get("fasth3-4step-vsa-480p-taeh3");
         assert_eq!(draft.canvas.short_edges, vec![480]);
+        assert_eq!(draft.canvas.hd, None);
         assert!(draft.canvas.area_at(480) >= 832 * 480);
         assert!(draft.canvas.area_at(480) < 768 * 1344);
         let ltx = get("ltx25-distill-sol");
@@ -1380,6 +1524,84 @@ mod tests {
     }
 
     #[test]
+    fn ltx_ref2v_is_the_task_companion_of_ltx_pro() {
+        use fastvideo_protocol::*;
+        let cat = catalog(&WeightLayout::default());
+        let m = cat.iter().find(|m| m.id.as_str() == "ltx25-ref2v").unwrap().clone();
+        let CudaRecipe::Ltx2(r) = &m.recipe else { panic!("ltx25-ref2v") };
+        assert_eq!(r.stage2, LtxStage2::Dense);
+        assert!(r.two_stage);
+        assert!(r
+            .ic_lora
+            .as_ref()
+            .unwrap()
+            .ends_with("ltx25-ic-lora-ingredients/ltx-2.5-22b-ic-lora-ingredients-0.9.safetensors"));
+        let c = m.caps();
+        assert_eq!(c.tasks.iter().copied().collect::<Vec<_>>(), vec![Task::Ref2V]);
+        assert_eq!(c.refs, RefLimits::ltx_ingredients());
+        assert!(c.knobs.seed && c.knobs.reference_strength && !c.knobs.steps);
+        assert_eq!(c.canvas.short_edges[0], 896);
+        assert_eq!((c.frames.max, c.frames.default), (LTX_REF_FRAMES_MAX, 121));
+        assert_eq!(c.tier, Some(Tier::Max));
+        assert!(m.describe().summary.starts_with("Reference-to-video"));
+        // No other LTX model takes the reference knobs.
+        for other in cat.iter().filter(|o| o.family() == Family::Ltx2 && o.id != m.id) {
+            assert!(!other.caps().knobs.reference_strength, "{}", other.id);
+            assert!(!other.caps().supports(Task::Ref2V), "{}", other.id);
+        }
+        // `ltx-pro` still names the plain model; its Ref2V requests route here.
+        let t = table(&cat);
+        assert_eq!(t.tier(Family::Ltx2, Tier::Max).unwrap().as_str(), "ltx25-distill-dense");
+        let models: Vec<&ModelCaps> = t.models().collect();
+        let base = t.resolve("ltx-pro").unwrap();
+        assert_eq!(route_task(base, Task::Ref2V, models.iter().copied()).id.as_str(), "ltx25-ref2v");
+        assert_eq!(route_task(base, Task::T2V, models.iter().copied()).id, base.id);
+        // fal `ingredient`'s default: the sheet at 1536x896, 121 frames, strengths.
+        let mut req = GenerationRequest::text(ProtocolId::Fal, "ltx-pro", "Reference sheet: a crab. Generated video: it walks.");
+        req.task = Task::Ref2V;
+        req.canvas = CanvasSpec::Exact { width: 1536, height: 896 };
+        req.references = vec![Reference {
+            kind: MediaKind::Image,
+            media: MediaRef::parse("https://e.x/sheet.png", "references").unwrap(),
+        }];
+        req.sampling.reference_strength = Some(0.8);
+        req.sampling.reference_lora_strength = Some(1.5);
+        let staged = StagedInputs {
+            references: vec![(
+                MediaKind::Image,
+                StagedMedia {
+                    path: "/stage/sheet.png".into(),
+                    mime: "image/png".into(),
+                    bytes: 1,
+                    probe: MediaProbe { width: Some(1536), height: Some(896), ..Default::default() },
+                },
+            )],
+            ..Default::default()
+        };
+        let j = negotiate(&req, &c, &staged).unwrap();
+        assert_eq!((j.width, j.height, j.num_frames), (1536, 896, 121));
+        assert_eq!(j.sampling.reference_lora_strength, Some(1.5));
+        // Two sheets, a strength above 1, or reference knobs on T2V are refused.
+        let mut two = req.clone();
+        two.references.push(two.references[0].clone());
+        assert!(negotiate(&two, &c, &staged).is_err());
+        let mut hot = req.clone();
+        hot.sampling.reference_strength = Some(1.2);
+        assert_eq!(negotiate(&hot, &c, &staged).unwrap_err().param.as_deref(), Some("reference_strength"));
+        let plain = get_caps(&cat, "ltx25-distill-dense");
+        let mut t2v = GenerationRequest::text(ProtocolId::Fal, "ltx-pro", "a cat");
+        t2v.sampling.reference_lora_strength = Some(1.0);
+        assert_eq!(
+            negotiate(&t2v, &plain, &StagedInputs::default()).unwrap_err().param.as_deref(),
+            Some("reference_lora_strength")
+        );
+    }
+
+    fn get_caps(cat: &[CudaModel], id: &str) -> ModelCaps {
+        cat.iter().find(|m| m.id.as_str() == id).unwrap().caps()
+    }
+
+    #[test]
     fn process_plans() {
         let cat = catalog(&WeightLayout::default());
         let pick = |ids: &[&str]| -> Vec<CudaModel> {
@@ -1441,6 +1663,23 @@ mod tests {
         assert!(h3(&with("warmup", "true")).unwrap().warmup);
         assert!(!h3(&with("warmup", "false")).unwrap().warmup);
         assert!(h3(&with("warmup", "yes")).is_err());
+        assert!(r.hd_1080p);
+        assert!(!h3(&with("h3_1080p", "false")).unwrap().hd_1080p);
+        assert!(h3(&with("h3_1080p", "true")).unwrap().hd_1080p);
+        assert!(h3(&with("h3_1080p", "on")).is_err());
+        let e8 = ModelEntryCfg { recipe: "8step".into(), ..with("h3_1080p", "true") };
+        assert!(model_from_config(&l, &e8).unwrap_err().contains("h3-max and h3-turbo"));
+        // The memory gate: 96 GB and 80 GB cards keep the tier, 48 GB ones not.
+        let gib = |g: f64| (g * f64::from(1u32 << 30)) as u64;
+        for (total, keep) in [(Some(gib(95.6)), true), (Some(gib(79.6)), true), (Some(gib(44.4)), false), (None, false)] {
+            let mut ms = vec![m.clone(), model_from_config(&l, &with("h3_1080p", "false")).unwrap()];
+            let off = gate_h3_1080p(&mut ms, total);
+            assert_eq!(off.is_none(), keep, "{total:?}");
+            assert_eq!(ms[0].caps().canvas.short_edges.contains(&1080), keep);
+            if let Some(o) = off {
+                assert!(o.contains("fasth3") && o.contains("memory plan"), "{o}");
+            }
+        }
         let t = CapabilityTable::build(vec![vec![(m.caps(), m.describe())]], &BTreeMap::new()).unwrap();
         assert_eq!(t.resolve("h3-turbo").unwrap().id.as_str(), "fasth3");
         for (fam, rec, want) in [("ltx2", "ltx-turbo", "ltx25-distill-sol"), ("wan", "", "fastwan22-ti2v-5b"), ("wan", "fastwan21-1.3b", "fastwan21-1.3b"), ("h3", "8step", "fasth3-8step-dense"), ("h3", "sol-h3", "sol-h3"), ("h3", "h3-max", "sol-h3")] {

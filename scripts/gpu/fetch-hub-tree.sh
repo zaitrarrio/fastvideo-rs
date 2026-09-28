@@ -17,7 +17,9 @@
 #   is a hard wall-clock cap: a detached backstop (setsid, survives this
 #   shell) deletes the pod regardless. FV_MIN_BALANCE (default 8) is the
 #   Runpod balance floor. The pod log and sha256.txt land in
-#   artifacts/runpod/fetch-<dest>-<volume>/.
+#   artifacts/runpod/fetch-<dest>-<volume>/ ('/' in <dest> becomes '-').
+#   FV_POD_PREFIX (default fv-p0-fetch) starts the pod name; FV_FETCH_VCPU
+#   (default 8) sizes the CPU pod when the datacentre is short of stock.
 set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(cd "$HERE/../.." && pwd)"
@@ -28,7 +30,7 @@ CAP_S="${FV_POD_CAP_S:-3600}"
 MIN_BALANCE="${FV_MIN_BALANCE:-8}"
 : "${RUNPOD_API_KEY:?RUNPOD_API_KEY missing}"
 dest="${1:?dest}"; rev="${2:?revision}"; expect="${3:-}"
-OUT="${FETCH_OUT:-$ROOT/artifacts/runpod/fetch-$dest-$VOL_NAME}"
+OUT="${FETCH_OUT:-$ROOT/artifacts/runpod/fetch-${dest//\//-}-$VOL_NAME}"
 
 log() { printf '[%s] %s\n' "$(date -u +%H:%M:%S)" "$*" >&2; }
 rest() {
@@ -50,11 +52,11 @@ vol_id="${vol% *}"; dc="${vol#* }"
 py_b64="$(base64 -w0 "$HERE/fetch-hub-tree.py")"
 exp_b64=""; [[ -n "$expect" ]] && exp_b64="$(base64 -w0 "$expect")"
 start='mkdir -p /srv && cd /srv && (python -m http.server 8000 --directory /srv >/dev/null 2>&1 &) && echo "$FETCH_PY" | base64 -d > /srv/fetch.py && pip install -q --no-cache-dir "huggingface_hub>=0.34" hf_xet >>/srv/log.txt 2>&1 && python /srv/fetch.py; sleep infinity'
-payload="$(jq -n --arg name "fv-p0-fetch-$dest-$(date -u +%m%d%H%M)" --arg vol "$vol_id" --arg dc "$dc" \
+payload="$(jq -n --arg name "${FV_POD_PREFIX:-fv-p0-fetch}-${dest##*/}-$(date -u +%m%d%H%M)" --arg vol "$vol_id" --arg dc "$dc" \
   --arg start "$start" --arg py "$py_b64" --arg repo "$repo" --arg rev "$rev" --arg dest "$dest" \
-  --arg globs "$globs" --arg exp "$exp_b64" --arg hf "${HF_TOKEN:-}" '{
+  --arg globs "$globs" --arg vcpu "${FV_FETCH_VCPU:-8}" --arg exp "$exp_b64" --arg hf "${HF_TOKEN:-}" '{
     name: $name, imageName: "python:3.12-slim", cloudType: "SECURE", computeType: "CPU",
-    cpuFlavorIds: ["cpu3c","cpu5c","cpu3g"], cpuFlavorPriority: "availability", vcpuCount: 8,
+    cpuFlavorIds: ["cpu3c","cpu5c","cpu3g"], cpuFlavorPriority: "availability", vcpuCount: ($vcpu|tonumber),
     containerDiskInGb: 20, networkVolumeId: $vol, volumeMountPath: "/workspace",
     dataCenterIds: [$dc], ports: ["8000/http"],
     dockerStartCmd: ["/bin/bash","-lc",$start],
@@ -62,7 +64,7 @@ payload="$(jq -n --arg name "fv-p0-fetch-$dest-$(date -u +%m%d%H%M)" --arg vol "
       + (if $exp != "" then {EXPECT_SHA256: $exp} else {} end)
       + (if $hf != "" then {HF_TOKEN: $hf} else {} end))
   }')"
-resp="$(rest POST /pods "$payload")"
+resp="$(rest POST /pods "$payload")" || { echo "pod create failed: $resp" >&2; exit 1; }
 id="$(jq -r '.id // empty' <<<"$resp")"
 [[ -n "$id" ]] || { echo "pod create failed: $resp" >&2; exit 1; }
 mkdir -p "$OUT"; echo "$id" >"$OUT/pod-id"

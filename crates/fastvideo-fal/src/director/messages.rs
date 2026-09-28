@@ -5,7 +5,7 @@
 //! type, an out-of-range value or an unknown `type` is refused with
 //! `error{code:"invalid_message"}` (a diagnostic: the message is dropped and
 //! the session continues). Values that are schema-valid but that we cannot
-//! serve (`resolution:"1080p"`, `audio_url`) are refused later with their
+//! serve (`resolution:"1080p"` without the H3 1080P tier, `audio_url`) are refused later with their
 //! own codes, by the control state machine.
 //!
 //! **Model → client** messages are built by the constructors at the bottom,

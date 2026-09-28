@@ -278,6 +278,32 @@ pub struct CanvasCaps {
     /// LTX: 1080 -> 1088 then crop (ltx §3.1). Exact canvases off the multiple
     /// are generated padded up and cropped back in post.
     pub pad_and_crop: bool,
+    /// An opt-in tier above the trained pixel budget (H3 1080P), also listed
+    /// in `short_edges`. `max_area` and [`CanvasCaps::area_at`] of the other
+    /// tiers ignore it. `None` on every other model.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hd: Option<HdTier>,
+}
+
+/// An opt-in canvas tier with its own pixel budget ([`CanvasCaps::hd`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct HdTier {
+    /// The delivered short edge (H3: 1080).
+    pub short_edge: u32,
+    /// Largest generation canvas area (H3: 1088*1920).
+    pub max_area: u64,
+}
+
+impl HdTier {
+    /// H3 1080P: short edge 1080, generated at 1088 on the short side and
+    /// centre-cropped back; at most 1088x1920 pixels
+    /// (docs/serve/h3-1080p-and-upscaler.md).
+    pub fn h3_1080p() -> Self {
+        Self {
+            short_edge: h3::H3_SHORT_EDGE_1080P as u32,
+            max_area: h3::H3_MAX_PIXELS_1080P as u64,
+        }
+    }
 }
 
 impl CanvasCaps {
@@ -289,7 +315,24 @@ impl CanvasCaps {
             aspect: (0.25, 4.0),
             short_edges: vec![h3::H3_SHORT_EDGE as u32],
             pad_and_crop: false,
+            hd: None,
         }
+    }
+
+    /// Adds the H3 1080P tier ([`HdTier::h3_1080p`]) after the other tiers
+    /// (the first tier stays the default).
+    pub fn with_h3_1080p(mut self) -> Self {
+        let t = HdTier::h3_1080p();
+        if !self.short_edges.contains(&t.short_edge) {
+            self.short_edges.push(t.short_edge);
+        }
+        self.hd = Some(t);
+        self
+    }
+
+    /// Whether `short_edge` is the opt-in [`CanvasCaps::hd`] tier.
+    pub fn is_hd(&self, short_edge: u32) -> bool {
+        self.hd.is_some_and(|t| t.short_edge == short_edge)
     }
 
     /// Whether `width / height` lies within [`CanvasCaps::aspect`].
@@ -304,12 +347,17 @@ impl CanvasCaps {
 
     /// The pixel budget at `short_edge`: `max_area` scaled by
     /// `(short_edge / largest tier)^2`. For H3 768 this is `768*1344`; for 480
-    /// it admits 832x480 at 16:9 (fal §6).
+    /// it admits 832x480 at 16:9 (fal §6). The [`CanvasCaps::hd`] tier has its
+    /// own budget and is not "the largest tier" for the others.
     pub fn area_at(&self, short_edge: u32) -> u64 {
+        if let Some(t) = self.hd.filter(|t| t.short_edge == short_edge) {
+            return t.max_area;
+        }
         let top = self
             .short_edges
             .iter()
             .copied()
+            .filter(|&s| !self.is_hd(s))
             .max()
             .unwrap_or(short_edge)
             .max(1);
@@ -340,6 +388,17 @@ impl RefLimits {
             total: 12,
         }
     }
+    /// LTX-2.5 reference-to-video (the Ingredients IC-LoRA): one reference
+    /// image, the reference sheet (`ic_lora.py` takes one reference per
+    /// conditioning; the sheet carries every subject in its panels).
+    pub fn ltx_ingredients() -> Self {
+        Self {
+            images: 1,
+            videos: 0,
+            audio: 0,
+            total: 1,
+        }
+    }
     /// No references at all.
     pub fn none() -> Self {
         Self::default()
@@ -358,10 +417,15 @@ pub struct KnobCaps {
     pub guidance: bool,
     pub guidance_2: bool,
     pub flow_shift: bool,
+    /// `SamplingOverrides::reference_strength` and `reference_lora_strength`
+    /// (LTX-2.5 reference-to-video only).
+    #[serde(default)]
+    pub reference_strength: bool,
 }
 
 impl KnobCaps {
-    /// Every knob honoured.
+    /// Every sampling knob honoured (the reference strengths are a
+    /// reference-to-video model's own and stay off).
     pub fn all() -> Self {
         Self {
             seed: true,
@@ -370,6 +434,7 @@ impl KnobCaps {
             guidance: true,
             guidance_2: true,
             flow_shift: true,
+            reference_strength: false,
         }
     }
 }

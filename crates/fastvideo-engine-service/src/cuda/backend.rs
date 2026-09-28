@@ -171,7 +171,20 @@ impl CudaBackend {
     /// Checks the model set ([`ProcessPlan`]) and installs its process-wide
     /// settings. Call at process start, before any other CUDA/pipeline use.
     /// Nothing loads here: the executor loads the resident models (warm pool).
-    pub fn new(cfg: CudaBackendConfig) -> Result<Self, ApiError> {
+    pub fn new(mut cfg: CudaBackendConfig) -> Result<Self, ApiError> {
+        // The caps are published before the executor creates the context:
+        // decide the H3 1080P tier on the device's total memory now.
+        if cfg.models.iter().any(|m| matches!(&m.recipe, CudaRecipe::H3(r) if r.hd_1080p)) {
+            let total =
+                fastvideo_cudarc::wan::device::device_total_memory(cfg.device as usize);
+            match super::caps::gate_h3_1080p(&mut cfg.models, total) {
+                Some(off) => tracing::warn!("{off}"),
+                None => tracing::info!(
+                    device_gib = total.map(|t| t as f64 / f64::from(1u32 << 30)),
+                    "H3 1080P tier offered"
+                ),
+            }
+        }
         let plan = ProcessPlan::for_models(&cfg.models).map_err(ApiError::internal)?;
         install_process_plan(&plan)?;
         let mut models = BTreeMap::new();

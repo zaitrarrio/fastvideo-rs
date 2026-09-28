@@ -1,0 +1,361 @@
+{
+  "checks": [
+    {
+      "limits": {},
+      "name": "load",
+      "ok": true,
+      "values": {
+        "mem_used_mib": 21794,
+        "seconds": 97.757709585
+      }
+    },
+    {
+      "limits": {},
+      "name": "cold_generation",
+      "ok": true,
+      "values": {
+        "audio_generate_s": 0.0,
+        "audio_s": 0.0,
+        "decode_s": 13.898725584,
+        "decoder": "wan-vae",
+        "denoise_s": 5.105995516,
+        "step_s": [
+          2.145314865,
+          1.477732285,
+          1.4826702059999999
+        ],
+        "text_cache": "miss",
+        "text_s": 4.294062212,
+        "total_s": 23.646092779,
+        "video_encode_s": 0.207946565,
+        "video_push_s": 0.000123691,
+        "video_rgb_s": 0.1844371010089058,
+        "video_vae_s": 13.637669357299805,
+        "video_wait_s": 1.75367263,
+        "write_s": 0.315307022
+      }
+    },
+    {
+      "limits": {},
+      "name": "timings/h3-demo",
+      "ok": true,
+      "values": {
+        "audio_generate_s": 0.0,
+        "audio_s": 0.0,
+        "decode_s": 13.811376379,
+        "decoder": "wan-vae",
+        "denoise_s": 4.489519554,
+        "frames_sha256": "06c447b5f6d5c69899079ba1ca79ff978560bf405c223cd21cacfd4d65b54730",
+        "peak_mib": 61196,
+        "step_s": [
+          1.491692237,
+          1.497709708,
+          1.4998375990000001
+        ],
+        "text_cache": "hit",
+        "text_s": 0.016009043,
+        "total_s": 18.369799815,
+        "video_encode_s": 0.191629372,
+        "video_push_s": 0.000116921,
+        "video_rgb_s": 0.16553525699554764,
+        "video_vae_s": 13.605277572631836,
+        "video_wait_s": 1.758983471,
+        "write_s": 0.253633292
+      }
+    },
+    {
+      "limits": {
+        "expected": 121
+      },
+      "name": "frames/h3-demo",
+      "ok": true,
+      "values": {
+        "decoded": 121,
+        "written": 121
+      }
+    },
+    {
+      "limits": {
+        "std_min": 0.02
+      },
+      "name": "middle_frame_not_flat/h3-demo",
+      "ok": true,
+      "values": {
+        "frame": "/fvscratch/runs/wan/9b2c963-09282019/fw22/frames/h3-demo/frame-060.png",
+        "mean": 0.2339811140524606,
+        "std": 0.1854095812579086
+      }
+    },
+    {
+      "limits": {},
+      "name": "timings/ltx-multishot",
+      "ok": true,
+      "values": {
+        "audio_generate_s": 0.0,
+        "audio_s": 0.0,
+        "decode_s": 13.868197858,
+        "decoder": "wan-vae",
+        "denoise_s": 4.510762507,
+        "frames_sha256": "2ef87579d23a3430f893f32be179dfd64b94cb94837b64c094e25f1f6e655470",
+        "peak_mib": 61196,
+        "step_s": [
+          1.503865139,
+          1.5017557990000001,
+          1.5048534089999999
+        ],
+        "text_cache": "miss",
+        "text_s": 0.063306571,
+        "total_s": 18.475523032,
+        "video_encode_s": 0.219563156,
+        "video_push_s": 0.00011861,
+        "video_rgb_s": 0.15883113599678764,
+        "video_vae_s": 13.635287658691405,
+        "video_wait_s": 1.760975503,
+        "write_s": 0.254587363
+      }
+    },
+    {
+      "limits": {
+        "expected": 121
+      },
+      "name": "frames/ltx-multishot",
+      "ok": true,
+      "values": {
+        "decoded": 121,
+        "written": 121
+      }
+    },
+    {
+      "limits": {
+        "std_min": 0.02
+      },
+      "name": "middle_frame_not_flat/ltx-multishot",
+      "ok": true,
+      "values": {
+        "frame": "/fvscratch/runs/wan/9b2c963-09282019/fw22/frames/ltx-multishot/frame-060.png",
+        "mean": 0.4360437164596957,
+        "std": 0.2972714383325306
+      }
+    },
+    {
+      "limits": {},
+      "name": "timings/ltx-newsbroadcast",
+      "ok": true,
+      "values": {
+        "audio_generate_s": 0.0,
+        "audio_s": 0.0,
+        "decode_s": 13.87657573,
+        "decoder": "wan-vae",
+        "denoise_s": 4.531499351,
+        "frames_sha256": "935ac45ddc8b8bba2fda98f987209247a66e5bdadc3877eb94d59b7d8692d1fd",
+        "peak_mib": 61196,
+        "step_s": [
+          1.50655902,
+          1.512106201,
+          1.512564921
+        ],
+        "text_cache": "miss",
+        "text_s": 0.214406715,
+        "total_s": 18.655622892,
+        "video_encode_s": 0.206279374,
+        "video_push_s": 0.000134959,
+        "video_rgb_s": 0.16519259100180758,
+        "video_vae_s": 13.656045333862304,
+        "video_wait_s": 1.764044233,
+        "write_s": 0.255700262
+      }
+    },
+    {
+      "limits": {
+        "expected": 121
+      },
+      "name": "frames/ltx-newsbroadcast",
+      "ok": true,
+      "values": {
+        "decoded": 121,
+        "written": 121
+      }
+    },
+    {
+      "limits": {
+        "std_min": 0.02
+      },
+      "name": "middle_frame_not_flat/ltx-newsbroadcast",
+      "ok": true,
+      "values": {
+        "frame": "/fvscratch/runs/wan/9b2c963-09282019/fw22/frames/ltx-newsbroadcast/frame-060.png",
+        "mean": 0.3863423926284135,
+        "std": 0.30974614723194827
+      }
+    },
+    {
+      "limits": {},
+      "name": "timings/ltx-frogyoga",
+      "ok": true,
+      "values": {
+        "audio_generate_s": 0.0,
+        "audio_s": 0.0,
+        "decode_s": 13.854139337,
+        "decoder": "wan-vae",
+        "denoise_s": 4.548532184,
+        "frames_sha256": "09156238743c730e6d11ba15c0ac071ef36a57eda01a46c19bf9b8af7f942165",
+        "peak_mib": 61196,
+        "step_s": [
+          1.512637201,
+          1.516078901,
+          1.519560801
+        ],
+        "text_cache": "miss",
+        "text_s": 0.096251846,
+        "total_s": 18.530814241999998,
+        "video_encode_s": 0.170796428,
+        "video_push_s": 0.000125219,
+        "video_rgb_s": 0.16269215199823864,
+        "video_vae_s": 13.668819274902344,
+        "video_wait_s": 1.7660604519999998,
+        "write_s": 0.253678612
+      }
+    },
+    {
+      "limits": {
+        "expected": 121
+      },
+      "name": "frames/ltx-frogyoga",
+      "ok": true,
+      "values": {
+        "decoded": 121,
+        "written": 121
+      }
+    },
+    {
+      "limits": {
+        "std_min": 0.02
+      },
+      "name": "middle_frame_not_flat/ltx-frogyoga",
+      "ok": true,
+      "values": {
+        "frame": "/fvscratch/runs/wan/9b2c963-09282019/fw22/frames/ltx-frogyoga/frame-060.png",
+        "mean": 0.33044427801857573,
+        "std": 0.2717403483097052
+      }
+    },
+    {
+      "limits": {},
+      "name": "timings/spark-mountain-lake",
+      "ok": true,
+      "values": {
+        "audio_generate_s": 0.0,
+        "audio_s": 0.0,
+        "decode_s": 13.87159664,
+        "decoder": "wan-vae",
+        "denoise_s": 4.557949835,
+        "frames_sha256": "ccccb58c8967375df2df84ff1eecc43585ad0613290317f2ed9b5a4a3264d510",
+        "peak_mib": 61196,
+        "step_s": [
+          1.517414332,
+          1.5199251120000001,
+          1.5203707020000001
+        ],
+        "text_cache": "miss",
+        "text_s": 0.039162977,
+        "total_s": 18.502031627,
+        "video_encode_s": 0.17810666,
+        "video_push_s": 0.0001207,
+        "video_rgb_s": 0.16217194500458518,
+        "video_vae_s": 13.678921768188477,
+        "video_wait_s": 1.767539805,
+        "write_s": 0.246446741
+      }
+    },
+    {
+      "limits": {
+        "expected": 121
+      },
+      "name": "frames/spark-mountain-lake",
+      "ok": true,
+      "values": {
+        "decoded": 121,
+        "written": 121
+      }
+    },
+    {
+      "limits": {
+        "std_min": 0.02
+      },
+      "name": "middle_frame_not_flat/spark-mountain-lake",
+      "ok": true,
+      "values": {
+        "frame": "/fvscratch/runs/wan/9b2c963-09282019/fw22/frames/spark-mountain-lake/frame-060.png",
+        "mean": 0.29477524294049756,
+        "std": 0.22421943589429658
+      }
+    }
+  ],
+  "context": {
+    "benchmark_json": "/fvscratch/runs/wan/9b2c963-09282019/fw22/benchmark.json",
+    "cuda_feature": true,
+    "device": {
+      "compute_capability": [
+        12,
+        0
+      ],
+      "free_mib": 96545,
+      "name": "NVIDIA RTX PRO 6000 Blackwell Server Edition",
+      "spec": "cuda",
+      "total_mib": 97251
+    },
+    "mode": "fast",
+    "request": {
+      "cond_cache": true,
+      "dmd": true,
+      "dmd_steps": [
+        1000,
+        757,
+        522
+      ],
+      "flow_shift": 5.0,
+      "guidance": 1.0,
+      "height": 704,
+      "num_frames": 121,
+      "preset": "fast_wan_2_2_ti2v_5b",
+      "prompt_set": [
+        {
+          "name": "h3-demo",
+          "seed": 0
+        },
+        {
+          "name": "ltx-multishot",
+          "seed": 42
+        },
+        {
+          "name": "ltx-newsbroadcast",
+          "seed": 42
+        },
+        {
+          "name": "ltx-frogyoga",
+          "seed": 42
+        },
+        {
+          "name": "spark-mountain-lake",
+          "seed": 42
+        }
+      ],
+      "steps": 3,
+      "text_cache": "/fvscratch/runs/wan/9b2c963-09282019/fw22/text-cache",
+      "vae": "full",
+      "vsa": false,
+      "warm": true,
+      "weights": "/workspace/weights/fastwan22-ti2v-5b",
+      "width": 1280
+    }
+  },
+  "elapsed_s": 218.527863233,
+  "env": {
+    "FASTVIDEO_TAE_DIR": "/workspace/weights/auxiliary/tae",
+    "FASTVIDEO_WAN_VAE": "full"
+  },
+  "error": null,
+  "git_sha": null,
+  "stage": "wan",
+  "status": "pass"
+}

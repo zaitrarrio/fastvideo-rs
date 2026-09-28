@@ -28,7 +28,7 @@ pub mod stream;
 
 pub use av::{Pcm, RgbFrame};
 pub use caps::{
-    AudioCaps, CanvasCaps, FpsCaps, FrameGrid, KnobCaps, ModelCaps, RefLimits, StreamCaps, Tier,
+    AudioCaps, CanvasCaps, FpsCaps, FrameGrid, HdTier, KnobCaps, ModelCaps, RefLimits, StreamCaps, Tier,
 };
 pub use error::{ApiError, ErrorKind, GapId};
 pub use http::{
@@ -41,7 +41,7 @@ pub use job::{
     StoreError, TransitionError,
 };
 pub use negotiate::{
-    canvas_for_aspect, draw_seed, negotiate, precheck, resolve_canvas, resolve_frames,
+    canvas_for_aspect, draw_seed, h3_1080p_canvas, negotiate, precheck, resolve_canvas, resolve_frames,
     resolve_model, resolve_tier, route_task, AudioPlan, MediaProbe, PostProcess, ResolvedCanvas, ResolvedJob,
     StagedInputs, StagedMedia,
 };
@@ -51,6 +51,6 @@ pub use request::{
     SamplingOverrides, Snap, Task, TimingSpec, UploadId,
 };
 pub use stream::{
-    AudioTrack, Continuity, EndReason, SessionSpec, SessionState, StreamProtocol, TrackSet,
+    AudioTrack, CausalLimits, Continuity, EndReason, SessionSpec, SessionState, StreamProtocol, TrackSet,
     VideoTrack, WIRE_AUDIO_RATE,
 };

@@ -32,6 +32,9 @@ from the committed JSON.
 - Driver: a small wrapper over `runpod-endpoint.sh up|job|down` (cold job,
   warm job, info job, fetch each MP4 from R2 and ffprobe it, delete).
 
+FlashBoot on/off and idle-out restarts on the same wan-turbo setup, and the
+slim per-variant image: [docs/serve/images.md §FlashBoot](../images.md#flashboot).
+
 ## Timeline (seconds from `/run` submit)
 
 | | worker initializing (`/health`) | process start | models loaded (`ready_after_s`) | job taken (`delayTime`) | output (job COMPLETED) | execution |

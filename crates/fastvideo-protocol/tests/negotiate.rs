@@ -356,6 +356,66 @@ fn h3_default_and_tiers() {
     assert_eq!((j.width, j.height), (480, 832));
 }
 
+/// The opt-in 1080P tier: generated at the 1088 short edge within 1088x1920,
+/// every 1088 side cropped to 1080 on delivery; the other tiers unchanged.
+#[test]
+fn h3_1080p_tier() {
+    let mut caps = h3();
+    caps.canvas = CanvasCaps {
+        short_edges: vec![768, 480],
+        ..CanvasCaps::h3()
+    }
+    .with_h3_1080p();
+    assert_eq!(caps.canvas.short_edges, vec![768, 480, 1080]);
+    let at = |ratio: Ratio, short_edge: u32| {
+        let mut r = t2v("fasth3", "x");
+        r.canvas = CanvasSpec::Aspect { ratio, short_edge };
+        nego(&r, &caps).map(|j| (j.width, j.height, j.post.crop, j.output_size()))
+    };
+    // The default and the 768 / 480 tiers are as before.
+    let j = nego(&t2v("fasth3", "x"), &caps).unwrap();
+    assert_eq!((j.width, j.height, j.post.crop), (1344, 768, None));
+    assert_eq!(at(Ratio::R16_9, 768).unwrap(), (1344, 768, None, (1344, 768)));
+    assert_eq!(at(Ratio::R16_9, 480).unwrap(), (832, 480, None, (832, 480)));
+    // 1080P.
+    for (ratio, gen, out) in [
+        (Ratio::R16_9, (1920, 1088), (1920, 1080)),
+        (Ratio::R9_16, (1088, 1920), (1080, 1920)),
+        (Ratio::new(1, 1), (1088, 1088), (1080, 1080)),
+        (Ratio::new(4, 3), (1440, 1088), (1440, 1080)),
+        (Ratio::new(3, 4), (1088, 1440), (1080, 1440)),
+    ] {
+        let (w, h, crop, delivered) = at(ratio, 1080).unwrap();
+        assert_eq!(((w, h), delivered), (gen, out), "{ratio}");
+        assert_eq!(crop, Some(out), "{ratio}");
+        assert!(h3cfg::check_canvas_1080p(h as usize, w as usize).is_ok());
+    }
+    // 21:9 is capped by the pixel budget and not cropped.
+    let (w, h, crop, _) = at(Ratio::new(21, 9), 1080).unwrap();
+    assert!(w as usize * h as usize <= h3cfg::H3_MAX_PIXELS_1080P && crop.is_none(), "{w}x{h}");
+    // Exact sizes: 1920x1080 is padded to 1088 and cropped back; 1088x1920
+    // canvases are taken as they are; within the trained budget nothing changes.
+    let exact = |width: u32, height: u32| {
+        let mut r = t2v("fasth3", "x");
+        r.canvas = CanvasSpec::Exact { width, height };
+        nego(&r, &caps).map(|j| (j.width, j.height, j.post.crop))
+    };
+    assert_eq!(exact(1920, 1080).unwrap(), (1920, 1088, Some((1920, 1080))));
+    assert_eq!(exact(1080, 1920).unwrap(), (1088, 1920, Some((1080, 1920))));
+    assert_eq!(exact(1920, 1088).unwrap(), (1920, 1088, None));
+    assert_eq!(exact(1344, 768).unwrap(), (1344, 768, None));
+    for (w, h) in [(1280, 720), (1952, 1088), (2560, 1440), (1921, 1080)] {
+        let e = exact(w, h).unwrap_err();
+        assert_eq!((e.kind, e.param.as_deref()), (ErrorKind::InvalidRequest, Some("size")), "{w}x{h}");
+    }
+    // Without the tier: 1080 is the H3Refine1080P gap, and 1920x1080 a size error.
+    let mut r = t2v("fasth3", "x");
+    r.canvas = CanvasSpec::Aspect { ratio: Ratio::R16_9, short_edge: 1080 };
+    assert_eq!(err_of(nego(&r, &h3())).kind, ErrorKind::Unsupported(GapId::H3Refine1080P));
+    r.canvas = CanvasSpec::Exact { width: 1920, height: 1080 };
+    assert_eq!(err_of(nego(&r, &h3())).param.as_deref(), Some("size"));
+}
+
 #[test]
 fn h3_exact_canvas_uses_check_canvas() {
     let mut r = t2v("fasth3", "x");
@@ -472,6 +532,7 @@ fn aspect_canvas_stays_within_the_pixel_budget() {
         max_area: 832 * 480,
         multiple: 16,
         pad_and_crop: false,
+        hd: None,
         short_edges: vec![480],
     };
     assert_eq!(canvas_for_aspect(&c, 16.0 / 9.0, 480), (832, 480));
@@ -802,8 +863,17 @@ fn knob_values_validated() {
         guidance_2: Some(3.0),
         flow_shift: Some(5.0),
         boundary_ratio: Some(0.875),
+        ..Default::default()
     };
     assert_eq!(nego(&w, &fastwan()).unwrap().sampling, w.sampling);
+    // The reference strengths belong to reference-to-video models only.
+    for (s, param) in [
+        (SamplingOverrides { reference_strength: Some(1.0), ..Default::default() }, "reference_strength"),
+        (SamplingOverrides { reference_lora_strength: Some(1.0), ..Default::default() }, "reference_lora_strength"),
+    ] {
+        w.sampling = s;
+        assert_eq!(err_of(nego(&w, &fastwan())).param.as_deref(), Some(param));
+    }
 }
 
 #[test]

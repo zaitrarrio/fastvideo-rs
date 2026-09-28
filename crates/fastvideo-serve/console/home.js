@@ -21,9 +21,16 @@ async function check() {
     const models = Array.isArray(caps.models) ? caps.models : [];
     pill.textContent = 'connected'; pill.className = 'pill ok';
     setMsg('connect-msg', 'Key accepted by ' + base() + '.', 'ok');
+    // Live causal (SF-Wan) streams are length-limited (design §5.2).
+    const live = models.filter((m) => m.stream_limits).map((m) => {
+      const l = m.stream_limits;
+      return String((m.caps && m.caps.id) || '') + ': ' + l.default_max_s + ' s by default, at most ' + l.hard_max_s + ' s'
+        + (l.reset_restarts_clock ? ' (a reset restarts the clock)' : '');
+    });
     facts.replaceChildren(
       el('dt', {}, 'server'), el('dd', {}, base()),
       el('dt', {}, 'models'), el('dd', {}, models.map((m) => String((m.caps && m.caps.id) || m.id || '')).filter(Boolean).join(', ') || '—'),
+      ...(live.length ? [el('dt', {}, 'live stream length'), el('dd', {}, live.join('; '))] : []),
     );
     facts.hidden = false;
   } catch (e) {

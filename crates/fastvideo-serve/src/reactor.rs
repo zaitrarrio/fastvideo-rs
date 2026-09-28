@@ -10,7 +10,7 @@ use fastvideo_engine_service::EngineService;
 use fastvideo_reactor::{H264Backend, Reactor, ReactorConfig};
 use fastvideo_webrtc::host::RtcHost;
 
-use crate::config::{Config, ReactorCfg};
+use crate::config::{Config, ReactorCfg, StreamsCfg};
 
 /// `[reactor] h264` → the encoder behind H.264 peers (`auto`, normally
 /// resolved at startup by [`crate::encoders::resolve`], probes here).
@@ -24,8 +24,8 @@ pub fn h264_backend(s: &str) -> anyhow::Result<H264Backend> {
     }
 }
 
-/// `ReactorConfig` from `[reactor]`.
-pub fn reactor_config(c: &ReactorCfg) -> anyhow::Result<ReactorConfig> {
+/// `ReactorConfig` from `[reactor]` and the `[streams]` causal limits.
+pub fn reactor_config(c: &ReactorCfg, streams: &StreamsCfg) -> anyhow::Result<ReactorConfig> {
     Ok(ReactorConfig {
         model: c.model.clone(),
         short_edge: c.short_edge,
@@ -36,6 +36,7 @@ pub fn reactor_config(c: &ReactorCfg) -> anyhow::Result<ReactorConfig> {
         max_connections: c.max_connections,
         h264: h264_backend(&c.h264)?,
         h264_bitrate_bps: c.h264_bitrate_bps,
+        causal_limits: streams.causal_limits(),
         ..ReactorConfig::default()
     })
 }
@@ -52,7 +53,7 @@ pub async fn build(c: &Config, engine: &EngineService) -> anyhow::Result<Reactor
 /// Builds the runtime on an already bound host (shared with the fal
 /// director in `App::build`).
 pub fn build_on(c: &Config, engine: &EngineService, host: RtcHost) -> anyhow::Result<Reactor> {
-    let cfg = reactor_config(&c.reactor)?;
+    let cfg = reactor_config(&c.reactor, &c.streams)?;
     tracing::info!(udp = ?host.udp_addr(), tcp = ?host.tcp_addr(), "reactor runtime ready to answer offers");
     Ok(Reactor::new(cfg, Arc::new(engine.clone()), host))
 }
@@ -65,7 +66,8 @@ mod tests {
     #[test]
     fn config_maps() {
         let c = Config::default();
-        let r = reactor_config(&c.reactor).unwrap();
+        let r = reactor_config(&c.reactor, &c.streams).unwrap();
+        assert_eq!(r.causal_limits, fastvideo_protocol::CausalLimits { default_max_s: 120, hard_max_s: 300 });
         assert_eq!(r.orphan_timeout, Duration::from_secs(60));
         assert_eq!(r.ping_timeout, Duration::from_secs(20));
         assert_eq!(r.max_connections, 64);

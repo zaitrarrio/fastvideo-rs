@@ -1,0 +1,46 @@
+{
+ "minimax": {
+  "ok": true,
+  "data": {
+   "task_id": "201040968217738632",
+   "wall_s": 53.4,
+   "usage": {
+    "input_image_count": 1,
+    "input_seconds": 0,
+    "output_seconds": 5,
+    "total_seconds": 5
+   },
+   "mp4": {
+    "width": 1344,
+    "height": 768,
+    "frames": 124,
+    "duration_s": 5.175,
+    "audio": {
+     "codec": "aac",
+     "rate": 32000,
+     "channels": 2
+    },
+    "bytes": 9104104
+   }
+  },
+  "s": 55.0
+ },
+ "refuse": {
+  "ok": true,
+  "data": {
+   "ten_images": {
+    "code": 422,
+    "body": "{\"detail\":[{\"loc\":[\"body\",\"reference_image_urls\"],\"msg\":\"List should have at most 9 items after validation, not 10\",\"type\":\"value_error\"}]}"
+   },
+   "res_1080p": {
+    "code": 422,
+    "body": "{\"detail\":[{\"loc\":[\"body\",\"resolution\"],\"msg\":\"1080P resolution is not supported by this server\",\"type\":\"value_error\"}]}"
+   },
+   "no_refs": {
+    "code": 422,
+    "body": "{\"detail\":[{\"loc\":[\"body\"],\"msg\":\"Provide at least one of reference_image_urls, reference_video_urls or reference_audio_urls\",\"type\":\"value_error\"}]}"
+   }
+  },
+  "s": 3.6
+ }
+}

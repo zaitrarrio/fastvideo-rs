@@ -1,0 +1,13 @@
+WARNING: Running pip as the 'root' user can result in broken permissions and conflicting behaviour with the system package manager, possibly rendering your system unusable. It is recommended to use a virtual environment instead: https://pip.pypa.io/warnings/venv. Use the --root-user-action option if you know what you are doing and want to suppress this warning.
+
+[notice] A new release of pip is available: 25.0.1 -> 26.2.1
+[notice] To update, run: pip install --upgrade pip
+21:17:26 JunhaoZhuang/FlashVSR-v1.1@27561b186ded3402d7c975f4fd722e2885b6135f: 6 files, 6948393656 bytes -> /workspace/weights/auxiliary/upscalers/.flashvsr-v1.1.partial-20260928211725
+21:17:46 downloaded in 20 s; verifying
+21:17:47 ok LQ_proj_in.ckpt 575694948 d6d011cdaaba6a52 lfs
+21:17:48 ok TCDecoder.ckpt 189018333 e224bdcf2f52745c lfs
+21:17:49 ok Wan2.1_VAE.pth 507609880 38071ab59bd94681 lfs
+21:17:49 ok config.json 30 2c51a6dc7dfcb5aa
+21:18:06 ok diffusion_pytorch_model_streaming_dmd.safetensors 5676070392 bd28180edcf3446c lfs
+21:18:06 ok model_index.json 73 85be89792ac83617
+21:18:06 renamed to /workspace/weights/auxiliary/upscalers/flashvsr-v1.1; 6948393656 bytes in 40 s

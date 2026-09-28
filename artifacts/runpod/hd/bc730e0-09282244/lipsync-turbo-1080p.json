@@ -1,0 +1,93 @@
+{
+  "clips": [
+    {
+      "clip": "turbo-1080p/frames/talking-head/output.mp4",
+      "size": "1920x1088",
+      "fps": 24.0,
+      "frames": 124,
+      "face_frames": 124,
+      "best_lag_frames": 0,
+      "best_lag_ms": 0.0,
+      "r_best": 0.19,
+      "r_lag0": 0.19,
+      "confidence": 0.18,
+      "speech_contrast": 0.755,
+      "r_by_lag": {
+        "-6": -0.027,
+        "-5": 0.01,
+        "-4": -0.015,
+        "-3": -0.071,
+        "-2": 0.058,
+        "-1": 0.117,
+        "0": 0.19,
+        "1": 0.174,
+        "2": 0.073,
+        "3": -0.033,
+        "4": -0.072,
+        "5": 0.005,
+        "6": 0.09
+      }
+    },
+    {
+      "clip": "turbo-1080p/frames/ltx-newsbroadcast/output.mp4",
+      "size": "1920x1088",
+      "fps": 24.0,
+      "frames": 124,
+      "face_frames": 65,
+      "best_lag_frames": -1,
+      "best_lag_ms": -41.7,
+      "r_best": 0.267,
+      "r_lag0": 0.176,
+      "confidence": 0.102,
+      "speech_contrast": 0.4,
+      "r_by_lag": {
+        "-6": 0.188,
+        "-5": 0.165,
+        "-4": 0.191,
+        "-3": 0.179,
+        "-2": 0.221,
+        "-1": 0.267,
+        "0": 0.176,
+        "1": 0.123,
+        "2": 0.11,
+        "3": 0.055,
+        "4": 0.075,
+        "5": 0.082,
+        "6": 0.062
+      }
+    },
+    {
+      "clip": "turbo-1080p/frames/h3-demo/output.mp4",
+      "size": "1920x1088",
+      "fps": 24.0,
+      "frames": 124,
+      "face_frames": 41,
+      "verdict": "no stable face"
+    }
+  ],
+  "pooled": {
+    "label": "turbo-1080p",
+    "best_lag_frames": -1,
+    "best_lag_ms": -41.7,
+    "r_best": 0.192,
+    "r_lag0": 0.183,
+    "confidence": 0.107,
+    "speech_contrast": 0.577,
+    "r_by_lag": {
+      "-6": 0.079,
+      "-5": 0.086,
+      "-4": 0.085,
+      "-3": 0.051,
+      "-2": 0.138,
+      "-1": 0.192,
+      "0": 0.183,
+      "1": 0.148,
+      "2": 0.092,
+      "3": 0.011,
+      "4": 0.002,
+      "5": 0.045,
+      "6": 0.078
+    },
+    "clips": 2
+  }
+}

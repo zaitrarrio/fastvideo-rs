@@ -173,4 +173,132 @@ every file, then renames). Results in §8.
 
 ## 8. Results
 
-(Filled in as the package runs: download hashes, parity, timings.)
+### 8.1 Download
+
+| Volume | Pod (cpu3c, $0.24/hr) | Wall | Result |
+|---|---|---:|---|
+| US `s2k01690bi` | `davmpuszksq3y8` | 442 s | 29 files, 69 059 483 520 bytes; every LFS SHA-256 = Hub; re-read after fsync; renamed from `.h3-ref2va.partial-*` |
+| EU `jg48s6o1w0` | `652qtvg5a6hqfy` | 296 s | same 29 SHA-256 / sizes as US |
+
+Both pods deleted (verified). The `h3-base` snapshot on both volumes is
+`42ed227`, the same revision. Hashes: `artifacts/runpod/fetch-h3-ref2va/*/sha256.txt`.
+
+### 8.2 Parity against FastVideo (RTX PRO 6000, EUR-IS-1)
+
+Target `h3-ref2va-4step`: FastVideo `MiniMaxH3Ref2VAModularPipeline`
+(`e90be598`, strict eager, FLASH_ATTN, `--steps 5`) against ours
+`h3 gen --h3-recipe base-4step --dense --ref beach.jpg --ref-root $W/h3-ref2va`,
+768x1344x124, one 832x480 image reference, seed 1024, bf16 (`FASTVIDEO_H3_QUANT=off`),
+the reference's starting noise injected.
+
+**Run 1** (upstream `2d9dd45-09282004`, ours `9b2c963-09282013`): the
+reference's packed rows are 44 400 = 7 104 condition + 37 296 target, as our
+layout expects; sigmas and timesteps are identical. The text was not: our
+multimodal prompt had **440 tokens against 7 154**. FastVideo shows Qwen-VL
+the *prepared* reference image (PIL Lanczos to the 2048-short-edge canvas,
+3552x2048: 7 104 vision tokens); we showed it the 832x480 file (390). Our
+VAE path also resized with nearest neighbour. With different conditioning the
+velocities agree only loosely (video `vel_step01` cosine 0.937, rel-L2 0.357;
+latents after step 1 rel-L2 2.4e-2, after step 4 0.378), and the block dumps
+are not comparable (different sequence lengths). Fixed in `64a3ff0`: one
+Lanczos-prepared image feeds both the VAE and Qwen-VL.
+
+Timings, 4 forwards (not a benchmark; one request each, cold):
+
+| | load | text | denoise | video decode | peak |
+|---|---:|---:|---:|---:|---:|
+| FastVideo (TE and VAE offloaded) | 339.9 s | 12.9 s (conditioning) | 81.8 s | 9.7 s | |
+| ours (streamed TE) | 91.9 s | 86.1 s (streamed Qwen-VL) | 86.1 s (first step 48.2 s, then 12.6 s/step) | 6.5 s | 50.2 GiB |
+
+(Run 1 had 440 text tokens instead of 7 154, so its denoise is not like for like.)
+
+**Run 2** (`0503478`): 993 tokens against 7 154. `smart_resize` capped
+images at Qwen2-VL's default 1 003 520 pixels; MiniMax-H3's
+`processor/preprocessor_config.json` allows 65 536 to 16 777 216. Fixed in
+`c01254e` (a 768x1344 FL2VA keyframe was also shrunk: 1 008 tokens upstream).
+
+**Run 3** (upstream `c01254e-09282059`): the reference cell failed. Its clone
+at the run's sha failed transiently and the baked fallback scripts carry no
+fixture image; the cell now stops early in that case (`1460724`).
+
+**Run 4** (upstream `c01254e-09282120`, ours `a09b5df-09282128`): token
+counts match (7 154), so the reference's text is injected; the reference's
+target noise is injected; the reference-image condition rows are ours.
+
+| tensor (rel-L2 / cosine) | ours, own condition rows | control: reference's condition rows too (`FASTVIDEO_INJECT_COND=1`) |
+|---|---|---|
+| `text_refined` | 7.96e-3 / 0.99997 | same |
+| `rope_cos` | 1.0e-3 / 0.999999 | same |
+| `step00_packed_in` | 0.703 / 0.765 | 4.28e-3 / 0.999991 |
+| `step00_block_0` | 7.3e-2 / 0.9974 | 1.53e-3 / 0.999999 |
+| `step00_block_24` | 0.296 / 0.956 | 8.26e-3 / 0.999966 |
+| `step00_block_49` | 0.636 / 0.788 | 6.30e-2 / 0.99802 |
+| `video_vel_step01` | 0.843 / 0.746 | 2.69e-2 / 0.99964 |
+| `video_step01` / `video_step04` | 5.7e-2 / 0.751 | 1.81e-3 / 3.93e-2 (cosine 0.99923) |
+| `audio_step04` | 0.380 | 3.16e-2 (cosine 0.9995) |
+
+With the same inputs the Ref2VA DiT, packing, RoPE over the reference rows,
+text refiner, schedulers and audio path agree with FastVideo at the level of
+the FastH3 oracles (docs/oracle.md): step-1 block errors 1.5e-3 to 8e-3,
+growing in the last blocks. Two input differences remain, both explained:
+
+1. **Reference latents.** FastVideo encodes references with a *posterior
+   sample* (`_sample_visual_posterior`, torch CPU generator seed 42, fp16
+   round trip); we took the mode, hence rel-L2 0.70 on the condition rows.
+   `fa7f638` samples too (our generator, same seed). Torch's CPU stream is not
+   reproduced, so exact equality is not a goal; the control above is the
+   parity statement. I2V / FL2VA keyframes still take the mode.
+2. **Our own Qwen-VL multimodal output** (before injection) is far from the
+   reference's: `text_hidden` cosine 0.363 at 7 154 tokens. The text-only
+   path matched in the FastH3 oracles, so the difference is in the vision
+   tower or the multimodal mRoPE / deepstack path at a 222x128 patch grid.
+   This is shared with I2V / FL2VA (the multimodal encoder another agent is
+   making resident) and is **not fixed here**; without text injection our
+   Ref2VA output follows its own conditioning.
+
+Timings, run 4 (RTX PRO 6000, 4 forwards, cold, one request, bf16 dense):
+FastVideo denoise 73.8 s (18.4 s/forward); ours denoise 100.9 s (first step
+52.5 s incl. warm-up, then 16.1 s/forward), load 85 s (FastVideo 340 s),
+streamed multimodal text 107 s (FastVideo 12.9 s, resident offload path).
+
+### 8.3 Serve (fv-serve, `configs/serve/runpod-h3-ref2v.toml`)
+
+Pod `vtnqsyfg7prgil` (RTX PRO 6000, EUR-IS-1, serve image `sha-a09b5df`,
+MXFP8 linears, resident FP8 text encoder); ready 2 min after create. Script
+`scripts/serve/e2e/ref2v.py`; records in `artifacts/serve/e2e/h3-ref2v*/`.
+
+| check | result |
+|---|---|
+| capabilities | `h3-ref2v-turbo` (turbo) and `h3-ref2v-max` (max, not resident) with `tasks: [ref2v]`, refs 9 / 3 / 3 / 12 |
+| fal `minimax/h3-turbo/reference-to-video`, 1 uploaded image, 768P, 5 s, seed 7 | 1344x768, 124 frames, 5.175 s, AAC 32000 Hz x2; seed echoed; wall 47.2 s; engine total 44.7 s = text 0.67 + denoise 33.6 (4 forwards) + video decode 6.6 |
+| fal, 2 image references, 480P, `aspect_ratio` 16:9 | 832x480, 124 frames; wall 19.3 s; engine total 16.2 s (denoise 8.8 s) |
+| MiniMax V2 `MiniMax-H3-Turbo`, `reference_image` content, 768P | 1344x768, 124 frames; wall 53.4 s; `usage.input_image_count` 1 |
+| refusals | 10 images: 422; `1080P`: 422; no references: 422 |
+| fal `minimax/h3-max/reference-to-video` (base Ref2VA, 49 forwards, swapped in over the turbo DiT) | 1344x768, 124 frames, AAC 32 kHz x2; wall 853 s including the swap; engine total 848.6 s = text 28.2 + denoise 681.4 (13.9 s/forward) + video decode 6.5 |
+
+Notes. The max tier's 13.9 s/forward against the turbo's 8.4 s at the same
+geometry suggests the swapped-in DiT ran partly streamed (auto offload after
+the swap); not investigated. `ready` came 2 min after the pod create. The
+fal wire has no `h3-max-turbo/reference-to-video` upstream; ours answers
+reference-to-video on every H3 app. The MiniMax V1 `subject_reference`
+API is not served (V1 is a non-goal, design §1.2, stretch S1); V2
+`reference_image` / `reference_video` / `reference_audio` is.
+
+### 8.4 Known gaps
+
+- Our multimodal Qwen-VL output differs from FastVideo's at large image
+  grids (§8.2 item 2); shared with I2V / FL2VA.
+- Reference **videos** use the image pixel bounds per frame; Qwen3-VL's video
+  processor bounds the whole clip (`video_preprocessor_config.json`:
+  4 096 to 25 165 824 pixels over T x H x W). Not ported, not tested.
+- FL2VA / I2V keyframes: nearest-neighbour resize and the posterior mode
+  (FastVideo samples); left for the I2V owner.
+- 8-step v1.0 768p turbo LoRA: downloaded, not wired (schedule not verified
+  against LightX2V).
+
+### 8.5 Spend
+
+About $6.5 of Runpod: two CPU fetch pods ($0.06), four upstream and four
+runtime oracle pods on RTX PRO 6000 at $2.09/hr (about $4.9; run 3's
+reference failed), one serve pod for 44 min ($1.5). Every pod was named
+`fv-ref-*`, had a wall-clock backstop, and was deleted and checked.

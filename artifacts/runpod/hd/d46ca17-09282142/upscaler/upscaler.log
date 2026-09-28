@@ -1,0 +1,20 @@
+[22:00:05] [upscaler] setup: uv + python 3.12 + torch cu128 + SeedVR2 CLI @ 4490bd1f
+[22:00:56] [upscaler] setup exit=0 51s 2.11.0+cu128 NVIDIA RTX PRO 6000 Blackwell Server Edition
+[22:03:52] [upscaler] seedvr2-3b-1088/talking-head exit=0 wall=174.5s processing=?s fps=0.75 peak_gpu_mib=46725 frames=124 size=1904x1088
+[22:03:56] [upscaler] warm repeat
+[22:06:26] [upscaler] seedvr2-3b-1088-warm/talking-head exit=0 wall=150.2s processing=?s fps=0.85 peak_gpu_mib=46725 frames=124 size=1904x1088
+[22:09:04] [upscaler] seedvr2-3b-1088/spark-mountain-lake exit=0 wall=152.1s processing=?s fps=0.84 peak_gpu_mib=46725 frames=124 size=1904x1088
+[22:11:46] [upscaler] seedvr2-3b-1088/ltx-frogyoga exit=0 wall=157.1s processing=?s fps=0.81 peak_gpu_mib=46725 frames=124 size=1904x1088
+[22:15:57] [upscaler] seedvr2-3b-1440/talking-head exit=0 wall=246.3s processing=?s fps=0.51 peak_gpu_mib=77044 frames=124 size=2520x1440
+[22:20:14] [upscaler] seedvr2-3b-1440/spark-mountain-lake exit=0 wall=251.6s processing=?s fps=0.50 peak_gpu_mib=76485 frames=124 size=2520x1440
+[22:24:31] [upscaler] seedvr2-3b-1440/ltx-frogyoga exit=0 wall=251.0s processing=?s fps=0.50 peak_gpu_mib=76485 frames=124 size=2520x1440
+[22:24:54] [upscaler] compare turbo-768p-lanczos--seedvr2-3b-1088/talking-head exit=0
+[22:24:56] [upscaler] compare turbo-768p-lanczos--seedvr2-3b-1088/spark-mountain-lake exit=0
+[22:24:58] [upscaler] compare turbo-768p-lanczos--seedvr2-3b-1088/ltx-frogyoga exit=0
+[22:25:00] [upscaler] compare turbo-768p-lanczos1440--seedvr2-3b-1440/talking-head exit=0
+[22:25:03] [upscaler] compare turbo-768p-lanczos1440--seedvr2-3b-1440/spark-mountain-lake exit=0
+[22:25:06] [upscaler] compare turbo-768p-lanczos1440--seedvr2-3b-1440/ltx-frogyoga exit=0
+[22:25:06] [upscaler] flashvsr: setup (FlashVSR cf910c61, Block-Sparse-Attention 49d6c39e, sm_120)
+[22:37:15] [upscaler] flashvsr setup exit=1 729s ImportError: libc10.so: cannot open shared object file: No such file or directory
+[22:39:46] [upscaler] metrics exit=0 151s
+[22:39:46] [upscaler] done

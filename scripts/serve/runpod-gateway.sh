@@ -19,17 +19,23 @@
 # max 1 / idle 30 s per endpoint, the endpoint script's wall-clock backstop,
 # a pod backstop (FV_GATEWAY_CAP_S, default 3600 s), destroy-on-exit.
 #
+# Images: [image] / FV_SERVE_IMAGE runs everything on one image (e.g. the
+# legacy all-in-one :latest); without either, each pool boots its variant's
+# published image and the gateway the CPU-only `gateway` image
+# (docs/serve/images.md, scripts/serve/variants.sh).
+#
 # Env: RUNPOD_API_KEY; FV_SERVE_IMAGE; RUNPOD_VOLUME_ID (default s2k01690bi);
 # RUNPOD_GPU_TYPES (default H100/H200 list); FV_GATEWAY_CPU_FLAVOR (default cpu3c).
 set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source-path=SCRIPTDIR source=../gpu/lib.sh
 source "$HERE/../gpu/lib.sh"
+# shellcheck source-path=SCRIPTDIR source=variants.sh
+source "$HERE/variants.sh"
 
 REST="${RUNPOD_API_BASE:-https://rest.runpod.io/v1}"
 QUEUE="${RUNPOD_QUEUE_API:-https://api.runpod.ai/v2}"
 GQL="${RUNPOD_GRAPHQL:-https://api.runpod.io/graphql}"
-IMAGE_DEFAULT="ghcr.io/zaitrarrio/fastvideo-rs-serve:latest"
 MIN_BALANCE="${FV_MIN_BALANCE:-8}"
 CAP_S="${FV_GATEWAY_CAP_S:-3600}"
 CPU_FLAVOR="${FV_GATEWAY_CPU_FLAVOR:-cpu3c}"
@@ -163,9 +169,10 @@ cmd_validate() {
   require_tools curl jq openssl
   : "${RUNPOD_API_KEY:?RUNPOD_API_KEY missing}"
   check_balance
-  local b0 image token keyhash admin
+  local b0 image gw_image token keyhash admin
   b0="$(balance)"
-  image="${1:-${FV_SERVE_IMAGE:-$IMAGE_DEFAULT}}"
+  image="${1:-${FV_SERVE_IMAGE:-}}"   # empty: every pool picks its variant image
+  gw_image="${image:-$(fv_variant_image gateway pod)}"
   token="$(openssl rand -hex 24)"
   USER_KEY="fvk-$(openssl rand -hex 16)"
   admin="fvadm_$(openssl rand -hex 16)"
@@ -177,16 +184,16 @@ cmd_validate() {
   local extra ep_h3 tpl_h3 ep_wan tpl_wan line
   extra="$(jq -cn --arg t "$token" '{FV_SERVE_ROLE: "worker", FV_INTERNAL_TOKEN: $t, FV_JOBS_HEARTBEAT_S: "10"}')"
   line="$(FV_EXTRA_ENV_JSON="$extra" FV_ENDPOINT_PREFIX=fv-gw-h3 FV_SERVE_CONFIG=/etc/fv/runpod.toml FV_IDLE_TIMEOUT_S=30 \
-    FV_ENDPOINT_CAP_S="$CAP_S" bash "$HERE/runpod-endpoint.sh" up "$image" | tail -1)"
+    FV_ENDPOINT_CAP_S="$CAP_S" bash "$HERE/runpod-endpoint.sh" up ${image:+"$image"} | tail -1)"
   read -r ep_h3 tpl_h3 <<<"$line"; EPS+=("$ep_h3"); TPLS+=("$tpl_h3")
   line="$(FV_EXTRA_ENV_JSON="$extra" FV_ENDPOINT_PREFIX=fv-gw-wan FV_SERVE_CONFIG=/etc/fv/runpod-wan.toml FV_IDLE_TIMEOUT_S=30 \
-    FV_ENDPOINT_CAP_S="$CAP_S" bash "$HERE/runpod-endpoint.sh" up "$image" | tail -1)"
+    FV_ENDPOINT_CAP_S="$CAP_S" bash "$HERE/runpod-endpoint.sh" up ${image:+"$image"} | tail -1)"
   read -r ep_wan tpl_wan <<<"$line"; EPS+=("$ep_wan"); TPLS+=("$tpl_wan")
   log "pools: h3-turbo=$ep_h3 wan=$ep_wan"
 
   # The gateway: a CPU pod. h3-max and ltx have no endpoint here (503 path).
   local payload resp t_create t_ready code
-  payload="$(jq -n --arg image "$image" \
+  payload="$(jq -n --arg image "$gw_image" \
     --arg flavor "$CPU_FLAVOR" --argjson secrets "$SECRET_ENV_JSON" --arg tok "$token" --arg keys "$keyhash" \
     --arg admin "$admin" --arg rp "$RUNPOD_API_KEY" --arg h3 "$ep_h3" --arg wan "$ep_wan" --arg name "fv-gw-gateway-$(date -u +%m%d%H%M%S)" '{
       name: $name, imageName: $image, computeType: "CPU", cpuFlavorIds: [$flavor], vcpuCount: 2,
@@ -226,7 +233,7 @@ cmd_validate() {
   out="$(gw_call POST /fv/v1/jobs '{"model":"fastwan21-1.3b","prompt":"a red fox trotting through fresh snow, cinematic","seed":1}')"
   split_submit "$out"
   r="$(poll_gw "/fv/v1/jobs/$(jq -r .id <<<"$body")" '.status == "succeeded" or .status == "failed"')"
-  add "$(jq -c --arg sub "$sub" --arg w "$(head -1 <<<"$r")" '{api: "native", pool: "wan", cold: true, submit: $sub, wall_s: ($w|tonumber), status: .status, url_host: (.output.url // "" | sub("\\?.*"; "") | sub("^(https://[^/]+).*"; "\\1"))}' <<<"$(sed 1d <<<"$r")")"
+  add "$(jq -c --arg sub "$sub" --arg w "$(head -1 <<<"$r")" '{api: "native", pool: "wan", cold: true, submit: $sub, wall_s: ($w|tonumber), status: .status, url_host: (.output.url // "" | capture("^(?<h>https://[^/?]+)").h? // "")}' <<<"$(sed 1d <<<"$r")")"
   # 2. FastVideo /v1/videos → wan (warm).
   out="$(gw_call POST /v1/videos '{"model":"fastwan21-1.3b","prompt":"ocean waves at sunset","seconds":"5"}')"
   split_submit "$out"
@@ -266,7 +273,7 @@ cmd_validate() {
   local left b1
   left="$(leftovers)"
   b1="$(balance)"
-  jq -n --arg image "$image" --arg ready "$(awk -v a="$t_ready" -v b="$t_create" 'BEGIN{printf "%.1f", a-b}')" \
+  jq -n --arg image "${image:-variants}" --arg ready "$(awk -v a="$t_ready" -v b="$t_create" 'BEGIN{printf "%.1f", a-b}')" \
     --argjson results "$results" --argjson lat "$lat" --argjson pools "$pools" --arg left "$left" \
     --arg b0 "$b0" --arg b1 "$b1" '{
       image: $image, gateway_pod_ready_s: ($ready|tonumber), jobs: $results, latency: $lat, pools: $pools,
@@ -277,5 +284,5 @@ cmd_validate() {
 case "${1:-}" in
   validate) shift; cmd_validate "$@" ;;
   down) shift; : "${RUNPOD_API_KEY:?RUNPOD_API_KEY missing}"; cmd_down ;;
-  *) sed -n '2,25p' "$0" | sed 's/^# \{0,1\}//'; exit 2 ;;
+  *) sed -n '2,30p' "$0" | sed 's/^# \{0,1\}//'; exit 2 ;;
 esac

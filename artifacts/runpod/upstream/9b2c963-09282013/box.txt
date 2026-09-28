@@ -1,0 +1,10 @@
+NVIDIA RTX PRO 6000 Blackwell Server Edition, 97887 MiB, 595.91.07
+cpus=256 mem=1511G
+mfs#eur-is-1.runpod.net:9421  2.1P  1.6P  511T  76% /workspace
+49M	/opt/upstream/bin
+6.9G	/opt/upstream/fastvideo
+345M	/opt/upstream/src
+59M	/opt/upstream/tools
+fastvideo: fastvideo:e90be598e56138af5c82590f0d72f6fa2dfce400:v1
+HF_HOME=/opt/upstream/hf
+HOME=/root

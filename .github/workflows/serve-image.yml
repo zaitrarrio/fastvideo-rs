@@ -1,7 +1,12 @@
-# Builds the fv-serve image (docker/gpucheck.Dockerfile target `serve`,
-# docs/serve/design.md §6.1) and pushes ghcr.io/<owner>/fastvideo-rs-serve.
-# Deploy tooling (scripts/serve/*.sh) pins the pushed **digest**, which the
-# job prints as a notice and writes to the run summary.
+# Builds the fv-serve images (docker/gpucheck.Dockerfile, docs/serve/images.md)
+# and pushes them to ghcr.io/<owner>/fastvideo-rs-serve:
+#   :latest / :sha-<sha>                 the legacy all-in-one `serve` target (the
+#                                        debug flavour: ssh, rsync, fv-gpucheck, scripts)
+#   :<variant> / :<variant>-sha-<sha>    one slim image per pod variant
+#                                        (h3-turbo h3-max ltx wan wan5b sfwan gateway)
+# then, on main with the RUNPOD_API_KEY secret set, points the Runpod
+# templates fv-serve-<variant>-{sls,pod} at the new digests
+# (scripts/serve/runpod-templates.sh). Deploy tooling pins digests.
 name: serve-image
 
 on:
@@ -11,6 +16,18 @@ on:
         description: "fv-serve cargo features"
         required: false
         default: "cuda,http-client"
+      variants:
+        description: "variant images to build (space list)"
+        required: false
+        default: "h3-turbo h3-max ltx wan wan5b sfwan gateway"
+      compression:
+        description: "variant layer compression: gzip or zstd (zstd tags get a -zstd- infix)"
+        required: false
+        default: "gzip"
+      debug:
+        description: "also build the legacy all-in-one (debug) image"
+        required: false
+        default: "true"
   # main only: agents push the same commits to their branches too, and a
   # second build of the same sha is wasted. Other branches: workflow_dispatch.
   push:
@@ -27,6 +44,9 @@ on:
       - "docker/gpucheck.Dockerfile"
       - ".dockerignore"
       - "scripts/gpu/**"
+      - "scripts/serve/ci-images.sh"
+      - "scripts/serve/runpod-templates.sh"
+      - "scripts/serve/variants.sh"
       - ".github/workflows/serve-image.yml"
 
 permissions:
@@ -42,7 +62,7 @@ concurrency:
 jobs:
   image:
     runs-on: ubuntu-22.04
-    timeout-minutes: 120
+    timeout-minutes: 180
     steps:
       - name: Free disk space
         run: |
@@ -73,8 +93,9 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Build and push
+      - name: Build and push (debug / legacy all-in-one)
         id: push
+        if: github.event.inputs.debug != 'false'
         uses: docker/build-push-action@v6
         with:
           context: .
@@ -99,6 +120,7 @@ jobs:
           cache-to: type=registry,ref=${{ steps.meta.outputs.image }}:buildcache,mode=max,image-manifest=true,oci-mediatypes=true,ignore-error=true
 
       - name: Smoke-check the pushed image (no GPU)
+        if: github.event.inputs.debug != 'false'
         run: |
           img="${{ steps.meta.outputs.image }}@${{ steps.push.outputs.digest }}"
           docker pull "$img"
@@ -123,7 +145,45 @@ jobs:
           test "$ok" = 1
 
       - name: Digest
+        if: github.event.inputs.debug != 'false'
         run: |
           ref="${{ steps.meta.outputs.image }}@${{ steps.push.outputs.digest }}"
           echo "::notice title=fv-serve image::$ref"
-          echo "fv-serve image: \`$ref\` (tag sha-${{ steps.meta.outputs.short_sha }})" >> "$GITHUB_STEP_SUMMARY"
+          echo "fv-serve image (debug): \`$ref\` (tag sha-${{ steps.meta.outputs.short_sha }}, $(bash scripts/serve/ci-images.sh size "$ref") MB/layers compressed)" >> "$GITHUB_STEP_SUMMARY"
+          docker image rm "$ref" >/dev/null 2>&1 || true
+
+      # One slim image per variant, sharing the base, CUDA and binary layers.
+      - name: Build and push the variant images
+        env:
+          FV_IMAGE: ${{ steps.meta.outputs.image }}
+          FV_SHORT_SHA: ${{ steps.meta.outputs.short_sha }}
+          FV_BUILD_ID: ${{ steps.meta.outputs.build_id }}
+          FV_SERVE_FEATURES: ${{ steps.meta.outputs.features }}
+          FV_LATEST: ${{ github.ref == 'refs/heads/main' && (github.event.inputs.compression || 'gzip') == 'gzip' && '1' || '0' }}
+          FV_COMPRESSION: ${{ github.event.inputs.compression || 'gzip' }}
+          FV_CACHE_FROM: ${{ steps.meta.outputs.runtime }}:buildcache ${{ steps.meta.outputs.image }}:buildcache
+        run: bash scripts/serve/ci-images.sh build ${{ github.event.inputs.variants || 'h3-turbo h3-max ltx wan wan5b sfwan gateway' }}
+
+      - name: Smoke-check the variant images (no GPU)
+        run: |
+          while IFS=$'\t' read -r v ref mb; do
+            echo "::group::$v ($mb MB)"
+            bash scripts/serve/ci-images.sh smoke "$v" "$ref"
+            echo "::endgroup::"
+          done < artifacts/ci/variants.tsv
+          { echo "### Variant images"; bash scripts/serve/ci-images.sh summary; } >> "$GITHUB_STEP_SUMMARY"
+          while IFS=$'\t' read -r v ref mb; do echo "::notice title=fv-serve $v::$ref ($mb MB)"; done < artifacts/ci/variants.tsv
+
+      # Publish to Runpod: the per-variant templates boot the new digests.
+      - name: Register the Runpod templates
+        if: github.ref == 'refs/heads/main' && (github.event.inputs.compression || 'gzip') == 'gzip'
+        env:
+          RUNPOD_API_KEY: ${{ secrets.RUNPOD_API_KEY }}
+          RUNPOD_REGISTRY_AUTH_ID: ${{ secrets.RUNPOD_REGISTRY_AUTH_ID }}
+        run: |
+          if [ -z "$RUNPOD_API_KEY" ]; then
+            echo "::warning title=Runpod templates::RUNPOD_API_KEY secret not set; templates not updated (docs/serve/images.md)"
+            exit 0
+          fi
+          bash scripts/serve/runpod-templates.sh sync-all artifacts/ci/variants.tsv
+          { echo "### Runpod templates"; echo '```'; bash scripts/serve/runpod-templates.sh list; echo '```'; } >> "$GITHUB_STEP_SUMMARY"

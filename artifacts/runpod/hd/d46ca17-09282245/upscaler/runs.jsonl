@@ -1,0 +1,2 @@
+{"cell":"seedvr2-3b-1088","clip":"talking-head","resolution":1088,"args":"--batch_size 33 --uniform_batch_size --temporal_overlap 3 --seed 42","exit":0,"wall_s":198.4,"processing_s":null,"avg_fps":0.66,"peak_gpu_mib":46725,"frames":124,"size":"1904x1088"}
+{"cell":"seedvr2-3b-1088","clip":"spark-mountain-lake","resolution":1088,"args":"--batch_size 33 --uniform_batch_size --temporal_overlap 3 --seed 42","exit":0,"wall_s":176.0,"processing_s":null,"avg_fps":0.73,"peak_gpu_mib":47284,"frames":124,"size":"1904x1088"}

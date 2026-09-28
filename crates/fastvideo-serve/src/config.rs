@@ -38,6 +38,7 @@
 //! | `FV_POOL_<ID>_ENDPOINT`, `FV_POOL_<ID>_URLS` | a pool's endpoint id / pod URLs (`<ID>`: the pool id upper-cased, `-` → `_`) |
 //! | `FV_ARTIFACTS_DIR` | `artifacts.local_dir` (local artifacts shared by processes on one host) |
 //! | `FV_JOBS_HEARTBEAT_S` | `jobs.heartbeat_s` (D1 heartbeat of unfinished jobs) |
+//! | `FV_CAUSAL_DEFAULT_MAX_S`, `FV_CAUSAL_HARD_MAX_S` | `streams.causal_default_max_s` / `causal_hard_max_s` (live SF-Wan session length, 120 / 300 s of video) |
 //!
 //! `auto` picks D1 when the three D1 values are set (else the file store)
 //! and S3/R2 when bucket, endpoint and both keys are set (else local).
@@ -471,6 +472,33 @@ impl Default for WebrtcCfg {
     }
 }
 
+/// `[streams]`: limits shared by every front-end that opens a live stream
+/// (design §5.2). Causal (SF-Wan) sessions get `causal_default_max_s` of
+/// video unless the request asks for another length, never more than
+/// `causal_hard_max_s`; a `reset` restarts the clock, up to
+/// `causal_hard_max_s` for the whole session.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct StreamsCfg {
+    /// `FV_CAUSAL_DEFAULT_MAX_S` (120, the R12 study's unattended limit).
+    pub causal_default_max_s: u32,
+    /// `FV_CAUSAL_HARD_MAX_S` (300).
+    pub causal_hard_max_s: u32,
+}
+
+impl Default for StreamsCfg {
+    fn default() -> Self {
+        let l = fastvideo_protocol::CausalLimits::default();
+        Self { causal_default_max_s: l.default_max_s, causal_hard_max_s: l.hard_max_s }
+    }
+}
+
+impl StreamsCfg {
+    pub fn causal_limits(&self) -> fastvideo_protocol::CausalLimits {
+        fastvideo_protocol::CausalLimits { default_max_s: self.causal_default_max_s, hard_max_s: self.causal_hard_max_s }
+    }
+}
+
 /// `[director]`: the fal WMA director (design §5.6, WP-14). The WebRTC host
 /// comes from `[webrtc]`; the apps from `[protocols] fal_apps` (each gets
 /// `{app}/director`).
@@ -693,6 +721,7 @@ pub struct Config {
     pub ltx: LtxCfg,
     pub limits: LimitsCfg,
     pub webrtc: WebrtcCfg,
+    pub streams: StreamsCfg,
     pub director: DirectorCfg,
     pub reactor: ReactorCfg,
     pub log: LogCfg,
@@ -860,6 +889,19 @@ impl Config {
                     .ok_or_else(|| ConfigError::Invalid(format!("{k}={v} is not a positive number of seconds")))?;
             }
         }
+        for (k, slot) in [
+            ("FV_CAUSAL_DEFAULT_MAX_S", &mut self.streams.causal_default_max_s),
+            ("FV_CAUSAL_HARD_MAX_S", &mut self.streams.causal_hard_max_s),
+        ] {
+            if let Some(v) = env.var(k) {
+                *slot = v
+                    .trim()
+                    .parse()
+                    .ok()
+                    .filter(|n| *n >= 1)
+                    .ok_or_else(|| ConfigError::Invalid(format!("{k}={v} is not a number of seconds (1 or more)")))?;
+            }
+        }
         if let Some(v) = env.var("FV_REACTOR_MODEL") {
             self.reactor.model = Some(v);
         }
@@ -963,6 +1005,7 @@ impl Config {
         if self.server.workers_max == 0 {
             return Err(ConfigError::Invalid("server.workers_max must be 1 or more".into()));
         }
+        self.streams.causal_limits().check().map_err(|e| ConfigError::Invalid(format!("[streams]: {e}")))?;
         if let Some(u) = &self.server.public_base_url {
             url::Url::parse(u).map_err(|e| ConfigError::Invalid(format!("server.public_base_url: {e}")))?;
         }
@@ -1155,6 +1198,20 @@ mod tests {
             c.apply_env(&env(&[("FV_CORS_ORIGINS", bad)])).unwrap();
             assert!(c.validate().is_err(), "{bad}");
         }
+    }
+
+    #[test]
+    fn causal_stream_limits_default_file_env_and_validation() {
+        let mut c = Config::default();
+        assert_eq!(c.streams.causal_limits(), fastvideo_protocol::CausalLimits { default_max_s: 120, hard_max_s: 300 });
+        let mut c2 = Config::from_toml("[streams]\ncausal_default_max_s = 60\ncausal_hard_max_s = 90\n", "t").unwrap();
+        c2.validate().unwrap();
+        assert_eq!((c2.streams.causal_default_max_s, c2.streams.causal_hard_max_s), (60, 90));
+        c2.apply_env(&env(&[("FV_CAUSAL_DEFAULT_MAX_S", "30"), ("FV_CAUSAL_HARD_MAX_S", "45")])).unwrap();
+        assert_eq!(c2.streams.causal_limits(), fastvideo_protocol::CausalLimits { default_max_s: 30, hard_max_s: 45 });
+        assert!(c.apply_env(&env(&[("FV_CAUSAL_HARD_MAX_S", "0")])).is_err());
+        c.apply_env(&env(&[("FV_CAUSAL_DEFAULT_MAX_S", "400")])).unwrap();
+        assert!(c.validate().is_err(), "default above the hard ceiling");
     }
 
     #[test]

@@ -284,6 +284,124 @@ Not compared: 4K (not run, to save budget; the 512p profiles show no
 resolution-specific hazard), and our upsampler in isolation (`s2_upsampled`,
 0.35, inherits stage 1's 0.34).
 
+## LTX-2.5 image conditioning (I2V and keyframes, serve E5 / E9)
+
+Reference: the same sol-engine / Lightricks/LTX-2 `fd4ded7` driver with
+`--image PATH FRAME_IDX STRENGTH` (docs/ports/ltx25.md "Image
+conditioning"), 768x512x121, dense stage 2, the matrix prompt, seed 1024.
+`ltx25-i2v`: the TI2V beach fixture at frame 0. `ltx25-kf`: the same at
+frame 0 plus its 1.35x zoom at pixel frame 120 (an appended keyframe block).
+Runs: runtime 82ce54a / 0ead025, upstream `sol-ltx25:latest` with the scripts
+at the same shas, RTX PRO 6000 (EUR-IS-1), 2026-09-28. Injected as for T2V
+(noise, text), plus the conditioning (three arms, below). rel-L2 of ours
+against the reference.
+
+**Denoiser under conditioning** (the reference's conditioning latents
+injected; this isolates the per-token timesteps, the appended keyframe tokens
+and their RoPE, and the masked samplers):
+
+| | ltx25-i2v | ltx25-kf | T2V 512p dense (above) |
+|---|---|---|---|
+| s1 block 0 / 24 / 47 (step 1) | 5.1e-3 / 7.9e-3 / 2.5e-2 | 3.4e-3 / 6.9e-3 / 1.0e-2 | 3.3e-3 / 5.4e-3 / 2.3e-2 |
+| s1 latents steps 1-4 | 1.0e-3 … 2.3e-3 | 6.5e-4 … 1.3e-3 | 9e-4 … 2.2e-3 |
+| s1 latents steps 5 / 6 / 7 / 8 | 7.8e-3 / 3.5e-2 / 0.10 / 0.16 | 2.4e-3 / 5.7e-3 / 1.8e-2 / 3.0e-2 | 7.1e-3 / 7.5e-2 / 0.25 / 0.34 |
+| s2 block 0 / 24 / 47 (step 1) | 2.3e-3 / 6.5e-3 / 8.9e-3 | 1.8e-3 / 7.0e-3 / 6.8e-3 | 2.9e-3 / 5.0e-3 / 1.5e-2 |
+| s2 latents steps 1 / 2 / 3 | 6.8e-3 / 2.0e-2 / 3.6e-2 | 3.6e-3 / 7.9e-3 / 1.3e-2 | 1.3e-2 / 4.8e-2 / 8.0e-2 |
+| stage-1 / stage-2 entry state | 0 / 0 | 0 / 0 (1632 = 1536 grid + 96 appended rows) | |
+
+Both are at or below the T2V profile at every step (the pinned frames anchor
+the trajectory), with no block where the error jumps. The keyframe run
+matches the reference's appended-token layout exactly (row counts and the
+entry states are identical).
+
+**Encoder and preprocessing:**
+
+| | s1 (384x256) | s2 (768x512) |
+|---|---|---|
+| preprocessed pixels (CRF re-encode + resize) | 1.2e-2 | 1.2e-2 |
+| conditioning latent, reference pixels injected (`-ownenc`: our encoder alone, f32 vs the reference's bf16) | 1.5e-2 | 1.7e-2 |
+| conditioning latent, all ours (`-ownimg`) | 8.2e-2 | 0.14 |
+
+The encoder is at the bf16 floor. The rest of the end-to-end latent gap is
+the H.264 re-encode: our `ffmpeg` CLI libx264 and PyAV's libx264 / swscale
+give pixels 1.2e-2 apart (max 0.06, about 7/255), and the one-frame CRF
+round trip is not bit-reproducible across builds. End to end (`-ownimg`)
+the final latents are 5.5e-2 (i2v) and 5.1e-2 (kf) from the reference.
+
+**Frame fidelity** (the pinned output frames against the conditioning
+images, cover + center crop to 768x512, ffmpeg SSIM / PSNR):
+
+| | ours (reference latents) | ours end to end | reference |
+|---|---|---|---|
+| i2v frame 0 | 0.9666 / 39.46 dB | 0.9668 / 39.59 dB | 0.9661 / 39.25 dB |
+| kf frame 0 | 0.9658 / 39.38 dB | 0.9659 / 39.49 dB | 0.9655 / 39.16 dB |
+| kf frame 120 (last) | 0.9691 / 40.14 dB | 0.9689 / 40.13 dB | 0.9685 / 39.91 dB |
+
+Verdict: **E5 and E9 pass.** The conditioned denoiser matches the reference
+to its bf16 floor, the encoder too, and the pinned frames are as faithful to
+the images as the reference's. Timings (ours, RTX PRO 6000, 512p, warm
+weights): image preprocessing + encode for both stages 1.7-2.3 s,
+denoise 10.8-12.5 s.
+
+## LTX-2.5 reference-to-video (Ingredients IC-LoRA)
+
+Reference: Lightricks/LTX-2 `fd4ded7` `python -m ltx_pipelines.ic_lora`
+(`ICLoraPipeline`) with `--lora ltx-2.5-22b-ic-lora-ingredients-0.9.safetensors
+1.0 --video-conditioning reference.mov 1.0 --offload cpu`, 1536x896x121 at
+24 fps (stage 1 at the LoRA's 768x448 bucket), seed 1024, the reference-sheet
+prompt of `scripts/gpu/upstream/oracle.sh` (`LTX_REF_PROMPT`). The reference
+clip is `scripts/gpu/fixtures/ltx-ref-sheet-768x448.png` looped into 121
+lossless PNG frames (QuickTime), so upstream decodes the sheet's exact pixels.
+Target `ltx25-ref2v`; ours: `fv-gpucheck ltx2 gen --two-stage --dense-stage2
+--reference <sheet> --ic-lora <file>`. Run 2026-09-28, runtime and scripts at
+`b38a408`, upstream `sol-ltx25:latest`, both on H100 80GB HBM3 in US-CA-2 on the
+US volume `s2k01690bi`. Injected as for T2V (noise, text); the main arm also
+injects the reference latent, `-ownimg` preprocesses and encodes the sheet
+on our own. Stage 2 starts from the reference's entry state
+(`FASTVIDEO_INJECT_STAGE2`, as every LTX target), so the stage-2 rows and the
+clip metrics measure stage 2 and the decode alone.
+
+Layout: identical. The reference latent is `[1, 128, 16, 14, 24]` upstream
+(5376 tokens, downscale 1 and temporal scale 1 from the LoRA metadata), the
+stage-1 sequence 10752 = 5376 grid + 5376 reference rows, the noise draws
+`[1, 10752, 128]` then audio then the stage-2 renoise; ours attached all 480
+LoRA pairs (every block's attn1 / attn2 q/k/v/out and FF).
+
+| | main (reference latent injected) | -ownimg (all ours) |
+|---|---|---|
+| reference pixels (sheet, 768x448) | 1.6e-6 | 1.6e-6 |
+| reference latent (our f32 encoder vs their bf16) | 1.7e-2 (ours, dumped) | 1.7e-2 |
+| s1 step-0 input | 0 | 1.3e-2 (the reference rows) |
+| s1 block 0 / 12 / 24 / 36 / 47 (step 1) | 2.1e-3 / 5.5e-3 / 1.7e-2 / 4.1e-2 / 3.5e-2 | |
+| s1 latents steps 1-4 | 7.4e-4 … 1.8e-3 | 1.3e-2 (the reference rows' offset) |
+| s1 latents steps 5 / 6 / 7 / 8 | 9.8e-3 / 5.9e-2 / 0.17 / 0.31 | 1.7e-2 / 5.7e-2 / 0.16 / 0.30 |
+| s2 block 0 / 24 / 47 (step 1) | 2.4e-3 / 6.2e-3 / 1.6e-2 | same |
+| s2 latents steps 1 / 2 / 3 | 1.2e-2 / 5.6e-2 / 0.10 | same |
+| decoded clip vs the reference's (121 frames) | SSIM 0.982, PSNR 38.9 dB (min 32.2) | same |
+
+Reading: the conditioned stage 1 with the LoRA fused starts at the bf16
+floor (block 0 2.1e-3, the T2V 512p dense row above has 3.3e-3) and its
+latents follow the T2V profile (T2V 512p dense: 9e-4 … 2.2e-3, then 7.1e-3 /
+7.5e-2 / 0.25 / 0.34): the 8-step distilled stage 1 amplifies bf16 noise in
+its last three steps, here as there. One difference from T2V: at step 1 the
+video blocks 25-33 rise to 6e-2 … 0.12 (max-abs outliers up to ~830 in the
+strided rows) and fall back to 3.5e-2 by block 47, while stage 2 (same
+weights without the LoRA and without the reference) stays smooth. The
+likeliest cause is the large-magnitude activations of the clean (timestep 0)
+reference rows under the fused weights, where our single-rounding fuse and
+upstream's double bf16 rounding differ by an ulp; it was not isolated
+further (the GPU budget of this run). The encoder is at the bf16 floor, as
+for I2V (1.5e-2 there), and preprocessing is exact. Stage 2 and the decode
+match as for T2V. Verdict: **pass** at the bf16 floor, with the stage-1
+mid-block bump noted.
+
+Timings (ours, H100, warm steps): stage 1 about 1.0 s per step at 10752
+tokens (the reference doubles the sequence), stage 2 1.8-2.1 s per step at
+21504, upsample 2.8 s, decode 1.6 s; the IC-LoRA fuse 0.20 s and unfuse
+0.10 s. Device memory 64 GiB live (the DiT with the kept base of the 480
+LoRA linears is 61.8 GiB), peak 70 GiB. Upstream (`--offload cpu`) ran the
+cell in 116 s, peak 9.3 GiB. Spend: upstream pod 13 min, runtime pod 8 min.
+
 ## Wan 2.2 TI2V-5B modules (Diffusers)
 
 `scripts/gpu/upstream/oracle_wan22.py` (upstream step `oracle:wan22-ti2v`,

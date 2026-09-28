@@ -47,7 +47,7 @@ stereo. Frame counts are ffprobe `nb_read_frames`, rates `r_frame_rate`.
 | 5 | LTX v2 | 1920x1080, 6 s, **50 fps** | PASS | 83.7 s | 305 @ 50 | 31.7 MB, audio |
 | 6 | LTX v2, video only | 1920x1080, 6 s, 24 fps, `generate_audio: false` (skip_audio_decode) | PASS, **no audio stream** | 43.4 s | 145 @ 24 | 13.3 MB |
 | 7 | LTX v2 | 1920x1080, **20 s**, 24 fps | PASS | 144.2 s | 481 @ 24 | 41.7 MB, audio |
-| 8 | LTX `POST /v1/upload` → `PUT upload_url` → `/v1/image-to-video` and `/v2/image-to-video` with `image_uri: ltx://uploads/…` | 1080p 6 s | PASS as designed: upload 200 + `ltx://` URI, PUT 200; both i2v calls 400 `invalid_request_error` "image-to-video is not supported for this model yet" (`Ltx25I2V`, E5) | — | — | — |
+| 8 | LTX `POST /v1/upload` → `PUT upload_url` → `/v1/image-to-video` and `/v2/image-to-video` with `image_uri: ltx://uploads/…` | 1080p 6 s | PASS as designed at the time: upload 200 + `ltx://` URI, PUT 200; both i2v calls 400 (`Ltx25I2V`). **Served since E5, see "Image conditioning" below** | — | — | — |
 | 9 | FastVideo `POST /v1/videos` → poll → `/content` | `model: ltx-turbo`, 1920x1080, `seconds: 5` | PASS, `completed` | 34.5 s | 121 @ 24 | 10.7 MB, audio |
 | 10 | Native `POST /fv/v1/jobs` → poll → `output.url` | `ltx-turbo`, 1920x1080, `seconds: 5`, **fps 50** | PASS, `succeeded`; job `num_frames 257`, `tier turbo`, `recipe ltx25-distill-two-stage-sol` | 71.7 s (run 66.6 s, queue 0.3 s) | 257 @ 50 | 28.6 MB, audio |
 | 11 | fal queue `POST /fastvideo/ltx-turbo/text-to-video` → status → result | `{prompt, seed}` (no `resolution`) | **FAIL (bug, fixed below)**: 422 "short edge 768 is not supported" | — | — | — |
@@ -113,3 +113,67 @@ pod ran the 9c42844 image).
 `minimax/h3-*` apps, which have no model on an LTX pod; it now sets
 `fal_apps = ["fastvideo/ltx-turbo"]` (the run used `fastvideo/ltx-pro` for
 the pro phase).
+
+## Image conditioning (E5 / E9), 2026-09-28
+
+Image `ghcr.io/zaitrarrio/fastvideo-rs-serve:sha-cb300fa` (main cb300fa),
+`ltx-turbo`, 1x RTX PRO 6000 (EUR-IS-1, $2.09/h), pod `fv-ltxi-e2e-*`
+created 21:40:43, deleted 21:49:07 (verified): **$0.30**. Boot to `/ping`
+200: 74 s. Driver: `scripts/serve/e2e/ltx_e2e.py … i2v-v2-1080p kf-v2-1080p
+i2v-upload i2v-v2-720p native-kf-720p v2-1440p-24` (key per run). Input: the
+TI2V beach fixture (832x480 JPEG, data URI) and, for keyframes, its 1.35x
+zoom as the last frame. Fidelity: SSIM / PSNR (ffmpeg) of the pinned output
+frames against the images prepared as the engine prepares them (cover +
+center crop to the 64-aligned generation canvas, then the output crop).
+
+| Case | Request | Result | Time | Frames @ rate | Pinned-frame fidelity |
+|---|---|---|---|---|---|
+| `i2v-v2-1080p` | LTX `POST /v2/image-to-video`, `ltx-2-5-fast`, 1920x1080, 6 s, `image_uri` (data URI) | PASS, `processing` → `completed` | 80.3 s (first job after boot) | 145 @ 24, audio | frame 0: SSIM 0.9884, PSNR 43.6 dB |
+| `kf-v2-1080p` | same + `last_frame_uri` (the zoom) | PASS | 44.1 s | 145 @ 24, audio | frame 0: 0.9887 / 43.7 dB; frame 144: 0.9884 / 43.3 dB |
+| `i2v-upload` | `/v1/upload` → PUT → `/v2/image-to-video`, then `/v1/image-to-video` (sync), then `/v2` again, all with the same `ltx://` URI | first run: v1 PASS, the v2 leg after it answered 404 with an empty body; **rerun (pod `xgake526rrltxn`, 21:54-22:04, $0.33): all three PASS** (202 / 200 `video/mp4` 145 @ 24 with audio / 202, each with `X-Request-Id`) | — | 145 @ 24 | — |
+| `i2v-v2-720p` | 1280x720 (generated 1280x768, cropped) | PASS | 23.6 s | 145 @ 24, audio | frame 0: 0.9804 / 41.8 dB |
+| `native-kf-720p` | native `/fv/v1/jobs`, `image_url` + `last_image_url`, 1280x720, 5 s | PASS, `succeeded`, run 16.4 s | 20.2 s | 121 @ 24, audio | frame 0: 0.9805 / 41.9 dB; frame 120: 0.9807 / 42.1 dB |
+| `v2-1440p-24` | text-to-video, 2560x1440, 6 s (the 1440p tier, untested before) | PASS | 111.0 s | 145 @ 24, audio, 2560x1440 | — |
+
+Notes:
+
+- The first run's v2 404 of `i2v-upload` did not come from fv-serve: it had
+  no `X-Request-Id` and no LTX error body, the same sequence passes against
+  the fake engine locally (`upload_then_image_to_video` now covers upload →
+  v2 → v1 sync → v2), and the GPU rerun above passed every leg (the proxy
+  answers carry `Server: cloudflare`). A transient Runpod-proxy answer.
+- The first run's `server` block for LTX/fal/`/v1/videos` cases (e.g.
+  `v2-1440p-24`: 121 frames, 1280x768) described **another job**: the
+  script read the newest job of `GET /fv/v1/jobs`, which lists native jobs
+  only (here `native-kf-720p`). The delivered 1440p file is 2560x1440, 145
+  frames, 24 fps, as requested. `ltx_e2e.py` no longer attaches that block to
+  non-native cases.
+- The frame-0 numbers are the fidelity of the pinned frame to the image after
+  the model's own VAE round trip and H.264; the GPU oracle (docs/oracle.md,
+  "LTX-2.5 image conditioning") shows the reference upstream pipeline at the
+  same level (512p: ours 0.9668, reference 0.9661 SSIM).
+- 720p and 1440p text-to-video now both ran on GPU (720p in the first run,
+  row 1; 1440p here).
+
+## Reference-to-video (Ingredients IC-LoRA), 2026-09-28: pending GPU run
+
+The serve path for the LTX reference mode (docs/ports/ltx-ref2v.md) is built
+and tested on CPU (`scripts/serve/check.sh`: caps, routing, negotiate, the
+native body and the fal `ingredient` schema), and the engine path passed the
+GPU oracle on H100 (docs/oracle.md, "LTX-2.5 reference-to-video"). The serve
+E2E on a GPU pod is **not run yet**: it was held for budget on 2026-09-28.
+Everything for it is in the repo:
+
+- config `configs/serve/runpod-ltx-ref2v.toml`: only the `ltx25-ref2v`
+  companion (the `ltx-pro` recipe with the IC-LoRA at stage 1), fal app
+  `fal-ai/ltx-2.3-quality`; an 80 GB card suffices (64 GiB live, 70 GiB peak
+  in the oracle run at 1536x896x121);
+- pod: `RUNPOD_VOLUME_ID=s2k01690bi RUNPOD_GPU_TYPES="NVIDIA H100 80GB HBM3"
+  RUNPOD_GPU_MAX_DPH=3.6 FV_SERVE_TOML=configs/serve/runpod-ltx-ref2v.toml
+  bash scripts/serve/e2e/ltx-pod.sh up ghcr.io/zaitrarrio/fastvideo-rs-serve:sha-<sha>`
+  (US-CA-2 had no RTX PRO 6000 stock that day);
+- cases (`ltx_e2e.py`): `probe`, `ref2v-fal-ingredient` (fal queue
+  `fal-ai/ltx-2.3-quality/ingredient`, `image_url` = the oracle's sheet as a
+  data URI, the oracle's prompt, seed 1024: expect 1536x896, 121 @ 24 with
+  audio, plus frame 0 against the sheet), `ref2v-native` (`/fv/v1/jobs`,
+  `model: ltx-pro`, `reference_urls`, `size: 1536x896`, `num_frames: 121`).
