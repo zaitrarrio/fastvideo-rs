@@ -173,6 +173,12 @@ pub enum Stage {
         /// Canvas width in pixels (default 1344).
         #[arg(long)]
         width: Option<usize>,
+        /// Test only: skip the 768 x 1344 pixel cap (`check_canvas`) so an
+        /// above-training canvas (1920x1088, 1088x1920) can be measured. The
+        /// sides must still be multiples of 32 and the aspect 1:4 to 4:1. The
+        /// serving path keeps the cap (docs/serve/h3-1080p-and-upscaler.md).
+        #[arg(long)]
+        oversize_canvas: bool,
         /// Refiner and DiT block residency: `auto` (resident when the free
         /// memory covers the planned need, else streamed), `resident`, or
         /// `streamed` (blocks copied from pinned host memory one ahead of the
@@ -398,6 +404,7 @@ pub fn run(report: &mut Report, stage: &Stage) -> StageResult<()> {
             num_frames,
             height,
             width,
+            oversize_canvas,
             dit_offload,
             device_budget_gib,
             seed,
@@ -453,6 +460,7 @@ pub fn run(report: &mut Report, stage: &Stage) -> StageResult<()> {
                 num_frames: *num_frames,
                 height: *height,
                 width: *width,
+                oversize: *oversize_canvas,
             };
             let (set, multi) = match prompts {
                 Some(file) => (crate::benchmark::load_prompts(file, *seed)?, true),
@@ -1498,6 +1506,9 @@ pub struct GenCanvas {
     pub num_frames: Option<usize>,
     pub height: Option<usize>,
     pub width: Option<usize>,
+    /// `h3 gen --oversize-canvas`: [`H3Geometry::new`] instead of
+    /// [`H3Geometry::checked`] (no pixel cap; test path only).
+    pub oversize: bool,
 }
 
 impl GenCanvas {
@@ -1516,6 +1527,33 @@ impl GenCanvas {
         }
         if self.height.is_some() != self.width.is_some() {
             anyhow::bail!("h3 gen: pass --height and --width together");
+        }
+        if self.oversize {
+            let (height, width) = (
+                self.height.unwrap_or(default.height),
+                self.width.unwrap_or(default.width),
+            );
+            let ratio = width as f64 / height as f64;
+            if !(0.25..=4.0).contains(&ratio) {
+                anyhow::bail!("h3 gen: aspect {height}x{width} outside 1:4..4:1");
+            }
+            let g = fastvideo_models::h3::config::H3Geometry::new(
+                height,
+                width,
+                self.num_frames.unwrap_or(default.num_frames),
+            )
+            .map_err(|e| anyhow::anyhow!(e))?;
+            let mut r = default;
+            (r.height, r.width, r.num_frames) = (g.height, g.width, g.num_frames);
+            eprintln!(
+                "h3 gen: --oversize-canvas {}x{} ({} px, {:.2}x the trained cap)",
+                g.width,
+                g.height,
+                g.width * g.height,
+                (g.width * g.height) as f64
+                    / fastvideo_models::h3::config::H3_MAX_PIXELS as f64
+            );
+            return Ok(r);
         }
         H3Request::sized(
             prompt,
