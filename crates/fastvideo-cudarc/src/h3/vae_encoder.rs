@@ -505,6 +505,28 @@ impl H3VideoEncoder {
         Ok(z)
     }
 
+    /// Encode an interleaved RGB8 image already at `(height, width)` (a
+    /// prepared Ref2VA reference), ImageNet-normalized, optionally noise-
+    /// augmented like [`Self::encode_keyframe_file`].
+    pub fn encode_rgb8(
+        &self,
+        rgb: &[u8],
+        height: usize,
+        width: usize,
+        noise_aug: bool,
+        seed: u64,
+    ) -> Result<CudaTensor> {
+        let fitted = fastvideo_models::h3::packing::prepare_keyframe_rgb(rgb, width, height, width, height, true)
+            .map_err(msg)?;
+        let x = CudaTensor::from_vec(imagenet_from_signed(fitted, height, width), vec![1, 3, 1, height, width])?
+            .to_device()?;
+        let mut z = self.encode(&x)?;
+        if noise_aug {
+            z = scale_noise_latent(&z, KEYFRAME_NOISE_AUG, seed)?;
+        }
+        Ok(z)
+    }
+
     /// Encode a channel-major RGB video already resized to `(height, width)`.
     /// `frames` is `T * 3 * H * W` in `[0,1]` (or call with ImageNet-normalized
     /// values via [`Self::encode`] directly). Values here are ImageNet-normalized
@@ -579,7 +601,11 @@ fn load_rgb_imagenet(
     let fitted =
         fastvideo_models::h3::packing::prepare_keyframe_rgb(&raw, sw, sh, width, height, stretch)
             .map_err(msg)?;
-    // prepare_keyframe_rgb is in [-1,1]; convert to [0,1] then ImageNet.
+    Ok(imagenet_from_signed(fitted, height, width))
+}
+
+/// Channel-major `[-1, 1]` RGB (`prepare_keyframe_rgb`) to ImageNet-normalized.
+fn imagenet_from_signed(fitted: Vec<f32>, height: usize, width: usize) -> Vec<f32> {
     let mut out = vec![0f32; fitted.len()];
     for c in 0..3 {
         let mean = H3_PIXEL_MEAN[c] as f32;
@@ -589,7 +615,7 @@ fn load_rgb_imagenet(
             out[c * height * width + i] = (v01 - mean) / std;
         }
     }
-    Ok(out)
+    out
 }
 
 fn split_tiles(
