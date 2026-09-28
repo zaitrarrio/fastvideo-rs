@@ -1,0 +1,2 @@
+2026-09-28T19:44:09Z	pod-created xw436rol8zikj3 fv-i2v-0928194408 gpu=NVIDIA RTX PRO 6000 Blackwell Server Edition dph=2.09 image=ghcr.io/zaitrarrio/fastvideo-rs-serve@sha256:f84701597d19508a622a6422eeda35950784caf08fc8355ed9f289290d64e2b7
+2026-09-28T20:04:26Z	pod-deleted xw436rol8zikj3 (lifetime 1217 s, verified 404)
