@@ -18,13 +18,17 @@
 # An existing destination stops the run on that volume (add-only). The HF
 # token comes from HF_TOKEN or the volume's /workspace/hf/token. FV_POD_CAP_S
 # (default 3600) is a hard cap: a detached backstop deletes each pod.
-# Pods are named ${FV_POD_PREFIX:-fv-ltxi}-fetch-*.
+# Pods are named ${FV_POD_PREFIX:-fv-ltxi}-fetch-*. FV_CPU_FLAVORS (default
+# "cpu3c cpu5c cpu3g") and FV_CPU_VCPUS (default 4) pick the CPU pod shape
+# when a datacenter has no stock for the default.
 set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(cd "$HERE/../.." && pwd)"
 API="${RUNPOD_API_BASE:-https://rest.runpod.io/v1}"
 CAP_S="${FV_POD_CAP_S:-3600}"
 PREFIX="${FV_POD_PREFIX:-fv-ltxi}"
+FLAVORS="${FV_CPU_FLAVORS:-cpu3c cpu5c cpu3g}"
+VCPUS="${FV_CPU_VCPUS:-4}"
 OUT="${FETCH_OUT:-$ROOT/artifacts/runpod/fetch-ltx-iclora}"
 IC_REPO="${IC_REPO:-Lightricks/LTX-2.5-22b-IC-LoRA-Ingredients}"
 IC_REV="${IC_REV:-12040e4091ac2008d3906a594e31a7fb1ab9d546}"
@@ -62,9 +66,10 @@ start() {
   local run='mkdir -p /srv && (python -m http.server 8000 --directory /srv >/dev/null 2>&1 &) && echo "$FETCH_PY" | base64 -d > /opt/fetch.py && python /opt/fetch.py; sleep infinity'
   payload="$(jq -n --arg name "$PREFIX-fetch-$role-$(date -u +%m%d%H%M)" --arg vol "$id" --arg dc "$dc" \
     --arg run "$run" --arg py "$py_b64" --arg role "$role" --arg src "$src" \
+    --argjson fl "$(jq -nc --arg f "$FLAVORS" '$f|split(" ")')" --argjson vc "$VCPUS" \
     --arg repo "$IC_REPO" --arg rev "$IC_REV" --arg dest "$IC_DEST" --arg files "$IC_FILES" '{
       name: $name, imageName: "python:3.12-slim", cloudType: "SECURE", computeType: "CPU",
-      cpuFlavorIds: ["cpu3c","cpu5c","cpu3g"], cpuFlavorPriority: "availability", vcpuCount: 4,
+      cpuFlavorIds: $fl, cpuFlavorPriority: "availability", vcpuCount: $vc,
       containerDiskInGb: 10, networkVolumeId: $vol, volumeMountPath: "/workspace",
       dataCenterIds: [$dc], ports: ["8000/http"],
       dockerStartCmd: ["/bin/bash","-lc",$run],
