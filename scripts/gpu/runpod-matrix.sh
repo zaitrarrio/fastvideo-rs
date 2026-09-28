@@ -2217,6 +2217,8 @@ Audio: male speech, clear voice, quiet room"
       --text-weights "$W/h3-base"
     )
     ltx_oracle=(--prompt "$PROMPT" --seed "$SEED" --two-stage --text streamed)
+    # The LTX reference-to-video prompt (upstream oracle.sh LTX_REF_PROMPT).
+    LTX_REF_PROMPT="${FV_LTX_REF_PROMPT:-Reference sheet: Top Row Left (Setting): a rocky coastline at golden hour, dark boulders in the surf and green hills behind a sandy beach. Top Row Right (Setting): a closer view of the same boulders with waves breaking around them. Bottom Row Left (Prop): a red and white striped beach umbrella, shown twice. Bottom Row Right (Character): a cartoon orange crab with big claws and eyes on stalks, shown twice. Generated video: A bright 3D animated shot on the rocky beach at golden hour. The cheerful orange cartoon crab scuttles sideways across the wet sand in front of the dark boulders, waving its big claws, next to the red and white striped beach umbrella planted in the sand, while waves roll in and break into white foam behind it.}"
     for target in ${FV_ORACLE_TARGETS:-fasth3-8step fasth3-4step-vsa ltx25-512p ltx25-512p-dense ltx25-4k ltx25-4k-dense}; do
       ref="$SCRATCH/oracle-ref/$target"
       if ! oracle_fetch "$target" "$ref"; then
@@ -2255,13 +2257,24 @@ Audio: male speech, clear voice, quiet room"
           [[ "$target" == *-dense ]] && arm=(--dense-stage2)
           # Image conditioning targets (upstream oracle.sh): 512p, dense stage 2.
           fx="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/fixtures"
+          ltx_args=("${ltx_oracle[@]}")
           case "$target" in
             ltx25-i2v) arm=(--dense-stage2 --image "$fx/ti2v-beach-832x480.jpg") ;;
             ltx25-kf) arm=(--dense-stage2 --image "$fx/ti2v-beach-832x480.jpg"
               --cond-image "$fx/ti2v-beach-zoom-832x480.jpg@120@1.0") ;;
+            ltx25-ref2v)
+              # IC-LoRA reference-to-video (docs/ports/ltx-ref2v.md): the
+              # Ingredients LoRA at stage 1 on the reference sheet, the
+              # LoRA's 768x448 stage-1 bucket; prompt and sheet as
+              # scripts/gpu/upstream/oracle.sh oracle_ltx_ref.
+              wcell=ltx25-ref2v
+              geo=(--height 896 --width 1536 --num-frames 121)
+              arm=(--dense-stage2 --reference "$fx/ltx-ref-sheet-768x448.png"
+                --ic-lora "$W/ltx25-ic-lora-ingredients/ltx-2.5-22b-ic-lora-ingredients-0.9.safetensors")
+              ltx_args=(--prompt "$LTX_REF_PROMPT" --seed "$SEED" --two-stage --text streamed) ;;
           esac
           cmd=("$BIN" --mode fast ltx2 gen --model-version 2.5 --weights "$W/ltx25" --dit "$W/ltx25"
-            "${geo[@]}" "${arm[@]}" "${ltx_oracle[@]}") ;;
+            "${geo[@]}" "${arm[@]}" "${ltx_args[@]}") ;;
         sfwan13)
           # FastVideo SF-Wan 1.3B at its defaults; the full Wan VAE (the
           # reference decodes with it) for the frame metrics.
@@ -2303,6 +2316,29 @@ Audio: male speech, clear voice, quiet room"
       # whole path end to end). Then frame fidelity: SSIM / PSNR of the
       # output's pinned frames against the conditioning images (cover +
       # center crop to the canvas), ours and the reference's.
+      # Reference-to-video: -ownenc / -ownimg as for the image targets (the
+      # reference latent, then the whole reference path, ours), then the
+      # whole clip against the reference's (SSIM / PSNR over all frames).
+      if [[ "$target" == ltx25-ref2v ]]; then
+        oracle_run "oracle-$target-ownenc" "$ours-ownenc" FASTVIDEO_INJECT_COND=0
+        oracle_diff "oracle-$target-ownenc-diff" "$ref/dump" "$ours-ownenc"
+        oracle_run "oracle-$target-ownimg" "$ours-ownimg" FASTVIDEO_INJECT_COND=0 FASTVIDEO_INJECT_PIXELS=0
+        oracle_diff "oracle-$target-ownimg-diff" "$ref/dump" "$ours-ownimg"
+        fm="$RUNS/oracle-$target-frames"
+        mkdir -p "$fm"
+        for src in "ours:$RUNS/oracle-$target/frames/output.mp4" "ownimg:$RUNS/oracle-$target-ownimg/frames/output.mp4"; do
+          mp4="${src#*:}"
+          [[ -f "$mp4" && -f "$ref/dump/ref.mp4" ]] || { echo "${src%%:*} missing $mp4 or ref.mp4" >>"$fm/metrics.txt"; continue; }
+          cp "$mp4" "$fm/${src%%:*}.mp4" 2>/dev/null || true
+          for m in ssim psnr; do
+            r="$(ffmpeg -v info -nostats -i "$mp4" -i "$ref/dump/ref.mp4" -lavfi "[0:v]format=yuv420p[a];[1:v]format=yuv420p[b];[a][b]$m" \
+              -f null - 2>&1 | grep -E "Parsed_$m" | tail -1)"
+            echo "${src%%:*} vs reference clip $m: ${r##*] }" >>"$fm/metrics.txt"
+          done
+        done
+        cp "$ref/dump/ref.mp4" "$fm/reference.mp4" 2>/dev/null || true
+        sed "s/^/[$target-frames] /" "$fm/metrics.txt" | tee -a "$LOG" || true
+      fi
       if [[ "$target" == ltx25-i2v || "$target" == ltx25-kf ]]; then
         oracle_run "oracle-$target-ownenc" "$ours-ownenc" FASTVIDEO_INJECT_COND=0
         oracle_diff "oracle-$target-ownenc-diff" "$ref/dump" "$ours-ownenc"
@@ -2353,7 +2389,7 @@ Audio: male speech, clear voice, quiet room"
         rm -rf "$ours-legacy" "$ours-composed"
       fi
       # The dumps are hundreds of MB each; the report keeps the numbers.
-      rm -rf "$ours" "$ours-f32" "$ours-owntext" "$ref"
+      rm -rf "$ours" "$ours-f32" "$ours-owntext" "$ours-ownenc" "$ours-ownimg" "$ref"
     done
     ;;
   writer)

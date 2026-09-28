@@ -340,6 +340,17 @@ impl RefLimits {
             total: 12,
         }
     }
+    /// LTX-2.5 reference-to-video (the Ingredients IC-LoRA): one reference
+    /// image, the reference sheet (`ic_lora.py` takes one reference per
+    /// conditioning; the sheet carries every subject in its panels).
+    pub fn ltx_ingredients() -> Self {
+        Self {
+            images: 1,
+            videos: 0,
+            audio: 0,
+            total: 1,
+        }
+    }
     /// No references at all.
     pub fn none() -> Self {
         Self::default()
@@ -358,10 +369,15 @@ pub struct KnobCaps {
     pub guidance: bool,
     pub guidance_2: bool,
     pub flow_shift: bool,
+    /// `SamplingOverrides::reference_strength` and `reference_lora_strength`
+    /// (LTX-2.5 reference-to-video only).
+    #[serde(default)]
+    pub reference_strength: bool,
 }
 
 impl KnobCaps {
-    /// Every knob honoured.
+    /// Every sampling knob honoured (the reference strengths are a
+    /// reference-to-video model's own and stay off).
     pub fn all() -> Self {
         Self {
             seed: true,
@@ -370,6 +386,7 @@ impl KnobCaps {
             guidance: true,
             guidance_2: true,
             flow_shift: true,
+            reference_strength: false,
         }
     }
 }

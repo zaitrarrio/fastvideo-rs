@@ -18,6 +18,7 @@
 //! | `ltx-pro` | `ltx25-distill-dense` | LTX-2.5 22B distilled two-stage (8 + 3), dense stage 2, conv VAE | `ltx2/ltx25_distill_dense` | Only LTX-2.5 generation path; dense (non-lossy) stage 2, full VAE |
 //! | `ltx-turbo` | `ltx25-distill-sol` | LTX-2.5 distilled two-stage, Sol stage 2 | `ltx2/ltx25_distill_sol` | The reference single-GPU route; passes the gate |
 //! | `ltx-draft` | `ltx25-distill-sol-nvfp4-taehv` | + NVFP4 video FFN + TAEHV (`taeltx2_3_wide`) decode | `ltx2/ltx25_distill_sol_nvfp4` | Faster, fails sharpness at 4K (draft) |
+//! | (`ltx-pro` Ref2V) | `ltx25-ref2v` | the `ltx-pro` recipe plus the Ingredients IC-LoRA fused at stage 1 (`ICLoraPipeline`): reference-to-video only, one reference sheet, 1536x896 default | `ltx2/ltx25_distill_dense` | The LTX reference mode (docs/ports/ltx-ref2v.md); `route_task` sends `ltx-pro` Ref2V requests here |
 //! | `wan-max` | `wan22-ti2v-5b` | Wan2.2 TI2V-5B, 50 UniPC steps, CFG 5, shift 5, full Wan 2.2 VAE, 704x1280x121 @ 24 fps (short edges 704, 576, 480; up to 161 frames) | none | The checkpoint's recommended recipe |
 //! | `wan-turbo` | `fastwan22-ti2v-5b` | FastWan2.2 TI2V-5B (FullAttn) DMD 3-step (1000/757/522), shift 5, full Wan 2.2 VAE, 704x1280x121 @ 24 fps, same canvas and frames as `wan-max` | none | fal's `fal-ai/wan/v2.2-5b/text-to-video/fast-wan` model (docs/serve/fal-parity.md §3) |
 //! | `wan-draft` | `fastwan22-ti2v-5b-taehv` | the turbo recipe decoded by TAEHV (`taew2_2`) | none | Tiny decoder: faster, lossy (draft) |
@@ -173,6 +174,11 @@ pub struct Ltx2Recipe {
     pub canvas: (u32, u32),
     pub stage1_steps: u32,
     pub refine_steps: u32,
+    /// Reference-to-video: the IC-LoRA (the Ingredients reference-sheet LoRA)
+    /// fused into stage 1 (`PipelineOptions::ic_lora`). The model then serves
+    /// `Task::Ref2V` only, with a dense stage 2 (`ICLoraPipeline`).
+    #[serde(default)]
+    pub ic_lora: Option<PathBuf>,
 }
 
 /// Wan sampler.
@@ -421,7 +427,12 @@ impl CudaModel {
                 .to_owned(),
                 if r.tae.is_some() { "taehv" } else { "full" }.to_owned(),
                 format!(
-                    "LTX-{} distilled {}, {} stage 2{}{}",
+                    "{}LTX-{} distilled {}, {} stage 2{}{}",
+                    if r.ic_lora.is_some() {
+                        "Reference-to-video (Ingredients IC-LoRA at stage 1, one reference sheet): "
+                    } else {
+                        ""
+                    },
                     match r.version {
                         LtxVersion::V23 => "2.3",
                         LtxVersion::V25 => "2.5",
@@ -525,6 +536,9 @@ fn ltx2_caps(id: &str, r: &Ltx2Recipe) -> ModelCaps {
     let cfg = ltx_config(r.version);
     let fps = cfg.defaults.frame_rate.round() as u32;
     let grid = FrameGrid::new(8, 1, 9, 481, 121);
+    if r.ic_lora.is_some() {
+        return ltx2_ref_caps(id, r, fps);
+    }
     ModelCaps {
         id: ModelId::new(id),
         family: Family::Ltx2,
@@ -566,6 +580,42 @@ fn ltx2_caps(id: &str, r: &Ltx2Recipe) -> ModelCaps {
         resident: true,
         tier: None,
         recipe: None,
+    }
+}
+
+/// Stage-1 bucket of the Ingredients IC-LoRA (model card: trained at
+/// 768x448, 121 frames, 24 fps); the two-stage output is twice that.
+pub const LTX_REF_CANVAS: (u32, u32) = (1536, 896);
+/// Frame ceiling of LTX reference-to-video: the reference doubles stage 1's
+/// sequence (and the IC-LoRA keeps an unfused copy of the weights it
+/// touches), so the clip stays at 10 s (the LoRA was trained on 121 frames).
+pub const LTX_REF_FRAMES_MAX: u32 = 241;
+
+/// LTX-2.5 reference-to-video (the IC-LoRA companion of `ltx-pro`).
+fn ltx2_ref_caps(id: &str, r: &Ltx2Recipe, fps: u32) -> ModelCaps {
+    let base = ltx2_caps(id, &Ltx2Recipe { ic_lora: None, ..r.clone() });
+    let grid = FrameGrid::new(8, 1, 9, LTX_REF_FRAMES_MAX, 121);
+    ModelCaps {
+        tasks: [Task::Ref2V].into_iter().collect(),
+        stream: Some(StreamCaps::Clip {
+            min_s: grid.min as f32 / fps as f32,
+            max_s: grid.max as f32 / fps as f32,
+        }),
+        frames: grid,
+        canvas: CanvasCaps {
+            // The first tier is the default: 16:9 at 896 is 1600x896 (stage 1
+            // 800x448); fal's `ingredient` default is exactly 1536x896.
+            short_edges: vec![LTX_REF_CANVAS.1, 720, 1080],
+            max_area: 1920 * 1088,
+            ..base.canvas
+        },
+        refs: RefLimits::ltx_ingredients(),
+        knobs: KnobCaps {
+            seed: true,
+            reference_strength: true,
+            ..KnobCaps::default()
+        },
+        ..base
     }
 }
 
@@ -688,6 +738,7 @@ fn ltx25(layout: &WeightLayout, stage2: LtxStage2, profile: &str) -> Ltx2Recipe 
         canvas: (1920, 1080),
         stage1_steps: 8,
         refine_steps: 3,
+        ic_lora: None,
     }
 }
 
@@ -742,6 +793,17 @@ pub fn catalog(layout: &WeightLayout) -> Vec<CudaModel> {
     };
     let h3_ref_max = h3_ref("base", "h3/h3_ref2va_base", 49);
     let h3_ref_turbo = h3_ref("sol-h3-ref2va", "h3/sol_h3_ref2va", 4);
+    // Reference-to-video (docs/ports/ltx-ref2v.md): the dense two-stage with
+    // the Ingredients IC-LoRA at stage 1, as `ICLoraPipeline`.
+    let ltx_ref = Ltx2Recipe {
+        ic_lora: Some(
+            layout
+                .at(fastvideo_models::ltx2::lora::LTX25_INGREDIENTS_DIR)
+                .join(fastvideo_models::ltx2::lora::LTX25_INGREDIENTS_FILE),
+        ),
+        canvas: LTX_REF_CANVAS,
+        ..ltx25(layout, LtxStage2::Dense, "ltx2/ltx25_distill_dense")
+    };
     let ltx_draft = Ltx2Recipe {
         tae: Some(tae("taeltx2_3_wide.safetensors")),
         ..ltx25(layout, LtxStage2::Sol, LTX_DRAFT_PROFILE)
@@ -850,6 +912,14 @@ pub fn catalog(layout: &WeightLayout) -> Vec<CudaModel> {
             Some(Tier::Draft),
             "ltx25-distill-two-stage-sol-nvfp4-taehv",
             CudaRecipe::Ltx2(ltx_draft),
+        ),
+        // Reference-to-video companion of `ltx-pro`: the routing sends Ref2V
+        // requests for `ltx-pro` here.
+        CudaModel::new(
+            "ltx25-ref2v",
+            Some(Tier::Max),
+            "ltx25-ic-lora-ingredients-dense",
+            CudaRecipe::Ltx2(ltx_ref),
         ),
         CudaModel::new(
             "wan22-ti2v-5b",
@@ -1013,6 +1083,9 @@ pub fn model_from_config(layout: &WeightLayout, e: &ModelEntryCfg) -> Result<Cud
             }
             if let Some(t) = x("tae").filter(|_| r.tae.is_some()) {
                 r.tae = Some(t.into());
+            }
+            if let Some(t) = x("ic_lora").filter(|_| r.ic_lora.is_some()) {
+                r.ic_lora = Some(t.into());
             }
         }
         CudaRecipe::Wan(r) => {
@@ -1377,6 +1450,84 @@ mod tests {
         }
         let tier_max = fastvideo_protocol::resolve_tier(Family::H3, Tier::Max, models.iter().copied()).unwrap();
         assert_eq!(tier_max.id.as_str(), "sol-h3");
+    }
+
+    #[test]
+    fn ltx_ref2v_is_the_task_companion_of_ltx_pro() {
+        use fastvideo_protocol::*;
+        let cat = catalog(&WeightLayout::default());
+        let m = cat.iter().find(|m| m.id.as_str() == "ltx25-ref2v").unwrap().clone();
+        let CudaRecipe::Ltx2(r) = &m.recipe else { panic!("ltx25-ref2v") };
+        assert_eq!(r.stage2, LtxStage2::Dense);
+        assert!(r.two_stage);
+        assert!(r
+            .ic_lora
+            .as_ref()
+            .unwrap()
+            .ends_with("ltx25-ic-lora-ingredients/ltx-2.5-22b-ic-lora-ingredients-0.9.safetensors"));
+        let c = m.caps();
+        assert_eq!(c.tasks.iter().copied().collect::<Vec<_>>(), vec![Task::Ref2V]);
+        assert_eq!(c.refs, RefLimits::ltx_ingredients());
+        assert!(c.knobs.seed && c.knobs.reference_strength && !c.knobs.steps);
+        assert_eq!(c.canvas.short_edges[0], 896);
+        assert_eq!((c.frames.max, c.frames.default), (LTX_REF_FRAMES_MAX, 121));
+        assert_eq!(c.tier, Some(Tier::Max));
+        assert!(m.describe().summary.starts_with("Reference-to-video"));
+        // No other LTX model takes the reference knobs.
+        for other in cat.iter().filter(|o| o.family() == Family::Ltx2 && o.id != m.id) {
+            assert!(!other.caps().knobs.reference_strength, "{}", other.id);
+            assert!(!other.caps().supports(Task::Ref2V), "{}", other.id);
+        }
+        // `ltx-pro` still names the plain model; its Ref2V requests route here.
+        let t = table(&cat);
+        assert_eq!(t.tier(Family::Ltx2, Tier::Max).unwrap().as_str(), "ltx25-distill-dense");
+        let models: Vec<&ModelCaps> = t.models().collect();
+        let base = t.resolve("ltx-pro").unwrap();
+        assert_eq!(route_task(base, Task::Ref2V, models.iter().copied()).id.as_str(), "ltx25-ref2v");
+        assert_eq!(route_task(base, Task::T2V, models.iter().copied()).id, base.id);
+        // fal `ingredient`'s default: the sheet at 1536x896, 121 frames, strengths.
+        let mut req = GenerationRequest::text(ProtocolId::Fal, "ltx-pro", "Reference sheet: a crab. Generated video: it walks.");
+        req.task = Task::Ref2V;
+        req.canvas = CanvasSpec::Exact { width: 1536, height: 896 };
+        req.references = vec![Reference {
+            kind: MediaKind::Image,
+            media: MediaRef::parse("https://e.x/sheet.png", "references").unwrap(),
+        }];
+        req.sampling.reference_strength = Some(0.8);
+        req.sampling.reference_lora_strength = Some(1.5);
+        let staged = StagedInputs {
+            references: vec![(
+                MediaKind::Image,
+                StagedMedia {
+                    path: "/stage/sheet.png".into(),
+                    mime: "image/png".into(),
+                    bytes: 1,
+                    probe: MediaProbe { width: Some(1536), height: Some(896), ..Default::default() },
+                },
+            )],
+            ..Default::default()
+        };
+        let j = negotiate(&req, &c, &staged).unwrap();
+        assert_eq!((j.width, j.height, j.num_frames), (1536, 896, 121));
+        assert_eq!(j.sampling.reference_lora_strength, Some(1.5));
+        // Two sheets, a strength above 1, or reference knobs on T2V are refused.
+        let mut two = req.clone();
+        two.references.push(two.references[0].clone());
+        assert!(negotiate(&two, &c, &staged).is_err());
+        let mut hot = req.clone();
+        hot.sampling.reference_strength = Some(1.2);
+        assert_eq!(negotiate(&hot, &c, &staged).unwrap_err().param.as_deref(), Some("reference_strength"));
+        let plain = get_caps(&cat, "ltx25-distill-dense");
+        let mut t2v = GenerationRequest::text(ProtocolId::Fal, "ltx-pro", "a cat");
+        t2v.sampling.reference_lora_strength = Some(1.0);
+        assert_eq!(
+            negotiate(&t2v, &plain, &StagedInputs::default()).unwrap_err().param.as_deref(),
+            Some("reference_lora_strength")
+        );
+    }
+
+    fn get_caps(cat: &[CudaModel], id: &str) -> ModelCaps {
+        cat.iter().find(|m| m.id.as_str() == id).unwrap().caps()
     }
 
     #[test]

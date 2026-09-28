@@ -630,7 +630,49 @@ def _patch_ltx_helpers(mod) -> None:
     mod.combined_image_conditionings = combined
 
 
+def _patch_ltx_iclora(mod) -> None:
+    """IC-LoRA reference-to-video (``ltx_pipelines.ic_lora``): the reference's
+    first preprocessed frame and its encoded latent, named as ltx2/pipeline.rs
+    dumps them (``s1_ref0_pixels`` ``[3, H, W]``, ``s1_ref0_latent`` packed
+    ``[F*H*W, C]``), plus the LoRA's reference geometry in oracle_meta.json.
+    ``ic_lora.py`` imports ``append_ic_lora_reference_video_conditionings`` by
+    name, which binds the patched function (this runs when the module loads)."""
+    orig_append = mod.append_ic_lora_reference_video_conditionings
+    orig_pre = mod.video_preprocess
+
+    def pre(*a, **kw):
+        out = orig_pre(*a, **kw)
+        k = getattr(_Ltx, "ref_item", 0)
+        write(f"s1_ref{k}_pixels", out[0, :, 0])
+        return out
+
+    def append(conditionings, video_conditioning, **kw):
+        n0 = len(conditionings)
+        _Ltx.ref_item = 0
+        mod.video_preprocess = pre
+        try:
+            orig_append(conditionings, video_conditioning, **kw)
+        finally:
+            mod.video_preprocess = orig_pre
+        for i, c in enumerate(conditionings[n0:]):
+            inner = getattr(c, "item", None) or getattr(c, "conditioning", None) or c
+            lat = getattr(inner, "latent", None)
+            if lat is not None:
+                write(f"s1_ref{i}_latent", _ltx_pack5(lat))
+                meta(ic_reference={
+                    "latent_shape": list(lat.shape),
+                    "downscale": kw.get("reference_downscale_factor"),
+                    "temporal_scale": kw.get("reference_temporal_scale_factor"),
+                    "strength": getattr(inner, "strength", None),
+                    "wrapped": type(c).__name__,
+                })
+            _note(f"ltx ic-lora reference {i}: {type(c).__name__} {None if lat is None else list(lat.shape)}")
+
+    mod.append_ic_lora_reference_video_conditionings = append
+
+
 _LTX_TARGETS: dict = {
+    "ltx_pipelines.iclora_utils": _patch_ltx_iclora,
     "ltx_pipelines.utils.helpers": _patch_ltx_helpers,
     "ltx_pipelines.utils.blocks": _patch_ltx_blocks,
     "ltx_core.model.transformer.model": _patch_ltx_model,

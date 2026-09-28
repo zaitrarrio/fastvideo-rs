@@ -10,7 +10,7 @@
 #                                      mmaudio-44k-v2
 #                                      hy15-480-t2v hy15-480-i2v hy15-720-t2v
 #                                      hy15-720-i2v aux text-fp8
-#                                      ltx25-ic-lora-ingredients
+#                                      ltx25-ic-lora-ingredients ltx25-ref2v
 #   verify-weights.sh --list           print the cells and what each needs
 #
 # For every weight root a cell needs, this checks:
@@ -78,6 +78,8 @@ needs() {
     # LTX-2.5 reference mode (docs/ports/ltx-ref2v.md; fetch-ltx-iclora.sh).
     ltx25-ic-lora-ingredients)
       echo ":ltx25-ic-lora-ingredients/ltx-2.5-22b-ic-lora-ingredients-0.9.safetensors" ;;
+    # LTX-2.5 reference-to-video: the two-stage base plus the Ingredients IC-LoRA.
+    ltx25-ref2v) echo "$(needs ltx25-two-stage) $(needs ltx25-ic-lora-ingredients)" ;;
     aux) echo "aux" ;;
     text-fp8) echo "text-fp8" ;;
     *) return 1 ;;
@@ -86,7 +88,7 @@ needs() {
 
 CELLS=(fasth3-8step h3-base fasth3-4step-vsa fasth3-4step-dense sol-h3 sol-h3-spark h3-ref2va h3-ref2va-turbo ltx25-two-stage ltx23 fastwan21-1.3b
   wan22-ti2v-5b fastwan22-ti2v-5b wan21-t2v-14b sfwan21-1.3b mmaudio-44k-v2 hy15-480-t2v hy15-480-i2v hy15-720-t2v hy15-720-i2v aux text-fp8
-  ltx25-ic-lora-ingredients)
+  ltx25-ic-lora-ingredients ltx25-ref2v)
 
 if [[ "${1:-}" == "--list" ]]; then
   for c in "${CELLS[@]}"; do printf '%-20s %s\n' "$c" "$(needs "$c")"; done

@@ -17,7 +17,9 @@
 # fasth3-4step-dense (dense-datafree LoRA, FLASH_ATTN), and the
 # sol-engine LTX-2.5 distilled two-stage: ltx25-512p / ltx25-4k with Sol
 # stage 2, ltx25-512p-dense / ltx25-4k-dense with dense stage 2, ltx25-i2v /
-# ltx25-kf (512p dense, first-frame / first+last image conditioning); sfwan13
+# ltx25-kf (512p dense, first-frame / first+last image conditioning),
+# ltx25-ref2v (ltx_pipelines ICLoraPipeline with the Ingredients IC-LoRA on a
+# reference sheet, 1536x896x121: the LoRA's 768x448 stage-1 bucket); sfwan13
 # (FastVideo SF-Wan 1.3B causal DMD, 480x832x81, bench_fastwan.py);
 # h3-ref2va-4step (FastVideo MiniMaxH3Ref2VAModularPipeline on transformer_ref,
 # one image reference, dense, 4 forwards on the uniform grid; ours: `base-4step`).
@@ -86,6 +88,60 @@ oracle_ltx() {
     --spatial-upsampler-path "$L/latent_upscale_models/ltx-2.5-latent-spatial-upscaler-x2-bf16-1.0.safetensors" \
     --offload cpu "${geo[@]}" --frame-rate 24 --seed "$SEED_OURS" --prompt "$PROMPT_OURS" \
     --output-path "$OUT/oracle-$name/out.mp4"
+}
+
+# LTX-2.5 reference-to-video (docs/ports/ltx-ref2v.md): ltx_pipelines'
+# ICLoraPipeline (`python -m ltx_pipelines.ic_lora`) at Lightricks/LTX-2 fd4ded7
+# with the Ingredients IC-LoRA fused into stage 1, on the reference sheet
+# looped into a lossless static clip of the output's length (the model card's
+# input; PNG frames in QuickTime, so the decoded frames are the sheet's pixels
+# exactly). The prompt and sheet are shared with runpod-matrix.sh (`oracle`
+# target ltx25-ref2v).
+LTX_REF_PROMPT="${FV_LTX_REF_PROMPT:-Reference sheet: Top Row Left (Setting): a rocky coastline at golden hour, dark boulders in the surf and green hills behind a sandy beach. Top Row Right (Setting): a closer view of the same boulders with waves breaking around them. Bottom Row Left (Prop): a red and white striped beach umbrella, shown twice. Bottom Row Right (Character): a cartoon orange crab with big claws and eyes on stalks, shown twice. Generated video: A bright 3D animated shot on the rocky beach at golden hour. The cheerful orange cartoon crab scuttles sideways across the wet sand in front of the dark boulders, waving its big claws, next to the red and white striped beach umbrella planted in the sand, while waves roll in and break into white foam behind it.}"
+LTX_REF_SHEET="$HERE/../fixtures/ltx-ref-sheet-768x448.png"
+LTX_IC_LORA="${FV_LTX_IC_LORA:-$W/ltx25-ic-lora-ingredients/ltx-2.5-22b-ic-lora-ingredients-0.9.safetensors}"
+
+oracle_ltx_ref() {
+  local name="$1" L="$UW/LTX-2.5" c="$OUT/oracle-$1" py="$UP/sol-ltx25/LTX-2/.venv/bin/python"
+  if [[ -n "${UP_ORACLE:-}" && " $UP_ORACLE " != *" $name "* ]]; then return 0; fi
+  [[ -f "$LTX_REF_SHEET" ]] || { log "oracle $name: no reference sheet $LTX_REF_SHEET (clone failed?)"; return 1; }
+  [[ -f "$LTX_IC_LORA" ]] || { log "oracle $name: no IC-LoRA at $LTX_IC_LORA"; return 1; }
+  mkdir -p "$c"
+  "$py" - "$LTX_REF_SHEET" "$c/reference.mov" 121 24 <<'PY' || { log "oracle $name: static clip failed"; return 1; }
+import sys
+from fractions import Fraction
+
+import av
+import numpy as np
+
+src, dst, frames, fps = sys.argv[1], sys.argv[2], int(sys.argv[3]), int(sys.argv[4])
+with av.open(src) as img:
+    rgb = next(img.decode(video=0)).to_rgb().to_ndarray()
+with av.open(dst, "w") as out:
+    st = out.add_stream("png", rate=Fraction(fps))
+    st.width, st.height, st.pix_fmt = rgb.shape[1], rgb.shape[0], "rgb24"
+    frame = av.VideoFrame.from_ndarray(rgb, format="rgb24")
+    for _ in range(frames):
+        for p in st.encode(frame):
+            out.mux(p)
+    for p in st.encode():
+        out.mux(p)
+with av.open(dst) as inp:
+    got = [f.to_rgb().to_ndarray() for f in inp.decode(video=0)]
+assert len(got) == frames and all(np.array_equal(g, rgb) for g in got), "static clip is not lossless"
+print(f"static clip {dst}: {frames} frames {rgb.shape[1]}x{rgb.shape[0]} lossless")
+PY
+  oracle_cell "$name" env PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True OMP_NUM_THREADS=1 \
+    TOKENIZERS_PARALLELISM=false PYTHONUNBUFFERED=1 "$py" -m ltx_pipelines.ic_lora \
+    --transformer-path "$L/diffusion_models/ltx-2.5-22b-distilled-transformer-bf16.safetensors" \
+    --text-encoder-path "$L/text_encoders/gemma4-12b-with-proj-ltx-2.5-bf16.safetensors" \
+    --video-vae-path "$L/vae/ltx-2.5-video-vae-conv-bf16.safetensors" \
+    --audio-vae-path "$L/vae/ltx-2.5-audio-vae-bf16.safetensors" \
+    --spatial-upsampler-path "$L/latent_upscale_models/ltx-2.5-latent-spatial-upscaler-x2-bf16-1.0.safetensors" \
+    --lora "$LTX_IC_LORA" 1.0 --video-conditioning "$c/reference.mov" 1.0 \
+    --offload cpu --width 1536 --height 896 --num-frames 121 --frame-rate 24 --seed "$SEED_OURS" \
+    --prompt "$LTX_REF_PROMPT" --output-path "$c/out.mp4"
+  rm -f "$c/reference.mov"
 }
 
 # Wan 2.2 TI2V-5B modules (Diffusers, oracle_wan22.py): VAE encode/decode
@@ -163,4 +219,5 @@ run_oracle() {
   oracle_ltx ltx25-i2v dense 512p --image "$fx/ti2v-beach-832x480.jpg" 0 1.0
   oracle_ltx ltx25-kf dense 512p --image "$fx/ti2v-beach-832x480.jpg" 0 1.0 \
     --image "$fx/ti2v-beach-zoom-832x480.jpg" 120 1.0
+  oracle_ltx_ref ltx25-ref2v
 }

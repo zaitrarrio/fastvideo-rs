@@ -28,6 +28,7 @@ use axum::{Json, Router};
 use fastvideo_serve_kit::ServeCtx;
 use serde_json::{json, Map, Value};
 
+use crate::schema::ingredient;
 use crate::schema::ltx::{self, LtxAspect, LtxClass, CAMERA_MOTIONS, LTX_PROMPT_MAX_CHARS};
 use crate::schema::wan::{self, WanAspect, WanResolution, WanVariant, INTERPOLATORS};
 use crate::schema::{
@@ -110,6 +111,7 @@ pub fn input_schema_for(kind: AppKind, endpoint: Endpoint) -> Value {
         Endpoint::WanTextToVideo => wan_schema(endpoint, WanVariant::TextToVideo),
         Endpoint::WanImageToVideo => wan_schema(endpoint, WanVariant::ImageToVideo),
         Endpoint::WanFastWan => wan_schema(endpoint, WanVariant::FastWan),
+        Endpoint::LtxIngredient => ingredient_schema(endpoint),
         Endpoint::TextToVideo | Endpoint::ImageToVideo | Endpoint::ReferenceToVideo => h3_schema(kind, endpoint),
     }
 }
@@ -353,6 +355,64 @@ fn wan_schema(endpoint: Endpoint, variant: WanVariant) -> Value {
     object(endpoint.title(), props, order, required)
 }
 
+fn ingredient_schema(endpoint: Endpoint) -> Value {
+    let mut props = Map::new();
+    props.insert(
+        "prompt".into(),
+        prompt(
+            LTX_PROMPT_MAX_CHARS,
+            "The prompt in two parts: \"Reference sheet: <the panels: characters, props, location> Generated video: <the shot and action>\".",
+        ),
+    );
+    props.insert(
+        "image_url".into(),
+        required_media_url(
+            "image",
+            "URL of the reference sheet: one composite image with a clean panel per character (face close-up and turnaround), prop and location, on a black background.",
+        ),
+    );
+    let (lo, hi, def) = ingredient::INGREDIENT_STRENGTH;
+    props.insert(
+        "ingredient_strength".into(),
+        json!({"type": "number", "minimum": lo, "maximum": hi, "default": def, "description": "Strength of the Ingredients IC-LoRA (1: the trained strength)."}),
+    );
+    props.insert(
+        "reference_strength".into(),
+        json!({"type": "number", "minimum": lo, "maximum": hi, "default": def, "description": "How strongly the reference sheet is held (1: kept clean). This server accepts 0 to 1."}),
+    );
+    props.insert(
+        "num_frames".into(),
+        json!({"type": "integer", "minimum": ingredient::INGREDIENT_FRAMES_MIN, "maximum": ingredient::INGREDIENT_FRAMES_MAX, "default": ingredient::INGREDIENT_FRAMES_DEFAULT, "description": "Number of frames to generate (rounded up to 8k+1). This server generates at most 241 frames with a reference."}),
+    );
+    props.insert(
+        "frames_per_second".into(),
+        json!({"type": "integer", "minimum": ingredient::INGREDIENT_FPS_MIN, "maximum": ingredient::INGREDIENT_FPS_MAX, "default": ingredient::INGREDIENT_FPS_DEFAULT, "description": "Frame rate of the generated video. This server generates at 24, 25, 48 or 50."}),
+    );
+    props.insert(
+        "generate_audio".into(),
+        json!({"type": "boolean", "default": true, "description": "Whether to generate audio for the video."}),
+    );
+    props.insert(
+        "negative_prompt".into(),
+        json!({"type": "string", "default": "", "description": "Negative prompt. Accepted; the distilled model runs one unguided pass.", "x-fv-advanced": true, "x-fv-multiline": true}),
+    );
+    props.insert("seed".into(), seed());
+    props.insert("sync_mode".into(), sync_mode());
+    let order = vec![
+        "prompt",
+        "image_url",
+        "ingredient_strength",
+        "reference_strength",
+        "num_frames",
+        "frames_per_second",
+        "generate_audio",
+        "negative_prompt",
+        "seed",
+        "sync_mode",
+    ];
+    object(endpoint.title(), props, order, &["prompt", "image_url"])
+}
+
 /// One catalog entry.
 fn app_entry(a: &FalApp) -> Value {
     let kind = a.kind();
@@ -411,7 +471,7 @@ mod tests {
     use super::*;
     use crate::schema::FalInput;
 
-    const KINDS: [AppKind; 4] = [AppKind::H3, AppKind::H3Base, AppKind::Ltx25, AppKind::Wan];
+    const KINDS: [AppKind; 5] = [AppKind::H3, AppKind::H3Base, AppKind::Ltx25, AppKind::Wan, AppKind::LtxQuality];
 
     fn defaults(s: &Value) -> Map<String, Value> {
         let mut m = Map::new();
@@ -432,7 +492,10 @@ mod tests {
             Endpoint::ReferenceToVideo => {
                 m.insert("reference_image_urls".into(), json!(["https://a.test/1.png"]));
             }
-            Endpoint::LtxImageToVideoFast | Endpoint::LtxImageToVideoPro | Endpoint::WanImageToVideo => {
+            Endpoint::LtxImageToVideoFast
+            | Endpoint::LtxImageToVideoPro
+            | Endpoint::WanImageToVideo
+            | Endpoint::LtxIngredient => {
                 m.insert("image_url".into(), "https://a.test/1.png".into());
             }
             _ => {}
@@ -519,5 +582,10 @@ mod tests {
         assert_eq!(c["apps"][1]["endpoints"][2]["endpoint_id"], "fal-ai/wan/v2.2-5b/text-to-video/fast-wan");
         assert_eq!(c["apps"][1]["endpoints"][2]["model"], "wan-turbo");
         assert_eq!(c["apps"][1]["endpoints"][0]["model"], "wan-max");
+        let q = FalConfig { apps: vec![FalApp::from_id("fal-ai/ltx-2.3-quality")], ..FalConfig::default() };
+        let c = catalog(&q);
+        assert_eq!(c["apps"][0]["kind"], "ltx_quality");
+        assert_eq!(c["apps"][0]["endpoints"][0]["endpoint_id"], "fal-ai/ltx-2.3-quality/ingredient");
+        assert_eq!(c["apps"][0]["endpoints"][0]["model"], "ltx-pro");
     }
 }

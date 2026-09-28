@@ -802,8 +802,17 @@ fn knob_values_validated() {
         guidance_2: Some(3.0),
         flow_shift: Some(5.0),
         boundary_ratio: Some(0.875),
+        ..Default::default()
     };
     assert_eq!(nego(&w, &fastwan()).unwrap().sampling, w.sampling);
+    // The reference strengths belong to reference-to-video models only.
+    for (s, param) in [
+        (SamplingOverrides { reference_strength: Some(1.0), ..Default::default() }, "reference_strength"),
+        (SamplingOverrides { reference_lora_strength: Some(1.0), ..Default::default() }, "reference_lora_strength"),
+    ] {
+        w.sampling = s;
+        assert_eq!(err_of(nego(&w, &fastwan())).param.as_deref(), Some(param));
+    }
 }
 
 #[test]
