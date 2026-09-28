@@ -256,6 +256,48 @@ pub enum Stage {
         #[arg(long, default_value = "cuda")]
         device: String,
     },
+    /// Image-to-video with the multimodal text encoder resident, then
+    /// streamed from the volume, then resident again, on one loaded pipeline:
+    /// the frames and the audio must be byte-identical. Reports each run's
+    /// text stage and wall. `--text-only` skips the DiT: the multimodal
+    /// hidden states of a resident decoder at `--precision` against the
+    /// streamed path at the same precision (bitwise), and for fp8 the drift
+    /// from the bf16 streamed original.
+    I2vParity {
+        /// Root of the snapshot (`tokenizer/`, `text_encoder/`, `transformer/`, ...).
+        #[arg(long)]
+        weights: PathBuf,
+        /// First-frame image (FL2VA `first_image`).
+        #[arg(long)]
+        image: PathBuf,
+        #[arg(long)]
+        prompt: String,
+        #[arg(long, default_value_t = 768)]
+        height: usize,
+        #[arg(long, default_value_t = 1344)]
+        width: usize,
+        #[arg(long, default_value_t = 124)]
+        num_frames: usize,
+        #[arg(long, default_value_t = 1024)]
+        seed: u64,
+        /// As `h3 gen --text-encoder` (the multimodal language model runs at
+        /// its precision in both modes).
+        #[arg(long, default_value = "auto")]
+        text_encoder: String,
+        #[arg(long)]
+        h3_recipe: Option<String>,
+        #[arg(long)]
+        adaln_cache: Option<PathBuf>,
+        #[arg(long, default_value = "gpucheck-out/h3-i2v-parity")]
+        clip_dir: PathBuf,
+        /// Encoder only (no DiT): `native` or `fp8` resident decoder.
+        #[arg(long)]
+        text_only: bool,
+        #[arg(long, default_value = "fp8")]
+        precision: String,
+        #[arg(long, default_value = "cuda")]
+        device: String,
+    },
     /// CPU only: re-pack the text encoder to exactly what tap 50 reads
     /// (embed_tokens + layers 0..=49, bf16 verbatim, in load order) plus a copy
     /// of `tokenizer/`. The output is a root `--text-weights` accepts.
@@ -404,6 +446,7 @@ pub fn run(report: &mut Report, stage: &Stage) -> StageResult<()> {
                     .map(fastvideo_cudarc::wan::offload::DitOffload::parse)
                     .transpose()
                     .map_err(|e| anyhow::anyhow!(e))?,
+                i2v_encoder: Default::default(),
             };
             let canvas = GenCanvas {
                 seconds: *seconds,
@@ -443,6 +486,39 @@ pub fn run(report: &mut Report, stage: &Stage) -> StageResult<()> {
             out,
             shard_gib,
         } => slim_text(report, weights, out, *shard_gib),
+        Stage::I2vParity {
+            weights,
+            image,
+            prompt,
+            height,
+            width,
+            num_frames,
+            seed,
+            text_encoder,
+            h3_recipe,
+            adaln_cache,
+            clip_dir,
+            text_only,
+            precision,
+            device,
+        } => {
+            report.set("device", crate::gpu::init(device)?);
+            if *text_only {
+                i2v_text_parity(report, weights, image, prompt, precision)
+            } else {
+                i2v_parity(
+                    report,
+                    weights,
+                    image,
+                    prompt,
+                    (*height, *width, *num_frames, *seed),
+                    text_encoder,
+                    h3_recipe.clone(),
+                    adaln_cache.clone(),
+                    clip_dir,
+                )
+            }
+        }
     }
 }
 
@@ -1979,4 +2055,199 @@ fn h3_benchmark(b: &H3Bench<'_>) -> serde_json::Value {
         "gpu_trace": fastvideo_cudarc::wan::gpu_trace::last_report(),
     });
     crate::benchmark::merge(crate::benchmark::common("h3", b.warm), doc)
+}
+
+/// Bytes of every PNG / WAV file directly under `dir`, by name.
+fn dir_bytes(dir: &Path) -> anyhow::Result<std::collections::BTreeMap<String, Vec<u8>>> {
+    let mut out = std::collections::BTreeMap::new();
+    for e in std::fs::read_dir(dir).with_context(|| dir.display().to_string())? {
+        let e = e?;
+        let name = e.file_name().to_string_lossy().into_owned();
+        if e.file_type()?.is_file() && (name.ends_with(".png") || name.ends_with(".wav")) {
+            out.insert(name, std::fs::read(e.path())?);
+        }
+    }
+    Ok(out)
+}
+
+fn sha256_hex(parts: &std::collections::BTreeMap<String, Vec<u8>>) -> String {
+    use sha2::Digest;
+    let mut h = sha2::Sha256::new();
+    for (k, v) in parts {
+        h.update(k.as_bytes());
+        h.update(v);
+    }
+    format!("{:x}", h.finalize())
+}
+
+#[allow(clippy::too_many_arguments)]
+fn i2v_parity(
+    report: &mut Report,
+    weights: &Path,
+    image: &Path,
+    prompt: &str,
+    (height, width, num_frames, seed): (usize, usize, usize, u64),
+    text_encoder: &str,
+    recipe: Option<String>,
+    adaln_cache: Option<PathBuf>,
+    clip_dir: &Path,
+) -> StageResult<()> {
+    use fastvideo_cudarc::h3::pipeline::{
+        H3Pipeline, H3PipelineOptions, H3Request, I2vEncoderChoice, TextEncoderChoice,
+    };
+    let options = H3PipelineOptions {
+        adaln_cache,
+        text_encoder: TextEncoderChoice::parse(text_encoder).map_err(|e| anyhow::anyhow!(e))?,
+        recipe,
+        i2v_encoder: I2vEncoderChoice::Resident,
+        ..Default::default()
+    };
+    let timer = std::time::Instant::now();
+    let mut pipeline = H3Pipeline::load(weights, options)?;
+    report.set("load_s", timer.elapsed().as_secs_f64());
+    report.set("load_vision_s", pipeline.load_timings.vision_s);
+    report.set("text_encoder", pipeline.text_encoder());
+    let mut req = H3Request::sized(prompt, height, width, num_frames, seed)
+        .map_err(|e| anyhow::anyhow!(e))?;
+    req.first_image = Some(image.to_path_buf());
+    req.mp4 = false;
+    let mut runs = Vec::new();
+    for (name, choice) in [
+        ("resident-cold", I2vEncoderChoice::Resident),
+        ("stream", I2vEncoderChoice::Stream),
+        ("resident", I2vEncoderChoice::Resident),
+    ] {
+        pipeline.set_i2v_encoder(choice)?;
+        let dir = clip_dir.join(name);
+        if dir.exists() {
+            std::fs::remove_dir_all(&dir)?;
+        }
+        std::fs::create_dir_all(&dir)?;
+        let t = std::time::Instant::now();
+        let out = pipeline.generate(&req, &dir)?;
+        let wall = t.elapsed().as_secs_f64();
+        let files = dir_bytes(&dir)?;
+        let peak = out.memory.iter().map(|p| p.peak_used).max().unwrap_or(0);
+        report.note(
+            format!("run_{name}"),
+            json!({
+                "wall_s": wall,
+                "text_s": out.timings.text_s,
+                "denoise_s": out.timings.denoise_s,
+                "text_encoder": out.text_encoder,
+                "frames": out.frames,
+                "files": files.len(),
+                "sha256": sha256_hex(&files),
+                "peak_gib": peak as f64 / f64::from(1u32 << 30),
+            }),
+        );
+        runs.push(files);
+    }
+    let differing = |a: &std::collections::BTreeMap<String, Vec<u8>>,
+                     b: &std::collections::BTreeMap<String, Vec<u8>>| {
+        a.keys()
+            .chain(b.keys())
+            .filter(|k| a.get(*k) != b.get(*k))
+            .count()
+    };
+    let (cold, stream, warm) = (&runs[0], &runs[1], &runs[2]);
+    let (d_stream, d_cold) = (differing(warm, stream), differing(warm, cold));
+    report.check(
+        "i2v_resident_vs_stream_bytes",
+        d_stream == 0 && d_cold == 0 && !stream.is_empty(),
+        json!({
+            "files": stream.len(),
+            "differing_resident_vs_stream": d_stream,
+            "differing_resident_vs_resident_cold": d_cold,
+        }),
+        json!({"differing": 0}),
+    )
+}
+
+fn i2v_text_parity(
+    report: &mut Report,
+    weights: &Path,
+    image: &Path,
+    prompt: &str,
+    precision: &str,
+) -> StageResult<()> {
+    use fastvideo_cudarc::h3::text::{
+        encode_multimodal_streamed, load_resident_encoder, MultimodalEncoder, MultimodalLm,
+        VisionImage,
+    };
+    use fastvideo_cudarc::llm::WeightPrecision;
+    let precision = match precision {
+        "native" | "bf16" => WeightPrecision::Native,
+        "fp8" => WeightPrecision::Fp8Rows,
+        other => return Err(anyhow::anyhow!("unknown --precision '{other}' (native|fp8)").into()),
+    };
+    let img = image::open(image)
+        .with_context(|| image.display().to_string())?
+        .into_rgb8();
+    let (w, h) = (img.width() as usize, img.height() as usize);
+    let rgb = img.into_raw();
+    let images = [VisionImage {
+        rgb: &rgb,
+        height: h,
+        width: w,
+    }];
+    let t = std::time::Instant::now();
+    let streamed =
+        encode_multimodal_streamed(weights, precision, prompt, &images, &[], None, None)?;
+    let stream_s = t.elapsed().as_secs_f64();
+    let t = std::time::Instant::now();
+    let decoder = load_resident_encoder(weights, precision)?;
+    let mm = MultimodalEncoder::load(weights)?;
+    let load_s = t.elapsed().as_secs_f64();
+    let mut resident_s = Vec::new();
+    let mut resident = None;
+    for _ in 0..2 {
+        let t = std::time::Instant::now();
+        resident = Some(mm.encode(MultimodalLm::Resident(&decoder), prompt, &images, &[], None)?);
+        resident_s.push(t.elapsed().as_secs_f64());
+    }
+    let resident = resident.expect("two runs");
+    let a = resident.hidden.host_cow()?.into_owned();
+    let b = streamed.hidden.host_cow()?.into_owned();
+    let differing = a
+        .iter()
+        .zip(b.iter())
+        .filter(|(x, y)| x.to_bits() != y.to_bits())
+        .count();
+    let mut values = json!({
+        "tokens": resident.ids.len(),
+        "elements": a.len(),
+        "differing_elements": differing,
+        "same_ids": resident.ids == streamed.ids,
+        "streamed_s": stream_s,
+        "resident_load_s": load_s,
+        "resident_s": resident_s,
+        "resident_encoder": resident.encoder,
+        "streamed_encoder": streamed.encoder,
+        "resident_gib": decoder.device_bytes() as f64 / f64::from(1u32 << 30),
+    });
+    if precision == WeightPrecision::Fp8Rows {
+        drop(decoder);
+        let t = std::time::Instant::now();
+        let bf16 = encode_multimodal_streamed(
+            weights,
+            WeightPrecision::Native,
+            prompt,
+            &images,
+            &[],
+            None,
+            None,
+        )?;
+        let c = bf16.hidden.host_cow()?.into_owned();
+        let d = diff(&a, &c);
+        values["bf16_streamed_s"] = json!(t.elapsed().as_secs_f64());
+        values["fp8_vs_bf16_rel_l2"] = json!(d.rel_l2);
+        values["fp8_vs_bf16_cosine"] = json!(d.cosine);
+    }
+    report.check(
+        "i2v_text_resident_vs_streamed",
+        differing == 0 && a.len() == b.len() && resident.ids == streamed.ids,
+        values,
+        json!({"differing_elements": 0}),
+    )
 }
