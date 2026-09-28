@@ -15,7 +15,7 @@
 //! | `generate_audio` (default `true`) | `false` → `AudioOut::Silent` |
 //! | `camera_motion` | 400 `Unsupported(LtxCameraMotion)` |
 //! | `image_uri` (i2v, required) | `Keyframe{First}`: `I2V` |
-//! | `last_frame_uri` (i2v) | `Keyframe{Last}`: `Keyframes` (400 `Unsupported(LtxKeyframes)` until E9) |
+//! | `last_frame_uri` (i2v) | `Keyframe{Last}`: `Keyframes` (E9; 400 `Unsupported(LtxKeyframes)` on an engine without it) |
 //!
 //! Media URIs must be `https://…`, `data:…;base64,…` or `ltx://uploads/<token>`
 //! (ltx §2.0). `image_uri` / `last_frame_uri` on text-to-video are refused

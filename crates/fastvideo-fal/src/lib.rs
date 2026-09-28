@@ -19,7 +19,13 @@
 //! Apps are static routes built from [`FalConfig::apps`], never wildcards.
 //! Each app resolves to a model by name (engine aliases / served names) and
 //! falls back to its tier (design §0.3, §0.6): `minimax/h3-max` → H3 `Max`,
-//! `minimax/h3-turbo` → `Turbo`, `minimax/h3-draft` → `Draft`.
+//! `minimax/h3-turbo` and fal's `minimax/h3-max-turbo` → `Turbo`,
+//! `minimax/h3-draft` → `Draft`, fal's base `minimax/h3` → `Max` (480P and
+//! 768P; 2K / 4K refused). fal's family apps pick a tier per endpoint
+//! (docs/serve/fal-parity.md): `lightricks/ltx-2.5` (`…/fast` → LTX
+//! `Turbo`, `…/pro` → `Max`) and `fal-ai/wan` (`v2.2-5b/…` → Wan `Max`,
+//! `v2.2-5b/text-to-video/fast-wan` → `Turbo`). Sub-paths may have several
+//! segments; the queue's status and result URLs are app-only.
 //!
 //! The binary mounts [`router`] and registers [`webhook::FalWebhook`] as the
 //! `ProtocolId::Fal` callback renderer.
@@ -48,8 +54,33 @@ use fastvideo_serve_kit::{IngestPolicy, ServeCtx};
 
 pub use error::FalProtocol;
 pub use queue::{FalEndpoint, FalView};
-pub use schema::{output_file_name, Endpoint, FalInput};
+pub use schema::{output_file_name, output_slug, AppKind, Endpoint, FalInput};
 pub use webhook::FalWebhook;
+
+/// The engine's canonical tier alias (`fastvideo_engine_service::tier_alias`):
+/// `h3-max`, `ltx-pro`, `ltx-turbo`, `wan-max`, `wan-turbo`, ...
+pub fn tier_alias(family: Family, tier: Tier) -> String {
+    let fam = match family {
+        Family::H3 => "h3",
+        Family::Ltx2 => "ltx",
+        Family::Wan => "wan",
+        Family::MmAudio => "mmaudio",
+    };
+    match (family, tier) {
+        (Family::Ltx2, Tier::Max) => "ltx-pro".to_owned(),
+        _ => format!("{fam}-{}", tier.as_str()),
+    }
+}
+
+/// The apps mounted when none are configured.
+pub const DEFAULT_APPS: [&str; 5] =
+    ["minimax/h3-max", "minimax/h3-turbo", "minimax/h3-draft", "minimax/h3-max-turbo", "minimax/h3"];
+
+/// The endpoint ids (`app/sub`) of a configured app id, for route tables.
+pub fn endpoint_ids(app_id: &str) -> Vec<String> {
+    let app = FalApp::from_id(app_id);
+    app.endpoints().iter().map(|e| format!("{}/{}", app.id, e.sub())).collect()
+}
 
 /// One fal app (`owner/alias`) this server answers for.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -71,6 +102,61 @@ impl FalApp {
         Self { id: format!("minimax/{alias}"), model: alias, tier: Some((Family::H3, tier)) }
     }
 
+    /// fal's `minimax/h3-max-turbo` (the H3 Turbo tier) and `minimax/h3`
+    /// (base H3; served by the H3 Max tier, 480P / 768P only).
+    pub fn h3_named(id: &str) -> Option<Self> {
+        let (alias, tier) = match id {
+            "minimax/h3-max" => ("h3-max", Tier::Max),
+            "minimax/h3-turbo" => ("h3-turbo", Tier::Turbo),
+            "minimax/h3-draft" => ("h3-draft", Tier::Draft),
+            "minimax/h3-max-turbo" => ("h3-turbo", Tier::Turbo),
+            "minimax/h3" => ("h3-max", Tier::Max),
+            _ => return None,
+        };
+        Some(Self { id: id.to_owned(), model: alias.to_owned(), tier: Some((Family::H3, tier)) })
+    }
+
+    /// fal's LTX-2.5 (`lightricks/ltx-2.5`) and Wan (`fal-ai/wan`) apps: each
+    /// endpoint picks its tier ([`Endpoint::target`]).
+    pub fn family_app(id: &str) -> Option<Self> {
+        let (model, tier) = match AppKind::of(id) {
+            AppKind::Ltx25 => ("ltx-turbo", (Family::Ltx2, Tier::Turbo)),
+            AppKind::Wan => ("wan-max", (Family::Wan, Tier::Max)),
+            AppKind::H3 | AppKind::H3Base => return None,
+        };
+        Some(Self { id: id.to_owned(), model: model.to_owned(), tier: Some(tier) })
+    }
+
+    /// The app for a configured id: the named H3 and family apps get their
+    /// tier fallbacks; any other id resolves its alias part by name only.
+    pub fn from_id(id: &str) -> Self {
+        let id = id.trim_matches('/');
+        Self::h3_named(id).or_else(|| Self::family_app(id)).unwrap_or_else(|| Self {
+            id: id.to_owned(),
+            model: id.rsplit('/').next().unwrap_or(id).to_owned(),
+            tier: None,
+        })
+    }
+
+    /// The schema family (from the id).
+    pub fn kind(&self) -> AppKind {
+        AppKind::of(&self.id)
+    }
+
+    /// The endpoints this app serves.
+    pub fn endpoints(&self) -> &'static [Endpoint] {
+        self.kind().endpoints()
+    }
+
+    /// `(name, tier fallback)` an endpoint resolves through: the endpoint's
+    /// family tier on the LTX and Wan apps, else the app's model.
+    pub fn target(&self, e: Endpoint) -> (String, Option<(Family, Tier)>) {
+        match e.target() {
+            Some((family, tier)) => (tier_alias(family, tier), Some((family, tier))),
+            None => (self.model.clone(), self.tier),
+        }
+    }
+
     /// `owner/alias` with both parts non-empty and URL-safe.
     pub fn is_valid(&self) -> bool {
         let ok = |s: &str| !s.is_empty() && s.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'));
@@ -81,7 +167,8 @@ impl FalApp {
 /// `[fal]` configuration.
 #[derive(Clone, Debug)]
 pub struct FalConfig {
-    /// Default: `minimax/h3-max`, `minimax/h3-turbo`, `minimax/h3-draft`.
+    /// Default: `minimax/h3-max`, `minimax/h3-turbo`, `minimax/h3-draft`,
+    /// `minimax/h3-max-turbo`, `minimax/h3`.
     pub apps: Vec<FalApp>,
     /// Media fetch limits for `*_url` inputs.
     pub ingest: IngestPolicy,
@@ -96,7 +183,7 @@ pub struct FalConfig {
 impl Default for FalConfig {
     fn default() -> Self {
         Self {
-            apps: vec![FalApp::h3(Tier::Max), FalApp::h3(Tier::Turbo), FalApp::h3(Tier::Draft)],
+            apps: DEFAULT_APPS.iter().map(|id| FalApp::from_id(id)).collect(),
             ingest: IngestPolicy::default(),
             url_ttl: Duration::from_secs(24 * 3600),
             inline_max_bytes: 64 * 1024 * 1024,
