@@ -1,0 +1,32 @@
+{
+  "pod": "itxbg5fnspe3nz",
+  "gpu": "NVIDIA RTX PRO 6000 Blackwell Server Edition (driver 595.91.07, 97887 MiB, 256 vCPU)",
+  "image": "ghcr.io/zaitrarrio/fastvideo-rs-serve@sha256:3beb71e40a7b6cb8ec23e5858627c614bdffe8447766181555fb6601937bc330 (sha-9c42844)",
+  "fal_client_python": {"fal_client": "1.0.3", "app": "minimax/h3-turbo", "subscribe": {"wall_s": 13.36, "updates": ["Completed", "InProgress"], "video": true, "timings": {"inference": 7.01}}, "run": {"wall_s": 11.26, "video": true}, "ok": true},
+  "console_smoke": {
+    "ok": true,
+    "secs": 341.35,
+    "origin": "https://<pod>-8000.proxy.runpod.net (Chromium on the pod)",
+    "steps": ["home lists the fal apps", "minted a key on /console/admin", "key accepted by /fv/v1/capabilities",
+              "text-to-video completed (R2 URL in the player)", "API tab snippets", "image-to-video with an uploaded image",
+              "history lists 2 requests", "director streaming 1344x768, 1 video + 1 audio track", "director v2 prompt applied",
+              "director stopped", "reference-to-video form fits 390 px", "revoked key refused (401)"],
+    "earlier_attempts": [
+      "origin http://127.0.0.1:8000: image upload preview never finished; the upload_url fv-serve mints is on the public origin and /uploads has no CORS preflight (405 on OPTIONS)",
+      "first public-origin run: the player src was read right after the status turned COMPLETED, before the result fetch set it (test race; smoke.cjs now waits for the src)"
+    ]
+  },
+  "post_encoder": {
+    "note": "fv-serve CPU = container cgroup usage delta around one fal T2V (same prompt/seed, sequential, nothing else running); 'proc' = fv-serve utime+stime incl. reaped children. The encode overlaps the VAE decode, so wall time does not move.",
+    "nvenc": {
+      "480p": {"wall_s": 16.27, "cpu_s_cgroup": 4.25, "cpu_s_proc": 4.17, "decode_plus_mp4_s": 2.71, "mp4_tail_s": 0.02, "bytes": 2916017},
+      "768p": {"wall_s": 30.73, "cpu_s_cgroup": 6.28, "cpu_s_proc": 6.17, "decode_plus_mp4_s": 6.48, "mp4_tail_s": 0.03, "bytes": 6695229}
+    },
+    "cpu-test-x264": {
+      "480p": {"wall_s": 16.61, "cpu_s_cgroup": 4.59, "cpu_s_proc": 4.54, "decode_plus_mp4_s": 2.68, "mp4_tail_s": 0.02, "bytes": 1527229},
+      "768p": {"wall_s": 32.21, "cpu_s_cgroup": 10.89, "cpu_s_proc": 10.82, "decode_plus_mp4_s": 6.92, "mp4_tail_s": 0.04, "bytes": 3614233}
+    },
+    "idle_cpu_ms_per_30s": 27,
+    "server_restart_to_ready_s": [163, 165]
+  }
+}

@@ -1,0 +1,4 @@
+{"encoder":"h264_nvenc -preset p5 -tune hq -profile:v high -rc vbr -cq 19 -b:v 0 -bf 0","frames":124,"size":"1344x768","wall_s":0.509,"cpu_user_s":0.042,"cpu_sys_s":0.314,"cpu_cores_avg":0.70,"bytes":6073916}
+{"encoder":"libx264 -preset veryfast -crf 19","frames":124,"size":"1344x768","wall_s":0.492,"cpu_user_s":2.494,"cpu_sys_s":1.008,"cpu_cores_avg":7.12,"bytes":3342435}
+{"encoder":"libx264 -preset medium -crf 19","frames":124,"size":"1344x768","wall_s":5.976,"cpu_user_s":6.123,"cpu_sys_s":8.772,"cpu_cores_avg":2.49,"bytes":3710353}
+{"nproc":256}

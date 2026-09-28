@@ -14,6 +14,7 @@ import argparse
 import asyncio
 import json
 import sys
+import os
 import time
 
 import reactor_sdk
@@ -37,7 +38,10 @@ async def wait_for(pred, timeout, step=0.1):
 async def run(url, mode):
     expect_audio = mode == "av"
     r = Reactor("fake", local=True, api_url=url)
-    video = {"n": 0, "size": None}
+    video = {"n": 0, "size": None, "first": None, "last": None, "times": []}
+    # Real engines need longer than the fake one (WP-18 GPU E2E).
+    clip_timeout = float(os.environ.get("FV_REACTOR_CLIP_TIMEOUT_S", "40"))
+    t_connect = time.monotonic()
     audio = {"n": 0, "rates": set(), "channels": set(), "samples": 0}
     messages = []
     r.on("message", lambda m: messages.append(m))
@@ -48,6 +52,10 @@ async def run(url, mode):
     def on_video(bgra, width, height, *_rest):
         video["n"] += 1
         video["size"] = (width, height)
+        now = time.monotonic()
+        video["first"] = video["first"] or now
+        video["last"] = now
+        video["times"].append(now)
 
     if expect_audio:
         at = r.track("main_audio")
@@ -93,7 +101,7 @@ async def run(url, mode):
         except reactor_sdk.ReactorError as e:
             summary["invalid_command_error"] = type(e).__name__
         got = await wait_for(
-            lambda: any(m.get("type") == "clip_finished" for m in messages if isinstance(m, dict)), 40
+            lambda: any(m.get("type") == "clip_finished" for m in messages if isinstance(m, dict)), clip_timeout
         )
         check(got, f"no clip_finished; messages={[m.get('type') for m in messages if isinstance(m, dict)]}")
         summary["clip_frames"] = clip["frames"]
@@ -120,6 +128,13 @@ async def run(url, mode):
         check(audio["n"] == 0, "audio on a video-only session")
     types = sorted({m.get("type") for m in messages if isinstance(m, dict)})
     summary.update({"video_frames": video["n"], "video_size": video["size"], "message_types": types})
+    if video["first"] and video["n"] > 1 and video["last"] > video["first"]:
+        summary["first_frame_s"] = round(video["first"] - t_connect, 2)
+        summary["fps"] = round((video["n"] - 1) / (video["last"] - video["first"]), 2)
+        # Arrival gaps: the largest shows where playout waited on generation.
+        t = video["times"]
+        gaps = sorted(b - a for a, b in zip(t, t[1:]))
+        summary["frame_gap_ms"] = {"median": round(1000 * gaps[len(gaps) // 2], 1), "max": round(1000 * gaps[-1], 1)}
     await r.disconnect()
     r.close()
     return summary

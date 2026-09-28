@@ -1,0 +1,294 @@
+[
+ {
+  "check": "health",
+  "ok": true,
+  "wall_s": 3.16,
+  "/health": 200,
+  "/healthz": 200,
+  "/ping": 200,
+  "/metrics": 200,
+  "/": 200
+ },
+ {
+  "check": "fal.t2v.480p",
+  "ok": true,
+  "wall_s": 15.05,
+  "request_id": "ebe3ae60-8761-4b9a-b8ae-1879db3e57c2",
+  "submit_s": 1.04,
+  "statuses": [
+   "IN_PROGRESS",
+   "COMPLETED"
+  ],
+  "to_in_progress_s": 0.44,
+  "fal_timings": {
+   "inference": 7.038330554
+  },
+  "status_metrics": {
+   "inference_time": 7.038330554
+  },
+  "logs_n": 4,
+  "seed": null,
+  "mp4": {
+   "video": "h264/High 832x480 124f @24/1",
+   "audio": "aac 32000Hz 2ch",
+   "duration_s": 5.175,
+   "bytes": 2916017,
+   "width": 832,
+   "height": 480,
+   "download_s": 0.57,
+   "host": "0cd06fd37ee4e07de370821cb3852a8a.r2.cloudflarestorage.com",
+   "sample": "artifacts/serve/e2e/h3-turbo/samples/fal-t2v-480p.mp4"
+  }
+ },
+ {
+  "check": "fal.upload",
+  "ok": true,
+  "wall_s": 2.32,
+  "upload_host": "itxbg5fnspe3nz-8000.proxy.runpod.net",
+  "file_host": "itxbg5fnspe3nz-8000.proxy.runpod.net",
+  "bytes": 76356,
+  "roundtrip_s": 2.32
+ },
+ {
+  "check": "fal.i2v.480p",
+  "ok": true,
+  "wall_s": 113.96,
+  "request_id": "0dc9a78e-ecbd-4886-b0a8-250777fb31e9",
+  "submit_s": 1.18,
+  "statuses": [
+   "IN_PROGRESS",
+   "COMPLETED"
+  ],
+  "to_in_progress_s": 1.04,
+  "fal_timings": {
+   "inference": 7.758360376
+  },
+  "status_metrics": {
+   "inference_time": 7.758360376
+  },
+  "logs_n": 4,
+  "seed": null,
+  "mp4": {
+   "video": "h264/High 832x480 124f @24/1",
+   "audio": "aac 32000Hz 2ch",
+   "duration_s": 5.175,
+   "bytes": 2651391,
+   "width": 832,
+   "height": 480,
+   "download_s": 1.07,
+   "host": "0cd06fd37ee4e07de370821cb3852a8a.r2.cloudflarestorage.com"
+  }
+ },
+ {
+  "check": "fal.r2v",
+  "ok": true,
+  "wall_s": 0.94,
+  "refused": 422,
+  "detail": [
+   {
+    "loc": [
+     "body"
+    ],
+    "msg": "reference-to-video is not enabled on this server",
+    "type": "value_error"
+   }
+  ]
+ },
+ {
+  "check": "fal.cancel",
+  "ok": true,
+  "wall_s": 9.11,
+  "queued_cancel": {
+   "code": 202,
+   "body": "{\"status\":\"CANCELLATION_REQUESTED\"}"
+  },
+  "queued_status": "COMPLETED",
+  "queued_error_type": "client_cancelled",
+  "running_cancel": {
+   "code": 202,
+   "body": "{\"status\":\"CANCELLATION_REQUESTED\"}"
+  },
+  "running_final": "COMPLETED",
+  "running_error_type": "client_cancelled",
+  "running_result": 499,
+  "queued_result": 499,
+  "queued_result_body": "{\"detail\":\"Request was cancelled\",\"error_type\":\"client_cancelled\"}",
+  "after_done_cancel": {
+   "code": 400,
+   "body": "{\"status\":\"ALREADY_COMPLETED\"}"
+  }
+ },
+ {
+  "check": "fal.sync",
+  "ok": true,
+  "wall_s": 12.9,
+  "sync_wall_s": 12.04,
+  "timings": {
+   "inference": 7.031796905
+  },
+  "mp4": {
+   "video": "h264/High 832x480 124f @24/1",
+   "audio": "aac 32000Hz 2ch",
+   "duration_s": 5.175,
+   "bytes": 3105614,
+   "width": 832,
+   "height": 480,
+   "download_s": 0.79,
+   "host": "0cd06fd37ee4e07de370821cb3852a8a.r2.cloudflarestorage.com"
+  }
+ },
+ {
+  "check": "fal.webhook",
+  "ok": true,
+  "wall_s": 16.62,
+  "request_id": "54654cb1-4638-4930-91fe-93a9f3bfaa2a",
+  "delivery_after_submit_s": 13.06,
+  "status": "OK",
+  "signature_ok": true,
+  "tampered_rejected": true,
+  "jwks_keys": 1,
+  "payload_video": true
+ },
+ {
+  "check": "fal.errors",
+  "ok": true,
+  "wall_s": 1.33,
+  "bad_resolution": 422,
+  "detail": [
+   {
+    "loc": [
+     "body",
+     "resolution"
+    ],
+    "msg": "Input should be '480P', '768P', '1080P'",
+    "type": "value_error"
+   }
+  ],
+  "no_key": 401
+ },
+ {
+  "check": "fal.unserved-app",
+  "ok": true,
+  "wall_s": 0.52,
+  "app": "minimax/h3-max",
+  "submit": 404,
+  "body": "{\"detail\":\"Application \\\"minimax/h3-max\\\" not found\",\"error_type\":\"not_found\"}"
+ },
+ {
+  "check": "minimax",
+  "ok": true,
+  "wall_s": 16.81,
+  "task_id": "203597907539555570",
+  "wall_s_to_succeeded": 13.45,
+  "statuses": [
+   "running",
+   "succeeded"
+  ],
+  "usage": {
+   "input_image_count": 0,
+   "input_seconds": 0,
+   "output_seconds": 5,
+   "total_seconds": 5
+  },
+  "mp4": {
+   "video": "h264/High 832x480 124f @24/1",
+   "audio": "aac 32000Hz 2ch",
+   "duration_s": 5.175,
+   "bytes": 2862507,
+   "width": 832,
+   "height": 480,
+   "download_s": 0.53,
+   "host": "0cd06fd37ee4e07de370821cb3852a8a.r2.cloudflarestorage.com"
+  },
+  "list_status": 200,
+  "listed": true,
+  "callback_challenge_first": true,
+  "callback_statuses": [
+   "queued",
+   "running",
+   "succeeded"
+  ],
+  "error_2013": true
+ },
+ {
+  "check": "openai",
+  "ok": true,
+  "wall_s": 17.53,
+  "openai": "3.6.0",
+  "models": [
+   "fasth3",
+   "fasth3-4step-vsa",
+   "h3-turbo"
+  ],
+  "video_id": "video_gen_18859e61b2e240a6a66623b647316203",
+  "create_and_poll_s": 12.55,
+  "download_s": 2.33,
+  "size": "832x480",
+  "seconds": "5",
+  "mp4": {
+   "video": "h264/High 832x480 124f @24/1",
+   "audio": "aac 32000Hz 2ch",
+   "duration_s": 5.175,
+   "bytes": 2952495,
+   "width": 832,
+   "height": 480
+  }
+ },
+ {
+  "check": "native",
+  "ok": true,
+  "wall_s": 13.05,
+  "models": [
+   null
+  ],
+  "job": "fvjob_e0d322c0241c4e2eb2e2a1365bd2fff0",
+  "content_status": 302,
+  "timings": null,
+  "mp4": {
+   "video": "h264/High 832x480 124f @24/1",
+   "audio": "aac 32000Hz 2ch",
+   "duration_s": 5.175,
+   "bytes": 2901638,
+   "width": 832,
+   "height": 480,
+   "download_s": 0.83,
+   "host": "0cd06fd37ee4e07de370821cb3852a8a.r2.cloudflarestorage.com"
+  },
+  "resolved": {
+   "width": 832,
+   "height": 480,
+   "num_frames": 124,
+   "fps": 24
+  }
+ },
+ {
+  "check": "fal.t2v.768p",
+  "ok": true,
+  "wall_s": 31.2,
+  "request_id": "ed3463c7-f535-4c52-82c5-d8582492ab37",
+  "submit_s": 1.08,
+  "statuses": [
+   "IN_PROGRESS",
+   "COMPLETED"
+  ],
+  "to_in_progress_s": 0.36,
+  "fal_timings": {
+   "inference": 19.094771654
+  },
+  "status_metrics": {
+   "inference_time": 19.094771654
+  },
+  "logs_n": 4,
+  "seed": null,
+  "mp4": {
+   "video": "h264/High 1344x768 124f @24/1",
+   "audio": "aac 32000Hz 2ch",
+   "duration_s": 5.175,
+   "bytes": 6695229,
+   "width": 1344,
+   "height": 768,
+   "download_s": 0.93,
+   "host": "0cd06fd37ee4e07de370821cb3852a8a.r2.cloudflarestorage.com"
+  }
+ }
+]

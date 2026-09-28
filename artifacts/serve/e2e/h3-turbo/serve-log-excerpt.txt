@@ -1,0 +1,260 @@
+=== 2026-09-28T16:54:14Z start /e2e/fv.toml
+2026-09-28T16:54:14.922144Z  INFO fastvideo_serve::encoders: H.264 encoder: nvenc (auto: the NVENC encode probe succeeded) settings=["director.encoder", "reactor.h264", "webrtc.encoder", "engine.post_encoder"] attempts=1
+2026-09-28T16:54:14.922329Z  WARN fastvideo_serve::app: FV_URL_SIGNING_KEY is not set: /files URLs die with this process
+2026-09-28T16:54:17.067024Z  INFO fastvideo_engine_service::cuda::backend: technique profile installed profile=Some("h3/fasth3_4step_vsa")
+2026-09-28T16:54:17.344373Z  INFO fastvideo_engine_service::cuda::backend: loading model=fasth3 dit_gb=1.106e-6 free_gb=101.235359744
+2026-09-28T16:54:19.216743Z  WARN fastvideo_serve::app: server.callbacks_allow_private: webhooks may target loopback/private hosts (tests only)
+2026-09-28T16:54:19.219861Z  INFO fastvideo_webrtc::host: webrtc host bound udp_local=Some(0.0.0.0:40010) tcp_local=Some(0.0.0.0:40000) candidates=["candidate:1 1 udp 2130706431 127.0.0.1 40010 typ host", "candidate:2 1 udp 2130706175 172.22.0.2 40010 typ host", "candidate:101 1 tcp 1526726655 127.0.0.1 40000 typ host tcptype passive", "candidate:102 1 tcp 1526726399 172.22.0.2 40000 typ host tcptype passive"]
+2026-09-28T16:54:19.219899Z  INFO fastvideo_serve::rtc: webrtc host bound udp=Some(0.0.0.0:40010) tcp=Some(0.0.0.0:40000)
+2026-09-28T16:54:19.219925Z  INFO fastvideo_serve::reactor: reactor runtime ready to answer offers udp=Some(0.0.0.0:40010) tcp=Some(0.0.0.0:40000)
+2026-09-28T16:54:19.220105Z  INFO fastvideo_serve::director: fal director mounted apps=3 udp=Some(0.0.0.0:40010) tcp=Some(0.0.0.0:40000)
+2026-09-28T16:54:19.221596Z  INFO fv_serve: listening addr=0.0.0.0:8000
+2026-09-28T16:57:12.703754Z  INFO fastvideo_engine_service::cuda::backend: model resident model=fasth3 seconds=175.359334728
+2026-09-28T16:57:12.703979Z  INFO fastvideo_serve::app: ready models=1
+[fastvideo] h3 step 1/4: 1.8s
+[fastvideo] h3 step 2/4: 1.8s
+[fastvideo] h3 step 3/4: 1.8s
+[fastvideo] h3 step 4/4: 1.8s
+[fastvideo] h3 memory denoise: peak 57.35 GiB used, 58.50 GiB reserved; 52.84 GiB live after; ledger: text_encoder 22.72 | text_refiner 1.49 | dit_nonlinear 23.87 | vae 4.52 | audio_vae 0.24 | activations 4.52 | pool_reserved 1.15 | non_pool 0.69 | total 58.04 GiB
+[fastvideo] h3 video decode + mp4 2.70s: vae 2.68s, rgb+copy 0.02s, writer push 0.00s, decode waited 0.36s, mp4 tail 0.02s
+[fastvideo] h3 fl2va: Qwen-VL multimodal (1 images)
+[fastvideo] llm prefetch: 50 layers, host read+convert 88.28s, upload wait 0.21s, compute starved 88.47s
+[fastvideo] h3 fl2va: encode first (/fvstate/inputs/199294f9-bea1-4ccc-91b1-f9961bfb9244/004d78c26a2f488097c395839c8615c1.jpg)
+[fastvideo] h3 step 1/4: 1.9s
+[fastvideo] h3 step 2/4: 1.9s
+[fastvideo] h3 step 3/4: 1.9s
+[fastvideo] h3 step 4/4: 1.9s
+[fastvideo] h3 memory denoise: peak 57.71 GiB used, 58.69 GiB reserved; 52.96 GiB live after; ledger: text_encoder 22.72 | text_refiner 1.49 | dit_nonlinear 23.87 | vae 4.52 | audio_vae 0.24 | activations 4.87 | pool_reserved 0.98 | non_pool 1.24 | total 58.95 GiB
+[fastvideo] h3 video decode + mp4 3.09s: vae 3.06s, rgb+copy 0.02s, writer push 0.00s, decode waited 0.36s, mp4 tail 0.02s
+[fastvideo] h3 step 1/4: 1.8s
+[fastvideo] h3 step 2/4: 1.8s
+[fastvideo] h3 step 1/4: 1.8s
+[fastvideo] h3 step 2/4: 1.8s
+[fastvideo] h3 step 3/4: 1.8s
+[fastvideo] h3 step 4/4: 1.8s
+[fastvideo] h3 memory denoise: peak 57.47 GiB used, 58.19 GiB reserved; 52.96 GiB live after; ledger: text_encoder 22.72 | text_refiner 1.49 | dit_nonlinear 23.87 | vae 4.52 | audio_vae 0.24 | activations 4.63 | pool_reserved 0.72 | non_pool 0.69 | total 58.16 GiB
+[fastvideo] h3 video decode + mp4 2.72s: vae 2.69s, rgb+copy 0.01s, writer push 0.00s, decode waited 0.36s, mp4 tail 0.02s
+[fastvideo] h3 step 1/4: 1.8s
+[fastvideo] h3 step 2/4: 1.8s
+[fastvideo] h3 step 3/4: 1.8s
+[fastvideo] h3 step 4/4: 1.8s
+[fastvideo] h3 memory denoise: peak 57.47 GiB used, 58.19 GiB reserved; 52.96 GiB live after; ledger: text_encoder 22.72 | text_refiner 1.49 | dit_nonlinear 23.87 | vae 4.52 | audio_vae 0.24 | activations 4.63 | pool_reserved 0.72 | non_pool 0.69 | total 58.16 GiB
+[fastvideo] h3 video decode + mp4 2.72s: vae 2.70s, rgb+copy 0.02s, writer push 0.00s, decode waited 0.36s, mp4 tail 0.02s
+[fastvideo] h3 step 1/4: 1.8s
+[fastvideo] h3 step 2/4: 1.8s
+[fastvideo] h3 step 3/4: 1.8s
+[fastvideo] h3 step 4/4: 1.8s
+[fastvideo] h3 memory denoise: peak 57.47 GiB used, 58.19 GiB reserved; 52.96 GiB live after; ledger: text_encoder 22.72 | text_refiner 1.49 | dit_nonlinear 23.87 | vae 4.52 | audio_vae 0.24 | activations 4.63 | pool_reserved 0.72 | non_pool 0.69 | total 58.16 GiB
+[fastvideo] h3 video decode + mp4 2.72s: vae 2.70s, rgb+copy 0.01s, writer push 0.00s, decode waited 0.37s, mp4 tail 0.02s
+[fastvideo] h3 step 1/4: 1.8s
+[fastvideo] h3 step 2/4: 1.8s
+[fastvideo] h3 step 3/4: 1.8s
+[fastvideo] h3 step 4/4: 1.8s
+[fastvideo] h3 memory denoise: peak 57.47 GiB used, 58.19 GiB reserved; 52.96 GiB live after; ledger: text_encoder 22.72 | text_refiner 1.49 | dit_nonlinear 23.87 | vae 4.52 | audio_vae 0.24 | activations 4.63 | pool_reserved 0.72 | non_pool 0.69 | total 58.16 GiB
+[fastvideo] h3 video decode + mp4 2.72s: vae 2.70s, rgb+copy 0.01s, writer push 0.00s, decode waited 0.36s, mp4 tail 0.02s
+[fastvideo] h3 step 1/4: 1.8s
+[fastvideo] h3 step 2/4: 1.8s
+[fastvideo] h3 step 3/4: 1.8s
+[fastvideo] h3 step 4/4: 1.8s
+[fastvideo] h3 memory denoise: peak 57.47 GiB used, 58.19 GiB reserved; 52.96 GiB live after; ledger: text_encoder 22.72 | text_refiner 1.49 | dit_nonlinear 23.87 | vae 4.52 | audio_vae 0.24 | activations 4.63 | pool_reserved 0.72 | non_pool 0.69 | total 58.16 GiB
+[fastvideo] h3 video decode + mp4 2.72s: vae 2.70s, rgb+copy 0.01s, writer push 0.00s, decode waited 0.36s, mp4 tail 0.02s
+[fastvideo] h3 step 1/4: 4.8s
+[fastvideo] h3 step 2/4: 4.8s
+[fastvideo] h3 step 3/4: 4.8s
+[fastvideo] h3 step 4/4: 4.8s
+[fastvideo] h3 memory denoise: peak 64.10 GiB used, 65.47 GiB reserved; 52.96 GiB live after; ledger: text_encoder 22.72 | text_refiner 1.49 | dit_nonlinear 23.87 | vae 4.52 | audio_vae 0.24 | activations 11.26 | pool_reserved 1.37 | non_pool 0.69 | total 64.79 GiB
+[fastvideo] h3 video decode + mp4 6.62s: vae 6.57s, rgb+copy 0.11s, writer push 0.00s, decode waited 0.26s, mp4 tail 0.03s
+2026-09-28T17:02:28.632938Z  INFO fastvideo_fal::director::service: director session starting session=419d390c-13dc-45c2-83b2-df4cac2acf0a app=minimax/h3-turbo model=fasth3 codec=Vp8 audio=true
+[fastvideo] h3 step 1/4: 3.6s
+[fastvideo] h3 step 2/4: 3.6s
+[fastvideo] h3 step 3/4: 3.6s
+[fastvideo] h3 step 4/4: 3.6s
+[fastvideo] h3 memory denoise: peak 61.52 GiB used, 63.41 GiB reserved; 52.96 GiB live after; ledger: text_encoder 22.72 | text_refiner 1.49 | dit_nonlinear 23.87 | vae 4.52 | audio_vae 0.24 | activations 8.69 | pool_reserved 1.88 | non_pool 0.70 | total 62.22 GiB
+[fastvideo] h3 video decode + mp4 5.36s: vae 5.35s, rgb+copy 0.02s, writer push 0.00s, decode waited 0.38s, mp4 tail 0.00s
+[fastvideo] h3 fl2va: Qwen-VL multimodal (1 images)
+2026-09-28T17:02:54.278928Z  INFO fastvideo_fal::director::session: director session closing session=419d390c-13dc-45c2-83b2-df4cac2acf0a reason=Stopped chunks=1
+2026-09-28T17:02:55.538266Z  INFO fastvideo_fal::director::service: director session starting session=b6dd0085-984c-4ccd-8054-6ce11120ab2a app=minimax/h3-turbo model=fasth3 codec=Vp8 audio=true
+[fastvideo] llm prefetch: 50 layers, host read+convert 67.16s, upload wait 0.22s, compute starved 67.35s
+[fastvideo] h3 fl2va: encode first (/fvstate/director/wma-419d390c-13dc-45c2-83b2-df4cac2acf0a/anchor-0.png)
+[fastvideo] h3 step 1/4: 3.6s
+[fastvideo] h3 step 2/4: 3.6s
+[fastvideo] h3 step 3/4: 3.6s
+[fastvideo] h3 step 4/4: 3.6s
+[fastvideo] h3 memory denoise: peak 61.52 GiB used, 63.41 GiB reserved; 52.96 GiB live after; ledger: text_encoder 22.72 | text_refiner 1.49 | dit_nonlinear 23.87 | vae 4.52 | audio_vae 0.24 | activations 8.69 | pool_reserved 1.88 | non_pool 0.70 | total 62.22 GiB
+[fastvideo] h3 video decode + mp4 5.34s: vae 5.33s, rgb+copy 0.02s, writer push 0.00s, decode waited 0.38s, mp4 tail 0.00s
+[fastvideo] h3 fl2va: Qwen-VL multimodal (1 images)
+[fastvideo] llm prefetch: 50 layers, host read+convert 1.36s, upload wait 0.21s, compute starved 1.55s
+[fastvideo] h3 fl2va: encode first (/fvstate/director/wma-b6dd0085-984c-4ccd-8054-6ce11120ab2a/anchor-0.png)
+2026-09-28T17:04:29.445472Z  INFO fastvideo_fal::director::session: director session closing session=b6dd0085-984c-4ccd-8054-6ce11120ab2a reason=Stopped chunks=1
+[fastvideo] h3 step 1/4: 3.9s
+[fastvideo] h3 step 2/4: 3.9s
+[fastvideo] h3 step 3/4: 3.9s
+[fastvideo] h3 step 4/4: 4.0s
+[fastvideo] h3 memory denoise: peak 61.76 GiB used, 62.91 GiB reserved; 52.97 GiB live after; ledger: text_encoder 22.72 | text_refiner 1.49 | dit_nonlinear 23.87 | vae 4.52 | audio_vae 0.24 | activations 8.93 | pool_reserved 1.14 | non_pool 0.70 | total 62.47 GiB
+[fastvideo] h3 video decode + mp4 5.37s: vae 5.37s, rgb+copy 0.02s, writer push 0.00s, decode waited 0.38s, mp4 tail 0.00s
+2026-09-28T17:06:23.569705Z  INFO fastvideo_engine_service::stream::player: clip build submitted session=d81f6f6d-1885-4605-913a-d976ed2b1a13 clip=748bb336-796a-47ca-9858-6cd03a31e30c frames=107
+2026-09-28T17:06:23.570000Z  INFO fastvideo_engine_service::stream::player: command refused session=d81f6f6d-1885-4605-913a-d976ed2b1a13 command="play" reason=The playout queue is empty; `enqueue` a clip and wait for `clip_generated`.
+2026-09-28T17:06:23.570515Z  INFO fastvideo_reactor::gateway: invalid command conn=6455 command=set_seed error=`seed` = -3 is out of range
+[fastvideo] h3 step 1/4: 3.9s
+[fastvideo] h3 step 2/4: 3.9s
+[fastvideo] h3 step 3/4: 3.9s
+[fastvideo] h3 step 4/4: 3.9s
+[fastvideo] h3 memory denoise: peak 62.41 GiB used, 64.50 GiB reserved; 52.96 GiB live after; ledger: text_encoder 22.72 | text_refiner 1.49 | dit_nonlinear 23.87 | vae 4.52 | audio_vae 0.24 | activations 9.57 | pool_reserved 2.09 | non_pool 0.70 | total 63.11 GiB
+[fastvideo] h3 video decode + mp4 5.39s: vae 5.36s, rgb+copy 0.09s, writer push 0.00s, decode waited 0.26s, mp4 tail 0.01s
+2026-09-28T17:06:47.857549Z  INFO fastvideo_engine_service::stream::player: clip generated session=d81f6f6d-1885-4605-913a-d976ed2b1a13 clip=748bb336-796a-47ca-9858-6cd03a31e30c build_s=24.287684539 rtf=5.447704943327103
+2026-09-28T17:06:52.314636Z  INFO fastvideo_reactor::gateway: reactor connection closed conn=6455 reason=RemoteClosed
+2026-09-28T17:07:24.433073Z  INFO fastvideo_engine_service::stream::player: clip build submitted session=68b78bbc-92b7-41dd-9111-af384daa24b4 clip=488ce84d-e571-45ec-98ce-a886a3bf8fc8 frames=107
+2026-09-28T17:07:24.433368Z  INFO fastvideo_engine_service::stream::player: command refused session=68b78bbc-92b7-41dd-9111-af384daa24b4 command="play" reason=The playout queue is empty; `enqueue` a clip and wait for `clip_generated`.
+2026-09-28T17:07:24.433532Z  INFO fastvideo_reactor::gateway: invalid command conn=6905 command=set_seed error=`seed` = -3 is out of range
+[fastvideo] h3 step 1/4: 3.9s
+[fastvideo] h3 step 2/4: 3.9s
+[fastvideo] h3 step 3/4: 3.9s
+[fastvideo] h3 step 4/4: 3.9s
+[fastvideo] h3 memory denoise: peak 62.41 GiB used, 64.44 GiB reserved; 52.96 GiB live after; ledger: text_encoder 22.72 | text_refiner 1.49 | dit_nonlinear 23.87 | vae 4.52 | audio_vae 0.24 | activations 9.57 | pool_reserved 2.03 | non_pool 0.70 | total 63.11 GiB
+[fastvideo] h3 video decode + mp4 5.38s: vae 5.36s, rgb+copy 0.09s, writer push 0.00s, decode waited 0.27s, mp4 tail 0.01s
+2026-09-28T17:07:45.750989Z  INFO fastvideo_engine_service::stream::player: clip generated session=68b78bbc-92b7-41dd-9111-af384daa24b4 clip=488ce84d-e571-45ec-98ce-a886a3bf8fc8 build_s=21.317815031 rtf=4.781565988261682
+2026-09-28T17:07:50.171029Z  INFO fastvideo_reactor::gateway: reactor connection closed conn=6905 reason=RemoteClosed
+2026-09-28T17:08:04.533154Z  INFO fastvideo_serve_kit::keys: api key minted id=key_8eb5555304d4 name=playwright
+[fastvideo] h3 step 1/4: 4.7s
+[fastvideo] h3 step 2/4: 4.8s
+[fastvideo] h3 step 3/4: 4.8s
+[fastvideo] h3 step 4/4: 4.8s
+[fastvideo] h3 memory denoise: peak 64.09 GiB used, 65.47 GiB reserved; 52.96 GiB live after; ledger: text_encoder 22.72 | text_refiner 1.49 | dit_nonlinear 23.87 | vae 4.52 | audio_vae 0.24 | activations 11.26 | pool_reserved 1.37 | non_pool 0.70 | total 64.80 GiB
+[fastvideo] h3 video decode + mp4 6.47s: vae 6.42s, rgb+copy 0.11s, writer push 0.00s, decode waited 0.25s, mp4 tail 0.04s
+2026-09-28T17:16:13.388143Z  INFO fastvideo_serve_kit::keys: api key minted id=key_7174a62dcc94 name=playwright
+[fastvideo] h3 step 1/4: 4.7s
+[fastvideo] h3 step 2/4: 4.7s
+[fastvideo] h3 step 3/4: 4.7s
+[fastvideo] h3 step 4/4: 4.8s
+[fastvideo] h3 memory denoise: peak 64.09 GiB used, 65.47 GiB reserved; 52.96 GiB live after; ledger: text_encoder 22.72 | text_refiner 1.49 | dit_nonlinear 23.87 | vae 4.52 | audio_vae 0.24 | activations 11.26 | pool_reserved 1.37 | non_pool 0.70 | total 64.80 GiB
+[fastvideo] h3 video decode + mp4 6.44s: vae 6.39s, rgb+copy 0.10s, writer push 0.00s, decode waited 0.24s, mp4 tail 0.03s
+2026-09-28T17:17:13.563267Z  INFO fastvideo_serve_kit::keys: api key minted id=key_1a5e96502613 name=playwright
+[fastvideo] h3 step 1/4: 4.7s
+[fastvideo] h3 step 2/4: 4.7s
+[fastvideo] h3 step 3/4: 4.7s
+[fastvideo] h3 step 4/4: 4.8s
+[fastvideo] h3 memory denoise: peak 64.09 GiB used, 65.47 GiB reserved; 52.96 GiB live after; ledger: text_encoder 22.72 | text_refiner 1.49 | dit_nonlinear 23.87 | vae 4.52 | audio_vae 0.24 | activations 11.26 | pool_reserved 1.37 | non_pool 0.70 | total 64.80 GiB
+[fastvideo] h3 video decode + mp4 6.46s: vae 6.41s, rgb+copy 0.10s, writer push 0.00s, decode waited 0.24s, mp4 tail 0.04s
+[fastvideo] h3 fl2va: Qwen-VL multimodal (1 images)
+[fastvideo] llm prefetch: 50 layers, host read+convert 92.30s, upload wait 0.21s, compute starved 92.50s
+[fastvideo] h3 fl2va: encode first (/fvstate/inputs/2a459684-bfa0-45dc-97c3-8194b5aceff8/bb5bbd1669d04da7a4fd5cac22620fd8.png)
+[fastvideo] h3 step 1/4: 5.2s
+[fastvideo] h3 step 2/4: 5.2s
+[fastvideo] h3 step 3/4: 5.3s
+[fastvideo] h3 step 4/4: 5.3s
+[fastvideo] h3 memory denoise: peak 64.41 GiB used, 65.84 GiB reserved; 52.97 GiB live after; ledger: text_encoder 22.72 | text_refiner 1.49 | dit_nonlinear 23.87 | vae 4.52 | audio_vae 0.24 | activations 11.57 | pool_reserved 1.44 | non_pool 0.70 | total 65.11 GiB
+[fastvideo] h3 video decode + mp4 6.46s: vae 6.40s, rgb+copy 0.13s, writer push 0.00s, decode waited 0.25s, mp4 tail 0.03s
+2026-09-28T17:19:57.034488Z  INFO fastvideo_fal::director::service: director session starting session=5e79d338-6ad1-48e9-8b11-5d3e432980a8 app=minimax/h3-turbo model=fasth3 codec=Vp8 audio=true
+[fastvideo] h3 step 1/4: 11.0s
+[fastvideo] h3 step 2/4: 11.0s
+[fastvideo] h3 step 3/4: 11.0s
+[fastvideo] h3 step 4/4: 11.0s
+[fastvideo] h3 memory denoise: peak 51.47 GiB used, 54.44 GiB reserved; 30.26 GiB live after; ledger: text_refiner 1.49 | dit_nonlinear 23.87 | vae 4.52 | audio_vae 0.24 | activations 21.36 | pool_reserved 2.96 | non_pool 0.70 | total 52.17 GiB
+[fastvideo] h3 video decode + mp4 12.68s: vae 12.65s, rgb+copy 0.21s, writer push 0.00s, decode waited 0.26s, mp4 tail 0.01s
+[fastvideo] h3 fl2va: Qwen-VL multimodal (1 images)
+[fastvideo] llm prefetch: 50 layers, host read+convert 41.74s, upload wait 0.22s, compute starved 41.91s
+[fastvideo] h3 fl2va: encode first (/fvstate/director/wma-5e79d338-6ad1-48e9-8b11-5d3e432980a8/anchor-0.png)
+[fastvideo] h3 step 1/4: 12.4s
+[fastvideo] h3 step 2/4: 12.5s
+[fastvideo] h3 step 3/4: 12.6s
+[fastvideo] h3 step 4/4: 12.6s
+[fastvideo] h3 memory denoise: peak 52.07 GiB used, 54.59 GiB reserved; 30.27 GiB live after; ledger: text_refiner 1.49 | dit_nonlinear 23.87 | vae 4.52 | audio_vae 0.24 | activations 21.96 | pool_reserved 2.52 | non_pool 0.70 | total 52.77 GiB
+[fastvideo] h3 video decode + mp4 12.69s: vae 12.66s, rgb+copy 0.21s, writer push 0.00s, decode waited 0.27s, mp4 tail 0.01s
+[fastvideo] h3 fl2va: Qwen-VL multimodal (1 images)
+2026-09-28T17:22:49.070420Z  INFO fastvideo_fal::director::session: director session closing session=5e79d338-6ad1-48e9-8b11-5d3e432980a8 reason=Stopped chunks=2
+2026-09-28T17:22:51.107161Z  INFO fastvideo_serve_kit::keys: api key revoked id=key_1a5e96502613
+[fastvideo] llm prefetch: 50 layers, host read+convert 95.38s, upload wait 0.22s, compute starved 95.02s
+[fastvideo] h3 fl2va: encode first (/fvstate/director/wma-5e79d338-6ad1-48e9-8b11-5d3e432980a8/anchor-1.png)
+[fastvideo] h3 step 1/4: 1.7s
+[fastvideo] h3 step 2/4: 1.7s
+[fastvideo] h3 step 3/4: 1.7s
+[fastvideo] h3 step 4/4: 1.7s
+[fastvideo] h3 memory denoise: peak 34.75 GiB used, 35.50 GiB reserved; 30.24 GiB live after; ledger: text_refiner 1.49 | dit_nonlinear 23.87 | vae 4.52 | audio_vae 0.24 | activations 4.63 | pool_reserved 0.75 | non_pool 0.70 | total 35.45 GiB
+[fastvideo] h3 video decode + mp4 2.71s: vae 2.68s, rgb+copy 0.01s, writer push 0.00s, decode waited 0.36s, mp4 tail 0.02s
+[fastvideo] h3 step 1/4: 4.7s
+[fastvideo] h3 step 2/4: 4.7s
+[fastvideo] h3 step 3/4: 4.8s
+[fastvideo] h3 step 4/4: 4.8s
+[fastvideo] h3 memory denoise: peak 41.38 GiB used, 42.78 GiB reserved; 30.24 GiB live after; ledger: text_refiner 1.49 | dit_nonlinear 23.87 | vae 4.52 | audio_vae 0.24 | activations 11.26 | pool_reserved 1.41 | non_pool 0.70 | total 42.08 GiB
+[fastvideo] h3 video decode + mp4 6.46s: vae 6.41s, rgb+copy 0.11s, writer push 0.00s, decode waited 0.25s, mp4 tail 0.04s
+2026-09-28T17:25:42.566449Z  INFO fastvideo_serve::shutdown: SIGTERM
+2026-09-28T17:25:42.566503Z  INFO fastvideo_serve::app: shutdown requested: draining
+2026-09-28T17:25:42.810084Z  INFO fastvideo_serve::app: drained
+=== 2026-09-28T17:25:43Z start /e2e/fv-x264.toml
+2026-09-28T17:25:43.965267Z  INFO fastvideo_serve::encoders: H.264 encoder: nvenc (auto: the NVENC encode probe succeeded) settings=["director.encoder", "reactor.h264", "webrtc.encoder"] attempts=1
+2026-09-28T17:25:43.965333Z  WARN fastvideo_serve::app: FV_URL_SIGNING_KEY is not set: /files URLs die with this process
+2026-09-28T17:25:45.241885Z  INFO fastvideo_engine_service::cuda::backend: technique profile installed profile=Some("h3/fasth3_4step_vsa")
+2026-09-28T17:25:45.546453Z  INFO fastvideo_engine_service::cuda::backend: loading model=fasth3 dit_gb=1.106e-6 free_gb=101.235359744
+2026-09-28T17:25:46.446921Z  WARN fastvideo_serve::app: server.callbacks_allow_private: webhooks may target loopback/private hosts (tests only)
+2026-09-28T17:25:46.447262Z  INFO fastvideo_webrtc::host: webrtc host bound udp_local=Some(0.0.0.0:40010) tcp_local=Some(0.0.0.0:40000) candidates=["candidate:1 1 udp 2130706431 127.0.0.1 40010 typ host", "candidate:2 1 udp 2130706175 172.22.0.2 40010 typ host", "candidate:101 1 tcp 1526726655 127.0.0.1 40000 typ host tcptype passive", "candidate:102 1 tcp 1526726399 172.22.0.2 40000 typ host tcptype passive"]
+2026-09-28T17:25:46.447281Z  INFO fastvideo_serve::rtc: webrtc host bound udp=Some(0.0.0.0:40010) tcp=Some(0.0.0.0:40000)
+2026-09-28T17:25:46.447312Z  INFO fastvideo_serve::reactor: reactor runtime ready to answer offers udp=Some(0.0.0.0:40010) tcp=Some(0.0.0.0:40000)
+2026-09-28T17:25:46.447504Z  INFO fastvideo_serve::director: fal director mounted apps=3 udp=Some(0.0.0.0:40010) tcp=Some(0.0.0.0:40000)
+2026-09-28T17:25:46.449000Z  INFO fv_serve: listening addr=0.0.0.0:8000
+2026-09-28T17:28:25.191170Z  INFO fastvideo_engine_service::cuda::backend: model resident model=fasth3 seconds=159.644672486
+2026-09-28T17:28:25.191349Z  INFO fastvideo_serve::app: ready models=1
+[fastvideo] h3 step 1/4: 1.9s
+[fastvideo] h3 step 2/4: 1.8s
+[fastvideo] h3 step 3/4: 1.8s
+[fastvideo] h3 step 4/4: 1.8s
+[fastvideo] h3 memory denoise: peak 57.35 GiB used, 58.50 GiB reserved; 52.84 GiB live after; ledger: text_encoder 22.72 | text_refiner 1.49 | dit_nonlinear 23.87 | vae 4.52 | audio_vae 0.24 | activations 4.52 | pool_reserved 1.15 | non_pool 0.69 | total 58.04 GiB
+[fastvideo] h3 video decode + mp4 2.68s: vae 2.65s, rgb+copy 0.02s, writer push 0.00s, decode waited 0.37s, mp4 tail 0.02s
+[fastvideo] h3 step 1/4: 4.8s
+[fastvideo] h3 step 2/4: 4.7s
+[fastvideo] h3 step 3/4: 4.8s
+[fastvideo] h3 step 4/4: 4.8s
+[fastvideo] h3 memory denoise: peak 64.06 GiB used, 65.41 GiB reserved; 52.93 GiB live after; ledger: text_encoder 22.72 | text_refiner 1.49 | dit_nonlinear 23.87 | vae 4.52 | audio_vae 0.24 | activations 11.23 | pool_reserved 1.34 | non_pool 0.69 | total 64.75 GiB
+[fastvideo] h3 video decode + mp4 6.92s: vae 6.86s, rgb+copy 0.12s, writer push 0.00s, decode waited 0.24s, mp4 tail 0.04s
+[fastvideo] h3 step 1/4: 1.8s
+[fastvideo] h3 step 2/4: 1.8s
+[fastvideo] h3 step 3/4: 1.8s
+[fastvideo] h3 step 4/4: 1.8s
+[fastvideo] h3 memory denoise: peak 57.44 GiB used, 58.12 GiB reserved; 52.92 GiB live after; ledger: text_encoder 22.72 | text_refiner 1.49 | dit_nonlinear 23.87 | vae 4.52 | audio_vae 0.24 | activations 4.60 | pool_reserved 0.69 | non_pool 0.70 | total 58.14 GiB
+[fastvideo] h3 video decode + mp4 2.69s: vae 2.66s, rgb+copy 0.01s, writer push 0.00s, decode waited 0.36s, mp4 tail 0.03s
+[fastvideo] h3 step 1/4: 4.7s
+[fastvideo] h3 step 2/4: 4.8s
+[fastvideo] h3 step 3/4: 4.8s
+[fastvideo] h3 step 4/4: 4.8s
+[fastvideo] h3 memory denoise: peak 64.06 GiB used, 65.41 GiB reserved; 52.93 GiB live after; ledger: text_encoder 22.72 | text_refiner 1.49 | dit_nonlinear 23.87 | vae 4.52 | audio_vae 0.24 | activations 11.23 | pool_reserved 1.34 | non_pool 0.70 | total 64.76 GiB
+[fastvideo] h3 video decode + mp4 6.58s: vae 6.51s, rgb+copy 0.11s, writer push 0.00s, decode waited 0.24s, mp4 tail 0.04s
+2026-09-28T17:30:52.073706Z  INFO fastvideo_serve::shutdown: SIGTERM
+2026-09-28T17:30:52.073771Z  INFO fastvideo_serve::app: shutdown requested: draining
+2026-09-28T17:30:52.376432Z  INFO fastvideo_serve::app: drained
+=== 2026-09-28T17:30:53Z start /e2e/fv.toml
+2026-09-28T17:30:53.455760Z  INFO fastvideo_serve::encoders: H.264 encoder: nvenc (auto: the NVENC encode probe succeeded) settings=["director.encoder", "reactor.h264", "webrtc.encoder", "engine.post_encoder"] attempts=1
+2026-09-28T17:30:53.455912Z  WARN fastvideo_serve::app: FV_URL_SIGNING_KEY is not set: /files URLs die with this process
+2026-09-28T17:30:56.851590Z  INFO fastvideo_engine_service::cuda::backend: technique profile installed profile=Some("h3/fasth3_4step_vsa")
+2026-09-28T17:30:57.125236Z  INFO fastvideo_engine_service::cuda::backend: loading model=fasth3 dit_gb=1.106e-6 free_gb=101.235359744
+2026-09-28T17:30:57.951330Z  WARN fastvideo_serve::app: server.callbacks_allow_private: webhooks may target loopback/private hosts (tests only)
+2026-09-28T17:30:57.951965Z  INFO fastvideo_webrtc::host: webrtc host bound udp_local=Some(0.0.0.0:40010) tcp_local=Some(0.0.0.0:40000) candidates=["candidate:1 1 udp 2130706431 127.0.0.1 40010 typ host", "candidate:2 1 udp 2130706175 172.22.0.2 40010 typ host", "candidate:101 1 tcp 1526726655 127.0.0.1 40000 typ host tcptype passive", "candidate:102 1 tcp 1526726399 172.22.0.2 40000 typ host tcptype passive"]
+2026-09-28T17:30:57.951987Z  INFO fastvideo_serve::rtc: webrtc host bound udp=Some(0.0.0.0:40010) tcp=Some(0.0.0.0:40000)
+2026-09-28T17:30:57.952032Z  INFO fastvideo_serve::reactor: reactor runtime ready to answer offers udp=Some(0.0.0.0:40010) tcp=Some(0.0.0.0:40000)
+2026-09-28T17:30:57.952258Z  INFO fastvideo_serve::director: fal director mounted apps=3 udp=Some(0.0.0.0:40010) tcp=Some(0.0.0.0:40000)
+2026-09-28T17:30:57.953788Z  INFO fv_serve: listening addr=0.0.0.0:8000
+2026-09-28T17:33:38.965561Z  INFO fastvideo_engine_service::cuda::backend: model resident model=fasth3 seconds=161.840286854
+2026-09-28T17:33:38.965719Z  INFO fastvideo_serve::app: ready models=1
+[fastvideo] h3 step 1/4: 1.8s
+[fastvideo] h3 step 2/4: 1.8s
+[fastvideo] h3 step 3/4: 1.8s
+[fastvideo] h3 step 4/4: 1.8s
+[fastvideo] h3 memory denoise: peak 57.35 GiB used, 58.50 GiB reserved; 52.84 GiB live after; ledger: text_encoder 22.72 | text_refiner 1.49 | dit_nonlinear 23.87 | vae 4.52 | audio_vae 0.24 | activations 4.52 | pool_reserved 1.15 | non_pool 0.69 | total 58.04 GiB
+[fastvideo] h3 video decode + mp4 2.71s: vae 2.68s, rgb+copy 0.01s, writer push 0.00s, decode waited 0.36s, mp4 tail 0.02s
+[fastvideo] h3 step 1/4: 4.7s
+[fastvideo] h3 step 2/4: 4.7s
+[fastvideo] h3 step 3/4: 4.8s
+[fastvideo] h3 step 4/4: 4.8s
+[fastvideo] h3 memory denoise: peak 64.06 GiB used, 65.41 GiB reserved; 52.93 GiB live after; ledger: text_encoder 22.72 | text_refiner 1.49 | dit_nonlinear 23.87 | vae 4.52 | audio_vae 0.24 | activations 11.23 | pool_reserved 1.34 | non_pool 0.69 | total 64.75 GiB
+[fastvideo] h3 video decode + mp4 6.48s: vae 6.43s, rgb+copy 0.11s, writer push 0.00s, decode waited 0.25s, mp4 tail 0.03s
+[fastvideo] h3 step 1/4: 1.8s
+[fastvideo] h3 step 2/4: 1.8s
+[fastvideo] h3 step 3/4: 1.8s
+[fastvideo] h3 step 4/4: 1.8s
+[fastvideo] h3 memory denoise: peak 57.43 GiB used, 58.12 GiB reserved; 52.92 GiB live after; ledger: text_encoder 22.72 | text_refiner 1.49 | dit_nonlinear 23.87 | vae 4.52 | audio_vae 0.24 | activations 4.60 | pool_reserved 0.69 | non_pool 0.70 | total 58.13 GiB
+[fastvideo] h3 video decode + mp4 2.71s: vae 2.68s, rgb+copy 0.01s, writer push 0.00s, decode waited 0.37s, mp4 tail 0.02s
+[fastvideo] h3 step 1/4: 1.8s
+[fastvideo] h3 step 2/4: 1.8s
+[fastvideo] h3 step 3/4: 1.8s
+[fastvideo] h3 step 4/4: 1.8s
+[fastvideo] h3 memory denoise: peak 57.43 GiB used, 58.12 GiB reserved; 52.92 GiB live after; ledger: text_encoder 22.72 | text_refiner 1.49 | dit_nonlinear 23.87 | vae 4.52 | audio_vae 0.24 | activations 4.60 | pool_reserved 0.69 | non_pool 0.70 | total 58.13 GiB
+[fastvideo] h3 video decode + mp4 2.71s: vae 2.69s, rgb+copy 0.01s, writer push 0.00s, decode waited 0.37s, mp4 tail 0.02s
+
