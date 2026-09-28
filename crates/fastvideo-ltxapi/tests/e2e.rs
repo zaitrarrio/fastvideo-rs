@@ -9,8 +9,8 @@ use axum::body::Body;
 use axum::http::{HeaderMap, Request, StatusCode};
 use axum::Router;
 use fastvideo_engine_service::{
-    CancelOutcome, EngineConfig, EngineEvent, EngineService, FakeBackend, FakeConfig, Mp4Mode,
-    Priority,
+    CancelOutcome, EngineConfig, EngineEvent, EngineService, FakeBackend, FakeConfig, ManualClock,
+    Mp4Mode, Priority,
 };
 use fastvideo_ltxapi::{router, LtxConfig};
 use fastvideo_protocol::{ApiError, AudioPlan, Job, JobId, ModelCaps, ProtocolId};
@@ -130,8 +130,17 @@ impl Drop for Fx {
 }
 
 async fn fixture(cfg: LtxConfig, aliases: bool) -> Fx {
+    fixture_on(cfg, aliases, None).await
+}
+
+/// [`fixture`] with the fake's denoise steps on `clock` (the test decides
+/// when they end).
+async fn fixture_on(cfg: LtxConfig, aliases: bool, clock: Option<Arc<ManualClock>>) -> Fx {
     let dir = std::env::temp_dir().join(format!("fv-ltxapi-{}", fastvideo_serve_kit::random_token()));
-    let fake = FakeConfig { mp4: Mp4Mode::Off, ..FakeConfig::default() }.with_models(&["fake-ltx-pro", "fake-ltx-turbo"]);
+    let mut fake = FakeConfig { mp4: Mp4Mode::Off, ..FakeConfig::default() }.with_models(&["fake-ltx-pro", "fake-ltx-turbo"]);
+    if let Some(c) = clock {
+        fake.clock = c;
+    }
     let engine = EngineService::start(
         EngineConfig { output_dir: dir.join("engine"), ..EngineConfig::default() },
         vec![Box::new(FakeBackend::new(fake))],
@@ -327,23 +336,38 @@ async fn v1_timeout_is_504_and_cancels() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn v1_concurrency_limit() {
     let cfg = LtxConfig { v1_concurrency: Some(1), ..LtxConfig::default() };
-    let fx = fixture(cfg, true).await;
-    let a = call(&fx.app, "POST", "/v1/text-to-video", Some("sk-a"), Some(t2v("ltx-turbo", "1280x720", 6)));
-    let b = async {
-        tokio::time::sleep(Duration::from_millis(100)).await;
-        call(&fx.app, "POST", "/v1/text-to-video", Some("sk-a"), Some(t2v("ltx-turbo", "1280x720", 6))).await
-    };
-    let c = async {
-        tokio::time::sleep(Duration::from_millis(100)).await;
-        call(&fx.app, "POST", "/v1/upload", Some("sk-a"), None).await
-    };
-    let (a, b, c) = tokio::join!(a, b, c);
-    assert_eq!(a.status, StatusCode::OK);
+    // The first generation is parked on a manual clock, so it holds the one
+    // v1 slot however fast or slow the host is.
+    let clock = Arc::new(ManualClock::new());
+    let fx = fixture_on(cfg, true, Some(clock.clone())).await;
+    let app = fx.app.clone();
+    let a = tokio::spawn(async move {
+        call(&app, "POST", "/v1/text-to-video", Some("sk-a"), Some(t2v("ltx-turbo", "1280x720", 6))).await
+    });
+    let c2 = clock.clone();
+    let parked = tokio::task::spawn_blocking(move || c2.wait_for_sleepers(1, Duration::from_secs(30))).await.unwrap();
+    assert!(parked, "the first generation never reached a denoise step");
+    let b = call(&fx.app, "POST", "/v1/text-to-video", Some("sk-a"), Some(t2v("ltx-turbo", "1280x720", 6))).await;
     assert_eq!(b.status, StatusCode::TOO_MANY_REQUESTS);
     assert_eq!(b.err_type(), "concurrency_limit_error");
     assert_eq!(b.header("retry-after"), Some("5"));
     // Uploads are not generations.
+    let c = call(&fx.app, "POST", "/v1/upload", Some("sk-a"), None).await;
     assert_eq!(c.status, StatusCode::OK);
+    // Let the first one finish.
+    let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let (s2, c3) = (stop.clone(), clock.clone());
+    let driver = std::thread::spawn(move || {
+        while !s2.load(std::sync::atomic::Ordering::Relaxed) {
+            if c3.wait_for_sleepers(1, Duration::from_millis(20)) {
+                c3.advance(Duration::from_millis(50));
+            }
+        }
+    });
+    let a = a.await.unwrap();
+    stop.store(true, std::sync::atomic::Ordering::Relaxed);
+    driver.join().unwrap();
+    assert_eq!(a.status, StatusCode::OK);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
