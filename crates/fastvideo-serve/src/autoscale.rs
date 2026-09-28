@@ -165,6 +165,7 @@ mod tests {
             available: true,
             max_queued: 32,
             max_streams: 0,
+            submitted_total: 4,
         };
         Hook(s.clone()).observe(&[m]).await;
         let v = s.signals(&["wan".into()]).await;

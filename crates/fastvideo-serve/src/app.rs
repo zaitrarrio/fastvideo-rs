@@ -485,15 +485,7 @@ impl App {
         // layers, so metrics and the multi-worker filter see them).
         #[cfg(feature = "http-client")]
         if worker_role {
-            let st = crate::worker::WorkerState::new(
-                ctx.clone(),
-                gate.clone(),
-                d1.clone(),
-                worker.clone(),
-                config.gateway.pool.clone(),
-                config.limits.queue_max,
-            );
-            streams = streams.merge(crate::worker::routes(st));
+            let drained = Arc::new(std::sync::atomic::AtomicBool::new(false));
             if let (Some(pool), Some(d), Some(url), true, Mode::Http) =
                 (&config.gateway.pool, &d1, &config.server.public_base_url, config.gateway.register, config.server.mode)
             {
@@ -503,10 +495,21 @@ impl App {
                     worker_id: worker.clone(),
                     url: url.trim_end_matches('/').to_owned(),
                     gate: gate.clone(),
+                    drained: drained.clone(),
                 };
                 background.push(crate::worker::spawn_registration(reg.clone()));
                 registration = Some(reg);
             }
+            let st = crate::worker::WorkerState::new(
+                ctx.clone(),
+                gate.clone(),
+                d1.clone(),
+                worker.clone(),
+                config.gateway.pool.clone(),
+                config.limits.queue_max,
+            )
+            .with_drain(drained, registration.clone());
+            streams = streams.merge(crate::worker::routes(st));
         }
         let mut router = assemble(&config, &ctx, &gate, jobs_kind, streams, fal_extra);
         #[cfg(feature = "http-client")]
