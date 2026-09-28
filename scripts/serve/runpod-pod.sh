@@ -11,8 +11,11 @@
 #   runpod-pod.sh plan [image]    print the create payload (no API call; secrets
 #                                 appear only as {{ RUNPOD_SECRET_* }} references)
 #
-# The image must be digest-pinned (…@sha256:…); a tag (default
-# ghcr.io/zaitrarrio/fastvideo-rs-serve:latest) is resolved to its digest first.
+# The image must be digest-pinned (…@sha256:…); a tag is resolved to its
+# digest first. Default: for a published variant's config (FV_VARIANT, or
+# derived from FV_SERVE_CONFIG; scripts/serve/variants.sh) the image of its
+# Runpod template fv-serve-<variant>-pod (docs/serve/images.md), else the
+# legacy all-in-one ghcr.io/zaitrarrio/fastvideo-rs-serve:latest.
 # fv-serve starts from the image ENTRYPOINT with `--config $FV_SERVE_CONFIG`.
 #
 # Money guards: the GPU's $/hr cap (RUNPOD_GPU_MAX_DPH, default 1.0), a
@@ -31,11 +34,21 @@ set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source-path=SCRIPTDIR source=../gpu/lib.sh
 source "$HERE/../gpu/lib.sh"
+# shellcheck source-path=SCRIPTDIR source=variants.sh
+source "$HERE/variants.sh"
 
 API="${RUNPOD_API_BASE:-https://rest.runpod.io/v1}"
 GQL="${RUNPOD_GRAPHQL:-https://api.runpod.io/graphql}"
 IMAGE_DEFAULT="ghcr.io/zaitrarrio/fastvideo-rs-serve:latest"
 CONFIG="${FV_SERVE_CONFIG:-/etc/fv/runpod-fake.toml}"
+VARIANT="${FV_VARIANT:-$(fv_variant_for_config "$CONFIG")}"
+pick_image() {
+  if [[ -n "${1:-}" ]]; then echo "$1"
+  elif [[ -n "${FV_SERVE_IMAGE:-}" ]]; then echo "$FV_SERVE_IMAGE"
+  elif [[ -n "$VARIANT" ]]; then fv_variant_image "$VARIANT" pod
+  else echo "$IMAGE_DEFAULT"
+  fi
+}
 GPUS="${RUNPOD_GPU_TYPES:-NVIDIA RTX A4000,NVIDIA RTX A4500,NVIDIA RTX 4000 Ada Generation,NVIDIA RTX A5000,NVIDIA RTX 2000 Ada Generation,NVIDIA GeForce RTX 3090,NVIDIA L4}"
 MAX_DPH="${RUNPOD_GPU_MAX_DPH:-1.0}"
 CAP_S="${FV_POD_CAP_S:-1800}"
@@ -169,7 +182,7 @@ cmd_smoke() {
   : "${RUNPOD_API_KEY:?RUNPOD_API_KEY missing}"
   check_balance
   local image key keyhash base t_create t_first="" t_ready="" code t0 info caps job id st result
-  image="$(resolve_digest "${1:-${FV_SERVE_IMAGE:-$IMAGE_DEFAULT}}")"
+  image="$(resolve_digest "$(pick_image "${1:-}")")"
   log "image $image"
   key="fvk-$(openssl rand -hex 16)"
   keyhash="$(printf '%s' "$key" | sha256sum | cut -d' ' -f1)"
@@ -228,7 +241,7 @@ cmd_up() {
   : "${RUNPOD_API_KEY:?RUNPOD_API_KEY missing}"
   check_balance
   local image key
-  image="$(resolve_digest "${1:-${FV_SERVE_IMAGE:-$IMAGE_DEFAULT}}")"
+  image="$(resolve_digest "$(pick_image "${1:-}")")"
   key="fvk-$(openssl rand -hex 16)"
   create "$image" "$(printf '%s' "$key" | sha256sum | cut -d' ' -f1)"
   echo "$POD $key"
@@ -244,6 +257,6 @@ case "${1:-}" in
   plan)
     shift
     IFS=',' read -r -a types <<<"$GPUS"
-    payload "${1:-${FV_SERVE_IMAGE:-$IMAGE_DEFAULT}}" "${types[0]}" fv-serve-plan "<sha256 of the run key>" ;;
-  *) sed -n '2,29p' "$0" | sed 's/^# \{0,1\}//'; exit 2 ;;
+    payload "$(pick_image "${1:-}")" "${types[0]}" fv-serve-plan "<sha256 of the run key>" ;;
+  *) sed -n '2,32p' "$0" | sed 's/^# \{0,1\}//'; exit 2 ;;
 esac
