@@ -2233,6 +2233,12 @@ Audio: male speech, clear voice, quiet room"
       esac
       oracle_run "oracle-$target" "$ours"
       oracle_diff "oracle-$target-diff" "$ref/dump" "$ours"
+      # Ref2VA control: the reference's condition rows injected as well, so
+      # only the DiT (and the text, when its token count matches) differs.
+      if [[ "$target" == h3-ref2va-* ]]; then
+        oracle_run "oracle-$target-cond" "$ours-cond" FASTVIDEO_INJECT_COND=1
+        oracle_diff "oracle-$target-cond-diff" "$ref/dump" "$ours-cond"
+      fi
       # The bf16 noise floor (FV_ORACLE_F32, default on for H3): ours with f32
       # activations against the reference, and our bf16 run against our f32
       # run -- how far bf16 rounding alone moves the same pipeline.
