@@ -859,7 +859,7 @@ Errors are `{"type":"error","error":{"type","message"}}`:
 | LTX silent output | LTX `generate_audio:false` | supported (post `-an`); the engine can skip the audio decode (`Ltx2Request::skip_audio_decode`) | E4 done |
 | LTX-2.5 I2V | LTX `image_uri` on 2.5 | served (E5, oracle-checked: docs/oracle.md "LTX-2.5 image conditioning") | E5 done |
 | LTX last frame | LTX `last_frame_uri` | served (E9) | E9 done |
-| LTX reference (Ingredients IC-LoRA) | fal `ingredient`, `Task::Ref2V` on LTX | 400 (task) | blocked on the LoRA's Hub gate; docs/ports/ltx-ref2v.md |
+| LTX reference (Ingredients IC-LoRA) | fal `ingredient`, native `reference_urls`, `Task::Ref2V` on LTX | served by the companion `ltx25-ref2v` of `ltx-pro` (`route_task`; one reference sheet; `configs/serve/runpod-ltx-ref2v.toml`); 400 when none is configured. Engine oracle-checked (docs/oracle.md); serve GPU E2E pending | docs/ports/ltx-ref2v.md |
 | LTX auto duration, camera motion, A2V/retake/extend/HDR/reframe | LTX | 400 / 403 | none planned |
 | Cancellation mid-generation | all DELETE/cancel | cancels only while queued | E1 |
 | In-memory frames (no PNG) | streaming | `fastvideo_cudarc::sink::FrameSink` via `Hooks::with_sink` | E2 done |
